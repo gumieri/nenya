@@ -17,3 +17,29 @@ max_rpm = 15                # requests per minute
 url = "http://127.0.0.1:11434/api/generate"
 model = "qwen2.5-coder:7b"
 system_prompt = "You are a data privacy filter. Summarize the following log/code error in 5 lines. REMOVE any IP addresses, AWS keys (AKIA...), or passwords. Keep only the technical core of the error."
+
+[filter]
+# Tier‑0 regex‑based secret redaction (runs on every request)
+enabled = true
+redaction_label = "[REDACTED]"
+# Patterns are Go regexps, compiled at startup.
+# Default patterns cover AWS keys, GitHub tokens, Google OAuth, private keys, etc.
+# patterns = [
+#   "(?i)AKIA[0-9A-Z]{16}",
+#   "(?i)gh(p|o|s)_[a-zA-Z0-9]{36,255}",
+#   "(?i)ya29\\.[0-9A-Za-z\\-_]+",
+#   "(?i)sk-[a-zA-Z0-9]{48}",
+#   "(?i)-----BEGIN (RSA|DSA|EC|PRIVATE) KEY-----",
+#   "(?i)(aws_access_key_id|aws_secret_access_key)\\s*=\\s*['\"][^'\"]{10,}['\"]",
+#   "(?i)(password|passwd|pwd|secret|token|key)[\\s:=]+['\"][^'\"]{6,}['\"]",
+#   "(?i)\\b[0-9]{1,3}\\.[0-9]{1,3}\\.[0-9]{1,3}\\.[0-9]{1,3}\\b",
+#   "(?i)[a-f0-9]{32}:",
+#   "(?i)SG\\.[a-zA-Z0-9\\-_]{22}\\.[a-zA-Z0-9\\-_]{43}",
+# ]
+
+[upstream]
+# gemini_url = "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions"
+# deepseek_url = "https://api.deepseek.com/v1/chat/completions"
+# zai_url = "https://api.z.ai/v1/chat/completions"
+# Uncomment to override default upstream URLs
+

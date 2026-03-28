@@ -7,7 +7,9 @@ Nenya uses systemd credentials to securely load API keys and tokens. The secrets
   "client_token": "your-client-bearer-token-here",
   "gemini_key": "gemini-api-key-here",
   "deepseek_key": "deepseek-api-key-here",
-  "zai_key": "zai-api-key-here"
+  "zai_key": "zai-api-key-here",
+  "groq_key": "groq-api-key-here",
+  "together_key": "together-api-key-here"
 }
 ```
 
@@ -35,8 +37,10 @@ openssl rand -hex 32
 ## Upstream API Keys
 
 - `gemini_key`: Google Gemini API key
-- `deepseek_key`: DeepSeek API key  
+- `deepseek_key`: DeepSeek API key
 - `zai_key`: z.ai API key
+- `groq_key`: Groq API key
+- `together_key`: Together AI API key
 
 At least one upstream key must be present for the corresponding provider.
 
