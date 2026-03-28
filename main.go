@@ -510,35 +510,27 @@ func (g *NenyaGateway) transformRequestForUpstream(upstreamURL string, body []by
 
 	// Gemini OpenAI‑compatible endpoint model mapping
 	if strings.Contains(upstreamURL, "generativelanguage.googleapis.com") {
-		// Map Gemini model names to what the OpenAI‑compatible endpoint expects
-		geminiModelMap := map[string]string{
-			// Try without version first (OpenAI‑compatible API might expect these)
-			"gemini-3-flash":          "gemini-flash",
-			"gemini-3.1-flash-lite":   "gemini-flash",
-			"gemini-3-flash-thinking": "gemini-flash",
-			"gemini-pro":              "gemini-pro",
-			"gemini-1.5-pro":          "gemini-pro",
-			"gemini-1.5-flash":        "gemini-flash",
-			"gemini-flash":            "gemini-flash",
-			"gemini-1.0-pro":          "gemini-pro",
-			"gemini-1.0-flash":        "gemini-flash",
-			// Also keep versioned mappings as fallback
-			"gemini-3-flash-001":      "gemini-1.5-flash",
-			"gemini-2.0-flash":        "gemini-1.5-flash",
-		}
-
+		// For Gemini, use known working model names
 		lowerModel := strings.ToLower(modelName)
-		if mapped, ok := geminiModelMap[lowerModel]; ok {
-			payload["model"] = mapped
-			log.Printf("[INFO] Mapping Gemini model: %s -> %s", modelName, mapped)
+		
+		var finalModel string
+		
+		// Map to known working model names for Gemini OpenAI‑compatible API
+		if strings.Contains(lowerModel, "flash") {
+			// Try gemini-1.5-flash first (most common)
+			finalModel = "gemini-1.5-flash"
+		} else if strings.Contains(lowerModel, "pro") {
+			finalModel = "gemini-1.5-pro"
 		} else if strings.HasPrefix(lowerModel, "gemini-") {
-			// Default fallback: try removing version prefix
-			transformed := strings.TrimPrefix(lowerModel, "gemini-")
-			transformed = strings.TrimPrefix(transformed, "1.5-")
-			transformed = strings.TrimPrefix(transformed, "2.0-")
-			payload["model"] = transformed
-			log.Printf("[INFO] Transforming Gemini model name: %s -> %s", modelName, transformed)
+			// Default fallback
+			finalModel = "gemini-1.5-flash"
+		} else {
+			// Keep original if it doesn't start with gemini-
+			finalModel = lowerModel
 		}
+		
+		payload["model"] = finalModel
+		log.Printf("[INFO] Gemini model mapping: %s -> %s", modelName, finalModel)
 	}
 
 	// Debug log final model
@@ -612,8 +604,20 @@ func (g *NenyaGateway) forwardToUpstream(w http.ResponseWriter, r *http.Request,
 	// Copy sanitized headers
 	copyHeaders(headers, req.Header)
 
-	// Debug log upstream request
+	// Debug log upstream request details (without sensitive data)
+	debugHeaders := make(http.Header)
+	for k, v := range req.Header {
+		if strings.Contains(strings.ToLower(k), "key") || strings.Contains(strings.ToLower(k), "auth") {
+			debugHeaders[k] = []string{"[REDACTED]"}
+		} else {
+			debugHeaders[k] = v
+		}
+	}
 	log.Printf("[DEBUG] Forwarding to upstream: %s", upstreamURL)
+	log.Printf("[DEBUG] Request headers: %v", debugHeaders)
+	if len(transformedBody) > 0 && len(transformedBody) < 1000 {
+		log.Printf("[DEBUG] Request body (first 1KB): %s", string(transformedBody))
+	}
 
 	resp, err := g.client.Do(req)
 	if err != nil {
