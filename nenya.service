@@ -1,0 +1,25 @@
+[Unit]
+Description=Nenya AI Gateway & Bouncer
+After=network.target
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+DynamicUser=yes 
+ExecStart=/usr/local/bin/nenya -config /etc/nenya/config.toml
+Restart=on-failure
+RestartSec=5s
+
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+
+LoadCredential=secrets:/etc/nenya/secrets.json
+
+[Install]
+WantedBy=multi-user.target

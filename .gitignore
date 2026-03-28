@@ -1,0 +1,34 @@
+# Binaries
+nenya
+nenya-*
+*.exe
+
+# Secrets and credentials
+creds/
+*.env
+secrets*.json
+
+# Go build artifacts
+bin/
+pkg/
+vendor/
+
+# Coverage and test outputs
+coverage.txt
+*.coverprofile
+*.test
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
