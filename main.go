@@ -318,8 +318,8 @@ func (g *NenyaGateway) determineUpstream(modelName string) string {
 	modelName = strings.ToLower(modelName)
 
 	if strings.HasPrefix(modelName, "gemini-") {
-		// Gemini OpenAI‑compatible endpoint (v1, not v1beta)
-		return "https://generativelanguage.googleapis.com/v1/openai/chat/completions"
+		// Gemini OpenAI‑compatible endpoint
+		return "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions"
 	}
 	if strings.HasPrefix(modelName, "deepseek-") {
 		// e.g., deepseek-reasoner, deepseek-chat
@@ -512,12 +512,19 @@ func (g *NenyaGateway) transformRequestForUpstream(upstreamURL string, body []by
 	if strings.Contains(upstreamURL, "generativelanguage.googleapis.com") {
 		// Map Gemini model names to what the OpenAI‑compatible endpoint expects
 		geminiModelMap := map[string]string{
-			"gemini-3-flash":          "gemini-1.5-flash",    // Map to supported model
-			"gemini-3.1-flash-lite":   "gemini-1.5-flash",
-			"gemini-3-flash-thinking": "gemini-1.5-flash",
-			"gemini-pro":              "gemini-1.5-pro",
-			"gemini-1.5-pro":          "gemini-1.5-pro",
-			"gemini-1.5-flash":        "gemini-1.5-flash",
+			// Try without version first (OpenAI‑compatible API might expect these)
+			"gemini-3-flash":          "gemini-flash",
+			"gemini-3.1-flash-lite":   "gemini-flash",
+			"gemini-3-flash-thinking": "gemini-flash",
+			"gemini-pro":              "gemini-pro",
+			"gemini-1.5-pro":          "gemini-pro",
+			"gemini-1.5-flash":        "gemini-flash",
+			"gemini-flash":            "gemini-flash",
+			"gemini-1.0-pro":          "gemini-pro",
+			"gemini-1.0-flash":        "gemini-flash",
+			// Also keep versioned mappings as fallback
+			"gemini-3-flash-001":      "gemini-1.5-flash",
+			"gemini-2.0-flash":        "gemini-1.5-flash",
 		}
 
 		lowerModel := strings.ToLower(modelName)
@@ -532,6 +539,11 @@ func (g *NenyaGateway) transformRequestForUpstream(upstreamURL string, body []by
 			payload["model"] = transformed
 			log.Printf("[INFO] Transforming Gemini model name: %s -> %s", modelName, transformed)
 		}
+	}
+
+	// Debug log final model
+	if finalModel, ok := payload["model"].(string); ok {
+		log.Printf("[DEBUG] Final model for upstream %s: %s", upstreamURL, finalModel)
 	}
 
 	newBody, err := json.Marshal(payload)
@@ -599,6 +611,9 @@ func (g *NenyaGateway) forwardToUpstream(w http.ResponseWriter, r *http.Request,
 
 	// Copy sanitized headers
 	copyHeaders(headers, req.Header)
+
+	// Debug log upstream request
+	log.Printf("[DEBUG] Forwarding to upstream: %s", upstreamURL)
 
 	resp, err := g.client.Do(req)
 	if err != nil {
