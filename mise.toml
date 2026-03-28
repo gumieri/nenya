@@ -1,2 +1,55 @@
 [tools]
 go = "latest"
+
+[tasks.build]
+description = "Build the nenya binary"
+run = "go build -o nenya ."
+
+[tasks.test]
+description = "Run all tests"
+run = "go test ./..."
+
+[tasks.vet]
+description = "Run go vet"
+run = "go vet ./..."
+
+[tasks.lint]
+description = "Format and vet source"
+run = ["go fmt ./...", "go vet ./..."]
+
+[tasks.clean]
+description = "Remove built binary"
+run = "rm -f nenya"
+
+[tasks.install]
+description = "Install binary, config, and systemd unit"
+depends = ["build"]
+run = """
+install -Dm755 nenya /usr/local/bin/nenya
+install -Dm644 example.config.toml /etc/nenya/config.toml
+install -Dm644 nenya.service /etc/systemd/system/nenya.service
+systemctl daemon-reload
+echo "Installed. Configure secrets as per SECRETS_FORMAT.md and enable service:"
+echo "  systemctl enable --now nenya.service"
+"""
+
+[tasks.run]
+description = "Build and run locally with dummy credentials"
+depends = ["build"]
+run = """
+mkdir -p creds
+if [ ! -f creds/secrets ]; then
+  echo "WARNING: Creating dummy secrets file for local testing. Replace with real API keys!"
+  printf '{\n  "client_token": "test-client-token",\n  "gemini_key": "dummy-gemini-key",\n  "deepseek_key": "dummy-deepseek-key",\n  "zai_key": "dummy-zai-key"\n}\n' > creds/secrets
+fi
+CREDENTIALS_DIRECTORY=./creds ./nenya -config config.toml
+"""
+
+[tasks.release]
+description = "Cross-compile for all platforms"
+run = """
+CGO_ENABLED=0 GOOS=linux  GOARCH=amd64 go build -o nenya-linux-amd64  .
+CGO_ENABLED=0 GOOS=linux  GOARCH=arm64 go build -o nenya-linux-arm64  .
+CGO_ENABLED=0 GOOS=darwin GOARCH=amd64 go build -o nenya-darwin-amd64 .
+CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build -o nenya-darwin-arm64 .
+"""
