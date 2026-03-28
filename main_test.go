@@ -68,8 +68,8 @@ func TestDetermineUpstream(t *testing.T) {
 		model      string
 		expected   string
 	}{
-		{"gemini-3.1-flash-lite", "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions"},
-		{"gemini-3-flash", "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions"},
+		{"gemini-3.1-flash-lite", "https://generativelanguage.googleapis.com/v1/openai/chat/completions"},
+		{"gemini-3-flash", "https://generativelanguage.googleapis.com/v1/openai/chat/completions"},
 		{"deepseek-reasoner", "https://api.deepseek.com/v1/chat/completions"},
 		{"deepseek-chat", "https://api.deepseek.com/v1/chat/completions"},
 		{"glm-5", "https://api.z.ai/v1/chat/completions"},

@@ -318,8 +318,8 @@ func (g *NenyaGateway) determineUpstream(modelName string) string {
 	modelName = strings.ToLower(modelName)
 
 	if strings.HasPrefix(modelName, "gemini-") {
-		// Gemini OpenAI‑compatible endpoint
-		return "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions"
+		// Gemini OpenAI‑compatible endpoint (try v1 instead of v1beta)
+		return "https://generativelanguage.googleapis.com/v1/openai/chat/completions"
 	}
 	if strings.HasPrefix(modelName, "deepseek-") {
 		// e.g., deepseek-reasoner, deepseek-chat
@@ -570,10 +570,10 @@ func (g *NenyaGateway) forwardToUpstream(w http.ResponseWriter, r *http.Request,
 	switch {
 	case strings.Contains(upstreamURL, "generativelanguage.googleapis.com"):
 		if g.secrets.GeminiKey != "" {
-			// Gemini expects x-goog-api-key header for API keys (not Authorization)
-			headers.Set("x-goog-api-key", g.secrets.GeminiKey)
-			// Also set Authorization for compatibility
+			// For Gemini OpenAI‑compatible API, use Authorization header
 			headers.Set("Authorization", "Bearer "+g.secrets.GeminiKey)
+			// Also set x-goog-api-key as fallback
+			headers.Set("x-goog-api-key", g.secrets.GeminiKey)
 		} else {
 			log.Printf("[ERROR] Gemini API key missing in secrets")
 			http.Error(w, "Gateway configuration error", http.StatusInternalServerError)
