@@ -627,6 +627,22 @@ func (g *NenyaGateway) forwardToUpstream(w http.ResponseWriter, r *http.Request,
 	}
 	defer resp.Body.Close()
 
+	// Log upstream response status for debugging
+	log.Printf("[DEBUG] Upstream response status: %d %s", resp.StatusCode, resp.Status)
+	
+	// For non-2xx responses, read and log the error body
+	if resp.StatusCode >= 400 {
+		errorBody, _ := io.ReadAll(resp.Body)
+		if len(errorBody) > 0 {
+			log.Printf("[ERROR] Upstream error response (%d): %s", resp.StatusCode, string(errorBody))
+			// Still forward the error to client
+			copyHeaders(resp.Header, w.Header())
+			w.WriteHeader(resp.StatusCode)
+			w.Write(errorBody)
+			return
+		}
+	}
+
 	copyHeaders(resp.Header, w.Header())
 	w.WriteHeader(resp.StatusCode)
 
