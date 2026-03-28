@@ -318,8 +318,8 @@ func (g *NenyaGateway) determineUpstream(modelName string) string {
 	modelName = strings.ToLower(modelName)
 
 	if strings.HasPrefix(modelName, "gemini-") {
-		// e.g., gemini-3.1-flash-lite, gemini-3-flash
-		return "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions"
+		// Gemini OpenAI‑compatible endpoint (v1, not v1beta)
+		return "https://generativelanguage.googleapis.com/v1/openai/chat/completions"
 	}
 	if strings.HasPrefix(modelName, "deepseek-") {
 		// e.g., deepseek-reasoner, deepseek-chat
@@ -491,9 +491,67 @@ func (g *NenyaGateway) summarizeWithOllama(heavyText string) (string, error) {
 	return "", fmt.Errorf("ollama response missing 'response' field")
 }
 
+// transformRequestForUpstream modifies the request body for specific upstream providers.
+func (g *NenyaGateway) transformRequestForUpstream(upstreamURL string, body []byte) ([]byte, error) {
+	var payload map[string]interface{}
+	if err := json.Unmarshal(body, &payload); err != nil {
+		return nil, fmt.Errorf("failed to parse request body for transformation: %v", err)
+	}
+
+	modelRaw, ok := payload["model"]
+	if !ok {
+		return body, nil // No model field, nothing to transform
+	}
+
+	modelName, ok := modelRaw.(string)
+	if !ok {
+		return body, nil // Model is not a string
+	}
+
+	// Gemini OpenAI‑compatible endpoint model mapping
+	if strings.Contains(upstreamURL, "generativelanguage.googleapis.com") {
+		// Map Gemini model names to what the OpenAI‑compatible endpoint expects
+		geminiModelMap := map[string]string{
+			"gemini-3-flash":          "gemini-1.5-flash",    // Map to supported model
+			"gemini-3.1-flash-lite":   "gemini-1.5-flash",
+			"gemini-3-flash-thinking": "gemini-1.5-flash",
+			"gemini-pro":              "gemini-1.5-pro",
+			"gemini-1.5-pro":          "gemini-1.5-pro",
+			"gemini-1.5-flash":        "gemini-1.5-flash",
+		}
+
+		lowerModel := strings.ToLower(modelName)
+		if mapped, ok := geminiModelMap[lowerModel]; ok {
+			payload["model"] = mapped
+			log.Printf("[INFO] Mapping Gemini model: %s -> %s", modelName, mapped)
+		} else if strings.HasPrefix(lowerModel, "gemini-") {
+			// Default fallback: try removing version prefix
+			transformed := strings.TrimPrefix(lowerModel, "gemini-")
+			transformed = strings.TrimPrefix(transformed, "1.5-")
+			transformed = strings.TrimPrefix(transformed, "2.0-")
+			payload["model"] = transformed
+			log.Printf("[INFO] Transforming Gemini model name: %s -> %s", modelName, transformed)
+		}
+	}
+
+	newBody, err := json.Marshal(payload)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal transformed request: %v", err)
+	}
+
+	return newBody, nil
+}
+
 // forwardToUpstream handles the reverse proxy logic and SSE streaming.
 func (g *NenyaGateway) forwardToUpstream(w http.ResponseWriter, r *http.Request, upstreamURL string, body []byte) {
-	req, err := http.NewRequest(r.Method, upstreamURL, bytes.NewBuffer(body))
+	// Transform request body if needed for upstream compatibility
+	transformedBody, err := g.transformRequestForUpstream(upstreamURL, body)
+	if err != nil {
+		log.Printf("[WARN] Failed to transform request for upstream: %v. Using original body.", err)
+		transformedBody = body
+	}
+
+	req, err := http.NewRequest(r.Method, upstreamURL, bytes.NewBuffer(transformedBody))
 	if err != nil {
 		log.Printf("[ERROR] Failed to create upstream request: %v", err)
 		http.Error(w, "Internal Gateway Error", http.StatusInternalServerError)
@@ -508,6 +566,9 @@ func (g *NenyaGateway) forwardToUpstream(w http.ResponseWriter, r *http.Request,
 	switch {
 	case strings.Contains(upstreamURL, "generativelanguage.googleapis.com"):
 		if g.secrets.GeminiKey != "" {
+			// Gemini expects x-goog-api-key header for API keys (not Authorization)
+			headers.Set("x-goog-api-key", g.secrets.GeminiKey)
+			// Also set Authorization for compatibility
 			headers.Set("Authorization", "Bearer "+g.secrets.GeminiKey)
 		} else {
 			log.Printf("[ERROR] Gemini API key missing in secrets")
