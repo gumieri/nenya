@@ -606,9 +606,11 @@ func (g *NenyaGateway) forwardToUpstream(w http.ResponseWriter, r *http.Request,
 
 	// Debug log upstream request details (without sensitive data)
 	debugHeaders := make(http.Header)
+	apiKeyRedacted := false
 	for k, v := range req.Header {
 		if strings.Contains(strings.ToLower(k), "key") || strings.Contains(strings.ToLower(k), "auth") {
 			debugHeaders[k] = []string{"[REDACTED]"}
+			apiKeyRedacted = true
 		} else {
 			debugHeaders[k] = v
 		}
@@ -617,6 +619,28 @@ func (g *NenyaGateway) forwardToUpstream(w http.ResponseWriter, r *http.Request,
 	log.Printf("[DEBUG] Request headers: %v", debugHeaders)
 	if len(transformedBody) > 0 && len(transformedBody) < 1000 {
 		log.Printf("[DEBUG] Request body (first 1KB): %s", string(transformedBody))
+	}
+	
+	// Generate curl command for manual testing (without API key)
+	if strings.Contains(upstreamURL, "generativelanguage.googleapis.com") {
+		curlCmd := fmt.Sprintf("curl -X POST '%s'", upstreamURL)
+		for k, v := range req.Header {
+			if !strings.Contains(strings.ToLower(k), "key") && !strings.Contains(strings.ToLower(k), "auth") {
+				for _, val := range v {
+					curlCmd += fmt.Sprintf(" -H '%s: %s'", k, val)
+				}
+			}
+		}
+		if apiKeyRedacted {
+			curlCmd += " -H 'Authorization: Bearer YOUR_GEMINI_API_KEY'"
+			curlCmd += " -H 'x-goog-api-key: YOUR_GEMINI_API_KEY'"
+		}
+		if len(transformedBody) > 0 {
+			// Escape single quotes in JSON for curl
+			bodyStr := strings.ReplaceAll(string(transformedBody), "'", "'\"'\"'")
+			curlCmd += fmt.Sprintf(" -d '%s'", bodyStr)
+		}
+		log.Printf("[DEBUG] Curl command for manual testing (add your API key): %s", curlCmd)
 	}
 
 	resp, err := g.client.Do(req)
