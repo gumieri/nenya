@@ -9,40 +9,41 @@ import (
 	toml "github.com/pelletier/go-toml/v2"
 )
 
-const (
-	defaultGeminiURL        = "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions"
-	defaultDeepSeekURL      = "https://api.deepseek.com/v1/chat/completions"
-	defaultZaiURL           = "https://api.z.ai/v1/chat/completions"
-	defaultGroqURL          = "https://api.groq.com/openai/v1/chat/completions"
-	defaultTogetherURL      = "https://api.together.xyz/v1/chat/completions"
-	defaultOllamaOpenAIURL  = "http://127.0.0.1:11434/v1/chat/completions"
-	defaultAgentCooldownSec = 60
-)
-
-// AgentModel is a single provider+model entry in an agent's fallback chain.
 type AgentModel struct {
-	Provider   string `toml:"provider"`    // gemini | deepseek | zai | ollama
-	Model      string `toml:"model"`       // model ID sent to the provider
-	URL        string `toml:"url"`         // optional URL override for this entry
-	MaxContext int    `toml:"max_context"` // skip if request tokens > this (0 = no limit)
+	Provider   string `toml:"provider"`
+	Model      string `toml:"model"`
+	URL        string `toml:"url"`
+	MaxContext int    `toml:"max_context"`
 }
 
-// AgentConfig defines a named agent with an ordered fallback chain of models.
 type AgentConfig struct {
-	Strategy        string       `toml:"strategy"`         // "round-robin" (default) | "fallback"
-	CooldownSeconds int          `toml:"cooldown_seconds"` // 0 → defaultAgentCooldownSec
+	Strategy        string       `toml:"strategy"`
+	CooldownSeconds int          `toml:"cooldown_seconds"`
 	Models          []AgentModel `toml:"models"`
 }
 
-// Config holds the environment and core configurations.
+type ProviderConfig struct {
+	URL           string   `toml:"url"`
+	RoutePrefixes []string `toml:"route_prefixes"`
+	AuthStyle     string   `toml:"auth_style"`
+}
+
+type Provider struct {
+	Name          string
+	URL           string
+	APIKey        string
+	RoutePrefixes []string
+	AuthStyle     string
+}
+
 type Config struct {
 	Server      ServerConfig
 	Interceptor InterceptorConfig
 	Ollama      OllamaConfig
-	RateLimit   RateLimitConfig        `toml:"ratelimit"`
-	Upstream    UpstreamConfig
+	RateLimit   RateLimitConfig `toml:"ratelimit"`
 	Filter      FilterConfig
-	Agents      map[string]AgentConfig `toml:"agents"`
+	Agents      map[string]AgentConfig    `toml:"agents"`
+	Providers   map[string]ProviderConfig `toml:"providers"`
 }
 
 type ServerConfig struct {
@@ -51,40 +52,28 @@ type ServerConfig struct {
 }
 
 type InterceptorConfig struct {
-	SoftLimit          int     `toml:"soft_limit"`          // characters (runes)
-	HardLimit          int     `toml:"hard_limit"`          // characters (runes)
-	TruncationStrategy string  `toml:"truncation_strategy"` // "middle-out"
-	KeepFirstPercent   float64 `toml:"keep_first_percent"`  // e.g., 15.0
-	KeepLastPercent    float64 `toml:"keep_last_percent"`   // e.g., 25.0
+	SoftLimit          int     `toml:"soft_limit"`
+	HardLimit          int     `toml:"hard_limit"`
+	TruncationStrategy string  `toml:"truncation_strategy"`
+	KeepFirstPercent   float64 `toml:"keep_first_percent"`
+	KeepLastPercent    float64 `toml:"keep_last_percent"`
 }
 
 type RateLimitConfig struct {
-	MaxTPM int `toml:"max_tpm"` // tokens per minute
-	MaxRPM int `toml:"max_rpm"` // requests per minute
-}
-
-type UpstreamConfig struct {
-	GeminiURL   string `toml:"gemini_url"`
-	DeepSeekURL string `toml:"deepseek_url"`
-	ZaiURL      string `toml:"zai_url"`
-	GroqURL     string `toml:"groq_url"`
-	TogetherURL string `toml:"together_url"`
+	MaxTPM int `toml:"max_tpm"`
+	MaxRPM int `toml:"max_rpm"`
 }
 
 type SecretsConfig struct {
-	ClientToken string `json:"client_token"` // auth for clients
-	GeminiKey   string `json:"gemini_key"`   // Gemini API key
-	DeepSeekKey string `json:"deepseek_key"` // DeepSeek API key
-	ZaiKey      string `json:"zai_key"`      // z.ai API key
-	GroqKey     string `json:"groq_key"`     // Groq API key
-	TogetherKey string `json:"together_key"` // Together AI API key
+	ClientToken  string            `json:"client_token"`
+	ProviderKeys map[string]string `json:"provider_keys"`
 }
 
 type OllamaConfig struct {
 	URL            string `toml:"url"`
 	Model          string `toml:"model"`
 	SystemPrompt   string `toml:"system_prompt"`
-	TimeoutSeconds int    `toml:"timeout_seconds"` // timeout for local LLM inference
+	TimeoutSeconds int    `toml:"timeout_seconds"`
 }
 
 type FilterConfig struct {
@@ -93,7 +82,41 @@ type FilterConfig struct {
 	RedactionLabel string   `toml:"redaction_label"`
 }
 
-// loadConfig reads and parses a TOML configuration file.
+func builtInProviders() map[string]ProviderConfig {
+	return map[string]ProviderConfig{
+		"gemini": {
+			URL:           "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
+			RoutePrefixes: []string{"gemini-"},
+			AuthStyle:     "bearer+x-goog",
+		},
+		"deepseek": {
+			URL:           "https://api.deepseek.com/v1/chat/completions",
+			RoutePrefixes: []string{"deepseek-"},
+			AuthStyle:     "bearer",
+		},
+		"zai": {
+			URL:           "https://api.z.ai/v1/chat/completions",
+			RoutePrefixes: []string{"zai-", "glm-"},
+			AuthStyle:     "bearer",
+		},
+		"groq": {
+			URL:           "https://api.groq.com/openai/v1/chat/completions",
+			RoutePrefixes: []string{"llama-", "llama3-", "mixtral-", "whisper-"},
+			AuthStyle:     "bearer",
+		},
+		"together": {
+			URL:           "https://api.together.xyz/v1/chat/completions",
+			RoutePrefixes: []string{"meta-llama/", "mistralai/", "qwen/", "together/"},
+			AuthStyle:     "bearer",
+		},
+		"ollama": {
+			URL:           "http://127.0.0.1:11434/v1/chat/completions",
+			RoutePrefixes: nil,
+			AuthStyle:     "none",
+		},
+	}
+}
+
 func loadConfig(filename string) (*Config, error) {
 	data, err := os.ReadFile(filename)
 	if err != nil {
@@ -105,18 +128,23 @@ func loadConfig(filename string) (*Config, error) {
 		return nil, fmt.Errorf("failed to parse config file %s: %v", filename, err)
 	}
 
-	// Apply defaults for fields not set in the config file.
+	applyDefaults(&cfg)
+
+	return &cfg, nil
+}
+
+func applyDefaults(cfg *Config) {
 	if cfg.Server.ListenAddr == "" {
 		cfg.Server.ListenAddr = ":8080"
 	}
 	if cfg.Server.MaxBodyBytes == 0 {
-		cfg.Server.MaxBodyBytes = 10 << 20 // 10 MB default
+		cfg.Server.MaxBodyBytes = 10 << 20
 	}
 	if cfg.Interceptor.SoftLimit == 0 {
-		cfg.Interceptor.SoftLimit = 4000 // characters
+		cfg.Interceptor.SoftLimit = 4000
 	}
 	if cfg.Interceptor.HardLimit == 0 {
-		cfg.Interceptor.HardLimit = 24000 // characters
+		cfg.Interceptor.HardLimit = 24000
 	}
 	if cfg.Interceptor.TruncationStrategy == "" {
 		cfg.Interceptor.TruncationStrategy = "middle-out"
@@ -137,16 +165,9 @@ func loadConfig(filename string) (*Config, error) {
 		cfg.Ollama.SystemPrompt = "You are a data privacy filter. Summarize the following log/code error in 5 lines. REMOVE any IP addresses, AWS keys (AKIA...), or passwords. Keep only the technical core of the error."
 	}
 	if cfg.Ollama.TimeoutSeconds == 0 {
-		cfg.Ollama.TimeoutSeconds = 600 // 10 minutes — generous default for local inference
+		cfg.Ollama.TimeoutSeconds = 600
 	}
 
-	// Default filter settings.
-	// Because bool's zero value is false, we cannot distinguish "user wrote
-	// enabled = false" from "user omitted the field". We key the default
-	// behaviour on Patterns: if the user did not configure any patterns the
-	// filter defaults to enabled with built-in patterns. To opt out, set
-	// patterns = [] in the config — an explicit empty list disables the filter
-	// regardless of the enabled field.
 	if cfg.Filter.RedactionLabel == "" {
 		cfg.Filter.RedactionLabel = "[REDACTED]"
 	}
@@ -160,33 +181,21 @@ func loadConfig(filename string) (*Config, error) {
 			`(?i)-----BEGIN (RSA|DSA|EC|PRIVATE) KEY-----`,
 			`(?i)(aws_access_key_id|aws_secret_access_key)\s*=\s*['"][^'"]{10,}['"]`,
 			`(?i)(password|passwd|pwd|secret|token|key)[\s:=]+['"][^'"]{6,}['"]`,
-			`(?i)\b[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\b`,
-			`(?i)[a-f0-9]{32}:`,
+			`[a-f0-9]{32}:`,
 			`(?i)SG\.[a-zA-Z0-9\-_]{22}\.[a-zA-Z0-9\-_]{43}`,
 		}
 	}
 
-	// Default upstream URLs
-	if cfg.Upstream.GeminiURL == "" {
-		cfg.Upstream.GeminiURL = defaultGeminiURL
+	if cfg.Providers == nil {
+		cfg.Providers = make(map[string]ProviderConfig)
 	}
-	if cfg.Upstream.DeepSeekURL == "" {
-		cfg.Upstream.DeepSeekURL = defaultDeepSeekURL
+	for name, builtIn := range builtInProviders() {
+		if _, exists := cfg.Providers[name]; !exists {
+			cfg.Providers[name] = builtIn
+		}
 	}
-	if cfg.Upstream.ZaiURL == "" {
-		cfg.Upstream.ZaiURL = defaultZaiURL
-	}
-	if cfg.Upstream.GroqURL == "" {
-		cfg.Upstream.GroqURL = defaultGroqURL
-	}
-	if cfg.Upstream.TogetherURL == "" {
-		cfg.Upstream.TogetherURL = defaultTogetherURL
-	}
-
-	return &cfg, nil
 }
 
-// loadSecrets reads the JSON secrets file from systemd credentials.
 func loadSecrets() (*SecretsConfig, error) {
 	credDir := os.Getenv("CREDENTIALS_DIRECTORY")
 	if credDir == "" {
@@ -203,12 +212,30 @@ func loadSecrets() (*SecretsConfig, error) {
 		return nil, fmt.Errorf("failed to parse secrets JSON: %v", err)
 	}
 
-	// Validate required fields
 	if secrets.ClientToken == "" {
 		return nil, fmt.Errorf("client_token missing in secrets")
 	}
-	// API keys can be empty if not using that upstream
-	// but warn if they might be needed
+	if secrets.ProviderKeys == nil {
+		secrets.ProviderKeys = make(map[string]string)
+	}
 
 	return &secrets, nil
+}
+
+func resolveProviders(cfg *Config, secrets *SecretsConfig) map[string]*Provider {
+	providers := make(map[string]*Provider, len(cfg.Providers))
+	for name, pc := range cfg.Providers {
+		apiKey := ""
+		if secrets != nil {
+			apiKey = secrets.ProviderKeys[name]
+		}
+		providers[name] = &Provider{
+			Name:          name,
+			URL:           pc.URL,
+			APIKey:        apiKey,
+			RoutePrefixes: pc.RoutePrefixes,
+			AuthStyle:     pc.AuthStyle,
+		}
+	}
+	return providers
 }

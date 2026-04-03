@@ -1,24 +1,16 @@
 package main
 
 import (
-	"log"
 	"net/url"
 	"time"
 )
 
-// rateLimiter is a token-bucket rate limiter for a single upstream host.
-// Buckets refill continuously based on elapsed time, preventing the 2× burst
-// that a fixed (tumbling) window allows at window boundaries.
-// Protected by NenyaGateway.rlMu — no per-instance lock needed.
 type rateLimiter struct {
-	rpmBucket  float64   // available request tokens; capacity = MaxRPM
-	tpmBucket  float64   // available payload tokens; capacity = MaxTPM
-	lastRefill time.Time // when buckets were last topped up
+	rpmBucket  float64
+	tpmBucket  float64
+	lastRefill time.Time
 }
 
-// checkRateLimit verifies if the request is within RPM/TPM limits for the given upstream
-// using a token-bucket algorithm. Buckets refill continuously so there is no burst at
-// window boundaries. Returns true if the request is allowed (and consumes tokens).
 func (g *NenyaGateway) checkRateLimit(upstreamURL string, tokenCount int) bool {
 	host := upstreamURL
 	if u, err := url.Parse(upstreamURL); err == nil && u.Host != "" {
@@ -38,7 +30,6 @@ func (g *NenyaGateway) checkRateLimit(upstreamURL string, tokenCount int) bool {
 		g.rateLimits[host] = limiter
 	}
 
-	// Refill buckets proportional to elapsed time since the last call.
 	now := time.Now()
 	elapsed := now.Sub(limiter.lastRefill).Seconds()
 	limiter.lastRefill = now
@@ -53,11 +44,13 @@ func (g *NenyaGateway) checkRateLimit(upstreamURL string, tokenCount int) bool {
 	}
 
 	if g.config.RateLimit.MaxRPM > 0 && limiter.rpmBucket < 1.0 {
-		log.Printf("[RATELIMIT] RPM limit exceeded for %s (%.2f tokens available)", host, limiter.rpmBucket)
+		g.logger.Warn("RPM limit exceeded",
+			"host", host, "rpm_available", limiter.rpmBucket)
 		return false
 	}
 	if g.config.RateLimit.MaxTPM > 0 && limiter.tpmBucket < float64(tokenCount) {
-		log.Printf("[RATELIMIT] TPM limit exceeded for %s (%.0f available, %d needed)", host, limiter.tpmBucket, tokenCount)
+		g.logger.Warn("TPM limit exceeded",
+			"host", host, "tpm_available", limiter.tpmBucket, "tokens_needed", tokenCount)
 		return false
 	}
 
