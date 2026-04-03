@@ -1,11 +1,13 @@
 package main
 
 import (
+	"context"
 	"flag"
-	"log"
 	"net/http"
+	"os"
+	"os/signal"
 	"sort"
-	"strings"
+	"syscall"
 	"time"
 )
 
@@ -16,24 +18,25 @@ func main() {
 	flag.BoolVar(&verbose, "verbose", false, "Enable debug-level request/response logging")
 	flag.Parse()
 
+	logger := setupLogger(verbose)
+
 	cfg, err := loadConfig(configFile)
 	if err != nil {
-		log.Fatalf("[FATAL] Failed to load configuration: %v", err)
+		logger.Error("failed to load configuration", "err", err)
+		os.Exit(1)
 	}
 
 	secrets, err := loadSecrets()
 	if err != nil {
-		log.Fatalf("[FATAL] Failed to load secrets: %v", err)
+		logger.Error("failed to load secrets", "err", err)
+		os.Exit(1)
 	}
 
-	gateway := NewNenyaGateway(*cfg, secrets)
-	gateway.verbose = verbose
+	gateway := NewNenyaGateway(*cfg, secrets, logger)
 
-	// Security: Strict server timeouts.
-	// WriteTimeout is 0 (disabled) because this is a streaming proxy — the upstream
-	// client timeout (secureClient.Timeout = 120s) and Ollama client timeout bound
-	// the actual response duration. A non-zero WriteTimeout would cut off slow
-	// streaming responses before the upstream finishes.
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+
 	srv := &http.Server{
 		Addr:         cfg.Server.ListenAddr,
 		Handler:      gateway,
@@ -42,21 +45,36 @@ func main() {
 		IdleTimeout:  120 * time.Second,
 	}
 
-	log.Printf("[INFO] Nenya AI Gateway listening on %s", cfg.Server.ListenAddr)
-	log.Printf("[INFO] Providers: gemini, deepseek, zai, groq, together, ollama")
+	logger.Info("nenya ai gateway listening", "addr", cfg.Server.ListenAddr)
+
 	if len(cfg.Agents) > 0 {
 		names := make([]string, 0, len(cfg.Agents))
 		for name := range cfg.Agents {
 			names = append(names, name)
 		}
 		sort.Strings(names)
-		log.Printf("[INFO] Agents: %s", strings.Join(names, ", "))
-	}
-	if verbose {
-		log.Printf("[INFO] Verbose logging enabled")
+		logger.Info("agents configured", "agents", names)
 	}
 
-	if err := srv.ListenAndServe(); err != nil {
-		log.Fatalf("[FATAL] Server failed: %v", err)
+	if verbose {
+		logger.Info("verbose logging enabled")
 	}
+
+	go func() {
+		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			logger.Error("server failed", "err", err)
+			os.Exit(1)
+		}
+	}()
+
+	<-ctx.Done()
+	logger.Info("shutting down gracefully...")
+
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	if err := srv.Shutdown(shutdownCtx); err != nil {
+		logger.Error("graceful shutdown failed", "err", err)
+	}
+	logger.Info("server stopped")
 }

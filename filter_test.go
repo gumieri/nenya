@@ -1,14 +1,11 @@
 package main
 
 import (
+	"log/slog"
 	"strings"
 	"testing"
 	"unicode/utf8"
 )
-
-func contains(s, substr string) bool {
-	return strings.Contains(s, substr)
-}
 
 func TestTruncateMiddleOut(t *testing.T) {
 	cfg := Config{
@@ -19,10 +16,9 @@ func TestTruncateMiddleOut(t *testing.T) {
 			KeepFirstPercent:   15.0,
 			KeepLastPercent:    25.0,
 		},
-		Upstream: UpstreamConfig{},
 	}
 	secrets := &SecretsConfig{}
-	g := NewNenyaGateway(cfg, secrets)
+	g := NewNenyaGateway(cfg, secrets, slog.Default())
 
 	// Test short text (no truncation)
 	short := "Hello, world!"
@@ -47,7 +43,7 @@ func TestTruncateMiddleOut(t *testing.T) {
 	}
 
 	// Check that separator is present
-	if !contains(result, "[NENYA: MASSIVE PAYLOAD TRUNCATED]") {
+	if !strings.Contains(result, "[NENYA: MASSIVE PAYLOAD TRUNCATED]") {
 		t.Errorf("Expected truncation separator")
 	}
 }
@@ -111,10 +107,9 @@ func TestRedactSecrets(t *testing.T) {
 					Patterns:       tt.patterns,
 					RedactionLabel: "[REDACTED]",
 				},
-				Upstream: UpstreamConfig{},
 			}
 			secrets := &SecretsConfig{}
-			g := NewNenyaGateway(cfg, secrets)
+			g := NewNenyaGateway(cfg, secrets, slog.Default())
 
 			result := g.redactSecrets(tt.input)
 			if result != tt.expectedOutput {
