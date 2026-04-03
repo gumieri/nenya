@@ -42,13 +42,21 @@ redaction_label = "[REDACTED]"
 #   "(?i)SG\\.[a-zA-Z0-9\\-_]{22}\\.[a-zA-Z0-9\\-_]{43}",
 # ]
 
-[upstream]
-# gemini_url    = "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions"
-# deepseek_url  = "https://api.deepseek.com/v1/chat/completions"
-# zai_url       = "https://api.z.ai/v1/chat/completions"
-# groq_url      = "https://api.groq.com/openai/v1/chat/completions"
-# together_url  = "https://api.together.xyz/v1/chat/completions"
-# Uncomment to override default upstream URLs
+# Provider Registry
+# Built-in providers are pre-configured (gemini, deepseek, zai, groq, together, ollama).
+# Add or override providers here. The `route_prefixes` field determines which model
+# names are routed to this provider. The `auth_style` field controls how API keys
+# are injected: "bearer" (Authorization header), "bearer+x-goog" (adds x-goog-api-key),
+# or "none" (no key needed, e.g. local Ollama).
+#
+# [providers.openai]
+# url = "https://api.openai.com/v1/chat/completions"
+# route_prefixes = ["gpt-", "o3-", "o4-"]
+# auth_style = "bearer"
+#
+# To override a built-in provider's URL:
+# [providers.gemini]
+# url = "https://your-custom-gemini-proxy.example.com/v1/chat/completions"
 
 # Agents — named profiles with ordered fallback chains.
 # When an AI tool sends model="plan", the gateway tries each entry in sequence.
@@ -74,7 +82,33 @@ redaction_label = "[REDACTED]"
 # models = [
 #   { provider = "gemini",   model = "gemini-2.5-pro",   max_context = 8000 },
 #   { provider = "gemini",   model = "gemini-2.5-flash"                      },
-#   { provider = "zai",      model = "glm-5"                                 },
+#   { provider = "zai",      model = "zai-coding-plan/glm-5"                },
+# ]
+#
+# [agents.code]
+# strategy         = "fallback"
+# cooldown_seconds = 60
+# models = [
+#   { provider = "zai", model = "zai-coding-plan/glm-5.1"              },
+#   { provider = "zai", model = "zai-coding-plan/glm-5"                },
+#   { provider = "zai", model = "zai-coding-plan/glm-5-turbo"          },
+# ]
+#
+# [agents.fast]
+# strategy = "round-robin"
+# models = [
+#   { provider = "zai", model = "zai-coding-plan/glm-4.7-flash"       },
+#   { provider = "zai", model = "zai-coding-plan/glm-4.7-flashx"      },
+#   { provider = "zai", model = "zai-coding-plan/glm-4.5-air"         },
+# ]
+#
+# [agents.vision]
+# strategy         = "fallback"
+# cooldown_seconds = 60
+# models = [
+#   { provider = "zai", model = "zai-coding-plan/glm-5v-turbo"        },
+#   { provider = "zai", model = "zai-coding-plan/glm-4.6v"            },
+#   { provider = "zai", model = "zai-coding-plan/glm-4.5v"            },
 # ]
 #
 # [agents.build]
@@ -96,7 +130,7 @@ redaction_label = "[REDACTED]"
 #   { provider = "gemini",   model = "gemini-2.5-flash" },  # fallback if Ollama is down
 # ]
 #
-# [agents.fast]
+# [agents.groq]
 # strategy = "round-robin"
 # models = [
 #   { provider = "groq",     model = "llama-3.3-70b-versatile" },

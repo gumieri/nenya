@@ -5,11 +5,14 @@ Nenya uses systemd credentials to securely load API keys and tokens. The secrets
 ```json
 {
   "client_token": "your-client-bearer-token-here",
-  "gemini_key": "gemini-api-key-here",
-  "deepseek_key": "deepseek-api-key-here",
-  "zai_key": "zai-api-key-here",
-  "groq_key": "groq-api-key-here",
-  "together_key": "together-api-key-here"
+  "provider_keys": {
+    "gemini": "AIza...",
+    "deepseek": "sk-...",
+    "zai": "...",
+    "groq": "gsk_...",
+    "together": "...",
+    "openai": "sk-..."
+  }
 }
 ```
 
@@ -34,15 +37,21 @@ The `client_token` is used by AI clients (OpenCode/Aider) to authenticate to Nen
 openssl rand -hex 32
 ```
 
-## Upstream API Keys
+## Provider Keys
 
-- `gemini_key`: Google Gemini API key
-- `deepseek_key`: DeepSeek API key
-- `zai_key`: z.ai API key
-- `groq_key`: Groq API key
-- `together_key`: Together AI API key
+The `provider_keys` object maps provider names (matching `[providers.*]` in `config.toml`) to their API keys. Built-in provider names are: `gemini`, `deepseek`, `zai`, `groq`, `together`, `ollama`.
 
-At least one upstream key must be present for the corresponding provider.
+To add a custom provider (e.g., OpenAI), add its key under the matching provider name defined in `config.toml`:
+
+```json
+{
+  "provider_keys": {
+    "openai": "sk-proj-..."
+  }
+}
+```
+
+At least one provider key must be present for the corresponding provider to work.
 
 ## Security Notes
 

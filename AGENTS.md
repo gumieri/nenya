@@ -20,9 +20,11 @@ You are acting as a **Senior Go Security Engineer and Network Architect**. Your 
 - Use Dependency Injection where appropriate.
 - Keep the `main.go` clean; delegate business logic to receiver methods.
 
-### 3. "Zero Dependency" Policy & Tech Stack
-- The project relies strictly on the Go Standard Library (`net/http`, `encoding/json`, `io`, `bytes`).
-- **Exception:** The only permitted external dependency is `github.com/pelletier/go-toml/v2` for configuration management.
+### 3. Dependency Policy & Tech Stack
+- The project relies primarily on the Go Standard Library (`net/http`, `encoding/json`, `io`, `bytes`).
+- **Permitted external dependencies:**
+  - `github.com/pelletier/go-toml/v2` — configuration management
+  - `github.com/pkoukk/tiktoken-go` — token counting (cl100k_base)
 - DO NOT import any other third-party packages without explicit human authorization.
 
 ### 4. Hardcore Security Rules (CRITICAL)
@@ -32,6 +34,10 @@ You are acting as a **Senior Go Security Engineer and Network Architect**. Your 
 - **Error Handling:** Never expose internal stack traces to the HTTP response. Log errors internally and return standard HTTP status codes.
 
 ### 5. Core Workflows to Maintain
-- **Dynamic Routing:** The proxy must inspect the JSON body, read the `"model"` string, and dynamically route the request to the correct Upstream URL (z.ai, Gemini AI Studio, or DeepSeek API).
-- **The Ollama Interceptor:** If the `messages[-1].content` length exceeds `config.Interceptor.ByteThreshold`, the proxy must synchronously call the local Ollama API to summarize the text BEFORE forwarding the request upstream.
-- **Transparent Streaming:** The proxy must flawlessly pipe the upstream SSE (Server-Sent Events
+- **Provider Registry:** Upstream providers are config-driven via `[providers.*]` TOML sections merged with built-in defaults (`builtInProviders()` in `config.go`). Adding a new provider (e.g., OpenAI) requires zero Go code changes — only TOML config and a secrets key. Routing uses `route_prefixes` for model-name-based provider resolution.
+- **Dynamic Routing:** The proxy must inspect the JSON body, read the `"model"` string, and dynamically route to the correct provider via `resolveProvider()`. Agents with fallback chains are resolved via `buildTargetList()`.
+- **The Ollama Interceptor:** If the `messages[-1].content` length exceeds `config.Interceptor.SoftLimit`, the proxy must synchronously call the local Ollama API to summarize the text BEFORE forwarding the request upstream.
+- **Transparent Streaming:** The proxy must flawlessly pipe the upstream SSE (Server-Sent Events) stream to the client, applying provider-specific response transformations (e.g. Gemini tool_calls normalization) as needed.
+- **Endpoints:** The gateway exposes `/v1/chat/completions` (streaming with Ollama interception), `/v1/models` (model catalog), `/v1/embeddings` (passthrough proxy), `/healthz` (Ollama health probe, no auth), and `/statsz` (per-model token usage counters, no auth). All `/v1/*` endpoints require `Authorization: Bearer <client_token>`.
+- **Token Usage Tracking:** `stats.go` implements `UsageTracker` with atomic per-model counters (requests, input_tokens, output_tokens, errors). Input tokens are counted at dispatch; output tokens are extracted from SSE `usage` fields via `SSETransformingReader.OnUsage` callback.
+- **Structured Logging:** All logging uses `slog` with structured key-value pairs. The logger auto-detects TTY (text) vs systemd (JSON) format. Debug-level logs are gated behind `g.logger.Enabled(ctx, slog.LevelDebug)`.
