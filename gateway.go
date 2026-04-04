@@ -9,15 +9,12 @@ import (
 	"sync"
 	"time"
 	"unicode/utf8"
-
-	tiktoken "github.com/pkoukk/tiktoken-go"
 )
 
 type NenyaGateway struct {
 	config         Config
 	client         *http.Client
 	ollamaClient   *http.Client
-	tokenizer      *tiktoken.Tiktoken
 	secrets        *SecretsConfig
 	providers      map[string]*Provider
 	rateLimits     map[string]*rateLimiter
@@ -46,7 +43,6 @@ func NewNenyaGateway(cfg Config, secrets *SecretsConfig, logger *slog.Logger) *N
 
 	secureClient := &http.Client{
 		Transport: transport,
-		Timeout:   120 * time.Second,
 	}
 
 	ollamaTransport := &http.Transport{
@@ -62,13 +58,6 @@ func NewNenyaGateway(cfg Config, secrets *SecretsConfig, logger *slog.Logger) *N
 	}
 	ollamaClient := &http.Client{
 		Transport: ollamaTransport,
-		Timeout:   time.Duration(cfg.Ollama.TimeoutSeconds) * time.Second,
-	}
-
-	tokenizer, err := tiktoken.GetEncoding("cl100k_base")
-	if err != nil {
-		logger.Warn("failed to initialize cl100k_base tokenizer, falling back to rune-length counting", "err", err)
-		tokenizer = nil
 	}
 
 	var secretPatterns []*regexp.Regexp
@@ -88,7 +77,6 @@ func NewNenyaGateway(cfg Config, secrets *SecretsConfig, logger *slog.Logger) *N
 		config:         cfg,
 		client:         secureClient,
 		ollamaClient:   ollamaClient,
-		tokenizer:      tokenizer,
 		secrets:        secrets,
 		providers:      resolveProviders(&cfg, secrets),
 		rateLimits:     make(map[string]*rateLimiter),
@@ -101,11 +89,11 @@ func NewNenyaGateway(cfg Config, secrets *SecretsConfig, logger *slog.Logger) *N
 }
 
 func (g *NenyaGateway) countTokens(text string) int {
-	if g.tokenizer != nil {
-		tokens := g.tokenizer.Encode(text, nil, nil)
-		return len(tokens)
+	ratio := g.config.Server.TokenRatio
+	if ratio <= 0 {
+		ratio = 4.0
 	}
-	return utf8.RuneCountInString(text) / 4
+	return int(float64(utf8.RuneCountInString(text)) / ratio)
 }
 
 func extractContentText(msg map[string]interface{}) string {

@@ -7,7 +7,7 @@ After=network-online.target
 [Service]
 Type=simple
 DynamicUser=yes 
-ExecStart=/usr/local/bin/nenya -config /etc/nenya/config.toml
+ExecStart=/usr/local/bin/nenya -config /etc/nenya/config.json
 Restart=on-failure
 RestartSec=5s
 

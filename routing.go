@@ -114,6 +114,26 @@ func (g *NenyaGateway) buildTargetList(agentName string, agent AgentConfig, toke
 	return append(active, cooling...)
 }
 
+func (g *NenyaGateway) resolveWindowMaxContext(modelName string, targets []upstreamTarget) int {
+	if agent, ok := g.config.Agents[modelName]; ok {
+		for _, m := range agent.Models {
+			if m.MaxContext > 0 {
+				return m.MaxContext
+			}
+		}
+	}
+	for _, t := range targets {
+		if provider, ok := g.providers[t.provider]; ok {
+			for _, prefix := range provider.RoutePrefixes {
+				if strings.HasPrefix(strings.ToLower(t.model), prefix) {
+					return 0
+				}
+			}
+		}
+	}
+	return 0
+}
+
 func (g *NenyaGateway) isGeminiProvider(providerName string) bool {
 	if p, ok := g.providers[providerName]; ok {
 		return p.AuthStyle == "bearer+x-goog"

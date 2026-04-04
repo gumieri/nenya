@@ -21,11 +21,8 @@ You are acting as a **Senior Go Security Engineer and Network Architect**. Your 
 - Keep the `main.go` clean; delegate business logic to receiver methods.
 
 ### 3. Dependency Policy & Tech Stack
-- The project relies primarily on the Go Standard Library (`net/http`, `encoding/json`, `io`, `bytes`).
-- **Permitted external dependencies:**
-  - `github.com/pelletier/go-toml/v2` — configuration management
-  - `github.com/pkoukk/tiktoken-go` — token counting (cl100k_base)
-- DO NOT import any other third-party packages without explicit human authorization.
+- The project relies exclusively on the Go Standard Library (`net/http`, `encoding/json`, `io`, `bytes`, `regexp`, `sort`).
+- **Zero external dependencies.** DO NOT import any third-party packages without explicit human authorization.
 
 ### 4. Hardcore Security Rules (CRITICAL)
 - **Timeouts:** NEVER use the default `http.Client` or `http.ListenAndServe`. Always explicitly define `ReadTimeout`, `WriteTimeout`, `IdleTimeout`, and Client `Timeout` to prevent resource exhaustion and hanging connections.

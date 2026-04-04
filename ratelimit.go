@@ -2,10 +2,12 @@ package main
 
 import (
 	"net/url"
+	"sync"
 	"time"
 )
 
 type rateLimiter struct {
+	mu         sync.Mutex
 	rpmBucket  float64
 	tpmBucket  float64
 	lastRefill time.Time
@@ -18,8 +20,6 @@ func (g *NenyaGateway) checkRateLimit(upstreamURL string, tokenCount int) bool {
 	}
 
 	g.rlMu.Lock()
-	defer g.rlMu.Unlock()
-
 	limiter, exists := g.rateLimits[host]
 	if !exists {
 		limiter = &rateLimiter{
@@ -29,6 +29,10 @@ func (g *NenyaGateway) checkRateLimit(upstreamURL string, tokenCount int) bool {
 		}
 		g.rateLimits[host] = limiter
 	}
+	g.rlMu.Unlock()
+
+	limiter.mu.Lock()
+	defer limiter.mu.Unlock()
 
 	now := time.Now()
 	elapsed := now.Sub(limiter.lastRefill).Seconds()
