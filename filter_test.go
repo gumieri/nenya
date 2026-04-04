@@ -20,31 +20,32 @@ func TestTruncateMiddleOut(t *testing.T) {
 	secrets := &SecretsConfig{}
 	g := NewNenyaGateway(cfg, secrets, slog.Default())
 
-	// Test short text (no truncation)
-	short := "Hello, world!"
-	result := g.truncateMiddleOut(short, 100)
-	if result != short {
-		t.Errorf("Expected no truncation, got: %s", result)
+	tests := []struct {
+		name    string
+		input   string
+		maxSize int
+		wantMax int
+		wantSep bool
+	}{
+		{"short text no truncation", "Hello, world!", 100, 13, false},
+		{"exact length", string(make([]rune, 100)), 100, 100, false},
+		{"long text truncated", string(make([]rune, 1000)), 100, 100, true},
+		{"zero max returns truncated separator", string(make([]rune, 1000)), 10, 10, false},
+		{"one rune max", string(make([]rune, 100)), 1, 1, false},
+		{"empty text", "", 100, 0, false},
 	}
 
-	// Test exact length
-	exact := string(make([]rune, 100))
-	result = g.truncateMiddleOut(exact, 100)
-	if utf8.RuneCountInString(result) != 100 {
-		t.Errorf("Expected 100 runes, got %d", utf8.RuneCountInString(result))
-	}
-
-	// Test truncation
-	long := string(make([]rune, 1000))
-	result = g.truncateMiddleOut(long, 100)
-	// Result should be <= maxSize and contain separator
-	if utf8.RuneCountInString(result) > 100 {
-		t.Errorf("Expected at most 100 runes after truncation, got %d", utf8.RuneCountInString(result))
-	}
-
-	// Check that separator is present
-	if !strings.Contains(result, "[NENYA: MASSIVE PAYLOAD TRUNCATED]") {
-		t.Errorf("Expected truncation separator")
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := g.truncateMiddleOut(tt.input, tt.maxSize)
+			runes := utf8.RuneCountInString(result)
+			if runes > tt.wantMax {
+				t.Errorf("expected at most %d runes, got %d", tt.wantMax, runes)
+			}
+			if tt.wantSep && !strings.Contains(result, "[NENYA: MASSIVE PAYLOAD TRUNCATED]") {
+				t.Error("expected truncation separator")
+			}
+		})
 	}
 }
 

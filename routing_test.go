@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"log/slog"
+	"net/http"
 	"sync"
 	"testing"
 	"time"
@@ -444,5 +445,170 @@ func TestBuildTargetListMaxContextNoLimit(t *testing.T) {
 	targets := g.buildTargetList("test", agent, 1_000_000)
 	if len(targets) != 1 {
 		t.Errorf("max_context=0 should impose no limit, got %d targets", len(targets))
+	}
+}
+
+func TestBuildTargetListUnknownProvider(t *testing.T) {
+	agent := AgentConfig{
+		Models: []AgentModel{
+			{Provider: "nonexistent", Model: "m1"},
+		},
+	}
+	cfg := Config{
+		Providers: builtInProviders(),
+	}
+	g := newTestGateway(cfg)
+
+	targets := g.buildTargetList("test", agent, 0)
+	if len(targets) != 0 {
+		t.Errorf("expected 0 targets for unknown provider, got %d", len(targets))
+	}
+}
+
+func TestResolveWindowMaxContext(t *testing.T) {
+	tests := []struct {
+		name    string
+		cfg     Config
+		model   string
+		targets []upstreamTarget
+		want    int
+	}{
+		{
+			name: "agent with max_context on first model",
+			cfg: Config{
+				Agents: map[string]AgentConfig{
+					"my-agent": {
+						Models: []AgentModel{
+							{Provider: "gemini", Model: "gemini-2.5-flash", MaxContext: 1000000},
+						},
+					},
+				},
+			},
+			model:   "my-agent",
+			targets: nil,
+			want:    1000000,
+		},
+		{
+			name: "agent with max_context=0 skips",
+			cfg: Config{
+				Agents: map[string]AgentConfig{
+					"my-agent": {
+						Models: []AgentModel{
+							{Provider: "gemini", Model: "gemini-2.5-flash", MaxContext: 0},
+							{Provider: "gemini", Model: "gemini-2.5-pro", MaxContext: 2000000},
+						},
+					},
+				},
+			},
+			model:   "my-agent",
+			targets: nil,
+			want:    2000000,
+		},
+		{
+			name: "agent with all max_context=0 returns 0",
+			cfg: Config{
+				Agents: map[string]AgentConfig{
+					"my-agent": {
+						Models: []AgentModel{
+							{Provider: "gemini", Model: "gemini-2.5-flash", MaxContext: 0},
+						},
+					},
+				},
+			},
+			model:   "my-agent",
+			targets: nil,
+			want:    0,
+		},
+		{
+			name: "direct route matching prefix returns 0",
+			cfg: Config{
+				Providers: map[string]ProviderConfig{
+					"gemini": {
+						URL:           "https://gemini.example.com/v1/chat/completions",
+						RoutePrefixes: []string{"gemini-"},
+						AuthStyle:     "bearer",
+					},
+				},
+			},
+			model: "gemini-2.5-flash",
+			targets: []upstreamTarget{
+				{url: "https://gemini.example.com/v1/chat/completions", model: "gemini-2.5-flash", provider: "gemini"},
+			},
+			want: 0,
+		},
+		{
+			name: "no agent and no prefix match returns 0",
+			cfg: Config{
+				Providers: builtInProviders(),
+			},
+			model: "unknown-model",
+			targets: []upstreamTarget{
+				{url: "https://z.ai/v1/chat/completions", model: "unknown-model", provider: "zai"},
+			},
+			want: 0,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			secrets := &SecretsConfig{}
+			g := NewNenyaGateway(tt.cfg, secrets, slog.Default())
+			got := g.resolveWindowMaxContext(tt.model, tt.targets)
+			if got != tt.want {
+				t.Errorf("got %d, want %d", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestInjectAPIKey(t *testing.T) {
+	tests := []struct {
+		name        string
+		provider    string
+		apiKey      string
+		authStyle   string
+		wantErr     bool
+		wantAuth    string
+		wantGoogKey bool
+	}{
+		{"bearer with key", "test", "sk-123", "bearer", false, "Bearer sk-123", false},
+		{"bearer missing key", "test", "", "bearer", true, "", false},
+		{"bearer+x-goog with key", "test", "AIza...", "bearer+x-goog", false, "Bearer AIza...", true},
+		{"bearer+x-goog missing key", "test", "", "bearer+x-goog", true, "", false},
+		{"none style", "test", "", "none", false, "", false},
+		{"unknown provider", "missing", "", "", true, "", false},
+		{"unknown auth style", "test", "key", "digest", true, "", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := Config{
+				Providers: map[string]ProviderConfig{
+					"test": {URL: "http://example.com", RoutePrefixes: []string{"test-"}, AuthStyle: tt.authStyle},
+				},
+			}
+			secrets := &SecretsConfig{ProviderKeys: map[string]string{"test": tt.apiKey}}
+			g := NewNenyaGateway(cfg, secrets, slog.Default())
+
+			headers := make(http.Header)
+			err := g.injectAPIKey(tt.provider, headers)
+
+			if (err != nil) != tt.wantErr {
+				t.Errorf("error: got %v, wantErr %v", err, tt.wantErr)
+			}
+			if tt.wantErr {
+				return
+			}
+			if tt.wantAuth != "" {
+				if got := headers.Get("Authorization"); got != tt.wantAuth {
+					t.Errorf("Authorization: got %q, want %q", got, tt.wantAuth)
+				}
+			}
+			if tt.wantGoogKey {
+				if got := headers.Get("x-goog-api-key"); got != tt.apiKey {
+					t.Errorf("x-goog-api-key: got %q, want %q", got, tt.apiKey)
+				}
+			}
+		})
 	}
 }

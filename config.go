@@ -5,27 +5,25 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-
-	toml "github.com/pelletier/go-toml/v2"
 )
 
 type AgentModel struct {
-	Provider   string `toml:"provider"`
-	Model      string `toml:"model"`
-	URL        string `toml:"url"`
-	MaxContext int    `toml:"max_context"`
+	Provider   string `json:"provider"`
+	Model      string `json:"model"`
+	URL        string `json:"url"`
+	MaxContext int    `json:"max_context"`
 }
 
 type AgentConfig struct {
-	Strategy        string       `toml:"strategy"`
-	CooldownSeconds int          `toml:"cooldown_seconds"`
-	Models          []AgentModel `toml:"models"`
+	Strategy        string       `json:"strategy"`
+	CooldownSeconds int          `json:"cooldown_seconds"`
+	Models          []AgentModel `json:"models"`
 }
 
 type ProviderConfig struct {
-	URL           string   `toml:"url"`
-	RoutePrefixes []string `toml:"route_prefixes"`
-	AuthStyle     string   `toml:"auth_style"`
+	URL           string   `json:"url"`
+	RoutePrefixes []string `json:"route_prefixes"`
+	AuthStyle     string   `json:"auth_style"`
 }
 
 type Provider struct {
@@ -40,28 +38,32 @@ type Config struct {
 	Server      ServerConfig
 	Interceptor InterceptorConfig
 	Ollama      OllamaConfig
-	RateLimit   RateLimitConfig `toml:"ratelimit"`
+	RateLimit   RateLimitConfig `json:"ratelimit"`
 	Filter      FilterConfig
-	Agents      map[string]AgentConfig    `toml:"agents"`
-	Providers   map[string]ProviderConfig `toml:"providers"`
+	PrefixCache PrefixCacheConfig         `json:"prefix_cache"`
+	Compaction  CompactionConfig          `json:"compaction"`
+	Window      WindowConfig              `json:"window"`
+	Agents      map[string]AgentConfig    `json:"agents"`
+	Providers   map[string]ProviderConfig `json:"providers"`
 }
 
 type ServerConfig struct {
-	ListenAddr   string `toml:"listen_addr"`
-	MaxBodyBytes int64  `toml:"max_body_bytes"`
+	ListenAddr   string  `json:"listen_addr"`
+	MaxBodyBytes int64   `json:"max_body_bytes"`
+	TokenRatio   float64 `json:"token_ratio"`
 }
 
 type InterceptorConfig struct {
-	SoftLimit          int     `toml:"soft_limit"`
-	HardLimit          int     `toml:"hard_limit"`
-	TruncationStrategy string  `toml:"truncation_strategy"`
-	KeepFirstPercent   float64 `toml:"keep_first_percent"`
-	KeepLastPercent    float64 `toml:"keep_last_percent"`
+	SoftLimit          int     `json:"soft_limit"`
+	HardLimit          int     `json:"hard_limit"`
+	TruncationStrategy string  `json:"truncation_strategy"`
+	KeepFirstPercent   float64 `json:"keep_first_percent"`
+	KeepLastPercent    float64 `json:"keep_last_percent"`
 }
 
 type RateLimitConfig struct {
-	MaxTPM int `toml:"max_tpm"`
-	MaxRPM int `toml:"max_rpm"`
+	MaxTPM int `json:"max_tpm"`
+	MaxRPM int `json:"max_rpm"`
 }
 
 type SecretsConfig struct {
@@ -70,16 +72,40 @@ type SecretsConfig struct {
 }
 
 type OllamaConfig struct {
-	URL            string `toml:"url"`
-	Model          string `toml:"model"`
-	SystemPrompt   string `toml:"system_prompt"`
-	TimeoutSeconds int    `toml:"timeout_seconds"`
+	URL            string `json:"url"`
+	Model          string `json:"model"`
+	SystemPrompt   string `json:"system_prompt"`
+	TimeoutSeconds int    `json:"timeout_seconds"`
 }
 
 type FilterConfig struct {
-	Enabled        bool     `toml:"enabled"`
-	Patterns       []string `toml:"patterns"`
-	RedactionLabel string   `toml:"redaction_label"`
+	Enabled        bool     `json:"enabled"`
+	Patterns       []string `json:"patterns"`
+	RedactionLabel string   `json:"redaction_label"`
+}
+
+type PrefixCacheConfig struct {
+	Enabled               bool `json:"enabled"`
+	PinSystemFirst        bool `json:"pin_system_first"`
+	StableTools           bool `json:"stable_tools"`
+	SkipRedactionOnSystem bool `json:"skip_redaction_on_system"`
+}
+
+type CompactionConfig struct {
+	Enabled                bool `json:"enabled"`
+	JSONMinify             bool `json:"json_minify"`
+	CollapseBlankLines     bool `json:"collapse_blank_lines"`
+	TrimTrailingWhitespace bool `json:"trim_trailing_whitespace"`
+	NormalizeLineEndings   bool `json:"normalize_line_endings"`
+}
+
+type WindowConfig struct {
+	Enabled         bool    `json:"enabled"`
+	Mode            string  `json:"mode"`
+	ActiveMessages  int     `json:"active_messages"`
+	TriggerRatio    float64 `json:"trigger_ratio"`
+	SummaryMaxRunes int     `json:"summary_max_runes"`
+	MaxContext      int     `json:"max_context"`
 }
 
 func builtInProviders() map[string]ProviderConfig {
@@ -124,7 +150,7 @@ func loadConfig(filename string) (*Config, error) {
 	}
 
 	var cfg Config
-	if err := toml.Unmarshal(data, &cfg); err != nil {
+	if err := json.Unmarshal(data, &cfg); err != nil {
 		return nil, fmt.Errorf("failed to parse config file %s: %v", filename, err)
 	}
 
@@ -139,6 +165,9 @@ func applyDefaults(cfg *Config) {
 	}
 	if cfg.Server.MaxBodyBytes == 0 {
 		cfg.Server.MaxBodyBytes = 10 << 20
+	}
+	if cfg.Server.TokenRatio == 0 {
+		cfg.Server.TokenRatio = 4.0
 	}
 	if cfg.Interceptor.SoftLimit == 0 {
 		cfg.Interceptor.SoftLimit = 4000
@@ -193,6 +222,54 @@ func applyDefaults(cfg *Config) {
 		if _, exists := cfg.Providers[name]; !exists {
 			cfg.Providers[name] = builtIn
 		}
+	}
+
+	if !cfg.PrefixCache.Enabled && cfg.PrefixCache.PinSystemFirst || cfg.PrefixCache.StableTools || cfg.PrefixCache.SkipRedactionOnSystem {
+		cfg.PrefixCache.Enabled = true
+	}
+	if !cfg.PrefixCache.PinSystemFirst {
+		cfg.PrefixCache.PinSystemFirst = true
+	}
+	if !cfg.PrefixCache.StableTools {
+		cfg.PrefixCache.StableTools = true
+	}
+	if !cfg.PrefixCache.SkipRedactionOnSystem {
+		cfg.PrefixCache.SkipRedactionOnSystem = true
+	}
+
+	if !cfg.Compaction.Enabled && (cfg.Compaction.JSONMinify || cfg.Compaction.CollapseBlankLines || cfg.Compaction.TrimTrailingWhitespace || cfg.Compaction.NormalizeLineEndings) {
+		cfg.Compaction.Enabled = true
+	}
+	if !cfg.Compaction.JSONMinify {
+		cfg.Compaction.JSONMinify = true
+	}
+	if !cfg.Compaction.CollapseBlankLines {
+		cfg.Compaction.CollapseBlankLines = true
+	}
+	if !cfg.Compaction.TrimTrailingWhitespace {
+		cfg.Compaction.TrimTrailingWhitespace = true
+	}
+	if !cfg.Compaction.NormalizeLineEndings {
+		cfg.Compaction.NormalizeLineEndings = true
+	}
+
+	if !cfg.Window.Enabled && (cfg.Window.Mode != "" || cfg.Window.ActiveMessages != 0 || cfg.Window.TriggerRatio != 0 || cfg.Window.SummaryMaxRunes != 0 || cfg.Window.MaxContext != 0) {
+		cfg.Window.Enabled = true
+	}
+	if cfg.Window.Mode == "" {
+		cfg.Window.Mode = "summarize"
+	}
+	if cfg.Window.ActiveMessages == 0 {
+		cfg.Window.ActiveMessages = 6
+	}
+	if cfg.Window.TriggerRatio == 0 {
+		cfg.Window.TriggerRatio = 0.8
+	}
+	if cfg.Window.SummaryMaxRunes == 0 {
+		cfg.Window.SummaryMaxRunes = 4000
+	}
+	if cfg.Window.MaxContext == 0 {
+		cfg.Window.MaxContext = 128000
 	}
 }
 

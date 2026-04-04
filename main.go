@@ -14,7 +14,7 @@ import (
 func main() {
 	var configFile string
 	var verbose bool
-	flag.StringVar(&configFile, "config", "config.toml", "Path to configuration file")
+	flag.StringVar(&configFile, "config", "config.json", "Path to configuration file")
 	flag.BoolVar(&verbose, "verbose", false, "Enable debug-level request/response logging")
 	flag.Parse()
 

@@ -6,14 +6,14 @@ Its **superpower** is the **"Bouncer" mechanism**: intercepting massive HTTP pay
 
 ## Features
 
-- **Config-driven provider registry** — add providers (OpenAI, Anthropic, etc.) via TOML config + secrets, zero code changes
+- **Config-driven provider registry** — add providers (OpenAI, Anthropic, etc.) via JSON config + secrets, zero code changes
 - **Dynamic routing** based on model name prefixes configured per provider
 - **Tier-0 regex secret filter**: always-on regex-based redaction of AWS keys, GitHub tokens, passwords, etc. (configurable patterns)
 - **3-Tier UTF-8 safe pipeline**:
   - **Tier 1** (pass-through): payloads under `soft_limit` characters
   - **Tier 2** (Ollama only): payloads between `soft_limit` and `hard_limit` characters — summarized locally
   - **Tier 3** (truncation + Ollama): payloads over `hard_limit` characters — middle-out truncation — summarization
-- **Zero-dependency core** (except `github.com/pelletier/go-toml/v2` for config and `github.com/pkoukk/tiktoken-go` for token counting)
+- **Zero external dependencies** — Go standard library only
 - **Hardened security**: strict timeouts, request size limits, hop-by-hop header stripping, panic recovery
 - **Systemd credential management**: API keys loaded from `CREDENTIALS_DIRECTORY`
 - **Rate limiting** per upstream host (RPM/TPM)
@@ -21,43 +21,40 @@ Its **superpower** is the **"Bouncer" mechanism**: intercepting massive HTTP pay
 
 ## Configuration
 
-### `config.toml`
+### `config.json`
 
-```toml
-[server]
-listen_addr = ":8080"
-max_body_bytes = 10485760
+See [`example.config.json`](example.config.json) for the full schema with all options.
 
-[interceptor]
-soft_limit = 4000           # characters (runes) - Tier 1 pass-through
-hard_limit = 24000          # characters (runes) - Tier 3 truncation threshold
-truncation_strategy = "middle-out"
-keep_first_percent = 15.0
-keep_last_percent = 25.0
-
-[ratelimit]
-max_tpm = 250000            # tokens per minute (approximate)
-max_rpm = 15                # requests per minute
-
-[ollama]
-url = "http://127.0.0.1:11434/api/generate"
-model = "qwen2.5-coder:7b"
-system_prompt = "You are a data privacy filter. Summarize the following log/code error in 5 lines. REMOVE any IP addresses, AWS keys (AKIA...), or passwords. Keep only the technical core of the error."
-
-[filter]
-# Tier-0 regex-based secret redaction (runs on every request)
-enabled = true
-redaction_label = "[REDACTED]"
-
-# Provider Registry
-# Built-in providers: gemini, deepseek, zai, groq, together, ollama
-# Override or add new providers here:
-#
-# [providers.openai]
-# url = "https://api.openai.com/v1/chat/completions"
-# route_prefixes = ["gpt-", "o3-", "o4-"]
-# auth_style = "bearer"
+```json
+{
+  "server": {
+    "listen_addr": ":8080",
+    "max_body_bytes": 10485760
+  },
+  "interceptor": {
+    "soft_limit": 4000,
+    "hard_limit": 24000,
+    "truncation_strategy": "middle-out",
+    "keep_first_percent": 15.0,
+    "keep_last_percent": 25.0
+  },
+  "ratelimit": {
+    "max_tpm": 250000,
+    "max_rpm": 15
+  },
+  "ollama": {
+    "url": "http://127.0.0.1:11434/api/generate",
+    "model": "qwen2.5-coder:7b",
+    "system_prompt": "You are a data privacy filter. Summarize the following log/code error in 5 lines. REMOVE any IP addresses, AWS keys (AKIA...), or passwords. Keep only the technical core of the error."
+  },
+  "filter": {
+    "enabled": true,
+    "redaction_label": "[REDACTED]"
+  }
+}
 ```
+
+For the full configuration reference including all sections (prefix cache, compaction, window compaction, agents), see [`CONFIGURATION.md`](CONFIGURATION.md).
 
 ### Secrets (`secrets` JSON file)
 
@@ -80,12 +77,17 @@ At minimum `client_token` must be present; `provider_keys` entries can be omitte
 
 No Go code changes needed. Add two sections:
 
-**config.toml:**
-```toml
-[providers.openai]
-url = "https://api.openai.com/v1/chat/completions"
-route_prefixes = ["gpt-", "o3-", "o4-"]
-auth_style = "bearer"
+**config.json:**
+```json
+{
+  "providers": {
+    "openai": {
+      "url": "https://api.openai.com/v1/chat/completions",
+      "route_prefixes": ["gpt-", "o3-", "o4-"],
+      "auth_style": "bearer"
+    }
+  }
+}
 ```
 
 **secrets.json:**
@@ -113,7 +115,7 @@ sudo mise run install
 
 This will:
 1. Build the binary and install to `/usr/local/bin/nenya`
-2. Copy `example.config.toml` to `/etc/nenya/config.toml`
+2. Copy `example.config.json` to `/etc/nenya/config.json`
 3. Copy `nenya.service` to `/etc/systemd/system/nenya.service`
 4. Reload systemd
 
@@ -215,7 +217,7 @@ The gateway will automatically map Gemini model names (e.g., `gemini-3-flash` to
 ### Prerequisites
 
 - Go 1.26+
-- Ollama with `qwen2.5-coder:7b` (or adjust `config.toml`)
+- Ollama with `qwen2.5-coder:7b` (or adjust `config.json`)
 
 ### Running Tests
 
@@ -228,7 +230,7 @@ go fmt ./...
 ### Architecture
 
 - **`main.go`** — Entry point, server bootstrap with graceful shutdown
-- **`config.go`** — Configuration types, TOML/JSON loading, provider registry
+- **`config.go`** — Configuration types, JSON loading, provider registry
 - **`gateway.go`** — NenyaGateway struct, HTTP clients, tokenization
 - **`proxy.go`** — HTTP handler, 3-tier pipeline, Ollama interceptor, upstream forwarding
 - **`routing.go`** — Dynamic routing, agent fallback chains, API key injection, model mapping
@@ -258,9 +260,10 @@ go fmt ./...
 - `ratelimit.go` — Token-bucket rate limiter
 - `stats.go` — Token usage tracking, /statsz and /healthz endpoints
 - `logger.go` — slog setup with TTY/systemd auto-detection
-- `config.toml` — Default configuration (editable)
-- `example.config.toml` — Example with comments
+- `config.json` — Runtime configuration (JSON)
+- `example.config.json` — Example with all options
 - `nenya.service` — Systemd service unit with sandboxing
+- `CONFIGURATION.md` — Full configuration reference
 - `SECRETS_FORMAT.md` — Secrets file format and security notes
 - `mise.toml` — Build, install, test, release tasks
 - `README.md` — This file
