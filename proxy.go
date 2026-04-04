@@ -209,6 +209,10 @@ func (g *NenyaGateway) handleChatCompletions(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
+	if r.Context().Err() != nil {
+		return
+	}
+
 	var payload map[string]interface{}
 	if err := json.Unmarshal(bodyBytes, &payload); err != nil {
 		g.logger.Warn("failed to parse JSON, returning Bad Request")
@@ -268,7 +272,8 @@ func (g *NenyaGateway) handleChatCompletions(w http.ResponseWriter, r *http.Requ
 
 	if messagesRaw, ok := payload["messages"]; ok {
 		if messages, ok := messagesRaw.([]interface{}); ok && len(messages) > 0 {
-			updated, err := g.applyContentPipeline(r.Context(), payload, messages, bodyBytes)
+			windowMaxCtx := g.resolveWindowMaxContext(modelName, targets)
+			updated, err := g.applyContentPipeline(r.Context(), payload, bodyBytes, tokenCount, windowMaxCtx)
 			if err != nil {
 				g.logger.Error("content pipeline failed", "err", err)
 				http.Error(w, "Internal Server Error", http.StatusInternalServerError)
@@ -283,11 +288,18 @@ func (g *NenyaGateway) handleChatCompletions(w http.ResponseWriter, r *http.Requ
 	g.forwardToUpstream(w, r, targets, payload, cooldownDuration, tokenCount)
 }
 
-func (g *NenyaGateway) applyContentPipeline(ctx context.Context, payload map[string]interface{}, messages []interface{}, bodyBytes []byte) ([]byte, error) {
+func (g *NenyaGateway) applyContentPipeline(ctx context.Context, payload map[string]interface{}, bodyBytes []byte, tokenCount int, windowMaxCtx int) ([]byte, error) {
+	messages := payload["messages"].([]interface{})
+
+	g.applyPrefixCacheOptimizations(payload, messages)
+
 	anyRedacted := false
 	for _, msgRaw := range messages {
 		msgNode, ok := msgRaw.(map[string]interface{})
 		if !ok {
+			continue
+		}
+		if g.shouldSkipRedaction(msgNode) {
 			continue
 		}
 		text := extractContentText(msgNode)
@@ -307,6 +319,28 @@ func (g *NenyaGateway) applyContentPipeline(ctx context.Context, payload map[str
 		bodyBytes = newBody
 	}
 
+	messages = payload["messages"].([]interface{})
+	if g.applyCompaction(messages) {
+		newBody, err := json.Marshal(payload)
+		if err != nil {
+			return nil, fmt.Errorf("failed to marshal compacted payload: %w", err)
+		}
+		bodyBytes = newBody
+	}
+
+	messages = payload["messages"].([]interface{})
+	if windowed, err := g.applyWindowCompaction(ctx, payload, messages, tokenCount, windowMaxCtx); err != nil {
+		g.logger.Warn("window compaction failed, proceeding without it", "err", err)
+		_ = windowed
+	} else if windowed {
+		newBody, err := json.Marshal(payload)
+		if err != nil {
+			return nil, fmt.Errorf("failed to marshal window-compacted payload: %w", err)
+		}
+		bodyBytes = newBody
+	}
+
+	messages = payload["messages"].([]interface{})
 	lastMsgRaw := messages[len(messages)-1]
 	lastMsgNode, ok := lastMsgRaw.(map[string]interface{})
 	if !ok {
@@ -363,47 +397,22 @@ func (g *NenyaGateway) applyContentPipeline(ctx context.Context, payload map[str
 		}
 	}
 
+	if minified, err := g.minifyJSON(bodyBytes); err == nil {
+		bodyBytes = minified
+	}
+
 	return bodyBytes, nil
 }
 
 func (g *NenyaGateway) summarizeWithOllama(ctx context.Context, heavyText string) (string, error) {
-	payload := map[string]interface{}{
-		"model":  g.config.Ollama.Model,
-		"system": g.config.Ollama.SystemPrompt,
-		"prompt": heavyText,
-		"stream": false,
-	}
-	jsonPayload, err := json.Marshal(payload)
+	ctx, cancel := context.WithTimeout(ctx, time.Duration(g.config.Ollama.TimeoutSeconds)*time.Second)
+	defer cancel()
+
+	summary, err := g.callOllama(ctx, g.config.Ollama.SystemPrompt, heavyText)
 	if err != nil {
-		return "", fmt.Errorf("failed to marshal ollama payload: %v", err)
+		return "", err
 	}
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, g.config.Ollama.URL, bytes.NewBuffer(jsonPayload))
-	if err != nil {
-		return "", fmt.Errorf("failed to create ollama request: %v", err)
-	}
-	req.Header.Set("Content-Type", "application/json")
-
-	resp, err := g.ollamaClient.Do(req)
-	if err != nil {
-		return "", fmt.Errorf("ollama unreachable: %v", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		return "", fmt.Errorf("ollama returned status %d: %s", resp.StatusCode, string(body))
-	}
-
-	var ollamaResp map[string]interface{}
-	if err := json.NewDecoder(io.LimitReader(resp.Body, maxOllamaResponseBytes)).Decode(&ollamaResp); err != nil {
-		return "", fmt.Errorf("failed to decode ollama response: %v", err)
-	}
-
-	if summary, ok := ollamaResp["response"].(string); ok {
-		return summary, nil
-	}
-	return "", fmt.Errorf("ollama response missing 'response' field")
+	return summary, nil
 }
 
 func (g *NenyaGateway) forwardToUpstream(
@@ -509,10 +518,22 @@ func (g *NenyaGateway) forwardToUpstream(
 		transformingReader.SetOnUsage(func(completion, prompt, total int) {
 			g.stats.RecordOutput(target.model, completion)
 		})
-		if _, err := io.Copy(w, transformingReader); err != nil {
-			g.logger.Debug("stream copy ended", "err", err)
+
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			if _, err := io.Copy(w, transformingReader); err != nil {
+				g.logger.Debug("stream copy ended", "err", err)
+			}
+		}()
+
+		select {
+		case <-done:
+		case <-r.Context().Done():
+			g.logger.Info("client disconnected, aborting upstream stream", "model", target.model)
+			resp.Body.Close()
+			<-done
 		}
-		resp.Body.Close()
 		return
 	}
 

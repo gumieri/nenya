@@ -352,3 +352,77 @@ data: [DONE]
 		t.Error("OnUsage should not fire when no usage field is present")
 	}
 }
+
+func TestToInt(t *testing.T) {
+	tests := []struct {
+		name  string
+		input interface{}
+		want  int
+	}{
+		{"float64", float64(42.7), 42},
+		{"float64 zero", float64(0), 0},
+		{"string", "not a number", 0},
+		{"nil", nil, 0},
+		{"bool", true, 0},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := toInt(tt.input)
+			if got != tt.want {
+				t.Errorf("toInt(%v) = %d, want %d", tt.input, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestExtractUsageEdgeCases(t *testing.T) {
+	t.Run("non-JSON data", func(t *testing.T) {
+		r := &SSETransformingReader{}
+		r.extractUsage([]byte("not json"))
+	})
+
+	t.Run("malformed JSON", func(t *testing.T) {
+		r := &SSETransformingReader{}
+		r.extractUsage([]byte(`{invalid}`))
+	})
+
+	t.Run("no usage field", func(t *testing.T) {
+		r := &SSETransformingReader{}
+		r.extractUsage([]byte(`{"choices":[]}`))
+	})
+
+	t.Run("usage with all zeros", func(t *testing.T) {
+		fired := false
+		r := &SSETransformingReader{}
+		r.onUsage = func(c, p, t int) { fired = true }
+		r.extractUsage([]byte(`{"usage":{"completion_tokens":0,"prompt_tokens":0,"total_tokens":0}}`))
+		if fired {
+			t.Error("onUsage should not fire for all-zero usage")
+		}
+	})
+
+	t.Run("usage with only completion", func(t *testing.T) {
+		fired := false
+		var gotC int
+		r := &SSETransformingReader{}
+		r.onUsage = func(c, p, t int) { fired = true; gotC = c }
+		r.extractUsage([]byte(`{"usage":{"completion_tokens":5}}`))
+		if !fired {
+			t.Error("onUsage should fire when completion_tokens > 0")
+		}
+		if gotC != 5 {
+			t.Errorf("got completion_tokens=%d, want 5", gotC)
+		}
+	})
+
+	t.Run("whitespace before JSON", func(t *testing.T) {
+		fired := false
+		r := &SSETransformingReader{}
+		r.onUsage = func(c, p, t int) { fired = true }
+		r.extractUsage([]byte(`   {"usage":{"completion_tokens":1,"prompt_tokens":1,"total_tokens":2}}`))
+		if !fired {
+			t.Error("onUsage should fire for valid JSON with leading whitespace")
+		}
+	})
+}

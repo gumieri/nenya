@@ -369,3 +369,143 @@ func TestStatsEndpoint(t *testing.T) {
 		t.Errorf("expected 1 error, got %d", ds.Errors)
 	}
 }
+
+func TestExtractContentText(t *testing.T) {
+	tests := []struct {
+		name string
+		msg  map[string]interface{}
+		want string
+	}{
+		{"string content", map[string]interface{}{"content": "hello"}, "hello"},
+		{"multi-part content", map[string]interface{}{
+			"content": []interface{}{
+				map[string]interface{}{"type": "text", "text": "part1"},
+				map[string]interface{}{"type": "text", "text": "part2"},
+			},
+		}, "part1part2"},
+		{"multi-part with non-text parts", map[string]interface{}{
+			"content": []interface{}{
+				map[string]interface{}{"type": "image_url", "url": "http://..."},
+				map[string]interface{}{"type": "text", "text": "only text"},
+			},
+		}, "only text"},
+		{"missing content key", map[string]interface{}{"role": "user"}, ""},
+		{"nil content", map[string]interface{}{"content": nil}, ""},
+		{"non-string non-array content", map[string]interface{}{"content": 42}, ""},
+		{"multi-part with non-map parts", map[string]interface{}{
+			"content": []interface{}{"not a map", map[string]interface{}{"type": "text", "text": "ok"}},
+		}, "ok"},
+		{"multi-part with missing text key", map[string]interface{}{
+			"content": []interface{}{
+				map[string]interface{}{"type": "text"},
+				map[string]interface{}{"type": "text", "text": "found"},
+			},
+		}, "found"},
+		{"empty multi-part", map[string]interface{}{
+			"content": []interface{}{},
+		}, ""},
+		{"empty string", map[string]interface{}{"content": ""}, ""},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := extractContentText(tt.msg)
+			if got != tt.want {
+				t.Errorf("got %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestNewNenyaGatewayInvalidRegex(t *testing.T) {
+	cfg := Config{
+		Filter: FilterConfig{
+			Enabled:  true,
+			Patterns: []string{"[invalid(regex"},
+		},
+	}
+	secrets := &SecretsConfig{}
+	logger := slog.Default()
+	g := NewNenyaGateway(cfg, secrets, logger)
+
+	if len(g.secretPatterns) != 0 {
+		t.Errorf("expected 0 compiled patterns for invalid regex, got %d", len(g.secretPatterns))
+	}
+}
+
+func TestCountRequestTokens(t *testing.T) {
+	cfg := Config{}
+	g := newTestGatewayWithLogger(cfg)
+
+	tests := []struct {
+		name    string
+		payload map[string]interface{}
+		want    int
+		gtZero  bool
+	}{
+		{
+			name: "single message",
+			payload: map[string]interface{}{
+				"messages": []interface{}{
+					map[string]interface{}{"role": "user", "content": "hello world"},
+				},
+			},
+			gtZero: true,
+		},
+		{
+			name: "multi-part content counted",
+			payload: map[string]interface{}{
+				"messages": []interface{}{
+					map[string]interface{}{
+						"content": []interface{}{
+							map[string]interface{}{"type": "text", "text": "part one"},
+							map[string]interface{}{"type": "text", "text": "part two"},
+						},
+					},
+				},
+			},
+			gtZero: true,
+		},
+		{
+			name:    "no messages key",
+			payload: map[string]interface{}{},
+			want:    0,
+		},
+		{
+			name: "messages not an array",
+			payload: map[string]interface{}{
+				"messages": "not an array",
+			},
+			want: 0,
+		},
+		{
+			name: "messages with non-map entries",
+			payload: map[string]interface{}{
+				"messages": []interface{}{
+					"not a map",
+					map[string]interface{}{"role": "user", "content": "valid"},
+				},
+			},
+			gtZero: true,
+		},
+		{
+			name: "empty messages array",
+			payload: map[string]interface{}{
+				"messages": []interface{}{},
+			},
+			want: 0,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := g.countRequestTokens(tt.payload)
+			if tt.want != 0 && got != tt.want {
+				t.Errorf("got %d, want %d", got, tt.want)
+			}
+			if tt.gtZero && got <= 0 {
+				t.Errorf("expected positive token count, got %d", got)
+			}
+		})
+	}
+}

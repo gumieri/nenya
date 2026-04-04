@@ -26,7 +26,7 @@ description = "Install binary, config, and systemd unit"
 depends = ["build"]
 run = """
 install -Dm755 nenya /usr/local/bin/nenya
-install -Dm644 example.config.toml /etc/nenya/config.toml
+	install -Dm644 example.config.json /etc/nenya/config.json
 install -Dm644 nenya.service /etc/systemd/system/nenya.service
 systemctl daemon-reload
 echo "Installed. Configure secrets as per SECRETS_FORMAT.md and enable service:"
@@ -42,7 +42,7 @@ if [ ! -f creds/secrets ]; then
   echo "WARNING: Creating dummy secrets file for local testing. Replace with real API keys!"
   printf '{\n  "client_token": "test-client-token",\n  "gemini_key": "dummy-gemini-key",\n  "deepseek_key": "dummy-deepseek-key",\n  "zai_key": "dummy-zai-key"\n}\n' > creds/secrets
 fi
-CREDENTIALS_DIRECTORY=./creds ./nenya -config config.toml
+	CREDENTIALS_DIRECTORY=./creds ./nenya -config config.json
 """
 
 [tasks.release]

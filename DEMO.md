@@ -3,7 +3,7 @@
 ## Prerequisites
 
 1. Install Go 1.26+
-2. Install dependencies: `go mod download`
+2. No external dependencies — Go standard library only
 3. Have a local Ollama instance running with `qwen2.5-coder:7b` model (or adjust config)
 4. Obtain API keys for at least one upstream provider (Gemini, DeepSeek, or z.ai)
 
@@ -11,13 +11,13 @@
 
 ### 1. Build the gateway
 ```bash
-make build
+mise run build
 ```
 
 ### 2. Prepare configuration
 Copy the example config and adjust as needed:
 ```bash
-cp example.config.toml config.toml
+cp example.config.json config.json
 ```
 
 ### 3. Prepare secrets (for systemd credentials)
@@ -44,12 +44,12 @@ cat > creds/secrets << 'EOF'
 }
 EOF
 
-CREDENTIALS_DIRECTORY=$(pwd)/creds ./nenya -config config.toml
+CREDENTIALS_DIRECTORY=$(pwd)/creds ./nenya -config config.json
 ```
 
-Or use the Makefile target (creates dummy secrets automatically):
+Or use the mise task (creates dummy secrets automatically):
 ```bash
-make run
+mise run run
 ```
 
 The gateway will listen on `:8080`.
@@ -117,7 +117,7 @@ The gateway logs to stdout. Look for indicators:
 
 1. Install the gateway system‑wide:
 ```bash
-sudo make install
+sudo mise run install
 ```
 
 2. Place your secrets file at `/etc/nenya/secrets.json` (adjust ownership)
@@ -144,7 +144,7 @@ curl http://127.0.0.1:11434/api/version
 - Ensure upstream API keys are valid and have sufficient quota
 
 ### Rate limiting
-Adjust `max_tpm` and `max_rpm` in `config.toml` or set to `0` to disable.
+Adjust `max_tpm` and `max_rpm` in `config.json` or set to `0` to disable.
 
 ### UTF‑8 handling
 The gateway counts **runes** (Unicode code points), not bytes. Non‑ASCII characters count as one rune each.
