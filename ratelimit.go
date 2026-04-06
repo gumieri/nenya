@@ -23,8 +23,8 @@ func (g *NenyaGateway) checkRateLimit(upstreamURL string, tokenCount int) bool {
 	limiter, exists := g.rateLimits[host]
 	if !exists {
 		limiter = &rateLimiter{
-			rpmBucket:  float64(g.config.RateLimit.MaxRPM),
-			tpmBucket:  float64(g.config.RateLimit.MaxTPM),
+			rpmBucket:  float64(g.config.Governance.RatelimitMaxRPM),
+			tpmBucket:  float64(g.config.Governance.RatelimitMaxTPM),
 			lastRefill: time.Now(),
 		}
 		g.rateLimits[host] = limiter
@@ -38,30 +38,30 @@ func (g *NenyaGateway) checkRateLimit(upstreamURL string, tokenCount int) bool {
 	elapsed := now.Sub(limiter.lastRefill).Seconds()
 	limiter.lastRefill = now
 
-	if g.config.RateLimit.MaxRPM > 0 {
-		limiter.rpmBucket = min(float64(g.config.RateLimit.MaxRPM),
-			limiter.rpmBucket+elapsed*float64(g.config.RateLimit.MaxRPM)/60.0)
+	if g.config.Governance.RatelimitMaxRPM > 0 {
+		limiter.rpmBucket = min(float64(g.config.Governance.RatelimitMaxRPM),
+			limiter.rpmBucket+elapsed*float64(g.config.Governance.RatelimitMaxRPM)/60.0)
 	}
-	if g.config.RateLimit.MaxTPM > 0 {
-		limiter.tpmBucket = min(float64(g.config.RateLimit.MaxTPM),
-			limiter.tpmBucket+elapsed*float64(g.config.RateLimit.MaxTPM)/60.0)
+	if g.config.Governance.RatelimitMaxTPM > 0 {
+		limiter.tpmBucket = min(float64(g.config.Governance.RatelimitMaxTPM),
+			limiter.tpmBucket+elapsed*float64(g.config.Governance.RatelimitMaxTPM)/60.0)
 	}
 
-	if g.config.RateLimit.MaxRPM > 0 && limiter.rpmBucket < 1.0 {
+	if g.config.Governance.RatelimitMaxRPM > 0 && limiter.rpmBucket < 1.0 {
 		g.logger.Warn("RPM limit exceeded",
 			"host", host, "rpm_available", limiter.rpmBucket)
 		return false
 	}
-	if g.config.RateLimit.MaxTPM > 0 && limiter.tpmBucket < float64(tokenCount) {
+	if g.config.Governance.RatelimitMaxTPM > 0 && limiter.tpmBucket < float64(tokenCount) {
 		g.logger.Warn("TPM limit exceeded",
 			"host", host, "tpm_available", limiter.tpmBucket, "tokens_needed", tokenCount)
 		return false
 	}
 
-	if g.config.RateLimit.MaxRPM > 0 {
+	if g.config.Governance.RatelimitMaxRPM > 0 {
 		limiter.rpmBucket--
 	}
-	if g.config.RateLimit.MaxTPM > 0 {
+	if g.config.Governance.RatelimitMaxTPM > 0 {
 		limiter.tpmBucket -= float64(tokenCount)
 	}
 	return true

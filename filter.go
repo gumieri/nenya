@@ -1,13 +1,13 @@
 package main
 
 func (g *NenyaGateway) redactSecrets(text string) string {
-	if !g.config.Filter.Enabled || len(g.secretPatterns) == 0 {
+	if !g.config.SecurityFilter.Enabled || len(g.secretPatterns) == 0 {
 		return text
 	}
 
 	redacted := text
 	for _, re := range g.secretPatterns {
-		redacted = re.ReplaceAllString(redacted, g.config.Filter.RedactionLabel)
+		redacted = re.ReplaceAllString(redacted, g.config.SecurityFilter.RedactionLabel)
 	}
 
 	if redacted != text {
@@ -32,8 +32,8 @@ func (g *NenyaGateway) truncateMiddleOut(text string, maxSize int) string {
 		return string(separatorRunes[:maxSize])
 	}
 
-	keepFirst := int(float64(available) * g.config.Interceptor.KeepFirstPercent / 100.0)
-	keepLast := int(float64(available) * g.config.Interceptor.KeepLastPercent / 100.0)
+	keepFirst := int(float64(available) * g.config.Governance.KeepFirstPercent / 100.0)
+	keepLast := int(float64(available) * g.config.Governance.KeepLastPercent / 100.0)
 
 	if keepFirst+keepLast > available {
 		total := keepFirst + keepLast

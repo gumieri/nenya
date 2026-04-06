@@ -20,6 +20,7 @@ const maxOllamaResponseBytes = 512 * 1024
 var hopByHopHeaders = map[string]bool{
 	"connection":          true,
 	"content-length":      true,
+	"content-encoding":    true,
 	"upgrade":             true,
 	"transfer-encoding":   true,
 	"te":                  true,
@@ -354,8 +355,8 @@ func (g *NenyaGateway) applyContentPipeline(ctx context.Context, payload map[str
 	}
 
 	contentRunes := utf8.RuneCountInString(textForInterception)
-	softLimit := g.config.Interceptor.SoftLimit
-	hardLimit := g.config.Interceptor.HardLimit
+	softLimit := g.config.Governance.ContextSoftLimit
+	hardLimit := g.config.Governance.ContextHardLimit
 
 	var processed string
 	var needsUpdate bool
@@ -405,10 +406,18 @@ func (g *NenyaGateway) applyContentPipeline(ctx context.Context, payload map[str
 }
 
 func (g *NenyaGateway) summarizeWithOllama(ctx context.Context, heavyText string) (string, error) {
-	ctx, cancel := context.WithTimeout(ctx, time.Duration(g.config.Ollama.TimeoutSeconds)*time.Second)
+	engine := g.config.SecurityFilter.Engine
+	ctx, cancel := context.WithTimeout(ctx, time.Duration(engine.TimeoutSeconds)*time.Second)
 	defer cancel()
 
-	summary, err := g.callOllama(ctx, g.config.Ollama.SystemPrompt, heavyText)
+	defaultPrompt := "You are a data privacy filter. Summarize the following log/code error in 5 lines. REMOVE any IP addresses, AWS keys (AKIA...), or passwords. Keep only the technical core of the error."
+	systemPrompt, err := loadPromptFile(engine.SystemPromptFile, engine.SystemPrompt, defaultPrompt)
+	if err != nil {
+		g.logger.Warn("failed to load privacy filter prompt, using default", "err", err)
+		systemPrompt = defaultPrompt
+	}
+
+	summary, err := g.callEngine(ctx, engine, systemPrompt, heavyText)
 	if err != nil {
 		return "", err
 	}
@@ -514,6 +523,9 @@ func (g *NenyaGateway) forwardToUpstream(
 		w.WriteHeader(resp.StatusCode)
 
 		transformer := g.getResponseTransformer(target.provider)
+		if transformer != nil {
+			g.logger.Debug("SSE transformer active", "provider", target.provider)
+		}
 		transformingReader := NewSSETransformingReader(resp.Body, transformer)
 		transformingReader.SetOnUsage(func(completion, prompt, total int) {
 			g.stats.RecordOutput(target.model, completion)
@@ -552,6 +564,7 @@ func (g *NenyaGateway) buildUpstreamRequest(ctx context.Context, method, url str
 		return nil, fmt.Errorf("API key injection failed: %w", err)
 	}
 	copyHeaders(headers, req.Header)
+	req.Header.Set("Accept-Encoding", "identity")
 	return req, nil
 }
 
@@ -581,17 +594,17 @@ func (g *NenyaGateway) handleStats(w http.ResponseWriter) {
 }
 
 func (g *NenyaGateway) handleHealthz(w http.ResponseWriter) {
-	ollamaOK := g.checkOllamaHealth()
+	engineOK := g.checkSecurityFilterEngineHealth()
 
 	resp := map[string]interface{}{
 		"status": "ok",
 		"ollama": map[string]interface{}{
-			"status": ollamaOK,
+			"status": engineOK,
 		},
 	}
 
 	status := http.StatusOK
-	if !ollamaOK {
+	if !engineOK {
 		status = http.StatusServiceUnavailable
 		resp["status"] = "degraded"
 	}
@@ -601,14 +614,18 @@ func (g *NenyaGateway) handleHealthz(w http.ResponseWriter) {
 	json.NewEncoder(w).Encode(resp)
 }
 
-func (g *NenyaGateway) checkOllamaHealth() bool {
+func (g *NenyaGateway) checkSecurityFilterEngineHealth() bool {
 	if g.ollamaClient == nil {
 		return false
+	}
+	// If engine is not Ollama, assume healthy (no health endpoint)
+	if g.config.SecurityFilter.Engine.ApiFormat != "ollama" {
+		return true
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, ollamaHealthURL(g.config.Ollama.URL), nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, ollamaHealthURL(g.config.SecurityFilter.Engine.URL), nil)
 	if err != nil {
 		return false
 	}

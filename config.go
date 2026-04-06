@@ -15,9 +15,11 @@ type AgentModel struct {
 }
 
 type AgentConfig struct {
-	Strategy        string       `json:"strategy"`
-	CooldownSeconds int          `json:"cooldown_seconds"`
-	Models          []AgentModel `json:"models"`
+	Strategy         string       `json:"strategy"`
+	CooldownSeconds  int          `json:"cooldown_seconds"`
+	SystemPrompt     string       `json:"system_prompt"`
+	SystemPromptFile string       `json:"system_prompt_file"`
+	Models           []AgentModel `json:"models"`
 }
 
 type ProviderConfig struct {
@@ -35,16 +37,14 @@ type Provider struct {
 }
 
 type Config struct {
-	Server      ServerConfig
-	Interceptor InterceptorConfig
-	Ollama      OllamaConfig
-	RateLimit   RateLimitConfig `json:"ratelimit"`
-	Filter      FilterConfig
-	PrefixCache PrefixCacheConfig         `json:"prefix_cache"`
-	Compaction  CompactionConfig          `json:"compaction"`
-	Window      WindowConfig              `json:"window"`
-	Agents      map[string]AgentConfig    `json:"agents"`
-	Providers   map[string]ProviderConfig `json:"providers"`
+	Server         ServerConfig
+	Governance     GovernanceConfig
+	SecurityFilter SecurityFilterConfig      `json:"security_filter"`
+	PrefixCache    PrefixCacheConfig         `json:"prefix_cache"`
+	Compaction     CompactionConfig          `json:"compaction"`
+	Window         WindowConfig              `json:"window"`
+	Agents         map[string]AgentConfig    `json:"agents"`
+	Providers      map[string]ProviderConfig `json:"providers"`
 }
 
 type ServerConfig struct {
@@ -53,17 +53,16 @@ type ServerConfig struct {
 	TokenRatio   float64 `json:"token_ratio"`
 }
 
-type InterceptorConfig struct {
-	SoftLimit          int     `json:"soft_limit"`
-	HardLimit          int     `json:"hard_limit"`
+type GovernanceConfig struct {
+	RatelimitMaxRPM    int     `json:"ratelimit_max_rpm"`
+	RatelimitMaxTPM    int     `json:"ratelimit_max_tpm"`
+	ContextSoftLimit   int     `json:"context_soft_limit"`
+	ContextHardLimit   int     `json:"context_hard_limit"`
 	TruncationStrategy string  `json:"truncation_strategy"`
 	KeepFirstPercent   float64 `json:"keep_first_percent"`
 	KeepLastPercent    float64 `json:"keep_last_percent"`
-}
-
-type RateLimitConfig struct {
-	MaxTPM int `json:"max_tpm"`
-	MaxRPM int `json:"max_rpm"`
+	rpmSet             bool    `json:"-"`
+	tpmSet             bool    `json:"-"`
 }
 
 type SecretsConfig struct {
@@ -71,17 +70,72 @@ type SecretsConfig struct {
 	ProviderKeys map[string]string `json:"provider_keys"`
 }
 
-type OllamaConfig struct {
-	URL            string `json:"url"`
-	Model          string `json:"model"`
-	SystemPrompt   string `json:"system_prompt"`
-	TimeoutSeconds int    `json:"timeout_seconds"`
+type EngineConfig struct {
+	URL              string `json:"url"`
+	Model            string `json:"model"`
+	ApiFormat        string `json:"api_format"`
+	SystemPrompt     string `json:"system_prompt"`
+	SystemPromptFile string `json:"system_prompt_file"`
+	TimeoutSeconds   int    `json:"timeout_seconds"`
 }
 
-type FilterConfig struct {
-	Enabled        bool     `json:"enabled"`
-	Patterns       []string `json:"patterns"`
-	RedactionLabel string   `json:"redaction_label"`
+type SecurityFilterConfig struct {
+	Enabled        bool         `json:"enabled"`
+	RedactionLabel string       `json:"redaction_label"`
+	Patterns       []string     `json:"patterns"`
+	Engine         EngineConfig `json:"engine"`
+	enabledSet     bool         `json:"-"`
+}
+
+func (s *SecurityFilterConfig) UnmarshalJSON(data []byte) error {
+	type alias SecurityFilterConfig // avoid recursion
+	aux := struct {
+		Enabled *bool `json:"enabled"`
+		*alias
+	}{
+		alias: (*alias)(s),
+	}
+	if err := json.Unmarshal(data, &aux); err != nil {
+		return err
+	}
+	if aux.Enabled == nil {
+		// field not present; default to true if patterns present
+		if s.Patterns != nil && len(s.Patterns) > 0 {
+			s.Enabled = true
+		}
+		s.enabledSet = false
+	} else {
+		s.Enabled = *aux.Enabled
+		s.enabledSet = true
+	}
+	return nil
+}
+
+func (g *GovernanceConfig) UnmarshalJSON(data []byte) error {
+	type alias GovernanceConfig // avoid recursion
+	aux := struct {
+		RatelimitMaxRPM *int `json:"ratelimit_max_rpm"`
+		RatelimitMaxTPM *int `json:"ratelimit_max_tpm"`
+		*alias
+	}{
+		alias: (*alias)(g),
+	}
+	if err := json.Unmarshal(data, &aux); err != nil {
+		return err
+	}
+	if aux.RatelimitMaxRPM == nil {
+		g.rpmSet = false
+	} else {
+		g.rpmSet = true
+		g.RatelimitMaxRPM = *aux.RatelimitMaxRPM
+	}
+	if aux.RatelimitMaxTPM == nil {
+		g.tpmSet = false
+	} else {
+		g.tpmSet = true
+		g.RatelimitMaxTPM = *aux.RatelimitMaxTPM
+	}
+	return nil
 }
 
 type PrefixCacheConfig struct {
@@ -100,12 +154,13 @@ type CompactionConfig struct {
 }
 
 type WindowConfig struct {
-	Enabled         bool    `json:"enabled"`
-	Mode            string  `json:"mode"`
-	ActiveMessages  int     `json:"active_messages"`
-	TriggerRatio    float64 `json:"trigger_ratio"`
-	SummaryMaxRunes int     `json:"summary_max_runes"`
-	MaxContext      int     `json:"max_context"`
+	Enabled         bool         `json:"enabled"`
+	Mode            string       `json:"mode"`
+	ActiveMessages  int          `json:"active_messages"`
+	TriggerRatio    float64      `json:"trigger_ratio"`
+	SummaryMaxRunes int          `json:"summary_max_runes"`
+	MaxContext      int          `json:"max_context"`
+	Engine          EngineConfig `json:"engine"`
 }
 
 func builtInProviders() map[string]ProviderConfig {
@@ -116,7 +171,7 @@ func builtInProviders() map[string]ProviderConfig {
 			AuthStyle:     "bearer+x-goog",
 		},
 		"deepseek": {
-			URL:           "https://api.deepseek.com/v1/chat/completions",
+			URL:           "https://api.deepseek.com/chat/completions",
 			RoutePrefixes: []string{"deepseek-"},
 			AuthStyle:     "bearer",
 		},
@@ -148,15 +203,68 @@ func loadConfig(filename string) (*Config, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to read config file %s: %v", filename, err)
 	}
-
+	data = stripComments(data)
 	var cfg Config
 	if err := json.Unmarshal(data, &cfg); err != nil {
 		return nil, fmt.Errorf("failed to parse config file %s: %v", filename, err)
 	}
-
 	applyDefaults(&cfg)
-
 	return &cfg, nil
+}
+
+func stripComments(data []byte) []byte {
+	var result []byte
+	i := 0
+	n := len(data)
+	inString := false
+	for i < n {
+		if !inString && i+1 < n && data[i] == '/' && data[i+1] == '/' {
+			// single-line comment: skip until newline
+			for i < n && data[i] != '\n' {
+				i++
+			}
+			continue
+		}
+		if !inString && i+1 < n && data[i] == '/' && data[i+1] == '*' {
+			// multi-line comment: skip until */
+			for i < n && !(data[i] == '*' && i+1 < n && data[i+1] == '/') {
+				i++
+			}
+			if i+1 < n {
+				i += 2 // skip */
+			}
+			continue
+		}
+		if data[i] == '"' {
+			// count preceding backslashes to determine if quote is escaped
+			backslashCount := 0
+			for j := i - 1; j >= 0 && data[j] == '\\'; j-- {
+				backslashCount++
+			}
+			if backslashCount%2 == 0 {
+				// not escaped
+				inString = !inString
+			}
+		}
+		result = append(result, data[i])
+		i++
+	}
+	return result
+}
+
+func loadPromptFile(filePath string, directPrompt string, defaultPrompt string) (string, error) {
+	// Priority: 1. direct prompt, 2. file, 3. default
+	if directPrompt != "" {
+		return directPrompt, nil
+	}
+	if filePath == "" {
+		return defaultPrompt, nil
+	}
+	data, err := os.ReadFile(filePath)
+	if err != nil {
+		return "", fmt.Errorf("failed to read prompt file %s: %v", filePath, err)
+	}
+	return string(data), nil
 }
 
 func applyDefaults(cfg *Config) {
@@ -169,40 +277,35 @@ func applyDefaults(cfg *Config) {
 	if cfg.Server.TokenRatio == 0 {
 		cfg.Server.TokenRatio = 4.0
 	}
-	if cfg.Interceptor.SoftLimit == 0 {
-		cfg.Interceptor.SoftLimit = 4000
+	if !cfg.Governance.tpmSet && cfg.Governance.RatelimitMaxTPM == 0 {
+		cfg.Governance.RatelimitMaxTPM = 250000
 	}
-	if cfg.Interceptor.HardLimit == 0 {
-		cfg.Interceptor.HardLimit = 24000
+	if !cfg.Governance.rpmSet && cfg.Governance.RatelimitMaxRPM == 0 {
+		cfg.Governance.RatelimitMaxRPM = 15
 	}
-	if cfg.Interceptor.TruncationStrategy == "" {
-		cfg.Interceptor.TruncationStrategy = "middle-out"
+	if cfg.Governance.ContextSoftLimit == 0 {
+		cfg.Governance.ContextSoftLimit = 4000
 	}
-	if cfg.Interceptor.KeepFirstPercent == 0 {
-		cfg.Interceptor.KeepFirstPercent = 15.0
+	if cfg.Governance.ContextHardLimit == 0 {
+		cfg.Governance.ContextHardLimit = 24000
 	}
-	if cfg.Interceptor.KeepLastPercent == 0 {
-		cfg.Interceptor.KeepLastPercent = 25.0
+	if cfg.Governance.TruncationStrategy == "" {
+		cfg.Governance.TruncationStrategy = "middle-out"
 	}
-	if cfg.Ollama.URL == "" {
-		cfg.Ollama.URL = "http://127.0.0.1:11434/api/generate"
+	if cfg.Governance.KeepFirstPercent == 0 {
+		cfg.Governance.KeepFirstPercent = 15.0
 	}
-	if cfg.Ollama.Model == "" {
-		cfg.Ollama.Model = "qwen2.5-coder:7b"
+	if cfg.Governance.KeepLastPercent == 0 {
+		cfg.Governance.KeepLastPercent = 25.0
 	}
-	if cfg.Ollama.SystemPrompt == "" {
-		cfg.Ollama.SystemPrompt = "You are a data privacy filter. Summarize the following log/code error in 5 lines. REMOVE any IP addresses, AWS keys (AKIA...), or passwords. Keep only the technical core of the error."
+	if cfg.SecurityFilter.RedactionLabel == "" {
+		cfg.SecurityFilter.RedactionLabel = "[REDACTED]"
 	}
-	if cfg.Ollama.TimeoutSeconds == 0 {
-		cfg.Ollama.TimeoutSeconds = 600
-	}
-
-	if cfg.Filter.RedactionLabel == "" {
-		cfg.Filter.RedactionLabel = "[REDACTED]"
-	}
-	if cfg.Filter.Patterns == nil {
-		cfg.Filter.Enabled = true
-		cfg.Filter.Patterns = []string{
+	if cfg.SecurityFilter.Patterns == nil {
+		if !cfg.SecurityFilter.enabledSet {
+			cfg.SecurityFilter.Enabled = true
+		}
+		cfg.SecurityFilter.Patterns = []string{
 			`(?i)AKIA[0-9A-Z]{16}`,
 			`(?i)gh(p|o|s)_[a-zA-Z0-9]{36,255}`,
 			`(?i)ya29\.[0-9A-Za-z\-_]+`,
@@ -213,18 +316,35 @@ func applyDefaults(cfg *Config) {
 			`[a-f0-9]{32}:`,
 			`(?i)SG\.[a-zA-Z0-9\-_]{22}\.[a-zA-Z0-9\-_]{43}`,
 		}
+	} else if !cfg.SecurityFilter.enabledSet {
+		cfg.SecurityFilter.Enabled = true
 	}
 
-	if cfg.Providers == nil {
-		cfg.Providers = make(map[string]ProviderConfig)
+	if cfg.SecurityFilter.Engine.URL == "" {
+		cfg.SecurityFilter.Engine.URL = "http://127.0.0.1:11434/api/generate"
 	}
-	for name, builtIn := range builtInProviders() {
-		if _, exists := cfg.Providers[name]; !exists {
-			cfg.Providers[name] = builtIn
-		}
+	if cfg.SecurityFilter.Engine.Model == "" {
+		cfg.SecurityFilter.Engine.Model = "qwen2.5-coder:7b"
 	}
-
-	if !cfg.PrefixCache.Enabled && cfg.PrefixCache.PinSystemFirst || cfg.PrefixCache.StableTools || cfg.PrefixCache.SkipRedactionOnSystem {
+	if cfg.SecurityFilter.Engine.ApiFormat == "" {
+		cfg.SecurityFilter.Engine.ApiFormat = "ollama"
+	}
+	if cfg.SecurityFilter.Engine.TimeoutSeconds == 0 {
+		cfg.SecurityFilter.Engine.TimeoutSeconds = 600
+	}
+	if cfg.Window.Engine.URL == "" {
+		cfg.Window.Engine.URL = "http://127.0.0.1:11434/api/generate"
+	}
+	if cfg.Window.Engine.Model == "" {
+		cfg.Window.Engine.Model = "qwen2.5-coder:7b"
+	}
+	if cfg.Window.Engine.ApiFormat == "" {
+		cfg.Window.Engine.ApiFormat = "ollama"
+	}
+	if cfg.Window.Engine.TimeoutSeconds == 0 {
+		cfg.Window.Engine.TimeoutSeconds = 600
+	}
+	if !cfg.PrefixCache.Enabled && (cfg.PrefixCache.PinSystemFirst || cfg.PrefixCache.StableTools || cfg.PrefixCache.SkipRedactionOnSystem) {
 		cfg.PrefixCache.Enabled = true
 	}
 	if !cfg.PrefixCache.PinSystemFirst {
@@ -251,6 +371,15 @@ func applyDefaults(cfg *Config) {
 	}
 	if !cfg.Compaction.NormalizeLineEndings {
 		cfg.Compaction.NormalizeLineEndings = true
+	}
+
+	if cfg.Providers == nil {
+		cfg.Providers = make(map[string]ProviderConfig)
+	}
+	for name, builtIn := range builtInProviders() {
+		if _, exists := cfg.Providers[name]; !exists {
+			cfg.Providers[name] = builtIn
+		}
 	}
 
 	if !cfg.Window.Enabled && (cfg.Window.Mode != "" || cfg.Window.ActiveMessages != 0 || cfg.Window.TriggerRatio != 0 || cfg.Window.SummaryMaxRunes != 0 || cfg.Window.MaxContext != 0) {

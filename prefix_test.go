@@ -232,10 +232,10 @@ func TestShouldSkipRedaction(t *testing.T) {
 		role     string
 		wantSkip bool
 	}{
-		{"system with flag enabled", PrefixCacheConfig{Enabled: true, SkipRedactionOnSystem: true}, "system", true},
-		{"user with flag enabled", PrefixCacheConfig{Enabled: true, SkipRedactionOnSystem: true}, "user", false},
-		{"assistant with flag enabled", PrefixCacheConfig{Enabled: true, SkipRedactionOnSystem: true}, "assistant", false},
-		{"system with flag disabled", PrefixCacheConfig{Enabled: true, SkipRedactionOnSystem: false}, "system", false},
+		{"system with flag enabled", PrefixCacheConfig{Enabled: true, PinSystemFirst: true, StableTools: true, SkipRedactionOnSystem: true}, "system", true},
+		{"user with flag enabled", PrefixCacheConfig{Enabled: true, PinSystemFirst: true, StableTools: true, SkipRedactionOnSystem: true}, "user", false},
+		{"assistant with flag enabled", PrefixCacheConfig{Enabled: true, PinSystemFirst: true, StableTools: true, SkipRedactionOnSystem: true}, "assistant", false},
+		{"system with flag disabled", PrefixCacheConfig{Enabled: true, PinSystemFirst: true, StableTools: true, SkipRedactionOnSystem: false}, "system", false},
 		{"user with prefix cache disabled", PrefixCacheConfig{Enabled: false}, "user", false},
 		{"system with prefix cache disabled", PrefixCacheConfig{Enabled: false}, "system", false},
 	}
@@ -243,7 +243,10 @@ func TestShouldSkipRedaction(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			cfg := Config{PrefixCache: tt.cfg}
-			g := NewNenyaGateway(cfg, &SecretsConfig{}, slog.Default())
+			g := &NenyaGateway{
+				config: cfg,
+				logger: slog.Default(),
+			}
 			msg := map[string]interface{}{"role": tt.role}
 			got := g.shouldSkipRedaction(msg)
 			if got != tt.wantSkip {
