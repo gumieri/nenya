@@ -1,11 +1,27 @@
 package main
 
 import (
+	"encoding/json"
 	"log/slog"
+	"strconv"
 	"sync"
 	"testing"
 	"time"
 )
+
+func newTestConfig(maxRPM, maxTPM int) Config {
+	jsonStr := `{
+		"governance": {
+			"ratelimit_max_rpm": ` + strconv.Itoa(maxRPM) + `,
+			"ratelimit_max_tpm": ` + strconv.Itoa(maxTPM) + `
+		}
+	}`
+	var cfg Config
+	if err := json.Unmarshal([]byte(jsonStr), &cfg); err != nil {
+		panic(err)
+	}
+	return cfg
+}
 
 func TestCheckRateLimit(t *testing.T) {
 	tests := []struct {
@@ -27,9 +43,7 @@ func TestCheckRateLimit(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			cfg := Config{
-				RateLimit: RateLimitConfig{MaxRPM: tt.maxRPM, MaxTPM: tt.maxTPM},
-			}
+			cfg := newTestConfig(tt.maxRPM, tt.maxTPM)
 			g := NewNenyaGateway(cfg, &SecretsConfig{}, slog.Default())
 
 			allowed := 0
@@ -49,9 +63,7 @@ func TestCheckRateLimit(t *testing.T) {
 }
 
 func TestCheckRateLimitPerHost(t *testing.T) {
-	cfg := Config{
-		RateLimit: RateLimitConfig{MaxRPM: 10, MaxTPM: 0},
-	}
+	cfg := newTestConfig(10, 0)
 	g := NewNenyaGateway(cfg, &SecretsConfig{}, slog.Default())
 
 	for i := 0; i < 10; i++ {
@@ -70,9 +82,7 @@ func TestCheckRateLimitPerHost(t *testing.T) {
 }
 
 func TestCheckRateLimitURLParsing(t *testing.T) {
-	cfg := Config{
-		RateLimit: RateLimitConfig{MaxRPM: 10, MaxTPM: 0},
-	}
+	cfg := newTestConfig(10, 0)
 	g := NewNenyaGateway(cfg, &SecretsConfig{}, slog.Default())
 
 	for i := 0; i < 10; i++ {
@@ -87,9 +97,7 @@ func TestCheckRateLimitURLParsing(t *testing.T) {
 }
 
 func TestCheckRateLimitConcurrent(t *testing.T) {
-	cfg := Config{
-		RateLimit: RateLimitConfig{MaxRPM: 1000, MaxTPM: 0},
-	}
+	cfg := newTestConfig(1000, 0)
 	g := NewNenyaGateway(cfg, &SecretsConfig{}, slog.Default())
 
 	var wg sync.WaitGroup
@@ -104,9 +112,7 @@ func TestCheckRateLimitConcurrent(t *testing.T) {
 }
 
 func TestCheckRateLimitRefill(t *testing.T) {
-	cfg := Config{
-		RateLimit: RateLimitConfig{MaxRPM: 2, MaxTPM: 0},
-	}
+	cfg := newTestConfig(2, 0)
 	g := NewNenyaGateway(cfg, &SecretsConfig{}, slog.Default())
 
 	g.checkRateLimit("http://example.com/api", 0)
@@ -123,9 +129,7 @@ func TestCheckRateLimitRefill(t *testing.T) {
 }
 
 func TestCheckRateLimitTPMAccumulation(t *testing.T) {
-	cfg := Config{
-		RateLimit: RateLimitConfig{MaxRPM: 0, MaxTPM: 100},
-	}
+	cfg := newTestConfig(0, 100)
 	g := NewNenyaGateway(cfg, &SecretsConfig{}, slog.Default())
 
 	if !g.checkRateLimit("http://example.com/api", 60) {

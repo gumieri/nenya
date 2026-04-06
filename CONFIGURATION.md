@@ -2,18 +2,18 @@
 
 Nenya reads its configuration from a JSON file (default: `config.json`). See [`example.config.json`](example.config.json) for a working example.
 
+**Important**: Configuration format changed from TOML to JSON with semantic grouping. Old `interceptor`, `ollama`, `ratelimit`, and `filter` sections are now unified under `governance` and `security_filter` with engine abstraction.
+
 ## Top-Level Sections
 
 | Section | JSON key | Description |
 |---------|----------|-------------|
 | Server | `server` | Listen address, body limits, token estimation |
-| Interceptor | `interceptor` | 3-tier payload pipeline thresholds |
-| Ollama | `ollama` | Local Ollama connection for summarization |
-| Rate Limit | `ratelimit` | Per-host RPM/TPM limits |
-| Filter | `filter` | Tier-0 regex secret redaction |
+| Governance | `governance` | Unified context limits, truncation, and rate limiting |
+| Security Filter | `security_filter` | Tier-0 regex secret redaction with configurable engine |
 | Prefix Cache | `prefix_cache` | Prompt cache alignment optimizations |
 | Compaction | `compaction` | Text compaction (whitespace, blank lines, JSON) |
-| Window | `window` | Sliding window conversation compaction |
+| Window | `window` | Sliding window conversation compaction with configurable engine |
 | Agents | `agents` | Named agent definitions with fallback chains |
 | Providers | `providers` | Upstream provider registry |
 
@@ -25,47 +25,50 @@ Nenya reads its configuration from a JSON file (default: `config.json`). See [`e
 | `max_body_bytes` | int | `10485760` (10 MB) | Maximum incoming request body size |
 | `token_ratio` | float | `4.0` | Characters (runes) per token for estimation. Used to approximate token counts without a tokenizer. Adjust based on your model's tokenization. |
 
-## `interceptor`
+## `governance`
+
+Unified configuration for context management, truncation, and rate limiting.
 
 The interceptor implements a 3-tier pipeline for the last user message content:
 
-- **Tier 1** (pass-through): content below `soft_limit` runes
-- **Tier 2** (Ollama summarization): content between `soft_limit` and `hard_limit` runes
-- **Tier 3** (truncation + Ollama): content above `hard_limit` runes
+- **Tier 1** (pass-through): content below `context_soft_limit` runes
+- **Tier 2** (engine summarization): content between `context_soft_limit` and `context_hard_limit` runes
+- **Tier 3** (truncation + engine): content above `context_hard_limit` runes
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `soft_limit` | int | `4000` | Runes below this pass through unmodified |
-| `hard_limit` | int | `24000` | Runes above this are middle-out truncated before Ollama |
+| `ratelimit_max_tpm` | int | `250000` | Max tokens per minute per upstream host (0 = disabled) |
+| `ratelimit_max_rpm` | int | `15` | Max requests per minute per upstream host (0 = disabled) |
+| `context_soft_limit` | int | `4000` | Runes below this pass through unmodified |
+| `context_hard_limit` | int | `24000` | Runes above this are middle-out truncated before engine summarization |
 | `truncation_strategy` | string | `"middle-out"` | Truncation method (`"middle-out"` only) |
 | `keep_first_percent` | float | `15.0` | Percentage of content to keep from the start when truncating |
 | `keep_last_percent` | float | `25.0` | Percentage of content to keep from the end when truncating |
 
-## `ollama`
+## `security_filter`
+
+Tier-0 regex-based secret redaction runs on every request, before any other pipeline step. Includes configurable engine for privacy filtering.
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `url` | string | `"http://127.0.0.1:11434/api/generate"` | Ollama generate API endpoint |
-| `model` | string | `"qwen2.5-coder:7b"` | Local model used for summarization/redaction |
-| `system_prompt` | string | (built-in) | System prompt for the interceptor Ollama call |
-| `timeout_seconds` | int | `600` | Timeout for individual Ollama API calls |
-
-## `ratelimit`
-
-| Field | Type | Default | Description |
-|-------|------|---------|-------------|
-| `max_tpm` | int | `250000` | Max tokens per minute per upstream host (0 = disabled) |
-| `max_rpm` | int | `15` | Max requests per minute per upstream host (0 = disabled) |
-
-## `filter`
-
-Tier-0 regex-based secret redaction runs on every request, before any other pipeline step.
-
-| Field | Type | Default | Description |
-|-------|------|---------|-------------|
-| `enabled` | bool | `true` | Enable/disable the filter |
+| `enabled` | bool | `true` | Enable/disable the filter. Defaults to `true` if `patterns` are provided but field omitted. |
 | `patterns` | []string | (9 built-in) | Custom regex patterns. Replaces built-in patterns if set. Built-in patterns match: AWS keys, GitHub tokens, Google OAuth, sk- API keys, PEM private keys, AWS credential file lines, password/key assignments, Docker tokens, SendGrid keys. |
 | `redaction_label` | string | `"[REDACTED]"` | Replacement string for matched secrets |
+| `engine` | EngineConfig | (see below) | Engine configuration for privacy filtering |
+
+### Engine Configuration (`engine`)
+
+Both `security_filter.engine` and `window.engine` use the same `EngineConfig` structure:
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `url` | string | `"http://127.0.0.1:11434/api/generate"` | API endpoint for the engine |
+| `model` | string | `"qwen2.5-coder:7b"` | Model identifier for the engine |
+| `api_format` | string | `"ollama"` | API format: `"ollama"` (native `/api/generate`) or `"openai"` (compatible `/v1/chat/completions`) |
+| `system_prompt_file` | string | `""` | Path to system prompt file (relative to config). Empty uses built-in prompt. |
+| `timeout_seconds` | int | `600` | Timeout for individual engine API calls |
+
+**Note**: `system_prompt_file` supports `%d` placeholder for window summarization (replaced with active message count).
 
 ## `prefix_cache`
 
@@ -73,10 +76,12 @@ Optimizations to improve upstream provider prefix cache hit rates by stabilizing
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `enabled` | bool | `true` | Master toggle |
-| `pin_system_first` | bool | `true` | Reorder all `system` role messages to the top of the messages array |
-| `stable_tools` | bool | `true` | Sort `tools[]` array by `function.name` for deterministic ordering |
-| `skip_redaction_on_system` | bool | `true` | Skip Tier-0 regex redaction on system messages to preserve prefix byte-identity |
+| `enabled` | bool | `false` | Master toggle (must be explicitly set to `true`) |
+| `pin_system_first` | bool | `false` | Reorder all `system` role messages to the top of the messages array |
+| `stable_tools` | bool | `false` | Sort `tools[]` array by `function.name` for deterministic ordering |
+| `skip_redaction_on_system` | bool | `false` | Skip Tier-0 regex redaction on system messages to preserve prefix byte-identity |
+
+**Important**: Unlike previous versions, boolean fields now default to `false` and must be explicitly enabled.
 
 ## `compaction`
 
@@ -84,13 +89,15 @@ Text compaction applied to all message content (both string and multi-part conte
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `enabled` | bool | `true` | Master toggle |
-| `normalize_line_endings` | bool | `true` | Convert CRLF to LF |
-| `trim_trailing_whitespace` | bool | `true` | Remove trailing spaces/tabs from each line |
-| `collapse_blank_lines` | bool | `true` | Collapse runs of 3+ blank lines to max 2 |
-| `json_minify` | bool | `true` | Minify the final JSON body with `json.Compact` |
+| `enabled` | bool | `false` | Master toggle (must be explicitly set to `true`) |
+| `normalize_line_endings` | bool | `false` | Convert CRLF to LF |
+| `trim_trailing_whitespace` | bool | `false` | Remove trailing spaces/tabs from each line |
+| `collapse_blank_lines` | bool | `false` | Collapse runs of 3+ blank lines to max 2 |
+| `json_minify` | bool | `false` | Minify the final JSON body with `json.Compact` |
 
-Compaction runs after redaction, before Ollama interception. JSON minify runs at the very end of the pipeline.
+**Important**: Unlike previous versions, boolean fields now default to `false` and must be explicitly enabled.
+
+Compaction runs after redaction, before engine interception. JSON minify runs at the very end of the pipeline.
 
 ## `window`
 
@@ -99,11 +106,12 @@ Sliding window conversation compaction for long conversations. When the estimate
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `enabled` | bool | `false` | Master toggle (off by default) |
-| `mode` | string | `"summarize"` | `"summarize"` (Ollama) or `"truncate"` (hard cut) |
+| `mode` | string | `"summarize"` | `"summarize"` (engine) or `"truncate"` (hard cut) |
 | `active_messages` | int | `6` | Number of recent messages to preserve unchanged |
 | `trigger_ratio` | float | `0.8` | Trigger when tokens exceed `max_context * ratio` (0.0-1.0) |
 | `summary_max_runes` | int | `4000` | Maximum length of the generated summary |
 | `max_context` | int | `128000` | Context window size. Overridden by agent model `max_context` when routing through agents. |
+| `engine` | EngineConfig | (see above) | Engine configuration for window summarization |
 
 ## `agents`
 
@@ -185,11 +193,19 @@ API keys are loaded from the secrets file via `provider_keys` (keyed by provider
 ## Processing Pipeline Order
 
 1. **Prefix cache optimizations** (pin system messages, sort tools)
-2. **Tier-0 regex redaction** (secret patterns)
+2. **Tier-0 regex redaction** (secret patterns via `security_filter`)
 3. **Text compaction** (normalize, trim, collapse blanks)
 4. **Window compaction** (if enabled and threshold exceeded)
-5. **Ollama interception** (3-tier last-message summarization)
+5. **Engine interception** (3-tier last-message summarization using `security_filter.engine`)
 6. **JSON minification** (final body compaction)
+
+## Configuration Notes
+
+- **JSON with Comments**: Configuration files support `//` and `/* */` comments
+- **External Prompts**: System prompts can be external files in `./prompts/` directory
+- **Separate Engines**: `security_filter.engine` and `window.engine` can use different models/APIs
+- **API Format Abstraction**: Supports `"ollama"` (native `/api/generate`) and `"openai"` (compatible `/v1/chat/completions`) formats
+- **Pattern-Based Enablement**: `security_filter.enabled` defaults to `true` when patterns are provided but field omitted
 
 ## Secrets
 

@@ -101,6 +101,22 @@ No Go code changes needed. Add two sections:
 
 Models matching the `route_prefixes` (e.g., `gpt-4o`, `o3-mini`) will now be routed to OpenAI automatically.
 
+### Configuration Validation
+
+Before starting the gateway, you can validate your configuration and API keys:
+
+```bash
+./nenya -config config.json -validate
+```
+
+This will:
+1. Check Ollama engine health (if configured)
+2. Validate each provider's API endpoint reachability
+3. Test API keys with provider endpoints
+4. Report any configuration errors before runtime
+
+The validation exits with code 0 on success, 1 on failure. Use this to verify your setup before deployment.
+
 ## Deployment
 
 ### Systemd Service

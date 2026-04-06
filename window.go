@@ -55,14 +55,18 @@ func (g *NenyaGateway) applyWindowCompaction(ctx context.Context, payload map[st
 	beforeTokens := tokenCount
 
 	var summary string
-	var err error
 
 	switch g.config.Window.Mode {
 	case "truncate":
 		summary = g.truncateHistory(historyText)
 	case "summarize", "":
-		prompt := fmt.Sprintf(windowSystemPrompt, g.config.Window.SummaryMaxRunes)
-		summary, err = g.callOllama(ctx, prompt, historyText)
+		defaultPrompt := fmt.Sprintf(windowSystemPrompt, g.config.Window.SummaryMaxRunes)
+		systemPrompt, err := loadPromptFile(g.config.Window.Engine.SystemPromptFile, g.config.Window.Engine.SystemPrompt, defaultPrompt)
+		if err != nil {
+			g.logger.Warn("failed to load window summarization prompt, using default", "err", err)
+			systemPrompt = defaultPrompt
+		}
+		summary, err = g.callEngine(ctx, g.config.Window.Engine, systemPrompt, historyText)
 		if err != nil {
 			g.logger.Warn("window summarization failed, falling back to truncation",
 				"err", err)
@@ -126,47 +130,77 @@ func (g *NenyaGateway) serializeMessages(messages []interface{}) string {
 	return sb.String()
 }
 
-func (g *NenyaGateway) callOllama(ctx context.Context, systemPrompt, prompt string) (string, error) {
-	payload := map[string]interface{}{
-		"model":  g.config.Ollama.Model,
-		"system": systemPrompt,
-		"prompt": prompt,
-		"stream": false,
+func (g *NenyaGateway) callEngine(ctx context.Context, engine EngineConfig, systemPrompt, prompt string) (string, error) {
+	var payload map[string]interface{}
+	switch engine.ApiFormat {
+	case "openai":
+		payload = map[string]interface{}{
+			"model": engine.Model,
+			"messages": []map[string]string{
+				{"role": "system", "content": systemPrompt},
+				{"role": "user", "content": prompt},
+			},
+			"stream": false,
+		}
+	default: // "ollama" and any unknown default to ollama format
+		payload = map[string]interface{}{
+			"model":  engine.Model,
+			"system": systemPrompt,
+			"prompt": prompt,
+			"stream": false,
+		}
 	}
 
 	encoded, err := json.Marshal(payload)
 	if err != nil {
-		return "", fmt.Errorf("failed to marshal ollama payload: %v", err)
+		return "", fmt.Errorf("failed to marshal engine payload: %v", err)
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, g.config.Ollama.URL, bytes.NewBuffer(encoded))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, engine.URL, bytes.NewBuffer(encoded))
 	if err != nil {
-		return "", fmt.Errorf("failed to create ollama request: %v", err)
+		return "", fmt.Errorf("failed to create engine request: %v", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
 
 	resp, err := g.ollamaClient.Do(req)
 	if err != nil {
-		return "", fmt.Errorf("ollama unreachable: %v", err)
+		return "", fmt.Errorf("engine unreachable: %v", err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 8*1024))
-		return "", fmt.Errorf("ollama returned status %d: %s", resp.StatusCode, string(body))
+		return "", fmt.Errorf("engine returned status %d: %s", resp.StatusCode, string(body))
 	}
 
-	var ollamaResp map[string]interface{}
-	if err := json.NewDecoder(io.LimitReader(resp.Body, maxOllamaResponseBytes)).Decode(&ollamaResp); err != nil {
-		return "", fmt.Errorf("failed to decode ollama response: %v", err)
+	var response map[string]interface{}
+	if err := json.NewDecoder(io.LimitReader(resp.Body, maxOllamaResponseBytes)).Decode(&response); err != nil {
+		return "", fmt.Errorf("failed to decode engine response: %v", err)
 	}
 
-	response, ok := ollamaResp["response"].(string)
-	if !ok {
-		return "", fmt.Errorf("ollama response missing 'response' field")
+	var output string
+	switch engine.ApiFormat {
+	case "openai":
+		if choices, ok := response["choices"].([]interface{}); ok && len(choices) > 0 {
+			if choice, ok := choices[0].(map[string]interface{}); ok {
+				if msg, ok := choice["message"].(map[string]interface{}); ok {
+					if content, ok := msg["content"].(string); ok {
+						output = content
+					}
+				}
+			}
+		}
+		if output == "" {
+			return "", fmt.Errorf("openai response missing content")
+		}
+	default:
+		resp, ok := response["response"].(string)
+		if !ok {
+			return "", fmt.Errorf("engine response missing 'response' field")
+		}
+		output = resp
 	}
-
-	return response, nil
+	return output, nil
 }
 
 func (g *NenyaGateway) truncateHistory(historyText string) string {

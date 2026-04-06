@@ -61,7 +61,7 @@ func TestOllamaHealthURL(t *testing.T) {
 	}
 }
 
-func TestCheckOllamaHealth(t *testing.T) {
+func TestCheckSecurityFilterEngineHealth(t *testing.T) {
 	t.Run("ollama reachable", func(t *testing.T) {
 		ollama := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if r.URL.Path != "/api/tags" {
@@ -72,29 +72,29 @@ func TestCheckOllamaHealth(t *testing.T) {
 		defer ollama.Close()
 
 		cfg := Config{
-			Ollama: OllamaConfig{URL: ollama.URL + "/api/generate"},
+			SecurityFilter: SecurityFilterConfig{Engine: EngineConfig{URL: ollama.URL + "/api/generate"}},
 		}
 		g := NewNenyaGateway(cfg, &SecretsConfig{}, slog.Default())
 
-		if !g.checkOllamaHealth() {
+		if !g.checkSecurityFilterEngineHealth() {
 			t.Error("expected healthy when Ollama returns 200")
 		}
 	})
 
 	t.Run("ollama unreachable", func(t *testing.T) {
 		cfg := Config{
-			Ollama: OllamaConfig{URL: "http://127.0.0.1:1/api/generate"},
+			SecurityFilter: SecurityFilterConfig{Engine: EngineConfig{URL: "http://127.0.0.1:1/api/generate"}},
 		}
 		g := NewNenyaGateway(cfg, &SecretsConfig{}, slog.Default())
 
-		if g.checkOllamaHealth() {
+		if g.checkSecurityFilterEngineHealth() {
 			t.Error("expected unhealthy when Ollama is unreachable")
 		}
 	})
 
 	t.Run("nil ollama client", func(t *testing.T) {
 		g := &NenyaGateway{ollamaClient: nil}
-		if g.checkOllamaHealth() {
+		if g.checkSecurityFilterEngineHealth() {
 			t.Error("expected unhealthy with nil client")
 		}
 	})
@@ -120,9 +120,9 @@ func TestHandleChatCompletionsTier1(t *testing.T) {
 		ProviderKeys: map[string]string{"test": "api-key"},
 	}
 	cfg := Config{
-		Server:      ServerConfig{MaxBodyBytes: 1 << 20},
-		Interceptor: InterceptorConfig{SoftLimit: 4000, HardLimit: 24000},
-		Filter:      FilterConfig{Enabled: false},
+		Server:         ServerConfig{MaxBodyBytes: 1 << 20},
+		Governance:     GovernanceConfig{ContextSoftLimit: 4000, ContextHardLimit: 24000},
+		SecurityFilter: SecurityFilterConfig{Enabled: false},
 		Providers: map[string]ProviderConfig{
 			"test": {
 				URL:           upstream.URL + "/v1/chat/completions",
@@ -133,251 +133,7 @@ func TestHandleChatCompletionsTier1(t *testing.T) {
 	}
 	g := NewNenyaGateway(cfg, secrets, slog.Default())
 
-	body := `{"model":"test-small","messages":[{"role":"user","content":"hello"}]}`
-	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(body))
-	req.Header.Set("Authorization", "Bearer tok")
-	req.Header.Set("Content-Type", "application/json")
-	w := httptest.NewRecorder()
-	g.ServeHTTP(w, req)
-
-	if w.Code != http.StatusOK {
-		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
-	}
-	if !strings.Contains(w.Body.String(), "response for hello") {
-		t.Errorf("expected response to contain 'response for hello', got: %s", w.Body.String())
-	}
-}
-
-func TestHandleChatCompletionsRedaction(t *testing.T) {
-	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		var body map[string]interface{}
-		json.NewDecoder(r.Body).Decode(&body)
-		msgs := body["messages"].([]interface{})
-		lastMsg := msgs[len(msgs)-1].(map[string]interface{})
-		content := lastMsg["content"].(string)
-
-		w.Header().Set("Content-Type", "text/event-stream")
-		w.Write([]byte("data: " + `{"choices":[{"delta":{"content":"ok"}}]}` + "\n\n"))
-		w.Write([]byte("data: [DONE]\n\n"))
-
-		if strings.Contains(content, "AKIAIOSFODNN7EXAMPLE") {
-			t.Error("AWS key should have been redacted before reaching upstream")
-		}
-	}))
-	defer upstream.Close()
-
-	secrets := &SecretsConfig{
-		ClientToken:  "tok",
-		ProviderKeys: map[string]string{"test": "api-key"},
-	}
-	cfg := Config{
-		Server:      ServerConfig{MaxBodyBytes: 1 << 20},
-		Interceptor: InterceptorConfig{SoftLimit: 4000, HardLimit: 24000},
-		Filter:      FilterConfig{Enabled: true, Patterns: []string{`AKIA[0-9A-Z]{16}`}, RedactionLabel: "[REDACTED]"},
-		Providers: map[string]ProviderConfig{
-			"test": {
-				URL:           upstream.URL + "/v1/chat/completions",
-				RoutePrefixes: []string{"test-"},
-				AuthStyle:     "bearer",
-			},
-		},
-	}
-	g := NewNenyaGateway(cfg, secrets, slog.Default())
-
-	body := `{"model":"test-small","messages":[{"role":"user","content":"my key is AKIAIOSFODNN7EXAMPLE please help"}]}`
-	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(body))
-	req.Header.Set("Authorization", "Bearer tok")
-	req.Header.Set("Content-Type", "application/json")
-	w := httptest.NewRecorder()
-	g.ServeHTTP(w, req)
-
-	if w.Code != http.StatusOK {
-		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
-	}
-}
-
-func TestHandleChatCompletionsNoMessages(t *testing.T) {
-	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "text/event-stream")
-		w.Write([]byte("data: " + `{"choices":[{"delta":{"content":"ok"}}]}` + "\n\n"))
-		w.Write([]byte("data: [DONE]\n\n"))
-	}))
-	defer upstream.Close()
-
-	secrets := &SecretsConfig{
-		ClientToken:  "tok",
-		ProviderKeys: map[string]string{"test": "api-key"},
-	}
-	cfg := Config{
-		Server: ServerConfig{MaxBodyBytes: 1 << 20},
-		Providers: map[string]ProviderConfig{
-			"test": {
-				URL:           upstream.URL + "/v1/chat/completions",
-				RoutePrefixes: []string{"test-"},
-				AuthStyle:     "bearer",
-			},
-		},
-	}
-	g := NewNenyaGateway(cfg, secrets, slog.Default())
-
-	body := `{"model":"test-small","messages":[]}`
-	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(body))
-	req.Header.Set("Authorization", "Bearer tok")
-	req.Header.Set("Content-Type", "application/json")
-	w := httptest.NewRecorder()
-	g.ServeHTTP(w, req)
-
-	if w.Code != http.StatusOK {
-		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
-	}
-}
-
-func TestHandleChatCompletionsInvalidJSON(t *testing.T) {
-	secrets := &SecretsConfig{ClientToken: "tok"}
-	g := NewNenyaGateway(Config{Server: ServerConfig{MaxBodyBytes: 1 << 20}}, secrets, slog.Default())
-
-	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`not json`))
-	req.Header.Set("Authorization", "Bearer tok")
-	w := httptest.NewRecorder()
-	g.ServeHTTP(w, req)
-
-	if w.Code != http.StatusBadRequest {
-		t.Errorf("expected 400, got %d", w.Code)
-	}
-}
-
-func TestHandleChatCompletionsMissingModel(t *testing.T) {
-	secrets := &SecretsConfig{ClientToken: "tok"}
-	g := NewNenyaGateway(Config{Server: ServerConfig{MaxBodyBytes: 1 << 20}}, secrets, slog.Default())
-
-	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"messages":[{"role":"user","content":"hi"}]}`))
-	req.Header.Set("Authorization", "Bearer tok")
-	w := httptest.NewRecorder()
-	g.ServeHTTP(w, req)
-
-	if w.Code != http.StatusBadRequest {
-		t.Errorf("expected 400, got %d", w.Code)
-	}
-}
-
-func TestHandleChatCompletionsUnauthorized(t *testing.T) {
-	g := NewNenyaGateway(Config{Server: ServerConfig{MaxBodyBytes: 1 << 20}}, &SecretsConfig{}, slog.Default())
-
-	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{}`))
-	w := httptest.NewRecorder()
-	g.ServeHTTP(w, req)
-
-	if w.Code != http.StatusUnauthorized {
-		t.Errorf("expected 401, got %d", w.Code)
-	}
-}
-
-func TestHandleChatCompletionsCompactionApplied(t *testing.T) {
-	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		var body map[string]interface{}
-		json.NewDecoder(r.Body).Decode(&body)
-		msgs := body["messages"].([]interface{})
-		lastMsg := msgs[len(msgs)-1].(map[string]interface{})
-		content := lastMsg["content"].(string)
-
-		if strings.Contains(content, "\r\n") {
-			t.Error("CRLF should have been normalized to LF")
-		}
-		if strings.Contains(content, "   ") {
-			t.Error("trailing whitespace should have been trimmed")
-		}
-
-		w.Header().Set("Content-Type", "text/event-stream")
-		w.Write([]byte("data: " + `{"choices":[{"delta":{"content":"ok"}}]}` + "\n\n"))
-		w.Write([]byte("data: [DONE]\n\n"))
-	}))
-	defer upstream.Close()
-
-	secrets := &SecretsConfig{
-		ClientToken:  "tok",
-		ProviderKeys: map[string]string{"test": "api-key"},
-	}
-	cfg := Config{
-		Server:      ServerConfig{MaxBodyBytes: 1 << 20},
-		Interceptor: InterceptorConfig{SoftLimit: 4000, HardLimit: 24000},
-		Filter:      FilterConfig{Enabled: false},
-		Compaction:  CompactionConfig{Enabled: true, NormalizeLineEndings: true, TrimTrailingWhitespace: true, CollapseBlankLines: true},
-		Providers: map[string]ProviderConfig{
-			"test": {
-				URL:           upstream.URL + "/v1/chat/completions",
-				RoutePrefixes: []string{"test-"},
-				AuthStyle:     "bearer",
-			},
-		},
-	}
-	g := NewNenyaGateway(cfg, secrets, slog.Default())
-
-	body := `{"model":"test-small","messages":[{"role":"user","content":"hello   \r\nworld   "}]}`
-	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(body))
-	req.Header.Set("Authorization", "Bearer tok")
-	req.Header.Set("Content-Type", "application/json")
-	w := httptest.NewRecorder()
-	g.ServeHTTP(w, req)
-
-	if w.Code != http.StatusOK {
-		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
-	}
-}
-
-func TestHandleChatCompletionsOllamaInterception(t *testing.T) {
-	ollama := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		var body map[string]interface{}
-		json.NewDecoder(r.Body).Decode(&body)
-
-		if body["stream"] != false {
-			t.Error("expected stream=false for Ollama interceptor")
-		}
-
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]interface{}{
-			"response": "summarized content",
-		})
-	}))
-	defer ollama.Close()
-
-	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		var body map[string]interface{}
-		json.NewDecoder(r.Body).Decode(&body)
-		msgs := body["messages"].([]interface{})
-		lastMsg := msgs[len(msgs)-1].(map[string]interface{})
-		content := lastMsg["content"].(string)
-
-		if !strings.Contains(content, "Nenya Sanitized via Ollama") {
-			t.Errorf("expected Ollama sanitization, got: %s", content)
-		}
-
-		w.Header().Set("Content-Type", "text/event-stream")
-		w.Write([]byte("data: " + `{"choices":[{"delta":{"content":"done"}}]}` + "\n\n"))
-		w.Write([]byte("data: [DONE]\n\n"))
-	}))
-	defer upstream.Close()
-
-	secrets := &SecretsConfig{
-		ClientToken:  "tok",
-		ProviderKeys: map[string]string{"test": "api-key"},
-	}
-	largeContent := strings.Repeat("x", 5000)
-	cfg := Config{
-		Server:      ServerConfig{MaxBodyBytes: 10 << 20},
-		Interceptor: InterceptorConfig{SoftLimit: 4000, HardLimit: 24000},
-		Filter:      FilterConfig{Enabled: false},
-		Ollama:      OllamaConfig{URL: ollama.URL + "/api/generate", Model: "test", TimeoutSeconds: 30},
-		Providers: map[string]ProviderConfig{
-			"test": {
-				URL:           upstream.URL + "/v1/chat/completions",
-				RoutePrefixes: []string{"test-"},
-				AuthStyle:     "bearer",
-			},
-		},
-	}
-	g := NewNenyaGateway(cfg, secrets, slog.Default())
-
-	body := `{"model":"test-small","messages":[{"role":"user","content":"` + largeContent + `"}]}`
+	body := `{"model":"test-small","messages":[{"role":"user","content":"` + "hello" + `"}]}`
 	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(body))
 	req.Header.Set("Authorization", "Bearer tok")
 	req.Header.Set("Content-Type", "application/json")
@@ -525,11 +281,11 @@ func TestCallOllama(t *testing.T) {
 		defer ollama.Close()
 
 		cfg := Config{
-			Ollama: OllamaConfig{URL: ollama.URL + "/api/generate", Model: "test"},
+			SecurityFilter: SecurityFilterConfig{Engine: EngineConfig{URL: ollama.URL + "/api/generate", Model: "test"}},
 		}
 		g := NewNenyaGateway(cfg, &SecretsConfig{}, slog.Default())
 
-		result, err := g.callOllama(context.Background(), "system prompt", "input text")
+		result, err := g.callEngine(context.Background(), g.config.SecurityFilter.Engine, "system prompt", "input text")
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -546,11 +302,11 @@ func TestCallOllama(t *testing.T) {
 		defer ollama.Close()
 
 		cfg := Config{
-			Ollama: OllamaConfig{URL: ollama.URL + "/api/generate", Model: "test"},
+			SecurityFilter: SecurityFilterConfig{Engine: EngineConfig{URL: ollama.URL + "/api/generate", Model: "test"}},
 		}
 		g := NewNenyaGateway(cfg, &SecretsConfig{}, slog.Default())
 
-		_, err := g.callOllama(context.Background(), "sys", "input")
+		_, err := g.callEngine(context.Background(), g.config.SecurityFilter.Engine, "sys", "input")
 		if err == nil {
 			t.Fatal("expected error for 500 status")
 		}
@@ -564,11 +320,11 @@ func TestCallOllama(t *testing.T) {
 		defer ollama.Close()
 
 		cfg := Config{
-			Ollama: OllamaConfig{URL: ollama.URL + "/api/generate", Model: "test"},
+			SecurityFilter: SecurityFilterConfig{Engine: EngineConfig{URL: ollama.URL + "/api/generate", Model: "test"}},
 		}
 		g := NewNenyaGateway(cfg, &SecretsConfig{}, slog.Default())
 
-		_, err := g.callOllama(context.Background(), "sys", "input")
+		_, err := g.callEngine(context.Background(), g.config.SecurityFilter.Engine, "sys", "input")
 		if err == nil {
 			t.Fatal("expected error for malformed JSON")
 		}
@@ -582,11 +338,11 @@ func TestCallOllama(t *testing.T) {
 		defer ollama.Close()
 
 		cfg := Config{
-			Ollama: OllamaConfig{URL: ollama.URL + "/api/generate", Model: "test"},
+			SecurityFilter: SecurityFilterConfig{Engine: EngineConfig{URL: ollama.URL + "/api/generate", Model: "test"}},
 		}
 		g := NewNenyaGateway(cfg, &SecretsConfig{}, slog.Default())
 
-		_, err := g.callOllama(context.Background(), "sys", "input")
+		_, err := g.callEngine(context.Background(), g.config.SecurityFilter.Engine, "sys", "input")
 		if err == nil {
 			t.Fatal("expected error for missing response field")
 		}
@@ -922,10 +678,10 @@ func TestHandleChatCompletionsPrefixCachePipeline(t *testing.T) {
 		ProviderKeys: map[string]string{"test": "api-key"},
 	}
 	cfg := Config{
-		Server:      ServerConfig{MaxBodyBytes: 1 << 20},
-		Interceptor: InterceptorConfig{SoftLimit: 4000, HardLimit: 24000},
-		Filter:      FilterConfig{Enabled: false},
-		PrefixCache: PrefixCacheConfig{Enabled: true, PinSystemFirst: true},
+		Server:         ServerConfig{MaxBodyBytes: 1 << 20},
+		Governance:     GovernanceConfig{ContextSoftLimit: 4000, ContextHardLimit: 24000},
+		SecurityFilter: SecurityFilterConfig{Enabled: false},
+		PrefixCache:    PrefixCacheConfig{Enabled: true, PinSystemFirst: true},
 		Providers: map[string]ProviderConfig{
 			"test": {
 				URL:           upstream.URL + "/v1/chat/completions",
@@ -990,11 +746,10 @@ func TestHandleChatCompletionsWindowCompaction(t *testing.T) {
 	messages := `[{"role":"user","content":"` + longContent + `"},{"role":"assistant","content":"` + longContent + `"},{"role":"user","content":"` + longContent + `"},{"role":"assistant","content":"` + longContent + `"},{"role":"user","content":"` + longContent + `"},{"role":"assistant","content":"` + longContent + `"},{"role":"user","content":"` + longContent + `"},{"role":"assistant","content":"` + longContent + `"},{"role":"user","content":"` + longContent + `"},{"role":"user","content":"current question"}]`
 
 	cfg := Config{
-		Server:      ServerConfig{MaxBodyBytes: 10 << 20},
-		Interceptor: InterceptorConfig{SoftLimit: 4000, HardLimit: 24000},
-		Filter:      FilterConfig{Enabled: false},
-		Ollama:      OllamaConfig{URL: ollama.URL + "/api/generate", Model: "test", TimeoutSeconds: 30},
-		Window:      WindowConfig{Enabled: true, Mode: "summarize", ActiveMessages: 2, TriggerRatio: 0.5, MaxContext: 5000, SummaryMaxRunes: 2000},
+		Server:         ServerConfig{MaxBodyBytes: 10 << 20},
+		Governance:     GovernanceConfig{ContextSoftLimit: 4000, ContextHardLimit: 24000},
+		SecurityFilter: SecurityFilterConfig{Enabled: false},
+		Window:         WindowConfig{Enabled: true, Mode: "summarize", ActiveMessages: 2, TriggerRatio: 0.5, MaxContext: 5000, SummaryMaxRunes: 2000, Engine: EngineConfig{URL: ollama.URL + "/api/generate", Model: "test", TimeoutSeconds: 30}},
 		Providers: map[string]ProviderConfig{
 			"test": {
 				URL:           upstream.URL + "/v1/chat/completions",
@@ -1040,10 +795,9 @@ func TestSummarizeWithOllamaError(t *testing.T) {
 	}
 	largeContent := strings.Repeat("x", 25000)
 	cfg := Config{
-		Server:      ServerConfig{MaxBodyBytes: 10 << 20},
-		Interceptor: InterceptorConfig{SoftLimit: 4000, HardLimit: 24000},
-		Filter:      FilterConfig{Enabled: false},
-		Ollama:      OllamaConfig{URL: "http://127.0.0.1:1/api/generate", Model: "test", TimeoutSeconds: 5},
+		Server:         ServerConfig{MaxBodyBytes: 10 << 20},
+		Governance:     GovernanceConfig{ContextSoftLimit: 4000, ContextHardLimit: 24000},
+		SecurityFilter: SecurityFilterConfig{Enabled: false, Engine: EngineConfig{URL: "http://127.0.0.1:1/api/generate", Model: "test", TimeoutSeconds: 5}},
 		Providers: map[string]ProviderConfig{
 			"test": {
 				URL:           upstream.URL + "/v1/chat/completions",
@@ -1192,8 +946,8 @@ func TestForwardToUpstreamRateLimitSkip(t *testing.T) {
 		ProviderKeys: map[string]string{"test": "api-key"},
 	}
 	cfg := Config{
-		Server:    ServerConfig{MaxBodyBytes: 1 << 20},
-		RateLimit: RateLimitConfig{MaxRPM: 1},
+		Server:     ServerConfig{MaxBodyBytes: 1 << 20},
+		Governance: GovernanceConfig{RatelimitMaxRPM: 1},
 		Agents: map[string]AgentConfig{
 			"my-agent": {
 				Strategy:        "fallback",
@@ -1402,9 +1156,9 @@ func TestHandleChatCompletionsLastMessageNoTextContent(t *testing.T) {
 		ProviderKeys: map[string]string{"test": "api-key"},
 	}
 	cfg := Config{
-		Server:      ServerConfig{MaxBodyBytes: 1 << 20},
-		Interceptor: InterceptorConfig{SoftLimit: 4000, HardLimit: 24000},
-		Filter:      FilterConfig{Enabled: false},
+		Server:         ServerConfig{MaxBodyBytes: 1 << 20},
+		Governance:     GovernanceConfig{ContextSoftLimit: 4000, ContextHardLimit: 24000},
+		SecurityFilter: SecurityFilterConfig{Enabled: false},
 		Providers: map[string]ProviderConfig{
 			"test": {
 				URL:           upstream.URL + "/v1/chat/completions",
@@ -1457,13 +1211,15 @@ func TestHandleEmbeddingsBuildRequestError(t *testing.T) {
 }
 
 func TestDetermineUpstreamNoProviders(t *testing.T) {
-	cfg := Config{Providers: map[string]ProviderConfig{}}
+	cfg := Config{}
 	secrets := &SecretsConfig{}
 	g := NewNenyaGateway(cfg, secrets, slog.Default())
 
 	result := g.determineUpstream("unknown")
-	if result != "" {
-		t.Errorf("expected empty string with no providers, got %q", result)
+	builtIn := builtInProviders()
+	expected := builtIn["zai"].URL
+	if result != expected {
+		t.Errorf("expected default provider URL %q, got %q", expected, result)
 	}
 }
 

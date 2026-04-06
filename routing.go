@@ -172,6 +172,46 @@ func (g *NenyaGateway) transformRequestForUpstream(providerName, upstreamURL str
 		}
 	}
 
+	// Inject agent system prompt if configured
+	if agentNameRaw, ok := origModel.(string); ok {
+		if agent, ok := g.config.Agents[agentNameRaw]; ok {
+			if agent.SystemPrompt != "" || agent.SystemPromptFile != "" {
+				systemPrompt, err := loadPromptFile(agent.SystemPromptFile, agent.SystemPrompt, "")
+				if err != nil {
+					g.logger.Warn("failed to load agent system prompt, skipping", "agent", agentNameRaw, "err", err)
+				} else if systemPrompt != "" {
+					// Inject system message if messages exist
+					if messagesRaw, ok := payload["messages"]; ok {
+						if messages, ok := messagesRaw.([]interface{}); ok && len(messages) > 0 {
+							// Check if first message is already a system message
+							injectSystem := true
+							if len(messages) > 0 {
+								if firstMsg, ok := messages[0].(map[string]interface{}); ok {
+									if role, ok := firstMsg["role"].(string); ok && role == "system" {
+										injectSystem = false
+										g.logger.Debug("agent system prompt skipped: first message already system role", "agent", agentNameRaw)
+									}
+								}
+							}
+							if injectSystem {
+								systemMsg := map[string]interface{}{
+									"role":    "system",
+									"content": systemPrompt,
+								}
+								// Insert at beginning
+								newMessages := make([]interface{}, 0, len(messages)+1)
+								newMessages = append(newMessages, systemMsg)
+								newMessages = append(newMessages, messages...)
+								payload["messages"] = newMessages
+								g.logger.Info("injected agent system prompt", "agent", agentNameRaw, "provider", providerName)
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+
 	newBody, err := json.Marshal(payload)
 
 	if origModel == nil {

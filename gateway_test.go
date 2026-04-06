@@ -419,7 +419,7 @@ func TestExtractContentText(t *testing.T) {
 
 func TestNewNenyaGatewayInvalidRegex(t *testing.T) {
 	cfg := Config{
-		Filter: FilterConfig{
+		SecurityFilter: SecurityFilterConfig{
 			Enabled:  true,
 			Patterns: []string{"[invalid(regex"},
 		},

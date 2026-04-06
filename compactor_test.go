@@ -140,8 +140,7 @@ func TestMinifyJSON(t *testing.T) {
 func TestMinifyJSONDisabled(t *testing.T) {
 	cfg := Config{
 		Compaction: CompactionConfig{
-			Enabled:    false,
-			JSONMinify: true,
+			JSONMinify: false,
 		},
 	}
 	secrets := &SecretsConfig{}
