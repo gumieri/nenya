@@ -2,28 +2,30 @@
 
 A lightweight, highly secure AI API Gateway/Proxy written in Go. Acts as transparent middleware between local AI coding clients (OpenCode/Aider) and upstream LLM providers (Gemini, DeepSeek, z.ai).
 
-Its **superpower** is the **"Bouncer" mechanism**: intercepting massive HTTP payloads, routing them to a local Ollama instance (`qwen2.5-coder`) for summarization and PII/credential redaction, and forwarding the sanitized, much smaller payload to upstream cloud AI using SSE streaming.
+Its **superpower** is the **"Bouncer" mechanism**: intercepting massive HTTP payloads, routing them to a local Ollama instance for summarization and PII/credential redaction, and forwarding the sanitized, much smaller payload to upstream cloud AI using SSE streaming.
 
 ## Features
 
 - **Config-driven provider registry** — add providers (OpenAI, Anthropic, etc.) via JSON config + secrets, zero code changes
 - **Dynamic routing** based on model name prefixes configured per provider
-- **Tier-0 regex secret filter**: always-on regex-based redaction of AWS keys, GitHub tokens, passwords, etc. (configurable patterns)
+- **Agent system prompts** — inject custom system prompts per agent (inline or file-based)
+- **Tier-0 regex secret filter**: always-on regex-based redaction of AWS keys, GitHub tokens, passwords, etc.
 - **3-Tier UTF-8 safe pipeline**:
   - **Tier 1** (pass-through): payloads under `soft_limit` characters
-  - **Tier 2** (Ollama only): payloads between `soft_limit` and `hard_limit` characters — summarized locally
-  - **Tier 3** (truncation + Ollama): payloads over `hard_limit` characters — middle-out truncation — summarization
+  - **Tier 2** (engine only): payloads between `soft_limit` and `hard_limit` — summarized locally
+  - **Tier 3** (truncation + engine): payloads over `hard_limit` — middle-out truncation then summarization
+- **Context window compaction**: sliding window summarization of old messages
 - **Zero external dependencies** — Go standard library only
 - **Hardened security**: strict timeouts, request size limits, hop-by-hop header stripping, panic recovery
 - **Systemd credential management**: API keys loaded from `CREDENTIALS_DIRECTORY`
 - **Rate limiting** per upstream host (RPM/TPM)
-- **Gemini free-tier compatibility**: automatic mapping of AI Studio UI model names to API-accepted names
+- **Gemini compatibility**: automatic model name mapping, SSE transformation (index field injection, thought signature preservation)
 
 ## Configuration
 
 ### `config.json`
 
-See [`example.config.json`](example.config.json) for the full schema with all options.
+See [`example.config.json`](example.config.json) for a working example. Full reference in [`CONFIGURATION.md`](CONFIGURATION.md).
 
 ```json
 {
@@ -31,30 +33,45 @@ See [`example.config.json`](example.config.json) for the full schema with all op
     "listen_addr": ":8080",
     "max_body_bytes": 10485760
   },
-  "interceptor": {
-    "soft_limit": 4000,
-    "hard_limit": 24000,
+  "governance": {
+    "ratelimit_max_tpm": 250000,
+    "ratelimit_max_rpm": 15,
+    "context_soft_limit": 4000,
+    "context_hard_limit": 24000,
     "truncation_strategy": "middle-out",
     "keep_first_percent": 15.0,
     "keep_last_percent": 25.0
   },
-  "ratelimit": {
-    "max_tpm": 250000,
-    "max_rpm": 15
-  },
-  "ollama": {
-    "url": "http://127.0.0.1:11434/api/generate",
-    "model": "qwen2.5-coder:7b",
-    "system_prompt": "You are a data privacy filter. Summarize the following log/code error in 5 lines. REMOVE any IP addresses, AWS keys (AKIA...), or passwords. Keep only the technical core of the error."
-  },
-  "filter": {
+  "security_filter": {
     "enabled": true,
-    "redaction_label": "[REDACTED]"
+    "redaction_label": "[REDACTED]",
+    "engine": {
+      "provider": "ollama",
+      "model": "qwen2.5-coder:7b",
+      "system_prompt_file": "./prompts/privacy_filter.md",
+      "timeout_seconds": 600
+    }
+  },
+  "agents": {
+    "build": {
+      "strategy": "fallback",
+      "cooldown_seconds": 60,
+      "system_prompt": "Reply with maximum brevity. Code only.",
+      "models": [
+        { "provider": "gemini", "model": "gemini-3.1-flash-lite-preview", "max_context": 128000 },
+        { "provider": "deepseek", "model": "deepseek-reasoner", "max_context": 128000 }
+      ]
+    }
+  },
+  "providers": {
+    "gemini": {
+      "url": "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
+      "auth_style": "bearer+x-goog",
+      "route_prefixes": ["gemini-"]
+    }
   }
 }
 ```
-
-For the full configuration reference including all sections (prefix cache, compaction, window compaction, agents), see [`CONFIGURATION.md`](CONFIGURATION.md).
 
 ### Secrets (`secrets` JSON file)
 
@@ -103,19 +120,13 @@ Models matching the `route_prefixes` (e.g., `gpt-4o`, `o3-mini`) will now be rou
 
 ### Configuration Validation
 
-Before starting the gateway, you can validate your configuration and API keys:
+Before starting the gateway, validate your configuration and API keys:
 
 ```bash
-./nenya -config config.json -validate
+CREDENTIALS_DIRECTORY=/path/to/creds ./nenya -config config.json -validate
 ```
 
-This will:
-1. Check Ollama engine health (if configured)
-2. Validate each provider's API endpoint reachability
-3. Test API keys with provider endpoints
-4. Report any configuration errors before runtime
-
-The validation exits with code 0 on success, 1 on failure. Use this to verify your setup before deployment.
+This checks Ollama engine health, provider endpoint reachability, and API key validity.
 
 ## Deployment
 
@@ -131,11 +142,11 @@ sudo mise run install
 
 This will:
 1. Build the binary and install to `/usr/local/bin/nenya`
-2. Copy `example.config.json` to `/etc/nenya/config.json`
+2. Copy `example.config.json` to `/etc/nenya/config.json` (only if not already present)
 3. Copy `nenya.service` to `/etc/systemd/system/nenya.service`
 4. Reload systemd
 
-You must then create the secrets JSON file as described in [`SECRETS_FORMAT.md`](SECRETS_FORMAT.md) at `/etc/nenya/secrets.json` and enable the service:
+You must then create the secrets JSON file as described in [`SECRETS_FORMAT.md`](SECRETS_FORMAT.md) and enable the service:
 
 ```bash
 sudo systemctl enable --now nenya
@@ -155,9 +166,9 @@ Or for a quick local test with dummy secrets:
 mise run run
 ```
 
-## API Usage
+## API Endpoints
 
-All endpoints require `Authorization: Bearer <client_token>`.
+All `/v1/*` endpoints require `Authorization: Bearer <client_token>`.
 
 ### `POST /v1/chat/completions`
 
@@ -165,7 +176,7 @@ OpenAI-compatible chat completions with SSE streaming, Ollama interception, and 
 
 ```json
 {
-  "model": "zai-coding-plan/glm-5",
+  "model": "build",
   "messages": [
     {"role": "user", "content": "Explain quantum computing in one sentence."}
   ]
@@ -174,7 +185,7 @@ OpenAI-compatible chat completions with SSE streaming, Ollama interception, and 
 
 ### `GET /v1/models`
 
-Returns all available models: agent names (owned by `nenya`), individual models from agent chains, and provider route prefixes.
+Returns all available models: agent names, individual models from agent chains, and provider route prefixes.
 
 ```bash
 curl -H "Authorization: Bearer $TOKEN" http://localhost:8080/v1/models
@@ -184,37 +195,15 @@ curl -H "Authorization: Bearer $TOKEN" http://localhost:8080/v1/models
 
 Passthrough proxy for embeddings requests. Routes via provider registry, no Ollama interception or SSE.
 
-```json
-{
-  "model": "text-embedding-3-small",
-  "input": "hello world"
-}
-```
-
 ### `GET /healthz`
 
-Health check (no auth required). Returns JSON with Ollama status. 200 if Ollama is reachable, 503 if degraded.
-
-```json
-{"status":"ok","ollama":{"status":true}}
-```
+Health check (no auth required). Returns JSON with engine status.
 
 ### `GET /statsz`
 
-Token usage statistics (no auth required). Returns per-model request counts, input/output tokens, and error counts since startup.
-
-```json
-{
-  "uptime_seconds": 3600,
-  "models": {
-    "gemini-2.5-flash": {"requests": 42, "input_tokens": 18000, "output_tokens": 5200, "errors": 1}
-  }
-}
-```
+Token usage statistics (no auth required). Returns per-model request counts, input/output tokens, and error counts.
 
 ### Model Routing
-
-Supported model prefixes (built-in providers):
 
 | Prefix | Provider |
 |--------|----------|
@@ -226,14 +215,14 @@ Supported model prefixes (built-in providers):
 
 Models not matching any prefix fall back to the `zai` provider.
 
-The gateway will automatically map Gemini model names (e.g., `gemini-3-flash` to `gemini-3-flash-preview`) to match the API.
+Gemini model names are automatically mapped (e.g., `gemini-3-flash` to `gemini-3-flash-preview`).
 
 ## Development
 
 ### Prerequisites
 
 - Go 1.26+
-- Ollama with `qwen2.5-coder:7b` (or adjust `config.json`)
+- Ollama with `qwen2.5-coder:7b` (or adjust config)
 
 ### Running Tests
 
@@ -248,42 +237,11 @@ go fmt ./...
 - **`main.go`** — Entry point, server bootstrap with graceful shutdown
 - **`config.go`** — Configuration types, JSON loading, provider registry
 - **`gateway.go`** — NenyaGateway struct, HTTP clients, tokenization
-- **`proxy.go`** — HTTP handler, 3-tier pipeline, Ollama interceptor, upstream forwarding
+- **`proxy.go`** — HTTP handler, 3-tier pipeline, upstream forwarding
 - **`routing.go`** — Dynamic routing, agent fallback chains, API key injection, model mapping
-- **`transform.go`** — SSE response transformation (Gemini tool_calls normalization), usage extraction
+- **`transform.go`** — SSE response transformation (Gemini index injection, thought signature preservation), usage extraction
 - **`filter.go`** — Tier-0 regex secret redaction, middle-out truncation
 - **`ratelimit.go`** — Token-bucket rate limiter (RPM/TPM)
+- **`validate.go`** — Configuration validation, provider health checks
 - **`stats.go`** — Token usage tracking, /statsz and /healthz endpoints
 - **`logger.go`** — slog setup with TTY/systemd auto-detection
-
-### Security Design
-
-- **No global variables** — state encapsulated in `NenyaGateway` struct
-- **Strict timeouts** — `http.Client` with 30s dial, 30s TLS, 120s total timeout
-- **Request size limits** — `http.MaxBytesReader` prevents memory exhaustion
-- **Header sanitization** — hop-by-hop headers stripped before forwarding
-- **Error safety** — panic recovery in HTTP handler, no stack traces exposed
-
-## Project Structure
-
-- `main.go` — Entry point, server bootstrap
-- `config.go` — Configuration types, TOML/JSON loading, provider registry
-- `gateway.go` — NenyaGateway struct, HTTP clients, tokenization
-- `proxy.go` — HTTP handler, 3-tier pipeline, upstream forwarding
-- `routing.go` — Dynamic routing, agent fallback chains, model mapping
-- `transform.go` — SSE response transformation, usage extraction
-- `filter.go` — Tier-0 regex secret redaction, middle-out truncation
-- `ratelimit.go` — Token-bucket rate limiter
-- `stats.go` — Token usage tracking, /statsz and /healthz endpoints
-- `logger.go` — slog setup with TTY/systemd auto-detection
-- `config.json` — Runtime configuration (JSON)
-- `example.config.json` — Example with all options
-- `nenya.service` — Systemd service unit with sandboxing
-- `CONFIGURATION.md` — Full configuration reference
-- `SECRETS_FORMAT.md` — Secrets file format and security notes
-- `mise.toml` — Build, install, test, release tasks
-- `README.md` — This file
-
-## License
-
-MIT

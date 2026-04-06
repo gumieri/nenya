@@ -14,7 +14,7 @@ Nenya reads its configuration from a JSON file (default: `config.json`). See [`e
 | Prefix Cache | `prefix_cache` | Prompt cache alignment optimizations |
 | Compaction | `compaction` | Text compaction (whitespace, blank lines, JSON) |
 | Window | `window` | Sliding window conversation compaction with configurable engine |
-| Agents | `agents` | Named agent definitions with fallback chains |
+| Agents | `agents` | Named agent definitions with fallback chains and optional system prompts |
 | Providers | `providers` | Upstream provider registry |
 
 ## `server`
@@ -62,11 +62,13 @@ Both `security_filter.engine` and `window.engine` use the same `EngineConfig` st
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `url` | string | `"http://127.0.0.1:11434/api/generate"` | API endpoint for the engine |
+| `provider` | string | `"ollama"` | Provider name from the `[providers]` registry. URL, auth, and API format are inherited from the provider definition. |
 | `model` | string | `"qwen2.5-coder:7b"` | Model identifier for the engine |
-| `api_format` | string | `"ollama"` | API format: `"ollama"` (native `/api/generate`) or `"openai"` (compatible `/v1/chat/completions`) |
-| `system_prompt_file` | string | `""` | Path to system prompt file (relative to config). Empty uses built-in prompt. |
+| `system_prompt` | string | `""` | Inline system prompt. Highest priority. |
+| `system_prompt_file` | string | `""` | Path to system prompt file (relative to config). Falls back to built-in prompt if empty. |
 | `timeout_seconds` | int | `600` | Timeout for individual engine API calls |
+
+**Prompt priority**: `system_prompt` (inline) > `system_prompt_file` > built-in default.
 
 **Note**: `system_prompt_file` supports `%d` placeholder for window summarization (replaced with active message count).
 
@@ -76,12 +78,10 @@ Optimizations to improve upstream provider prefix cache hit rates by stabilizing
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `enabled` | bool | `false` | Master toggle (must be explicitly set to `true`) |
-| `pin_system_first` | bool | `false` | Reorder all `system` role messages to the top of the messages array |
-| `stable_tools` | bool | `false` | Sort `tools[]` array by `function.name` for deterministic ordering |
-| `skip_redaction_on_system` | bool | `false` | Skip Tier-0 regex redaction on system messages to preserve prefix byte-identity |
-
-**Important**: Unlike previous versions, boolean fields now default to `false` and must be explicitly enabled.
+| `enabled` | bool | `true` (auto) | Master toggle. Auto-enabled when any sub-field is explicitly set to `true`. |
+| `pin_system_first` | bool | `true` | Reorder all `system` role messages to the top of the messages array |
+| `stable_tools` | bool | `true` | Sort `tools[]` array by `function.name` for deterministic ordering |
+| `skip_redaction_on_system` | bool | `true` | Skip Tier-0 regex redaction on system messages to preserve prefix byte-identity |
 
 ## `compaction`
 
@@ -89,13 +89,11 @@ Text compaction applied to all message content (both string and multi-part conte
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `enabled` | bool | `false` | Master toggle (must be explicitly set to `true`) |
-| `normalize_line_endings` | bool | `false` | Convert CRLF to LF |
-| `trim_trailing_whitespace` | bool | `false` | Remove trailing spaces/tabs from each line |
-| `collapse_blank_lines` | bool | `false` | Collapse runs of 3+ blank lines to max 2 |
-| `json_minify` | bool | `false` | Minify the final JSON body with `json.Compact` |
-
-**Important**: Unlike previous versions, boolean fields now default to `false` and must be explicitly enabled.
+| `enabled` | bool | `true` (auto) | Master toggle. Auto-enabled when any sub-field is explicitly set to `true`. |
+| `normalize_line_endings` | bool | `true` | Convert CRLF to LF |
+| `trim_trailing_whitespace` | bool | `true` | Remove trailing spaces/tabs from each line |
+| `collapse_blank_lines` | bool | `true` | Collapse runs of 3+ blank lines to max 2 |
+| `json_minify` | bool | `true` | Minify the final JSON body with `json.Compact` |
 
 Compaction runs after redaction, before engine interception. JSON minify runs at the very end of the pipeline.
 
@@ -115,25 +113,18 @@ Sliding window conversation compaction for long conversations. When the estimate
 
 ## `agents`
 
-Named agent definitions with model fallback chains. When a request specifies `model: "<agent_name>"`, the gateway routes through the agent's model list.
+Named agent definitions with model fallback chains and optional system prompts. When a request specifies `model: "<agent_name>"`, the gateway routes through the agent's model list.
 
 ```json
 {
   "agents": {
-    "my-agent": {
-      "strategy": "round-robin",
-      "cooldown_seconds": 300,
+    "build": {
+      "strategy": "fallback",
+      "cooldown_seconds": 60,
+      "system_prompt": "Reply with maximum brevity. Code only.",
       "models": [
-        {
-          "provider": "gemini",
-          "model": "gemini-3-flash",
-          "max_context": 1000000
-        },
-        {
-          "provider": "deepseek",
-          "model": "deepseek-chat",
-          "max_context": 64000
-        }
+        { "provider": "gemini", "model": "gemini-3.1-flash-lite-preview", "max_context": 128000 },
+        { "provider": "deepseek", "model": "deepseek-reasoner", "max_context": 128000 }
       ]
     }
   }
@@ -144,6 +135,8 @@ Named agent definitions with model fallback chains. When a request specifies `mo
 |-------|------|---------|-------------|
 | `strategy` | string | `"round-robin"` | `"round-robin"` or `"fallback"` |
 | `cooldown_seconds` | int | `60` | Seconds to skip a model after a retryable error |
+| `system_prompt` | string | `""` | Inline system prompt injected as the first message (only if no existing system message). |
+| `system_prompt_file` | string | `""` | Path to system prompt file. Lower priority than `system_prompt`. |
 | `models` | array | (required) | List of model entries to try in order |
 
 Each model entry:
@@ -155,18 +148,20 @@ Each model entry:
 | `url` | string | (optional) Override provider URL for this specific model |
 | `max_context` | int | Context window size for token budgeting and window compaction |
 
+**System prompt injection**: If `system_prompt` or `system_prompt_file` is set, the prompt is injected as the first message in the array only when no existing system message is present.
+
 ## `providers`
 
 Upstream LLM provider registry. Built-in providers are automatically loaded:
 
-| Name | Prefixes | Auth Style |
-|------|----------|------------|
-| `gemini` | `gemini-` | `bearer+x-goog` |
-| `deepseek` | `deepseek-` | `bearer` |
-| `zai` | `zai-`, `glm-` | `bearer` |
-| `groq` | `llama-`, `llama3-`, `mixtral-`, `whisper-` | `bearer` |
-| `together` | `meta-llama/`, `mistralai/`, `qwen/`, `together/` | `bearer` |
-| `ollama` | (none) | `none` |
+| Name | URL | Prefixes | Auth Style |
+|------|-----|----------|------------|
+| `gemini` | `https://generativelanguage.googleapis.com/v1beta/openai/chat/completions` | `gemini-` | `bearer+x-goog` |
+| `deepseek` | `https://api.deepseek.com/chat/completions` | `deepseek-` | `bearer` |
+| `zai` | `https://api.z.ai/v1/chat/completions` | `zai-`, `glm-` | `bearer` |
+| `groq` | `https://api.groq.com/openai/v1/chat/completions` | `llama-`, `llama3-`, `mixtral-`, `whisper-` | `bearer` |
+| `together` | `https://api.together.xyz/v1/chat/completions` | `meta-llama/`, `mistralai/`, `qwen/`, `together/` | `bearer` |
+| `ollama` | `http://127.0.0.1:11434/v1/chat/completions` | (none) | `none` |
 
 To add or override a provider:
 
@@ -186,26 +181,48 @@ To add or override a provider:
 |-------|------|-------------|
 | `url` | string | Upstream chat completions endpoint |
 | `route_prefixes` | []string | Model name prefixes that route to this provider |
-| `auth_style` | string | `"bearer"`, `"bearer+x-goog"` (Gemini), or `"none"` |
+| `auth_style` | string | `"bearer"`, `"bearer+x-goog"` (Gemini), or `"none"` (Ollama) |
 
 API keys are loaded from the secrets file via `provider_keys` (keyed by provider name). See [`SECRETS_FORMAT.md`](SECRETS_FORMAT.md).
+
+### Gemini `auth_style: "bearer+x-goog"`
+
+Gemini requires both `Authorization: Bearer <key>` and `x-goog-api-key: <key>` headers. The `bearer+x-goog` auth style sets both automatically.
+
+### Gemini `extra_content` (Thought Signatures)
+
+Gemini 3 models include `extra_content.google.thought_signature` in tool_calls responses. Nenya preserves this field (it is required for multi-turn function calling with Gemini 3) and adds the missing `index` field to comply with the OpenAI spec.
 
 ## Processing Pipeline Order
 
 1. **Prefix cache optimizations** (pin system messages, sort tools)
-2. **Tier-0 regex redaction** (secret patterns via `security_filter`)
-3. **Text compaction** (normalize, trim, collapse blanks)
-4. **Window compaction** (if enabled and threshold exceeded)
-5. **Engine interception** (3-tier last-message summarization using `security_filter.engine`)
-6. **JSON minification** (final body compaction)
+2. **Agent system prompt injection** (if agent has prompt and no system message exists)
+3. **Tier-0 regex redaction** (secret patterns via `security_filter`)
+4. **Text compaction** (normalize, trim, collapse blanks)
+5. **Window compaction** (if enabled and threshold exceeded)
+6. **Engine interception** (3-tier last-message summarization using `security_filter.engine`)
+7. **JSON minification** (final body compaction)
 
 ## Configuration Notes
 
 - **JSON with Comments**: Configuration files support `//` and `/* */` comments
-- **External Prompts**: System prompts can be external files in `./prompts/` directory
+- **External Prompts**: System prompts can be inline (`system_prompt`) or external files (`system_prompt_file`) in `./prompts/` directory
 - **Separate Engines**: `security_filter.engine` and `window.engine` can use different models/APIs
 - **API Format Abstraction**: Supports `"ollama"` (native `/api/generate`) and `"openai"` (compatible `/v1/chat/completions`) formats
-- **Pattern-Based Enablement**: `security_filter.enabled` defaults to `true` when patterns are provided but field omitted
+- **Auto-enable**: `security_filter.enabled` defaults to `true` when patterns are provided; `prefix_cache` and `compaction` auto-enable when sub-fields are set
+
+## Configuration Validation
+
+Before starting the gateway, validate your configuration and API keys:
+
+```bash
+CREDENTIALS_DIRECTORY=/path/to/creds ./nenya -config config.json -validate
+```
+
+This checks:
+1. Ollama engine health (if `security_filter` is enabled and engine is `ollama`)
+2. Provider API endpoint reachability
+3. API key validity
 
 ## Secrets
 
