@@ -72,7 +72,10 @@ func TestCheckSecurityFilterEngineHealth(t *testing.T) {
 		defer ollama.Close()
 
 		cfg := Config{
-			SecurityFilter: SecurityFilterConfig{Engine: EngineConfig{URL: ollama.URL + "/api/generate"}},
+			Providers: map[string]ProviderConfig{
+				"ollama-health": {URL: ollama.URL + "/v1/chat/completions", AuthStyle: "none", ApiFormat: "ollama"},
+			},
+			SecurityFilter: SecurityFilterConfig{Engine: EngineConfig{Provider: "ollama-health", Model: "qwen2.5-coder:7b"}},
 		}
 		g := NewNenyaGateway(cfg, &SecretsConfig{}, slog.Default())
 
@@ -83,7 +86,10 @@ func TestCheckSecurityFilterEngineHealth(t *testing.T) {
 
 	t.Run("ollama unreachable", func(t *testing.T) {
 		cfg := Config{
-			SecurityFilter: SecurityFilterConfig{Engine: EngineConfig{URL: "http://127.0.0.1:1/api/generate"}},
+			Providers: map[string]ProviderConfig{
+				"ollama-bad": {URL: "http://127.0.0.1:1/api/generate", AuthStyle: "none", ApiFormat: "ollama"},
+			},
+			SecurityFilter: SecurityFilterConfig{Engine: EngineConfig{Provider: "ollama-bad"}},
 		}
 		g := NewNenyaGateway(cfg, &SecretsConfig{}, slog.Default())
 
@@ -92,10 +98,28 @@ func TestCheckSecurityFilterEngineHealth(t *testing.T) {
 		}
 	})
 
-	t.Run("nil ollama client", func(t *testing.T) {
-		g := &NenyaGateway{ollamaClient: nil}
+	t.Run("openai engine always healthy", func(t *testing.T) {
+		cfg := Config{
+			Providers: map[string]ProviderConfig{
+				"gemini": {URL: "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions", AuthStyle: "bearer+x-goog", ApiFormat: "openai"},
+			},
+			SecurityFilter: SecurityFilterConfig{Engine: EngineConfig{Provider: "gemini"}},
+		}
+		g := NewNenyaGateway(cfg, &SecretsConfig{}, slog.Default())
+
+		if !g.checkSecurityFilterEngineHealth() {
+			t.Error("expected healthy for non-ollama engine")
+		}
+	})
+
+	t.Run("nil client", func(t *testing.T) {
+		cfg := Config{
+			SecurityFilter: SecurityFilterConfig{Engine: EngineConfig{Provider: "nonexistent"}},
+		}
+		g := NewNenyaGateway(cfg, &SecretsConfig{}, slog.Default())
+
 		if g.checkSecurityFilterEngineHealth() {
-			t.Error("expected unhealthy with nil client")
+			t.Error("expected unhealthy when provider not found")
 		}
 	})
 }
@@ -281,7 +305,10 @@ func TestCallOllama(t *testing.T) {
 		defer ollama.Close()
 
 		cfg := Config{
-			SecurityFilter: SecurityFilterConfig{Engine: EngineConfig{URL: ollama.URL + "/api/generate", Model: "test"}},
+			Providers: map[string]ProviderConfig{
+				"ollama-test": {URL: ollama.URL, AuthStyle: "none", ApiFormat: "ollama"},
+			},
+			SecurityFilter: SecurityFilterConfig{Engine: EngineConfig{Provider: "ollama-test", Model: "test"}},
 		}
 		g := NewNenyaGateway(cfg, &SecretsConfig{}, slog.Default())
 
@@ -302,7 +329,10 @@ func TestCallOllama(t *testing.T) {
 		defer ollama.Close()
 
 		cfg := Config{
-			SecurityFilter: SecurityFilterConfig{Engine: EngineConfig{URL: ollama.URL + "/api/generate", Model: "test"}},
+			Providers: map[string]ProviderConfig{
+				"ollama-test": {URL: ollama.URL, AuthStyle: "none", ApiFormat: "ollama"},
+			},
+			SecurityFilter: SecurityFilterConfig{Engine: EngineConfig{Provider: "ollama-test", Model: "test"}},
 		}
 		g := NewNenyaGateway(cfg, &SecretsConfig{}, slog.Default())
 
@@ -320,7 +350,10 @@ func TestCallOllama(t *testing.T) {
 		defer ollama.Close()
 
 		cfg := Config{
-			SecurityFilter: SecurityFilterConfig{Engine: EngineConfig{URL: ollama.URL + "/api/generate", Model: "test"}},
+			Providers: map[string]ProviderConfig{
+				"ollama-test": {URL: ollama.URL, AuthStyle: "none", ApiFormat: "ollama"},
+			},
+			SecurityFilter: SecurityFilterConfig{Engine: EngineConfig{Provider: "ollama-test", Model: "test"}},
 		}
 		g := NewNenyaGateway(cfg, &SecretsConfig{}, slog.Default())
 
@@ -338,7 +371,10 @@ func TestCallOllama(t *testing.T) {
 		defer ollama.Close()
 
 		cfg := Config{
-			SecurityFilter: SecurityFilterConfig{Engine: EngineConfig{URL: ollama.URL + "/api/generate", Model: "test"}},
+			Providers: map[string]ProviderConfig{
+				"ollama-test": {URL: ollama.URL, AuthStyle: "none", ApiFormat: "ollama"},
+			},
+			SecurityFilter: SecurityFilterConfig{Engine: EngineConfig{Provider: "ollama-test", Model: "test"}},
 		}
 		g := NewNenyaGateway(cfg, &SecretsConfig{}, slog.Default())
 
@@ -749,7 +785,7 @@ func TestHandleChatCompletionsWindowCompaction(t *testing.T) {
 		Server:         ServerConfig{MaxBodyBytes: 10 << 20},
 		Governance:     GovernanceConfig{ContextSoftLimit: 4000, ContextHardLimit: 24000},
 		SecurityFilter: SecurityFilterConfig{Enabled: false},
-		Window:         WindowConfig{Enabled: true, Mode: "summarize", ActiveMessages: 2, TriggerRatio: 0.5, MaxContext: 5000, SummaryMaxRunes: 2000, Engine: EngineConfig{URL: ollama.URL + "/api/generate", Model: "test", TimeoutSeconds: 30}},
+		Window:         WindowConfig{Enabled: true, Mode: "summarize", ActiveMessages: 2, TriggerRatio: 0.5, MaxContext: 5000, SummaryMaxRunes: 2000, Engine: EngineConfig{Provider: "ollama", Model: "test", TimeoutSeconds: 30}},
 		Providers: map[string]ProviderConfig{
 			"test": {
 				URL:           upstream.URL + "/v1/chat/completions",
@@ -797,7 +833,7 @@ func TestSummarizeWithOllamaError(t *testing.T) {
 	cfg := Config{
 		Server:         ServerConfig{MaxBodyBytes: 10 << 20},
 		Governance:     GovernanceConfig{ContextSoftLimit: 4000, ContextHardLimit: 24000},
-		SecurityFilter: SecurityFilterConfig{Enabled: false, Engine: EngineConfig{URL: "http://127.0.0.1:1/api/generate", Model: "test", TimeoutSeconds: 5}},
+		SecurityFilter: SecurityFilterConfig{Enabled: false, Engine: EngineConfig{Provider: "ollama", Model: "test", TimeoutSeconds: 5}},
 		Providers: map[string]ProviderConfig{
 			"test": {
 				URL:           upstream.URL + "/v1/chat/completions",

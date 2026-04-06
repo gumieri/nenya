@@ -26,6 +26,7 @@ type ProviderConfig struct {
 	URL           string   `json:"url"`
 	RoutePrefixes []string `json:"route_prefixes"`
 	AuthStyle     string   `json:"auth_style"`
+	ApiFormat     string   `json:"api_format"`
 }
 
 type Provider struct {
@@ -34,6 +35,7 @@ type Provider struct {
 	APIKey        string
 	RoutePrefixes []string
 	AuthStyle     string
+	ApiFormat     string
 }
 
 type Config struct {
@@ -71,9 +73,8 @@ type SecretsConfig struct {
 }
 
 type EngineConfig struct {
-	URL              string `json:"url"`
+	Provider         string `json:"provider"`
 	Model            string `json:"model"`
-	ApiFormat        string `json:"api_format"`
 	SystemPrompt     string `json:"system_prompt"`
 	SystemPromptFile string `json:"system_prompt_file"`
 	TimeoutSeconds   int    `json:"timeout_seconds"`
@@ -320,26 +321,20 @@ func applyDefaults(cfg *Config) {
 		cfg.SecurityFilter.Enabled = true
 	}
 
-	if cfg.SecurityFilter.Engine.URL == "" {
-		cfg.SecurityFilter.Engine.URL = "http://127.0.0.1:11434/api/generate"
+	if cfg.SecurityFilter.Engine.Provider == "" {
+		cfg.SecurityFilter.Engine.Provider = "ollama"
 	}
 	if cfg.SecurityFilter.Engine.Model == "" {
 		cfg.SecurityFilter.Engine.Model = "qwen2.5-coder:7b"
 	}
-	if cfg.SecurityFilter.Engine.ApiFormat == "" {
-		cfg.SecurityFilter.Engine.ApiFormat = "ollama"
-	}
 	if cfg.SecurityFilter.Engine.TimeoutSeconds == 0 {
 		cfg.SecurityFilter.Engine.TimeoutSeconds = 600
 	}
-	if cfg.Window.Engine.URL == "" {
-		cfg.Window.Engine.URL = "http://127.0.0.1:11434/api/generate"
+	if cfg.Window.Engine.Provider == "" {
+		cfg.Window.Engine.Provider = "ollama"
 	}
 	if cfg.Window.Engine.Model == "" {
 		cfg.Window.Engine.Model = "qwen2.5-coder:7b"
-	}
-	if cfg.Window.Engine.ApiFormat == "" {
-		cfg.Window.Engine.ApiFormat = "ollama"
 	}
 	if cfg.Window.Engine.TimeoutSeconds == 0 {
 		cfg.Window.Engine.TimeoutSeconds = 600
@@ -441,6 +436,7 @@ func resolveProviders(cfg *Config, secrets *SecretsConfig) map[string]*Provider 
 			APIKey:        apiKey,
 			RoutePrefixes: pc.RoutePrefixes,
 			AuthStyle:     pc.AuthStyle,
+			ApiFormat:     pc.ApiFormat,
 		}
 	}
 	return providers

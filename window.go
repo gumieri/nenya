@@ -131,22 +131,32 @@ func (g *NenyaGateway) serializeMessages(messages []interface{}) string {
 }
 
 func (g *NenyaGateway) callEngine(ctx context.Context, engine EngineConfig, systemPrompt, prompt string) (string, error) {
+	p, ok := g.providers[engine.Provider]
+	if !ok {
+		return "", fmt.Errorf("engine provider %q not found", engine.Provider)
+	}
+
+	apiFormat := p.ApiFormat
+	if apiFormat == "" {
+		apiFormat = "openai"
+	}
+
 	var payload map[string]interface{}
-	switch engine.ApiFormat {
-	case "openai":
+	switch apiFormat {
+	case "ollama":
+		payload = map[string]interface{}{
+			"model":  engine.Model,
+			"system": systemPrompt,
+			"prompt": prompt,
+			"stream": false,
+		}
+	default:
 		payload = map[string]interface{}{
 			"model": engine.Model,
 			"messages": []map[string]string{
 				{"role": "system", "content": systemPrompt},
 				{"role": "user", "content": prompt},
 			},
-			"stream": false,
-		}
-	default: // "ollama" and any unknown default to ollama format
-		payload = map[string]interface{}{
-			"model":  engine.Model,
-			"system": systemPrompt,
-			"prompt": prompt,
 			"stream": false,
 		}
 	}
@@ -156,13 +166,17 @@ func (g *NenyaGateway) callEngine(ctx context.Context, engine EngineConfig, syst
 		return "", fmt.Errorf("failed to marshal engine payload: %v", err)
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, engine.URL, bytes.NewBuffer(encoded))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, p.URL, bytes.NewBuffer(encoded))
 	if err != nil {
 		return "", fmt.Errorf("failed to create engine request: %v", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
 
-	resp, err := g.ollamaClient.Do(req)
+	if err := g.injectAPIKey(engine.Provider, req.Header); err != nil {
+		return "", fmt.Errorf("engine auth failed: %v", err)
+	}
+
+	resp, err := g.client.Do(req)
 	if err != nil {
 		return "", fmt.Errorf("engine unreachable: %v", err)
 	}
@@ -179,8 +193,14 @@ func (g *NenyaGateway) callEngine(ctx context.Context, engine EngineConfig, syst
 	}
 
 	var output string
-	switch engine.ApiFormat {
-	case "openai":
+	switch apiFormat {
+	case "ollama":
+		resp, ok := response["response"].(string)
+		if !ok {
+			return "", fmt.Errorf("engine response missing 'response' field")
+		}
+		output = resp
+	default:
 		if choices, ok := response["choices"].([]interface{}); ok && len(choices) > 0 {
 			if choice, ok := choices[0].(map[string]interface{}); ok {
 				if msg, ok := choice["message"].(map[string]interface{}); ok {
@@ -193,12 +213,6 @@ func (g *NenyaGateway) callEngine(ctx context.Context, engine EngineConfig, syst
 		if output == "" {
 			return "", fmt.Errorf("openai response missing content")
 		}
-	default:
-		resp, ok := response["response"].(string)
-		if !ok {
-			return "", fmt.Errorf("engine response missing 'response' field")
-		}
-		output = resp
 	}
 	return output, nil
 }

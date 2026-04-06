@@ -615,22 +615,28 @@ func (g *NenyaGateway) handleHealthz(w http.ResponseWriter) {
 }
 
 func (g *NenyaGateway) checkSecurityFilterEngineHealth() bool {
-	if g.ollamaClient == nil {
+	engine := g.config.SecurityFilter.Engine
+	p, ok := g.providers[engine.Provider]
+	if !ok {
+		g.logger.Warn("engine provider not found", "provider", engine.Provider)
 		return false
 	}
-	// If engine is not Ollama, assume healthy (no health endpoint)
-	if g.config.SecurityFilter.Engine.ApiFormat != "ollama" {
+	apiFormat := p.ApiFormat
+	if apiFormat == "" {
+		apiFormat = "openai"
+	}
+	if apiFormat != "ollama" {
 		return true
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, ollamaHealthURL(g.config.SecurityFilter.Engine.URL), nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, ollamaHealthURL(p.URL), nil)
 	if err != nil {
 		return false
 	}
 
-	resp, err := g.ollamaClient.Do(req)
+	resp, err := g.client.Do(req)
 	if err != nil {
 		return false
 	}
@@ -638,10 +644,14 @@ func (g *NenyaGateway) checkSecurityFilterEngineHealth() bool {
 	return resp.StatusCode == http.StatusOK
 }
 
-func ollamaHealthURL(ollamaURL string) string {
-	const suffix = "api/generate"
-	if strings.HasSuffix(ollamaURL, suffix) {
-		return ollamaURL[:len(ollamaURL)-len(suffix)] + "api/tags"
+func ollamaHealthURL(engineURL string) string {
+	const nativeSuffix = "/api/generate"
+	const openaiSuffix = "/v1/chat/completions"
+	if strings.HasSuffix(engineURL, nativeSuffix) {
+		return engineURL[:len(engineURL)-len(nativeSuffix)] + "/api/tags"
 	}
-	return ollamaURL
+	if strings.HasSuffix(engineURL, openaiSuffix) {
+		return engineURL[:len(engineURL)-len(openaiSuffix)] + "/api/tags"
+	}
+	return engineURL
 }
