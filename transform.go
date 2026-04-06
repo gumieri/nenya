@@ -14,35 +14,32 @@ type ResponseTransformer interface {
 }
 
 // GeminiTransformer fixes Gemini's OpenAI-compatible API response format.
-// Gemini responses are missing required 'index' field in tool_calls and include
-// non-standard 'extra_content' field.
+// Gemini streaming responses may omit the 'index' field inside each tool_calls
+// entry. This transformer adds the missing index to comply with the OpenAI spec.
+// Note: 'extra_content' (containing thought_signature) is preserved as-is per
+// Google's documentation — it is required for multi-turn function calling with
+// Gemini 3 models.
 type GeminiTransformer struct{}
 
 func (t *GeminiTransformer) TransformSSEChunk(data []byte) ([]byte, error) {
-	// Empty data or non-JSON (e.g., "[DONE]") passes through unchanged
 	if len(data) == 0 || !bytes.HasPrefix(bytes.TrimSpace(data), []byte("{")) {
 		return data, nil
 	}
 
 	var chunk map[string]interface{}
 	if err := json.Unmarshal(data, &chunk); err != nil {
-		// Not valid JSON, pass through (could be malformed but we don't want to break streaming)
 		return data, nil
 	}
 
-	// Fix tool_calls format in choices[0].delta.tool_calls
 	if choices, ok := chunk["choices"].([]interface{}); ok && len(choices) > 0 {
 		if choice, ok := choices[0].(map[string]interface{}); ok {
 			if delta, ok := choice["delta"].(map[string]interface{}); ok {
 				if toolCalls, ok := delta["tool_calls"].([]interface{}); ok {
 					for i, tc := range toolCalls {
 						if tcMap, ok := tc.(map[string]interface{}); ok {
-							// Add missing index field required by OpenAI spec
 							if _, exists := tcMap["index"]; !exists {
 								tcMap["index"] = i
 							}
-							// Remove Gemini-specific extra_content field
-							delete(tcMap, "extra_content")
 						}
 					}
 				}
@@ -50,10 +47,8 @@ func (t *GeminiTransformer) TransformSSEChunk(data []byte) ([]byte, error) {
 		}
 	}
 
-	// Re-marshal the transformed chunk
 	transformed, err := json.Marshal(chunk)
 	if err != nil {
-		// If marshaling fails, return original data to avoid breaking the stream
 		return data, fmt.Errorf("failed to marshal transformed chunk: %v", err)
 	}
 

@@ -28,6 +28,7 @@ type NenyaGateway struct {
 }
 
 func NewNenyaGateway(cfg Config, secrets *SecretsConfig, logger *slog.Logger) *NenyaGateway {
+	applyDefaults(&cfg)
 	transport := &http.Transport{
 		DialContext: (&net.Dialer{
 			Timeout:   30 * time.Second,
@@ -61,8 +62,8 @@ func NewNenyaGateway(cfg Config, secrets *SecretsConfig, logger *slog.Logger) *N
 	}
 
 	var secretPatterns []*regexp.Regexp
-	if cfg.Filter.Enabled && len(cfg.Filter.Patterns) > 0 {
-		for _, pattern := range cfg.Filter.Patterns {
+	if cfg.SecurityFilter.Enabled && len(cfg.SecurityFilter.Patterns) > 0 {
+		for _, pattern := range cfg.SecurityFilter.Patterns {
 			re, err := regexp.Compile(pattern)
 			if err != nil {
 				logger.Warn("failed to compile secret pattern, skipping", "pattern", pattern, "err", err)

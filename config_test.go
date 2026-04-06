@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"net/http"
 	"os"
 	"path/filepath"
 	"testing"
@@ -59,125 +60,173 @@ func TestApplyDefaultsServer(t *testing.T) {
 	}
 }
 
-func TestApplyDefaultsInterceptor(t *testing.T) {
+func TestExampleConfig(t *testing.T) {
+	cfg, err := loadConfig("example.config.json")
+	if err != nil {
+		t.Fatalf("failed to load example.config.json: %v", err)
+	}
+
+	// Validate some expected values from example.config.json
+	if cfg.Server.ListenAddr != ":8080" {
+		t.Errorf("Server.ListenAddr: got %q, want :8080", cfg.Server.ListenAddr)
+	}
+	if cfg.Governance.RatelimitMaxTPM != 250000 {
+		t.Errorf("Governance.RatelimitMaxTPM: got %d, want 250000", cfg.Governance.RatelimitMaxTPM)
+	}
+	if !cfg.SecurityFilter.Enabled {
+		t.Error("SecurityFilter.Enabled should be true")
+	}
+	if cfg.SecurityFilter.Engine.Model != "qwen2.5-coder:7b" {
+		t.Errorf("SecurityFilter.Engine.Model: got %q, want qwen2.5-coder:7b", cfg.SecurityFilter.Engine.Model)
+	}
+	if cfg.Window.Engine.Model != "qwen2.5-coder:7b" {
+		t.Errorf("Window.Engine.Model: got %q, want qwen2.5-coder:7b", cfg.Window.Engine.Model)
+	}
+	if len(cfg.Providers) < 2 {
+		t.Errorf("Providers count: got %d, want at least 2", len(cfg.Providers))
+	}
+	if cfg.Providers["openai"].URL != "https://api.openai.com/v1/chat/completions" {
+		t.Errorf("openai URL: got %q", cfg.Providers["openai"].URL)
+	}
+	if cfg.Providers["zai"].URL != "https://api.z.ai/v1/chat/completions" {
+		t.Errorf("zai URL: got %q", cfg.Providers["zai"].URL)
+	}
+}
+func TestApplyDefaultsGovernance(t *testing.T) {
 	cfg := Config{}
 	applyDefaults(&cfg)
 
-	if cfg.Interceptor.SoftLimit != 4000 {
-		t.Errorf("SoftLimit: got %d", cfg.Interceptor.SoftLimit)
+	if cfg.Governance.ContextSoftLimit != 4000 {
+		t.Errorf("ContextSoftLimit: got %d", cfg.Governance.ContextSoftLimit)
 	}
-	if cfg.Interceptor.HardLimit != 24000 {
-		t.Errorf("HardLimit: got %d", cfg.Interceptor.HardLimit)
+	if cfg.Governance.ContextHardLimit != 24000 {
+		t.Errorf("ContextHardLimit: got %d", cfg.Governance.ContextHardLimit)
 	}
-	if cfg.Interceptor.TruncationStrategy != "middle-out" {
-		t.Errorf("TruncationStrategy: got %q", cfg.Interceptor.TruncationStrategy)
+	if cfg.Governance.TruncationStrategy != "middle-out" {
+		t.Errorf("TruncationStrategy: got %q", cfg.Governance.TruncationStrategy)
 	}
-	if cfg.Interceptor.KeepFirstPercent != 15.0 {
-		t.Errorf("KeepFirstPercent: got %f", cfg.Interceptor.KeepFirstPercent)
+	if cfg.Governance.KeepFirstPercent != 15.0 {
+		t.Errorf("KeepFirstPercent: got %f", cfg.Governance.KeepFirstPercent)
 	}
-	if cfg.Interceptor.KeepLastPercent != 25.0 {
-		t.Errorf("KeepLastPercent: got %f", cfg.Interceptor.KeepLastPercent)
+	if cfg.Governance.KeepLastPercent != 25.0 {
+		t.Errorf("KeepLastPercent: got %f", cfg.Governance.KeepLastPercent)
 	}
 
 	cfg2 := Config{
-		Interceptor: InterceptorConfig{
-			SoftLimit:          8000,
-			HardLimit:          48000,
+		Governance: GovernanceConfig{
+			ContextSoftLimit:   8000,
+			ContextHardLimit:   48000,
 			TruncationStrategy: "head-tail",
 			KeepFirstPercent:   30.0,
 			KeepLastPercent:    10.0,
 		},
 	}
 	applyDefaults(&cfg2)
-	if cfg2.Interceptor.SoftLimit != 8000 {
-		t.Errorf("SoftLimit preserved: got %d", cfg2.Interceptor.SoftLimit)
+	if cfg2.Governance.ContextSoftLimit != 8000 {
+		t.Errorf("ContextSoftLimit preserved: got %d", cfg2.Governance.ContextSoftLimit)
 	}
-	if cfg2.Interceptor.HardLimit != 48000 {
-		t.Errorf("HardLimit preserved: got %d", cfg2.Interceptor.HardLimit)
+	if cfg2.Governance.ContextHardLimit != 48000 {
+		t.Errorf("ContextHardLimit preserved: got %d", cfg2.Governance.ContextHardLimit)
 	}
-	if cfg2.Interceptor.TruncationStrategy != "head-tail" {
-		t.Errorf("TruncationStrategy preserved: got %q", cfg2.Interceptor.TruncationStrategy)
+	if cfg2.Governance.TruncationStrategy != "head-tail" {
+		t.Errorf("TruncationStrategy preserved: got %q", cfg2.Governance.TruncationStrategy)
 	}
 }
 
-func TestApplyDefaultsOllama(t *testing.T) {
+func TestApplyDefaultsSecurityFilterEngine(t *testing.T) {
 	cfg := Config{}
 	applyDefaults(&cfg)
 
-	if cfg.Ollama.URL != "http://127.0.0.1:11434/api/generate" {
-		t.Errorf("URL: got %q", cfg.Ollama.URL)
+	if cfg.SecurityFilter.Engine.URL != "http://127.0.0.1:11434/api/generate" {
+		t.Errorf("URL: got %q", cfg.SecurityFilter.Engine.URL)
 	}
-	if cfg.Ollama.Model != "qwen2.5-coder:7b" {
-		t.Errorf("Model: got %q", cfg.Ollama.Model)
+	if cfg.SecurityFilter.Engine.Model != "qwen2.5-coder:7b" {
+		t.Errorf("Model: got %q", cfg.SecurityFilter.Engine.Model)
 	}
-	if cfg.Ollama.TimeoutSeconds != 600 {
-		t.Errorf("TimeoutSeconds: got %d", cfg.Ollama.TimeoutSeconds)
+	if cfg.SecurityFilter.Engine.ApiFormat != "ollama" {
+		t.Errorf("ApiFormat: got %q", cfg.SecurityFilter.Engine.ApiFormat)
 	}
-	if cfg.Ollama.SystemPrompt == "" {
-		t.Error("SystemPrompt: expected non-empty default")
+	if cfg.SecurityFilter.Engine.TimeoutSeconds != 600 {
+		t.Errorf("TimeoutSeconds: got %d", cfg.SecurityFilter.Engine.TimeoutSeconds)
 	}
 
 	cfg2 := Config{
-		Ollama: OllamaConfig{
-			URL:            "http://localhost:11434/api/generate",
-			Model:          "llama3:8b",
-			TimeoutSeconds: 120,
+		SecurityFilter: SecurityFilterConfig{
+			Engine: EngineConfig{
+				URL:            "http://localhost:11434/api/generate",
+				Model:          "llama3:8b",
+				ApiFormat:      "openai",
+				TimeoutSeconds: 120,
+			},
 		},
 	}
 	applyDefaults(&cfg2)
-	if cfg2.Ollama.URL != "http://localhost:11434/api/generate" {
-		t.Errorf("URL preserved: got %q", cfg2.Ollama.URL)
+	if cfg2.SecurityFilter.Engine.URL != "http://localhost:11434/api/generate" {
+		t.Errorf("URL preserved: got %q", cfg2.SecurityFilter.Engine.URL)
 	}
-	if cfg2.Ollama.Model != "llama3:8b" {
-		t.Errorf("Model preserved: got %q", cfg2.Ollama.Model)
+	if cfg2.SecurityFilter.Engine.Model != "llama3:8b" {
+		t.Errorf("Model preserved: got %q", cfg2.SecurityFilter.Engine.Model)
 	}
-	if cfg2.Ollama.TimeoutSeconds != 120 {
-		t.Errorf("TimeoutSeconds preserved: got %d", cfg2.Ollama.TimeoutSeconds)
+	if cfg2.SecurityFilter.Engine.ApiFormat != "openai" {
+		t.Errorf("ApiFormat preserved: got %q", cfg2.SecurityFilter.Engine.ApiFormat)
+	}
+	if cfg2.SecurityFilter.Engine.TimeoutSeconds != 120 {
+		t.Errorf("TimeoutSeconds preserved: got %d", cfg2.SecurityFilter.Engine.TimeoutSeconds)
 	}
 }
 
-func TestApplyDefaultsFilter(t *testing.T) {
+func TestApplyDefaultsSecurityFilter(t *testing.T) {
 	t.Run("empty config gets built-in patterns", func(t *testing.T) {
 		cfg := Config{}
 		applyDefaults(&cfg)
 
-		if !cfg.Filter.Enabled {
-			t.Error("Filter.Enabled should default to true")
+		if !cfg.SecurityFilter.Enabled {
+			t.Error("SecurityFilter.Enabled should default to true")
 		}
-		if cfg.Filter.RedactionLabel != "[REDACTED]" {
-			t.Errorf("RedactionLabel: got %q", cfg.Filter.RedactionLabel)
+		if cfg.SecurityFilter.RedactionLabel != "[REDACTED]" {
+			t.Errorf("RedactionLabel: got %q", cfg.SecurityFilter.RedactionLabel)
 		}
-		if len(cfg.Filter.Patterns) == 0 {
-			t.Error("Patterns: expected non-empty built-in patterns")
+		if len(cfg.SecurityFilter.Patterns) == 0 {
+			t.Error("Patterns: expected built-in patterns")
 		}
 	})
 
-	t.Run("custom patterns replace built-in", func(t *testing.T) {
+	t.Run("patterns provided are preserved", func(t *testing.T) {
 		cfg := Config{
-			Filter: FilterConfig{
-				Patterns: []string{`custom-pattern`},
+			SecurityFilter: SecurityFilterConfig{
+				enabledSet:     true,
+				Enabled:        false,
+				RedactionLabel: "X",
+				Patterns:       []string{"a", "b"},
 			},
 		}
 		applyDefaults(&cfg)
 
-		if len(cfg.Filter.Patterns) != 1 {
-			t.Errorf("Patterns: expected 1 custom, got %d", len(cfg.Filter.Patterns))
+		if cfg.SecurityFilter.Enabled {
+			t.Error("SecurityFilter.Enabled should stay false when explicitly set")
 		}
-		if cfg.Filter.Patterns[0] != `custom-pattern` {
-			t.Errorf("Patterns[0]: got %q", cfg.Filter.Patterns[0])
+		if cfg.SecurityFilter.RedactionLabel != "X" {
+			t.Errorf("RedactionLabel preserved: got %q", cfg.SecurityFilter.RedactionLabel)
+		}
+		if len(cfg.SecurityFilter.Patterns) != 2 || cfg.SecurityFilter.Patterns[0] != "a" || cfg.SecurityFilter.Patterns[1] != "b" {
+			t.Errorf("Patterns preserved: got %v", cfg.SecurityFilter.Patterns)
 		}
 	})
 
-	t.Run("custom redaction label preserved", func(t *testing.T) {
+	t.Run("enabled stays false when patterns set but enabled not set", func(t *testing.T) {
 		cfg := Config{
-			Filter: FilterConfig{
-				RedactionLabel: "[SECRET]",
+			SecurityFilter: SecurityFilterConfig{
+				RedactionLabel: "X",
+				Patterns:       []string{"c"},
 			},
 		}
 		applyDefaults(&cfg)
 
-		if cfg.Filter.RedactionLabel != "[SECRET]" {
-			t.Errorf("RedactionLabel: got %q", cfg.Filter.RedactionLabel)
+		if !cfg.SecurityFilter.Enabled {
+			t.Error("SecurityFilter.Enabled should default to true when patterns set but enabled not set")
+		}
+		if cfg.SecurityFilter.RedactionLabel != "X" {
+			t.Errorf("RedactionLabel preserved: got %q", cfg.SecurityFilter.RedactionLabel)
 		}
 	})
 }
@@ -439,8 +488,8 @@ func TestLoadConfig(t *testing.T) {
 		if cfg.Server.ListenAddr != ":8080" {
 			t.Errorf("ListenAddr default: got %q", cfg.Server.ListenAddr)
 		}
-		if cfg.Ollama.Model != "qwen2.5-coder:7b" {
-			t.Errorf("Ollama.Model default: got %q", cfg.Ollama.Model)
+		if cfg.SecurityFilter.Engine.Model != "qwen2.5-coder:7b" {
+			t.Errorf("SecurityFilter.Engine.Model default: got %q", cfg.SecurityFilter.Engine.Model)
 		}
 	})
 
@@ -448,13 +497,16 @@ func TestLoadConfig(t *testing.T) {
 		tmpDir := t.TempDir()
 		configPath := filepath.Join(tmpDir, "config.json")
 		original := Config{
-			Server:      ServerConfig{ListenAddr: ":7070", MaxBodyBytes: 999, TokenRatio: 3.0},
-			Interceptor: InterceptorConfig{SoftLimit: 1000, HardLimit: 5000},
-			Ollama:      OllamaConfig{URL: "http://localhost:11434/api/generate", Model: "llama3:8b", TimeoutSeconds: 120},
-			RateLimit:   RateLimitConfig{MaxRPM: 5, MaxTPM: 50000},
-			Filter:      FilterConfig{Enabled: true, Patterns: []string{`AKIA[0-9A-Z]{16}`}, RedactionLabel: "[HIDDEN]"},
-			Window:      WindowConfig{Enabled: true, Mode: "truncate", ActiveMessages: 4},
-			Agents:      map[string]AgentConfig{"test-agent": {Strategy: "fallback"}},
+			Server:     ServerConfig{ListenAddr: ":7070", MaxBodyBytes: 999, TokenRatio: 3.0},
+			Governance: GovernanceConfig{ContextSoftLimit: 1000, ContextHardLimit: 5000, RatelimitMaxRPM: 5, RatelimitMaxTPM: 50000},
+			SecurityFilter: SecurityFilterConfig{
+				Enabled:        true,
+				Patterns:       []string{`AKIA[0-9A-Z]{16}`},
+				RedactionLabel: "[HIDDEN]",
+				Engine:         EngineConfig{URL: "http://localhost:11434/api/generate", Model: "llama3:8b", TimeoutSeconds: 120},
+			},
+			Window: WindowConfig{Enabled: true, Mode: "truncate", ActiveMessages: 4},
+			Agents: map[string]AgentConfig{"test-agent": {Strategy: "fallback"}},
 		}
 		data, _ := json.Marshal(original)
 		if err := os.WriteFile(configPath, data, 0644); err != nil {
@@ -596,4 +648,141 @@ func TestResolveProviders(t *testing.T) {
 			t.Errorf("expected empty APIKey with nil secrets, got %q", providers["gemini"].APIKey)
 		}
 	})
+}
+
+func TestValidationEndpoints(t *testing.T) {
+	tests := []struct {
+		name     string
+		url      string
+		expected string
+	}{
+		{
+			name:     "gemini",
+			url:      "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
+			expected: "https://generativelanguage.googleapis.com/v1beta/models",
+		},
+		{
+			name:     "deepseek",
+			url:      "https://api.deepseek.com/v1/chat/completions",
+			expected: "https://api.deepseek.com/models",
+		},
+		{
+			name:     "zai",
+			url:      "https://api.z.ai/v1/chat/completions",
+			expected: "https://api.z.ai/v1/models",
+		},
+		{
+			name:     "groq",
+			url:      "https://api.groq.com/openai/v1/chat/completions",
+			expected: "https://api.groq.com/openai/v1/models",
+		},
+		{
+			name:     "together",
+			url:      "https://api.together.xyz/v1/chat/completions",
+			expected: "https://api.together.xyz/v1/models",
+		},
+		{
+			name:     "openai",
+			url:      "https://api.openai.com/v1/chat/completions",
+			expected: "https://api.openai.com/v1/models",
+		},
+		{
+			name:     "ollama",
+			url:      "http://127.0.0.1:11434/v1/chat/completions",
+			expected: "",
+		},
+		{
+			name:     "custom endpoint",
+			url:      "https://custom.example.com/v1/chat/completions",
+			expected: "https://custom.example.com/v1/models",
+		},
+		{
+			name:     "no chat completions suffix",
+			url:      "https://example.com/api",
+			expected: "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := getValidationEndpoint(tt.url)
+			if result != tt.expected {
+				t.Errorf("getValidationEndpoint(%q) = %q, want %q", tt.url, result, tt.expected)
+			}
+		})
+	}
+}
+
+func TestApplyAuthHeader(t *testing.T) {
+	tests := []struct {
+		name     string
+		provider *Provider
+		wantErr  bool
+		check    func(t *testing.T, req *http.Request)
+	}{
+		{
+			name: "bearer auth",
+			provider: &Provider{
+				Name:      "test",
+				APIKey:    "test-token",
+				AuthStyle: "bearer",
+			},
+			check: func(t *testing.T, req *http.Request) {
+				if req.Header.Get("Authorization") != "Bearer test-token" {
+					t.Errorf("Authorization header = %q, want 'Bearer test-token'", req.Header.Get("Authorization"))
+				}
+			},
+		},
+		{
+			name: "bearer+x-goog auth",
+			provider: &Provider{
+				Name:      "gemini",
+				APIKey:    "AIza...",
+				AuthStyle: "bearer+x-goog",
+			},
+			check: func(t *testing.T, req *http.Request) {
+				if req.Header.Get("Authorization") != "Bearer AIza..." {
+					t.Errorf("Authorization header = %q, want 'Bearer AIza...'", req.Header.Get("Authorization"))
+				}
+				if req.Header.Get("x-goog-api-key") != "AIza..." {
+					t.Errorf("x-goog-api-key header = %q, want 'AIza...'", req.Header.Get("x-goog-api-key"))
+				}
+			},
+		},
+		{
+			name: "no auth",
+			provider: &Provider{
+				Name:      "ollama",
+				APIKey:    "",
+				AuthStyle: "none",
+			},
+			check: func(t *testing.T, req *http.Request) {
+				if req.Header.Get("Authorization") != "" {
+					t.Errorf("Authorization header = %q, want empty", req.Header.Get("Authorization"))
+				}
+			},
+		},
+		{
+			name: "unsupported auth style",
+			provider: &Provider{
+				Name:      "bad",
+				APIKey:    "key",
+				AuthStyle: "custom",
+			},
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req, _ := http.NewRequest("GET", "https://example.com", nil)
+			err := applyAuthHeader(req, tt.provider)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("applyAuthHeader() error = %v, wantErr %v", err, tt.wantErr)
+			}
+			if err == nil && tt.check != nil {
+				tt.check(t, req)
+			}
+		})
+	}
 }

@@ -9,9 +9,9 @@ import (
 
 func TestTruncateMiddleOut(t *testing.T) {
 	cfg := Config{
-		Interceptor: InterceptorConfig{
-			SoftLimit:          4000,
-			HardLimit:          24000,
+		Governance: GovernanceConfig{
+			ContextSoftLimit:   4000,
+			ContextHardLimit:   24000,
 			TruncationStrategy: "middle-out",
 			KeepFirstPercent:   15.0,
 			KeepLastPercent:    25.0,
@@ -103,7 +103,8 @@ func TestRedactSecrets(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			cfg := Config{
-				Filter: FilterConfig{
+				SecurityFilter: SecurityFilterConfig{
+					enabledSet:     true,
 					Enabled:        tt.filterEnabled,
 					Patterns:       tt.patterns,
 					RedactionLabel: "[REDACTED]",

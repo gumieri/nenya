@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"log/slog"
 	"net/http"
+	"os"
 	"sync"
 	"testing"
 	"time"
@@ -213,6 +214,119 @@ func TestReplaceModelNoMutation(t *testing.T) {
 	}
 	if payload["model"] != "original" {
 		t.Errorf("payload mutated after transform: got %v", payload["model"])
+	}
+}
+
+func TestAgentSystemPromptInjection(t *testing.T) {
+	// Create test prompt file first
+	tmpDir := t.TempDir()
+	promptFile := tmpDir + "/test_prompt.txt"
+	testPrompt := "From file: Be concise."
+	if err := os.WriteFile(promptFile, []byte(testPrompt), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg := Config{
+		Agents: map[string]AgentConfig{
+			"build": {
+				SystemPrompt: "Speak like a caveman. No yapping.",
+				Models: []AgentModel{
+					{Provider: "gemini", Model: "gemini-3-flash"},
+				},
+			},
+			"build-file": {
+				SystemPromptFile: promptFile,
+				Models: []AgentModel{
+					{Provider: "gemini", Model: "gemini-3-flash"},
+				},
+			},
+		},
+	}
+	g := newTestGateway(cfg)
+
+	tests := []struct {
+		name          string
+		agentName     string
+		messages      []interface{}
+		wantFirstRole string
+		wantFirstMsg  string
+	}{
+		{
+			name:      "inject system prompt when none present",
+			agentName: "build",
+			messages: []interface{}{
+				map[string]interface{}{"role": "user", "content": "hello"},
+			},
+			wantFirstRole: "system",
+			wantFirstMsg:  "Speak like a caveman. No yapping.",
+		},
+		{
+			name:      "skip injection when first message is system",
+			agentName: "build",
+			messages: []interface{}{
+				map[string]interface{}{"role": "system", "content": "existing"},
+				map[string]interface{}{"role": "user", "content": "hello"},
+			},
+			wantFirstRole: "system",
+			wantFirstMsg:  "existing",
+		},
+		{
+			name:      "inject from file",
+			agentName: "build-file",
+			messages: []interface{}{
+				map[string]interface{}{"role": "user", "content": "test"},
+			},
+			wantFirstRole: "system",
+			wantFirstMsg:  "From file: Be concise.",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			payload := map[string]interface{}{
+				"model":    tt.agentName,
+				"messages": tt.messages,
+			}
+
+			result, _, err := g.transformRequestForUpstream("gemini", "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions", payload, "")
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+
+			var transformed map[string]interface{}
+			if err := json.Unmarshal(result, &transformed); err != nil {
+				t.Fatalf("failed to unmarshal result: %v", err)
+			}
+
+			messagesRaw, ok := transformed["messages"].([]interface{})
+			if !ok {
+				t.Fatalf("messages not found or not array")
+			}
+
+			if len(messagesRaw) == 0 {
+				t.Fatal("messages empty")
+			}
+
+			firstMsg, ok := messagesRaw[0].(map[string]interface{})
+			if !ok {
+				t.Fatalf("first message not a map")
+			}
+
+			role, _ := firstMsg["role"].(string)
+			content, _ := firstMsg["content"].(string)
+
+			if role != tt.wantFirstRole {
+				t.Errorf("first message role = %q, want %q", role, tt.wantFirstRole)
+			}
+			if content != tt.wantFirstMsg {
+				t.Errorf("first message content = %q, want %q", content, tt.wantFirstMsg)
+			}
+
+			// Verify original payload not mutated
+			if payload["model"] != tt.agentName {
+				t.Errorf("original payload model mutated: got %v", payload["model"])
+			}
+		})
 	}
 }
 

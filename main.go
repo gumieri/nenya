@@ -14,8 +14,10 @@ import (
 func main() {
 	var configFile string
 	var verbose bool
+	var validateOnly bool
 	flag.StringVar(&configFile, "config", "config.json", "Path to configuration file")
 	flag.BoolVar(&verbose, "verbose", false, "Enable debug-level request/response logging")
+	flag.BoolVar(&validateOnly, "validate", false, "Validate configuration and exit")
 	flag.Parse()
 
 	logger := setupLogger(verbose)
@@ -30,6 +32,15 @@ func main() {
 	if err != nil {
 		logger.Error("failed to load secrets", "err", err)
 		os.Exit(1)
+	}
+
+	if validateOnly {
+		if err := validateConfiguration(cfg, secrets, logger); err != nil {
+			logger.Error("configuration validation failed", "err", err)
+			os.Exit(1)
+		}
+		logger.Info("configuration validation passed")
+		os.Exit(0)
 	}
 
 	gateway := NewNenyaGateway(*cfg, secrets, logger)

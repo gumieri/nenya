@@ -39,19 +39,19 @@ func TestGeminiTransformer_TransformSSEChunk(t *testing.T) {
 		{
 			name:     "Gemini tool_calls without index",
 			input:    `{"choices":[{"delta":{"tool_calls":[{"id":"1","type":"function","function":{"name":"read"},"extra_content":{"google":{}}}]}}]}`,
-			expected: `{"choices":[{"delta":{"tool_calls":[{"function":{"name":"read"},"id":"1","index":0,"type":"function"}]}}]}`,
+			expected: `{"choices":[{"delta":{"tool_calls":[{"extra_content":{"google":{}},"function":{"name":"read"},"id":"1","index":0,"type":"function"}]}}]}`,
 			wantErr:  false,
 		},
 		{
 			name:     "Gemini tool_calls with multiple items",
 			input:    `{"choices":[{"delta":{"tool_calls":[{"id":"1","type":"function","function":{"name":"read"},"extra_content":{"google":{}}},{"id":"2","type":"function","function":{"name":"write"},"extra_content":{"google":{}}}]}}]}`,
-			expected: `{"choices":[{"delta":{"tool_calls":[{"function":{"name":"read"},"id":"1","index":0,"type":"function"},{"function":{"name":"write"},"id":"2","index":1,"type":"function"}]}}]}`,
+			expected: `{"choices":[{"delta":{"tool_calls":[{"extra_content":{"google":{}},"function":{"name":"read"},"id":"1","index":0,"type":"function"},{"extra_content":{"google":{}},"function":{"name":"write"},"id":"2","index":1,"type":"function"}]}}]}`,
 			wantErr:  false,
 		},
 		{
 			name:     "Gemini tool_calls already has index",
 			input:    `{"choices":[{"delta":{"tool_calls":[{"id":"1","type":"function","function":{"name":"read"},"index":0,"extra_content":{"google":{}}}]}}]}`,
-			expected: `{"choices":[{"delta":{"tool_calls":[{"function":{"name":"read"},"id":"1","index":0,"type":"function"}]}}]}`,
+			expected: `{"choices":[{"delta":{"tool_calls":[{"extra_content":{"google":{}},"function":{"name":"read"},"id":"1","index":0,"type":"function"}]}}]}`,
 			wantErr:  false,
 		},
 		{
@@ -63,7 +63,7 @@ func TestGeminiTransformer_TransformSSEChunk(t *testing.T) {
 		{
 			name:     "real example from error",
 			input:    `{"choices":[{"delta":{"role":"assistant","tool_calls":[{"extra_content":{"google":{"thought_signature":"EjQKMgG+Pvb7s6anNtqTZtb1XVK5Rf2edMXJQpVr53xZCQ3+7yiWdGctjmyn1GLanJ+jMP9P"}},"function":{"arguments":"{\"filePath\":\"/home/rafael/Projects/git.0ur.uk/nenya/gateway.go\"}","name":"read"},"id":"623rbkd0","type":"function"}]},"index":0}],"created":1774892391,"id":"Z7XKaaO9Msi_qtsPkon5-AY","model":"gemini-3.1-flash-lite-preview","object":"chat.completion.chunk","usage":{"completion_tokens":34,"prompt_tokens":49292,"total_tokens":49326}}`,
-			expected: `{"choices":[{"delta":{"role":"assistant","tool_calls":[{"function":{"arguments":"{\"filePath\":\"/home/rafael/Projects/git.0ur.uk/nenya/gateway.go\"}","name":"read"},"id":"623rbkd0","index":0,"type":"function"}]},"index":0}],"created":1774892391,"id":"Z7XKaaO9Msi_qtsPkon5-AY","model":"gemini-3.1-flash-lite-preview","object":"chat.completion.chunk","usage":{"completion_tokens":34,"prompt_tokens":49292,"total_tokens":49326}}`,
+			expected: `{"choices":[{"delta":{"role":"assistant","tool_calls":[{"extra_content":{"google":{"thought_signature":"EjQKMgG+Pvb7s6anNtqTZtb1XVK5Rf2edMXJQpVr53xZCQ3+7yiWdGctjmyn1GLanJ+jMP9P"}},"function":{"arguments":"{\"filePath\":\"/home/rafael/Projects/git.0ur.uk/nenya/gateway.go\"}","name":"read"},"id":"623rbkd0","index":0,"type":"function"}]},"index":0}],"created":1774892391,"id":"Z7XKaaO9Msi_qtsPkon5-AY","model":"gemini-3.1-flash-lite-preview","object":"chat.completion.chunk","usage":{"completion_tokens":34,"prompt_tokens":49292,"total_tokens":49326}}`,
 			wantErr:  false,
 		},
 	}
@@ -166,9 +166,6 @@ data: [DONE]
 			if !strings.Contains(data, `"index":0`) {
 				t.Error("Transformation did not add index field")
 			}
-			if strings.Contains(data, `"extra_content"`) {
-				t.Error("Transformation did not remove extra_content field")
-			}
 		} else if i == 1 {
 			// Second line should be unchanged
 			if line != `data: {"choices":[{"delta":{"content":"Thinking..."}}]}` {
@@ -220,9 +217,6 @@ func TestSSETransformingReader_NonSSEJSON(t *testing.T) {
 			tc, _ := toolCalls[0].(map[string]interface{})
 			if index, ok := tc["index"]; !ok || index != float64(0) {
 				t.Error("First line missing index field")
-			}
-			if _, ok := tc["extra_content"]; ok {
-				t.Error("First line still has extra_content field")
 			}
 		}
 	}
