@@ -13,19 +13,20 @@ import (
 func validateConfiguration(cfg *Config, secrets *SecretsConfig, logger *slog.Logger) error {
 	logger.Info("starting configuration validation")
 
-	// Validate Ollama engine health if configured and enabled
-	if cfg.SecurityFilter.Engine.ApiFormat == "ollama" && cfg.SecurityFilter.Enabled {
-		logger.Info("checking Ollama engine health", "url", cfg.SecurityFilter.Engine.URL)
-		if !validateOllamaHealth(cfg.SecurityFilter.Engine.URL) {
-			return fmt.Errorf("Ollama engine at %s is not reachable", cfg.SecurityFilter.Engine.URL)
-		}
-		logger.Info("Ollama engine health check passed")
-	} else if cfg.SecurityFilter.Engine.ApiFormat == "ollama" && !cfg.SecurityFilter.Enabled {
-		logger.Info("skipping Ollama health check (security filter disabled)")
-	}
-
 	// Validate each provider with API key
 	providers := resolveProviders(cfg, secrets)
+
+	// Validate engine provider health if configured and enabled (moved here after resolveProviders)
+	if cfg.SecurityFilter.Enabled && cfg.SecurityFilter.Engine.Provider == "ollama" {
+		if p, ok := providers[cfg.SecurityFilter.Engine.Provider]; ok && p.URL != "" {
+			logger.Info("checking Ollama engine health", "provider", cfg.SecurityFilter.Engine.Provider, "url", p.URL)
+			if !validateOllamaHealth(p.URL) {
+				return fmt.Errorf("Ollama engine provider %q at %s is not reachable", cfg.SecurityFilter.Engine.Provider, p.URL)
+			}
+			logger.Info("Ollama engine health check passed")
+		}
+	}
+
 	errors := []string{}
 
 	for name, provider := range providers {

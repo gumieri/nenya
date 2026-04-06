@@ -82,14 +82,20 @@ func TestExampleConfig(t *testing.T) {
 	if cfg.Window.Engine.Model != "qwen2.5-coder:7b" {
 		t.Errorf("Window.Engine.Model: got %q, want qwen2.5-coder:7b", cfg.Window.Engine.Model)
 	}
-	if len(cfg.Providers) < 2 {
-		t.Errorf("Providers count: got %d, want at least 2", len(cfg.Providers))
+	if len(cfg.Providers) < 4 {
+		t.Errorf("Providers count: got %d, want at least 4", len(cfg.Providers))
 	}
-	if cfg.Providers["openai"].URL != "https://api.openai.com/v1/chat/completions" {
-		t.Errorf("openai URL: got %q", cfg.Providers["openai"].URL)
+	if cfg.Providers["gemini"].URL != "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions" {
+		t.Errorf("gemini URL: got %q", cfg.Providers["gemini"].URL)
 	}
 	if cfg.Providers["zai"].URL != "https://api.z.ai/v1/chat/completions" {
 		t.Errorf("zai URL: got %q", cfg.Providers["zai"].URL)
+	}
+	if cfg.Providers["deepseek"].URL != "https://api.deepseek.com/chat/completions" {
+		t.Errorf("deepseek URL: got %q", cfg.Providers["deepseek"].URL)
+	}
+	if cfg.Providers["ollama"].AuthStyle != "none" {
+		t.Errorf("ollama AuthStyle: got %q, want none", cfg.Providers["ollama"].AuthStyle)
 	}
 }
 func TestApplyDefaultsGovernance(t *testing.T) {
@@ -137,14 +143,11 @@ func TestApplyDefaultsSecurityFilterEngine(t *testing.T) {
 	cfg := Config{}
 	applyDefaults(&cfg)
 
-	if cfg.SecurityFilter.Engine.URL != "http://127.0.0.1:11434/api/generate" {
-		t.Errorf("URL: got %q", cfg.SecurityFilter.Engine.URL)
+	if cfg.SecurityFilter.Engine.Provider != "ollama" {
+		t.Errorf("Provider: got %q", cfg.SecurityFilter.Engine.Provider)
 	}
 	if cfg.SecurityFilter.Engine.Model != "qwen2.5-coder:7b" {
 		t.Errorf("Model: got %q", cfg.SecurityFilter.Engine.Model)
-	}
-	if cfg.SecurityFilter.Engine.ApiFormat != "ollama" {
-		t.Errorf("ApiFormat: got %q", cfg.SecurityFilter.Engine.ApiFormat)
 	}
 	if cfg.SecurityFilter.Engine.TimeoutSeconds != 600 {
 		t.Errorf("TimeoutSeconds: got %d", cfg.SecurityFilter.Engine.TimeoutSeconds)
@@ -153,22 +156,18 @@ func TestApplyDefaultsSecurityFilterEngine(t *testing.T) {
 	cfg2 := Config{
 		SecurityFilter: SecurityFilterConfig{
 			Engine: EngineConfig{
-				URL:            "http://localhost:11434/api/generate",
+				Provider:       "gemini",
 				Model:          "llama3:8b",
-				ApiFormat:      "openai",
 				TimeoutSeconds: 120,
 			},
 		},
 	}
 	applyDefaults(&cfg2)
-	if cfg2.SecurityFilter.Engine.URL != "http://localhost:11434/api/generate" {
-		t.Errorf("URL preserved: got %q", cfg2.SecurityFilter.Engine.URL)
+	if cfg2.SecurityFilter.Engine.Provider != "gemini" {
+		t.Errorf("Provider preserved: got %q", cfg2.SecurityFilter.Engine.Provider)
 	}
 	if cfg2.SecurityFilter.Engine.Model != "llama3:8b" {
 		t.Errorf("Model preserved: got %q", cfg2.SecurityFilter.Engine.Model)
-	}
-	if cfg2.SecurityFilter.Engine.ApiFormat != "openai" {
-		t.Errorf("ApiFormat preserved: got %q", cfg2.SecurityFilter.Engine.ApiFormat)
 	}
 	if cfg2.SecurityFilter.Engine.TimeoutSeconds != 120 {
 		t.Errorf("TimeoutSeconds preserved: got %d", cfg2.SecurityFilter.Engine.TimeoutSeconds)
@@ -503,7 +502,7 @@ func TestLoadConfig(t *testing.T) {
 				Enabled:        true,
 				Patterns:       []string{`AKIA[0-9A-Z]{16}`},
 				RedactionLabel: "[HIDDEN]",
-				Engine:         EngineConfig{URL: "http://localhost:11434/api/generate", Model: "llama3:8b", TimeoutSeconds: 120},
+				Engine:         EngineConfig{Provider: "ollama", Model: "llama3:8b", TimeoutSeconds: 120},
 			},
 			Window: WindowConfig{Enabled: true, Mode: "truncate", ActiveMessages: 4},
 			Agents: map[string]AgentConfig{"test-agent": {Strategy: "fallback"}},
