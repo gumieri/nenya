@@ -188,7 +188,7 @@ Upstream LLM provider registry. Built-in providers are automatically loaded from
 |------|-----|----------|------------|
 | `gemini` | `https://generativelanguage.googleapis.com/v1beta/openai/chat/completions` | `gemini-` | `bearer+x-goog` |
 | `deepseek` | `https://api.deepseek.com/chat/completions` | `deepseek-` | `bearer` |
-| `zai` | `https://api.z.ai/v1/chat/completions` | `zai-`, `glm-` | `bearer` |
+| `zai` | `https://api.z.ai/api/paas/v4/chat/completions` | `zai-`, `glm-` | `bearer` |
 | `groq` | `https://api.groq.com/openai/v1/chat/completions` | `llama-`, `llama3-`, `mixtral-`, `whisper-` | `bearer` |
 | `together` | `https://api.together.xyz/v1/chat/completions` | `meta-llama/`, `mistralai/`, `qwen/`, `together/` | `bearer` |
 | `nvidia_free` | `https://integrate.api.nvidia.com/v1/chat/completions` | (none) | `bearer` |

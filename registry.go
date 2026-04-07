@@ -24,7 +24,7 @@ var ProviderRegistry = map[string]ProviderEntry{
 		AuthStyle:     "bearer",
 	},
 	"zai": {
-		URL:           "https://api.z.ai/v1/chat/completions",
+		URL:           "https://api.z.ai/api/paas/v4/chat/completions",
 		RoutePrefixes: []string{"zai-", "glm-"},
 		AuthStyle:     "bearer",
 	},
