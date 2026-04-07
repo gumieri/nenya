@@ -217,9 +217,10 @@ func (g *NenyaGateway) transformRequestForUpstream(providerName, upstreamURL str
 		}
 	}
 
-	// Set default max_tokens if not present in request
 	if _, hasMaxTokens := payload["max_tokens"]; !hasMaxTokens {
-		payload["max_tokens"] = g.config.Governance.MaxTokens
+		if entry, ok := ModelRegistry[finalModel]; ok && entry.MaxOutput > 0 {
+			payload["max_tokens"] = entry.MaxOutput
+		}
 	}
 
 	newBody, err := json.Marshal(payload)

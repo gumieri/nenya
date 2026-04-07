@@ -12,6 +12,7 @@ type AgentModel struct {
 	Model      string `json:"model"`
 	URL        string `json:"url"`
 	MaxContext int    `json:"max_context"`
+	MaxOutput  int    `json:"max_output"`
 }
 
 type AgentConfig struct {
@@ -47,6 +48,7 @@ func (a *AgentConfig) UnmarshalJSON(data []byte) error {
 				Model:      modelStr,
 				Provider:   entry.Provider,
 				MaxContext: entry.MaxContext,
+				MaxOutput:  entry.MaxOutput,
 			}
 		} else {
 			if err := json.Unmarshal(raw, &m); err != nil {
@@ -96,13 +98,11 @@ type GovernanceConfig struct {
 	RatelimitMaxTPM    int     `json:"ratelimit_max_tpm"`
 	ContextSoftLimit   int     `json:"context_soft_limit"`
 	ContextHardLimit   int     `json:"context_hard_limit"`
-	MaxTokens          int     `json:"max_tokens"`
 	TruncationStrategy string  `json:"truncation_strategy"`
 	KeepFirstPercent   float64 `json:"keep_first_percent"`
 	KeepLastPercent    float64 `json:"keep_last_percent"`
 	rpmSet             bool    `json:"-"`
 	tpmSet             bool    `json:"-"`
-	maxTokensSet       bool    `json:"-"`
 }
 
 type SecretsConfig struct {
@@ -155,7 +155,6 @@ func (g *GovernanceConfig) UnmarshalJSON(data []byte) error {
 	aux := struct {
 		RatelimitMaxRPM *int `json:"ratelimit_max_rpm"`
 		RatelimitMaxTPM *int `json:"ratelimit_max_tpm"`
-		MaxTokens       *int `json:"max_tokens"`
 		*alias
 	}{
 		alias: (*alias)(g),
@@ -174,12 +173,6 @@ func (g *GovernanceConfig) UnmarshalJSON(data []byte) error {
 	} else {
 		g.tpmSet = true
 		g.RatelimitMaxTPM = *aux.RatelimitMaxTPM
-	}
-	if aux.MaxTokens == nil {
-		g.maxTokensSet = false
-	} else {
-		g.maxTokensSet = true
-		g.MaxTokens = *aux.MaxTokens
 	}
 	return nil
 }
@@ -312,9 +305,6 @@ func applyDefaults(cfg *Config) {
 	}
 	if cfg.Governance.ContextHardLimit == 0 {
 		cfg.Governance.ContextHardLimit = 24000
-	}
-	if !cfg.Governance.maxTokensSet && cfg.Governance.MaxTokens == 0 {
-		cfg.Governance.MaxTokens = 8192
 	}
 	if cfg.Governance.TruncationStrategy == "" {
 		cfg.Governance.TruncationStrategy = "middle-out"

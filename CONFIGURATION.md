@@ -41,7 +41,6 @@ The interceptor implements a 3-tier pipeline for the last user message content:
 | `ratelimit_max_rpm` | int | `15` | Max requests per minute per upstream host (0 = disabled) |
 | `context_soft_limit` | int | `4000` | Runes below this pass through unmodified |
 | `context_hard_limit` | int | `24000` | Runes above this are middle-out truncated before engine summarization |
-| `max_tokens` | int | `8192` | Default `max_tokens` injected into upstream requests when not already set by the client. Set to `0` to disable injection. |
 | `truncation_strategy` | string | `"middle-out"` | Truncation method (`"middle-out"` only) |
 | `keep_first_percent` | float | `15.0` | Percentage of content to keep from the start when truncating |
 | `keep_last_percent` | float | `25.0` | Percentage of content to keep from the end when truncating |
@@ -286,7 +285,7 @@ Models not in this registry (e.g., local Ollama models, custom endpoints) must b
 - **Separate Engines**: `security_filter.engine` and `window.engine` can use different models/APIs
 - **API Format Abstraction**: Supports `"ollama"` (native `/api/generate`) and `"openai"` (compatible `/v1/chat/completions`) formats
 - **Auto-enable**: `security_filter.enabled` defaults to `true` when patterns are provided; `prefix_cache` and `compaction` auto-enable when sub-fields are set
-- **max_tokens injection**: `governance.max_tokens` is injected into upstream requests when not already set by the client
+- **max_tokens injection**: `max_tokens` is injected from per-model `MaxOutput` in the `ModelRegistry` when the client doesn't set it. Unknown models (not in registry) are not injected.
 
 ## Configuration Validation
 

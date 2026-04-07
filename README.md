@@ -10,7 +10,7 @@ Its **superpower** is the **"Bouncer" mechanism**: intercepting massive HTTP pay
 - **Built-in model registry** — reference models by string shorthand (e.g., `"deepseek-reasoner"`) with automatic provider/context resolution
 - **Dynamic routing** based on model name prefixes configured per provider, with direct ModelRegistry lookups taking priority
 - **Agent system prompts** — inject custom system prompts per agent (inline or file-based)
-- **Default max_tokens injection** — configurable `governance.max_tokens` (default: 8192) injected when client doesn't set it
+- **Per-model max_tokens injection** — `max_tokens` injected from `ModelRegistry.MaxOutput` when client doesn't set it
 - **Tier-0 regex secret filter**: always-on regex-based redaction of AWS keys, GitHub tokens, passwords, etc.
 - **3-Tier UTF-8 safe pipeline**:
   - **Tier 1** (pass-through): payloads under `soft_limit` characters
