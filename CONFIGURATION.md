@@ -1,6 +1,6 @@
 # Configuration Reference
 
-Nenya reads its configuration from a JSON file (default: `config.json`). See [`example.config.json`](example.config.json) for a working example.
+Nenya reads its configuration from a JSON file (default: `config.json`). See [`example.config.json`](example.config.json) for a fully-documented example or [`minimal_example.config.json`](minimal_example.config.json) for the smallest possible configuration.
 
 **Important**: Configuration format changed from TOML to JSON with semantic grouping. Old `interceptor`, `ollama`, `ratelimit`, and `filter` sections are now unified under `governance` and `security_filter` with engine abstraction.
 
@@ -41,6 +41,7 @@ The interceptor implements a 3-tier pipeline for the last user message content:
 | `ratelimit_max_rpm` | int | `15` | Max requests per minute per upstream host (0 = disabled) |
 | `context_soft_limit` | int | `4000` | Runes below this pass through unmodified |
 | `context_hard_limit` | int | `24000` | Runes above this are middle-out truncated before engine summarization |
+| `max_tokens` | int | `8192` | Default `max_tokens` injected into upstream requests when not already set by the client. Set to `0` to disable injection. |
 | `truncation_strategy` | string | `"middle-out"` | Truncation method (`"middle-out"` only) |
 | `keep_first_percent` | float | `15.0` | Percentage of content to keep from the start when truncating |
 | `keep_last_percent` | float | `25.0` | Percentage of content to keep from the end when truncating |
@@ -115,21 +116,48 @@ Sliding window conversation compaction for long conversations. When the estimate
 
 Named agent definitions with model fallback chains and optional system prompts. When a request specifies `model: "<agent_name>"`, the gateway routes through the agent's model list.
 
+### Model Shorthand (Convention)
+
+Models listed in the built-in **Model Registry** can be specified as plain strings. Provider and `max_context` are resolved automatically:
+
 ```json
 {
   "agents": {
     "build": {
       "strategy": "fallback",
-      "cooldown_seconds": 60,
-      "system_prompt": "Reply with maximum brevity. Code only.",
       "models": [
-        { "provider": "gemini", "model": "gemini-3.1-flash-lite-preview", "max_context": 128000 },
-        { "provider": "deepseek", "model": "deepseek-reasoner", "max_context": 128000 }
+        "gemini-2.5-flash",
+        "deepseek-reasoner"
       ]
     }
   }
 }
 ```
+
+### Model Object Notation (Configuration/Override)
+
+For custom or local models (not in the registry), or to override registry defaults, use full objects:
+
+```json
+{
+  "agents": {
+    "build": {
+      "strategy": "fallback",
+      "models": [
+        "gemini-2.5-flash",
+        {
+          "provider": "ollama",
+          "model": "qwen2.5-coder:7b",
+          "max_context": 32000,
+          "url": "http://localhost:11434/v1/chat/completions"
+        }
+      ]
+    }
+  }
+}
+```
+
+Both styles can be mixed in the same `models` array.
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
@@ -137,9 +165,9 @@ Named agent definitions with model fallback chains and optional system prompts. 
 | `cooldown_seconds` | int | `60` | Seconds to skip a model after a retryable error |
 | `system_prompt` | string | `""` | Inline system prompt injected as the first message (only if no existing system message). |
 | `system_prompt_file` | string | `""` | Path to system prompt file. Lower priority than `system_prompt`. |
-| `models` | array | (required) | List of model entries to try in order |
+| `models` | array | (required) | List of model entries (strings or objects) to try in order |
 
-Each model entry:
+Each model entry (object form):
 
 | Field | Type | Description |
 |-------|------|-------------|
@@ -148,11 +176,13 @@ Each model entry:
 | `url` | string | (optional) Override provider URL for this specific model |
 | `max_context` | int | Context window size for token budgeting and window compaction |
 
+**String shorthand**: If the entry is a string, it must exist in the built-in Model Registry. The registry resolves `provider` and `max_context` automatically. If the model is not found, configuration loading fails with an error.
+
 **System prompt injection**: If `system_prompt` or `system_prompt_file` is set, the prompt is injected as the first message in the array only when no existing system message is present.
 
 ## `providers`
 
-Upstream LLM provider registry. Built-in providers are automatically loaded:
+Upstream LLM provider registry. Built-in providers are automatically loaded from the internal Provider Registry:
 
 | Name | URL | Prefixes | Auth Style |
 |------|-----|----------|------------|
@@ -161,6 +191,12 @@ Upstream LLM provider registry. Built-in providers are automatically loaded:
 | `zai` | `https://api.z.ai/v1/chat/completions` | `zai-`, `glm-` | `bearer` |
 | `groq` | `https://api.groq.com/openai/v1/chat/completions` | `llama-`, `llama3-`, `mixtral-`, `whisper-` | `bearer` |
 | `together` | `https://api.together.xyz/v1/chat/completions` | `meta-llama/`, `mistralai/`, `qwen/`, `together/` | `bearer` |
+| `nvidia_free` | `https://integrate.api.nvidia.com/v1/chat/completions` | (none) | `bearer` |
+| `qwen_free` | `https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions` | (none) | `bearer` |
+| `minimax_free` | `https://api.minimax.chat/v1/chat/completions` | (none) | `bearer` |
+| `sambanova` | `https://api.sambanova.ai/v1/chat/completions` | (none) | `bearer` |
+| `cerebras` | `https://api.cerebras.ai/v1/chat/completions` | (none) | `bearer` |
+| `github` | `https://models.inference.ai.azure.com/chat/completions` | (none) | `bearer` |
 | `ollama` | `http://127.0.0.1:11434/v1/chat/completions` | (none) | `none` |
 
 To add or override a provider:
@@ -193,6 +229,44 @@ Gemini requires both `Authorization: Bearer <key>` and `x-goog-api-key: <key>` h
 
 Gemini 3 models include `extra_content.google.thought_signature` in tool_calls responses. Nenya preserves this field (it is required for multi-turn function calling with Gemini 3) and adds the missing `index` field to comply with the OpenAI spec.
 
+## Model Registry
+
+Built-in models that can be referenced by string shorthand in agent `models` arrays. Each entry maps to a provider and includes a default `max_context`.
+
+| Model | Provider | Max Context |
+|-------|----------|-------------|
+| `gemini-3.1-flash-lite-preview` | `gemini` | 128000 |
+| `gemini-3-flash-preview` | `gemini` | 128000 |
+| `gemini-2.5-flash-lite` | `gemini` | 128000 |
+| `gemini-2.5-flash` | `gemini` | 128000 |
+| `deepseek-reasoner` | `deepseek` | 128000 |
+| `deepseek-chat` | `deepseek` | 128000 |
+| `glm-5.1` | `zai` | 128000 |
+| `glm-5-turbo` | `zai` | 128000 |
+| `glm-5v-turbo` | `zai` | 128000 |
+| `glm-5` | `zai` | 128000 |
+| `glm-4.7` | `zai` | 128000 |
+| `glm-4.7-flash` | `zai` | 128000 |
+| `glm-4.7-flashx` | `zai` | 128000 |
+| `glm-4.6` | `zai` | 128000 |
+| `glm-4.6v` | `zai` | 128000 |
+| `glm-4.5` | `zai` | 128000 |
+| `glm-4.5-air` | `zai` | 128000 |
+| `glm-4.5-flash` | `zai` | 128000 |
+| `glm-4.5v` | `zai` | 128000 |
+| `nemotron-3-super` | `nvidia_free` | 4000 |
+| `qwen-3.6-plus` | `qwen_free` | 8000 |
+| `minimax-m2.5` | `minimax_free` | 8000 |
+| `llama-3.3-70b-versatile` | `groq` | 131072 |
+| `mixtral-8x7b-32768` | `groq` | 32768 |
+| `llama-3.1-405b-instruct` | `sambanova` | 128000 |
+| `llama-3.3-70b` | `cerebras` | 8192 |
+| `gpt-4o` | `github` | 128000 |
+| `phi-3.5-mini-instruct` | `github` | 128000 |
+| `qwen2.5-72b-turbo` | `together` | 32768 |
+
+Models not in this registry (e.g., local Ollama models, custom endpoints) must be specified as full objects with explicit `provider` and `model` fields.
+
 ## Processing Pipeline Order
 
 1. **Prefix cache optimizations** (pin system messages, sort tools)
@@ -206,10 +280,13 @@ Gemini 3 models include `extra_content.google.thought_signature` in tool_calls r
 ## Configuration Notes
 
 - **JSON with Comments**: Configuration files support `//` and `/* */` comments
+- **Model Registry**: Built-in models can be referenced as strings in agent configs; custom/local models use full object notation
+- **Provider Registry**: All built-in providers are loaded automatically; user providers are merged on top
 - **External Prompts**: System prompts can be inline (`system_prompt`) or external files (`system_prompt_file`) in `./prompts/` directory
 - **Separate Engines**: `security_filter.engine` and `window.engine` can use different models/APIs
 - **API Format Abstraction**: Supports `"ollama"` (native `/api/generate`) and `"openai"` (compatible `/v1/chat/completions`) formats
 - **Auto-enable**: `security_filter.enabled` defaults to `true` when patterns are provided; `prefix_cache` and `compaction` auto-enable when sub-fields are set
+- **max_tokens injection**: `governance.max_tokens` is injected into upstream requests when not already set by the client
 
 ## Configuration Validation
 
