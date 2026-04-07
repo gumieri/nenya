@@ -31,6 +31,11 @@ type upstreamTarget struct {
 }
 
 func (g *NenyaGateway) resolveProvider(modelName string) *Provider {
+	if entry, ok := ModelRegistry[modelName]; ok {
+		if p, ok := g.providers[entry.Provider]; ok {
+			return p
+		}
+	}
 	lower := strings.ToLower(modelName)
 	for _, p := range g.providers {
 		for _, prefix := range p.RoutePrefixes {
@@ -210,6 +215,11 @@ func (g *NenyaGateway) transformRequestForUpstream(providerName, upstreamURL str
 				}
 			}
 		}
+	}
+
+	// Set default max_tokens if not present in request
+	if _, hasMaxTokens := payload["max_tokens"]; !hasMaxTokens {
+		payload["max_tokens"] = g.config.Governance.MaxTokens
 	}
 
 	newBody, err := json.Marshal(payload)

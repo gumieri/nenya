@@ -22,6 +22,42 @@ type AgentConfig struct {
 	Models           []AgentModel `json:"models"`
 }
 
+func (a *AgentConfig) UnmarshalJSON(data []byte) error {
+	type alias AgentConfig
+	aux := struct {
+		Models []json.RawMessage `json:"models"`
+		*alias
+	}{
+		alias: (*alias)(a),
+	}
+	if err := json.Unmarshal(data, &aux); err != nil {
+		return err
+	}
+
+	a.Models = make([]AgentModel, 0, len(aux.Models))
+	for _, raw := range aux.Models {
+		var m AgentModel
+		var modelStr string
+		if err := json.Unmarshal(raw, &modelStr); err == nil {
+			entry, ok := ModelRegistry[modelStr]
+			if !ok {
+				return fmt.Errorf("model %q not found in registry", modelStr)
+			}
+			m = AgentModel{
+				Model:      modelStr,
+				Provider:   entry.Provider,
+				MaxContext: entry.MaxContext,
+			}
+		} else {
+			if err := json.Unmarshal(raw, &m); err != nil {
+				return fmt.Errorf("invalid model entry: must be a string or an object")
+			}
+		}
+		a.Models = append(a.Models, m)
+	}
+	return nil
+}
+
 type ProviderConfig struct {
 	URL           string   `json:"url"`
 	RoutePrefixes []string `json:"route_prefixes"`
@@ -60,11 +96,13 @@ type GovernanceConfig struct {
 	RatelimitMaxTPM    int     `json:"ratelimit_max_tpm"`
 	ContextSoftLimit   int     `json:"context_soft_limit"`
 	ContextHardLimit   int     `json:"context_hard_limit"`
+	MaxTokens          int     `json:"max_tokens"`
 	TruncationStrategy string  `json:"truncation_strategy"`
 	KeepFirstPercent   float64 `json:"keep_first_percent"`
 	KeepLastPercent    float64 `json:"keep_last_percent"`
 	rpmSet             bool    `json:"-"`
 	tpmSet             bool    `json:"-"`
+	maxTokensSet       bool    `json:"-"`
 }
 
 type SecretsConfig struct {
@@ -117,6 +155,7 @@ func (g *GovernanceConfig) UnmarshalJSON(data []byte) error {
 	aux := struct {
 		RatelimitMaxRPM *int `json:"ratelimit_max_rpm"`
 		RatelimitMaxTPM *int `json:"ratelimit_max_tpm"`
+		MaxTokens       *int `json:"max_tokens"`
 		*alias
 	}{
 		alias: (*alias)(g),
@@ -135,6 +174,12 @@ func (g *GovernanceConfig) UnmarshalJSON(data []byte) error {
 	} else {
 		g.tpmSet = true
 		g.RatelimitMaxTPM = *aux.RatelimitMaxTPM
+	}
+	if aux.MaxTokens == nil {
+		g.maxTokensSet = false
+	} else {
+		g.maxTokensSet = true
+		g.MaxTokens = *aux.MaxTokens
 	}
 	return nil
 }
@@ -165,38 +210,16 @@ type WindowConfig struct {
 }
 
 func builtInProviders() map[string]ProviderConfig {
-	return map[string]ProviderConfig{
-		"gemini": {
-			URL:           "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
-			RoutePrefixes: []string{"gemini-"},
-			AuthStyle:     "bearer+x-goog",
-		},
-		"deepseek": {
-			URL:           "https://api.deepseek.com/chat/completions",
-			RoutePrefixes: []string{"deepseek-"},
-			AuthStyle:     "bearer",
-		},
-		"zai": {
-			URL:           "https://api.z.ai/v1/chat/completions",
-			RoutePrefixes: []string{"zai-", "glm-"},
-			AuthStyle:     "bearer",
-		},
-		"groq": {
-			URL:           "https://api.groq.com/openai/v1/chat/completions",
-			RoutePrefixes: []string{"llama-", "llama3-", "mixtral-", "whisper-"},
-			AuthStyle:     "bearer",
-		},
-		"together": {
-			URL:           "https://api.together.xyz/v1/chat/completions",
-			RoutePrefixes: []string{"meta-llama/", "mistralai/", "qwen/", "together/"},
-			AuthStyle:     "bearer",
-		},
-		"ollama": {
-			URL:           "http://127.0.0.1:11434/v1/chat/completions",
-			RoutePrefixes: nil,
-			AuthStyle:     "none",
-		},
+	providers := make(map[string]ProviderConfig, len(ProviderRegistry))
+	for name, entry := range ProviderRegistry {
+		providers[name] = ProviderConfig{
+			URL:           entry.URL,
+			RoutePrefixes: entry.RoutePrefixes,
+			AuthStyle:     entry.AuthStyle,
+			ApiFormat:     entry.ApiFormat,
+		}
 	}
+	return providers
 }
 
 func loadConfig(filename string) (*Config, error) {
@@ -289,6 +312,9 @@ func applyDefaults(cfg *Config) {
 	}
 	if cfg.Governance.ContextHardLimit == 0 {
 		cfg.Governance.ContextHardLimit = 24000
+	}
+	if !cfg.Governance.maxTokensSet && cfg.Governance.MaxTokens == 0 {
+		cfg.Governance.MaxTokens = 8192
 	}
 	if cfg.Governance.TruncationStrategy == "" {
 		cfg.Governance.TruncationStrategy = "middle-out"

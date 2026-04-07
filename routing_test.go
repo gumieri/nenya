@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -722,6 +723,116 @@ func TestInjectAPIKey(t *testing.T) {
 				if got := headers.Get("x-goog-api-key"); got != tt.apiKey {
 					t.Errorf("x-goog-api-key: got %q, want %q", got, tt.apiKey)
 				}
+			}
+		})
+	}
+}
+
+func TestMaxTokensInjection(t *testing.T) {
+	tests := []struct {
+		name         string
+		config       Config
+		body         string
+		expectedBody string
+		expectError  bool
+	}{
+		{
+			name:         "Default max_tokens injected when missing",
+			config:       Config{Providers: builtInProviders()},
+			body:         `{"model": "glm-5", "messages": [{"role": "user", "content": "test"}]}`,
+			expectedBody: `{"messages":[{"content":"test","role":"user"}],"model":"glm-5","max_tokens":8192}`,
+		},
+		{
+			name: "Custom max_tokens from config injected when missing",
+			config: Config{
+				Providers: builtInProviders(),
+				Governance: GovernanceConfig{
+					MaxTokens: 16000,
+				},
+			},
+			body:         `{"model": "glm-5", "messages": [{"role": "user", "content": "test"}]}`,
+			expectedBody: `{"messages":[{"content":"test","role":"user"}],"model":"glm-5","max_tokens":16000}`,
+		},
+		{
+			name:         "Existing max_tokens preserved",
+			config:       Config{Providers: builtInProviders()},
+			body:         `{"model": "glm-5", "messages": [{"role": "user", "content": "test"}], "max_tokens": 500}`,
+			expectedBody: `{"messages":[{"content":"test","role":"user"}],"model":"glm-5","max_tokens":500}`,
+		},
+		{
+			name:         "Max_tokens zero preserved",
+			config:       Config{Providers: builtInProviders()},
+			body:         `{"model": "glm-5", "messages": [{"role": "user", "content": "test"}], "max_tokens": 0}`,
+			expectedBody: `{"messages":[{"content":"test","role":"user"}],"model":"glm-5","max_tokens":0}`,
+		},
+		{
+			name:         "Works with gemini model mapping",
+			config:       Config{Providers: builtInProviders()},
+			body:         `{"model": "gemini-3-flash", "messages": []}`,
+			expectedBody: `{"messages":[],"model":"gemini-3-flash-preview","max_tokens":8192}`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			secrets := &SecretsConfig{}
+			g := NewNenyaGateway(tt.config, secrets, slog.Default())
+
+			var payload map[string]interface{}
+			if err := json.Unmarshal([]byte(tt.body), &payload); err != nil {
+				t.Fatalf("Failed to parse test body: %v", err)
+			}
+			
+			provider := "zai"
+			url := "https://api.z.ai/v1/chat/completions"
+			if strings.Contains(tt.body, "gemini") {
+				provider = "gemini"
+				url = "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions"
+			}
+			transformedBody, _, err := g.transformRequestForUpstream(provider, url, payload, "")
+			if tt.expectError {
+				if err == nil {
+					t.Errorf("Expected error but got none")
+				}
+				return
+			}
+			if err != nil {
+				t.Errorf("Unexpected error: %v", err)
+				return
+			}
+
+			var transformed map[string]interface{}
+			if err := json.Unmarshal(transformedBody, &transformed); err != nil {
+				t.Errorf("Failed to unmarshal transformed body: %v", err)
+				return
+			}
+
+			var expected map[string]interface{}
+			if err := json.Unmarshal([]byte(tt.expectedBody), &expected); err != nil {
+				t.Errorf("Failed to unmarshal expected body: %v", err)
+				return
+			}
+
+			// Check max_tokens
+			gotMaxTokens, gotHas := transformed["max_tokens"]
+			wantMaxTokens, wantHas := expected["max_tokens"]
+			if gotHas != wantHas {
+				t.Errorf("max_tokens presence: got %v, want %v", gotHas, wantHas)
+			} else if gotHas {
+				gotNum, ok1 := gotMaxTokens.(float64)
+				wantNum, ok2 := wantMaxTokens.(float64)
+				if !ok1 || !ok2 {
+					t.Errorf("max_tokens not numbers: got %T, want %T", gotMaxTokens, wantMaxTokens)
+				} else if int(gotNum) != int(wantNum) {
+					t.Errorf("max_tokens: got %v, want %v", gotNum, wantNum)
+				}
+			}
+
+			// Check model
+			gotModel, _ := transformed["model"].(string)
+			wantModel, _ := expected["model"].(string)
+			if gotModel != wantModel {
+				t.Errorf("model: got %q, want %q", gotModel, wantModel)
 			}
 		})
 	}
