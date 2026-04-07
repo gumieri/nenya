@@ -1,0 +1,12 @@
+{
+  "agents": {
+    "plan": {
+      "strategy": "fallback",
+      "models": ["deepseek-reasoner"]
+    },
+    "build": {
+      "strategy": "fallback",
+      "models": ["glm-5-turbo"]
+    }
+  }
+}
