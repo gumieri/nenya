@@ -165,10 +165,6 @@ func (f *StreamFilter) checkWindowRedact() bool {
 	return false
 }
 
-func (f *StreamFilter) BlockReason() string {
-	return f.blockReason
-}
-
 func (f *StreamFilter) IsBlocked() bool {
 	return f.blocked
 }

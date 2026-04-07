@@ -25,9 +25,11 @@ Create a JSON file with your API keys and client token:
 ```json
 {
   "client_token": "test-client-token",
-  "gemini_key": "your-gemini-key",
-  "deepseek_key": "your-deepseek-key",
-  "zai_key": "your-zai-key"
+  "provider_keys": {
+    "gemini": "your-gemini-key",
+    "deepseek": "your-deepseek-key",
+    "zai": "your-zai-key"
+  }
 }
 ```
 
@@ -38,9 +40,11 @@ mkdir -p creds
 cat > creds/secrets << 'EOF'
 {
   "client_token": "test-client-token",
-  "gemini_key": "your-gemini-key",
-  "deepseek_key": "your-deepseek-key",
-  "zai_key": "your-zai-key"
+  "provider_keys": {
+    "gemini": "your-gemini-key",
+    "deepseek": "your-deepseek-key",
+    "zai": "your-zai-key"
+  }
 }
 EOF
 

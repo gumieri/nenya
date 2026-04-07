@@ -506,11 +506,11 @@ func (g *NenyaGateway) forwardToUpstream(
 		}
 
 		upstreamCtx, upstreamCancel := context.WithCancel(r.Context())
-		defer upstreamCancel()
 		req = req.WithContext(upstreamCtx)
 
 		resp, err := g.client.Do(req)
 		if err != nil {
+			upstreamCancel()
 			g.logger.Warn("target network error",
 				"target", i+1, "total", len(targets), "model", target.model, "err", err)
 			continue
@@ -520,6 +520,7 @@ func (g *NenyaGateway) forwardToUpstream(
 			"target", i+1, "total", len(targets), "model", target.model, "status", resp.StatusCode)
 
 		if isRetryable(resp.StatusCode) {
+			upstreamCancel()
 			g.stats.RecordError(target.model)
 			if g.metrics != nil {
 				g.metrics.RecordUpstreamError(target.model, agentName, target.provider, resp.StatusCode)
@@ -554,6 +555,7 @@ func (g *NenyaGateway) forwardToUpstream(
 		}
 
 		if resp.StatusCode >= 400 {
+			defer upstreamCancel()
 			g.stats.RecordError(target.model)
 			if g.metrics != nil {
 				g.metrics.RecordUpstreamError(target.model, agentName, target.provider, resp.StatusCode)
@@ -572,6 +574,7 @@ func (g *NenyaGateway) forwardToUpstream(
 			return
 		}
 
+		defer upstreamCancel()
 		copyHeaders(resp.Header, w.Header())
 		w.WriteHeader(resp.StatusCode)
 
@@ -691,8 +694,6 @@ func parseRetryDelay(header http.Header, body []byte) time.Duration {
 
 func isRetryable(statusCode int) bool {
 	return statusCode == http.StatusTooManyRequests ||
-		statusCode == http.StatusUnauthorized ||
-		statusCode == http.StatusForbidden ||
 		statusCode >= 500
 }
 
@@ -732,13 +733,15 @@ func (g *NenyaGateway) handleHealthz(w http.ResponseWriter) {
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	json.NewEncoder(w).Encode(resp)
+	if err := json.NewEncoder(w).Encode(resp); err != nil {
+		g.logger.Error("failed to encode healthz response", "err", err)
+	}
 }
 
 func (g *NenyaGateway) writeBlockedSSE(w http.ResponseWriter) {
 	blockPayload := map[string]interface{}{
-		"id":      "blocked",
-		"object":  "chat.completion.chunk",
+		"id":     "blocked",
+		"object": "chat.completion.chunk",
 		"choices": []map[string]interface{}{
 			{
 				"index": 0,
