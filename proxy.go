@@ -269,9 +269,10 @@ func (g *NenyaGateway) handleChatCompletions(w http.ResponseWriter, r *http.Requ
 		if p := g.resolveProvider(modelName); p != nil {
 			upstreamURL = p.URL
 			providerName = p.Name
-		} else if defaultP, ok := g.providers["zai"]; ok {
-			upstreamURL = defaultP.URL
-			providerName = defaultP.Name
+		} else {
+			g.logger.Warn("no provider found for model", "model", modelName)
+			http.Error(w, "No provider configured for model: "+modelName, http.StatusBadRequest)
+			return
 		}
 		targets = []upstreamTarget{{url: upstreamURL, model: modelName, provider: providerName}}
 		g.logger.Info("model routing", "model", modelName, "upstream", upstreamURL)
@@ -470,7 +471,7 @@ func (g *NenyaGateway) forwardToUpstream(
 			continue
 		}
 
-		transformedBody, finalModel, err := g.transformRequestForUpstream(target.provider, target.url, payload, target.model)
+		transformedBody, finalModel, err := g.transformRequestForUpstream(target.provider, target.url, payload, target.model, target.maxOutput)
 		if err != nil {
 			g.logger.Warn("failed to transform request, using original payload",
 				"target", i+1, "total", len(targets), "model", target.model, "err", err)
@@ -555,13 +556,31 @@ func (g *NenyaGateway) forwardToUpstream(
 		}
 
 		if resp.StatusCode >= 400 {
+			errorBody, _ := io.ReadAll(io.LimitReader(resp.Body, 8*1024))
+			resp.Body.Close()
+
+			if isRetryableClientError(resp.StatusCode, errorBody) && len(targets) > 1 {
+				upstreamCancel()
+				g.stats.RecordError(target.model)
+				if g.metrics != nil {
+					g.metrics.RecordUpstreamError(target.model, agentName, target.provider, resp.StatusCode)
+				}
+				g.logger.Warn("retryable client error from upstream, trying next target",
+					"target", i+1, "total", len(targets), "model", target.model,
+					"status", resp.StatusCode, "body", string(errorBody))
+				if target.coolKey != "" && cooldownDuration > 0 {
+					g.agentMu.Lock()
+					g.modelCooldowns[target.coolKey] = time.Now().Add(cooldownDuration)
+					g.agentMu.Unlock()
+				}
+				continue
+			}
+
 			defer upstreamCancel()
 			g.stats.RecordError(target.model)
 			if g.metrics != nil {
 				g.metrics.RecordUpstreamError(target.model, agentName, target.provider, resp.StatusCode)
 			}
-			errorBody, _ := io.ReadAll(io.LimitReader(resp.Body, 8*1024))
-			resp.Body.Close()
 			if len(errorBody) > 0 {
 				g.logger.Error("non-retryable upstream error",
 					"target", i+1, "total", len(targets), "model", target.model,
@@ -695,6 +714,21 @@ func parseRetryDelay(header http.Header, body []byte) time.Duration {
 func isRetryable(statusCode int) bool {
 	return statusCode == http.StatusTooManyRequests ||
 		statusCode >= 500
+}
+
+func isRetryableClientError(statusCode int, body []byte) bool {
+	if statusCode != http.StatusBadRequest {
+		return false
+	}
+	if len(body) == 0 {
+		return false
+	}
+	lower := strings.ToLower(string(body))
+	return strings.Contains(lower, "unavailable_model") ||
+		strings.Contains(lower, "tokens_limit_reached") ||
+		strings.Contains(lower, "thought_signature") ||
+		strings.Contains(lower, "name cannot be empty") ||
+		strings.Contains(lower, "messages parameter is illegal")
 }
 
 func copyHeaders(src, dst http.Header) {

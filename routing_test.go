@@ -128,7 +128,7 @@ func TestTransformRequestForUpstream(t *testing.T) {
 			if err := json.Unmarshal([]byte(tt.body), &payload); err != nil {
 				t.Fatalf("Failed to parse test body: %v", err)
 			}
-			transformedBody, finalModel, err := g.transformRequestForUpstream(tt.provider, tt.upstreamURL, payload, "")
+			transformedBody, finalModel, err := g.transformRequestForUpstream(tt.provider, tt.upstreamURL, payload, "", 0)
 			if tt.expectError {
 				if err == nil {
 					t.Errorf("Expected error but got none")
@@ -184,7 +184,7 @@ func TestReplaceModel(t *testing.T) {
 			map[string]interface{}{"role": "user", "content": "hi"},
 		},
 	}
-	result, _, err := g.transformRequestForUpstream("zai", "https://api.z.ai/v1/chat/completions", payload, "new-model")
+	result, _, err := g.transformRequestForUpstream("zai", "https://api.z.ai/v1/chat/completions", payload, "new-model", 0)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -209,7 +209,7 @@ func TestReplaceModelNoMutation(t *testing.T) {
 		"messages": []interface{}{},
 	}
 
-	_, _, err := g.transformRequestForUpstream("zai", "https://api.z.ai/v1/chat/completions", payload, "overridden")
+	_, _, err := g.transformRequestForUpstream("zai", "https://api.z.ai/v1/chat/completions", payload, "overridden", 0)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -289,7 +289,7 @@ func TestAgentSystemPromptInjection(t *testing.T) {
 				"messages": tt.messages,
 			}
 
-			result, _, err := g.transformRequestForUpstream("gemini", "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions", payload, "")
+			result, _, err := g.transformRequestForUpstream("gemini", "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions", payload, "", 0)
 			if err != nil {
 				t.Fatalf("unexpected error: %v", err)
 			}
@@ -796,7 +796,7 @@ func TestMaxTokensInjection(t *testing.T) {
 				provider = "gemini"
 				url = "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions"
 			}
-			transformedBody, _, err := g.transformRequestForUpstream(provider, url, payload, "")
+			transformedBody, _, err := g.transformRequestForUpstream(provider, url, payload, "", 0)
 			if tt.expectError {
 				if err == nil {
 					t.Errorf("Expected error but got none")

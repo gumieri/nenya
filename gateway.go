@@ -104,7 +104,7 @@ func NewNenyaGateway(cfg Config, secrets *SecretsConfig, logger *slog.Logger) *N
 		logger:          logger,
 		agentCounters:   make(map[string]uint64),
 		modelCooldowns:  make(map[string]time.Time),
-		thoughtSigCache: NewThoughtSignatureCache(1000, 10*time.Minute),
+		thoughtSigCache: NewThoughtSignatureCache(1000, 30*time.Minute),
 	}
 }
 
