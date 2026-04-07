@@ -92,8 +92,20 @@ func (g *NenyaGateway) applyWindowCompaction(ctx context.Context, payload map[st
 			len(history), beforeTokens, summary),
 	}
 
-	newMessages := make([]interface{}, 0, 1+len(active))
+	newMessages := make([]interface{}, 0, 2+len(active))
 	newMessages = append(newMessages, summaryMsg)
+
+	if len(active) > 0 {
+		if firstActive, ok := active[0].(map[string]interface{}); ok {
+			if role, _ := firstActive["role"].(string); role == "assistant" {
+				newMessages = append(newMessages, map[string]interface{}{
+					"role":    "user",
+					"content": "[Continuing from compacted conversation. Please proceed with the current task.]",
+				})
+			}
+		}
+	}
+
 	newMessages = append(newMessages, active...)
 
 	payload["messages"] = newMessages
