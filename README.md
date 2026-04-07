@@ -81,19 +81,6 @@ The smallest useful configuration — only agents with string shorthand models, 
       "cooldown_seconds": 60,
       "system_prompt": "Reply with maximum brevity. Code only.",
       "models": [
-        "gemini-2.5-flash",
-        "deepseek-reasoner"
-      ]
-    }
-  }
-}
-  },
-  "agents": {
-    "build": {
-      "strategy": "fallback",
-      "cooldown_seconds": 60,
-      "system_prompt": "Reply with maximum brevity. Code only.",
-      "models": [
         { "provider": "gemini", "model": "gemini-3.1-flash-lite-preview", "max_context": 128000 },
         { "provider": "deepseek", "model": "deepseek-reasoner", "max_context": 128000 }
       ]
@@ -281,3 +268,14 @@ go fmt ./...
 - **`validate.go`** — Configuration validation, provider health checks
 - **`stats.go`** — Token usage tracking, /statsz and /healthz endpoints
 - **`logger.go`** — slog setup with TTY/systemd auto-detection
+
+## Sponsor / Support this Project
+
+If Nenya saves you time or money on API costs, consider supporting its development:
+
+- **GitHub Sponsors**: [https://github.com/sponsors/gumieri](https://github.com/sponsors/gumieri)
+- **Pix (Brazil)**: [`rgumieri@gmail.com`](https://nubank.com.br/cobrar/2jm8a/69d54dab-4530-4e09-a531-e959e45fb6d8)
+
+## AI Collaboration
+
+This project was built in collaboration with AI coding tools. The architecture, security patterns, and codebase reflect rapid iterative development guided by human engineering decisions. Every line of code has been reviewed, tested, and validated by the maintainer.

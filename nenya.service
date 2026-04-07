@@ -1,3 +1,12 @@
+# Nenya AI Gateway - systemd service unit
+#
+# Install paths (adjust if deploying elsewhere):
+#   Binary:    /usr/local/bin/nenya
+#   Config:    /etc/nenya/config.json
+#   Secrets:   /etc/nenya/secrets.json  (loaded via systemd credential)
+#   Install:   sudo mise run install
+#   Enable:    sudo systemctl enable --now nenya
+
 [Unit]
 Description=Nenya AI Gateway & Bouncer
 After=network.target
