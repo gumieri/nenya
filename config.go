@@ -95,15 +95,16 @@ type ServerConfig struct {
 }
 
 type GovernanceConfig struct {
-	RatelimitMaxRPM    int     `json:"ratelimit_max_rpm"`
-	RatelimitMaxTPM    int     `json:"ratelimit_max_tpm"`
-	ContextSoftLimit   int     `json:"context_soft_limit"`
-	ContextHardLimit   int     `json:"context_hard_limit"`
-	TruncationStrategy string  `json:"truncation_strategy"`
-	KeepFirstPercent   float64 `json:"keep_first_percent"`
-	KeepLastPercent    float64 `json:"keep_last_percent"`
-	rpmSet             bool    `json:"-"`
-	tpmSet             bool    `json:"-"`
+	BlockedExecutionPatterns []string `json:"blocked_execution_patterns"`
+	RatelimitMaxRPM          int      `json:"ratelimit_max_rpm"`
+	RatelimitMaxTPM          int      `json:"ratelimit_max_tpm"`
+	ContextSoftLimit         int      `json:"context_soft_limit"`
+	ContextHardLimit         int      `json:"context_hard_limit"`
+	TruncationStrategy       string   `json:"truncation_strategy"`
+	KeepFirstPercent         float64  `json:"keep_first_percent"`
+	KeepLastPercent          float64  `json:"keep_last_percent"`
+	rpmSet                   bool     `json:"-"`
+	tpmSet                   bool     `json:"-"`
 }
 
 type SecretsConfig struct {
@@ -120,11 +121,13 @@ type EngineConfig struct {
 }
 
 type SecurityFilterConfig struct {
-	Enabled        bool         `json:"enabled"`
-	RedactionLabel string       `json:"redaction_label"`
-	Patterns       []string     `json:"patterns"`
-	Engine         EngineConfig `json:"engine"`
-	enabledSet     bool         `json:"-"`
+	Enabled           bool         `json:"enabled"`
+	RedactionLabel    string       `json:"redaction_label"`
+	Patterns          []string     `json:"patterns"`
+	OutputEnabled     bool         `json:"output_enabled"`
+	OutputWindowChars int          `json:"output_window_chars"`
+	Engine            EngineConfig `json:"engine"`
+	enabledSet        bool         `json:"-"`
 }
 
 func (s *SecurityFilterConfig) UnmarshalJSON(data []byte) error {
@@ -322,6 +325,21 @@ func applyDefaults(cfg *Config) {
 	if cfg.SecurityFilter.RedactionLabel == "" {
 		cfg.SecurityFilter.RedactionLabel = "[REDACTED]"
 	}
+	if cfg.Governance.BlockedExecutionPatterns == nil || len(cfg.Governance.BlockedExecutionPatterns) == 0 {
+		cfg.Governance.BlockedExecutionPatterns = []string{
+			`(?i)\brm\s+-[a-zA-Z]*[rR][a-zA-Z]*\s+.*(/|\*)`,
+			`(?i)\bchmod\s+(?:-R\s+)?777\b`,
+			`(?i)\bmkfs\.`,
+			`(?i)\bterraform\s+destroy\b`,
+			`(?i)\bterragrunt\s+destroy\b`,
+			`(?i)\baws\s+s3\s+rb\s+.*--force`,
+			`(?i)\baws\s+ec2\s+terminate-instances\b`,
+			`(?i)\bkubectl\s+delete\s+(namespace|ns|pv|pvc|crd)\b`,
+			`(?i)\bhelm\s+(uninstall|delete)\b`,
+			`(?i)\b(DROP|TRUNCATE)\s+(TABLE|DATABASE|SCHEMA)\b`,
+			`(?i)\b(shutdown|reboot|poweroff|halt|init\s+0)\b`,
+		}
+	}
 	if cfg.SecurityFilter.Patterns == nil {
 		if !cfg.SecurityFilter.enabledSet {
 			cfg.SecurityFilter.Enabled = true
@@ -331,7 +349,7 @@ func applyDefaults(cfg *Config) {
 			`(?i)gh(p|o|s)_[a-zA-Z0-9]{36,255}`,
 			`(?i)ya29\.[0-9A-Za-z\-_]+`,
 			`(?i)sk-[a-zA-Z0-9]{48}`,
-			`(?i)-----BEGIN (RSA|DSA|EC|PRIVATE) KEY-----`,
+			`(?i)-----BEGIN\s+(RSA\s+)?(DSA\s+)?(EC\s+)?PRIVATE\s+KEY\s*-----`,
 			`(?i)(aws_access_key_id|aws_secret_access_key)\s*=\s*['"][^'"]{10,}['"]`,
 			`(?i)(password|passwd|pwd|secret|token|key)[\s:=]+['"][^'"]{6,}['"]`,
 			`[a-f0-9]{32}:`,
@@ -339,6 +357,9 @@ func applyDefaults(cfg *Config) {
 		}
 	} else if !cfg.SecurityFilter.enabledSet {
 		cfg.SecurityFilter.Enabled = true
+	}
+	if cfg.SecurityFilter.OutputWindowChars == 0 {
+		cfg.SecurityFilter.OutputWindowChars = 4096
 	}
 
 	if cfg.SecurityFilter.Engine.Provider == "" {

@@ -12,20 +12,22 @@ import (
 )
 
 type NenyaGateway struct {
-	config         Config
-	client         *http.Client
-	ollamaClient   *http.Client
-	secrets        *SecretsConfig
-	providers      map[string]*Provider
-	rateLimits     map[string]*rateLimiter
-	secretPatterns []*regexp.Regexp
-	stats          *UsageTracker
-	metrics        *Metrics
-	logger         *slog.Logger
-	rlMu           sync.Mutex
-	agentCounters  map[string]uint64
-	modelCooldowns map[string]time.Time
-	agentMu        sync.Mutex
+	config          Config
+	client          *http.Client
+	ollamaClient    *http.Client
+	secrets         *SecretsConfig
+	providers       map[string]*Provider
+	rateLimits      map[string]*rateLimiter
+	secretPatterns  []*regexp.Regexp
+	blockedPatterns []*regexp.Regexp
+	stats           *UsageTracker
+	metrics         *Metrics
+	logger          *slog.Logger
+	rlMu            sync.Mutex
+	agentCounters   map[string]uint64
+	modelCooldowns  map[string]time.Time
+	agentMu         sync.Mutex
+	thoughtSigCache *ThoughtSignatureCache
 }
 
 func NewNenyaGateway(cfg Config, secrets *SecretsConfig, logger *slog.Logger) *NenyaGateway {
@@ -75,19 +77,34 @@ func NewNenyaGateway(cfg Config, secrets *SecretsConfig, logger *slog.Logger) *N
 		logger.Info("compiled secret patterns for Tier-0 filtering", "count", len(secretPatterns))
 	}
 
+	var blockedPatterns []*regexp.Regexp
+	for _, pattern := range cfg.Governance.BlockedExecutionPatterns {
+		re, err := regexp.Compile(pattern)
+		if err != nil {
+			logger.Warn("failed to compile blocked execution pattern, skipping", "pattern", pattern, "err", err)
+			continue
+		}
+		blockedPatterns = append(blockedPatterns, re)
+	}
+	if len(blockedPatterns) > 0 {
+		logger.Info("compiled blocked execution patterns for stream kill switch", "count", len(blockedPatterns))
+	}
+
 	return &NenyaGateway{
-		config:         cfg,
-		client:         secureClient,
-		ollamaClient:   ollamaClient,
-		secrets:        secrets,
-		providers:      resolveProviders(&cfg, secrets),
-		rateLimits:     make(map[string]*rateLimiter),
-		secretPatterns: secretPatterns,
-		stats:          NewUsageTracker(),
-		metrics:        nil,
-		logger:         logger,
-		agentCounters:  make(map[string]uint64),
-		modelCooldowns: make(map[string]time.Time),
+		config:          cfg,
+		client:          secureClient,
+		ollamaClient:    ollamaClient,
+		secrets:         secrets,
+		providers:       resolveProviders(&cfg, secrets),
+		rateLimits:      make(map[string]*rateLimiter),
+		secretPatterns:  secretPatterns,
+		blockedPatterns: blockedPatterns,
+		stats:           NewUsageTracker(),
+		metrics:         nil,
+		logger:          logger,
+		agentCounters:   make(map[string]uint64),
+		modelCooldowns:  make(map[string]time.Time),
+		thoughtSigCache: NewThoughtSignatureCache(1000, 10*time.Minute),
 	}
 }
 

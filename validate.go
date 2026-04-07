@@ -6,6 +6,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"regexp"
 	"strings"
 	"time"
 )
@@ -28,6 +29,13 @@ func validateConfiguration(cfg *Config, secrets *SecretsConfig, logger *slog.Log
 	}
 
 	errors := []string{}
+
+	if err := validatePatterns("security_filter.patterns", cfg.SecurityFilter.Patterns, logger); err != nil {
+		errors = append(errors, err.Error())
+	}
+	if err := validatePatterns("governance.blocked_execution_patterns", cfg.Governance.BlockedExecutionPatterns, logger); err != nil {
+		errors = append(errors, err.Error())
+	}
 
 	for name, provider := range providers {
 		if provider.APIKey == "" {
@@ -182,13 +190,26 @@ func applyAuthHeader(req *http.Request, provider *Provider) error {
 	case "bearer":
 		req.Header.Set("Authorization", "Bearer "+provider.APIKey)
 	case "bearer+x-goog":
-		// Gemini style: Bearer token with x-goog-api-key header
 		req.Header.Set("Authorization", "Bearer "+provider.APIKey)
 		req.Header.Set("x-goog-api-key", provider.APIKey)
 	case "none":
-		// No authentication required (e.g., Ollama)
 	default:
 		return fmt.Errorf("unsupported auth style: %s", provider.AuthStyle)
+	}
+	return nil
+}
+
+func validatePatterns(label string, patterns []string, logger *slog.Logger) error {
+	var errs []string
+	for i, p := range patterns {
+		if _, err := regexp.Compile(p); err != nil {
+			msg := fmt.Sprintf("%s[%d]: %v", label, i, err)
+			errs = append(errs, msg)
+			logger.Error("pattern compile failed", "label", label, "index", i, "pattern", p, "err", err)
+		}
+	}
+	if len(errs) > 0 {
+		return fmt.Errorf("invalid patterns in %s:\n  - %s", label, strings.Join(errs, "\n  - "))
 	}
 	return nil
 }
