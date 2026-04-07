@@ -28,13 +28,11 @@ jobs:
             "linux   arm64  tar.gz"
             "darwin  amd64  tar.gz"
             "darwin  arm64  tar.gz"
-            "windows amd64  zip"
           )
 
           for entry in "${platforms[@]}"; do
             read -r GOOS GOARCH EXT <<< "$entry"
             BINARY="nenya"
-            if [ "$GOOS" = "windows" ]; then BINARY="nenya.exe"; fi
 
             echo "Building ${GOOS}/${GOARCH}..."
             CGO_ENABLED=0 GOOS="$GOOS" GOARCH="$GOARCH" \
@@ -43,15 +41,9 @@ jobs:
             ARCHIVE="nenya-${VERSION}-${GOOS}-${GOARCH}.${EXT}"
             echo "Packaging ${ARCHIVE}..."
 
-            if [ "$EXT" = "zip" ]; then
-              cp nenya.service dist/nenya.service
-              cp example.config.json dist/config.json.example
-              (cd dist && zip -q "../${ARCHIVE}" "${BINARY}" nenya.service config.json.example)
-            else
-              cp nenya.service dist/nenya.service
-              cp example.config.json dist/config.json.example
-              tar -czf "${ARCHIVE}" -C dist "${BINARY}" nenya.service config.json.example
-            fi
+            cp nenya.service dist/nenya.service
+            cp example.config.json dist/config.json.example
+            tar -czf "${ARCHIVE}" -C dist "${BINARY}" nenya.service config.json.example
 
             rm -f "dist/${BINARY}" dist/nenya.service dist/config.json.example
           done
@@ -69,5 +61,4 @@ jobs:
             nenya-${VERSION}-linux-amd64.tar.gz \
             nenya-${VERSION}-linux-arm64.tar.gz \
             nenya-${VERSION}-darwin-amd64.tar.gz \
-            nenya-${VERSION}-darwin-arm64.tar.gz \
-            nenya-${VERSION}-windows-amd64.zip
+            nenya-${VERSION}-darwin-arm64.tar.gz
