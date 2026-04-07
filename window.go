@@ -184,7 +184,7 @@ func (g *NenyaGateway) callEngine(ctx context.Context, engine EngineConfig, syst
 	}
 	req.Header.Set("Content-Type", "application/json")
 
-	if err := g.injectAPIKey(engine.Provider, req.Header); err != nil {
+	if err = g.injectAPIKey(engine.Provider, req.Header); err != nil {
 		return "", fmt.Errorf("engine auth failed: %v", err)
 	}
 

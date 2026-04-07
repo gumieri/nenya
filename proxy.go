@@ -151,7 +151,7 @@ func (g *NenyaGateway) handleEmbeddings(w http.ResponseWriter, r *http.Request) 
 	}
 
 	var payload map[string]interface{}
-	if err := json.Unmarshal(bodyBytes, &payload); err != nil {
+	if err = json.Unmarshal(bodyBytes, &payload); err != nil {
 		g.logger.Warn("failed to parse embeddings JSON")
 		http.Error(w, "Invalid JSON payload", http.StatusBadRequest)
 		return
@@ -281,13 +281,11 @@ func (g *NenyaGateway) handleChatCompletions(w http.ResponseWriter, r *http.Requ
 	if messagesRaw, ok := payload["messages"]; ok {
 		if messages, ok := messagesRaw.([]interface{}); ok && len(messages) > 0 {
 			windowMaxCtx := g.resolveWindowMaxContext(modelName, targets)
-			updated, err := g.applyContentPipeline(r.Context(), payload, bodyBytes, tokenCount, windowMaxCtx)
-			if err != nil {
+			if _, err := g.applyContentPipeline(r.Context(), payload, bodyBytes, tokenCount, windowMaxCtx); err != nil {
 				g.logger.Error("content pipeline failed", "err", err)
 				http.Error(w, "Internal Server Error", http.StatusInternalServerError)
 				return
 			}
-			bodyBytes = updated
 		} else {
 			g.logger.Warn("messages field is not a non-empty array, skipping Ollama interception")
 		}
