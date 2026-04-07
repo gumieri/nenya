@@ -44,6 +44,7 @@ func main() {
 	}
 
 	gateway := NewNenyaGateway(*cfg, secrets, logger)
+	gateway.initMetrics()
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()

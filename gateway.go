@@ -20,6 +20,7 @@ type NenyaGateway struct {
 	rateLimits     map[string]*rateLimiter
 	secretPatterns []*regexp.Regexp
 	stats          *UsageTracker
+	metrics        *Metrics
 	logger         *slog.Logger
 	rlMu           sync.Mutex
 	agentCounters  map[string]uint64
@@ -83,10 +84,15 @@ func NewNenyaGateway(cfg Config, secrets *SecretsConfig, logger *slog.Logger) *N
 		rateLimits:     make(map[string]*rateLimiter),
 		secretPatterns: secretPatterns,
 		stats:          NewUsageTracker(),
+		metrics:        nil,
 		logger:         logger,
 		agentCounters:  make(map[string]uint64),
 		modelCooldowns: make(map[string]time.Time),
 	}
+}
+
+func (g *NenyaGateway) initMetrics() {
+	g.metrics = NewMetrics(g)
 }
 
 func (g *NenyaGateway) countTokens(text string) int {
