@@ -471,9 +471,17 @@ func TestSanitizeMessagesForZAI_PreservesToolMessages(t *testing.T) {
 		"messages": []interface{}{
 			map[string]interface{}{"role": "user", "content": "Read file"},
 			map[string]interface{}{
-				"role":       "assistant",
-				"tool_calls": []interface{}{},
-				"content":    "",
+				"role": "assistant",
+				"tool_calls": []interface{}{
+					map[string]interface{}{
+						"id":   "tc-1",
+						"type": "function",
+						"function": map[string]interface{}{
+							"name":      "read_file",
+							"arguments": "{}",
+						},
+					},
+				},
 			},
 			map[string]interface{}{
 				"role":         "tool",

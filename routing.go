@@ -24,10 +24,11 @@ var geminiModelMap = map[string]string{
 }
 
 type upstreamTarget struct {
-	url      string
-	model    string
-	coolKey  string
-	provider string
+	url       string
+	model     string
+	coolKey   string
+	provider  string
+	maxOutput int
 }
 
 func (g *NenyaGateway) resolveProvider(modelName string) *Provider {
@@ -92,9 +93,15 @@ func (g *NenyaGateway) buildTargetList(agentName string, agent AgentConfig, toke
 	for i := 0; i < n; i++ {
 		m := agent.Models[(start+i)%n]
 
-		if m.MaxContext > 0 && tokenCount > m.MaxContext {
+		maxCtx := m.MaxContext
+		if maxCtx == 0 {
+			if entry, ok := ModelRegistry[m.Model]; ok && entry.MaxContext > 0 {
+				maxCtx = entry.MaxContext
+			}
+		}
+		if maxCtx > 0 && tokenCount > maxCtx {
 			g.logger.Info("skipping model: exceeds max_context",
-				"model", m.Model, "max_context", m.MaxContext, "tokens", tokenCount)
+				"model", m.Model, "max_context", maxCtx, "tokens", tokenCount)
 			continue
 		}
 
@@ -104,11 +111,19 @@ func (g *NenyaGateway) buildTargetList(agentName string, agent AgentConfig, toke
 			continue
 		}
 
+		maxOut := m.MaxOutput
+		if maxOut == 0 {
+			if entry, ok := ModelRegistry[m.Model]; ok && entry.MaxOutput > 0 {
+				maxOut = entry.MaxOutput
+			}
+		}
+
 		t := upstreamTarget{
-			url:      p,
-			model:    m.Model,
-			coolKey:  agentName + ":" + m.Provider + ":" + m.Model,
-			provider: m.Provider,
+			url:       p,
+			model:     m.Model,
+			coolKey:   agentName + ":" + m.Provider + ":" + m.Model,
+			provider:  m.Provider,
+			maxOutput: maxOut,
 		}
 		if now.Before(cooldowns[t.coolKey]) {
 			cooling = append(cooling, t)
@@ -156,99 +171,165 @@ func (g *NenyaGateway) sanitizeToolMessagesForGemini(payload map[string]interfac
 		return
 	}
 
-	type toolCallEntry struct {
-		id   string
-		name string
+	type toolCallInfo struct {
+		id       string
+		name     string
+		hasExtra bool
 	}
 
-	for i, msgRaw := range messages {
+	toolCallMap := make(map[string]*toolCallInfo)
+
+	for _, msgRaw := range messages {
 		msg, ok := msgRaw.(map[string]interface{})
 		if !ok {
 			continue
 		}
 		role, _ := msg["role"].(string)
-
-		if role == "assistant" {
-			toolCallsRaw, ok := msg["tool_calls"]
+		if role != "assistant" {
+			continue
+		}
+		toolCallsRaw, ok := msg["tool_calls"]
+		if !ok {
+			continue
+		}
+		toolCalls, ok := toolCallsRaw.([]interface{})
+		if !ok {
+			continue
+		}
+		for _, tcRaw := range toolCalls {
+			tc, ok := tcRaw.(map[string]interface{})
 			if !ok {
 				continue
 			}
-			toolCalls, ok := toolCallsRaw.([]interface{})
-			if !ok {
+			tcID, _ := tc["id"].(string)
+			if tcID == "" {
 				continue
 			}
-			for _, tcRaw := range toolCalls {
-				tc, ok := tcRaw.(map[string]interface{})
-				if !ok {
-					continue
-				}
-				if _, hasExtra := tc["extra_content"]; hasExtra {
-					continue
-				}
-				tcID, _ := tc["id"].(string)
-				if tcID == "" {
-					continue
-				}
+			_, hasExtra := tc["extra_content"]
+			if !hasExtra {
 				if cached, found := g.thoughtSigCache.Load(tcID); found {
 					tc["extra_content"] = cached
 					g.logger.Debug("gemini: injected cached thought_signature", "tool_call_id", tcID)
+					hasExtra = true
 				}
 			}
-			continue
+			var fnName string
+			if fn, ok := tc["function"].(map[string]interface{}); ok {
+				fnName, _ = fn["name"].(string)
+			}
+			toolCallMap[tcID] = &toolCallInfo{
+				id:       tcID,
+				name:     fnName,
+				hasExtra: hasExtra,
+			}
 		}
+	}
 
-		if role != "tool" {
-			continue
+	orphanedIDs := make(map[string]bool)
+	for tcID, info := range toolCallMap {
+		if !info.hasExtra {
+			orphanedIDs[tcID] = true
+			g.logger.Warn("gemini: tool_call missing thought_signature, will strip pair",
+				"tool_call_id", tcID)
 		}
+	}
 
-		toolCallID, _ := msg["tool_call_id"].(string)
-		if toolCallID == "" {
-			continue
-		}
-
-		if _, hasName := msg["name"]; hasName {
-			continue
-		}
-
-		var name string
-		for j := i - 1; j >= 0; j-- {
-			prevMsg, ok := messages[j].(map[string]interface{})
+	if len(orphanedIDs) == 0 {
+		for _, msgRaw := range messages {
+			msg, ok := msgRaw.(map[string]interface{})
 			if !ok {
 				continue
 			}
-			prevRole, _ := prevMsg["role"].(string)
-			if prevRole != "assistant" {
+			role, _ := msg["role"].(string)
+			if role != "tool" {
 				continue
 			}
-			toolCallsRaw, ok := prevMsg["tool_calls"]
-			if !ok {
+			toolCallID, _ := msg["tool_call_id"].(string)
+			if toolCallID == "" {
 				continue
 			}
-			toolCalls, ok := toolCallsRaw.([]interface{})
-			if !ok {
+			if _, hasName := msg["name"]; hasName {
 				continue
 			}
-			for _, tcRaw := range toolCalls {
-				tc, ok := tcRaw.(map[string]interface{})
-				if !ok {
-					continue
-				}
-				if id, _ := tc["id"].(string); id == toolCallID {
-					if fn, ok := tc["function"].(map[string]interface{}); ok {
-						name, _ = fn["name"].(string)
+			if info, ok := toolCallMap[toolCallID]; ok && info.name != "" {
+				msg["name"] = info.name
+				g.logger.Debug("gemini: injected function name on tool message", "tool_call_id", toolCallID, "name", info.name)
+			}
+		}
+		return
+	}
+
+	filtered := make([]interface{}, 0, len(messages))
+	for i, msgRaw := range messages {
+		msg, ok := msgRaw.(map[string]interface{})
+		if !ok {
+			filtered = append(filtered, msgRaw)
+			continue
+		}
+		role, _ := msg["role"].(string)
+
+		if role == "assistant" {
+				toolCallsRaw, hasTC := msg["tool_calls"]
+			if hasTC {
+				toolCalls, ok := toolCallsRaw.([]interface{})
+				if ok {
+					cleaned := make([]interface{}, 0, len(toolCalls))
+					for _, tcRaw := range toolCalls {
+						tc, ok := tcRaw.(map[string]interface{})
+						if !ok {
+							cleaned = append(cleaned, tcRaw)
+							continue
+						}
+						tcID, _ := tc["id"].(string)
+						if orphanedIDs[tcID] {
+							continue
+						}
+						cleaned = append(cleaned, tcRaw)
 					}
-					break
+					if len(cleaned) == 0 {
+						content := extractContentText(msg)
+						if content == "" {
+							g.logger.Debug("gemini: removed empty assistant message after stripping orphaned tool_calls", "index", i)
+							continue
+						}
+						delete(msg, "tool_calls")
+					} else {
+						msg["tool_calls"] = cleaned
+					}
 				}
 			}
-			if name != "" {
-				break
-			}
+			filtered = append(filtered, msgRaw)
+			continue
 		}
 
-		if name != "" {
-			msg["name"] = name
-			g.logger.Debug("gemini: injected function name on tool message", "tool_call_id", toolCallID, "name", name)
+		if role == "tool" {
+			toolCallID, _ := msg["tool_call_id"].(string)
+			if toolCallID != "" && orphanedIDs[toolCallID] {
+				g.logger.Debug("gemini: removed orphaned tool response", "tool_call_id", toolCallID)
+				continue
+			}
+
+			if _, hasName := msg["name"]; !hasName {
+				if info, ok := toolCallMap[toolCallID]; ok && info.name != "" {
+					msg["name"] = info.name
+					g.logger.Debug("gemini: injected function name on tool message",
+						"tool_call_id", toolCallID, "name", info.name)
+				} else {
+					msg["name"] = "unknown_function"
+					g.logger.Warn("gemini: assigned synthetic name to tool message",
+						"tool_call_id", toolCallID)
+				}
+			}
+
+			filtered = append(filtered, msgRaw)
+			continue
 		}
+
+		filtered = append(filtered, msgRaw)
+	}
+
+	if len(filtered) != len(messages) {
+		payload["messages"] = filtered
 	}
 }
 
@@ -269,19 +350,75 @@ func (g *NenyaGateway) sanitizeMessagesForZAI(payload map[string]interface{}) {
 		return
 	}
 
-	filtered := make([]interface{}, 0, len(messages))
-
+	validToolCallIDs := make(map[string]string)
 	for _, msgRaw := range messages {
 		msg, ok := msgRaw.(map[string]interface{})
 		if !ok {
 			continue
 		}
+		role, _ := msg["role"].(string)
+		if role != "assistant" {
+			continue
+		}
+		toolCallsRaw, ok := msg["tool_calls"]
+		if !ok {
+			continue
+		}
+		toolCalls, ok := toolCallsRaw.([]interface{})
+		if !ok {
+			continue
+		}
+		for _, tcRaw := range toolCalls {
+			tc, ok := tcRaw.(map[string]interface{})
+			if !ok {
+				continue
+			}
+			tcID, _ := tc["id"].(string)
+			if tcID == "" {
+				continue
+			}
+			var fnName string
+			if fn, ok := tc["function"].(map[string]interface{}); ok {
+				fnName, _ = fn["name"].(string)
+			}
+			validToolCallIDs[tcID] = fnName
+		}
+	}
 
+	filtered := make([]interface{}, 0, len(messages))
+	for _, msgRaw := range messages {
+		msg, ok := msgRaw.(map[string]interface{})
+		if !ok {
+			continue
+		}
 		role, _ := msg["role"].(string)
 		content := extractContentText(msg)
 
 		if content == "" && role != "tool" && role != "assistant" {
 			continue
+		}
+
+		if role == "assistant" && content == "" {
+			if tcRaw, hasTC := msg["tool_calls"]; !hasTC {
+				continue
+			} else {
+				toolCalls, ok := tcRaw.([]interface{})
+				if !ok || len(toolCalls) == 0 {
+					continue
+				}
+			}
+		}
+
+		if role == "tool" {
+			toolCallID, _ := msg["tool_call_id"].(string)
+			if toolCallID == "" {
+				g.logger.Debug("zai: removing tool message without tool_call_id")
+				continue
+			}
+			if _, ok := validToolCallIDs[toolCallID]; !ok {
+				g.logger.Debug("zai: removing orphaned tool message", "tool_call_id", toolCallID)
+				continue
+			}
 		}
 
 		filtered = append(filtered, msgRaw)
@@ -310,6 +447,13 @@ func (g *NenyaGateway) sanitizeMessagesForZAI(payload map[string]interface{}) {
 					prevMsg["content"] = prevContent + "\n\n" + currContent
 					continue
 				}
+				if prevRole == "assistant" && role == "assistant" {
+					merged = append(merged, map[string]interface{}{
+						"role":    "user",
+						"content": "Continue.",
+					})
+					g.logger.Debug("zai: inserted user bridge between consecutive assistant messages")
+				}
 			}
 		}
 
@@ -337,7 +481,7 @@ func (g *NenyaGateway) sanitizeMessagesForZAI(payload map[string]interface{}) {
 	payload["messages"] = merged
 }
 
-func (g *NenyaGateway) transformRequestForUpstream(providerName, upstreamURL string, payload map[string]interface{}, model string) ([]byte, string, error) {
+func (g *NenyaGateway) transformRequestForUpstream(providerName, upstreamURL string, payload map[string]interface{}, model string, maxOutput int) ([]byte, string, error) {
 	origModel := payload["model"]
 
 	if model != "" {
@@ -413,11 +557,18 @@ func (g *NenyaGateway) transformRequestForUpstream(providerName, upstreamURL str
 		}
 	}
 
+	effectiveMaxOutput := 0
 	if entry, ok := ModelRegistry[finalModel]; ok && entry.MaxOutput > 0 {
+		effectiveMaxOutput = entry.MaxOutput
+	}
+	if maxOutput > 0 && (effectiveMaxOutput == 0 || maxOutput < effectiveMaxOutput) {
+		effectiveMaxOutput = maxOutput
+	}
+	if effectiveMaxOutput > 0 {
 		if _, hasMaxTokens := payload["max_tokens"]; !hasMaxTokens {
-			payload["max_tokens"] = entry.MaxOutput
-		} else if v, ok := payload["max_tokens"].(float64); ok && v > float64(entry.MaxOutput) {
-			payload["max_tokens"] = entry.MaxOutput
+			payload["max_tokens"] = effectiveMaxOutput
+		} else if v, ok := payload["max_tokens"].(float64); ok && v > float64(effectiveMaxOutput) {
+			payload["max_tokens"] = effectiveMaxOutput
 		}
 	}
 
