@@ -60,15 +60,25 @@
       "strategy": "fallback",
       "cooldown_seconds": 60,
       "models": [
-        { "provider": "gemini", "model": "gemini-3.1-flash-lite-preview", "max_context": 128000 },
-        { "provider": "deepseek", "model": "deepseek-reasoner", "max_context": 128000 }
+        "gemini-3.1-flash-lite-preview",
+        "gemini-2.5-flash",
+        "deepseek-reasoner"
       ]
     },
     "plan": {
       "strategy": "fallback",
       "cooldown_seconds": 60,
       "models": [
-        { "provider": "zai", "model": "glm-5-turbo", "max_context": 128000 }
+        "glm-5-turbo"
+      ]
+    },
+    "free-llm": {
+      "strategy": "fallback",
+      "cooldown_seconds": 60,
+      "models": [
+        "nemotron-3-super",
+        "qwen-3.6-plus",
+        "minimax-m2.5"
       ]
     }
   },
