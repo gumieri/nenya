@@ -23,13 +23,13 @@ func TestAgentModelsStringLookup(t *testing.T) {
 	}
 
 	tests := []struct {
-		idx              int
-		wantProvider     string
-		wantMaxContext   int
+		idx            int
+		wantProvider   string
+		wantMaxContext int
 	}{
 		{0, "gemini", 128000},
 		{1, "deepseek", 128000},
-		{2, "github", 128000},
+		{2, "github", 8000},
 	}
 	for _, tc := range tests {
 		m := agent.Models[tc.idx]

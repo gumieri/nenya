@@ -16,10 +16,12 @@ type ResponseTransformer interface {
 // GeminiTransformer fixes Gemini's OpenAI-compatible API response format.
 // Gemini streaming responses may omit the 'index' field inside each tool_calls
 // entry. This transformer adds the missing index to comply with the OpenAI spec.
-// Note: 'extra_content' (containing thought_signature) is preserved as-is per
-// Google's documentation — it is required for multi-turn function calling with
-// Gemini 3 models.
-type GeminiTransformer struct{}
+// When onExtraContent is set, tool_call entries containing 'extra_content'
+// (e.g. thought_signature for Gemini 3) are cached for re-injection on
+// subsequent requests.
+type GeminiTransformer struct {
+	onExtraContent func(toolCallID string, extraContent interface{})
+}
 
 func (t *GeminiTransformer) TransformSSEChunk(data []byte) ([]byte, error) {
 	if len(data) == 0 || !bytes.HasPrefix(bytes.TrimSpace(data), []byte("{")) {
@@ -39,6 +41,13 @@ func (t *GeminiTransformer) TransformSSEChunk(data []byte) ([]byte, error) {
 						if tcMap, ok := tc.(map[string]interface{}); ok {
 							if _, exists := tcMap["index"]; !exists {
 								tcMap["index"] = i
+							}
+							if t.onExtraContent != nil {
+								if tcID, _ := tcMap["id"].(string); tcID != "" {
+									if extra, hasExtra := tcMap["extra_content"]; hasExtra {
+										t.onExtraContent(tcID, extra)
+									}
+								}
 							}
 						}
 					}
@@ -61,14 +70,15 @@ type UsageCallback func(completionTokens, promptTokens, totalTokens int)
 // SSETransformingReader wraps an io.Reader and applies response transformations
 // to Server-Sent Events (SSE) stream lines.
 type SSETransformingReader struct {
-	src         io.Reader
-	scanner     *bufio.Scanner
-	transformer ResponseTransformer
-	onUsage     UsageCallback
-	buffer      []byte
-	pos         int
-	err         error
-	usageFired  bool
+	src          io.Reader
+	scanner      *bufio.Scanner
+	transformer  ResponseTransformer
+	onUsage      UsageCallback
+	streamFilter *StreamFilter
+	buffer       []byte
+	pos          int
+	err          error
+	usageFired   bool
 }
 
 // NewSSETransformingReader creates a new transforming reader for SSE streams.
@@ -86,6 +96,10 @@ func NewSSETransformingReader(src io.Reader, transformer ResponseTransformer) *S
 // SetOnUsage sets a callback invoked when the stream contains a usage field.
 func (r *SSETransformingReader) SetOnUsage(cb UsageCallback) {
 	r.onUsage = cb
+}
+
+func (r *SSETransformingReader) SetStreamFilter(sf *StreamFilter) {
+	r.streamFilter = sf
 }
 
 // Read implements io.Reader interface, transforming SSE lines as they're read.
@@ -117,7 +131,11 @@ func (r *SSETransformingReader) Read(p []byte) (int, error) {
 	line := r.scanner.Bytes()
 	transformed := r.transformLine(line)
 
-	// Ensure newline is preserved
+	if r.streamFilter != nil && r.streamFilter.IsBlocked() {
+		r.err = ErrStreamBlocked
+		return 0, r.err
+	}
+
 	if !bytes.HasSuffix(transformed, []byte("\n")) {
 		transformed = append(transformed, '\n')
 	}
@@ -139,20 +157,36 @@ func (r *SSETransformingReader) transformLine(line []byte) []byte {
 
 	// Handle SSE data lines: "data: {json}"
 	if bytes.HasPrefix(line, []byte("data: ")) {
-		data := bytes.TrimPrefix(line, []byte("data: "))
+		origData := bytes.TrimPrefix(line, []byte("data: "))
 
-		// Skip "[DONE]" and other non-JSON data messages
-		if len(data) == 0 || bytes.Equal(data, []byte("[DONE]")) {
+		if len(origData) == 0 || bytes.Equal(origData, []byte("[DONE]")) {
 			return line
 		}
 
-		// Extract usage stats before transformation
+		data := origData
+
+		if r.streamFilter != nil && !r.streamFilter.IsBlocked() {
+			content := extractDeltaContent(data)
+			if content != "" {
+				redacted, action, _ := r.streamFilter.FilterContent(content)
+				if action == ActionBlock {
+					return line
+				}
+				if action == ActionRedact && redacted != content {
+					data = replaceDeltaContent(data, redacted)
+				}
+			}
+		}
+
 		if r.onUsage != nil && !r.usageFired {
 			r.extractUsage(data)
 		}
 
 		if r.transformer == nil {
-			return line
+			if bytes.Equal(data, origData) {
+				return line
+			}
+			return append([]byte("data: "), data...)
 		}
 
 		transformed, err := r.transformer.TransformSSEChunk(data)
@@ -160,12 +194,14 @@ func (r *SSETransformingReader) transformLine(line []byte) []byte {
 			return line
 		}
 
-		// If transformer returned same data, no change needed
-		if bytes.Equal(transformed, data) {
+		if bytes.Equal(transformed, origData) && bytes.Equal(data, origData) {
 			return line
 		}
 
-		// Reconstruct SSE line with transformed data
+		if bytes.Equal(transformed, data) {
+			return append([]byte("data: "), transformed...)
+		}
+
 		return append([]byte("data: "), transformed...)
 	}
 
@@ -187,11 +223,13 @@ func (r *SSETransformingReader) transformLine(line []byte) []byte {
 	return line
 }
 
-var geminiTransformer ResponseTransformer = &GeminiTransformer{}
-
 func (g *NenyaGateway) getResponseTransformer(providerName string) ResponseTransformer {
 	if g.isGeminiProvider(providerName) {
-		return geminiTransformer
+		return &GeminiTransformer{
+			onExtraContent: func(toolCallID string, extraContent interface{}) {
+				g.thoughtSigCache.Store(toolCallID, extraContent)
+			},
+		}
 	}
 
 	return nil

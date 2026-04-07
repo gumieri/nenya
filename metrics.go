@@ -26,9 +26,10 @@ type Metrics struct {
 	windowApplied sync.Map
 	interceptions sync.Map
 
-	rlRejected sync.Map
-	cooldowns  sync.Map
-	exhausted  sync.Map
+	rlRejected    sync.Map
+	cooldowns     sync.Map
+	exhausted     sync.Map
+	streamBlocked sync.Map
 
 	gateway *NenyaGateway
 }
@@ -166,6 +167,13 @@ func (m *Metrics) RecordExhausted(agent string) {
 	e.value.Add(1)
 }
 
+func (m *Metrics) RecordStreamBlock(model, provider string) {
+	e := getOrCreateEntry(&m.streamBlocked, map[string]string{
+		"model": model, "provider": provider,
+	})
+	e.value.Add(1)
+}
+
 func (m *Metrics) WritePrometheus(w io.Writer) {
 	fprintln := func(format string, args ...interface{}) {
 		fmt.Fprintf(w, format+"\n", args...)
@@ -206,6 +214,8 @@ func (m *Metrics) WritePrometheus(w io.Writer) {
 		"Total agent model cooldowns activated.", &m.cooldowns)
 	m.writeCounterMap(w, "nenya_agent_targets_exhausted_total",
 		"Total times all agent targets were exhausted.", &m.exhausted)
+	m.writeCounterMap(w, "nenya_stream_blocked_total",
+		"Total upstream streams killed by execution policy.", &m.streamBlocked)
 
 	m.writeHistogramMap(w, "nenya_http_request_duration_seconds",
 		"HTTP request duration in seconds.", &m.httpDur)

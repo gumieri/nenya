@@ -167,6 +167,36 @@ func (g *NenyaGateway) sanitizeToolMessagesForGemini(payload map[string]interfac
 			continue
 		}
 		role, _ := msg["role"].(string)
+
+		if role == "assistant" {
+			toolCallsRaw, ok := msg["tool_calls"]
+			if !ok {
+				continue
+			}
+			toolCalls, ok := toolCallsRaw.([]interface{})
+			if !ok {
+				continue
+			}
+			for _, tcRaw := range toolCalls {
+				tc, ok := tcRaw.(map[string]interface{})
+				if !ok {
+					continue
+				}
+				if _, hasExtra := tc["extra_content"]; hasExtra {
+					continue
+				}
+				tcID, _ := tc["id"].(string)
+				if tcID == "" {
+					continue
+				}
+				if cached, found := g.thoughtSigCache.Load(tcID); found {
+					tc["extra_content"] = cached
+					g.logger.Debug("gemini: injected cached thought_signature", "tool_call_id", tcID)
+				}
+			}
+			continue
+		}
+
 		if role != "tool" {
 			continue
 		}
@@ -222,6 +252,91 @@ func (g *NenyaGateway) sanitizeToolMessagesForGemini(payload map[string]interfac
 	}
 }
 
+func (g *NenyaGateway) isZAIProvider(providerName string) bool {
+	if p, ok := g.providers[providerName]; ok {
+		return strings.HasPrefix(p.URL, "https://api.z.ai")
+	}
+	return false
+}
+
+func (g *NenyaGateway) sanitizeMessagesForZAI(payload map[string]interface{}) {
+	messagesRaw, ok := payload["messages"]
+	if !ok {
+		return
+	}
+	messages, ok := messagesRaw.([]interface{})
+	if !ok {
+		return
+	}
+
+	filtered := make([]interface{}, 0, len(messages))
+
+	for _, msgRaw := range messages {
+		msg, ok := msgRaw.(map[string]interface{})
+		if !ok {
+			continue
+		}
+
+		role, _ := msg["role"].(string)
+		content := extractContentText(msg)
+
+		if content == "" && role != "tool" && role != "assistant" {
+			continue
+		}
+
+		filtered = append(filtered, msgRaw)
+	}
+
+	if len(filtered) == 0 {
+		return
+	}
+
+	merged := make([]interface{}, 0, len(filtered))
+	for i, msgRaw := range filtered {
+		msg, ok := msgRaw.(map[string]interface{})
+		if !ok {
+			merged = append(merged, msgRaw)
+			continue
+		}
+		role, _ := msg["role"].(string)
+
+		if i > 0 {
+			prevMsg, ok := merged[len(merged)-1].(map[string]interface{})
+			if ok {
+				prevRole, _ := prevMsg["role"].(string)
+				if prevRole == role && role == "user" {
+					prevContent := extractContentText(prevMsg)
+					currContent := extractContentText(msg)
+					prevMsg["content"] = prevContent + "\n\n" + currContent
+					continue
+				}
+			}
+		}
+
+		merged = append(merged, msgRaw)
+	}
+
+	if len(merged) > 0 {
+		if firstMsg, ok := merged[0].(map[string]interface{}); ok {
+			if role, _ := firstMsg["role"].(string); role == "user" {
+				bridgeMsg := map[string]interface{}{
+					"role":    "system",
+					"content": "Continue the conversation.",
+				}
+				merged = append([]interface{}{bridgeMsg}, merged...)
+				g.logger.Debug("zai: prepended system bridge before leading user message")
+			}
+		}
+	}
+
+	if len(merged) != len(messages) {
+		g.logger.Debug("zai: sanitized message sequence",
+			"messages_before", len(messages), "messages_after", len(merged))
+	}
+
+	payload["messages"] = merged
+}
+
 func (g *NenyaGateway) transformRequestForUpstream(providerName, upstreamURL string, payload map[string]interface{}, model string) ([]byte, string, error) {
 	origModel := payload["model"]
 
@@ -252,6 +367,10 @@ func (g *NenyaGateway) transformRequestForUpstream(providerName, upstreamURL str
 			g.logger.Info("gemini model mapping", "from", modelName, "to", finalModel)
 		}
 		g.sanitizeToolMessagesForGemini(payload)
+	}
+
+	if g.isZAIProvider(providerName) {
+		g.sanitizeMessagesForZAI(payload)
 	}
 
 	// Inject agent system prompt if configured
