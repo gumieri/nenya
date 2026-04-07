@@ -19,8 +19,8 @@ func TestIsRetryable(t *testing.T) {
 	}{
 		{200, false},
 		{400, false},
-		{401, true},
-		{403, true},
+		{401, false},
+		{403, false},
 		{404, false},
 		{422, false},
 		{429, true},
