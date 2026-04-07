@@ -29,6 +29,10 @@ var ProviderRegistry = map[string]ProviderEntry{
 		RoutePrefixes: []string{"zai-", "glm-"},
 		AuthStyle:     "bearer",
 	},
+	"zai-coding-plan": {
+		URL:       "https://api.z.ai/api/coding/paas/v4/chat/completions",
+		AuthStyle: "bearer",
+	},
 	"groq": {
 		URL:           "https://api.groq.com/openai/v1/chat/completions",
 		RoutePrefixes: []string{"llama-", "llama3-", "mixtral-", "whisper-"},

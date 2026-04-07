@@ -91,6 +91,7 @@ type ServerConfig struct {
 	ListenAddr   string  `json:"listen_addr"`
 	MaxBodyBytes int64   `json:"max_body_bytes"`
 	TokenRatio   float64 `json:"token_ratio"`
+	UserAgent    string  `json:"user_agent"`
 }
 
 type GovernanceConfig struct {
@@ -293,6 +294,9 @@ func applyDefaults(cfg *Config) {
 	}
 	if cfg.Server.TokenRatio == 0 {
 		cfg.Server.TokenRatio = 4.0
+	}
+	if cfg.Server.UserAgent == "" {
+		cfg.Server.UserAgent = "nenya/1.0"
 	}
 	if !cfg.Governance.tpmSet && cfg.Governance.RatelimitMaxTPM == 0 {
 		cfg.Governance.RatelimitMaxTPM = 250000
