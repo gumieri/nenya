@@ -20,7 +20,7 @@ jobs:
       - uses: golangci/golangci-lint-action@v6
         with:
           version: latest
-          go-version-file: go.mod
+          install-mode: gobinary
 
   test:
     name: Test (Go ${{ matrix.go-version }})
