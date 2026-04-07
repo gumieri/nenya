@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/subtle"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -504,6 +505,10 @@ func (g *NenyaGateway) forwardToUpstream(
 			}
 		}
 
+		upstreamCtx, upstreamCancel := context.WithCancel(r.Context())
+		defer upstreamCancel()
+		req = req.WithContext(upstreamCtx)
+
 		resp, err := g.client.Do(req)
 		if err != nil {
 			g.logger.Warn("target network error",
@@ -536,6 +541,14 @@ func (g *NenyaGateway) forwardToUpstream(
 				g.agentMu.Lock()
 				g.modelCooldowns[target.coolKey] = time.Now().Add(cooldownDuration)
 				g.agentMu.Unlock()
+			}
+			if resp.StatusCode == http.StatusTooManyRequests {
+				delay := parseRetryDelay(resp.Header, errorBody)
+				if delay > 0 {
+					g.logger.Info("rate limited, backing off before retry",
+						"model", target.model, "delay_ms", delay.Milliseconds())
+					time.Sleep(delay)
+				}
 			}
 			continue
 		}
@@ -574,16 +587,35 @@ func (g *NenyaGateway) forwardToUpstream(
 			}
 		})
 
+		if g.config.SecurityFilter.OutputEnabled && (len(g.secretPatterns) > 0 || len(g.blockedPatterns) > 0) {
+			sf := NewStreamFilter(g.secretPatterns, g.blockedPatterns, g.config.SecurityFilter.RedactionLabel, g.config.SecurityFilter.OutputWindowChars)
+			transformingReader.SetStreamFilter(sf)
+			g.logger.Debug("stream filter active",
+				"secret_patterns", len(g.secretPatterns),
+				"block_patterns", len(g.blockedPatterns),
+				"window_size", g.config.SecurityFilter.OutputWindowChars)
+		}
+
+		var copyErr error
 		done := make(chan struct{})
 		go func() {
 			defer close(done)
-			if _, err := io.Copy(w, transformingReader); err != nil {
-				g.logger.Debug("stream copy ended", "err", err)
-			}
+			_, copyErr = io.Copy(w, transformingReader)
 		}()
 
 		select {
 		case <-done:
+			if errors.Is(copyErr, ErrStreamBlocked) {
+				upstreamCancel()
+				resp.Body.Close()
+				g.logger.Warn("stream blocked by execution policy, upstream killed",
+					"model", target.model, "provider", target.provider)
+				if g.metrics != nil {
+					g.metrics.RecordStreamBlock(target.model, target.provider)
+				}
+				g.writeBlockedSSE(w)
+				return
+			}
 		case <-r.Context().Done():
 			g.logger.Info("client disconnected, aborting upstream stream", "model", target.model)
 			resp.Body.Close()
@@ -613,6 +645,48 @@ func (g *NenyaGateway) buildUpstreamRequest(ctx context.Context, method, url str
 	req.Header.Set("Accept-Encoding", "identity")
 	req.Header.Set("User-Agent", g.config.Server.UserAgent)
 	return req, nil
+}
+
+const maxRetryBackoff = 5 * time.Second
+
+func parseRetryDelay(header http.Header, body []byte) time.Duration {
+	if v := header.Get("Retry-After"); v != "" {
+		if secs, err := time.ParseDuration(v + "s"); err == nil && secs > 0 {
+			if secs > maxRetryBackoff {
+				return maxRetryBackoff
+			}
+			return secs
+		}
+	}
+
+	if len(body) == 0 {
+		return 0
+	}
+
+	var envelope []struct {
+		Error struct {
+			Details []struct {
+				RetryDelay string `json:"retryDelay"`
+				Type       string `json:"@type"`
+			} `json:"details"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(body, &envelope); err != nil {
+		return 0
+	}
+	for _, item := range envelope {
+		for _, d := range item.Error.Details {
+			if d.RetryDelay != "" {
+				if dur, err := time.ParseDuration(d.RetryDelay); err == nil && dur > 0 {
+					if dur > maxRetryBackoff {
+						return maxRetryBackoff
+					}
+					return dur
+				}
+			}
+		}
+	}
+	return 0
 }
 
 func isRetryable(statusCode int) bool {
@@ -659,6 +733,32 @@ func (g *NenyaGateway) handleHealthz(w http.ResponseWriter) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	json.NewEncoder(w).Encode(resp)
+}
+
+func (g *NenyaGateway) writeBlockedSSE(w http.ResponseWriter) {
+	blockPayload := map[string]interface{}{
+		"id":      "blocked",
+		"object":  "chat.completion.chunk",
+		"choices": []map[string]interface{}{
+			{
+				"index": 0,
+				"delta": map[string]interface{}{
+					"content": "[Response blocked by execution policy]",
+				},
+				"finish_reason": "stop",
+			},
+		},
+	}
+	blockJSON, err := json.Marshal(blockPayload)
+	if err != nil {
+		g.logger.Error("failed to marshal blocked SSE payload", "err", err)
+		return
+	}
+	fmt.Fprintf(w, "data: %s\n\n", blockJSON)
+	fmt.Fprint(w, "data: [DONE]\n\n")
+	if flusher, ok := w.(http.Flusher); ok {
+		flusher.Flush()
+	}
 }
 
 func (g *NenyaGateway) checkSecurityFilterEngineHealth() bool {

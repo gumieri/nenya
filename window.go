@@ -188,7 +188,12 @@ func (g *NenyaGateway) callEngine(ctx context.Context, engine EngineConfig, syst
 		return "", fmt.Errorf("engine auth failed: %v", err)
 	}
 
-	resp, err := g.client.Do(req)
+	httpClient := g.client
+	if apiFormat == "ollama" {
+		httpClient = g.ollamaClient
+	}
+
+	resp, err := httpClient.Do(req)
 	if err != nil {
 		return "", fmt.Errorf("engine unreachable: %v", err)
 	}

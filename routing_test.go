@@ -746,7 +746,7 @@ func TestMaxTokensInjection(t *testing.T) {
 			name:         "Per-model MaxOutput injected (gpt-4o)",
 			config:       Config{Providers: builtInProviders()},
 			body:         `{"model": "gpt-4o", "messages": [{"role": "user", "content": "test"}]}`,
-			expectedBody: `{"messages":[{"content":"test","role":"user"}],"model":"gpt-4o","max_tokens":16384}`,
+			expectedBody: `{"messages":[{"content":"test","role":"user"}],"model":"gpt-4o","max_tokens":4096}`,
 		},
 		{
 			name:         "Per-model MaxOutput injected (deepseek-reasoner)",
@@ -789,7 +789,7 @@ func TestMaxTokensInjection(t *testing.T) {
 			if err := json.Unmarshal([]byte(tt.body), &payload); err != nil {
 				t.Fatalf("Failed to parse test body: %v", err)
 			}
-			
+
 			provider := "zai"
 			url := "https://api.z.ai/v1/chat/completions"
 			if strings.Contains(tt.body, "gemini") {

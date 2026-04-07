@@ -85,19 +85,19 @@ var ModelRegistry = map[string]ModelEntry{
 	"deepseek-chat":     {Provider: "deepseek", MaxContext: 128000, MaxOutput: 8192},
 
 	// Z.ai
-	"glm-5.1":         {Provider: "zai", MaxContext: 128000, MaxOutput: 4096},
-	"glm-5-turbo":     {Provider: "zai", MaxContext: 128000, MaxOutput: 4096},
-	"glm-5v-turbo":    {Provider: "zai", MaxContext: 128000, MaxOutput: 4096},
-	"glm-5":           {Provider: "zai", MaxContext: 128000, MaxOutput: 4096},
-	"glm-4.7":         {Provider: "zai", MaxContext: 128000, MaxOutput: 4096},
-	"glm-4.7-flash":   {Provider: "zai", MaxContext: 128000, MaxOutput: 4096},
-	"glm-4.7-flashx":  {Provider: "zai", MaxContext: 128000, MaxOutput: 4096},
-	"glm-4.6":         {Provider: "zai", MaxContext: 128000, MaxOutput: 4096},
-	"glm-4.6v":        {Provider: "zai", MaxContext: 128000, MaxOutput: 4096},
-	"glm-4.5":         {Provider: "zai", MaxContext: 128000, MaxOutput: 4096},
-	"glm-4.5-air":     {Provider: "zai", MaxContext: 128000, MaxOutput: 4096},
-	"glm-4.5-flash":   {Provider: "zai", MaxContext: 128000, MaxOutput: 4096},
-	"glm-4.5v":        {Provider: "zai", MaxContext: 128000, MaxOutput: 4096},
+	"glm-5.1":        {Provider: "zai", MaxContext: 128000, MaxOutput: 4096},
+	"glm-5-turbo":    {Provider: "zai", MaxContext: 128000, MaxOutput: 4096},
+	"glm-5v-turbo":   {Provider: "zai", MaxContext: 128000, MaxOutput: 4096},
+	"glm-5":          {Provider: "zai", MaxContext: 128000, MaxOutput: 4096},
+	"glm-4.7":        {Provider: "zai", MaxContext: 128000, MaxOutput: 4096},
+	"glm-4.7-flash":  {Provider: "zai", MaxContext: 128000, MaxOutput: 4096},
+	"glm-4.7-flashx": {Provider: "zai", MaxContext: 128000, MaxOutput: 4096},
+	"glm-4.6":        {Provider: "zai", MaxContext: 128000, MaxOutput: 4096},
+	"glm-4.6v":       {Provider: "zai", MaxContext: 128000, MaxOutput: 4096},
+	"glm-4.5":        {Provider: "zai", MaxContext: 128000, MaxOutput: 4096},
+	"glm-4.5-air":    {Provider: "zai", MaxContext: 128000, MaxOutput: 4096},
+	"glm-4.5-flash":  {Provider: "zai", MaxContext: 128000, MaxOutput: 4096},
+	"glm-4.5v":       {Provider: "zai", MaxContext: 128000, MaxOutput: 4096},
 
 	// NVIDIA Free
 	"nemotron-3-super": {Provider: "nvidia_free", MaxContext: 4000, MaxOutput: 1024},
@@ -119,8 +119,8 @@ var ModelRegistry = map[string]ModelEntry{
 	"llama-3.3-70b": {Provider: "cerebras", MaxContext: 8192, MaxOutput: 8192},
 
 	// GitHub Models
-	"gpt-4o":                 {Provider: "github", MaxContext: 128000, MaxOutput: 16384},
-	"phi-3.5-mini-instruct":  {Provider: "github", MaxContext: 128000, MaxOutput: 4096},
+	"gpt-4o":                {Provider: "github", MaxContext: 8000, MaxOutput: 4096},
+	"phi-3.5-mini-instruct": {Provider: "github", MaxContext: 128000, MaxOutput: 4096},
 
 	// Together
 	"qwen2.5-72b-turbo": {Provider: "together", MaxContext: 32768, MaxOutput: 4096},
