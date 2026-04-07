@@ -13,6 +13,10 @@ type ProviderEntry struct {
 	ApiFormat     string
 }
 
+func (e ProviderEntry) ToProviderConfig() ProviderConfig {
+	return ProviderConfig(e)
+}
+
 var ProviderRegistry = map[string]ProviderEntry{
 	"gemini": {
 		URL:           "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
