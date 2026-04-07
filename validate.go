@@ -92,7 +92,7 @@ func validateProvider(provider *Provider, logger *slog.Logger) error {
 	}
 
 	// Apply authentication based on auth style
-	if err := applyAuthHeader(req, provider); err != nil {
+	if err = applyAuthHeader(req, provider); err != nil {
 		return fmt.Errorf("failed to apply authentication: %v", err)
 	}
 
@@ -104,9 +104,6 @@ func validateProvider(provider *Provider, logger *slog.Logger) error {
 	defer resp.Body.Close()
 
 	if resp.StatusCode == http.StatusOK || resp.StatusCode == http.StatusUnauthorized {
-		// 200 OK means valid, 401 means key is invalid (but endpoint exists)
-		// We accept 401 because it means the endpoint is reachable and key format is wrong,
-		// which is still a configuration issue the user needs to fix
 		if resp.StatusCode == http.StatusUnauthorized {
 			return fmt.Errorf("API key rejected (HTTP 401)")
 		}
@@ -162,7 +159,7 @@ func validateWithMinimalRequest(provider *Provider, ctx context.Context, logger 
 	}
 	req.Header.Set("Content-Type", "application/json")
 
-	if err := applyAuthHeader(req, provider); err != nil {
+	if err = applyAuthHeader(req, provider); err != nil {
 		return fmt.Errorf("failed to apply authentication: %v", err)
 	}
 

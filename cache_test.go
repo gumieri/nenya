@@ -23,7 +23,7 @@ func TestThoughtSignatureCache_StoreAndLoad(t *testing.T) {
 		t.Errorf("expected abc, got %s", google["thought_signature"])
 	}
 
-	val, ok = cache.Load("tc-2")
+	_, ok = cache.Load("tc-2")
 	if !ok {
 		t.Fatal("expected tc-2 to be found")
 	}
@@ -596,7 +596,6 @@ func TestCallEngine_SelectsOllamaClient(t *testing.T) {
 
 	engine := EngineConfig{
 		Provider: "ollama",
-		Model:    "qwen2.5-coder:7b",
 	}
 
 	p, ok := gw.providers[engine.Provider]
@@ -637,7 +636,6 @@ func TestCallEngine_NonOllamaUsesDefaultClient(t *testing.T) {
 
 	engine := EngineConfig{
 		Provider: "ollama",
-		Model:    "qwen2.5-coder:7b",
 	}
 
 	p, ok := gw.providers[engine.Provider]

@@ -357,7 +357,7 @@ func TestProviderURL(t *testing.T) {
 	custom := "http://custom-host:9090/v1/chat/completions"
 	got := g.providerURL("gemini", custom)
 	if got != custom {
-		t.Errorf("URL override not honoured: got %q", got)
+		t.Errorf("URL override not honored: got %q", got)
 	}
 }
 

@@ -143,7 +143,7 @@ func (s *SecurityFilterConfig) UnmarshalJSON(data []byte) error {
 	}
 	if aux.Enabled == nil {
 		// field not present; default to true if patterns present
-		if s.Patterns != nil && len(s.Patterns) > 0 {
+		if len(s.Patterns) > 0 {
 			s.Enabled = true
 		}
 		s.enabledSet = false
@@ -209,12 +209,7 @@ type WindowConfig struct {
 func builtInProviders() map[string]ProviderConfig {
 	providers := make(map[string]ProviderConfig, len(ProviderRegistry))
 	for name, entry := range ProviderRegistry {
-		providers[name] = ProviderConfig{
-			URL:           entry.URL,
-			RoutePrefixes: entry.RoutePrefixes,
-			AuthStyle:     entry.AuthStyle,
-			ApiFormat:     entry.ApiFormat,
-		}
+		providers[name] = entry.ToProviderConfig()
 	}
 	return providers
 }
@@ -325,7 +320,7 @@ func applyDefaults(cfg *Config) {
 	if cfg.SecurityFilter.RedactionLabel == "" {
 		cfg.SecurityFilter.RedactionLabel = "[REDACTED]"
 	}
-	if cfg.Governance.BlockedExecutionPatterns == nil || len(cfg.Governance.BlockedExecutionPatterns) == 0 {
+	if len(cfg.Governance.BlockedExecutionPatterns) == 0 {
 		cfg.Governance.BlockedExecutionPatterns = []string{
 			`(?i)\brm\s+-[a-zA-Z]*[rR][a-zA-Z]*\s+.*(/|\*)`,
 			`(?i)\bchmod\s+(?:-R\s+)?777\b`,

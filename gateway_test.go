@@ -195,7 +195,9 @@ func TestModelsDeduplicatesAgentAndProviderModels(t *testing.T) {
 			ID string `json:"id"`
 		} `json:"data"`
 	}
-	json.Unmarshal(w.Body.Bytes(), &resp)
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("failed to unmarshal models response: %v", err)
+	}
 
 	count := 0
 	for _, m := range resp.Data {
@@ -217,7 +219,7 @@ func TestEmbeddingsEndpoint(t *testing.T) {
 			t.Errorf("missing API key in upstream request")
 		}
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]interface{}{
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
 			"object": "list",
 			"data":   []map[string]interface{}{},
 			"model":  "text-embedding-3-small",
@@ -252,7 +254,9 @@ func TestEmbeddingsEndpoint(t *testing.T) {
 	}
 
 	var resp map[string]interface{}
-	json.Unmarshal(w.Body.Bytes(), &resp)
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("failed to unmarshal embeddings response: %v", err)
+	}
 	if resp["object"] != "list" {
 		t.Errorf("expected object='list', got %v", resp["object"])
 	}

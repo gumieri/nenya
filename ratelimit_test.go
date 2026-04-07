@@ -118,7 +118,10 @@ func TestCheckRateLimitRefill(t *testing.T) {
 	g.checkRateLimit("http://example.com/api", 0)
 	g.checkRateLimit("http://example.com/api", 0)
 
-	limiter, _ := g.rateLimits["example.com"]
+	limiter, ok := g.rateLimits["example.com"]
+	if !ok {
+		t.Fatal("expected rate limiter for example.com")
+	}
 	limiter.mu.Lock()
 	limiter.lastRefill = time.Now().Add(-60 * time.Second)
 	limiter.mu.Unlock()

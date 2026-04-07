@@ -340,7 +340,9 @@ data: [DONE]
 	})
 
 	var output bytes.Buffer
-	io.Copy(&output, reader)
+	if _, err := io.Copy(&output, reader); err != nil {
+		t.Fatalf("io.Copy failed: %v", err)
+	}
 
 	if fired {
 		t.Error("OnUsage should not fire when no usage field is present")

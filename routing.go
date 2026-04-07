@@ -269,7 +269,7 @@ func (g *NenyaGateway) sanitizeToolMessagesForGemini(payload map[string]interfac
 		role, _ := msg["role"].(string)
 
 		if role == "assistant" {
-				toolCallsRaw, hasTC := msg["tool_calls"]
+			toolCallsRaw, hasTC := msg["tool_calls"]
 			if hasTC {
 				toolCalls, ok := toolCallsRaw.([]interface{})
 				if ok {

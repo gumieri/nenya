@@ -127,15 +127,18 @@ func TestCheckSecurityFilterEngineHealth(t *testing.T) {
 func TestHandleChatCompletionsTier1(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var body map[string]interface{}
-		json.NewDecoder(r.Body).Decode(&body)
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Errorf("failed to decode request body: %v", err)
+			return
+		}
 
 		msgs := body["messages"].([]interface{})
 		lastMsg := msgs[len(msgs)-1].(map[string]interface{})
 		content := lastMsg["content"].(string)
 
 		w.Header().Set("Content-Type", "text/event-stream")
-		w.Write([]byte("data: " + `{"choices":[{"delta":{"content":"response for ` + content + `"}}]}` + "\n\n"))
-		w.Write([]byte("data: [DONE]\n\n"))
+		_, _ = w.Write([]byte("data: " + `{"choices":[{"delta":{"content":"response for ` + content + `"}}]}` + "\n\n"))
+		_, _ = w.Write([]byte("data: [DONE]\n\n"))
 	}))
 	defer upstream.Close()
 
@@ -178,8 +181,8 @@ func TestForwardToUpstreamRetryable(t *testing.T) {
 			return
 		}
 		w.Header().Set("Content-Type", "text/event-stream")
-		w.Write([]byte("data: " + `{"choices":[{"delta":{"content":"ok"}}]}` + "\n\n"))
-		w.Write([]byte("data: [DONE]\n\n"))
+		_, _ = w.Write([]byte("data: " + `{"choices":[{"delta":{"content":"ok"}}]}` + "\n\n"))
+		_, _ = w.Write([]byte("data: [DONE]\n\n"))
 	}))
 	defer upstream.Close()
 
@@ -227,7 +230,7 @@ func TestForwardToUpstreamRetryable(t *testing.T) {
 func TestForwardToUpstreamNonRetryable(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusBadRequest)
-		w.Write([]byte(`{"error":"bad request"}`))
+		_, _ = w.Write([]byte(`{"error":"bad request"}`))
 	}))
 	defer upstream.Close()
 
@@ -262,7 +265,7 @@ func TestForwardToUpstreamNonRetryable(t *testing.T) {
 func TestHandleEmbeddingsUpstreamError(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)
-		w.Write([]byte(`{"error":"upstream fail"}`))
+		_, _ = w.Write([]byte(`{"error":"upstream fail"}`))
 	}))
 	defer upstream.Close()
 
@@ -298,7 +301,7 @@ func TestCallOllama(t *testing.T) {
 	t.Run("successful response", func(t *testing.T) {
 		ollama := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(map[string]interface{}{
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
 				"response": "hello summary",
 			})
 		}))
@@ -324,7 +327,7 @@ func TestCallOllama(t *testing.T) {
 	t.Run("non-200 status", func(t *testing.T) {
 		ollama := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusInternalServerError)
-			w.Write([]byte("internal error"))
+			_, _ = w.Write([]byte("internal error"))
 		}))
 		defer ollama.Close()
 
@@ -345,7 +348,7 @@ func TestCallOllama(t *testing.T) {
 	t.Run("malformed JSON response", func(t *testing.T) {
 		ollama := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Content-Type", "application/json")
-			w.Write([]byte(`not json`))
+			_, _ = w.Write([]byte(`not json`))
 		}))
 		defer ollama.Close()
 
@@ -366,7 +369,7 @@ func TestCallOllama(t *testing.T) {
 	t.Run("missing response field", func(t *testing.T) {
 		ollama := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Content-Type", "application/json")
-			w.Write([]byte(`{"other":"data"}`))
+			_, _ = w.Write([]byte(`{"other":"data"}`))
 		}))
 		defer ollama.Close()
 
@@ -590,7 +593,7 @@ func TestHandleEmbeddingsSuccessful(t *testing.T) {
 			t.Errorf("expected /v1/embeddings, got %s", r.URL.Path)
 		}
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]interface{}{
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
 			"object": "list",
 			"data":   []map[string]interface{}{{"object": "embedding", "embedding": []float64{0.1, 0.2}}},
 			"model":  "embed-test",
@@ -691,7 +694,10 @@ func TestHandleEmbeddingsInvalidJSON(t *testing.T) {
 func TestHandleChatCompletionsPrefixCachePipeline(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var body map[string]interface{}
-		json.NewDecoder(r.Body).Decode(&body)
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Errorf("failed to decode prefix cache request: %v", err)
+			return
+		}
 		msgs := body["messages"].([]interface{})
 		firstRole := msgs[0].(map[string]interface{})["role"].(string)
 		lastRole := msgs[len(msgs)-1].(map[string]interface{})["role"].(string)
@@ -704,8 +710,8 @@ func TestHandleChatCompletionsPrefixCachePipeline(t *testing.T) {
 		}
 
 		w.Header().Set("Content-Type", "text/event-stream")
-		w.Write([]byte("data: " + `{"choices":[{"delta":{"content":"ok"}}]}` + "\n\n"))
-		w.Write([]byte("data: [DONE]\n\n"))
+		_, _ = w.Write([]byte("data: " + `{"choices":[{"delta":{"content":"ok"}}]}` + "\n\n"))
+		_, _ = w.Write([]byte("data: [DONE]\n\n"))
 	}))
 	defer upstream.Close()
 
@@ -743,11 +749,14 @@ func TestHandleChatCompletionsPrefixCachePipeline(t *testing.T) {
 func TestHandleChatCompletionsWindowCompaction(t *testing.T) {
 	ollama := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var body map[string]interface{}
-		json.NewDecoder(r.Body).Decode(&body)
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Errorf("failed to decode ollama request: %v", err)
+			return
+		}
 		prompt, _ := body["prompt"].(string)
 
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]interface{}{
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
 			"response": "Summarized: " + prompt[:min(50, len(prompt))],
 		})
 	}))
@@ -755,7 +764,10 @@ func TestHandleChatCompletionsWindowCompaction(t *testing.T) {
 
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var body map[string]interface{}
-		json.NewDecoder(r.Body).Decode(&body)
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Errorf("failed to decode window compaction request: %v", err)
+			return
+		}
 		msgs := body["messages"].([]interface{})
 		firstRole := msgs[0].(map[string]interface{})["role"].(string)
 		firstContent := msgs[0].(map[string]interface{})["content"].(string)
@@ -768,8 +780,8 @@ func TestHandleChatCompletionsWindowCompaction(t *testing.T) {
 		}
 
 		w.Header().Set("Content-Type", "text/event-stream")
-		w.Write([]byte("data: " + `{"choices":[{"delta":{"content":"ok"}}]}` + "\n\n"))
-		w.Write([]byte("data: [DONE]\n\n"))
+		_, _ = w.Write([]byte("data: " + `{"choices":[{"delta":{"content":"ok"}}]}` + "\n\n"))
+		_, _ = w.Write([]byte("data: [DONE]\n\n"))
 	}))
 	defer upstream.Close()
 
@@ -811,7 +823,10 @@ func TestHandleChatCompletionsWindowCompaction(t *testing.T) {
 func TestSummarizeWithOllamaError(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var body map[string]interface{}
-		json.NewDecoder(r.Body).Decode(&body)
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Errorf("failed to decode summarize request: %v", err)
+			return
+		}
 		msgs := body["messages"].([]interface{})
 		lastContent := msgs[len(msgs)-1].(map[string]interface{})["content"].(string)
 
@@ -820,8 +835,8 @@ func TestSummarizeWithOllamaError(t *testing.T) {
 		}
 
 		w.Header().Set("Content-Type", "text/event-stream")
-		w.Write([]byte("data: " + `{"choices":[{"delta":{"content":"ok"}}]}` + "\n\n"))
-		w.Write([]byte("data: [DONE]\n\n"))
+		_, _ = w.Write([]byte("data: " + `{"choices":[{"delta":{"content":"ok"}}]}` + "\n\n"))
+		_, _ = w.Write([]byte("data: [DONE]\n\n"))
 	}))
 	defer upstream.Close()
 
@@ -893,10 +908,10 @@ func TestAuthenticateRequest(t *testing.T) {
 func TestHandleChatCompletionsWithUsage(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")
-		w.Write([]byte(`data: {"choices":[{"delta":{"content":"hello"}}]}` + "\n"))
-		w.Write([]byte(`data: {"choices":[{}]}` + "\n"))
-		w.Write([]byte(`data: {"usage":{"completion_tokens":10,"prompt_tokens":5,"total_tokens":15}}` + "\n"))
-		w.Write([]byte("data: [DONE]\n\n"))
+		_, _ = w.Write([]byte(`data: {"choices":[{"delta":{"content":"hello"}}]}` + "\n"))
+		_, _ = w.Write([]byte(`data: {"choices":[{}]}` + "\n"))
+		_, _ = w.Write([]byte(`data: {"usage":{"completion_tokens":10,"prompt_tokens":5,"total_tokens":15}}` + "\n"))
+		_, _ = w.Write([]byte("data: [DONE]\n\n"))
 	}))
 	defer upstream.Close()
 
@@ -970,8 +985,8 @@ func TestForwardToUpstreamRateLimitSkip(t *testing.T) {
 
 	upstream2 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")
-		w.Write([]byte("data: " + `{"choices":[{"delta":{"content":"ok"}}]}` + "\n\n"))
-		w.Write([]byte("data: [DONE]\n\n"))
+		_, _ = w.Write([]byte("data: " + `{"choices":[{"delta":{"content":"ok"}}]}` + "\n\n"))
+		_, _ = w.Write([]byte("data: [DONE]\n\n"))
 	}))
 	defer upstream2.Close()
 
@@ -1074,8 +1089,8 @@ func TestHandleChatCompletionsNoProviderNoDefault(t *testing.T) {
 func TestHandleChatCompletionsMessagesNotArray(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")
-		w.Write([]byte("data: " + `{"choices":[{"delta":{"content":"ok"}}]}` + "\n\n"))
-		w.Write([]byte("data: [DONE]\n\n"))
+		_, _ = w.Write([]byte("data: " + `{"choices":[{"delta":{"content":"ok"}}]}` + "\n\n"))
+		_, _ = w.Write([]byte("data: [DONE]\n\n"))
 	}))
 	defer upstream.Close()
 
@@ -1173,7 +1188,10 @@ func TestServeHTTPPanicRecovery(t *testing.T) {
 func TestHandleChatCompletionsLastMessageNoTextContent(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var body map[string]interface{}
-		json.NewDecoder(r.Body).Decode(&body)
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Errorf("failed to decode last message no text content request: %v", err)
+			return
+		}
 		msgs := body["messages"].([]interface{})
 		lastMsg := msgs[len(msgs)-1].(map[string]interface{})
 		content := lastMsg["content"]
@@ -1182,8 +1200,8 @@ func TestHandleChatCompletionsLastMessageNoTextContent(t *testing.T) {
 		}
 
 		w.Header().Set("Content-Type", "text/event-stream")
-		w.Write([]byte("data: " + `{"choices":[{"delta":{"content":"ok"}}]}` + "\n\n"))
-		w.Write([]byte("data: [DONE]\n\n"))
+		_, _ = w.Write([]byte("data: " + `{"choices":[{"delta":{"content":"ok"}}]}` + "\n\n"))
+		_, _ = w.Write([]byte("data: [DONE]\n\n"))
 	}))
 	defer upstream.Close()
 
@@ -1262,8 +1280,8 @@ func TestDetermineUpstreamNoProviders(t *testing.T) {
 func TestHandleChatCompletionsWithEmptyMessages(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")
-		w.Write([]byte("data: " + `{"choices":[{"delta":{"content":"ok"}}]}` + "\n\n"))
-		w.Write([]byte("data: [DONE]\n\n"))
+		_, _ = w.Write([]byte("data: " + `{"choices":[{"delta":{"content":"ok"}}]}` + "\n\n"))
+		_, _ = w.Write([]byte("data: [DONE]\n\n"))
 	}))
 	defer upstream.Close()
 
