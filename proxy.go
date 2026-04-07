@@ -41,28 +41,31 @@ func (g *NenyaGateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	switch {
 	case r.URL.Path == "/healthz":
-		g.handleHealthz(w)
+		g.observeHTTP(g.handleHealthz)(w, r)
 		return
 	case r.URL.Path == "/statsz":
-		g.handleStats(w)
+		g.observeHTTP(g.handleStats)(w, r)
+		return
+	case r.URL.Path == "/metrics":
+		g.observeHTTPFunc(g.handleMetrics)(w, r)
 		return
 	case r.URL.Path == "/v1/models" && r.Method == http.MethodGet:
 		if !g.authenticateRequest(r, w) {
 			return
 		}
-		g.handleModels(w)
+		g.observeHTTP(g.handleModels)(w, r)
 		return
 	case r.URL.Path == "/v1/chat/completions" && r.Method == http.MethodPost:
 		if !g.authenticateRequest(r, w) {
 			return
 		}
-		g.handleChatCompletions(w, r)
+		g.observeHTTPFunc(g.handleChatCompletions)(w, r)
 		return
 	case r.URL.Path == "/v1/embeddings" && r.Method == http.MethodPost:
 		if !g.authenticateRequest(r, w) {
 			return
 		}
-		g.handleEmbeddings(w, r)
+		g.observeHTTPFunc(g.handleEmbeddings)(w, r)
 		return
 	default:
 		http.Error(w, "Not Found", http.StatusNotFound)
@@ -232,8 +235,10 @@ func (g *NenyaGateway) handleChatCompletions(w http.ResponseWriter, r *http.Requ
 
 	var targets []upstreamTarget
 	var cooldownDuration time.Duration
+	var agentName string
 
 	if agent, ok := g.config.Agents[modelName]; ok {
+		agentName = modelName
 		secs := agent.CooldownSeconds
 		if secs == 0 {
 			secs = defaultAgentCooldownSec
@@ -286,7 +291,7 @@ func (g *NenyaGateway) handleChatCompletions(w http.ResponseWriter, r *http.Requ
 		}
 	}
 
-	g.forwardToUpstream(w, r, targets, payload, cooldownDuration, tokenCount)
+	g.forwardToUpstream(w, r, targets, payload, cooldownDuration, tokenCount, agentName)
 }
 
 func (g *NenyaGateway) applyContentPipeline(ctx context.Context, payload map[string]interface{}, bodyBytes []byte, tokenCount int, windowMaxCtx int) ([]byte, error) {
@@ -313,6 +318,9 @@ func (g *NenyaGateway) applyContentPipeline(ctx context.Context, payload map[str
 		}
 	}
 	if anyRedacted {
+		if g.metrics != nil {
+			g.metrics.RecordRedaction()
+		}
 		newBody, err := json.Marshal(payload)
 		if err != nil {
 			return nil, fmt.Errorf("failed to marshal redacted payload: %w", err)
@@ -322,6 +330,9 @@ func (g *NenyaGateway) applyContentPipeline(ctx context.Context, payload map[str
 
 	messages = payload["messages"].([]interface{})
 	if g.applyCompaction(messages) {
+		if g.metrics != nil {
+			g.metrics.RecordCompaction()
+		}
 		newBody, err := json.Marshal(payload)
 		if err != nil {
 			return nil, fmt.Errorf("failed to marshal compacted payload: %w", err)
@@ -334,6 +345,9 @@ func (g *NenyaGateway) applyContentPipeline(ctx context.Context, payload map[str
 		g.logger.Warn("window compaction failed, proceeding without it", "err", err)
 		_ = windowed
 	} else if windowed {
+		if g.metrics != nil {
+			g.metrics.RecordWindow(g.config.Window.Mode)
+		}
 		newBody, err := json.Marshal(payload)
 		if err != nil {
 			return nil, fmt.Errorf("failed to marshal window-compacted payload: %w", err)
@@ -367,6 +381,9 @@ func (g *NenyaGateway) applyContentPipeline(ctx context.Context, payload map[str
 	} else if contentRunes <= hardLimit {
 		g.logger.Warn("payload exceeds soft limit, sending to Ollama",
 			"runes", contentRunes)
+		if g.metrics != nil {
+			g.metrics.RecordInterception("soft_limit")
+		}
 		summarized, err := g.summarizeWithOllama(ctx, textForInterception)
 		if err != nil {
 			g.logger.Error("Ollama summarization failed, proceeding with original", "err", err)
@@ -377,6 +394,9 @@ func (g *NenyaGateway) applyContentPipeline(ctx context.Context, payload map[str
 	} else {
 		g.logger.Warn("payload exceeds hard limit, truncating before Ollama",
 			"runes", contentRunes, "hard_limit", hardLimit)
+		if g.metrics != nil {
+			g.metrics.RecordInterception("hard_limit")
+		}
 		truncated := g.truncateMiddleOut(textForInterception, hardLimit)
 		summarized, err := g.summarizeWithOllama(ctx, truncated)
 		if err != nil {
@@ -431,11 +451,19 @@ func (g *NenyaGateway) forwardToUpstream(
 	payload map[string]interface{},
 	cooldownDuration time.Duration,
 	tokenCount int,
+	agentName string,
 ) {
 	for i, target := range targets {
 		g.stats.RecordRequest(target.model, tokenCount)
+		if g.metrics != nil {
+			g.metrics.RecordTokens("input", target.model, agentName, target.provider, tokenCount)
+			g.metrics.RecordUpstreamRequest(target.model, agentName, target.provider)
+		}
 
 		if !g.checkRateLimit(target.url, tokenCount) {
+			if g.metrics != nil {
+				g.metrics.RecordRateLimitRejected(extractHost(target.url))
+			}
 			g.logger.Warn("target skipped: rate limit exceeded",
 				"target", i+1, "total", len(targets), "model", target.model)
 			continue
@@ -488,6 +516,9 @@ func (g *NenyaGateway) forwardToUpstream(
 
 		if isRetryable(resp.StatusCode) {
 			g.stats.RecordError(target.model)
+			if g.metrics != nil {
+				g.metrics.RecordUpstreamError(target.model, agentName, target.provider, resp.StatusCode)
+			}
 			errorBody, _ := io.ReadAll(io.LimitReader(resp.Body, 8*1024))
 			resp.Body.Close()
 			g.logger.Warn("activating cooldown, trying next target",
@@ -496,6 +527,9 @@ func (g *NenyaGateway) forwardToUpstream(
 				g.logger.Debug("error body", "body", string(errorBody))
 			}
 			if target.coolKey != "" && cooldownDuration > 0 {
+				if g.metrics != nil {
+					g.metrics.RecordCooldown(agentName, target.provider, target.model)
+				}
 				g.agentMu.Lock()
 				g.modelCooldowns[target.coolKey] = time.Now().Add(cooldownDuration)
 				g.agentMu.Unlock()
@@ -505,6 +539,9 @@ func (g *NenyaGateway) forwardToUpstream(
 
 		if resp.StatusCode >= 400 {
 			g.stats.RecordError(target.model)
+			if g.metrics != nil {
+				g.metrics.RecordUpstreamError(target.model, agentName, target.provider, resp.StatusCode)
+			}
 			errorBody, _ := io.ReadAll(io.LimitReader(resp.Body, 8*1024))
 			resp.Body.Close()
 			if len(errorBody) > 0 {
@@ -529,6 +566,9 @@ func (g *NenyaGateway) forwardToUpstream(
 		transformingReader := NewSSETransformingReader(resp.Body, transformer)
 		transformingReader.SetOnUsage(func(completion, prompt, total int) {
 			g.stats.RecordOutput(target.model, completion)
+			if g.metrics != nil {
+				g.metrics.RecordTokens("output", target.model, agentName, target.provider, completion)
+			}
 		})
 
 		done := make(chan struct{})
@@ -550,6 +590,9 @@ func (g *NenyaGateway) forwardToUpstream(
 	}
 
 	g.logger.Error("all upstream targets exhausted", "total", len(targets))
+	if g.metrics != nil && agentName != "" {
+		g.metrics.RecordExhausted(agentName)
+	}
 	http.Error(w, "All upstream targets exhausted", http.StatusServiceUnavailable)
 }
 
