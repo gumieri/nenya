@@ -521,10 +521,13 @@ func (g *NenyaGateway) forwardToUpstream(
 			}
 			errorBody, _ := io.ReadAll(io.LimitReader(resp.Body, 8*1024))
 			resp.Body.Close()
-			g.logger.Warn("activating cooldown, trying next target",
-				"target", i+1, "total", len(targets), "model", target.model, "status", resp.StatusCode)
-			if g.logger.Enabled(r.Context(), slog.LevelDebug) && len(errorBody) > 0 {
-				g.logger.Debug("error body", "body", string(errorBody))
+			if len(errorBody) > 0 {
+				g.logger.Warn("upstream retryable error",
+					"target", i+1, "total", len(targets), "model", target.model,
+					"status", resp.StatusCode, "body", string(errorBody))
+			} else {
+				g.logger.Warn("activating cooldown, trying next target",
+					"target", i+1, "total", len(targets), "model", target.model, "status", resp.StatusCode)
 			}
 			if target.coolKey != "" && cooldownDuration > 0 {
 				if g.metrics != nil {
@@ -608,6 +611,7 @@ func (g *NenyaGateway) buildUpstreamRequest(ctx context.Context, method, url str
 	}
 	copyHeaders(headers, req.Header)
 	req.Header.Set("Accept-Encoding", "identity")
+	req.Header.Set("User-Agent", g.config.Server.UserAgent)
 	return req, nil
 }
 
