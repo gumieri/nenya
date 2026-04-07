@@ -146,6 +146,82 @@ func (g *NenyaGateway) isGeminiProvider(providerName string) bool {
 	return false
 }
 
+func (g *NenyaGateway) sanitizeToolMessagesForGemini(payload map[string]interface{}) {
+	messagesRaw, ok := payload["messages"]
+	if !ok {
+		return
+	}
+	messages, ok := messagesRaw.([]interface{})
+	if !ok {
+		return
+	}
+
+	type toolCallEntry struct {
+		id   string
+		name string
+	}
+
+	for i, msgRaw := range messages {
+		msg, ok := msgRaw.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		role, _ := msg["role"].(string)
+		if role != "tool" {
+			continue
+		}
+
+		toolCallID, _ := msg["tool_call_id"].(string)
+		if toolCallID == "" {
+			continue
+		}
+
+		if _, hasName := msg["name"]; hasName {
+			continue
+		}
+
+		var name string
+		for j := i - 1; j >= 0; j-- {
+			prevMsg, ok := messages[j].(map[string]interface{})
+			if !ok {
+				continue
+			}
+			prevRole, _ := prevMsg["role"].(string)
+			if prevRole != "assistant" {
+				continue
+			}
+			toolCallsRaw, ok := prevMsg["tool_calls"]
+			if !ok {
+				continue
+			}
+			toolCalls, ok := toolCallsRaw.([]interface{})
+			if !ok {
+				continue
+			}
+			for _, tcRaw := range toolCalls {
+				tc, ok := tcRaw.(map[string]interface{})
+				if !ok {
+					continue
+				}
+				if id, _ := tc["id"].(string); id == toolCallID {
+					if fn, ok := tc["function"].(map[string]interface{}); ok {
+						name, _ = fn["name"].(string)
+					}
+					break
+				}
+			}
+			if name != "" {
+				break
+			}
+		}
+
+		if name != "" {
+			msg["name"] = name
+			g.logger.Debug("gemini: injected function name on tool message", "tool_call_id", toolCallID, "name", name)
+		}
+	}
+}
+
 func (g *NenyaGateway) transformRequestForUpstream(providerName, upstreamURL string, payload map[string]interface{}, model string) ([]byte, string, error) {
 	origModel := payload["model"]
 
@@ -175,6 +251,7 @@ func (g *NenyaGateway) transformRequestForUpstream(providerName, upstreamURL str
 		if finalModel != modelName {
 			g.logger.Info("gemini model mapping", "from", modelName, "to", finalModel)
 		}
+		g.sanitizeToolMessagesForGemini(payload)
 	}
 
 	// Inject agent system prompt if configured
@@ -217,8 +294,10 @@ func (g *NenyaGateway) transformRequestForUpstream(providerName, upstreamURL str
 		}
 	}
 
-	if _, hasMaxTokens := payload["max_tokens"]; !hasMaxTokens {
-		if entry, ok := ModelRegistry[finalModel]; ok && entry.MaxOutput > 0 {
+	if entry, ok := ModelRegistry[finalModel]; ok && entry.MaxOutput > 0 {
+		if _, hasMaxTokens := payload["max_tokens"]; !hasMaxTokens {
+			payload["max_tokens"] = entry.MaxOutput
+		} else if v, ok := payload["max_tokens"].(float64); ok && v > float64(entry.MaxOutput) {
 			payload["max_tokens"] = entry.MaxOutput
 		}
 	}
