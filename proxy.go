@@ -410,7 +410,7 @@ func (g *NenyaGateway) summarizeWithOllama(ctx context.Context, heavyText string
 	ctx, cancel := context.WithTimeout(ctx, time.Duration(engine.TimeoutSeconds)*time.Second)
 	defer cancel()
 
-	defaultPrompt := "You are a data privacy filter. Summarize the following log/code error in 5 lines. REMOVE any IP addresses, AWS keys (AKIA...), or passwords. Keep only the technical core of the error."
+	defaultPrompt := "You are a data privacy filter. Review the following text and remove or replace any IP addresses, AWS keys (AKIA...), passwords, tokens, or credentials with [REDACTED]. Preserve the original structure, detail level, and all non-sensitive content exactly as provided. Do NOT summarize or shorten the text."
 	systemPrompt, err := loadPromptFile(engine.SystemPromptFile, engine.SystemPrompt, defaultPrompt)
 	if err != nil {
 		g.logger.Warn("failed to load privacy filter prompt, using default", "err", err)
