@@ -737,33 +737,40 @@ func TestMaxTokensInjection(t *testing.T) {
 		expectError  bool
 	}{
 		{
-			name:         "Default max_tokens injected when missing",
+			name:         "Per-model MaxOutput injected when missing (glm-5-turbo)",
 			config:       Config{Providers: builtInProviders()},
-			body:         `{"model": "glm-5", "messages": [{"role": "user", "content": "test"}]}`,
-			expectedBody: `{"messages":[{"content":"test","role":"user"}],"model":"glm-5","max_tokens":8192}`,
+			body:         `{"model": "glm-5-turbo", "messages": [{"role": "user", "content": "test"}]}`,
+			expectedBody: `{"messages":[{"content":"test","role":"user"}],"model":"glm-5-turbo","max_tokens":4096}`,
 		},
 		{
-			name: "Custom max_tokens from config injected when missing",
-			config: Config{
-				Providers: builtInProviders(),
-				Governance: GovernanceConfig{
-					MaxTokens: 16000,
-				},
-			},
-			body:         `{"model": "glm-5", "messages": [{"role": "user", "content": "test"}]}`,
-			expectedBody: `{"messages":[{"content":"test","role":"user"}],"model":"glm-5","max_tokens":16000}`,
+			name:         "Per-model MaxOutput injected (gpt-4o)",
+			config:       Config{Providers: builtInProviders()},
+			body:         `{"model": "gpt-4o", "messages": [{"role": "user", "content": "test"}]}`,
+			expectedBody: `{"messages":[{"content":"test","role":"user"}],"model":"gpt-4o","max_tokens":16384}`,
+		},
+		{
+			name:         "Per-model MaxOutput injected (deepseek-reasoner)",
+			config:       Config{Providers: builtInProviders()},
+			body:         `{"model": "deepseek-reasoner", "messages": [{"role": "user", "content": "test"}]}`,
+			expectedBody: `{"messages":[{"content":"test","role":"user"}],"model":"deepseek-reasoner","max_tokens":8192}`,
 		},
 		{
 			name:         "Existing max_tokens preserved",
 			config:       Config{Providers: builtInProviders()},
-			body:         `{"model": "glm-5", "messages": [{"role": "user", "content": "test"}], "max_tokens": 500}`,
-			expectedBody: `{"messages":[{"content":"test","role":"user"}],"model":"glm-5","max_tokens":500}`,
+			body:         `{"model": "glm-5-turbo", "messages": [{"role": "user", "content": "test"}], "max_tokens": 500}`,
+			expectedBody: `{"messages":[{"content":"test","role":"user"}],"model":"glm-5-turbo","max_tokens":500}`,
 		},
 		{
 			name:         "Max_tokens zero preserved",
 			config:       Config{Providers: builtInProviders()},
-			body:         `{"model": "glm-5", "messages": [{"role": "user", "content": "test"}], "max_tokens": 0}`,
-			expectedBody: `{"messages":[{"content":"test","role":"user"}],"model":"glm-5","max_tokens":0}`,
+			body:         `{"model": "glm-5-turbo", "messages": [{"role": "user", "content": "test"}], "max_tokens": 0}`,
+			expectedBody: `{"messages":[{"content":"test","role":"user"}],"model":"glm-5-turbo","max_tokens":0}`,
+		},
+		{
+			name:         "No injection for unknown model",
+			config:       Config{Providers: builtInProviders()},
+			body:         `{"model": "unknown-model", "messages": [{"role": "user", "content": "test"}]}`,
+			expectedBody: `{"messages":[{"content":"test","role":"user"}],"model":"unknown-model"}`,
 		},
 		{
 			name:         "Works with gemini model mapping",

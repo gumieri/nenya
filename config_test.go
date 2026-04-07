@@ -117,16 +117,11 @@ func TestApplyDefaultsGovernance(t *testing.T) {
 	if cfg.Governance.KeepLastPercent != 25.0 {
 		t.Errorf("KeepLastPercent: got %f", cfg.Governance.KeepLastPercent)
 	}
-	// Check MaxTokens default
-	if cfg.Governance.MaxTokens != 8192 {
-		t.Errorf("MaxTokens: got %d, want %d", cfg.Governance.MaxTokens, 8192)
-	}
 
 	cfg2 := Config{
 		Governance: GovernanceConfig{
 			ContextSoftLimit:   8000,
 			ContextHardLimit:   48000,
-			MaxTokens:          16000,
 			TruncationStrategy: "head-tail",
 			KeepFirstPercent:   30.0,
 			KeepLastPercent:    10.0,
@@ -138,9 +133,6 @@ func TestApplyDefaultsGovernance(t *testing.T) {
 	}
 	if cfg2.Governance.ContextHardLimit != 48000 {
 		t.Errorf("ContextHardLimit preserved: got %d", cfg2.Governance.ContextHardLimit)
-	}
-	if cfg2.Governance.MaxTokens != 16000 {
-		t.Errorf("MaxTokens preserved: got %d, want %d", cfg2.Governance.MaxTokens, 16000)
 	}
 	if cfg2.Governance.TruncationStrategy != "head-tail" {
 		t.Errorf("TruncationStrategy preserved: got %q", cfg2.Governance.TruncationStrategy)
