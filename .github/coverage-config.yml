@@ -1,0 +1,4 @@
+profile: coverage.txt
+
+threshold:
+  total: 0
