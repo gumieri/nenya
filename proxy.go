@@ -11,6 +11,7 @@ import (
 	"log/slog"
 	"net/http"
 	"runtime/debug"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -607,6 +608,33 @@ func (g *NenyaGateway) prepareAndSend(
 	return upstreamAction{kind: actionStream, resp: resp, cancel: upstreamCancel}
 }
 
+func parseQuotaExhaustion(body []byte) time.Duration {
+	if len(body) == 0 {
+		return 0
+	}
+	lower := strings.ToLower(string(body))
+
+	if idx := strings.Index(lower, "per 86400s"); idx != -1 {
+		return maxQuotaCooldown
+	}
+	if idx := strings.Index(lower, "perday"); idx != -1 {
+		return maxQuotaCooldown
+	}
+
+	quotaPatterns := []string{
+		"resource_exhausted",
+		"quota exceeded",
+		"quota_exceeded",
+	}
+	for _, p := range quotaPatterns {
+		if strings.Contains(lower, p) {
+			return 5 * time.Minute
+		}
+	}
+
+	return 0
+}
+
 func (g *NenyaGateway) handleUpstreamError(
 	r *http.Request,
 	idx int,
@@ -627,7 +655,17 @@ func (g *NenyaGateway) handleUpstreamError(
 			g.logger.Warn("activating cooldown, trying next target",
 				"target", idx+1, "total", len(targets), "model", target.model, "status", action.resp.StatusCode)
 		}
-		g.activateCooldown(target, cooldownDuration, agentName)
+		effectiveCooldown := cooldownDuration
+		if action.resp.StatusCode == http.StatusTooManyRequests && len(errorBody) > 0 {
+			if quotaCD := parseQuotaExhaustion(errorBody); quotaCD > 0 {
+				if quotaCD > cooldownDuration {
+					effectiveCooldown = quotaCD
+					g.logger.Info("quota exhaustion detected, extending cooldown",
+						"model", target.model, "cooldown_s", effectiveCooldown.Seconds())
+				}
+			}
+		}
+		g.activateCooldown(target, effectiveCooldown, agentName)
 		if action.resp.StatusCode == http.StatusTooManyRequests {
 			delay := parseRetryDelay(action.resp.Header, errorBody)
 			if delay > 0 {
@@ -805,14 +843,75 @@ func (g *NenyaGateway) buildUpstreamRequest(ctx context.Context, method, url str
 }
 
 const maxRetryBackoff = 5 * time.Second
+const maxQuotaCooldown = 30 * time.Minute
+
+type rpcDetail struct {
+	RetryDelay string `json:"retryDelay"`
+	Type       string `json:"@type"`
+}
+
+func capRetryDelay(d time.Duration) time.Duration {
+	if d <= 0 {
+		return 0
+	}
+	if d > maxRetryBackoff {
+		return maxRetryBackoff
+	}
+	return d
+}
+
+func parseRetryDelayFromRPCDetails(details []rpcDetail) time.Duration {
+	for _, d := range details {
+		if d.RetryDelay != "" {
+			if dur, err := time.ParseDuration(d.RetryDelay); err == nil {
+				return capRetryDelay(dur)
+			}
+		}
+	}
+	return 0
+}
+
+func parseRetryDelayFromMessage(msg string) time.Duration {
+	lower := strings.ToLower(msg)
+
+	patterns := []struct {
+		before string
+		after  string
+	}{
+		{"retry in ", "s"},
+		{"wait ", "s"},
+		{"retry after ", "s"},
+	}
+	for _, p := range patterns {
+		idx := strings.Index(lower, p.before)
+		if idx == -1 {
+			continue
+		}
+		candidate := lower[idx+len(p.before):]
+		end := len(candidate)
+		for i, c := range candidate {
+			if c < '0' || c > '9' {
+				end = i
+				break
+			}
+		}
+		if end == 0 {
+			continue
+		}
+		n, err := strconv.ParseFloat(candidate[:end], 64)
+		if err != nil || n <= 0 {
+			continue
+		}
+		return capRetryDelay(time.Duration(n * float64(time.Second)))
+	}
+
+	return 0
+}
 
 func parseRetryDelay(header http.Header, body []byte) time.Duration {
 	if v := header.Get("Retry-After"); v != "" {
 		if secs, err := time.ParseDuration(v + "s"); err == nil && secs > 0 {
-			if secs > maxRetryBackoff {
-				return maxRetryBackoff
-			}
-			return secs
+			return capRetryDelay(secs)
 		}
 	}
 
@@ -822,25 +921,38 @@ func parseRetryDelay(header http.Header, body []byte) time.Duration {
 
 	var envelope struct {
 		Error struct {
-			Details []struct {
-				RetryDelay string `json:"retryDelay"`
-				Type       string `json:"@type"`
-			} `json:"details"`
+			Details []rpcDetail `json:"details"`
+			Message string      `json:"message"`
 		} `json:"error"`
 	}
-	if err := json.Unmarshal(body, &envelope); err != nil {
-		return 0
-	}
-	for _, d := range envelope.Error.Details {
-		if d.RetryDelay != "" {
-			if dur, err := time.ParseDuration(d.RetryDelay); err == nil && dur > 0 {
-				if dur > maxRetryBackoff {
-					return maxRetryBackoff
-				}
-				return dur
+	if err := json.Unmarshal(body, &envelope); err == nil {
+		if d := parseRetryDelayFromRPCDetails(envelope.Error.Details); d > 0 {
+			return d
+		}
+		if envelope.Error.Message != "" {
+			if d := parseRetryDelayFromMessage(envelope.Error.Message); d > 0 {
+				return d
 			}
 		}
 	}
+
+	var arr []struct {
+		Error struct {
+			Details []rpcDetail `json:"details"`
+			Message string      `json:"message"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(body, &arr); err == nil && len(arr) > 0 {
+		if d := parseRetryDelayFromRPCDetails(arr[0].Error.Details); d > 0 {
+			return d
+		}
+		if arr[0].Error.Message != "" {
+			if d := parseRetryDelayFromMessage(arr[0].Error.Message); d > 0 {
+				return d
+			}
+		}
+	}
+
 	return 0
 }
 
