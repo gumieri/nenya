@@ -170,13 +170,13 @@ func TestParseRetryDelay(t *testing.T) {
 		{
 			name:   "gemini retry delay in body",
 			header: http.Header{},
-			body:   `[{"error":{"details":[{"@type":"type.googleapis.com/google.rpc.RetryInfo","retryDelay":"1.854618161s"}]}}]`,
+			body:   `{"error":{"details":[{"@type":"type.googleapis.com/google.rpc.RetryInfo","retryDelay":"1.854618161s"}]}}`,
 			want:   1854618161 * time.Nanosecond,
 		},
 		{
 			name:   "gemini retry delay capped",
 			header: http.Header{},
-			body:   `[{"error":{"details":[{"@type":"type.googleapis.com/google.rpc.RetryInfo","retryDelay":"30s"}]}}]`,
+			body:   `{"error":{"details":[{"@type":"type.googleapis.com/google.rpc.RetryInfo","retryDelay":"30s"}]}}`,
 			want:   maxRetryBackoff,
 		},
 		{

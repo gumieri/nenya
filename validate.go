@@ -6,6 +6,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"regexp"
 	"strings"
 	"time"
@@ -62,18 +63,19 @@ func validateConfiguration(cfg *Config, secrets *SecretsConfig, logger *slog.Log
 
 func validateOllamaHealth(ollamaURL string) bool {
 	healthURL := ollamaHealthURL(ollamaURL)
-	client := &http.Client{Timeout: 10 * time.Second}
 	req, err := http.NewRequest(http.MethodGet, healthURL, nil)
 	if err != nil {
 		return false
 	}
-	resp, err := client.Do(req)
+	resp, err := validationClient.Do(req)
 	if err != nil {
 		return false
 	}
 	defer resp.Body.Close()
 	return resp.StatusCode == http.StatusOK
 }
+
+var validationClient = &http.Client{Timeout: 30 * time.Second}
 
 func validateProvider(provider *Provider, logger *slog.Logger) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -96,8 +98,7 @@ func validateProvider(provider *Provider, logger *slog.Logger) error {
 		return fmt.Errorf("failed to apply authentication: %v", err)
 	}
 
-	client := &http.Client{Timeout: 30 * time.Second}
-	resp, err := client.Do(req)
+	resp, err := validationClient.Do(req)
 	if err != nil {
 		return fmt.Errorf("request failed: %v", err)
 	}
@@ -114,38 +115,35 @@ func validateProvider(provider *Provider, logger *slog.Logger) error {
 	return fmt.Errorf("unexpected status %d: %s", resp.StatusCode, string(body))
 }
 
-func getValidationEndpoint(url string) string {
-	// Map provider URLs to their model listing endpoints
-	// Most OpenAI-compatible APIs support /v1/models
-	if strings.Contains(url, "generativelanguage.googleapis.com") {
-		// Gemini: https://generativelanguage.googleapis.com/v1beta/openai/chat/completions
-		// Models endpoint: https://generativelanguage.googleapis.com/v1beta/models
-		if idx := strings.Index(url, "/openai/chat/completions"); idx != -1 {
-			return url[:idx] + "/models"
-		}
-	}
-	if strings.Contains(url, "api.deepseek.com") {
-		return "https://api.deepseek.com/models"
-	}
-	if strings.Contains(url, "api.z.ai") {
-		return "https://api.z.ai/v1/models"
-	}
-	if strings.Contains(url, "api.groq.com") {
-		return "https://api.groq.com/openai/v1/models"
-	}
-	if strings.Contains(url, "api.together.xyz") {
-		return "https://api.together.xyz/v1/models"
-	}
-	if strings.Contains(url, "api.openai.com") {
-		return "https://api.openai.com/v1/models"
-	}
-	// Ollama doesn't need validation beyond health check
-	if strings.Contains(url, "127.0.0.1:11434") || strings.Contains(url, "localhost:11434") {
+func getValidationEndpoint(providerURL string) string {
+	u, err := url.Parse(providerURL)
+	if err != nil {
 		return ""
 	}
-	// Default: try /v1/models relative to the chat completions endpoint
-	if strings.HasSuffix(url, "/chat/completions") {
-		return strings.TrimSuffix(url, "/chat/completions") + "/models"
+	host := strings.ToLower(u.Host)
+	path := u.Path
+
+	switch {
+	case strings.Contains(host, "generativelanguage.googleapis.com"):
+		if idx := strings.Index(path, "/openai/chat/completions"); idx != -1 {
+			return strings.TrimSuffix(providerURL, "/openai/chat/completions") + "/models"
+		}
+	case strings.Contains(host, "api.deepseek.com"):
+		return "https://api.deepseek.com/models"
+	case strings.Contains(host, "api.z.ai"):
+		return "https://api.z.ai/v1/models"
+	case strings.Contains(host, "api.groq.com"):
+		return "https://api.groq.com/openai/v1/models"
+	case strings.Contains(host, "api.together.xyz"):
+		return "https://api.together.xyz/v1/models"
+	case strings.Contains(host, "api.openai.com"):
+		return "https://api.openai.com/v1/models"
+	case strings.Contains(host, "127.0.0.1:11434") || strings.Contains(host, "localhost:11434"):
+		return ""
+	}
+
+	if strings.HasSuffix(path, "/chat/completions") {
+		return providerURL[:len(providerURL)-len("/chat/completions")] + "/models"
 	}
 	return ""
 }
@@ -163,8 +161,7 @@ func validateWithMinimalRequest(provider *Provider, ctx context.Context, logger 
 		return fmt.Errorf("failed to apply authentication: %v", err)
 	}
 
-	client := &http.Client{Timeout: 30 * time.Second}
-	resp, err := client.Do(req)
+	resp, err := validationClient.Do(req)
 	if err != nil {
 		return fmt.Errorf("request failed: %v", err)
 	}

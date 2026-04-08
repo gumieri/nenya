@@ -83,7 +83,9 @@ func (g *NenyaGateway) buildTargetList(agentName string, agent AgentConfig, toke
 	now := time.Now()
 	cooldowns := make(map[string]time.Time, len(g.modelCooldowns))
 	for k, v := range g.modelCooldowns {
-		cooldowns[k] = v
+		if v.After(now) {
+			cooldowns[k] = v
+		}
 	}
 	g.agentMu.Unlock()
 
@@ -139,15 +141,6 @@ func (g *NenyaGateway) resolveWindowMaxContext(modelName string, targets []upstr
 		for _, m := range agent.Models {
 			if m.MaxContext > 0 {
 				return m.MaxContext
-			}
-		}
-	}
-	for _, t := range targets {
-		if provider, ok := g.providers[t.provider]; ok {
-			for _, prefix := range provider.RoutePrefixes {
-				if strings.HasPrefix(strings.ToLower(t.model), prefix) {
-					return 0
-				}
 			}
 		}
 	}
@@ -334,10 +327,7 @@ func (g *NenyaGateway) sanitizeToolMessagesForGemini(payload map[string]interfac
 }
 
 func (g *NenyaGateway) isZAIProvider(providerName string) bool {
-	if p, ok := g.providers[providerName]; ok {
-		return strings.HasPrefix(p.URL, "https://api.z.ai")
-	}
-	return false
+	return providerName == "zai"
 }
 
 func (g *NenyaGateway) sanitizeMessagesForZAI(payload map[string]interface{}) {
@@ -394,7 +384,7 @@ func (g *NenyaGateway) sanitizeMessagesForZAI(payload map[string]interface{}) {
 		role, _ := msg["role"].(string)
 		content := extractContentText(msg)
 
-		if content == "" && role != "tool" && role != "assistant" {
+		if content == "" && role != "tool" && role != "assistant" && role != "system" {
 			continue
 		}
 

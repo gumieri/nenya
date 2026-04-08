@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"log/slog"
 	"testing"
 )
@@ -138,10 +139,10 @@ func TestMinifyJSON(t *testing.T) {
 }
 
 func TestMinifyJSONDisabled(t *testing.T) {
-	cfg := Config{
-		Compaction: CompactionConfig{
-			JSONMinify: false,
-		},
+	raw := `{"compaction":{"enabled":true,"json_minify":false}}`
+	var cfg Config
+	if err := json.Unmarshal([]byte(raw), &cfg); err != nil {
+		t.Fatal(err)
 	}
 	secrets := &SecretsConfig{}
 	g := NewNenyaGateway(cfg, secrets, slog.Default())
@@ -201,7 +202,8 @@ func TestApplyCompactionOnMessages(t *testing.T) {
 func TestApplyCompactionDisabled(t *testing.T) {
 	cfg := Config{
 		Compaction: CompactionConfig{
-			Enabled: false,
+			Enabled:    false,
+			enabledSet: true,
 		},
 	}
 	secrets := &SecretsConfig{}
