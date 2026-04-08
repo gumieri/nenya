@@ -197,6 +197,48 @@ func TestParseRetryDelay(t *testing.T) {
 			body:   `[{"error":{"details":[{"@type":"type.googleapis.com/google.rpc.RetryInfo","retryDelay":"10s"}]}}]`,
 			want:   1 * time.Second,
 		},
+		{
+			name:   "gemini array format with retry delay",
+			header: http.Header{},
+			body:   `[{"error":{"code":429,"message":"quota exceeded","status":"RESOURCE_EXHAUSTED","details":[{"@type":"type.googleapis.com/google.rpc.RetryInfo","retryDelay":"12.396700236s"}]}}]`,
+			want:   5 * time.Second,
+		},
+		{
+			name:   "gemini array format capped",
+			header: http.Header{},
+			body:   `[{"error":{"code":429,"details":[{"@type":"type.googleapis.com/google.rpc.RetryInfo","retryDelay":"60s"}]}}]`,
+			want:   maxRetryBackoff,
+		},
+		{
+			name:   "openai style wait seconds",
+			header: http.Header{},
+			body:   `{"error":{"code":"RateLimitReached","message":"Please wait 3 seconds before retrying."}}`,
+			want:   3 * time.Second,
+		},
+		{
+			name:   "openai style retry in seconds",
+			header: http.Header{},
+			body:   `{"error":{"code":"RateLimitReached","message":"Rate limit exceeded. Retry in 2 seconds."}}`,
+			want:   2 * time.Second,
+		},
+		{
+			name:   "openai style wait seconds capped",
+			header: http.Header{},
+			body:   `{"error":{"code":"RateLimitReached","message":"Please wait 10 seconds before retrying."}}`,
+			want:   maxRetryBackoff,
+		},
+		{
+			name:   "zai style wait in message",
+			header: http.Header{},
+			body:   `{"error":{"code":"RateLimitReached","message":"Rate limit of 50 per 86400s exceeded. Please wait 1400 seconds before retrying."}}`,
+			want:   maxRetryBackoff,
+		},
+		{
+			name:   "gemini array with message retry",
+			header: http.Header{},
+			body:   `[{"error":{"code":429,"message":"Please retry in 4s","status":"RESOURCE_EXHAUSTED"}}]`,
+			want:   4 * time.Second,
+		},
 	}
 
 	for _, tt := range tests {
@@ -582,6 +624,63 @@ func TestParseRetryDelay_BodyArrayWithNoDetails(t *testing.T) {
 	got := parseRetryDelay(http.Header{}, []byte(body))
 	if got != 0 {
 		t.Errorf("expected 0 when no retry details, got %v", got)
+	}
+}
+
+func TestParseQuotaExhaustion(t *testing.T) {
+	tests := []struct {
+		name string
+		body string
+		want time.Duration
+	}{
+		{
+			name: "empty body",
+			body: "",
+			want: 0,
+		},
+		{
+			name: "not quota error",
+			body: `{"error":{"code":429,"message":"Rate limit of 2 per 0s exceeded for UserConcurrentRequests"}}`,
+			want: 0,
+		},
+		{
+			name: "resource_exhausted daily",
+			body: `{"error":{"code":429,"message":"quota exceeded","status":"RESOURCE_EXHAUSTED"}}`,
+			want: 5 * time.Minute,
+		},
+		{
+			name: "per 86400s daily quota",
+			body: `{"error":{"code":"RateLimitReached","message":"Rate limit of 50 per 86400s exceeded"}}`,
+			want: maxQuotaCooldown,
+		},
+		{
+			name: "perday quota",
+			body: `{"error":{"code":429,"message":"Quota exceeded for metric: GenerateRequestsPerDayPerProjectPerModel"}}`,
+			want: maxQuotaCooldown,
+		},
+		{
+			name: "gemini array resource exhausted",
+			body: `[{"error":{"code":429,"message":"quota exceeded","status":"RESOURCE_EXHAUSTED"}}]`,
+			want: 5 * time.Minute,
+		},
+		{
+			name: "gemini array per 86400s",
+			body: `[{"error":{"code":429,"message":"Rate limit of 50 per 86400s exceeded","status":"RESOURCE_EXHAUSTED"}}]`,
+			want: maxQuotaCooldown,
+		},
+		{
+			name: "case insensitive",
+			body: `{"error":{"code":429,"message":"RESOURCE_EXHAUSTED: quota per 86400s"}}`,
+			want: maxQuotaCooldown,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := parseQuotaExhaustion([]byte(tt.body))
+			if got != tt.want {
+				t.Errorf("parseQuotaExhaustion() = %v, want %v", got, tt.want)
+			}
+		})
 	}
 }
 

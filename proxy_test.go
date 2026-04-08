@@ -471,6 +471,75 @@ func TestForwardToUpstreamAllExhausted(t *testing.T) {
 	}
 }
 
+func TestForwardToUpstreamQuotaCooldown(t *testing.T) {
+	callCount := 0
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		callCount++
+		if callCount == 1 {
+			w.WriteHeader(http.StatusTooManyRequests)
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"error":{"code":"RateLimitReached","message":"Rate limit of 50 per 86400s exceeded. Please wait 1400 seconds."}}`))
+			return
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte("data: " + `{"choices":[{"delta":{"content":"fallback ok"}}]}` + "\n\n"))
+		_, _ = w.Write([]byte("data: [DONE]\n\n"))
+	}))
+	defer upstream.Close()
+
+	secrets := &SecretsConfig{
+		ClientToken:  "tok",
+		ProviderKeys: map[string]string{"test": "api-key"},
+	}
+	cfg := Config{
+		Server: ServerConfig{MaxBodyBytes: 1 << 20},
+		Agents: map[string]AgentConfig{
+			"qa-agent": {
+				Strategy:        "fallback",
+				CooldownSeconds: 60,
+				Models: []AgentModel{
+					{Provider: "test", Model: "test-model-1"},
+					{Provider: "test", Model: "test-model-2"},
+				},
+			},
+		},
+		Providers: map[string]ProviderConfig{
+			"test": {
+				URL:           upstream.URL + "/v1/chat/completions",
+				RoutePrefixes: []string{"test-"},
+				AuthStyle:     "bearer",
+			},
+		},
+	}
+	g := NewNenyaGateway(cfg, secrets, slog.Default())
+
+	body := `{"model":"qa-agent","messages":[{"role":"user","content":"test"}]}`
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(body))
+	req.Header.Set("Authorization", "Bearer tok")
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	g.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200 after quota fallback, got %d: %s", w.Code, w.Body.String())
+	}
+	if callCount != 2 {
+		t.Errorf("expected 2 upstream calls, got %d", callCount)
+	}
+
+	coolKey := "qa-agent:test:test-model-1"
+	g.agentMu.Lock()
+	cd, exists := g.modelCooldowns[coolKey]
+	g.agentMu.Unlock()
+	if !exists {
+		t.Fatal("expected cooldown to be set for quota-exhausted model")
+	}
+	expectedMin := 60 * time.Second
+	if cd.Before(time.Now().Add(expectedMin)) {
+		t.Errorf("expected cooldown >= %v, got %v (expires %v from now)", expectedMin, cd, time.Until(cd))
+	}
+}
+
 func TestForwardToUpstreamNetworkError(t *testing.T) {
 	secrets := &SecretsConfig{
 		ClientToken:  "tok",
