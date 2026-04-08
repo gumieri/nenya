@@ -36,7 +36,6 @@ func (g *NenyaGateway) checkRateLimit(upstreamURL string, tokenCount int) bool {
 
 	now := time.Now()
 	elapsed := now.Sub(limiter.lastRefill).Seconds()
-	limiter.lastRefill = now
 
 	if g.config.Governance.RatelimitMaxRPM > 0 {
 		limiter.rpmBucket = min(float64(g.config.Governance.RatelimitMaxRPM),
@@ -64,5 +63,6 @@ func (g *NenyaGateway) checkRateLimit(upstreamURL string, tokenCount int) bool {
 	if g.config.Governance.RatelimitMaxTPM > 0 {
 		limiter.tpmBucket -= float64(tokenCount)
 	}
+	limiter.lastRefill = now
 	return true
 }
