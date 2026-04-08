@@ -1,3 +1,5 @@
+<img width="2752" height="1536" alt="nenya" src="https://github.com/user-attachments/assets/bd518ded-2b65-42f9-866e-5a670cf9dbb1" />
+
 # Nenya AI Gateway
 
 A lightweight, highly secure AI API Gateway/Proxy written in Go. Acts as transparent middleware between local AI coding clients (OpenCode/Aider) and upstream LLM providers (Gemini, DeepSeek, z.ai).
