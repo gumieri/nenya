@@ -2,28 +2,43 @@
 
 # Nenya AI Gateway
 
+[![Go Version]][go-version] [![License]][license] [![Zero Deps]][zero-deps] [![CI]][ci] [![CodeQL]][codeql] [![Release]][release] [![Sponsor]][sponsor]
+
 A lightweight, highly secure AI API Gateway/Proxy written in Go. Acts as transparent middleware between local AI coding clients (OpenCode/Aider) and upstream LLM providers (Gemini, DeepSeek, z.ai).
 
-Its **superpower** is the **"Bouncer" mechanism**: intercepting massive HTTP payloads, routing them to a local Ollama instance for summarization and PII/credential redaction, and forwarding the sanitized, much smaller payload to upstream cloud AI using SSE streaming.
+Nenya acts as a **silent guardian** for your AI interactions. Its core strength is the **"Bouncer" mechanism**: like the Ring of Adamant shielding Lothlórien, it intercepts massive payloads to discern essential context and redact sensitive data locally, before forwarding the refined essence to upstream cloud providers.
 
-## Features
+## 🛡️ Features
+
+### 🗺️ Routing & Providers
 
 - **Config-driven provider registry** — add providers (OpenAI, Anthropic, etc.) via JSON config + secrets, zero code changes
 - **Built-in model registry** — reference models by string shorthand (e.g., `"deepseek-reasoner"`) with automatic provider/context resolution
 - **Dynamic routing** based on model name prefixes configured per provider, with direct ModelRegistry lookups taking priority
-- **Agent system prompts** — inject custom system prompts per agent (inline or file-based)
-- **Per-model max_tokens injection** — `max_tokens` injected from `ModelRegistry.MaxOutput` when client doesn't set it
-- **Tier-0 regex secret filter**: always-on regex-based redaction of AWS keys, GitHub tokens, passwords, etc.
+- **Gemini compatibility** — automatic model name mapping, SSE transformation (index field injection, thought signature preservation)
+
+### 🔐 Security & Privacy
+
+- **Tier-0 regex secret filter** — always-on regex-based redaction of AWS keys, GitHub tokens, passwords, etc.
 - **3-Tier UTF-8 safe pipeline**:
   - **Tier 1** (pass-through): payloads under `soft_limit` characters
   - **Tier 2** (engine only): payloads between `soft_limit` and `hard_limit` — summarized locally
   - **Tier 3** (truncation + engine): payloads over `hard_limit` — middle-out truncation then summarization
-- **Context window compaction**: sliding window summarization of old messages
+- **Context window compaction** — sliding window summarization of old messages
+- **Hardened security** — strict timeouts, request size limits, hop-by-hop header stripping, panic recovery
+- **Systemd credential management** — API keys loaded from `CREDENTIALS_DIRECTORY`
+
+### ⚡ Performance & Reliability
+
 - **Zero external dependencies** — Go standard library only
-- **Hardened security**: strict timeouts, request size limits, hop-by-hop header stripping, panic recovery
-- **Systemd credential management**: API keys loaded from `CREDENTIALS_DIRECTORY`
 - **Rate limiting** per upstream host (RPM/TPM)
-- **Gemini compatibility**: automatic model name mapping, SSE transformation (index field injection, thought signature preservation)
+- **Transparent SSE streaming** — flawless pipe of upstream Server-Sent Events to the client
+
+### 🤖 Agent System
+
+- **Agent system prompts** — inject custom system prompts per agent (inline or file-based)
+- **Per-model max_tokens injection** — `max_tokens` injected from `ModelRegistry.MaxOutput` when client doesn't set it
+- **Fallback chains** — agent-level strategy with per-provider cooldown and automatic failover
 
 ## Configuration
 
@@ -83,8 +98,16 @@ The smallest useful configuration — only agents with string shorthand models, 
       "cooldown_seconds": 60,
       "system_prompt": "Reply with maximum brevity. Code only.",
       "models": [
-        { "provider": "gemini", "model": "gemini-3.1-flash-lite-preview", "max_context": 128000 },
-        { "provider": "deepseek", "model": "deepseek-reasoner", "max_context": 128000 }
+        {
+          "provider": "gemini",
+          "model": "gemini-3.1-flash-lite-preview",
+          "max_context": 128000
+        },
+        {
+          "provider": "deepseek",
+          "model": "deepseek-reasoner",
+          "max_context": 128000
+        }
       ]
     }
   },
@@ -120,6 +143,7 @@ At minimum `client_token` must be present; `provider_keys` entries can be omitte
 No Go code changes needed. Add two sections:
 
 **config.json:**
+
 ```json
 {
   "providers": {
@@ -133,6 +157,7 @@ No Go code changes needed. Add two sections:
 ```
 
 **secrets.json:**
+
 ```json
 {
   "provider_keys": {
@@ -166,6 +191,7 @@ sudo mise run install
 ```
 
 This will:
+
 1. Build the binary and install to `/usr/local/bin/nenya`
 2. Copy `example.config.json` to `/etc/nenya/config.json` (only if not already present)
 3. Copy `nenya.service` to `/etc/systemd/system/nenya.service`
@@ -203,7 +229,7 @@ OpenAI-compatible chat completions with SSE streaming, Ollama interception, and 
 {
   "model": "build",
   "messages": [
-    {"role": "user", "content": "Explain quantum computing in one sentence."}
+    { "role": "user", "content": "Explain quantum computing in one sentence." }
   ]
 }
 ```
@@ -230,13 +256,13 @@ Token usage statistics (no auth required). Returns per-model request counts, inp
 
 ### Model Routing
 
-| Prefix | Provider |
-|--------|----------|
-| `gemini-*` | Gemini (Google AI Studio) |
-| `deepseek-*` | DeepSeek |
-| `zai-*`, `glm-*` | z.ai |
-| `llama-*`, `llama3-*`, `mixtral-*`, `whisper-*` | Groq |
-| `meta-llama/*`, `mistralai/*`, `qwen/*`, `together/*` | Together |
+| Prefix                                                | Provider                  |
+| ----------------------------------------------------- | ------------------------- |
+| `gemini-*`                                            | Gemini (Google AI Studio) |
+| `deepseek-*`                                          | DeepSeek                  |
+| `zai-*`, `glm-*`                                      | z.ai                      |
+| `llama-*`, `llama3-*`, `mixtral-*`, `whisper-*`       | Groq                      |
+| `meta-llama/*`, `mistralai/*`, `qwen/*`, `together/*` | Together                  |
 
 Models not matching any prefix fall back to the `zai` provider.
 
@@ -281,3 +307,21 @@ If Nenya saves you time or money on API costs, consider supporting its developme
 ## AI Collaboration
 
 This project was built in collaboration with AI coding tools. The architecture, security patterns, and codebase reflect rapid iterative development guided by human engineering decisions. Every line of code has been reviewed, tested, and validated by the maintainer.
+
+---
+
+## License & Disclaimer
+
+This project is licensed under the Apache 2.0 License — see the [LICENSE](LICENSE) file for details.
+
+Before using Nenya with autonomous agents in production environments, please read the [DISCLAIMER](DISCLAIMER.md).
+
+---
+
+[go-version]: https://img.shields.io/badge/Go-1.26-00ADD8?logo=go&logoColor=white
+[license]: https://img.shields.io/badge/License-Apache_2.0-5B44C2?logo=apache&logoColor=white
+[zero-deps]: https://img.shields.io/badge/Dependencies-0-2EA043?logo=go&logoColor=white
+[ci]: https://img.shields.io/github/actions/workflow/status/gumieri/nenya/ci.yml?branch=main&logo=github&logoColor=white&label=CI
+[codeql]: https://img.shields.io/github/actions/workflow/status/gumieri/nenya/codeql.yml?branch=main&logo=github&logoColor=white&label=CodeQL
+[release]: https://img.shields.io/github/v/release/gumieri/nenya?logo=github&logoColor=white&sort=semver
+[sponsor]: https://img.shields.io/badge/Sponsor-GitHub-EA4AAA?logo=githubsponsors&logoColor=white
