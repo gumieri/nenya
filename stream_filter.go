@@ -228,10 +228,12 @@ func replaceDeltaContentMap(chunk map[string]interface{}, newContent string) []b
 		return result
 	}
 
+	original := delta["content"]
 	delta["content"] = newContent
 
 	result, err := json.Marshal(chunk)
 	if err != nil {
+		delta["content"] = original
 		result, _ = json.Marshal(chunk)
 	}
 	return result

@@ -203,7 +203,7 @@ func (g *NenyaGateway) callEngine(ctx context.Context, engine EngineConfig, syst
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(io.LimitReader(resp.Body, 8*1024))
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, maxErrorBodyBytes))
 		return "", fmt.Errorf("engine returned status %d: %s", resp.StatusCode, string(body))
 	}
 

@@ -70,8 +70,8 @@ func TestHealthz(t *testing.T) {
 	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("healthz: failed to parse JSON: %v", err)
 	}
-	if _, ok := resp["ollama"]; !ok {
-		t.Error("healthz: missing ollama field")
+	if _, ok := resp["engine"]; !ok {
+		t.Error("healthz: missing engine field")
 	}
 }
 

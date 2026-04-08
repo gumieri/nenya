@@ -31,7 +31,15 @@ type NenyaGateway struct {
 }
 
 func NewNenyaGateway(cfg Config, secrets *SecretsConfig, logger *slog.Logger) *NenyaGateway {
-	applyDefaults(&cfg)
+	if cfg.Providers == nil {
+		cfg.Providers = make(map[string]ProviderConfig)
+	}
+	for name, builtIn := range builtInProviders() {
+		if _, exists := cfg.Providers[name]; !exists {
+			cfg.Providers[name] = builtIn
+		}
+	}
+
 	transport := &http.Transport{
 		DialContext: (&net.Dialer{
 			Timeout:   30 * time.Second,

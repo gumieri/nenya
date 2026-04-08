@@ -620,7 +620,7 @@ func TestResolveWindowMaxContext(t *testing.T) {
 			want:    2000000,
 		},
 		{
-			name: "agent with all max_context=0 returns 0",
+			name: "agent with all max_context=0 falls back to registry",
 			cfg: Config{
 				Agents: map[string]AgentConfig{
 					"my-agent": {
@@ -632,7 +632,7 @@ func TestResolveWindowMaxContext(t *testing.T) {
 			},
 			model:   "my-agent",
 			targets: nil,
-			want:    0,
+			want:    128000,
 		},
 		{
 			name: "direct route matching prefix returns 0",

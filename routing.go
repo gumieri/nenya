@@ -141,11 +141,19 @@ func (g *NenyaGateway) buildTargetList(agentName string, agent AgentConfig, toke
 
 func (g *NenyaGateway) resolveWindowMaxContext(modelName string, targets []upstreamTarget) int {
 	if agent, ok := g.config.Agents[modelName]; ok {
+		maxCtx := 0
 		for _, m := range agent.Models {
-			if m.MaxContext > 0 {
-				return m.MaxContext
+			mc := m.MaxContext
+			if mc == 0 {
+				if entry, ok := ModelRegistry[m.Model]; ok && entry.MaxContext > 0 {
+					mc = entry.MaxContext
+				}
+			}
+			if mc > maxCtx {
+				maxCtx = mc
 			}
 		}
+		return maxCtx
 	}
 	return 0
 }

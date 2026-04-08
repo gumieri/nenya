@@ -12,11 +12,16 @@ import (
 	"net/http"
 	"runtime/debug"
 	"strings"
+	"sync"
 	"time"
 	"unicode/utf8"
 )
 
 const maxOllamaResponseBytes = 512 * 1024
+
+const maxModelNameLength = 256
+
+const maxErrorBodyBytes = 8 * 1024
 
 var hopByHopHeaders = map[string]bool{
 	"connection":          true,
@@ -48,6 +53,9 @@ func (g *NenyaGateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		g.observeHTTP(g.handleStats)(w, r)
 		return
 	case r.URL.Path == "/metrics":
+		if !g.authenticateRequest(r, w) {
+			return
+		}
 		g.observeHTTPFunc(g.handleMetrics)(w, r)
 		return
 	case r.URL.Path == "/v1/models" && r.Method == http.MethodGet:
@@ -163,6 +171,11 @@ func (g *NenyaGateway) handleEmbeddings(w http.ResponseWriter, r *http.Request) 
 		http.Error(w, `Missing or empty "model" field`, http.StatusBadRequest)
 		return
 	}
+	if len(modelName) > maxModelNameLength {
+		g.logger.Warn("model name exceeds maximum length in embeddings request", "length", len(modelName))
+		http.Error(w, "Model name too long", http.StatusBadRequest)
+		return
+	}
 
 	provider := g.resolveProvider(modelName)
 	if provider == nil {
@@ -231,6 +244,11 @@ func (g *NenyaGateway) handleChatCompletions(w http.ResponseWriter, r *http.Requ
 		http.Error(w, `Missing or empty "model" field in request body`, http.StatusBadRequest)
 		return
 	}
+	if len(modelName) > maxModelNameLength {
+		g.logger.Warn("model name exceeds maximum length", "length", len(modelName))
+		http.Error(w, "Model name too long", http.StatusBadRequest)
+		return
+	}
 
 	tokenCount := g.countRequestTokens(payload)
 
@@ -271,7 +289,7 @@ func (g *NenyaGateway) handleChatCompletions(w http.ResponseWriter, r *http.Requ
 			providerName = p.Name
 		} else {
 			g.logger.Warn("no provider found for model", "model", modelName)
-			http.Error(w, "No provider configured for model: "+modelName, http.StatusBadRequest)
+			http.Error(w, "No provider configured for this model", http.StatusBadRequest)
 			return
 		}
 		targets = []upstreamTarget{{url: upstreamURL, model: modelName, provider: providerName}}
@@ -342,7 +360,6 @@ func (g *NenyaGateway) applyContentPipeline(ctx context.Context, payload map[str
 	}
 	if windowed, err := g.applyWindowCompaction(ctx, payload, messages, tokenCount, windowMaxCtx); err != nil {
 		g.logger.Warn("window compaction failed, proceeding without it", "err", err)
-		_ = windowed
 	} else if windowed {
 		if g.metrics != nil {
 			g.metrics.RecordWindow(g.config.Window.Mode)
@@ -470,7 +487,7 @@ func (g *NenyaGateway) forwardToUpstream(
 		case actionContinue:
 			continue
 		case actionError:
-			action.body, _ = io.ReadAll(io.LimitReader(action.resp.Body, 8*1024))
+			action.body, _ = io.ReadAll(io.LimitReader(action.resp.Body, maxErrorBodyBytes))
 			action.resp.Body.Close()
 			shouldContinue := g.handleUpstreamError(r, i, targets, target, cooldownDuration, agentName, action)
 			action.cancel()
@@ -579,15 +596,6 @@ func (g *NenyaGateway) prepareAndSend(
 	g.logger.Info("upstream response",
 		"target", idx+1, "total", len(targets), "model", target.model, "status", resp.StatusCode)
 
-	if isRetryable(resp.StatusCode) {
-		upstreamCancel()
-		g.stats.RecordError(target.model)
-		if g.metrics != nil {
-			g.metrics.RecordUpstreamError(target.model, agentName, target.provider, resp.StatusCode)
-		}
-		return upstreamAction{kind: actionError, resp: resp, cancel: upstreamCancel}
-	}
-
 	if resp.StatusCode >= 400 {
 		g.stats.RecordError(target.model)
 		if g.metrics != nil {
@@ -668,6 +676,46 @@ func (g *NenyaGateway) activateCooldown(target upstreamTarget, cooldownDuration 
 	g.agentMu.Unlock()
 }
 
+const streamIdleTimeout = 120 * time.Second
+
+type stallReader struct {
+	src     io.Reader
+	mu      sync.Mutex
+	timer   *time.Timer
+	stalled bool
+}
+
+func newStallReader(src io.Reader, timeout time.Duration) *stallReader {
+	sr := &stallReader{src: src}
+	sr.timer = time.AfterFunc(timeout, func() {
+		sr.mu.Lock()
+		sr.stalled = true
+		sr.mu.Unlock()
+	})
+	return sr
+}
+
+func (sr *stallReader) Read(p []byte) (int, error) {
+	sr.mu.Lock()
+	if sr.stalled {
+		sr.mu.Unlock()
+		return 0, errStreamStalled
+	}
+	sr.mu.Unlock()
+
+	n, err := sr.src.Read(p)
+	if n > 0 {
+		sr.timer.Reset(streamIdleTimeout)
+	}
+	return n, err
+}
+
+func (sr *stallReader) Stop() {
+	sr.timer.Stop()
+}
+
+var errStreamStalled = errors.New("stream stalled: no data received within idle timeout")
+
 func (g *NenyaGateway) streamResponse(
 	w http.ResponseWriter,
 	r *http.Request,
@@ -683,7 +731,11 @@ func (g *NenyaGateway) streamResponse(
 	if transformer != nil {
 		g.logger.Debug("SSE transformer active", "provider", target.provider)
 	}
-	transformingReader := NewSSETransformingReader(action.resp.Body, transformer)
+
+	stallR := newStallReader(action.resp.Body, streamIdleTimeout)
+	defer stallR.Stop()
+
+	transformingReader := NewSSETransformingReader(stallR, transformer)
 	transformingReader.SetOnUsage(func(completion, prompt, total int) {
 		g.stats.RecordOutput(target.model, completion)
 		if g.metrics != nil {
@@ -718,6 +770,14 @@ func (g *NenyaGateway) streamResponse(
 				g.metrics.RecordStreamBlock(target.model, target.provider)
 			}
 			g.writeBlockedSSE(w)
+			return
+		}
+		if errors.Is(copyErr, errStreamStalled) {
+			action.cancel()
+			action.resp.Body.Close()
+			g.logger.Warn("stream stalled, aborting upstream",
+				"model", target.model, "provider", target.provider,
+				"idle_timeout", streamIdleTimeout)
 			return
 		}
 		action.resp.Body.Close()
@@ -835,7 +895,7 @@ func (g *NenyaGateway) handleHealthz(w http.ResponseWriter) {
 
 	resp := map[string]interface{}{
 		"status": "ok",
-		"ollama": map[string]interface{}{
+		"engine": map[string]interface{}{
 			"status": engineOK,
 		},
 	}

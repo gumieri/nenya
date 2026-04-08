@@ -375,24 +375,24 @@ func TestToInt(t *testing.T) {
 func TestExtractUsageEdgeCases(t *testing.T) {
 	t.Run("non-JSON data", func(t *testing.T) {
 		r := &SSETransformingReader{}
-		r.extractUsage([]byte("not json"))
+		r.extractUsageFromMap(parseSSEChunk([]byte("not json")))
 	})
 
 	t.Run("malformed JSON", func(t *testing.T) {
 		r := &SSETransformingReader{}
-		r.extractUsage([]byte(`{invalid}`))
+		r.extractUsageFromMap(parseSSEChunk([]byte(`{invalid}`)))
 	})
 
 	t.Run("no usage field", func(t *testing.T) {
 		r := &SSETransformingReader{}
-		r.extractUsage([]byte(`{"choices":[]}`))
+		r.extractUsageFromMap(parseSSEChunk([]byte(`{"choices":[]}`)))
 	})
 
 	t.Run("usage with all zeros", func(t *testing.T) {
 		fired := false
 		r := &SSETransformingReader{}
 		r.onUsage = func(c, p, t int) { fired = true }
-		r.extractUsage([]byte(`{"usage":{"completion_tokens":0,"prompt_tokens":0,"total_tokens":0}}`))
+		r.extractUsageFromMap(parseSSEChunk([]byte(`{"usage":{"completion_tokens":0,"prompt_tokens":0,"total_tokens":0}}`)))
 		if fired {
 			t.Error("onUsage should not fire for all-zero usage")
 		}
@@ -403,7 +403,7 @@ func TestExtractUsageEdgeCases(t *testing.T) {
 		var gotC int
 		r := &SSETransformingReader{}
 		r.onUsage = func(c, p, t int) { fired = true; gotC = c }
-		r.extractUsage([]byte(`{"usage":{"completion_tokens":5}}`))
+		r.extractUsageFromMap(parseSSEChunk([]byte(`{"usage":{"completion_tokens":5}}`)))
 		if !fired {
 			t.Error("onUsage should fire when completion_tokens > 0")
 		}
@@ -416,7 +416,7 @@ func TestExtractUsageEdgeCases(t *testing.T) {
 		fired := false
 		r := &SSETransformingReader{}
 		r.onUsage = func(c, p, t int) { fired = true }
-		r.extractUsage([]byte(`   {"usage":{"completion_tokens":1,"prompt_tokens":1,"total_tokens":2}}`))
+		r.extractUsageFromMap(parseSSEChunk([]byte(`   {"usage":{"completion_tokens":1,"prompt_tokens":1,"total_tokens":2}}`)))
 		if !fired {
 			t.Error("onUsage should fire for valid JSON with leading whitespace")
 		}

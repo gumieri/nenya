@@ -470,12 +470,6 @@ func applyDefaults(cfg *Config) {
 	if !cfg.Compaction.NormalizeLineEndings && !cfg.Compaction.normalizeSet {
 		cfg.Compaction.NormalizeLineEndings = true
 	}
-	if !cfg.PrefixCache.StableTools && !cfg.PrefixCache.stableSet {
-		cfg.PrefixCache.StableTools = true
-	}
-	if !cfg.PrefixCache.SkipRedactionOnSystem && !cfg.PrefixCache.skipRedactionSet {
-		cfg.PrefixCache.SkipRedactionOnSystem = true
-	}
 
 	if !cfg.Compaction.Enabled && !cfg.Compaction.enabledSet && (cfg.Compaction.JSONMinify || cfg.Compaction.CollapseBlankLines || cfg.Compaction.TrimTrailingWhitespace || cfg.Compaction.NormalizeLineEndings) {
 		cfg.Compaction.Enabled = true

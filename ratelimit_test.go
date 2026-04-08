@@ -145,3 +145,53 @@ func TestCheckRateLimitTPMAccumulation(t *testing.T) {
 		t.Error("should be blocked: only ~10 tokens left, need 20")
 	}
 }
+
+func TestCheckRateLimitHostCapacityEviction(t *testing.T) {
+	cfg := newTestConfig(10, 0)
+	g := NewNenyaGateway(cfg, &SecretsConfig{}, slog.Default())
+
+	for i := 0; i < maxRateLimitHosts; i++ {
+		if !g.checkRateLimit("http://host-"+strconv.Itoa(i)+".example.com/api", 0) {
+			t.Errorf("host %d should be allowed", i)
+		}
+	}
+
+	if len(g.rateLimits) != maxRateLimitHosts {
+		t.Fatalf("expected %d rate limiters, got %d", maxRateLimitHosts, len(g.rateLimits))
+	}
+
+	ageOut := func() {
+		g.rlMu.Lock()
+		defer g.rlMu.Unlock()
+		for _, rl := range g.rateLimits {
+			rl.mu.Lock()
+			rl.lastRefill = time.Now().Add(-10 * time.Minute)
+			rl.mu.Unlock()
+		}
+	}
+
+	ageOut()
+
+	if !g.checkRateLimit("http://new-host.example.com/api", 0) {
+		t.Error("new host should be allowed after stale entries evicted")
+	}
+	if len(g.rateLimits) <= maxRateLimitHosts {
+		t.Logf("after eviction: %d rate limiters", len(g.rateLimits))
+	}
+
+	g.rlMu.Lock()
+	for _, rl := range g.rateLimits {
+		rl.mu.Lock()
+		rl.lastRefill = time.Now()
+		rl.mu.Unlock()
+	}
+	g.rlMu.Unlock()
+
+	for i := 0; i < maxRateLimitHosts; i++ {
+		g.checkRateLimit("http://fresh-"+strconv.Itoa(i)+".example.com/api", 0)
+	}
+
+	if g.checkRateLimit("http://overflow.example.com/api", 0) {
+		t.Error("request should be rejected when all hosts are fresh and at capacity")
+	}
+}
