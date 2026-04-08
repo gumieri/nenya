@@ -223,16 +223,16 @@ func (m *Metrics) WritePrometheus(w io.Writer) {
 
 	if m.gateway != nil {
 		m.gateway.rlMu.Lock()
+		fprintln("# HELP nenya_ratelimit_rpm_available Current RPM bucket available.")
+		fprintln("# TYPE nenya_ratelimit_rpm_available gauge")
+		fprintln("# HELP nenya_ratelimit_tpm_available Current TPM bucket available.")
+		fprintln("# TYPE nenya_ratelimit_tpm_available gauge")
 		for host, rl := range m.gateway.rateLimits {
 			rl.mu.Lock()
 			rpm := rl.rpmBucket
 			tpm := rl.tpmBucket
 			rl.mu.Unlock()
-			fprintln("# HELP nenya_ratelimit_rpm_available Current RPM bucket available.")
-			fprintln("# TYPE nenya_ratelimit_rpm_available gauge")
 			fprintln(`nenya_ratelimit_rpm_available{host="%s"} %g`, host, rpm)
-			fprintln("# HELP nenya_ratelimit_tpm_available Current TPM bucket available.")
-			fprintln("# TYPE nenya_ratelimit_tpm_available gauge")
 			fprintln(`nenya_ratelimit_tpm_available{host="%s"} %g`, host, tpm)
 		}
 		m.gateway.rlMu.Unlock()

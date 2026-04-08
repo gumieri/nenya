@@ -25,7 +25,13 @@ func (g *NenyaGateway) checkRateLimit(upstreamURL string, tokenCount int) bool {
 	limiter, exists := g.rateLimits[host]
 	if !exists {
 		if len(g.rateLimits) >= maxRateLimitHosts {
-			g.rateLimits = make(map[string]*rateLimiter)
+			g.evictRateLimitsLocked()
+		}
+		if len(g.rateLimits) >= maxRateLimitHosts {
+			g.logger.Warn("rate limit host capacity reached, rejecting request",
+				"host", host, "max_hosts", maxRateLimitHosts)
+			g.rlMu.Unlock()
+			return false
 		}
 		limiter = &rateLimiter{
 			rpmBucket:  float64(g.config.Governance.RatelimitMaxRPM),
@@ -70,4 +76,16 @@ func (g *NenyaGateway) checkRateLimit(upstreamURL string, tokenCount int) bool {
 	}
 	limiter.lastRefill = now
 	return true
+}
+
+func (g *NenyaGateway) evictRateLimitsLocked() {
+	now := time.Now()
+	for host, rl := range g.rateLimits {
+		rl.mu.Lock()
+		stale := now.Sub(rl.lastRefill) > 5*time.Minute
+		rl.mu.Unlock()
+		if stale {
+			delete(g.rateLimits, host)
+		}
+	}
 }

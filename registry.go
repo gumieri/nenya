@@ -14,7 +14,12 @@ type ProviderEntry struct {
 }
 
 func (e ProviderEntry) ToProviderConfig() ProviderConfig {
-	return ProviderConfig(e)
+	return ProviderConfig{ //nolint:gosimple // explicit field copy for type safety
+		URL:           e.URL,
+		RoutePrefixes: e.RoutePrefixes,
+		AuthStyle:     e.AuthStyle,
+		ApiFormat:     e.ApiFormat,
+	}
 }
 
 var ProviderRegistry = map[string]ProviderEntry{

@@ -8,6 +8,11 @@ import (
 	"io"
 )
 
+const (
+	sseScannerInitialBuf = 64 * 1024
+	sseScannerMaxBuf     = 1024 * 1024
+)
+
 // ResponseTransformer defines the interface for provider-specific response normalization.
 type ResponseTransformer interface {
 	TransformSSEChunk(data []byte) ([]byte, error)
@@ -89,7 +94,7 @@ func NewSSETransformingReader(src io.Reader, transformer ResponseTransformer) *S
 		transformer: transformer,
 	}
 	// Increase scanner buffer size to handle large JSON chunks
-	reader.scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024) // 1MB max line
+	reader.scanner.Buffer(make([]byte, 0, sseScannerInitialBuf), sseScannerMaxBuf)
 	return reader
 }
 
@@ -247,14 +252,6 @@ func (r *SSETransformingReader) extractUsageFromMap(chunk map[string]interface{}
 	}
 	r.usageFired = true
 	r.onUsage(completion, prompt, total)
-}
-
-func (r *SSETransformingReader) extractUsage(data []byte) {
-	chunk := parseSSEChunk(data)
-	if chunk == nil {
-		return
-	}
-	r.extractUsageFromMap(chunk)
 }
 
 func toInt(v interface{}) int {
