@@ -44,6 +44,7 @@ The interceptor implements a 3-tier pipeline for the last user message content:
 | `truncation_strategy` | string | `"middle-out"` | Truncation method (`"middle-out"` only) |
 | `keep_first_percent` | float | `15.0` | Percentage of content to keep from the start when truncating |
 | `keep_last_percent` | float | `25.0` | Percentage of content to keep from the end when truncating |
+| `retryable_status_codes` | []int | `[429, 500, 502, 503, 504]` | HTTP status codes that trigger fallback to the next model in an agent chain. **Warning: setting this field REPLACES the built-in defaults entirely.** You must include all codes you want retryable (including the standard ones). Per-provider override available via `providers.<name>.retryable_status_codes` (provider-level replaces global for that provider). |
 
 ## `security_filter`
 
@@ -217,6 +218,7 @@ To add or override a provider:
 | `url` | string | Upstream chat completions endpoint |
 | `route_prefixes` | []string | Model name prefixes that route to this provider |
 | `auth_style` | string | `"bearer"`, `"bearer+x-goog"` (Gemini), or `"none"` (Ollama) |
+| `retryable_status_codes` | []int | Provider-level override for retryable status codes. **Replaces** both global and built-in defaults for this provider. If not set, falls back to `governance.retryable_status_codes`, then built-in defaults `[429, 500, 502, 503, 504]`. |
 
 API keys are loaded from the secrets file via `provider_keys` (keyed by provider name). See [`SECRETS_FORMAT.md`](SECRETS_FORMAT.md).
 
