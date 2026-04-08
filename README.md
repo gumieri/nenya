@@ -2,7 +2,7 @@
 
 # Nenya AI Gateway
 
-[![Go Version]][go-version] [![License]][license] [![Zero Deps]][zero-deps] [![CI]][ci] [![CodeQL]][codeql] [![Release]][release] [![Sponsor]][sponsor]
+![go-version] [![License]][license] ![zero-deps] [![CI]][ci] [![CodeQL]][codeql] [![Release]][release] [![Sponsor]][sponsor]
 
 A lightweight, highly secure AI API Gateway/Proxy written in Go. Acts as transparent middleware between local AI coding clients (OpenCode/Aider) and upstream LLM providers (Gemini, DeepSeek, z.ai).
 
@@ -318,9 +318,9 @@ Before using Nenya with autonomous agents in production environments, please rea
 
 ---
 
-[go-version]: https://img.shields.io/badge/Go-1.26-00ADD8?logo=go&logoColor=white
+[go-version]: https://img.shields.io/badge/Go-1.26-00ADD8?logo=golang&logoColor=white
 [license]: https://img.shields.io/badge/License-Apache_2.0-5B44C2?logo=apache&logoColor=white
-[zero-deps]: https://img.shields.io/badge/Dependencies-0-2EA043?logo=go&logoColor=white
+[zero-deps]: https://img.shields.io/badge/Dependencies-0-2EA043?logo=golang&logoColor=white
 [ci]: https://img.shields.io/github/actions/workflow/status/gumieri/nenya/ci.yml?branch=main&logo=github&logoColor=white&label=CI
 [codeql]: https://img.shields.io/github/actions/workflow/status/gumieri/nenya/codeql.yml?branch=main&logo=github&logoColor=white&label=CodeQL
 [release]: https://img.shields.io/github/v/release/gumieri/nenya?logo=github&logoColor=white&sort=semver
