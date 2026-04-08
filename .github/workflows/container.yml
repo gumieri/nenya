@@ -1,0 +1,32 @@
+name: Container
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Log in to GHCR
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | podman login ghcr.io -u "${{ github.actor }}" --password-stdin
+
+      - name: Build and push image
+        run: |
+          IMAGE="ghcr.io/${{ github.repository }}/nenya"
+          VERSION="${{ github.ref_name }}"
+
+          podman build -f Containerfile \
+            -t "${IMAGE}:${VERSION}" \
+            -t "${IMAGE}:latest" \
+            .
+
+          podman push "${IMAGE}:${VERSION}"
+          podman push "${IMAGE}:latest"
