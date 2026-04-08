@@ -262,12 +262,12 @@ func TestApplyDefaultsPrefixCache(t *testing.T) {
 }
 
 func TestApplyDefaultsCompaction(t *testing.T) {
-	t.Run("zero config: Enabled stays false but sub-fields get defaults", func(t *testing.T) {
+	t.Run("zero config: sub-fields get defaults and auto-enable parent", func(t *testing.T) {
 		cfg := Config{}
 		applyDefaults(&cfg)
 
-		if cfg.Compaction.Enabled {
-			t.Error("Compaction.Enabled stays false for zero config")
+		if !cfg.Compaction.Enabled {
+			t.Error("Compaction.Enabled should auto-enable when sub-fields get defaults")
 		}
 		if !cfg.Compaction.JSONMinify {
 			t.Error("JSONMinify should default to true")
@@ -294,21 +294,25 @@ func TestApplyDefaultsCompaction(t *testing.T) {
 		}
 	})
 
-	t.Run("user false values get overridden by defaults", func(t *testing.T) {
-		cfg := Config{
-			Compaction: CompactionConfig{
-				Enabled:            true,
-				JSONMinify:         false,
-				CollapseBlankLines: false,
-			},
+	t.Run("user explicit false sub-fields are respected", func(t *testing.T) {
+		raw := `{"compaction":{"enabled":true,"json_minify":false,"collapse_blank_lines":false}}`
+		var cfg Config
+		if err := json.Unmarshal([]byte(raw), &cfg); err != nil {
+			t.Fatal(err)
 		}
 		applyDefaults(&cfg)
 
-		if !cfg.Compaction.JSONMinify {
-			t.Error("JSONMinify=false gets overridden to true by default logic")
+		if cfg.Compaction.JSONMinify {
+			t.Error("explicit JSONMinify=false should be preserved")
 		}
-		if !cfg.Compaction.CollapseBlankLines {
-			t.Error("CollapseBlankLines=false gets overridden to true by default logic")
+		if cfg.Compaction.CollapseBlankLines {
+			t.Error("explicit CollapseBlankLines=false should be preserved")
+		}
+		if !cfg.Compaction.TrimTrailingWhitespace {
+			t.Error("TrimTrailingWhitespace should get default since not explicitly set")
+		}
+		if !cfg.Compaction.NormalizeLineEndings {
+			t.Error("NormalizeLineEndings should get default since not explicitly set")
 		}
 	})
 }

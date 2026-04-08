@@ -77,8 +77,8 @@ type Provider struct {
 }
 
 type Config struct {
-	Server         ServerConfig
-	Governance     GovernanceConfig
+	Server         ServerConfig              `json:"server"`
+	Governance     GovernanceConfig          `json:"governance"`
 	SecurityFilter SecurityFilterConfig      `json:"security_filter"`
 	PrefixCache    PrefixCacheConfig         `json:"prefix_cache"`
 	Compaction     CompactionConfig          `json:"compaction"`
@@ -186,6 +186,37 @@ type PrefixCacheConfig struct {
 	PinSystemFirst        bool `json:"pin_system_first"`
 	StableTools           bool `json:"stable_tools"`
 	SkipRedactionOnSystem bool `json:"skip_redaction_on_system"`
+	pinSet                bool `json:"-"`
+	stableSet             bool `json:"-"`
+	skipRedactionSet      bool `json:"-"`
+}
+
+func (c *PrefixCacheConfig) UnmarshalJSON(data []byte) error {
+	type alias PrefixCacheConfig
+	aux := struct {
+		PinSystemFirst        *bool `json:"pin_system_first"`
+		StableTools           *bool `json:"stable_tools"`
+		SkipRedactionOnSystem *bool `json:"skip_redaction_on_system"`
+		*alias
+	}{
+		alias: (*alias)(c),
+	}
+	if err := json.Unmarshal(data, &aux); err != nil {
+		return err
+	}
+	if aux.PinSystemFirst != nil {
+		c.PinSystemFirst = *aux.PinSystemFirst
+		c.pinSet = true
+	}
+	if aux.StableTools != nil {
+		c.StableTools = *aux.StableTools
+		c.stableSet = true
+	}
+	if aux.SkipRedactionOnSystem != nil {
+		c.SkipRedactionOnSystem = *aux.SkipRedactionOnSystem
+		c.skipRedactionSet = true
+	}
+	return nil
 }
 
 type CompactionConfig struct {
@@ -194,6 +225,49 @@ type CompactionConfig struct {
 	CollapseBlankLines     bool `json:"collapse_blank_lines"`
 	TrimTrailingWhitespace bool `json:"trim_trailing_whitespace"`
 	NormalizeLineEndings   bool `json:"normalize_line_endings"`
+	enabledSet             bool `json:"-"`
+	minifySet              bool `json:"-"`
+	collapseSet            bool `json:"-"`
+	trimSet                bool `json:"-"`
+	normalizeSet           bool `json:"-"`
+}
+
+func (c *CompactionConfig) UnmarshalJSON(data []byte) error {
+	type alias CompactionConfig
+	aux := struct {
+		Enabled                *bool `json:"enabled"`
+		JSONMinify             *bool `json:"json_minify"`
+		CollapseBlankLines     *bool `json:"collapse_blank_lines"`
+		TrimTrailingWhitespace *bool `json:"trim_trailing_whitespace"`
+		NormalizeLineEndings   *bool `json:"normalize_line_endings"`
+		*alias
+	}{
+		alias: (*alias)(c),
+	}
+	if err := json.Unmarshal(data, &aux); err != nil {
+		return err
+	}
+	if aux.Enabled != nil {
+		c.Enabled = *aux.Enabled
+		c.enabledSet = true
+	}
+	if aux.JSONMinify != nil {
+		c.JSONMinify = *aux.JSONMinify
+		c.minifySet = true
+	}
+	if aux.CollapseBlankLines != nil {
+		c.CollapseBlankLines = *aux.CollapseBlankLines
+		c.collapseSet = true
+	}
+	if aux.TrimTrailingWhitespace != nil {
+		c.TrimTrailingWhitespace = *aux.TrimTrailingWhitespace
+		c.trimSet = true
+	}
+	if aux.NormalizeLineEndings != nil {
+		c.NormalizeLineEndings = *aux.NormalizeLineEndings
+		c.normalizeSet = true
+	}
+	return nil
 }
 
 type WindowConfig struct {
@@ -283,6 +357,18 @@ func loadPromptFile(filePath string, directPrompt string, defaultPrompt string) 
 	return string(data), nil
 }
 
+func applyEngineDefaults(e *EngineConfig) {
+	if e.Provider == "" {
+		e.Provider = "ollama"
+	}
+	if e.Model == "" {
+		e.Model = "qwen2.5-coder:7b"
+	}
+	if e.TimeoutSeconds == 0 {
+		e.TimeoutSeconds = 600
+	}
+}
+
 func applyDefaults(cfg *Config) {
 	if cfg.Server.ListenAddr == "" {
 		cfg.Server.ListenAddr = ":8080"
@@ -346,7 +432,7 @@ func applyDefaults(cfg *Config) {
 			`(?i)sk-[a-zA-Z0-9]{48}`,
 			`(?i)-----BEGIN\s+(RSA\s+)?(DSA\s+)?(EC\s+)?PRIVATE\s+KEY\s*-----`,
 			`(?i)(aws_access_key_id|aws_secret_access_key)\s*=\s*['"][^'"]{10,}['"]`,
-			`(?i)(password|passwd|pwd|secret|token|key)[\s:=]+['"][^'"]{6,}['"]`,
+			`(?i)(password|passwd|pwd|secret|token)[\s:=]+['"][^'"]{6,}['"]`,
 			`[a-f0-9]{32}:`,
 			`(?i)SG\.[a-zA-Z0-9\-_]{22}\.[a-zA-Z0-9\-_]{43}`,
 		}
@@ -357,29 +443,32 @@ func applyDefaults(cfg *Config) {
 		cfg.SecurityFilter.OutputWindowChars = 4096
 	}
 
-	if cfg.SecurityFilter.Engine.Provider == "" {
-		cfg.SecurityFilter.Engine.Provider = "ollama"
-	}
-	if cfg.SecurityFilter.Engine.Model == "" {
-		cfg.SecurityFilter.Engine.Model = "qwen2.5-coder:7b"
-	}
-	if cfg.SecurityFilter.Engine.TimeoutSeconds == 0 {
-		cfg.SecurityFilter.Engine.TimeoutSeconds = 600
-	}
-	if cfg.Window.Engine.Provider == "" {
-		cfg.Window.Engine.Provider = "ollama"
-	}
-	if cfg.Window.Engine.Model == "" {
-		cfg.Window.Engine.Model = "qwen2.5-coder:7b"
-	}
-	if cfg.Window.Engine.TimeoutSeconds == 0 {
-		cfg.Window.Engine.TimeoutSeconds = 600
-	}
+	applyEngineDefaults(&cfg.SecurityFilter.Engine)
+	applyEngineDefaults(&cfg.Window.Engine)
 	if !cfg.PrefixCache.Enabled && (cfg.PrefixCache.PinSystemFirst || cfg.PrefixCache.StableTools || cfg.PrefixCache.SkipRedactionOnSystem) {
 		cfg.PrefixCache.Enabled = true
 	}
-	if !cfg.PrefixCache.PinSystemFirst {
+	if !cfg.PrefixCache.PinSystemFirst && !cfg.PrefixCache.pinSet {
 		cfg.PrefixCache.PinSystemFirst = true
+	}
+	if !cfg.PrefixCache.StableTools && !cfg.PrefixCache.stableSet {
+		cfg.PrefixCache.StableTools = true
+	}
+	if !cfg.PrefixCache.SkipRedactionOnSystem && !cfg.PrefixCache.skipRedactionSet {
+		cfg.PrefixCache.SkipRedactionOnSystem = true
+	}
+
+	if !cfg.Compaction.JSONMinify && !cfg.Compaction.minifySet {
+		cfg.Compaction.JSONMinify = true
+	}
+	if !cfg.Compaction.CollapseBlankLines && !cfg.Compaction.collapseSet {
+		cfg.Compaction.CollapseBlankLines = true
+	}
+	if !cfg.Compaction.TrimTrailingWhitespace && !cfg.Compaction.trimSet {
+		cfg.Compaction.TrimTrailingWhitespace = true
+	}
+	if !cfg.Compaction.NormalizeLineEndings && !cfg.Compaction.normalizeSet {
+		cfg.Compaction.NormalizeLineEndings = true
 	}
 	if !cfg.PrefixCache.StableTools {
 		cfg.PrefixCache.StableTools = true
@@ -388,20 +477,8 @@ func applyDefaults(cfg *Config) {
 		cfg.PrefixCache.SkipRedactionOnSystem = true
 	}
 
-	if !cfg.Compaction.Enabled && (cfg.Compaction.JSONMinify || cfg.Compaction.CollapseBlankLines || cfg.Compaction.TrimTrailingWhitespace || cfg.Compaction.NormalizeLineEndings) {
+	if !cfg.Compaction.Enabled && !cfg.Compaction.enabledSet && (cfg.Compaction.JSONMinify || cfg.Compaction.CollapseBlankLines || cfg.Compaction.TrimTrailingWhitespace || cfg.Compaction.NormalizeLineEndings) {
 		cfg.Compaction.Enabled = true
-	}
-	if !cfg.Compaction.JSONMinify {
-		cfg.Compaction.JSONMinify = true
-	}
-	if !cfg.Compaction.CollapseBlankLines {
-		cfg.Compaction.CollapseBlankLines = true
-	}
-	if !cfg.Compaction.TrimTrailingWhitespace {
-		cfg.Compaction.TrimTrailingWhitespace = true
-	}
-	if !cfg.Compaction.NormalizeLineEndings {
-		cfg.Compaction.NormalizeLineEndings = true
 	}
 
 	if cfg.Providers == nil {

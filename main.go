@@ -50,11 +50,12 @@ func main() {
 	defer stop()
 
 	srv := &http.Server{
-		Addr:         cfg.Server.ListenAddr,
-		Handler:      gateway,
-		ReadTimeout:  10 * time.Second,
-		WriteTimeout: 0,
-		IdleTimeout:  120 * time.Second,
+		Addr:           cfg.Server.ListenAddr,
+		Handler:        gateway,
+		ReadTimeout:    10 * time.Second,
+		WriteTimeout:   0, // Intentional: SSE streams can be long-lived
+		IdleTimeout:    120 * time.Second,
+		MaxHeaderBytes: 1 << 14,
 	}
 
 	logger.Info("nenya ai gateway listening", "addr", cfg.Server.ListenAddr)
@@ -72,14 +73,21 @@ func main() {
 		logger.Info("verbose logging enabled")
 	}
 
+	serverErr := make(chan error, 1)
 	go func() {
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			logger.Error("server failed", "err", err)
-			os.Exit(1)
+			serverErr <- err
 		}
+		close(serverErr)
 	}()
 
-	<-ctx.Done()
+	select {
+	case err := <-serverErr:
+		logger.Error("server failed", "err", err)
+		os.Exit(1)
+	case <-ctx.Done():
+	}
+
 	logger.Info("shutting down gracefully...")
 
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)

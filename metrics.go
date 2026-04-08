@@ -100,7 +100,8 @@ func labelStr(labels map[string]string) string {
 	}
 	pairs := make([]string, 0, len(labels))
 	for k, v := range labels {
-		pairs = append(pairs, k+"=\""+v+"\"")
+		escaped := strings.NewReplacer(`\`, `\\`, `"`, `\"`, "\n", `\n`).Replace(v)
+		pairs = append(pairs, k+"=\""+escaped+"\"")
 	}
 	sort.Strings(pairs)
 	return "{" + strings.Join(pairs, ", ") + "}"

@@ -129,7 +129,9 @@ func (r *SSETransformingReader) Read(p []byte) (int, error) {
 	}
 
 	line := r.scanner.Bytes()
-	transformed := r.transformLine(line)
+	lineCopy := make([]byte, len(line))
+	copy(lineCopy, line)
+	transformed := r.transformLine(lineCopy)
 
 	if r.streamFilter != nil && r.streamFilter.IsBlocked() {
 		r.err = ErrStreamBlocked
@@ -150,12 +152,10 @@ func (r *SSETransformingReader) Read(p []byte) (int, error) {
 
 // transformLine processes a single SSE line, applying transformations if needed.
 func (r *SSETransformingReader) transformLine(line []byte) []byte {
-	// Skip empty lines
 	if len(line) == 0 {
 		return line
 	}
 
-	// Handle SSE data lines: "data: {json}"
 	if bytes.HasPrefix(line, []byte("data: ")) {
 		origData := bytes.TrimPrefix(line, []byte("data: "))
 
@@ -165,21 +165,27 @@ func (r *SSETransformingReader) transformLine(line []byte) []byte {
 
 		data := origData
 
-		if r.streamFilter != nil && !r.streamFilter.IsBlocked() {
-			content := extractDeltaContent(data)
-			if content != "" {
+		var parsed map[string]interface{}
+		if bytes.HasPrefix(bytes.TrimSpace(data), []byte("{")) {
+			if err := json.Unmarshal(data, &parsed); err != nil {
+				parsed = nil
+			}
+		}
+
+		if r.streamFilter != nil && !r.streamFilter.IsBlocked() && parsed != nil {
+			if content := extractDeltaContentFromMap(parsed); content != "" {
 				redacted, action, _ := r.streamFilter.FilterContent(content)
 				if action == ActionBlock {
 					return line
 				}
 				if action == ActionRedact && redacted != content {
-					data = replaceDeltaContent(data, redacted)
+					data = replaceDeltaContentMap(parsed, redacted)
 				}
 			}
 		}
 
-		if r.onUsage != nil && !r.usageFired {
-			r.extractUsage(data)
+		if r.onUsage != nil && !r.usageFired && parsed != nil {
+			r.extractUsageFromMap(parsed)
 		}
 
 		if r.transformer == nil {
@@ -198,15 +204,9 @@ func (r *SSETransformingReader) transformLine(line []byte) []byte {
 			return line
 		}
 
-		if bytes.Equal(transformed, data) {
-			return append([]byte("data: "), transformed...)
-		}
-
 		return append([]byte("data: "), transformed...)
 	}
 
-	// For non-SSE lines or raw JSON streaming (no "data: " prefix),
-	// check if it looks like JSON and transform it
 	trimmed := bytes.TrimSpace(line)
 	if len(trimmed) > 0 && (trimmed[0] == '{' || trimmed[0] == '[') {
 		if r.transformer == nil {
@@ -219,7 +219,6 @@ func (r *SSETransformingReader) transformLine(line []byte) []byte {
 		return transformed
 	}
 
-	// Pass through all other lines unchanged (comments, event types, etc.)
 	return line
 }
 
@@ -235,14 +234,7 @@ func (g *NenyaGateway) getResponseTransformer(providerName string) ResponseTrans
 	return nil
 }
 
-func (r *SSETransformingReader) extractUsage(data []byte) {
-	if !bytes.HasPrefix(bytes.TrimSpace(data), []byte("{")) {
-		return
-	}
-	var chunk map[string]interface{}
-	if err := json.Unmarshal(data, &chunk); err != nil {
-		return
-	}
+func (r *SSETransformingReader) extractUsageFromMap(chunk map[string]interface{}) {
 	usage, ok := chunk["usage"].(map[string]interface{})
 	if !ok {
 		return
@@ -255,6 +247,14 @@ func (r *SSETransformingReader) extractUsage(data []byte) {
 	}
 	r.usageFired = true
 	r.onUsage(completion, prompt, total)
+}
+
+func (r *SSETransformingReader) extractUsage(data []byte) {
+	chunk := parseSSEChunk(data)
+	if chunk == nil {
+		return
+	}
+	r.extractUsageFromMap(chunk)
 }
 
 func toInt(v interface{}) int {

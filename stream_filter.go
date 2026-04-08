@@ -178,15 +178,10 @@ func (f *StreamFilter) WindowLen() int {
 }
 
 func extractDeltaContent(data []byte) string {
-	if len(data) == 0 {
-		return ""
-	}
+	return extractDeltaContentFromMap(parseSSEChunk(data))
+}
 
-	var chunk map[string]interface{}
-	if err := json.Unmarshal(data, &chunk); err != nil {
-		return ""
-	}
-
+func extractDeltaContentFromMap(chunk map[string]interface{}) string {
 	choices, ok := chunk["choices"].([]interface{})
 	if !ok || len(choices) == 0 {
 		return ""
@@ -207,31 +202,45 @@ func extractDeltaContent(data []byte) string {
 }
 
 func replaceDeltaContent(data []byte, newContent string) []byte {
-	var chunk map[string]interface{}
-	if err := json.Unmarshal(data, &chunk); err != nil {
+	chunk := parseSSEChunk(data)
+	if chunk == nil {
 		return data
 	}
+	return replaceDeltaContentMap(chunk, newContent)
+}
 
+func replaceDeltaContentMap(chunk map[string]interface{}, newContent string) []byte {
 	choices, ok := chunk["choices"].([]interface{})
 	if !ok || len(choices) == 0 {
-		return data
+		result, _ := json.Marshal(chunk)
+		return result
 	}
 
 	choice, ok := choices[0].(map[string]interface{})
 	if !ok {
-		return data
+		result, _ := json.Marshal(chunk)
+		return result
 	}
 
 	delta, ok := choice["delta"].(map[string]interface{})
 	if !ok {
-		return data
+		result, _ := json.Marshal(chunk)
+		return result
 	}
 
 	delta["content"] = newContent
 
 	result, err := json.Marshal(chunk)
 	if err != nil {
-		return data
+		return nil
 	}
 	return result
+}
+
+func parseSSEChunk(data []byte) map[string]interface{} {
+	var chunk map[string]interface{}
+	if err := json.Unmarshal(data, &chunk); err != nil {
+		return nil
+	}
+	return chunk
 }

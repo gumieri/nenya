@@ -61,7 +61,9 @@ func (c *ThoughtSignatureCache) Load(key string) (interface{}, bool) {
 	}
 	if time.Now().After(entry.expireAt) {
 		c.mu.Lock()
-		delete(c.entries, key)
+		if current, ok := c.entries[key]; ok && time.Now().After(current.expireAt) {
+			delete(c.entries, key)
+		}
 		c.mu.Unlock()
 		return nil, false
 	}

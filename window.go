@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"time"
 	"unicode/utf8"
 )
 
@@ -66,7 +67,9 @@ func (g *NenyaGateway) applyWindowCompaction(ctx context.Context, payload map[st
 			g.logger.Warn("failed to load window summarization prompt, using default", "err", err)
 			systemPrompt = defaultPrompt
 		}
-		summary, err = g.callEngine(ctx, g.config.Window.Engine, systemPrompt, historyText)
+		engineCtx, engineCancel := context.WithTimeout(ctx, time.Duration(g.config.Window.Engine.TimeoutSeconds)*time.Second)
+		summary, err = g.callEngine(engineCtx, g.config.Window.Engine, systemPrompt, historyText)
+		engineCancel()
 		if err != nil {
 			g.logger.Warn("window summarization failed, falling back to truncation",
 				"err", err)
@@ -212,11 +215,10 @@ func (g *NenyaGateway) callEngine(ctx context.Context, engine EngineConfig, syst
 	var output string
 	switch apiFormat {
 	case "ollama":
-		resp, ok := response["response"].(string)
+		output, ok = response["response"].(string)
 		if !ok {
 			return "", fmt.Errorf("engine response missing 'response' field")
 		}
-		output = resp
 	default:
 		if choices, ok := response["choices"].([]interface{}); ok && len(choices) > 0 {
 			if choice, ok := choices[0].(map[string]interface{}); ok {

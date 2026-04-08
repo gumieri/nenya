@@ -281,7 +281,7 @@ func (g *NenyaGateway) handleChatCompletions(w http.ResponseWriter, r *http.Requ
 	if messagesRaw, ok := payload["messages"]; ok {
 		if messages, ok := messagesRaw.([]interface{}); ok && len(messages) > 0 {
 			windowMaxCtx := g.resolveWindowMaxContext(modelName, targets)
-			if _, err := g.applyContentPipeline(r.Context(), payload, bodyBytes, tokenCount, windowMaxCtx); err != nil {
+			if err := g.applyContentPipeline(r.Context(), payload, tokenCount, windowMaxCtx); err != nil {
 				g.logger.Error("content pipeline failed", "err", err)
 				http.Error(w, "Internal Server Error", http.StatusInternalServerError)
 				return
@@ -294,15 +294,18 @@ func (g *NenyaGateway) handleChatCompletions(w http.ResponseWriter, r *http.Requ
 	g.forwardToUpstream(w, r, targets, payload, cooldownDuration, tokenCount, agentName)
 }
 
-func (g *NenyaGateway) applyContentPipeline(ctx context.Context, payload map[string]interface{}, bodyBytes []byte, tokenCount int, windowMaxCtx int) ([]byte, error) {
-	messages := payload["messages"].([]interface{})
+func (g *NenyaGateway) applyContentPipeline(ctx context.Context, payload map[string]interface{}, tokenCount int, windowMaxCtx int) error {
+	messages, ok := payload["messages"].([]interface{})
+	if !ok || len(messages) == 0 {
+		return nil
+	}
 
 	g.applyPrefixCacheOptimizations(payload, messages)
 
 	anyRedacted := false
 	for _, msgRaw := range messages {
-		msgNode, ok := msgRaw.(map[string]interface{})
-		if !ok {
+		msgNode, isMap := msgRaw.(map[string]interface{})
+		if !isMap {
 			continue
 		}
 		if g.shouldSkipRedaction(msgNode) {
@@ -321,26 +324,22 @@ func (g *NenyaGateway) applyContentPipeline(ctx context.Context, payload map[str
 		if g.metrics != nil {
 			g.metrics.RecordRedaction()
 		}
-		newBody, err := json.Marshal(payload)
-		if err != nil {
-			return nil, fmt.Errorf("failed to marshal redacted payload: %w", err)
-		}
-		bodyBytes = newBody
 	}
 
 	messages = payload["messages"].([]interface{})
+	if len(messages) == 0 {
+		return nil
+	}
 	if g.applyCompaction(messages) {
 		if g.metrics != nil {
 			g.metrics.RecordCompaction()
 		}
-		newBody, err := json.Marshal(payload)
-		if err != nil {
-			return nil, fmt.Errorf("failed to marshal compacted payload: %w", err)
-		}
-		bodyBytes = newBody
 	}
 
 	messages = payload["messages"].([]interface{})
+	if len(messages) == 0 {
+		return nil
+	}
 	if windowed, err := g.applyWindowCompaction(ctx, payload, messages, tokenCount, windowMaxCtx); err != nil {
 		g.logger.Warn("window compaction failed, proceeding without it", "err", err)
 		_ = windowed
@@ -348,24 +347,22 @@ func (g *NenyaGateway) applyContentPipeline(ctx context.Context, payload map[str
 		if g.metrics != nil {
 			g.metrics.RecordWindow(g.config.Window.Mode)
 		}
-		newBody, err := json.Marshal(payload)
-		if err != nil {
-			return nil, fmt.Errorf("failed to marshal window-compacted payload: %w", err)
-		}
-		bodyBytes = newBody
 	}
 
 	messages = payload["messages"].([]interface{})
+	if len(messages) == 0 {
+		return nil
+	}
 	lastMsgRaw := messages[len(messages)-1]
 	lastMsgNode, ok := lastMsgRaw.(map[string]interface{})
 	if !ok {
-		return bodyBytes, nil
+		return nil
 	}
 
 	textForInterception := extractContentText(lastMsgNode)
 	if textForInterception == "" {
 		g.logger.Warn("last message has no text content, skipping interception")
-		return bodyBytes, nil
+		return nil
 	}
 
 	contentRunes := utf8.RuneCountInString(textForInterception)
@@ -410,19 +407,9 @@ func (g *NenyaGateway) applyContentPipeline(ctx context.Context, payload map[str
 
 	if needsUpdate {
 		lastMsgNode["content"] = processed
-		newBodyBytes, err := json.Marshal(payload)
-		if err != nil {
-			g.logger.Error("failed to marshal updated payload, using original", "err", err)
-		} else {
-			bodyBytes = newBodyBytes
-		}
 	}
 
-	if minified, err := g.minifyJSON(bodyBytes); err == nil {
-		bodyBytes = minified
-	}
-
-	return bodyBytes, nil
+	return nil
 }
 
 func (g *NenyaGateway) summarizeWithOllama(ctx context.Context, heavyText string) (string, error) {
@@ -453,195 +440,39 @@ func (g *NenyaGateway) forwardToUpstream(
 	tokenCount int,
 	agentName string,
 ) {
+	originalPayload, err := json.Marshal(payload)
+	if err != nil {
+		g.logger.Error("failed to marshal original payload for retry loop", "err", err)
+		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+		return
+	}
+
 	for i, target := range targets {
-		g.stats.RecordRequest(target.model, tokenCount)
-		if g.metrics != nil {
-			g.metrics.RecordTokens("input", target.model, agentName, target.provider, tokenCount)
-			g.metrics.RecordUpstreamRequest(target.model, agentName, target.provider)
-		}
-
-		if !g.checkRateLimit(target.url, tokenCount) {
-			if g.metrics != nil {
-				g.metrics.RecordRateLimitRejected(extractHost(target.url))
-			}
-			g.logger.Warn("target skipped: rate limit exceeded",
-				"target", i+1, "total", len(targets), "model", target.model)
-			continue
-		}
-
-		transformedBody, finalModel, err := g.transformRequestForUpstream(target.provider, target.url, payload, target.model, target.maxOutput)
-		if err != nil {
-			g.logger.Warn("failed to transform request, using original payload",
-				"target", i+1, "total", len(targets), "model", target.model, "err", err)
-			transformedBody, _ = json.Marshal(payload)
-		} else if finalModel != "" {
-			g.logger.Debug("using model for target",
-				"target", i+1, "total", len(targets), "model", finalModel, "url", target.url)
-		}
-
-		req, err := g.buildUpstreamRequest(r.Context(), r.Method, target.url, transformedBody, target.provider, r.Header)
-		if err != nil {
-			g.logger.Error("failed to create upstream request",
+		workingPayload := make(map[string]interface{})
+		if err := json.Unmarshal(originalPayload, &workingPayload); err != nil {
+			g.logger.Error("failed to unmarshal payload for target",
 				"target", i+1, "total", len(targets), "err", err)
 			continue
 		}
 
-		if g.logger.Enabled(r.Context(), slog.LevelDebug) {
-			debugHeaders := make(http.Header)
-			for k, v := range req.Header {
-				lk := strings.ToLower(k)
-				if strings.Contains(lk, "key") || strings.Contains(lk, "auth") {
-					debugHeaders[k] = []string{"[REDACTED]"}
-				} else {
-					debugHeaders[k] = v
-				}
-			}
-			g.logger.Debug("forwarding to upstream",
-				"url", target.url, "target", i+1, "total", len(targets))
-			g.logger.Debug("request headers", "headers", debugHeaders)
-			if len(transformedBody) > 0 && len(transformedBody) < 1000 {
-				g.logger.Debug("request body", "body", string(transformedBody))
-			}
-		}
-
-		upstreamCtx, upstreamCancel := context.WithCancel(r.Context())
-		req = req.WithContext(upstreamCtx)
-
-		resp, err := g.client.Do(req)
-		if err != nil {
-			upstreamCancel()
-			g.logger.Warn("target network error",
-				"target", i+1, "total", len(targets), "model", target.model, "err", err)
+		action := g.prepareAndSend(r, i, targets, target, workingPayload, cooldownDuration, tokenCount, agentName)
+		switch action.kind {
+		case actionContinue:
 			continue
-		}
-
-		g.logger.Info("upstream response",
-			"target", i+1, "total", len(targets), "model", target.model, "status", resp.StatusCode)
-
-		if isRetryable(resp.StatusCode) {
-			upstreamCancel()
-			g.stats.RecordError(target.model)
-			if g.metrics != nil {
-				g.metrics.RecordUpstreamError(target.model, agentName, target.provider, resp.StatusCode)
-			}
-			errorBody, _ := io.ReadAll(io.LimitReader(resp.Body, 8*1024))
-			resp.Body.Close()
-			if len(errorBody) > 0 {
-				g.logger.Warn("upstream retryable error",
-					"target", i+1, "total", len(targets), "model", target.model,
-					"status", resp.StatusCode, "body", string(errorBody))
-			} else {
-				g.logger.Warn("activating cooldown, trying next target",
-					"target", i+1, "total", len(targets), "model", target.model, "status", resp.StatusCode)
-			}
-			if target.coolKey != "" && cooldownDuration > 0 {
-				if g.metrics != nil {
-					g.metrics.RecordCooldown(agentName, target.provider, target.model)
-				}
-				g.agentMu.Lock()
-				g.modelCooldowns[target.coolKey] = time.Now().Add(cooldownDuration)
-				g.agentMu.Unlock()
-			}
-			if resp.StatusCode == http.StatusTooManyRequests {
-				delay := parseRetryDelay(resp.Header, errorBody)
-				if delay > 0 {
-					g.logger.Info("rate limited, backing off before retry",
-						"model", target.model, "delay_ms", delay.Milliseconds())
-					time.Sleep(delay)
-				}
-			}
-			continue
-		}
-
-		if resp.StatusCode >= 400 {
-			errorBody, _ := io.ReadAll(io.LimitReader(resp.Body, 8*1024))
-			resp.Body.Close()
-
-			if isRetryableClientError(resp.StatusCode, errorBody) && len(targets) > 1 {
-				upstreamCancel()
-				g.stats.RecordError(target.model)
-				if g.metrics != nil {
-					g.metrics.RecordUpstreamError(target.model, agentName, target.provider, resp.StatusCode)
-				}
-				g.logger.Warn("retryable client error from upstream, trying next target",
-					"target", i+1, "total", len(targets), "model", target.model,
-					"status", resp.StatusCode, "body", string(errorBody))
-				if target.coolKey != "" && cooldownDuration > 0 {
-					g.agentMu.Lock()
-					g.modelCooldowns[target.coolKey] = time.Now().Add(cooldownDuration)
-					g.agentMu.Unlock()
-				}
+		case actionError:
+			action.body, _ = io.ReadAll(io.LimitReader(action.resp.Body, 8*1024))
+			action.resp.Body.Close()
+			shouldContinue := g.handleUpstreamError(r, i, targets, target, cooldownDuration, agentName, action)
+			if shouldContinue {
 				continue
 			}
-
-			defer upstreamCancel()
-			g.stats.RecordError(target.model)
-			if g.metrics != nil {
-				g.metrics.RecordUpstreamError(target.model, agentName, target.provider, resp.StatusCode)
-			}
-			if len(errorBody) > 0 {
-				g.logger.Error("non-retryable upstream error",
-					"target", i+1, "total", len(targets), "model", target.model,
-					"status", resp.StatusCode, "body", string(errorBody))
-			} else {
-				g.logger.Error("non-retryable upstream error, empty body",
-					"target", i+1, "total", len(targets), "model", target.model, "status", resp.StatusCode)
-			}
-			http.Error(w, "Upstream provider error", resp.StatusCode)
+			action.cancel()
+			http.Error(w, "Upstream provider error", action.resp.StatusCode)
+			return
+		case actionStream:
+			g.streamResponse(w, r, target, agentName, action)
 			return
 		}
-
-		defer upstreamCancel()
-		copyHeaders(resp.Header, w.Header())
-		w.WriteHeader(resp.StatusCode)
-
-		transformer := g.getResponseTransformer(target.provider)
-		if transformer != nil {
-			g.logger.Debug("SSE transformer active", "provider", target.provider)
-		}
-		transformingReader := NewSSETransformingReader(resp.Body, transformer)
-		transformingReader.SetOnUsage(func(completion, prompt, total int) {
-			g.stats.RecordOutput(target.model, completion)
-			if g.metrics != nil {
-				g.metrics.RecordTokens("output", target.model, agentName, target.provider, completion)
-			}
-		})
-
-		if g.config.SecurityFilter.OutputEnabled && (len(g.secretPatterns) > 0 || len(g.blockedPatterns) > 0) {
-			sf := NewStreamFilter(g.secretPatterns, g.blockedPatterns, g.config.SecurityFilter.RedactionLabel, g.config.SecurityFilter.OutputWindowChars)
-			transformingReader.SetStreamFilter(sf)
-			g.logger.Debug("stream filter active",
-				"secret_patterns", len(g.secretPatterns),
-				"block_patterns", len(g.blockedPatterns),
-				"window_size", g.config.SecurityFilter.OutputWindowChars)
-		}
-
-		var copyErr error
-		done := make(chan struct{})
-		go func() {
-			defer close(done)
-			_, copyErr = io.Copy(w, transformingReader)
-		}()
-
-		select {
-		case <-done:
-			if errors.Is(copyErr, ErrStreamBlocked) {
-				upstreamCancel()
-				resp.Body.Close()
-				g.logger.Warn("stream blocked by execution policy, upstream killed",
-					"model", target.model, "provider", target.provider)
-				if g.metrics != nil {
-					g.metrics.RecordStreamBlock(target.model, target.provider)
-				}
-				g.writeBlockedSSE(w)
-				return
-			}
-		case <-r.Context().Done():
-			g.logger.Info("client disconnected, aborting upstream stream", "model", target.model)
-			resp.Body.Close()
-			<-done
-		}
-		return
 	}
 
 	g.logger.Error("all upstream targets exhausted", "total", len(targets))
@@ -649,6 +480,243 @@ func (g *NenyaGateway) forwardToUpstream(
 		g.metrics.RecordExhausted(agentName)
 	}
 	http.Error(w, "All upstream targets exhausted", http.StatusServiceUnavailable)
+}
+
+type upstreamAction struct {
+	kind   int
+	resp   *http.Response
+	body   []byte
+	cancel context.CancelFunc
+}
+
+const (
+	actionContinue = iota
+	actionError
+	actionStream
+)
+
+func (g *NenyaGateway) prepareAndSend(
+	r *http.Request,
+	idx int,
+	targets []upstreamTarget,
+	target upstreamTarget,
+	payload map[string]interface{},
+	cooldownDuration time.Duration,
+	tokenCount int,
+	agentName string,
+) upstreamAction {
+	g.stats.RecordRequest(target.model, tokenCount)
+	if g.metrics != nil {
+		g.metrics.RecordTokens("input", target.model, agentName, target.provider, tokenCount)
+		g.metrics.RecordUpstreamRequest(target.model, agentName, target.provider)
+	}
+
+	if !g.checkRateLimit(target.url, tokenCount) {
+		if g.metrics != nil {
+			g.metrics.RecordRateLimitRejected(extractHost(target.url))
+		}
+		g.logger.Warn("target skipped: rate limit exceeded",
+			"target", idx+1, "total", len(targets), "model", target.model)
+		return upstreamAction{kind: actionContinue}
+	}
+
+	transformedBody, finalModel, err := g.transformRequestForUpstream(target.provider, target.url, payload, target.model, target.maxOutput)
+	if err != nil {
+		g.logger.Warn("failed to transform request, using original payload",
+			"target", idx+1, "total", len(targets), "model", target.model, "err", err)
+		transformedBody, _ = json.Marshal(payload)
+	} else if finalModel != "" {
+		g.logger.Debug("using model for target",
+			"target", idx+1, "total", len(targets), "model", finalModel, "url", target.url)
+	}
+
+	req, err := g.buildUpstreamRequest(r.Context(), r.Method, target.url, transformedBody, target.provider, r.Header)
+	if err != nil {
+		g.logger.Error("failed to create upstream request",
+			"target", idx+1, "total", len(targets), "err", err)
+		return upstreamAction{kind: actionContinue}
+	}
+
+	if g.logger.Enabled(r.Context(), slog.LevelDebug) {
+		debugHeaders := make(http.Header)
+		for k, v := range req.Header {
+			lk := strings.ToLower(k)
+			if strings.Contains(lk, "key") || strings.Contains(lk, "auth") {
+				debugHeaders[k] = []string{"[REDACTED]"}
+			} else {
+				debugHeaders[k] = v
+			}
+		}
+		g.logger.Debug("forwarding to upstream",
+			"url", target.url, "target", idx+1, "total", len(targets))
+		g.logger.Debug("request headers", "headers", debugHeaders)
+		if len(transformedBody) > 0 && len(transformedBody) < 1000 {
+			g.logger.Debug("request body", "body", string(transformedBody))
+		}
+	}
+
+	upstreamCtx, upstreamCancel := context.WithCancel(r.Context())
+	req = req.WithContext(upstreamCtx)
+
+	resp, err := g.client.Do(req)
+	if err != nil {
+		upstreamCancel()
+		g.logger.Warn("target network error",
+			"target", idx+1, "total", len(targets), "model", target.model, "err", err)
+		return upstreamAction{kind: actionContinue}
+	}
+
+	g.logger.Info("upstream response",
+		"target", idx+1, "total", len(targets), "model", target.model, "status", resp.StatusCode)
+
+	if isRetryable(resp.StatusCode) {
+		upstreamCancel()
+		g.stats.RecordError(target.model)
+		if g.metrics != nil {
+			g.metrics.RecordUpstreamError(target.model, agentName, target.provider, resp.StatusCode)
+		}
+		return upstreamAction{kind: actionError, resp: resp, cancel: upstreamCancel}
+	}
+
+	if resp.StatusCode >= 400 {
+		g.stats.RecordError(target.model)
+		if g.metrics != nil {
+			g.metrics.RecordUpstreamError(target.model, agentName, target.provider, resp.StatusCode)
+		}
+		return upstreamAction{kind: actionError, resp: resp, cancel: upstreamCancel}
+	}
+
+	return upstreamAction{kind: actionStream, resp: resp, cancel: upstreamCancel}
+}
+
+func (g *NenyaGateway) handleUpstreamError(
+	r *http.Request,
+	idx int,
+	targets []upstreamTarget,
+	target upstreamTarget,
+	cooldownDuration time.Duration,
+	agentName string,
+	action upstreamAction,
+) bool {
+	errorBody := action.body
+
+	if isRetryable(action.resp.StatusCode) {
+		if len(errorBody) > 0 {
+			g.logger.Warn("upstream retryable error",
+				"target", idx+1, "total", len(targets), "model", target.model,
+				"status", action.resp.StatusCode, "body", string(errorBody))
+		} else {
+			g.logger.Warn("activating cooldown, trying next target",
+				"target", idx+1, "total", len(targets), "model", target.model, "status", action.resp.StatusCode)
+		}
+		g.activateCooldown(target, cooldownDuration, agentName)
+		if action.resp.StatusCode == http.StatusTooManyRequests {
+			delay := parseRetryDelay(action.resp.Header, errorBody)
+			if delay > 0 {
+				g.logger.Info("rate limited, backing off before retry",
+					"model", target.model, "delay_ms", delay.Milliseconds())
+				timer := time.NewTimer(delay)
+				select {
+				case <-timer.C:
+				case <-r.Context().Done():
+					timer.Stop()
+				}
+			}
+		}
+		return true
+	}
+
+	if isRetryableClientError(action.resp.StatusCode, errorBody) && len(targets) > 1 {
+		action.cancel()
+		g.logger.Warn("retryable client error from upstream, trying next target",
+			"target", idx+1, "total", len(targets), "model", target.model,
+			"status", action.resp.StatusCode, "body", string(errorBody))
+		g.activateCooldown(target, cooldownDuration, agentName)
+		return true
+	}
+
+	defer action.cancel()
+	if len(errorBody) > 0 {
+		g.logger.Error("non-retryable upstream error",
+			"target", idx+1, "total", len(targets), "model", target.model,
+			"status", action.resp.StatusCode, "body", string(errorBody))
+	} else {
+		g.logger.Error("non-retryable upstream error, empty body",
+			"target", idx+1, "total", len(targets), "model", target.model, "status", action.resp.StatusCode)
+	}
+	return false
+}
+
+func (g *NenyaGateway) activateCooldown(target upstreamTarget, cooldownDuration time.Duration, agentName string) {
+	if target.coolKey == "" || cooldownDuration == 0 {
+		return
+	}
+	if g.metrics != nil {
+		g.metrics.RecordCooldown(agentName, target.provider, target.model)
+	}
+	g.agentMu.Lock()
+	g.modelCooldowns[target.coolKey] = time.Now().Add(cooldownDuration)
+	g.agentMu.Unlock()
+}
+
+func (g *NenyaGateway) streamResponse(
+	w http.ResponseWriter,
+	r *http.Request,
+	target upstreamTarget,
+	agentName string,
+	action upstreamAction,
+) {
+	defer action.cancel()
+	copyHeaders(action.resp.Header, w.Header())
+	w.WriteHeader(action.resp.StatusCode)
+
+	transformer := g.getResponseTransformer(target.provider)
+	if transformer != nil {
+		g.logger.Debug("SSE transformer active", "provider", target.provider)
+	}
+	transformingReader := NewSSETransformingReader(action.resp.Body, transformer)
+	transformingReader.SetOnUsage(func(completion, prompt, total int) {
+		g.stats.RecordOutput(target.model, completion)
+		if g.metrics != nil {
+			g.metrics.RecordTokens("output", target.model, agentName, target.provider, completion)
+		}
+	})
+
+	if g.config.SecurityFilter.OutputEnabled && (len(g.secretPatterns) > 0 || len(g.blockedPatterns) > 0) {
+		sf := NewStreamFilter(g.secretPatterns, g.blockedPatterns, g.config.SecurityFilter.RedactionLabel, g.config.SecurityFilter.OutputWindowChars)
+		transformingReader.SetStreamFilter(sf)
+		g.logger.Debug("stream filter active",
+			"secret_patterns", len(g.secretPatterns),
+			"block_patterns", len(g.blockedPatterns),
+			"window_size", g.config.SecurityFilter.OutputWindowChars)
+	}
+
+	var copyErr error
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		_, copyErr = io.Copy(w, transformingReader)
+	}()
+
+	select {
+	case <-done:
+		if errors.Is(copyErr, ErrStreamBlocked) {
+			action.cancel()
+			action.resp.Body.Close()
+			g.logger.Warn("stream blocked by execution policy, upstream killed",
+				"model", target.model, "provider", target.provider)
+			if g.metrics != nil {
+				g.metrics.RecordStreamBlock(target.model, target.provider)
+			}
+			g.writeBlockedSSE(w)
+			return
+		}
+		action.resp.Body.Close()
+	case <-r.Context().Done():
+		g.logger.Info("client disconnected, aborting upstream stream", "model", target.model)
+		action.resp.Body.Close()
+		<-done
+	}
 }
 
 func (g *NenyaGateway) buildUpstreamRequest(ctx context.Context, method, url string, body []byte, providerName string, srcHeaders http.Header) (*http.Request, error) {
@@ -683,7 +751,7 @@ func parseRetryDelay(header http.Header, body []byte) time.Duration {
 		return 0
 	}
 
-	var envelope []struct {
+	var envelope struct {
 		Error struct {
 			Details []struct {
 				RetryDelay string `json:"retryDelay"`
@@ -694,15 +762,13 @@ func parseRetryDelay(header http.Header, body []byte) time.Duration {
 	if err := json.Unmarshal(body, &envelope); err != nil {
 		return 0
 	}
-	for _, item := range envelope {
-		for _, d := range item.Error.Details {
-			if d.RetryDelay != "" {
-				if dur, err := time.ParseDuration(d.RetryDelay); err == nil && dur > 0 {
-					if dur > maxRetryBackoff {
-						return maxRetryBackoff
-					}
-					return dur
+	for _, d := range envelope.Error.Details {
+		if d.RetryDelay != "" {
+			if dur, err := time.ParseDuration(d.RetryDelay); err == nil && dur > 0 {
+				if dur > maxRetryBackoff {
+					return maxRetryBackoff
 				}
+				return dur
 			}
 		}
 	}
@@ -710,8 +776,16 @@ func parseRetryDelay(header http.Header, body []byte) time.Duration {
 }
 
 func isRetryable(statusCode int) bool {
-	return statusCode == http.StatusTooManyRequests ||
-		statusCode >= 500
+	switch statusCode {
+	case http.StatusTooManyRequests,
+		http.StatusInternalServerError,
+		http.StatusBadGateway,
+		http.StatusServiceUnavailable,
+		http.StatusGatewayTimeout:
+		return true
+	default:
+		return false
+	}
 }
 
 func isRetryableClientError(statusCode int, body []byte) bool {
