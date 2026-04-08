@@ -12,30 +12,87 @@ import (
 	"time"
 )
 
-func TestIsRetryable(t *testing.T) {
+func TestIsRetryableStatus(t *testing.T) {
+	cfg := Config{}
+	secrets := &SecretsConfig{ClientToken: "test"}
+	g := NewNenyaGateway(cfg, secrets, slog.Default())
+
 	tests := []struct {
 		status int
 		want   bool
 	}{
 		{200, false},
 		{400, false},
-		{401, false},
-		{403, false},
 		{404, false},
-		{422, false},
+		{413, false},
 		{429, true},
 		{500, true},
 		{502, true},
 		{503, true},
+		{504, true},
 	}
 
 	for _, tt := range tests {
 		t.Run(http.StatusText(tt.status), func(t *testing.T) {
-			got := isRetryable(tt.status)
+			got := g.isRetryableStatus("unknown-provider", tt.status)
 			if got != tt.want {
-				t.Errorf("isRetryable(%d) = %v, want %v", tt.status, got, tt.want)
+				t.Errorf("isRetryableStatus(%d) = %v, want %v", tt.status, got, tt.want)
 			}
 		})
+	}
+}
+
+func TestIsRetryableStatusGlobalOverride(t *testing.T) {
+	cfg := Config{
+		Governance: GovernanceConfig{
+			RetryableStatusCodes: []int{429, 413, 503},
+		},
+	}
+	secrets := &SecretsConfig{ClientToken: "test"}
+	g := NewNenyaGateway(cfg, secrets, slog.Default())
+
+	tests := []struct {
+		status int
+		want   bool
+	}{
+		{429, true},
+		{413, true},
+		{503, true},
+		{500, false},
+		{502, false},
+		{504, false},
+	}
+
+	for _, tt := range tests {
+		t.Run(http.StatusText(tt.status), func(t *testing.T) {
+			got := g.isRetryableStatus("unknown-provider", tt.status)
+			if got != tt.want {
+				t.Errorf("isRetryableStatus(%d) = %v, want %v", tt.status, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestIsRetryableStatusProviderOverride(t *testing.T) {
+	cfg := Config{
+		Governance: GovernanceConfig{
+			RetryableStatusCodes: []int{429, 500, 502, 503, 504},
+		},
+		Providers: map[string]ProviderConfig{
+			"github": {URL: "https://example.com", RetryableStatusCodes: []int{429, 413}},
+		},
+	}
+	secrets := &SecretsConfig{ClientToken: "test"}
+	g := NewNenyaGateway(cfg, secrets, slog.Default())
+
+	if !g.isRetryableStatus("github", 413) {
+		t.Error("expected 413 retryable for github provider")
+	}
+	if g.isRetryableStatus("github", 500) {
+		t.Error("expected 500 NOT retryable for github provider (provider override replaces global)")
+	}
+	if !g.isRetryableStatus("unknown", 500) {
+		t.Error("expected 500 retryable for unknown provider (falls back to global)")
 	}
 }
 

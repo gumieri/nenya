@@ -61,19 +61,21 @@ func (a *AgentConfig) UnmarshalJSON(data []byte) error {
 }
 
 type ProviderConfig struct {
-	URL           string   `json:"url"`
-	RoutePrefixes []string `json:"route_prefixes"`
-	AuthStyle     string   `json:"auth_style"`
-	ApiFormat     string   `json:"api_format"`
+	URL                  string `json:"url"`
+	RoutePrefixes        []string `json:"route_prefixes"`
+	AuthStyle            string `json:"auth_style"`
+	ApiFormat            string `json:"api_format"`
+	RetryableStatusCodes []int  `json:"retryable_status_codes"`
 }
 
 type Provider struct {
-	Name          string
-	URL           string
-	APIKey        string
-	RoutePrefixes []string
-	AuthStyle     string
-	ApiFormat     string
+	Name                 string
+	URL                  string
+	APIKey               string
+	RoutePrefixes        []string
+	AuthStyle            string
+	ApiFormat            string
+	RetryableStatusCodes []int
 }
 
 type Config struct {
@@ -103,6 +105,7 @@ type GovernanceConfig struct {
 	TruncationStrategy       string   `json:"truncation_strategy"`
 	KeepFirstPercent         float64  `json:"keep_first_percent"`
 	KeepLastPercent          float64  `json:"keep_last_percent"`
+	RetryableStatusCodes     []int    `json:"retryable_status_codes"`
 	rpmSet                   bool     `json:"-"`
 	tpmSet                   bool     `json:"-"`
 }
@@ -538,12 +541,13 @@ func resolveProviders(cfg *Config, secrets *SecretsConfig) map[string]*Provider 
 			apiKey = secrets.ProviderKeys[name]
 		}
 		providers[name] = &Provider{
-			Name:          name,
-			URL:           pc.URL,
-			APIKey:        apiKey,
-			RoutePrefixes: pc.RoutePrefixes,
-			AuthStyle:     pc.AuthStyle,
-			ApiFormat:     pc.ApiFormat,
+			Name:                 name,
+			URL:                  pc.URL,
+			APIKey:               apiKey,
+			RoutePrefixes:        pc.RoutePrefixes,
+			AuthStyle:            pc.AuthStyle,
+			ApiFormat:            pc.ApiFormat,
+			RetryableStatusCodes: pc.RetryableStatusCodes,
 		}
 	}
 	return providers
