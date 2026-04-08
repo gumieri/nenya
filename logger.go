@@ -25,7 +25,9 @@ func setupLogger(verbose bool) *slog.Logger {
 }
 
 func isatty(fd uintptr) bool {
-	const _SYS_ISATTY = 16
-	_, _, errno := syscall.Syscall(_SYS_ISATTY, fd, 0, 0)
-	return errno == 0
+	var st syscall.Stat_t
+	if err := syscall.Fstat(int(fd), &st); err != nil {
+		return false
+	}
+	return st.Mode&syscall.S_IFMT == syscall.S_IFCHR
 }

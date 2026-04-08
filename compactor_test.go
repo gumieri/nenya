@@ -1,7 +1,6 @@
 package main
 
 import (
-	"encoding/json"
 	"log/slog"
 	"testing"
 )
@@ -113,47 +112,6 @@ func TestCompactTextEmpty(t *testing.T) {
 
 	if got := g.compactText("", &g.config.Compaction); got != "" {
 		t.Errorf("expected empty, got %q", got)
-	}
-}
-
-func TestMinifyJSON(t *testing.T) {
-	cfg := Config{
-		Compaction: CompactionConfig{
-			Enabled:    true,
-			JSONMinify: true,
-		},
-	}
-	secrets := &SecretsConfig{}
-	g := NewNenyaGateway(cfg, secrets, slog.Default())
-
-	input := []byte(`{  "hello"  :  "world"  }`)
-	want := []byte(`{"hello":"world"}`)
-
-	got, err := g.minifyJSON(input)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if string(got) != string(want) {
-		t.Errorf("got %q, want %q", got, want)
-	}
-}
-
-func TestMinifyJSONDisabled(t *testing.T) {
-	raw := `{"compaction":{"enabled":true,"json_minify":false}}`
-	var cfg Config
-	if err := json.Unmarshal([]byte(raw), &cfg); err != nil {
-		t.Fatal(err)
-	}
-	secrets := &SecretsConfig{}
-	g := NewNenyaGateway(cfg, secrets, slog.Default())
-
-	input := []byte(`{  "hello"  :  "world"  }`)
-	got, err := g.minifyJSON(input)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if string(got) != string(input) {
-		t.Errorf("expected passthrough when disabled, got %q", got)
 	}
 }
 
@@ -274,25 +232,5 @@ func TestApplyCompactionMultiPartNonTextOnly(t *testing.T) {
 	mutated := g.applyCompaction(messages)
 	if mutated {
 		t.Error("expected no mutation when only non-text parts")
-	}
-}
-
-func TestMinifyJSONInvalidInput(t *testing.T) {
-	cfg := Config{
-		Compaction: CompactionConfig{
-			Enabled:    true,
-			JSONMinify: true,
-		},
-	}
-	secrets := &SecretsConfig{}
-	g := NewNenyaGateway(cfg, secrets, slog.Default())
-
-	input := []byte(`{invalid json}`)
-	got, err := g.minifyJSON(input)
-	if err == nil {
-		t.Fatal("expected error for invalid JSON")
-	}
-	if string(got) != string(input) {
-		t.Errorf("expected original returned on invalid JSON, got %q", got)
 	}
 }

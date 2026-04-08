@@ -13,6 +13,8 @@ type rateLimiter struct {
 	lastRefill time.Time
 }
 
+const maxRateLimitHosts = 100
+
 func (g *NenyaGateway) checkRateLimit(upstreamURL string, tokenCount int) bool {
 	host := upstreamURL
 	if u, err := url.Parse(upstreamURL); err == nil && u.Host != "" {
@@ -22,6 +24,9 @@ func (g *NenyaGateway) checkRateLimit(upstreamURL string, tokenCount int) bool {
 	g.rlMu.Lock()
 	limiter, exists := g.rateLimits[host]
 	if !exists {
+		if len(g.rateLimits) >= maxRateLimitHosts {
+			g.rateLimits = make(map[string]*rateLimiter)
+		}
 		limiter = &rateLimiter{
 			rpmBucket:  float64(g.config.Governance.RatelimitMaxRPM),
 			tpmBucket:  float64(g.config.Governance.RatelimitMaxTPM),

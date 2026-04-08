@@ -85,8 +85,11 @@ func (g *NenyaGateway) buildTargetList(agentName string, agent AgentConfig, toke
 	for k, v := range g.modelCooldowns {
 		if v.After(now) {
 			cooldowns[k] = v
+		} else {
+			delete(g.modelCooldowns, k)
 		}
 	}
+	g.modelCooldowns = cooldowns
 	g.agentMu.Unlock()
 
 	active := make([]upstreamTarget, 0, n)
