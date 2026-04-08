@@ -21,6 +21,10 @@ func (rw *responseWatcher) WriteHeader(code int) {
 	rw.ResponseWriter.WriteHeader(code)
 }
 
+func (g *NenyaGateway) observeHTTP(h func(http.ResponseWriter)) http.HandlerFunc {
+	return g.observeHTTPFunc(func(w http.ResponseWriter, r *http.Request) { h(w) })
+}
+
 func (g *NenyaGateway) observeHTTPFunc(h http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if g.metrics == nil {
@@ -30,19 +34,6 @@ func (g *NenyaGateway) observeHTTPFunc(h http.HandlerFunc) http.HandlerFunc {
 		start := time.Now()
 		ww := &responseWatcher{ResponseWriter: w, statusCode: 200}
 		h(ww, r)
-		g.metrics.RecordHTTPRequest(r.Method, normalizeMetricPath(r.URL.Path), ww.statusCode, time.Since(start))
-	}
-}
-
-func (g *NenyaGateway) observeHTTP(h func(http.ResponseWriter)) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		if g.metrics == nil {
-			h(w)
-			return
-		}
-		start := time.Now()
-		ww := &responseWatcher{ResponseWriter: w, statusCode: 200}
-		h(ww)
 		g.metrics.RecordHTTPRequest(r.Method, normalizeMetricPath(r.URL.Path), ww.statusCode, time.Since(start))
 	}
 }
