@@ -1,8 +1,6 @@
 package main
 
 import (
-	"bytes"
-	"encoding/json"
 	"strings"
 )
 
@@ -68,18 +66,6 @@ func (g *NenyaGateway) compactText(text string, cc *CompactionConfig) string {
 	}
 
 	return result
-}
-
-func (g *NenyaGateway) minifyJSON(body []byte) ([]byte, error) {
-	if !g.config.Compaction.Enabled || !g.config.Compaction.JSONMinify {
-		return body, nil
-	}
-
-	var buf bytes.Buffer
-	if err := json.Compact(&buf, body); err != nil {
-		return body, err
-	}
-	return buf.Bytes(), nil
 }
 
 func normalizeLineEndings(s string) string {

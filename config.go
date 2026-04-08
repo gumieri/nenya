@@ -470,10 +470,10 @@ func applyDefaults(cfg *Config) {
 	if !cfg.Compaction.NormalizeLineEndings && !cfg.Compaction.normalizeSet {
 		cfg.Compaction.NormalizeLineEndings = true
 	}
-	if !cfg.PrefixCache.StableTools {
+	if !cfg.PrefixCache.StableTools && !cfg.PrefixCache.stableSet {
 		cfg.PrefixCache.StableTools = true
 	}
-	if !cfg.PrefixCache.SkipRedactionOnSystem {
+	if !cfg.PrefixCache.SkipRedactionOnSystem && !cfg.PrefixCache.skipRedactionSet {
 		cfg.PrefixCache.SkipRedactionOnSystem = true
 	}
 

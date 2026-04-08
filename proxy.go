@@ -447,6 +447,16 @@ func (g *NenyaGateway) forwardToUpstream(
 		return
 	}
 
+	if g.config.Compaction.Enabled && g.config.Compaction.JSONMinify {
+		minified := bytes.NewBuffer(make([]byte, 0, len(originalPayload)))
+		err = json.Compact(minified, originalPayload)
+		if err != nil {
+			g.logger.Warn("failed to minify JSON payload, using original", "err", err)
+		} else {
+			originalPayload = minified.Bytes()
+		}
+	}
+
 	for i, target := range targets {
 		workingPayload := make(map[string]interface{})
 		if err := json.Unmarshal(originalPayload, &workingPayload); err != nil {
@@ -463,10 +473,10 @@ func (g *NenyaGateway) forwardToUpstream(
 			action.body, _ = io.ReadAll(io.LimitReader(action.resp.Body, 8*1024))
 			action.resp.Body.Close()
 			shouldContinue := g.handleUpstreamError(r, i, targets, target, cooldownDuration, agentName, action)
+			action.cancel()
 			if shouldContinue {
 				continue
 			}
-			action.cancel()
 			http.Error(w, "Upstream provider error", action.resp.StatusCode)
 			return
 		case actionStream:
@@ -627,7 +637,6 @@ func (g *NenyaGateway) handleUpstreamError(
 	}
 
 	if isRetryableClientError(action.resp.StatusCode, errorBody) && len(targets) > 1 {
-		action.cancel()
 		g.logger.Warn("retryable client error from upstream, trying next target",
 			"target", idx+1, "total", len(targets), "model", target.model,
 			"status", action.resp.StatusCode, "body", string(errorBody))

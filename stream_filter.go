@@ -232,7 +232,7 @@ func replaceDeltaContentMap(chunk map[string]interface{}, newContent string) []b
 
 	result, err := json.Marshal(chunk)
 	if err != nil {
-		return nil
+		result, _ = json.Marshal(chunk)
 	}
 	return result
 }
