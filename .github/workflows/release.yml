@@ -55,7 +55,15 @@ jobs:
           VERSION="${GITHUB_REF_NAME}"
 
           if gh release view "$VERSION" >/dev/null 2>&1; then
-            echo "Release ${VERSION} already exists, skipping."
+            echo "Release ${VERSION} already exists, updating..."
+            gh release edit "$VERSION" --title "Nenya ${VERSION}" --verify-tag
+            gh release upload "$VERSION" \
+              nenya-${VERSION}-linux-amd64.tar.gz \
+              nenya-${VERSION}-linux-arm64.tar.gz \
+              nenya-${VERSION}-darwin-amd64.tar.gz \
+              nenya-${VERSION}-darwin-arm64.tar.gz \
+              --clobber
+            echo "Release ${VERSION} updated."
             exit 0
           fi
 
