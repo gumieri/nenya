@@ -61,11 +61,11 @@ func (a *AgentConfig) UnmarshalJSON(data []byte) error {
 }
 
 type ProviderConfig struct {
-	URL                  string `json:"url"`
+	URL                  string   `json:"url"`
 	RoutePrefixes        []string `json:"route_prefixes"`
-	AuthStyle            string `json:"auth_style"`
-	ApiFormat            string `json:"api_format"`
-	RetryableStatusCodes []int  `json:"retryable_status_codes"`
+	AuthStyle            string   `json:"auth_style"`
+	ApiFormat            string   `json:"api_format"`
+	RetryableStatusCodes []int    `json:"retryable_status_codes"`
 }
 
 type Provider struct {
