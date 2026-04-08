@@ -970,7 +970,7 @@ func isRetryable(statusCode int) bool {
 }
 
 func isRetryableClientError(statusCode int, body []byte) bool {
-	if statusCode != http.StatusBadRequest {
+	if statusCode != http.StatusBadRequest && statusCode != http.StatusRequestEntityTooLarge {
 		return false
 	}
 	if len(body) == 0 {
@@ -979,6 +979,9 @@ func isRetryableClientError(statusCode int, body []byte) bool {
 	lower := strings.ToLower(string(body))
 	return strings.Contains(lower, "unavailable_model") ||
 		strings.Contains(lower, "tokens_limit_reached") ||
+		strings.Contains(lower, "context_length_exceeded") ||
+		strings.Contains(lower, "model_overloaded") ||
+		strings.Contains(lower, "overloaded") ||
 		strings.Contains(lower, "thought_signature") ||
 		strings.Contains(lower, "name cannot be empty") ||
 		strings.Contains(lower, "messages parameter is illegal")
