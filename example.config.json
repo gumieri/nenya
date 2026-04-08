@@ -12,6 +12,11 @@
     "truncation_strategy": "middle-out",
     "keep_first_percent": 15.0,
     "keep_last_percent": 25.0
+
+    // Retryable upstream HTTP status codes. WARNING: setting this field REPLACES the built-in
+    // defaults entirely. You must include all codes you want retryable. Built-in defaults:
+    // [429, 500, 502, 503, 504]. Example to also retry on 400 and 413:
+    // "retryable_status_codes": [429, 500, 502, 503, 504, 400, 413]
   },
 
   "security_filter": {

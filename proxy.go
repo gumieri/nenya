@@ -646,7 +646,7 @@ func (g *NenyaGateway) handleUpstreamError(
 ) bool {
 	errorBody := action.body
 
-	if isRetryable(action.resp.StatusCode) {
+	if g.isRetryableStatus(target.provider, action.resp.StatusCode) {
 		if len(errorBody) > 0 {
 			g.logger.Warn("upstream retryable error",
 				"target", idx+1, "total", len(targets), "model", target.model,
@@ -956,17 +956,31 @@ func parseRetryDelay(header http.Header, body []byte) time.Duration {
 	return 0
 }
 
-func isRetryable(statusCode int) bool {
-	switch statusCode {
-	case http.StatusTooManyRequests,
-		http.StatusInternalServerError,
-		http.StatusBadGateway,
-		http.StatusServiceUnavailable,
-		http.StatusGatewayTimeout:
-		return true
-	default:
-		return false
+var defaultRetryableStatusCodes = []int{
+	http.StatusTooManyRequests,
+	http.StatusInternalServerError,
+	http.StatusBadGateway,
+	http.StatusServiceUnavailable,
+	http.StatusGatewayTimeout,
+}
+
+func (g *NenyaGateway) isRetryableStatus(providerName string, statusCode int) bool {
+	if p, ok := g.providers[providerName]; ok && len(p.RetryableStatusCodes) > 0 {
+		return sliceContains(p.RetryableStatusCodes, statusCode)
 	}
+	if len(g.config.Governance.RetryableStatusCodes) > 0 {
+		return sliceContains(g.config.Governance.RetryableStatusCodes, statusCode)
+	}
+	return sliceContains(defaultRetryableStatusCodes, statusCode)
+}
+
+func sliceContains(haystack []int, needle int) bool {
+	for _, v := range haystack {
+		if v == needle {
+			return true
+		}
+	}
+	return false
 }
 
 func isRetryableClientError(statusCode int, body []byte) bool {
