@@ -3,7 +3,7 @@ go = "latest"
 
 [tasks.build]
 description = "Build the nenya binary"
-run = "go build -o nenya ."
+run = "go build -o nenya ./cmd/nenya"
 
 [tasks.test]
 description = "Run all tests"
@@ -32,7 +32,7 @@ if [ ! -f /etc/nenya/config.json ]; then
 else
 	echo "Config /etc/nenya/config.json exists, skipping overwrite"
 fi
-install -Dm644 nenya.service /etc/systemd/system/nenya.service
+install -Dm644 deploy/nenya.service /etc/systemd/system/nenya.service
 systemctl daemon-reload
 echo "Installed. Configure secrets as per SECRETS_FORMAT.md and enable service:"
 echo "  systemctl enable --now nenya.service"
@@ -53,8 +53,8 @@ fi
 [tasks.release]
 description = "Cross-compile for all platforms"
 run = """
-CGO_ENABLED=0 GOOS=linux  GOARCH=amd64 go build -o nenya-linux-amd64  .
-CGO_ENABLED=0 GOOS=linux  GOARCH=arm64 go build -o nenya-linux-arm64  .
-CGO_ENABLED=0 GOOS=darwin GOARCH=amd64 go build -o nenya-darwin-amd64 .
-CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build -o nenya-darwin-arm64 .
+CGO_ENABLED=0 GOOS=linux  GOARCH=amd64 go build -o nenya-linux-amd64  ./cmd/nenya
+CGO_ENABLED=0 GOOS=linux  GOARCH=arm64 go build -o nenya-linux-arm64  ./cmd/nenya
+CGO_ENABLED=0 GOOS=darwin GOARCH=amd64 go build -o nenya-darwin-amd64 ./cmd/nenya
+CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build -o nenya-darwin-arm64  ./cmd/nenya
 """

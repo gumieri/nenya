@@ -1,0 +1,213 @@
+package pipeline
+
+import (
+	"context"
+	"fmt"
+	"log/slog"
+	"net/http"
+	"strings"
+	"time"
+	"unicode/utf8"
+
+	"nenya/internal/config"
+)
+
+const WindowSystemPrompt = `You are a conversation summarizer. Summarize the following conversation history into a concise summary.
+Preserve: file names, key decisions, error patterns, current task, constraints mentioned.
+Omit: verbatim code snippets, verbose outputs, redundant back-and-forth.
+Keep the summary under %d characters. Output ONLY the summary, no preamble or explanation.`
+
+type WindowDeps struct {
+	Logger       *slog.Logger
+	Client       *http.Client
+	OllamaClient *http.Client
+	Providers    map[string]*config.Provider
+	InjectAPIKey func(providerName string, headers http.Header) error
+	CountTokens  func(text string) int
+}
+
+func ApplyWindowCompaction(ctx context.Context, deps WindowDeps, payload map[string]interface{}, messages []interface{}, tokenCount int, windowCfg config.WindowConfig, maxContext int, countRequestTokens func(payload map[string]interface{}) int) (bool, error) {
+	if !windowCfg.Enabled {
+		return false, nil
+	}
+
+	effectiveMax := maxContext
+	if effectiveMax == 0 {
+		effectiveMax = windowCfg.MaxContext
+	}
+	if effectiveMax == 0 {
+		return false, nil
+	}
+
+	threshold := int(float64(effectiveMax) * windowCfg.TriggerRatio)
+	if threshold == 0 || tokenCount <= threshold {
+		return false, nil
+	}
+
+	activeMessages := windowCfg.ActiveMessages
+	if activeMessages < 2 {
+		activeMessages = 2
+	}
+
+	if len(messages) <= activeMessages {
+		return false, nil
+	}
+
+	splitIdx := len(messages) - activeMessages
+	history := messages[:splitIdx]
+	active := messages[splitIdx:]
+
+	historyText := SerializeMessages(history)
+	if historyText == "" {
+		return false, nil
+	}
+
+	beforeTokens := tokenCount
+
+	var summary string
+
+	switch windowCfg.Mode {
+	case "truncate":
+		summary = TruncateHistory(historyText, windowCfg.SummaryMaxRunes)
+	case "summarize", "":
+		defaultPrompt := fmt.Sprintf(WindowSystemPrompt, windowCfg.SummaryMaxRunes)
+		systemPrompt, err := config.LoadPromptFile(windowCfg.Engine.SystemPromptFile, windowCfg.Engine.SystemPrompt, defaultPrompt)
+		if err != nil {
+			deps.Logger.Warn("failed to load window summarization prompt, using default", "err", err)
+			systemPrompt = defaultPrompt
+		}
+		engineCtx, engineCancel := context.WithTimeout(ctx, time.Duration(windowCfg.Engine.TimeoutSeconds)*time.Second)
+		p, ok := deps.Providers[windowCfg.Engine.Provider]
+		if !ok {
+			engineCancel()
+			return false, fmt.Errorf("engine provider %q not found", windowCfg.Engine.Provider)
+		}
+		httpClient := deps.Client
+		if p.ApiFormat == "ollama" {
+			httpClient = deps.OllamaClient
+		}
+		s, err := CallEngine(engineCtx, httpClient, p, windowCfg.Engine, deps.InjectAPIKey, systemPrompt, historyText)
+		engineCancel()
+		if err != nil {
+			deps.Logger.Warn("window summarization failed, falling back to truncation", "err", err)
+			summary = TruncateHistory(historyText, windowCfg.SummaryMaxRunes)
+		} else {
+			summary = s
+		}
+	default:
+		deps.Logger.Warn("unknown window mode, skipping", "mode", windowCfg.Mode)
+		return false, nil
+	}
+
+	if summary == "" {
+		return false, nil
+	}
+
+	maxRunes := windowCfg.SummaryMaxRunes
+	if maxRunes > 0 && utf8.RuneCountInString(summary) > maxRunes {
+		summary = string([]rune(summary)[:maxRunes])
+	}
+
+	summaryMsg := map[string]interface{}{
+		"role": "system",
+		"content": fmt.Sprintf("[Nenya Window Summary (%d messages compacted, was ~%d tokens)]:\n%s",
+			len(history), beforeTokens, summary),
+	}
+
+	newMessages := make([]interface{}, 0, 2+len(active))
+	newMessages = append(newMessages, summaryMsg)
+
+	if len(active) > 0 {
+		if firstActive, ok := active[0].(map[string]interface{}); ok {
+			if role, _ := firstActive["role"].(string); role == "assistant" {
+				newMessages = append(newMessages, map[string]interface{}{
+					"role":    "user",
+					"content": "[Continuing from compacted conversation. Please proceed with the current task.]",
+				})
+			}
+		}
+	}
+
+	newMessages = append(newMessages, active...)
+
+	payload["messages"] = newMessages
+
+	afterTokens := countRequestTokens(payload)
+	deps.Logger.Info("window compaction applied",
+		"mode", windowCfg.Mode,
+		"messages_before", len(history)+len(active),
+		"messages_after", 1+len(active),
+		"tokens_before", beforeTokens,
+		"tokens_after", afterTokens,
+		"savings", beforeTokens-afterTokens)
+
+	return true, nil
+}
+
+func SerializeMessages(messages []interface{}) string {
+	var sb strings.Builder
+	for _, msgRaw := range messages {
+		msgNode, ok := msgRaw.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		role, _ := msgNode["role"].(string)
+		text := ExtractContentText(msgNode)
+		if text == "" {
+			continue
+		}
+		sb.WriteString(role)
+		sb.WriteString(":\n")
+		sb.WriteString(text)
+		sb.WriteString("\n\n")
+	}
+	return sb.String()
+}
+
+func ExtractContentText(msg map[string]interface{}) string {
+	contentRaw, ok := msg["content"]
+	if !ok {
+		return ""
+	}
+	switch content := contentRaw.(type) {
+	case string:
+		return content
+	case []interface{}:
+		var sb strings.Builder
+		for _, partRaw := range content {
+			if part, ok := partRaw.(map[string]interface{}); ok {
+				if text, ok := part["text"].(string); ok {
+					sb.WriteString(text)
+				}
+			}
+		}
+		return sb.String()
+	default:
+		return ""
+	}
+}
+
+func TruncateHistory(historyText string, maxRunes int) string {
+	if maxRunes <= 0 {
+		maxRunes = 4000
+	}
+	runes := []rune(historyText)
+	if len(runes) <= maxRunes {
+		return historyText
+	}
+	keepFirst := int(float64(maxRunes) * 0.3)
+	keepLast := int(float64(maxRunes) * 0.7)
+	if keepFirst+keepLast > maxRunes {
+		keepLast = maxRunes - keepFirst
+	}
+	if keepLast <= 0 {
+		keepLast = 1
+	}
+	separator := "\n... [NENYA: HISTORY TRUNCATED] ...\n"
+	sepRunes := []rune(separator)
+	result := make([]rune, 0, keepFirst+len(sepRunes)+keepLast)
+	result = append(result, runes[:keepFirst]...)
+	result = append(result, sepRunes...)
+	result = append(result, runes[len(runes)-keepLast:]...)
+	return string(result)
+}
