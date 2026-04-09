@@ -14,8 +14,6 @@ type UpstreamTarget struct {
 	MaxOutput int
 }
 
-const DefaultAgentCooldownSec = 60
-
 func ResolveProvider(modelName string, providers map[string]*config.Provider) *config.Provider {
 	if entry, ok := config.ModelRegistry[modelName]; ok {
 		if p, ok := providers[entry.Provider]; ok {

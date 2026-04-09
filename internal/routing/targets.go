@@ -6,18 +6,31 @@ import (
 	"time"
 
 	"nenya/internal/config"
+	"nenya/internal/resilience"
+)
+
+const (
+	DefaultAgentCooldownSec = 60
+	DefaultFailureThreshold = 5
+	DefaultFailureWindowSec = 60
+	DefaultSuccessThreshold = 1
 )
 
 type AgentState struct {
-	Counters       map[string]uint64
-	ModelCooldowns map[string]time.Time
-	Mu             sync.Mutex
+	Counters map[string]uint64
+	CB       *resilience.CircuitBreaker
+	Mu       sync.Mutex
 }
 
 func NewAgentState() *AgentState {
 	return &AgentState{
-		Counters:       make(map[string]uint64),
-		ModelCooldowns: make(map[string]time.Time),
+		Counters: make(map[string]uint64),
+		CB: resilience.NewCircuitBreaker(
+			DefaultFailureThreshold,
+			DefaultSuccessThreshold,
+			time.Duration(DefaultFailureWindowSec)*time.Second,
+			time.Duration(DefaultAgentCooldownSec)*time.Second,
+		),
 	}
 }
 
@@ -35,16 +48,6 @@ func (a *AgentState) BuildTargetList(logger *slog.Logger, agentName string, agen
 		start = int(a.Counters[agentName]) % n
 		a.Counters[agentName]++
 	}
-	now := time.Now()
-	cooldowns := make(map[string]time.Time, len(a.ModelCooldowns))
-	for k, v := range a.ModelCooldowns {
-		if v.After(now) {
-			cooldowns[k] = v
-		} else {
-			delete(a.ModelCooldowns, k)
-		}
-	}
-	a.ModelCooldowns = cooldowns
 	a.Mu.Unlock()
 
 	active := make([]UpstreamTarget, 0, n)
@@ -85,35 +88,36 @@ func (a *AgentState) BuildTargetList(logger *slog.Logger, agentName string, agen
 			Provider:  m.Provider,
 			MaxOutput: maxOut,
 		}
-		if now.Before(cooldowns[t.CoolKey]) {
-			cooling = append(cooling, t)
-		} else {
+		if a.CB.Allow(t.CoolKey) {
 			active = append(active, t)
+		} else {
+			cooling = append(cooling, t)
 		}
 	}
 	return append(active, cooling...)
 }
 
 func (a *AgentState) ActivateCooldown(target UpstreamTarget, cooldownDuration time.Duration) {
-	if target.CoolKey == "" || cooldownDuration == 0 {
-		return
+	a.CB.ForceOpen(target.CoolKey, cooldownDuration)
+}
+
+func (a *AgentState) RecordFailure(target UpstreamTarget, cooldownDuration time.Duration) bool {
+	if target.CoolKey == "" {
+		return false
 	}
-	a.Mu.Lock()
-	a.ModelCooldowns[target.CoolKey] = time.Now().Add(cooldownDuration)
-	a.Mu.Unlock()
+	return a.CB.RecordFailure(target.CoolKey, cooldownDuration)
+}
+
+func (a *AgentState) RecordSuccess(key string) {
+	a.CB.RecordSuccess(key)
 }
 
 func (a *AgentState) ActiveCooldowns() int {
-	a.Mu.Lock()
-	defer a.Mu.Unlock()
-	now := time.Now()
-	count := 0
-	for _, expiry := range a.ModelCooldowns {
-		if expiry.After(now) {
-			count++
-		}
-	}
-	return count
+	return a.CB.ActiveCount()
+}
+
+func (a *AgentState) CBSnapshot() map[string]string {
+	return a.CB.Snapshot()
 }
 
 func ResolveWindowMaxContext(modelName string, agents map[string]config.AgentConfig) int {

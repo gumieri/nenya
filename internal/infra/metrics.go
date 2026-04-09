@@ -33,6 +33,7 @@ type Metrics struct {
 
 	RateLimits func() map[string]*RateLimitSnapshot
 	Cooldowns  func() (active int)
+	CBStates   func() map[string]string
 }
 
 type RateLimitSnapshot struct {
@@ -242,6 +243,27 @@ func (m *Metrics) WritePrometheus(w io.Writer) {
 		fprintln("# HELP nenya_agent_active_cooldowns Number of currently active model cooldowns.")
 		fprintln("# TYPE nenya_agent_active_cooldowns gauge")
 		fprintln("nenya_agent_active_cooldowns %d", active)
+	}
+
+	if m.CBStates != nil {
+		fprintln("# HELP nenya_cb_state Circuit breaker state per model key.")
+		fprintln("# TYPE nenya_cb_state gauge")
+		states := m.CBStates()
+		keys := make([]string, 0, len(states))
+		for k := range states {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		for _, key := range keys {
+			stateVal := 0
+			switch states[key] {
+			case "open":
+				stateVal = 1
+			case "half_open":
+				stateVal = 2
+			}
+			fprintln(`nenya_cb_state{key="%s",state="%s"} %d`, key, states[key], stateVal)
+		}
 	}
 }
 

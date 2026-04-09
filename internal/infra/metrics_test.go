@@ -10,6 +10,9 @@ import (
 
 func TestMetrics_RecordAndWritePrometheus(t *testing.T) {
 	m := NewMetrics()
+	m.CBStates = func() map[string]string {
+		return map[string]string{"test-key": "closed"}
+	}
 
 	m.RecordTokens("input", "model-a", "agent-1", "gemini", 100)
 	m.RecordTokens("output", "model-a", "agent-1", "gemini", 42)
@@ -48,6 +51,7 @@ func TestMetrics_RecordAndWritePrometheus(t *testing.T) {
 		"nenya_build_info",
 		"nenya_uptime_seconds",
 		"nenya_go_goroutines",
+		"nenya_cb_state",
 	}
 
 	for _, metric := range expectedMetrics {
