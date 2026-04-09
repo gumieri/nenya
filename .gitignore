@@ -1,5 +1,6 @@
 # Binaries
 nenya
+!cmd/nenya/
 nenya-*
 *.exe
 
