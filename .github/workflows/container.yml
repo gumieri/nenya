@@ -23,7 +23,7 @@ jobs:
           IMAGE="ghcr.io/${{ github.repository }}/nenya"
           VERSION="${{ github.ref_name }}"
 
-          podman build -f Containerfile \
+          podman build -f deploy/Containerfile \
             -t "${IMAGE}:${VERSION}" \
             -t "${IMAGE}:latest" \
             .
