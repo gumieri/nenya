@@ -21,6 +21,12 @@ func (rw *responseWatcher) WriteHeader(code int) {
 	rw.ResponseWriter.WriteHeader(code)
 }
 
+func (rw *responseWatcher) Flush() {
+	if f, ok := rw.ResponseWriter.(http.Flusher); ok {
+		f.Flush()
+	}
+}
+
 func ObserveHTTP(m *Metrics, h func(http.ResponseWriter)) http.HandlerFunc {
 	return ObserveHTTPFunc(m, func(w http.ResponseWriter, r *http.Request) { h(w) })
 }

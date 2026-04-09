@@ -1,6 +1,7 @@
 package proxy
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -14,7 +15,17 @@ import (
 	"nenya/internal/stream"
 )
 
-const streamIdleTimeout = 120 * time.Second
+const (
+	streamIdleTimeout = 120 * time.Second
+	streamBufferSize  = 32 * 1024
+)
+
+var streamingBufPool = sync.Pool{
+	New: func() any {
+		b := make([]byte, streamBufferSize)
+		return &b
+	},
+}
 
 type stallReader struct {
 	src     io.Reader
@@ -54,6 +65,63 @@ func (sr *stallReader) Stop() {
 
 var errStreamStalled = errors.New("stream stalled: no data received within idle timeout")
 
+type immediateFlushWriter struct {
+	dst     http.ResponseWriter
+	flusher http.Flusher
+}
+
+func newImmediateFlushWriter(w http.ResponseWriter) *immediateFlushWriter {
+	return &immediateFlushWriter{
+		dst:     w,
+		flusher: w.(http.Flusher),
+	}
+}
+
+func (fw *immediateFlushWriter) Write(p []byte) (int, error) {
+	n, err := fw.dst.Write(p)
+	if err == nil {
+		fw.flusher.Flush()
+	}
+	return n, err
+}
+
+func (fw *immediateFlushWriter) Header() http.Header {
+	return fw.dst.Header()
+}
+
+func (fw *immediateFlushWriter) WriteHeader(statusCode int) {
+	fw.dst.WriteHeader(statusCode)
+}
+
+func copyStream(ctx context.Context, dst io.Writer, src io.Reader, buf []byte) (int64, error) {
+	if len(buf) == 0 {
+		buf = make([]byte, streamBufferSize)
+	}
+	var written int64
+	for {
+		nr, rerr := src.Read(buf)
+		if nr > 0 {
+			nw, werr := dst.Write(buf[:nr])
+			if werr != nil {
+				return written, fmt.Errorf("writing to client: %w", werr)
+			}
+			if nr != nw {
+				return written, io.ErrShortWrite
+			}
+			written += int64(nw)
+		}
+		if rerr != nil {
+			if rerr == io.EOF {
+				return written, nil
+			}
+			return written, fmt.Errorf("reading from upstream: %w", rerr)
+		}
+		if ctx.Err() != nil {
+			return written, ctx.Err()
+		}
+	}
+}
+
 func (p *Proxy) streamResponse(w http.ResponseWriter, r *http.Request, target routing.UpstreamTarget, agentName string, action upstreamAction) {
 	defer action.cancel()
 	routing.CopyHeaders(action.resp.Header, w.Header())
@@ -87,11 +155,16 @@ func (p *Proxy) streamResponse(w http.ResponseWriter, r *http.Request, target ro
 			"window_size", p.GW.Config.SecurityFilter.OutputWindowChars)
 	}
 
+	buf := streamingBufPool.Get().(*[]byte)
+	defer streamingBufPool.Put(buf)
+
+	fw := newImmediateFlushWriter(w)
+
 	var copyErr error
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		_, copyErr = io.Copy(w, transformingReader)
+		_, copyErr = copyStream(r.Context(), fw, transformingReader, *buf)
 	}()
 
 	select {
@@ -114,6 +187,11 @@ func (p *Proxy) streamResponse(w http.ResponseWriter, r *http.Request, target ro
 				"model", target.Model, "provider", target.Provider,
 				"idle_timeout", streamIdleTimeout)
 			return
+		}
+		if copyErr != nil {
+			p.GW.Logger.Warn("stream copy error",
+				"model", target.Model, "provider", target.Provider,
+				"err", copyErr)
 		}
 		action.resp.Body.Close()
 		p.GW.AgentState.RecordSuccess(target.CoolKey)
