@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"math"
 	"net/http"
 	"strings"
 
@@ -112,7 +113,13 @@ func TransformRequestForUpstream(deps TransformDeps, providerName, upstreamURL s
 									"role":    "system",
 									"content": systemPrompt,
 								}
-								newMessages := make([]interface{}, 0, len(messages)+1)
+								var cap int
+								if len(messages) > math.MaxInt-1 {
+									cap = math.MaxInt
+								} else {
+									cap = len(messages) + 1
+								}
+								newMessages := make([]interface{}, 0, cap)
 								newMessages = append(newMessages, systemMsg)
 								newMessages = append(newMessages, messages...)
 								payload["messages"] = newMessages

@@ -34,7 +34,7 @@ func TestCallEngine_OpenAI(t *testing.T) {
 		}
 
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]interface{}{
+		if err := json.NewEncoder(w).Encode(map[string]interface{}{
 			"choices": []interface{}{
 				map[string]interface{}{
 					"message": map[string]interface{}{
@@ -42,7 +42,9 @@ func TestCallEngine_OpenAI(t *testing.T) {
 					},
 				},
 			},
-		})
+		}); err != nil {
+			t.Fatalf("encode: %v", err)
+		}
 	}))
 	defer srv.Close()
 
@@ -80,9 +82,11 @@ func TestCallEngine_Ollama(t *testing.T) {
 		}
 
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]interface{}{
+		if err := json.NewEncoder(w).Encode(map[string]interface{}{
 			"response": "ollama-summary",
-		})
+		}); err != nil {
+			t.Fatalf("encode: %v", err)
+		}
 	}))
 	defer srv.Close()
 
@@ -124,7 +128,9 @@ func TestCallEngine_Unreachable(t *testing.T) {
 func TestCallEngine_Non200Status(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusTooManyRequests)
-		w.Write([]byte("rate limited"))
+		if _, err := w.Write([]byte("rate limited")); err != nil {
+			t.Errorf("write: %v", err)
+		}
 	}))
 	defer srv.Close()
 
@@ -146,7 +152,9 @@ func TestCallEngine_Non200Status(t *testing.T) {
 func TestCallEngine_InvalidResponseBody(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		w.Write([]byte("not-json"))
+		if _, err := w.Write([]byte("not-json")); err != nil {
+			t.Errorf("write: %v", err)
+		}
 	}))
 	defer srv.Close()
 

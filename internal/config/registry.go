@@ -54,6 +54,14 @@ var ProviderRegistry = map[string]ProviderEntry{
 		URL:       "https://models.inference.ai.azure.com/chat/completions",
 		AuthStyle: "bearer",
 	},
+	"openrouter": {
+		URL:       "https://openrouter.ai/api/v1/chat/completions",
+		AuthStyle: "bearer",
+	},
+	"nvidia": {
+		URL:       "https://integrate.api.nvidia.com/v1/chat/completions",
+		AuthStyle: "bearer",
+	},
 	"ollama": {
 		URL:       "http://127.0.0.1:11434/v1/chat/completions",
 		AuthStyle: "none",
