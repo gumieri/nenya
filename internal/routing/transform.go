@@ -10,6 +10,7 @@ import (
 
 	"nenya/internal/config"
 	"nenya/internal/infra"
+	providerpkg "nenya/internal/providers"
 )
 
 type TransformDeps struct {
@@ -75,19 +76,23 @@ func TransformRequestForUpstream(deps TransformDeps, providerName, upstreamURL s
 
 	finalModel := modelName
 
-	if IsGeminiProvider(providerName, deps.Providers) {
-		if mapped, ok := GeminiModelMap[strings.ToLower(modelName)]; ok {
-			finalModel = mapped
+	if spec, ok := providerpkg.Get(providerName); ok {
+		if spec.ModelMap != nil {
+			if mapped, ok := spec.ModelMap[strings.ToLower(modelName)]; ok {
+				finalModel = mapped
+			}
+			payload["model"] = finalModel
+			if finalModel != modelName {
+				deps.Logger.Info("provider model mapping", "provider", providerName, "from", modelName, "to", finalModel)
+			}
 		}
-		payload["model"] = finalModel
-		if finalModel != modelName {
-			deps.Logger.Info("gemini model mapping", "from", modelName, "to", finalModel)
+		if spec.SanitizeRequest != nil {
+			spec.SanitizeRequest(&providerpkg.SanitizeDeps{
+				Logger:             deps.Logger,
+				ThoughtSigCache:    deps.ThoughtSigCache,
+				ExtractContentText: deps.ExtractContentText,
+			}, payload)
 		}
-		SanitizeToolMessagesForGemini(deps, payload)
-	}
-
-	if IsZAIProvider(providerName) {
-		SanitizeMessagesForZAI(deps, payload)
 	}
 
 	SanitizePayload(deps, payload, providerName)

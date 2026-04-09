@@ -1,17 +1,14 @@
-package routing
+package providers
 
 import (
 	"log/slog"
 	"os"
 	"testing"
-
-	"nenya/internal/config"
 )
 
-func zaiDeps() TransformDeps {
-	return TransformDeps{
+func zaiDeps() *SanitizeDeps {
+	return &SanitizeDeps{
 		Logger: slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelDebug})),
-		Config: &config.Config{},
 		ExtractContentText: func(msg map[string]interface{}) string {
 			if c, ok := msg["content"].(string); ok {
 				return c
@@ -32,7 +29,7 @@ func TestZAI_MergesConsecutiveUserMessages(t *testing.T) {
 		},
 	}
 
-	SanitizeMessagesForZAI(deps, payload)
+	zaiSanitize(deps, payload)
 
 	msgs := payload["messages"].([]interface{})
 	if len(msgs) != 3 {
@@ -59,7 +56,7 @@ func TestZAI_PrependsSystemBridge(t *testing.T) {
 		},
 	}
 
-	SanitizeMessagesForZAI(deps, payload)
+	zaiSanitize(deps, payload)
 
 	msgs := payload["messages"].([]interface{})
 	if len(msgs) < 1 {
@@ -84,7 +81,7 @@ func TestZAI_NoSystemBridgeWhenSystemFirst(t *testing.T) {
 		},
 	}
 
-	SanitizeMessagesForZAI(deps, payload)
+	zaiSanitize(deps, payload)
 
 	msgs := payload["messages"].([]interface{})
 	if len(msgs) < 1 {
@@ -106,7 +103,7 @@ func TestZAI_InsertsUserBridgeBetweenConsecutiveAssistants(t *testing.T) {
 		},
 	}
 
-	SanitizeMessagesForZAI(deps, payload)
+	zaiSanitize(deps, payload)
 
 	msgs := payload["messages"].([]interface{})
 	foundBridge := false
@@ -151,7 +148,7 @@ func TestZAI_RemovesOrphanedToolMessages(t *testing.T) {
 		},
 	}
 
-	SanitizeMessagesForZAI(deps, payload)
+	zaiSanitize(deps, payload)
 
 	msgs := payload["messages"].([]interface{})
 	for _, m := range msgs {
@@ -175,7 +172,7 @@ func TestZAI_RemovesToolMessagesWithoutToolCallID(t *testing.T) {
 		},
 	}
 
-	SanitizeMessagesForZAI(deps, payload)
+	zaiSanitize(deps, payload)
 
 	msgs := payload["messages"].([]interface{})
 	for _, m := range msgs {
@@ -196,7 +193,7 @@ func TestZAI_RemovesEmptyMessages(t *testing.T) {
 		},
 	}
 
-	SanitizeMessagesForZAI(deps, payload)
+	zaiSanitize(deps, payload)
 
 	msgs := payload["messages"].([]interface{})
 	for _, m := range msgs {
@@ -230,7 +227,7 @@ func TestZAI_KeepsEmptyAssistantWithToolCalls(t *testing.T) {
 		},
 	}
 
-	SanitizeMessagesForZAI(deps, payload)
+	zaiSanitize(deps, payload)
 
 	msgs := payload["messages"].([]interface{})
 	found := false
@@ -253,7 +250,7 @@ func TestZAI_NoMessages(t *testing.T) {
 		"messages": []interface{}{},
 	}
 
-	SanitizeMessagesForZAI(deps, payload)
+	zaiSanitize(deps, payload)
 
 	if _, ok := payload["messages"].([]interface{}); !ok {
 		t.Error("messages should still be present")
