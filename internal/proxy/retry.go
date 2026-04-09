@@ -276,10 +276,7 @@ func (p *Proxy) handleUpstreamError(
 			return true, delay
 		}
 
-		tripped := p.GW.AgentState.RecordFailure(target, effectiveCooldown)
-		if tripped && p.GW.Metrics != nil {
-			p.GW.Metrics.RecordCooldown(agentName, target.Provider, target.Model)
-		}
+		p.GW.AgentState.RecordFailure(target, effectiveCooldown)
 		return true, 0
 	}
 
@@ -287,10 +284,7 @@ func (p *Proxy) handleUpstreamError(
 		p.GW.Logger.Warn("retryable client error from upstream, trying next target",
 			"target", idx+1, "total", len(targets), "model", target.Model,
 			"status", action.resp.StatusCode, "body", string(errorBody))
-		tripped := p.GW.AgentState.RecordFailure(target, cooldownDuration)
-		if tripped && p.GW.Metrics != nil {
-			p.GW.Metrics.RecordCooldown(agentName, target.Provider, target.Model)
-		}
+		p.GW.AgentState.RecordFailure(target, cooldownDuration)
 		return true, 0
 	}
 
