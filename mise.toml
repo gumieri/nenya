@@ -22,20 +22,20 @@ description = "Remove built binary"
 run = "rm -f nenya"
 
 [tasks.install]
-description = "Install binary, config, and systemd unit"
+description = "Build and install binary, config, and systemd unit (prompts for sudo)"
 depends = ["build"]
 run = """
-install -Dm755 nenya /usr/local/bin/nenya
+sudo install -Dm755 nenya /usr/local/bin/nenya
 if [ ! -f /etc/nenya/config.json ]; then
-	install -Dm644 configs/example.config.json /etc/nenya/config.json
+	sudo install -Dm644 configs/example.config.json /etc/nenya/config.json
 	echo "Installed example config to /etc/nenya/config.json"
 else
 	echo "Config /etc/nenya/config.json exists, skipping overwrite"
 fi
-install -Dm644 deploy/nenya.service /etc/systemd/system/nenya.service
-systemctl daemon-reload
-echo "Installed. Configure secrets as per SECRETS_FORMAT.md and enable service:"
-echo "  systemctl enable --now nenya.service"
+sudo install -Dm644 deploy/nenya.service /etc/systemd/system/nenya.service
+sudo systemctl daemon-reload
+echo "Installed. Configure secrets as per docs/SECRETS_FORMAT.md and enable service:"
+echo "  sudo systemctl enable --now nenya.service"
 """
 
 [tasks.run]
