@@ -16,7 +16,6 @@ func (m *mockTransformer) TransformSSEChunk(data []byte) ([]byte, error) {
 	return data, nil
 }
 
-
 func TestSSETransformingReader_DataLines(t *testing.T) {
 	input := `data: {"choices":[{"delta":{"content":"hello"}}]}
  data: {"choices":[{"delta":{"content":" world"}}]}
