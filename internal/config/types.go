@@ -87,6 +87,7 @@ type Config struct {
 	PrefixCache    PrefixCacheConfig         `json:"prefix_cache"`
 	Compaction     CompactionConfig          `json:"compaction"`
 	Window         WindowConfig              `json:"window"`
+	ResponseCache  ResponseCacheConfig       `json:"response_cache"`
 	Agents         map[string]AgentConfig    `json:"agents"`
 	Providers      map[string]ProviderConfig `json:"providers"`
 }

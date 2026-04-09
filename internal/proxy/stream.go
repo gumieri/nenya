@@ -1,6 +1,7 @@
 package proxy
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -93,6 +94,24 @@ func (fw *immediateFlushWriter) WriteHeader(statusCode int) {
 	fw.dst.WriteHeader(statusCode)
 }
 
+type sseTeeWriter struct {
+	dst      io.Writer
+	buf      *bytes.Buffer
+	maxBytes int64
+	exceeded bool
+}
+
+func (t *sseTeeWriter) Write(p []byte) (int, error) {
+	if !t.exceeded {
+		if t.maxBytes > 0 && int64(t.buf.Len()+len(p)) > t.maxBytes {
+			t.exceeded = true
+		} else {
+			t.buf.Write(p)
+		}
+	}
+	return t.dst.Write(p)
+}
+
 func copyStream(ctx context.Context, dst io.Writer, src io.Reader, buf []byte) (int64, error) {
 	if len(buf) == 0 {
 		buf = make([]byte, streamBufferSize)
@@ -122,9 +141,12 @@ func copyStream(ctx context.Context, dst io.Writer, src io.Reader, buf []byte) (
 	}
 }
 
-func (p *Proxy) streamResponse(w http.ResponseWriter, r *http.Request, target routing.UpstreamTarget, agentName string, action upstreamAction) {
+func (p *Proxy) streamResponse(w http.ResponseWriter, r *http.Request, target routing.UpstreamTarget, agentName string, action upstreamAction, cacheKey string) {
 	defer action.cancel()
 	routing.CopyHeaders(action.resp.Header, w.Header())
+	if cacheKey != "" {
+		w.Header().Set("X-Nenya-Cache-Status", "MISS")
+	}
 	w.WriteHeader(action.resp.StatusCode)
 
 	var transformer stream.ResponseTransformer
@@ -160,11 +182,27 @@ func (p *Proxy) streamResponse(w http.ResponseWriter, r *http.Request, target ro
 
 	fw := newImmediateFlushWriter(w)
 
+	var captureBuf *bytes.Buffer
+	var tee *sseTeeWriter
+	if cacheKey != "" && p.GW.ResponseCache != nil {
+		captureBuf = new(bytes.Buffer)
+		tee = &sseTeeWriter{
+			dst:      fw,
+			buf:      captureBuf,
+			maxBytes: p.GW.Config.ResponseCache.MaxEntryBytes,
+		}
+	}
+
+	dst := io.Writer(fw)
+	if tee != nil {
+		dst = tee
+	}
+
 	var copyErr error
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		_, copyErr = copyStream(r.Context(), fw, transformingReader, *buf)
+		_, copyErr = copyStream(r.Context(), dst, transformingReader, *buf)
 	}()
 
 	select {
@@ -195,6 +233,12 @@ func (p *Proxy) streamResponse(w http.ResponseWriter, r *http.Request, target ro
 		}
 		action.resp.Body.Close()
 		p.GW.AgentState.RecordSuccess(target.CoolKey)
+
+		if cacheKey != "" && p.GW.ResponseCache != nil && tee != nil && !tee.exceeded && captureBuf.Len() > 0 {
+			p.GW.ResponseCache.Store(cacheKey, captureBuf.Bytes())
+			p.GW.Logger.Debug("response cache stored",
+				"model", target.Model, "size", captureBuf.Len())
+		}
 	case <-r.Context().Done():
 		p.GW.Logger.Info("client disconnected, aborting upstream stream", "model", target.Model)
 		action.resp.Body.Close()
