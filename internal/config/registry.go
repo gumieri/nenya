@@ -97,8 +97,8 @@ var ModelRegistry = map[string]ModelEntry{
 
 	"minimax-m2.5": {Provider: "minimax_free", MaxContext: 8000, MaxOutput: 4096},
 
-	"llama-3.3-70b-versatile": {Provider: "groq", MaxContext: 131072, MaxOutput: 32768},
-	"mixtral-8x7b-32768":      {Provider: "groq", MaxContext: 32768, MaxOutput: 32768},
+	"llama-3.3-70b-versatile": {Provider: "groq", MaxContext: 131072, MaxOutput: 8192},
+	"mixtral-8x7b-32768":      {Provider: "groq", MaxContext: 32768, MaxOutput: 8192},
 
 	"llama-3.1-405b-instruct": {Provider: "sambanova", MaxContext: 128000, MaxOutput: 4096},
 

@@ -299,7 +299,7 @@ var defaultRetryableStatusCodes = []int{
 }
 
 func isRetryableClientError(statusCode int, body []byte) bool {
-	if statusCode != http.StatusBadRequest && statusCode != http.StatusRequestEntityTooLarge {
+	if statusCode != http.StatusBadRequest && statusCode != http.StatusRequestEntityTooLarge && statusCode != http.StatusUnprocessableEntity {
 		return false
 	}
 	if len(body) == 0 {
@@ -309,11 +309,18 @@ func isRetryableClientError(statusCode int, body []byte) bool {
 	return strings.Contains(lower, "unavailable_model") ||
 		strings.Contains(lower, "tokens_limit_reached") ||
 		strings.Contains(lower, "context_length_exceeded") ||
+		strings.Contains(lower, "context length") ||
 		strings.Contains(lower, "model_overloaded") ||
 		strings.Contains(lower, "overloaded") ||
 		strings.Contains(lower, "thought_signature") ||
 		strings.Contains(lower, "name cannot be empty") ||
-		strings.Contains(lower, "messages parameter is illegal")
+		strings.Contains(lower, "messages parameter is illegal") ||
+		strings.Contains(lower, "unknown_model") ||
+		strings.Contains(lower, "max_tokens") ||
+		strings.Contains(lower, "extra_forbidden") ||
+		strings.Contains(lower, "enable-auto-tool-choice") ||
+		strings.Contains(lower, "tool_call_parser") ||
+		strings.Contains(lower, "valid string")
 }
 
 type rpcDetail struct {

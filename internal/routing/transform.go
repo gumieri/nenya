@@ -90,6 +90,8 @@ func TransformRequestForUpstream(deps TransformDeps, providerName, upstreamURL s
 		SanitizeMessagesForZAI(deps, payload)
 	}
 
+	SanitizePayload(deps, payload, providerName)
+
 	if agentNameRaw, ok := origModel.(string); ok {
 		if agent, ok := deps.Config.Agents[agentNameRaw]; ok {
 			if agent.SystemPrompt != "" || agent.SystemPromptFile != "" {
