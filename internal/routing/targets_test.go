@@ -29,8 +29,8 @@ func TestNewAgentState(t *testing.T) {
 	if a.Counters == nil {
 		t.Fatal("Counters should be initialized")
 	}
-	if a.ModelCooldowns == nil {
-		t.Fatal("ModelCooldowns should be initialized")
+	if a.CB == nil {
+		t.Fatal("CB should be initialized")
 	}
 	if a.ActiveCooldowns() != 0 {
 		t.Fatal("new agent should have no active cooldowns")

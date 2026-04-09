@@ -16,6 +16,10 @@ type AgentModel struct {
 type AgentConfig struct {
 	Strategy         string       `json:"strategy"`
 	CooldownSeconds  int          `json:"cooldown_seconds"`
+	FailureThreshold int          `json:"failure_threshold"`
+	FailureWindowSec int          `json:"failure_window_secs"`
+	SuccessThreshold int          `json:"success_threshold"`
+	MaxRetries       int          `json:"max_retries"`
 	SystemPrompt     string       `json:"system_prompt"`
 	SystemPromptFile string       `json:"system_prompt_file"`
 	Models           []AgentModel `json:"models"`

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"io"
 	"log/slog"
+	"math/rand"
 	"net/http"
 	"strconv"
 	"strings"
@@ -20,6 +21,12 @@ import (
 const maxRetryBackoff = 5 * time.Second
 const maxQuotaCooldown = 30 * time.Minute
 
+const (
+	exponentialBackoffBase   = 500 * time.Millisecond
+	exponentialBackoffMax    = 8 * time.Second
+	exponentialBackoffJitter = 750 * time.Millisecond
+)
+
 type upstreamAction struct {
 	kind   int
 	resp   *http.Response
@@ -33,6 +40,31 @@ const (
 	actionStream
 )
 
+func calculateBackoff(attempt int) time.Duration {
+	delay := exponentialBackoffBase
+	for i := 0; i < attempt; i++ {
+		delay *= 2
+		if delay >= exponentialBackoffMax {
+			delay = exponentialBackoffMax
+			break
+		}
+	}
+	jitter := time.Duration(rand.Int63n(int64(exponentialBackoffJitter)))
+	return delay + jitter
+}
+
+func waitWithCancel(ctx context.Context, d time.Duration) {
+	if d <= 0 {
+		return
+	}
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+	select {
+	case <-timer.C:
+	case <-ctx.Done():
+	}
+}
+
 func (p *Proxy) forwardToUpstream(
 	w http.ResponseWriter,
 	r *http.Request,
@@ -41,6 +73,7 @@ func (p *Proxy) forwardToUpstream(
 	cooldownDuration time.Duration,
 	tokenCount int,
 	agentName string,
+	maxRetries int,
 ) {
 	originalPayload, err := json.Marshal(payload)
 	if err != nil {
@@ -59,7 +92,14 @@ func (p *Proxy) forwardToUpstream(
 		}
 	}
 
+	attempt := 0
 	for i, target := range targets {
+		if maxRetries > 0 && attempt >= maxRetries {
+			p.GW.Logger.Warn("max retries reached",
+				"attempt", attempt, "max", maxRetries, "agent", agentName)
+			break
+		}
+
 		workingPayload := make(map[string]interface{})
 		if err := json.Unmarshal(originalPayload, &workingPayload); err != nil {
 			p.GW.Logger.Error("failed to unmarshal payload for target",
@@ -72,11 +112,25 @@ func (p *Proxy) forwardToUpstream(
 		case actionContinue:
 			continue
 		case actionError:
+			attempt++
 			action.body, _ = io.ReadAll(io.LimitReader(action.resp.Body, pipeline.MaxErrorBodyBytes))
 			action.resp.Body.Close()
-			shouldContinue := p.handleUpstreamError(r, i, targets, target, cooldownDuration, agentName, action)
+			shouldRetry, retryDelay := p.handleUpstreamError(i, targets, target, cooldownDuration, agentName, action)
 			action.cancel()
-			if shouldContinue {
+			if shouldRetry {
+				if maxRetries > 0 && attempt >= maxRetries {
+					break
+				}
+				if retryDelay > 0 {
+					p.GW.Logger.Info("retrying with parsed delay",
+						"model", target.Model, "delay_ms", retryDelay.Milliseconds())
+					waitWithCancel(r.Context(), retryDelay)
+				} else {
+					backoff := calculateBackoff(attempt - 1)
+					p.GW.Logger.Info("retrying with exponential backoff",
+						"model", target.Model, "attempt", attempt, "delay_ms", backoff.Milliseconds())
+					waitWithCancel(r.Context(), backoff)
+				}
 				continue
 			}
 			http.Error(w, "Upstream provider error", action.resp.StatusCode)
@@ -87,7 +141,7 @@ func (p *Proxy) forwardToUpstream(
 		}
 	}
 
-	p.GW.Logger.Error("all upstream targets exhausted", "total", len(targets))
+	p.GW.Logger.Error("all upstream targets exhausted", "total", len(targets), "attempts", attempt)
 	if p.GW.Metrics != nil && agentName != "" {
 		p.GW.Metrics.RecordExhausted(agentName)
 	}
@@ -184,14 +238,13 @@ func (p *Proxy) prepareAndSend(
 }
 
 func (p *Proxy) handleUpstreamError(
-	r *http.Request,
 	idx int,
 	targets []routing.UpstreamTarget,
 	target routing.UpstreamTarget,
 	cooldownDuration time.Duration,
 	agentName string,
 	action upstreamAction,
-) bool {
+) (bool, time.Duration) {
 	errorBody := action.body
 
 	if p.isRetryableStatus(target.Provider, action.resp.StatusCode) {
@@ -200,7 +253,7 @@ func (p *Proxy) handleUpstreamError(
 				"target", idx+1, "total", len(targets), "model", target.Model,
 				"status", action.resp.StatusCode, "body", string(errorBody))
 		} else {
-			p.GW.Logger.Warn("activating cooldown, trying next target",
+			p.GW.Logger.Warn("retryable error, trying next target",
 				"target", idx+1, "total", len(targets), "model", target.Model, "status", action.resp.StatusCode)
 		}
 		effectiveCooldown := cooldownDuration
@@ -213,32 +266,32 @@ func (p *Proxy) handleUpstreamError(
 				}
 			}
 		}
-		p.GW.AgentState.ActivateCooldown(target, effectiveCooldown)
-		if p.GW.Metrics != nil {
+
+		if action.resp.StatusCode == http.StatusTooManyRequests {
+			p.GW.AgentState.ActivateCooldown(target, effectiveCooldown)
+			if p.GW.Metrics != nil {
+				p.GW.Metrics.RecordCooldown(agentName, target.Provider, target.Model)
+			}
+			delay := parseRetryDelay(action.resp.Header, errorBody)
+			return true, delay
+		}
+
+		tripped := p.GW.AgentState.RecordFailure(target, effectiveCooldown)
+		if tripped && p.GW.Metrics != nil {
 			p.GW.Metrics.RecordCooldown(agentName, target.Provider, target.Model)
 		}
-		if action.resp.StatusCode == http.StatusTooManyRequests {
-			delay := parseRetryDelay(action.resp.Header, errorBody)
-			if delay > 0 {
-				p.GW.Logger.Info("rate limited, backing off before retry",
-					"model", target.Model, "delay_ms", delay.Milliseconds())
-				timer := time.NewTimer(delay)
-				select {
-				case <-timer.C:
-				case <-r.Context().Done():
-					timer.Stop()
-				}
-			}
-		}
-		return true
+		return true, 0
 	}
 
-	if isRetryableClientError(action.resp.StatusCode, errorBody) && len(targets) > 1 {
+	if isRetryableClientErrorForProvider(action.resp.StatusCode, errorBody, target.Provider) && len(targets) > 1 {
 		p.GW.Logger.Warn("retryable client error from upstream, trying next target",
 			"target", idx+1, "total", len(targets), "model", target.Model,
 			"status", action.resp.StatusCode, "body", string(errorBody))
-		p.GW.AgentState.ActivateCooldown(target, cooldownDuration)
-		return true
+		tripped := p.GW.AgentState.RecordFailure(target, cooldownDuration)
+		if tripped && p.GW.Metrics != nil {
+			p.GW.Metrics.RecordCooldown(agentName, target.Provider, target.Model)
+		}
+		return true, 0
 	}
 
 	defer action.cancel()
@@ -250,7 +303,7 @@ func (p *Proxy) handleUpstreamError(
 		p.GW.Logger.Error("non-retryable upstream error, empty body",
 			"target", idx+1, "total", len(targets), "model", target.Model, "status", action.resp.StatusCode)
 	}
-	return false
+	return false, 0
 }
 
 func parseQuotaExhaustion(body []byte) time.Duration {
@@ -298,7 +351,39 @@ var defaultRetryableStatusCodes = []int{
 	http.StatusGatewayTimeout,
 }
 
-func isRetryableClientError(statusCode int, body []byte) bool {
+var commonRetryablePatterns = []string{
+	"unavailable_model",
+	"tokens_limit_reached",
+	"context_length_exceeded",
+	"context length",
+	"model_overloaded",
+	"overloaded",
+	"thought_signature",
+	"name cannot be empty",
+	"messages parameter is illegal",
+	"unknown_model",
+	"max_tokens",
+	"rate_limit_exceeded",
+	"extra_forbidden",
+	"enable-auto-tool-choice",
+	"tool_call_parser",
+	"valid string",
+}
+
+var anthropicRetryablePatterns = []string{
+	"overloaded_error",
+	"prompt is too long",
+	"prompt: length",
+}
+
+var geminiRetryablePatterns = []string{
+	"resource_exhausted",
+	"the response was blocked",
+	"content has no parts",
+	"quota exceeded",
+}
+
+func isRetryableClientErrorForProvider(statusCode int, body []byte, provider string) bool {
 	if statusCode != http.StatusBadRequest && statusCode != http.StatusRequestEntityTooLarge && statusCode != http.StatusUnprocessableEntity {
 		return false
 	}
@@ -306,22 +391,34 @@ func isRetryableClientError(statusCode int, body []byte) bool {
 		return false
 	}
 	lower := strings.ToLower(string(body))
-	return strings.Contains(lower, "unavailable_model") ||
-		strings.Contains(lower, "tokens_limit_reached") ||
-		strings.Contains(lower, "context_length_exceeded") ||
-		strings.Contains(lower, "context length") ||
-		strings.Contains(lower, "model_overloaded") ||
-		strings.Contains(lower, "overloaded") ||
-		strings.Contains(lower, "thought_signature") ||
-		strings.Contains(lower, "name cannot be empty") ||
-		strings.Contains(lower, "messages parameter is illegal") ||
-		strings.Contains(lower, "unknown_model") ||
-		strings.Contains(lower, "max_tokens") ||
-		strings.Contains(lower, "rate_limit_exceeded") ||
-		strings.Contains(lower, "extra_forbidden") ||
-		strings.Contains(lower, "enable-auto-tool-choice") ||
-		strings.Contains(lower, "tool_call_parser") ||
-		strings.Contains(lower, "valid string")
+
+	for _, pat := range commonRetryablePatterns {
+		if strings.Contains(lower, pat) {
+			return true
+		}
+	}
+
+	lp := strings.ToLower(provider)
+	if strings.Contains(lp, "anthropic") {
+		for _, pat := range anthropicRetryablePatterns {
+			if strings.Contains(lower, pat) {
+				return true
+			}
+		}
+	}
+	if strings.Contains(lp, "gemini") || strings.Contains(lp, "vertex") {
+		for _, pat := range geminiRetryablePatterns {
+			if strings.Contains(lower, pat) {
+				return true
+			}
+		}
+	}
+
+	return false
+}
+
+func isRetryableClientError(statusCode int, body []byte) bool {
+	return isRetryableClientErrorForProvider(statusCode, body, "")
 }
 
 type rpcDetail struct {

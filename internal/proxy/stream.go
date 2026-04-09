@@ -9,9 +9,9 @@ import (
 	"sync"
 	"time"
 
+	providerpkg "nenya/internal/providers"
 	"nenya/internal/routing"
 	"nenya/internal/stream"
-	providerpkg "nenya/internal/providers"
 )
 
 const streamIdleTimeout = 120 * time.Second
@@ -116,6 +116,7 @@ func (p *Proxy) streamResponse(w http.ResponseWriter, r *http.Request, target ro
 			return
 		}
 		action.resp.Body.Close()
+		p.GW.AgentState.RecordSuccess(target.CoolKey)
 	case <-r.Context().Done():
 		p.GW.Logger.Info("client disconnected, aborting upstream stream", "model", target.Model)
 		action.resp.Body.Close()

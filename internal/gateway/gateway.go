@@ -119,6 +119,7 @@ func New(cfg config.Config, secrets *config.SecretsConfig, logger *slog.Logger) 
 	gw.Metrics = infra.NewMetrics()
 	gw.Metrics.RateLimits = gw.RateLimiter.Snapshot
 	gw.Metrics.Cooldowns = gw.AgentState.ActiveCooldowns
+	gw.Metrics.CBStates = gw.AgentState.CBSnapshot
 
 	return gw
 }
@@ -127,6 +128,7 @@ func (g *NenyaGateway) InitMetrics() {
 	g.Metrics = infra.NewMetrics()
 	g.Metrics.RateLimits = g.RateLimiter.Snapshot
 	g.Metrics.Cooldowns = g.AgentState.ActiveCooldowns
+	g.Metrics.CBStates = g.AgentState.CBSnapshot
 }
 
 func (g *NenyaGateway) CountTokens(text string) int {
