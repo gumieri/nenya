@@ -27,7 +27,7 @@ depends = ["build"]
 run = """
 install -Dm755 nenya /usr/local/bin/nenya
 if [ ! -f /etc/nenya/config.json ]; then
-	install -Dm644 example.config.json /etc/nenya/config.json
+	install -Dm644 configs/example.config.json /etc/nenya/config.json
 	echo "Installed example config to /etc/nenya/config.json"
 else
 	echo "Config /etc/nenya/config.json exists, skipping overwrite"

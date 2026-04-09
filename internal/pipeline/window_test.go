@@ -190,9 +190,9 @@ func TestApplyWindowCompaction(t *testing.T) {
 
 	t.Run("below threshold returns false", func(t *testing.T) {
 		cfg := config.WindowConfig{
-			Enabled:      true,
-			TriggerRatio: 0.8,
-			MaxContext:   10000,
+			Enabled:        true,
+			TriggerRatio:   0.8,
+			MaxContext:     10000,
 			ActiveMessages: 2,
 		}
 		deps := WindowDeps{Logger: logger}
@@ -213,9 +213,9 @@ func TestApplyWindowCompaction(t *testing.T) {
 
 	t.Run("not enough messages below active_messages", func(t *testing.T) {
 		cfg := config.WindowConfig{
-			Enabled:      true,
-			TriggerRatio: 0.1,
-			MaxContext:   100,
+			Enabled:        true,
+			TriggerRatio:   0.1,
+			MaxContext:     100,
 			ActiveMessages: 10,
 		}
 		deps := WindowDeps{Logger: logger}
@@ -236,11 +236,11 @@ func TestApplyWindowCompaction(t *testing.T) {
 
 	t.Run("truncate mode compacts and creates summary", func(t *testing.T) {
 		cfg := config.WindowConfig{
-			Enabled:        true,
-			Mode:           "truncate",
-			TriggerRatio:   0.1,
-			MaxContext:     100,
-			ActiveMessages: 2,
+			Enabled:         true,
+			Mode:            "truncate",
+			TriggerRatio:    0.1,
+			MaxContext:      100,
+			ActiveMessages:  2,
 			SummaryMaxRunes: 500,
 		}
 		deps := WindowDeps{Logger: logger}
