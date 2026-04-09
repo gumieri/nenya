@@ -317,6 +317,7 @@ func isRetryableClientError(statusCode int, body []byte) bool {
 		strings.Contains(lower, "messages parameter is illegal") ||
 		strings.Contains(lower, "unknown_model") ||
 		strings.Contains(lower, "max_tokens") ||
+		strings.Contains(lower, "rate_limit_exceeded") ||
 		strings.Contains(lower, "extra_forbidden") ||
 		strings.Contains(lower, "enable-auto-tool-choice") ||
 		strings.Contains(lower, "tool_call_parser") ||
