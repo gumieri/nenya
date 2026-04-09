@@ -36,13 +36,13 @@ jobs:
 
             echo "Building ${GOOS}/${GOARCH}..."
             CGO_ENABLED=0 GOOS="$GOOS" GOARCH="$GOARCH" \
-              go build -ldflags="-s -w" -o "dist/${BINARY}" .
+              go build -ldflags="-s -w" -o "dist/${BINARY}" ./cmd/nenya
 
             ARCHIVE="nenya-${VERSION}-${GOOS}-${GOARCH}.${EXT}"
             echo "Packaging ${ARCHIVE}..."
 
-            cp nenya.service dist/nenya.service
-            cp example.config.json dist/config.json.example
+            cp deploy/nenya.service dist/nenya.service
+            cp configs/example.config.json dist/config.json.example
             tar -czf "${ARCHIVE}" -C dist "${BINARY}" nenya.service config.json.example
 
             rm -f "dist/${BINARY}" dist/nenya.service dist/config.json.example
