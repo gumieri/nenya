@@ -549,7 +549,7 @@ func BenchmarkParseRetryDelay_RPCBody(b *testing.B) {
 func BenchmarkIsRetryableClientError(b *testing.B) {
 	body := []byte(`{"error":"unavailable_model"}`)
 	for i := 0; i < b.N; i++ {
-		isRetryableClientError(http.StatusBadRequest, body)
+		isRetryableClientErrorForProvider(http.StatusBadRequest, body, "")
 	}
 }
 
@@ -590,7 +590,7 @@ func FuzzParseQuotaExhaustion(f *testing.F) {
 
 func FuzzIsRetryableClientError(f *testing.F) {
 	f.Fuzz(func(t *testing.T, statusCode int, body []byte) {
-		isRetryableClientError(statusCode, body)
+		isRetryableClientErrorForProvider(statusCode, body, "")
 	})
 }
 

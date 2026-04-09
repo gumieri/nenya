@@ -136,7 +136,9 @@ func (p *Proxy) handleModels(w http.ResponseWriter) {
 
 func (p *Proxy) handleStats(w http.ResponseWriter) {
 	w.Header().Set("Content-Type", "application/json")
-	if err := json.NewEncoder(w).Encode(p.GW.Stats.Snapshot()); err != nil {
+	stats := p.GW.Stats.Snapshot()
+	stats["circuit_breakers"] = p.GW.AgentState.CBSnapshot()
+	if err := json.NewEncoder(w).Encode(stats); err != nil {
 		p.GW.Logger.Error("failed to encode stats response", "err", err)
 	}
 }

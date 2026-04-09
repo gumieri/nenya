@@ -57,6 +57,7 @@ func (p *Proxy) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 	var cooldownDuration time.Duration
 	var agentName string
 
+	var maxRetries int
 	if agent, ok := p.GW.Config.Agents[modelName]; ok {
 		agentName = modelName
 		secs := agent.CooldownSeconds
@@ -64,6 +65,7 @@ func (p *Proxy) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 			secs = routing.DefaultAgentCooldownSec
 		}
 		cooldownDuration = time.Duration(secs) * time.Second
+		maxRetries = agent.MaxRetries
 		targets = p.GW.AgentState.BuildTargetList(p.GW.Logger, modelName, agent, tokenCount, p.GW.Providers)
 		if len(targets) == 0 {
 			if len(agent.Models) > 0 {
@@ -106,7 +108,7 @@ func (p *Proxy) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	p.forwardToUpstream(w, r, targets, payload, cooldownDuration, tokenCount, agentName)
+	p.forwardToUpstream(w, r, targets, payload, cooldownDuration, tokenCount, agentName, maxRetries)
 }
 
 func (p *Proxy) applyContentPipeline(ctx context.Context, payload map[string]interface{}, tokenCount int, windowMaxCtx int) error {
