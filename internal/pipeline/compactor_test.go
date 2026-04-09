@@ -137,7 +137,7 @@ func TestApplyCompaction(t *testing.T) {
 	t.Run("messages with array content", func(t *testing.T) {
 		messages := []interface{}{
 			map[string]interface{}{
-				"role":    "user",
+				"role": "user",
 				"content": []interface{}{
 					map[string]interface{}{"type": "text", "text": "hello  \r\n\n\n\nworld   "},
 					map[string]interface{}{"type": "image_url", "image_url": map[string]interface{}{"url": "http://example.com/img.png"}},

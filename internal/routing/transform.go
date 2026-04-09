@@ -12,10 +12,10 @@ import (
 )
 
 type TransformDeps struct {
-	Logger           *slog.Logger
-	Providers        map[string]*config.Provider
-	Config           *config.Config
-	ThoughtSigCache  *infra.ThoughtSignatureCache
+	Logger             *slog.Logger
+	Providers          map[string]*config.Provider
+	Config             *config.Config
+	ThoughtSigCache    *infra.ThoughtSignatureCache
 	ExtractContentText func(msg map[string]interface{}) string
 }
 

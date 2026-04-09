@@ -196,7 +196,7 @@ type PrefixCacheConfig struct {
 	skipRedactionSet      bool `json:"-"`
 }
 
-func (c *PrefixCacheConfig) PinWasSet() bool         { return c.pinSet }
+func (c *PrefixCacheConfig) PinWasSet() bool           { return c.pinSet }
 func (c *PrefixCacheConfig) StableWasSet() bool        { return c.stableSet }
 func (c *PrefixCacheConfig) SkipRedactionWasSet() bool { return c.skipRedactionSet }
 
@@ -242,10 +242,10 @@ type CompactionConfig struct {
 }
 
 func (c *CompactionConfig) EnabledWasSet() bool  { return c.enabledSet }
-func (c *CompactionConfig) MinifyWasSet() bool    { return c.minifySet }
-func (c *CompactionConfig) CollapseWasSet() bool  { return c.collapseSet }
-func (c *CompactionConfig) TrimWasSet() bool      { return c.trimSet }
-func (c *CompactionConfig) NormWasSet() bool      { return c.normalizeSet }
+func (c *CompactionConfig) MinifyWasSet() bool   { return c.minifySet }
+func (c *CompactionConfig) CollapseWasSet() bool { return c.collapseSet }
+func (c *CompactionConfig) TrimWasSet() bool     { return c.trimSet }
+func (c *CompactionConfig) NormWasSet() bool     { return c.normalizeSet }
 
 func (c *CompactionConfig) UnmarshalJSON(data []byte) error {
 	type alias CompactionConfig

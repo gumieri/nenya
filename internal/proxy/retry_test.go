@@ -271,19 +271,19 @@ func TestCapRetryDelay_Zero(t *testing.T) {
 }
 
 func TestCapRetryDelay_Negative(t *testing.T) {
-	if capRetryDelay(-5 * time.Second) != 0 {
+	if capRetryDelay(-5*time.Second) != 0 {
 		t.Fatal("expected 0")
 	}
 }
 
 func TestCapRetryDelay_WithinCap(t *testing.T) {
-	if capRetryDelay(3 * time.Second) != 3*time.Second {
+	if capRetryDelay(3*time.Second) != 3*time.Second {
 		t.Fatal("expected 3s")
 	}
 }
 
 func TestCapRetryDelay_OverCap(t *testing.T) {
-	if capRetryDelay(60 * time.Second) != maxRetryBackoff {
+	if capRetryDelay(60*time.Second) != maxRetryBackoff {
 		t.Fatal("expected maxRetryBackoff")
 	}
 }

@@ -12,8 +12,8 @@ import (
 
 func geminiDeps() TransformDeps {
 	return TransformDeps{
-		Logger:  slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelDebug})),
-		Config:  &config.Config{},
+		Logger: slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelDebug})),
+		Config: &config.Config{},
 		ExtractContentText: func(msg map[string]interface{}) string {
 			if c, ok := msg["content"].(string); ok {
 				return c
@@ -27,10 +27,10 @@ func TestGemini_NormalToolCallsNoStripping(t *testing.T) {
 	deps := geminiDeps()
 
 	toolCall := map[string]interface{}{
-		"id":             "tc-1",
-		"type":           "function",
-		"extra_content":  "thought-sig-abc",
-		"function":       map[string]interface{}{"name": "read_file"},
+		"id":            "tc-1",
+		"type":          "function",
+		"extra_content": "thought-sig-abc",
+		"function":      map[string]interface{}{"name": "read_file"},
 	}
 
 	payload := map[string]interface{}{
@@ -132,8 +132,8 @@ func TestGemini_OrphanedToolResponsesRemoved(t *testing.T) {
 	payload := map[string]interface{}{
 		"messages": []interface{}{
 			map[string]interface{}{
-				"role":       "assistant",
-				"content":    "I'll call a function.",
+				"role":    "assistant",
+				"content": "I'll call a function.",
 				"tool_calls": []interface{}{
 					map[string]interface{}{
 						"id":       "tc-no-extra",
@@ -174,7 +174,7 @@ func TestGemini_FunctionNameInjection(t *testing.T) {
 	payload := map[string]interface{}{
 		"messages": []interface{}{
 			map[string]interface{}{
-				"role":       "assistant",
+				"role": "assistant",
 				"tool_calls": []interface{}{
 					map[string]interface{}{
 						"id":            "tc-1",
@@ -211,7 +211,7 @@ func TestGemini_CachedThoughtSignature(t *testing.T) {
 	payload := map[string]interface{}{
 		"messages": []interface{}{
 			map[string]interface{}{
-				"role":       "assistant",
+				"role": "assistant",
 				"tool_calls": []interface{}{
 					map[string]interface{}{
 						"id":       "tc-cached",
@@ -249,11 +249,11 @@ func TestGemini_EmptyAssistantAfterStripping(t *testing.T) {
 	payload := map[string]interface{}{
 		"messages": []interface{}{
 			map[string]interface{}{
-				"role": "user",
+				"role":    "user",
 				"content": "hello",
 			},
 			map[string]interface{}{
-				"role":       "assistant",
+				"role": "assistant",
 				"tool_calls": []interface{}{
 					map[string]interface{}{
 						"id":       "tc-orphan",
