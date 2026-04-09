@@ -10,8 +10,8 @@ import (
 
 func defaultSanitizeDeps() TransformDeps {
 	return TransformDeps{
-		Logger:  slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelDebug})),
-		Config:  &config.Config{},
+		Logger: slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelDebug})),
+		Config: &config.Config{},
 		ExtractContentText: func(msg map[string]interface{}) string {
 			if c, ok := msg["content"].(string); ok {
 				return c
@@ -79,7 +79,7 @@ func TestSanitizePayload_StripAutoToolChoice(t *testing.T) {
 	deps.Providers = providers
 
 	payload := map[string]interface{}{
-		"model":      "nemotron-3-super",
+		"model":       "nemotron-3-super",
 		"tool_choice": "auto",
 	}
 	SanitizePayload(deps, payload, "nvidia")
@@ -96,7 +96,7 @@ func TestSanitizePayload_KeepAutoToolChoice(t *testing.T) {
 	deps.Providers = providers
 
 	payload := map[string]interface{}{
-		"model":      "deepseek-reasoner",
+		"model":       "deepseek-reasoner",
 		"tool_choice": "auto",
 	}
 	SanitizePayload(deps, payload, "deepseek")
@@ -113,7 +113,7 @@ func TestSanitizePayload_StripNonStringToolChoice(t *testing.T) {
 	deps.Providers = providers
 
 	payload := map[string]interface{}{
-		"model":      "nemotron-3-super",
+		"model":       "nemotron-3-super",
 		"tool_choice": map[string]interface{}{"type": "function", "function": map[string]interface{}{"name": "foo"}},
 	}
 	SanitizePayload(deps, payload, "nvidia")
@@ -133,7 +133,7 @@ func TestSanitizePayload_FlattenContentArrays(t *testing.T) {
 		"model": "nemotron-3-super",
 		"messages": []interface{}{
 			map[string]interface{}{
-				"role":    "user",
+				"role": "user",
 				"content": []interface{}{
 					map[string]interface{}{"type": "text", "text": "hello"},
 					map[string]interface{}{"type": "text", "text": "world"},
@@ -186,9 +186,9 @@ func TestSanitizePayload_NoMessages(t *testing.T) {
 
 func TestFlattenContentArray(t *testing.T) {
 	tests := []struct {
-		name string
+		name  string
 		input []interface{}
-		want string
+		want  string
 	}{
 		{"text blocks", []interface{}{
 			map[string]interface{}{"type": "text", "text": "hello"},
