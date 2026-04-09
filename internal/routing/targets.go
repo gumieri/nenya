@@ -10,10 +10,10 @@ import (
 )
 
 const (
-	DefaultAgentCooldownSec = 60
-	DefaultFailureThreshold = 5
-	DefaultFailureWindowSec = 60
-	DefaultSuccessThreshold = 1
+	DefaultAgentCooldownSec    = 60
+	DefaultFailureThreshold    = 5
+	DefaultSuccessThreshold    = 1
+	DefaultHalfOpenMaxRequests = 3
 )
 
 type AgentState struct {
@@ -22,14 +22,29 @@ type AgentState struct {
 	Mu       sync.Mutex
 }
 
-func NewAgentState() *AgentState {
+func NewAgentState(logger *slog.Logger) *AgentState {
+	onChange := func(key string, from, to resilience.State) {
+		switch to {
+		case resilience.StateOpen:
+			logger.Warn("[CIRCUIT BREAKER] "+key+" is DOWN/RATE-LIMITED. Tripping circuit. Skipping for 60s.",
+				"from", from, "to", to)
+		case resilience.StateHalfOpen:
+			logger.Info("[CIRCUIT BREAKER] "+key+" probing upstream (HALF_OPEN).",
+				"from", from, "to", to)
+		case resilience.StateClosed:
+			logger.Info("[CIRCUIT BREAKER] "+key+" recovered — circuit CLOSED.",
+				"from", from, "to", to)
+		}
+	}
+
 	return &AgentState{
 		Counters: make(map[string]uint64),
 		CB: resilience.NewCircuitBreaker(
 			DefaultFailureThreshold,
 			DefaultSuccessThreshold,
-			time.Duration(DefaultFailureWindowSec)*time.Second,
+			DefaultHalfOpenMaxRequests,
 			time.Duration(DefaultAgentCooldownSec)*time.Second,
+			onChange,
 		),
 	}
 }
@@ -101,11 +116,11 @@ func (a *AgentState) ActivateCooldown(target UpstreamTarget, cooldownDuration ti
 	a.CB.ForceOpen(target.CoolKey, cooldownDuration)
 }
 
-func (a *AgentState) RecordFailure(target UpstreamTarget, cooldownDuration time.Duration) bool {
+func (a *AgentState) RecordFailure(target UpstreamTarget, cooldownDuration time.Duration) {
 	if target.CoolKey == "" {
-		return false
+		return
 	}
-	return a.CB.RecordFailure(target.CoolKey, cooldownDuration)
+	a.CB.RecordFailure(target.CoolKey, cooldownDuration)
 }
 
 func (a *AgentState) RecordSuccess(key string) {

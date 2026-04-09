@@ -22,7 +22,7 @@ type discardWriter struct{}
 func (d *discardWriter) Write(p []byte) (int, error) { return len(p), nil }
 
 func TestNewAgentState(t *testing.T) {
-	a := NewAgentState()
+	a := NewAgentState(testLogger())
 	if a == nil {
 		t.Fatal("NewAgentState returned nil")
 	}
@@ -39,7 +39,7 @@ func TestNewAgentState(t *testing.T) {
 
 func TestBuildTargetList_RoundRobin(t *testing.T) {
 	p := targetProviders()
-	a := NewAgentState()
+	a := NewAgentState(testLogger())
 	agent := config.AgentConfig{
 		Models: []config.AgentModel{
 			{Provider: "gemini", Model: "gemini-2.5-flash"},
@@ -77,7 +77,7 @@ func TestBuildTargetList_RoundRobin(t *testing.T) {
 
 func TestBuildTargetList_CooldownSkip(t *testing.T) {
 	p := targetProviders()
-	a := NewAgentState()
+	a := NewAgentState(testLogger())
 	agent := config.AgentConfig{
 		Models: []config.AgentModel{
 			{Provider: "gemini", Model: "gemini-2.5-flash"},
@@ -105,7 +105,7 @@ func TestBuildTargetList_CooldownSkip(t *testing.T) {
 
 func TestBuildTargetList_FallbackStrategy(t *testing.T) {
 	p := targetProviders()
-	a := NewAgentState()
+	a := NewAgentState(testLogger())
 	agent := config.AgentConfig{
 		Strategy: "fallback",
 		Models: []config.AgentModel{
@@ -124,7 +124,7 @@ func TestBuildTargetList_FallbackStrategy(t *testing.T) {
 
 func TestBuildTargetList_UnknownProviderSkipped(t *testing.T) {
 	p := targetProviders()
-	a := NewAgentState()
+	a := NewAgentState(testLogger())
 	agent := config.AgentConfig{
 		Models: []config.AgentModel{
 			{Provider: "gemini", Model: "gemini-2.5-flash"},
@@ -146,7 +146,7 @@ func TestBuildTargetList_UnknownProviderSkipped(t *testing.T) {
 
 func TestBuildTargetList_EmptyModels(t *testing.T) {
 	p := targetProviders()
-	a := NewAgentState()
+	a := NewAgentState(testLogger())
 	agent := config.AgentConfig{}
 
 	targets := a.BuildTargetList(testLogger(), "test-agent", agent, 1000, p)
@@ -157,7 +157,7 @@ func TestBuildTargetList_EmptyModels(t *testing.T) {
 
 func TestBuildTargetList_TokenCountExceedsMaxContext(t *testing.T) {
 	p := targetProviders()
-	a := NewAgentState()
+	a := NewAgentState(testLogger())
 	agent := config.AgentConfig{
 		Models: []config.AgentModel{
 			{Provider: "nvidia_free", Model: "nemotron-3-super"},
@@ -176,7 +176,7 @@ func TestBuildTargetList_TokenCountExceedsMaxContext(t *testing.T) {
 
 func TestBuildTargetList_MaxContextFromAgentModel(t *testing.T) {
 	p := targetProviders()
-	a := NewAgentState()
+	a := NewAgentState(testLogger())
 	agent := config.AgentConfig{
 		Models: []config.AgentModel{
 			{Provider: "gemini", Model: "gemini-2.5-flash", MaxContext: 500},
@@ -195,7 +195,7 @@ func TestBuildTargetList_MaxContextFromAgentModel(t *testing.T) {
 
 func TestBuildTargetList_TargetFields(t *testing.T) {
 	p := targetProviders()
-	a := NewAgentState()
+	a := NewAgentState(testLogger())
 	agent := config.AgentConfig{
 		Models: []config.AgentModel{
 			{Provider: "deepseek", Model: "deepseek-chat"},
@@ -226,7 +226,7 @@ func TestBuildTargetList_TargetFields(t *testing.T) {
 }
 
 func TestActivateCooldown_Active(t *testing.T) {
-	a := NewAgentState()
+	a := NewAgentState(testLogger())
 	target := UpstreamTarget{
 		CoolKey: "agent:gemini:gemini-2.5-flash",
 	}
@@ -239,7 +239,7 @@ func TestActivateCooldown_Active(t *testing.T) {
 }
 
 func TestActivateCooldown_ZeroDuration(t *testing.T) {
-	a := NewAgentState()
+	a := NewAgentState(testLogger())
 	target := UpstreamTarget{
 		CoolKey: "agent:gemini:gemini-2.5-flash",
 	}
@@ -252,7 +252,7 @@ func TestActivateCooldown_ZeroDuration(t *testing.T) {
 }
 
 func TestActivateCooldown_EmptyCoolKey(t *testing.T) {
-	a := NewAgentState()
+	a := NewAgentState(testLogger())
 	target := UpstreamTarget{
 		CoolKey: "",
 	}
@@ -265,7 +265,7 @@ func TestActivateCooldown_EmptyCoolKey(t *testing.T) {
 }
 
 func TestActivateCooldown_Expires(t *testing.T) {
-	a := NewAgentState()
+	a := NewAgentState(testLogger())
 	target := UpstreamTarget{
 		CoolKey: "agent:gemini:gemini-2.5-flash",
 	}
@@ -279,7 +279,7 @@ func TestActivateCooldown_Expires(t *testing.T) {
 }
 
 func TestActiveCooldowns_Multiple(t *testing.T) {
-	a := NewAgentState()
+	a := NewAgentState(testLogger())
 
 	a.ActivateCooldown(UpstreamTarget{CoolKey: "a"}, 5*time.Minute)
 	a.ActivateCooldown(UpstreamTarget{CoolKey: "b"}, 5*time.Minute)

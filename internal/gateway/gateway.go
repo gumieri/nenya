@@ -112,7 +112,7 @@ func New(cfg config.Config, secrets *config.SecretsConfig, logger *slog.Logger) 
 		Stats:           infra.NewUsageTracker(),
 		Metrics:         nil,
 		Logger:          logger,
-		AgentState:      routing.NewAgentState(),
+		AgentState:      routing.NewAgentState(logger),
 		ThoughtSigCache: infra.NewThoughtSignatureCache(1000, 30*time.Minute),
 	}
 

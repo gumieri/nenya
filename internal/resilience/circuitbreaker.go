@@ -26,51 +26,101 @@ func (s State) String() string {
 	}
 }
 
-type circuit struct {
-	state          State
-	failures       []time.Time
-	successes      int
-	lastChange     time.Time
-	cooldownExpiry time.Time
+type Counts struct {
+	Requests             uint32
+	TotalSuccesses       uint32
+	TotalFailures        uint32
+	ConsecutiveSuccesses uint32
+	ConsecutiveFailures  uint32
 }
 
-func (c *circuit) pruneFailures(now time.Time, window time.Duration) {
-	cutoff := now.Add(-window)
-	i := 0
-	for i < len(c.failures) && !c.failures[i].After(cutoff) {
-		i++
-	}
-	if i > 0 {
-		c.failures = c.failures[i:]
-	}
+type circuit struct {
+	state            State
+	generation       uint64
+	counts           Counts
+	expiry           time.Time
+	halfOpenInflight uint32
+	lastChange       time.Time
 }
 
 type CircuitBreaker struct {
-	mu               sync.Mutex
-	circuits         map[string]*circuit
-	failureThreshold int
-	successThreshold int
-	windowDuration   time.Duration
-	defaultCooldown  time.Duration
+	mu                  sync.Mutex
+	circuits            map[string]*circuit
+	failureThreshold    uint32
+	successThreshold    uint32
+	halfOpenMaxRequests uint32
+	cooldown            time.Duration
+	onStateChange       func(key string, from, to State)
 }
 
-func NewCircuitBreaker(failureThreshold, successThreshold int, windowDuration, defaultCooldown time.Duration) *CircuitBreaker {
+func NewCircuitBreaker(failureThreshold, successThreshold int, halfOpenMaxRequests uint32, cooldown time.Duration, onStateChange func(string, State, State)) *CircuitBreaker {
+	if failureThreshold <= 0 {
+		failureThreshold = 5
+	}
+	if successThreshold <= 0 {
+		successThreshold = 1
+	}
+	if halfOpenMaxRequests == 0 {
+		halfOpenMaxRequests = 1
+	}
+	if cooldown <= 0 {
+		cooldown = 60 * time.Second
+	}
+
 	return &CircuitBreaker{
-		circuits:         make(map[string]*circuit),
-		failureThreshold: failureThreshold,
-		successThreshold: successThreshold,
-		windowDuration:   windowDuration,
-		defaultCooldown:  defaultCooldown,
+		circuits:            make(map[string]*circuit),
+		failureThreshold:    uint32(failureThreshold),
+		successThreshold:    uint32(successThreshold),
+		halfOpenMaxRequests: halfOpenMaxRequests,
+		cooldown:            cooldown,
+		onStateChange:       onStateChange,
 	}
 }
 
 func (cb *CircuitBreaker) getOrCreate(key string) *circuit {
 	c, ok := cb.circuits[key]
 	if !ok {
-		c = &circuit{state: StateClosed, lastChange: time.Now()}
+		c = &circuit{
+			state:      StateClosed,
+			generation: 1,
+			expiry:     time.Time{},
+		}
 		cb.circuits[key] = c
 	}
 	return c
+}
+
+func (cb *CircuitBreaker) setState(c *circuit, newState State, key string) {
+	if c.state == newState {
+		return
+	}
+
+	from := c.state
+	c.state = newState
+	c.generation++
+
+	c.counts.Requests = 0
+	c.counts.TotalSuccesses = 0
+	c.counts.TotalFailures = 0
+	c.counts.ConsecutiveSuccesses = 0
+	c.counts.ConsecutiveFailures = 0
+	c.halfOpenInflight = 0
+
+	now := time.Now()
+	c.lastChange = now
+
+	switch newState {
+	case StateClosed:
+		c.expiry = time.Time{}
+	case StateOpen:
+		c.expiry = now.Add(cb.cooldown)
+	case StateHalfOpen:
+		c.expiry = time.Time{}
+	}
+
+	if cb.onStateChange != nil {
+		cb.onStateChange(key, from, newState)
+	}
 }
 
 func (cb *CircuitBreaker) Allow(key string) bool {
@@ -82,27 +132,34 @@ func (cb *CircuitBreaker) Allow(key string) bool {
 
 	switch c.state {
 	case StateClosed:
+		c.counts.Requests++
+		c.lastChange = now
 		return true
+
 	case StateOpen:
-		if now.After(c.cooldownExpiry) {
-			c.state = StateHalfOpen
-			c.successes = 0
+		if now.After(c.expiry) {
+			cb.setState(c, StateHalfOpen, key)
+			c.counts.Requests++
+			c.halfOpenInflight++
 			c.lastChange = now
 			return true
 		}
 		return false
+
 	case StateHalfOpen:
+		if c.halfOpenInflight >= cb.halfOpenMaxRequests {
+			return false
+		}
+		c.counts.Requests++
+		c.halfOpenInflight++
+		c.lastChange = now
 		return true
 	}
-	return true
+
+	return false
 }
 
-func (cb *CircuitBreaker) RecordFailure(key string, cooldownOverride ...time.Duration) bool {
-	cd := cb.defaultCooldown
-	if len(cooldownOverride) > 0 && cooldownOverride[0] > 0 {
-		cd = cooldownOverride[0]
-	}
-
+func (cb *CircuitBreaker) RecordFailure(key string, cooldownOverride ...time.Duration) {
 	cb.mu.Lock()
 	defer cb.mu.Unlock()
 
@@ -111,31 +168,70 @@ func (cb *CircuitBreaker) RecordFailure(key string, cooldownOverride ...time.Dur
 
 	switch c.state {
 	case StateClosed:
-		c.pruneFailures(now, cb.windowDuration)
-		c.failures = append(c.failures, now)
-		if len(c.failures) >= cb.failureThreshold {
-			c.state = StateOpen
-			c.cooldownExpiry = now.Add(cd)
-			c.lastChange = now
-			return true
+		c.counts.Requests++
+		c.counts.TotalFailures++
+		c.counts.ConsecutiveFailures++
+		c.counts.ConsecutiveSuccesses = 0
+		c.lastChange = now
+
+		if c.counts.ConsecutiveFailures >= cb.failureThreshold {
+			cd := cb.cooldown
+			if len(cooldownOverride) > 0 && cooldownOverride[0] > 0 {
+				cd = cooldownOverride[0]
+			}
+			cb.setState(c, StateOpen, key)
+			c.expiry = now.Add(cd)
 		}
-		return false
 
 	case StateHalfOpen:
-		c.state = StateOpen
-		c.cooldownExpiry = now.Add(cd)
+		cd := cb.cooldown
+		if len(cooldownOverride) > 0 && cooldownOverride[0] > 0 {
+			cd = cooldownOverride[0]
+		}
+		cb.setState(c, StateOpen, key)
+		c.expiry = now.Add(cd)
 		c.lastChange = now
-		c.successes = 0
-		return true
 
 	case StateOpen:
-		newExpiry := now.Add(cd)
-		if newExpiry.After(c.cooldownExpiry) {
-			c.cooldownExpiry = newExpiry
+		if len(cooldownOverride) > 0 && cooldownOverride[0] > 0 {
+			newExpiry := now.Add(cooldownOverride[0])
+			if newExpiry.After(c.expiry) {
+				c.expiry = newExpiry
+			}
 		}
-		return false
 	}
-	return false
+}
+
+func (cb *CircuitBreaker) RecordSuccess(key string) {
+	cb.mu.Lock()
+	defer cb.mu.Unlock()
+
+	c := cb.getOrCreate(key)
+	now := time.Now()
+
+	switch c.state {
+	case StateClosed:
+		c.counts.Requests++
+		c.counts.TotalSuccesses++
+		c.counts.ConsecutiveSuccesses++
+		c.counts.ConsecutiveFailures = 0
+		c.lastChange = now
+
+	case StateHalfOpen:
+		c.counts.Requests++
+		c.counts.TotalSuccesses++
+		c.counts.ConsecutiveSuccesses++
+		c.counts.ConsecutiveFailures = 0
+		if c.halfOpenInflight > 0 {
+			c.halfOpenInflight--
+		}
+
+		if c.counts.ConsecutiveSuccesses >= cb.successThreshold {
+			cb.setState(c, StateClosed, key)
+		} else {
+			c.lastChange = now
+		}
+	}
 }
 
 func (cb *CircuitBreaker) ForceOpen(key string, cooldown time.Duration) {
@@ -148,33 +244,8 @@ func (cb *CircuitBreaker) ForceOpen(key string, cooldown time.Duration) {
 
 	c := cb.getOrCreate(key)
 	now := time.Now()
-	c.state = StateOpen
-	c.failures = nil
-	c.successes = 0
-	c.cooldownExpiry = now.Add(cooldown)
-	c.lastChange = now
-}
-
-func (cb *CircuitBreaker) RecordSuccess(key string) {
-	cb.mu.Lock()
-	defer cb.mu.Unlock()
-
-	c := cb.getOrCreate(key)
-	now := time.Now()
-
-	switch c.state {
-	case StateHalfOpen:
-		c.successes++
-		if c.successes >= cb.successThreshold {
-			c.state = StateClosed
-			c.failures = nil
-			c.successes = 0
-			c.lastChange = now
-		}
-
-	case StateClosed:
-		c.pruneFailures(now, cb.windowDuration)
-	}
+	cb.setState(c, StateOpen, key)
+	c.expiry = now.Add(cooldown)
 }
 
 func (cb *CircuitBreaker) State(key string) State {
@@ -185,9 +256,11 @@ func (cb *CircuitBreaker) State(key string) State {
 	if !ok {
 		return StateClosed
 	}
-	if c.state == StateOpen && time.Now().After(c.cooldownExpiry) {
+
+	if c.state == StateOpen && time.Now().After(c.expiry) {
 		return StateHalfOpen
 	}
+
 	return c.state
 }
 
@@ -198,7 +271,7 @@ func (cb *CircuitBreaker) ActiveCount() int {
 	now := time.Now()
 	count := 0
 	for _, c := range cb.circuits {
-		if c.state == StateOpen && now.Before(c.cooldownExpiry) {
+		if c.state == StateOpen && now.Before(c.expiry) {
 			count++
 		}
 	}
@@ -212,7 +285,7 @@ func (cb *CircuitBreaker) Snapshot() map[string]string {
 	snap := make(map[string]string, len(cb.circuits))
 	for key, c := range cb.circuits {
 		state := c.state
-		if c.state == StateOpen && time.Now().After(c.cooldownExpiry) {
+		if c.state == StateOpen && time.Now().After(c.expiry) {
 			state = StateHalfOpen
 		}
 		snap[key] = state.String()
