@@ -9,14 +9,14 @@ import (
 )
 
 type AgentState struct {
-	Counters     map[string]uint64
+	Counters       map[string]uint64
 	ModelCooldowns map[string]time.Time
-	Mu           sync.Mutex
+	Mu             sync.Mutex
 }
 
 func NewAgentState() *AgentState {
 	return &AgentState{
-		Counters:      make(map[string]uint64),
+		Counters:       make(map[string]uint64),
 		ModelCooldowns: make(map[string]time.Time),
 	}
 }

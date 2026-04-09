@@ -10,8 +10,8 @@ import (
 
 func zaiDeps() TransformDeps {
 	return TransformDeps{
-		Logger:  slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelDebug})),
-		Config:  &config.Config{},
+		Logger: slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelDebug})),
+		Config: &config.Config{},
 		ExtractContentText: func(msg map[string]interface{}) string {
 			if c, ok := msg["content"].(string); ok {
 				return c
@@ -129,7 +129,7 @@ func TestZAI_RemovesOrphanedToolMessages(t *testing.T) {
 		"messages": []interface{}{
 			map[string]interface{}{"role": "user", "content": "hello"},
 			map[string]interface{}{
-				"role":       "assistant",
+				"role": "assistant",
 				"tool_calls": []interface{}{
 					map[string]interface{}{
 						"id":       "tc-1",
@@ -213,7 +213,7 @@ func TestZAI_KeepsEmptyAssistantWithToolCalls(t *testing.T) {
 	payload := map[string]interface{}{
 		"messages": []interface{}{
 			map[string]interface{}{
-				"role":       "assistant",
+				"role": "assistant",
 				"tool_calls": []interface{}{
 					map[string]interface{}{
 						"id":       "tc-1",

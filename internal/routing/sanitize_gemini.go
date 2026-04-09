@@ -177,5 +177,3 @@ func SanitizeToolMessagesForGemini(deps TransformDeps, payload map[string]interf
 		payload["messages"] = filtered
 	}
 }
-
-

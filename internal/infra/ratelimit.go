@@ -7,11 +7,11 @@ import (
 )
 
 type RateLimiter struct {
-	mu         sync.Mutex
-	limits     map[string]*rateLimiter
-	maxRPM     int
-	maxTPM     int
-	maxHosts   int
+	mu       sync.Mutex
+	limits   map[string]*rateLimiter
+	maxRPM   int
+	maxTPM   int
+	maxHosts int
 }
 
 type rateLimiter struct {

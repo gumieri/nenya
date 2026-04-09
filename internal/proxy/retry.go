@@ -120,10 +120,10 @@ func (p *Proxy) prepareAndSend(
 	}
 
 	transformDeps := routing.TransformDeps{
-		Logger:            p.GW.Logger,
-		Providers:         p.GW.Providers,
-		Config:            &p.GW.Config,
-		ThoughtSigCache:   p.GW.ThoughtSigCache,
+		Logger:             p.GW.Logger,
+		Providers:          p.GW.Providers,
+		Config:             &p.GW.Config,
+		ThoughtSigCache:    p.GW.ThoughtSigCache,
 		ExtractContentText: gateway.ExtractContentText,
 	}
 	transformedBody, _, err := routing.TransformRequestForUpstream(transformDeps, target.Provider, target.URL, payload, target.Model, target.MaxOutput)

@@ -44,7 +44,7 @@ Nenya acts as a **silent guardian** for your AI interactions. Its core strength 
 
 ### `config.json`
 
-See [`example.config.json`](example.config.json) for a fully-documented example or [`minimal_example.config.json`](minimal_example.config.json) for the smallest possible config. Full reference in [`CONFIGURATION.md`](CONFIGURATION.md).
+See [`example.config.json`](configs/example.config.json) for a fully-documented example or [`minimal_example.config.json`](configs/minimal_example.config.json) for the smallest possible config. Full reference in [`CONFIGURATION.md`](docs/CONFIGURATION.md).
 
 ### Minimal Configuration
 
@@ -136,7 +136,7 @@ Secrets are loaded via systemd credentials (`CREDENTIALS_DIRECTORY`). Create a J
 }
 ```
 
-At minimum `client_token` must be present; `provider_keys` entries can be omitted for providers you don't use. See [`SECRETS_FORMAT.md`](SECRETS_FORMAT.md) for full details.
+At minimum `client_token` must be present; `provider_keys` entries can be omitted for providers you don't use. See [`SECRETS_FORMAT.md`](docs/SECRETS_FORMAT.md) for full details.
 
 ### Adding a New Provider (e.g., OpenAI)
 
@@ -182,7 +182,7 @@ This checks Ollama engine health, provider endpoint reachability, and API key va
 
 ### Systemd Service
 
-A hardened systemd service file is included: [`nenya.service`](nenya.service). It uses `DynamicUser` and strict sandboxing.
+A hardened systemd service file is included: [`deploy/nenya.service`](deploy/nenya.service). It uses `DynamicUser` and strict sandboxing.
 
 Installation via mise:
 
@@ -193,11 +193,11 @@ sudo mise run install
 This will:
 
 1. Build the binary and install to `/usr/local/bin/nenya`
-2. Copy `example.config.json` to `/etc/nenya/config.json` (only if not already present)
-3. Copy `nenya.service` to `/etc/systemd/system/nenya.service`
+2. Copy `configs/example.config.json` to `/etc/nenya/config.json` (only if not already present)
+3. Copy `deploy/nenya.service` to `/etc/systemd/system/nenya.service`
 4. Reload systemd
 
-You must then create the secrets JSON file as described in [`SECRETS_FORMAT.md`](SECRETS_FORMAT.md) and enable the service:
+You must then create the secrets JSON file as described in [`docs/SECRETS_FORMAT.md`](docs/SECRETS_FORMAT.md) and enable the service:
 
 ```bash
 sudo systemctl enable --now nenya
@@ -208,7 +208,7 @@ sudo systemctl enable --now nenya
 ```bash
 git clone https://git.0ur.uk/nenya.git
 cd nenya
-go build -o nenya .
+go build -o nenya ./cmd/nenya
 ```
 
 Or for a quick local test with dummy secrets:
@@ -285,17 +285,16 @@ go fmt ./...
 
 ### Architecture
 
-- **`main.go`** — Entry point, server bootstrap with graceful shutdown
-- **`config.go`** — Configuration types, JSON loading, provider registry
-- **`gateway.go`** — NenyaGateway struct, HTTP clients, tokenization
-- **`proxy.go`** — HTTP handler, 3-tier pipeline, upstream forwarding
-- **`routing.go`** — Dynamic routing, agent fallback chains, API key injection, model mapping
-- **`transform.go`** — SSE response transformation (Gemini index injection, thought signature preservation), usage extraction
-- **`filter.go`** — Tier-0 regex secret redaction, middle-out truncation
-- **`ratelimit.go`** — Token-bucket rate limiter (RPM/TPM)
-- **`validate.go`** — Configuration validation, provider health checks
-- **`stats.go`** — Token usage tracking, /statsz and /healthz endpoints
-- **`logger.go`** — slog setup with TTY/systemd auto-detection
+Packages follow a strict dependency DAG: `config → infra → stream → pipeline → routing → gateway → proxy → cmd`.
+
+- **`cmd/nenya/`** — Entry point, server bootstrap with graceful shutdown
+- **`internal/config/`** — Configuration types, JSON loading, model/provider registries, defaults, validation
+- **`internal/infra/`** — Structured logging (slog with TTY/systemd auto-detection), thought signature cache, Prometheus-compatible metrics, token-bucket rate limiter, atomic token usage tracker
+- **`internal/stream/`** — SSE transforming reader, sliding window stream filter, Gemini SSE transformation (index injection, thought signature preservation)
+- **`internal/pipeline/`** — Tier-0 regex secret redaction, middle-out truncation, line ending normalization, whitespace trimming, system message pinning, context window compaction, Ollama/OpenAI engine calls
+- **`internal/routing/`** — Dynamic provider resolution, agent fallback chains with cooldown, upstream request transformation, API key injection, model name mapping, Gemini/z.ai message sanitization
+- **`internal/gateway/`** — NenyaGateway struct, HTTP client configuration, token counting
+- **`internal/proxy/`** — HTTP handler (auth, /healthz, /models, /statsz), 3-tier content pipeline, upstream forwarding with retry, transparent SSE streaming
 
 ## Sponsor / Support this Project
 
@@ -314,7 +313,7 @@ This project was built in collaboration with AI coding tools. The architecture, 
 
 This project is licensed under the Apache 2.0 License — see the [LICENSE](LICENSE) file for details.
 
-Before using Nenya with autonomous agents in production environments, please read the [DISCLAIMER](DISCLAIMER.md).
+Before using Nenya with autonomous agents in production environments, please read the [`docs/DISCLAIMER.md`](docs/DISCLAIMER.md).
 
 ---
 

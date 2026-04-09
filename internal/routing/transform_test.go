@@ -25,10 +25,10 @@ func testProviders() map[string]*config.Provider {
 
 func testDeps(providers map[string]*config.Provider) TransformDeps {
 	return TransformDeps{
-		Logger:           testLogger(),
-		Providers:        providers,
-		Config:           &config.Config{Agents: map[string]config.AgentConfig{}},
-		ThoughtSigCache:  nil,
+		Logger:          testLogger(),
+		Providers:       providers,
+		Config:          &config.Config{Agents: map[string]config.AgentConfig{}},
+		ThoughtSigCache: nil,
 		ExtractContentText: func(msg map[string]interface{}) string {
 			if c, ok := msg["content"].(string); ok {
 				return c
@@ -460,16 +460,16 @@ func TestCopyHeaders_Normal(t *testing.T) {
 
 func TestCopyHeaders_HopByHopStripped(t *testing.T) {
 	src := http.Header{
-		"Connection":        []string{"keep-alive"},
-		"Content-Length":    []string{"1234"},
-		"Transfer-Encoding": []string{"chunked"},
-		"Content-Type":      []string{"application/json"},
-		"Keep-Alive":        []string{"timeout=5"},
-		"Te":                []string{"trailers"},
-		"Upgrade":           []string{"h2c"},
-		"Proxy-Authorize":   []string{"Basic abc"},
+		"Connection":         []string{"keep-alive"},
+		"Content-Length":     []string{"1234"},
+		"Transfer-Encoding":  []string{"chunked"},
+		"Content-Type":       []string{"application/json"},
+		"Keep-Alive":         []string{"timeout=5"},
+		"Te":                 []string{"trailers"},
+		"Upgrade":            []string{"h2c"},
+		"Proxy-Authorize":    []string{"Basic abc"},
 		"Proxy-Authenticate": []string{"Basic realm=test"},
-		"Trailers":          []string{"chunked"},
+		"Trailers":           []string{"chunked"},
 	}
 	dst := http.Header{}
 
@@ -533,8 +533,8 @@ func TestTransformDeps_WithCache(t *testing.T) {
 				"role": "assistant",
 				"tool_calls": []interface{}{
 					map[string]interface{}{
-						"id":      "tc-1",
-						"type":    "function",
+						"id":   "tc-1",
+						"type": "function",
 						"function": map[string]interface{}{
 							"name": "read_file",
 						},

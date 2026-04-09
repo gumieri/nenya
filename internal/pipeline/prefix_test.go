@@ -12,39 +12,39 @@ func msg(role, content string) map[string]interface{} {
 
 func TestPinSystemMessages(t *testing.T) {
 	tests := []struct {
-		name     string
-		input    []interface{}
-		wantPin  bool
+		name      string
+		input     []interface{}
+		wantPin   bool
 		wantRoles []string
 	}{
 		{
-			name:     "already pinned system first",
-			input:    []interface{}{msg("system", "s1"), msg("user", "u1"), msg("assistant", "a1")},
-			wantPin:  false,
+			name:      "already pinned system first",
+			input:     []interface{}{msg("system", "s1"), msg("user", "u1"), msg("assistant", "a1")},
+			wantPin:   false,
 			wantRoles: []string{"system", "user", "assistant"},
 		},
 		{
-			name:     "system scattered in middle",
-			input:    []interface{}{msg("user", "u1"), msg("system", "s1"), msg("user", "u2")},
-			wantPin:  true,
+			name:      "system scattered in middle",
+			input:     []interface{}{msg("user", "u1"), msg("system", "s1"), msg("user", "u2")},
+			wantPin:   true,
 			wantRoles: []string{"system", "user", "user"},
 		},
 		{
-			name:     "no system messages",
-			input:    []interface{}{msg("user", "u1"), msg("assistant", "a1")},
-			wantPin:  false,
+			name:      "no system messages",
+			input:     []interface{}{msg("user", "u1"), msg("assistant", "a1")},
+			wantPin:   false,
 			wantRoles: []string{"user", "assistant"},
 		},
 		{
-			name:     "single message no change",
-			input:    []interface{}{msg("system", "s1")},
-			wantPin:  false,
+			name:      "single message no change",
+			input:     []interface{}{msg("system", "s1")},
+			wantPin:   false,
 			wantRoles: []string{"system"},
 		},
 		{
-			name:     "empty",
-			input:    []interface{}{},
-			wantPin:  false,
+			name:      "empty",
+			input:     []interface{}{},
+			wantPin:   false,
 			wantRoles: nil,
 		},
 		{
@@ -56,13 +56,13 @@ func TestPinSystemMessages(t *testing.T) {
 				msg("system", "s2"),
 				msg("assistant", "a1"),
 			},
-			wantPin:  true,
+			wantPin:   true,
 			wantRoles: []string{"system", "system", "user", "user", "assistant"},
 		},
 		{
-			name:     "non-map entries preserved",
-			input:    []interface{}{"not-a-map", msg("system", "s1"), msg("user", "u1")},
-			wantPin:  true,
+			name:      "non-map entries preserved",
+			input:     []interface{}{"not-a-map", msg("system", "s1"), msg("user", "u1")},
+			wantPin:   true,
 			wantRoles: []string{"system", "not-a-map", "user"},
 		},
 	}
@@ -92,19 +92,19 @@ func TestPinSystemMessages(t *testing.T) {
 
 func TestStabilizeTools(t *testing.T) {
 	tool := func(name string) map[string]interface{} {
-			return map[string]interface{}{
-				"type": "function",
-				"function": map[string]interface{}{
-					"name":        name,
-					"description": "tool " + name,
-				},
-			}
+		return map[string]interface{}{
+			"type": "function",
+			"function": map[string]interface{}{
+				"name":        name,
+				"description": "tool " + name,
+			},
 		}
+	}
 
 	tests := []struct {
-		name    string
-		payload map[string]interface{}
-		want    bool
+		name      string
+		payload   map[string]interface{}
+		want      bool
 		wantNames []string
 	}{
 		{
@@ -122,7 +122,7 @@ func TestStabilizeTools(t *testing.T) {
 			payload: map[string]interface{}{
 				"tools": []interface{}{tool("alpha")},
 			},
-			want:    false,
+			want:      false,
 			wantNames: []string{"alpha"},
 		},
 		{
@@ -130,7 +130,7 @@ func TestStabilizeTools(t *testing.T) {
 			payload: map[string]interface{}{
 				"tools": []interface{}{tool("alpha"), tool("beta"), tool("gamma")},
 			},
-			want:    true,
+			want:      true,
 			wantNames: []string{"alpha", "beta", "gamma"},
 		},
 		{
@@ -138,7 +138,7 @@ func TestStabilizeTools(t *testing.T) {
 			payload: map[string]interface{}{
 				"tools": []interface{}{tool("gamma"), tool("alpha"), tool("beta")},
 			},
-			want:    true,
+			want:      true,
 			wantNames: []string{"alpha", "beta", "gamma"},
 		},
 		{
@@ -149,7 +149,7 @@ func TestStabilizeTools(t *testing.T) {
 					map[string]interface{}{"type": "function", "no_function": true},
 				},
 			},
-			want:    true,
+			want:      true,
 			wantNames: []string{"", ""},
 		},
 		{
@@ -157,7 +157,7 @@ func TestStabilizeTools(t *testing.T) {
 			payload: map[string]interface{}{
 				"tools": []interface{}{"string-tool", 42},
 			},
-			want:    true,
+			want: true,
 		},
 	}
 
@@ -182,9 +182,9 @@ func TestStabilizeTools(t *testing.T) {
 
 func TestToolSortKey(t *testing.T) {
 	tests := []struct {
-		name  string
-		tool  interface{}
-		want  string
+		name string
+		tool interface{}
+		want string
 	}{
 		{
 			name: "normal tool with function name",
@@ -198,19 +198,19 @@ func TestToolSortKey(t *testing.T) {
 			want: "read_file",
 		},
 		{
-			name:  "missing function key",
-			tool:  map[string]interface{}{"type": "function"},
-			want:  "",
+			name: "missing function key",
+			tool: map[string]interface{}{"type": "function"},
+			want: "",
 		},
 		{
-			name:  "function without name",
-			tool:  map[string]interface{}{"function": map[string]interface{}{"description": "no name"}},
-			want:  "",
+			name: "function without name",
+			tool: map[string]interface{}{"function": map[string]interface{}{"description": "no name"}},
+			want: "",
 		},
 		{
-			name:  "non-map input",
-			tool:  "not-a-map",
-			want:  "",
+			name: "non-map input",
+			tool: "not-a-map",
+			want: "",
 		},
 	}
 
@@ -266,11 +266,11 @@ func TestApplyPrefixCacheOptimizations(t *testing.T) {
 		payload := map[string]interface{}{
 			"tools": []interface{}{
 				map[string]interface{}{
-					"type": "function",
+					"type":     "function",
 					"function": map[string]interface{}{"name": "z_tool"},
 				},
 				map[string]interface{}{
-					"type": "function",
+					"type":     "function",
 					"function": map[string]interface{}{"name": "a_tool"},
 				},
 			},
@@ -296,11 +296,11 @@ func TestApplyPrefixCacheOptimizations(t *testing.T) {
 		payload := map[string]interface{}{
 			"tools": []interface{}{
 				map[string]interface{}{
-					"type": "function",
+					"type":     "function",
 					"function": map[string]interface{}{"name": "z_tool"},
 				},
 				map[string]interface{}{
-					"type": "function",
+					"type":     "function",
 					"function": map[string]interface{}{"name": "a_tool"},
 				},
 			},
