@@ -1,6 +1,21 @@
-package routing
+package providers
 
-func SanitizeMessagesForZAI(deps TransformDeps, payload map[string]interface{}) {
+import (
+	"net/url"
+	"strings"
+)
+
+func zaiSpec() ProviderSpec {
+	return ProviderSpec{
+		SupportsStreamOptions:  true,
+		SupportsAutoToolChoice: true,
+		SupportsContentArrays:  true,
+		SanitizeRequest:        zaiSanitize,
+		ValidationEndpoint:     zaiValidationEndpoint,
+	}
+}
+
+func zaiSanitize(deps *SanitizeDeps, payload map[string]interface{}) {
 	messagesRaw, ok := payload["messages"]
 	if !ok {
 		return
@@ -49,6 +64,7 @@ func SanitizeMessagesForZAI(deps TransformDeps, payload map[string]interface{}) 
 	for _, msgRaw := range messages {
 		msg, ok := msgRaw.(map[string]interface{})
 		if !ok {
+			filtered = append(filtered, msgRaw)
 			continue
 		}
 		role, _ := msg["role"].(string)
@@ -139,4 +155,17 @@ func SanitizeMessagesForZAI(deps TransformDeps, payload map[string]interface{}) 
 	}
 
 	payload["messages"] = merged
+}
+
+func zaiValidationEndpoint(providerURL string) string {
+	u, err := url.Parse(providerURL)
+	if err != nil {
+		return ""
+	}
+	host := strings.ToLower(u.Host)
+
+	if strings.Contains(host, "api.z.ai") {
+		return "https://api.z.ai/v1/models"
+	}
+	return defaultValidationEndpoint(providerURL, u.Path)
 }

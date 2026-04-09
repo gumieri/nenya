@@ -11,6 +11,7 @@ import (
 
 	"nenya/internal/routing"
 	"nenya/internal/stream"
+	providerpkg "nenya/internal/providers"
 )
 
 const streamIdleTimeout = 120 * time.Second
@@ -58,9 +59,12 @@ func (p *Proxy) streamResponse(w http.ResponseWriter, r *http.Request, target ro
 	routing.CopyHeaders(action.resp.Header, w.Header())
 	w.WriteHeader(action.resp.StatusCode)
 
-	transformer := p.getResponseTransformer(target.Provider)
-	if transformer != nil {
-		p.GW.Logger.Debug("SSE transformer active", "provider", target.Provider)
+	var transformer stream.ResponseTransformer
+	if spec, ok := providerpkg.Get(target.Provider); ok && spec.NewResponseTransformer != nil {
+		transformer = spec.NewResponseTransformer(p.GW.ThoughtSigCache)
+		if transformer != nil {
+			p.GW.Logger.Debug("SSE transformer active", "provider", target.Provider)
+		}
 	}
 
 	stallR := newStallReader(action.resp.Body, streamIdleTimeout)
@@ -117,17 +121,6 @@ func (p *Proxy) streamResponse(w http.ResponseWriter, r *http.Request, target ro
 		action.resp.Body.Close()
 		<-done
 	}
-}
-
-func (p *Proxy) getResponseTransformer(providerName string) stream.ResponseTransformer {
-	if routing.IsGeminiProvider(providerName, p.GW.Providers) {
-		return &stream.GeminiTransformer{
-			OnExtraContent: func(toolCallID string, extraContent interface{}) {
-				p.GW.ThoughtSigCache.Store(toolCallID, extraContent)
-			},
-		}
-	}
-	return nil
 }
 
 func (p *Proxy) writeBlockedSSE(w http.ResponseWriter) {

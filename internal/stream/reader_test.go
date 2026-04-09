@@ -10,12 +10,19 @@ import (
 	"testing"
 )
 
+type mockTransformer struct{}
+
+func (m *mockTransformer) TransformSSEChunk(data []byte) ([]byte, error) {
+	return data, nil
+}
+
+
 func TestSSETransformingReader_DataLines(t *testing.T) {
 	input := `data: {"choices":[{"delta":{"content":"hello"}}]}
-data: {"choices":[{"delta":{"content":" world"}}]}
-data: [DONE]
-`
-	reader := NewSSETransformingReader(strings.NewReader(input), &GeminiTransformer{})
+ data: {"choices":[{"delta":{"content":" world"}}]}
+ data: [DONE]
+ `
+	reader := NewSSETransformingReader(strings.NewReader(input), &mockTransformer{})
 	var buf bytes.Buffer
 	_, err := io.Copy(&buf, reader)
 	if err != nil {
@@ -39,7 +46,7 @@ data: [DONE]
 func TestSSETransformingReader_NonSSEJSON(t *testing.T) {
 	input := `{"choices":[{"delta":{"content":"raw json"}}]}
 `
-	reader := NewSSETransformingReader(strings.NewReader(input), &GeminiTransformer{})
+	reader := NewSSETransformingReader(strings.NewReader(input), &mockTransformer{})
 	var buf bytes.Buffer
 	_, err := io.Copy(&buf, reader)
 	if err != nil {
@@ -64,7 +71,7 @@ data: {"choices":[{"delta":{"content":"hi"}}]}
 
 : another comment
 `
-	reader := NewSSETransformingReader(strings.NewReader(input), &GeminiTransformer{})
+	reader := NewSSETransformingReader(strings.NewReader(input), &mockTransformer{})
 	var buf bytes.Buffer
 	_, err := io.Copy(&buf, reader)
 	if err != nil {
@@ -88,7 +95,7 @@ func TestSSETransformingReader_StreamFilterBlock(t *testing.T) {
 
 	input := `data: {"choices":[{"delta":{"content":"run rm -rf / now"}}]}
 `
-	reader := NewSSETransformingReader(strings.NewReader(input), &GeminiTransformer{})
+	reader := NewSSETransformingReader(strings.NewReader(input), &mockTransformer{})
 	reader.SetStreamFilter(sf)
 
 	var buf bytes.Buffer
@@ -104,7 +111,7 @@ func TestSSETransformingReader_StreamFilterRedact(t *testing.T) {
 
 	input := `data: {"choices":[{"delta":{"content":"key is AKIAIOSFODNN7EXAMPLE end"}}]}
 `
-	reader := NewSSETransformingReader(strings.NewReader(input), &GeminiTransformer{})
+	reader := NewSSETransformingReader(strings.NewReader(input), &mockTransformer{})
 	reader.SetStreamFilter(sf)
 
 	var buf bytes.Buffer
@@ -135,7 +142,7 @@ data: {"choices":[],"usage":{"completion_tokens":10,"prompt_tokens":5,"total_tok
 		gotTotal = total
 	}
 
-	reader := NewSSETransformingReader(strings.NewReader(input), &GeminiTransformer{})
+	reader := NewSSETransformingReader(strings.NewReader(input), &mockTransformer{})
 	reader.SetOnUsage(cb)
 
 	var buf bytes.Buffer
@@ -157,7 +164,7 @@ data: {"choices":[{"delta":{"content":"bye"}}]}
 		fired = true
 	}
 
-	reader := NewSSETransformingReader(strings.NewReader(input), &GeminiTransformer{})
+	reader := NewSSETransformingReader(strings.NewReader(input), &mockTransformer{})
 	reader.SetOnUsage(cb)
 
 	var buf bytes.Buffer

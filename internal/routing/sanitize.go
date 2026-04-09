@@ -3,12 +3,12 @@ package routing
 import (
 	"strings"
 
-	"nenya/internal/config"
+	providerpkg "nenya/internal/providers"
 )
 
 func SanitizePayload(deps TransformDeps, payload map[string]interface{}, providerName string) {
 	if _, ok := payload["stream_options"]; ok {
-		if !providerSupportsStreamOptions(providerName, deps.Providers) {
+		if !providerpkg.SupportsStreamOptions(providerName) {
 			delete(payload, "stream_options")
 			deps.Logger.Debug("stripped stream_options for provider", "provider", providerName)
 		}
@@ -16,7 +16,7 @@ func SanitizePayload(deps TransformDeps, payload map[string]interface{}, provide
 
 	if toolChoice, ok := payload["tool_choice"]; ok {
 		if tc, ok := toolChoice.(string); ok && tc == "auto" {
-			if !providerSupportsAutoToolChoice(providerName, deps.Providers) {
+			if !providerpkg.SupportsAutoToolChoice(providerName) {
 				delete(payload, "tool_choice")
 				deps.Logger.Debug("stripped tool_choice \"auto\" for provider", "provider", providerName)
 			}
@@ -25,7 +25,7 @@ func SanitizePayload(deps TransformDeps, payload map[string]interface{}, provide
 
 	if messagesRaw, ok := payload["messages"]; ok {
 		if messages, ok := messagesRaw.([]interface{}); ok {
-			if !providerSupportsContentArrays(providerName, deps.Providers) {
+			if !providerpkg.SupportsContentArrays(providerName) {
 				changed := false
 				for i, msgRaw := range messages {
 					msg, ok := msgRaw.(map[string]interface{})
@@ -63,28 +63,4 @@ func flattenContentArray(arr []interface{}) string {
 		}
 	}
 	return strings.Join(parts, "\n")
-}
-
-func providerSupportsStreamOptions(providerName string, providers map[string]*config.Provider) bool {
-	switch strings.ToLower(providerName) {
-	case "deepseek", "zai", "openrouter":
-		return true
-	}
-	return false
-}
-
-func providerSupportsAutoToolChoice(providerName string, providers map[string]*config.Provider) bool {
-	switch strings.ToLower(providerName) {
-	case "gemini", "deepseek", "zai", "openrouter", "openai", "github":
-		return true
-	}
-	return false
-}
-
-func providerSupportsContentArrays(providerName string, providers map[string]*config.Provider) bool {
-	switch strings.ToLower(providerName) {
-	case "gemini", "deepseek", "zai", "openrouter", "openai", "github", "together", "sambanova", "cerebras":
-		return true
-	}
-	return false
 }

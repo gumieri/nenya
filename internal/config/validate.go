@@ -6,10 +6,11 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
-	"net/url"
 	"regexp"
 	"strings"
 	"time"
+
+	providerpkg "nenya/internal/providers"
 )
 
 func ValidateConfiguration(cfg *Config, secrets *SecretsConfig, logger *slog.Logger) error {
@@ -43,7 +44,7 @@ func ValidateConfiguration(cfg *Config, secrets *SecretsConfig, logger *slog.Log
 		}
 
 		logger.Info("validating provider", "provider", name, "url", provider.URL)
-		if err := validateProvider(provider, logger); err != nil {
+		if err := validateProvider(name, provider, logger); err != nil {
 			errors = append(errors, fmt.Sprintf("%s: %v", name, err))
 			logger.Error("provider validation failed", "provider", name, "err", err)
 		} else {
@@ -75,11 +76,15 @@ func validateOllamaHealth(ollamaURL string) bool {
 
 var validationClient = &http.Client{Timeout: 30 * time.Second}
 
-func validateProvider(provider *Provider, logger *slog.Logger) error {
+func validateProvider(name string, provider *Provider, logger *slog.Logger) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	validationURL := GetValidationEndpoint(provider.URL)
+	var validationURL string
+	if spec, ok := providerpkg.Get(name); ok && spec.ValidationEndpoint != nil {
+		validationURL = spec.ValidationEndpoint(provider.URL)
+	}
+
 	if validationURL == "" {
 		return validateWithMinimalRequest(provider, ctx, logger)
 	}
@@ -108,39 +113,6 @@ func validateProvider(provider *Provider, logger *slog.Logger) error {
 
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
 	return fmt.Errorf("unexpected status %d: %s", resp.StatusCode, string(body))
-}
-
-func GetValidationEndpoint(providerURL string) string {
-	u, err := url.Parse(providerURL)
-	if err != nil {
-		return ""
-	}
-	host := strings.ToLower(u.Host)
-	path := u.Path
-
-	switch {
-	case strings.Contains(host, "generativelanguage.googleapis.com"):
-		if idx := strings.Index(path, "/openai/chat/completions"); idx != -1 {
-			return strings.TrimSuffix(providerURL, "/openai/chat/completions") + "/models"
-		}
-	case strings.Contains(host, "api.deepseek.com"):
-		return "https://api.deepseek.com/models"
-	case strings.Contains(host, "api.z.ai"):
-		return "https://api.z.ai/v1/models"
-	case strings.Contains(host, "api.groq.com"):
-		return "https://api.groq.com/openai/v1/models"
-	case strings.Contains(host, "api.together.xyz"):
-		return "https://api.together.xyz/v1/models"
-	case strings.Contains(host, "api.openai.com"):
-		return "https://api.openai.com/v1/models"
-	case strings.Contains(host, "127.0.0.1:11434") || strings.Contains(host, "localhost:11434"):
-		return ""
-	}
-
-	if strings.HasSuffix(path, "/chat/completions") {
-		return providerURL[:len(providerURL)-len("/chat/completions")] + "/models"
-	}
-	return ""
 }
 
 func validateWithMinimalRequest(provider *Provider, ctx context.Context, logger *slog.Logger) error {

@@ -1,10 +1,95 @@
-package routing
+package providers
 
 import (
-	"nenya/internal/pipeline"
+	"bytes"
+	"encoding/json"
+	"fmt"
+	"net/url"
+	"strings"
+
+	"nenya/internal/infra"
+	"nenya/internal/stream"
 )
 
-func SanitizeToolMessagesForGemini(deps TransformDeps, payload map[string]interface{}) {
+var GeminiModelMap = map[string]string{
+	"gemini-3-flash":        "gemini-3-flash-preview",
+	"gemini-3-pro":          "gemini-3-pro-preview",
+	"gemini-3.1-flash":      "gemini-3.1-flash-preview",
+	"gemini-3.1-flash-lite": "gemini-3.1-flash-lite-preview",
+	"gemini-3.1-pro":        "gemini-3.1-pro-preview",
+	"gemini-flash":          "gemini-2.5-flash",
+	"gemini-flash-lite":     "gemini-2.5-flash-lite",
+	"gemini-pro":            "gemini-2.5-pro",
+}
+
+func geminiSpec() ProviderSpec {
+	return ProviderSpec{
+		SupportsStreamOptions:  false,
+		SupportsAutoToolChoice: true,
+		SupportsContentArrays:  true,
+		ModelMap:               GeminiModelMap,
+		SanitizeRequest:        geminiSanitize,
+		NewResponseTransformer: newGeminiTransformer,
+		ValidationEndpoint:     geminiValidationEndpoint,
+	}
+}
+
+type GeminiTransformer struct {
+	OnExtraContent func(toolCallID string, extraContent interface{})
+}
+
+func newGeminiTransformer(cache *infra.ThoughtSignatureCache) stream.ResponseTransformer {
+	return &GeminiTransformer{
+		OnExtraContent: func(toolCallID string, extraContent interface{}) {
+			if cache != nil {
+				cache.Store(toolCallID, extraContent)
+			}
+		},
+	}
+}
+
+func (t *GeminiTransformer) TransformSSEChunk(data []byte) ([]byte, error) {
+	if len(data) == 0 || !bytes.HasPrefix(bytes.TrimSpace(data), []byte("{")) {
+		return data, nil
+	}
+
+	var chunk map[string]interface{}
+	if err := json.Unmarshal(data, &chunk); err != nil {
+		return data, nil
+	}
+
+	if choices, ok := chunk["choices"].([]interface{}); ok && len(choices) > 0 {
+		if choice, ok := choices[0].(map[string]interface{}); ok {
+			if delta, ok := choice["delta"].(map[string]interface{}); ok {
+				if toolCalls, ok := delta["tool_calls"].([]interface{}); ok {
+					for i, tc := range toolCalls {
+						if tcMap, ok := tc.(map[string]interface{}); ok {
+							if _, exists := tcMap["index"]; !exists {
+								tcMap["index"] = i
+							}
+							if t.OnExtraContent != nil {
+								if tcID, _ := tcMap["id"].(string); tcID != "" {
+									if extra, hasExtra := tcMap["extra_content"]; hasExtra {
+										t.OnExtraContent(tcID, extra)
+									}
+								}
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+
+	transformed, err := json.Marshal(chunk)
+	if err != nil {
+		return data, fmt.Errorf("failed to marshal transformed chunk: %v", err)
+	}
+
+	return transformed, nil
+}
+
+func geminiSanitize(deps *SanitizeDeps, payload map[string]interface{}) {
 	messagesRaw, ok := payload["messages"]
 	if !ok {
 		return
@@ -132,7 +217,7 @@ func SanitizeToolMessagesForGemini(deps TransformDeps, payload map[string]interf
 						cleaned = append(cleaned, tcRaw)
 					}
 					if len(cleaned) == 0 {
-						content := pipeline.ExtractContentText(msg)
+						content := deps.ExtractContentText(msg)
 						if content == "" {
 							deps.Logger.Debug("gemini: removed empty assistant message after stripping orphaned tool_calls", "index", i)
 							continue
@@ -176,4 +261,20 @@ func SanitizeToolMessagesForGemini(deps TransformDeps, payload map[string]interf
 	if len(filtered) != len(messages) {
 		payload["messages"] = filtered
 	}
+}
+
+func geminiValidationEndpoint(providerURL string) string {
+	u, err := url.Parse(providerURL)
+	if err != nil {
+		return ""
+	}
+	host := strings.ToLower(u.Host)
+	path := u.Path
+
+	if strings.Contains(host, "generativelanguage.googleapis.com") {
+		if idx := strings.Index(path, "/openai/chat/completions"); idx != -1 {
+			return strings.TrimSuffix(providerURL, "/openai/chat/completions") + "/models"
+		}
+	}
+	return defaultValidationEndpoint(providerURL, path)
 }
