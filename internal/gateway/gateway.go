@@ -9,6 +9,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"nenya/internal/adapter"
 	"nenya/internal/config"
 	"nenya/internal/infra"
 	"nenya/internal/routing"
@@ -122,6 +123,8 @@ func New(cfg config.Config, secrets *config.SecretsConfig, logger *slog.Logger) 
 	gw.Metrics.RateLimits = gw.RateLimiter.Snapshot
 	gw.Metrics.Cooldowns = gw.AgentState.ActiveCooldowns
 	gw.Metrics.CBStates = gw.AgentState.CBSnapshot
+
+	adapter.InitWithDeps(logger, gw.ThoughtSigCache, ExtractContentText)
 
 	return gw
 }
