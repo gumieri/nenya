@@ -273,7 +273,9 @@ func TestApplyDefaultsProviders(t *testing.T) {
 func TestLoadConfig(t *testing.T) {
 	t.Run("valid JSON", func(t *testing.T) {
 		tmpfile := filepath.Join(t.TempDir(), "config.json")
-		os.WriteFile(tmpfile, []byte(`{"server":{"listen_addr":":9090"}}`), 0644)
+		if err := os.WriteFile(tmpfile, []byte(`{"server":{"listen_addr":":9090"}}`), 0644); err != nil {
+			t.Fatalf("write: %v", err)
+		}
 		cfg, err := Load(tmpfile)
 		if err != nil {
 			t.Fatalf("Load failed: %v", err)
@@ -290,7 +292,9 @@ func TestLoadConfig(t *testing.T) {
 	})
 	t.Run("invalid JSON", func(t *testing.T) {
 		tmpfile := filepath.Join(t.TempDir(), "config.json")
-		os.WriteFile(tmpfile, []byte(`{invalid}`), 0644)
+		if err := os.WriteFile(tmpfile, []byte(`{invalid}`), 0644); err != nil {
+			t.Fatalf("write: %v", err)
+		}
 		_, err := Load(tmpfile)
 		if err == nil {
 			t.Fatal("expected error")
@@ -298,7 +302,9 @@ func TestLoadConfig(t *testing.T) {
 	})
 	t.Run("comments stripped", func(t *testing.T) {
 		tmpfile := filepath.Join(t.TempDir(), "config.json")
-		os.WriteFile(tmpfile, []byte(`{"server": {"listen_addr": ":9090" /* trailing */}}`), 0644)
+		if err := os.WriteFile(tmpfile, []byte(`{"server": {"listen_addr": ":9090" /* trailing */}}`), 0644); err != nil {
+			t.Fatalf("write: %v", err)
+		}
 		cfg, err := Load(tmpfile)
 		if err != nil {
 			t.Fatalf("Load failed: %v", err)
@@ -313,8 +319,10 @@ func TestLoadSecrets(t *testing.T) {
 	t.Run("valid", func(t *testing.T) {
 		dir := t.TempDir()
 		t.Setenv("CREDENTIALS_DIRECTORY", dir)
-		os.WriteFile(filepath.Join(dir, "secrets"),
-			[]byte(`{"client_token":"tok","provider_keys":{"gemini":"key1"}}`), 0644)
+		if err := os.WriteFile(filepath.Join(dir, "secrets"),
+			[]byte(`{"client_token":"tok","provider_keys":{"gemini":"key1"}}`), 0644); err != nil {
+			t.Fatalf("write: %v", err)
+		}
 		s, err := LoadSecrets()
 		if err != nil {
 			t.Fatalf("LoadSecrets failed: %v", err)
@@ -333,8 +341,10 @@ func TestLoadSecrets(t *testing.T) {
 	t.Run("missing client_token", func(t *testing.T) {
 		dir := t.TempDir()
 		t.Setenv("CREDENTIALS_DIRECTORY", dir)
-		os.WriteFile(filepath.Join(dir, "secrets"),
-			[]byte(`{"provider_keys":{}}`), 0644)
+		if err := os.WriteFile(filepath.Join(dir, "secrets"),
+			[]byte(`{"provider_keys":{}}`), 0644); err != nil {
+			t.Fatalf("write: %v", err)
+		}
 		_, err := LoadSecrets()
 		if err == nil {
 			t.Fatal("expected error")

@@ -1,7 +1,6 @@
 package proxy
 
 import (
-	"fmt"
 	"log/slog"
 	"net/http"
 	"testing"
@@ -489,11 +488,11 @@ func BenchmarkParseRetryDelay_HeaderOnly(b *testing.B) {
 }
 
 func BenchmarkParseRetryDelay_RPCBody(b *testing.B) {
-	body := []byte(fmt.Sprintf(`{
+	body := []byte(`{
 		"error": {
 			"details": [{"@type":"type.googleapis.com/google.rpc.RetryInfo","retryDelay":"2s"}]
 		}
-	}`))
+	}`)
 	for i := 0; i < b.N; i++ {
 		parseRetryDelay(http.Header{}, body)
 	}

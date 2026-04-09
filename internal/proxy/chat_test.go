@@ -223,10 +223,12 @@ func TestHandleChatCompletions_AgentNoModels(t *testing.T) {
 func TestHandleEmbeddings_ValidUpstream(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]interface{}{
+		if err := json.NewEncoder(w).Encode(map[string]interface{}{
 			"object": "list",
 			"data":   []map[string]interface{}{{"embedding": []float64{0.1, 0.2}}},
-		})
+		}); err != nil {
+			t.Errorf("encode: %v", err)
+		}
 	}))
 	defer upstream.Close()
 
