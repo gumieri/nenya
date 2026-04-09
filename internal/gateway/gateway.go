@@ -28,6 +28,7 @@ type NenyaGateway struct {
 	Logger          *slog.Logger
 	AgentState      *routing.AgentState
 	ThoughtSigCache *infra.ThoughtSignatureCache
+	ResponseCache   *infra.ResponseCache
 }
 
 func New(cfg config.Config, secrets *config.SecretsConfig, logger *slog.Logger) *NenyaGateway {
@@ -114,6 +115,7 @@ func New(cfg config.Config, secrets *config.SecretsConfig, logger *slog.Logger) 
 		Logger:          logger,
 		AgentState:      routing.NewAgentState(logger),
 		ThoughtSigCache: infra.NewThoughtSignatureCache(1000, 30*time.Minute),
+		ResponseCache:   newResponseCache(cfg, logger),
 	}
 
 	gw.Metrics = infra.NewMetrics()
@@ -175,5 +177,30 @@ func ExtractContentText(msg map[string]interface{}) string {
 		return sb.String()
 	default:
 		return ""
+	}
+}
+
+func newResponseCache(cfg config.Config, logger *slog.Logger) *infra.ResponseCache {
+	if !cfg.ResponseCache.Enabled {
+		return nil
+	}
+	rc := cfg.ResponseCache
+	cache := infra.NewResponseCache(
+		rc.MaxEntries,
+		rc.MaxEntryBytes,
+		time.Duration(rc.TTLSeconds)*time.Second,
+		time.Duration(rc.EvictEverySeconds)*time.Second,
+	)
+	logger.Info("response cache enabled",
+		"max_entries", rc.MaxEntries,
+		"max_entry_bytes", rc.MaxEntryBytes,
+		"ttl_seconds", rc.TTLSeconds,
+		"evict_every_seconds", rc.EvictEverySeconds)
+	return cache
+}
+
+func (g *NenyaGateway) Close() {
+	if g.ResponseCache != nil {
+		g.ResponseCache.Stop()
 	}
 }
