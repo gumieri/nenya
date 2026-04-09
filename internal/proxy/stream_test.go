@@ -13,7 +13,7 @@ import (
 	"nenya/internal/gateway"
 	"nenya/internal/infra"
 	"nenya/internal/routing"
-	"nenya/internal/stream"
+	providerpkg "nenya/internal/providers"
 )
 
 func TestWriteBlockedSSE(t *testing.T) {
@@ -122,46 +122,46 @@ func TestStallReader_ResetOnRead(t *testing.T) {
 	}
 }
 
-func TestGetResponseTransformer_GeminiProvider(t *testing.T) {
-	providers := map[string]*config.Provider{
-		"gemini": {
-			Name:      "gemini",
-			AuthStyle: "bearer+x-goog",
-		},
+func TestResponseTransformer_GeminiProvider(t *testing.T) {
+	spec, ok := providerpkg.Get("gemini")
+	if !ok {
+		t.Fatal("expected gemini provider to exist")
 	}
-	p := &Proxy{GW: newStreamTestGatewayWithProviders(providers)}
 
-	transformer := p.getResponseTransformer("gemini")
+	if spec.NewResponseTransformer == nil {
+		t.Fatal("expected gemini to have NewResponseTransformer")
+	}
+
+	transformer := spec.NewResponseTransformer(nil)
 	if transformer == nil {
 		t.Fatal("expected non-nil transformer for gemini provider")
 	}
 
-	if _, ok := transformer.(*stream.GeminiTransformer); !ok {
+	if _, ok := transformer.(*providerpkg.GeminiTransformer); !ok {
 		t.Fatal("expected GeminiTransformer type")
 	}
 }
 
-func TestGetResponseTransformer_NonGeminiProvider(t *testing.T) {
-	providers := map[string]*config.Provider{
-		"openai": {
-			Name:      "openai",
-			AuthStyle: "bearer",
-		},
+func TestResponseTransformer_NonGeminiProvider(t *testing.T) {
+	spec, ok := providerpkg.Get("openai")
+	if !ok {
+		t.Fatal("expected openai provider to exist")
 	}
-	p := &Proxy{GW: newStreamTestGatewayWithProviders(providers)}
 
-	transformer := p.getResponseTransformer("openai")
+	if spec.NewResponseTransformer == nil {
+		return
+	}
+
+	transformer := spec.NewResponseTransformer(nil)
 	if transformer != nil {
-		t.Fatal("expected nil transformer for non-gemini provider")
+		t.Fatal("expected nil transformer for openai provider")
 	}
 }
 
-func TestGetResponseTransformer_UnknownProvider(t *testing.T) {
-	p := &Proxy{GW: newStreamTestGateway()}
-
-	transformer := p.getResponseTransformer("nonexistent")
-	if transformer != nil {
-		t.Fatal("expected nil transformer for unknown provider")
+func TestResponseTransformer_UnknownProvider(t *testing.T) {
+	_, ok := providerpkg.Get("nonexistent")
+	if ok {
+		t.Fatal("expected false for nonexistent provider")
 	}
 }
 
@@ -206,17 +206,18 @@ func TestWriteBlockedSSE_MultipleChunks(t *testing.T) {
 	}
 }
 
-func TestGetResponseTransformer_GeminiTransformerHasOnExtraContent(t *testing.T) {
-	providers := map[string]*config.Provider{
-		"gemini": {
-			Name:      "gemini",
-			AuthStyle: "bearer+x-goog",
-		},
+func TestResponseTransformer_GeminiTransformerHasOnExtraContent(t *testing.T) {
+	spec, ok := providerpkg.Get("gemini")
+	if !ok {
+		t.Fatal("expected gemini provider to exist")
 	}
-	p := &Proxy{GW: newStreamTestGatewayWithProviders(providers)}
 
-	transformer := p.getResponseTransformer("gemini")
-	gt, ok := transformer.(*stream.GeminiTransformer)
+	if spec.NewResponseTransformer == nil {
+		t.Fatal("expected gemini to have NewResponseTransformer")
+	}
+
+	transformer := spec.NewResponseTransformer(nil)
+	gt, ok := transformer.(*providerpkg.GeminiTransformer)
 	if !ok {
 		t.Fatal("expected GeminiTransformer")
 	}

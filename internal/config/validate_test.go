@@ -4,6 +4,8 @@ import (
 	"log/slog"
 	"net/http"
 	"testing"
+
+	providerpkg "nenya/internal/providers"
 )
 
 func TestOllamaHealthURL(t *testing.T) {
@@ -104,33 +106,43 @@ func TestValidatePatterns(t *testing.T) {
 	})
 }
 
-func TestGetValidationEndpoint(t *testing.T) {
+func TestProviderValidationEndpoints(t *testing.T) {
 	tests := []struct {
+		name string
 		url  string
 		want string
 	}{
-		{"https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
+		{"gemini", "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
 			"https://generativelanguage.googleapis.com/v1beta/models"},
-		{"https://api.deepseek.com/chat/completions",
+		{"deepseek", "https://api.deepseek.com/chat/completions",
 			"https://api.deepseek.com/models"},
-		{"https://api.z.ai/api/paas/v4/chat/completions",
+		{"zai", "https://api.z.ai/api/paas/v4/chat/completions",
 			"https://api.z.ai/v1/models"},
-		{"https://api.groq.com/openai/v1/chat/completions",
+		{"groq", "https://api.groq.com/openai/v1/chat/completions",
 			"https://api.groq.com/openai/v1/models"},
-		{"https://api.together.xyz/v1/chat/completions",
+		{"together", "https://api.together.xyz/v1/chat/completions",
 			"https://api.together.xyz/v1/models"},
-		{"https://api.openai.com/v1/chat/completions",
+		{"openai", "https://api.openai.com/v1/chat/completions",
 			"https://api.openai.com/v1/models"},
-		{"http://127.0.0.1:11434/v1/chat/completions", ""},
-		{"http://localhost:11434/v1/chat/completions", ""},
-		{"https://custom.example.com/v1/chat/completions",
+		{"ollama", "http://127.0.0.1:11434/v1/chat/completions", ""},
+		{"nvidia", "https://custom.example.com/v1/chat/completions",
 			"https://custom.example.com/v1/models"},
 	}
 	for _, tt := range tests {
-		t.Run(tt.url, func(t *testing.T) {
-			got := GetValidationEndpoint(tt.url)
+		t.Run(tt.name, func(t *testing.T) {
+			spec, ok := providerpkg.Get(tt.name)
+			if !ok {
+				t.Fatalf("provider %q not found", tt.name)
+			}
+			if spec.ValidationEndpoint == nil {
+				if tt.want != "" {
+					t.Errorf("provider %q has no ValidationEndpoint but want %q", tt.name, tt.want)
+				}
+				return
+			}
+			got := spec.ValidationEndpoint(tt.url)
 			if got != tt.want {
-				t.Errorf("GetValidationEndpoint(%q) = %q, want %q", tt.url, got, tt.want)
+				t.Errorf("%s.ValidationEndpoint(%q) = %q, want %q", tt.name, tt.url, got, tt.want)
 			}
 		})
 	}

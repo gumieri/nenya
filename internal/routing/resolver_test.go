@@ -11,15 +11,6 @@ func providers() map[string]*config.Provider {
 	return config.ResolveProviders(&config.Config{Providers: builtIn}, &config.SecretsConfig{ProviderKeys: map[string]string{}})
 }
 
-func TestGeminiModelMap(t *testing.T) {
-	if len(GeminiModelMap) == 0 {
-		t.Fatal("GeminiModelMap should not be empty")
-	}
-	if GeminiModelMap["gemini-flash"] != "gemini-2.5-flash" {
-		t.Fatalf("expected gemini-flash -> gemini-2.5-flash, got %s", GeminiModelMap["gemini-flash"])
-	}
-}
-
 func TestResolveProvider_KnownModels(t *testing.T) {
 	p := providers()
 
@@ -167,57 +158,5 @@ func TestProviderURL_AgentURLOverride(t *testing.T) {
 	got = ProviderURL("nonexistent", "https://override.example.com", p)
 	if got != "https://override.example.com" {
 		t.Fatalf("expected agent URL override even for unknown provider, got %q", got)
-	}
-}
-
-func TestIsGeminiProvider_True(t *testing.T) {
-	p := providers()
-
-	if !IsGeminiProvider("gemini", p) {
-		t.Fatal("expected true for gemini provider")
-	}
-}
-
-func TestIsGeminiProvider_False(t *testing.T) {
-	p := providers()
-
-	cases := []string{"deepseek", "zai", "groq", "together", "ollama"}
-	for _, name := range cases {
-		t.Run(name, func(t *testing.T) {
-			if IsGeminiProvider(name, p) {
-				t.Fatalf("expected false for %q", name)
-			}
-		})
-	}
-}
-
-func TestIsGeminiProvider_Unknown(t *testing.T) {
-	p := providers()
-
-	if IsGeminiProvider("nonexistent", p) {
-		t.Fatal("expected false for unknown provider")
-	}
-}
-
-func TestIsGeminiProvider_NilProviders(t *testing.T) {
-	if IsGeminiProvider("gemini", nil) {
-		t.Fatal("expected false with nil providers")
-	}
-}
-
-func TestIsZAIProvider_True(t *testing.T) {
-	if !IsZAIProvider("zai") {
-		t.Fatal("expected true for zai")
-	}
-}
-
-func TestIsZAIProvider_False(t *testing.T) {
-	cases := []string{"gemini", "deepseek", "groq", "together", "", "z ai", "ZAi"}
-	for _, name := range cases {
-		t.Run(name, func(t *testing.T) {
-			if IsZAIProvider(name) {
-				t.Fatalf("expected false for %q", name)
-			}
-		})
 	}
 }
