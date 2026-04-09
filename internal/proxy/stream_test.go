@@ -12,8 +12,8 @@ import (
 	"nenya/internal/config"
 	"nenya/internal/gateway"
 	"nenya/internal/infra"
-	"nenya/internal/routing"
 	providerpkg "nenya/internal/providers"
+	"nenya/internal/routing"
 )
 
 func TestWriteBlockedSSE(t *testing.T) {
@@ -267,7 +267,7 @@ func newStreamTestGateway() *gateway.NenyaGateway {
 		Logger:     slog.Default(),
 		Stats:      infra.NewUsageTracker(),
 		Metrics:    infra.NewMetrics(),
-		AgentState: routing.NewAgentState(),
+		AgentState: routing.NewAgentState(slog.Default()),
 		Providers:  make(map[string]*config.Provider),
 	}
 }
@@ -278,7 +278,7 @@ func newStreamTestGatewayWithProviders(providers map[string]*config.Provider) *g
 		Logger:     slog.Default(),
 		Stats:      infra.NewUsageTracker(),
 		Metrics:    infra.NewMetrics(),
-		AgentState: routing.NewAgentState(),
+		AgentState: routing.NewAgentState(slog.Default()),
 		Providers:  providers,
 	}
 }
