@@ -74,6 +74,7 @@ func (p *Proxy) forwardToUpstream(
 	tokenCount int,
 	agentName string,
 	maxRetries int,
+	cacheKey string,
 ) {
 	originalPayload, err := json.Marshal(payload)
 	if err != nil {
@@ -136,7 +137,7 @@ func (p *Proxy) forwardToUpstream(
 			http.Error(w, "Upstream provider error", action.resp.StatusCode)
 			return
 		case actionStream:
-			p.streamResponse(w, r, target, agentName, action)
+			p.streamResponse(w, r, target, agentName, action, cacheKey)
 			return
 		}
 	}

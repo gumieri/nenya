@@ -117,6 +117,28 @@ func ApplyDefaults(cfg *Config) {
 		cfg.Compaction.Enabled = true
 	}
 
+	if !cfg.ResponseCache.Enabled && !cfg.ResponseCache.EnabledWasSet() && cfg.ResponseCache.MaxEntries > 0 {
+		cfg.ResponseCache.Enabled = true
+	}
+
+	if cfg.ResponseCache.Enabled {
+		if cfg.ResponseCache.MaxEntries <= 0 {
+			cfg.ResponseCache.MaxEntries = 512
+		}
+		if cfg.ResponseCache.MaxEntryBytes <= 0 {
+			cfg.ResponseCache.MaxEntryBytes = 1 << 20
+		}
+		if cfg.ResponseCache.TTLSeconds <= 0 {
+			cfg.ResponseCache.TTLSeconds = 3600
+		}
+		if cfg.ResponseCache.EvictEverySeconds <= 0 {
+			cfg.ResponseCache.EvictEverySeconds = 300
+		}
+		if cfg.ResponseCache.ForceRefreshHeader == "" {
+			cfg.ResponseCache.ForceRefreshHeader = "x-nenya-cache-force-refresh"
+		}
+	}
+
 	if cfg.Providers == nil {
 		cfg.Providers = make(map[string]ProviderConfig)
 	}

@@ -13,6 +13,7 @@ import (
 
 	"nenya/internal/config"
 	"nenya/internal/gateway"
+	"nenya/internal/infra"
 	"nenya/internal/pipeline"
 	"nenya/internal/routing"
 )
@@ -95,6 +96,17 @@ func (p *Proxy) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 		p.GW.Logger.Info("model routing", "model", modelName, "upstream", provider.URL)
 	}
 
+	var cacheKey string
+	if p.GW.ResponseCache != nil {
+		cacheKey = infra.FingerprintPayload(payload)
+		if r.Header.Get(p.GW.Config.ResponseCache.ForceRefreshHeader) == "" {
+			if data, ok := p.GW.ResponseCache.Lookup(cacheKey); ok {
+				p.replayCachedSSE(w, r, data)
+				return
+			}
+		}
+	}
+
 	if messagesRaw, ok := payload["messages"]; ok {
 		if messages, ok := messagesRaw.([]interface{}); ok && len(messages) > 0 {
 			windowMaxCtx := routing.ResolveWindowMaxContext(modelName, p.GW.Config.Agents)
@@ -108,7 +120,20 @@ func (p *Proxy) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	p.forwardToUpstream(w, r, targets, payload, cooldownDuration, tokenCount, agentName, maxRetries)
+	p.forwardToUpstream(w, r, targets, payload, cooldownDuration, tokenCount, agentName, maxRetries, cacheKey)
+}
+
+func (p *Proxy) replayCachedSSE(w http.ResponseWriter, r *http.Request, data []byte) {
+	p.GW.Logger.Info("response cache hit")
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("X-Nenya-Cache-Status", "HIT")
+	w.WriteHeader(http.StatusOK)
+
+	fw := newImmediateFlushWriter(w)
+	buf := streamingBufPool.Get().(*[]byte)
+	defer streamingBufPool.Put(buf)
+	copyStream(r.Context(), fw, bytes.NewReader(data), *buf)
 }
 
 func (p *Proxy) applyContentPipeline(ctx context.Context, payload map[string]interface{}, tokenCount int, windowMaxCtx int) error {
