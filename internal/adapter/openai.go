@@ -1,0 +1,152 @@
+package adapter
+
+import (
+	"encoding/json"
+	"net/http"
+	"strings"
+)
+
+type OpenAIAdapter struct {
+	Caps Capabilities
+}
+
+func NewOpenAIAdapter(caps Capabilities) *OpenAIAdapter {
+	return &OpenAIAdapter{Caps: caps}
+}
+
+func (a *OpenAIAdapter) MutateRequest(body []byte, model string, stream bool) ([]byte, error) {
+	if len(body) == 0 {
+		return body, nil
+	}
+
+	var payload map[string]interface{}
+	if err := json.Unmarshal(body, &payload); err != nil {
+		return body, nil
+	}
+
+	changed := false
+
+	if !a.Caps.StreamOptions {
+		if _, has := payload["stream_options"]; has {
+			delete(payload, "stream_options")
+			changed = true
+		}
+	}
+
+	if !a.Caps.AutoToolChoice {
+		if tc, has := payload["tool_choice"]; has {
+			if s, ok := tc.(string); ok && s == "auto" {
+				delete(payload, "tool_choice")
+				changed = true
+			}
+		}
+	}
+
+	if !a.Caps.ContentArrays {
+		if msgsRaw, has := payload["messages"]; has {
+			if msgs, ok := msgsRaw.([]interface{}); ok {
+				if flattened := flattenContentArrays(msgs); flattened {
+					changed = true
+				}
+			}
+		}
+	}
+
+	if !changed {
+		return body, nil
+	}
+
+	out, err := json.Marshal(payload)
+	if err != nil {
+		return body, nil
+	}
+	return out, nil
+}
+
+func (a *OpenAIAdapter) InjectAuth(req *http.Request, apiKey string) error {
+	return (&BearerAuth{}).InjectAuth(req, apiKey)
+}
+
+func (a *OpenAIAdapter) MutateResponse(body []byte) ([]byte, error) {
+	return body, nil
+}
+
+func (a *OpenAIAdapter) NormalizeError(statusCode int, body []byte) ErrorClass {
+	return defaultNormalizeError(statusCode, body)
+}
+
+func flattenContentArrays(msgs []interface{}) bool {
+	changed := false
+	for i, msgRaw := range msgs {
+		msg, ok := msgRaw.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		contentRaw, has := msg["content"]
+		if !has {
+			continue
+		}
+		arr, ok := contentRaw.([]interface{})
+		if !ok || len(arr) == 0 {
+			continue
+		}
+		var parts []string
+		for _, item := range arr {
+			m, ok := item.(map[string]interface{})
+			if !ok {
+				continue
+			}
+			if typ, ok := m["type"].(string); ok && typ == "text" {
+				if text, ok := m["text"].(string); ok {
+					parts = append(parts, text)
+				}
+			}
+		}
+		if len(parts) > 0 {
+			msgs[i].(map[string]interface{})["content"] = strings.Join(parts, "\n")
+			changed = true
+		}
+	}
+	return changed
+}
+
+func defaultNormalizeError(statusCode int, body []byte) ErrorClass {
+	switch statusCode {
+	case 429:
+		return ErrorRateLimited
+	case 500, 502, 503, 504:
+		return ErrorRetryable
+	case 400, 413, 422:
+		if len(body) == 0 {
+			return ErrorPermanent
+		}
+		lower := strings.ToLower(string(body))
+		for _, pat := range commonRetryablePatterns {
+			if strings.Contains(lower, pat) {
+				return ErrorRetryable
+			}
+		}
+		return ErrorPermanent
+	default:
+		return ErrorPermanent
+	}
+}
+
+var commonRetryablePatterns = []string{
+	"unavailable_model",
+	"tokens_limit_reached",
+	"context_length_exceeded",
+	"context length",
+	"model_overloaded",
+	"overloaded",
+	"thought_signature",
+	"name cannot be empty",
+	"messages parameter is illegal",
+	"unknown_model",
+	"max_tokens",
+	"rate_limit_exceeded",
+	"extra_forbidden",
+	"enable-auto-tool-choice",
+	"tool_call_parser",
+	"valid string",
+}
