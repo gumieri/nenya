@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"nenya/internal/adapter"
 	"nenya/internal/gateway"
 	"nenya/internal/infra"
 	"nenya/internal/pipeline"
@@ -285,6 +286,16 @@ func (p *Proxy) handleUpstreamError(
 		p.GW.Logger.Warn("retryable client error from upstream, trying next target",
 			"target", idx+1, "total", len(targets), "model", target.Model,
 			"status", action.resp.StatusCode, "body", string(errorBody))
+		p.GW.AgentState.RecordFailure(target, cooldownDuration)
+		return true, 0
+	}
+
+	a := adapter.ForProvider(target.Provider)
+	errClass := a.NormalizeError(action.resp.StatusCode, errorBody)
+	if (errClass == adapter.ErrorRetryable || errClass == adapter.ErrorQuotaExhausted) && action.resp.StatusCode >= 400 && action.resp.StatusCode < 500 {
+		p.GW.Logger.Warn("adapter classified client error as retryable, trying next target",
+			"target", idx+1, "total", len(targets), "model", target.Model,
+			"status", action.resp.StatusCode, "error_class", errClass)
 		p.GW.AgentState.RecordFailure(target, cooldownDuration)
 		return true, 0
 	}

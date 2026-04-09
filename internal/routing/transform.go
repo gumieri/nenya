@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"strings"
 
+	"nenya/internal/adapter"
 	"nenya/internal/config"
 	"nenya/internal/infra"
 	providerpkg "nenya/internal/providers"
@@ -27,24 +28,9 @@ func InjectAPIKey(providerName string, providers map[string]*config.Provider, he
 		return fmt.Errorf("unknown provider: %s", providerName)
 	}
 
-	switch p.AuthStyle {
-	case "none":
-		return nil
-	case "bearer":
-		if p.APIKey == "" {
-			return fmt.Errorf("API key missing for provider %s", providerName)
-		}
-		headers.Set("Authorization", "Bearer "+p.APIKey)
-	case "bearer+x-goog":
-		if p.APIKey == "" {
-			return fmt.Errorf("API key missing for provider %s", providerName)
-		}
-		headers.Set("Authorization", "Bearer "+p.APIKey)
-		headers.Set("x-goog-api-key", p.APIKey)
-	default:
-		return fmt.Errorf("unknown auth style %q for provider %s", p.AuthStyle, providerName)
-	}
-	return nil
+	a := adapter.ForProviderWithAuth(providerName, p.AuthStyle)
+	req := &http.Request{Header: headers}
+	return a.InjectAuth(req, p.APIKey)
 }
 
 func TransformRequestForUpstream(deps TransformDeps, providerName, upstreamURL string, payload map[string]interface{}, model string, maxOutput int) ([]byte, string, error) {
