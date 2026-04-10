@@ -53,8 +53,8 @@ func TestApplyDefaultsServer(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			if err := ApplyDefaults(&tt.before); err != nil {
-			t.Fatal(err)
-		}
+				t.Fatal(err)
+			}
 			tt.check(t, &tt.before)
 		})
 	}
@@ -108,8 +108,8 @@ func TestApplyDefaultsGovernance(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			if err := ApplyDefaults(&tt.before); err != nil {
-			t.Fatal(err)
-		}
+				t.Fatal(err)
+			}
 			tt.check(t, &tt.before)
 		})
 	}
@@ -139,7 +139,9 @@ func TestApplyDefaultsSecurityFilterEngine(t *testing.T) {
 func TestApplyDefaultsSecurityFilter(t *testing.T) {
 	t.Run("empty gets built-ins", func(t *testing.T) {
 		cfg := Config{}
-		ApplyDefaults(&cfg)
+		if err := ApplyDefaults(&cfg); err != nil {
+			t.Fatal(err)
+		}
 		if !cfg.SecurityFilter.Enabled {
 			t.Error("expected Enabled=true")
 		}
@@ -153,7 +155,9 @@ func TestApplyDefaultsSecurityFilter(t *testing.T) {
 				Patterns: []string{`custom-[0-9]+`},
 			},
 		}
-		ApplyDefaults(&cfg)
+		if err := ApplyDefaults(&cfg); err != nil {
+			t.Fatal(err)
+		}
 		if len(cfg.SecurityFilter.Patterns) != 1 {
 			t.Errorf("expected 1 pattern, got %d", len(cfg.SecurityFilter.Patterns))
 		}
@@ -164,7 +168,9 @@ func TestApplyDefaultsSecurityFilter(t *testing.T) {
 		if err := json.Unmarshal([]byte(jsonStr), &cfg); err != nil {
 			t.Fatal(err)
 		}
-		ApplyDefaults(&cfg)
+		if err := ApplyDefaults(&cfg); err != nil {
+			t.Fatal(err)
+		}
 		if cfg.SecurityFilter.Enabled {
 			t.Error("expected Enabled=false when explicitly set")
 		}
@@ -174,7 +180,9 @@ func TestApplyDefaultsSecurityFilter(t *testing.T) {
 func TestApplyDefaultsPrefixCache(t *testing.T) {
 	t.Run("sub-field defaults", func(t *testing.T) {
 		cfg := Config{}
-		ApplyDefaults(&cfg)
+		if err := ApplyDefaults(&cfg); err != nil {
+			t.Fatal(err)
+		}
 		if !cfg.PrefixCache.PinSystemFirst {
 			t.Error("expected PinSystemFirst=true")
 		}
@@ -184,7 +192,9 @@ func TestApplyDefaultsPrefixCache(t *testing.T) {
 	})
 	t.Run("auto-enable parent", func(t *testing.T) {
 		cfg := Config{PrefixCache: PrefixCacheConfig{PinSystemFirst: true}}
-		ApplyDefaults(&cfg)
+		if err := ApplyDefaults(&cfg); err != nil {
+			t.Fatal(err)
+		}
 		if !cfg.PrefixCache.Enabled {
 			t.Error("expected Enabled=true when sub-fields set")
 		}
@@ -195,7 +205,9 @@ func TestApplyDefaultsPrefixCache(t *testing.T) {
 		if err := json.Unmarshal([]byte(jsonStr), &cfg); err != nil {
 			t.Fatal(err)
 		}
-		ApplyDefaults(&cfg)
+		if err := ApplyDefaults(&cfg); err != nil {
+			t.Fatal(err)
+		}
 		if cfg.PrefixCache.PinSystemFirst {
 			t.Error("expected PinSystemFirst=false")
 		}
@@ -205,14 +217,18 @@ func TestApplyDefaultsPrefixCache(t *testing.T) {
 func TestApplyDefaultsCompaction(t *testing.T) {
 	t.Run("auto-enable", func(t *testing.T) {
 		cfg := Config{}
-		ApplyDefaults(&cfg)
+		if err := ApplyDefaults(&cfg); err != nil {
+			t.Fatal(err)
+		}
 		if !cfg.Compaction.Enabled {
 			t.Error("expected Enabled=true")
 		}
 	})
 	t.Run("sub-fields default true", func(t *testing.T) {
 		cfg := Config{}
-		ApplyDefaults(&cfg)
+		if err := ApplyDefaults(&cfg); err != nil {
+			t.Fatal(err)
+		}
 		if !cfg.Compaction.JSONMinify {
 			t.Error("expected JSONMinify=true")
 		}
@@ -226,7 +242,9 @@ func TestApplyDefaultsCompaction(t *testing.T) {
 		if err := json.Unmarshal([]byte(jsonStr), &cfg); err != nil {
 			t.Fatal(err)
 		}
-		ApplyDefaults(&cfg)
+		if err := ApplyDefaults(&cfg); err != nil {
+			t.Fatal(err)
+		}
 		if cfg.Compaction.JSONMinify {
 			t.Error("expected JSONMinify=false")
 		}
@@ -236,7 +254,9 @@ func TestApplyDefaultsCompaction(t *testing.T) {
 func TestApplyDefaultsWindow(t *testing.T) {
 	t.Run("defaults", func(t *testing.T) {
 		cfg := Config{}
-		ApplyDefaults(&cfg)
+		if err := ApplyDefaults(&cfg); err != nil {
+			t.Fatal(err)
+		}
 		if cfg.Window.Mode != "summarize" {
 			t.Errorf("Mode: got %q", cfg.Window.Mode)
 		}
@@ -252,7 +272,9 @@ func TestApplyDefaultsWindow(t *testing.T) {
 	})
 	t.Run("auto-enable", func(t *testing.T) {
 		cfg := Config{Window: WindowConfig{Mode: "truncate"}}
-		ApplyDefaults(&cfg)
+		if err := ApplyDefaults(&cfg); err != nil {
+			t.Fatal(err)
+		}
 		if !cfg.Window.Enabled {
 			t.Error("expected Enabled=true when Mode set")
 		}
@@ -262,7 +284,9 @@ func TestApplyDefaultsWindow(t *testing.T) {
 func TestApplyDefaultsProviders(t *testing.T) {
 	t.Run("nil gets built-ins", func(t *testing.T) {
 		cfg := Config{}
-		ApplyDefaults(&cfg)
+		if err := ApplyDefaults(&cfg); err != nil {
+			t.Fatal(err)
+		}
 		if _, ok := cfg.Providers["gemini"]; !ok {
 			t.Error("expected built-in gemini provider")
 		}
@@ -273,7 +297,9 @@ func TestApplyDefaultsProviders(t *testing.T) {
 				"gemini": {URL: "http://custom"},
 			},
 		}
-		ApplyDefaults(&cfg)
+		if err := ApplyDefaults(&cfg); err != nil {
+			t.Fatal(err)
+		}
 		if cfg.Providers["gemini"].URL != "http://custom" {
 			t.Errorf("expected custom URL, got %q", cfg.Providers["gemini"].URL)
 		}
@@ -407,7 +433,9 @@ func TestLoadPromptFile(t *testing.T) {
 	})
 	t.Run("file prompt", func(t *testing.T) {
 		tmpfile := filepath.Join(t.TempDir(), "prompt.md")
-		os.WriteFile(tmpfile, []byte("file content"), 0644)
+		if err := os.WriteFile(tmpfile, []byte("file content"), 0644); err != nil {
+			t.Fatal(err)
+		}
 		s, err := LoadPromptFile(tmpfile, "", "default")
 		if err != nil {
 			t.Fatal(err)

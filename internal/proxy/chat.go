@@ -133,7 +133,9 @@ func (p *Proxy) replayCachedSSE(w http.ResponseWriter, r *http.Request, data []b
 	fw := newImmediateFlushWriter(w)
 	buf := streamingBufPool.Get().(*[]byte)
 	defer streamingBufPool.Put(buf)
-	copyStream(r.Context(), fw, bytes.NewReader(data), *buf)
+	if _, err := copyStream(r.Context(), fw, bytes.NewReader(data), *buf); err != nil {
+		p.GW.Logger.Error("failed to replay cached SSE stream", "err", err)
+	}
 }
 
 func (p *Proxy) applyContentPipeline(ctx context.Context, payload map[string]interface{}, tokenCount int, windowMaxCtx int) error {
