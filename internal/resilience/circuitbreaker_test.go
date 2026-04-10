@@ -363,7 +363,7 @@ func TestRecordFailure_CooldownOverride(t *testing.T) {
 	c := cb.circuits["test-key"]
 	expectedExpiry := time.Now().Add(5 * time.Second)
 	if c.expiry.Before(expectedExpiry.Add(-time.Second)) || c.expiry.After(expectedExpiry.Add(time.Second)) {
-		t.Fatalf("cooldown override not respected: expected ~5s, got %v", c.expiry.Sub(time.Now()))
+		t.Fatalf("cooldown override not respected: expected ~5s, got %v", time.Until(c.expiry))
 	}
 }
 

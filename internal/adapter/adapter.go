@@ -8,7 +8,7 @@ import (
 type ErrorClass int
 
 const (
-	ErrorPermanent    ErrorClass = iota
+	ErrorPermanent ErrorClass = iota
 	ErrorRetryable
 	ErrorRateLimited
 	ErrorQuotaExhausted
@@ -30,9 +30,9 @@ func (e ErrorClass) String() string {
 }
 
 type Capabilities struct {
-	StreamOptions   bool
-	AutoToolChoice  bool
-	ContentArrays   bool
+	StreamOptions  bool
+	AutoToolChoice bool
+	ContentArrays  bool
 }
 
 type ProviderAdapter interface {
