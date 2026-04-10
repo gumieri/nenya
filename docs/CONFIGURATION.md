@@ -56,23 +56,82 @@ Tier-0 regex-based secret redaction runs on every request, before any other pipe
 | `enabled` | bool | `true` | Enable/disable the filter. Defaults to `true` if `patterns` are provided but field omitted. |
 | `patterns` | []string | (9 built-in) | Custom regex patterns. Replaces built-in patterns if set. Built-in patterns match: AWS keys, GitHub tokens, Google OAuth, sk- API keys, PEM private keys, AWS credential file lines, password/key assignments, Docker tokens, SendGrid keys. |
 | `redaction_label` | string | `"[REDACTED]"` | Replacement string for matched secrets |
-| `engine` | EngineConfig | (see below) | Engine configuration for privacy filtering |
+| `engine` | string or object | (see below) | Agent name reference or inline engine configuration |
 
 ### Engine Configuration (`engine`)
 
-Both `security_filter.engine` and `window.engine` use the same `EngineConfig` structure:
+Both `security_filter.engine` and `window.engine` support two forms:
+
+#### Form 1: Agent Reference (string)
+
+References a named agent by name. The agent's model list becomes the engine's fallback chain. The agent's `system_prompt` / `system_prompt_file` are used as defaults (overridable by inline fields on the `EngineRef`).
+
+```json
+{
+  "security_filter": {
+    "engine": "summarizer"
+  }
+}
+```
+
+The agent `"summarizer"` must exist in the `agents` section with at least one model.
+
+#### Form 2: Inline Configuration (object)
+
+Directly specifies the engine model, identical to the previous `EngineConfig` format:
+
+```json
+{
+  "security_filter": {
+    "engine": {
+      "provider": "ollama",
+      "model": "qwen2.5-coder:7b",
+      "timeout_seconds": 600
+    }
+  }
+}
+```
+
+#### Engine Fields
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `provider` | string | `"ollama"` | Provider name from the `[providers]` registry. URL, auth, and API format are inherited from the provider definition. |
-| `model` | string | `"qwen2.5-coder:7b"` | Model identifier for the engine |
+| `provider` | string | `"ollama"` | Provider name from the `providers` registry (inline mode only) |
+| `model` | string | `"qwen2.5-coder:7b"` | Model identifier (inline mode only) |
 | `system_prompt` | string | `""` | Inline system prompt. Highest priority. |
-| `system_prompt_file` | string | `""` | Path to system prompt file (relative to config). Falls back to built-in prompt if empty. |
+| `system_prompt_file` | string | `""` | Path to system prompt file. Falls back to built-in prompt if empty. |
 | `timeout_seconds` | int | `600` | Timeout for individual engine API calls |
 
-**Prompt priority**: `system_prompt` (inline) > `system_prompt_file` > built-in default.
+**Prompt priority**: `system_prompt` (inline) > `system_prompt_file` > agent's `system_prompt` > built-in default.
 
 **Note**: `system_prompt_file` supports `%d` placeholder for window summarization (replaced with active message count).
+
+#### Agent-as-Engine: Fallback Chain
+
+When an agent reference is used, the engine inherits the agent's full model list as a fallback chain. If the primary model fails, the next model in the list is tried automatically. This provides resilience for engine calls (e.g., Ollama down → fall back to a cloud provider).
+
+```json
+{
+  "agents": {
+    "summarizer": {
+      "strategy": "fallback",
+      "system_prompt": "You are a privacy filter...",
+      "models": [
+        { "provider": "ollama", "model": "qwen2.5-coder:7b" },
+        { "provider": "deepseek", "model": "deepseek-chat" }
+      ]
+    }
+  },
+  "security_filter": {
+    "engine": "summarizer"
+  },
+  "window": {
+    "engine": "summarizer"
+  }
+}
+```
+
+**Structured logging**: Engine calls log the `caller` (`security_filter` or `window`), `agent` name (or `inline`), `provider`, `model`, and `attempt`/`total` for observability.
 
 ## `prefix_cache`
 
@@ -111,7 +170,7 @@ Sliding window conversation compaction for long conversations. When the estimate
 | `trigger_ratio` | float | `0.8` | Trigger when tokens exceed `max_context * ratio` (0.0-1.0) |
 | `summary_max_runes` | int | `4000` | Maximum length of the generated summary |
 | `max_context` | int | `128000` | Context window size. Overridden by agent model `max_context` when routing through agents. |
-| `engine` | EngineConfig | (see above) | Engine configuration for window summarization |
+| `engine` | string or object | (see below) | Agent name reference or inline engine configuration for window summarization |
 
 ## `response_cache`
 
@@ -303,7 +362,7 @@ Models not in this registry (e.g., local Ollama models, custom endpoints) must b
 4. **Tier-0 regex redaction** (secret patterns via `security_filter`)
 5. **Text compaction** (normalize, trim, collapse blanks)
 6. **Window compaction** (if enabled and threshold exceeded)
-7. **Engine interception** (3-tier last-message summarization using `security_filter.engine`)
+7. **Engine interception** (3-tier last-message summarization using `security_filter.engine`, with fallback chain if agent-referenced)
 8. **JSON minification** (final body compaction)
 9. **Response cache store** (if enabled, store completed SSE response)
 
@@ -313,7 +372,8 @@ Models not in this registry (e.g., local Ollama models, custom endpoints) must b
 - **Model Registry**: Built-in models can be referenced as strings in agent configs; custom/local models use full object notation
 - **Provider Registry**: All built-in providers are loaded automatically; user providers are merged on top
 - **External Prompts**: System prompts can be inline (`system_prompt`) or external files (`system_prompt_file`) in `./prompts/` directory
-- **Separate Engines**: `security_filter.engine` and `window.engine` can use different models/APIs
+- **Separate Engines**: `security_filter.engine` and `window.engine` can use different models/APIs, or share the same agent reference
+- **Agent-as-Engine**: Engine fields accept a string (agent name) or inline object. Agent references inherit the agent's model list as a fallback chain
 - **API Format Abstraction**: Supports `"ollama"` (native `/api/generate`) and `"openai"` (compatible `/v1/chat/completions`) formats
 - **Auto-enable**: `security_filter.enabled` defaults to `true` when patterns are provided; `prefix_cache` and `compaction` auto-enable when sub-fields are set
 - **max_tokens injection**: `max_tokens` is injected from per-model `MaxOutput` in the `ModelRegistry` when the client doesn't set it. Unknown models (not in registry) are not injected.

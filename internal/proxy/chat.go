@@ -265,33 +265,30 @@ func (p *Proxy) applyContentPipeline(ctx context.Context, payload map[string]int
 }
 
 func (p *Proxy) summarizeWithOllama(ctx context.Context, heavyText string) (string, error) {
-	engine := p.GW.Config.SecurityFilter.Engine
-	ctx, cancel := context.WithTimeout(ctx, time.Duration(engine.TimeoutSeconds)*time.Second)
-	defer cancel()
+	if len(p.GW.Config.SecurityFilter.Engine.ResolvedTargets) == 0 {
+		return "", fmt.Errorf("security_filter engine: no resolved targets")
+	}
 
 	defaultPrompt := "You are a data privacy filter. Review the following text and remove or replace any IP addresses, AWS keys (AKIA...), passwords, tokens, or credentials with [REDACTED]. Preserve the original structure, detail level, and all non-sensitive content exactly as provided. Do NOT summarize or shorten the text."
-	systemPrompt, err := config.LoadPromptFile(engine.SystemPromptFile, engine.SystemPrompt, defaultPrompt)
+
+	ref := p.GW.Config.SecurityFilter.Engine
+	systemPrompt, err := config.LoadPromptFile(ref.SystemPromptFile, ref.SystemPrompt, defaultPrompt)
 	if err != nil {
 		p.GW.Logger.Warn("failed to load privacy filter prompt, using default", "err", err)
 		systemPrompt = defaultPrompt
 	}
 
-	provider, ok := p.GW.Providers[engine.Provider]
-	if !ok {
-		return "", fmt.Errorf("engine provider %q not found", engine.Provider)
-	}
-	httpClient := p.GW.Client
-	if provider.ApiFormat == "ollama" {
-		httpClient = p.GW.OllamaClient
+	agentName := ref.AgentName
+	if agentName == "" {
+		agentName = "inline"
 	}
 
-	summary, err := pipeline.CallEngine(ctx, httpClient, provider, engine, func(providerName string, headers http.Header) error {
-		return routing.InjectAPIKey(providerName, p.GW.Providers, headers)
-	}, systemPrompt, heavyText)
-	if err != nil {
-		return "", err
-	}
-	return summary, nil
+	return pipeline.CallEngineChain(ctx, p.GW.Client, p.GW.OllamaClient,
+		ref.ResolvedTargets, p.GW.Logger,
+		func(providerName string, headers http.Header) error {
+			return routing.InjectAPIKey(providerName, p.GW.Providers, headers)
+		},
+		"security_filter", agentName, systemPrompt, heavyText)
 }
 
 func (p *Proxy) handleEmbeddings(w http.ResponseWriter, r *http.Request) {

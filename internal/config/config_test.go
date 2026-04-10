@@ -52,7 +52,9 @@ func TestApplyDefaultsServer(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			ApplyDefaults(&tt.before)
+			if err := ApplyDefaults(&tt.before); err != nil {
+			t.Fatal(err)
+		}
 			tt.check(t, &tt.before)
 		})
 	}
@@ -105,7 +107,9 @@ func TestApplyDefaultsGovernance(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			ApplyDefaults(&tt.before)
+			if err := ApplyDefaults(&tt.before); err != nil {
+			t.Fatal(err)
+		}
 			tt.check(t, &tt.before)
 		})
 	}
@@ -113,16 +117,22 @@ func TestApplyDefaultsGovernance(t *testing.T) {
 
 func TestApplyDefaultsSecurityFilterEngine(t *testing.T) {
 	cfg := Config{}
-	ApplyDefaults(&cfg)
+	if err := ApplyDefaults(&cfg); err != nil {
+		t.Fatal(err)
+	}
 
-	if cfg.SecurityFilter.Engine.Provider != "ollama" {
-		t.Errorf("Engine.Provider: got %q", cfg.SecurityFilter.Engine.Provider)
+	if len(cfg.SecurityFilter.Engine.ResolvedTargets) == 0 {
+		t.Fatal("expected at least one resolved target")
 	}
-	if cfg.SecurityFilter.Engine.Model != "qwen2.5-coder:7b" {
-		t.Errorf("Engine.Model: got %q", cfg.SecurityFilter.Engine.Model)
+	target := cfg.SecurityFilter.Engine.ResolvedTargets[0]
+	if target.Engine.Provider != "ollama" {
+		t.Errorf("Engine.Provider: got %q", target.Engine.Provider)
 	}
-	if cfg.SecurityFilter.Engine.TimeoutSeconds != 600 {
-		t.Errorf("Engine.TimeoutSeconds: got %d", cfg.SecurityFilter.Engine.TimeoutSeconds)
+	if target.Engine.Model != "qwen2.5-coder:7b" {
+		t.Errorf("Engine.Model: got %q", target.Engine.Model)
+	}
+	if target.Engine.TimeoutSeconds != 600 {
+		t.Errorf("Engine.TimeoutSeconds: got %d", target.Engine.TimeoutSeconds)
 	}
 }
 

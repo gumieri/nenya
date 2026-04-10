@@ -13,10 +13,10 @@ Each layer may only import from layers to its left. This prevents circular depen
 | Package | Responsibility |
 |---------|---------------|
 | `cmd/nenya/` | Entry point, server bootstrap with graceful shutdown |
-| `internal/config/` | Configuration types, JSON loading, model/provider registries, defaults, validation |
+| `internal/config/` | Configuration types, JSON loading, model/provider registries, defaults, validation, engine reference resolution |
 | `internal/infra/` | Structured logging, thought signature cache, Prometheus metrics, rate limiter, usage tracker, response cache |
 | `internal/stream/` | SSE transforming reader, sliding window stream filter |
-| `internal/pipeline/` | Tier-0 regex secret redaction, middle-out truncation, text compaction, context window compaction, engine calls |
+| `internal/pipeline/` | Tier-0 regex secret redaction, middle-out truncation, text compaction, context window compaction, engine calls with fallback chains |
 | `internal/resilience/` | Circuit breaker with Closed/Open/HalfOpen states, exponential backoff |
 | `internal/providers/` | Provider capability specs (stream_options, auto_tool_choice, content_arrays), per-provider sanitization, response transformers |
 | `internal/adapter/` | Provider Adapter pattern: request mutation, auth injection, response mutation, error classification |
@@ -66,6 +66,28 @@ Client Request
   ├─ GET /healthz
   └─ GET /statsz
 ```
+
+## Engine Reference System
+
+Both `security_filter.engine` and `window.engine` use the `EngineRef` type which supports two JSON forms:
+
+| Form | Syntax | Resolution |
+|------|--------|------------|
+| Agent reference | `"engine": "agent-name"` | Looks up `agents["agent-name"]`, builds one `EngineTarget` per model in the agent's model list |
+| Inline object | `"engine": {"provider": "...", "model": "..."}` | Single `EngineTarget` using the specified provider/model |
+
+Resolution happens once at config load time (`resolveEngineRefs` in `internal/config/engine_resolve.go`). The resolved `[]EngineTarget` slices are cached on the `EngineRef` struct — zero per-request overhead.
+
+### `CallEngineChain`
+
+`internal/pipeline/engine.go` implements `CallEngineChain` which iterates the target list:
+
+1. For each target, selects the appropriate HTTP client (regular vs Ollama) based on provider `ApiFormat`
+2. Applies per-target timeout from `EngineConfig.TimeoutSeconds`
+3. On failure, logs a structured warning and tries the next target
+4. Returns on first success; on all failures, returns the last error
+
+All engine calls log `caller` (`security_filter` or `window`), `agent` name (or `inline`), `provider`, `model`, and `attempt`/`total` for observability.
 
 ## Circuit Breaker
 

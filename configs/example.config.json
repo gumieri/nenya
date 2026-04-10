@@ -22,6 +22,9 @@
   "security_filter": {
     "enabled": true,
     "redaction_label": "[REDACTED]",
+    // Engine can be a string (agent name) or an inline object.
+    // String form: references an agent's model list as a fallback chain.
+    // Object form: directly specifies provider/model (backward compatible).
     "engine": {
       "provider": "ollama",
       "model": "qwen2.5-coder:7b",
@@ -76,6 +79,16 @@
   },
 
   "agents": {
+    // Agents can also be used as engines for security_filter and window.
+    // Reference them by name: "engine": "summarizer"
+    "summarizer": {
+      "strategy": "fallback",
+      "system_prompt": "You are a data privacy filter. Remove or replace sensitive information with [REDACTED].",
+      "models": [
+        { "provider": "ollama", "model": "qwen2.5-coder:7b" },
+        { "provider": "deepseek", "model": "deepseek-chat" }
+      ]
+    },
     "build": {
       "strategy": "fallback",
       "cooldown_seconds": 60,

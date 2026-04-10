@@ -16,7 +16,7 @@ func newTestProxy(t *testing.T) (*Proxy, *httptest.Server) {
 	t.Helper()
 	cfg := config.Config{
 		SecurityFilter: config.SecurityFilterConfig{
-			Engine: config.EngineConfig{
+			Engine: config.EngineRef{
 				Provider: "ollama",
 			},
 		},

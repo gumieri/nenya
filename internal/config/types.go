@@ -129,14 +129,41 @@ type EngineConfig struct {
 	TimeoutSeconds   int    `json:"timeout_seconds"`
 }
 
+type EngineRef struct {
+	AgentName        string         `json:"-"`
+	Provider         string         `json:"provider"`
+	Model            string         `json:"model"`
+	SystemPrompt     string         `json:"system_prompt"`
+	SystemPromptFile string         `json:"system_prompt_file"`
+	TimeoutSeconds   int            `json:"timeout_seconds"`
+	ResolvedTargets  []EngineTarget `json:"-"`
+}
+
+func (e *EngineRef) UnmarshalJSON(data []byte) error {
+	var s string
+	if err := json.Unmarshal(data, &s); err == nil {
+		e.AgentName = s
+		return nil
+	}
+
+	type alias EngineRef
+	aux := (*alias)(e)
+	return json.Unmarshal(data, aux)
+}
+
+type EngineTarget struct {
+	Engine   EngineConfig
+	Provider *Provider
+}
+
 type SecurityFilterConfig struct {
-	Enabled           bool         `json:"enabled"`
-	RedactionLabel    string       `json:"redaction_label"`
-	Patterns          []string     `json:"patterns"`
-	OutputEnabled     bool         `json:"output_enabled"`
-	OutputWindowChars int          `json:"output_window_chars"`
-	Engine            EngineConfig `json:"engine"`
-	enabledSet        bool         `json:"-"`
+	Enabled           bool      `json:"enabled"`
+	RedactionLabel    string    `json:"redaction_label"`
+	Patterns          []string  `json:"patterns"`
+	OutputEnabled     bool      `json:"output_enabled"`
+	OutputWindowChars int       `json:"output_window_chars"`
+	Engine            EngineRef `json:"engine"`
+	enabledSet        bool      `json:"-"`
 }
 
 func (s *SecurityFilterConfig) EnabledWasSet() bool { return s.enabledSet }
@@ -291,11 +318,11 @@ func (c *CompactionConfig) UnmarshalJSON(data []byte) error {
 }
 
 type WindowConfig struct {
-	Enabled         bool         `json:"enabled"`
-	Mode            string       `json:"mode"`
-	ActiveMessages  int          `json:"active_messages"`
-	TriggerRatio    float64      `json:"trigger_ratio"`
-	SummaryMaxRunes int          `json:"summary_max_runes"`
-	MaxContext      int          `json:"max_context"`
-	Engine          EngineConfig `json:"engine"`
+	Enabled         bool      `json:"enabled"`
+	Mode            string    `json:"mode"`
+	ActiveMessages  int       `json:"active_messages"`
+	TriggerRatio    float64   `json:"trigger_ratio"`
+	SummaryMaxRunes int       `json:"summary_max_runes"`
+	MaxContext      int       `json:"max_context"`
+	Engine          EngineRef `json:"engine"`
 }
