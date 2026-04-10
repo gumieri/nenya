@@ -116,6 +116,76 @@ The gateway logs to stdout. Look for indicators:
 - `[WARN] Payload exceeds soft limit, sending to Ollama` – Tier 2 (Ollama only)
 - `[WARN] Payload exceeds hard limit, applying middle‑out truncation` – Tier 3 (truncate + Ollama)
 - `[RATELIMIT] RPM limit exceeded` – Rate limiting active
+- `[INFO] response cache hit` – Cached response replayed
+- `[WARN] [CIRCUIT BREAKER]` – Circuit tripped or recovering
+
+## Response Cache
+
+When `response_cache.enabled` is set to `true`, responses are cached and replayed on matching requests.
+
+### Observing Cache Hits
+
+Check for the `X-Nenya-Cache-Status` header in the response:
+
+```bash
+curl -v -X POST http://localhost:8080/v1/chat/completions \
+  -H "Authorization: Bearer test-client-token" \
+  -H "Content-Type: application/json" \
+  -d '{"model":"gemini-3-flash","messages":[{"role":"user","content":"Say hello"}]}'
+```
+
+First request: `X-Nenya-Cache-Status: MISS` (or no header on some HTTP clients)
+Second identical request: `X-Nenya-Cache-Status: HIT`
+
+### Forcing Cache Bypass
+
+Send the configured `force_refresh_header` (default: `x-nenya-cache-force-refresh`) with any non-empty value:
+
+```bash
+curl -X POST http://localhost:8080/v1/chat/completions \
+  -H "Authorization: Bearer test-client-token" \
+  -H "x-nenya-cache-force-refresh: true" \
+  -H "Content-Type: application/json" \
+  -d '{"model":"gemini-3-flash","messages":[{"role":"user","content":"Say hello"}]}'
+```
+
+This forces a cache miss regardless of whether a cached response exists.
+
+## Circuit Breaker
+
+Circuit breakers protect against cascading failures by tripping (skipping) models that are failing.
+
+### Observing Circuit State
+
+Check the `/statsz` endpoint for the `circuit_breakers` field:
+
+```bash
+curl http://localhost:8080/statsz | jq '.circuit_breakers'
+```
+
+Example output:
+
+```json
+{
+  "build:gemini:gemini-3-flash": "closed",
+  "build:deepseek:deepseek-reasoner": "open",
+  "plan:zai:glm-5-turbo": "half_open"
+}
+```
+
+- **closed**: Normal operation
+- **open**: Circuit tripped, requests skipped until cooldown expires
+- **half_open**: Probing with limited requests to test recovery
+
+### Triggering a Circuit Trip
+
+Repeatedly send a request to a non-existent model or invalid endpoint to trigger failures. After `failure_threshold` (default 5) consecutive failures, the circuit will trip and the gateway will log:
+
+```
+[WARN] [CIRCUIT BREAKER] agent:provider:model transitioned from closed to open
+```
+
+Subsequent requests to that model will be skipped, falling back to the next model in the agent's chain.
 
 ## Systemd Deployment
 
