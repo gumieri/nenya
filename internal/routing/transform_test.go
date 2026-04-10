@@ -12,7 +12,9 @@ import (
 
 func testProviders() map[string]*config.Provider {
 	cfg := &config.Config{}
-	config.ApplyDefaults(cfg)
+	if err := config.ApplyDefaults(cfg); err != nil {
+		panic(err)
+	}
 	return config.ResolveProviders(cfg, &config.SecretsConfig{
 		ProviderKeys: map[string]string{
 			"gemini":   "test-gemini-key",

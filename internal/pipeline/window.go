@@ -6,7 +6,6 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
-	"time"
 	"unicode/utf8"
 
 	"nenya/internal/config"
@@ -71,28 +70,29 @@ func ApplyWindowCompaction(ctx context.Context, deps WindowDeps, payload map[str
 		summary = TruncateHistory(historyText, windowCfg.SummaryMaxRunes)
 	case "summarize", "":
 		defaultPrompt := fmt.Sprintf(WindowSystemPrompt, windowCfg.SummaryMaxRunes)
-		systemPrompt, err := config.LoadPromptFile(windowCfg.Engine.SystemPromptFile, windowCfg.Engine.SystemPrompt, defaultPrompt)
+		ref := windowCfg.Engine
+		systemPrompt, err := config.LoadPromptFile(ref.SystemPromptFile, ref.SystemPrompt, defaultPrompt)
 		if err != nil {
 			deps.Logger.Warn("failed to load window summarization prompt, using default", "err", err)
 			systemPrompt = defaultPrompt
 		}
-		engineCtx, engineCancel := context.WithTimeout(ctx, time.Duration(windowCfg.Engine.TimeoutSeconds)*time.Second)
-		p, ok := deps.Providers[windowCfg.Engine.Provider]
-		if !ok {
-			engineCancel()
-			return false, fmt.Errorf("engine provider %q not found", windowCfg.Engine.Provider)
-		}
-		httpClient := deps.Client
-		if p.ApiFormat == "ollama" {
-			httpClient = deps.OllamaClient
-		}
-		s, err := CallEngine(engineCtx, httpClient, p, windowCfg.Engine, deps.InjectAPIKey, systemPrompt, historyText)
-		engineCancel()
-		if err != nil {
-			deps.Logger.Warn("window summarization failed, falling back to truncation", "err", err)
+		if len(ref.ResolvedTargets) == 0 {
+			deps.Logger.Warn("window engine: no resolved targets, falling back to truncation")
 			summary = TruncateHistory(historyText, windowCfg.SummaryMaxRunes)
 		} else {
-			summary = s
+			agentName := ref.AgentName
+			if agentName == "" {
+				agentName = "inline"
+			}
+			s, err := CallEngineChain(ctx, deps.Client, deps.OllamaClient,
+				ref.ResolvedTargets, deps.Logger, deps.InjectAPIKey,
+				"window", agentName, systemPrompt, historyText)
+			if err != nil {
+				deps.Logger.Warn("window summarization failed, falling back to truncation", "err", err)
+				summary = TruncateHistory(historyText, windowCfg.SummaryMaxRunes)
+			} else {
+				summary = s
+			}
 		}
 	default:
 		deps.Logger.Warn("unknown window mode, skipping", "mode", windowCfg.Mode)
