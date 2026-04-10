@@ -1,6 +1,6 @@
 # Configuration Reference
 
-Nenya reads its configuration from a JSON file (default: `config.json`). See [`example.config.json`](example.config.json) for a fully-documented example or [`minimal_example.config.json`](minimal_example.config.json) for the smallest possible configuration.
+Nenya reads its configuration from a JSON file (default: `config.json`). See [`../configs/example.config.json`](../configs/example.config.json) for a fully-documented example or [`../configs/minimal_example.config.json`](../configs/minimal_example.config.json) for the smallest possible configuration.
 
 **Important**: Configuration format changed from TOML to JSON with semantic grouping. Old `interceptor`, `ollama`, `ratelimit`, and `filter` sections are now unified under `governance` and `security_filter` with engine abstraction.
 
@@ -14,7 +14,8 @@ Nenya reads its configuration from a JSON file (default: `config.json`). See [`e
 | Prefix Cache | `prefix_cache` | Prompt cache alignment optimizations |
 | Compaction | `compaction` | Text compaction (whitespace, blank lines, JSON) |
 | Window | `window` | Sliding window conversation compaction with configurable engine |
-| Agents | `agents` | Named agent definitions with fallback chains and optional system prompts |
+| Response Cache | `response_cache` | In-memory LRU cache for deterministic response caching |
+| Agents | `agents` | Named agent definitions with fallback chains, circuit breaker, and optional system prompts |
 | Providers | `providers` | Upstream provider registry |
 
 ## `server`
@@ -112,6 +113,23 @@ Sliding window conversation compaction for long conversations. When the estimate
 | `max_context` | int | `128000` | Context window size. Overridden by agent model `max_context` when routing through agents. |
 | `engine` | EngineConfig | (see above) | Engine configuration for window summarization |
 
+## `response_cache`
+
+In-memory LRU cache for deterministic response caching. Responses are cached by SHA-256 fingerprint of the request payload. On cache hit, the stored SSE stream is replayed to the client with `X-Nenya-Cache-Status: HIT` header.
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `enabled` | bool | `false` | Master toggle (off by default) |
+| `max_entries` | int | `512` | Maximum number of cached responses (LRU eviction) |
+| `max_entry_bytes` | int | `1048576` (1 MB) | Maximum size per cached response |
+| `ttl_seconds` | int | `3600` (1 hour) | Time-to-live for cached entries |
+| `evict_every_seconds` | int | `300` (5 minutes) | Background eviction sweep interval |
+| `force_refresh_header` | string | `"x-nenya-cache-force-refresh"` | HTTP header name that bypasses cache when present |
+
+**Cache key**: Deterministic SHA-256 computed from `model`, `messages`, `temperature`, `top_p`, `max_tokens`, `tools`, `tool_choice`, `response_format`, `stop`.
+
+**Bypass**: Send any non-empty value for the configured `force_refresh_header` to force a cache miss.
+
 ## `agents`
 
 Named agent definitions with model fallback chains and optional system prompts. When a request specifies `model: "<agent_name>"`, the gateway routes through the agent's model list.
@@ -163,6 +181,9 @@ Both styles can be mixed in the same `models` array.
 |-------|------|---------|-------------|
 | `strategy` | string | `"round-robin"` | `"round-robin"` or `"fallback"` |
 | `cooldown_seconds` | int | `60` | Seconds to skip a model after a retryable error |
+| `failure_threshold` | int | `5` | Circuit breaker: consecutive failures before tripping to Open state |
+| `success_threshold` | int | `1` | Circuit breaker: consecutive successes in HalfOpen to recover to Closed state |
+| `max_retries` | int | `0` | Cap on retry attempts per request (0 = unlimited) |
 | `system_prompt` | string | `""` | Inline system prompt injected as the first message (only if no existing system message). |
 | `system_prompt_file` | string | `""` | Path to system prompt file. Lower priority than `system_prompt`. |
 | `models` | array | (required) | List of model entries (strings or objects) to try in order |
@@ -226,6 +247,12 @@ API keys are loaded from the secrets file via `provider_keys` (keyed by provider
 
 Gemini requires both `Authorization: Bearer <key>` and `x-goog-api-key: <key>` headers. The `bearer+x-goog` auth style sets both automatically.
 
+### Provider Adapters
+
+Provider-specific wire format differences (auth injection, request/response mutation, error classification) are handled by the adapter system. Most providers use the `OpenAIAdapter` with capability-based parameter stripping. See [`ADAPTERS.md`](ADAPTERS.md) for the full adapter reference and capability matrix.
+
+Gemini requires both `Authorization: Bearer <key>` and `x-goog-api-key: <key>` headers. The `bearer+x-goog` auth style sets both automatically.
+
 ### Gemini `extra_content` (Thought Signatures)
 
 Gemini 3 models include `extra_content.google.thought_signature` in tool_calls responses. Nenya preserves this field (it is required for multi-turn function calling with Gemini 3) and adds the missing `index` field to comply with the OpenAI spec.
@@ -270,13 +297,15 @@ Models not in this registry (e.g., local Ollama models, custom endpoints) must b
 
 ## Processing Pipeline Order
 
-1. **Prefix cache optimizations** (pin system messages, sort tools)
-2. **Agent system prompt injection** (if agent has prompt and no system message exists)
-3. **Tier-0 regex redaction** (secret patterns via `security_filter`)
-4. **Text compaction** (normalize, trim, collapse blanks)
-5. **Window compaction** (if enabled and threshold exceeded)
-6. **Engine interception** (3-tier last-message summarization using `security_filter.engine`)
-7. **JSON minification** (final body compaction)
+1. **Response cache lookup** (if enabled, bypass entire pipeline on hit)
+2. **Prefix cache optimizations** (pin system messages, sort tools)
+3. **Agent system prompt injection** (if agent has prompt and no system message exists)
+4. **Tier-0 regex redaction** (secret patterns via `security_filter`)
+5. **Text compaction** (normalize, trim, collapse blanks)
+6. **Window compaction** (if enabled and threshold exceeded)
+7. **Engine interception** (3-tier last-message summarization using `security_filter.engine`)
+8. **JSON minification** (final body compaction)
+9. **Response cache store** (if enabled, store completed SSE response)
 
 ## Configuration Notes
 
@@ -288,6 +317,8 @@ Models not in this registry (e.g., local Ollama models, custom endpoints) must b
 - **API Format Abstraction**: Supports `"ollama"` (native `/api/generate`) and `"openai"` (compatible `/v1/chat/completions`) formats
 - **Auto-enable**: `security_filter.enabled` defaults to `true` when patterns are provided; `prefix_cache` and `compaction` auto-enable when sub-fields are set
 - **max_tokens injection**: `max_tokens` is injected from per-model `MaxOutput` in the `ModelRegistry` when the client doesn't set it. Unknown models (not in registry) are not injected.
+- **Provider Adapters**: Provider-specific wire format differences (auth, request/response mutation, error classification) are handled by the adapter system. See [`ADAPTERS.md`](ADAPTERS.md) for details.
+- **Circuit Breaker**: Each agent+provider+model combination has an independent circuit breaker (Closed/Open/HalfOpen states). See [`ARCHITECTURE.md`](ARCHITECTURE.md#circuit-breaker) for the state machine.
 
 ## Configuration Validation
 
