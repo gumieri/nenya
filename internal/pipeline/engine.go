@@ -6,7 +6,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
+	"time"
 
 	"nenya/internal/config"
 )
@@ -96,4 +98,60 @@ func CallEngine(ctx context.Context, httpClient *http.Client, provider *config.P
 		}
 	}
 	return output, nil
+}
+
+func CallEngineChain(ctx context.Context, httpClient, ollamaClient *http.Client,
+	targets []config.EngineTarget, logger *slog.Logger,
+	injectAPIKey func(providerName string, headers http.Header) error,
+	caller, agentName, systemPrompt, prompt string) (string, error) {
+	if len(targets) == 0 {
+		return "", fmt.Errorf("engine chain: no targets available")
+	}
+
+	var lastErr error
+	for i, target := range targets {
+		attempt := i + 1
+		total := len(targets)
+
+		logger.Info("engine call attempt",
+			"caller", caller,
+			"agent", agentName,
+			"provider", target.Provider.Name,
+			"model", target.Engine.Model,
+			"attempt", attempt,
+			"total", total)
+
+		client := httpClient
+		if target.Provider.ApiFormat == "ollama" {
+			client = ollamaClient
+		}
+
+		engineCtx, cancel := context.WithTimeout(ctx, time.Duration(target.Engine.TimeoutSeconds)*time.Second)
+		result, err := CallEngine(engineCtx, client, target.Provider, target.Engine, injectAPIKey, systemPrompt, prompt)
+		cancel()
+
+		if err != nil {
+			lastErr = err
+			logger.Warn("engine call failed",
+				"caller", caller,
+				"agent", agentName,
+				"provider", target.Provider.Name,
+				"model", target.Engine.Model,
+				"attempt", attempt,
+				"total", total,
+				"err", err)
+			continue
+		}
+
+		logger.Info("engine call success",
+			"caller", caller,
+			"agent", agentName,
+			"provider", target.Provider.Name,
+			"model", target.Engine.Model,
+			"attempt", attempt,
+			"total", total)
+		return result, nil
+	}
+
+	return "", fmt.Errorf("engine chain failed after %d attempts: last error: %w", len(targets), lastErr)
 }

@@ -167,10 +167,40 @@ func (p *Proxy) handleHealthz(w http.ResponseWriter) {
 }
 
 func (p *Proxy) checkSecurityFilterEngineHealth() bool {
-	engine := p.GW.Config.SecurityFilter.Engine
-	pr, ok := p.GW.Providers[engine.Provider]
+	ref := p.GW.Config.SecurityFilter.Engine
+
+	if len(ref.ResolvedTargets) > 0 {
+		for _, target := range ref.ResolvedTargets {
+			apiFormat := target.Provider.ApiFormat
+			if apiFormat == "" {
+				apiFormat = "openai"
+			}
+			if apiFormat != "ollama" {
+				return true
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+
+			req, err := http.NewRequestWithContext(ctx, http.MethodGet, config.OllamaHealthURL(target.Provider.URL), nil)
+			if err != nil {
+				continue
+			}
+
+			resp, err := p.GW.Client.Do(req)
+			if err != nil {
+				continue
+			}
+			resp.Body.Close()
+			if resp.StatusCode == http.StatusOK {
+				return true
+			}
+		}
+		return false
+	}
+
+	pr, ok := p.GW.Providers[ref.Provider]
 	if !ok {
-		p.GW.Logger.Warn("engine provider not found", "provider", engine.Provider)
+		p.GW.Logger.Warn("engine provider not found", "provider", ref.Provider)
 		return false
 	}
 	apiFormat := pr.ApiFormat

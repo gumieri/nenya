@@ -1,18 +1,34 @@
 package config
 
-func applyEngineDefaults(e *EngineConfig) {
-	if e.Provider == "" {
-		e.Provider = "ollama"
-	}
-	if e.Model == "" {
-		e.Model = "qwen2.5-coder:7b"
-	}
-	if e.TimeoutSeconds == 0 {
-		e.TimeoutSeconds = 600
+func applyEngineRefDefaults(e *EngineRef) {
+	if e.AgentName == "" {
+		if e.Provider == "" {
+			e.Provider = "ollama"
+		}
+		if e.Model == "" {
+			e.Model = "qwen2.5-coder:7b"
+		}
+		if e.TimeoutSeconds == 0 {
+			e.TimeoutSeconds = 600
+		}
 	}
 }
 
-func ApplyDefaults(cfg *Config) {
+func applyResolvedEngineDefaults(targets []EngineTarget) {
+	for i := range targets {
+		if targets[i].Engine.Provider == "" {
+			targets[i].Engine.Provider = "ollama"
+		}
+		if targets[i].Engine.Model == "" {
+			targets[i].Engine.Model = "qwen2.5-coder:7b"
+		}
+		if targets[i].Engine.TimeoutSeconds == 0 {
+			targets[i].Engine.TimeoutSeconds = 600
+		}
+	}
+}
+
+func ApplyDefaults(cfg *Config) error {
 	if cfg.Server.ListenAddr == "" {
 		cfg.Server.ListenAddr = ":8080"
 	}
@@ -86,8 +102,8 @@ func ApplyDefaults(cfg *Config) {
 		cfg.SecurityFilter.OutputWindowChars = 4096
 	}
 
-	applyEngineDefaults(&cfg.SecurityFilter.Engine)
-	applyEngineDefaults(&cfg.Window.Engine)
+	applyEngineRefDefaults(&cfg.SecurityFilter.Engine)
+	applyEngineRefDefaults(&cfg.Window.Engine)
 	if !cfg.PrefixCache.Enabled && (cfg.PrefixCache.PinSystemFirst || cfg.PrefixCache.StableTools || cfg.PrefixCache.SkipRedactionOnSystem) {
 		cfg.PrefixCache.Enabled = true
 	}
@@ -166,4 +182,12 @@ func ApplyDefaults(cfg *Config) {
 	if cfg.Window.MaxContext == 0 {
 		cfg.Window.MaxContext = 128000
 	}
+
+	if err := resolveEngineRefs(cfg); err != nil {
+		return err
+	}
+	applyResolvedEngineDefaults(cfg.SecurityFilter.Engine.ResolvedTargets)
+	applyResolvedEngineDefaults(cfg.Window.Engine.ResolvedTargets)
+
+	return nil
 }

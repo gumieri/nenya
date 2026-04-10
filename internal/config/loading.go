@@ -16,7 +16,9 @@ func Load(filename string) (*Config, error) {
 	if err := json.Unmarshal(data, &cfg); err != nil {
 		return nil, fmt.Errorf("failed to parse config file %s: %v", filename, err)
 	}
-	ApplyDefaults(&cfg)
+	if err := ApplyDefaults(&cfg); err != nil {
+		return nil, fmt.Errorf("failed to apply defaults: %v", err)
+	}
 	return &cfg, nil
 }
 
