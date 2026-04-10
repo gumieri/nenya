@@ -60,10 +60,31 @@
     }
   },
 
+  "response_cache": {
+    // Master toggle. Disabled by default.
+    "enabled": false,
+    // Maximum cached responses (LRU eviction)
+    "max_entries": 512,
+    // Maximum size per cached response (1 MB)
+    "max_entry_bytes": 1048576,
+    // Time-to-live for cached entries (1 hour)
+    "ttl_seconds": 3600,
+    // Background eviction sweep interval (5 minutes)
+    "evict_every_seconds": 300,
+    // HTTP header to bypass cache (any non-empty value forces bypass)
+    "force_refresh_header": "x-nenya-cache-force-refresh"
+  },
+
   "agents": {
     "build": {
       "strategy": "fallback",
       "cooldown_seconds": 60,
+      // Circuit breaker: consecutive failures before tripping
+      "failure_threshold": 5,
+      // Circuit breaker: consecutive successes in HalfOpen to recover
+      "success_threshold": 1,
+      // Cap on retry attempts per request (0 = unlimited)
+      "max_retries": 0,
       "models": [
         "gemini-3.1-flash-lite-preview",
         "gemini-2.5-flash",

@@ -4,51 +4,57 @@
 
 ![go-version] [![License]][license] ![zero-deps] [![CI]][ci] [![CodeQL]][codeql] [![Release]][release] [![Sponsor]][sponsor]
 
-A lightweight, highly secure AI API Gateway/Proxy written in Go. Acts as transparent middleware between local AI coding clients (OpenCode/Aider) and upstream LLM providers (Gemini, DeepSeek, z.ai).
+A lightweight, highly secure AI API Gateway/Proxy written in Go. Acts as transparent middleware between local AI coding clients (OpenCode/Aider) and upstream LLM providers.
 
 Nenya acts as a **silent guardian** for your AI interactions. Its core strength is the **"Bouncer" mechanism**: like the Ring of Adamant shielding Lothlórien, it intercepts massive payloads to discern essential context and redact sensitive data locally, before forwarding the refined essence to upstream cloud providers.
 
-## 🛡️ Features
+## Documentation
 
-### 🗺️ Routing & Providers
+| Document | Description |
+|----------|-------------|
+| [Architecture](docs/ARCHITECTURE.md) | Package DAG, request lifecycle, circuit breaker, SSE pipeline, response cache |
+| [Adapters](docs/ADAPTERS.md) | Provider adapter system, capabilities, auth styles, how to add providers |
+| [Configuration](docs/CONFIGURATION.md) | Full config reference with all sections and fields |
+| [Demo](docs/DEMO.md) | Quick start, pipeline testing, cache bypass, circuit breaker observability |
+| [Secrets Format](docs/SECRETS_FORMAT.md) | Systemd credential management, provider key setup |
+| [Security](docs/SECURITY.md) | Vulnerability reporting policy |
+| [Disclaimer](docs/DISCLAIMER.md) | Usage terms and liability |
 
-- **Config-driven provider registry** — add providers (OpenAI, Anthropic, etc.) via JSON config + secrets, zero code changes
-- **Built-in model registry** — reference models by string shorthand (e.g., `"deepseek-reasoner"`) with automatic provider/context resolution
-- **Dynamic routing** based on model name prefixes configured per provider, with direct ModelRegistry lookups taking priority
-- **Gemini compatibility** — automatic model name mapping, SSE transformation (index field injection, thought signature preservation)
+## Features
 
-### 🔐 Security & Privacy
+### Routing & Providers
 
-- **Tier-0 regex secret filter** — always-on regex-based redaction of AWS keys, GitHub tokens, passwords, etc.
-- **3-Tier UTF-8 safe pipeline**:
-  - **Tier 1** (pass-through): payloads under `soft_limit` characters
-  - **Tier 2** (engine only): payloads between `soft_limit` and `hard_limit` — summarized locally
-  - **Tier 3** (truncation + engine): payloads over `hard_limit` — middle-out truncation then summarization
+- **Config-driven provider registry** — add providers via JSON config + secrets, zero code changes
+- **Built-in model registry** — reference models by string shorthand with automatic provider/context resolution
+- **Dynamic routing** based on model name prefixes, with direct ModelRegistry lookups taking priority
+- **Provider adapter system** — clean Go interface for wire format differences, auth injection, response mutation, and error classification across 15+ providers
+- **Gemini compatibility** — model name mapping, thought signature preservation, orphaned tool_call cleanup
+
+### Security & Privacy
+
+- **Tier-0 regex secret filter** — always-on redaction of AWS keys, GitHub tokens, passwords, etc.
+- **3-Tier UTF-8 safe pipeline** — pass-through, engine summarization, or truncation+summarization based on payload size
 - **Context window compaction** — sliding window summarization of old messages
-- **Hardened security** — strict timeouts, request size limits, hop-by-hop header stripping, panic recovery
+- **Hardened security** — strict timeouts, body limits, hop-by-hop header stripping, panic recovery
 - **Systemd credential management** — API keys loaded from `CREDENTIALS_DIRECTORY`
 
-### ⚡ Performance & Reliability
+### Performance & Reliability
 
 - **Zero external dependencies** — Go standard library only
 - **Rate limiting** per upstream host (RPM/TPM)
-- **Transparent SSE streaming** — flawless pipe of upstream Server-Sent Events to the client
+- **Transparent SSE streaming** — buffer pooling, immediate flush, stall detection (120s idle timeout)
+- **Circuit breaker** — per agent+provider+model with Closed/Open/HalfOpen states and exponential backoff
+- **In-memory LRU response cache** — deterministic SHA-256 fingerprinting, cache bypass header
 
-### 🤖 Agent System
+### Agent System
 
-- **Agent system prompts** — inject custom system prompts per agent (inline or file-based)
-- **Per-model max_tokens injection** — `max_tokens` injected from `ModelRegistry.MaxOutput` when client doesn't set it
-- **Fallback chains** — agent-level strategy with per-provider cooldown and automatic failover
+- **Agent fallback chains** — agent-level strategy with circuit breaker and automatic failover
+- **System prompts** — inject custom system prompts per agent (inline or file-based)
+- **Per-model max_tokens injection** — from ModelRegistry when client doesn't set it
 
-## Configuration
-
-### `config.json`
-
-See [`example.config.json`](configs/example.config.json) for a fully-documented example or [`minimal_example.config.json`](configs/minimal_example.config.json) for the smallest possible config. Full reference in [`CONFIGURATION.md`](docs/CONFIGURATION.md).
+## Quick Start
 
 ### Minimal Configuration
-
-The smallest useful configuration — only agents with string shorthand models, everything else uses built-in defaults:
 
 ```json
 {
@@ -65,84 +71,9 @@ The smallest useful configuration — only agents with string shorthand models, 
 }
 ```
 
-### Full Configuration
+### Adding a New Provider
 
-```json
-{
-  "server": {
-    "listen_addr": ":8080",
-    "max_body_bytes": 10485760
-  },
-  "governance": {
-    "ratelimit_max_tpm": 250000,
-    "ratelimit_max_rpm": 15,
-    "context_soft_limit": 4000,
-    "context_hard_limit": 24000,
-    "truncation_strategy": "middle-out",
-    "keep_first_percent": 15.0,
-    "keep_last_percent": 25.0
-  },
-  "security_filter": {
-    "enabled": true,
-    "redaction_label": "[REDACTED]",
-    "engine": {
-      "provider": "ollama",
-      "model": "qwen2.5-coder:7b",
-      "system_prompt_file": "./prompts/privacy_filter.md",
-      "timeout_seconds": 600
-    }
-  },
-  "agents": {
-    "build": {
-      "strategy": "fallback",
-      "cooldown_seconds": 60,
-      "system_prompt": "Reply with maximum brevity. Code only.",
-      "models": [
-        {
-          "provider": "gemini",
-          "model": "gemini-3.1-flash-lite-preview",
-          "max_context": 128000
-        },
-        {
-          "provider": "deepseek",
-          "model": "deepseek-reasoner",
-          "max_context": 128000
-        }
-      ]
-    }
-  },
-  "providers": {
-    "gemini": {
-      "url": "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
-      "auth_style": "bearer+x-goog",
-      "route_prefixes": ["gemini-"]
-    }
-  }
-}
-```
-
-### Secrets (`secrets` JSON file)
-
-Secrets are loaded via systemd credentials (`CREDENTIALS_DIRECTORY`). Create a JSON file with the following structure:
-
-```json
-{
-  "client_token": "your-client-auth-token",
-  "provider_keys": {
-    "gemini": "AIza...",
-    "deepseek": "sk-...",
-    "zai": "..."
-  }
-}
-```
-
-At minimum `client_token` must be present; `provider_keys` entries can be omitted for providers you don't use. See [`SECRETS_FORMAT.md`](docs/SECRETS_FORMAT.md) for full details.
-
-### Adding a New Provider (e.g., OpenAI)
-
-No Go code changes needed. Add two sections:
-
-**config.json:**
+No Go code changes needed for OpenAI-compatible providers:
 
 ```json
 {
@@ -156,126 +87,63 @@ No Go code changes needed. Add two sections:
 }
 ```
 
-**secrets.json:**
-
-```json
-{
-  "provider_keys": {
-    "openai": "sk-proj-..."
-  }
-}
-```
-
-Models matching the `route_prefixes` (e.g., `gpt-4o`, `o3-mini`) will now be routed to OpenAI automatically.
+See [`docs/ADAPTERS.md`](docs/ADAPTERS.md) for alien-format providers (Bedrock, Vertex, etc.).
 
 ### Configuration Validation
-
-Before starting the gateway, validate your configuration and API keys:
 
 ```bash
 CREDENTIALS_DIRECTORY=/path/to/creds ./nenya -config config.json -validate
 ```
 
-This checks Ollama engine health, provider endpoint reachability, and API key validity.
+Full configuration reference: [`docs/CONFIGURATION.md`](docs/CONFIGURATION.md)
+
+## API Endpoints
+
+All `/v1/*` endpoints require `Authorization: Bearer <client_token>`.
+
+| Endpoint | Auth | Description |
+|----------|------|-------------|
+| `POST /v1/chat/completions` | Bearer | OpenAI-compatible chat with SSE streaming, Ollama interception, agent fallback |
+| `GET /v1/models` | Bearer | Available models catalog |
+| `POST /v1/embeddings` | Bearer | Passthrough proxy for embeddings |
+| `GET /healthz` | None | Engine health probe |
+| `GET /statsz` | None | Token usage, per-model stats, circuit breaker state |
+| `GET /metrics` | None | Prometheus-compatible metrics |
+
+## Model Routing
+
+| Prefix | Provider |
+|--------|----------|
+| `gemini-*` | Gemini (Google AI Studio) |
+| `deepseek-*` | DeepSeek |
+| `zai-*`, `glm-*` | z.ai |
+| `llama-*`, `llama3-*`, `mixtral-*`, `whisper-*` | Groq |
+| `meta-llama/*`, `mistralai/*`, `qwen/*`, `together/*` | Together |
+
+Models not matching any prefix fall back to the `zai` provider. Gemini model names are automatically mapped (e.g., `gemini-3-flash` to `gemini-3-flash-preview`).
 
 ## Deployment
 
 ### Systemd Service
 
-A hardened systemd service file is included: [`deploy/nenya.service`](deploy/nenya.service). It uses `DynamicUser` and strict sandboxing.
-
-Installation via mise:
-
 ```bash
 sudo mise run install
-```
-
-This will:
-
-1. Build the binary and install to `/usr/local/bin/nenya`
-2. Copy `configs/example.config.json` to `/etc/nenya/config.json` (only if not already present)
-3. Copy `deploy/nenya.service` to `/etc/systemd/system/nenya.service`
-4. Reload systemd
-
-You must then create the secrets JSON file as described in [`docs/SECRETS_FORMAT.md`](docs/SECRETS_FORMAT.md) and enable the service:
-
-```bash
 sudo systemctl enable --now nenya
 ```
 
 ### Building from Source
 
 ```bash
-git clone https://git.0ur.uk/nenya.git
-cd nenya
 go build -o nenya ./cmd/nenya
 ```
 
-Or for a quick local test with dummy secrets:
+Or for a quick local test:
 
 ```bash
 mise run run
 ```
 
-## API Endpoints
-
-All `/v1/*` endpoints require `Authorization: Bearer <client_token>`.
-
-### `POST /v1/chat/completions`
-
-OpenAI-compatible chat completions with SSE streaming, Ollama interception, and agent fallback chains.
-
-```json
-{
-  "model": "build",
-  "messages": [
-    { "role": "user", "content": "Explain quantum computing in one sentence." }
-  ]
-}
-```
-
-### `GET /v1/models`
-
-Returns all available models: agent names, individual models from agent chains, and provider route prefixes.
-
-```bash
-curl -H "Authorization: Bearer $TOKEN" http://localhost:8080/v1/models
-```
-
-### `POST /v1/embeddings`
-
-Passthrough proxy for embeddings requests. Routes via provider registry, no Ollama interception or SSE.
-
-### `GET /healthz`
-
-Health check (no auth required). Returns JSON with engine status.
-
-### `GET /statsz`
-
-Token usage statistics (no auth required). Returns per-model request counts, input/output tokens, and error counts.
-
-### Model Routing
-
-| Prefix                                                | Provider                  |
-| ----------------------------------------------------- | ------------------------- |
-| `gemini-*`                                            | Gemini (Google AI Studio) |
-| `deepseek-*`                                          | DeepSeek                  |
-| `zai-*`, `glm-*`                                      | z.ai                      |
-| `llama-*`, `llama3-*`, `mixtral-*`, `whisper-*`       | Groq                      |
-| `meta-llama/*`, `mistralai/*`, `qwen/*`, `together/*` | Together                  |
-
-Models not matching any prefix fall back to the `zai` provider.
-
-Gemini model names are automatically mapped (e.g., `gemini-3-flash` to `gemini-3-flash-preview`).
-
 ## Development
-
-### Prerequisites
-
-- Go 1.26+
-- Ollama with `qwen2.5-coder:7b` (or adjust config)
-
-### Running Tests
 
 ```bash
 go test ./...
@@ -283,37 +151,16 @@ go vet ./...
 go fmt ./...
 ```
 
-### Architecture
-
-Packages follow a strict dependency DAG: `config → infra → stream → pipeline → routing → gateway → proxy → cmd`.
-
-- **`cmd/nenya/`** — Entry point, server bootstrap with graceful shutdown
-- **`internal/config/`** — Configuration types, JSON loading, model/provider registries, defaults, validation
-- **`internal/infra/`** — Structured logging (slog with TTY/systemd auto-detection), thought signature cache, Prometheus-compatible metrics, token-bucket rate limiter, atomic token usage tracker
-- **`internal/stream/`** — SSE transforming reader, sliding window stream filter, Gemini SSE transformation (index injection, thought signature preservation)
-- **`internal/pipeline/`** — Tier-0 regex secret redaction, middle-out truncation, line ending normalization, whitespace trimming, system message pinning, context window compaction, Ollama/OpenAI engine calls
-- **`internal/routing/`** — Dynamic provider resolution, agent fallback chains with cooldown, upstream request transformation, API key injection, model name mapping, Gemini/z.ai message sanitization
-- **`internal/gateway/`** — NenyaGateway struct, HTTP client configuration, token counting
-- **`internal/proxy/`** — HTTP handler (auth, /healthz, /models, /statsz), 3-tier content pipeline, upstream forwarding with retry, transparent SSE streaming
+Architecture overview: [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)
 
 ## Sponsor / Support this Project
-
-If Nenya saves you time or money on API costs, consider supporting its development:
 
 - **GitHub Sponsors**: [https://github.com/sponsors/gumieri](https://github.com/sponsors/gumieri)
 - **Pix (Brazil)**: [`rgumieri@gmail.com`](https://nubank.com.br/cobrar/2jm8a/69d54dab-4530-4e09-a531-e959e45fb6d8)
 
-## AI Collaboration
-
-This project was built in collaboration with AI coding tools. The architecture, security patterns, and codebase reflect rapid iterative development guided by human engineering decisions. Every line of code has been reviewed, tested, and validated by the maintainer.
-
----
-
 ## License & Disclaimer
 
-This project is licensed under the Apache 2.0 License — see the [LICENSE](LICENSE) file for details.
-
-Before using Nenya with autonomous agents in production environments, please read the [`docs/DISCLAIMER.md`](docs/DISCLAIMER.md).
+Apache 2.0 License. See [`LICENSE`](LICENSE) and [`docs/DISCLAIMER.md`](docs/DISCLAIMER.md).
 
 ---
 
