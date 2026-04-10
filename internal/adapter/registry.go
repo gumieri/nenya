@@ -11,8 +11,8 @@ import (
 )
 
 type AdapterEntry struct {
-	Adapter          ProviderAdapter
-	NewTransformer   func(cache *infra.ThoughtSignatureCache) stream.ResponseTransformer
+	Adapter            ProviderAdapter
+	NewTransformer     func(cache *infra.ThoughtSignatureCache) stream.ResponseTransformer
 	ValidationEndpoint func(providerURL string) string
 }
 
@@ -283,8 +283,8 @@ func InitWithDeps(logger *slog.Logger, cache *infra.ThoughtSignatureCache, extra
 	})
 
 	Register("gemini", AdapterEntry{
-		Adapter:          geminiAdapter,
-		NewTransformer:   newGeminiTransformerShim,
+		Adapter:        geminiAdapter,
+		NewTransformer: newGeminiTransformerShim,
 	})
 	Register("zai", AdapterEntry{
 		Adapter: zaiAdapter,

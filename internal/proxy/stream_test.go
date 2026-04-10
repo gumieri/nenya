@@ -555,7 +555,7 @@ func (b *bytesCapture) String() string {
 }
 
 type brokenWriter struct {
-	err         error
+	err        error
 	flushCount int32
 }
 
@@ -587,22 +587,6 @@ type errorWriter struct {
 
 func (w *errorWriter) Write(p []byte) (int, error) {
 	return 0, w.err
-}
-
-type slowReader struct {
-	chunks []string
-	delay  time.Duration
-	index  int
-}
-
-func (r *slowReader) Read(p []byte) (int, error) {
-	if r.index >= len(r.chunks) {
-		return 0, io.EOF
-	}
-	time.Sleep(r.delay)
-	n := copy(p, r.chunks[r.index])
-	r.index++
-	return n, nil
 }
 
 type contextReader struct {
@@ -643,16 +627,5 @@ func newStreamTestGateway() *gateway.NenyaGateway {
 		Metrics:    infra.NewMetrics(),
 		AgentState: routing.NewAgentState(slog.Default()),
 		Providers:  make(map[string]*config.Provider),
-	}
-}
-
-func newStreamTestGatewayWithProviders(providers map[string]*config.Provider) *gateway.NenyaGateway {
-	return &gateway.NenyaGateway{
-		Config:     config.Config{},
-		Logger:     slog.Default(),
-		Stats:      infra.NewUsageTracker(),
-		Metrics:    infra.NewMetrics(),
-		AgentState: routing.NewAgentState(slog.Default()),
-		Providers:  providers,
 	}
 }

@@ -269,7 +269,9 @@ func TestAdapterForAuthStyle(t *testing.T) {
 	for _, tt := range tests {
 		a := AdapterForAuthStyle(tt.style)
 		req := httptest.NewRequest(http.MethodPost, "/", nil)
-		a.InjectAuth(req, "key")
+		if err := a.InjectAuth(req, "key"); err != nil {
+			t.Fatalf("InjectAuth() error = %v", err)
+		}
 		got := req.Header.Get("Authorization")
 		if got != tt.wantAuth {
 			t.Errorf("AdapterForAuthStyle(%q).InjectAuth() Authorization = %q, want %q", tt.style, got, tt.wantAuth)
@@ -320,7 +322,7 @@ func TestErrorClass_String(t *testing.T) {
 func TestFlattenContentArrays_MixedTypes(t *testing.T) {
 	msgs := []interface{}{
 		map[string]interface{}{
-			"role":    "user",
+			"role": "user",
 			"content": []interface{}{
 				map[string]interface{}{"type": "text", "text": "hello"},
 				map[string]interface{}{"type": "image_url", "image_url": map[string]interface{}{"url": "http://example.com/img.png"}},
