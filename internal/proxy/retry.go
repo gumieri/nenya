@@ -175,6 +175,12 @@ func (p *Proxy) prepareAndSend(
 		return upstreamAction{kind: actionContinue}
 	}
 
+	if target.CoolKey != "" && !p.GW.AgentState.CB.Allow(target.CoolKey) {
+		p.GW.Logger.Warn("target skipped: circuit breaker open",
+			"target", idx+1, "total", len(targets), "model", target.Model)
+		return upstreamAction{kind: actionContinue}
+	}
+
 	transformDeps := routing.TransformDeps{
 		Logger:             p.GW.Logger,
 		Providers:          p.GW.Providers,
@@ -301,12 +307,24 @@ func (p *Proxy) handleUpstreamError(
 	}
 
 	defer action.cancel()
+	if len(targets) > 1 {
+		if len(errorBody) > 0 {
+			p.GW.Logger.Warn("non-retryable upstream error, trying next target",
+				"target", idx+1, "total", len(targets), "model", target.Model,
+				"status", action.resp.StatusCode, "body", string(errorBody))
+		} else {
+			p.GW.Logger.Warn("non-retryable upstream error (empty body), trying next target",
+				"target", idx+1, "total", len(targets), "model", target.Model, "status", action.resp.StatusCode)
+		}
+		return true, 0
+	}
+
 	if len(errorBody) > 0 {
-		p.GW.Logger.Error("non-retryable upstream error",
+		p.GW.Logger.Error("non-retryable upstream error, no more targets",
 			"target", idx+1, "total", len(targets), "model", target.Model,
 			"status", action.resp.StatusCode, "body", string(errorBody))
 	} else {
-		p.GW.Logger.Error("non-retryable upstream error, empty body",
+		p.GW.Logger.Error("non-retryable upstream error (empty body), no more targets",
 			"target", idx+1, "total", len(targets), "model", target.Model, "status", action.resp.StatusCode)
 	}
 	return false, 0

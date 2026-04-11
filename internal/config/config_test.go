@@ -131,7 +131,7 @@ func TestApplyDefaultsSecurityFilterEngine(t *testing.T) {
 	if target.Engine.Model != "qwen2.5-coder:7b" {
 		t.Errorf("Engine.Model: got %q", target.Engine.Model)
 	}
-	if target.Engine.TimeoutSeconds != 600 {
+	if target.Engine.TimeoutSeconds != 60 {
 		t.Errorf("Engine.TimeoutSeconds: got %d", target.Engine.TimeoutSeconds)
 	}
 }

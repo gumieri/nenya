@@ -9,7 +9,7 @@ func applyEngineRefDefaults(e *EngineRef) {
 			e.Model = "qwen2.5-coder:7b"
 		}
 		if e.TimeoutSeconds == 0 {
-			e.TimeoutSeconds = 600
+			e.TimeoutSeconds = 60
 		}
 	}
 }
@@ -23,7 +23,7 @@ func applyResolvedEngineDefaults(targets []EngineTarget) {
 			targets[i].Engine.Model = "qwen2.5-coder:7b"
 		}
 		if targets[i].Engine.TimeoutSeconds == 0 {
-			targets[i].Engine.TimeoutSeconds = 600
+			targets[i].Engine.TimeoutSeconds = 60
 		}
 	}
 }
@@ -100,6 +100,9 @@ func ApplyDefaults(cfg *Config) error {
 	}
 	if cfg.SecurityFilter.OutputWindowChars == 0 {
 		cfg.SecurityFilter.OutputWindowChars = 4096
+	}
+	if !cfg.SecurityFilter.SkipOnEngineFailure {
+		cfg.SecurityFilter.SkipOnEngineFailure = true
 	}
 
 	applyEngineRefDefaults(&cfg.SecurityFilter.Engine)

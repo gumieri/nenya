@@ -35,24 +35,25 @@ Client Request
   │   ├─ Resolve agent or provider
   │   ├─ Response cache lookup (if enabled)
   │   │   └─ HIT → replay cached SSE, done
-  │   ├─ Content pipeline:
-  │   │   ├─ Prefix cache optimizations
+   │   ├─ Content pipeline (best-effort — failures logged, never block request):
+   │   │   ├─ Prefix cache optimizations
   │   │   ├─ Tier-0 regex secret redaction
   │   │   ├─ Text compaction
   │   │   ├─ Window compaction (if enabled)
   │   │   ├─ 3-tier engine interception (soft/hard limits)
   │   │   └─ JSON minification
   │   ├─ Agent fallback loop:
-  │   │   ├─ Circuit breaker check (skip if Open/ForceOpen)
-  │   │   ├─ Rate limiter check
+   │   │   ├─ Circuit breaker check (skip if Open/ForceOpen)
+   │   │   ├─ Circuit breaker re-check before send (skip if tripped during queue wait)
+   │   │   ├─ Rate limiter check
   │   │   ├─ adapter.MutateRequest() (payload transform)
   │   │   ├─ adapter.InjectAuth() (header signing)
   │   │   ├─ HTTP POST to upstream
   │   │   ├─ Error classification (adapter.NormalizeError)
-  │   │   │   ├─ ErrorRetryable → exponential backoff, retry
-  │   │   │   ├─ ErrorRateLimited → cooldown, retry with delay
-  │   │   │   ├─ ErrorQuotaExhausted → long cooldown
-  │   │   │   └─ ErrorPermanent → return error to client
+   │   │   │   ├─ ErrorRetryable → exponential backoff, retry
+   │   │   │   ├─ ErrorRateLimited → cooldown, retry with delay
+   │   │   │   ├─ ErrorQuotaExhausted → long cooldown
+   │   │   │   ├─ ErrorPermanent → try next target (or return error if no more targets)
   │   │   └─ On success → circuit breaker.RecordSuccess()
   │   └─ SSE stream pipeline:
   │       ├─ stallReader (120s idle timeout)
@@ -102,6 +103,8 @@ Each agent+provider+model combination is tracked independently by a circuit brea
 | **HalfOpen** | Allows up to `halfOpenMaxRequests` (3) probe requests. All succeed → Closed. Any fail → Open. |
 | **ForceOpen** | Immediately opened (used for HTTP 429 rate limits). Extends cooldown for quota exhaustion patterns. |
 
+The circuit breaker is checked twice per target: once during target list construction (`BuildTargetList`) and again immediately before sending the request (`prepareAndSend`). This prevents sending requests to providers that tripped while queued behind other targets.
+
 ### Configuration
 
 | Field | JSON Key | Default | Description |
@@ -139,8 +142,32 @@ Buffer pooling via `sync.Pool` (32KB buffers) reduces GC pressure under high con
 
 In-memory LRU cache with deterministic SHA-256 fingerprinting. See [`CONFIGURATION.md`](CONFIGURATION.md#response_cache) for configuration.
 
-- **Cache key**: SHA-256 of canonical JSON subset (`model`, `messages`, `temperature`, `top_p`, `max_tokens`, `tools`, `tool_choice`, `response_format`, `stop`)
+- **Cache key**: SHA-256 of canonical JSON subset (`model`, `messages`, `temperature`, `top_p`, `max_tokens`, `tools`, `tool_choice`, `response_format`, `stop`, `stream`)
 - **Storage**: Completed SSE streams captured via `sseTeeWriter`
 - **Replay**: Cache hits replay the stored SSE stream with `X-Nenya-Cache-Status: HIT`
 - **Bypass**: `x-nenya-cache-force-refresh` header forces cache miss
 - **Eviction**: Background goroutine sweeps expired entries every `evict_every_seconds`
+
+## Graceful Degradation
+
+Nenya is designed to never break the flow between AI coding clients (OpenCode, Aider) and upstream providers. The following mechanisms ensure resilience:
+
+### Best-Effort Content Pipeline
+
+The entire content pipeline (prefix cache, redaction, compaction, window, engine interception) runs as best-effort. Any failure is logged as a warning and the request proceeds with the original payload. No pipeline error results in an HTTP 500 to the client.
+
+### Skip on Engine Failure
+
+When `security_filter.skip_on_engine_failure` is `true` (default):
+- **Soft limit** (Tier 2): Engine summarization fails → original payload forwarded unchanged
+- **Hard limit** (Tier 3): Engine summarization fails → original payload forwarded unchanged (not truncated)
+
+This means users without a local Ollama instance can use Nenya purely as a routing proxy with regex-based secret redaction.
+
+### Exhaustive Fallback
+
+For agents with multiple models in a fallback chain, non-retryable errors (e.g., HTTP 400, 401) from one provider still try the next provider before returning an error to the client. Only when all targets are exhausted does the gateway return an error.
+
+### Client Disconnect Cleanup
+
+When a client disconnects during SSE streaming, the upstream connection is aborted and a 5-second timeout ensures the stream copy goroutine doesn't leak indefinitely.

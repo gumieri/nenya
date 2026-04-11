@@ -179,18 +179,21 @@ func (p *Proxy) checkSecurityFilterEngineHealth() bool {
 				return true
 			}
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-			defer cancel()
 
 			req, err := http.NewRequestWithContext(ctx, http.MethodGet, config.OllamaHealthURL(target.Provider.URL), nil)
 			if err != nil {
+				cancel()
 				continue
 			}
 
-			resp, err := p.GW.Client.Do(req)
+			client := p.GW.OllamaClient
+			resp, err := client.Do(req)
 			if err != nil {
+				cancel()
 				continue
 			}
 			resp.Body.Close()
+			cancel()
 			if resp.StatusCode == http.StatusOK {
 				return true
 			}
@@ -211,17 +214,20 @@ func (p *Proxy) checkSecurityFilterEngineHealth() bool {
 		return true
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, config.OllamaHealthURL(pr.URL), nil)
 	if err != nil {
+		cancel()
 		return false
 	}
 
-	resp, err := p.GW.Client.Do(req)
+	client := p.GW.OllamaClient
+	resp, err := client.Do(req)
 	if err != nil {
+		cancel()
 		return false
 	}
-	defer resp.Body.Close()
+	resp.Body.Close()
+	cancel()
 	return resp.StatusCode == http.StatusOK
 }
