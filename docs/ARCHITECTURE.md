@@ -65,6 +65,7 @@ Client Request
   │
   ├─ GET /v1/models
   ├─ POST /v1/embeddings
+  ├─ POST /v1/responses (transparent passthrough, no content pipeline)
   ├─ GET /healthz
   └─ GET /statsz
 ```
@@ -179,7 +180,7 @@ Nenya detects IDE clients (Cursor, OpenCode) via `User-Agent` header inspection 
 
 ### Client Classification (`internal/pipeline/client.go`)
 
-`ClassifyClient(headers http.Header)` returns a `ClientProfile{IsIDE, ClientName}`. Detection is extensible via the `clientPatterns` registry.
+`ClassifyClient(headers http.Header)` returns a `ClientProfile{IsIDE, ClientName}`. Inspects multiple headers (`User-Agent`, `Editor-Version`, `Editor-Plugin-Version`). Detection patterns are extensible via the `clientPatterns` registry.
 
 ### IDE-Aware Pipeline Behavior
 

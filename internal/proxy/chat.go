@@ -392,6 +392,68 @@ func (p *Proxy) handleEmbeddings(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+func (p *Proxy) handleResponses(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, p.GW.Config.Server.MaxBodyBytes)
+	defer r.Body.Close()
+
+	bodyBytes, err := io.ReadAll(r.Body)
+	if err != nil {
+		p.GW.Logger.Error("failed to read responses request body", "err", err)
+		http.Error(w, "Payload too large or malformed", http.StatusRequestEntityTooLarge)
+		return
+	}
+
+	var payload map[string]interface{}
+	if err := json.Unmarshal(bodyBytes, &payload); err != nil {
+		http.Error(w, "Invalid JSON payload", http.StatusBadRequest)
+		return
+	}
+
+	modelName, ok := payload["model"].(string)
+	if !ok || modelName == "" {
+		http.Error(w, `Missing or empty "model" field`, http.StatusBadRequest)
+		return
+	}
+
+	provider := routing.ResolveProvider(modelName, p.GW.Providers)
+	if provider == nil {
+		p.GW.Logger.Warn("no provider for responses model", "model", modelName)
+		http.Error(w, "No provider configured for this model", http.StatusBadRequest)
+		return
+	}
+
+	responsesURL := strings.TrimSuffix(provider.URL, "/chat/completions") + "/responses"
+	if responsesURL == provider.URL {
+		p.GW.Logger.Warn("provider URL does not end with /chat/completions, cannot derive responses endpoint",
+			"provider", provider.Name, "url", provider.URL)
+		http.Error(w, "Provider does not support responses API", http.StatusBadRequest)
+		return
+	}
+
+	req, err := p.buildUpstreamRequest(r.Context(), http.MethodPost, responsesURL, bodyBytes, provider.Name, r.Header)
+	if err != nil {
+		p.GW.Logger.Error("failed to create responses upstream request", "err", err)
+		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+		return
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := p.GW.Client.Do(req)
+	if err != nil {
+		p.GW.Logger.Error("responses upstream request failed", "provider", provider.Name, "err", err)
+		http.Error(w, "Upstream provider error", http.StatusBadGateway)
+		return
+	}
+	defer resp.Body.Close()
+
+	routing.CopyHeaders(resp.Header, w.Header())
+	w.WriteHeader(resp.StatusCode)
+
+	if _, err := io.Copy(w, resp.Body); err != nil {
+		p.GW.Logger.Debug("responses response copy ended", "err", err)
+	}
+}
+
 func (p *Proxy) buildUpstreamRequest(ctx context.Context, method, url string, body []byte, providerName string, srcHeaders http.Header) (*http.Request, error) {
 	req, err := http.NewRequestWithContext(ctx, method, url, bytes.NewBuffer(body))
 	if err != nil {
