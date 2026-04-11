@@ -213,3 +213,62 @@ func TestFlattenContentArray(t *testing.T) {
 		})
 	}
 }
+
+func TestSanitizePayload_ToolCallsPassthrough(t *testing.T) {
+	providers := map[string]*config.Provider{
+		"nvidia": {Name: "nvidia"},
+	}
+	deps := defaultSanitizeDeps()
+	deps.Providers = providers
+
+	toolCalls := []interface{}{
+		map[string]interface{}{
+			"id":   "call_123",
+			"type": "function",
+			"function": map[string]interface{}{
+				"name":      "read_file",
+				"arguments": "{\"path\":\"/tmp/test.go\"}",
+			},
+		},
+	}
+
+	payload := map[string]interface{}{
+		"model": "nemotron-3-super",
+		"messages": []interface{}{
+			map[string]interface{}{
+				"role":       "assistant",
+				"content":    "",
+				"tool_calls": toolCalls,
+			},
+			map[string]interface{}{
+				"role":         "tool",
+				"tool_call_id": "call_123",
+				"content":      "file contents here",
+			},
+		},
+	}
+
+	SanitizePayload(deps, payload, "nvidia")
+
+	msgs := payload["messages"].([]interface{})
+	assistant := msgs[0].(map[string]interface{})
+	tc, ok := assistant["tool_calls"].([]interface{})
+	if !ok || len(tc) != 1 {
+		t.Fatal("tool_calls should be preserved")
+	}
+	if tc[0].(map[string]interface{})["id"] != "call_123" {
+		t.Errorf("tool_call id mismatch: %v", tc[0].(map[string]interface{})["id"])
+	}
+	fn := tc[0].(map[string]interface{})["function"].(map[string]interface{})
+	if fn["name"] != "read_file" {
+		t.Errorf("function name mismatch: %v", fn["name"])
+	}
+
+	toolMsg := msgs[1].(map[string]interface{})
+	if toolMsg["tool_call_id"] != "call_123" {
+		t.Errorf("tool_call_id mismatch: %v", toolMsg["tool_call_id"])
+	}
+	if toolMsg["role"] != "tool" {
+		t.Errorf("role mismatch: %v", toolMsg["role"])
+	}
+}

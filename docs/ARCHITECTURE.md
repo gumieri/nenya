@@ -16,7 +16,7 @@ Each layer may only import from layers to its left. This prevents circular depen
 | `internal/config/` | Configuration types, JSON loading, model/provider registries, defaults, validation, engine reference resolution |
 | `internal/infra/` | Structured logging, thought signature cache, Prometheus metrics, rate limiter, usage tracker, response cache |
 | `internal/stream/` | SSE transforming reader, sliding window stream filter |
-| `internal/pipeline/` | Tier-0 regex secret redaction, middle-out truncation, text compaction, context window compaction, engine calls with fallback chains |
+| `internal/pipeline/` | Client classification, code fence detection, tier-0 regex secret redaction (code-span-aware for IDEs), middle-out truncation (code-boundary-aware for IDEs), text compaction, context window compaction, engine calls with fallback chains |
 | `internal/resilience/` | Circuit breaker with Closed/Open/HalfOpen states, exponential backoff |
 | `internal/providers/` | Provider capability specs (stream_options, auto_tool_choice, content_arrays), per-provider sanitization, response transformers |
 | `internal/adapter/` | Provider Adapter pattern: request mutation, auth injection, response mutation, error classification |
@@ -30,17 +30,18 @@ Each layer may only import from layers to its left. This prevents circular depen
 Client Request
   │
   ├─ POST /v1/chat/completions
-  │   ├─ Auth check (Bearer token)
-  │   ├─ Parse JSON body, extract model
-  │   ├─ Resolve agent or provider
-  │   ├─ Response cache lookup (if enabled)
-  │   │   └─ HIT → replay cached SSE, done
+   │   ├─ Auth check (Bearer token)
+   │   ├─ Parse JSON body, extract model
+   │   ├─ Classify client (IDE detection via User-Agent)
+   │   ├─ Resolve agent or provider
+   │   ├─ Response cache lookup (if enabled)
+   │   │   └─ HIT → replay cached SSE, done
    │   ├─ Content pipeline (best-effort — failures logged, never block request):
    │   │   ├─ Prefix cache optimizations
-  │   │   ├─ Tier-0 regex secret redaction
-  │   │   ├─ Text compaction
-  │   │   ├─ Window compaction (if enabled)
-  │   │   ├─ 3-tier engine interception (soft/hard limits)
+   │   │   ├─ Tier-0 regex secret redaction (code-span-aware for IDE clients)
+   │   │   ├─ Text compaction (skipped for IDE clients)
+   │   │   ├─ Window compaction (if enabled)
+   │   │   ├─ 3-tier engine interception (soft/hard limits, code-aware prompt for IDEs)
   │   │   └─ JSON minification
   │   ├─ Agent fallback loop:
    │   │   ├─ Circuit breaker check (skip if Open/ForceOpen)
@@ -171,3 +172,33 @@ For agents with multiple models in a fallback chain, non-retryable errors (e.g.,
 ### Client Disconnect Cleanup
 
 When a client disconnects during SSE streaming, the upstream connection is aborted and a 5-second timeout ensures the stream copy goroutine doesn't leak indefinitely.
+
+## IDE Compatibility
+
+Nenya detects IDE clients (Cursor, OpenCode) via `User-Agent` header inspection and adapts the content pipeline to preserve code structure. Unknown clients get standard pipeline behavior with zero regression risk.
+
+### Client Classification (`internal/pipeline/client.go`)
+
+`ClassifyClient(headers http.Header)` returns a `ClientProfile{IsIDE, ClientName}`. Detection is extensible via the `clientPatterns` registry.
+
+### IDE-Aware Pipeline Behavior
+
+| Stage | Non-IDE Clients | IDE Clients |
+|-------|----------------|-------------|
+| **Secret redaction** | Regex on entire text | `RedactSecretsPreservingCodeSpans` — skips markdown code fences, redacts prose only |
+| **Text compaction** | Collapse blank lines, trim whitespace | **Skipped entirely** — preserves whitespace and line references |
+| **Truncation** | Character-boundary middle-out | `TruncateMiddleOutCodeAware` — snaps cuts to blank-line boundaries |
+| **Engine summarization** | Generic privacy filter prompt | Code-preserving prompt — only redacts secrets, never restructures code |
+
+### Code Fence Detection (`internal/pipeline/code_detect.go`)
+
+`DetectCodeFences(text)` returns `[]CodeSpan{Start, End, Language}` for markdown fenced code blocks (`` ``` ``). Used by the code-aware redaction and summarization to identify regions that must not be modified.
+
+### Structured Content Handling (`internal/gateway/gateway.go`)
+
+`ExtractContentText` handles the full OpenAI content array spec:
+- `{type: "text"}` — concatenated as before
+- `{type: "image_url"}` — replaced with `[image]` placeholder for token counting
+- `{type: "input_json"}` — serialized to JSON for token counting
+
+Tool call fields (`tool_calls`, `tool_call_id`, `function_call`) pass through sanitization unmodified.
