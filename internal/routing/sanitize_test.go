@@ -272,3 +272,33 @@ func TestSanitizePayload_ToolCallsPassthrough(t *testing.T) {
 		t.Errorf("role mismatch: %v", toolMsg["role"])
 	}
 }
+
+func TestSanitizePayload_ReasoningParamsPassthrough(t *testing.T) {
+	providers := map[string]*config.Provider{
+		"nvidia": {Name: "nvidia"},
+	}
+	deps := defaultSanitizeDeps()
+	deps.Providers = providers
+
+	payload := map[string]interface{}{
+		"model":                 "nemotron-3-super",
+		"reasoning_effort":      "high",
+		"max_completion_tokens": 16384,
+		"temperature":           0.7,
+		"messages": []interface{}{
+			map[string]interface{}{"role": "user", "content": "think about this"},
+		},
+	}
+
+	SanitizePayload(deps, payload, "nvidia")
+
+	if payload["reasoning_effort"] != "high" {
+		t.Errorf("reasoning_effort should pass through, got %v", payload["reasoning_effort"])
+	}
+	if payload["max_completion_tokens"] != 16384 {
+		t.Errorf("max_completion_tokens should pass through, got %v", payload["max_completion_tokens"])
+	}
+	if payload["temperature"] != 0.7 {
+		t.Errorf("temperature should pass through, got %v", payload["temperature"])
+	}
+}
