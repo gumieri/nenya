@@ -154,3 +154,124 @@ func TestTruncateMiddleOut(t *testing.T) {
 		})
 	}
 }
+
+func TestRedactSecretsPreservingCodeSpans(t *testing.T) {
+	awsKey := regexp.MustCompile(`AKIA[0-9A-Z]{16}`)
+	label := "[REDACTED]"
+
+	tests := []struct {
+		name     string
+		text     string
+		enabled  bool
+		patterns []*regexp.Regexp
+		want     string
+	}{
+		{
+			name:     "disabled returns original",
+			text:     "key=AKIAIOSFODNN7EXAMPLE",
+			enabled:  false,
+			patterns: []*regexp.Regexp{awsKey},
+			want:     "key=AKIAIOSFODNN7EXAMPLE",
+		},
+		{
+			name:     "secret in prose is redacted",
+			text:     "Use key AKIAIOSFODNN7EXAMPLE for auth",
+			enabled:  true,
+			patterns: []*regexp.Regexp{awsKey},
+			want:     "Use key [REDACTED] for auth",
+		},
+		{
+			name: "secret inside code fence preserved",
+			text: "Here is the code:\n```go\nvar key = \"AKIAIOSFODNN7EXAMPLE\"\n```\nDone",
+			enabled:  true,
+			patterns: []*regexp.Regexp{awsKey},
+			want:     "Here is the code:\n```go\nvar key = \"AKIAIOSFODNN7EXAMPLE\"\n```\nDone",
+		},
+		{
+			name: "secret in prose before code fence redacted",
+			text: "The key AKIAIOSFODNN7EXAMPLE is used:\n```go\nfmt.Println(\"hello\")\n```",
+			enabled:  true,
+			patterns: []*regexp.Regexp{awsKey},
+			want:     "The key [REDACTED] is used:\n```go\nfmt.Println(\"hello\")\n```",
+		},
+		{
+			name: "secret in prose after code fence redacted",
+			text: "```go\nfmt.Println()\n```\nThen use AKIAIOSFODNN7EXAMPLE",
+			enabled:  true,
+			patterns: []*regexp.Regexp{awsKey},
+			want:     "```go\nfmt.Println()\n```\nThen use [REDACTED]",
+		},
+		{
+			name: "secret in prose between two code fences redacted",
+			text: "```go\na\n```\nkey=AKIAIOSFODNN7EXAMPLE\n```js\nb\n```",
+			enabled:  true,
+			patterns: []*regexp.Regexp{awsKey},
+			want:     "```go\na\n```\nkey=[REDACTED]\n```js\nb\n```",
+		},
+		{
+			name:     "no code fences falls back to normal redaction",
+			text:     "key=AKIAIOSFODNN7EXAMPLE no fences here",
+			enabled:  true,
+			patterns: []*regexp.Regexp{awsKey},
+			want:     "key=[REDACTED] no fences here",
+		},
+		{
+			name:     "empty patterns returns original even with fences",
+			text:     "```go\ncode\n```\nAKIAIOSFODNN7EXAMPLE",
+			enabled:  true,
+			patterns: []*regexp.Regexp{},
+			want:     "```go\ncode\n```\nAKIAIOSFODNN7EXAMPLE",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := RedactSecretsPreservingCodeSpans(tt.text, tt.enabled, tt.patterns, label)
+			if got != tt.want {
+				t.Errorf("RedactSecretsPreservingCodeSpans() =\n got:  %q\n want: %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestTruncateMiddleOutCodeAware(t *testing.T) {
+	cfg := config.GovernanceConfig{
+		KeepFirstPercent: 40,
+		KeepLastPercent:  40,
+	}
+
+	t.Run("short text no truncation", func(t *testing.T) {
+		got := TruncateMiddleOutCodeAware("hello", 100, cfg)
+		if got != "hello" {
+			t.Errorf("got %q, want %q", got, "hello")
+		}
+	})
+
+	t.Run("snaps to blank line boundary", func(t *testing.T) {
+		text := "line one\nline two\n\nfunc foo() {\n\treturn 42\n}\n\nfunc bar() {\n\treturn 99\n}\n\nlast line\n"
+		maxSize := 50
+		got := TruncateMiddleOutCodeAware(text, maxSize, cfg)
+		if !strings.Contains(got, "... [NENYA: MASSIVE PAYLOAD TRUNCATED] ...") {
+			t.Errorf("expected truncation marker in output: %q", got)
+		}
+		if strings.Contains(got, "return") && strings.Count(got, "return") > 1 {
+			t.Errorf("should not cut inside both functions: %q", got)
+		}
+	})
+
+	t.Run("no blank lines falls back to normal", func(t *testing.T) {
+		text := strings.Repeat("a", 50) + strings.Repeat("b", 50)
+		maxSize := 80
+		got := TruncateMiddleOutCodeAware(text, maxSize, cfg)
+		if !strings.Contains(got, "... [NENYA: MASSIVE PAYLOAD TRUNCATED] ...") {
+			t.Errorf("expected truncation: %q", got)
+		}
+	})
+
+	t.Run("empty text", func(t *testing.T) {
+		got := TruncateMiddleOutCodeAware("", 100, cfg)
+		if got != "" {
+			t.Errorf("got %q, want empty", got)
+		}
+	})
+}
