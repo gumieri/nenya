@@ -41,10 +41,12 @@ Nenya acts as a **silent guardian** for your AI interactions. Its core strength 
 ### Performance & Reliability
 
 - **Zero external dependencies** — Go standard library only
+- **Graceful degradation** — best-effort content pipeline; works without Ollama; never returns 500 for pipeline failures
 - **Rate limiting** per upstream host (RPM/TPM)
 - **Transparent SSE streaming** — buffer pooling, immediate flush, stall detection (120s idle timeout)
 - **Circuit breaker** — per agent+provider+model with Closed/Open/HalfOpen states and exponential backoff
 - **In-memory LRU response cache** — deterministic SHA-256 fingerprinting, cache bypass header
+- **Exhaustive fallback** — non-retryable errors still try the next provider before giving up
 
 ### Agent System
 

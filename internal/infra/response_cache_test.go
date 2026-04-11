@@ -69,8 +69,8 @@ func TestFingerprintPayload_ExcludedFields(t *testing.T) {
 	}
 
 	hBase := FingerprintPayload(base)
-	if FingerprintPayload(withStream) != hBase {
-		t.Fatal("stream field should not affect fingerprint")
+	if FingerprintPayload(withStream) == hBase {
+		t.Fatal("stream field should affect fingerprint (different stream mode)")
 	}
 	if FingerprintPayload(withUser) != hBase {
 		t.Fatal("user field should not affect fingerprint")

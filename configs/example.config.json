@@ -22,6 +22,9 @@
   "security_filter": {
     "enabled": true,
     "redaction_label": "[REDACTED]",
+    // When true, if the engine (Ollama/cloud) is unreachable, skip summarization
+    // and forward the original payload. Allows Nenya to work without Ollama.
+    "skip_on_engine_failure": true,
     // Engine can be a string (agent name) or an inline object.
     // String form: references an agent's model list as a fallback chain.
     // Object form: directly specifies provider/model (backward compatible).
@@ -29,7 +32,7 @@
       "provider": "ollama",
       "model": "qwen2.5-coder:7b",
       "system_prompt_file": "./prompts/privacy_filter.md",
-      "timeout_seconds": 600
+      "timeout_seconds": 60
     }
   },
 
@@ -59,7 +62,7 @@
       "provider": "ollama",
       "model": "qwen2.5-coder:7b",
       "system_prompt_file": "./prompts/summarizer.md",
-      "timeout_seconds": 600
+      "timeout_seconds": 60
     }
   },
 

@@ -56,6 +56,9 @@ Tier-0 regex-based secret redaction runs on every request, before any other pipe
 | `enabled` | bool | `true` | Enable/disable the filter. Defaults to `true` if `patterns` are provided but field omitted. |
 | `patterns` | []string | (9 built-in) | Custom regex patterns. Replaces built-in patterns if set. Built-in patterns match: AWS keys, GitHub tokens, Google OAuth, sk- API keys, PEM private keys, AWS credential file lines, password/key assignments, Docker tokens, SendGrid keys. |
 | `redaction_label` | string | `"[REDACTED]"` | Replacement string for matched secrets |
+| `output_enabled` | bool | `false` | Enable stream output filtering (secret redaction and execution policy blocking on responses) |
+| `output_window_chars` | int | `4096` | Sliding window size (in chars) for cross-chunk pattern matching in output streams |
+| `skip_on_engine_failure` | bool | `true` | When the engine (Ollama/cloud) is unreachable, skip summarization and forward the original payload. If `false`, hard-limit payloads are truncated even when the engine fails. |
 | `engine` | string or object | (see below) | Agent name reference or inline engine configuration |
 
 ### Engine Configuration (`engine`)
@@ -100,7 +103,7 @@ Directly specifies the engine model, identical to the previous `EngineConfig` fo
 | `model` | string | `"qwen2.5-coder:7b"` | Model identifier (inline mode only) |
 | `system_prompt` | string | `""` | Inline system prompt. Highest priority. |
 | `system_prompt_file` | string | `""` | Path to system prompt file. Falls back to built-in prompt if empty. |
-| `timeout_seconds` | int | `600` | Timeout for individual engine API calls |
+| `timeout_seconds` | int | `60` | Timeout for individual engine API calls |
 
 **Prompt priority**: `system_prompt` (inline) > `system_prompt_file` > agent's `system_prompt` > built-in default.
 
@@ -185,7 +188,7 @@ In-memory LRU cache for deterministic response caching. Responses are cached by 
 | `evict_every_seconds` | int | `300` (5 minutes) | Background eviction sweep interval |
 | `force_refresh_header` | string | `"x-nenya-cache-force-refresh"` | HTTP header name that bypasses cache when present |
 
-**Cache key**: Deterministic SHA-256 computed from `model`, `messages`, `temperature`, `top_p`, `max_tokens`, `tools`, `tool_choice`, `response_format`, `stop`.
+**Cache key**: Deterministic SHA-256 computed from `model`, `messages`, `temperature`, `top_p`, `max_tokens`, `tools`, `tool_choice`, `response_format`, `stop`, `stream`.
 
 **Bypass**: Send any non-empty value for the configured `force_refresh_header` to force a cache miss.
 
@@ -366,6 +369,10 @@ Models not in this registry (e.g., local Ollama models, custom endpoints) must b
 8. **JSON minification** (final body compaction)
 9. **Response cache store** (if enabled, store completed SSE response)
 
+### Best-Effort Pipeline
+
+The content pipeline (steps 2–7) is **best-effort**: if any step fails (e.g., engine unreachable, Ollama down), the gateway logs a warning and proceeds with the original payload. This ensures the proxy never blocks or returns errors due to pipeline failures — the request always reaches an upstream provider. When `skip_on_engine_failure` is `true` (default), hard-limit payloads that fail engine summarization are forwarded unchanged instead of being truncated.
+
 ## Configuration Notes
 
 - **JSON with Comments**: Configuration files support `//` and `/* */` comments
@@ -379,6 +386,7 @@ Models not in this registry (e.g., local Ollama models, custom endpoints) must b
 - **max_tokens injection**: `max_tokens` is injected from per-model `MaxOutput` in the `ModelRegistry` when the client doesn't set it. Unknown models (not in registry) are not injected.
 - **Provider Adapters**: Provider-specific wire format differences (auth, request/response mutation, error classification) are handled by the adapter system. See [`ADAPTERS.md`](ADAPTERS.md) for details.
 - **Circuit Breaker**: Each agent+provider+model combination has an independent circuit breaker (Closed/Open/HalfOpen states). See [`ARCHITECTURE.md`](ARCHITECTURE.md#circuit-breaker) for the state machine.
+- **Graceful Degradation**: When `skip_on_engine_failure` is `true`, the gateway operates normally even without a local Ollama instance. Secret redaction (Tier-0 regex) still runs; only the LLM-based summarization is skipped.
 
 ## Configuration Validation
 
