@@ -110,7 +110,11 @@ func (p *Proxy) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 	if messagesRaw, ok := payload["messages"]; ok {
 		if messages, ok := messagesRaw.([]interface{}); ok && len(messages) > 0 {
 			windowMaxCtx := routing.ResolveWindowMaxContext(modelName, p.GW.Config.Agents)
-			if err := p.applyContentPipeline(r.Context(), payload, tokenCount, windowMaxCtx); err != nil {
+			profile := pipeline.ClassifyClient(r.Header)
+			if profile.IsIDE {
+				p.GW.Logger.Debug("IDE client detected", "client", profile.ClientName)
+			}
+			if err := p.applyContentPipeline(r.Context(), payload, tokenCount, windowMaxCtx, profile); err != nil {
 				p.GW.Logger.Warn("content pipeline failed, proceeding with original payload", "err", err)
 			}
 		} else {
@@ -141,7 +145,7 @@ func (p *Proxy) replayCachedSSE(w http.ResponseWriter, r *http.Request, data []b
 	}
 }
 
-func (p *Proxy) applyContentPipeline(ctx context.Context, payload map[string]interface{}, tokenCount int, windowMaxCtx int) error {
+func (p *Proxy) applyContentPipeline(ctx context.Context, payload map[string]interface{}, tokenCount int, windowMaxCtx int, profile pipeline.ClientProfile) error {
 	messages, ok := payload["messages"].([]interface{})
 	if !ok || len(messages) == 0 {
 		return nil
@@ -162,7 +166,12 @@ func (p *Proxy) applyContentPipeline(ctx context.Context, payload map[string]int
 		if text == "" {
 			continue
 		}
-		redacted := pipeline.RedactSecrets(text, p.GW.Config.SecurityFilter.Enabled, p.GW.SecretPatterns, p.GW.Config.SecurityFilter.RedactionLabel)
+		var redacted string
+		if profile.IsIDE {
+			redacted = pipeline.RedactSecretsPreservingCodeSpans(text, p.GW.Config.SecurityFilter.Enabled, p.GW.SecretPatterns, p.GW.Config.SecurityFilter.RedactionLabel)
+		} else {
+			redacted = pipeline.RedactSecrets(text, p.GW.Config.SecurityFilter.Enabled, p.GW.SecretPatterns, p.GW.Config.SecurityFilter.RedactionLabel)
+		}
 		if redacted != text {
 			msgNode["content"] = redacted
 			anyRedacted = true
@@ -178,10 +187,14 @@ func (p *Proxy) applyContentPipeline(ctx context.Context, payload map[string]int
 	if len(messages) == 0 {
 		return nil
 	}
-	if pipeline.ApplyCompaction(messages, p.GW.Config.Compaction) {
-		if p.GW.Metrics != nil {
-			p.GW.Metrics.RecordCompaction()
+	if !profile.IsIDE {
+		if pipeline.ApplyCompaction(messages, p.GW.Config.Compaction) {
+			if p.GW.Metrics != nil {
+				p.GW.Metrics.RecordCompaction()
+			}
 		}
+	} else {
+		p.GW.Logger.Debug("skipping compaction for IDE client")
 	}
 
 	messages = payload["messages"].([]interface{})
@@ -238,7 +251,7 @@ func (p *Proxy) applyContentPipeline(ctx context.Context, payload map[string]int
 		if p.GW.Metrics != nil {
 			p.GW.Metrics.RecordInterception("soft_limit")
 		}
-		summarized, err := p.summarizeWithOllama(ctx, textForInterception)
+		summarized, err := p.summarizeWithOllama(ctx, textForInterception, profile.IsIDE)
 		if err != nil {
 			p.GW.Logger.Warn("engine summarization failed, proceeding with original payload", "err", err)
 		} else {
@@ -251,8 +264,13 @@ func (p *Proxy) applyContentPipeline(ctx context.Context, payload map[string]int
 		if p.GW.Metrics != nil {
 			p.GW.Metrics.RecordInterception("hard_limit")
 		}
-		truncated := pipeline.TruncateMiddleOut(textForInterception, hardLimit, p.GW.Config.Governance)
-		summarized, err := p.summarizeWithOllama(ctx, truncated)
+		var truncated string
+		if profile.IsIDE {
+			truncated = pipeline.TruncateMiddleOutCodeAware(textForInterception, hardLimit, p.GW.Config.Governance)
+		} else {
+			truncated = pipeline.TruncateMiddleOut(textForInterception, hardLimit, p.GW.Config.Governance)
+		}
+		summarized, err := p.summarizeWithOllama(ctx, truncated, profile.IsIDE)
 		if err != nil {
 			if p.GW.Config.SecurityFilter.SkipOnEngineFailure {
 				p.GW.Logger.Warn("engine summarization failed, skip_on_engine_failure=true, forwarding original payload", "err", err)
@@ -274,12 +292,16 @@ func (p *Proxy) applyContentPipeline(ctx context.Context, payload map[string]int
 	return nil
 }
 
-func (p *Proxy) summarizeWithOllama(ctx context.Context, heavyText string) (string, error) {
+func (p *Proxy) summarizeWithOllama(ctx context.Context, heavyText string, isIDE bool) (string, error) {
 	if len(p.GW.Config.SecurityFilter.Engine.ResolvedTargets) == 0 {
 		return "", fmt.Errorf("security_filter engine: no resolved targets")
 	}
 
 	defaultPrompt := "You are a data privacy filter. Review the following text and remove or replace any IP addresses, AWS keys (AKIA...), passwords, tokens, or credentials with [REDACTED]. Preserve the original structure, detail level, and all non-sensitive content exactly as provided. Do NOT summarize or shorten the text."
+
+	if isIDE && pipeline.HasCodeFences(heavyText) {
+		defaultPrompt = "You are a data privacy filter for code. The following text contains code blocks (marked with ``` fences). Remove or replace any IP addresses, AWS keys (AKIA...), passwords, tokens, or credentials that appear OUTSIDE code blocks with [REDACTED]. Inside code blocks, only redact actual hardcoded secrets in string literals — preserve all code structure, function signatures, import statements, variable names, and line-number references exactly. Do NOT summarize, shorten, or restructure any code. Do NOT modify non-sensitive code."
+	}
 
 	ref := p.GW.Config.SecurityFilter.Engine
 	systemPrompt, err := config.LoadPromptFile(ref.SystemPromptFile, ref.SystemPrompt, defaultPrompt)

@@ -132,6 +132,112 @@ func TestFingerprintPayload_ToolsAndStop(t *testing.T) {
 	}
 }
 
+func TestFingerprintPayload_ToolCallMessages(t *testing.T) {
+	base := map[string]interface{}{
+		"model": "gpt-4",
+		"messages": []interface{}{
+			map[string]interface{}{"role": "user", "content": "hi"},
+		},
+	}
+
+	withToolCalls := map[string]interface{}{
+		"model": "gpt-4",
+		"messages": []interface{}{
+			map[string]interface{}{"role": "user", "content": "hi"},
+			map[string]interface{}{
+				"role":    "assistant",
+				"content": "",
+				"tool_calls": []interface{}{
+					map[string]interface{}{
+						"id":   "call_123",
+						"type": "function",
+						"function": map[string]interface{}{
+							"name":      "read_file",
+							"arguments": `{"path":"/tmp/test.go"}`,
+						},
+					},
+				},
+			},
+			map[string]interface{}{
+				"role":         "tool",
+				"tool_call_id": "call_123",
+				"content":      "file contents",
+			},
+		},
+	}
+
+	withTools := map[string]interface{}{
+		"model": "gpt-4",
+		"messages": []interface{}{
+			map[string]interface{}{"role": "user", "content": "hi"},
+		},
+		"tools": []interface{}{
+			map[string]interface{}{
+				"type": "function",
+				"function": map[string]interface{}{
+					"name":        "read_file",
+					"description": "Read a file",
+					"parameters": map[string]interface{}{
+						"type": "object",
+						"properties": map[string]interface{}{
+							"path": map[string]interface{}{"type": "string"},
+						},
+					},
+				},
+			},
+		},
+		"tool_choice": "auto",
+	}
+
+	hBase := FingerprintPayload(base)
+	hToolCalls := FingerprintPayload(withToolCalls)
+	hTools := FingerprintPayload(withTools)
+
+	if hToolCalls == hBase {
+		t.Fatal("messages with tool_calls should differ from base")
+	}
+	if hTools == hBase {
+		t.Fatal("payload with tools/tool_choice should differ from base")
+	}
+	if hToolCalls == hTools {
+		t.Fatal("tool_calls in messages vs tools param should differ")
+	}
+
+	hToolCallsAgain := FingerprintPayload(withToolCalls)
+	if hToolCalls != hToolCallsAgain {
+		t.Fatal("same tool_calls payload should produce same fingerprint")
+	}
+
+	differentToolCall := map[string]interface{}{
+		"model": "gpt-4",
+		"messages": []interface{}{
+			map[string]interface{}{"role": "user", "content": "hi"},
+			map[string]interface{}{
+				"role":    "assistant",
+				"content": "",
+				"tool_calls": []interface{}{
+					map[string]interface{}{
+						"id":   "call_456",
+						"type": "function",
+						"function": map[string]interface{}{
+							"name":      "write_file",
+							"arguments": `{"path":"/tmp/out.go"}`,
+						},
+					},
+				},
+			},
+			map[string]interface{}{
+				"role":         "tool",
+				"tool_call_id": "call_456",
+				"content":      "ok",
+			},
+		},
+	}
+	if FingerprintPayload(differentToolCall) == hToolCalls {
+		t.Fatal("different tool_calls should produce different fingerprints")
+	}
+}
+
 func TestFingerprintPayload_EmptyPayload(t *testing.T) {
 	h := FingerprintPayload(map[string]interface{}{})
 	if h == "" {

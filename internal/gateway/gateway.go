@@ -1,6 +1,7 @@
 package gateway
 
 import (
+	"encoding/json"
 	"log/slog"
 	"net"
 	"net/http"
@@ -172,8 +173,21 @@ func ExtractContentText(msg map[string]interface{}) string {
 		var sb strings.Builder
 		for _, partRaw := range content {
 			if part, ok := partRaw.(map[string]interface{}); ok {
-				if text, ok := part["text"].(string); ok {
-					sb.WriteString(text)
+				if typ, ok := part["type"].(string); ok {
+					switch typ {
+					case "text":
+						if text, ok := part["text"].(string); ok {
+							sb.WriteString(text)
+						}
+					case "image_url":
+						sb.WriteString("[image]")
+					case "input_json":
+						if input, ok := part["input_json"]; ok {
+							if jsonBytes, err := json.Marshal(input); err == nil {
+								sb.Write(jsonBytes)
+							}
+						}
+					}
 				}
 			}
 		}
