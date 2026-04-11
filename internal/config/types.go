@@ -157,13 +157,14 @@ type EngineTarget struct {
 }
 
 type SecurityFilterConfig struct {
-	Enabled           bool      `json:"enabled"`
-	RedactionLabel    string    `json:"redaction_label"`
-	Patterns          []string  `json:"patterns"`
-	OutputEnabled     bool      `json:"output_enabled"`
-	OutputWindowChars int       `json:"output_window_chars"`
-	Engine            EngineRef `json:"engine"`
-	enabledSet        bool      `json:"-"`
+	Enabled             bool      `json:"enabled"`
+	RedactionLabel      string    `json:"redaction_label"`
+	Patterns            []string  `json:"patterns"`
+	OutputEnabled       bool      `json:"output_enabled"`
+	OutputWindowChars   int       `json:"output_window_chars"`
+	SkipOnEngineFailure bool      `json:"skip_on_engine_failure"`
+	Engine              EngineRef `json:"engine"`
+	enabledSet          bool      `json:"-"`
 }
 
 func (s *SecurityFilterConfig) EnabledWasSet() bool { return s.enabledSet }

@@ -12,6 +12,7 @@ import (
 var cacheableFields = []string{
 	"model", "messages", "temperature", "top_p",
 	"max_tokens", "tools", "tool_choice", "response_format", "stop",
+	"stream",
 }
 
 func FingerprintPayload(payload map[string]interface{}) string {

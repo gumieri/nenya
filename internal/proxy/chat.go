@@ -111,9 +111,7 @@ func (p *Proxy) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 		if messages, ok := messagesRaw.([]interface{}); ok && len(messages) > 0 {
 			windowMaxCtx := routing.ResolveWindowMaxContext(modelName, p.GW.Config.Agents)
 			if err := p.applyContentPipeline(r.Context(), payload, tokenCount, windowMaxCtx); err != nil {
-				p.GW.Logger.Error("content pipeline failed", "err", err)
-				http.Error(w, "Internal Server Error", http.StatusInternalServerError)
-				return
+				p.GW.Logger.Warn("content pipeline failed, proceeding with original payload", "err", err)
 			}
 		} else {
 			p.GW.Logger.Warn("messages field is not a non-empty array, skipping Ollama interception")
@@ -130,10 +128,15 @@ func (p *Proxy) replayCachedSSE(w http.ResponseWriter, r *http.Request, data []b
 	w.Header().Set("X-Nenya-Cache-Status", "HIT")
 	w.WriteHeader(http.StatusOK)
 
-	fw := newImmediateFlushWriter(w)
+	var dst io.Writer
+	if fw, ok := newImmediateFlushWriterSafe(w); ok {
+		dst = fw
+	} else {
+		dst = w
+	}
 	buf := streamingBufPool.Get().(*[]byte)
 	defer streamingBufPool.Put(buf)
-	if _, err := copyStream(r.Context(), fw, bytes.NewReader(data), *buf); err != nil {
+	if _, err := copyStream(r.Context(), dst, bytes.NewReader(data), *buf); err != nil {
 		p.GW.Logger.Error("failed to replay cached SSE stream", "err", err)
 	}
 }
@@ -230,20 +233,20 @@ func (p *Proxy) applyContentPipeline(ctx context.Context, payload map[string]int
 		p.GW.Logger.Debug("payload within soft limit, passing through",
 			"runes", contentRunes, "soft_limit", softLimit)
 	} else if contentRunes <= hardLimit {
-		p.GW.Logger.Warn("payload exceeds soft limit, sending to Ollama",
+		p.GW.Logger.Warn("payload exceeds soft limit, sending to engine",
 			"runes", contentRunes)
 		if p.GW.Metrics != nil {
 			p.GW.Metrics.RecordInterception("soft_limit")
 		}
 		summarized, err := p.summarizeWithOllama(ctx, textForInterception)
 		if err != nil {
-			p.GW.Logger.Error("Ollama summarization failed, proceeding with original", "err", err)
+			p.GW.Logger.Warn("engine summarization failed, proceeding with original payload", "err", err)
 		} else {
 			processed = fmt.Sprintf("[Nenya Sanitized via Ollama]:\n%s", summarized)
 			needsUpdate = true
 		}
 	} else {
-		p.GW.Logger.Warn("payload exceeds hard limit, truncating before Ollama",
+		p.GW.Logger.Warn("payload exceeds hard limit, truncating before engine",
 			"runes", contentRunes, "hard_limit", hardLimit)
 		if p.GW.Metrics != nil {
 			p.GW.Metrics.RecordInterception("hard_limit")
@@ -251,12 +254,17 @@ func (p *Proxy) applyContentPipeline(ctx context.Context, payload map[string]int
 		truncated := pipeline.TruncateMiddleOut(textForInterception, hardLimit, p.GW.Config.Governance)
 		summarized, err := p.summarizeWithOllama(ctx, truncated)
 		if err != nil {
-			p.GW.Logger.Error("Ollama summarization failed after truncation, forwarding truncated", "err", err)
-			processed = fmt.Sprintf("[Nenya Truncated (Ollama unreachable)]:\n%s", truncated)
+			if p.GW.Config.SecurityFilter.SkipOnEngineFailure {
+				p.GW.Logger.Warn("engine summarization failed, skip_on_engine_failure=true, forwarding original payload", "err", err)
+			} else {
+				p.GW.Logger.Warn("engine summarization failed after truncation, forwarding truncated", "err", err)
+				processed = fmt.Sprintf("[Nenya Truncated (engine unreachable)]:\n%s", truncated)
+				needsUpdate = true
+			}
 		} else {
 			processed = fmt.Sprintf("[Nenya Sanitized via Ollama (truncated input)]:\n%s", summarized)
+			needsUpdate = true
 		}
-		needsUpdate = true
 	}
 
 	if needsUpdate {

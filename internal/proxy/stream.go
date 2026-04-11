@@ -72,15 +72,21 @@ type immediateFlushWriter struct {
 }
 
 func newImmediateFlushWriter(w http.ResponseWriter) *immediateFlushWriter {
-	return &immediateFlushWriter{
-		dst:     w,
-		flusher: w.(http.Flusher),
+	fw, _ := newImmediateFlushWriterSafe(w)
+	return fw
+}
+
+func newImmediateFlushWriterSafe(w http.ResponseWriter) (*immediateFlushWriter, bool) {
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		return &immediateFlushWriter{dst: w}, false
 	}
+	return &immediateFlushWriter{dst: w, flusher: flusher}, true
 }
 
 func (fw *immediateFlushWriter) Write(p []byte) (int, error) {
 	n, err := fw.dst.Write(p)
-	if err == nil {
+	if err == nil && fw.flusher != nil {
 		fw.flusher.Flush()
 	}
 	return n, err
@@ -180,20 +186,23 @@ func (p *Proxy) streamResponse(w http.ResponseWriter, r *http.Request, target ro
 	buf := streamingBufPool.Get().(*[]byte)
 	defer streamingBufPool.Put(buf)
 
-	fw := newImmediateFlushWriter(w)
+	flushWriter, canFlush := newImmediateFlushWriterSafe(w)
 
 	var captureBuf *bytes.Buffer
 	var tee *sseTeeWriter
 	if cacheKey != "" && p.GW.ResponseCache != nil {
 		captureBuf = new(bytes.Buffer)
 		tee = &sseTeeWriter{
-			dst:      fw,
+			dst:      flushWriter,
 			buf:      captureBuf,
 			maxBytes: p.GW.Config.ResponseCache.MaxEntryBytes,
 		}
 	}
 
-	dst := io.Writer(fw)
+	dst := io.Writer(flushWriter)
+	if !canFlush {
+		dst = w
+	}
 	if tee != nil {
 		dst = tee
 	}
@@ -242,7 +251,11 @@ func (p *Proxy) streamResponse(w http.ResponseWriter, r *http.Request, target ro
 	case <-r.Context().Done():
 		p.GW.Logger.Info("client disconnected, aborting upstream stream", "model", target.Model)
 		action.resp.Body.Close()
-		<-done
+		select {
+		case <-done:
+		case <-time.After(5 * time.Second):
+			p.GW.Logger.Warn("timed out waiting for stream copy to finish after client disconnect", "model", target.Model)
+		}
 	}
 }
 
