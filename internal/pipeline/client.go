@@ -11,20 +11,23 @@ type ClientProfile struct {
 }
 
 type clientPattern struct {
-	substring  string
-	name       string
-	isIDE      bool
+	header    string
+	substring string
+	name      string
+	isIDE     bool
 }
 
 var clientPatterns = []clientPattern{
-	{substring: "cursor", name: "cursor", isIDE: true},
-	{substring: "opencode", name: "opencode", isIDE: true},
+	{header: "User-Agent", substring: "cursor", name: "cursor", isIDE: true},
+	{header: "User-Agent", substring: "opencode", name: "opencode", isIDE: true},
+	{header: "Editor-Version", substring: "opencode", name: "opencode", isIDE: true},
+	{header: "Editor-Plugin-Version", substring: "opencode", name: "opencode", isIDE: true},
 }
 
 func ClassifyClient(headers http.Header) ClientProfile {
-	ua := strings.ToLower(headers.Get("User-Agent"))
 	for _, p := range clientPatterns {
-		if strings.Contains(ua, p.substring) {
+		val := strings.ToLower(headers.Get(p.header))
+		if val != "" && strings.Contains(val, p.substring) {
 			return ClientProfile{IsIDE: p.isIDE, ClientName: p.name}
 		}
 	}

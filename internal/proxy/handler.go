@@ -59,6 +59,12 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		infra.ObserveHTTPFunc(p.GW.Metrics, p.handleEmbeddings)(w, r)
 		return
+	case r.URL.Path == "/v1/responses" && r.Method == http.MethodPost:
+		if !p.authenticateRequest(r, w) {
+			return
+		}
+		infra.ObserveHTTPFunc(p.GW.Metrics, p.handleResponses)(w, r)
+		return
 	default:
 		http.Error(w, "Not Found", http.StatusNotFound)
 		return
