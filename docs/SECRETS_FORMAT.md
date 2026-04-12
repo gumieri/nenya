@@ -12,6 +12,9 @@ Nenya uses systemd credentials to securely load API keys and tokens. The secrets
     "groq": "gsk_...",
     "together": "...",
     "openai": "sk-..."
+  },
+  "memory_provider_keys": {
+    "mem0": "your-mem0-api-key"
   }
 }
 ```
@@ -52,6 +55,20 @@ To add a custom provider (e.g., OpenAI), add its key under the matching provider
 ```
 
 At least one provider key must be present for the corresponding provider to work.
+
+## Memory Provider Keys
+
+The `memory_provider_keys` object maps memory service names to their API keys. Currently supports `mem0`. Future memory service integrations will add additional keys here.
+
+```json
+{
+  "memory_provider_keys": {
+    "mem0": "your-mem0-api-key"
+  }
+}
+```
+
+Individual agents can override the key by setting `api_key` in their `memory` config. See [`MEMORY.md`](MEMORY.md) for full memory integration details.
 
 ## Security Notes
 

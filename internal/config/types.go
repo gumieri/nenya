@@ -3,6 +3,8 @@ package config
 import (
 	"encoding/json"
 	"fmt"
+
+	"nenya/internal/memory"
 )
 
 type AgentModel struct {
@@ -14,15 +16,16 @@ type AgentModel struct {
 }
 
 type AgentConfig struct {
-	Strategy         string       `json:"strategy"`
-	CooldownSeconds  int          `json:"cooldown_seconds"`
-	FailureThreshold int          `json:"failure_threshold"`
-	FailureWindowSec int          `json:"failure_window_secs"`
-	SuccessThreshold int          `json:"success_threshold"`
-	MaxRetries       int          `json:"max_retries"`
-	SystemPrompt     string       `json:"system_prompt"`
-	SystemPromptFile string       `json:"system_prompt_file"`
-	Models           []AgentModel `json:"models"`
+	Strategy         string              `json:"strategy"`
+	CooldownSeconds  int                 `json:"cooldown_seconds"`
+	FailureThreshold int                 `json:"failure_threshold"`
+	FailureWindowSec int                 `json:"failure_window_secs"`
+	SuccessThreshold int                 `json:"success_threshold"`
+	MaxRetries       int                 `json:"max_retries"`
+	SystemPrompt     string              `json:"system_prompt"`
+	SystemPromptFile string              `json:"system_prompt_file"`
+	Models           []AgentModel        `json:"models"`
+	Memory           *memory.MemoryConfig `json:"memory,omitempty"`
 }
 
 func (a *AgentConfig) UnmarshalJSON(data []byte) error {
@@ -117,8 +120,9 @@ func (g *GovernanceConfig) RPMSet() bool { return g.rpmSet }
 func (g *GovernanceConfig) TPMSet() bool { return g.tpmSet }
 
 type SecretsConfig struct {
-	ClientToken  string            `json:"client_token"`
-	ProviderKeys map[string]string `json:"provider_keys"`
+	ClientToken         string            `json:"client_token"`
+	ProviderKeys        map[string]string `json:"provider_keys"`
+	MemoryProviderKeys  map[string]string `json:"memory_provider_keys,omitempty"`
 }
 
 type EngineConfig struct {
