@@ -28,19 +28,30 @@ var streamingBufPool = sync.Pool{
 	},
 }
 
+func getStreamBuffer() *[]byte {
+	buf := streamingBufPool.Get().(*[]byte)
+	clear(*buf)
+	return buf
+}
+
 type stallReader struct {
 	src     io.Reader
 	mu      sync.Mutex
 	timer   *time.Timer
 	stalled bool
+	stallCh chan struct{}
 }
 
 func newStallReader(src io.Reader, timeout time.Duration) *stallReader {
-	sr := &stallReader{src: src}
+	sr := &stallReader{
+		src:     src,
+		stallCh: make(chan struct{}),
+	}
 	sr.timer = time.AfterFunc(timeout, func() {
 		sr.mu.Lock()
 		sr.stalled = true
 		sr.mu.Unlock()
+		close(sr.stallCh)
 	})
 	return sr
 }
@@ -53,15 +64,46 @@ func (sr *stallReader) Read(p []byte) (int, error) {
 	}
 	sr.mu.Unlock()
 
-	n, err := sr.src.Read(p)
-	if n > 0 {
-		sr.timer.Reset(streamIdleTimeout)
+	type readResult struct {
+		n   int
+		err error
 	}
-	return n, err
+	ch := make(chan readResult, 1)
+	go func() {
+		n, err := sr.src.Read(p)
+		ch <- readResult{n, err}
+	}()
+
+	select {
+	case <-sr.stallCh:
+		return 0, errStreamStalled
+	case rr := <-ch:
+		if rr.n > 0 {
+			sr.timer.Reset(streamIdleTimeout)
+		}
+		sr.mu.Lock()
+		if sr.stalled {
+			sr.mu.Unlock()
+			if rr.n > 0 {
+				return rr.n, errStreamStalled
+			}
+			return 0, errStreamStalled
+		}
+		sr.mu.Unlock()
+		return rr.n, rr.err
+	}
 }
 
 func (sr *stallReader) Stop() {
 	sr.timer.Stop()
+	sr.mu.Lock()
+	if !sr.stalled {
+		sr.stalled = true
+		sr.mu.Unlock()
+		close(sr.stallCh)
+	} else {
+		sr.mu.Unlock()
+	}
 }
 
 var errStreamStalled = errors.New("stream stalled: no data received within idle timeout")
@@ -183,7 +225,7 @@ func (p *Proxy) streamResponse(w http.ResponseWriter, r *http.Request, target ro
 			"window_size", p.GW.Config.SecurityFilter.OutputWindowChars)
 	}
 
-	buf := streamingBufPool.Get().(*[]byte)
+	buf := getStreamBuffer()
 	defer streamingBufPool.Put(buf)
 
 	flushWriter, canFlush := newImmediateFlushWriterSafe(w)
