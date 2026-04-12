@@ -268,16 +268,18 @@ func TestStreamingBufPool_ReturnsCorrectSize(t *testing.T) {
 	}
 }
 
-func TestStreamingBufPool_ReuseAcrossGets(t *testing.T) {
-	buf1 := streamingBufPool.Get().(*[]byte)
-	copy(*buf1, "hello reuse test data")
-	streamingBufPool.Put(buf1)
+func TestStreamingBufPool_ReturnsCleanBuffer(t *testing.T) {
+	buf := streamingBufPool.Get().(*[]byte)
+	copy(*buf, "dirty data from previous use")
+	streamingBufPool.Put(buf)
 
-	buf2 := streamingBufPool.Get().(*[]byte)
+	buf2 := getStreamBuffer()
 	defer streamingBufPool.Put(buf2)
 
-	if string((*buf2)[:17]) != "hello reuse test " {
-		t.Fatalf("expected pooled buffer to contain previous data, got: %q", string(*buf2))
+	for i, b := range *buf2 {
+		if b != 0 {
+			t.Fatalf("expected zeroed buffer at byte %d, got %q", i, b)
+		}
 	}
 }
 
