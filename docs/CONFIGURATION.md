@@ -15,7 +15,7 @@ Nenya reads its configuration from a JSON file (default: `config.json`). See [`.
 | Compaction | `compaction` | Text compaction (whitespace, blank lines, JSON) |
 | Window | `window` | Sliding window conversation compaction with configurable engine |
 | Response Cache | `response_cache` | In-memory LRU cache for deterministic response caching |
-| Agents | `agents` | Named agent definitions with fallback chains, circuit breaker, and optional system prompts |
+| Agents | `agents` | Named agent definitions with fallback chains, circuit breaker, optional system prompts, and optional memory integration |
 | Providers | `providers` | Upstream provider registry |
 
 ## `server`
@@ -248,6 +248,7 @@ Both styles can be mixed in the same `models` array.
 | `max_retries` | int | `0` | Cap on retry attempts per request (0 = unlimited) |
 | `system_prompt` | string | `""` | Inline system prompt injected as the first message (only if no existing system message). |
 | `system_prompt_file` | string | `""` | Path to system prompt file. Lower priority than `system_prompt`. |
+| `memory` | object | (none) | Optional mem0 memory integration. See [Memory Integration](MEMORY.md) for details. |
 | `models` | array | (required) | List of model entries (strings or objects) to try in order |
 
 Each model entry (object form):
@@ -360,14 +361,16 @@ Models not in this registry (e.g., local Ollama models, custom endpoints) must b
 ## Processing Pipeline Order
 
 1. **Response cache lookup** (if enabled, bypass entire pipeline on hit)
-2. **Prefix cache optimizations** (pin system messages, sort tools)
-3. **Agent system prompt injection** (if agent has prompt and no system message exists)
-4. **Tier-0 regex redaction** (secret patterns via `security_filter`)
-5. **Text compaction** (normalize, trim, collapse blanks)
-6. **Window compaction** (if enabled and threshold exceeded)
-7. **Engine interception** (3-tier last-message summarization using `security_filter.engine`, with fallback chain if agent-referenced)
-8. **JSON minification** (final body compaction)
-9. **Response cache store** (if enabled, store completed SSE response)
+2. **Memory search + injection** (if agent has memory configured, search mem0 and inject as system message)
+3. **Prefix cache optimizations** (pin system messages, sort tools)
+4. **Agent system prompt injection** (if agent has prompt and no system message exists)
+5. **Tier-0 regex redaction** (secret patterns via `security_filter`)
+6. **Text compaction** (normalize, trim, collapse blanks)
+7. **Window compaction** (if enabled and threshold exceeded)
+8. **Engine interception** (3-tier last-message summarization using `security_filter.engine`, with fallback chain if agent-referenced)
+9. **JSON minification** (final body compaction)
+10. **Response cache store** (if enabled, store completed SSE response)
+11. **Memory store** (if agent has memory configured, async store of assistant response to mem0)
 
 ### Best-Effort Pipeline
 

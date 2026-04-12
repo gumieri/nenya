@@ -21,7 +21,8 @@ Each layer may only import from layers to its left. This prevents circular depen
 | `internal/providers/` | Provider capability specs (stream_options, auto_tool_choice, content_arrays), per-provider sanitization, response transformers |
 | `internal/adapter/` | Provider Adapter pattern: request mutation, auth injection, response mutation, error classification |
 | `internal/routing/` | Dynamic provider resolution, agent fallback chains, upstream request transformation, API key injection |
-| `internal/gateway/` | NenyaGateway struct, HTTP client configuration, token counting |
+| `internal/memory/` | mem0 OSS client: memory search, memory storage, content capture for streaming |
+| `internal/gateway/` | NenyaGateway struct, HTTP client configuration, token counting, memory client initialization |
 | `internal/proxy/` | HTTP handlers, content pipeline orchestration, upstream forwarding with retry, transparent SSE streaming |
 
 ## Request Lifecycle
@@ -36,6 +37,8 @@ Client Request
    │   ├─ Resolve agent or provider
    │   ├─ Response cache lookup (if enabled)
    │   │   └─ HIT → replay cached SSE, done
+   │   ├─ Memory search (if agent has memory configured)
+   │   │   └─ Inject relevant memories as system message before last user message
    │   ├─ Content pipeline (best-effort — failures logged, never block request):
    │   │   ├─ Prefix cache optimizations
    │   │   ├─ Tier-0 regex secret redaction (code-span-aware for IDE clients)
@@ -56,12 +59,14 @@ Client Request
    │   │   │   ├─ ErrorQuotaExhausted → long cooldown
    │   │   │   ├─ ErrorPermanent → try next target (or return error if no more targets)
   │   │   └─ On success → circuit breaker.RecordSuccess()
-  │   └─ SSE stream pipeline:
-  │       ├─ stallReader (120s idle timeout)
-  │       ├─ SSETransformingReader (adapter.MutateResponse per chunk)
-  │       ├─ StreamFilter (blocked execution patterns)
-  │       ├─ immediateFlushWriter (Flush after every Write)
-  │       └─ sseTeeWriter (capture for response cache)
+   │   └─ SSE stream pipeline:
+   │       ├─ stallReader (120s idle timeout)
+   │       ├─ SSETransformingReader (adapter.MutateResponse per chunk)
+   │       ├─ OnContent callback (capture assistant response for memory storage)
+   │       ├─ StreamFilter (blocked execution patterns)
+   │       ├─ immediateFlushWriter (Flush after every Write)
+   │       ├─ sseTeeWriter (capture for response cache)
+   │       └─ Async memory store (POST /memories after stream completes, best-effort)
   │
   ├─ GET /v1/models
   ├─ POST /v1/embeddings
@@ -133,7 +138,7 @@ The streaming pipeline is built from composable `io.Reader` and `io.Writer` wrap
 | Component | Direction | Purpose |
 |-----------|-----------|---------|
 | `stallReader` | Read from upstream | Aborts after 120s of no data (stall detection) |
-| `SSETransformingReader` | Read from upstream | Parses SSE frames, calls `adapter.MutateResponse()` per chunk, extracts usage |
+| `SSETransformingReader` | Read from upstream | Parses SSE frames, calls `adapter.MutateResponse()` per chunk, extracts usage, fires `OnContent` callback |
 | `StreamFilter` | Read | Kills stream if blocked execution patterns detected |
 | `immediateFlushWriter` | Write to client | Wraps `http.ResponseWriter`, calls `Flush()` after every `Write()` |
 | `sseTeeWriter` | Write to client + buffer | Captures response bytes for response cache storage |

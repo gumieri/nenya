@@ -101,6 +101,13 @@
       "success_threshold": 1,
       // Cap on retry attempts per request (0 = unlimited)
       "max_retries": 0,
+      // Optional: long-term memory via mem0 OSS server
+      // "memory": {
+      //   "url": "http://127.0.0.1:8081",
+      //   "user_id": "default",
+      //   "top_k": 10,
+      //   "threshold": 0.3
+      // },
       "models": [
         "gemini-3.1-flash-lite-preview",
         "gemini-2.5-flash",

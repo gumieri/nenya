@@ -18,11 +18,14 @@ type ResponseTransformer interface {
 
 type UsageCallback func(completionTokens, promptTokens, totalTokens int)
 
+type ContentCallback func(content string)
+
 type SSETransformingReader struct {
 	src          io.Reader
 	scanner      *bufio.Scanner
 	transformer  ResponseTransformer
 	onUsage      UsageCallback
+	onContent    ContentCallback
 	streamFilter *StreamFilter
 	buffer       []byte
 	pos          int
@@ -46,6 +49,10 @@ func (r *SSETransformingReader) SetOnUsage(cb UsageCallback) {
 
 func (r *SSETransformingReader) SetStreamFilter(sf *StreamFilter) {
 	r.streamFilter = sf
+}
+
+func (r *SSETransformingReader) SetOnContent(cb ContentCallback) {
+	r.onContent = cb
 }
 
 func (r *SSETransformingReader) Read(p []byte) (int, error) {
@@ -126,6 +133,12 @@ func (r *SSETransformingReader) transformLine(line []byte) []byte {
 
 		if r.onUsage != nil && !r.usageFired && parsed != nil {
 			r.extractUsageFromMap(parsed)
+		}
+
+		if r.onContent != nil && parsed != nil {
+			if content := ExtractDeltaContentFromMap(parsed); content != "" {
+				r.onContent(content)
+			}
 		}
 
 		if r.transformer == nil {
