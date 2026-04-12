@@ -7,10 +7,10 @@ import (
 
 func TestDetectCodeFences(t *testing.T) {
 	tests := []struct {
-		name   string
-		text   string
-		want   int
-		lang   string
+		name string
+		text string
+		want int
+		lang string
 	}{
 		{"no fences", "hello world", 0, ""},
 		{"single fence", "before\n```go\ncode\n```\nafter", 1, "go"},
