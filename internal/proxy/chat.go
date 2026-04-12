@@ -138,7 +138,7 @@ func (p *Proxy) replayCachedSSE(w http.ResponseWriter, r *http.Request, data []b
 	} else {
 		dst = w
 	}
-	buf := streamingBufPool.Get().(*[]byte)
+	buf := getStreamBuffer()
 	defer streamingBufPool.Put(buf)
 	if _, err := copyStream(r.Context(), dst, bytes.NewReader(data), *buf); err != nil {
 		p.GW.Logger.Error("failed to replay cached SSE stream", "err", err)
