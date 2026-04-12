@@ -14,6 +14,8 @@ import (
 	providerpkg "nenya/internal/providers"
 	"nenya/internal/routing"
 	"nenya/internal/stream"
+
+	"nenya/internal/memory"
 )
 
 const (
@@ -225,6 +227,12 @@ func (p *Proxy) streamResponse(w http.ResponseWriter, r *http.Request, target ro
 			"window_size", p.GW.Config.SecurityFilter.OutputWindowChars)
 	}
 
+	var contentBuilder *memory.ContentBuilder
+	if _, ok := p.GW.MemoryClients[agentName]; ok {
+		contentBuilder = memory.NewContentBuilder()
+		transformingReader.SetOnContent(contentBuilder.AddContent)
+	}
+
 	buf := getStreamBuffer()
 	defer streamingBufPool.Put(buf)
 
@@ -290,6 +298,10 @@ func (p *Proxy) streamResponse(w http.ResponseWriter, r *http.Request, target ro
 			p.GW.Logger.Debug("response cache stored",
 				"model", target.Model, "size", captureBuf.Len())
 		}
+
+		if contentBuilder != nil {
+			p.asyncStoreMemory(agentName, contentBuilder.Build())
+		}
 	case <-r.Context().Done():
 		p.GW.Logger.Info("client disconnected, aborting upstream stream", "model", target.Model)
 		action.resp.Body.Close()
@@ -325,4 +337,20 @@ func (p *Proxy) writeBlockedSSE(w http.ResponseWriter) {
 	if flusher, ok := w.(http.Flusher); ok {
 		flusher.Flush()
 	}
+}
+
+func (p *Proxy) asyncStoreMemory(agentName string, assistantContent string) {
+	memClient, ok := p.GW.MemoryClients[agentName]
+	if !ok || assistantContent == "" {
+		return
+	}
+	go func() {
+		msgs := []memory.AddMessage{
+			{Role: "assistant", Content: assistantContent},
+		}
+		if err := memClient.Add(context.Background(), msgs); err != nil {
+			p.GW.Logger.Warn("memory store failed (best-effort)",
+				"agent", agentName, "err", err)
+		}
+	}()
 }

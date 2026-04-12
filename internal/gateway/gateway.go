@@ -13,6 +13,7 @@ import (
 	"nenya/internal/adapter"
 	"nenya/internal/config"
 	"nenya/internal/infra"
+	"nenya/internal/memory"
 	"nenya/internal/routing"
 )
 
@@ -31,6 +32,7 @@ type NenyaGateway struct {
 	AgentState      *routing.AgentState
 	ThoughtSigCache *infra.ThoughtSignatureCache
 	ResponseCache   *infra.ResponseCache
+	MemoryClients   map[string]*memory.Mem0Client
 }
 
 func New(cfg config.Config, secrets *config.SecretsConfig, logger *slog.Logger) *NenyaGateway {
@@ -118,6 +120,7 @@ func New(cfg config.Config, secrets *config.SecretsConfig, logger *slog.Logger) 
 		AgentState:      routing.NewAgentState(logger),
 		ThoughtSigCache: infra.NewThoughtSignatureCache(1000, 30*time.Minute),
 		ResponseCache:   newResponseCache(cfg, logger),
+		MemoryClients:   buildMemoryClients(cfg, secrets, logger),
 	}
 
 	gw.Metrics = infra.NewMetrics()
@@ -220,4 +223,22 @@ func (g *NenyaGateway) Close() {
 	if g.ResponseCache != nil {
 		g.ResponseCache.Stop()
 	}
+}
+
+func buildMemoryClients(cfg config.Config, secrets *config.SecretsConfig, logger *slog.Logger) map[string]*memory.Mem0Client {
+	clients := make(map[string]*memory.Mem0Client)
+	for agentName, agent := range cfg.Agents {
+		if agent.Memory == nil || agent.Memory.URL == "" {
+			continue
+		}
+		memCfg := *agent.Memory
+		if memCfg.APIKey == "" && secrets != nil {
+			if keys, ok := secrets.MemoryProviderKeys["mem0"]; ok {
+				memCfg.APIKey = keys
+			}
+		}
+		clients[agentName] = memory.NewMem0Client(memCfg, logger)
+		logger.Info("memory client initialized", "agent", agentName, "url", memCfg.URL)
+	}
+	return clients
 }

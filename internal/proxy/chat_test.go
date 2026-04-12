@@ -1,6 +1,7 @@
 package proxy
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -9,9 +10,11 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"nenya/internal/config"
 	"nenya/internal/gateway"
+	"nenya/internal/memory"
 )
 
 func newChatProxy(t *testing.T, upstreamURL string) *Proxy {
@@ -278,4 +281,267 @@ func TestHandleEmbeddings_UnknownModel(t *testing.T) {
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("expected 400, got %d", rec.Code)
 	}
+}
+
+func TestInjectMemoryContext(t *testing.T) {
+	t.Run("no agent name", func(t *testing.T) {
+		p := newChatProxy(t, "http://127.0.0.1")
+		payload := map[string]interface{}{
+			"messages": []interface{}{
+				map[string]interface{}{"role": "user", "content": "hello"},
+			},
+		}
+		messages := payload["messages"].([]interface{})
+		p.injectMemoryContext(context.Background(), payload, messages, "")
+		msgs := payload["messages"].([]interface{})
+		if len(msgs) != 1 {
+			t.Errorf("expected 1 message (unchanged), got %d", len(msgs))
+		}
+	})
+
+	t.Run("no memory client", func(t *testing.T) {
+		p := newChatProxy(t, "http://127.0.0.1")
+		payload := map[string]interface{}{
+			"messages": []interface{}{
+				map[string]interface{}{"role": "user", "content": "hello"},
+			},
+		}
+		messages := payload["messages"].([]interface{})
+		p.injectMemoryContext(context.Background(), payload, messages, "nonexistent-agent")
+		msgs := payload["messages"].([]interface{})
+		if len(msgs) != 1 {
+			t.Errorf("expected 1 message (unchanged), got %d", len(msgs))
+		}
+	})
+
+	t.Run("last message not user role", func(t *testing.T) {
+		memSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			t.Error("mem0 should not be called when last message is not user")
+			w.WriteHeader(http.StatusOK)
+			json.NewEncoder(w).Encode(map[string]interface{}{"results": nil})
+		}))
+		defer memSrv.Close()
+
+		p := newChatProxy(t, "http://127.0.0.1")
+		p.GW.MemoryClients = map[string]*memory.Mem0Client{
+			"mem-agent": memory.NewMem0Client(memory.MemoryConfig{URL: memSrv.URL, UserID: "u1"}, nil),
+		}
+		payload := map[string]interface{}{
+			"messages": []interface{}{
+				map[string]interface{}{"role": "assistant", "content": "previous response"},
+			},
+		}
+		messages := payload["messages"].([]interface{})
+		p.injectMemoryContext(context.Background(), payload, messages, "mem-agent")
+		msgs := payload["messages"].([]interface{})
+		if len(msgs) != 1 {
+			t.Errorf("expected 1 message (unchanged), got %d", len(msgs))
+		}
+	})
+
+	t.Run("empty last message content", func(t *testing.T) {
+		memSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			t.Error("mem0 should not be called for empty content")
+			w.WriteHeader(http.StatusOK)
+			json.NewEncoder(w).Encode(map[string]interface{}{"results": nil})
+		}))
+		defer memSrv.Close()
+
+		p := newChatProxy(t, "http://127.0.0.1")
+		p.GW.MemoryClients = map[string]*memory.Mem0Client{
+			"mem-agent": memory.NewMem0Client(memory.MemoryConfig{URL: memSrv.URL, UserID: "u1"}, nil),
+		}
+		payload := map[string]interface{}{
+			"messages": []interface{}{
+				map[string]interface{}{"role": "user", "content": ""},
+			},
+		}
+		messages := payload["messages"].([]interface{})
+		p.injectMemoryContext(context.Background(), payload, messages, "mem-agent")
+		msgs := payload["messages"].([]interface{})
+		if len(msgs) != 1 {
+			t.Errorf("expected 1 message (unchanged), got %d", len(msgs))
+		}
+	})
+
+	t.Run("memories injected before last user message", func(t *testing.T) {
+		memSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusOK)
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"results": []map[string]interface{}{
+					{"id": "m1", "memory": "User likes Go", "score": 0.9},
+				},
+			})
+		}))
+		defer memSrv.Close()
+
+		p := newChatProxy(t, "http://127.0.0.1")
+		p.GW.MemoryClients = map[string]*memory.Mem0Client{
+			"mem-agent": memory.NewMem0Client(memory.MemoryConfig{URL: memSrv.URL, UserID: "u1"}, nil),
+		}
+		payload := map[string]interface{}{
+			"messages": []interface{}{
+				map[string]interface{}{"role": "system", "content": "you are helpful"},
+				map[string]interface{}{"role": "user", "content": "what should I use?"},
+			},
+		}
+		messages := payload["messages"].([]interface{})
+		p.injectMemoryContext(context.Background(), payload, messages, "mem-agent")
+
+		msgs := payload["messages"].([]interface{})
+		if len(msgs) != 3 {
+			t.Fatalf("expected 3 messages (system + memory + user), got %d", len(msgs))
+		}
+
+		first := msgs[0].(map[string]interface{})
+		if first["role"] != "system" || first["content"] != "you are helpful" {
+			t.Errorf("first message should be original system, got: %+v", first)
+		}
+
+		injected := msgs[1].(map[string]interface{})
+		if injected["role"] != "system" {
+			t.Errorf("injected message should be system role, got: %+v", injected)
+		}
+		injectedContent, _ := injected["content"].(string)
+		if !strings.Contains(injectedContent, "User likes Go") {
+			t.Errorf("injected message should contain memory, got: %s", injectedContent)
+		}
+
+		last := msgs[2].(map[string]interface{})
+		if last["role"] != "user" || last["content"] != "what should I use?" {
+			t.Errorf("last message should be original user message, got: %+v", last)
+		}
+	})
+
+	t.Run("no memories found", func(t *testing.T) {
+		memSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusOK)
+			json.NewEncoder(w).Encode(map[string]interface{}{"results": []interface{}{}})
+		}))
+		defer memSrv.Close()
+
+		p := newChatProxy(t, "http://127.0.0.1")
+		p.GW.MemoryClients = map[string]*memory.Mem0Client{
+			"mem-agent": memory.NewMem0Client(memory.MemoryConfig{URL: memSrv.URL, UserID: "u1"}, nil),
+		}
+		payload := map[string]interface{}{
+			"messages": []interface{}{
+				map[string]interface{}{"role": "user", "content": "hello"},
+			},
+		}
+		messages := payload["messages"].([]interface{})
+		p.injectMemoryContext(context.Background(), payload, messages, "mem-agent")
+		msgs := payload["messages"].([]interface{})
+		if len(msgs) != 1 {
+			t.Errorf("expected 1 message (unchanged when no results), got %d", len(msgs))
+		}
+	})
+
+	t.Run("mem0 search failure does not block", func(t *testing.T) {
+		memSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusInternalServerError)
+			w.Write([]byte("mem0 down"))
+		}))
+		defer memSrv.Close()
+
+		p := newChatProxy(t, "http://127.0.0.1")
+		p.GW.MemoryClients = map[string]*memory.Mem0Client{
+			"mem-agent": memory.NewMem0Client(memory.MemoryConfig{URL: memSrv.URL, UserID: "u1"}, nil),
+		}
+		payload := map[string]interface{}{
+			"messages": []interface{}{
+				map[string]interface{}{"role": "user", "content": "hello"},
+			},
+		}
+		messages := payload["messages"].([]interface{})
+		p.injectMemoryContext(context.Background(), payload, messages, "mem-agent")
+		msgs := payload["messages"].([]interface{})
+		if len(msgs) != 1 {
+			t.Errorf("expected 1 message (unchanged on error), got %d", len(msgs))
+		}
+	})
+}
+
+func TestAsyncStoreMemory(t *testing.T) {
+	t.Run("stores assistant content", func(t *testing.T) {
+		var receivedBody addRequestBody
+		memSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			json.NewDecoder(r.Body).Decode(&receivedBody)
+			w.WriteHeader(http.StatusOK)
+			json.NewEncoder(w).Encode(map[string]interface{}{"results": []interface{}{}})
+		}))
+		defer memSrv.Close()
+
+		p := newChatProxy(t, "http://127.0.0.1")
+		p.GW.MemoryClients = map[string]*memory.Mem0Client{
+			"mem-agent": memory.NewMem0Client(memory.MemoryConfig{URL: memSrv.URL, UserID: "u1"}, nil),
+		}
+
+		p.asyncStoreMemory("mem-agent", "Hello from assistant")
+		time.Sleep(200 * time.Millisecond)
+
+		if len(receivedBody.Messages) != 1 {
+			t.Fatalf("expected 1 message, got %d", len(receivedBody.Messages))
+		}
+		if receivedBody.Messages[0].Role != "assistant" {
+			t.Errorf("expected role 'assistant', got %q", receivedBody.Messages[0].Role)
+		}
+		if receivedBody.Messages[0].Content != "Hello from assistant" {
+			t.Errorf("expected content 'Hello from assistant', got %q", receivedBody.Messages[0].Content)
+		}
+		if receivedBody.UserID != "u1" {
+			t.Errorf("expected user_id 'u1', got %q", receivedBody.UserID)
+		}
+	})
+
+	t.Run("no-op for unknown agent", func(t *testing.T) {
+		p := newChatProxy(t, "http://127.0.0.1")
+		p.asyncStoreMemory("nonexistent", "content")
+	})
+
+	t.Run("no-op for empty content", func(t *testing.T) {
+		memSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			t.Error("mem0 should not be called for empty content")
+			w.WriteHeader(http.StatusOK)
+		}))
+		defer memSrv.Close()
+
+		p := newChatProxy(t, "http://127.0.0.1")
+		p.GW.MemoryClients = map[string]*memory.Mem0Client{
+			"mem-agent": memory.NewMem0Client(memory.MemoryConfig{URL: memSrv.URL, UserID: "u1"}, nil),
+		}
+		p.asyncStoreMemory("mem-agent", "")
+	})
+
+	t.Run("error is logged not panicked", func(t *testing.T) {
+		memSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusInternalServerError)
+			w.Write([]byte("mem0 error"))
+		}))
+		defer memSrv.Close()
+
+		p := newChatProxy(t, "http://127.0.0.1")
+		p.GW.MemoryClients = map[string]*memory.Mem0Client{
+			"mem-agent": memory.NewMem0Client(memory.MemoryConfig{URL: memSrv.URL, UserID: "u1"}, nil),
+		}
+
+		done := make(chan struct{})
+		go func() {
+			p.asyncStoreMemory("mem-agent", "some content")
+			close(done)
+		}()
+		select {
+		case <-done:
+		case <-time.After(3 * time.Second):
+			t.Fatal("asyncStoreMemory goroutine did not complete within timeout")
+		}
+	})
+}
+
+type addRequestBody struct {
+	Messages []struct {
+		Role    string `json:"role"`
+		Content string `json:"content"`
+	} `json:"messages"`
+	UserID   string `json:"user_id,omitempty"`
 }

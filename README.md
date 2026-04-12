@@ -15,6 +15,7 @@ Nenya acts as a **silent guardian** for your AI interactions. Its core strength 
 | [Architecture](docs/ARCHITECTURE.md) | Package DAG, request lifecycle, circuit breaker, SSE pipeline, response cache |
 | [Adapters](docs/ADAPTERS.md) | Provider adapter system, capabilities, auth styles, how to add providers |
 | [Configuration](docs/CONFIGURATION.md) | Full config reference with all sections and fields |
+| [Memory](docs/MEMORY.md) | mem0 integration for long-term agent memory |
 | [Demo](docs/DEMO.md) | Quick start, pipeline testing, cache bypass, circuit breaker observability |
 | [Secrets Format](docs/SECRETS_FORMAT.md) | Systemd credential management, provider key setup |
 | [Security](docs/SECURITY.md) | Vulnerability reporting policy |
@@ -53,6 +54,7 @@ Nenya acts as a **silent guardian** for your AI interactions. Its core strength 
 - **Agent fallback chains** — agent-level strategy with circuit breaker and automatic failover
 - **System prompts** — inject custom system prompts per agent (inline or file-based)
 - **Per-model max_tokens injection** — from ModelRegistry when client doesn't set it
+- **Long-term memory** — optional mem0 integration per agent for persistent memory search and storage
 
 ## Quick Start
 

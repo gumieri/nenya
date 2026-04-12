@@ -14,6 +14,7 @@ import (
 	"nenya/internal/config"
 	"nenya/internal/gateway"
 	"nenya/internal/infra"
+	"nenya/internal/memory"
 	"nenya/internal/pipeline"
 	"nenya/internal/routing"
 )
@@ -109,6 +110,7 @@ func (p *Proxy) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 
 	if messagesRaw, ok := payload["messages"]; ok {
 		if messages, ok := messagesRaw.([]interface{}); ok && len(messages) > 0 {
+			p.injectMemoryContext(r.Context(), payload, messages, agentName)
 			windowMaxCtx := routing.ResolveWindowMaxContext(modelName, p.GW.Config.Agents)
 			profile := pipeline.ClassifyClient(r.Header)
 			if profile.IsIDE {
@@ -469,4 +471,52 @@ func (p *Proxy) buildUpstreamRequest(ctx context.Context, method, url string, bo
 	req.Header.Set("Accept-Encoding", "identity")
 	req.Header.Set("User-Agent", p.GW.Config.Server.UserAgent)
 	return req, nil
+}
+
+func (p *Proxy) injectMemoryContext(ctx context.Context, payload map[string]interface{}, messages []interface{}, agentName string) {
+	if agentName == "" {
+		return
+	}
+	memClient, ok := p.GW.MemoryClients[agentName]
+	if !ok {
+		return
+	}
+
+	lastIdx := len(messages) - 1
+	lastMsg, ok := messages[lastIdx].(map[string]interface{})
+	if !ok {
+		return
+	}
+	lastRole, _ := lastMsg["role"].(string)
+	if lastRole != "user" {
+		return
+	}
+
+	query := gateway.ExtractContentText(lastMsg)
+	if query == "" {
+		return
+	}
+
+	results, err := memClient.Search(ctx, query)
+	if err != nil {
+		p.GW.Logger.Warn("memory search failed, proceeding without memories", "agent", agentName, "err", err)
+		return
+	}
+	if len(results) == 0 {
+		return
+	}
+
+	contextStr := memory.FormatMemoryContext(results)
+	memoryMsg := map[string]interface{}{
+		"role":    "system",
+		"content": contextStr,
+	}
+
+	updated := make([]interface{}, 0, len(messages)+1)
+	updated = append(updated, messages[:lastIdx]...)
+	updated = append(updated, memoryMsg)
+	updated = append(updated, messages[lastIdx:]...)
+	payload["messages"] = updated
+
+	p.GW.Logger.Debug("memory context injected", "agent", agentName, "memories", len(results))
 }
