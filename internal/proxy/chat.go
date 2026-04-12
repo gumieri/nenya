@@ -404,7 +404,8 @@ func (p *Proxy) handleResponses(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var payload map[string]interface{}
-	if err := json.Unmarshal(bodyBytes, &payload); err != nil {
+	err = json.Unmarshal(bodyBytes, &payload)
+	if err != nil {
 		http.Error(w, "Invalid JSON payload", http.StatusBadRequest)
 		return
 	}
