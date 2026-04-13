@@ -109,7 +109,17 @@
       "success_threshold": 1,
       // Cap on retry attempts per request (0 = unlimited)
       "max_retries": 0,
-      // Optional: long-term memory via mem0 OSS server
+      // Optional: Model Context Protocol (MCP) server integration.
+      // MCP tools are exposed to the LLM as OpenAI function tools.
+      // When the LLM responds with tool_calls for MCP tools, Nenya executes
+      // them locally and re-sends with results (multi-turn loop).
+      "mcp": {
+        "servers": ["mempalace"],
+        "max_iterations": 10,
+        "auto_search": true,
+        "auto_save": true
+      },
+      // Optional: long-term memory via mem0 OSS server (deprecated, use MCP instead)
       // "memory": {
       //   "url": "http://127.0.0.1:8081",
       //   "user_id": "default",
@@ -139,6 +149,15 @@
       ]
     }
   },
+
+  // MCP servers: connect Nenya to external MCP servers via HTTP+SSE proxy.
+  // Tools from these servers are injected into LLM requests for agents that reference them.
+  // "mcp_servers": {
+  //   "mempalace": {
+  //     "url": "http://localhost:6060",
+  //     "timeout": 30
+  //   }
+  // },
 
   "providers": {
     "gemini": {

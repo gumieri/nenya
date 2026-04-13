@@ -3,7 +3,7 @@
 ## Package Dependency DAG
 
 ```
-config → infra → stream → pipeline → resilience → providers → adapter → routing → gateway → proxy → cmd
+config → infra → stream → pipeline → resilience → providers → adapter → routing → gateway → proxy → mcp
 ```
 
 Each layer may only import from layers to its left. This prevents circular dependencies and keeps the codebase testable in isolation.
@@ -22,8 +22,9 @@ Each layer may only import from layers to its left. This prevents circular depen
 | `internal/adapter/` | Provider Adapter pattern: request mutation, auth injection, response mutation, error classification |
 | `internal/routing/` | Dynamic provider resolution, agent fallback chains, upstream request transformation, API key injection |
 | `internal/memory/` | mem0 OSS client: memory search, memory storage, content capture for streaming |
-| `internal/gateway/` | NenyaGateway struct, HTTP client configuration, token counting, memory client initialization |
-| `internal/proxy/` | HTTP handlers, content pipeline orchestration, upstream forwarding with retry, transparent SSE streaming |
+| `internal/mcp/` | MCP (Model Context Protocol) client: HTTP+SSE transport, tool discovery, tool call execution, OpenAI schema transformation |
+| `internal/gateway/` | NenyaGateway struct, HTTP client configuration, token counting, memory client initialization, MCP client initialization, MCP tool index |
+| `internal/proxy/` | HTTP handlers, content pipeline orchestration, upstream forwarding with retry, transparent SSE streaming, MCP multi-turn tool call loop, buffered SSE response |
 
 ## Request Lifecycle
 
@@ -31,49 +32,91 @@ Each layer may only import from layers to its left. This prevents circular depen
 Client Request
   │
   ├─ POST /v1/chat/completions
-   │   ├─ Auth check (Bearer token)
-   │   ├─ Parse JSON body, extract model
-   │   ├─ Classify client (IDE detection via User-Agent)
-   │   ├─ Resolve agent or provider
-   │   ├─ Response cache lookup (if enabled)
-   │   │   └─ HIT → replay cached SSE, done
-   │   ├─ Memory search (if agent has memory configured)
-   │   │   └─ Inject relevant memories as system message before last user message
-   │   ├─ Content pipeline (best-effort — failures logged, never block request):
-   │   │   ├─ Prefix cache optimizations
-   │   │   ├─ Tier-0 regex secret redaction (code-span-aware for IDE clients)
-   │   │   ├─ Text compaction (skipped for IDE clients)
-   │   │   ├─ Window compaction (if enabled)
-   │   │   ├─ 3-tier engine interception (soft/hard limits, code-aware prompt for IDEs)
+  │   ├─ Auth check (Bearer token)
+  │   ├─ Parse JSON body, extract model
+  │   ├─ Classify client (IDE detection via User-Agent)
+  │   ├─ Resolve agent or provider
+  │   ├─ Response cache lookup (if enabled)
+  │   │   └─ HIT → replay cached SSE, done
+  │   ├─ Memory search (if agent has memory configured)
+  │   │   └─ Inject relevant memories as system message before last user message
+  │   ├─ MCP auto-search (if agent has mcp.auto_search, queries MCP server)
+  │   │   └─ Inject relevant context as system message before last user message
+  │   ├─ MCP tool injection (if agent has MCP servers configured)
+  │   │   └─ Inject MCP tools as OpenAI function tools into request
+  │   ├─ Content pipeline (best-effort — failures logged, never block request):
+  │   │   ├─ Prefix cache optimizations
+  │   │   ├─ Tier-0 regex secret redaction (code-span-aware for IDE clients)
+  │   │   ├─ Text compaction (skipped for IDE clients)
+  │   │   ├─ Window compaction (if enabled)
+  │   │   ├─ 3-tier engine interception (soft/hard limits, code-aware prompt for IDEs)
   │   │   └─ JSON minification
-  │   ├─ Agent fallback loop:
-   │   │   ├─ Circuit breaker check (skip if Open/ForceOpen)
-   │   │   ├─ Circuit breaker re-check before send (skip if tripped during queue wait)
-   │   │   ├─ Rate limiter check
-  │   │   ├─ adapter.MutateRequest() (payload transform)
-  │   │   ├─ adapter.InjectAuth() (header signing)
-  │   │   ├─ HTTP POST to upstream
-  │   │   ├─ Error classification (adapter.NormalizeError)
-   │   │   │   ├─ ErrorRetryable → exponential backoff, retry
-   │   │   │   ├─ ErrorRateLimited → cooldown, retry with delay
-   │   │   │   ├─ ErrorQuotaExhausted → long cooldown
-   │   │   │   ├─ ErrorPermanent → try next target (or return error if no more targets)
-  │   │   └─ On success → circuit breaker.RecordSuccess()
-   │   └─ SSE stream pipeline:
-   │       ├─ stallReader (120s idle timeout)
-   │       ├─ SSETransformingReader (adapter.MutateResponse per chunk)
-   │       ├─ OnContent callback (capture assistant response for memory storage)
-   │       ├─ StreamFilter (blocked execution patterns)
-   │       ├─ immediateFlushWriter (Flush after every Write)
-   │       ├─ sseTeeWriter (capture for response cache)
-   │       └─ Async memory store (POST /memories after stream completes, best-effort)
-  │
+  │   ├─ MCP routing decision:
+  │   │   ├─ Agent has MCP tools → MCP multi-turn loop (see below)
+  │   │   └─ No MCP tools → standard forwarding (see below)
+  │   └─ Standard forwarding (no MCP):
+  │       ├─ Agent fallback loop:
+  │       │   ├─ Circuit breaker check (skip if Open/ForceOpen)
+  │       │   ├─ Circuit breaker re-check before send (skip if tripped during queue wait)
+  │       │   ├─ Rate limiter check
+  │       │   ├─ adapter.MutateRequest() (payload transform)
+  │       │   ├─ adapter.InjectAuth() (header signing)
+  │       │   ├─ HTTP POST to upstream
+  │       │   ├─ Error classification (adapter.NormalizeError)
+  │       │   │   ├─ ErrorRetryable → exponential backoff, retry
+  │       │   │   ├─ ErrorRateLimited → cooldown, retry with delay
+  │       │   │   ├─ ErrorQuotaExhausted → long cooldown
+  │       │   │   └─ ErrorPermanent → try next target (or return error if no more targets)
+  │       │   └─ On success → circuit breaker.RecordSuccess()
+  │   └─ MCP multi-turn forwarding:
+  │       ├─ Buffer upstream SSE response completely
+  │       ├─ Extract tool_calls from response
+  │       ├─ Partition into MCP tools vs client tools:
+  │       │   ├─ Has MCP tools → execute via MCP client (parallel), append results, re-send
+  │       │   ├─ Has client tools only → replay to client
+  │       │   └─ Mixed → resolve MCP, re-send (LLM may re-request client tools)
+  │       └─ Loop until: content response or max iterations reached
+  │           ├─ Content response → replay to client
+  │           └─ Max iterations → replay last response
+  ├─ SSE stream pipeline:
+  │       ├─ stallReader (120s idle timeout)
+  │       ├─ SSETransformingReader (adapter.MutateResponse per chunk)
+  │       ├─ OnContent callback (capture assistant response for memory storage)
+  │       ├─ StreamFilter (blocked execution patterns)
+  │       ├─ immediateFlushWriter (Flush after every Write)
+  │       ├─ sseTeeWriter (capture for response cache)
+  │       └─ Async memory store (POST /memories after stream completes, best-effort)
+  ├─ Async MCP auto-save (if agent has mcp.auto_save)
+  │       └─ POST add_drawer to MCP server with assistant content (best-effort)
   ├─ GET /v1/models
   ├─ POST /v1/embeddings
   ├─ POST /v1/responses (transparent passthrough, no content pipeline)
   ├─ GET /healthz
   └─ GET /statsz
 ```
+
+## MCP Multi-Turn Tool Call Flow
+
+When an agent has MCP servers configured, the LLM may respond with `tool_calls` targeting MCP tools. Nenya intercepts these locally:
+
+```
+Request with MCP tools injected
+  │
+  ├─ Buffer entire SSE response (no streaming to client yet)
+  ├─ Parse response for tool_calls
+  ├─ No tool_calls → replay buffered response to client, done
+  ├─ Only client tool_calls → replay to client, done
+  └─ Has MCP tool_calls:
+      ├─ Execute MCP tool calls in parallel
+      ├─ Append tool results to messages
+      └─ Re-send to upstream (loop up to max_iterations)
+```
+
+**Buffered mode**: When MCP tools are present, responses are buffered in memory rather than streamed to the client. This allows inspection for tool calls before the client sees anything. The final response (with no tool calls) is replayed as a complete SSE stream. Buffer size is bounded by `MaxBodyBytes`.
+
+**Tool name namespacing**: MCP tools are injected with the pattern `server__tool` (e.g., `mempalace__mempalace_search`). Non-MCP tool calls (from the client like `file_edit`) pass through unmodified.
+
+**Mixed tool calls**: If the LLM calls both MCP and client tools in the same response, MCP tools are resolved first and the entire response is re-sent. The LLM may re-request client-only tools in the next iteration.
 
 ## Engine Reference System
 
@@ -178,6 +221,15 @@ For agents with multiple models in a fallback chain, non-retryable errors (e.g.,
 ### Client Disconnect Cleanup
 
 When a client disconnects during SSE streaming, the upstream connection is aborted and a 5-second timeout ensures the stream copy goroutine doesn't leak indefinitely.
+
+### MCP Graceful Degradation
+
+MCP integration follows the same best-effort philosophy:
+
+- **Server unreachable**: If an MCP server is unreachable at startup, tools from that server are not injected. A warning is logged. Other MCP servers and the request itself proceed normally.
+- **Server goes down mid-session**: The MCP client's HTTP+SSE transport detects the disconnection. The tool index is still available from cache, but new tool calls to that server will fail with an error result. The error is returned as a tool result to the LLM, which can decide to retry or inform the user.
+- **Timeout**: Each MCP tool call has a 30s timeout (configurable per-server). Timeouts are returned as error results.
+- **Max iterations**: The MCP multi-turn loop has a configurable max iteration count (default: 10). When exhausted, the last buffered response is replayed to the client.
 
 ## IDE Compatibility
 

@@ -302,6 +302,8 @@ func (p *Proxy) streamResponse(w http.ResponseWriter, r *http.Request, target ro
 		if contentBuilder != nil {
 			p.asyncStoreMemory(agentName, contentBuilder.Build())
 		}
+
+		p.asyncMCPAutoSave(agentName, contentBuilder)
 	case <-r.Context().Done():
 		p.GW.Logger.Info("client disconnected, aborting upstream stream", "model", target.Model)
 		action.resp.Body.Close()
@@ -351,6 +353,49 @@ func (p *Proxy) asyncStoreMemory(agentName string, assistantContent string) {
 		if err := memClient.Add(context.Background(), msgs); err != nil {
 			p.GW.Logger.Warn("memory store failed (best-effort)",
 				"agent", agentName, "err", err)
+		}
+	}()
+}
+
+func (p *Proxy) asyncMCPAutoSave(agentName string, contentBuilder *memory.ContentBuilder) {
+	if agentName == "" || contentBuilder == nil {
+		return
+	}
+	agent, ok := p.GW.Config.Agents[agentName]
+	if !ok || agent.MCP == nil || !agent.MCP.AutoSave {
+		return
+	}
+
+	assistantContent := contentBuilder.Build()
+	if assistantContent == "" {
+		return
+	}
+
+	go func() {
+		for _, serverName := range agent.MCP.Servers {
+			client, ok := p.GW.MCPClients[serverName]
+			if !ok || !client.Ready() {
+				continue
+			}
+
+			ctx, cancel := context.WithTimeout(context.Background(), mcpExecTimeout)
+			defer cancel()
+
+			_, err := client.CallTool(ctx, "add_drawer", map[string]any{
+				"wing":    agentName,
+				"room":    "conversation",
+				"content": assistantContent,
+				"added_by": "nenya",
+			})
+			if err != nil {
+				p.GW.Logger.Warn("MCP auto-save failed (best-effort)",
+					"server", serverName, "agent", agentName, "err", err)
+			} else {
+				p.GW.Logger.Debug("MCP auto-save completed",
+					"server", serverName, "agent", agentName,
+					"content_len", len(assistantContent))
+			}
+			return
 		}
 	}()
 }

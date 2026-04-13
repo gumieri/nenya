@@ -14,6 +14,7 @@ import (
 	"nenya/internal/config"
 	"nenya/internal/gateway"
 	"nenya/internal/infra"
+	"nenya/internal/mcp"
 	"nenya/internal/memory"
 	"nenya/internal/pipeline"
 	"nenya/internal/routing"
@@ -111,6 +112,8 @@ func (p *Proxy) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 	if messagesRaw, ok := payload["messages"]; ok {
 		if messages, ok := messagesRaw.([]interface{}); ok && len(messages) > 0 {
 			p.injectMemoryContext(r.Context(), payload, messages, agentName)
+			p.injectAutoSearch(r.Context(), payload, messages, agentName)
+			p.injectMCPTools(payload, agentName)
 			windowMaxCtx := routing.ResolveWindowMaxContext(modelName, p.GW.Config.Agents)
 			profile := pipeline.ClassifyClient(r.Header)
 			if profile.IsIDE {
@@ -122,6 +125,11 @@ func (p *Proxy) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 		} else {
 			p.GW.Logger.Warn("messages field is not a non-empty array, skipping Ollama interception")
 		}
+	}
+
+	if p.hasMCPTools(agentName) {
+		p.forwardToUpstreamWithMCP(w, r, targets, payload, cooldownDuration, tokenCount, agentName, maxRetries, cacheKey)
+		return
 	}
 
 	p.forwardToUpstream(w, r, targets, payload, cooldownDuration, tokenCount, agentName, maxRetries, cacheKey)
@@ -551,4 +559,288 @@ func (p *Proxy) injectMemoryContext(ctx context.Context, payload map[string]inte
 	payload["messages"] = updated
 
 	p.GW.Logger.Debug("memory context injected", "agent", agentName, "memories", len(results))
+}
+
+func (p *Proxy) hasMCPTools(agentName string) bool {
+	if agentName == "" {
+		return false
+	}
+	agent, ok := p.GW.Config.Agents[agentName]
+	if !ok || agent.MCP == nil || len(agent.MCP.Servers) == 0 {
+		return false
+	}
+	return p.GW.MCPToolIndex != nil && len(p.GW.MCPToolIndex.AllRoutes()) > 0
+}
+
+func (p *Proxy) injectMCPTools(payload map[string]interface{}, agentName string) {
+	if agentName == "" {
+		return
+	}
+	agent, ok := p.GW.Config.Agents[agentName]
+	if !ok || agent.MCP == nil || len(agent.MCP.Servers) == 0 {
+		return
+	}
+
+	for _, serverName := range agent.MCP.Servers {
+		client, ok := p.GW.MCPClients[serverName]
+		if !ok || !client.Ready() {
+			p.GW.Logger.Warn("MCP server not available, skipping tool injection",
+				"server", serverName, "agent", agentName)
+			continue
+		}
+
+		tools := client.ListTools()
+		openaiTools := mcp.MCPToolsToOpenAI(serverName, tools)
+
+		existing, ok := payload["tools"].([]interface{})
+		if !ok {
+			existing = []interface{}{}
+		}
+
+		for _, t := range openaiTools {
+			existing = append(existing, t)
+		}
+
+		payload["tools"] = existing
+		p.GW.Logger.Debug("MCP tools injected",
+			"server", serverName, "tools", len(tools), "agent", agentName)
+	}
+}
+
+func (p *Proxy) injectAutoSearch(ctx context.Context, payload map[string]interface{}, messages []interface{}, agentName string) {
+	if agentName == "" {
+		return
+	}
+	agent, ok := p.GW.Config.Agents[agentName]
+	if !ok || agent.MCP == nil || !agent.MCP.AutoSearch {
+		return
+	}
+
+	if len(messages) == 0 {
+		return
+	}
+	lastMsg, ok := messages[len(messages)-1].(map[string]interface{})
+	if !ok {
+		return
+	}
+	lastRole, _ := lastMsg["role"].(string)
+	if lastRole != "user" {
+		return
+	}
+
+	query := gateway.ExtractContentText(lastMsg)
+	if query == "" {
+		return
+	}
+
+	for _, serverName := range agent.MCP.Servers {
+		client, ok := p.GW.MCPClients[serverName]
+		if !ok || !client.Ready() {
+			continue
+		}
+
+		result, err := client.CallTool(ctx, "search", map[string]any{
+			"query": query,
+			"limit": 5,
+		})
+		if err != nil {
+			p.GW.Logger.Warn("MCP auto-search failed, proceeding without",
+				"server", serverName, "agent", agentName, "err", err)
+			continue
+		}
+		if result == nil || result.Text() == "" {
+			continue
+		}
+
+		contextStr := fmt.Sprintf("[MemPalace context from %s]\n%s", serverName, result.Text())
+		memoryMsg := map[string]interface{}{
+			"role":    "system",
+			"content": contextStr,
+		}
+
+		updated := make([]interface{}, 0, len(messages)+1)
+		updated = append(updated, messages[:len(messages)-1]...)
+		updated = append(updated, memoryMsg)
+		updated = append(updated, messages[len(messages)-1:]...)
+		payload["messages"] = updated
+
+		p.GW.Logger.Debug("MCP auto-search context injected",
+			"server", serverName, "agent", agentName,
+			"result_len", len(result.Text()))
+		break
+	}
+}
+
+func (p *Proxy) forwardToUpstreamWithMCP(
+	w http.ResponseWriter,
+	r *http.Request,
+	targets []routing.UpstreamTarget,
+	payload map[string]interface{},
+	cooldownDuration time.Duration,
+	tokenCount int,
+	agentName string,
+	maxRetries int,
+	cacheKey string,
+) {
+	_, hasAgent := p.GW.Config.Agents[agentName]
+	maxIter := mcpMaxIterations
+	if hasAgent {
+		if agent := p.GW.Config.Agents[agentName]; agent.MCP != nil && agent.MCP.MaxIterations > 0 {
+			maxIter = agent.MCP.MaxIterations
+		}
+	}
+
+	originalPayload, err := json.Marshal(payload)
+	if err != nil {
+		p.GW.Logger.Error("failed to marshal payload for MCP loop", "err", err)
+		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+		return
+	}
+
+	var lastBuf *bufferedSSE
+
+	for iteration := 0; iteration < maxIter; iteration++ {
+		working := make(map[string]interface{})
+		if err := json.Unmarshal(originalPayload, &working); err != nil {
+			p.GW.Logger.Error("failed to unmarshal payload for MCP iteration", "err", err)
+			break
+		}
+
+		if iteration > 0 {
+			payload = working
+		} else {
+			// Use the already-parsed payload for first iteration
+			working = payload
+		}
+
+		buf, err := p.forwardBuffered(r, targets, working, cooldownDuration, tokenCount, agentName, maxRetries)
+		if err != nil {
+			p.GW.Logger.Warn("MCP loop: upstream failed, streaming last response",
+				"iteration", iteration, "err", err)
+			if lastBuf != nil {
+				replayBufferedResponse(w, lastBuf)
+				return
+			}
+			http.Error(w, "Upstream provider error", http.StatusInternalServerError)
+			return
+		}
+
+		allCalls := buf.toolCalls
+		if len(allCalls) == 0 {
+			replayBufferedResponse(w, buf)
+			p.recordMCPUsage(buf, agentName)
+			return
+		}
+
+		mcpCalls, nonMcpCalls := partitionMCPToolCalls(allCalls, p.GW.MCPToolIndex)
+
+		if len(mcpCalls) > 0 {
+			p.GW.Logger.Info("MCP tool calls intercepted",
+				"mcp_calls", len(mcpCalls),
+				"non_mcp_calls", len(nonMcpCalls),
+				"iteration", iteration+1,
+				"agent", agentName)
+
+			results := executeMCPCalls(r.Context(), mcpCalls, p)
+			appendMCPResults(working, mcpCalls, results)
+
+			updatedPayload, err := json.Marshal(working)
+			if err != nil {
+				p.GW.Logger.Error("failed to marshal updated payload for MCP loop", "err", err)
+				replayBufferedResponse(w, buf)
+				return
+			}
+			originalPayload = updatedPayload
+		}
+
+		if len(mcpCalls) == 0 && len(nonMcpCalls) > 0 {
+			replayBufferedResponse(w, buf)
+			p.recordMCPUsage(buf, agentName)
+			return
+		}
+
+		lastBuf = buf
+	}
+
+	if lastBuf != nil {
+		p.GW.Logger.Warn("MCP loop exhausted, replaying last response",
+			"max_iterations", maxIter, "agent", agentName)
+		replayBufferedResponse(w, lastBuf)
+		p.recordMCPUsage(lastBuf, agentName)
+		return
+	}
+
+	http.Error(w, "MCP loop ended without response", http.StatusInternalServerError)
+}
+
+func (p *Proxy) forwardBuffered(
+	r *http.Request,
+	targets []routing.UpstreamTarget,
+	payload map[string]interface{},
+	cooldownDuration time.Duration,
+	tokenCount int,
+	agentName string,
+	maxRetries int,
+) (*bufferedSSE, error) {
+	originalPayload, err := json.Marshal(payload)
+	if err != nil {
+		return nil, fmt.Errorf("marshal payload: %w", err)
+	}
+
+	if p.GW.Config.Compaction.Enabled && p.GW.Config.Compaction.JSONMinify {
+		minified := bytes.NewBuffer(make([]byte, 0, len(originalPayload)))
+		if err := json.Compact(minified, originalPayload); err == nil {
+			originalPayload = minified.Bytes()
+		}
+	}
+
+	for i, target := range targets {
+		workingPayload := make(map[string]interface{})
+		if err := json.Unmarshal(originalPayload, &workingPayload); err != nil {
+			p.GW.Logger.Error("failed to unmarshal payload for target",
+				"target", i+1, "total", len(targets), "err", err)
+			continue
+		}
+
+		action := p.prepareAndSend(r, i, targets, target, workingPayload, cooldownDuration, tokenCount, agentName)
+		switch action.kind {
+		case actionContinue:
+			continue
+		case actionError:
+			action.body, _ = io.ReadAll(io.LimitReader(action.resp.Body, pipeline.MaxErrorBodyBytes))
+			action.resp.Body.Close()
+			shouldRetry, retryDelay := p.handleUpstreamError(i, targets, target, cooldownDuration, agentName, action)
+			action.cancel()
+			if shouldRetry {
+				if retryDelay > 0 {
+					waitWithCancel(r.Context(), retryDelay)
+				} else {
+					backoff := calculateBackoff(0)
+					waitWithCancel(r.Context(), backoff)
+				}
+				continue
+			}
+			return nil, fmt.Errorf("upstream error: status %d", action.resp.StatusCode)
+		case actionStream:
+			defer action.cancel()
+			buf, err := bufferStreamResponse(r.Context(), action.resp.Body)
+			action.resp.Body.Close()
+			if err != nil {
+				p.GW.AgentState.RecordSuccess(target.CoolKey)
+				return nil, fmt.Errorf("buffering response: %w", err)
+			}
+			p.GW.AgentState.RecordSuccess(target.CoolKey)
+			return buf, nil
+		}
+	}
+
+	return nil, fmt.Errorf("all upstream targets exhausted")
+}
+
+func (p *Proxy) recordMCPUsage(buf *bufferedSSE, agentName string) {
+	// Usage is tracked by the upstream forwarding, but for MCP loop
+	// iterations, we should record the token usage from the final response
+	// via the existing stream metrics if available
+	_ = buf
+	_ = agentName
 }

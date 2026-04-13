@@ -1,5 +1,7 @@
 # Memory Integration (mem0)
 
+> **Note:** mem0 integration is deprecated in favor of MCP (Model Context Protocol) integration. MCP provides richer tool access including semantic search, auto-save, and structured storage. See [MCP Integration](MCP_INTEGRATION.md) for the recommended approach. The mem0 client remains functional for backward compatibility.
+
 Nenya integrates with [mem0](https://github.com/mem0ai/mem0) to provide long-term memory for AI agents. When configured, agents automatically search for relevant past memories before each request and store conversation history after each response — all transparently to the client.
 
 ## How It Works
