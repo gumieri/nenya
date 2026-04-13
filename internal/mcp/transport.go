@@ -262,7 +262,11 @@ func (t *HTTPTransport) SendRequest(ctx context.Context, method string, params a
 		return nil, fmt.Errorf("reading MCP response: %w", err)
 	}
 
-	if httpResp.StatusCode != http.StatusOK && httpResp.StatusCode != http.StatusAccepted {
+	if httpResp.StatusCode == http.StatusAccepted {
+		return t.waitForJSONRPCResponse(postCtx, ch)
+	}
+
+	if httpResp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("MCP endpoint returned status %d: %s", httpResp.StatusCode, string(body))
 	}
 
@@ -283,13 +287,16 @@ func (t *HTTPTransport) SendRequest(ctx context.Context, method string, params a
 		return &rpcResp, nil
 	}
 
+	return t.waitForJSONRPCResponse(postCtx, ch)
+}
+
+func (t *HTTPTransport) waitForJSONRPCResponse(ctx context.Context, ch chan *Response) (*Response, error) {
 	select {
 	case result := <-ch:
 		return result, nil
-	case <-postCtx.Done():
-		if ctx.Err() != nil {
-			return nil, ctx.Err()
-		}
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case <-time.After(t.cfg.RequestTimeout):
 		return nil, ErrRequestTimeout
 	}
 }
