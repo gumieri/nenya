@@ -108,6 +108,24 @@ EOF
 )"
 ```
 
+### Tier 3 (TF-IDF Truncation) – Relevance-scored pruning
+When `tfidf_query_source` is set in governance, TF-IDF scores content blocks by relevance to prior messages:
+```bash
+curl -X POST http://localhost:8080/v1/chat/completions \
+  -H "Authorization: Bearer test-client-token" \
+  -H "Content-Type: application/json" \
+  -d "$(cat <<EOF
+{
+  "model": "glm-5",
+  "messages": [
+    {"role": "user", "content": "fix the login handler JWT validation"},
+    {"role": "user", "content": "$HUGE_PAYLOAD"}
+  ]
+}
+EOF
+)"
+```
+
 ## Observing Logs
 
 The gateway logs to stdout. Look for indicators:
@@ -115,6 +133,8 @@ The gateway logs to stdout. Look for indicators:
 - `[INFO] Payload within soft limit` – Tier 1 (pass‑through)
 - `[WARN] Payload exceeds soft limit, sending to Ollama` – Tier 2 (Ollama only)
 - `[WARN] Payload exceeds hard limit, applying middle‑out truncation` – Tier 3 (truncate + Ollama)
+- `[INFO] TF-IDF truncation enabled` – Tier 3 with TF-IDF relevance scoring
+- `[INFO] TF-IDF reduced payload below soft limit, skipping engine` – TF-IDF eliminated the need for engine call
 - `[RATELIMIT] RPM limit exceeded` – Rate limiting active
 - `[INFO] response cache hit` – Cached response replayed
 - `[WARN] [CIRCUIT BREAKER]` – Circuit tripped or recovering

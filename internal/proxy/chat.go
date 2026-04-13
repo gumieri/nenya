@@ -243,6 +243,7 @@ func (p *Proxy) applyContentPipeline(ctx context.Context, payload map[string]int
 
 	var processed string
 	var needsUpdate bool
+	var truncated string
 
 	if contentRunes < softLimit {
 		p.GW.Logger.Debug("payload within soft limit, passing through",
@@ -266,24 +267,42 @@ func (p *Proxy) applyContentPipeline(ctx context.Context, payload map[string]int
 		if p.GW.Metrics != nil {
 			p.GW.Metrics.RecordInterception("hard_limit")
 		}
-		var truncated string
-		if profile.IsIDE {
-			truncated = pipeline.TruncateMiddleOutCodeAware(textForInterception, hardLimit, p.GW.Config.Governance)
-		} else {
-			truncated = pipeline.TruncateMiddleOut(textForInterception, hardLimit, p.GW.Config.Governance)
-		}
-		summarized, err := p.summarizeWithOllama(ctx, truncated, profile.IsIDE)
-		if err != nil {
-			if p.GW.Config.SecurityFilter.SkipOnEngineFailure {
-				p.GW.Logger.Warn("engine summarization failed, skip_on_engine_failure=true, forwarding original payload", "err", err)
+
+		querySource := p.GW.Config.Governance.TFIDFQuerySource
+		if querySource != "" {
+			var query string
+			switch querySource {
+			case "prior_messages":
+				query = pipeline.ExtractPriorUserMessages(messages[:len(messages)-1], 5)
+			case "self":
+				query = pipeline.ExtractSelfQuery(textForInterception, 500)
+			}
+			p.GW.Logger.Info("TF-IDF truncation enabled",
+				"query_source", querySource,
+				"query_len", utf8.RuneCountInString(query),
+				"input_runes", contentRunes)
+
+			if profile.IsIDE {
+				truncated = pipeline.TruncateTFIDFCodeAware(textForInterception, hardLimit, query, p.GW.Config.Governance)
 			} else {
-				p.GW.Logger.Warn("engine summarization failed after truncation, forwarding truncated", "err", err)
-				processed = fmt.Sprintf("[Nenya Truncated (engine unreachable)]:\n%s", truncated)
+				truncated = pipeline.TruncateTFIDF(textForInterception, hardLimit, query, p.GW.Config.Governance)
+			}
+
+			if utf8.RuneCountInString(truncated) < softLimit {
+				p.GW.Logger.Info("TF-IDF reduced payload below soft limit, skipping engine",
+					"truncated_runes", utf8.RuneCountInString(truncated), "soft_limit", softLimit)
+				processed = fmt.Sprintf("[Nenya TF-IDF Pruned]:\n%s", truncated)
 				needsUpdate = true
+			} else {
+				processed, needsUpdate = p.summarizeOrForward(ctx, truncated, profile.IsIDE, "TF-IDF Pruned")
 			}
 		} else {
-			processed = fmt.Sprintf("[Nenya Sanitized via Ollama (truncated input)]:\n%s", summarized)
-			needsUpdate = true
+			if profile.IsIDE {
+				truncated = pipeline.TruncateMiddleOutCodeAware(textForInterception, hardLimit, p.GW.Config.Governance)
+			} else {
+				truncated = pipeline.TruncateMiddleOut(textForInterception, hardLimit, p.GW.Config.Governance)
+			}
+			processed, needsUpdate = p.summarizeOrForward(ctx, truncated, profile.IsIDE, "Truncated")
 		}
 	}
 
@@ -323,6 +342,19 @@ func (p *Proxy) summarizeWithOllama(ctx context.Context, heavyText string, isIDE
 			return routing.InjectAPIKey(providerName, p.GW.Providers, headers)
 		},
 		"security_filter", agentName, systemPrompt, heavyText)
+}
+
+func (p *Proxy) summarizeOrForward(ctx context.Context, truncated string, isIDE bool, label string) (string, bool) {
+	summarized, err := p.summarizeWithOllama(ctx, truncated, isIDE)
+	if err != nil {
+		if p.GW.Config.SecurityFilter.SkipOnEngineFailure {
+			p.GW.Logger.Warn("engine summarization failed, skip_on_engine_failure=true, forwarding original payload", "err", err)
+			return "", false
+		}
+		p.GW.Logger.Warn("engine summarization failed after truncation, forwarding truncated", "err", err)
+		return fmt.Sprintf("[Nenya %s (engine unreachable)]:\n%s", label, truncated), true
+	}
+	return fmt.Sprintf("[Nenya Sanitized via Ollama (%s input)]:\n%s", label, summarized), true
 }
 
 func (p *Proxy) handleEmbeddings(w http.ResponseWriter, r *http.Request) {

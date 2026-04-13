@@ -68,6 +68,17 @@ func ApplyWindowCompaction(ctx context.Context, deps WindowDeps, payload map[str
 	switch windowCfg.Mode {
 	case "truncate":
 		summary = TruncateHistory(historyText, windowCfg.SummaryMaxRunes)
+	case "tfidf":
+		var query string
+		for i := len(active) - 1; i >= 0; i-- {
+			if msg, ok := active[i].(map[string]interface{}); ok {
+				if role, _ := msg["role"].(string); role == "user" {
+					query = ExtractContentText(msg)
+					break
+				}
+			}
+		}
+		summary = TruncateTFIDFHistory(historyText, windowCfg.SummaryMaxRunes, query)
 	case "summarize", "":
 		defaultPrompt := fmt.Sprintf(WindowSystemPrompt, windowCfg.SummaryMaxRunes)
 		ref := windowCfg.Engine

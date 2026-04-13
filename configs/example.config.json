@@ -13,6 +13,14 @@
     "keep_first_percent": 15.0,
     "keep_last_percent": 25.0
 
+    // Enable TF-IDF relevance-scored truncation for Tier 3 (payloads above context_hard_limit).
+    // When set, content is split into blocks (paragraphs + code fences) and scored by relevance
+    // to the user's query terms. Blocks with the lowest scores are discarded first.
+    // If the pruned payload falls below context_soft_limit, the engine (Ollama) call is skipped entirely.
+    // Options: "" (disabled, use middle-out), "prior_messages" (use previous user messages as query),
+    // "self" (use first 500 runes of the massive message as query).
+    // "tfidf_query_source": "prior_messages",
+
     // Retryable upstream HTTP status codes. WARNING: setting this field REPLACES the built-in
     // defaults entirely. You must include all codes you want retryable. Built-in defaults:
     // [429, 500, 502, 503, 504]. Example to also retry on 400 and 413:
