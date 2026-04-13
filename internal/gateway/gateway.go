@@ -1,6 +1,7 @@
 package gateway
 
 import (
+	"context"
 	"encoding/json"
 	"log/slog"
 	"net"
@@ -13,6 +14,7 @@ import (
 	"nenya/internal/adapter"
 	"nenya/internal/config"
 	"nenya/internal/infra"
+	"nenya/internal/mcp"
 	"nenya/internal/memory"
 	"nenya/internal/routing"
 )
@@ -33,6 +35,8 @@ type NenyaGateway struct {
 	ThoughtSigCache *infra.ThoughtSignatureCache
 	ResponseCache   *infra.ResponseCache
 	MemoryClients   map[string]*memory.Mem0Client
+	MCPClients      map[string]*mcp.Client
+	MCPToolIndex    *mcp.ToolRegistry
 }
 
 func New(cfg config.Config, secrets *config.SecretsConfig, logger *slog.Logger) *NenyaGateway {
@@ -121,7 +125,11 @@ func New(cfg config.Config, secrets *config.SecretsConfig, logger *slog.Logger) 
 		ThoughtSigCache: infra.NewThoughtSignatureCache(1000, 30*time.Minute),
 		ResponseCache:   newResponseCache(cfg, logger),
 		MemoryClients:   buildMemoryClients(cfg, secrets, logger),
+		MCPClients:      buildMCPClients(cfg, logger),
+		MCPToolIndex:    mcp.NewToolRegistry(),
 	}
+
+	gw.buildMCPToolIndex(logger)
 
 	gw.Metrics = infra.NewMetrics()
 	gw.Metrics.RateLimits = gw.RateLimiter.Snapshot
@@ -223,6 +231,10 @@ func (g *NenyaGateway) Close() {
 	if g.ResponseCache != nil {
 		g.ResponseCache.Stop()
 	}
+	for name, client := range g.MCPClients {
+		client.Close()
+		g.Logger.Debug("MCP client closed", "server", name)
+	}
 }
 
 func buildMemoryClients(cfg config.Config, secrets *config.SecretsConfig, logger *slog.Logger) map[string]*memory.Mem0Client {
@@ -241,4 +253,71 @@ func buildMemoryClients(cfg config.Config, secrets *config.SecretsConfig, logger
 		logger.Info("memory client initialized", "agent", agentName, "url", memCfg.URL)
 	}
 	return clients
+}
+
+func buildMCPClients(cfg config.Config, logger *slog.Logger) map[string]*mcp.Client {
+	clients := make(map[string]*mcp.Client)
+	for name, serverCfg := range cfg.MCPServers {
+		if serverCfg.URL == "" {
+			logger.Warn("MCP server has empty URL, skipping", "server", name)
+			continue
+		}
+		client := mcp.NewClient(mcp.ClientConfig{
+			Name:    "nenya",
+			URL:     serverCfg.URL,
+			Headers: serverCfg.Headers,
+			Logger:  logger,
+		})
+		clients[name] = client
+	}
+	return clients
+}
+
+func (g *NenyaGateway) buildMCPToolIndex(logger *slog.Logger) {
+	for name, client := range g.MCPClients {
+		ctx, cancel := contextWithTimeout(10 * time.Second)
+		err := client.Initialize(ctx)
+		cancel()
+		if err != nil {
+			logger.Warn("MCP client initialization failed, skipping",
+				"server", name, "err", err)
+			continue
+		}
+
+		ctx, cancel = contextWithTimeout(15 * time.Second)
+		tools, err := client.RefreshTools(ctx)
+		cancel()
+		if err != nil {
+			logger.Warn("MCP tool list refresh failed",
+				"server", name, "err", err)
+			continue
+		}
+
+		g.MCPToolIndex.Register(name, tools)
+		logger.Info("MCP server connected",
+			"server", name,
+			"tools", len(tools),
+			"server_version", client.ServerInfo().Version)
+	}
+}
+
+func (g *NenyaGateway) GetMCPClientsForAgent(agentName string) map[string]*mcp.Client {
+	agent, ok := g.Config.Agents[agentName]
+	if !ok || agent.MCP == nil || len(agent.MCP.Servers) == 0 {
+		return nil
+	}
+	clients := make(map[string]*mcp.Client, len(agent.MCP.Servers))
+	for _, serverName := range agent.MCP.Servers {
+		if client, ok := g.MCPClients[serverName]; ok {
+			clients[serverName] = client
+		}
+	}
+	if len(clients) == 0 {
+		return nil
+	}
+	return clients
+}
+
+func contextWithTimeout(d time.Duration) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.Background(), d)
 }
