@@ -112,6 +112,7 @@ type GovernanceConfig struct {
 	KeepFirstPercent         float64  `json:"keep_first_percent"`
 	KeepLastPercent          float64  `json:"keep_last_percent"`
 	RetryableStatusCodes     []int    `json:"retryable_status_codes"`
+	TFIDFQuerySource         string   `json:"tfidf_query_source"`
 	rpmSet                   bool     `json:"-"`
 	tpmSet                   bool     `json:"-"`
 }

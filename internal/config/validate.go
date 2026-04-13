@@ -30,6 +30,12 @@ func ValidateConfiguration(cfg *Config, secrets *SecretsConfig, logger *slog.Log
 
 	errors := []string{}
 
+	switch cfg.Governance.TFIDFQuerySource {
+	case "", "prior_messages", "self":
+	default:
+		errors = append(errors, fmt.Sprintf("governance.tfidf_query_source: invalid value %q, must be empty, \"prior_messages\", or \"self\"", cfg.Governance.TFIDFQuerySource))
+	}
+
 	if err := ValidatePatterns("security_filter.patterns", cfg.SecurityFilter.Patterns, logger); err != nil {
 		errors = append(errors, err.Error())
 	}

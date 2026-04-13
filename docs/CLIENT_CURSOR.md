@@ -66,7 +66,7 @@ Cursor is detected as an IDE client via `User-Agent`. The following pipeline ada
 |-------|----------|
 | **Secret redaction** | Regex redaction skips code inside markdown fences (` ``` `). Prose and documentation outside code blocks are still redacted. |
 | **Text compaction** | **Skipped**. Cursor carefully formats payloads with line-number references; collapsing whitespace would break them. |
-| **Truncation** | Code-boundary aware — cuts at blank-line boundaries between functions/blocks instead of mid-character. |
+| **Truncation** | Code-boundary aware — cuts at blank-line boundaries between functions/blocks. When `tfidf_query_source` is set, uses TF-IDF relevance scoring to keep the most relevant blocks instead. |
 | **Engine summarization** | Uses code-preserving prompt — only redacts secrets in prose, never restructures or summarizes code. |
 | **Tool calls** | `tool_calls`, `tool_call_id`, `function_call` pass through unmodified. |
 
@@ -119,6 +119,6 @@ Cursor sends full file contents, git diffs, and multi-file context. This can eas
 
 1. **Below soft limit**: pass through unchanged
 2. **Between soft/hard**: send to Ollama for privacy-preserving summarization (code structure preserved for IDE clients)
-3. **Above hard limit**: truncate at code-boundary blanks, then summarize
+3. **Above hard limit**: truncate (TF-IDF relevance-scored when `tfidf_query_source` is set, otherwise code-boundary middle-out), then summarize. If TF-IDF reduces payload below `context_soft_limit`, engine call is skipped entirely.
 
 If Ollama is unavailable and `skip_on_engine_failure` is `true` (default), the original payload is forwarded unchanged.

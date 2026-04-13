@@ -104,7 +104,7 @@ When OpenCode is detected as an IDE client:
 |-------|----------|
 | **Secret redaction** | Regex redaction skips code inside markdown fences. Prose outside code blocks is still redacted. |
 | **Text compaction** | **Skipped**. Preserves whitespace and line-number references in code payloads. |
-| **Truncation** | Code-boundary aware — cuts at blank-line boundaries between functions/blocks. |
+| **Truncation** | Code-boundary aware — cuts at blank-line boundaries. When `tfidf_query_source` is set, uses TF-IDF relevance scoring instead. |
 | **Engine summarization** | Uses code-preserving prompt — only redacts secrets in prose, never restructures code. |
 | **Tool calls** | `tool_calls`, `tool_call_id`, `function_call` pass through unmodified. |
 
