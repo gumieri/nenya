@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 
+	"nenya/internal/mcp"
 	"nenya/internal/memory"
 )
 
@@ -26,6 +27,7 @@ type AgentConfig struct {
 	SystemPromptFile string              `json:"system_prompt_file"`
 	Models           []AgentModel        `json:"models"`
 	Memory           *memory.MemoryConfig `json:"memory,omitempty"`
+	MCP              *AgentMCPConfig      `json:"mcp,omitempty"`
 }
 
 func (a *AgentConfig) UnmarshalJSON(data []byte) error {
@@ -91,6 +93,7 @@ type Config struct {
 	Compaction     CompactionConfig          `json:"compaction"`
 	Window         WindowConfig              `json:"window"`
 	ResponseCache  ResponseCacheConfig       `json:"response_cache"`
+	MCPServers     map[string]MCPServerConfig `json:"mcp_servers,omitempty"`
 	Agents         map[string]AgentConfig    `json:"agents"`
 	Providers      map[string]ProviderConfig `json:"providers"`
 }
@@ -331,4 +334,21 @@ type WindowConfig struct {
 	SummaryMaxRunes int       `json:"summary_max_runes"`
 	MaxContext      int       `json:"max_context"`
 	Engine          EngineRef `json:"engine"`
+}
+
+type MCPServerConfig struct {
+	URL     string            `json:"url"`
+	Headers map[string]string `json:"headers,omitempty"`
+	Timeout int               `json:"timeout,omitempty"`
+}
+
+type AgentMCPConfig struct {
+	Servers       []string `json:"servers"`
+	MaxIterations int      `json:"max_iterations,omitempty"`
+	AutoSave      bool     `json:"auto_save,omitempty"`
+	AutoSearch    bool     `json:"auto_search,omitempty"`
+}
+
+type MCPClientsConfig struct {
+	Clients map[string]*mcp.Client `json:"-"`
 }

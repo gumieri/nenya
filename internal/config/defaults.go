@@ -161,6 +161,16 @@ func ApplyDefaults(cfg *Config) error {
 	if cfg.Providers == nil {
 		cfg.Providers = make(map[string]ProviderConfig)
 	}
+
+	for name, agent := range cfg.Agents {
+		if agent.MCP != nil {
+			if agent.MCP.MaxIterations <= 0 {
+				agent.MCP.MaxIterations = 10
+				cfg.Agents[name] = agent
+			}
+		}
+	}
+
 	for name, builtIn := range BuiltInProviders() {
 		if _, exists := cfg.Providers[name]; !exists {
 			cfg.Providers[name] = builtIn
