@@ -58,3 +58,35 @@ CGO_ENABLED=0 GOOS=linux  GOARCH=arm64 go build -o nenya-linux-arm64  ./cmd/neny
 CGO_ENABLED=0 GOOS=darwin GOARCH=amd64 go build -o nenya-darwin-amd64 ./cmd/nenya
 CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build -o nenya-darwin-arm64  ./cmd/nenya
 """
+
+[tasks.mcp-build]
+description = "Build MCP transport only (quick compile check, bypasses rtk)"
+run = "GOOS=$(go env GOOS) GOARCH=$(go env GOARCH) /home/rafael/.local/share/mise/installs/go/1.26.1/bin/go build ./internal/mcp/"
+
+[tasks.mcp-test]
+description = "Run MCP package tests (bypasses rtk)"
+run = "/home/rafael/.local/share/mise/installs/go/1.26.1/bin/go test -v -count=1 ./internal/mcp/"
+
+[tasks.mcp-proxy-test]
+description = "Run MCP proxy/tool execution tests (bypasses rtk)"
+run = "/home/rafael/.local/share/mise/installs/go/1.26.1/bin/go test -v -count=1 ./internal/proxy/ -run 'MCP|Tool'"
+
+[tasks.mcp-all]
+description = "Run all MCP-related tests (bypasses rtk)"
+depends = ["mcp-build", "mcp-test", "mcp-proxy-test"]
+
+[tasks.raw-build]
+description = "Build binary using direct go path (bypasses rtk)"
+run = "/home/rafael/.local/share/mise/installs/go/1.26.1/bin/go build -o nenya ./cmd/nenya"
+
+[tasks.raw-test]
+description = "Run all tests using direct go path (bypasses rtk)"
+run = "/home/rafael/.local/share/mise/installs/go/1.26.1/bin/go test -count=1 ./..."
+
+[tasks.raw-test-mcp]
+description = "Run only MCP package tests (bypasses rtk)"
+run = "/home/rafael/.local/share/mise/installs/go/1.26.1/bin/go test -v -count=1 ./internal/mcp/"
+
+[tasks.raw-vet]
+description = "Run go vet using direct go path (bypasses rtk)"
+run = "/home/rafael/.local/share/mise/installs/go/1.26.1/bin/go vet ./..."

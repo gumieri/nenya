@@ -60,6 +60,7 @@ type HTTPTransport struct {
 	ready    atomic.Bool
 
 	sessionEndpoint string
+	sseCancel       context.CancelFunc
 
 	pendingMu  sync.Mutex
 	pending    map[int64]chan *Response
@@ -110,9 +111,6 @@ func (t *HTTPTransport) Connect(ctx context.Context) error {
 		return fmt.Errorf("invalid MCP server URL: %w", err)
 	}
 
-	connectCtx, cancel := context.WithTimeout(ctx, t.cfg.ConnectTimeout)
-	defer cancel()
-
 	sseURL := baseURL.String()
 	if !strings.HasSuffix(sseURL, "/sse") && !strings.HasSuffix(sseURL, "/") {
 		sseURL += "/sse"
@@ -122,19 +120,23 @@ func (t *HTTPTransport) Connect(ctx context.Context) error {
 
 	t.cfg.Logger.Debug("connecting to MCP SSE endpoint", "url", sseURL)
 
-	req, err := http.NewRequestWithContext(connectCtx, http.MethodGet, sseURL, nil)
+	sseCtx, sseCancel := context.WithTimeout(context.Background(), t.cfg.ConnectTimeout)
+	req, err := http.NewRequestWithContext(sseCtx, http.MethodGet, sseURL, nil)
 	if err != nil {
+		sseCancel()
 		return fmt.Errorf("creating SSE request: %w", err)
 	}
 	t.setHeaders(req)
 
 	resp, err := t.httpClient.Do(req)
 	if err != nil {
+		sseCancel()
 		return fmt.Errorf("SSE connection failed: %w", err)
 	}
 
 	if resp.StatusCode != http.StatusOK {
 		resp.Body.Close()
+		sseCancel()
 		return fmt.Errorf("SSE connection returned status %d", resp.StatusCode)
 	}
 
@@ -143,11 +145,11 @@ func (t *HTTPTransport) Connect(ctx context.Context) error {
 	t.mu.Unlock()
 
 	sseReader := bufio.NewReader(resp.Body)
-	endpointCtx := connectCtx
 
 	for {
 		line, err := sseReader.ReadString('\n')
 		if err != nil {
+			sseCancel()
 			resp.Body.Close()
 			return fmt.Errorf("reading SSE endpoint event: %w", err)
 		}
@@ -183,14 +185,15 @@ func (t *HTTPTransport) Connect(ctx context.Context) error {
 			t.mu.Unlock()
 
 			t.cfg.Logger.Debug("received MCP session endpoint", "endpoint", endpointURL)
+
+			t.sseCancel = sseCancel
+			go t.sseReadLoop(sseReader)
+			go t.eventDispatchLoop()
+
 			break
 		}
 	}
 
-	go t.sseReadLoop(sseReader)
-	go t.eventDispatchLoop()
-
-	_ = endpointCtx
 	t.ready.Store(true)
 	return nil
 }
@@ -343,6 +346,10 @@ func (t *HTTPTransport) Close() error {
 	t.closeOnce.Do(func() {
 		t.closed.Store(true)
 		t.ready.Store(false)
+
+		if t.sseCancel != nil {
+			t.sseCancel()
+		}
 		close(t.closeCh)
 
 		t.pendingMu.Lock()
