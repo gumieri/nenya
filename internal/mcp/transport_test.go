@@ -511,9 +511,268 @@ func TestHTTPTransport_HeadersPassed(t *testing.T) {
 		URL:    mock.server.URL + "/sse",
 		Logger: newTestLogger(),
 		Headers: map[string]string{
-			"X-Custom-Auth": "test-token",
+			"X-Custom-Auth": "[REDACTED]",
 			"X-Request-Id":  "req-123",
 		},
+	})
+
+	if err := transport.Connect(t.Context()); err != nil {
+		t.Fatalf("Connect failed: %v", err)
+	}
+	defer transport.Close()
+
+	resp, err := transport.SendRequest(t.Context(), "ping", nil)
+	if err != nil {
+		t.Fatalf("SendRequest failed: %v", err)
+	}
+
+	resultMap, ok := resp.Result.(map[string]any)
+	if !ok {
+		t.Fatalf("expected map result, got %T", resp.Result)
+	}
+	if status, _ := resultMap["status"].(string); status != "ok" {
+		t.Fatalf("status = %q, want %q", status, "ok")
+	}
+}
+
+type proxyMockMCPServer struct {
+	t       *testing.T
+	mu      sync.Mutex
+	sseCh   chan sseOutgoing
+	server  *httptest.Server
+}
+
+type sseOutgoing struct {
+	data string
+}
+
+func newProxyMockMCPServer(t *testing.T) *proxyMockMCPServer {
+	t.Helper()
+	pm := &proxyMockMCPServer{
+		t:     t,
+		sseCh: make(chan sseOutgoing, 64),
+	}
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/sse", pm.handleSSE)
+	mux.HandleFunc("/message", pm.handleMessage)
+	pm.server = httptest.NewServer(mux)
+	t.Cleanup(func() { pm.server.Close() })
+
+	return pm
+}
+
+func (pm *proxyMockMCPServer) handleSSE(w http.ResponseWriter, r *http.Request) {
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		pm.t.Fatal("proxy mock: response writer not a flusher")
+	}
+
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	w.WriteHeader(http.StatusOK)
+	flusher.Flush()
+
+	endpointURL := pm.server.URL + "/message"
+	fmt.Fprintf(w, "event: endpoint\ndata: %s\n\n", endpointURL)
+	flusher.Flush()
+
+	for {
+		select {
+		case <-r.Context().Done():
+			return
+		case msg := <-pm.sseCh:
+			fmt.Fprintf(w, "event: message\ndata: %s\n\n", msg.data)
+			flusher.Flush()
+		}
+	}
+}
+
+func (pm *proxyMockMCPServer) handleMessage(w http.ResponseWriter, r *http.Request) {
+	var req Request
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid JSON-RPC", http.StatusBadRequest)
+		return
+	}
+
+	switch req.Method {
+	case "initialize":
+		result := InitializeResult{
+			ProtocolVersion: "2025-03-26",
+			Capabilities:    ServerCapabilities{Tools: &ToolsCapability{}},
+			ServerInfo:      ImplementationInfo{Name: "proxy-mock", Version: "0.1.0"},
+		}
+		resp := Response{JSONRPC: JSONRPCVersion2, ID: req.ID, Result: result}
+		respBytes, _ := json.Marshal(resp)
+		pm.sseCh <- sseOutgoing{data: string(respBytes)}
+
+	case "tools/list":
+		resp := Response{
+			JSONRPC: JSONRPCVersion2,
+			ID:      req.ID,
+			Result: ListToolsResult{Tools: []Tool{
+				{
+					Name:        "proxy_tool",
+					Description: "A proxy tool",
+					InputSchema: InputSchema{Type: "object", Properties: map[string]any{
+						"query": map[string]any{"type": "string"},
+					}},
+				},
+			}},
+		}
+		respBytes, _ := json.Marshal(resp)
+		pm.sseCh <- sseOutgoing{data: string(respBytes)}
+
+	case "tools/call":
+		var params CallToolParams
+		paramsBytes, _ := json.Marshal(req.Params)
+		json.Unmarshal(paramsBytes, &params)
+		resp := Response{
+			JSONRPC: JSONRPCVersion2,
+			ID:      req.ID,
+			Result: &CallToolResult{
+				Content: []ContentBlock{{Type: "text", Text: fmt.Sprintf("proxy result for: %s", params.Name)}},
+			},
+		}
+		respBytes, _ := json.Marshal(resp)
+		pm.sseCh <- sseOutgoing{data: string(respBytes)}
+
+	case "ping":
+		resp := Response{JSONRPC: JSONRPCVersion2, ID: req.ID, Result: map[string]string{"status": "ok"}}
+		respBytes, _ := json.Marshal(resp)
+		pm.sseCh <- sseOutgoing{data: string(respBytes)}
+
+	case "notifications/initialized":
+	default:
+		resp := Response{
+			JSONRPC: JSONRPCVersion2,
+			ID:      req.ID,
+			Error:   &Error{Code: ErrCodeMethodNotFound, Message: "unknown method"},
+		}
+		respBytes, _ := json.Marshal(resp)
+		pm.sseCh <- sseOutgoing{data: string(respBytes)}
+	}
+
+	w.WriteHeader(http.StatusAccepted)
+	fmt.Fprint(w, "Accepted")
+}
+
+func TestHTTPTransport_ProxyMode_Initialize(t *testing.T) {
+	proxy := newProxyMockMCPServer(t)
+
+	transport := NewHTTPTransport(TransportConfig{
+		URL:    proxy.server.URL + "/sse",
+		Logger: newTestLogger(),
+	})
+
+	if err := transport.Connect(t.Context()); err != nil {
+		t.Fatalf("Connect failed: %v", err)
+	}
+	defer transport.Close()
+
+	params := InitializeParams{
+		ProtocolVersion: "2025-03-26",
+		Capabilities:    ClientCapabilities{},
+		ClientInfo:      ImplementationInfo{Name: "nenya-test", Version: "0.0.1"},
+	}
+
+	resp, err := transport.SendRequest(t.Context(), "initialize", params)
+	if err != nil {
+		t.Fatalf("SendRequest failed: %v", err)
+	}
+
+	resultMap, ok := resp.Result.(map[string]any)
+	if !ok {
+		t.Fatalf("expected map result, got %T", resp.Result)
+	}
+
+	if serverInfo, ok := resultMap["serverInfo"].(map[string]any); ok {
+		if name, _ := serverInfo["name"].(string); name != "proxy-mock" {
+			t.Fatalf("serverInfo.name = %q, want %q", name, "proxy-mock")
+		}
+	}
+}
+
+func TestHTTPTransport_ProxyMode_ToolsList(t *testing.T) {
+	proxy := newProxyMockMCPServer(t)
+
+	transport := NewHTTPTransport(TransportConfig{
+		URL:    proxy.server.URL + "/sse",
+		Logger: newTestLogger(),
+	})
+
+	if err := transport.Connect(t.Context()); err != nil {
+		t.Fatalf("Connect failed: %v", err)
+	}
+	defer transport.Close()
+
+	resp, err := transport.SendRequest(t.Context(), "tools/list", nil)
+	if err != nil {
+		t.Fatalf("SendRequest failed: %v", err)
+	}
+
+	resultMap, ok := resp.Result.(map[string]any)
+	if !ok {
+		t.Fatalf("expected map result, got %T", resp.Result)
+	}
+
+	toolsRaw, ok := resultMap["tools"].([]any)
+	if !ok {
+		t.Fatal("expected tools array in result")
+	}
+	if len(toolsRaw) != 1 {
+		t.Fatalf("expected 1 tool, got %d", len(toolsRaw))
+	}
+}
+
+func TestHTTPTransport_ProxyMode_ToolCall(t *testing.T) {
+	proxy := newProxyMockMCPServer(t)
+
+	transport := NewHTTPTransport(TransportConfig{
+		URL:    proxy.server.URL + "/sse",
+		Logger: newTestLogger(),
+	})
+
+	if err := transport.Connect(t.Context()); err != nil {
+		t.Fatalf("Connect failed: %v", err)
+	}
+	defer transport.Close()
+
+	params := CallToolParams{
+		Name:      "proxy_tool",
+		Arguments: map[string]any{"query": "test"},
+	}
+
+	resp, err := transport.SendRequest(t.Context(), "tools/call", params)
+	if err != nil {
+		t.Fatalf("SendRequest failed: %v", err)
+	}
+
+	if resp.Error != nil {
+		t.Fatalf("unexpected error: %v", resp.Error)
+	}
+
+	resultMap, ok := resp.Result.(map[string]any)
+	if !ok {
+		t.Fatalf("expected map result, got %T", resp.Result)
+	}
+
+	content, ok := resultMap["content"].([]any)
+	if !ok {
+		t.Fatal("expected content array in result")
+	}
+	if len(content) != 1 {
+		t.Fatalf("expected 1 content block, got %d", len(content))
+	}
+}
+
+func TestHTTPTransport_ProxyMode_Ping(t *testing.T) {
+	proxy := newProxyMockMCPServer(t)
+
+	transport := NewHTTPTransport(TransportConfig{
+		URL:    proxy.server.URL + "/sse",
+		Logger: newTestLogger(),
 	})
 
 	if err := transport.Connect(t.Context()); err != nil {
