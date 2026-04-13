@@ -16,7 +16,7 @@ Each layer may only import from layers to its left. This prevents circular depen
 | `internal/config/` | Configuration types, JSON loading, model/provider registries, defaults, validation, engine reference resolution |
 | `internal/infra/` | Structured logging, thought signature cache, Prometheus metrics, rate limiter, usage tracker, response cache |
 | `internal/stream/` | SSE transforming reader, sliding window stream filter |
-| `internal/pipeline/` | Client classification, code fence detection, tier-0 regex secret redaction (code-span-aware for IDEs), middle-out truncation (code-boundary-aware for IDEs), text compaction, context window compaction, engine calls with fallback chains |
+| `internal/pipeline/` | Client classification, code fence detection, tier-0 regex secret redaction (code-span-aware for IDEs), TF-IDF relevance-scored truncation, middle-out truncation (code-boundary-aware for IDEs), text compaction, context window compaction, engine calls with fallback chains |
 | `internal/resilience/` | Circuit breaker with Closed/Open/HalfOpen states, exponential backoff |
 | `internal/providers/` | Provider capability specs (stream_options, auto_tool_choice, content_arrays), per-provider sanitization, response transformers |
 | `internal/adapter/` | Provider Adapter pattern: request mutation, auth injection, response mutation, error classification |
@@ -161,13 +161,13 @@ Nenya is designed to never break the flow between AI coding clients (OpenCode, A
 
 ### Best-Effort Content Pipeline
 
-The entire content pipeline (prefix cache, redaction, compaction, window, engine interception) runs as best-effort. Any failure is logged as a warning and the request proceeds with the original payload. No pipeline error results in an HTTP 500 to the client.
+The entire content pipeline (prefix cache, redaction, compaction, window, TF-IDF truncation, engine interception) runs as best-effort. Any failure is logged as a warning and the request proceeds with the original payload. No pipeline error results in an HTTP 500 to the client.
 
 ### Skip on Engine Failure
 
 When `security_filter.skip_on_engine_failure` is `true` (default):
 - **Soft limit** (Tier 2): Engine summarization fails → original payload forwarded unchanged
-- **Hard limit** (Tier 3): Engine summarization fails → original payload forwarded unchanged (not truncated)
+- **Hard limit** (Tier 3): Engine summarization fails → original payload forwarded unchanged (not truncated). When `tfidf_query_source` is set and TF-IDF reduces the payload below `context_soft_limit`, the engine call is skipped entirely.
 
 This means users without a local Ollama instance can use Nenya purely as a routing proxy with regex-based secret redaction.
 
@@ -194,6 +194,7 @@ Nenya detects IDE clients (Cursor, OpenCode) via `User-Agent` header inspection 
 | **Secret redaction** | Regex on entire text | `RedactSecretsPreservingCodeSpans` — skips markdown code fences, redacts prose only |
 | **Text compaction** | Collapse blank lines, trim whitespace | **Skipped entirely** — preserves whitespace and line references |
 | **Truncation** | Character-boundary middle-out | `TruncateMiddleOutCodeAware` — snaps cuts to blank-line boundaries |
+| **TF-IDF Truncation** | Same as IDE — when `tfidf_query_source` is set | Same — splits into blocks, scores by relevance, keeps highest-scoring. Pure Go, zero network calls. |
 | **Engine summarization** | Generic privacy filter prompt | Code-preserving prompt — only redacts secrets, never restructures code |
 
 ### Code Fence Detection (`internal/pipeline/code_detect.go`)
