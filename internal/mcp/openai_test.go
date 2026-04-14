@@ -97,10 +97,10 @@ func TestMCPToolsToOpenAI_Empty(t *testing.T) {
 
 func TestParseMCPCall(t *testing.T) {
 	tests := []struct {
-		input           string
-		wantServer      string
-		wantTool        string
-		wantOK          bool
+		input      string
+		wantServer string
+		wantTool   string
+		wantOK     bool
 	}{
 		{"mempalace__mempalace_search", "mempalace", "mempalace_search", true},
 		{"mcp1__tool_a", "mcp1", "tool_a", true},

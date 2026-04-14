@@ -185,8 +185,8 @@ func TestAppendMCPResults(t *testing.T) {
 	}
 
 	assistantMsg := map[string]any{
-		"role":       "assistant",
-		"content":    nil,
+		"role":    "assistant",
+		"content": nil,
 		"tool_calls": []any{
 			map[string]any{
 				"id":   "call_1",
@@ -248,7 +248,7 @@ func TestAppendMCPResults_Error(t *testing.T) {
 	}
 
 	assistantMsg := map[string]any{
-		"role":       "assistant",
+		"role": "assistant",
 		"tool_calls": []any{
 			map[string]any{"id": "call_1", "type": "function", "function": map[string]any{"name": "mcp__tool"}},
 		},
@@ -279,7 +279,7 @@ func TestAppendMCPResults_NilResults(t *testing.T) {
 		"messages": []any{
 			map[string]any{"role": "user", "content": "hello"},
 			map[string]any{
-				"role":       "assistant",
+				"role": "assistant",
 				"tool_calls": []any{
 					map[string]any{"id": "call_1", "type": "function", "function": map[string]any{"name": "mcp__tool"}},
 				},
