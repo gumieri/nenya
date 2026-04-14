@@ -51,21 +51,21 @@ type HTTPTransport struct {
 	cfg        TransportConfig
 	httpClient *http.Client
 
-	mu       sync.Mutex
-	closed   atomic.Bool
-	ready    atomic.Bool
+	mu     sync.Mutex
+	closed atomic.Bool
+	ready  atomic.Bool
 
 	sessionEndpoint string
 	sseCancel       context.CancelFunc
 
-	pendingMu  sync.Mutex
-	pending    map[int64]chan *Response
-	nextID     atomic.Int64
+	pendingMu sync.Mutex
+	pending   map[int64]chan *Response
+	nextID    atomic.Int64
 
-	eventCh    chan sseEvent
-	closeCh    chan struct{}
-	closeOnce  sync.Once
-	doneCh     chan struct{}
+	eventCh   chan sseEvent
+	closeCh   chan struct{}
+	closeOnce sync.Once
+	doneCh    chan struct{}
 }
 
 type sseEvent struct {

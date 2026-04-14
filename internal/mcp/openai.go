@@ -102,8 +102,8 @@ func BuildToolResultMessage(toolCallID string, result *CallToolResult, isError b
 	}
 
 	return map[string]any{
-		"role":       "tool",
+		"role":         "tool",
 		"tool_call_id": toolCallID,
-		"content":    content,
+		"content":      content,
 	}
 }

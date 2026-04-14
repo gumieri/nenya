@@ -20,12 +20,12 @@ const (
 )
 
 type bufferedSSE struct {
-	rawBytes          []byte
-	toolCalls         []mcpToolCall
-	assistantMessage  map[string]any
-	finishReason      string
-	hasContent        bool
-	model             string
+	rawBytes         []byte
+	toolCalls        []mcpToolCall
+	assistantMessage map[string]any
+	finishReason     string
+	hasContent       bool
+	model            string
 }
 
 type mcpToolCall struct {
@@ -126,11 +126,11 @@ func bufferStreamResponse(ctx context.Context, r io.Reader) (*bufferedSSE, error
 						}
 						if argsAny, ok := fn["arguments"]; ok {
 							if argsStr, ok := argsAny.(string); ok && argsStr != "" {
-							if tcArgsAccum[idx] == nil {
-								tcArgsAccum[idx] = &strings.Builder{}
+								if tcArgsAccum[idx] == nil {
+									tcArgsAccum[idx] = &strings.Builder{}
+								}
+								tcArgsAccum[idx].WriteString(argsStr)
 							}
-							tcArgsAccum[idx].WriteString(argsStr)
-						}
 						}
 					}
 				}
@@ -184,8 +184,8 @@ func bufferStreamResponse(ctx context.Context, r io.Reader) (*bufferedSSE, error
 		}
 	} else if hasContent {
 		assistantMsg = map[string]any{
-			"role":      "assistant",
-			"content":   contentBuilder.String(),
+			"role":    "assistant",
+			"content": contentBuilder.String(),
 		}
 	}
 
@@ -303,9 +303,9 @@ func appendMCPResults(payload map[string]any, calls []mcpToolCall, results []*mc
 		}
 
 		toolResults = append(toolResults, map[string]any{
-			"role":        "tool",
+			"role":         "tool",
 			"tool_call_id": call.ID,
-			"content":     content,
+			"content":      content,
 		})
 	}
 

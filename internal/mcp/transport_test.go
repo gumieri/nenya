@@ -512,10 +512,10 @@ func TestHTTPTransport_HeadersPassed(t *testing.T) {
 }
 
 type proxyMockMCPServer struct {
-	t       *testing.T
-	mu      sync.Mutex
-	sseCh   chan sseOutgoing
-	server  *httptest.Server
+	t      *testing.T
+	mu     sync.Mutex
+	sseCh  chan sseOutgoing
+	server *httptest.Server
 }
 
 type sseOutgoing struct {
