@@ -8,14 +8,13 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
 	providerpkg "nenya/internal/providers"
 	"nenya/internal/routing"
 	"nenya/internal/stream"
-
-	"nenya/internal/memory"
 )
 
 const (
@@ -34,6 +33,22 @@ func getStreamBuffer() *[]byte {
 	buf := streamingBufPool.Get().(*[]byte)
 	clear(*buf)
 	return buf
+}
+
+type contentBuilder struct {
+	buf strings.Builder
+}
+
+func newContentBuilder() *contentBuilder {
+	return &contentBuilder{}
+}
+
+func (b *contentBuilder) addContent(s string) {
+	b.buf.WriteString(s)
+}
+
+func (b *contentBuilder) build() string {
+	return b.buf.String()
 }
 
 type stallReader struct {
@@ -227,10 +242,10 @@ func (p *Proxy) streamResponse(w http.ResponseWriter, r *http.Request, target ro
 			"window_size", p.GW.Config.SecurityFilter.OutputWindowChars)
 	}
 
-	var contentBuilder *memory.ContentBuilder
-	if _, ok := p.GW.MemoryClients[agentName]; ok {
-		contentBuilder = memory.NewContentBuilder()
-		transformingReader.SetOnContent(contentBuilder.AddContent)
+	var contentBuilder *contentBuilder
+	if agent, ok := p.GW.Config.Agents[agentName]; ok && agent.MCP != nil && agent.MCP.AutoSave {
+		contentBuilder = newContentBuilder()
+		transformingReader.SetOnContent(contentBuilder.addContent)
 	}
 
 	buf := getStreamBuffer()
@@ -299,10 +314,6 @@ func (p *Proxy) streamResponse(w http.ResponseWriter, r *http.Request, target ro
 				"model", target.Model, "size", captureBuf.Len())
 		}
 
-		if contentBuilder != nil {
-			p.asyncStoreMemory(agentName, contentBuilder.Build())
-		}
-
 		p.asyncMCPAutoSave(agentName, contentBuilder)
 	case <-r.Context().Done():
 		p.GW.Logger.Info("client disconnected, aborting upstream stream", "model", target.Model)
@@ -341,23 +352,7 @@ func (p *Proxy) writeBlockedSSE(w http.ResponseWriter) {
 	}
 }
 
-func (p *Proxy) asyncStoreMemory(agentName string, assistantContent string) {
-	memClient, ok := p.GW.MemoryClients[agentName]
-	if !ok || assistantContent == "" {
-		return
-	}
-	go func() {
-		msgs := []memory.AddMessage{
-			{Role: "assistant", Content: assistantContent},
-		}
-		if err := memClient.Add(context.Background(), msgs); err != nil {
-			p.GW.Logger.Warn("memory store failed (best-effort)",
-				"agent", agentName, "err", err)
-		}
-	}()
-}
-
-func (p *Proxy) asyncMCPAutoSave(agentName string, contentBuilder *memory.ContentBuilder) {
+func (p *Proxy) asyncMCPAutoSave(agentName string, contentBuilder *contentBuilder) {
 	if agentName == "" || contentBuilder == nil {
 		return
 	}
@@ -366,7 +361,7 @@ func (p *Proxy) asyncMCPAutoSave(agentName string, contentBuilder *memory.Conten
 		return
 	}
 
-	assistantContent := contentBuilder.Build()
+	assistantContent := contentBuilder.build()
 	if assistantContent == "" {
 		return
 	}

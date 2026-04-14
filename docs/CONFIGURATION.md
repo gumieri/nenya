@@ -251,7 +251,6 @@ Both styles can be mixed in the same `models` array.
 | `max_retries` | int | `0` | Cap on retry attempts per request (0 = unlimited) |
 | `system_prompt` | string | `""` | Inline system prompt injected as the first message (only if no existing system message). |
 | `system_prompt_file` | string | `""` | Path to system prompt file. Lower priority than `system_prompt`. |
-| `memory` | object | (none) | Optional mem0 memory integration. See [Memory Integration](MEMORY.md) for details. **Deprecated:** Use MCP integration instead for new setups. |
 | `mcp` | object | (none) | Optional Model Context Protocol server integration. See [MCP Integration](MCP_INTEGRATION.md) for details. |
 | `models` | array | (required) | List of model entries (strings or objects) to try in order |
 
@@ -364,20 +363,18 @@ Models not in this registry (e.g., local Ollama models, custom endpoints) must b
 
 ## Processing Pipeline Order
 
- 1. **Response cache lookup** (if enabled, bypass entire pipeline on hit)
- 2. **Memory search + injection** (MCP-first with mem0 fallback: if agent has MCP servers with a search tool, use MCP; else if agent has mem0, use mem0)
- 3. **MCP auto-search** (if agent has mcp.auto_search, query MCP server and inject as system message)
- 4. **MCP tool injection** (if agent has MCP servers, inject tools as OpenAI function tools + system prompt)
-5. **Prefix cache optimizations** (pin system messages, sort tools — includes MCP tools)
-6. **Agent system prompt injection** (if agent has prompt and no system message exists)
-7. **Tier-0 regex redaction** (secret patterns via `security_filter`)
-8. **Text compaction** (normalize, trim, collapse blanks)
-9. **Window compaction** (if enabled and threshold exceeded)
-10. **Engine interception** (3-tier last-message summarization using `security_filter.engine`, with TF-IDF relevance-scored truncation when `tfidf_query_source` is set, with fallback chain if agent-referenced)
-11. **JSON minification** (final body compaction)
-12. **Response cache store** (if enabled, store completed SSE response)
-13. **Memory store** (if agent has memory configured, async store of assistant response to mem0)
-14. **MCP auto-save** (if agent has mcp.auto_save, async store of assistant response to MCP server)
+  1. **Response cache lookup** (if enabled, bypass entire pipeline on hit)
+  2. **MCP auto-search** (if agent has mcp.auto_search, query MCP server and inject as system message)
+  3. **MCP tool injection** (if agent has MCP servers, inject tools as OpenAI function tools + system prompt)
+  4. **Prefix cache optimizations** (pin system messages, sort tools — includes MCP tools)
+  5. **Agent system prompt injection** (if agent has prompt and no system message exists)
+  6. **Tier-0 regex redaction** (secret patterns via `security_filter`)
+  7. **Text compaction** (normalize, trim, collapse blanks)
+  8. **Window compaction** (if enabled and threshold exceeded)
+  9. **Engine interception** (3-tier last-message summarization using `security_filter.engine`, with TF-IDF relevance-scored truncation when `tfidf_query_source` is set, with fallback chain if agent-referenced)
+  10. **JSON minification** (final body compaction)
+  11. **Response cache store** (if enabled, store completed SSE response)
+  12. **MCP auto-save** (if agent has mcp.auto_save, async store of assistant response to MCP server)
 
 ### Best-Effort Pipeline
 
