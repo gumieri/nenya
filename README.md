@@ -16,7 +16,6 @@ Nenya acts as a **silent guardian** for your AI interactions. Its core strength 
 | [MCP Integration](docs/MCP_INTEGRATION.md) | MCP server integration, tool discovery, multi-turn execution, auto-search/save |
 | [Adapters](docs/ADAPTERS.md) | Provider adapter system, capabilities, auth styles, how to add providers |
 | [Configuration](docs/CONFIGURATION.md) | Full config reference with all sections and fields |
-| [MCP Integration](docs/MCP_INTEGRATION.md) | MCP server integration, tool discovery, multi-turn execution, auto-search/save, mem0 via MCP |
 | [Demo](docs/DEMO.md) | Quick start, pipeline testing, cache bypass, circuit breaker observability |
 | [Secrets Format](docs/SECRETS_FORMAT.md) | Systemd credential management, provider key setup |
 | [Security](docs/SECURITY.md) | Vulnerability reporting policy |
