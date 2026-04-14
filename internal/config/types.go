@@ -332,9 +332,10 @@ type WindowConfig struct {
 }
 
 type MCPServerConfig struct {
-	URL     string            `json:"url"`
-	Headers map[string]string `json:"headers,omitempty"`
-	Timeout int               `json:"timeout,omitempty"`
+	URL               string            `json:"url"`
+	Headers           map[string]string `json:"headers,omitempty"`
+	Timeout           int               `json:"timeout,omitempty"`
+	KeepAliveInterval int               `json:"keep_alive_interval,omitempty"`
 }
 
 type AgentMCPConfig struct {

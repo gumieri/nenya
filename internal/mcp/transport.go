@@ -23,13 +23,14 @@ var (
 )
 
 type TransportConfig struct {
-	URL              string
-	Headers          map[string]string
-	ConnectTimeout   time.Duration
-	RequestTimeout   time.Duration
-	IdleTimeout      time.Duration
-	ReconnectBackoff time.Duration
-	Logger           *slog.Logger
+	URL               string
+	Headers           map[string]string
+	ConnectTimeout    time.Duration
+	RequestTimeout    time.Duration
+	IdleTimeout       time.Duration
+	ReconnectBackoff  time.Duration
+	KeepAliveInterval time.Duration
+	Logger            *slog.Logger
 }
 
 func (c *TransportConfig) setDefaults() {
@@ -44,6 +45,9 @@ func (c *TransportConfig) setDefaults() {
 	}
 	if c.ReconnectBackoff <= 0 {
 		c.ReconnectBackoff = 30 * time.Second
+	}
+	if c.KeepAliveInterval <= 0 {
+		c.KeepAliveInterval = 4 * time.Second
 	}
 }
 
@@ -180,6 +184,7 @@ func (t *HTTPTransport) Connect(ctx context.Context) error {
 			t.sseCancel = sseCancel
 			go t.sseReadLoop(sseReader)
 			go t.eventDispatchLoop()
+			go t.keepaliveLoop()
 
 			break
 		}
@@ -373,6 +378,29 @@ func (t *HTTPTransport) setHeaders(req *http.Request) {
 	req.Header.Set("Accept", "application/json, text/event-stream")
 }
 
+func (t *HTTPTransport) keepaliveLoop() {
+	ticker := time.NewTicker(t.cfg.KeepAliveInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-t.closeCh:
+			return
+		case <-ticker.C:
+			if !t.ready.Load() {
+				return
+			}
+			if err := t.SendNotification("ping", nil); err != nil {
+				if !t.closed.Load() {
+					t.cfg.Logger.Warn("MCP keepalive ping failed", "err", err)
+					t.ready.Store(false)
+				}
+				return
+			}
+		}
+	}
+}
+
 func (t *HTTPTransport) sseReadLoop(reader *bufio.Reader) {
 	defer close(t.doneCh)
 
@@ -386,7 +414,8 @@ func (t *HTTPTransport) sseReadLoop(reader *bufio.Reader) {
 		line, err := reader.ReadString('\n')
 		if err != nil {
 			if !t.closed.Load() {
-				t.cfg.Logger.Debug("SSE read loop ended", "err", err)
+				t.cfg.Logger.Warn("SSE connection lost, marking transport as not ready", "err", err)
+				t.ready.Store(false)
 			}
 			return
 		}
