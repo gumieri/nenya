@@ -119,13 +119,6 @@
         "auto_search": true,
         "auto_save": true
       },
-      // Optional: long-term memory via mem0 OSS server (deprecated, use MCP instead)
-      // "memory": {
-      //   "url": "http://127.0.0.1:8081",
-      //   "user_id": "default",
-      //   "top_k": 10,
-      //   "threshold": 0.3
-      // },
       "models": [
         "gemini-3.1-flash-lite-preview",
         "gemini-2.5-flash",

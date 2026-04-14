@@ -15,7 +15,6 @@ import (
 	"nenya/internal/gateway"
 	"nenya/internal/infra"
 	"nenya/internal/mcp"
-	"nenya/internal/memory"
 	"nenya/internal/pipeline"
 	"nenya/internal/routing"
 )
@@ -111,7 +110,6 @@ func (p *Proxy) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 
 	if messagesRaw, ok := payload["messages"]; ok {
 		if messages, ok := messagesRaw.([]interface{}); ok && len(messages) > 0 {
-			p.injectMemoryContext(r.Context(), payload, messages, agentName)
 			p.injectAutoSearch(r.Context(), payload, messages, agentName)
 			p.injectMCPTools(payload, agentName)
 			windowMaxCtx := routing.ResolveWindowMaxContext(modelName, p.GW.Config.Agents)
@@ -511,101 +509,6 @@ func (p *Proxy) buildUpstreamRequest(ctx context.Context, method, url string, bo
 	req.Header.Set("Accept-Encoding", "identity")
 	req.Header.Set("User-Agent", p.GW.Config.Server.UserAgent)
 	return req, nil
-}
-
-func (p *Proxy) injectMemoryContext(ctx context.Context, payload map[string]interface{}, messages []interface{}, agentName string) {
-	if agentName == "" {
-		return
-	}
-
-	// Phase 7: Check MCP-based memory first
-	memClient, haveMCP := p.GW.MemoryClients[agentName]
-	if !haveMCP {
-		// Check if agent has MCP servers that could serve as memory
-		if agent, agentOk := p.GW.Config.Agents[agentName]; agentOk && agent.MCP != nil && len(agent.MCP.Servers) > 0 {
-			// Try to use first available MCP server for memory search
-			for _, serverName := range agent.MCP.Servers {
-				client, clientOk := p.GW.MCPClients[serverName]
-				if !clientOk || !client.Ready() {
-					continue
-				}
-				// Try to discover a search tool on the MCP server
-				searchTool := agent.MCP.SearchTool
-				if searchTool == "" {
-					searchTool = p.discoverToolByPrefix(serverName, "search")
-				}
-				if searchTool != "" {
-					lastMsg, msgOk := messages[len(messages)-1].(map[string]interface{})
-					if !msgOk {
-						continue
-					}
-					query := gateway.ExtractContentText(lastMsg)
-					if query != "" {
-						if result, err := client.CallTool(ctx, searchTool, map[string]any{
-							"query": query,
-							"limit": 5,
-						}); err == nil && result != nil && result.Text() != "" {
-							contextStr := fmt.Sprintf("[Memory from %s]\n%s", serverName, result.Text())
-							memoryMsg := map[string]interface{}{
-								"role":    "system",
-								"content": contextStr,
-							}
-							updated := make([]interface{}, 0, len(messages)+1)
-							updated = append(updated, memoryMsg)
-							updated = append(updated, messages...)
-							payload["messages"] = updated
-							p.GW.Logger.Debug("MCP memory context injected", "agent", agentName, "server", serverName, "tool", searchTool)
-							return
-						}
-					}
-				}
-			}
-		}
-		// Fall back to mem0 if configured
-		var memOk bool
-		memClient, memOk = p.GW.MemoryClients[agentName]
-		if !memOk {
-			return
-		}
-	}
-
-	lastIdx := len(messages) - 1
-	lastMsg, ok := messages[lastIdx].(map[string]interface{})
-	if !ok {
-		return
-	}
-	lastRole, _ := lastMsg["role"].(string)
-	if lastRole != "user" {
-		return
-	}
-
-	query := gateway.ExtractContentText(lastMsg)
-	if query == "" {
-		return
-	}
-
-	results, err := memClient.Search(ctx, query)
-	if err != nil {
-		p.GW.Logger.Warn("memory search failed, proceeding without memories", "agent", agentName, "err", err)
-		return
-	}
-	if len(results) == 0 {
-		return
-	}
-
-	contextStr := memory.FormatMemoryContext(results)
-	memoryMsg := map[string]interface{}{
-		"role":    "system",
-		"content": contextStr,
-	}
-
-	updated := make([]interface{}, 0, len(messages)+1)
-	updated = append(updated, messages[:lastIdx]...)
-	updated = append(updated, memoryMsg)
-	updated = append(updated, messages[lastIdx:]...)
-	payload["messages"] = updated
-
-	p.GW.Logger.Debug("memory context injected", "agent", agentName, "memories", len(results))
 }
 
 func (p *Proxy) hasMCPTools(agentName string) bool {

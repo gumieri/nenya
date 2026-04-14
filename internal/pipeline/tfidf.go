@@ -306,7 +306,7 @@ func TruncateTFIDFHistory(historyText string, maxRunes int, query string) string
 	}
 	cfg := config.GovernanceConfig{
 		KeepFirstPercent: 10.0,
-		KeepLastPercent: 15.0,
+		KeepLastPercent:  15.0,
 	}
 	return TruncateTFIDF(historyText, maxRunes, query, cfg)
 }

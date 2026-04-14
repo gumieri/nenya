@@ -21,9 +21,8 @@ Each layer may only import from layers to its left. This prevents circular depen
 | `internal/providers/` | Provider capability specs (stream_options, auto_tool_choice, content_arrays), per-provider sanitization, response transformers |
 | `internal/adapter/` | Provider Adapter pattern: request mutation, auth injection, response mutation, error classification |
 | `internal/routing/` | Dynamic provider resolution, agent fallback chains, upstream request transformation, API key injection |
-| `internal/memory/` | mem0 OSS client: memory search, memory storage, content capture for streaming |
 | `internal/mcp/` | MCP (Model Context Protocol) client: HTTP+SSE transport, tool discovery, tool call execution, OpenAI schema transformation |
-| `internal/gateway/` | NenyaGateway struct, HTTP client configuration, token counting, memory client initialization, MCP client initialization, MCP tool index |
+| `internal/gateway/` | NenyaGateway struct, HTTP client configuration, token counting, MCP client initialization, MCP tool index |
 | `internal/proxy/` | HTTP handlers, content pipeline orchestration, upstream forwarding with retry, transparent SSE streaming, MCP multi-turn tool call loop, buffered SSE response |
 
 ## Request Lifecycle
@@ -38,10 +37,6 @@ Client Request
   │   ├─ Resolve agent or provider
   │   ├─ Response cache lookup (if enabled)
   │   │   └─ HIT → replay cached SSE, done
-   │   ├─ Memory search (MCP-first with mem0 fallback)
-   │   │   ├─ If agent has MCP servers with a search tool → use MCP search
-   │   │   ├─ Else if agent has mem0 configured → use mem0 search
-   │   │   └─ Inject relevant memories as system message before last user message
   │   ├─ MCP auto-search (if agent has mcp.auto_search, queries MCP server)
   │   │   └─ Inject relevant context as system message before last user message
   │   ├─ MCP tool injection (if agent has MCP servers configured)
@@ -88,9 +83,8 @@ Client Request
   │       ├─ StreamFilter (blocked execution patterns)
   │       ├─ immediateFlushWriter (Flush after every Write)
   │       ├─ sseTeeWriter (capture for response cache)
-  │       └─ Async memory store (POST /memories after stream completes, best-effort)
-  ├─ Async MCP auto-save (if agent has mcp.auto_save)
-  │       └─ POST to MCP server with assistant content (best-effort, tool name configurable)
+  │       └─ Async MCP auto-save (if agent has mcp.auto_save)
+  │           └─ POST to MCP server with assistant content (best-effort, tool name configurable)
   ├─ GET /v1/models
   ├─ POST /v1/embeddings
   ├─ POST /v1/responses (transparent passthrough, no content pipeline)

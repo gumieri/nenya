@@ -3,8 +3,6 @@ package config
 import (
 	"encoding/json"
 	"fmt"
-
-	"nenya/internal/memory"
 )
 
 type AgentModel struct {
@@ -16,17 +14,16 @@ type AgentModel struct {
 }
 
 type AgentConfig struct {
-	Strategy         string              `json:"strategy"`
-	CooldownSeconds  int                 `json:"cooldown_seconds"`
-	FailureThreshold int                 `json:"failure_threshold"`
-	FailureWindowSec int                 `json:"failure_window_secs"`
-	SuccessThreshold int                 `json:"success_threshold"`
-	MaxRetries       int                 `json:"max_retries"`
-	SystemPrompt     string              `json:"system_prompt"`
-	SystemPromptFile string              `json:"system_prompt_file"`
-	Models           []AgentModel        `json:"models"`
-	Memory           *memory.MemoryConfig `json:"memory,omitempty"`
-	MCP              *AgentMCPConfig      `json:"mcp,omitempty"`
+	Strategy         string          `json:"strategy"`
+	CooldownSeconds  int             `json:"cooldown_seconds"`
+	FailureThreshold int             `json:"failure_threshold"`
+	FailureWindowSec int             `json:"failure_window_secs"`
+	SuccessThreshold int             `json:"success_threshold"`
+	MaxRetries       int             `json:"max_retries"`
+	SystemPrompt     string          `json:"system_prompt"`
+	SystemPromptFile string          `json:"system_prompt_file"`
+	Models           []AgentModel    `json:"models"`
+	MCP              *AgentMCPConfig `json:"mcp,omitempty"`
 }
 
 func (a *AgentConfig) UnmarshalJSON(data []byte) error {
@@ -85,16 +82,16 @@ type Provider struct {
 }
 
 type Config struct {
-	Server         ServerConfig              `json:"server"`
-	Governance     GovernanceConfig          `json:"governance"`
-	SecurityFilter SecurityFilterConfig      `json:"security_filter"`
-	PrefixCache    PrefixCacheConfig         `json:"prefix_cache"`
-	Compaction     CompactionConfig          `json:"compaction"`
-	Window         WindowConfig              `json:"window"`
-	ResponseCache  ResponseCacheConfig       `json:"response_cache"`
+	Server         ServerConfig               `json:"server"`
+	Governance     GovernanceConfig           `json:"governance"`
+	SecurityFilter SecurityFilterConfig       `json:"security_filter"`
+	PrefixCache    PrefixCacheConfig          `json:"prefix_cache"`
+	Compaction     CompactionConfig           `json:"compaction"`
+	Window         WindowConfig               `json:"window"`
+	ResponseCache  ResponseCacheConfig        `json:"response_cache"`
 	MCPServers     map[string]MCPServerConfig `json:"mcp_servers,omitempty"`
-	Agents         map[string]AgentConfig    `json:"agents"`
-	Providers      map[string]ProviderConfig `json:"providers"`
+	Agents         map[string]AgentConfig     `json:"agents"`
+	Providers      map[string]ProviderConfig  `json:"providers"`
 }
 
 type ServerConfig struct {
@@ -123,9 +120,8 @@ func (g *GovernanceConfig) RPMSet() bool { return g.rpmSet }
 func (g *GovernanceConfig) TPMSet() bool { return g.tpmSet }
 
 type SecretsConfig struct {
-	ClientToken         string            `json:"client_token"`
-	ProviderKeys        map[string]string `json:"provider_keys"`
-	MemoryProviderKeys  map[string]string `json:"memory_provider_keys,omitempty"`
+	ClientToken  string            `json:"client_token"`
+	ProviderKeys map[string]string `json:"provider_keys"`
 }
 
 type EngineConfig struct {

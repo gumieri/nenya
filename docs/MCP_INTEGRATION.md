@@ -202,13 +202,67 @@ MCP integration follows the same best-effort philosophy as the rest of Nenya:
 
 ## Memory Migration (mem0 to MCP)
 
-Nenya supports a graceful migration path from mem0 to MCP-based memory:
+The mem0 direct integration has been removed from Nenya. Memory is now exclusively handled through MCP servers.
 
-1. **If both MCP and mem0 are configured for an agent**, MCP takes priority. Nenya checks for MCP servers with a `search`-prefixed tool first.
-2. **If no MCP servers are configured**, Nenya falls back to mem0 (if configured).
-3. **If neither is configured**, no memory context is injected — zero overhead.
+### Using mem0 via MCP
 
-This means existing mem0 deployments continue working unchanged, and MCP can be adopted incrementally.
+To use mem0 alongside MemPalace, run mem0 behind an MCP proxy:
+
+```bash
+# Install mem0 MCP server (example using mcp-proxy)
+pip install mem0ai mcp-proxy
+mcp-proxy --port 8081 -- mem0-mcp-server
+```
+
+Then configure both servers in Nenya:
+
+```json
+{
+  "mcp_servers": {
+    "mempalace": {
+      "url": "http://localhost:6060"
+    },
+    "mem0": {
+      "url": "http://localhost:8081",
+      "headers": {
+        "Authorization": "Bearer your-mem0-api-key"
+      }
+    }
+  }
+}
+```
+
+The agent can use both servers:
+
+```json
+{
+  "agents": {
+    "build": {
+      "mcp": {
+        "servers": ["mempalace", "mem0"],
+        "auto_search": true,
+        "auto_save": true,
+        "search_tool": "mempalace__mempalace_search",
+        "save_tool": "mempalace__add_drawer"
+      }
+    }
+  }
+}
+```
+
+### Auto-Search and Auto-Save Tool Conventions
+
+The `auto_search` and `auto_save` features rely on MCP servers exposing tools with specific names. Nenya uses configurable tool names with automatic discovery:
+
+| Feature | Config Field | Auto-Discovery Fallback | Arguments |
+|---------|-------------|------------------------|-----------|
+| `auto_search` | `search_tool` | Any tool prefixed with `search` | `{"query": <string>, "limit": 5}` |
+| `auto_save` | `save_tool` | Any tool prefixed with `add`, then `save` | `{"wing": <agent>, "room": "conversation", "content": <string>, "added_by": "nenya"}` |
+
+- If `search_tool` / `save_tool` are not set, Nenya scans the server's tool list for matching prefixes.
+- For **multi-server agents**, `auto_search` uses the first server that returns a non-empty result. `auto_save` uses the first server with a matching tool.
+- The `save_tool` arguments (`wing`, `room`, `added_by`) follow MemPalace's drawer API convention. Other MCP servers may need to adapt their tool schemas accordingly.
+- Set `search_tool` and `save_tool` explicitly when using non-MemPalace servers to avoid auto-discovery ambiguity.
 
 ## Transport Details
 
