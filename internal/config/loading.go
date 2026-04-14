@@ -94,9 +94,6 @@ func LoadSecrets() (*SecretsConfig, error) {
 	if secrets.ProviderKeys == nil {
 		secrets.ProviderKeys = make(map[string]string)
 	}
-	if secrets.MemoryProviderKeys == nil {
-		secrets.MemoryProviderKeys = make(map[string]string)
-	}
 
 	return &secrets, nil
 }

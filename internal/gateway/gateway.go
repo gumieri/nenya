@@ -15,7 +15,6 @@ import (
 	"nenya/internal/config"
 	"nenya/internal/infra"
 	"nenya/internal/mcp"
-	"nenya/internal/memory"
 	"nenya/internal/routing"
 )
 
@@ -34,7 +33,6 @@ type NenyaGateway struct {
 	AgentState      *routing.AgentState
 	ThoughtSigCache *infra.ThoughtSignatureCache
 	ResponseCache   *infra.ResponseCache
-	MemoryClients   map[string]*memory.Mem0Client
 	MCPClients      map[string]*mcp.Client
 	MCPToolIndex    *mcp.ToolRegistry
 }
@@ -124,7 +122,6 @@ func New(cfg config.Config, secrets *config.SecretsConfig, logger *slog.Logger) 
 		AgentState:      routing.NewAgentState(logger),
 		ThoughtSigCache: infra.NewThoughtSignatureCache(1000, 30*time.Minute),
 		ResponseCache:   newResponseCache(cfg, logger),
-		MemoryClients:   buildMemoryClients(cfg, secrets, logger),
 		MCPClients:      buildMCPClients(cfg, logger),
 		MCPToolIndex:    mcp.NewToolRegistry(),
 	}
@@ -235,24 +232,6 @@ func (g *NenyaGateway) Close() {
 		client.Close()
 		g.Logger.Debug("MCP client closed", "server", name)
 	}
-}
-
-func buildMemoryClients(cfg config.Config, secrets *config.SecretsConfig, logger *slog.Logger) map[string]*memory.Mem0Client {
-	clients := make(map[string]*memory.Mem0Client)
-	for agentName, agent := range cfg.Agents {
-		if agent.Memory == nil || agent.Memory.URL == "" {
-			continue
-		}
-		memCfg := *agent.Memory
-		if memCfg.APIKey == "" && secrets != nil {
-			if keys, ok := secrets.MemoryProviderKeys["mem0"]; ok {
-				memCfg.APIKey = keys
-			}
-		}
-		clients[agentName] = memory.NewMem0Client(memCfg, logger)
-		logger.Info("memory client initialized", "agent", agentName, "url", memCfg.URL)
-	}
-	return clients
 }
 
 func buildMCPClients(cfg config.Config, logger *slog.Logger) map[string]*mcp.Client {
