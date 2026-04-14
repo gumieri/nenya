@@ -608,7 +608,7 @@ func (p *Proxy) discoverToolByPrefix(serverName, prefix string) string {
 		return ""
 	}
 	for _, tool := range client.ListTools() {
-		if strings.HasPrefix(tool.Name, prefix) {
+		if strings.Contains(tool.Name, prefix) {
 			return tool.Name
 		}
 	}
