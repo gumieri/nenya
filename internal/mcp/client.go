@@ -17,21 +17,21 @@ type Client struct {
 	name      string
 	logger    *slog.Logger
 
-	mu         sync.RWMutex
-	tools      []Tool
-	toolsMap   map[string]Tool
+	mu          sync.RWMutex
+	tools       []Tool
+	toolsMap    map[string]Tool
 	initialized bool
-	serverInfo ImplementationInfo
+	serverInfo  ImplementationInfo
 }
 
 type ClientConfig struct {
-	Name            string
-	URL             string
-	Headers         map[string]string
-	ConnectTimeout  time.Duration
-	RequestTimeout  time.Duration
-	IdleTimeout     time.Duration
-	Logger          *slog.Logger
+	Name           string
+	URL            string
+	Headers        map[string]string
+	ConnectTimeout time.Duration
+	RequestTimeout time.Duration
+	IdleTimeout    time.Duration
+	Logger         *slog.Logger
 }
 
 func NewClient(cfg ClientConfig) *Client {
@@ -45,12 +45,12 @@ func NewClient(cfg ClientConfig) *Client {
 	}
 
 	transport := NewHTTPTransport(TransportConfig{
-		URL:             cfg.URL,
-		Headers:         cfg.Headers,
-		ConnectTimeout:  cfg.ConnectTimeout,
-		RequestTimeout:  cfg.RequestTimeout,
-		IdleTimeout:     cfg.IdleTimeout,
-		Logger:          logger,
+		URL:            cfg.URL,
+		Headers:        cfg.Headers,
+		ConnectTimeout: cfg.ConnectTimeout,
+		RequestTimeout: cfg.RequestTimeout,
+		IdleTimeout:    cfg.IdleTimeout,
+		Logger:         logger,
 	})
 
 	return &Client{

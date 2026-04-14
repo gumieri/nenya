@@ -43,9 +43,9 @@ const (
 )
 
 type InitializeParams struct {
-	ProtocolVersion string                `json:"protocolVersion"`
-	Capabilities    ClientCapabilities    `json:"capabilities"`
-	ClientInfo      ImplementationInfo    `json:"clientInfo"`
+	ProtocolVersion string             `json:"protocolVersion"`
+	Capabilities    ClientCapabilities `json:"capabilities"`
+	ClientInfo      ImplementationInfo `json:"clientInfo"`
 }
 
 type ClientCapabilities struct {
@@ -62,9 +62,9 @@ type ImplementationInfo struct {
 }
 
 type InitializeResult struct {
-	ProtocolVersion string                `json:"protocolVersion"`
-	Capabilities    ServerCapabilities    `json:"capabilities"`
-	ServerInfo      ImplementationInfo    `json:"serverInfo"`
+	ProtocolVersion string             `json:"protocolVersion"`
+	Capabilities    ServerCapabilities `json:"capabilities"`
+	ServerInfo      ImplementationInfo `json:"serverInfo"`
 }
 
 type ServerCapabilities struct {
@@ -82,10 +82,10 @@ type Tool struct {
 }
 
 type InputSchema struct {
-	Type                 string            `json:"type"`
-	Properties           map[string]any    `json:"properties,omitempty"`
-	Required             []string          `json:"required,omitempty"`
-	AdditionalProperties bool              `json:"additionalProperties,omitempty"`
+	Type                 string         `json:"type"`
+	Properties           map[string]any `json:"properties,omitempty"`
+	Required             []string       `json:"required,omitempty"`
+	AdditionalProperties bool           `json:"additionalProperties,omitempty"`
 }
 
 type CallToolParams struct {
