@@ -181,18 +181,19 @@ func TestAppendMCPResults(t *testing.T) {
 	payload := map[string]any{
 		"messages": []any{
 			map[string]any{"role": "user", "content": "hello"},
+		},
+	}
+
+	assistantMsg := map[string]any{
+		"role":       "assistant",
+		"content":    nil,
+		"tool_calls": []any{
 			map[string]any{
-				"role":       "assistant",
-				"content":    nil,
-				"tool_calls": []any{
-					map[string]any{
-						"id":   "call_1",
-						"type": "function",
-						"function": map[string]any{
-							"name":      "mempalace__search",
-							"arguments": map[string]any{"query": "test"},
-						},
-					},
+				"id":   "call_1",
+				"type": "function",
+				"function": map[string]any{
+					"name":      "mempalace__search",
+					"arguments": `{"query":"test"}`,
 				},
 			},
 		},
@@ -205,7 +206,7 @@ func TestAppendMCPResults(t *testing.T) {
 		{Content: []mcp.ContentBlock{{Type: "text", Text: "found 3 items"}}},
 	}
 
-	appendMCPResults(payload, calls, results)
+	appendMCPResults(payload, calls, results, assistantMsg)
 
 	messages, ok := payload["messages"].([]any)
 	if !ok {
@@ -214,6 +215,14 @@ func TestAppendMCPResults(t *testing.T) {
 
 	if len(messages) != 3 {
 		t.Fatalf("expected 3 messages (user, assistant, tool), got %d", len(messages))
+	}
+
+	assistMsg, ok := messages[1].(map[string]any)
+	if !ok {
+		t.Fatal("second message is not a map")
+	}
+	if assistMsg["role"] != "assistant" {
+		t.Fatalf("second message role = %v, want assistant", assistMsg["role"])
 	}
 
 	toolMsg, ok := messages[2].(map[string]any)
@@ -235,12 +244,13 @@ func TestAppendMCPResults_Error(t *testing.T) {
 	payload := map[string]any{
 		"messages": []any{
 			map[string]any{"role": "user", "content": "hello"},
-			map[string]any{
-				"role":       "assistant",
-				"tool_calls": []any{
-					map[string]any{"id": "call_1", "type": "function", "function": map[string]any{"name": "mcp__tool"}},
-				},
-			},
+		},
+	}
+
+	assistantMsg := map[string]any{
+		"role":       "assistant",
+		"tool_calls": []any{
+			map[string]any{"id": "call_1", "type": "function", "function": map[string]any{"name": "mcp__tool"}},
 		},
 	}
 
@@ -249,7 +259,7 @@ func TestAppendMCPResults_Error(t *testing.T) {
 		{Content: []mcp.ContentBlock{{Type: "text", Text: "server unavailable"}}, IsError: true},
 	}
 
-	appendMCPResults(payload, calls, results)
+	appendMCPResults(payload, calls, results, assistantMsg)
 
 	messages := payload["messages"].([]any)
 	toolMsg := messages[2].(map[string]any)
@@ -261,7 +271,7 @@ func TestAppendMCPResults_Error(t *testing.T) {
 
 func TestAppendMCPResults_NoMessages(t *testing.T) {
 	payload := map[string]any{"messages": "not-array"}
-	appendMCPResults(payload, []mcpToolCall{{ID: "1"}}, []*mcp.CallToolResult{{}})
+	appendMCPResults(payload, []mcpToolCall{{ID: "1"}}, []*mcp.CallToolResult{{}}, nil)
 }
 
 func TestAppendMCPResults_NilResults(t *testing.T) {
@@ -277,7 +287,7 @@ func TestAppendMCPResults_NilResults(t *testing.T) {
 		},
 	}
 
-	appendMCPResults(payload, []mcpToolCall{{ID: "call_1"}}, nil)
+	appendMCPResults(payload, []mcpToolCall{{ID: "call_1"}}, nil, nil)
 	messages := payload["messages"].([]any)
 	if len(messages) != 2 {
 		t.Fatalf("expected 2 messages (unchanged), got %d", len(messages))

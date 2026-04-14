@@ -8,10 +8,8 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
-	"net"
 	"net/http"
 	"net/url"
-	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -19,11 +17,9 @@ import (
 )
 
 var (
-	ErrTransportClosed    = errors.New("mcp transport: closed")
-	ErrTransportNotReady  = errors.New("mcp transport: not connected")
-	ErrRequestTimeout     = errors.New("mcp transport: request timeout")
-	ErrSessionTerminated  = errors.New("mcp transport: session terminated by server")
-	ErrUnexpectedResponse = errors.New("mcp transport: unexpected response")
+	ErrTransportClosed   = errors.New("mcp transport: closed")
+	ErrTransportNotReady = errors.New("mcp transport: not connected")
+	ErrRequestTimeout    = errors.New("mcp transport: request timeout")
 )
 
 type TransportConfig struct {
@@ -89,12 +85,7 @@ func NewHTTPTransport(cfg TransportConfig) *HTTPTransport {
 	}
 
 	t.httpClient = &http.Client{
-		Timeout: cfg.IdleTimeout,
 		Transport: &http.Transport{
-			DialContext: (&net.Dialer{
-				Timeout:   cfg.ConnectTimeout,
-				KeepAlive: cfg.IdleTimeout,
-			}).DialContext,
 			ResponseHeaderTimeout: cfg.RequestTimeout,
 			IdleConnTimeout:       cfg.IdleTimeout,
 			MaxIdleConns:          2,
@@ -296,8 +287,6 @@ func (t *HTTPTransport) waitForJSONRPCResponse(ctx context.Context, ch chan *Res
 		return result, nil
 	case <-ctx.Done():
 		return nil, ctx.Err()
-	case <-time.After(t.cfg.RequestTimeout):
-		return nil, ErrRequestTimeout
 	}
 }
 
@@ -514,23 +503,4 @@ func (t *HTTPTransport) SessionEndpoint() string {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	return t.sessionEndpoint
-}
-
-func parseSSEID(raw any) (int64, bool) {
-	switch v := raw.(type) {
-	case float64:
-		return int64(v), true
-	case json.Number:
-		n, err := v.Int64()
-		return n, err == nil
-	case string:
-		n, err := strconv.ParseInt(v, 10, 64)
-		return n, err == nil
-	case int64:
-		return v, true
-	case int:
-		return int64(v), true
-	default:
-		return 0, false
-	}
 }

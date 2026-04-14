@@ -480,30 +480,6 @@ func TestHTTPTransport_Defaults(t *testing.T) {
 	}
 }
 
-func TestParseSSEID(t *testing.T) {
-	tests := []struct {
-		input   any
-		want    int64
-		wantOK  bool
-	}{
-		{float64(42), 42, true},
-		{json.Number("42"), 42, true},
-		{"42", 42, true},
-		{int64(99), 99, true},
-		{int(7), 7, true},
-		{"not-a-number", 0, false},
-		{nil, 0, false},
-		{true, 0, false},
-	}
-
-	for _, tt := range tests {
-		got, ok := parseSSEID(tt.input)
-		if got != tt.want || ok != tt.wantOK {
-			t.Errorf("parseSSEID(%v) = (%d, %v), want (%d, %v)", tt.input, got, ok, tt.want, tt.wantOK)
-		}
-	}
-}
-
 func TestHTTPTransport_HeadersPassed(t *testing.T) {
 	mock := newMockMCPServer(t)
 
