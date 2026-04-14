@@ -242,10 +242,12 @@ func buildMCPClients(cfg config.Config, logger *slog.Logger) map[string]*mcp.Cli
 			continue
 		}
 		client := mcp.NewClient(mcp.ClientConfig{
-			Name:    "nenya",
-			URL:     serverCfg.URL,
-			Headers: serverCfg.Headers,
-			Logger:  logger,
+			Name:              "nenya",
+			URL:               serverCfg.URL,
+			Headers:           serverCfg.Headers,
+			RequestTimeout:    time.Duration(serverCfg.Timeout) * time.Second,
+			KeepAliveInterval: time.Duration(serverCfg.KeepAliveInterval) * time.Second,
+			Logger:            logger,
 		})
 		clients[name] = client
 	}

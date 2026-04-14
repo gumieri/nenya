@@ -83,6 +83,7 @@ MCP servers are configured at the top level:
 |-------|------|---------|-------------|
 | `url` | string | (required) | URL of the MCP HTTP+SSE proxy (e.g., `http://host:port`) |
 | `timeout` | int | `30` | Per-tool-call timeout in seconds |
+| `keep_alive_interval` | int | `4` | SSE keepalive ping interval in seconds. Must be shorter than the server's idle timeout. |
 | `headers` | object | (none) | Additional HTTP headers sent to the MCP server (e.g., auth) |
 
 ### Agent Configuration
@@ -140,7 +141,7 @@ Non-MCP tool calls (from the client like `file_edit`, `bash`) pass through unmod
 MCP integration follows the same best-effort philosophy as the rest of Nenya:
 
 - **Server unreachable at startup**: Tools from that server are silently omitted. A warning is logged. The request proceeds normally without those tools.
-- **Server goes down mid-session**: Tool calls fail with error results that are returned to the LLM as tool result messages. The LLM can inform the user or try a different approach.
+- **Server goes down mid-session**: The keepalive ping detects the dead connection and marks the transport as not-ready. Tool calls fail with error results that are returned to the LLM as tool result messages. The LLM can inform the user or try a different approach.
 - **Timeout**: Each MCP tool call has a configurable timeout (default 30s per-server). Timeouts return error results.
 - **Max iterations**: The multi-turn loop has a configurable max iteration count (default 10). When exhausted, the last buffered response is replayed to the client.
 - **No MCP configured**: Zero overhead — no allocation, no goroutine, no tool injection.

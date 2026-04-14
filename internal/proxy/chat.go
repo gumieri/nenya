@@ -519,7 +519,12 @@ func (p *Proxy) hasMCPTools(agentName string) bool {
 	if !ok || agent.MCP == nil || len(agent.MCP.Servers) == 0 {
 		return false
 	}
-	return p.GW.MCPToolIndex != nil && len(p.GW.MCPToolIndex.AllRoutes()) > 0
+	for _, serverName := range agent.MCP.Servers {
+		if client, ok := p.GW.MCPClients[serverName]; ok && client.Ready() {
+			return true
+		}
+	}
+	return false
 }
 
 func (p *Proxy) injectMCPTools(payload map[string]interface{}, agentName string) {
