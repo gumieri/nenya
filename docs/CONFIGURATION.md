@@ -365,9 +365,9 @@ Models not in this registry (e.g., local Ollama models, custom endpoints) must b
 ## Processing Pipeline Order
 
  1. **Response cache lookup** (if enabled, bypass entire pipeline on hit)
-2. **Memory search + injection** (if agent has memory configured, search mem0 and inject as system message)
-3. **MCP auto-search** (if agent has mcp.auto_search, query MCP server and inject as system message)
-4. **MCP tool injection** (if agent has MCP servers, inject tools as OpenAI function tools)
+ 2. **Memory search + injection** (MCP-first with mem0 fallback: if agent has MCP servers with a search tool, use MCP; else if agent has mem0, use mem0)
+ 3. **MCP auto-search** (if agent has mcp.auto_search, query MCP server and inject as system message)
+ 4. **MCP tool injection** (if agent has MCP servers, inject tools as OpenAI function tools + system prompt)
 5. **Prefix cache optimizations** (pin system messages, sort tools — includes MCP tools)
 6. **Agent system prompt injection** (if agent has prompt and no system message exists)
 7. **Tier-0 regex redaction** (secret patterns via `security_filter`)

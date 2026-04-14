@@ -517,9 +517,56 @@ func (p *Proxy) injectMemoryContext(ctx context.Context, payload map[string]inte
 	if agentName == "" {
 		return
 	}
-	memClient, ok := p.GW.MemoryClients[agentName]
-	if !ok {
-		return
+
+	// Phase 7: Check MCP-based memory first
+	memClient, haveMCP := p.GW.MemoryClients[agentName]
+	if !haveMCP {
+		// Check if agent has MCP servers that could serve as memory
+		if agent, agentOk := p.GW.Config.Agents[agentName]; agentOk && agent.MCP != nil && len(agent.MCP.Servers) > 0 {
+			// Try to use first available MCP server for memory search
+			for _, serverName := range agent.MCP.Servers {
+				client, clientOk := p.GW.MCPClients[serverName]
+				if !clientOk || !client.Ready() {
+					continue
+				}
+				// Try to discover a search tool on the MCP server
+				searchTool := agent.MCP.SearchTool
+				if searchTool == "" {
+					searchTool = p.discoverToolByPrefix(serverName, "search")
+				}
+				if searchTool != "" {
+					lastMsg, msgOk := messages[len(messages)-1].(map[string]interface{})
+					if !msgOk {
+						continue
+					}
+					query := gateway.ExtractContentText(lastMsg)
+					if query != "" {
+						if result, err := client.CallTool(ctx, searchTool, map[string]any{
+							"query": query,
+							"limit": 5,
+						}); err == nil && result != nil && result.Text() != "" {
+							contextStr := fmt.Sprintf("[Memory from %s]\n%s", serverName, result.Text())
+							memoryMsg := map[string]interface{}{
+								"role":    "system",
+								"content": contextStr,
+							}
+							updated := make([]interface{}, 0, len(messages)+1)
+							updated = append(updated, memoryMsg)
+							updated = append(updated, messages...)
+							payload["messages"] = updated
+							p.GW.Logger.Debug("MCP memory context injected", "agent", agentName, "server", serverName, "tool", searchTool)
+							return
+						}
+					}
+				}
+			}
+		}
+		// Fall back to mem0 if configured
+		var memOk bool
+		memClient, memOk = p.GW.MemoryClients[agentName]
+		if !memOk {
+			return
+		}
 	}
 
 	lastIdx := len(messages) - 1
@@ -581,6 +628,7 @@ func (p *Proxy) injectMCPTools(payload map[string]interface{}, agentName string)
 		return
 	}
 
+	var toolNames []string
 	for _, serverName := range agent.MCP.Servers {
 		client, ok := p.GW.MCPClients[serverName]
 		if !ok || !client.Ready() {
@@ -599,12 +647,69 @@ func (p *Proxy) injectMCPTools(payload map[string]interface{}, agentName string)
 
 		for _, t := range openaiTools {
 			existing = append(existing, t)
+			if fn, ok := t["function"].(map[string]any); ok {
+				if name, ok := fn["name"].(string); ok {
+					toolNames = append(toolNames, name)
+				}
+			}
 		}
 
 		payload["tools"] = existing
 		p.GW.Logger.Debug("MCP tools injected",
 			"server", serverName, "tools", len(tools), "agent", agentName)
 	}
+
+	if len(toolNames) > 0 {
+		p.injectMCPSystemPrompt(payload, toolNames)
+	}
+}
+
+func (p *Proxy) injectMCPSystemPrompt(payload map[string]interface{}, toolNames []string) {
+	var toolsList strings.Builder
+	for i, name := range toolNames {
+		if i > 0 {
+			toolsList.WriteString(", ")
+		}
+		toolsList.WriteString("`" + name + "`")
+	}
+
+	prompt := fmt.Sprintf(
+		"You have access to the following MCP tools for long-term memory and knowledge retrieval: %s. "+
+			"Use these tools when the user asks about previously discussed information, needs to recall past "+
+			"conversations, or explicitly requests memory/knowledge operations. Do NOT mention these tools "+
+			"unless the user's query requires accessing stored information.",
+		toolsList.String(),
+	)
+
+	messages, ok := payload["messages"].([]interface{})
+	if !ok || len(messages) == 0 {
+		return
+	}
+
+	mcpMsg := map[string]interface{}{
+		"role":    "system",
+		"content": prompt,
+	}
+
+	updated := make([]interface{}, 0, len(messages)+1)
+	updated = append(updated, mcpMsg)
+	updated = append(updated, messages...)
+	payload["messages"] = updated
+
+	p.GW.Logger.Debug("MCP system prompt injected", "tools", len(toolNames))
+}
+
+func (p *Proxy) discoverToolByPrefix(serverName, prefix string) string {
+	client, ok := p.GW.MCPClients[serverName]
+	if !ok {
+		return ""
+	}
+	for _, tool := range client.ListTools() {
+		if strings.HasPrefix(tool.Name, prefix) {
+			return tool.Name
+		}
+	}
+	return ""
 }
 
 func (p *Proxy) injectAutoSearch(ctx context.Context, payload map[string]interface{}, messages []interface{}, agentName string) {
@@ -633,13 +738,24 @@ func (p *Proxy) injectAutoSearch(ctx context.Context, payload map[string]interfa
 		return
 	}
 
+	searchTool := agent.MCP.SearchTool
 	for _, serverName := range agent.MCP.Servers {
 		client, ok := p.GW.MCPClients[serverName]
 		if !ok || !client.Ready() {
 			continue
 		}
 
-		result, err := client.CallTool(ctx, "search", map[string]any{
+		toolName := searchTool
+		if toolName == "" {
+			toolName = p.discoverToolByPrefix(serverName, "search")
+			if toolName == "" {
+				p.GW.Logger.Warn("MCP auto-search: no 'search' tool found on server",
+					"server", serverName, "agent", agentName)
+				continue
+			}
+		}
+
+		result, err := client.CallTool(ctx, toolName, map[string]any{
 			"query": query,
 			"limit": 5,
 		})
@@ -652,7 +768,7 @@ func (p *Proxy) injectAutoSearch(ctx context.Context, payload map[string]interfa
 			continue
 		}
 
-		contextStr := fmt.Sprintf("[MemPalace context from %s]\n%s", serverName, result.Text())
+		contextStr := fmt.Sprintf("[Memory context from %s]\n%s", serverName, result.Text())
 		memoryMsg := map[string]interface{}{
 			"role":    "system",
 			"content": contextStr,
@@ -666,6 +782,7 @@ func (p *Proxy) injectAutoSearch(ctx context.Context, payload map[string]interfa
 
 		p.GW.Logger.Debug("MCP auto-search context injected",
 			"server", serverName, "agent", agentName,
+			"tool", toolName,
 			"result_len", len(result.Text()))
 		break
 	}
@@ -742,7 +859,7 @@ func (p *Proxy) forwardToUpstreamWithMCP(
 				"agent", agentName)
 
 			results := executeMCPCalls(r.Context(), mcpCalls, p)
-			appendMCPResults(working, mcpCalls, results)
+			appendMCPResults(working, mcpCalls, results, buf.assistantMessage)
 
 			updatedPayload, err := json.Marshal(working)
 			if err != nil {

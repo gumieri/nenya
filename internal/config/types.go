@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"nenya/internal/mcp"
 	"nenya/internal/memory"
 )
 
@@ -347,8 +346,6 @@ type AgentMCPConfig struct {
 	MaxIterations int      `json:"max_iterations,omitempty"`
 	AutoSave      bool     `json:"auto_save,omitempty"`
 	AutoSearch    bool     `json:"auto_search,omitempty"`
-}
-
-type MCPClientsConfig struct {
-	Clients map[string]*mcp.Client `json:"-"`
+	SearchTool    string   `json:"search_tool,omitempty"`
+	SaveTool      string   `json:"save_tool,omitempty"`
 }

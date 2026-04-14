@@ -42,18 +42,21 @@ Client Request (model: "build")
 2. For each referenced server, transforms MCP tools into OpenAI function tool format
 3. Tools are namespaced as `server__tool_name` (e.g., `mempalace__mempalace_search`)
 4. Tools are appended to the request's existing `tools[]` array
-5. The `prefix_cache.stable_tools` optimization sorts all tools (including MCP) for deterministic ordering
+5. A system prompt is injected instructing the LLM to use the MCP tools for memory/knowledge retrieval
+6. The `prefix_cache.stable_tools` optimization sorts all tools (including MCP) for deterministic ordering
 
 ### Multi-Turn Tool Execution (Per-Request)
 
 1. The upstream response is buffered completely in memory (not streamed to client)
 2. The buffered SSE is parsed for `tool_calls` in the response
-3. Tool calls are partitioned into MCP tools vs client tools:
-   - **MCP tools**: Executed locally via the MCP client (parallel)
-   - **Client tools**: Passed through to the client unmodified
-4. MCP tool results are appended to the messages array
-5. The request is re-sent to the upstream
-6. This loops until: content response, client-only tools, or max iterations reached
+3. The assistant message (with `tool_calls` or content) is reconstructed from the buffered stream
+4. Tool calls are partitioned into MCP tools vs client tools:
+    - **MCP tools**: Executed locally via the MCP client (parallel)
+    - **Client tools**: Passed through to the client unmodified
+5. The reconstructed assistant message is appended to the messages array
+6. MCP tool results are appended as `tool` role messages after the assistant message
+7. The request is re-sent to the upstream
+8. This loops until: content response, client-only tools, or max iterations reached
 
 ### Streaming Argument Accumulation
 
@@ -109,6 +112,8 @@ MCP integration is enabled per-agent:
 | `max_iterations` | int | `10` | Maximum MCP tool call rounds per request |
 | `auto_search` | bool | `false` | Automatically search MCP servers for relevant context before forwarding |
 | `auto_save` | bool | `false` | Automatically store assistant responses to MCP server after streaming |
+| `search_tool` | string | (auto) | MCP tool name for auto-search. Auto-discovers a tool prefixed with `search` if not set. |
+| `save_tool` | string | (auto) | MCP tool name for auto-save. Auto-discovers a tool prefixed with `add` or `save` if not set. |
 
 ## Running an MCP Server
 
@@ -194,3 +199,31 @@ MCP integration follows the same best-effort philosophy as the rest of Nenya:
 - Tool call arguments are passed through to MCP servers as-is. Nenya does not sanitize MCP tool call arguments.
 - MCP server responses (tool results) are injected directly into the LLM conversation as tool messages. The LLM sees them unmodified.
 - Timeout values prevent hanging connections to slow MCP servers.
+
+## Memory Migration (mem0 to MCP)
+
+Nenya supports a graceful migration path from mem0 to MCP-based memory:
+
+1. **If both MCP and mem0 are configured for an agent**, MCP takes priority. Nenya checks for MCP servers with a `search`-prefixed tool first.
+2. **If no MCP servers are configured**, Nenya falls back to mem0 (if configured).
+3. **If neither is configured**, no memory context is injected — zero overhead.
+
+This means existing mem0 deployments continue working unchanged, and MCP can be adopted incrementally.
+
+## Transport Details
+
+Nenya connects to MCP servers via HTTP+SSE (Server-Sent Events). Two transport modes are supported:
+
+### Direct Mode (HTTP 200)
+
+The MCP server returns JSON-RPC responses directly in the POST response body with `HTTP 200`. This is the simpler mode used by some MCP implementations.
+
+### Proxy Mode (HTTP 202 + SSE)
+
+The `mcp-proxy` (from `@modelcontextprotocol/sdk`) uses a different pattern:
+
+1. `GET /sse` — Opens a long-lived SSE connection. Returns an `endpoint` event with the session URL (e.g., `/messages?sessionId=UUID`).
+2. `POST /messages?sessionId=...` — Returns `HTTP 202 Accepted` with body `Accepted`. The actual JSON-RPC response arrives via the SSE stream as an `event: message`.
+3. The SSE connection must remain open for the session to stay alive. Closing the SSE connection destroys the session.
+
+Nenya handles both modes transparently in the transport layer. If the POST returns 202, it waits for the response on the SSE event dispatch channel. If the POST returns 200, it parses the body directly.

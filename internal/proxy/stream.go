@@ -378,15 +378,28 @@ func (p *Proxy) asyncMCPAutoSave(agentName string, contentBuilder *memory.Conten
 				continue
 			}
 
-			ctx, cancel := context.WithTimeout(context.Background(), mcpExecTimeout)
-			defer cancel()
+			saveTool := agent.MCP.SaveTool
+			if saveTool == "" {
+				saveTool = p.discoverToolByPrefix(serverName, "add")
+				if saveTool == "" {
+					saveTool = p.discoverToolByPrefix(serverName, "save")
+					if saveTool == "" {
+						p.GW.Logger.Warn("MCP auto-save: no 'add'/'save' tool found on server",
+							"server", serverName, "agent", agentName)
+						continue
+					}
+				}
+			}
 
-			_, err := client.CallTool(ctx, "add_drawer", map[string]any{
-				"wing":    agentName,
-				"room":    "conversation",
-				"content": assistantContent,
+			ctx, cancel := context.WithTimeout(context.Background(), mcpExecTimeout)
+
+			_, err := client.CallTool(ctx, saveTool, map[string]any{
+				"wing":     agentName,
+				"room":     "conversation",
+				"content":  assistantContent,
 				"added_by": "nenya",
 			})
+			cancel()
 			if err != nil {
 				p.GW.Logger.Warn("MCP auto-save failed (best-effort)",
 					"server", serverName, "agent", agentName, "err", err)
