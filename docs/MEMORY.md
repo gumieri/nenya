@@ -4,6 +4,32 @@
 
 Nenya integrates with [mem0](https://github.com/mem0ai/mem0) to provide long-term memory for AI agents. When configured, agents automatically search for relevant past memories before each request and store conversation history after each response — all transparently to the client.
 
+## Migration to MCP
+
+Nenya supports a graceful migration path:
+
+1. **Configure MCP servers** alongside mem0 — both can coexist for the same agent
+2. **MCP takes priority** — if the agent has MCP servers with a `search`-prefixed tool, MCP is used for memory search instead of mem0
+3. **mem0 as fallback** — if no MCP servers are configured (or no search tool is found), mem0 is used if configured
+4. **Remove mem0** once MCP is working — delete the `memory` block from the agent config
+
+```json
+{
+  "agents": {
+    "build": {
+      "memory": { "url": "http://127.0.0.1:8081", "user_id": "dev-user" },
+      "mcp": {
+        "servers": ["mempalace"],
+        "auto_search": true,
+        "auto_save": true
+      }
+    }
+  }
+}
+```
+
+In this example, MCP auto-search handles memory retrieval. The mem0 config is kept as fallback but will not be used as long as the MCP server is available.
+
 ## How It Works
 
 ```

@@ -20,10 +20,12 @@ const (
 )
 
 type bufferedSSE struct {
-	rawBytes     []byte
-	toolCalls    []mcpToolCall
-	finishReason string
-	hasContent   bool
+	rawBytes          []byte
+	toolCalls         []mcpToolCall
+	assistantMessage  map[string]any
+	finishReason      string
+	hasContent        bool
+	model             string
 }
 
 type mcpToolCall struct {
@@ -49,9 +51,9 @@ func bufferStreamResponse(ctx context.Context, r io.Reader) (*bufferedSSE, error
 	var toolCalls []mcpToolCall
 	var finishReason string
 	var hasContent bool
+	var contentBuilder strings.Builder
+	var model string
 
-	// Accumulate tool call arguments across streaming chunks
-	// keyed by tool call index
 	tcArgsAccum := make(map[int]*strings.Builder)
 	tcNameAccum := make(map[int]string)
 	tcIDAccum := make(map[int]string)
@@ -85,6 +87,10 @@ func bufferStreamResponse(ctx context.Context, r io.Reader) (*bufferedSSE, error
 			continue
 		}
 
+		if m, ok := chunk["model"].(string); ok && m != "" {
+			model = m
+		}
+
 		var delta map[string]any
 		if choices, ok := chunk["choices"].([]any); ok && len(choices) > 0 {
 			if choice, ok := choices[0].(map[string]any); ok {
@@ -98,6 +104,7 @@ func bufferStreamResponse(ctx context.Context, r io.Reader) (*bufferedSSE, error
 			if content, ok := delta["content"]; ok && content != nil {
 				if s, ok := content.(string); ok && s != "" {
 					hasContent = true
+					contentBuilder.WriteString(s)
 				}
 			}
 			if tcSlice, ok := delta["tool_calls"].([]any); ok {
@@ -148,7 +155,6 @@ func bufferStreamResponse(ctx context.Context, r io.Reader) (*bufferedSSE, error
 		return nil, fmt.Errorf("reading SSE stream: %w", err)
 	}
 
-	// Build final tool calls from accumulated data
 	for idx := 0; idx < len(tcIDAccum); idx++ {
 		id := tcIDAccum[idx]
 		name := tcNameAccum[idx]
@@ -169,12 +175,44 @@ func bufferStreamResponse(ctx context.Context, r io.Reader) (*bufferedSSE, error
 		})
 	}
 
+	var assistantMsg map[string]any
+	if len(toolCalls) > 0 {
+		assistantMsg = map[string]any{
+			"role":       "assistant",
+			"content":    nil,
+			"tool_calls": buildOpenAIToolCalls(toolCalls),
+		}
+	} else if hasContent {
+		assistantMsg = map[string]any{
+			"role":      "assistant",
+			"content":   contentBuilder.String(),
+		}
+	}
+
 	return &bufferedSSE{
-		rawBytes:     []byte(sb.String()),
-		toolCalls:    toolCalls,
-		finishReason: finishReason,
-		hasContent:   hasContent,
+		rawBytes:         []byte(sb.String()),
+		toolCalls:        toolCalls,
+		assistantMessage: assistantMsg,
+		finishReason:     finishReason,
+		hasContent:       hasContent,
+		model:            model,
 	}, nil
+}
+
+func buildOpenAIToolCalls(calls []mcpToolCall) []any {
+	result := make([]any, 0, len(calls))
+	for _, call := range calls {
+		argsBytes, _ := json.Marshal(call.Arguments)
+		result = append(result, map[string]any{
+			"id":   call.ID,
+			"type": "function",
+			"function": map[string]any{
+				"name":      call.Name,
+				"arguments": string(argsBytes),
+			},
+		})
+	}
+	return result
 }
 
 func partitionMCPToolCalls(calls []mcpToolCall, toolIndex *mcp.ToolRegistry) (mcpCalls, nonMcpCalls []mcpToolCall) {
@@ -238,7 +276,7 @@ func executeMCPCalls(ctx context.Context, calls []mcpToolCall, gw *Proxy) []*mcp
 	return results
 }
 
-func appendMCPResults(payload map[string]any, calls []mcpToolCall, results []*mcp.CallToolResult) {
+func appendMCPResults(payload map[string]any, calls []mcpToolCall, results []*mcp.CallToolResult, assistantMsg map[string]any) {
 	if len(calls) == 0 || len(results) == 0 {
 		return
 	}
@@ -248,20 +286,9 @@ func appendMCPResults(payload map[string]any, calls []mcpToolCall, results []*mc
 		return
 	}
 
-	lastAssistantIdx := -1
-	for i := len(messages) - 1; i >= 0; i-- {
-		if msg, ok := messages[i].(map[string]any); ok {
-			if role, _ := msg["role"].(string); role == "assistant" {
-				if _, hasToolCalls := msg["tool_calls"]; hasToolCalls {
-					lastAssistantIdx = i
-					break
-				}
-			}
-		}
-	}
-
-	if lastAssistantIdx == -1 {
-		return
+	// Inject assistant message if provided
+	if assistantMsg != nil {
+		messages = append(messages, assistantMsg)
 	}
 
 	var toolResults []any
@@ -283,9 +310,8 @@ func appendMCPResults(payload map[string]any, calls []mcpToolCall, results []*mc
 	}
 
 	newMessages := make([]any, 0, len(messages)+len(toolResults))
-	newMessages = append(newMessages, messages[:lastAssistantIdx+1]...)
+	newMessages = append(newMessages, messages...)
 	newMessages = append(newMessages, toolResults...)
-	newMessages = append(newMessages, messages[lastAssistantIdx+1:]...)
 
 	payload["messages"] = newMessages
 }

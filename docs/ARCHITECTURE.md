@@ -38,12 +38,15 @@ Client Request
   │   ├─ Resolve agent or provider
   │   ├─ Response cache lookup (if enabled)
   │   │   └─ HIT → replay cached SSE, done
-  │   ├─ Memory search (if agent has memory configured)
-  │   │   └─ Inject relevant memories as system message before last user message
+   │   ├─ Memory search (MCP-first with mem0 fallback)
+   │   │   ├─ If agent has MCP servers with a search tool → use MCP search
+   │   │   ├─ Else if agent has mem0 configured → use mem0 search
+   │   │   └─ Inject relevant memories as system message before last user message
   │   ├─ MCP auto-search (if agent has mcp.auto_search, queries MCP server)
   │   │   └─ Inject relevant context as system message before last user message
   │   ├─ MCP tool injection (if agent has MCP servers configured)
-  │   │   └─ Inject MCP tools as OpenAI function tools into request
+  │   │   ├─ Inject MCP tools as OpenAI function tools into request
+  │   │   └─ Inject system prompt instructing LLM to use MCP tools for memory retrieval
   │   ├─ Content pipeline (best-effort — failures logged, never block request):
   │   │   ├─ Prefix cache optimizations
   │   │   ├─ Tier-0 regex secret redaction (code-span-aware for IDE clients)
@@ -87,7 +90,7 @@ Client Request
   │       ├─ sseTeeWriter (capture for response cache)
   │       └─ Async memory store (POST /memories after stream completes, best-effort)
   ├─ Async MCP auto-save (if agent has mcp.auto_save)
-  │       └─ POST add_drawer to MCP server with assistant content (best-effort)
+  │       └─ POST to MCP server with assistant content (best-effort, tool name configurable)
   ├─ GET /v1/models
   ├─ POST /v1/embeddings
   ├─ POST /v1/responses (transparent passthrough, no content pipeline)
@@ -104,11 +107,12 @@ Request with MCP tools injected
   │
   ├─ Buffer entire SSE response (no streaming to client yet)
   ├─ Parse response for tool_calls
+  ├─ Reconstruct assistant message (with content or tool_calls) from buffered SSE
   ├─ No tool_calls → replay buffered response to client, done
   ├─ Only client tool_calls → replay to client, done
   └─ Has MCP tool_calls:
       ├─ Execute MCP tool calls in parallel
-      ├─ Append tool results to messages
+      ├─ Append assistant message + tool results to messages
       └─ Re-send to upstream (loop up to max_iterations)
 ```
 

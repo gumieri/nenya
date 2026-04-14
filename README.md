@@ -13,9 +13,10 @@ Nenya acts as a **silent guardian** for your AI interactions. Its core strength 
 | Document | Description |
 |----------|-------------|
 | [Architecture](docs/ARCHITECTURE.md) | Package DAG, request lifecycle, circuit breaker, SSE pipeline, response cache |
+| [MCP Integration](docs/MCP_INTEGRATION.md) | MCP server integration, tool discovery, multi-turn execution, auto-search/save |
 | [Adapters](docs/ADAPTERS.md) | Provider adapter system, capabilities, auth styles, how to add providers |
 | [Configuration](docs/CONFIGURATION.md) | Full config reference with all sections and fields |
-| [Memory](docs/MEMORY.md) | mem0 integration for long-term agent memory |
+| [Memory](docs/MEMORY.md) | mem0 integration for long-term agent memory (deprecated, MCP recommended) |
 | [Demo](docs/DEMO.md) | Quick start, pipeline testing, cache bypass, circuit breaker observability |
 | [Secrets Format](docs/SECRETS_FORMAT.md) | Systemd credential management, provider key setup |
 | [Security](docs/SECURITY.md) | Vulnerability reporting policy |
@@ -54,7 +55,8 @@ Nenya acts as a **silent guardian** for your AI interactions. Its core strength 
 - **Agent fallback chains** — agent-level strategy with circuit breaker and automatic failover
 - **System prompts** — inject custom system prompts per agent (inline or file-based)
 - **Per-model max_tokens injection** — from ModelRegistry when client doesn't set it
-- **Long-term memory** — optional mem0 integration per agent for persistent memory search and storage
+- **MCP tool integration** — connect to MCP servers (MemPalace, etc.) for tool discovery, auto-search, auto-save, and multi-turn tool execution
+- **Long-term memory** — MCP-based memory with mem0 fallback per agent for persistent memory search and storage
 
 ## Quick Start
 
@@ -107,9 +109,10 @@ All `/v1/*` endpoints require `Authorization: Bearer <client_token>`.
 
 | Endpoint | Auth | Description |
 |----------|------|-------------|
-| `POST /v1/chat/completions` | Bearer | OpenAI-compatible chat with SSE streaming, Ollama interception, agent fallback |
+| `POST /v1/chat/completions` | Bearer | OpenAI-compatible chat with SSE streaming, Ollama interception, agent fallback, MCP multi-turn |
 | `GET /v1/models` | Bearer | Available models catalog |
 | `POST /v1/embeddings` | Bearer | Passthrough proxy for embeddings |
+| `POST /v1/responses` | Bearer | Passthrough proxy for responses API |
 | `GET /healthz` | None | Engine health probe |
 | `GET /statsz` | None | Token usage, per-model stats, circuit breaker state |
 | `GET /metrics` | None | Prometheus-compatible metrics |
