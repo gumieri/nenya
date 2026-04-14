@@ -117,58 +117,11 @@ MCP integration is enabled per-agent:
 
 ## Running an MCP Server
 
-### MemPalace via `mcp proxy`
-
-```bash
-# Clone and install MemPalace
-cd /path/to/mempalace
-pip install -e .
-
-# Start MCP proxy (default port 6060)
-mcp proxy
-```
-
-Nenya connects to the proxy via HTTP+SSE. The proxy exposes:
+MCP servers run behind an HTTP+SSE proxy. Nenya connects to the proxy via:
 - `GET /sse` — SSE connection for receiving the session endpoint
 - `POST /message` — JSON-RPC 2.0 endpoint for tool calls
 
-To change the proxy port:
-
-```bash
-mcp proxy --port 6060
-```
-
-### Multiple MCP Servers
-
-Agents can reference multiple servers:
-
-```json
-{
-  "mcp_servers": {
-    "mempalace": {
-      "url": "http://localhost:6060"
-    },
-    "files": {
-      "url": "http://localhost:8081",
-      "headers": {
-        "Authorization": "Bearer token"
-      }
-    }
-  }
-}
-```
-
-```json
-{
-  "agents": {
-    "build": {
-      "mcp": {
-        "servers": ["mempalace", "files"]
-      }
-    }
-  }
-}
-```
+See [MCP Server Examples](#mcp-server-examples) below for specific setup instructions.
 
 ## Tool Name Namespacing
 
@@ -200,28 +153,51 @@ MCP integration follows the same best-effort philosophy as the rest of Nenya:
 - MCP server responses (tool results) are injected directly into the LLM conversation as tool messages. The LLM sees them unmodified.
 - Timeout values prevent hanging connections to slow MCP servers.
 
-## Memory Migration (mem0 to MCP)
+## MCP Server Examples
 
-The mem0 direct integration has been removed from Nenya. Memory is now exclusively handled through MCP servers.
+### MemPalace
 
-### Using mem0 via MCP
-
-To use mem0 alongside MemPalace, run mem0 behind an MCP proxy:
+[MemPalace](https://github.com/nenya/mempalace) provides semantic memory via drawers and wings. Run it via `mcp proxy`:
 
 ```bash
-# Install mem0 MCP server (example using mcp-proxy)
-pip install mem0ai mcp-proxy
-mcp-proxy --port 8081 -- mem0-mcp-server
+cd /path/to/mempalace
+pip install -e .
+mcp proxy --port 6060
 ```
-
-Then configure both servers in Nenya:
 
 ```json
 {
   "mcp_servers": {
     "mempalace": {
       "url": "http://localhost:6060"
-    },
+    }
+  },
+  "agents": {
+    "build": {
+      "mcp": {
+        "servers": ["mempalace"],
+        "auto_search": true,
+        "auto_save": true
+      }
+    }
+  }
+}
+```
+
+MemPalace exposes tools like `mempalace_search` and `add_drawer`. Nenya auto-discovers them by scanning tool names for `search` and `add`/`save` substrings.
+
+### mem0
+
+[mem0](https://github.com/mem0ai/mem0) provides long-term AI memory. Expose it as an MCP server:
+
+```bash
+pip install mem0ai mcp-proxy
+mcp-proxy --port 8081 -- mem0-mcp-server
+```
+
+```json
+{
+  "mcp_servers": {
     "mem0": {
       "url": "http://localhost:8081",
       "headers": {
@@ -232,37 +208,89 @@ Then configure both servers in Nenya:
 }
 ```
 
-The agent can use both servers:
+Set `search_tool` and `save_tool` explicitly when using non-MemPalace servers:
 
 ```json
 {
   "agents": {
     "build": {
       "mcp": {
-        "servers": ["mempalace", "mem0"],
+        "servers": ["mem0"],
         "auto_search": true,
         "auto_save": true,
-        "search_tool": "mempalace__mempalace_search",
-        "save_tool": "mempalace__add_drawer"
+        "search_tool": "mem0_search",
+        "save_tool": "mem0_add"
       }
     }
   }
 }
 ```
 
-### Auto-Search and Auto-Save Tool Conventions
+### GitHub MCP Server
 
-The `auto_search` and `auto_save` features rely on MCP servers exposing tools with specific names. Nenya uses configurable tool names with automatic discovery:
+The official [GitHub MCP Server](https://github.com/github/github-mcp-server) provides GitHub API access (issues, PRs, repos, etc.):
 
-| Feature | Config Field | Auto-Discovery Fallback | Arguments |
-|---------|-------------|------------------------|-----------|
-| `auto_search` | `search_tool` | Any tool prefixed with `search` | `{"query": <string>, "limit": 5}` |
-| `auto_save` | `save_tool` | Any tool prefixed with `add`, then `save` | `{"wing": <agent>, "room": "conversation", "content": <string>, "added_by": "nenya"}` |
+```bash
+npx -y @modelcontextprotocol/server-github
+```
 
-- If `search_tool` / `save_tool` are not set, Nenya scans the server's tool list for matching prefixes.
+```json
+{
+  "mcp_servers": {
+    "github": {
+      "url": "http://localhost:3001",
+      "headers": {
+        "Authorization": "Bearer ghp_..."
+      }
+    }
+  },
+  "agents": {
+    "build": {
+      "mcp": {
+        "servers": ["github"],
+        "max_iterations": 5
+      }
+    }
+  }
+}
+```
+
+GitHub MCP tools (e.g., `create_issue`, `search_repositories`) are injected as `github__create_issue`, `github__search_repositories`. No auto-search/auto-save — these are explicit LLM-initiated tool calls.
+
+### Combining Multiple Servers
+
+Agents can reference multiple MCP servers. Tools from all servers are injected simultaneously:
+
+```json
+{
+  "mcp_servers": {
+    "mempalace": { "url": "http://localhost:6060" },
+    "github": { "url": "http://localhost:3001", "headers": { "Authorization": "Bearer ghp_..." } }
+  },
+  "agents": {
+    "build": {
+      "mcp": {
+        "servers": ["mempalace", "github"],
+        "auto_search": true,
+        "auto_save": true
+      }
+    }
+  }
+}
+```
+
+## Auto-Search and Auto-Save Conventions
+
+The `auto_search` and `auto_save` features use configurable tool names with automatic discovery:
+
+| Feature | Config Field | Auto-Discovery | Arguments |
+|---------|-------------|----------------|-----------|
+| `auto_search` | `search_tool` | Any tool name containing `search` | `{"query": <string>, "limit": 5}` |
+| `auto_save` | `save_tool` | Any tool name containing `add`, then `save` | `{"wing": <agent>, "room": "conversation", "content": <string>, "added_by": "nenya"}` |
+
+- If not set, Nenya scans the server's tool list for names containing the prefix substring.
 - For **multi-server agents**, `auto_search` uses the first server that returns a non-empty result. `auto_save` uses the first server with a matching tool.
-- The `save_tool` arguments (`wing`, `room`, `added_by`) follow MemPalace's drawer API convention. Other MCP servers may need to adapt their tool schemas accordingly.
-- Set `search_tool` and `save_tool` explicitly when using non-MemPalace servers to avoid auto-discovery ambiguity.
+- The `save_tool` arguments follow MemPalace's drawer API convention. Set `save_tool` explicitly for non-MemPalace servers with different schemas.
 
 ## Transport Details
 
