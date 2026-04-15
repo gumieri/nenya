@@ -139,6 +139,10 @@ func ApplyDefaults(cfg *Config) error {
 	if cfg.Compaction.ToolProtectionWindow == 0 && !cfg.Compaction.PruneWasSet() {
 		cfg.Compaction.ToolProtectionWindow = 4
 	}
+	// Thought pruning defaults - off by default
+	if !cfg.Compaction.PruneThoughts && !cfg.Compaction.PruneThoughtsWasSet() {
+		cfg.Compaction.PruneThoughts = false
+	}
 	if !cfg.Compaction.Enabled && !cfg.Compaction.EnabledWasSet() && (cfg.Compaction.JSONMinify || cfg.Compaction.CollapseBlankLines || cfg.Compaction.TrimTrailingWhitespace || cfg.Compaction.NormalizeLineEndings) {
 		cfg.Compaction.Enabled = true
 	}
