@@ -46,6 +46,27 @@ func replayBufferedResponse(w http.ResponseWriter, buf *bufferedSSE) {
 	}
 }
 
+func writeSSEError(w http.ResponseWriter, statusCode int, message string) {
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.WriteHeader(statusCode)
+
+	errPayload := map[string]any{
+		"error": map[string]any{
+			"message": message,
+			"type":    "gateway_error",
+		},
+	}
+	errBytes, _ := json.Marshal(errPayload)
+	sseData := fmt.Sprintf("data: %s\n\n", errBytes)
+
+	if fw, ok := newImmediateFlushWriterSafe(w); ok {
+		fw.Write([]byte(sseData))
+	} else {
+		w.Write([]byte(sseData))
+	}
+}
+
 func bufferStreamResponse(ctx context.Context, r io.Reader) (*bufferedSSE, error) {
 	var sb strings.Builder
 	var toolCalls []mcpToolCall
@@ -147,6 +168,7 @@ func bufferStreamResponse(ctx context.Context, r io.Reader) (*bufferedSSE, error
 			}
 		}
 
+		sb.WriteString("data: ")
 		sb.WriteString(data)
 		sb.WriteString("\n\n")
 	}
