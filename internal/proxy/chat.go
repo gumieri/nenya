@@ -728,7 +728,7 @@ func (p *Proxy) forwardToUpstreamWithMCP(
 	originalPayload, err := json.Marshal(payload)
 	if err != nil {
 		p.GW.Logger.Error("failed to marshal payload for MCP loop", "err", err)
-		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+		writeSSEError(w, http.StatusInternalServerError, "Internal Server Error")
 		return
 	}
 
@@ -756,7 +756,7 @@ func (p *Proxy) forwardToUpstreamWithMCP(
 				replayBufferedResponse(w, lastBuf)
 				return
 			}
-			http.Error(w, "Upstream provider error", http.StatusInternalServerError)
+			writeSSEError(w, http.StatusBadGateway, "All upstream providers failed")
 			return
 		}
 
@@ -829,7 +829,14 @@ func (p *Proxy) forwardBuffered(
 		}
 	}
 
+	attempt := 0
 	for i, target := range targets {
+		if maxRetries > 0 && attempt >= maxRetries {
+			p.GW.Logger.Warn("max retries reached in buffered mode",
+				"attempt", attempt, "max", maxRetries, "agent", agentName)
+			break
+		}
+
 		workingPayload := make(map[string]interface{})
 		if err := json.Unmarshal(originalPayload, &workingPayload); err != nil {
 			p.GW.Logger.Error("failed to unmarshal payload for target",
@@ -842,15 +849,25 @@ func (p *Proxy) forwardBuffered(
 		case actionContinue:
 			continue
 		case actionError:
+			attempt++
 			action.body, _ = io.ReadAll(io.LimitReader(action.resp.Body, pipeline.MaxErrorBodyBytes))
 			action.resp.Body.Close()
 			shouldRetry, retryDelay := p.handleUpstreamError(i, targets, target, cooldownDuration, agentName, action)
 			action.cancel()
 			if shouldRetry {
+				if maxRetries > 0 && attempt >= maxRetries {
+					p.GW.Logger.Warn("max retries reached in buffered mode after error",
+						"attempt", attempt, "max", maxRetries, "agent", agentName)
+					break
+				}
 				if retryDelay > 0 {
+					p.GW.Logger.Info("retrying with parsed delay (buffered)",
+						"model", target.Model, "delay_ms", retryDelay.Milliseconds())
 					waitWithCancel(r.Context(), retryDelay)
 				} else {
-					backoff := calculateBackoff(0)
+					backoff := calculateBackoff(attempt - 1)
+					p.GW.Logger.Info("retrying with exponential backoff (buffered)",
+						"model", target.Model, "attempt", attempt, "delay_ms", backoff.Milliseconds())
 					waitWithCancel(r.Context(), backoff)
 				}
 				continue
@@ -869,7 +886,9 @@ func (p *Proxy) forwardBuffered(
 		}
 	}
 
-	return nil, fmt.Errorf("all upstream targets exhausted")
+	p.GW.Logger.Error("all upstream targets exhausted (buffered)",
+		"total", len(targets), "attempts", attempt)
+	return nil, fmt.Errorf("all %d upstream targets exhausted", len(targets))
 }
 
 func (p *Proxy) recordMCPUsage(buf *bufferedSSE, agentName string) {
