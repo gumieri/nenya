@@ -201,6 +201,11 @@ func (p *Proxy) applyContentPipeline(ctx context.Context, payload map[string]int
 				p.GW.Metrics.RecordCompaction()
 			}
 		}
+		if pipeline.PruneStaleToolCalls(payload, p.GW.Config.Compaction) {
+			if p.GW.Metrics != nil {
+				p.GW.Metrics.RecordCompaction()
+			}
+		}
 	} else {
 		p.GW.Logger.Debug("skipping compaction for IDE client")
 	}
