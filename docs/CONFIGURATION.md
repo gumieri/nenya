@@ -163,6 +163,7 @@ Text compaction applied to all message content (both string and multi-part conte
 | `json_minify` | bool | `true` | Minify the final JSON body with `json.Compact` |
 | `prune_stale_tools` | bool | `false` | Compact old assistant+tool response pairs into summary placeholders |
 | `tool_protection_window` | int | `4` | Number of most recent messages to protect from tool call pruning |
+| `prune_thoughts` | bool | `false` | Strip reasoning blocks from assistant messages to save context tokens |
 
 Compaction runs after redaction, before engine interception. JSON minify runs at the very end of the pipeline.
 
@@ -179,6 +180,20 @@ The tool name is extracted from the first tool call's `function.name` field. If 
 **Protection window**: The last `tool_protection_window` messages (default: 4) are never modified, preserving the LLM's immediate reasoning context including the most recent tool calls.
 
 **Safety**: Orphaned tool calls (assistant with `tool_calls` but missing corresponding `tool` response, e.g., due to stream interruption) are left untouched. The pruning is skipped entirely for IDE clients.
+
+### Thought Pruning
+
+When `prune_thoughts` is enabled, the gateway strips reasoning blocks from all `assistant` messages in the conversation history. This targets two formats used by reasoning models (DeepSeek-R1, OpenRouter, Groq, Gemini):
+
+**Part A — Structured field:** If the message contains a `reasoning_content` field, the field is deleted entirely.
+
+**Part B — Raw text tags:** Inside the `content` string, the gateway looks for the `<think` opening tag and `</think` closing tag. When found:
+- Both tags and everything between them are removed.
+- The removed block is replaced with `[Reasoning pruned by gateway]`.
+- If the opening tag exists but the closing tag is missing (stream interruption), everything from `<think` to the end of the string is replaced.
+- Multiple reasoning blocks in a single message are all pruned.
+
+Uses `strings.Index` (not regex) for zero-allocation scanning of large payloads.
 
 ## `window`
 
@@ -387,15 +402,16 @@ Models not in this registry (e.g., local Ollama models, custom endpoints) must b
   6. **Tier-0 regex redaction** (secret patterns via `security_filter`)
   7. **Text compaction** (normalize, trim, collapse blanks)
   8. **Stale tool call pruning** (if `prune_stale_tools` enabled, compact old assistant+tool pairs)
-  9. **Window compaction** (if enabled and threshold exceeded)
-  9. **Engine interception** (3-tier last-message summarization using `security_filter.engine`, with TF-IDF relevance-scored truncation when `tfidf_query_source` is set, with fallback chain if agent-referenced)
-  10. **JSON minification** (final body compaction)
-  11. **Response cache store** (if enabled, store completed SSE response)
-  12. **MCP auto-save** (if agent has mcp.auto_save, async store of assistant response to MCP server)
+  9. **Thought pruning** (if `prune_thoughts` enabled, strip reasoning blocks from assistant messages)
+  10. **Window compaction** (if enabled and threshold exceeded)
+  10. **Engine interception** (3-tier last-message summarization using `security_filter.engine`, with TF-IDF relevance-scored truncation when `tfidf_query_source` is set, with fallback chain if agent-referenced)
+  11. **JSON minification** (final body compaction)
+  12. **Response cache store** (if enabled, store completed SSE response)
+  13. **MCP auto-save** (if agent has mcp.auto_save, async store of assistant response to MCP server)
 
 ### Best-Effort Pipeline
 
-The content pipeline (steps 2–8) is **best-effort**: if any step fails (e.g., engine unreachable, Ollama down), the gateway logs a warning and proceeds with the original payload. This ensures the proxy never blocks or returns errors due to pipeline failures — the request always reaches an upstream provider. When `skip_on_engine_failure` is `true` (default), hard-limit payloads that fail engine summarization are forwarded unchanged instead of being truncated.
+The content pipeline (steps 2–9) is **best-effort**: if any step fails (e.g., engine unreachable, Ollama down), the gateway logs a warning and proceeds with the original payload. This ensures the proxy never blocks or returns errors due to pipeline failures — the request always reaches an upstream provider. When `skip_on_engine_failure` is `true` (default), hard-limit payloads that fail engine summarization are forwarded unchanged instead of being truncated.
 
 ## Configuration Notes
 

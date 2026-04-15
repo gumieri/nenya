@@ -272,20 +272,23 @@ type CompactionConfig struct {
 	NormalizeLineEndings   bool `json:"normalize_line_endings"`
 	PruneStaleTools        bool `json:"prune_stale_tools"`
 	ToolProtectionWindow   int  `json:"tool_protection_window"`
+	PruneThoughts          bool `json:"prune_thoughts"`
 	enabledSet             bool `json:"-"`
 	minifySet              bool `json:"-"`
 	collapseSet            bool `json:"-"`
 	trimSet                bool `json:"-"`
 	normalizeSet           bool `json:"-"`
 	pruneSet               bool `json:"-"`
+	pruneThoughtsSet       bool `json:"-"`
 }
 
-func (c *CompactionConfig) EnabledWasSet() bool  { return c.enabledSet }
-func (c *CompactionConfig) MinifyWasSet() bool   { return c.minifySet }
-func (c *CompactionConfig) CollapseWasSet() bool { return c.collapseSet }
-func (c *CompactionConfig) TrimWasSet() bool     { return c.trimSet }
-func (c *CompactionConfig) NormWasSet() bool     { return c.normalizeSet }
-func (c *CompactionConfig) PruneWasSet() bool    { return c.pruneSet }
+func (c *CompactionConfig) EnabledWasSet() bool    { return c.enabledSet }
+func (c *CompactionConfig) MinifyWasSet() bool      { return c.minifySet }
+func (c *CompactionConfig) CollapseWasSet() bool    { return c.collapseSet }
+func (c *CompactionConfig) TrimWasSet() bool        { return c.trimSet }
+func (c *CompactionConfig) NormWasSet() bool        { return c.normalizeSet }
+func (c *CompactionConfig) PruneWasSet() bool       { return c.pruneSet }
+func (c *CompactionConfig) PruneThoughtsWasSet() bool { return c.pruneThoughtsSet }
 
 func (c *CompactionConfig) UnmarshalJSON(data []byte) error {
 	type alias CompactionConfig
@@ -297,6 +300,7 @@ func (c *CompactionConfig) UnmarshalJSON(data []byte) error {
 		NormalizeLineEndings   *bool `json:"normalize_line_endings"`
 		PruneStaleTools        *bool `json:"prune_stale_tools"`
 		ToolProtectionWindow   *int  `json:"tool_protection_window"`
+		PruneThoughts          *bool `json:"prune_thoughts"`
 		*alias
 	}{
 		alias: (*alias)(c),
@@ -330,6 +334,10 @@ func (c *CompactionConfig) UnmarshalJSON(data []byte) error {
 	}
 	if aux.ToolProtectionWindow != nil {
 		c.ToolProtectionWindow = *aux.ToolProtectionWindow
+	}
+	if aux.PruneThoughts != nil {
+		c.PruneThoughts = *aux.PruneThoughts
+		c.pruneThoughtsSet = true
 	}
 	return nil
 }

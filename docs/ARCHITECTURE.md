@@ -16,7 +16,7 @@ Each layer may only import from layers to its left. This prevents circular depen
 | `internal/config/` | Configuration types, JSON loading, model/provider registries, defaults, validation, engine reference resolution |
 | `internal/infra/` | Structured logging, thought signature cache, Prometheus metrics, rate limiter, usage tracker, response cache |
 | `internal/stream/` | SSE transforming reader, sliding window stream filter |
-| `internal/pipeline/` | Client classification, code fence detection, tier-0 regex secret redaction (code-span-aware for IDEs), TF-IDF relevance-scored truncation, middle-out truncation (code-boundary-aware for IDEs), text compaction, stale tool call pruning, context window compaction, engine calls with fallback chains |
+| `internal/pipeline/` | Client classification, code fence detection, tier-0 regex secret redaction (code-span-aware for IDEs), TF-IDF relevance-scored truncation, middle-out truncation (code-boundary-aware for IDEs), text compaction, stale tool call pruning, thought pruning, context window compaction, engine calls with fallback chains |
 | `internal/resilience/` | Circuit breaker with Closed/Open/HalfOpen states, exponential backoff |
 | `internal/providers/` | Provider capability specs (stream_options, auto_tool_choice, content_arrays), per-provider sanitization, response transformers |
 | `internal/adapter/` | Provider Adapter pattern: request mutation, auth injection, response mutation, error classification |
@@ -47,6 +47,7 @@ Client Request
   │   │   ├─ Tier-0 regex secret redaction (code-span-aware for IDE clients)
   │   │   ├─ Text compaction (skipped for IDE clients)
   │   │   ├─ Stale tool call pruning (if enabled, skipped for IDE clients)
+  │   │   ├─ Thought pruning (if enabled — strip <think.../think> reasoning blocks and reasoning_content field)
   │   │   ├─ Window compaction (if enabled)
   │   │   ├─ 3-tier engine interception (soft/hard limits, code-aware prompt for IDEs)
   │   │   └─ JSON minification
@@ -203,7 +204,7 @@ Nenya is designed to never break the flow between AI coding clients (OpenCode, A
 
 ### Best-Effort Content Pipeline
 
-The entire content pipeline (prefix cache, redaction, compaction, tool call pruning, window, TF-IDF truncation, engine interception) runs as best-effort. Any failure is logged as a warning and the request proceeds with the original payload. No pipeline error results in an HTTP 500 to the client.
+The entire content pipeline (prefix cache, redaction, compaction, tool call pruning, thought pruning, window, TF-IDF truncation, engine interception) runs as best-effort. Any failure is logged as a warning and the request proceeds with the original payload. No pipeline error results in an HTTP 500 to the client.
 
 ### Skip on Engine Failure
 
@@ -245,6 +246,7 @@ Nenya detects IDE clients (Cursor, OpenCode) via `User-Agent` header inspection 
 | **Secret redaction** | Regex on entire text | `RedactSecretsPreservingCodeSpans` — skips markdown code fences, redacts prose only |
 | **Text compaction** | Collapse blank lines, trim whitespace | **Skipped entirely** — preserves whitespace and line references |
 | **Tool call pruning** | Compact old assistant+tool pairs | **Skipped entirely** — preserves full tool context for IDE agents |
+| **Thought pruning** | Strip `<think.../think>` reasoning blocks + `reasoning_content` field | Same — reasoning tokens stripped from assistant history |
 | **Truncation** | Character-boundary middle-out | `TruncateMiddleOutCodeAware` — snaps cuts to blank-line boundaries |
 | **TF-IDF Truncation** | Same as IDE — when `tfidf_query_source` is set | Same — splits into blocks, scores by relevance, keeps highest-scoring. Pure Go, zero network calls. |
 | **Engine summarization** | Generic privacy filter prompt | Code-preserving prompt — only redacts secrets, never restructures code |
