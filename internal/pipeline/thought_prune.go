@@ -96,21 +96,36 @@ func stripThoughtBlocks(s string) string {
 	}
 
 	var b strings.Builder
-	b.Grow(len(s))
 
 	rest := s
 	for {
 		idx := strings.Index(rest, thoughtOpenTag)
 		if idx < 0 {
+			if b.Len() == 0 {
+				return s
+			}
 			b.WriteString(rest)
 			break
+		}
+
+		if !isThinkTagBoundary(rest, idx+len(thoughtOpenTag)) {
+			if b.Len() == 0 {
+				return s
+			}
+			b.WriteString(rest[:idx+len(thoughtOpenTag)])
+			rest = rest[idx+len(thoughtOpenTag):]
+			continue
+		}
+
+		if b.Len() == 0 {
+			b.Grow(len(rest))
 		}
 
 		b.WriteString(rest[:idx])
 
 		afterOpen := rest[idx+len(thoughtOpenTag):]
 
-		closeIdx := strings.Index(afterOpen, thoughtCloseTag)
+		closeIdx := findCloseTag(afterOpen)
 
 		if closeIdx < 0 {
 			b.WriteString(thoughtMarker)
@@ -126,4 +141,25 @@ func stripThoughtBlocks(s string) string {
 		return thoughtMarker
 	}
 	return result
+}
+
+func isThinkTagBoundary(s string, pos int) bool {
+	if pos >= len(s) {
+		return true
+	}
+	ch := s[pos]
+	return ch == '>' || ch == '\n' || ch == '\r' || ch == ' ' || ch == '\t'
+}
+
+func findCloseTag(s string) int {
+	for {
+		idx := strings.Index(s, thoughtCloseTag)
+		if idx < 0 {
+			return -1
+		}
+		if isThinkTagBoundary(s, idx+len(thoughtCloseTag)) {
+			return idx
+		}
+		s = s[idx+len(thoughtCloseTag):]
+	}
 }

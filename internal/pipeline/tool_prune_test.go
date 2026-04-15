@@ -135,8 +135,8 @@ func TestPruneStaleToolCalls_MultipleCallsSameTurn(t *testing.T) {
 	if content != "[System] Tool 'tool_one' was executed previously. Result compacted to save context window." {
 		t.Fatalf("unexpected content: %q", content)
 	}
-	if name, ok := first["name"].(string); !ok || name != "tool_one" {
-		t.Fatalf("expected name tool_one, got %v", name)
+	if _, hasName := first["name"]; hasName {
+		t.Fatalf("expected no name field on summary message")
 	}
 }
 

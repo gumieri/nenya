@@ -120,10 +120,6 @@ func PruneStaleToolCalls(payload map[string]interface{}, cfg config.CompactionCo
 			"content": summary,
 		}
 
-		if toolName != "" {
-			replacement["name"] = toolName
-		}
-
 		total := 1 + numToolCalls
 		messages[i] = replacement
 		copy(messages[i+1:], messages[i+total:])

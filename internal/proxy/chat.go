@@ -196,6 +196,8 @@ func (p *Proxy) applyContentPipeline(ctx context.Context, payload map[string]int
 		return nil
 	}
 	if !profile.IsIDE {
+		// Order matters: compaction normalizes whitespace first, which ensures
+		// <think\r\n gets normalized to <think\n for thought pruning.
 		if pipeline.ApplyCompaction(messages, p.GW.Config.Compaction) {
 			if p.GW.Metrics != nil {
 				p.GW.Metrics.RecordCompaction()
