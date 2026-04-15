@@ -289,17 +289,8 @@ func TestPruneThoughts_AdjacentThoughtTags(t *testing.T) {
 		},
 	}
 
-	if mutated := PruneThoughts(payload, cfg); !mutated {
-		t.Fatalf("expected true, got false")
-	}
-
-	messages := payload["messages"].([]interface{})
-	msg := messages[0].(map[string]interface{})
-	content := msg["content"].(string)
-
-	expected := "[Reasoning pruned by gateway]No reasoning between tags"
-	if content != expected {
-		t.Fatalf("expected %q, got %q", expected, content)
+	if mutated := PruneThoughts(payload, cfg); mutated {
+		t.Fatalf("expected false for <think without boundary char after it, got true")
 	}
 }
 
@@ -375,5 +366,102 @@ func TestPruneThoughts_NilMessages(t *testing.T) {
 
 	if mutated := PruneThoughts(payload, cfg); mutated {
 		t.Fatalf("expected false for nil messages, got true")
+	}
+}
+
+func TestPruneThoughts_ThinkingTagNotMatched(t *testing.T) {
+	cfg := config.CompactionConfig{
+		PruneThoughts: true,
+	}
+
+	payload := map[string]interface{}{
+		"messages": []interface{}{
+			map[string]interface{}{
+				"role":    "assistant",
+				"content": "I was <thinking> about this problem </thinking> and the answer is 42.",
+			},
+		},
+	}
+
+	if mutated := PruneThoughts(payload, cfg); mutated {
+		t.Fatalf("expected false for <thinking> tag (not <think), got true")
+	}
+	messages := payload["messages"].([]interface{})
+	msg := messages[0].(map[string]interface{})
+	if msg["content"].(string) != "I was <thinking> about this problem </thinking> and the answer is 42." {
+		t.Fatalf("content should be unchanged")
+	}
+}
+
+func TestPruneThoughts_ThinkTagWithNewline(t *testing.T) {
+	cfg := config.CompactionConfig{
+		PruneThoughts: true,
+	}
+
+	payload := map[string]interface{}{
+		"messages": []interface{}{
+			map[string]interface{}{
+				"role":    "assistant",
+				"content": "<think\nLet me reason\n</think\nAnswer here",
+			},
+		},
+	}
+
+	if mutated := PruneThoughts(payload, cfg); !mutated {
+		t.Fatalf("expected true, got false")
+	}
+	messages := payload["messages"].([]interface{})
+	content := messages[0].(map[string]interface{})["content"].(string)
+	if content != "[Reasoning pruned by gateway]\nAnswer here" {
+		t.Fatalf("expected newline-delimited tags to be pruned, got %q", content)
+	}
+}
+
+func TestPruneThoughts_ThinkTagWithClosingBracket(t *testing.T) {
+	cfg := config.CompactionConfig{
+		PruneThoughts: true,
+	}
+
+	payload := map[string]interface{}{
+		"messages": []interface{}{
+			map[string]interface{}{
+				"role":    "assistant",
+				"content": "<think >reasoning</think >answer",
+			},
+		},
+	}
+
+	if mutated := PruneThoughts(payload, cfg); !mutated {
+		t.Fatalf("expected true, got false")
+	}
+	messages := payload["messages"].([]interface{})
+	content := messages[0].(map[string]interface{})["content"].(string)
+	if content != "[Reasoning pruned by gateway] >answer" {
+		t.Fatalf("expected space-closing tags to be pruned, got %q", content)
+	}
+}
+
+func TestPruneThoughts_ThinkTagMixedWithThinkingTag(t *testing.T) {
+	cfg := config.CompactionConfig{
+		PruneThoughts: true,
+	}
+
+	payload := map[string]interface{}{
+		"messages": []interface{}{
+			map[string]interface{}{
+				"role":    "assistant",
+				"content": "<think real reasoning </think answer with <thinking>not matched</thinking> text",
+			},
+		},
+	}
+
+	if mutated := PruneThoughts(payload, cfg); !mutated {
+		t.Fatalf("expected true, got false")
+	}
+	messages := payload["messages"].([]interface{})
+	content := messages[0].(map[string]interface{})["content"].(string)
+	expected := "[Reasoning pruned by gateway] answer with <thinking>not matched</thinking> text"
+	if content != expected {
+		t.Fatalf("expected %q, got %q", expected, content)
 	}
 }
