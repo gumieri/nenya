@@ -115,13 +115,17 @@ func (t *HTTPTransport) Connect(ctx context.Context) error {
 
 	t.cfg.Logger.Debug("connecting to MCP SSE endpoint", "url", sseURL)
 
-	sseCtx, sseCancel := context.WithTimeout(context.Background(), t.cfg.ConnectTimeout)
+	sseCtx, sseCancel := context.WithCancel(context.Background())
 	req, err := http.NewRequestWithContext(sseCtx, http.MethodGet, sseURL, nil)
 	if err != nil {
 		sseCancel()
 		return fmt.Errorf("creating SSE request: %w", err)
 	}
 	t.setHeaders(req)
+
+	// Apply timeout only to the initial connection and endpoint event reading
+	connectCtx, connectCancel := context.WithTimeout(sseCtx, t.cfg.ConnectTimeout)
+	defer connectCancel()
 
 	resp, err := t.httpClient.Do(req)
 	if err != nil {
@@ -142,6 +146,14 @@ func (t *HTTPTransport) Connect(ctx context.Context) error {
 	sseReader := bufio.NewReader(resp.Body)
 
 	for {
+		select {
+		case <-connectCtx.Done():
+			sseCancel()
+			resp.Body.Close()
+			return fmt.Errorf("waiting for MCP session endpoint: %w", connectCtx.Err())
+		default:
+		}
+
 		line, err := sseReader.ReadString('\n')
 		if err != nil {
 			sseCancel()
