@@ -161,8 +161,24 @@ Text compaction applied to all message content (both string and multi-part conte
 | `trim_trailing_whitespace` | bool | `true` | Remove trailing spaces/tabs from each line |
 | `collapse_blank_lines` | bool | `true` | Collapse runs of 3+ blank lines to max 2 |
 | `json_minify` | bool | `true` | Minify the final JSON body with `json.Compact` |
+| `prune_stale_tools` | bool | `false` | Compact old assistant+tool response pairs into summary placeholders |
+| `tool_protection_window` | int | `4` | Number of most recent messages to protect from tool call pruning |
 
 Compaction runs after redaction, before engine interception. JSON minify runs at the very end of the pipeline.
+
+### Stale Tool Call Pruning
+
+When `prune_stale_tools` is enabled, the gateway scans the messages array backwards (from oldest to newest) for completed tool execution pairs: an `assistant` message containing `tool_calls`, immediately followed by one or more `tool` messages with the results. When such a pair is found outside the protection window, both the assistant message and its tool responses are replaced with a single summary message:
+
+```
+[System] Tool 'tool_name' was executed previously. Result compacted to save context window.
+```
+
+The tool name is extracted from the first tool call's `function.name` field. If unavailable, the `tool_call_id` is used as a fallback.
+
+**Protection window**: The last `tool_protection_window` messages (default: 4) are never modified, preserving the LLM's immediate reasoning context including the most recent tool calls.
+
+**Safety**: Orphaned tool calls (assistant with `tool_calls` but missing corresponding `tool` response, e.g., due to stream interruption) are left untouched. The pruning is skipped entirely for IDE clients.
 
 ## `window`
 
@@ -370,7 +386,8 @@ Models not in this registry (e.g., local Ollama models, custom endpoints) must b
   5. **Agent system prompt injection** (if agent has prompt and no system message exists)
   6. **Tier-0 regex redaction** (secret patterns via `security_filter`)
   7. **Text compaction** (normalize, trim, collapse blanks)
-  8. **Window compaction** (if enabled and threshold exceeded)
+  8. **Stale tool call pruning** (if `prune_stale_tools` enabled, compact old assistant+tool pairs)
+  9. **Window compaction** (if enabled and threshold exceeded)
   9. **Engine interception** (3-tier last-message summarization using `security_filter.engine`, with TF-IDF relevance-scored truncation when `tfidf_query_source` is set, with fallback chain if agent-referenced)
   10. **JSON minification** (final body compaction)
   11. **Response cache store** (if enabled, store completed SSE response)
@@ -378,7 +395,7 @@ Models not in this registry (e.g., local Ollama models, custom endpoints) must b
 
 ### Best-Effort Pipeline
 
-The content pipeline (steps 2–7) is **best-effort**: if any step fails (e.g., engine unreachable, Ollama down), the gateway logs a warning and proceeds with the original payload. This ensures the proxy never blocks or returns errors due to pipeline failures — the request always reaches an upstream provider. When `skip_on_engine_failure` is `true` (default), hard-limit payloads that fail engine summarization are forwarded unchanged instead of being truncated.
+The content pipeline (steps 2–8) is **best-effort**: if any step fails (e.g., engine unreachable, Ollama down), the gateway logs a warning and proceeds with the original payload. This ensures the proxy never blocks or returns errors due to pipeline failures — the request always reaches an upstream provider. When `skip_on_engine_failure` is `true` (default), hard-limit payloads that fail engine summarization are forwarded unchanged instead of being truncated.
 
 ## Configuration Notes
 

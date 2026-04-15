@@ -132,6 +132,13 @@ func ApplyDefaults(cfg *Config) error {
 	if !cfg.Compaction.NormalizeLineEndings && !cfg.Compaction.NormWasSet() {
 		cfg.Compaction.NormalizeLineEndings = true
 	}
+	// Tool pruning defaults - off by default, protect 4 most recent messages
+	if !cfg.Compaction.PruneStaleTools && !cfg.Compaction.PruneWasSet() {
+		cfg.Compaction.PruneStaleTools = false
+	}
+	if cfg.Compaction.ToolProtectionWindow == 0 && !cfg.Compaction.PruneWasSet() {
+		cfg.Compaction.ToolProtectionWindow = 4
+	}
 	if !cfg.Compaction.Enabled && !cfg.Compaction.EnabledWasSet() && (cfg.Compaction.JSONMinify || cfg.Compaction.CollapseBlankLines || cfg.Compaction.TrimTrailingWhitespace || cfg.Compaction.NormalizeLineEndings) {
 		cfg.Compaction.Enabled = true
 	}
