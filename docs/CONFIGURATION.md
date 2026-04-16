@@ -306,22 +306,22 @@ Upstream LLM provider registry. Built-in providers are automatically loaded from
 |------|-----|----------|------------|
 | `gemini` | `https://generativelanguage.googleapis.com/v1beta/openai/chat/completions` | `gemini-` | `bearer+x-goog` |
 | `deepseek` | `https://api.deepseek.com/chat/completions` | `deepseek-` | `bearer` |
-| `zai` | `https://api.z.ai/api/paas/v4/chat/completions` | `zai-`, `glm-` | `bearer` |
-| `groq` | `https://api.groq.com/openai/v1/chat/completions` | `llama-`, `llama3-`, `mixtral-`, `whisper-` | `bearer` |
-| `together` | `https://api.together.xyz/v1/chat/completions` | `meta-llama/`, `mistralai/`, `qwen/`, `together/` | `bearer` |
+| `zai` | `https://api.z.ai/api/paas/v4/chat/completions` | `glm-` | `bearer` |
+| `groq` | `https://api.groq.com/openai/v1/chat/completions` | (none) | `bearer` |
+| `together` | `https://api.together.xyz/v1/chat/completions` | `together/` | `bearer` |
+| `anthropic` | `https://api.anthropic.com/v1/messages` | `claude-` | `anthropic` |
+| `mistral` | `https://api.mistral.ai/v1/chat/completions` | `mistral-`, `codestral-`, `devstral-` | `bearer` |
+| `xai` | `https://api.x.ai/v1/chat/completions` | `grok-` | `bearer` |
+| `perplexity` | `https://api.perplexity.ai/chat/completions` | (none) | `bearer` |
+| `cohere` | `https://api.cohere.com/v1/chat/completions` | (none) | `bearer` |
+| `deepinfra` | `https://api.deepinfra.com/v1/chat/completions` | (none) | `bearer` |
+| `openrouter` | `https://openrouter.ai/api/v1/chat/completions` | (none) | `bearer` |
 | `nvidia_free` | `https://integrate.api.nvidia.com/v1/chat/completions` | (none) | `bearer` |
 | `qwen_free` | `https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions` | (none) | `bearer` |
 | `minimax_free` | `https://api.minimax.chat/v1/chat/completions` | (none) | `bearer` |
 | `sambanova` | `https://api.sambanova.ai/v1/chat/completions` | (none) | `bearer` |
 | `cerebras` | `https://api.cerebras.ai/v1/chat/completions` | (none) | `bearer` |
 | `github` | `https://models.inference.ai.azure.com/chat/completions` | (none) | `bearer` |
-| `openrouter` | `https://openrouter.ai/api/v1/chat/completions` | (none) | `bearer` |
-| `anthropic` | `https://api.anthropic.com/v1/messages` | `claude-` | `anthropic` |
-| `mistral` | `https://api.mistral.ai/v1/chat/completions` | `mistral-`, `codestral-` | `bearer` |
-| `xai` | `https://api.x.ai/v1/chat/completions` | `grok-` | `bearer` |
-| `perplexity` | `https://api.perplexity.ai/chat/completions` | (none) | `bearer` |
-| `cohere` | `https://api.cohere.com/v1/chat/completions` | `command-` | `bearer` |
-| `deepinfra` | `https://api.deepinfra.com/v1/chat/completions` | (none) | `bearer` |
 | `ollama` | `http://127.0.0.1:11434/v1/chat/completions` | (none) | `none` |
 
 To add or override a provider:
@@ -393,6 +393,30 @@ Built-in models that can be referenced by string shorthand in agent `models` arr
 | `glm-4.5-air` | `zai` | 128000 |
 | `glm-4.5-flash` | `zai` | 128000 |
 | `glm-4.5v` | `zai` | 128000 |
+| `claude-opus-4-5` | `anthropic` | 200000 |
+| `claude-opus-4-0` | `anthropic` | 200000 |
+| `claude-sonnet-4-5` | `anthropic` | 200000 |
+| `claude-sonnet-4-0` | `anthropic` | 200000 |
+| `claude-haiku-4-5` | `anthropic` | 200000 |
+| `claude-3-7-sonnet-20250219` | `anthropic` | 200000 |
+| `claude-3-5-sonnet-20241022` | `anthropic` | 200000 |
+| `claude-3-5-haiku-latest` | `anthropic` | 200000 |
+| `mistral-large-latest` | `mistral` | 262144 |
+| `mistral-small-latest` | `mistral` | 256000 |
+| `mistral-medium-latest` | `mistral` | 128000 |
+| `codestral-latest` | `mistral` | 256000 |
+| `devstral-medium-latest` | `mistral` | 262144 |
+| `magistral-medium-latest` | `mistral` | 128000 |
+| `pixtral-large-latest` | `mistral` | 128000 |
+| `grok-4` | `xai` | 256000 |
+| `grok-4-fast` | `xai` | 2000000 |
+| `grok-3` | `xai` | 131072 |
+| `grok-3-fast` | `xai` | 131072 |
+| `grok-3-mini` | `xai` | 131072 |
+| `sonar-pro` | `perplexity` | 200000 |
+| `sonar-reasoning-pro` | `perplexity` | 128000 |
+| `sonar-deep-research` | `perplexity` | 128000 |
+| `sonar` | `perplexity` | 128000 |
 | `nemotron-3-super` | `nvidia_free` | 4000 |
 | `qwen-3.6-plus` | `qwen_free` | 8000 |
 | `minimax-m2.5` | `minimax_free` | 8000 |
