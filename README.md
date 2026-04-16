@@ -28,7 +28,8 @@ Nenya acts as a **silent guardian** for your AI interactions. Its core strength 
 - **Config-driven provider registry** — add providers via JSON config + secrets, zero code changes
 - **Built-in model registry** — reference models by string shorthand with automatic provider/context resolution
 - **Dynamic routing** based on model name prefixes, with direct ModelRegistry lookups taking priority
-- **Provider adapter system** — clean Go interface for wire format differences, auth injection, response mutation, and error classification across 15+ providers
+- **Provider adapter system** — clean Go interface for wire format differences, auth injection, response mutation, and error classification across 20+ providers
+- **Anthropic native API support** — full bidirectional OpenAI↔Anthropic format conversion
 - **Gemini compatibility** — model name mapping, thought signature preservation, orphaned tool_call cleanup
 
 ### Security & Privacy
@@ -94,7 +95,7 @@ No Go code changes needed for OpenAI-compatible providers:
 }
 ```
 
-See [`docs/ADAPTERS.md`](docs/ADAPTERS.md) for alien-format providers (Bedrock, Vertex, etc.).
+See [`docs/ADAPTERS.md`](docs/ADAPTERS.md) for the full adapter reference including Anthropic, Mistral, xAI, Azure, Perplexity, Cohere, and DeepInfra.
 
 ### Configuration Validation
 
@@ -120,15 +121,19 @@ All `/v1/*` endpoints require `Authorization: Bearer <client_token>`.
 
 ## Model Routing
 
+Model resolution uses a two-tier system: explicit **ModelRegistry** entries take priority, then **route prefix** matching for unregistered variants.
+
 | Prefix | Provider |
 |--------|----------|
+| `claude-*` | Anthropic |
 | `gemini-*` | Gemini (Google AI Studio) |
 | `deepseek-*` | DeepSeek |
-| `zai-*`, `glm-*` | z.ai |
-| `llama-*`, `llama3-*`, `mixtral-*`, `whisper-*` | Groq |
-| `meta-llama/*`, `mistralai/*`, `qwen/*`, `together/*` | Together |
+| `grok-*` | xAI |
+| `glm-*` | z.ai |
+| `mistral-*`, `codestral-*`, `devstral-*` | Mistral |
+| `together/*` | Together |
 
-Models not matching any prefix fall back to the `zai` provider. Gemini model names are automatically mapped (e.g., `gemini-3-flash` to `gemini-3-flash-preview`).
+Models not in the registry and not matching any prefix return a 400 error. Use agent configuration or full object notation to route to other providers (OpenRouter, Groq, Perplexity, etc.).
 
 ## Deployment
 
