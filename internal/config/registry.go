@@ -13,7 +13,7 @@ var ProviderRegistry = map[string]ProviderEntry{
 	},
 	"zai": {
 		URL:           "https://api.z.ai/api/paas/v4/chat/completions",
-		RoutePrefixes: []string{"zai-", "glm-"},
+		RoutePrefixes: []string{"glm-"},
 		AuthStyle:     "bearer",
 	},
 	"zai-coding-plan": {
@@ -21,14 +21,44 @@ var ProviderRegistry = map[string]ProviderEntry{
 		AuthStyle: "bearer",
 	},
 	"groq": {
-		URL:           "https://api.groq.com/openai/v1/chat/completions",
-		RoutePrefixes: []string{"llama-", "llama3-", "mixtral-", "whisper-"},
-		AuthStyle:     "bearer",
+		URL:       "https://api.groq.com/openai/v1/chat/completions",
+		AuthStyle: "bearer",
 	},
 	"together": {
 		URL:           "https://api.together.xyz/v1/chat/completions",
-		RoutePrefixes: []string{"meta-llama/", "mistralai/", "qwen/", "together/"},
+		RoutePrefixes: []string{"together/"},
 		AuthStyle:     "bearer",
+	},
+	"anthropic": {
+		URL:           "https://api.anthropic.com/v1/messages",
+		RoutePrefixes: []string{"claude-"},
+		AuthStyle:     "anthropic",
+	},
+	"mistral": {
+		URL:           "https://api.mistral.ai/v1/chat/completions",
+		RoutePrefixes: []string{"mistral-", "codestral-", "devstral-"},
+		AuthStyle:     "bearer",
+	},
+	"xai": {
+		URL:           "https://api.x.ai/v1/chat/completions",
+		RoutePrefixes: []string{"grok-"},
+		AuthStyle:     "bearer",
+	},
+	"perplexity": {
+		URL:       "https://api.perplexity.ai/chat/completions",
+		AuthStyle: "bearer",
+	},
+	"cohere": {
+		URL:       "https://api.cohere.com/v1/chat/completions",
+		AuthStyle: "bearer",
+	},
+	"deepinfra": {
+		URL:       "https://api.deepinfra.com/v1/chat/completions",
+		AuthStyle: "bearer",
+	},
+	"openrouter": {
+		URL:       "https://openrouter.ai/api/v1/chat/completions",
+		AuthStyle: "bearer",
 	},
 	"nvidia_free": {
 		URL:       "https://integrate.api.nvidia.com/v1/chat/completions",
@@ -52,10 +82,6 @@ var ProviderRegistry = map[string]ProviderEntry{
 	},
 	"github": {
 		URL:       "https://models.inference.ai.azure.com/chat/completions",
-		AuthStyle: "bearer",
-	},
-	"openrouter": {
-		URL:       "https://openrouter.ai/api/v1/chat/completions",
 		AuthStyle: "bearer",
 	},
 	"nvidia": {
@@ -108,4 +134,32 @@ var ModelRegistry = map[string]ModelEntry{
 	"phi-3.5-mini-instruct": {Provider: "github", MaxContext: 128000, MaxOutput: 4096},
 
 	"qwen2.5-72b-turbo": {Provider: "together", MaxContext: 32768, MaxOutput: 4096},
+
+	"claude-opus-4-5":          {Provider: "anthropic", MaxContext: 200000, MaxOutput: 64000},
+	"claude-opus-4-0":          {Provider: "anthropic", MaxContext: 200000, MaxOutput: 32000},
+	"claude-sonnet-4-5":        {Provider: "anthropic", MaxContext: 200000, MaxOutput: 64000},
+	"claude-sonnet-4-0":        {Provider: "anthropic", MaxContext: 200000, MaxOutput: 64000},
+	"claude-haiku-4-5":         {Provider: "anthropic", MaxContext: 200000, MaxOutput: 64000},
+	"claude-3-7-sonnet-20250219": {Provider: "anthropic", MaxContext: 200000, MaxOutput: 64000},
+	"claude-3-5-sonnet-20241022": {Provider: "anthropic", MaxContext: 200000, MaxOutput: 8192},
+	"claude-3-5-haiku-latest":  {Provider: "anthropic", MaxContext: 200000, MaxOutput: 8192},
+
+	"mistral-large-latest":     {Provider: "mistral", MaxContext: 262144, MaxOutput: 262144},
+	"mistral-small-latest":     {Provider: "mistral", MaxContext: 256000, MaxOutput: 256000},
+	"mistral-medium-latest":    {Provider: "mistral", MaxContext: 128000, MaxOutput: 16384},
+	"codestral-latest":         {Provider: "mistral", MaxContext: 256000, MaxOutput: 4096},
+	"devstral-medium-latest":   {Provider: "mistral", MaxContext: 262144, MaxOutput: 262144},
+	"magistral-medium-latest":  {Provider: "mistral", MaxContext: 128000, MaxOutput: 16384},
+	"pixtral-large-latest":     {Provider: "mistral", MaxContext: 128000, MaxOutput: 128000},
+
+	"grok-4":                  {Provider: "xai", MaxContext: 256000, MaxOutput: 64000},
+	"grok-4-fast":              {Provider: "xai", MaxContext: 2000000, MaxOutput: 30000},
+	"grok-3":                  {Provider: "xai", MaxContext: 131072, MaxOutput: 8192},
+	"grok-3-fast":              {Provider: "xai", MaxContext: 131072, MaxOutput: 8192},
+	"grok-3-mini":              {Provider: "xai", MaxContext: 131072, MaxOutput: 8192},
+
+	"sonar-pro":               {Provider: "perplexity", MaxContext: 200000, MaxOutput: 8192},
+	"sonar-reasoning-pro":      {Provider: "perplexity", MaxContext: 128000, MaxOutput: 4096},
+	"sonar-deep-research":      {Provider: "perplexity", MaxContext: 128000, MaxOutput: 32768},
+	"sonar":                   {Provider: "perplexity", MaxContext: 128000, MaxOutput: 4096},
 }
