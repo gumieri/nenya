@@ -32,7 +32,17 @@ func TestResolveProvider_KnownModels(t *testing.T) {
 		{"llama-3.1-405b-instruct", "sambanova"},
 		{"llama-3.3-70b", "cerebras"},
 		{"gpt-4o", "github"},
+		{"phi-3.5-mini-instruct", "github"},
 		{"qwen2.5-72b-turbo", "together"},
+		{"claude-opus-4-5", "anthropic"},
+		{"claude-sonnet-4-5", "anthropic"},
+		{"claude-haiku-4-5", "anthropic"},
+		{"claude-3-5-haiku-latest", "anthropic"},
+		{"mistral-large-latest", "mistral"},
+		{"codestral-latest", "mistral"},
+		{"grok-4", "xai"},
+		{"grok-3-mini", "xai"},
+		{"sonar-pro", "perplexity"},
 	}
 
 	for _, c := range cases {
@@ -56,11 +66,6 @@ func TestResolveProvider_PrefixMatch(t *testing.T) {
 		t.Fatalf("expected zai provider for glm-some-unknown-model, got %v", zai)
 	}
 
-	zai2 := ResolveProvider("zai-coding-plan/some-model", p)
-	if zai2 == nil {
-		t.Fatal("expected zai provider for zai-coding-plan/ prefix")
-	}
-
 	gemini := ResolveProvider("gemini-unknown-variant", p)
 	if gemini == nil || gemini.Name != "gemini" {
 		t.Fatalf("expected gemini provider for gemini-unknown-variant, got %v", gemini)
@@ -69,6 +74,21 @@ func TestResolveProvider_PrefixMatch(t *testing.T) {
 	ds := ResolveProvider("deepseek-r1-xyz", p)
 	if ds == nil || ds.Name != "deepseek" {
 		t.Fatalf("expected deepseek provider for deepseek-r1-xyz, got %v", ds)
+	}
+
+	claude := ResolveProvider("claude-some-unknown-variant", p)
+	if claude == nil || claude.Name != "anthropic" {
+		t.Fatalf("expected anthropic provider for claude-some-unknown-variant, got %v", claude)
+	}
+
+	mistral := ResolveProvider("mistral-some-unknown-variant", p)
+	if mistral == nil || mistral.Name != "mistral" {
+		t.Fatalf("expected mistral provider for mistral-some-unknown-variant, got %v", mistral)
+	}
+
+	grok := ResolveProvider("grok-some-unknown-variant", p)
+	if grok == nil || grok.Name != "xai" {
+		t.Fatalf("expected xai provider for grok-some-unknown-variant, got %v", grok)
 	}
 }
 
@@ -106,13 +126,12 @@ func TestDetermineUpstream_KnownModels(t *testing.T) {
 	}
 }
 
-func TestDetermineUpstream_UnknownFallsBackToZAI(t *testing.T) {
+func TestDetermineUpstream_UnknownNoMatch(t *testing.T) {
 	p := providers()
 
 	got := DetermineUpstream("totally-unknown-no-prefix", p)
-	expected := "https://api.z.ai/api/paas/v4/chat/completions"
-	if got != expected {
-		t.Fatalf("expected zai fallback %q, got %q", expected, got)
+	if got != "" {
+		t.Fatalf("expected empty string for unknown model, got %q", got)
 	}
 }
 

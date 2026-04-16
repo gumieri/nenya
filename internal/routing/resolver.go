@@ -35,9 +35,6 @@ func DetermineUpstream(modelName string, providers map[string]*config.Provider) 
 	if p := ResolveProvider(modelName, providers); p != nil {
 		return p.URL
 	}
-	if defaultP, ok := providers["zai"]; ok {
-		return defaultP.URL
-	}
 	return ""
 }
 
