@@ -161,7 +161,7 @@ func zaiCodingPlanSpec() ProviderSpec {
 func ollamaSpec() ProviderSpec {
 	return ProviderSpec{
 		SupportsStreamOptions:  false,
-		SupportsAutoToolChoice: false,
+		SupportsAutoToolChoice: true,
 		SupportsContentArrays:  false,
 		ValidationEndpoint:     ollamaValidationEndpoint,
 	}
