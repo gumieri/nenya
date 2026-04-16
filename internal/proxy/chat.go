@@ -767,6 +767,7 @@ func (p *Proxy) forwardToUpstreamWithMCP(
 	var lastBuf *bufferedSSE
 	loopStart := time.Now()
 	totalToolCalls := 0
+	actualIter := 0
 
 	defer func() {
 		loopDuration := time.Since(loopStart)
@@ -775,7 +776,7 @@ func (p *Proxy) forwardToUpstreamWithMCP(
 		}
 		p.GW.Logger.Info("MCP multi-turn loop completed",
 			"agent", agentName,
-			"iterations", maxIter,
+			"iterations", actualIter,
 			"tool_calls_executed", totalToolCalls,
 			"duration_ms", loopDuration.Milliseconds())
 	}()
@@ -784,6 +785,7 @@ func (p *Proxy) forwardToUpstreamWithMCP(
 		if p.GW.Metrics != nil {
 			p.GW.Metrics.RecordMCPLoopIteration(agentName)
 		}
+		actualIter++
 
 		working := make(map[string]interface{})
 		if err := json.Unmarshal(originalPayload, &working); err != nil {
@@ -803,7 +805,7 @@ func (p *Proxy) forwardToUpstreamWithMCP(
 			p.GW.Logger.Warn("MCP loop: upstream failed, streaming last response",
 				"iteration", iteration, "err", err)
 			if lastBuf != nil {
-				replayBufferedResponse(w, lastBuf)
+				replayBufferedResponse(w, lastBuf, p.GW.Logger)
 				return
 			}
 			writeSSEError(w, http.StatusBadGateway, "All upstream providers failed")
@@ -812,7 +814,11 @@ func (p *Proxy) forwardToUpstreamWithMCP(
 
 		allCalls := buf.toolCalls
 		if len(allCalls) == 0 {
-			replayBufferedResponse(w, buf)
+			p.GW.Logger.Debug("MCP loop: content-only response, replaying",
+				"has_content", buf.hasContent,
+				"finish_reason", buf.finishReason,
+				"raw_bytes_len", len(buf.rawBytes))
+			replayBufferedResponse(w, buf, p.GW.Logger)
 			p.recordMCPUsage(buf, agentName)
 			return
 		}
@@ -833,14 +839,17 @@ func (p *Proxy) forwardToUpstreamWithMCP(
 			updatedPayload, err := json.Marshal(working)
 			if err != nil {
 				p.GW.Logger.Error("failed to marshal updated payload for MCP loop", "err", err)
-				replayBufferedResponse(w, buf)
+				replayBufferedResponse(w, buf, p.GW.Logger)
 				return
 			}
 			originalPayload = updatedPayload
 		}
 
 		if len(mcpCalls) == 0 && len(nonMcpCalls) > 0 {
-			replayBufferedResponse(w, buf)
+			p.GW.Logger.Debug("MCP loop: non-MCP tool calls only, replaying",
+				"non_mcp_calls", len(nonMcpCalls),
+				"raw_bytes_len", len(buf.rawBytes))
+			replayBufferedResponse(w, buf, p.GW.Logger)
 			p.recordMCPUsage(buf, agentName)
 			return
 		}
@@ -851,7 +860,7 @@ func (p *Proxy) forwardToUpstreamWithMCP(
 	if lastBuf != nil {
 		p.GW.Logger.Warn("MCP loop exhausted, replaying last response",
 			"max_iterations", maxIter, "agent", agentName)
-		replayBufferedResponse(w, lastBuf)
+		replayBufferedResponse(w, lastBuf, p.GW.Logger)
 		p.recordMCPUsage(lastBuf, agentName)
 		return
 	}
@@ -903,6 +912,11 @@ func (p *Proxy) forwardBuffered(
 			attempt++
 			action.body, _ = io.ReadAll(io.LimitReader(action.resp.Body, pipeline.MaxErrorBodyBytes))
 			action.resp.Body.Close()
+			p.GW.Logger.Debug("MCP buffered: upstream error",
+				"target", i+1,
+				"status", action.resp.StatusCode,
+				"model", target.Model,
+				"body_len", len(action.body))
 			shouldRetry, retryDelay := p.handleUpstreamError(i, targets, target, cooldownDuration, agentName, action)
 			action.cancel()
 			if shouldRetry {

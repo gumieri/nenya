@@ -2,13 +2,15 @@ package proxy
 
 import (
 	"context"
+	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 
-	"nenya/internal/gateway"
 	"nenya/internal/mcp"
+	"nenya/internal/gateway"
 )
 
 func TestBufferStreamResponse_ContentOnly(t *testing.T) {
@@ -300,7 +302,7 @@ func TestReplayBufferedResponse(t *testing.T) {
 		rawBytes: []byte("data: {\"choices\":[{}]}\n\ndata: [DONE]\n\n"),
 	}
 
-	replayBufferedResponse(w, buf)
+	replayBufferedResponse(w, buf, slog.New(slog.NewTextHandler(io.Discard, nil)))
 
 	if w.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200", w.Code)

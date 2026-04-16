@@ -35,7 +35,13 @@ type mcpToolCall struct {
 	Arguments map[string]any
 }
 
-func replayBufferedResponse(w http.ResponseWriter, buf *bufferedSSE) {
+func replayBufferedResponse(w http.ResponseWriter, buf *bufferedSSE, logger *slog.Logger) {
+	if len(buf.rawBytes) == 0 {
+		logger.Warn("MCP loop: empty buffered response, sending error")
+		writeSSEError(w, http.StatusInternalServerError, "MCP loop: empty response from upstream")
+		return
+	}
+
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.WriteHeader(http.StatusOK)
@@ -79,6 +85,8 @@ func bufferStreamResponse(ctx context.Context, r io.Reader) (*bufferedSSE, error
 	tcArgsAccum := make(map[int]*strings.Builder)
 	tcNameAccum := make(map[int]string)
 	tcIDAccum := make(map[int]string)
+	totalLines := 0
+	dataLines := 0
 
 	scanner := bufio.NewScanner(r)
 	for scanner.Scan() {
@@ -89,9 +97,15 @@ func bufferStreamResponse(ctx context.Context, r io.Reader) (*bufferedSSE, error
 		}
 
 		line := scanner.Text()
+		if line == "" {
+			continue
+		}
+		totalLines++
+
 		if !strings.HasPrefix(line, "data: ") {
 			continue
 		}
+		dataLines++
 
 		data := strings.TrimPrefix(line, "data: ")
 		data = strings.TrimSpace(data)
@@ -176,6 +190,12 @@ func bufferStreamResponse(ctx context.Context, r io.Reader) (*bufferedSSE, error
 
 	if err := scanner.Err(); err != nil {
 		return nil, fmt.Errorf("reading SSE stream: %w", err)
+	}
+
+	// Detect non-SSE responses (e.g. plain JSON)
+	if dataLines == 0 && totalLines > 0 {
+		slog.Warn("MCP stream: no SSE 'data:' lines found; possible non-SSE response",
+			"total_lines", totalLines)
 	}
 
 	for idx := 0; idx < len(tcIDAccum); idx++ {
