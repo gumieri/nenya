@@ -31,6 +31,15 @@ type Metrics struct {
 	exhausted     sync.Map
 	streamBlocked sync.Map
 
+	// MCP metrics
+	mcpToolCallsTotal    sync.Map // labels: server, tool, agent, status (success/error)
+	mcpToolCallDuration  sync.Map // labels: server, tool (histogram)
+	mcpAutoSearchTotal   sync.Map // labels: server, agent, status (hit/miss/error)
+	mcpAutoSaveTotal     sync.Map // labels: server, agent, status (success/error)
+	mcpLoopIterations    sync.Map // labels: agent
+	mcpLoopDuration      sync.Map // labels: agent (histogram)
+	mcpServerReady       sync.Map // labels: server (gauge: 1=ready, 0=not ready)
+
 	RateLimits func() map[string]*RateLimitSnapshot
 	Cooldowns  func() (active int)
 	CBStates   func() map[string]string
@@ -181,6 +190,65 @@ func (m *Metrics) RecordStreamBlock(model, provider string) {
 	e.value.Add(1)
 }
 
+func (m *Metrics) RecordMCPToolCall(server, tool, agent string, duration time.Duration, callErr error) {
+	status := "success"
+	if callErr != nil {
+		status = "error"
+	}
+	e := getOrCreateEntry(&m.mcpToolCallsTotal, map[string]string{
+		"server": server, "tool": tool, "agent": agent, "status": status,
+	})
+	e.value.Add(1)
+
+	h := getOrCreateHist(&m.mcpToolCallDuration, map[string]string{
+		"server": server, "tool": tool,
+	}, HTTPDurationBuckets)
+	h.Observe(duration.Seconds())
+}
+
+func (m *Metrics) RecordMCPAutoSearch(server, agent string, hit bool, searchErr error) {
+	status := "miss"
+	if searchErr != nil {
+		status = "error"
+	} else if hit {
+		status = "hit"
+	}
+	e := getOrCreateEntry(&m.mcpAutoSearchTotal, map[string]string{
+		"server": server, "agent": agent, "status": status,
+	})
+	e.value.Add(1)
+}
+
+func (m *Metrics) RecordMCPAutoSave(server, agent string, saveErr error) {
+	status := "success"
+	if saveErr != nil {
+		status = "error"
+	}
+	e := getOrCreateEntry(&m.mcpAutoSaveTotal, map[string]string{
+		"server": server, "agent": agent, "status": status,
+	})
+	e.value.Add(1)
+}
+
+func (m *Metrics) RecordMCPLoopIteration(agent string) {
+	e := getOrCreateEntry(&m.mcpLoopIterations, map[string]string{"agent": agent})
+	e.value.Add(1)
+}
+
+func (m *Metrics) RecordMCPLoopDuration(agent string, duration time.Duration) {
+	h := getOrCreateHist(&m.mcpLoopDuration, map[string]string{"agent": agent}, HTTPDurationBuckets)
+	h.Observe(duration.Seconds())
+}
+
+func (m *Metrics) SetMCPServerReady(server string, ready bool) {
+	val := uint64(0)
+	if ready {
+		val = 1
+	}
+	e := getOrCreateEntry(&m.mcpServerReady, map[string]string{"server": server})
+	e.value.Store(val)
+}
+
 func (m *Metrics) WritePrometheus(w io.Writer) {
 	fprintln := func(format string, args ...interface{}) {
 		fmt.Fprintf(w, format+"\n", args...)
@@ -226,6 +294,21 @@ func (m *Metrics) WritePrometheus(w io.Writer) {
 
 	m.writeHistogramMap(w, "nenya_http_request_duration_seconds",
 		"HTTP request duration in seconds.", &m.httpDur)
+
+	m.writeCounterMap(w, "nenya_mcp_tool_calls_total",
+		"Total MCP tool call executions.", &m.mcpToolCallsTotal)
+	m.writeHistogramMap(w, "nenya_mcp_tool_call_duration_seconds",
+		"MCP tool call duration in seconds.", &m.mcpToolCallDuration)
+	m.writeCounterMap(w, "nenya_mcp_auto_search_total",
+		"Total MCP auto-search attempts by outcome.", &m.mcpAutoSearchTotal)
+	m.writeCounterMap(w, "nenya_mcp_auto_save_total",
+		"Total MCP auto-save attempts by outcome.", &m.mcpAutoSaveTotal)
+	m.writeCounterMap(w, "nenya_mcp_loop_iterations_total",
+		"Total MCP multi-turn loop iterations.", &m.mcpLoopIterations)
+	m.writeHistogramMap(w, "nenya_mcp_loop_duration_seconds",
+		"Total MCP multi-turn loop duration in seconds.", &m.mcpLoopDuration)
+	m.writeGaugeMap(w, "nenya_mcp_server_ready",
+		"MCP server readiness (1=ready, 0=not ready).", &m.mcpServerReady)
 
 	if m.RateLimits != nil {
 		fprintln("# HELP nenya_ratelimit_rpm_available Current RPM bucket available.")
@@ -287,6 +370,22 @@ func (m *Metrics) writeCounterAtomic(w io.Writer, name, help string, value uint6
 	fmt.Fprintf(w, "# HELP %s %s\n", name, help)
 	fmt.Fprintf(w, "# TYPE %s counter\n", name)
 	fmt.Fprintf(w, "%s %d\n", name, value)
+}
+
+func (m *Metrics) writeGaugeMap(w io.Writer, name, help string, mmap *sync.Map) {
+	fmt.Fprintf(w, "# HELP %s %s\n", name, help)
+	fmt.Fprintf(w, "# TYPE %s gauge\n", name)
+	var entries []*labeledEntry
+	mmap.Range(func(_, v interface{}) bool {
+		entries = append(entries, v.(*labeledEntry))
+		return true
+	})
+	sort.Slice(entries, func(i, j int) bool {
+		return labelKey(entries[i].labels) < labelKey(entries[j].labels)
+	})
+	for _, e := range entries {
+		fmt.Fprintf(w, "%s%s %d\n", name, labelStr(e.labels), e.value.Load())
+	}
 }
 
 func (m *Metrics) writeHistogramMap(w io.Writer, name, help string, mmap *sync.Map) {
