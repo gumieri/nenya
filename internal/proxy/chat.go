@@ -562,6 +562,9 @@ func (p *Proxy) injectMCPTools(payload map[string]interface{}, agentName string)
 		return
 	}
 
+	p.GW.Logger.Info("MCP injection starting",
+		"servers", agent.MCP.Servers, "agent", agentName)
+
 	var toolNames []string
 	for _, serverName := range agent.MCP.Servers {
 		client, ok := p.GW.MCPClients[serverName]
@@ -572,6 +575,11 @@ func (p *Proxy) injectMCPTools(payload map[string]interface{}, agentName string)
 		}
 
 		tools := client.ListTools()
+		if len(tools) == 0 {
+			p.GW.Logger.Warn("MCP server returned no tools",
+				"server", serverName, "agent", agentName)
+			continue
+		}
 		openaiTools := mcp.MCPToolsToOpenAI(serverName, tools)
 
 		existing, ok := payload["tools"].([]interface{})
@@ -596,8 +604,13 @@ func (p *Proxy) injectMCPTools(payload map[string]interface{}, agentName string)
 	if len(toolNames) > 0 {
 		if _, has := payload["tool_choice"]; !has {
 			payload["tool_choice"] = "auto"
+			p.GW.Logger.Info("MCP tool_choice auto injected",
+				"tools_count", len(toolNames), "agent", agentName)
 		}
 		p.injectMCPSystemPrompt(payload, toolNames)
+	} else {
+		p.GW.Logger.Warn("MCP: no tools injected for agent",
+			"agent", agentName, "servers", agent.MCP.Servers)
 	}
 }
 

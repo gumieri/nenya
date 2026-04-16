@@ -38,7 +38,7 @@ Nenya acts as a **silent guardian** for your AI interactions. Its core strength 
 - **3-Tier UTF-8 safe pipeline** — pass-through, engine summarization, or truncation+summarization based on payload size. TF-IDF relevance-scored truncation optionally skips the engine call entirely.
 - **Context window compaction** — sliding window summarization of old messages (supports summarize, truncate, or TF-IDF modes)
 - **Stale tool call pruning** — automatically compact old assistant+tool response pairs into summary placeholders to reduce token consumption in long conversations
-- **Thought pruning** — strip massive reasoning blocks (DeepSeek-R1 💭...🗨 tags and `reasoning_content` field) from assistant message history to save context tokens
+- **Thought pruning** — strip massive reasoning blocks (`<think...</think` XML tags and `reasoning_content` field) from assistant message history to save context tokens
 - **Hardened security** — strict timeouts, body limits, hop-by-hop header stripping, panic recovery
 - **Systemd credential management** — API keys loaded from `CREDENTIALS_DIRECTORY`
 
