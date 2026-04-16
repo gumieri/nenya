@@ -47,6 +47,10 @@ func AdapterForAuthStyle(authStyle string) ProviderAdapter {
 		return NewNoAuthAdapter(Capabilities{})
 	case "bearer+x-goog":
 		return &bearerPlusGoogAdapter{}
+	case "anthropic":
+		return NewAnthropicAdapter()
+	case "azure":
+		return NewAzureAdapter()
 	default:
 		return defaultAdapter
 	}
@@ -140,11 +144,35 @@ func init() {
 	})
 
 	Register("openrouter", AdapterEntry{
-		Adapter: NewOpenAIAdapter(Capabilities{
-			StreamOptions:  true,
-			AutoToolChoice: true,
-			ContentArrays:  true,
-		}),
+		Adapter: NewOpenRouterAdapter(),
+	})
+
+	Register("anthropic", AdapterEntry{
+		Adapter: NewAnthropicAdapter(),
+	})
+
+	Register("mistral", AdapterEntry{
+		Adapter: NewMistralAdapter(),
+	})
+
+	Register("xai", AdapterEntry{
+		Adapter: NewXAIAdapter(),
+	})
+
+	Register("azure", AdapterEntry{
+		Adapter: NewAzureAdapter(),
+	})
+
+	Register("perplexity", AdapterEntry{
+		Adapter: NewPerplexityAdapter(),
+	})
+
+	Register("cohere", AdapterEntry{
+		Adapter: NewCohereAdapter(),
+	})
+
+	Register("deepinfra", AdapterEntry{
+		Adapter: NewDeepInfraAdapter(),
 	})
 
 	Register("sambanova", AdapterEntry{

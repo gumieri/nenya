@@ -10,6 +10,9 @@ func togetherSpec() ProviderSpec {
 		SupportsStreamOptions:  false,
 		SupportsAutoToolChoice: false,
 		SupportsContentArrays:  true,
+		SupportsToolCalls:     true,
+		SupportsReasoning:     false,
+		SupportsVision:        true,
 		ValidationEndpoint:     togetherValidationEndpoint,
 	}
 }
@@ -32,6 +35,9 @@ func openaiSpec() ProviderSpec {
 		SupportsStreamOptions:  false,
 		SupportsAutoToolChoice: true,
 		SupportsContentArrays:  true,
+		SupportsToolCalls:     true,
+		SupportsReasoning:     true,
+		SupportsVision:        true,
 		ValidationEndpoint:     openaiValidationEndpoint,
 	}
 }
@@ -54,6 +60,9 @@ func githubSpec() ProviderSpec {
 		SupportsStreamOptions:  false,
 		SupportsAutoToolChoice: true,
 		SupportsContentArrays:  true,
+		SupportsToolCalls:     true,
+		SupportsReasoning:     true,
+		SupportsVision:        true,
 		ValidationEndpoint:     githubValidationEndpoint,
 	}
 }
@@ -67,6 +76,9 @@ func openrouterSpec() ProviderSpec {
 		SupportsStreamOptions:  true,
 		SupportsAutoToolChoice: true,
 		SupportsContentArrays:  true,
+		SupportsToolCalls:     true,
+		SupportsReasoning:     true,
+		SupportsVision:        true,
 		ValidationEndpoint:     openrouterValidationEndpoint,
 	}
 }
@@ -80,6 +92,8 @@ func sambanovaSpec() ProviderSpec {
 		SupportsStreamOptions:  false,
 		SupportsAutoToolChoice: false,
 		SupportsContentArrays:  true,
+		SupportsToolCalls:     true,
+		SupportsVision:        true,
 		ValidationEndpoint:     sambanovaValidationEndpoint,
 	}
 }
@@ -93,6 +107,8 @@ func cerebrasSpec() ProviderSpec {
 		SupportsStreamOptions:  false,
 		SupportsAutoToolChoice: false,
 		SupportsContentArrays:  true,
+		SupportsToolCalls:     true,
+		SupportsVision:        false,
 		ValidationEndpoint:     cerebrasValidationEndpoint,
 	}
 }
@@ -106,6 +122,8 @@ func nvidiaSpec() ProviderSpec {
 		SupportsStreamOptions:  false,
 		SupportsAutoToolChoice: false,
 		SupportsContentArrays:  false,
+		SupportsToolCalls:     false,
+		SupportsVision:        false,
 		ValidationEndpoint:     nvidiaValidationEndpoint,
 	}
 }
@@ -119,6 +137,8 @@ func nvidiaFreeSpec() ProviderSpec {
 		SupportsStreamOptions:  false,
 		SupportsAutoToolChoice: false,
 		SupportsContentArrays:  false,
+		SupportsToolCalls:     false,
+		SupportsVision:        false,
 		ValidationEndpoint:     nvidiaValidationEndpoint,
 	}
 }
@@ -128,6 +148,8 @@ func qwenFreeSpec() ProviderSpec {
 		SupportsStreamOptions:  false,
 		SupportsAutoToolChoice: false,
 		SupportsContentArrays:  false,
+		SupportsToolCalls:     false,
+		SupportsVision:        false,
 		ValidationEndpoint:     qwenFreeValidationEndpoint,
 	}
 }
@@ -141,6 +163,8 @@ func minimaxFreeSpec() ProviderSpec {
 		SupportsStreamOptions:  false,
 		SupportsAutoToolChoice: false,
 		SupportsContentArrays:  false,
+		SupportsToolCalls:     false,
+		SupportsVision:        false,
 		ValidationEndpoint:     minimaxFreeValidationEndpoint,
 	}
 }
@@ -154,6 +178,9 @@ func zaiCodingPlanSpec() ProviderSpec {
 		SupportsStreamOptions:  true,
 		SupportsAutoToolChoice: true,
 		SupportsContentArrays:  true,
+		SupportsToolCalls:     true,
+		SupportsReasoning:     true,
+		SupportsVision:        false,
 		ValidationEndpoint:     zaiValidationEndpoint,
 	}
 }
@@ -163,10 +190,128 @@ func ollamaSpec() ProviderSpec {
 		SupportsStreamOptions:  false,
 		SupportsAutoToolChoice: true,
 		SupportsContentArrays:  false,
+		SupportsToolCalls:     true,
+		SupportsReasoning:     true,
+		SupportsVision:        false,
 		ValidationEndpoint:     ollamaValidationEndpoint,
 	}
 }
 
 func ollamaValidationEndpoint(providerURL string) string {
+	return defaultValidationEndpoint(providerURL, "")
+}
+
+func anthropicSpec() ProviderSpec {
+	return ProviderSpec{
+		SupportsStreamOptions:  false,
+		SupportsAutoToolChoice: true,
+		SupportsContentArrays:  false,
+		SupportsToolCalls:     true,
+		SupportsReasoning:     true,
+		SupportsVision:        true,
+		ValidationEndpoint:     anthropicValidationEndpoint,
+	}
+}
+
+func anthropicValidationEndpoint(providerURL string) string {
+	if strings.HasSuffix(providerURL, "/messages") {
+		return strings.TrimSuffix(providerURL, "/messages")
+	}
+	return defaultValidationEndpoint(providerURL, "")
+}
+
+func mistralSpec() ProviderSpec {
+	return ProviderSpec{
+		SupportsStreamOptions:  false,
+		SupportsAutoToolChoice: true,
+		SupportsContentArrays:  true,
+		SupportsToolCalls:     true,
+		SupportsReasoning:     true,
+		SupportsVision:        true,
+		ValidationEndpoint:     mistralValidationEndpoint,
+	}
+}
+
+func mistralValidationEndpoint(providerURL string) string {
+	return defaultValidationEndpoint(providerURL, "")
+}
+
+func xaiSpec() ProviderSpec {
+	return ProviderSpec{
+		SupportsStreamOptions:  true,
+		SupportsAutoToolChoice: true,
+		SupportsContentArrays:  true,
+		SupportsToolCalls:     true,
+		SupportsReasoning:     true,
+		SupportsVision:        true,
+		ValidationEndpoint:     xaiValidationEndpoint,
+	}
+}
+
+func xaiValidationEndpoint(providerURL string) string {
+	return defaultValidationEndpoint(providerURL, "")
+}
+
+func azureSpec() ProviderSpec {
+	return ProviderSpec{
+		SupportsStreamOptions:  false,
+		SupportsAutoToolChoice: true,
+		SupportsContentArrays:  true,
+		SupportsToolCalls:     true,
+		SupportsReasoning:     true,
+		SupportsVision:        true,
+		ValidationEndpoint:     azureValidationEndpoint,
+	}
+}
+
+func azureValidationEndpoint(providerURL string) string {
+	return defaultValidationEndpoint(providerURL, "")
+}
+
+func perplexitySpec() ProviderSpec {
+	return ProviderSpec{
+		SupportsStreamOptions:  false,
+		SupportsAutoToolChoice: false,
+		SupportsContentArrays:  true,
+		SupportsToolCalls:     false,
+		SupportsReasoning:     false,
+		SupportsVision:        true,
+		ValidationEndpoint:     perplexityValidationEndpoint,
+	}
+}
+
+func perplexityValidationEndpoint(providerURL string) string {
+	return defaultValidationEndpoint(providerURL, "")
+}
+
+func cohereSpec() ProviderSpec {
+	return ProviderSpec{
+		SupportsStreamOptions:  false,
+		SupportsAutoToolChoice: true,
+		SupportsContentArrays:  false,
+		SupportsToolCalls:     true,
+		SupportsReasoning:     false,
+		SupportsVision:        true,
+		ValidationEndpoint:     cohereValidationEndpoint,
+	}
+}
+
+func cohereValidationEndpoint(providerURL string) string {
+	return defaultValidationEndpoint(providerURL, "")
+}
+
+func deepinfraSpec() ProviderSpec {
+	return ProviderSpec{
+		SupportsStreamOptions:  false,
+		SupportsAutoToolChoice: true,
+		SupportsContentArrays:  true,
+		SupportsToolCalls:     true,
+		SupportsReasoning:     false,
+		SupportsVision:        true,
+		ValidationEndpoint:     deepinfraValidationEndpoint,
+	}
+}
+
+func deepinfraValidationEndpoint(providerURL string) string {
 	return defaultValidationEndpoint(providerURL, "")
 }
