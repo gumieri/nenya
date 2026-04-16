@@ -428,7 +428,14 @@ func (p *Proxy) handleEmbeddings(w http.ResponseWriter, r *http.Request) {
 	}
 	req.Header.Set("Content-Type", "application/json")
 
-	resp, err := p.GW.Client.Do(req)
+	ctx := r.Context()
+	if provider.TimeoutSeconds > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(r.Context(), time.Duration(provider.TimeoutSeconds)*time.Second)
+		defer cancel()
+	}
+
+	resp, err := p.GW.Client.Do(req.WithContext(ctx))
 	if err != nil {
 		p.GW.Logger.Error("embeddings upstream request failed", "provider", provider.Name, "err", err)
 		http.Error(w, "Upstream provider error", http.StatusBadGateway)
@@ -491,7 +498,14 @@ func (p *Proxy) handleResponses(w http.ResponseWriter, r *http.Request) {
 	}
 	req.Header.Set("Content-Type", "application/json")
 
-	resp, err := p.GW.Client.Do(req)
+	ctx := r.Context()
+	if provider.TimeoutSeconds > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(r.Context(), time.Duration(provider.TimeoutSeconds)*time.Second)
+		defer cancel()
+	}
+
+	resp, err := p.GW.Client.Do(req.WithContext(ctx))
 	if err != nil {
 		p.GW.Logger.Error("responses upstream request failed", "provider", provider.Name, "err", err)
 		http.Error(w, "Upstream provider error", http.StatusBadGateway)

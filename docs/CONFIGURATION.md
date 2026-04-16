@@ -106,7 +106,7 @@ Directly specifies the engine model, identical to the previous `EngineConfig` fo
 | `model` | string | `"qwen2.5-coder:7b"` | Model identifier (inline mode only) |
 | `system_prompt` | string | `""` | Inline system prompt. Highest priority. |
 | `system_prompt_file` | string | `""` | Path to system prompt file. Falls back to built-in prompt if empty. |
-| `timeout_seconds` | int | `60` | Timeout for individual engine API calls |
+| `timeout_seconds` | int | `60` | Timeout for individual engine API calls. Falls back to the provider's `timeout_seconds` if not explicitly set, then to hard default `60`. |
 
 **Prompt priority**: `system_prompt` (inline) > `system_prompt_file` > agent's `system_prompt` > built-in default.
 
@@ -326,6 +326,10 @@ To add or override a provider:
       "url": "https://api.openai.com/v1/chat/completions",
       "route_prefixes": ["gpt-", "o3-", "o4-"],
       "auth_style": "bearer"
+    },
+    "ollama": {
+      "url": "http://127.0.0.1:11434/v1/chat/completions",
+      "timeout_seconds": 300
     }
   }
 }
@@ -336,6 +340,7 @@ To add or override a provider:
 | `url` | string | Upstream chat completions endpoint |
 | `route_prefixes` | []string | Model name prefixes that route to this provider |
 | `auth_style` | string | `"bearer"`, `"bearer+x-goog"` (Gemini), or `"none"` (Ollama) |
+| `timeout_seconds` | int | Per-provider timeout in seconds. For the `ollama` provider, sets the HTTP transport's `ResponseHeaderTimeout` (time-to-first-byte). For other providers, applies as a request context timeout on `/v1/embeddings` and `/v1/responses` endpoints. Also used as a fallback for engine calls (`security_filter.engine`, `window.engine`) when the engine's own `timeout_seconds` is not explicitly set. Default: `30` (transport-level). |
 | `retryable_status_codes` | []int | Provider-level override for retryable status codes. **Replaces** both global and built-in defaults for this provider. If not set, falls back to `governance.retryable_status_codes`, then built-in defaults `[429, 500, 502, 503, 504]`. |
 
 API keys are loaded from the secrets file via `provider_keys` (keyed by provider name). See [`SECRETS_FORMAT.md`](SECRETS_FORMAT.md).
