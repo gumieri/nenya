@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"strings"
 	"sync"
@@ -261,20 +262,43 @@ func executeMCPCalls(ctx context.Context, calls []mcpToolCall, gw *Proxy) []*mcp
 		go func(idx int, c mcpToolCall) {
 			defer wg.Done()
 
+				if gw.GW == nil {
+				results[idx] = &mcp.CallToolResult{
+					Content: []mcp.ContentBlock{{Type: "text", Text: "gateway not available"}},
+					IsError: true,
+				}
+				return
+			}
+
+			logger := gw.GW.Logger
+			if logger == nil {
+				logger = slog.New(slog.NewTextHandler(io.Discard, nil))
+			}
+
+			start := time.Now()
+
 			route, ok := gw.GW.MCPToolIndex.Lookup(c.Name)
 			if !ok {
+				logger.Warn("MCP tool call failed: unknown tool", "tool", c.Name)
 				results[idx] = &mcp.CallToolResult{
 					Content: []mcp.ContentBlock{{Type: "text", Text: fmt.Sprintf("unknown MCP tool: %s", c.Name)}},
 					IsError: true,
+				}
+				if gw.GW != nil && gw.GW.Metrics != nil {
+					gw.GW.Metrics.RecordMCPToolCall("unknown", c.Name, "", time.Since(start), fmt.Errorf("unknown tool"))
 				}
 				return
 			}
 
 			client := gw.GW.MCPClients[route.ServerName]
 			if client == nil {
+				logger.Warn("MCP tool call failed: server not available", "server", route.ServerName, "tool", c.Name)
 				results[idx] = &mcp.CallToolResult{
 					Content: []mcp.ContentBlock{{Type: "text", Text: fmt.Sprintf("MCP server not available: %s", route.ServerName)}},
 					IsError: true,
+				}
+				if gw.GW != nil && gw.GW.Metrics != nil {
+					gw.GW.Metrics.RecordMCPToolCall(route.ServerName, c.Name, "", time.Since(start), fmt.Errorf("server not available"))
 				}
 				return
 			}
@@ -283,14 +307,27 @@ func executeMCPCalls(ctx context.Context, calls []mcpToolCall, gw *Proxy) []*mcp
 			defer cancel()
 
 			result, err := client.CallTool(toolCtx, route.MCPToolName, c.Arguments)
+			duration := time.Since(start)
 			if err != nil {
+				logger.Warn("MCP tool call failed", "server", route.ServerName, "tool", route.MCPToolName, "err", err, "duration_ms", duration.Milliseconds())
 				results[idx] = &mcp.CallToolResult{
 					Content: []mcp.ContentBlock{{Type: "text", Text: fmt.Sprintf("MCP tool call failed: %v", err)}},
 					IsError: true,
 				}
-				return
+			} else {
+				results[idx] = result
+				if gw.GW != nil && gw.GW.Metrics != nil {
+					textLen := 0
+					if result != nil {
+						textLen = len(result.Text())
+					}
+						logger.Debug("MCP tool call completed", "server", route.ServerName, "tool", route.MCPToolName, "duration_ms", duration.Milliseconds(), "result_bytes", textLen)
+				}
+
+				if gw.GW != nil && gw.GW.Metrics != nil {
+					gw.GW.Metrics.RecordMCPToolCall(route.ServerName, route.MCPToolName, "", duration, err)
+				}
 			}
-			results[idx] = result
 		}(i, call)
 	}
 

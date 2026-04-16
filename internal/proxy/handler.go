@@ -144,6 +144,19 @@ func (p *Proxy) handleStats(w http.ResponseWriter) {
 	w.Header().Set("Content-Type", "application/json")
 	stats := p.GW.Stats.Snapshot()
 	stats["circuit_breakers"] = p.GW.AgentState.CBSnapshot()
+
+	mcpServers := make(map[string]interface{})
+	for name, client := range p.GW.MCPClients {
+		serverInfo := client.ServerInfo()
+		tools := client.ListTools()
+		mcpServers[name] = map[string]interface{}{
+			"ready":    client.Ready(),
+			"tools":    len(tools),
+			"version":  serverInfo.Version,
+		}
+	}
+	stats["mcp"] = mcpServers
+
 	if err := json.NewEncoder(w).Encode(stats); err != nil {
 		p.GW.Logger.Error("failed to encode stats response", "err", err)
 	}

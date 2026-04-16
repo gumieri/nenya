@@ -388,20 +388,30 @@ func (p *Proxy) asyncMCPAutoSave(agentName string, contentBuilder *contentBuilde
 
 			ctx, cancel := context.WithTimeout(context.Background(), mcpExecTimeout)
 
+			start := time.Now()
 			_, err := client.CallTool(ctx, saveTool, map[string]any{
 				"wing":     agentName,
 				"room":     "conversation",
 				"content":  assistantContent,
 				"added_by": "nenya",
 			})
+			duration := time.Since(start)
 			cancel()
 			if err != nil {
 				p.GW.Logger.Warn("MCP auto-save failed (best-effort)",
-					"server", serverName, "agent", agentName, "err", err)
+					"server", serverName, "agent", agentName, "err", err,
+					"duration_ms", duration.Milliseconds())
+				if p.GW.Metrics != nil {
+					p.GW.Metrics.RecordMCPAutoSave(serverName, agentName, err)
+				}
 			} else {
 				p.GW.Logger.Debug("MCP auto-save completed",
 					"server", serverName, "agent", agentName,
+					"duration_ms", duration.Milliseconds(),
 					"content_len", len(assistantContent))
+				if p.GW.Metrics != nil {
+					p.GW.Metrics.RecordMCPAutoSave(serverName, agentName, nil)
+				}
 			}
 			return
 		}
