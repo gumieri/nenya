@@ -131,7 +131,7 @@ func (c *Client) RefreshTools(ctx context.Context) ([]Tool, error) {
 	}
 	c.mu.Unlock()
 
-	c.logger.Debug("tools refreshed", "count", len(listResult.Tools))
+	c.logger.Info("MCP tools refreshed", "count", len(listResult.Tools))
 	return listResult.Tools, nil
 }
 
