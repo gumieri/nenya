@@ -594,6 +594,9 @@ func (p *Proxy) injectMCPTools(payload map[string]interface{}, agentName string)
 	}
 
 	if len(toolNames) > 0 {
+		if _, has := payload["tool_choice"]; !has {
+			payload["tool_choice"] = "auto"
+		}
 		p.injectMCPSystemPrompt(payload, toolNames)
 	}
 }
