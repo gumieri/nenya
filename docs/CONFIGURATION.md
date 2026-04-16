@@ -315,6 +315,13 @@ Upstream LLM provider registry. Built-in providers are automatically loaded from
 | `sambanova` | `https://api.sambanova.ai/v1/chat/completions` | (none) | `bearer` |
 | `cerebras` | `https://api.cerebras.ai/v1/chat/completions` | (none) | `bearer` |
 | `github` | `https://models.inference.ai.azure.com/chat/completions` | (none) | `bearer` |
+| `openrouter` | `https://openrouter.ai/api/v1/chat/completions` | (none) | `bearer` |
+| `anthropic` | `https://api.anthropic.com/v1/messages` | `claude-` | `anthropic` |
+| `mistral` | `https://api.mistral.ai/v1/chat/completions` | `mistral-`, `codestral-` | `bearer` |
+| `xai` | `https://api.x.ai/v1/chat/completions` | `grok-` | `bearer` |
+| `perplexity` | `https://api.perplexity.ai/chat/completions` | (none) | `bearer` |
+| `cohere` | `https://api.cohere.com/v1/chat/completions` | `command-` | `bearer` |
+| `deepinfra` | `https://api.deepinfra.com/v1/chat/completions` | (none) | `bearer` |
 | `ollama` | `http://127.0.0.1:11434/v1/chat/completions` | (none) | `none` |
 
 To add or override a provider:
@@ -339,7 +346,7 @@ To add or override a provider:
 |-------|------|-------------|
 | `url` | string | Upstream chat completions endpoint |
 | `route_prefixes` | []string | Model name prefixes that route to this provider |
-| `auth_style` | string | `"bearer"`, `"bearer+x-goog"` (Gemini), or `"none"` (Ollama) |
+| `auth_style` | string | `"bearer"`, `"bearer+x-goog"` (Gemini), `"anthropic"` (Anthropic), `"azure"` (Azure OpenAI), or `"none"` (Ollama) |
 | `timeout_seconds` | int | Per-provider timeout in seconds. For the `ollama` provider, sets the HTTP transport's `ResponseHeaderTimeout` (time-to-first-byte). For other providers, applies as a request context timeout on `/v1/embeddings` and `/v1/responses` endpoints. Also used as a fallback for engine calls (`security_filter.engine`, `window.engine`) when the engine's own `timeout_seconds` is not explicitly set. Default: `30` (transport-level). |
 | `retryable_status_codes` | []int | Provider-level override for retryable status codes. **Replaces** both global and built-in defaults for this provider. If not set, falls back to `governance.retryable_status_codes`, then built-in defaults `[429, 500, 502, 503, 504]`. |
 
@@ -349,11 +356,13 @@ API keys are loaded from the secrets file via `provider_keys` (keyed by provider
 
 Gemini requires both `Authorization: Bearer <key>` and `x-goog-api-key: <key>` headers. The `bearer+x-goog` auth style sets both automatically.
 
-### Provider Adapters
+### Anthropic `auth_style: "anthropic"`
 
-Provider-specific wire format differences (auth injection, request/response mutation, error classification) are handled by the adapter system. Most providers use the `OpenAIAdapter` with capability-based parameter stripping. See [`ADAPTERS.md`](ADAPTERS.md) for the full adapter reference and capability matrix.
+Anthropic uses `x-api-key` header instead of `Authorization: Bearer`. The adapter performs full OpenAI↔Anthropic format conversion automatically — send standard OpenAI-format requests and Nenya handles the rest.
 
-Gemini requires both `Authorization: Bearer <key>` and `x-goog-api-key: <key>` headers. The `bearer+x-goog` auth style sets both automatically.
+### Azure `auth_style: "azure"`
+
+Azure OpenAI uses `api-key` header instead of `Authorization: Bearer`.
 
 ### Gemini `extra_content` (Thought Signatures)
 

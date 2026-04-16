@@ -49,8 +49,10 @@ type Capabilities struct {
 
 | Style | Header(s) | Used By |
 |-------|-----------|---------|
-| `bearer` | `Authorization: Bearer <key>` | OpenAI, DeepSeek, Groq, Together, OpenRouter, SambaNova, Cerebras, GitHub, z.ai |
+| `bearer` | `Authorization: Bearer <key>` | OpenAI, DeepSeek, Groq, Together, SambaNova, Cerebras, GitHub, z.ai, Mistral, xAI, Perplexity, Cohere, DeepInfra |
 | `bearer+x-goog` | `Authorization: Bearer <key>` + `x-goog-api-key: <key>` | Gemini |
+| `anthropic` | `x-api-key: <key>` + `anthropic-version: 2023-06-01` | Anthropic |
+| `azure` | `api-key: <key>` | Azure OpenAI |
 | `none` | (no auth) | Ollama |
 
 Auth style is resolved in priority order:
@@ -68,7 +70,7 @@ Identity transform for request/response. Capability-based parameter stripping:
 - `AutoToolChoice: false` → strips `tool_choice: "auto"` from request
 - `ContentArrays: false` → flattens `content: [{type:"text",text:"..."}]` to `content: "..."`
 
-**Used by**: `openai`, `deepseek`, `groq`, `together`, `github`, `openrouter`, `sambanova`, `cerebras`, `nvidia`, `nvidia_free`, `qwen_free`, `minimax_free`, `zai-coding-plan`
+**Used by**: `deepseek`, `groq`, `together`, `github`, `sambanova`, `cerebras`, `nvidia`, `nvidia_free`, `qwen_free`, `minimax_free`, `zai-coding-plan`
 
 ### GeminiAdapter
 
@@ -88,6 +90,78 @@ Identity transform for request/response. Capability-based parameter stripping:
 - **Request**: Identity (no transformation)
 - **Auth**: Optional Bearer (only if API key is non-empty)
 - **Error**: Conservative — only 429/5xx are retryable
+
+### AnthropicAdapter
+
+Full bidirectional conversion between OpenAI and Anthropic native API formats.
+
+- **Request**: Converts OpenAI format to Anthropic format:
+  - Messages: `system` → `user`/`assistant` pair, `tool` → `user` with `tool_result` content block
+  - Tools: OpenAI `function` tools → Anthropic tool format (with `input_schema`)
+  - `tool_choice`: `"auto"` → `{"type":"auto"}`, `"required"` → `{"type":"required"}`, named tool → `{"type":"tool","name":"..."}`
+  - Parameters mapped: `max_tokens`, `temperature`, `top_p`, `stop` → `stop_sequences`, `user` → `metadata.user_id`
+- **Response**: Converts Anthropic format back to OpenAI:
+  - Content blocks: `text` → `delta.content`, `tool_use` → `delta.tool_calls`
+  - `stop_reason`: `end_turn` → `stop`, `tool_use` → `tool_calls`, `max_tokens` → `length`
+  - Usage: `input_tokens`/`output_tokens` → OpenAI usage format
+- **Auth**: `x-api-key` header + `anthropic-version` header
+- **Error**: 529 treated as rate-limited (Anthropic overloaded)
+
+### MistralAdapter
+
+OpenAI-compatible with capability-based stripping.
+
+- **Request**: Stream options stripped, content arrays preserved, auto tool choice preserved
+- **Auth**: Bearer
+- **Error**: Standard classification
+
+### XAIAdapter
+
+OpenAI-compatible with extended capabilities.
+
+- **Request**: Stream options and auto tool choice preserved, content arrays preserved
+- **Auth**: Bearer
+- **Error**: Standard classification
+
+### OpenRouterAdapter
+
+OpenAI-compatible with custom headers for OpenRouter's referral program.
+
+- **Request**: Adds `HTTP-Referer` and `X-Title` headers on every request. Stream options and auto tool choice preserved.
+- **Auth**: Bearer + `HTTP-Referer: https://github.com/nenya-project/nenya` + `X-Title: Nenya`
+- **Error**: Standard classification
+
+### AzureAdapter
+
+OpenAI-compatible for Azure OpenAI Service endpoints.
+
+- **Request**: Standard capability-based stripping
+- **Auth**: `api-key` header (not `Authorization: Bearer`)
+- **Error**: Standard classification
+
+### PerplexityAdapter
+
+OpenAI-compatible. Perplexity does not support function calling.
+
+- **Request**: Content arrays preserved, auto tool choice stripped
+- **Auth**: Bearer
+- **Error**: Standard classification
+
+### CohereAdapter
+
+OpenAI-compatible. Cohere uses a different content format internally.
+
+- **Request**: Content arrays flattened, auto tool choice preserved
+- **Auth**: Bearer
+- **Error**: Standard classification
+
+### DeepInfraAdapter
+
+OpenAI-compatible with standard capabilities.
+
+- **Request**: Content arrays preserved, auto tool choice preserved
+- **Auth**: Bearer
+- **Error**: Standard classification
 
 ## Adding a New Provider
 
