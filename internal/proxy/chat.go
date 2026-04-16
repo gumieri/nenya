@@ -689,16 +689,28 @@ func (p *Proxy) injectAutoSearch(ctx context.Context, payload map[string]interfa
 			}
 		}
 
+		start := time.Now()
 		result, err := client.CallTool(ctx, toolName, map[string]any{
 			"query": query,
 			"limit": 5,
 		})
+		duration := time.Since(start)
 		if err != nil {
 			p.GW.Logger.Warn("MCP auto-search failed, proceeding without",
-				"server", serverName, "agent", agentName, "err", err)
+				"server", serverName, "agent", agentName, "err", err,
+				"duration_ms", duration.Milliseconds())
+			if p.GW.Metrics != nil {
+				p.GW.Metrics.RecordMCPAutoSearch(serverName, agentName, false, err)
+			}
 			continue
 		}
 		if result == nil || result.Text() == "" {
+			p.GW.Logger.Debug("MCP auto-search: no results",
+				"server", serverName, "agent", agentName,
+				"duration_ms", duration.Milliseconds())
+			if p.GW.Metrics != nil {
+				p.GW.Metrics.RecordMCPAutoSearch(serverName, agentName, false, nil)
+			}
 			continue
 		}
 
@@ -717,7 +729,11 @@ func (p *Proxy) injectAutoSearch(ctx context.Context, payload map[string]interfa
 		p.GW.Logger.Debug("MCP auto-search context injected",
 			"server", serverName, "agent", agentName,
 			"tool", toolName,
+			"duration_ms", duration.Milliseconds(),
 			"result_len", len(result.Text()))
+		if p.GW.Metrics != nil {
+			p.GW.Metrics.RecordMCPAutoSearch(serverName, agentName, true, nil)
+		}
 		break
 	}
 }
@@ -749,8 +765,26 @@ func (p *Proxy) forwardToUpstreamWithMCP(
 	}
 
 	var lastBuf *bufferedSSE
+	loopStart := time.Now()
+	totalToolCalls := 0
+
+	defer func() {
+		loopDuration := time.Since(loopStart)
+		if p.GW.Metrics != nil && loopDuration > 0 {
+			p.GW.Metrics.RecordMCPLoopDuration(agentName, loopDuration)
+		}
+		p.GW.Logger.Info("MCP multi-turn loop completed",
+			"agent", agentName,
+			"iterations", maxIter,
+			"tool_calls_executed", totalToolCalls,
+			"duration_ms", loopDuration.Milliseconds())
+	}()
 
 	for iteration := 0; iteration < maxIter; iteration++ {
+		if p.GW.Metrics != nil {
+			p.GW.Metrics.RecordMCPLoopIteration(agentName)
+		}
+
 		working := make(map[string]interface{})
 		if err := json.Unmarshal(originalPayload, &working); err != nil {
 			p.GW.Logger.Error("failed to unmarshal payload for MCP iteration", "err", err)
@@ -784,6 +818,7 @@ func (p *Proxy) forwardToUpstreamWithMCP(
 		}
 
 		mcpCalls, nonMcpCalls := partitionMCPToolCalls(allCalls, p.GW.MCPToolIndex)
+		totalToolCalls += len(mcpCalls)
 
 		if len(mcpCalls) > 0 {
 			p.GW.Logger.Info("MCP tool calls intercepted",
