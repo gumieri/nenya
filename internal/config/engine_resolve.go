@@ -26,11 +26,21 @@ func ResolveEngineRef(ref EngineRef, agents map[string]AgentConfig, providers ma
 				return nil, fmt.Errorf("engine agent %q: provider %q not found and no URL specified", ref.AgentName, m.Provider)
 			}
 
+			var providerTimeout int
+			if p, ok := providers[m.Provider]; ok {
+				providerTimeout = p.TimeoutSeconds
+			}
+
 			systemPrompt := ref.SystemPrompt
 			systemPromptFile := ref.SystemPromptFile
 			if systemPrompt == "" && systemPromptFile == "" {
 				systemPrompt = agent.SystemPrompt
 				systemPromptFile = agent.SystemPromptFile
+			}
+
+			timeoutSeconds := ref.TimeoutSeconds
+			if timeoutSeconds == 0 && providerTimeout > 0 {
+				timeoutSeconds = providerTimeout
 			}
 
 			target := EngineTarget{
@@ -39,12 +49,13 @@ func ResolveEngineRef(ref EngineRef, agents map[string]AgentConfig, providers ma
 					Model:            m.Model,
 					SystemPrompt:     systemPrompt,
 					SystemPromptFile: systemPromptFile,
-					TimeoutSeconds:   ref.TimeoutSeconds,
+					TimeoutSeconds:   timeoutSeconds,
 				},
 				Provider: &Provider{
-					Name:   m.Provider,
-					URL:    providerURL,
-					APIKey: "",
+					Name:           m.Provider,
+					URL:            providerURL,
+					APIKey:         "",
+					TimeoutSeconds: providerTimeout,
 					AuthStyle: func() string {
 						if p, ok := providers[m.Provider]; ok {
 							return p.AuthStyle
@@ -65,13 +76,20 @@ func ResolveEngineRef(ref EngineRef, agents map[string]AgentConfig, providers ma
 	}
 
 	providerURL := ""
+	var providerTimeout int
 	if ref.Provider != "" {
 		if p, ok := providers[ref.Provider]; ok {
 			providerURL = p.URL
+			providerTimeout = p.TimeoutSeconds
 		}
 	}
 	if providerURL == "" {
 		return nil, fmt.Errorf("engine provider %q not found", ref.Provider)
+	}
+
+	timeoutSeconds := ref.TimeoutSeconds
+	if timeoutSeconds == 0 && providerTimeout > 0 {
+		timeoutSeconds = providerTimeout
 	}
 
 	return []EngineTarget{
@@ -81,12 +99,13 @@ func ResolveEngineRef(ref EngineRef, agents map[string]AgentConfig, providers ma
 				Model:            ref.Model,
 				SystemPrompt:     ref.SystemPrompt,
 				SystemPromptFile: ref.SystemPromptFile,
-				TimeoutSeconds:   ref.TimeoutSeconds,
+				TimeoutSeconds:   timeoutSeconds,
 			},
 			Provider: &Provider{
-				Name:   ref.Provider,
-				URL:    providerURL,
-				APIKey: "",
+				Name:           ref.Provider,
+				URL:            providerURL,
+				APIKey:         "",
+				TimeoutSeconds: providerTimeout,
 				AuthStyle: func() string {
 					if p, ok := providers[ref.Provider]; ok {
 						return p.AuthStyle
@@ -113,6 +132,7 @@ func resolveEngineRefs(cfg *Config) error {
 			RoutePrefixes:        pc.RoutePrefixes,
 			AuthStyle:            pc.AuthStyle,
 			ApiFormat:            pc.ApiFormat,
+			TimeoutSeconds:       pc.TimeoutSeconds,
 			RetryableStatusCodes: pc.RetryableStatusCodes,
 		}
 	}
