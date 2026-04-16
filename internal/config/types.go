@@ -68,6 +68,7 @@ type ProviderConfig struct {
 	RoutePrefixes        []string `json:"route_prefixes"`
 	AuthStyle            string   `json:"auth_style"`
 	ApiFormat            string   `json:"api_format"`
+	TimeoutSeconds       int      `json:"timeout_seconds"`
 	RetryableStatusCodes []int    `json:"retryable_status_codes"`
 }
 
@@ -78,6 +79,7 @@ type Provider struct {
 	RoutePrefixes        []string
 	AuthStyle            string
 	ApiFormat            string
+	TimeoutSeconds       int
 	RetryableStatusCodes []int
 }
 

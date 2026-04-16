@@ -64,12 +64,18 @@ func New(cfg config.Config, secrets *config.SecretsConfig, logger *slog.Logger) 
 		Transport: transport,
 	}
 
+	ollamaResponseHeaderTimeout := 30 * time.Second
+	if ollamaCfg, ok := cfg.Providers["ollama"]; ok && ollamaCfg.TimeoutSeconds > 0 {
+		ollamaResponseHeaderTimeout = time.Duration(ollamaCfg.TimeoutSeconds) * time.Second
+	}
+
 	ollamaTransport := &http.Transport{
 		DialContext: (&net.Dialer{
 			Timeout:   30 * time.Second,
 			KeepAlive: 30 * time.Second,
 		}).DialContext,
 		TLSHandshakeTimeout:   30 * time.Second,
+		ResponseHeaderTimeout: ollamaResponseHeaderTimeout,
 		ExpectContinueTimeout: 1 * time.Second,
 		IdleConnTimeout:       90 * time.Second,
 		MaxIdleConns:          10,

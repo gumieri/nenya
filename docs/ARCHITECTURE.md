@@ -134,7 +134,7 @@ Resolution happens once at config load time (`resolveEngineRefs` in `internal/co
 `internal/pipeline/engine.go` implements `CallEngineChain` which iterates the target list:
 
 1. For each target, selects the appropriate HTTP client (regular vs Ollama) based on provider `ApiFormat`
-2. Applies per-target timeout from `EngineConfig.TimeoutSeconds`
+2. Applies per-target timeout from `EngineConfig.TimeoutSeconds` (falls back to provider's `timeout_seconds`, then hard default `60`)
 3. On failure, logs a structured warning and tries the next target
 4. Returns on first success; on all failures, returns the last error
 
