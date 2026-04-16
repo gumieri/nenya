@@ -19,10 +19,34 @@ type ProviderSpec struct {
 	SupportsStreamOptions  bool
 	SupportsAutoToolChoice bool
 	SupportsContentArrays  bool
+	SupportsToolCalls     bool
+	SupportsReasoning     bool
+	SupportsVision        bool
 	ModelMap               map[string]string
 	SanitizeRequest        func(deps *SanitizeDeps, payload map[string]interface{})
 	NewResponseTransformer func(cache *infra.ThoughtSignatureCache) stream.ResponseTransformer
 	ValidationEndpoint     func(providerURL string) string
+}
+
+func SupportsToolCalls(name string) bool {
+	if spec, ok := Get(name); ok {
+		return spec.SupportsToolCalls
+	}
+	return true
+}
+
+func SupportsReasoning(name string) bool {
+	if spec, ok := Get(name); ok {
+		return spec.SupportsReasoning
+	}
+	return false
+}
+
+func SupportsVision(name string) bool {
+	if spec, ok := Get(name); ok {
+		return spec.SupportsVision
+	}
+	return false
 }
 
 var Registry = map[string]ProviderSpec{}
@@ -44,6 +68,13 @@ func init() {
 	Registry["minimax_free"] = minimaxFreeSpec()
 	Registry["zai-coding-plan"] = zaiCodingPlanSpec()
 	Registry["ollama"] = ollamaSpec()
+	Registry["anthropic"] = anthropicSpec()
+	Registry["mistral"] = mistralSpec()
+	Registry["xai"] = xaiSpec()
+	Registry["azure"] = azureSpec()
+	Registry["perplexity"] = perplexitySpec()
+	Registry["cohere"] = cohereSpec()
+	Registry["deepinfra"] = deepinfraSpec()
 }
 
 func Get(name string) (ProviderSpec, bool) {

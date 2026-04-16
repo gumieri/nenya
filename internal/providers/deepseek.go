@@ -10,6 +10,9 @@ func deepseekSpec() ProviderSpec {
 		SupportsStreamOptions:  true,
 		SupportsAutoToolChoice: true,
 		SupportsContentArrays:  true,
+		SupportsToolCalls:     true,
+		SupportsReasoning:     true,
+		SupportsVision:        false,
 		ValidationEndpoint:     deepseekValidationEndpoint,
 	}
 }
