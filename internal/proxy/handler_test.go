@@ -26,7 +26,8 @@ func newTestProxy(t *testing.T) (*Proxy, *httptest.Server) {
 		ProviderKeys: map[string]string{"gemini": "test-key"},
 	}
 	gw := gateway.New(cfg, secrets, slog.Default())
-	p := &Proxy{GW: gw}
+	p := &Proxy{}
+	p.StoreGateway(gw)
 	return p, nil
 }
 

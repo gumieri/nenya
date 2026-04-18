@@ -20,12 +20,12 @@ import (
 )
 
 func (p *Proxy) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
-	r.Body = http.MaxBytesReader(w, r.Body, p.GW.Config.Server.MaxBodyBytes)
+	r.Body = http.MaxBytesReader(w, r.Body, p.Gateway().Config.Server.MaxBodyBytes)
 	defer r.Body.Close()
 
 	bodyBytes, err := io.ReadAll(r.Body)
 	if err != nil {
-		p.GW.Logger.Error("failed to read request body", "err", err)
+		p.Gateway().Logger.Error("failed to read request body", "err", err)
 		http.Error(w, "Payload too large or malformed", http.StatusRequestEntityTooLarge)
 		return
 	}
@@ -36,31 +36,31 @@ func (p *Proxy) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 
 	var payload map[string]interface{}
 	if err := json.Unmarshal(bodyBytes, &payload); err != nil {
-		p.GW.Logger.Warn("failed to parse JSON, returning Bad Request")
+		p.Gateway().Logger.Warn("failed to parse JSON, returning Bad Request")
 		http.Error(w, "Invalid JSON payload", http.StatusBadRequest)
 		return
 	}
 
 	modelName, ok := payload["model"].(string)
 	if !ok || modelName == "" {
-		p.GW.Logger.Warn("missing or empty model field in request body")
+		p.Gateway().Logger.Warn("missing or empty model field in request body")
 		http.Error(w, `Missing or empty "model" field in request body`, http.StatusBadRequest)
 		return
 	}
 	if len(modelName) > MaxModelNameLength {
-		p.GW.Logger.Warn("model name exceeds maximum length", "length", len(modelName))
+		p.Gateway().Logger.Warn("model name exceeds maximum length", "length", len(modelName))
 		http.Error(w, "Model name too long", http.StatusBadRequest)
 		return
 	}
 
-	tokenCount := p.GW.CountRequestTokens(payload)
+	tokenCount := p.Gateway().CountRequestTokens(payload)
 
 	var targets []routing.UpstreamTarget
 	var cooldownDuration time.Duration
 	var agentName string
 
 	var maxRetries int
-	if agent, ok := p.GW.Config.Agents[modelName]; ok {
+	if agent, ok := p.Gateway().Config.Agents[modelName]; ok {
 		agentName = modelName
 		secs := agent.CooldownSeconds
 		if secs == 0 {
@@ -68,14 +68,14 @@ func (p *Proxy) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 		}
 		cooldownDuration = time.Duration(secs) * time.Second
 		maxRetries = agent.MaxRetries
-		targets = p.GW.AgentState.BuildTargetList(p.GW.Logger, modelName, agent, tokenCount, p.GW.Providers)
+		targets = p.Gateway().AgentState.BuildTargetList(p.Gateway().Logger, modelName, agent, tokenCount, p.Gateway().Providers)
 		if len(targets) == 0 {
 			if len(agent.Models) > 0 {
-				p.GW.Logger.Warn("all models excluded by max_context",
+				p.Gateway().Logger.Warn("all models excluded by max_context",
 					"agent", modelName, "tokens", tokenCount)
 				http.Error(w, "Request too large for all configured models in this agent", http.StatusRequestEntityTooLarge)
 			} else {
-				p.GW.Logger.Error("agent has no models configured", "agent", modelName)
+				p.Gateway().Logger.Error("agent has no models configured", "agent", modelName)
 				http.Error(w, "Agent has no models configured", http.StatusInternalServerError)
 			}
 			return
@@ -84,24 +84,24 @@ func (p *Proxy) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 		if strategy == "" {
 			strategy = "round-robin"
 		}
-		p.GW.Logger.Info("agent routing",
+		p.Gateway().Logger.Info("agent routing",
 			"agent", modelName, "strategy", strategy, "models_in_chain", len(targets))
 	} else {
-		provider := routing.ResolveProvider(modelName, p.GW.Providers)
+		provider := routing.ResolveProvider(modelName, p.Gateway().Providers)
 		if provider == nil {
-			p.GW.Logger.Warn("no provider found for model", "model", modelName)
+			p.Gateway().Logger.Warn("no provider found for model", "model", modelName)
 			http.Error(w, "No provider configured for this model", http.StatusBadRequest)
 			return
 		}
 		targets = []routing.UpstreamTarget{{URL: provider.URL, Model: modelName, Provider: provider.Name}}
-		p.GW.Logger.Info("model routing", "model", modelName, "upstream", provider.URL)
+		p.Gateway().Logger.Info("model routing", "model", modelName, "upstream", provider.URL)
 	}
 
 	var cacheKey string
-	if p.GW.ResponseCache != nil {
+	if p.Gateway().ResponseCache != nil {
 		cacheKey = infra.FingerprintPayload(payload)
-		if r.Header.Get(p.GW.Config.ResponseCache.ForceRefreshHeader) == "" {
-			if data, ok := p.GW.ResponseCache.Lookup(cacheKey); ok {
+		if r.Header.Get(p.Gateway().Config.ResponseCache.ForceRefreshHeader) == "" {
+			if data, ok := p.Gateway().ResponseCache.Lookup(cacheKey); ok {
 				p.replayCachedSSE(w, r, data)
 				return
 			}
@@ -112,16 +112,16 @@ func (p *Proxy) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 		if messages, ok := messagesRaw.([]interface{}); ok && len(messages) > 0 {
 			p.injectAutoSearch(r.Context(), payload, messages, agentName)
 			p.injectMCPTools(payload, agentName)
-			windowMaxCtx := routing.ResolveWindowMaxContext(modelName, p.GW.Config.Agents)
+			windowMaxCtx := routing.ResolveWindowMaxContext(modelName, p.Gateway().Config.Agents)
 			profile := pipeline.ClassifyClient(r.Header)
 			if profile.IsIDE {
-				p.GW.Logger.Debug("IDE client detected", "client", profile.ClientName)
+				p.Gateway().Logger.Debug("IDE client detected", "client", profile.ClientName)
 			}
 			if err := p.applyContentPipeline(r.Context(), payload, tokenCount, windowMaxCtx, profile); err != nil {
-				p.GW.Logger.Warn("content pipeline failed, proceeding with original payload", "err", err)
+				p.Gateway().Logger.Warn("content pipeline failed, proceeding with original payload", "err", err)
 			}
 		} else {
-			p.GW.Logger.Warn("messages field is not a non-empty array, skipping Ollama interception")
+			p.Gateway().Logger.Warn("messages field is not a non-empty array, skipping Ollama interception")
 		}
 	}
 
@@ -134,7 +134,7 @@ func (p *Proxy) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 }
 
 func (p *Proxy) replayCachedSSE(w http.ResponseWriter, r *http.Request, data []byte) {
-	p.GW.Logger.Info("response cache hit")
+	p.Gateway().Logger.Info("response cache hit")
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("X-Nenya-Cache-Status", "HIT")
@@ -149,7 +149,7 @@ func (p *Proxy) replayCachedSSE(w http.ResponseWriter, r *http.Request, data []b
 	buf := getStreamBuffer()
 	defer streamingBufPool.Put(buf)
 	if _, err := copyStream(r.Context(), dst, bytes.NewReader(data), *buf); err != nil {
-		p.GW.Logger.Error("failed to replay cached SSE stream", "err", err)
+		p.Gateway().Logger.Error("failed to replay cached SSE stream", "err", err)
 	}
 }
 
@@ -159,7 +159,7 @@ func (p *Proxy) applyContentPipeline(ctx context.Context, payload map[string]int
 		return nil
 	}
 
-	pipeline.ApplyPrefixCacheOptimizations(payload, messages, p.GW.Config.PrefixCache)
+	pipeline.ApplyPrefixCacheOptimizations(payload, messages, p.Gateway().Config.PrefixCache)
 
 	anyRedacted := false
 	for _, msgRaw := range messages {
@@ -167,7 +167,7 @@ func (p *Proxy) applyContentPipeline(ctx context.Context, payload map[string]int
 		if !isMap {
 			continue
 		}
-		if pipeline.ShouldSkipRedaction(msgNode, p.GW.Config.PrefixCache) {
+		if pipeline.ShouldSkipRedaction(msgNode, p.Gateway().Config.PrefixCache) {
 			continue
 		}
 		text := gateway.ExtractContentText(msgNode)
@@ -176,9 +176,9 @@ func (p *Proxy) applyContentPipeline(ctx context.Context, payload map[string]int
 		}
 		var redacted string
 		if profile.IsIDE {
-			redacted = pipeline.RedactSecretsPreservingCodeSpans(text, p.GW.Config.SecurityFilter.Enabled, p.GW.SecretPatterns, p.GW.Config.SecurityFilter.RedactionLabel)
+			redacted = pipeline.RedactSecretsPreservingCodeSpans(text, p.Gateway().Config.SecurityFilter.Enabled, p.Gateway().SecretPatterns, p.Gateway().Config.SecurityFilter.RedactionLabel)
 		} else {
-			redacted = pipeline.RedactSecrets(text, p.GW.Config.SecurityFilter.Enabled, p.GW.SecretPatterns, p.GW.Config.SecurityFilter.RedactionLabel)
+			redacted = pipeline.RedactSecrets(text, p.Gateway().Config.SecurityFilter.Enabled, p.Gateway().SecretPatterns, p.Gateway().Config.SecurityFilter.RedactionLabel)
 		}
 		if redacted != text {
 			msgNode["content"] = redacted
@@ -186,8 +186,8 @@ func (p *Proxy) applyContentPipeline(ctx context.Context, payload map[string]int
 		}
 	}
 	if anyRedacted {
-		if p.GW.Metrics != nil {
-			p.GW.Metrics.RecordRedaction()
+		if p.Gateway().Metrics != nil {
+			p.Gateway().Metrics.RecordRedaction()
 		}
 	}
 
@@ -198,23 +198,23 @@ func (p *Proxy) applyContentPipeline(ctx context.Context, payload map[string]int
 	if !profile.IsIDE {
 		// Order matters: compaction normalizes whitespace first, which ensures
 		// <think\r\n gets normalized to <think\n for thought pruning.
-		if pipeline.ApplyCompaction(messages, p.GW.Config.Compaction) {
-			if p.GW.Metrics != nil {
-				p.GW.Metrics.RecordCompaction()
+		if pipeline.ApplyCompaction(messages, p.Gateway().Config.Compaction) {
+			if p.Gateway().Metrics != nil {
+				p.Gateway().Metrics.RecordCompaction()
 			}
 		}
-		if pipeline.PruneStaleToolCalls(payload, p.GW.Config.Compaction) {
-			if p.GW.Metrics != nil {
-				p.GW.Metrics.RecordCompaction()
+		if pipeline.PruneStaleToolCalls(payload, p.Gateway().Config.Compaction) {
+			if p.Gateway().Metrics != nil {
+				p.Gateway().Metrics.RecordCompaction()
 			}
 		}
-		if pipeline.PruneThoughts(payload, p.GW.Config.Compaction) {
-			if p.GW.Metrics != nil {
-				p.GW.Metrics.RecordCompaction()
+		if pipeline.PruneThoughts(payload, p.Gateway().Config.Compaction) {
+			if p.Gateway().Metrics != nil {
+				p.Gateway().Metrics.RecordCompaction()
 			}
 		}
 	} else {
-		p.GW.Logger.Debug("skipping compaction for IDE client")
+		p.Gateway().Logger.Debug("skipping compaction for IDE client")
 	}
 
 	messages = payload["messages"].([]interface{})
@@ -222,20 +222,20 @@ func (p *Proxy) applyContentPipeline(ctx context.Context, payload map[string]int
 		return nil
 	}
 	deps := pipeline.WindowDeps{
-		Logger:       p.GW.Logger,
-		Client:       p.GW.Client,
-		OllamaClient: p.GW.OllamaClient,
-		Providers:    p.GW.Providers,
+		Logger:       p.Gateway().Logger,
+		Client:       p.Gateway().Client,
+		OllamaClient: p.Gateway().OllamaClient,
+		Providers:    p.Gateway().Providers,
 		InjectAPIKey: func(providerName string, headers http.Header) error {
-			return routing.InjectAPIKey(providerName, p.GW.Providers, headers)
+			return routing.InjectAPIKey(providerName, p.Gateway().Providers, headers)
 		},
-		CountTokens: p.GW.CountTokens,
+		CountTokens: p.Gateway().CountTokens,
 	}
-	if windowed, err := pipeline.ApplyWindowCompaction(ctx, deps, payload, messages, tokenCount, p.GW.Config.Window, windowMaxCtx, p.GW.CountRequestTokens); err != nil {
-		p.GW.Logger.Warn("window compaction failed, proceeding without it", "err", err)
+	if windowed, err := pipeline.ApplyWindowCompaction(ctx, deps, payload, messages, tokenCount, p.Gateway().Config.Window, windowMaxCtx, p.Gateway().CountRequestTokens); err != nil {
+		p.Gateway().Logger.Warn("window compaction failed, proceeding without it", "err", err)
 	} else if windowed {
-		if p.GW.Metrics != nil {
-			p.GW.Metrics.RecordWindow(p.GW.Config.Window.Mode)
+		if p.Gateway().Metrics != nil {
+			p.Gateway().Metrics.RecordWindow(p.Gateway().Config.Window.Mode)
 		}
 	}
 
@@ -251,42 +251,42 @@ func (p *Proxy) applyContentPipeline(ctx context.Context, payload map[string]int
 
 	textForInterception := gateway.ExtractContentText(lastMsgNode)
 	if textForInterception == "" {
-		p.GW.Logger.Warn("last message has no text content, skipping interception")
+		p.Gateway().Logger.Warn("last message has no text content, skipping interception")
 		return nil
 	}
 
 	contentRunes := utf8.RuneCountInString(textForInterception)
-	softLimit := p.GW.Config.Governance.ContextSoftLimit
-	hardLimit := p.GW.Config.Governance.ContextHardLimit
+	softLimit := p.Gateway().Config.Governance.ContextSoftLimit
+	hardLimit := p.Gateway().Config.Governance.ContextHardLimit
 
 	var processed string
 	var needsUpdate bool
 	var truncated string
 
 	if contentRunes < softLimit {
-		p.GW.Logger.Debug("payload within soft limit, passing through",
+		p.Gateway().Logger.Debug("payload within soft limit, passing through",
 			"runes", contentRunes, "soft_limit", softLimit)
 	} else if contentRunes <= hardLimit {
-		p.GW.Logger.Warn("payload exceeds soft limit, sending to engine",
+		p.Gateway().Logger.Warn("payload exceeds soft limit, sending to engine",
 			"runes", contentRunes)
-		if p.GW.Metrics != nil {
-			p.GW.Metrics.RecordInterception("soft_limit")
+		if p.Gateway().Metrics != nil {
+			p.Gateway().Metrics.RecordInterception("soft_limit")
 		}
 		summarized, err := p.summarizeWithOllama(ctx, textForInterception, profile.IsIDE)
 		if err != nil {
-			p.GW.Logger.Warn("engine summarization failed, proceeding with original payload", "err", err)
+			p.Gateway().Logger.Warn("engine summarization failed, proceeding with original payload", "err", err)
 		} else {
 			processed = fmt.Sprintf("[Nenya Sanitized via Ollama]:\n%s", summarized)
 			needsUpdate = true
 		}
 	} else {
-		p.GW.Logger.Warn("payload exceeds hard limit, truncating before engine",
+		p.Gateway().Logger.Warn("payload exceeds hard limit, truncating before engine",
 			"runes", contentRunes, "hard_limit", hardLimit)
-		if p.GW.Metrics != nil {
-			p.GW.Metrics.RecordInterception("hard_limit")
+		if p.Gateway().Metrics != nil {
+			p.Gateway().Metrics.RecordInterception("hard_limit")
 		}
 
-		querySource := p.GW.Config.Governance.TFIDFQuerySource
+		querySource := p.Gateway().Config.Governance.TFIDFQuerySource
 		if querySource != "" {
 			var query string
 			switch querySource {
@@ -295,19 +295,19 @@ func (p *Proxy) applyContentPipeline(ctx context.Context, payload map[string]int
 			case "self":
 				query = pipeline.ExtractSelfQuery(textForInterception, 500)
 			}
-			p.GW.Logger.Info("TF-IDF truncation enabled",
+			p.Gateway().Logger.Info("TF-IDF truncation enabled",
 				"query_source", querySource,
 				"query_len", utf8.RuneCountInString(query),
 				"input_runes", contentRunes)
 
 			if profile.IsIDE {
-				truncated = pipeline.TruncateTFIDFCodeAware(textForInterception, hardLimit, query, p.GW.Config.Governance)
+				truncated = pipeline.TruncateTFIDFCodeAware(textForInterception, hardLimit, query, p.Gateway().Config.Governance)
 			} else {
-				truncated = pipeline.TruncateTFIDF(textForInterception, hardLimit, query, p.GW.Config.Governance)
+				truncated = pipeline.TruncateTFIDF(textForInterception, hardLimit, query, p.Gateway().Config.Governance)
 			}
 
 			if utf8.RuneCountInString(truncated) < softLimit {
-				p.GW.Logger.Info("TF-IDF reduced payload below soft limit, skipping engine",
+				p.Gateway().Logger.Info("TF-IDF reduced payload below soft limit, skipping engine",
 					"truncated_runes", utf8.RuneCountInString(truncated), "soft_limit", softLimit)
 				processed = fmt.Sprintf("[Nenya TF-IDF Pruned]:\n%s", truncated)
 				needsUpdate = true
@@ -316,9 +316,9 @@ func (p *Proxy) applyContentPipeline(ctx context.Context, payload map[string]int
 			}
 		} else {
 			if profile.IsIDE {
-				truncated = pipeline.TruncateMiddleOutCodeAware(textForInterception, hardLimit, p.GW.Config.Governance)
+				truncated = pipeline.TruncateMiddleOutCodeAware(textForInterception, hardLimit, p.Gateway().Config.Governance)
 			} else {
-				truncated = pipeline.TruncateMiddleOut(textForInterception, hardLimit, p.GW.Config.Governance)
+				truncated = pipeline.TruncateMiddleOut(textForInterception, hardLimit, p.Gateway().Config.Governance)
 			}
 			processed, needsUpdate = p.summarizeOrForward(ctx, truncated, profile.IsIDE, "Truncated")
 		}
@@ -332,7 +332,7 @@ func (p *Proxy) applyContentPipeline(ctx context.Context, payload map[string]int
 }
 
 func (p *Proxy) summarizeWithOllama(ctx context.Context, heavyText string, isIDE bool) (string, error) {
-	if len(p.GW.Config.SecurityFilter.Engine.ResolvedTargets) == 0 {
+	if len(p.Gateway().Config.SecurityFilter.Engine.ResolvedTargets) == 0 {
 		return "", fmt.Errorf("security_filter engine: no resolved targets")
 	}
 
@@ -342,10 +342,10 @@ func (p *Proxy) summarizeWithOllama(ctx context.Context, heavyText string, isIDE
 		defaultPrompt = "You are a data privacy filter for code. The following text contains code blocks (marked with ``` fences). Remove or replace any IP addresses, AWS keys (AKIA...), passwords, tokens, or credentials that appear OUTSIDE code blocks with [REDACTED]. Inside code blocks, only redact actual hardcoded secrets in string literals — preserve all code structure, function signatures, import statements, variable names, and line-number references exactly. Do NOT summarize, shorten, or restructure any code. Do NOT modify non-sensitive code."
 	}
 
-	ref := p.GW.Config.SecurityFilter.Engine
+	ref := p.Gateway().Config.SecurityFilter.Engine
 	systemPrompt, err := config.LoadPromptFile(ref.SystemPromptFile, ref.SystemPrompt, defaultPrompt)
 	if err != nil {
-		p.GW.Logger.Warn("failed to load privacy filter prompt, using default", "err", err)
+		p.Gateway().Logger.Warn("failed to load privacy filter prompt, using default", "err", err)
 		systemPrompt = defaultPrompt
 	}
 
@@ -354,10 +354,10 @@ func (p *Proxy) summarizeWithOllama(ctx context.Context, heavyText string, isIDE
 		agentName = "inline"
 	}
 
-	return pipeline.CallEngineChain(ctx, p.GW.Client, p.GW.OllamaClient,
-		ref.ResolvedTargets, p.GW.Logger,
+	return pipeline.CallEngineChain(ctx, p.Gateway().Client, p.Gateway().OllamaClient,
+		ref.ResolvedTargets, p.Gateway().Logger,
 		func(providerName string, headers http.Header) error {
-			return routing.InjectAPIKey(providerName, p.GW.Providers, headers)
+			return routing.InjectAPIKey(providerName, p.Gateway().Providers, headers)
 		},
 		"security_filter", agentName, systemPrompt, heavyText)
 }
@@ -365,56 +365,56 @@ func (p *Proxy) summarizeWithOllama(ctx context.Context, heavyText string, isIDE
 func (p *Proxy) summarizeOrForward(ctx context.Context, truncated string, isIDE bool, label string) (string, bool) {
 	summarized, err := p.summarizeWithOllama(ctx, truncated, isIDE)
 	if err != nil {
-		if p.GW.Config.SecurityFilter.SkipOnEngineFailure {
-			p.GW.Logger.Warn("engine summarization failed, skip_on_engine_failure=true, forwarding original payload", "err", err)
+		if p.Gateway().Config.SecurityFilter.SkipOnEngineFailure {
+			p.Gateway().Logger.Warn("engine summarization failed, skip_on_engine_failure=true, forwarding original payload", "err", err)
 			return "", false
 		}
-		p.GW.Logger.Warn("engine summarization failed after truncation, forwarding truncated", "err", err)
+		p.Gateway().Logger.Warn("engine summarization failed after truncation, forwarding truncated", "err", err)
 		return fmt.Sprintf("[Nenya %s (engine unreachable)]:\n%s", label, truncated), true
 	}
 	return fmt.Sprintf("[Nenya Sanitized via Ollama (%s input)]:\n%s", label, summarized), true
 }
 
 func (p *Proxy) handleEmbeddings(w http.ResponseWriter, r *http.Request) {
-	r.Body = http.MaxBytesReader(w, r.Body, p.GW.Config.Server.MaxBodyBytes)
+	r.Body = http.MaxBytesReader(w, r.Body, p.Gateway().Config.Server.MaxBodyBytes)
 	defer r.Body.Close()
 
 	bodyBytes, err := io.ReadAll(r.Body)
 	if err != nil {
-		p.GW.Logger.Error("failed to read embeddings request body", "err", err)
+		p.Gateway().Logger.Error("failed to read embeddings request body", "err", err)
 		http.Error(w, "Payload too large or malformed", http.StatusRequestEntityTooLarge)
 		return
 	}
 
 	var payload map[string]interface{}
 	if err = json.Unmarshal(bodyBytes, &payload); err != nil {
-		p.GW.Logger.Warn("failed to parse embeddings JSON")
+		p.Gateway().Logger.Warn("failed to parse embeddings JSON")
 		http.Error(w, "Invalid JSON payload", http.StatusBadRequest)
 		return
 	}
 
 	modelName, ok := payload["model"].(string)
 	if !ok || modelName == "" {
-		p.GW.Logger.Warn("missing or empty model in embeddings request")
+		p.Gateway().Logger.Warn("missing or empty model in embeddings request")
 		http.Error(w, `Missing or empty "model" field`, http.StatusBadRequest)
 		return
 	}
 	if len(modelName) > MaxModelNameLength {
-		p.GW.Logger.Warn("model name exceeds maximum length in embeddings request", "length", len(modelName))
+		p.Gateway().Logger.Warn("model name exceeds maximum length in embeddings request", "length", len(modelName))
 		http.Error(w, "Model name too long", http.StatusBadRequest)
 		return
 	}
 
-	provider := routing.ResolveProvider(modelName, p.GW.Providers)
+	provider := routing.ResolveProvider(modelName, p.Gateway().Providers)
 	if provider == nil {
-		p.GW.Logger.Warn("no provider for embeddings model", "model", modelName)
+		p.Gateway().Logger.Warn("no provider for embeddings model", "model", modelName)
 		http.Error(w, "No provider configured for this model", http.StatusBadRequest)
 		return
 	}
 
 	embeddingURL := strings.TrimSuffix(provider.URL, "/chat/completions") + "/embeddings"
 	if embeddingURL == provider.URL {
-		p.GW.Logger.Warn("provider URL does not end with /chat/completions, cannot derive embeddings endpoint",
+		p.Gateway().Logger.Warn("provider URL does not end with /chat/completions, cannot derive embeddings endpoint",
 			"provider", provider.Name, "url", provider.URL)
 		http.Error(w, "Provider does not support embeddings", http.StatusBadRequest)
 		return
@@ -422,7 +422,7 @@ func (p *Proxy) handleEmbeddings(w http.ResponseWriter, r *http.Request) {
 
 	req, err := p.buildUpstreamRequest(r.Context(), http.MethodPost, embeddingURL, bodyBytes, provider.Name, r.Header)
 	if err != nil {
-		p.GW.Logger.Error("failed to create embeddings upstream request", "err", err)
+		p.Gateway().Logger.Error("failed to create embeddings upstream request", "err", err)
 		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
 		return
 	}
@@ -435,9 +435,9 @@ func (p *Proxy) handleEmbeddings(w http.ResponseWriter, r *http.Request) {
 		defer cancel()
 	}
 
-	resp, err := p.GW.Client.Do(req.WithContext(ctx))
+	resp, err := p.Gateway().Client.Do(req.WithContext(ctx))
 	if err != nil {
-		p.GW.Logger.Error("embeddings upstream request failed", "provider", provider.Name, "err", err)
+		p.Gateway().Logger.Error("embeddings upstream request failed", "provider", provider.Name, "err", err)
 		http.Error(w, "Upstream provider error", http.StatusBadGateway)
 		return
 	}
@@ -447,17 +447,17 @@ func (p *Proxy) handleEmbeddings(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(resp.StatusCode)
 
 	if _, err := io.Copy(w, resp.Body); err != nil {
-		p.GW.Logger.Debug("embeddings response copy ended", "err", err)
+		p.Gateway().Logger.Debug("embeddings response copy ended", "err", err)
 	}
 }
 
 func (p *Proxy) handleResponses(w http.ResponseWriter, r *http.Request) {
-	r.Body = http.MaxBytesReader(w, r.Body, p.GW.Config.Server.MaxBodyBytes)
+	r.Body = http.MaxBytesReader(w, r.Body, p.Gateway().Config.Server.MaxBodyBytes)
 	defer r.Body.Close()
 
 	bodyBytes, err := io.ReadAll(r.Body)
 	if err != nil {
-		p.GW.Logger.Error("failed to read responses request body", "err", err)
+		p.Gateway().Logger.Error("failed to read responses request body", "err", err)
 		http.Error(w, "Payload too large or malformed", http.StatusRequestEntityTooLarge)
 		return
 	}
@@ -475,16 +475,16 @@ func (p *Proxy) handleResponses(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	provider := routing.ResolveProvider(modelName, p.GW.Providers)
+	provider := routing.ResolveProvider(modelName, p.Gateway().Providers)
 	if provider == nil {
-		p.GW.Logger.Warn("no provider for responses model", "model", modelName)
+		p.Gateway().Logger.Warn("no provider for responses model", "model", modelName)
 		http.Error(w, "No provider configured for this model", http.StatusBadRequest)
 		return
 	}
 
 	responsesURL := strings.TrimSuffix(provider.URL, "/chat/completions") + "/responses"
 	if responsesURL == provider.URL {
-		p.GW.Logger.Warn("provider URL does not end with /chat/completions, cannot derive responses endpoint",
+		p.Gateway().Logger.Warn("provider URL does not end with /chat/completions, cannot derive responses endpoint",
 			"provider", provider.Name, "url", provider.URL)
 		http.Error(w, "Provider does not support responses API", http.StatusBadRequest)
 		return
@@ -492,7 +492,7 @@ func (p *Proxy) handleResponses(w http.ResponseWriter, r *http.Request) {
 
 	req, err := p.buildUpstreamRequest(r.Context(), http.MethodPost, responsesURL, bodyBytes, provider.Name, r.Header)
 	if err != nil {
-		p.GW.Logger.Error("failed to create responses upstream request", "err", err)
+		p.Gateway().Logger.Error("failed to create responses upstream request", "err", err)
 		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
 		return
 	}
@@ -505,9 +505,9 @@ func (p *Proxy) handleResponses(w http.ResponseWriter, r *http.Request) {
 		defer cancel()
 	}
 
-	resp, err := p.GW.Client.Do(req.WithContext(ctx))
+	resp, err := p.Gateway().Client.Do(req.WithContext(ctx))
 	if err != nil {
-		p.GW.Logger.Error("responses upstream request failed", "provider", provider.Name, "err", err)
+		p.Gateway().Logger.Error("responses upstream request failed", "provider", provider.Name, "err", err)
 		http.Error(w, "Upstream provider error", http.StatusBadGateway)
 		return
 	}
@@ -517,7 +517,7 @@ func (p *Proxy) handleResponses(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(resp.StatusCode)
 
 	if _, err := io.Copy(w, resp.Body); err != nil {
-		p.GW.Logger.Debug("responses response copy ended", "err", err)
+		p.Gateway().Logger.Debug("responses response copy ended", "err", err)
 	}
 }
 
@@ -528,12 +528,12 @@ func (p *Proxy) buildUpstreamRequest(ctx context.Context, method, url string, bo
 	}
 	headers := srcHeaders.Clone()
 	headers.Del("Authorization")
-	if err := routing.InjectAPIKey(providerName, p.GW.Providers, headers); err != nil {
+	if err := routing.InjectAPIKey(providerName, p.Gateway().Providers, headers); err != nil {
 		return nil, fmt.Errorf("API key injection failed: %w", err)
 	}
 	routing.CopyHeaders(headers, req.Header)
 	req.Header.Set("Accept-Encoding", "identity")
-	req.Header.Set("User-Agent", p.GW.Config.Server.UserAgent)
+	req.Header.Set("User-Agent", p.Gateway().Config.Server.UserAgent)
 	return req, nil
 }
 
@@ -541,12 +541,12 @@ func (p *Proxy) hasMCPTools(agentName string) bool {
 	if agentName == "" {
 		return false
 	}
-	agent, ok := p.GW.Config.Agents[agentName]
+	agent, ok := p.Gateway().Config.Agents[agentName]
 	if !ok || agent.MCP == nil || len(agent.MCP.Servers) == 0 {
 		return false
 	}
 	for _, serverName := range agent.MCP.Servers {
-		if client, ok := p.GW.MCPClients[serverName]; ok && client.Ready() {
+		if client, ok := p.Gateway().MCPClients[serverName]; ok && client.Ready() {
 			return true
 		}
 	}
@@ -557,26 +557,26 @@ func (p *Proxy) injectMCPTools(payload map[string]interface{}, agentName string)
 	if agentName == "" {
 		return
 	}
-	agent, ok := p.GW.Config.Agents[agentName]
+	agent, ok := p.Gateway().Config.Agents[agentName]
 	if !ok || agent.MCP == nil || len(agent.MCP.Servers) == 0 {
 		return
 	}
 
-	p.GW.Logger.Info("MCP injection starting",
+	p.Gateway().Logger.Info("MCP injection starting",
 		"servers", agent.MCP.Servers, "agent", agentName)
 
 	var toolNames []string
 	for _, serverName := range agent.MCP.Servers {
-		client, ok := p.GW.MCPClients[serverName]
+		client, ok := p.Gateway().MCPClients[serverName]
 		if !ok || !client.Ready() {
-			p.GW.Logger.Warn("MCP server not available, skipping tool injection",
+			p.Gateway().Logger.Warn("MCP server not available, skipping tool injection",
 				"server", serverName, "agent", agentName)
 			continue
 		}
 
 		tools := client.ListTools()
 		if len(tools) == 0 {
-			p.GW.Logger.Warn("MCP server returned no tools",
+			p.Gateway().Logger.Warn("MCP server returned no tools",
 				"server", serverName, "agent", agentName)
 			continue
 		}
@@ -597,19 +597,19 @@ func (p *Proxy) injectMCPTools(payload map[string]interface{}, agentName string)
 		}
 
 		payload["tools"] = existing
-		p.GW.Logger.Debug("MCP tools injected",
+		p.Gateway().Logger.Debug("MCP tools injected",
 			"server", serverName, "tools", len(tools), "agent", agentName)
 	}
 
 	if len(toolNames) > 0 {
 		if _, has := payload["tool_choice"]; !has {
 			payload["tool_choice"] = "auto"
-			p.GW.Logger.Info("MCP tool_choice auto injected",
+			p.Gateway().Logger.Info("MCP tool_choice auto injected",
 				"tools_count", len(toolNames), "agent", agentName)
 		}
 		p.injectMCPSystemPrompt(payload, toolNames)
 	} else {
-		p.GW.Logger.Warn("MCP: no tools injected for agent",
+		p.Gateway().Logger.Warn("MCP: no tools injected for agent",
 			"agent", agentName, "servers", agent.MCP.Servers)
 	}
 }
@@ -646,11 +646,11 @@ func (p *Proxy) injectMCPSystemPrompt(payload map[string]interface{}, toolNames 
 	updated = append(updated, messages...)
 	payload["messages"] = updated
 
-	p.GW.Logger.Debug("MCP system prompt injected", "tools", len(toolNames))
+	p.Gateway().Logger.Debug("MCP system prompt injected", "tools", len(toolNames))
 }
 
 func (p *Proxy) discoverToolByPrefix(serverName, prefix string) string {
-	client, ok := p.GW.MCPClients[serverName]
+	client, ok := p.Gateway().MCPClients[serverName]
 	if !ok {
 		return ""
 	}
@@ -666,7 +666,7 @@ func (p *Proxy) injectAutoSearch(ctx context.Context, payload map[string]interfa
 	if agentName == "" {
 		return
 	}
-	agent, ok := p.GW.Config.Agents[agentName]
+	agent, ok := p.Gateway().Config.Agents[agentName]
 	if !ok || agent.MCP == nil || !agent.MCP.AutoSearch {
 		return
 	}
@@ -690,7 +690,7 @@ func (p *Proxy) injectAutoSearch(ctx context.Context, payload map[string]interfa
 
 	searchTool := agent.MCP.SearchTool
 	for _, serverName := range agent.MCP.Servers {
-		client, ok := p.GW.MCPClients[serverName]
+		client, ok := p.Gateway().MCPClients[serverName]
 		if !ok || !client.Ready() {
 			continue
 		}
@@ -699,7 +699,7 @@ func (p *Proxy) injectAutoSearch(ctx context.Context, payload map[string]interfa
 		if toolName == "" {
 			toolName = p.discoverToolByPrefix(serverName, "search")
 			if toolName == "" {
-				p.GW.Logger.Warn("MCP auto-search: no 'search' tool found on server",
+				p.Gateway().Logger.Warn("MCP auto-search: no 'search' tool found on server",
 					"server", serverName, "agent", agentName)
 				continue
 			}
@@ -712,20 +712,20 @@ func (p *Proxy) injectAutoSearch(ctx context.Context, payload map[string]interfa
 		})
 		duration := time.Since(start)
 		if err != nil {
-			p.GW.Logger.Warn("MCP auto-search failed, proceeding without",
+			p.Gateway().Logger.Warn("MCP auto-search failed, proceeding without",
 				"server", serverName, "agent", agentName, "err", err,
 				"duration_ms", duration.Milliseconds())
-			if p.GW.Metrics != nil {
-				p.GW.Metrics.RecordMCPAutoSearch(serverName, agentName, false, err)
+			if p.Gateway().Metrics != nil {
+				p.Gateway().Metrics.RecordMCPAutoSearch(serverName, agentName, false, err)
 			}
 			continue
 		}
 		if result == nil || result.Text() == "" {
-			p.GW.Logger.Debug("MCP auto-search: no results",
+			p.Gateway().Logger.Debug("MCP auto-search: no results",
 				"server", serverName, "agent", agentName,
 				"duration_ms", duration.Milliseconds())
-			if p.GW.Metrics != nil {
-				p.GW.Metrics.RecordMCPAutoSearch(serverName, agentName, false, nil)
+			if p.Gateway().Metrics != nil {
+				p.Gateway().Metrics.RecordMCPAutoSearch(serverName, agentName, false, nil)
 			}
 			continue
 		}
@@ -742,13 +742,13 @@ func (p *Proxy) injectAutoSearch(ctx context.Context, payload map[string]interfa
 		updated = append(updated, messages[len(messages)-1:]...)
 		payload["messages"] = updated
 
-		p.GW.Logger.Debug("MCP auto-search context injected",
+		p.Gateway().Logger.Debug("MCP auto-search context injected",
 			"server", serverName, "agent", agentName,
 			"tool", toolName,
 			"duration_ms", duration.Milliseconds(),
 			"result_len", len(result.Text()))
-		if p.GW.Metrics != nil {
-			p.GW.Metrics.RecordMCPAutoSearch(serverName, agentName, true, nil)
+		if p.Gateway().Metrics != nil {
+			p.Gateway().Metrics.RecordMCPAutoSearch(serverName, agentName, true, nil)
 		}
 		break
 	}
@@ -765,17 +765,17 @@ func (p *Proxy) forwardToUpstreamWithMCP(
 	maxRetries int,
 	cacheKey string,
 ) {
-	_, hasAgent := p.GW.Config.Agents[agentName]
+	_, hasAgent := p.Gateway().Config.Agents[agentName]
 	maxIter := mcpMaxIterations
 	if hasAgent {
-		if agent := p.GW.Config.Agents[agentName]; agent.MCP != nil && agent.MCP.MaxIterations > 0 {
+		if agent := p.Gateway().Config.Agents[agentName]; agent.MCP != nil && agent.MCP.MaxIterations > 0 {
 			maxIter = agent.MCP.MaxIterations
 		}
 	}
 
 	originalPayload, err := json.Marshal(payload)
 	if err != nil {
-		p.GW.Logger.Error("failed to marshal payload for MCP loop", "err", err)
+		p.Gateway().Logger.Error("failed to marshal payload for MCP loop", "err", err)
 		writeSSEError(w, http.StatusInternalServerError, "Internal Server Error")
 		return
 	}
@@ -787,10 +787,10 @@ func (p *Proxy) forwardToUpstreamWithMCP(
 
 	defer func() {
 		loopDuration := time.Since(loopStart)
-		if p.GW.Metrics != nil && loopDuration > 0 {
-			p.GW.Metrics.RecordMCPLoopDuration(agentName, loopDuration)
+		if p.Gateway().Metrics != nil && loopDuration > 0 {
+			p.Gateway().Metrics.RecordMCPLoopDuration(agentName, loopDuration)
 		}
-		p.GW.Logger.Info("MCP multi-turn loop completed",
+		p.Gateway().Logger.Info("MCP multi-turn loop completed",
 			"agent", agentName,
 			"iterations", actualIter,
 			"tool_calls_executed", totalToolCalls,
@@ -798,14 +798,14 @@ func (p *Proxy) forwardToUpstreamWithMCP(
 	}()
 
 	for iteration := 0; iteration < maxIter; iteration++ {
-		if p.GW.Metrics != nil {
-			p.GW.Metrics.RecordMCPLoopIteration(agentName)
+		if p.Gateway().Metrics != nil {
+			p.Gateway().Metrics.RecordMCPLoopIteration(agentName)
 		}
 		actualIter++
 
 		working := make(map[string]interface{})
 		if err := json.Unmarshal(originalPayload, &working); err != nil {
-			p.GW.Logger.Error("failed to unmarshal payload for MCP iteration", "err", err)
+			p.Gateway().Logger.Error("failed to unmarshal payload for MCP iteration", "err", err)
 			break
 		}
 
@@ -818,10 +818,10 @@ func (p *Proxy) forwardToUpstreamWithMCP(
 
 		buf, err := p.forwardBuffered(r, targets, working, cooldownDuration, tokenCount, agentName, maxRetries)
 		if err != nil {
-			p.GW.Logger.Warn("MCP loop: upstream failed, streaming last response",
+			p.Gateway().Logger.Warn("MCP loop: upstream failed, streaming last response",
 				"iteration", iteration, "err", err)
 			if lastBuf != nil {
-				replayBufferedResponse(w, lastBuf, p.GW.Logger)
+				replayBufferedResponse(w, lastBuf, p.Gateway().Logger)
 				return
 			}
 			writeSSEError(w, http.StatusBadGateway, "All upstream providers failed")
@@ -830,20 +830,20 @@ func (p *Proxy) forwardToUpstreamWithMCP(
 
 		allCalls := buf.toolCalls
 		if len(allCalls) == 0 {
-			p.GW.Logger.Debug("MCP loop: content-only response, replaying",
+			p.Gateway().Logger.Debug("MCP loop: content-only response, replaying",
 				"has_content", buf.hasContent,
 				"finish_reason", buf.finishReason,
 				"raw_bytes_len", len(buf.rawBytes))
-			replayBufferedResponse(w, buf, p.GW.Logger)
+			replayBufferedResponse(w, buf, p.Gateway().Logger)
 			p.recordMCPUsage(buf, agentName)
 			return
 		}
 
-		mcpCalls, nonMcpCalls := partitionMCPToolCalls(allCalls, p.GW.MCPToolIndex)
+		mcpCalls, nonMcpCalls := partitionMCPToolCalls(allCalls, p.Gateway().MCPToolIndex)
 		totalToolCalls += len(mcpCalls)
 
 		if len(mcpCalls) > 0 {
-			p.GW.Logger.Info("MCP tool calls intercepted",
+			p.Gateway().Logger.Info("MCP tool calls intercepted",
 				"mcp_calls", len(mcpCalls),
 				"non_mcp_calls", len(nonMcpCalls),
 				"iteration", iteration+1,
@@ -854,18 +854,18 @@ func (p *Proxy) forwardToUpstreamWithMCP(
 
 			updatedPayload, err := json.Marshal(working)
 			if err != nil {
-				p.GW.Logger.Error("failed to marshal updated payload for MCP loop", "err", err)
-				replayBufferedResponse(w, buf, p.GW.Logger)
+				p.Gateway().Logger.Error("failed to marshal updated payload for MCP loop", "err", err)
+				replayBufferedResponse(w, buf, p.Gateway().Logger)
 				return
 			}
 			originalPayload = updatedPayload
 		}
 
 		if len(mcpCalls) == 0 && len(nonMcpCalls) > 0 {
-			p.GW.Logger.Debug("MCP loop: non-MCP tool calls only, replaying",
+			p.Gateway().Logger.Debug("MCP loop: non-MCP tool calls only, replaying",
 				"non_mcp_calls", len(nonMcpCalls),
 				"raw_bytes_len", len(buf.rawBytes))
-			replayBufferedResponse(w, buf, p.GW.Logger)
+			replayBufferedResponse(w, buf, p.Gateway().Logger)
 			p.recordMCPUsage(buf, agentName)
 			return
 		}
@@ -874,9 +874,9 @@ func (p *Proxy) forwardToUpstreamWithMCP(
 	}
 
 	if lastBuf != nil {
-		p.GW.Logger.Warn("MCP loop exhausted, replaying last response",
+		p.Gateway().Logger.Warn("MCP loop exhausted, replaying last response",
 			"max_iterations", maxIter, "agent", agentName)
-		replayBufferedResponse(w, lastBuf, p.GW.Logger)
+		replayBufferedResponse(w, lastBuf, p.Gateway().Logger)
 		p.recordMCPUsage(lastBuf, agentName)
 		return
 	}
@@ -898,7 +898,7 @@ func (p *Proxy) forwardBuffered(
 		return nil, fmt.Errorf("marshal payload: %w", err)
 	}
 
-	if p.GW.Config.Compaction.Enabled && p.GW.Config.Compaction.JSONMinify {
+	if p.Gateway().Config.Compaction.Enabled && p.Gateway().Config.Compaction.JSONMinify {
 		minified := bytes.NewBuffer(make([]byte, 0, len(originalPayload)))
 		if err := json.Compact(minified, originalPayload); err == nil {
 			originalPayload = minified.Bytes()
@@ -908,14 +908,14 @@ func (p *Proxy) forwardBuffered(
 	attempt := 0
 	for i, target := range targets {
 		if maxRetries > 0 && attempt >= maxRetries {
-			p.GW.Logger.Warn("max retries reached in buffered mode",
+			p.Gateway().Logger.Warn("max retries reached in buffered mode",
 				"attempt", attempt, "max", maxRetries, "agent", agentName)
 			break
 		}
 
 		workingPayload := make(map[string]interface{})
 		if err := json.Unmarshal(originalPayload, &workingPayload); err != nil {
-			p.GW.Logger.Error("failed to unmarshal payload for target",
+			p.Gateway().Logger.Error("failed to unmarshal payload for target",
 				"target", i+1, "total", len(targets), "err", err)
 			continue
 		}
@@ -928,7 +928,7 @@ func (p *Proxy) forwardBuffered(
 			attempt++
 			action.body, _ = io.ReadAll(io.LimitReader(action.resp.Body, pipeline.MaxErrorBodyBytes))
 			action.resp.Body.Close()
-			p.GW.Logger.Debug("MCP buffered: upstream error",
+			p.Gateway().Logger.Debug("MCP buffered: upstream error",
 				"target", i+1,
 				"status", action.resp.StatusCode,
 				"model", target.Model,
@@ -937,17 +937,17 @@ func (p *Proxy) forwardBuffered(
 			action.cancel()
 			if shouldRetry {
 				if maxRetries > 0 && attempt >= maxRetries {
-					p.GW.Logger.Warn("max retries reached in buffered mode after error",
+					p.Gateway().Logger.Warn("max retries reached in buffered mode after error",
 						"attempt", attempt, "max", maxRetries, "agent", agentName)
 					break
 				}
 				if retryDelay > 0 {
-					p.GW.Logger.Info("retrying with parsed delay (buffered)",
+					p.Gateway().Logger.Info("retrying with parsed delay (buffered)",
 						"model", target.Model, "delay_ms", retryDelay.Milliseconds())
 					waitWithCancel(r.Context(), retryDelay)
 				} else {
 					backoff := calculateBackoff(attempt - 1)
-					p.GW.Logger.Info("retrying with exponential backoff (buffered)",
+					p.Gateway().Logger.Info("retrying with exponential backoff (buffered)",
 						"model", target.Model, "attempt", attempt, "delay_ms", backoff.Milliseconds())
 					waitWithCancel(r.Context(), backoff)
 				}
@@ -959,15 +959,15 @@ func (p *Proxy) forwardBuffered(
 			buf, err := bufferStreamResponse(r.Context(), action.resp.Body)
 			action.resp.Body.Close()
 			if err != nil {
-				p.GW.AgentState.RecordSuccess(target.CoolKey)
+				p.Gateway().AgentState.RecordSuccess(target.CoolKey)
 				return nil, fmt.Errorf("buffering response: %w", err)
 			}
-			p.GW.AgentState.RecordSuccess(target.CoolKey)
+			p.Gateway().AgentState.RecordSuccess(target.CoolKey)
 			return buf, nil
 		}
 	}
 
-	p.GW.Logger.Error("all upstream targets exhausted (buffered)",
+	p.Gateway().Logger.Error("all upstream targets exhausted (buffered)",
 		"total", len(targets), "attempts", attempt)
 	return nil, fmt.Errorf("all %d upstream targets exhausted", len(targets))
 }
