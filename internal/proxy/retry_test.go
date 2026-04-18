@@ -265,7 +265,8 @@ func TestIsRetryableClientError_EmptyBody(t *testing.T) {
 }
 
 func TestIsRetryableStatus_DefaultCodes(t *testing.T) {
-	p := &Proxy{GW: newTestGateway(nil, nil)}
+	p := &Proxy{}
+	p.StoreGateway(newTestGateway(nil, nil))
 	for _, code := range defaultRetryableStatusCodes {
 		if !p.isRetryableStatus("unknown_provider", code) {
 			t.Fatalf("expected %d to be retryable", code)
@@ -274,7 +275,8 @@ func TestIsRetryableStatus_DefaultCodes(t *testing.T) {
 }
 
 func TestIsRetryableStatus_NonRetryableCodes(t *testing.T) {
-	p := &Proxy{GW: newTestGateway(nil, nil)}
+	p := &Proxy{}
+	p.StoreGateway(newTestGateway(nil, nil))
 	nonRetryable := []int{400, 401, 403, 404}
 	for _, code := range nonRetryable {
 		if p.isRetryableStatus("unknown_provider", code) {
@@ -290,7 +292,8 @@ func TestIsRetryableStatus_CustomProviderCodes(t *testing.T) {
 			RetryableStatusCodes: []int{401, 403},
 		},
 	}
-	p := &Proxy{GW: newTestGateway(nil, providers)}
+	p := &Proxy{}
+	p.StoreGateway(newTestGateway(nil, providers))
 	if !p.isRetryableStatus("custom", 401) {
 		t.Fatal("expected 401 to be retryable for custom provider")
 	}
@@ -302,7 +305,8 @@ func TestIsRetryableStatus_CustomProviderCodes(t *testing.T) {
 func TestIsRetryableStatus_GlobalConfigCodes(t *testing.T) {
 	cfg := config.Config{}
 	cfg.Governance.RetryableStatusCodes = []int{502, 504}
-	p := &Proxy{GW: newTestGateway(&cfg, nil)}
+	p := &Proxy{}
+	p.StoreGateway(newTestGateway(&cfg, nil))
 	if !p.isRetryableStatus("unknown_provider", 502) {
 		t.Fatal("expected 502 to be retryable via global config")
 	}
@@ -518,7 +522,8 @@ func TestIsRetryableStatus_ProviderOverridesGlobal(t *testing.T) {
 			RetryableStatusCodes: []int{401},
 		},
 	}
-	p := &Proxy{GW: newTestGateway(&cfg, providers)}
+	p := &Proxy{}
+	p.StoreGateway(newTestGateway(&cfg, providers))
 	if !p.isRetryableStatus("myprovider", 401) {
 		t.Fatal("expected provider-specific code to take priority")
 	}

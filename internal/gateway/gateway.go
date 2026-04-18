@@ -240,6 +240,22 @@ func (g *NenyaGateway) Close() {
 	}
 }
 
+func (g *NenyaGateway) Reload(cfg config.Config, secrets *config.SecretsConfig) *NenyaGateway {
+	newGW := New(cfg, secrets, g.Logger)
+
+	newGW.Stats = g.Stats
+	newGW.Metrics = g.Metrics
+	newGW.ThoughtSigCache = g.ThoughtSigCache
+
+	newGW.Metrics.RateLimits = newGW.RateLimiter.Snapshot
+	newGW.Metrics.Cooldowns = newGW.AgentState.ActiveCooldowns
+	newGW.Metrics.CBStates = newGW.AgentState.CBSnapshot
+
+	g.Close()
+
+	return newGW
+}
+
 func buildMCPClients(cfg config.Config, logger *slog.Logger) map[string]*mcp.Client {
 	clients := make(map[string]*mcp.Client)
 	for name, serverCfg := range cfg.MCPServers {

@@ -337,12 +337,11 @@ func TestExecuteMCPCalls(t *testing.T) {
 		{Name: "test_tool", Description: "A test tool"},
 	})
 
-	p := &Proxy{
-		GW: &gateway.NenyaGateway{
-			MCPClients:   map[string]*mcp.Client{"mempalace": client},
-			MCPToolIndex: toolIndex,
-		},
-	}
+	p := &Proxy{}
+	p.StoreGateway(&gateway.NenyaGateway{
+		MCPClients:   map[string]*mcp.Client{"mempalace": client},
+		MCPToolIndex: toolIndex,
+	})
 
 	calls := []mcpToolCall{
 		{ID: "1", Name: "mempalace__test_tool", Arguments: map[string]any{"query": "hello"}},
@@ -378,12 +377,11 @@ func TestExecuteMCPCalls_UnknownTool(t *testing.T) {
 	client.RefreshTools(t.Context())
 
 	toolIndex := mcp.NewToolRegistry()
-	p := &Proxy{
-		GW: &gateway.NenyaGateway{
-			MCPClients:   map[string]*mcp.Client{"mempalace": client},
-			MCPToolIndex: toolIndex,
-		},
-	}
+	p := &Proxy{}
+	p.StoreGateway(&gateway.NenyaGateway{
+		MCPClients:   map[string]*mcp.Client{"mempalace": client},
+		MCPToolIndex: toolIndex,
+	})
 
 	calls := []mcpToolCall{
 		{ID: "1", Name: "mempalace__unknown_tool"},
@@ -403,12 +401,11 @@ func TestExecuteMCPCalls_ServerUnavailable(t *testing.T) {
 	toolIndex := mcp.NewToolRegistry()
 	toolIndex.Register("mempalace", []mcp.Tool{{Name: "search"}})
 
-	p := &Proxy{
-		GW: &gateway.NenyaGateway{
-			MCPClients:   map[string]*mcp.Client{},
-			MCPToolIndex: toolIndex,
-		},
-	}
+	p := &Proxy{}
+	p.StoreGateway(&gateway.NenyaGateway{
+		MCPClients:   map[string]*mcp.Client{},
+		MCPToolIndex: toolIndex,
+	})
 
 	calls := []mcpToolCall{
 		{ID: "1", Name: "mempalace__search"},
@@ -428,12 +425,12 @@ func TestExecuteMCPCalls_ServerUnavailable(t *testing.T) {
 }
 
 func TestExecuteMCPCalls_EmptyCalls(t *testing.T) {
-	p := &Proxy{
-		GW: &gateway.NenyaGateway{
-			MCPClients:   map[string]*mcp.Client{},
-			MCPToolIndex: mcp.NewToolRegistry(),
-		},
-	}
+	toolIndex := mcp.NewToolRegistry()
+	p := &Proxy{}
+	p.StoreGateway(&gateway.NenyaGateway{
+		MCPClients:   map[string]*mcp.Client{},
+		MCPToolIndex: toolIndex,
+	})
 
 	results := executeMCPCalls(t.Context(), nil, p)
 	if results != nil {
