@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"flag"
+	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
@@ -49,13 +50,18 @@ func main() {
 	}
 
 	gw := gateway.New(*cfg, secrets, logger)
+	p := &proxy.Proxy{}
+	p.StoreGateway(gw)
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
+	sighup := make(chan os.Signal, 1)
+	signal.Notify(sighup, syscall.SIGHUP)
+
 	srv := &http.Server{
 		Addr:           cfg.Server.ListenAddr,
-		Handler:        &proxy.Proxy{GW: gw},
+		Handler:        p,
 		ReadTimeout:    10 * time.Second,
 		WriteTimeout:   0,
 		IdleTimeout:    120 * time.Second,
@@ -85,20 +91,51 @@ func main() {
 		close(serverErr)
 	}()
 
-	select {
-	case err := <-serverErr:
-		logger.Error("server failed", "err", err)
-		os.Exit(1)
-	case <-ctx.Done():
+	for {
+		select {
+		case err := <-serverErr:
+			logger.Error("server failed", "err", err)
+			os.Exit(1)
+		case <-sighup:
+			reloadConfig(p, configFile, logger)
+		case <-ctx.Done():
+			logger.Info("shutting down gracefully...")
+
+			shutdownCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+
+			if err := srv.Shutdown(shutdownCtx); err != nil {
+				logger.Error("graceful shutdown failed", "err", err)
+			}
+			logger.Info("server stopped")
+			return
+		}
+	}
+}
+
+func reloadConfig(p *proxy.Proxy, configFile string, logger *slog.Logger) {
+	logger.Info("reloading configuration", "file", configFile)
+
+	newCfg, err := config.Load(configFile)
+	if err != nil {
+		logger.Error("reload failed: could not load configuration file", "err", err)
+		return
 	}
 
-	logger.Info("shutting down gracefully...")
-
-	shutdownCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-
-	if err := srv.Shutdown(shutdownCtx); err != nil {
-		logger.Error("graceful shutdown failed", "err", err)
+	newSecrets, err := config.LoadSecrets()
+	if err != nil {
+		logger.Error("reload failed: could not load secrets", "err", err)
+		return
 	}
-	logger.Info("server stopped")
+
+	if err := config.ValidateConfiguration(newCfg, newSecrets, logger); err != nil {
+		logger.Error("reload failed: configuration validation", "err", err)
+		return
+	}
+
+	oldGW := p.Gateway()
+	newGW := oldGW.Reload(*newCfg, newSecrets)
+	p.StoreGateway(newGW)
+
+	logger.Info("configuration reloaded successfully")
 }

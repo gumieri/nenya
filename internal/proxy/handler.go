@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"runtime/debug"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"nenya/internal/config"
@@ -17,70 +18,89 @@ import (
 const MaxModelNameLength = 256
 
 type Proxy struct {
-	GW *gateway.NenyaGateway
+	gw atomic.Pointer[gateway.NenyaGateway]
+}
+
+func (p *Proxy) StoreGateway(gw *gateway.NenyaGateway) {
+	p.gw.Store(gw)
+}
+
+func (p *Proxy) Gateway() *gateway.NenyaGateway {
+	return p.gw.Load()
 }
 
 func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	defer func() {
 		if rec := recover(); rec != nil {
-			p.GW.Logger.Error("panic recovered", "err", rec, "stack", string(debug.Stack()))
+			p.Gateway().Logger.Error("panic recovered", "err", rec, "stack", string(debug.Stack()))
 			http.Error(w, "Internal Server Error", http.StatusInternalServerError)
 		}
 	}()
 
-	switch {
-	case r.URL.Path == "/healthz":
-		infra.ObserveHTTP(p.GW.Metrics, p.handleHealthz)(w, r)
-		return
-	case r.URL.Path == "/statsz":
-		infra.ObserveHTTP(p.GW.Metrics, p.handleStats)(w, r)
-		return
-	case r.URL.Path == "/metrics":
-		if !p.authenticateRequest(r, w) {
+	if gw := p.Gateway(); gw != nil {
+		switch {
+		case r.URL.Path == "/healthz":
+			infra.ObserveHTTP(gw.Metrics, p.handleHealthz)(w, r)
+			return
+		case r.URL.Path == "/statsz":
+			infra.ObserveHTTP(gw.Metrics, p.handleStats)(w, r)
+			return
+		case r.URL.Path == "/metrics":
+			if !p.authenticateRequest(r, w) {
+				return
+			}
+			infra.ObserveHTTPFunc(gw.Metrics, p.handleMetrics)(w, r)
+			return
+		case r.URL.Path == "/v1/models" && r.Method == http.MethodGet:
+			if !p.authenticateRequest(r, w) {
+				return
+			}
+			infra.ObserveHTTP(gw.Metrics, p.handleModels)(w, r)
+			return
+		case r.URL.Path == "/v1/chat/completions" && r.Method == http.MethodPost:
+			if !p.authenticateRequest(r, w) {
+				return
+			}
+			infra.ObserveHTTPFunc(gw.Metrics, p.handleChatCompletions)(w, r)
+			return
+		case r.URL.Path == "/v1/embeddings" && r.Method == http.MethodPost:
+			if !p.authenticateRequest(r, w) {
+				return
+			}
+			infra.ObserveHTTPFunc(gw.Metrics, p.handleEmbeddings)(w, r)
+			return
+		case r.URL.Path == "/v1/responses" && r.Method == http.MethodPost:
+			if !p.authenticateRequest(r, w) {
+				return
+			}
+			infra.ObserveHTTPFunc(gw.Metrics, p.handleResponses)(w, r)
+			return
+		default:
+			http.Error(w, "Not Found", http.StatusNotFound)
 			return
 		}
-		infra.ObserveHTTPFunc(p.GW.Metrics, p.handleMetrics)(w, r)
-		return
-	case r.URL.Path == "/v1/models" && r.Method == http.MethodGet:
-		if !p.authenticateRequest(r, w) {
-			return
-		}
-		infra.ObserveHTTP(p.GW.Metrics, p.handleModels)(w, r)
-		return
-	case r.URL.Path == "/v1/chat/completions" && r.Method == http.MethodPost:
-		if !p.authenticateRequest(r, w) {
-			return
-		}
-		infra.ObserveHTTPFunc(p.GW.Metrics, p.handleChatCompletions)(w, r)
-		return
-	case r.URL.Path == "/v1/embeddings" && r.Method == http.MethodPost:
-		if !p.authenticateRequest(r, w) {
-			return
-		}
-		infra.ObserveHTTPFunc(p.GW.Metrics, p.handleEmbeddings)(w, r)
-		return
-	case r.URL.Path == "/v1/responses" && r.Method == http.MethodPost:
-		if !p.authenticateRequest(r, w) {
-			return
-		}
-		infra.ObserveHTTPFunc(p.GW.Metrics, p.handleResponses)(w, r)
-		return
-	default:
-		http.Error(w, "Not Found", http.StatusNotFound)
+	} else {
+		http.Error(w, "Gateway not initialized", http.StatusServiceUnavailable)
 		return
 	}
 }
 
 func (p *Proxy) authenticateRequest(r *http.Request, w http.ResponseWriter) bool {
+	gw := p.Gateway()
+	if gw == nil {
+		gw.Logger.Warn("gateway not available during auth")
+		http.Error(w, "Gateway not initialized", http.StatusServiceUnavailable)
+		return false
+	}
 	authHeader := r.Header.Get("Authorization")
 	if !strings.HasPrefix(authHeader, "Bearer ") {
-		p.GW.Logger.Warn("missing or malformed Authorization header")
+		gw.Logger.Warn("missing or malformed Authorization header")
 		http.Error(w, "Unauthorized", http.StatusUnauthorized)
 		return false
 	}
 	clientToken := strings.TrimSpace(strings.TrimPrefix(authHeader, "Bearer "))
-	if subtle.ConstantTimeCompare([]byte(clientToken), []byte(p.GW.Secrets.ClientToken)) != 1 {
-		p.GW.Logger.Warn("invalid client token")
+	if subtle.ConstantTimeCompare([]byte(clientToken), []byte(gw.Secrets.ClientToken)) != 1 {
+		gw.Logger.Warn("invalid client token")
 		http.Error(w, "Forbidden", http.StatusForbidden)
 		return false
 	}
@@ -88,10 +108,20 @@ func (p *Proxy) authenticateRequest(r *http.Request, w http.ResponseWriter) bool
 }
 
 func (p *Proxy) handleMetrics(w http.ResponseWriter, r *http.Request) {
-	infra.HandleMetrics(p.GW.Metrics, w, r)
+	gw := p.Gateway()
+	if gw == nil {
+		http.Error(w, "Gateway not initialized", http.StatusServiceUnavailable)
+		return
+	}
+	infra.HandleMetrics(gw.Metrics, w, r)
 }
 
 func (p *Proxy) handleModels(w http.ResponseWriter) {
+	gw := p.Gateway()
+	if gw == nil {
+		http.Error(w, "Gateway not initialized", http.StatusServiceUnavailable)
+		return
+	}
 	type modelEntry struct {
 		ID      string `json:"id"`
 		Object  string `json:"object"`
@@ -113,14 +143,14 @@ func (p *Proxy) handleModels(w http.ResponseWriter) {
 		})
 	}
 
-	for agentName, agent := range p.GW.Config.Agents {
+	for agentName, agent := range gw.Config.Agents {
 		addModel(agentName, "nenya")
 		for _, m := range agent.Models {
 			addModel(m.Model, m.Provider)
 		}
 	}
 
-	for _, pr := range p.GW.Providers {
+	for _, pr := range gw.Providers {
 		if pr.APIKey == "" && pr.AuthStyle != "none" {
 			continue
 		}
@@ -136,17 +166,22 @@ func (p *Proxy) handleModels(w http.ResponseWriter) {
 
 	w.Header().Set("Content-Type", "application/json")
 	if err := json.NewEncoder(w).Encode(resp); err != nil {
-		p.GW.Logger.Error("failed to encode models response", "err", err)
+		gw.Logger.Error("failed to encode models response", "err", err)
 	}
 }
 
 func (p *Proxy) handleStats(w http.ResponseWriter) {
+	gw := p.Gateway()
+	if gw == nil {
+		http.Error(w, "Gateway not initialized", http.StatusServiceUnavailable)
+		return
+	}
 	w.Header().Set("Content-Type", "application/json")
-	stats := p.GW.Stats.Snapshot()
-	stats["circuit_breakers"] = p.GW.AgentState.CBSnapshot()
+	stats := gw.Stats.Snapshot()
+	stats["circuit_breakers"] = gw.AgentState.CBSnapshot()
 
 	mcpServers := make(map[string]interface{})
-	for name, client := range p.GW.MCPClients {
+	for name, client := range gw.MCPClients {
 		serverInfo := client.ServerInfo()
 		tools := client.ListTools()
 		mcpServers[name] = map[string]interface{}{
@@ -158,11 +193,16 @@ func (p *Proxy) handleStats(w http.ResponseWriter) {
 	stats["mcp"] = mcpServers
 
 	if err := json.NewEncoder(w).Encode(stats); err != nil {
-		p.GW.Logger.Error("failed to encode stats response", "err", err)
+		gw.Logger.Error("failed to encode stats response", "err", err)
 	}
 }
 
 func (p *Proxy) handleHealthz(w http.ResponseWriter) {
+	gw := p.Gateway()
+	if gw == nil {
+		http.Error(w, "Gateway not initialized", http.StatusServiceUnavailable)
+		return
+	}
 	engineOK := p.checkSecurityFilterEngineHealth()
 
 	resp := map[string]interface{}{
@@ -181,12 +221,16 @@ func (p *Proxy) handleHealthz(w http.ResponseWriter) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	if err := json.NewEncoder(w).Encode(resp); err != nil {
-		p.GW.Logger.Error("failed to encode healthz response", "err", err)
+		gw.Logger.Error("failed to encode healthz response", "err", err)
 	}
 }
 
 func (p *Proxy) checkSecurityFilterEngineHealth() bool {
-	ref := p.GW.Config.SecurityFilter.Engine
+	gw := p.Gateway()
+	if gw == nil {
+		return false
+	}
+	ref := gw.Config.SecurityFilter.Engine
 
 	if len(ref.ResolvedTargets) > 0 {
 		for _, target := range ref.ResolvedTargets {
@@ -205,7 +249,7 @@ func (p *Proxy) checkSecurityFilterEngineHealth() bool {
 				continue
 			}
 
-			client := p.GW.OllamaClient
+			client := gw.OllamaClient
 			resp, err := client.Do(req)
 			if err != nil {
 				cancel()
@@ -220,9 +264,9 @@ func (p *Proxy) checkSecurityFilterEngineHealth() bool {
 		return false
 	}
 
-	pr, ok := p.GW.Providers[ref.Provider]
+	pr, ok := gw.Providers[ref.Provider]
 	if !ok {
-		p.GW.Logger.Warn("engine provider not found", "provider", ref.Provider)
+		gw.Logger.Warn("engine provider not found", "provider", ref.Provider)
 		return false
 	}
 	apiFormat := pr.ApiFormat
@@ -240,7 +284,7 @@ func (p *Proxy) checkSecurityFilterEngineHealth() bool {
 		return false
 	}
 
-	client := p.GW.OllamaClient
+	client := gw.OllamaClient
 	resp, err := client.Do(req)
 	if err != nil {
 		cancel()

@@ -42,7 +42,9 @@ func newChatProxy(t *testing.T, upstreamURL string) *Proxy {
 		ProviderKeys: map[string]string{},
 	}
 	gw := gateway.New(cfg, secrets, slog.Default())
-	return &Proxy{GW: gw}
+	p := &Proxy{}
+	p.StoreGateway(gw)
+	return p
 }
 
 func TestHandleChatCompletions_ValidUpstream(t *testing.T) {
@@ -182,7 +184,8 @@ func TestHandleChatCompletions_AgentWithModels(t *testing.T) {
 		ProviderKeys: map[string]string{},
 	}
 	gw := gateway.New(cfg, secrets, slog.Default())
-	p := &Proxy{GW: gw}
+	p := &Proxy{}
+	p.StoreGateway(gw)
 
 	body := strings.NewReader(`{"model":"my-agent","messages":[{"role":"user","content":"hi"}]}`)
 	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", body)
@@ -202,7 +205,7 @@ func TestHandleChatCompletions_AgentWithModels(t *testing.T) {
 
 func TestHandleChatCompletions_AgentNoModels(t *testing.T) {
 	p := newChatProxy(t, "http://127.0.0.1:1")
-	p.GW.Config.Agents = map[string]config.AgentConfig{
+	p.Gateway().Config.Agents = map[string]config.AgentConfig{
 		"empty-agent": {
 			Models: []config.AgentModel{},
 		},

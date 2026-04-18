@@ -17,6 +17,7 @@ After=network-online.target
 Type=simple
 DynamicUser=yes 
 ExecStart=/usr/local/bin/nenya -config /etc/nenya/config.json
+ExecReload=/bin/kill -HUP $MAINPID
 Restart=on-failure
 RestartSec=5s
 

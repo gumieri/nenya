@@ -216,9 +216,9 @@ func (p *Proxy) streamResponse(w http.ResponseWriter, r *http.Request, target ro
 
 	var transformer stream.ResponseTransformer
 	if spec, ok := providerpkg.Get(target.Provider); ok && spec.NewResponseTransformer != nil {
-		transformer = spec.NewResponseTransformer(p.GW.ThoughtSigCache)
+		transformer = spec.NewResponseTransformer(p.Gateway().ThoughtSigCache)
 		if transformer != nil {
-			p.GW.Logger.Debug("SSE transformer active", "provider", target.Provider)
+			p.Gateway().Logger.Debug("SSE transformer active", "provider", target.Provider)
 		}
 	}
 
@@ -227,23 +227,23 @@ func (p *Proxy) streamResponse(w http.ResponseWriter, r *http.Request, target ro
 
 	transformingReader := stream.NewSSETransformingReader(stallR, transformer)
 	transformingReader.SetOnUsage(func(completion, prompt, total int) {
-		p.GW.Stats.RecordOutput(target.Model, completion)
-		if p.GW.Metrics != nil {
-			p.GW.Metrics.RecordTokens("output", target.Model, agentName, target.Provider, completion)
+		p.Gateway().Stats.RecordOutput(target.Model, completion)
+		if p.Gateway().Metrics != nil {
+			p.Gateway().Metrics.RecordTokens("output", target.Model, agentName, target.Provider, completion)
 		}
 	})
 
-	if p.GW.Config.SecurityFilter.OutputEnabled && (len(p.GW.SecretPatterns) > 0 || len(p.GW.BlockedPatterns) > 0) {
-		sf := stream.NewStreamFilter(p.GW.SecretPatterns, p.GW.BlockedPatterns, p.GW.Config.SecurityFilter.RedactionLabel, p.GW.Config.SecurityFilter.OutputWindowChars)
+	if p.Gateway().Config.SecurityFilter.OutputEnabled && (len(p.Gateway().SecretPatterns) > 0 || len(p.Gateway().BlockedPatterns) > 0) {
+		sf := stream.NewStreamFilter(p.Gateway().SecretPatterns, p.Gateway().BlockedPatterns, p.Gateway().Config.SecurityFilter.RedactionLabel, p.Gateway().Config.SecurityFilter.OutputWindowChars)
 		transformingReader.SetStreamFilter(sf)
-		p.GW.Logger.Debug("stream filter active",
-			"secret_patterns", len(p.GW.SecretPatterns),
-			"block_patterns", len(p.GW.BlockedPatterns),
-			"window_size", p.GW.Config.SecurityFilter.OutputWindowChars)
+		p.Gateway().Logger.Debug("stream filter active",
+			"secret_patterns", len(p.Gateway().SecretPatterns),
+			"block_patterns", len(p.Gateway().BlockedPatterns),
+			"window_size", p.Gateway().Config.SecurityFilter.OutputWindowChars)
 	}
 
 	var contentBuilder *contentBuilder
-	if agent, ok := p.GW.Config.Agents[agentName]; ok && agent.MCP != nil && agent.MCP.AutoSave {
+	if agent, ok := p.Gateway().Config.Agents[agentName]; ok && agent.MCP != nil && agent.MCP.AutoSave {
 		contentBuilder = newContentBuilder()
 		transformingReader.SetOnContent(contentBuilder.addContent)
 	}
@@ -255,12 +255,12 @@ func (p *Proxy) streamResponse(w http.ResponseWriter, r *http.Request, target ro
 
 	var captureBuf *bytes.Buffer
 	var tee *sseTeeWriter
-	if cacheKey != "" && p.GW.ResponseCache != nil {
+	if cacheKey != "" && p.Gateway().ResponseCache != nil {
 		captureBuf = new(bytes.Buffer)
 		tee = &sseTeeWriter{
 			dst:      flushWriter,
 			buf:      captureBuf,
-			maxBytes: p.GW.Config.ResponseCache.MaxEntryBytes,
+			maxBytes: p.Gateway().Config.ResponseCache.MaxEntryBytes,
 		}
 	}
 
@@ -284,10 +284,10 @@ func (p *Proxy) streamResponse(w http.ResponseWriter, r *http.Request, target ro
 		if errors.Is(copyErr, stream.ErrStreamBlocked) {
 			action.cancel()
 			action.resp.Body.Close()
-			p.GW.Logger.Warn("stream blocked by execution policy, upstream killed",
+			p.Gateway().Logger.Warn("stream blocked by execution policy, upstream killed",
 				"model", target.Model, "provider", target.Provider)
-			if p.GW.Metrics != nil {
-				p.GW.Metrics.RecordStreamBlock(target.Model, target.Provider)
+			if p.Gateway().Metrics != nil {
+				p.Gateway().Metrics.RecordStreamBlock(target.Model, target.Provider)
 			}
 			p.writeBlockedSSE(w)
 			return
@@ -295,33 +295,33 @@ func (p *Proxy) streamResponse(w http.ResponseWriter, r *http.Request, target ro
 		if errors.Is(copyErr, errStreamStalled) {
 			action.cancel()
 			action.resp.Body.Close()
-			p.GW.Logger.Warn("stream stalled, aborting upstream",
+			p.Gateway().Logger.Warn("stream stalled, aborting upstream",
 				"model", target.Model, "provider", target.Provider,
 				"idle_timeout", streamIdleTimeout)
 			return
 		}
 		if copyErr != nil {
-			p.GW.Logger.Warn("stream copy error",
+			p.Gateway().Logger.Warn("stream copy error",
 				"model", target.Model, "provider", target.Provider,
 				"err", copyErr)
 		}
 		action.resp.Body.Close()
-		p.GW.AgentState.RecordSuccess(target.CoolKey)
+		p.Gateway().AgentState.RecordSuccess(target.CoolKey)
 
-		if cacheKey != "" && p.GW.ResponseCache != nil && tee != nil && !tee.exceeded && captureBuf.Len() > 0 {
-			p.GW.ResponseCache.Store(cacheKey, captureBuf.Bytes())
-			p.GW.Logger.Debug("response cache stored",
+		if cacheKey != "" && p.Gateway().ResponseCache != nil && tee != nil && !tee.exceeded && captureBuf.Len() > 0 {
+			p.Gateway().ResponseCache.Store(cacheKey, captureBuf.Bytes())
+			p.Gateway().Logger.Debug("response cache stored",
 				"model", target.Model, "size", captureBuf.Len())
 		}
 
 		p.asyncMCPAutoSave(agentName, contentBuilder)
 	case <-r.Context().Done():
-		p.GW.Logger.Info("client disconnected, aborting upstream stream", "model", target.Model)
+		p.Gateway().Logger.Info("client disconnected, aborting upstream stream", "model", target.Model)
 		action.resp.Body.Close()
 		select {
 		case <-done:
 		case <-time.After(5 * time.Second):
-			p.GW.Logger.Warn("timed out waiting for stream copy to finish after client disconnect", "model", target.Model)
+			p.Gateway().Logger.Warn("timed out waiting for stream copy to finish after client disconnect", "model", target.Model)
 		}
 	}
 }
@@ -342,7 +342,7 @@ func (p *Proxy) writeBlockedSSE(w http.ResponseWriter) {
 	}
 	blockJSON, err := json.Marshal(blockPayload)
 	if err != nil {
-		p.GW.Logger.Error("failed to marshal blocked SSE payload", "err", err)
+		p.Gateway().Logger.Error("failed to marshal blocked SSE payload", "err", err)
 		return
 	}
 	fmt.Fprintf(w, "data: %s\n\n", blockJSON)
@@ -356,7 +356,7 @@ func (p *Proxy) asyncMCPAutoSave(agentName string, contentBuilder *contentBuilde
 	if agentName == "" || contentBuilder == nil {
 		return
 	}
-	agent, ok := p.GW.Config.Agents[agentName]
+	agent, ok := p.Gateway().Config.Agents[agentName]
 	if !ok || agent.MCP == nil || !agent.MCP.AutoSave {
 		return
 	}
@@ -368,7 +368,7 @@ func (p *Proxy) asyncMCPAutoSave(agentName string, contentBuilder *contentBuilde
 
 	go func() {
 		for _, serverName := range agent.MCP.Servers {
-			client, ok := p.GW.MCPClients[serverName]
+			client, ok := p.Gateway().MCPClients[serverName]
 			if !ok || !client.Ready() {
 				continue
 			}
@@ -379,7 +379,7 @@ func (p *Proxy) asyncMCPAutoSave(agentName string, contentBuilder *contentBuilde
 				if saveTool == "" {
 					saveTool = p.discoverToolByPrefix(serverName, "save")
 					if saveTool == "" {
-						p.GW.Logger.Warn("MCP auto-save: no 'add'/'save' tool found on server",
+						p.Gateway().Logger.Warn("MCP auto-save: no 'add'/'save' tool found on server",
 							"server", serverName, "agent", agentName)
 						continue
 					}
@@ -398,19 +398,19 @@ func (p *Proxy) asyncMCPAutoSave(agentName string, contentBuilder *contentBuilde
 			duration := time.Since(start)
 			cancel()
 			if err != nil {
-				p.GW.Logger.Warn("MCP auto-save failed (best-effort)",
+				p.Gateway().Logger.Warn("MCP auto-save failed (best-effort)",
 					"server", serverName, "agent", agentName, "err", err,
 					"duration_ms", duration.Milliseconds())
-				if p.GW.Metrics != nil {
-					p.GW.Metrics.RecordMCPAutoSave(serverName, agentName, err)
+				if p.Gateway().Metrics != nil {
+					p.Gateway().Metrics.RecordMCPAutoSave(serverName, agentName, err)
 				}
 			} else {
-				p.GW.Logger.Debug("MCP auto-save completed",
+				p.Gateway().Logger.Debug("MCP auto-save completed",
 					"server", serverName, "agent", agentName,
 					"duration_ms", duration.Milliseconds(),
 					"content_len", len(assistantContent))
-				if p.GW.Metrics != nil {
-					p.GW.Metrics.RecordMCPAutoSave(serverName, agentName, nil)
+				if p.Gateway().Metrics != nil {
+					p.Gateway().Metrics.RecordMCPAutoSave(serverName, agentName, nil)
 				}
 			}
 			return

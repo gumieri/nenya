@@ -22,7 +22,8 @@ import (
 )
 
 func TestWriteBlockedSSE(t *testing.T) {
-	p := &Proxy{GW: newStreamTestGateway()}
+	p := &Proxy{}
+	p.StoreGateway(newStreamTestGateway())
 	rec := httptest.NewRecorder()
 	p.writeBlockedSSE(rec)
 
@@ -55,7 +56,8 @@ func TestWriteBlockedSSE(t *testing.T) {
 }
 
 func TestWriteBlockedSSE_Flush(t *testing.T) {
-	p := &Proxy{GW: newStreamTestGateway()}
+	p := &Proxy{}
+	p.StoreGateway(newStreamTestGateway())
 	rec := httptest.NewRecorder()
 	p.writeBlockedSSE(rec)
 
@@ -201,7 +203,8 @@ func TestStallReader_StopPreventsStall(t *testing.T) {
 }
 
 func TestWriteBlockedSSE_MultipleChunks(t *testing.T) {
-	p := &Proxy{GW: newStreamTestGateway()}
+	p := &Proxy{}
+	p.StoreGateway(newStreamTestGateway())
 	rec := httptest.NewRecorder()
 	p.writeBlockedSSE(rec)
 
