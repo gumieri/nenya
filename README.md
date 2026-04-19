@@ -84,8 +84,19 @@ A lightweight, zero-dependency AI API Gateway written in Go. Nenya sits between 
 ### 1. Install
 
 ```bash
-go build -o nenya ./cmd/nenya
-sudo cp nenya /usr/local/bin/
+curl -fsSL https://raw.githubusercontent.com/gumieri/nenya/main/install.sh | sudo sh
+```
+
+This detects your OS and architecture, downloads the correct binary from GitHub Releases, verifies the checksum, and installs the binary, example config, and systemd unit.
+
+Pinned version:
+```bash
+curl -fsSL https://raw.githubusercontent.com/gumieri/nenya/main/install.sh | sudo sh -s -- -v 0.1.0
+```
+
+Dry run (audit before installing):
+```bash
+curl -fsSL https://raw.githubusercontent.com/gumieri/nenya/main/install.sh | sh -s -- --dry-run
 ```
 
 ### 2. Create config directory

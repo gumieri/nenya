@@ -18,62 +18,68 @@ jobs:
         with:
           go-version-file: go.mod
 
-      - name: Build all platforms
-        run: |
-          VERSION="${GITHUB_REF_NAME}"
-          mkdir -p dist
+       - name: Build all platforms
+         run: |
+           VERSION="${GITHUB_REF_NAME}"
+           mkdir -p dist
 
-          platforms=(
-            "linux   amd64  tar.gz"
-            "linux   arm64  tar.gz"
-            "darwin  amd64  tar.gz"
-            "darwin  arm64  tar.gz"
-          )
+           platforms=(
+             "linux   amd64  tar.gz"
+             "linux   arm64  tar.gz"
+             "darwin  amd64  tar.gz"
+             "darwin  arm64  tar.gz"
+           )
 
-          for entry in "${platforms[@]}"; do
-            read -r GOOS GOARCH EXT <<< "$entry"
-            BINARY="nenya"
+           for entry in "${platforms[@]}"; do
+             read -r GOOS GOARCH EXT <<< "$entry"
+             BINARY="nenya"
 
-            echo "Building ${GOOS}/${GOARCH}..."
-            CGO_ENABLED=0 GOOS="$GOOS" GOARCH="$GOARCH" \
-              go build -ldflags="-s -w" -o "dist/${BINARY}" ./cmd/nenya
+             echo "Building ${GOOS}/${GOARCH}..."
+             CGO_ENABLED=0 GOOS="$GOOS" GOARCH="$GOARCH" \
+               go build -ldflags="-s -w" -o "dist/${BINARY}" ./cmd/nenya
 
-            ARCHIVE="nenya-${VERSION}-${GOOS}-${GOARCH}.${EXT}"
-            echo "Packaging ${ARCHIVE}..."
+             ARCHIVE="nenya-${VERSION}-${GOOS}-${GOARCH}.${EXT}"
+             echo "Packaging ${ARCHIVE}..."
 
-            cp deploy/nenya.service dist/nenya.service
-            cp configs/example.config.json dist/config.json.example
-            tar -czf "${ARCHIVE}" -C dist "${BINARY}" nenya.service config.json.example
+             cp deploy/nenya.service dist/nenya.service
+             cp configs/example.config.json dist/config.json.example
+             tar -czf "${ARCHIVE}" -C dist "${BINARY}" nenya.service config.json.example
 
-            rm -f "dist/${BINARY}" dist/nenya.service dist/config.json.example
-          done
+             rm -f "dist/${BINARY}" dist/nenya.service dist/config.json.example
+           done
 
-      - name: Create GitHub Release
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          VERSION="${GITHUB_REF_NAME}"
+       - name: Generate checksums
+         run: |
+           cd dist
+           sha256sum *.tar.gz > checksums.txt
 
-          if gh release view "$VERSION" >/dev/null 2>&1; then
-            echo "Release ${VERSION} already exists, updating..."
-            gh release edit "$VERSION" --title "Nenya ${VERSION}" --verify-tag
-            gh release upload "$VERSION" \
-              nenya-${VERSION}-linux-amd64.tar.gz \
-              nenya-${VERSION}-linux-arm64.tar.gz \
-              nenya-${VERSION}-darwin-amd64.tar.gz \
-              nenya-${VERSION}-darwin-arm64.tar.gz \
-              --clobber
-            echo "Release ${VERSION} updated."
-            exit 0
-          fi
+       - name: Create GitHub Release
+         env:
+           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+         run: |
+           VERSION="${GITHUB_REF_NAME}"
 
-          echo "Creating release ${VERSION}..."
+           if gh release view "$VERSION" >/dev/null 2>&1; then
+             echo "Release ${VERSION} already exists, updating..."
+             gh release edit "$VERSION" --title "Nenya ${VERSION}" --verify-tag
+             gh release upload "$VERSION" \
+               nenya-${VERSION}-linux-amd64.tar.gz \
+               nenya-${VERSION}-linux-arm64.tar.gz \
+               nenya-${VERSION}-darwin-amd64.tar.gz \
+               nenya-${VERSION}-darwin-arm64.tar.gz \
+               checksums.txt \
+               --clobber
+             echo "Release ${VERSION} updated."
+             exit 0
+           fi
 
-          gh release create "$VERSION" \
-            --verify-tag \
-            --title "Nenya ${VERSION}" \
-            --generate-notes \
-            nenya-${VERSION}-linux-amd64.tar.gz \
-            nenya-${VERSION}-linux-arm64.tar.gz \
-            nenya-${VERSION}-darwin-amd64.tar.gz \
-            nenya-${VERSION}-darwin-arm64.tar.gz
+           echo "Creating release ${VERSION}..."
+           gh release create "$VERSION" \
+             --verify-tag \
+             --title "Nenya ${VERSION}" \
+             --generate-notes \
+             nenya-${VERSION}-linux-amd64.tar.gz \
+             nenya-${VERSION}-linux-arm64.tar.gz \
+             nenya-${VERSION}-darwin-amd64.tar.gz \
+             nenya-${VERSION}-darwin-arm64.tar.gz \
+             checksums.txt
