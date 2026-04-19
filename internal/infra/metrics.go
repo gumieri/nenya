@@ -32,13 +32,13 @@ type Metrics struct {
 	streamBlocked sync.Map
 
 	// MCP metrics
-	mcpToolCallsTotal    sync.Map // labels: server, tool, agent, status (success/error)
-	mcpToolCallDuration  sync.Map // labels: server, tool (histogram)
-	mcpAutoSearchTotal   sync.Map // labels: server, agent, status (hit/miss/error)
-	mcpAutoSaveTotal     sync.Map // labels: server, agent, status (success/error)
-	mcpLoopIterations    sync.Map // labels: agent
-	mcpLoopDuration      sync.Map // labels: agent (histogram)
-	mcpServerReady       sync.Map // labels: server (gauge: 1=ready, 0=not ready)
+	mcpToolCallsTotal   sync.Map // labels: server, tool, agent, status (success/error)
+	mcpToolCallDuration sync.Map // labels: server, tool (histogram)
+	mcpAutoSearchTotal  sync.Map // labels: server, agent, status (hit/miss/error)
+	mcpAutoSaveTotal    sync.Map // labels: server, agent, status (success/error)
+	mcpLoopIterations   sync.Map // labels: agent
+	mcpLoopDuration     sync.Map // labels: agent (histogram)
+	mcpServerReady      sync.Map // labels: server (gauge: 1=ready, 0=not ready)
 
 	RateLimits func() map[string]*RateLimitSnapshot
 	Cooldowns  func() (active int)

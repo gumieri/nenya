@@ -13,8 +13,8 @@ description = "Run go vet"
 run = "go vet ./..."
 
 [tasks.lint]
-description = "Format and vet source"
-run = ["go fmt ./...", "go vet ./..."]
+description = "Run golangci-lint (matches CI)"
+run = "golangci-lint run"
 
 [tasks.clean]
 description = "Remove built binary"

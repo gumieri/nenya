@@ -105,7 +105,7 @@ func TestBufferStreamResponse_ContextCancelled(t *testing.T) {
 	sse := "data: {\"choices\":[{\"delta\":{\"content\":\"Hello\"}}]}\n\n"
 	_, err := bufferStreamResponse(ctx, strings.NewReader(sse))
 	if err == nil {
-		t.Fatal("expected error for cancelled context")
+		t.Fatal("expected error for canceled context")
 	}
 }
 
