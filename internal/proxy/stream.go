@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"nenya/internal/gateway"
 	providerpkg "nenya/internal/providers"
 	"nenya/internal/routing"
 	"nenya/internal/stream"
@@ -206,7 +207,7 @@ func copyStream(ctx context.Context, dst io.Writer, src io.Reader, buf []byte) (
 	}
 }
 
-func (p *Proxy) streamResponse(w http.ResponseWriter, r *http.Request, target routing.UpstreamTarget, agentName string, action upstreamAction, cacheKey string) {
+func (p *Proxy) streamResponse(gw *gateway.NenyaGateway, w http.ResponseWriter, r *http.Request, target routing.UpstreamTarget, agentName string, action upstreamAction, cacheKey string) {
 	defer action.cancel()
 	routing.CopyHeaders(action.resp.Header, w.Header())
 	if cacheKey != "" {
@@ -216,9 +217,9 @@ func (p *Proxy) streamResponse(w http.ResponseWriter, r *http.Request, target ro
 
 	var transformer stream.ResponseTransformer
 	if spec, ok := providerpkg.Get(target.Provider); ok && spec.NewResponseTransformer != nil {
-		transformer = spec.NewResponseTransformer(p.Gateway().ThoughtSigCache)
+		transformer = spec.NewResponseTransformer(gw.ThoughtSigCache)
 		if transformer != nil {
-			p.Gateway().Logger.Debug("SSE transformer active", "provider", target.Provider)
+			gw.Logger.Debug("SSE transformer active", "provider", target.Provider)
 		}
 	}
 
@@ -227,23 +228,23 @@ func (p *Proxy) streamResponse(w http.ResponseWriter, r *http.Request, target ro
 
 	transformingReader := stream.NewSSETransformingReader(stallR, transformer)
 	transformingReader.SetOnUsage(func(completion, prompt, total int) {
-		p.Gateway().Stats.RecordOutput(target.Model, completion)
-		if p.Gateway().Metrics != nil {
-			p.Gateway().Metrics.RecordTokens("output", target.Model, agentName, target.Provider, completion)
+		gw.Stats.RecordOutput(target.Model, completion)
+		if gw.Metrics != nil {
+			gw.Metrics.RecordTokens("output", target.Model, agentName, target.Provider, completion)
 		}
 	})
 
-	if p.Gateway().Config.SecurityFilter.OutputEnabled && (len(p.Gateway().SecretPatterns) > 0 || len(p.Gateway().BlockedPatterns) > 0) {
-		sf := stream.NewStreamFilter(p.Gateway().SecretPatterns, p.Gateway().BlockedPatterns, p.Gateway().Config.SecurityFilter.RedactionLabel, p.Gateway().Config.SecurityFilter.OutputWindowChars)
+	if gw.Config.SecurityFilter.OutputEnabled && (len(gw.SecretPatterns) > 0 || len(gw.BlockedPatterns) > 0) {
+		sf := stream.NewStreamFilter(gw.SecretPatterns, gw.BlockedPatterns, gw.Config.SecurityFilter.RedactionLabel, gw.Config.SecurityFilter.OutputWindowChars)
 		transformingReader.SetStreamFilter(sf)
-		p.Gateway().Logger.Debug("stream filter active",
-			"secret_patterns", len(p.Gateway().SecretPatterns),
-			"block_patterns", len(p.Gateway().BlockedPatterns),
-			"window_size", p.Gateway().Config.SecurityFilter.OutputWindowChars)
+		gw.Logger.Debug("stream filter active",
+			"secret_patterns", len(gw.SecretPatterns),
+			"block_patterns", len(gw.BlockedPatterns),
+			"window_size", gw.Config.SecurityFilter.OutputWindowChars)
 	}
 
 	var contentBuilder *contentBuilder
-	if agent, ok := p.Gateway().Config.Agents[agentName]; ok && agent.MCP != nil && agent.MCP.AutoSave {
+	if agent, ok := gw.Config.Agents[agentName]; ok && agent.MCP != nil && agent.MCP.AutoSave {
 		contentBuilder = newContentBuilder()
 		transformingReader.SetOnContent(contentBuilder.addContent)
 	}
@@ -255,12 +256,12 @@ func (p *Proxy) streamResponse(w http.ResponseWriter, r *http.Request, target ro
 
 	var captureBuf *bytes.Buffer
 	var tee *sseTeeWriter
-	if cacheKey != "" && p.Gateway().ResponseCache != nil {
+	if cacheKey != "" && gw.ResponseCache != nil {
 		captureBuf = new(bytes.Buffer)
 		tee = &sseTeeWriter{
 			dst:      flushWriter,
 			buf:      captureBuf,
-			maxBytes: p.Gateway().Config.ResponseCache.MaxEntryBytes,
+			maxBytes: gw.Config.ResponseCache.MaxEntryBytes,
 		}
 	}
 
@@ -284,49 +285,49 @@ func (p *Proxy) streamResponse(w http.ResponseWriter, r *http.Request, target ro
 		if errors.Is(copyErr, stream.ErrStreamBlocked) {
 			action.cancel()
 			action.resp.Body.Close()
-			p.Gateway().Logger.Warn("stream blocked by execution policy, upstream killed",
+			gw.Logger.Warn("stream blocked by execution policy, upstream killed",
 				"model", target.Model, "provider", target.Provider)
-			if p.Gateway().Metrics != nil {
-				p.Gateway().Metrics.RecordStreamBlock(target.Model, target.Provider)
+			if gw.Metrics != nil {
+				gw.Metrics.RecordStreamBlock(target.Model, target.Provider)
 			}
-			p.writeBlockedSSE(w)
+			p.writeBlockedSSE(gw, w)
 			return
 		}
 		if errors.Is(copyErr, errStreamStalled) {
 			action.cancel()
 			action.resp.Body.Close()
-			p.Gateway().Logger.Warn("stream stalled, aborting upstream",
+			gw.Logger.Warn("stream stalled, aborting upstream",
 				"model", target.Model, "provider", target.Provider,
 				"idle_timeout", streamIdleTimeout)
 			return
 		}
 		if copyErr != nil {
-			p.Gateway().Logger.Warn("stream copy error",
+			gw.Logger.Warn("stream copy error",
 				"model", target.Model, "provider", target.Provider,
 				"err", copyErr)
 		}
 		action.resp.Body.Close()
-		p.Gateway().AgentState.RecordSuccess(target.CoolKey)
+		gw.AgentState.RecordSuccess(target.CoolKey)
 
-		if cacheKey != "" && p.Gateway().ResponseCache != nil && tee != nil && !tee.exceeded && captureBuf.Len() > 0 {
-			p.Gateway().ResponseCache.Store(cacheKey, captureBuf.Bytes())
-			p.Gateway().Logger.Debug("response cache stored",
+		if cacheKey != "" && gw.ResponseCache != nil && tee != nil && !tee.exceeded && captureBuf.Len() > 0 {
+			gw.ResponseCache.Store(cacheKey, captureBuf.Bytes())
+			gw.Logger.Debug("response cache stored",
 				"model", target.Model, "size", captureBuf.Len())
 		}
 
-		p.asyncMCPAutoSave(agentName, contentBuilder)
+		p.asyncMCPAutoSave(gw, agentName, contentBuilder)
 	case <-r.Context().Done():
-		p.Gateway().Logger.Info("client disconnected, aborting upstream stream", "model", target.Model)
+		gw.Logger.Info("client disconnected, aborting upstream stream", "model", target.Model)
 		action.resp.Body.Close()
 		select {
 		case <-done:
 		case <-time.After(5 * time.Second):
-			p.Gateway().Logger.Warn("timed out waiting for stream copy to finish after client disconnect", "model", target.Model)
+			gw.Logger.Warn("timed out waiting for stream copy to finish after client disconnect", "model", target.Model)
 		}
 	}
 }
 
-func (p *Proxy) writeBlockedSSE(w http.ResponseWriter) {
+func (p *Proxy) writeBlockedSSE(gw *gateway.NenyaGateway, w http.ResponseWriter) {
 	blockPayload := map[string]interface{}{
 		"id":     "blocked",
 		"object": "chat.completion.chunk",
@@ -342,7 +343,7 @@ func (p *Proxy) writeBlockedSSE(w http.ResponseWriter) {
 	}
 	blockJSON, err := json.Marshal(blockPayload)
 	if err != nil {
-		p.Gateway().Logger.Error("failed to marshal blocked SSE payload", "err", err)
+		gw.Logger.Error("failed to marshal blocked SSE payload", "err", err)
 		return
 	}
 	fmt.Fprintf(w, "data: %s\n\n", blockJSON)
@@ -352,11 +353,11 @@ func (p *Proxy) writeBlockedSSE(w http.ResponseWriter) {
 	}
 }
 
-func (p *Proxy) asyncMCPAutoSave(agentName string, contentBuilder *contentBuilder) {
+func (p *Proxy) asyncMCPAutoSave(gw *gateway.NenyaGateway, agentName string, contentBuilder *contentBuilder) {
 	if agentName == "" || contentBuilder == nil {
 		return
 	}
-	agent, ok := p.Gateway().Config.Agents[agentName]
+	agent, ok := gw.Config.Agents[agentName]
 	if !ok || agent.MCP == nil || !agent.MCP.AutoSave {
 		return
 	}
@@ -368,18 +369,18 @@ func (p *Proxy) asyncMCPAutoSave(agentName string, contentBuilder *contentBuilde
 
 	go func() {
 		for _, serverName := range agent.MCP.Servers {
-			client, ok := p.Gateway().MCPClients[serverName]
+			client, ok := gw.MCPClients[serverName]
 			if !ok || !client.Ready() {
 				continue
 			}
 
 			saveTool := agent.MCP.SaveTool
 			if saveTool == "" {
-				saveTool = p.discoverToolByPrefix(serverName, "add")
+				saveTool = p.discoverToolByPrefix(gw, serverName, "add")
 				if saveTool == "" {
-					saveTool = p.discoverToolByPrefix(serverName, "save")
+					saveTool = p.discoverToolByPrefix(gw, serverName, "save")
 					if saveTool == "" {
-						p.Gateway().Logger.Warn("MCP auto-save: no 'add'/'save' tool found on server",
+						gw.Logger.Warn("MCP auto-save: no 'add'/'save' tool found on server",
 							"server", serverName, "agent", agentName)
 						continue
 					}
@@ -398,19 +399,19 @@ func (p *Proxy) asyncMCPAutoSave(agentName string, contentBuilder *contentBuilde
 			duration := time.Since(start)
 			cancel()
 			if err != nil {
-				p.Gateway().Logger.Warn("MCP auto-save failed (best-effort)",
+				gw.Logger.Warn("MCP auto-save failed (best-effort)",
 					"server", serverName, "agent", agentName, "err", err,
 					"duration_ms", duration.Milliseconds())
-				if p.Gateway().Metrics != nil {
-					p.Gateway().Metrics.RecordMCPAutoSave(serverName, agentName, err)
+				if gw.Metrics != nil {
+					gw.Metrics.RecordMCPAutoSave(serverName, agentName, err)
 				}
 			} else {
-				p.Gateway().Logger.Debug("MCP auto-save completed",
+				gw.Logger.Debug("MCP auto-save completed",
 					"server", serverName, "agent", agentName,
 					"duration_ms", duration.Milliseconds(),
 					"content_len", len(assistantContent))
-				if p.Gateway().Metrics != nil {
-					p.Gateway().Metrics.RecordMCPAutoSave(serverName, agentName, nil)
+				if gw.Metrics != nil {
+					gw.Metrics.RecordMCPAutoSave(serverName, agentName, nil)
 				}
 			}
 			return

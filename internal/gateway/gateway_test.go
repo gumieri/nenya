@@ -283,3 +283,58 @@ func TestExtractContentText_NonStringNonArrayContent(t *testing.T) {
 		t.Errorf("expected empty string for non-string non-array content, got %q", text)
 	}
 }
+
+func TestReload_StatePreserved(t *testing.T) {
+	gw := New(testConfig(), testSecrets(), testLogger())
+
+	stats := gw.Stats
+	metrics := gw.Metrics
+	sigCache := gw.ThoughtSigCache
+
+	newCfg := testConfig()
+	newCfg.Governance.RatelimitMaxRPM = 99
+	newSecrets := testSecrets()
+	newSecrets.ClientToken = "new-token"
+
+	newGW := gw.Reload(newCfg, newSecrets)
+
+	if newGW.Stats != stats {
+		t.Fatal("expected Stats to be the same pointer")
+	}
+	if newGW.Metrics != metrics {
+		t.Fatal("expected Metrics to be the same pointer")
+	}
+	if newGW.ThoughtSigCache != sigCache {
+		t.Fatal("expected ThoughtSigCache to be the same pointer")
+	}
+}
+
+func TestReload_ConfigUpdated(t *testing.T) {
+	gw := New(testConfig(), testSecrets(), testLogger())
+
+	newCfg := testConfig()
+	newCfg.Governance.RatelimitMaxRPM = 42
+	newGW := gw.Reload(newCfg, testSecrets())
+
+	if newGW.Config.Governance.RatelimitMaxRPM != 42 {
+		t.Fatalf("expected new RatelimitMaxRPM=42, got %d", newGW.Config.Governance.RatelimitMaxRPM)
+	}
+}
+
+func TestReload_ProvidersRebuilt(t *testing.T) {
+	cfg := testConfig()
+	secrets := testSecrets()
+	secrets.ProviderKeys["gemini"] = "old-key"
+	gw := New(cfg, secrets, testLogger())
+
+	newSecrets := testSecrets()
+	newSecrets.ProviderKeys["gemini"] = "new-key"
+	newGW := gw.Reload(cfg, newSecrets)
+
+	if newGW == gw {
+		t.Fatal("expected new gateway pointer")
+	}
+	if newGW.Secrets != newSecrets {
+		t.Fatal("expected new secrets reference")
+	}
+}

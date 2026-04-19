@@ -268,7 +268,7 @@ func TestIsRetryableStatus_DefaultCodes(t *testing.T) {
 	p := &Proxy{}
 	p.StoreGateway(newTestGateway(nil, nil))
 	for _, code := range defaultRetryableStatusCodes {
-		if !p.isRetryableStatus("unknown_provider", code) {
+		if !p.isRetryableStatus(p.Gateway(), "unknown_provider", code) {
 			t.Fatalf("expected %d to be retryable", code)
 		}
 	}
@@ -279,7 +279,7 @@ func TestIsRetryableStatus_NonRetryableCodes(t *testing.T) {
 	p.StoreGateway(newTestGateway(nil, nil))
 	nonRetryable := []int{400, 401, 403, 404}
 	for _, code := range nonRetryable {
-		if p.isRetryableStatus("unknown_provider", code) {
+		if p.isRetryableStatus(p.Gateway(), "unknown_provider", code) {
 			t.Fatalf("expected %d to NOT be retryable", code)
 		}
 	}
@@ -294,10 +294,10 @@ func TestIsRetryableStatus_CustomProviderCodes(t *testing.T) {
 	}
 	p := &Proxy{}
 	p.StoreGateway(newTestGateway(nil, providers))
-	if !p.isRetryableStatus("custom", 401) {
+	if !p.isRetryableStatus(p.Gateway(), "custom", 401) {
 		t.Fatal("expected 401 to be retryable for custom provider")
 	}
-	if p.isRetryableStatus("custom", 429) {
+	if p.isRetryableStatus(p.Gateway(), "custom", 429) {
 		t.Fatal("expected 429 to NOT be retryable for custom provider (custom list overrides)")
 	}
 }
@@ -307,10 +307,10 @@ func TestIsRetryableStatus_GlobalConfigCodes(t *testing.T) {
 	cfg.Governance.RetryableStatusCodes = []int{502, 504}
 	p := &Proxy{}
 	p.StoreGateway(newTestGateway(&cfg, nil))
-	if !p.isRetryableStatus("unknown_provider", 502) {
+	if !p.isRetryableStatus(p.Gateway(), "unknown_provider", 502) {
 		t.Fatal("expected 502 to be retryable via global config")
 	}
-	if p.isRetryableStatus("unknown_provider", 429) {
+	if p.isRetryableStatus(p.Gateway(), "unknown_provider", 429) {
 		t.Fatal("expected 429 to NOT be retryable (global config overrides defaults)")
 	}
 }
@@ -524,10 +524,10 @@ func TestIsRetryableStatus_ProviderOverridesGlobal(t *testing.T) {
 	}
 	p := &Proxy{}
 	p.StoreGateway(newTestGateway(&cfg, providers))
-	if !p.isRetryableStatus("myprovider", 401) {
+	if !p.isRetryableStatus(p.Gateway(), "myprovider", 401) {
 		t.Fatal("expected provider-specific code to take priority")
 	}
-	if p.isRetryableStatus("myprovider", 502) {
+	if p.isRetryableStatus(p.Gateway(), "myprovider", 502) {
 		t.Fatal("expected global config code to NOT apply when provider overrides")
 	}
 }
