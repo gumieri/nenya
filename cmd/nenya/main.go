@@ -128,7 +128,7 @@ func reloadConfig(p *proxy.Proxy, configFile string, logger *slog.Logger) {
 		return
 	}
 
-	if err := config.ValidateConfiguration(newCfg, newSecrets, logger); err != nil {
+	if err := config.ValidateConfigurationNoPing(newCfg, newSecrets, logger); err != nil {
 		logger.Error("reload failed: configuration validation", "err", err)
 		return
 	}
