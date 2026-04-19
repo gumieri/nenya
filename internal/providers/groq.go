@@ -7,12 +7,12 @@ import (
 
 func groqSpec() ProviderSpec {
 	return ProviderSpec{
-		SupportsStreamOptions:  false,
-		SupportsAutoToolChoice: false,
-		SupportsContentArrays:  false,
+		SupportsStreamOptions:  true,
+		SupportsAutoToolChoice: true,
+		SupportsContentArrays:  true,
 		SupportsToolCalls:     true,
-		SupportsReasoning:     false,
-		SupportsVision:        false,
+		SupportsReasoning:     true,
+		SupportsVision:        true,
 		ValidationEndpoint:     groqValidationEndpoint,
 	}
 }
