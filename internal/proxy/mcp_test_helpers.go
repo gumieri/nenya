@@ -134,7 +134,9 @@ func (ms *testMCPServer) handleMessage(w http.ResponseWriter, r *http.Request) {
 func (ms *testMCPServer) writeRPCResponse(w http.ResponseWriter, id any, result any) {
 	resp := mcp.Response{JSONRPC: mcp.JSONRPCVersion2, ID: id, Result: result}
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(resp)
+	if _, err := json.NewEncoder(w).Encode(resp); err != nil {
+		t.Fatalf("failed to encode response: %v", err)
+	}
 }
 
 func (ms *testMCPServer) writeRPCError(w http.ResponseWriter, id any, code int, message string) {

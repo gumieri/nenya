@@ -156,17 +156,21 @@ func (ms *mockMCPServer) writeRPCResponse(w http.ResponseWriter, id any, result 
 		Result:  result,
 	}
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(resp)
+	if _, err := json.NewEncoder(w).Encode(resp); err != nil {
+		t.Fatalf("failed to encode response: %v", err)
+	}
 }
 
 func (ms *mockMCPServer) writeRPCError(w http.ResponseWriter, id any, code int, message string) {
-	resp := Response{
+		resp := Response{
 		JSONRPC: JSONRPCVersion2,
 		ID:      id,
 		Error:   &Error{Code: code, Message: message},
 	}
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(resp)
+	if _, err := json.NewEncoder(w).Encode(resp); err != nil {
+		t.Fatalf("failed to encode response: %v", err)
+	}
 }
 
 func TestHTTPTransport_Connect(t *testing.T) {
@@ -511,9 +515,8 @@ func TestHTTPTransport_HeadersPassed(t *testing.T) {
 	}
 }
 
-type proxyMockMCPServer struct {
+	type proxyMockMCPServer struct {
 	t      *testing.T
-	mu     sync.Mutex
 	sseCh  chan sseOutgoing
 	server *httptest.Server
 }
@@ -599,6 +602,9 @@ func (pm *proxyMockMCPServer) handleMessage(w http.ResponseWriter, r *http.Reque
 		}
 		respBytes, _ := json.Marshal(resp)
 		pm.sseCh <- sseOutgoing{data: string(respBytes)}
+		if _, err := json.Unmarshal(paramsBytes, &params); err != nil {
+			t.Fatalf("failed to unmarshal params: %v", err)
+		}
 
 	case "tools/call":
 		var params CallToolParams

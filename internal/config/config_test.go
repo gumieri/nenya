@@ -464,8 +464,11 @@ func TestLoadPromptFile(t *testing.T) {
 func TestLoadDirectory(t *testing.T) {
 	t.Run("multiple files merged", func(t *testing.T) {
 		dir := t.TempDir()
-		os.WriteFile(filepath.Join(dir, "00-server.json"), []byte(`{"server":{"listen_addr":":9090"}}`), 0644)
-		os.WriteFile(filepath.Join(dir, "10-governance.json"), []byte(`{"governance":{"context_soft_limit":5000}}`), 0644)
+	os.WriteFile(filepath.Join(dir, "00-server.json"), []byte(`{"server":{"listen_addr":":9090"}}`), 0644)
+	if err != nil {
+		t.Fatalf("failed to create 00-server.json: %v", err)
+	}
+	os.WriteFile(filepath.Join(dir, "10-governance.json"), []byte(`{"governance":{"context_soft_limit":5000}}`), 0644)
 
 		cfg, err := Load(dir)
 		if err != nil {
