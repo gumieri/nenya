@@ -460,3 +460,159 @@ func TestLoadPromptFile(t *testing.T) {
 		}
 	})
 }
+
+func TestLoadDirectory(t *testing.T) {
+	t.Run("multiple files merged", func(t *testing.T) {
+		dir := t.TempDir()
+		os.WriteFile(filepath.Join(dir, "00-server.json"), []byte(`{"server":{"listen_addr":":9090"}}`), 0644)
+		os.WriteFile(filepath.Join(dir, "10-governance.json"), []byte(`{"governance":{"context_soft_limit":5000}}`), 0644)
+
+		cfg, err := Load(dir)
+		if err != nil {
+			t.Fatalf("Load failed: %v", err)
+		}
+		if cfg.Server.ListenAddr != ":9090" {
+			t.Errorf("ListenAddr: got %q", cfg.Server.ListenAddr)
+		}
+		if cfg.Governance.ContextSoftLimit != 5000 {
+			t.Errorf("ContextSoftLimit: got %d", cfg.Governance.ContextSoftLimit)
+		}
+	})
+
+	t.Run("sorted alphabetically", func(t *testing.T) {
+		dir := t.TempDir()
+		os.WriteFile(filepath.Join(dir, "20-later.json"), []byte(`{"server":{"listen_addr":":9090"}}`), 0644)
+		os.WriteFile(filepath.Join(dir, "10-earlier.json"), []byte(`{"server":{"listen_addr":":8080"}}`), 0644)
+
+		cfg, err := Load(dir)
+		if err != nil {
+			t.Fatalf("Load failed: %v", err)
+		}
+		if cfg.Server.ListenAddr != ":9090" {
+			t.Errorf("expected later file to win, got ListenAddr %q", cfg.Server.ListenAddr)
+		}
+	})
+
+	t.Run("excludes secrets.json", func(t *testing.T) {
+		dir := t.TempDir()
+		os.WriteFile(filepath.Join(dir, "secrets.json"), []byte(`{"server":{"listen_addr":":9999"}}`), 0644)
+		os.WriteFile(filepath.Join(dir, "config.json"), []byte(`{"server":{"listen_addr":":8080"}}`), 0644)
+
+		cfg, err := Load(dir)
+		if err != nil {
+			t.Fatalf("Load failed: %v", err)
+		}
+		if cfg.Server.ListenAddr == ":9999" {
+			t.Error("secrets.json should be excluded from merge")
+		}
+	})
+
+	t.Run("map fields merge per-key", func(t *testing.T) {
+		dir := t.TempDir()
+		os.WriteFile(filepath.Join(dir, "10-providers.json"), []byte(`{
+			"providers": {
+				"gemini": {"url": "http://gemini", "route_prefixes": ["gemini-"]},
+				"deepseek": {"url": "http://deepseek", "route_prefixes": ["deepseek-"]}
+			}
+		}`), 0644)
+		os.WriteFile(filepath.Join(dir, "20-providers-override.json"), []byte(`{
+			"providers": {
+				"gemini": {"url": "http://custom-gemini", "route_prefixes": ["gemini-"]}
+			}
+		}`), 0644)
+
+		cfg, err := Load(dir)
+		if err != nil {
+			t.Fatalf("Load failed: %v", err)
+		}
+		if cfg.Providers["gemini"].URL != "http://custom-gemini" {
+			t.Errorf("gemini URL: got %q", cfg.Providers["gemini"].URL)
+		}
+		if cfg.Providers["deepseek"].URL != "http://deepseek" {
+			t.Errorf("deepseek should be preserved: got %q", cfg.Providers["deepseek"].URL)
+		}
+	})
+
+	t.Run("agents map merge", func(t *testing.T) {
+		dir := t.TempDir()
+		os.WriteFile(filepath.Join(dir, "10-agents.json"), []byte(`{
+			"agents": {
+				"coder": {"models": [{"provider":"gemini","model":"gemini-2.5-pro"}]}
+			}
+		}`), 0644)
+		os.WriteFile(filepath.Join(dir, "20-agents-extra.json"), []byte(`{
+			"agents": {
+				"researcher": {"models": [{"provider":"gemini","model":"gemini-2.5-flash"}]}
+			}
+		}`), 0644)
+
+		cfg, err := Load(dir)
+		if err != nil {
+			t.Fatalf("Load failed: %v", err)
+		}
+		if _, ok := cfg.Agents["coder"]; !ok {
+			t.Error("expected coder agent from first file")
+		}
+		if _, ok := cfg.Agents["researcher"]; !ok {
+			t.Error("expected researcher agent from second file")
+		}
+	})
+
+	t.Run("empty directory returns error", func(t *testing.T) {
+		dir := t.TempDir()
+		_, err := Load(dir)
+		if err == nil {
+			t.Fatal("expected error for empty directory")
+		}
+	})
+
+	t.Run("non-existent directory returns error", func(t *testing.T) {
+		_, err := Load("/nonexistent/dir")
+		if err == nil {
+			t.Fatal("expected error for non-existent directory")
+		}
+	})
+
+	t.Run("defaults applied after merge", func(t *testing.T) {
+		dir := t.TempDir()
+		os.WriteFile(filepath.Join(dir, "config.json"), []byte(`{}`), 0644)
+
+		cfg, err := Load(dir)
+		if err != nil {
+			t.Fatalf("Load failed: %v", err)
+		}
+		if cfg.Server.ListenAddr != ":8080" {
+			t.Errorf("expected default ListenAddr, got %q", cfg.Server.ListenAddr)
+		}
+		if cfg.Governance.ContextSoftLimit != 4000 {
+			t.Errorf("expected default ContextSoftLimit, got %d", cfg.Governance.ContextSoftLimit)
+		}
+	})
+
+	t.Run("single file still works", func(t *testing.T) {
+		tmpfile := filepath.Join(t.TempDir(), "config.json")
+		os.WriteFile(tmpfile, []byte(`{"server":{"listen_addr":":9090"}}`), 0644)
+
+		cfg, err := Load(tmpfile)
+		if err != nil {
+			t.Fatalf("Load failed: %v", err)
+		}
+		if cfg.Server.ListenAddr != ":9090" {
+			t.Errorf("ListenAddr: got %q", cfg.Server.ListenAddr)
+		}
+	})
+
+	t.Run("non-json files ignored", func(t *testing.T) {
+		dir := t.TempDir()
+		os.WriteFile(filepath.Join(dir, "README.md"), []byte("not json"), 0644)
+		os.WriteFile(filepath.Join(dir, "config.json"), []byte(`{"server":{"listen_addr":":9090"}}`), 0644)
+
+		cfg, err := Load(dir)
+		if err != nil {
+			t.Fatalf("Load failed: %v", err)
+		}
+		if cfg.Server.ListenAddr != ":9090" {
+			t.Errorf("ListenAddr: got %q", cfg.Server.ListenAddr)
+		}
+	})
+}
