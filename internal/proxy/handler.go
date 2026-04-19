@@ -61,19 +61,25 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			if !p.authenticateRequest(r, w) {
 				return
 			}
-			infra.ObserveHTTPFunc(gw.Metrics, p.handleChatCompletions)(w, r)
+			infra.ObserveHTTPFunc(gw.Metrics, func(w http.ResponseWriter, r *http.Request) {
+				p.handleChatCompletions(gw, w, r)
+			})(w, r)
 			return
 		case r.URL.Path == "/v1/embeddings" && r.Method == http.MethodPost:
 			if !p.authenticateRequest(r, w) {
 				return
 			}
-			infra.ObserveHTTPFunc(gw.Metrics, p.handleEmbeddings)(w, r)
+			infra.ObserveHTTPFunc(gw.Metrics, func(w http.ResponseWriter, r *http.Request) {
+				p.handleEmbeddings(gw, w, r)
+			})(w, r)
 			return
 		case r.URL.Path == "/v1/responses" && r.Method == http.MethodPost:
 			if !p.authenticateRequest(r, w) {
 				return
 			}
-			infra.ObserveHTTPFunc(gw.Metrics, p.handleResponses)(w, r)
+			infra.ObserveHTTPFunc(gw.Metrics, func(w http.ResponseWriter, r *http.Request) {
+				p.handleResponses(gw, w, r)
+			})(w, r)
 			return
 		default:
 			http.Error(w, "Not Found", http.StatusNotFound)
@@ -88,7 +94,6 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 func (p *Proxy) authenticateRequest(r *http.Request, w http.ResponseWriter) bool {
 	gw := p.Gateway()
 	if gw == nil {
-		gw.Logger.Warn("gateway not available during auth")
 		http.Error(w, "Gateway not initialized", http.StatusServiceUnavailable)
 		return false
 	}
