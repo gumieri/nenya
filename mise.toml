@@ -1,5 +1,4 @@
 [tools]
-go = "latest"
 
 [tasks.build]
 description = "Build the nenya binary"
@@ -21,23 +20,6 @@ run = ["go fmt ./...", "go vet ./..."]
 description = "Remove built binary"
 run = "rm -f nenya"
 
-[tasks.install]
-description = "Build and install binary, config, and systemd unit (prompts for sudo)"
-depends = ["build"]
-run = """
-sudo install -Dm755 nenya /usr/local/bin/nenya
-if [ ! -f /etc/nenya/config.json ]; then
-	sudo install -Dm644 configs/example.config.json /etc/nenya/config.json
-	echo "Installed example config to /etc/nenya/config.json"
-else
-	echo "Config /etc/nenya/config.json exists, skipping overwrite"
-fi
-sudo install -Dm644 deploy/nenya.service /etc/systemd/system/nenya.service
-sudo systemctl daemon-reload
-echo "Installed. Configure secrets as per docs/SECRETS_FORMAT.md and enable service:"
-echo "  sudo systemctl enable --now nenya.service"
-"""
-
 [tasks.run]
 description = "Build and run locally with dummy credentials"
 depends = ["build"]
@@ -47,46 +29,42 @@ if [ ! -f creds/secrets ]; then
   echo "WARNING: Creating dummy secrets file for local testing. Replace with real API keys!"
   printf '{\n  "client_token": "test-client-token",\n  "provider_keys": {\n    "gemini": "dummy-gemini-key",\n    "deepseek": "dummy-deepseek-key",\n    "zai": "dummy-zai-key"\n  }\n}\n' > creds/secrets
 fi
-	CREDENTIALS_DIRECTORY=./creds ./nenya -config config.json
+CREDENTIALS_DIRECTORY=./creds ./nenya -config config.json
 """
 
 [tasks.release]
 description = "Cross-compile for all platforms"
 run = """
-CGO_ENABLED=0 GOOS=linux  GOARCH=amd64 go build -o nenya-linux-amd64  ./cmd/nenya
-CGO_ENABLED=0 GOOS=linux  GOARCH=arm64 go build -o nenya-linux-arm64  ./cmd/nenya
+CGO_ENABLED=0 GOOS=linux  GOARCH=amd64 go build -o nenya-linux-amd64 ./cmd/nenya
+CGO_ENABLED=0 GOOS=linux  GOARCH=arm64 go build -o nenya-linux-arm64 ./cmd/nenya
 CGO_ENABLED=0 GOOS=darwin GOARCH=amd64 go build -o nenya-darwin-amd64 ./cmd/nenya
-CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build -o nenya-darwin-arm64  ./cmd/nenya
+CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build -o nenya-darwin-arm64 ./cmd/nenya
 """
 
 [tasks.mcp-build]
-description = "Build MCP transport only (quick compile check, bypasses rtk)"
-run = "GOOS=$(go env GOOS) GOARCH=$(go env GOARCH) /home/rafael/.local/share/mise/installs/go/1.26.1/bin/go build ./internal/mcp/"
+description = "Build MCP transport only"
+run = "go build ./internal/mcp/"
 
 [tasks.mcp-test]
-description = "Run MCP package tests (bypasses rtk)"
-run = "/home/rafael/.local/share/mise/installs/go/1.26.1/bin/go test -v -count=1 ./internal/mcp/"
+description = "Run MCP package tests"
+run = "go test -v -count=1 ./internal/mcp/"
 
 [tasks.mcp-proxy-test]
-description = "Run MCP proxy/tool execution tests (bypasses rtk)"
-run = "/home/rafael/.local/share/mise/installs/go/1.26.1/bin/go test -v -count=1 ./internal/proxy/ -run 'MCP|Tool'"
+description = "Run MCP proxy/tool execution tests"
+run = "go test -v -count=1 ./internal/proxy/ -run 'MCP|Tool'"
 
 [tasks.mcp-all]
-description = "Run all MCP-related tests (bypasses rtk)"
+description = "Run all MCP-related tests"
 depends = ["mcp-build", "mcp-test", "mcp-proxy-test"]
 
 [tasks.raw-build]
-description = "Build binary using direct go path (bypasses rtk)"
-run = "/home/rafael/.local/share/mise/installs/go/1.26.1/bin/go build -o nenya ./cmd/nenya"
+description = "Build binary using direct go path"
+run = "go build -o nenya ./cmd/nenya"
 
 [tasks.raw-test]
-description = "Run all tests using direct go path (bypasses rtk)"
-run = "/home/rafael/.local/share/mise/installs/go/1.26.1/bin/go test -count=1 ./..."
-
-[tasks.raw-test-mcp]
-description = "Run only MCP package tests (bypasses rtk)"
-run = "/home/rafael/.local/share/mise/installs/go/1.26.1/bin/go test -v -count=1 ./internal/mcp/"
+description = "Run all tests using direct go path"
+run = "go test -count=1 ./..."
 
 [tasks.raw-vet]
-description = "Run go vet using direct go path (bypasses rtk)"
-run = "/home/rafael/.local/share/mise/installs/go/1.26.1/bin/go vet ./..."
+description = "Run go vet using direct go path"
+run = "go vet ./..."
