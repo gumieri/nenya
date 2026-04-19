@@ -1,12 +1,46 @@
-<img width="1230" height="687" alt="nenya" src="https://github.com/user-attachments/assets/bd518ded-2b65-42f9-866e-5a670cf9dbb1" />
+<img alt="nenya" src="https://github.com/user-attachments/assets/bd518ded-2b65-42f9-866e-5a670cf9dbb1" />
 
 # Nenya AI Gateway
 
-![go-version] [![License][license] ![zero-deps] [![CI][ci] ![CodeQL][codeql] [![Release][release] ![Sponsor][sponsor]
+![go-version] ![License][license] ![zero-deps] ![CI][ci] ![CodeQL][codeql] ![Release][release] ![Sponsor][sponsor]
 
 A lightweight, zero-dependency AI API Gateway written in Go. Nenya sits between your AI coding clients and upstream LLM providers, adding secret redaction, context management, agent routing, and MCP tool integration — all with transparent SSE streaming.
 
 **Compatible with any provider that implements the OpenAI Chat Completions API.** For 22 providers we ship built-in adapters with specialized handling.
+
+## Features
+
+### Routing & Agents
+
+- **Config-driven provider registry** — add providers via JSON, zero code changes
+- **22 built-in providers** with specialized adapters for wire format differences
+- **Model registry** — reference models by string shorthand with automatic provider/context resolution
+- **Agent fallback chains** — round-robin or sequential with circuit breaker and automatic failover
+- **Per-agent system prompts** — inline or file-based
+
+### Security & Privacy
+
+- **Tier-0 regex secret filter** — always-on redaction of AWS keys, GitHub tokens, passwords, etc.
+- **3-Tier content pipeline** — pass-through, engine summarization, or TF-IDF relevance-scored truncation
+- **Context window compaction** — sliding window summarization with configurable engine
+- **Stale tool call pruning** — compact old assistant+tool response pairs to save tokens
+- **Thought pruning** — strip reasoning blocks from assistant message history
+
+### Reliability
+
+- **Zero external dependencies** — Go standard library only
+- **Hot reload** — `systemctl reload nenya` for zero-downtime config changes
+- **Circuit breaker** — per agent+provider+model with automatic failover and backoff
+- **Rate limiting** — per upstream host (RPM/TPM)
+- **Response cache** — in-memory LRU with SHA-256 fingerprinting
+- **Graceful degradation** — works without Ollama; never returns 500 for pipeline failures
+
+### MCP Tool Integration
+
+- **Tool discovery** — connect to MCP servers for automatic tool injection
+- **Multi-turn execution** — intercept tool calls, execute against MCP servers, forward results
+- **Auto-search** — pre-fetch relevant context from MCP servers before forwarding
+- **Auto-save** — persist assistant responses to MCP memory servers
 
 ## Supported Providers
 
@@ -129,40 +163,6 @@ LoadCredential=secrets:/etc/nenya/secrets.json
 ```bash
 sudo systemctl enable --now nenya
 ```
-
-## Features
-
-### Routing & Agents
-
-- **Config-driven provider registry** — add providers via JSON, zero code changes
-- **22 built-in providers** with specialized adapters for wire format differences
-- **Model registry** — reference models by string shorthand with automatic provider/context resolution
-- **Agent fallback chains** — round-robin or sequential with circuit breaker and automatic failover
-- **Per-agent system prompts** — inline or file-based
-
-### Security & Privacy
-
-- **Tier-0 regex secret filter** — always-on redaction of AWS keys, GitHub tokens, passwords, etc.
-- **3-Tier content pipeline** — pass-through, engine summarization, or TF-IDF relevance-scored truncation
-- **Context window compaction** — sliding window summarization with configurable engine
-- **Stale tool call pruning** — compact old assistant+tool response pairs to save tokens
-- **Thought pruning** — strip reasoning blocks from assistant message history
-
-### Reliability
-
-- **Zero external dependencies** — Go standard library only
-- **Hot reload** — `systemctl reload nenya` for zero-downtime config changes
-- **Circuit breaker** — per agent+provider+model with automatic failover and backoff
-- **Rate limiting** — per upstream host (RPM/TPM)
-- **Response cache** — in-memory LRU with SHA-256 fingerprinting
-- **Graceful degradation** — works without Ollama; never returns 500 for pipeline failures
-
-### MCP Tool Integration
-
-- **Tool discovery** — connect to MCP servers for automatic tool injection
-- **Multi-turn execution** — intercept tool calls, execute against MCP servers, forward results
-- **Auto-search** — pre-fetch relevant context from MCP servers before forwarding
-- **Auto-save** — persist assistant responses to MCP memory servers
 
 ## API Endpoints
 
