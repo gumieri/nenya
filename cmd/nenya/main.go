@@ -21,7 +21,7 @@ func main() {
 	var configFile string
 	var verbose bool
 	var validateOnly bool
-	flag.StringVar(&configFile, "config", "config.json", "Path to configuration file")
+	flag.StringVar(&configFile, "config", "/etc/nenya/", "Path to configuration file or directory")
 	flag.BoolVar(&verbose, "verbose", false, "Enable debug-level request/response logging")
 	flag.BoolVar(&validateOnly, "validate", false, "Validate configuration and exit")
 	flag.Parse()
