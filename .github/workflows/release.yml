@@ -18,40 +18,39 @@ jobs:
         with:
           go-version-file: go.mod
 
-       - name: Build all platforms
-         run: |
-           VERSION="${GITHUB_REF_NAME}"
-           mkdir -p dist
+      - name: Build all platforms
+        run: |
+          VERSION="${GITHUB_REF_NAME}"
 
-           platforms=(
-             "linux   amd64  tar.gz"
-             "linux   arm64  tar.gz"
-             "darwin  amd64  tar.gz"
-             "darwin  arm64  tar.gz"
-           )
+          platforms=(
+            "linux   amd64  tar.gz"
+            "linux   arm64  tar.gz"
+            "darwin  amd64  tar.gz"
+            "darwin  arm64  tar.gz"
+          )
 
-           for entry in "${platforms[@]}"; do
-             read -r GOOS GOARCH EXT <<< "$entry"
-             BINARY="nenya"
+          for entry in "${platforms[@]}"; do
+            read -r GOOS GOARCH EXT <<< "$entry"
+            BINARY="nenya"
 
-             echo "Building ${GOOS}/${GOARCH}..."
-             CGO_ENABLED=0 GOOS="$GOOS" GOARCH="$GOARCH" \
-               go build -ldflags="-s -w" -o "dist/${BINARY}" ./cmd/nenya
+            echo "Building ${GOOS}/${GOARCH}..."
+            CGO_ENABLED=0 GOOS="$GOOS" GOARCH="$GOARCH" \
+              go build -ldflags="-s -w" -o "nenya-${VERSION}-${GOOS}-${GOARCH}" ./cmd/nenya
 
-             ARCHIVE="nenya-${VERSION}-${GOOS}-${GOARCH}.${EXT}"
-             echo "Packaging ${ARCHIVE}..."
+            cp deploy/nenya.service "nenya-${VERSION}-${GOOS}-${GOARCH}.service"
+            cp configs/example.config.json "nenya-${VERSION}-${GOOS}-${GOARCH}.config.json.example"
+            tar -czf "nenya-${VERSION}-${GOOS}-${GOARCH}.tar.gz" \
+              "nenya-${VERSION}-${GOOS}-${GOARCH}" \
+              "nenya-${VERSION}-${GOOS}-${GOARCH}.service" \
+              "nenya-${VERSION}-${GOOS}-${GOARCH}.config.json.example"
 
-             cp deploy/nenya.service dist/nenya.service
-             cp configs/example.config.json dist/config.json.example
-             tar -czf "${ARCHIVE}" -C dist "${BINARY}" nenya.service config.json.example
+            rm -f "nenya-${VERSION}-${GOOS}-${GOARCH}" \
+              "nenya-${VERSION}-${GOOS}-${GOARCH}.service" \
+              "nenya-${VERSION}-${GOOS}-${GOARCH}.config.json.example"
+          done
 
-             rm -f "dist/${BINARY}" dist/nenya.service dist/config.json.example
-           done
-
-       - name: Generate checksums
-         run: |
-           cd dist
-           sha256sum *.tar.gz > checksums.txt
+      - name: Generate checksums
+        run: sha256sum nenya-*.tar.gz > checksums.txt
 
        - name: Create GitHub Release
          env:
