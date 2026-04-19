@@ -284,12 +284,12 @@ type CompactionConfig struct {
 	pruneThoughtsSet       bool `json:"-"`
 }
 
-func (c *CompactionConfig) EnabledWasSet() bool    { return c.enabledSet }
-func (c *CompactionConfig) MinifyWasSet() bool      { return c.minifySet }
-func (c *CompactionConfig) CollapseWasSet() bool    { return c.collapseSet }
-func (c *CompactionConfig) TrimWasSet() bool        { return c.trimSet }
-func (c *CompactionConfig) NormWasSet() bool        { return c.normalizeSet }
-func (c *CompactionConfig) PruneWasSet() bool       { return c.pruneSet }
+func (c *CompactionConfig) EnabledWasSet() bool       { return c.enabledSet }
+func (c *CompactionConfig) MinifyWasSet() bool        { return c.minifySet }
+func (c *CompactionConfig) CollapseWasSet() bool      { return c.collapseSet }
+func (c *CompactionConfig) TrimWasSet() bool          { return c.trimSet }
+func (c *CompactionConfig) NormWasSet() bool          { return c.normalizeSet }
+func (c *CompactionConfig) PruneWasSet() bool         { return c.pruneSet }
 func (c *CompactionConfig) PruneThoughtsWasSet() bool { return c.pruneThoughtsSet }
 
 func (c *CompactionConfig) UnmarshalJSON(data []byte) error {

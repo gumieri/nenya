@@ -458,7 +458,6 @@ func (t *HTTPTransport) sseReadLoop(reader *bufio.Reader) {
 		case strings.HasPrefix(line, "data: "):
 			eventData = strings.TrimPrefix(line, "data: ")
 		case strings.HasPrefix(line, ":"):
-			continue
 		default:
 			continue
 		}

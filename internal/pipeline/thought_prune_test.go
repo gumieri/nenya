@@ -56,8 +56,8 @@ func TestPruneThoughts_ReasoningContentField(t *testing.T) {
 	payload := map[string]interface{}{
 		"messages": []interface{}{
 			map[string]interface{}{
-				"role":             "assistant",
-				"content":          "final answer",
+				"role":              "assistant",
+				"content":           "final answer",
 				"reasoning_content": "massive reasoning block here",
 			},
 		},
@@ -82,8 +82,8 @@ func TestPruneThoughts_EmptyReasoningContent(t *testing.T) {
 	payload := map[string]interface{}{
 		"messages": []interface{}{
 			map[string]interface{}{
-				"role":             "assistant",
-				"content":          "final answer",
+				"role":              "assistant",
+				"content":           "final answer",
 				"reasoning_content": "",
 			},
 		},
@@ -115,7 +115,7 @@ func TestPruneThoughts_SimpleThoughtTags(t *testing.T) {
 	messages := payload["messages"].([]interface{})
 	msg := messages[0].(map[string]interface{})
 	content := msg["content"].(string)
-	
+
 	// The result should be the marker followed by the answer (no reasoning)
 	// Note: The stripThoughtBlocks function returns the marker when all reasoning is stripped
 	if content != "[Reasoning pruned by gateway] Final answer here" {
@@ -144,7 +144,7 @@ func TestPruneThoughts_ThoughtTagsWithSurroundingText(t *testing.T) {
 	messages := payload["messages"].([]interface{})
 	msg := messages[0].(map[string]interface{})
 	content := msg["content"].(string)
-	
+
 	expected := "Let me think: [Reasoning pruned by gateway] The answer is 42."
 	if content != expected {
 		t.Fatalf("expected %q, got %q", expected, content)
@@ -172,7 +172,7 @@ func TestPruneThoughts_MultipleThoughtBlocks(t *testing.T) {
 	messages := payload["messages"].([]interface{})
 	msg := messages[0].(map[string]interface{})
 	content := msg["content"].(string)
-	
+
 	// Both blocks should be replaced with markers, and markers should be concatenated
 	// Result: marker + " intermediate " + marker + " final answer"
 	expected := "[Reasoning pruned by gateway] intermediate [Reasoning pruned by gateway] final answer"
@@ -202,7 +202,7 @@ func TestPruneThoughts_UnclosedThoughtTag(t *testing.T) {
 	messages := payload["messages"].([]interface{})
 	msg := messages[0].(map[string]interface{})
 	content := msg["content"].(string)
-	
+
 	// Everything from the opening tag onward should be replaced with the marker
 	if content != "[Reasoning pruned by gateway]" {
 		t.Fatalf("expected '[Reasoning pruned by gateway]', got %q", content)
@@ -249,7 +249,7 @@ func TestPruneThoughts_OnlyOpenTag(t *testing.T) {
 	messages := payload["messages"].([]interface{})
 	msg := messages[0].(map[string]interface{})
 	content := msg["content"].(string)
-	
+
 	// The open tag and everything after should be replaced with marker
 	if content != "Starting reasoning [Reasoning pruned by gateway]" {
 		t.Fatalf("expected 'Starting reasoning [Reasoning pruned by gateway]', got %q", content)
@@ -315,7 +315,7 @@ func TestPruneThoughts_EmptyReasoningBetweenTags(t *testing.T) {
 	messages := payload["messages"].([]interface{})
 	msg := messages[0].(map[string]interface{})
 	content := msg["content"].(string)
-	
+
 	expected := "[Reasoning pruned by gateway] Just whitespace reasoning"
 	if content != expected {
 		t.Fatalf("expected %q, got %q", expected, content)
@@ -330,8 +330,8 @@ func TestPruneThoughts_ReasoningContentAndTagsBoth(t *testing.T) {
 	payload := map[string]interface{}{
 		"messages": []interface{}{
 			map[string]interface{}{
-				"role":             "assistant",
-				"content":          "<think reasoning in content </think final answer",
+				"role":              "assistant",
+				"content":           "<think reasoning in content </think final answer",
 				"reasoning_content": "massive structured reasoning block",
 			},
 		},
@@ -343,12 +343,12 @@ func TestPruneThoughts_ReasoningContentAndTagsBoth(t *testing.T) {
 
 	messages := payload["messages"].([]interface{})
 	msg := messages[0].(map[string]interface{})
-	
+
 	// reasoning_content should be removed
 	if _, exists := msg["reasoning_content"]; exists {
 		t.Fatalf("expected reasoning_content to be removed")
 	}
-	
+
 	// content should have tags stripped
 	content := msg["content"].(string)
 	expected := "[Reasoning pruned by gateway] final answer"

@@ -11,16 +11,17 @@ jobs:
     name: Lint
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
 
       - uses: golangci/golangci-lint-action@v6
         with:
-          version: latest
+          version: v1.64
           install-mode: goinstall
+          verify: true
 
   test:
     name: Test (Go ${{ matrix.go-version }})
@@ -30,9 +31,9 @@ jobs:
       matrix:
         go-version: ["1.26.x", "1.25.x"]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v6
         with:
           go-version: ${{ matrix.go-version }}
 
