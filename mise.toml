@@ -13,7 +13,7 @@ description = "Run go vet"
 run = "go vet ./..."
 
 [tasks.lint]
-description = "Run golangci-lint (matches CI)"
+description = "Run golangci-lint"
 run = "golangci-lint run"
 
 [tasks.clean]
