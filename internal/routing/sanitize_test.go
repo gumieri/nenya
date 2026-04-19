@@ -124,13 +124,13 @@ func TestSanitizePayload_StripNonStringToolChoice(t *testing.T) {
 
 func TestSanitizePayload_FlattenContentArrays(t *testing.T) {
 	providers := map[string]*config.Provider{
-		"nvidia": {Name: "nvidia"},
+		"ollama": {Name: "ollama"},
 	}
 	deps := defaultSanitizeDeps()
 	deps.Providers = providers
 
 	payload := map[string]interface{}{
-		"model": "nemotron-3-super",
+		"model": "qwen2.5-coder:7b",
 		"messages": []interface{}{
 			map[string]interface{}{
 				"role": "user",
@@ -141,7 +141,7 @@ func TestSanitizePayload_FlattenContentArrays(t *testing.T) {
 			},
 		},
 	}
-	SanitizePayload(deps, payload, "nvidia")
+	SanitizePayload(deps, payload, "ollama")
 	msgs := payload["messages"].([]interface{})
 	content := msgs[0].(map[string]interface{})["content"].(string)
 	if content != "hello\nworld" {
@@ -173,13 +173,13 @@ func TestSanitizePayload_KeepContentArrays(t *testing.T) {
 
 func TestSanitizePayload_NoMessages(t *testing.T) {
 	providers := map[string]*config.Provider{
-		"nvidia": {Name: "nvidia"},
+		"ollama": {Name: "ollama"},
 	}
 	deps := defaultSanitizeDeps()
 	deps.Providers = providers
 
 	payload := map[string]interface{}{
-		"model": "nemotron-3-super",
+		"model": "qwen2.5-coder:7b",
 	}
 	SanitizePayload(deps, payload, "nvidia")
 }

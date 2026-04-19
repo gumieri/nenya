@@ -35,8 +35,12 @@ func TestSupportsStreamOptions(t *testing.T) {
 		{"DeepSeek", true},
 		{"zai", true},
 		{"openrouter", true},
+		{"groq", true},
+		{"sambanova", true},
+		{"cerebras", true},
+		{"qwen_free", true},
+		{"minimax_free", true},
 		{"nvidia", false},
-		{"groq", false},
 		{"gemini", false},
 	}
 	for _, tt := range tests {
@@ -57,8 +61,11 @@ func TestSupportsAutoToolChoice(t *testing.T) {
 		{"gemini", true},
 		{"deepseek", true},
 		{"zai", true},
+		{"groq", true},
+		{"together", true},
+		{"sambanova", true},
+		{"cerebras", true},
 		{"nvidia", false},
-		{"groq", false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.provider, func(t *testing.T) {
@@ -78,8 +85,14 @@ func TestSupportsContentArrays(t *testing.T) {
 		{"gemini", true},
 		{"deepseek", true},
 		{"openrouter", true},
-		{"nvidia", false},
-		{"groq", false},
+		{"groq", true},
+		{"sambanova", true},
+		{"cerebras", true},
+		{"nvidia", true},
+		{"nvidia_free", true},
+		{"qwen_free", true},
+		{"minimax_free", true},
+		{"cohere", true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.provider, func(t *testing.T) {

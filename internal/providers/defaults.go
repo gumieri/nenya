@@ -8,7 +8,7 @@ import (
 func togetherSpec() ProviderSpec {
 	return ProviderSpec{
 		SupportsStreamOptions:  false,
-		SupportsAutoToolChoice: false,
+		SupportsAutoToolChoice: true,
 		SupportsContentArrays:  true,
 		SupportsToolCalls:     true,
 		SupportsReasoning:     false,
@@ -89,10 +89,11 @@ func openrouterValidationEndpoint(providerURL string) string {
 
 func sambanovaSpec() ProviderSpec {
 	return ProviderSpec{
-		SupportsStreamOptions:  false,
-		SupportsAutoToolChoice: false,
+		SupportsStreamOptions:  true,
+		SupportsAutoToolChoice: true,
 		SupportsContentArrays:  true,
 		SupportsToolCalls:     true,
+		SupportsReasoning:     true,
 		SupportsVision:        true,
 		ValidationEndpoint:     sambanovaValidationEndpoint,
 	}
@@ -104,10 +105,11 @@ func sambanovaValidationEndpoint(providerURL string) string {
 
 func cerebrasSpec() ProviderSpec {
 	return ProviderSpec{
-		SupportsStreamOptions:  false,
-		SupportsAutoToolChoice: false,
+		SupportsStreamOptions:  true,
+		SupportsAutoToolChoice: true,
 		SupportsContentArrays:  true,
 		SupportsToolCalls:     true,
+		SupportsReasoning:     true,
 		SupportsVision:        false,
 		ValidationEndpoint:     cerebrasValidationEndpoint,
 	}
@@ -121,9 +123,10 @@ func nvidiaSpec() ProviderSpec {
 	return ProviderSpec{
 		SupportsStreamOptions:  false,
 		SupportsAutoToolChoice: false,
-		SupportsContentArrays:  false,
-		SupportsToolCalls:     false,
-		SupportsVision:        false,
+		SupportsContentArrays:  true,
+		SupportsToolCalls:     true,
+		SupportsReasoning:     false,
+		SupportsVision:        true,
 		ValidationEndpoint:     nvidiaValidationEndpoint,
 	}
 }
@@ -136,8 +139,8 @@ func nvidiaFreeSpec() ProviderSpec {
 	return ProviderSpec{
 		SupportsStreamOptions:  false,
 		SupportsAutoToolChoice: false,
-		SupportsContentArrays:  false,
-		SupportsToolCalls:     false,
+		SupportsContentArrays:  true,
+		SupportsToolCalls:     true,
 		SupportsVision:        false,
 		ValidationEndpoint:     nvidiaValidationEndpoint,
 	}
@@ -145,10 +148,10 @@ func nvidiaFreeSpec() ProviderSpec {
 
 func qwenFreeSpec() ProviderSpec {
 	return ProviderSpec{
-		SupportsStreamOptions:  false,
+		SupportsStreamOptions:  true,
 		SupportsAutoToolChoice: false,
-		SupportsContentArrays:  false,
-		SupportsToolCalls:     false,
+		SupportsContentArrays:  true,
+		SupportsToolCalls:     true,
 		SupportsVision:        false,
 		ValidationEndpoint:     qwenFreeValidationEndpoint,
 	}
@@ -160,10 +163,11 @@ func qwenFreeValidationEndpoint(providerURL string) string {
 
 func minimaxFreeSpec() ProviderSpec {
 	return ProviderSpec{
-		SupportsStreamOptions:  false,
+		SupportsStreamOptions:  true,
 		SupportsAutoToolChoice: false,
-		SupportsContentArrays:  false,
-		SupportsToolCalls:     false,
+		SupportsContentArrays:  true,
+		SupportsToolCalls:     true,
+		SupportsReasoning:     true,
 		SupportsVision:        false,
 		ValidationEndpoint:     minimaxFreeValidationEndpoint,
 	}
@@ -288,7 +292,7 @@ func cohereSpec() ProviderSpec {
 	return ProviderSpec{
 		SupportsStreamOptions:  false,
 		SupportsAutoToolChoice: true,
-		SupportsContentArrays:  false,
+		SupportsContentArrays:  true,
 		SupportsToolCalls:     true,
 		SupportsReasoning:     false,
 		SupportsVision:        true,

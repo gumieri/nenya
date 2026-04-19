@@ -32,21 +32,21 @@ Zero-config integration for providers using the standard OpenAI wire format:
 | **z.ai** | `bearer` | `glm-*` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | **Ollama** | `none` | (local) | ❌ | ✅ | ❌ | ✅ | ✅ | ❌ |
 | **OpenRouter** | `bearer` | (custom) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| **Azure OpenAI** | `api-key` | (custom) | ❌ | ✅ | ✓ | ✅ | ✅ | ✅ |
-| **Perplexity** | `bearer` | (custom) | ❌ | ❌ | ✓ | ❌ | ❌ | ✅ |
-| **Cohere** | `bearer` | (custom) | ❌ | ✅ | ❌ | ✅ | ❌ | ✅ |
-| **DeepInfra** | `bearer` | (custom) | ❌ | ✅ | ✓ | ✅ | ❌ | ✅ |
-| **DeepSeek** | `bearer` | `deepseek-*` | ❌ | ✅ | ✓ | ✅ | ✅ | ✅ |
-| **Mistral** | `bearer` | `mistral-*`, `codestral-*`, `devstral-*` | ❌ | ✅ | ✓ | ✅ | ✅ | ✅ |
-| **xAI** | `bearer` | `grok-*` | ✅ | ✅ | ✓ | ✅ | ✅ | ✅ |
-| **Groq** | `bearer` | (custom) | ❌ | ✅ | ✓ | ✅ | ✅ | ❌ |
-| **Together** | `bearer` | `together/*` | ❌ | ❌ | ✓ | ✅ | ❌ | ✅ |
-| **SambaNova** | `bearer` | (custom) | ❌ | ❌ | ✓ | ✅ | ✅ | ✅ |
-| **Cerebras** | `bearer` | (custom) | ❌ | ❌ | ✓ | ✅ | ✅ | ❌ |
-| **NVIDIA** | `bearer` | (custom) | ❌ | ❌ | ❌ | ✅ | ✅ | ❌ |
-| **GitHub** | `bearer` | (custom) | ❌ | ✅ | ✓ | ✅ | ✅ | ❌ |
-| **Qwen** | `bearer` | (custom) | ❌ | ❌ | ✓ | ✅ | ✅ | ✅ |
-| **MiniMax** | `bearer` | (custom) | ❌ | ❌ | ✓ | ✅ | ✅ | ✅ |
+| **Azure OpenAI** | `api-key` | (custom) | ❌ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| **Perplexity** | `bearer` | (custom) | ❌ | ❌ | ✅ | ❌ | ❌ | ✅ |
+| **Cohere** | `bearer` | (custom) | ❌ | ✅ | ✅ | ✅ | ❌ | ✅ |
+| **DeepInfra** | `bearer` | (custom) | ❌ | ✅ | ✅ | ✅ | ❌ | ✅ |
+| **DeepSeek** | `bearer` | `deepseek-*` | ✅ | ✅ | ✅ | ✅ | ✅ | ❌ |
+| **Mistral** | `bearer` | `mistral-*`, `codestral-*`, `devstral-*` | ❌ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| **xAI** | `bearer` | `grok-*` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| **Groq** | `bearer` | (custom) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| **Together** | `bearer` | `together/*` | ❌ | ✅ | ✅ | ✅ | ❌ | ✅ |
+| **SambaNova** | `bearer` | (custom) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| **Cerebras** | `bearer` | (custom) | ✅ | ✅ | ✅ | ✅ | ✅ | ❌ |
+| **NVIDIA** | `bearer` | (custom) | ❌ | ❌ | ✅ | ✅ | ❌ | ✅ |
+| **GitHub** | `bearer` | (custom) | ❌ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| **Qwen** | `bearer` | (custom) | ✅ | ❌ | ✅ | ✅ | ✅ | ❌ |
+| **MiniMax** | `bearer` | (custom) | ✅ | ❌ | ✅ | ✅ | ✅ | ❌ |
 
 > ✅ = Supported | ❌ = Not Supported
 

@@ -121,16 +121,16 @@ func init() {
 
 	Register("groq", AdapterEntry{
 		Adapter: NewOpenAIAdapter(Capabilities{
-			StreamOptions:  false,
-			AutoToolChoice: false,
-			ContentArrays:  false,
+			StreamOptions:  true,
+			AutoToolChoice: true,
+			ContentArrays:  true,
 		}),
 	})
 
 	Register("together", AdapterEntry{
 		Adapter: NewOpenAIAdapter(Capabilities{
 			StreamOptions:  false,
-			AutoToolChoice: false,
+			AutoToolChoice: true,
 			ContentArrays:  true,
 		}),
 	})
@@ -177,16 +177,16 @@ func init() {
 
 	Register("sambanova", AdapterEntry{
 		Adapter: NewOpenAIAdapter(Capabilities{
-			StreamOptions:  false,
-			AutoToolChoice: false,
+			StreamOptions:  true,
+			AutoToolChoice: true,
 			ContentArrays:  true,
 		}),
 	})
 
 	Register("cerebras", AdapterEntry{
 		Adapter: NewOpenAIAdapter(Capabilities{
-			StreamOptions:  false,
-			AutoToolChoice: false,
+			StreamOptions:  true,
+			AutoToolChoice: true,
 			ContentArrays:  true,
 		}),
 	})
@@ -195,7 +195,7 @@ func init() {
 		Adapter: NewOpenAIAdapter(Capabilities{
 			StreamOptions:  false,
 			AutoToolChoice: false,
-			ContentArrays:  false,
+			ContentArrays:  true,
 		}),
 	})
 
@@ -203,23 +203,23 @@ func init() {
 		Adapter: NewOpenAIAdapter(Capabilities{
 			StreamOptions:  false,
 			AutoToolChoice: false,
-			ContentArrays:  false,
+			ContentArrays:  true,
 		}),
 	})
 
 	Register("qwen_free", AdapterEntry{
 		Adapter: NewOpenAIAdapter(Capabilities{
-			StreamOptions:  false,
+			StreamOptions:  true,
 			AutoToolChoice: false,
-			ContentArrays:  false,
+			ContentArrays:  true,
 		}),
 	})
 
 	Register("minimax_free", AdapterEntry{
 		Adapter: NewOpenAIAdapter(Capabilities{
-			StreamOptions:  false,
-			AutoToolChoice: false,
-			ContentArrays:  false,
+			StreamOptions:  true,
+			AutoToolChoice: true,
+			ContentArrays:  true,
 		}),
 	})
 
