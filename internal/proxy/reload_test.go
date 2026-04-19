@@ -89,7 +89,7 @@ func TestStoreGateway_SwapConsistency(t *testing.T) {
 }
 
 func TestHandleChatCompletions_GatewaySwapDuringRequest(t *testing.T) {
-	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+ 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")
 		w.Write([]byte("data: {\"choices\":[{\"delta\":{\"content\":\"hello\"}}]}\n\n"))
 		w.Write([]byte("data: [DONE]\n\n"))
