@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"nenya/internal/gateway"
 	"nenya/internal/mcp"
 )
 
@@ -269,7 +270,7 @@ func partitionMCPToolCalls(calls []mcpToolCall, toolIndex *mcp.ToolRegistry) (mc
 	return
 }
 
-func executeMCPCalls(ctx context.Context, calls []mcpToolCall, gw *Proxy) []*mcp.CallToolResult {
+func executeMCPCalls(ctx context.Context, calls []mcpToolCall, gw *gateway.NenyaGateway) []*mcp.CallToolResult {
 	if len(calls) == 0 {
 		return nil
 	}
@@ -282,43 +283,35 @@ func executeMCPCalls(ctx context.Context, calls []mcpToolCall, gw *Proxy) []*mcp
 		go func(idx int, c mcpToolCall) {
 			defer wg.Done()
 
-				if gw.Gateway() == nil {
-				results[idx] = &mcp.CallToolResult{
-					Content: []mcp.ContentBlock{{Type: "text", Text: "gateway not available"}},
-					IsError: true,
-				}
-				return
-			}
-
-			logger := gw.Gateway().Logger
+			logger := gw.Logger
 			if logger == nil {
 				logger = slog.New(slog.NewTextHandler(io.Discard, nil))
 			}
 
 			start := time.Now()
 
-			route, ok := gw.Gateway().MCPToolIndex.Lookup(c.Name)
+			route, ok := gw.MCPToolIndex.Lookup(c.Name)
 			if !ok {
 				logger.Warn("MCP tool call failed: unknown tool", "tool", c.Name)
 				results[idx] = &mcp.CallToolResult{
 					Content: []mcp.ContentBlock{{Type: "text", Text: fmt.Sprintf("unknown MCP tool: %s", c.Name)}},
 					IsError: true,
 				}
-				if gw.Gateway() != nil && gw.Gateway().Metrics != nil {
-					gw.Gateway().Metrics.RecordMCPToolCall("unknown", c.Name, "", time.Since(start), fmt.Errorf("unknown tool"))
+				if gw.Metrics != nil {
+					gw.Metrics.RecordMCPToolCall("unknown", c.Name, "", time.Since(start), fmt.Errorf("unknown tool"))
 				}
 				return
 			}
 
-			client := gw.Gateway().MCPClients[route.ServerName]
+			client := gw.MCPClients[route.ServerName]
 			if client == nil {
 				logger.Warn("MCP tool call failed: server not available", "server", route.ServerName, "tool", c.Name)
 				results[idx] = &mcp.CallToolResult{
 					Content: []mcp.ContentBlock{{Type: "text", Text: fmt.Sprintf("MCP server not available: %s", route.ServerName)}},
 					IsError: true,
 				}
-				if gw.Gateway() != nil && gw.Gateway().Metrics != nil {
-					gw.Gateway().Metrics.RecordMCPToolCall(route.ServerName, c.Name, "", time.Since(start), fmt.Errorf("server not available"))
+				if gw.Metrics != nil {
+					gw.Metrics.RecordMCPToolCall(route.ServerName, c.Name, "", time.Since(start), fmt.Errorf("server not available"))
 				}
 				return
 			}
@@ -336,16 +329,16 @@ func executeMCPCalls(ctx context.Context, calls []mcpToolCall, gw *Proxy) []*mcp
 				}
 			} else {
 				results[idx] = result
-				if gw.Gateway() != nil && gw.Gateway().Metrics != nil {
+				if gw.Metrics != nil {
 					textLen := 0
 					if result != nil {
 						textLen = len(result.Text())
 					}
-						logger.Debug("MCP tool call completed", "server", route.ServerName, "tool", route.MCPToolName, "duration_ms", duration.Milliseconds(), "result_bytes", textLen)
+					logger.Debug("MCP tool call completed", "server", route.ServerName, "tool", route.MCPToolName, "duration_ms", duration.Milliseconds(), "result_bytes", textLen)
 				}
 
-				if gw.Gateway() != nil && gw.Gateway().Metrics != nil {
-					gw.Gateway().Metrics.RecordMCPToolCall(route.ServerName, route.MCPToolName, "", duration, err)
+				if gw.Metrics != nil {
+					gw.Metrics.RecordMCPToolCall(route.ServerName, route.MCPToolName, "", duration, err)
 				}
 			}
 		}(i, call)

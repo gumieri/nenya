@@ -25,7 +25,7 @@ func TestWriteBlockedSSE(t *testing.T) {
 	p := &Proxy{}
 	p.StoreGateway(newStreamTestGateway())
 	rec := httptest.NewRecorder()
-	p.writeBlockedSSE(rec)
+	p.writeBlockedSSE(p.Gateway(), rec)
 
 	body := rec.Body.String()
 	if !strings.HasPrefix(body, "data: {") {
@@ -59,7 +59,7 @@ func TestWriteBlockedSSE_Flush(t *testing.T) {
 	p := &Proxy{}
 	p.StoreGateway(newStreamTestGateway())
 	rec := httptest.NewRecorder()
-	p.writeBlockedSSE(rec)
+	p.writeBlockedSSE(p.Gateway(), rec)
 
 	if !rec.Flushed {
 		t.Fatal("expected response to be flushed")
@@ -206,7 +206,7 @@ func TestWriteBlockedSSE_MultipleChunks(t *testing.T) {
 	p := &Proxy{}
 	p.StoreGateway(newStreamTestGateway())
 	rec := httptest.NewRecorder()
-	p.writeBlockedSSE(rec)
+	p.writeBlockedSSE(p.Gateway(), rec)
 
 	count := strings.Count(rec.Body.String(), "data: ")
 	if count != 2 {

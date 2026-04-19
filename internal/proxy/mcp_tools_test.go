@@ -348,7 +348,7 @@ func TestExecuteMCPCalls(t *testing.T) {
 		{ID: "2", Name: "mempalace__test_tool", Arguments: map[string]any{"query": "world"}},
 	}
 
-	results := executeMCPCalls(t.Context(), calls, p)
+	results := executeMCPCalls(t.Context(), calls, p.Gateway())
 
 	if len(results) != 2 {
 		t.Fatalf("expected 2 results, got %d", len(results))
@@ -387,7 +387,7 @@ func TestExecuteMCPCalls_UnknownTool(t *testing.T) {
 		{ID: "1", Name: "mempalace__unknown_tool"},
 	}
 
-	results := executeMCPCalls(t.Context(), calls, p)
+	results := executeMCPCalls(t.Context(), calls, p.Gateway())
 
 	if len(results) != 1 {
 		t.Fatalf("expected 1 result, got %d", len(results))
@@ -411,7 +411,7 @@ func TestExecuteMCPCalls_ServerUnavailable(t *testing.T) {
 		{ID: "1", Name: "mempalace__search"},
 	}
 
-	results := executeMCPCalls(t.Context(), calls, p)
+	results := executeMCPCalls(t.Context(), calls, p.Gateway())
 
 	if len(results) != 1 {
 		t.Fatalf("expected 1 result, got %d", len(results))
@@ -432,7 +432,7 @@ func TestExecuteMCPCalls_EmptyCalls(t *testing.T) {
 		MCPToolIndex: toolIndex,
 	})
 
-	results := executeMCPCalls(t.Context(), nil, p)
+	results := executeMCPCalls(t.Context(), nil, p.Gateway())
 	if results != nil {
 		t.Fatalf("expected nil results for empty calls, got %v", results)
 	}

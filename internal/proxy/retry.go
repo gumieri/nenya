@@ -66,7 +66,7 @@ func waitWithCancel(ctx context.Context, d time.Duration) {
 	}
 }
 
-func (p *Proxy) forwardToUpstream(
+func (p *Proxy) forwardToUpstream(gw *gateway.NenyaGateway, 
 	w http.ResponseWriter,
 	r *http.Request,
 	targets []routing.UpstreamTarget,
@@ -79,16 +79,16 @@ func (p *Proxy) forwardToUpstream(
 ) {
 	originalPayload, err := json.Marshal(payload)
 	if err != nil {
-		p.Gateway().Logger.Error("failed to marshal original payload for retry loop", "err", err)
+		gw.Logger.Error("failed to marshal original payload for retry loop", "err", err)
 		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
 		return
 	}
 
-	if p.Gateway().Config.Compaction.Enabled && p.Gateway().Config.Compaction.JSONMinify {
+	if gw.Config.Compaction.Enabled && gw.Config.Compaction.JSONMinify {
 		minified := bytes.NewBuffer(make([]byte, 0, len(originalPayload)))
 		err = json.Compact(minified, originalPayload)
 		if err != nil {
-			p.Gateway().Logger.Warn("failed to minify JSON payload, using original", "err", err)
+			gw.Logger.Warn("failed to minify JSON payload, using original", "err", err)
 		} else {
 			originalPayload = minified.Bytes()
 		}
@@ -97,19 +97,19 @@ func (p *Proxy) forwardToUpstream(
 	attempt := 0
 	for i, target := range targets {
 		if maxRetries > 0 && attempt >= maxRetries {
-			p.Gateway().Logger.Warn("max retries reached",
+			gw.Logger.Warn("max retries reached",
 				"attempt", attempt, "max", maxRetries, "agent", agentName)
 			break
 		}
 
 		workingPayload := make(map[string]interface{})
 		if err := json.Unmarshal(originalPayload, &workingPayload); err != nil {
-			p.Gateway().Logger.Error("failed to unmarshal payload for target",
+			gw.Logger.Error("failed to unmarshal payload for target",
 				"target", i+1, "total", len(targets), "err", err)
 			continue
 		}
 
-		action := p.prepareAndSend(r, i, targets, target, workingPayload, cooldownDuration, tokenCount, agentName)
+		action := p.prepareAndSend(gw, r, i, targets, target, workingPayload, cooldownDuration, tokenCount, agentName)
 		switch action.kind {
 		case actionContinue:
 			continue
@@ -117,19 +117,19 @@ func (p *Proxy) forwardToUpstream(
 			attempt++
 			action.body, _ = io.ReadAll(io.LimitReader(action.resp.Body, pipeline.MaxErrorBodyBytes))
 			action.resp.Body.Close()
-			shouldRetry, retryDelay := p.handleUpstreamError(i, targets, target, cooldownDuration, agentName, action)
+			shouldRetry, retryDelay := p.handleUpstreamError(gw, i, targets, target, cooldownDuration, agentName, action)
 			action.cancel()
 			if shouldRetry {
 				if maxRetries > 0 && attempt >= maxRetries {
 					break
 				}
 				if retryDelay > 0 {
-					p.Gateway().Logger.Info("retrying with parsed delay",
+					gw.Logger.Info("retrying with parsed delay",
 						"model", target.Model, "delay_ms", retryDelay.Milliseconds())
 					waitWithCancel(r.Context(), retryDelay)
 				} else {
 					backoff := calculateBackoff(attempt - 1)
-					p.Gateway().Logger.Info("retrying with exponential backoff",
+					gw.Logger.Info("retrying with exponential backoff",
 						"model", target.Model, "attempt", attempt, "delay_ms", backoff.Milliseconds())
 					waitWithCancel(r.Context(), backoff)
 				}
@@ -138,19 +138,19 @@ func (p *Proxy) forwardToUpstream(
 			http.Error(w, "Upstream provider error", action.resp.StatusCode)
 			return
 		case actionStream:
-			p.streamResponse(w, r, target, agentName, action, cacheKey)
+			p.streamResponse(gw, w, r, target, agentName, action, cacheKey)
 			return
 		}
 	}
 
-	p.Gateway().Logger.Error("all upstream targets exhausted", "total", len(targets), "attempts", attempt)
-	if p.Gateway().Metrics != nil && agentName != "" {
-		p.Gateway().Metrics.RecordExhausted(agentName)
+	gw.Logger.Error("all upstream targets exhausted", "total", len(targets), "attempts", attempt)
+	if gw.Metrics != nil && agentName != "" {
+		gw.Metrics.RecordExhausted(agentName)
 	}
 	http.Error(w, "All upstream targets exhausted", http.StatusServiceUnavailable)
 }
 
-func (p *Proxy) prepareAndSend(
+func (p *Proxy) prepareAndSend(gw *gateway.NenyaGateway, 
 	r *http.Request,
 	idx int,
 	targets []routing.UpstreamTarget,
@@ -160,49 +160,49 @@ func (p *Proxy) prepareAndSend(
 	tokenCount int,
 	agentName string,
 ) upstreamAction {
-	p.Gateway().Stats.RecordRequest(target.Model, tokenCount)
-	if p.Gateway().Metrics != nil {
-		p.Gateway().Metrics.RecordTokens("input", target.Model, agentName, target.Provider, tokenCount)
-		p.Gateway().Metrics.RecordUpstreamRequest(target.Model, agentName, target.Provider)
+	gw.Stats.RecordRequest(target.Model, tokenCount)
+	if gw.Metrics != nil {
+		gw.Metrics.RecordTokens("input", target.Model, agentName, target.Provider, tokenCount)
+		gw.Metrics.RecordUpstreamRequest(target.Model, agentName, target.Provider)
 	}
 
-	if !p.Gateway().RateLimiter.Check(target.URL, tokenCount) {
-		if p.Gateway().Metrics != nil {
-			p.Gateway().Metrics.RecordRateLimitRejected(infra.ExtractHost(target.URL))
+	if !gw.RateLimiter.Check(target.URL, tokenCount) {
+		if gw.Metrics != nil {
+			gw.Metrics.RecordRateLimitRejected(infra.ExtractHost(target.URL))
 		}
-		p.Gateway().Logger.Warn("target skipped: rate limit exceeded",
+		gw.Logger.Warn("target skipped: rate limit exceeded",
 			"target", idx+1, "total", len(targets), "model", target.Model)
 		return upstreamAction{kind: actionContinue}
 	}
 
-	if target.CoolKey != "" && !p.Gateway().AgentState.CB.Allow(target.CoolKey) {
-		p.Gateway().Logger.Warn("target skipped: circuit breaker open",
+	if target.CoolKey != "" && !gw.AgentState.CB.Allow(target.CoolKey) {
+		gw.Logger.Warn("target skipped: circuit breaker open",
 			"target", idx+1, "total", len(targets), "model", target.Model)
 		return upstreamAction{kind: actionContinue}
 	}
 
 	transformDeps := routing.TransformDeps{
-		Logger:             p.Gateway().Logger,
-		Providers:          p.Gateway().Providers,
-		Config:             &p.Gateway().Config,
-		ThoughtSigCache:    p.Gateway().ThoughtSigCache,
+		Logger:             gw.Logger,
+		Providers:          gw.Providers,
+		Config:             &gw.Config,
+		ThoughtSigCache:    gw.ThoughtSigCache,
 		ExtractContentText: gateway.ExtractContentText,
 	}
 	transformedBody, _, err := routing.TransformRequestForUpstream(transformDeps, target.Provider, target.URL, payload, target.Model, target.MaxOutput)
 	if err != nil {
-		p.Gateway().Logger.Warn("failed to transform request, using original payload",
+		gw.Logger.Warn("failed to transform request, using original payload",
 			"target", idx+1, "total", len(targets), "model", target.Model, "err", err)
 		transformedBody, _ = json.Marshal(payload)
 	}
 
-	req, err := p.buildUpstreamRequest(r.Context(), r.Method, target.URL, transformedBody, target.Provider, r.Header)
+	req, err := p.buildUpstreamRequest(gw, r.Context(), r.Method, target.URL, transformedBody, target.Provider, r.Header)
 	if err != nil {
-		p.Gateway().Logger.Error("failed to create upstream request",
+		gw.Logger.Error("failed to create upstream request",
 			"target", idx+1, "total", len(targets), "err", err)
 		return upstreamAction{kind: actionContinue}
 	}
 
-	if p.Gateway().Logger.Enabled(r.Context(), slog.LevelDebug) {
+	if gw.Logger.Enabled(r.Context(), slog.LevelDebug) {
 		debugHeaders := make(http.Header)
 		for k, v := range req.Header {
 			lk := strings.ToLower(k)
@@ -212,32 +212,32 @@ func (p *Proxy) prepareAndSend(
 				debugHeaders[k] = v
 			}
 		}
-		p.Gateway().Logger.Debug("forwarding to upstream",
+		gw.Logger.Debug("forwarding to upstream",
 			"url", target.URL, "target", idx+1, "total", len(targets))
-		p.Gateway().Logger.Debug("request headers", "headers", debugHeaders)
+		gw.Logger.Debug("request headers", "headers", debugHeaders)
 		if len(transformedBody) > 0 && len(transformedBody) < 1000 {
-			p.Gateway().Logger.Debug("request body", "body", string(transformedBody))
+			gw.Logger.Debug("request body", "body", string(transformedBody))
 		}
 	}
 
 	upstreamCtx, upstreamCancel := context.WithCancel(r.Context())
 	req = req.WithContext(upstreamCtx)
 
-	resp, err := p.Gateway().Client.Do(req)
+	resp, err := gw.Client.Do(req)
 	if err != nil {
 		upstreamCancel()
-		p.Gateway().Logger.Warn("target network error",
+		gw.Logger.Warn("target network error",
 			"target", idx+1, "total", len(targets), "model", target.Model, "err", err)
 		return upstreamAction{kind: actionContinue}
 	}
 
-	p.Gateway().Logger.Info("upstream response",
+	gw.Logger.Info("upstream response",
 		"target", idx+1, "total", len(targets), "model", target.Model, "status", resp.StatusCode)
 
 	if resp.StatusCode >= 400 {
-		p.Gateway().Stats.RecordError(target.Model)
-		if p.Gateway().Metrics != nil {
-			p.Gateway().Metrics.RecordUpstreamError(target.Model, agentName, target.Provider, resp.StatusCode)
+		gw.Stats.RecordError(target.Model)
+		if gw.Metrics != nil {
+			gw.Metrics.RecordUpstreamError(target.Model, agentName, target.Provider, resp.StatusCode)
 		}
 		return upstreamAction{kind: actionError, resp: resp, cancel: upstreamCancel}
 	}
@@ -245,7 +245,7 @@ func (p *Proxy) prepareAndSend(
 	return upstreamAction{kind: actionStream, resp: resp, cancel: upstreamCancel}
 }
 
-func (p *Proxy) handleUpstreamError(
+func (p *Proxy) handleUpstreamError(gw *gateway.NenyaGateway, 
 	idx int,
 	targets []routing.UpstreamTarget,
 	target routing.UpstreamTarget,
@@ -255,13 +255,13 @@ func (p *Proxy) handleUpstreamError(
 ) (bool, time.Duration) {
 	errorBody := action.body
 
-	if p.isRetryableStatus(target.Provider, action.resp.StatusCode) {
+	if p.isRetryableStatus(gw, target.Provider, action.resp.StatusCode) {
 		if len(errorBody) > 0 {
-			p.Gateway().Logger.Warn("upstream retryable error",
+			gw.Logger.Warn("upstream retryable error",
 				"target", idx+1, "total", len(targets), "model", target.Model,
 				"status", action.resp.StatusCode, "body", string(errorBody))
 		} else {
-			p.Gateway().Logger.Warn("retryable error, trying next target",
+			gw.Logger.Warn("retryable error, trying next target",
 				"target", idx+1, "total", len(targets), "model", target.Model, "status", action.resp.StatusCode)
 		}
 		effectiveCooldown := cooldownDuration
@@ -269,62 +269,62 @@ func (p *Proxy) handleUpstreamError(
 			if quotaCD := parseQuotaExhaustion(errorBody); quotaCD > 0 {
 				if quotaCD > cooldownDuration {
 					effectiveCooldown = quotaCD
-					p.Gateway().Logger.Info("quota exhaustion detected, extending cooldown",
+					gw.Logger.Info("quota exhaustion detected, extending cooldown",
 						"model", target.Model, "cooldown_s", effectiveCooldown.Seconds())
 				}
 			}
 		}
 
 		if action.resp.StatusCode == http.StatusTooManyRequests {
-			p.Gateway().AgentState.ActivateCooldown(target, effectiveCooldown)
-			if p.Gateway().Metrics != nil {
-				p.Gateway().Metrics.RecordCooldown(agentName, target.Provider, target.Model)
+			gw.AgentState.ActivateCooldown(target, effectiveCooldown)
+			if gw.Metrics != nil {
+				gw.Metrics.RecordCooldown(agentName, target.Provider, target.Model)
 			}
 			delay := parseRetryDelay(action.resp.Header, errorBody)
 			return true, delay
 		}
 
-		p.Gateway().AgentState.RecordFailure(target, effectiveCooldown)
+		gw.AgentState.RecordFailure(target, effectiveCooldown)
 		return true, 0
 	}
 
 	if isRetryableClientErrorForProvider(action.resp.StatusCode, errorBody, target.Provider) && len(targets) > 1 {
-		p.Gateway().Logger.Warn("retryable client error from upstream, trying next target",
+		gw.Logger.Warn("retryable client error from upstream, trying next target",
 			"target", idx+1, "total", len(targets), "model", target.Model,
 			"status", action.resp.StatusCode, "body", string(errorBody))
-		p.Gateway().AgentState.RecordFailure(target, cooldownDuration)
+		gw.AgentState.RecordFailure(target, cooldownDuration)
 		return true, 0
 	}
 
 	a := adapter.ForProvider(target.Provider)
 	errClass := a.NormalizeError(action.resp.StatusCode, errorBody)
 	if (errClass == adapter.ErrorRetryable || errClass == adapter.ErrorQuotaExhausted) && action.resp.StatusCode >= 400 && action.resp.StatusCode < 500 {
-		p.Gateway().Logger.Warn("adapter classified client error as retryable, trying next target",
+		gw.Logger.Warn("adapter classified client error as retryable, trying next target",
 			"target", idx+1, "total", len(targets), "model", target.Model,
 			"status", action.resp.StatusCode, "error_class", errClass)
-		p.Gateway().AgentState.RecordFailure(target, cooldownDuration)
+		gw.AgentState.RecordFailure(target, cooldownDuration)
 		return true, 0
 	}
 
 	defer action.cancel()
 	if len(targets) > 1 {
 		if len(errorBody) > 0 {
-			p.Gateway().Logger.Warn("non-retryable upstream error, trying next target",
+			gw.Logger.Warn("non-retryable upstream error, trying next target",
 				"target", idx+1, "total", len(targets), "model", target.Model,
 				"status", action.resp.StatusCode, "body", string(errorBody))
 		} else {
-			p.Gateway().Logger.Warn("non-retryable upstream error (empty body), trying next target",
+			gw.Logger.Warn("non-retryable upstream error (empty body), trying next target",
 				"target", idx+1, "total", len(targets), "model", target.Model, "status", action.resp.StatusCode)
 		}
 		return true, 0
 	}
 
 	if len(errorBody) > 0 {
-		p.Gateway().Logger.Error("non-retryable upstream error, no more targets",
+		gw.Logger.Error("non-retryable upstream error, no more targets",
 			"target", idx+1, "total", len(targets), "model", target.Model,
 			"status", action.resp.StatusCode, "body", string(errorBody))
 	} else {
-		p.Gateway().Logger.Error("non-retryable upstream error (empty body), no more targets",
+		gw.Logger.Error("non-retryable upstream error (empty body), no more targets",
 			"target", idx+1, "total", len(targets), "model", target.Model, "status", action.resp.StatusCode)
 	}
 	return false, 0
@@ -357,12 +357,12 @@ func parseQuotaExhaustion(body []byte) time.Duration {
 	return 0
 }
 
-func (p *Proxy) isRetryableStatus(providerName string, statusCode int) bool {
-	if pr, ok := p.Gateway().Providers[providerName]; ok && len(pr.RetryableStatusCodes) > 0 {
+func (p *Proxy) isRetryableStatus(gw *gateway.NenyaGateway, providerName string, statusCode int) bool {
+	if pr, ok := gw.Providers[providerName]; ok && len(pr.RetryableStatusCodes) > 0 {
 		return routing.SliceContains(pr.RetryableStatusCodes, statusCode)
 	}
-	if len(p.Gateway().Config.Governance.RetryableStatusCodes) > 0 {
-		return routing.SliceContains(p.Gateway().Config.Governance.RetryableStatusCodes, statusCode)
+	if len(gw.Config.Governance.RetryableStatusCodes) > 0 {
+		return routing.SliceContains(gw.Config.Governance.RetryableStatusCodes, statusCode)
 	}
 	return routing.SliceContains(defaultRetryableStatusCodes, statusCode)
 }
