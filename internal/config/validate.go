@@ -14,11 +14,19 @@ import (
 )
 
 func ValidateConfiguration(cfg *Config, secrets *SecretsConfig, logger *slog.Logger) error {
+	return ValidateConfigurationWithPing(cfg, secrets, logger, true)
+}
+
+func ValidateConfigurationNoPing(cfg *Config, secrets *SecretsConfig, logger *slog.Logger) error {
+	return ValidateConfigurationWithPing(cfg, secrets, logger, false)
+}
+
+func ValidateConfigurationWithPing(cfg *Config, secrets *SecretsConfig, logger *slog.Logger, pingProviders bool) error {
 	logger.Info("starting configuration validation")
 
 	providers := ResolveProviders(cfg, secrets)
 
-	if cfg.SecurityFilter.Enabled && cfg.SecurityFilter.Engine.Provider == "ollama" {
+	if pingProviders && cfg.SecurityFilter.Enabled && cfg.SecurityFilter.Engine.Provider == "ollama" {
 		if p, ok := providers[cfg.SecurityFilter.Engine.Provider]; ok && p.URL != "" {
 			logger.Info("checking Ollama engine health", "provider", cfg.SecurityFilter.Engine.Provider, "url", p.URL)
 			if !validateOllamaHealth(p.URL) {
@@ -43,18 +51,20 @@ func ValidateConfiguration(cfg *Config, secrets *SecretsConfig, logger *slog.Log
 		errors = append(errors, err.Error())
 	}
 
-	for name, provider := range providers {
-		if provider.APIKey == "" {
-			logger.Warn("provider has no API key configured", "provider", name)
-			continue
-		}
+	if pingProviders {
+		for name, provider := range providers {
+			if provider.APIKey == "" {
+				logger.Warn("provider has no API key configured", "provider", name)
+				continue
+			}
 
-		logger.Info("validating provider", "provider", name, "url", provider.URL)
-		if err := validateProvider(name, provider, logger); err != nil {
-			errors = append(errors, fmt.Sprintf("%s: %v", name, err))
-			logger.Error("provider validation failed", "provider", name, "err", err)
-		} else {
-			logger.Info("provider validation passed", "provider", name)
+			logger.Info("validating provider", "provider", name, "url", provider.URL)
+			if err := validateProvider(name, provider, logger); err != nil {
+				errors = append(errors, fmt.Sprintf("%s: %v", name, err))
+				logger.Error("provider validation failed", "provider", name, "err", err)
+			} else {
+				logger.Info("provider validation passed", "provider", name)
+			}
 		}
 	}
 
