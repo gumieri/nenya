@@ -1,6 +1,6 @@
 # Provider Adapter System
 
-The `internal/adapter` package manages provider-specific differences in wire format, authentication, response transformation, and error classification through a clean Go interface.
+The `internal/adapter` package manages provider-specific differences in wire format, authentication, response transformation, and error classification through a clean Go interface. For a user-facing provider guide with capabilities and special behaviors, see [`PROVIDERS.md`](PROVIDERS.md).
 
 ## The Interface
 

@@ -1,69 +1,95 @@
-<img width="2752" height="1536" alt="nenya" src="https://github.com/user-attachments/assets/bd518ded-2b65-42f9-866e-5a670cf9dbb1" />
+<img width="1230" height="687" alt="nenya" src="https://github.com/user-attachments/assets/bd518ded-2b65-42f9-866e-5a670cf9dbb1" />
 
 # Nenya AI Gateway
 
-![go-version] [![License]][license] ![zero-deps] [![CI]][ci] [![CodeQL]][codeql] [![Release]][release] [![Sponsor]][sponsor]
+![go-version] [![License][license] ![zero-deps] [![CI][ci] ![CodeQL][codeql] [![Release][release] ![Sponsor][sponsor]
 
-A lightweight, highly secure AI API Gateway/Proxy written in Go. Acts as transparent middleware between local AI coding clients (OpenCode/Aider) and upstream LLM providers.
+A lightweight, zero-dependency AI API Gateway written in Go. Nenya sits between your AI coding clients and upstream LLM providers, adding secret redaction, context management, agent routing, and MCP tool integration — all with transparent SSE streaming.
 
-Nenya acts as a **silent guardian** for your AI interactions. Its core strength is the **"Bouncer" mechanism**: like the Ring of Adamant shielding Lothlórien, it intercepts massive payloads to discern essential context and redact sensitive data locally, before forwarding the refined essence to upstream cloud providers.
+**Compatible with any provider that implements the OpenAI Chat Completions API.** For 22 providers we ship built-in adapters with specialized handling.
 
-## Documentation
+## Supported Providers
 
-| Document | Description |
-|----------|-------------|
-| [Architecture](docs/ARCHITECTURE.md) | Package DAG, request lifecycle, circuit breaker, SSE pipeline, response cache |
-| [MCP Integration](docs/MCP_INTEGRATION.md) | MCP server integration, tool discovery, multi-turn execution, auto-search/save |
-| [Adapters](docs/ADAPTERS.md) | Provider adapter system, capabilities, auth styles, how to add providers |
-| [Configuration](docs/CONFIGURATION.md) | Full config reference with all sections and fields |
-| [Demo](docs/DEMO.md) | Quick start, pipeline testing, cache bypass, circuit breaker observability |
-| [Secrets Format](docs/SECRETS_FORMAT.md) | Systemd credential management, provider key setup |
-| [Security](docs/SECURITY.md) | Vulnerability reporting policy |
-| [Disclaimer](docs/DISCLAIMER.md) | Usage terms and liability |
+### Full Adapters (custom wire format handling)
 
-## Features
+| Provider | Route Prefixes | Auth | Special Behavior |
+|----------|---------------|------|-----------------|
+| **Anthropic** | `claude-*` | `x-api-key` | Full bidirectional OpenAI↔Anthropic format conversion |
+| **Gemini** | `gemini-*` | `bearer+x-goog` | Thought signature preservation, orphaned tool_call cleanup, model aliasing |
+| **z.ai** | `glm-*` | `bearer` | Orphaned tool message removal, consecutive user message merging |
+| **Ollama** | (local) | `none` | Local-first, optional auth, conservative error classification |
 
-### Routing & Providers
+### OpenAI-Compatible with Adjustments
 
-- **Config-driven provider registry** — add providers via JSON config + secrets, zero code changes
-- **Built-in model registry** — reference models by string shorthand with automatic provider/context resolution
-- **Dynamic routing** based on model name prefixes, with direct ModelRegistry lookups taking priority
-- **Provider adapter system** — clean Go interface for wire format differences, auth injection, response mutation, and error classification across 20+ providers
-- **Anthropic native API support** — full bidirectional OpenAI↔Anthropic format conversion
-- **Gemini compatibility** — model name mapping, thought signature preservation, orphaned tool_call cleanup
+| Provider | Route Prefixes | Auth | Notes |
+|----------|---------------|------|-------|
+| **OpenRouter** | (custom) | `bearer` | Adds `HTTP-Referer` and `X-Title` headers |
+| **Azure OpenAI** | (custom) | `api-key` | Uses `api-key` header instead of `Authorization: Bearer` |
+| **Perplexity** | (custom) | `bearer` | Does not support function calling |
+| **Cohere** | (custom) | `bearer` | Content arrays flattened |
+| **DeepInfra** | (custom) | `bearer` | Standard capabilities |
 
-### Security & Privacy
+### Drop-in OpenAI-Compatible
 
-- **Tier-0 regex secret filter** — always-on redaction of AWS keys, GitHub tokens, passwords, etc.
-- **3-Tier UTF-8 safe pipeline** — pass-through, engine summarization, or truncation+summarization based on payload size. TF-IDF relevance-scored truncation optionally skips the engine call entirely.
-- **Context window compaction** — sliding window summarization of old messages (supports summarize, truncate, or TF-IDF modes)
-- **Stale tool call pruning** — automatically compact old assistant+tool response pairs into summary placeholders to reduce token consumption in long conversations
-- **Thought pruning** — strip massive reasoning blocks (`<think...</think` XML tags and `reasoning_content` field) from assistant message history to save context tokens
-- **Hardened security** — strict timeouts, body limits, hop-by-hop header stripping, panic recovery
-- **Systemd credential management** — API keys loaded from `CREDENTIALS_DIRECTORY`
+| Provider | Route Prefixes | Auth |
+|----------|---------------|------|
+| **DeepSeek** | `deepseek-*` | `bearer` |
+| **Mistral** | `mistral-*`, `codestral-*`, `devstral-*` | `bearer` |
+| **xAI** | `grok-*` | `bearer` |
+| **Groq** | (custom) | `bearer` |
+| **Together** | `together/*` | `bearer` |
+| **SambaNova** | (custom) | `bearer` |
+| **Cerebras** | (custom) | `bearer` |
+| **NVIDIA** | (custom) | `bearer` |
+| **GitHub** | (custom) | `bearer` |
 
-### Performance & Reliability
-
-- **Zero external dependencies** — Go standard library only
-- **Graceful degradation** — best-effort content pipeline; works without Ollama; never returns 500 for pipeline failures
-- **Rate limiting** per upstream host (RPM/TPM)
-- **Transparent SSE streaming** — buffer pooling, immediate flush, stall detection (120s idle timeout)
-- **Circuit breaker** — per agent+provider+model with Closed/Open/HalfOpen states and exponential backoff
-- **In-memory LRU response cache** — deterministic SHA-256 fingerprinting, cache bypass header
-- **Exhaustive fallback** — non-retryable errors still try the next provider before giving up
-
-### Agent System
-
-- **Agent fallback chains** — agent-level strategy with circuit breaker and automatic failover
-- **System prompts** — inject custom system prompts per agent (inline or file-based)
-- **Per-model max_tokens injection** — from ModelRegistry when client doesn't set it
-- **MCP tool integration** — connect to MCP servers (MemPalace, mem0, etc.) for tool discovery, auto-search, auto-save, and multi-turn tool execution
-- **Long-term memory** — MCP-based memory per agent for persistent memory search and storage
+> **Any** OpenAI-compatible provider can be added via JSON config — no code changes required. See [`docs/PROVIDERS.md`](docs/PROVIDERS.md) for the full provider reference.
 
 ## Quick Start
 
-### Minimal Configuration
+### 1. Install
 
+```bash
+go build -o nenya ./cmd/nenya
+sudo cp nenya /usr/local/bin/
+```
+
+### 2. Create config directory
+
+```bash
+sudo mkdir -p /etc/nenya
+```
+
+### 3. Split configuration across files
+
+Nenya loads all `*.json` files from `/etc/nenya/` (excluding `secrets.json`), sorted alphabetically, and deep-merges them. Map fields (`agents`, `providers`, `mcp_servers`) merge per-key; struct fields use last-file-wins.
+
+```
+/etc/nenya/
+├── 00-server.json          # server, governance, security_filter, compaction
+├── 10-providers.json       # provider overrides
+├── 20-agents.json          # agent definitions with fallback chains
+├── 30-agents-mcp.json      # MCP server integration per agent
+└── secrets.json            # excluded (loaded via systemd credential)
+```
+
+`00-server.json`:
+```json
+{
+  "server": {
+    "listen_addr": ":8080"
+  },
+  "security_filter": {
+    "enabled": true,
+    "engine": {
+      "provider": "ollama",
+      "model": "qwen2.5-coder:7b"
+    }
+  }
+}
+```
+
+`20-agents.json`:
 ```json
 {
   "agents": {
@@ -73,37 +99,70 @@ Nenya acts as a **silent guardian** for your AI interactions. Its core strength 
     },
     "build": {
       "strategy": "fallback",
-      "models": ["glm-5-turbo"]
+      "models": ["gemini-2.5-flash"]
     }
   }
 }
 ```
 
-### Adding a New Provider
-
-No Go code changes needed for OpenAI-compatible providers:
+### 4. Create secrets
 
 ```json
 {
-  "providers": {
-    "openai": {
-      "url": "https://api.openai.com/v1/chat/completions",
-      "route_prefixes": ["gpt-", "o3-", "o4-"],
-      "auth_style": "bearer"
-    }
+  "client_token": "<generate with: openssl rand -hex 32>",
+  "provider_keys": {
+    "gemini": "AIza...",
+    "deepseek": "sk-..."
   }
 }
 ```
 
-See [`docs/ADAPTERS.md`](docs/ADAPTERS.md) for the full adapter reference including Anthropic, Mistral, xAI, Azure, Perplexity, Cohere, and DeepInfra.
+### 5. Configure systemd
 
-### Configuration Validation
-
-```bash
-CREDENTIALS_DIRECTORY=/path/to/creds ./nenya -config config.json -validate
+```ini
+[Service]
+ExecStart=/usr/local/bin/nenya
+ExecReload=/bin/kill -HUP $MAINPID
+LoadCredential=secrets:/etc/nenya/secrets.json
 ```
 
-Full configuration reference: [`docs/CONFIGURATION.md`](docs/CONFIGURATION.md)
+```bash
+sudo systemctl enable --now nenya
+```
+
+## Features
+
+### Routing & Agents
+
+- **Config-driven provider registry** — add providers via JSON, zero code changes
+- **22 built-in providers** with specialized adapters for wire format differences
+- **Model registry** — reference models by string shorthand with automatic provider/context resolution
+- **Agent fallback chains** — round-robin or sequential with circuit breaker and automatic failover
+- **Per-agent system prompts** — inline or file-based
+
+### Security & Privacy
+
+- **Tier-0 regex secret filter** — always-on redaction of AWS keys, GitHub tokens, passwords, etc.
+- **3-Tier content pipeline** — pass-through, engine summarization, or TF-IDF relevance-scored truncation
+- **Context window compaction** — sliding window summarization with configurable engine
+- **Stale tool call pruning** — compact old assistant+tool response pairs to save tokens
+- **Thought pruning** — strip reasoning blocks from assistant message history
+
+### Reliability
+
+- **Zero external dependencies** — Go standard library only
+- **Hot reload** — `systemctl reload nenya` for zero-downtime config changes
+- **Circuit breaker** — per agent+provider+model with automatic failover and backoff
+- **Rate limiting** — per upstream host (RPM/TPM)
+- **Response cache** — in-memory LRU with SHA-256 fingerprinting
+- **Graceful degradation** — works without Ollama; never returns 500 for pipeline failures
+
+### MCP Tool Integration
+
+- **Tool discovery** — connect to MCP servers for automatic tool injection
+- **Multi-turn execution** — intercept tool calls, execute against MCP servers, forward results
+- **Auto-search** — pre-fetch relevant context from MCP servers before forwarding
+- **Auto-save** — persist assistant responses to MCP memory servers
 
 ## API Endpoints
 
@@ -111,69 +170,43 @@ All `/v1/*` endpoints require `Authorization: Bearer <client_token>`.
 
 | Endpoint | Auth | Description |
 |----------|------|-------------|
-| `POST /v1/chat/completions` | Bearer | OpenAI-compatible chat with SSE streaming, Ollama interception, agent fallback, MCP multi-turn |
+| `POST /v1/chat/completions` | Bearer | OpenAI-compatible chat with SSE streaming, agent fallback, MCP multi-turn |
 | `GET /v1/models` | Bearer | Available models catalog |
-| `POST /v1/embeddings` | Bearer | Passthrough proxy for embeddings |
-| `POST /v1/responses` | Bearer | Passthrough proxy for responses API |
+| `POST /v1/embeddings` | Bearer | Passthrough proxy |
+| `POST /v1/responses` | Bearer | Passthrough proxy |
 | `GET /healthz` | None | Engine health probe |
-| `GET /statsz` | None | Token usage, per-model stats, circuit breaker state |
+| `GET /statsz` | None | Token usage, circuit breaker state, MCP server status |
 | `GET /metrics` | None | Prometheus-compatible metrics |
 
-## Model Routing
+## Hot Reload
 
-Model resolution uses a two-tier system: explicit **ModelRegistry** entries take priority, then **route prefix** matching for unregistered variants.
-
-| Prefix | Provider |
-|--------|----------|
-| `claude-*` | Anthropic |
-| `gemini-*` | Gemini (Google AI Studio) |
-| `deepseek-*` | DeepSeek |
-| `grok-*` | xAI |
-| `glm-*` | z.ai |
-| `mistral-*`, `codestral-*`, `devstral-*` | Mistral |
-| `together/*` | Together |
-
-Models not in the registry and not matching any prefix return a 400 error. Use agent configuration or full object notation to route to other providers (OpenRouter, Groq, Perplexity, etc.).
-
-## Deployment
-
-### Systemd Service
+Send `SIGHUP` to reload configuration without downtime:
 
 ```bash
-sudo mise run install
-sudo systemctl enable --now nenya
+systemctl reload nenya
 ```
 
-### Building from Source
+- Reloads config files from `/etc/nenya/` and re-reads secrets
+- Validates config structure (patterns, enums) but does not ping providers
+- Preserves UsageTracker, Metrics, and ThoughtSignatureCache across reloads
+- On validation failure: logs error, continues serving with old config
+- In-flight requests complete with the gateway they started with
 
-```bash
-go build -o nenya ./cmd/nenya
-```
+## Documentation
 
-Or for a quick local test:
+| Document | Description |
+|----------|-------------|
+| [Providers](docs/PROVIDERS.md) | All 22 providers, capabilities matrix, special behaviors, adding custom providers |
+| [Configuration](docs/CONFIGURATION.md) | Full config reference, directory mode, all sections and fields |
+| [Architecture](docs/ARCHITECTURE.md) | Package DAG, request lifecycle, circuit breaker, SSE pipeline |
+| [MCP Integration](docs/MCP_INTEGRATION.md) | MCP server integration, tool discovery, multi-turn execution |
+| [Adapters](docs/ADAPTERS.md) | Adapter system internals, auth styles, capability flags |
+| [Secrets Format](docs/SECRETS_FORMAT.md) | Systemd credential management, provider key setup |
+| [Security](docs/SECURITY.md) | Vulnerability reporting policy |
 
-```bash
-mise run run
-```
+## License
 
-## Development
-
-```bash
-go test ./...
-go vet ./...
-go fmt ./...
-```
-
-Architecture overview: [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)
-
-## Sponsor / Support this Project
-
-- **GitHub Sponsors**: [https://github.com/sponsors/gumieri](https://github.com/sponsors/gumieri)
-- **Pix (Brazil)**: [`rgumieri@gmail.com`](https://nubank.com.br/cobrar/2jm8a/69d54dab-4530-4e09-a531-e959e45fb6d8)
-
-## License & Disclaimer
-
-Apache 2.0 License. See [`LICENSE`](LICENSE) and [`docs/DISCLAIMER.md`](docs/DISCLAIMER.md).
+Apache 2.0. See [`LICENSE`](LICENSE).
 
 ---
 

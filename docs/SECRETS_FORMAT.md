@@ -39,7 +39,7 @@ openssl rand -hex 32
 
 ## Provider Keys
 
-The `provider_keys` object maps provider names (matching provider keys in `config.json`) to their API keys. Built-in provider names are: `gemini`, `deepseek`, `zai`, `groq`, `together`, `ollama`.
+The `provider_keys` object maps provider names (matching provider keys in config) to their API keys. See [`PROVIDERS.md`](PROVIDERS.md) for the full list of built-in providers.
 
 To add a custom provider (e.g., OpenAI), add its key under the matching provider name defined in `config.json`:
 

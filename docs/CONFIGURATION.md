@@ -1,6 +1,10 @@
 # Configuration Reference
 
-Nenya reads its configuration from a JSON file (default: `config.json`). See [`../configs/example.config.json`](../configs/example.config.json) for a fully-documented example or [`../configs/minimal_example.config.json`](../configs/minimal_example.config.json) for the smallest possible configuration.
+Nenya reads its configuration from a JSON file or directory (default: `/etc/nenya/`). See [`PROVIDERS.md`](PROVIDERS.md) for the full provider reference.
+
+When a **directory** is specified, all `*.json` files (excluding `secrets.json`) are loaded in alphabetical order and deep-merged. Map fields (`agents`, `providers`, `mcp_servers`) merge per-key; struct fields use last-file-wins. Defaults are applied once after the merge.
+
+When a **file** is specified, only that file is loaded (single-file mode, unchanged behavior).
 
 **Important**: Configuration format changed from TOML to JSON with semantic grouping. Old `interceptor`, `ollama`, `ratelimit`, and `filter` sections are now unified under `governance` and `security_filter` with engine abstraction.
 
@@ -17,6 +21,40 @@ Nenya reads its configuration from a JSON file (default: `config.json`). See [`.
 | Response Cache | `response_cache` | In-memory LRU cache for deterministic response caching |
  | Agents | `agents` | Named agent definitions with fallback chains, circuit breaker, optional system prompts, optional memory integration, and optional MCP server integration |
 | Providers | `providers` | Upstream provider registry |
+
+## Multi-File Configuration (Directory Mode)
+
+When `-config` points to a directory (the default), Nenya loads all `*.json` files in sorted order and deep-merges them:
+
+```
+/etc/nenya/
+├── 00-server.json          # server, governance, security_filter, compaction
+├── 10-providers.json       # provider URL or auth overrides
+├── 20-agents.json          # agent definitions
+└── secrets.json            # EXCLUDED (loaded via systemd credential)
+```
+
+**Merge rules:**
+
+| Field Type | Behavior |
+|------------|----------|
+| `agents` (map) | Per-key merge — later files add or override individual agents |
+| `providers` (map) | Per-key merge — later files add or override individual providers |
+| `mcp_servers` (map) | Per-key merge |
+| `server`, `governance`, `security_filter`, etc. (struct) | Last file wins — if multiple files set the same field, the last one in alphabetical order takes precedence |
+
+This lets you split configuration however makes sense for your deployment — e.g., separate files for server settings, provider credentials, and agent definitions managed by different teams.
+
+## Hot Reload
+
+```bash
+systemctl reload nenya
+```
+
+- Reloads config from the same path used at startup
+- Validates config structure (patterns, enums) without pinging providers
+- Preserves UsageTracker, Metrics, and ThoughtSignatureCache across reloads
+- On validation failure: logs error, continues serving with old config
 
 ## `server`
 
@@ -469,16 +507,18 @@ The content pipeline (steps 2–9) is **best-effort**: if any step fails (e.g., 
 
 ## Configuration Validation
 
-Before starting the gateway, validate your configuration and API keys:
+Validate your configuration without starting the gateway:
 
 ```bash
-CREDENTIALS_DIRECTORY=/path/to/creds ./nenya -config config.json -validate
+./nenya -validate
 ```
 
 This checks:
 1. Ollama engine health (if `security_filter` is enabled and engine is `ollama`)
 2. Provider API endpoint reachability
 3. API key validity
+
+> **Note**: On hot reload (`systemctl reload nenya`), only config structure is validated — provider reachability checks are skipped to prevent transient issues from blocking reloads.
 
 ## Secrets
 
