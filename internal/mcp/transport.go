@@ -346,10 +346,7 @@ func (t *HTTPTransport) SendNotification(method string, params any) error {
 		return fmt.Errorf("sending notification: %w", err)
 	}
 	defer resp.Body.Close()
-	data, err := io.ReadAll(io.LimitReader(resp.Body, 4096))
-	if err != nil {
-		return fmt.Errorf("sending notification: %w", err)
-	}
+	_, _ = io.ReadAll(io.LimitReader(resp.Body, 4096))
 
 	return nil
 }
