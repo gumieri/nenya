@@ -43,7 +43,7 @@ func main() {
 	}
 
 	if validateOnly {
-		if err := config.ValidateConfiguration(cfg, secrets, logger); err != nil {
+		if err = config.ValidateConfiguration(cfg, secrets, logger); err != nil {
 			logger.Error("configuration validation failed", "err", err)
 			os.Exit(1)
 		}
