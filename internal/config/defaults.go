@@ -104,6 +104,12 @@ func ApplyDefaults(cfg *Config) error {
 	if !cfg.SecurityFilter.SkipOnEngineFailure {
 		cfg.SecurityFilter.SkipOnEngineFailure = true
 	}
+	if cfg.SecurityFilter.EntropyThreshold == 0 {
+		cfg.SecurityFilter.EntropyThreshold = 4.5
+	}
+	if cfg.SecurityFilter.EntropyMinToken == 0 {
+		cfg.SecurityFilter.EntropyMinToken = 20
+	}
 
 	applyEngineRefDefaults(&cfg.SecurityFilter.Engine)
 	applyEngineRefDefaults(&cfg.Window.Engine)

@@ -90,7 +90,7 @@ The interceptor implements a 3-tier pipeline for the last user message content:
 
 ## `security_filter`
 
-Tier-0 regex-based secret redaction runs on every request, before any other pipeline step. Includes configurable engine for privacy filtering.
+Tier-0 regex-based secret redaction runs on every request, before any other pipeline step. Includes configurable engine for privacy filtering and optional Shannon entropy detection for unknown high-entropy tokens.
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
@@ -100,6 +100,9 @@ Tier-0 regex-based secret redaction runs on every request, before any other pipe
 | `output_enabled` | bool | `false` | Enable stream output filtering (secret redaction and execution policy blocking on responses) |
 | `output_window_chars` | int | `4096` | Sliding window size (in chars) for cross-chunk pattern matching in output streams |
 | `skip_on_engine_failure` | bool | `true` | When the engine (Ollama/cloud) is unreachable, skip summarization and forward the original payload. If `false`, hard-limit payloads are truncated even when the engine fails. |
+| `entropy_enabled` | bool | `false` | Enable Shannon entropy-based secret detection. Catches high-entropy tokens that don't match regex patterns (JWTs, opaque API keys, base64 credentials). |
+| `entropy_threshold` | float64 | `4.5` | Shannon entropy threshold in bits/character. Tokens above this value are redacted. English text: ~3.5, hex secrets: ~4.0, base64 tokens: ~5.5, random API keys: ~4.5-5.5. |
+| `entropy_min_token` | int | `20` | Minimum token length (in characters) to evaluate for entropy. Shorter tokens are skipped to reduce false positives. |
 | `engine` | string or object | (see below) | Agent name reference or inline engine configuration |
 
 ### Engine Configuration (`engine`)
@@ -475,15 +478,16 @@ Models not in this registry (e.g., local Ollama models, custom endpoints) must b
   3. **MCP tool injection** (if agent has MCP servers, inject tools as OpenAI function tools + system prompt)
   4. **Prefix cache optimizations** (pin system messages, sort tools — includes MCP tools)
   5. **Agent system prompt injection** (if agent has prompt and no system message exists)
-  6. **Tier-0 regex redaction** (secret patterns via `security_filter`)
-  7. **Text compaction** (normalize, trim, collapse blanks)
-  8. **Stale tool call pruning** (if `prune_stale_tools` enabled, compact old assistant+tool pairs)
-  9. **Thought pruning** (if `prune_thoughts` enabled, strip reasoning blocks from assistant messages)
-  10. **Window compaction** (if enabled and threshold exceeded)
-  10. **Engine interception** (3-tier last-message summarization using `security_filter.engine`, with TF-IDF relevance-scored truncation when `tfidf_query_source` is set, with fallback chain if agent-referenced)
-  11. **JSON minification** (final body compaction)
-  12. **Response cache store** (if enabled, store completed SSE response)
-  13. **MCP auto-save** (if agent has mcp.auto_save, async store of assistant response to MCP server)
+   6. **Tier-0 regex redaction** (secret patterns via `security_filter`)
+   6b. **Shannon entropy redaction** (high-entropy token detection via `security_filter.entropy_enabled`, runs after regex)
+   7. **Text compaction** (normalize, trim, collapse blanks)
+   8. **Stale tool call pruning** (if `prune_stale_tools` enabled, compact old assistant+tool pairs)
+   9. **Thought pruning** (if `prune_thoughts` enabled, strip reasoning blocks from assistant messages)
+   10. **Window compaction** (if enabled and threshold exceeded)
+   11. **Engine interception** (3-tier last-message summarization using `security_filter.engine`, with TF-IDF relevance-scored truncation when `tfidf_query_source` is set, with fallback chain if agent-referenced)
+   12. **JSON minification** (final body compaction)
+   13. **Response cache store** (if enabled, store completed SSE response)
+   14. **MCP auto-save** (if agent has mcp.auto_save, async store of assistant response to MCP server)
 
 ### Best-Effort Pipeline
 
