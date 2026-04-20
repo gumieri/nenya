@@ -21,16 +21,17 @@ type UsageCallback func(completionTokens, promptTokens, totalTokens int)
 type ContentCallback func(content string)
 
 type SSETransformingReader struct {
-	src          io.Reader
-	scanner      *bufio.Scanner
-	transformer  ResponseTransformer
-	onUsage      UsageCallback
-	onContent    ContentCallback
-	streamFilter *StreamFilter
-	buffer       []byte
-	pos          int
-	err          error
-	usageFired   bool
+	src                 io.Reader
+	scanner             *bufio.Scanner
+	transformer         ResponseTransformer
+	onUsage             UsageCallback
+	onContent           ContentCallback
+	streamFilter        *StreamFilter
+	streamEntropyFilter *StreamEntropyFilter
+	buffer              []byte
+	pos                 int
+	err                 error
+	usageFired          bool
 }
 
 func NewSSETransformingReader(src io.Reader, transformer ResponseTransformer) *SSETransformingReader {
@@ -49,6 +50,10 @@ func (r *SSETransformingReader) SetOnUsage(cb UsageCallback) {
 
 func (r *SSETransformingReader) SetStreamFilter(sf *StreamFilter) {
 	r.streamFilter = sf
+}
+
+func (r *SSETransformingReader) SetStreamEntropyFilter(ef *StreamEntropyFilter) {
+	r.streamEntropyFilter = ef
 }
 
 func (r *SSETransformingReader) SetOnContent(cb ContentCallback) {
@@ -125,6 +130,15 @@ func (r *SSETransformingReader) transformLine(line []byte) []byte {
 				if action == ActionBlock {
 					return line
 				}
+				if action == ActionRedact && redacted != content {
+					data = ReplaceDeltaContentMap(parsed, redacted)
+				}
+			}
+		}
+
+		if r.streamEntropyFilter != nil && parsed != nil {
+			if content := ExtractDeltaContentFromMap(parsed); content != "" {
+				redacted, action := r.streamEntropyFilter.FilterContent(content)
 				if action == ActionRedact && redacted != content {
 					data = ReplaceDeltaContentMap(parsed, redacted)
 				}

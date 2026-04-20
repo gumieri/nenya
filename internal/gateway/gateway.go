@@ -15,6 +15,7 @@ import (
 	"nenya/internal/config"
 	"nenya/internal/infra"
 	"nenya/internal/mcp"
+	"nenya/internal/pipeline"
 	"nenya/internal/routing"
 )
 
@@ -27,6 +28,7 @@ type NenyaGateway struct {
 	RateLimiter     *infra.RateLimiter
 	SecretPatterns  []*regexp.Regexp
 	BlockedPatterns []*regexp.Regexp
+	EntropyFilter   *pipeline.EntropyFilter
 	Stats           *infra.UsageTracker
 	Metrics         *infra.Metrics
 	Logger          *slog.Logger
@@ -113,6 +115,15 @@ func New(cfg config.Config, secrets *config.SecretsConfig, logger *slog.Logger) 
 		logger.Info("compiled blocked execution patterns for stream kill switch", "count", len(blockedPatterns))
 	}
 
+	var entropyFilter *pipeline.EntropyFilter
+	if cfg.SecurityFilter.EntropyEnabled {
+		entropyFilter = pipeline.NewEntropyFilter(
+			cfg.SecurityFilter.EntropyThreshold,
+			cfg.SecurityFilter.EntropyMinToken,
+		)
+		logger.Info("entropy filter enabled", "threshold", cfg.SecurityFilter.EntropyThreshold, "min_token", cfg.SecurityFilter.EntropyMinToken)
+	}
+
 	gw := &NenyaGateway{
 		Config:          cfg,
 		Client:          secureClient,
@@ -122,6 +133,7 @@ func New(cfg config.Config, secrets *config.SecretsConfig, logger *slog.Logger) 
 		RateLimiter:     infra.NewRateLimiter(cfg.Governance.RatelimitMaxRPM, cfg.Governance.RatelimitMaxTPM),
 		SecretPatterns:  secretPatterns,
 		BlockedPatterns: blockedPatterns,
+		EntropyFilter:   entropyFilter,
 		Stats:           infra.NewUsageTracker(),
 		Metrics:         nil,
 		Logger:          logger,

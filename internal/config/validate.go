@@ -51,6 +51,15 @@ func ValidateConfigurationWithPing(cfg *Config, secrets *SecretsConfig, logger *
 		errors = append(errors, err.Error())
 	}
 
+	if cfg.SecurityFilter.EntropyEnabled {
+		if cfg.SecurityFilter.EntropyThreshold <= 0 || cfg.SecurityFilter.EntropyThreshold > 8.0 {
+			errors = append(errors, "security_filter.entropy_threshold must be between 0 and 8.0")
+		}
+		if cfg.SecurityFilter.EntropyMinToken < 8 {
+			errors = append(errors, "security_filter.entropy_min_token must be >= 8")
+		}
+	}
+
 	if pingProviders {
 		for name, provider := range providers {
 			if provider.APIKey == "" {

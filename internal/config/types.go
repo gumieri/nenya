@@ -169,6 +169,9 @@ type SecurityFilterConfig struct {
 	OutputWindowChars   int       `json:"output_window_chars"`
 	SkipOnEngineFailure bool      `json:"skip_on_engine_failure"`
 	Engine              EngineRef `json:"engine"`
+	EntropyEnabled      bool      `json:"entropy_enabled"`
+	EntropyThreshold    float64   `json:"entropy_threshold"`
+	EntropyMinToken     int       `json:"entropy_min_token"`
 	enabledSet          bool      `json:"-"`
 }
 

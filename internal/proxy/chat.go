@@ -191,6 +191,40 @@ func (p *Proxy) applyContentPipeline(gw *gateway.NenyaGateway, ctx context.Conte
 		}
 	}
 
+	if gw.EntropyFilter != nil {
+		for _, msgRaw := range messages {
+			msgNode, isMap := msgRaw.(map[string]interface{})
+			if !isMap {
+				continue
+			}
+			if pipeline.ShouldSkipRedaction(msgNode, gw.Config.PrefixCache) {
+				continue
+			}
+			text := gateway.ExtractContentText(msgNode)
+			if text == "" {
+				continue
+			}
+
+			var redacted string
+			if profile.IsIDE {
+				redacted = gw.EntropyFilter.RedactHighEntropyPreservingCodeSpans(
+					text, pipeline.DetectCodeFences(text), gw.Config.SecurityFilter.RedactionLabel,
+				)
+			} else {
+				redacted = gw.EntropyFilter.RedactHighEntropy(text, gw.Config.SecurityFilter.RedactionLabel)
+			}
+			if redacted != text {
+				msgNode["content"] = redacted
+				anyRedacted = true
+			}
+		}
+		if anyRedacted {
+			if gw.Metrics != nil {
+				gw.Metrics.RecordRedaction()
+			}
+		}
+	}
+
 	messages = payload["messages"].([]interface{})
 	if len(messages) == 0 {
 		return nil

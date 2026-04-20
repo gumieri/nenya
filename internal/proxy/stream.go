@@ -243,6 +243,19 @@ func (p *Proxy) streamResponse(gw *gateway.NenyaGateway, w http.ResponseWriter, 
 			"window_size", gw.Config.SecurityFilter.OutputWindowChars)
 	}
 
+	if gw.EntropyFilter != nil && gw.Config.SecurityFilter.OutputEnabled {
+		ef := stream.NewStreamEntropyFilter(
+			gw.EntropyFilter.RedactHighEntropy,
+			gw.Config.SecurityFilter.RedactionLabel,
+			gw.Config.SecurityFilter.OutputWindowChars,
+		)
+		transformingReader.SetStreamEntropyFilter(ef)
+		gw.Logger.Debug("stream entropy filter active",
+			"threshold", gw.Config.SecurityFilter.EntropyThreshold,
+			"min_token", gw.Config.SecurityFilter.EntropyMinToken,
+			"window_size", gw.Config.SecurityFilter.OutputWindowChars)
+	}
+
 	var contentBuilder *contentBuilder
 	if agent, ok := gw.Config.Agents[agentName]; ok && agent.MCP != nil && agent.MCP.AutoSave {
 		contentBuilder = newContentBuilder()
