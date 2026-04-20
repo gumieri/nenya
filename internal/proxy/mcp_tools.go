@@ -48,9 +48,13 @@ func replayBufferedResponse(w http.ResponseWriter, buf *bufferedSSE, logger *slo
 	w.WriteHeader(http.StatusOK)
 
 	if fw, ok := newImmediateFlushWriterSafe(w); ok {
-		fw.Write(buf.rawBytes)
+		if _, err := fw.Write(buf.rawBytes); err != nil {
+			return
+		}
 	} else {
-		w.Write(buf.rawBytes)
+		if _, err := w.Write(buf.rawBytes); err != nil {
+			return
+		}
 	}
 }
 
@@ -69,9 +73,13 @@ func writeSSEError(w http.ResponseWriter, statusCode int, message string) {
 	sseData := fmt.Sprintf("data: %s\n\n", errBytes)
 
 	if fw, ok := newImmediateFlushWriterSafe(w); ok {
-		fw.Write([]byte(sseData))
+		if _, err := fw.Write([]byte(sseData)); err != nil {
+			return
+		}
 	} else {
-		w.Write([]byte(sseData))
+		if _, err := w.Write([]byte(sseData)); err != nil {
+			return
+		}
 	}
 }
 

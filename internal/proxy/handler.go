@@ -190,9 +190,9 @@ func (p *Proxy) handleStats(w http.ResponseWriter) {
 		serverInfo := client.ServerInfo()
 		tools := client.ListTools()
 		mcpServers[name] = map[string]interface{}{
-			"ready":    client.Ready(),
-			"tools":    len(tools),
-			"version":  serverInfo.Version,
+			"ready":   client.Ready(),
+			"tools":   len(tools),
+			"version": serverInfo.Version,
 		}
 	}
 	stats["mcp"] = mcpServers

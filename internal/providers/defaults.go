@@ -10,9 +10,9 @@ func togetherSpec() ProviderSpec {
 		SupportsStreamOptions:  false,
 		SupportsAutoToolChoice: true,
 		SupportsContentArrays:  true,
-		SupportsToolCalls:     true,
-		SupportsReasoning:     false,
-		SupportsVision:        true,
+		SupportsToolCalls:      true,
+		SupportsReasoning:      false,
+		SupportsVision:         true,
 		ValidationEndpoint:     togetherValidationEndpoint,
 	}
 }
@@ -35,9 +35,9 @@ func openaiSpec() ProviderSpec {
 		SupportsStreamOptions:  false,
 		SupportsAutoToolChoice: true,
 		SupportsContentArrays:  true,
-		SupportsToolCalls:     true,
-		SupportsReasoning:     true,
-		SupportsVision:        true,
+		SupportsToolCalls:      true,
+		SupportsReasoning:      true,
+		SupportsVision:         true,
 		ValidationEndpoint:     openaiValidationEndpoint,
 	}
 }
@@ -60,9 +60,9 @@ func githubSpec() ProviderSpec {
 		SupportsStreamOptions:  false,
 		SupportsAutoToolChoice: true,
 		SupportsContentArrays:  true,
-		SupportsToolCalls:     true,
-		SupportsReasoning:     true,
-		SupportsVision:        true,
+		SupportsToolCalls:      true,
+		SupportsReasoning:      true,
+		SupportsVision:         true,
 		ValidationEndpoint:     githubValidationEndpoint,
 	}
 }
@@ -76,9 +76,9 @@ func openrouterSpec() ProviderSpec {
 		SupportsStreamOptions:  true,
 		SupportsAutoToolChoice: true,
 		SupportsContentArrays:  true,
-		SupportsToolCalls:     true,
-		SupportsReasoning:     true,
-		SupportsVision:        true,
+		SupportsToolCalls:      true,
+		SupportsReasoning:      true,
+		SupportsVision:         true,
 		ValidationEndpoint:     openrouterValidationEndpoint,
 	}
 }
@@ -92,9 +92,9 @@ func sambanovaSpec() ProviderSpec {
 		SupportsStreamOptions:  true,
 		SupportsAutoToolChoice: true,
 		SupportsContentArrays:  true,
-		SupportsToolCalls:     true,
-		SupportsReasoning:     true,
-		SupportsVision:        true,
+		SupportsToolCalls:      true,
+		SupportsReasoning:      true,
+		SupportsVision:         true,
 		ValidationEndpoint:     sambanovaValidationEndpoint,
 	}
 }
@@ -108,9 +108,9 @@ func cerebrasSpec() ProviderSpec {
 		SupportsStreamOptions:  true,
 		SupportsAutoToolChoice: true,
 		SupportsContentArrays:  true,
-		SupportsToolCalls:     true,
-		SupportsReasoning:     true,
-		SupportsVision:        false,
+		SupportsToolCalls:      true,
+		SupportsReasoning:      true,
+		SupportsVision:         false,
 		ValidationEndpoint:     cerebrasValidationEndpoint,
 	}
 }
@@ -124,9 +124,9 @@ func nvidiaSpec() ProviderSpec {
 		SupportsStreamOptions:  false,
 		SupportsAutoToolChoice: false,
 		SupportsContentArrays:  true,
-		SupportsToolCalls:     true,
-		SupportsReasoning:     false,
-		SupportsVision:        true,
+		SupportsToolCalls:      true,
+		SupportsReasoning:      false,
+		SupportsVision:         true,
 		ValidationEndpoint:     nvidiaValidationEndpoint,
 	}
 }
@@ -140,8 +140,8 @@ func nvidiaFreeSpec() ProviderSpec {
 		SupportsStreamOptions:  false,
 		SupportsAutoToolChoice: false,
 		SupportsContentArrays:  true,
-		SupportsToolCalls:     true,
-		SupportsVision:        false,
+		SupportsToolCalls:      true,
+		SupportsVision:         false,
 		ValidationEndpoint:     nvidiaValidationEndpoint,
 	}
 }
@@ -151,8 +151,8 @@ func qwenFreeSpec() ProviderSpec {
 		SupportsStreamOptions:  true,
 		SupportsAutoToolChoice: false,
 		SupportsContentArrays:  true,
-		SupportsToolCalls:     true,
-		SupportsVision:        false,
+		SupportsToolCalls:      true,
+		SupportsVision:         false,
 		ValidationEndpoint:     qwenFreeValidationEndpoint,
 	}
 }
@@ -166,9 +166,9 @@ func minimaxFreeSpec() ProviderSpec {
 		SupportsStreamOptions:  true,
 		SupportsAutoToolChoice: false,
 		SupportsContentArrays:  true,
-		SupportsToolCalls:     true,
-		SupportsReasoning:     true,
-		SupportsVision:        false,
+		SupportsToolCalls:      true,
+		SupportsReasoning:      true,
+		SupportsVision:         false,
 		ValidationEndpoint:     minimaxFreeValidationEndpoint,
 	}
 }
@@ -182,9 +182,9 @@ func zaiCodingPlanSpec() ProviderSpec {
 		SupportsStreamOptions:  true,
 		SupportsAutoToolChoice: true,
 		SupportsContentArrays:  true,
-		SupportsToolCalls:     true,
-		SupportsReasoning:     true,
-		SupportsVision:        false,
+		SupportsToolCalls:      true,
+		SupportsReasoning:      true,
+		SupportsVision:         false,
 		ValidationEndpoint:     zaiValidationEndpoint,
 	}
 }
@@ -194,9 +194,9 @@ func ollamaSpec() ProviderSpec {
 		SupportsStreamOptions:  false,
 		SupportsAutoToolChoice: true,
 		SupportsContentArrays:  false,
-		SupportsToolCalls:     true,
-		SupportsReasoning:     true,
-		SupportsVision:        false,
+		SupportsToolCalls:      true,
+		SupportsReasoning:      true,
+		SupportsVision:         false,
 		ValidationEndpoint:     ollamaValidationEndpoint,
 	}
 }
@@ -210,9 +210,9 @@ func anthropicSpec() ProviderSpec {
 		SupportsStreamOptions:  false,
 		SupportsAutoToolChoice: true,
 		SupportsContentArrays:  false,
-		SupportsToolCalls:     true,
-		SupportsReasoning:     true,
-		SupportsVision:        true,
+		SupportsToolCalls:      true,
+		SupportsReasoning:      true,
+		SupportsVision:         true,
 		ValidationEndpoint:     anthropicValidationEndpoint,
 	}
 }
@@ -229,9 +229,9 @@ func mistralSpec() ProviderSpec {
 		SupportsStreamOptions:  false,
 		SupportsAutoToolChoice: true,
 		SupportsContentArrays:  true,
-		SupportsToolCalls:     true,
-		SupportsReasoning:     true,
-		SupportsVision:        true,
+		SupportsToolCalls:      true,
+		SupportsReasoning:      true,
+		SupportsVision:         true,
 		ValidationEndpoint:     mistralValidationEndpoint,
 	}
 }
@@ -245,9 +245,9 @@ func xaiSpec() ProviderSpec {
 		SupportsStreamOptions:  true,
 		SupportsAutoToolChoice: true,
 		SupportsContentArrays:  true,
-		SupportsToolCalls:     true,
-		SupportsReasoning:     true,
-		SupportsVision:        true,
+		SupportsToolCalls:      true,
+		SupportsReasoning:      true,
+		SupportsVision:         true,
 		ValidationEndpoint:     xaiValidationEndpoint,
 	}
 }
@@ -261,9 +261,9 @@ func azureSpec() ProviderSpec {
 		SupportsStreamOptions:  false,
 		SupportsAutoToolChoice: true,
 		SupportsContentArrays:  true,
-		SupportsToolCalls:     true,
-		SupportsReasoning:     true,
-		SupportsVision:        true,
+		SupportsToolCalls:      true,
+		SupportsReasoning:      true,
+		SupportsVision:         true,
 		ValidationEndpoint:     azureValidationEndpoint,
 	}
 }
@@ -277,9 +277,9 @@ func perplexitySpec() ProviderSpec {
 		SupportsStreamOptions:  false,
 		SupportsAutoToolChoice: false,
 		SupportsContentArrays:  true,
-		SupportsToolCalls:     false,
-		SupportsReasoning:     false,
-		SupportsVision:        true,
+		SupportsToolCalls:      false,
+		SupportsReasoning:      false,
+		SupportsVision:         true,
 		ValidationEndpoint:     perplexityValidationEndpoint,
 	}
 }
@@ -293,9 +293,9 @@ func cohereSpec() ProviderSpec {
 		SupportsStreamOptions:  false,
 		SupportsAutoToolChoice: true,
 		SupportsContentArrays:  true,
-		SupportsToolCalls:     true,
-		SupportsReasoning:     false,
-		SupportsVision:        true,
+		SupportsToolCalls:      true,
+		SupportsReasoning:      false,
+		SupportsVision:         true,
 		ValidationEndpoint:     cohereValidationEndpoint,
 	}
 }
@@ -309,9 +309,9 @@ func deepinfraSpec() ProviderSpec {
 		SupportsStreamOptions:  false,
 		SupportsAutoToolChoice: true,
 		SupportsContentArrays:  true,
-		SupportsToolCalls:     true,
-		SupportsReasoning:     false,
-		SupportsVision:        true,
+		SupportsToolCalls:      true,
+		SupportsReasoning:      false,
+		SupportsVision:         true,
 		ValidationEndpoint:     deepinfraValidationEndpoint,
 	}
 }

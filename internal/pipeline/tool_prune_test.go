@@ -33,9 +33,9 @@ func TestPruneStaleToolCalls_BelowProtectionWindow(t *testing.T) {
 	}
 
 	payload := makePayload(
-		map[string]interface{}{"role": "assistant", "tool_calls": []interface{}{}}, // 0
-		map[string]interface{}{"role": "user", "content": "test"},                // 1
-		map[string]interface{}{"role": "assistant", "content": "hi"},             // 2
+		map[string]interface{}{"role": "assistant", "tool_calls": []interface{}{}},         // 0
+		map[string]interface{}{"role": "user", "content": "test"},                          // 1
+		map[string]interface{}{"role": "assistant", "content": "hi"},                       // 2
 		map[string]interface{}{"role": "tool", "tool_call_id": "abc", "content": "result"}, // 3
 	)
 
@@ -64,7 +64,7 @@ func TestPruneStaleToolCalls_SimplePair(t *testing.T) {
 			},
 		}}, // 0 - should be pruned (outside protection window)
 		map[string]interface{}{"role": "tool", "tool_call_id": "call_1", "content": "tool result"}, // 1
-		map[string]interface{}{"role": "user", "content": "current message"},                     // 2 - protected
+		map[string]interface{}{"role": "user", "content": "current message"},                       // 2 - protected
 	)
 
 	if mutated := PruneStaleToolCalls(payload, cfg); !mutated {
@@ -116,7 +116,7 @@ func TestPruneStaleToolCalls_MultipleCallsSameTurn(t *testing.T) {
 		}}, // 0 - should be pruned
 		map[string]interface{}{"role": "tool", "tool_call_id": "call_1", "content": "result one"}, // 1
 		map[string]interface{}{"role": "tool", "tool_call_id": "call_2", "content": "result two"}, // 2
-		map[string]interface{}{"role": "user", "content": "current"},                             // 3 - protected
+		map[string]interface{}{"role": "user", "content": "current"},                              // 3 - protected
 	)
 
 	if mutated := PruneStaleToolCalls(payload, cfg); !mutated {
@@ -233,7 +233,7 @@ func TestPruneStaleToolCalls_NonMapMessages(t *testing.T) {
 			},
 		}}, // 2
 		map[string]interface{}{"role": "tool", "tool_call_id": "call_1", "content": "result"}, // 3
-		map[string]interface{}{"role": "user", "content": "protected"},                      // 4 - protected
+		map[string]interface{}{"role": "user", "content": "protected"},                        // 4 - protected
 	)
 
 	if mutated := PruneStaleToolCalls(payload, cfg); !mutated {
@@ -360,7 +360,7 @@ func TestPruneStaleToolCalls_EmptyToolCalls(t *testing.T) {
 
 	payload := makePayload(
 		map[string]interface{}{"role": "assistant", "tool_calls": []interface{}{}}, // 0 - empty slice
-		map[string]interface{}{"role": "user", "content": "current"},                // 1 - protected
+		map[string]interface{}{"role": "user", "content": "current"},               // 1 - protected
 	)
 
 	if mutated := PruneStaleToolCalls(payload, cfg); mutated {
@@ -396,8 +396,8 @@ func TestPruneStaleToolCalls_PairBrokenByUserMessage(t *testing.T) {
 				},
 			},
 		}}, // 0 - tool_calls
-		map[string]interface{}{"role": "user", "content": "interrupted"},                    // 1 - not a tool response
-		map[string]interface{}{"role": "user", "content": "current message"},                // 2 - protected
+		map[string]interface{}{"role": "user", "content": "interrupted"},     // 1 - not a tool response
+		map[string]interface{}{"role": "user", "content": "current message"}, // 2 - protected
 	)
 
 	if mutated := PruneStaleToolCalls(payload, cfg); mutated {
@@ -432,7 +432,7 @@ func TestPruneStaleToolCalls_PartialPair(t *testing.T) {
 		}}, // 0 - two tool calls
 		map[string]interface{}{"role": "tool", "tool_call_id": "call_1", "content": "result a"}, // 1
 		map[string]interface{}{"role": "user", "content": "missing second tool response"},       // 2
-		map[string]interface{}{"role": "user", "content": "current"},                             // 3 - protected
+		map[string]interface{}{"role": "user", "content": "current"},                            // 3 - protected
 	)
 
 	if mutated := PruneStaleToolCalls(payload, cfg); mutated {

@@ -19,9 +19,9 @@ type ProviderSpec struct {
 	SupportsStreamOptions  bool
 	SupportsAutoToolChoice bool
 	SupportsContentArrays  bool
-	SupportsToolCalls     bool
-	SupportsReasoning     bool
-	SupportsVision        bool
+	SupportsToolCalls      bool
+	SupportsReasoning      bool
+	SupportsVision         bool
 	ModelMap               map[string]string
 	SanitizeRequest        func(deps *SanitizeDeps, payload map[string]interface{})
 	NewResponseTransformer func(cache *infra.ThoughtSignatureCache) stream.ResponseTransformer
