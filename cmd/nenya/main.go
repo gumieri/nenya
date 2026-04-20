@@ -36,6 +36,12 @@ func main() {
 		os.Exit(1)
 	}
 
+	if listenAddr := os.Getenv("NENYA_LISTEN_ADDR"); listenAddr != "" {
+		cfg.Server.ListenAddr = listenAddr
+	} else if port := os.Getenv("PORT"); port != "" {
+		cfg.Server.ListenAddr = ":" + port
+	}
+
 	secrets, err := config.LoadSecrets()
 	if err != nil {
 		logger.Error("failed to load secrets", "err", err)

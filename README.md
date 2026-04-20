@@ -213,7 +213,7 @@ systemctl reload nenya
 | [Architecture](docs/ARCHITECTURE.md) | Package DAG, request lifecycle, circuit breaker, SSE pipeline |
 | [MCP Integration](docs/MCP_INTEGRATION.md) | MCP server integration, tool discovery, multi-turn execution |
 | [Adapters](docs/ADAPTERS.md) | Adapter system internals, auth styles, capability flags |
-| [Secrets Format](docs/SECRETS_FORMAT.md) | Systemd credential management, provider key setup |
+| [Secrets Format](docs/SECRETS_FORMAT.md) | Systemd credentials, env var fallback, container/K8s deployment |
 | [Security](docs/SECURITY.md) | Vulnerability reporting policy |
 
 ## License

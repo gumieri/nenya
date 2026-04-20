@@ -308,28 +308,46 @@ func LoadPromptFile(filePath string, directPrompt string, defaultPrompt string) 
 
 func LoadSecrets() (*SecretsConfig, error) {
 	credDir := os.Getenv("CREDENTIALS_DIRECTORY")
-	if credDir == "" {
-		return nil, fmt.Errorf("CREDENTIALS_DIRECTORY not set")
-	}
-	secretsPath := credDir + "/secrets"
-	data, err := os.ReadFile(secretsPath)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read secrets file %s: %v", secretsPath, err)
-	}
-
-	var secrets SecretsConfig
-	if err := json.Unmarshal(data, &secrets); err != nil {
-		return nil, fmt.Errorf("failed to parse secrets JSON: %v", err)
-	}
-
-	if secrets.ClientToken == "" {
-		return nil, fmt.Errorf("client_token missing in secrets")
-	}
-	if secrets.ProviderKeys == nil {
-		secrets.ProviderKeys = make(map[string]string)
+	if credDir != "" {
+		secretsPath := credDir + "/secrets"
+		data, err := os.ReadFile(secretsPath)
+		if err == nil {
+			var secrets SecretsConfig
+			if err := json.Unmarshal(data, &secrets); err != nil {
+				return nil, fmt.Errorf("failed to parse secrets JSON: %v", err)
+			}
+			if secrets.ClientToken == "" {
+				return nil, fmt.Errorf("client_token missing in secrets")
+			}
+			if secrets.ProviderKeys == nil {
+				secrets.ProviderKeys = make(map[string]string)
+			}
+			return &secrets, nil
+		}
 	}
 
-	return &secrets, nil
+	clientToken := os.Getenv("NENYA_CLIENT_TOKEN")
+	if clientToken == "" {
+		return nil, fmt.Errorf("CREDENTIALS_DIRECTORY not set and NENYA_CLIENT_TOKEN not set")
+	}
+
+	secrets := &SecretsConfig{
+		ClientToken:  clientToken,
+		ProviderKeys: make(map[string]string),
+	}
+
+	for _, env := range os.Environ() {
+		if strings.HasPrefix(env, "NENYA_PROVIDER_KEY_") {
+			parts := strings.SplitN(env, "=", 2)
+			if len(parts) != 2 {
+				continue
+			}
+			providerName := strings.ToLower(strings.TrimPrefix(parts[0], "NENYA_PROVIDER_KEY_"))
+			secrets.ProviderKeys[providerName] = parts[1]
+		}
+	}
+
+	return secrets, nil
 }
 
 func ResolveProviders(cfg *Config, secrets *SecretsConfig) map[string]*Provider {
