@@ -343,3 +343,78 @@ func TestFlattenContentArrays_MixedTypes(t *testing.T) {
 		t.Errorf("expected content to contain hello and world, got %q", content)
 	}
 }
+
+func TestZAIAdapter_MutateRequest_SkipsWhenToolsPresent(t *testing.T) {
+	a := NewZAIAdapter(ZAIAdapterDeps{
+		ExtractContent: func(msg map[string]interface{}) string {
+			if c, ok := msg["content"].(string); ok {
+				return c
+			}
+			return ""
+		},
+	})
+
+	body := []byte(`{
+		"model": "glm-5-turbo",
+		"messages": [
+			{"role": "user", "content": "first part"},
+			{"role": "user", "content": "second part"},
+			{"role": "assistant", "content": "response"}
+		],
+		"tools": [{"type": "function", "function": {"name": "read_file"}}]
+	}`)
+	out, err := a.MutateRequest(body, "glm-5-turbo", true)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if string(out) != string(body) {
+		t.Errorf("expected identity transform when tools present, got: %s", string(out))
+	}
+
+	var m map[string]interface{}
+	if err := json.Unmarshal(out, &m); err != nil {
+		t.Fatalf("failed to parse output: %v", err)
+	}
+	msgs := m["messages"].([]interface{})
+	if len(msgs) != 3 {
+		t.Errorf("expected 3 messages (untouched), got %d", len(msgs))
+	}
+}
+
+func TestZAIAdapter_MutateRequest_MutatesWhenNoTools(t *testing.T) {
+	a := NewZAIAdapter(ZAIAdapterDeps{
+		ExtractContent: func(msg map[string]interface{}) string {
+			if c, ok := msg["content"].(string); ok {
+				return c
+			}
+			return ""
+		},
+	})
+
+	body := []byte(`{
+		"model": "glm-5-turbo",
+		"messages": [
+			{"role": "user", "content": "first part"},
+			{"role": "user", "content": "second part"}
+		]
+	}`)
+	out, err := a.MutateRequest(body, "glm-5-turbo", true)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if string(out) == string(body) {
+		t.Error("expected body to be mutated (user messages merged, system bridge added) when no tools present")
+	}
+
+	var m map[string]interface{}
+	if err := json.Unmarshal(out, &m); err != nil {
+		t.Fatalf("failed to parse output: %v", err)
+	}
+	msgs := m["messages"].([]interface{})
+	if len(msgs) < 2 {
+		t.Errorf("expected at least 2 messages after sanitization, got %d", len(msgs))
+	}
+	if msgs[0].(map[string]interface{})["role"] != "system" {
+		t.Error("expected system bridge as first message")
+	}
+}

@@ -575,3 +575,100 @@ func TestTransformDeps_WithCache(t *testing.T) {
 		t.Errorf("expected cached thought_signature injected, got %v", tc["extra_content"])
 	}
 }
+
+func TestTransformRequest_ZAIWithTools_PreservesMessages(t *testing.T) {
+	providers := testProviders()
+	deps := testDeps(providers)
+
+	payload := map[string]interface{}{
+		"model":      "glm-5-turbo",
+		"messages": []interface{}{
+			map[string]interface{}{"role": "user", "content": "first part"},
+			map[string]interface{}{"role": "user", "content": "second part"},
+			map[string]interface{}{"role": "assistant", "content": "response"},
+		},
+		"tools":      []interface{}{map[string]interface{}{"type": "function", "function": map[string]interface{}{"name": "read_file"}}},
+		"tool_choice": "auto",
+	}
+
+	body, _, err := TransformRequestForUpstream(deps, "zai", "http://example.com", payload, "", 0)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var parsed map[string]interface{}
+	if err := json.Unmarshal(body, &parsed); err != nil {
+		t.Fatalf("failed to unmarshal: %v", err)
+	}
+	msgs := parsed["messages"].([]interface{})
+	if len(msgs) != 3 {
+		t.Fatalf("expected 3 messages (untouched), got %d", len(msgs))
+	}
+	if msgs[0].(map[string]interface{})["role"] == "system" {
+		t.Error("system bridge should NOT be prepended when tools are present")
+	}
+	if msgs[0].(map[string]interface{})["content"] != "first part" {
+		t.Errorf("first message should be unchanged, got content=%q", msgs[0].(map[string]interface{})["content"])
+	}
+	if msgs[1].(map[string]interface{})["content"] != "second part" {
+		t.Errorf("second message should be unchanged, got content=%q", msgs[1].(map[string]interface{})["content"])
+	}
+	if _, ok := parsed["tools"]; !ok {
+		t.Error("tools should be preserved in output")
+	}
+	if parsed["tool_choice"] != "auto" {
+		t.Errorf("tool_choice should be preserved, got %v", parsed["tool_choice"])
+	}
+}
+
+func TestTransformRequest_ZAIWithTools_KeepsMaxTokens(t *testing.T) {
+	providers := testProviders()
+	deps := testDeps(providers)
+
+	payload := map[string]interface{}{
+		"model":      "glm-5-turbo",
+		"messages":   []interface{}{map[string]interface{}{"role": "user", "content": "hello"}},
+		"max_tokens": float64(16384),
+		"tools":      []interface{}{},
+	}
+
+	body, _, err := TransformRequestForUpstream(deps, "zai", "http://example.com", payload, "", 0)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var parsed map[string]interface{}
+	if err := json.Unmarshal(body, &parsed); err != nil {
+		t.Fatalf("failed to unmarshal: %v", err)
+	}
+	if parsed["max_tokens"].(float64) != 16384 {
+		t.Errorf("expected max_tokens=16384, got %v", parsed["max_tokens"])
+	}
+}
+
+func TestTransformRequest_ZAIWithTools_KeepsStreamOptions(t *testing.T) {
+	providers := testProviders()
+	deps := testDeps(providers)
+
+	payload := map[string]interface{}{
+		"model":    "glm-5-turbo",
+		"messages": []interface{}{map[string]interface{}{"role": "user", "content": "hello"}},
+		"stream_options": map[string]interface{}{
+			"include_usage": true,
+		},
+		"tools": []interface{}{},
+	}
+
+	body, _, err := TransformRequestForUpstream(deps, "zai", "http://example.com", payload, "", 0)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var parsed map[string]interface{}
+	if err := json.Unmarshal(body, &parsed); err != nil {
+		t.Fatalf("failed to unmarshal: %v", err)
+	}
+	if _, ok := parsed["stream_options"]; !ok {
+		t.Error("stream_options should be kept for zai (SupportsStreamOptions: true)")
+	}
+}

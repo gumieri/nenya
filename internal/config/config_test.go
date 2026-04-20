@@ -644,3 +644,19 @@ func TestLoadDirectory(t *testing.T) {
 		}
 	})
 }
+
+func TestModelRegistry_GLM5MaxOutput(t *testing.T) {
+	glm5Models := []string{"glm-5.1", "glm-5-turbo", "glm-5v-turbo", "glm-5"}
+	for _, model := range glm5Models {
+		entry, ok := ModelRegistry[model]
+		if !ok {
+			t.Fatalf("model %q missing from ModelRegistry", model)
+		}
+		if entry.MaxOutput < 16384 {
+			t.Errorf("model %q: MaxOutput=%d, want >= 16384 (tool use requires larger output budget)", model, entry.MaxOutput)
+		}
+		if entry.Provider != "zai" {
+			t.Errorf("model %q: Provider=%q, want zai", model, entry.Provider)
+		}
+	}
+}
