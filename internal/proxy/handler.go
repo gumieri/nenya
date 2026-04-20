@@ -151,6 +151,13 @@ func (p *Proxy) handleModels(w http.ResponseWriter) {
 	for agentName, agent := range gw.Config.Agents {
 		addModel(agentName, "nenya")
 		for _, m := range agent.Models {
+			provider, ok := gw.Providers[m.Provider]
+			if !ok {
+				continue
+			}
+			if provider.APIKey == "" && provider.AuthStyle != "none" {
+				continue
+			}
 			addModel(m.Model, m.Provider)
 		}
 	}
