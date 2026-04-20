@@ -4,10 +4,12 @@ import (
 	"context"
 	"flag"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
 	"sort"
+	"strconv"
 	"syscall"
 	"time"
 
@@ -60,7 +62,6 @@ func main() {
 	signal.Notify(sighup, syscall.SIGHUP)
 
 	srv := &http.Server{
-		Addr:           cfg.Server.ListenAddr,
 		Handler:        p,
 		ReadTimeout:    10 * time.Second,
 		WriteTimeout:   0,
@@ -68,7 +69,13 @@ func main() {
 		MaxHeaderBytes: 1 << 14,
 	}
 
-	logger.Info("nenya ai gateway listening", "addr", cfg.Server.ListenAddr)
+	listener, addr, err := systemdListener(cfg.Server.ListenAddr)
+	if err != nil {
+		logger.Error("failed to create listener", "err", err)
+		os.Exit(1)
+	}
+
+	logger.Info("nenya ai gateway listening", "addr", addr, "socket_activation", listener != nil)
 
 	if len(cfg.Agents) > 0 {
 		names := make([]string, 0, len(cfg.Agents))
@@ -85,8 +92,14 @@ func main() {
 
 	serverErr := make(chan error, 1)
 	go func() {
-		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			serverErr <- err
+		if listener != nil {
+			if err := srv.Serve(listener); err != nil && err != http.ErrServerClosed {
+				serverErr <- err
+			}
+		} else {
+			if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+				serverErr <- err
+			}
 		}
 		close(serverErr)
 	}()
@@ -138,4 +151,47 @@ func reloadConfig(p *proxy.Proxy, configFile string, logger *slog.Logger) {
 	p.StoreGateway(newGW)
 
 	logger.Info("configuration reloaded successfully")
+}
+
+const (
+	sdListenFdsStart = 3
+)
+
+func systemdListener(defaultAddr string) (net.Listener, string, error) {
+	listenPid := os.Getenv("LISTEN_PID")
+	if listenPid == "" {
+		return nil, defaultAddr, nil
+	}
+
+	pid, err := strconv.Atoi(listenPid)
+	if err != nil {
+		return nil, defaultAddr, nil
+	}
+
+	if pid != os.Getpid() {
+		return nil, defaultAddr, nil
+	}
+
+	listenFds := os.Getenv("LISTEN_FDS")
+	if listenFds == "" {
+		return nil, defaultAddr, nil
+	}
+
+	nfds, err := strconv.Atoi(listenFds)
+	if err != nil || nfds == 0 {
+		return nil, defaultAddr, nil
+	}
+
+	fd := os.NewFile(uintptr(sdListenFdsStart), "systemd")
+	listener, err := net.FileListener(fd)
+	if err != nil {
+		return nil, defaultAddr, err
+	}
+
+	os.Unsetenv("LISTEN_PID")
+	os.Unsetenv("LISTEN_FDS")
+	os.Unsetenv("LISTEN_FDNAMES")
+
+	addr := listener.Addr().String()
+	return listener, addr, nil
 }
