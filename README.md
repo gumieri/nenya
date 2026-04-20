@@ -30,6 +30,7 @@ A lightweight, zero-dependency AI API Gateway written in Go. Nenya sits between 
 
 - **Zero external dependencies** — Go standard library only
 - **Hot reload** — `systemctl reload nenya` for zero-downtime config changes
+- **Seamless restarts** — `systemctl enable nenya.socket` enables socket activation; when the service restarts, connections queue in the socket and the new process inherits the file descriptor — no dropped requests
 - **Circuit breaker** — per agent+provider+model with automatic failover and backoff
 - **Rate limiting** — per upstream host (RPM/TPM)
 - **Response cache** — in-memory LRU with SHA-256 fingerprinting
@@ -172,7 +173,7 @@ LoadCredential=secrets:/etc/nenya/secrets.json
 ```
 
 ```bash
-sudo systemctl enable --now nenya
+sudo systemctl enable --now nenya.socket
 ```
 
 ## API Endpoints

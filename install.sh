@@ -11,6 +11,7 @@ INSTALL_DIR="/usr/local/bin"
 CONFIG_DIR="/etc/nenya"
 SERVICE_DIR="/etc/systemd/system"
 SERVICE_FILE="nenya.service"
+SOCKET_FILE="nenya.socket"
 MIN_GO_VERSION="1.23"
 
 info()  { printf "\033[1;34m[info]\033[0m %s\n" "$1"; }
@@ -169,18 +170,52 @@ install_service() {
 	if [ -f "$dest" ]; then
 		if cmp -s "$src" "$dest" >/dev/null 2>&1; then
 			info "Service file ${dest} is already up to date — skipping."
-			return 0
+		else
+			printf "Systemd service file differs from bundled version. Replace? [y/N] "
+			if confirm "Replace ${dest}?"; then
+				sudo install -Dm644 "$src" "$dest"
+				info "Updated ${SERVICE_FILE} to ${dest}."
+			else
+				info "Skipped service installation."
+			fi
 		fi
-		printf "Systemd service file differs from bundled version. Replace? [y/N] "
-		if ! confirm "Replace ${dest}?"; then
-			info "Skipped service installation."
-			return 0
-		fi
+	else
+		sudo install -Dm644 "$src" "$dest"
+		info "Installed ${SERVICE_FILE} to ${dest}."
+	fi
+}
+
+install_socket() {
+	if [ "$OS" != "linux" ]; then
+		return 0
 	fi
 
-	sudo install -Dm644 "$src" "$dest"
+	if ! command -v systemctl >/dev/null 2>&1; then
+		warn "systemd not detected — skipping socket installation."
+		return 0
+	fi
+
+	local src="$1"
+	local dest="$SERVICE_DIR/$SOCKET_FILE"
+
+	if [ -f "$dest" ]; then
+		if cmp -s "$src" "$dest" >/dev/null 2>&1; then
+			info "Socket file ${dest} is already up to date — skipping."
+		else
+			printf "Systemd socket file differs from bundled version. Replace? [y/N] "
+			if confirm "Replace ${dest}?"; then
+				sudo install -Dm644 "$src" "$dest"
+				info "Updated ${SOCKET_FILE} to ${dest}."
+			else
+				info "Skipped socket installation."
+			fi
+		fi
+	else
+		sudo install -Dm644 "$src" "$dest"
+		info "Installed ${SOCKET_FILE} to ${dest}."
+	fi
+
 	sudo systemctl daemon-reload
-	success "Installed ${SERVICE_FILE} to ${dest}."
 }
 
 main() {
@@ -211,7 +246,7 @@ main() {
 				echo ""
 				echo "After installation:"
 				echo "  1. Create secrets: sudoedit ${CONFIG_DIR}/secrets.json"
-				echo "  2. Enable service:   sudo systemctl enable --now nenya"
+				echo "  2. Enable socket:    sudo systemctl enable --now nenya.socket"
 				echo "  3. Start:           sudo systemctl start nenya"
 				echo "  4. Hot reload:       sudo systemctl reload nenya"
 				echo ""
@@ -261,7 +296,7 @@ main() {
 		exit 0
 	fi
 
-	tar -xzf "$ARCHIVE" nenya "$SERVICE_FILE" config.json.example 2>/dev/null || true
+	tar -xzf "$ARCHIVE" nenya "$SERVICE_FILE" "$SOCKET_FILE" config.json.example 2>/dev/null || true
 	rm -f "$ARCHIVE" "$CHECKSUMS"
 
 	install_binary "nenya"
@@ -274,18 +309,20 @@ main() {
 
 	install_config "config.json.example"
 	install_service "nenya.service"
+	install_socket "nenya.socket"
 
 	echo ""
 	info "Installation complete. Next steps:"
 	echo "  1. Create secrets: sudoedit ${CONFIG_DIR}/secrets.json"
 	echo "     See docs/SECRETS_FORMAT.md for the required format."
-	echo "  2. Enable service:   sudo systemctl enable --now nenya"
+	echo "  2. Enable socket:    sudo systemctl enable --now nenya.socket"
 	echo "  3. Start:           sudo systemctl start nenya"
-	echo " 4. Hot reload:       sudo systemctl reload nenya"
+	echo "  4. Hot reload:       sudo systemctl reload nenya"
 	echo ""
 	echo "Install directory: ${INSTALL_DIR}"
 	echo "Config directory: ${CONFIG_DIR}"
 	echo "Service file:    ${SERVICE_DIR}/${SERVICE_FILE}"
+	echo "Socket file:     ${SERVICE_DIR}/${SOCKET_FILE}"
 }
 
 main "$@"

@@ -1,0 +1,24 @@
+# Nenya AI Gateway - systemd socket unit
+#
+# This socket unit holds the listening port, allowing seamless restarts:
+# - When nenya.service restarts, the socket stays open and queues connections
+# - The new nenya process inherits the already-listening file descriptor
+# - Zero packet loss during updates, crashes, or config reloads
+#
+# Install:
+#   systemctl enable --now nenya.socket
+#
+# Override for non-default ports:
+#   systemctl edit nenya.socket
+#   # Add: [Socket] ListenStream=9090
+#   systemctl daemon-reload && systemctl restart nenya.socket
+
+[Unit]
+Description=Nenya AI Gateway Socket
+
+[Socket]
+ListenStream=8080
+Accept=no
+
+[Install]
+WantedBy=sockets.target

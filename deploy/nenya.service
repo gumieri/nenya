@@ -15,9 +15,8 @@
 
 [Unit]
 Description=Nenya AI Gateway & Bouncer
-After=network.target
-Wants=network-online.target
-After=network-online.target
+Requires=nenya.socket
+After=nenya.socket
 
 [Service]
 Type=simple
