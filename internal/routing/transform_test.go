@@ -581,13 +581,13 @@ func TestTransformRequest_ZAIWithTools_PreservesMessages(t *testing.T) {
 	deps := testDeps(providers)
 
 	payload := map[string]interface{}{
-		"model":      "glm-5-turbo",
+		"model": "glm-5-turbo",
 		"messages": []interface{}{
 			map[string]interface{}{"role": "user", "content": "first part"},
 			map[string]interface{}{"role": "user", "content": "second part"},
 			map[string]interface{}{"role": "assistant", "content": "response"},
 		},
-		"tools":      []interface{}{map[string]interface{}{"type": "function", "function": map[string]interface{}{"name": "read_file"}}},
+		"tools":       []interface{}{map[string]interface{}{"type": "function", "function": map[string]interface{}{"name": "read_file"}}},
 		"tool_choice": "auto",
 	}
 
