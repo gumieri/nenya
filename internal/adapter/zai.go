@@ -65,6 +65,10 @@ func (a *ZAIAdapter) NormalizeError(statusCode int, body []byte) ErrorClass {
 }
 
 func (a *ZAIAdapter) zaiSanitize(payload map[string]interface{}) bool {
+	if _, hasTools := payload["tools"]; hasTools {
+		return false
+	}
+
 	messagesRaw, ok := payload["messages"]
 	if !ok {
 		return false

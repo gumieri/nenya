@@ -19,6 +19,10 @@ func zaiSpec() ProviderSpec {
 }
 
 func zaiSanitize(deps *SanitizeDeps, payload map[string]interface{}) {
+	if _, hasTools := payload["tools"]; hasTools {
+		return
+	}
+
 	messagesRaw, ok := payload["messages"]
 	if !ok {
 		return

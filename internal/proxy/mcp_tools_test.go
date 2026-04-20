@@ -441,3 +441,149 @@ func TestExecuteMCPCalls_EmptyCalls(t *testing.T) {
 		t.Fatalf("expected nil results for empty calls, got %v", results)
 	}
 }
+
+func TestBufferStreamResponse_MultipleToolCalls(t *testing.T) {
+	sse := `data: {"id":"1","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_A","type":"function","function":{"name":"tool_a","arguments":""}}]}}]}
+
+data: {"id":"1","choices":[{"index":0,"delta":{"tool_calls":[{"index":1,"id":"call_B","type":"function","function":{"name":"tool_b","arguments":""}}]}}]}
+
+data: {"id":"1","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":"{\"x\":1}"}}]}}]}
+
+data: {"id":"1","choices":[{"index":0,"delta":{"tool_calls":[{"index":1,"function":{"arguments":"{\"y\":2}"}}]}}]}
+
+data: {"id":"1","choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}]}
+
+data: [DONE]
+`
+	buf, err := bufferStreamResponse(context.Background(), strings.NewReader(sse))
+	if err != nil {
+		t.Fatalf("bufferStreamResponse failed: %v", err)
+	}
+
+	if buf.hasContent {
+		t.Fatal("expected hasContent=false")
+	}
+	if len(buf.toolCalls) != 2 {
+		t.Fatalf("expected 2 tool calls, got %d", len(buf.toolCalls))
+	}
+	if buf.toolCalls[0].ID != "call_A" || buf.toolCalls[0].Name != "tool_a" {
+		t.Errorf("tool call 0: got id=%q name=%q", buf.toolCalls[0].ID, buf.toolCalls[0].Name)
+	}
+	if buf.toolCalls[0].Arguments["x"] != float64(1) {
+		t.Errorf("tool call 0 args: got %v", buf.toolCalls[0].Arguments)
+	}
+	if buf.toolCalls[1].ID != "call_B" || buf.toolCalls[1].Name != "tool_b" {
+		t.Errorf("tool call 1: got id=%q name=%q", buf.toolCalls[1].ID, buf.toolCalls[1].Name)
+	}
+	if buf.toolCalls[1].Arguments["y"] != float64(2) {
+		t.Errorf("tool call 1 args: got %v", buf.toolCalls[1].Arguments)
+	}
+}
+
+func TestBufferStreamResponse_ContentAndToolCallsMixed(t *testing.T) {
+	sse := `data: {"id":"1","choices":[{"delta":{"content":"Let me look that up."}}]}
+
+data: {"id":"1","choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_X","type":"function","function":{"name":"search","arguments":"{\"q\":\"test\"}"}}]}}]}
+
+data: {"id":"1","choices":[{"delta":{},"finish_reason":"tool_calls"}]}
+
+data: [DONE]
+`
+	buf, err := bufferStreamResponse(context.Background(), strings.NewReader(sse))
+	if err != nil {
+		t.Fatalf("bufferStreamResponse failed: %v", err)
+	}
+
+	if !buf.hasContent {
+		t.Fatal("expected hasContent=true")
+	}
+	if len(buf.toolCalls) != 1 {
+		t.Fatalf("expected 1 tool call, got %d", len(buf.toolCalls))
+	}
+	if buf.toolCalls[0].Name != "search" {
+		t.Errorf("expected tool name 'search', got %q", buf.toolCalls[0].Name)
+	}
+	if buf.finishReason != "tool_calls" {
+		t.Fatalf("expected finish_reason=tool_calls, got %q", buf.finishReason)
+	}
+}
+
+func TestAppendMCPResults_MultipleCallsPreserveOrder(t *testing.T) {
+	payload := map[string]any{
+		"messages": []any{
+			map[string]any{"role": "user", "content": "do things"},
+		},
+	}
+
+	assistantMsg := map[string]any{
+		"role":    "assistant",
+		"content": nil,
+		"tool_calls": []any{
+			map[string]any{"id": "call_A", "type": "function", "function": map[string]any{"name": "mcp__alpha", "arguments": `{}`}},
+			map[string]any{"id": "call_B", "type": "function", "function": map[string]any{"name": "mcp__beta", "arguments": `{}`}},
+			map[string]any{"id": "call_C", "type": "function", "function": map[string]any{"name": "mcp__gamma", "arguments": `{}`}},
+		},
+	}
+
+	calls := []mcpToolCall{
+		{ID: "call_A", Name: "mcp__alpha"},
+		{ID: "call_B", Name: "mcp__beta"},
+		{ID: "call_C", Name: "mcp__gamma"},
+	}
+	results := []*mcp.CallToolResult{
+		{Content: []mcp.ContentBlock{{Type: "text", Text: "result A"}}},
+		{Content: []mcp.ContentBlock{{Type: "text", Text: "result B"}}},
+		{Content: []mcp.ContentBlock{{Type: "text", Text: "result C"}}},
+	}
+
+	appendMCPResults(payload, calls, results, assistantMsg)
+
+	messages := payload["messages"].([]any)
+	if len(messages) != 5 {
+		t.Fatalf("expected 5 messages (user + assistant + 3 tool results), got %d", len(messages))
+	}
+
+	for i, expectedID := range []string{"call_A", "call_B", "call_C"} {
+		toolMsg := messages[2+i].(map[string]any)
+		if toolMsg["tool_call_id"] != expectedID {
+			t.Errorf("message %d: expected tool_call_id=%q, got %q", 2+i, expectedID, toolMsg["tool_call_id"])
+		}
+	}
+	if messages[2].(map[string]any)["content"] != "result A" {
+		t.Errorf("expected result A, got %v", messages[2].(map[string]any)["content"])
+	}
+	if messages[3].(map[string]any)["content"] != "result B" {
+		t.Errorf("expected result B, got %v", messages[3].(map[string]any)["content"])
+	}
+	if messages[4].(map[string]any)["content"] != "result C" {
+		t.Errorf("expected result C, got %v", messages[4].(map[string]any)["content"])
+	}
+}
+
+func TestAppendMCPResults_LargeContentNotTruncated(t *testing.T) {
+	largeContent := strings.Repeat("x", 10000)
+
+	payload := map[string]any{
+		"messages": []any{
+			map[string]any{"role": "user", "content": "go"},
+		},
+	}
+
+	assistantMsg := map[string]any{
+		"role": "assistant",
+		"tool_calls": []any{
+			map[string]any{"id": "call_1", "type": "function", "function": map[string]any{"name": "mcp__big"}},
+		},
+	}
+
+	appendMCPResults(payload, []mcpToolCall{{ID: "call_1", Name: "mcp__big"}},
+		[]*mcp.CallToolResult{{Content: []mcp.ContentBlock{{Type: "text", Text: largeContent}}}},
+		assistantMsg)
+
+	messages := payload["messages"].([]any)
+	toolMsg := messages[2].(map[string]any)
+	content := toolMsg["content"].(string)
+	if len(content) != 10000 {
+		t.Fatalf("expected 10000 bytes of content, got %d", len(content))
+	}
+}
