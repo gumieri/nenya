@@ -66,7 +66,7 @@ func waitWithCancel(ctx context.Context, d time.Duration) {
 	}
 }
 
-func (p *Proxy) forwardToUpstream(gw *gateway.NenyaGateway, 
+func (p *Proxy) forwardToUpstream(gw *gateway.NenyaGateway,
 	w http.ResponseWriter,
 	r *http.Request,
 	targets []routing.UpstreamTarget,
@@ -150,7 +150,7 @@ func (p *Proxy) forwardToUpstream(gw *gateway.NenyaGateway,
 	http.Error(w, "All upstream targets exhausted", http.StatusServiceUnavailable)
 }
 
-func (p *Proxy) prepareAndSend(gw *gateway.NenyaGateway, 
+func (p *Proxy) prepareAndSend(gw *gateway.NenyaGateway,
 	r *http.Request,
 	idx int,
 	targets []routing.UpstreamTarget,
@@ -245,7 +245,7 @@ func (p *Proxy) prepareAndSend(gw *gateway.NenyaGateway,
 	return upstreamAction{kind: actionStream, resp: resp, cancel: upstreamCancel}
 }
 
-func (p *Proxy) handleUpstreamError(gw *gateway.NenyaGateway, 
+func (p *Proxy) handleUpstreamError(gw *gateway.NenyaGateway,
 	idx int,
 	targets []routing.UpstreamTarget,
 	target routing.UpstreamTarget,

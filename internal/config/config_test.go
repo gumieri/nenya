@@ -464,11 +464,12 @@ func TestLoadPromptFile(t *testing.T) {
 func TestLoadDirectory(t *testing.T) {
 	t.Run("multiple files merged", func(t *testing.T) {
 		dir := t.TempDir()
-	os.WriteFile(filepath.Join(dir, "00-server.json"), []byte(`{"server":{"listen_addr":":9090"}}`), 0644)
-	if err != nil {
-		t.Fatalf("failed to create 00-server.json: %v", err)
-	}
-	os.WriteFile(filepath.Join(dir, "10-governance.json"), []byte(`{"governance":{"context_soft_limit":5000}}`), 0644)
+		if err := os.WriteFile(filepath.Join(dir, "00-server.json"), []byte(`{"server":{"listen_addr":":9090"}}`), 0644); err != nil {
+			t.Fatalf("failed to create 00-server.json: %v", err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "10-governance.json"), []byte(`{"governance":{"context_soft_limit":5000}}`), 0644); err != nil {
+			t.Fatalf("failed to create 10-governance.json: %v", err)
+		}
 
 		cfg, err := Load(dir)
 		if err != nil {
@@ -484,8 +485,12 @@ func TestLoadDirectory(t *testing.T) {
 
 	t.Run("sorted alphabetically", func(t *testing.T) {
 		dir := t.TempDir()
-		os.WriteFile(filepath.Join(dir, "20-later.json"), []byte(`{"server":{"listen_addr":":9090"}}`), 0644)
-		os.WriteFile(filepath.Join(dir, "10-earlier.json"), []byte(`{"server":{"listen_addr":":8080"}}`), 0644)
+		if err := os.WriteFile(filepath.Join(dir, "20-later.json"), []byte(`{"server":{"listen_addr":":9090"}}`), 0644); err != nil {
+			t.Fatalf("failed to create 20-later.json: %v", err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "10-earlier.json"), []byte(`{"server":{"listen_addr":":8080"}}`), 0644); err != nil {
+			t.Fatalf("failed to create 10-earlier.json: %v", err)
+		}
 
 		cfg, err := Load(dir)
 		if err != nil {
@@ -498,8 +503,12 @@ func TestLoadDirectory(t *testing.T) {
 
 	t.Run("excludes secrets.json", func(t *testing.T) {
 		dir := t.TempDir()
-		os.WriteFile(filepath.Join(dir, "secrets.json"), []byte(`{"server":{"listen_addr":":9999"}}`), 0644)
-		os.WriteFile(filepath.Join(dir, "config.json"), []byte(`{"server":{"listen_addr":":8080"}}`), 0644)
+		if err := os.WriteFile(filepath.Join(dir, "secrets.json"), []byte(`{"server":{"listen_addr":":9999"}}`), 0644); err != nil {
+			t.Fatalf("failed to create secrets.json: %v", err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "config.json"), []byte(`{"server":{"listen_addr":":8080"}}`), 0644); err != nil {
+			t.Fatalf("failed to create config.json: %v", err)
+		}
 
 		cfg, err := Load(dir)
 		if err != nil {
@@ -512,17 +521,21 @@ func TestLoadDirectory(t *testing.T) {
 
 	t.Run("map fields merge per-key", func(t *testing.T) {
 		dir := t.TempDir()
-		os.WriteFile(filepath.Join(dir, "10-providers.json"), []byte(`{
+		if err := os.WriteFile(filepath.Join(dir, "10-providers.json"), []byte(`{
 			"providers": {
 				"gemini": {"url": "http://gemini", "route_prefixes": ["gemini-"]},
 				"deepseek": {"url": "http://deepseek", "route_prefixes": ["deepseek-"]}
 			}
-		}`), 0644)
-		os.WriteFile(filepath.Join(dir, "20-providers-override.json"), []byte(`{
+		}`), 0644); err != nil {
+			t.Fatalf("failed to create 10-providers.json: %v", err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "20-providers-override.json"), []byte(`{
 			"providers": {
 				"gemini": {"url": "http://custom-gemini", "route_prefixes": ["gemini-"]}
 			}
-		}`), 0644)
+		}`), 0644); err != nil {
+			t.Fatalf("failed to create 20-providers-override.json: %v", err)
+		}
 
 		cfg, err := Load(dir)
 		if err != nil {
@@ -538,16 +551,20 @@ func TestLoadDirectory(t *testing.T) {
 
 	t.Run("agents map merge", func(t *testing.T) {
 		dir := t.TempDir()
-		os.WriteFile(filepath.Join(dir, "10-agents.json"), []byte(`{
+		if err := os.WriteFile(filepath.Join(dir, "10-agents.json"), []byte(`{
 			"agents": {
 				"coder": {"models": [{"provider":"gemini","model":"gemini-2.5-pro"}]}
 			}
-		}`), 0644)
-		os.WriteFile(filepath.Join(dir, "20-agents-extra.json"), []byte(`{
+		}`), 0644); err != nil {
+			t.Fatalf("failed to create 10-agents.json: %v", err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "20-agents-extra.json"), []byte(`{
 			"agents": {
 				"researcher": {"models": [{"provider":"gemini","model":"gemini-2.5-flash"}]}
 			}
-		}`), 0644)
+		}`), 0644); err != nil {
+			t.Fatalf("failed to create 20-agents-extra.json: %v", err)
+		}
 
 		cfg, err := Load(dir)
 		if err != nil {
@@ -578,7 +595,9 @@ func TestLoadDirectory(t *testing.T) {
 
 	t.Run("defaults applied after merge", func(t *testing.T) {
 		dir := t.TempDir()
-		os.WriteFile(filepath.Join(dir, "config.json"), []byte(`{}`), 0644)
+		if err := os.WriteFile(filepath.Join(dir, "config.json"), []byte(`{}`), 0644); err != nil {
+			t.Fatalf("failed to create config.json: %v", err)
+		}
 
 		cfg, err := Load(dir)
 		if err != nil {
@@ -594,7 +613,9 @@ func TestLoadDirectory(t *testing.T) {
 
 	t.Run("single file still works", func(t *testing.T) {
 		tmpfile := filepath.Join(t.TempDir(), "config.json")
-		os.WriteFile(tmpfile, []byte(`{"server":{"listen_addr":":9090"}}`), 0644)
+		if err := os.WriteFile(tmpfile, []byte(`{"server":{"listen_addr":":9090"}}`), 0644); err != nil {
+			t.Fatalf("failed to create config.json: %v", err)
+		}
 
 		cfg, err := Load(tmpfile)
 		if err != nil {
@@ -607,8 +628,12 @@ func TestLoadDirectory(t *testing.T) {
 
 	t.Run("non-json files ignored", func(t *testing.T) {
 		dir := t.TempDir()
-		os.WriteFile(filepath.Join(dir, "README.md"), []byte("not json"), 0644)
-		os.WriteFile(filepath.Join(dir, "config.json"), []byte(`{"server":{"listen_addr":":9090"}}`), 0644)
+		if err := os.WriteFile(filepath.Join(dir, "README.md"), []byte("not json"), 0644); err != nil {
+			t.Fatalf("failed to create README.md: %v", err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "config.json"), []byte(`{"server":{"listen_addr":":9090"}}`), 0644); err != nil {
+			t.Fatalf("failed to create config.json: %v", err)
+		}
 
 		cfg, err := Load(dir)
 		if err != nil {

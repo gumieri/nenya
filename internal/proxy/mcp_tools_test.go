@@ -9,8 +9,8 @@ import (
 	"strings"
 	"testing"
 
-	"nenya/internal/mcp"
 	"nenya/internal/gateway"
+	"nenya/internal/mcp"
 )
 
 func TestBufferStreamResponse_ContentOnly(t *testing.T) {
@@ -330,7 +330,9 @@ func TestExecuteMCPCalls(t *testing.T) {
 		t.Fatalf("Initialize failed: %v", err)
 	}
 	defer client.Close()
-	client.RefreshTools(t.Context())
+	if _, err := client.RefreshTools(t.Context()); err != nil {
+		t.Fatalf("RefreshTools failed: %v", err)
+	}
 
 	toolIndex := mcp.NewToolRegistry()
 	toolIndex.Register("mempalace", []mcp.Tool{
@@ -374,7 +376,9 @@ func TestExecuteMCPCalls_UnknownTool(t *testing.T) {
 		t.Fatalf("Initialize failed: %v", err)
 	}
 	defer client.Close()
-	client.RefreshTools(t.Context())
+	if _, err := client.RefreshTools(t.Context()); err != nil {
+		t.Fatalf("RefreshTools failed: %v", err)
+	}
 
 	toolIndex := mcp.NewToolRegistry()
 	p := &Proxy{}

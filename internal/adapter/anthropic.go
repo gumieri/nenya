@@ -85,8 +85,8 @@ func (a *AnthropicAdapter) NormalizeError(statusCode int, body []byte) ErrorClas
 
 func (a *AnthropicAdapter) convertOpenAIToAnthropic(openai map[string]interface{}, model string, stream bool) map[string]interface{} {
 	anthropic := map[string]interface{}{
-		"model":  model,
-		"stream": stream,
+		"model":      model,
+		"stream":     stream,
 		"max_tokens": 8192,
 	}
 
@@ -183,7 +183,7 @@ func (a *AnthropicAdapter) convertMessages(msgs []interface{}) []interface{} {
 				}
 				anthMsg["content"] = []interface{}{
 					map[string]interface{}{
-						"type":     "tool_result",
+						"type":    "tool_result",
 						"content": toolContent,
 					},
 				}

@@ -754,7 +754,7 @@ func (p *Proxy) injectAutoSearch(gw *gateway.NenyaGateway, ctx context.Context, 
 	}
 }
 
-func (p *Proxy) forwardToUpstreamWithMCP(gw *gateway.NenyaGateway, 
+func (p *Proxy) forwardToUpstreamWithMCP(gw *gateway.NenyaGateway,
 	w http.ResponseWriter,
 	r *http.Request,
 	targets []routing.UpstreamTarget,
@@ -884,7 +884,7 @@ func (p *Proxy) forwardToUpstreamWithMCP(gw *gateway.NenyaGateway,
 	http.Error(w, "MCP loop ended without response", http.StatusInternalServerError)
 }
 
-func (p *Proxy) forwardBuffered(gw *gateway.NenyaGateway, 
+func (p *Proxy) forwardBuffered(gw *gateway.NenyaGateway,
 	r *http.Request,
 	targets []routing.UpstreamTarget,
 	payload map[string]interface{},

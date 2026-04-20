@@ -10,9 +10,9 @@ func zaiSpec() ProviderSpec {
 		SupportsStreamOptions:  true,
 		SupportsAutoToolChoice: true,
 		SupportsContentArrays:  true,
-		SupportsToolCalls:     true,
-		SupportsReasoning:     true,
-		SupportsVision:        false,
+		SupportsToolCalls:      true,
+		SupportsReasoning:      true,
+		SupportsVision:         false,
 		SanitizeRequest:        zaiSanitize,
 		ValidationEndpoint:     zaiValidationEndpoint,
 	}

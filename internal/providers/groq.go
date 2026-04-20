@@ -10,9 +10,9 @@ func groqSpec() ProviderSpec {
 		SupportsStreamOptions:  true,
 		SupportsAutoToolChoice: true,
 		SupportsContentArrays:  true,
-		SupportsToolCalls:     true,
-		SupportsReasoning:     true,
-		SupportsVision:        true,
+		SupportsToolCalls:      true,
+		SupportsReasoning:      true,
+		SupportsVision:         true,
 		ValidationEndpoint:     groqValidationEndpoint,
 	}
 }
