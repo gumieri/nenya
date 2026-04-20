@@ -1,0 +1,47 @@
+# Git
+.git
+.gitignore
+
+# Documentation
+*.md
+docs/
+
+# Configs and examples
+configs/
+*.example.json
+
+# Credentials and secrets
+creds/
+*.env
+secrets*.json
+
+# Development tools
+mise.toml
+.github/
+.vscode/
+.idea/
+
+# Test files
+*_test.go
+testdata/
+
+# CI/CD
+.github/
+
+# OS files
+.DS_Store
+Thumbs.db
+*~
+
+# Build artifacts
+*.o
+*.a
+*.so
+*.dylib
+*.dll
+*.exe
+*.test
+*.out
+dist/
+build/
+bin/
