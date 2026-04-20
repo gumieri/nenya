@@ -115,10 +115,10 @@ Nenya handles `image_url` content types — they are counted as `[image]` for to
 
 ## Large Payloads
 
-Cursor sends full file contents, git diffs, and multi-file context. This can easily exceed Nenya's `context_soft_limit`. The 3-tier pipeline handles this:
+Cursor sends full file contents, git diffs, and multi-file context. This can easily exceed Nenya's soft limit (derived from the target model's `max_context`). The 3-tier pipeline handles this:
 
 1. **Below soft limit**: pass through unchanged
 2. **Between soft/hard**: send to Ollama for privacy-preserving summarization (code structure preserved for IDE clients)
-3. **Above hard limit**: truncate (TF-IDF relevance-scored when `tfidf_query_source` is set, otherwise code-boundary middle-out), then summarize. If TF-IDF reduces payload below `context_soft_limit`, engine call is skipped entirely.
+3. **Above hard limit**: truncate (TF-IDF relevance-scored when `tfidf_query_source` is set, otherwise code-boundary middle-out), then summarize. If TF-IDF reduces payload below `soft_limit`, engine call is skipped entirely.
 
 If Ollama is unavailable and `skip_on_engine_failure` is `true` (default), the original payload is forwarded unchanged.
