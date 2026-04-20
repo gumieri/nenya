@@ -210,7 +210,7 @@ The entire content pipeline (prefix cache, redaction, compaction, tool call prun
 
 When `security_filter.skip_on_engine_failure` is `true` (default):
 - **Soft limit** (Tier 2): Engine summarization fails → original payload forwarded unchanged
-- **Hard limit** (Tier 3): Engine summarization fails → original payload forwarded unchanged (not truncated). When `tfidf_query_source` is set and TF-IDF reduces the payload below `context_soft_limit`, the engine call is skipped entirely.
+- **Hard limit** (Tier 3): Engine summarization fails → original payload forwarded unchanged (not truncated). When `tfidf_query_source` is set and TF-IDF reduces the payload below `soft_limit`, the engine call is skipped entirely.
 
 This means users without a local Ollama instance can use Nenya purely as a routing proxy with regex-based secret redaction.
 

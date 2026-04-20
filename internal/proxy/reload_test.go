@@ -19,10 +19,8 @@ func newReloadTestGateway(t *testing.T, upstreamURL string) *gateway.NenyaGatewa
 			MaxBodyBytes: 10 << 20,
 		},
 		Governance: config.GovernanceConfig{
-			ContextSoftLimit: 100000,
-			ContextHardLimit: 200000,
-			RatelimitMaxRPM:  60,
-			RatelimitMaxTPM:  100000,
+			RatelimitMaxRPM: 60,
+			RatelimitMaxTPM: 100000,
 		},
 		SecurityFilter: config.SecurityFilterConfig{
 			Enabled: false,

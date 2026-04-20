@@ -70,12 +70,6 @@ func TestApplyDefaultsGovernance(t *testing.T) {
 			name:   "zero values get defaults",
 			before: Config{},
 			check: func(t *testing.T, c *Config) {
-				if c.Governance.ContextSoftLimit != 4000 {
-					t.Errorf("ContextSoftLimit: got %d", c.Governance.ContextSoftLimit)
-				}
-				if c.Governance.ContextHardLimit != 24000 {
-					t.Errorf("ContextHardLimit: got %d", c.Governance.ContextHardLimit)
-				}
 				if c.Governance.TruncationStrategy != "middle-out" {
 					t.Errorf("TruncationStrategy: got %q", c.Governance.TruncationStrategy)
 				}
@@ -91,14 +85,10 @@ func TestApplyDefaultsGovernance(t *testing.T) {
 			name: "explicit values preserved",
 			before: Config{
 				Governance: GovernanceConfig{
-					ContextSoftLimit: 1000,
 					KeepFirstPercent: 30.0,
 				},
 			},
 			check: func(t *testing.T, c *Config) {
-				if c.Governance.ContextSoftLimit != 1000 {
-					t.Errorf("ContextSoftLimit: got %d", c.Governance.ContextSoftLimit)
-				}
 				if c.Governance.KeepFirstPercent != 30.0 {
 					t.Errorf("KeepFirstPercent: got %f", c.Governance.KeepFirstPercent)
 				}
@@ -467,7 +457,7 @@ func TestLoadDirectory(t *testing.T) {
 		if err := os.WriteFile(filepath.Join(dir, "00-server.json"), []byte(`{"server":{"listen_addr":":9090"}}`), 0644); err != nil {
 			t.Fatalf("failed to create 00-server.json: %v", err)
 		}
-		if err := os.WriteFile(filepath.Join(dir, "10-governance.json"), []byte(`{"governance":{"context_soft_limit":5000}}`), 0644); err != nil {
+		if err := os.WriteFile(filepath.Join(dir, "10-governance.json"), []byte(`{"governance":{"truncation_strategy":"middle-out"}}`), 0644); err != nil {
 			t.Fatalf("failed to create 10-governance.json: %v", err)
 		}
 
@@ -478,8 +468,8 @@ func TestLoadDirectory(t *testing.T) {
 		if cfg.Server.ListenAddr != ":9090" {
 			t.Errorf("ListenAddr: got %q", cfg.Server.ListenAddr)
 		}
-		if cfg.Governance.ContextSoftLimit != 5000 {
-			t.Errorf("ContextSoftLimit: got %d", cfg.Governance.ContextSoftLimit)
+		if cfg.Governance.TruncationStrategy != "middle-out" {
+			t.Errorf("TruncationStrategy: got %q", cfg.Governance.TruncationStrategy)
 		}
 	})
 
@@ -606,8 +596,8 @@ func TestLoadDirectory(t *testing.T) {
 		if cfg.Server.ListenAddr != ":8080" {
 			t.Errorf("expected default ListenAddr, got %q", cfg.Server.ListenAddr)
 		}
-		if cfg.Governance.ContextSoftLimit != 4000 {
-			t.Errorf("expected default ContextSoftLimit, got %d", cfg.Governance.ContextSoftLimit)
+		if cfg.Governance.TruncationStrategy != "middle-out" {
+			t.Errorf("expected default TruncationStrategy, got %q", cfg.Governance.TruncationStrategy)
 		}
 	})
 

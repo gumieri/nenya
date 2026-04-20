@@ -7,11 +7,12 @@ import (
 )
 
 type UpstreamTarget struct {
-	URL       string
-	Model     string
-	CoolKey   string
-	Provider  string
-	MaxOutput int
+	URL        string
+	Model      string
+	CoolKey    string
+	Provider   string
+	MaxOutput  int
+	MaxContext int
 }
 
 func ResolveProvider(modelName string, providers map[string]*config.Provider) *config.Provider {

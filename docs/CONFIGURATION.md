@@ -68,24 +68,22 @@ systemctl reload nenya
 
 Unified configuration for context management, truncation, and rate limiting.
 
-The interceptor implements a 3-tier pipeline for the last user message content:
+The interceptor implements a 3-tier pipeline for the last user message content, with limits derived from the target model's `max_context` (characters, not tokens). If the model has no `max_context`, fallback defaults of 4000/24000 are used.
 
-- **Tier 1** (pass-through): content below `context_soft_limit` runes
-- **Tier 2** (engine summarization): content between `context_soft_limit` and `context_hard_limit` runes
-- **Tier 3** (truncation + engine): content above `context_hard_limit` runes. Truncation uses the strategy selected by `truncation_strategy`:
+- **Tier 1** (pass-through): content below `soft_limit` runes
+- **Tier 2** (engine summarization): content between `soft_limit` and `hard_limit` runes
+- **Tier 3** (truncation + engine): content above `hard_limit` runes. Truncation uses the strategy selected by `truncation_strategy`:
   - `"middle-out"` (default): positional — keeps first/last percentages, discards middle
-  - When `tfidf_query_source` is set: **TF-IDF scoring** — splits content into blocks (paragraphs + code fences), scores each block's relevance to the user's prior messages or the start of the current message, and greedily keeps the most relevant blocks within budget. First/last blocks are pinned as a safety net. If TF-IDF reduces the payload below `context_soft_limit`, the engine call is skipped entirely (zero network overhead).
+  - When `tfidf_query_source` is set: **TF-IDF scoring** — splits content into blocks (paragraphs + code fences), scores each block's relevance to the user's prior messages or the start of the current message, and greedily keeps the most relevant blocks within budget. First/last blocks are pinned as a safety net. If TF-IDF reduces the payload below `soft_limit`, the engine call is skipped entirely (zero network overhead).
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `ratelimit_max_tpm` | int | `250000` | Max tokens per minute per upstream host (0 = disabled) |
 | `ratelimit_max_rpm` | int | `15` | Max requests per minute per upstream host (0 = disabled) |
-| `context_soft_limit` | int | `4000` | Runes below this pass through unmodified. Also the threshold below which TF-IDF-pruned payloads skip the engine call. |
-| `context_hard_limit` | int | `24000` | Runes above this are truncated before engine summarization |
 | `truncation_strategy` | string | `"middle-out"` | Truncation method. `"middle-out"` (positional) or any value — TF-IDF is activated by setting `tfidf_query_source` instead. |
 | `keep_first_percent` | float | `15.0` | Percentage of blocks to pin from the start when truncating (safety net for both middle-out and TF-IDF) |
 | `keep_last_percent` | float | `25.0` | Percentage of blocks to pin from the end when truncating (safety net for both middle-out and TF-IDF) |
-| `tfidf_query_source` | string | `""` (disabled) | Enable TF-IDF relevance-scored truncation for Tier 3. `""` = disabled (use middle-out). `"prior_messages"` = use previous user messages as query terms. `"self"` = use first 500 runes of the massive message as query terms. When enabled, if TF-IDF reduces the payload below `context_soft_limit`, the engine call is skipped entirely. |
+| `tfidf_query_source` | string | `""` (disabled) | Enable TF-IDF relevance-scored truncation for Tier 3. `""` = disabled (use middle-out). `"prior_messages"` = use previous user messages as query terms. `"self"` = use first 500 runes of the massive message as query terms. When enabled, if TF-IDF reduces the payload below `soft_limit`, the engine call is skipped entirely. |
 | `retryable_status_codes` | []int | `[429, 500, 502, 503, 504]` | HTTP status codes that trigger fallback to the next model in an agent chain. **Warning: setting this field REPLACES the built-in defaults entirely.** You must include all codes you want retryable (including the standard ones). Per-provider override available via `providers.<name>.retryable_status_codes` (provider-level replaces global for that provider). |
 
 ## `security_filter`
@@ -506,7 +504,7 @@ The content pipeline (steps 2–9) is **best-effort**: if any step fails (e.g., 
 - **max_tokens injection**: `max_tokens` is injected from per-model `MaxOutput` in the `ModelRegistry` when the client doesn't set it. Unknown models (not in registry) are not injected.
 - **Provider Adapters**: Provider-specific wire format differences (auth, request/response mutation, error classification) are handled by the adapter system. See [`ADAPTERS.md`](ADAPTERS.md) for details.
 - **Circuit Breaker**: Each agent+provider+model combination has an independent circuit breaker (Closed/Open/HalfOpen states). See [`ARCHITECTURE.md`](ARCHITECTURE.md#circuit-breaker) for the state machine.
-- **Graceful Degradation**: When `skip_on_engine_failure` is `true`, the gateway operates normally even without a local Ollama instance. Secret redaction (Tier-0 regex) still runs; only the LLM-based summarization is skipped. When `tfidf_query_source` is set, Tier 3 payloads that reduce below `context_soft_limit` via TF-IDF scoring skip the engine call entirely.
+- **Graceful Degradation**: When `skip_on_engine_failure` is `true`, the gateway operates normally even without a local Ollama instance. Secret redaction (Tier-0 regex) still runs; only the LLM-based summarization is skipped. When `tfidf_query_source` is set, Tier 3 payloads that reduce below `soft_limit` via TF-IDF scoring skip the engine call entirely.
 - **TF-IDF Truncation**: When `tfidf_query_source` is set, Tier 3 uses a local TF-IDF algorithm (no external dependencies) to score content blocks by relevance to the user's query terms. This is a pure Go implementation using `strings.Fields` for tokenization and TF-IDF math for scoring. See `internal/pipeline/tfidf.go`.
 
 ## Configuration Validation

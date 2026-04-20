@@ -117,7 +117,23 @@ func (p *Proxy) handleChatCompletions(gw *gateway.NenyaGateway, w http.ResponseW
 			if profile.IsIDE {
 				gw.Logger.Debug("IDE client detected", "client", profile.ClientName)
 			}
-			if err := p.applyContentPipeline(gw, r.Context(), payload, tokenCount, windowMaxCtx, profile); err != nil {
+
+			// Derive soft/hard limits from the primary target's MaxContext
+			softLimit := 4000
+			hardLimit := 24000
+			if len(targets) > 0 {
+				primaryTarget := targets[0]
+				if primaryTarget.MaxContext > 0 {
+					tokenRatio := gw.Config.Server.TokenRatio
+					if tokenRatio == 0 {
+						tokenRatio = 4.0
+					}
+					softLimit = int(float64(primaryTarget.MaxContext) / tokenRatio * 0.125)
+					hardLimit = int(float64(primaryTarget.MaxContext) / tokenRatio * 0.75)
+				}
+			}
+
+			if err := p.applyContentPipeline(gw, r.Context(), payload, tokenCount, windowMaxCtx, profile, softLimit, hardLimit); err != nil {
 				gw.Logger.Warn("content pipeline failed, proceeding with original payload", "err", err)
 			}
 		} else {
@@ -153,7 +169,7 @@ func (p *Proxy) replayCachedSSE(gw *gateway.NenyaGateway, w http.ResponseWriter,
 	}
 }
 
-func (p *Proxy) applyContentPipeline(gw *gateway.NenyaGateway, ctx context.Context, payload map[string]interface{}, tokenCount int, windowMaxCtx int, profile pipeline.ClientProfile) error {
+func (p *Proxy) applyContentPipeline(gw *gateway.NenyaGateway, ctx context.Context, payload map[string]interface{}, tokenCount int, windowMaxCtx int, profile pipeline.ClientProfile, softLimit, hardLimit int) error {
 	messages, ok := payload["messages"].([]interface{})
 	if !ok || len(messages) == 0 {
 		return nil
@@ -290,8 +306,6 @@ func (p *Proxy) applyContentPipeline(gw *gateway.NenyaGateway, ctx context.Conte
 	}
 
 	contentRunes := utf8.RuneCountInString(textForInterception)
-	softLimit := gw.Config.Governance.ContextSoftLimit
-	hardLimit := gw.Config.Governance.ContextHardLimit
 
 	var processed string
 	var needsUpdate bool

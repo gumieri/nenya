@@ -7,8 +7,6 @@
   "governance": {
     "ratelimit_max_tpm": 250000,
     "ratelimit_max_rpm": 15,
-    "context_soft_limit": 4000,
-    "context_hard_limit": 24000,
     "truncation_strategy": "middle-out",
     "keep_first_percent": 15.0,
     "keep_last_percent": 25.0

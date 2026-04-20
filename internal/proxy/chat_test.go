@@ -21,10 +21,8 @@ func newChatProxy(t *testing.T, upstreamURL string) *Proxy {
 			MaxBodyBytes: 10 << 20,
 		},
 		Governance: config.GovernanceConfig{
-			ContextSoftLimit: 100000,
-			ContextHardLimit: 200000,
-			RatelimitMaxRPM:  60,
-			RatelimitMaxTPM:  100000,
+			RatelimitMaxRPM: 60,
+			RatelimitMaxTPM: 100000,
 		},
 		SecurityFilter: config.SecurityFilterConfig{
 			Enabled: false,
@@ -156,10 +154,8 @@ func TestHandleChatCompletions_AgentWithModels(t *testing.T) {
 			MaxBodyBytes: 10 << 20,
 		},
 		Governance: config.GovernanceConfig{
-			ContextSoftLimit: 100000,
-			ContextHardLimit: 200000,
-			RatelimitMaxRPM:  60,
-			RatelimitMaxTPM:  100000,
+			RatelimitMaxRPM: 60,
+			RatelimitMaxTPM: 100000,
 		},
 		SecurityFilter: config.SecurityFilterConfig{
 			Enabled: false,

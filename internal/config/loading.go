@@ -98,12 +98,6 @@ func mergeConfig(base, overlay *Config) {
 		base.Server.UserAgent = overlay.Server.UserAgent
 	}
 
-	if overlay.Governance.ContextSoftLimit != 0 {
-		base.Governance.ContextSoftLimit = overlay.Governance.ContextSoftLimit
-	}
-	if overlay.Governance.ContextHardLimit != 0 {
-		base.Governance.ContextHardLimit = overlay.Governance.ContextHardLimit
-	}
 	if overlay.Governance.TruncationStrategy != "" {
 		base.Governance.TruncationStrategy = overlay.Governance.TruncationStrategy
 	}
@@ -124,6 +118,13 @@ func mergeConfig(base, overlay *Config) {
 	}
 	if overlay.Governance.RPMSet() {
 		base.Governance.RatelimitMaxRPM = overlay.Governance.RatelimitMaxRPM
+	}
+	if overlay.Governance.TPMSet() {
+		base.Governance.RatelimitMaxTPM = overlay.Governance.RatelimitMaxTPM
+	}
+
+	if overlay.Governance.TruncationStrategy != "" {
+		base.Governance.TruncationStrategy = overlay.Governance.TruncationStrategy
 	}
 	if overlay.Governance.TPMSet() {
 		base.Governance.RatelimitMaxTPM = overlay.Governance.RatelimitMaxTPM

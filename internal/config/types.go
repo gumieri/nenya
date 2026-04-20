@@ -107,8 +107,6 @@ type GovernanceConfig struct {
 	BlockedExecutionPatterns []string `json:"blocked_execution_patterns"`
 	RatelimitMaxRPM          int      `json:"ratelimit_max_rpm"`
 	RatelimitMaxTPM          int      `json:"ratelimit_max_tpm"`
-	ContextSoftLimit         int      `json:"context_soft_limit"`
-	ContextHardLimit         int      `json:"context_hard_limit"`
 	TruncationStrategy       string   `json:"truncation_strategy"`
 	KeepFirstPercent         float64  `json:"keep_first_percent"`
 	KeepLastPercent          float64  `json:"keep_last_percent"`

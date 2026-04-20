@@ -47,12 +47,6 @@ func ApplyDefaults(cfg *Config) error {
 	if !cfg.Governance.RPMSet() && cfg.Governance.RatelimitMaxRPM == 0 {
 		cfg.Governance.RatelimitMaxRPM = 15
 	}
-	if cfg.Governance.ContextSoftLimit == 0 {
-		cfg.Governance.ContextSoftLimit = 4000
-	}
-	if cfg.Governance.ContextHardLimit == 0 {
-		cfg.Governance.ContextHardLimit = 24000
-	}
 	if cfg.Governance.TruncationStrategy == "" {
 		cfg.Governance.TruncationStrategy = "middle-out"
 	}
