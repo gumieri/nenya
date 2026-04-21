@@ -167,13 +167,44 @@ func TestServeHTTP_Models_WrongMethod(t *testing.T) {
 }
 
 func TestServeHTTP_Metrics_ValidAuth(t *testing.T) {
-	p, _ := newTestProxy(t)
+	_, _ = newTestProxy(t)
 	req := httptest.NewRequest(http.MethodGet, "/metrics", nil)
 	req.Header.Set("Authorization", "Bearer test-token")
 	rec := httptest.NewRecorder()
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+}
+
+func TestServeHTTP_Models_NoDeepSeekWithoutAPIKey(t *testing.T) {
+	p, _ := newTestProxy(t)
+	req := httptest.NewRequest(http.MethodGet, "/v1/models", nil)
+	req.Header.Set("Authorization", "Bearer test-token")
+	rec := httptest.NewRecorder()
+
 	p.ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+	var body map[string]interface{}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("expected JSON body, got error: %v", err)
+	}
+	data, ok := body["data"].([]interface{})
+	if !ok {
+		t.Fatal("expected data array")
+	}
+	for _, m := range data {
+		entry, ok := m.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		id, _ := entry["id"].(string)
+		ownedBy, _ := entry["owned_by"].(string)
+		if strings.Contains(strings.ToLower(id), "deepseek") || strings.Contains(strings.ToLower(ownedBy), "deepseek") {
+			t.Errorf("deepseek model should not appear without API key: id=%q ownedBy=%q", id, ownedBy)
+		}
 	}
 }

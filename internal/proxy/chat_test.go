@@ -278,3 +278,21 @@ func TestHandleEmbeddings_UnknownModel(t *testing.T) {
 		t.Fatalf("expected 400, got %d", rec.Code)
 	}
 }
+
+func TestBuildUpstreamRequest_SetsContentType(t *testing.T) {
+	var gotCT string
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotCT = r.Header.Get("Content-Type")
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer upstream.Close()
+
+	p := newChatProxy(t, upstream.URL)
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"test-model","messages":[{"role":"user","content":"hi"}]}`))
+	req.Header.Set("Authorization", "Bearer test-token")
+	p.ServeHTTP(httptest.NewRecorder(), req)
+
+	if gotCT != "application/json" {
+		t.Fatalf("expected Content-Type=application/json, got %q", gotCT)
+	}
+}

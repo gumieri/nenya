@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"io"
 )
 
@@ -172,6 +173,14 @@ func (r *SSETransformingReader) transformLine(line []byte) []byte {
 			r.extractUsageFromMap(parsed)
 		}
 
+		if parsed != nil {
+			if normalizeToolCallIDs(parsed) {
+				if out, err := json.Marshal(parsed); err == nil {
+					data = out
+				}
+			}
+		}
+
 		if r.onContent != nil && parsed != nil {
 			if content := ExtractDeltaContentFromMap(parsed); content != "" {
 				r.onContent(content)
@@ -246,4 +255,45 @@ func ToInt(v interface{}) int {
 	default:
 		return 0
 	}
+}
+
+func normalizeToolCallIDs(chunk map[string]interface{}) bool {
+	choices, ok := chunk["choices"].([]interface{})
+	if !ok {
+		return false
+	}
+	mutated := false
+	for _, c := range choices {
+		choice, ok := c.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		delta, ok := choice["delta"].(map[string]interface{})
+		if !ok {
+			continue
+		}
+		tcs, ok := delta["tool_calls"].([]interface{})
+		if !ok {
+			continue
+		}
+		for _, tcRaw := range tcs {
+			tc, ok := tcRaw.(map[string]interface{})
+			if !ok {
+				continue
+			}
+			idx := ToInt(tc["index"])
+			id := tc["id"]
+			switch id.(type) {
+			case string:
+				continue
+			case nil:
+				tc["id"] = fmt.Sprintf("call_%d", idx)
+				mutated = true
+			default:
+				tc["id"] = fmt.Sprintf("call_%d", idx)
+				mutated = true
+			}
+		}
+	}
+	return mutated
 }
