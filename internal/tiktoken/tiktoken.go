@@ -60,27 +60,27 @@ func loadVocab() {
 			panic("tiktoken: failed to base64-decode token: " + err.Error())
 		}
 		var rank uint32
-		if _, err := parseUint32(parts[1], &rank); err != nil {
-			panic("tiktoken: failed to parse rank: " + err.Error())
+		if !parseUint32(parts[1], &rank) {
+			panic("tiktoken: failed to parse rank in vocab line: " + line)
 		}
 		ranks[string(tokenBytes)] = rank
 	}
 }
 
-func parseUint32(s string, out *uint32) (bool, error) {
+func parseUint32(s string, out *uint32) bool {
 	var val uint64
 	for i := 0; i < len(s); i++ {
 		c := s[i]
 		if c < '0' || c > '9' {
-			return false, nil
+			return false
 		}
 		val = val*10 + uint64(c-'0')
 		if val > math.MaxUint32 {
-			return false, nil
+			return false
 		}
 	}
 	*out = uint32(val)
-	return true, nil
+	return true
 }
 
 func CountTokens(text string) int {
@@ -230,9 +230,6 @@ func tryDigits(runes []rune, i, n int) int {
 func tryPunctuation(runes []rune, i, n int) int {
 	r := runes[i]
 	if !(unicode.IsPunct(r) || unicode.IsSymbol(r) || unicode.IsMark(r)) {
-		return i
-	}
-	if i+1 < n && runes[i] == ' ' {
 		return i
 	}
 	for i < n && (unicode.IsPunct(runes[i]) || unicode.IsSymbol(runes[i]) || unicode.IsMark(runes[i])) {
