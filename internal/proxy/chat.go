@@ -882,7 +882,16 @@ func (p *Proxy) forwardToUpstreamWithMCP(gw *gateway.NenyaGateway,
 				"agent", agentName)
 
 			results := executeMCPCalls(r.Context(), mcpCalls, gw)
-			appendMCPResults(working, mcpCalls, results, buf.assistantMessage)
+			// Build an assistant message that only lists the MCP calls being
+			// handled. Using buf.assistantMessage (which contains ALL calls)
+			// would create orphaned tool_call references if nonMcpCalls is
+			// non-empty, causing providers like Ollama to reject the payload.
+			mcpAssistantMsg := map[string]any{
+				"role":       "assistant",
+				"content":    nil,
+				"tool_calls": buildOpenAIToolCalls(mcpCalls),
+			}
+			appendMCPResults(working, mcpCalls, results, mcpAssistantMsg)
 
 			updatedPayload, err := json.Marshal(working)
 			if err != nil {

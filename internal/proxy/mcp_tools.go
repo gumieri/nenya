@@ -8,6 +8,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -207,11 +208,25 @@ func bufferStreamResponse(ctx context.Context, r io.Reader) (*bufferedSSE, error
 			"total_lines", totalLines)
 	}
 
-	for idx := 0; idx < len(tcIDAccum); idx++ {
-		id := tcIDAccum[idx]
+	// Collect all indices where a name was accumulated (name is always
+	// present in the first chunk for a given tool call index).
+	indices := make([]int, 0, len(tcNameAccum))
+	for idx := range tcNameAccum {
+		indices = append(indices, idx)
+	}
+	sort.Ints(indices)
+
+	for _, idx := range indices {
 		name := tcNameAccum[idx]
-		if name == "" || id == "" {
+		if name == "" {
 			continue
+		}
+		id := tcIDAccum[idx]
+		if id == "" {
+			// Some providers (e.g. certain Ollama builds) omit the id field.
+			// Generate a stable synthetic id so the round-trip tool_call_id
+			// reference in the result message remains consistent.
+			id = fmt.Sprintf("call_%d", idx)
 		}
 		var args map[string]any
 		if argsBuilder := tcArgsAccum[idx]; argsBuilder != nil {
