@@ -185,6 +185,22 @@ func (t *HTTPTransport) Connect(ctx context.Context) error {
 			endpointURL := parsed.Endpoint
 			if !strings.HasPrefix(endpointURL, "http") {
 				endpointURL = baseURL.Scheme + "://" + baseURL.Host + endpointURL
+			} else {
+				// Validate that the endpoint host matches the configured base URL
+				// to prevent a compromised MCP server from redirecting requests
+				// to an attacker-controlled host (session endpoint hijacking).
+				epURL, err := url.Parse(endpointURL)
+				if err != nil || epURL.Host != baseURL.Host {
+					gotHost := ""
+					if err == nil {
+						gotHost = epURL.Host
+					}
+					t.cfg.Logger.Warn("MCP server sent endpoint with unexpected host, rejecting",
+						"expected_host", baseURL.Host, "got_host", gotHost, "endpoint", endpointURL)
+					sseCancel()
+					resp.Body.Close()
+					return fmt.Errorf("MCP session endpoint host mismatch: expected %s, got %s", baseURL.Host, gotHost)
+				}
 			}
 
 			t.mu.Lock()

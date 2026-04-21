@@ -55,6 +55,18 @@ func TestServeHTTP_Statsz_NoAuth(t *testing.T) {
 	rec := httptest.NewRecorder()
 	p.ServeHTTP(rec, req)
 
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401, got %d", rec.Code)
+	}
+}
+
+func TestServeHTTP_Statsz_ValidAuth(t *testing.T) {
+	p, _ := newTestProxy(t)
+	req := httptest.NewRequest(http.MethodGet, "/statsz", nil)
+	req.Header.Set("Authorization", "Bearer test-token")
+	rec := httptest.NewRecorder()
+	p.ServeHTTP(rec, req)
+
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d", rec.Code)
 	}

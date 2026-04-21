@@ -6,8 +6,8 @@ package tiktoken
 
 import (
 	"bufio"
-	_ "embed"
 	"crypto/sha256"
+	_ "embed"
 	"encoding/base64"
 	"encoding/hex"
 	"io"

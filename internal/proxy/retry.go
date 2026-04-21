@@ -95,11 +95,12 @@ func (p *Proxy) forwardToUpstream(gw *gateway.NenyaGateway,
 	}
 
 	attempt := 0
+retryLoop:
 	for i, target := range targets {
 		if maxRetries > 0 && attempt >= maxRetries {
 			gw.Logger.Warn("max retries reached",
 				"attempt", attempt, "max", maxRetries, "agent", agentName)
-			break
+			break retryLoop
 		}
 
 		workingPayload := make(map[string]interface{})
@@ -121,7 +122,7 @@ func (p *Proxy) forwardToUpstream(gw *gateway.NenyaGateway,
 			action.cancel()
 			if shouldRetry {
 				if maxRetries > 0 && attempt >= maxRetries {
-					break
+					break retryLoop
 				}
 				if retryDelay > 0 {
 					gw.Logger.Info("retrying with parsed delay",
@@ -138,7 +139,7 @@ func (p *Proxy) forwardToUpstream(gw *gateway.NenyaGateway,
 			http.Error(w, "Upstream provider error", action.resp.StatusCode)
 			return
 		case actionStream:
-			p.streamResponse(gw, w, r, target, agentName, action, cacheKey)
+			p.streamResponse(gw, w, r, target, agentName, action, cacheKey, cooldownDuration)
 			return
 		}
 	}
@@ -257,9 +258,13 @@ func (p *Proxy) handleUpstreamError(gw *gateway.NenyaGateway,
 
 	if p.isRetryableStatus(gw, target.Provider, action.resp.StatusCode) {
 		if len(errorBody) > 0 {
+			logBody := pipeline.RedactSecrets(string(errorBody), gw.Config.SecurityFilter.Enabled, gw.SecretPatterns, gw.Config.SecurityFilter.RedactionLabel)
+			if len(logBody) > 512 {
+				logBody = logBody[:512] + "...[truncated]"
+			}
 			gw.Logger.Warn("upstream retryable error",
 				"target", idx+1, "total", len(targets), "model", target.Model,
-				"status", action.resp.StatusCode, "body", string(errorBody))
+				"status", action.resp.StatusCode, "body", logBody)
 		} else {
 			gw.Logger.Warn("retryable error, trying next target",
 				"target", idx+1, "total", len(targets), "model", target.Model, "status", action.resp.StatusCode)
@@ -289,9 +294,10 @@ func (p *Proxy) handleUpstreamError(gw *gateway.NenyaGateway,
 	}
 
 	if isRetryableClientErrorForProvider(action.resp.StatusCode, errorBody, target.Provider) && len(targets) > 1 {
+		logBody := redactForLog(string(errorBody), gw)
 		gw.Logger.Warn("retryable client error from upstream, trying next target",
 			"target", idx+1, "total", len(targets), "model", target.Model,
-			"status", action.resp.StatusCode, "body", string(errorBody))
+			"status", action.resp.StatusCode, "body", logBody)
 		gw.AgentState.RecordFailure(target, cooldownDuration)
 		return true, 0
 	}
@@ -309,9 +315,10 @@ func (p *Proxy) handleUpstreamError(gw *gateway.NenyaGateway,
 	defer action.cancel()
 	if len(targets) > 1 {
 		if len(errorBody) > 0 {
+			logBody := redactForLog(string(errorBody), gw)
 			gw.Logger.Warn("non-retryable upstream error, trying next target",
 				"target", idx+1, "total", len(targets), "model", target.Model,
-				"status", action.resp.StatusCode, "body", string(errorBody))
+				"status", action.resp.StatusCode, "body", logBody)
 		} else {
 			gw.Logger.Warn("non-retryable upstream error (empty body), trying next target",
 				"target", idx+1, "total", len(targets), "model", target.Model, "status", action.resp.StatusCode)
@@ -320,14 +327,25 @@ func (p *Proxy) handleUpstreamError(gw *gateway.NenyaGateway,
 	}
 
 	if len(errorBody) > 0 {
+		logBody := redactForLog(string(errorBody), gw)
 		gw.Logger.Error("non-retryable upstream error, no more targets",
 			"target", idx+1, "total", len(targets), "model", target.Model,
-			"status", action.resp.StatusCode, "body", string(errorBody))
+			"status", action.resp.StatusCode, "body", logBody)
 	} else {
 		gw.Logger.Error("non-retryable upstream error (empty body), no more targets",
 			"target", idx+1, "total", len(targets), "model", target.Model, "status", action.resp.StatusCode)
 	}
 	return false, 0
+}
+
+// redactForLog applies secret redaction and truncation to error body text before
+// writing to logs, preventing upstream error responses from leaking secrets.
+func redactForLog(body string, gw *gateway.NenyaGateway) string {
+	s := pipeline.RedactSecrets(body, gw.Config.SecurityFilter.Enabled, gw.SecretPatterns, gw.Config.SecurityFilter.RedactionLabel)
+	if len(s) > 512 {
+		s = s[:512] + "...[truncated]"
+	}
+	return s
 }
 
 func parseQuotaExhaustion(body []byte) time.Duration {

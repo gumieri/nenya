@@ -32,7 +32,12 @@ func (p *Proxy) Gateway() *gateway.NenyaGateway {
 func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	defer func() {
 		if rec := recover(); rec != nil {
-			p.Gateway().Logger.Error("panic recovered", "err", rec, "stack", string(debug.Stack()))
+			if gw := p.Gateway(); gw != nil {
+				gw.Logger.Error("panic recovered", "err", rec, "stack", string(debug.Stack()))
+				if gw.Metrics != nil {
+					gw.Metrics.RecordPanic()
+				}
+			}
 			http.Error(w, "Internal Server Error", http.StatusInternalServerError)
 		}
 	}()
@@ -40,9 +45,20 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if gw := p.Gateway(); gw != nil {
 		switch {
 		case r.URL.Path == "/healthz":
+			if r.Method != http.MethodGet {
+				http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+				return
+			}
 			infra.ObserveHTTP(gw.Metrics, p.handleHealthz)(w, r)
 			return
 		case r.URL.Path == "/statsz":
+			if r.Method != http.MethodGet {
+				http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+				return
+			}
+			if !p.authenticateRequest(r, w) {
+				return
+			}
 			infra.ObserveHTTP(gw.Metrics, p.handleStats)(w, r)
 			return
 		case r.URL.Path == "/metrics":

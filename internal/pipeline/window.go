@@ -74,7 +74,24 @@ func ApplyWindowCompaction(ctx context.Context, deps WindowDeps, payload map[str
 		return false, nil
 	}
 
-	history := messages[:splitIdx]
+	// Preserve leading system messages verbatim. They carry operator-defined
+	// safety instructions and guardrails that must survive compaction intact.
+	// Only summarize the non-system history between them and the active window.
+	var leadingSystem []interface{}
+	historyStart := 0
+	for historyStart < splitIdx {
+		msg, ok := messages[historyStart].(map[string]interface{})
+		if !ok {
+			break
+		}
+		if role, _ := msg["role"].(string); role != "system" {
+			break
+		}
+		leadingSystem = append(leadingSystem, messages[historyStart])
+		historyStart++
+	}
+
+	history := messages[historyStart:splitIdx]
 	active := messages[splitIdx:]
 
 	historyText := SerializeMessages(history)
@@ -146,7 +163,10 @@ func ApplyWindowCompaction(ctx context.Context, deps WindowDeps, payload map[str
 			len(history), beforeTokens, summary),
 	}
 
-	newMessages := make([]interface{}, 0, 2+len(active))
+	newMessages := make([]interface{}, 0, len(leadingSystem)+2+len(active))
+	// Re-inject preserved operator system messages before the summary so they
+	// are never lost during compaction.
+	newMessages = append(newMessages, leadingSystem...)
 	newMessages = append(newMessages, summaryMsg)
 
 	if len(active) > 0 {

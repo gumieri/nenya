@@ -117,6 +117,35 @@ func (a *AnthropicAdapter) convertOpenAIToAnthropic(openai map[string]interface{
 	}
 
 	if msgs, ok := openai["messages"].([]interface{}); ok {
+		// Extract system messages into Anthropic's native top-level system field.
+		// Converting them to user/assistant pairs wastes tokens, breaks prompt
+		// caching, and reduces instruction-following fidelity.
+		var systemParts []string
+		for _, msgRaw := range msgs {
+			msg, ok := msgRaw.(map[string]interface{})
+			if !ok {
+				continue
+			}
+			if role, _ := msg["role"].(string); role == "system" {
+				switch c := msg["content"].(type) {
+				case string:
+					if c != "" {
+						systemParts = append(systemParts, c)
+					}
+				case []interface{}:
+					for _, partRaw := range c {
+						if part, ok := partRaw.(map[string]interface{}); ok {
+							if t, ok := part["text"].(string); ok && t != "" {
+								systemParts = append(systemParts, t)
+							}
+						}
+					}
+				}
+			}
+		}
+		if len(systemParts) > 0 {
+			anthropic["system"] = strings.Join(systemParts, "\n\n")
+		}
 		anthropic["messages"] = a.convertMessages(msgs)
 	}
 
@@ -159,16 +188,9 @@ func (a *AnthropicAdapter) convertMessages(msgs []interface{}) []interface{} {
 
 		switch role {
 		case "system":
-			if content != nil {
-				result = append(result, map[string]interface{}{
-					"role":    "user",
-					"content": content,
-				})
-				result = append(result, map[string]interface{}{
-					"role":    "assistant",
-					"content": "Understood.",
-				})
-			}
+			// System messages are collected into the top-level system field in
+			// convertOpenAIToAnthropic; skip them in the messages array.
+			continue
 		case "user", "assistant", "tool":
 			anthMsg := map[string]interface{}{
 				"role": role,

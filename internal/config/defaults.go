@@ -35,7 +35,7 @@ func ApplyDefaults(cfg *Config) error {
 	if cfg.Server.MaxBodyBytes == 0 {
 		cfg.Server.MaxBodyBytes = 10 << 20
 	}
-if cfg.Server.UserAgent == "" {
+	if cfg.Server.UserAgent == "" {
 		cfg.Server.UserAgent = "nenya/1.0"
 	}
 	if !cfg.Governance.TPMSet() && cfg.Governance.RatelimitMaxTPM == 0 {
@@ -113,8 +113,8 @@ if cfg.Server.UserAgent == "" {
 	if !cfg.PrefixCache.StableTools && !cfg.PrefixCache.StableWasSet() {
 		cfg.PrefixCache.StableTools = true
 	}
-	if !cfg.PrefixCache.SkipRedactionOnSystem && !cfg.PrefixCache.SkipRedactionWasSet() {
-		cfg.PrefixCache.SkipRedactionOnSystem = true
+	if !cfg.PrefixCache.SkipRedactionWasSet() {
+		cfg.PrefixCache.SkipRedactionOnSystem = false
 	}
 
 	if !cfg.Compaction.JSONMinify && !cfg.Compaction.MinifyWasSet() {

@@ -173,6 +173,12 @@ func TruncateTFIDF(text string, maxSize int, query string, cfg config.Governance
 		return text
 	}
 
+	// Cap query length before tokenization to bound O(n·m) work.
+	const maxQueryRunes = 2000
+	if utf8.RuneCountInString(query) > maxQueryRunes {
+		query = string([]rune(query)[:maxQueryRunes])
+	}
+
 	separator := "\n... [NENYA: TF-IDF PRUNED] ...\n"
 	sepLen := utf8.RuneCountInString(separator)
 	available := maxSize - sepLen
