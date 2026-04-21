@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log/slog"
 	"math/rand"
@@ -77,9 +78,11 @@ func (p *Proxy) forwardToUpstream(gw *gateway.NenyaGateway,
 	maxRetries int,
 	cacheKey string,
 ) {
+	ctxLogger := gw.Logger.With("operation", "forward", "agent", agentName)
+	
 	originalPayload, err := json.Marshal(payload)
 	if err != nil {
-		gw.Logger.Error("failed to marshal original payload for retry loop", "err", err)
+		ctxLogger.Error("failed to marshal original payload for retry loop", "err", err)
 		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
 		return
 	}
@@ -88,7 +91,7 @@ func (p *Proxy) forwardToUpstream(gw *gateway.NenyaGateway,
 		minified := bytes.NewBuffer(make([]byte, 0, len(originalPayload)))
 		err = json.Compact(minified, originalPayload)
 		if err != nil {
-			gw.Logger.Warn("failed to minify JSON payload, using original", "err", err)
+			ctxLogger.Warn("failed to minify JSON payload, using original", "err", err)
 		} else {
 			originalPayload = minified.Bytes()
 		}
@@ -98,14 +101,13 @@ func (p *Proxy) forwardToUpstream(gw *gateway.NenyaGateway,
 retryLoop:
 	for i, target := range targets {
 		if maxRetries > 0 && attempt >= maxRetries {
-			gw.Logger.Warn("max retries reached",
-				"attempt", attempt, "max", maxRetries, "agent", agentName)
+			ctxLogger.Warn("max retries reached", "attempt", attempt, "max", maxRetries)
 			break retryLoop
 		}
 
 		workingPayload := make(map[string]interface{})
 		if err := json.Unmarshal(originalPayload, &workingPayload); err != nil {
-			gw.Logger.Error("failed to unmarshal payload for target",
+			ctxLogger.Error("failed to unmarshal payload for target",
 				"target", i+1, "total", len(targets), "err", err)
 			continue
 		}
@@ -125,12 +127,12 @@ retryLoop:
 					break retryLoop
 				}
 				if retryDelay > 0 {
-					gw.Logger.Info("retrying with parsed delay",
+					ctxLogger.Info("retrying with parsed delay",
 						"model", target.Model, "delay_ms", retryDelay.Milliseconds())
 					waitWithCancel(r.Context(), retryDelay)
 				} else {
 					backoff := calculateBackoff(attempt - 1)
-					gw.Logger.Info("retrying with exponential backoff",
+					ctxLogger.Info("retrying with exponential backoff",
 						"model", target.Model, "attempt", attempt, "delay_ms", backoff.Milliseconds())
 					waitWithCancel(r.Context(), backoff)
 				}
@@ -144,7 +146,7 @@ retryLoop:
 		}
 	}
 
-	gw.Logger.Error("all upstream targets exhausted", "total", len(targets), "attempts", attempt)
+	ctxLogger.Error("all upstream targets exhausted", "total", len(targets), "attempts", attempt)
 	if gw.Metrics != nil && agentName != "" {
 		gw.Metrics.RecordExhausted(agentName)
 	}
@@ -161,6 +163,14 @@ func (p *Proxy) prepareAndSend(gw *gateway.NenyaGateway,
 	tokenCount int,
 	agentName string,
 ) upstreamAction {
+	ctxLogger := gw.Logger.With(
+		"operation", "upstream",
+		"agent", agentName,
+		"provider", target.Provider,
+		"model", target.Model,
+		"target_idx", fmt.Sprintf("%d/%d", idx+1, len(targets)),
+	)
+	
 	gw.Stats.RecordRequest(target.Model, tokenCount)
 	if gw.Metrics != nil {
 		gw.Metrics.RecordTokens("input", target.Model, agentName, target.Provider, tokenCount)
@@ -171,14 +181,12 @@ func (p *Proxy) prepareAndSend(gw *gateway.NenyaGateway,
 		if gw.Metrics != nil {
 			gw.Metrics.RecordRateLimitRejected(infra.ExtractHost(target.URL))
 		}
-		gw.Logger.Warn("target skipped: rate limit exceeded",
-			"target", idx+1, "total", len(targets), "model", target.Model)
+		ctxLogger.Warn("target skipped: rate limit exceeded")
 		return upstreamAction{kind: actionContinue}
 	}
 
 	if target.CoolKey != "" && !gw.AgentState.CB.Allow(target.CoolKey) {
-		gw.Logger.Warn("target skipped: circuit breaker open",
-			"target", idx+1, "total", len(targets), "model", target.Model)
+		ctxLogger.Warn("target skipped: circuit breaker open")
 		return upstreamAction{kind: actionContinue}
 	}
 
@@ -191,15 +199,13 @@ func (p *Proxy) prepareAndSend(gw *gateway.NenyaGateway,
 	}
 	transformedBody, _, err := routing.TransformRequestForUpstream(transformDeps, target.Provider, target.URL, payload, target.Model, target.MaxOutput)
 	if err != nil {
-		gw.Logger.Warn("failed to transform request, using original payload",
-			"target", idx+1, "total", len(targets), "model", target.Model, "err", err)
+		ctxLogger.Warn("failed to transform request, using original payload", "err", err)
 		transformedBody, _ = json.Marshal(payload)
 	}
 
 	req, err := p.buildUpstreamRequest(gw, r.Context(), r.Method, target.URL, transformedBody, target.Provider, r.Header)
 	if err != nil {
-		gw.Logger.Error("failed to create upstream request",
-			"target", idx+1, "total", len(targets), "err", err)
+		ctxLogger.Error("failed to create upstream request", "err", err)
 		return upstreamAction{kind: actionContinue}
 	}
 
@@ -213,11 +219,10 @@ func (p *Proxy) prepareAndSend(gw *gateway.NenyaGateway,
 				debugHeaders[k] = v
 			}
 		}
-		gw.Logger.Debug("forwarding to upstream",
-			"url", target.URL, "target", idx+1, "total", len(targets))
-		gw.Logger.Debug("request headers", "headers", debugHeaders)
+		ctxLogger.Debug("forwarding to upstream", "url", target.URL)
+		ctxLogger.Debug("request headers", "headers", debugHeaders)
 		if len(transformedBody) > 0 && len(transformedBody) < 1000 {
-			gw.Logger.Debug("request body", "body", string(transformedBody))
+			ctxLogger.Debug("request body", "body", string(transformedBody))
 		}
 	}
 
@@ -227,13 +232,11 @@ func (p *Proxy) prepareAndSend(gw *gateway.NenyaGateway,
 	resp, err := gw.Client.Do(req)
 	if err != nil {
 		upstreamCancel()
-		gw.Logger.Warn("target network error",
-			"target", idx+1, "total", len(targets), "model", target.Model, "err", err)
+		ctxLogger.Warn("target network error", "err", err)
 		return upstreamAction{kind: actionContinue}
 	}
 
-	gw.Logger.Info("upstream response",
-		"target", idx+1, "total", len(targets), "model", target.Model, "status", resp.StatusCode)
+	ctxLogger.Info("upstream response", "status", resp.StatusCode)
 
 	if resp.StatusCode >= 400 {
 		gw.Stats.RecordError(target.Model)
@@ -255,6 +258,15 @@ func (p *Proxy) handleUpstreamError(gw *gateway.NenyaGateway,
 	action upstreamAction,
 ) (bool, time.Duration) {
 	errorBody := action.body
+	
+	ctxLogger := gw.Logger.With(
+		"operation", "upstream_error",
+		"agent", agentName,
+		"provider", target.Provider,
+		"model", target.Model,
+		"target_idx", fmt.Sprintf("%d/%d", idx+1, len(targets)),
+		"status", action.resp.StatusCode,
+	)
 
 	if p.isRetryableStatus(gw, target.Provider, action.resp.StatusCode) {
 		if len(errorBody) > 0 {
@@ -262,20 +274,16 @@ func (p *Proxy) handleUpstreamError(gw *gateway.NenyaGateway,
 			if len(logBody) > 512 {
 				logBody = logBody[:512] + "...[truncated]"
 			}
-			gw.Logger.Warn("upstream retryable error",
-				"target", idx+1, "total", len(targets), "model", target.Model,
-				"status", action.resp.StatusCode, "body", logBody)
+			ctxLogger.Warn("upstream retryable error", "body", logBody)
 		} else {
-			gw.Logger.Warn("retryable error, trying next target",
-				"target", idx+1, "total", len(targets), "model", target.Model, "status", action.resp.StatusCode)
+			ctxLogger.Warn("retryable error, trying next target")
 		}
 		effectiveCooldown := cooldownDuration
 		if action.resp.StatusCode == http.StatusTooManyRequests && len(errorBody) > 0 {
 			if quotaCD := parseQuotaExhaustion(errorBody); quotaCD > 0 {
 				if quotaCD > cooldownDuration {
 					effectiveCooldown = quotaCD
-					gw.Logger.Info("quota exhaustion detected, extending cooldown",
-						"model", target.Model, "cooldown_s", effectiveCooldown.Seconds())
+					ctxLogger.Info("quota exhaustion detected, extending cooldown", "cooldown_s", effectiveCooldown.Seconds())
 				}
 			}
 		}
@@ -295,9 +303,7 @@ func (p *Proxy) handleUpstreamError(gw *gateway.NenyaGateway,
 
 	if isRetryableClientErrorForProvider(action.resp.StatusCode, errorBody, target.Provider) && len(targets) > 1 {
 		logBody := redactForLog(string(errorBody), gw)
-		gw.Logger.Warn("retryable client error from upstream, trying next target",
-			"target", idx+1, "total", len(targets), "model", target.Model,
-			"status", action.resp.StatusCode, "body", logBody)
+		ctxLogger.Warn("retryable client error from upstream, trying next target", "body", logBody)
 		gw.AgentState.RecordFailure(target, cooldownDuration)
 		return true, 0
 	}
@@ -305,9 +311,7 @@ func (p *Proxy) handleUpstreamError(gw *gateway.NenyaGateway,
 	a := adapter.ForProvider(target.Provider)
 	errClass := a.NormalizeError(action.resp.StatusCode, errorBody)
 	if (errClass == adapter.ErrorRetryable || errClass == adapter.ErrorQuotaExhausted) && action.resp.StatusCode >= 400 && action.resp.StatusCode < 500 {
-		gw.Logger.Warn("adapter classified client error as retryable, trying next target",
-			"target", idx+1, "total", len(targets), "model", target.Model,
-			"status", action.resp.StatusCode, "error_class", errClass)
+		ctxLogger.Warn("adapter classified client error as retryable, trying next target", "error_class", errClass)
 		gw.AgentState.RecordFailure(target, cooldownDuration)
 		return true, 0
 	}
@@ -316,24 +320,18 @@ func (p *Proxy) handleUpstreamError(gw *gateway.NenyaGateway,
 	if len(targets) > 1 {
 		if len(errorBody) > 0 {
 			logBody := redactForLog(string(errorBody), gw)
-			gw.Logger.Warn("non-retryable upstream error, trying next target",
-				"target", idx+1, "total", len(targets), "model", target.Model,
-				"status", action.resp.StatusCode, "body", logBody)
+			ctxLogger.Warn("non-retryable upstream error, trying next target", "body", logBody)
 		} else {
-			gw.Logger.Warn("non-retryable upstream error (empty body), trying next target",
-				"target", idx+1, "total", len(targets), "model", target.Model, "status", action.resp.StatusCode)
+			ctxLogger.Warn("non-retryable upstream error (empty body), trying next target")
 		}
 		return true, 0
 	}
 
 	if len(errorBody) > 0 {
 		logBody := redactForLog(string(errorBody), gw)
-		gw.Logger.Error("non-retryable upstream error, no more targets",
-			"target", idx+1, "total", len(targets), "model", target.Model,
-			"status", action.resp.StatusCode, "body", logBody)
+		ctxLogger.Error("non-retryable upstream error, no more targets", "body", logBody)
 	} else {
-		gw.Logger.Error("non-retryable upstream error (empty body), no more targets",
-			"target", idx+1, "total", len(targets), "model", target.Model, "status", action.resp.StatusCode)
+		ctxLogger.Error("non-retryable upstream error (empty body), no more targets")
 	}
 	return false, 0
 }

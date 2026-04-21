@@ -113,15 +113,37 @@ func (p *Proxy) authenticateRequest(r *http.Request, w http.ResponseWriter) bool
 		http.Error(w, "Gateway not initialized", http.StatusServiceUnavailable)
 		return false
 	}
+	
+	correlationID := r.Header.Get("X-Request-Id")
+	if correlationID == "" {
+		correlationID = r.Header.Get("X-Correlation-Id")
+	}
+	if correlationID == "" {
+		correlationID = "unknown"
+	}
+	
 	authHeader := r.Header.Get("Authorization")
 	if !strings.HasPrefix(authHeader, "Bearer ") {
-		gw.Logger.Warn("missing or malformed Authorization header")
+		gw.Logger.Warn("missing or malformed Authorization header",
+			"correlation_id", correlationID,
+			"remote_addr", r.RemoteAddr,
+			"user_agent", r.Header.Get("User-Agent"),
+			"auth_header_present", authHeader != "",
+			"auth_header_prefix", func() string {
+				if len(authHeader) > 10 {
+					return authHeader[:10] + "..."
+				}
+				return authHeader
+			}())
 		http.Error(w, "Unauthorized", http.StatusUnauthorized)
 		return false
 	}
 	clientToken := strings.TrimSpace(strings.TrimPrefix(authHeader, "Bearer "))
 	if subtle.ConstantTimeCompare([]byte(clientToken), []byte(gw.Secrets.ClientToken)) != 1 {
-		gw.Logger.Warn("invalid client token")
+		gw.Logger.Warn("invalid client token",
+			"correlation_id", correlationID,
+			"remote_addr", r.RemoteAddr,
+			"user_agent", r.Header.Get("User-Agent"))
 		http.Error(w, "Forbidden", http.StatusForbidden)
 		return false
 	}
