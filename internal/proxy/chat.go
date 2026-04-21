@@ -564,6 +564,7 @@ func (p *Proxy) buildUpstreamRequest(gw *gateway.NenyaGateway, ctx context.Conte
 			req.Header.Set(h, v)
 		}
 	}
+	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept-Encoding", "identity")
 	req.Header.Set("User-Agent", gw.Config.Server.UserAgent)
 	return req, nil

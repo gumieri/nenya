@@ -271,3 +271,124 @@ func TestExtractUsageFromMap_AllZeroUsage(t *testing.T) {
 		t.Fatal("callback should not fire when all usage values are zero")
 	}
 }
+
+func TestNormalizeToolCallIDs_NullID(t *testing.T) {
+	chunk := map[string]interface{}{
+		"choices": []interface{}{
+			map[string]interface{}{
+				"delta": map[string]interface{}{
+					"tool_calls": []interface{}{
+						map[string]interface{}{
+							"index": float64(0),
+							"id":    nil,
+							"function": map[string]interface{}{
+								"name":      "read_file",
+								"arguments": "{}",
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+	if !normalizeToolCallIDs(chunk) {
+		t.Fatal("expected mutation for null id")
+	}
+	choices := chunk["choices"].([]interface{})
+	delta := choices[0].(map[string]interface{})["delta"].(map[string]interface{})
+	tcs := delta["tool_calls"].([]interface{})
+	id := tcs[0].(map[string]interface{})["id"].(string)
+	if id != "call_0" {
+		t.Fatalf("expected id=call_0, got %q", id)
+	}
+}
+
+func TestNormalizeToolCallIDs_NumericID(t *testing.T) {
+	chunk := map[string]interface{}{
+		"choices": []interface{}{
+			map[string]interface{}{
+				"delta": map[string]interface{}{
+					"tool_calls": []interface{}{
+						map[string]interface{}{
+							"index": float64(3),
+							"id":    float64(42),
+							"function": map[string]interface{}{
+								"name":      "search",
+								"arguments": "{}",
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+	if !normalizeToolCallIDs(chunk) {
+		t.Fatal("expected mutation for numeric id")
+	}
+	choices := chunk["choices"].([]interface{})
+	delta := choices[0].(map[string]interface{})["delta"].(map[string]interface{})
+	tcs := delta["tool_calls"].([]interface{})
+	id := tcs[0].(map[string]interface{})["id"].(string)
+	if id != "call_3" {
+		t.Fatalf("expected id=call_3, got %q", id)
+	}
+}
+
+func TestNormalizeToolCallIDs_StringIDUnchanged(t *testing.T) {
+	chunk := map[string]interface{}{
+		"choices": []interface{}{
+			map[string]interface{}{
+				"delta": map[string]interface{}{
+					"tool_calls": []interface{}{
+						map[string]interface{}{
+							"index": float64(0),
+							"id":    "call_abc123",
+							"function": map[string]interface{}{
+								"name":      "read_file",
+								"arguments": "{}",
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+	if normalizeToolCallIDs(chunk) {
+		t.Fatal("expected no mutation for valid string id")
+	}
+}
+
+func TestNormalizeToolCallIDs_MissingToolCalls(t *testing.T) {
+	chunk := map[string]interface{}{
+		"choices": []interface{}{
+			map[string]interface{}{
+				"delta": map[string]interface{}{
+					"content": "hello",
+				},
+			},
+		},
+	}
+	if normalizeToolCallIDs(chunk) {
+		t.Fatal("expected no mutation when no tool_calls")
+	}
+}
+
+func TestSSETransformingReader_ToolCallIDNormalized(t *testing.T) {
+	input := `data: {"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"name":"read_file","arguments":""}}]}}]}
+data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":null,"function":{"name":"read_file","arguments":"{}"}}]}}]}
+data: [DONE]
+`
+	reader := NewSSETransformingReader(strings.NewReader(input), nil)
+	var buf bytes.Buffer
+	_, err := io.Copy(&buf, reader)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	output := buf.String()
+	if strings.Contains(output, `"id":null`) {
+		t.Fatalf("null tool call id should be normalized, got: %s", output)
+	}
+	if !strings.Contains(output, `"id":"call_0"`) {
+		t.Fatalf("expected synthetic id call_0, got: %s", output)
+	}
+}
