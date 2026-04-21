@@ -62,7 +62,6 @@ systemctl reload nenya
 |-------|------|---------|-------------|
 | `listen_addr` | string | `":8080"` | Bind address and port |
 | `max_body_bytes` | int | `10485760` (10 MB) | Maximum incoming request body size |
-| `token_ratio` | float | `4.0` | Characters (runes) per token for estimation. Used to approximate token counts without a tokenizer. Adjust based on your model's tokenization. |
 
 ## `governance`
 

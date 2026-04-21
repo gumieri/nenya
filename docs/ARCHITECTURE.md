@@ -16,7 +16,7 @@ Each layer may only import from layers to its left. This prevents circular depen
 | `internal/config/` | Configuration types, JSON loading, model/provider registries, defaults, validation, engine reference resolution |
 | `internal/infra/` | Structured logging, thought signature cache, Prometheus metrics, rate limiter, usage tracker, response cache |
 | `internal/stream/` | SSE transforming reader, sliding window stream filter |
-| `internal/pipeline/` | Client classification, code fence detection, tier-0 regex secret redaction (code-span-aware for IDEs), TF-IDF relevance-scored truncation, middle-out truncation (code-boundary-aware for IDEs), text compaction, stale tool call pruning, thought pruning, context window compaction, engine calls with fallback chains |
+| `internal/pipeline/` | Client classification, code fence detection, tier-0 regex secret redaction, Shannon entropy redaction, TF-IDF relevance-scored truncation, middle-out truncation (code-boundary-aware for IDEs), text compaction, stale tool call pruning, thought pruning, context window compaction, engine calls with fallback chains |
 | `internal/resilience/` | Circuit breaker with Closed/Open/HalfOpen states, exponential backoff |
 | `internal/providers/` | Provider capability specs (stream_options, auto_tool_choice, content_arrays), per-provider sanitization, response transformers |
 | `internal/adapter/` | Provider Adapter pattern: request mutation, auth injection, response mutation, error classification |
@@ -44,7 +44,7 @@ Client Request
   │   │   └─ Inject system prompt instructing LLM to use MCP tools for memory retrieval
   │   ├─ Content pipeline (best-effort — failures logged, never block request):
   │   │   ├─ Prefix cache optimizations
-  │   │   ├─ Tier-0 regex secret redaction (code-span-aware for IDE clients)
+  │   │   ├─ Tier-0 regex secret redaction + Shannon entropy redaction (applied unconditionally)
   │   │   ├─ Text compaction (skipped for IDE clients)
   │   │   ├─ Stale tool call pruning (if enabled, skipped for IDE clients)
   │   │   ├─ Thought pruning (if enabled — strip <think.../think> reasoning blocks and reasoning_content field)
@@ -243,7 +243,7 @@ Nenya detects IDE clients (Cursor, OpenCode) via `User-Agent` header inspection 
 
 | Stage | Non-IDE Clients | IDE Clients |
 |-------|----------------|-------------|
-| **Secret redaction** | Regex on entire text | `RedactSecretsPreservingCodeSpans` — skips markdown code fences, redacts prose only |
+| **Secret redaction** | Regex on entire text | Same — redacts unconditionally including inside code fences |
 | **Text compaction** | Collapse blank lines, trim whitespace | **Skipped entirely** — preserves whitespace and line references |
 | **Tool call pruning** | Compact old assistant+tool pairs | **Skipped entirely** — preserves full tool context for IDE agents |
 | **Thought pruning** | Strip `<think.../think>` reasoning blocks + `reasoning_content` field | Same — reasoning tokens stripped from assistant history |
@@ -253,7 +253,7 @@ Nenya detects IDE clients (Cursor, OpenCode) via `User-Agent` header inspection 
 
 ### Code Fence Detection (`internal/pipeline/code_detect.go`)
 
-`DetectCodeFences(text)` returns `[]CodeSpan{Start, End, Language}` for markdown fenced code blocks (`` ``` ``). Used by the code-aware redaction and summarization to identify regions that must not be modified.
+`DetectCodeFences(text)` returns `[]CodeSpan{Start, End, Language}` for markdown fenced code blocks (`` ``` ``). Used by code-boundary-aware truncation and summarization to avoid cutting inside code blocks.
 
 ### Structured Content Handling (`internal/gateway/gateway.go`)
 
