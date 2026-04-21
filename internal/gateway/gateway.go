@@ -9,7 +9,6 @@ import (
 	"regexp"
 	"strings"
 	"time"
-	"unicode/utf8"
 
 	"nenya/internal/adapter"
 	"nenya/internal/config"
@@ -17,6 +16,7 @@ import (
 	"nenya/internal/mcp"
 	"nenya/internal/pipeline"
 	"nenya/internal/routing"
+	"nenya/internal/tiktoken"
 )
 
 type NenyaGateway struct {
@@ -164,11 +164,7 @@ func (g *NenyaGateway) InitMetrics() {
 }
 
 func (g *NenyaGateway) CountTokens(text string) int {
-	ratio := g.Config.Server.TokenRatio
-	if ratio <= 0 {
-		ratio = 4.0
-	}
-	return int(float64(utf8.RuneCountInString(text)) / ratio)
+	return tiktoken.CountTokens(text)
 }
 
 func (g *NenyaGateway) CountRequestTokens(payload map[string]interface{}) int {

@@ -23,9 +23,6 @@ func TestApplyDefaultsServer(t *testing.T) {
 				if c.Server.MaxBodyBytes != 10<<20 {
 					t.Errorf("MaxBodyBytes: got %d", c.Server.MaxBodyBytes)
 				}
-				if c.Server.TokenRatio != 4.0 {
-					t.Errorf("TokenRatio: got %f", c.Server.TokenRatio)
-				}
 			},
 		},
 		{
@@ -34,7 +31,6 @@ func TestApplyDefaultsServer(t *testing.T) {
 				Server: ServerConfig{
 					ListenAddr:   ":9090",
 					MaxBodyBytes: 1 << 20,
-					TokenRatio:   2.5,
 				},
 			},
 			check: func(t *testing.T, c *Config) {
@@ -43,9 +39,6 @@ func TestApplyDefaultsServer(t *testing.T) {
 				}
 				if c.Server.MaxBodyBytes != 1<<20 {
 					t.Errorf("MaxBodyBytes: got %d", c.Server.MaxBodyBytes)
-				}
-				if c.Server.TokenRatio != 2.5 {
-					t.Errorf("TokenRatio: got %f", c.Server.TokenRatio)
 				}
 			},
 		},

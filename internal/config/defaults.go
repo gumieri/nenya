@@ -35,10 +35,7 @@ func ApplyDefaults(cfg *Config) error {
 	if cfg.Server.MaxBodyBytes == 0 {
 		cfg.Server.MaxBodyBytes = 10 << 20
 	}
-	if cfg.Server.TokenRatio == 0 {
-		cfg.Server.TokenRatio = 4.0
-	}
-	if cfg.Server.UserAgent == "" {
+if cfg.Server.UserAgent == "" {
 		cfg.Server.UserAgent = "nenya/1.0"
 	}
 	if !cfg.Governance.TPMSet() && cfg.Governance.RatelimitMaxTPM == 0 {

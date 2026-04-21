@@ -99,8 +99,7 @@ type Config struct {
 type ServerConfig struct {
 	ListenAddr   string  `json:"listen_addr"`
 	MaxBodyBytes int64   `json:"max_body_bytes"`
-	TokenRatio   float64 `json:"token_ratio"`
-	UserAgent    string  `json:"user_agent"`
+UserAgent    string  `json:"user_agent"`
 }
 
 type GovernanceConfig struct {
