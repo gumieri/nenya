@@ -139,34 +139,6 @@ func (f *EntropyFilter) RedactHighEntropy(text string, label string) string {
 	return result.String()
 }
 
-func (f *EntropyFilter) RedactHighEntropyPreservingCodeSpans(text string, codeSpans []CodeSpan, label string) string {
-	if len(text) == 0 {
-		return text
-	}
-
-	if len(codeSpans) == 0 {
-		return f.RedactHighEntropy(text, label)
-	}
-
-	var result strings.Builder
-	lastEnd := 0
-
-	for _, span := range codeSpans {
-		if span.Start > lastEnd {
-			prose := text[lastEnd:span.Start]
-			result.WriteString(f.RedactHighEntropy(prose, label))
-		}
-		result.WriteString(text[span.Start:span.End])
-		lastEnd = span.End
-	}
-
-	if lastEnd < len(text) {
-		result.WriteString(f.RedactHighEntropy(text[lastEnd:], label))
-	}
-
-	return result.String()
-}
-
 func hasRepeatedChars(token string) bool {
 	if len(token) < 10 {
 		return false

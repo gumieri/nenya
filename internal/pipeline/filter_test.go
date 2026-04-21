@@ -155,80 +155,32 @@ func TestTruncateMiddleOut(t *testing.T) {
 	}
 }
 
-func TestRedactSecretsPreservingCodeSpans(t *testing.T) {
+func TestRedactSecrets_CodeFenceNotBypassed(t *testing.T) {
 	awsKey := regexp.MustCompile(`AKIA[0-9A-Z]{16}`)
 	label := "[REDACTED]"
 
 	tests := []struct {
-		name     string
-		text     string
-		enabled  bool
-		patterns []*regexp.Regexp
-		want     string
+		name string
+		text string
+		want string
 	}{
 		{
-			name:     "disabled returns original",
-			text:     "key=AKIAIOSFODNN7EXAMPLE",
-			enabled:  false,
-			patterns: []*regexp.Regexp{awsKey},
-			want:     "key=AKIAIOSFODNN7EXAMPLE",
+			name: "secret inside code fence is redacted",
+			text: "Here is the code:\n```go\nvar key = \"AKIAIOSFODNN7EXAMPLE\"\n```\nDone",
+			want: "Here is the code:\n```go\nvar key = \"[REDACTED]\"\n```\nDone",
 		},
 		{
-			name:     "secret in prose is redacted",
-			text:     "Use key AKIAIOSFODNN7EXAMPLE for auth",
-			enabled:  true,
-			patterns: []*regexp.Regexp{awsKey},
-			want:     "Use key [REDACTED] for auth",
-		},
-		{
-			name:     "secret inside code fence preserved",
-			text:     "Here is the code:\n```go\nvar key = \"AKIAIOSFODNN7EXAMPLE\"\n```\nDone",
-			enabled:  true,
-			patterns: []*regexp.Regexp{awsKey},
-			want:     "Here is the code:\n```go\nvar key = \"AKIAIOSFODNN7EXAMPLE\"\n```\nDone",
-		},
-		{
-			name:     "secret in prose before code fence redacted",
-			text:     "The key AKIAIOSFODNN7EXAMPLE is used:\n```go\nfmt.Println(\"hello\")\n```",
-			enabled:  true,
-			patterns: []*regexp.Regexp{awsKey},
-			want:     "The key [REDACTED] is used:\n```go\nfmt.Println(\"hello\")\n```",
-		},
-		{
-			name:     "secret in prose after code fence redacted",
-			text:     "```go\nfmt.Println()\n```\nThen use AKIAIOSFODNN7EXAMPLE",
-			enabled:  true,
-			patterns: []*regexp.Regexp{awsKey},
-			want:     "```go\nfmt.Println()\n```\nThen use [REDACTED]",
-		},
-		{
-			name:     "secret in prose between two code fences redacted",
-			text:     "```go\na\n```\nkey=AKIAIOSFODNN7EXAMPLE\n```js\nb\n```",
-			enabled:  true,
-			patterns: []*regexp.Regexp{awsKey},
-			want:     "```go\na\n```\nkey=[REDACTED]\n```js\nb\n```",
-		},
-		{
-			name:     "no code fences falls back to normal redaction",
-			text:     "key=AKIAIOSFODNN7EXAMPLE no fences here",
-			enabled:  true,
-			patterns: []*regexp.Regexp{awsKey},
-			want:     "key=[REDACTED] no fences here",
-		},
-		{
-			name:     "empty patterns returns original even with fences",
-			text:     "```go\ncode\n```\nAKIAIOSFODNN7EXAMPLE",
-			enabled:  true,
-			patterns: []*regexp.Regexp{},
-			want:     "```go\ncode\n```\nAKIAIOSFODNN7EXAMPLE",
+			name: "secret in prose before code fence redacted",
+			text: "The key AKIAIOSFODNN7EXAMPLE is used:\n```go\nfmt.Println(\"hello\")\n```",
+			want: "The key [REDACTED] is used:\n```go\nfmt.Println(\"hello\")\n```",
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := RedactSecretsPreservingCodeSpans(tt.text, tt.enabled, tt.patterns, label)
+			got := RedactSecrets(tt.text, true, []*regexp.Regexp{awsKey}, label)
 			if got != tt.want {
-				t.Errorf("RedactSecretsPreservingCodeSpans() =\n got:  %q\n want: %q", got, tt.want)
+				t.Errorf("RedactSecrets() =\n got:  %q\n want: %q", got, tt.want)
 			}
 		})
 	}

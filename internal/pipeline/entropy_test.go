@@ -82,32 +82,15 @@ func TestEntropyRedaction_ShortToken(t *testing.T) {
 	}
 }
 
-func TestEntropyRedaction_CodeSpanPreservation(t *testing.T) {
+func TestEntropyRedaction_CodeSpanIsRedacted(t *testing.T) {
 	f := NewEntropyFilter(4.5, 20)
 	label := "[REDACTED]"
 
 	input := "before\n```\nxJ3kL9mN2pQ8rS5vT1wA7yB4cF6hD0eG2iK\n```\nafter"
-	spans := DetectCodeFences(input)
-	got := f.RedactHighEntropyPreservingCodeSpans(input, spans, label)
-
-	if !contains(got, "xJ3kL9mN2pQ8rS5vT1wA7yB4cF6hD0eG2iK") {
-		t.Errorf("expected code span content preserved, got %q", got)
-	}
-}
-
-func TestEntropyRedaction_CodeSpanRedactsProse(t *testing.T) {
-	f := NewEntropyFilter(4.5, 20)
-	label := "[REDACTED]"
-
-	input := "prose xJ3kL9mN2pQ8rS5vT1wA7yB4cF6hD0eG2iK more\n```\ncode_here\n```\nend"
-	spans := DetectCodeFences(input)
-	got := f.RedactHighEntropyPreservingCodeSpans(input, spans, label)
+	got := f.RedactHighEntropy(input, label)
 
 	if contains(got, "xJ3kL9mN2pQ8rS5vT1wA7yB4cF6hD0eG2iK") {
-		t.Errorf("expected prose token to be redacted, got %q", got)
-	}
-	if !contains(got, "code_here") {
-		t.Errorf("expected code span content preserved, got %q", got)
+		t.Errorf("expected code span secret to be redacted, got %q", got)
 	}
 }
 

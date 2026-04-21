@@ -184,12 +184,7 @@ func (p *Proxy) applyContentPipeline(gw *gateway.NenyaGateway, ctx context.Conte
 		if text == "" {
 			continue
 		}
-		var redacted string
-		if profile.IsIDE {
-			redacted = pipeline.RedactSecretsPreservingCodeSpans(text, gw.Config.SecurityFilter.Enabled, gw.SecretPatterns, gw.Config.SecurityFilter.RedactionLabel)
-		} else {
-			redacted = pipeline.RedactSecrets(text, gw.Config.SecurityFilter.Enabled, gw.SecretPatterns, gw.Config.SecurityFilter.RedactionLabel)
-		}
+		redacted := pipeline.RedactSecrets(text, gw.Config.SecurityFilter.Enabled, gw.SecretPatterns, gw.Config.SecurityFilter.RedactionLabel)
 		if redacted != text {
 			msgNode["content"] = redacted
 			anyRedacted = true
@@ -215,14 +210,7 @@ func (p *Proxy) applyContentPipeline(gw *gateway.NenyaGateway, ctx context.Conte
 				continue
 			}
 
-			var redacted string
-			if profile.IsIDE {
-				redacted = gw.EntropyFilter.RedactHighEntropyPreservingCodeSpans(
-					text, pipeline.DetectCodeFences(text), gw.Config.SecurityFilter.RedactionLabel,
-				)
-			} else {
-				redacted = gw.EntropyFilter.RedactHighEntropy(text, gw.Config.SecurityFilter.RedactionLabel)
-			}
+			redacted := gw.EntropyFilter.RedactHighEntropy(text, gw.Config.SecurityFilter.RedactionLabel)
 			if redacted != text {
 				msgNode["content"] = redacted
 				anyRedacted = true
