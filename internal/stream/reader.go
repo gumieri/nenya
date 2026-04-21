@@ -174,7 +174,7 @@ func (r *SSETransformingReader) transformLine(line []byte) []byte {
 		}
 
 		if parsed != nil {
-			if normalizeToolCallIDs(parsed) {
+			if normalizeToolCalls(parsed) {
 				if out, err := json.Marshal(parsed); err == nil {
 					data = out
 				}
@@ -257,7 +257,7 @@ func ToInt(v interface{}) int {
 	}
 }
 
-func normalizeToolCallIDs(chunk map[string]interface{}) bool {
+func normalizeToolCalls(chunk map[string]interface{}) bool {
 	choices, ok := chunk["choices"].([]interface{})
 	if !ok {
 		return false
@@ -276,6 +276,7 @@ func normalizeToolCallIDs(chunk map[string]interface{}) bool {
 		if !ok {
 			continue
 		}
+		keep := make([]interface{}, 0, len(tcs))
 		for _, tcRaw := range tcs {
 			tc, ok := tcRaw.(map[string]interface{})
 			if !ok {
@@ -285,13 +286,36 @@ func normalizeToolCallIDs(chunk map[string]interface{}) bool {
 			id := tc["id"]
 			switch id.(type) {
 			case string:
-				continue
 			case nil:
 				tc["id"] = fmt.Sprintf("call_%d", idx)
 				mutated = true
 			default:
 				tc["id"] = fmt.Sprintf("call_%d", idx)
 				mutated = true
+			}
+			fn, hasFn := tc["function"]
+			if !hasFn || fn == nil {
+				continue
+			}
+			fnMap, ok := fn.(map[string]interface{})
+			if !ok {
+				continue
+			}
+			fnName, hasFnName := fnMap["name"]
+			fnArgs, hasFnArgs := fnMap["arguments"]
+			if !hasFnName || fnName == nil {
+				if !hasFnArgs || fnArgs == nil || fnArgs == "" {
+					continue
+				}
+			}
+			keep = append(keep, tc)
+		}
+		if len(keep) != len(tcs) {
+			mutated = true
+			if len(keep) == 0 {
+				delete(delta, "tool_calls")
+			} else {
+				delta["tool_calls"] = keep
 			}
 		}
 	}
