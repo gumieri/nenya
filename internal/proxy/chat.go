@@ -902,7 +902,7 @@ func (p *Proxy) forwardToUpstreamWithMCP(gw *gateway.NenyaGateway,
 				"iteration", iteration+1,
 				"agent", agentName)
 
-			results := executeMCPCalls(r.Context(), mcpCalls, gw)
+			results := executeMCPCalls(r.Context(), mcpCalls, gw, agentName)
 			// Build an assistant message that only lists the MCP calls being
 			// handled. Using buf.assistantMessage (which contains ALL calls)
 			// would create orphaned tool_call references if nonMcpCalls is

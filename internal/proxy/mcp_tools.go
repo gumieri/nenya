@@ -44,6 +44,11 @@ func replayBufferedResponse(w http.ResponseWriter, buf *bufferedSSE, logger *slo
 		return
 	}
 
+	logger.Info("replaying buffered SSE response", 
+		"has_content", buf.hasContent,
+		"finish_reason", buf.finishReason,
+		"raw_bytes_len", len(buf.rawBytes))
+
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.WriteHeader(http.StatusOK)
@@ -295,7 +300,7 @@ func partitionMCPToolCalls(calls []mcpToolCall, toolIndex *mcp.ToolRegistry) (mc
 	return
 }
 
-func executeMCPCalls(ctx context.Context, calls []mcpToolCall, gw *gateway.NenyaGateway) []*mcp.CallToolResult {
+func executeMCPCalls(ctx context.Context, calls []mcpToolCall, gw *gateway.NenyaGateway, agentName string) []*mcp.CallToolResult {
 	if len(calls) == 0 {
 		return nil
 	}
@@ -312,31 +317,42 @@ func executeMCPCalls(ctx context.Context, calls []mcpToolCall, gw *gateway.Nenya
 			if logger == nil {
 				logger = slog.New(slog.NewTextHandler(io.Discard, nil))
 			}
+			
+			ctxLogger := logger.With(
+				"mcp_operation", "tool_call",
+				"agent", agentName,
+				"mcp_call_id", c.ID,
+			)
 
 			start := time.Now()
 
 			route, ok := gw.MCPToolIndex.Lookup(c.Name)
 			if !ok {
-				logger.Warn("MCP tool call failed: unknown tool", "tool", c.Name)
+				ctxLogger.Warn("MCP tool call failed: unknown tool", "tool", c.Name)
 				results[idx] = &mcp.CallToolResult{
 					Content: []mcp.ContentBlock{{Type: "text", Text: fmt.Sprintf("unknown MCP tool: %s", c.Name)}},
 					IsError: true,
 				}
 				if gw.Metrics != nil {
-					gw.Metrics.RecordMCPToolCall("unknown", c.Name, "", time.Since(start), fmt.Errorf("unknown tool"))
+					gw.Metrics.RecordMCPToolCall("unknown", c.Name, agentName, time.Since(start), fmt.Errorf("unknown tool"))
 				}
 				return
 			}
 
+			ctxLogger = ctxLogger.With(
+				"mcp_server", route.ServerName,
+				"mcp_tool", route.MCPToolName,
+			)
+
 			client := gw.MCPClients[route.ServerName]
 			if client == nil {
-				logger.Warn("MCP tool call failed: server not available", "server", route.ServerName, "tool", c.Name)
+				ctxLogger.Warn("MCP tool call failed: server not available")
 				results[idx] = &mcp.CallToolResult{
 					Content: []mcp.ContentBlock{{Type: "text", Text: fmt.Sprintf("MCP server not available: %s", route.ServerName)}},
 					IsError: true,
 				}
 				if gw.Metrics != nil {
-					gw.Metrics.RecordMCPToolCall(route.ServerName, c.Name, "", time.Since(start), fmt.Errorf("server not available"))
+					gw.Metrics.RecordMCPToolCall(route.ServerName, c.Name, agentName, time.Since(start), fmt.Errorf("server not available"))
 				}
 				return
 			}
@@ -347,7 +363,9 @@ func executeMCPCalls(ctx context.Context, calls []mcpToolCall, gw *gateway.Nenya
 			result, err := client.CallTool(toolCtx, route.MCPToolName, c.Arguments)
 			duration := time.Since(start)
 			if err != nil {
-				logger.Warn("MCP tool call failed", "server", route.ServerName, "tool", route.MCPToolName, "err", err, "duration_ms", duration.Milliseconds())
+				ctxLogger.Warn("MCP tool call failed", 
+					"err", err, 
+					"duration_ms", duration.Milliseconds())
 				results[idx] = &mcp.CallToolResult{
 					Content: []mcp.ContentBlock{{Type: "text", Text: fmt.Sprintf("MCP tool call failed: %v", err)}},
 					IsError: true,
@@ -359,11 +377,13 @@ func executeMCPCalls(ctx context.Context, calls []mcpToolCall, gw *gateway.Nenya
 					if result != nil {
 						textLen = len(result.Text())
 					}
-					logger.Debug("MCP tool call completed", "server", route.ServerName, "tool", route.MCPToolName, "duration_ms", duration.Milliseconds(), "result_bytes", textLen)
+					ctxLogger.Debug("MCP tool call completed",
+						"duration_ms", duration.Milliseconds(), 
+						"result_bytes", textLen)
 				}
 
 				if gw.Metrics != nil {
-					gw.Metrics.RecordMCPToolCall(route.ServerName, route.MCPToolName, "", duration, err)
+					gw.Metrics.RecordMCPToolCall(route.ServerName, route.MCPToolName, agentName, duration, err)
 				}
 			}
 		}(i, call)
