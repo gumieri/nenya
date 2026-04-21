@@ -91,10 +91,7 @@ func mergeConfig(base, overlay *Config) {
 	if overlay.Server.MaxBodyBytes != 0 {
 		base.Server.MaxBodyBytes = overlay.Server.MaxBodyBytes
 	}
-	if overlay.Server.TokenRatio != 0 {
-		base.Server.TokenRatio = overlay.Server.TokenRatio
-	}
-	if overlay.Server.UserAgent != "" {
+if overlay.Server.UserAgent != "" {
 		base.Server.UserAgent = overlay.Server.UserAgent
 	}
 

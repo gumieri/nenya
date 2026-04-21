@@ -124,12 +124,8 @@ func (p *Proxy) handleChatCompletions(gw *gateway.NenyaGateway, w http.ResponseW
 			if len(targets) > 0 {
 				primaryTarget := targets[0]
 				if primaryTarget.MaxContext > 0 {
-					tokenRatio := gw.Config.Server.TokenRatio
-					if tokenRatio == 0 {
-						tokenRatio = 4.0
-					}
-					softLimit = int(float64(primaryTarget.MaxContext) / tokenRatio * 0.125)
-					hardLimit = int(float64(primaryTarget.MaxContext) / tokenRatio * 0.75)
+					softLimit = int(float64(primaryTarget.MaxContext) * 0.125)
+					hardLimit = int(float64(primaryTarget.MaxContext) * 0.75)
 				}
 			}
 

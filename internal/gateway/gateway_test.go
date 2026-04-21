@@ -109,36 +109,21 @@ func TestNew_StatsInitialized(t *testing.T) {
 	}
 }
 
-func TestCountTokens_DefaultRatio(t *testing.T) {
-	cfg := testConfig()
-	cfg.Server.TokenRatio = 4.0
-	gw := New(cfg, testSecrets(), testLogger())
+func TestCountTokens_HelloWorld(t *testing.T) {
+	gw := New(testConfig(), testSecrets(), testLogger())
 
 	tokens := gw.CountTokens("hello world")
 	if tokens != 2 {
-		t.Errorf("expected 2 tokens for 'hello world' (11 chars / 4.0), got %d", tokens)
+		t.Errorf("expected 2 tokens for 'hello world', got %d", tokens)
 	}
 }
 
-func TestCountTokens_CustomRatio(t *testing.T) {
-	cfg := testConfig()
-	cfg.Server.TokenRatio = 2.0
-	gw := New(cfg, testSecrets(), testLogger())
+func TestCountTokens_Contraction(t *testing.T) {
+	gw := New(testConfig(), testSecrets(), testLogger())
 
-	tokens := gw.CountTokens("hello world")
-	if tokens != 5 {
-		t.Errorf("expected 5 tokens for 'hello world' (11 chars / 2.0), got %d", tokens)
-	}
-}
-
-func TestCountTokens_ZeroRatioFallback(t *testing.T) {
-	cfg := testConfig()
-	cfg.Server.TokenRatio = 0
-	gw := New(cfg, testSecrets(), testLogger())
-
-	tokens := gw.CountTokens("hello world")
-	if tokens != 2 {
-		t.Errorf("expected 2 tokens with zero ratio fallback to 4.0, got %d", tokens)
+	tokens := gw.CountTokens("it's a test")
+	if tokens != 4 {
+		t.Errorf("expected 4 tokens for \"it's a test\", got %d", tokens)
 	}
 }
 
@@ -152,14 +137,11 @@ func TestCountTokens_EmptyString(t *testing.T) {
 }
 
 func TestCountTokens_Unicode(t *testing.T) {
-	cfg := testConfig()
-	cfg.Server.TokenRatio = 1.0
-	gw := New(cfg, testSecrets(), testLogger())
+	gw := New(testConfig(), testSecrets(), testLogger())
 
-	text := "こんにちは世界"
-	tokens := gw.CountTokens(text)
-	if tokens != 7 {
-		t.Errorf("expected 7 tokens for 7 runes with ratio 1.0, got %d", tokens)
+	tokens := gw.CountTokens("こんにちは世界")
+	if tokens != 4 {
+		t.Errorf("expected 4 tokens for \"こんにちは世界\", got %d", tokens)
 	}
 }
 
