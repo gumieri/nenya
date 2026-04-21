@@ -79,7 +79,7 @@ func (p *Proxy) forwardToUpstream(gw *gateway.NenyaGateway,
 	cacheKey string,
 ) {
 	ctxLogger := gw.Logger.With("operation", "forward", "agent", agentName)
-	
+
 	originalPayload, err := json.Marshal(payload)
 	if err != nil {
 		ctxLogger.Error("failed to marshal original payload for retry loop", "err", err)
@@ -170,7 +170,7 @@ func (p *Proxy) prepareAndSend(gw *gateway.NenyaGateway,
 		"model", target.Model,
 		"target_idx", fmt.Sprintf("%d/%d", idx+1, len(targets)),
 	)
-	
+
 	gw.Stats.RecordRequest(target.Model, tokenCount)
 	if gw.Metrics != nil {
 		gw.Metrics.RecordTokens("input", target.Model, agentName, target.Provider, tokenCount)
@@ -258,7 +258,7 @@ func (p *Proxy) handleUpstreamError(gw *gateway.NenyaGateway,
 	action upstreamAction,
 ) (bool, time.Duration) {
 	errorBody := action.body
-	
+
 	ctxLogger := gw.Logger.With(
 		"operation", "upstream_error",
 		"agent", agentName,
@@ -408,6 +408,9 @@ var commonRetryablePatterns = []string{
 	"enable-auto-tool-choice",
 	"tool_call_parser",
 	"valid string",
+	"resource_exhausted",
+	"quota exceeded",
+	"quota_exceeded",
 }
 
 var anthropicRetryablePatterns = []string{
@@ -417,10 +420,8 @@ var anthropicRetryablePatterns = []string{
 }
 
 var geminiRetryablePatterns = []string{
-	"resource_exhausted",
 	"the response was blocked",
 	"content has no parts",
-	"quota exceeded",
 }
 
 func isRetryableClientErrorForProvider(statusCode int, body []byte, provider string) bool {

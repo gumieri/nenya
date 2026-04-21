@@ -400,8 +400,8 @@ func TestNormalizeToolCalls_NullFunction(t *testing.T) {
 				"delta": map[string]interface{}{
 					"tool_calls": []interface{}{
 						map[string]interface{}{
-							"index": float64(0),
-							"id":    "call_0",
+							"index":    float64(0),
+							"id":       "call_0",
 							"function": nil,
 						},
 						map[string]interface{}{
@@ -501,8 +501,8 @@ func TestNormalizeToolCalls_MixedValidInvalid(t *testing.T) {
 				"delta": map[string]interface{}{
 					"tool_calls": []interface{}{
 						map[string]interface{}{
-							"index": float64(0),
-							"id":    "call_0",
+							"index":    float64(0),
+							"id":       "call_0",
 							"function": nil,
 						},
 						map[string]interface{}{

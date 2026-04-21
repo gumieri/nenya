@@ -44,7 +44,7 @@ func replayBufferedResponse(w http.ResponseWriter, buf *bufferedSSE, logger *slo
 		return
 	}
 
-	logger.Info("replaying buffered SSE response", 
+	logger.Info("replaying buffered SSE response",
 		"has_content", buf.hasContent,
 		"finish_reason", buf.finishReason,
 		"raw_bytes_len", len(buf.rawBytes))
@@ -317,7 +317,7 @@ func executeMCPCalls(ctx context.Context, calls []mcpToolCall, gw *gateway.Nenya
 			if logger == nil {
 				logger = slog.New(slog.NewTextHandler(io.Discard, nil))
 			}
-			
+
 			ctxLogger := logger.With(
 				"mcp_operation", "tool_call",
 				"agent", agentName,
@@ -363,8 +363,8 @@ func executeMCPCalls(ctx context.Context, calls []mcpToolCall, gw *gateway.Nenya
 			result, err := client.CallTool(toolCtx, route.MCPToolName, c.Arguments)
 			duration := time.Since(start)
 			if err != nil {
-				ctxLogger.Warn("MCP tool call failed", 
-					"err", err, 
+				ctxLogger.Warn("MCP tool call failed",
+					"err", err,
 					"duration_ms", duration.Milliseconds())
 				results[idx] = &mcp.CallToolResult{
 					Content: []mcp.ContentBlock{{Type: "text", Text: fmt.Sprintf("MCP tool call failed: %v", err)}},
@@ -373,17 +373,14 @@ func executeMCPCalls(ctx context.Context, calls []mcpToolCall, gw *gateway.Nenya
 			} else {
 				results[idx] = result
 				if gw.Metrics != nil {
+					gw.Metrics.RecordMCPToolCall(route.ServerName, route.MCPToolName, agentName, duration, err)
 					textLen := 0
 					if result != nil {
 						textLen = len(result.Text())
 					}
 					ctxLogger.Debug("MCP tool call completed",
-						"duration_ms", duration.Milliseconds(), 
+						"duration_ms", duration.Milliseconds(),
 						"result_bytes", textLen)
-				}
-
-				if gw.Metrics != nil {
-					gw.Metrics.RecordMCPToolCall(route.ServerName, route.MCPToolName, agentName, duration, err)
 				}
 			}
 		}(i, call)

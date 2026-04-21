@@ -113,7 +113,7 @@ func (p *Proxy) authenticateRequest(r *http.Request, w http.ResponseWriter) bool
 		http.Error(w, "Gateway not initialized", http.StatusServiceUnavailable)
 		return false
 	}
-	
+
 	correlationID := r.Header.Get("X-Request-Id")
 	if correlationID == "" {
 		correlationID = r.Header.Get("X-Correlation-Id")
@@ -121,7 +121,7 @@ func (p *Proxy) authenticateRequest(r *http.Request, w http.ResponseWriter) bool
 	if correlationID == "" {
 		correlationID = "unknown"
 	}
-	
+
 	authHeader := r.Header.Get("Authorization")
 	if !strings.HasPrefix(authHeader, "Bearer ") {
 		gw.Logger.Warn("missing or malformed Authorization header",
@@ -284,30 +284,10 @@ func (p *Proxy) checkSecurityFilterEngineHealth() bool {
 
 	if len(ref.ResolvedTargets) > 0 {
 		for _, target := range ref.ResolvedTargets {
-			apiFormat := target.Provider.ApiFormat
-			if apiFormat == "" {
-				apiFormat = "openai"
-			}
-			if apiFormat != "ollama" {
+			if target.Provider.ApiFormat != "ollama" {
 				return true
 			}
-			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-
-			req, err := http.NewRequestWithContext(ctx, http.MethodGet, config.OllamaHealthURL(target.Provider.URL), nil)
-			if err != nil {
-				cancel()
-				continue
-			}
-
-			client := gw.OllamaClient
-			resp, err := client.Do(req)
-			if err != nil {
-				cancel()
-				continue
-			}
-			resp.Body.Close()
-			cancel()
-			if resp.StatusCode == http.StatusOK {
+			if p.checkOllamaProviderHealth(gw, target.Provider.URL) {
 				return true
 			}
 		}
@@ -319,28 +299,25 @@ func (p *Proxy) checkSecurityFilterEngineHealth() bool {
 		gw.Logger.Warn("engine provider not found", "provider", ref.Provider)
 		return false
 	}
-	apiFormat := pr.ApiFormat
-	if apiFormat == "" {
-		apiFormat = "openai"
-	}
-	if apiFormat != "ollama" {
+	if pr.ApiFormat != "ollama" {
 		return true
 	}
+	return p.checkOllamaProviderHealth(gw, pr.URL)
+}
+
+func (p *Proxy) checkOllamaProviderHealth(gw *gateway.NenyaGateway, providerURL string) bool {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, config.OllamaHealthURL(pr.URL), nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, config.OllamaHealthURL(providerURL), nil)
 	if err != nil {
-		cancel()
 		return false
 	}
 
-	client := gw.OllamaClient
-	resp, err := client.Do(req)
+	resp, err := gw.OllamaClient.Do(req)
 	if err != nil {
-		cancel()
 		return false
 	}
-	resp.Body.Close()
-	cancel()
+	defer resp.Body.Close()
 	return resp.StatusCode == http.StatusOK
 }
