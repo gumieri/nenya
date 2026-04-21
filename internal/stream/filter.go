@@ -60,7 +60,10 @@ func (f *StreamFilter) FilterContent(content string) (string, FilterAction, stri
 		}
 	}
 
-	prevWindowLen := f.windowLen
+	// Capture the byte length of the window before appending the new content.
+	// regex.FindAllStringIndex returns byte offsets, so we must subtract bytes
+	// (not runes) to convert window-relative offsets into content-relative offsets.
+	prevWindowBytes := len(string(f.window))
 	f.appendToWindow(content)
 
 	if f.checkWindowBlock() {
@@ -90,11 +93,11 @@ func (f *StreamFilter) FilterContent(content string) (string, FilterAction, stri
 		for _, re := range f.secretPatterns {
 			locs := re.FindAllStringIndex(windowStr, -1)
 			for _, loc := range locs {
-				chunkStart := loc[0] - prevWindowLen
+				chunkStart := loc[0] - prevWindowBytes
 				if chunkStart < 0 {
 					chunkStart = 0
 				}
-				chunkEnd := loc[1] - prevWindowLen
+				chunkEnd := loc[1] - prevWindowBytes
 				if chunkEnd > len(content) {
 					chunkEnd = len(content)
 				}

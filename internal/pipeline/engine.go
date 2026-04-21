@@ -126,7 +126,11 @@ func CallEngineChain(ctx context.Context, httpClient, ollamaClient *http.Client,
 			client = ollamaClient
 		}
 
-		engineCtx, cancel := context.WithTimeout(ctx, time.Duration(target.Engine.TimeoutSeconds)*time.Second)
+		timeout := target.Engine.TimeoutSeconds
+		if timeout <= 0 {
+			timeout = 60
+		}
+		engineCtx, cancel := context.WithTimeout(ctx, time.Duration(timeout)*time.Second)
 		result, err := CallEngine(engineCtx, client, target.Provider, target.Engine, injectAPIKey, systemPrompt, prompt)
 		cancel()
 

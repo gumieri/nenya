@@ -91,7 +91,7 @@ func mergeConfig(base, overlay *Config) {
 	if overlay.Server.MaxBodyBytes != 0 {
 		base.Server.MaxBodyBytes = overlay.Server.MaxBodyBytes
 	}
-if overlay.Server.UserAgent != "" {
+	if overlay.Server.UserAgent != "" {
 		base.Server.UserAgent = overlay.Server.UserAgent
 	}
 
@@ -261,7 +261,7 @@ func stripComments(data []byte) []byte {
 	inString := false
 	for i < n {
 		if !inString && i+1 < n && data[i] == '/' && data[i+1] == '/' {
-			for i < n && data[i] != '\n' {
+			for i < n && data[i] != '\n' && data[i] != '\r' {
 				i++
 			}
 			continue

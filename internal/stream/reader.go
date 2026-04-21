@@ -31,7 +31,12 @@ type SSETransformingReader struct {
 	buffer              []byte
 	pos                 int
 	err                 error
-	usageFired          bool
+
+	// Track last seen token counts to deliver deltas when providers
+	// emit usage in multiple chunks.
+	lastCompletionTokens int
+	lastPromptTokens     int
+	lastTotalTokens      int
 }
 
 func NewSSETransformingReader(src io.Reader, transformer ResponseTransformer) *SSETransformingReader {
@@ -61,10 +66,8 @@ func (r *SSETransformingReader) SetOnContent(cb ContentCallback) {
 }
 
 func (r *SSETransformingReader) Read(p []byte) (int, error) {
-	if r.err != nil {
-		return 0, r.err
-	}
-
+	// Drain pending buffer before returning any error so that an error
+	// event we injected (e.g. ErrTooLong) reaches the client.
 	if r.pos < len(r.buffer) {
 		n := copy(p, r.buffer[r.pos:])
 		r.pos += n
@@ -75,11 +78,31 @@ func (r *SSETransformingReader) Read(p []byte) (int, error) {
 		return n, nil
 	}
 
+	if r.err != nil {
+		return 0, r.err
+	}
+
 	if !r.scanner.Scan() {
-		r.err = r.scanner.Err()
-		if r.err == nil {
+		scanErr := r.scanner.Err()
+		if scanErr == nil {
 			r.err = io.EOF
+			return 0, r.err
 		}
+		if scanErr == bufio.ErrTooLong {
+			// Surface a parseable SSE error chunk so the client knows why
+			// the stream ended rather than seeing a silent EOF.
+			errPayload, _ := json.Marshal(map[string]any{
+				"error": map[string]any{
+					"message": "upstream SSE line exceeded maximum scanner buffer",
+					"type":    "gateway_error",
+				},
+			})
+			r.buffer = append(append([]byte("data: "), errPayload...), []byte("\n\ndata: [DONE]\n\n")...)
+			r.pos = 0
+			r.err = scanErr
+			return r.Read(p)
+		}
+		r.err = scanErr
 		return 0, r.err
 	}
 
@@ -145,7 +168,7 @@ func (r *SSETransformingReader) transformLine(line []byte) []byte {
 			}
 		}
 
-		if r.onUsage != nil && !r.usageFired && parsed != nil {
+		if r.onUsage != nil && parsed != nil {
 			r.extractUsageFromMap(parsed)
 		}
 
@@ -200,8 +223,18 @@ func (r *SSETransformingReader) extractUsageFromMap(chunk map[string]interface{}
 	if completion == 0 && prompt == 0 && total == 0 {
 		return
 	}
-	r.usageFired = true
-	r.onUsage(completion, prompt, total)
+	// Compute deltas so providers that emit cumulative usage in multiple
+	// chunks don't cause double-counting in additive stats trackers.
+	dCompletion := completion - r.lastCompletionTokens
+	dPrompt := prompt - r.lastPromptTokens
+	dTotal := total - r.lastTotalTokens
+	if dCompletion <= 0 && dPrompt <= 0 && dTotal <= 0 {
+		return
+	}
+	r.lastCompletionTokens = completion
+	r.lastPromptTokens = prompt
+	r.lastTotalTokens = total
+	r.onUsage(dCompletion, dPrompt, dTotal)
 }
 
 func ToInt(v interface{}) int {

@@ -6,15 +6,15 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"net/http"
-	"strings"
-	"time"
 	"nenya/internal/config"
 	"nenya/internal/gateway"
 	"nenya/internal/infra"
 	"nenya/internal/mcp"
 	"nenya/internal/pipeline"
 	"nenya/internal/routing"
+	"net/http"
+	"strings"
+	"time"
 )
 
 func (p *Proxy) handleChatCompletions(gw *gateway.NenyaGateway, w http.ResponseWriter, r *http.Request) {
@@ -122,7 +122,7 @@ func (p *Proxy) handleChatCompletions(gw *gateway.NenyaGateway, w http.ResponseW
 			if len(targets) > 0 {
 				primaryTarget := targets[0]
 				if primaryTarget.MaxContext > 0 {
-						softLimit = primaryTarget.MaxContext / 8
+					softLimit = primaryTarget.MaxContext / 8
 					hardLimit = primaryTarget.MaxContext * 3 / 4
 				}
 			}
@@ -171,52 +171,54 @@ func (p *Proxy) applyContentPipeline(gw *gateway.NenyaGateway, ctx context.Conte
 
 	pipeline.ApplyPrefixCacheOptimizations(payload, messages, gw.Config.PrefixCache)
 
-	anyRedacted := false
+	// Run compaction (whitespace normalisation) BEFORE secret redaction so that
+	// patterns like \r\n-split secrets and stale thoughts are normalised first.
+	// Compaction is skipped for IDE clients which manage their own context.
+	if !profile.IsIDE {
+		if pipeline.ApplyCompaction(messages, gw.Config.Compaction) {
+			if gw.Metrics != nil {
+				gw.Metrics.RecordCompaction()
+			}
+		}
+	} else {
+		gw.Logger.Debug("skipping compaction for IDE client")
+	}
+
+	// Refresh messages slice after compaction may have mutated payload.
+	messages = payload["messages"].([]interface{})
+
+	patternRedacted := false
 	for _, msgRaw := range messages {
 		msgNode, isMap := msgRaw.(map[string]interface{})
 		if !isMap {
 			continue
 		}
-		if pipeline.ShouldSkipRedaction(msgNode, gw.Config.PrefixCache) {
-			continue
-		}
-		text := gateway.ExtractContentText(msgNode)
-		if text == "" {
-			continue
-		}
-		redacted := pipeline.RedactSecrets(text, gw.Config.SecurityFilter.Enabled, gw.SecretPatterns, gw.Config.SecurityFilter.RedactionLabel)
-		if redacted != text {
-			msgNode["content"] = redacted
-			anyRedacted = true
+		if applyRedactToContent(msgNode, func(s string) string {
+			return pipeline.RedactSecrets(s, gw.Config.SecurityFilter.Enabled, gw.SecretPatterns, gw.Config.SecurityFilter.RedactionLabel)
+		}) {
+			patternRedacted = true
 		}
 	}
-	if anyRedacted {
+	if patternRedacted {
 		if gw.Metrics != nil {
 			gw.Metrics.RecordRedaction()
 		}
 	}
 
+	entropyRedacted := false
 	if gw.EntropyFilter != nil {
 		for _, msgRaw := range messages {
 			msgNode, isMap := msgRaw.(map[string]interface{})
 			if !isMap {
 				continue
 			}
-			if pipeline.ShouldSkipRedaction(msgNode, gw.Config.PrefixCache) {
-				continue
-			}
-			text := gateway.ExtractContentText(msgNode)
-			if text == "" {
-				continue
-			}
-
-			redacted := gw.EntropyFilter.RedactHighEntropy(text, gw.Config.SecurityFilter.RedactionLabel)
-			if redacted != text {
-				msgNode["content"] = redacted
-				anyRedacted = true
+			if applyRedactToContent(msgNode, func(s string) string {
+				return gw.EntropyFilter.RedactHighEntropy(s, gw.Config.SecurityFilter.RedactionLabel)
+			}) {
+				entropyRedacted = true
 			}
 		}
-		if anyRedacted {
+		if entropyRedacted {
 			if gw.Metrics != nil {
 				gw.Metrics.RecordRedaction()
 			}
@@ -228,13 +230,6 @@ func (p *Proxy) applyContentPipeline(gw *gateway.NenyaGateway, ctx context.Conte
 		return nil
 	}
 	if !profile.IsIDE {
-		// Order matters: compaction normalizes whitespace first, which ensures
-		// <think\r\n gets normalized to <think\n for thought pruning.
-		if pipeline.ApplyCompaction(messages, gw.Config.Compaction) {
-			if gw.Metrics != nil {
-				gw.Metrics.RecordCompaction()
-			}
-		}
 		if pipeline.PruneStaleToolCalls(payload, gw.Config.Compaction) {
 			if gw.Metrics != nil {
 				gw.Metrics.RecordCompaction()
@@ -245,8 +240,6 @@ func (p *Proxy) applyContentPipeline(gw *gateway.NenyaGateway, ctx context.Conte
 				gw.Metrics.RecordCompaction()
 			}
 		}
-	} else {
-		gw.Logger.Debug("skipping compaction for IDE client")
 	}
 
 	messages = payload["messages"].([]interface{})
@@ -558,12 +551,19 @@ func (p *Proxy) buildUpstreamRequest(gw *gateway.NenyaGateway, ctx context.Conte
 	if err != nil {
 		return nil, fmt.Errorf("failed to create upstream request: %w", err)
 	}
-	headers := srcHeaders.Clone()
-	headers.Del("Authorization")
-	if err := routing.InjectAPIKey(providerName, gw.Providers, headers); err != nil {
+	if err := routing.InjectAPIKey(providerName, gw.Providers, req.Header); err != nil {
 		return nil, fmt.Errorf("API key injection failed: %w", err)
 	}
-	routing.CopyHeaders(headers, req.Header)
+	// Forward only safe passthrough headers; never let client-supplied
+	// headers leak internal routing tokens or override upstream auth.
+	for _, h := range []string{
+		"X-Request-Id", "X-Correlation-Id", "X-Trace-Id",
+		"Traceparent", "Tracestate",
+	} {
+		if v := srcHeaders.Get(h); v != "" {
+			req.Header.Set(h, v)
+		}
+	}
 	req.Header.Set("Accept-Encoding", "identity")
 	req.Header.Set("User-Agent", gw.Config.Server.UserAgent)
 	return req, nil
@@ -720,6 +720,14 @@ func (p *Proxy) injectAutoSearch(gw *gateway.NenyaGateway, ctx context.Context, 
 		return
 	}
 
+	// Redact secrets from the query before sending it to an external MCP server.
+	// The content pipeline runs after this function, so raw user content
+	// (potentially containing secrets) would otherwise leave the gateway.
+	query = pipeline.RedactSecrets(query, gw.Config.SecurityFilter.Enabled, gw.SecretPatterns, gw.Config.SecurityFilter.RedactionLabel)
+	if gw.EntropyFilter != nil {
+		query = gw.EntropyFilter.RedactHighEntropy(query, gw.Config.SecurityFilter.RedactionLabel)
+	}
+
 	searchTool := agent.MCP.SearchTool
 	for _, serverName := range agent.MCP.Servers {
 		client, ok := gw.MCPClients[serverName]
@@ -762,7 +770,15 @@ func (p *Proxy) injectAutoSearch(gw *gateway.NenyaGateway, ctx context.Context, 
 			continue
 		}
 
-		contextStr := fmt.Sprintf("[Memory context from %s]\n%s", serverName, result.Text())
+		resultText := result.Text()
+		// Redact secrets from external MCP content before injecting into the
+		// conversation as a system message, which would otherwise bypass the
+		// content pipeline that runs after this function.
+		resultText = pipeline.RedactSecrets(resultText, gw.Config.SecurityFilter.Enabled, gw.SecretPatterns, gw.Config.SecurityFilter.RedactionLabel)
+		if gw.EntropyFilter != nil {
+			resultText = gw.EntropyFilter.RedactHighEntropy(resultText, gw.Config.SecurityFilter.RedactionLabel)
+		}
+		contextStr := fmt.Sprintf("[Memory context from %s]\n%s", serverName, resultText)
 		memoryMsg := map[string]interface{}{
 			"role":    "system",
 			"content": contextStr,
@@ -797,11 +813,15 @@ func (p *Proxy) forwardToUpstreamWithMCP(gw *gateway.NenyaGateway,
 	maxRetries int,
 	cacheKey string,
 ) {
+	const mcpMaxIterationsHardCeiling = 50
 	_, hasAgent := gw.Config.Agents[agentName]
 	maxIter := mcpMaxIterations
 	if hasAgent {
 		if agent := gw.Config.Agents[agentName]; agent.MCP != nil && agent.MCP.MaxIterations > 0 {
 			maxIter = agent.MCP.MaxIterations
+			if maxIter > mcpMaxIterationsHardCeiling {
+				maxIter = mcpMaxIterationsHardCeiling
+			}
 		}
 	}
 
@@ -1019,4 +1039,44 @@ func (p *Proxy) recordMCPUsage(gw *gateway.NenyaGateway, buf *bufferedSSE, agent
 	// via the existing stream metrics if available
 	_ = buf
 	_ = agentName
+}
+
+// applyRedactToContent runs redactFn against every text surface of msgNode's
+// content, preserving multimodal content arrays instead of flattening them to
+// a string. Returns true if any part was changed.
+func applyRedactToContent(msgNode map[string]interface{}, redactFn func(string) string) bool {
+	contentRaw, ok := msgNode["content"]
+	if !ok {
+		return false
+	}
+	changed := false
+	switch c := contentRaw.(type) {
+	case string:
+		if c == "" {
+			return false
+		}
+		if r := redactFn(c); r != c {
+			msgNode["content"] = r
+			changed = true
+		}
+	case []interface{}:
+		for _, partRaw := range c {
+			part, ok := partRaw.(map[string]interface{})
+			if !ok {
+				continue
+			}
+			if part["type"] != "text" {
+				continue
+			}
+			text, ok := part["text"].(string)
+			if !ok || text == "" {
+				continue
+			}
+			if r := redactFn(text); r != text {
+				part["text"] = r
+				changed = true
+			}
+		}
+	}
+	return changed
 }

@@ -23,6 +23,7 @@ type Metrics struct {
 
 	redactions    atomic.Uint64
 	compactions   atomic.Uint64
+	panics        atomic.Uint64
 	windowApplied sync.Map
 	interceptions sync.Map
 
@@ -155,6 +156,7 @@ func (m *Metrics) RecordHTTPRequest(method, path string, status int, duration ti
 
 func (m *Metrics) RecordRedaction()  { m.redactions.Add(1) }
 func (m *Metrics) RecordCompaction() { m.compactions.Add(1) }
+func (m *Metrics) RecordPanic()      { m.panics.Add(1) }
 
 func (m *Metrics) RecordWindow(mode string) {
 	e := getOrCreateEntry(&m.windowApplied, map[string]string{"mode": mode})
@@ -275,6 +277,8 @@ func (m *Metrics) WritePrometheus(w io.Writer) {
 	m.writeCounterMap(w, "nenya_http_requests_total",
 		"Total HTTP requests by method, path, and status.", &m.httpTotal)
 
+	m.writeCounterAtomic(w, "nenya_panics_total",
+		"Total recovered panics in the request handler.", m.panics.Load())
 	m.writeCounterAtomic(w, "nenya_pipeline_redactions_total",
 		"Total secret redactions applied by the Tier-0 filter.", m.redactions.Load())
 	m.writeCounterAtomic(w, "nenya_pipeline_compaction_applied_total",

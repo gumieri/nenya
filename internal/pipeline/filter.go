@@ -20,7 +20,6 @@ func RedactSecrets(text string, enabled bool, patterns []*regexp.Regexp, label s
 	return redacted
 }
 
-
 func TruncateMiddleOut(text string, maxSize int, cfg config.GovernanceConfig) string {
 	runes := []rune(text)
 	if len(runes) <= maxSize {

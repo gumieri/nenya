@@ -7,6 +7,7 @@ import (
 	"io"
 	"log/slog"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -20,7 +21,7 @@ type Client struct {
 	mu          sync.RWMutex
 	tools       []Tool
 	toolsMap    map[string]Tool
-	initialized bool
+	initialized atomic.Bool
 	serverInfo  ImplementationInfo
 }
 
@@ -103,7 +104,7 @@ func (c *Client) Initialize(ctx context.Context) error {
 		c.logger.Warn("failed to send initialized notification", "err", err)
 	}
 
-	c.initialized = true
+	c.initialized.Store(true)
 	return nil
 }
 
@@ -151,7 +152,7 @@ func (c *Client) GetTool(name string) (Tool, bool) {
 }
 
 func (c *Client) CallTool(ctx context.Context, name string, arguments map[string]any) (*CallToolResult, error) {
-	if !c.initialized {
+	if !c.initialized.Load() {
 		return nil, fmt.Errorf("client not initialized")
 	}
 
@@ -204,10 +205,10 @@ func (c *Client) ServerName() string {
 }
 
 func (c *Client) Ready() bool {
-	return c.initialized && c.transport.Ready()
+	return c.initialized.Load() && c.transport.Ready()
 }
 
 func (c *Client) Close() error {
-	c.initialized = false
+	c.initialized.Store(false)
 	return c.transport.Close()
 }

@@ -232,6 +232,8 @@ func bufferStreamResponse(ctx context.Context, r io.Reader) (*bufferedSSE, error
 		if argsBuilder := tcArgsAccum[idx]; argsBuilder != nil {
 			argsStr := argsBuilder.String()
 			if err := json.Unmarshal([]byte(argsStr), &args); err != nil {
+				slog.Warn("MCP: failed to parse tool arguments, calling with empty args",
+					"tool", name, "err", err)
 				args = make(map[string]any)
 			}
 		}

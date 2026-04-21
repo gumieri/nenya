@@ -248,6 +248,28 @@ func (cb *CircuitBreaker) ForceOpen(key string, cooldown time.Duration) {
 	c.expiry = now.Add(cooldown)
 }
 
+// Peek reports whether a request would be allowed for key without producing any
+// side effects (no inflight counter increment, no state transition). Use this
+// for read-only partitioning (active vs. cooling lists). Call Allow when an
+// actual request is about to be dispatched.
+func (cb *CircuitBreaker) Peek(key string) bool {
+	cb.mu.Lock()
+	defer cb.mu.Unlock()
+
+	c := cb.getOrCreate(key)
+	now := time.Now()
+
+	switch c.state {
+	case StateClosed:
+		return true
+	case StateOpen:
+		return now.After(c.expiry)
+	case StateHalfOpen:
+		return c.halfOpenInflight < cb.halfOpenMaxRequests
+	}
+	return false
+}
+
 func (cb *CircuitBreaker) State(key string) State {
 	cb.mu.Lock()
 	defer cb.mu.Unlock()

@@ -103,7 +103,9 @@ func (a *AgentState) BuildTargetList(logger *slog.Logger, agentName string, agen
 			Provider:  m.Provider,
 			MaxOutput: maxOut,
 		}
-		if a.CB.Allow(t.CoolKey) {
+		// Use Peek (no side effects) here; Allow is called later in
+		// prepareAndSend when the request is actually dispatched.
+		if a.CB.Peek(t.CoolKey) {
 			active = append(active, t)
 		} else {
 			cooling = append(cooling, t)
