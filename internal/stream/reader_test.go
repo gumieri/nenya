@@ -291,7 +291,7 @@ func TestNormalizeToolCallIDs_NullID(t *testing.T) {
 			},
 		},
 	}
-	if !normalizeToolCallIDs(chunk) {
+	if !normalizeToolCalls(chunk) {
 		t.Fatal("expected mutation for null id")
 	}
 	choices := chunk["choices"].([]interface{})
@@ -322,7 +322,7 @@ func TestNormalizeToolCallIDs_NumericID(t *testing.T) {
 			},
 		},
 	}
-	if !normalizeToolCallIDs(chunk) {
+	if !normalizeToolCalls(chunk) {
 		t.Fatal("expected mutation for numeric id")
 	}
 	choices := chunk["choices"].([]interface{})
@@ -353,7 +353,7 @@ func TestNormalizeToolCallIDs_StringIDUnchanged(t *testing.T) {
 			},
 		},
 	}
-	if normalizeToolCallIDs(chunk) {
+	if normalizeToolCalls(chunk) {
 		t.Fatal("expected no mutation for valid string id")
 	}
 }
@@ -368,7 +368,7 @@ func TestNormalizeToolCallIDs_MissingToolCalls(t *testing.T) {
 			},
 		},
 	}
-	if normalizeToolCallIDs(chunk) {
+	if normalizeToolCalls(chunk) {
 		t.Fatal("expected no mutation when no tool_calls")
 	}
 }
@@ -390,5 +390,153 @@ data: [DONE]
 	}
 	if !strings.Contains(output, `"id":"call_0"`) {
 		t.Fatalf("expected synthetic id call_0, got: %s", output)
+	}
+}
+
+func TestNormalizeToolCalls_NullFunction(t *testing.T) {
+	chunk := map[string]interface{}{
+		"choices": []interface{}{
+			map[string]interface{}{
+				"delta": map[string]interface{}{
+					"tool_calls": []interface{}{
+						map[string]interface{}{
+							"index": float64(0),
+							"id":    "call_0",
+							"function": nil,
+						},
+						map[string]interface{}{
+							"index": float64(1),
+							"id":    "call_1",
+							"function": map[string]interface{}{
+								"name":      "read_file",
+								"arguments": "{}",
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+	if !normalizeToolCalls(chunk) {
+		t.Fatal("expected mutation for null function")
+	}
+	choices := chunk["choices"].([]interface{})
+	delta := choices[0].(map[string]interface{})["delta"].(map[string]interface{})
+	tcs, ok := delta["tool_calls"].([]interface{})
+	if !ok {
+		t.Fatal("tool_calls should still exist with valid entries")
+	}
+	if len(tcs) != 1 {
+		t.Fatalf("expected 1 tool call after stripping, got %d", len(tcs))
+	}
+	tc := tcs[0].(map[string]interface{})
+	if tc["id"] != "call_1" {
+		t.Fatalf("expected call_1 to remain, got %q", tc["id"])
+	}
+}
+
+func TestNormalizeToolCalls_NullFunctionNameNoArgs(t *testing.T) {
+	chunk := map[string]interface{}{
+		"choices": []interface{}{
+			map[string]interface{}{
+				"delta": map[string]interface{}{
+					"tool_calls": []interface{}{
+						map[string]interface{}{
+							"index": float64(0),
+							"id":    "call_0",
+							"function": map[string]interface{}{
+								"name":      nil,
+								"arguments": nil,
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+	if !normalizeToolCalls(chunk) {
+		t.Fatal("expected mutation for null function.name with no args")
+	}
+	choices := chunk["choices"].([]interface{})
+	delta := choices[0].(map[string]interface{})["delta"].(map[string]interface{})
+	if _, hasTC := delta["tool_calls"]; hasTC {
+		t.Fatal("tool_calls should be removed when all entries are malformed")
+	}
+}
+
+func TestNormalizeToolCalls_NullFunctionNameWithArgs(t *testing.T) {
+	chunk := map[string]interface{}{
+		"choices": []interface{}{
+			map[string]interface{}{
+				"delta": map[string]interface{}{
+					"tool_calls": []interface{}{
+						map[string]interface{}{
+							"index": float64(0),
+							"id":    "call_0",
+							"function": map[string]interface{}{
+								"name":      nil,
+								"arguments": `{"path":"test.txt"}`,
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+	if normalizeToolCalls(chunk) {
+		t.Fatal("expected no mutation for null function.name with args (subsequent chunk)")
+	}
+	choices := chunk["choices"].([]interface{})
+	delta := choices[0].(map[string]interface{})["delta"].(map[string]interface{})
+	tcs := delta["tool_calls"].([]interface{})
+	if len(tcs) != 1 {
+		t.Fatalf("expected 1 tool call to remain, got %d", len(tcs))
+	}
+}
+
+func TestNormalizeToolCalls_MixedValidInvalid(t *testing.T) {
+	chunk := map[string]interface{}{
+		"choices": []interface{}{
+			map[string]interface{}{
+				"delta": map[string]interface{}{
+					"tool_calls": []interface{}{
+						map[string]interface{}{
+							"index": float64(0),
+							"id":    "call_0",
+							"function": nil,
+						},
+						map[string]interface{}{
+							"index": float64(1),
+							"id":    "call_1",
+							"function": map[string]interface{}{
+								"name":      "read_file",
+								"arguments": "{}",
+							},
+						},
+						map[string]interface{}{
+							"index": float64(2),
+							"id":    "call_2",
+							"function": map[string]interface{}{
+								"name":      nil,
+								"arguments": nil,
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+	if !normalizeToolCalls(chunk) {
+		t.Fatal("expected mutation for mixed valid/invalid entries")
+	}
+	choices := chunk["choices"].([]interface{})
+	delta := choices[0].(map[string]interface{})["delta"].(map[string]interface{})
+	tcs := delta["tool_calls"].([]interface{})
+	if len(tcs) != 1 {
+		t.Fatalf("expected 1 valid tool call to remain, got %d", len(tcs))
+	}
+	tc := tcs[0].(map[string]interface{})
+	if tc["id"] != "call_1" {
+		t.Fatalf("expected call_1 to remain, got %q", tc["id"])
 	}
 }
