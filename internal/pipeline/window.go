@@ -53,6 +53,27 @@ func ApplyWindowCompaction(ctx context.Context, deps WindowDeps, payload map[str
 	}
 
 	splitIdx := len(messages) - activeMessages
+
+	// Never start the active window on a tool-result message. A tool message
+	// is semantically bound to the preceding assistant+tool_calls message; if
+	// that assistant message were in the compacted history, the tool result
+	// would be orphaned and providers would reject the conversation.
+	// Walk splitIdx backward until active[0] is not a tool message.
+	for splitIdx > 0 {
+		msg, ok := messages[splitIdx].(map[string]interface{})
+		if !ok {
+			break
+		}
+		if role, _ := msg["role"].(string); role != "tool" {
+			break
+		}
+		splitIdx--
+	}
+
+	if splitIdx <= 0 {
+		return false, nil
+	}
+
 	history := messages[:splitIdx]
 	active := messages[splitIdx:]
 

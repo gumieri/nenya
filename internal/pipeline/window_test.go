@@ -325,4 +325,111 @@ func TestApplyWindowCompaction(t *testing.T) {
 			t.Error("expected false for unknown mode")
 		}
 	})
+
+	// Tool call safety: the split point must never land on a tool message —
+	// tool results are semantically bound to the preceding assistant turn.
+	t.Run("split does not orphan tool result at active boundary", func(t *testing.T) {
+		// With activeMessages=2 the naive split lands right before the tool
+		// message, making it active[0]. The fix walks splitIdx back until
+		// active[0] is not a tool message.
+		cfg := config.WindowConfig{
+			Enabled:         true,
+			Mode:            "truncate",
+			TriggerRatio:    0.1,
+			MaxContext:      100,
+			ActiveMessages:  2,
+			SummaryMaxRunes: 500,
+		}
+		deps := WindowDeps{Logger: logger}
+		payload := map[string]interface{}{"messages": []interface{}{}}
+		toolCall := map[string]interface{}{
+			"role":    "assistant",
+			"content": nil,
+			"tool_calls": []interface{}{
+				map[string]interface{}{"id": "call_1", "type": "function",
+					"function": map[string]interface{}{"name": "search", "arguments": "{}"}},
+			},
+		}
+		toolResult := map[string]interface{}{
+			"role":         "tool",
+			"tool_call_id": "call_1",
+			"content":      "result text",
+		}
+		messages := []interface{}{
+			msg("user", "old 1"), msg("assistant", "old reply 1"),
+			msg("user", "old 2"), msg("assistant", "old reply 2"),
+			// split naively falls here (activeMessages=2) —
+			// toolCall + toolResult are the last 2 messages
+			toolCall,
+			toolResult,
+		}
+
+		compacted, err := ApplyWindowCompaction(context.Background(), deps, payload, messages, 500, cfg, 100, noOpCount)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if !compacted {
+			t.Fatal("expected compaction to trigger")
+		}
+
+		newMsgs, ok := payload["messages"].([]interface{})
+		if !ok {
+			t.Fatal("payload messages not updated")
+		}
+		// No message in the active window should have role "tool" as the
+		// very first message after the summary.
+		for i, m := range newMsgs {
+			mm, ok := m.(map[string]interface{})
+			if !ok {
+				continue
+			}
+			if i == 0 {
+				if role, _ := mm["role"].(string); role != "system" {
+					t.Errorf("first message role = %q, want system", role)
+				}
+				continue
+			}
+			// The message immediately after the summary (index 1) must not
+			// be a tool result.
+			if i == 1 {
+				if role, _ := mm["role"].(string); role == "tool" {
+					t.Errorf("active window starts with orphaned tool result at index %d", i)
+				}
+			}
+		}
+	})
+
+	t.Run("split on tool result with all tool messages returns no-op", func(t *testing.T) {
+		// Edge case: if walking back reaches splitIdx==0 we must not compact.
+		cfg := config.WindowConfig{
+			Enabled:         true,
+			Mode:            "truncate",
+			TriggerRatio:    0.1,
+			MaxContext:      100,
+			ActiveMessages:  4,
+			SummaryMaxRunes: 500,
+		}
+		deps := WindowDeps{Logger: logger}
+		payload := map[string]interface{}{"messages": []interface{}{}}
+		toolCall := map[string]interface{}{
+			"role": "assistant", "content": nil,
+			"tool_calls": []interface{}{map[string]interface{}{"id": "c1"}},
+		}
+		toolResult := map[string]interface{}{
+			"role": "tool", "tool_call_id": "c1", "content": "r",
+		}
+		// Only 5 messages, activeMessages=4, naive split=1 (a tool result).
+		// Walking back to 0 → no history → no compaction.
+		messages := []interface{}{
+			toolCall, toolResult, toolCall, toolResult, toolResult,
+		}
+
+		compacted, err := ApplyWindowCompaction(context.Background(), deps, payload, messages, 500, cfg, 100, noOpCount)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if compacted {
+			t.Error("expected no compaction when walkback reaches 0")
+		}
+	})
 }

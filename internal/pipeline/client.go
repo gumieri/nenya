@@ -22,6 +22,8 @@ var clientPatterns = []clientPattern{
 	{header: "User-Agent", substring: "opencode", name: "opencode", isIDE: true},
 	{header: "Editor-Version", substring: "opencode", name: "opencode", isIDE: true},
 	{header: "Editor-Plugin-Version", substring: "opencode", name: "opencode", isIDE: true},
+	{header: "User-Agent", substring: "claude-code", name: "claude-code", isIDE: true},
+	{header: "Editor-Plugin-Version", substring: "claude-code", name: "claude-code", isIDE: true},
 }
 
 func ClassifyClient(headers http.Header) ClientProfile {
