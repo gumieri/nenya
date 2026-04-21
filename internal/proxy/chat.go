@@ -9,8 +9,6 @@ import (
 	"net/http"
 	"strings"
 	"time"
-	"unicode/utf8"
-
 	"nenya/internal/config"
 	"nenya/internal/gateway"
 	"nenya/internal/infra"
@@ -124,8 +122,8 @@ func (p *Proxy) handleChatCompletions(gw *gateway.NenyaGateway, w http.ResponseW
 			if len(targets) > 0 {
 				primaryTarget := targets[0]
 				if primaryTarget.MaxContext > 0 {
-					softLimit = int(float64(primaryTarget.MaxContext) * 0.125)
-					hardLimit = int(float64(primaryTarget.MaxContext) * 0.75)
+						softLimit = primaryTarget.MaxContext / 8
+					hardLimit = primaryTarget.MaxContext * 3 / 4
 				}
 			}
 
@@ -301,18 +299,18 @@ func (p *Proxy) applyContentPipeline(gw *gateway.NenyaGateway, ctx context.Conte
 		return nil
 	}
 
-	contentRunes := utf8.RuneCountInString(textForInterception)
+	contentTokens := gw.CountTokens(textForInterception)
 
 	var processed string
 	var needsUpdate bool
 	var truncated string
 
-	if contentRunes < softLimit {
+	if contentTokens < softLimit {
 		gw.Logger.Debug("payload within soft limit, passing through",
-			"runes", contentRunes, "soft_limit", softLimit)
-	} else if contentRunes <= hardLimit {
+			"tokens", contentTokens, "soft_limit", softLimit)
+	} else if contentTokens <= hardLimit {
 		gw.Logger.Warn("payload exceeds soft limit, sending to engine",
-			"runes", contentRunes)
+			"tokens", contentTokens)
 		if gw.Metrics != nil {
 			gw.Metrics.RecordInterception("soft_limit")
 		}
@@ -325,10 +323,13 @@ func (p *Proxy) applyContentPipeline(gw *gateway.NenyaGateway, ctx context.Conte
 		}
 	} else {
 		gw.Logger.Warn("payload exceeds hard limit, truncating before engine",
-			"runes", contentRunes, "hard_limit", hardLimit)
+			"tokens", contentTokens, "hard_limit", hardLimit)
 		if gw.Metrics != nil {
 			gw.Metrics.RecordInterception("hard_limit")
 		}
+
+		// Truncation functions work in rune units; estimate conservatively at 3 chars/token.
+		hardLimitRunes := hardLimit * 3
 
 		querySource := gw.Config.Governance.TFIDFQuerySource
 		if querySource != "" {
@@ -341,18 +342,17 @@ func (p *Proxy) applyContentPipeline(gw *gateway.NenyaGateway, ctx context.Conte
 			}
 			gw.Logger.Info("TF-IDF truncation enabled",
 				"query_source", querySource,
-				"query_len", utf8.RuneCountInString(query),
-				"input_runes", contentRunes)
+				"input_tokens", contentTokens)
 
 			if profile.IsIDE {
-				truncated = pipeline.TruncateTFIDFCodeAware(textForInterception, hardLimit, query, gw.Config.Governance)
+				truncated = pipeline.TruncateTFIDFCodeAware(textForInterception, hardLimitRunes, query, gw.Config.Governance)
 			} else {
-				truncated = pipeline.TruncateTFIDF(textForInterception, hardLimit, query, gw.Config.Governance)
+				truncated = pipeline.TruncateTFIDF(textForInterception, hardLimitRunes, query, gw.Config.Governance)
 			}
 
-			if utf8.RuneCountInString(truncated) < softLimit {
+			if gw.CountTokens(truncated) < softLimit {
 				gw.Logger.Info("TF-IDF reduced payload below soft limit, skipping engine",
-					"truncated_runes", utf8.RuneCountInString(truncated), "soft_limit", softLimit)
+					"soft_limit", softLimit)
 				processed = fmt.Sprintf("[Nenya TF-IDF Pruned]:\n%s", truncated)
 				needsUpdate = true
 			} else {
@@ -360,9 +360,9 @@ func (p *Proxy) applyContentPipeline(gw *gateway.NenyaGateway, ctx context.Conte
 			}
 		} else {
 			if profile.IsIDE {
-				truncated = pipeline.TruncateMiddleOutCodeAware(textForInterception, hardLimit, gw.Config.Governance)
+				truncated = pipeline.TruncateMiddleOutCodeAware(textForInterception, hardLimitRunes, gw.Config.Governance)
 			} else {
-				truncated = pipeline.TruncateMiddleOut(textForInterception, hardLimit, gw.Config.Governance)
+				truncated = pipeline.TruncateMiddleOut(textForInterception, hardLimitRunes, gw.Config.Governance)
 			}
 			processed, needsUpdate = p.summarizeOrForward(gw, ctx, truncated, profile.IsIDE, "Truncated")
 		}
