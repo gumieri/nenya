@@ -19,6 +19,7 @@ import (
 	"nenya/internal/infra"
 	providerpkg "nenya/internal/providers"
 	"nenya/internal/routing"
+	"nenya/internal/testutil"
 )
 
 func TestWriteBlockedSSE(t *testing.T) {
@@ -85,8 +86,7 @@ func TestStallReader_ReadsNormally(t *testing.T) {
 }
 
 func TestStallReader_StallsAfterTimeout(t *testing.T) {
-	blockCh := make(chan struct{})
-	src := &blockingReader{ch: blockCh}
+	src := &testutil.BlockingReader{Closed: make(chan struct{})}
 
 	sr := newStallReader(src, 30*time.Millisecond)
 	defer sr.Stop()
@@ -102,7 +102,7 @@ func TestStallReader_StallsAfterTimeout(t *testing.T) {
 		t.Fatalf("expected 0 bytes, got %d", n)
 	}
 
-	close(blockCh)
+	src.Close()
 }
 
 func TestStallReader_ResetOnRead(t *testing.T) {
@@ -182,8 +182,7 @@ func TestErrStreamStalled(t *testing.T) {
 }
 
 func TestStallReader_StopPreventsStall(t *testing.T) {
-	blockCh := make(chan struct{})
-	src := &blockingReader{ch: blockCh}
+	src := &testutil.BlockingReader{Closed: make(chan struct{})}
 
 	sr := newStallReader(src, 30*time.Millisecond)
 	sr.Stop()
@@ -199,7 +198,7 @@ func TestStallReader_StopPreventsStall(t *testing.T) {
 		t.Fatalf("expected 0 bytes, got %d", n)
 	}
 
-	close(blockCh)
+	src.Close()
 }
 
 func TestWriteBlockedSSE_MultipleChunks(t *testing.T) {
@@ -235,8 +234,7 @@ func TestResponseTransformer_GeminiTransformerHasOnExtraContent(t *testing.T) {
 }
 
 func TestStallReader_ConcurrentReadAndStall(t *testing.T) {
-	blockCh := make(chan struct{})
-	src := &blockingReader{ch: blockCh}
+	src := &testutil.BlockingReader{Closed: make(chan struct{})}
 
 	sr := newStallReader(src, 20*time.Millisecond)
 	defer sr.Stop()
@@ -257,7 +255,7 @@ func TestStallReader_ConcurrentReadAndStall(t *testing.T) {
 		t.Fatal("timeout waiting for stall")
 	}
 
-	close(blockCh)
+	src.Close()
 }
 
 // --- streamingBufPool tests ---
@@ -366,7 +364,7 @@ func TestImmediateFlushWriter_WriteErrorNoFlush(t *testing.T) {
 
 func TestCopyStream_NormalCopy(t *testing.T) {
 	src := strings.NewReader("hello world")
-	dst := &bytesCapture{}
+	dst := testutil.NewBytesCapture()
 
 	written, err := copyStream(context.Background(), dst, src, make([]byte, 4))
 	if err != nil {
@@ -385,7 +383,7 @@ func TestCopyStream_ContextCancellation(t *testing.T) {
 	defer cancel()
 
 	src := &contextReader{ctx: ctx}
-	dst := &bytesCapture{}
+	dst := testutil.NewBytesCapture()
 
 	errCh := make(chan error, 1)
 	go func() {
@@ -408,25 +406,19 @@ func TestCopyStream_ContextCancellation(t *testing.T) {
 
 func TestCopyStream_UpstreamReadError(t *testing.T) {
 	readErr := fmt.Errorf("connection reset")
-	src := &errorReader{err: readErr}
-	dst := &bytesCapture{}
+	src := &testutil.ErrorReader{Err: readErr}
+	dst := testutil.NewBytesCapture()
 
 	_, err := copyStream(context.Background(), dst, src, make([]byte, 1024))
-	if err == nil {
-		t.Fatal("expected error from upstream read failure")
-	}
-	if !strings.Contains(err.Error(), "reading from upstream") {
-		t.Fatalf("expected 'reading from upstream' error, got: %v", err)
-	}
-	if !strings.Contains(err.Error(), "connection reset") {
-		t.Fatalf("expected wrapped upstream error, got: %v", err)
+	if !errors.Is(err, readErr) {
+		t.Fatalf("expected read error, got: %v", err)
 	}
 }
 
 func TestCopyStream_ClientWriteError(t *testing.T) {
 	writeErr := fmt.Errorf("broken pipe")
 	src := strings.NewReader("some data that should fail")
-	dst := &errorWriter{err: writeErr}
+	dst := &testutil.ErrorWriter{Err: writeErr}
 
 	_, err := copyStream(context.Background(), dst, src, make([]byte, 4))
 	if err == nil {
@@ -442,7 +434,7 @@ func TestCopyStream_ClientWriteError(t *testing.T) {
 
 func TestCopyStream_EmptyBuffer(t *testing.T) {
 	src := strings.NewReader("data")
-	dst := &bytesCapture{}
+	dst := testutil.NewBytesCapture()
 
 	written, err := copyStream(context.Background(), dst, src, nil)
 	if err != nil {
@@ -459,7 +451,7 @@ func TestCopyStream_EmptyBuffer(t *testing.T) {
 func TestCopyStream_LargeDataExceedsBuffer(t *testing.T) {
 	data := strings.Repeat("A", streamBufferSize*3)
 	src := strings.NewReader(data)
-	dst := &bytesCapture{}
+	dst := testutil.NewBytesCapture()
 
 	written, err := copyStream(context.Background(), dst, src, make([]byte, streamBufferSize))
 	if err != nil {
@@ -475,7 +467,7 @@ func TestCopyStream_LargeDataExceedsBuffer(t *testing.T) {
 
 func TestCopyStream_EOFOnRead(t *testing.T) {
 	src := strings.NewReader("end")
-	dst := &bytesCapture{}
+	dst := testutil.NewBytesCapture()
 
 	written, err := copyStream(context.Background(), dst, src, make([]byte, 1024))
 	if err != nil {
@@ -514,7 +506,7 @@ func TestCopyStream_ContextCancelKillsSlowUpstream(t *testing.T) {
 	defer cancel()
 
 	slowSrc := &slowContextReader{ctx: ctx, chunk: "data: {\"ok\":1}\n\n", delay: 50 * time.Millisecond}
-	dst := &bytesCapture{}
+	dst := testutil.NewBytesCapture()
 
 	errCh := make(chan error, 1)
 	go func() {
@@ -537,28 +529,6 @@ func TestCopyStream_ContextCancelKillsSlowUpstream(t *testing.T) {
 
 // --- test helpers ---
 
-type blockingReader struct {
-	ch chan struct{}
-}
-
-func (r *blockingReader) Read(p []byte) (int, error) {
-	<-r.ch
-	return 0, io.EOF
-}
-
-type bytesCapture struct {
-	buf []byte
-}
-
-func (b *bytesCapture) Write(p []byte) (int, error) {
-	b.buf = append(b.buf, p...)
-	return len(p), nil
-}
-
-func (b *bytesCapture) String() string {
-	return string(b.buf)
-}
-
 type brokenWriter struct {
 	err        error
 	flushCount int32
@@ -577,22 +547,6 @@ func (w *brokenWriter) Header() http.Header {
 }
 
 func (w *brokenWriter) WriteHeader(statusCode int) {}
-
-type errorReader struct {
-	err error
-}
-
-func (r *errorReader) Read(p []byte) (int, error) {
-	return 0, r.err
-}
-
-type errorWriter struct {
-	err error
-}
-
-func (w *errorWriter) Write(p []byte) (int, error) {
-	return 0, w.err
-}
 
 type contextReader struct {
 	ctx context.Context
