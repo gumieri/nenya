@@ -90,6 +90,7 @@ Client Request
   ├─ GET /v1/models
   ├─ POST /v1/embeddings
   ├─ POST /v1/responses (transparent passthrough, no content pipeline)
+  ├─ /proxy/{provider}/* (arbitrary endpoint passthrough, auth injection, SSE auto-detect)
   ├─ GET /healthz
   └─ GET /statsz
 ```
