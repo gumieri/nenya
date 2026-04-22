@@ -12,34 +12,28 @@ import (
 
 	"nenya/internal/config"
 	"nenya/internal/gateway"
+	"nenya/internal/testutil"
 )
 
 func newChatProxy(t *testing.T, upstreamURL string) *Proxy {
 	t.Helper()
-	cfg := config.Config{
-		Server: config.ServerConfig{
-			MaxBodyBytes: 10 << 20,
-		},
-		Governance: config.GovernanceConfig{
-			RatelimitMaxRPM: 60,
-			RatelimitMaxTPM: 100000,
-		},
-		SecurityFilter: config.SecurityFilterConfig{
-			Enabled: false,
-		},
-		Providers: map[string]config.ProviderConfig{
-			"test-provider": {
-				URL:           upstreamURL + "/v1/chat/completions",
-				RoutePrefixes: []string{"test-"},
-				AuthStyle:     "none",
-			},
+	cfg := testutil.MinimalConfig()
+	cfg.Server.MaxBodyBytes = 10 << 20
+	cfg.Governance.RatelimitMaxRPM = 60
+	cfg.Governance.RatelimitMaxTPM = 100000
+	cfg.SecurityFilter.Enabled = false
+	cfg.Providers = map[string]config.ProviderConfig{
+		"test-provider": {
+			URL:           upstreamURL + "/v1/chat/completions",
+			RoutePrefixes: []string{"test-"},
+			AuthStyle:     "none",
 		},
 	}
 	secrets := &config.SecretsConfig{
 		ClientToken:  "test-token",
 		ProviderKeys: map[string]string{},
 	}
-	gw := gateway.New(cfg, secrets, slog.Default())
+	gw := gateway.New(*cfg, secrets, slog.Default())
 	p := &Proxy{}
 	p.StoreGateway(gw)
 	return p
@@ -54,16 +48,13 @@ func TestHandleChatCompletions_ValidUpstream(t *testing.T) {
 	defer upstream.Close()
 
 	p := newChatProxy(t, upstream.URL)
-	body := strings.NewReader(`{"model":"test-model","messages":[{"role":"user","content":"hi"}]}`)
-	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", body)
-	req.Header.Set("Authorization", "Bearer test-token")
-	rec := httptest.NewRecorder()
+	body := `{"model":"test-model","messages":[{"role":"user","content":"hi"}]}`
+	req := testutil.NewTestRequest(t, http.MethodPost, "/v1/chat/completions", body)
+	rec := testutil.NewTestResponseRecorder()
 
 	p.ServeHTTP(rec, req)
 
-	if rec.Code != http.StatusOK {
-		t.Fatalf("expected 200, got %d", rec.Code)
-	}
+	testutil.AssertResponseStatusCode(t, rec, http.StatusOK)
 	respBody, _ := io.ReadAll(rec.Body)
 	if !strings.Contains(string(respBody), "hello") {
 		t.Errorf("expected response to contain 'hello', got: %s", string(respBody))
@@ -72,73 +63,58 @@ func TestHandleChatCompletions_ValidUpstream(t *testing.T) {
 
 func TestHandleChatCompletions_MissingModel(t *testing.T) {
 	p := newChatProxy(t, "http://127.0.0.1:1")
-	body := strings.NewReader(`{"messages":[{"role":"user","content":"hi"}]}`)
-	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", body)
-	req.Header.Set("Authorization", "Bearer test-token")
-	rec := httptest.NewRecorder()
+	body := `{"messages":[{"role":"user","content":"hi"}]}`
+	req := testutil.NewTestRequest(t, http.MethodPost, "/v1/chat/completions", body)
+	rec := testutil.NewTestResponseRecorder()
 
 	p.ServeHTTP(rec, req)
 
-	if rec.Code != http.StatusBadRequest {
-		t.Fatalf("expected 400, got %d", rec.Code)
-	}
+	testutil.AssertResponseStatusCode(t, rec, http.StatusBadRequest)
 }
 
 func TestHandleChatCompletions_EmptyModel(t *testing.T) {
 	p := newChatProxy(t, "http://127.0.0.1:1")
-	body := strings.NewReader(`{"model":"","messages":[{"role":"user","content":"hi"}]}`)
-	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", body)
-	req.Header.Set("Authorization", "Bearer test-token")
-	rec := httptest.NewRecorder()
+	body := `{"model":"","messages":[{"role":"user","content":"hi"}]}`
+	req := testutil.NewTestRequest(t, http.MethodPost, "/v1/chat/completions", body)
+	rec := testutil.NewTestResponseRecorder()
 
 	p.ServeHTTP(rec, req)
 
-	if rec.Code != http.StatusBadRequest {
-		t.Fatalf("expected 400, got %d", rec.Code)
-	}
+	testutil.AssertResponseStatusCode(t, rec, http.StatusBadRequest)
 }
 
 func TestHandleChatCompletions_ModelTooLong(t *testing.T) {
 	p := newChatProxy(t, "http://127.0.0.1:1")
 	longModel := strings.Repeat("a", MaxModelNameLength+1)
 	payload := fmt.Sprintf(`{"model":"%s","messages":[{"role":"user","content":"hi"}]}`, longModel)
-	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(payload))
-	req.Header.Set("Authorization", "Bearer test-token")
-	rec := httptest.NewRecorder()
+	req := testutil.NewTestRequest(t, http.MethodPost, "/v1/chat/completions", payload)
+	rec := testutil.NewTestResponseRecorder()
 
 	p.ServeHTTP(rec, req)
 
-	if rec.Code != http.StatusBadRequest {
-		t.Fatalf("expected 400, got %d", rec.Code)
-	}
+	testutil.AssertResponseStatusCode(t, rec, http.StatusBadRequest)
 }
 
 func TestHandleChatCompletions_InvalidJSON(t *testing.T) {
 	p := newChatProxy(t, "http://127.0.0.1:1")
-	body := strings.NewReader(`{invalid json}`)
-	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", body)
-	req.Header.Set("Authorization", "Bearer test-token")
-	rec := httptest.NewRecorder()
+	body := `{invalid json}`
+	req := testutil.NewTestRequest(t, http.MethodPost, "/v1/chat/completions", body)
+	rec := testutil.NewTestResponseRecorder()
 
 	p.ServeHTTP(rec, req)
 
-	if rec.Code != http.StatusBadRequest {
-		t.Fatalf("expected 400, got %d", rec.Code)
-	}
+	testutil.AssertResponseStatusCode(t, rec, http.StatusBadRequest)
 }
 
 func TestHandleChatCompletions_UnknownModel(t *testing.T) {
 	p := newChatProxy(t, "http://127.0.0.1:1")
-	body := strings.NewReader(`{"model":"unknown-model-xyz","messages":[{"role":"user","content":"hi"}]}`)
-	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", body)
-	req.Header.Set("Authorization", "Bearer test-token")
-	rec := httptest.NewRecorder()
+	body := `{"model":"unknown-model-xyz","messages":[{"role":"user","content":"hi"}]}`
+	req := testutil.NewTestRequest(t, http.MethodPost, "/v1/chat/completions", body)
+	rec := testutil.NewTestResponseRecorder()
 
 	p.ServeHTTP(rec, req)
 
-	if rec.Code != http.StatusBadRequest {
-		t.Fatalf("expected 400, got %d", rec.Code)
-	}
+	testutil.AssertResponseStatusCode(t, rec, http.StatusBadRequest)
 }
 
 func TestHandleChatCompletions_AgentWithModels(t *testing.T) {
