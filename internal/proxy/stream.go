@@ -304,7 +304,7 @@ func (p *Proxy) streamResponse(gw *gateway.NenyaGateway, w http.ResponseWriter, 
 
 		if errors.Is(copyErr, stream.ErrStreamBlocked) {
 			action.cancel()
-			action.resp.Body.Close()
+			_ = action.resp.Body.Close()
 			gw.Logger.Warn("stream blocked by execution policy, upstream killed",
 				"model", target.Model, "provider", target.Provider)
 			if gw.Metrics != nil {
@@ -315,13 +315,13 @@ func (p *Proxy) streamResponse(gw *gateway.NenyaGateway, w http.ResponseWriter, 
 		}
 		if errors.Is(copyErr, errStreamStalled) {
 			action.cancel()
-			action.resp.Body.Close()
+			_ = action.resp.Body.Close()
 			gw.Logger.Warn("stream stalled, aborting upstream",
 				"model", target.Model, "provider", target.Provider,
 				"idle_timeout", streamIdleTimeout)
 			return
 		}
-		action.resp.Body.Close()
+		_ = action.resp.Body.Close()
 
 		// Only credit the circuit breaker on a clean stream. Context errors mean
 		// the client disconnected; don't penalize upstream. Other errors mean the
@@ -348,7 +348,7 @@ func (p *Proxy) streamResponse(gw *gateway.NenyaGateway, w http.ResponseWriter, 
 		}
 	case <-r.Context().Done():
 		gw.Logger.Info("client disconnected, aborting upstream stream", "model", target.Model)
-		action.resp.Body.Close()
+		_ = action.resp.Body.Close()
 		select {
 		case <-done:
 			// Goroutine exited before the timeout; safe to return the buffer.
@@ -380,8 +380,8 @@ func (p *Proxy) writeBlockedSSE(gw *gateway.NenyaGateway, w http.ResponseWriter)
 		gw.Logger.Error("failed to marshal blocked SSE payload", "err", err)
 		return
 	}
-	fmt.Fprintf(w, "data: %s\n\n", blockJSON)
-	fmt.Fprint(w, "data: [DONE]\n\n")
+	_, _ = fmt.Fprintf(w, "data: %s\n\n", blockJSON)
+	_, _ = fmt.Fprint(w, "data: [DONE]\n\n")
 	if flusher, ok := w.(http.Flusher); ok {
 		flusher.Flush()
 	}

@@ -42,8 +42,8 @@ func newChatProxy(t *testing.T, upstreamURL string) *Proxy {
 func TestHandleChatCompletions_ValidUpstream(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")
-		fmt.Fprintf(w, "data: {\"choices\":[{\"delta\":{\"content\":\"hello\"}}]}\n\n")
-		fmt.Fprintf(w, "data: [DONE]\n\n")
+		_, _ = fmt.Fprintf(w, "data: {\"choices\":[{\"delta\":{\"content\":\"hello\"}}]}\n\n")
+		_, _ = fmt.Fprintf(w, "data: [DONE]\n\n")
 	}))
 	defer upstream.Close()
 
@@ -120,8 +120,8 @@ func TestHandleChatCompletions_UnknownModel(t *testing.T) {
 func TestHandleChatCompletions_AgentWithModels(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")
-		fmt.Fprintf(w, "data: {\"choices\":[{\"delta\":{\"content\":\"agent response\"}}]}\n\n")
-		fmt.Fprintf(w, "data: [DONE]\n\n")
+		_, _ = fmt.Fprintf(w, "data: {\"choices\":[{\"delta\":{\"content\":\"agent response\"}}]}\n\n")
+		_, _ = fmt.Fprintf(w, "data: [DONE]\n\n")
 	}))
 	defer upstream.Close()
 

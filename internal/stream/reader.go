@@ -107,10 +107,10 @@ func (r *SSETransformingReader) Read(p []byte) (int, error) {
 	}
 
 	if !r.scanner.Scan() {
-		scanErr := r.scanner.Err()
-		if scanErr == nil {
+		switch r.scanner.Err() {
+		case nil:
 			r.err = io.EOF
-		} else if scanErr == bufio.ErrTooLong {
+		case bufio.ErrTooLong:
 			errPayload, _ := json.Marshal(map[string]any{
 				"error": map[string]any{
 					"message": "upstream SSE line exceeded maximum scanner buffer",
@@ -119,19 +119,17 @@ func (r *SSETransformingReader) Read(p []byte) (int, error) {
 			})
 			r.buffer = append(append([]byte("data: "), errPayload...), []byte("\n\ndata: [DONE]\n\n")...)
 			r.pos = 0
-			r.err = scanErr
+			r.err = r.scanner.Err()
 			if r.observer != nil {
+				var errMap map[string]any
+				_ = json.Unmarshal(errPayload, &errMap)
 				r.observer.OnSSEEvent(SSEEvent{
 					Type: "error",
-					Data: map[string]interface{}{
-						"message": "upstream SSE line exceeded maximum scanner buffer",
-						"type":    "gateway_error",
-					},
+					Data: errMap,
 				})
 			}
-			return r.Read(p)
-		} else {
-			r.err = scanErr
+		default:
+			r.err = r.scanner.Err()
 		}
 		if r.observer != nil && !r.closed {
 			r.closed = true

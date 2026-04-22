@@ -329,7 +329,7 @@ func TestExecuteMCPCalls(t *testing.T) {
 	if err := client.Initialize(t.Context()); err != nil {
 		t.Fatalf("Initialize failed: %v", err)
 	}
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 	if _, err := client.RefreshTools(t.Context()); err != nil {
 		t.Fatalf("RefreshTools failed: %v", err)
 	}
@@ -375,7 +375,7 @@ func TestExecuteMCPCalls_UnknownTool(t *testing.T) {
 	if err := client.Initialize(t.Context()); err != nil {
 		t.Fatalf("Initialize failed: %v", err)
 	}
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 	if _, err := client.RefreshTools(t.Context()); err != nil {
 		t.Fatalf("RefreshTools failed: %v", err)
 	}

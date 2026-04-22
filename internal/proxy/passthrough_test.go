@@ -237,7 +237,7 @@ func TestHandlePassthrough(t *testing.T) {
 			proxy.ServeHTTP(w, req)
 
 			resp := w.Result()
-			defer resp.Body.Close()
+			defer func() { _ = resp.Body.Close() }()
 
 			if resp.StatusCode != tt.expectStatus {
 				t.Errorf("expected status %d, got %d", tt.expectStatus, resp.StatusCode)
@@ -293,7 +293,7 @@ func TestPipeSSE(t *testing.T) {
 			proxy.pipeSSE(logger, src, w)
 
 			resp := w.Result()
-			defer resp.Body.Close()
+			defer func() { _ = resp.Body.Close() }()
 
 			body, _ := io.ReadAll(resp.Body)
 			if string(body) != tt.expected {

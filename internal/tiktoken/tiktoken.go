@@ -229,7 +229,7 @@ func tryDigits(runes []rune, i, n int) int {
 
 func tryPunctuation(runes []rune, i, n int) int {
 	r := runes[i]
-	if !(unicode.IsPunct(r) || unicode.IsSymbol(r) || unicode.IsMark(r)) {
+	if !unicode.IsPunct(r) && !unicode.IsSymbol(r) && !unicode.IsMark(r) {
 		return i
 	}
 	for i < n && (unicode.IsPunct(runes[i]) || unicode.IsSymbol(runes[i]) || unicode.IsMark(runes[i])) {

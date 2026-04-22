@@ -80,7 +80,7 @@ func (c *Client) Initialize(ctx context.Context) error {
 
 	resp, err := c.transport.SendRequest(ctx, "initialize", params)
 	if err != nil {
-		c.transport.Close()
+		_ = c.transport.Close()
 		return fmt.Errorf("initialize failed: %w", err)
 	}
 

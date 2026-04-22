@@ -243,7 +243,7 @@ func (g *NenyaGateway) Close() {
 		g.ResponseCache.Stop()
 	}
 	for name, client := range g.MCPClients {
-		client.Close()
+		_ = client.Close()
 		g.Logger.Debug("MCP client closed", "server", name)
 	}
 }

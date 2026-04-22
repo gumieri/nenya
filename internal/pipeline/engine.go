@@ -63,7 +63,7 @@ func CallEngine(ctx context.Context, httpClient *http.Client, provider *config.P
 	if err != nil {
 		return "", fmt.Errorf("engine unreachable: %v", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, MaxErrorBodyBytes))

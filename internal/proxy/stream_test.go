@@ -102,7 +102,7 @@ func TestStallReader_StallsAfterTimeout(t *testing.T) {
 		t.Fatalf("expected 0 bytes, got %d", n)
 	}
 
-	src.Close()
+	_ = src.Close()
 }
 
 func TestStallReader_ResetOnRead(t *testing.T) {
@@ -198,7 +198,7 @@ func TestStallReader_StopPreventsStall(t *testing.T) {
 		t.Fatalf("expected 0 bytes, got %d", n)
 	}
 
-	src.Close()
+	_ = src.Close()
 }
 
 func TestWriteBlockedSSE_MultipleChunks(t *testing.T) {
@@ -255,7 +255,7 @@ func TestStallReader_ConcurrentReadAndStall(t *testing.T) {
 		t.Fatal("timeout waiting for stall")
 	}
 
-	src.Close()
+	_ = src.Close()
 }
 
 // --- streamingBufPool tests ---

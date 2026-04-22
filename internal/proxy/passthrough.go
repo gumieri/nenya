@@ -69,7 +69,7 @@ func (p *Proxy) handlePassthrough(gw *gateway.NenyaGateway, w http.ResponseWrite
 	hasBody := r.Method == http.MethodPost || r.Method == http.MethodPut || r.Method == http.MethodPatch
 	if hasBody {
 		r.Body = http.MaxBytesReader(w, r.Body, gw.Config.Server.MaxBodyBytes)
-		defer r.Body.Close()
+		defer func() { _ = r.Body.Close() }()
 		bodyBytes, err = io.ReadAll(r.Body)
 		if err != nil {
 			gw.Logger.Error("passthrough: failed to read request body", "provider", providerName, "err", err)
@@ -114,7 +114,7 @@ func (p *Proxy) handlePassthrough(gw *gateway.NenyaGateway, w http.ResponseWrite
 		http.Error(w, "Upstream provider error", http.StatusBadGateway)
 		return
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	ctxLogger.Info("upstream response", "status", resp.StatusCode)
 

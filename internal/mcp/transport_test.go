@@ -90,7 +90,7 @@ func (ms *mockMCPServer) handleSSE(w http.ResponseWriter, r *http.Request) {
 
 	endpointURL := ms.server.URL + "/message"
 	endpointJSON, _ := json.Marshal(map[string]string{"endpoint": endpointURL})
-	fmt.Fprintf(w, "data: %s\n\n", endpointJSON)
+	_, _ = fmt.Fprintf(w, "data: %s\n\n", endpointJSON)
 	flusher.Flush()
 
 	<-r.Context().Done()
@@ -117,7 +117,7 @@ func (ms *mockMCPServer) handleMessage(w http.ResponseWriter, r *http.Request) {
 
 	case "notifications/initialized":
 		w.WriteHeader(http.StatusAccepted)
-		fmt.Fprint(w, "{}")
+		_, _ = fmt.Fprint(w, "{}")
 
 	case "tools/list":
 		ms.mu.Lock()
@@ -196,7 +196,7 @@ func TestHTTPTransport_Connect(t *testing.T) {
 		t.Fatalf("SessionEndpoint = %q, want %q", got, expected)
 	}
 
-	transport.Close()
+	_ = transport.Close()
 }
 
 func TestHTTPTransport_Connect_InvalidURL(t *testing.T) {
@@ -236,7 +236,7 @@ func TestHTTPTransport_Close(t *testing.T) {
 		t.Fatalf("Connect failed: %v", err)
 	}
 
-	transport.Close()
+	_ = transport.Close()
 
 	if transport.Ready() {
 		t.Fatal("expected transport to not be ready after Close")
@@ -255,8 +255,8 @@ func TestHTTPTransport_Close_Idempotent(t *testing.T) {
 		t.Fatalf("Connect failed: %v", err)
 	}
 
-	transport.Close()
-	transport.Close()
+	_ = transport.Close()
+	_ = transport.Close()
 
 	if transport.Ready() {
 		t.Fatal("expected transport to not be ready after double Close")
@@ -274,7 +274,7 @@ func TestHTTPTransport_SendRequest_Initialize(t *testing.T) {
 	if err := transport.Connect(t.Context()); err != nil {
 		t.Fatalf("Connect failed: %v", err)
 	}
-	defer transport.Close()
+	defer func() { _ = transport.Close() }()
 
 	params := InitializeParams{
 		ProtocolVersion: "2025-03-26",
@@ -310,7 +310,7 @@ func TestHTTPTransport_SendRequest_ToolsList(t *testing.T) {
 	if err := transport.Connect(t.Context()); err != nil {
 		t.Fatalf("Connect failed: %v", err)
 	}
-	defer transport.Close()
+	defer func() { _ = transport.Close() }()
 
 	resp, err := transport.SendRequest(t.Context(), "tools/list", nil)
 	if err != nil {
@@ -342,7 +342,7 @@ func TestHTTPTransport_SendRequest_ToolCall(t *testing.T) {
 	if err := transport.Connect(t.Context()); err != nil {
 		t.Fatalf("Connect failed: %v", err)
 	}
-	defer transport.Close()
+	defer func() { _ = transport.Close() }()
 
 	params := CallToolParams{
 		Name:      "test_tool",
@@ -387,7 +387,7 @@ func TestHTTPTransport_SendRequest_ErrorResponse(t *testing.T) {
 	if err := transport.Connect(t.Context()); err != nil {
 		t.Fatalf("Connect failed: %v", err)
 	}
-	defer transport.Close()
+	defer func() { _ = transport.Close() }()
 
 	params := CallToolParams{
 		Name: "nonexistent_tool",
@@ -428,7 +428,7 @@ func TestHTTPTransport_SendRequest_AfterClose(t *testing.T) {
 	if err := transport.Connect(t.Context()); err != nil {
 		t.Fatalf("Connect failed: %v", err)
 	}
-	transport.Close()
+	_ = transport.Close()
 
 	_, err := transport.SendRequest(t.Context(), "ping", nil)
 	if err != ErrTransportClosed {
@@ -447,7 +447,7 @@ func TestHTTPTransport_SendNotification(t *testing.T) {
 	if err := transport.Connect(t.Context()); err != nil {
 		t.Fatalf("Connect failed: %v", err)
 	}
-	defer transport.Close()
+	defer func() { _ = transport.Close() }()
 
 	err := transport.SendNotification("notifications/initialized", nil)
 	if err != nil {
@@ -500,7 +500,7 @@ func TestHTTPTransport_HeadersPassed(t *testing.T) {
 	if err := transport.Connect(t.Context()); err != nil {
 		t.Fatalf("Connect failed: %v", err)
 	}
-	defer transport.Close()
+	defer func() { _ = transport.Close() }()
 
 	resp, err := transport.SendRequest(t.Context(), "ping", nil)
 	if err != nil {
@@ -555,7 +555,7 @@ func (pm *proxyMockMCPServer) handleSSE(w http.ResponseWriter, r *http.Request) 
 	flusher.Flush()
 
 	endpointURL := pm.server.URL + "/message"
-	fmt.Fprintf(w, "event: endpoint\ndata: %s\n\n", endpointURL)
+	_, _ = fmt.Fprintf(w, "event: endpoint\ndata: %s\n\n", endpointURL)
 	flusher.Flush()
 
 	for {
@@ -563,7 +563,7 @@ func (pm *proxyMockMCPServer) handleSSE(w http.ResponseWriter, r *http.Request) 
 		case <-r.Context().Done():
 			return
 		case msg := <-pm.sseCh:
-			fmt.Fprintf(w, "event: message\ndata: %s\n\n", msg.data)
+			_, _ = fmt.Fprintf(w, "event: message\ndata: %s\n\n", msg.data)
 			flusher.Flush()
 		}
 	}
@@ -637,7 +637,7 @@ func (pm *proxyMockMCPServer) handleMessage(w http.ResponseWriter, r *http.Reque
 	}
 
 	w.WriteHeader(http.StatusAccepted)
-	fmt.Fprint(w, "Accepted")
+	_, _ = fmt.Fprint(w, "Accepted")
 }
 
 func TestHTTPTransport_ProxyMode_Initialize(t *testing.T) {
@@ -651,7 +651,7 @@ func TestHTTPTransport_ProxyMode_Initialize(t *testing.T) {
 	if err := transport.Connect(t.Context()); err != nil {
 		t.Fatalf("Connect failed: %v", err)
 	}
-	defer transport.Close()
+	defer func() { _ = transport.Close() }()
 
 	params := InitializeParams{
 		ProtocolVersion: "2025-03-26",
@@ -687,7 +687,7 @@ func TestHTTPTransport_ProxyMode_ToolsList(t *testing.T) {
 	if err := transport.Connect(t.Context()); err != nil {
 		t.Fatalf("Connect failed: %v", err)
 	}
-	defer transport.Close()
+	defer func() { _ = transport.Close() }()
 
 	resp, err := transport.SendRequest(t.Context(), "tools/list", nil)
 	if err != nil {
@@ -719,7 +719,7 @@ func TestHTTPTransport_ProxyMode_ToolCall(t *testing.T) {
 	if err := transport.Connect(t.Context()); err != nil {
 		t.Fatalf("Connect failed: %v", err)
 	}
-	defer transport.Close()
+	defer func() { _ = transport.Close() }()
 
 	params := CallToolParams{
 		Name:      "proxy_tool",
@@ -760,7 +760,7 @@ func TestHTTPTransport_ProxyMode_Ping(t *testing.T) {
 	if err := transport.Connect(t.Context()); err != nil {
 		t.Fatalf("Connect failed: %v", err)
 	}
-	defer transport.Close()
+	defer func() { _ = transport.Close() }()
 
 	resp, err := transport.SendRequest(t.Context(), "ping", nil)
 	if err != nil {
