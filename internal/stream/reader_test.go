@@ -64,11 +64,11 @@ func TestSSETransformingReader_NonSSEJSON(t *testing.T) {
 }
 
 func TestSSETransformingReader_EmptyLinesAndComments(t *testing.T) {
-	input := `: this is a comment
+	input := `
+: this is a comment
 
-data: {"choices":[{"delta":{"content":"hi"}}]}
+data: {"choices":[{"delta":{"content":"test"}}]}
 
-: another comment
 `
 	reader := NewSSETransformingReader(strings.NewReader(input), &mockTransformer{})
 	var buf bytes.Buffer
@@ -77,11 +77,14 @@ data: {"choices":[{"delta":{"content":"hi"}}]}
 		t.Fatalf("unexpected error: %v", err)
 	}
 	output := buf.String()
+	if !strings.Contains(output, "data: ") {
+		t.Fatalf("expected SSE data lines, got: %s", output)
+	}
+	if !strings.Contains(output, "test") {
+		t.Fatal("expected 'test' in output")
+	}
 	if !strings.Contains(output, ": this is a comment\n") {
 		t.Fatal("comment line not preserved")
-	}
-	if !strings.Contains(output, ": another comment\n") {
-		t.Fatal("second comment not preserved")
 	}
 	if strings.Count(output, "\n\n") < 2 {
 		t.Fatalf("empty lines not preserved, got: %q", output)

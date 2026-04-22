@@ -21,17 +21,36 @@ type UsageCallback func(completionTokens, promptTokens, totalTokens int)
 
 type ContentCallback func(content string)
 
+// SSEObserver receives notifications about SSE events during streaming.
+// Observers are called after transformation, so they see what the client receives.
+type SSEObserver interface {
+	// OnSSEEvent is called for each SSE event (data line, [DONE], error, etc.)
+	OnSSEEvent(event SSEEvent)
+	// OnStreamClose is called when the stream ends (with any error, or nil on clean EOF)
+	OnStreamClose(err error)
+}
+
+// SSEEvent represents a single SSE event.
+type SSEEvent struct {
+	ID   string
+	Type string // "content", "usage", "tool_call", "done", "error"
+	Data map[string]interface{}
+	Raw  []byte
+}
+
 type SSETransformingReader struct {
 	src                 io.Reader
 	scanner             *bufio.Scanner
 	transformer         ResponseTransformer
 	onUsage             UsageCallback
 	onContent           ContentCallback
+	observer            SSEObserver
 	streamFilter        *StreamFilter
 	streamEntropyFilter *StreamEntropyFilter
 	buffer              []byte
 	pos                 int
 	err                 error
+	closed              bool
 
 	// Track last seen token counts to deliver deltas when providers
 	// emit usage in multiple chunks.
@@ -66,6 +85,10 @@ func (r *SSETransformingReader) SetOnContent(cb ContentCallback) {
 	r.onContent = cb
 }
 
+func (r *SSETransformingReader) SetObserver(obs SSEObserver) {
+	r.observer = obs
+}
+
 func (r *SSETransformingReader) Read(p []byte) (int, error) {
 	// Drain pending buffer before returning any error so that an error
 	// event we injected (e.g. ErrTooLong) reaches the client.
@@ -87,11 +110,7 @@ func (r *SSETransformingReader) Read(p []byte) (int, error) {
 		scanErr := r.scanner.Err()
 		if scanErr == nil {
 			r.err = io.EOF
-			return 0, r.err
-		}
-		if scanErr == bufio.ErrTooLong {
-			// Surface a parseable SSE error chunk so the client knows why
-			// the stream ended rather than seeing a silent EOF.
+		} else if scanErr == bufio.ErrTooLong {
 			errPayload, _ := json.Marshal(map[string]any{
 				"error": map[string]any{
 					"message": "upstream SSE line exceeded maximum scanner buffer",
@@ -101,9 +120,23 @@ func (r *SSETransformingReader) Read(p []byte) (int, error) {
 			r.buffer = append(append([]byte("data: "), errPayload...), []byte("\n\ndata: [DONE]\n\n")...)
 			r.pos = 0
 			r.err = scanErr
+			if r.observer != nil {
+				r.observer.OnSSEEvent(SSEEvent{
+					Type: "error",
+					Data: map[string]interface{}{
+						"message": "upstream SSE line exceeded maximum scanner buffer",
+						"type":    "gateway_error",
+					},
+				})
+			}
 			return r.Read(p)
+		} else {
+			r.err = scanErr
 		}
-		r.err = scanErr
+		if r.observer != nil && !r.closed {
+			r.closed = true
+			r.observer.OnStreamClose(r.err)
+		}
 		return 0, r.err
 	}
 
@@ -132,10 +165,13 @@ func (r *SSETransformingReader) transformLine(line []byte) []byte {
 		return line
 	}
 
-	if bytes.HasPrefix(line, []byte("data: ")) {
+		if bytes.HasPrefix(line, []byte("data: ")) {
 		origData := bytes.TrimPrefix(line, []byte("data: "))
 
 		if len(origData) == 0 || bytes.Equal(origData, []byte("[DONE]")) {
+			if r.observer != nil {
+				r.observer.OnSSEEvent(SSEEvent{Type: "done", Raw: line})
+			}
 			return line
 		}
 
@@ -189,21 +225,38 @@ func (r *SSETransformingReader) transformLine(line []byte) []byte {
 
 		if r.transformer == nil {
 			if bytes.Equal(data, origData) {
+				if r.observer != nil {
+					r.observer.OnSSEEvent(SSEEvent{Raw: line, Data: parsed})
+				}
 				return line
 			}
-			return append([]byte("data: "), data...)
+			finalLine := append([]byte("data: "), data...)
+			if r.observer != nil {
+				r.observer.OnSSEEvent(SSEEvent{Raw: finalLine, Data: parsed})
+			}
+			return finalLine
 		}
 
 		transformed, err := r.transformer.TransformSSEChunk(data)
 		if err != nil {
+			if r.observer != nil {
+				r.observer.OnSSEEvent(SSEEvent{Raw: line, Data: parsed})
+			}
 			return line
 		}
 
 		if bytes.Equal(transformed, origData) && bytes.Equal(data, origData) {
+			if r.observer != nil {
+				r.observer.OnSSEEvent(SSEEvent{Raw: line, Data: parsed})
+			}
 			return line
 		}
 
-		return append([]byte("data: "), transformed...)
+		finalLine := append([]byte("data: "), transformed...)
+		if r.observer != nil {
+			r.observer.OnSSEEvent(SSEEvent{Raw: finalLine, Data: parsed})
+		}
+		return finalLine
 	}
 
 	trimmed := bytes.TrimSpace(line)
