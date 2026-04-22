@@ -33,7 +33,7 @@ func newTestProxy(t *testing.T) (*Proxy, *httptest.Server) {
 func TestServeHTTP_Healthz_NoAuth(t *testing.T) {
 	p, _ := newTestProxy(t)
 	req := testutil.NewTestRequest(t, http.MethodGet, "/healthz", nil)
-	rec := testutil.NewTestResponseRecorder()
+	rec := httptest.NewRecorder()
 	p.ServeHTTP(rec, req)
 
 	testutil.AssertResponseStatusCode(t, rec, http.StatusOK)
@@ -50,7 +50,7 @@ func TestServeHTTP_Statsz_NoAuth(t *testing.T) {
 	p, _ := newTestProxy(t)
 	req := testutil.NewTestRequest(t, http.MethodGet, "/statsz", nil)
 	req.Header.Set("Authorization", "")
-	rec := testutil.NewTestResponseRecorder()
+	rec := httptest.NewRecorder()
 	p.ServeHTTP(rec, req)
 
 	testutil.AssertResponseStatusCode(t, rec, http.StatusUnauthorized)
@@ -59,7 +59,7 @@ func TestServeHTTP_Statsz_NoAuth(t *testing.T) {
 func TestServeHTTP_Statsz_ValidAuth(t *testing.T) {
 	p, _ := newTestProxy(t)
 	req := testutil.NewTestRequest(t, http.MethodGet, "/statsz", nil)
-	rec := testutil.NewTestResponseRecorder()
+	rec := httptest.NewRecorder()
 	p.ServeHTTP(rec, req)
 
 	testutil.AssertResponseStatusCode(t, rec, http.StatusOK)
@@ -72,7 +72,7 @@ func TestServeHTTP_Statsz_ValidAuth(t *testing.T) {
 func TestServeHTTP_Models_ValidAuth(t *testing.T) {
 	p, _ := newTestProxy(t)
 	req := testutil.NewTestRequest(t, http.MethodGet, "/v1/models", nil)
-	rec := testutil.NewTestResponseRecorder()
+	rec := httptest.NewRecorder()
 	p.ServeHTTP(rec, req)
 
 	testutil.AssertResponseStatusCode(t, rec, http.StatusOK)
@@ -89,7 +89,7 @@ func TestServeHTTP_Models_NoAuth(t *testing.T) {
 	p, _ := newTestProxy(t)
 	req := testutil.NewTestRequest(t, http.MethodGet, "/v1/models", nil)
 	req.Header.Set("Authorization", "")
-	rec := testutil.NewTestResponseRecorder()
+	rec := httptest.NewRecorder()
 	p.ServeHTTP(rec, req)
 
 	testutil.AssertResponseStatusCode(t, rec, http.StatusUnauthorized)
@@ -99,7 +99,7 @@ func TestServeHTTP_Models_WrongToken(t *testing.T) {
 	p, _ := newTestProxy(t)
 	req := testutil.NewTestRequest(t, http.MethodGet, "/v1/models", nil)
 	req.Header.Set("Authorization", "Bearer wrong-token")
-	rec := testutil.NewTestResponseRecorder()
+	rec := httptest.NewRecorder()
 	p.ServeHTTP(rec, req)
 
 	testutil.AssertResponseStatusCode(t, rec, http.StatusForbidden)
@@ -110,7 +110,7 @@ func TestServeHTTP_ChatCompletions_NoAuth(t *testing.T) {
 	body := `{"model":"gemini-2.5-flash","messages":[{"role":"user","content":"hi"}]}`
 	req := testutil.NewTestRequest(t, http.MethodPost, "/v1/chat/completions", body)
 	req.Header.Set("Authorization", "")
-	rec := testutil.NewTestResponseRecorder()
+	rec := httptest.NewRecorder()
 	p.ServeHTTP(rec, req)
 
 	testutil.AssertResponseStatusCode(t, rec, http.StatusUnauthorized)
@@ -121,7 +121,7 @@ func TestServeHTTP_ChatCompletions_WrongToken(t *testing.T) {
 	body := `{"model":"gemini-2.5-flash","messages":[{"role":"user","content":"hi"}]}`
 	req := testutil.NewTestRequest(t, http.MethodPost, "/v1/chat/completions", body)
 	req.Header.Set("Authorization", "Bearer wrong-token")
-	rec := testutil.NewTestResponseRecorder()
+	rec := httptest.NewRecorder()
 	p.ServeHTTP(rec, req)
 
 	testutil.AssertResponseStatusCode(t, rec, http.StatusForbidden)
@@ -130,7 +130,7 @@ func TestServeHTTP_ChatCompletions_WrongToken(t *testing.T) {
 func TestServeHTTP_UnknownPath(t *testing.T) {
 	p, _ := newTestProxy(t)
 	req := testutil.NewTestRequest(t, http.MethodGet, "/unknown", nil)
-	rec := testutil.NewTestResponseRecorder()
+	rec := httptest.NewRecorder()
 	p.ServeHTTP(rec, req)
 
 	testutil.AssertResponseStatusCode(t, rec, http.StatusNotFound)
@@ -139,7 +139,7 @@ func TestServeHTTP_UnknownPath(t *testing.T) {
 func TestServeHTTP_Models_WrongMethod(t *testing.T) {
 	p, _ := newTestProxy(t)
 	req := testutil.NewTestRequest(t, http.MethodPost, "/v1/models", nil)
-	rec := testutil.NewTestResponseRecorder()
+	rec := httptest.NewRecorder()
 	p.ServeHTTP(rec, req)
 
 	testutil.AssertResponseStatusCode(t, rec, http.StatusNotFound)
@@ -148,7 +148,7 @@ func TestServeHTTP_Models_WrongMethod(t *testing.T) {
 func TestServeHTTP_Metrics_ValidAuth(t *testing.T) {
 	p, _ := newTestProxy(t)
 	req := testutil.NewTestRequest(t, http.MethodGet, "/metrics", nil)
-	rec := testutil.NewTestResponseRecorder()
+	rec := httptest.NewRecorder()
 	p.ServeHTTP(rec, req)
 
 	testutil.AssertResponseStatusCode(t, rec, http.StatusOK)
@@ -157,7 +157,7 @@ func TestServeHTTP_Metrics_ValidAuth(t *testing.T) {
 func TestServeHTTP_Models_NoDeepSeekWithoutAPIKey(t *testing.T) {
 	p, _ := newTestProxy(t)
 	req := testutil.NewTestRequest(t, http.MethodGet, "/v1/models", nil)
-	rec := testutil.NewTestResponseRecorder()
+	rec := httptest.NewRecorder()
 	p.ServeHTTP(rec, req)
 
 	testutil.AssertResponseStatusCode(t, rec, http.StatusOK)

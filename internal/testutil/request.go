@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"encoding/json"
 	"io"
-	"io/ioutil"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
@@ -39,16 +38,11 @@ func NewTestRequest(t *testing.T, method, url string, body interface{}) *http.Re
 	return req
 }
 
-// NewTestResponseRecorder creates a new response recorder with common defaults.
-func NewTestResponseRecorder() *httptest.ResponseRecorder {
-	return httptest.NewRecorder()
-}
-
 // ReadResponseBody reads and returns the response body from a recorder.
 func ReadResponseBody(t *testing.T, rec *httptest.ResponseRecorder) []byte {
 	t.Helper()
 
-	body, err := ioutil.ReadAll(rec.Body)
+	body, err := io.ReadAll(rec.Body)
 	if err != nil {
 		t.Fatalf("failed to read response body: %v", err)
 	}
