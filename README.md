@@ -249,9 +249,37 @@ All `/v1/*` endpoints require `Authorization: Bearer <client_token>`.
 | `GET /v1/models` | Bearer | Available models catalog |
 | `POST /v1/embeddings` | Bearer | Passthrough proxy |
 | `POST /v1/responses` | Bearer | Passthrough proxy |
+| `POST /proxy/{provider}/*` | Bearer | Arbitrary provider endpoint passthrough (all HTTP methods, SSE streaming) |
 | `GET /healthz` | None | Engine health probe |
 | `GET /statsz` | None | Token usage, circuit breaker state, MCP server status |
 | `GET /metrics` | None | Prometheus-compatible metrics |
+
+### Passthrough Proxy
+
+The `/proxy/{provider}/*` endpoint enables raw proxying to any provider endpoint:
+
+```bash
+# Get Anthropic models
+curl -H "Authorization: Bearer $CLIENT_TOKEN" \
+  http://localhost:8080/proxy/anthropic/v1/models
+
+# Upload file to OpenAI
+curl -X POST -H "Authorization: Bearer $CLIENT_TOKEN" \
+  -F "file=@document.pdf" -F "purpose=fine-tune" \
+  http://localhost:8080/proxy/openai/v1/files
+
+# Any provider endpoint
+curl -H "Authorization: Bearer $CLIENT_TOKEN" \
+  http://localhost:8080/proxy/{provider}/{path}
+```
+
+**Features:**
+- All HTTP methods: GET, POST, PUT, PATCH, DELETE, HEAD, OPTIONS
+- Automatic auth injection (provider-specific API keys)
+- Header sanitization (strips hop-by-hop, auth, host headers)
+- SSE streaming auto-detect (`text/event-stream` → pipe as-is)
+- Rate limiting, usage tracking, and metrics
+- Bypasses content pipeline, circuit breaker, and retry (raw proxy)
 
 ## Hot Reload
 

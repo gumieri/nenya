@@ -388,6 +388,8 @@ To add or override a provider:
 | `timeout_seconds` | int | Per-provider timeout in seconds. For the `ollama` provider, sets the HTTP transport's `ResponseHeaderTimeout` (time-to-first-byte). For other providers, applies as a request context timeout on `/v1/embeddings` and `/v1/responses` endpoints. Also used as a fallback for engine calls (`security_filter.engine`, `window.engine`) when the engine's own `timeout_seconds` is not explicitly set. Default: `30` (transport-level). |
 | `retryable_status_codes` | []int | Provider-level override for retryable status codes. **Replaces** both global and built-in defaults for this provider. If not set, falls back to `governance.retryable_status_codes`, then built-in defaults `[429, 500, 502, 503, 504]`. |
 
+**Note**: The `BaseURL` field is automatically derived from `url` by stripping the path component. This is used by the `/proxy/{provider}/*` passthrough endpoint to construct arbitrary provider URLs. For example, if `url` is `https://api.anthropic.com/v1/messages`, the derived `BaseURL` is `https://api.anthropic.com`, allowing passthrough to `/proxy/anthropic/v1/models`.
+
 API keys are loaded from the secrets file via `provider_keys` (keyed by provider name). See [`SECRETS_FORMAT.md`](SECRETS_FORMAT.md).
 
 ### Gemini `auth_style: "bearer+x-goog"`
