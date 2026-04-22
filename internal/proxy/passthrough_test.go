@@ -164,13 +164,13 @@ func TestHandlePassthrough(t *testing.T) {
 					if tt.upstreamSSE {
 						w.Header().Set("Content-Type", "text/event-stream")
 						w.WriteHeader(tt.upstreamStatus)
-						io.WriteString(w, tt.upstreamBody)
+						_, _ = io.WriteString(w, tt.upstreamBody)
 						return
 					}
 
 					w.Header().Set("Content-Type", "application/json")
 					w.WriteHeader(tt.upstreamStatus)
-					io.WriteString(w, tt.upstreamBody)
+					_, _ = io.WriteString(w, tt.upstreamBody)
 				}
 			}
 

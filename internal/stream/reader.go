@@ -165,7 +165,7 @@ func (r *SSETransformingReader) transformLine(line []byte) []byte {
 		return line
 	}
 
-		if bytes.HasPrefix(line, []byte("data: ")) {
+	if bytes.HasPrefix(line, []byte("data: ")) {
 		origData := bytes.TrimPrefix(line, []byte("data: "))
 
 		if len(origData) == 0 || bytes.Equal(origData, []byte("[DONE]")) {

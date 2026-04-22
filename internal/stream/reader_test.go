@@ -181,9 +181,9 @@ data: {"choices":[{"delta":{"content":"bye"}}]}
 
 func TestToInt(t *testing.T) {
 	tests := []struct {
-		name string
+		name  string
 		input interface{}
-		want int
+		want  int
 	}{
 		{"float64 truncated", float64(42.7), 42},
 		{"float64 zero", float64(0), 0},
@@ -203,9 +203,9 @@ func TestToInt(t *testing.T) {
 
 func TestExtractUsageFromMap(t *testing.T) {
 	tests := []struct {
-		name       string
-		chunk      map[string]interface{}
-		wantFired  bool
+		name      string
+		chunk     map[string]interface{}
+		wantFired bool
 	}{
 		{
 			"non-map usage field",
@@ -368,11 +368,11 @@ data: [DONE]
 
 func TestNormalizeToolCalls(t *testing.T) {
 	tests := []struct {
-		name         string
-		chunk        map[string]interface{}
-		wantMutate   bool
-		wantTCLen    int
-		wantFirstID  string
+		name        string
+		chunk       map[string]interface{}
+		wantMutate  bool
+		wantTCLen   int
+		wantFirstID string
 	}{
 		{
 			"null function stripped",
