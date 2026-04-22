@@ -8,5 +8,6 @@
 //   - Config and gateway factories
 //   - HTTP request helpers
 //
-// All utilities are designed to be thread-safe and suitable for parallel tests.
+// Each test should create its own instances of mock types; they are not
+// designed for concurrent use within a single test.
 package testutil

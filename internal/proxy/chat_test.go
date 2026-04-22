@@ -50,7 +50,7 @@ func TestHandleChatCompletions_ValidUpstream(t *testing.T) {
 	p := newChatProxy(t, upstream.URL)
 	body := `{"model":"test-model","messages":[{"role":"user","content":"hi"}]}`
 	req := testutil.NewTestRequest(t, http.MethodPost, "/v1/chat/completions", body)
-	rec := testutil.NewTestResponseRecorder()
+	rec := httptest.NewRecorder()
 
 	p.ServeHTTP(rec, req)
 
@@ -65,7 +65,7 @@ func TestHandleChatCompletions_MissingModel(t *testing.T) {
 	p := newChatProxy(t, "http://127.0.0.1:1")
 	body := `{"messages":[{"role":"user","content":"hi"}]}`
 	req := testutil.NewTestRequest(t, http.MethodPost, "/v1/chat/completions", body)
-	rec := testutil.NewTestResponseRecorder()
+	rec := httptest.NewRecorder()
 
 	p.ServeHTTP(rec, req)
 
@@ -76,7 +76,7 @@ func TestHandleChatCompletions_EmptyModel(t *testing.T) {
 	p := newChatProxy(t, "http://127.0.0.1:1")
 	body := `{"model":"","messages":[{"role":"user","content":"hi"}]}`
 	req := testutil.NewTestRequest(t, http.MethodPost, "/v1/chat/completions", body)
-	rec := testutil.NewTestResponseRecorder()
+	rec := httptest.NewRecorder()
 
 	p.ServeHTTP(rec, req)
 
@@ -88,7 +88,7 @@ func TestHandleChatCompletions_ModelTooLong(t *testing.T) {
 	longModel := strings.Repeat("a", MaxModelNameLength+1)
 	payload := fmt.Sprintf(`{"model":"%s","messages":[{"role":"user","content":"hi"}]}`, longModel)
 	req := testutil.NewTestRequest(t, http.MethodPost, "/v1/chat/completions", payload)
-	rec := testutil.NewTestResponseRecorder()
+	rec := httptest.NewRecorder()
 
 	p.ServeHTTP(rec, req)
 
@@ -99,7 +99,7 @@ func TestHandleChatCompletions_InvalidJSON(t *testing.T) {
 	p := newChatProxy(t, "http://127.0.0.1:1")
 	body := `{invalid json}`
 	req := testutil.NewTestRequest(t, http.MethodPost, "/v1/chat/completions", body)
-	rec := testutil.NewTestResponseRecorder()
+	rec := httptest.NewRecorder()
 
 	p.ServeHTTP(rec, req)
 
@@ -110,7 +110,7 @@ func TestHandleChatCompletions_UnknownModel(t *testing.T) {
 	p := newChatProxy(t, "http://127.0.0.1:1")
 	body := `{"model":"unknown-model-xyz","messages":[{"role":"user","content":"hi"}]}`
 	req := testutil.NewTestRequest(t, http.MethodPost, "/v1/chat/completions", body)
-	rec := testutil.NewTestResponseRecorder()
+	rec := httptest.NewRecorder()
 
 	p.ServeHTTP(rec, req)
 

@@ -7,8 +7,11 @@ import (
 	"nenya/internal/config"
 )
 
-// AssertConfigEqual asserts that two configs are equal.
+// AssertConfigEqual asserts that two configs are equal by comparing exported fields.
 // Useful for verifying config transformations.
+// Note: This uses reflect.DeepEqual which compares unexported tracking fields
+// (e.g., enabledSet, rpmSet). For reliable comparison, only use this with
+// programmatically-constructed configs, not ones deserialized from JSON.
 func AssertConfigEqual(t *testing.T, expected, actual *config.Config) {
 	t.Helper()
 

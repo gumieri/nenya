@@ -1,74 +1,16 @@
 package testutil
 
 import (
-	"context"
-	"net/http"
 	"testing"
-	"time"
 
 	"nenya/internal/config"
 )
 
 // DefaultConfig returns a minimal valid Config for testing.
 // It uses in-memory defaults and safe values.
+// Deprecated: Use MinimalConfig() instead.
 func DefaultConfig() *config.Config {
-	return &config.Config{
-		Server: config.ServerConfig{
-			ListenAddr:   ":0",
-			MaxBodyBytes: 10 * 1024 * 1024,
-			UserAgent:    "Nenya-Test/1.0",
-		},
-		Governance: config.GovernanceConfig{
-			BlockedExecutionPatterns: []string{},
-			RatelimitMaxRPM:           1000,
-			RatelimitMaxTPM:           100000,
-			TruncationStrategy:        "keep_first_last",
-			KeepFirstPercent:          0.2,
-			KeepLastPercent:           0.8,
-			RetryableStatusCodes:      []int{429, 500, 502, 503, 504},
-		},
-		SecurityFilter: config.SecurityFilterConfig{
-			Enabled:             false,
-			RedactionLabel:      "[REDACTED]",
-			Patterns:            []string{},
-			OutputEnabled:       false,
-			OutputWindowChars:   1000,
-			SkipOnEngineFailure: true,
-			EntropyEnabled:      false,
-			EntropyThreshold:    3.5,
-			EntropyMinToken:     10,
-		},
-		PrefixCache: config.PrefixCacheConfig{
-			Enabled:               false,
-			PinSystemFirst:        false,
-			StableTools:           false,
-			SkipRedactionOnSystem: false,
-		},
-		Compaction: config.CompactionConfig{
-			Enabled:                false,
-			JSONMinify:             false,
-			CollapseBlankLines:     false,
-			TrimTrailingWhitespace: false,
-			NormalizeLineEndings:   false,
-			PruneStaleTools:        false,
-			ToolProtectionWindow:   60,
-			PruneThoughts:          false,
-		},
-		Window: config.WindowConfig{
-			Enabled:         false,
-			Mode:            "summary",
-			ActiveMessages:  10,
-			TriggerRatio:    0.8,
-			SummaryMaxRunes: 2000,
-			MaxContext:      100000,
-		},
-		ResponseCache: config.ResponseCacheConfig{
-			Enabled: false,
-		},
-		MCPServers: map[string]config.MCPServerConfig{},
-		Agents:     map[string]config.AgentConfig{},
-		Providers:  map[string]config.ProviderConfig{},
-	}
+	return MinimalConfig()
 }
 
 // ConfigOption is a functional option for modifying a test Config.
@@ -194,7 +136,7 @@ func WithAgent(name string, a config.AgentConfig) ConfigOption {
 
 // TestConfig returns a Config with the given options applied.
 func TestConfig(opts ...ConfigOption) *config.Config {
-	c := DefaultConfig()
+	c := MinimalConfig()
 	for _, opt := range opts {
 		opt(c)
 	}
@@ -202,7 +144,6 @@ func TestConfig(opts ...ConfigOption) *config.Config {
 }
 
 // LoadTestConfig loads a config from a testdata file and applies options.
-// If the file does not exist, it returns DefaultConfig with options.
 func LoadTestConfig(tb testing.TB, path string, opts ...ConfigOption) *config.Config {
 	tb.Helper()
 
@@ -216,22 +157,4 @@ func LoadTestConfig(tb testing.TB, path string, opts ...ConfigOption) *config.Co
 	}
 
 	return cfg
-}
-
-// NewTestHTTPClient returns an http.Client with safe defaults for testing.
-func NewTestHTTPClient() *http.Client {
-	return &http.Client{
-		Timeout: 10 * time.Second,
-		Transport: &http.Transport{
-			MaxIdleConns:       10,
-			IdleConnTimeout:    5 * time.Second,
-			DisableCompression: false,
-			DisableKeepAlives:  false,
-		},
-	}
-}
-
-// NewTestContext returns a context with a short timeout for testing.
-func NewTestContext() (context.Context, context.CancelFunc) {
-	return context.WithTimeout(context.Background(), 5*time.Second)
 }

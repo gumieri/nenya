@@ -8,11 +8,12 @@ import (
 // BrokenWriter is an http.ResponseWriter that always returns a fixed error on Write.
 // Useful for testing error handling in HTTP handlers.
 type BrokenWriter struct {
-	Err      error
-	headers  http.Header
-	Flushed  bool
-	Written  bool
-	buf      *bytes.Buffer
+	Err        error
+	headers    http.Header
+	StatusCode int
+	Flushed    bool
+	Written    bool
+	buf        *bytes.Buffer
 }
 
 // NewBrokenWriter creates a new BrokenWriter with the given error.
@@ -33,7 +34,7 @@ func (w *BrokenWriter) Write(p []byte) (n int, err error) {
 }
 
 func (w *BrokenWriter) WriteHeader(statusCode int) {
-	// No-op for testing
+	w.StatusCode = statusCode
 }
 
 func (w *BrokenWriter) Header() http.Header {
@@ -59,4 +60,5 @@ func (w *BrokenWriter) Reset() {
 	w.buf.Reset()
 	w.Flushed = false
 	w.Written = false
+	w.StatusCode = 0
 }
