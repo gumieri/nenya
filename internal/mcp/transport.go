@@ -134,7 +134,7 @@ func (t *HTTPTransport) Connect(ctx context.Context) error {
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		resp.Body.Close()
+		_ = resp.Body.Close()
 		sseCancel()
 		return fmt.Errorf("SSE connection returned status %d", resp.StatusCode)
 	}
@@ -149,7 +149,7 @@ func (t *HTTPTransport) Connect(ctx context.Context) error {
 		select {
 		case <-connectCtx.Done():
 			sseCancel()
-			resp.Body.Close()
+			_ = resp.Body.Close()
 			return fmt.Errorf("waiting for MCP session endpoint: %w", connectCtx.Err())
 		default:
 		}
@@ -157,7 +157,7 @@ func (t *HTTPTransport) Connect(ctx context.Context) error {
 		line, err := sseReader.ReadString('\n')
 		if err != nil {
 			sseCancel()
-			resp.Body.Close()
+			_ = resp.Body.Close()
 			return fmt.Errorf("reading SSE endpoint event: %w", err)
 		}
 
@@ -198,7 +198,7 @@ func (t *HTTPTransport) Connect(ctx context.Context) error {
 					t.cfg.Logger.Warn("MCP server sent endpoint with unexpected host, rejecting",
 						"expected_host", baseURL.Host, "got_host", gotHost, "endpoint", endpointURL)
 					sseCancel()
-					resp.Body.Close()
+					_ = resp.Body.Close()
 					return fmt.Errorf("MCP session endpoint host mismatch: expected %s, got %s", baseURL.Host, gotHost)
 				}
 			}
@@ -279,7 +279,7 @@ func (t *HTTPTransport) SendRequest(ctx context.Context, method string, params a
 		}
 		return nil, fmt.Errorf("POST to MCP endpoint failed: %w", err)
 	}
-	defer httpResp.Body.Close()
+	defer func() { _ = httpResp.Body.Close() }()
 
 	body, err := io.ReadAll(io.LimitReader(httpResp.Body, 1<<20))
 	if err != nil {
@@ -361,7 +361,7 @@ func (t *HTTPTransport) SendNotification(method string, params any) error {
 	if err != nil {
 		return fmt.Errorf("sending notification: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	_, _ = io.ReadAll(io.LimitReader(resp.Body, 4096))
 
 	return nil

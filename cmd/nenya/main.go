@@ -190,14 +190,14 @@ func systemdListener(defaultAddr string) (net.Listener, string, error) {
 
 	fd := os.NewFile(uintptr(sdListenFdsStart), "systemd")
 	listener, err := net.FileListener(fd)
-	fd.Close() // FileListener dups the fd; close the original in all cases
+	_ = fd.Close() // FileListener dups the fd; close the original in all cases
 	if err != nil {
 		return nil, defaultAddr, err
 	}
 
-	os.Unsetenv("LISTEN_PID")
-	os.Unsetenv("LISTEN_FDS")
-	os.Unsetenv("LISTEN_FDNAMES")
+	_ = os.Unsetenv("LISTEN_PID")
+	_ = os.Unsetenv("LISTEN_FDS")
+	_ = os.Unsetenv("LISTEN_FDNAMES")
 
 	addr := listener.Addr().String()
 	return listener, addr, nil

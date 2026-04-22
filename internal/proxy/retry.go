@@ -119,7 +119,7 @@ retryLoop:
 		case actionError:
 			attempt++
 			action.body, _ = io.ReadAll(io.LimitReader(action.resp.Body, pipeline.MaxErrorBodyBytes))
-			action.resp.Body.Close()
+			_ = action.resp.Body.Close()
 			shouldRetry, retryDelay := p.handleUpstreamError(gw, i, targets, target, cooldownDuration, agentName, action)
 			action.cancel()
 			if shouldRetry {

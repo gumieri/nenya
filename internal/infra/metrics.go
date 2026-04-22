@@ -253,7 +253,7 @@ func (m *Metrics) SetMCPServerReady(server string, ready bool) {
 
 func (m *Metrics) WritePrometheus(w io.Writer) {
 	fprintln := func(format string, args ...interface{}) {
-		fmt.Fprintf(w, format+"\n", args...)
+		_, _ = fmt.Fprintf(w, format+"\n", args...)
 	}
 
 	fprintln("# HELP nenya_build_info Nenya gateway build information.")
@@ -355,8 +355,8 @@ func (m *Metrics) WritePrometheus(w io.Writer) {
 }
 
 func (m *Metrics) writeCounterMap(w io.Writer, name, help string, mmap *sync.Map) {
-	fmt.Fprintf(w, "# HELP %s %s\n", name, help)
-	fmt.Fprintf(w, "# TYPE %s counter\n", name)
+	_, _ = fmt.Fprintf(w, "# HELP %s %s\n", name, help)
+	_, _ = fmt.Fprintf(w, "# TYPE %s counter\n", name)
 	var entries []*labeledEntry
 	mmap.Range(func(_, v interface{}) bool {
 		entries = append(entries, v.(*labeledEntry))
@@ -366,19 +366,19 @@ func (m *Metrics) writeCounterMap(w io.Writer, name, help string, mmap *sync.Map
 		return labelKey(entries[i].labels) < labelKey(entries[j].labels)
 	})
 	for _, e := range entries {
-		fmt.Fprintf(w, "%s%s %d\n", name, labelStr(e.labels), e.value.Load())
+		_, _ = fmt.Fprintf(w, "%s%s %d\n", name, labelStr(e.labels), e.value.Load())
 	}
 }
 
 func (m *Metrics) writeCounterAtomic(w io.Writer, name, help string, value uint64) {
-	fmt.Fprintf(w, "# HELP %s %s\n", name, help)
-	fmt.Fprintf(w, "# TYPE %s counter\n", name)
-	fmt.Fprintf(w, "%s %d\n", name, value)
+	_, _ = fmt.Fprintf(w, "# HELP %s %s\n", name, help)
+	_, _ = fmt.Fprintf(w, "# TYPE %s counter\n", name)
+	_, _ = fmt.Fprintf(w, "%s %d\n", name, value)
 }
 
 func (m *Metrics) writeGaugeMap(w io.Writer, name, help string, mmap *sync.Map) {
-	fmt.Fprintf(w, "# HELP %s %s\n", name, help)
-	fmt.Fprintf(w, "# TYPE %s gauge\n", name)
+	_, _ = fmt.Fprintf(w, "# HELP %s %s\n", name, help)
+	_, _ = fmt.Fprintf(w, "# TYPE %s gauge\n", name)
 	var entries []*labeledEntry
 	mmap.Range(func(_, v interface{}) bool {
 		entries = append(entries, v.(*labeledEntry))
@@ -388,13 +388,13 @@ func (m *Metrics) writeGaugeMap(w io.Writer, name, help string, mmap *sync.Map) 
 		return labelKey(entries[i].labels) < labelKey(entries[j].labels)
 	})
 	for _, e := range entries {
-		fmt.Fprintf(w, "%s%s %d\n", name, labelStr(e.labels), e.value.Load())
+		_, _ = fmt.Fprintf(w, "%s%s %d\n", name, labelStr(e.labels), e.value.Load())
 	}
 }
 
 func (m *Metrics) writeHistogramMap(w io.Writer, name, help string, mmap *sync.Map) {
-	fmt.Fprintf(w, "# HELP %s %s\n", name, help)
-	fmt.Fprintf(w, "# TYPE %s histogram\n", name)
+	_, _ = fmt.Fprintf(w, "# HELP %s %s\n", name, help)
+	_, _ = fmt.Fprintf(w, "# TYPE %s histogram\n", name)
 	var hists []*histogram
 	mmap.Range(func(_, v interface{}) bool {
 		hists = append(hists, v.(*histogram))
@@ -406,10 +406,10 @@ func (m *Metrics) writeHistogramMap(w io.Writer, name, help string, mmap *sync.M
 	for _, h := range hists {
 		ls := labelStr(h.labels)
 		for i, bkt := range h.buckets {
-			fmt.Fprintf(w, "%s_bucket%s,le=\"%g\"} %d\n", name, ls[:len(ls)-1], bkt, h.counts[i].Load())
+			_, _ = fmt.Fprintf(w, "%s_bucket%s,le=\"%g\"} %d\n", name, ls[:len(ls)-1], bkt, h.counts[i].Load())
 		}
-		fmt.Fprintf(w, "%s_bucket%s,le=\"+Inf\"} %d\n", name, ls[:len(ls)-1], h.count.Load())
-		fmt.Fprintf(w, "%s_sum%s %g\n", name, ls, float64(h.sumNS.Load())/1e9)
-		fmt.Fprintf(w, "%s_count%s %d\n", name, ls, h.count.Load())
+		_, _ = fmt.Fprintf(w, "%s_bucket%s,le=\"+Inf\"} %d\n", name, ls[:len(ls)-1], h.count.Load())
+		_, _ = fmt.Fprintf(w, "%s_sum%s %g\n", name, ls, float64(h.sumNS.Load())/1e9)
+		_, _ = fmt.Fprintf(w, "%s_count%s %d\n", name, ls, h.count.Load())
 	}
 }

@@ -47,7 +47,7 @@ func ObserveHTTPFunc(m *Metrics, h http.HandlerFunc) http.HandlerFunc {
 func HandleMetrics(m *Metrics, w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
 	m.WritePrometheus(w)
-	fmt.Fprintln(w, "# EOF")
+	_, _ = fmt.Fprintln(w, "# EOF")
 }
 
 func NormalizeMetricPath(path string) string {

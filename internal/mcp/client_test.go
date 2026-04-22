@@ -29,7 +29,7 @@ func TestClient_Initialize(t *testing.T) {
 		t.Fatalf("ServerInfo.Name = %q, want %q", info.Name, "mock-mcp")
 	}
 
-	client.Close()
+	_ = client.Close()
 }
 
 func TestClient_RefreshTools(t *testing.T) {
@@ -43,7 +43,7 @@ func TestClient_RefreshTools(t *testing.T) {
 	if err := client.Initialize(t.Context()); err != nil {
 		t.Fatalf("Initialize failed: %v", err)
 	}
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 
 	tools, err := client.RefreshTools(t.Context())
 	if err != nil {
@@ -77,7 +77,7 @@ func TestClient_ListTools_Cached(t *testing.T) {
 	if err := client.Initialize(t.Context()); err != nil {
 		t.Fatalf("Initialize failed: %v", err)
 	}
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 
 	_, err := client.RefreshTools(t.Context())
 	if err != nil {
@@ -101,7 +101,7 @@ func TestClient_GetTool(t *testing.T) {
 	if err := client.Initialize(t.Context()); err != nil {
 		t.Fatalf("Initialize failed: %v", err)
 	}
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 
 	_, _ = client.RefreshTools(t.Context())
 
@@ -130,7 +130,7 @@ func TestClient_CallTool(t *testing.T) {
 	if err := client.Initialize(t.Context()); err != nil {
 		t.Fatalf("Initialize failed: %v", err)
 	}
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 
 	_, _ = client.RefreshTools(t.Context())
 
@@ -160,7 +160,7 @@ func TestClient_CallTool_UnknownTool(t *testing.T) {
 	if err := client.Initialize(t.Context()); err != nil {
 		t.Fatalf("Initialize failed: %v", err)
 	}
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 
 	_, _ = client.RefreshTools(t.Context())
 
@@ -193,7 +193,7 @@ func TestClient_CallTool_ServerError(t *testing.T) {
 	if err := client.Initialize(t.Context()); err != nil {
 		t.Fatalf("Initialize failed: %v", err)
 	}
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 
 	_, _ = client.RefreshTools(t.Context())
 
@@ -214,7 +214,7 @@ func TestClient_Ping(t *testing.T) {
 	if err := client.Initialize(t.Context()); err != nil {
 		t.Fatalf("Initialize failed: %v", err)
 	}
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 
 	if err := client.Ping(t.Context()); err != nil {
 		t.Fatalf("Ping failed: %v", err)
@@ -233,7 +233,7 @@ func TestClient_Close(t *testing.T) {
 		t.Fatalf("Initialize failed: %v", err)
 	}
 
-	client.Close()
+	_ = client.Close()
 
 	if client.Ready() {
 		t.Fatal("expected client to not be ready after Close")
@@ -256,8 +256,8 @@ func TestClient_Close_Idempotent(t *testing.T) {
 		t.Fatalf("Initialize failed: %v", err)
 	}
 
-	client.Close()
-	client.Close()
+	_ = client.Close()
+	_ = client.Close()
 
 	if client.Ready() {
 		t.Fatal("expected client to not be ready after double Close")
@@ -275,7 +275,7 @@ func TestClient_ServerName(t *testing.T) {
 	if err := client.Initialize(t.Context()); err != nil {
 		t.Fatalf("Initialize failed: %v", err)
 	}
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 
 	if client.ServerName() != "mock-mcp" {
 		t.Fatalf("ServerName() = %q, want %q", client.ServerName(), "mock-mcp")

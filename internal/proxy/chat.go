@@ -27,7 +27,7 @@ func addCap(a, b int) int {
 
 func (p *Proxy) handleChatCompletions(gw *gateway.NenyaGateway, w http.ResponseWriter, r *http.Request) {
 	r.Body = http.MaxBytesReader(w, r.Body, gw.Config.Server.MaxBodyBytes)
-	defer r.Body.Close()
+	defer func() { _ = r.Body.Close() }()
 
 	bodyBytes, err := io.ReadAll(r.Body)
 	if err != nil {
@@ -410,7 +410,7 @@ func (p *Proxy) summarizeOrForward(gw *gateway.NenyaGateway, ctx context.Context
 
 func (p *Proxy) handleEmbeddings(gw *gateway.NenyaGateway, w http.ResponseWriter, r *http.Request) {
 	r.Body = http.MaxBytesReader(w, r.Body, gw.Config.Server.MaxBodyBytes)
-	defer r.Body.Close()
+	defer func() { _ = r.Body.Close() }()
 
 	bodyBytes, err := io.ReadAll(r.Body)
 	if err != nil {
@@ -474,7 +474,7 @@ func (p *Proxy) handleEmbeddings(gw *gateway.NenyaGateway, w http.ResponseWriter
 		http.Error(w, "Upstream provider error", http.StatusBadGateway)
 		return
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	routing.CopyHeaders(resp.Header, w.Header())
 	w.WriteHeader(resp.StatusCode)
@@ -486,7 +486,7 @@ func (p *Proxy) handleEmbeddings(gw *gateway.NenyaGateway, w http.ResponseWriter
 
 func (p *Proxy) handleResponses(gw *gateway.NenyaGateway, w http.ResponseWriter, r *http.Request) {
 	r.Body = http.MaxBytesReader(w, r.Body, gw.Config.Server.MaxBodyBytes)
-	defer r.Body.Close()
+	defer func() { _ = r.Body.Close() }()
 
 	bodyBytes, err := io.ReadAll(r.Body)
 	if err != nil {
@@ -544,7 +544,7 @@ func (p *Proxy) handleResponses(gw *gateway.NenyaGateway, w http.ResponseWriter,
 		http.Error(w, "Upstream provider error", http.StatusBadGateway)
 		return
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	routing.CopyHeaders(resp.Header, w.Header())
 	w.WriteHeader(resp.StatusCode)
@@ -997,7 +997,7 @@ func (p *Proxy) forwardBuffered(gw *gateway.NenyaGateway,
 		case actionError:
 			attempt++
 			action.body, _ = io.ReadAll(io.LimitReader(action.resp.Body, pipeline.MaxErrorBodyBytes))
-			action.resp.Body.Close()
+			_ = action.resp.Body.Close()
 			gw.Logger.Debug("MCP buffered: upstream error",
 				"target", i+1,
 				"status", action.resp.StatusCode,
@@ -1027,7 +1027,7 @@ func (p *Proxy) forwardBuffered(gw *gateway.NenyaGateway,
 		case actionStream:
 			defer action.cancel()
 			buf, err := bufferStreamResponse(r.Context(), action.resp.Body)
-			action.resp.Body.Close()
+			_ = action.resp.Body.Close()
 			if err != nil {
 				gw.AgentState.RecordSuccess(target.CoolKey)
 				return nil, fmt.Errorf("buffering response: %w", err)

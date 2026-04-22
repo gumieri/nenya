@@ -13,6 +13,12 @@ import (
 	providerpkg "nenya/internal/providers"
 )
 
+func closeBody(resp *http.Response) {
+	if resp != nil {
+		_ = resp.Body.Close()
+	}
+}
+
 func ValidateConfiguration(cfg *Config, secrets *SecretsConfig, logger *slog.Logger) error {
 	return ValidateConfigurationWithPing(cfg, secrets, logger, true)
 }
@@ -30,7 +36,7 @@ func ValidateConfigurationWithPing(cfg *Config, secrets *SecretsConfig, logger *
 		if p, ok := providers[cfg.SecurityFilter.Engine.Provider]; ok && p.URL != "" {
 			logger.Info("checking Ollama engine health", "provider", cfg.SecurityFilter.Engine.Provider, "url", p.URL)
 			if !validateOllamaHealth(p.URL) {
-				return fmt.Errorf("Ollama engine provider %q at %s is not reachable", cfg.SecurityFilter.Engine.Provider, p.URL)
+				return fmt.Errorf("ollama engine provider %q at %s is not reachable", cfg.SecurityFilter.Engine.Provider, p.URL)
 			}
 			logger.Info("Ollama engine health check passed")
 		}
@@ -95,7 +101,7 @@ func validateOllamaHealth(ollamaURL string) bool {
 	if err != nil {
 		return false
 	}
-	defer resp.Body.Close()
+	defer closeBody(resp)
 	return resp.StatusCode == http.StatusOK
 }
 
@@ -127,7 +133,7 @@ func validateProvider(name string, provider *Provider, logger *slog.Logger) erro
 	if err != nil {
 		return fmt.Errorf("request failed: %v", err)
 	}
-	defer resp.Body.Close()
+	defer closeBody(resp)
 
 	if resp.StatusCode == http.StatusOK || resp.StatusCode == http.StatusUnauthorized {
 		if resp.StatusCode == http.StatusUnauthorized {
@@ -156,7 +162,7 @@ func validateWithMinimalRequest(provider *Provider, ctx context.Context, logger 
 	if err != nil {
 		return fmt.Errorf("request failed: %v", err)
 	}
-	defer resp.Body.Close()
+	defer closeBody(resp)
 
 	if resp.StatusCode == http.StatusOK || resp.StatusCode == http.StatusBadRequest {
 		return nil

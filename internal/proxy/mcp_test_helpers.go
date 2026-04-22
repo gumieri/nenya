@@ -72,7 +72,7 @@ func (ms *testMCPServer) handleSSE(w http.ResponseWriter, r *http.Request) {
 
 	endpointURL := ms.server.URL + "/message"
 	endpointJSON, _ := json.Marshal(map[string]string{"endpoint": endpointURL})
-	fmt.Fprintf(w, "data: %s\n\n", endpointJSON)
+	_, _ = fmt.Fprintf(w, "data: %s\n\n", endpointJSON)
 	flusher.Flush()
 
 	<-r.Context().Done()
