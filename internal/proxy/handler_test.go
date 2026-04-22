@@ -10,22 +10,21 @@ import (
 
 	"nenya/internal/config"
 	"nenya/internal/gateway"
+	"nenya/internal/testutil"
 )
 
 func newTestProxy(t *testing.T) (*Proxy, *httptest.Server) {
 	t.Helper()
-	cfg := config.Config{
-		SecurityFilter: config.SecurityFilterConfig{
-			Engine: config.EngineRef{
-				Provider: "ollama",
-			},
-		},
+	cfg := testutil.MinimalConfig()
+	cfg.SecurityFilter.Engine = config.EngineRef{
+		Provider: "ollama",
+		Model:    "qwen2.5-coder",
 	}
 	secrets := &config.SecretsConfig{
 		ClientToken:  "test-token",
 		ProviderKeys: map[string]string{"gemini": "test-key"},
 	}
-	gw := gateway.New(cfg, secrets, slog.Default())
+	gw := gateway.New(*cfg, secrets, slog.Default())
 	p := &Proxy{}
 	p.StoreGateway(gw)
 	return p, nil
@@ -33,13 +32,11 @@ func newTestProxy(t *testing.T) (*Proxy, *httptest.Server) {
 
 func TestServeHTTP_Healthz_NoAuth(t *testing.T) {
 	p, _ := newTestProxy(t)
-	req := httptest.NewRequest(http.MethodGet, "/healthz", nil)
-	rec := httptest.NewRecorder()
+	req := testutil.NewTestRequest(t, http.MethodGet, "/healthz", nil)
+	rec := testutil.NewTestResponseRecorder()
 	p.ServeHTTP(rec, req)
 
-	if rec.Code != http.StatusOK {
-		t.Fatalf("expected 200, got %d", rec.Code)
-	}
+	testutil.AssertResponseStatusCode(t, rec, http.StatusOK)
 	var body map[string]interface{}
 	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
 		t.Fatalf("expected JSON body, got error: %v", err)
@@ -51,25 +48,21 @@ func TestServeHTTP_Healthz_NoAuth(t *testing.T) {
 
 func TestServeHTTP_Statsz_NoAuth(t *testing.T) {
 	p, _ := newTestProxy(t)
-	req := httptest.NewRequest(http.MethodGet, "/statsz", nil)
-	rec := httptest.NewRecorder()
+	req := testutil.NewTestRequest(t, http.MethodGet, "/statsz", nil)
+	req.Header.Set("Authorization", "")
+	rec := testutil.NewTestResponseRecorder()
 	p.ServeHTTP(rec, req)
 
-	if rec.Code != http.StatusUnauthorized {
-		t.Fatalf("expected 401, got %d", rec.Code)
-	}
+	testutil.AssertResponseStatusCode(t, rec, http.StatusUnauthorized)
 }
 
 func TestServeHTTP_Statsz_ValidAuth(t *testing.T) {
 	p, _ := newTestProxy(t)
-	req := httptest.NewRequest(http.MethodGet, "/statsz", nil)
-	req.Header.Set("Authorization", "Bearer test-token")
-	rec := httptest.NewRecorder()
+	req := testutil.NewTestRequest(t, http.MethodGet, "/statsz", nil)
+	rec := testutil.NewTestResponseRecorder()
 	p.ServeHTTP(rec, req)
 
-	if rec.Code != http.StatusOK {
-		t.Fatalf("expected 200, got %d", rec.Code)
-	}
+	testutil.AssertResponseStatusCode(t, rec, http.StatusOK)
 	var body map[string]interface{}
 	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
 		t.Fatalf("expected JSON body, got error: %v", err)
@@ -78,14 +71,11 @@ func TestServeHTTP_Statsz_ValidAuth(t *testing.T) {
 
 func TestServeHTTP_Models_ValidAuth(t *testing.T) {
 	p, _ := newTestProxy(t)
-	req := httptest.NewRequest(http.MethodGet, "/v1/models", nil)
-	req.Header.Set("Authorization", "Bearer test-token")
-	rec := httptest.NewRecorder()
+	req := testutil.NewTestRequest(t, http.MethodGet, "/v1/models", nil)
+	rec := testutil.NewTestResponseRecorder()
 	p.ServeHTTP(rec, req)
 
-	if rec.Code != http.StatusOK {
-		t.Fatalf("expected 200, got %d", rec.Code)
-	}
+	testutil.AssertResponseStatusCode(t, rec, http.StatusOK)
 	var body map[string]interface{}
 	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
 		t.Fatalf("expected JSON body, got error: %v", err)
@@ -97,104 +87,87 @@ func TestServeHTTP_Models_ValidAuth(t *testing.T) {
 
 func TestServeHTTP_Models_NoAuth(t *testing.T) {
 	p, _ := newTestProxy(t)
-	req := httptest.NewRequest(http.MethodGet, "/v1/models", nil)
-	rec := httptest.NewRecorder()
+	req := testutil.NewTestRequest(t, http.MethodGet, "/v1/models", nil)
+	req.Header.Set("Authorization", "")
+	rec := testutil.NewTestResponseRecorder()
 	p.ServeHTTP(rec, req)
 
-	if rec.Code != http.StatusUnauthorized {
-		t.Fatalf("expected 401, got %d", rec.Code)
-	}
+	testutil.AssertResponseStatusCode(t, rec, http.StatusUnauthorized)
 }
 
 func TestServeHTTP_Models_WrongToken(t *testing.T) {
 	p, _ := newTestProxy(t)
-	req := httptest.NewRequest(http.MethodGet, "/v1/models", nil)
+	req := testutil.NewTestRequest(t, http.MethodGet, "/v1/models", nil)
 	req.Header.Set("Authorization", "Bearer wrong-token")
-	rec := httptest.NewRecorder()
+	rec := testutil.NewTestResponseRecorder()
 	p.ServeHTTP(rec, req)
 
-	if rec.Code != http.StatusForbidden {
-		t.Fatalf("expected 403, got %d", rec.Code)
-	}
+	testutil.AssertResponseStatusCode(t, rec, http.StatusForbidden)
 }
 
 func TestServeHTTP_ChatCompletions_NoAuth(t *testing.T) {
 	p, _ := newTestProxy(t)
-	body := strings.NewReader(`{"model":"gemini-2.5-flash","messages":[{"role":"user","content":"hi"}]}`)
-	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", body)
-	rec := httptest.NewRecorder()
+	body := `{"model":"gemini-2.5-flash","messages":[{"role":"user","content":"hi"}]}`
+	req := testutil.NewTestRequest(t, http.MethodPost, "/v1/chat/completions", body)
+	req.Header.Set("Authorization", "")
+	rec := testutil.NewTestResponseRecorder()
 	p.ServeHTTP(rec, req)
 
-	if rec.Code != http.StatusUnauthorized {
-		t.Fatalf("expected 401, got %d", rec.Code)
-	}
+	testutil.AssertResponseStatusCode(t, rec, http.StatusUnauthorized)
 }
 
 func TestServeHTTP_ChatCompletions_WrongToken(t *testing.T) {
 	p, _ := newTestProxy(t)
-	body := strings.NewReader(`{"model":"gemini-2.5-flash","messages":[{"role":"user","content":"hi"}]}`)
-	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", body)
+	body := `{"model":"gemini-2.5-flash","messages":[{"role":"user","content":"hi"}]}`
+	req := testutil.NewTestRequest(t, http.MethodPost, "/v1/chat/completions", body)
 	req.Header.Set("Authorization", "Bearer wrong-token")
-	rec := httptest.NewRecorder()
+	rec := testutil.NewTestResponseRecorder()
 	p.ServeHTTP(rec, req)
 
-	if rec.Code != http.StatusForbidden {
-		t.Fatalf("expected 403, got %d", rec.Code)
-	}
+	testutil.AssertResponseStatusCode(t, rec, http.StatusForbidden)
 }
 
 func TestServeHTTP_UnknownPath(t *testing.T) {
 	p, _ := newTestProxy(t)
-	req := httptest.NewRequest(http.MethodGet, "/unknown", nil)
-	rec := httptest.NewRecorder()
+	req := testutil.NewTestRequest(t, http.MethodGet, "/unknown", nil)
+	rec := testutil.NewTestResponseRecorder()
 	p.ServeHTTP(rec, req)
 
-	if rec.Code != http.StatusNotFound {
-		t.Fatalf("expected 404, got %d", rec.Code)
-	}
+	testutil.AssertResponseStatusCode(t, rec, http.StatusNotFound)
 }
 
 func TestServeHTTP_Models_WrongMethod(t *testing.T) {
 	p, _ := newTestProxy(t)
-	req := httptest.NewRequest(http.MethodPost, "/v1/models", nil)
-	req.Header.Set("Authorization", "Bearer test-token")
-	rec := httptest.NewRecorder()
+	req := testutil.NewTestRequest(t, http.MethodPost, "/v1/models", nil)
+	rec := testutil.NewTestResponseRecorder()
 	p.ServeHTTP(rec, req)
 
-	if rec.Code != http.StatusNotFound {
-		t.Fatalf("expected 404, got %d", rec.Code)
-	}
+	testutil.AssertResponseStatusCode(t, rec, http.StatusNotFound)
 }
 
 func TestServeHTTP_Metrics_ValidAuth(t *testing.T) {
-	_, _ = newTestProxy(t)
-	req := httptest.NewRequest(http.MethodGet, "/metrics", nil)
-	req.Header.Set("Authorization", "Bearer test-token")
-	rec := httptest.NewRecorder()
+	p, _ := newTestProxy(t)
+	req := testutil.NewTestRequest(t, http.MethodGet, "/metrics", nil)
+	rec := testutil.NewTestResponseRecorder()
+	p.ServeHTTP(rec, req)
 
-	if rec.Code != http.StatusOK {
-		t.Fatalf("expected 200, got %d", rec.Code)
-	}
+	testutil.AssertResponseStatusCode(t, rec, http.StatusOK)
 }
 
 func TestServeHTTP_Models_NoDeepSeekWithoutAPIKey(t *testing.T) {
 	p, _ := newTestProxy(t)
-	req := httptest.NewRequest(http.MethodGet, "/v1/models", nil)
-	req.Header.Set("Authorization", "Bearer test-token")
-	rec := httptest.NewRecorder()
-
+	req := testutil.NewTestRequest(t, http.MethodGet, "/v1/models", nil)
+	rec := testutil.NewTestResponseRecorder()
 	p.ServeHTTP(rec, req)
 
-	if rec.Code != http.StatusOK {
-		t.Fatalf("expected 200, got %d", rec.Code)
-	}
+	testutil.AssertResponseStatusCode(t, rec, http.StatusOK)
 	var body map[string]interface{}
 	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
-		t.Fatalf("expected JSON body, got error: %v", err)
+		t.Fatalf("expected JSON body, got error: %v, body: %s", err, rec.Body.String())
 	}
 	data, ok := body["data"].([]interface{})
 	if !ok {
-		t.Fatal("expected data array")
+		t.Fatalf("expected data array, got body: %+v", body)
 	}
 	for _, m := range data {
 		entry, ok := m.(map[string]interface{})
