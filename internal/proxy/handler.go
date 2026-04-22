@@ -97,6 +97,14 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				p.handleResponses(gw, w, r)
 			})(w, r)
 			return
+		case strings.HasPrefix(r.URL.Path, "/proxy/"):
+			if !p.authenticateRequest(r, w) {
+				return
+			}
+			infra.ObserveHTTPFunc(gw.Metrics, func(w http.ResponseWriter, r *http.Request) {
+				p.handlePassthrough(gw, w, r)
+			})(w, r)
+			return
 		default:
 			http.Error(w, "Not Found", http.StatusNotFound)
 			return
