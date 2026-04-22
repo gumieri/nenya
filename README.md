@@ -8,6 +8,69 @@ A lightweight, zero-dependency AI API Gateway written in Go. Nenya sits between 
 
 **Compatible with any provider that implements the OpenAI Chat Completions API.** For 22 providers we ship built-in adapters with specialized handling.
 
+## How Nenya Works (ASCII Diagram)
+
+```text
++----------------------------------------------+
+| Client (Cursor / OpenCode / Aider / etc.)     |
+| OpenAI-compatible request                      |
+| POST /v1/chat/completions + Bearer token       |
++----------------------------------------------+
+                       |
+                       v
++----------------------------------------------+
+| Nenya Gateway                                 |
+| - auth check                                  |
+| - parse JSON + extract model                   |
+| - resolve agent/provider                       |
+| - optional cache (HIT => replay SSE)           |
+| - optional MCP context/tool injection          |
++----------------------------------------------+
+                       |
+                       v
++----------------------------------------------+
+| Privacy / Context Pipeline (best-effort)       |
+| - Tier-0 regex + entropy secret redaction      |
+| - compaction / pruning / window mgmt           |
+| - engine summarize (usually local Ollama)      |
++----------------------------------------------+
+                       |
+                       v
++----------------------------------------------+
+| Routing                                       |
+|  A) Standard forwarding                        |
+|     - fallback chain + circuit breaker + RL    |
+|  B) MCP multi-turn tool loop (if enabled)      |
+|     - buffer SSE, execute MCP tools, re-send   |
++----------------------------------------------+
+                       |
+                       v
++----------------------------------------------+
+| Upstream LLM Providers                         |
+| Anthropic | Gemini | DeepSeek | Mistral | ...  |
++----------------------------------------------+
+                       |
+                       |  SSE stream
+                       v
++----------------------------------------------+
+| Nenya SSE Pipeline                             |
+| - adapter response transforms                  |
+| - usage accounting + stream filter             |
+| - flush + (optional) cache capture             |
+| - (optional) MCP auto-save                     |
++----------------------------------------------+
+                       |
+                       v
++----------------------------------------------+
+| Client receives transparent SSE output         |
++----------------------------------------------+
+```
+
+Flow notes:
+- `/v1/*` endpoints require client bearer auth; `/healthz`, `/statsz`, `/metrics` do not.
+- Pipeline failures degrade gracefully and forward the request instead of returning a 500.
+- MCP-enabled agents can run local/remote tools without exposing MCP complexity to the client.
+
 ## Features
 
 ### Routing & Agents
