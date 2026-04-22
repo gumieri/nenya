@@ -423,7 +423,7 @@ func appendMCPResults(payload map[string]any, calls []mcpToolCall, results []*mc
 		})
 	}
 
-	newMessages := make([]any, 0, len(messages)+len(toolResults))
+	newMessages := make([]any, 0, addCap(len(messages), len(toolResults)))
 	newMessages = append(newMessages, messages...)
 	newMessages = append(newMessages, toolResults...)
 

@@ -308,6 +308,9 @@ func bpeCount(piece []byte) int {
 	if n == 1 {
 		return 1
 	}
+	if n == math.MaxInt {
+		return n
+	}
 	if _, ok := ranks[string(piece)]; ok {
 		return 1
 	}
