@@ -1,5 +1,6 @@
+version: "2"
+
 run:
-  timeout: 3m
   modules-download-mode: readonly
 
 linters:
@@ -8,24 +9,25 @@ linters:
     - govet
     - staticcheck
     - unused
-    - gosimple
     - ineffassign
-    - typecheck
     - misspell
+  settings:
+    govet:
+      enable-all: true
+      disable:
+        - fieldalignment
+    misspell:
+      locale: US
+  exclusions:
+    paths:
+      - vendor$
+      - third_party$
+
+formatters:
+  enable:
     - gofmt
     - goimports
-
-linters-settings:
-  govet:
-    enable-all: true
-    disable:
-      - fieldalignment
-  misspell:
-    locale: US
 
 issues:
   max-issues-per-linter: 50
   max-same-issues: 5
-  exclude-dirs:
-    - vendor
-    - third_party
