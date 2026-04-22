@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math"
 	"nenya/internal/config"
 	"nenya/internal/gateway"
 	"nenya/internal/infra"
@@ -16,6 +17,13 @@ import (
 	"strings"
 	"time"
 )
+
+func addCap(a, b int) int {
+	if b > 0 && a > math.MaxInt-b {
+		return math.MaxInt
+	}
+	return a + b
+}
 
 func (p *Proxy) handleChatCompletions(gw *gateway.NenyaGateway, w http.ResponseWriter, r *http.Request) {
 	r.Body = http.MaxBytesReader(w, r.Body, gw.Config.Server.MaxBodyBytes)
@@ -785,7 +793,7 @@ func (p *Proxy) injectAutoSearch(gw *gateway.NenyaGateway, ctx context.Context, 
 			"content": contextStr,
 		}
 
-		updated := make([]interface{}, 0, len(messages)+1)
+		updated := make([]interface{}, 0, addCap(1, len(messages)))
 		updated = append(updated, messages[:len(messages)-1]...)
 		updated = append(updated, memoryMsg)
 		updated = append(updated, messages[len(messages)-1:]...)
