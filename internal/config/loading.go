@@ -3,6 +3,7 @@ package config
 import (
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"slices"
@@ -358,6 +359,7 @@ func ResolveProviders(cfg *Config, secrets *SecretsConfig) map[string]*Provider 
 		providers[name] = &Provider{
 			Name:                 name,
 			URL:                  pc.URL,
+			BaseURL:              deriveBaseURL(pc.URL),
 			APIKey:               apiKey,
 			RoutePrefixes:        pc.RoutePrefixes,
 			AuthStyle:            pc.AuthStyle,
@@ -367,6 +369,16 @@ func ResolveProviders(cfg *Config, secrets *SecretsConfig) map[string]*Provider 
 		}
 	}
 	return providers
+}
+
+func deriveBaseURL(rawURL string) string {
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return rawURL
+	}
+	u.Path = ""
+	u.RawPath = ""
+	return u.String()
 }
 
 func BuiltInProviders() map[string]ProviderConfig {

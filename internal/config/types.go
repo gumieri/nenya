@@ -75,6 +75,7 @@ type ProviderConfig struct {
 type Provider struct {
 	Name                 string
 	URL                  string
+	BaseURL              string
 	APIKey               string
 	RoutePrefixes        []string
 	AuthStyle            string
