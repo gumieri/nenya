@@ -174,29 +174,41 @@ func (p *Proxy) handleModels(w http.ResponseWriter) {
 		return
 	}
 	type modelEntry struct {
-		ID      string `json:"id"`
-		Object  string `json:"object"`
-		OwnedBy string `json:"owned_by"`
+		ID            string `json:"id"`
+		Object        string `json:"object"`
+		OwnedBy       string `json:"owned_by"`
+		ContextWindow int    `json:"context_window,omitempty"`
+		MaxTokens     int    `json:"max_tokens,omitempty"`
 	}
 
 	var models []modelEntry
 	seen := make(map[string]bool)
 
-	addModel := func(id, ownedBy string) {
+	addModel := func(id, ownedBy string, maxCtx, maxOut int) {
 		if seen[id] {
 			return
 		}
 		seen[id] = true
-		models = append(models, modelEntry{
+		entry := modelEntry{
 			ID:      id,
 			Object:  "model",
 			OwnedBy: ownedBy,
-		})
+		}
+		if maxCtx > 0 {
+			entry.ContextWindow = maxCtx
+		}
+		if maxOut > 0 {
+			entry.MaxTokens = maxOut
+		}
+		models = append(models, entry)
 	}
 
-	for agentName, agent := range gw.Config.Agents {
-		addModel(agentName, "nenya")
-		for _, m := range agent.Models {
+	for agentName := range gw.Config.Agents {
+		addModel(agentName, "nenya", 0, 0)
+	}
+
+	if gw.ModelCatalog != nil {
+		for _, m := range gw.ModelCatalog.AllModels() {
 			provider, ok := gw.Providers[m.Provider]
 			if !ok {
 				continue
@@ -204,7 +216,7 @@ func (p *Proxy) handleModels(w http.ResponseWriter) {
 			if provider.APIKey == "" && provider.AuthStyle != "none" {
 				continue
 			}
-			addModel(m.Model, m.Provider)
+			addModel(m.ID, m.OwnedBy, m.MaxContext, m.MaxOutput)
 		}
 	}
 
@@ -213,7 +225,7 @@ func (p *Proxy) handleModels(w http.ResponseWriter) {
 			continue
 		}
 		for _, prefix := range pr.RoutePrefixes {
-			addModel(prefix+"*", pr.Name)
+			addModel(prefix+"*", pr.Name, 0, 0)
 		}
 	}
 
@@ -249,6 +261,10 @@ func (p *Proxy) handleStats(w http.ResponseWriter) {
 		}
 	}
 	stats["mcp"] = mcpServers
+
+	if gw.HealthRegistry != nil {
+		stats["provider_health"] = gw.HealthRegistry.Snapshot()
+	}
 
 	if err := json.NewEncoder(w).Encode(stats); err != nil {
 		gw.Logger.Error("failed to encode stats response", "err", err)

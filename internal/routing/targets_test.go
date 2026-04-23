@@ -48,7 +48,7 @@ func TestBuildTargetList_RoundRobin(t *testing.T) {
 		},
 	}
 
-	t1 := a.BuildTargetList(testLogger(), "test-agent", agent, 1000, p)
+	t1 := a.BuildTargetList(testLogger(), "test-agent", agent, 1000, p, nil, false)
 	if len(t1) != 3 {
 		t.Fatalf("expected 3 targets, got %d", len(t1))
 	}
@@ -56,7 +56,7 @@ func TestBuildTargetList_RoundRobin(t *testing.T) {
 		t.Fatalf("first call: expected gemini first, got %s", t1[0].Provider)
 	}
 
-	t2 := a.BuildTargetList(testLogger(), "test-agent", agent, 1000, p)
+	t2 := a.BuildTargetList(testLogger(), "test-agent", agent, 1000, p, nil, false)
 	if len(t2) != 3 {
 		t.Fatalf("expected 3 targets, got %d", len(t2))
 	}
@@ -64,12 +64,12 @@ func TestBuildTargetList_RoundRobin(t *testing.T) {
 		t.Fatalf("second call: expected deepseek first, got %s", t2[0].Provider)
 	}
 
-	t3 := a.BuildTargetList(testLogger(), "test-agent", agent, 1000, p)
+	t3 := a.BuildTargetList(testLogger(), "test-agent", agent, 1000, p, nil, false)
 	if t3[0].Provider != "zai" {
 		t.Fatalf("third call: expected zai first, got %s", t3[0].Provider)
 	}
 
-	t4 := a.BuildTargetList(testLogger(), "test-agent", agent, 1000, p)
+	t4 := a.BuildTargetList(testLogger(), "test-agent", agent, 1000, p, nil, false)
 	if t4[0].Provider != "gemini" {
 		t.Fatalf("fourth call: expected gemini first (wrap), got %s", t4[0].Provider)
 	}
@@ -86,12 +86,12 @@ func TestBuildTargetList_CooldownSkip(t *testing.T) {
 		},
 	}
 
-	t1 := a.BuildTargetList(testLogger(), "test-agent", agent, 1000, p)
+	t1 := a.BuildTargetList(testLogger(), "test-agent", agent, 1000, p, nil, false)
 	geminiTarget := t1[0]
 
 	a.ActivateCooldown(geminiTarget, 10*time.Minute)
 
-	t2 := a.BuildTargetList(testLogger(), "test-agent", agent, 1000, p)
+	t2 := a.BuildTargetList(testLogger(), "test-agent", agent, 1000, p, nil, false)
 	if len(t2) != 3 {
 		t.Fatalf("expected 3 targets, got %d", len(t2))
 	}
@@ -115,7 +115,7 @@ func TestBuildTargetList_FallbackStrategy(t *testing.T) {
 	}
 
 	for i := 0; i < 5; i++ {
-		targets := a.BuildTargetList(testLogger(), "test-agent", agent, 1000, p)
+		targets := a.BuildTargetList(testLogger(), "test-agent", agent, 1000, p, nil, false)
 		if targets[0].Provider != "gemini" {
 			t.Fatalf("iteration %d: fallback strategy should always start with gemini, got %s", i, targets[0].Provider)
 		}
@@ -133,7 +133,7 @@ func TestBuildTargetList_UnknownProviderSkipped(t *testing.T) {
 		},
 	}
 
-	targets := a.BuildTargetList(testLogger(), "test-agent", agent, 1000, p)
+	targets := a.BuildTargetList(testLogger(), "test-agent", agent, 1000, p, nil, false)
 	if len(targets) != 2 {
 		t.Fatalf("expected 2 targets (unknown provider skipped), got %d", len(targets))
 	}
@@ -149,7 +149,7 @@ func TestBuildTargetList_EmptyModels(t *testing.T) {
 	a := NewAgentState(testLogger())
 	agent := config.AgentConfig{}
 
-	targets := a.BuildTargetList(testLogger(), "test-agent", agent, 1000, p)
+	targets := a.BuildTargetList(testLogger(), "test-agent", agent, 1000, p, nil, false)
 	if targets != nil {
 		t.Fatalf("expected nil for empty models, got %v", targets)
 	}
@@ -165,7 +165,7 @@ func TestBuildTargetList_TokenCountExceedsMaxContext(t *testing.T) {
 		},
 	}
 
-	targets := a.BuildTargetList(testLogger(), "test-agent", agent, 5000, p)
+	targets := a.BuildTargetList(testLogger(), "test-agent", agent, 5000, p, nil, false)
 	if len(targets) != 1 {
 		t.Fatalf("expected 1 target (nemotron skipped), got %d", len(targets))
 	}
@@ -184,7 +184,7 @@ func TestBuildTargetList_MaxContextFromAgentModel(t *testing.T) {
 		},
 	}
 
-	targets := a.BuildTargetList(testLogger(), "test-agent", agent, 1000, p)
+	targets := a.BuildTargetList(testLogger(), "test-agent", agent, 1000, p, nil, false)
 	if len(targets) != 1 {
 		t.Fatalf("expected 1 target (gemini skipped due to agent-level max_context), got %d", len(targets))
 	}
@@ -202,7 +202,7 @@ func TestBuildTargetList_TargetFields(t *testing.T) {
 		},
 	}
 
-	targets := a.BuildTargetList(testLogger(), "my-agent", agent, 1000, p)
+	targets := a.BuildTargetList(testLogger(), "my-agent", agent, 1000, p, nil, false)
 	if len(targets) != 1 {
 		t.Fatalf("expected 1 target, got %d", len(targets))
 	}
@@ -300,7 +300,7 @@ func TestResolveWindowMaxContext_WithModels(t *testing.T) {
 		},
 	}
 
-	got := ResolveWindowMaxContext("test-agent", agents)
+	got := ResolveWindowMaxContext("test-agent", agents, nil)
 	if got != 128000 {
 		t.Fatalf("expected 128000 (max of 4000 and 128000), got %d", got)
 	}
@@ -309,7 +309,7 @@ func TestResolveWindowMaxContext_WithModels(t *testing.T) {
 func TestResolveWindowMaxContext_AgentNotFound(t *testing.T) {
 	agents := map[string]config.AgentConfig{}
 
-	got := ResolveWindowMaxContext("nonexistent", agents)
+	got := ResolveWindowMaxContext("nonexistent", agents, nil)
 	if got != 0 {
 		t.Fatalf("expected 0 for nonexistent agent, got %d", got)
 	}
@@ -325,7 +325,7 @@ func TestResolveWindowMaxContext_AgentLevelMaxContext(t *testing.T) {
 		},
 	}
 
-	got := ResolveWindowMaxContext("test-agent", agents)
+	got := ResolveWindowMaxContext("test-agent", agents, nil)
 	if got != 50000 {
 		t.Fatalf("expected 50000 (max of agent-level 50000 and registry 4000), got %d", got)
 	}

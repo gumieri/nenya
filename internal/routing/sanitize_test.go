@@ -18,6 +18,7 @@ func defaultSanitizeDeps() TransformDeps {
 			}
 			return ""
 		},
+		Catalog: nil,
 	}
 }
 

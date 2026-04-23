@@ -10,6 +10,7 @@ import (
 
 	"nenya/internal/adapter"
 	"nenya/internal/config"
+	"nenya/internal/discovery"
 	"nenya/internal/infra"
 	providerpkg "nenya/internal/providers"
 )
@@ -20,6 +21,7 @@ type TransformDeps struct {
 	Config             *config.Config
 	ThoughtSigCache    *infra.ThoughtSignatureCache
 	ExtractContentText func(msg map[string]interface{}) string
+	Catalog            *discovery.ModelCatalog
 }
 
 func InjectAPIKey(providerName string, providers map[string]*config.Provider, headers http.Header) error {
@@ -126,8 +128,15 @@ func TransformRequestForUpstream(deps TransformDeps, providerName, upstreamURL s
 	}
 
 	effectiveMaxOutput := 0
-	if entry, ok := config.ModelRegistry[finalModel]; ok && entry.MaxOutput > 0 {
-		effectiveMaxOutput = entry.MaxOutput
+	if deps.Catalog != nil {
+		if m, ok := deps.Catalog.Lookup(finalModel); ok && m.MaxOutput > 0 {
+			effectiveMaxOutput = m.MaxOutput
+		}
+	}
+	if effectiveMaxOutput == 0 {
+		if entry, ok := config.ModelRegistry[finalModel]; ok && entry.MaxOutput > 0 {
+			effectiveMaxOutput = entry.MaxOutput
+		}
 	}
 	if maxOutput > 0 && (effectiveMaxOutput == 0 || maxOutput < effectiveMaxOutput) {
 		effectiveMaxOutput = maxOutput

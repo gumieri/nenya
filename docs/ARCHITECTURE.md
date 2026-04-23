@@ -3,7 +3,7 @@
 ## Package Dependency DAG
 
 ```
-config → infra → stream → pipeline → resilience → providers → adapter → routing → gateway → proxy → mcp
+config → infra → discovery → stream → pipeline → resilience → providers → adapter → routing → gateway → proxy → mcp
 ```
 
 Each layer may only import from layers to its left. This prevents circular dependencies and keeps the codebase testable in isolation.
@@ -15,6 +15,7 @@ Each layer may only import from layers to its left. This prevents circular depen
 | `cmd/nenya/` | Entry point, server bootstrap with graceful shutdown |
 | `internal/config/` | Configuration types, JSON loading, model/provider registries, defaults, validation, engine reference resolution |
 | `internal/infra/` | Structured logging, thought signature cache, Prometheus metrics, rate limiter, usage tracker, response cache |
+| `internal/discovery/` | Dynamic model catalog discovery from upstream providers, three-tier merge (config > discovered > static), per-provider response parsers |
 | `internal/stream/` | SSE transforming reader, sliding window stream filter |
 | `internal/pipeline/` | Client classification, code fence detection, tier-0 regex secret redaction, Shannon entropy redaction, TF-IDF relevance-scored truncation, middle-out truncation (code-boundary-aware for IDEs), text compaction, stale tool call pruning, thought pruning, context window compaction, engine calls with fallback chains |
 | `internal/resilience/` | Circuit breaker with Closed/Open/HalfOpen states, exponential backoff |
@@ -141,6 +142,93 @@ Resolution happens once at config load time (`resolveEngineRefs` in `internal/co
 
 All engine calls log `caller` (`security_filter` or `window`), `agent` name (or `inline`), `provider`, `model`, and `attempt`/`total` for observability.
 
+## Model Discovery
+
+Nenya dynamically fetches model catalogs from upstream providers at startup and on SIGHUP reload, replacing the static ModelRegistry with a three-tier priority system.
+
+### Three-Tier Model Resolution
+
+When resolving a model (for routing, `/v1/models` catalog, or `max_tokens` injection), Nenya uses this priority order:
+
+1. **Config overrides** — Agent model entries with explicit `provider`, `max_context`, or `max_output` fields
+2. **Discovered models** — Models fetched from provider `/v1/models` endpoints at startup/reload
+3. **Static registry** — Built-in ModelRegistry fallback for known models
+
+This allows:
+- Custom local models (Ollama) to be discovered automatically
+- Provider-specific overrides without code changes
+- Graceful fallback when discovery fails (static registry still works)
+
+### Discovery Process
+
+At startup and on `systemctl reload nenya`:
+
+1. **Concurrent fetch** — For each configured provider with an API key, fetch `/v1/models` in parallel (10s timeout per provider)
+2. **Provider-specific parsing** — Each provider has a dedicated parser for its response format:
+   - OpenAI-compatible: `{"data": [{"id": "..."}]}`
+   - Anthropic: `{"data": [{"id": "...", "display_name": "..."}]}`
+   - Gemini: `{"models": [{"name": "models/...", "inputTokenLimit": ..., "outputTokenLimit": ...}]}`
+   - Ollama: `{"models": [{"name": "..."}]}`
+3. **Merge with static registry** — Discovered models are merged with built-in ModelRegistry (config overrides take precedence)
+4. **Update catalog** — The merged catalog is stored in `Gateway.ModelCatalog` and used for all subsequent model resolution
+
+### Security Hardening
+
+The discovery package enforces strict security boundaries:
+
+- **Response body limits** — 10 MB max per provider response (DoS protection)
+- **JSON decode limits** — 10 MB max with `DisallowUnknownFields` (malformed JSON rejection)
+- **Content-type validation** — Only `application/json` responses are parsed
+- **Model ID sanitization** — Max 256 chars, printable characters only (XSS prevention)
+- **Per-provider timeouts** — 10s context timeout per fetch (no hanging)
+- **Panic recovery** — Goroutines have defer/recover to prevent crashes
+- **Auth header injection** — Gemini uses `x-goog-api-key` header (not query params)
+- **Shared HTTP client** — Reused with proper TLS timeouts (no resource leaks)
+
+### `/v1/models` Endpoint
+
+The `/v1/models` catalog endpoint now returns actual discovered models instead of wildcards:
+
+```json
+{
+  "object": "list",
+  "data": [
+    {
+      "id": "gemini-2.5-flash",
+      "object": "model",
+      "owned_by": "google",
+      "context_window": 128000,
+      "max_tokens": 8192
+    },
+    {
+      "id": "deepseek-chat",
+      "object": "model",
+      "owned_by": "deepseek",
+      "context_window": 128000,
+      "max_tokens": 4096
+    }
+  ]
+}
+```
+
+Models are filtered to only show those with valid API keys configured. Agent names are also included as models (for agent-based routing).
+
+### Thread Safety
+
+- **ModelCatalog** — Internal `sync.RWMutex` protects all reads/writes
+- **Gateway hot-swap** — `Proxy` uses `atomic.Pointer[gateway.NenyaGateway]` for zero-downtime reloads
+- **Concurrent discovery** — Provider fetches run in parallel with proper goroutine lifecycle management
+
+### Graceful Degradation
+
+If discovery fails for any provider:
+- The provider is skipped with a warning log
+- Static registry models for that provider still work
+- Other providers' discovered models are still used
+- `/v1/models` endpoint shows only successfully discovered models
+
+This ensures Nenya never breaks due to discovery failures — it's a best-effort enhancement on top of the static registry.
+
 ## Circuit Breaker
 
 Each agent+provider+model combination is tracked independently by a circuit breaker.
@@ -248,6 +336,7 @@ Each outbound call path applies appropriate timeouts:
 - **Embeddings/Responses**: Uses `provider.TimeoutSeconds` from config
 - **Passthrough**: Uses `provider.TimeoutSeconds` from config
 - **Auto-search**: 10-second timeout to bound MCP search latency
+- **Model discovery**: 10-second timeout per provider fetch (concurrent)
 - **MCP multi-turn loop**: 5-minute overall deadline to prevent runaway loops
 - **MCP tool calls**: 30-second timeout per tool call
 - **Health checks**: 5-second timeout for provider availability checks
@@ -255,6 +344,7 @@ Each outbound call path applies appropriate timeouts:
 ### Goroutine Lifecycle
 All goroutines respect context cancellation or use detached contexts:
 - **Stream copying goroutines**: Use request context via `copyStream(ctx, ...)`
+- **Discovery goroutines**: Use parent context with per-provider timeout via `context.WithTimeout`
 - **Scheids/response cache evictor**: Use dedicated shutdown channels
 - **MCP auto-save**: Uses `context.Background()` for fire-and-forget semantics (best-effort, outlives request)
 - **Background loops**: Use dedicated cancellation channels (`closeCh`, `stopCh`)

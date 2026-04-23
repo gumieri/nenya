@@ -47,7 +47,7 @@ func TestResolveProvider_KnownModels(t *testing.T) {
 
 	for _, c := range cases {
 		t.Run(c.model, func(t *testing.T) {
-			got := ResolveProvider(c.model, p)
+			got := ResolveProvider(c.model, p, nil)
 			if got == nil {
 				t.Fatalf("expected provider %q for model %q, got nil", c.provider, c.model)
 			}
@@ -61,32 +61,32 @@ func TestResolveProvider_KnownModels(t *testing.T) {
 func TestResolveProvider_PrefixMatch(t *testing.T) {
 	p := providers()
 
-	zai := ResolveProvider("glm-some-unknown-model", p)
+	zai := ResolveProvider("glm-some-unknown-model", p, nil)
 	if zai == nil || zai.Name != "zai" {
 		t.Fatalf("expected zai provider for glm-some-unknown-model, got %v", zai)
 	}
 
-	gemini := ResolveProvider("gemini-unknown-variant", p)
+	gemini := ResolveProvider("gemini-unknown-variant", p, nil)
 	if gemini == nil || gemini.Name != "gemini" {
 		t.Fatalf("expected gemini provider for gemini-unknown-variant, got %v", gemini)
 	}
 
-	ds := ResolveProvider("deepseek-r1-xyz", p)
+	ds := ResolveProvider("deepseek-r1-xyz", p, nil)
 	if ds == nil || ds.Name != "deepseek" {
 		t.Fatalf("expected deepseek provider for deepseek-r1-xyz, got %v", ds)
 	}
 
-	claude := ResolveProvider("claude-some-unknown-variant", p)
+	claude := ResolveProvider("claude-some-unknown-variant", p, nil)
 	if claude == nil || claude.Name != "anthropic" {
 		t.Fatalf("expected anthropic provider for claude-some-unknown-variant, got %v", claude)
 	}
 
-	mistral := ResolveProvider("mistral-some-unknown-variant", p)
+	mistral := ResolveProvider("mistral-some-unknown-variant", p, nil)
 	if mistral == nil || mistral.Name != "mistral" {
 		t.Fatalf("expected mistral provider for mistral-some-unknown-variant, got %v", mistral)
 	}
 
-	grok := ResolveProvider("grok-some-unknown-variant", p)
+	grok := ResolveProvider("grok-some-unknown-variant", p, nil)
 	if grok == nil || grok.Name != "xai" {
 		t.Fatalf("expected xai provider for grok-some-unknown-variant, got %v", grok)
 	}
@@ -95,7 +95,7 @@ func TestResolveProvider_PrefixMatch(t *testing.T) {
 func TestResolveProvider_UnknownNoMatch(t *testing.T) {
 	p := providers()
 
-	got := ResolveProvider("totally-unknown-model-no-prefix", p)
+	got := ResolveProvider("totally-unknown-model-no-prefix", p, nil)
 	if got != nil {
 		t.Fatalf("expected nil for unknown model, got %q", got.Name)
 	}
@@ -104,7 +104,7 @@ func TestResolveProvider_UnknownNoMatch(t *testing.T) {
 func TestResolveProvider_EmptyModel(t *testing.T) {
 	p := providers()
 
-	got := ResolveProvider("", p)
+	got := ResolveProvider("", p, nil)
 	if got != nil {
 		t.Fatalf("expected nil for empty model, got %q", got.Name)
 	}
