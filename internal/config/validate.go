@@ -57,6 +57,12 @@ func ValidateConfigurationWithPing(ctx context.Context, cfg *Config, secrets *Se
 		errors = append(errors, err.Error())
 	}
 
+	for modelID, entry := range ModelRegistry {
+		if err := entry.Validate(); err != nil {
+			errors = append(errors, fmt.Sprintf("model_registry[%q]: %v", modelID, err))
+		}
+	}
+
 	if cfg.SecurityFilter.EntropyEnabled {
 		if cfg.SecurityFilter.EntropyThreshold <= 0 || cfg.SecurityFilter.EntropyThreshold > 8.0 {
 			errors = append(errors, "security_filter.entropy_threshold must be between 0 and 8.0")

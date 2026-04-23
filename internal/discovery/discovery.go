@@ -6,11 +6,11 @@ import (
 )
 
 type DiscoveredModel struct {
-	ID         string
-	Provider   string
-	MaxContext int
-	MaxOutput  int
-	OwnedBy    string
+	ID         string `json:"id"`
+	Provider   string `json:"provider"`
+	MaxContext int    `json:"max_context"`
+	MaxOutput  int    `json:"max_output"`
+	OwnedBy    string `json:"owned_by"`
 }
 
 type ModelCatalog struct {

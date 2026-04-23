@@ -12,6 +12,8 @@ const (
 	HealthStatusOK          = "ok"
 	HealthStatusUnreachable = "unreachable"
 	HealthStatusEmpty       = "empty"
+	HealthStatusInvalid     = "invalid"
+	HealthStatusDegraded    = "degraded"
 )
 
 type ProviderHealth struct {

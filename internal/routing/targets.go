@@ -2,6 +2,7 @@ package routing
 
 import (
 	"log/slog"
+	"math/rand"
 	"sort"
 	"sync"
 	"time"
@@ -17,6 +18,7 @@ const (
 	DefaultFailureThreshold    = 5
 	DefaultSuccessThreshold    = 1
 	DefaultHalfOpenMaxRequests = 3
+	latencyJitterPct          = 0.10
 )
 
 type AgentState struct {
@@ -188,9 +190,13 @@ func ResolveWindowMaxContext(modelName string, agents map[string]config.AgentCon
 	return 0
 }
 
-func SortTargetsByLatency(targets []UpstreamTarget, latencyTracker *infra.LatencyTracker) []UpstreamTarget {
+func SortTargetsByLatency(targets []UpstreamTarget, latencyTracker *infra.LatencyTracker, jitterFn func() float64) []UpstreamTarget {
 	if latencyTracker == nil || len(targets) <= 1 {
 		return targets
+	}
+
+	if jitterFn == nil {
+		jitterFn = rand.Float64
 	}
 
 	sorted := make([]UpstreamTarget, len(targets))
@@ -210,7 +216,10 @@ func SortTargetsByLatency(targets []UpstreamTarget, latencyTracker *infra.Latenc
 			return true
 		}
 
-		return latencyI.MedianMs < latencyJ.MedianMs
+		jitterI := latencyI.MedianMs * (1.0 + (jitterFn()*latencyJitterPct - latencyJitterPct/2))
+		jitterJ := latencyJ.MedianMs * (1.0 + (jitterFn()*latencyJitterPct - latencyJitterPct/2))
+
+		return jitterI < jitterJ
 	})
 
 	return sorted

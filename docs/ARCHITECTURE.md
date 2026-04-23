@@ -14,14 +14,14 @@ Each layer may only import from layers to its left. This prevents circular depen
 |---------|---------------|
 | `cmd/nenya/` | Entry point, server bootstrap with graceful shutdown |
 | `internal/config/` | Configuration types, JSON loading, model/provider registries, defaults, validation, engine reference resolution |
-| `internal/infra/` | Structured logging, thought signature cache, Prometheus metrics, rate limiter, usage tracker, response cache |
+| `internal/infra/` | Structured logging, thought signature cache, Prometheus metrics, rate limiter, usage tracker, latency tracker (sorted-buffer median with incremental insertion), response cache |
 | `internal/discovery/` | Dynamic model catalog discovery from upstream providers, three-tier merge (config > discovered > static), per-provider response parsers |
 | `internal/stream/` | SSE transforming reader, sliding window stream filter |
 | `internal/pipeline/` | Client classification, code fence detection, tier-0 regex secret redaction, Shannon entropy redaction, TF-IDF relevance-scored truncation, middle-out truncation (code-boundary-aware for IDEs), text compaction, stale tool call pruning, thought pruning, context window compaction, engine calls with fallback chains |
 | `internal/resilience/` | Circuit breaker with Closed/Open/HalfOpen states, exponential backoff |
 | `internal/providers/` | Provider capability specs (stream_options, auto_tool_choice, content_arrays), per-provider sanitization, response transformers |
 | `internal/adapter/` | Provider Adapter pattern: request mutation, auth injection, response mutation, error classification |
-| `internal/routing/` | Dynamic provider resolution, agent fallback chains, upstream request transformation, API key injection |
+| `internal/routing/` | Dynamic provider resolution, agent fallback chains, latency-aware reordering with jitter (thundering herd prevention), upstream request transformation, API key injection |
 | `internal/mcp/` | MCP (Model Context Protocol) client: HTTP+SSE transport, tool discovery, tool call execution, OpenAI schema transformation |
 | `internal/gateway/` | NenyaGateway struct, HTTP client configuration, token counting, MCP client initialization, MCP tool index |
 | `internal/proxy/` | HTTP handlers, content pipeline orchestration, upstream forwarding with retry, transparent SSE streaming, MCP multi-turn tool call loop, buffered SSE response |
@@ -217,7 +217,7 @@ Models are filtered to only show those with valid API keys configured. Agent nam
 
 - **ModelCatalog** — Internal `sync.RWMutex` protects all reads/writes
 - **Gateway hot-swap** — `Proxy` uses `atomic.Pointer[gateway.NenyaGateway]` for zero-downtime reloads
-- **Concurrent discovery** — Provider fetches run in parallel with proper goroutine lifecycle management
+- **Concurrent discovery** — Provider fetches run in parallel with proper goroutine lifecycle management and concurrency-limited health checks (configurable, default 5 concurrent)
 
 ### Graceful Degradation
 
@@ -286,6 +286,17 @@ In-memory LRU cache with deterministic SHA-256 fingerprinting. See [`CONFIGURATI
 - **Replay**: Cache hits replay the stored SSE stream with `X-Nenya-Cache-Status: HIT`
 - **Bypass**: `x-nenya-cache-force-refresh` header forces cache miss
 - **Eviction**: Background goroutine sweeps expired entries every `evict_every_seconds`
+
+## Latency Tracker
+
+`infra.LatencyTracker` tracks per-model response times for latency-aware routing. When `governance.auto_reorder_by_latency` is enabled, targets are sorted by historical median latency (fastest first) before routing.
+
+### Implementation
+
+- **Sorted buffer**: Samples are maintained in sorted order via incremental binary-search insertion — O(n) per `Record()` instead of O(n log n) full sort. The median is a direct index lookup (`buf[len/2]`).
+- **Sliding window**: At most 100 samples per model/provider key. When the buffer overflows, the oldest sample is dropped via explicit copy to a new slice (prevents the underlying array from leaking memory).
+- **Eviction**: Stale entries (no updates for 1 hour) are evicted on each `Record()` call.
+- **Jitter**: `SortTargetsByLatency` applies ±5% random jitter to median latencies before comparison to prevent thundering herd — all clients hitting the same fastest provider simultaneously. The jitter function is injectable for deterministic testing.
 
 ## Graceful Degradation
 
