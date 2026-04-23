@@ -232,6 +232,43 @@ MCP integration follows the same best-effort philosophy:
 - **Timeout**: Each MCP tool call has a 30s timeout (configurable per-server). Timeouts are returned as error results.
 - **Max iterations**: The MCP multi-turn loop has a configurable max iteration count (default: 10). When exhausted, the last buffered response is replayed to the client.
 
+## Context Package Usage
+
+Nenya follows Go context best practices for request-scoped values, cancellation, and timeouts:
+
+### Context Propagation
+- **Incoming requests**: `r.Context()` from `http.Request` is the root context for each client request
+- **Request lifecycle**: Context is threaded through the entire call stack: `handleChatCompletions` → routing → validation → upstream calls
+- **Gateway initialization**: Startup/shutdown contexts are created in `main.go` and passed to `gateway.New()` and `Reload()`
+- **Validation**: Config/health check validation functions accept `context.Context` to allow cancellation during startup
+
+### Timeout Enforcement
+Each outbound call path applies appropriate timeouts:
+- **Chat completions**: Uses `provider.TimeoutSeconds` from config (falls back to transport-level timeouts)
+- **Embeddings/Responses**: Uses `provider.TimeoutSeconds` from config
+- **Passthrough**: Uses `provider.TimeoutSeconds` from config
+- **Auto-search**: 10-second timeout to bound MCP search latency
+- **MCP multi-turn loop**: 5-minute overall deadline to prevent runaway loops
+- **MCP tool calls**: 30-second timeout per tool call
+- **Health checks**: 5-second timeout for provider availability checks
+
+### Goroutine Lifecycle
+All goroutines respect context cancellation or use detached contexts:
+- **Stream copying goroutines**: Use request context via `copyStream(ctx, ...)`
+- **Scheids/response cache evictor**: Use dedicated shutdown channels
+- **MCP auto-save**: Uses `context.Background()` for fire-and-forget semantics (best-effort, outlives request)
+- **Background loops**: Use dedicated cancellation channels (`closeCh`, `stopCh`)
+
+### Loop Cancellation
+Long-running loops regularly check for cancellation:
+- `pipeSSE` → `select { case <-ctx.Done(): }`
+- `copyStream` → `if ctx.Err() != nil`
+- MCP multi-turn loop → `select { case <-mcpLoopCtx.Done(): }`
+- MCP transport loops → `select { case <-closeCh: }`
+- Background workers → `select { case <-stopCh: }`
+
+This ensures prompt cleanup during graceful shutdown, client disconnect, or timeout scenarios.
+
 ## IDE Compatibility
 
 Nenya detects IDE clients (Cursor, OpenCode) via `User-Agent` header inspection and adapts the content pipeline to preserve code structure. Unknown clients get standard pipeline behavior with zero regression risk.

@@ -49,7 +49,9 @@ func main() {
 	}
 
 	if validateOnly {
-		if err = config.ValidateConfiguration(cfg, secrets, logger); err != nil {
+		validateCtx, validateCancel := context.WithTimeout(context.Background(), 60*time.Second)
+		defer validateCancel()
+		if err = config.ValidateConfiguration(validateCtx, cfg, secrets, logger); err != nil {
 			logger.Error("configuration validation failed", "err", err)
 			os.Exit(1)
 		}
@@ -57,7 +59,10 @@ func main() {
 		os.Exit(0)
 	}
 
-	gw := gateway.New(*cfg, secrets, logger)
+	startupCtx, startupCancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer startupCancel()
+
+	gw := gateway.New(startupCtx, *cfg, secrets, logger)
 	p := &proxy.Proxy{}
 	p.StoreGateway(gw)
 
@@ -116,7 +121,9 @@ func main() {
 			logger.Error("server failed", "err", err)
 			os.Exit(1)
 		case <-sighup:
-			reloadConfig(p, configFile, logger)
+			reloadCtx, reloadCancel := context.WithTimeout(context.Background(), 60*time.Second)
+			reloadConfig(reloadCtx, p, configFile, logger)
+			reloadCancel()
 		case <-ctx.Done():
 			logger.Info("shutting down gracefully...")
 
@@ -132,7 +139,7 @@ func main() {
 	}
 }
 
-func reloadConfig(p *proxy.Proxy, configFile string, logger *slog.Logger) {
+func reloadConfig(ctx context.Context, p *proxy.Proxy, configFile string, logger *slog.Logger) {
 	logger.Info("reloading configuration", "file", configFile)
 
 	newCfg, err := config.Load(configFile)
@@ -147,13 +154,13 @@ func reloadConfig(p *proxy.Proxy, configFile string, logger *slog.Logger) {
 		return
 	}
 
-	if err := config.ValidateConfigurationNoPing(newCfg, newSecrets, logger); err != nil {
+	if err := config.ValidateConfigurationNoPing(ctx, newCfg, newSecrets, logger); err != nil {
 		logger.Error("reload failed: configuration validation", "err", err)
 		return
 	}
 
 	oldGW := p.Gateway()
-	newGW := oldGW.Reload(*newCfg, newSecrets)
+	newGW := oldGW.Reload(ctx, *newCfg, newSecrets)
 	p.StoreGateway(newGW)
 
 	logger.Info("configuration reloaded successfully")

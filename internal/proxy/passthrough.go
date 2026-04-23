@@ -83,7 +83,14 @@ func (p *Proxy) handlePassthrough(gw *gateway.NenyaGateway, w http.ResponseWrite
 		upstreamURL += "?" + r.URL.RawQuery
 	}
 
-	req, err := p.buildUpstreamRequest(gw, r.Context(), r.Method, upstreamURL, bodyBytes, provider.Name, r.Header)
+	ctx := r.Context()
+	if provider.TimeoutSeconds > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(r.Context(), time.Duration(provider.TimeoutSeconds)*time.Second)
+		defer cancel()
+	}
+
+	req, err := p.buildUpstreamRequest(gw, ctx, r.Method, upstreamURL, bodyBytes, provider.Name, r.Header)
 	if err != nil {
 		gw.Logger.Error("passthrough: failed to create upstream request", "provider", providerName, "err", err)
 		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
@@ -94,13 +101,6 @@ func (p *Proxy) handlePassthrough(gw *gateway.NenyaGateway, w http.ResponseWrite
 		req.Header.Set("Content-Type", r.Header.Get("Content-Type"))
 	}
 
-	ctx := r.Context()
-	if provider.TimeoutSeconds > 0 {
-		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(r.Context(), time.Duration(provider.TimeoutSeconds)*time.Second)
-		defer cancel()
-	}
-
 	ctxLogger := gw.Logger.With(
 		"operation", "passthrough",
 		"provider", providerName,
@@ -108,7 +108,7 @@ func (p *Proxy) handlePassthrough(gw *gateway.NenyaGateway, w http.ResponseWrite
 		"path", subPath,
 	)
 
-	resp, err := gw.Client.Do(req.WithContext(ctx))
+	resp, err := gw.Client.Do(req)
 	if err != nil {
 		ctxLogger.Error("upstream request failed", "err", err)
 		http.Error(w, "Upstream provider error", http.StatusBadGateway)
@@ -128,19 +128,29 @@ func (p *Proxy) handlePassthrough(gw *gateway.NenyaGateway, w http.ResponseWrite
 
 	contentType := resp.Header.Get("Content-Type")
 	if strings.Contains(contentType, "text/event-stream") {
-		p.pipeSSE(ctxLogger, resp.Body, w)
+		p.pipeSSE(ctx, ctxLogger, resp.Body, w)
 	} else {
-		if _, err := io.Copy(w, resp.Body); err != nil {
+		if _, err := copyStream(ctx, w, resp.Body, nil); err != nil {
 			ctxLogger.Debug("response copy ended", "err", err)
 		}
 	}
 }
 
-func (p *Proxy) pipeSSE(ctxLogger *slog.Logger, src io.Reader, dst http.ResponseWriter) {
+func (p *Proxy) pipeSSE(ctx context.Context, ctxLogger *slog.Logger, src io.Reader, dst http.ResponseWriter) {
 	buf := make([]byte, 4096)
+	stallTimer := time.NewTimer(120 * time.Second)
+	defer stallTimer.Stop()
+
 	for {
 		n, err := src.Read(buf)
 		if n > 0 {
+			if !stallTimer.Stop() {
+				select {
+				case <-stallTimer.C:
+				default:
+				}
+			}
+			stallTimer.Reset(120 * time.Second)
 			if _, writeErr := dst.Write(buf[:n]); writeErr != nil {
 				ctxLogger.Debug("SSE write error", "err", writeErr)
 				return
@@ -154,6 +164,16 @@ func (p *Proxy) pipeSSE(ctxLogger *slog.Logger, src io.Reader, dst http.Response
 				ctxLogger.Debug("SSE read error", "err", err)
 			}
 			return
+		}
+
+		select {
+		case <-ctx.Done():
+			ctxLogger.Debug("SSE stream cancelled by context")
+			return
+		case <-stallTimer.C:
+			ctxLogger.Warn("SSE stream stalled, aborting")
+			return
+		default:
 		}
 	}
 }

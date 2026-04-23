@@ -1,6 +1,7 @@
 package proxy
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -33,7 +34,7 @@ func newChatProxy(t *testing.T, upstreamURL string) *Proxy {
 		ClientToken:  "test-token",
 		ProviderKeys: map[string]string{},
 	}
-	gw := gateway.New(*cfg, secrets, slog.Default())
+	gw := gateway.New(context.Background(), *cfg, secrets, slog.Default())
 	p := &Proxy{}
 	p.StoreGateway(gw)
 	return p
@@ -155,7 +156,7 @@ func TestHandleChatCompletions_AgentWithModels(t *testing.T) {
 		ClientToken:  "test-token",
 		ProviderKeys: map[string]string{},
 	}
-	gw := gateway.New(cfg, secrets, slog.Default())
+	gw := gateway.New(context.Background(), cfg, secrets, slog.Default())
 	p := &Proxy{}
 	p.StoreGateway(gw)
 

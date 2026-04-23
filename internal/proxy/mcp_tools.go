@@ -18,8 +18,7 @@ import (
 )
 
 const (
-	mcpMaxIterations = 10
-	mcpExecTimeout   = 30 * time.Second
+	mcpExecTimeout = 30 * time.Second
 )
 
 type bufferedSSE struct {

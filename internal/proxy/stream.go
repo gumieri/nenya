@@ -421,10 +421,10 @@ func (p *Proxy) asyncMCPAutoSave(gw *gateway.NenyaGateway, agentName string, con
 				}
 			}
 
-			ctx, cancel := context.WithTimeout(context.Background(), mcpExecTimeout)
+			saveCtx, cancel := context.WithTimeout(context.Background(), mcpExecTimeout)
 
 			start := time.Now()
-			_, err := client.CallTool(ctx, saveTool, map[string]any{
+			_, err := client.CallTool(saveCtx, saveTool, map[string]any{
 				"wing":     agentName,
 				"room":     "conversation",
 				"content":  assistantContent,

@@ -1,6 +1,7 @@
 package proxy
 
 import (
+	"context"
 	"encoding/json"
 	"log/slog"
 	"net/http"
@@ -24,7 +25,7 @@ func newTestProxy(t *testing.T) (*Proxy, *httptest.Server) {
 		ClientToken:  "test-token",
 		ProviderKeys: map[string]string{"gemini": "test-key"},
 	}
-	gw := gateway.New(*cfg, secrets, slog.Default())
+	gw := gateway.New(context.Background(), *cfg, secrets, slog.Default())
 	p := &Proxy{}
 	p.StoreGateway(gw)
 	return p, nil
