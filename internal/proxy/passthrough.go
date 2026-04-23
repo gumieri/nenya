@@ -168,7 +168,7 @@ func (p *Proxy) pipeSSE(ctx context.Context, ctxLogger *slog.Logger, src io.Read
 
 		select {
 		case <-ctx.Done():
-			ctxLogger.Debug("SSE stream cancelled by context")
+			ctxLogger.Debug("SSE stream canceled by context")
 			return
 		case <-stallTimer.C:
 			ctxLogger.Warn("SSE stream stalled, aborting")
