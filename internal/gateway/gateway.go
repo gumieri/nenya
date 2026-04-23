@@ -286,8 +286,8 @@ func buildMCPClients(cfg config.Config, logger *slog.Logger) map[string]*mcp.Cli
 
 func (g *NenyaGateway) buildMCPToolIndex(ctx context.Context, logger *slog.Logger) {
 	for name, client := range g.MCPClients {
-		ctx, cancel := contextWithTimeout(ctx, 10*time.Second)
-		err := client.Initialize(ctx)
+		initCtx, cancel := contextWithTimeout(ctx, 10*time.Second)
+		err := client.Initialize(initCtx)
 		cancel()
 		if err != nil {
 			logger.Warn("MCP client initialization failed, skipping",
@@ -295,8 +295,8 @@ func (g *NenyaGateway) buildMCPToolIndex(ctx context.Context, logger *slog.Logge
 			continue
 		}
 
-		ctx, cancel = contextWithTimeout(ctx, 15*time.Second)
-		tools, err := client.RefreshTools(ctx)
+		toolsCtx, cancel := contextWithTimeout(ctx, 15*time.Second)
+		tools, err := client.RefreshTools(toolsCtx)
 		cancel()
 		if err != nil {
 			logger.Warn("MCP tool list refresh failed",
