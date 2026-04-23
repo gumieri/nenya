@@ -691,7 +691,7 @@ func (p *Proxy) injectMCPSystemPrompt(gw *gateway.NenyaGateway, payload map[stri
 		"content": prompt,
 	}
 
-	updated := make([]interface{}, 0, len(messages)+1)
+	updated := make([]interface{}, 0, addCap(len(messages), 1))
 	updated = append(updated, mcpMsg)
 	updated = append(updated, messages...)
 	payload["messages"] = updated

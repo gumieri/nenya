@@ -315,6 +315,11 @@ func bpeCount(piece []byte) int {
 		return 1
 	}
 
+	// Guard against overflow in n+1 allocation
+	if n > math.MaxInt-1 {
+		return n
+	}
+
 	parts := make([]int, n+1)
 	for i := range parts {
 		parts[i] = i
