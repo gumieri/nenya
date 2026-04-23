@@ -12,6 +12,7 @@ import (
 
 	"nenya/internal/adapter"
 	"nenya/internal/config"
+	"nenya/internal/discovery"
 	"nenya/internal/infra"
 	"nenya/internal/mcp"
 	"nenya/internal/pipeline"
@@ -37,6 +38,9 @@ type NenyaGateway struct {
 	ResponseCache   *infra.ResponseCache
 	MCPClients      map[string]*mcp.Client
 	MCPToolIndex    *mcp.ToolRegistry
+	ModelCatalog    *discovery.ModelCatalog
+	HealthRegistry  *discovery.HealthRegistry
+	LatencyTracker  *infra.LatencyTracker
 }
 
 func New(ctx context.Context, cfg config.Config, secrets *config.SecretsConfig, logger *slog.Logger) *NenyaGateway {
@@ -88,6 +92,29 @@ func New(ctx context.Context, cfg config.Config, secrets *config.SecretsConfig, 
 	}
 
 	providers := config.ResolveProviders(&cfg, secrets)
+
+	var mergedCatalog *discovery.ModelCatalog
+	var healthRegistry *discovery.HealthRegistry
+
+	if cfg.Discovery.Enabled {
+		fetcher := discovery.NewDiscoveryFetcher()
+		catalog := fetcher.FetchAll(ctx, providers, logger)
+		mergedCatalog = discovery.MergeCatalog(catalog, &cfg)
+		logger.Info("model discovery completed", "total_models", len(mergedCatalog.AllModels()), "fetched_at", catalog.FetchedAt().Format(time.RFC3339))
+
+		healthRegistry = discovery.ValidateAllProviders(providers, mergedCatalog, logger)
+
+		if cfg.Discovery.AutoAgents {
+			autoAgents := discovery.GenerateAutoAgents(mergedCatalog, providers, logger)
+			for name, agent := range autoAgents {
+				if _, exists := cfg.Agents[name]; !exists {
+					cfg.Agents[name] = agent
+				}
+			}
+		}
+	} else {
+		mergedCatalog = discovery.MergeCatalog(discovery.NewModelCatalog(), &cfg)
+	}
 
 	var secretPatterns []*regexp.Regexp
 	if cfg.SecurityFilter.Enabled && len(cfg.SecurityFilter.Patterns) > 0 {
@@ -142,6 +169,9 @@ func New(ctx context.Context, cfg config.Config, secrets *config.SecretsConfig, 
 		ResponseCache:   newResponseCache(cfg, logger),
 		MCPClients:      buildMCPClients(cfg, logger),
 		MCPToolIndex:    mcp.NewToolRegistry(),
+		ModelCatalog:    mergedCatalog,
+		HealthRegistry:  healthRegistry,
+		LatencyTracker:  infra.NewLatencyTracker(),
 	}
 
 	gw.buildMCPToolIndex(ctx, logger)

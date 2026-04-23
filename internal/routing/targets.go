@@ -2,10 +2,13 @@ package routing
 
 import (
 	"log/slog"
+	"sort"
 	"sync"
 	"time"
 
 	"nenya/internal/config"
+	"nenya/internal/discovery"
+	"nenya/internal/infra"
 	"nenya/internal/resilience"
 )
 
@@ -49,7 +52,7 @@ func NewAgentState(logger *slog.Logger) *AgentState {
 	}
 }
 
-func (a *AgentState) BuildTargetList(logger *slog.Logger, agentName string, agent config.AgentConfig, tokenCount int, providers map[string]*config.Provider) []UpstreamTarget {
+func (a *AgentState) BuildTargetList(logger *slog.Logger, agentName string, agent config.AgentConfig, tokenCount int, providers map[string]*config.Provider, catalog *discovery.ModelCatalog, autoContextSkip bool) []UpstreamTarget {
 	n := len(agent.Models)
 	if n == 0 {
 		return nil
@@ -73,12 +76,26 @@ func (a *AgentState) BuildTargetList(logger *slog.Logger, agentName string, agen
 
 		maxCtx := m.MaxContext
 		if maxCtx == 0 {
-			if entry, ok := config.ModelRegistry[m.Model]; ok && entry.MaxContext > 0 {
-				maxCtx = entry.MaxContext
+			if catalog != nil {
+				if disc, ok := catalog.Lookup(m.Model); ok && disc.MaxContext > 0 {
+					maxCtx = disc.MaxContext
+				}
+			}
+			if maxCtx == 0 {
+				if entry, ok := config.ModelRegistry[m.Model]; ok && entry.MaxContext > 0 {
+					maxCtx = entry.MaxContext
+				}
 			}
 		}
+
 		if maxCtx > 0 && tokenCount > maxCtx {
 			logger.Info("skipping model: exceeds max_context",
+				"model", m.Model, "max_context", maxCtx, "tokens", tokenCount)
+			continue
+		}
+
+		if autoContextSkip && maxCtx > 0 && tokenCount > 0 && maxCtx < tokenCount*2 {
+			logger.Info("skipping model: context headroom too small",
 				"model", m.Model, "max_context", maxCtx, "tokens", tokenCount)
 			continue
 		}
@@ -91,17 +108,25 @@ func (a *AgentState) BuildTargetList(logger *slog.Logger, agentName string, agen
 
 		maxOut := m.MaxOutput
 		if maxOut == 0 {
-			if entry, ok := config.ModelRegistry[m.Model]; ok && entry.MaxOutput > 0 {
-				maxOut = entry.MaxOutput
+			if catalog != nil {
+				if disc, ok := catalog.Lookup(m.Model); ok && disc.MaxOutput > 0 {
+					maxOut = disc.MaxOutput
+				}
+			}
+			if maxOut == 0 {
+				if entry, ok := config.ModelRegistry[m.Model]; ok && entry.MaxOutput > 0 {
+					maxOut = entry.MaxOutput
+				}
 			}
 		}
 
 		t := UpstreamTarget{
-			URL:       p,
-			Model:     m.Model,
-			CoolKey:   agentName + ":" + m.Provider + ":" + m.Model,
-			Provider:  m.Provider,
-			MaxOutput: maxOut,
+			URL:        p,
+			Model:      m.Model,
+			CoolKey:    agentName + ":" + m.Provider + ":" + m.Model,
+			Provider:   m.Provider,
+			MaxOutput:  maxOut,
+			MaxContext: maxCtx,
 		}
 		// Use Peek (no side effects) here; Allow is called later in
 		// prepareAndSend when the request is actually dispatched.
@@ -137,14 +162,21 @@ func (a *AgentState) CBSnapshot() map[string]string {
 	return a.CB.Snapshot()
 }
 
-func ResolveWindowMaxContext(modelName string, agents map[string]config.AgentConfig) int {
+func ResolveWindowMaxContext(modelName string, agents map[string]config.AgentConfig, catalog *discovery.ModelCatalog) int {
 	if agent, ok := agents[modelName]; ok {
 		maxCtx := 0
 		for _, m := range agent.Models {
 			mc := m.MaxContext
 			if mc == 0 {
-				if entry, ok := config.ModelRegistry[m.Model]; ok && entry.MaxContext > 0 {
-					mc = entry.MaxContext
+				if catalog != nil {
+					if disc, ok := catalog.Lookup(m.Model); ok && disc.MaxContext > 0 {
+						mc = disc.MaxContext
+					}
+				}
+				if mc == 0 {
+					if entry, ok := config.ModelRegistry[m.Model]; ok && entry.MaxContext > 0 {
+						mc = entry.MaxContext
+					}
 				}
 			}
 			if mc > maxCtx {
@@ -154,4 +186,32 @@ func ResolveWindowMaxContext(modelName string, agents map[string]config.AgentCon
 		return maxCtx
 	}
 	return 0
+}
+
+func SortTargetsByLatency(targets []UpstreamTarget, latencyTracker *infra.LatencyTracker) []UpstreamTarget {
+	if latencyTracker == nil || len(targets) <= 1 {
+		return targets
+	}
+
+	sorted := make([]UpstreamTarget, len(targets))
+	copy(sorted, targets)
+
+	sort.SliceStable(sorted, func(i, j int) bool {
+		latencyI, okI := latencyTracker.Get(sorted[i].Model, sorted[i].Provider)
+		latencyJ, okJ := latencyTracker.Get(sorted[j].Model, sorted[j].Provider)
+
+		if !okI && !okJ {
+			return false
+		}
+		if !okI {
+			return false
+		}
+		if !okJ {
+			return true
+		}
+
+		return latencyI.MedianMs < latencyJ.MedianMs
+	})
+
+	return sorted
 }

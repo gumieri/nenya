@@ -81,7 +81,7 @@ func (p *Proxy) handleChatCompletions(gw *gateway.NenyaGateway, w http.ResponseW
 		}
 		cooldownDuration = time.Duration(secs) * time.Second
 		maxRetries = agent.MaxRetries
-		targets = gw.AgentState.BuildTargetList(gw.Logger, modelName, agent, tokenCount, gw.Providers)
+		targets = gw.AgentState.BuildTargetList(gw.Logger, modelName, agent, tokenCount, gw.Providers, gw.ModelCatalog, gw.Config.Governance.AutoContextSkip)
 		if len(targets) == 0 {
 			if len(agent.Models) > 0 {
 				gw.Logger.Warn("all models excluded by max_context",
@@ -93,6 +93,11 @@ func (p *Proxy) handleChatCompletions(gw *gateway.NenyaGateway, w http.ResponseW
 			}
 			return
 		}
+
+		if gw.Config.Governance.AutoReorderByLatency {
+			targets = routing.SortTargetsByLatency(targets, gw.LatencyTracker)
+		}
+
 		strategy := agent.Strategy
 		if strategy == "" {
 			strategy = "round-robin"
@@ -100,7 +105,7 @@ func (p *Proxy) handleChatCompletions(gw *gateway.NenyaGateway, w http.ResponseW
 		gw.Logger.Info("agent routing",
 			"agent", modelName, "strategy", strategy, "models_in_chain", len(targets))
 	} else {
-		provider := routing.ResolveProvider(modelName, gw.Providers)
+		provider := routing.ResolveProvider(modelName, gw.Providers, gw.ModelCatalog)
 		if provider == nil {
 			gw.Logger.Warn("no provider found for model", "model", modelName)
 			http.Error(w, "No provider configured for this model", http.StatusBadRequest)
@@ -127,7 +132,7 @@ func (p *Proxy) handleChatCompletions(gw *gateway.NenyaGateway, w http.ResponseW
 			p.injectAutoSearch(gw, autoSearchCtx, payload, messages, agentName)
 			autoSearchCancel()
 			p.injectMCPTools(gw, payload, agentName)
-			windowMaxCtx := routing.ResolveWindowMaxContext(modelName, gw.Config.Agents)
+			windowMaxCtx := routing.ResolveWindowMaxContext(modelName, gw.Config.Agents, gw.ModelCatalog)
 			profile := pipeline.ClassifyClient(r.Header)
 			if profile.IsIDE {
 				gw.Logger.Debug("IDE client detected", "client", profile.ClientName)
@@ -447,7 +452,7 @@ func (p *Proxy) handleEmbeddings(gw *gateway.NenyaGateway, w http.ResponseWriter
 		return
 	}
 
-	provider := routing.ResolveProvider(modelName, gw.Providers)
+	provider := routing.ResolveProvider(modelName, gw.Providers, gw.ModelCatalog)
 	if provider == nil {
 		gw.Logger.Warn("no provider for embeddings model", "model", modelName)
 		http.Error(w, "No provider configured for this model", http.StatusBadRequest)
@@ -517,7 +522,7 @@ func (p *Proxy) handleResponses(gw *gateway.NenyaGateway, w http.ResponseWriter,
 		return
 	}
 
-	provider := routing.ResolveProvider(modelName, gw.Providers)
+	provider := routing.ResolveProvider(modelName, gw.Providers, gw.ModelCatalog)
 	if provider == nil {
 		gw.Logger.Warn("no provider for responses model", "model", modelName)
 		http.Error(w, "No provider configured for this model", http.StatusBadRequest)

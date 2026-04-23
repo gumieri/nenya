@@ -52,6 +52,7 @@ systemctl reload nenya
 ```
 
 - Reloads config from the same path used at startup
+- Re-discovers model catalogs from all configured providers
 - Validates config structure (patterns, enums) without pinging providers
 - Preserves UsageTracker, Metrics, and ThoughtSignatureCache across reloads
 - On validation failure: logs error, continues serving with old config
@@ -83,6 +84,8 @@ The interceptor implements a 3-tier pipeline for the last user message content, 
 | `keep_first_percent` | float | `15.0` | Percentage of blocks to pin from the start when truncating (safety net for both middle-out and TF-IDF) |
 | `keep_last_percent` | float | `25.0` | Percentage of blocks to pin from the end when truncating (safety net for both middle-out and TF-IDF) |
 | `tfidf_query_source` | string | `""` (disabled) | Enable TF-IDF relevance-scored truncation for Tier 3. `""` = disabled (use middle-out). `"prior_messages"` = use previous user messages as query terms. `"self"` = use first 500 runes of the massive message as query terms. When enabled, if TF-IDF reduces the payload below `soft_limit`, the engine call is skipped entirely. |
+| `auto_context_skip` | bool | `false` | Automatically skip models that do not meet context requirements for the current request. When enabled, models with `max_context` smaller than the request's input token count are excluded from routing, preventing errors and improving latency. |
+| `auto_reorder_by_latency` | bool | `false` | Dynamically sort targets based on historical response times. When enabled, targets are reordered by latency (fastest first) before routing. Requires `infra.LatencyTracker` to be initialized. |
 | `retryable_status_codes` | []int | `[429, 500, 502, 503, 504]` | HTTP status codes that trigger fallback to the next model in an agent chain. **Warning: setting this field REPLACES the built-in defaults entirely.** You must include all codes you want retryable (including the standard ones). Per-provider override available via `providers.<name>.retryable_status_codes` (provider-level replaces global for that provider). |
 
 ## `security_filter`
@@ -469,6 +472,81 @@ Built-in models that can be referenced by string shorthand in agent `models` arr
 | `qwen2.5-72b-turbo` | `together` | 32768 |
 
 Models not in this registry (e.g., local Ollama models, custom endpoints) must be specified as full objects with explicit `provider` and `model` fields.
+
+## Model Discovery
+
+Nenya dynamically fetches model catalogs from upstream providers at startup and on SIGHUP reload. This enables automatic discovery of custom models (e.g., Ollama) and reduces the need for manual registry updates.
+
+### Discovery Process
+
+1. **Startup/Reload** — For each configured provider with an API key, fetch `/v1/models` in parallel (10s timeout per provider)
+2. **Provider-specific parsing** — Each provider has a dedicated parser for its response format
+3. **Three-tier merge** — Discovered models are merged with static registry (config overrides take precedence)
+4. **Catalog update** — The merged catalog is used for all subsequent model resolution
+
+### Three-Tier Model Resolution
+
+When resolving a model (for routing, `/v1/models` catalog, or `max_tokens` injection):
+
+| Priority | Source | Description |
+|----------|--------|-------------|
+| 1 | Config overrides | Agent model entries with explicit `provider`, `max_context`, or `max_output` fields |
+| 2 | Discovered models | Models fetched from provider `/v1/models` endpoints at startup/reload |
+| 3 | Static registry | Built-in ModelRegistry fallback for known models |
+
+This allows:
+- Custom local models (Ollama) to be discovered automatically
+- Provider-specific overrides without code changes
+- Graceful fallback when discovery fails (static registry still works)
+
+### Security Hardening
+
+The discovery package enforces strict security boundaries:
+
+- **Response body limits** — 10 MB max per provider response (DoS protection)
+- **JSON decode limits** — 10 MB max with `DisallowUnknownFields` (malformed JSON rejection)
+- **Content-type validation** — Only `application/json` responses are parsed
+- **Model ID sanitization** — Max 256 chars, printable characters only (XSS prevention)
+- **Per-provider timeouts** — 10s context timeout per fetch (no hanging)
+- **Panic recovery** — Goroutines have defer/recover to prevent crashes
+- **Auth header injection** — Gemini uses `x-goog-api-key` header (not query params)
+- **Shared HTTP client** — Reused with proper TLS timeouts (no resource leaks)
+
+### Graceful Degradation
+
+If discovery fails for any provider:
+- The provider is skipped with a warning log
+- Static registry models for that provider still work
+- Other providers' discovered models are still used
+- `/v1/models` endpoint shows only successfully discovered models
+
+### `/v1/models` Endpoint
+
+The `/v1/models` catalog endpoint returns actual discovered models instead of wildcards:
+
+```json
+{
+  "object": "list",
+  "data": [
+    {
+      "id": "gemini-2.5-flash",
+      "object": "model",
+      "owned_by": "google",
+      "context_window": 128000,
+      "max_tokens": 8192
+    },
+    {
+      "id": "deepseek-chat",
+      "object": "model",
+      "owned_by": "deepseek",
+      "context_window": 128000,
+      "max_tokens": 4096
+    }
+  ]
+}
+```
+
+Models are filtered to only show those with valid API keys configured. Agent names are also included as models (for agent-based routing).
 
 ## Processing Pipeline Order
 

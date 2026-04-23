@@ -33,3 +33,8 @@ func (c *ResponseCacheConfig) UnmarshalJSON(data []byte) error {
 	}
 	return nil
 }
+
+type DiscoveryConfig struct {
+	Enabled    bool `json:"enabled"`
+	AutoAgents bool `json:"auto_agents"`
+}

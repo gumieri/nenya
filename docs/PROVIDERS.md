@@ -147,3 +147,17 @@ Each provider declares its capabilities through a `ProviderSpec`:
 | `SupportsVision` | Provider accepts image inputs |
 
 See `internal/providers/spec.go` for the full specification.
+
+## Model Discovery Support
+
+Nenya automatically fetches model catalogs from configured providers at startup and on SIGHUP reload. Discovery support varies by provider:
+
+| Provider | Discovery Support | Endpoint | Response Format |
+|----------|-------------------|----------|-----------------|
+| **Anthropic** | Full | `api.anthropic.com/v1/models` | `{"data": [{"id": "..."}]}` |
+| **Gemini** | Full | `generativelanguage.googleapis.com/v1beta/models` | `{"models": [{"name": "models/...", "inputTokenLimit": ...}]}` |
+| **Ollama** | Full | `127.0.0.1:11434/api/tags` | `{"models": [{"name": "..."}]}` |
+| **OpenAI-compatible** | Full | `{provider_url}/v1/models` | `{"data": [{"id": "..."}]}` |
+| **Others** | Default | Derived from chat endpoint | OpenAI format fallback |
+
+Discovery is automatic — no configuration required. Models are merged with the static registry using three-tier priority (config overrides > discovered > static). Providers without API keys are skipped. See [Configuration > Model Discovery](CONFIGURATION.md#model-discovery) for details.

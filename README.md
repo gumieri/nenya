@@ -77,7 +77,9 @@ Flow notes:
 
 - **Config-driven provider registry** — add providers via JSON, zero code changes
 - **22 built-in providers** with specialized adapters for wire format differences
+- **Dynamic model discovery** — fetches live model catalogs from providers at startup and on reload
 - **Model registry** — reference models by string shorthand with automatic provider/context resolution
+- **Three-tier model resolution** — config overrides > discovered models > static registry
 - **Agent fallback chains** — round-robin or sequential with circuit breaker and automatic failover
 - **Per-agent system prompts** — inline or file-based
 
@@ -246,7 +248,7 @@ All `/v1/*` endpoints require `Authorization: Bearer <client_token>`.
 | Endpoint | Auth | Description |
 |----------|------|-------------|
 | `POST /v1/chat/completions` | Bearer | OpenAI-compatible chat with SSE streaming, agent fallback, MCP multi-turn |
-| `GET /v1/models` | Bearer | Available models catalog |
+| `GET /v1/models` | Bearer | Live model catalog from discovered providers + static registry (context window, max tokens) |
 | `POST /v1/embeddings` | Bearer | Passthrough proxy |
 | `POST /v1/responses` | Bearer | Passthrough proxy |
 | `POST /proxy/{provider}/*` | Bearer | Arbitrary provider endpoint passthrough (all HTTP methods, SSE streaming) |
@@ -290,6 +292,7 @@ systemctl reload nenya
 ```
 
 - Reloads config files from `/etc/nenya/` and re-reads secrets
+- Re-discovers model catalogs from all configured providers
 - Validates config structure (patterns, enums) but does not ping providers
 - Preserves UsageTracker, Metrics, and ThoughtSignatureCache across reloads
 - On validation failure: logs error, continues serving with old config

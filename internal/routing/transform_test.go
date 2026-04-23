@@ -37,6 +37,7 @@ func testDeps(providers map[string]*config.Provider) TransformDeps {
 			}
 			return ""
 		},
+		Catalog: nil,
 	}
 }
 

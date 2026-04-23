@@ -92,6 +92,7 @@ type Config struct {
 	Compaction     CompactionConfig           `json:"compaction"`
 	Window         WindowConfig               `json:"window"`
 	ResponseCache  ResponseCacheConfig        `json:"response_cache"`
+	Discovery      DiscoveryConfig            `json:"discovery"`
 	MCPServers     map[string]MCPServerConfig `json:"mcp_servers,omitempty"`
 	Agents         map[string]AgentConfig     `json:"agents"`
 	Providers      map[string]ProviderConfig  `json:"providers"`
@@ -112,6 +113,8 @@ type GovernanceConfig struct {
 	KeepLastPercent          float64  `json:"keep_last_percent"`
 	RetryableStatusCodes     []int    `json:"retryable_status_codes"`
 	TFIDFQuerySource         string   `json:"tfidf_query_source"`
+	AutoContextSkip          bool     `json:"auto_context_skip"`
+	AutoReorderByLatency     bool     `json:"auto_reorder_by_latency"`
 	rpmSet                   bool     `json:"-"`
 	tpmSet                   bool     `json:"-"`
 }

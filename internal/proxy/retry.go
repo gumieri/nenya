@@ -196,6 +196,7 @@ func (p *Proxy) prepareAndSend(gw *gateway.NenyaGateway,
 		Config:             &gw.Config,
 		ThoughtSigCache:    gw.ThoughtSigCache,
 		ExtractContentText: gateway.ExtractContentText,
+		Catalog:            gw.ModelCatalog,
 	}
 	transformedBody, _, err := routing.TransformRequestForUpstream(transformDeps, target.Provider, target.URL, payload, target.Model, target.MaxOutput)
 	if err != nil {
@@ -235,11 +236,17 @@ func (p *Proxy) prepareAndSend(gw *gateway.NenyaGateway,
 	}
 	req = req.WithContext(upstreamCtx)
 
+	startTime := time.Now()
 	resp, err := gw.Client.Do(req)
 	if err != nil {
 		upstreamCancel()
 		ctxLogger.Warn("target network error", "err", err)
 		return upstreamAction{kind: actionContinue}
+	}
+
+	duration := time.Since(startTime)
+	if gw.LatencyTracker != nil {
+		gw.LatencyTracker.Record(target.Model, target.Provider, duration)
 	}
 
 	ctxLogger.Info("upstream response", "status", resp.StatusCode)
