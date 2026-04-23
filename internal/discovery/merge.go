@@ -4,6 +4,9 @@ import (
 	"nenya/internal/config"
 )
 
+// MergeCatalog rebuilds the merged model catalog from scratch on every call.
+// This is intentional: the catalog is rebuilt only at startup and on SIGHUP reload,
+// so the cost is negligible and correctness is simpler than incremental merging.
 func MergeCatalog(catalog *ModelCatalog, cfg *config.Config) *ModelCatalog {
 	merged := NewModelCatalog()
 

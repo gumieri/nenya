@@ -85,7 +85,7 @@ The interceptor implements a 3-tier pipeline for the last user message content, 
 | `keep_last_percent` | float | `25.0` | Percentage of blocks to pin from the end when truncating (safety net for both middle-out and TF-IDF) |
 | `tfidf_query_source` | string | `""` (disabled) | Enable TF-IDF relevance-scored truncation for Tier 3. `""` = disabled (use middle-out). `"prior_messages"` = use previous user messages as query terms. `"self"` = use first 500 runes of the massive message as query terms. When enabled, if TF-IDF reduces the payload below `soft_limit`, the engine call is skipped entirely. |
 | `auto_context_skip` | bool | `false` | Automatically skip models that do not meet context requirements for the current request. When enabled, models with `max_context` smaller than the request's input token count are excluded from routing, preventing errors and improving latency. |
-| `auto_reorder_by_latency` | bool | `false` | Dynamically sort targets based on historical response times. When enabled, targets are reordered by latency (fastest first) before routing. Requires `infra.LatencyTracker` to be initialized. |
+| `auto_reorder_by_latency` | bool | `false` | Dynamically sort targets based on historical response times. When enabled, targets are reordered by median latency (fastest first) with ±5% jitter to prevent thundering herd. Requires `infra.LatencyTracker` to be initialized. |
 | `retryable_status_codes` | []int | `[429, 500, 502, 503, 504]` | HTTP status codes that trigger fallback to the next model in an agent chain. **Warning: setting this field REPLACES the built-in defaults entirely.** You must include all codes you want retryable (including the standard ones). Per-provider override available via `providers.<name>.retryable_status_codes` (provider-level replaces global for that provider). |
 
 ## `security_filter`
@@ -598,6 +598,7 @@ This checks:
 1. Ollama engine health (if `security_filter` is enabled and engine is `ollama`)
 2. Provider API endpoint reachability
 3. API key validity
+4. Model registry integrity (validates every `ModelRegistry` entry has a non-empty provider and non-negative limits)
 
 > **Note**: On hot reload (`systemctl reload nenya`), only config structure is validated — provider reachability checks are skipped to prevent transient issues from blocking reloads.
 

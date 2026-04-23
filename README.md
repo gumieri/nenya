@@ -81,6 +81,7 @@ Flow notes:
 - **Model registry** — reference models by string shorthand with automatic provider/context resolution
 - **Three-tier model resolution** — config overrides > discovered models > static registry
 - **Agent fallback chains** — round-robin or sequential with circuit breaker and automatic failover
+- **Latency-aware routing** — auto-reorder targets by historical median response time with ±5% jitter to prevent thundering herd
 - **Per-agent system prompts** — inline or file-based
 
 ### Security & Privacy

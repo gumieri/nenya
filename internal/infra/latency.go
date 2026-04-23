@@ -1,7 +1,6 @@
 package infra
 
 import (
-	"sort"
 	"sync"
 	"time"
 )
@@ -23,13 +22,13 @@ type ModelLatency struct {
 type LatencyTracker struct {
 	mu      sync.RWMutex
 	latency map[string]*ModelLatency
-	samples map[string][]time.Duration
+	sorted  map[string][]time.Duration
 }
 
 func NewLatencyTracker() *LatencyTracker {
 	return &LatencyTracker{
 		latency: make(map[string]*ModelLatency),
-		samples: make(map[string][]time.Duration),
+		sorted:  make(map[string][]time.Duration),
 	}
 }
 
@@ -40,25 +39,49 @@ func (l *LatencyTracker) Record(model, provider string, duration time.Duration) 
 	defer l.mu.Unlock()
 
 	l.evictStaleLocked()
-	if len(l.samples) >= latencyMaxKeys {
-		if _, exists := l.samples[key]; !exists {
+	if len(l.sorted) >= latencyMaxKeys {
+		if _, exists := l.sorted[key]; !exists {
 			return
 		}
 	}
 
-	if l.samples[key] == nil {
-		l.samples[key] = make([]time.Duration, 0, latencyMaxSamples)
+	buf, ok := l.sorted[key]
+	if !ok {
+		buf = make([]time.Duration, 0, latencyMaxSamples)
 	}
 
-	l.samples[key] = append(l.samples[key], duration)
+	buf = insertSorted(buf, duration)
 
-	if len(l.samples[key]) > latencyMaxSamples {
+	if len(buf) > latencyMaxSamples {
 		trimmed := make([]time.Duration, latencyMaxSamples)
-		copy(trimmed, l.samples[key][len(l.samples[key])-latencyMaxSamples:])
-		l.samples[key] = trimmed
+		copy(trimmed, buf[1:])
+		buf = trimmed
 	}
 
-	l.updateMedianLocked(key, model, provider)
+	l.sorted[key] = buf
+	l.latency[key] = &ModelLatency{
+		Model:      model,
+		Provider:   provider,
+		MedianMs:   float64(buf[len(buf)/2].Milliseconds()),
+		SampleSize: len(buf),
+		LastUpdate: time.Now(),
+	}
+}
+
+func insertSorted(sorted []time.Duration, val time.Duration) []time.Duration {
+	lo, hi := 0, len(sorted)
+	for lo < hi {
+		mid := (lo + hi) / 2
+		if sorted[mid] < val {
+			lo = mid + 1
+		} else {
+			hi = mid
+		}
+	}
+	sorted = append(sorted, 0)
+	copy(sorted[lo+1:], sorted[lo:])
+	sorted[lo] = val
+	return sorted
 }
 
 func (l *LatencyTracker) evictStaleLocked() {
@@ -66,31 +89,8 @@ func (l *LatencyTracker) evictStaleLocked() {
 	for key, ml := range l.latency {
 		if ml.LastUpdate.Before(cutoff) {
 			delete(l.latency, key)
-			delete(l.samples, key)
+			delete(l.sorted, key)
 		}
-	}
-}
-
-func (l *LatencyTracker) updateMedianLocked(key, model, provider string) {
-	samples := l.samples[key]
-	if len(samples) == 0 {
-		return
-	}
-
-	n := len(samples)
-	sorted := make([]time.Duration, n)
-	copy(sorted, samples)
-
-	sort.Slice(sorted, func(i, j int) bool { return sorted[i] < sorted[j] })
-
-	median := sorted[n/2]
-
-	l.latency[key] = &ModelLatency{
-		Model:      model,
-		Provider:   provider,
-		MedianMs:   float64(median.Milliseconds()),
-		SampleSize: n,
-		LastUpdate: time.Now(),
 	}
 }
 

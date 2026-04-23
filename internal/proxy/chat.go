@@ -95,7 +95,7 @@ func (p *Proxy) handleChatCompletions(gw *gateway.NenyaGateway, w http.ResponseW
 		}
 
 		if gw.Config.Governance.AutoReorderByLatency {
-			targets = routing.SortTargetsByLatency(targets, gw.LatencyTracker)
+			targets = routing.SortTargetsByLatency(targets, gw.LatencyTracker, nil)
 		}
 
 		strategy := agent.Strategy
