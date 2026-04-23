@@ -39,7 +39,7 @@ type NenyaGateway struct {
 	MCPToolIndex    *mcp.ToolRegistry
 }
 
-func New(cfg config.Config, secrets *config.SecretsConfig, logger *slog.Logger) *NenyaGateway {
+func New(ctx context.Context, cfg config.Config, secrets *config.SecretsConfig, logger *slog.Logger) *NenyaGateway {
 	if cfg.Providers == nil {
 		cfg.Providers = make(map[string]config.ProviderConfig)
 	}
@@ -144,7 +144,7 @@ func New(cfg config.Config, secrets *config.SecretsConfig, logger *slog.Logger) 
 		MCPToolIndex:    mcp.NewToolRegistry(),
 	}
 
-	gw.buildMCPToolIndex(logger)
+	gw.buildMCPToolIndex(ctx, logger)
 
 	gw.Metrics = infra.NewMetrics()
 	gw.Metrics.RateLimits = gw.RateLimiter.Snapshot
@@ -248,8 +248,8 @@ func (g *NenyaGateway) Close() {
 	}
 }
 
-func (g *NenyaGateway) Reload(cfg config.Config, secrets *config.SecretsConfig) *NenyaGateway {
-	newGW := New(cfg, secrets, g.Logger)
+func (g *NenyaGateway) Reload(ctx context.Context, cfg config.Config, secrets *config.SecretsConfig) *NenyaGateway {
+	newGW := New(ctx, cfg, secrets, g.Logger)
 
 	newGW.Stats = g.Stats
 	newGW.Metrics = g.Metrics
@@ -284,9 +284,9 @@ func buildMCPClients(cfg config.Config, logger *slog.Logger) map[string]*mcp.Cli
 	return clients
 }
 
-func (g *NenyaGateway) buildMCPToolIndex(logger *slog.Logger) {
+func (g *NenyaGateway) buildMCPToolIndex(ctx context.Context, logger *slog.Logger) {
 	for name, client := range g.MCPClients {
-		ctx, cancel := contextWithTimeout(10 * time.Second)
+		ctx, cancel := contextWithTimeout(ctx, 10*time.Second)
 		err := client.Initialize(ctx)
 		cancel()
 		if err != nil {
@@ -295,7 +295,7 @@ func (g *NenyaGateway) buildMCPToolIndex(logger *slog.Logger) {
 			continue
 		}
 
-		ctx, cancel = contextWithTimeout(15 * time.Second)
+		ctx, cancel = contextWithTimeout(ctx, 15*time.Second)
 		tools, err := client.RefreshTools(ctx)
 		cancel()
 		if err != nil {
@@ -329,6 +329,6 @@ func (g *NenyaGateway) GetMCPClientsForAgent(agentName string) map[string]*mcp.C
 	return clients
 }
 
-func contextWithTimeout(d time.Duration) (context.Context, context.CancelFunc) {
-	return context.WithTimeout(context.Background(), d)
+func contextWithTimeout(parent context.Context, d time.Duration) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(parent, d)
 }

@@ -261,7 +261,7 @@ func (p *Proxy) handleHealthz(w http.ResponseWriter) {
 		http.Error(w, "Gateway not initialized", http.StatusServiceUnavailable)
 		return
 	}
-	engineOK := p.checkSecurityFilterEngineHealth()
+	engineOK := p.checkSecurityFilterEngineHealth(context.Background())
 
 	resp := map[string]interface{}{
 		"status": "ok",
@@ -283,7 +283,7 @@ func (p *Proxy) handleHealthz(w http.ResponseWriter) {
 	}
 }
 
-func (p *Proxy) checkSecurityFilterEngineHealth() bool {
+func (p *Proxy) checkSecurityFilterEngineHealth(ctx context.Context) bool {
 	gw := p.Gateway()
 	if gw == nil {
 		return false
@@ -295,7 +295,7 @@ func (p *Proxy) checkSecurityFilterEngineHealth() bool {
 			if target.Provider.ApiFormat != "ollama" {
 				return true
 			}
-			if p.checkOllamaProviderHealth(gw, target.Provider.URL) {
+			if p.checkOllamaProviderHealth(ctx, gw, target.Provider.URL) {
 				return true
 			}
 		}
@@ -310,14 +310,14 @@ func (p *Proxy) checkSecurityFilterEngineHealth() bool {
 	if pr.ApiFormat != "ollama" {
 		return true
 	}
-	return p.checkOllamaProviderHealth(gw, pr.URL)
+	return p.checkOllamaProviderHealth(ctx, gw, pr.URL)
 }
 
-func (p *Proxy) checkOllamaProviderHealth(gw *gateway.NenyaGateway, providerURL string) bool {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+func (p *Proxy) checkOllamaProviderHealth(ctx context.Context, gw *gateway.NenyaGateway, providerURL string) bool {
+	healthCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, config.OllamaHealthURL(providerURL), nil)
+	req, err := http.NewRequestWithContext(healthCtx, http.MethodGet, config.OllamaHealthURL(providerURL), nil)
 	if err != nil {
 		return false
 	}

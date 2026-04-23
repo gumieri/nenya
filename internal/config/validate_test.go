@@ -1,6 +1,7 @@
 package config
 
 import (
+	"context"
 	"log/slog"
 	"net/http"
 	"testing"
@@ -31,7 +32,7 @@ func TestOllamaHealthURL(t *testing.T) {
 
 func TestApplyAuthHeader(t *testing.T) {
 	t.Run("bearer", func(t *testing.T) {
-		req, _ := http.NewRequest(http.MethodGet, "/", nil)
+		req, _ := http.NewRequestWithContext(context.Background(), http.MethodGet, "/", nil)
 		p := &Provider{AuthStyle: "bearer", APIKey: "sk-test"}
 		if err := ApplyAuthHeader(req, p); err != nil {
 			t.Fatal(err)
@@ -41,7 +42,7 @@ func TestApplyAuthHeader(t *testing.T) {
 		}
 	})
 	t.Run("bearer+x-goog", func(t *testing.T) {
-		req, _ := http.NewRequest(http.MethodGet, "/", nil)
+		req, _ := http.NewRequestWithContext(context.Background(), http.MethodGet, "/", nil)
 		p := &Provider{AuthStyle: "bearer+x-goog", APIKey: "key123"}
 		if err := ApplyAuthHeader(req, p); err != nil {
 			t.Fatal(err)
@@ -54,7 +55,7 @@ func TestApplyAuthHeader(t *testing.T) {
 		}
 	})
 	t.Run("none", func(t *testing.T) {
-		req, _ := http.NewRequest(http.MethodGet, "/", nil)
+		req, _ := http.NewRequestWithContext(context.Background(), http.MethodGet, "/", nil)
 		p := &Provider{AuthStyle: "none"}
 		if err := ApplyAuthHeader(req, p); err != nil {
 			t.Fatal(err)
@@ -64,7 +65,7 @@ func TestApplyAuthHeader(t *testing.T) {
 		}
 	})
 	t.Run("missing key", func(t *testing.T) {
-		req, _ := http.NewRequest(http.MethodGet, "/", nil)
+		req, _ := http.NewRequestWithContext(context.Background(), http.MethodGet, "/", nil)
 		p := &Provider{AuthStyle: "bearer", APIKey: ""}
 		if err := ApplyAuthHeader(req, p); err != nil {
 			t.Fatalf("unexpected error: %v", err)
@@ -74,7 +75,7 @@ func TestApplyAuthHeader(t *testing.T) {
 		}
 	})
 	t.Run("unsupported", func(t *testing.T) {
-		req, _ := http.NewRequest(http.MethodGet, "/", nil)
+		req, _ := http.NewRequestWithContext(context.Background(), http.MethodGet, "/", nil)
 		p := &Provider{AuthStyle: "ntlm"}
 		if err := ApplyAuthHeader(req, p); err == nil {
 			t.Fatal("expected error")

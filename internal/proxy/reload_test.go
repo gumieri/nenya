@@ -1,6 +1,7 @@
 package proxy
 
 import (
+	"context"
 	"io"
 	"log/slog"
 	"net/http"
@@ -37,7 +38,7 @@ func newReloadTestGateway(t *testing.T, upstreamURL string) *gateway.NenyaGatewa
 		ClientToken:  "test-token",
 		ProviderKeys: map[string]string{},
 	}
-	return gateway.New(cfg, secrets, slog.Default())
+	return gateway.New(context.Background(), cfg, secrets, slog.Default())
 }
 
 func TestAuthenticateRequest_NilGateway(t *testing.T) {
@@ -69,8 +70,8 @@ func TestServeHTTP_NilGateway(t *testing.T) {
 
 func TestStoreGateway_SwapConsistency(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	gw1 := gateway.New(config.Config{}, &config.SecretsConfig{ClientToken: "old"}, logger)
-	gw2 := gateway.New(config.Config{}, &config.SecretsConfig{ClientToken: "new"}, logger)
+	gw1 := gateway.New(context.Background(), config.Config{}, &config.SecretsConfig{ClientToken: "old"}, logger)
+	gw2 := gateway.New(context.Background(), config.Config{}, &config.SecretsConfig{ClientToken: "new"}, logger)
 
 	p := &Proxy{}
 	p.StoreGateway(gw1)

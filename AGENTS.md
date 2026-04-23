@@ -30,7 +30,31 @@ You are acting as a **Senior Go Security Engineer and Network Architect**. Your 
 - **Header Sanitization:** When proxying requests, strip hop-by-hop headers (like `Connection`, `Content-Length`) to prevent HTTP desync attacks. Pass only necessary headers (e.g., `Authorization`).
 - **Error Handling:** Never expose internal stack traces to the HTTP response. Log errors internally and return standard HTTP status codes.
 
-### 5. Core Workflows to Maintain
+### 5. Context Package Standards (CRITICAL)
+- **Request Context:** Always use `r.Context()` from `http.Request` as the root context for request-scoped operations. Thread it through the entire call stack.
+- **Timeout Enforcement:** Apply appropriate timeouts to all outbound calls:
+  - Upstream requests: Use `provider.TimeoutSeconds` from config
+  - MCP operations: Use configured timeouts (30s for tool calls, 10s for auto-search)
+  - Health checks: Use short timeouts (5s)
+  - Long-running loops: Use overall deadlines (5min for MCP multi-turn loop)
+- **Context Propagation:** Functions doing I/O or long-running work MUST accept `context.Context` as their first parameter. Never create a new `context.Background()` mid-request unless the operation is fire-and-forget and must outlive the request.
+- **Goroutine Lifecycle:** All goroutines must respect cancellation:
+  - Request-scoped goroutines: Use the request context or a derived context
+  - Background workers: Use dedicated cancellation channels (`closeCh`, `stopCh`)
+  - Fire-and-forget operations: Use `context.Background()` with explicit timeout
+- **Loop Cancellation:** Long-running loops MUST check for cancellation:
+  - Use `select { case <-ctx.Done(): }` for blocking operations
+  - Check `ctx.Err()` in loop bodies for non-blocking operations
+  - Never have infinite loops without cancellation checks
+- **HTTP Requests:** Always use `http.NewRequestWithContext(ctx, ...)` — never `http.NewRequest` (deprecated)
+- **I/O Operations:** Use context-aware I/O functions (e.g., `copyStream(ctx, dst, src, buf)`) instead of bare `io.Copy`
+- **Anti-Patterns to Avoid:**
+  - `context.TODO()` — never use, always have a clear parent
+  - `context.WithValue()` — avoid for request-scoped data; use struct fields or parameters
+  - `context.Background()` mid-request — only use for top-level contexts or fire-and-forget goroutines
+  - Ignoring `ctx.Done()` — always respect cancellation signals
+
+### 6. Core Workflows to Maintain
 - **Provider Registry:** Upstream providers are config-driven via `"providers"` JSON sections merged with built-in defaults (`builtInProviders()` in `config.go`, sourced from `ProviderRegistry` in `registry.go`). Adding a new provider (e.g., OpenAI) requires zero Go code changes — only JSON config and a secrets key. Routing uses the `ModelRegistry` for direct model name lookups (priority), then `route_prefixes` for catch-all matching. Only unambiguous prefixes are used (e.g., `claude-` for Anthropic, `grok-` for xAI). Unknown models return a 400 error — there is no default provider fallback.
 - **Dynamic Routing:** The proxy must inspect the JSON body, read the `"model"` string, and dynamically route to the correct provider via `resolveProvider()`. Agents with fallback chains are resolved via `buildTargetList()`. Agent model lists support string shorthand (looked up from `ModelRegistry`) or full object notation (explicit provider/model).
 - **The Ollama Interceptor:** If the `messages[-1].content` length exceeds `config.Governance.ContextSoftLimit`, the proxy must synchronously call the local Ollama API to summarize the text BEFORE forwarding the request upstream. The engine is configured via `security_filter.engine` which supports a string (agent name reference with fallback chain) or an inline object (direct provider/model). See `internal/config/engine_resolve.go` for resolution logic and `internal/pipeline/engine.go` `CallEngineChain` for the fallback chain implementation. When `config.Governance.TFIDFQuerySource` is set, Tier 3 uses TF-IDF relevance scoring (`internal/pipeline/tfidf.go`) to prune content blocks by relevance to the user's query terms, potentially eliminating the engine call entirely if the payload drops below `ContextSoftLimit`.

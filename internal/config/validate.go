@@ -19,15 +19,15 @@ func closeBody(resp *http.Response) {
 	}
 }
 
-func ValidateConfiguration(cfg *Config, secrets *SecretsConfig, logger *slog.Logger) error {
-	return ValidateConfigurationWithPing(cfg, secrets, logger, true)
+func ValidateConfiguration(ctx context.Context, cfg *Config, secrets *SecretsConfig, logger *slog.Logger) error {
+	return ValidateConfigurationWithPing(ctx, cfg, secrets, logger, true)
 }
 
-func ValidateConfigurationNoPing(cfg *Config, secrets *SecretsConfig, logger *slog.Logger) error {
-	return ValidateConfigurationWithPing(cfg, secrets, logger, false)
+func ValidateConfigurationNoPing(ctx context.Context, cfg *Config, secrets *SecretsConfig, logger *slog.Logger) error {
+	return ValidateConfigurationWithPing(ctx, cfg, secrets, logger, false)
 }
 
-func ValidateConfigurationWithPing(cfg *Config, secrets *SecretsConfig, logger *slog.Logger, pingProviders bool) error {
+func ValidateConfigurationWithPing(ctx context.Context, cfg *Config, secrets *SecretsConfig, logger *slog.Logger, pingProviders bool) error {
 	logger.Info("starting configuration validation")
 
 	providers := ResolveProviders(cfg, secrets)
@@ -35,7 +35,7 @@ func ValidateConfigurationWithPing(cfg *Config, secrets *SecretsConfig, logger *
 	if pingProviders && cfg.SecurityFilter.Enabled && cfg.SecurityFilter.Engine.Provider == "ollama" {
 		if p, ok := providers[cfg.SecurityFilter.Engine.Provider]; ok && p.URL != "" {
 			logger.Info("checking Ollama engine health", "provider", cfg.SecurityFilter.Engine.Provider, "url", p.URL)
-			if !validateOllamaHealth(p.URL) {
+			if !validateOllamaHealth(ctx, p.URL) {
 				return fmt.Errorf("ollama engine provider %q at %s is not reachable", cfg.SecurityFilter.Engine.Provider, p.URL)
 			}
 			logger.Info("Ollama engine health check passed")
@@ -74,7 +74,7 @@ func ValidateConfigurationWithPing(cfg *Config, secrets *SecretsConfig, logger *
 			}
 
 			logger.Info("validating provider", "provider", name, "url", provider.URL)
-			if err := validateProvider(name, provider, logger); err != nil {
+			if err := validateProvider(ctx, name, provider, logger); err != nil {
 				errors = append(errors, fmt.Sprintf("%s: %v", name, err))
 				logger.Error("provider validation failed", "provider", name, "err", err)
 			} else {
@@ -91,9 +91,9 @@ func ValidateConfigurationWithPing(cfg *Config, secrets *SecretsConfig, logger *
 	return nil
 }
 
-func validateOllamaHealth(ollamaURL string) bool {
+func validateOllamaHealth(ctx context.Context, ollamaURL string) bool {
 	healthURL := OllamaHealthURL(ollamaURL)
-	req, err := http.NewRequest(http.MethodGet, healthURL, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, healthURL, nil)
 	if err != nil {
 		return false
 	}
@@ -107,8 +107,8 @@ func validateOllamaHealth(ollamaURL string) bool {
 
 var validationClient = &http.Client{Timeout: 30 * time.Second}
 
-func validateProvider(name string, provider *Provider, logger *slog.Logger) error {
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+func validateProvider(ctx context.Context, name string, provider *Provider, logger *slog.Logger) error {
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 
 	var validationURL string

@@ -18,6 +18,13 @@ import (
 	"time"
 )
 
+const (
+	mcpAutoSearchTimeout      = 10 * time.Second
+	mcpLoopMaxDuration        = 5 * time.Minute
+	mcpMaxIterations           = 10
+	mcpMaxIterationsHardCeiling = 50
+)
+
 func addCap(a, b int) int {
 	if b > 0 && a > math.MaxInt-b {
 		return math.MaxInt
@@ -116,7 +123,9 @@ func (p *Proxy) handleChatCompletions(gw *gateway.NenyaGateway, w http.ResponseW
 
 	if messagesRaw, ok := payload["messages"]; ok {
 		if messages, ok := messagesRaw.([]interface{}); ok && len(messages) > 0 {
-			p.injectAutoSearch(gw, r.Context(), payload, messages, agentName)
+			autoSearchCtx, autoSearchCancel := context.WithTimeout(r.Context(), mcpAutoSearchTimeout)
+			p.injectAutoSearch(gw, autoSearchCtx, payload, messages, agentName)
+			autoSearchCancel()
 			p.injectMCPTools(gw, payload, agentName)
 			windowMaxCtx := routing.ResolveWindowMaxContext(modelName, gw.Config.Agents)
 			profile := pipeline.ClassifyClient(r.Header)
@@ -453,14 +462,6 @@ func (p *Proxy) handleEmbeddings(gw *gateway.NenyaGateway, w http.ResponseWriter
 		return
 	}
 
-	req, err := p.buildUpstreamRequest(gw, r.Context(), http.MethodPost, embeddingURL, bodyBytes, provider.Name, r.Header)
-	if err != nil {
-		gw.Logger.Error("failed to create embeddings upstream request", "err", err)
-		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
-		return
-	}
-	req.Header.Set("Content-Type", "application/json")
-
 	ctx := r.Context()
 	if provider.TimeoutSeconds > 0 {
 		var cancel context.CancelFunc
@@ -468,7 +469,15 @@ func (p *Proxy) handleEmbeddings(gw *gateway.NenyaGateway, w http.ResponseWriter
 		defer cancel()
 	}
 
-	resp, err := gw.Client.Do(req.WithContext(ctx))
+	req, err := p.buildUpstreamRequest(gw, ctx, http.MethodPost, embeddingURL, bodyBytes, provider.Name, r.Header)
+	if err != nil {
+		gw.Logger.Error("failed to create embeddings upstream request", "err", err)
+		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+		return
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := gw.Client.Do(req)
 	if err != nil {
 		gw.Logger.Error("embeddings upstream request failed", "provider", provider.Name, "err", err)
 		http.Error(w, "Upstream provider error", http.StatusBadGateway)
@@ -479,7 +488,7 @@ func (p *Proxy) handleEmbeddings(gw *gateway.NenyaGateway, w http.ResponseWriter
 	routing.CopyHeaders(resp.Header, w.Header())
 	w.WriteHeader(resp.StatusCode)
 
-	if _, err := io.Copy(w, resp.Body); err != nil {
+	if _, err := copyStream(ctx, w, resp.Body, nil); err != nil {
 		gw.Logger.Debug("embeddings response copy ended", "err", err)
 	}
 }
@@ -523,14 +532,6 @@ func (p *Proxy) handleResponses(gw *gateway.NenyaGateway, w http.ResponseWriter,
 		return
 	}
 
-	req, err := p.buildUpstreamRequest(gw, r.Context(), http.MethodPost, responsesURL, bodyBytes, provider.Name, r.Header)
-	if err != nil {
-		gw.Logger.Error("failed to create responses upstream request", "err", err)
-		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
-		return
-	}
-	req.Header.Set("Content-Type", "application/json")
-
 	ctx := r.Context()
 	if provider.TimeoutSeconds > 0 {
 		var cancel context.CancelFunc
@@ -538,7 +539,15 @@ func (p *Proxy) handleResponses(gw *gateway.NenyaGateway, w http.ResponseWriter,
 		defer cancel()
 	}
 
-	resp, err := gw.Client.Do(req.WithContext(ctx))
+	req, err := p.buildUpstreamRequest(gw, ctx, http.MethodPost, responsesURL, bodyBytes, provider.Name, r.Header)
+	if err != nil {
+		gw.Logger.Error("failed to create responses upstream request", "err", err)
+		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+		return
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := gw.Client.Do(req)
 	if err != nil {
 		gw.Logger.Error("responses upstream request failed", "provider", provider.Name, "err", err)
 		http.Error(w, "Upstream provider error", http.StatusBadGateway)
@@ -549,7 +558,7 @@ func (p *Proxy) handleResponses(gw *gateway.NenyaGateway, w http.ResponseWriter,
 	routing.CopyHeaders(resp.Header, w.Header())
 	w.WriteHeader(resp.StatusCode)
 
-	if _, err := io.Copy(w, resp.Body); err != nil {
+	if _, err := copyStream(ctx, w, resp.Body, nil); err != nil {
 		gw.Logger.Debug("responses response copy ended", "err", err)
 	}
 }
@@ -822,7 +831,6 @@ func (p *Proxy) forwardToUpstreamWithMCP(gw *gateway.NenyaGateway,
 	maxRetries int,
 	cacheKey string,
 ) {
-	const mcpMaxIterationsHardCeiling = 50
 	_, hasAgent := gw.Config.Agents[agentName]
 	maxIter := mcpMaxIterations
 	if hasAgent {
@@ -846,6 +854,9 @@ func (p *Proxy) forwardToUpstreamWithMCP(gw *gateway.NenyaGateway,
 	totalToolCalls := 0
 	actualIter := 0
 
+	mcpLoopCtx, mcpLoopCancel := context.WithTimeout(r.Context(), mcpLoopMaxDuration)
+	defer mcpLoopCancel()
+
 	defer func() {
 		loopDuration := time.Since(loopStart)
 		if gw.Metrics != nil && loopDuration > 0 {
@@ -859,6 +870,18 @@ func (p *Proxy) forwardToUpstreamWithMCP(gw *gateway.NenyaGateway,
 	}()
 
 	for iteration := 0; iteration < maxIter; iteration++ {
+		select {
+		case <-mcpLoopCtx.Done():
+			gw.Logger.Warn("MCP loop deadline exceeded", "agent", agentName, "iterations", actualIter)
+			if lastBuf != nil {
+				replayBufferedResponse(w, lastBuf, gw.Logger)
+			} else {
+				writeSSEError(w, http.StatusRequestTimeout, "MCP loop deadline exceeded")
+			}
+			return
+		default:
+		}
+
 		if gw.Metrics != nil {
 			gw.Metrics.RecordMCPLoopIteration(agentName)
 		}
@@ -877,7 +900,7 @@ func (p *Proxy) forwardToUpstreamWithMCP(gw *gateway.NenyaGateway,
 			working = payload
 		}
 
-		buf, err := p.forwardBuffered(gw, r, targets, working, cooldownDuration, tokenCount, agentName, maxRetries)
+		buf, err := p.forwardBuffered(gw, mcpLoopCtx, r, targets, working, cooldownDuration, tokenCount, agentName, maxRetries)
 		if err != nil {
 			gw.Logger.Warn("MCP loop: upstream failed, streaming last response",
 				"iteration", iteration, "err", err)
@@ -910,7 +933,7 @@ func (p *Proxy) forwardToUpstreamWithMCP(gw *gateway.NenyaGateway,
 				"iteration", iteration+1,
 				"agent", agentName)
 
-			results := executeMCPCalls(r.Context(), mcpCalls, gw, agentName)
+			results := executeMCPCalls(mcpLoopCtx, mcpCalls, gw, agentName)
 			// Build an assistant message that only lists the MCP calls being
 			// handled. Using buf.assistantMessage (which contains ALL calls)
 			// would create orphaned tool_call references if nonMcpCalls is
@@ -955,6 +978,7 @@ func (p *Proxy) forwardToUpstreamWithMCP(gw *gateway.NenyaGateway,
 }
 
 func (p *Proxy) forwardBuffered(gw *gateway.NenyaGateway,
+	ctx context.Context,
 	r *http.Request,
 	targets []routing.UpstreamTarget,
 	payload map[string]interface{},
@@ -1014,19 +1038,19 @@ func (p *Proxy) forwardBuffered(gw *gateway.NenyaGateway,
 				if retryDelay > 0 {
 					gw.Logger.Info("retrying with parsed delay (buffered)",
 						"model", target.Model, "delay_ms", retryDelay.Milliseconds())
-					waitWithCancel(r.Context(), retryDelay)
+					waitWithCancel(ctx, retryDelay)
 				} else {
 					backoff := calculateBackoff(attempt - 1)
 					gw.Logger.Info("retrying with exponential backoff (buffered)",
 						"model", target.Model, "attempt", attempt, "delay_ms", backoff.Milliseconds())
-					waitWithCancel(r.Context(), backoff)
+					waitWithCancel(ctx, backoff)
 				}
 				continue
 			}
 			return nil, fmt.Errorf("upstream error: status %d", action.resp.StatusCode)
 		case actionStream:
 			defer action.cancel()
-			buf, err := bufferStreamResponse(r.Context(), action.resp.Body)
+			buf, err := bufferStreamResponse(ctx, action.resp.Body)
 			_ = action.resp.Body.Close()
 			if err != nil {
 				gw.AgentState.RecordSuccess(target.CoolKey)

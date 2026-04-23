@@ -226,7 +226,13 @@ func (p *Proxy) prepareAndSend(gw *gateway.NenyaGateway,
 		}
 	}
 
-	upstreamCtx, upstreamCancel := context.WithCancel(r.Context())
+	var upstreamCtx context.Context
+	var upstreamCancel context.CancelFunc
+	if pr, ok := gw.Providers[target.Provider]; ok && pr.TimeoutSeconds > 0 {
+		upstreamCtx, upstreamCancel = context.WithTimeout(r.Context(), time.Duration(pr.TimeoutSeconds)*time.Second)
+	} else {
+		upstreamCtx, upstreamCancel = context.WithCancel(r.Context())
+	}
 	req = req.WithContext(upstreamCtx)
 
 	resp, err := gw.Client.Do(req)

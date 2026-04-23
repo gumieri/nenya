@@ -290,7 +290,7 @@ func TestPipeSSE(t *testing.T) {
 			src := strings.NewReader(tt.input)
 			w := httptest.NewRecorder()
 
-			proxy.pipeSSE(logger, src, w)
+			proxy.pipeSSE(context.Background(), logger, src, w)
 
 			resp := w.Result()
 			defer func() { _ = resp.Body.Close() }()
