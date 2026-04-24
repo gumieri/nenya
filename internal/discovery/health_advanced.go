@@ -251,14 +251,14 @@ func (h *AdvancedHealthChecker) GetSummary() map[string]interface{} {
 
 	summary := map[string]interface{}{
 		"total_providers": len(h.results),
-		"ok":             0,
-		"degraded":       0,
-		"unreachable":    0,
-		"empty":          0,
-		"invalid":        0,
-		"total_models":   0,
-		"missing_models": 0,
-		"new_models":     0,
+		"ok":              0,
+		"degraded":        0,
+		"unreachable":     0,
+		"empty":           0,
+		"invalid":         0,
+		"total_models":    0,
+		"missing_models":  0,
+		"new_models":      0,
 	}
 
 	for _, result := range h.results {

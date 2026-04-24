@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
+	"reflect"
 )
 
 const (
@@ -52,11 +54,28 @@ type SSETransformingReader struct {
 	err                 error
 	closed              bool
 
-	// Track last seen token counts to deliver deltas when providers
-	// emit usage in multiple chunks.
 	lastCompletionTokens int
 	lastPromptTokens     int
 	lastTotalTokens      int
+
+	tcState toolCallState
+}
+
+type pendingToolCall struct {
+	id   string
+	args string
+}
+
+type toolCallState struct {
+	seenIndices map[int]bool
+	pending     map[int]*pendingToolCall
+}
+
+func newToolCallState() toolCallState {
+	return toolCallState{
+		seenIndices: make(map[int]bool),
+		pending:     make(map[int]*pendingToolCall),
+	}
 }
 
 func NewSSETransformingReader(src io.Reader, transformer ResponseTransformer) *SSETransformingReader {
@@ -64,6 +83,7 @@ func NewSSETransformingReader(src io.Reader, transformer ResponseTransformer) *S
 		src:         src,
 		scanner:     bufio.NewScanner(src),
 		transformer: transformer,
+		tcState:     newToolCallState(),
 	}
 	reader.scanner.Buffer(make([]byte, 0, SSEScannerInitialBuf), SSEScannerMaxBuf)
 	return reader
@@ -207,14 +227,6 @@ func (r *SSETransformingReader) transformLine(line []byte) []byte {
 			r.extractUsageFromMap(parsed)
 		}
 
-		if parsed != nil {
-			if normalizeToolCalls(parsed) {
-				if out, err := json.Marshal(parsed); err == nil {
-					data = out
-				}
-			}
-		}
-
 		if r.onContent != nil && parsed != nil {
 			if content := ExtractDeltaContentFromMap(parsed); content != "" {
 				r.onContent(content)
@@ -222,6 +234,13 @@ func (r *SSETransformingReader) transformLine(line []byte) []byte {
 		}
 
 		if r.transformer == nil {
+			if parsed != nil {
+				if normalizeToolCalls(parsed, &r.tcState) {
+					if out, err := json.Marshal(parsed); err == nil {
+						data = out
+					}
+				}
+			}
 			if bytes.Equal(data, origData) {
 				if r.observer != nil {
 					r.observer.OnSSEEvent(SSEEvent{Raw: line, Data: parsed})
@@ -241,6 +260,17 @@ func (r *SSETransformingReader) transformLine(line []byte) []byte {
 				r.observer.OnSSEEvent(SSEEvent{Raw: line, Data: parsed})
 			}
 			return line
+		}
+
+		if len(transformed) > 0 && transformed[0] == '{' {
+			var transformedParsed map[string]interface{}
+			if json.Unmarshal(transformed, &transformedParsed) == nil {
+				if normalizeToolCalls(transformedParsed, &r.tcState) {
+					if out, err := json.Marshal(transformedParsed); err == nil {
+						transformed = out
+					}
+				}
+			}
 		}
 
 		if bytes.Equal(transformed, origData) && bytes.Equal(data, origData) {
@@ -308,7 +338,7 @@ func ToInt(v interface{}) int {
 	}
 }
 
-func normalizeToolCalls(chunk map[string]interface{}) bool {
+func normalizeToolCalls(chunk map[string]interface{}, state *toolCallState) bool {
 	choices, ok := chunk["choices"].([]interface{})
 	if !ok {
 		return false
@@ -334,6 +364,12 @@ func normalizeToolCalls(chunk map[string]interface{}) bool {
 				continue
 			}
 			idx := ToInt(tc["index"])
+
+			if state.seenIndices[idx] {
+				keep = append(keep, tc)
+				continue
+			}
+
 			id := tc["id"]
 			switch id.(type) {
 			case string:
@@ -344,22 +380,53 @@ func normalizeToolCalls(chunk map[string]interface{}) bool {
 				tc["id"] = fmt.Sprintf("call_%d", idx)
 				mutated = true
 			}
+
 			fn, hasFn := tc["function"]
-			if !hasFn || fn == nil {
-				continue
-			}
-			fnMap, ok := fn.(map[string]interface{})
-			if !ok {
-				continue
-			}
-			fnName, hasFnName := fnMap["name"]
-			fnArgs, hasFnArgs := fnMap["arguments"]
-			if !hasFnName || fnName == nil {
-				if !hasFnArgs || fnArgs == nil || fnArgs == "" {
-					continue
+			tcID, _ := tc["id"].(string)
+			fnNameStr := extractToolCallName(fn, hasFn, &mutated, tcID)
+			fnArgsStr := extractToolCallArgs(fn, hasFn)
+
+			if fnNameStr != "" {
+				if p, ok := state.pending[idx]; ok {
+					if (tcID == "" || len(tcID) < 6 || tcID[:5] == "call_") && p.id != "" {
+						tc["id"] = p.id
+					}
+					if fnArgsStr == "" || fnArgsStr == "{}" {
+						if p.args != "" {
+							if fn, ok := tc["function"].(map[string]interface{}); ok {
+								fn["arguments"] = p.args
+							}
+						}
+					} else if p.args != "" {
+						if fn, ok := tc["function"].(map[string]interface{}); ok {
+							fn["arguments"] = p.args + fnArgsStr
+						}
+					}
+					delete(state.pending, idx)
+					mutated = true
+					slog.Debug("merged pending tool_call data on name arrival",
+						"index", idx,
+						"pending_args_len", len(p.args),
+						"tool_call_id", tcID,
+					)
 				}
+				state.seenIndices[idx] = true
+				keep = append(keep, tc)
+				continue
 			}
-			keep = append(keep, tc)
+
+			if fnArgsStr != "" && fnArgsStr != "{}" {
+				state.pending[idx] = &pendingToolCall{
+					id:   tcID,
+					args: fnArgsStr,
+				}
+				mutated = true
+				slog.Debug("buffered tool_call entry missing name, waiting for name chunk",
+					"index", idx,
+					"buffered_args_len", len(fnArgsStr),
+					"tool_call_id", tcID,
+				)
+			}
 		}
 		if len(keep) != len(tcs) {
 			mutated = true
@@ -371,4 +438,43 @@ func normalizeToolCalls(chunk map[string]interface{}) bool {
 		}
 	}
 	return mutated
+}
+
+func extractToolCallName(fn interface{}, hasFn bool, mutated *bool, tcID string) string {
+	if !hasFn || fn == nil {
+		return ""
+	}
+	fnMap, ok := fn.(map[string]interface{})
+	if !ok {
+		return ""
+	}
+	fnNameRaw := fnMap["name"]
+	switch fnName := fnNameRaw.(type) {
+	case string:
+		return fnName
+	case nil:
+		return ""
+	default:
+		coerced := fmt.Sprintf("%v", fnNameRaw)
+		fnMap["name"] = coerced
+		*mutated = true
+		slog.Debug("coerced non-string function.name to string",
+			"coerced_value", coerced,
+			"original_type", reflect.TypeOf(fnNameRaw).String(),
+			"tool_call_id", tcID,
+		)
+		return coerced
+	}
+}
+
+func extractToolCallArgs(fn interface{}, hasFn bool) string {
+	if !hasFn || fn == nil {
+		return ""
+	}
+	fnMap, ok := fn.(map[string]interface{})
+	if !ok {
+		return ""
+	}
+	args, _ := fnMap["arguments"].(string)
+	return args
 }

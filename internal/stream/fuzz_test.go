@@ -73,7 +73,8 @@ func FuzzNormalizeToolCalls(f *testing.F) {
 		if err := json.Unmarshal(jsonBytes, &chunk); err != nil {
 			return
 		}
-		mutated := normalizeToolCalls(chunk)
+		state := newToolCallState()
+		mutated := normalizeToolCalls(chunk, &state)
 		if mutated {
 			_, err := json.Marshal(chunk)
 			if err != nil {

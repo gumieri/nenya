@@ -18,11 +18,11 @@ type ProviderDiscoveryResult struct {
 }
 
 type PersistentProviderCache struct {
-	mu        sync.RWMutex
-	entries   map[string]ProviderDiscoveryResult
-	cacheDir  string
-	cacheTTL  time.Duration
-	logger    *slog.Logger
+	mu       sync.RWMutex
+	entries  map[string]ProviderDiscoveryResult
+	cacheDir string
+	cacheTTL time.Duration
+	logger   *slog.Logger
 }
 
 func NewPersistentProviderCache(cacheDir string, cacheTTL time.Duration, logger *slog.Logger) *PersistentProviderCache {
@@ -69,7 +69,7 @@ func (c *PersistentProviderCache) Load() {
 
 		if time.Since(cached.Timestamp) > c.cacheTTL {
 			c.logger.Debug("cache entry expired", "provider", providerRef, "age", time.Since(cached.Timestamp))
-			os.Remove(cachePath)
+			_ = os.Remove(cachePath)
 			continue
 		}
 
@@ -152,7 +152,7 @@ func (c *PersistentProviderCache) Prune() {
 		if now.Sub(result.Timestamp) > c.cacheTTL {
 			delete(c.entries, providerRef)
 			cachePath := filepath.Join(c.cacheDir, providerRef+".json")
-			os.Remove(cachePath)
+			_ = os.Remove(cachePath)
 			c.logger.Debug("pruned expired cache entry", "provider", providerRef)
 		}
 	}

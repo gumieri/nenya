@@ -85,8 +85,8 @@ var ProviderRegistry = map[string]ProviderEntry{
 		AuthStyle: "bearer",
 	},
 	"nvidia": {
-		URL:         "https://integrate.api.nvidia.com/v1/chat/completions",
-		AuthStyle:   "bearer",
+		URL:           "https://integrate.api.nvidia.com/v1/chat/completions",
+		AuthStyle:     "bearer",
 		RoutePrefixes: []string{"nvidia/"},
 		Models: []ModelRef{
 			{ID: "chat/llama3-8b-instruct", MaxContext: 8192, MaxOutput: 8192},
