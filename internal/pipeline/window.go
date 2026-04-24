@@ -265,7 +265,11 @@ func TruncateHistory(historyText string, maxRunes int) string {
 	}
 	separator := "\n... [NENYA: HISTORY TRUNCATED] ...\n"
 	sepRunes := []rune(separator)
-	result := make([]rune, 0, keepFirst+len(sepRunes)+keepLast)
+	capacity := keepFirst + len(sepRunes) + keepLast
+	if capacity < 0 || capacity > int(float64(maxRunes)*1.5) {
+		capacity = maxRunes
+	}
+	result := make([]rune, 0, capacity)
 	result = append(result, runes[:keepFirst]...)
 	result = append(result, sepRunes...)
 	result = append(result, runes[len(runes)-keepLast:]...)

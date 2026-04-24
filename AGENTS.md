@@ -68,3 +68,36 @@ You are acting as a **Senior Go Security Engineer and Network Architect**. Your 
 - **Circuit Breaker:** Each agent+provider+model combination has an independent circuit breaker (Closed/Open/HalfOpen states) implemented in `internal/resilience/`. Failure thresholds, success thresholds, and max_retries are configured per-agent. See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md#circuit-breaker) for the state machine.
 - **Provider Spec System:** `internal/providers/` defines `ProviderSpec` with capabilities (`SupportsStreamOptions`, `SupportsAutoToolChoice`, `SupportsContentArrays`, `SupportsToolCalls`, `SupportsReasoning`, `SupportsVision`) and per-provider sanitization/response transformer functions. The adapter system builds on top of this.
 - **MCP Tool Integration:** The gateway supports Model Context Protocol servers via HTTP+SSE transport. When an agent has MCP servers configured, tools are discovered at startup, injected into requests as OpenAI function tools with `tool_choice: "auto"`, and a multi-turn loop executes tool calls between the client and upstream model. See `internal/mcp/` and `internal/proxy/mcp_tools.go` for the implementation.
+
+### 7. Integer Overflow Prevention (CWE-190)
+- **Vulnerable Patterns:** Arithmetic on length values before slice allocation can cause integer overflow:
+  ```go
+  // VULNERABLE - n+1 can overflow
+  parts := make([]int, n+1)
+  ```
+- **Safe Pattern:** Always check for potential overflow before arithmetic:
+  ```go
+  // SAFE - Check for potential overflow before doing n+1
+  if n >= math.MaxInt {
+      return n
+  }
+  parts := make([]int, n+1)
+  ```
+- **Key Principles:**
+  1. Always check for potential overflow before arithmetic operations
+  2. Validate input sizes against reasonable maximums
+  3. Use explicit bounds checking with math.MaxInt constants
+  4. Consider using wider integer types (uint64) for intermediate calculations
+  5. Clamp values to reasonable limits when overflow is detected
+- **Standard Guard Pattern:**
+  ```go
+  // Standard guard pattern for n+1 allocation
+  if n >= math.MaxInt {
+      return n  // or handle error appropriately
+  }
+  parts := make([]int, n+1)
+  ```
+- **Examples of Fixed Code:**
+  - `internal/tiktoken/tiktoken.go:323` - Guard added before `make([]int, n+1)`
+  - `internal/pipeline/window.go:268` - Capacity calculation with overflow check
+  - `internal/routing/transform.go:112` - Guard added before `len(messages)+1` allocation
