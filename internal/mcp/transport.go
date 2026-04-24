@@ -54,6 +54,7 @@ func (c *TransportConfig) setDefaults() {
 type HTTPTransport struct {
 	cfg        TransportConfig
 	httpClient *http.Client
+	ctx        context.Context
 
 	mu     sync.Mutex
 	closed atomic.Bool
@@ -101,6 +102,8 @@ func NewHTTPTransport(cfg TransportConfig) *HTTPTransport {
 }
 
 func (t *HTTPTransport) Connect(ctx context.Context) error {
+	t.ctx = ctx
+
 	baseURL, err := url.Parse(t.cfg.URL)
 	if err != nil {
 		return fmt.Errorf("invalid MCP server URL: %w", err)
@@ -115,7 +118,7 @@ func (t *HTTPTransport) Connect(ctx context.Context) error {
 
 	t.cfg.Logger.Debug("connecting to MCP SSE endpoint", "url", sseURL)
 
-	sseCtx, sseCancel := context.WithCancel(context.Background())
+	sseCtx, sseCancel := context.WithCancel(t.ctx)
 	req, err := http.NewRequestWithContext(sseCtx, http.MethodGet, sseURL, nil)
 	if err != nil {
 		sseCancel()
@@ -124,7 +127,7 @@ func (t *HTTPTransport) Connect(ctx context.Context) error {
 	t.setHeaders(req)
 
 	// Apply timeout only to the initial connection and endpoint event reading
-	connectCtx, connectCancel := context.WithTimeout(sseCtx, t.cfg.ConnectTimeout)
+	connectCtx, connectCancel := context.WithTimeout(t.ctx, t.cfg.ConnectTimeout)
 	defer connectCancel()
 
 	resp, err := t.httpClient.Do(req)
