@@ -305,19 +305,11 @@ func bpeCount(piece []byte) int {
 	if n == 0 {
 		return 0
 	}
-	if n == 1 {
-		return 1
-	}
 	if n >= math.MaxInt {
 		return n
 	}
-	if _, ok := ranks[string(piece)]; ok {
+	if n == 1 {
 		return 1
-	}
-
-	// Guard against overflow in n+1 allocation
-	if n > math.MaxInt-1 {
-		return n
 	}
 
 	parts := make([]int, n+1)
@@ -356,8 +348,10 @@ func bpeCount(piece []byte) int {
 		if minIdx < n-1 {
 			partsRank[minIdx] = getRank(piece, parts[minIdx], parts[minIdx+2])
 		}
-		copy(partsRank[minIdx+1:n], partsRank[minIdx+2:n+1])
-		partsRank[n-1] = math.MaxInt
+		// Ensure n+1 doesn't overflow before using it as slice bounds
+		if n == math.MaxInt {
+			return n
+		}
 	}
 	return n
 }

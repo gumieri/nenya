@@ -108,13 +108,15 @@ func TransformRequestForUpstream(deps TransformDeps, providerName, upstreamURL s
 									"role":    "system",
 									"content": systemPrompt,
 								}
-								var cap int
-								if len(messages) > math.MaxInt-1 {
-									cap = math.MaxInt
-								} else {
-									cap = len(messages) + 1
+								capMsg := len(messages)
+								if capMsg < math.MaxInt {
+									capMsg++
 								}
-								newMessages := make([]interface{}, 0, cap)
+								if capMsg < 0 {
+									deps.Logger.Warn("message count overflow, truncating", "count", len(messages))
+									capMsg = len(messages)
+								}
+								newMessages := make([]interface{}, 0, capMsg)
 								newMessages = append(newMessages, systemMsg)
 								newMessages = append(newMessages, messages...)
 								payload["messages"] = newMessages
