@@ -18,7 +18,7 @@ const (
 	DefaultFailureThreshold    = 5
 	DefaultSuccessThreshold    = 1
 	DefaultHalfOpenMaxRequests = 3
-	latencyJitterPct          = 0.10
+	latencyJitterPct           = 0.10
 )
 
 type AgentState struct {

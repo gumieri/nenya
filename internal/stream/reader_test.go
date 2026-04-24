@@ -318,7 +318,8 @@ func TestNormalizeToolCallIDs(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			mutated := normalizeToolCalls(tt.chunk)
+			state := newToolCallState()
+			mutated := normalizeToolCalls(tt.chunk, &state)
 			if mutated != tt.wantMutate {
 				t.Fatalf("mutated=%v, want %v", mutated, tt.wantMutate)
 			}
@@ -341,14 +342,14 @@ func TestNormalizeToolCallIDs_MissingToolCalls(t *testing.T) {
 			},
 		},
 	}
-	if normalizeToolCalls(chunk) {
+	state := newToolCallState()
+	if normalizeToolCalls(chunk, &state) {
 		t.Fatal("expected no mutation when no tool_calls")
 	}
 }
 
 func TestSSETransformingReader_ToolCallIDNormalized(t *testing.T) {
-	input := `data: {"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"name":"read_file","arguments":""}}]}}]}
-data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":null,"function":{"name":"read_file","arguments":"{}"}}]}}]}
+	input := `data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":null,"function":{"name":"read_file","arguments":"{}"}}]}}]}
 data: [DONE]
 `
 	reader := NewSSETransformingReader(strings.NewReader(input), nil)
@@ -368,11 +369,12 @@ data: [DONE]
 
 func TestNormalizeToolCalls(t *testing.T) {
 	tests := []struct {
-		name        string
-		chunk       map[string]interface{}
-		wantMutate  bool
-		wantTCLen   int
-		wantFirstID string
+		name          string
+		chunk         map[string]interface{}
+		wantMutate    bool
+		wantTCLen     int
+		wantFirstID   string
+		wantFirstName string
 	}{
 		{
 			"null function stripped",
@@ -393,7 +395,7 @@ func TestNormalizeToolCalls(t *testing.T) {
 					},
 				},
 			},
-			true, 1, "call_1",
+			true, 1, "call_1", "read_file",
 		},
 		{
 			"null function.name no args removed",
@@ -411,10 +413,10 @@ func TestNormalizeToolCalls(t *testing.T) {
 					},
 				},
 			},
-			true, 0, "",
+			true, 0, "", "",
 		},
 		{
-			"null function.name with args preserved",
+			"null function.name with args buffered (not emitted for new index)",
 			map[string]interface{}{
 				"choices": []interface{}{
 					map[string]interface{}{
@@ -429,7 +431,43 @@ func TestNormalizeToolCalls(t *testing.T) {
 					},
 				},
 			},
-			false, 1, "call_0",
+			true, 0, "", "",
+		},
+		{
+			"numeric function.name coerced to string",
+			map[string]interface{}{
+				"choices": []interface{}{
+					map[string]interface{}{
+						"delta": map[string]interface{}{
+							"tool_calls": []interface{}{
+								map[string]interface{}{
+									"index": float64(0), "id": "call_0",
+									"function": map[string]interface{}{"name": float64(42), "arguments": "{}"},
+								},
+							},
+						},
+					},
+				},
+			},
+			true, 1, "call_0", "42",
+		},
+		{
+			"boolean function.name coerced to string",
+			map[string]interface{}{
+				"choices": []interface{}{
+					map[string]interface{}{
+						"delta": map[string]interface{}{
+							"tool_calls": []interface{}{
+								map[string]interface{}{
+									"index": float64(0), "id": "call_0",
+									"function": map[string]interface{}{"name": true, "arguments": "{}"},
+								},
+							},
+						},
+					},
+				},
+			},
+			true, 1, "call_0", "true",
 		},
 		{
 			"mixed valid and invalid entries",
@@ -454,12 +492,13 @@ func TestNormalizeToolCalls(t *testing.T) {
 					},
 				},
 			},
-			true, 1, "call_1",
+			true, 1, "call_1", "read_file",
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			mutated := normalizeToolCalls(tt.chunk)
+			state := newToolCallState()
+			mutated := normalizeToolCalls(tt.chunk, &state)
 			if mutated != tt.wantMutate {
 				t.Fatalf("mutated=%v, want %v", mutated, tt.wantMutate)
 			}
@@ -481,6 +520,202 @@ func TestNormalizeToolCalls(t *testing.T) {
 					t.Fatalf("first id=%q, want %q", gotID, tt.wantFirstID)
 				}
 			}
+			if tt.wantFirstName != "" {
+				fn := tcs[0].(map[string]interface{})["function"].(map[string]interface{})
+				gotName := fn["name"].(string)
+				if gotName != tt.wantFirstName {
+					t.Fatalf("first function.name=%q, want %q", gotName, tt.wantFirstName)
+				}
+			}
 		})
 	}
+}
+
+func TestNormalizeToolCalls_StatefulBuffering(t *testing.T) {
+	t.Run("nil name buffered then merged on name arrival", func(t *testing.T) {
+		state := newToolCallState()
+
+		chunk1 := map[string]interface{}{
+			"choices": []interface{}{
+				map[string]interface{}{
+					"delta": map[string]interface{}{
+						"tool_calls": []interface{}{
+							map[string]interface{}{
+								"index":    float64(0),
+								"id":       "call_abc",
+								"function": map[string]interface{}{"name": nil, "arguments": `{"path":`},
+							},
+						},
+					},
+				},
+			},
+		}
+		mutated := normalizeToolCalls(chunk1, &state)
+		if !mutated {
+			t.Fatal("chunk1 should be mutated (entry buffered)")
+		}
+		delta1 := extractDelta(chunk1)
+		if _, hasTC := delta1["tool_calls"]; hasTC {
+			t.Fatal("chunk1 tool_calls should be removed (buffered)")
+		}
+		if _, ok := state.pending[0]; !ok {
+			t.Fatal("index 0 should be pending")
+		}
+
+		chunk2 := map[string]interface{}{
+			"choices": []interface{}{
+				map[string]interface{}{
+					"delta": map[string]interface{}{
+						"tool_calls": []interface{}{
+							map[string]interface{}{
+								"index":    float64(0),
+								"id":       "call_abc",
+								"function": map[string]interface{}{"name": "read_file", "arguments": `"test.txt"}`},
+							},
+						},
+					},
+				},
+			},
+		}
+		mutated = normalizeToolCalls(chunk2, &state)
+		if !mutated {
+			t.Fatal("chunk2 should be mutated (pending merged)")
+		}
+		tcs := extractDelta(chunk2)["tool_calls"].([]interface{})
+		if len(tcs) != 1 {
+			t.Fatalf("chunk2 tool_calls len=%d, want 1", len(tcs))
+		}
+		fn := tcs[0].(map[string]interface{})["function"].(map[string]interface{})
+		gotArgs := fn["arguments"].(string)
+		if gotArgs != `{"path":"test.txt"}` {
+			t.Fatalf("merged args=%q, want %q", gotArgs, `{"path":"test.txt"}`)
+		}
+		gotName := fn["name"].(string)
+		if gotName != "read_file" {
+			t.Fatalf("name=%q, want read_file", gotName)
+		}
+		if _, ok := state.pending[0]; ok {
+			t.Fatal("index 0 should no longer be pending")
+		}
+		if !state.seenIndices[0] {
+			t.Fatal("index 0 should be seen")
+		}
+	})
+
+	t.Run("continuation chunk passes through after seen", func(t *testing.T) {
+		state := newToolCallState()
+
+		chunk1 := map[string]interface{}{
+			"choices": []interface{}{
+				map[string]interface{}{
+					"delta": map[string]interface{}{
+						"tool_calls": []interface{}{
+							map[string]interface{}{
+								"index": float64(0), "id": "call_0",
+								"function": map[string]interface{}{"name": "search", "arguments": `{`},
+							},
+						},
+					},
+				},
+			},
+		}
+		normalizeToolCalls(chunk1, &state)
+
+		chunk2 := map[string]interface{}{
+			"choices": []interface{}{
+				map[string]interface{}{
+					"delta": map[string]interface{}{
+						"tool_calls": []interface{}{
+							map[string]interface{}{
+								"index":    float64(0),
+								"function": map[string]interface{}{"name": nil, "arguments": `"q":"go"`},
+							},
+						},
+					},
+				},
+			},
+		}
+		mutated := normalizeToolCalls(chunk2, &state)
+		if mutated {
+			t.Fatal("continuation chunk should not be mutated")
+		}
+		tcs := extractDelta(chunk2)["tool_calls"].([]interface{})
+		if len(tcs) != 1 {
+			t.Fatalf("continuation tool_calls len=%d, want 1", len(tcs))
+		}
+	})
+
+	t.Run("no function field dropped silently", func(t *testing.T) {
+		state := newToolCallState()
+		chunk := map[string]interface{}{
+			"choices": []interface{}{
+				map[string]interface{}{
+					"delta": map[string]interface{}{
+						"tool_calls": []interface{}{
+							map[string]interface{}{
+								"index": float64(0), "id": "call_0",
+							},
+						},
+					},
+				},
+			},
+		}
+		mutated := normalizeToolCalls(chunk, &state)
+		if !mutated {
+			t.Fatal("should be mutated (entry dropped)")
+		}
+		if _, hasTC := extractDelta(chunk)["tool_calls"]; hasTC {
+			t.Fatal("tool_calls should be removed")
+		}
+	})
+
+	t.Run("pending id restored when name chunk lacks id", func(t *testing.T) {
+		state := newToolCallState()
+
+		chunk1 := map[string]interface{}{
+			"choices": []interface{}{
+				map[string]interface{}{
+					"delta": map[string]interface{}{
+						"tool_calls": []interface{}{
+							map[string]interface{}{
+								"index":    float64(0),
+								"id":       "call_real",
+								"function": map[string]interface{}{"name": nil, "arguments": `{`},
+							},
+						},
+					},
+				},
+			},
+		}
+		normalizeToolCalls(chunk1, &state)
+
+		chunk2 := map[string]interface{}{
+			"choices": []interface{}{
+				map[string]interface{}{
+					"delta": map[string]interface{}{
+						"tool_calls": []interface{}{
+							map[string]interface{}{
+								"index":    float64(0),
+								"function": map[string]interface{}{"name": "do_thing", "arguments": `}`},
+							},
+						},
+					},
+				},
+			},
+		}
+		mutated := normalizeToolCalls(chunk2, &state)
+		if !mutated {
+			t.Fatal("should be mutated (id restored)")
+		}
+		tcs := extractDelta(chunk2)["tool_calls"].([]interface{})
+		gotID := tcs[0].(map[string]interface{})["id"].(string)
+		if gotID != "call_real" {
+			t.Fatalf("id=%q, want call_real", gotID)
+		}
+	})
+}
+
+func extractDelta(chunk map[string]interface{}) map[string]interface{} {
+	choices := chunk["choices"].([]interface{})
+	return choices[0].(map[string]interface{})["delta"].(map[string]interface{})
 }
