@@ -338,6 +338,7 @@ func bpeCount(piece []byte) int {
 
 		parts[minIdx+1] = parts[minIdx]
 		copy(parts[minIdx:], parts[minIdx+1:])
+		copy(partsRank[minIdx+1:], partsRank[minIdx+2:])
 		n--
 		if n == 1 {
 			break
