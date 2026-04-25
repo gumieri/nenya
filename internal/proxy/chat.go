@@ -97,7 +97,7 @@ func (p *Proxy) handleChatCompletions(gw *gateway.NenyaGateway, w http.ResponseW
 		if gw.Config.Governance.AutoReorderByLatency {
 			switch gw.Config.Governance.RoutingStrategy {
 			case "balanced":
-				targets = routing.SortTargetsByBalanced(targets, gw.LatencyTracker, nil, gw.ModelCatalog, routing.SortOptions{
+				targets = routing.SortTargetsByBalanced(targets, gw.LatencyTracker, gw.CostTracker, gw.ModelCatalog, routing.SortOptions{
 					LatencyWeight: gw.Config.Governance.RoutingLatencyWeight,
 					CostWeight:    gw.Config.Governance.RoutingCostWeight,
 					RequestCaps:   detectRequestCapabilities(payload),

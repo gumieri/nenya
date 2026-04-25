@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"time"
@@ -25,12 +26,15 @@ func (p PricingEntry) CalculateCost(inputTokens, outputTokens int64) float64 {
 	return inputCost + outputCost
 }
 
+type openRouterPricing struct {
+	Prompt     string `json:"prompt"`
+	Completion string `json:"completion"`
+}
+
 type openRouterModel struct {
-	ID               string  `json:"id"`
-	Name             string  `json:"name"`
-	ContextLength    int     `json:"context_length"`
-	PricingPrompt    string  `json:"pricing.prompt"`
-	PricingCompletion string `json:"pricing.completion"`
+	ID      string            `json:"id"`
+	Name    string            `json:"name"`
+	Pricing openRouterPricing `json:"pricing"`
 }
 
 type openRouterModelsResponse struct {
@@ -69,16 +73,25 @@ func (pf *PricingFetcher) FetchOpenRouterPricing(ctx context.Context) (map[strin
 		return nil, fmt.Errorf("unexpected status: %d", resp.StatusCode)
 	}
 
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 10<<20))
+	if err != nil {
+		return nil, fmt.Errorf("reading response body: %w", err)
+	}
+
 	var modelsResp openRouterModelsResponse
-	if err := json.NewDecoder(resp.Body).Decode(&modelsResp); err != nil {
+	if err := json.Unmarshal(body, &modelsResp); err != nil {
 		return nil, fmt.Errorf("decoding response: %w", err)
 	}
 
 	pricing := make(map[string]PricingEntry, len(modelsResp.Data))
 	for _, m := range modelsResp.Data {
 		var inputCost, outputCost float64
-		fmt.Sscanf(m.PricingPrompt, "%f", &inputCost)
-		fmt.Sscanf(m.PricingCompletion, "%f", &outputCost)
+		if _, err := fmt.Sscanf(m.Pricing.Prompt, "%f", &inputCost); err != nil {
+			continue
+		}
+		if _, err := fmt.Sscanf(m.Pricing.Completion, "%f", &outputCost); err != nil {
+			continue
+		}
 
 		inputPer1M := inputCost * 1_000_000
 		outputPer1M := outputCost * 1_000_000

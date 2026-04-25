@@ -415,61 +415,61 @@ Gemini 3 models include `extra_content.google.thought_signature` in tool_calls r
 
 Built-in models that can be referenced by string shorthand in agent `models` arrays. Each entry maps to a provider and includes a default `max_context`.
 
-| Model | Provider | Max Context |
-|-------|----------|-------------|
-| `gemini-3.1-flash-lite-preview` | `gemini` | 128000 |
-| `gemini-3-flash-preview` | `gemini` | 128000 |
-| `gemini-2.5-flash-lite` | `gemini` | 128000 |
-| `gemini-2.5-flash` | `gemini` | 128000 |
-| `deepseek-reasoner` | `deepseek` | 128000 |
-| `deepseek-chat` | `deepseek` | 128000 |
-| `glm-5.1` | `zai` | 128000 |
-| `glm-5-turbo` | `zai` | 128000 |
-| `glm-5v-turbo` | `zai` | 128000 |
-| `glm-5` | `zai` | 128000 |
-| `glm-4.7` | `zai` | 128000 |
-| `glm-4.7-flash` | `zai` | 128000 |
-| `glm-4.7-flashx` | `zai` | 128000 |
-| `glm-4.6` | `zai` | 128000 |
-| `glm-4.6v` | `zai` | 128000 |
-| `glm-4.5` | `zai` | 128000 |
-| `glm-4.5-air` | `zai` | 128000 |
-| `glm-4.5-flash` | `zai` | 128000 |
-| `glm-4.5v` | `zai` | 128000 |
-| `claude-opus-4-5` | `anthropic` | 200000 |
-| `claude-opus-4-0` | `anthropic` | 200000 |
-| `claude-sonnet-4-5` | `anthropic` | 200000 |
-| `claude-sonnet-4-0` | `anthropic` | 200000 |
-| `claude-haiku-4-5` | `anthropic` | 200000 |
-| `claude-3-7-sonnet-20250219` | `anthropic` | 200000 |
-| `claude-3-5-sonnet-20241022` | `anthropic` | 200000 |
-| `claude-3-5-haiku-latest` | `anthropic` | 200000 |
-| `mistral-large-latest` | `mistral` | 262144 |
-| `mistral-small-latest` | `mistral` | 256000 |
-| `mistral-medium-latest` | `mistral` | 128000 |
-| `codestral-latest` | `mistral` | 256000 |
-| `devstral-medium-latest` | `mistral` | 262144 |
-| `magistral-medium-latest` | `mistral` | 128000 |
-| `pixtral-large-latest` | `mistral` | 128000 |
-| `grok-4` | `xai` | 256000 |
-| `grok-4-fast` | `xai` | 2000000 |
-| `grok-3` | `xai` | 131072 |
-| `grok-3-fast` | `xai` | 131072 |
-| `grok-3-mini` | `xai` | 131072 |
-| `sonar-pro` | `perplexity` | 200000 |
-| `sonar-reasoning-pro` | `perplexity` | 128000 |
-| `sonar-deep-research` | `perplexity` | 128000 |
-| `sonar` | `perplexity` | 128000 |
-| `nemotron-3-super` | `nvidia_free` | 4000 |
-| `qwen-3.6-plus` | `qwen_free` | 8000 |
-| `minimax-m2.5` | `minimax_free` | 8000 |
-| `llama-3.3-70b-versatile` | `groq` | 131072 |
-| `mixtral-8x7b-32768` | `groq` | 32768 |
-| `llama-3.1-405b-instruct` | `sambanova` | 128000 |
-| `llama-3.3-70b` | `cerebras` | 8192 |
-| `gpt-4o` | `github` | 128000 |
-| `phi-3.5-mini-instruct` | `github` | 128000 |
-| `qwen2.5-72b-turbo` | `together` | 32768 |
+| Model | Provider | Max Context | Score Bonus |
+|-------|----------|-------------|-------------|
+| `gemini-3.1-flash-lite-preview` | `gemini` | 128000 | 0.1 |
+| `gemini-3.1-flash` | `gemini` | 128000 | 0.1 |
+| `gemini-2.5-flash-lite` | `gemini` | 128000 | 0.1 |
+| `gemini-2.5-flash` | `gemini` | 128000 | 0.1 |
+| `deepseek-reasoner` | `deepseek` | 128000 | 0.2 |
+| `deepseek-chat` | `deepseek` | 128000 | 0.2 |
+| `glm-5.1` | `zai` | 128000 | 0.0 |
+| `glm-5-turbo` | `zai` | 128000 | 0.0 |
+| `glm-5v-turbo` | `zai` | 128000 | 0.0 |
+| `glm-5` | `zai` | 128000 | 0.0 |
+| `glm-4.7` | `zai` | 128000 | 0.0 |
+| `glm-4.7-flash` | `zai` | 128000 | 0.0 |
+| `glm-4.7-flashx` | `zai` | 128000 | 0.0 |
+| `glm-4.6` | `zai` | 128000 | 0.0 |
+| `glm-4.6v` | `zai` | 128000 | 0.0 |
+| `glm-4.5` | `zai` | 128000 | 0.0 |
+| `glm-4.5-air` | `zai` | 128000 | 0.0 |
+| `glm-4.5-flash` | `zai` | 128000 | 0.0 |
+| `glm-4.5v` | `zai` | 128000 | 0.0 |
+| `claude-opus-4-5` | `anthropic` | 200000 | 0.3 |
+| `claude-opus-4-0` | `anthropic` | 200000 | 0.3 |
+| `claude-sonnet-4-5` | `anthropic` | 200000 | 0.2 |
+| `claude-sonnet-4-0` | `anthropic` | 200000 | 0.2 |
+| `claude-haiku-4-5` | `anthropic` | 200000 | 0.1 |
+| `claude-3-7-sonnet-20250219` | `anthropic` | 200000 | 0.2 |
+| `claude-3-5-sonnet-20241022` | `anthropic` | 200000 | 0.2 |
+| `claude-3-5-haiku-latest` | `anthropic` | 200000 | 0.1 |
+| `mistral-large-latest` | `mistral` | 262144 | 0.0 |
+| `mistral-small-latest` | `mistral` | 256000 | 0.0 |
+| `mistral-medium-latest` | `mistral` | 128000 | 0.0 |
+| `codestral-latest` | `mistral` | 256000 | 0.0 |
+| `devstral-medium-latest` | `mistral` | 262144 | 0.0 |
+| `magistral-medium-latest` | `mistral` | 128000 | 0.0 |
+| `pixtral-large-latest` | `mistral` | 128000 | 0.0 |
+| `grok-4` | `xai` | 256000 | 0.0 |
+| `grok-4-fast` | `xai` | 2000000 | 0.0 |
+| `grok-3` | `xai` | 131072 | 0.0 |
+| `grok-3-fast` | `xai` | 131072 | 0.0 |
+| `grok-3-mini` | `xai` | 131072 | 0.0 |
+| `sonar-pro` | `perplexity` | 200000 | 0.0 |
+| `sonar-reasoning-pro` | `perplexity` | 128000 | 0.1 |
+| `sonar-deep-research` | `perplexity` | 128000 | 0.1 |
+| `sonar` | `perplexity` | 128000 | 0.0 |
+| `nemotron-3-super` | `nvidia_free` | 4000 | 0.0 |
+| `qwen-3.6-plus` | `qwen_free` | 8000 | 0.0 |
+| `minimax-m2.5` | `minimax_free` | 8000 | 0.0 |
+| `llama-3.3-70b-versatile` | `groq` | 131072 | 0.0 |
+| `mixtral-8x7b-32768` | `groq` | 32768 | 0.0 |
+| `llama-3.1-405b-instruct` | `sambanova` | 128000 | 0.1 |
+| `llama-3.3-70b` | `cerebras` | 8192 | 0.0 |
+| `gpt-4o` | `github` | 128000 | 0.1 |
+| `phi-3.5-mini-instruct` | `github` | 128000 | 0.0 |
+| `qwen2.5-72b-turbo` | `together` | 32768 | 0.0 |
 
 Models not in this registry (e.g., local Ollama models, custom endpoints) must be specified as full objects with explicit `provider` and `model` fields.
 

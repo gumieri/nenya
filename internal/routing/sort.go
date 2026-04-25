@@ -26,31 +26,48 @@ func SortTargetsByBalanced(targets []UpstreamTarget, latencyTracker *infra.Laten
 		return targets
 	}
 
-	if opts.LatencyWeight == 0 && opts.CostWeight == 0 && !hasCatalogMetadata(catalog) {
+	if opts.LatencyWeight == 0 && opts.CostWeight == 0 && (catalog == nil || !catalog.HasMetadata()) {
 		return targets
 	}
 
-	var latencies []float64
-	var costs []float64
-
-	for _, t := range targets {
-		if latencyTracker != nil {
-			if lat, ok := latencyTracker.Get(t.Model, t.Provider); ok {
-				latencies = append(latencies, lat.MedianMs)
-			}
-		}
-		if costTracker != nil {
-			if c := costTracker.GetCost(t.Model); c > 0 {
-				costs = append(costs, float64(c))
-			}
-		}
-	}
-
-	minLat, maxLat := minMax(latencies)
-	minCost, maxCost := minMax(costs)
-
 	sorted := make([]UpstreamTarget, len(targets))
 	copy(sorted, targets)
+
+	collectMinMax := func(fn func(t UpstreamTarget) (float64, bool)) (min, max float64) {
+		min, max = -1, -1
+		for _, t := range sorted {
+			if v, ok := fn(t); ok {
+				if min < 0 || v < min {
+					min = v
+				}
+				if max < 0 || v > max {
+					max = v
+				}
+			}
+		}
+		if min < 0 {
+			return 0, 1
+		}
+		if min == max {
+			return 0, 1
+		}
+		return min, max
+	}
+
+	minLat, maxLat := collectMinMax(func(t UpstreamTarget) (float64, bool) {
+		if latencyTracker == nil {
+			return 0, false
+		}
+		lat, ok := latencyTracker.Get(t.Model, t.Provider)
+		return lat.MedianMs, ok
+	})
+	minCost, maxCost := collectMinMax(func(t UpstreamTarget) (float64, bool) {
+		if costTracker == nil {
+			return 0, false
+		}
+		c := costTracker.GetCostMicroUSD(t.Model)
+		return float64(c), c > 0
+	})
 
 	sort.SliceStable(sorted, func(i, j int) bool {
 		scoreI := calculateScore(sorted[i], latencyTracker, costTracker, catalog, minLat, maxLat, minCost, maxCost, opts)
@@ -79,26 +96,6 @@ func SortTargetsByBalanced(targets []UpstreamTarget, latencyTracker *infra.Laten
 	return sorted
 }
 
-func minMax(values []float64) (min, max float64) {
-	if len(values) == 0 {
-		return 0, 1
-	}
-	min = values[0]
-	max = values[0]
-	for _, v := range values[1:] {
-		if v < min {
-			min = v
-		}
-		if v > max {
-			max = v
-		}
-	}
-	if min == max {
-		return 0, 1
-	}
-	return min, max
-}
-
 func calculateScore(target UpstreamTarget, latencyTracker *infra.LatencyTracker, costTracker *infra.CostTracker, catalog *discovery.ModelCatalog, minLat, maxLat, minCost, maxCost float64, opts SortOptions) float64 {
 	latencyNorm := 0.5
 	if latencyTracker != nil && opts.LatencyWeight > 0 {
@@ -111,7 +108,7 @@ func calculateScore(target UpstreamTarget, latencyTracker *infra.LatencyTracker,
 
 	costNorm := 0.5
 	if costTracker != nil && opts.CostWeight > 0 {
-		if c := costTracker.GetCost(target.Model); c > 0 {
+		if c := costTracker.GetCostMicroUSD(target.Model); c > 0 {
 			fc := float64(c)
 			if maxCost > minCost {
 				costNorm = (fc - minCost) / (maxCost - minCost)
@@ -175,18 +172,4 @@ func capabilityBoost(meta *discovery.ModelMetadata, caps RequestCapabilities) fl
 		boost -= 0.1 * float64(totalCaps)
 	}
 	return boost
-}
-
-func hasCatalogMetadata(catalog *discovery.ModelCatalog) bool {
-	if catalog == nil {
-		return false
-	}
-	for _, m := range catalog.AllModels() {
-		if m.Metadata != nil && (m.Metadata.ScoreBonus != 0 ||
-			m.Metadata.SupportsToolCalls || m.Metadata.SupportsReasoning ||
-			m.Metadata.SupportsVision || m.Metadata.SupportsContentArrays) {
-			return true
-		}
-	}
-	return false
 }

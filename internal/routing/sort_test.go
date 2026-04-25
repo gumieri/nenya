@@ -35,8 +35,8 @@ func TestSortTargetsByBalanced_LatencyOnly(t *testing.T) {
 
 func TestSortTargetsByBalanced_CostOnly(t *testing.T) {
 	ct := infra.NewCostTracker()
-	ct.RecordUsage("cheap-model", 100)
-	ct.RecordUsage("expensive-model", 10000)
+	ct.RecordUsage("cheap-model", 0.0001)
+	ct.RecordUsage("expensive-model", 0.01)
 
 	targets := []UpstreamTarget{
 		{Model: "expensive-model", Provider: "p1", URL: "http://exp"},
@@ -199,28 +199,6 @@ func TestSortTargetsByBalanced_NoData_DefaultsToNeutral(t *testing.T) {
 
 	if len(sorted) != 2 {
 		t.Fatalf("expected 2 targets, got %d", len(sorted))
-	}
-}
-
-func TestMinMax(t *testing.T) {
-	tests := []struct {
-		name     string
-		values   []float64
-		wantMin  float64
-		wantMax  float64
-	}{
-		{"empty", nil, 0, 1},
-		{"single", []float64{5.0}, 0, 1},
-		{"normal", []float64{1.0, 5.0, 3.0}, 1.0, 5.0},
-		{"all_same", []float64{3.0, 3.0, 3.0}, 0, 1},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			min, max := minMax(tt.values)
-			if min != tt.wantMin || max != tt.wantMax {
-				t.Errorf("minMax(%v) = (%v, %v), want (%v, %v)", tt.values, min, max, tt.wantMin, tt.wantMax)
-			}
-		})
 	}
 }
 
