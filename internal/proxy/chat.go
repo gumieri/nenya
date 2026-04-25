@@ -95,7 +95,16 @@ func (p *Proxy) handleChatCompletions(gw *gateway.NenyaGateway, w http.ResponseW
 		}
 
 		if gw.Config.Governance.AutoReorderByLatency {
-			targets = routing.SortTargetsByLatency(targets, gw.LatencyTracker, nil)
+			switch gw.Config.Governance.RoutingStrategy {
+			case "balanced":
+				targets = routing.SortTargetsByBalanced(targets, gw.LatencyTracker, nil, gw.ModelCatalog, routing.SortOptions{
+					LatencyWeight: gw.Config.Governance.RoutingLatencyWeight,
+					CostWeight:    gw.Config.Governance.RoutingCostWeight,
+					RequestCaps:   detectRequestCapabilities(payload),
+				})
+			default:
+				targets = routing.SortTargetsByLatency(targets, gw.LatencyTracker, nil)
+			}
 		}
 
 		strategy := agent.Strategy
@@ -1082,6 +1091,43 @@ func (p *Proxy) recordMCPUsage(gw *gateway.NenyaGateway, buf *bufferedSSE, agent
 // applyRedactToContent runs redactFn against every text surface of msgNode's
 // content, preserving multimodal content arrays instead of flattening them to
 // a string. Returns true if any part was changed.
+func detectRequestCapabilities(payload map[string]interface{}) routing.RequestCapabilities {
+	var caps routing.RequestCapabilities
+
+	if tools, ok := payload["tools"].([]interface{}); ok && len(tools) > 0 {
+		caps.HasToolCalls = true
+	}
+
+	if messages, ok := payload["messages"].([]interface{}); ok {
+		for _, msg := range messages {
+			m, ok := msg.(map[string]interface{})
+			if !ok {
+				continue
+			}
+			content := m["content"]
+			if arr, ok := content.([]interface{}); ok && len(arr) > 0 {
+				caps.HasContentArr = true
+				for _, part := range arr {
+					if p, ok := part.(map[string]interface{}); ok {
+						if t, ok := p["type"].(string); ok && t == "image_url" {
+							caps.HasVision = true
+							break
+						}
+					}
+				}
+			}
+			if reasoning, ok := m["reasoning"].(map[string]interface{}); ok && len(reasoning) > 0 {
+				caps.HasReasoning = true
+			}
+			if caps.HasVision && caps.HasReasoning {
+				break
+			}
+		}
+	}
+
+	return caps
+}
+
 func applyRedactToContent(msgNode map[string]interface{}, redactFn func(string) string) bool {
 	contentRaw, ok := msgNode["content"]
 	if !ok {
