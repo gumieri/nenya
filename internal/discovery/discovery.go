@@ -15,10 +15,11 @@ type DiscoveredModel struct {
 }
 
 type ModelCatalog struct {
-	mu        sync.RWMutex
-	models    map[string]DiscoveredModel
-	providers map[string][]string
-	fetchedAt time.Time
+	mu           sync.RWMutex
+	models       map[string]DiscoveredModel
+	providers    map[string][]string
+	fetchedAt    time.Time
+	hasMetadata  bool
 }
 
 func NewModelCatalog() *ModelCatalog {
@@ -65,8 +66,19 @@ func (c *ModelCatalog) AllModels() []DiscoveredModel {
 func (c *ModelCatalog) Add(model DiscoveredModel) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if model.Metadata != nil && (model.Metadata.ScoreBonus != 0 ||
+		model.Metadata.SupportsToolCalls || model.Metadata.SupportsReasoning ||
+		model.Metadata.SupportsVision || model.Metadata.SupportsContentArrays) {
+		c.hasMetadata = true
+	}
 	c.models[model.ID] = model
 	c.providers[model.Provider] = append(c.providers[model.Provider], model.ID)
+}
+
+func (c *ModelCatalog) HasMetadata() bool {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.hasMetadata
 }
 
 func (c *ModelCatalog) FetchedAt() time.Time {

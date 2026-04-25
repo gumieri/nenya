@@ -41,6 +41,7 @@ type NenyaGateway struct {
 	ModelCatalog    *discovery.ModelCatalog
 	HealthRegistry  *discovery.HealthRegistry
 	LatencyTracker  *infra.LatencyTracker
+	CostTracker     *infra.CostTracker
 }
 
 func New(ctx context.Context, cfg config.Config, secrets *config.SecretsConfig, logger *slog.Logger) *NenyaGateway {
@@ -172,6 +173,7 @@ func New(ctx context.Context, cfg config.Config, secrets *config.SecretsConfig, 
 		ModelCatalog:    mergedCatalog,
 		HealthRegistry:  healthRegistry,
 		LatencyTracker:  infra.NewLatencyTracker(),
+		CostTracker:     infra.NewCostTracker(),
 	}
 
 	gw.buildMCPToolIndex(ctx, logger)

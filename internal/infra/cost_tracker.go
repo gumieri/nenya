@@ -1,6 +1,7 @@
 package infra
 
 import (
+	"math"
 	"sync"
 	"sync/atomic"
 )
@@ -18,12 +19,16 @@ func NewCostTracker() *CostTracker {
 	}
 }
 
-func (ct *CostTracker) RecordUsage(model string, costCents int64) {
+func (ct *CostTracker) RecordUsage(model string, costUSD float64) {
+	microUSD := int64(math.Round(costUSD * 1e6))
+	if microUSD == 0 && costUSD != 0 {
+		microUSD = 1
+	}
 	ct.mu.Lock()
 	if ct.costs[model] == nil {
 		ct.costs[model] = new(atomic.Int64)
 	}
-	ct.costs[model].Add(costCents)
+	ct.costs[model].Add(microUSD)
 	ct.mu.Unlock()
 }
 
@@ -36,13 +41,17 @@ func (ct *CostTracker) RecordError(model string) {
 	ct.mu.Unlock()
 }
 
-func (ct *CostTracker) GetCost(model string) int64 {
+func (ct *CostTracker) GetCostMicroUSD(model string) int64 {
 	ct.mu.RLock()
 	defer ct.mu.RUnlock()
 	if c, ok := ct.costs[model]; ok {
 		return c.Load()
 	}
 	return 0
+}
+
+func (ct *CostTracker) GetCostUSD(model string) float64 {
+	return float64(ct.GetCostMicroUSD(model)) / 1e6
 }
 
 func (ct *CostTracker) GetErrorCount(model string) int64 {
@@ -54,7 +63,7 @@ func (ct *CostTracker) GetErrorCount(model string) int64 {
 	return 0
 }
 
-func (ct *CostTracker) GetAllCosts() map[string]int64 {
+func (ct *CostTracker) GetAllCostsMicroUSD() map[string]int64 {
 	ct.mu.RLock()
 	defer ct.mu.RUnlock()
 	result := make(map[string]int64, len(ct.costs))
@@ -75,14 +84,21 @@ func (ct *CostTracker) GetAllErrors() map[string]int64 {
 }
 
 type CostSnapshot struct {
-	TotalCostCents int64            `json:"total_cost_cents"`
-	ModelCosts     map[string]int64 `json:"model_costs"`
-	ModelErrors    map[string]int64 `json:"model_errors"`
+	TotalCostMicroUSD int64            `json:"total_cost_micro_usd"`
+	ModelCosts        map[string]int64 `json:"model_costs_micro_usd"`
+	ModelErrors       map[string]int64 `json:"model_errors"`
 }
 
 func (ct *CostTracker) Snapshot() CostSnapshot {
+	modelCosts := ct.GetAllCostsMicroUSD()
+	modelErrors := ct.GetAllErrors()
+	var total int64
+	for _, c := range modelCosts {
+		total += c
+	}
 	return CostSnapshot{
-		ModelCosts:  ct.GetAllCosts(),
-		ModelErrors: ct.GetAllErrors(),
+		TotalCostMicroUSD: total,
+		ModelCosts:        modelCosts,
+		ModelErrors:       modelErrors,
 	}
 }
