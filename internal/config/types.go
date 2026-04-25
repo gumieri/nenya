@@ -6,11 +6,12 @@ import (
 )
 
 type AgentModel struct {
-	Provider   string `json:"provider"`
-	Model      string `json:"model"`
-	URL        string `json:"url"`
-	MaxContext int    `json:"max_context"`
-	MaxOutput  int    `json:"max_output"`
+	Provider              string   `json:"provider"`
+	Model                 string   `json:"model"`
+	URL                   string   `json:"url"`
+	MaxContext            int      `json:"max_context"`
+	MaxOutput             int      `json:"max_output"`
+	RequiredCapabilities  []string `json:"required_capabilities,omitempty"`
 }
 
 type AgentConfig struct {
@@ -24,6 +25,7 @@ type AgentConfig struct {
 	SystemPromptFile string          `json:"system_prompt_file"`
 	Models           []AgentModel    `json:"models"`
 	MCP              *AgentMCPConfig `json:"mcp,omitempty"`
+	BudgetLimitUSD   float64         `json:"budget_limit_usd,omitempty"`
 }
 
 func (a *AgentConfig) UnmarshalJSON(data []byte) error {
@@ -118,6 +120,7 @@ type GovernanceConfig struct {
 	RoutingStrategy          string  `json:"routing_strategy"`
 	RoutingLatencyWeight     float64 `json:"routing_latency_weight"`
 	RoutingCostWeight        float64 `json:"routing_cost_weight"`
+	MaxCostPerRequest       float64 `json:"max_cost_per_request"`
 	rpmSet                   bool     `json:"-"`
 	tpmSet                   bool     `json:"-"`
 }

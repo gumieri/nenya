@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"nenya/internal/config"
+	"nenya/internal/discovery"
 	"nenya/internal/gateway"
 	"nenya/internal/infra"
 )
@@ -174,17 +175,22 @@ func (p *Proxy) handleModels(w http.ResponseWriter) {
 		return
 	}
 	type modelEntry struct {
-		ID            string `json:"id"`
-		Object        string `json:"object"`
-		OwnedBy       string `json:"owned_by"`
-		ContextWindow int    `json:"context_window,omitempty"`
-		MaxTokens     int    `json:"max_tokens,omitempty"`
+		ID             string   `json:"id"`
+		Object         string   `json:"object"`
+		OwnedBy        string   `json:"owned_by"`
+		ContextWindow  int      `json:"context_window,omitempty"`
+		MaxTokens      int      `json:"max_tokens,omitempty"`
+		SupportsVision bool     `json:"supports_vision,omitempty"`
+		SupportsTools  bool     `json:"supports_tool_calls,omitempty"`
+		SupportsReasoning bool  `json:"supports_reasoning,omitempty"`
+		InputCostPer1M float64  `json:"input_cost_per_1m,omitempty"`
+		OutputCostPer1M float64 `json:"output_cost_per_1m,omitempty"`
 	}
 
 	var models []modelEntry
 	seen := make(map[string]bool)
 
-	addModel := func(id, ownedBy string, maxCtx, maxOut int) {
+	addModel := func(id, ownedBy string, maxCtx, maxOut int, meta *discovery.ModelMetadata, pricing *discovery.PricingEntry) {
 		if seen[id] {
 			return
 		}
@@ -200,11 +206,20 @@ func (p *Proxy) handleModels(w http.ResponseWriter) {
 		if maxOut > 0 {
 			entry.MaxTokens = maxOut
 		}
+		if meta != nil {
+			entry.SupportsVision = meta.SupportsVision
+			entry.SupportsTools = meta.SupportsToolCalls
+			entry.SupportsReasoning = meta.SupportsReasoning
+		}
+		if pricing != nil && !pricing.IsZero() {
+			entry.InputCostPer1M = pricing.InputCostPer1M
+			entry.OutputCostPer1M = pricing.OutputCostPer1M
+		}
 		models = append(models, entry)
 	}
 
 	for agentName := range gw.Config.Agents {
-		addModel(agentName, "nenya", 0, 0)
+		addModel(agentName, "nenya", 0, 0, nil, nil)
 	}
 
 	if gw.ModelCatalog != nil {
@@ -216,7 +231,7 @@ func (p *Proxy) handleModels(w http.ResponseWriter) {
 			if provider.APIKey == "" && provider.AuthStyle != "none" {
 				continue
 			}
-			addModel(m.ID, m.OwnedBy, m.MaxContext, m.MaxOutput)
+			addModel(m.ID, m.OwnedBy, m.MaxContext, m.MaxOutput, m.Metadata, m.Pricing)
 		}
 	}
 
@@ -225,7 +240,7 @@ func (p *Proxy) handleModels(w http.ResponseWriter) {
 			continue
 		}
 		for _, prefix := range pr.RoutePrefixes {
-			addModel(prefix+"*", pr.Name, 0, 0)
+			addModel(prefix+"*", pr.Name, 0, 0, nil, nil)
 		}
 	}
 

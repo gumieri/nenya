@@ -5,10 +5,22 @@ import (
 	"fmt"
 )
 
+type PricingOverride struct {
+	InputCostPer1M  float64 `json:"input_cost_per_1m"`
+	OutputCostPer1M float64 `json:"output_cost_per_1m"`
+}
+
+func (p PricingOverride) IsZero() bool {
+	return p.InputCostPer1M == 0 && p.OutputCostPer1M == 0
+}
+
 type ModelEntry struct {
-	Provider   string
-	MaxContext int
-	MaxOutput  int
+	Provider     string
+	MaxContext   int
+	MaxOutput    int
+	ScoreBonus   float64         `json:"score_bonus,omitempty"`
+	Capabilities []string        `json:"capabilities,omitempty"`
+	Pricing      PricingOverride `json:"pricing,omitempty"`
 }
 
 func (e ModelEntry) Validate() error {

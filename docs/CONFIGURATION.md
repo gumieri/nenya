@@ -86,6 +86,10 @@ The interceptor implements a 3-tier pipeline for the last user message content, 
 | `tfidf_query_source` | string | `""` (disabled) | Enable TF-IDF relevance-scored truncation for Tier 3. `""` = disabled (use middle-out). `"prior_messages"` = use previous user messages as query terms. `"self"` = use first 500 runes of the massive message as query terms. When enabled, if TF-IDF reduces the payload below `soft_limit`, the engine call is skipped entirely. |
 | `auto_context_skip` | bool | `false` | Automatically skip models that do not meet context requirements for the current request. When enabled, models with `max_context` smaller than the request's input token count are excluded from routing, preventing errors and improving latency. |
 | `auto_reorder_by_latency` | bool | `false` | Dynamically sort targets based on historical response times. When enabled, targets are reordered by median latency (fastest first) with ±5% jitter to prevent thundering herd. Requires `infra.LatencyTracker` to be initialized. |
+| `routing_strategy` | string | `""` (latency) | Routing strategy when `auto_reorder_by_latency` is enabled. `""` or `"latency"` = latency-only sorting. `"balanced"` = weighted scoring using latency, cost, capability matching, and per-model score bonus. |
+| `routing_latency_weight` | float64 | `1.0` | Weight for latency normalization in balanced scoring (0.0-10.0). Higher = prioritize faster models. |
+| `routing_cost_weight` | float64 | `0.0` | Weight for cost normalization in balanced scoring (0.0-10.0). Higher = prioritize cheaper models. |
+| `max_cost_per_request` | float64 | `0` (disabled) | Maximum allowed cost in USD per request. 0 = no limit. Logged but not yet enforced. |
 | `retryable_status_codes` | []int | `[429, 500, 502, 503, 504]` | HTTP status codes that trigger fallback to the next model in an agent chain. **Warning: setting this field REPLACES the built-in defaults entirely.** You must include all codes you want retryable (including the standard ones). Per-provider override available via `providers.<name>.retryable_status_codes` (provider-level replaces global for that provider). |
 
 ## `security_filter`
@@ -325,6 +329,7 @@ Both styles can be mixed in the same `models` array.
 | `system_prompt_file` | string | `""` | Path to system prompt file. Lower priority than `system_prompt`. |
 | `mcp` | object | (none) | Optional Model Context Protocol server integration. See [MCP Integration](MCP_INTEGRATION.md) for details. |
 | `models` | array | (required) | List of model entries (strings or objects) to try in order |
+| `budget_limit_usd` | float64 | `0` (disabled) | Per-agent cumulative budget limit in USD. 0 = no limit. Logged but not yet enforced. |
 
 Each model entry (object form):
 
@@ -334,6 +339,7 @@ Each model entry (object form):
 | `model` | string | Model identifier sent to the upstream API |
 | `url` | string | (optional) Override provider URL for this specific model |
 | `max_context` | int | Context window size for token budgeting and window compaction |
+| `required_capabilities` | []string | (optional) Required model capabilities. Models without matching capabilities are skipped. Values: `"vision"`, `"tool_calls"`, `"reasoning"`, `"content_arrays"`, `"stream_options"`, `"auto_tool_choice"`. Capabilities are determined from provider API responses, static registry entries, or heuristic model name inference. |
 
 **String shorthand**: If the entry is a string, it must exist in the built-in Model Registry. The registry resolves `provider` and `max_context` automatically. If the model is not found, configuration loading fails with an error.
 
@@ -546,7 +552,46 @@ The `/v1/models` catalog endpoint returns actual discovered models instead of wi
 }
 ```
 
-Models are filtered to only show those with valid API keys configured. Agent names are also included as models (for agent-based routing).
+## Balanced Routing
+
+When `auto_reorder_by_latency` is enabled and `routing_strategy` is `"balanced"`, targets are scored using a multi-dimensional formula:
+
+```
+score = (latency_normalized * latency_weight)
+      - (cost_normalized * cost_weight)
+      + model.score_bonus
+      + capability_boost
+```
+
+- **latency_normalized**: `(maxLat - modelLatency) / (maxLat - minLat)` — higher = faster
+- **cost_normalized**: `(modelCost - minCost) / (maxCost - minCost)` — lower = cheaper
+- **score_bonus**: Per-model override from static registry or discovered metadata
+- **capability_boost**: +0.1 per matching capability (tool_calls, reasoning, vision, content_arrays), -0.1 per mismatched capability
+
+### Cost Tracking
+
+When the OpenRouter provider is configured, pricing data is fetched from its `/v1/models` endpoint at startup. Per-request costs are calculated from usage data (input/output tokens) using `PricingEntry.CalculateCost()` and recorded in `CostTracker` (microUSD internal precision).
+
+Cost data is also exposed via the `/statsz` endpoint and in the `/v1/models` response.
+
+## `/v1/models` Response Fields
+
+The model catalog endpoint now includes capability and pricing metadata when available:
+
+```json
+{
+  "id": "claude-sonnet-4-5",
+  "object": "model",
+  "owned_by": "anthropic",
+  "context_window": 200000,
+  "max_tokens": 8192,
+  "supports_vision": true,
+  "supports_tool_calls": true,
+  "supports_reasoning": false,
+  "input_cost_per_1m": 3.0,
+  "output_cost_per_1m": 15.0
+}
+```
 
 ## Processing Pipeline Order
 
@@ -582,6 +627,7 @@ The content pipeline (steps 2–9) is **best-effort**: if any step fails (e.g., 
 - **Auto-enable**: `security_filter.enabled` defaults to `true` when patterns are provided; `prefix_cache` and `compaction` auto-enable when sub-fields are set
 - **max_tokens injection**: `max_tokens` is injected from per-model `MaxOutput` in the `ModelRegistry` when the client doesn't set it. Unknown models (not in registry) are not injected.
 - **Provider Adapters**: Provider-specific wire format differences (auth, request/response mutation, error classification) are handled by the adapter system. See [`ADAPTERS.md`](ADAPTERS.md) for details.
+- **Capability-Based Routing**: When model entries include `required_capabilities`, models without matching metadata are skipped during target building. Capabilities are inferred from provider responses, static registry entries, or heuristic model name patterns (e.g., `claude-` → vision+tool_calls, `gemini-2` → vision+tool_calls+reasoning).
 - **Circuit Breaker**: Each agent+provider+model combination has an independent circuit breaker (Closed/Open/HalfOpen states). See [`ARCHITECTURE.md`](ARCHITECTURE.md#circuit-breaker) for the state machine.
 - **Graceful Degradation**: When `skip_on_engine_failure` is `true`, the gateway operates normally even without a local Ollama instance. Secret redaction (Tier-0 regex) still runs; only the LLM-based summarization is skipped. When `tfidf_query_source` is set, Tier 3 payloads that reduce below `soft_limit` via TF-IDF scoring skip the engine call entirely.
 - **TF-IDF Truncation**: When `tfidf_query_source` is set, Tier 3 uses a local TF-IDF algorithm (no external dependencies) to score content blocks by relevance to the user's query terms. This is a pure Go implementation using `strings.Fields` for tokenization and TF-IDF math for scoring. See `internal/pipeline/tfidf.go`.

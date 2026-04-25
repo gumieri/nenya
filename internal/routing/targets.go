@@ -102,6 +102,20 @@ func (a *AgentState) BuildTargetList(logger *slog.Logger, agentName string, agen
 			continue
 		}
 
+		if len(m.RequiredCapabilities) > 0 && catalog != nil {
+			dm, hasMeta := catalog.Lookup(m.Model)
+			if !hasMeta || dm.Metadata == nil {
+				logger.Debug("skipping model: no metadata for capability check",
+					"model", m.Model, "required", m.RequiredCapabilities)
+				continue
+			}
+			if !modelHasCapabilities(dm.Metadata, m.RequiredCapabilities) {
+				logger.Debug("skipping model: missing required capabilities",
+					"model", m.Model, "required", m.RequiredCapabilities)
+				continue
+			}
+		}
+
 		p := ProviderURL(m.Provider, m.URL, providers)
 		if p == "" {
 			logger.Warn("unknown provider, skipping model", "provider", m.Provider, "model", m.Model)
@@ -223,4 +237,36 @@ func SortTargetsByLatency(targets []UpstreamTarget, latencyTracker *infra.Latenc
 	})
 
 	return sorted
+}
+
+func modelHasCapabilities(meta *discovery.ModelMetadata, required []string) bool {
+	for _, cap := range required {
+		switch cap {
+		case "vision":
+			if !meta.SupportsVision {
+				return false
+			}
+		case "tool_calls":
+			if !meta.SupportsToolCalls {
+				return false
+			}
+		case "reasoning":
+			if !meta.SupportsReasoning {
+				return false
+			}
+		case "content_arrays":
+			if !meta.SupportsContentArrays {
+				return false
+			}
+		case "stream_options":
+			if !meta.SupportsStreamOptions {
+				return false
+			}
+		case "auto_tool_choice":
+			if !meta.SupportsAutoToolChoice {
+				return false
+			}
+		}
+	}
+	return true
 }

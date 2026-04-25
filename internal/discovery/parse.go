@@ -191,6 +191,13 @@ func ParseModelsResponse(body []byte, provider string, logger *slog.Logger) ([]D
 		logger.Debug("failed to parse models response", "provider", provider, "err", err)
 		return nil, err
 	}
+	for i := range models {
+		if models[i].Metadata == nil {
+			if caps := InferCapabilities(models[i].ID); caps != nil {
+				models[i].Metadata = caps
+			}
+		}
+	}
 	logger.Debug("parsed models from provider", "provider", provider, "count", len(models))
 	return models, nil
 }

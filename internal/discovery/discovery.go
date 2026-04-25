@@ -6,12 +6,13 @@ import (
 )
 
 type DiscoveredModel struct {
-	ID         string `json:"id"`
-	Provider   string `json:"provider"`
-	MaxContext int    `json:"max_context"`
-	MaxOutput  int    `json:"max_output"`
-	OwnedBy    string `json:"owned_by"`
-	Metadata   *ModelMetadata `json:"metadata,omitempty"` // Added metadata field
+	ID         string              `json:"id"`
+	Provider   string              `json:"provider"`
+	MaxContext int                 `json:"max_context"`
+	MaxOutput  int                 `json:"max_output"`
+	OwnedBy    string              `json:"owned_by"`
+	Metadata   *ModelMetadata      `json:"metadata,omitempty"`
+	Pricing    *PricingEntry       `json:"pricing,omitempty"`
 }
 
 type ModelCatalog struct {
@@ -66,9 +67,10 @@ func (c *ModelCatalog) AllModels() []DiscoveredModel {
 func (c *ModelCatalog) Add(model DiscoveredModel) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if model.Metadata != nil && (model.Metadata.ScoreBonus != 0 ||
-		model.Metadata.SupportsToolCalls || model.Metadata.SupportsReasoning ||
-		model.Metadata.SupportsVision || model.Metadata.SupportsContentArrays) {
+		if model.Metadata != nil && (model.Metadata.ScoreBonus != 0 ||
+			model.Metadata.SupportsToolCalls || model.Metadata.SupportsReasoning ||
+			model.Metadata.SupportsVision || model.Metadata.SupportsContentArrays ||
+			model.Metadata.Pricing != nil) {
 		c.hasMetadata = true
 	}
 	c.models[model.ID] = model
@@ -91,4 +93,15 @@ func (c *ModelCatalog) UpdateFetchedAt(t time.Time) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.fetchedAt = t
+}
+
+func (c *ModelCatalog) AttachPricing(pricing map[string]PricingEntry) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for id, p := range pricing {
+		if m, ok := c.models[id]; ok {
+			m.Pricing = &p
+			c.models[id] = m
+		}
+	}
 }
