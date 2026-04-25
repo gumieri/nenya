@@ -11,6 +11,7 @@ type DiscoveredModel struct {
 	MaxContext int    `json:"max_context"`
 	MaxOutput  int    `json:"max_output"`
 	OwnedBy    string `json:"owned_by"`
+	Metadata   *ModelMetadata `json:"metadata,omitempty"` // Added metadata field
 }
 
 type ModelCatalog struct {

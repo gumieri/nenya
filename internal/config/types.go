@@ -114,7 +114,10 @@ type GovernanceConfig struct {
 	RetryableStatusCodes     []int    `json:"retryable_status_codes"`
 	TFIDFQuerySource         string   `json:"tfidf_query_source"`
 	AutoContextSkip          bool     `json:"auto_context_skip"`
-	AutoReorderByLatency     bool     `json:"auto_reorder_by_latency"`
+	AutoReorderByLatency     bool    `json:"auto_reorder_by_latency"`
+	RoutingStrategy          string  `json:"routing_strategy"`
+	RoutingLatencyWeight     float64 `json:"routing_latency_weight"`
+	RoutingCostWeight        float64 `json:"routing_cost_weight"`
 	rpmSet                   bool     `json:"-"`
 	tpmSet                   bool     `json:"-"`
 }
