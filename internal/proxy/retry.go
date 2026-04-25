@@ -253,6 +253,9 @@ func (p *Proxy) prepareAndSend(gw *gateway.NenyaGateway,
 
 	if resp.StatusCode >= 400 {
 		gw.Stats.RecordError(target.Model)
+		if gw.CostTracker != nil {
+			gw.CostTracker.RecordError(target.Model)
+		}
 		if gw.Metrics != nil {
 			gw.Metrics.RecordUpstreamError(target.Model, agentName, target.Provider, resp.StatusCode)
 		}

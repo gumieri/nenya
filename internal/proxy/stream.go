@@ -232,6 +232,12 @@ func (p *Proxy) streamResponse(gw *gateway.NenyaGateway, w http.ResponseWriter, 
 		if gw.Metrics != nil {
 			gw.Metrics.RecordTokens("output", target.Model, agentName, target.Provider, completion)
 		}
+		if gw.CostTracker != nil && prompt > 0 || completion > 0 {
+			if dm, ok := gw.ModelCatalog.Lookup(target.Model); ok && dm.Pricing != nil && !dm.Pricing.IsZero() {
+				cost := dm.Pricing.CalculateCost(int64(prompt), int64(completion))
+				gw.CostTracker.RecordUsage(target.Model, cost)
+			}
+		}
 	})
 
 	if gw.Config.SecurityFilter.OutputEnabled && (len(gw.SecretPatterns) > 0 || len(gw.BlockedPatterns) > 0) {

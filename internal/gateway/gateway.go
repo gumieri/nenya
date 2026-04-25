@@ -101,6 +101,19 @@ func New(ctx context.Context, cfg config.Config, secrets *config.SecretsConfig, 
 		fetcher := discovery.NewDiscoveryFetcher()
 		catalog := fetcher.FetchAll(ctx, providers, logger)
 		mergedCatalog = discovery.MergeCatalog(catalog, &cfg)
+
+		if _, hasOR := providers["openrouter"]; hasOR {
+			pfCtx, pfCancel := context.WithTimeout(ctx, 20*time.Second)
+			pf := discovery.NewPricingFetcher(logger)
+			if orPricing, err := pf.FetchOpenRouterPricing(pfCtx); err != nil {
+				logger.Warn("failed to fetch openrouter pricing, skipping", "err", err)
+			} else {
+				logger.Info("fetched openrouter pricing", "models_with_pricing", len(orPricing))
+				mergedCatalog.AttachPricing(orPricing)
+			}
+			pfCancel()
+		}
+
 		logger.Info("model discovery completed", "total_models", len(mergedCatalog.AllModels()), "fetched_at", catalog.FetchedAt().Format(time.RFC3339))
 
 		healthRegistry = discovery.ValidateAllProviders(providers, mergedCatalog, logger)

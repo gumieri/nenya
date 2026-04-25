@@ -25,6 +25,24 @@ func MergeCatalog(catalog *ModelCatalog, cfg *config.Config) *ModelCatalog {
 		discovered, hasDiscovered := catalog.Lookup(modelID)
 		override, hasOverride := agentOverrides[modelID]
 
+		var metadata *ModelMetadata
+		if hasDiscovered && discovered.Metadata != nil {
+			metadata = discovered.Metadata
+		}
+
+		if hasStatic && (static.ScoreBonus != 0 || len(static.Capabilities) > 0 || !static.Pricing.IsZero()) {
+			if metadata == nil {
+				metadata = &ModelMetadata{}
+			}
+			if static.ScoreBonus != 0 {
+				metadata.ScoreBonus = static.ScoreBonus
+			}
+			metadata = applyCapabilities(metadata, static.Capabilities)
+			if !static.Pricing.IsZero() {
+				metadata.Pricing = &static.Pricing
+			}
+		}
+
 		if hasOverride {
 			merged.Add(DiscoveredModel{
 				ID:         modelID,
@@ -32,6 +50,7 @@ func MergeCatalog(catalog *ModelCatalog, cfg *config.Config) *ModelCatalog {
 				MaxContext: firstPositive(override.MaxContext, pickInt(hasDiscovered, discovered.MaxContext), pickInt(hasStatic, static.MaxContext)),
 				MaxOutput:  firstPositive(override.MaxOutput, pickInt(hasDiscovered, discovered.MaxOutput), pickInt(hasStatic, static.MaxOutput)),
 				OwnedBy:    firstNonEmpty(discovered.OwnedBy, "nenya"),
+				Metadata:   metadata,
 			})
 		} else if hasStatic {
 			merged.Add(DiscoveredModel{
@@ -40,6 +59,7 @@ func MergeCatalog(catalog *ModelCatalog, cfg *config.Config) *ModelCatalog {
 				MaxContext: firstPositive(static.MaxContext, pickInt(hasDiscovered, discovered.MaxContext)),
 				MaxOutput:  firstPositive(static.MaxOutput, pickInt(hasDiscovered, discovered.MaxOutput)),
 				OwnedBy:    firstNonEmpty(discovered.OwnedBy, "nenya"),
+				Metadata:   metadata,
 			})
 		} else if hasDiscovered {
 			merged.Add(discovered)
