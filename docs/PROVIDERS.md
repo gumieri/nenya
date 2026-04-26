@@ -56,10 +56,12 @@ Zero-config integration for providers using the standard OpenAI wire format:
 
 DeepSeek v4 models support a **thinking mode** controlled by the `thinking` parameter and return structured `reasoning_content` in assistant messages.
 
-- **Request**: The `thinking: {"type": "enabled"}` parameter activates thinking mode. When active, `reasoning_effort` (e.g., `"high"`) controls the reasoning depth.
-- **Multi-turn requirement**: When thinking mode is active, `reasoning_content` from previous assistant turns **must** be passed back verbatim to the API. The gateway preserves this field for DeepSeek and strips it for non-reasoning providers.
-- **`deepseek-v4-pro`**: Thinking mode is always on by default.
-- **`deepseek-v4-flash`**: Thinking mode is opt-in via the `thinking` parameter.
+- **`deepseek-v4-pro`**: Thinking mode is **always on by default**. No `thinking` parameter needed.
+- **`deepseek-v4-flash`**: Thinking mode is opt-in via `thinking: {"type": "enabled"}`.
+- **Reasoning effort**: `reasoning_effort: "high"` (default) or `"max"`. For complex agent requests (Claude Code, OpenCode), DeepSeek auto-escalates to `max`.
+- **Multi-turn**: `reasoning_content` from assistant messages is passed back verbatim. When tool calls were performed, this field is **mandatory** — the API returns 400 if missing. The gateway preserves it for reasoning providers and strips it for others.
+- **Ignored params**: In thinking mode, `temperature`, `top_p`, `presence_penalty`, `frequency_penalty` are silently ignored. The gateway strips these for DeepSeek when thinking is enabled.
+- **Prefix caching**: DeepSeek uses automatic disk-based KV caching with exact prefix matching. Enable `prefix_cache` in the gateway config to optimize cache hits — the gateway pins system messages first and sorts tools deterministically.
 - **Limits**: 1M context, 384K max output.
 
 ### Anthropic

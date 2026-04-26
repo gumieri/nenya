@@ -227,9 +227,15 @@ func (p *Proxy) streamResponse(gw *gateway.NenyaGateway, w http.ResponseWriter, 
 	defer stallR.Stop()
 
 	transformingReader := stream.NewSSETransformingReader(stallR, transformer)
-	transformingReader.SetOnUsage(func(completion, prompt, total int) {
+	transformingReader.SetOnUsage(func(completion, prompt, total, cacheHit, cacheMiss int) {
 		gw.Stats.RecordOutput(target.Model, completion)
 		gw.Metrics.RecordTokens("output", target.Model, agentName, target.Provider, completion)
+		if cacheHit > 0 {
+			gw.Stats.RecordCacheHit(target.Model, cacheHit)
+		}
+		if cacheMiss > 0 {
+			gw.Stats.RecordCacheMiss(target.Model, cacheMiss)
+		}
 		if gw.CostTracker != nil && prompt > 0 || completion > 0 {
 			if dm, ok := gw.ModelCatalog.Lookup(target.Model); ok && dm.Pricing != nil && !dm.Pricing.IsZero() {
 				cost := dm.Pricing.CalculateCost(int64(prompt), int64(completion))

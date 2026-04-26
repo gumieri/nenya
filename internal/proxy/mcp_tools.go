@@ -29,6 +29,7 @@ type bufferedSSE struct {
 	finishReason     string
 	hasContent       bool
 	model            string
+	reasoningContent string
 }
 
 type mcpToolCall struct {
@@ -95,6 +96,7 @@ func bufferStreamResponse(ctx context.Context, r io.Reader) (*bufferedSSE, error
 	var finishReason string
 	var hasContent bool
 	var contentBuilder strings.Builder
+	var reasoningBuilder strings.Builder
 	var model string
 
 	tcArgsAccum := make(map[int]*strings.Builder)
@@ -156,6 +158,11 @@ func bufferStreamResponse(ctx context.Context, r io.Reader) (*bufferedSSE, error
 				if s, ok := content.(string); ok && s != "" {
 					hasContent = true
 					contentBuilder.WriteString(s)
+				}
+			}
+			if rc, ok := delta["reasoning_content"]; ok && rc != nil {
+				if s, ok := rc.(string); ok && s != "" {
+					reasoningBuilder.WriteString(s)
 				}
 			}
 			if tcSlice, ok := delta["tool_calls"].([]any); ok {
@@ -250,16 +257,23 @@ func bufferStreamResponse(ctx context.Context, r io.Reader) (*bufferedSSE, error
 	}
 
 	var assistantMsg map[string]any
+	reasoningStr := reasoningBuilder.String()
 	if len(toolCalls) > 0 {
 		assistantMsg = map[string]any{
 			"role":       "assistant",
 			"content":    nil,
 			"tool_calls": buildOpenAIToolCalls(toolCalls),
 		}
+		if reasoningStr != "" {
+			assistantMsg["reasoning_content"] = reasoningStr
+		}
 	} else if hasContent {
 		assistantMsg = map[string]any{
 			"role":    "assistant",
 			"content": contentBuilder.String(),
+		}
+		if reasoningStr != "" {
+			assistantMsg["reasoning_content"] = reasoningStr
 		}
 	}
 
@@ -270,6 +284,7 @@ func bufferStreamResponse(ctx context.Context, r io.Reader) (*bufferedSSE, error
 		finishReason:     finishReason,
 		hasContent:       hasContent,
 		model:            model,
+		reasoningContent: reasoningStr,
 	}, nil
 }
 

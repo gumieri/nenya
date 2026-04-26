@@ -19,7 +19,7 @@ type ResponseTransformer interface {
 	TransformSSEChunk(data []byte) ([]byte, error)
 }
 
-type UsageCallback func(completionTokens, promptTokens, totalTokens int)
+type UsageCallback func(completionTokens, promptTokens, totalTokens, cacheHitTokens, cacheMissTokens int)
 
 type ContentCallback func(content string)
 
@@ -57,6 +57,8 @@ type SSETransformingReader struct {
 	lastCompletionTokens int
 	lastPromptTokens     int
 	lastTotalTokens      int
+	lastCacheHitTokens   int
+	lastCacheMissTokens int
 
 	tcState toolCallState
 }
@@ -310,21 +312,25 @@ func (r *SSETransformingReader) extractUsageFromMap(chunk map[string]interface{}
 	completion := ToInt(usage["completion_tokens"])
 	prompt := ToInt(usage["prompt_tokens"])
 	total := ToInt(usage["total_tokens"])
-	if completion == 0 && prompt == 0 && total == 0 {
+	cacheHit := ToInt(usage["prompt_cache_hit_tokens"])
+	cacheMiss := ToInt(usage["prompt_cache_miss_tokens"])
+	if completion == 0 && prompt == 0 && total == 0 && cacheHit == 0 && cacheMiss == 0 {
 		return
 	}
-	// Compute deltas so providers that emit cumulative usage in multiple
-	// chunks don't cause double-counting in additive stats trackers.
 	dCompletion := completion - r.lastCompletionTokens
 	dPrompt := prompt - r.lastPromptTokens
 	dTotal := total - r.lastTotalTokens
-	if dCompletion <= 0 && dPrompt <= 0 && dTotal <= 0 {
+	dCacheHit := cacheHit - r.lastCacheHitTokens
+	dCacheMiss := cacheMiss - r.lastCacheMissTokens
+	if dCompletion <= 0 && dPrompt <= 0 && dTotal <= 0 && dCacheHit <= 0 && dCacheMiss <= 0 {
 		return
 	}
 	r.lastCompletionTokens = completion
 	r.lastPromptTokens = prompt
 	r.lastTotalTokens = total
-	r.onUsage(dCompletion, dPrompt, dTotal)
+	r.lastCacheHitTokens = cacheHit
+	r.lastCacheMissTokens = cacheMiss
+	r.onUsage(dCompletion, dPrompt, dTotal, dCacheHit, dCacheMiss)
 }
 
 func ToInt(v interface{}) int {

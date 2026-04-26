@@ -389,3 +389,94 @@ func TestSanitizePayload_KeepEmptyReasoningContent(t *testing.T) {
 		t.Fatal("empty reasoning_content should remain (no-op, nothing to strip)")
 	}
 }
+
+func TestSanitizePayload_StripDeepSeekThinkingParams(t *testing.T) {
+	tests := []struct {
+		name     string
+		provider string
+		thinking interface{}
+		extra    map[string]interface{}
+		want     []string
+	}{
+		{
+			name:     "enabled strips all four",
+			provider: "deepseek",
+			thinking: map[string]interface{}{"type": "enabled"},
+			extra:    map[string]interface{}{"temperature": 0.7, "top_p": 0.9, "presence_penalty": 1.0, "frequency_penalty": 1.0},
+			want:     []string{"temperature", "top_p", "presence_penalty", "frequency_penalty"},
+		},
+		{
+			name:     "disabled keeps params",
+			provider: "deepseek",
+			thinking: map[string]interface{}{"type": "disabled"},
+			extra:    map[string]interface{}{"temperature": 0.7},
+			want:     nil,
+		},
+		{
+			name:     "no thinking keeps params",
+			provider: "deepseek",
+			thinking: nil,
+			extra:    map[string]interface{}{"temperature": 0.7},
+			want:     nil,
+		},
+		{
+			name:     "non-deepseek keeps params",
+			provider: "anthropic",
+			thinking: map[string]interface{}{"type": "enabled"},
+			extra:    map[string]interface{}{"temperature": 0.7},
+			want:     nil,
+		},
+		{
+			name:     "string thinking value keeps params",
+			provider: "deepseek",
+			thinking: "enabled",
+			extra:    map[string]interface{}{"temperature": 0.7},
+			want:     nil,
+		},
+		{
+			name:     "missing type key keeps params",
+			provider: "deepseek",
+			thinking: map[string]interface{}{"budget": 100},
+			extra:    map[string]interface{}{"temperature": 0.7},
+			want:     nil,
+		},
+		{
+			name:     "no extra params no-op",
+			provider: "deepseek",
+			thinking: map[string]interface{}{"type": "enabled"},
+			extra:    nil,
+			want:     nil,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			deps := defaultSanitizeDeps()
+			deps.Providers = map[string]*config.Provider{
+				"deepseek": {Name: "deepseek"},
+			}
+			payload := map[string]interface{}{
+				"model":    "deepseek-v4-pro",
+				"messages": []interface{}{},
+			}
+			if tt.thinking != nil {
+				payload["thinking"] = tt.thinking
+			}
+			for k, v := range tt.extra {
+				payload[k] = v
+			}
+			SanitizePayload(deps, payload, tt.provider)
+			for _, key := range tt.want {
+				if _, exists := payload[key]; exists {
+					t.Errorf("expected %q to be stripped, but it remains", key)
+				}
+			}
+			if len(tt.want) == 0 {
+				for k := range tt.extra {
+					if _, exists := payload[k]; !exists {
+						t.Errorf("expected %q to be preserved, but it was stripped", k)
+					}
+				}
+			}
+		})
+	}
+}
