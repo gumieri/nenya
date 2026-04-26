@@ -149,6 +149,4 @@ var commonRetryablePatterns = []string{
 	"enable-auto-tool-choice",
 	"tool_call_parser",
 	"valid string",
-	"model_context_window_exceeded",
-	"network_error",
 }

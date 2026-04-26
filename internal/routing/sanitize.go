@@ -54,7 +54,7 @@ func SanitizePayload(deps TransformDeps, payload map[string]interface{}, provide
 
 			shouldStripReasoning := !providerpkg.SupportsReasoning(providerName)
 			if !shouldStripReasoning && deps.Catalog != nil && modelName != "" {
-				if dm, ok := deps.Catalog.Lookup(modelName); !ok || dm.Metadata == nil || !dm.Metadata.SupportsReasoning {
+				if dm, ok := deps.Catalog.Lookup(modelName); ok && dm.Metadata != nil && !dm.Metadata.SupportsReasoning {
 					shouldStripReasoning = true
 				}
 			}
