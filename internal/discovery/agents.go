@@ -23,6 +23,12 @@ type AutoAgentConfig struct {
 func GenerateAutoAgents(catalog *ModelCatalog, providersMap map[string]*config.Provider, cfg *config.AutoAgentsConfig, logger *slog.Logger) map[string]config.AgentConfig {
 	agents := make(map[string]config.AgentConfig)
 
+	logger.Info("auto-agents generation started",
+		"catalog_models", len(catalog.AllModels()),
+		"providers", len(providersMap),
+		"config_provided", cfg != nil,
+	)
+
 	agentConfigs := []AutoAgentConfig{
 		{
 			Name:        "auto_fast",
@@ -108,6 +114,8 @@ func GenerateAutoAgents(catalog *ModelCatalog, providersMap map[string]*config.P
 		"total_agents", len(agents),
 		"agents", agentNames,
 	)
+
+	logger.Info("auto-agents generation completed", "generated_count", len(agents))
 
 	return agents
 }
