@@ -90,158 +90,183 @@ func writeSSEError(w http.ResponseWriter, statusCode int, message string) {
 	}
 }
 
-func bufferStreamResponse(ctx context.Context, r io.Reader) (*bufferedSSE, error) {
-	var sb strings.Builder
-	var toolCalls []mcpToolCall
-	var finishReason string
-	var hasContent bool
-	var contentBuilder strings.Builder
-	var reasoningBuilder strings.Builder
-	var model string
+// sseAccumulator accumulates SSE stream state during buffered reading,
+// decomposing the high-cyclomatic-complexity bufferStreamResponse into
+// single-responsibility methods.
+type sseAccumulator struct {
+	raw          strings.Builder
+	finishReason string
+	hasContent   bool
+	content      strings.Builder
+	reasoning    strings.Builder
+	model        string
 
-	tcArgsAccum := make(map[int]*strings.Builder)
-	tcNameAccum := make(map[int]string)
-	tcIDAccum := make(map[int]string)
-	totalLines := 0
-	dataLines := 0
+	tcArgsAccum map[int]*strings.Builder
+	tcNameAccum map[int]string
+	tcIDAccum   map[int]string
+	totalLines  int
+	dataLines   int
+}
 
-	scanner := bufio.NewScanner(r)
-	for scanner.Scan() {
-		select {
-		case <-ctx.Done():
-			return nil, ctx.Err()
-		default:
+func newSSEAccumulator() *sseAccumulator {
+	return &sseAccumulator{
+		tcArgsAccum: make(map[int]*strings.Builder),
+		tcNameAccum: make(map[int]string),
+		tcIDAccum:   make(map[int]string),
+	}
+}
+
+// processLine handles a single scanner line. Returns true when [DONE] is seen.
+func (acc *sseAccumulator) processLine(line string) bool {
+	if line == "" {
+		return false
+	}
+	acc.totalLines++
+
+	if !strings.HasPrefix(line, "data: ") {
+		return false
+	}
+	acc.dataLines++
+
+	data := strings.TrimPrefix(line, "data: ")
+	data = strings.TrimSpace(data)
+	if data == "" {
+		return false
+	}
+
+	if data == "[DONE]" {
+		acc.raw.WriteString("data: [DONE]\n\n")
+		return true
+	}
+
+	acc.processChunk(data)
+	acc.raw.WriteString("data: ")
+	acc.raw.WriteString(data)
+	acc.raw.WriteString("\n\n")
+	return false
+}
+
+// processChunk unmarshals a JSON data chunk and extracts model, delta, and
+// finish_reason.
+func (acc *sseAccumulator) processChunk(data string) {
+	var chunk map[string]any
+	if err := json.Unmarshal([]byte(data), &chunk); err != nil {
+		return
+	}
+
+	if m, ok := chunk["model"].(string); ok && m != "" {
+		acc.model = m
+	}
+
+	if choice := extractFirstChoice(chunk); choice != nil {
+		if d, ok := choice["delta"].(map[string]any); ok {
+			acc.processDelta(d)
 		}
-
-		line := scanner.Text()
-		if line == "" {
-			continue
+		if fr, ok := choice["finish_reason"].(string); ok && fr != "" {
+			acc.finishReason = fr
 		}
-		totalLines++
+	}
 
-		if !strings.HasPrefix(line, "data: ") {
-			continue
-		}
-		dataLines++
-
-		data := strings.TrimPrefix(line, "data: ")
-		data = strings.TrimSpace(data)
-		if data == "" {
-			continue
-		}
-
-		if data == "[DONE]" {
-			sb.WriteString("data: [DONE]\n\n")
-			break
-		}
-
-		var chunk map[string]any
-		if err := json.Unmarshal([]byte(data), &chunk); err != nil {
-			continue
-		}
-
-		if m, ok := chunk["model"].(string); ok && m != "" {
-			model = m
-		}
-
-		var delta map[string]any
-		if choices, ok := chunk["choices"].([]any); ok && len(choices) > 0 {
-			if choice, ok := choices[0].(map[string]any); ok {
-				if d, ok := choice["delta"].(map[string]any); ok {
-					delta = d
-				}
-			}
-		}
-
-		if delta != nil {
-			if content, ok := delta["content"]; ok && content != nil {
-				if s, ok := content.(string); ok && s != "" {
-					hasContent = true
-					contentBuilder.WriteString(s)
-				}
-			}
-			if rc, ok := delta["reasoning_content"]; ok && rc != nil {
-				if s, ok := rc.(string); ok && s != "" {
-					reasoningBuilder.WriteString(s)
-				}
-			}
-			if tcSlice, ok := delta["tool_calls"].([]any); ok {
-				for _, tcAny := range tcSlice {
-					tc, ok := tcAny.(map[string]any)
-					if !ok {
-						continue
-					}
-					idx := 0
-					if idxVal, ok := tc["index"].(float64); ok {
-						idx = int(idxVal)
-					}
-					if id, ok := tc["id"].(string); ok && id != "" {
-						tcIDAccum[idx] = id
-					}
-					if fn, ok := tc["function"].(map[string]any); ok {
-						if name, ok := fn["name"].(string); ok && name != "" {
-							tcNameAccum[idx] = name
-						}
-						if argsAny, ok := fn["arguments"]; ok {
-							if argsStr, ok := argsAny.(string); ok && argsStr != "" {
-								if tcArgsAccum[idx] == nil {
-									tcArgsAccum[idx] = &strings.Builder{}
-								}
-								tcArgsAccum[idx].WriteString(argsStr)
-							}
-						}
-					}
-				}
-			}
-		}
-
+	if acc.finishReason == "" {
 		if fr, ok := chunk["finish_reason"].(string); ok && fr != "" {
-			finishReason = fr
-		} else if choices, ok := chunk["choices"].([]any); ok && len(choices) > 0 {
-			if choice, ok := choices[0].(map[string]any); ok {
-				if fr, ok := choice["finish_reason"].(string); ok && fr != "" {
-					finishReason = fr
-				}
-			}
+			acc.finishReason = fr
 		}
+	}
+}
 
-		sb.WriteString("data: ")
-		sb.WriteString(data)
-		sb.WriteString("\n\n")
+// extractFirstChoice extracts the first choices[0] element from a chunk.
+func extractFirstChoice(chunk map[string]any) map[string]any {
+	choices, ok := chunk["choices"].([]any)
+	if !ok || len(choices) == 0 {
+		return nil
+	}
+	choice, ok := choices[0].(map[string]any)
+	if !ok {
+		return nil
+	}
+	return choice
+}
+
+// processDelta extracts content, reasoning_content, and tool_calls from a
+// delta map.
+func (acc *sseAccumulator) processDelta(delta map[string]any) {
+	if content, ok := delta["content"]; ok && content != nil {
+		if s, ok := content.(string); ok && s != "" {
+			acc.hasContent = true
+			acc.content.WriteString(s)
+		}
 	}
 
-	if err := scanner.Err(); err != nil {
-		return nil, fmt.Errorf("reading SSE stream: %w", err)
+	if rc, ok := delta["reasoning_content"]; ok && rc != nil {
+		if s, ok := rc.(string); ok && s != "" {
+			acc.reasoning.WriteString(s)
+		}
 	}
 
-	// Detect non-SSE responses (e.g. plain JSON)
-	if dataLines == 0 && totalLines > 0 {
-		slog.Warn("MCP stream: no SSE 'data:' lines found; possible non-SSE response",
-			"total_lines", totalLines)
+	if tcSlice, ok := delta["tool_calls"].([]any); ok {
+		for _, tcAny := range tcSlice {
+			tc, ok := tcAny.(map[string]any)
+			if !ok {
+				continue
+			}
+			acc.processToolCallChunk(tc)
+		}
+	}
+}
+
+// processToolCallChunk extracts index, id, name, and arguments from a single
+// tool_call delta chunk, accumulating arguments across chunks by index.
+func (acc *sseAccumulator) processToolCallChunk(tc map[string]any) {
+	idx := 0
+	if idxVal, ok := tc["index"].(float64); ok {
+		idx = int(idxVal)
 	}
 
-	// Collect all indices where a name was accumulated (name is always
-	// present in the first chunk for a given tool call index).
-	indices := make([]int, 0, len(tcNameAccum))
-	for idx := range tcNameAccum {
+	if id, ok := tc["id"].(string); ok && id != "" {
+		acc.tcIDAccum[idx] = id
+	}
+
+	fn, ok := tc["function"].(map[string]any)
+	if !ok {
+		return
+	}
+
+	if name, ok := fn["name"].(string); ok && name != "" {
+		acc.tcNameAccum[idx] = name
+	}
+
+	if argsAny, ok := fn["arguments"]; ok {
+		argsStr, ok := argsAny.(string)
+		if !ok || argsStr == "" {
+			return
+		}
+		if acc.tcArgsAccum[idx] == nil {
+			acc.tcArgsAccum[idx] = &strings.Builder{}
+		}
+		acc.tcArgsAccum[idx].WriteString(argsStr)
+	}
+}
+
+// buildToolCalls assembles the final tool call list from accumulators.
+func (acc *sseAccumulator) buildToolCalls() []mcpToolCall {
+	indices := make([]int, 0, len(acc.tcNameAccum))
+	for idx := range acc.tcNameAccum {
 		indices = append(indices, idx)
 	}
 	sort.Ints(indices)
 
+	calls := make([]mcpToolCall, 0, len(indices))
 	for _, idx := range indices {
-		name := tcNameAccum[idx]
+		name := acc.tcNameAccum[idx]
 		if name == "" {
 			continue
 		}
-		id := tcIDAccum[idx]
+		id := acc.tcIDAccum[idx]
 		if id == "" {
-			// Some providers (e.g. certain Ollama builds) omit the id field.
-			// Generate a stable synthetic id so the round-trip tool_call_id
-			// reference in the result message remains consistent.
 			id = fmt.Sprintf("call_%d", idx)
 		}
 		var args map[string]any
-		if argsBuilder := tcArgsAccum[idx]; argsBuilder != nil {
+		if argsBuilder := acc.tcArgsAccum[idx]; argsBuilder != nil {
 			argsStr := argsBuilder.String()
 			if err := json.Unmarshal([]byte(argsStr), &args); err != nil {
 				slog.Warn("MCP: failed to parse tool arguments, calling with empty args",
@@ -249,15 +274,22 @@ func bufferStreamResponse(ctx context.Context, r io.Reader) (*bufferedSSE, error
 				args = make(map[string]any)
 			}
 		}
-		toolCalls = append(toolCalls, mcpToolCall{
-			ID:        id,
-			Name:      name,
-			Arguments: args,
-		})
+		calls = append(calls, mcpToolCall{ID: id, Name: name, Arguments: args})
+	}
+	return calls
+}
+
+// result produces the final bufferedSSE from accumulated state.
+func (acc *sseAccumulator) result() *bufferedSSE {
+	if acc.dataLines == 0 && acc.totalLines > 0 {
+		slog.Warn("MCP stream: no SSE 'data:' lines found; possible non-SSE response",
+			"total_lines", acc.totalLines)
 	}
 
+	toolCalls := acc.buildToolCalls()
+	reasoningStr := acc.reasoning.String()
+
 	var assistantMsg map[string]any
-	reasoningStr := reasoningBuilder.String()
 	if len(toolCalls) > 0 {
 		assistantMsg = map[string]any{
 			"role":       "assistant",
@@ -267,10 +299,10 @@ func bufferStreamResponse(ctx context.Context, r io.Reader) (*bufferedSSE, error
 		if reasoningStr != "" {
 			assistantMsg["reasoning_content"] = reasoningStr
 		}
-	} else if hasContent {
+	} else if acc.hasContent {
 		assistantMsg = map[string]any{
 			"role":    "assistant",
-			"content": contentBuilder.String(),
+			"content": acc.content.String(),
 		}
 		if reasoningStr != "" {
 			assistantMsg["reasoning_content"] = reasoningStr
@@ -278,14 +310,34 @@ func bufferStreamResponse(ctx context.Context, r io.Reader) (*bufferedSSE, error
 	}
 
 	return &bufferedSSE{
-		rawBytes:         []byte(sb.String()),
+		rawBytes:         []byte(acc.raw.String()),
 		toolCalls:        toolCalls,
 		assistantMessage: assistantMsg,
-		finishReason:     finishReason,
-		hasContent:       hasContent,
-		model:            model,
+		finishReason:     acc.finishReason,
+		hasContent:       acc.hasContent,
+		model:            acc.model,
 		reasoningContent: reasoningStr,
-	}, nil
+	}
+}
+
+func bufferStreamResponse(ctx context.Context, r io.Reader) (*bufferedSSE, error) {
+	acc := newSSEAccumulator()
+	scanner := bufio.NewScanner(r)
+	for scanner.Scan() {
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		default:
+		}
+
+		if acc.processLine(scanner.Text()) {
+			break
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		return nil, fmt.Errorf("reading SSE stream: %w", err)
+	}
+	return acc.result(), nil
 }
 
 func buildOpenAIToolCalls(calls []mcpToolCall) []any {

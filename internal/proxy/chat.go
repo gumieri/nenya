@@ -234,11 +234,27 @@ func (p *Proxy) handleChatCompletions(gw *gateway.NenyaGateway, w http.ResponseW
 	}
 
 	if req.HasMCPTools {
-		p.forwardToUpstreamWithMCP(gw, w, r, req.Targets, req.Payload, req.Cooldown, req.TokenCount, req.AgentName, req.MaxRetries, req.CacheKey)
+		p.forwardToUpstreamWithMCP(gw, w, r, forwardOptions{
+			Targets:    req.Targets,
+			Payload:    req.Payload,
+			Cooldown:   req.Cooldown,
+			TokenCount: req.TokenCount,
+			AgentName:  req.AgentName,
+			MaxRetries: req.MaxRetries,
+			CacheKey:   req.CacheKey,
+		})
 		return
 	}
 
-	p.forwardToUpstream(gw, w, r, req.Targets, req.Payload, req.Cooldown, req.TokenCount, req.AgentName, req.MaxRetries, req.CacheKey)
+	p.forwardToUpstream(gw, w, r, forwardOptions{
+		Targets:    req.Targets,
+		Payload:    req.Payload,
+		Cooldown:   req.Cooldown,
+		TokenCount: req.TokenCount,
+		AgentName:  req.AgentName,
+		MaxRetries: req.MaxRetries,
+		CacheKey:   req.CacheKey,
+	})
 }
 
 // replayCachedSSE serves a previously cached response using Server-Sent Events.
@@ -270,59 +286,15 @@ func (p *Proxy) applyContentPipeline(gw *gateway.NenyaGateway, ctx context.Conte
 
 	pipeline.ApplyPrefixCacheOptimizations(payload, messages, gw.Config.PrefixCache)
 
-	// Run compaction (whitespace normalisation) BEFORE secret redaction so that
-	// patterns like \r\n-split secrets and stale thoughts are normalised first.
-	// Compaction is skipped for IDE clients which manage their own context.
 	if !profile.IsIDE {
 		if pipeline.ApplyCompaction(messages, gw.Config.Compaction) {
 			gw.Metrics.RecordCompaction()
 		}
-	} else {
-		gw.Logger.Debug("skipping compaction for IDE client")
 	}
 
-	// Refresh messages slice after compaction may have mutated payload.
 	messages = payload["messages"].([]interface{})
-
-	patternRedacted := false
-	for _, msgRaw := range messages {
-		msgNode, isMap := msgRaw.(map[string]interface{})
-		if !isMap {
-			continue
-		}
-		if pipeline.ShouldSkipRedaction(msgNode, gw.Config.PrefixCache) {
-			continue
-		}
-		if applyRedactToContent(msgNode, func(s string) string {
-			return pipeline.RedactSecrets(s, gw.Config.SecurityFilter.Enabled, gw.SecretPatterns, gw.Config.SecurityFilter.RedactionLabel)
-		}) {
-			patternRedacted = true
-		}
-	}
-	if patternRedacted {
-		gw.Metrics.RecordRedaction()
-	}
-
-	entropyRedacted := false
-	if gw.EntropyFilter != nil {
-		for _, msgRaw := range messages {
-			msgNode, isMap := msgRaw.(map[string]interface{})
-			if !isMap {
-				continue
-			}
-			if pipeline.ShouldSkipRedaction(msgNode, gw.Config.PrefixCache) {
-				continue
-			}
-			if applyRedactToContent(msgNode, func(s string) string {
-				return gw.EntropyFilter.RedactHighEntropy(s, gw.Config.SecurityFilter.RedactionLabel)
-			}) {
-				entropyRedacted = true
-			}
-		}
-		if entropyRedacted {
-			gw.Metrics.RecordRedaction()
-		}
-	}
+	applyPatternRedaction(gw, messages, payload)
+	applyEntropyRedaction(gw, messages, payload)
 
 	messages = payload["messages"].([]interface{})
 	if len(messages) == 0 {
@@ -341,16 +313,7 @@ func (p *Proxy) applyContentPipeline(gw *gateway.NenyaGateway, ctx context.Conte
 	if len(messages) == 0 {
 		return nil
 	}
-	deps := pipeline.WindowDeps{
-		Logger:       gw.Logger,
-		Client:       gw.Client,
-		OllamaClient: gw.OllamaClient,
-		Providers:    gw.Providers,
-		InjectAPIKey: func(providerName string, headers http.Header) error {
-			return routing.InjectAPIKey(providerName, gw.Providers, headers)
-		},
-		CountTokens: gw.CountTokens,
-	}
+	deps := buildWindowDeps(gw)
 	if windowed, err := pipeline.ApplyWindowCompaction(ctx, deps, payload, messages, tokenCount, gw.Config.Window, windowMaxCtx, gw.CountRequestTokens); err != nil {
 		gw.Logger.Warn("window compaction failed, proceeding without it", "err", err)
 	} else if windowed {
@@ -361,6 +324,75 @@ func (p *Proxy) applyContentPipeline(gw *gateway.NenyaGateway, ctx context.Conte
 	if len(messages) == 0 {
 		return nil
 	}
+	return p.interceptContent(gw, ctx, messages, payload, profile, softLimit, hardLimit)
+}
+
+// buildWindowDeps creates a WindowDeps from the gateway state.
+func buildWindowDeps(gw *gateway.NenyaGateway) pipeline.WindowDeps {
+	return pipeline.WindowDeps{
+		Logger:       gw.Logger,
+		Client:       gw.Client,
+		OllamaClient: gw.OllamaClient,
+		Providers:    gw.Providers,
+		InjectAPIKey: func(providerName string, headers http.Header) error {
+			return routing.InjectAPIKey(providerName, gw.Providers, headers)
+		},
+		CountTokens: gw.CountTokens,
+	}
+}
+
+// applyPatternRedaction runs pattern-based secret redaction on all messages.
+func applyPatternRedaction(gw *gateway.NenyaGateway, messages []interface{}, payload map[string]interface{}) {
+	patternRedacted := false
+	for _, msgRaw := range messages {
+		msgNode, isMap := msgRaw.(map[string]interface{})
+		if !isMap {
+			continue
+		}
+		if pipeline.ShouldSkipRedaction(msgNode, gw.Config.PrefixCache) {
+			continue
+		}
+		if applyRedactToContent(msgNode, func(s string) string {
+			return pipeline.RedactSecrets(s, gw.Config.SecurityFilter.Enabled, gw.SecretPatterns, gw.Config.SecurityFilter.RedactionLabel)
+		}) {
+			patternRedacted = true
+		}
+	}
+	if patternRedacted {
+		gw.Metrics.RecordRedaction()
+	}
+}
+
+// applyEntropyRedaction runs entropy-based high-entropy string redaction on all
+// messages when an entropy filter is configured.
+func applyEntropyRedaction(gw *gateway.NenyaGateway, messages []interface{}, payload map[string]interface{}) {
+	if gw.EntropyFilter == nil {
+		return
+	}
+	entropyRedacted := false
+	for _, msgRaw := range messages {
+		msgNode, isMap := msgRaw.(map[string]interface{})
+		if !isMap {
+			continue
+		}
+		if pipeline.ShouldSkipRedaction(msgNode, gw.Config.PrefixCache) {
+			continue
+		}
+		if applyRedactToContent(msgNode, func(s string) string {
+			return gw.EntropyFilter.RedactHighEntropy(s, gw.Config.SecurityFilter.RedactionLabel)
+		}) {
+			entropyRedacted = true
+		}
+	}
+	if entropyRedacted {
+		gw.Metrics.RecordRedaction()
+	}
+}
+
+// interceptContent extracts the last user message and applies the content
+// interception pipeline (soft limit → Ollama engine, hard limit → truncate +
+// engine with optional TF-IDF scoring).
+func (p *Proxy) interceptContent(gw *gateway.NenyaGateway, ctx context.Context, messages []interface{}, payload map[string]interface{}, profile pipeline.ClientProfile, softLimit, hardLimit int) error {
 	lastMsgRaw := messages[len(messages)-1]
 	lastMsgNode, ok := lastMsgRaw.(map[string]interface{})
 	if !ok {
@@ -377,72 +409,94 @@ func (p *Proxy) applyContentPipeline(gw *gateway.NenyaGateway, ctx context.Conte
 
 	var processed string
 	var needsUpdate bool
-	var truncated string
 
 	if contentTokens < softLimit {
 		gw.Logger.Debug("payload within soft limit, passing through",
 			"tokens", contentTokens, "soft_limit", softLimit)
 	} else if contentTokens <= hardLimit {
-		gw.Logger.Warn("payload exceeds soft limit, sending to engine",
-			"tokens", contentTokens)
-		gw.Metrics.RecordInterception("soft_limit")
-		summarized, err := p.summarizeWithOllama(gw, ctx, textForInterception, profile.IsIDE)
-		if err != nil {
-			gw.Logger.Warn("engine summarization failed, proceeding with original payload", "err", err)
-		} else {
-			processed = fmt.Sprintf("[Nenya Sanitized via Ollama]:\n%s", summarized)
-			needsUpdate = true
-		}
+		processed, needsUpdate = p.interceptSoftLimit(gw, ctx, textForInterception, profile.IsIDE)
 	} else {
-		gw.Logger.Warn("payload exceeds hard limit, truncating before engine",
-			"tokens", contentTokens, "hard_limit", hardLimit)
-		gw.Metrics.RecordInterception("hard_limit")
-
-		// Truncation functions work in rune units; estimate conservatively at 3 chars/token.
-		hardLimitRunes := hardLimit * 3
-
-		querySource := gw.Config.Governance.TFIDFQuerySource
-		if querySource != "" {
-			var query string
-			switch querySource {
-			case "prior_messages":
-				query = pipeline.ExtractPriorUserMessages(messages[:len(messages)-1], 5)
-			case "self":
-				query = pipeline.ExtractSelfQuery(textForInterception, 500)
-			}
-			gw.Logger.Info("TF-IDF truncation enabled",
-				"query_source", querySource,
-				"input_tokens", contentTokens)
-
-			if profile.IsIDE {
-				truncated = pipeline.TruncateTFIDFCodeAware(textForInterception, hardLimitRunes, query, gw.Config.Governance)
-			} else {
-				truncated = pipeline.TruncateTFIDF(textForInterception, hardLimitRunes, query, gw.Config.Governance)
-			}
-
-			if gw.CountTokens(truncated) < softLimit {
-				gw.Logger.Info("TF-IDF reduced payload below soft limit, skipping engine",
-					"soft_limit", softLimit)
-				processed = fmt.Sprintf("[Nenya TF-IDF Pruned]:\n%s", truncated)
-				needsUpdate = true
-			} else {
-				processed, needsUpdate = p.summarizeOrForward(gw, ctx, truncated, profile.IsIDE, "TF-IDF Pruned")
-			}
-		} else {
-			if profile.IsIDE {
-				truncated = pipeline.TruncateMiddleOutCodeAware(textForInterception, hardLimitRunes, gw.Config.Governance)
-			} else {
-				truncated = pipeline.TruncateMiddleOut(textForInterception, hardLimitRunes, gw.Config.Governance)
-			}
-			processed, needsUpdate = p.summarizeOrForward(gw, ctx, truncated, profile.IsIDE, "Truncated")
-		}
+		processed, needsUpdate = p.interceptHardLimit(gw, ctx, textForInterception, messages, profile, softLimit, hardLimit, contentTokens)
 	}
 
 	if needsUpdate {
 		lastMsgNode["content"] = processed
 	}
-
 	return nil
+}
+
+// interceptSoftLimit handles the case where content tokens exceed the soft
+// limit but are within the hard limit: send to engine for summarization.
+func (p *Proxy) interceptSoftLimit(gw *gateway.NenyaGateway, ctx context.Context, text string, isIDE bool) (string, bool) {
+	gw.Logger.Warn("payload exceeds soft limit, sending to engine",
+		"tokens", gw.CountTokens(text))
+	gw.Metrics.RecordInterception("soft_limit")
+	summarized, err := p.summarizeWithOllama(gw, ctx, text, isIDE)
+	if err != nil {
+		gw.Logger.Warn("engine summarization failed, proceeding with original payload", "err", err)
+		return "", false
+	}
+	return fmt.Sprintf("[Nenya Sanitized via Ollama]:\n%s", summarized), true
+}
+
+// interceptHardLimit handles the case where content tokens exceed the hard
+// limit: truncate first, then optionally apply TF-IDF relevance scoring before
+// sending to the engine.
+func (p *Proxy) interceptHardLimit(gw *gateway.NenyaGateway, ctx context.Context, text string, messages []interface{}, profile pipeline.ClientProfile, softLimit, hardLimit, contentTokens int) (string, bool) {
+	gw.Logger.Warn("payload exceeds hard limit, truncating before engine",
+		"tokens", contentTokens, "hard_limit", hardLimit)
+	gw.Metrics.RecordInterception("hard_limit")
+
+	hardLimitRunes := hardLimit * 3
+	querySource := gw.Config.Governance.TFIDFQuerySource
+
+	if querySource != "" {
+		return p.interceptWithTFIDF(gw, ctx, text, messages, profile, softLimit, hardLimitRunes, contentTokens, querySource)
+	}
+
+	return p.interceptWithMiddleOut(gw, ctx, text, profile, hardLimitRunes)
+}
+
+// interceptWithTFIDF applies TF-IDF relevance truncation, then optionally sends
+// to engine if still above the soft limit.
+func (p *Proxy) interceptWithTFIDF(gw *gateway.NenyaGateway, ctx context.Context, text string, messages []interface{}, profile pipeline.ClientProfile, softLimit, hardLimitRunes, contentTokens int, querySource string) (string, bool) {
+	var query string
+	switch querySource {
+	case "prior_messages":
+		query = pipeline.ExtractPriorUserMessages(messages[:len(messages)-1], 5)
+	case "self":
+		query = pipeline.ExtractSelfQuery(text, 500)
+	}
+	gw.Logger.Info("TF-IDF truncation enabled",
+		"query_source", querySource,
+		"input_tokens", contentTokens)
+
+	var truncated string
+	if profile.IsIDE {
+		truncated = pipeline.TruncateTFIDFCodeAware(text, hardLimitRunes, query, gw.Config.Governance)
+	} else {
+		truncated = pipeline.TruncateTFIDF(text, hardLimitRunes, query, gw.Config.Governance)
+	}
+
+	if gw.CountTokens(truncated) < softLimit {
+		gw.Logger.Info("TF-IDF reduced payload below soft limit, skipping engine",
+			"soft_limit", softLimit)
+		return fmt.Sprintf("[Nenya TF-IDF Pruned]:\n%s", truncated), true
+	}
+
+	return p.summarizeOrForward(gw, ctx, truncated, profile.IsIDE, "TF-IDF Pruned")
+}
+
+// interceptWithMiddleOut applies middle-out truncation, then sends to the
+// engine.
+func (p *Proxy) interceptWithMiddleOut(gw *gateway.NenyaGateway, ctx context.Context, text string, profile pipeline.ClientProfile, hardLimitRunes int) (string, bool) {
+	var truncated string
+	if profile.IsIDE {
+		truncated = pipeline.TruncateMiddleOutCodeAware(text, hardLimitRunes, gw.Config.Governance)
+	} else {
+		truncated = pipeline.TruncateMiddleOut(text, hardLimitRunes, gw.Config.Governance)
+	}
+	return p.summarizeOrForward(gw, ctx, truncated, profile.IsIDE, "Truncated")
 }
 
 // summarizeWithOllama sends content to the security filter engine for redaction and summarization.
@@ -885,18 +939,11 @@ func (p *Proxy) injectAutoSearch(gw *gateway.NenyaGateway, ctx context.Context, 
 func (p *Proxy) forwardToUpstreamWithMCP(gw *gateway.NenyaGateway,
 	w http.ResponseWriter,
 	r *http.Request,
-	targets []routing.UpstreamTarget,
-	payload map[string]interface{},
-	cooldownDuration time.Duration,
-	tokenCount int,
-	agentName string,
-	maxRetries int,
-	cacheKey string,
-) {
-	_, hasAgent := gw.Config.Agents[agentName]
+	opts forwardOptions) {
+	_, hasAgent := gw.Config.Agents[opts.AgentName]
 	maxIter := mcpMaxIterations
 	if hasAgent {
-		if agent := gw.Config.Agents[agentName]; agent.MCP != nil && agent.MCP.MaxIterations > 0 {
+		if agent := gw.Config.Agents[opts.AgentName]; agent.MCP != nil && agent.MCP.MaxIterations > 0 {
 			maxIter = agent.MCP.MaxIterations
 			if maxIter > mcpMaxIterationsHardCeiling {
 				maxIter = mcpMaxIterationsHardCeiling
@@ -904,7 +951,7 @@ func (p *Proxy) forwardToUpstreamWithMCP(gw *gateway.NenyaGateway,
 		}
 	}
 
-	originalPayload, err := json.Marshal(payload)
+	originalPayload, err := json.Marshal(opts.Payload)
 	if err != nil {
 		gw.Logger.Error("failed to marshal payload for MCP loop", "err", err)
 		writeSSEError(w, http.StatusInternalServerError, "Internal Server Error")
@@ -922,10 +969,10 @@ func (p *Proxy) forwardToUpstreamWithMCP(gw *gateway.NenyaGateway,
 	defer func() {
 		loopDuration := time.Since(loopStart)
 		if loopDuration > 0 {
-			gw.Metrics.RecordMCPLoopDuration(agentName, loopDuration)
+			gw.Metrics.RecordMCPLoopDuration(opts.AgentName, loopDuration)
 		}
 		gw.Logger.Info("MCP multi-turn loop completed",
-			"agent", agentName,
+			"agent", opts.AgentName,
 			"iterations", actualIter,
 			"tool_calls_executed", totalToolCalls,
 			"duration_ms", loopDuration.Milliseconds())
@@ -934,7 +981,7 @@ func (p *Proxy) forwardToUpstreamWithMCP(gw *gateway.NenyaGateway,
 	for iteration := 0; iteration < maxIter; iteration++ {
 		select {
 		case <-mcpLoopCtx.Done():
-			gw.Logger.Warn("MCP loop deadline exceeded", "agent", agentName, "iterations", actualIter)
+			gw.Logger.Warn("MCP loop deadline exceeded", "agent", opts.AgentName, "iterations", actualIter)
 			if lastBuf != nil {
 				replayBufferedResponse(w, lastBuf, gw.Logger)
 			} else {
@@ -944,7 +991,7 @@ func (p *Proxy) forwardToUpstreamWithMCP(gw *gateway.NenyaGateway,
 		default:
 		}
 
-		gw.Metrics.RecordMCPLoopIteration(agentName)
+		gw.Metrics.RecordMCPLoopIteration(opts.AgentName)
 		actualIter++
 
 		working := make(map[string]interface{})
@@ -954,13 +1001,13 @@ func (p *Proxy) forwardToUpstreamWithMCP(gw *gateway.NenyaGateway,
 		}
 
 		if iteration > 0 {
-			payload = working
+			// Use the unmarshaled copy for subsequent iterations
 		} else {
-			// Use the already-parsed payload for first iteration
-			working = payload
+			// Use the already-parsed opts.Payload for first iteration
+			working = opts.Payload
 		}
 
-		buf, err := p.forwardBuffered(gw, mcpLoopCtx, r, targets, working, cooldownDuration, tokenCount, agentName, maxRetries)
+		buf, err := p.forwardBuffered(gw, mcpLoopCtx, r, opts.Targets, working, opts.Cooldown, opts.TokenCount, opts.AgentName, opts.MaxRetries)
 		if err != nil {
 			gw.Logger.Warn("MCP loop: upstream failed, streaming last response",
 				"iteration", iteration, "err", err)
@@ -979,7 +1026,7 @@ func (p *Proxy) forwardToUpstreamWithMCP(gw *gateway.NenyaGateway,
 				"finish_reason", buf.finishReason,
 				"raw_bytes_len", len(buf.rawBytes))
 			replayBufferedResponse(w, buf, gw.Logger)
-			p.recordMCPUsage(gw, buf, agentName)
+			p.recordMCPUsage(gw, buf, opts.AgentName)
 			return
 		}
 
@@ -991,9 +1038,9 @@ func (p *Proxy) forwardToUpstreamWithMCP(gw *gateway.NenyaGateway,
 				"mcp_calls", len(mcpCalls),
 				"non_mcp_calls", len(nonMcpCalls),
 				"iteration", iteration+1,
-				"agent", agentName)
+				"agent", opts.AgentName)
 
-			results := executeMCPCalls(mcpLoopCtx, mcpCalls, gw, agentName)
+			results := executeMCPCalls(mcpLoopCtx, mcpCalls, gw, opts.AgentName)
 			// Build an assistant message that only lists the MCP calls being
 			// handled. Using buf.assistantMessage (which contains ALL calls)
 			// would create orphaned tool_call references if nonMcpCalls is
@@ -1022,7 +1069,7 @@ func (p *Proxy) forwardToUpstreamWithMCP(gw *gateway.NenyaGateway,
 				"non_mcp_calls", len(nonMcpCalls),
 				"raw_bytes_len", len(buf.rawBytes))
 			replayBufferedResponse(w, buf, gw.Logger)
-			p.recordMCPUsage(gw, buf, agentName)
+			p.recordMCPUsage(gw, buf, opts.AgentName)
 			return
 		}
 
@@ -1031,9 +1078,9 @@ func (p *Proxy) forwardToUpstreamWithMCP(gw *gateway.NenyaGateway,
 
 	if lastBuf != nil {
 		gw.Logger.Warn("MCP loop exhausted, replaying last response",
-			"max_iterations", maxIter, "agent", agentName)
+			"max_iterations", maxIter, "agent", opts.AgentName)
 		replayBufferedResponse(w, lastBuf, gw.Logger)
-		p.recordMCPUsage(gw, lastBuf, agentName)
+		p.recordMCPUsage(gw, lastBuf, opts.AgentName)
 		return
 	}
 
