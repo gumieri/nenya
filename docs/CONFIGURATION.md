@@ -325,8 +325,9 @@ Both styles can be mixed in the same `models` array.
 | `failure_threshold` | int | `5` | Circuit breaker: consecutive failures before tripping to Open state |
 | `success_threshold` | int | `1` | Circuit breaker: consecutive successes in HalfOpen to recover to Closed state |
 | `max_retries` | int | `0` | Cap on retry attempts per request (0 = unlimited) |
-| `system_prompt` | string | `""` | Inline system prompt injected as the first message (only if no existing system message). |
+| `system_prompt` | string | `""` | Inline system prompt injected as the first message (only if no existing system message, unless `force_system_prompt` is true). |
 | `system_prompt_file` | string | `""` | Path to system prompt file. Lower priority than `system_prompt`. |
+| `force_system_prompt` | bool | `false` | If true, always inject the agent's system prompt as the first message, even if the request already contains a system message. The client's system message is preserved after the forced prompt. |
 | `mcp` | object | (none) | Optional Model Context Protocol server integration. See [MCP Integration](MCP_INTEGRATION.md) for details. |
 | `models` | array | (required) | List of model entries (strings or objects) to try in order |
 | `budget_limit_usd` | float64 | `0` (disabled) | Per-agent cumulative budget limit in USD. 0 = no limit. Logged but not yet enforced. |
@@ -343,7 +344,7 @@ Each model entry (object form):
 
 **String shorthand**: If the entry is a string, it must exist in the built-in Model Registry. The registry resolves `provider` and `max_context` automatically. If the model is not found, configuration loading fails with an error.
 
-**System prompt injection**: If `system_prompt` or `system_prompt_file` is set, the prompt is injected as the first message in the array only when no existing system message is present.
+**System prompt injection**: If `system_prompt` or `system_prompt_file` is set, the prompt is injected as the first message in the array only when no existing system message is present. If `force_system_prompt` is true, the agent's system prompt is always injected first, even if the request already contains a system message (the client's system message is preserved after the forced prompt).
 
 ## `providers`
 

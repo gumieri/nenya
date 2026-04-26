@@ -209,6 +209,54 @@ func TestTransformRequest_AgentSystemPromptSkippedWhenSystemFirst(t *testing.T) 
 	}
 }
 
+func TestTransformRequest_ForceSystemPromptOverridesExistingSystem(t *testing.T) {
+	providers := testProviders()
+	deps := testDeps(providers)
+	deps.Config.Agents = map[string]config.AgentConfig{
+		"my-agent": {
+			SystemPrompt:      "You are a helpful agent.",
+			ForceSystemPrompt: true,
+		},
+	}
+
+	payload := map[string]interface{}{
+		"model": "my-agent",
+		"messages": []interface{}{
+			map[string]interface{}{"role": "system", "content": "Existing system"},
+			map[string]interface{}{"role": "user", "content": "hello"},
+		},
+	}
+	body, _, err := TransformRequestForUpstream(deps, "deepseek", "http://example.com", payload, "deepseek-v4-flash", 0)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	var parsed map[string]interface{}
+	if err := json.Unmarshal(body, &parsed); err != nil {
+		t.Fatalf("failed to unmarshal body: %v", err)
+	}
+	msgs, ok := parsed["messages"].([]interface{})
+	if !ok {
+		t.Fatal("messages not an array")
+	}
+	if len(msgs) != 3 {
+		t.Fatalf("expected 3 messages (force injected + 2 original), got %d", len(msgs))
+	}
+	first, ok := msgs[0].(map[string]interface{})
+	if !ok {
+		t.Fatal("first message not a map")
+	}
+	if first["role"] != "system" || first["content"] != "You are a helpful agent." {
+		t.Errorf("expected forced system prompt, got role=%q content=%q", first["role"], first["content"])
+	}
+	second, ok := msgs[1].(map[string]interface{})
+	if !ok {
+		t.Fatal("second message not a map")
+	}
+	if second["role"] != "system" || second["content"] != "Existing system" {
+		t.Errorf("expected original system message preserved, got role=%q content=%q", second["role"], second["content"])
+	}
+}
+
 func TestTransformRequest_NoModelField(t *testing.T) {
 	providers := testProviders()
 	deps := testDeps(providers)
