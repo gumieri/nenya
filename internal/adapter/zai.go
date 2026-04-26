@@ -61,6 +61,25 @@ func (a *ZAIAdapter) MutateResponse(body []byte) ([]byte, error) {
 }
 
 func (a *ZAIAdapter) NormalizeError(statusCode int, body []byte) ErrorClass {
+	if statusCode == http.StatusTooManyRequests && len(body) > 0 {
+		var errResp struct {
+			Error struct {
+				Code string `json:"code"`
+			} `json:"error"`
+		}
+		if json.Unmarshal(body, &errResp) == nil && errResp.Error.Code != "" {
+			switch errResp.Error.Code {
+			case "1302", "1303":
+				return ErrorRateLimited
+			case "1308", "1310":
+				return ErrorQuotaExhausted
+			case "1312":
+				return ErrorRetryable
+			case "1311", "1313":
+				return ErrorPermanent
+			}
+		}
+	}
 	return defaultNormalizeError(statusCode, body)
 }
 

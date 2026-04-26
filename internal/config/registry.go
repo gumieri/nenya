@@ -129,7 +129,7 @@ var ModelRegistry = map[string]ModelEntry{
 	"deepseek-v4-pro":   {Provider: "deepseek", MaxContext: 1000000, MaxOutput: 393216},
 	"deepseek-v4-flash": {Provider: "deepseek", MaxContext: 1000000, MaxOutput: 393216},
 
-	"glm-5.1":        {Provider: "zai", MaxContext: 200000, MaxOutput: 128000},
+	"glm-5.1":             {Provider: "zai", MaxContext: 200000, MaxOutput: 128000},
 	"glm-5-turbo":    {Provider: "zai", MaxContext: 200000, MaxOutput: 128000},
 	"glm-5v-turbo":   {Provider: "zai", MaxContext: 200000, MaxOutput: 128000},
 	"glm-5":          {Provider: "zai", MaxContext: 200000, MaxOutput: 128000},
@@ -137,11 +137,16 @@ var ModelRegistry = map[string]ModelEntry{
 	"glm-4.7-flash":  {Provider: "zai", MaxContext: 200000, MaxOutput: 128000},
 	"glm-4.7-flashx": {Provider: "zai", MaxContext: 200000, MaxOutput: 128000},
 	"glm-4.6":        {Provider: "zai", MaxContext: 200000, MaxOutput: 128000},
-	"glm-4.6v":       {Provider: "zai", MaxContext: 200000, MaxOutput: 128000},
+	"glm-4.6v":       {Provider: "zai", MaxContext: 200000, MaxOutput: 32000},
 	"glm-4.5":        {Provider: "zai", MaxContext: 128000, MaxOutput: 96000},
 	"glm-4.5-air":    {Provider: "zai", MaxContext: 128000, MaxOutput: 96000},
 	"glm-4.5-flash":  {Provider: "zai", MaxContext: 128000, MaxOutput: 96000},
-	"glm-4.5v":       {Provider: "zai", MaxContext: 128000, MaxOutput: 96000},
+	"glm-4.5v":       {Provider: "zai", MaxContext: 128000, MaxOutput: 16000},
+	"glm-4.5-airx":   {Provider: "zai", MaxContext: 128000, MaxOutput: 96000},
+	"glm-4.5-x":      {Provider: "zai", MaxContext: 128000, MaxOutput: 96000},
+	"glm-4.6v-flash": {Provider: "zai", MaxContext: 200000, MaxOutput: 128000},
+	"glm-4.6v-flashx":{Provider: "zai", MaxContext: 200000, MaxOutput: 128000},
+	"glm-4-32b-0414-128k": {Provider: "zai", MaxContext: 128000, MaxOutput: 16000},
 
 	"nemotron-3-super": {Provider: "nvidia_free", MaxContext: 4000, MaxOutput: 1024},
 

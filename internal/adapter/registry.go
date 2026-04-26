@@ -108,7 +108,11 @@ func init() {
 	})
 
 	Register("zai", AdapterEntry{
-		Adapter: &zaiAdapterShim{},
+		Adapter: NewOpenAIAdapter(Capabilities{
+			StreamOptions:  true,
+			AutoToolChoice: true,
+			ContentArrays:  true,
+		}),
 	})
 
 	Register("zai-coding-plan", AdapterEntry{
