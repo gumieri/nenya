@@ -570,6 +570,97 @@ func TestSanitizePayload_KeepReasoningForUnknownModelOnReasoningProvider(t *test
 	}
 }
 
+func TestSanitizePayload_InjectReasoningContentForDeepSeek(t *testing.T) {
+	deps := defaultSanitizeDeps()
+	deps.Providers = map[string]*config.Provider{
+		"deepseek": {Name: "deepseek"},
+	}
+
+	payload := map[string]interface{}{
+		"model": "deepseek-v4-pro",
+		"messages": []interface{}{
+			map[string]interface{}{"role": "user", "content": "hello"},
+			map[string]interface{}{"role": "assistant", "content": "answer"},
+			map[string]interface{}{"role": "user", "content": "followup"},
+		},
+	}
+
+	SanitizePayload(deps, payload, "deepseek", "deepseek-v4-pro")
+	msgs := payload["messages"].([]interface{})
+	assistant := msgs[1].(map[string]interface{})
+	rc, ok := assistant["reasoning_content"].(string)
+	if !ok || rc != "" {
+		t.Fatalf("expected empty reasoning_content injected, got %v", assistant["reasoning_content"])
+	}
+}
+
+func TestSanitizePayload_InjectReasoningOnBridgeMessage(t *testing.T) {
+	deps := defaultSanitizeDeps()
+	deps.Providers = map[string]*config.Provider{
+		"deepseek": {Name: "deepseek"},
+	}
+
+	payload := map[string]interface{}{
+		"model": "deepseek-v4-pro",
+		"messages": []interface{}{
+			map[string]interface{}{"role": "user", "content": "hello"},
+			map[string]interface{}{"role": "assistant", "content": "", "tool_calls": []interface{}{map[string]interface{}{"id": "c1"}}},
+			map[string]interface{}{"role": "tool", "tool_call_id": "c1", "content": "result"},
+			map[string]interface{}{"role": "user", "content": "next question"},
+		},
+	}
+
+	SanitizePayload(deps, payload, "deepseek", "deepseek-v4-pro")
+	msgs := payload["messages"].([]interface{})
+	// After repair: [user, assistant(tool_call), tool, bridge, user]
+	// Bridge is at index 3
+	if len(msgs) < 4 {
+		t.Fatalf("expected at least 4 messages after repair, got %d", len(msgs))
+	}
+	bridge := msgs[3].(map[string]interface{})
+	if bridge["role"] != "assistant" {
+		t.Fatalf("expected bridge at index 3 with role assistant, got role %v", bridge["role"])
+	}
+	rc, ok := bridge["reasoning_content"].(string)
+	if !ok || rc != "" {
+		t.Fatalf("expected empty reasoning_content on bridge message, got %v", bridge["reasoning_content"])
+	}
+}
+
+func TestSanitizePayload_SkipStripReasoningForDeepSeek(t *testing.T) {
+	catalog := discovery.NewModelCatalog()
+	catalog.Add(discovery.DiscoveredModel{
+		ID:       "deepseek-v4-pro",
+		Provider: "deepseek",
+		Metadata: &discovery.ModelMetadata{},
+	})
+
+	deps := defaultSanitizeDeps()
+	deps.Catalog = catalog
+	deps.Providers = map[string]*config.Provider{
+		"deepseek": {Name: "deepseek"},
+	}
+
+	payload := map[string]interface{}{
+		"model": "deepseek-v4-pro",
+		"messages": []interface{}{
+			map[string]interface{}{
+				"role":              "assistant",
+				"content":           "answer",
+				"reasoning_content": "should not be stripped",
+			},
+		},
+	}
+
+	SanitizePayload(deps, payload, "deepseek", "deepseek-v4-pro")
+	msgs := payload["messages"].([]interface{})
+	assistant := msgs[0].(map[string]interface{})
+	rc, ok := assistant["reasoning_content"].(string)
+	if !ok || rc != "should not be stripped" {
+		t.Fatalf("reasoning_content should be preserved for deepseek even when catalog says no reasoning, got %v", assistant["reasoning_content"])
+	}
+}
+
 func TestRepairMessageOrdering(t *testing.T) {
 	tests := []struct {
 		name       string
