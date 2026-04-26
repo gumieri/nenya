@@ -122,6 +122,9 @@ func PruneStaleToolCalls(payload map[string]interface{}, cfg config.CompactionCo
 			"role":    "assistant",
 			"content": summary,
 		}
+		if rc, ok := msg["reasoning_content"].(string); ok && rc != "" {
+			replacement["reasoning_content"] = rc
+		}
 
 		total := 1 + numToolCalls
 		messages[i] = replacement
