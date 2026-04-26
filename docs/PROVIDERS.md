@@ -88,14 +88,26 @@ DeepSeek v4 models support a **thinking mode** controlled by the `thinking` para
 - **Auth**: `bearer+x-goog` (both `Authorization: Bearer <key>` and `x-goog-api-key: <key>`)
 - **Error**: Gemini-specific retryable patterns (`resource_exhausted`, `quota exceeded`, `the response was blocked`, `content has no parts`)
 
-### z.ai
+### z.ai (Zhipu)
 - **Request**:
   - Orphaned tool message removal
   - Consecutive user message merging
   - User bridge insertion between consecutive assistant messages
   - System bridge prepending
+  - Thinking mode auto-activation for reasoning-capable models (e.g., GLM-5)
+  - Model-specific temperature defaults (GLM-4.6/4.7 → 1.0)
+- **Thinking mode**: Auto-enabled when the model supports reasoning. Configurable per-provider via `thinking.enabled` in the provider config:
+  ```json
+  "zai": {
+    "url": "https://api.z.ai/v1/chat/completions",
+    "thinking": null
+  }
+  ```
+  - `null` (omitted) → auto mode (enabled for reasoning models only)
+  - `{"enabled": true}` → force enable for all models
+  - `{"enabled": false}` → force disable
 - **Auth**: `bearer`
-- **Error**: Standard classification
+- **Error**: Zhipu error codes (1302/1303 → rate-limited, 1308/1310 → quota exhausted, 1312 → retryable, 1311/1313 → permanent) + `model_context_window_exceeded` → retryable
 
 ### Ollama
 - **Request**: Identity (no transformation)

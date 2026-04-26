@@ -117,7 +117,7 @@ Flow notes:
 |----------|---------------|------|-----------------|
 | **Anthropic** | `claude-*` | `x-api-key` | Full bidirectional OpenAI↔Anthropic format conversion |
 | **Gemini** | `gemini-*` | `bearer+x-goog` | Thought signature preservation, orphaned tool_call cleanup, model aliasing |
-| **z.ai** | `glm-*` | `bearer` | Orphaned tool message removal, consecutive user message merging |
+| **z.ai** (Zhipu) | `glm-*` | `bearer` | Orphaned tool message removal, user message merging, auto-thinking for reasoning models, model-specific temperature defaults, Zhipu error code classification |
 | **Ollama** | (local) | `none` | Local-first, optional auth, conservative error classification |
 
 ### OpenAI-Compatible with Adjustments
@@ -134,7 +134,7 @@ Flow notes:
 
 | Provider | Route Prefixes | Auth |
 |----------|---------------|------|
-| **DeepSeek** | `deepseek-*` | `bearer` |
+| **DeepSeek** | `deepseek-*` | `bearer` | Thinking mode default, reasoning_content injection, parameter stripping in thinking mode |
 | **Mistral** | `mistral-*`, `codestral-*`, `devstral-*` | `bearer` |
 | **xAI** | `grok-*` | `bearer` |
 | **Groq** | (custom) | `bearer` |
