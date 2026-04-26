@@ -32,6 +32,7 @@ linters:
     paths:
       - vendor$
       - third_party$
+      - ".*_test\\.go"
 
 formatters:
   enable:
