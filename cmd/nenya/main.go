@@ -36,6 +36,12 @@ func main() {
 		os.Exit(1)
 	}
 
+	logger.Info("configuration loaded",
+		"discovery_enabled", cfg.Discovery.Enabled,
+		"auto_agents", cfg.Discovery.AutoAgents,
+		"auto_agents_config_provided", cfg.Discovery.AutoAgentsConfig != nil,
+	)
+
 	if listenAddr := os.Getenv("NENYA_LISTEN_ADDR"); listenAddr != "" {
 		cfg.Server.ListenAddr = listenAddr
 	} else if port := os.Getenv("PORT"); port != "" {
