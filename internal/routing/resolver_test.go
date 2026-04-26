@@ -20,8 +20,8 @@ func TestResolveProvider_KnownModels(t *testing.T) {
 	}{
 		{"gemini-2.5-flash", "gemini"},
 		{"gemini-3.1-flash-lite-preview", "gemini"},
-		{"deepseek-chat", "deepseek"},
-		{"deepseek-reasoner", "deepseek"},
+		{"deepseek-v4-flash", "deepseek"},
+		{"deepseek-v4-pro", "deepseek"},
 		{"glm-5", "zai"},
 		{"glm-4.7-flash", "zai"},
 		{"nemotron-3-super", "nvidia_free"},
@@ -119,7 +119,7 @@ func TestDetermineUpstream_KnownModels(t *testing.T) {
 		t.Fatalf("expected %q, got %q", expected, got)
 	}
 
-	got = DetermineUpstream("deepseek-chat", p)
+	got = DetermineUpstream("deepseek-v4-flash", p)
 	expected = "https://api.deepseek.com/chat/completions"
 	if got != expected {
 		t.Fatalf("expected %q, got %q", expected, got)

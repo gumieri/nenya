@@ -126,8 +126,8 @@ var ModelRegistry = map[string]ModelEntry{
 	"gemini-2.5-flash-lite":         {Provider: "gemini", MaxContext: 128000, MaxOutput: 8192},
 	"gemini-2.5-flash":              {Provider: "gemini", MaxContext: 128000, MaxOutput: 8192},
 
-	"deepseek-reasoner": {Provider: "deepseek", MaxContext: 128000, MaxOutput: 8192},
-	"deepseek-chat":     {Provider: "deepseek", MaxContext: 128000, MaxOutput: 8192},
+	"deepseek-v4-pro":   {Provider: "deepseek", MaxContext: 1000000, MaxOutput: 393216},
+	"deepseek-v4-flash": {Provider: "deepseek", MaxContext: 1000000, MaxOutput: 393216},
 
 	"glm-5.1":        {Provider: "zai", MaxContext: 200000, MaxOutput: 128000},
 	"glm-5-turbo":    {Provider: "zai", MaxContext: 200000, MaxOutput: 128000},

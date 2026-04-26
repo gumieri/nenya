@@ -43,7 +43,7 @@ func TestBuildTargetList_RoundRobin(t *testing.T) {
 	agent := config.AgentConfig{
 		Models: []config.AgentModel{
 			{Provider: "gemini", Model: "gemini-2.5-flash"},
-			{Provider: "deepseek", Model: "deepseek-chat"},
+			{Provider: "deepseek", Model: "deepseek-v4-flash"},
 			{Provider: "zai", Model: "glm-5"},
 		},
 	}
@@ -81,7 +81,7 @@ func TestBuildTargetList_CooldownSkip(t *testing.T) {
 	agent := config.AgentConfig{
 		Models: []config.AgentModel{
 			{Provider: "gemini", Model: "gemini-2.5-flash"},
-			{Provider: "deepseek", Model: "deepseek-chat"},
+			{Provider: "deepseek", Model: "deepseek-v4-flash"},
 			{Provider: "zai", Model: "glm-5"},
 		},
 	}
@@ -110,7 +110,7 @@ func TestBuildTargetList_FallbackStrategy(t *testing.T) {
 		Strategy: "fallback",
 		Models: []config.AgentModel{
 			{Provider: "gemini", Model: "gemini-2.5-flash"},
-			{Provider: "deepseek", Model: "deepseek-chat"},
+			{Provider: "deepseek", Model: "deepseek-v4-flash"},
 		},
 	}
 
@@ -129,7 +129,7 @@ func TestBuildTargetList_UnknownProviderSkipped(t *testing.T) {
 		Models: []config.AgentModel{
 			{Provider: "gemini", Model: "gemini-2.5-flash"},
 			{Provider: "nonexistent_provider", Model: "some-model"},
-			{Provider: "deepseek", Model: "deepseek-chat"},
+			{Provider: "deepseek", Model: "deepseek-v4-flash"},
 		},
 	}
 
@@ -180,7 +180,7 @@ func TestBuildTargetList_MaxContextFromAgentModel(t *testing.T) {
 	agent := config.AgentConfig{
 		Models: []config.AgentModel{
 			{Provider: "gemini", Model: "gemini-2.5-flash", MaxContext: 500},
-			{Provider: "deepseek", Model: "deepseek-chat"},
+			{Provider: "deepseek", Model: "deepseek-v4-flash"},
 		},
 	}
 
@@ -198,7 +198,7 @@ func TestBuildTargetList_TargetFields(t *testing.T) {
 	a := NewAgentState(testLogger())
 	agent := config.AgentConfig{
 		Models: []config.AgentModel{
-			{Provider: "deepseek", Model: "deepseek-chat"},
+			{Provider: "deepseek", Model: "deepseek-v4-flash"},
 		},
 	}
 
@@ -211,16 +211,16 @@ func TestBuildTargetList_TargetFields(t *testing.T) {
 	if tgt.URL != "https://api.deepseek.com/chat/completions" {
 		t.Fatalf("unexpected URL: %s", tgt.URL)
 	}
-	if tgt.Model != "deepseek-chat" {
+	if tgt.Model != "deepseek-v4-flash" {
 		t.Fatalf("unexpected Model: %s", tgt.Model)
 	}
 	if tgt.Provider != "deepseek" {
 		t.Fatalf("unexpected Provider: %s", tgt.Provider)
 	}
-	if tgt.CoolKey != "my-agent:deepseek:deepseek-chat" {
+	if tgt.CoolKey != "my-agent:deepseek:deepseek-v4-flash" {
 		t.Fatalf("unexpected CoolKey: %s", tgt.CoolKey)
 	}
-	if tgt.MaxOutput != 8192 {
+	if tgt.MaxOutput != 393216 {
 		t.Fatalf("unexpected MaxOutput: %d", tgt.MaxOutput)
 	}
 }

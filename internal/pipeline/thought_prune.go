@@ -13,8 +13,13 @@ const (
 )
 
 // PruneThoughts removes <think ...>...</think > reasoning blocks from
-// assistant messages to reduce token usage while preserving the final
+// assistant message content to reduce token usage while preserving the final
 // model output.
+//
+// It does NOT remove the structured reasoning_content field from assistant
+// messages — that is provider-specific data handled by
+// routing.SanitizePayload per-target so that providers requiring it
+// (e.g. DeepSeek v4 thinking mode) receive it intact.
 func PruneThoughts(payload map[string]interface{}, cfg config.CompactionConfig) bool {
 	if !cfg.PruneThoughts {
 		return false
@@ -42,10 +47,6 @@ func PruneThoughts(payload map[string]interface{}, cfg config.CompactionConfig) 
 			continue
 		}
 
-		if pruneReasoningField(msg) {
-			mutated = true
-		}
-
 		if pruneThoughtTags(msg) {
 			mutated = true
 		}
@@ -54,23 +55,53 @@ func PruneThoughts(payload map[string]interface{}, cfg config.CompactionConfig) 
 	return mutated
 }
 
-func pruneReasoningField(msg map[string]interface{}) bool {
-	rc, ok := msg["reasoning_content"]
+// StripReasoningContent removes the reasoning_content field from all
+// assistant messages in the payload. This should be called per-target
+// in SanitizePayload for providers that do not support reasoning, to avoid
+// sending unknown fields upstream.
+func StripReasoningContent(payload map[string]interface{}) bool {
+	messagesRaw, ok := payload["messages"]
 	if !ok {
 		return false
 	}
+	messages, ok := messagesRaw.([]interface{})
+	if !ok || len(messages) == 0 {
+		return false
+	}
 
-	str, ok := rc.(string)
-	if !ok {
+	mutated := false
+
+	for _, msgRaw := range messages {
+		msg, ok := msgRaw.(map[string]interface{})
+		if !ok {
+			continue
+		}
+
+		role, _ := msg["role"].(string)
+		if role != "assistant" {
+			continue
+		}
+
+		rc, ok := msg["reasoning_content"]
+		if !ok {
+			continue
+		}
+
+		str, ok := rc.(string)
+		if !ok {
+			delete(msg, "reasoning_content")
+			mutated = true
+			continue
+		}
+		if str == "" {
+			continue
+		}
+
 		delete(msg, "reasoning_content")
-		return true
-	}
-	if str == "" {
-		return false
+		mutated = true
 	}
 
-	delete(msg, "reasoning_content")
-	return true
+	return mutated
 }
 
 func pruneThoughtTags(msg map[string]interface{}) bool {

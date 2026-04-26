@@ -610,3 +610,29 @@ func FuzzParseRetryDelayFromMessage(f *testing.F) {
 		}
 	})
 }
+
+func TestDeepseekRetryablePatterns(t *testing.T) {
+	body := []byte(`{"error":{"message":"The reasoning_content in the thinking mode must be passed back to the API.","type":"invalid_request_error"}}`)
+
+	if !isRetryableClientErrorForProvider(http.StatusBadRequest, body, "deepseek") {
+		t.Fatal("expected retryable for deepseek with reasoning_content error")
+	}
+
+	if isRetryableClientErrorForProvider(http.StatusBadRequest, body, "anthropic") {
+		t.Fatal("expected non-retryable for anthropic with deepseek-specific error")
+	}
+
+	if isRetryableClientErrorForProvider(http.StatusBadRequest, body, "") {
+		t.Fatal("expected non-retryable for unknown provider with deepseek-specific error")
+	}
+
+	body2 := []byte(`{"error":{"message":"thinking mode is required","type":"invalid_request_error"}}`)
+
+	if !isRetryableClientErrorForProvider(http.StatusBadRequest, body2, "deepseek") {
+		t.Fatal("expected retryable for deepseek with thinking mode error")
+	}
+
+	if isRetryableClientErrorForProvider(http.StatusBadRequest, body2, "gemini") {
+		t.Fatal("expected non-retryable for gemini with deepseek-specific error")
+	}
+}

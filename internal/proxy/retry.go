@@ -421,6 +421,11 @@ var commonRetryablePatterns = []string{
 	"quota_exceeded",
 }
 
+var deepseekRetryablePatterns = []string{
+	"reasoning_content",
+	"thinking mode",
+}
+
 var anthropicRetryablePatterns = []string{
 	"overloaded_error",
 	"prompt is too long",
@@ -457,6 +462,13 @@ func isRetryableClientErrorForProvider(statusCode int, body []byte, provider str
 	}
 	if strings.Contains(lp, "gemini") || strings.Contains(lp, "vertex") {
 		for _, pat := range geminiRetryablePatterns {
+			if strings.Contains(lower, pat) {
+				return true
+			}
+		}
+	}
+	if strings.Contains(lp, "deepseek") {
+		for _, pat := range deepseekRetryablePatterns {
 			if strings.Contains(lower, pat) {
 				return true
 			}

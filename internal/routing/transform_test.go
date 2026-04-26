@@ -115,17 +115,17 @@ func TestTransformRequest_NonGeminiNoMapping(t *testing.T) {
 	deps := testDeps(providers)
 
 	payload := map[string]interface{}{
-		"model":    "deepseek-chat",
+		"model":    "deepseek-v4-flash",
 		"messages": []interface{}{},
 	}
 	_, returnedModel, err := TransformRequestForUpstream(deps, "deepseek", "http://example.com", payload, "", 0)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if returnedModel != "deepseek-chat" {
-		t.Errorf("expected model %q, got %q", "deepseek-chat", returnedModel)
+	if returnedModel != "deepseek-v4-flash" {
+		t.Errorf("expected model %q, got %q", "deepseek-v4-flash", returnedModel)
 	}
-	if payload["model"] != "deepseek-chat" {
+	if payload["model"] != "deepseek-v4-flash" {
 		t.Errorf("original payload mutated")
 	}
 }
@@ -145,7 +145,7 @@ func TestTransformRequest_AgentSystemPrompt(t *testing.T) {
 			map[string]interface{}{"role": "user", "content": "hello"},
 		},
 	}
-	body, _, err := TransformRequestForUpstream(deps, "deepseek", "http://example.com", payload, "deepseek-chat", 0)
+	body, _, err := TransformRequestForUpstream(deps, "deepseek", "http://example.com", payload, "deepseek-v4-flash", 0)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -185,7 +185,7 @@ func TestTransformRequest_AgentSystemPromptSkippedWhenSystemFirst(t *testing.T) 
 			map[string]interface{}{"role": "user", "content": "hello"},
 		},
 	}
-	body, _, err := TransformRequestForUpstream(deps, "deepseek", "http://example.com", payload, "deepseek-chat", 0)
+	body, _, err := TransformRequestForUpstream(deps, "deepseek", "http://example.com", payload, "deepseek-v4-flash", 0)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -256,12 +256,12 @@ func TestTransformRequest_ModelOverride(t *testing.T) {
 		"model":    "some-agent",
 		"messages": []interface{}{},
 	}
-	_, returnedModel, err := TransformRequestForUpstream(deps, "deepseek", "http://example.com", payload, "deepseek-chat", 0)
+	_, returnedModel, err := TransformRequestForUpstream(deps, "deepseek", "http://example.com", payload, "deepseek-v4-flash", 0)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if returnedModel != "deepseek-chat" {
-		t.Errorf("expected model %q, got %q", "deepseek-chat", returnedModel)
+	if returnedModel != "deepseek-v4-flash" {
+		t.Errorf("expected model %q, got %q", "deepseek-v4-flash", returnedModel)
 	}
 	if payload["model"] != "some-agent" {
 		t.Errorf("original payload mutated: got %v", payload["model"])
