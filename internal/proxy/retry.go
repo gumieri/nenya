@@ -67,24 +67,37 @@ func waitWithCancel(ctx context.Context, d time.Duration) {
 	}
 }
 
-func (p *Proxy) forwardToUpstream(gw *gateway.NenyaGateway,
-	w http.ResponseWriter,
-	r *http.Request,
-	targets []routing.UpstreamTarget,
-	payload map[string]interface{},
-	cooldownDuration time.Duration,
-	tokenCount int,
-	agentName string,
-	maxRetries int,
-	cacheKey string,
-) {
-	ctxLogger := gw.Logger.With("operation", "forward", "agent", agentName)
+// forwardOptions holds the parameters for forwarding a request upstream.
+type forwardOptions struct {
+	Targets         []routing.UpstreamTarget
+	Payload         map[string]any
+	Cooldown        time.Duration
+	TokenCount      int
+	AgentName       string
+	MaxRetries     int
+	CacheKey        string
+}
 
-	originalPayload, err := json.Marshal(payload)
+// retryLoop encapsulates the state and logic for retrying upstream requests.
+type retryLoop struct {
+	p               *Proxy
+	gw              *gateway.NenyaGateway
+	w               http.ResponseWriter
+	r               *http.Request
+	opts            forwardOptions
+	ctxLogger        *slog.Logger
+	originalPayload  []byte
+	attempt         int
+}
+
+// newRetryLoop creates a retryLoop with the given parameters.
+func newRetryLoop(p *Proxy, gw *gateway.NenyaGateway, w http.ResponseWriter, r *http.Request, opts forwardOptions) (*retryLoop, error) {
+	ctxLogger := gw.Logger.With("operation", "forward", "agent", opts.AgentName)
+	
+	originalPayload, err := json.Marshal(opts.Payload)
 	if err != nil {
 		ctxLogger.Error("failed to marshal original payload for retry loop", "err", err)
-		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
-		return
+		return nil, err
 	}
 
 	if gw.Config.Compaction.Enabled && gw.Config.Compaction.JSONMinify {
@@ -97,60 +110,101 @@ func (p *Proxy) forwardToUpstream(gw *gateway.NenyaGateway,
 		}
 	}
 
-	attempt := 0
+	return &retryLoop{
+		p:               p,
+		gw:              gw,
+		w:               w,
+		r:               r,
+		opts:            opts,
+		ctxLogger:       ctxLogger,
+		originalPayload: originalPayload,
+	}, nil
+}
+
+// Run executes the retry loop, returning true if a response was successfully streamed.
+func (rl *retryLoop) Run() bool {
 retryLoop:
-	for i, target := range targets {
-		if maxRetries > 0 && attempt >= maxRetries {
-			ctxLogger.Warn("max retries reached", "attempt", attempt, "max", maxRetries)
+	for i, target := range rl.opts.Targets {
+		if rl.opts.MaxRetries > 0 && rl.attempt >= rl.opts.MaxRetries {
+			rl.ctxLogger.Warn("max retries reached", "attempt", rl.attempt, "max", rl.opts.MaxRetries)
 			break retryLoop
 		}
 
 		workingPayload := make(map[string]interface{})
-		if err := json.Unmarshal(originalPayload, &workingPayload); err != nil {
-			ctxLogger.Error("failed to unmarshal payload for target",
-				"target", i+1, "total", len(targets), "err", err)
+		if err := json.Unmarshal(rl.originalPayload, &workingPayload); err != nil {
+			rl.ctxLogger.Error("failed to unmarshal payload for target",
+				"target", i+1, "total", len(rl.opts.Targets), "err", err)
 			continue
 		}
 
-		action := p.prepareAndSend(gw, r, i, targets, target, workingPayload, cooldownDuration, tokenCount, agentName)
+		action := rl.prepareAndSend(i, target, workingPayload)
 		switch action.kind {
 		case actionContinue:
 			continue
 		case actionError:
-			attempt++
+			rl.attempt++
 			action.body, _ = io.ReadAll(io.LimitReader(action.resp.Body, pipeline.MaxErrorBodyBytes))
 			_ = action.resp.Body.Close()
-			shouldRetry, retryDelay := p.handleUpstreamError(gw, i, targets, target, cooldownDuration, agentName, action)
+			shouldRetry, retryDelay := rl.handleUpstreamError(i, target, action)
 			action.cancel()
 			if shouldRetry {
-				if maxRetries > 0 && attempt >= maxRetries {
+				if rl.opts.MaxRetries > 0 && rl.attempt >= rl.opts.MaxRetries {
 					break retryLoop
 				}
 				if retryDelay > 0 {
-					ctxLogger.Info("retrying with parsed delay",
+					rl.ctxLogger.Info("retrying with parsed delay",
 						"model", target.Model, "delay_ms", retryDelay.Milliseconds())
-					waitWithCancel(r.Context(), retryDelay)
+					waitWithCancel(rl.r.Context(), retryDelay)
 				} else {
-					backoff := calculateBackoff(attempt - 1)
-					ctxLogger.Info("retrying with exponential backoff",
-						"model", target.Model, "attempt", attempt, "delay_ms", backoff.Milliseconds())
-					waitWithCancel(r.Context(), backoff)
+					backoff := calculateBackoff(rl.attempt - 1)
+					rl.ctxLogger.Info("retrying with exponential backoff",
+						"model", target.Model, "attempt", rl.attempt, "delay_ms", backoff.Milliseconds())
+					waitWithCancel(rl.r.Context(), backoff)
 				}
 				continue
 			}
-			http.Error(w, "Upstream provider error", action.resp.StatusCode)
-			return
+			http.Error(rl.w, "Upstream provider error", action.resp.StatusCode)
+			return true
 		case actionStream:
-			p.streamResponse(gw, w, r, target, agentName, action, cacheKey, cooldownDuration)
-			return
+			rl.p.streamResponse(rl.gw, rl.w, rl.r, target, rl.opts.AgentName, action, rl.opts.CacheKey, rl.opts.Cooldown)
+			return true
 		}
 	}
+	return false
+}
 
-	ctxLogger.Error("all upstream targets exhausted", "total", len(targets), "attempts", attempt)
-	if agentName != "" {
-		gw.Metrics.RecordExhausted(agentName)
+// prepareAndSend wraps the proxy's prepareAndSend method.
+func (rl *retryLoop) prepareAndSend(idx int, target routing.UpstreamTarget, payload map[string]interface{}) upstreamAction {
+	return rl.p.prepareAndSend(rl.gw, rl.r, idx, rl.opts.Targets, target, payload, rl.opts.Cooldown, rl.opts.TokenCount, rl.opts.AgentName)
+}
+
+// handleUpstreamError wraps the proxy's handleUpstreamError method.
+func (rl *retryLoop) handleUpstreamError(idx int, target routing.UpstreamTarget, action upstreamAction) (bool, time.Duration) {
+	return rl.p.handleUpstreamError(rl.gw, idx, rl.opts.Targets, target, rl.opts.Cooldown, rl.opts.AgentName, action)
+}
+
+// Exhausted signals that all targets have been exhausted.
+func (rl *retryLoop) Exhausted() {
+	rl.ctxLogger.Error("all upstream targets exhausted", "total", len(rl.opts.Targets), "attempts", rl.attempt)
+	if rl.opts.AgentName != "" {
+		rl.gw.Metrics.RecordExhausted(rl.opts.AgentName)
 	}
-	http.Error(w, "All upstream targets exhausted", http.StatusServiceUnavailable)
+	http.Error(rl.w, "All upstream targets exhausted", http.StatusServiceUnavailable)
+}
+
+// forwardToUpstream processes chat completion requests with retry logic.
+func (p *Proxy) forwardToUpstream(gw *gateway.NenyaGateway, w http.ResponseWriter, r *http.Request, opts forwardOptions) {
+	rl, err := newRetryLoop(p, gw, w, r, opts)
+	if err != nil {
+		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+		return
+	}
+	
+	if rl.Run() {
+		return
+	}
+	
+	rl.Exhausted()
 }
 
 func (p *Proxy) prepareAndSend(gw *gateway.NenyaGateway,

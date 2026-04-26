@@ -36,89 +36,115 @@ func (p *Proxy) Gateway() *gateway.NenyaGateway {
 
 // ServeHTTP handles incoming HTTP requests and routes them to appropriate handlers.
 func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	defer func() {
-		if rec := recover(); rec != nil {
-			if gw := p.Gateway(); gw != nil {
-				gw.Logger.Error("panic recovered", "err", rec, "stack", string(debug.Stack()))
-				gw.Metrics.RecordPanic()
-			}
-			http.Error(w, "Internal Server Error", http.StatusInternalServerError)
-		}
-	}()
+	defer p.recoverPanic(w)
 
-	if gw := p.Gateway(); gw != nil {
-		switch {
-		case r.URL.Path == "/healthz":
-			if r.Method != http.MethodGet {
-				http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
-				return
-			}
-			infra.ObserveHTTPFunc(gw.Metrics, func(w http.ResponseWriter, r *http.Request) {
-				p.handleHealthz(w, r)
-			})(w, r)
-			return
-		case r.URL.Path == "/statsz":
-			if r.Method != http.MethodGet {
-				http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
-				return
-			}
-			if !p.authenticateRequest(r, w) {
-				return
-			}
-			infra.ObserveHTTP(gw.Metrics, p.handleStats)(w, r)
-			return
-		case r.URL.Path == "/metrics":
-			if !p.authenticateRequest(r, w) {
-				return
-			}
-			infra.ObserveHTTPFunc(gw.Metrics, p.handleMetrics)(w, r)
-			return
-		case r.URL.Path == "/v1/models" && r.Method == http.MethodGet:
-			if !p.authenticateRequest(r, w) {
-				return
-			}
-			infra.ObserveHTTP(gw.Metrics, p.handleModels)(w, r)
-			return
-		case r.URL.Path == "/v1/chat/completions" && r.Method == http.MethodPost:
-			if !p.authenticateRequest(r, w) {
-				return
-			}
-			infra.ObserveHTTPFunc(gw.Metrics, func(w http.ResponseWriter, r *http.Request) {
-				p.handleChatCompletions(gw, w, r)
-			})(w, r)
-			return
-		case r.URL.Path == "/v1/embeddings" && r.Method == http.MethodPost:
-			if !p.authenticateRequest(r, w) {
-				return
-			}
-			infra.ObserveHTTPFunc(gw.Metrics, func(w http.ResponseWriter, r *http.Request) {
-				p.handleEmbeddings(gw, w, r)
-			})(w, r)
-			return
-		case r.URL.Path == "/v1/responses" && r.Method == http.MethodPost:
-			if !p.authenticateRequest(r, w) {
-				return
-			}
-			infra.ObserveHTTPFunc(gw.Metrics, func(w http.ResponseWriter, r *http.Request) {
-				p.handleResponses(gw, w, r)
-			})(w, r)
-			return
-		case strings.HasPrefix(r.URL.Path, "/proxy/"):
-			if !p.authenticateRequest(r, w) {
-				return
-			}
-			infra.ObserveHTTPFunc(gw.Metrics, func(w http.ResponseWriter, r *http.Request) {
-				p.handlePassthrough(gw, w, r)
-			})(w, r)
-			return
-		default:
-			http.Error(w, "Not Found", http.StatusNotFound)
-			return
-		}
-	} else {
+	gw := p.Gateway()
+	if gw == nil {
 		http.Error(w, "Gateway not initialized", http.StatusServiceUnavailable)
 		return
 	}
+
+	switch {
+	case r.URL.Path == "/healthz":
+		p.serveHealthzRoute(gw, w, r)
+	case r.URL.Path == "/statsz":
+		p.serveStatszRoute(gw, w, r)
+	case r.URL.Path == "/metrics":
+		p.serveMetricsRoute(gw, w, r)
+	case r.URL.Path == "/v1/models" && r.Method == http.MethodGet:
+		p.serveModelsRoute(gw, w, r)
+	case r.URL.Path == "/v1/chat/completions" && r.Method == http.MethodPost:
+		p.serveChatRoute(gw, w, r)
+	case r.URL.Path == "/v1/embeddings" && r.Method == http.MethodPost:
+		p.serveEmbeddingsRoute(gw, w, r)
+	case r.URL.Path == "/v1/responses" && r.Method == http.MethodPost:
+		p.serveResponsesRoute(gw, w, r)
+	case strings.HasPrefix(r.URL.Path, "/proxy/"):
+		p.serveProxyRoute(gw, w, r)
+	default:
+		http.Error(w, "Not Found", http.StatusNotFound)
+	}
+}
+
+func (p *Proxy) recoverPanic(w http.ResponseWriter) {
+	if rec := recover(); rec != nil {
+		if gw := p.Gateway(); gw != nil {
+			gw.Logger.Error("panic recovered", "err", rec, "stack", string(debug.Stack()))
+			gw.Metrics.RecordPanic()
+		}
+		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+	}
+}
+
+func (p *Proxy) serveHealthzRoute(gw *gateway.NenyaGateway, w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	infra.ObserveHTTPFunc(gw.Metrics, func(w http.ResponseWriter, r *http.Request) {
+		p.handleHealthz(w, r)
+	})(w, r)
+}
+
+func (p *Proxy) serveStatszRoute(gw *gateway.NenyaGateway, w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if !p.authenticateRequest(r, w) {
+		return
+	}
+	infra.ObserveHTTP(gw.Metrics, p.handleStats)(w, r)
+}
+
+func (p *Proxy) serveMetricsRoute(gw *gateway.NenyaGateway, w http.ResponseWriter, r *http.Request) {
+	if !p.authenticateRequest(r, w) {
+		return
+	}
+	infra.ObserveHTTPFunc(gw.Metrics, p.handleMetrics)(w, r)
+}
+
+func (p *Proxy) serveModelsRoute(gw *gateway.NenyaGateway, w http.ResponseWriter, r *http.Request) {
+	if !p.authenticateRequest(r, w) {
+		return
+	}
+	infra.ObserveHTTP(gw.Metrics, p.handleModels)(w, r)
+}
+
+func (p *Proxy) serveChatRoute(gw *gateway.NenyaGateway, w http.ResponseWriter, r *http.Request) {
+	if !p.authenticateRequest(r, w) {
+		return
+	}
+	infra.ObserveHTTPFunc(gw.Metrics, func(w http.ResponseWriter, r *http.Request) {
+		p.handleChatCompletions(gw, w, r)
+	})(w, r)
+}
+
+func (p *Proxy) serveEmbeddingsRoute(gw *gateway.NenyaGateway, w http.ResponseWriter, r *http.Request) {
+	if !p.authenticateRequest(r, w) {
+		return
+	}
+	infra.ObserveHTTPFunc(gw.Metrics, func(w http.ResponseWriter, r *http.Request) {
+		p.handleEmbeddings(gw, w, r)
+	})(w, r)
+}
+
+func (p *Proxy) serveResponsesRoute(gw *gateway.NenyaGateway, w http.ResponseWriter, r *http.Request) {
+	if !p.authenticateRequest(r, w) {
+		return
+	}
+	infra.ObserveHTTPFunc(gw.Metrics, func(w http.ResponseWriter, r *http.Request) {
+		p.handleResponses(gw, w, r)
+	})(w, r)
+}
+
+func (p *Proxy) serveProxyRoute(gw *gateway.NenyaGateway, w http.ResponseWriter, r *http.Request) {
+	if !p.authenticateRequest(r, w) {
+		return
+	}
+	infra.ObserveHTTPFunc(gw.Metrics, func(w http.ResponseWriter, r *http.Request) {
+		p.handlePassthrough(gw, w, r)
+	})(w, r)
 }
 
 // authenticateRequest validates the authorization token in incoming requests.
