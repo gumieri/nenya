@@ -1,6 +1,7 @@
 package routing
 
 import (
+	"log/slog"
 	"strings"
 
 	"nenya/internal/pipeline"
@@ -55,6 +56,32 @@ func SanitizePayload(deps TransformDeps, payload map[string]interface{}, provide
 					deps.Logger.Debug("stripped reasoning_content for non-reasoning provider", "provider", providerName)
 				}
 			}
+		}
+	}
+
+	stripDeepSeekThinkingParams(payload, providerName, deps.Logger)
+}
+
+func stripDeepSeekThinkingParams(payload map[string]interface{}, providerName string, logger *slog.Logger) {
+	if providerName != "deepseek" {
+		return
+	}
+	thinking, ok := payload["thinking"]
+	if !ok {
+		return
+	}
+	tm, ok := thinking.(map[string]interface{})
+	if !ok {
+		return
+	}
+	typ, ok := tm["type"].(string)
+	if !ok || typ != "enabled" {
+		return
+	}
+	for _, key := range []string{"temperature", "top_p", "presence_penalty", "frequency_penalty"} {
+		if _, has := payload[key]; has {
+			delete(payload, key)
+			logger.Debug("stripped param ignored in thinking mode", "param", key, "provider", providerName)
 		}
 	}
 }

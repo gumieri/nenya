@@ -7,10 +7,12 @@ import (
 )
 
 type modelStats struct {
-	Requests     uint64 `json:"requests"`
-	InputTokens  uint64 `json:"input_tokens"`
-	OutputTokens uint64 `json:"output_tokens"`
-	Errors       uint64 `json:"errors"`
+	Requests        uint64 `json:"requests"`
+	InputTokens     uint64 `json:"input_tokens"`
+	OutputTokens    uint64 `json:"output_tokens"`
+	CacheHitTokens  uint64 `json:"cache_hit_tokens"`
+	CacheMissTokens uint64 `json:"cache_miss_tokens"`
+	Errors          uint64 `json:"errors"`
 }
 
 type UsageTracker struct {
@@ -60,6 +62,16 @@ func (u *UsageTracker) RecordError(model string) {
 	atomic.AddUint64(&s.Errors, 1)
 }
 
+func (u *UsageTracker) RecordCacheHit(model string, tokens int) {
+	s := u.GetOrCreate(model)
+	atomic.AddUint64(&s.CacheHitTokens, uint64(tokens))
+}
+
+func (u *UsageTracker) RecordCacheMiss(model string, tokens int) {
+	s := u.GetOrCreate(model)
+	atomic.AddUint64(&s.CacheMissTokens, uint64(tokens))
+}
+
 func (u *UsageTracker) Snapshot() map[string]interface{} {
 	u.mu.RLock()
 	defer u.mu.RUnlock()
@@ -67,10 +79,12 @@ func (u *UsageTracker) Snapshot() map[string]interface{} {
 	modelsI := make(map[string]interface{}, len(u.models))
 	for name, s := range u.models {
 		modelsI[name] = map[string]interface{}{
-			"requests":      atomic.LoadUint64(&s.Requests),
-			"input_tokens":  atomic.LoadUint64(&s.InputTokens),
-			"output_tokens": atomic.LoadUint64(&s.OutputTokens),
-			"errors":        atomic.LoadUint64(&s.Errors),
+			"requests":           atomic.LoadUint64(&s.Requests),
+			"input_tokens":       atomic.LoadUint64(&s.InputTokens),
+			"output_tokens":      atomic.LoadUint64(&s.OutputTokens),
+			"cache_hit_tokens":   atomic.LoadUint64(&s.CacheHitTokens),
+			"cache_miss_tokens":  atomic.LoadUint64(&s.CacheMissTokens),
+			"errors":            atomic.LoadUint64(&s.Errors),
 		}
 	}
 

@@ -290,6 +290,9 @@ func (p *Proxy) applyContentPipeline(gw *gateway.NenyaGateway, ctx context.Conte
 		if !isMap {
 			continue
 		}
+		if pipeline.ShouldSkipRedaction(msgNode, gw.Config.PrefixCache) {
+			continue
+		}
 		if applyRedactToContent(msgNode, func(s string) string {
 			return pipeline.RedactSecrets(s, gw.Config.SecurityFilter.Enabled, gw.SecretPatterns, gw.Config.SecurityFilter.RedactionLabel)
 		}) {
@@ -305,6 +308,9 @@ func (p *Proxy) applyContentPipeline(gw *gateway.NenyaGateway, ctx context.Conte
 		for _, msgRaw := range messages {
 			msgNode, isMap := msgRaw.(map[string]interface{})
 			if !isMap {
+				continue
+			}
+			if pipeline.ShouldSkipRedaction(msgNode, gw.Config.PrefixCache) {
 				continue
 			}
 			if applyRedactToContent(msgNode, func(s string) string {
@@ -996,6 +1002,9 @@ func (p *Proxy) forwardToUpstreamWithMCP(gw *gateway.NenyaGateway,
 				"role":       "assistant",
 				"content":    nil,
 				"tool_calls": buildOpenAIToolCalls(mcpCalls),
+			}
+			if buf.reasoningContent != "" {
+				mcpAssistantMsg["reasoning_content"] = buf.reasoningContent
 			}
 			appendMCPResults(working, mcpCalls, results, mcpAssistantMsg)
 

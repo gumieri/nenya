@@ -138,7 +138,7 @@ func TestSSETransformingReader_OnUsageCallback(t *testing.T) {
 data: {"choices":[],"usage":{"completion_tokens":10,"prompt_tokens":5,"total_tokens":15}}
 `
 	var gotCompletion, gotPrompt, gotTotal int
-	cb := func(completion, prompt, total int) {
+	cb := func(completion, prompt, total, cacheHit, cacheMiss int) {
 		gotCompletion = completion
 		gotPrompt = prompt
 		gotTotal = total
@@ -162,7 +162,7 @@ func TestSSETransformingReader_OnUsageNotFired(t *testing.T) {
 data: {"choices":[{"delta":{"content":"bye"}}]}
 `
 	fired := false
-	cb := func(_, _, _ int) {
+	cb := func(_, _, _, _, _ int) {
 		fired = true
 	}
 
@@ -244,7 +244,7 @@ func TestExtractUsageFromMap(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			fired := false
 			r := &SSETransformingReader{
-				onUsage: func(_, _, _ int) { fired = true },
+				onUsage: func(_, _, _, _, _ int) { fired = true },
 			}
 			r.extractUsageFromMap(tt.chunk)
 			if fired != tt.wantFired {
