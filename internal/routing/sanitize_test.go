@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"nenya/internal/config"
+	"nenya/internal/discovery"
 )
 
 func defaultSanitizeDeps() TransformDeps {
@@ -36,7 +37,7 @@ func TestSanitizePayload_StripStreamOptions(t *testing.T) {
 			"include_usage": true,
 		},
 	}
-	SanitizePayload(deps, payload, "nvidia")
+	SanitizePayload(deps, payload, "nvidia", "nemotron-3-super")
 	if _, ok := payload["stream_options"]; ok {
 		t.Fatal("stream_options should be stripped for nvidia")
 	}
@@ -47,7 +48,7 @@ func TestSanitizePayload_StripStreamOptions(t *testing.T) {
 			"include_usage": true,
 		},
 	}
-	SanitizePayload(deps, payload2, "gemini")
+	SanitizePayload(deps, payload2, "gemini", "gemini-2.5-flash")
 	if _, ok := payload2["stream_options"]; ok {
 		t.Fatal("stream_options should be stripped for gemini")
 	}
@@ -66,7 +67,7 @@ func TestSanitizePayload_KeepStreamOptions(t *testing.T) {
 			"include_usage": true,
 		},
 	}
-	SanitizePayload(deps, payload, "deepseek")
+	SanitizePayload(deps, payload, "deepseek", "deepseek-v4-pro")
 	if _, ok := payload["stream_options"]; !ok {
 		t.Fatal("stream_options should be kept for deepseek")
 	}
@@ -83,7 +84,7 @@ func TestSanitizePayload_StripAutoToolChoice(t *testing.T) {
 		"model":       "nemotron-3-super",
 		"tool_choice": "auto",
 	}
-	SanitizePayload(deps, payload, "nvidia")
+	SanitizePayload(deps, payload, "nvidia", "nemotron-3-super")
 	if _, ok := payload["tool_choice"]; ok {
 		t.Fatal("tool_choice \"auto\" should be stripped for nvidia")
 	}
@@ -100,7 +101,7 @@ func TestSanitizePayload_KeepAutoToolChoice(t *testing.T) {
 		"model":       "deepseek-v4-pro",
 		"tool_choice": "auto",
 	}
-	SanitizePayload(deps, payload, "deepseek")
+	SanitizePayload(deps, payload, "deepseek", "deepseek-v4-pro")
 	if v, ok := payload["tool_choice"]; !ok || v != "auto" {
 		t.Fatal("tool_choice \"auto\" should be kept for deepseek")
 	}
@@ -117,7 +118,7 @@ func TestSanitizePayload_StripNonStringToolChoice(t *testing.T) {
 		"model":       "nemotron-3-super",
 		"tool_choice": map[string]interface{}{"type": "function", "function": map[string]interface{}{"name": "foo"}},
 	}
-	SanitizePayload(deps, payload, "nvidia")
+	SanitizePayload(deps, payload, "nvidia", "nemotron-3-super")
 	if _, ok := payload["tool_choice"]; !ok {
 		t.Fatal("non-string tool_choice (object) should be kept")
 	}
@@ -142,7 +143,7 @@ func TestSanitizePayload_FlattenContentArrays(t *testing.T) {
 			},
 		},
 	}
-	SanitizePayload(deps, payload, "ollama")
+	SanitizePayload(deps, payload, "ollama", "qwen2.5-coder:7b")
 	msgs := payload["messages"].([]interface{})
 	content := msgs[0].(map[string]interface{})["content"].(string)
 	if content != "hello\nworld" {
@@ -164,7 +165,7 @@ func TestSanitizePayload_KeepContentArrays(t *testing.T) {
 		"model":    "deepseek-v4-pro",
 		"messages": []interface{}{map[string]interface{}{"role": "user", "content": contentArr}},
 	}
-	SanitizePayload(deps, payload, "deepseek")
+	SanitizePayload(deps, payload, "deepseek", "deepseek-v4-pro")
 	msgs := payload["messages"].([]interface{})
 	arr, ok := msgs[0].(map[string]interface{})["content"].([]interface{})
 	if !ok || len(arr) != 1 {
@@ -182,7 +183,8 @@ func TestSanitizePayload_NoMessages(t *testing.T) {
 	payload := map[string]interface{}{
 		"model": "qwen2.5-coder:7b",
 	}
-	SanitizePayload(deps, payload, "nvidia")
+
+	SanitizePayload(deps, payload, "nvidia", "qwen2.5-coder:7b")
 }
 
 func TestFlattenContentArray(t *testing.T) {
@@ -249,7 +251,7 @@ func TestSanitizePayload_ToolCallsPassthrough(t *testing.T) {
 		},
 	}
 
-	SanitizePayload(deps, payload, "nvidia")
+	SanitizePayload(deps, payload, "nvidia", "nemotron-3-super")
 
 	msgs := payload["messages"].([]interface{})
 	assistant := msgs[0].(map[string]interface{})
@@ -291,7 +293,7 @@ func TestSanitizePayload_ReasoningParamsPassthrough(t *testing.T) {
 		},
 	}
 
-	SanitizePayload(deps, payload, "nvidia")
+	SanitizePayload(deps, payload, "nvidia", "nemotron-3-super")
 
 	if payload["reasoning_effort"] != "high" {
 		t.Errorf("reasoning_effort should pass through, got %v", payload["reasoning_effort"])
@@ -325,7 +327,7 @@ func TestSanitizePayload_StripReasoningContentForNonReasoningProvider(t *testing
 		},
 	}
 
-	SanitizePayload(deps, payload, "nvidia")
+	SanitizePayload(deps, payload, "nvidia", "nemotron-3-super")
 	msgs := payload["messages"].([]interface{})
 	assistant := msgs[1].(map[string]interface{})
 	if _, exists := assistant["reasoning_content"]; exists {
@@ -354,7 +356,7 @@ func TestSanitizePayload_KeepReasoningContentForReasoningProvider(t *testing.T) 
 		},
 	}
 
-	SanitizePayload(deps, payload, "deepseek")
+	SanitizePayload(deps, payload, "deepseek", "deepseek-v4-pro")
 	msgs := payload["messages"].([]interface{})
 	assistant := msgs[1].(map[string]interface{})
 	if _, exists := assistant["reasoning_content"]; !exists {
@@ -382,7 +384,7 @@ func TestSanitizePayload_KeepEmptyReasoningContent(t *testing.T) {
 		},
 	}
 
-	SanitizePayload(deps, payload, "nvidia")
+	SanitizePayload(deps, payload, "nvidia", "nemotron-3-super")
 	msgs := payload["messages"].([]interface{})
 	assistant := msgs[0].(map[string]interface{})
 	if _, exists := assistant["reasoning_content"]; !exists {
@@ -464,7 +466,7 @@ func TestSanitizePayload_StripDeepSeekThinkingParams(t *testing.T) {
 			for k, v := range tt.extra {
 				payload[k] = v
 			}
-			SanitizePayload(deps, payload, tt.provider)
+			SanitizePayload(deps, payload, tt.provider, "deepseek-v4-pro")
 			for _, key := range tt.want {
 				if _, exists := payload[key]; exists {
 					t.Errorf("expected %q to be stripped, but it remains", key)
@@ -476,6 +478,168 @@ func TestSanitizePayload_StripDeepSeekThinkingParams(t *testing.T) {
 						t.Errorf("expected %q to be preserved, but it was stripped", k)
 					}
 				}
+			}
+		})
+	}
+}
+
+func TestSanitizePayload_StripReasoningForNonReasoningModel(t *testing.T) {
+	catalog := discovery.NewModelCatalog()
+	catalog.Add(discovery.DiscoveredModel{
+		ID:       "qwen/qwen3-32b",
+		Provider: "groq",
+		Metadata: &discovery.ModelMetadata{},
+	})
+
+	deps := defaultSanitizeDeps()
+	deps.Catalog = catalog
+
+	payload := map[string]interface{}{
+		"model": "qwen/qwen3-32b",
+		"messages": []interface{}{
+			map[string]interface{}{
+				"role":              "assistant",
+				"content":           "answer",
+				"reasoning_content": "thoughts from a reasoning model",
+			},
+		},
+	}
+
+	SanitizePayload(deps, payload, "groq", "qwen/qwen3-32b")
+	msgs := payload["messages"].([]interface{})
+	assistant := msgs[0].(map[string]interface{})
+	if _, exists := assistant["reasoning_content"]; exists {
+		t.Fatal("reasoning_content should be stripped for non-reasoning model on reasoning provider")
+	}
+}
+
+func TestSanitizePayload_KeepReasoningForReasoningModel(t *testing.T) {
+	catalog := discovery.NewModelCatalog()
+	catalog.Add(discovery.DiscoveredModel{
+		ID:       "deepseek-r1",
+		Provider: "groq",
+		Metadata: &discovery.ModelMetadata{
+			SupportsReasoning: true,
+		},
+	})
+
+	deps := defaultSanitizeDeps()
+	deps.Catalog = catalog
+
+	payload := map[string]interface{}{
+		"model": "deepseek-r1",
+		"messages": []interface{}{
+			map[string]interface{}{
+				"role":              "assistant",
+				"content":           "answer",
+				"reasoning_content": "required reasoning",
+			},
+		},
+	}
+
+	SanitizePayload(deps, payload, "groq", "deepseek-r1")
+	msgs := payload["messages"].([]interface{})
+	assistant := msgs[0].(map[string]interface{})
+	if _, exists := assistant["reasoning_content"]; !exists {
+		t.Fatal("reasoning_content should be preserved for reasoning model on reasoning provider")
+	}
+}
+
+func TestRepairMessageOrdering(t *testing.T) {
+	tests := []struct {
+		name       string
+		messages   []interface{}
+		wantRepair bool
+		wantLen    int
+	}{
+		{
+			name: "valid sequence no repair",
+			messages: []interface{}{
+				map[string]interface{}{"role": "user", "content": "hello"},
+				map[string]interface{}{"role": "assistant", "content": "hi"},
+			},
+			wantRepair: false,
+			wantLen:    2,
+		},
+		{
+			name: "tool then user needs bridge",
+			messages: []interface{}{
+				map[string]interface{}{"role": "user", "content": "hello"},
+				map[string]interface{}{"role": "assistant", "content": "", "tool_calls": []interface{}{}},
+				map[string]interface{}{"role": "tool", "tool_call_id": "c1", "content": "result"},
+				map[string]interface{}{"role": "user", "content": "next question"},
+			},
+			wantRepair: true,
+			wantLen:    5,
+		},
+		{
+			name: "multiple tool then user",
+			messages: []interface{}{
+				map[string]interface{}{"role": "user", "content": "hello"},
+				map[string]interface{}{"role": "assistant", "content": "", "tool_calls": []interface{}{}},
+				map[string]interface{}{"role": "tool", "tool_call_id": "c1", "content": "r1"},
+				map[string]interface{}{"role": "tool", "tool_call_id": "c2", "content": "r2"},
+				map[string]interface{}{"role": "user", "content": "next"},
+			},
+			wantRepair: true,
+			wantLen:    6,
+		},
+		{
+			name: "tool then assistant no repair",
+			messages: []interface{}{
+				map[string]interface{}{"role": "user", "content": "hello"},
+				map[string]interface{}{"role": "assistant", "content": "", "tool_calls": []interface{}{}},
+				map[string]interface{}{"role": "tool", "tool_call_id": "c1", "content": "result"},
+				map[string]interface{}{"role": "assistant", "content": "summary"},
+			},
+			wantRepair: false,
+			wantLen:    4,
+		},
+		{
+			name: "empty messages",
+			messages: []interface{}{
+				map[string]interface{}{"role": "assistant", "content": "", "tool_calls": []interface{}{}},
+				map[string]interface{}{"role": "tool", "tool_call_id": "c1", "content": "result"},
+				map[string]interface{}{"role": "user", "content": "next"},
+			},
+			wantRepair: true,
+			wantLen:    4,
+		},
+		{
+			name:       "single message no repair",
+			messages:   []interface{}{map[string]interface{}{"role": "user", "content": "hello"}},
+			wantRepair: false,
+			wantLen:    1,
+		},
+		{
+			name:       "empty slice no repair",
+			messages:   []interface{}{},
+			wantRepair: false,
+			wantLen:    0,
+		},
+		{
+			name: "double tool-user repair",
+			messages: []interface{}{
+				map[string]interface{}{"role": "assistant", "content": "", "tool_calls": []interface{}{}},
+				map[string]interface{}{"role": "tool", "tool_call_id": "c1", "content": "r1"},
+				map[string]interface{}{"role": "user", "content": "followup1"},
+				map[string]interface{}{"role": "assistant", "content": "", "tool_calls": []interface{}{}},
+				map[string]interface{}{"role": "tool", "tool_call_id": "c2", "content": "r2"},
+				map[string]interface{}{"role": "user", "content": "followup2"},
+			},
+			wantRepair: true,
+			wantLen:    8,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			repaired, repairedMessages := repairMessageOrdering(tt.messages)
+			if repaired != tt.wantRepair {
+				t.Errorf("repaired = %v, want %v", repaired, tt.wantRepair)
+			}
+			if len(repairedMessages) != tt.wantLen {
+				t.Errorf("len(repairedMessages) = %d, want %d", len(repairedMessages), tt.wantLen)
 			}
 		})
 	}
