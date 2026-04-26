@@ -26,6 +26,55 @@ func (p PricingEntry) CalculateCost(inputTokens, outputTokens int64) float64 {
 	return inputCost + outputCost
 }
 
+// PricingSource is an interface for pricing data sources. It is reserved for future
+// use in implementing a pricing chain (e.g., StaticPricing → FallbackPricing) for
+// more flexible pricing resolution. Currently not integrated into the main discovery
+// flow.
+type PricingSource interface {
+	GetPricing(ctx context.Context, modelID string) (PricingEntry, bool)
+}
+
+// StaticPricing implements PricingSource by looking up pricing from a static map.
+// Reserved for future use in pricing chain implementation.
+type StaticPricing struct {
+	pricing map[string]PricingEntry
+}
+
+func NewStaticPricing(pricing map[string]PricingEntry) *StaticPricing {
+	return &StaticPricing{pricing: pricing}
+}
+
+func (sp *StaticPricing) GetPricing(ctx context.Context, modelID string) (PricingEntry, bool) {
+	if sp.pricing == nil {
+		return PricingEntry{}, false
+	}
+	p, ok := sp.pricing[modelID]
+	return p, ok
+}
+
+// FallbackPricing implements PricingSource by returning a fixed high-cost estimate.
+// Reserved for future use in pricing chain implementation when no other pricing source
+// is available.
+type FallbackPricing struct {
+	InputCostPer1M  float64
+	OutputCostPer1M float64
+}
+
+func NewFallbackPricing(inputCost, outputCost float64) *FallbackPricing {
+	return &FallbackPricing{
+		InputCostPer1M:  inputCost,
+		OutputCostPer1M: outputCost,
+	}
+}
+
+func (fp *FallbackPricing) GetPricing(ctx context.Context, modelID string) (PricingEntry, bool) {
+	return PricingEntry{
+		InputCostPer1M:  fp.InputCostPer1M,
+		OutputCostPer1M: fp.OutputCostPer1M,
+		Currency:        "USD",
+	}, true
+}
+
 type openRouterPricing struct {
 	Prompt     string `json:"prompt"`
 	Completion string `json:"completion"`
