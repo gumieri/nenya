@@ -40,7 +40,7 @@ type chatRequest struct {
 	HasMCPTools  bool
 	SoftLimit    int
 	HardLimit    int
-	WindowMaxCtx  int
+	WindowMaxCtx int
 	Profile      pipeline.ClientProfile
 	Messages     []any
 }
@@ -66,7 +66,7 @@ func (p *Proxy) validateChatRequest(w http.ResponseWriter, r *http.Request, gw *
 	defer func() { _ = r.Body.Close() }()
 
 	if r.Context().Err() != nil {
-		return nil, &httpError{http.StatusRequestEntityTooLarge, "Request cancelled"}
+		return nil, &httpError{http.StatusRequestEntityTooLarge, "Request canceled"}
 	}
 
 	var payload map[string]any
@@ -86,8 +86,8 @@ func (p *Proxy) validateChatRequest(w http.ResponseWriter, r *http.Request, gw *
 	}
 
 	req := &chatRequest{
-		Payload:   payload,
-		ModelName: modelName,
+		Payload:    payload,
+		ModelName:  modelName,
 		TokenCount: gw.CountRequestTokens(payload),
 	}
 

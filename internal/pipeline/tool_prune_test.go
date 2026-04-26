@@ -470,7 +470,7 @@ func TestExtractToolCallID(t *testing.T) {
 
 func TestPruneStaleToolCalls_PreserveReasoningContent(t *testing.T) {
 	cfg := config.CompactionConfig{
-		PruneStaleTools: true,
+		PruneStaleTools:      true,
 		ToolProtectionWindow: 4,
 	}
 
@@ -485,7 +485,7 @@ func TestPruneStaleToolCalls_PreserveReasoningContent(t *testing.T) {
 						"type": "function",
 						"function": map[string]interface{}{
 							"name":      "get_weather",
-							"arguments":   "{\"location\":\"Paris\"}",
+							"arguments": "{\"location\":\"Paris\"}",
 						},
 					},
 				},
