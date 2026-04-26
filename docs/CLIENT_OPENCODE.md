@@ -138,7 +138,7 @@ This is compatible with Nenya's content array handling. For providers without co
 
 ## Reasoning Models
 
-OpenCode sends `reasoning_effort` and `max_completion_tokens` for models with `CanReason: true` (o1, o3, DeepSeek-R1). These pass through Nenya untouched:
+OpenCode sends `reasoning_effort` and `max_completion_tokens` for models with `CanReason: true` (o1, o3, DeepSeek v4). These pass through Nenya untouched:
 
 ```json
 {
