@@ -2,9 +2,10 @@ package discovery
 
 import (
 	"log/slog"
+	"sort"
+	"strings"
 
 	"nenya/internal/config"
-	"nenya/internal/providers"
 )
 
 const (
@@ -16,10 +17,10 @@ type AutoAgentConfig struct {
 	Name        string
 	Description string
 	Strategy    string
-	Filter      func(DiscoveredModel, providers.ProviderSpec) bool
+	Filter      func(DiscoveredModel) bool
 }
 
-func GenerateAutoAgents(catalog *ModelCatalog, providersMap map[string]*config.Provider, logger *slog.Logger) map[string]config.AgentConfig {
+func GenerateAutoAgents(catalog *ModelCatalog, providersMap map[string]*config.Provider, cfg *config.AutoAgentsConfig, logger *slog.Logger) map[string]config.AgentConfig {
 	agents := make(map[string]config.AgentConfig)
 
 	agentConfigs := []AutoAgentConfig{
@@ -59,9 +60,21 @@ func GenerateAutoAgents(catalog *ModelCatalog, providersMap map[string]*config.P
 			Strategy:    AgentStrategyRoundRobin,
 			Filter:      isBalancedModel,
 		},
+		{
+			Name:        "auto_coding",
+			Description: "Code-optimized models with tool calling capability",
+			Strategy:    AgentStrategyFallback,
+			Filter:      isCodingModel,
+		},
 	}
 
 	for _, agentCfg := range agentConfigs {
+		category := strings.TrimPrefix(agentCfg.Name, "auto_")
+		if !cfg.IsEnabled(category) {
+			logger.Debug("auto-agent disabled by config", "agent", agentCfg.Name)
+			continue
+		}
+
 		models := filterModels(catalog, providersMap, agentCfg.Filter, logger)
 		if len(models) == 0 {
 			logger.Debug("auto-agent has no models, skipping", "agent", agentCfg.Name)
@@ -73,13 +86,33 @@ func GenerateAutoAgents(catalog *ModelCatalog, providersMap map[string]*config.P
 			Models:   models,
 		}
 
-		logger.Info("generated auto-agent", "agent", agentCfg.Name, "description", agentCfg.Description, "models", len(models))
+		modelIDs := make([]string, 0, len(models))
+		for _, m := range models {
+			modelIDs = append(modelIDs, m.Model)
+		}
+
+		logger.Info("generated auto-agent",
+			"agent", agentCfg.Name,
+			"description", agentCfg.Description,
+			"strategy", agentCfg.Strategy,
+			"models", modelIDs,
+		)
 	}
+
+	var agentNames []string
+	for name := range agents {
+		agentNames = append(agentNames, name)
+	}
+	sort.Strings(agentNames)
+	logger.Info("auto-agents summary",
+		"total_agents", len(agents),
+		"agents", agentNames,
+	)
 
 	return agents
 }
 
-func filterModels(catalog *ModelCatalog, providersMap map[string]*config.Provider, filter func(DiscoveredModel, providers.ProviderSpec) bool, logger *slog.Logger) []config.AgentModel {
+func filterModels(catalog *ModelCatalog, providersMap map[string]*config.Provider, filter func(DiscoveredModel) bool, logger *slog.Logger) []config.AgentModel {
 	var models []config.AgentModel
 
 	for _, m := range catalog.AllModels() {
@@ -92,12 +125,7 @@ func filterModels(catalog *ModelCatalog, providersMap map[string]*config.Provide
 			continue
 		}
 
-		spec, ok := providers.Get(m.Provider)
-		if !ok {
-			continue
-		}
-
-		if filter(m, spec) {
+		if filter(m) {
 			models = append(models, config.AgentModel{
 				Model:    m.ID,
 				Provider: m.Provider,
@@ -108,27 +136,49 @@ func filterModels(catalog *ModelCatalog, providersMap map[string]*config.Provide
 	return models
 }
 
-func isFastModel(m DiscoveredModel, spec providers.ProviderSpec) bool {
+func isFastModel(m DiscoveredModel) bool {
 	return m.MaxContext > 0 && m.MaxContext <= 32000 &&
 		m.MaxOutput > 0 && m.MaxOutput <= 4096
 }
 
-func isReasoningModel(m DiscoveredModel, spec providers.ProviderSpec) bool {
-	return m.MaxContext >= 128000 && spec.SupportsReasoning
+func isReasoningModel(m DiscoveredModel) bool {
+	return m.HasCapability("reasoning") && m.MaxContext >= 128000
 }
 
-func isVisionModel(m DiscoveredModel, spec providers.ProviderSpec) bool {
-	return spec.SupportsVision
+func isVisionModel(m DiscoveredModel) bool {
+	return m.HasCapability("vision")
 }
 
-func isToolModel(m DiscoveredModel, spec providers.ProviderSpec) bool {
-	return spec.SupportsToolCalls
+func isToolModel(m DiscoveredModel) bool {
+	return m.HasCapability("tool_calls")
 }
 
-func isLargeModel(m DiscoveredModel, spec providers.ProviderSpec) bool {
+func isLargeModel(m DiscoveredModel) bool {
 	return m.MaxContext >= 200000
 }
 
-func isBalancedModel(m DiscoveredModel, spec providers.ProviderSpec) bool {
+func isBalancedModel(m DiscoveredModel) bool {
 	return m.MaxContext > 32000 && m.MaxContext < 128000
+}
+
+var codingPrefixes = []string{
+	"codestral", "devstral", "deepseek-v4", "deepseek-r1",
+	"qwen2.5", "qwen3", "code-llama", "phi-4",
+	"claude-sonnet", "claude-3-5", "claude-3-7",
+	"gemini-2.5", "gemini-3",
+	"grok-3", "grok-4",
+	"mistral-large", "glm-5",
+}
+
+func isCodingModel(m DiscoveredModel) bool {
+	if !m.HasCapability("tool_calls") {
+		return false
+	}
+	id := strings.ToLower(m.ID)
+	for _, prefix := range codingPrefixes {
+		if strings.HasPrefix(id, prefix) {
+			return true
+		}
+	}
+	return false
 }

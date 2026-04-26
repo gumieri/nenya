@@ -15,6 +15,26 @@ type DiscoveredModel struct {
 	Pricing    *PricingEntry  `json:"pricing,omitempty"`
 }
 
+func (m DiscoveredModel) HasCapability(cap string) bool {
+	if m.Metadata == nil {
+		return false
+	}
+	switch cap {
+	case "vision":
+		return m.Metadata.SupportsVision
+	case "tool_calls":
+		return m.Metadata.SupportsToolCalls
+	case "reasoning":
+		return m.Metadata.SupportsReasoning
+	case "content_arrays":
+		return m.Metadata.SupportsContentArrays
+	case "stream_options":
+		return m.Metadata.SupportsStreamOptions
+	default:
+		return false
+	}
+}
+
 type ModelCatalog struct {
 	mu          sync.RWMutex
 	models      map[string]DiscoveredModel

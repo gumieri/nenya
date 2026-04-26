@@ -125,7 +125,7 @@ func New(ctx context.Context, cfg config.Config, secrets *config.SecretsConfig, 
 		healthRegistry = discovery.ValidateAllProviders(providers, mergedCatalog, logger)
 
 		if cfg.Discovery.AutoAgents {
-			autoAgents := discovery.GenerateAutoAgents(mergedCatalog, providers, logger)
+			autoAgents := discovery.GenerateAutoAgents(mergedCatalog, providers, cfg.Discovery.AutoAgentsConfig, logger)
 			for name, agent := range autoAgents {
 				if _, exists := cfg.Agents[name]; !exists {
 					cfg.Agents[name] = agent
