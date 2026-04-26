@@ -73,7 +73,38 @@ func SanitizePayload(deps TransformDeps, payload map[string]interface{}, provide
 		}
 	}
 
+	if providerName == "deepseek" {
+		ensureDeepSeekReasoningContent(payload)
+	}
 	stripDeepSeekThinkingParams(payload, providerName, deps.Logger)
+}
+
+// ensureDeepSeekReasoningContent injects an empty reasoning_content field
+// on all assistant messages that lack it. DeepSeek v4 requires all assistant
+// messages to carry reasoning_content in multi-turn conversations; requests
+// without it return 400 errors with "reasoning_content must be passed back".
+func ensureDeepSeekReasoningContent(payload map[string]interface{}) {
+	messagesRaw, ok := payload["messages"]
+	if !ok {
+		return
+	}
+	messages, ok := messagesRaw.([]interface{})
+	if !ok {
+		return
+	}
+	for _, msgRaw := range messages {
+		msg, ok := msgRaw.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		role, ok := msg["role"].(string)
+		if !ok || role != "assistant" {
+			continue
+		}
+		if _, exists := msg["reasoning_content"]; !exists {
+			msg["reasoning_content"] = ""
+		}
+	}
 }
 
 func stripDeepSeekThinkingParams(payload map[string]interface{}, providerName string, logger *slog.Logger) {
