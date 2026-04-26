@@ -53,7 +53,7 @@ func SanitizePayload(deps TransformDeps, payload map[string]interface{}, provide
 			}
 
 			shouldStripReasoning := !providerpkg.SupportsReasoning(providerName)
-			if !shouldStripReasoning && deps.Catalog != nil && modelName != "" {
+			if !shouldStripReasoning && providerName != "deepseek" && deps.Catalog != nil && modelName != "" {
 				if dm, ok := deps.Catalog.Lookup(modelName); ok && dm.Metadata != nil && !dm.Metadata.SupportsReasoning {
 					shouldStripReasoning = true
 				}
@@ -74,7 +74,7 @@ func SanitizePayload(deps TransformDeps, payload map[string]interface{}, provide
 	}
 
 	if providerName == "deepseek" {
-		ensureDeepSeekReasoningContent(payload)
+		ensureDeepSeekReasoningContent(payload, deps.Logger)
 	}
 	stripDeepSeekThinkingParams(payload, providerName, deps.Logger)
 }
@@ -83,7 +83,7 @@ func SanitizePayload(deps TransformDeps, payload map[string]interface{}, provide
 // on all assistant messages that lack it. DeepSeek v4 requires all assistant
 // messages to carry reasoning_content in multi-turn conversations; requests
 // without it return 400 errors with "reasoning_content must be passed back".
-func ensureDeepSeekReasoningContent(payload map[string]interface{}) {
+func ensureDeepSeekReasoningContent(payload map[string]interface{}, logger *slog.Logger) {
 	messagesRaw, ok := payload["messages"]
 	if !ok {
 		return
@@ -92,6 +92,7 @@ func ensureDeepSeekReasoningContent(payload map[string]interface{}) {
 	if !ok {
 		return
 	}
+	injected := 0
 	for _, msgRaw := range messages {
 		msg, ok := msgRaw.(map[string]interface{})
 		if !ok {
@@ -103,7 +104,11 @@ func ensureDeepSeekReasoningContent(payload map[string]interface{}) {
 		}
 		if _, exists := msg["reasoning_content"]; !exists {
 			msg["reasoning_content"] = ""
+			injected++
 		}
+	}
+	if injected > 0 {
+		logger.Debug("injected reasoning_content on assistant messages", "count", injected)
 	}
 }
 
