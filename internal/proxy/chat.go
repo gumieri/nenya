@@ -26,67 +26,108 @@ const (
 	mcpMaxIterationsHardCeiling = 50
 )
 
-// handleChatCompletions processes chat completion requests with optional content filtering and tool integration.
-func (p *Proxy) handleChatCompletions(gw *gateway.NenyaGateway, w http.ResponseWriter, r *http.Request) {
+// chatRequest holds the validated request data extracted from an incoming
+// /v1/chat/completions payload.
+type chatRequest struct {
+	Payload      map[string]any
+	ModelName    string
+	TokenCount   int
+	Targets      []routing.UpstreamTarget
+	AgentName    string
+	Cooldown     time.Duration
+	MaxRetries   int
+	CacheKey     string
+	HasMCPTools  bool
+	SoftLimit    int
+	HardLimit    int
+	WindowMaxCtx  int
+	Profile      pipeline.ClientProfile
+	Messages     []any
+}
+
+// httpError pairs an HTTP status code with a user-facing message.
+type httpError struct {
+	Code    int
+	Message string
+}
+
+func (e *httpError) Error() string { return e.Message }
+
+// validateChatRequest reads and validates the incoming request body,
+// returning a populated chatRequest or an httpError.
+func (p *Proxy) validateChatRequest(w http.ResponseWriter, r *http.Request, gw *gateway.NenyaGateway) (*chatRequest, *httpError) {
 	r.Body = http.MaxBytesReader(w, r.Body, gw.Config.Server.MaxBodyBytes)
-	defer func() { _ = r.Body.Close() }()
 
 	bodyBytes, err := io.ReadAll(r.Body)
 	if err != nil {
 		gw.Logger.Error("failed to read request body", "err", err)
-		http.Error(w, "Payload too large or malformed", http.StatusRequestEntityTooLarge)
-		return
+		return nil, &httpError{http.StatusRequestEntityTooLarge, "Payload too large or malformed"}
 	}
+	defer func() { _ = r.Body.Close() }()
 
 	if r.Context().Err() != nil {
-		return
+		return nil, &httpError{http.StatusRequestEntityTooLarge, "Request cancelled"}
 	}
 
-	var payload map[string]interface{}
+	var payload map[string]any
 	if err := json.Unmarshal(bodyBytes, &payload); err != nil {
 		gw.Logger.Warn("failed to parse JSON, returning Bad Request")
-		http.Error(w, "Invalid JSON payload", http.StatusBadRequest)
-		return
+		return nil, &httpError{http.StatusBadRequest, "Invalid JSON payload"}
 	}
 
 	modelName, ok := payload["model"].(string)
 	if !ok || modelName == "" {
 		gw.Logger.Warn("missing or empty model field in request body")
-		http.Error(w, `Missing or empty "model" field in request body`, http.StatusBadRequest)
-		return
+		return nil, &httpError{http.StatusBadRequest, `Missing or empty "model" field in request body`}
 	}
 	if len(modelName) > MaxModelNameLength {
 		gw.Logger.Warn("model name exceeds maximum length", "length", len(modelName))
-		http.Error(w, "Model name too long", http.StatusBadRequest)
-		return
+		return nil, &httpError{http.StatusBadRequest, "Model name too long"}
 	}
 
-	tokenCount := gw.CountRequestTokens(payload)
+	req := &chatRequest{
+		Payload:   payload,
+		ModelName: modelName,
+		TokenCount: gw.CountRequestTokens(payload),
+	}
 
-	var targets []routing.UpstreamTarget
-	var cooldownDuration time.Duration
-	var agentName string
+	var herr *httpError
+	req.Targets, req.AgentName, req.Cooldown, req.MaxRetries, herr = p.resolveRouting(req, gw)
+	if herr != nil {
+		return nil, herr
+	}
 
-	var maxRetries int
-	if agent, ok := gw.Config.Agents[modelName]; ok {
-		agentName = modelName
+	req.CacheKey, herr = p.resolveCache(w, r, gw, req)
+	if herr != nil {
+		return nil, herr
+	}
+
+	req.Messages, req.HasMCPTools, req.SoftLimit, req.HardLimit, req.WindowMaxCtx, req.Profile = p.resolvePipelineContext(r, gw, req)
+
+	return req, nil
+}
+
+// resolveRouting determines the upstream targets, agent name, cooldown, and
+// max retries for the given model.
+func (p *Proxy) resolveRouting(req *chatRequest, gw *gateway.NenyaGateway) ([]routing.UpstreamTarget, string, time.Duration, int, *httpError) {
+	if agent, ok := gw.Config.Agents[req.ModelName]; ok {
+		req.AgentName = req.ModelName
 		secs := agent.CooldownSeconds
 		if secs == 0 {
 			secs = routing.DefaultAgentCooldownSec
 		}
-		cooldownDuration = time.Duration(secs) * time.Second
-		maxRetries = agent.MaxRetries
-		targets = gw.AgentState.BuildTargetList(gw.Logger, modelName, agent, tokenCount, gw.Providers, gw.ModelCatalog, gw.Config.Governance.AutoContextSkip)
+		cooldown := time.Duration(secs) * time.Second
+		maxRetries := agent.MaxRetries
+
+		targets := gw.AgentState.BuildTargetList(gw.Logger, req.ModelName, agent, req.TokenCount, gw.Providers, gw.ModelCatalog, gw.Config.Governance.AutoContextSkip)
 		if len(targets) == 0 {
 			if len(agent.Models) > 0 {
 				gw.Logger.Warn("all models excluded by max_context",
-					"agent", modelName, "tokens", tokenCount)
-				http.Error(w, "Request too large for all configured models in this agent", http.StatusRequestEntityTooLarge)
-			} else {
-				gw.Logger.Error("agent has no models configured", "agent", modelName)
-				http.Error(w, "Agent has no models configured", http.StatusInternalServerError)
+					"agent", req.ModelName, "tokens", req.TokenCount)
+				return nil, "", 0, 0, &httpError{http.StatusRequestEntityTooLarge, "Request too large for all configured models in this agent"}
 			}
-			return
+			gw.Logger.Error("agent has no models configured", "agent", req.ModelName)
+			return nil, "", 0, 0, &httpError{http.StatusInternalServerError, "Agent has no models configured"}
 		}
 
 		if gw.Config.Governance.AutoReorderByLatency {
@@ -95,7 +136,7 @@ func (p *Proxy) handleChatCompletions(gw *gateway.NenyaGateway, w http.ResponseW
 				targets = routing.SortTargetsByBalanced(targets, gw.LatencyTracker, gw.CostTracker, gw.ModelCatalog, routing.SortOptions{
 					LatencyWeight: gw.Config.Governance.RoutingLatencyWeight,
 					CostWeight:    gw.Config.Governance.RoutingCostWeight,
-					RequestCaps:   detectRequestCapabilities(payload),
+					RequestCaps:   detectRequestCapabilities(req.Payload),
 				})
 			default:
 				targets = routing.SortTargetsByLatency(targets, gw.LatencyTracker, nil)
@@ -107,66 +148,97 @@ func (p *Proxy) handleChatCompletions(gw *gateway.NenyaGateway, w http.ResponseW
 			strategy = "round-robin"
 		}
 		gw.Logger.Info("agent routing",
-			"agent", modelName, "strategy", strategy, "models_in_chain", len(targets))
-	} else {
-		provider := routing.ResolveProvider(modelName, gw.Providers, gw.ModelCatalog)
-		if provider == nil {
-			gw.Logger.Warn("no provider found for model", "model", modelName)
-			http.Error(w, util.ErrNoProvider, http.StatusBadRequest)
+			"agent", req.ModelName, "strategy", strategy, "models_in_chain", len(targets))
+
+		return targets, req.AgentName, cooldown, maxRetries, nil
+	}
+
+	provider := routing.ResolveProvider(req.ModelName, gw.Providers, gw.ModelCatalog)
+	if provider == nil {
+		gw.Logger.Warn("no provider found for model", "model", req.ModelName)
+		return nil, "", 0, 0, &httpError{http.StatusBadRequest, util.ErrNoProvider}
+	}
+	targets := []routing.UpstreamTarget{{URL: provider.URL, Model: req.ModelName, Provider: provider.Name}}
+	gw.Logger.Info("model routing", "model", req.ModelName, "upstream", provider.URL)
+
+	return targets, "", 0, 0, nil
+}
+
+// resolveCache checks the response cache and returns a cache key. If a cached
+// response is found and served, it returns ("", httpError) to signal early return.
+func (p *Proxy) resolveCache(w http.ResponseWriter, r *http.Request, gw *gateway.NenyaGateway, req *chatRequest) (string, *httpError) {
+	if gw.ResponseCache == nil {
+		return "", nil
+	}
+
+	cacheKey := infra.FingerprintPayload(req.Payload)
+	if r.Header.Get(gw.Config.ResponseCache.ForceRefreshHeader) == "" {
+		if data, ok := gw.ResponseCache.Lookup(cacheKey); ok {
+			p.replayCachedSSE(gw, w, r, data)
+			return "", &httpError{http.StatusOK, "cache hit"}
+		}
+	}
+	return cacheKey, nil
+}
+
+// resolvePipelineContext extracts messages, MCP tool state, limits, and client
+// profile from the validated request.
+func (p *Proxy) resolvePipelineContext(r *http.Request, gw *gateway.NenyaGateway, req *chatRequest) ([]any, bool, int, int, int, pipeline.ClientProfile) {
+	messagesRaw, ok := req.Payload["messages"]
+	if !ok {
+		return nil, false, 4000, 24000, 0, pipeline.ClientProfile{}
+	}
+	messages, ok := messagesRaw.([]any)
+	if !ok || len(messages) == 0 {
+		gw.Logger.Warn("messages field is not a non-empty array, skipping Ollama interception")
+		return nil, false, 4000, 24000, 0, pipeline.ClientProfile{}
+	}
+
+	autoSearchCtx, autoSearchCancel := context.WithTimeout(r.Context(), mcpAutoSearchTimeout)
+	p.injectAutoSearch(gw, autoSearchCtx, req.Payload, messages, req.AgentName)
+	autoSearchCancel()
+	p.injectMCPTools(gw, req.Payload, req.AgentName)
+
+	softLimit := 4000
+	hardLimit := 24000
+	if len(req.Targets) > 0 {
+		primaryTarget := req.Targets[0]
+		if primaryTarget.MaxContext > 0 {
+			softLimit = primaryTarget.MaxContext / 8
+			hardLimit = primaryTarget.MaxContext * 3 / 4
+		}
+	}
+
+	windowMaxCtx := routing.ResolveWindowMaxContext(req.ModelName, gw.Config.Agents, gw.ModelCatalog)
+	profile := pipeline.ClassifyClient(r.Header)
+	if profile.IsIDE {
+		gw.Logger.Debug("IDE client detected", "client", profile.ClientName)
+	}
+
+	return messages, p.hasMCPTools(gw, req.AgentName), softLimit, hardLimit, windowMaxCtx, profile
+}
+
+// handleChatCompletions processes chat completion requests with optional content filtering and tool integration.
+func (p *Proxy) handleChatCompletions(gw *gateway.NenyaGateway, w http.ResponseWriter, r *http.Request) {
+	req, herr := p.validateChatRequest(w, r, gw)
+	if herr != nil {
+		if herr.Code == http.StatusNoContent {
 			return
 		}
-		targets = []routing.UpstreamTarget{{URL: provider.URL, Model: modelName, Provider: provider.Name}}
-		gw.Logger.Info("model routing", "model", modelName, "upstream", provider.URL)
-	}
-
-	var cacheKey string
-	if gw.ResponseCache != nil {
-		cacheKey = infra.FingerprintPayload(payload)
-		if r.Header.Get(gw.Config.ResponseCache.ForceRefreshHeader) == "" {
-			if data, ok := gw.ResponseCache.Lookup(cacheKey); ok {
-				p.replayCachedSSE(gw, w, r, data)
-				return
-			}
-		}
-	}
-
-	if messagesRaw, ok := payload["messages"]; ok {
-		if messages, ok := messagesRaw.([]interface{}); ok && len(messages) > 0 {
-			autoSearchCtx, autoSearchCancel := context.WithTimeout(r.Context(), mcpAutoSearchTimeout)
-			p.injectAutoSearch(gw, autoSearchCtx, payload, messages, agentName)
-			autoSearchCancel()
-			p.injectMCPTools(gw, payload, agentName)
-			windowMaxCtx := routing.ResolveWindowMaxContext(modelName, gw.Config.Agents, gw.ModelCatalog)
-			profile := pipeline.ClassifyClient(r.Header)
-			if profile.IsIDE {
-				gw.Logger.Debug("IDE client detected", "client", profile.ClientName)
-			}
-
-			// Derive soft/hard limits from the primary target's MaxContext
-			softLimit := 4000
-			hardLimit := 24000
-			if len(targets) > 0 {
-				primaryTarget := targets[0]
-				if primaryTarget.MaxContext > 0 {
-					softLimit = primaryTarget.MaxContext / 8
-					hardLimit = primaryTarget.MaxContext * 3 / 4
-				}
-			}
-
-			if err := p.applyContentPipeline(gw, r.Context(), payload, tokenCount, windowMaxCtx, profile, softLimit, hardLimit); err != nil {
-				gw.Logger.Warn("content pipeline failed, proceeding with original payload", "err", err)
-			}
-		} else {
-			gw.Logger.Warn("messages field is not a non-empty array, skipping Ollama interception")
-		}
-	}
-
-	if p.hasMCPTools(gw, agentName) {
-		p.forwardToUpstreamWithMCP(gw, w, r, targets, payload, cooldownDuration, tokenCount, agentName, maxRetries, cacheKey)
+		http.Error(w, herr.Message, herr.Code)
 		return
 	}
 
-	p.forwardToUpstream(gw, w, r, targets, payload, cooldownDuration, tokenCount, agentName, maxRetries, cacheKey)
+	if err := p.applyContentPipeline(gw, r.Context(), req.Payload, req.TokenCount, req.WindowMaxCtx, req.Profile, req.SoftLimit, req.HardLimit); err != nil {
+		gw.Logger.Warn("content pipeline failed, proceeding with original payload", "err", err)
+	}
+
+	if req.HasMCPTools {
+		p.forwardToUpstreamWithMCP(gw, w, r, req.Targets, req.Payload, req.Cooldown, req.TokenCount, req.AgentName, req.MaxRetries, req.CacheKey)
+		return
+	}
+
+	p.forwardToUpstream(gw, w, r, req.Targets, req.Payload, req.Cooldown, req.TokenCount, req.AgentName, req.MaxRetries, req.CacheKey)
 }
 
 // replayCachedSSE serves a previously cached response using Server-Sent Events.
