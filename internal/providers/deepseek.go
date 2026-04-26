@@ -12,8 +12,8 @@ import (
 // reasoning_content field alongside the final content.
 //
 // Key behaviors:
-//   - deepseek-v4-pro: thinking mode is ON by default
-//   - deepseek-v4-flash: thinking mode is opt-in via {"thinking": {"type": "enabled"}}
+//   - deepseek-v4-pro and deepseek-v4-flash: thinking mode is ON by default
+//   - To disable thinking, clients must send {"thinking": {"type": "disabled"}}
 //   - When thinking mode is active, temperature/top_p/presence_penalty/frequency_penalty
 //     are silently ignored by the API
 //   - reasoning_content from assistant messages MUST be passed back verbatim in

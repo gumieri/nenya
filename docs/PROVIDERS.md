@@ -56,8 +56,8 @@ Zero-config integration for providers using the standard OpenAI wire format:
 
 DeepSeek v4 models support a **thinking mode** controlled by the `thinking` parameter and return structured `reasoning_content` in assistant messages.
 
-- **`deepseek-v4-pro`**: Thinking mode is **always on by default**. No `thinking` parameter needed.
-- **`deepseek-v4-flash`**: Thinking mode is opt-in via `thinking: {"type": "enabled"}`.
+- **`deepseek-v4-pro`**: Thinking mode is **on by default**.
+- **`deepseek-v4-flash`**: Thinking mode is **on by default**. To disable, send `thinking: {"type": "disabled"}`.
 - **Reasoning effort**: `reasoning_effort: "high"` (default) or `"max"`. For complex agent requests (Claude Code, OpenCode), DeepSeek auto-escalates to `max`.
 - **Multi-turn**: `reasoning_content` from assistant messages is passed back verbatim. When tool calls were performed, this field is **mandatory** — the API returns 400 if missing. The gateway preserves it for reasoning providers and strips it for others.
 - **Ignored params**: In thinking mode, `temperature`, `top_p`, `presence_penalty`, `frequency_penalty` are silently ignored. The gateway strips these for DeepSeek when thinking is enabled.
