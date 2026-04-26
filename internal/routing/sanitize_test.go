@@ -545,6 +545,31 @@ func TestSanitizePayload_KeepReasoningForReasoningModel(t *testing.T) {
 	}
 }
 
+func TestSanitizePayload_KeepReasoningForUnknownModelOnReasoningProvider(t *testing.T) {
+	catalog := discovery.NewModelCatalog()
+
+	deps := defaultSanitizeDeps()
+	deps.Catalog = catalog
+
+	payload := map[string]interface{}{
+		"model": "deepseek-v4-flash",
+		"messages": []interface{}{
+			map[string]interface{}{
+				"role":              "assistant",
+				"content":           "answer",
+				"reasoning_content": "required reasoning",
+			},
+		},
+	}
+
+	SanitizePayload(deps, payload, "deepseek", "deepseek-v4-flash")
+	msgs := payload["messages"].([]interface{})
+	assistant := msgs[0].(map[string]interface{})
+	if _, exists := assistant["reasoning_content"]; !exists {
+		t.Fatal("reasoning_content should be preserved when model is missing from catalog but provider supports reasoning")
+	}
+}
+
 func TestRepairMessageOrdering(t *testing.T) {
 	tests := []struct {
 		name       string

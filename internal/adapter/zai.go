@@ -61,7 +61,7 @@ func (a *ZAIAdapter) MutateResponse(body []byte) ([]byte, error) {
 }
 
 func (a *ZAIAdapter) NormalizeError(statusCode int, body []byte) ErrorClass {
-	if statusCode == http.StatusTooManyRequests && len(body) > 0 {
+	if len(body) > 0 {
 		var errResp struct {
 			Error struct {
 				Code string `json:"code"`
