@@ -100,6 +100,7 @@ type sseAccumulator struct {
 	content      strings.Builder
 	reasoning    strings.Builder
 	model        string
+	logger       *slog.Logger
 
 	tcArgsAccum map[int]*strings.Builder
 	tcNameAccum map[int]string
@@ -108,11 +109,12 @@ type sseAccumulator struct {
 	dataLines   int
 }
 
-func newSSEAccumulator() *sseAccumulator {
+func newSSEAccumulator(logger *slog.Logger) *sseAccumulator {
 	return &sseAccumulator{
 		tcArgsAccum: make(map[int]*strings.Builder),
 		tcNameAccum: make(map[int]string),
 		tcIDAccum:   make(map[int]string),
+		logger:      logger,
 	}
 }
 
@@ -269,7 +271,7 @@ func (acc *sseAccumulator) buildToolCalls() []mcpToolCall {
 		if argsBuilder := acc.tcArgsAccum[idx]; argsBuilder != nil {
 			argsStr := argsBuilder.String()
 			if err := json.Unmarshal([]byte(argsStr), &args); err != nil {
-				slog.Warn("MCP: failed to parse tool arguments, calling with empty args",
+				acc.logger.Warn("MCP: failed to parse tool arguments, calling with empty args",
 					"tool", name, "err", err)
 				args = make(map[string]any)
 			}
@@ -282,7 +284,7 @@ func (acc *sseAccumulator) buildToolCalls() []mcpToolCall {
 // result produces the final bufferedSSE from accumulated state.
 func (acc *sseAccumulator) result() *bufferedSSE {
 	if acc.dataLines == 0 && acc.totalLines > 0 {
-		slog.Warn("MCP stream: no SSE 'data:' lines found; possible non-SSE response",
+		acc.logger.Warn("MCP stream: no SSE 'data:' lines found; possible non-SSE response",
 			"total_lines", acc.totalLines)
 	}
 
@@ -320,8 +322,8 @@ func (acc *sseAccumulator) result() *bufferedSSE {
 	}
 }
 
-func bufferStreamResponse(ctx context.Context, r io.Reader) (*bufferedSSE, error) {
-	acc := newSSEAccumulator()
+func bufferStreamResponse(ctx context.Context, r io.Reader, logger *slog.Logger) (*bufferedSSE, error) {
+	acc := newSSEAccumulator(logger)
 	scanner := bufio.NewScanner(r)
 	for scanner.Scan() {
 		select {
