@@ -58,7 +58,7 @@ type SSETransformingReader struct {
 	lastPromptTokens     int
 	lastTotalTokens      int
 	lastCacheHitTokens   int
-	lastCacheMissTokens int
+	lastCacheMissTokens  int
 
 	tcState toolCallState
 }

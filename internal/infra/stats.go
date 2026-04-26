@@ -79,11 +79,11 @@ func (u *UsageTracker) Snapshot() map[string]interface{} {
 	modelsI := make(map[string]interface{}, len(u.models))
 	for name, s := range u.models {
 		modelsI[name] = map[string]interface{}{
-			"requests":           atomic.LoadUint64(&s.Requests),
-			"input_tokens":       atomic.LoadUint64(&s.InputTokens),
-			"output_tokens":      atomic.LoadUint64(&s.OutputTokens),
-			"cache_hit_tokens":   atomic.LoadUint64(&s.CacheHitTokens),
-			"cache_miss_tokens":  atomic.LoadUint64(&s.CacheMissTokens),
+			"requests":          atomic.LoadUint64(&s.Requests),
+			"input_tokens":      atomic.LoadUint64(&s.InputTokens),
+			"output_tokens":     atomic.LoadUint64(&s.OutputTokens),
+			"cache_hit_tokens":  atomic.LoadUint64(&s.CacheHitTokens),
+			"cache_miss_tokens": atomic.LoadUint64(&s.CacheMissTokens),
 			"errors":            atomic.LoadUint64(&s.Errors),
 		}
 	}

@@ -512,7 +512,7 @@ func TestZAI_InjectTemperatureForGLM46(t *testing.T) {
 	deps := zaiDeps()
 
 	payload := map[string]interface{}{
-		"model": "glm-4.6-turbo",
+		"model":    "glm-4.6-turbo",
 		"messages": []interface{}{},
 	}
 
@@ -528,7 +528,7 @@ func TestZAI_InjectTemperatureForGLM47(t *testing.T) {
 	deps := zaiDeps()
 
 	payload := map[string]interface{}{
-		"model": "glm-4.7-plus",
+		"model":    "glm-4.7-plus",
 		"messages": []interface{}{},
 	}
 
@@ -544,7 +544,7 @@ func TestZAI_NoTemperatureForOtherModels(t *testing.T) {
 	deps := zaiDeps()
 
 	payload := map[string]interface{}{
-		"model": "glm-5",
+		"model":    "glm-5",
 		"messages": []interface{}{},
 	}
 

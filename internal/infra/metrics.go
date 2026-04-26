@@ -166,9 +166,24 @@ func (m *Metrics) RecordHTTPRequest(method, path string, status int, duration ti
 	h.Observe(duration.Seconds())
 }
 
-func (m *Metrics) RecordRedaction()  { if m == nil { return }; m.redactions.Add(1) }
-func (m *Metrics) RecordCompaction() { if m == nil { return }; m.compactions.Add(1) }
-func (m *Metrics) RecordPanic()      { if m == nil { return }; m.panics.Add(1) }
+func (m *Metrics) RecordRedaction() {
+	if m == nil {
+		return
+	}
+	m.redactions.Add(1)
+}
+func (m *Metrics) RecordCompaction() {
+	if m == nil {
+		return
+	}
+	m.compactions.Add(1)
+}
+func (m *Metrics) RecordPanic() {
+	if m == nil {
+		return
+	}
+	m.panics.Add(1)
+}
 
 func (m *Metrics) RecordWindow(mode string) {
 	if m == nil {
