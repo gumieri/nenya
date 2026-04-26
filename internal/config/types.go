@@ -5,15 +5,19 @@ import (
 	"fmt"
 )
 
+// AgentModel defines a single model entry within an agent's model list,
+// specifying the provider, model name, URL override, and context limits.
 type AgentModel struct {
-	Provider              string   `json:"provider"`
-	Model                 string   `json:"model"`
-	URL                   string   `json:"url"`
-	MaxContext            int      `json:"max_context"`
-	MaxOutput             int      `json:"max_output"`
-	RequiredCapabilities  []string `json:"required_capabilities,omitempty"`
+	Provider             string   `json:"provider"`
+	Model                string   `json:"model"`
+	URL                  string   `json:"url"`
+	MaxContext           int      `json:"max_context"`
+	MaxOutput            int      `json:"max_output"`
+	RequiredCapabilities []string `json:"required_capabilities,omitempty"`
 }
 
+// AgentConfig defines an agent (a named alias for one or more models)
+// with routing strategy, cooldown, retry, and MCP configuration.
 type AgentConfig struct {
 	Strategy         string          `json:"strategy"`
 	CooldownSeconds  int             `json:"cooldown_seconds"`
@@ -116,11 +120,11 @@ type GovernanceConfig struct {
 	RetryableStatusCodes     []int    `json:"retryable_status_codes"`
 	TFIDFQuerySource         string   `json:"tfidf_query_source"`
 	AutoContextSkip          bool     `json:"auto_context_skip"`
-	AutoReorderByLatency     bool    `json:"auto_reorder_by_latency"`
-	RoutingStrategy          string  `json:"routing_strategy"`
-	RoutingLatencyWeight     float64 `json:"routing_latency_weight"`
-	RoutingCostWeight        float64 `json:"routing_cost_weight"`
-	MaxCostPerRequest       float64 `json:"max_cost_per_request"`
+	AutoReorderByLatency     bool     `json:"auto_reorder_by_latency"`
+	RoutingStrategy          string   `json:"routing_strategy"`
+	RoutingLatencyWeight     float64  `json:"routing_latency_weight"`
+	RoutingCostWeight        float64  `json:"routing_cost_weight"`
+	MaxCostPerRequest        float64  `json:"max_cost_per_request"`
 	rpmSet                   bool     `json:"-"`
 	tpmSet                   bool     `json:"-"`
 }
@@ -163,6 +167,7 @@ func (e *EngineRef) UnmarshalJSON(data []byte) error {
 	return json.Unmarshal(data, aux)
 }
 
+// EngineTarget describes a resolved engine target with timeout and configuration.
 type EngineTarget struct {
 	Engine   EngineConfig
 	Provider *Provider

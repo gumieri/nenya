@@ -6,18 +6,19 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"math"
 	"nenya/internal/config"
 	"nenya/internal/gateway"
 	"nenya/internal/infra"
 	"nenya/internal/mcp"
 	"nenya/internal/pipeline"
 	"nenya/internal/routing"
+	"nenya/internal/util"
 	"net/http"
 	"strings"
 	"time"
 )
 
+// MCP timeout constants for automatic operations.
 const (
 	mcpAutoSearchTimeout        = 10 * time.Second
 	mcpLoopMaxDuration          = 5 * time.Minute
@@ -25,13 +26,7 @@ const (
 	mcpMaxIterationsHardCeiling = 50
 )
 
-func addCap(a, b int) int {
-	if b > 0 && a > math.MaxInt-b {
-		return math.MaxInt
-	}
-	return a + b
-}
-
+// handleChatCompletions processes chat completion requests with optional content filtering and tool integration.
 func (p *Proxy) handleChatCompletions(gw *gateway.NenyaGateway, w http.ResponseWriter, r *http.Request) {
 	r.Body = http.MaxBytesReader(w, r.Body, gw.Config.Server.MaxBodyBytes)
 	defer func() { _ = r.Body.Close() }()
@@ -117,7 +112,7 @@ func (p *Proxy) handleChatCompletions(gw *gateway.NenyaGateway, w http.ResponseW
 		provider := routing.ResolveProvider(modelName, gw.Providers, gw.ModelCatalog)
 		if provider == nil {
 			gw.Logger.Warn("no provider found for model", "model", modelName)
-			http.Error(w, "No provider configured for this model", http.StatusBadRequest)
+			http.Error(w, util.ErrNoProvider, http.StatusBadRequest)
 			return
 		}
 		targets = []routing.UpstreamTarget{{URL: provider.URL, Model: modelName, Provider: provider.Name}}
@@ -174,6 +169,7 @@ func (p *Proxy) handleChatCompletions(gw *gateway.NenyaGateway, w http.ResponseW
 	p.forwardToUpstream(gw, w, r, targets, payload, cooldownDuration, tokenCount, agentName, maxRetries, cacheKey)
 }
 
+// replayCachedSSE serves a previously cached response using Server-Sent Events.
 func (p *Proxy) replayCachedSSE(gw *gateway.NenyaGateway, w http.ResponseWriter, r *http.Request, data []byte) {
 	gw.Logger.Info("response cache hit")
 	w.Header().Set("Content-Type", "text/event-stream")
@@ -207,9 +203,7 @@ func (p *Proxy) applyContentPipeline(gw *gateway.NenyaGateway, ctx context.Conte
 	// Compaction is skipped for IDE clients which manage their own context.
 	if !profile.IsIDE {
 		if pipeline.ApplyCompaction(messages, gw.Config.Compaction) {
-			if gw.Metrics != nil {
-				gw.Metrics.RecordCompaction()
-			}
+			gw.Metrics.RecordCompaction()
 		}
 	} else {
 		gw.Logger.Debug("skipping compaction for IDE client")
@@ -231,9 +225,7 @@ func (p *Proxy) applyContentPipeline(gw *gateway.NenyaGateway, ctx context.Conte
 		}
 	}
 	if patternRedacted {
-		if gw.Metrics != nil {
-			gw.Metrics.RecordRedaction()
-		}
+		gw.Metrics.RecordRedaction()
 	}
 
 	entropyRedacted := false
@@ -250,9 +242,7 @@ func (p *Proxy) applyContentPipeline(gw *gateway.NenyaGateway, ctx context.Conte
 			}
 		}
 		if entropyRedacted {
-			if gw.Metrics != nil {
-				gw.Metrics.RecordRedaction()
-			}
+			gw.Metrics.RecordRedaction()
 		}
 	}
 
@@ -262,14 +252,10 @@ func (p *Proxy) applyContentPipeline(gw *gateway.NenyaGateway, ctx context.Conte
 	}
 	if !profile.IsIDE {
 		if pipeline.PruneStaleToolCalls(payload, gw.Config.Compaction) {
-			if gw.Metrics != nil {
-				gw.Metrics.RecordCompaction()
-			}
+			gw.Metrics.RecordCompaction()
 		}
 		if pipeline.PruneThoughts(payload, gw.Config.Compaction) {
-			if gw.Metrics != nil {
-				gw.Metrics.RecordCompaction()
-			}
+			gw.Metrics.RecordCompaction()
 		}
 	}
 
@@ -290,9 +276,7 @@ func (p *Proxy) applyContentPipeline(gw *gateway.NenyaGateway, ctx context.Conte
 	if windowed, err := pipeline.ApplyWindowCompaction(ctx, deps, payload, messages, tokenCount, gw.Config.Window, windowMaxCtx, gw.CountRequestTokens); err != nil {
 		gw.Logger.Warn("window compaction failed, proceeding without it", "err", err)
 	} else if windowed {
-		if gw.Metrics != nil {
-			gw.Metrics.RecordWindow(gw.Config.Window.Mode)
-		}
+		gw.Metrics.RecordWindow(gw.Config.Window.Mode)
 	}
 
 	messages = payload["messages"].([]interface{})
@@ -323,9 +307,7 @@ func (p *Proxy) applyContentPipeline(gw *gateway.NenyaGateway, ctx context.Conte
 	} else if contentTokens <= hardLimit {
 		gw.Logger.Warn("payload exceeds soft limit, sending to engine",
 			"tokens", contentTokens)
-		if gw.Metrics != nil {
-			gw.Metrics.RecordInterception("soft_limit")
-		}
+		gw.Metrics.RecordInterception("soft_limit")
 		summarized, err := p.summarizeWithOllama(gw, ctx, textForInterception, profile.IsIDE)
 		if err != nil {
 			gw.Logger.Warn("engine summarization failed, proceeding with original payload", "err", err)
@@ -336,9 +318,7 @@ func (p *Proxy) applyContentPipeline(gw *gateway.NenyaGateway, ctx context.Conte
 	} else {
 		gw.Logger.Warn("payload exceeds hard limit, truncating before engine",
 			"tokens", contentTokens, "hard_limit", hardLimit)
-		if gw.Metrics != nil {
-			gw.Metrics.RecordInterception("hard_limit")
-		}
+		gw.Metrics.RecordInterception("hard_limit")
 
 		// Truncation functions work in rune units; estimate conservatively at 3 chars/token.
 		hardLimitRunes := hardLimit * 3
@@ -387,6 +367,7 @@ func (p *Proxy) applyContentPipeline(gw *gateway.NenyaGateway, ctx context.Conte
 	return nil
 }
 
+// summarizeWithOllama sends content to the security filter engine for redaction and summarization.
 func (p *Proxy) summarizeWithOllama(gw *gateway.NenyaGateway, ctx context.Context, heavyText string, isIDE bool) (string, error) {
 	if len(gw.Config.SecurityFilter.Engine.ResolvedTargets) == 0 {
 		return "", fmt.Errorf("security_filter engine: no resolved targets")
@@ -418,6 +399,7 @@ func (p *Proxy) summarizeWithOllama(gw *gateway.NenyaGateway, ctx context.Contex
 		"security_filter", agentName, systemPrompt, heavyText)
 }
 
+// summarizeOrForward attempts engine summarization with fallback to raw content if engine fails.
 func (p *Proxy) summarizeOrForward(gw *gateway.NenyaGateway, ctx context.Context, truncated string, isIDE bool, label string) (string, bool) {
 	summarized, err := p.summarizeWithOllama(gw, ctx, truncated, isIDE)
 	if err != nil {
@@ -464,7 +446,7 @@ func (p *Proxy) handleEmbeddings(gw *gateway.NenyaGateway, w http.ResponseWriter
 	provider := routing.ResolveProvider(modelName, gw.Providers, gw.ModelCatalog)
 	if provider == nil {
 		gw.Logger.Warn("no provider for embeddings model", "model", modelName)
-		http.Error(w, "No provider configured for this model", http.StatusBadRequest)
+		http.Error(w, util.ErrNoProvider, http.StatusBadRequest)
 		return
 	}
 
@@ -534,7 +516,7 @@ func (p *Proxy) handleResponses(gw *gateway.NenyaGateway, w http.ResponseWriter,
 	provider := routing.ResolveProvider(modelName, gw.Providers, gw.ModelCatalog)
 	if provider == nil {
 		gw.Logger.Warn("no provider for responses model", "model", modelName)
-		http.Error(w, "No provider configured for this model", http.StatusBadRequest)
+		http.Error(w, util.ErrNoProvider, http.StatusBadRequest)
 		return
 	}
 
@@ -679,20 +661,14 @@ func (p *Proxy) injectMCPTools(gw *gateway.NenyaGateway, payload map[string]inte
 }
 
 func (p *Proxy) injectMCPSystemPrompt(gw *gateway.NenyaGateway, payload map[string]interface{}, toolNames []string) {
-	var toolsList strings.Builder
-	for i, name := range toolNames {
-		if i > 0 {
-			toolsList.WriteString(", ")
-		}
-		toolsList.WriteString("`" + name + "`")
-	}
+	toolsList := util.JoinBackticks(toolNames)
 
 	prompt := fmt.Sprintf(
 		"You have access to the following MCP tools for long-term memory and knowledge retrieval: %s. "+
 			"Use these tools when the user asks about previously discussed information, needs to recall past "+
 			"conversations, or explicitly requests memory/knowledge operations. Do NOT mention these tools "+
 			"unless the user's query requires accessing stored information.",
-		toolsList.String(),
+		toolsList,
 	)
 
 	messages, ok := payload["messages"].([]interface{})
@@ -705,7 +681,7 @@ func (p *Proxy) injectMCPSystemPrompt(gw *gateway.NenyaGateway, payload map[stri
 		"content": prompt,
 	}
 
-	updated := make([]interface{}, 0, addCap(len(messages), 1))
+	updated := make([]interface{}, 0, util.AddCap(len(messages), 1))
 	updated = append(updated, mcpMsg)
 	updated = append(updated, messages...)
 	payload["messages"] = updated
@@ -787,18 +763,14 @@ func (p *Proxy) injectAutoSearch(gw *gateway.NenyaGateway, ctx context.Context, 
 			gw.Logger.Warn("MCP auto-search failed, proceeding without",
 				"server", serverName, "agent", agentName, "err", err,
 				"duration_ms", duration.Milliseconds())
-			if gw.Metrics != nil {
-				gw.Metrics.RecordMCPAutoSearch(serverName, agentName, false, err)
-			}
+			gw.Metrics.RecordMCPAutoSearch(serverName, agentName, false, err)
 			continue
 		}
 		if result == nil || result.Text() == "" {
 			gw.Logger.Debug("MCP auto-search: no results",
 				"server", serverName, "agent", agentName,
 				"duration_ms", duration.Milliseconds())
-			if gw.Metrics != nil {
-				gw.Metrics.RecordMCPAutoSearch(serverName, agentName, false, nil)
-			}
+			gw.Metrics.RecordMCPAutoSearch(serverName, agentName, false, nil)
 			continue
 		}
 
@@ -816,7 +788,7 @@ func (p *Proxy) injectAutoSearch(gw *gateway.NenyaGateway, ctx context.Context, 
 			"content": contextStr,
 		}
 
-		updated := make([]interface{}, 0, addCap(1, len(messages)))
+		updated := make([]interface{}, 0, util.AddCap(1, len(messages)))
 		updated = append(updated, messages[:len(messages)-1]...)
 		updated = append(updated, memoryMsg)
 		updated = append(updated, messages[len(messages)-1:]...)
@@ -827,9 +799,7 @@ func (p *Proxy) injectAutoSearch(gw *gateway.NenyaGateway, ctx context.Context, 
 			"tool", toolName,
 			"duration_ms", duration.Milliseconds(),
 			"result_len", len(result.Text()))
-		if gw.Metrics != nil {
-			gw.Metrics.RecordMCPAutoSearch(serverName, agentName, true, nil)
-		}
+		gw.Metrics.RecordMCPAutoSearch(serverName, agentName, true, nil)
 		break
 	}
 }
@@ -873,7 +843,7 @@ func (p *Proxy) forwardToUpstreamWithMCP(gw *gateway.NenyaGateway,
 
 	defer func() {
 		loopDuration := time.Since(loopStart)
-		if gw.Metrics != nil && loopDuration > 0 {
+		if loopDuration > 0 {
 			gw.Metrics.RecordMCPLoopDuration(agentName, loopDuration)
 		}
 		gw.Logger.Info("MCP multi-turn loop completed",
@@ -896,9 +866,7 @@ func (p *Proxy) forwardToUpstreamWithMCP(gw *gateway.NenyaGateway,
 		default:
 		}
 
-		if gw.Metrics != nil {
-			gw.Metrics.RecordMCPLoopIteration(agentName)
-		}
+		gw.Metrics.RecordMCPLoopIteration(agentName)
 		actualIter++
 
 		working := make(map[string]interface{})

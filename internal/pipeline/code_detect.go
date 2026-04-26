@@ -5,6 +5,7 @@ import (
 	"strings"
 )
 
+// CodeSpan represents a detected code fence region within text.
 type CodeSpan struct {
 	Start    int
 	End      int
@@ -13,6 +14,8 @@ type CodeSpan struct {
 
 var fenceRe = regexp.MustCompile("(?m)^(`{3,})(\\w*)\\s*$")
 
+// DetectCodeFences finds all markdown code fence pairs (```language ... ```)
+// in text and returns their byte offsets and languages.
 func DetectCodeFences(text string) []CodeSpan {
 	matches := fenceRe.FindAllStringSubmatchIndex(text, -1)
 	if len(matches)%2 != 0 {

@@ -7,6 +7,9 @@ import (
 	"nenya/internal/config"
 )
 
+// RedactSecrets replaces all matches of the given regex patterns in text
+// with the specified label. If disabled or no patterns are provided, the
+// original text is returned unchanged.
 func RedactSecrets(text string, enabled bool, patterns []*regexp.Regexp, label string) string {
 	if !enabled || len(patterns) == 0 {
 		return text
@@ -20,6 +23,9 @@ func RedactSecrets(text string, enabled bool, patterns []*regexp.Regexp, label s
 	return redacted
 }
 
+// TruncateMiddleOut truncates text that exceeds maxSize runes by keeping
+// the beginning and end, separated by a marker. Used for payloads that
+// exceed the hard context limit.
 func TruncateMiddleOut(text string, maxSize int, cfg config.GovernanceConfig) string {
 	runes := []rune(text)
 	if len(runes) <= maxSize {

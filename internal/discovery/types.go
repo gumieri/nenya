@@ -5,17 +5,17 @@ import (
 )
 
 type ModelMetadata struct {
-	SupportsStreamOptions  bool   `json:"supports_stream_options,omitempty"`
-	SupportsAutoToolChoice bool   `json:"supports_auto_tool_choice,omitempty"`
-	SupportsContentArrays  bool   `json:"supports_content_arrays,omitempty"`
-	SupportsToolCalls      bool   `json:"supports_tool_calls,omitempty"`
-	SupportsReasoning      bool   `json:"supports_reasoning,omitempty"`
-	SupportsVision         bool   `json:"supports_vision,omitempty"`
+	SupportsStreamOptions  bool `json:"supports_stream_options,omitempty"`
+	SupportsAutoToolChoice bool `json:"supports_auto_tool_choice,omitempty"`
+	SupportsContentArrays  bool `json:"supports_content_arrays,omitempty"`
+	SupportsToolCalls      bool `json:"supports_tool_calls,omitempty"`
+	SupportsReasoning      bool `json:"supports_reasoning,omitempty"`
+	SupportsVision         bool `json:"supports_vision,omitempty"`
 
 	ScoreBonus float64 `json:"score_bonus,omitempty"`
 
 	Pricing    *config.PricingOverride `json:"pricing,omitempty"`
-	ParsedFrom map[string]interface{} `json:"parsed_from,omitempty"`
+	ParsedFrom map[string]interface{}  `json:"parsed_from,omitempty"`
 }
 
 func applyCapabilities(meta *ModelMetadata, caps []string) *ModelMetadata {

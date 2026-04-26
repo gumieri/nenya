@@ -124,6 +124,9 @@ func labelStr(labels map[string]string) string {
 }
 
 func (m *Metrics) RecordTokens(direction, model, agent, provider string, count int) {
+	if m == nil {
+		return
+	}
 	e := getOrCreateEntry(&m.tokens, map[string]string{
 		"direction": direction, "model": model, "agent": agent, "provider": provider,
 	})
@@ -131,6 +134,9 @@ func (m *Metrics) RecordTokens(direction, model, agent, provider string, count i
 }
 
 func (m *Metrics) RecordUpstreamRequest(model, agent, provider string) {
+	if m == nil {
+		return
+	}
 	e := getOrCreateEntry(&m.reqTotal, map[string]string{
 		"model": model, "agent": agent, "provider": provider,
 	})
@@ -138,6 +144,9 @@ func (m *Metrics) RecordUpstreamRequest(model, agent, provider string) {
 }
 
 func (m *Metrics) RecordUpstreamError(model, agent, provider string, statusCode int) {
+	if m == nil {
+		return
+	}
 	e := getOrCreateEntry(&m.errTotal, map[string]string{
 		"model": model, "agent": agent, "provider": provider, "code": strconv.Itoa(statusCode),
 	})
@@ -145,6 +154,9 @@ func (m *Metrics) RecordUpstreamError(model, agent, provider string, statusCode 
 }
 
 func (m *Metrics) RecordHTTPRequest(method, path string, status int, duration time.Duration) {
+	if m == nil {
+		return
+	}
 	e := getOrCreateEntry(&m.httpTotal, map[string]string{
 		"method": method, "path": path, "status": strconv.Itoa(status),
 	})
@@ -154,26 +166,38 @@ func (m *Metrics) RecordHTTPRequest(method, path string, status int, duration ti
 	h.Observe(duration.Seconds())
 }
 
-func (m *Metrics) RecordRedaction()  { m.redactions.Add(1) }
-func (m *Metrics) RecordCompaction() { m.compactions.Add(1) }
-func (m *Metrics) RecordPanic()      { m.panics.Add(1) }
+func (m *Metrics) RecordRedaction()  { if m == nil { return }; m.redactions.Add(1) }
+func (m *Metrics) RecordCompaction() { if m == nil { return }; m.compactions.Add(1) }
+func (m *Metrics) RecordPanic()      { if m == nil { return }; m.panics.Add(1) }
 
 func (m *Metrics) RecordWindow(mode string) {
+	if m == nil {
+		return
+	}
 	e := getOrCreateEntry(&m.windowApplied, map[string]string{"mode": mode})
 	e.value.Add(1)
 }
 
 func (m *Metrics) RecordInterception(reason string) {
+	if m == nil {
+		return
+	}
 	e := getOrCreateEntry(&m.interceptions, map[string]string{"reason": reason})
 	e.value.Add(1)
 }
 
 func (m *Metrics) RecordRateLimitRejected(host string) {
+	if m == nil {
+		return
+	}
 	e := getOrCreateEntry(&m.rlRejected, map[string]string{"host": host})
 	e.value.Add(1)
 }
 
 func (m *Metrics) RecordCooldown(agent, provider, model string) {
+	if m == nil {
+		return
+	}
 	e := getOrCreateEntry(&m.cooldowns, map[string]string{
 		"agent": agent, "provider": provider, "model": model,
 	})
@@ -181,11 +205,17 @@ func (m *Metrics) RecordCooldown(agent, provider, model string) {
 }
 
 func (m *Metrics) RecordExhausted(agent string) {
+	if m == nil {
+		return
+	}
 	e := getOrCreateEntry(&m.exhausted, map[string]string{"agent": agent})
 	e.value.Add(1)
 }
 
 func (m *Metrics) RecordStreamBlock(model, provider string) {
+	if m == nil {
+		return
+	}
 	e := getOrCreateEntry(&m.streamBlocked, map[string]string{
 		"model": model, "provider": provider,
 	})
@@ -193,6 +223,9 @@ func (m *Metrics) RecordStreamBlock(model, provider string) {
 }
 
 func (m *Metrics) RecordMCPToolCall(server, tool, agent string, duration time.Duration, callErr error) {
+	if m == nil {
+		return
+	}
 	status := "success"
 	if callErr != nil {
 		status = "error"
@@ -209,6 +242,9 @@ func (m *Metrics) RecordMCPToolCall(server, tool, agent string, duration time.Du
 }
 
 func (m *Metrics) RecordMCPAutoSearch(server, agent string, hit bool, searchErr error) {
+	if m == nil {
+		return
+	}
 	status := "miss"
 	if searchErr != nil {
 		status = "error"
@@ -222,6 +258,9 @@ func (m *Metrics) RecordMCPAutoSearch(server, agent string, hit bool, searchErr 
 }
 
 func (m *Metrics) RecordMCPAutoSave(server, agent string, saveErr error) {
+	if m == nil {
+		return
+	}
 	status := "success"
 	if saveErr != nil {
 		status = "error"
@@ -233,16 +272,25 @@ func (m *Metrics) RecordMCPAutoSave(server, agent string, saveErr error) {
 }
 
 func (m *Metrics) RecordMCPLoopIteration(agent string) {
+	if m == nil {
+		return
+	}
 	e := getOrCreateEntry(&m.mcpLoopIterations, map[string]string{"agent": agent})
 	e.value.Add(1)
 }
 
 func (m *Metrics) RecordMCPLoopDuration(agent string, duration time.Duration) {
+	if m == nil {
+		return
+	}
 	h := getOrCreateHist(&m.mcpLoopDuration, map[string]string{"agent": agent}, HTTPDurationBuckets)
 	h.Observe(duration.Seconds())
 }
 
 func (m *Metrics) SetMCPServerReady(server string, ready bool) {
+	if m == nil {
+		return
+	}
 	val := uint64(0)
 	if ready {
 		val = 1
@@ -252,6 +300,9 @@ func (m *Metrics) SetMCPServerReady(server string, ready bool) {
 }
 
 func (m *Metrics) WritePrometheus(w io.Writer) {
+	if m == nil {
+		return
+	}
 	fprintln := func(format string, args ...interface{}) {
 		_, _ = fmt.Fprintf(w, format+"\n", args...)
 	}

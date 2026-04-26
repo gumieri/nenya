@@ -13,6 +13,8 @@ import (
 
 const ClientVersion = "0.1.0"
 
+// Client communicates with an MCP server over HTTP+SSE transport.
+// It handles initialization, tool discovery, and tool invocation.
 type Client struct {
 	transport *HTTPTransport
 	name      string
@@ -25,6 +27,7 @@ type Client struct {
 	serverInfo  ImplementationInfo
 }
 
+// ClientConfig holds the parameters for creating a new MCP Client.
 type ClientConfig struct {
 	Name              string
 	URL               string
@@ -36,6 +39,8 @@ type ClientConfig struct {
 	Logger            *slog.Logger
 }
 
+// NewClient creates a new MCP client with the given configuration and
+// initiates the SSE transport connection.
 func NewClient(cfg ClientConfig) *Client {
 	name := cfg.Name
 	if name == "" {

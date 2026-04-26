@@ -8,6 +8,9 @@ import (
 
 const defaultToolProtectionWindow = 4
 
+// PruneStaleToolCalls removes old tool_call/tool_result message pairs
+// from the conversation history, keeping only the most recent ones within
+// the configured protection window.
 func PruneStaleToolCalls(payload map[string]interface{}, cfg config.CompactionConfig) bool {
 	if !cfg.PruneStaleTools {
 		return false

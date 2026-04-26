@@ -5,6 +5,8 @@ import (
 	"strings"
 )
 
+// ClientProfile describes the detected AI coding client making the request,
+// used to tailor pipeline behavior (e.g. skip compaction for IDE clients).
 type ClientProfile struct {
 	IsIDE      bool
 	ClientName string
@@ -26,6 +28,8 @@ var clientPatterns = []clientPattern{
 	{header: "Editor-Plugin-Version", substring: "claude-code", name: "claude-code", isIDE: true},
 }
 
+// ClassifyClient inspects HTTP headers to identify the AI coding client
+// and determine whether it is an IDE-style client that manages its own context.
 func ClassifyClient(headers http.Header) ClientProfile {
 	for _, p := range clientPatterns {
 		val := strings.ToLower(headers.Get(p.header))

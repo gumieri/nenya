@@ -11,6 +11,9 @@ linters:
     - unused
     - ineffassign
     - misspell
+    - gocyclo
+    - funlen
+    - nestif
   settings:
     govet:
       enable-all: true
@@ -18,6 +21,13 @@ linters:
         - fieldalignment
     misspell:
       locale: US
+    gocyclo:
+      min-complexity: 15
+    funlen:
+      lines: 150
+      statements: 80
+    nestif:
+      min-complexity: 4
   exclusions:
     paths:
       - vendor$

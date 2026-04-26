@@ -5,6 +5,8 @@ import (
 	"strings"
 )
 
+// EntropyFilter redacts high-entropy token sequences that likely represent
+// secrets (API keys, tokens, passwords) based on Shannon entropy analysis.
 type EntropyFilter struct {
 	Threshold   float64 // bits/char threshold for redaction
 	MinTokenLen int     // minimum token length to consider
@@ -16,6 +18,8 @@ type tokenSpan struct {
 	length int
 }
 
+// NewEntropyFilter creates an EntropyFilter with the given threshold and
+// minimum token length. Sensible defaults are applied if values are too low.
 func NewEntropyFilter(threshold float64, minTokenLen int) *EntropyFilter {
 	if threshold <= 0 {
 		threshold = 4.5

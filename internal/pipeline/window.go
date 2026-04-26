@@ -4,12 +4,12 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"math"
 	"net/http"
 	"strings"
 	"unicode/utf8"
 
 	"nenya/internal/config"
+	"nenya/internal/util"
 )
 
 const WindowSystemPrompt = `You are a conversation summarizer. Summarize the following conversation history into a concise summary.
@@ -24,13 +24,6 @@ type WindowDeps struct {
 	Providers    map[string]*config.Provider
 	InjectAPIKey func(providerName string, headers http.Header) error
 	CountTokens  func(text string) int
-}
-
-func addCap(a, b int) int {
-	if b > 0 && a > math.MaxInt-b {
-		return math.MaxInt
-	}
-	return a + b
 }
 
 func ApplyWindowCompaction(ctx context.Context, deps WindowDeps, payload map[string]interface{}, messages []interface{}, tokenCount int, windowCfg config.WindowConfig, maxContext int, countRequestTokens func(payload map[string]interface{}) int) (bool, error) {
@@ -171,7 +164,7 @@ func ApplyWindowCompaction(ctx context.Context, deps WindowDeps, payload map[str
 			len(history), beforeTokens, summary),
 	}
 
-	newMessages := make([]interface{}, 0, addCap(addCap(len(leadingSystem), 2), len(active)))
+	newMessages := make([]interface{}, 0, util.AddCap(util.AddCap(len(leadingSystem), 2), len(active)))
 	// Re-inject preserved operator system messages before the summary so they
 	// are never lost during compaction.
 	newMessages = append(newMessages, leadingSystem...)

@@ -6,21 +6,21 @@ import (
 )
 
 type DiscoveredModel struct {
-	ID         string              `json:"id"`
-	Provider   string              `json:"provider"`
-	MaxContext int                 `json:"max_context"`
-	MaxOutput  int                 `json:"max_output"`
-	OwnedBy    string              `json:"owned_by"`
-	Metadata   *ModelMetadata      `json:"metadata,omitempty"`
-	Pricing    *PricingEntry       `json:"pricing,omitempty"`
+	ID         string         `json:"id"`
+	Provider   string         `json:"provider"`
+	MaxContext int            `json:"max_context"`
+	MaxOutput  int            `json:"max_output"`
+	OwnedBy    string         `json:"owned_by"`
+	Metadata   *ModelMetadata `json:"metadata,omitempty"`
+	Pricing    *PricingEntry  `json:"pricing,omitempty"`
 }
 
 type ModelCatalog struct {
-	mu           sync.RWMutex
-	models       map[string]DiscoveredModel
-	providers    map[string][]string
-	fetchedAt    time.Time
-	hasMetadata  bool
+	mu          sync.RWMutex
+	models      map[string]DiscoveredModel
+	providers   map[string][]string
+	fetchedAt   time.Time
+	hasMetadata bool
 }
 
 func NewModelCatalog() *ModelCatalog {
@@ -67,10 +67,10 @@ func (c *ModelCatalog) AllModels() []DiscoveredModel {
 func (c *ModelCatalog) Add(model DiscoveredModel) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-		if model.Metadata != nil && (model.Metadata.ScoreBonus != 0 ||
-			model.Metadata.SupportsToolCalls || model.Metadata.SupportsReasoning ||
-			model.Metadata.SupportsVision || model.Metadata.SupportsContentArrays ||
-			model.Metadata.Pricing != nil) {
+	if model.Metadata != nil && (model.Metadata.ScoreBonus != 0 ||
+		model.Metadata.SupportsToolCalls || model.Metadata.SupportsReasoning ||
+		model.Metadata.SupportsVision || model.Metadata.SupportsContentArrays ||
+		model.Metadata.Pricing != nil) {
 		c.hasMetadata = true
 	}
 	c.models[model.ID] = model
