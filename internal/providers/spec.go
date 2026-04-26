@@ -15,6 +15,8 @@ type SanitizeDeps struct {
 	Logger             *slog.Logger
 	ThoughtSigCache    *infra.ThoughtSignatureCache
 	ExtractContentText func(msg map[string]interface{}) string
+	SupportsReasoning  func(model string) bool
+	ProviderThinking   func(name string) (enabled bool, clearThinking bool, ok bool)
 }
 
 // ProviderSpec describes a provider's capabilities and optional hooks

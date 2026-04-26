@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 )
 
 type ZAIAdapter struct {
@@ -78,6 +79,10 @@ func (a *ZAIAdapter) NormalizeError(statusCode int, body []byte) ErrorClass {
 			case "1311", "1313":
 				return ErrorPermanent
 			}
+		}
+		lower := strings.ToLower(string(body))
+		if strings.Contains(lower, "model_context_window_exceeded") {
+			return ErrorRetryable
 		}
 	}
 	return defaultNormalizeError(statusCode, body)

@@ -26,6 +26,8 @@ func TestZAIAdapter_NormalizeError(t *testing.T) {
 		{"quota_on_403", 403, `{"error":{"code":"1310"}}`, ErrorQuotaExhausted},
 		{"concurrency_on_500", 500, `{"error":{"code":"1302"}}`, ErrorRateLimited},
 		{"generic_400", 400, `{"error":{"code":"1311"}}`, ErrorPermanent},
+		{"context_window_exceeded", 400, `{"error":{"message":"model_context_window_exceeded"}}`, ErrorRetryable},
+		{"context_window_exceeded_in_message", 400, `{"error":{"message":"request failed: model_context_window_exceeded for model glm-5"}}`, ErrorRetryable},
 	}
 
 	for _, tt := range tests {

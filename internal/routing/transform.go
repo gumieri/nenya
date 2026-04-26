@@ -77,11 +77,29 @@ func TransformRequestForUpstream(deps TransformDeps, providerName, upstreamURL s
 			}
 		}
 		if spec.SanitizeRequest != nil {
-			spec.SanitizeRequest(&providerpkg.SanitizeDeps{
+			sanitizeDeps := &providerpkg.SanitizeDeps{
 				Logger:             deps.Logger,
 				ThoughtSigCache:    deps.ThoughtSigCache,
 				ExtractContentText: deps.ExtractContentText,
-			}, payload)
+			}
+			if deps.Catalog != nil {
+				sanitizeDeps.SupportsReasoning = func(model string) bool {
+					if dm, ok := deps.Catalog.Lookup(model); ok && dm.Metadata != nil {
+						return dm.Metadata.SupportsReasoning
+					}
+					return false
+				}
+			}
+			if deps.Providers != nil {
+				sanitizeDeps.ProviderThinking = func(name string) (bool, bool, bool) {
+					p, ok := deps.Providers[name]
+					if !ok || p.Thinking == nil {
+						return false, false, false
+					}
+					return p.Thinking.Enabled, p.Thinking.ClearThinking, true
+				}
+			}
+			spec.SanitizeRequest(sanitizeDeps, payload)
 		}
 	}
 

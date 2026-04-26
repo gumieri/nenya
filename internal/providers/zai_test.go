@@ -383,3 +383,191 @@ func TestZAI_SanitizesWhenNoTools(t *testing.T) {
 		t.Error("expected system bridge as first message when no tools present")
 	}
 }
+
+func TestZAI_InjectThinkingForReasoningModel(t *testing.T) {
+	deps := zaiDeps()
+	deps.SupportsReasoning = func(model string) bool {
+		return model == "glm-5"
+	}
+
+	payload := map[string]interface{}{
+		"model": "glm-5",
+		"messages": []interface{}{
+			map[string]interface{}{"role": "user", "content": "hello"},
+		},
+	}
+
+	zaiSanitize(deps, payload)
+
+	thinking, ok := payload["thinking"].(map[string]interface{})
+	if !ok {
+		t.Fatal("expected thinking to be injected")
+	}
+	if thinking["type"] != "enabled" {
+		t.Fatalf("expected thinking.type to be enabled, got %v", thinking["type"])
+	}
+}
+
+func TestZAI_SkipThinkingForNonReasoningModel(t *testing.T) {
+	deps := zaiDeps()
+	deps.SupportsReasoning = func(model string) bool {
+		return false
+	}
+
+	payload := map[string]interface{}{
+		"model": "glm-4",
+		"messages": []interface{}{
+			map[string]interface{}{"role": "user", "content": "hello"},
+		},
+	}
+
+	zaiSanitize(deps, payload)
+
+	if _, hasThinking := payload["thinking"]; hasThinking {
+		t.Fatal("expected thinking NOT to be injected for non-reasoning model")
+	}
+}
+
+func TestZAI_ForceEnableThinking(t *testing.T) {
+	deps := zaiDeps()
+	deps.SupportsReasoning = func(model string) bool {
+		return false
+	}
+	deps.ProviderThinking = func(name string) (bool, bool, bool) {
+		if name == "zai" {
+			return true, false, true
+		}
+		return false, false, false
+	}
+
+	payload := map[string]interface{}{
+		"model": "glm-4",
+		"messages": []interface{}{
+			map[string]interface{}{"role": "user", "content": "hello"},
+		},
+	}
+
+	zaiSanitize(deps, payload)
+
+	thinking, ok := payload["thinking"].(map[string]interface{})
+	if !ok {
+		t.Fatal("expected thinking to be injected despite non-reasoning model")
+	}
+	if thinking["type"] != "enabled" {
+		t.Fatalf("expected thinking.type enabled, got %v", thinking["type"])
+	}
+}
+
+func TestZAI_ForceDisableThinking(t *testing.T) {
+	deps := zaiDeps()
+	deps.SupportsReasoning = func(model string) bool {
+		return true
+	}
+	deps.ProviderThinking = func(name string) (bool, bool, bool) {
+		if name == "zai" {
+			return false, false, true
+		}
+		return false, false, false
+	}
+
+	payload := map[string]interface{}{
+		"model": "glm-5",
+		"messages": []interface{}{
+			map[string]interface{}{"role": "user", "content": "hello"},
+		},
+	}
+
+	zaiSanitize(deps, payload)
+
+	if _, hasThinking := payload["thinking"]; hasThinking {
+		t.Fatal("expected thinking NOT to be injected when force-disabled")
+	}
+}
+
+func TestZAI_RespectsClientProvidedThinking(t *testing.T) {
+	deps := zaiDeps()
+	deps.SupportsReasoning = func(model string) bool {
+		return true
+	}
+
+	payload := map[string]interface{}{
+		"model": "glm-5",
+		"thinking": map[string]interface{}{
+			"type": "disabled",
+		},
+		"messages": []interface{}{
+			map[string]interface{}{"role": "user", "content": "hello"},
+		},
+	}
+
+	zaiSanitize(deps, payload)
+
+	thinking := payload["thinking"].(map[string]interface{})
+	if thinking["type"] != "disabled" {
+		t.Fatalf("expected client's thinking type 'disabled' to be preserved, got %v", thinking["type"])
+	}
+}
+
+func TestZAI_InjectTemperatureForGLM46(t *testing.T) {
+	deps := zaiDeps()
+
+	payload := map[string]interface{}{
+		"model": "glm-4.6-turbo",
+		"messages": []interface{}{},
+	}
+
+	zaiSanitize(deps, payload)
+
+	temp, ok := payload["temperature"].(float64)
+	if !ok || temp != 1.0 {
+		t.Fatalf("expected temperature 1.0 for glm-4.6, got %v", payload["temperature"])
+	}
+}
+
+func TestZAI_InjectTemperatureForGLM47(t *testing.T) {
+	deps := zaiDeps()
+
+	payload := map[string]interface{}{
+		"model": "glm-4.7-plus",
+		"messages": []interface{}{},
+	}
+
+	zaiSanitize(deps, payload)
+
+	temp, ok := payload["temperature"].(float64)
+	if !ok || temp != 1.0 {
+		t.Fatalf("expected temperature 1.0 for glm-4.7, got %v", payload["temperature"])
+	}
+}
+
+func TestZAI_NoTemperatureForOtherModels(t *testing.T) {
+	deps := zaiDeps()
+
+	payload := map[string]interface{}{
+		"model": "glm-5",
+		"messages": []interface{}{},
+	}
+
+	zaiSanitize(deps, payload)
+
+	if _, hasTemp := payload["temperature"]; hasTemp {
+		t.Fatal("expected no temperature injection for non-glm-4.x models")
+	}
+}
+
+func TestZAI_PreservesClientTemperature(t *testing.T) {
+	deps := zaiDeps()
+
+	payload := map[string]interface{}{
+		"model":       "glm-4.6-turbo",
+		"temperature": 0.5,
+		"messages":    []interface{}{},
+	}
+
+	zaiSanitize(deps, payload)
+
+	temp := payload["temperature"].(float64)
+	if temp != 0.5 {
+		t.Fatalf("expected client temperature 0.5 preserved, got %v", temp)
+	}
+}
