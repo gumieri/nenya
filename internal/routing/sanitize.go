@@ -3,6 +3,7 @@ package routing
 import (
 	"strings"
 
+	"nenya/internal/pipeline"
 	providerpkg "nenya/internal/providers"
 )
 
@@ -46,6 +47,12 @@ func SanitizePayload(deps TransformDeps, payload map[string]interface{}, provide
 				}
 				if changed {
 					deps.Logger.Debug("flattened content arrays for provider", "provider", providerName)
+				}
+			}
+
+			if !providerpkg.SupportsReasoning(providerName) {
+				if pipeline.StripReasoningContent(payload) {
+					deps.Logger.Debug("stripped reasoning_content for non-reasoning provider", "provider", providerName)
 				}
 			}
 		}

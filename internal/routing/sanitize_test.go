@@ -61,7 +61,7 @@ func TestSanitizePayload_KeepStreamOptions(t *testing.T) {
 	deps.Providers = providers
 
 	payload := map[string]interface{}{
-		"model": "deepseek-reasoner",
+		"model": "deepseek-v4-pro",
 		"stream_options": map[string]interface{}{
 			"include_usage": true,
 		},
@@ -97,7 +97,7 @@ func TestSanitizePayload_KeepAutoToolChoice(t *testing.T) {
 	deps.Providers = providers
 
 	payload := map[string]interface{}{
-		"model":       "deepseek-reasoner",
+		"model":       "deepseek-v4-pro",
 		"tool_choice": "auto",
 	}
 	SanitizePayload(deps, payload, "deepseek")
@@ -161,7 +161,7 @@ func TestSanitizePayload_KeepContentArrays(t *testing.T) {
 		map[string]interface{}{"type": "text", "text": "hello"},
 	}
 	payload := map[string]interface{}{
-		"model":    "deepseek-reasoner",
+		"model":    "deepseek-v4-pro",
 		"messages": []interface{}{map[string]interface{}{"role": "user", "content": contentArr}},
 	}
 	SanitizePayload(deps, payload, "deepseek")
@@ -301,5 +301,91 @@ func TestSanitizePayload_ReasoningParamsPassthrough(t *testing.T) {
 	}
 	if payload["temperature"] != 0.7 {
 		t.Errorf("temperature should pass through, got %v", payload["temperature"])
+	}
+}
+
+func TestSanitizePayload_StripReasoningContentForNonReasoningProvider(t *testing.T) {
+	deps := defaultSanitizeDeps()
+	deps.Providers = map[string]*config.Provider{
+		"nvidia": {Name: "nvidia"},
+	}
+
+	payload := map[string]interface{}{
+		"model": "nemotron-3-super",
+		"messages": []interface{}{
+			map[string]interface{}{
+				"role":    "user",
+				"content": "hello",
+			},
+			map[string]interface{}{
+				"role":              "assistant",
+				"content":           "answer",
+				"reasoning_content": "some reasoning that nvidia does not support",
+			},
+		},
+	}
+
+	SanitizePayload(deps, payload, "nvidia")
+	msgs := payload["messages"].([]interface{})
+	assistant := msgs[1].(map[string]interface{})
+	if _, exists := assistant["reasoning_content"]; exists {
+		t.Fatal("reasoning_content should be stripped for non-reasoning provider")
+	}
+}
+
+func TestSanitizePayload_KeepReasoningContentForReasoningProvider(t *testing.T) {
+	deps := defaultSanitizeDeps()
+	deps.Providers = map[string]*config.Provider{
+		"deepseek": {Name: "deepseek"},
+	}
+
+	payload := map[string]interface{}{
+		"model": "deepseek-v4-pro",
+		"messages": []interface{}{
+			map[string]interface{}{
+				"role":    "user",
+				"content": "hello",
+			},
+			map[string]interface{}{
+				"role":              "assistant",
+				"content":           "answer",
+				"reasoning_content": "required reasoning for deepseek v4 thinking mode",
+			},
+		},
+	}
+
+	SanitizePayload(deps, payload, "deepseek")
+	msgs := payload["messages"].([]interface{})
+	assistant := msgs[1].(map[string]interface{})
+	if _, exists := assistant["reasoning_content"]; !exists {
+		t.Fatal("reasoning_content should be preserved for reasoning provider")
+	}
+	if assistant["reasoning_content"].(string) != "required reasoning for deepseek v4 thinking mode" {
+		t.Fatalf("reasoning_content value mismatch: %v", assistant["reasoning_content"])
+	}
+}
+
+func TestSanitizePayload_KeepEmptyReasoningContent(t *testing.T) {
+	deps := defaultSanitizeDeps()
+	deps.Providers = map[string]*config.Provider{
+		"nvidia": {Name: "nvidia"},
+	}
+
+	payload := map[string]interface{}{
+		"model": "nemotron-3-super",
+		"messages": []interface{}{
+			map[string]interface{}{
+				"role":              "assistant",
+				"content":           "answer",
+				"reasoning_content": "",
+			},
+		},
+	}
+
+	SanitizePayload(deps, payload, "nvidia")
+	msgs := payload["messages"].([]interface{})
+	assistant := msgs[0].(map[string]interface{})
+	if _, exists := assistant["reasoning_content"]; !exists {
+		t.Fatal("empty reasoning_content should remain (no-op, nothing to strip)")
 	}
 }

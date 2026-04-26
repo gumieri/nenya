@@ -48,7 +48,7 @@ func TestPruneThoughts_NoAssistantMessages(t *testing.T) {
 	}
 }
 
-func TestPruneThoughts_ReasoningContentField(t *testing.T) {
+func TestPruneThoughts_ReasoningContentFieldPreserved(t *testing.T) {
 	cfg := config.CompactionConfig{
 		PruneThoughts: true,
 	}
@@ -63,34 +63,14 @@ func TestPruneThoughts_ReasoningContentField(t *testing.T) {
 		},
 	}
 
-	if mutated := PruneThoughts(payload, cfg); !mutated {
-		t.Fatalf("expected true, got false")
+	if mutated := PruneThoughts(payload, cfg); mutated {
+		t.Fatalf("expected false (no  coherence tags), got true")
 	}
 
 	messages := payload["messages"].([]interface{})
 	msg := messages[0].(map[string]interface{})
-	if _, exists := msg["reasoning_content"]; exists {
-		t.Fatalf("expected reasoning_content to be removed")
-	}
-}
-
-func TestPruneThoughts_EmptyReasoningContent(t *testing.T) {
-	cfg := config.CompactionConfig{
-		PruneThoughts: true,
-	}
-
-	payload := map[string]interface{}{
-		"messages": []interface{}{
-			map[string]interface{}{
-				"role":              "assistant",
-				"content":           "final answer",
-				"reasoning_content": "",
-			},
-		},
-	}
-
-	if mutated := PruneThoughts(payload, cfg); mutated {
-		t.Fatalf("expected false for empty reasoning_content, got true")
+	if _, exists := msg["reasoning_content"]; !exists {
+		t.Fatalf("expected reasoning_content to be preserved by PruneThoughts")
 	}
 }
 
@@ -344,12 +324,10 @@ func TestPruneThoughts_ReasoningContentAndTagsBoth(t *testing.T) {
 	messages := payload["messages"].([]interface{})
 	msg := messages[0].(map[string]interface{})
 
-	// reasoning_content should be removed
-	if _, exists := msg["reasoning_content"]; exists {
-		t.Fatalf("expected reasoning_content to be removed")
+	if _, exists := msg["reasoning_content"]; !exists {
+		t.Fatalf("expected reasoning_content to be preserved by PruneThoughts")
 	}
 
-	// content should have tags stripped
 	content := msg["content"].(string)
 	expected := "[Reasoning pruned by gateway] final answer"
 	if content != expected {
@@ -463,5 +441,128 @@ func TestPruneThoughts_ThinkTagMixedWithThinkingTag(t *testing.T) {
 	expected := "[Reasoning pruned by gateway] answer with <thinking>not matched</thinking> text"
 	if content != expected {
 		t.Fatalf("expected %q, got %q", expected, content)
+	}
+}
+
+func TestStripReasoningContent_Basic(t *testing.T) {
+	payload := map[string]interface{}{
+		"messages": []interface{}{
+			map[string]interface{}{
+				"role":              "assistant",
+				"content":           "final answer",
+				"reasoning_content": "massive reasoning block here",
+			},
+		},
+	}
+
+	if mutated := StripReasoningContent(payload); !mutated {
+		t.Fatalf("expected true, got false")
+	}
+
+	messages := payload["messages"].([]interface{})
+	msg := messages[0].(map[string]interface{})
+	if _, exists := msg["reasoning_content"]; exists {
+		t.Fatalf("expected reasoning_content to be removed")
+	}
+}
+
+func TestStripReasoningContent_Empty(t *testing.T) {
+	payload := map[string]interface{}{
+		"messages": []interface{}{
+			map[string]interface{}{
+				"role":              "assistant",
+				"content":           "final answer",
+				"reasoning_content": "",
+			},
+		},
+	}
+
+	if mutated := StripReasoningContent(payload); mutated {
+		t.Fatalf("expected false for empty reasoning_content, got true")
+	}
+}
+
+func TestStripReasoningContent_NonString(t *testing.T) {
+	payload := map[string]interface{}{
+		"messages": []interface{}{
+			map[string]interface{}{
+				"role":              "assistant",
+				"content":           "final answer",
+				"reasoning_content": 42,
+			},
+		},
+	}
+
+	if mutated := StripReasoningContent(payload); !mutated {
+		t.Fatalf("expected true for non-string reasoning_content, got false")
+	}
+
+	messages := payload["messages"].([]interface{})
+	msg := messages[0].(map[string]interface{})
+	if _, exists := msg["reasoning_content"]; exists {
+		t.Fatalf("expected non-string reasoning_content to be removed")
+	}
+}
+
+func TestStripReasoningContent_SkipUserMessages(t *testing.T) {
+	payload := map[string]interface{}{
+		"messages": []interface{}{
+			map[string]interface{}{
+				"role":              "user",
+				"content":           "question",
+				"reasoning_content": "should not be touched (malformed but test skip)",
+			},
+		},
+	}
+
+	if mutated := StripReasoningContent(payload); mutated {
+		t.Fatalf("expected false for user messages, got true")
+	}
+}
+
+func TestStripReasoningContent_NoMessages(t *testing.T) {
+	payload := map[string]interface{}{}
+
+	if mutated := StripReasoningContent(payload); mutated {
+		t.Fatalf("expected false for nil messages, got true")
+	}
+}
+
+func TestStripReasoningContent_MultiMessage(t *testing.T) {
+	payload := map[string]interface{}{
+		"messages": []interface{}{
+			map[string]interface{}{
+				"role":    "user",
+				"content": "question",
+			},
+			map[string]interface{}{
+				"role":              "assistant",
+				"content":           "answer",
+				"reasoning_content": "reasoning A",
+			},
+			map[string]interface{}{
+				"role":    "user",
+				"content": "follow up",
+			},
+			map[string]interface{}{
+				"role":              "assistant",
+				"content":           "answer 2",
+				"reasoning_content": "reasoning B",
+			},
+		},
+	}
+
+	if mutated := StripReasoningContent(payload); !mutated {
+		t.Fatalf("expected true, got false")
+	}
+
+	messages := payload["messages"].([]interface{})
+	for i, msgRaw := range messages {
+		msg := msgRaw.(map[string]interface{})
+		if msg["role"] == "assistant" {
+			if _, exists := msg["reasoning_content"]; exists {
+				t.Fatalf("assistant message %d should have reasoning_content stripped", i)
+			}
+		}
 	}
 }

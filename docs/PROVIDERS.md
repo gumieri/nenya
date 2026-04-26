@@ -52,6 +52,16 @@ Zero-config integration for providers using the standard OpenAI wire format:
 
 ## Special Behaviors
 
+### DeepSeek v4 (deepseek-v4-flash, deepseek-v4-pro)
+
+DeepSeek v4 models support a **thinking mode** controlled by the `thinking` parameter and return structured `reasoning_content` in assistant messages.
+
+- **Request**: The `thinking: {"type": "enabled"}` parameter activates thinking mode. When active, `reasoning_effort` (e.g., `"high"`) controls the reasoning depth.
+- **Multi-turn requirement**: When thinking mode is active, `reasoning_content` from previous assistant turns **must** be passed back verbatim to the API. The gateway preserves this field for DeepSeek and strips it for non-reasoning providers.
+- **`deepseek-v4-pro`**: Thinking mode is always on by default.
+- **`deepseek-v4-flash`**: Thinking mode is opt-in via the `thinking` parameter.
+- **Limits**: 1M context, 384K max output.
+
 ### Anthropic
 - **Request**: Converts OpenAI format to Anthropic native format
   - Messages: `system` → `user`/`assistant` pair, `tool` → `user` with `tool_result` content block
