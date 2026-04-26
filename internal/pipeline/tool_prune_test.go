@@ -1,6 +1,7 @@
 package pipeline
 
 import (
+	"strings"
 	"testing"
 
 	"nenya/internal/config"
@@ -464,5 +465,83 @@ func TestExtractToolCallID(t *testing.T) {
 				t.Fatalf("extractToolCallID(%v) = %q, want %q", tt.in, got, tt.want)
 			}
 		})
+	}
+}
+
+func TestPruneStaleToolCalls_PreserveReasoningContent(t *testing.T) {
+	cfg := config.CompactionConfig{
+		PruneStaleTools: true,
+		ToolProtectionWindow: 4,
+	}
+
+	payload := map[string]interface{}{
+		"messages": []interface{}{
+			map[string]interface{}{ // 0: old assistant with tool call + reasoning_content
+				"role":    "assistant",
+				"content": "Let me check the weather",
+				"tool_calls": []interface{}{
+					map[string]interface{}{
+						"id":   "call_old",
+						"type": "function",
+						"function": map[string]interface{}{
+							"name":      "get_weather",
+							"arguments":   "{\"location\":\"Paris\"}",
+						},
+					},
+				},
+				"reasoning_content": "I need to call the weather API to get current conditions in Paris",
+			},
+			map[string]interface{}{ // 1: old tool result
+				"role":         "tool",
+				"tool_call_id": "call_old",
+				"content":      "It's sunny, 22°C",
+			},
+			map[string]interface{}{ // 2: user follow-up
+				"role":    "user",
+				"content": "What should I wear?",
+			},
+			map[string]interface{}{ // 3: assistant reply
+				"role":    "assistant",
+				"content": "Wear light clothes",
+			},
+			map[string]interface{}{ // 4: user question
+				"role":    "user",
+				"content": "And what about dinner?",
+			},
+			map[string]interface{}{ // 5: assistant reply
+				"role":    "assistant",
+				"content": "Something warm",
+			},
+		},
+	}
+
+	if mutated := PruneStaleToolCalls(payload, cfg); !mutated {
+		t.Fatalf("expected true, got false")
+	}
+
+	messages := payload["messages"].([]interface{})
+	if len(messages) != 5 {
+		t.Fatalf("expected 5 messages (1 replaced + 4 original), got %d", len(messages))
+	}
+
+	// First message should be replacement with reasoning_content preserved
+	first := messages[0].(map[string]interface{})
+	if first["role"] != "assistant" {
+		t.Fatalf("expected assistant role, got %v", first["role"])
+	}
+	content := first["content"].(string)
+	if !strings.Contains(content, "Tool 'get_weather' was executed previously") {
+		t.Fatalf("expected summary content, got %q", content)
+	}
+	if rc, ok := first["reasoning_content"].(string); !ok || rc != "I need to call the weather API to get current conditions in Paris" {
+		t.Fatalf("expected reasoning_content to be preserved, got %v", rc)
+	}
+
+	// Remaining messages should be preserved
+	if messages[1].(map[string]interface{})["role"] != "user" {
+		t.Fatalf("expected user at index 1")
+	}
+	if messages[2].(map[string]interface{})["role"] != "assistant" {
+		t.Fatalf("expected assistant at index 2")
 	}
 }
