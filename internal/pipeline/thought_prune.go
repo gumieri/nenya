@@ -12,6 +12,9 @@ const (
 	thoughtMarker   = "[Reasoning pruned by gateway]"
 )
 
+// PruneThoughts removes <think ...>...</think > reasoning blocks from
+// assistant messages to reduce token usage while preserving the final
+// model output.
 func PruneThoughts(payload map[string]interface{}, cfg config.CompactionConfig) bool {
 	if !cfg.PruneThoughts {
 		return false

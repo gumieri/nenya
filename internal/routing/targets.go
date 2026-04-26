@@ -13,20 +13,35 @@ import (
 	"nenya/internal/resilience"
 )
 
+// DefaultAgentCooldownSec is the default cooldown between requests to the
+// same agent+provider+model combination when not explicitly configured.
+const DefaultAgentCooldownSec = 60
+
+// DefaultFailureThreshold is the default number of consecutive failures
+// before a circuit breaker trips open.
+const DefaultFailureThreshold = 5
+
+// DefaultSuccessThreshold is the default number of consecutive successes
+// required to close a half-open circuit breaker.
+const DefaultSuccessThreshold = 1
+
+// DefaultHalfOpenMaxRequests is the default maximum number of probe
+// requests allowed while a circuit is in half-open state.
+const DefaultHalfOpenMaxRequests = 3
+
 const (
-	DefaultAgentCooldownSec    = 60
-	DefaultFailureThreshold    = 5
-	DefaultSuccessThreshold    = 1
-	DefaultHalfOpenMaxRequests = 3
-	latencyJitterPct           = 0.10
+	latencyJitterPct = 0.10
 )
 
+// AgentState tracks per-model request counters and circuit breaker state.
 type AgentState struct {
 	Counters map[string]uint64
 	CB       *resilience.CircuitBreaker
 	Mu       sync.Mutex
 }
 
+// NewAgentState creates an AgentState with a circuit breaker and
+// optional state-change logging.
 func NewAgentState(logger *slog.Logger) *AgentState {
 	onChange := func(key string, from, to resilience.State) {
 		switch to {

@@ -147,7 +147,7 @@ retryLoop:
 	}
 
 	ctxLogger.Error("all upstream targets exhausted", "total", len(targets), "attempts", attempt)
-	if gw.Metrics != nil && agentName != "" {
+	if agentName != "" {
 		gw.Metrics.RecordExhausted(agentName)
 	}
 	http.Error(w, "All upstream targets exhausted", http.StatusServiceUnavailable)
@@ -172,15 +172,11 @@ func (p *Proxy) prepareAndSend(gw *gateway.NenyaGateway,
 	)
 
 	gw.Stats.RecordRequest(target.Model, tokenCount)
-	if gw.Metrics != nil {
-		gw.Metrics.RecordTokens("input", target.Model, agentName, target.Provider, tokenCount)
-		gw.Metrics.RecordUpstreamRequest(target.Model, agentName, target.Provider)
-	}
+	gw.Metrics.RecordTokens("input", target.Model, agentName, target.Provider, tokenCount)
+	gw.Metrics.RecordUpstreamRequest(target.Model, agentName, target.Provider)
 
 	if !gw.RateLimiter.Check(target.URL, tokenCount) {
-		if gw.Metrics != nil {
-			gw.Metrics.RecordRateLimitRejected(infra.ExtractHost(target.URL))
-		}
+		gw.Metrics.RecordRateLimitRejected(infra.ExtractHost(target.URL))
 		ctxLogger.Warn("target skipped: rate limit exceeded")
 		return upstreamAction{kind: actionContinue}
 	}
@@ -256,9 +252,7 @@ func (p *Proxy) prepareAndSend(gw *gateway.NenyaGateway,
 		if gw.CostTracker != nil {
 			gw.CostTracker.RecordError(target.Model)
 		}
-		if gw.Metrics != nil {
-			gw.Metrics.RecordUpstreamError(target.Model, agentName, target.Provider, resp.StatusCode)
-		}
+		gw.Metrics.RecordUpstreamError(target.Model, agentName, target.Provider, resp.StatusCode)
 		return upstreamAction{kind: actionError, resp: resp, cancel: upstreamCancel}
 	}
 
@@ -306,9 +300,7 @@ func (p *Proxy) handleUpstreamError(gw *gateway.NenyaGateway,
 
 		if action.resp.StatusCode == http.StatusTooManyRequests {
 			gw.AgentState.ActivateCooldown(target, effectiveCooldown)
-			if gw.Metrics != nil {
-				gw.Metrics.RecordCooldown(agentName, target.Provider, target.Model)
-			}
+			gw.Metrics.RecordCooldown(agentName, target.Provider, target.Model)
 			delay := parseRetryDelay(action.resp.Header, errorBody)
 			return true, delay
 		}

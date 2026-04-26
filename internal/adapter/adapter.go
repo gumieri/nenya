@@ -5,6 +5,7 @@ import (
 	"net/http"
 )
 
+// ErrorClass classifies upstream errors for retry/circuit-breaker decisions.
 type ErrorClass int
 
 const (
@@ -29,12 +30,15 @@ func (e ErrorClass) String() string {
 	}
 }
 
+// Capabilities declares which optional features a provider supports.
 type Capabilities struct {
 	StreamOptions  bool
 	AutoToolChoice bool
 	ContentArrays  bool
 }
 
+// ProviderAdapter defines the interface for provider-specific request/response
+// mutation, authentication injection, and error classification.
 type ProviderAdapter interface {
 	MutateRequest(body []byte, model string, stream bool) ([]byte, error)
 	InjectAuth(req *http.Request, apiKey string) error
@@ -42,6 +46,7 @@ type ProviderAdapter interface {
 	NormalizeError(statusCode int, body []byte) ErrorClass
 }
 
+// BearerAuth injects an API key via the standard Authorization header.
 type BearerAuth struct{}
 
 func (a *BearerAuth) InjectAuth(req *http.Request, apiKey string) error {
@@ -52,6 +57,8 @@ func (a *BearerAuth) InjectAuth(req *http.Request, apiKey string) error {
 	return nil
 }
 
+// BearerPlusGoogAuth injects an API key via both Authorization and
+// x-goog-api-key headers, used by Google AI providers.
 type BearerPlusGoogAuth struct{}
 
 func (a *BearerPlusGoogAuth) InjectAuth(req *http.Request, apiKey string) error {

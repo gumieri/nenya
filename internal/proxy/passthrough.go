@@ -56,9 +56,7 @@ func (p *Proxy) handlePassthrough(gw *gateway.NenyaGateway, w http.ResponseWrite
 	}
 
 	if !gw.RateLimiter.Check(provider.BaseURL, 0) {
-		if gw.Metrics != nil {
-			gw.Metrics.RecordRateLimitRejected(infra.ExtractHost(provider.BaseURL))
-		}
+		gw.Metrics.RecordRateLimitRejected(infra.ExtractHost(provider.BaseURL))
 		gw.Logger.Warn("passthrough: rate limit exceeded", "provider", providerName)
 		http.Error(w, "Rate limit exceeded", http.StatusTooManyRequests)
 		return
@@ -119,9 +117,7 @@ func (p *Proxy) handlePassthrough(gw *gateway.NenyaGateway, w http.ResponseWrite
 	ctxLogger.Info("upstream response", "status", resp.StatusCode)
 
 	gw.Stats.RecordRequest("proxy:"+providerName, 0)
-	if gw.Metrics != nil {
-		gw.Metrics.RecordUpstreamRequest("proxy:"+providerName, "", providerName)
-	}
+	gw.Metrics.RecordUpstreamRequest("proxy:"+providerName, "", providerName)
 
 	routing.CopyHeaders(resp.Header, w.Header())
 	w.WriteHeader(resp.StatusCode)

@@ -229,9 +229,7 @@ func (p *Proxy) streamResponse(gw *gateway.NenyaGateway, w http.ResponseWriter, 
 	transformingReader := stream.NewSSETransformingReader(stallR, transformer)
 	transformingReader.SetOnUsage(func(completion, prompt, total int) {
 		gw.Stats.RecordOutput(target.Model, completion)
-		if gw.Metrics != nil {
-			gw.Metrics.RecordTokens("output", target.Model, agentName, target.Provider, completion)
-		}
+		gw.Metrics.RecordTokens("output", target.Model, agentName, target.Provider, completion)
 		if gw.CostTracker != nil && prompt > 0 || completion > 0 {
 			if dm, ok := gw.ModelCatalog.Lookup(target.Model); ok && dm.Pricing != nil && !dm.Pricing.IsZero() {
 				cost := dm.Pricing.CalculateCost(int64(prompt), int64(completion))
@@ -313,9 +311,7 @@ func (p *Proxy) streamResponse(gw *gateway.NenyaGateway, w http.ResponseWriter, 
 			_ = action.resp.Body.Close()
 			gw.Logger.Warn("stream blocked by execution policy, upstream killed",
 				"model", target.Model, "provider", target.Provider)
-			if gw.Metrics != nil {
-				gw.Metrics.RecordStreamBlock(target.Model, target.Provider)
-			}
+			gw.Metrics.RecordStreamBlock(target.Model, target.Provider)
 			p.writeBlockedSSE(gw, w)
 			return
 		}
@@ -442,17 +438,13 @@ func (p *Proxy) asyncMCPAutoSave(gw *gateway.NenyaGateway, agentName string, con
 				gw.Logger.Warn("MCP auto-save failed (best-effort)",
 					"server", serverName, "agent", agentName, "err", err,
 					"duration_ms", duration.Milliseconds())
-				if gw.Metrics != nil {
-					gw.Metrics.RecordMCPAutoSave(serverName, agentName, err)
-				}
+				gw.Metrics.RecordMCPAutoSave(serverName, agentName, err)
 			} else {
 				gw.Logger.Debug("MCP auto-save completed",
 					"server", serverName, "agent", agentName,
 					"duration_ms", duration.Milliseconds(),
 					"content_len", len(assistantContent))
-				if gw.Metrics != nil {
-					gw.Metrics.RecordMCPAutoSave(serverName, agentName, nil)
-				}
+				gw.Metrics.RecordMCPAutoSave(serverName, agentName, nil)
 			}
 			return
 		}

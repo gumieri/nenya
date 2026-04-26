@@ -101,3 +101,108 @@ You are acting as a **Senior Go Security Engineer and Network Architect**. Your 
   - `internal/tiktoken/tiktoken.go:323` - Guard added before `make([]int, n+1)`
   - `internal/pipeline/window.go:268` - Capacity calculation with overflow check
   - `internal/routing/transform.go:112` - Guard added before `len(messages)+1` allocation
+
+### 8. Code Readability Patterns (Strong Recommendations)
+- **Function Length:** Target ≤80 lines. Functions exceeding 150 lines SHOULD be decomposed into smaller, named helpers. Enforced by `funlen` linter.
+- **Cyclomatic Complexity:** Keep under 10. Functions with high branch count (many if/else, switch cases) SHOULD extract branches into named methods. Enforced by `gocyclo` linter (threshold: 15 for existing code).
+- **Nesting Depth:** Maximum 3 levels. Deeper nesting MUST use guard clauses (early return) or extraction into a named function. Enforced by `nestif` linter.
+- **Decomposition Pattern:** Split large handlers into a validate → resolve → execute pipeline where each step is a distinct method returning early on failure:
+  ```go
+  // PREFER: linear flow with early returns
+  req, err := p.validateRequest(r, gw)
+  if err != nil { return }
+  targets, err := p.resolveTargets(req, gw)
+  if err != nil { return }
+  p.execute(w, r, req, targets)
+  ```
+- **Options Struct Pattern:** Functions with >5 parameters MUST group them into a struct (see §11). Name the struct after the operation: `forwardOpts`, `streamConfig`, `pipelineDeps`.
+- **Strategy Extraction:** When a function branches on a condition to pick an algorithm (e.g. IDE vs non-IDE truncation), extract each branch into a function and select via a variable or table:
+  ```go
+  // PREFER: table-driven selection
+  var truncate func(string, int, string) string
+  if profile.IsIDE {
+      truncate = pipeline.TruncateTFIDFCodeAware
+  } else {
+      truncate = pipeline.TruncateTFIDF
+  }
+  result := truncate(text, limit, query)
+  ```
+- **State Machine Extraction:** Loops that track mutable state across iterations (retry counters, backoff timers, circuit state) SHOULD be extracted into a struct with named methods for each transition.
+- **Guard Clauses Over Nesting:** Prefer early returns over nested if-else:
+  ```go
+  // AVOID: nested conditions
+  if x != nil {
+      if y, ok := x.(string); ok {
+          // 3 levels deep
+      }
+  }
+  // PREFER: guard clauses
+  if x == nil { return }
+  y, ok := x.(string)
+  if !ok { return }
+  ```
+- **Metrics Guard DRY:** Replace repeated `if gw.Metrics != nil` checks with a nil-safe receiver pattern. Metrics methods should handle nil receivers gracefully:
+  ```go
+  func (m *Metrics) RecordInterception(reason string) {
+      if m == nil { return }
+      // ... actual logic
+  }
+  ```
+  This eliminates ~20+ repetitive nil checks across the codebase.
+- **Scope:** These recommendations apply to production code (`internal/*`, `cmd/*`). Test code follows separate standards (see §12).
+
+### 9. Error Handling & Reliability (CRITICAL)
+- **No Panics in Library Code:** NEVER use `panic` in non-`main` packages. Library functions MUST return `error` values. Panics bypass graceful error handling and can crash the entire gateway. The only acceptable use of `panic` is in `cmd/nenya/main.go` for fatal startup failures where recovery is impossible.
+- **Error Wrapping:** All errors MUST be wrapped with `fmt.Errorf("context: %w", err)` to preserve the error chain. Never discard error context with bare error strings.
+- **No Swallowed Errors:** Never assign errors to `_` unless explicitly justified with a comment explaining why the error is safe to ignore (e.g., `defer func() { _ = resp.Body.Close() }()`).
+- **No `os.Exit` in Library Code:** `os.Exit` is only allowed in `cmd/nenya/main.go`. All other packages must return errors to callers.
+- **Structured Logging Only:** Use `slog` with structured key-value pairs exclusively. Never use `log.Println`, `fmt.Println`, or `log.Printf` for operational logging.
+
+### 10. Documentation Standards
+- **GoDoc for Exported Symbols:** Every exported type, function, method, constant, and variable MUST have a GoDoc comment. The comment must start with the symbol name:
+  ```go
+  // CountTokens estimates the number of tokens in the given text using
+  // the cl100k_base BPE encoding.
+  func CountTokens(text string) int { ... }
+  ```
+- **Package Documentation:** Every `internal/` package MUST have a `doc.go` file with a package-level comment describing the package's purpose and key types.
+- **No Stale Comments:** Comments must accurately reflect the code. If code changes, update or remove affected comments.
+
+### 11. Code Organization & DRY (Don't Repeat Yourself)
+- **Shared Helpers:** Common utility functions MUST live in `internal/util/` (e.g., `AddCap` for overflow-safe integer addition, `JoinBackticks` for formatting name lists, `ErrNoProvider` for shared error strings).
+- **No Copy-Paste:** If you find the same pattern in 3+ places, extract it into a shared helper. Check `internal/util/` before writing new utility code.
+- **Parameter Grouping:** Functions with more than 5 parameters MUST use an options struct or config struct to group related arguments. Example:
+  ```go
+  // BAD: 10+ parameters
+  func forward(gw, w, r, targets, payload, cooldown, tokens, agent, retries, cache)
+
+  // GOOD: grouped into a struct
+  type forwardOpts struct {
+      Targets    []UpstreamTarget
+      Payload    map[string]any
+      Cooldown   time.Duration
+      TokenCount int
+      AgentName  string
+      MaxRetries int
+      CacheKey   string
+  }
+  ```
+- **Single Responsibility:** Each file should have a clear, focused purpose. If a file exceeds ~500 lines, consider splitting related functionality into separate files.
+
+### 12. Testing Standards
+- **Test Coverage:** Every non-trivial exported function MUST have at least one test case covering the happy path. Error paths MUST be tested where they represent recoverable conditions.
+- **Table-Driven Tests:** Prefer table-driven tests for functions with multiple input/output combinations. Use `t.Run` for sub-test names.
+- **Test Helpers:** Shared test utilities live in `internal/testutil/`. Reuse existing helpers (e.g., `testutil.NewTestLogger`, `testutil.NewTestConfig`) instead of duplicating setup code.
+- **No Empty Tests:** Every test must contain at least one assertion. Tests that only verify "no panic" must explicitly check postconditions.
+- **Test File Naming:** Test files MUST follow the pattern `*_test.go` and reside in the same package as the code under test.
+- **Fuzz Tests:** For security-critical parsing functions (e.g., JSON body parsing, SSE parsing), add fuzz tests using `testing.F`.
+
+### 13. File Path Security
+- **Prompt File Validation:** `LoadPromptFile` and any function reading files from user-configurable paths MUST validate that the resolved path does not escape the expected directory (e.g., the config directory). Use `filepath.Abs` and check the prefix. Reject paths containing `..` or absolute paths that point outside the config root.
+- **No Path Traversal:** Never concatenate user-supplied path components without sanitization. Use `filepath.Join` and validate the result.
+
+### 14. Concurrency Safety
+- **Shared State:** All mutable shared state MUST be protected by `sync.Mutex`, `sync.RWMutex`, or `atomic` operations. Document the locking strategy in GoDoc.
+- **Goroutine Lifecycle:** Every goroutine MUST have a clear termination condition (context cancellation, channel close, or explicit stop signal). Document the lifecycle in comments.
+- **No Goroutine Leaks:** Use `defer cancel()` for all contexts used to spawn goroutines. Ensure background goroutines are stopped on gateway shutdown.
+- **Context Propagation:** Never use `context.Background()` in request-scoped code. The request context (`r.Context()`) must flow through the entire call chain. The only exception is fire-and-forget operations that must outlive the request (e.g., metrics recording with explicit timeout).

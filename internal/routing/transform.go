@@ -15,6 +15,8 @@ import (
 	providerpkg "nenya/internal/providers"
 )
 
+// TransformDeps provides the dependencies needed for request payload
+// transformation (provider lookup, API key injection, metrics, etc.).
 type TransformDeps struct {
 	Logger             *slog.Logger
 	Providers          map[string]*config.Provider

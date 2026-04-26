@@ -20,6 +20,9 @@ import (
 	"nenya/internal/tiktoken"
 )
 
+// NenyaGateway is the top-level container that holds all gateway components:
+// configuration, HTTP clients, provider registry, MCP clients, metrics,
+// rate limiter, caches, and the token counter.
 type NenyaGateway struct {
 	Config          config.Config
 	Client          *http.Client
@@ -44,6 +47,9 @@ type NenyaGateway struct {
 	CostTracker     *infra.CostTracker
 }
 
+// New creates a new NenyaGateway with the given configuration, secrets,
+// and logger. It initializes HTTP clients, provider registry, rate limiter,
+// metrics, MCP clients, and starts dynamic model discovery.
 func New(ctx context.Context, cfg config.Config, secrets *config.SecretsConfig, logger *slog.Logger) *NenyaGateway {
 	if cfg.Providers == nil {
 		cfg.Providers = make(map[string]config.ProviderConfig)
@@ -208,8 +214,16 @@ func (g *NenyaGateway) InitMetrics() {
 	g.Metrics.CBStates = g.AgentState.CBSnapshot
 }
 
+// CountTokens estimates the number of tokens in the given text using the
+// cl100k_base BPE encoding. Returns 0 and logs a warning if tokenization
+// fails (graceful degradation).
 func (g *NenyaGateway) CountTokens(text string) int {
-	return tiktoken.CountTokens(text)
+	n, err := tiktoken.CountTokens(text)
+	if err != nil {
+		g.Logger.Warn("tokenization failed, returning 0", "err", err)
+		return 0
+	}
+	return n
 }
 
 func (g *NenyaGateway) CountRequestTokens(payload map[string]interface{}) int {

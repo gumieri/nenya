@@ -39,7 +39,7 @@ func InferCapabilities(modelID string) *ModelMetadata {
 	matched := false
 	for _, rule := range capabilityRules {
 		if strings.HasPrefix(strings.ToLower(modelID), rule.prefix) {
-		applyCapabilities(&meta, rule.caps)
+			applyCapabilities(&meta, rule.caps)
 			matched = true
 			break
 		}

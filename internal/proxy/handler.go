@@ -16,28 +16,31 @@ import (
 	"nenya/internal/infra"
 )
 
+// MaxModelNameLength is the maximum allowed length for model names.
 const MaxModelNameLength = 256
 
+// Proxy handles HTTP requests and routes them to upstream AI providers.
 type Proxy struct {
 	gw atomic.Pointer[gateway.NenyaGateway]
 }
 
+// StoreGateway sets the gateway instance for the proxy.
 func (p *Proxy) StoreGateway(gw *gateway.NenyaGateway) {
 	p.gw.Store(gw)
 }
 
+// Gateway returns the current gateway instance.
 func (p *Proxy) Gateway() *gateway.NenyaGateway {
 	return p.gw.Load()
 }
 
+// ServeHTTP handles incoming HTTP requests and routes them to appropriate handlers.
 func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	defer func() {
 		if rec := recover(); rec != nil {
 			if gw := p.Gateway(); gw != nil {
 				gw.Logger.Error("panic recovered", "err", rec, "stack", string(debug.Stack()))
-				if gw.Metrics != nil {
-					gw.Metrics.RecordPanic()
-				}
+				gw.Metrics.RecordPanic()
 			}
 			http.Error(w, "Internal Server Error", http.StatusInternalServerError)
 		}
@@ -50,7 +53,9 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
 				return
 			}
-			infra.ObserveHTTP(gw.Metrics, p.handleHealthz)(w, r)
+			infra.ObserveHTTPFunc(gw.Metrics, func(w http.ResponseWriter, r *http.Request) {
+				p.handleHealthz(w, r)
+			})(w, r)
 			return
 		case r.URL.Path == "/statsz":
 			if r.Method != http.MethodGet {
@@ -116,6 +121,7 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// authenticateRequest validates the authorization token in incoming requests.
 func (p *Proxy) authenticateRequest(r *http.Request, w http.ResponseWriter) bool {
 	gw := p.Gateway()
 	if gw == nil {
@@ -159,6 +165,7 @@ func (p *Proxy) authenticateRequest(r *http.Request, w http.ResponseWriter) bool
 	return true
 }
 
+// handleMetrics serves the Prometheus-compatible metrics endpoint.
 func (p *Proxy) handleMetrics(w http.ResponseWriter, r *http.Request) {
 	gw := p.Gateway()
 	if gw == nil {
@@ -168,6 +175,7 @@ func (p *Proxy) handleMetrics(w http.ResponseWriter, r *http.Request) {
 	infra.HandleMetrics(gw.Metrics, w, r)
 }
 
+// handleModels returns the list of available models from all configured providers.
 func (p *Proxy) handleModels(w http.ResponseWriter) {
 	gw := p.Gateway()
 	if gw == nil {
@@ -175,16 +183,16 @@ func (p *Proxy) handleModels(w http.ResponseWriter) {
 		return
 	}
 	type modelEntry struct {
-		ID             string   `json:"id"`
-		Object         string   `json:"object"`
-		OwnedBy        string   `json:"owned_by"`
-		ContextWindow  int      `json:"context_window,omitempty"`
-		MaxTokens      int      `json:"max_tokens,omitempty"`
-		SupportsVision bool     `json:"supports_vision,omitempty"`
-		SupportsTools  bool     `json:"supports_tool_calls,omitempty"`
-		SupportsReasoning bool  `json:"supports_reasoning,omitempty"`
-		InputCostPer1M float64  `json:"input_cost_per_1m,omitempty"`
-		OutputCostPer1M float64 `json:"output_cost_per_1m,omitempty"`
+		ID                string  `json:"id"`
+		Object            string  `json:"object"`
+		OwnedBy           string  `json:"owned_by"`
+		ContextWindow     int     `json:"context_window,omitempty"`
+		MaxTokens         int     `json:"max_tokens,omitempty"`
+		SupportsVision    bool    `json:"supports_vision,omitempty"`
+		SupportsTools     bool    `json:"supports_tool_calls,omitempty"`
+		SupportsReasoning bool    `json:"supports_reasoning,omitempty"`
+		InputCostPer1M    float64 `json:"input_cost_per_1m,omitempty"`
+		OutputCostPer1M   float64 `json:"output_cost_per_1m,omitempty"`
 	}
 
 	var models []modelEntry
@@ -255,6 +263,7 @@ func (p *Proxy) handleModels(w http.ResponseWriter) {
 	}
 }
 
+// handleStats provides runtime statistics including usage, circuit breaker state, and MCP status.
 func (p *Proxy) handleStats(w http.ResponseWriter) {
 	gw := p.Gateway()
 	if gw == nil {
@@ -286,13 +295,14 @@ func (p *Proxy) handleStats(w http.ResponseWriter) {
 	}
 }
 
-func (p *Proxy) handleHealthz(w http.ResponseWriter) {
+// handleHealthz provides health status including engine readiness.
+func (p *Proxy) handleHealthz(w http.ResponseWriter, r *http.Request) {
 	gw := p.Gateway()
 	if gw == nil {
 		http.Error(w, "Gateway not initialized", http.StatusServiceUnavailable)
 		return
 	}
-	engineOK := p.checkSecurityFilterEngineHealth(context.Background())
+	engineOK := p.checkSecurityFilterEngineHealth(r.Context())
 
 	resp := map[string]interface{}{
 		"status": "ok",
@@ -314,6 +324,7 @@ func (p *Proxy) handleHealthz(w http.ResponseWriter) {
 	}
 }
 
+// checkSecurityFilterEngineHealth verifies that the security filter engine is operational.
 func (p *Proxy) checkSecurityFilterEngineHealth(ctx context.Context) bool {
 	gw := p.Gateway()
 	if gw == nil {
@@ -344,6 +355,7 @@ func (p *Proxy) checkSecurityFilterEngineHealth(ctx context.Context) bool {
 	return p.checkOllamaProviderHealth(ctx, gw, pr.URL)
 }
 
+// checkOllamaProviderHealth checks the health of an Ollama provider instance.
 func (p *Proxy) checkOllamaProviderHealth(ctx context.Context, gw *gateway.NenyaGateway, providerURL string) bool {
 	healthCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()

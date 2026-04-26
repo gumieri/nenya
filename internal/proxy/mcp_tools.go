@@ -15,6 +15,7 @@ import (
 
 	"nenya/internal/gateway"
 	"nenya/internal/mcp"
+	"nenya/internal/util"
 )
 
 const (
@@ -332,9 +333,7 @@ func executeMCPCalls(ctx context.Context, calls []mcpToolCall, gw *gateway.Nenya
 					Content: []mcp.ContentBlock{{Type: "text", Text: fmt.Sprintf("unknown MCP tool: %s", c.Name)}},
 					IsError: true,
 				}
-				if gw.Metrics != nil {
-					gw.Metrics.RecordMCPToolCall("unknown", c.Name, agentName, time.Since(start), fmt.Errorf("unknown tool"))
-				}
+				gw.Metrics.RecordMCPToolCall("unknown", c.Name, agentName, time.Since(start), fmt.Errorf("unknown tool"))
 				return
 			}
 
@@ -350,9 +349,7 @@ func executeMCPCalls(ctx context.Context, calls []mcpToolCall, gw *gateway.Nenya
 					Content: []mcp.ContentBlock{{Type: "text", Text: fmt.Sprintf("MCP server not available: %s", route.ServerName)}},
 					IsError: true,
 				}
-				if gw.Metrics != nil {
-					gw.Metrics.RecordMCPToolCall(route.ServerName, c.Name, agentName, time.Since(start), fmt.Errorf("server not available"))
-				}
+				gw.Metrics.RecordMCPToolCall(route.ServerName, c.Name, agentName, time.Since(start), fmt.Errorf("server not available"))
 				return
 			}
 
@@ -371,16 +368,14 @@ func executeMCPCalls(ctx context.Context, calls []mcpToolCall, gw *gateway.Nenya
 				}
 			} else {
 				results[idx] = result
-				if gw.Metrics != nil {
-					gw.Metrics.RecordMCPToolCall(route.ServerName, route.MCPToolName, agentName, duration, err)
-					textLen := 0
-					if result != nil {
-						textLen = len(result.Text())
-					}
-					ctxLogger.Debug("MCP tool call completed",
-						"duration_ms", duration.Milliseconds(),
-						"result_bytes", textLen)
+				gw.Metrics.RecordMCPToolCall(route.ServerName, route.MCPToolName, agentName, duration, err)
+				textLen := 0
+				if result != nil {
+					textLen = len(result.Text())
 				}
+				ctxLogger.Debug("MCP tool call completed",
+					"duration_ms", duration.Milliseconds(),
+					"result_bytes", textLen)
 			}
 		}(i, call)
 	}
@@ -422,7 +417,7 @@ func appendMCPResults(payload map[string]any, calls []mcpToolCall, results []*mc
 		})
 	}
 
-	newMessages := make([]any, 0, addCap(len(messages), len(toolResults)))
+	newMessages := make([]any, 0, util.AddCap(len(messages), len(toolResults)))
 	newMessages = append(newMessages, messages...)
 	newMessages = append(newMessages, toolResults...)
 

@@ -7,6 +7,8 @@ import (
 	"nenya/internal/discovery"
 )
 
+// UpstreamTarget describes a resolved target for forwarding a request,
+// including the provider URL, model name, cooldown key, and context limits.
 type UpstreamTarget struct {
 	URL        string
 	Model      string
@@ -16,6 +18,9 @@ type UpstreamTarget struct {
 	MaxContext int
 }
 
+// ResolveProvider looks up the provider for the given model name, checking
+// the static ModelRegistry first, then the dynamic ModelCatalog, then
+// route_prefixes. Returns nil if no provider matches.
 func ResolveProvider(modelName string, providers map[string]*config.Provider, catalog *discovery.ModelCatalog) *config.Provider {
 	if entry, ok := config.ModelRegistry[modelName]; ok {
 		if p, ok := providers[entry.Provider]; ok {

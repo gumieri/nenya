@@ -6,6 +6,9 @@ import (
 	providerpkg "nenya/internal/providers"
 )
 
+// SanitizePayload removes unsupported fields from the request payload
+// based on the target provider's capabilities (e.g. stream_options,
+// tool_choice, reasoning parameters).
 func SanitizePayload(deps TransformDeps, payload map[string]interface{}, providerName string) {
 	if _, ok := payload["stream_options"]; ok {
 		if !providerpkg.SupportsStreamOptions(providerName) {

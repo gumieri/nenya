@@ -9,12 +9,16 @@ import (
 	"nenya/internal/stream"
 )
 
+// SanitizeDeps provides the dependencies needed by provider-specific
+// request sanitization functions.
 type SanitizeDeps struct {
 	Logger             *slog.Logger
 	ThoughtSigCache    *infra.ThoughtSignatureCache
 	ExtractContentText func(msg map[string]interface{}) string
 }
 
+// ProviderSpec describes a provider's capabilities and optional hooks
+// for request sanitization and response transformation.
 type ProviderSpec struct {
 	SupportsStreamOptions  bool
 	SupportsAutoToolChoice bool
@@ -28,6 +32,7 @@ type ProviderSpec struct {
 	ValidationEndpoint     func(providerURL string) string
 }
 
+// SupportsToolCalls reports whether the named provider supports tool calls.
 func SupportsToolCalls(name string) bool {
 	if spec, ok := Get(name); ok {
 		return spec.SupportsToolCalls
@@ -35,6 +40,7 @@ func SupportsToolCalls(name string) bool {
 	return true
 }
 
+// SupportsReasoning reports whether the named provider supports reasoning/thinking.
 func SupportsReasoning(name string) bool {
 	if spec, ok := Get(name); ok {
 		return spec.SupportsReasoning
@@ -42,6 +48,7 @@ func SupportsReasoning(name string) bool {
 	return false
 }
 
+// SupportsVision reports whether the named provider supports vision/image inputs.
 func SupportsVision(name string) bool {
 	if spec, ok := Get(name); ok {
 		return spec.SupportsVision
@@ -49,6 +56,8 @@ func SupportsVision(name string) bool {
 	return false
 }
 
+// Registry maps provider format names to their ProviderSpec definitions.
+// Built-in specs are registered at init time.
 var Registry = map[string]ProviderSpec{}
 
 func init() {

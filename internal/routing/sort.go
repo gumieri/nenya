@@ -8,12 +8,15 @@ import (
 	"nenya/internal/infra"
 )
 
+// SortOptions configures the weights used by balanced sorting strategies.
 type SortOptions struct {
 	LatencyWeight float64
 	CostWeight    float64
 	RequestCaps   RequestCapabilities
 }
 
+// RequestCapabilities describes the features detected in an incoming request
+// payload (tool calls, reasoning, vision, content arrays).
 type RequestCapabilities struct {
 	HasToolCalls  bool
 	HasReasoning  bool

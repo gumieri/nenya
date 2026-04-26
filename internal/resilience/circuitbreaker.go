@@ -5,6 +5,7 @@ import (
 	"time"
 )
 
+// State represents the current state of a circuit breaker.
 type State int
 
 const (
@@ -26,6 +27,7 @@ func (s State) String() string {
 	}
 }
 
+// Counts holds the request statistics for a single circuit.
 type Counts struct {
 	Requests             uint32
 	TotalSuccesses       uint32
@@ -43,6 +45,8 @@ type circuit struct {
 	lastChange       time.Time
 }
 
+// CircuitBreaker manages per-key circuit breakers with configurable
+// failure/success thresholds and automatic recovery.
 type CircuitBreaker struct {
 	mu                  sync.Mutex
 	circuits            map[string]*circuit
@@ -53,6 +57,8 @@ type CircuitBreaker struct {
 	onStateChange       func(key string, from, to State)
 }
 
+// NewCircuitBreaker creates a CircuitBreaker with the given thresholds.
+// Zero or negative values are replaced with sensible defaults.
 func NewCircuitBreaker(failureThreshold, successThreshold int, halfOpenMaxRequests uint32, cooldown time.Duration, onStateChange func(string, State, State)) *CircuitBreaker {
 	if failureThreshold <= 0 {
 		failureThreshold = 5

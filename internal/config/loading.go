@@ -298,6 +298,22 @@ func LoadPromptFile(filePath string, directPrompt string, defaultPrompt string) 
 	if filePath == "" {
 		return defaultPrompt, nil
 	}
+
+	// Validate that the file path is within the config directory and doesn't escape
+	if absPath, err := filepath.Abs(filePath); err == nil {
+		if configDir := os.Getenv("CONFIG_DIR"); configDir != "" {
+			if absConfigDir, err := filepath.Abs(configDir); err == nil {
+				// Check if the file path is within the config directory
+				if relPath, err := filepath.Rel(absConfigDir, absPath); err == nil {
+					// Check for path traversal attempts
+					if strings.Contains(relPath, "..") {
+						return "", fmt.Errorf("prompt file path escapes config directory: %s", filePath)
+					}
+				}
+			}
+		}
+	}
+
 	data, err := os.ReadFile(filePath)
 	if err != nil {
 		return "", fmt.Errorf("failed to read prompt file %s: %v", filePath, err)

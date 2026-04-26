@@ -1,9 +1,11 @@
 package mcp
 
+// JSONRPCVersion represents a JSON-RPC protocol version string.
 type JSONRPCVersion string
 
 const JSONRPCVersion2 JSONRPCVersion = "2.0"
 
+// Request is a JSON-RPC 2.0 request message.
 type Request struct {
 	JSONRPC JSONRPCVersion `json:"jsonrpc"`
 	ID      any            `json:"id,omitempty"`
@@ -11,12 +13,14 @@ type Request struct {
 	Params  any            `json:"params,omitempty"`
 }
 
+// Notification is a JSON-RPC 2.0 notification (no ID, no response expected).
 type Notification struct {
 	JSONRPC JSONRPCVersion `json:"jsonrpc"`
 	Method  string         `json:"method"`
 	Params  any            `json:"params,omitempty"`
 }
 
+// Response is a JSON-RPC 2.0 response message.
 type Response struct {
 	JSONRPC JSONRPCVersion `json:"jsonrpc"`
 	ID      any            `json:"id,omitempty"`
@@ -24,6 +28,7 @@ type Response struct {
 	Error   *Error         `json:"error,omitempty"`
 }
 
+// Error is a JSON-RPC 2.0 error object.
 type Error struct {
 	Code    int    `json:"code"`
 	Message string `json:"message"`
@@ -42,6 +47,7 @@ const (
 	ErrCodeInternal       = -32603
 )
 
+// InitializeParams contains the parameters sent during MCP initialization.
 type InitializeParams struct {
 	ProtocolVersion string             `json:"protocolVersion"`
 	Capabilities    ClientCapabilities `json:"capabilities"`
@@ -56,6 +62,7 @@ type RootsCapability struct {
 	ListChanged bool `json:"listChanged,omitempty"`
 }
 
+// ImplementationInfo describes the client or server implementation.
 type ImplementationInfo struct {
 	Name    string `json:"name"`
 	Version string `json:"version"`

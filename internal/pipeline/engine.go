@@ -13,11 +13,16 @@ import (
 	"nenya/internal/config"
 )
 
-const (
-	MaxOllamaResponseBytes = 512 * 1024
-	MaxErrorBodyBytes      = 8 * 1024
-)
+// MaxOllamaResponseBytes is the maximum response size accepted from the
+// local engine (Ollama) to prevent memory exhaustion.
+const MaxOllamaResponseBytes = 512 * 1024
 
+// MaxErrorBodyBytes is the maximum number of bytes read from upstream
+// error response bodies for logging/classification.
+const MaxErrorBodyBytes = 8 * 1024
+
+// CallEngine sends a prompt to the local engine (e.g. Ollama) for
+// summarization or redaction. It handles both OpenAI and Ollama API formats.
 func CallEngine(ctx context.Context, httpClient *http.Client, provider *config.Provider, engine config.EngineConfig, injectAPIKey func(providerName string, headers http.Header) error, systemPrompt, prompt string) (string, error) {
 	apiFormat := provider.ApiFormat
 	if apiFormat == "" {

@@ -10,6 +10,8 @@ import (
 	_ "embed"
 	"encoding/base64"
 	"encoding/hex"
+	"errors"
+	"fmt"
 	"io"
 	"math"
 	"strings"
@@ -25,16 +27,22 @@ const expectedChecksum = "223921b76ee99bde995b7ff738513eef100fb51d18c93597a113bc
 var (
 	ranks    map[string]uint32
 	initOnce sync.Once
+	initErr  error
 )
 
-func init() {
-	initOnce.Do(loadVocab)
-}
+var (
+	ErrVocabCorrupted = errors.New("tiktoken: embedded vocab checksum mismatch — file may be corrupted or tampered with")
+	ErrVocabParse     = errors.New("tiktoken: failed to parse vocab")
+	ErrVocabBase64    = errors.New("tiktoken: failed to base64-decode token")
+	ErrVocabRank      = errors.New("tiktoken: failed to parse rank")
+	ErrNotInitialized = errors.New("tiktoken: vocab not initialized")
+)
 
 func loadVocab() {
 	checksum := sha256.Sum256(embeddedVocab)
 	if hex.EncodeToString(checksum[:]) != expectedChecksum {
-		panic("tiktoken: embedded vocab checksum mismatch — file may be corrupted or tampered with")
+		initErr = ErrVocabCorrupted
+		return
 	}
 
 	ranks = make(map[string]uint32, 100256)
@@ -45,7 +53,8 @@ func loadVocab() {
 			break
 		}
 		if err != nil {
-			panic("tiktoken: failed to parse vocab: " + err.Error())
+			initErr = fmt.Errorf("%w: %v", ErrVocabParse, err)
+			return
 		}
 		line = strings.TrimSpace(line)
 		if line == "" {
@@ -57,14 +66,39 @@ func loadVocab() {
 		}
 		tokenBytes, err := base64.StdEncoding.DecodeString(parts[0])
 		if err != nil {
-			panic("tiktoken: failed to base64-decode token: " + err.Error())
+			initErr = fmt.Errorf("%w: %v", ErrVocabBase64, err)
+			return
 		}
 		var rank uint32
 		if !parseUint32(parts[1], &rank) {
-			panic("tiktoken: failed to parse rank in vocab line: " + line)
+			initErr = fmt.Errorf("%w in vocab line: %s", ErrVocabRank, line)
+			return
 		}
 		ranks[string(tokenBytes)] = rank
 	}
+}
+
+func ensureInit() error {
+	initOnce.Do(loadVocab)
+	return initErr
+}
+
+// CountTokens estimates the number of tokens in the given text using the
+// cl100k_base BPE encoding. Returns an error if the embedded vocabulary
+// failed to initialize.
+func CountTokens(text string) (int, error) {
+	if err := ensureInit(); err != nil {
+		return 0, err
+	}
+	if text == "" {
+		return 0, nil
+	}
+	pieces := preTokenize(text)
+	total := 0
+	for _, piece := range pieces {
+		total += bpeCount([]byte(piece))
+	}
+	return total, nil
 }
 
 func parseUint32(s string, out *uint32) bool {
@@ -81,18 +115,6 @@ func parseUint32(s string, out *uint32) bool {
 	}
 	*out = uint32(val)
 	return true
-}
-
-func CountTokens(text string) int {
-	if text == "" {
-		return 0
-	}
-	pieces := preTokenize(text)
-	total := 0
-	for _, piece := range pieces {
-		total += bpeCount([]byte(piece))
-	}
-	return total
 }
 
 func preTokenize(text string) []string {
