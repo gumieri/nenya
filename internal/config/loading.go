@@ -382,6 +382,7 @@ func ResolveProviders(cfg *Config, secrets *SecretsConfig) map[string]*Provider 
 			ApiFormat:            pc.ApiFormat,
 			TimeoutSeconds:       pc.TimeoutSeconds,
 			RetryableStatusCodes: pc.RetryableStatusCodes,
+			Thinking:             pc.Thinking,
 		}
 	}
 	return providers

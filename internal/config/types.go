@@ -70,12 +70,22 @@ func (a *AgentConfig) UnmarshalJSON(data []byte) error {
 }
 
 type ProviderConfig struct {
-	URL                  string   `json:"url"`
-	RoutePrefixes        []string `json:"route_prefixes"`
-	AuthStyle            string   `json:"auth_style"`
-	ApiFormat            string   `json:"api_format"`
-	TimeoutSeconds       int      `json:"timeout_seconds"`
-	RetryableStatusCodes []int    `json:"retryable_status_codes"`
+	URL                  string          `json:"url"`
+	RoutePrefixes        []string        `json:"route_prefixes"`
+	AuthStyle            string          `json:"auth_style"`
+	ApiFormat            string          `json:"api_format"`
+	TimeoutSeconds       int             `json:"timeout_seconds"`
+	RetryableStatusCodes []int           `json:"retryable_status_codes"`
+	Thinking             *ThinkingConfig `json:"thinking,omitempty"`
+}
+
+// ThinkingConfig controls thinking/reasoning mode activation for a provider.
+// When nil (omitted in config), auto mode is used: thinking is enabled when
+// the model's capabilities indicate it supports reasoning.
+// When set, the Enabled field takes precedence over model-level detection.
+type ThinkingConfig struct {
+	Enabled       bool `json:"enabled"`
+	ClearThinking bool `json:"clear_thinking"`
 }
 
 type Provider struct {
@@ -88,6 +98,7 @@ type Provider struct {
 	ApiFormat            string
 	TimeoutSeconds       int
 	RetryableStatusCodes []int
+	Thinking             *ThinkingConfig
 }
 
 type Config struct {

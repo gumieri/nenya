@@ -19,6 +19,9 @@ func zaiSpec() ProviderSpec {
 }
 
 func zaiSanitize(deps *SanitizeDeps, payload map[string]interface{}) {
+	injectThinkingForZai(deps, payload)
+	injectTemperatureDefaultsForZai(payload)
+
 	if _, hasTools := payload["tools"]; hasTools {
 		return
 	}
@@ -162,6 +165,68 @@ func zaiSanitize(deps *SanitizeDeps, payload map[string]interface{}) {
 	}
 
 	payload["messages"] = merged
+}
+
+// injectThinkingForZai enables thinking mode for Zai models that support reasoning.
+// Three modes are supported:
+//   - Auto (nil config): enabled when model's capabilities indicate reasoning support
+//   - Force enabled (config.Thinking.Enabled=true): always injects thinking
+//   - Force disabled (config.Thinking.Enabled=false): skips injection
+func injectThinkingForZai(deps *SanitizeDeps, payload map[string]interface{}) {
+	model, _ := payload["model"].(string)
+	if model == "" {
+		return
+	}
+
+	if deps.ProviderThinking != nil {
+		if enabled, clearThinking, ok := deps.ProviderThinking("zai"); ok {
+			if !enabled {
+				return
+			}
+			payload["thinking"] = map[string]interface{}{
+				"type":           "enabled",
+				"clear_thinking": clearThinking,
+			}
+			if deps.Logger != nil {
+				deps.Logger.Debug("zai: force-enabled thinking mode", "model", model)
+			}
+			return
+		}
+	}
+
+	if deps.SupportsReasoning == nil {
+		return
+	}
+	if !deps.SupportsReasoning(model) {
+		return
+	}
+
+	if _, hasThinking := payload["thinking"]; hasThinking {
+		return
+	}
+
+	payload["thinking"] = map[string]interface{}{
+		"type":           "enabled",
+		"clear_thinking": false,
+	}
+	if deps.Logger != nil {
+		deps.Logger.Debug("zai: auto-enabled thinking mode for reasoning model", "model", model)
+	}
+}
+
+// injectTemperatureDefaultsForZai sets model-specific temperature defaults.
+// GLM-4.6 and GLM-4.7 require temperature=1.0 for optimal output.
+func injectTemperatureDefaultsForZai(payload map[string]interface{}) {
+	model, _ := payload["model"].(string)
+	if model == "" {
+		return
+	}
+	modelLower := strings.ToLower(model)
+	if strings.Contains(modelLower, "glm-4.6") || strings.Contains(modelLower, "glm-4.7") {
+		if _, hasTemp := payload["temperature"]; !hasTemp {
+			payload["temperature"] = 1.0
+		}
+	}
 }
 
 func zaiValidationEndpoint(providerURL string) string {
