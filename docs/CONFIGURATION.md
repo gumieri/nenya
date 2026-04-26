@@ -553,6 +553,62 @@ The `/v1/models` catalog endpoint returns actual discovered models instead of wi
 }
 ```
 
+## Auto-Agents
+
+When `discovery.auto_agents` is enabled, Nenya automatically generates agent definitions from discovered models. These agents group models by capability and context size, providing convenient routing targets without manual configuration.
+
+### Usage
+
+```json
+{ "model": "auto_reasoning" }
+```
+
+### Categories
+
+| Agent | Filter | Strategy | Description |
+|-------|--------|----------|-------------|
+| `auto_fast` | ≤32k context, ≤4k output | round-robin | Low-latency models |
+| `auto_reasoning` | reasoning capability + ≥128k context | fallback | Chain-of-thought models |
+| `auto_vision` | vision capability | round-robin | Image analysis models |
+| `auto_tools` | tool_calls capability | round-robin | Function calling models |
+| `auto_large` | ≥200k context | fallback | Long context models |
+| `auto_balanced` | 32k–128k context | round-robin | General purpose models |
+| `auto_coding` | tool_calls + coding model prefix | fallback | Code-optimized models |
+
+### Per-Category Configuration
+
+```json
+{
+  "discovery": {
+    "enabled": true,
+    "auto_agents": true,
+    "auto_agents_config": {
+      "fast":      { "enabled": true },
+      "reasoning": { "enabled": true },
+      "coding":    { "enabled": true }
+    }
+  }
+}
+```
+
+When `auto_agents_config` is present, only explicitly enabled categories are generated. When omitted, all categories are enabled (default).
+
+### User Override
+
+User-defined agents in the `agents` config section take precedence. If you define an agent named `auto_reasoning`, your definition replaces the auto-generated one.
+
+### Capability Resolution
+
+Auto-agent filters use model-level metadata only. Capabilities are inferred from model name patterns (e.g., `claude-` → vision+tool_calls, `gemini-2` → vision+tool_calls+reasoning). Models without matching capability rules are excluded from capability-based agents.
+
+### Example Log Output
+
+```
+INFO generated auto-agent agent=auto_reasoning description="Reasoning models with large context windows (≥128k context, supports reasoning)" strategy=fallback models=[claude-opus-4-5 deepseek-v4-pro gemini-2.5-flash]
+INFO generated auto-agent agent=auto_coding description="Code-optimized models with tool calling capability" strategy=fallback models=[codestral-latest deepseek-v4-pro qwen2.5-72b-turbo]
+INFO auto-agents summary total_agents=2 agents=[auto_coding auto_reasoning]
+```
+
 ## Balanced Routing
 
 When `auto_reorder_by_latency` is enabled and `routing_strategy` is `"balanced"`, targets are scored using a multi-dimensional formula:
