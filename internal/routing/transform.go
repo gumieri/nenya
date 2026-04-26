@@ -85,7 +85,7 @@ func TransformRequestForUpstream(deps TransformDeps, providerName, upstreamURL s
 		}
 	}
 
-	SanitizePayload(deps, payload, providerName)
+	SanitizePayload(deps, payload, providerName, modelName) // modelName is the original model name from payload, used for catalog lookup
 
 	if agentNameRaw, ok := origModel.(string); ok {
 		if agent, ok := deps.Config.Agents[agentNameRaw]; ok {

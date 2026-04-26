@@ -10,8 +10,9 @@ import (
 
 // SanitizePayload removes unsupported fields from the request payload
 // based on the target provider's capabilities (e.g. stream_options,
-// tool_choice, reasoning parameters).
-func SanitizePayload(deps TransformDeps, payload map[string]interface{}, providerName string) {
+// tool_choice, reasoning parameters). It also validates and repairs
+// message role ordering to comply with the OpenAI chat completions spec.
+func SanitizePayload(deps TransformDeps, payload map[string]interface{}, providerName string, modelName string) {
 	if _, ok := payload["stream_options"]; ok {
 		if !providerpkg.SupportsStreamOptions(providerName) {
 			delete(payload, "stream_options")
@@ -51,10 +52,23 @@ func SanitizePayload(deps TransformDeps, payload map[string]interface{}, provide
 				}
 			}
 
-			if !providerpkg.SupportsReasoning(providerName) {
-				if pipeline.StripReasoningContent(payload) {
-					deps.Logger.Debug("stripped reasoning_content for non-reasoning provider", "provider", providerName)
+			shouldStripReasoning := !providerpkg.SupportsReasoning(providerName)
+			if !shouldStripReasoning && deps.Catalog != nil && modelName != "" {
+				if dm, ok := deps.Catalog.Lookup(modelName); !ok || dm.Metadata == nil || !dm.Metadata.SupportsReasoning {
+					shouldStripReasoning = true
 				}
+			}
+			if shouldStripReasoning {
+				if pipeline.StripReasoningContent(payload) {
+					deps.Logger.Debug("stripped reasoning_content",
+						"provider", providerName, "model", modelName)
+				}
+			}
+
+			repaired, repairedMessages := repairMessageOrdering(messages)
+			if repaired {
+				payload["messages"] = repairedMessages
+				deps.Logger.Warn("repaired invalid message role ordering", "provider", providerName)
 			}
 		}
 	}
@@ -100,4 +114,58 @@ func flattenContentArray(arr []interface{}) string {
 		}
 	}
 	return strings.Join(parts, "\n")
+}
+
+// repairMessageOrdering validates and repairs message role ordering to comply
+// with the OpenAI chat completions API spec. The valid role sequence requires
+// that a "user" message never directly follows a "tool" message — there must
+// be an "assistant" message in between. When this invariant is violated, an
+// assistant message is inserted to bridge the gap.
+//
+// Returns true if any repairs were made, and the repaired messages slice.
+func repairMessageOrdering(messages []interface{}) (bool, []interface{}) {
+	if len(messages) < 2 {
+		return false, messages
+	}
+
+	repaired := false
+	sawToolSinceLastAssistant := false
+
+	bridgeMsg := map[string]interface{}{
+		"role":    "assistant",
+		"content": "",
+	}
+
+	i := 0
+	for i < len(messages) {
+		msg, ok := messages[i].(map[string]interface{})
+		if !ok {
+			i++
+			continue
+		}
+
+		role, ok := msg["role"].(string)
+		if !ok {
+			i++
+			continue
+		}
+
+		switch {
+		case role == "tool":
+			sawToolSinceLastAssistant = true
+			i++
+
+		case role == "user" && sawToolSinceLastAssistant:
+			messages = append(messages[:i], append([]interface{}{bridgeMsg}, messages[i:]...)...)
+			repaired = true
+			sawToolSinceLastAssistant = false
+			i += 2
+
+		default:
+			sawToolSinceLastAssistant = false
+			i++
+		}
+	}
+
+	return repaired, messages
 }
