@@ -69,13 +69,13 @@ func waitWithCancel(ctx context.Context, d time.Duration) {
 
 // forwardOptions holds the parameters for forwarding a request upstream.
 type forwardOptions struct {
-	Targets         []routing.UpstreamTarget
-	Payload         map[string]any
-	Cooldown        time.Duration
-	TokenCount      int
-	AgentName       string
-	MaxRetries     int
-	CacheKey        string
+	Targets    []routing.UpstreamTarget
+	Payload    map[string]any
+	Cooldown   time.Duration
+	TokenCount int
+	AgentName  string
+	MaxRetries int
+	CacheKey   string
 }
 
 // retryLoop encapsulates the state and logic for retrying upstream requests.
@@ -85,15 +85,15 @@ type retryLoop struct {
 	w               http.ResponseWriter
 	r               *http.Request
 	opts            forwardOptions
-	ctxLogger        *slog.Logger
-	originalPayload  []byte
+	ctxLogger       *slog.Logger
+	originalPayload []byte
 	attempt         int
 }
 
 // newRetryLoop creates a retryLoop with the given parameters.
 func newRetryLoop(p *Proxy, gw *gateway.NenyaGateway, w http.ResponseWriter, r *http.Request, opts forwardOptions) (*retryLoop, error) {
 	ctxLogger := gw.Logger.With("operation", "forward", "agent", opts.AgentName)
-	
+
 	originalPayload, err := json.Marshal(opts.Payload)
 	if err != nil {
 		ctxLogger.Error("failed to marshal original payload for retry loop", "err", err)
@@ -199,11 +199,11 @@ func (p *Proxy) forwardToUpstream(gw *gateway.NenyaGateway, w http.ResponseWrite
 		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
 		return
 	}
-	
+
 	if rl.Run() {
 		return
 	}
-	
+
 	rl.Exhausted()
 }
 

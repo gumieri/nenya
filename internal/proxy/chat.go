@@ -292,9 +292,8 @@ func (p *Proxy) applyContentPipeline(gw *gateway.NenyaGateway, ctx context.Conte
 		}
 	}
 
-	messages = payload["messages"].([]interface{})
-	applyPatternRedaction(gw, messages, payload)
-	applyEntropyRedaction(gw, messages, payload)
+	applyPatternRedaction(gw, messages)
+	applyEntropyRedaction(gw, messages)
 
 	messages = payload["messages"].([]interface{})
 	if len(messages) == 0 {
@@ -342,7 +341,7 @@ func buildWindowDeps(gw *gateway.NenyaGateway) pipeline.WindowDeps {
 }
 
 // applyPatternRedaction runs pattern-based secret redaction on all messages.
-func applyPatternRedaction(gw *gateway.NenyaGateway, messages []interface{}, payload map[string]interface{}) {
+func applyPatternRedaction(gw *gateway.NenyaGateway, messages []interface{}) {
 	patternRedacted := false
 	for _, msgRaw := range messages {
 		msgNode, isMap := msgRaw.(map[string]interface{})
@@ -365,7 +364,7 @@ func applyPatternRedaction(gw *gateway.NenyaGateway, messages []interface{}, pay
 
 // applyEntropyRedaction runs entropy-based high-entropy string redaction on all
 // messages when an entropy filter is configured.
-func applyEntropyRedaction(gw *gateway.NenyaGateway, messages []interface{}, payload map[string]interface{}) {
+func applyEntropyRedaction(gw *gateway.NenyaGateway, messages []interface{}) {
 	if gw.EntropyFilter == nil {
 		return
 	}
@@ -1160,7 +1159,7 @@ func (p *Proxy) forwardBuffered(gw *gateway.NenyaGateway,
 			return nil, fmt.Errorf("upstream error: status %d", action.resp.StatusCode)
 		case actionStream:
 			defer action.cancel()
-			buf, err := bufferStreamResponse(ctx, action.resp.Body)
+			buf, err := bufferStreamResponse(ctx, action.resp.Body, gw.Logger)
 			_ = action.resp.Body.Close()
 			if err != nil {
 				gw.AgentState.RecordSuccess(target.CoolKey)
