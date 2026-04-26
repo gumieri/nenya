@@ -115,7 +115,7 @@ func TransformRequestForUpstream(deps TransformDeps, providerName, upstreamURL s
 					if messagesRaw, ok := payload["messages"]; ok {
 						if messages, ok := messagesRaw.([]interface{}); ok && len(messages) > 0 {
 							injectSystem := true
-							if len(messages) > 0 {
+							if !agent.ForceSystemPrompt {
 								if firstMsg, ok := messages[0].(map[string]interface{}); ok {
 									if role, ok := firstMsg["role"].(string); ok && role == "system" {
 										injectSystem = false

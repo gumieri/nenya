@@ -19,17 +19,18 @@ type AgentModel struct {
 // AgentConfig defines an agent (a named alias for one or more models)
 // with routing strategy, cooldown, retry, and MCP configuration.
 type AgentConfig struct {
-	Strategy         string          `json:"strategy"`
-	CooldownSeconds  int             `json:"cooldown_seconds"`
-	FailureThreshold int             `json:"failure_threshold"`
-	FailureWindowSec int             `json:"failure_window_secs"`
-	SuccessThreshold int             `json:"success_threshold"`
-	MaxRetries       int             `json:"max_retries"`
-	SystemPrompt     string          `json:"system_prompt"`
-	SystemPromptFile string          `json:"system_prompt_file"`
-	Models           []AgentModel    `json:"models"`
-	MCP              *AgentMCPConfig `json:"mcp,omitempty"`
-	BudgetLimitUSD   float64         `json:"budget_limit_usd,omitempty"`
+	Strategy          string          `json:"strategy"`
+	CooldownSeconds   int             `json:"cooldown_seconds"`
+	FailureThreshold  int             `json:"failure_threshold"`
+	FailureWindowSec  int             `json:"failure_window_secs"`
+	SuccessThreshold  int             `json:"success_threshold"`
+	MaxRetries        int             `json:"max_retries"`
+	SystemPrompt      string          `json:"system_prompt"`
+	SystemPromptFile  string          `json:"system_prompt_file"`
+	ForceSystemPrompt bool            `json:"force_system_prompt"`
+	Models            []AgentModel    `json:"models"`
+	MCP               *AgentMCPConfig `json:"mcp,omitempty"`
+	BudgetLimitUSD    float64         `json:"budget_limit_usd,omitempty"`
 }
 
 func (a *AgentConfig) UnmarshalJSON(data []byte) error {
