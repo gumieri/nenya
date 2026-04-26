@@ -48,7 +48,7 @@ Client Request
   │   │   ├─ Tier-0 regex secret redaction + Shannon entropy redaction (applied unconditionally)
   │   │   ├─ Text compaction (skipped for IDE clients)
   │   │   ├─ Stale tool call pruning (if enabled, skipped for IDE clients)
-  │   │   ├─ Thought pruning (if enabled — strip <think.../think> reasoning blocks and reasoning_content field)
+  │   │   ├─ Thought pruning (if enabled — strip <think.../think> reasoning blocks. reasoning_content field is preserved in shared pipeline and stripped per-target for non-reasoning providers)
   │   │   ├─ Window compaction (if enabled)
   │   │   ├─ 3-tier engine interception (soft/hard limits, code-aware prompt for IDEs)
   │   │   └─ JSON minification
@@ -385,7 +385,7 @@ Nenya detects IDE clients (Cursor, OpenCode) via `User-Agent` header inspection 
 | **Secret redaction** | Regex on entire text | Same — redacts unconditionally including inside code fences |
 | **Text compaction** | Collapse blank lines, trim whitespace | **Skipped entirely** — preserves whitespace and line references |
 | **Tool call pruning** | Compact old assistant+tool pairs | **Skipped entirely** — preserves full tool context for IDE agents |
-| **Thought pruning** | Strip `<think.../think>` reasoning blocks + `reasoning_content` field | Same — reasoning tokens stripped from assistant history |
+| **Thought pruning** | Strip `<think.../think>` reasoning blocks | Same — reasoning tokens stripped from assistant history. The `reasoning_content` field is preserved in the shared pipeline and stripped per-target for non-reasoning providers. |
 | **Truncation** | Character-boundary middle-out | `TruncateMiddleOutCodeAware` — snaps cuts to blank-line boundaries |
 | **TF-IDF Truncation** | Same as IDE — when `tfidf_query_source` is set | Same — splits into blocks, scores by relevance, keeps highest-scoring. Pure Go, zero network calls. |
 | **Engine summarization** | Generic privacy filter prompt | Code-preserving prompt — only redacts secrets, never restructures code |

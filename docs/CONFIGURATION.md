@@ -228,15 +228,15 @@ The tool name is extracted from the first tool call's `function.name` field. If 
 
 ### Thought Pruning
 
-When `prune_thoughts` is enabled, the gateway strips reasoning blocks from all `assistant` messages in the conversation history. This targets two formats used by reasoning models (DeepSeek-R1, OpenRouter, Groq, Gemini):
+When `prune_thoughts` is enabled, the gateway strips reasoning blocks from all `assistant` messages in the conversation history. This targets `<think.../think>` tags used by reasoning models (DeepSeek, OpenRouter, Groq, Gemini):
 
-**Part A — Structured field:** If the message contains a `reasoning_content` field, the field is deleted entirely.
-
-**Part B — Raw text tags:** Inside the `content` string, the gateway looks for the `<think` opening tag and `</think` closing tag. When found:
+**Text tag pruning:** Inside the `content` string, the gateway looks for the `<think` opening tag and `</think` closing tag. When found:
 - Both tags and everything between them are removed.
 - The removed block is replaced with `[Reasoning pruned by gateway]`.
 - If the opening tag exists but the closing tag is missing (stream interruption), everything from `<think` to the end of the string is replaced.
 - Multiple reasoning blocks in a single message are all pruned.
+
+The structured `reasoning_content` field is **not** stripped by thought pruning. It is preserved in the shared pipeline and stripped per-target during request sanitization — only for providers that do not support reasoning.
 
 Uses `strings.Index` (not regex) for zero-allocation scanning of large payloads.
 
