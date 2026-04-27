@@ -95,6 +95,9 @@ func mergeConfig(base, overlay *Config) {
 	if overlay.Server.UserAgent != "" {
 		base.Server.UserAgent = overlay.Server.UserAgent
 	}
+	if overlay.Server.LogLevel != "" {
+		base.Server.LogLevel = overlay.Server.LogLevel
+	}
 
 	if overlay.Governance.TruncationStrategy != "" {
 		base.Governance.TruncationStrategy = overlay.Governance.TruncationStrategy

@@ -124,7 +124,7 @@ func New(ctx context.Context, cfg config.Config, secrets *config.SecretsConfig, 
 
 		healthRegistry = discovery.ValidateAllProviders(providers, mergedCatalog, logger)
 
-		logger.Info("auto-agents check", "discovery_enabled", cfg.Discovery.Enabled, "auto_agents", cfg.Discovery.AutoAgents)
+		logger.Debug("auto-agents check", "discovery_enabled", cfg.Discovery.Enabled, "auto_agents", cfg.Discovery.AutoAgents)
 		if cfg.Discovery.AutoAgents {
 			autoAgents := discovery.GenerateAutoAgents(mergedCatalog, providers, cfg.Discovery.AutoAgentsConfig, logger)
 			for name, agent := range autoAgents {

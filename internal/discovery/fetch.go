@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -92,6 +93,49 @@ func (df *DiscoveryFetcher) FetchAll(ctx context.Context, providers map[string]*
 			catalog.Add(m)
 		}
 		logger.Info("discovered models", "provider", result.provider, "count", len(result.models))
+	}
+
+	if logger.Enabled(ctx, slog.LevelDebug) {
+		var providerSummary []string
+		for provider, ids := range catalog.providers {
+			providerSummary = append(providerSummary, fmt.Sprintf("%s:%d", provider, len(ids)))
+		}
+		sort.Strings(providerSummary)
+
+		var allModels []string
+		for _, m := range catalog.AllModels() {
+			meta := ""
+			if m.Metadata != nil {
+				caps := []string{}
+				if m.Metadata.SupportsVision {
+					caps = append(caps, "vision")
+				}
+				if m.Metadata.SupportsToolCalls {
+					caps = append(caps, "tools")
+				}
+				if m.Metadata.SupportsReasoning {
+					caps = append(caps, "reasoning")
+				}
+				if m.Metadata.SupportsContentArrays {
+					caps = append(caps, "content_arrays")
+				}
+				if m.Metadata.SupportsStreamOptions {
+					caps = append(caps, "stream_options")
+				}
+				if m.Metadata.SupportsAutoToolChoice {
+					caps = append(caps, "auto_tool_choice")
+				}
+				meta = strings.Join(caps, ",")
+			}
+			pricing := "false"
+			if m.Pricing != nil {
+				pricing = fmt.Sprintf("%.2f/%.2f", m.Pricing.InputCostPer1M, m.Pricing.OutputCostPer1M)
+			}
+			allModels = append(allModels, fmt.Sprintf("%s/%s ctx=%d out=%d caps=%s pricing=%s",
+				m.Provider, m.ID, m.MaxContext, m.MaxOutput, meta, pricing))
+		}
+		sort.Strings(allModels)
+		logger.Debug("discovery catalog", "providers", providerSummary, "models", allModels)
 	}
 
 	catalog.UpdateFetchedAt(time.Now())
