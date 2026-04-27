@@ -4,6 +4,13 @@ import (
 	"nenya/internal/config"
 )
 
+// ModelRanking represents a ranking entry for a model (e.g., Elo score, rank position)
+type ModelRanking struct {
+	Elo  *float64 `json:"elo,omitempty"`
+	Rank *int     `json:"rank,omitempty"`
+	AsOf string   `json:"as_of,omitempty"`
+}
+
 type ModelMetadata struct {
 	SupportsStreamOptions  bool `json:"supports_stream_options,omitempty"`
 	SupportsAutoToolChoice bool `json:"supports_auto_tool_choice,omitempty"`
@@ -13,6 +20,9 @@ type ModelMetadata struct {
 	SupportsVision         bool `json:"supports_vision,omitempty"`
 
 	ScoreBonus float64 `json:"score_bonus,omitempty"`
+
+	Family   string                  `json:"family,omitempty"`
+	Rankings map[string]ModelRanking `json:"rankings,omitempty"`
 
 	Pricing    *config.PricingOverride `json:"pricing,omitempty"`
 	ParsedFrom map[string]interface{}  `json:"parsed_from,omitempty"`
