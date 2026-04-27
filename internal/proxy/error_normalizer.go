@@ -8,6 +8,11 @@ import (
 	"strings"
 )
 
+const (
+	maxErrorBodySize = 64 * 1024 // 64KB limit for error bodies
+	maxParamLength   = 256       // 256 char limit for param/code fields
+)
+
 // ErrorType represents the type of error that occurred
 type ErrorType string
 
@@ -105,12 +110,18 @@ func (e *GatewayError) ToJSON() map[string]any {
 
 // WithParam sets the param field and returns the error
 func (e *GatewayError) WithParam(param string) *GatewayError {
+	if len(param) > maxParamLength {
+		param = param[:maxParamLength]
+	}
 	e.Param = &param
 	return e
 }
 
 // WithCode sets the code field and returns the error
 func (e *GatewayError) WithCode(code string) *GatewayError {
+	if len(code) > maxParamLength {
+		code = code[:maxParamLength]
+	}
 	e.Code = &code
 	return e
 }
@@ -173,8 +184,14 @@ func NewNotFoundError(message string) *GatewayError {
 // ParseProviderError converts a raw HTTP error response from an upstream provider into a GatewayError
 func ParseProviderError(provider string, statusCode int, body []byte, originalErr error) *GatewayError {
 	message := string(body)
+	if len(body) > maxErrorBodySize {
+		message = string(body[:maxErrorBodySize]) + "... (truncated)"
+	}
 	errorResponse := parseProviderErrorBody(body)
 	if errorResponse.Message != "" {
+		if len(errorResponse.Message) > maxErrorBodySize {
+			errorResponse.Message = errorResponse.Message[:maxErrorBodySize] + "... (truncated)"
+		}
 		message = errorResponse.Message
 	}
 
@@ -288,11 +305,11 @@ func jsonString(raw json.RawMessage) string {
 	if len(raw) == 0 || bytes.Equal(raw, []byte("null")) {
 		return ""
 	}
-	var value string
-	if err := json.Unmarshal(raw, &value); err != nil {
+	var s string
+	if err := json.Unmarshal(raw, &s); err != nil {
 		return ""
 	}
-	return value
+	return s
 }
 
 // jsonScalarString extracts a string or number value from JSON raw bytes

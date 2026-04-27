@@ -356,3 +356,14 @@ func jsonEqual(a, b map[string]any) bool {
 	bj, _ := json.Marshal(b)
 	return string(aj) == string(bj)
 }
+
+func FuzzParseProviderErrorBody(f *testing.F) {
+	f.Add([]byte(`{"error":{"message":"test"}}`))
+	f.Add([]byte(`{"error":"plain"}`))
+	f.Add([]byte(`{"error":{}}`))
+	f.Add([]byte(`not json at all`))
+	f.Add([]byte(`{"error":{"message":"nested","param":"value","code":"err"}}`))
+	f.Fuzz(func(t *testing.T, body []byte) {
+		_ = parseProviderErrorBody(body)
+	})
+}
