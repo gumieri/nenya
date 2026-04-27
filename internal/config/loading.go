@@ -238,6 +238,16 @@ func mergeConfig(base, overlay *Config) {
 		base.ResponseCache.ForceRefreshHeader = overlay.ResponseCache.ForceRefreshHeader
 	}
 
+	if overlay.Discovery.Enabled {
+		base.Discovery.Enabled = overlay.Discovery.Enabled
+	}
+	if overlay.Discovery.AutoAgents {
+		base.Discovery.AutoAgents = overlay.Discovery.AutoAgents
+	}
+	if overlay.Discovery.AutoAgentsConfig != nil {
+		base.Discovery.AutoAgentsConfig = overlay.Discovery.AutoAgentsConfig
+	}
+
 	mergeMap(base, overlay, &base.Agents, &overlay.Agents)
 	mergeMap(base, overlay, &base.Providers, &overlay.Providers)
 	mergeMap(base, overlay, &base.MCPServers, &overlay.MCPServers)
