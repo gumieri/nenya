@@ -1,3 +1,6 @@
+// Package routing provides scoring and selection helpers for fallback
+// model routing, including capability overlap detection, family matching,
+// and ranking difference calculations.
 package routing
 
 import (
