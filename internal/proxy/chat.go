@@ -1162,7 +1162,7 @@ func (p *Proxy) forwardBuffered(gw *gateway.NenyaGateway,
 			buf, err := bufferStreamResponse(ctx, action.resp.Body, gw.Logger)
 			_ = action.resp.Body.Close()
 			if err != nil {
-				gw.AgentState.RecordSuccess(target.CoolKey)
+				gw.AgentState.RecordFailure(target, cooldownDuration)
 				return nil, fmt.Errorf("buffering response: %w", err)
 			}
 			gw.AgentState.RecordSuccess(target.CoolKey)

@@ -319,6 +319,44 @@ For custom or local models (not in the registry), or to override registry defaul
 
 Both styles can be mixed in the same `models` array.
 
+### Model Selectors (Dynamic Model Discovery)
+
+As an alternative to static `models` arrays, agents can define regex-based selectors that dynamically build the model list from the discovery catalog. This enables auto-updating agent model lists when new models appear at providers without manual config changes.
+
+```json
+{
+  "agents": {
+    "any-gemini-flash": {
+      "strategy": "round-robin",
+      "model_selectors": [
+        {
+          "provider_rgx": "^gemini$",
+          "model_rgx": "^gemini-2\\.5-flash",
+          "models": ["gemini-2.5-flash", "gemini-2.5-flash-lite"]
+        }
+      ]
+    },
+    "all-claude": {
+      "strategy": "fallback",
+      "model_selectors": [
+        {
+          "provider_rgx": "^anthropic$",
+          "model_rgx": "^claude-"
+        }
+      ]
+    }
+  }
+}
+```
+
+**Selector resolution:**
+
+1. Evaluates selectors in order; first selector with matches wins
+2. For each selector, matches against the discovery catalog using regex patterns
+3. Applies optional whitelist (`models` field) to filter matched models
+4. Converts resolved model IDs to `AgentModel` entries (provider URL and context limits from discovery catalog)
+5. If no selector matches or discovery catalog is unavailable, falls back to static `models` array
+
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `strategy` | string | `"round-robin"` | `"round-robin"` or `"fallback"` |
@@ -331,6 +369,7 @@ Both styles can be mixed in the same `models` array.
 | `force_system_prompt` | bool | `false` | If true, always inject the agent's system prompt as the first message, even if the request already contains a system message. The client's system message is preserved after the forced prompt. |
 | `mcp` | object | (none) | Optional Model Context Protocol server integration. See [MCP Integration](MCP_INTEGRATION.md) for details. |
 | `models` | array | (required) | List of model entries (strings or objects) to try in order |
+| `model_selectors` | array | (none) | Regex-based selectors for dynamic model discovery from the catalog. Evaluated before `models`; first matching selector wins. See [Model Selectors](#model-selectors-dynamic-model-discovery) above. |
 | `budget_limit_usd` | float64 | `0` (disabled) | Per-agent cumulative budget limit in USD. 0 = no limit. Logged but not yet enforced. |
 
 Each model entry (object form):

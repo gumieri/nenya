@@ -291,6 +291,7 @@ func (p *Proxy) prepareAndSend(gw *gateway.NenyaGateway,
 	if err != nil {
 		upstreamCancel()
 		ctxLogger.Warn("target network error", "err", err)
+		gw.AgentState.RecordFailure(target, cooldownDuration)
 		return upstreamAction{kind: actionContinue}
 	}
 
