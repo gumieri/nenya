@@ -319,43 +319,48 @@ For custom or local models (not in the registry), or to override registry defaul
 
 Both styles can be mixed in the same `models` array.
 
-### Model Selectors (Dynamic Model Discovery)
+### Dynamic Model Discovery (Regex Patterns)
 
-As an alternative to static `models` arrays, agents can define regex-based selectors that dynamically build the model list from the discovery catalog. This enables auto-updating agent model lists when new models appear at providers without manual config changes.
+Model entries can use regex patterns to dynamically match against the discovery catalog. This enables auto-updating agent model lists when new models appear at providers without manual config changes.
 
 ```json
 {
   "agents": {
-    "any-gemini-flash": {
+    "all-flash": {
       "strategy": "round-robin",
-      "model_selectors": [
-        {
-          "provider_rgx": "^gemini$",
-          "model_rgx": "^gemini-2\\.5-flash",
-          "models": ["gemini-2.5-flash", "gemini-2.5-flash-lite"]
-        }
+      "models": [
+        { "provider_rgx": "^gemini$", "model_rgx": "^gemini-2\\.5-flash" },
+        { "provider": "anthropic", "model_rgx": "^claude-3\\.5-sonnet" }
       ]
     },
-    "all-claude": {
+    "mixed": {
       "strategy": "fallback",
-      "model_selectors": [
-        {
-          "provider_rgx": "^anthropic$",
-          "model_rgx": "^claude-"
-        }
+      "models": [
+        "claude-sonnet-4-20250514",
+        { "provider_rgx": "^deepseek$", "model": "deepseek-chat" }
       ]
     }
   }
 }
 ```
 
-**Selector resolution:**
+**Precedence rules:**
 
-1. Evaluates selectors in order; first selector with matches wins
-2. For each selector, matches against the discovery catalog using regex patterns
-3. Applies optional whitelist (`models` field) to filter matched models
-4. Converts resolved model IDs to `AgentModel` entries (provider URL and context limits from discovery catalog)
-5. If no selector matches or discovery catalog is unavailable, falls back to static `models` array
+- `provider` + `model` — static entry, used as-is
+- `provider` + `model_rgx` — static provider, regex model from that provider's catalog
+- `provider_rgx` + `model` — regex provider match, static model name
+- `provider_rgx` + `model_rgx` — full regex, expands to all matching catalog entries
+
+Static fields always win over regex when both are present on the same key.
+
+> **Note:** If both static and regex fields are set on the same entry (e.g., both `provider` and `provider_rgx`), a warning is logged at startup. The dynamic field takes precedence — but the config is likely a mistake.
+
+**Resolution:**
+
+1. For each model entry with `provider_rgx` or `model_rgx`, expand against the discovery catalog
+2. Static entries (no regex) pass through unchanged
+3. Results are cached per-agent keyed on catalog timestamp and regex hash
+4. If discovery catalog is unavailable, static entries are used as-is
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
@@ -368,8 +373,7 @@ As an alternative to static `models` arrays, agents can define regex-based selec
 | `system_prompt_file` | string | `""` | Path to system prompt file. Lower priority than `system_prompt`. |
 | `force_system_prompt` | bool | `false` | If true, always inject the agent's system prompt as the first message, even if the request already contains a system message. The client's system message is preserved after the forced prompt. |
 | `mcp` | object | (none) | Optional Model Context Protocol server integration. See [MCP Integration](MCP_INTEGRATION.md) for details. |
-| `models` | array | (required) | List of model entries (strings or objects) to try in order |
-| `model_selectors` | array | (none) | Regex-based selectors for dynamic model discovery from the catalog. Evaluated before `models`; first matching selector wins. See [Model Selectors](#model-selectors-dynamic-model-discovery) above. |
+| `models` | array | (required) | List of model entries (strings or objects) to try in order. Strings are looked up from the model registry. Objects can be static (`provider`+`model`) or dynamic (`provider_rgx`/`model_rgx` for catalog expansion). |
 | `budget_limit_usd` | float64 | `0` (disabled) | Per-agent cumulative budget limit in USD. 0 = no limit. Logged but not yet enforced. |
 
 Each model entry (object form):

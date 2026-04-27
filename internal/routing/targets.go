@@ -1,7 +1,6 @@
 package routing
 
 import (
-	"fmt"
 	"log/slog"
 	"math/rand"
 	"sort"
@@ -48,7 +47,7 @@ type AgentState struct {
 type selectorCacheEntry struct {
 	timestamp time.Time
 	models    []config.AgentModel
-	agentHash string // hash of agent.ModelSelectors for change detection
+	hash      string // hash of dynamic model entries for change detection
 }
 
 // NewAgentState creates an AgentState with a circuit breaker and
@@ -82,8 +81,8 @@ func NewAgentState(logger *slog.Logger) *AgentState {
 }
 
 func (a *AgentState) BuildTargetList(logger *slog.Logger, agentName string, agent config.AgentConfig, tokenCount int, providers map[string]*config.Provider, catalog *discovery.ModelCatalog, autoContextSkip bool) []UpstreamTarget {
-	models := a.resolveAgentModels(agentName, agent, catalog, providers, logger)
-	if models == nil {
+	models := a.expandModels(agentName, agent, catalog, providers, logger)
+	if len(models) == 0 {
 		return nil
 	}
 
@@ -107,23 +106,88 @@ func (a *AgentState) BuildTargetList(logger *slog.Logger, agentName string, agen
 	return append(active, cooling...)
 }
 
-func (a *AgentState) resolveAgentModels(agentName string, agent config.AgentConfig, catalog *discovery.ModelCatalog, providers map[string]*config.Provider, logger *slog.Logger) []config.AgentModel {
-	hasSelectors := len(agent.ModelSelectors) > 0 && catalog != nil
-
-	if hasSelectors {
-		selectorModels, err := a.getCachedSelectorModels(agentName, agent, catalog, providers, logger)
-		if err != nil {
-			logger.Warn("failed to resolve model selectors, falling back to static models",
-				"agent", agentName, "error", err)
-		} else if len(selectorModels) > 0 {
-			return selectorModels
+func (a *AgentState) expandModels(agentName string, agent config.AgentConfig, catalog *discovery.ModelCatalog, providers map[string]*config.Provider, logger *slog.Logger) []config.AgentModel {
+	hasDynamic := false
+	for _, m := range agent.Models {
+		if m.ProviderRgx != "" || m.ModelRgx != "" {
+			hasDynamic = true
+			break
 		}
 	}
-
-	if len(agent.Models) == 0 {
-		return nil
+	if !hasDynamic || catalog == nil {
+		return agent.Models
 	}
-	return agent.Models
+
+	hash := hashDynamicModels(agent.Models)
+	catTs := catalog.FetchedAt()
+
+	a.selectorCacheMu.RLock()
+	cached, hit := a.selectorCache[agentName]
+	a.selectorCacheMu.RUnlock()
+	if hit && cached.hash == hash && cached.timestamp.Equal(catTs) {
+		return cached.models
+	}
+
+	models := expandDynamicModels(agent.Models, catalog, providers, logger)
+
+	a.selectorCacheMu.Lock()
+	a.selectorCache[agentName] = selectorCacheEntry{
+		timestamp: catTs,
+		models:    models,
+		hash:      hash,
+	}
+	a.selectorCacheMu.Unlock()
+
+	return models
+}
+
+func hashDynamicModels(models []config.AgentModel) string {
+	var parts []string
+	for _, m := range models {
+		if m.ProviderRgx == "" && m.ModelRgx == "" {
+			continue
+		}
+		parts = append(parts, m.ProviderRgx, m.ModelRgx)
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	return strings.Join(parts, "|")
+}
+
+func expandDynamicModels(models []config.AgentModel, catalog *discovery.ModelCatalog, providers map[string]*config.Provider, logger *slog.Logger) []config.AgentModel {
+	expanded := make([]config.AgentModel, 0, len(models))
+	for _, m := range models {
+		if !m.IsDynamic() {
+			expanded = append(expanded, m)
+			continue
+		}
+		matchedAny := false
+		for _, dm := range catalog.AllModels() {
+			if !m.MatchesCatalog(dm.Provider, dm.ID) {
+				continue
+			}
+			matchedAny = true
+			provider, ok := providers[dm.Provider]
+			if !ok {
+				logger.Debug("provider from catalog not found", "provider", dm.Provider, "model", dm.ID)
+				continue
+			}
+			am := config.AgentModel{
+				Provider:   dm.Provider,
+				Model:      dm.ID,
+				URL:        provider.BaseURL,
+				MaxContext: dm.MaxContext,
+				MaxOutput:  dm.MaxOutput,
+			}
+			expanded = append(expanded, am)
+		}
+		if !matchedAny {
+			logger.Warn("dynamic model entry matched no catalog entries",
+				"provider_rgx", m.ProviderRgx, "model_rgx", m.ModelRgx)
+		}
+	}
+	return expanded
 }
 
 func (a *AgentState) selectStart(agent config.AgentConfig, agentName string, n int) int {
@@ -251,48 +315,6 @@ func checkCapabilities(m config.AgentModel, catalog *discovery.ModelCatalog) boo
 	return modelHasCapabilities(dm.Metadata, m.RequiredCapabilities)
 }
 
-func (a *AgentState) getCachedSelectorModels(agentName string, agent config.AgentConfig, catalog *discovery.ModelCatalog, providers map[string]*config.Provider, logger *slog.Logger) ([]config.AgentModel, error) {
-	selectorHash := hashSelectors(agent.ModelSelectors)
-	catalogTimestamp := catalog.FetchedAt()
-
-	a.selectorCacheMu.RLock()
-	cached, hit := a.selectorCache[agentName]
-	a.selectorCacheMu.RUnlock()
-
-	if hit && cached.agentHash == selectorHash && cached.timestamp.Equal(catalogTimestamp) {
-		return cached.models, nil
-	}
-
-	models, err := resolveSelectorModels(agentName, agent, catalog, providers, logger)
-	if err != nil {
-		return nil, err
-	}
-
-	if len(models) > 0 {
-		a.selectorCacheMu.Lock()
-		a.selectorCache[agentName] = selectorCacheEntry{
-			timestamp: catalogTimestamp,
-			models:    models,
-			agentHash: selectorHash,
-		}
-		a.selectorCacheMu.Unlock()
-	}
-
-	return models, nil
-}
-
-func hashSelectors(selectors []config.AgentModelSelector) string {
-	if len(selectors) == 0 {
-		return ""
-	}
-
-	var parts []string
-	for _, sel := range selectors {
-		parts = append(parts, sel.ProviderRgx, sel.ModelRgx, strings.Join(sel.Models, ","))
-	}
-	return strings.Join(parts, "|")
-}
-
 func ResolveWindowMaxContext(modelName string, agents map[string]config.AgentConfig, catalog *discovery.ModelCatalog) int {
 	agent, ok := agents[modelName]
 	if !ok {
@@ -342,96 +364,6 @@ func SortTargetsByLatency(targets []UpstreamTarget, latencyTracker *infra.Latenc
 	})
 
 	return sorted
-}
-
-func resolveSelectorModels(agentName string, agent config.AgentConfig, catalog *discovery.ModelCatalog, providers map[string]*config.Provider, logger *slog.Logger) ([]config.AgentModel, error) {
-	modelIDs, err := resolveAgentSelectors(agent, catalog)
-	if err != nil {
-		return nil, err
-	}
-
-	if len(modelIDs) == 0 {
-		return nil, nil
-	}
-
-	models := make([]config.AgentModel, 0, len(modelIDs))
-	for _, modelID := range modelIDs {
-		dm, ok := catalog.Lookup(modelID)
-		if !ok {
-			logger.Debug("model from selector not found in catalog", "model", modelID)
-			continue
-		}
-
-		provider, ok := providers[dm.Provider]
-		if !ok {
-			logger.Debug("provider from selector not found", "provider", dm.Provider, "model", modelID)
-			continue
-		}
-
-		am := config.AgentModel{
-			Provider:   dm.Provider,
-			Model:      dm.ID,
-			URL:        provider.BaseURL,
-			MaxContext: dm.MaxContext,
-			MaxOutput:  dm.MaxOutput,
-		}
-		models = append(models, am)
-	}
-
-	if len(models) == 0 {
-		return nil, nil
-	}
-
-	return models, nil
-}
-
-func resolveAgentSelectors(agent config.AgentConfig, catalog *discovery.ModelCatalog) ([]string, error) {
-	if len(agent.ModelSelectors) == 0 {
-		return nil, nil
-	}
-
-	for i := range agent.ModelSelectors {
-		sel := &agent.ModelSelectors[i]
-		if err := sel.Compile(); err != nil {
-			return nil, fmt.Errorf("selector %d: %w", i, err)
-		}
-	}
-
-	matches := []string{}
-	for _, sel := range agent.ModelSelectors {
-		for _, dm := range catalog.AllModels() {
-			if !sel.Matches(dm.Provider, dm.ID) {
-				continue
-			}
-			matches = append(matches, dm.ID)
-		}
-
-		if len(matches) == 0 {
-			continue
-		}
-
-		if len(sel.Models) > 0 {
-			whitelist := make(map[string]struct{}, len(sel.Models))
-			for _, m := range sel.Models {
-				whitelist[m] = struct{}{}
-			}
-			filtered := make([]string, 0, len(matches))
-			for _, m := range matches {
-				if _, ok := whitelist[m]; ok {
-					filtered = append(filtered, m)
-				}
-			}
-			matches = filtered
-		}
-
-		if len(matches) > 0 {
-			return matches, nil
-		}
-
-		matches = nil
-	}
-
-	return nil, nil
 }
 
 func modelHasCapabilities(meta *discovery.ModelMetadata, required []string) bool {

@@ -253,11 +253,19 @@ func applyAgentDefaults(cfg *Config) error {
 				agent.MCP.MaxIterations = 10
 			}
 		}
-		for i, sel := range agent.ModelSelectors {
-			if err := sel.Compile(); err != nil {
-				return fmt.Errorf("agent %q selector %d: %w", name, i, err)
+		for i, m := range agent.Models {
+			if m.ProviderRgx != "" || m.ModelRgx != "" {
+				if m.Provider != "" && m.ProviderRgx != "" {
+					fmt.Printf("[WARN] agent %q model %d: both provider and provider_rgx set; provider_rgx takes precedence\n", name, i)
+				}
+				if m.Model != "" && m.ModelRgx != "" {
+					fmt.Printf("[WARN] agent %q model %d: both model and model_rgx set; model_rgx takes precedence\n", name, i)
+				}
+				if err := m.CompileRegex(); err != nil {
+					return fmt.Errorf("agent %q model %d: %w", name, i, err)
+				}
+				agent.Models[i] = m
 			}
-			agent.ModelSelectors[i] = sel
 		}
 		cfg.Agents[name] = agent
 	}
