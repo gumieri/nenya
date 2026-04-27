@@ -62,19 +62,19 @@ type AgentModel struct {
 // AgentConfig defines an agent (a named alias for one or more models)
 // with routing strategy, cooldown, retry, and MCP configuration.
 type AgentConfig struct {
-	Strategy          string                 `json:"strategy"`
-	CooldownSeconds   int                    `json:"cooldown_seconds"`
-	FailureThreshold  int                    `json:"failure_threshold"`
-	FailureWindowSec  int                    `json:"failure_window_secs"`
-	SuccessThreshold  int                    `json:"success_threshold"`
-	MaxRetries        int                    `json:"max_retries"`
-	SystemPrompt      string                 `json:"system_prompt"`
-	SystemPromptFile  string                 `json:"system_prompt_file"`
-	ForceSystemPrompt bool                   `json:"force_system_prompt"`
-	Models            []AgentModel           `json:"models,omitempty"`
-	ModelSelectors    []AgentModelSelector   `json:"model_selectors,omitempty"`
-	MCP               *AgentMCPConfig        `json:"mcp,omitempty"`
-	BudgetLimitUSD    float64                `json:"budget_limit_usd,omitempty"`
+	Strategy          string               `json:"strategy"`
+	CooldownSeconds   int                  `json:"cooldown_seconds"`
+	FailureThreshold  int                  `json:"failure_threshold"`
+	FailureWindowSec  int                  `json:"failure_window_secs"`
+	SuccessThreshold  int                  `json:"success_threshold"`
+	MaxRetries        int                  `json:"max_retries"`
+	SystemPrompt      string               `json:"system_prompt"`
+	SystemPromptFile  string               `json:"system_prompt_file"`
+	ForceSystemPrompt bool                 `json:"force_system_prompt"`
+	Models            []AgentModel         `json:"models,omitempty"`
+	ModelSelectors    []AgentModelSelector `json:"model_selectors,omitempty"`
+	MCP               *AgentMCPConfig      `json:"mcp,omitempty"`
+	BudgetLimitUSD    float64              `json:"budget_limit_usd,omitempty"`
 }
 
 func (a *AgentConfig) UnmarshalJSON(data []byte) error {
@@ -147,17 +147,17 @@ type Provider struct {
 }
 
 type Config struct {
-	Server            ServerConfig               `json:"server"`
-	Governance        GovernanceConfig           `json:"governance"`
-	SecurityFilter    SecurityFilterConfig       `json:"security_filter"`
-	PrefixCache       PrefixCacheConfig          `json:"prefix_cache"`
-	Compaction        CompactionConfig           `json:"compaction"`
-	Window            WindowConfig               `json:"window"`
-	ResponseCache     ResponseCacheConfig        `json:"response_cache"`
-	Discovery         DiscoveryConfig            `json:"discovery"`
-	MCPServers        map[string]MCPServerConfig `json:"mcp_servers,omitempty"`
-	Agents            map[string]AgentConfig     `json:"agents"`
-	Providers         map[string]ProviderConfig  `json:"providers"`
+	Server         ServerConfig               `json:"server"`
+	Governance     GovernanceConfig           `json:"governance"`
+	SecurityFilter SecurityFilterConfig       `json:"security_filter"`
+	PrefixCache    PrefixCacheConfig          `json:"prefix_cache"`
+	Compaction     CompactionConfig           `json:"compaction"`
+	Window         WindowConfig               `json:"window"`
+	ResponseCache  ResponseCacheConfig        `json:"response_cache"`
+	Discovery      DiscoveryConfig            `json:"discovery"`
+	MCPServers     map[string]MCPServerConfig `json:"mcp_servers,omitempty"`
+	Agents         map[string]AgentConfig     `json:"agents"`
+	Providers      map[string]ProviderConfig  `json:"providers"`
 }
 
 type ServerConfig struct {

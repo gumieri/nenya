@@ -41,6 +41,29 @@ func applyResolvedEngineDefaults(targets []EngineTarget) {
 }
 
 func ApplyDefaults(cfg *Config) error {
+	applyServerDefaults(cfg)
+	applyGovernanceDefaults(cfg)
+	applySecurityFilterDefaults(cfg)
+	applyEngineRefDefaults(&cfg.SecurityFilter.Engine)
+	applyEngineRefDefaults(&cfg.Window.Engine)
+	applyPrefixCacheDefaults(cfg)
+	applyCompactionDefaults(cfg)
+	applyResponseCacheDefaults(cfg)
+	applyProviderMapDefaults(cfg)
+	if err := applyAgentDefaults(cfg); err != nil {
+		return err
+	}
+	applyBuiltInProviders(cfg)
+	applyWindowDefaults(cfg)
+	if err := resolveEngineRefs(cfg); err != nil {
+		return err
+	}
+	applyResolvedEngineDefaults(cfg.SecurityFilter.Engine.ResolvedTargets)
+	applyResolvedEngineDefaults(cfg.Window.Engine.ResolvedTargets)
+	return nil
+}
+
+func applyServerDefaults(cfg *Config) {
 	if cfg.Server.ListenAddr == "" {
 		cfg.Server.ListenAddr = ":8080"
 	}
@@ -50,8 +73,11 @@ func ApplyDefaults(cfg *Config) error {
 	if cfg.Server.UserAgent == "" {
 		cfg.Server.UserAgent = "nenya/1.0"
 	}
+}
+
+func applyGovernanceDefaults(cfg *Config) {
 	if err := applyLogLevel(cfg.Server.LogLevel); err != nil {
-		return err
+		return
 	}
 	if !cfg.Governance.TPMSet() && cfg.Governance.RatelimitMaxTPM == 0 {
 		cfg.Governance.RatelimitMaxTPM = 250000
@@ -83,6 +109,9 @@ func ApplyDefaults(cfg *Config) error {
 			`(?i)\b(shutdown|reboot|poweroff|halt|init\s+0)\b`,
 		}
 	}
+}
+
+func applySecurityFilterDefaults(cfg *Config) {
 	if cfg.SecurityFilter.Patterns == nil {
 		if !cfg.SecurityFilter.EnabledWasSet() {
 			cfg.SecurityFilter.Enabled = true
@@ -107,18 +136,16 @@ func ApplyDefaults(cfg *Config) error {
 	if cfg.SecurityFilter.OutputWindowChars == 0 {
 		cfg.SecurityFilter.OutputWindowChars = 4096
 	}
-	if !cfg.SecurityFilter.SkipOnEngineFailure {
-		cfg.SecurityFilter.SkipOnEngineFailure = true
-	}
+	cfg.SecurityFilter.SkipOnEngineFailure = true
 	if cfg.SecurityFilter.EntropyThreshold == 0 {
 		cfg.SecurityFilter.EntropyThreshold = 4.5
 	}
 	if cfg.SecurityFilter.EntropyMinToken == 0 {
 		cfg.SecurityFilter.EntropyMinToken = 20
 	}
+}
 
-	applyEngineRefDefaults(&cfg.SecurityFilter.Engine)
-	applyEngineRefDefaults(&cfg.Window.Engine)
+func applyPrefixCacheDefaults(cfg *Config) {
 	if !cfg.PrefixCache.Enabled && (cfg.PrefixCache.PinSystemFirst || cfg.PrefixCache.StableTools || cfg.PrefixCache.SkipRedactionOnSystem) {
 		cfg.PrefixCache.Enabled = true
 	}
@@ -131,68 +158,101 @@ func ApplyDefaults(cfg *Config) error {
 	if !cfg.PrefixCache.SkipRedactionWasSet() {
 		cfg.PrefixCache.SkipRedactionOnSystem = false
 	}
+}
 
+func applyCompactionDefaults(cfg *Config) {
+	applyJSONMinifyDefaults(cfg)
+	applyCollapseDefaults(cfg)
+	applyTrimDefaults(cfg)
+	applyNormalizeDefaults(cfg)
+	applyPruneToolsDefaults(cfg)
+	applyPruneThoughtsDefaults(cfg)
+	applyCompactionEnabledDefaults(cfg)
+}
+
+func applyJSONMinifyDefaults(cfg *Config) {
 	if !cfg.Compaction.JSONMinify && !cfg.Compaction.MinifyWasSet() {
 		cfg.Compaction.JSONMinify = true
 	}
+}
+
+func applyCollapseDefaults(cfg *Config) {
 	if !cfg.Compaction.CollapseBlankLines && !cfg.Compaction.CollapseWasSet() {
 		cfg.Compaction.CollapseBlankLines = true
 	}
+}
+
+func applyTrimDefaults(cfg *Config) {
 	if !cfg.Compaction.TrimTrailingWhitespace && !cfg.Compaction.TrimWasSet() {
 		cfg.Compaction.TrimTrailingWhitespace = true
 	}
+}
+
+func applyNormalizeDefaults(cfg *Config) {
 	if !cfg.Compaction.NormalizeLineEndings && !cfg.Compaction.NormWasSet() {
 		cfg.Compaction.NormalizeLineEndings = true
 	}
-	// Tool pruning defaults - off by default, protect 4 most recent messages
+}
+
+func applyPruneToolsDefaults(cfg *Config) {
 	if !cfg.Compaction.PruneStaleTools && !cfg.Compaction.PruneWasSet() {
 		cfg.Compaction.PruneStaleTools = false
 	}
 	if cfg.Compaction.ToolProtectionWindow == 0 && !cfg.Compaction.PruneWasSet() {
 		cfg.Compaction.ToolProtectionWindow = 4
 	}
-	// Thought pruning defaults - off by default
+}
+
+func applyPruneThoughtsDefaults(cfg *Config) {
 	if !cfg.Compaction.PruneThoughts && !cfg.Compaction.PruneThoughtsWasSet() {
 		cfg.Compaction.PruneThoughts = false
 	}
-	if !cfg.Compaction.Enabled && !cfg.Compaction.EnabledWasSet() && (cfg.Compaction.JSONMinify || cfg.Compaction.CollapseBlankLines || cfg.Compaction.TrimTrailingWhitespace || cfg.Compaction.NormalizeLineEndings) {
+}
+
+func applyCompactionEnabledDefaults(cfg *Config) {
+	hasAnyFeature := cfg.Compaction.JSONMinify || cfg.Compaction.CollapseBlankLines || cfg.Compaction.TrimTrailingWhitespace || cfg.Compaction.NormalizeLineEndings
+	if !cfg.Compaction.Enabled && !cfg.Compaction.EnabledWasSet() && hasAnyFeature {
 		cfg.Compaction.Enabled = true
 	}
+}
 
+func applyResponseCacheDefaults(cfg *Config) {
 	if !cfg.ResponseCache.Enabled && !cfg.ResponseCache.EnabledWasSet() && cfg.ResponseCache.MaxEntries > 0 {
 		cfg.ResponseCache.Enabled = true
 	}
-
-	if cfg.ResponseCache.Enabled {
-		if cfg.ResponseCache.MaxEntries <= 0 {
-			cfg.ResponseCache.MaxEntries = 512
-		}
-		if cfg.ResponseCache.MaxEntryBytes <= 0 {
-			cfg.ResponseCache.MaxEntryBytes = 1 << 20
-		}
-		if cfg.ResponseCache.TTLSeconds <= 0 {
-			cfg.ResponseCache.TTLSeconds = 3600
-		}
-		if cfg.ResponseCache.EvictEverySeconds <= 0 {
-			cfg.ResponseCache.EvictEverySeconds = 300
-		}
-		if cfg.ResponseCache.ForceRefreshHeader == "" {
-			cfg.ResponseCache.ForceRefreshHeader = "x-nenya-cache-force-refresh"
-		}
+	if !cfg.ResponseCache.Enabled {
+		return
 	}
+	if cfg.ResponseCache.MaxEntries <= 0 {
+		cfg.ResponseCache.MaxEntries = 512
+	}
+	if cfg.ResponseCache.MaxEntryBytes <= 0 {
+		cfg.ResponseCache.MaxEntryBytes = 1 << 20
+	}
+	if cfg.ResponseCache.TTLSeconds <= 0 {
+		cfg.ResponseCache.TTLSeconds = 3600
+	}
+	if cfg.ResponseCache.EvictEverySeconds <= 0 {
+		cfg.ResponseCache.EvictEverySeconds = 300
+	}
+	if cfg.ResponseCache.ForceRefreshHeader == "" {
+		cfg.ResponseCache.ForceRefreshHeader = "x-nenya-cache-force-refresh"
+	}
+}
 
+func applyProviderMapDefaults(cfg *Config) {
 	if cfg.Providers == nil {
 		cfg.Providers = make(map[string]ProviderConfig)
 	}
+}
 
+func applyAgentDefaults(cfg *Config) error {
 	for name, agent := range cfg.Agents {
 		if agent.MCP != nil {
 			if agent.MCP.MaxIterations <= 0 {
 				agent.MCP.MaxIterations = 10
-				cfg.Agents[name] = agent
 			}
 		}
-		// Compile and validate model selectors
 		for i, sel := range agent.ModelSelectors {
 			if err := sel.Compile(); err != nil {
 				return fmt.Errorf("agent %q selector %d: %w", name, i, err)
@@ -201,13 +261,18 @@ func ApplyDefaults(cfg *Config) error {
 		}
 		cfg.Agents[name] = agent
 	}
+	return nil
+}
 
+func applyBuiltInProviders(cfg *Config) {
 	for name, builtIn := range BuiltInProviders() {
 		if _, exists := cfg.Providers[name]; !exists {
 			cfg.Providers[name] = builtIn
 		}
 	}
+}
 
+func applyWindowDefaults(cfg *Config) {
 	if !cfg.Window.Enabled && (cfg.Window.Mode != "" || cfg.Window.ActiveMessages != 0 || cfg.Window.TriggerRatio != 0 || cfg.Window.SummaryMaxRunes != 0 || cfg.Window.MaxContext != 0) {
 		cfg.Window.Enabled = true
 	}
@@ -226,12 +291,4 @@ func ApplyDefaults(cfg *Config) error {
 	if cfg.Window.MaxContext == 0 {
 		cfg.Window.MaxContext = 128000
 	}
-
-	if err := resolveEngineRefs(cfg); err != nil {
-		return err
-	}
-	applyResolvedEngineDefaults(cfg.SecurityFilter.Engine.ResolvedTargets)
-	applyResolvedEngineDefaults(cfg.Window.Engine.ResolvedTargets)
-
-	return nil
 }
