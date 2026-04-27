@@ -120,6 +120,7 @@ type ServerConfig struct {
 	ListenAddr   string `json:"listen_addr"`
 	MaxBodyBytes int64  `json:"max_body_bytes"`
 	UserAgent    string `json:"user_agent"`
+	LogLevel     string `json:"log_level"`
 }
 
 type GovernanceConfig struct {

@@ -1,5 +1,16 @@
 package config
 
+import (
+	"nenya/internal/infra"
+)
+
+func applyLogLevel(level string) error {
+	if level == "" {
+		return nil
+	}
+	return infra.SetLogLevel(level)
+}
+
 func applyEngineRefDefaults(e *EngineRef) {
 	if e.AgentName == "" {
 		if e.Provider == "" {
@@ -37,6 +48,9 @@ func ApplyDefaults(cfg *Config) error {
 	}
 	if cfg.Server.UserAgent == "" {
 		cfg.Server.UserAgent = "nenya/1.0"
+	}
+	if err := applyLogLevel(cfg.Server.LogLevel); err != nil {
+		return err
 	}
 	if !cfg.Governance.TPMSet() && cfg.Governance.RatelimitMaxTPM == 0 {
 		cfg.Governance.RatelimitMaxTPM = 250000

@@ -36,7 +36,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	logger.Info("configuration loaded",
+	logger.Debug("configuration loaded",
 		"discovery_enabled", cfg.Discovery.Enabled,
 		"auto_agents", cfg.Discovery.AutoAgents,
 		"auto_agents_config_provided", cfg.Discovery.AutoAgentsConfig != nil,

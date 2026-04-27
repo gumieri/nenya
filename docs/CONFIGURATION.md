@@ -63,6 +63,7 @@ systemctl reload nenya
 |-------|------|---------|-------------|
 | `listen_addr` | string | `":8080"` | Bind address and port |
 | `max_body_bytes` | int | `10485760` (10 MB) | Maximum incoming request body size |
+| `log_level` | string | `"info"` | Log level: `"debug"`, `"info"`, `"warn"`, or `"error"`. The `-verbose` flag overrides this to `"debug"`. |
 
 ## `governance`
 
@@ -527,6 +528,28 @@ If discovery fails for any provider:
 - Other providers' discovered models are still used
 - `/v1/models` endpoint shows only successfully discovered models
 
+### Debug Logging
+
+When `server.log_level` is set to `"debug"`, the discovery process logs detailed information:
+
+- **Per-provider fetch results**: `"discovered models"` log shows model count per provider
+- **Full catalog dump**: `"discovery catalog"` debug log shows all discovered models with:
+  - Provider name
+  - Model ID
+  - Context window (`ctx=`)
+  - Max output tokens (`out=`)
+  - Capabilities (`caps=`): comma-separated list (e.g., `vision,tools,reasoning`)
+  - Pricing (`pricing=`): `input_per_1m/output_per_1m` if available, or `false`
+
+Example debug log output:
+```
+DEBUG discovery catalog providers=[anthropic:3 gemini:5 openrouter:42] models=[
+  anthropic/claude-opus-4-5 ctx=200000 out=64000 caps=vision,tools,reasoning pricing=15.00/75.00
+  gemini/gemini-2.5-flash ctx=128000 out=8192 caps=vision,tools,reasoning pricing=0.08/0.30
+  openrouter/llama-3.3-70b ctx=131072 out=8192 caps=tools pricing=0.59/0.79
+]
+```
+
 ### `/v1/models` Endpoint
 
 The `/v1/models` catalog endpoint returns actual discovered models instead of wildcards:
@@ -603,10 +626,12 @@ Auto-agent filters use model-level metadata only. Capabilities are inferred from
 
 ### Example Log Output
 
+Auto-agent logs are emitted at debug level. Enable debug logging with `server.log_level: "debug"` or the `-verbose` flag:
+
 ```
-INFO generated auto-agent agent=auto_reasoning description="Reasoning models with large context windows (≥128k context, supports reasoning)" strategy=fallback models=[claude-opus-4-5 deepseek-v4-pro gemini-2.5-flash]
-INFO generated auto-agent agent=auto_coding description="Code-optimized models with tool calling capability" strategy=fallback models=[codestral-latest deepseek-v4-pro qwen2.5-72b-turbo]
-INFO auto-agents summary total_agents=2 agents=[auto_coding auto_reasoning]
+DEBUG generated auto-agent agent=auto_reasoning description="Reasoning models with large context windows (≥128k context, supports reasoning)" strategy=fallback models=[claude-opus-4-5 deepseek-v4-pro gemini-2.5-flash]
+DEBUG generated auto-agent agent=auto_coding description="Code-optimized models with tool calling capability" strategy=fallback models=[codestral-latest deepseek-v4-pro qwen2.5-72b-turbo]
+DEBUG auto-agents summary total_agents=2 agents=[auto_coding auto_reasoning]
 ```
 
 ## Balanced Routing
