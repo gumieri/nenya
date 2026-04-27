@@ -1,6 +1,7 @@
 package config
 
 import (
+	"fmt"
 	"nenya/internal/infra"
 )
 
@@ -191,6 +192,14 @@ func ApplyDefaults(cfg *Config) error {
 				cfg.Agents[name] = agent
 			}
 		}
+		// Compile and validate model selectors
+		for i, sel := range agent.ModelSelectors {
+			if err := sel.Compile(); err != nil {
+				return fmt.Errorf("agent %q selector %d: %w", name, i, err)
+			}
+			agent.ModelSelectors[i] = sel
+		}
+		cfg.Agents[name] = agent
 	}
 
 	for name, builtIn := range BuiltInProviders() {

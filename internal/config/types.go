@@ -3,7 +3,50 @@ package config
 import (
 	"encoding/json"
 	"fmt"
+	"regexp"
 )
+
+// AgentModelSelector defines a regex-based selector for models within an agent.
+// It matches against the discovery catalog to dynamically build the model list.
+type AgentModelSelector struct {
+	ProviderRgx string   `json:"provider_rgx,omitempty"` // regex matching provider name from discovery
+	ModelRgx    string   `json:"model_rgx,omitempty"`    // regex matching model name from discovery
+	Models      []string `json:"models,omitempty"`       // optional whitelist; if empty, all matching models are used
+
+	providerRE *regexp.Regexp // compiled regex for provider matching
+	modelRE    *regexp.Regexp // compiled regex for model matching
+}
+
+// Compile compiles the regex patterns in the selector.
+// Returns an error if any pattern is invalid.
+func (s *AgentModelSelector) Compile() error {
+	if s.ProviderRgx != "" {
+		re, err := regexp.Compile(s.ProviderRgx)
+		if err != nil {
+			return fmt.Errorf("invalid provider_rgx %q: %w", s.ProviderRgx, err)
+		}
+		s.providerRE = re
+	}
+	if s.ModelRgx != "" {
+		re, err := regexp.Compile(s.ModelRgx)
+		if err != nil {
+			return fmt.Errorf("invalid model_rgx %q: %w", s.ModelRgx, err)
+		}
+		s.modelRE = re
+	}
+	return nil
+}
+
+// Matches returns true if the selector matches the given provider and model.
+func (s *AgentModelSelector) Matches(provider, model string) bool {
+	if s.providerRE != nil && !s.providerRE.MatchString(provider) {
+		return false
+	}
+	if s.modelRE != nil && !s.modelRE.MatchString(model) {
+		return false
+	}
+	return true
+}
 
 // AgentModel defines a single model entry within an agent's model list,
 // specifying the provider, model name, URL override, and context limits.
@@ -19,18 +62,19 @@ type AgentModel struct {
 // AgentConfig defines an agent (a named alias for one or more models)
 // with routing strategy, cooldown, retry, and MCP configuration.
 type AgentConfig struct {
-	Strategy          string          `json:"strategy"`
-	CooldownSeconds   int             `json:"cooldown_seconds"`
-	FailureThreshold  int             `json:"failure_threshold"`
-	FailureWindowSec  int             `json:"failure_window_secs"`
-	SuccessThreshold  int             `json:"success_threshold"`
-	MaxRetries        int             `json:"max_retries"`
-	SystemPrompt      string          `json:"system_prompt"`
-	SystemPromptFile  string          `json:"system_prompt_file"`
-	ForceSystemPrompt bool            `json:"force_system_prompt"`
-	Models            []AgentModel    `json:"models"`
-	MCP               *AgentMCPConfig `json:"mcp,omitempty"`
-	BudgetLimitUSD    float64         `json:"budget_limit_usd,omitempty"`
+	Strategy          string                 `json:"strategy"`
+	CooldownSeconds   int                    `json:"cooldown_seconds"`
+	FailureThreshold  int                    `json:"failure_threshold"`
+	FailureWindowSec  int                    `json:"failure_window_secs"`
+	SuccessThreshold  int                    `json:"success_threshold"`
+	MaxRetries        int                    `json:"max_retries"`
+	SystemPrompt      string                 `json:"system_prompt"`
+	SystemPromptFile  string                 `json:"system_prompt_file"`
+	ForceSystemPrompt bool                   `json:"force_system_prompt"`
+	Models            []AgentModel           `json:"models,omitempty"`
+	ModelSelectors    []AgentModelSelector   `json:"model_selectors,omitempty"`
+	MCP               *AgentMCPConfig        `json:"mcp,omitempty"`
+	BudgetLimitUSD    float64                `json:"budget_limit_usd,omitempty"`
 }
 
 func (a *AgentConfig) UnmarshalJSON(data []byte) error {
@@ -103,17 +147,17 @@ type Provider struct {
 }
 
 type Config struct {
-	Server         ServerConfig               `json:"server"`
-	Governance     GovernanceConfig           `json:"governance"`
-	SecurityFilter SecurityFilterConfig       `json:"security_filter"`
-	PrefixCache    PrefixCacheConfig          `json:"prefix_cache"`
-	Compaction     CompactionConfig           `json:"compaction"`
-	Window         WindowConfig               `json:"window"`
-	ResponseCache  ResponseCacheConfig        `json:"response_cache"`
-	Discovery      DiscoveryConfig            `json:"discovery"`
-	MCPServers     map[string]MCPServerConfig `json:"mcp_servers,omitempty"`
-	Agents         map[string]AgentConfig     `json:"agents"`
-	Providers      map[string]ProviderConfig  `json:"providers"`
+	Server            ServerConfig               `json:"server"`
+	Governance        GovernanceConfig           `json:"governance"`
+	SecurityFilter    SecurityFilterConfig       `json:"security_filter"`
+	PrefixCache       PrefixCacheConfig          `json:"prefix_cache"`
+	Compaction        CompactionConfig           `json:"compaction"`
+	Window            WindowConfig               `json:"window"`
+	ResponseCache     ResponseCacheConfig        `json:"response_cache"`
+	Discovery         DiscoveryConfig            `json:"discovery"`
+	MCPServers        map[string]MCPServerConfig `json:"mcp_servers,omitempty"`
+	Agents            map[string]AgentConfig     `json:"agents"`
+	Providers         map[string]ProviderConfig  `json:"providers"`
 }
 
 type ServerConfig struct {
