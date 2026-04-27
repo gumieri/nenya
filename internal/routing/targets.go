@@ -38,17 +38,17 @@ const (
 // AgentState tracks per-model request counters, circuit breaker state,
 // and cached selector resolution results.
 type AgentState struct {
-	Counters           map[string]uint64
-	CB                 *resilience.CircuitBreaker
-	Mu                 sync.Mutex
-	selectorCache      map[string]selectorCacheEntry
-	selectorCacheMu    sync.RWMutex
+	Counters        map[string]uint64
+	CB              *resilience.CircuitBreaker
+	Mu              sync.Mutex
+	selectorCache   map[string]selectorCacheEntry
+	selectorCacheMu sync.RWMutex
 }
 
 type selectorCacheEntry struct {
-	timestamp  time.Time
-	models     []config.AgentModel
-	agentHash  string // hash of agent.ModelSelectors for change detection
+	timestamp time.Time
+	models    []config.AgentModel
+	agentHash string // hash of agent.ModelSelectors for change detection
 }
 
 // NewAgentState creates an AgentState with a circuit breaker and
@@ -82,8 +82,32 @@ func NewAgentState(logger *slog.Logger) *AgentState {
 }
 
 func (a *AgentState) BuildTargetList(logger *slog.Logger, agentName string, agent config.AgentConfig, tokenCount int, providers map[string]*config.Provider, catalog *discovery.ModelCatalog, autoContextSkip bool) []UpstreamTarget {
-	var models []config.AgentModel
-	n := len(agent.Models)
+	models := a.resolveAgentModels(agentName, agent, catalog, providers, logger)
+	if models == nil {
+		return nil
+	}
+
+	n := len(models)
+	start := a.selectStart(agent, agentName, n)
+
+	active := make([]UpstreamTarget, 0, n)
+	cooling := make([]UpstreamTarget, 0, n)
+
+	for i := 0; i < n; i++ {
+		t, ok := a.buildTarget(logger, agentName, models[(start+i)%n], tokenCount, providers, catalog, autoContextSkip)
+		if !ok {
+			continue
+		}
+		if a.CB.Peek(t.CoolKey) {
+			active = append(active, *t)
+		} else {
+			cooling = append(cooling, *t)
+		}
+	}
+	return append(active, cooling...)
+}
+
+func (a *AgentState) resolveAgentModels(agentName string, agent config.AgentConfig, catalog *discovery.ModelCatalog, providers map[string]*config.Provider, logger *slog.Logger) []config.AgentModel {
 	hasSelectors := len(agent.ModelSelectors) > 0 && catalog != nil
 
 	if hasSelectors {
@@ -92,112 +116,63 @@ func (a *AgentState) BuildTargetList(logger *slog.Logger, agentName string, agen
 			logger.Warn("failed to resolve model selectors, falling back to static models",
 				"agent", agentName, "error", err)
 		} else if len(selectorModels) > 0 {
-			models = selectorModels
-			n = len(models)
+			return selectorModels
 		}
 	}
 
-	if models == nil {
-		n = len(agent.Models)
-		models = agent.Models
-		if n == 0 {
-			return nil
-		}
+	if len(agent.Models) == 0 {
+		return nil
 	}
+	return agent.Models
+}
 
+func (a *AgentState) selectStart(agent config.AgentConfig, agentName string, n int) int {
 	a.Mu.Lock()
-	var start int
-	if agent.Strategy != "" && agent.Strategy == "fallback" {
-		start = 0
-	} else {
-		start = int(a.Counters[agentName]) % n
-		a.Counters[agentName]++
+	defer a.Mu.Unlock()
+
+	if agent.Strategy == "fallback" {
+		return 0
 	}
-	a.Mu.Unlock()
 
-	active := make([]UpstreamTarget, 0, n)
-	cooling := make([]UpstreamTarget, 0, n)
+	start := int(a.Counters[agentName]) % n
+	a.Counters[agentName]++
+	return start
+}
 
-	for i := 0; i < n; i++ {
-		m := models[(start+i)%n]
-
-		maxCtx := m.MaxContext
-		if maxCtx == 0 {
-			if catalog != nil {
-				if disc, ok := catalog.Lookup(m.Model); ok && disc.MaxContext > 0 {
-					maxCtx = disc.MaxContext
-				}
-			}
-			if maxCtx == 0 {
-				if entry, ok := config.ModelRegistry[m.Model]; ok && entry.MaxContext > 0 {
-					maxCtx = entry.MaxContext
-				}
-			}
-		}
-
-		if maxCtx > 0 && tokenCount > maxCtx {
-			logger.Info("skipping model: exceeds max_context",
-				"model", m.Model, "max_context", maxCtx, "tokens", tokenCount)
-			continue
-		}
-
-		if autoContextSkip && maxCtx > 0 && tokenCount > 0 && maxCtx < tokenCount*2 {
-			logger.Info("skipping model: context headroom too small",
-				"model", m.Model, "max_context", maxCtx, "tokens", tokenCount)
-			continue
-		}
-
-		if len(m.RequiredCapabilities) > 0 && catalog != nil {
-			dm, hasMeta := catalog.Lookup(m.Model)
-			if !hasMeta || dm.Metadata == nil {
-				logger.Debug("skipping model: no metadata for capability check",
-					"model", m.Model, "required", m.RequiredCapabilities)
-				continue
-			}
-			if !modelHasCapabilities(dm.Metadata, m.RequiredCapabilities) {
-				logger.Debug("skipping model: missing required capabilities",
-					"model", m.Model, "required", m.RequiredCapabilities)
-				continue
-			}
-		}
-
-		p := ProviderURL(m.Provider, m.URL, providers)
-		if p == "" {
-			logger.Warn("unknown provider, skipping model", "provider", m.Provider, "model", m.Model)
-			continue
-		}
-
-		maxOut := m.MaxOutput
-		if maxOut == 0 {
-			if catalog != nil {
-				if disc, ok := catalog.Lookup(m.Model); ok && disc.MaxOutput > 0 {
-					maxOut = disc.MaxOutput
-				}
-			}
-			if maxOut == 0 {
-				if entry, ok := config.ModelRegistry[m.Model]; ok && entry.MaxOutput > 0 {
-					maxOut = entry.MaxOutput
-				}
-			}
-		}
-
-		t := UpstreamTarget{
-			URL:        p,
-			Model:      m.Model,
-			CoolKey:    agentName + ":" + m.Provider + ":" + m.Model,
-			Provider:   m.Provider,
-			MaxOutput:  maxOut,
-			MaxContext: maxCtx,
-		}
-		// Use Peek (no side effects) here; Allow is called later in
-		// prepareAndSend when the request is actually dispatched.
-		if a.CB.Peek(t.CoolKey) {
-			active = append(active, t)
-		} else {
-			cooling = append(cooling, t)
-		}
+func (a *AgentState) buildTarget(logger *slog.Logger, agentName string, m config.AgentModel, tokenCount int, providers map[string]*config.Provider, catalog *discovery.ModelCatalog, autoContextSkip bool) (*UpstreamTarget, bool) {
+	maxCtx := resolveMaxContext(m, catalog)
+	if maxCtx > 0 && tokenCount > maxCtx {
+		logger.Info("skipping model: exceeds max_context",
+			"model", m.Model, "max_context", maxCtx, "tokens", tokenCount)
+		return nil, false
 	}
-	return append(active, cooling...)
+
+	if autoContextSkip && maxCtx > 0 && tokenCount > 0 && maxCtx < tokenCount*2 {
+		logger.Info("skipping model: context headroom too small",
+			"model", m.Model, "max_context", maxCtx, "tokens", tokenCount)
+		return nil, false
+	}
+
+	if !checkCapabilities(m, catalog) {
+		return nil, false
+	}
+
+	p := ProviderURL(m.Provider, m.URL, providers)
+	if p == "" {
+		logger.Warn("unknown provider, skipping model", "provider", m.Provider, "model", m.Model)
+		return nil, false
+	}
+
+	maxOut := resolveMaxOutput(m, catalog)
+
+	return &UpstreamTarget{
+		URL:        p,
+		Model:      m.Model,
+		CoolKey:    agentName + ":" + m.Provider + ":" + m.Model,
+		Provider:   m.Provider,
+		MaxOutput:  maxOut,
+		MaxContext: maxCtx,
+	}, true
 }
 
 func (a *AgentState) ActivateCooldown(target UpstreamTarget, cooldownDuration time.Duration) {
@@ -221,6 +196,59 @@ func (a *AgentState) ActiveCooldowns() int {
 
 func (a *AgentState) CBSnapshot() map[string]string {
 	return a.CB.Snapshot()
+}
+
+func resolveMaxContext(m config.AgentModel, catalog *discovery.ModelCatalog) int {
+	if m.MaxContext > 0 {
+		return m.MaxContext
+	}
+
+	if catalog != nil {
+		if disc, ok := catalog.Lookup(m.Model); ok && disc.MaxContext > 0 {
+			return disc.MaxContext
+		}
+	}
+
+	if entry, ok := config.ModelRegistry[m.Model]; ok && entry.MaxContext > 0 {
+		return entry.MaxContext
+	}
+
+	return 0
+}
+
+func resolveMaxOutput(m config.AgentModel, catalog *discovery.ModelCatalog) int {
+	if m.MaxOutput > 0 {
+		return m.MaxOutput
+	}
+
+	if catalog != nil {
+		if disc, ok := catalog.Lookup(m.Model); ok && disc.MaxOutput > 0 {
+			return disc.MaxOutput
+		}
+	}
+
+	if entry, ok := config.ModelRegistry[m.Model]; ok && entry.MaxOutput > 0 {
+		return entry.MaxOutput
+	}
+
+	return 0
+}
+
+func checkCapabilities(m config.AgentModel, catalog *discovery.ModelCatalog) bool {
+	if len(m.RequiredCapabilities) == 0 {
+		return true
+	}
+
+	if catalog == nil {
+		return true
+	}
+
+	dm, hasMeta := catalog.Lookup(m.Model)
+	if !hasMeta || dm.Metadata == nil {
+		return false
+	}
+
+	return modelHasCapabilities(dm.Metadata, m.RequiredCapabilities)
 }
 
 func (a *AgentState) getCachedSelectorModels(agentName string, agent config.AgentConfig, catalog *discovery.ModelCatalog, providers map[string]*config.Provider, logger *slog.Logger) ([]config.AgentModel, error) {
@@ -266,29 +294,19 @@ func hashSelectors(selectors []config.AgentModelSelector) string {
 }
 
 func ResolveWindowMaxContext(modelName string, agents map[string]config.AgentConfig, catalog *discovery.ModelCatalog) int {
-	if agent, ok := agents[modelName]; ok {
-		maxCtx := 0
-		for _, m := range agent.Models {
-			mc := m.MaxContext
-			if mc == 0 {
-				if catalog != nil {
-					if disc, ok := catalog.Lookup(m.Model); ok && disc.MaxContext > 0 {
-						mc = disc.MaxContext
-					}
-				}
-				if mc == 0 {
-					if entry, ok := config.ModelRegistry[m.Model]; ok && entry.MaxContext > 0 {
-						mc = entry.MaxContext
-					}
-				}
-			}
-			if mc > maxCtx {
-				maxCtx = mc
-			}
-		}
-		return maxCtx
+	agent, ok := agents[modelName]
+	if !ok {
+		return 0
 	}
-	return 0
+
+	maxCtx := 0
+	for _, m := range agent.Models {
+		mc := resolveMaxContext(m, catalog)
+		if mc > maxCtx {
+			maxCtx = mc
+		}
+	}
+	return maxCtx
 }
 
 func SortTargetsByLatency(targets []UpstreamTarget, latencyTracker *infra.LatencyTracker, jitterFn func() float64) []UpstreamTarget {

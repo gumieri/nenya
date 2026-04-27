@@ -86,6 +86,20 @@ func loadFromDirectory(dir string) (*Config, error) {
 }
 
 func mergeConfig(base, overlay *Config) {
+	mergeServerConfig(base, overlay)
+	mergeGovernanceConfig(base, overlay)
+	mergeSecurityFilterConfig(base, overlay)
+	mergePrefixCacheConfig(base, overlay)
+	mergeCompactionConfig(base, overlay)
+	mergeWindowConfig(base, overlay)
+	mergeResponseCacheConfig(base, overlay)
+	mergeDiscoveryConfig(base, overlay)
+	mergeMap(base, overlay, &base.Agents, &overlay.Agents)
+	mergeMap(base, overlay, &base.Providers, &overlay.Providers)
+	mergeMap(base, overlay, &base.MCPServers, &overlay.MCPServers)
+}
+
+func mergeServerConfig(base, overlay *Config) {
 	if overlay.Server.ListenAddr != "" {
 		base.Server.ListenAddr = overlay.Server.ListenAddr
 	}
@@ -98,7 +112,9 @@ func mergeConfig(base, overlay *Config) {
 	if overlay.Server.LogLevel != "" {
 		base.Server.LogLevel = overlay.Server.LogLevel
 	}
+}
 
+func mergeGovernanceConfig(base, overlay *Config) {
 	if overlay.Governance.TruncationStrategy != "" {
 		base.Governance.TruncationStrategy = overlay.Governance.TruncationStrategy
 	}
@@ -123,14 +139,9 @@ func mergeConfig(base, overlay *Config) {
 	if overlay.Governance.TPMSet() {
 		base.Governance.RatelimitMaxTPM = overlay.Governance.RatelimitMaxTPM
 	}
+}
 
-	if overlay.Governance.TruncationStrategy != "" {
-		base.Governance.TruncationStrategy = overlay.Governance.TruncationStrategy
-	}
-	if overlay.Governance.TPMSet() {
-		base.Governance.RatelimitMaxTPM = overlay.Governance.RatelimitMaxTPM
-	}
-
+func mergeSecurityFilterConfig(base, overlay *Config) {
 	if overlay.SecurityFilter.EnabledWasSet() {
 		base.SecurityFilter.Enabled = overlay.SecurityFilter.Enabled
 		base.SecurityFilter.enabledSet = true
@@ -153,7 +164,9 @@ func mergeConfig(base, overlay *Config) {
 	if overlay.SecurityFilter.Engine.AgentName != "" || overlay.SecurityFilter.Engine.Provider != "" {
 		base.SecurityFilter.Engine = overlay.SecurityFilter.Engine
 	}
+}
 
+func mergePrefixCacheConfig(base, overlay *Config) {
 	if overlay.PrefixCache.PinWasSet() {
 		base.PrefixCache.PinSystemFirst = overlay.PrefixCache.PinSystemFirst
 		base.PrefixCache.pinSet = true
@@ -166,7 +179,9 @@ func mergeConfig(base, overlay *Config) {
 		base.PrefixCache.SkipRedactionOnSystem = overlay.PrefixCache.SkipRedactionOnSystem
 		base.PrefixCache.skipRedactionSet = true
 	}
+}
 
+func mergeCompactionConfig(base, overlay *Config) {
 	if overlay.Compaction.EnabledWasSet() {
 		base.Compaction.Enabled = overlay.Compaction.Enabled
 		base.Compaction.enabledSet = true
@@ -198,7 +213,9 @@ func mergeConfig(base, overlay *Config) {
 	if overlay.Compaction.ToolProtectionWindow != 0 {
 		base.Compaction.ToolProtectionWindow = overlay.Compaction.ToolProtectionWindow
 	}
+}
 
+func mergeWindowConfig(base, overlay *Config) {
 	if overlay.Window.Enabled {
 		base.Window.Enabled = true
 	}
@@ -220,7 +237,9 @@ func mergeConfig(base, overlay *Config) {
 	if overlay.Window.Engine.AgentName != "" || overlay.Window.Engine.Provider != "" {
 		base.Window.Engine = overlay.Window.Engine
 	}
+}
 
+func mergeResponseCacheConfig(base, overlay *Config) {
 	if overlay.ResponseCache.EnabledWasSet() {
 		base.ResponseCache.Enabled = overlay.ResponseCache.Enabled
 		base.ResponseCache.enabledSet = true
@@ -240,7 +259,9 @@ func mergeConfig(base, overlay *Config) {
 	if overlay.ResponseCache.ForceRefreshHeader != "" {
 		base.ResponseCache.ForceRefreshHeader = overlay.ResponseCache.ForceRefreshHeader
 	}
+}
 
+func mergeDiscoveryConfig(base, overlay *Config) {
 	if overlay.Discovery.Enabled {
 		base.Discovery.Enabled = overlay.Discovery.Enabled
 	}
@@ -250,10 +271,6 @@ func mergeConfig(base, overlay *Config) {
 	if overlay.Discovery.AutoAgentsConfig != nil {
 		base.Discovery.AutoAgentsConfig = overlay.Discovery.AutoAgentsConfig
 	}
-
-	mergeMap(base, overlay, &base.Agents, &overlay.Agents)
-	mergeMap(base, overlay, &base.Providers, &overlay.Providers)
-	mergeMap(base, overlay, &base.MCPServers, &overlay.MCPServers)
 }
 
 func mergeMap[T any](base, overlay *Config, baseField *map[string]T, overlayField *map[string]T) {
@@ -271,37 +288,50 @@ func mergeMap[T any](base, overlay *Config, baseField *map[string]T, overlayFiel
 func stripComments(data []byte) []byte {
 	var result []byte
 	i := 0
-	n := len(data)
 	inString := false
-	for i < n {
-		if !inString && i+1 < n && data[i] == '/' && data[i+1] == '/' {
-			for i < n && data[i] != '\n' && data[i] != '\r' {
-				i++
+	for i < len(data) {
+		if !inString && i+1 < len(data) && data[i] == '/' {
+			if data[i+1] == '/' {
+				i = skipLineComment(data, i)
+				continue
 			}
-			continue
+			if data[i+1] == '*' {
+				i = skipBlockComment(data, i)
+				continue
+			}
 		}
-		if !inString && i+1 < n && data[i] == '/' && data[i+1] == '*' {
-			for i < n && (data[i] != '*' || i+1 >= n || data[i+1] != '/') {
-				i++
-			}
-			if i+1 < n {
-				i += 2
-			}
-			continue
-		}
-		if data[i] == '"' {
-			backslashCount := 0
-			for j := i - 1; j >= 0 && data[j] == '\\'; j-- {
-				backslashCount++
-			}
-			if backslashCount%2 == 0 {
-				inString = !inString
-			}
+		if data[i] == '"' && isUnescapedQuote(data, i) {
+			inString = !inString
 		}
 		result = append(result, data[i])
 		i++
 	}
 	return result
+}
+
+func skipLineComment(data []byte, i int) int {
+	for i < len(data) && data[i] != '\n' && data[i] != '\r' {
+		i++
+	}
+	return i
+}
+
+func skipBlockComment(data []byte, i int) int {
+	for i < len(data) && (data[i] != '*' || i+1 >= len(data) || data[i+1] != '/') {
+		i++
+	}
+	if i+1 < len(data) {
+		i += 2
+	}
+	return i
+}
+
+func isUnescapedQuote(data []byte, i int) bool {
+	backslashCount := 0
+	for j := i - 1; j >= 0 && data[j] == '\\'; j-- {
+		backslashCount++
+	}
+	return backslashCount%2 == 0
 }
 
 func LoadPromptFile(filePath string, directPrompt string, defaultPrompt string) (string, error) {
@@ -312,19 +342,8 @@ func LoadPromptFile(filePath string, directPrompt string, defaultPrompt string) 
 		return defaultPrompt, nil
 	}
 
-	// Validate that the file path is within the config directory and doesn't escape
-	if absPath, err := filepath.Abs(filePath); err == nil {
-		if configDir := os.Getenv("CONFIG_DIR"); configDir != "" {
-			if absConfigDir, err := filepath.Abs(configDir); err == nil {
-				// Check if the file path is within the config directory
-				if relPath, err := filepath.Rel(absConfigDir, absPath); err == nil {
-					// Check for path traversal attempts
-					if strings.Contains(relPath, "..") {
-						return "", fmt.Errorf("prompt file path escapes config directory: %s", filePath)
-					}
-				}
-			}
-		}
+	if err := validatePromptPath(filePath); err != nil {
+		return "", err
 	}
 
 	data, err := os.ReadFile(filePath)
@@ -334,24 +353,39 @@ func LoadPromptFile(filePath string, directPrompt string, defaultPrompt string) 
 	return string(data), nil
 }
 
+func validatePromptPath(filePath string) error {
+	absPath, err := filepath.Abs(filePath)
+	if err != nil {
+		return nil
+	}
+
+	configDir := os.Getenv("CONFIG_DIR")
+	if configDir == "" {
+		return nil
+	}
+
+	absConfigDir, err := filepath.Abs(configDir)
+	if err != nil {
+		return nil
+	}
+
+	relPath, err := filepath.Rel(absConfigDir, absPath)
+	if err != nil {
+		return nil
+	}
+
+	if strings.Contains(relPath, "..") {
+		return fmt.Errorf("prompt file path escapes config directory: %s", filePath)
+	}
+
+	return nil
+}
+
 func LoadSecrets() (*SecretsConfig, error) {
-	credDir := os.Getenv("CREDENTIALS_DIRECTORY")
-	if credDir != "" {
-		secretsPath := credDir + "/secrets"
-		data, err := os.ReadFile(secretsPath)
-		if err == nil {
-			var secrets SecretsConfig
-			if err := json.Unmarshal(data, &secrets); err != nil {
-				return nil, fmt.Errorf("failed to parse secrets JSON: %v", err)
-			}
-			if secrets.ClientToken == "" {
-				return nil, fmt.Errorf("client_token missing in secrets")
-			}
-			if secrets.ProviderKeys == nil {
-				secrets.ProviderKeys = make(map[string]string)
-			}
-			return &secrets, nil
-		}
+	if secrets, err := tryLoadCredFile(); err != nil {
+		return nil, err
+	} else if secrets != nil {
+		return secrets, nil
 	}
 
 	clientToken := os.Getenv("NENYA_CLIENT_TOKEN")
@@ -376,6 +410,30 @@ func LoadSecrets() (*SecretsConfig, error) {
 	}
 
 	return secrets, nil
+}
+
+func tryLoadCredFile() (*SecretsConfig, error) {
+	credDir := os.Getenv("CREDENTIALS_DIRECTORY")
+	if credDir == "" {
+		return nil, nil
+	}
+
+	data, err := os.ReadFile(credDir + "/secrets")
+	if err != nil {
+		return nil, nil
+	}
+
+	var secrets SecretsConfig
+	if err := json.Unmarshal(data, &secrets); err != nil {
+		return nil, fmt.Errorf("failed to parse secrets JSON: %v", err)
+	}
+	if secrets.ClientToken == "" {
+		return nil, fmt.Errorf("client_token missing in secrets")
+	}
+	if secrets.ProviderKeys == nil {
+		secrets.ProviderKeys = make(map[string]string)
+	}
+	return &secrets, nil
 }
 
 func ResolveProviders(cfg *Config, secrets *SecretsConfig) map[string]*Provider {
