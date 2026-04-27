@@ -6,50 +6,10 @@ import (
 	"regexp"
 )
 
-// AgentModelSelector defines a regex-based selector for models within an agent.
-// It matches against the discovery catalog to dynamically build the model list.
-type AgentModelSelector struct {
-	ProviderRgx string   `json:"provider_rgx,omitempty"` // regex matching provider name from discovery
-	ModelRgx    string   `json:"model_rgx,omitempty"`    // regex matching model name from discovery
-	Models      []string `json:"models,omitempty"`       // optional whitelist; if empty, all matching models are used
-
-	providerRE *regexp.Regexp // compiled regex for provider matching
-	modelRE    *regexp.Regexp // compiled regex for model matching
-}
-
-// Compile compiles the regex patterns in the selector.
-// Returns an error if any pattern is invalid.
-func (s *AgentModelSelector) Compile() error {
-	if s.ProviderRgx != "" {
-		re, err := regexp.Compile(s.ProviderRgx)
-		if err != nil {
-			return fmt.Errorf("invalid provider_rgx %q: %w", s.ProviderRgx, err)
-		}
-		s.providerRE = re
-	}
-	if s.ModelRgx != "" {
-		re, err := regexp.Compile(s.ModelRgx)
-		if err != nil {
-			return fmt.Errorf("invalid model_rgx %q: %w", s.ModelRgx, err)
-		}
-		s.modelRE = re
-	}
-	return nil
-}
-
-// Matches returns true if the selector matches the given provider and model.
-func (s *AgentModelSelector) Matches(provider, model string) bool {
-	if s.providerRE != nil && !s.providerRE.MatchString(provider) {
-		return false
-	}
-	if s.modelRE != nil && !s.modelRE.MatchString(model) {
-		return false
-	}
-	return true
-}
-
 // AgentModel defines a single model entry within an agent's model list,
 // specifying the provider, model name, URL override, and context limits.
+// Supports static entries (provider/model) and dynamic entries (provider_rgx/model_rgx)
+// that expand against the discovery catalog at runtime.
 type AgentModel struct {
 	Provider             string   `json:"provider"`
 	Model                string   `json:"model"`
@@ -57,24 +17,66 @@ type AgentModel struct {
 	MaxContext           int      `json:"max_context"`
 	MaxOutput            int      `json:"max_output"`
 	RequiredCapabilities []string `json:"required_capabilities,omitempty"`
+	ProviderRgx          string   `json:"provider_rgx,omitempty"` // regex matching provider name from discovery
+	ModelRgx             string   `json:"model_rgx,omitempty"`    // regex matching model name from discovery
+
+	providerRE *regexp.Regexp // compiled regex for provider matching
+	modelRE    *regexp.Regexp // compiled regex for model matching
+}
+
+// CompileRegex compiles the regex patterns in the model entry.
+// Returns an error if any pattern is invalid.
+func (m *AgentModel) CompileRegex() error {
+	if m.ProviderRgx != "" {
+		re, err := regexp.Compile(m.ProviderRgx)
+		if err != nil {
+			return fmt.Errorf("invalid provider_rgx %q: %w", m.ProviderRgx, err)
+		}
+		m.providerRE = re
+	}
+	if m.ModelRgx != "" {
+		re, err := regexp.Compile(m.ModelRgx)
+		if err != nil {
+			return fmt.Errorf("invalid model_rgx %q: %w", m.ModelRgx, err)
+		}
+		m.modelRE = re
+	}
+	return nil
+}
+
+// MatchesCatalog returns true if the model entry matches the given provider and model
+// from the discovery catalog using the compiled regex patterns.
+func (m *AgentModel) MatchesCatalog(provider, model string) bool {
+	if m.providerRE != nil && !m.providerRE.MatchString(provider) {
+		return false
+	}
+	if m.modelRE != nil && !m.modelRE.MatchString(model) {
+		return false
+	}
+	return true
+}
+
+// IsDynamic returns true if the model entry has regex patterns and should be
+// expanded against the discovery catalog at runtime.
+func (m *AgentModel) IsDynamic() bool {
+	return m.providerRE != nil || m.modelRE != nil
 }
 
 // AgentConfig defines an agent (a named alias for one or more models)
 // with routing strategy, cooldown, retry, and MCP configuration.
 type AgentConfig struct {
-	Strategy          string               `json:"strategy"`
-	CooldownSeconds   int                  `json:"cooldown_seconds"`
-	FailureThreshold  int                  `json:"failure_threshold"`
-	FailureWindowSec  int                  `json:"failure_window_secs"`
-	SuccessThreshold  int                  `json:"success_threshold"`
-	MaxRetries        int                  `json:"max_retries"`
-	SystemPrompt      string               `json:"system_prompt"`
-	SystemPromptFile  string               `json:"system_prompt_file"`
-	ForceSystemPrompt bool                 `json:"force_system_prompt"`
-	Models            []AgentModel         `json:"models,omitempty"`
-	ModelSelectors    []AgentModelSelector `json:"model_selectors,omitempty"`
-	MCP               *AgentMCPConfig      `json:"mcp,omitempty"`
-	BudgetLimitUSD    float64              `json:"budget_limit_usd,omitempty"`
+	Strategy          string          `json:"strategy"`
+	CooldownSeconds   int             `json:"cooldown_seconds"`
+	FailureThreshold  int             `json:"failure_threshold"`
+	FailureWindowSec  int             `json:"failure_window_secs"`
+	SuccessThreshold  int             `json:"success_threshold"`
+	MaxRetries        int             `json:"max_retries"`
+	SystemPrompt      string          `json:"system_prompt"`
+	SystemPromptFile  string          `json:"system_prompt_file"`
+	ForceSystemPrompt bool            `json:"force_system_prompt"`
+	Models            []AgentModel    `json:"models,omitempty"`
+	MCP               *AgentMCPConfig `json:"mcp,omitempty"`
+	BudgetLimitUSD    float64         `json:"budget_limit_usd,omitempty"`
 }
 
 func (a *AgentConfig) UnmarshalJSON(data []byte) error {
