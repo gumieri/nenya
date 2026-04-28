@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"log/slog"
 	"nenya/internal/infra"
 )
 
@@ -271,6 +272,42 @@ func applyAgentDefaults(cfg *Config) error {
 			}
 		}
 		cfg.Agents[name] = agent
+
+		if slog.Default().Enabled(nil, slog.LevelDebug) {
+			modelEntries := make([]string, 0, len(agent.Models))
+			for _, m := range agent.Models {
+				var entry string
+				switch {
+				case m.Provider != "" && m.Model != "":
+					entry = fmt.Sprintf("%s/%s", m.Provider, m.Model)
+				case m.Model != "":
+					entry = m.Model
+				case m.ModelRgx != "" && m.ProviderRgx != "":
+					entry = fmt.Sprintf("rgx:%s/%s", m.ProviderRgx, m.ModelRgx)
+				case m.ModelRgx != "":
+					entry = fmt.Sprintf("rgx:%s", m.ModelRgx)
+				case m.ProviderRgx != "":
+					entry = fmt.Sprintf("prgx:%s", m.ProviderRgx)
+				default:
+					entry = "empty"
+				}
+				if m.URL != "" {
+					entry += fmt.Sprintf("@%s", m.URL)
+				}
+				modelEntries = append(modelEntries, entry)
+			}
+			var mcpSrv []string
+			if agent.MCP != nil {
+				mcpSrv = agent.MCP.Servers
+			}
+			slog.Default().Debug("agent configured",
+				"name", name,
+				"strategy", agent.Strategy,
+				"models", modelEntries,
+				"system_prompt", agent.SystemPromptFile,
+				"mcp_servers", mcpSrv,
+			)
+		}
 	}
 	return nil
 }
