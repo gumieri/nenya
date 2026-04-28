@@ -319,6 +319,47 @@ For custom or local models (not in the registry), or to override registry defaul
 
 Both styles can be mixed in the same `models` array.
 
+### Model Selector Syntax
+
+Model entries support flexible selectors that expand at runtime against the discovery catalog. You can select models by provider name, model name, or regex patterns — in any combination:
+
+```json
+{
+  "agents": {
+    "all-deepseek": {
+      "models": [
+        { "provider": "deepseek" }
+      ]
+    },
+    "all-gemini-flash": {
+      "models": [
+        { "provider": "gemini", "model_rgx": ".*flash.*" }
+      ]
+    },
+    "all-gpt4": {
+      "models": [
+        { "model_rgx": "^gpt-4.*$" }
+      ]
+    }
+  }
+}
+```
+
+**Selector rules:**
+
+| Fields set | Behavior |
+|------------|----------|
+| `provider` only | All discovered models from that provider |
+| `model` only | All providers offering that exact model (deferred provider expansion) |
+| `provider` + `model` | Static entry, pinned to exactly one provider+model |
+| `provider` + `model_rgx` | All models matching the regex from that provider |
+| `provider_rgx` only | All models from providers matching the regex |
+| `model_rgx` only | All models matching the regex across all providers |
+| `provider_rgx` + `model_rgx` | All catalog entries matching both regexes |
+| String shorthand (`"model-name"`) | Deferred provider expansion — all providers offering the model |
+
+Static fields (`provider`, `model`) act as exact filters. Regex fields (`provider_rgx`, `model_rgx`) act as pattern matchers. When both are set on the same dimension (e.g., `provider` + `provider_rgx`), both must match (AND logic).
+
 ### Dynamic Model Discovery (Regex Patterns)
 
 Model entries can use regex patterns to dynamically match against the discovery catalog. This enables auto-updating agent model lists when new models appear at providers without manual config changes.
@@ -346,12 +387,16 @@ Model entries can use regex patterns to dynamically match against the discovery 
 
 **Precedence rules:**
 
+- `provider` only — expands to all models from that provider (catalog first, then ModelRegistry fallback)
+- `model` only — expands to all providers offering that exact model (deferred provider expansion)
 - `provider` + `model` — static entry, used as-is
 - `provider` + `model_rgx` — static provider, regex model from that provider's catalog
 - `provider_rgx` + `model` — regex provider match, static model name
 - `provider_rgx` + `model_rgx` — full regex, expands to all matching catalog entries
+- `provider_rgx` only — all models from providers matching the regex
+- `model_rgx` only — all models matching the regex across all providers
 
-Static fields always win over regex when both are present on the same key.
+Static fields always win over regex when both are present on the same key. When both static and regex are set on the same dimension (e.g., `provider` + `provider_rgx`), both conditions must be satisfied (AND logic).
 
 > **Note:** If both static and regex fields are set on the same entry (e.g., both `provider` and `provider_rgx`), a warning is logged at startup. The dynamic field takes precedence — but the config is likely a mistake.
 
@@ -380,10 +425,13 @@ Each model entry (object form):
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `provider` | string | Provider name (must match a key in `providers` or a built-in) |
-| `model` | string | Model identifier sent to the upstream API |
+| `provider` | string | Provider name (must match a key in `providers` or a built-in). If set without `model`, expands to all models from that provider. |
+| `model` | string | Model identifier sent to the upstream API. If set without `provider`, expands to all providers offering this model (deferred provider expansion). |
+| `provider_rgx` | string | Regex pattern to match provider names from the discovery catalog. Expands to all models from matching providers. |
+| `model_rgx` | string | Regex pattern to match model names from the discovery catalog. Expands to all models matching the pattern. |
 | `url` | string | (optional) Override provider URL for this specific model |
 | `max_context` | int | Context window size for token budgeting and window compaction |
+| `max_output` | int | Maximum output tokens for this model |
 | `required_capabilities` | []string | (optional) Required model capabilities. Models without matching capabilities are skipped. Values: `"vision"`, `"tool_calls"`, `"reasoning"`, `"content_arrays"`, `"stream_options"`, `"auto_tool_choice"`. Capabilities are determined from provider API responses, static registry entries, or heuristic model name inference. |
 
 **String shorthand**: If the entry is a string, it must exist in the built-in Model Registry. The registry resolves `provider` and `max_context` automatically. If the model is not found, configuration loading fails with an error.

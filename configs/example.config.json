@@ -120,7 +120,13 @@
       "models": [
         "gemini-3.1-flash-lite-preview",
         "gemini-2.5-flash",
-        "deepseek-reasoner"
+        // Deferred provider expansion: all providers offering this model
+        // (discovery catalog first, then ModelRegistry fallback)
+        "deepseek-v4-flash",
+        // Provider-only selector: all discovered models from this provider
+        {"provider": "zai"},
+        // Regex selector: all models matching the pattern across all providers
+        {"model_rgx": "^claude-3\\.5-.*$"}
       ]
     },
     "plan": {
@@ -137,6 +143,27 @@
         "nemotron-3-super",
         "qwen-3.6-plus",
         "minimax-m2.5"
+      ]
+    },
+    // Agent using provider-only selector: all models from a provider
+    "all-deepseek": {
+      "strategy": "round-robin",
+      "models": [
+        {"provider": "deepseek"}
+      ]
+    },
+    // Agent using regex model selector: all models matching the pattern
+    "all-flash-models": {
+      "strategy": "round-robin",
+      "models": [
+        {"model_rgx": ".*flash.*"}
+      ]
+    },
+    // Agent using provider regex: all models from matching providers
+    "all-free-models": {
+      "strategy": "fallback",
+      "models": [
+        {"provider_rgx": ".*_free"}
       ]
     }
   },

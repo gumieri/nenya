@@ -400,3 +400,171 @@ func TestExpandModels_DeferredProvider_CatalogFallback(t *testing.T) {
 	}
 }
 
+func TestExpandModels_ProviderOnly_Catalog(t *testing.T) {
+	catalog := discovery.NewModelCatalog()
+	catalog.Add(discovery.DiscoveredModel{ID: "deepseek-v4-flash", Provider: "deepseek", MaxContext: 100000, MaxOutput: 393216})
+	catalog.Add(discovery.DiscoveredModel{ID: "deepseek-v4-pro", Provider: "deepseek", MaxContext: 200000, MaxOutput: 393216})
+	catalog.Add(discovery.DiscoveredModel{ID: "gemini-2.5-flash", Provider: "gemini", MaxContext: 128000, MaxOutput: 8192})
+
+	providers := targetProviders()
+	agent := config.AgentConfig{
+		Models: []config.AgentModel{
+			{Provider: "deepseek", Model: "", MaxContext: 1234, MaxOutput: 5678},
+		},
+	}
+
+	a := NewAgentState(testLogger())
+	expanded := a.expandModels("test-agent", agent, catalog, providers, testLogger())
+
+	if len(expanded) != 2 {
+		t.Fatalf("expected 2 expanded entries (all deepseek models), got %d", len(expanded))
+	}
+
+	modelsFound := make(map[string]bool)
+	for _, m := range expanded {
+		if m.Provider != "deepseek" {
+			t.Errorf("expected provider deepseek, got %s", m.Provider)
+		}
+		modelsFound[m.Model] = true
+		if m.MaxContext != 1234 {
+			t.Errorf("expected MaxContext 1234 from agent config, got %d", m.MaxContext)
+		}
+		if m.MaxOutput != 5678 {
+			t.Errorf("expected MaxOutput 5678 from agent config, got %d", m.MaxOutput)
+		}
+	}
+
+	if !modelsFound["deepseek-v4-flash"] || !modelsFound["deepseek-v4-pro"] {
+		t.Fatalf("expected models deepseek-v4-flash and deepseek-v4-pro, got %v", modelsFound)
+	}
+}
+
+func TestExpandModels_ProviderOnly_CatalogFallback(t *testing.T) {
+	catalog := discovery.NewModelCatalog()
+	providers := targetProviders()
+	agent := config.AgentConfig{
+		Models: []config.AgentModel{
+			{Provider: "deepseek", Model: "", MaxContext: 1234, MaxOutput: 5678},
+		},
+	}
+
+	a := NewAgentState(testLogger())
+	expanded := a.expandModels("test-agent", agent, catalog, providers, testLogger())
+
+	if len(expanded) < 2 {
+		t.Fatalf("expected at least 2 entries from ModelRegistry fallback, got %d", len(expanded))
+	}
+
+	for _, m := range expanded {
+		if m.Provider != "deepseek" {
+			t.Errorf("expected provider deepseek, got %s", m.Provider)
+		}
+		if m.MaxContext != 1234 {
+			t.Errorf("expected MaxContext 1234 from agent config, got %d", m.MaxContext)
+		}
+		if m.MaxOutput != 5678 {
+			t.Errorf("expected MaxOutput 5678 from agent config, got %d", m.MaxOutput)
+		}
+	}
+}
+
+func TestExpandModels_ProviderOnly_UnknownProvider(t *testing.T) {
+	catalog := discovery.NewModelCatalog()
+	providers := targetProviders()
+	agent := config.AgentConfig{
+		Models: []config.AgentModel{
+			{Provider: "nonexistent_provider", Model: ""},
+		},
+	}
+
+	a := NewAgentState(testLogger())
+	expanded := a.expandModels("test-agent", agent, catalog, providers, testLogger())
+
+	if len(expanded) != 0 {
+		t.Fatalf("expected 0 entries for unknown provider, got %d", len(expanded))
+	}
+}
+
+func TestExpandModels_ProviderOnly_MixedWithStatic(t *testing.T) {
+	catalog := discovery.NewModelCatalog()
+	catalog.Add(discovery.DiscoveredModel{ID: "deepseek-v4-flash", Provider: "deepseek", MaxContext: 100000, MaxOutput: 393216})
+	catalog.Add(discovery.DiscoveredModel{ID: "deepseek-v4-pro", Provider: "deepseek", MaxContext: 200000, MaxOutput: 393216})
+
+	providers := targetProviders()
+	agent := config.AgentConfig{
+		Models: []config.AgentModel{
+			{Provider: "deepseek", Model: ""},
+			{Provider: "gemini", Model: "gemini-2.5-flash"},
+		},
+	}
+
+	a := NewAgentState(testLogger())
+	expanded := a.expandModels("test-agent", agent, catalog, providers, testLogger())
+
+	if len(expanded) != 3 {
+		t.Fatalf("expected 3 entries (2 deepseek + 1 gemini), got %d", len(expanded))
+	}
+
+	deepseekCount := 0
+	geminiCount := 0
+	for _, m := range expanded {
+		if m.Provider == "deepseek" {
+			deepseekCount++
+		}
+		if m.Provider == "gemini" && m.Model == "gemini-2.5-flash" {
+			geminiCount++
+		}
+	}
+
+	if deepseekCount != 2 {
+		t.Errorf("expected 2 deepseek entries, got %d", deepseekCount)
+	}
+	if geminiCount != 1 {
+		t.Errorf("expected 1 gemini entry, got %d", geminiCount)
+	}
+}
+
+func TestExpandModels_ProviderOnly_MixedWithDynamic(t *testing.T) {
+	catalog := discovery.NewModelCatalog()
+	catalog.Add(discovery.DiscoveredModel{ID: "deepseek-v4-flash", Provider: "deepseek", MaxContext: 100000, MaxOutput: 393216})
+	catalog.Add(discovery.DiscoveredModel{ID: "deepseek-v4-pro", Provider: "deepseek", MaxContext: 200000, MaxOutput: 393216})
+	catalog.Add(discovery.DiscoveredModel{ID: "gemini-2.5-flash", Provider: "gemini", MaxContext: 128000, MaxOutput: 8192})
+	catalog.Add(discovery.DiscoveredModel{ID: "gemini-2.5-pro", Provider: "gemini", MaxContext: 128000, MaxOutput: 8192})
+
+	providers := targetProviders()
+	agent := config.AgentConfig{
+		Models: []config.AgentModel{
+			{Provider: "deepseek", Model: ""},
+			{ModelRgx: "^gemini-2\\.5-.*$"},
+		},
+	}
+
+	if err := agent.Models[1].CompileRegex(); err != nil {
+		t.Fatalf("failed to compile regex: %v", err)
+	}
+
+	a := NewAgentState(testLogger())
+	expanded := a.expandModels("test-agent", agent, catalog, providers, testLogger())
+
+	if len(expanded) != 4 {
+		t.Fatalf("expected 4 entries (2 deepseek + 2 gemini), got %d", len(expanded))
+	}
+
+	deepseekCount := 0
+	geminiCount := 0
+	for _, m := range expanded {
+		if m.Provider == "deepseek" {
+			deepseekCount++
+		}
+		if m.Provider == "gemini" {
+			geminiCount++
+		}
+	}
+
+	if deepseekCount != 2 {
+		t.Errorf("expected 2 deepseek entries, got %d", deepseekCount)
+	}
+	if geminiCount != 2 {
+		t.Errorf("expected 2 gemini entries, got %d", geminiCount)
+	}
+}

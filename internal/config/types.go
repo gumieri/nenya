@@ -45,8 +45,14 @@ func (m *AgentModel) CompileRegex() error {
 }
 
 // MatchesCatalog returns true if the model entry matches the given provider and model
-// from the discovery catalog using the compiled regex patterns.
+// from the discovery catalog using the compiled regex patterns and exact field matches.
 func (m *AgentModel) MatchesCatalog(provider, model string) bool {
+	if m.Provider != "" && m.Provider != provider {
+		return false
+	}
+	if m.Model != "" && m.Model != model {
+		return false
+	}
 	if m.providerRE != nil && !m.providerRE.MatchString(provider) {
 		return false
 	}
@@ -102,7 +108,7 @@ func (a *AgentConfig) UnmarshalJSON(data []byte) error {
 			}
 			m = AgentModel{
 				Model:      modelStr,
-				Provider:   "", 
+				Provider:   "",
 				MaxContext: entry.MaxContext,
 				MaxOutput:  entry.MaxOutput,
 			}
