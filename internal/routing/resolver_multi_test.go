@@ -112,7 +112,7 @@ func TestResolveProviders_MaxContextOutputFromCatalog(t *testing.T) {
 	catalog.Add(discovery.DiscoveredModel{ID: "test-model", Provider: "test", MaxContext: 1234, MaxOutput: 5678})
 
 	providers := map[string]*config.Provider{
-		"test": {Name: "test", URL: "https://test.example.com/chat/completions"},
+		"test": {Name: "test", URL: "https://api.example.com/chat/completions"},
 	}
 
 	matches := ResolveProviders("test-model", providers, catalog)
@@ -125,5 +125,29 @@ func TestResolveProviders_MaxContextOutputFromCatalog(t *testing.T) {
 	}
 	if matches[0].MaxOutput != 5678 {
 		t.Errorf("expected MaxOutput 5678, got %d", matches[0].MaxOutput)
+	}
+}
+
+func TestResolveProviders_NilCatalog(t *testing.T) {
+	providers := targetProviders()
+
+	matches := ResolveProviders("deepseek-v4-pro", providers, nil)
+	if len(matches) != 1 {
+		t.Fatalf("expected 1 provider match from ModelRegistry with nil catalog, got %d", len(matches))
+	}
+
+	if matches[0].Provider != "deepseek" {
+		t.Errorf("expected provider deepseek from ModelRegistry, got %s", matches[0].Provider)
+	}
+}
+
+func TestResolveProviders_NilCatalog_NoMatch(t *testing.T) {
+	providers := map[string]*config.Provider{
+		"deepseek": {Name: "deepseek", URL: "https://api.deepseek.com/chat/completions"},
+	}
+
+	matches := ResolveProviders("unknown-model", providers, nil)
+	if len(matches) != 0 {
+		t.Fatalf("expected 0 matches with nil catalog and unknown model, got %d", len(matches))
 	}
 }

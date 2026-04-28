@@ -162,23 +162,10 @@
     "zai": {
       "url": "https://api.z.ai/v1/chat/completions",
       "auth_style": "bearer"
-    },
-    "ollama": {
-      "url": "http://127.0.0.1:11434/v1/chat/completions",
-      "auth_style": "none"
-    }
-  },
-    "deepseek": {
-      "url": "https://api.deepseek.com/chat/completions",
-      "auth_style": "bearer"
-    },
-    "zai": {
-      "url": "https://api.z.ai/v1/chat/completions",
-      "auth_style": "bearer"
-    },
-    "ollama": {
-      "url": "http://127.0.0.1:11434/v1/chat/completions",
-      "auth_style": "none"
-    }
-  }
+     },
+     "ollama": {
+       "url": "http://127.0.0.1:11434/v1/chat/completions",
+       "auth_style": "none"
+     }
+   }
 }
