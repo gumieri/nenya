@@ -26,9 +26,12 @@ func resolveAgentEngineRef(ref EngineRef, agents map[string]AgentConfig, provide
 	for _, m := range agent.Models {
 		target, err := buildAgentEngineTarget(ref, m, agent, providers)
 		if err != nil {
-			return nil, err
+			continue
 		}
 		targets = append(targets, target)
+	}
+	if len(targets) == 0 {
+		return nil, fmt.Errorf("engine agent %q: no models could be resolved", ref.AgentName)
 	}
 	return targets, nil
 }
