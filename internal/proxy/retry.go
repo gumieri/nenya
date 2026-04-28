@@ -311,6 +311,16 @@ func (p *Proxy) prepareAndSend(gw *gateway.NenyaGateway,
 		return upstreamAction{kind: actionError, resp: resp, cancel: upstreamCancel}
 	}
 
+	ct := resp.Header.Get("Content-Type")
+	if strings.Contains(strings.ToLower(ct), "text/html") {
+		ctxLogger.Warn("upstream returned HTML instead of API response, skipping target",
+			"content_type", ct, "status", resp.StatusCode)
+		_, _ = io.Copy(io.Discard, resp.Body)
+		_ = resp.Body.Close()
+		upstreamCancel()
+		return upstreamAction{kind: actionContinue}
+	}
+
 	return upstreamAction{kind: actionStream, resp: resp, cancel: upstreamCancel}
 }
 
