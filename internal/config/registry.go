@@ -2,19 +2,16 @@ package config
 
 var ProviderRegistry = map[string]ProviderEntry{
 	"gemini": {
-		URL:           "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
-		RoutePrefixes: []string{"gemini-"},
-		AuthStyle:     "bearer+x-goog",
+		URL:       "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
+		AuthStyle: "bearer+x-goog",
 	},
 	"deepseek": {
-		URL:           "https://api.deepseek.com/chat/completions",
-		RoutePrefixes: []string{"deepseek-"},
-		AuthStyle:     "bearer",
+		URL:       "https://api.deepseek.com/chat/completions",
+		AuthStyle: "bearer",
 	},
 	"zai": {
-		URL:           "https://api.z.ai/api/paas/v4/chat/completions",
-		RoutePrefixes: []string{"glm-"},
-		AuthStyle:     "bearer",
+		URL:       "https://api.z.ai/api/paas/v4/chat/completions",
+		AuthStyle: "bearer",
 	},
 	"zai-coding-plan": {
 		URL:       "https://api.z.ai/api/coding/paas/v4/chat/completions",
@@ -25,24 +22,20 @@ var ProviderRegistry = map[string]ProviderEntry{
 		AuthStyle: "bearer",
 	},
 	"together": {
-		URL:           "https://api.together.xyz/v1/chat/completions",
-		RoutePrefixes: []string{"together/"},
-		AuthStyle:     "bearer",
+		URL:       "https://api.together.xyz/v1/chat/completions",
+		AuthStyle: "bearer",
 	},
 	"anthropic": {
-		URL:           "https://api.anthropic.com/v1/messages",
-		RoutePrefixes: []string{"claude-"},
-		AuthStyle:     "anthropic",
+		URL:       "https://api.anthropic.com/v1/messages",
+		AuthStyle: "anthropic",
 	},
 	"mistral": {
-		URL:           "https://api.mistral.ai/v1/chat/completions",
-		RoutePrefixes: []string{"mistral-", "codestral-", "devstral-"},
-		AuthStyle:     "bearer",
+		URL:       "https://api.mistral.ai/v1/chat/completions",
+		AuthStyle: "bearer",
 	},
 	"xai": {
-		URL:           "https://api.x.ai/v1/chat/completions",
-		RoutePrefixes: []string{"grok-"},
-		AuthStyle:     "bearer",
+		URL:       "https://api.x.ai/v1/chat/completions",
+		AuthStyle: "bearer",
 	},
 	"perplexity": {
 		URL:       "https://api.perplexity.ai/chat/completions",
@@ -85,9 +78,8 @@ var ProviderRegistry = map[string]ProviderEntry{
 		AuthStyle: "bearer",
 	},
 	"nvidia": {
-		URL:           "https://integrate.api.nvidia.com/v1/chat/completions",
-		AuthStyle:     "bearer",
-		RoutePrefixes: []string{"nvidia/"},
+		URL:       "https://integrate.api.nvidia.com/v1/chat/completions",
+		AuthStyle: "bearer",
 		Models: []ModelRef{
 			{ID: "chat/llama3-8b-instruct", MaxContext: 8192, MaxOutput: 8192},
 			{ID: "chat/llama3-70b-instruct", MaxContext: 8192, MaxOutput: 8192},

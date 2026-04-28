@@ -60,18 +60,16 @@ type ModelRef struct {
 }
 
 type ProviderEntry struct {
-	URL           string
-	RoutePrefixes []string
-	AuthStyle     string
-	ApiFormat     string
-	Models        []ModelRef
+	URL       string
+	AuthStyle string
+	ApiFormat string
+	Models    []ModelRef
 }
 
 func (e ProviderEntry) ToProviderConfig() ProviderConfig {
 	return ProviderConfig{
-		URL:           e.URL,
-		RoutePrefixes: e.RoutePrefixes,
-		AuthStyle:     e.AuthStyle,
-		ApiFormat:     e.ApiFormat,
+		URL:       e.URL,
+		AuthStyle: e.AuthStyle,
+		ApiFormat: e.ApiFormat,
 	}
 }

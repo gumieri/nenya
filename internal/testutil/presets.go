@@ -161,7 +161,6 @@ func NewProviderConfig() *config.Config {
 	cfg.Providers = map[string]config.ProviderConfig{
 		"test-provider": {
 			URL:                  "https://api.example.com/v1",
-			RoutePrefixes:        []string{"test-"},
 			AuthStyle:            "bearer",
 			ApiFormat:            "openai",
 			TimeoutSeconds:       30,
@@ -253,7 +252,6 @@ func FullConfig() *config.Config {
 	cfg.Providers = map[string]config.ProviderConfig{
 		"test-provider": {
 			URL:                  "https://api.example.com/v1",
-			RoutePrefixes:        []string{"test-"},
 			AuthStyle:            "bearer",
 			ApiFormat:            "openai",
 			TimeoutSeconds:       30,

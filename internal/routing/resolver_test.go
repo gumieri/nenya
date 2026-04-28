@@ -58,40 +58,6 @@ func TestResolveProvider_KnownModels(t *testing.T) {
 	}
 }
 
-func TestResolveProvider_PrefixMatch(t *testing.T) {
-	p := providers()
-
-	zai := ResolveProvider("glm-some-unknown-model", p, nil)
-	if zai == nil || zai.Name != "zai" {
-		t.Fatalf("expected zai provider for glm-some-unknown-model, got %v", zai)
-	}
-
-	gemini := ResolveProvider("gemini-unknown-variant", p, nil)
-	if gemini == nil || gemini.Name != "gemini" {
-		t.Fatalf("expected gemini provider for gemini-unknown-variant, got %v", gemini)
-	}
-
-	ds := ResolveProvider("deepseek-r1-xyz", p, nil)
-	if ds == nil || ds.Name != "deepseek" {
-		t.Fatalf("expected deepseek provider for deepseek-r1-xyz, got %v", ds)
-	}
-
-	claude := ResolveProvider("claude-some-unknown-variant", p, nil)
-	if claude == nil || claude.Name != "anthropic" {
-		t.Fatalf("expected anthropic provider for claude-some-unknown-variant, got %v", claude)
-	}
-
-	mistral := ResolveProvider("mistral-some-unknown-variant", p, nil)
-	if mistral == nil || mistral.Name != "mistral" {
-		t.Fatalf("expected mistral provider for mistral-some-unknown-variant, got %v", mistral)
-	}
-
-	grok := ResolveProvider("grok-some-unknown-variant", p, nil)
-	if grok == nil || grok.Name != "xai" {
-		t.Fatalf("expected xai provider for grok-some-unknown-variant, got %v", grok)
-	}
-}
-
 func TestResolveProvider_UnknownNoMatch(t *testing.T) {
 	p := providers()
 

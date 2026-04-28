@@ -7,8 +7,6 @@ import (
 	"nenya/internal/discovery"
 )
 
-// UpstreamTarget describes a resolved target for forwarding a request,
-// including the provider URL, model name, cooldown key, and context limits.
 type UpstreamTarget struct {
 	URL        string
 	Model      string
@@ -18,31 +16,70 @@ type UpstreamTarget struct {
 	MaxContext int
 }
 
-// ResolveProvider looks up the provider for the given model name, checking
-// the static ModelRegistry first, then the dynamic ModelCatalog, then
-// route_prefixes. Returns nil if no provider matches.
-func ResolveProvider(modelName string, providers map[string]*config.Provider, catalog *discovery.ModelCatalog) *config.Provider {
-	if entry, ok := config.ModelRegistry[modelName]; ok {
-		if p, ok := providers[entry.Provider]; ok {
-			return p
-		}
+type ProviderMatch struct {
+	Provider   string
+	Model      string
+	MaxContext int
+	MaxOutput  int
+}
+
+func ResolveProviders(modelName string, providers map[string]*config.Provider, catalog *discovery.ModelCatalog) []ProviderMatch {
+	if providers == nil {
+		return nil
 	}
 
 	if catalog != nil {
-		if m, ok := catalog.Lookup(modelName); ok {
-			if p, ok := providers[m.Provider]; ok {
-				return p
+		entries := catalog.LookupAll(modelName)
+		if len(entries) > 0 {
+			matches := make([]ProviderMatch, 0, len(entries))
+			for _, e := range entries {
+				if _, ok := providers[e.Provider]; ok {
+					matches = append(matches, ProviderMatch{
+						Provider:   e.Provider,
+						Model:      modelName,
+						MaxContext: e.MaxContext,
+						MaxOutput:  e.MaxOutput,
+					})
+				}
+			}
+			if len(matches) > 0 {
+				return matches
 			}
 		}
 	}
 
-	lower := strings.ToLower(modelName)
-	for _, p := range providers {
-		for _, prefix := range p.RoutePrefixes {
-			if strings.HasPrefix(lower, prefix) {
-				return p
-			}
+	if entry, ok := config.ModelRegistry[strings.ToLower(modelName)]; ok {
+		if p, ok := providers[entry.Provider]; ok {
+			return []ProviderMatch{{
+				Provider:   p.Name,
+				Model:      modelName,
+				MaxContext: entry.MaxContext,
+				MaxOutput:  entry.MaxOutput,
+			}}
 		}
+	}
+
+	if entry, ok := config.ModelRegistry[modelName]; ok {
+		if p, ok := providers[entry.Provider]; ok {
+			return []ProviderMatch{{
+				Provider:   p.Name,
+				Model:      modelName,
+				MaxContext: entry.MaxContext,
+				MaxOutput:  entry.MaxOutput,
+			}}
+		}
+	}
+
+	return nil
+}
+
+func ResolveProvider(modelName string, providers map[string]*config.Provider, catalog *discovery.ModelCatalog) *config.Provider {
+	matches := ResolveProviders(modelName, providers, catalog)
+	if len(matches) == 0 {
+		return nil
+	}
+	if p, ok := providers[matches[0].Provider]; ok {
+		return p
 	}
 	return nil
 }
@@ -66,8 +103,9 @@ func ProviderURL(provider, agentURL string, providers map[string]*config.Provide
 
 func ResolveModelLimits(modelID string, catalog *discovery.ModelCatalog) (maxContext, maxOutput int) {
 	if catalog != nil {
-		if m, ok := catalog.Lookup(modelID); ok {
-			return m.MaxContext, m.MaxOutput
+		entries := catalog.LookupAll(modelID)
+		if len(entries) > 0 {
+			return entries[0].MaxContext, entries[0].MaxOutput
 		}
 	}
 	if entry, ok := config.ModelRegistry[modelID]; ok {

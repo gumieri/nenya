@@ -108,14 +108,25 @@ func (a *AgentState) BuildTargetList(logger *slog.Logger, agentName string, agen
 
 func (a *AgentState) expandModels(agentName string, agent config.AgentConfig, catalog *discovery.ModelCatalog, providers map[string]*config.Provider, logger *slog.Logger) []config.AgentModel {
 	hasDynamic := false
+	hasDeferred := false
 	for _, m := range agent.Models {
 		if m.ProviderRgx != "" || m.ModelRgx != "" {
 			hasDynamic = true
 			break
 		}
 	}
-	if !hasDynamic || catalog == nil {
+	for _, m := range agent.Models {
+		if m.Provider == "" && m.Model != "" {
+			hasDeferred = true
+			break
+		}
+	}
+	if !hasDynamic && !hasDeferred {
 		return agent.Models
+	}
+
+	if !hasDynamic {
+		return a.expandDeferredProviders(agent.Models, catalog, providers, logger)
 	}
 
 	hash := hashDynamicModels(agent.Models)
@@ -129,6 +140,9 @@ func (a *AgentState) expandModels(agentName string, agent config.AgentConfig, ca
 	}
 
 	models := expandDynamicModels(agent.Models, catalog, providers, logger)
+	if hasDeferred {
+		models = a.expandDeferredProviders(models, catalog, providers, logger)
+	}
 
 	a.selectorCacheMu.Lock()
 	a.selectorCache[agentName] = selectorCacheEntry{
@@ -139,6 +153,70 @@ func (a *AgentState) expandModels(agentName string, agent config.AgentConfig, ca
 	a.selectorCacheMu.Unlock()
 
 	return models
+}
+
+func (a *AgentState) expandDeferredProviders(models []config.AgentModel, catalog *discovery.ModelCatalog, providers map[string]*config.Provider, logger *slog.Logger) []config.AgentModel {
+	expanded := make([]config.AgentModel, 0, len(models))
+	for _, m := range models {
+		if m.Provider != "" || m.Model == "" {
+			expanded = append(expanded, m)
+			continue
+		}
+
+		if catalog != nil {
+			entries := catalog.LookupAll(m.Model)
+			if len(entries) > 0 {
+				for _, e := range entries {
+					if _, ok := providers[e.Provider]; !ok {
+						continue
+					}
+					am := config.AgentModel{
+						Provider:   e.Provider,
+						Model:      m.Model,
+						MaxContext: m.MaxContext,
+						MaxOutput:  m.MaxOutput,
+					}
+					if am.MaxContext <= 0 {
+						am.MaxContext = e.MaxContext
+					}
+					if am.MaxOutput <= 0 {
+						am.MaxOutput = e.MaxOutput
+					}
+					logger.Debug("expanded deferred provider",
+						"model", m.Model, "provider", e.Provider,
+						"max_context", am.MaxContext, "max_output", am.MaxOutput)
+					expanded = append(expanded, am)
+				}
+				continue
+			}
+		}
+
+		entry, ok := config.ModelRegistry[m.Model]
+		if ok {
+			if p, ok := providers[entry.Provider]; ok {
+				am := config.AgentModel{
+					Provider:   p.Name,
+					Model:      m.Model,
+					MaxContext: m.MaxContext,
+					MaxOutput:  m.MaxOutput,
+				}
+				if am.MaxContext <= 0 {
+					am.MaxContext = entry.MaxContext
+				}
+				if am.MaxOutput <= 0 {
+					am.MaxOutput = entry.MaxOutput
+				}
+				logger.Debug("deferred provider fallback to ModelRegistry",
+					"model", m.Model, "provider", p.Name)
+				expanded = append(expanded, am)
+				continue
+			}
+		}
+
+		logger.Warn("deferred provider could not be resolved",
+			"model", m.Model)
+	}
+	return expanded
 }
 
 func hashDynamicModels(models []config.AgentModel) string {

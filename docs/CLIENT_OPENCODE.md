@@ -32,20 +32,15 @@ Or in your OpenCode config:
   "providers": {
     "openai": {
       "url": "https://api.openai.com/v1/chat/completions",
-      "auth_style": "bearer",
-      "route_prefixes": ["gpt-", "o1-", "o3-"],
-      "api_key_secret": "OPENAI_API_KEY"
+      "auth_style": "bearer"
     },
     "deepseek": {
       "url": "https://api.deepseek.com/v1/chat/completions",
-      "auth_style": "bearer",
-      "route_prefixes": ["deepseek-"],
-      "api_key_secret": "DEEPSEEK_API_KEY"
+      "auth_style": "bearer"
     },
     "ollama": {
       "url": "http://localhost:11434/v1/chat/completions",
-      "auth_style": "none",
-      "route_prefixes": ["qwen-", "llama-", "codellama-"]
+      "auth_style": "none"
     }
   },
   "agents": {
@@ -60,6 +55,7 @@ Or in your OpenCode config:
     }
   }
 }
+```
 ```
 
 Use `coder` as the model name in OpenCode to get automatic fallback across providers.

@@ -155,7 +155,6 @@ func resolveEngineRefs(cfg *Config) error {
 		providers[name] = &Provider{
 			Name:                 name,
 			URL:                  pc.URL,
-			RoutePrefixes:        pc.RoutePrefixes,
 			AuthStyle:            pc.AuthStyle,
 			ApiFormat:            pc.ApiFormat,
 			TimeoutSeconds:       pc.TimeoutSeconds,

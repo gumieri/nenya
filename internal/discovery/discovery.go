@@ -37,7 +37,7 @@ func (m DiscoveredModel) HasCapability(cap string) bool {
 
 type ModelCatalog struct {
 	mu          sync.RWMutex
-	models      map[string]DiscoveredModel
+	models      map[string][]DiscoveredModel
 	providers   map[string][]string
 	fetchedAt   time.Time
 	hasMetadata bool
@@ -45,7 +45,7 @@ type ModelCatalog struct {
 
 func NewModelCatalog() *ModelCatalog {
 	return &ModelCatalog{
-		models:    make(map[string]DiscoveredModel),
+		models:    make(map[string][]DiscoveredModel),
 		providers: make(map[string][]string),
 		fetchedAt: time.Now(),
 	}
@@ -54,8 +54,23 @@ func NewModelCatalog() *ModelCatalog {
 func (c *ModelCatalog) Lookup(modelID string) (DiscoveredModel, bool) {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-	m, ok := c.models[modelID]
-	return m, ok
+	entries, ok := c.models[modelID]
+	if !ok || len(entries) == 0 {
+		return DiscoveredModel{}, false
+	}
+	return entries[0], true
+}
+
+func (c *ModelCatalog) LookupAll(modelID string) []DiscoveredModel {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	entries, ok := c.models[modelID]
+	if !ok {
+		return nil
+	}
+	result := make([]DiscoveredModel, len(entries))
+	copy(result, entries)
+	return result
 }
 
 func (c *ModelCatalog) ModelsForProvider(provider string) []DiscoveredModel {
@@ -67,8 +82,12 @@ func (c *ModelCatalog) ModelsForProvider(provider string) []DiscoveredModel {
 	}
 	models := make([]DiscoveredModel, 0, len(ids))
 	for _, id := range ids {
-		if m, ok := c.models[id]; ok {
-			models = append(models, m)
+		if entries, ok := c.models[id]; ok {
+			for _, m := range entries {
+				if m.Provider == provider {
+					models = append(models, m)
+				}
+			}
 		}
 	}
 	return models
@@ -77,9 +96,13 @@ func (c *ModelCatalog) ModelsForProvider(provider string) []DiscoveredModel {
 func (c *ModelCatalog) AllModels() []DiscoveredModel {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-	models := make([]DiscoveredModel, 0, len(c.models))
-	for _, m := range c.models {
-		models = append(models, m)
+	var total int
+	for _, entries := range c.models {
+		total += len(entries)
+	}
+	models := make([]DiscoveredModel, 0, total)
+	for _, entries := range c.models {
+		models = append(models, entries...)
 	}
 	return models
 }
@@ -93,7 +116,7 @@ func (c *ModelCatalog) Add(model DiscoveredModel) {
 		model.Metadata.Pricing != nil) {
 		c.hasMetadata = true
 	}
-	c.models[model.ID] = model
+	c.models[model.ID] = append(c.models[model.ID], model)
 	c.providers[model.Provider] = append(c.providers[model.Provider], model.ID)
 }
 
@@ -119,9 +142,11 @@ func (c *ModelCatalog) AttachPricing(pricing map[string]PricingEntry) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	for id, p := range pricing {
-		if m, ok := c.models[id]; ok {
-			m.Pricing = &p
-			c.models[id] = m
+		if entries, ok := c.models[id]; ok {
+			for i := range entries {
+				entries[i].Pricing = &p
+			}
+			c.models[id] = entries
 		}
 	}
 }
