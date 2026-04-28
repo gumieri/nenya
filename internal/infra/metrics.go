@@ -31,6 +31,7 @@ type Metrics struct {
 	cooldowns     sync.Map
 	exhausted     sync.Map
 	streamBlocked sync.Map
+	emptyStreams  sync.Map
 
 	// MCP metrics
 	mcpToolCallsTotal   sync.Map // labels: server, tool, agent, status (success/error)
@@ -237,6 +238,16 @@ func (m *Metrics) RecordStreamBlock(model, provider string) {
 	e.value.Add(1)
 }
 
+func (m *Metrics) RecordEmptyStream(model, provider string) {
+	if m == nil {
+		return
+	}
+	e := getOrCreateEntry(&m.emptyStreams, map[string]string{
+		"model": model, "provider": provider,
+	})
+	e.value.Add(1)
+}
+
 func (m *Metrics) RecordMCPToolCall(server, tool, agent string, duration time.Duration, callErr error) {
 	if m == nil {
 		return
@@ -361,6 +372,8 @@ func (m *Metrics) WritePrometheus(w io.Writer) {
 		"Total times all agent targets were exhausted.", &m.exhausted)
 	m.writeCounterMap(w, "nenya_stream_blocked_total",
 		"Total upstream streams killed by execution policy.", &m.streamBlocked)
+	m.writeCounterMap(w, "nenya_empty_stream_total",
+		"Total upstream streams that returned empty body.", &m.emptyStreams)
 
 	m.writeHistogramMap(w, "nenya_http_request_duration_seconds",
 		"HTTP request duration in seconds.", &m.httpDur)

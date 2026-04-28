@@ -262,11 +262,11 @@ func (p *Proxy) handleModels(w http.ResponseWriter) {
 			if !ok {
 				continue
 			}
-		if provider.APIKey == "" && provider.AuthStyle != "none" {
-			continue
+			if provider.APIKey == "" && provider.AuthStyle != "none" {
+				continue
+			}
+			addModel(m.ID, m.OwnedBy, m.MaxContext, m.MaxOutput, m.Metadata, m.Pricing)
 		}
-		addModel(m.ID, m.OwnedBy, m.MaxContext, m.MaxOutput, m.Metadata, m.Pricing)
-	}
 	}
 
 	resp := map[string]interface{}{

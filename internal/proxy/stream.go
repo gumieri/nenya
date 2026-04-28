@@ -301,16 +301,27 @@ func (p *Proxy) streamResponse(gw *gateway.NenyaGateway, w http.ResponseWriter, 
 	}
 
 	var copyErr error
+	var written int64
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		_, copyErr = copyStream(r.Context(), dst, transformingReader, *buf)
+		written, copyErr = copyStream(r.Context(), dst, transformingReader, *buf)
 	}()
 
 	select {
 	case <-done:
 		// Goroutine has exited; safe to return the buffer to the pool.
 		streamingBufPool.Put(buf)
+
+		// Detect empty stream (no bytes written) when configured
+		if copyErr == nil && written == 0 && gw.Config.Governance.EmptyStreamAsError {
+			gw.Logger.Warn("empty upstream stream detected, treating as error",
+				"model", target.Model, "provider", target.Provider)
+			gw.Metrics.RecordEmptyStream(target.Model, target.Provider)
+			gw.AgentState.RecordFailure(target, cooldownDuration)
+			p.writeEmptyStreamSSE(gw, w)
+			return
+		}
 
 		if errors.Is(copyErr, stream.ErrStreamBlocked) {
 			action.cancel()
@@ -366,6 +377,26 @@ func (p *Proxy) streamResponse(gw *gateway.NenyaGateway, w http.ResponseWriter, 
 			// returning it to the pool while the goroutine may still write to it.
 			gw.Logger.Warn("timed out waiting for stream copy to finish after client disconnect", "model", target.Model)
 		}
+	}
+}
+
+func (p *Proxy) writeEmptyStreamSSE(gw *gateway.NenyaGateway, w http.ResponseWriter) {
+	errPayload := map[string]interface{}{
+		"type": "error",
+		"error": map[string]interface{}{
+			"code":    "empty_response",
+			"message": "empty upstream SSE",
+		},
+	}
+	errJSON, err := json.Marshal(errPayload)
+	if err != nil {
+		gw.Logger.Error("failed to marshal empty stream SSE payload", "err", err)
+		return
+	}
+	_, _ = fmt.Fprintf(w, "data: %s\n\n", errJSON)
+	_, _ = fmt.Fprint(w, "data: [DONE]\n\n")
+	if flusher, ok := w.(http.Flusher); ok {
+		flusher.Flush()
 	}
 }
 
