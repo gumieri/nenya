@@ -109,6 +109,7 @@ func (a *AgentState) BuildTargetList(logger *slog.Logger, agentName string, agen
 func (a *AgentState) expandModels(agentName string, agent config.AgentConfig, catalog *discovery.ModelCatalog, providers map[string]*config.Provider, logger *slog.Logger) []config.AgentModel {
 	hasDynamic := false
 	hasDeferred := false
+	hasProviderOnly := false
 	for _, m := range agent.Models {
 		if m.ProviderRgx != "" || m.ModelRgx != "" {
 			hasDynamic = true
@@ -121,42 +122,52 @@ func (a *AgentState) expandModels(agentName string, agent config.AgentConfig, ca
 			break
 		}
 	}
-	if !hasDynamic && !hasDeferred {
+	for _, m := range agent.Models {
+		if m.Provider != "" && m.Model == "" && m.ProviderRgx == "" && m.ModelRgx == "" {
+			hasProviderOnly = true
+			break
+		}
+	}
+	if !hasDynamic && !hasDeferred && !hasProviderOnly {
 		return agent.Models
 	}
 
-	if !hasDynamic {
-		return a.expandDeferredProviders(agent.Models, catalog, providers, logger)
+	models := agent.Models
+	if hasProviderOnly {
+		models = a.expandProviderOnly(models, catalog, providers, logger)
 	}
 
-	hash := hashDynamicModels(agent.Models)
-	catTs := catalog.FetchedAt()
+	if hasDynamic {
+		hash := hashDynamicModels(models)
+		catTs := catalog.FetchedAt()
 
-	a.selectorCacheMu.RLock()
-	cached, hit := a.selectorCache[agentName]
-	a.selectorCacheMu.RUnlock()
-	if hit && cached.hash == hash && cached.timestamp.Equal(catTs) {
-		return cached.models
+		a.selectorCacheMu.RLock()
+		cached, hit := a.selectorCache[agentName]
+		a.selectorCacheMu.RUnlock()
+		if hit && cached.hash == hash && cached.timestamp.Equal(catTs) {
+			return cached.models
+		}
+
+		models = expandDynamicModels(models, catalog, providers, logger)
+
+		a.selectorCacheMu.Lock()
+		a.selectorCache[agentName] = selectorCacheEntry{
+			timestamp: catTs,
+			models:    models,
+			hash:      hash,
+		}
+		a.selectorCacheMu.Unlock()
 	}
 
-	models := expandDynamicModels(agent.Models, catalog, providers, logger)
 	if hasDeferred {
 		models = a.expandDeferredProviders(models, catalog, providers, logger)
 	}
-
-	a.selectorCacheMu.Lock()
-	a.selectorCache[agentName] = selectorCacheEntry{
-		timestamp: catTs,
-		models:    models,
-		hash:      hash,
-	}
-	a.selectorCacheMu.Unlock()
 
 	return models
 }
 
 func (a *AgentState) expandDeferredProviders(models []config.AgentModel, catalog *discovery.ModelCatalog, providers map[string]*config.Provider, logger *slog.Logger) []config.AgentModel {
-	expanded := make([]config.AgentModel, 0, len(models))
+	expanded := make([]config.AgentModel, 0, len(models)*2)
 	for _, m := range models {
 		if m.Provider != "" || m.Model == "" {
 			expanded = append(expanded, m)
@@ -231,6 +242,75 @@ func hashDynamicModels(models []config.AgentModel) string {
 		return ""
 	}
 	return strings.Join(parts, "|")
+}
+
+func (a *AgentState) expandProviderOnly(models []config.AgentModel, catalog *discovery.ModelCatalog, providers map[string]*config.Provider, logger *slog.Logger) []config.AgentModel {
+	expanded := make([]config.AgentModel, 0, len(models)*2)
+	for _, m := range models {
+		if !(m.Provider != "" && m.Model == "" && m.ProviderRgx == "" && m.ModelRgx == "") {
+			expanded = append(expanded, m)
+			continue
+		}
+
+		providerName := m.Provider
+		if _, ok := providers[providerName]; !ok {
+			logger.Warn("provider-only entry: provider not configured", "provider", providerName)
+			continue
+		}
+
+		if catalog != nil {
+			discModels := catalog.ModelsForProvider(providerName)
+			if len(discModels) > 0 {
+				for _, dm := range discModels {
+					am := config.AgentModel{
+						Provider:   dm.Provider,
+						Model:      dm.ID,
+						MaxContext: m.MaxContext,
+						MaxOutput:  m.MaxOutput,
+					}
+					if am.MaxContext <= 0 {
+						am.MaxContext = dm.MaxContext
+					}
+					if am.MaxOutput <= 0 {
+						am.MaxOutput = dm.MaxOutput
+					}
+					logger.Debug("expanded provider-only entry from catalog",
+						"provider", providerName, "model", dm.ID,
+						"max_context", am.MaxContext, "max_output", am.MaxOutput)
+					expanded = append(expanded, am)
+				}
+				continue
+			}
+		}
+
+		registryModels := make([]config.AgentModel, 0)
+		for modelID, entry := range config.ModelRegistry {
+			if entry.Provider == providerName {
+				am := config.AgentModel{
+					Provider:   providerName,
+					Model:      modelID,
+					MaxContext: m.MaxContext,
+					MaxOutput:  m.MaxOutput,
+				}
+				if am.MaxContext <= 0 {
+					am.MaxContext = entry.MaxContext
+				}
+				if am.MaxOutput <= 0 {
+					am.MaxOutput = entry.MaxOutput
+				}
+				registryModels = append(registryModels, am)
+			}
+		}
+		if len(registryModels) > 0 {
+			logger.Debug("expanded provider-only entry from ModelRegistry fallback",
+				"provider", providerName, "count", len(registryModels))
+			expanded = append(expanded, registryModels...)
+			continue
+		}
+
+		logger.Warn("provider-only entry: no models found", "provider", providerName)
+	}
+	return expanded
 }
 
 func expandDynamicModels(models []config.AgentModel, catalog *discovery.ModelCatalog, providers map[string]*config.Provider, logger *slog.Logger) []config.AgentModel {
