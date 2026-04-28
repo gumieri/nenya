@@ -2,7 +2,6 @@ package config
 
 import (
 	"fmt"
-	"log/slog"
 	"nenya/internal/infra"
 )
 
@@ -265,49 +264,19 @@ func applyAgentDefaults(cfg *Config) error {
 				if m.Model != "" && m.ModelRgx != "" {
 					fmt.Printf("[WARN] agent %q model %d: both model and model_rgx set; model_rgx takes precedence\n", name, i)
 				}
+				if !cfg.Discovery.Enabled {
+					fmt.Printf("[WARN] agent %q model %d: model_rgx requires discovery to expand into concrete models; only static registry entries will match\n", name, i)
+				}
 				if err := m.CompileRegex(); err != nil {
 					return fmt.Errorf("agent %q model %d: %w", name, i, err)
 				}
 				agent.Models[i] = m
 			}
+			if m.ProviderRgx == "" && m.ModelRgx == "" && looksLikeRegex(m.Model) {
+				fmt.Printf("[WARN] agent %q model %d: model %q looks like a regex pattern but uses the 'model' field (literal). Did you mean to use 'model_rgx' for regex matching?\n", name, i, m.Model)
+			}
 		}
 		cfg.Agents[name] = agent
-
-		if slog.Default().Enabled(nil, slog.LevelDebug) {
-			modelEntries := make([]string, 0, len(agent.Models))
-			for _, m := range agent.Models {
-				var entry string
-				switch {
-				case m.Provider != "" && m.Model != "":
-					entry = fmt.Sprintf("%s/%s", m.Provider, m.Model)
-				case m.Model != "":
-					entry = m.Model
-				case m.ModelRgx != "" && m.ProviderRgx != "":
-					entry = fmt.Sprintf("rgx:%s/%s", m.ProviderRgx, m.ModelRgx)
-				case m.ModelRgx != "":
-					entry = fmt.Sprintf("rgx:%s", m.ModelRgx)
-				case m.ProviderRgx != "":
-					entry = fmt.Sprintf("prgx:%s", m.ProviderRgx)
-				default:
-					entry = "empty"
-				}
-				if m.URL != "" {
-					entry += fmt.Sprintf("@%s", m.URL)
-				}
-				modelEntries = append(modelEntries, entry)
-			}
-			var mcpSrv []string
-			if agent.MCP != nil {
-				mcpSrv = agent.MCP.Servers
-			}
-			slog.Default().Debug("agent configured",
-				"name", name,
-				"strategy", agent.Strategy,
-				"models", modelEntries,
-				"system_prompt", agent.SystemPromptFile,
-				"mcp_servers", mcpSrv,
-			)
-		}
 	}
 	return nil
 }
@@ -339,4 +308,20 @@ func applyWindowDefaults(cfg *Config) {
 	if cfg.Window.MaxContext == 0 {
 		cfg.Window.MaxContext = 128000
 	}
+}
+
+// looksLikeRegex returns true if s contains characters commonly used in regex
+// patterns, suggesting the user may have intended to use model_rgx instead of model.
+func looksLikeRegex(s string) bool {
+	if s == "" {
+		return false
+	}
+	// Common regex pattern indicators in model strings
+	for i := 0; i < len(s); i++ {
+		switch s[i] {
+		case '.', '*', '+', '^', '$', '(', ')', '[', ']', '{', '}', '|', '\\', '?':
+			return true
+		}
+	}
+	return false
 }
