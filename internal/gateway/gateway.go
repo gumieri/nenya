@@ -3,6 +3,7 @@ package gateway
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"net"
 	"net/http"
@@ -202,6 +203,53 @@ func New(ctx context.Context, cfg config.Config, secrets *config.SecretsConfig, 
 	gw.Metrics.RateLimits = gw.RateLimiter.Snapshot
 	gw.Metrics.Cooldowns = gw.AgentState.ActiveCooldowns
 	gw.Metrics.CBStates = gw.AgentState.CBSnapshot
+
+	if logger.Enabled(ctx, slog.LevelDebug) {
+		for name, agent := range cfg.Agents {
+			modelEntries := make([]string, 0, len(agent.Models))
+			for _, m := range agent.Models {
+				if m.Provider != "" && m.Model != "" {
+					modelEntries = append(modelEntries, fmt.Sprintf("%s/%s", m.Provider, m.Model))
+				} else if m.ProviderRgx != "" || m.ModelRgx != "" {
+					r := m.ModelRgx
+					if m.ProviderRgx != "" {
+						r = m.ProviderRgx + "/" + r
+					}
+					modelEntries = append(modelEntries, fmt.Sprintf("rx:%s", r))
+				} else if m.Model != "" {
+					if mergedCatalog != nil {
+						entries := mergedCatalog.LookupAll(m.Model)
+						if len(entries) > 0 {
+							for _, e := range entries {
+								if _, ok := providers[e.Provider]; ok {
+									modelEntries = append(modelEntries, fmt.Sprintf("%s/%s", e.Provider, m.Model))
+								}
+							}
+							continue
+						}
+					}
+					if entry, ok := config.ModelRegistry[m.Model]; ok {
+						if _, ok := providers[entry.Provider]; ok {
+							modelEntries = append(modelEntries, fmt.Sprintf("%s/%s", entry.Provider, m.Model))
+							continue
+						}
+					}
+					modelEntries = append(modelEntries, fmt.Sprintf("%s (unresolved)", m.Model))
+				}
+			}
+			mcpSrv := []string{}
+			if agent.MCP != nil {
+				mcpSrv = agent.MCP.Servers
+			}
+			logger.Debug("agent model chain",
+				"name", name,
+				"strategy", agent.Strategy,
+				"models", modelEntries,
+				"system_prompt", agent.SystemPromptFile,
+				"mcp_servers", mcpSrv,
+			)
+		}
+	}
 
 	adapter.InitWithDeps(logger, gw.ThoughtSigCache, ExtractContentText)
 
