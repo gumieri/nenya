@@ -171,3 +171,117 @@ func TestResolveEngineRef_ExplicitTimeoutOverrides(t *testing.T) {
 		t.Errorf("expected explicit timeout 60, got %d", targets[0].Engine.TimeoutSeconds)
 	}
 }
+
+func TestBuildAgentEngineTarget_StringShorthandResolvesProvider(t *testing.T) {
+	providers := map[string]*Provider{
+		"gemini": {
+			Name: "gemini",
+			URL:  "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
+		},
+	}
+
+	ref := EngineRef{
+		AgentName: "window",
+	}
+	agent := AgentConfig{
+		Models: []AgentModel{
+			{Model: "gemini-3.1-flash-lite-preview"},
+		},
+	}
+
+	targets, err := resolveAgentEngineRef(ref, map[string]AgentConfig{"window": agent}, providers)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(targets) != 1 {
+		t.Fatalf("expected 1 target, got %d", len(targets))
+	}
+	if targets[0].Engine.Provider != "gemini" {
+		t.Errorf("expected resolved provider gemini, got %s", targets[0].Engine.Provider)
+	}
+	if targets[0].Engine.Model != "gemini-3.1-flash-lite-preview" {
+		t.Errorf("expected model gemini-3.1-flash-lite-preview, got %s", targets[0].Engine.Model)
+	}
+	if targets[0].Provider.URL == "" {
+		t.Fatal("expected resolved provider URL")
+	}
+}
+
+func TestBuildAgentEngineTarget_StringShorthandMixedOrder(t *testing.T) {
+	providers := map[string]*Provider{
+		"gemini": {Name: "gemini", URL: "https://generativelanguage.googleapis.com/v1/chat/completions"},
+		"groq":   {Name: "groq", URL: "https://api.groq.com/openai/v1/chat/completions"},
+	}
+
+	ref := EngineRef{
+		AgentName: "window",
+	}
+	agent := AgentConfig{
+		Models: []AgentModel{
+			{Model: "gemini-3.1-flash-lite-preview"},
+			{Provider: "groq", Model: "llama-3.1-8b-instant"},
+			{Model: "gemini-2.5-flash-lite"},
+		},
+	}
+
+	targets, err := resolveAgentEngineRef(ref, map[string]AgentConfig{"window": agent}, providers)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(targets) != 3 {
+		t.Fatalf("expected 3 targets, got %d", len(targets))
+	}
+	if targets[0].Engine.Provider != "gemini" {
+		t.Errorf("expected target[0] provider gemini, got %s", targets[0].Engine.Provider)
+	}
+	if targets[1].Engine.Provider != "groq" {
+		t.Errorf("expected target[1] provider groq, got %s", targets[1].Engine.Provider)
+	}
+	if targets[2].Engine.Provider != "gemini" {
+		t.Errorf("expected target[2] provider gemini, got %s", targets[2].Engine.Provider)
+	}
+}
+
+func TestBuildAgentEngineTarget_StringShorthandUnknownModel(t *testing.T) {
+	providers := map[string]*Provider{
+		"ollama": {Name: "ollama", URL: "http://localhost:11434/v1/chat/completions"},
+	}
+
+	ref := EngineRef{
+		AgentName: "window",
+	}
+	agent := AgentConfig{
+		Models: []AgentModel{
+			{Model: "nonexistent-model-that-is-not-in-registry"},
+		},
+	}
+
+	_, err := resolveAgentEngineRef(ref, map[string]AgentConfig{"window": agent}, providers)
+	if err == nil {
+		t.Fatal("expected error for unknown model with no provider")
+	}
+}
+
+func TestResolveSingleEngineRef_EmptyRefSkips(t *testing.T) {
+	ref := &EngineRef{}
+	err := resolveSingleEngineRef(ref, nil, nil, "test")
+	if err != nil {
+		t.Fatalf("expected nil for empty EngineRef, got: %v", err)
+	}
+	if ref.ResolvedTargets != nil {
+		t.Errorf("expected ResolvedTargets to be nil for empty EngineRef, got %v", ref.ResolvedTargets)
+	}
+}
+
+func TestResolveEngineRefs_NoEnginesConfigured(t *testing.T) {
+	cfg := &Config{
+		Providers: map[string]ProviderConfig{
+			"ollama": {URL: "http://localhost:11434/v1/chat/completions"},
+		},
+	}
+
+	err := resolveEngineRefs(cfg)
+	if err != nil {
+		t.Fatalf("expected no error when no engines configured, got: %v", err)
+	}
+}
