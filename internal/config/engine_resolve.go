@@ -34,24 +34,30 @@ func resolveAgentEngineRef(ref EngineRef, agents map[string]AgentConfig, provide
 }
 
 func buildAgentEngineTarget(ref EngineRef, m AgentModel, agent AgentConfig, providers map[string]*Provider) (EngineTarget, error) {
-	providerURL := getProviderURL(m.Provider, m.URL, providers)
+	provider := m.Provider
+	if provider == "" && m.Model != "" {
+		if entry, ok := ModelRegistry[m.Model]; ok {
+			provider = entry.Provider
+		}
+	}
+	providerURL := getProviderURL(provider, m.URL, providers)
 	if providerURL == "" {
-		return EngineTarget{}, fmt.Errorf("engine agent %q: provider %q not found and no URL specified", ref.AgentName, m.Provider)
+		return EngineTarget{}, fmt.Errorf("engine agent %q: provider %q not found and no URL specified", ref.AgentName, provider)
 	}
 
-	providerTimeout := getProviderTimeout(m.Provider, providers)
+	providerTimeout := getProviderTimeout(provider, providers)
 	systemPrompt, systemPromptFile := resolveSystemPrompts(ref, agent)
 	timeoutSeconds := resolveTimeout(ref, providerTimeout)
 
 	return EngineTarget{
 		Engine: EngineConfig{
-			Provider:         m.Provider,
+			Provider:         provider,
 			Model:            m.Model,
 			SystemPrompt:     systemPrompt,
 			SystemPromptFile: systemPromptFile,
 			TimeoutSeconds:   timeoutSeconds,
 		},
-		Provider: buildProvider(m.Provider, providerURL, providerTimeout, providers),
+		Provider: buildProvider(provider, providerURL, providerTimeout, providers),
 	}, nil
 }
 
@@ -173,6 +179,9 @@ func resolveEngineRefs(cfg *Config) error {
 }
 
 func resolveSingleEngineRef(ref *EngineRef, agents map[string]AgentConfig, providers map[string]*Provider, label string) error {
+	if ref.AgentName == "" && ref.Provider == "" {
+		return nil
+	}
 	targets, err := ResolveEngineRef(*ref, agents, providers)
 	if err != nil {
 		return fmt.Errorf("%s engine: %w", label, err)
