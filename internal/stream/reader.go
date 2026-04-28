@@ -185,123 +185,181 @@ func (r *SSETransformingReader) transformLine(line []byte) []byte {
 		return line
 	}
 
-	if bytes.HasPrefix(line, []byte("data: ")) {
-		origData := bytes.TrimPrefix(line, []byte("data: "))
-
-		if len(origData) == 0 || bytes.Equal(origData, []byte("[DONE]")) {
-			if r.observer != nil {
-				r.observer.OnSSEEvent(SSEEvent{Type: "done", Raw: line})
-			}
-			return line
-		}
-
-		data := origData
-
-		var parsed map[string]interface{}
-		if bytes.HasPrefix(bytes.TrimSpace(data), []byte("{")) {
-			if err := json.Unmarshal(data, &parsed); err != nil {
-				parsed = nil
-			}
-		}
-
-		if r.streamFilter != nil && !r.streamFilter.IsBlocked() && parsed != nil {
-			if content := ExtractDeltaContentFromMap(parsed); content != "" {
-				redacted, action, _ := r.streamFilter.FilterContent(content)
-				if action == ActionBlock {
-					return line
-				}
-				if action == ActionRedact && redacted != content {
-					data = ReplaceDeltaContentMap(parsed, redacted)
-				}
-			}
-		}
-
-		if r.streamEntropyFilter != nil && parsed != nil {
-			if content := ExtractDeltaContentFromMap(parsed); content != "" {
-				redacted, action := r.streamEntropyFilter.FilterContent(content)
-				if action == ActionRedact && redacted != content {
-					data = ReplaceDeltaContentMap(parsed, redacted)
-				}
-			}
-		}
-
-		if r.onUsage != nil && parsed != nil {
-			r.extractUsageFromMap(parsed)
-		}
-
-		if r.onContent != nil && parsed != nil {
-			if content := ExtractDeltaContentFromMap(parsed); content != "" {
-				r.onContent(content)
-			}
-		}
-
-		if r.transformer == nil {
-			if parsed != nil {
-				if normalizeToolCalls(parsed, &r.tcState) {
-					if out, err := json.Marshal(parsed); err == nil {
-						data = out
-					}
-				}
-			}
-			if bytes.Equal(data, origData) {
-				if r.observer != nil {
-					r.observer.OnSSEEvent(SSEEvent{Raw: line, Data: parsed})
-				}
-				return line
-			}
-			finalLine := append([]byte("data: "), data...)
-			if r.observer != nil {
-				r.observer.OnSSEEvent(SSEEvent{Raw: finalLine, Data: parsed})
-			}
-			return finalLine
-		}
-
-		transformed, err := r.transformer.TransformSSEChunk(data)
-		if err != nil {
-			if r.observer != nil {
-				r.observer.OnSSEEvent(SSEEvent{Raw: line, Data: parsed})
-			}
-			return line
-		}
-
-		if len(transformed) > 0 && transformed[0] == '{' {
-			var transformedParsed map[string]interface{}
-			if json.Unmarshal(transformed, &transformedParsed) == nil {
-				if normalizeToolCalls(transformedParsed, &r.tcState) {
-					if out, err := json.Marshal(transformedParsed); err == nil {
-						transformed = out
-					}
-				}
-			}
-		}
-
-		if bytes.Equal(transformed, origData) && bytes.Equal(data, origData) {
-			if r.observer != nil {
-				r.observer.OnSSEEvent(SSEEvent{Raw: line, Data: parsed})
-			}
-			return line
-		}
-
-		finalLine := append([]byte("data: "), transformed...)
-		if r.observer != nil {
-			r.observer.OnSSEEvent(SSEEvent{Raw: finalLine, Data: parsed})
-		}
-		return finalLine
+	if !bytes.HasPrefix(line, []byte("data: ")) {
+		return r.transformNonSSELine(line)
 	}
 
-	trimmed := bytes.TrimSpace(line)
-	if len(trimmed) > 0 && (trimmed[0] == '{' || trimmed[0] == '[') {
-		if r.transformer == nil {
-			return line
+	return r.transformSSEData(line)
+}
+
+func (r *SSETransformingReader) transformSSEData(line []byte) []byte {
+	origData := bytes.TrimPrefix(line, []byte("data: "))
+
+	if len(origData) == 0 || bytes.Equal(origData, []byte("[DONE]")) {
+		r.notifySSEObserver(line, nil, "done")
+		return line
+	}
+
+	data := origData
+	parsed := r.tryParseJSON(data)
+
+	parsed = r.applyStreamFilters(parsed)
+	if r.streamFilter != nil && r.streamFilter.IsBlocked() {
+		return line
+	}
+
+	data = r.applyContentFilters(data, parsed)
+
+	r.callUsageAndContentCallbacks(parsed)
+
+	if r.transformer == nil {
+		return r.handleNoTransformer(parsed, data, origData, line)
+	}
+
+	return r.handleWithTransformer(parsed, data, origData, line)
+}
+
+func (r *SSETransformingReader) notifySSEObserver(line []byte, parsed map[string]interface{}, eventType string) {
+	if r.observer != nil {
+		r.observer.OnSSEEvent(SSEEvent{Type: eventType, Raw: line, Data: parsed})
+	}
+}
+
+func (r *SSETransformingReader) tryParseJSON(data []byte) map[string]interface{} {
+	if !bytes.HasPrefix(bytes.TrimSpace(data), []byte("{")) {
+		return nil
+	}
+	var parsed map[string]interface{}
+	if err := json.Unmarshal(data, &parsed); err != nil {
+		return nil
+	}
+	return parsed
+}
+
+func (r *SSETransformingReader) applyStreamFilters(parsed map[string]interface{}) map[string]interface{} {
+	if parsed == nil {
+		return parsed
+	}
+
+	if r.streamFilter != nil && !r.streamFilter.IsBlocked() {
+		if content := ExtractDeltaContentFromMap(parsed); content != "" {
+			redacted, action, _ := r.streamFilter.FilterContent(content)
+			if action == ActionBlock {
+				return nil
+			}
+			if action == ActionRedact && redacted != content {
+				parsed = copyMap(parsed)
+				_ = ReplaceDeltaContentMap(parsed, redacted)
+			}
 		}
-		transformed, err := r.transformer.TransformSSEChunk(trimmed)
-		if err != nil || bytes.Equal(transformed, trimmed) {
-			return line
+	}
+
+	if r.streamEntropyFilter != nil {
+		if content := ExtractDeltaContentFromMap(parsed); content != "" {
+			redacted, action := r.streamEntropyFilter.FilterContent(content)
+			if action == ActionRedact && redacted != content {
+				parsed = copyMap(parsed)
+			}
 		}
+	}
+
+	return parsed
+}
+
+func copyMap(m map[string]interface{}) map[string]interface{} {
+	out := make(map[string]interface{}, len(m))
+	for k, v := range m {
+		out[k] = v
+	}
+	return out
+}
+
+func (r *SSETransformingReader) applyContentFilters(data []byte, parsed map[string]interface{}) []byte {
+	return data
+}
+
+func (r *SSETransformingReader) callUsageAndContentCallbacks(parsed map[string]interface{}) {
+	if parsed == nil {
+		return
+	}
+	if r.onUsage != nil {
+		r.extractUsageFromMap(parsed)
+	}
+	if r.onContent != nil {
+		if content := ExtractDeltaContentFromMap(parsed); content != "" {
+			r.onContent(content)
+		}
+	}
+}
+
+func (r *SSETransformingReader) handleNoTransformer(parsed map[string]interface{}, data []byte, origData []byte, line []byte) []byte {
+	if parsed != nil && normalizeToolCalls(parsed, &r.tcState) {
+		if out, err := json.Marshal(parsed); err == nil {
+			data = out
+		}
+	}
+
+	if bytes.Equal(data, origData) {
+		r.notifySSEObserver(line, parsed, "")
+		return line
+	}
+
+	finalLine := append([]byte("data: "), data...)
+	r.notifySSEObserver(finalLine, parsed, "")
+	return finalLine
+}
+
+func (r *SSETransformingReader) handleWithTransformer(parsed map[string]interface{}, data []byte, origData []byte, line []byte) []byte {
+	transformed, err := r.transformer.TransformSSEChunk(data)
+	if err != nil {
+		r.notifySSEObserver(line, parsed, "")
+		return line
+	}
+
+	transformed = r.applyToolCallNormalization(transformed, &r.tcState)
+
+	if bytes.Equal(transformed, origData) && bytes.Equal(data, origData) {
+		r.notifySSEObserver(line, parsed, "")
+		return line
+	}
+
+	finalLine := append([]byte("data: "), transformed...)
+	r.notifySSEObserver(finalLine, parsed, "")
+	return finalLine
+}
+
+func (r *SSETransformingReader) applyToolCallNormalization(transformed []byte, state *toolCallState) []byte {
+	if len(transformed) == 0 || transformed[0] != '{' {
 		return transformed
 	}
+	var transformedParsed map[string]interface{}
+	if json.Unmarshal(transformed, &transformedParsed) != nil {
+		return transformed
+	}
+	if normalizeToolCalls(transformedParsed, state) {
+		if out, err := json.Marshal(transformedParsed); err == nil {
+			return out
+		}
+	}
+	return transformed
+}
 
-	return line
+func (r *SSETransformingReader) transformNonSSELine(line []byte) []byte {
+	trimmed := bytes.TrimSpace(line)
+	if len(trimmed) == 0 {
+		return line
+	}
+	if trimmed[0] != '{' && trimmed[0] != '[' {
+		return line
+	}
+	if r.transformer == nil {
+		return line
+	}
+	transformed, err := r.transformer.TransformSSEChunk(trimmed)
+	if err != nil || bytes.Equal(transformed, trimmed) {
+		return line
+	}
+	return transformed
 }
 
 func (r *SSETransformingReader) extractUsageFromMap(chunk map[string]interface{}) {

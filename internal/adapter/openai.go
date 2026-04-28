@@ -43,12 +43,8 @@ func (a *OpenAIAdapter) MutateRequest(body []byte, model string, stream bool) ([
 	}
 
 	if !a.Caps.ContentArrays {
-		if msgsRaw, has := payload["messages"]; has {
-			if msgs, ok := msgsRaw.([]interface{}); ok {
-				if flattened := flattenContentArrays(msgs); flattened {
-					changed = true
-				}
-			}
+		if a.flattenMessages(payload) {
+			changed = true
 		}
 	}
 
@@ -61,6 +57,18 @@ func (a *OpenAIAdapter) MutateRequest(body []byte, model string, stream bool) ([
 		return body, nil
 	}
 	return out, nil
+}
+
+func (a *OpenAIAdapter) flattenMessages(payload map[string]interface{}) bool {
+	msgsRaw, has := payload["messages"]
+	if !has {
+		return false
+	}
+	msgs, ok := msgsRaw.([]interface{})
+	if !ok {
+		return false
+	}
+	return flattenContentArrays(msgs)
 }
 
 func (a *OpenAIAdapter) InjectAuth(req *http.Request, apiKey string) error {

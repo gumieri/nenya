@@ -12,71 +12,133 @@ import (
 // based on the target provider's capabilities (e.g. stream_options,
 // tool_choice, reasoning parameters). It also validates and repairs
 // message role ordering to comply with the OpenAI chat completions spec.
-func SanitizePayload(deps TransformDeps, payload map[string]interface{}, providerName string, modelName string) {
-	if _, ok := payload["stream_options"]; ok {
-		if !providerpkg.SupportsStreamOptions(providerName) {
-			delete(payload, "stream_options")
-			deps.Logger.Debug("stripped stream_options for provider", "provider", providerName)
-		}
+func stripStreamOptions(deps TransformDeps, payload map[string]interface{}, providerName string) {
+	if _, ok := payload["stream_options"]; !ok {
+		return
 	}
-
-	if toolChoice, ok := payload["tool_choice"]; ok {
-		if tc, ok := toolChoice.(string); ok && tc == "auto" {
-			if !providerpkg.SupportsAutoToolChoice(providerName) {
-				delete(payload, "tool_choice")
-				deps.Logger.Debug("stripped tool_choice \"auto\" for provider", "provider", providerName)
-			}
-		}
+	if providerpkg.SupportsStreamOptions(providerName) {
+		return
 	}
+	delete(payload, "stream_options")
+	deps.Logger.Debug("stripped stream_options for provider", "provider", providerName)
+}
 
-	if messagesRaw, ok := payload["messages"]; ok {
-		if messages, ok := messagesRaw.([]interface{}); ok {
-			if !providerpkg.SupportsContentArrays(providerName) {
-				changed := false
-				for i, msgRaw := range messages {
-					msg, ok := msgRaw.(map[string]interface{})
-					if !ok {
-						continue
-					}
-					if contentRaw, ok := msg["content"]; ok {
-						if arr, ok := contentRaw.([]interface{}); ok && len(arr) > 0 {
-							if flat := flattenContentArray(arr); flat != "" {
-								messages[i].(map[string]interface{})["content"] = flat
-								changed = true
-							}
-						}
-					}
-				}
-				if changed {
-					deps.Logger.Debug("flattened content arrays for provider", "provider", providerName)
-				}
-			}
-
-			shouldStripReasoning := !providerpkg.SupportsReasoning(providerName)
-			if !shouldStripReasoning && providerName != "deepseek" && deps.Catalog != nil && modelName != "" {
-				if dm, ok := deps.Catalog.Lookup(modelName); ok && dm.Metadata != nil && !dm.Metadata.SupportsReasoning {
-					shouldStripReasoning = true
-				}
-			}
-			if shouldStripReasoning {
-				if pipeline.StripReasoningContent(payload) {
-					deps.Logger.Debug("stripped reasoning_content",
-						"provider", providerName, "model", modelName)
-				}
-			}
-
-			repaired, repairedMessages := repairMessageOrdering(messages)
-			if repaired {
-				payload["messages"] = repairedMessages
-				deps.Logger.Warn("repaired invalid message role ordering", "provider", providerName)
-			}
-		}
+func stripToolChoice(deps TransformDeps, payload map[string]interface{}, providerName string) {
+	toolChoice, ok := payload["tool_choice"]
+	if !ok {
+		return
 	}
+	tc, ok := toolChoice.(string)
+	if !ok || tc != "auto" {
+		return
+	}
+	if providerpkg.SupportsAutoToolChoice(providerName) {
+		return
+	}
+	delete(payload, "tool_choice")
+	deps.Logger.Debug("stripped tool_choice \"auto\" for provider", "provider", providerName)
+}
 
+func flattenContentArrays(deps TransformDeps, payload map[string]interface{}, providerName string) {
+	messagesRaw, ok := payload["messages"]
+	if !ok {
+		return
+	}
+	messages, ok := messagesRaw.([]interface{})
+	if !ok {
+		return
+	}
+	if providerpkg.SupportsContentArrays(providerName) {
+		return
+	}
+	changed := false
+	for i, msgRaw := range messages {
+		msg, ok := msgRaw.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		contentRaw, ok := msg["content"]
+		if !ok {
+			continue
+		}
+		arr, ok := contentRaw.([]interface{})
+		if !ok || len(arr) == 0 {
+			continue
+		}
+		flat := flattenContentArray(arr)
+		if flat == "" {
+			continue
+		}
+		messages[i].(map[string]interface{})["content"] = flat
+		changed = true
+	}
+	if changed {
+		deps.Logger.Debug("flattened content arrays for provider", "provider", providerName)
+	}
+}
+
+func shouldStripReasoning(deps TransformDeps, providerName, modelName string) bool {
+	if providerpkg.SupportsReasoning(providerName) {
+		return false
+	}
 	if providerName == "deepseek" {
-		ensureDeepSeekReasoningContent(payload, deps.Logger)
+		return false
 	}
+	if deps.Catalog == nil || modelName == "" {
+		return false
+	}
+	dm, ok := deps.Catalog.Lookup(modelName)
+	if !ok {
+		return false
+	}
+	if dm.Metadata == nil {
+		return false
+	}
+	return !dm.Metadata.SupportsReasoning
+}
+
+func processReasoningContent(deps TransformDeps, payload map[string]interface{}, providerName, modelName string) {
+	if !shouldStripReasoning(deps, providerName, modelName) {
+		return
+	}
+	if pipeline.StripReasoningContent(payload) {
+		deps.Logger.Debug("stripped reasoning_content",
+			"provider", providerName, "model", modelName)
+	}
+}
+
+func processMessages(deps TransformDeps, payload map[string]interface{}, providerName, modelName string) {
+	messagesRaw, ok := payload["messages"]
+	if !ok {
+		return
+	}
+	messages, ok := messagesRaw.([]interface{})
+	if !ok {
+		return
+	}
+	flattenContentArrays(deps, payload, providerName)
+	processReasoningContent(deps, payload, providerName, modelName)
+	repaired, repairedMessages := repairMessageOrdering(messages)
+	if !repaired {
+		return
+	}
+	payload["messages"] = repairedMessages
+	deps.Logger.Warn("repaired invalid message role ordering", "provider", providerName)
+}
+
+func applyDeepSeekFixes(deps TransformDeps, payload map[string]interface{}, providerName string) {
+	if providerName != "deepseek" {
+		return
+	}
+	ensureDeepSeekReasoningContent(payload, deps.Logger)
 	stripDeepSeekThinkingParams(payload, providerName, deps.Logger)
+}
+
+func SanitizePayload(deps TransformDeps, payload map[string]interface{}, providerName string, modelName string) {
+	stripStreamOptions(deps, payload, providerName)
+	stripToolChoice(deps, payload, providerName)
+	processMessages(deps, payload, providerName, modelName)
+	applyDeepSeekFixes(deps, payload, providerName)
 }
 
 // ensureDeepSeekReasoningContent injects an empty reasoning_content field

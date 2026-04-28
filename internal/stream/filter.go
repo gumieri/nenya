@@ -50,19 +50,10 @@ func (f *StreamFilter) FilterContent(content string) (string, FilterAction, stri
 		return content, ActionPass, ""
 	}
 
-	if len(f.blockPatterns) > 0 {
-		for _, re := range f.blockPatterns {
-			if re.MatchString(content) {
-				f.blocked = true
-				f.blockReason = re.String()
-				return content, ActionBlock, f.blockReason
-			}
-		}
+	if action, reason := f.checkBlockPatterns(content); action != ActionPass {
+		return content, action, reason
 	}
 
-	// Capture the byte length of the window before appending the new content.
-	// regex.FindAllStringIndex returns byte offsets, so we must subtract bytes
-	// (not runes) to convert window-relative offsets into content-relative offsets.
 	prevWindowBytes := len(string(f.window))
 	f.appendToWindow(content)
 
@@ -70,51 +61,76 @@ func (f *StreamFilter) FilterContent(content string) (string, FilterAction, stri
 		return content, ActionBlock, f.blockReason
 	}
 
-	var redacted string
-	var wasRedacted bool
+	if redacted, action := f.checkSecretPatterns(content); action != ActionPass {
+		return redacted, action, ""
+	}
 
-	if len(f.secretPatterns) > 0 {
-		redacted = content
-		for _, re := range f.secretPatterns {
-			if re.MatchString(redacted) {
-				redacted = re.ReplaceAllString(redacted, f.redactLabel)
-				wasRedacted = true
-			}
+	if f.checkWindowRedact() {
+		return f.redactFromWindow(content, prevWindowBytes)
+	}
+
+	return content, ActionPass, ""
+}
+
+func (f *StreamFilter) checkBlockPatterns(content string) (FilterAction, string) {
+	if len(f.blockPatterns) == 0 {
+		return ActionPass, ""
+	}
+	for _, re := range f.blockPatterns {
+		if re.MatchString(content) {
+			f.blocked = true
+			f.blockReason = re.String()
+			return ActionBlock, f.blockReason
+		}
+	}
+	return ActionPass, ""
+}
+
+func (f *StreamFilter) checkSecretPatterns(content string) (string, FilterAction) {
+	if len(f.secretPatterns) == 0 {
+		return content, ActionPass
+	}
+
+	redacted := content
+	wasRedacted := false
+	for _, re := range f.secretPatterns {
+		if re.MatchString(redacted) {
+			redacted = re.ReplaceAllString(redacted, f.redactLabel)
+			wasRedacted = true
 		}
 	}
 
 	if wasRedacted {
-		return redacted, ActionRedact, ""
+		return redacted, ActionRedact
 	}
+	return content, ActionPass
+}
 
-	if f.checkWindowRedact() {
-		redacted = content
-		windowStr := string(f.window)
-		for _, re := range f.secretPatterns {
-			locs := re.FindAllStringIndex(windowStr, -1)
-			for _, loc := range locs {
-				chunkStart := loc[0] - prevWindowBytes
-				if chunkStart < 0 {
-					chunkStart = 0
-				}
-				chunkEnd := loc[1] - prevWindowBytes
-				if chunkEnd > len(content) {
-					chunkEnd = len(content)
-				}
-				if chunkStart < len(content) && chunkEnd > chunkStart {
-					prefix := content[:chunkStart]
-					suffix := content[chunkEnd:]
-					redacted = prefix + f.redactLabel + suffix
-					content = redacted
-				}
+func (f *StreamFilter) redactFromWindow(content string, prevWindowBytes int) (string, FilterAction, string) {
+	redacted := content
+	windowStr := string(f.window)
+	for _, re := range f.secretPatterns {
+		locs := re.FindAllStringIndex(windowStr, -1)
+		for _, loc := range locs {
+			chunkStart := loc[0] - prevWindowBytes
+			if chunkStart < 0 {
+				chunkStart = 0
+			}
+			chunkEnd := loc[1] - prevWindowBytes
+			if chunkEnd > len(content) {
+				chunkEnd = len(content)
+			}
+			if chunkStart < len(content) && chunkEnd > chunkStart {
+				prefix := content[:chunkStart]
+				suffix := content[chunkEnd:]
+				redacted = prefix + f.redactLabel + suffix
+				content = redacted
 			}
 		}
-		if strings.Contains(redacted, f.redactLabel) {
-			return redacted, ActionRedact, ""
-		}
-		return content, ActionPass, ""
 	}
-
+	if strings.Contains(redacted, f.redactLabel) {
+		return redacted, ActionRedact, ""
+	}
 	return content, ActionPass, ""
 }
 

@@ -90,59 +90,10 @@ func (a *AnthropicAdapter) convertOpenAIToAnthropic(openai map[string]interface{
 		"max_tokens": 8192,
 	}
 
-	if v, ok := openai["max_tokens"].(float64); ok && v > 0 {
-		anthropic["max_tokens"] = int(v)
-	}
-
-	if v, ok := openai["temperature"].(float64); ok {
-		anthropic["temperature"] = v
-	}
-
-	if v, ok := openai["top_p"].(float64); ok {
-		anthropic["top_p"] = v
-	}
-
-	if v, ok := openai["stop"]; ok {
-		anthropic["stop_sequences"] = v
-	}
-
-	if v, ok := openai["user"].(string); ok {
-		anthropic["metadata"] = map[string]interface{}{
-			"user_id": v,
-		}
-	}
-
-	if v, ok := openai["stream"].(bool); ok {
-		anthropic["stream"] = v
-	}
+	a.copyOpenAIFields(openai, anthropic)
 
 	if msgs, ok := openai["messages"].([]interface{}); ok {
-		// Extract system messages into Anthropic's native top-level system field.
-		// Converting them to user/assistant pairs wastes tokens, breaks prompt
-		// caching, and reduces instruction-following fidelity.
-		var systemParts []string
-		for _, msgRaw := range msgs {
-			msg, ok := msgRaw.(map[string]interface{})
-			if !ok {
-				continue
-			}
-			if role, _ := msg["role"].(string); role == "system" {
-				switch c := msg["content"].(type) {
-				case string:
-					if c != "" {
-						systemParts = append(systemParts, c)
-					}
-				case []interface{}:
-					for _, partRaw := range c {
-						if part, ok := partRaw.(map[string]interface{}); ok {
-							if t, ok := part["text"].(string); ok && t != "" {
-								systemParts = append(systemParts, t)
-							}
-						}
-					}
-				}
-			}
-		}
+		systemParts := a.extractSystemMessages(msgs)
 		if len(systemParts) > 0 {
 			anthropic["system"] = strings.Join(systemParts, "\n\n")
 		}
@@ -154,26 +105,88 @@ func (a *AnthropicAdapter) convertOpenAIToAnthropic(openai map[string]interface{
 	}
 
 	if tc, ok := openai["tool_choice"]; ok {
-		if s, ok := tc.(string); ok {
-			switch s {
-			case "auto", "required":
-				anthropic["tool_choice"] = map[string]interface{}{"type": s}
-			case "none":
-				delete(anthropic, "tool_choice")
-			}
-		} else if m, ok := tc.(map[string]interface{}); ok {
-			if fn, ok := m["function"].(map[string]interface{}); ok {
-				if name, ok := fn["name"].(string); ok {
-					anthropic["tool_choice"] = map[string]interface{}{
-						"type": "tool",
-						"name": name,
-					}
+		a.convertToolChoice(tc, anthropic)
+	}
+
+	return anthropic
+}
+
+func (a *AnthropicAdapter) copyOpenAIFields(openai, anthropic map[string]interface{}) {
+	if v, ok := openai["max_tokens"].(float64); ok && v > 0 {
+		anthropic["max_tokens"] = int(v)
+	}
+	if v, ok := openai["temperature"].(float64); ok {
+		anthropic["temperature"] = v
+	}
+	if v, ok := openai["top_p"].(float64); ok {
+		anthropic["top_p"] = v
+	}
+	if v, ok := openai["stop"]; ok {
+		anthropic["stop_sequences"] = v
+	}
+	if v, ok := openai["user"].(string); ok {
+		anthropic["metadata"] = map[string]interface{}{
+			"user_id": v,
+		}
+	}
+	if v, ok := openai["stream"].(bool); ok {
+		anthropic["stream"] = v
+	}
+}
+
+func (a *AnthropicAdapter) extractSystemMessages(msgs []interface{}) []string {
+	var systemParts []string
+	for _, msgRaw := range msgs {
+		msg, ok := msgRaw.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		if role, _ := msg["role"].(string); role == "system" {
+			systemParts = append(systemParts, a.extractSystemContent(msg["content"])...)
+		}
+	}
+	return systemParts
+}
+
+func (a *AnthropicAdapter) extractSystemContent(content interface{}) []string {
+	var parts []string
+	switch c := content.(type) {
+	case string:
+		if c != "" {
+			parts = append(parts, c)
+		}
+	case []interface{}:
+		for _, partRaw := range c {
+			if part, ok := partRaw.(map[string]interface{}); ok {
+				if t, ok := part["text"].(string); ok && t != "" {
+					parts = append(parts, t)
 				}
 			}
 		}
 	}
+	return parts
+}
 
-	return anthropic
+func (a *AnthropicAdapter) convertToolChoice(tc interface{}, anthropic map[string]interface{}) {
+	if s, ok := tc.(string); ok {
+		switch s {
+		case "auto", "required":
+			anthropic["tool_choice"] = map[string]interface{}{"type": s}
+		case "none":
+			delete(anthropic, "tool_choice")
+		}
+		return
+	}
+	if m, ok := tc.(map[string]interface{}); ok {
+		if fn, ok := m["function"].(map[string]interface{}); ok {
+			if name, ok := fn["name"].(string); ok {
+				anthropic["tool_choice"] = map[string]interface{}{
+					"type": "tool",
+					"name": name,
+				}
+			}
+		}
+	}
 }
 
 func (a *AnthropicAdapter) convertMessages(msgs []interface{}) []interface{} {
@@ -188,8 +201,6 @@ func (a *AnthropicAdapter) convertMessages(msgs []interface{}) []interface{} {
 
 		switch role {
 		case "system":
-			// System messages are collected into the top-level system field in
-			// convertOpenAIToAnthropic; skip them in the messages array.
 			continue
 		case "user", "assistant", "tool":
 			anthMsg := map[string]interface{}{
@@ -197,18 +208,7 @@ func (a *AnthropicAdapter) convertMessages(msgs []interface{}) []interface{} {
 			}
 			if role == "tool" {
 				anthMsg["role"] = "user"
-				toolContent := ""
-				if content != nil {
-					if s, ok := content.(string); ok {
-						toolContent = s
-					}
-				}
-				anthMsg["content"] = []interface{}{
-					map[string]interface{}{
-						"type":    "tool_result",
-						"content": toolContent,
-					},
-				}
+				anthMsg["content"] = a.convertToolMessage(content)
 			} else if content != nil {
 				anthMsg["content"] = content
 			}
@@ -216,6 +216,21 @@ func (a *AnthropicAdapter) convertMessages(msgs []interface{}) []interface{} {
 		}
 	}
 	return result
+}
+
+func (a *AnthropicAdapter) convertToolMessage(content interface{}) []interface{} {
+	toolContent := ""
+	if content != nil {
+		if s, ok := content.(string); ok {
+			toolContent = s
+		}
+	}
+	return []interface{}{
+		map[string]interface{}{
+			"type":    "tool_result",
+			"content": toolContent,
+		},
+	}
 }
 
 func (a *AnthropicAdapter) convertTools(tools []interface{}) []interface{} {
@@ -258,91 +273,118 @@ func (a *AnthropicAdapter) convertAnthropicToOpenAI(anthropic map[string]interfa
 		"model":   anthropic["model"],
 	}
 
-	var choices []interface{}
 	choice := map[string]interface{}{
 		"index": 0,
 	}
-
 	delta := map[string]interface{}{}
 
-	if content, ok := anthropic["content"]; ok {
-		switch c := content.(type) {
-		case string:
-			delta["content"] = c
-			choice["finish_reason"] = "stop"
-		case []interface{}:
-			var textParts []string
-			var toolCalls []interface{}
-			for _, block := range c {
-				bm, ok := block.(map[string]interface{})
-				if !ok {
-					continue
-				}
-				bType, _ := bm["type"].(string)
-				switch bType {
-				case "text":
-					if t, ok := bm["text"].(string); ok {
-						textParts = append(textParts, t)
-					}
-				case "tool_use":
-					tc := map[string]interface{}{
-						"id":   bm["id"],
-						"type": "function",
-						"function": map[string]interface{}{
-							"name":      bm["name"],
-							"arguments": "{}",
-						},
-					}
-					if inp, ok := bm["input"]; ok {
-						argsBytes, _ := json.Marshal(inp)
-						tc["function"].(map[string]interface{})["arguments"] = string(argsBytes)
-					}
-					toolCalls = append(toolCalls, tc)
-				case "tool_result":
-					if t, ok := bm["content"].(string); ok {
-						delta["content"] = t
-					}
-				}
-			}
-			if len(textParts) > 0 {
-				delta["content"] = strings.Join(textParts, "")
-			}
-			if len(toolCalls) > 0 {
-				delta["tool_calls"] = toolCalls
-				choice["finish_reason"] = "tool_calls"
-			}
-			if choice["finish_reason"] == nil {
-				choice["finish_reason"] = "stop"
-			}
-		}
-	}
+	a.processAnthropicContent(anthropic, delta, choice)
 
-	if stopReason, ok := anthropic["stop_reason"].(string); ok {
-		switch stopReason {
-		case "end_turn":
-			choice["finish_reason"] = "stop"
-		case "tool_use":
-			choice["finish_reason"] = "tool_calls"
-		case "max_tokens":
-			choice["finish_reason"] = "length"
-		default:
-			choice["finish_reason"] = "stop"
-		}
-	}
+	a.processStopReason(anthropic, choice)
 
 	choice["delta"] = delta
-	choices = append(choices, choice)
-	openai["choices"] = choices
+	openai["choices"] = []interface{}{choice}
 
-	if usage, ok := anthropic["usage"].(map[string]interface{}); ok {
-		openai["usage"] = map[string]interface{}{
-			"prompt_tokens":     usage["input_tokens"],
-			"completion_tokens": usage["output_tokens"],
-			"total_tokens":      addFloat64(usage["input_tokens"], usage["output_tokens"]),
-		}
-	}
+	a.processUsage(anthropic, openai)
 
 	return openai
+}
+
+func (a *AnthropicAdapter) processAnthropicContent(anthropic, delta, choice map[string]interface{}) {
+	content, ok := anthropic["content"]
+	if !ok {
+		return
+	}
+
+	switch c := content.(type) {
+	case string:
+		delta["content"] = c
+		choice["finish_reason"] = "stop"
+	case []interface{}:
+		textParts, toolCalls := a.extractContentBlocks(c)
+		if len(textParts) > 0 {
+			delta["content"] = strings.Join(textParts, "")
+		}
+		if len(toolCalls) > 0 {
+			delta["tool_calls"] = toolCalls
+			choice["finish_reason"] = "tool_calls"
+		}
+		if choice["finish_reason"] == nil {
+			choice["finish_reason"] = "stop"
+		}
+	}
+}
+
+func (a *AnthropicAdapter) extractContentBlocks(blocks []interface{}) ([]string, []interface{}) {
+	var textParts []string
+	var toolCalls []interface{}
+	for _, block := range blocks {
+		bm, ok := block.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		bType, _ := bm["type"].(string)
+		switch bType {
+		case "text":
+			if t, ok := bm["text"].(string); ok {
+				textParts = append(textParts, t)
+			}
+		case "tool_use":
+			toolCalls = append(toolCalls, a.convertToolUseBlock(bm))
+		case "tool_result":
+			if t, ok := bm["content"].(string); ok {
+				textParts = append(textParts, t)
+			}
+		}
+	}
+	return textParts, toolCalls
+}
+
+func (a *AnthropicAdapter) convertToolUseBlock(bm map[string]interface{}) map[string]interface{} {
+	tc := map[string]interface{}{
+		"id":   bm["id"],
+		"type": "function",
+		"function": map[string]interface{}{
+			"name":      bm["name"],
+			"arguments": "{}",
+		},
+	}
+	if inp, ok := bm["input"]; ok {
+		argsBytes, _ := json.Marshal(inp)
+		tc["function"].(map[string]interface{})["arguments"] = string(argsBytes)
+	}
+	return tc
+}
+
+func (a *AnthropicAdapter) processStopReason(anthropic, choice map[string]interface{}) {
+	stopReason, ok := anthropic["stop_reason"].(string)
+	if !ok {
+		return
+	}
+
+	switch stopReason {
+	case "end_turn":
+		choice["finish_reason"] = "stop"
+	case "tool_use":
+		choice["finish_reason"] = "tool_calls"
+	case "max_tokens":
+		choice["finish_reason"] = "length"
+	default:
+		choice["finish_reason"] = "stop"
+	}
+}
+
+func (a *AnthropicAdapter) processUsage(anthropic, openai map[string]interface{}) {
+	usage, ok := anthropic["usage"].(map[string]interface{})
+	if !ok {
+		return
+	}
+
+	openai["usage"] = map[string]interface{}{
+		"prompt_tokens":     usage["input_tokens"],
+		"completion_tokens": usage["output_tokens"],
+		"total_tokens":      addFloat64(usage["input_tokens"], usage["output_tokens"]),
+	}
 }
 
 func addFloat64(a, b interface{}) float64 {

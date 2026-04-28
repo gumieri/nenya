@@ -842,97 +842,146 @@ func (p *Proxy) injectAutoSearch(gw *gateway.NenyaGateway, ctx context.Context, 
 		return
 	}
 
-	if len(messages) == 0 {
-		return
-	}
-	lastMsg, ok := messages[len(messages)-1].(map[string]interface{})
-	if !ok {
-		return
-	}
-	lastRole, _ := lastMsg["role"].(string)
-	if lastRole != "user" {
-		return
-	}
-
-	query := gateway.ExtractContentText(lastMsg)
+	query, _ := p.extractAutoSearchQuery(messages)
 	if query == "" {
 		return
 	}
 
-	// Redact secrets from the query before sending it to an external MCP server.
-	// The content pipeline runs after this function, so raw user content
-	// (potentially containing secrets) would otherwise leave the gateway.
+	query = p.redactQuery(gw, query)
+
+	for _, serverName := range agent.MCP.Servers {
+		if !p.canPerformAutoSearch(gw, serverName) {
+			continue
+		}
+
+		toolName := p.resolveSearchTool(gw, serverName, agent.MCP.SearchTool, agentName)
+		if toolName == "" {
+			continue
+		}
+
+		if result := p.executeAutoSearch(gw, ctx, serverName, toolName, query, agentName); result != nil {
+			p.injectAutoSearchContext(gw, payload, messages, serverName, result, toolName, agentName)
+			break
+		}
+	}
+}
+
+func (p *Proxy) extractAutoSearchQuery(messages []interface{}) (string, map[string]interface{}) {
+	if len(messages) == 0 {
+		return "", nil
+	}
+	lastMsg, ok := messages[len(messages)-1].(map[string]interface{})
+	if !ok {
+		return "", nil
+	}
+	lastRole, _ := lastMsg["role"].(string)
+	if lastRole != "user" {
+		return "", nil
+	}
+	query := gateway.ExtractContentText(lastMsg)
+	return query, lastMsg
+}
+
+func (p *Proxy) redactQuery(gw *gateway.NenyaGateway, query string) string {
 	query = pipeline.RedactSecrets(query, gw.Config.SecurityFilter.Enabled, gw.SecretPatterns, gw.Config.SecurityFilter.RedactionLabel)
 	if gw.EntropyFilter != nil {
 		query = gw.EntropyFilter.RedactHighEntropy(query, gw.Config.SecurityFilter.RedactionLabel)
 	}
+	return query
+}
 
-	searchTool := agent.MCP.SearchTool
-	for _, serverName := range agent.MCP.Servers {
-		client, ok := gw.MCPClients[serverName]
-		if !ok || !client.Ready() {
-			continue
-		}
+func (p *Proxy) canPerformAutoSearch(gw *gateway.NenyaGateway, serverName string) bool {
+	client, ok := gw.MCPClients[serverName]
+	return ok && client.Ready()
+}
 
-		toolName := searchTool
-		if toolName == "" {
-			toolName = p.discoverToolByPrefix(gw, serverName, "search")
-			if toolName == "" {
-				gw.Logger.Warn("MCP auto-search: no 'search' tool found on server",
-					"server", serverName, "agent", agentName)
-				continue
-			}
-		}
-
-		start := time.Now()
-		result, err := client.CallTool(ctx, toolName, map[string]any{
-			"query": query,
-			"limit": 5,
-		})
-		duration := time.Since(start)
-		if err != nil {
-			gw.Logger.Warn("MCP auto-search failed, proceeding without",
-				"server", serverName, "agent", agentName, "err", err,
-				"duration_ms", duration.Milliseconds())
-			gw.Metrics.RecordMCPAutoSearch(serverName, agentName, false, err)
-			continue
-		}
-		if result == nil || result.Text() == "" {
-			gw.Logger.Debug("MCP auto-search: no results",
-				"server", serverName, "agent", agentName,
-				"duration_ms", duration.Milliseconds())
-			gw.Metrics.RecordMCPAutoSearch(serverName, agentName, false, nil)
-			continue
-		}
-
-		resultText := result.Text()
-		// Redact secrets from external MCP content before injecting into the
-		// conversation as a system message, which would otherwise bypass the
-		// content pipeline that runs after this function.
-		resultText = pipeline.RedactSecrets(resultText, gw.Config.SecurityFilter.Enabled, gw.SecretPatterns, gw.Config.SecurityFilter.RedactionLabel)
-		if gw.EntropyFilter != nil {
-			resultText = gw.EntropyFilter.RedactHighEntropy(resultText, gw.Config.SecurityFilter.RedactionLabel)
-		}
-		contextStr := fmt.Sprintf("[Memory context from %s]\n%s", serverName, resultText)
-		memoryMsg := map[string]interface{}{
-			"role":    "system",
-			"content": contextStr,
-		}
-
-		updated := make([]interface{}, 0, util.AddCap(1, len(messages)))
-		updated = append(updated, messages[:len(messages)-1]...)
-		updated = append(updated, memoryMsg)
-		updated = append(updated, messages[len(messages)-1:]...)
-		payload["messages"] = updated
-
-		gw.Logger.Debug("MCP auto-search context injected",
-			"server", serverName, "agent", agentName,
-			"tool", toolName,
-			"duration_ms", duration.Milliseconds(),
-			"result_len", len(result.Text()))
-		gw.Metrics.RecordMCPAutoSearch(serverName, agentName, true, nil)
-		break
+func (p *Proxy) resolveSearchTool(gw *gateway.NenyaGateway, serverName, configuredTool, agentName string) string {
+	if configuredTool != "" {
+		return configuredTool
 	}
+	toolName := p.discoverToolByPrefix(gw, serverName, "search")
+	if toolName == "" {
+		gw.Logger.Warn("MCP auto-search: no 'search' tool found on server",
+			"server", serverName, "agent", agentName)
+	}
+	return toolName
+}
+
+type autoSearchResult struct {
+	text      string
+	toolName  string
+	duration  time.Duration
+	server    string
+	agentName string
+}
+
+func (p *Proxy) executeAutoSearch(gw *gateway.NenyaGateway, ctx context.Context, serverName, toolName, query, agentName string) *autoSearchResult {
+	start := time.Now()
+	result, err := p.mcpClientCallTool(gw, ctx, serverName, toolName, query)
+	duration := time.Since(start)
+
+	if err != nil {
+		gw.Logger.Warn("MCP auto-search failed, proceeding without",
+			"server", serverName, "agent", agentName, "err", err,
+			"duration_ms", duration.Milliseconds())
+		gw.Metrics.RecordMCPAutoSearch(serverName, agentName, false, err)
+		return nil
+	}
+	if result == nil || result.Text() == "" {
+		gw.Logger.Debug("MCP auto-search: no results",
+			"server", serverName, "agent", agentName,
+			"duration_ms", duration.Milliseconds())
+		gw.Metrics.RecordMCPAutoSearch(serverName, agentName, false, nil)
+		return nil
+	}
+
+	return &autoSearchResult{
+		text:      p.redactSearchResult(gw, result.Text()),
+		toolName:  toolName,
+		duration:  duration,
+		server:    serverName,
+		agentName: agentName,
+	}
+}
+
+func (p *Proxy) mcpClientCallTool(gw *gateway.NenyaGateway, ctx context.Context, serverName, toolName, query string) (*mcp.CallToolResult, error) {
+	client, ok := gw.MCPClients[serverName]
+	if !ok {
+		return nil, fmt.Errorf("MCP client not found")
+	}
+	return client.CallTool(ctx, toolName, map[string]any{
+		"query": query,
+		"limit": 5,
+	})
+}
+
+func (p *Proxy) redactSearchResult(gw *gateway.NenyaGateway, resultText string) string {
+	resultText = pipeline.RedactSecrets(resultText, gw.Config.SecurityFilter.Enabled, gw.SecretPatterns, gw.Config.SecurityFilter.RedactionLabel)
+	if gw.EntropyFilter != nil {
+		resultText = gw.EntropyFilter.RedactHighEntropy(resultText, gw.Config.SecurityFilter.RedactionLabel)
+	}
+	return resultText
+}
+
+func (p *Proxy) injectAutoSearchContext(gw *gateway.NenyaGateway, payload map[string]interface{}, messages []interface{}, serverName string, result *autoSearchResult, toolName, agentName string) {
+	contextStr := fmt.Sprintf("[Memory context from %s]\n%s", serverName, result.text)
+	memoryMsg := map[string]interface{}{
+		"role":    "system",
+		"content": contextStr,
+	}
+
+	updated := make([]interface{}, 0, util.AddCap(1, len(messages)))
+	updated = append(updated, messages[:len(messages)-1]...)
+	updated = append(updated, memoryMsg)
+	updated = append(updated, messages[len(messages)-1:]...)
+	payload["messages"] = updated
+
+	gw.Logger.Debug("MCP auto-search context injected",
+		"server", serverName, "agent", agentName,
+		"tool", toolName,
+		"duration_ms", result.duration.Milliseconds(),
+		"result_len", len(result.text))
+	gw.Metrics.RecordMCPAutoSearch(serverName, agentName, true, nil)
 }
 
 func (p *Proxy) forwardToUpstreamWithMCP(gw *gateway.NenyaGateway,

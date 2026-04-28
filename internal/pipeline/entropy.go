@@ -93,11 +93,20 @@ func tokenizeForEntropy(text string) []tokenSpan {
 }
 
 func isDelimiter(r rune) bool {
-	return r == ' ' || r == '\t' || r == '\n' || r == '\r' ||
-		r == '"' || r == '\'' || r == '`' || r == ',' ||
-		r == ';' || r == '(' || r == ')' || r == '[' ||
-		r == ']' || r == '{' || r == '}' || r == '=' ||
-		r == ':' || r == '|' || r == '<' || r == '>'
+	switch r {
+	case ' ', '\t', '\n', '\r':
+		return true
+	case '"', '\'', '`', ',':
+		return true
+	case ';', '(', ')', '[':
+		return true
+	case ']', '{', '}', '=':
+		return true
+	case ':', '|', '<', '>':
+		return true
+	default:
+		return false
+	}
 }
 
 func (f *EntropyFilter) RedactHighEntropy(text string, label string) string {

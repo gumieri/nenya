@@ -76,33 +76,56 @@ func CallEngine(ctx context.Context, httpClient *http.Client, provider *config.P
 	}
 
 	var response map[string]interface{}
-	if err := json.NewDecoder(io.LimitReader(resp.Body, MaxOllamaResponseBytes)).Decode(&response); err != nil {
-		return "", fmt.Errorf("failed to decode engine response: %v", err)
+	if decodeErr := json.NewDecoder(io.LimitReader(resp.Body, MaxOllamaResponseBytes)).Decode(&response); decodeErr != nil {
+		return "", fmt.Errorf("failed to decode engine response: %v", decodeErr)
 	}
 
-	var output string
-	switch apiFormat {
-	case "ollama":
-		var ok bool
-		output, ok = response["response"].(string)
-		if !ok {
-			return "", fmt.Errorf("engine response missing 'response' field")
-		}
-	default:
-		if choices, ok := response["choices"].([]interface{}); ok && len(choices) > 0 {
-			if choice, ok := choices[0].(map[string]interface{}); ok {
-				if msg, ok := choice["message"].(map[string]interface{}); ok {
-					if content, ok := msg["content"].(string); ok {
-						output = content
-					}
-				}
-			}
-		}
-		if output == "" {
-			return "", fmt.Errorf("openai response missing content")
-		}
+	output, err := extractEngineOutput(response, apiFormat)
+	if err != nil {
+		return "", err
 	}
 	return output, nil
+}
+
+func extractEngineOutput(response map[string]interface{}, apiFormat string) (string, error) {
+	switch apiFormat {
+	case "ollama":
+		return extractOllamaOutput(response)
+	default:
+		return extractOpenAIOutput(response)
+	}
+}
+
+func extractOllamaOutput(response map[string]interface{}) (string, error) {
+	output, ok := response["response"].(string)
+	if !ok {
+		return "", fmt.Errorf("engine response missing 'response' field")
+	}
+	return output, nil
+}
+
+func extractOpenAIOutput(response map[string]interface{}) (string, error) {
+	choices, ok := response["choices"].([]interface{})
+	if !ok || len(choices) == 0 {
+		return "", fmt.Errorf("openai response missing choices")
+	}
+
+	choice, ok := choices[0].(map[string]interface{})
+	if !ok {
+		return "", fmt.Errorf("openai choice is not an object")
+	}
+
+	msg, ok := choice["message"].(map[string]interface{})
+	if !ok {
+		return "", fmt.Errorf("openai choice missing message")
+	}
+
+	content, ok := msg["content"].(string)
+	if !ok {
+		return "", fmt.Errorf("openai message missing content")
+	}
+
+	return content, nil
 }
 
 func CallEngineChain(ctx context.Context, httpClient, ollamaClient *http.Client,
