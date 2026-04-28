@@ -59,17 +59,6 @@ func ResolveProviders(modelName string, providers map[string]*config.Provider, c
 		}
 	}
 
-	if entry, ok := config.ModelRegistry[modelName]; ok {
-		if p, ok := providers[entry.Provider]; ok {
-			return []ProviderMatch{{
-				Provider:   p.Name,
-				Model:      modelName,
-				MaxContext: entry.MaxContext,
-				MaxOutput:  entry.MaxOutput,
-			}}
-		}
-	}
-
 	return nil
 }
 
