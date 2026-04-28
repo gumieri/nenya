@@ -118,33 +118,7 @@ func (a *GeminiAdapter) MutateResponse(body []byte) ([]byte, error) {
 		return body, nil
 	}
 
-	transformed := false
-	if choices, ok := chunk["choices"].([]interface{}); ok && len(choices) > 0 {
-		if choice, ok := choices[0].(map[string]interface{}); ok {
-			if delta, ok := choice["delta"].(map[string]interface{}); ok {
-				if toolCalls, ok := delta["tool_calls"].([]interface{}); ok {
-					for i, tc := range toolCalls {
-						if tcMap, ok := tc.(map[string]interface{}); ok {
-							if _, exists := tcMap["index"]; !exists {
-								tcMap["index"] = i
-								transformed = true
-							}
-							if a.thoughtSigCache != nil {
-								if tcID, _ := tcMap["id"].(string); tcID != "" {
-									if extra, hasExtra := tcMap["extra_content"]; hasExtra {
-										a.thoughtSigCache.Store(tcID, extra)
-										transformed = true
-									}
-								}
-							}
-						}
-					}
-				}
-			}
-		}
-	}
-
-	if !transformed {
+	if !a.transformToolCallsInDelta(chunk) {
 		return body, nil
 	}
 
@@ -153,6 +127,60 @@ func (a *GeminiAdapter) MutateResponse(body []byte) ([]byte, error) {
 		return body, fmt.Errorf("gemini: failed to marshal mutated response: %w", err)
 	}
 	return out, nil
+}
+
+func (a *GeminiAdapter) transformToolCallsInDelta(chunk map[string]interface{}) bool {
+	choices, ok := chunk["choices"].([]interface{})
+	if !ok || len(choices) == 0 {
+		return false
+	}
+	choice, ok := choices[0].(map[string]interface{})
+	if !ok {
+		return false
+	}
+	delta, ok := choice["delta"].(map[string]interface{})
+	if !ok {
+		return false
+	}
+	toolCalls, ok := delta["tool_calls"].([]interface{})
+	if !ok {
+		return false
+	}
+	return a.enrichToolCalls(toolCalls)
+}
+
+func (a *GeminiAdapter) enrichToolCalls(toolCalls []interface{}) bool {
+	transformed := false
+	for i, tc := range toolCalls {
+		tcMap, ok := tc.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		if _, exists := tcMap["index"]; !exists {
+			tcMap["index"] = i
+			transformed = true
+		}
+		if a.storeExtraContent(tcMap) {
+			transformed = true
+		}
+	}
+	return transformed
+}
+
+func (a *GeminiAdapter) storeExtraContent(tcMap map[string]interface{}) bool {
+	if a.thoughtSigCache == nil {
+		return false
+	}
+	tcID, _ := tcMap["id"].(string)
+	if tcID == "" {
+		return false
+	}
+	extra, hasExtra := tcMap["extra_content"]
+	if !hasExtra {
+		return false
+	}
+	a.thoughtSigCache.Store(tcID, extra)
+	return true
 }
 
 func (a *GeminiAdapter) NormalizeError(statusCode int, body []byte) ErrorClass {
@@ -198,8 +226,25 @@ func (a *GeminiAdapter) geminiSanitize(payload map[string]interface{}) bool {
 		return false
 	}
 
-	toolCallMap := make(map[string]*toolCallInfo)
+	toolCallMap := a.buildToolCallMap(messages)
+	orphanedIDs := a.findOrphanedIDs(toolCallMap)
 
+	if len(orphanedIDs) == 0 {
+		a.injectToolMessageNames(messages, toolCallMap)
+		return false
+	}
+
+	filtered := a.filterOrphanedMessages(messages, orphanedIDs, toolCallMap)
+	if len(filtered) == len(messages) {
+		return false
+	}
+
+	payload["messages"] = filtered
+	return true
+}
+
+func (a *GeminiAdapter) buildToolCallMap(messages []interface{}) map[string]*toolCallInfo {
+	toolCallMap := make(map[string]*toolCallInfo)
 	for _, msgRaw := range messages {
 		msg, ok := msgRaw.(map[string]interface{})
 		if !ok {
@@ -217,73 +262,79 @@ func (a *GeminiAdapter) geminiSanitize(payload map[string]interface{}) bool {
 		if !ok {
 			continue
 		}
-		for _, tcRaw := range toolCalls {
-			tc, ok := tcRaw.(map[string]interface{})
-			if !ok {
-				continue
-			}
-			tcID, _ := tc["id"].(string)
-			if tcID == "" {
-				continue
-			}
-			_, hasExtra := tc["extra_content"]
-			if !hasExtra {
-				if a.thoughtSigCache != nil {
-					if cached, found := a.thoughtSigCache.Load(tcID); found {
-						tc["extra_content"] = cached
-						if a.logger != nil {
-							a.logger.Debug("gemini: injected cached thought_signature", "tool_call_id", tcID)
-						}
-						hasExtra = true
-					}
-				}
-			}
-			var fnName string
-			if fn, ok := tc["function"].(map[string]interface{}); ok {
-				fnName, _ = fn["name"].(string)
-			}
-			toolCallMap[tcID] = &toolCallInfo{id: tcID, name: fnName, hasExtra: hasExtra}
+		a.indexToolCalls(toolCalls, toolCallMap)
+	}
+	return toolCallMap
+}
+
+func (a *GeminiAdapter) indexToolCalls(toolCalls []interface{}, toolCallMap map[string]*toolCallInfo) {
+	for _, tcRaw := range toolCalls {
+		tc, ok := tcRaw.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		tcID, _ := tc["id"].(string)
+		if tcID == "" {
+			continue
+		}
+		hasExtra := a.ensureExtraContent(tc, tcID)
+		var fnName string
+		if fn, ok := tc["function"].(map[string]interface{}); ok {
+			fnName, _ = fn["name"].(string)
+		}
+		toolCallMap[tcID] = &toolCallInfo{id: tcID, name: fnName, hasExtra: hasExtra}
+	}
+}
+
+func (a *GeminiAdapter) ensureExtraContent(tc map[string]interface{}, tcID string) bool {
+	_, hasExtra := tc["extra_content"]
+	if !hasExtra && a.thoughtSigCache != nil {
+		if cached, found := a.thoughtSigCache.Load(tcID); found {
+			tc["extra_content"] = cached
+			a.logDebug("gemini: injected cached thought_signature", "tool_call_id", tcID)
+			return true
 		}
 	}
+	return hasExtra
+}
 
+func (a *GeminiAdapter) findOrphanedIDs(toolCallMap map[string]*toolCallInfo) map[string]bool {
 	orphanedIDs := make(map[string]bool)
 	for tcID, info := range toolCallMap {
 		if !info.hasExtra {
 			orphanedIDs[tcID] = true
-			if a.logger != nil {
-				a.logger.Warn("gemini: tool_call missing thought_signature, will strip pair",
-					"tool_call_id", tcID)
-			}
+			a.logWarn("gemini: tool_call missing thought_signature, will strip pair",
+				"tool_call_id", tcID)
 		}
 	}
+	return orphanedIDs
+}
 
-	if len(orphanedIDs) == 0 {
-		for _, msgRaw := range messages {
-			msg, ok := msgRaw.(map[string]interface{})
-			if !ok {
-				continue
-			}
-			role, _ := msg["role"].(string)
-			if role != "tool" {
-				continue
-			}
-			toolCallID, _ := msg["tool_call_id"].(string)
-			if toolCallID == "" {
-				continue
-			}
-			if _, hasName := msg["name"]; hasName {
-				continue
-			}
-			if info, ok := toolCallMap[toolCallID]; ok && info.name != "" {
-				msg["name"] = info.name
-				if a.logger != nil {
-					a.logger.Debug("gemini: injected function name on tool message", "tool_call_id", toolCallID, "name", info.name)
-				}
-			}
+func (a *GeminiAdapter) injectToolMessageNames(messages []interface{}, toolCallMap map[string]*toolCallInfo) {
+	for _, msgRaw := range messages {
+		msg, ok := msgRaw.(map[string]interface{})
+		if !ok {
+			continue
 		}
-		return false
+		role, _ := msg["role"].(string)
+		if role != "tool" {
+			continue
+		}
+		toolCallID, _ := msg["tool_call_id"].(string)
+		if toolCallID == "" {
+			continue
+		}
+		if _, hasName := msg["name"]; hasName {
+			continue
+		}
+		if info, ok := toolCallMap[toolCallID]; ok && info.name != "" {
+			msg["name"] = info.name
+			a.logDebug("gemini: injected function name on tool message", "tool_call_id", toolCallID, "name", info.name)
+		}
 	}
+}
 
+func (a *GeminiAdapter) filterOrphanedMessages(messages []interface{}, orphanedIDs map[string]bool, toolCallMap map[string]*toolCallInfo) []interface{} {
 	filtered := make([]interface{}, 0, len(messages))
 	for i, msgRaw := range messages {
 		msg, ok := msgRaw.(map[string]interface{})
@@ -294,79 +345,108 @@ func (a *GeminiAdapter) geminiSanitize(payload map[string]interface{}) bool {
 		role, _ := msg["role"].(string)
 
 		if role == "assistant" {
-			toolCallsRaw, hasTC := msg["tool_calls"]
-			if hasTC {
-				toolCalls, ok := toolCallsRaw.([]interface{})
-				if ok {
-					cleaned := make([]interface{}, 0, len(toolCalls))
-					for _, tcRaw := range toolCalls {
-						tc, ok := tcRaw.(map[string]interface{})
-						if !ok {
-							cleaned = append(cleaned, tcRaw)
-							continue
-						}
-						tcID, _ := tc["id"].(string)
-						if orphanedIDs[tcID] {
-							continue
-						}
-						cleaned = append(cleaned, tcRaw)
-					}
-					if len(cleaned) == 0 {
-						var content string
-						if a.extractContent != nil {
-							content = a.extractContent(msg)
-						}
-						if content == "" {
-							if a.logger != nil {
-								a.logger.Debug("gemini: removed empty assistant message after stripping orphaned tool_calls", "index", i)
-							}
-							continue
-						}
-						delete(msg, "tool_calls")
-					} else {
-						msg["tool_calls"] = cleaned
-					}
-				}
-			}
-			filtered = append(filtered, msgRaw)
+			a.assistantOrphanedFilter(msg, &filtered, i, orphanedIDs, msgRaw)
 			continue
 		}
 
 		if role == "tool" {
-			toolCallID, _ := msg["tool_call_id"].(string)
-			if toolCallID != "" && orphanedIDs[toolCallID] {
-				if a.logger != nil {
-					a.logger.Debug("gemini: removed orphaned tool response", "tool_call_id", toolCallID)
-				}
-				continue
-			}
-
-			if _, hasName := msg["name"]; !hasName {
-				if info, ok := toolCallMap[toolCallID]; ok && info.name != "" {
-					msg["name"] = info.name
-					if a.logger != nil {
-						a.logger.Debug("gemini: injected function name on tool message",
-							"tool_call_id", toolCallID, "name", info.name)
-					}
-				} else {
-					msg["name"] = "unknown_function"
-					if a.logger != nil {
-						a.logger.Warn("gemini: assigned synthetic name to tool message",
-							"tool_call_id", toolCallID)
-					}
-				}
-			}
-
-			filtered = append(filtered, msgRaw)
+			a.toolOrphanedFilter(msg, &filtered, orphanedIDs, toolCallMap, msgRaw)
 			continue
 		}
 
 		filtered = append(filtered, msgRaw)
 	}
+	return filtered
+}
 
-	if len(filtered) != len(messages) {
-		payload["messages"] = filtered
-		return true
+func (a *GeminiAdapter) assistantOrphanedFilter(msg map[string]interface{}, filtered *[]interface{}, i int, orphanedIDs map[string]bool, msgRaw interface{}) {
+	toolCallsRaw, hasTC := msg["tool_calls"]
+	if !hasTC {
+		*filtered = append(*filtered, msgRaw)
+		return
 	}
-	return false
+	toolCalls, ok := toolCallsRaw.([]interface{})
+	if !ok {
+		*filtered = append(*filtered, msgRaw)
+		return
+	}
+
+	cleaned := a.stripOrphanedToolCalls(toolCalls, orphanedIDs)
+	if len(cleaned) == 0 {
+		a.dropEmptyAssistantAfterStrip(msg, i, filtered, msgRaw)
+		return
+	}
+	msg["tool_calls"] = cleaned
+	*filtered = append(*filtered, msgRaw)
+}
+
+func (a *GeminiAdapter) dropEmptyAssistantAfterStrip(msg map[string]interface{}, i int, filtered *[]interface{}, msgRaw interface{}) {
+	var content string
+	if a.extractContent != nil {
+		content = a.extractContent(msg)
+	}
+	if content == "" {
+		a.logDebug("gemini: removed empty assistant message after stripping orphaned tool_calls", "index", i)
+		return
+	}
+	delete(msg, "tool_calls")
+	*filtered = append(*filtered, msgRaw)
+}
+
+func (a *GeminiAdapter) stripOrphanedToolCalls(toolCalls []interface{}, orphanedIDs map[string]bool) []interface{} {
+	cleaned := make([]interface{}, 0, len(toolCalls))
+	for _, tcRaw := range toolCalls {
+		tc, ok := tcRaw.(map[string]interface{})
+		if !ok {
+			cleaned = append(cleaned, tcRaw)
+			continue
+		}
+		tcID, _ := tc["id"].(string)
+		if orphanedIDs[tcID] {
+			continue
+		}
+		cleaned = append(cleaned, tcRaw)
+	}
+	return cleaned
+}
+
+func (a *GeminiAdapter) toolOrphanedFilter(msg map[string]interface{}, filtered *[]interface{}, orphanedIDs map[string]bool, toolCallMap map[string]*toolCallInfo, msgRaw interface{}) {
+	toolCallID, _ := msg["tool_call_id"].(string)
+
+	if toolCallID != "" && orphanedIDs[toolCallID] {
+		a.logDebug("gemini: removed orphaned tool response", "tool_call_id", toolCallID)
+		return
+	}
+
+	a.ensureToolMessageName(msg, toolCallID, toolCallMap)
+	*filtered = append(*filtered, msgRaw)
+}
+
+func (a *GeminiAdapter) ensureToolMessageName(msg map[string]interface{}, toolCallID string, toolCallMap map[string]*toolCallInfo) {
+	if _, hasName := msg["name"]; hasName {
+		return
+	}
+
+	if info, ok := toolCallMap[toolCallID]; ok && info.name != "" {
+		msg["name"] = info.name
+		a.logDebug("gemini: injected function name on tool message",
+			"tool_call_id", toolCallID, "name", info.name)
+		return
+	}
+
+	msg["name"] = "unknown_function"
+	a.logWarn("gemini: assigned synthetic name to tool message",
+		"tool_call_id", toolCallID)
+}
+
+func (a *GeminiAdapter) logDebug(msg string, args ...any) {
+	if a.logger != nil {
+		a.logger.Debug(msg, args...)
+	}
+}
+
+func (a *GeminiAdapter) logWarn(msg string, args ...any) {
+	if a.logger != nil {
+		a.logger.Warn(msg, args...)
+	}
 }

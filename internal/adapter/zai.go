@@ -102,7 +102,27 @@ func (a *ZAIAdapter) zaiSanitize(payload map[string]interface{}) bool {
 		return false
 	}
 
-	validToolCallIDs := make(map[string]string)
+	validIDs := a.collectValidToolCallIDs(messages)
+
+	filtered := a.zaiFilterMessages(messages, validIDs)
+	if len(filtered) == 0 {
+		return false
+	}
+
+	merged := a.zaiMergeSequentialMessages(filtered)
+	merged = a.zaiPrependBridgeIfNeeded(merged)
+
+	if len(merged) != len(messages) {
+		a.logDebug("zai: sanitized message sequence",
+			"messages_before", len(messages), "messages_after", len(merged))
+	}
+
+	payload["messages"] = merged
+	return true
+}
+
+func (a *ZAIAdapter) collectValidToolCallIDs(messages []interface{}) map[string]string {
+	ids := make(map[string]string)
 	for _, msgRaw := range messages {
 		msg, ok := msgRaw.(map[string]interface{})
 		if !ok {
@@ -133,10 +153,13 @@ func (a *ZAIAdapter) zaiSanitize(payload map[string]interface{}) bool {
 			if fn, ok := tc["function"].(map[string]interface{}); ok {
 				fnName, _ = fn["name"].(string)
 			}
-			validToolCallIDs[tcID] = fnName
+			ids[tcID] = fnName
 		}
 	}
+	return ids
+}
 
+func (a *ZAIAdapter) zaiFilterMessages(messages []interface{}, validIDs map[string]string) []interface{} {
 	filtered := make([]interface{}, 0, len(messages))
 	for _, msgRaw := range messages {
 		msg, ok := msgRaw.(map[string]interface{})
@@ -147,44 +170,59 @@ func (a *ZAIAdapter) zaiSanitize(payload map[string]interface{}) bool {
 		role, _ := msg["role"].(string)
 		content := a.extractContent(msg)
 
-		if content == "" && role != "tool" && role != "assistant" && role != "system" {
+		if a.shouldDropMessage(role, content, msg) {
 			continue
 		}
 
-		if role == "assistant" && content == "" {
-			if tcRaw, hasTC := msg["tool_calls"]; !hasTC {
-				continue
-			} else {
-				toolCalls, ok := tcRaw.([]interface{})
-				if !ok || len(toolCalls) == 0 {
-					continue
-				}
-			}
-		}
-
 		if role == "tool" {
-			toolCallID, _ := msg["tool_call_id"].(string)
-			if toolCallID == "" {
-				if a.logger != nil {
-					a.logger.Debug("zai: removing tool message without tool_call_id")
-				}
-				continue
-			}
-			if _, ok := validToolCallIDs[toolCallID]; !ok {
-				if a.logger != nil {
-					a.logger.Debug("zai: removing orphaned tool message", "tool_call_id", toolCallID)
-				}
+			if a.shouldDropToolMessage(msg, validIDs) {
 				continue
 			}
 		}
 
 		filtered = append(filtered, msgRaw)
 	}
+	return filtered
+}
 
-	if len(filtered) == 0 {
-		return false
+func (a *ZAIAdapter) shouldDropMessage(role, content string, msg map[string]interface{}) bool {
+	if content == "" && role != "tool" && role != "assistant" && role != "system" {
+		return true
 	}
 
+	if role == "assistant" && content == "" {
+		return a.assistantHasNoToolCalls(msg)
+	}
+
+	return false
+}
+
+func (a *ZAIAdapter) assistantHasNoToolCalls(msg map[string]interface{}) bool {
+	tcRaw, hasTC := msg["tool_calls"]
+	if !hasTC {
+		return true
+	}
+	toolCalls, ok := tcRaw.([]interface{})
+	if !ok || len(toolCalls) == 0 {
+		return true
+	}
+	return false
+}
+
+func (a *ZAIAdapter) shouldDropToolMessage(msg map[string]interface{}, validIDs map[string]string) bool {
+	toolCallID, _ := msg["tool_call_id"].(string)
+	if toolCallID == "" {
+		a.logDebug("zai: removing tool message without tool_call_id")
+		return true
+	}
+	if _, ok := validIDs[toolCallID]; !ok {
+		a.logDebug("zai: removing orphaned tool message", "tool_call_id", toolCallID)
+		return true
+	}
+	return false
+}
+
+func (a *ZAIAdapter) zaiMergeSequentialMessages(filtered []interface{}) []interface{} {
 	merged := make([]interface{}, 0, len(filtered))
 	for i, msgRaw := range filtered {
 		msg, ok := msgRaw.(map[string]interface{})
@@ -192,57 +230,72 @@ func (a *ZAIAdapter) zaiSanitize(payload map[string]interface{}) bool {
 			merged = append(merged, msgRaw)
 			continue
 		}
+
+		if i == 0 {
+			merged = append(merged, msgRaw)
+			continue
+		}
+
 		role, _ := msg["role"].(string)
+		merged = a.mergeIntoLast(merged, msg, role, msgRaw)
+	}
+	return merged
+}
 
-		if i > 0 {
-			prevMsg, ok := merged[len(merged)-1].(map[string]interface{})
-			if ok {
-				prevRole, _ := prevMsg["role"].(string)
-				if prevRole == role && role == "user" {
-					prevContent := a.extractContent(prevMsg)
-					currContent := a.extractContent(msg)
-					prevMsg["content"] = prevContent + "\n\n" + currContent
-					continue
-				}
-				if prevRole == "assistant" && role == "assistant" {
-					merged = append(merged, map[string]interface{}{
-						"role":    "user",
-						"content": "Continue.",
-					})
-					if a.logger != nil {
-						a.logger.Debug("zai: inserted user bridge between consecutive assistant messages")
-					}
-				}
-			}
-		}
-
-		merged = append(merged, msgRaw)
+func (a *ZAIAdapter) mergeIntoLast(merged []interface{}, msg map[string]interface{}, role string, msgRaw interface{}) []interface{} {
+	prevMsg, ok := merged[len(merged)-1].(map[string]interface{})
+	if !ok {
+		return append(merged, msgRaw)
 	}
 
-	if len(merged) > 0 {
-		if firstMsg, ok := merged[0].(map[string]interface{}); ok {
-			if role, _ := firstMsg["role"].(string); role == "user" {
-				bridgeMsg := map[string]interface{}{
-					"role":    "system",
-					"content": "Continue the conversation.",
-				}
-				merged = append([]interface{}{bridgeMsg}, merged...)
-				if a.logger != nil {
-					a.logger.Debug("zai: prepended system bridge before leading user message")
-				}
-			}
-		}
+	prevRole, _ := prevMsg["role"].(string)
+
+	if prevRole == role && role == "user" {
+		prevContent := a.extractContent(prevMsg)
+		currContent := a.extractContent(msg)
+		prevMsg["content"] = prevContent + "\n\n" + currContent
+		return merged
 	}
 
-	if len(merged) != len(messages) {
-		if a.logger != nil {
-			a.logger.Debug("zai: sanitized message sequence",
-				"messages_before", len(messages), "messages_after", len(merged))
-		}
+	if prevRole == "assistant" && role == "assistant" {
+		merged = append(merged, map[string]interface{}{
+			"role":    "user",
+			"content": "Continue.",
+		})
+		a.logDebug("zai: inserted user bridge between consecutive assistant messages")
 	}
 
-	payload["messages"] = merged
-	return true
+	return append(merged, msgRaw)
+}
+
+func (a *ZAIAdapter) zaiPrependBridgeIfNeeded(merged []interface{}) []interface{} {
+	if len(merged) == 0 {
+		return merged
+	}
+
+	firstMsg, ok := merged[0].(map[string]interface{})
+	if !ok {
+		return merged
+	}
+
+	role, _ := firstMsg["role"].(string)
+	if role != "user" {
+		return merged
+	}
+
+	bridgeMsg := map[string]interface{}{
+		"role":    "system",
+		"content": "Continue the conversation.",
+	}
+	merged = append([]interface{}{bridgeMsg}, merged...)
+	a.logDebug("zai: prepended system bridge before leading user message")
+	return merged
+}
+
+func (a *ZAIAdapter) logDebug(msg string, args ...any) {
+	if a.logger != nil {
+		a.logger.Debug(msg, args...)
+	}
 }
 
 func init() {

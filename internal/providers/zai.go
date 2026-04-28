@@ -35,7 +35,27 @@ func zaiSanitize(deps *SanitizeDeps, payload map[string]interface{}) {
 		return
 	}
 
+	validToolCallIDs := zaiExtractValidToolCallIDs(messages)
+	filtered := zaiFilterMessages(deps, messages, validToolCallIDs)
+
+	if len(filtered) == 0 {
+		return
+	}
+
+	merged := zaiMergeConsecutiveMessages(deps, filtered)
+	merged = zaiPrependSystemBridge(deps, merged)
+
+	if len(merged) != len(messages) {
+		deps.Logger.Debug("zai: sanitized message sequence",
+			"messages_before", len(messages), "messages_after", len(merged))
+	}
+
+	payload["messages"] = merged
+}
+
+func zaiExtractValidToolCallIDs(messages []interface{}) map[string]string {
 	validToolCallIDs := make(map[string]string)
+
 	for _, msgRaw := range messages {
 		msg, ok := msgRaw.(map[string]interface{})
 		if !ok {
@@ -45,6 +65,7 @@ func zaiSanitize(deps *SanitizeDeps, payload map[string]interface{}) {
 		if role != "assistant" {
 			continue
 		}
+
 		toolCallsRaw, ok := msg["tool_calls"]
 		if !ok {
 			continue
@@ -53,6 +74,7 @@ func zaiSanitize(deps *SanitizeDeps, payload map[string]interface{}) {
 		if !ok {
 			continue
 		}
+
 		for _, tcRaw := range toolCalls {
 			tc, ok := tcRaw.(map[string]interface{})
 			if !ok {
@@ -62,15 +84,27 @@ func zaiSanitize(deps *SanitizeDeps, payload map[string]interface{}) {
 			if tcID == "" {
 				continue
 			}
-			var fnName string
-			if fn, ok := tc["function"].(map[string]interface{}); ok {
-				fnName, _ = fn["name"].(string)
-			}
+
+			fnName := zaiExtractFunctionName(tc)
 			validToolCallIDs[tcID] = fnName
 		}
 	}
 
+	return validToolCallIDs
+}
+
+func zaiExtractFunctionName(tc map[string]interface{}) string {
+	fn, ok := tc["function"].(map[string]interface{})
+	if !ok {
+		return ""
+	}
+	fnName, _ := fn["name"].(string)
+	return fnName
+}
+
+func zaiFilterMessages(deps *SanitizeDeps, messages []interface{}, validToolCallIDs map[string]string) []interface{} {
 	filtered := make([]interface{}, 0, len(messages))
+
 	for _, msgRaw := range messages {
 		msg, ok := msgRaw.(map[string]interface{})
 		if !ok {
@@ -80,41 +114,61 @@ func zaiSanitize(deps *SanitizeDeps, payload map[string]interface{}) {
 		role, _ := msg["role"].(string)
 		content := deps.ExtractContentText(msg)
 
-		if content == "" && role != "tool" && role != "assistant" && role != "system" {
+		if zaiShouldSkipMessage(role, content, msg) {
 			continue
 		}
 
-		if role == "assistant" && content == "" {
-			if tcRaw, hasTC := msg["tool_calls"]; !hasTC {
-				continue
-			} else {
-				toolCalls, ok := tcRaw.([]interface{})
-				if !ok || len(toolCalls) == 0 {
-					continue
-				}
-			}
-		}
-
-		if role == "tool" {
-			toolCallID, _ := msg["tool_call_id"].(string)
-			if toolCallID == "" {
-				deps.Logger.Debug("zai: removing tool message without tool_call_id")
-				continue
-			}
-			if _, ok := validToolCallIDs[toolCallID]; !ok {
-				deps.Logger.Debug("zai: removing orphaned tool message", "tool_call_id", toolCallID)
-				continue
-			}
+		if zaiShouldSkipToolMessage(deps, role, msg, validToolCallIDs) {
+			continue
 		}
 
 		filtered = append(filtered, msgRaw)
 	}
 
-	if len(filtered) == 0 {
-		return
+	return filtered
+}
+
+func zaiShouldSkipMessage(role, content string, msg map[string]interface{}) bool {
+	if content == "" && role != "tool" && role != "assistant" && role != "system" {
+		return true
 	}
 
+	if role == "assistant" && content == "" {
+		tcRaw, hasTC := msg["tool_calls"]
+		if !hasTC {
+			return true
+		}
+		toolCalls, ok := tcRaw.([]interface{})
+		if !ok || len(toolCalls) == 0 {
+			return true
+		}
+	}
+
+	return false
+}
+
+func zaiShouldSkipToolMessage(deps *SanitizeDeps, role string, msg map[string]interface{}, validToolCallIDs map[string]string) bool {
+	if role != "tool" {
+		return false
+	}
+
+	toolCallID, _ := msg["tool_call_id"].(string)
+	if toolCallID == "" {
+		deps.Logger.Debug("zai: removing tool message without tool_call_id")
+		return true
+	}
+
+	if _, ok := validToolCallIDs[toolCallID]; !ok {
+		deps.Logger.Debug("zai: removing orphaned tool message", "tool_call_id", toolCallID)
+		return true
+	}
+
+	return false
+}
+
+func zaiMergeConsecutiveMessages(deps *SanitizeDeps, filtered []interface{}) []interface{} {
 	merged := make([]interface{}, 0, len(filtered))
+
 	for i, msgRaw := range filtered {
 		msg, ok := msgRaw.(map[string]interface{})
 		if !ok {
@@ -126,14 +180,10 @@ func zaiSanitize(deps *SanitizeDeps, payload map[string]interface{}) {
 		if i > 0 {
 			prevMsg, ok := merged[len(merged)-1].(map[string]interface{})
 			if ok {
-				prevRole, _ := prevMsg["role"].(string)
-				if prevRole == role && role == "user" {
-					prevContent := deps.ExtractContentText(prevMsg)
-					currContent := deps.ExtractContentText(msg)
-					prevMsg["content"] = prevContent + "\n\n" + currContent
+				if zaiShouldMergeUserMessages(prevMsg, msg, role) {
 					continue
 				}
-				if prevRole == "assistant" && role == "assistant" {
+				if zaiShouldInsertAssistantBridge(prevMsg, role) {
 					merged = append(merged, map[string]interface{}{
 						"role":    "user",
 						"content": "Continue.",
@@ -146,25 +196,48 @@ func zaiSanitize(deps *SanitizeDeps, payload map[string]interface{}) {
 		merged = append(merged, msgRaw)
 	}
 
-	if len(merged) > 0 {
-		if firstMsg, ok := merged[0].(map[string]interface{}); ok {
-			if role, _ := firstMsg["role"].(string); role == "user" {
-				bridgeMsg := map[string]interface{}{
-					"role":    "system",
-					"content": "Continue the conversation.",
-				}
-				merged = append([]interface{}{bridgeMsg}, merged...)
-				deps.Logger.Debug("zai: prepended system bridge before leading user message")
-			}
-		}
+	return merged
+}
+
+func zaiShouldMergeUserMessages(prevMsg, msg map[string]interface{}, role string) bool {
+	prevRole, _ := prevMsg["role"].(string)
+	if prevRole == role && role == "user" {
+		prevContent := prevMsg["content"].(string)
+		currContent := msg["content"].(string)
+		prevMsg["content"] = prevContent + "\n\n" + currContent
+		return true
+	}
+	return false
+}
+
+func zaiShouldInsertAssistantBridge(prevMsg map[string]interface{}, role string) bool {
+	prevRole, _ := prevMsg["role"].(string)
+	return prevRole == "assistant" && role == "assistant"
+}
+
+func zaiPrependSystemBridge(deps *SanitizeDeps, merged []interface{}) []interface{} {
+	if len(merged) == 0 {
+		return merged
 	}
 
-	if len(merged) != len(messages) {
-		deps.Logger.Debug("zai: sanitized message sequence",
-			"messages_before", len(messages), "messages_after", len(merged))
+	firstMsg, ok := merged[0].(map[string]interface{})
+	if !ok {
+		return merged
 	}
 
-	payload["messages"] = merged
+	role, _ := firstMsg["role"].(string)
+	if role != "user" {
+		return merged
+	}
+
+	bridgeMsg := map[string]interface{}{
+		"role":    "system",
+		"content": "Continue the conversation.",
+	}
+	merged = append([]interface{}{bridgeMsg}, merged...)
+	deps.Logger.Debug("zai: prepended system bridge before leading user message")
+
+	return merged
 }
 
 // injectThinkingForZai enables thinking mode for Zai models that support reasoning.

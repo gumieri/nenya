@@ -32,69 +32,117 @@ func ValidateConfigurationWithPing(ctx context.Context, cfg *Config, secrets *Se
 
 	providers := ResolveProviders(cfg, secrets)
 
-	if pingProviders && cfg.SecurityFilter.Enabled && cfg.SecurityFilter.Engine.Provider == "ollama" {
-		if p, ok := providers[cfg.SecurityFilter.Engine.Provider]; ok && p.URL != "" {
-			logger.Info("checking Ollama engine health", "provider", cfg.SecurityFilter.Engine.Provider, "url", p.URL)
-			if !validateOllamaHealth(ctx, p.URL) {
-				return fmt.Errorf("ollama engine provider %q at %s is not reachable", cfg.SecurityFilter.Engine.Provider, p.URL)
-			}
-			logger.Info("Ollama engine health check passed")
-		}
+	if err := validateOllamaEngine(ctx, cfg, providers, pingProviders, logger); err != nil {
+		return err
 	}
 
-	errors := []string{}
-
-	switch cfg.Governance.TFIDFQuerySource {
-	case "", "prior_messages", "self":
-	default:
-		errors = append(errors, fmt.Sprintf("governance.tfidf_query_source: invalid value %q, must be empty, \"prior_messages\", or \"self\"", cfg.Governance.TFIDFQuerySource))
-	}
-
-	if err := ValidatePatterns("security_filter.patterns", cfg.SecurityFilter.Patterns, logger); err != nil {
-		errors = append(errors, err.Error())
-	}
-	if err := ValidatePatterns("governance.blocked_execution_patterns", cfg.Governance.BlockedExecutionPatterns, logger); err != nil {
-		errors = append(errors, err.Error())
-	}
-
-	for modelID, entry := range ModelRegistry {
-		if err := entry.Validate(); err != nil {
-			errors = append(errors, fmt.Sprintf("model_registry[%q]: %v", modelID, err))
-		}
-	}
-
-	if cfg.SecurityFilter.EntropyEnabled {
-		if cfg.SecurityFilter.EntropyThreshold <= 0 || cfg.SecurityFilter.EntropyThreshold > 8.0 {
-			errors = append(errors, "security_filter.entropy_threshold must be between 0 and 8.0")
-		}
-		if cfg.SecurityFilter.EntropyMinToken < 8 {
-			errors = append(errors, "security_filter.entropy_min_token must be >= 8")
-		}
-	}
-
-	if pingProviders {
-		for name, provider := range providers {
-			if provider.APIKey == "" {
-				logger.Warn("provider has no API key configured", "provider", name)
-				continue
-			}
-
-			logger.Info("validating provider", "provider", name, "url", provider.URL)
-			if err := validateProvider(ctx, name, provider, logger); err != nil {
-				errors = append(errors, fmt.Sprintf("%s: %v", name, err))
-				logger.Error("provider validation failed", "provider", name, "err", err)
-			} else {
-				logger.Info("provider validation passed", "provider", name)
-			}
-		}
-	}
-
+	errors := collectValidationErrors(ctx, cfg, providers, pingProviders, logger)
 	if len(errors) > 0 {
 		return fmt.Errorf("provider validation failed:\n  - %s", strings.Join(errors, "\n  - "))
 	}
 
 	logger.Info("configuration validation completed successfully")
 	return nil
+}
+
+func validateOllamaEngine(ctx context.Context, cfg *Config, providers map[string]*Provider, pingProviders bool, logger *slog.Logger) error {
+	if !pingProviders {
+		return nil
+	}
+	if !cfg.SecurityFilter.Enabled {
+		return nil
+	}
+	if cfg.SecurityFilter.Engine.Provider != "ollama" {
+		return nil
+	}
+
+	p, ok := providers[cfg.SecurityFilter.Engine.Provider]
+	if !ok || p.URL == "" {
+		return nil
+	}
+
+	logger.Info("checking Ollama engine health", "provider", cfg.SecurityFilter.Engine.Provider, "url", p.URL)
+	if !validateOllamaHealth(ctx, p.URL) {
+		return fmt.Errorf("ollama engine provider %q at %s is not reachable", cfg.SecurityFilter.Engine.Provider, p.URL)
+	}
+	logger.Info("Ollama engine health check passed")
+	return nil
+}
+
+func collectValidationErrors(ctx context.Context, cfg *Config, providers map[string]*Provider, pingProviders bool, logger *slog.Logger) []string {
+	errors := []string{}
+
+	errors = append(errors, validateTFIDFQuerySource(cfg.Governance.TFIDFQuerySource)...)
+	errors = append(errors, validatePatternsErrors("security_filter.patterns", cfg.SecurityFilter.Patterns, logger)...)
+	errors = append(errors, validatePatternsErrors("governance.blocked_execution_patterns", cfg.Governance.BlockedExecutionPatterns, logger)...)
+	errors = append(errors, validateModelRegistryErrors(logger)...)
+	errors = append(errors, validateEntropyConfig(cfg.SecurityFilter)...)
+
+	if pingProviders {
+		errors = append(errors, validateProviders(ctx, providers, logger)...)
+	}
+
+	return errors
+}
+
+func validateTFIDFQuerySource(source string) []string {
+	switch source {
+	case "", "prior_messages", "self":
+		return nil
+	default:
+		return []string{fmt.Sprintf("governance.tfidf_query_source: invalid value %q, must be empty, \"prior_messages\", or \"self\"", source)}
+	}
+}
+
+func validatePatternsErrors(label string, patterns []string, logger *slog.Logger) []string {
+	if err := ValidatePatterns(label, patterns, logger); err != nil {
+		return []string{err.Error()}
+	}
+	return nil
+}
+
+func validateModelRegistryErrors(logger *slog.Logger) []string {
+	errors := []string{}
+	for modelID, entry := range ModelRegistry {
+		if err := entry.Validate(); err != nil {
+			errors = append(errors, fmt.Sprintf("model_registry[%q]: %v", modelID, err))
+		}
+	}
+	return errors
+}
+
+func validateEntropyConfig(sf SecurityFilterConfig) []string {
+	if !sf.EntropyEnabled {
+		return nil
+	}
+
+	errors := []string{}
+	if sf.EntropyThreshold <= 0 || sf.EntropyThreshold > 8.0 {
+		errors = append(errors, "security_filter.entropy_threshold must be between 0 and 8.0")
+	}
+	if sf.EntropyMinToken < 8 {
+		errors = append(errors, "security_filter.entropy_min_token must be >= 8")
+	}
+	return errors
+}
+
+func validateProviders(ctx context.Context, providers map[string]*Provider, logger *slog.Logger) []string {
+	errors := []string{}
+	for name, provider := range providers {
+		if provider.APIKey == "" {
+			logger.Warn("provider has no API key configured", "provider", name)
+			continue
+		}
+
+		logger.Info("validating provider", "provider", name, "url", provider.URL)
+		if err := validateProvider(ctx, name, provider, logger); err != nil {
+			errors = append(errors, fmt.Sprintf("%s: %v", name, err))
+			logger.Error("provider validation failed", "provider", name, "err", err)
+		} else {
+			logger.Info("provider validation passed", "provider", name)
+		}
+	}
+	return errors
 }
 
 func validateOllamaHealth(ctx context.Context, ollamaURL string) bool {

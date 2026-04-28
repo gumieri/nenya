@@ -24,11 +24,68 @@ type RequestCapabilities struct {
 	HasContentArr bool
 }
 
+func collectMinMax(targets []UpstreamTarget, fn func(t UpstreamTarget) (float64, bool)) (min, max float64) {
+	min, max = -1, -1
+	for _, t := range targets {
+		v, ok := fn(t)
+		if !ok {
+			continue
+		}
+		if min < 0 || v < min {
+			min = v
+		}
+		if max < 0 || v > max {
+			max = v
+		}
+	}
+	if min < 0 {
+		return 0, 1
+	}
+	if min == max {
+		return 0, 1
+	}
+	return min, max
+}
+
+func getLatencyRange(targets []UpstreamTarget, latencyTracker *infra.LatencyTracker) (min, max float64) {
+	return collectMinMax(targets, func(t UpstreamTarget) (float64, bool) {
+		if latencyTracker == nil {
+			return 0, false
+		}
+		lat, ok := latencyTracker.Get(t.Model, t.Provider)
+		return lat.MedianMs, ok
+	})
+}
+
+func getCostRange(targets []UpstreamTarget, costTracker *infra.CostTracker) (min, max float64) {
+	return collectMinMax(targets, func(t UpstreamTarget) (float64, bool) {
+		if costTracker == nil {
+			return 0, false
+		}
+		c := costTracker.GetCostMicroUSD(t.Model)
+		return float64(c), c > 0
+	})
+}
+
+func compareByLatency(i, j UpstreamTarget, latencyTracker *infra.LatencyTracker) bool {
+	latI, okI := latencyTracker.Get(i.Model, i.Provider)
+	latJ, okJ := latencyTracker.Get(j.Model, j.Provider)
+	if okI && okJ {
+		return latI.MedianMs < latJ.MedianMs
+	}
+	if okI {
+		return true
+	}
+	if okJ {
+		return false
+	}
+	return false
+}
+
 func SortTargetsByBalanced(targets []UpstreamTarget, latencyTracker *infra.LatencyTracker, costTracker *infra.CostTracker, catalog *discovery.ModelCatalog, opts SortOptions) []UpstreamTarget {
 	if len(targets) <= 1 {
 		return targets
 	}
-
 	if opts.LatencyWeight == 0 && opts.CostWeight == 0 && (catalog == nil || !catalog.HasMetadata()) {
 		return targets
 	}
@@ -36,41 +93,8 @@ func SortTargetsByBalanced(targets []UpstreamTarget, latencyTracker *infra.Laten
 	sorted := make([]UpstreamTarget, len(targets))
 	copy(sorted, targets)
 
-	collectMinMax := func(fn func(t UpstreamTarget) (float64, bool)) (min, max float64) {
-		min, max = -1, -1
-		for _, t := range sorted {
-			if v, ok := fn(t); ok {
-				if min < 0 || v < min {
-					min = v
-				}
-				if max < 0 || v > max {
-					max = v
-				}
-			}
-		}
-		if min < 0 {
-			return 0, 1
-		}
-		if min == max {
-			return 0, 1
-		}
-		return min, max
-	}
-
-	minLat, maxLat := collectMinMax(func(t UpstreamTarget) (float64, bool) {
-		if latencyTracker == nil {
-			return 0, false
-		}
-		lat, ok := latencyTracker.Get(t.Model, t.Provider)
-		return lat.MedianMs, ok
-	})
-	minCost, maxCost := collectMinMax(func(t UpstreamTarget) (float64, bool) {
-		if costTracker == nil {
-			return 0, false
-		}
-		c := costTracker.GetCostMicroUSD(t.Model)
-		return float64(c), c > 0
-	})
+	minLat, maxLat := getLatencyRange(sorted, latencyTracker)
+	minCost, maxCost := getCostRange(sorted, costTracker)
 
 	sort.SliceStable(sorted, func(i, j int) bool {
 		scoreI := calculateScore(sorted[i], latencyTracker, costTracker, catalog, minLat, maxLat, minCost, maxCost, opts)
@@ -80,20 +104,10 @@ func SortTargetsByBalanced(targets []UpstreamTarget, latencyTracker *infra.Laten
 			return scoreI > scoreJ
 		}
 
-		if latencyTracker != nil {
-			latI, okI := latencyTracker.Get(sorted[i].Model, sorted[i].Provider)
-			latJ, okJ := latencyTracker.Get(sorted[j].Model, sorted[j].Provider)
-			if okI && okJ {
-				return latI.MedianMs < latJ.MedianMs
-			}
-			if okI {
-				return true
-			}
-			if okJ {
-				return false
-			}
+		if latencyTracker == nil {
+			return false
 		}
-		return false
+		return compareByLatency(sorted[i], sorted[j], latencyTracker)
 	})
 
 	return sorted
