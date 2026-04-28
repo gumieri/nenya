@@ -191,10 +191,12 @@ type GovernanceConfig struct {
 	EmptyStreamAsError       bool     `json:"empty_stream_as_error"`
 	rpmSet                   bool     `json:"-"`
 	tpmSet                   bool     `json:"-"`
+	emptyStreamAsErrorSet    bool     `json:"-"`
 }
 
-func (g *GovernanceConfig) RPMSet() bool { return g.rpmSet }
-func (g *GovernanceConfig) TPMSet() bool { return g.tpmSet }
+func (g *GovernanceConfig) RPMSet() bool                { return g.rpmSet }
+func (g *GovernanceConfig) TPMSet() bool                { return g.tpmSet }
+func (g *GovernanceConfig) EmptyStreamAsErrorSet() bool { return g.emptyStreamAsErrorSet }
 
 type SecretsConfig struct {
 	ClientToken  string            `json:"client_token"`
@@ -279,8 +281,9 @@ func (s *SecurityFilterConfig) UnmarshalJSON(data []byte) error {
 func (g *GovernanceConfig) UnmarshalJSON(data []byte) error {
 	type alias GovernanceConfig
 	aux := struct {
-		RatelimitMaxRPM *int `json:"ratelimit_max_rpm"`
-		RatelimitMaxTPM *int `json:"ratelimit_max_tpm"`
+		RatelimitMaxRPM    *int  `json:"ratelimit_max_rpm"`
+		RatelimitMaxTPM    *int  `json:"ratelimit_max_tpm"`
+		EmptyStreamAsError *bool `json:"empty_stream_as_error"`
 		*alias
 	}{
 		alias: (*alias)(g),
@@ -299,6 +302,12 @@ func (g *GovernanceConfig) UnmarshalJSON(data []byte) error {
 	} else {
 		g.tpmSet = true
 		g.RatelimitMaxTPM = *aux.RatelimitMaxTPM
+	}
+	if aux.EmptyStreamAsError == nil {
+		g.emptyStreamAsErrorSet = false
+	} else {
+		g.emptyStreamAsErrorSet = true
+		g.EmptyStreamAsError = *aux.EmptyStreamAsError
 	}
 	return nil
 }

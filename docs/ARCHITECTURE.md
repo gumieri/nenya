@@ -291,7 +291,7 @@ In-memory LRU cache with deterministic SHA-256 fingerprinting. See [`CONFIGURATI
 
 ## Empty-Stream Detection
 
-When an upstream provider returns `200 OK` with a zero-byte body, the SSE stream completes without any data events. If `governance.empty_stream_as_error` is enabled (default: `false`), Nenya treats this condition as a failure:
+When an upstream provider returns `200 OK` with a zero-byte body, the SSE stream completes without any data events. If `governance.empty_stream_as_error` is enabled (default: `true`), Nenya treats this condition as a failure:
 
 1. **Detection** — After `copyStream` completes, the number of bytes written is checked. Zero bytes with no error signals an empty stream.
 2. **SSE Error Payload** — An SSE error chunk is emitted to the client:
@@ -303,7 +303,7 @@ When an upstream provider returns `200 OK` with a zero-byte body, the SSE stream
 3. **Metrics** — The counter `nenya_empty_stream_total{model,provider}` is incremented, allowing operators to identify problematic providers.
 4. **Circuit Breaker** — The failure is recorded via `AgentState.RecordFailure`, contributing to cooldown and circuit breaker state.
 
-When the flag is disabled (default), empty streams are treated as a successful response and the client receives a `200 OK` with no SSE events, preserving backward compatibility.
+When the flag is disabled, empty streams are treated as a successful response and the client receives a `200 OK` with no SSE events, preserving backward compatibility.
 
 ## Latency Tracker
 
@@ -342,7 +342,7 @@ When a client disconnects during SSE streaming, the upstream connection is abort
 
 ### Empty-Stream Detection
 
-When an upstream provider returns `200 OK` with a zero-byte body, Nenya can optionally treat this as a failure (when `governance.empty_stream_as_error` is enabled). A structured SSE error payload is emitted to the client, which OpenCode recognizes as a retryable error, allowing fallback to the next target in the agent chain. This prevents the client from hanging on an empty response and provides observability via the `nenya_empty_stream_total` metric. When disabled (default), empty streams are treated as successful responses for backward compatibility.
+When an upstream provider returns `200 OK` with a zero-byte body, Nenya can optionally treat this as a failure (when `governance.empty_stream_as_error` is enabled, default `true`). A structured SSE error payload is emitted to the client, which OpenCode recognizes as a retryable error, allowing fallback to the next target in the agent chain. This prevents the client from hanging on an empty response and provides observability via the `nenya_empty_stream_total` metric. When disabled, empty streams are treated as successful responses for backward compatibility.
 
 ### MCP Graceful Degradation
 

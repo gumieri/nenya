@@ -109,6 +109,9 @@ func applyGovernanceDefaults(cfg *Config) {
 			`(?i)\b(shutdown|reboot|poweroff|halt|init\s+0)\b`,
 		}
 	}
+	if !cfg.Governance.EmptyStreamAsErrorSet() {
+		cfg.Governance.EmptyStreamAsError = true
+	}
 }
 
 func applySecurityFilterDefaults(cfg *Config) {

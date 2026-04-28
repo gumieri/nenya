@@ -92,7 +92,7 @@ The interceptor implements a 3-tier pipeline for the last user message content, 
  | `routing_cost_weight` | float64 | `0.0` | Weight for cost normalization in balanced scoring (0.0-10.0). Higher = prioritize cheaper models. |
 | `max_cost_per_request` | float64 | `0` (disabled) | Maximum allowed cost in USD per request. 0 = no limit. Logged but not yet enforced. |
 | `retryable_status_codes` | []int | `[429, 500, 502, 503, 504]` | HTTP status codes that trigger fallback to the next model in an agent chain. **Warning: setting this field REPLACES the built-in defaults entirely.** You must include all codes you want retryable (including the standard ones). Per-provider override available via `providers.<name>.retryable_status_codes` (provider-level replaces global for that provider). |
-| `empty_stream_as_error` | bool | `false` | Treat upstream responses with `200 OK` and zero-byte body as errors. When enabled, an SSE error payload is emitted to the client (code: `empty_response`), which OpenCode recognizes as a retryable error, allowing fallback to the next target. The metric `nenya_empty_stream_total` is incremented. When disabled (default), empty streams are treated as successful responses (backward compatible). |
+| `empty_stream_as_error` | bool | `true` | Treat upstream responses with `200 OK` and zero-byte body as errors. When enabled, an SSE error payload is emitted to the client (code: `empty_response`), which OpenCode recognizes as a retryable error, allowing fallback to the next target. The metric `nenya_empty_stream_total` is incremented. Set to `false` to preserve backward compatibility (empty streams treated as successful responses, resulting in empty assistant messages). |
 
 ## `security_filter`
 

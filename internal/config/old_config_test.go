@@ -130,7 +130,7 @@ func TestResolveEngineRefs_WindowAndSecurityRefs(t *testing.T) {
 			},
 		},
 		Providers: map[string]ProviderConfig{
-			"groq":  {URL: "https://api.groq.com/openai/v1/chat/completions"},
+			"groq":   {URL: "https://api.groq.com/openai/v1/chat/completions"},
 			"gemini": {URL: "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions"},
 		},
 	}
