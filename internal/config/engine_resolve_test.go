@@ -285,3 +285,123 @@ func TestResolveEngineRefs_NoEnginesConfigured(t *testing.T) {
 		t.Fatalf("expected no error when no engines configured, got: %v", err)
 	}
 }
+
+func TestResolveAgentEngineRef_SkipsFailingFirstModel(t *testing.T) {
+	providers := map[string]*Provider{
+		"groq": {Name: "groq", URL: "https://api.groq.com/openai/v1/chat/completions"},
+	}
+	agent := AgentConfig{
+		Models: []AgentModel{
+			{Model: "nonexistent-model-not-in-registry"},
+			{Provider: "groq", Model: "llama-3.1-8b-instant"},
+		},
+	}
+	ref := EngineRef{AgentName: "test-agent"}
+
+	targets, err := resolveAgentEngineRef(ref, map[string]AgentConfig{"test-agent": agent}, providers)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(targets) != 1 {
+		t.Fatalf("expected 1 target (from second model), got %d", len(targets))
+	}
+	if targets[0].Engine.Provider != "groq" {
+		t.Errorf("expected provider groq, got %s", targets[0].Engine.Provider)
+	}
+	if targets[0].Engine.Model != "llama-3.1-8b-instant" {
+		t.Errorf("expected model llama-3.1-8b-instant, got %s", targets[0].Engine.Model)
+	}
+}
+
+func TestResolveAgentEngineRef_SkipsMultipleFailingModels(t *testing.T) {
+	providers := map[string]*Provider{
+		"ollama": {Name: "ollama", URL: "http://localhost:11434/v1/chat/completions"},
+	}
+	agent := AgentConfig{
+		Models: []AgentModel{
+			{Model: "unknown-model-a"},
+			{ModelRgx: ".*regex.*"},
+			{Provider: "unknown-provider", Model: "some-model"},
+			{Provider: "ollama", Model: "qwen2.5-coder:7b"},
+		},
+	}
+	ref := EngineRef{AgentName: "test-agent"}
+
+	targets, err := resolveAgentEngineRef(ref, map[string]AgentConfig{"test-agent": agent}, providers)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(targets) != 1 {
+		t.Fatalf("expected 1 target (from fourth model), got %d", len(targets))
+	}
+	if targets[0].Engine.Provider != "ollama" {
+		t.Errorf("expected provider ollama, got %s", targets[0].Engine.Provider)
+	}
+}
+
+func TestResolveAgentEngineRef_AllModelsFail(t *testing.T) {
+	providers := map[string]*Provider{
+		"ollama": {Name: "ollama", URL: "http://localhost:11434/v1/chat/completions"},
+	}
+	agent := AgentConfig{
+		Models: []AgentModel{
+			{Model: "unknown-model-a"},
+			{ModelRgx: ".*regex.*"},
+		},
+	}
+	ref := EngineRef{AgentName: "test-agent"}
+
+	_, err := resolveAgentEngineRef(ref, map[string]AgentConfig{"test-agent": agent}, providers)
+	if err == nil {
+		t.Fatal("expected error when all models fail to resolve")
+	}
+}
+
+func TestResolveAgentEngineRef_SkipsRegexOnlyModels(t *testing.T) {
+	providers := map[string]*Provider{
+		"groq": {Name: "groq", URL: "https://api.groq.com/openai/v1/chat/completions"},
+	}
+	agent := AgentConfig{
+		Models: []AgentModel{
+			{ModelRgx: ".*gemma.*"},
+			{Provider: "groq", Model: "llama-3.1-8b-instant"},
+			{ModelRgx: ".*guard.*"},
+		},
+	}
+	ref := EngineRef{AgentName: "test-agent"}
+
+	targets, err := resolveAgentEngineRef(ref, map[string]AgentConfig{"test-agent": agent}, providers)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(targets) != 1 {
+		t.Fatalf("expected 1 target (from second model), got %d", len(targets))
+	}
+	if targets[0].Engine.Provider != "groq" {
+		t.Errorf("expected provider groq, got %s", targets[0].Engine.Provider)
+	}
+}
+
+func TestResolveAgentEngineRef_ModelOnlyNotInRegistry_Skips(t *testing.T) {
+	providers := map[string]*Provider{
+		"groq": {Name: "groq", URL: "https://api.groq.com/openai/v1/chat/completions"},
+	}
+	agent := AgentConfig{
+		Models: []AgentModel{
+			{Model: "llama-3.1-8b-instant"},
+			{Provider: "groq", Model: "llama-3.1-70b-versatile"},
+		},
+	}
+	ref := EngineRef{AgentName: "test-agent"}
+
+	targets, err := resolveAgentEngineRef(ref, map[string]AgentConfig{"test-agent": agent}, providers)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(targets) != 1 {
+		t.Fatalf("expected 1 target (from second model), got %d", len(targets))
+	}
+	if targets[0].Engine.Model != "llama-3.1-70b-versatile" {
+		t.Errorf("expected model llama-3.1-70b-versatile, got %s", targets[0].Engine.Model)
+	}
+}
