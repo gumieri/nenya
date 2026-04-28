@@ -174,8 +174,7 @@ Most providers (Groq, Together, Fireworks, Perplexity, etc.) use the OpenAI wire
   "providers": {
     "fireworks": {
       "url": "https://api.fireworks.ai/inference/v1/chat/completions",
-      "auth_style": "bearer",
-      "route_prefixes": ["accounts/fireworks/models/"]
+      "auth_style": "bearer"
     }
   }
 }

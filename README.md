@@ -79,6 +79,7 @@ Flow notes:
 - **22 built-in providers** with specialized adapters for wire format differences
 - **Dynamic model discovery** — fetches live model catalogs from providers at startup and on reload
 - **Model registry** — reference models by string shorthand with automatic provider/context resolution
+- **Multi-provider model resolution** — when a model exists in multiple providers, all are added to the agent's fallback chain
 - **Three-tier model resolution** — config overrides > discovered models > static registry
 - **Agent fallback chains** — round-robin or sequential with circuit breaker and automatic failover
 - **Latency-aware routing** — auto-reorder targets by historical median response time with ±5% jitter to prevent thundering herd
@@ -113,36 +114,36 @@ Flow notes:
 
 ### Full Adapters (custom wire format handling)
 
-| Provider | Route Prefixes | Auth | Special Behavior |
-|----------|---------------|------|-----------------|
-| **Anthropic** | `claude-*` | `x-api-key` | Full bidirectional OpenAI↔Anthropic format conversion |
-| **Gemini** | `gemini-*` | `bearer+x-goog` | Thought signature preservation, orphaned tool_call cleanup, model aliasing |
-| **z.ai** (Zhipu) | `glm-*` | `bearer` | Orphaned tool message removal, user message merging, auto-thinking for reasoning models, model-specific temperature defaults, Zhipu error code classification |
-| **Ollama** | (local) | `none` | Local-first, optional auth, conservative error classification |
+| Provider | Auth | Special Behavior |
+|----------|------|-----------------|
+| **Anthropic** | `x-api-key` | Full bidirectional OpenAI↔Anthropic format conversion |
+| **Gemini** | `bearer+x-goog` | Thought signature preservation, orphaned tool_call cleanup, model aliasing |
+| **z.ai** (Zhipu) | `bearer` | Orphaned tool message removal, user message merging, auto-thinking for reasoning models, model-specific temperature defaults, Zhipu error code classification |
+| **Ollama** | `none` | Local-first, optional auth, conservative error classification |
 
 ### OpenAI-Compatible with Adjustments
 
-| Provider | Route Prefixes | Auth | Notes |
-|----------|---------------|------|-------|
-| **OpenRouter** | (custom) | `bearer` | Adds `HTTP-Referer` and `X-Title` headers |
-| **Azure OpenAI** | (custom) | `api-key` | Uses `api-key` header instead of `Authorization: Bearer` |
-| **Perplexity** | (custom) | `bearer` | Does not support function calling |
-| **Cohere** | (custom) | `bearer` | Content arrays flattened |
-| **DeepInfra** | (custom) | `bearer` | Standard capabilities |
+| Provider | Auth | Notes |
+|----------|------|-------|
+| **OpenRouter** | `bearer` | Adds `HTTP-Referer` and `X-Title` headers |
+| **Azure OpenAI** | `api-key` | Uses `api-key` header instead of `Authorization: Bearer` |
+| **Perplexity** | `bearer` | Does not support function calling |
+| **Cohere** | `bearer` | Content arrays flattened |
+| **DeepInfra** | `bearer` | Standard capabilities |
 
 ### Drop-in OpenAI-Compatible
 
-| Provider | Route Prefixes | Auth |
-|----------|---------------|------|
-| **DeepSeek** | `deepseek-*` | `bearer` | Thinking mode default, reasoning_content injection, parameter stripping in thinking mode |
-| **Mistral** | `mistral-*`, `codestral-*`, `devstral-*` | `bearer` |
-| **xAI** | `grok-*` | `bearer` |
-| **Groq** | (custom) | `bearer` |
-| **Together** | `together/*` | `bearer` |
-| **SambaNova** | (custom) | `bearer` |
-| **Cerebras** | (custom) | `bearer` |
-| **NVIDIA** | (custom) | `bearer` |
-| **GitHub** | (custom) | `bearer` |
+| Provider | Auth | Notes |
+|----------|------|-------|
+| **DeepSeek** | `bearer` | Thinking mode default, reasoning_content injection, parameter stripping in thinking mode |
+| **Mistral** | `bearer` |
+| **xAI** | `bearer` |
+| **Groq** | `bearer` |
+| **Together** | `bearer` |
+| **SambaNova** | `bearer` |
+| **Cerebras** | `bearer` |
+| **NVIDIA** | `bearer` |
+| **GitHub** | `bearer` |
 
 > **Any** OpenAI-compatible provider can be added via JSON config — no code changes required. See [`docs/PROVIDERS.md`](docs/PROVIDERS.md) for the full provider reference.
 

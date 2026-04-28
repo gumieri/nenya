@@ -20,21 +20,15 @@ In Cursor Settings > Models > OpenAI API Key:
   "providers": {
     "openai": {
       "url": "https://api.openai.com/v1/chat/completions",
-      "auth_style": "bearer",
-      "route_prefixes": ["gpt-", "o1-", "o3-", "o4-"],
-      "api_key_secret": "OPENAI_API_KEY"
+      "auth_style": "bearer"
     },
     "anthropic": {
       "url": "https://api.anthropic.com/v1/chat/completions",
-      "auth_style": "bearer",
-      "route_prefixes": ["claude-"],
-      "api_key_secret": "ANTHROPIC_API_KEY"
+      "auth_style": "bearer"
     },
     "gemini": {
       "url": "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
-      "auth_style": "bearer+x-goog",
-      "route_prefixes": ["gemini-"],
-      "api_key_secret": "GEMINI_API_KEY"
+      "auth_style": "bearer+x-goog"
     }
   }
 }
@@ -47,7 +41,7 @@ curl -s http://localhost:8080/v1/models \
   -H "Authorization: Bearer your-client-token" | jq .
 ```
 
-Cursor calls `/v1/models` to discover available models. The response includes all agent names and model prefixes configured in Nenya.
+Cursor calls `/v1/models` to discover available models. The response includes all agent names and discovered models from configured providers.
 
 ## Supported Endpoints
 

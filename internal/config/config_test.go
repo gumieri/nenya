@@ -374,7 +374,7 @@ func TestLoadSecrets(t *testing.T) {
 func TestResolveProviders(t *testing.T) {
 	cfg := &Config{
 		Providers: map[string]ProviderConfig{
-			"gemini": {URL: "http://gemini", RoutePrefixes: []string{"gemini-"}},
+			"gemini": {URL: "http://gemini"},
 		},
 	}
 	secrets := &SecretsConfig{ProviderKeys: map[string]string{"gemini": "key1"}}
@@ -506,15 +506,15 @@ func TestLoadDirectory(t *testing.T) {
 		dir := t.TempDir()
 		if err := os.WriteFile(filepath.Join(dir, "10-providers.json"), []byte(`{
 			"providers": {
-				"gemini": {"url": "http://gemini", "route_prefixes": ["gemini-"]},
-				"deepseek": {"url": "http://deepseek", "route_prefixes": ["deepseek-"]}
+				"gemini": {"url": "http://gemini"},
+				"deepseek": {"url": "http://deepseek"}
 			}
 		}`), 0644); err != nil {
 			t.Fatalf("failed to create 10-providers.json: %v", err)
 		}
 		if err := os.WriteFile(filepath.Join(dir, "20-providers-override.json"), []byte(`{
 			"providers": {
-				"gemini": {"url": "http://custom-gemini", "route_prefixes": ["gemini-"]}
+				"gemini": {"url": "http://custom-gemini"}
 			}
 		}`), 0644); err != nil {
 			t.Fatalf("failed to create 20-providers-override.json: %v", err)

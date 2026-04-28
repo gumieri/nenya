@@ -25,28 +25,28 @@ Zero-config integration for providers using the standard OpenAI wire format:
 
 ## Provider Reference Table
 
-| Provider | Auth Style | Route Prefixes | Stream Options | Auto Tool Choice | Content Arrays | Tool Calls | Reasoning | Vision |
-|----------|------------|----------------|----------------|------------------|----------------|------------|-----------|--------|
-| **Anthropic** | `anthropic` | `claude-*` | ❌ | ✅ | ❌ | ✅ | ✅ | ✅ |
-| **Gemini** | `bearer+x-goog` | `gemini-*` | ❌ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| **z.ai** | `bearer` | `glm-*` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| **Ollama** | `none` | (local) | ❌ | ✅ | ❌ | ✅ | ✅ | ❌ |
-| **OpenRouter** | `bearer` | (custom) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| **Azure OpenAI** | `api-key` | (custom) | ❌ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| **Perplexity** | `bearer` | (custom) | ❌ | ❌ | ✅ | ❌ | ❌ | ✅ |
-| **Cohere** | `bearer` | (custom) | ❌ | ✅ | ✅ | ✅ | ❌ | ✅ |
-| **DeepInfra** | `bearer` | (custom) | ❌ | ✅ | ✅ | ✅ | ❌ | ✅ |
-| **DeepSeek** | `bearer` | `deepseek-*` | ✅ | ✅ | ✅ | ✅ | ✅ | ❌ |
-| **Mistral** | `bearer` | `mistral-*`, `codestral-*`, `devstral-*` | ❌ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| **xAI** | `bearer` | `grok-*` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| **Groq** | `bearer` | (custom) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| **Together** | `bearer` | `together/*` | ❌ | ✅ | ✅ | ✅ | ❌ | ✅ |
-| **SambaNova** | `bearer` | (custom) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| **Cerebras** | `bearer` | (custom) | ✅ | ✅ | ✅ | ✅ | ✅ | ❌ |
-| **NVIDIA** | `bearer` | (custom) | ❌ | ❌ | ✅ | ✅ | ❌ | ✅ |
-| **GitHub** | `bearer` | (custom) | ❌ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| **Qwen** | `bearer` | (custom) | ✅ | ❌ | ✅ | ✅ | ✅ | ❌ |
-| **MiniMax** | `bearer` | (custom) | ✅ | ❌ | ✅ | ✅ | ✅ | ❌ |
+| Provider | Auth Style | Stream Options | Auto Tool Choice | Content Arrays | Tool Calls | Reasoning | Vision |
+|----------|------------|----------------|------------------|----------------|------------|-----------|--------|
+| **Anthropic** | `anthropic` | ❌ | ✅ | ❌ | ✅ | ✅ | ✅ |
+| **Gemini** | `bearer+x-goog` | ❌ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| **z.ai** | `bearer` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| **Ollama** | `none` | ❌ | ✅ | ❌ | ✅ | ✅ | ❌ |
+| **OpenRouter** | `bearer` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| **Azure OpenAI** | `api-key` | ❌ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| **Perplexity** | `bearer` | ❌ | ❌ | ✅ | ❌ | ❌ | ✅ |
+| **Cohere** | `bearer` | ❌ | ✅ | ✅ | ✅ | ❌ | ✅ |
+| **DeepInfra** | `bearer` | ❌ | ✅ | ✅ | ✅ | ❌ | ✅ |
+| **DeepSeek** | `bearer` | ✅ | ✅ | ✅ | ✅ | ✅ | ❌ |
+| **Mistral** | `bearer` | ❌ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| **xAI** | `bearer` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| **Groq** | `bearer` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| **Together** | `bearer` | ❌ | ✅ | ✅ | ❌ | ✅ | ✅ |
+| **SambaNova** | `bearer` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| **Cerebras** | `bearer` | ✅ | ✅ | ✅ | ✅ | ✅ | ❌ |
+| **NVIDIA** | `bearer` | ❌ | ❌ | ✅ | ✅ | ❌ | ✅ |
+| **GitHub** | `bearer` | ❌ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| **Qwen** | `bearer` | ✅ | ❌ | ✅ | ✅ | ✅ | ❌ |
+| **MiniMax** | `bearer` | ✅ | ❌ | ✅ | ✅ | ✅ | ❌ |
 
 > ✅ = Supported | ❌ = Not Supported
 
@@ -124,8 +124,7 @@ Most providers use the OpenAI wire format. Add them via JSON config only:
   "providers": {
     "fireworks": {
       "url": "https://api.fireworks.ai/inference/v1/chat/completions",
-      "auth_style": "bearer",
-      "route_prefixes": ["accounts/fireworks/models/"]
+      "auth_style": "bearer"
     }
   }
 }

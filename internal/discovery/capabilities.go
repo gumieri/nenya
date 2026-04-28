@@ -1,6 +1,7 @@
 package discovery
 
 import (
+	"log/slog"
 	"strings"
 )
 
@@ -38,14 +39,35 @@ func InferCapabilities(modelID string) *ModelMetadata {
 	var meta ModelMetadata
 	matched := false
 	for _, rule := range capabilityRules {
-		if strings.HasPrefix(strings.ToLower(modelID), rule.prefix) {
-			applyCapabilities(&meta, rule.caps)
-			matched = true
+		for _, seg := range ModelSegments(modelID) {
+			if strings.HasPrefix(seg, rule.prefix) {
+				slog.Debug("capability rule matched by segment",
+					"model_id", modelID,
+					"segment", seg,
+					"rule_prefix", rule.prefix,
+					"capabilities", rule.caps,
+				)
+				applyCapabilities(&meta, rule.caps)
+				matched = true
+				break
+			}
+		}
+		if matched {
 			break
 		}
 	}
 	if !matched {
+		slog.Debug("no capability rule matched",
+			"model_id", modelID,
+			"segments", ModelSegments(modelID),
+		)
 		return nil
 	}
+	slog.Info("model capabilities inferred",
+		"model_id", modelID,
+		"tool_calls", meta.SupportsToolCalls,
+		"reasoning", meta.SupportsReasoning,
+		"vision", meta.SupportsVision,
+	)
 	return &meta
 }

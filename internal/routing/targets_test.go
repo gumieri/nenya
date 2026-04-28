@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"nenya/internal/config"
+	"nenya/internal/discovery"
 )
 
 func targetProviders() map[string]*config.Provider {
@@ -330,3 +331,72 @@ func TestResolveWindowMaxContext_AgentLevelMaxContext(t *testing.T) {
 		t.Fatalf("expected 50000 (max of agent-level 50000 and registry 4000), got %d", got)
 	}
 }
+
+func TestExpandModels_DeferredProvider(t *testing.T) {
+	catalog := discovery.NewModelCatalog()
+	catalog.Add(discovery.DiscoveredModel{ID: "deepseek-v4-flash", Provider: "deepseek", MaxContext: 100000, MaxOutput: 393216})
+	catalog.Add(discovery.DiscoveredModel{ID: "deepseek-v4-flash", Provider: "nvidia", MaxContext: 50000, MaxOutput: 16384})
+
+	providers := targetProviders()
+	agent := config.AgentConfig{
+		Models: []config.AgentModel{
+			{Model: "deepseek-v4-flash", Provider: "", MaxContext: 1234, MaxOutput: 5678},
+		},
+	}
+
+	a := NewAgentState(testLogger())
+	expanded := a.expandModels("test-agent", agent, catalog, providers, testLogger())
+
+	if len(expanded) != 2 {
+		t.Fatalf("expected 2 expanded entries (one per provider), got %d", len(expanded))
+	}
+
+	providersFound := make(map[string]bool)
+	for _, m := range expanded {
+		providersFound[m.Provider] = true
+		if m.Model != "deepseek-v4-flash" {
+			t.Errorf("expected model deepseek-v4-flash, got %s", m.Model)
+		}
+		if m.MaxContext != 1234 {
+			t.Errorf("expected MaxContext 1234 from agent config, got %d", m.MaxContext)
+		}
+		if m.MaxOutput != 5678 {
+			t.Errorf("expected MaxOutput 5678 from agent config, got %d", m.MaxOutput)
+		}
+	}
+
+	if !providersFound["deepseek"] || !providersFound["nvidia"] {
+		t.Fatalf("expected providers deepseek and nvidia, got %v", providersFound)
+	}
+}
+
+func TestExpandModels_DeferredProvider_CatalogFallback(t *testing.T) {
+	catalog := discovery.NewModelCatalog()
+	providers := targetProviders()
+	agent := config.AgentConfig{
+		Models: []config.AgentModel{
+			{Model: "deepseek-v4-pro", Provider: "", MaxContext: 1234, MaxOutput: 5678},
+		},
+	}
+
+	a := NewAgentState(testLogger())
+	expanded := a.expandModels("test-agent", agent, catalog, providers, testLogger())
+
+	if len(expanded) != 1 {
+		t.Fatalf("expected 1 entry from ModelRegistry fallback, got %d", len(expanded))
+	}
+
+	if expanded[0].Provider != "deepseek" {
+		t.Errorf("expected provider deepseek from ModelRegistry, got %s", expanded[0].Provider)
+	}
+	if expanded[0].Model != "deepseek-v4-pro" {
+		t.Errorf("expected model deepseek-v4-pro, got %s", expanded[0].Model)
+	}
+	if expanded[0].MaxContext != 1234 {
+		t.Errorf("expected MaxContext 1234 from agent config, got %d", expanded[0].MaxContext)
+	}
+	if expanded[0].MaxOutput != 5678 {
+		t.Errorf("expected MaxOutput 5678 from agent config, got %d", expanded[0].MaxOutput)
+	}
+}
+

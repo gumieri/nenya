@@ -25,14 +25,27 @@ func newChatProxy(t *testing.T, upstreamURL string) *Proxy {
 	cfg.SecurityFilter.Enabled = false
 	cfg.Providers = map[string]config.ProviderConfig{
 		"test-provider": {
-			URL:           upstreamURL + "/v1/chat/completions",
-			RoutePrefixes: []string{"test-"},
-			AuthStyle:     "none",
+			URL:       upstreamURL + "/v1/chat/completions",
+			AuthStyle: "none",
+		},
+		"deepseek": {
+			URL:       upstreamURL + "/v1/chat/completions",
+			AuthStyle: "bearer",
+		},
+	}
+	cfg.Agents = map[string]config.AgentConfig{
+		"test-agent": {
+			Strategy: "fallback",
+			Models: []config.AgentModel{
+				{Provider: "test-provider", Model: "test-model"},
+			},
 		},
 	}
 	secrets := &config.SecretsConfig{
 		ClientToken:  "test-token",
-		ProviderKeys: map[string]string{},
+		ProviderKeys: map[string]string{
+			"deepseek": "test-api-key",
+		},
 	}
 	gw := gateway.New(context.Background(), *cfg, secrets, slog.Default())
 	p := &Proxy{}
@@ -49,7 +62,7 @@ func TestHandleChatCompletions_ValidUpstream(t *testing.T) {
 	defer upstream.Close()
 
 	p := newChatProxy(t, upstream.URL)
-	body := `{"model":"test-model","messages":[{"role":"user","content":"hi"}]}`
+	body := `{"model":"test-agent","messages":[{"role":"user","content":"hi"}]}`
 	req := testutil.NewTestRequest(t, http.MethodPost, "/v1/chat/completions", body)
 	rec := httptest.NewRecorder()
 
@@ -139,9 +152,8 @@ func TestHandleChatCompletions_AgentWithModels(t *testing.T) {
 		},
 		Providers: map[string]config.ProviderConfig{
 			"test-provider": {
-				URL:           upstream.URL + "/v1/chat/completions",
-				RoutePrefixes: []string{"test-"},
-				AuthStyle:     "none",
+				URL:       upstream.URL + "/v1/chat/completions",
+				AuthStyle: "none",
 			},
 		},
 		Agents: map[string]config.AgentConfig{
@@ -209,7 +221,7 @@ func TestHandleEmbeddings_ValidUpstream(t *testing.T) {
 	defer upstream.Close()
 
 	p := newChatProxy(t, upstream.URL)
-	body := strings.NewReader(`{"model":"test-embedding","input":"hello"}`)
+	body := strings.NewReader(`{"model":"deepseek-v4-flash","input":"hello"}`)
 	req := httptest.NewRequest(http.MethodPost, "/v1/embeddings", body)
 	req.Header.Set("Authorization", "Bearer test-token")
 	rec := httptest.NewRecorder()
@@ -265,7 +277,7 @@ func TestBuildUpstreamRequest_SetsContentType(t *testing.T) {
 	defer upstream.Close()
 
 	p := newChatProxy(t, upstream.URL)
-	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"test-model","messages":[{"role":"user","content":"hi"}]}`))
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"test-agent","messages":[{"role":"user","content":"hi"}]}`))
 	req.Header.Set("Authorization", "Bearer test-token")
 	p.ServeHTTP(httptest.NewRecorder(), req)
 

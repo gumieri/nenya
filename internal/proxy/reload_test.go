@@ -28,9 +28,16 @@ func newReloadTestGateway(t *testing.T, upstreamURL string) *gateway.NenyaGatewa
 		},
 		Providers: map[string]config.ProviderConfig{
 			"test-provider": {
-				URL:           upstreamURL + "/v1/chat/completions",
-				RoutePrefixes: []string{"test-"},
-				AuthStyle:     "none",
+				URL:       upstreamURL + "/v1/chat/completions",
+				AuthStyle: "none",
+			},
+		},
+		Agents: map[string]config.AgentConfig{
+			"test-model": {
+				Strategy: "fallback",
+				Models: []config.AgentModel{
+					{Provider: "test-provider", Model: "test-model"},
+				},
 			},
 		},
 	}

@@ -153,23 +153,32 @@
   "providers": {
     "gemini": {
       "url": "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
-      "auth_style": "bearer+x-goog",
-      "route_prefixes": ["gemini-"]
+      "auth_style": "bearer+x-goog"
     },
     "deepseek": {
       "url": "https://api.deepseek.com/chat/completions",
-      "auth_style": "bearer",
-      "route_prefixes": ["deepseek-"]
+      "auth_style": "bearer"
     },
     "zai": {
       "url": "https://api.z.ai/v1/chat/completions",
-      "auth_style": "bearer",
-      "route_prefixes": ["glm-"]
+      "auth_style": "bearer"
     },
     "ollama": {
       "url": "http://127.0.0.1:11434/v1/chat/completions",
-      "auth_style": "none",
-      "route_prefixes": ["ollama-"]
+      "auth_style": "none"
+    }
+  },
+    "deepseek": {
+      "url": "https://api.deepseek.com/chat/completions",
+      "auth_style": "bearer"
+    },
+    "zai": {
+      "url": "https://api.z.ai/v1/chat/completions",
+      "auth_style": "bearer"
+    },
+    "ollama": {
+      "url": "http://127.0.0.1:11434/v1/chat/completions",
+      "auth_style": "none"
     }
   }
 }

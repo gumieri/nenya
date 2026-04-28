@@ -448,7 +448,6 @@ func ResolveProviders(cfg *Config, secrets *SecretsConfig) map[string]*Provider 
 			URL:                  pc.URL,
 			BaseURL:              deriveBaseURL(pc.URL),
 			APIKey:               apiKey,
-			RoutePrefixes:        pc.RoutePrefixes,
 			AuthStyle:            pc.AuthStyle,
 			ApiFormat:            pc.ApiFormat,
 			TimeoutSeconds:       pc.TimeoutSeconds,

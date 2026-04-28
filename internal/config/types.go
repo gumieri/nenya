@@ -102,7 +102,7 @@ func (a *AgentConfig) UnmarshalJSON(data []byte) error {
 			}
 			m = AgentModel{
 				Model:      modelStr,
-				Provider:   entry.Provider,
+				Provider:   "", 
 				MaxContext: entry.MaxContext,
 				MaxOutput:  entry.MaxOutput,
 			}
@@ -118,7 +118,6 @@ func (a *AgentConfig) UnmarshalJSON(data []byte) error {
 
 type ProviderConfig struct {
 	URL                  string          `json:"url"`
-	RoutePrefixes        []string        `json:"route_prefixes"`
 	AuthStyle            string          `json:"auth_style"`
 	ApiFormat            string          `json:"api_format"`
 	TimeoutSeconds       int             `json:"timeout_seconds"`
@@ -140,7 +139,6 @@ type Provider struct {
 	URL                  string
 	BaseURL              string
 	APIKey               string
-	RoutePrefixes        []string
 	AuthStyle            string
 	ApiFormat            string
 	TimeoutSeconds       int

@@ -153,13 +153,33 @@ func (p *Proxy) resolveRouting(req *chatRequest, gw *gateway.NenyaGateway) ([]ro
 		return targets, req.AgentName, cooldown, maxRetries, nil
 	}
 
-	provider := routing.ResolveProvider(req.ModelName, gw.Providers, gw.ModelCatalog)
-	if provider == nil {
+	matches := routing.ResolveProviders(req.ModelName, gw.Providers, gw.ModelCatalog)
+	if len(matches) == 0 {
 		gw.Logger.Warn("no provider found for model", "model", req.ModelName)
 		return nil, "", 0, 0, &httpError{http.StatusBadRequest, util.ErrNoProvider}
 	}
-	targets := []routing.UpstreamTarget{{URL: provider.URL, Model: req.ModelName, Provider: provider.Name}}
-	gw.Logger.Info("model routing", "model", req.ModelName, "upstream", provider.URL)
+
+	targets := make([]routing.UpstreamTarget, 0, len(matches))
+	for _, m := range matches {
+		provider, ok := gw.Providers[m.Provider]
+		if !ok {
+			continue
+		}
+		targets = append(targets, routing.UpstreamTarget{
+			URL:        provider.URL,
+			Model:      m.Model,
+			Provider:   m.Provider,
+			MaxContext: m.MaxContext,
+			MaxOutput:  m.MaxOutput,
+		})
+	}
+
+	if len(targets) == 0 {
+		gw.Logger.Error("no valid providers after filtering", "model", req.ModelName)
+		return nil, "", 0, 0, &httpError{http.StatusInternalServerError, "No valid providers available"}
+	}
+
+	gw.Logger.Info("model routing", "model", req.ModelName, "providers", len(targets), "upstreams", targets)
 
 	return targets, "", 0, 0, nil
 }
@@ -574,9 +594,16 @@ func (p *Proxy) handleEmbeddings(gw *gateway.NenyaGateway, w http.ResponseWriter
 		return
 	}
 
-	provider := routing.ResolveProvider(modelName, gw.Providers, gw.ModelCatalog)
-	if provider == nil {
+	matches := routing.ResolveProviders(modelName, gw.Providers, gw.ModelCatalog)
+	if len(matches) == 0 {
 		gw.Logger.Warn("no provider for embeddings model", "model", modelName)
+		http.Error(w, util.ErrNoProvider, http.StatusBadRequest)
+		return
+	}
+
+	provider, ok := gw.Providers[matches[0].Provider]
+	if !ok {
+		gw.Logger.Error("provider not found in providers map", "provider", matches[0].Provider)
 		http.Error(w, util.ErrNoProvider, http.StatusBadRequest)
 		return
 	}
@@ -644,9 +671,16 @@ func (p *Proxy) handleResponses(gw *gateway.NenyaGateway, w http.ResponseWriter,
 		return
 	}
 
-	provider := routing.ResolveProvider(modelName, gw.Providers, gw.ModelCatalog)
-	if provider == nil {
+	matches := routing.ResolveProviders(modelName, gw.Providers, gw.ModelCatalog)
+	if len(matches) == 0 {
 		gw.Logger.Warn("no provider for responses model", "model", modelName)
+		http.Error(w, util.ErrNoProvider, http.StatusBadRequest)
+		return
+	}
+
+	provider, ok := gw.Providers[matches[0].Provider]
+	if !ok {
+		gw.Logger.Error("provider not found in providers map", "provider", matches[0].Provider)
 		http.Error(w, util.ErrNoProvider, http.StatusBadRequest)
 		return
 	}
