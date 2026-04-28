@@ -188,6 +188,7 @@ type GovernanceConfig struct {
 	RoutingLatencyWeight     float64  `json:"routing_latency_weight"`
 	RoutingCostWeight        float64  `json:"routing_cost_weight"`
 	MaxCostPerRequest        float64  `json:"max_cost_per_request"`
+	EmptyStreamAsError       bool     `json:"empty_stream_as_error"`
 	rpmSet                   bool     `json:"-"`
 	tpmSet                   bool     `json:"-"`
 }

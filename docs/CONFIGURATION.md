@@ -89,9 +89,10 @@ The interceptor implements a 3-tier pipeline for the last user message content, 
 | `auto_reorder_by_latency` | bool | `false` | Dynamically sort targets based on historical response times. When enabled, targets are reordered by median latency (fastest first) with ±5% jitter to prevent thundering herd. Requires `infra.LatencyTracker` to be initialized. |
 | `routing_strategy` | string | `""` (latency) | Routing strategy when `auto_reorder_by_latency` is enabled. `""` or `"latency"` = latency-only sorting. `"balanced"` = weighted scoring using latency, cost, capability matching, and per-model score bonus. |
 | `routing_latency_weight` | float64 | `1.0` | Weight for latency normalization in balanced scoring (0.0-10.0). Higher = prioritize faster models. |
-| `routing_cost_weight` | float64 | `0.0` | Weight for cost normalization in balanced scoring (0.0-10.0). Higher = prioritize cheaper models. |
+ | `routing_cost_weight` | float64 | `0.0` | Weight for cost normalization in balanced scoring (0.0-10.0). Higher = prioritize cheaper models. |
 | `max_cost_per_request` | float64 | `0` (disabled) | Maximum allowed cost in USD per request. 0 = no limit. Logged but not yet enforced. |
 | `retryable_status_codes` | []int | `[429, 500, 502, 503, 504]` | HTTP status codes that trigger fallback to the next model in an agent chain. **Warning: setting this field REPLACES the built-in defaults entirely.** You must include all codes you want retryable (including the standard ones). Per-provider override available via `providers.<name>.retryable_status_codes` (provider-level replaces global for that provider). |
+| `empty_stream_as_error` | bool | `false` | Treat upstream responses with `200 OK` and zero-byte body as errors. When enabled, an SSE error payload is emitted to the client (code: `empty_response`), which OpenCode recognizes as a retryable error, allowing fallback to the next target. The metric `nenya_empty_stream_total` is incremented. When disabled (default), empty streams are treated as successful responses (backward compatible). |
 
 ## `security_filter`
 

@@ -24,7 +24,7 @@ Each layer may only import from layers to its left. This prevents circular depen
 | `internal/routing/` | Dynamic provider resolution, agent fallback chains, latency-aware reordering with jitter (thundering herd prevention), upstream request transformation, API key injection |
 | `internal/mcp/` | MCP (Model Context Protocol) client: HTTP+SSE transport, tool discovery, tool call execution, OpenAI schema transformation |
 | `internal/gateway/` | NenyaGateway struct, HTTP client configuration, token counting, MCP client initialization, MCP tool index |
-| `internal/proxy/` | HTTP handlers, content pipeline orchestration, upstream forwarding with retry, transparent SSE streaming, MCP multi-turn tool call loop, buffered SSE response |
+| `internal/proxy/` | HTTP handlers, content pipeline orchestration, upstream forwarding with retry, transparent SSE streaming, MCP multi-turn tool call loop, buffered SSE response, empty-stream detection with SSE error payload |
 
 ## Request Lifecycle
 
@@ -83,10 +83,11 @@ Client Request
   │       ├─ stallReader (120s idle timeout)
   │       ├─ SSETransformingReader (adapter.MutateResponse per chunk)
   │       ├─ OnContent callback (capture assistant response for memory storage)
-  │       ├─ StreamFilter (blocked execution patterns)
-  │       ├─ immediateFlushWriter (Flush after every Write)
-  │       ├─ sseTeeWriter (capture for response cache)
-  │       └─ Async MCP auto-save (if agent has mcp.auto_save)
+   │       ├─ StreamFilter (blocked execution patterns)
+   │       ├─ immediateFlushWriter (Flush after every Write)
+   │       ├─ sseTeeWriter (capture for response cache)
+   │       └─ Empty-stream detection (if enabled, emit SSE error payload on zero-byte response)
+   │           └─ Async MCP auto-save (if agent has mcp.auto_save)
   │           └─ POST to MCP server with assistant content (best-effort, tool name configurable)
   ├─ GET /v1/models
   ├─ POST /v1/embeddings
@@ -274,6 +275,7 @@ The streaming pipeline is built from composable `io.Reader` and `io.Writer` wrap
 | `StreamFilter` | Read | Kills stream if blocked execution patterns detected |
 | `immediateFlushWriter` | Write to client | Wraps `http.ResponseWriter`, calls `Flush()` after every `Write()` |
 | `sseTeeWriter` | Write to client + buffer | Captures response bytes for response cache storage |
+| `emptyStreamSSE` | Write to client | Emits SSE error payload when upstream returns 200 with empty body (when `empty_stream_as_error` is enabled) |
 
 Buffer pooling via `sync.Pool` (32KB buffers) reduces GC pressure under high concurrency.
 
@@ -286,6 +288,22 @@ In-memory LRU cache with deterministic SHA-256 fingerprinting. See [`CONFIGURATI
 - **Replay**: Cache hits replay the stored SSE stream with `X-Nenya-Cache-Status: HIT`
 - **Bypass**: `x-nenya-cache-force-refresh` header forces cache miss
 - **Eviction**: Background goroutine sweeps expired entries every `evict_every_seconds`
+
+## Empty-Stream Detection
+
+When an upstream provider returns `200 OK` with a zero-byte body, the SSE stream completes without any data events. If `governance.empty_stream_as_error` is enabled (default: `false`), Nenya treats this condition as a failure:
+
+1. **Detection** — After `copyStream` completes, the number of bytes written is checked. Zero bytes with no error signals an empty stream.
+2. **SSE Error Payload** — An SSE error chunk is emitted to the client:
+   ```json
+   data: {"type":"error","error":{"code":"empty_response","message":"empty upstream SSE"}}
+   data: [DONE]
+   ```
+   This structured payload is recognized by OpenCode's `parseStreamError` as a retryable `APIError`, triggering the client-side retry mechanism.
+3. **Metrics** — The counter `nenya_empty_stream_total{model,provider}` is incremented, allowing operators to identify problematic providers.
+4. **Circuit Breaker** — The failure is recorded via `AgentState.RecordFailure`, contributing to cooldown and circuit breaker state.
+
+When the flag is disabled (default), empty streams are treated as a successful response and the client receives a `200 OK` with no SSE events, preserving backward compatibility.
 
 ## Latency Tracker
 
@@ -321,6 +339,10 @@ For agents with multiple models in a fallback chain, non-retryable errors (e.g.,
 ### Client Disconnect Cleanup
 
 When a client disconnects during SSE streaming, the upstream connection is aborted and a 5-second timeout ensures the stream copy goroutine doesn't leak indefinitely.
+
+### Empty-Stream Detection
+
+When an upstream provider returns `200 OK` with a zero-byte body, Nenya can optionally treat this as a failure (when `governance.empty_stream_as_error` is enabled). A structured SSE error payload is emitted to the client, which OpenCode recognizes as a retryable error, allowing fallback to the next target in the agent chain. This prevents the client from hanging on an empty response and provides observability via the `nenya_empty_stream_total` metric. When disabled (default), empty streams are treated as successful responses for backward compatibility.
 
 ### MCP Graceful Degradation
 

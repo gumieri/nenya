@@ -42,7 +42,7 @@ func newChatProxy(t *testing.T, upstreamURL string) *Proxy {
 		},
 	}
 	secrets := &config.SecretsConfig{
-		ClientToken:  "test-token",
+		ClientToken: "test-token",
 		ProviderKeys: map[string]string{
 			"deepseek": "test-api-key",
 		},
