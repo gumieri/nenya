@@ -247,7 +247,7 @@ func hashDynamicModels(models []config.AgentModel) string {
 func (a *AgentState) expandProviderOnly(models []config.AgentModel, catalog *discovery.ModelCatalog, providers map[string]*config.Provider, logger *slog.Logger) []config.AgentModel {
 	expanded := make([]config.AgentModel, 0, len(models)*2)
 	for _, m := range models {
-		if !(m.Provider != "" && m.Model == "" && m.ProviderRgx == "" && m.ModelRgx == "") {
+		if m.Provider == "" || m.Model != "" || m.ProviderRgx != "" || m.ModelRgx != "" {
 			expanded = append(expanded, m)
 			continue
 		}

@@ -421,76 +421,10 @@ func normalizeToolCalls(chunk map[string]interface{}, state *toolCallState) bool
 		if !ok {
 			continue
 		}
-		keep := make([]interface{}, 0, len(tcs))
-		for _, tcRaw := range tcs {
-			tc, ok := tcRaw.(map[string]interface{})
-			if !ok {
-				continue
-			}
-			idx := ToInt(tc["index"])
 
-			if state.seenIndices[idx] {
-				keep = append(keep, tc)
-				continue
-			}
-
-			id := tc["id"]
-			switch id.(type) {
-			case string:
-			case nil:
-				tc["id"] = fmt.Sprintf("call_%d", idx)
-				mutated = true
-			default:
-				tc["id"] = fmt.Sprintf("call_%d", idx)
-				mutated = true
-			}
-
-			fn, hasFn := tc["function"]
-			tcID, _ := tc["id"].(string)
-			fnNameStr := extractToolCallName(fn, hasFn, &mutated, tcID)
-			fnArgsStr := extractToolCallArgs(fn, hasFn)
-
-			if fnNameStr != "" {
-				if p, ok := state.pending[idx]; ok {
-					if (tcID == "" || len(tcID) < 6 || tcID[:5] == "call_") && p.id != "" {
-						tc["id"] = p.id
-					}
-					if fnArgsStr == "" || fnArgsStr == "{}" {
-						if p.args != "" {
-							if fn, ok := tc["function"].(map[string]interface{}); ok {
-								fn["arguments"] = p.args
-							}
-						}
-					} else if p.args != "" {
-						if fn, ok := tc["function"].(map[string]interface{}); ok {
-							fn["arguments"] = p.args + fnArgsStr
-						}
-					}
-					delete(state.pending, idx)
-					mutated = true
-					slog.Debug("merged pending tool_call data on name arrival",
-						"index", idx,
-						"pending_args_len", len(p.args),
-						"tool_call_id", tcID,
-					)
-				}
-				state.seenIndices[idx] = true
-				keep = append(keep, tc)
-				continue
-			}
-
-			if fnArgsStr != "" && fnArgsStr != "{}" {
-				state.pending[idx] = &pendingToolCall{
-					id:   tcID,
-					args: fnArgsStr,
-				}
-				mutated = true
-				slog.Debug("buffered tool_call entry missing name, waiting for name chunk",
-					"index", idx,
-					"buffered_args_len", len(fnArgsStr),
-					"tool_call_id", tcID,
-				)
-			}
+		keep, mutatedInDelta := processToolCallDelta(tcs, state)
+		if mutatedInDelta {
+			mutated = true
 		}
 		if len(keep) != len(tcs) {
 			mutated = true
@@ -502,6 +436,102 @@ func normalizeToolCalls(chunk map[string]interface{}, state *toolCallState) bool
 		}
 	}
 	return mutated
+}
+
+func processToolCallDelta(tcs []interface{}, state *toolCallState) ([]interface{}, bool) {
+	keep := make([]interface{}, 0, len(tcs))
+	mutated := false
+
+	for _, tcRaw := range tcs {
+		tc, ok := tcRaw.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		idx := ToInt(tc["index"])
+
+		if state.seenIndices[idx] {
+			keep = append(keep, tc)
+			continue
+		}
+
+		mutated = normalizeToolCallID(tc) || mutated
+
+		fn, hasFn := tc["function"]
+		tcID, _ := tc["id"].(string)
+		fnNameStr := extractToolCallName(fn, hasFn, &mutated, tcID)
+		fnArgsStr := extractToolCallArgs(fn, hasFn)
+
+		if fnNameStr != "" {
+			handleToolCallWithName(tc, idx, tcID, fnArgsStr, state, &mutated)
+			state.seenIndices[idx] = true
+			keep = append(keep, tc)
+			continue
+		}
+
+		if fnArgsStr != "" && fnArgsStr != "{}" {
+			bufferPendingToolCall(idx, tcID, fnArgsStr, state, &mutated)
+		}
+	}
+	return keep, mutated
+}
+
+func normalizeToolCallID(tc map[string]interface{}) bool {
+	id := tc["id"]
+	switch id.(type) {
+	case string:
+		return false
+	case nil:
+		idx := ToInt(tc["index"])
+		tc["id"] = fmt.Sprintf("call_%d", idx)
+		return true
+	default:
+		idx := ToInt(tc["index"])
+		tc["id"] = fmt.Sprintf("call_%d", idx)
+		return true
+	}
+}
+
+func handleToolCallWithName(tc map[string]interface{}, idx int, tcID string, fnArgsStr string, state *toolCallState, mutated *bool) {
+	if p, ok := state.pending[idx]; ok {
+		mergePendingToolCall(tc, idx, tcID, fnArgsStr, p, mutated)
+		delete(state.pending, idx)
+		slog.Debug("merged pending tool_call data on name arrival",
+			"index", idx,
+			"pending_args_len", len(p.args),
+			"tool_call_id", tcID,
+		)
+	}
+}
+
+func mergePendingToolCall(tc map[string]interface{}, idx int, tcID string, fnArgsStr string, pending *pendingToolCall, mutated *bool) {
+	if (tcID == "" || len(tcID) < 6 || tcID[:5] == "call_") && pending.id != "" {
+		tc["id"] = pending.id
+	}
+	if fnArgsStr == "" || fnArgsStr == "{}" {
+		if pending.args != "" {
+			if fn, ok := tc["function"].(map[string]interface{}); ok {
+				fn["arguments"] = pending.args
+			}
+		}
+	} else if pending.args != "" {
+		if fn, ok := tc["function"].(map[string]interface{}); ok {
+			fn["arguments"] = pending.args + fnArgsStr
+		}
+	}
+	*mutated = true
+}
+
+func bufferPendingToolCall(idx int, tcID string, fnArgsStr string, state *toolCallState, mutated *bool) {
+	state.pending[idx] = &pendingToolCall{
+		id:   tcID,
+		args: fnArgsStr,
+	}
+	*mutated = true
+	slog.Debug("buffered tool_call entry missing name, waiting for name chunk",
+		"index", idx,
+		"buffered_args_len", len(fnArgsStr),
+		"tool_call_id", tcID,
+	)
 }
 
 func extractToolCallName(fn interface{}, hasFn bool, mutated *bool, tcID string) string {

@@ -223,3 +223,16 @@ All outbound HTTP dispatch points vulnerable to transient network errors (TLS ha
 - **Goroutine Lifecycle:** Every goroutine MUST have a clear termination condition (context cancellation, channel close, or explicit stop signal). Document the lifecycle in comments.
 - **No Goroutine Leaks:** Use `defer cancel()` for all contexts used to spawn goroutines. Ensure background goroutines are stopped on gateway shutdown.
 - **Context Propagation:** Never use `context.Background()` in request-scoped code. The request context (`r.Context()`) must flow through the entire call chain. The only exception is fire-and-forget operations that must outlive the request (e.g., metrics recording with explicit timeout).
+
+### 15. Code Quality & Linting (CRITICAL)
+- **Mandatory Linting:** After completing any code changes, you MUST run `golangci-lint run` to verify code quality. This is configured in `.golangci.yml` and includes:
+  - `gocyclo` (cyclomatic complexity threshold: 15)
+  - `funlen` (max 150 lines, 80 statements)
+  - `nestif` (max nesting depth: 4)
+  - `staticcheck` (static analysis)
+  - `govet` (Go vet with all checks enabled)
+  - `errcheck` (unchecked errors)
+  - `misspell` (spell checking)
+- **Compilation Check:** Run `go build ./...` to ensure all code compiles without errors.
+- **CI Enforcement:** The GitHub Actions workflow requires lint to pass before tests run. Failing lint will block PRs.
+- **Format Enforcement:** `golangci-lint` automatically runs `gofmt` and `goimports` - do not run these separately.
