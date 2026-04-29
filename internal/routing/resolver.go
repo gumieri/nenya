@@ -33,14 +33,19 @@ func ResolveProviders(modelName string, providers map[string]*config.Provider, c
 		if len(entries) > 0 {
 			matches := make([]ProviderMatch, 0, len(entries))
 			for _, e := range entries {
-				if _, ok := providers[e.Provider]; ok {
-					matches = append(matches, ProviderMatch{
-						Provider:   e.Provider,
-						Model:      modelName,
-						MaxContext: e.MaxContext,
-						MaxOutput:  e.MaxOutput,
-					})
+				p, ok := providers[e.Provider]
+				if !ok {
+					continue
 				}
+				if p.APIKey == "" && p.AuthStyle != "none" {
+					continue
+				}
+				matches = append(matches, ProviderMatch{
+					Provider:   e.Provider,
+					Model:      modelName,
+					MaxContext: e.MaxContext,
+					MaxOutput:  e.MaxOutput,
+				})
 			}
 			if len(matches) > 0 {
 				return matches
@@ -49,14 +54,19 @@ func ResolveProviders(modelName string, providers map[string]*config.Provider, c
 	}
 
 	if entry, ok := config.ModelRegistry[strings.ToLower(modelName)]; ok {
-		if p, ok := providers[entry.Provider]; ok {
-			return []ProviderMatch{{
-				Provider:   p.Name,
-				Model:      modelName,
-				MaxContext: entry.MaxContext,
-				MaxOutput:  entry.MaxOutput,
-			}}
+		p, ok := providers[entry.Provider]
+		if !ok {
+			return nil
 		}
+		if p.APIKey == "" && p.AuthStyle != "none" {
+			return nil
+		}
+		return []ProviderMatch{{
+			Provider:   p.Name,
+			Model:      modelName,
+			MaxContext: entry.MaxContext,
+			MaxOutput:  entry.MaxOutput,
+		}}
 	}
 
 	return nil

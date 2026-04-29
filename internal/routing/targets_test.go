@@ -11,7 +11,11 @@ import (
 
 func targetProviders() map[string]*config.Provider {
 	builtIn := config.BuiltInProviders()
-	return config.ResolveProviders(&config.Config{Providers: builtIn}, &config.SecretsConfig{ProviderKeys: map[string]string{}})
+	keys := make(map[string]string)
+	for name := range builtIn {
+		keys[name] = "test-key"
+	}
+	return config.ResolveProviders(&config.Config{Providers: builtIn}, &config.SecretsConfig{ProviderKeys: keys})
 }
 
 func testLogger() *slog.Logger {

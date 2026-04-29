@@ -13,8 +13,8 @@ func TestResolveProviders_MultiProviderFromCatalog(t *testing.T) {
 	catalog.Add(discovery.DiscoveredModel{ID: "deepseek-v4-flash", Provider: "nvidia", MaxContext: 50000, MaxOutput: 16384})
 
 	providers := map[string]*config.Provider{
-		"deepseek": {Name: "deepseek", URL: "https://api.deepseek.com/chat/completions"},
-		"nvidia":   {Name: "nvidia", URL: "https://integrate.api.nvidia.com/v1/chat/completions"},
+		"deepseek": {Name: "deepseek", URL: "https://api.deepseek.com/chat/completions", AuthStyle: "bearer", APIKey: "test-key"},
+		"nvidia":   {Name: "nvidia", URL: "https://integrate.api.nvidia.com/v1/chat/completions", AuthStyle: "bearer", APIKey: "test-key"},
 	}
 
 	matches := ResolveProviders("deepseek-v4-flash", providers, catalog)
@@ -42,7 +42,7 @@ func TestResolveProviders_SingleProviderFromCatalog(t *testing.T) {
 	catalog.Add(discovery.DiscoveredModel{ID: "glm-5-turbo", Provider: "zai", MaxContext: 200000, MaxOutput: 128000})
 
 	providers := map[string]*config.Provider{
-		"zai": {Name: "zai", URL: "https://api.z.ai/api/paas/v4/chat/completions"},
+		"zai": {Name: "zai", URL: "https://api.z.ai/api/paas/v4/chat/completions", AuthStyle: "bearer", APIKey: "test-key"},
 	}
 
 	matches := ResolveProviders("glm-5-turbo", providers, catalog)
@@ -61,7 +61,7 @@ func TestResolveProviders_SingleProviderFromCatalog(t *testing.T) {
 func TestResolveProviders_FallbackToModelRegistry(t *testing.T) {
 	catalog := discovery.NewModelCatalog()
 	providers := map[string]*config.Provider{
-		"deepseek": {Name: "deepseek", URL: "https://api.deepseek.com/chat/completions"},
+		"deepseek": {Name: "deepseek", URL: "https://api.deepseek.com/chat/completions", AuthStyle: "bearer", APIKey: "test-key"},
 	}
 
 	matches := ResolveProviders("deepseek-v4-pro", providers, catalog)
@@ -80,7 +80,7 @@ func TestResolveProviders_FallbackToModelRegistry(t *testing.T) {
 func TestResolveProviders_NoMatch(t *testing.T) {
 	catalog := discovery.NewModelCatalog()
 	providers := map[string]*config.Provider{
-		"deepseek": {Name: "deepseek", URL: "https://api.deepseek.com/chat/completions"},
+		"deepseek": {Name: "deepseek", URL: "https://api.deepseek.com/chat/completions", AuthStyle: "bearer", APIKey: "test-key"},
 	}
 
 	matches := ResolveProviders("unknown-model", providers, catalog)
@@ -94,7 +94,7 @@ func TestResolveProviders_CatalogTakesPriorityOverRegistry(t *testing.T) {
 	catalog.Add(discovery.DiscoveredModel{ID: "gpt-4o", Provider: "github", MaxContext: 8000, MaxOutput: 4096})
 
 	providers := map[string]*config.Provider{
-		"github": {Name: "github", URL: "https://models.inference.ai.azure.com/chat/completions"},
+		"github": {Name: "github", URL: "https://models.inference.ai.azure.com/chat/completions", AuthStyle: "bearer", APIKey: "test-key"},
 	}
 
 	matches := ResolveProviders("gpt-4o", providers, catalog)
@@ -112,7 +112,7 @@ func TestResolveProviders_MaxContextOutputFromCatalog(t *testing.T) {
 	catalog.Add(discovery.DiscoveredModel{ID: "test-model", Provider: "test", MaxContext: 1234, MaxOutput: 5678})
 
 	providers := map[string]*config.Provider{
-		"test": {Name: "test", URL: "https://api.example.com/chat/completions"},
+		"test": {Name: "test", URL: "https://api.example.com/chat/completions", AuthStyle: "bearer", APIKey: "test-key"},
 	}
 
 	matches := ResolveProviders("test-model", providers, catalog)
