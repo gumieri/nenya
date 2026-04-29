@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"flag"
+	"fmt"
 	"log/slog"
 	"net"
 	"net/http"
@@ -20,20 +21,42 @@ import (
 )
 
 func main() {
-	var configFile string
-	var verbose bool
-	var validateOnly bool
+	configFile, verbose, validateOnly := parseFlags()
+
+	logger := infra.SetupLogger(verbose)
+
+	cfg, secrets, err := loadConfig(configFile, validateOnly, logger)
+	if err != nil {
+		logger.Error("setup failed", "err", err)
+		os.Exit(1)
+	}
+
+	if validateOnly {
+		validateCtx, validateCancel := context.WithTimeout(context.Background(), 60*time.Second)
+		defer validateCancel()
+		if err := config.ValidateConfiguration(validateCtx, cfg, secrets, logger); err != nil {
+			logger.Error("configuration validation failed", "err", err)
+			os.Exit(1)
+		}
+		logger.Info("configuration validation passed")
+		return
+	}
+
+	run(logger, cfg, secrets, configFile)
+}
+
+func parseFlags() (configFile string, verbose, validateOnly bool) {
 	flag.StringVar(&configFile, "config", "/etc/nenya/", "Path to configuration file or directory")
 	flag.BoolVar(&verbose, "verbose", false, "Enable debug-level request/response logging")
 	flag.BoolVar(&validateOnly, "validate", false, "Validate configuration and exit")
 	flag.Parse()
+	return
+}
 
-	logger := infra.SetupLogger(verbose)
-
+func loadConfig(configFile string, validateOnly bool, logger *slog.Logger) (*config.Config, *config.SecretsConfig, error) {
 	cfg, err := config.Load(configFile)
 	if err != nil {
-		logger.Error("failed to load configuration", "err", err)
-		os.Exit(1)
+		return nil, nil, fmt.Errorf("load config: %w", err)
 	}
 
 	logger.Debug("configuration loaded",
@@ -50,21 +73,13 @@ func main() {
 
 	secrets, err := config.LoadSecrets()
 	if err != nil {
-		logger.Error("failed to load secrets", "err", err)
-		os.Exit(1)
+		return nil, nil, fmt.Errorf("load secrets: %w", err)
 	}
 
-	if validateOnly {
-		validateCtx, validateCancel := context.WithTimeout(context.Background(), 60*time.Second)
-		defer validateCancel()
-		if err = config.ValidateConfiguration(validateCtx, cfg, secrets, logger); err != nil {
-			logger.Error("configuration validation failed", "err", err)
-			os.Exit(1)
-		}
-		logger.Info("configuration validation passed")
-		os.Exit(0)
-	}
+	return cfg, secrets, nil
+}
 
+func run(logger *slog.Logger, cfg *config.Config, secrets *config.SecretsConfig, configFile string) {
 	startupCtx, startupCancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer startupCancel()
 
@@ -78,13 +93,7 @@ func main() {
 	sighup := make(chan os.Signal, 1)
 	signal.Notify(sighup, syscall.SIGHUP)
 
-	srv := &http.Server{
-		Handler:        p,
-		ReadTimeout:    10 * time.Second,
-		WriteTimeout:   0,
-		IdleTimeout:    120 * time.Second,
-		MaxHeaderBytes: 1 << 14,
-	}
+	srv := buildServer(p, cfg.Server.ListenAddr)
 
 	listener, addr, err := systemdListener(cfg.Server.ListenAddr)
 	if err != nil {
@@ -93,34 +102,50 @@ func main() {
 	}
 
 	logger.Info("nenya ai gateway listening", "addr", addr, "socket_activation", listener != nil)
-
-	if len(cfg.Agents) > 0 {
-		names := make([]string, 0, len(cfg.Agents))
-		for name := range cfg.Agents {
-			names = append(names, name)
-		}
-		sort.Strings(names)
-		logger.Info("agents configured", "agents", names)
-	}
-
-	if verbose {
-		logger.Info("verbose logging enabled")
-	}
+	logConfiguredAgents(logger, cfg)
 
 	serverErr := make(chan error, 1)
-	go func() {
-		if listener != nil {
-			if err := srv.Serve(listener); err != nil && err != http.ErrServerClosed {
-				serverErr <- err
-			}
-		} else {
-			if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-				serverErr <- err
-			}
-		}
-		close(serverErr)
-	}()
+	go serveHTTP(srv, listener, serverErr)
 
+	eventLoop(logger, configFile, p, ctx, sighup, serverErr, srv)
+}
+
+func buildServer(p *proxy.Proxy, listenAddr string) *http.Server {
+	return &http.Server{
+		Handler:        p,
+		ReadTimeout:    10 * time.Second,
+		WriteTimeout:   0,
+		IdleTimeout:    120 * time.Second,
+		MaxHeaderBytes: 1 << 14,
+	}
+}
+
+func logConfiguredAgents(logger *slog.Logger, cfg *config.Config) {
+	if len(cfg.Agents) == 0 {
+		return
+	}
+	names := make([]string, 0, len(cfg.Agents))
+	for name := range cfg.Agents {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	logger.Info("agents configured", "agents", names)
+}
+
+func serveHTTP(srv *http.Server, listener net.Listener, serverErr chan error) {
+	if listener != nil {
+		if err := srv.Serve(listener); err != nil && err != http.ErrServerClosed {
+			serverErr <- err
+		}
+	} else {
+		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			serverErr <- err
+		}
+	}
+	close(serverErr)
+}
+
+func eventLoop(logger *slog.Logger, configFile string, p *proxy.Proxy, ctx context.Context, sighup chan os.Signal, serverErr chan error, srv *http.Server) {
 	for {
 		select {
 		case err := <-serverErr:

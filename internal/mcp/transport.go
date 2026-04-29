@@ -161,20 +161,39 @@ func (t *HTTPTransport) Connect(ctx context.Context) error {
 
 	sseReader := bufio.NewReader(resp.Body)
 
+	endpointURL, err := readSSEInitialEndpoint(connectCtx, sseReader, baseURL, t.cfg.Logger)
+	if err != nil {
+		sseCancel()
+		_ = resp.Body.Close()
+		return err
+	}
+
+	t.mu.Lock()
+	t.sessionEndpoint = endpointURL
+	t.mu.Unlock()
+
+	t.cfg.Logger.Debug("received MCP session endpoint", "endpoint", endpointURL)
+
+	t.sseCancel = sseCancel
+	go t.sseReadLoop(sseReader)
+	go t.eventDispatchLoop()
+	go t.keepaliveLoop()
+
+	t.ready.Store(true)
+	return nil
+}
+
+func readSSEInitialEndpoint(ctx context.Context, reader *bufio.Reader, baseURL *url.URL, logger *slog.Logger) (string, error) {
 	for {
 		select {
-		case <-connectCtx.Done():
-			sseCancel()
-			_ = resp.Body.Close()
-			return fmt.Errorf("waiting for MCP session endpoint: %w", connectCtx.Err())
+		case <-ctx.Done():
+			return "", fmt.Errorf("waiting for MCP session endpoint: %w", ctx.Err())
 		default:
 		}
 
-		line, err := sseReader.ReadString('\n')
+		line, err := reader.ReadString('\n')
 		if err != nil {
-			sseCancel()
-			_ = resp.Body.Close()
-			return fmt.Errorf("reading SSE endpoint event: %w", err)
+			return "", fmt.Errorf("reading SSE endpoint event: %w", err)
 		}
 
 		line = strings.TrimSpace(line)
@@ -192,50 +211,60 @@ func (t *HTTPTransport) Connect(ctx context.Context) error {
 		var parsed struct {
 			Endpoint string `json:"endpoint"`
 		}
-		if err := json.Unmarshal([]byte(data), &parsed); err != nil {
-			t.cfg.Logger.Debug("non-JSON SSE data, treating as endpoint", "data", data)
+		if jsonErr := json.Unmarshal([]byte(data), &parsed); jsonErr != nil {
+			logger.Debug("non-JSON SSE data, treating as endpoint", "data", data)
 			parsed.Endpoint = data
 		}
 
-		if parsed.Endpoint != "" {
-			endpointURL := parsed.Endpoint
-			if !strings.HasPrefix(endpointURL, "http") {
-				endpointURL = baseURL.Scheme + "://" + baseURL.Host + endpointURL
-			} else {
-				// Validate that the endpoint host matches the configured base URL
-				// to prevent a compromised MCP server from redirecting requests
-				// to an attacker-controlled host (session endpoint hijacking).
-				epURL, err := url.Parse(endpointURL)
-				if err != nil || epURL.Host != baseURL.Host {
-					gotHost := ""
-					if err == nil {
-						gotHost = epURL.Host
-					}
-					t.cfg.Logger.Warn("MCP server sent endpoint with unexpected host, rejecting",
-						"expected_host", baseURL.Host, "got_host", gotHost, "endpoint", endpointURL)
-					sseCancel()
-					_ = resp.Body.Close()
-					return fmt.Errorf("MCP session endpoint host mismatch: expected %s, got %s", baseURL.Host, gotHost)
-				}
-			}
-
-			t.mu.Lock()
-			t.sessionEndpoint = endpointURL
-			t.mu.Unlock()
-
-			t.cfg.Logger.Debug("received MCP session endpoint", "endpoint", endpointURL)
-
-			t.sseCancel = sseCancel
-			go t.sseReadLoop(sseReader)
-			go t.eventDispatchLoop()
-			go t.keepaliveLoop()
-
-			break
+		if parsed.Endpoint == "" {
+			continue
 		}
-	}
 
-	t.ready.Store(true)
-	return nil
+		endpointURL := parsed.Endpoint
+		if !strings.HasPrefix(endpointURL, "http") {
+			return baseURL.Scheme + "://" + baseURL.Host + endpointURL, nil
+		}
+
+		epURL, err := url.Parse(endpointURL)
+		if err != nil || epURL.Host != baseURL.Host {
+			gotHost := ""
+			if err == nil {
+				gotHost = epURL.Host
+			}
+			logger.Warn("MCP server sent endpoint with unexpected host, rejecting",
+				"expected_host", baseURL.Host, "got_host", gotHost, "endpoint", endpointURL)
+			return "", fmt.Errorf("MCP session endpoint host mismatch: expected %s, got %s", baseURL.Host, gotHost)
+		}
+
+		return endpointURL, nil
+	}
+}
+
+func sendHTTPPost(client *http.Client, t *HTTPTransport, ctx context.Context, endpoint string, reqBytes []byte) (*http.Response, error) {
+	var httpResp *http.Response
+	err := util.DoWithRetry(ctx, 2, func() error {
+		httpReq, reqErr := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, strings.NewReader(string(reqBytes)))
+		if reqErr != nil {
+			return fmt.Errorf("creating POST request: %w", reqErr)
+		}
+		t.setHeaders(httpReq)
+		httpReq.Header.Set("Content-Type", "application/json")
+
+		var doErr error
+		httpResp, doErr = client.Do(httpReq)
+		if doErr != nil {
+			return doErr
+		}
+		if httpResp.StatusCode >= 500 {
+			_ = httpResp.Body.Close()
+			return fmt.Errorf("upstream error: %d", httpResp.StatusCode)
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return httpResp, nil
 }
 
 func (t *HTTPTransport) SendRequest(ctx context.Context, method string, params any) (*Response, error) {
@@ -284,26 +313,7 @@ func (t *HTTPTransport) SendRequest(ctx context.Context, method string, params a
 	reqBytesCopy := make([]byte, len(reqBytes))
 	copy(reqBytesCopy, reqBytes)
 
-	var httpResp *http.Response
-	err = util.DoWithRetry(postCtx, 2, func() error {
-		httpReq, reqErr := http.NewRequestWithContext(postCtx, http.MethodPost, endpoint, strings.NewReader(string(reqBytesCopy)))
-		if reqErr != nil {
-			return fmt.Errorf("creating POST request: %w", reqErr)
-		}
-		t.setHeaders(httpReq)
-		httpReq.Header.Set("Content-Type", "application/json")
-
-		var doErr error
-		httpResp, doErr = t.httpClient.Do(httpReq)
-		if doErr != nil {
-			return doErr
-		}
-		if httpResp.StatusCode >= 500 {
-			_ = httpResp.Body.Close()
-			return fmt.Errorf("upstream error: %d", httpResp.StatusCode)
-		}
-		return nil
-	})
+	httpResp, err := sendHTTPPost(t.httpClient, t, postCtx, endpoint, reqBytesCopy)
 	if err != nil {
 		if ctx.Err() != nil {
 			return nil, ctx.Err()
@@ -460,6 +470,23 @@ func (t *HTTPTransport) keepaliveLoop() {
 	}
 }
 
+func readMultiLineEvent(reader *bufio.Reader) string {
+	for {
+		nextLine, readErr := reader.ReadString('\n')
+		if readErr != nil {
+			break
+		}
+		nextLine = strings.TrimSpace(nextLine)
+		if nextLine == "" {
+			break
+		}
+		if strings.HasPrefix(nextLine, "data: ") {
+			return strings.TrimPrefix(nextLine, "data: ")
+		}
+	}
+	return ""
+}
+
 func (t *HTTPTransport) sseReadLoop(reader *bufio.Reader) {
 	defer close(t.doneCh)
 
@@ -489,19 +516,7 @@ func (t *HTTPTransport) sseReadLoop(reader *bufio.Reader) {
 		switch {
 		case strings.HasPrefix(line, "event: "):
 			eventType = strings.TrimPrefix(line, "event: ")
-			for {
-				nextLine, readErr := reader.ReadString('\n')
-				if readErr != nil {
-					break
-				}
-				nextLine = strings.TrimSpace(nextLine)
-				if nextLine == "" {
-					break
-				}
-				if strings.HasPrefix(nextLine, "data: ") {
-					eventData = strings.TrimPrefix(nextLine, "data: ")
-				}
-			}
+			eventData = readMultiLineEvent(reader)
 		case strings.HasPrefix(line, "data: "):
 			eventData = strings.TrimPrefix(line, "data: ")
 		case strings.HasPrefix(line, ":"):
@@ -554,34 +569,38 @@ func (t *HTTPTransport) eventDispatchLoop() {
 				continue
 			}
 
-			if rpcResp.ID == nil {
-				continue
-			}
+			dispatchJSONRPCResponse(t, rpcResp)
+		}
+	}
+}
 
-			var idKey int64
-			switch id := rpcResp.ID.(type) {
-			case float64:
-				idKey = int64(id)
-			case int64:
-				idKey = id
-			default:
-				continue
-			}
+func dispatchJSONRPCResponse(t *HTTPTransport, rpcResp Response) {
+	if rpcResp.ID == nil {
+		return
+	}
 
-			t.pendingMu.Lock()
-			ch, ok := t.pending[idKey]
-			if ok {
-				delete(t.pending, idKey)
-			}
-			t.pendingMu.Unlock()
+	var idKey int64
+	switch id := rpcResp.ID.(type) {
+	case float64:
+		idKey = int64(id)
+	case int64:
+		idKey = id
+	default:
+		return
+	}
 
-			if ok {
-				select {
-				case ch <- &rpcResp:
-				default:
-					t.cfg.Logger.Warn("dropping response for pending request, channel full", "id", idKey)
-				}
-			}
+	t.pendingMu.Lock()
+	ch, ok := t.pending[idKey]
+	if ok {
+		delete(t.pending, idKey)
+	}
+	t.pendingMu.Unlock()
+
+	if ok {
+		select {
+		case ch <- &rpcResp:
+		default:
+			t.cfg.Logger.Warn("dropping response for pending request, channel full", "id", idKey)
 		}
 	}
 }

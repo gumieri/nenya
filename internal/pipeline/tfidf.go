@@ -173,12 +173,7 @@ func TruncateTFIDF(text string, maxSize int, query string, cfg config.Governance
 		return text
 	}
 
-	// Cap query length before tokenization to bound O(n·m) work.
-	const maxQueryRunes = 2000
-	if utf8.RuneCountInString(query) > maxQueryRunes {
-		query = string([]rune(query)[:maxQueryRunes])
-	}
-
+	query = capQueryRunes(query)
 	separator := "\n... [NENYA: TF-IDF PRUNED] ...\n"
 	sepLen := utf8.RuneCountInString(separator)
 	available := maxSize - sepLen
@@ -197,36 +192,13 @@ func TruncateTFIDF(text string, maxSize int, query string, cfg config.Governance
 	}
 
 	n := len(blocks)
-	pinFirst := max(1, int(float64(n)*cfg.KeepFirstPercent/100.0))
-	pinLast := max(1, int(float64(n)*cfg.KeepLastPercent/100.0))
-
+	pinFirst, pinLast, middleBudget, reservedForPinned := calculateBudget(n, blockRunes, cfg, available)
 	if pinFirst+pinLast >= n {
 		return TruncateMiddleOut(text, maxSize, cfg)
 	}
 
 	middleStart := pinFirst
 	middleEnd := n - pinLast
-
-	pinFirstRunes := 0
-	for i := 0; i < pinFirst; i++ {
-		pinFirstRunes += blockRunes[i]
-	}
-	pinLastRunes := 0
-	for i := middleEnd; i < n; i++ {
-		pinLastRunes += blockRunes[i]
-	}
-
-	reservedForPinned := pinFirstRunes + pinLastRunes
-	maxReserved := int(float64(available) * 0.5)
-	if reservedForPinned > maxReserved {
-		reservedForPinned = maxReserved
-	}
-
-	middleBudget := available - reservedForPinned
-	if middleBudget <= 0 {
-		middleBudget = available / 3
-	}
-
 	middleBlocks := blocks[middleStart:middleEnd]
 	middleBlockRunes := blockRunes[middleStart:middleEnd]
 
@@ -236,17 +208,73 @@ func TruncateTFIDF(text string, maxSize int, query string, cfg config.Governance
 	}
 	sortScoredDesc(scored)
 
-	keptMiddle := make(map[int]bool, len(middleBlocks))
-	currentRunes := 0
-	for _, sb := range scored {
-		if currentRunes+middleBlockRunes[sb.index] > middleBudget {
-			continue
-		}
-		keptMiddle[sb.index] = true
-		currentRunes += middleBlockRunes[sb.index]
+	keptMiddle := selectKeptBlocks(scored, middleBlockRunes, middleBudget)
+
+	result := assembleResult(blocks, blockRunes, pinFirst, middleStart, middleEnd, n, keptMiddle, separator, available, reservedForPinned)
+	if utf8.RuneCountInString(result) > maxSize {
+		return TruncateMiddleOut(result, maxSize, cfg)
+	}
+	return result
+}
+
+func capQueryRunes(query string) string {
+	const maxQueryRunes = 2000
+	if utf8.RuneCountInString(query) > maxQueryRunes {
+		query = string([]rune(query)[:maxQueryRunes])
+	}
+	return query
+}
+
+func calculateBudget(n int, blockRunes []int, cfg config.GovernanceConfig, available int) (pinFirst, pinLast, middleBudget, reservedForPinned int) {
+	pinFirst = max(1, int(float64(n)*cfg.KeepFirstPercent/100.0))
+	pinLast = max(1, int(float64(n)*cfg.KeepLastPercent/100.0))
+
+	pinFirstRunes := 0
+	for i := 0; i < pinFirst; i++ {
+		pinFirstRunes += blockRunes[i]
+	}
+	pinLastRunes := 0
+	for i := n - pinLast; i < n; i++ {
+		pinLastRunes += blockRunes[i]
 	}
 
-	totalKept := pinFirstRunes + currentRunes
+	reservedForPinned = pinFirstRunes + pinLastRunes
+	maxReserved := int(float64(available) * 0.5)
+	if reservedForPinned > maxReserved {
+		reservedForPinned = maxReserved
+	}
+
+	middleBudget = available - reservedForPinned
+	if middleBudget <= 0 {
+		middleBudget = available / 3
+	}
+	return
+}
+
+func selectKeptBlocks(scored []scoredBlock, runes []int, budget int) map[int]bool {
+	kept := make(map[int]bool, len(scored))
+	currentRunes := 0
+	for _, sb := range scored {
+		if currentRunes+runes[sb.index] > budget {
+			continue
+		}
+		kept[sb.index] = true
+		currentRunes += runes[sb.index]
+	}
+	return kept
+}
+
+func assembleResult(blocks []Block, blockRunes []int, pinFirst, middleStart, middleEnd, n int, keptMiddle map[int]bool, separator string, available, reservedForPinned int) string {
+	totalKept := 0
+	for i := 0; i < pinFirst; i++ {
+		totalKept += blockRunes[i]
+	}
+	for i, kept := range keptMiddle {
+		if kept {
+			totalKept += blockRunes[middleStart+i]
+		}
+	}
+
 	var sb strings.Builder
 	for i := 0; i < pinFirst; i++ {
 		sb.WriteString(blocks[i].Content)
@@ -276,11 +304,7 @@ func TruncateTFIDF(text string, maxSize int, query string, cfg config.Governance
 		totalKept += blockRunes[i]
 	}
 
-	result := sb.String()
-	if utf8.RuneCountInString(result) > maxSize {
-		return TruncateMiddleOut(result, maxSize, cfg)
-	}
-	return result
+	return sb.String()
 }
 
 func TruncateTFIDFCodeAware(text string, maxSize int, query string, cfg config.GovernanceConfig) string {

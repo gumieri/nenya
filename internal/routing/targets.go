@@ -106,64 +106,130 @@ func (a *AgentState) BuildTargetList(logger *slog.Logger, agentName string, agen
 	return append(active, cooling...)
 }
 
-func (a *AgentState) expandModels(agentName string, agent config.AgentConfig, catalog *discovery.ModelCatalog, providers map[string]*config.Provider, logger *slog.Logger) []config.AgentModel {
-	hasDynamic := false
-	hasDeferred := false
-	hasProviderOnly := false
-	for _, m := range agent.Models {
+type modelFlags struct {
+	hasDynamic      bool
+	hasDeferred     bool
+	hasProviderOnly bool
+}
+
+func detectModelFlags(models []config.AgentModel) modelFlags {
+	var flags modelFlags
+	for _, m := range models {
 		if m.ProviderRgx != "" || m.ModelRgx != "" {
-			hasDynamic = true
-			break
+			flags.hasDynamic = true
 		}
-	}
-	for _, m := range agent.Models {
 		if m.Provider == "" && m.Model != "" {
-			hasDeferred = true
-			break
+			flags.hasDeferred = true
 		}
-	}
-	for _, m := range agent.Models {
 		if m.Provider != "" && m.Model == "" && m.ProviderRgx == "" && m.ModelRgx == "" {
-			hasProviderOnly = true
-			break
+			flags.hasProviderOnly = true
 		}
 	}
-	if !hasDynamic && !hasDeferred && !hasProviderOnly {
+	return flags
+}
+
+func (a *AgentState) expandModels(agentName string, agent config.AgentConfig, catalog *discovery.ModelCatalog, providers map[string]*config.Provider, logger *slog.Logger) []config.AgentModel {
+	flags := detectModelFlags(agent.Models)
+	if !flags.hasDynamic && !flags.hasDeferred && !flags.hasProviderOnly {
 		return agent.Models
 	}
 
 	models := agent.Models
-	if hasProviderOnly {
+	if flags.hasProviderOnly {
 		models = a.expandProviderOnly(models, catalog, providers, logger)
 	}
 
-	if hasDynamic {
-		hash := hashDynamicModels(models)
-		catTs := catalog.FetchedAt()
-
-		a.selectorCacheMu.RLock()
-		cached, hit := a.selectorCache[agentName]
-		a.selectorCacheMu.RUnlock()
-		if hit && cached.hash == hash && cached.timestamp.Equal(catTs) {
-			return cached.models
-		}
-
-		models = expandDynamicModels(models, catalog, providers, logger)
-
-		a.selectorCacheMu.Lock()
-		a.selectorCache[agentName] = selectorCacheEntry{
-			timestamp: catTs,
-			models:    models,
-			hash:      hash,
-		}
-		a.selectorCacheMu.Unlock()
+	if flags.hasDynamic {
+		models = a.expandDynamicWithCache(agentName, models, catalog, providers, logger)
 	}
 
-	if hasDeferred {
+	if flags.hasDeferred {
 		models = a.expandDeferredProviders(models, catalog, providers, logger)
 	}
 
 	return models
+}
+
+func (a *AgentState) expandDynamicWithCache(agentName string, models []config.AgentModel, catalog *discovery.ModelCatalog, providers map[string]*config.Provider, logger *slog.Logger) []config.AgentModel {
+	hash := hashDynamicModels(models)
+	catTs := catalog.FetchedAt()
+
+	a.selectorCacheMu.RLock()
+	cached, hit := a.selectorCache[agentName]
+	a.selectorCacheMu.RUnlock()
+	if hit && cached.hash == hash && cached.timestamp.Equal(catTs) {
+		return cached.models
+	}
+
+	models = expandDynamicModels(models, catalog, providers, logger)
+
+	a.selectorCacheMu.Lock()
+	a.selectorCache[agentName] = selectorCacheEntry{
+		timestamp: catTs,
+		models:    models,
+		hash:      hash,
+	}
+	a.selectorCacheMu.Unlock()
+	return models
+}
+
+func expandDeferredFromCatalog(m config.AgentModel, catalog *discovery.ModelCatalog, providers map[string]*config.Provider, logger *slog.Logger) ([]config.AgentModel, bool) {
+	if catalog == nil {
+		return nil, false
+	}
+	entries := catalog.LookupAll(m.Model)
+	if len(entries) == 0 {
+		return nil, false
+	}
+	expanded := make([]config.AgentModel, 0, len(entries))
+	for _, e := range entries {
+		if _, ok := providers[e.Provider]; !ok {
+			continue
+		}
+		am := config.AgentModel{
+			Provider:   e.Provider,
+			Model:      m.Model,
+			MaxContext: m.MaxContext,
+			MaxOutput:  m.MaxOutput,
+		}
+		if am.MaxContext <= 0 {
+			am.MaxContext = e.MaxContext
+		}
+		if am.MaxOutput <= 0 {
+			am.MaxOutput = e.MaxOutput
+		}
+		logger.Debug("expanded deferred provider",
+			"model", m.Model, "provider", e.Provider,
+			"max_context", am.MaxContext, "max_output", am.MaxOutput)
+		expanded = append(expanded, am)
+	}
+	return expanded, true
+}
+
+func expandDeferredFromRegistry(m config.AgentModel, providers map[string]*config.Provider, logger *slog.Logger) (config.AgentModel, bool) {
+	entry, ok := config.ModelRegistry[m.Model]
+	if !ok {
+		return config.AgentModel{}, false
+	}
+	p, ok := providers[entry.Provider]
+	if !ok {
+		return config.AgentModel{}, false
+	}
+	am := config.AgentModel{
+		Provider:   p.Name,
+		Model:      m.Model,
+		MaxContext: m.MaxContext,
+		MaxOutput:  m.MaxOutput,
+	}
+	if am.MaxContext <= 0 {
+		am.MaxContext = entry.MaxContext
+	}
+	if am.MaxOutput <= 0 {
+		am.MaxOutput = entry.MaxOutput
+	}
+	logger.Debug("deferred provider fallback to ModelRegistry",
+		"model", m.Model, "provider", p.Name)
+	return am, true
 }
 
 func (a *AgentState) expandDeferredProviders(models []config.AgentModel, catalog *discovery.ModelCatalog, providers map[string]*config.Provider, logger *slog.Logger) []config.AgentModel {
@@ -174,54 +240,14 @@ func (a *AgentState) expandDeferredProviders(models []config.AgentModel, catalog
 			continue
 		}
 
-		if catalog != nil {
-			entries := catalog.LookupAll(m.Model)
-			if len(entries) > 0 {
-				for _, e := range entries {
-					if _, ok := providers[e.Provider]; !ok {
-						continue
-					}
-					am := config.AgentModel{
-						Provider:   e.Provider,
-						Model:      m.Model,
-						MaxContext: m.MaxContext,
-						MaxOutput:  m.MaxOutput,
-					}
-					if am.MaxContext <= 0 {
-						am.MaxContext = e.MaxContext
-					}
-					if am.MaxOutput <= 0 {
-						am.MaxOutput = e.MaxOutput
-					}
-					logger.Debug("expanded deferred provider",
-						"model", m.Model, "provider", e.Provider,
-						"max_context", am.MaxContext, "max_output", am.MaxOutput)
-					expanded = append(expanded, am)
-				}
-				continue
-			}
+		if result, ok := expandDeferredFromCatalog(m, catalog, providers, logger); ok {
+			expanded = append(expanded, result...)
+			continue
 		}
 
-		entry, ok := config.ModelRegistry[m.Model]
-		if ok {
-			if p, ok := providers[entry.Provider]; ok {
-				am := config.AgentModel{
-					Provider:   p.Name,
-					Model:      m.Model,
-					MaxContext: m.MaxContext,
-					MaxOutput:  m.MaxOutput,
-				}
-				if am.MaxContext <= 0 {
-					am.MaxContext = entry.MaxContext
-				}
-				if am.MaxOutput <= 0 {
-					am.MaxOutput = entry.MaxOutput
-				}
-				logger.Debug("deferred provider fallback to ModelRegistry",
-					"model", m.Model, "provider", p.Name)
-				expanded = append(expanded, am)
-				continue
-			}
+		if am, ok := expandDeferredFromRegistry(m, providers, logger); ok {
+			expanded = append(expanded, am)
+			continue
 		}
 
 		logger.Warn("deferred provider could not be resolved",
@@ -244,6 +270,63 @@ func hashDynamicModels(models []config.AgentModel) string {
 	return strings.Join(parts, "|")
 }
 
+func expandWithCatalog(m config.AgentModel, providerName string, catalog *discovery.ModelCatalog, providers map[string]*config.Provider, logger *slog.Logger) ([]config.AgentModel, bool) {
+	if catalog == nil {
+		return nil, false
+	}
+	discModels := catalog.ModelsForProvider(providerName)
+	if len(discModels) == 0 {
+		return nil, false
+	}
+	expanded := make([]config.AgentModel, 0, len(discModels))
+	for _, dm := range discModels {
+		am := config.AgentModel{
+			Provider:   dm.Provider,
+			Model:      dm.ID,
+			MaxContext: m.MaxContext,
+			MaxOutput:  m.MaxOutput,
+		}
+		if am.MaxContext <= 0 {
+			am.MaxContext = dm.MaxContext
+		}
+		if am.MaxOutput <= 0 {
+			am.MaxOutput = dm.MaxOutput
+		}
+		logger.Debug("expanded provider-only entry from catalog",
+			"provider", providerName, "model", dm.ID,
+			"max_context", am.MaxContext, "max_output", am.MaxOutput)
+		expanded = append(expanded, am)
+	}
+	return expanded, true
+}
+
+func expandWithRegistryFallback(providerName string, m config.AgentModel, logger *slog.Logger) ([]config.AgentModel, bool) {
+	registryModels := make([]config.AgentModel, 0)
+	for modelID, entry := range config.ModelRegistry {
+		if entry.Provider == providerName {
+			am := config.AgentModel{
+				Provider:   providerName,
+				Model:      modelID,
+				MaxContext: m.MaxContext,
+				MaxOutput:  m.MaxOutput,
+			}
+			if am.MaxContext <= 0 {
+				am.MaxContext = entry.MaxContext
+			}
+			if am.MaxOutput <= 0 {
+				am.MaxOutput = entry.MaxOutput
+			}
+			registryModels = append(registryModels, am)
+		}
+	}
+	if len(registryModels) == 0 {
+		return nil, false
+	}
+	logger.Debug("expanded provider-only entry from ModelRegistry fallback",
+		"provider", providerName, "count", len(registryModels))
+	return registryModels, true
+}
+
 func (a *AgentState) expandProviderOnly(models []config.AgentModel, catalog *discovery.ModelCatalog, providers map[string]*config.Provider, logger *slog.Logger) []config.AgentModel {
 	expanded := make([]config.AgentModel, 0, len(models)*2)
 	for _, m := range models {
@@ -258,53 +341,13 @@ func (a *AgentState) expandProviderOnly(models []config.AgentModel, catalog *dis
 			continue
 		}
 
-		if catalog != nil {
-			discModels := catalog.ModelsForProvider(providerName)
-			if len(discModels) > 0 {
-				for _, dm := range discModels {
-					am := config.AgentModel{
-						Provider:   dm.Provider,
-						Model:      dm.ID,
-						MaxContext: m.MaxContext,
-						MaxOutput:  m.MaxOutput,
-					}
-					if am.MaxContext <= 0 {
-						am.MaxContext = dm.MaxContext
-					}
-					if am.MaxOutput <= 0 {
-						am.MaxOutput = dm.MaxOutput
-					}
-					logger.Debug("expanded provider-only entry from catalog",
-						"provider", providerName, "model", dm.ID,
-						"max_context", am.MaxContext, "max_output", am.MaxOutput)
-					expanded = append(expanded, am)
-				}
-				continue
-			}
+		if result, ok := expandWithCatalog(m, providerName, catalog, providers, logger); ok {
+			expanded = append(expanded, result...)
+			continue
 		}
 
-		registryModels := make([]config.AgentModel, 0)
-		for modelID, entry := range config.ModelRegistry {
-			if entry.Provider == providerName {
-				am := config.AgentModel{
-					Provider:   providerName,
-					Model:      modelID,
-					MaxContext: m.MaxContext,
-					MaxOutput:  m.MaxOutput,
-				}
-				if am.MaxContext <= 0 {
-					am.MaxContext = entry.MaxContext
-				}
-				if am.MaxOutput <= 0 {
-					am.MaxOutput = entry.MaxOutput
-				}
-				registryModels = append(registryModels, am)
-			}
-		}
-		if len(registryModels) > 0 {
-			logger.Debug("expanded provider-only entry from ModelRegistry fallback",
-				"provider", providerName, "count", len(registryModels))
-			expanded = append(expanded, registryModels...)
+		if result, ok := expandWithRegistryFallback(providerName, m, logger); ok {
+			expanded = append(expanded, result...)
 			continue
 		}
 

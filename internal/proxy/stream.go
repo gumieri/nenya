@@ -245,10 +245,19 @@ func (p *Proxy) setupTransformingReader(gw *gateway.NenyaGateway, target routing
 	}
 
 	stallR := newStallReader(action.resp.Body, streamIdleTimeout)
-	defer stallR.Stop()
 
 	transformingReader := stream.NewSSETransformingReader(stallR, transformer)
-	transformingReader.SetOnUsage(func(completion, prompt, total, cacheHit, cacheMiss int) {
+	transformingReader.SetOnUsage(p.makeUsageCallback(gw, target, agentName))
+
+	p.setupStreamFilterIfEnabled(gw, transformingReader)
+	p.setupStreamEntropyFilterIfEnabled(gw, transformingReader)
+	contentBuilder := p.setupContentBuilderIfNeeded(gw, agentName, transformingReader)
+
+	return transformingReader, contentBuilder
+}
+
+func (p *Proxy) makeUsageCallback(gw *gateway.NenyaGateway, target routing.UpstreamTarget, agentName string) func(int, int, int, int, int) {
+	return func(completion, prompt, total, cacheHit, cacheMiss int) {
 		gw.Stats.RecordOutput(target.Model, completion)
 		gw.Metrics.RecordTokens("output", target.Model, agentName, target.Provider, completion)
 		if cacheHit > 0 {
@@ -263,36 +272,48 @@ func (p *Proxy) setupTransformingReader(gw *gateway.NenyaGateway, target routing
 				gw.CostTracker.RecordUsage(target.Model, cost)
 			}
 		}
-	})
-
-	if gw.Config.SecurityFilter.OutputEnabled && (len(gw.SecretPatterns) > 0 || len(gw.BlockedPatterns) > 0) {
-		sf := stream.NewStreamFilter(gw.SecretPatterns, gw.BlockedPatterns, gw.Config.SecurityFilter.RedactionLabel, gw.Config.SecurityFilter.OutputWindowChars)
-		transformingReader.SetStreamFilter(sf)
-		gw.Logger.Debug("stream filter active",
-			"secret_patterns", len(gw.SecretPatterns),
-			"block_patterns", len(gw.BlockedPatterns),
-			"window_size", gw.Config.SecurityFilter.OutputWindowChars)
 	}
+}
 
-	if gw.EntropyFilter != nil && gw.Config.SecurityFilter.OutputEnabled {
-		ef := stream.NewStreamEntropyFilter(
-			gw.EntropyFilter.RedactHighEntropy,
-			gw.Config.SecurityFilter.RedactionLabel,
-			gw.Config.SecurityFilter.OutputWindowChars,
-		)
-		transformingReader.SetStreamEntropyFilter(ef)
-		gw.Logger.Debug("stream entropy filter active",
-			"threshold", gw.Config.SecurityFilter.EntropyThreshold,
-			"min_token", gw.Config.SecurityFilter.EntropyMinToken,
-			"window_size", gw.Config.SecurityFilter.OutputWindowChars)
+func (p *Proxy) setupStreamFilterIfEnabled(gw *gateway.NenyaGateway, r *stream.SSETransformingReader) {
+	if !gw.Config.SecurityFilter.OutputEnabled {
+		return
 	}
+	if len(gw.SecretPatterns) == 0 && len(gw.BlockedPatterns) == 0 {
+		return
+	}
+	sf := stream.NewStreamFilter(gw.SecretPatterns, gw.BlockedPatterns, gw.Config.SecurityFilter.RedactionLabel, gw.Config.SecurityFilter.OutputWindowChars)
+	r.SetStreamFilter(sf)
+	gw.Logger.Debug("stream filter active",
+		"secret_patterns", len(gw.SecretPatterns),
+		"block_patterns", len(gw.BlockedPatterns),
+		"window_size", gw.Config.SecurityFilter.OutputWindowChars)
+}
 
-	var contentBuilder *contentBuilder
-	if agent, ok := gw.Config.Agents[agentName]; ok && agent.MCP != nil && agent.MCP.AutoSave {
-		contentBuilder = newContentBuilder()
-		transformingReader.SetOnContent(contentBuilder.addContent)
+func (p *Proxy) setupStreamEntropyFilterIfEnabled(gw *gateway.NenyaGateway, r *stream.SSETransformingReader) {
+	if gw.EntropyFilter == nil || !gw.Config.SecurityFilter.OutputEnabled {
+		return
 	}
-	return transformingReader, contentBuilder
+	ef := stream.NewStreamEntropyFilter(
+		gw.EntropyFilter.RedactHighEntropy,
+		gw.Config.SecurityFilter.RedactionLabel,
+		gw.Config.SecurityFilter.OutputWindowChars,
+	)
+	r.SetStreamEntropyFilter(ef)
+	gw.Logger.Debug("stream entropy filter active",
+		"threshold", gw.Config.SecurityFilter.EntropyThreshold,
+		"min_token", gw.Config.SecurityFilter.EntropyMinToken,
+		"window_size", gw.Config.SecurityFilter.OutputWindowChars)
+}
+
+func (p *Proxy) setupContentBuilderIfNeeded(gw *gateway.NenyaGateway, agentName string, r *stream.SSETransformingReader) *contentBuilder {
+	agent, ok := gw.Config.Agents[agentName]
+	if !ok || agent.MCP == nil || !agent.MCP.AutoSave {
+		return nil
+	}
+	cb := newContentBuilder()
+	r.SetOnContent(cb.addContent)
+	return cb
 }
 
 func (p *Proxy) setupStreamWriter(gw *gateway.NenyaGateway, flushWriter *immediateFlushWriter, canFlush bool, w http.ResponseWriter, cacheKey string) (io.Writer, *bytes.Buffer, *sseTeeWriter) {
@@ -356,6 +377,15 @@ func (p *Proxy) handleStreamDone(gw *gateway.NenyaGateway, w http.ResponseWriter
 	}
 	_ = action.resp.Body.Close()
 
+	recordStreamResult(gw, target, agentName, cooldownDuration, copyErr)
+
+	if copyErr == nil {
+		storeStreamCache(gw, cacheKey, captureBuf, tee)
+		p.asyncMCPAutoSave(gw, agentName, contentBuilder)
+	}
+}
+
+func recordStreamResult(gw *gateway.NenyaGateway, target routing.UpstreamTarget, agentName string, cooldownDuration time.Duration, copyErr error) {
 	if copyErr == nil || errors.Is(copyErr, context.Canceled) || errors.Is(copyErr, context.DeadlineExceeded) {
 		if copyErr != nil {
 			gw.Logger.Debug("stream ended (client disconnect)", "model", target.Model, "provider", target.Provider)
@@ -363,19 +393,17 @@ func (p *Proxy) handleStreamDone(gw *gateway.NenyaGateway, w http.ResponseWriter
 		gw.AgentState.RecordSuccess(target.CoolKey)
 	} else {
 		gw.Logger.Warn("stream copy error (upstream)",
-			"model", target.Model, "provider", target.Provider,
-			"err", copyErr)
+			"model", target.Model, "provider", target.Provider, "err", copyErr)
 		gw.AgentState.RecordFailure(target, cooldownDuration)
 	}
+}
 
-	if copyErr == nil {
-		if cacheKey != "" && gw.ResponseCache != nil && tee != nil && !tee.exceeded && captureBuf.Len() > 0 {
-			gw.ResponseCache.Store(cacheKey, captureBuf.Bytes())
-			gw.Logger.Debug("response cache stored",
-				"model", target.Model, "size", captureBuf.Len())
-		}
-		p.asyncMCPAutoSave(gw, agentName, contentBuilder)
+func storeStreamCache(gw *gateway.NenyaGateway, cacheKey string, captureBuf *bytes.Buffer, tee *sseTeeWriter) {
+	if cacheKey == "" || gw.ResponseCache == nil || tee == nil || tee.exceeded || captureBuf.Len() <= 0 {
+		return
 	}
+	gw.ResponseCache.Store(cacheKey, captureBuf.Bytes())
+	gw.Logger.Debug("response cache stored", "model", captureBuf.Len())
 }
 
 func (p *Proxy) handleClientDisconnect(gw *gateway.NenyaGateway, w http.ResponseWriter, target routing.UpstreamTarget, action upstreamAction, buf *[]byte, done chan struct{}) {
