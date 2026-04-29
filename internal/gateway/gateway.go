@@ -312,25 +312,31 @@ func resolveRegexModelEntry(m config.AgentModel, catalog *discovery.ModelCatalog
 
 func resolveStringModelEntry(m config.AgentModel, catalog *discovery.ModelCatalog, providers map[string]*config.Provider) []string {
 	if catalog != nil {
-		entries := catalog.LookupAll(m.Model)
-		if len(entries) > 0 {
-			modelEntries := make([]string, 0, len(entries))
-			for _, e := range entries {
-				if providerCanServe(providers[e.Provider]) {
-					modelEntries = append(modelEntries, fmt.Sprintf("%s/%s", e.Provider, m.Model))
-				}
-			}
-			if len(modelEntries) > 0 {
-				return modelEntries
-			}
+		if entries := lookupStringModelInCatalog(m, catalog, providers); entries != nil {
+			return entries
 		}
 	}
-	if entry, ok := config.ModelRegistry[m.Model]; ok {
-		if providerCanServe(providers[entry.Provider]) {
-			return []string{fmt.Sprintf("%s/%s", entry.Provider, m.Model)}
-		}
+	if entry, ok := config.ModelRegistry[m.Model]; ok && providerCanServe(providers[entry.Provider]) {
+		return []string{fmt.Sprintf("%s/%s", entry.Provider, m.Model)}
 	}
 	return []string{fmt.Sprintf("%s (unresolved)", m.Model)}
+}
+
+func lookupStringModelInCatalog(m config.AgentModel, catalog *discovery.ModelCatalog, providers map[string]*config.Provider) []string {
+	entries := catalog.LookupAll(m.Model)
+	if len(entries) == 0 {
+		return nil
+	}
+	modelEntries := make([]string, 0, len(entries))
+	for _, e := range entries {
+		if providerCanServe(providers[e.Provider]) {
+			modelEntries = append(modelEntries, fmt.Sprintf("%s/%s", e.Provider, m.Model))
+		}
+	}
+	if len(modelEntries) == 0 {
+		return nil
+	}
+	return modelEntries
 }
 
 func (g *NenyaGateway) InitMetrics() {
@@ -380,28 +386,46 @@ func ExtractContentText(msg map[string]interface{}) string {
 		var sb strings.Builder
 		for _, partRaw := range content {
 			if part, ok := partRaw.(map[string]interface{}); ok {
-				if typ, ok := part["type"].(string); ok {
-					switch typ {
-					case "text":
-						if text, ok := part["text"].(string); ok {
-							sb.WriteString(text)
-						}
-					case "image_url":
-						sb.WriteString("[image]")
-					case "input_json":
-						if input, ok := part["input_json"]; ok {
-							if jsonBytes, err := json.Marshal(input); err == nil {
-								sb.Write(jsonBytes)
-							}
-						}
-					}
-				}
+				sb.WriteString(extractContentFromPart(part))
 			}
 		}
 		return sb.String()
 	default:
 		return ""
 	}
+}
+
+func extractContentFromPart(part map[string]interface{}) string {
+	typ, ok := part["type"].(string)
+	if !ok {
+		return ""
+	}
+	switch typ {
+	case "text":
+		return extractTextFromContentPart(part)
+	case "image_url":
+		return "[image]"
+	case "input_json":
+		return extractInputJSONFromPart(part)
+	default:
+		return ""
+	}
+}
+
+func extractTextFromContentPart(part map[string]interface{}) string {
+	if text, ok := part["text"].(string); ok {
+		return text
+	}
+	return ""
+}
+
+func extractInputJSONFromPart(part map[string]interface{}) string {
+	if input, ok := part["input_json"]; ok {
+		if jsonBytes, err := json.Marshal(input); err == nil {
+			return string(jsonBytes)
+		}
+	}
+	return ""
 }
 
 func newResponseCache(cfg config.Config, logger *slog.Logger) *infra.ResponseCache {

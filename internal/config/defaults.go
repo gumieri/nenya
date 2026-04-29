@@ -251,32 +251,43 @@ func applyProviderMapDefaults(cfg *Config) {
 
 func applyAgentDefaults(cfg *Config) error {
 	for name, agent := range cfg.Agents {
-		if agent.MCP != nil {
-			if agent.MCP.MaxIterations <= 0 {
-				agent.MCP.MaxIterations = 10
-			}
-		}
+		applyAgentMCPDefaults(&agent)
 		for i, m := range agent.Models {
-			if m.ProviderRgx != "" || m.ModelRgx != "" {
-				if m.Provider != "" && m.ProviderRgx != "" {
-					fmt.Printf("[WARN] agent %q model %d: both provider and provider_rgx set; provider_rgx takes precedence\n", name, i)
-				}
-				if m.Model != "" && m.ModelRgx != "" {
-					fmt.Printf("[WARN] agent %q model %d: both model and model_rgx set; model_rgx takes precedence\n", name, i)
-				}
-				if !cfg.Discovery.Enabled {
-					fmt.Printf("[WARN] agent %q model %d: model_rgx requires discovery to expand into concrete models; only static registry entries will match\n", name, i)
-				}
-				if err := m.CompileRegex(); err != nil {
-					return fmt.Errorf("agent %q model %d: %w", name, i, err)
-				}
-				agent.Models[i] = m
+			if err := applyAgentModelRegexDefaults(cfg, name, i, &m); err != nil {
+				return err
 			}
-			if m.ProviderRgx == "" && m.ModelRgx == "" && looksLikeRegex(m.Model) {
-				fmt.Printf("[WARN] agent %q model %d: model %q looks like a regex pattern but uses the 'model' field (literal). Did you mean to use 'model_rgx' for regex matching?\n", name, i, m.Model)
-			}
+			agent.Models[i] = m
 		}
 		cfg.Agents[name] = agent
+	}
+	return nil
+}
+
+func applyAgentMCPDefaults(agent *AgentConfig) {
+	if agent.MCP != nil && agent.MCP.MaxIterations <= 0 {
+		agent.MCP.MaxIterations = 10
+	}
+}
+
+func applyAgentModelRegexDefaults(cfg *Config, name string, i int, m *AgentModel) error {
+	if m.ProviderRgx == "" && m.ModelRgx == "" {
+		if looksLikeRegex(m.Model) {
+			fmt.Printf("[WARN] agent %q model %d: model %q looks like a regex pattern but uses the 'model' field (literal). Did you mean to use 'model_rgx' for regex matching?\n", name, i, m.Model)
+		}
+		return nil
+	}
+
+	if m.Provider != "" && m.ProviderRgx != "" {
+		fmt.Printf("[WARN] agent %q model %d: both provider and provider_rgx set; provider_rgx takes precedence\n", name, i)
+	}
+	if m.Model != "" && m.ModelRgx != "" {
+		fmt.Printf("[WARN] agent %q model %d: both model and model_rgx set; model_rgx takes precedence\n", name, i)
+	}
+	if !cfg.Discovery.Enabled {
+		fmt.Printf("[WARN] agent %q model %d: model_rgx requires discovery to expand into concrete models; only static registry entries will match\n", name, i)
+	}
+	if err := m.CompileRegex(); err != nil {
+		return fmt.Errorf("agent %q model %d: %w", name, i, err)
 	}
 	return nil
 }

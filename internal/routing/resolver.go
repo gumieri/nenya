@@ -29,47 +29,56 @@ func ResolveProviders(modelName string, providers map[string]*config.Provider, c
 	}
 
 	if catalog != nil {
-		entries := catalog.LookupAll(modelName)
-		if len(entries) > 0 {
-			matches := make([]ProviderMatch, 0, len(entries))
-			for _, e := range entries {
-				p, ok := providers[e.Provider]
-				if !ok {
-					continue
-				}
-				if p.APIKey == "" && p.AuthStyle != "none" {
-					continue
-				}
-				matches = append(matches, ProviderMatch{
-					Provider:   e.Provider,
-					Model:      modelName,
-					MaxContext: e.MaxContext,
-					MaxOutput:  e.MaxOutput,
-				})
-			}
-			if len(matches) > 0 {
-				return matches
-			}
+		if matches := resolveFromCatalog(modelName, providers, catalog); len(matches) > 0 {
+			return matches
 		}
 	}
 
-	if entry, ok := config.ModelRegistry[strings.ToLower(modelName)]; ok {
-		p, ok := providers[entry.Provider]
+	return resolveFromRegistry(modelName, providers)
+}
+
+func resolveFromCatalog(modelName string, providers map[string]*config.Provider, catalog *discovery.ModelCatalog) []ProviderMatch {
+	entries := catalog.LookupAll(modelName)
+	if len(entries) == 0 {
+		return nil
+	}
+	matches := make([]ProviderMatch, 0, len(entries))
+	for _, e := range entries {
+		p, ok := providers[e.Provider]
 		if !ok {
-			return nil
+			continue
 		}
 		if p.APIKey == "" && p.AuthStyle != "none" {
-			return nil
+			continue
 		}
-		return []ProviderMatch{{
-			Provider:   p.Name,
+		matches = append(matches, ProviderMatch{
+			Provider:   e.Provider,
 			Model:      modelName,
-			MaxContext: entry.MaxContext,
-			MaxOutput:  entry.MaxOutput,
-		}}
+			MaxContext: e.MaxContext,
+			MaxOutput:  e.MaxOutput,
+		})
 	}
+	return matches
+}
 
-	return nil
+func resolveFromRegistry(modelName string, providers map[string]*config.Provider) []ProviderMatch {
+	entry, ok := config.ModelRegistry[strings.ToLower(modelName)]
+	if !ok {
+		return nil
+	}
+	p, ok := providers[entry.Provider]
+	if !ok {
+		return nil
+	}
+	if p.APIKey == "" && p.AuthStyle != "none" {
+		return nil
+	}
+	return []ProviderMatch{{
+		Provider:   p.Name,
+		Model:      modelName,
+		MaxContext: entry.MaxContext,
+		MaxOutput:  entry.MaxOutput,
+	}}
 }
 
 func ResolveProvider(modelName string, providers map[string]*config.Provider, catalog *discovery.ModelCatalog) *config.Provider {

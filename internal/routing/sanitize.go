@@ -78,23 +78,16 @@ func flattenContentArrays(deps TransformDeps, payload map[string]interface{}, pr
 }
 
 func shouldStripReasoning(deps TransformDeps, providerName, modelName string) bool {
-	if providerpkg.SupportsReasoning(providerName) {
-		return false
-	}
 	if providerName == "deepseek" {
 		return false
 	}
-	if deps.Catalog == nil || modelName == "" {
-		return false
+	if deps.Catalog != nil && modelName != "" {
+		dm, ok := deps.Catalog.Lookup(modelName)
+		if ok && dm.Metadata != nil {
+			return !dm.Metadata.SupportsReasoning
+		}
 	}
-	dm, ok := deps.Catalog.Lookup(modelName)
-	if !ok {
-		return false
-	}
-	if dm.Metadata == nil {
-		return false
-	}
-	return !dm.Metadata.SupportsReasoning
+	return !providerpkg.SupportsReasoning(providerName)
 }
 
 func processReasoningContent(deps TransformDeps, payload map[string]interface{}, providerName, modelName string) {

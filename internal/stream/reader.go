@@ -242,27 +242,44 @@ func (r *SSETransformingReader) applyStreamFilters(parsed map[string]interface{}
 	}
 
 	if r.streamFilter != nil && !r.streamFilter.IsBlocked() {
-		if content := ExtractDeltaContentFromMap(parsed); content != "" {
-			redacted, action, _ := r.streamFilter.FilterContent(content)
-			if action == ActionBlock {
-				return nil
-			}
-			if action == ActionRedact && redacted != content {
-				parsed = copyMap(parsed)
-				_ = ReplaceDeltaContentMap(parsed, redacted)
-			}
+		parsed = applyStreamFilter(parsed, r.streamFilter)
+		if r.streamFilter.IsBlocked() {
+			return nil
 		}
 	}
 
 	if r.streamEntropyFilter != nil {
-		if content := ExtractDeltaContentFromMap(parsed); content != "" {
-			redacted, action := r.streamEntropyFilter.FilterContent(content)
-			if action == ActionRedact && redacted != content {
-				parsed = copyMap(parsed)
-			}
-		}
+		parsed = applyEntropyFilter(parsed, r.streamEntropyFilter)
 	}
 
+	return parsed
+}
+
+func applyStreamFilter(parsed map[string]interface{}, filter *StreamFilter) map[string]interface{} {
+	content := ExtractDeltaContentFromMap(parsed)
+	if content == "" {
+		return parsed
+	}
+	redacted, action, _ := filter.FilterContent(content)
+	if action == ActionBlock {
+		return nil
+	}
+	if action == ActionRedact && redacted != content {
+		parsed = copyMap(parsed)
+		_ = ReplaceDeltaContentMap(parsed, redacted)
+	}
+	return parsed
+}
+
+func applyEntropyFilter(parsed map[string]interface{}, filter *StreamEntropyFilter) map[string]interface{} {
+	content := ExtractDeltaContentFromMap(parsed)
+	if content == "" {
+		return parsed
+	}
+	redacted, action := filter.FilterContent(content)
+	if action == ActionRedact && redacted != content {
+		parsed = copyMap(parsed)
+	}
 	return parsed
 }
 
@@ -319,6 +336,14 @@ func (r *SSETransformingReader) handleWithTransformer(parsed map[string]interfac
 	transformed = r.applyToolCallNormalization(transformed, &r.tcState)
 
 	if bytes.Equal(transformed, origData) && bytes.Equal(data, origData) {
+		if parsed != nil {
+			marshaled, err := json.Marshal(parsed)
+			if err == nil && !bytes.Equal(marshaled, origData) {
+				finalLine := append([]byte("data: "), marshaled...)
+				r.notifySSEObserver(finalLine, parsed, "")
+				return finalLine
+			}
+		}
 		r.notifySSEObserver(line, parsed, "")
 		return line
 	}
@@ -507,16 +532,15 @@ func mergePendingToolCall(tc map[string]interface{}, idx int, tcID string, fnArg
 	if (tcID == "" || len(tcID) < 6 || tcID[:5] == "call_") && pending.id != "" {
 		tc["id"] = pending.id
 	}
+	fn, ok := tc["function"].(map[string]interface{})
+	if !ok {
+		return
+	}
+	// "{}" is a JSON placeholder with no real data; use pending args as-is.
 	if fnArgsStr == "" || fnArgsStr == "{}" {
-		if pending.args != "" {
-			if fn, ok := tc["function"].(map[string]interface{}); ok {
-				fn["arguments"] = pending.args
-			}
-		}
-	} else if pending.args != "" {
-		if fn, ok := tc["function"].(map[string]interface{}); ok {
-			fn["arguments"] = pending.args + fnArgsStr
-		}
+		fn["arguments"] = pending.args
+	} else {
+		fn["arguments"] = pending.args + fnArgsStr
 	}
 	*mutated = true
 }

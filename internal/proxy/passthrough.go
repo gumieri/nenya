@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"nenya/internal/config"
 	"nenya/internal/gateway"
 	"nenya/internal/infra"
 	"nenya/internal/routing"
@@ -62,32 +63,15 @@ func (p *Proxy) handlePassthrough(gw *gateway.NenyaGateway, w http.ResponseWrite
 		return
 	}
 
-	var bodyBytes []byte
-	var err error
-	hasBody := r.Method == http.MethodPost || r.Method == http.MethodPut || r.Method == http.MethodPatch
-	if hasBody {
-		r.Body = http.MaxBytesReader(w, r.Body, gw.Config.Server.MaxBodyBytes)
-		defer func() { _ = r.Body.Close() }()
-		bodyBytes, err = io.ReadAll(r.Body)
-		if err != nil {
-			gw.Logger.Error("passthrough: failed to read request body", "provider", providerName, "err", err)
-			http.Error(w, "Payload too large or malformed", http.StatusRequestEntityTooLarge)
-			return
-		}
+	bodyBytes, err := readPassthroughBody(gw, r)
+	if err != nil {
+		gw.Logger.Error("passthrough: failed to read request body", "provider", providerName, "err", err)
+		http.Error(w, "Payload too large or malformed", http.StatusRequestEntityTooLarge)
+		return
 	}
 
-	upstreamURL := provider.BaseURL + "/" + subPath
-	if r.URL.RawQuery != "" {
-		upstreamURL += "?" + r.URL.RawQuery
-	}
-
-	ctx := r.Context()
-	if provider.TimeoutSeconds > 0 {
-		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(r.Context(), time.Duration(provider.TimeoutSeconds)*time.Second)
-		defer cancel()
-	}
-
+	upstreamURL := buildPassthroughURL(provider, subPath, r.URL.RawQuery)
+	ctx := buildPassthroughContext(r.Context(), provider)
 	req, err := p.buildUpstreamRequest(gw, ctx, r.Method, upstreamURL, bodyBytes, provider.Name, r.Header)
 	if err != nil {
 		gw.Logger.Error("passthrough: failed to create upstream request", "provider", providerName, "err", err)
@@ -95,8 +79,8 @@ func (p *Proxy) handlePassthrough(gw *gateway.NenyaGateway, w http.ResponseWrite
 		return
 	}
 
-	if r.Header.Get("Content-Type") != "" {
-		req.Header.Set("Content-Type", r.Header.Get("Content-Type"))
+	if ct := r.Header.Get("Content-Type"); ct != "" {
+		req.Header.Set("Content-Type", ct)
 	}
 
 	ctxLogger := gw.Logger.With(
@@ -132,6 +116,31 @@ func (p *Proxy) handlePassthrough(gw *gateway.NenyaGateway, w http.ResponseWrite
 	}
 }
 
+func readPassthroughBody(gw *gateway.NenyaGateway, r *http.Request) ([]byte, error) {
+	if r.Method != http.MethodPost && r.Method != http.MethodPut && r.Method != http.MethodPatch {
+		return nil, nil
+	}
+	r.Body = http.MaxBytesReader(nil, r.Body, gw.Config.Server.MaxBodyBytes)
+	defer func() { _ = r.Body.Close() }()
+	return io.ReadAll(r.Body)
+}
+
+func buildPassthroughURL(provider *config.Provider, subPath, rawQuery string) string {
+	upstreamURL := provider.BaseURL + "/" + subPath
+	if rawQuery != "" {
+		upstreamURL += "?" + rawQuery
+	}
+	return upstreamURL
+}
+
+func buildPassthroughContext(ctx context.Context, provider *config.Provider) context.Context {
+	if provider.TimeoutSeconds > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, time.Duration(provider.TimeoutSeconds)*time.Second)
+		_ = cancel
+	}
+	return ctx
+}
 func (p *Proxy) pipeSSE(ctx context.Context, ctxLogger *slog.Logger, src io.Reader, dst http.ResponseWriter) {
 	buf := make([]byte, 4096)
 	stallTimer := time.NewTimer(120 * time.Second)

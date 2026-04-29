@@ -133,18 +133,16 @@ func zaiShouldSkipMessage(role, content string, msg map[string]interface{}) bool
 		return true
 	}
 
-	if role == "assistant" && content == "" {
-		tcRaw, hasTC := msg["tool_calls"]
-		if !hasTC {
-			return true
-		}
-		toolCalls, ok := tcRaw.([]interface{})
-		if !ok || len(toolCalls) == 0 {
-			return true
-		}
+	if role != "assistant" || content != "" {
+		return false
 	}
 
-	return false
+	tcRaw, hasTC := msg["tool_calls"]
+	if !hasTC {
+		return true
+	}
+	toolCalls, ok := tcRaw.([]interface{})
+	return !ok || len(toolCalls) == 0
 }
 
 func zaiShouldSkipToolMessage(deps *SanitizeDeps, role string, msg map[string]interface{}, validToolCallIDs map[string]string) bool {
@@ -178,18 +176,14 @@ func zaiMergeConsecutiveMessages(deps *SanitizeDeps, filtered []interface{}) []i
 		role, _ := msg["role"].(string)
 
 		if i > 0 {
-			prevMsg, ok := merged[len(merged)-1].(map[string]interface{})
-			if ok {
-				if zaiShouldMergeUserMessages(prevMsg, msg, role) {
-					continue
-				}
-				if zaiShouldInsertAssistantBridge(prevMsg, role) {
-					merged = append(merged, map[string]interface{}{
-						"role":    "user",
-						"content": "Continue.",
-					})
-					deps.Logger.Debug("zai: inserted user bridge between consecutive assistant messages")
-				}
+			if shouldMerge, shouldBridge, _ := checkMessageMerge(merged, msg, role); shouldMerge {
+				continue
+			} else if shouldBridge {
+				merged = append(merged, map[string]interface{}{
+					"role":    "user",
+					"content": "Continue.",
+				})
+				deps.Logger.Debug("zai: inserted user bridge between consecutive assistant messages")
 			}
 		}
 
@@ -197,6 +191,20 @@ func zaiMergeConsecutiveMessages(deps *SanitizeDeps, filtered []interface{}) []i
 	}
 
 	return merged
+}
+
+func checkMessageMerge(merged []interface{}, msg map[string]interface{}, role string) (shouldMerge, shouldBridge bool, prevMsg map[string]interface{}) {
+	prevMsg, ok := merged[len(merged)-1].(map[string]interface{})
+	if !ok {
+		return false, false, nil
+	}
+	if zaiShouldMergeUserMessages(prevMsg, msg, role) {
+		return true, false, prevMsg
+	}
+	if zaiShouldInsertAssistantBridge(prevMsg, role) {
+		return false, true, prevMsg
+	}
+	return false, false, prevMsg
 }
 
 func zaiShouldMergeUserMessages(prevMsg, msg map[string]interface{}, role string) bool {
@@ -260,9 +268,7 @@ func injectThinkingForZai(deps *SanitizeDeps, payload map[string]interface{}) {
 				"type":           "enabled",
 				"clear_thinking": clearThinking,
 			}
-			if deps.Logger != nil {
-				deps.Logger.Debug("zai: force-enabled thinking mode", "model", model)
-			}
+			logThinkingEnabled(deps.Logger, model, "force-enabled")
 			return
 		}
 	}
@@ -273,7 +279,6 @@ func injectThinkingForZai(deps *SanitizeDeps, payload map[string]interface{}) {
 	if !deps.SupportsReasoning(model) {
 		return
 	}
-
 	if _, hasThinking := payload["thinking"]; hasThinking {
 		return
 	}
@@ -282,9 +287,14 @@ func injectThinkingForZai(deps *SanitizeDeps, payload map[string]interface{}) {
 		"type":           "enabled",
 		"clear_thinking": false,
 	}
-	if deps.Logger != nil {
-		deps.Logger.Debug("zai: auto-enabled thinking mode for reasoning model", "model", model)
+	logThinkingEnabled(deps.Logger, model, "auto-enabled")
+}
+
+func logThinkingEnabled(logger interface{ Debug(string, ...interface{}) }, model, mode string) {
+	if logger == nil {
+		return
 	}
+	logger.Debug("zai: "+mode+" thinking mode for reasoning model", "model", model)
 }
 
 // injectTemperatureDefaultsForZai sets model-specific temperature defaults.

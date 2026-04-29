@@ -70,13 +70,8 @@ func tokenizeForEntropy(text string) []tokenSpan {
 
 	for i, r := range text {
 		if isDelimiter(r) {
-			if start >= 0 {
-				length := i - start
-				if length > 0 {
-					spans = append(spans, tokenSpan{offset: start, length: length})
-				}
-				start = -1
-			}
+			spans = finalizeToken(spans, start, i)
+			start = -1
 		} else if start < 0 {
 			start = i
 		}
@@ -90,6 +85,17 @@ func tokenizeForEntropy(text string) []tokenSpan {
 	}
 
 	return spans
+}
+
+func finalizeToken(spans []tokenSpan, start, end int) []tokenSpan {
+	if start < 0 {
+		return spans
+	}
+	length := end - start
+	if length <= 0 {
+		return spans
+	}
+	return append(spans, tokenSpan{offset: start, length: length})
 }
 
 func isDelimiter(r rune) bool {

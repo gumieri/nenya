@@ -186,30 +186,32 @@ func classifyEvent(data map[string]interface{}) string {
 	if _, ok := data["usage"]; ok {
 		return "usage"
 	}
-	if choices, ok := data["choices"].([]interface{}); ok {
-		if len(choices) > 0 {
-			if choice, ok := choices[0].(map[string]interface{}); ok {
-				delta, ok := choice["delta"].(map[string]interface{})
-				if !ok {
-					return "chunk"
-				}
-				if _, ok := delta["tool_calls"]; ok {
-					return "tool_call"
-				}
-				if _, ok := delta["content"].(string); ok {
-					return "content"
-				}
-				if _, ok := delta["reasoning"].(string); ok {
-					return "reasoning"
-				}
-				return "chunk"
-			}
+	if choices, ok := data["choices"].([]interface{}); ok && len(choices) > 0 {
+		if choice, ok := choices[0].(map[string]interface{}); ok {
+			return classifyDeltaEvent(choice)
 		}
 	}
 	if _, ok := data["error"]; ok {
 		return "error"
 	}
 	return "data"
+}
+
+func classifyDeltaEvent(choice map[string]interface{}) string {
+	delta, ok := choice["delta"].(map[string]interface{})
+	if !ok {
+		return "chunk"
+	}
+	if _, ok := delta["tool_calls"]; ok {
+		return "tool_call"
+	}
+	if _, ok := delta["content"].(string); ok {
+		return "content"
+	}
+	if _, ok := delta["reasoning"].(string); ok {
+		return "reasoning"
+	}
+	return "chunk"
 }
 
 func extractID(data map[string]interface{}) string {

@@ -207,6 +207,39 @@ func (p *Proxy) forwardToUpstream(gw *gateway.NenyaGateway, w http.ResponseWrite
 	rl.Exhausted()
 }
 
+func logRequestIfDebug(ctx context.Context, logger *slog.Logger, req *http.Request, targetURL string, body []byte) {
+	if !logger.Enabled(ctx, slog.LevelDebug) {
+		return
+	}
+	debugHeaders := make(http.Header)
+	for k, v := range req.Header {
+		lk := strings.ToLower(k)
+		if strings.Contains(lk, "key") || strings.Contains(lk, "auth") {
+			debugHeaders[k] = []string{"[REDACTED]"}
+		} else {
+			debugHeaders[k] = v
+		}
+	}
+	logger.Debug("forwarding to upstream", "url", targetURL)
+	logger.Debug("request headers", "headers", debugHeaders)
+	if len(body) > 0 && len(body) < 1000 {
+		logger.Debug("request body", "body", string(body))
+	}
+}
+
+func handleUpstreamResponse(ctxLogger *slog.Logger, resp *http.Response, cancel context.CancelFunc) upstreamAction {
+	ct := resp.Header.Get("Content-Type")
+	if strings.Contains(strings.ToLower(ct), "text/html") {
+		ctxLogger.Warn("upstream returned HTML instead of API response, skipping target",
+			"content_type", ct, "status", resp.StatusCode)
+		_, _ = io.Copy(io.Discard, resp.Body)
+		_ = resp.Body.Close()
+		cancel()
+		return upstreamAction{kind: actionContinue}
+	}
+	return upstreamAction{kind: actionStream, resp: resp, cancel: cancel}
+}
+
 func (p *Proxy) prepareAndSend(gw *gateway.NenyaGateway,
 	r *http.Request,
 	idx int,
@@ -260,22 +293,7 @@ func (p *Proxy) prepareAndSend(gw *gateway.NenyaGateway,
 		return upstreamAction{kind: actionContinue}
 	}
 
-	if gw.Logger.Enabled(r.Context(), slog.LevelDebug) {
-		debugHeaders := make(http.Header)
-		for k, v := range req.Header {
-			lk := strings.ToLower(k)
-			if strings.Contains(lk, "key") || strings.Contains(lk, "auth") {
-				debugHeaders[k] = []string{"[REDACTED]"}
-			} else {
-				debugHeaders[k] = v
-			}
-		}
-		ctxLogger.Debug("forwarding to upstream", "url", target.URL)
-		ctxLogger.Debug("request headers", "headers", debugHeaders)
-		if len(transformedBody) > 0 && len(transformedBody) < 1000 {
-			ctxLogger.Debug("request body", "body", string(transformedBody))
-		}
-	}
+	logRequestIfDebug(r.Context(), ctxLogger, req, target.URL, transformedBody)
 
 	var upstreamCtx context.Context
 	var upstreamCancel context.CancelFunc
@@ -311,17 +329,51 @@ func (p *Proxy) prepareAndSend(gw *gateway.NenyaGateway,
 		return upstreamAction{kind: actionError, resp: resp, cancel: upstreamCancel}
 	}
 
-	ct := resp.Header.Get("Content-Type")
-	if strings.Contains(strings.ToLower(ct), "text/html") {
-		ctxLogger.Warn("upstream returned HTML instead of API response, skipping target",
-			"content_type", ct, "status", resp.StatusCode)
-		_, _ = io.Copy(io.Discard, resp.Body)
-		_ = resp.Body.Close()
-		upstreamCancel()
-		return upstreamAction{kind: actionContinue}
+	return handleUpstreamResponse(ctxLogger, resp, upstreamCancel)
+}
+
+func logRetryableError(ctxLogger *slog.Logger, errorBody []byte, gw *gateway.NenyaGateway) {
+	if len(errorBody) > 0 {
+		logBody := pipeline.RedactSecrets(string(errorBody), gw.Config.SecurityFilter.Enabled, gw.SecretPatterns, gw.Config.SecurityFilter.RedactionLabel)
+		if len(logBody) > 512 {
+			logBody = logBody[:512] + "...[truncated]"
+		}
+		ctxLogger.Warn("upstream retryable error", "body", logBody)
+	} else {
+		ctxLogger.Warn("retryable error, trying next target")
+	}
+}
+
+func handleRetryableError429(logger *slog.Logger, errorBody []byte, action upstreamAction, cooldownDuration time.Duration, target routing.UpstreamTarget, agentName string, gw *gateway.NenyaGateway) time.Duration {
+	effectiveCooldown := cooldownDuration
+	if action.resp.StatusCode == http.StatusTooManyRequests && len(errorBody) > 0 {
+		if quotaCD := parseQuotaExhaustion(errorBody); quotaCD > 0 {
+			if quotaCD > cooldownDuration {
+				effectiveCooldown = quotaCD
+				logger.Info("quota exhaustion detected, extending cooldown", "cooldown_s", effectiveCooldown.Seconds())
+			}
+		}
 	}
 
-	return upstreamAction{kind: actionStream, resp: resp, cancel: upstreamCancel}
+	if action.resp.StatusCode == http.StatusTooManyRequests {
+		gw.AgentState.ActivateCooldown(target, effectiveCooldown)
+		gw.Metrics.RecordCooldown(agentName, target.Provider, target.Model)
+		return parseRetryDelay(action.resp.Header, errorBody)
+	}
+
+	gw.AgentState.RecordFailure(target, effectiveCooldown)
+	return 0
+}
+
+func handleAdapterRetryableError(ctxLogger *slog.Logger, target routing.UpstreamTarget, action upstreamAction, cooldownDuration time.Duration, gw *gateway.NenyaGateway) bool {
+	a := adapter.ForProvider(target.Provider)
+	errClass := a.NormalizeError(action.resp.StatusCode, action.body)
+	if (errClass == adapter.ErrorRetryable || errClass == adapter.ErrorQuotaExhausted) && action.resp.StatusCode >= 400 && action.resp.StatusCode < 500 {
+		ctxLogger.Warn("adapter classified client error as retryable, trying next target", "error_class", errClass)
+		gw.AgentState.RecordFailure(target, cooldownDuration)
+		return true
+	}
+	return false
 }
 
 func (p *Proxy) handleUpstreamError(gw *gateway.NenyaGateway,
@@ -344,34 +396,9 @@ func (p *Proxy) handleUpstreamError(gw *gateway.NenyaGateway,
 	)
 
 	if p.isRetryableStatus(gw, target.Provider, action.resp.StatusCode) {
-		if len(errorBody) > 0 {
-			logBody := pipeline.RedactSecrets(string(errorBody), gw.Config.SecurityFilter.Enabled, gw.SecretPatterns, gw.Config.SecurityFilter.RedactionLabel)
-			if len(logBody) > 512 {
-				logBody = logBody[:512] + "...[truncated]"
-			}
-			ctxLogger.Warn("upstream retryable error", "body", logBody)
-		} else {
-			ctxLogger.Warn("retryable error, trying next target")
-		}
-		effectiveCooldown := cooldownDuration
-		if action.resp.StatusCode == http.StatusTooManyRequests && len(errorBody) > 0 {
-			if quotaCD := parseQuotaExhaustion(errorBody); quotaCD > 0 {
-				if quotaCD > cooldownDuration {
-					effectiveCooldown = quotaCD
-					ctxLogger.Info("quota exhaustion detected, extending cooldown", "cooldown_s", effectiveCooldown.Seconds())
-				}
-			}
-		}
-
-		if action.resp.StatusCode == http.StatusTooManyRequests {
-			gw.AgentState.ActivateCooldown(target, effectiveCooldown)
-			gw.Metrics.RecordCooldown(agentName, target.Provider, target.Model)
-			delay := parseRetryDelay(action.resp.Header, errorBody)
-			return true, delay
-		}
-
-		gw.AgentState.RecordFailure(target, effectiveCooldown)
-		return true, 0
+		logRetryableError(ctxLogger, errorBody, gw)
+		delay := handleRetryableError429(ctxLogger, errorBody, action, cooldownDuration, target, agentName, gw)
+		return true, delay
 	}
 
 	if isRetryableClientErrorForProvider(action.resp.StatusCode, errorBody, target.Provider) && len(targets) > 1 {
@@ -381,32 +408,34 @@ func (p *Proxy) handleUpstreamError(gw *gateway.NenyaGateway,
 		return true, 0
 	}
 
-	a := adapter.ForProvider(target.Provider)
-	errClass := a.NormalizeError(action.resp.StatusCode, errorBody)
-	if (errClass == adapter.ErrorRetryable || errClass == adapter.ErrorQuotaExhausted) && action.resp.StatusCode >= 400 && action.resp.StatusCode < 500 {
-		ctxLogger.Warn("adapter classified client error as retryable, trying next target", "error_class", errClass)
-		gw.AgentState.RecordFailure(target, cooldownDuration)
+	if handleAdapterRetryableError(ctxLogger, target, action, cooldownDuration, gw) {
 		return true, 0
 	}
 
 	defer action.cancel()
 	if len(targets) > 1 {
-		if len(errorBody) > 0 {
-			logBody := redactForLog(string(errorBody), gw)
-			ctxLogger.Warn("non-retryable upstream error, trying next target", "body", logBody)
-		} else {
-			ctxLogger.Warn("non-retryable upstream error (empty body), trying next target")
-		}
+		logWarnRetryable(ctxLogger, errorBody, gw, "non-retryable upstream error, trying next target")
 		return true, 0
 	}
 
-	if len(errorBody) > 0 {
-		logBody := redactForLog(string(errorBody), gw)
-		ctxLogger.Error("non-retryable upstream error, no more targets", "body", logBody)
-	} else {
-		ctxLogger.Error("non-retryable upstream error (empty body), no more targets")
-	}
+	logErrorRetryable(ctxLogger, errorBody, gw, "non-retryable upstream error, no more targets")
 	return false, 0
+}
+
+func logWarnRetryable(ctxLogger *slog.Logger, errorBody []byte, gw *gateway.NenyaGateway, msg string) {
+	if len(errorBody) == 0 {
+		ctxLogger.Warn(msg + " (empty body)")
+		return
+	}
+	ctxLogger.Warn(msg, "body", redactForLog(string(errorBody), gw))
+}
+
+func logErrorRetryable(ctxLogger *slog.Logger, errorBody []byte, gw *gateway.NenyaGateway, msg string) {
+	if len(errorBody) == 0 {
+		ctxLogger.Error(msg + " (empty body)")
+		return
+	}
+	ctxLogger.Error(msg, "body", redactForLog(string(errorBody), gw))
 }
 
 // redactForLog applies secret redaction and truncation to error body text before
@@ -502,6 +531,32 @@ var geminiRetryablePatterns = []string{
 	"content has no parts",
 }
 
+type providerMatcher struct {
+	name     string
+	patterns []string
+}
+
+var providerMatchers = []providerMatcher{
+	{name: "anthropic", patterns: anthropicRetryablePatterns},
+	{name: "gemini", patterns: geminiRetryablePatterns},
+	{name: "vertex", patterns: geminiRetryablePatterns},
+	{name: "deepseek", patterns: deepseekRetryablePatterns},
+}
+
+func matchProviderSpecificPatterns(lowerBody string, provider string) bool {
+	lp := strings.ToLower(provider)
+	for _, m := range providerMatchers {
+		if strings.Contains(lp, m.name) {
+			for _, pat := range m.patterns {
+				if strings.Contains(lowerBody, pat) {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
+
 func isRetryableClientErrorForProvider(statusCode int, body []byte, provider string) bool {
 	if statusCode != http.StatusBadRequest && statusCode != http.StatusRequestEntityTooLarge && statusCode != http.StatusUnprocessableEntity {
 		return false
@@ -517,30 +572,7 @@ func isRetryableClientErrorForProvider(statusCode int, body []byte, provider str
 		}
 	}
 
-	lp := strings.ToLower(provider)
-	if strings.Contains(lp, "anthropic") {
-		for _, pat := range anthropicRetryablePatterns {
-			if strings.Contains(lower, pat) {
-				return true
-			}
-		}
-	}
-	if strings.Contains(lp, "gemini") || strings.Contains(lp, "vertex") {
-		for _, pat := range geminiRetryablePatterns {
-			if strings.Contains(lower, pat) {
-				return true
-			}
-		}
-	}
-	if strings.Contains(lp, "deepseek") {
-		for _, pat := range deepseekRetryablePatterns {
-			if strings.Contains(lower, pat) {
-				return true
-			}
-		}
-	}
-
-	return false
+	return matchProviderSpecificPatterns(lower, provider)
 }
 
 func isRetryableClientError(statusCode int, body []byte) bool {
@@ -610,6 +642,44 @@ func parseRetryDelayFromMessage(msg string) time.Duration {
 	return 0
 }
 
+func parseRetryDelayFromErrorObject(body []byte) time.Duration {
+	var envelope struct {
+		Error struct {
+			Details []rpcDetail `json:"details"`
+			Message string      `json:"message"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(body, &envelope); err != nil {
+		return 0
+	}
+	if d := parseRetryDelayFromRPCDetails(envelope.Error.Details); d > 0 {
+		return d
+	}
+	if envelope.Error.Message == "" {
+		return 0
+	}
+	return parseRetryDelayFromMessage(envelope.Error.Message)
+}
+
+func parseRetryDelayFromErrorArray(body []byte) time.Duration {
+	var arr []struct {
+		Error struct {
+			Details []rpcDetail `json:"details"`
+			Message string      `json:"message"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(body, &arr); err != nil || len(arr) == 0 {
+		return 0
+	}
+	if d := parseRetryDelayFromRPCDetails(arr[0].Error.Details); d > 0 {
+		return d
+	}
+	if arr[0].Error.Message == "" {
+		return 0
+	}
+	return parseRetryDelayFromMessage(arr[0].Error.Message)
+}
+
 func parseRetryDelay(header http.Header, body []byte) time.Duration {
 	if v := header.Get("Retry-After"); v != "" {
 		if secs, err := time.ParseDuration(v + "s"); err == nil && secs > 0 {
@@ -621,39 +691,9 @@ func parseRetryDelay(header http.Header, body []byte) time.Duration {
 		return 0
 	}
 
-	var envelope struct {
-		Error struct {
-			Details []rpcDetail `json:"details"`
-			Message string      `json:"message"`
-		} `json:"error"`
-	}
-	if err := json.Unmarshal(body, &envelope); err == nil {
-		if d := parseRetryDelayFromRPCDetails(envelope.Error.Details); d > 0 {
-			return d
-		}
-		if envelope.Error.Message != "" {
-			if d := parseRetryDelayFromMessage(envelope.Error.Message); d > 0 {
-				return d
-			}
-		}
+	if d := parseRetryDelayFromErrorObject(body); d > 0 {
+		return d
 	}
 
-	var arr []struct {
-		Error struct {
-			Details []rpcDetail `json:"details"`
-			Message string      `json:"message"`
-		} `json:"error"`
-	}
-	if err := json.Unmarshal(body, &arr); err == nil && len(arr) > 0 {
-		if d := parseRetryDelayFromRPCDetails(arr[0].Error.Details); d > 0 {
-			return d
-		}
-		if arr[0].Error.Message != "" {
-			if d := parseRetryDelayFromMessage(arr[0].Error.Message); d > 0 {
-				return d
-			}
-		}
-	}
-
-	return 0
+	return parseRetryDelayFromErrorArray(body)
 }
