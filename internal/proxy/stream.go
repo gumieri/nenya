@@ -215,6 +215,27 @@ func (p *Proxy) streamResponse(gw *gateway.NenyaGateway, w http.ResponseWriter, 
 	}
 	w.WriteHeader(action.resp.StatusCode)
 
+	transformingReader, contentBuilder := p.setupTransformingReader(gw, target, agentName, action, r.Context())
+	if transformingReader == nil {
+		return
+	}
+
+	buf := getStreamBuffer()
+	flushWriter, canFlush := newImmediateFlushWriterSafe(w)
+	dst, captureBuf, tee := p.setupStreamWriter(gw, flushWriter, canFlush, w, cacheKey)
+
+	var copyErr error
+	var written int64
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		written, copyErr = copyStream(r.Context(), dst, transformingReader, *buf)
+	}()
+
+	p.handleStreamCompletion(r.Context(), gw, w, target, agentName, action, cacheKey, cooldownDuration, buf, done, copyErr, written, captureBuf, tee, contentBuilder)
+}
+
+func (p *Proxy) setupTransformingReader(gw *gateway.NenyaGateway, target routing.UpstreamTarget, agentName string, action upstreamAction, ctx context.Context) (*stream.SSETransformingReader, *contentBuilder) {
 	var transformer stream.ResponseTransformer
 	if spec, ok := providerpkg.Get(target.Provider); ok && spec.NewResponseTransformer != nil {
 		transformer = spec.NewResponseTransformer(gw.ThoughtSigCache)
@@ -271,15 +292,14 @@ func (p *Proxy) streamResponse(gw *gateway.NenyaGateway, w http.ResponseWriter, 
 		contentBuilder = newContentBuilder()
 		transformingReader.SetOnContent(contentBuilder.addContent)
 	}
+	return transformingReader, contentBuilder
+}
 
-	buf := getStreamBuffer()
-	// Do not defer streamingBufPool.Put(buf). The goroutine below holds a
-	// reference to *buf until it exits. We return the buffer explicitly after
-	// confirming the goroutine has finished to prevent a data race where
-	// another handler reuses the same underlying slice while it is still being
-	// written.
-
-	flushWriter, canFlush := newImmediateFlushWriterSafe(w)
+func (p *Proxy) setupStreamWriter(gw *gateway.NenyaGateway, flushWriter *immediateFlushWriter, canFlush bool, w http.ResponseWriter, cacheKey string) (io.Writer, *bytes.Buffer, *sseTeeWriter) {
+	dst := io.Writer(flushWriter)
+	if !canFlush {
+		dst = w
+	}
 
 	var captureBuf *bytes.Buffer
 	var tee *sseTeeWriter
@@ -290,93 +310,82 @@ func (p *Proxy) streamResponse(gw *gateway.NenyaGateway, w http.ResponseWriter, 
 			buf:      captureBuf,
 			maxBytes: gw.Config.ResponseCache.MaxEntryBytes,
 		}
-	}
-
-	dst := io.Writer(flushWriter)
-	if !canFlush {
-		dst = w
-	}
-	if tee != nil {
 		dst = tee
 	}
 
-	var copyErr error
-	var written int64
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		written, copyErr = copyStream(r.Context(), dst, transformingReader, *buf)
-	}()
+	return dst, captureBuf, tee
+}
 
+func (p *Proxy) handleStreamCompletion(ctx context.Context, gw *gateway.NenyaGateway, w http.ResponseWriter, target routing.UpstreamTarget, agentName string, action upstreamAction, cacheKey string, cooldownDuration time.Duration, buf *[]byte, done chan struct{}, copyErr error, written int64, captureBuf *bytes.Buffer, tee *sseTeeWriter, contentBuilder *contentBuilder) {
 	select {
 	case <-done:
-		// Goroutine has exited; safe to return the buffer to the pool.
+		p.handleStreamDone(gw, w, target, agentName, action, cacheKey, cooldownDuration, buf, copyErr, written, captureBuf, tee, contentBuilder)
+	case <-ctx.Done():
+		p.handleClientDisconnect(gw, w, target, action, buf, done)
+	}
+}
+
+func (p *Proxy) handleStreamDone(gw *gateway.NenyaGateway, w http.ResponseWriter, target routing.UpstreamTarget, agentName string, action upstreamAction, cacheKey string, cooldownDuration time.Duration, buf *[]byte, copyErr error, written int64, captureBuf *bytes.Buffer, tee *sseTeeWriter, contentBuilder *contentBuilder) {
+	streamingBufPool.Put(buf)
+
+	if copyErr == nil && written == 0 && gw.Config.Governance.EmptyStreamAsError {
+		gw.Logger.Warn("empty upstream stream detected, treating as error",
+			"model", target.Model, "provider", target.Provider)
+		gw.Metrics.RecordEmptyStream(target.Model, target.Provider)
+		gw.AgentState.RecordFailure(target, cooldownDuration)
+		p.writeEmptyStreamSSE(gw, w)
+		return
+	}
+
+	if errors.Is(copyErr, stream.ErrStreamBlocked) {
+		action.cancel()
+		_ = action.resp.Body.Close()
+		gw.Logger.Warn("stream blocked by execution policy, upstream killed",
+			"model", target.Model, "provider", target.Provider)
+		gw.Metrics.RecordStreamBlock(target.Model, target.Provider)
+		p.writeBlockedSSE(gw, w)
+		return
+	}
+	if errors.Is(copyErr, errStreamStalled) {
+		action.cancel()
+		_ = action.resp.Body.Close()
+		gw.Logger.Warn("stream stalled, aborting upstream",
+			"model", target.Model, "provider", target.Provider,
+			"idle_timeout", streamIdleTimeout)
+		return
+	}
+	_ = action.resp.Body.Close()
+
+	if copyErr == nil || errors.Is(copyErr, context.Canceled) || errors.Is(copyErr, context.DeadlineExceeded) {
+		if copyErr != nil {
+			gw.Logger.Debug("stream ended (client disconnect)", "model", target.Model, "provider", target.Provider)
+		}
+		gw.AgentState.RecordSuccess(target.CoolKey)
+	} else {
+		gw.Logger.Warn("stream copy error (upstream)",
+			"model", target.Model, "provider", target.Provider,
+			"err", copyErr)
+		gw.AgentState.RecordFailure(target, cooldownDuration)
+	}
+
+	if copyErr == nil {
+		if cacheKey != "" && gw.ResponseCache != nil && tee != nil && !tee.exceeded && captureBuf.Len() > 0 {
+			gw.ResponseCache.Store(cacheKey, captureBuf.Bytes())
+			gw.Logger.Debug("response cache stored",
+				"model", target.Model, "size", captureBuf.Len())
+		}
+		p.asyncMCPAutoSave(gw, agentName, contentBuilder)
+	}
+}
+
+func (p *Proxy) handleClientDisconnect(gw *gateway.NenyaGateway, w http.ResponseWriter, target routing.UpstreamTarget, action upstreamAction, buf *[]byte, done chan struct{}) {
+	gw.Logger.Info("client disconnected, aborting upstream stream", "model", target.Model)
+	_ = action.resp.Body.Close()
+	select {
+	case <-done:
 		streamingBufPool.Put(buf)
-
-		// Detect empty stream (no bytes written) when configured
-		if copyErr == nil && written == 0 && gw.Config.Governance.EmptyStreamAsError {
-			gw.Logger.Warn("empty upstream stream detected, treating as error",
-				"model", target.Model, "provider", target.Provider)
-			gw.Metrics.RecordEmptyStream(target.Model, target.Provider)
-			gw.AgentState.RecordFailure(target, cooldownDuration)
-			p.writeEmptyStreamSSE(gw, w)
-			return
-		}
-
-		if errors.Is(copyErr, stream.ErrStreamBlocked) {
-			action.cancel()
-			_ = action.resp.Body.Close()
-			gw.Logger.Warn("stream blocked by execution policy, upstream killed",
-				"model", target.Model, "provider", target.Provider)
-			gw.Metrics.RecordStreamBlock(target.Model, target.Provider)
-			p.writeBlockedSSE(gw, w)
-			return
-		}
-		if errors.Is(copyErr, errStreamStalled) {
-			action.cancel()
-			_ = action.resp.Body.Close()
-			gw.Logger.Warn("stream stalled, aborting upstream",
-				"model", target.Model, "provider", target.Provider,
-				"idle_timeout", streamIdleTimeout)
-			return
-		}
-		_ = action.resp.Body.Close()
-
-		// Only credit the circuit breaker on a clean stream. Context errors mean
-		// the client disconnected; don't penalize upstream. Other errors mean the
-		// upstream dropped the stream mid-transfer.
-		if copyErr == nil || errors.Is(copyErr, context.Canceled) || errors.Is(copyErr, context.DeadlineExceeded) {
-			if copyErr != nil {
-				gw.Logger.Debug("stream ended (client disconnect)", "model", target.Model, "provider", target.Provider)
-			}
-			gw.AgentState.RecordSuccess(target.CoolKey)
-		} else {
-			gw.Logger.Warn("stream copy error (upstream)",
-				"model", target.Model, "provider", target.Provider,
-				"err", copyErr)
-			gw.AgentState.RecordFailure(target, cooldownDuration)
-		}
-
-		if copyErr == nil {
-			if cacheKey != "" && gw.ResponseCache != nil && tee != nil && !tee.exceeded && captureBuf.Len() > 0 {
-				gw.ResponseCache.Store(cacheKey, captureBuf.Bytes())
-				gw.Logger.Debug("response cache stored",
-					"model", target.Model, "size", captureBuf.Len())
-			}
-			p.asyncMCPAutoSave(gw, agentName, contentBuilder)
-		}
-	case <-r.Context().Done():
-		gw.Logger.Info("client disconnected, aborting upstream stream", "model", target.Model)
-		_ = action.resp.Body.Close()
-		select {
-		case <-done:
-			// Goroutine exited before the timeout; safe to return the buffer.
-			streamingBufPool.Put(buf)
-		case <-time.After(5 * time.Second):
-			// Goroutine is still running. Leak the 32KB buffer rather than
-			// returning it to the pool while the goroutine may still write to it.
-			gw.Logger.Warn("timed out waiting for stream copy to finish after client disconnect", "model", target.Model)
-		}
+	case <-time.After(5 * time.Second):
+		gw.Logger.Warn("timed out waiting for stream copy to finish after client disconnect", "model", target.Model)
 	}
 }
 

@@ -52,6 +52,33 @@ type NenyaGateway struct {
 // and logger. It initializes HTTP clients, provider registry, rate limiter,
 // metrics, MCP clients, and starts dynamic model discovery.
 func New(ctx context.Context, cfg config.Config, secrets *config.SecretsConfig, logger *slog.Logger) *NenyaGateway {
+	cfg = mergeBuiltInProviders(cfg)
+	secureClient, ollamaClient := createHTTPClients(cfg)
+	providers := config.ResolveProviders(&cfg, secrets)
+
+	mergedCatalog, healthRegistry := performModelDiscovery(ctx, cfg, providers, logger)
+
+	secretPatterns, blockedPatterns := compilePatterns(cfg, logger)
+	entropyFilter := createEntropyFilter(cfg, logger)
+
+	gw := buildGateway(cfg, secrets, secureClient, ollamaClient, providers,
+		secretPatterns, blockedPatterns, entropyFilter, mergedCatalog, healthRegistry, logger)
+
+	gw.buildMCPToolIndex(ctx, logger)
+
+	gw.Metrics = infra.NewMetrics()
+	gw.Metrics.RateLimits = gw.RateLimiter.Snapshot
+	gw.Metrics.Cooldowns = gw.AgentState.ActiveCooldowns
+	gw.Metrics.CBStates = gw.AgentState.CBSnapshot
+
+	debugLogAgentModels(ctx, logger, cfg, mergedCatalog, providers)
+
+	adapter.InitWithDeps(logger, gw.ThoughtSigCache, ExtractContentText)
+
+	return gw
+}
+
+func mergeBuiltInProviders(cfg config.Config) config.Config {
 	if cfg.Providers == nil {
 		cfg.Providers = make(map[string]config.ProviderConfig)
 	}
@@ -60,7 +87,10 @@ func New(ctx context.Context, cfg config.Config, secrets *config.SecretsConfig, 
 			cfg.Providers[name] = builtIn
 		}
 	}
+	return cfg
+}
 
+func createHTTPClients(cfg config.Config) (*http.Client, *http.Client) {
 	transport := &http.Transport{
 		DialContext: (&net.Dialer{
 			Timeout:   30 * time.Second,
@@ -99,45 +129,62 @@ func New(ctx context.Context, cfg config.Config, secrets *config.SecretsConfig, 
 		Transport: ollamaTransport,
 	}
 
-	providers := config.ResolveProviders(&cfg, secrets)
+	return secureClient, ollamaClient
+}
 
+func performModelDiscovery(ctx context.Context, cfg config.Config, providers map[string]*config.Provider, logger *slog.Logger) (*discovery.ModelCatalog, *discovery.HealthRegistry) {
 	var mergedCatalog *discovery.ModelCatalog
 	var healthRegistry *discovery.HealthRegistry
 
-	if cfg.Discovery.Enabled {
-		fetcher := discovery.NewDiscoveryFetcher(cfg.Governance.EffectiveMaxRetryAttempts())
-		catalog := fetcher.FetchAll(ctx, providers, logger)
-		mergedCatalog = discovery.MergeCatalog(catalog, &cfg)
-
-		if _, hasOR := providers["openrouter"]; hasOR {
-			pfCtx, pfCancel := context.WithTimeout(ctx, 20*time.Second)
-			pf := discovery.NewPricingFetcher(logger)
-			if orPricing, err := pf.FetchOpenRouterPricing(pfCtx); err != nil {
-				logger.Warn("failed to fetch openrouter pricing, skipping", "err", err)
-			} else {
-				logger.Info("fetched openrouter pricing", "models_with_pricing", len(orPricing))
-				mergedCatalog.AttachPricing(orPricing)
-			}
-			pfCancel()
-		}
-
-		logger.Info("model discovery completed", "total_models", len(mergedCatalog.AllModels()), "fetched_at", catalog.FetchedAt().Format(time.RFC3339))
-
-		healthRegistry = discovery.ValidateAllProviders(providers, mergedCatalog, logger)
-
-		logger.Debug("auto-agents check", "discovery_enabled", cfg.Discovery.Enabled, "auto_agents", cfg.Discovery.AutoAgents)
-		if cfg.Discovery.AutoAgents {
-			autoAgents := discovery.GenerateAutoAgents(mergedCatalog, providers, cfg.Discovery.AutoAgentsConfig, logger)
-			for name, agent := range autoAgents {
-				if _, exists := cfg.Agents[name]; !exists {
-					cfg.Agents[name] = agent
-				}
-			}
-		}
-	} else {
+	if !cfg.Discovery.Enabled {
 		mergedCatalog = discovery.MergeCatalog(discovery.NewModelCatalog(), &cfg)
+		return mergedCatalog, nil
 	}
 
+	fetcher := discovery.NewDiscoveryFetcher(cfg.Governance.EffectiveMaxRetryAttempts())
+	catalog := fetcher.FetchAll(ctx, providers, logger)
+	mergedCatalog = discovery.MergeCatalog(catalog, &cfg)
+
+	if _, hasOR := providers["openrouter"]; hasOR {
+		fetchOpenRouterPricing(ctx, providers, mergedCatalog, logger)
+	}
+
+	logger.Info("model discovery completed", "total_models", len(mergedCatalog.AllModels()), "fetched_at", catalog.FetchedAt().Format(time.RFC3339))
+
+	healthRegistry = discovery.ValidateAllProviders(providers, mergedCatalog, logger)
+
+	generateAutoAgents(cfg, mergedCatalog, providers, logger)
+
+	return mergedCatalog, healthRegistry
+}
+
+func fetchOpenRouterPricing(ctx context.Context, providers map[string]*config.Provider, catalog *discovery.ModelCatalog, logger *slog.Logger) {
+	pfCtx, pfCancel := context.WithTimeout(ctx, 20*time.Second)
+	defer pfCancel()
+
+	pf := discovery.NewPricingFetcher(logger)
+	if orPricing, err := pf.FetchOpenRouterPricing(pfCtx); err != nil {
+		logger.Warn("failed to fetch openrouter pricing, skipping", "err", err)
+	} else {
+		logger.Info("fetched openrouter pricing", "models_with_pricing", len(orPricing))
+		catalog.AttachPricing(orPricing)
+	}
+}
+
+func generateAutoAgents(cfg config.Config, catalog *discovery.ModelCatalog, providers map[string]*config.Provider, logger *slog.Logger) {
+	logger.Debug("auto-agents check", "discovery_enabled", cfg.Discovery.Enabled, "auto_agents", cfg.Discovery.AutoAgents)
+	if !cfg.Discovery.AutoAgents {
+		return
+	}
+	autoAgents := discovery.GenerateAutoAgents(catalog, providers, cfg.Discovery.AutoAgentsConfig, logger)
+	for name, agent := range autoAgents {
+		if _, exists := cfg.Agents[name]; !exists {
+			cfg.Agents[name] = agent
+		}
+	}
+}
+
+func compilePatterns(cfg config.Config, logger *slog.Logger) ([]*regexp.Regexp, []*regexp.Regexp) {
 	var secretPatterns []*regexp.Regexp
 	if cfg.SecurityFilter.Enabled && len(cfg.SecurityFilter.Patterns) > 0 {
 		for _, pattern := range cfg.SecurityFilter.Patterns {
@@ -164,16 +211,23 @@ func New(ctx context.Context, cfg config.Config, secrets *config.SecretsConfig, 
 		logger.Info("compiled blocked execution patterns for stream kill switch", "count", len(blockedPatterns))
 	}
 
-	var entropyFilter *pipeline.EntropyFilter
-	if cfg.SecurityFilter.EntropyEnabled {
-		entropyFilter = pipeline.NewEntropyFilter(
-			cfg.SecurityFilter.EntropyThreshold,
-			cfg.SecurityFilter.EntropyMinToken,
-		)
-		logger.Info("entropy filter enabled", "threshold", cfg.SecurityFilter.EntropyThreshold, "min_token", cfg.SecurityFilter.EntropyMinToken)
-	}
+	return secretPatterns, blockedPatterns
+}
 
-	gw := &NenyaGateway{
+func createEntropyFilter(cfg config.Config, logger *slog.Logger) *pipeline.EntropyFilter {
+	if !cfg.SecurityFilter.EntropyEnabled {
+		return nil
+	}
+	entropyFilter := pipeline.NewEntropyFilter(
+		cfg.SecurityFilter.EntropyThreshold,
+		cfg.SecurityFilter.EntropyMinToken,
+	)
+	logger.Info("entropy filter enabled", "threshold", cfg.SecurityFilter.EntropyThreshold, "min_token", cfg.SecurityFilter.EntropyMinToken)
+	return entropyFilter
+}
+
+func buildGateway(cfg config.Config, secrets *config.SecretsConfig, secureClient *http.Client, ollamaClient *http.Client, providers map[string]*config.Provider, secretPatterns []*regexp.Regexp, blockedPatterns []*regexp.Regexp, entropyFilter *pipeline.EntropyFilter, mergedCatalog *discovery.ModelCatalog, healthRegistry *discovery.HealthRegistry, logger *slog.Logger) *NenyaGateway {
+	return &NenyaGateway{
 		Config:          cfg,
 		Client:          secureClient,
 		OllamaClient:    ollamaClient,
@@ -196,76 +250,87 @@ func New(ctx context.Context, cfg config.Config, secrets *config.SecretsConfig, 
 		LatencyTracker:  infra.NewLatencyTracker(),
 		CostTracker:     infra.NewCostTracker(),
 	}
+}
 
-	gw.buildMCPToolIndex(ctx, logger)
+func debugLogAgentModels(ctx context.Context, logger *slog.Logger, cfg config.Config, mergedCatalog *discovery.ModelCatalog, providers map[string]*config.Provider) {
+	if !logger.Enabled(ctx, slog.LevelDebug) {
+		return
+	}
+	for name, agent := range cfg.Agents {
+		modelEntries := make([]string, 0, len(agent.Models))
+		for _, m := range agent.Models {
+			entries := resolveModelEntry(m, mergedCatalog, providers)
+			modelEntries = append(modelEntries, entries...)
+		}
+		mcpSrv := []string{}
+		if agent.MCP != nil {
+			mcpSrv = agent.MCP.Servers
+		}
+		logger.Debug("agent model chain",
+			"name", name,
+			"strategy", agent.Strategy,
+			"models", modelEntries,
+			"system_prompt", agent.SystemPromptFile,
+			"mcp_servers", mcpSrv,
+		)
+	}
+}
 
-	gw.Metrics = infra.NewMetrics()
-	gw.Metrics.RateLimits = gw.RateLimiter.Snapshot
-	gw.Metrics.Cooldowns = gw.AgentState.ActiveCooldowns
-	gw.Metrics.CBStates = gw.AgentState.CBSnapshot
+func resolveModelEntry(m config.AgentModel, catalog *discovery.ModelCatalog, providers map[string]*config.Provider) []string {
+	if m.Provider != "" && m.Model != "" {
+		return []string{fmt.Sprintf("%s/%s", m.Provider, m.Model)}
+	}
+	if m.ProviderRgx != "" || m.ModelRgx != "" {
+		return resolveRegexModelEntry(m, catalog, providers)
+	}
+	if m.Model != "" {
+		return resolveStringModelEntry(m, catalog, providers)
+	}
+	return []string{}
+}
 
-	if logger.Enabled(ctx, slog.LevelDebug) {
-		for name, agent := range cfg.Agents {
-			modelEntries := make([]string, 0, len(agent.Models))
-			for _, m := range agent.Models {
-				if m.Provider != "" && m.Model != "" {
-					modelEntries = append(modelEntries, fmt.Sprintf("%s/%s", m.Provider, m.Model))
-				} else if m.ProviderRgx != "" || m.ModelRgx != "" {
-					if mergedCatalog != nil {
-						matched := false
-						for _, dm := range mergedCatalog.AllModels() {
-							if !m.MatchesCatalog(dm.Provider, dm.ID) {
-								continue
-							}
-							if !providerCanServe(providers[dm.Provider]) {
-								continue
-							}
-							matched = true
-							modelEntries = append(modelEntries, fmt.Sprintf("%s/%s", dm.Provider, dm.ID))
-						}
-						if matched {
-							continue
-						}
-					}
-					modelEntries = append(modelEntries, fmt.Sprintf("rx:%s (unresolved)", m.ModelRgx))
-				} else if m.Model != "" {
-					if mergedCatalog != nil {
-						entries := mergedCatalog.LookupAll(m.Model)
-						if len(entries) > 0 {
-							for _, e := range entries {
-								if providerCanServe(providers[e.Provider]) {
-									modelEntries = append(modelEntries, fmt.Sprintf("%s/%s", e.Provider, m.Model))
-								}
-							}
-							continue
-						}
-					}
-					if entry, ok := config.ModelRegistry[m.Model]; ok {
-						if providerCanServe(providers[entry.Provider]) {
-							modelEntries = append(modelEntries, fmt.Sprintf("%s/%s", entry.Provider, m.Model))
-							continue
-						}
-					}
-					modelEntries = append(modelEntries, fmt.Sprintf("%s (unresolved)", m.Model))
-				}
+func resolveRegexModelEntry(m config.AgentModel, catalog *discovery.ModelCatalog, providers map[string]*config.Provider) []string {
+	modelEntries := make([]string, 0)
+	if catalog != nil {
+		matched := false
+		for _, dm := range catalog.AllModels() {
+			if !m.MatchesCatalog(dm.Provider, dm.ID) {
+				continue
 			}
-			mcpSrv := []string{}
-			if agent.MCP != nil {
-				mcpSrv = agent.MCP.Servers
+			if !providerCanServe(providers[dm.Provider]) {
+				continue
 			}
-			logger.Debug("agent model chain",
-				"name", name,
-				"strategy", agent.Strategy,
-				"models", modelEntries,
-				"system_prompt", agent.SystemPromptFile,
-				"mcp_servers", mcpSrv,
-			)
+			matched = true
+			modelEntries = append(modelEntries, fmt.Sprintf("%s/%s", dm.Provider, dm.ID))
+		}
+		if matched {
+			return modelEntries
 		}
 	}
+	return []string{fmt.Sprintf("rx:%s (unresolved)", m.ModelRgx)}
+}
 
-	adapter.InitWithDeps(logger, gw.ThoughtSigCache, ExtractContentText)
-
-	return gw
+func resolveStringModelEntry(m config.AgentModel, catalog *discovery.ModelCatalog, providers map[string]*config.Provider) []string {
+	if catalog != nil {
+		entries := catalog.LookupAll(m.Model)
+		if len(entries) > 0 {
+			modelEntries := make([]string, 0, len(entries))
+			for _, e := range entries {
+				if providerCanServe(providers[e.Provider]) {
+					modelEntries = append(modelEntries, fmt.Sprintf("%s/%s", e.Provider, m.Model))
+				}
+			}
+			if len(modelEntries) > 0 {
+				return modelEntries
+			}
+		}
+	}
+	if entry, ok := config.ModelRegistry[m.Model]; ok {
+		if providerCanServe(providers[entry.Provider]) {
+			return []string{fmt.Sprintf("%s/%s", entry.Provider, m.Model)}
+		}
+	}
+	return []string{fmt.Sprintf("%s (unresolved)", m.Model)}
 }
 
 func (g *NenyaGateway) InitMetrics() {
@@ -387,7 +452,7 @@ func (g *NenyaGateway) Reload(ctx context.Context, cfg config.Config, secrets *c
 // providerCanServe returns true if the provider is configured with either
 // an API key or auth_style "none" (i.e. can actually make upstream requests).
 func providerCanServe(p *config.Provider) bool {
-	return p != nil && !(p.APIKey == "" && p.AuthStyle != "none")
+	return p != nil && (p.APIKey != "" || p.AuthStyle == "none")
 }
 
 func buildMCPClients(cfg config.Config, logger *slog.Logger) map[string]*mcp.Client {

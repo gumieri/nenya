@@ -31,17 +31,57 @@ func ApplyWindowCompaction(ctx context.Context, deps WindowDeps, payload map[str
 		return false, nil
 	}
 
-	effectiveMax := maxContext
+	_, _, _, active, history, leadingSystem, ok := calculateWindowParams(windowCfg, maxContext, tokenCount, messages)
+	if !ok {
+		return false, nil
+	}
+
+	historyText := SerializeMessages(history)
+	if historyText == "" {
+		return false, nil
+	}
+
+	beforeTokens := tokenCount
+	summary, err := generateWindowSummary(ctx, deps, windowCfg, active, historyText)
+	if err != nil || summary == "" {
+		if err != nil {
+			deps.Logger.Warn("window summarization failed, skipping", "err", err)
+		}
+		return false, nil
+	}
+
+	summary = trimSummaryToMaxRunes(summary, windowCfg.SummaryMaxRunes)
+	if summary == "" {
+		return false, nil
+	}
+
+	newMessages := buildCompactedMessages(leadingSystem, active, summary, len(history), beforeTokens)
+	payload["messages"] = newMessages
+
+	afterTokens := countRequestTokens(payload)
+	deps.Logger.Info("window compaction applied",
+		"mode", windowCfg.Mode,
+		"messages_before", len(history)+len(active),
+		"messages_after", 1+len(active),
+		"tokens_before", beforeTokens,
+		"tokens_after", afterTokens,
+		"savings", beforeTokens-afterTokens)
+
+	return true, nil
+}
+
+func calculateWindowParams(windowCfg config.WindowConfig, maxContext int, tokenCount int, messages []interface{}) (effectiveMax int, threshold int, splitIdx int, active []interface{}, history []interface{}, leadingSystem []interface{}, ok bool) {
+	effectiveMax = maxContext
 	if effectiveMax == 0 {
 		effectiveMax = windowCfg.MaxContext
 	}
 	if effectiveMax == 0 {
-		return false, nil
+		return 0, 0, 0, nil, nil, nil, false
 	}
 
-	threshold := int(float64(effectiveMax) * windowCfg.TriggerRatio)
+	threshold = int(float64(effectiveMax) * windowCfg.TriggerRatio)
 	if threshold == 0 || tokenCount <= threshold {
-		return false, nil
+		return 0, 0, 0, nil, nil, nil, false
 	}
 
 	activeMessages := windowCfg.ActiveMessages
@@ -50,16 +90,11 @@ func ApplyWindowCompaction(ctx context.Context, deps WindowDeps, payload map[str
 	}
 
 	if len(messages) <= activeMessages {
-		return false, nil
+		return 0, 0, 0, nil, nil, nil, false
 	}
 
-	splitIdx := len(messages) - activeMessages
+	splitIdx = len(messages) - activeMessages
 
-	// Never start the active window on a tool-result message. A tool message
-	// is semantically bound to the preceding assistant+tool_calls message; if
-	// that assistant message were in the compacted history, the tool result
-	// would be orphaned and providers would reject the conversation.
-	// Walk splitIdx backward until active[0] is not a tool message.
 	for splitIdx > 0 {
 		msg, ok := messages[splitIdx].(map[string]interface{})
 		if !ok {
@@ -72,13 +107,9 @@ func ApplyWindowCompaction(ctx context.Context, deps WindowDeps, payload map[str
 	}
 
 	if splitIdx <= 0 {
-		return false, nil
+		return 0, 0, 0, nil, nil, nil, false
 	}
 
-	// Preserve leading system messages verbatim. They carry operator-defined
-	// safety instructions and guardrails that must survive compaction intact.
-	// Only summarize the non-system history between them and the active window.
-	var leadingSystem []interface{}
 	historyStart := 0
 	for historyStart < splitIdx {
 		msg, ok := messages[historyStart].(map[string]interface{})
@@ -92,81 +123,79 @@ func ApplyWindowCompaction(ctx context.Context, deps WindowDeps, payload map[str
 		historyStart++
 	}
 
-	history := messages[historyStart:splitIdx]
-	active := messages[splitIdx:]
+	history = messages[historyStart:splitIdx]
+	active = messages[splitIdx:]
 
-	historyText := SerializeMessages(history)
-	if historyText == "" {
-		return false, nil
-	}
+	return effectiveMax, threshold, splitIdx, active, history, leadingSystem, true
+}
 
-	beforeTokens := tokenCount
-
-	var summary string
-
+func generateWindowSummary(ctx context.Context, deps WindowDeps, windowCfg config.WindowConfig, active []interface{}, historyText string) (string, error) {
 	switch windowCfg.Mode {
 	case "truncate":
-		summary = TruncateHistory(historyText, windowCfg.SummaryMaxRunes)
+		return TruncateHistory(historyText, windowCfg.SummaryMaxRunes), nil
 	case "tfidf":
-		var query string
-		for i := len(active) - 1; i >= 0; i-- {
-			if msg, ok := active[i].(map[string]interface{}); ok {
-				if role, _ := msg["role"].(string); role == "user" {
-					query = ExtractContentText(msg)
-					break
-				}
-			}
-		}
-		summary = TruncateTFIDFHistory(historyText, windowCfg.SummaryMaxRunes, query)
+		query := extractQueryFromActiveMessages(active)
+		return TruncateTFIDFHistory(historyText, windowCfg.SummaryMaxRunes, query), nil
 	case "summarize", "":
-		defaultPrompt := fmt.Sprintf(WindowSystemPrompt, windowCfg.SummaryMaxRunes)
-		ref := windowCfg.Engine
-		systemPrompt, err := config.LoadPromptFile(ref.SystemPromptFile, ref.SystemPrompt, defaultPrompt)
-		if err != nil {
-			deps.Logger.Warn("failed to load window summarization prompt, using default", "err", err)
-			systemPrompt = defaultPrompt
-		}
-		if len(ref.ResolvedTargets) == 0 {
-			deps.Logger.Warn("window engine: no resolved targets, falling back to truncation")
-			summary = TruncateHistory(historyText, windowCfg.SummaryMaxRunes)
-		} else {
-			agentName := ref.AgentName
-			if agentName == "" {
-				agentName = "inline"
-			}
-			s, err := CallEngineChain(ctx, deps.Client, deps.OllamaClient,
-				ref.ResolvedTargets, deps.Logger, deps.InjectAPIKey,
-				"window", agentName, systemPrompt, historyText)
-			if err != nil {
-				deps.Logger.Warn("window summarization failed, falling back to truncation", "err", err)
-				summary = TruncateHistory(historyText, windowCfg.SummaryMaxRunes)
-			} else {
-				summary = s
-			}
-		}
+		return generateEngineSummary(ctx, deps, windowCfg, active, historyText)
 	default:
 		deps.Logger.Warn("unknown window mode, skipping", "mode", windowCfg.Mode)
-		return false, nil
+		return "", nil
 	}
+}
 
-	if summary == "" {
-		return false, nil
+func extractQueryFromActiveMessages(active []interface{}) string {
+	for i := len(active) - 1; i >= 0; i-- {
+		if msg, ok := active[i].(map[string]interface{}); ok {
+			if role, _ := msg["role"].(string); role == "user" {
+				return ExtractContentText(msg)
+			}
+		}
 	}
+	return ""
+}
 
-	maxRunes := windowCfg.SummaryMaxRunes
+func generateEngineSummary(ctx context.Context, deps WindowDeps, windowCfg config.WindowConfig, active []interface{}, historyText string) (string, error) {
+	defaultPrompt := fmt.Sprintf(WindowSystemPrompt, windowCfg.SummaryMaxRunes)
+	ref := windowCfg.Engine
+	systemPrompt, err := config.LoadPromptFile(ref.SystemPromptFile, ref.SystemPrompt, defaultPrompt)
+	if err != nil {
+		deps.Logger.Warn("failed to load window summarization prompt, using default", "err", err)
+		systemPrompt = defaultPrompt
+	}
+	if len(ref.ResolvedTargets) == 0 {
+		deps.Logger.Warn("window engine: no resolved targets, falling back to truncation")
+		return TruncateHistory(historyText, windowCfg.SummaryMaxRunes), nil
+	}
+	agentName := ref.AgentName
+	if agentName == "" {
+		agentName = "inline"
+	}
+	s, err := CallEngineChain(ctx, deps.Client, deps.OllamaClient,
+		ref.ResolvedTargets, deps.Logger, deps.InjectAPIKey,
+		"window", agentName, systemPrompt, historyText)
+	if err != nil {
+		deps.Logger.Warn("window summarization failed, falling back to truncation", "err", err)
+		return TruncateHistory(historyText, windowCfg.SummaryMaxRunes), nil
+	}
+	return s, nil
+}
+
+func trimSummaryToMaxRunes(summary string, maxRunes int) string {
 	if maxRunes > 0 && utf8.RuneCountInString(summary) > maxRunes {
 		summary = string([]rune(summary)[:maxRunes])
 	}
+	return summary
+}
 
+func buildCompactedMessages(leadingSystem []interface{}, active []interface{}, summary string, historyLen int, beforeTokens int) []interface{} {
 	summaryMsg := map[string]interface{}{
 		"role": "system",
 		"content": fmt.Sprintf("[Nenya Window Summary (%d messages compacted, was ~%d tokens)]:\n%s",
-			len(history), beforeTokens, summary),
+			historyLen, beforeTokens, summary),
 	}
 
 	newMessages := make([]interface{}, 0, util.AddCap(util.AddCap(len(leadingSystem), 2), len(active)))
-	// Re-inject preserved operator system messages before the summary so they
-	// are never lost during compaction.
 	newMessages = append(newMessages, leadingSystem...)
 	newMessages = append(newMessages, summaryMsg)
 
@@ -182,19 +211,7 @@ func ApplyWindowCompaction(ctx context.Context, deps WindowDeps, payload map[str
 	}
 
 	newMessages = append(newMessages, active...)
-
-	payload["messages"] = newMessages
-
-	afterTokens := countRequestTokens(payload)
-	deps.Logger.Info("window compaction applied",
-		"mode", windowCfg.Mode,
-		"messages_before", len(history)+len(active),
-		"messages_after", 1+len(active),
-		"tokens_before", beforeTokens,
-		"tokens_after", afterTokens,
-		"savings", beforeTokens-afterTokens)
-
-	return true, nil
+	return newMessages
 }
 
 func SerializeMessages(messages []interface{}) string {

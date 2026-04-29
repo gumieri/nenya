@@ -16,12 +16,8 @@ func PruneStaleToolCalls(payload map[string]interface{}, cfg config.CompactionCo
 		return false
 	}
 
-	messagesRaw, ok := payload["messages"]
+	messages, ok := getMessagesFromPayload(payload)
 	if !ok {
-		return false
-	}
-	messages, ok := messagesRaw.([]interface{})
-	if !ok || len(messages) == 0 {
 		return false
 	}
 
@@ -38,106 +34,34 @@ func PruneStaleToolCalls(payload map[string]interface{}, cfg config.CompactionCo
 	mutated := false
 	pruneEnd := n - protectionWindow
 
-	i := pruneEnd - 1
-	for i >= 0 {
+	for i := pruneEnd - 1; i >= 0; {
 		msg, ok := messages[i].(map[string]interface{})
-		if !ok {
+		if !ok || shouldSkipMessage(msg) {
 			i--
 			continue
 		}
 
-		role, _ := msg["role"].(string)
-		if role != "assistant" {
-			i--
-			continue
-		}
-
-		tcRaw, hasToolCalls := msg["tool_calls"]
-		if !hasToolCalls {
-			i--
-			continue
-		}
-
-		tcSlice, ok := tcRaw.([]interface{})
+		tcSlice, ok := msg["tool_calls"].([]interface{})
 		if !ok || len(tcSlice) == 0 {
 			i--
 			continue
 		}
 
-		var toolName string
-		if tc, ok := tcSlice[0].(map[string]interface{}); ok {
-			if fn, ok := tc["function"].(map[string]interface{}); ok {
-				if name, ok := fn["name"].(string); ok {
-					toolName = name
-				}
-			}
-		}
-
-		toolCallID := extractToolCallID(tcSlice[0])
-
+		toolName, toolCallID := extractToolCallInfo(tcSlice[0])
 		numToolCalls := len(tcSlice)
+
 		if i+numToolCalls >= pruneEnd {
 			i--
 			continue
 		}
 
-		allPaired := true
-		for j := 0; j < numToolCalls; j++ {
-			respIdx := i + 1 + j
-			if respIdx >= pruneEnd {
-				allPaired = false
-				break
-			}
-			respMsg, ok := messages[respIdx].(map[string]interface{})
-			if !ok {
-				allPaired = false
-				break
-			}
-			respRole, _ := respMsg["role"].(string)
-			if respRole != "tool" {
-				allPaired = false
-				break
-			}
-		}
-
-		if !allPaired {
+		if !areToolResultsPaired(messages, i, numToolCalls, pruneEnd) {
 			i--
 			continue
 		}
 
-		displayName := toolName
-		if displayName == "" {
-			displayName = toolCallID
-		}
-		if displayName == "" {
-			displayName = "unknown"
-		}
-
-		summary := fmt.Sprintf(
-			"[System] Tool '%s' was executed previously. Result compacted to save context window.",
-			displayName,
-		)
-
-		replacement := map[string]interface{}{
-			"role":    "assistant",
-			"content": summary,
-		}
-		if rc, ok := msg["reasoning_content"].(string); ok && rc != "" {
-			replacement["reasoning_content"] = rc
-		}
-
-		total := 1 + numToolCalls
-		messages[i] = replacement
-		copy(messages[i+1:], messages[i+total:])
-		for k := 0; k < numToolCalls; k++ {
-			messages[n-1-k] = nil
-		}
-		messages = messages[:n-numToolCalls]
-		n = len(messages)
-		pruneEnd = n - protectionWindow
-		if pruneEnd < 0 {
-			pruneEnd = 0
-		}
+		replacement := createToolCallReplacement(msg, toolName, toolCallID)
+		messages, n, pruneEnd = pruneToolCallResults(messages, i, numToolCalls, replacement, n, protectionWindow)
 
 		mutated = true
 		i = pruneEnd - 1
@@ -148,6 +72,97 @@ func PruneStaleToolCalls(payload map[string]interface{}, cfg config.CompactionCo
 	}
 
 	return mutated
+}
+
+func getMessagesFromPayload(payload map[string]interface{}) ([]interface{}, bool) {
+	messagesRaw, ok := payload["messages"]
+	if !ok {
+		return nil, false
+	}
+	messages, ok := messagesRaw.([]interface{})
+	if !ok || len(messages) == 0 {
+		return nil, false
+	}
+	return messages, true
+}
+
+func shouldSkipMessage(msg map[string]interface{}) bool {
+	role, _ := msg["role"].(string)
+	return role != "assistant"
+}
+
+func extractToolCallInfo(tc interface{}) (string, string) {
+	var toolName, toolCallID string
+
+	tcMap, ok := tc.(map[string]interface{})
+	if !ok {
+		return "", ""
+	}
+
+	if fn, ok := tcMap["function"].(map[string]interface{}); ok {
+		toolName, _ = fn["name"].(string)
+	}
+
+	toolCallID, _ = tcMap["id"].(string)
+	return toolName, toolCallID
+}
+
+func areToolResultsPaired(messages []interface{}, i int, numToolCalls int, pruneEnd int) bool {
+	for j := 0; j < numToolCalls; j++ {
+		respIdx := i + 1 + j
+		if respIdx >= pruneEnd {
+			return false
+		}
+		respMsg, ok := messages[respIdx].(map[string]interface{})
+		if !ok {
+			return false
+		}
+		respRole, _ := respMsg["role"].(string)
+		if respRole != "tool" {
+			return false
+		}
+	}
+	return true
+}
+
+func createToolCallReplacement(msg map[string]interface{}, toolName, toolCallID string) map[string]interface{} {
+	displayName := toolName
+	if displayName == "" {
+		displayName = toolCallID
+	}
+	if displayName == "" {
+		displayName = "unknown"
+	}
+
+	summary := fmt.Sprintf(
+		"[System] Tool '%s' was executed previously. Result compacted to save context window.",
+		displayName,
+	)
+
+	replacement := map[string]interface{}{
+		"role":    "assistant",
+		"content": summary,
+	}
+	if rc, ok := msg["reasoning_content"].(string); ok && rc != "" {
+		replacement["reasoning_content"] = rc
+	}
+	return replacement
+}
+
+func pruneToolCallResults(messages []interface{}, i int, numToolCalls int, replacement map[string]interface{}, n int, protectionWindow int) ([]interface{}, int, int) {
+	messages[i] = replacement
+	total := 1 + numToolCalls
+	copy(messages[i+1:], messages[i+total:])
+	for k := 0; k < numToolCalls; k++ {
+		messages[n-1-k] = nil
+	}
+	messages = messages[:n-numToolCalls]
+	n = len(messages)
+	pruneEnd := n - protectionWindow
+	if pruneEnd < 0 {
+		pruneEnd = 0
+	}
+	return messages, n, pruneEnd
 }
 
 func extractToolCallID(tc interface{}) string {
