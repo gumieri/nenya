@@ -123,7 +123,7 @@ func processMessages(deps TransformDeps, payload map[string]interface{}, provide
 		return
 	}
 	payload["messages"] = repairedMessages
-	deps.Logger.Warn("repaired invalid message role ordering", "provider", providerName)
+	deps.Logger.Info("repaired invalid message role ordering", "provider", providerName)
 }
 
 func applyDeepSeekFixes(deps TransformDeps, payload map[string]interface{}, providerName string) {
