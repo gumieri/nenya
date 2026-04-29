@@ -326,15 +326,14 @@ func expandDynamicModels(models []config.AgentModel, catalog *discovery.ModelCat
 				continue
 			}
 			matchedAny = true
-			provider, ok := providers[dm.Provider]
-			if !ok {
+			if _, ok := providers[dm.Provider]; !ok {
 				logger.Debug("provider from catalog not found", "provider", dm.Provider, "model", dm.ID)
 				continue
 			}
 			am := config.AgentModel{
 				Provider:   dm.Provider,
 				Model:      dm.ID,
-				URL:        provider.BaseURL,
+				URL:        "",
 				MaxContext: dm.MaxContext,
 				MaxOutput:  dm.MaxOutput,
 			}
