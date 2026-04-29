@@ -364,13 +364,13 @@ func (a *AgentState) buildTarget(logger *slog.Logger, agentName string, m config
 	maxCtx := resolveMaxContext(m, catalog)
 	if maxCtx > 0 && tokenCount > maxCtx {
 		logger.Info("skipping model: exceeds max_context",
-			"model", m.Model, "max_context", maxCtx, "tokens", tokenCount)
+			"provider", m.Provider, "model", m.Model, "max_context", maxCtx, "tokens", tokenCount)
 		return nil, false
 	}
 
 	if autoContextSkip && maxCtx > 0 && tokenCount > 0 && maxCtx < tokenCount*2 {
 		logger.Info("skipping model: context headroom too small",
-			"model", m.Model, "max_context", maxCtx, "tokens", tokenCount)
+			"provider", m.Provider, "model", m.Model, "max_context", maxCtx, "tokens", tokenCount)
 		return nil, false
 	}
 
@@ -387,7 +387,7 @@ func (a *AgentState) buildTarget(logger *slog.Logger, agentName string, m config
 	if m.Provider != "" {
 		provider := providers[m.Provider]
 		if provider == nil || (provider.APIKey == "" && provider.AuthStyle != "none") {
-			logger.Warn("provider configured but has no API key, skipping model", "provider", m.Provider, "model", m.Model)
+			logger.Debug("provider has no API key, skipping model", "provider", m.Provider, "model", m.Model)
 			return nil, false
 		}
 	}

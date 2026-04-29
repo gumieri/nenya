@@ -87,14 +87,17 @@ func ValidateAllProviders(providers map[string]*config.Provider, catalog *ModelC
 	registry := NewHealthRegistry()
 
 	for name, p := range providers {
+		if p.APIKey == "" && p.AuthStyle != "none" {
+			logger.Debug("skipping health check: no API key", "provider", name)
+			continue
+		}
+
 		health := ValidateProviderHealth(name, p, catalog, logger)
 		registry.Update(name, health)
 
 		switch health.Status {
 		case HealthStatusOK:
 			logger.Info("provider health check passed", "provider", name, "models", health.ModelsFound)
-		case HealthStatusUnreachable:
-			logger.Warn("provider health check failed", "provider", name, "status", health.Status, "error", health.Error)
 		case HealthStatusEmpty:
 			logger.Warn("provider returned no models", "provider", name)
 		}
