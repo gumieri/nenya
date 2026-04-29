@@ -46,6 +46,42 @@ type OpenAIParser struct{}
 func (p *OpenAIParser) Parse(body []byte, provider string) ([]DiscoveredModel, error) {
 	var resp OpenAIModelsResponse
 	if err := json.NewDecoder(bytes.NewReader(body)).Decode(&resp); err != nil {
+		var plainArray []string
+		if arrayErr := json.Unmarshal(body, &plainArray); arrayErr == nil {
+			models := make([]DiscoveredModel, 0, len(plainArray))
+			for _, id := range plainArray {
+				if id == "" {
+					continue
+				}
+				if !isValidModelID(id) {
+					continue
+				}
+				models = append(models, DiscoveredModel{
+					ID:       id,
+					Provider: provider,
+				})
+			}
+			return models, nil
+		}
+		var objectArray []struct {
+			ID string `json:"id"`
+		}
+		if objectErr := json.Unmarshal(body, &objectArray); objectErr == nil {
+			models := make([]DiscoveredModel, 0, len(objectArray))
+			for _, m := range objectArray {
+				if m.ID == "" {
+					continue
+				}
+				if !isValidModelID(m.ID) {
+					continue
+				}
+				models = append(models, DiscoveredModel{
+					ID:       m.ID,
+					Provider: provider,
+				})
+			}
+			return models, nil
+		}
 		return nil, fmt.Errorf("failed to parse OpenAI models response: %w", err)
 	}
 	models := make([]DiscoveredModel, 0, len(resp.Data))

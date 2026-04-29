@@ -86,7 +86,7 @@ func (df *DiscoveryFetcher) FetchAll(ctx context.Context, providers map[string]*
 
 	for result := range results {
 		if result.err != nil {
-			logger.Warn("model discovery failed", "err", result.err)
+			logger.Warn("model discovery failed", "provider", result.provider, "err", result.err)
 			continue
 		}
 		for _, m := range result.models {
