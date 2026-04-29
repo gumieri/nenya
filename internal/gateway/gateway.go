@@ -211,11 +211,27 @@ func New(ctx context.Context, cfg config.Config, secrets *config.SecretsConfig, 
 				if m.Provider != "" && m.Model != "" {
 					modelEntries = append(modelEntries, fmt.Sprintf("%s/%s", m.Provider, m.Model))
 				} else if m.ProviderRgx != "" || m.ModelRgx != "" {
-					r := m.ModelRgx
-					if m.ProviderRgx != "" {
-						r = m.ProviderRgx + "/" + r
+					if mergedCatalog != nil {
+						matched := false
+						for _, dm := range mergedCatalog.AllModels() {
+							if !m.MatchesCatalog(dm.Provider, dm.ID) {
+								continue
+							}
+							if _, ok := providers[dm.Provider]; !ok {
+								continue
+							}
+							matched = true
+							if dm.MaxContext > 0 || dm.MaxOutput > 0 {
+								modelEntries = append(modelEntries, fmt.Sprintf("%s/%s", dm.Provider, dm.ID))
+							} else {
+								modelEntries = append(modelEntries, fmt.Sprintf("%s/%s", dm.Provider, dm.ID))
+							}
+						}
+						if matched {
+							continue
+						}
 					}
-					modelEntries = append(modelEntries, fmt.Sprintf("rx:%s", r))
+					modelEntries = append(modelEntries, fmt.Sprintf("rx:%s (unresolved)", m.ModelRgx))
 				} else if m.Model != "" {
 					if mergedCatalog != nil {
 						entries := mergedCatalog.LookupAll(m.Model)
