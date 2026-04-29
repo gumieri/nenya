@@ -63,7 +63,7 @@ func InferCapabilities(modelID string) *ModelMetadata {
 		)
 		return nil
 	}
-	slog.Info("model capabilities inferred",
+	slog.Debug("model capabilities inferred",
 		"model_id", modelID,
 		"tool_calls", meta.SupportsToolCalls,
 		"reasoning", meta.SupportsReasoning,

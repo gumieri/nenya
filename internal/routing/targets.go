@@ -384,6 +384,14 @@ func (a *AgentState) buildTarget(logger *slog.Logger, agentName string, m config
 		return nil, false
 	}
 
+	if m.Provider != "" {
+		provider := providers[m.Provider]
+		if provider == nil || (provider.APIKey == "" && provider.AuthStyle != "none") {
+			logger.Warn("provider configured but has no API key, skipping model", "provider", m.Provider, "model", m.Model)
+			return nil, false
+		}
+	}
+
 	maxOut := resolveMaxOutput(m, catalog)
 
 	return &UpstreamTarget{
