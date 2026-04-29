@@ -168,6 +168,7 @@ func resolveEngineRefs(cfg *Config) error {
 			ApiFormat:            pc.ApiFormat,
 			TimeoutSeconds:       pc.TimeoutSeconds,
 			RetryableStatusCodes: pc.RetryableStatusCodes,
+			MaxRetryAttempts:     pc.MaxRetryAttempts,
 		}
 	}
 

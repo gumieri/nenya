@@ -14,6 +14,7 @@ import (
 
 	"nenya/internal/adapter"
 	"nenya/internal/config"
+	"nenya/internal/util"
 )
 
 const (
@@ -24,11 +25,16 @@ const (
 )
 
 type DiscoveryFetcher struct {
-	client *http.Client
+	client      *http.Client
+	maxAttempts int
 }
 
-func NewDiscoveryFetcher() *DiscoveryFetcher {
+func NewDiscoveryFetcher(maxAttempts int) *DiscoveryFetcher {
+	if maxAttempts <= 0 {
+		maxAttempts = 3
+	}
 	return &DiscoveryFetcher{
+		maxAttempts: maxAttempts,
 		client: &http.Client{
 			Transport: &http.Transport{
 				DialContext: (&net.Dialer{
@@ -161,7 +167,25 @@ func (df *DiscoveryFetcher) fetchProviderModels(ctx context.Context, providerNam
 		return nil, fmt.Errorf("discovery auth: %w", err)
 	}
 
-	resp, err := df.client.Do(req)
+	maxAttempts := df.maxAttempts
+	if provider.MaxRetryAttempts > 0 {
+		maxAttempts = provider.MaxRetryAttempts
+	}
+
+	var resp *http.Response
+	err = util.DoWithRetry(providerCtx, maxAttempts, func() error {
+		var fetchErr error
+		resp, fetchErr = df.client.Do(req)
+		if fetchErr != nil {
+			return fetchErr
+		}
+		if resp.StatusCode >= 500 {
+			_ = resp.Body.Close()
+			return fmt.Errorf("upstream error: %d", resp.StatusCode)
+		}
+		return nil
+	})
+
 	if err != nil {
 		return nil, fmt.Errorf("discovery fetch: %w", err)
 	}

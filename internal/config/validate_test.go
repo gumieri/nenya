@@ -4,10 +4,76 @@ import (
 	"context"
 	"log/slog"
 	"net/http"
+	"net/http/httptest"
+	"strings"
+	"sync/atomic"
 	"testing"
 
 	providerpkg "nenya/internal/providers"
 )
+
+func TestValidateWithMinimalRequest_RetryOnNetworkError(t *testing.T) {
+	var attempts atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		n := attempts.Add(1)
+		if n < 2 {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{"id":"test"}`))
+	}))
+	defer server.Close()
+
+	provider := &Provider{
+		Name:           "test-provider",
+		URL:            server.URL,
+		AuthStyle:      "none",
+		APIKey:         "",
+		TimeoutSeconds: 30,
+	}
+
+	ctx := context.Background()
+	logger := slog.Default()
+	err := validateWithMinimalRequest(provider, ctx, logger)
+	if err != nil {
+		t.Fatalf("expected success, got error: %v", err)
+	}
+	if attempts.Load() != 2 {
+		t.Errorf("expected 2 attempts, got %d", attempts.Load())
+	}
+}
+
+func TestValidateWithMinimalRequest_NoRetryOnAuthError(t *testing.T) {
+	var attempts atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		attempts.Add(1)
+		w.WriteHeader(http.StatusUnauthorized)
+	}))
+	defer server.Close()
+
+	provider := &Provider{
+		Name:           "test-provider",
+		URL:            server.URL,
+		AuthStyle:      "none",
+		APIKey:         "",
+		TimeoutSeconds: 30,
+	}
+
+	ctx := context.Background()
+	logger := slog.Default()
+	err := validateWithMinimalRequest(provider, ctx, logger)
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	if !strings.Contains(err.Error(), "401") {
+		t.Errorf("expected 401 in error, got: %v", err)
+	}
+	if attempts.Load() != 1 {
+		t.Errorf("expected 1 attempt (no retry on 401), got %d", attempts.Load())
+	}
+}
 
 func TestOllamaHealthURL(t *testing.T) {
 	tests := []struct {

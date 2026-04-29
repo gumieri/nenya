@@ -128,6 +128,7 @@ type ProviderConfig struct {
 	ApiFormat            string          `json:"api_format"`
 	TimeoutSeconds       int             `json:"timeout_seconds"`
 	RetryableStatusCodes []int           `json:"retryable_status_codes"`
+	MaxRetryAttempts     int             `json:"max_retry_attempts"`
 	Thinking             *ThinkingConfig `json:"thinking,omitempty"`
 }
 
@@ -149,6 +150,7 @@ type Provider struct {
 	ApiFormat            string
 	TimeoutSeconds       int
 	RetryableStatusCodes []int
+	MaxRetryAttempts     int
 	Thinking             *ThinkingConfig
 }
 
@@ -181,6 +183,7 @@ type GovernanceConfig struct {
 	KeepFirstPercent         float64  `json:"keep_first_percent"`
 	KeepLastPercent          float64  `json:"keep_last_percent"`
 	RetryableStatusCodes     []int    `json:"retryable_status_codes"`
+	MaxRetryAttempts         int      `json:"max_retry_attempts"`
 	TFIDFQuerySource         string   `json:"tfidf_query_source"`
 	AutoContextSkip          bool     `json:"auto_context_skip"`
 	AutoReorderByLatency     bool     `json:"auto_reorder_by_latency"`
@@ -197,6 +200,13 @@ type GovernanceConfig struct {
 func (g *GovernanceConfig) RPMSet() bool                { return g.rpmSet }
 func (g *GovernanceConfig) TPMSet() bool                { return g.tpmSet }
 func (g *GovernanceConfig) EmptyStreamAsErrorSet() bool { return g.emptyStreamAsErrorSet }
+
+func (g *GovernanceConfig) EffectiveMaxRetryAttempts() int {
+	if g.MaxRetryAttempts > 0 {
+		return g.MaxRetryAttempts
+	}
+	return 3
+}
 
 type SecretsConfig struct {
 	ClientToken  string            `json:"client_token"`

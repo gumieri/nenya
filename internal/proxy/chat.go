@@ -6,6 +6,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net/http"
+	"strings"
+	"time"
+
 	"nenya/internal/config"
 	"nenya/internal/gateway"
 	"nenya/internal/infra"
@@ -13,9 +17,6 @@ import (
 	"nenya/internal/pipeline"
 	"nenya/internal/routing"
 	"nenya/internal/util"
-	"net/http"
-	"strings"
-	"time"
 )
 
 // MCP timeout constants for automatic operations.
@@ -631,7 +632,24 @@ func (p *Proxy) handleEmbeddings(gw *gateway.NenyaGateway, w http.ResponseWriter
 	}
 	req.Header.Set("Content-Type", "application/json")
 
-	resp, err := gw.Client.Do(req)
+	maxAttempts := provider.MaxRetryAttempts
+	if maxAttempts <= 0 {
+		maxAttempts = gw.Config.Governance.EffectiveMaxRetryAttempts()
+	}
+
+	var resp *http.Response
+	err = util.DoWithRetry(ctx, maxAttempts, func() error {
+		var fetchErr error
+		resp, fetchErr = gw.Client.Do(req)
+		if fetchErr != nil {
+			return fetchErr
+		}
+		if resp.StatusCode >= 500 {
+			_ = resp.Body.Close()
+			return fmt.Errorf("upstream error: %d", resp.StatusCode)
+		}
+		return nil
+	})
 	if err != nil {
 		gw.Logger.Error("embeddings upstream request failed", "provider", provider.Name, "err", err)
 		http.Error(w, "Upstream provider error", http.StatusBadGateway)
@@ -708,7 +726,24 @@ func (p *Proxy) handleResponses(gw *gateway.NenyaGateway, w http.ResponseWriter,
 	}
 	req.Header.Set("Content-Type", "application/json")
 
-	resp, err := gw.Client.Do(req)
+	maxAttempts := provider.MaxRetryAttempts
+	if maxAttempts <= 0 {
+		maxAttempts = gw.Config.Governance.EffectiveMaxRetryAttempts()
+	}
+
+	var resp *http.Response
+	err = util.DoWithRetry(ctx, maxAttempts, func() error {
+		var fetchErr error
+		resp, fetchErr = gw.Client.Do(req)
+		if fetchErr != nil {
+			return fetchErr
+		}
+		if resp.StatusCode >= 500 {
+			_ = resp.Body.Close()
+			return fmt.Errorf("upstream error: %d", resp.StatusCode)
+		}
+		return nil
+	})
 	if err != nil {
 		gw.Logger.Error("responses upstream request failed", "provider", provider.Name, "err", err)
 		http.Error(w, "Upstream provider error", http.StatusBadGateway)

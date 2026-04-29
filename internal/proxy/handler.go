@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/subtle"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"runtime/debug"
 	"strings"
@@ -14,6 +15,7 @@ import (
 	"nenya/internal/discovery"
 	"nenya/internal/gateway"
 	"nenya/internal/infra"
+	"nenya/internal/util"
 )
 
 // MaxModelNameLength is the maximum allowed length for model names.
@@ -382,7 +384,19 @@ func (p *Proxy) checkOllamaProviderHealth(ctx context.Context, gw *gateway.Nenya
 		return false
 	}
 
-	resp, err := gw.OllamaClient.Do(req)
+	var resp *http.Response
+	err = util.DoWithRetry(healthCtx, 2, func() error {
+		var fetchErr error
+		resp, fetchErr = gw.OllamaClient.Do(req)
+		if fetchErr != nil {
+			return fetchErr
+		}
+		if resp.StatusCode >= 500 {
+			_ = resp.Body.Close()
+			return fmt.Errorf("upstream error: %d", resp.StatusCode)
+		}
+		return nil
+	})
 	if err != nil {
 		return false
 	}
