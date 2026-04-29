@@ -105,7 +105,7 @@ func New(ctx context.Context, cfg config.Config, secrets *config.SecretsConfig, 
 	var healthRegistry *discovery.HealthRegistry
 
 	if cfg.Discovery.Enabled {
-		fetcher := discovery.NewDiscoveryFetcher()
+		fetcher := discovery.NewDiscoveryFetcher(cfg.Governance.EffectiveMaxRetryAttempts())
 		catalog := fetcher.FetchAll(ctx, providers, logger)
 		mergedCatalog = discovery.MergeCatalog(catalog, &cfg)
 

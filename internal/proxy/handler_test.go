@@ -7,7 +7,9 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"nenya/internal/config"
 	"nenya/internal/gateway"
@@ -180,5 +182,107 @@ func TestServeHTTP_Models_NoDeepSeekWithoutAPIKey(t *testing.T) {
 		if strings.Contains(strings.ToLower(id), "deepseek") || strings.Contains(strings.ToLower(ownedBy), "deepseek") {
 			t.Errorf("deepseek model should not appear without API key: id=%q ownedBy=%q", id, ownedBy)
 		}
+	}
+}
+
+func TestCheckOllamaProviderHealth_RetryOnce(t *testing.T) {
+	var attempts atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		n := attempts.Add(1)
+		if n == 1 {
+			http.Error(w, "service unavailable", http.StatusServiceUnavailable)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{"models": []interface{}{}})
+	}))
+	defer server.Close()
+
+	cfg := testutil.MinimalConfig()
+	cfg.SecurityFilter.Engine = config.EngineRef{
+		Provider: "ollama",
+		Model:    "qwen2.5-coder",
+	}
+	secrets := &config.SecretsConfig{
+		ClientToken: "test-token",
+	}
+	gw := gateway.New(context.Background(), *cfg, secrets, slog.Default())
+
+	p := &Proxy{}
+	p.StoreGateway(gw)
+
+	ctx := context.Background()
+	result := p.checkOllamaProviderHealth(ctx, gw, server.URL)
+	if !result {
+		t.Errorf("expected true after retry, got false")
+	}
+	if attempts.Load() != 2 {
+		t.Errorf("expected 2 attempts, got %d", attempts.Load())
+	}
+}
+
+func TestCheckOllamaProviderHealth_AllFailed(t *testing.T) {
+	var attempts atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		attempts.Add(1)
+		http.Error(w, "service unavailable", http.StatusServiceUnavailable)
+	}))
+	defer server.Close()
+
+	cfg := testutil.MinimalConfig()
+	cfg.SecurityFilter.Engine = config.EngineRef{
+		Provider: "ollama",
+		Model:    "qwen2.5-coder",
+	}
+	secrets := &config.SecretsConfig{
+		ClientToken: "test-token",
+	}
+	gw := gateway.New(context.Background(), *cfg, secrets, slog.Default())
+
+	p := &Proxy{}
+	p.StoreGateway(gw)
+
+	ctx := context.Background()
+	result := p.checkOllamaProviderHealth(ctx, gw, server.URL)
+	if result {
+		t.Errorf("expected false when all attempts fail, got true")
+	}
+	if attempts.Load() != 2 {
+		t.Errorf("expected 2 attempts, got %d", attempts.Load())
+	}
+}
+
+func TestCheckOllamaProviderHealth_ContextDeadline(t *testing.T) {
+	var attempts atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		attempts.Add(1)
+		time.Sleep(500 * time.Millisecond)
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{"models": []interface{}{}})
+	}))
+	defer server.Close()
+
+	cfg := testutil.MinimalConfig()
+	cfg.SecurityFilter.Engine = config.EngineRef{
+		Provider: "ollama",
+		Model:    "qwen2.5-coder",
+	}
+	secrets := &config.SecretsConfig{
+		ClientToken: "test-token",
+	}
+	gw := gateway.New(context.Background(), *cfg, secrets, slog.Default())
+
+	p := &Proxy{}
+	p.StoreGateway(gw)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer cancel()
+
+	result := p.checkOllamaProviderHealth(ctx, gw, server.URL)
+	if result {
+		t.Errorf("expected false due to context timeout, got true")
+	}
+	if attempts.Load() > 2 {
+		t.Errorf("expected at most 2 attempts due to timeout, got %d", attempts.Load())
 	}
 }

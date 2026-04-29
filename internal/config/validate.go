@@ -11,6 +11,7 @@ import (
 	"time"
 
 	providerpkg "nenya/internal/providers"
+	"nenya/internal/util"
 )
 
 func closeBody(resp *http.Response) {
@@ -212,7 +213,19 @@ func validateWithMinimalRequest(provider *Provider, ctx context.Context, logger 
 		return fmt.Errorf("failed to apply authentication: %v", err)
 	}
 
-	resp, err := validationClient.Do(req)
+	var resp *http.Response
+	err = util.DoWithRetry(ctx, 3, func() error {
+		var doErr error
+		resp, doErr = validationClient.Do(req)
+		if doErr != nil {
+			return doErr
+		}
+		if resp.StatusCode >= 500 {
+			_ = resp.Body.Close()
+			return fmt.Errorf("upstream error: %d", resp.StatusCode)
+		}
+		return nil
+	})
 	if err != nil {
 		return fmt.Errorf("request failed: %v", err)
 	}

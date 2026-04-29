@@ -104,7 +104,29 @@ You are acting as a **Senior Go Security Engineer and Network Architect**. Your 
   - `internal/pipeline/window.go:268` - Capacity calculation with overflow check
   - `internal/routing/transform.go:112` - Guard added before `len(messages)+1` allocation
 
-### 8. Code Readability Patterns (Strong Recommendations)
+### 8. Transient Network Retries (CRITICAL)
+
+All outbound HTTP dispatch points vulnerable to transient network errors (TLS handshake timeout, connection refused, DNS failure, 5xx responses) MUST use the standard `util.DoWithRetry` primitive.
+
+**Standard retry helper:**
+- `util.DoWithRetry(ctx, maxAttempts, fn)` — calls `fn` up to `maxAttempts` times with exponential backoff and jitter. Respects `ctx` cancellation. Only succeeds when `fn` returns `nil`.
+- `util.CalculateBackoff(attempt int) time.Duration` — reused by the chat-completion proxy retry loop.
+
+**Retry is required for these request types:**
+- Model discovery fetches (`internal/discovery/fetch.go:fetchProviderModels`)
+- Embeddings passthrough (`internal/proxy/chat.go:handleEmbeddings`)
+- Responses passthrough (`internal/proxy/chat.go:handleResponses`)
+- Health-check probes (`internal/proxy/handler.go:checkOllamaProviderHealth`)
+- MCP transport SSE connections and POST requests (`internal/mcp/transport.go:Connect`, `SendRequest`)
+- Provider validation at startup (`internal/config/validate.go:validateWithMinimalRequest`)
+
+**Configuration:**
+- `governance.max_retry_attempts` — global default (default 3), applied by `GovernanceConfig.EffectiveMaxRetryAttempts()`
+- `providers.<name>.max_retry_attempts` — per-provider override, takes precedence over global default
+- The context deadline bounds the total retry time; never exceed the per-request timeout.
+- Network errors and 5xx upstream responses are retried. 4xx responses are NOT retried.
+
+### 9. Code Readability Patterns (Strong Recommendations)
 - **Function Length:** Target ≤80 lines. Functions exceeding 150 lines SHOULD be decomposed into smaller, named helpers. Enforced by `funlen` linter.
 - **Cyclomatic Complexity:** Keep under 10. Functions with high branch count (many if/else, switch cases) SHOULD extract branches into named methods. Enforced by `gocyclo` linter (threshold: 15 for existing code).
 - **Nesting Depth:** Maximum 3 levels. Deeper nesting MUST use guard clauses (early return) or extraction into a named function. Enforced by `nestif` linter.
@@ -153,14 +175,7 @@ You are acting as a **Senior Go Security Engineer and Network Architect**. Your 
   This eliminates ~20+ repetitive nil checks across the codebase.
 - **Scope:** These recommendations apply to production code (`internal/*`, `cmd/*`). Test code follows separate standards (see §12).
 
-### 9. Error Handling & Reliability (CRITICAL)
-- **No Panics in Library Code:** NEVER use `panic` in non-`main` packages. Library functions MUST return `error` values. Panics bypass graceful error handling and can crash the entire gateway. The only acceptable use of `panic` is in `cmd/nenya/main.go` for fatal startup failures where recovery is impossible.
-- **Error Wrapping:** All errors MUST be wrapped with `fmt.Errorf("context: %w", err)` to preserve the error chain. Never discard error context with bare error strings.
-- **No Swallowed Errors:** Never assign errors to `_` unless explicitly justified with a comment explaining why the error is safe to ignore (e.g., `defer func() { _ = resp.Body.Close() }()`).
-- **No `os.Exit` in Library Code:** `os.Exit` is only allowed in `cmd/nenya/main.go`. All other packages must return errors to callers.
-- **Structured Logging Only:** Use `slog` with structured key-value pairs exclusively. Never use `log.Println`, `fmt.Println`, or `log.Printf` for operational logging.
-
-### 10. Documentation Standards
+### 10. Error Handling & Reliability (CRITICAL)
 - **GoDoc for Exported Symbols:** Every exported type, function, method, constant, and variable MUST have a GoDoc comment. The comment must start with the symbol name:
   ```go
   // CountTokens estimates the number of tokens in the given text using

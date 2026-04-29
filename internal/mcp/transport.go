@@ -14,6 +14,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"nenya/internal/util"
 )
 
 var (
@@ -130,16 +132,27 @@ func (t *HTTPTransport) Connect(ctx context.Context) error {
 	connectCtx, connectCancel := context.WithTimeout(t.ctx, t.cfg.ConnectTimeout)
 	defer connectCancel()
 
-	resp, err := t.httpClient.Do(req)
+	var resp *http.Response
+	err = util.DoWithRetry(connectCtx, 3, func() error {
+		var fetchErr error
+		resp, fetchErr = t.httpClient.Do(req)
+		if fetchErr != nil {
+			return fetchErr
+		}
+		if resp.StatusCode >= 500 {
+			_ = resp.Body.Close()
+			return fmt.Errorf("upstream error: %d", resp.StatusCode)
+		}
+		if resp.StatusCode != http.StatusOK {
+			_ = resp.Body.Close()
+			return fmt.Errorf("SSE connection returned status %d", resp.StatusCode)
+		}
+		return nil
+	})
+
 	if err != nil {
 		sseCancel()
 		return fmt.Errorf("SSE connection failed: %w", err)
-	}
-
-	if resp.StatusCode != http.StatusOK {
-		_ = resp.Body.Close()
-		sseCancel()
-		return fmt.Errorf("SSE connection returned status %d", resp.StatusCode)
 	}
 
 	t.mu.Lock()
@@ -268,14 +281,29 @@ func (t *HTTPTransport) SendRequest(ctx context.Context, method string, params a
 	postCtx, cancel := context.WithTimeout(ctx, t.cfg.RequestTimeout)
 	defer cancel()
 
-	httpReq, err := http.NewRequestWithContext(postCtx, http.MethodPost, endpoint, strings.NewReader(string(reqBytes)))
-	if err != nil {
-		return nil, fmt.Errorf("creating POST request: %w", err)
-	}
-	t.setHeaders(httpReq)
-	httpReq.Header.Set("Content-Type", "application/json")
+	reqBytesCopy := make([]byte, len(reqBytes))
+	copy(reqBytesCopy, reqBytes)
 
-	httpResp, err := t.httpClient.Do(httpReq)
+	var httpResp *http.Response
+	err = util.DoWithRetry(postCtx, 2, func() error {
+		httpReq, reqErr := http.NewRequestWithContext(postCtx, http.MethodPost, endpoint, strings.NewReader(string(reqBytesCopy)))
+		if reqErr != nil {
+			return fmt.Errorf("creating POST request: %w", reqErr)
+		}
+		t.setHeaders(httpReq)
+		httpReq.Header.Set("Content-Type", "application/json")
+
+		var doErr error
+		httpResp, doErr = t.httpClient.Do(httpReq)
+		if doErr != nil {
+			return doErr
+		}
+		if httpResp.StatusCode >= 500 {
+			_ = httpResp.Body.Close()
+			return fmt.Errorf("upstream error: %d", httpResp.StatusCode)
+		}
+		return nil
+	})
 	if err != nil {
 		if ctx.Err() != nil {
 			return nil, ctx.Err()
