@@ -217,15 +217,11 @@ func New(ctx context.Context, cfg config.Config, secrets *config.SecretsConfig, 
 							if !m.MatchesCatalog(dm.Provider, dm.ID) {
 								continue
 							}
-							if _, ok := providers[dm.Provider]; !ok {
+							if !providerCanServe(providers[dm.Provider]) {
 								continue
 							}
 							matched = true
-							if dm.MaxContext > 0 || dm.MaxOutput > 0 {
-								modelEntries = append(modelEntries, fmt.Sprintf("%s/%s", dm.Provider, dm.ID))
-							} else {
-								modelEntries = append(modelEntries, fmt.Sprintf("%s/%s", dm.Provider, dm.ID))
-							}
+							modelEntries = append(modelEntries, fmt.Sprintf("%s/%s", dm.Provider, dm.ID))
 						}
 						if matched {
 							continue
@@ -237,7 +233,7 @@ func New(ctx context.Context, cfg config.Config, secrets *config.SecretsConfig, 
 						entries := mergedCatalog.LookupAll(m.Model)
 						if len(entries) > 0 {
 							for _, e := range entries {
-								if _, ok := providers[e.Provider]; ok {
+								if providerCanServe(providers[e.Provider]) {
 									modelEntries = append(modelEntries, fmt.Sprintf("%s/%s", e.Provider, m.Model))
 								}
 							}
@@ -245,7 +241,7 @@ func New(ctx context.Context, cfg config.Config, secrets *config.SecretsConfig, 
 						}
 					}
 					if entry, ok := config.ModelRegistry[m.Model]; ok {
-						if _, ok := providers[entry.Provider]; ok {
+						if providerCanServe(providers[entry.Provider]) {
 							modelEntries = append(modelEntries, fmt.Sprintf("%s/%s", entry.Provider, m.Model))
 							continue
 						}
@@ -386,6 +382,12 @@ func (g *NenyaGateway) Reload(ctx context.Context, cfg config.Config, secrets *c
 	g.Close()
 
 	return newGW
+}
+
+// providerCanServe returns true if the provider is configured with either
+// an API key or auth_style "none" (i.e. can actually make upstream requests).
+func providerCanServe(p *config.Provider) bool {
+	return p != nil && !(p.APIKey == "" && p.AuthStyle != "none")
 }
 
 func buildMCPClients(cfg config.Config, logger *slog.Logger) map[string]*mcp.Client {
