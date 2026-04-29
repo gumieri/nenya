@@ -61,6 +61,16 @@ func MergeCatalog(catalog *ModelCatalog, cfg *config.Config) *ModelCatalog {
 				OwnedBy:    firstNonEmpty(discovered.OwnedBy, "nenya"),
 				Metadata:   metadata,
 			})
+			if hasDiscovered && discovered.Provider != "" && discovered.Provider != static.Provider {
+				merged.Add(DiscoveredModel{
+					ID:         modelID,
+					Provider:   discovered.Provider,
+					MaxContext: firstPositive(discovered.MaxContext, static.MaxContext),
+					MaxOutput:  firstPositive(discovered.MaxOutput, static.MaxOutput),
+					OwnedBy:    firstNonEmpty(discovered.OwnedBy, "nenya"),
+					Metadata:   metadata,
+				})
+			}
 		} else if hasDiscovered {
 			merged.Add(discovered)
 		}
