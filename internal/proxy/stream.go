@@ -52,24 +52,32 @@ func (b *contentBuilder) build() string {
 	return b.buf.String()
 }
 
+type readResult struct {
+	n   int
+	err error
+}
+
 type stallReader struct {
-	src     io.Reader
-	mu      sync.Mutex
-	timer   *time.Timer
-	stalled bool
-	stallCh chan struct{}
+	src       io.Reader
+	mu        sync.Mutex
+	timer     *time.Timer
+	stalled   bool
+	stallCh   chan struct{}
+	closeOnce sync.Once
+	ch        chan readResult
 }
 
 func newStallReader(src io.Reader, timeout time.Duration) *stallReader {
 	sr := &stallReader{
 		src:     src,
 		stallCh: make(chan struct{}),
+		ch:      make(chan readResult, 1),
 	}
 	sr.timer = time.AfterFunc(timeout, func() {
 		sr.mu.Lock()
 		sr.stalled = true
 		sr.mu.Unlock()
-		close(sr.stallCh)
+		sr.closeOnce.Do(func() { close(sr.stallCh) })
 	})
 	return sr
 }
@@ -82,20 +90,15 @@ func (sr *stallReader) Read(p []byte) (int, error) {
 	}
 	sr.mu.Unlock()
 
-	type readResult struct {
-		n   int
-		err error
-	}
-	ch := make(chan readResult, 1)
 	go func() {
 		n, err := sr.src.Read(p)
-		ch <- readResult{n, err}
+		sr.ch <- readResult{n, err}
 	}()
 
 	select {
 	case <-sr.stallCh:
 		return 0, errStreamStalled
-	case rr := <-ch:
+	case rr := <-sr.ch:
 		if rr.n > 0 {
 			sr.timer.Reset(streamIdleTimeout)
 		}
@@ -118,9 +121,19 @@ func (sr *stallReader) Stop() {
 	if !sr.stalled {
 		sr.stalled = true
 		sr.mu.Unlock()
-		close(sr.stallCh)
+		sr.closeOnce.Do(func() { close(sr.stallCh) })
 	} else {
 		sr.mu.Unlock()
+	}
+}
+
+func (sr *stallReader) DrainPending(timeout time.Duration) (int, error) {
+	sr.closeOnce.Do(func() { close(sr.stallCh) })
+	select {
+	case rr := <-sr.ch:
+		return rr.n, rr.err
+	case <-time.After(timeout):
+		return 0, errors.New("stall reader drain timeout")
 	}
 }
 
@@ -267,7 +280,7 @@ func (p *Proxy) streamResponse(gw *gateway.NenyaGateway, w http.ResponseWriter, 
 	}
 	w.WriteHeader(action.resp.StatusCode)
 
-	transformingReader, contentBuilder := p.setupTransformingReader(gw, target, agentName, action, r.Context())
+	transformingReader, contentBuilder, stallR := p.setupTransformingReader(gw, target, agentName, action, r.Context())
 	if transformingReader == nil {
 		return streamResult{}
 	}
@@ -279,16 +292,22 @@ func (p *Proxy) streamResponse(gw *gateway.NenyaGateway, w http.ResponseWriter, 
 	var copyErr error
 	var written int64
 	done := make(chan struct{})
+	// Defer handleStreamCompletion until the copy goroutine finishes so that copyErr
+	// and written are fully populated before we read them. Without this barrier,
+	// the select on done races on these variables: the main goroutine reads them
+	// while the copy goroutine is still writing them.
 	go func() {
 		defer close(done)
 		written, copyErr = copyStream(r.Context(), dst, transformingReader, *buf)
 	}()
 
-	p.handleStreamCompletion(r.Context(), gw, w, target, agentName, action, cacheKey, cooldownDuration, buf, done, copyErr, written, captureBuf, tee, contentBuilder)
+	<-done
+
+	p.handleStreamCompletion(r.Context(), gw, w, target, agentName, action, cacheKey, cooldownDuration, buf, done, copyErr, written, captureBuf, tee, contentBuilder, stallR)
 	return streamResult{}
 }
 
-func (p *Proxy) setupTransformingReader(gw *gateway.NenyaGateway, target routing.UpstreamTarget, agentName string, action upstreamAction, ctx context.Context) (*stream.SSETransformingReader, *contentBuilder) {
+func (p *Proxy) setupTransformingReader(gw *gateway.NenyaGateway, target routing.UpstreamTarget, agentName string, action upstreamAction, ctx context.Context) (*stream.SSETransformingReader, *contentBuilder, *stallReader) {
 	var transformer stream.ResponseTransformer
 	switch target.Format {
 	case "anthropic":
@@ -319,7 +338,7 @@ func (p *Proxy) setupTransformingReader(gw *gateway.NenyaGateway, target routing
 	p.setupStreamEntropyFilterIfEnabled(gw, transformingReader)
 	contentBuilder := p.setupContentBuilderIfNeeded(gw, agentName, transformingReader)
 
-	return transformingReader, contentBuilder
+	return transformingReader, contentBuilder, stallR
 }
 
 func (p *Proxy) makeUsageCallback(gw *gateway.NenyaGateway, target routing.UpstreamTarget, agentName string) func(int, int, int, int, int) {
@@ -403,16 +422,16 @@ func (p *Proxy) setupStreamWriter(gw *gateway.NenyaGateway, flushWriter *immedia
 	return dst, captureBuf, tee
 }
 
-func (p *Proxy) handleStreamCompletion(ctx context.Context, gw *gateway.NenyaGateway, w http.ResponseWriter, target routing.UpstreamTarget, agentName string, action upstreamAction, cacheKey string, cooldownDuration time.Duration, buf *[]byte, done chan struct{}, copyErr error, written int64, captureBuf *bytes.Buffer, tee *sseTeeWriter, contentBuilder *contentBuilder) {
+func (p *Proxy) handleStreamCompletion(ctx context.Context, gw *gateway.NenyaGateway, w http.ResponseWriter, target routing.UpstreamTarget, agentName string, action upstreamAction, cacheKey string, cooldownDuration time.Duration, buf *[]byte, done chan struct{}, copyErr error, written int64, captureBuf *bytes.Buffer, tee *sseTeeWriter, contentBuilder *contentBuilder, stallR *stallReader) {
 	select {
 	case <-done:
-		p.handleStreamDone(gw, w, target, agentName, action, cacheKey, cooldownDuration, buf, copyErr, written, captureBuf, tee, contentBuilder)
+		p.handleStreamDone(gw, w, target, agentName, action, cacheKey, cooldownDuration, buf, copyErr, written, captureBuf, tee, contentBuilder, stallR)
 	case <-ctx.Done():
-		p.handleClientDisconnect(gw, w, target, action, buf, done)
+		p.handleClientDisconnect(gw, w, target, action, buf, done, stallR)
 	}
 }
 
-func (p *Proxy) handleStreamDone(gw *gateway.NenyaGateway, w http.ResponseWriter, target routing.UpstreamTarget, agentName string, action upstreamAction, cacheKey string, cooldownDuration time.Duration, buf *[]byte, copyErr error, written int64, captureBuf *bytes.Buffer, tee *sseTeeWriter, contentBuilder *contentBuilder) {
+func (p *Proxy) handleStreamDone(gw *gateway.NenyaGateway, w http.ResponseWriter, target routing.UpstreamTarget, agentName string, action upstreamAction, cacheKey string, cooldownDuration time.Duration, buf *[]byte, copyErr error, written int64, captureBuf *bytes.Buffer, tee *sseTeeWriter, contentBuilder *contentBuilder, stallR *stallReader) {
 	streamingBufPool.Put(buf)
 
 	if errors.Is(copyErr, stream.ErrStreamBlocked) {
@@ -426,6 +445,9 @@ func (p *Proxy) handleStreamDone(gw *gateway.NenyaGateway, w http.ResponseWriter
 	}
 	if errors.Is(copyErr, errStreamStalled) {
 		action.cancel()
+		if stallR != nil {
+			_, _ = stallR.DrainPending(3 * time.Second)
+		}
 		_ = action.resp.Body.Close()
 		gw.Logger.Warn("stream stalled, aborting upstream",
 			"model", target.Model, "provider", target.Provider,
@@ -463,8 +485,11 @@ func storeStreamCache(gw *gateway.NenyaGateway, cacheKey string, captureBuf *byt
 	gw.Logger.Debug("response cache stored", "model", captureBuf.Len())
 }
 
-func (p *Proxy) handleClientDisconnect(gw *gateway.NenyaGateway, w http.ResponseWriter, target routing.UpstreamTarget, action upstreamAction, buf *[]byte, done chan struct{}) {
+func (p *Proxy) handleClientDisconnect(gw *gateway.NenyaGateway, w http.ResponseWriter, target routing.UpstreamTarget, action upstreamAction, buf *[]byte, done chan struct{}, stallR *stallReader) {
 	gw.Logger.Info("client disconnected, aborting upstream stream", "model", target.Model)
+	if stallR != nil {
+		_, _ = stallR.DrainPending(3 * time.Second)
+	}
 	_ = action.resp.Body.Close()
 	select {
 	case <-done:
