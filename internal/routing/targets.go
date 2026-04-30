@@ -403,6 +403,18 @@ func (a *AgentState) selectStart(agent config.AgentConfig, agentName string, n i
 	return start
 }
 
+func resolveTargetFormat(model string, catalog *discovery.ModelCatalog) string {
+	if catalog != nil {
+		if dm, ok := catalog.Lookup(model); ok {
+			return dm.Format
+		}
+	}
+	if entry, ok := config.ModelRegistry[model]; ok {
+		return entry.Format
+	}
+	return ""
+}
+
 func (a *AgentState) buildTarget(logger *slog.Logger, agentName string, m config.AgentModel, tokenCount int, providers map[string]*config.Provider, catalog *discovery.ModelCatalog, autoContextSkip bool) (*UpstreamTarget, bool) {
 	maxCtx := resolveMaxContext(m, catalog)
 	if maxCtx > 0 && tokenCount > maxCtx {
@@ -421,12 +433,6 @@ func (a *AgentState) buildTarget(logger *slog.Logger, agentName string, m config
 		return nil, false
 	}
 
-	p := ProviderURL(m.Provider, m.URL, providers)
-	if p == "" {
-		logger.Warn("unknown provider, skipping model", "provider", m.Provider, "model", m.Model)
-		return nil, false
-	}
-
 	if m.Provider != "" {
 		provider := providers[m.Provider]
 		if provider == nil || (provider.APIKey == "" && provider.AuthStyle != "none") {
@@ -437,9 +443,22 @@ func (a *AgentState) buildTarget(logger *slog.Logger, agentName string, m config
 
 	maxOut := resolveMaxOutput(m, catalog)
 
+	formatURLs := map[string]string{}
+	if m.Provider != "" {
+		if provider := providers[m.Provider]; provider != nil {
+			formatURLs = provider.FormatURLs
+		}
+	}
+	p := ProviderURL(m.Provider, m.URL, "", formatURLs, providers)
+	if p == "" {
+		logger.Warn("unknown provider, skipping model", "provider", m.Provider, "model", m.Model)
+		return nil, false
+	}
+
 	return &UpstreamTarget{
 		URL:        p,
 		Model:      m.Model,
+		Format:     resolveTargetFormat(m.Model, catalog),
 		CoolKey:    agentName + ":" + m.Provider + ":" + m.Model,
 		Provider:   m.Provider,
 		MaxOutput:  maxOut,

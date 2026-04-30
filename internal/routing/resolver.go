@@ -10,6 +10,7 @@ import (
 type UpstreamTarget struct {
 	URL        string
 	Model      string
+	Format     string
 	CoolKey    string
 	Provider   string
 	MaxOutput  int
@@ -19,6 +20,7 @@ type UpstreamTarget struct {
 type ProviderMatch struct {
 	Provider   string
 	Model      string
+	Format     string
 	MaxContext int
 	MaxOutput  int
 }
@@ -54,6 +56,7 @@ func resolveFromCatalog(modelName string, providers map[string]*config.Provider,
 		matches = append(matches, ProviderMatch{
 			Provider:   e.Provider,
 			Model:      modelName,
+			Format:     e.Format,
 			MaxContext: e.MaxContext,
 			MaxOutput:  e.MaxOutput,
 		})
@@ -76,6 +79,7 @@ func resolveFromRegistry(modelName string, providers map[string]*config.Provider
 	return []ProviderMatch{{
 		Provider:   p.Name,
 		Model:      modelName,
+		Format:     entry.Format,
 		MaxContext: entry.MaxContext,
 		MaxOutput:  entry.MaxOutput,
 	}}
@@ -99,9 +103,14 @@ func DetermineUpstream(modelName string, providers map[string]*config.Provider) 
 	return ""
 }
 
-func ProviderURL(provider, agentURL string, providers map[string]*config.Provider) string {
+func ProviderURL(provider, agentURL, format string, formatURLs map[string]string, providers map[string]*config.Provider) string {
 	if agentURL != "" {
 		return agentURL
+	}
+	if format != "" && formatURLs != nil {
+		if u, ok := formatURLs[format]; ok {
+			return u
+		}
 	}
 	if p, ok := providers[provider]; ok {
 		return p.URL

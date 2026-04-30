@@ -8,6 +8,7 @@ import (
 type DiscoveredModel struct {
 	ID         string         `json:"id"`
 	Provider   string         `json:"provider"`
+	Format     string         `json:"format,omitempty"`
 	MaxContext int            `json:"max_context"`
 	MaxOutput  int            `json:"max_output"`
 	OwnedBy    string         `json:"owned_by"`

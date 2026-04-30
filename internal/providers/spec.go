@@ -86,6 +86,7 @@ func init() {
 	Registry["perplexity"] = perplexitySpec()
 	Registry["cohere"] = cohereSpec()
 	Registry["deepinfra"] = deepinfraSpec()
+	Registry["zen"] = zenSpec()
 }
 
 func Get(name string) (ProviderSpec, bool) {

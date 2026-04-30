@@ -226,6 +226,14 @@ func init() {
 	Register("ollama", AdapterEntry{
 		Adapter: NewOllamaAdapter(),
 	})
+
+	Register("zen", AdapterEntry{
+		Adapter: NewOpenAIAdapter(Capabilities{
+			StreamOptions:  true,
+			AutoToolChoice: true,
+			ContentArrays:  true,
+		}),
+	})
 }
 
 type geminiAdapterShim struct{}

@@ -65,7 +65,7 @@ func TestTransformRequest_GeminiModelMapping(t *testing.T) {
 				"model":    tt.model,
 				"messages": []interface{}{},
 			}
-			body, returnedModel, err := TransformRequestForUpstream(deps, "gemini", "http://example.com", payload, "", 0)
+			body, returnedModel, err := TransformRequestForUpstream(deps, "gemini", "http://example.com", payload, "", 0, "")
 			if err != nil {
 				t.Fatalf("unexpected error: %v", err)
 			}
@@ -94,7 +94,7 @@ func TestTransformRequest_GeminiUnknownModel(t *testing.T) {
 		"model":    "gemini-totally-unknown",
 		"messages": []interface{}{},
 	}
-	body, returnedModel, err := TransformRequestForUpstream(deps, "gemini", "http://example.com", payload, "", 0)
+	body, returnedModel, err := TransformRequestForUpstream(deps, "gemini", "http://example.com", payload, "", 0, "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -118,7 +118,7 @@ func TestTransformRequest_NonGeminiNoMapping(t *testing.T) {
 		"model":    "deepseek-v4-flash",
 		"messages": []interface{}{},
 	}
-	_, returnedModel, err := TransformRequestForUpstream(deps, "deepseek", "http://example.com", payload, "", 0)
+	_, returnedModel, err := TransformRequestForUpstream(deps, "deepseek", "http://example.com", payload, "", 0, "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -145,7 +145,7 @@ func TestTransformRequest_AgentSystemPrompt(t *testing.T) {
 			map[string]interface{}{"role": "user", "content": "hello"},
 		},
 	}
-	body, _, err := TransformRequestForUpstream(deps, "deepseek", "http://example.com", payload, "deepseek-v4-flash", 0)
+	body, _, err := TransformRequestForUpstream(deps, "deepseek", "http://example.com", payload, "deepseek-v4-flash", 0, "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -185,7 +185,7 @@ func TestTransformRequest_AgentSystemPromptSkippedWhenSystemFirst(t *testing.T) 
 			map[string]interface{}{"role": "user", "content": "hello"},
 		},
 	}
-	body, _, err := TransformRequestForUpstream(deps, "deepseek", "http://example.com", payload, "deepseek-v4-flash", 0)
+	body, _, err := TransformRequestForUpstream(deps, "deepseek", "http://example.com", payload, "deepseek-v4-flash", 0, "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -226,7 +226,7 @@ func TestTransformRequest_ForceSystemPromptOverridesExistingSystem(t *testing.T)
 			map[string]interface{}{"role": "user", "content": "hello"},
 		},
 	}
-	body, _, err := TransformRequestForUpstream(deps, "deepseek", "http://example.com", payload, "deepseek-v4-flash", 0)
+	body, _, err := TransformRequestForUpstream(deps, "deepseek", "http://example.com", payload, "deepseek-v4-flash", 0, "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -264,7 +264,7 @@ func TestTransformRequest_NoModelField(t *testing.T) {
 	payload := map[string]interface{}{
 		"messages": []interface{}{},
 	}
-	body, returnedModel, err := TransformRequestForUpstream(deps, "deepseek", "http://example.com", payload, "", 0)
+	body, returnedModel, err := TransformRequestForUpstream(deps, "deepseek", "http://example.com", payload, "", 0, "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -284,7 +284,7 @@ func TestTransformRequest_NonStringModel(t *testing.T) {
 		"model":    12345,
 		"messages": []interface{}{},
 	}
-	body, returnedModel, err := TransformRequestForUpstream(deps, "deepseek", "http://example.com", payload, "", 0)
+	body, returnedModel, err := TransformRequestForUpstream(deps, "deepseek", "http://example.com", payload, "", 0, "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -304,7 +304,7 @@ func TestTransformRequest_ModelOverride(t *testing.T) {
 		"model":    "some-agent",
 		"messages": []interface{}{},
 	}
-	_, returnedModel, err := TransformRequestForUpstream(deps, "deepseek", "http://example.com", payload, "deepseek-v4-flash", 0)
+	_, returnedModel, err := TransformRequestForUpstream(deps, "deepseek", "http://example.com", payload, "deepseek-v4-flash", 0, "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -325,7 +325,7 @@ func TestTransformRequest_OriginalPayloadNotMutated(t *testing.T) {
 		"model":    origModel,
 		"messages": []interface{}{},
 	}
-	_, _, err := TransformRequestForUpstream(deps, "gemini", "http://example.com", payload, "", 0)
+	_, _, err := TransformRequestForUpstream(deps, "gemini", "http://example.com", payload, "", 0, "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -343,7 +343,7 @@ func TestTransformRequest_MaxTokensCapping(t *testing.T) {
 			"model":    "gemini-2.5-flash",
 			"messages": []interface{}{},
 		}
-		body, _, err := TransformRequestForUpstream(deps, "gemini", "http://example.com", payload, "", 0)
+		body, _, err := TransformRequestForUpstream(deps, "gemini", "http://example.com", payload, "", 0, "")
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -366,7 +366,7 @@ func TestTransformRequest_MaxTokensCapping(t *testing.T) {
 			"messages":   []interface{}{},
 			"max_tokens": float64(16000),
 		}
-		body, _, err := TransformRequestForUpstream(deps, "gemini", "http://example.com", payload, "", 0)
+		body, _, err := TransformRequestForUpstream(deps, "gemini", "http://example.com", payload, "", 0, "")
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -385,7 +385,7 @@ func TestTransformRequest_MaxTokensCapping(t *testing.T) {
 			"messages":   []interface{}{},
 			"max_tokens": float64(4000),
 		}
-		body, _, err := TransformRequestForUpstream(deps, "gemini", "http://example.com", payload, "", 0)
+		body, _, err := TransformRequestForUpstream(deps, "gemini", "http://example.com", payload, "", 0, "")
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -403,7 +403,7 @@ func TestTransformRequest_MaxTokensCapping(t *testing.T) {
 			"model":    "gemini-2.5-flash",
 			"messages": []interface{}{},
 		}
-		body, _, err := TransformRequestForUpstream(deps, "gemini", "http://example.com", payload, "", 4096)
+		body, _, err := TransformRequestForUpstream(deps, "gemini", "http://example.com", payload, "", 4096, "")
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -600,7 +600,7 @@ func TestTransformDeps_WithCache(t *testing.T) {
 		},
 	}
 
-	body, returnedModel, err := TransformRequestForUpstream(deps, "gemini", "http://example.com", payload, "", 0)
+	body, returnedModel, err := TransformRequestForUpstream(deps, "gemini", "http://example.com", payload, "", 0, "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -640,7 +640,7 @@ func TestTransformRequest_ZAIWithTools_PreservesMessages(t *testing.T) {
 		"tool_choice": "auto",
 	}
 
-	body, _, err := TransformRequestForUpstream(deps, "zai", "http://example.com", payload, "", 0)
+	body, _, err := TransformRequestForUpstream(deps, "zai", "http://example.com", payload, "", 0, "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -681,7 +681,7 @@ func TestTransformRequest_ZAIWithTools_KeepsMaxTokens(t *testing.T) {
 		"tools":      []interface{}{},
 	}
 
-	body, _, err := TransformRequestForUpstream(deps, "zai", "http://example.com", payload, "", 0)
+	body, _, err := TransformRequestForUpstream(deps, "zai", "http://example.com", payload, "", 0, "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -708,7 +708,7 @@ func TestTransformRequest_ZAIWithTools_KeepsStreamOptions(t *testing.T) {
 		"tools": []interface{}{},
 	}
 
-	body, _, err := TransformRequestForUpstream(deps, "zai", "http://example.com", payload, "", 0)
+	body, _, err := TransformRequestForUpstream(deps, "zai", "http://example.com", payload, "", 0, "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

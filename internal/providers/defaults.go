@@ -319,3 +319,19 @@ func deepinfraSpec() ProviderSpec {
 func deepinfraValidationEndpoint(providerURL string) string {
 	return defaultValidationEndpoint(providerURL, "")
 }
+
+func zenSpec() ProviderSpec {
+	return ProviderSpec{
+		SupportsStreamOptions:  true,
+		SupportsAutoToolChoice: true,
+		SupportsContentArrays:  true,
+		SupportsToolCalls:      true,
+		SupportsReasoning:      true,
+		SupportsVision:         true,
+		ValidationEndpoint:     zenValidationEndpoint,
+	}
+}
+
+func zenValidationEndpoint(providerURL string) string {
+	return defaultValidationEndpoint(providerURL, "")
+}

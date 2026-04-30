@@ -244,6 +244,9 @@ func ParseModelsResponse(body []byte, provider string, logger *slog.Logger) ([]D
 		return nil, err
 	}
 	for i := range models {
+		if models[i].Format == "" {
+			models[i].Format = InferFormat(models[i].ID)
+		}
 		if models[i].Metadata == nil {
 			if caps := InferCapabilities(models[i].ID); caps != nil {
 				models[i].Metadata = caps

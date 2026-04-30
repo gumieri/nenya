@@ -106,6 +106,13 @@ var ProviderRegistry = map[string]ProviderEntry{
 			{ID: "chat/starcoder2-3b", MaxContext: 8192, MaxOutput: 8192},
 		},
 	},
+	"zen": {
+		URL:       "https://opencode.ai/zen/v1/chat/completions",
+		AuthStyle: "bearer",
+		FormatURLs: map[string]string{
+			"anthropic": "https://opencode.ai/zen/v1/messages",
+		},
+	},
 	"ollama": {
 		URL:       "http://127.0.0.1:11434/v1/chat/completions",
 		AuthStyle: "none",
@@ -185,4 +192,18 @@ var ModelRegistry = map[string]ModelEntry{
 	"sonar-reasoning-pro": {Provider: "perplexity", MaxContext: 128000, MaxOutput: 4096, Pricing: PricingOverride{InputCostPer1M: 3.0, OutputCostPer1M: 15.0}},
 	"sonar-deep-research": {Provider: "perplexity", MaxContext: 128000, MaxOutput: 32768, Pricing: PricingOverride{InputCostPer1M: 1.0, OutputCostPer1M: 1.0}},
 	"sonar":               {Provider: "perplexity", MaxContext: 128000, MaxOutput: 4096, Pricing: PricingOverride{InputCostPer1M: 0.2, OutputCostPer1M: 0.2}},
+
+	"qwen3.5-plus":          {Provider: "zen", MaxContext: 131072, MaxOutput: 8192},
+	"minimax-m2.7":          {Provider: "zen", MaxContext: 200000, MaxOutput: 8192},
+	"minimax-m2.5-free":     {Provider: "zen", MaxContext: 200000, MaxOutput: 8192},
+	"kimi-k2.6":             {Provider: "zen", MaxContext: 200000, MaxOutput: 8192},
+	"kimi-k2.5":             {Provider: "zen", MaxContext: 200000, MaxOutput: 8192},
+	"big-pickle":            {Provider: "zen", MaxContext: 200000, MaxOutput: 8192},
+	"ling-2.6-flash-free":   {Provider: "zen", MaxContext: 200000, MaxOutput: 8192},
+	"hy3-preview-free":      {Provider: "zen", MaxContext: 131072, MaxOutput: 8192},
+	"nemotron-3-super-free": {Provider: "zen", MaxContext: 4000, MaxOutput: 1024},
+	"gpt-5-nano":            {Provider: "zen", MaxContext: 200000, MaxOutput: 8192},
+	"claude-opus-4-7":       {Provider: "zen", Format: "anthropic", MaxContext: 200000, MaxOutput: 64000},
+	"claude-opus-4-6":       {Provider: "zen", Format: "anthropic", MaxContext: 200000, MaxOutput: 64000},
+	"claude-sonnet-4-6":     {Provider: "zen", Format: "anthropic", MaxContext: 200000, MaxOutput: 64000},
 }
