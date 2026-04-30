@@ -126,6 +126,32 @@ func (sr *stallReader) Stop() {
 
 var errStreamStalled = errors.New("stream stalled: no data received within idle timeout")
 
+// streamResult carries the outcome of streamResponse back to the retry loop.
+type streamResult struct {
+	empty bool
+}
+
+// prefixedReadCloser returns a prefix buffer first, then delegates to the
+// underlying reader. Used to prepend already-read bytes to a stream body.
+type prefixedReadCloser struct {
+	prefix []byte
+	pos    int
+	reader io.ReadCloser
+}
+
+func (p *prefixedReadCloser) Read(buf []byte) (int, error) {
+	if p.pos < len(p.prefix) {
+		n := copy(buf, p.prefix[p.pos:])
+		p.pos += n
+		return n, nil
+	}
+	return p.reader.Read(buf)
+}
+
+func (p *prefixedReadCloser) Close() error {
+	return p.reader.Close()
+}
+
 type immediateFlushWriter struct {
 	dst     http.ResponseWriter
 	flusher http.Flusher
@@ -207,8 +233,34 @@ func copyStream(ctx context.Context, dst io.Writer, src io.Reader, buf []byte) (
 	}
 }
 
-func (p *Proxy) streamResponse(gw *gateway.NenyaGateway, w http.ResponseWriter, r *http.Request, target routing.UpstreamTarget, agentName string, action upstreamAction, cacheKey string, cooldownDuration time.Duration) {
+func (p *Proxy) streamResponse(gw *gateway.NenyaGateway, w http.ResponseWriter, r *http.Request, target routing.UpstreamTarget, agentName string, action upstreamAction, cacheKey string, cooldownDuration time.Duration) streamResult {
 	defer action.cancel()
+
+	// When EmptyStreamAsError is enabled, probe the upstream body before writing
+	// headers so we can detect empty streams and fall back to the next target
+	// rather than sending an error SSE chunk to the client.
+	if gw.Config.Governance.EmptyStreamAsError {
+		firstBuf := make([]byte, 4096)
+		n, readErr := action.resp.Body.Read(firstBuf)
+
+		if n == 0 {
+			_ = action.resp.Body.Close()
+			gw.AgentState.RecordFailure(target, cooldownDuration)
+			gw.Metrics.RecordEmptyStream(target.Model, target.Provider)
+			gw.Logger.Warn("empty upstream stream detected, falling back to next target",
+				"model", target.Model, "provider", target.Provider)
+			if readErr != nil && readErr != io.EOF {
+				gw.Logger.Debug("upstream body read error", "err", readErr)
+			}
+			return streamResult{empty: true}
+		}
+
+		action.resp.Body = &prefixedReadCloser{
+			prefix: firstBuf[:n],
+			reader: action.resp.Body,
+		}
+	}
+
 	routing.CopyHeaders(action.resp.Header, w.Header())
 	if cacheKey != "" {
 		w.Header().Set("X-Nenya-Cache-Status", "MISS")
@@ -217,7 +269,7 @@ func (p *Proxy) streamResponse(gw *gateway.NenyaGateway, w http.ResponseWriter, 
 
 	transformingReader, contentBuilder := p.setupTransformingReader(gw, target, agentName, action, r.Context())
 	if transformingReader == nil {
-		return
+		return streamResult{}
 	}
 
 	buf := getStreamBuffer()
@@ -233,6 +285,7 @@ func (p *Proxy) streamResponse(gw *gateway.NenyaGateway, w http.ResponseWriter, 
 	}()
 
 	p.handleStreamCompletion(r.Context(), gw, w, target, agentName, action, cacheKey, cooldownDuration, buf, done, copyErr, written, captureBuf, tee, contentBuilder)
+	return streamResult{}
 }
 
 func (p *Proxy) setupTransformingReader(gw *gateway.NenyaGateway, target routing.UpstreamTarget, agentName string, action upstreamAction, ctx context.Context) (*stream.SSETransformingReader, *contentBuilder) {
@@ -349,15 +402,6 @@ func (p *Proxy) handleStreamCompletion(ctx context.Context, gw *gateway.NenyaGat
 func (p *Proxy) handleStreamDone(gw *gateway.NenyaGateway, w http.ResponseWriter, target routing.UpstreamTarget, agentName string, action upstreamAction, cacheKey string, cooldownDuration time.Duration, buf *[]byte, copyErr error, written int64, captureBuf *bytes.Buffer, tee *sseTeeWriter, contentBuilder *contentBuilder) {
 	streamingBufPool.Put(buf)
 
-	if copyErr == nil && written == 0 && gw.Config.Governance.EmptyStreamAsError {
-		gw.Logger.Warn("empty upstream stream detected, treating as error",
-			"model", target.Model, "provider", target.Provider)
-		gw.Metrics.RecordEmptyStream(target.Model, target.Provider)
-		gw.AgentState.RecordFailure(target, cooldownDuration)
-		p.writeEmptyStreamSSE(gw, w)
-		return
-	}
-
 	if errors.Is(copyErr, stream.ErrStreamBlocked) {
 		action.cancel()
 		_ = action.resp.Body.Close()
@@ -414,26 +458,6 @@ func (p *Proxy) handleClientDisconnect(gw *gateway.NenyaGateway, w http.Response
 		streamingBufPool.Put(buf)
 	case <-time.After(5 * time.Second):
 		gw.Logger.Warn("timed out waiting for stream copy to finish after client disconnect", "model", target.Model)
-	}
-}
-
-func (p *Proxy) writeEmptyStreamSSE(gw *gateway.NenyaGateway, w http.ResponseWriter) {
-	errPayload := map[string]interface{}{
-		"type": "error",
-		"error": map[string]interface{}{
-			"code":    "empty_response",
-			"message": "empty upstream SSE",
-		},
-	}
-	errJSON, err := json.Marshal(errPayload)
-	if err != nil {
-		gw.Logger.Error("failed to marshal empty stream SSE payload", "err", err)
-		return
-	}
-	_, _ = fmt.Fprintf(w, "data: %s\n\n", errJSON)
-	_, _ = fmt.Fprint(w, "data: [DONE]\n\n")
-	if flusher, ok := w.(http.Flusher); ok {
-		flusher.Flush()
 	}
 }
 

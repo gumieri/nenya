@@ -166,7 +166,12 @@ retryLoop:
 			http.Error(rl.w, "Upstream provider error", action.resp.StatusCode)
 			return true
 		case actionStream:
-			rl.p.streamResponse(rl.gw, rl.w, rl.r, target, rl.opts.AgentName, action, rl.opts.CacheKey, rl.opts.Cooldown)
+			result := rl.p.streamResponse(rl.gw, rl.w, rl.r, target, rl.opts.AgentName, action, rl.opts.CacheKey, rl.opts.Cooldown)
+			if result.empty {
+				rl.ctxLogger.Warn("empty stream from upstream, trying next target",
+					"model", target.Model, "provider", target.Provider)
+				continue
+			}
 			return true
 		}
 	}
