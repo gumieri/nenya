@@ -456,3 +456,14 @@ func TestHandleResponses_Compact(t *testing.T) {
 	}
 }
 
+func TestHandleResponses_PathTraversal(t *testing.T) {
+	p := newChatProxy(t, "http://127.0.0.1:1")
+	req := httptest.NewRequest(http.MethodGet, "/v1/responses/../../etc/passwd", nil)
+	req.Header.Set("Authorization", "Bearer test-token")
+	rec := httptest.NewRecorder()
+	p.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("expected 400 for path traversal, got %d", rec.Code)
+	}
+}
+

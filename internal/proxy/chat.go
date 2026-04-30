@@ -761,6 +761,25 @@ func recordEmbeddingUsage(gw *gateway.NenyaGateway, respBody []byte, providerNam
 	if err := json.Unmarshal(respBody, &responseMap); err != nil {
 		return
 	}
+	recordUsageFromMap(gw, responseMap, "", providerName)
+}
+
+func recordChatUsage(gw *gateway.NenyaGateway, model string, usage map[string]interface{}) {
+	totalTokens, ok := usage["total_tokens"].(float64)
+	if !ok {
+		return
+	}
+	inputTokens := 0
+	if inputRaw, ok := usage["prompt_tokens"].(float64); ok {
+		inputTokens = int(inputRaw)
+	}
+	outputTokens := int(totalTokens) - inputTokens
+	if gw.Stats != nil {
+		gw.Stats.RecordOutput(model, outputTokens)
+	}
+}
+
+func recordUsageFromMap(gw *gateway.NenyaGateway, responseMap map[string]interface{}, model, providerName string) {
 	usage, ok := responseMap["usage"].(map[string]interface{})
 	if !ok {
 		return
@@ -775,10 +794,10 @@ func recordEmbeddingUsage(gw *gateway.NenyaGateway, respBody []byte, providerNam
 	}
 	outputTokens := int(totalTokens) - inputTokens
 	if gw.Stats != nil {
-		gw.Stats.RecordOutput("", outputTokens)
+		gw.Stats.RecordOutput(model, outputTokens)
 	}
-	if gw.Metrics != nil {
-		gw.Metrics.RecordTokens("output", "", "", providerName, outputTokens)
+	if gw.Metrics != nil && providerName != "" {
+		gw.Metrics.RecordTokens("output", model, "", providerName, outputTokens)
 	}
 }
 
@@ -903,10 +922,15 @@ func (p *Proxy) readResponsesBody(gw *gateway.NenyaGateway, w http.ResponseWrite
 }
 
 func (p *Proxy) resolveResponsesURL(provider *config.Provider, pathStr, query string) string {
+	// Fallback chain: BaseURL → trimmed URL → empty (Provider uses BaseURL if set,
+	// legacy configs only have URL ending in /chat/completions which we strip).
 	baseURL := strings.TrimSuffix(provider.BaseURL, "/")
 	if baseURL == "" {
 		baseURL = strings.TrimSuffix(provider.URL, "/chat/completions")
 	}
+	// If BaseURL was empty and URL doesn't end with /chat/completions, the
+	// TrimSuffix is a no-op and baseURL == provider.URL — the provider likely
+	// only supports chat completions, not responses.
 	if baseURL == provider.URL || baseURL == "" {
 		return ""
 	}
@@ -1670,8 +1694,8 @@ func (p *Proxy) handleNonStreamingResponse(gw *gateway.NenyaGateway, w http.Resp
 		return streamResult{}
 	}
 
-	if gw.Stats != nil {
-		gw.Stats.RecordOutput(target.Model, 0)
+	if usage, ok := responseMap["usage"].(map[string]interface{}); ok {
+		recordChatUsage(gw, target.Model, usage)
 	}
 
 	_ = json.NewEncoder(w).Encode(responseMap)
