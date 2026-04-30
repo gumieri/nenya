@@ -347,3 +347,112 @@ func TestBuildUpstreamRequest_SetsContentType(t *testing.T) {
 		t.Fatalf("expected Content-Type=application/json, got %q", gotCT)
 	}
 }
+
+func TestHandleResponses_GET_ByID(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			t.Errorf("expected GET, got %s", r.Method)
+		}
+		if r.URL.Path != "/v1/responses/resp_123" {
+			t.Errorf("expected /v1/responses/resp_123, got %s", r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"id":     "resp_123",
+			"status": "completed",
+		})
+	}))
+	defer upstream.Close()
+
+	p := newChatProxy(t, upstream.URL)
+	req := httptest.NewRequest(http.MethodGet, "/v1/responses/resp_123", nil)
+	req.Header.Set("Authorization", "Bearer test-token")
+	rec := httptest.NewRecorder()
+
+	p.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+}
+
+func TestHandleResponses_Cancel(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			t.Errorf("expected POST, got %s", r.Method)
+		}
+		if r.URL.Path != "/v1/responses/resp_456/cancel" {
+			t.Errorf("expected /v1/responses/resp_456/cancel, got %s", r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"id":     "resp_456",
+			"status": "cancelling",
+		})
+	}))
+	defer upstream.Close()
+
+	p := newChatProxy(t, upstream.URL)
+	req := httptest.NewRequest(http.MethodPost, "/v1/responses/resp_456/cancel", strings.NewReader(`{}`))
+	req.Header.Set("Authorization", "Bearer test-token")
+	rec := httptest.NewRecorder()
+
+	p.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+}
+
+func TestHandleResponses_Delete(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodDelete {
+			t.Errorf("expected DELETE, got %s", r.Method)
+		}
+		if r.URL.Path != "/v1/responses/resp_789" {
+			t.Errorf("expected /v1/responses/resp_789, got %s", r.URL.Path)
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer upstream.Close()
+
+	p := newChatProxy(t, upstream.URL)
+	req := httptest.NewRequest(http.MethodDelete, "/v1/responses/resp_789", nil)
+	req.Header.Set("Authorization", "Bearer test-token")
+	rec := httptest.NewRecorder()
+
+	p.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusNoContent {
+		t.Errorf("expected 204, got %d", rec.Code)
+	}
+}
+
+func TestHandleResponses_Compact(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			t.Errorf("expected POST, got %s", r.Method)
+		}
+		if r.URL.Path != "/v1/responses/resp_abc/compact" {
+			t.Errorf("expected /v1/responses/resp_abc/compact, got %s", r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"id":     "resp_abc",
+			"status": "in_progress",
+		})
+	}))
+	defer upstream.Close()
+
+	p := newChatProxy(t, upstream.URL)
+	req := httptest.NewRequest(http.MethodPost, "/v1/responses/resp_abc/compact", strings.NewReader(`{}`))
+	req.Header.Set("Authorization", "Bearer test-token")
+	rec := httptest.NewRecorder()
+
+	p.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+}
+

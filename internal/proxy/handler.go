@@ -78,7 +78,7 @@ func (p *Proxy) resolveRoute(path string) routeHandler {
 		{false, "/v1/models", p.chainModels},
 		{false, "/v1/chat/completions", p.chainChat},
 		{false, "/v1/embeddings", p.chainEmbeddings},
-		{false, "/v1/responses", p.chainResponses},
+		{true, "/v1/responses", p.chainResponses},
 		{true, "/proxy/", p.chainProxy},
 		{true, "/v1/files", p.chainFiles},
 		{true, "/v1/batches", p.chainBatches},
