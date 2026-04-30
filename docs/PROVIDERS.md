@@ -21,7 +21,38 @@ OpenAI-compatible with specific adjustments for auth, headers, or capabilities:
 
 ### Tier 3: Drop-in OpenAI-Compatible
 Zero-config integration for providers using the standard OpenAI wire format:
-- **DeepSeek**, **Mistral**, **xAI**, **Groq**, **Together**, **SambaNova**, **Cerebras**, **NVIDIA**, **GitHub**, **Qwen**, **MiniMax**
+- **DeepSeek**, **Mistral**, **xAI**, **Groq**, **Together**, **SambaNova**, **Cerebras**, **NVIDIA**, **GitHub**, **Qwen**, **MiniMax**, **OpenCode Zen**
+
+## Per-Model Wire Format (`format` attribute)
+
+Nenya supports the `format` attribute on model entries, enabling per-model wire format routing independent of the provider. This is useful for multi-format gateways like OpenCode Zen that serve models from different API families through a single provider endpoint.
+
+| Format | Description | Request Body | Response SSE |
+|--------|-------------|--------------|--------------|
+| `"openai"` (default) | OpenAI Chat Completions + standard SSE | Passthrough | Passthrough |
+| `"anthropic"` | Anthropic Messages API | OpenAI → Anthropic conversion | Anthropic → OpenAI conversion |
+| `"gemini"` | Gemini API | OpenAI → Gemini conversion | Gemini → OpenAI conversion |
+
+When a model has `format: "anthropic"`:
+1. **URL routing**: The request is sent to the provider's `FormatURLs["anthropic"]` endpoint (e.g., `/v1/messages`)
+2. **Body conversion**: The OpenAI-format request is automatically converted to Anthropic Messages API format
+3. **Response transformation**: Anthropic SSE events (`content_block_delta`, `message_delta`) are converted to OpenAI SSE format
+
+This enables providers like OpenCode Zen to serve Claude models (format: `"anthropic"`) and OpenAI-compatible models (format: `"openai"`) through a single provider entry with zero user configuration.
+
+Providers can declare multiple format endpoints via `FormatURLs` in their registry entry:
+```json
+{
+  "providers": {
+    "zen": {
+      "url": "https://opencode.ai/zen/v1/chat/completions",
+      "format_urls": {
+        "anthropic": "https://opencode.ai/zen/v1/messages"
+      }
+    }
+  }
+}
+```
 
 ## Provider Reference Table
 
@@ -47,6 +78,7 @@ Zero-config integration for providers using the standard OpenAI wire format:
 | **GitHub** | `bearer` | ❌ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | **Qwen** | `bearer` | ✅ | ❌ | ✅ | ✅ | ✅ | ❌ |
 | **MiniMax** | `bearer` | ✅ | ❌ | ✅ | ✅ | ✅ | ❌ |
+| **OpenCode Zen** | `bearer` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 
 > ✅ = Supported | ❌ = Not Supported
 
