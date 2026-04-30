@@ -40,6 +40,7 @@ const (
 	actionContinue = iota
 	actionError
 	actionStream
+	actionResponse
 )
 
 func calculateBackoff(attempt int) time.Duration {
@@ -71,6 +72,7 @@ func waitWithCancel(ctx context.Context, d time.Duration) {
 type forwardOptions struct {
 	Targets    []routing.UpstreamTarget
 	Payload    map[string]any
+	Stream     bool
 	Cooldown   time.Duration
 	TokenCount int
 	AgentName  string
@@ -88,6 +90,8 @@ type retryLoop struct {
 	ctxLogger       *slog.Logger
 	originalPayload []byte
 	attempt         int
+	stream          bool
+	cancel          context.CancelFunc
 }
 
 // newRetryLoop creates a retryLoop with the given parameters.
@@ -118,6 +122,7 @@ func newRetryLoop(p *Proxy, gw *gateway.NenyaGateway, w http.ResponseWriter, r *
 		opts:            opts,
 		ctxLogger:       ctxLogger,
 		originalPayload: originalPayload,
+		stream:          opts.Stream,
 	}, nil
 }
 
@@ -166,9 +171,19 @@ retryLoop:
 			http.Error(rl.w, "Upstream provider error", action.resp.StatusCode)
 			return true
 		case actionStream:
+			rl.cancel = action.cancel
 			result := rl.p.streamResponse(rl.gw, rl.w, rl.r, target, rl.opts.AgentName, action, rl.opts.CacheKey, rl.opts.Cooldown)
 			if result.empty {
 				rl.ctxLogger.Warn("empty stream from upstream, trying next target",
+					"model", target.Model, "provider", target.Provider)
+				continue
+			}
+			return true
+		case actionResponse:
+			rl.cancel = action.cancel
+			result := rl.p.handleNonStreamingResponse(rl.gw, rl.w, rl.r, target, rl.opts.AgentName, action, rl.opts.CacheKey, rl.opts.Cooldown)
+			if result.empty {
+				rl.ctxLogger.Warn("empty non-streaming response from upstream, trying next target",
 					"model", target.Model, "provider", target.Provider)
 				continue
 			}
@@ -180,7 +195,7 @@ retryLoop:
 
 // prepareAndSend wraps the proxy's prepareAndSend method.
 func (rl *retryLoop) prepareAndSend(idx int, target routing.UpstreamTarget, payload map[string]interface{}) upstreamAction {
-	return rl.p.prepareAndSend(rl.gw, rl.r, idx, rl.opts.Targets, target, payload, rl.opts.Cooldown, rl.opts.TokenCount, rl.opts.AgentName)
+	return rl.p.prepareAndSend(rl.gw, rl.r, idx, rl.opts.Targets, target, payload, rl.opts.Cooldown, rl.opts.TokenCount, rl.opts.AgentName, rl.stream)
 }
 
 // handleUpstreamError wraps the proxy's handleUpstreamError method.
@@ -232,7 +247,7 @@ func logRequestIfDebug(ctx context.Context, logger *slog.Logger, req *http.Reque
 	}
 }
 
-func handleUpstreamResponse(ctxLogger *slog.Logger, resp *http.Response, cancel context.CancelFunc) upstreamAction {
+func handleUpstreamResponse(ctxLogger *slog.Logger, resp *http.Response, cancel context.CancelFunc, stream bool) upstreamAction {
 	ct := resp.Header.Get("Content-Type")
 	if strings.Contains(strings.ToLower(ct), "text/html") {
 		ctxLogger.Warn("upstream returned HTML instead of API response, skipping target",
@@ -242,7 +257,10 @@ func handleUpstreamResponse(ctxLogger *slog.Logger, resp *http.Response, cancel 
 		cancel()
 		return upstreamAction{kind: actionContinue}
 	}
-	return upstreamAction{kind: actionStream, resp: resp, cancel: cancel}
+	if stream {
+		return upstreamAction{kind: actionStream, resp: resp, cancel: cancel}
+	}
+	return upstreamAction{kind: actionResponse, resp: resp, cancel: cancel}
 }
 
 func (p *Proxy) prepareAndSend(gw *gateway.NenyaGateway,
@@ -254,6 +272,7 @@ func (p *Proxy) prepareAndSend(gw *gateway.NenyaGateway,
 	cooldownDuration time.Duration,
 	tokenCount int,
 	agentName string,
+	stream bool,
 ) upstreamAction {
 	ctxLogger := gw.Logger.With(
 		"operation", "upstream",
@@ -334,7 +353,7 @@ func (p *Proxy) prepareAndSend(gw *gateway.NenyaGateway,
 		return upstreamAction{kind: actionError, resp: resp, cancel: upstreamCancel}
 	}
 
-	return handleUpstreamResponse(ctxLogger, resp, upstreamCancel)
+	return handleUpstreamResponse(ctxLogger, resp, upstreamCancel, stream)
 }
 
 func logRetryableError(ctxLogger *slog.Logger, errorBody []byte, gw *gateway.NenyaGateway) {

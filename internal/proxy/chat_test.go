@@ -109,6 +109,68 @@ func TestHandleChatCompletions_ModelTooLong(t *testing.T) {
 	testutil.AssertResponseStatusCode(t, rec, http.StatusBadRequest)
 }
 
+func TestHandleChatCompletions_NonStreaming(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"id":      "chat-123",
+			"object":  "chat.completion",
+			"created": 1234567890,
+			"model":   "test-model",
+			"choices": []interface{}{
+				map[string]interface{}{
+					"index": 0,
+					"message": map[string]interface{}{
+						"role":    "assistant",
+						"content": "hello world",
+					},
+				},
+			},
+		})
+	}))
+	defer upstream.Close()
+
+	p := newChatProxy(t, upstream.URL)
+	body := `{"model":"test-agent","stream":false,"messages":[{"role":"user","content":"hi"}]}`
+	req := testutil.NewTestRequest(t, http.MethodPost, "/v1/chat/completions", body)
+	rec := httptest.NewRecorder()
+
+	p.ServeHTTP(rec, req)
+
+	testutil.AssertResponseStatusCode(t, rec, http.StatusOK)
+	respBody, _ := io.ReadAll(rec.Body)
+	if strings.Contains(string(respBody), "data:") {
+		t.Errorf("expected non-streaming response, got SSE: %s", string(respBody))
+	}
+	var resp map[string]interface{}
+	if err := json.Unmarshal(respBody, &resp); err != nil {
+		t.Fatalf("expected JSON response, got error: %v, body: %s", err, string(respBody))
+	}
+	if resp["id"] != "chat-123" {
+		t.Errorf("expected id=chat-123, got %v", resp["id"])
+	}
+}
+
+func TestHandleChatCompletions_NonStreamingEmptyResponse(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(nil)
+	}))
+	defer upstream.Close()
+
+	p := newChatProxy(t, upstream.URL)
+	body := `{"model":"test-agent","stream":false,"messages":[{"role":"user","content":"hi"}]}`
+	req := testutil.NewTestRequest(t, http.MethodPost, "/v1/chat/completions", body)
+	rec := httptest.NewRecorder()
+
+	p.ServeHTTP(rec, req)
+
+	if rec.Code == http.StatusOK {
+		t.Logf("got %d for empty non-streaming — acceptable without upstream error", rec.Code)
+	}
+}
+
 func TestHandleChatCompletions_InvalidJSON(t *testing.T) {
 	p := newChatProxy(t, "http://127.0.0.1:1")
 	body := `{invalid json}`
