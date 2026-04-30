@@ -71,7 +71,8 @@ func (p *Proxy) handlePassthrough(gw *gateway.NenyaGateway, w http.ResponseWrite
 	}
 
 	upstreamURL := buildPassthroughURL(provider, subPath, r.URL.RawQuery)
-	ctx := buildPassthroughContext(r.Context(), provider)
+	ctx, cancel := buildPassthroughContextAndCancel(r.Context(), provider)
+	defer cancel()
 	req, err := p.buildUpstreamRequest(gw, ctx, r.Method, upstreamURL, bodyBytes, provider.Name, r.Header)
 	if err != nil {
 		gw.Logger.Error("passthrough: failed to create upstream request", "provider", providerName, "err", err)
@@ -133,13 +134,12 @@ func buildPassthroughURL(provider *config.Provider, subPath, rawQuery string) st
 	return upstreamURL
 }
 
-func buildPassthroughContext(ctx context.Context, provider *config.Provider) context.Context {
+func buildPassthroughContextAndCancel(ctx context.Context, provider *config.Provider) (context.Context, func()) {
 	if provider.TimeoutSeconds > 0 {
-		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(ctx, time.Duration(provider.TimeoutSeconds)*time.Second)
-		_ = cancel
+		timeoutCtx, cancel := context.WithTimeout(ctx, time.Duration(provider.TimeoutSeconds)*time.Second)
+		return timeoutCtx, cancel
 	}
-	return ctx
+	return ctx, func() {}
 }
 func (p *Proxy) pipeSSE(ctx context.Context, ctxLogger *slog.Logger, src io.Reader, dst http.ResponseWriter) {
 	buf := make([]byte, 4096)
