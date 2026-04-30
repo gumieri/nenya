@@ -145,7 +145,7 @@ func TestServeHTTP_Models_WrongMethod(t *testing.T) {
 	rec := httptest.NewRecorder()
 	p.ServeHTTP(rec, req)
 
-	testutil.AssertResponseStatusCode(t, rec, http.StatusNotFound)
+	testutil.AssertResponseStatusCode(t, rec, http.StatusMethodNotAllowed)
 }
 
 func TestServeHTTP_Metrics_ValidAuth(t *testing.T) {

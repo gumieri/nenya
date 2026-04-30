@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"runtime/debug"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -46,39 +45,58 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	switch {
-	case r.URL.Path == "/healthz":
-		p.serveHealthzRoute(gw, w, r)
-	case r.URL.Path == "/statsz":
-		p.serveStatszRoute(gw, w, r)
-	case r.URL.Path == "/metrics":
-		p.serveMetricsRoute(gw, w, r)
-	case r.URL.Path == "/v1/models" && r.Method == http.MethodGet:
-		p.serveModelsRoute(gw, w, r)
-	case r.URL.Path == "/v1/chat/completions" && r.Method == http.MethodPost:
-		p.serveChatRoute(gw, w, r)
-	case r.URL.Path == "/v1/embeddings" && r.Method == http.MethodPost:
-		p.serveEmbeddingsRoute(gw, w, r)
-	case r.URL.Path == "/v1/responses" && r.Method == http.MethodPost:
-		p.serveResponsesRoute(gw, w, r)
-	case strings.HasPrefix(r.URL.Path, "/proxy/"):
-		p.serveProxyRoute(gw, w, r)
-	default:
-		http.Error(w, "Not Found", http.StatusNotFound)
+	if handler := p.resolveRoute(r.URL.Path); handler != nil {
+		handler(gw, w, r)
+		return
 	}
+	http.Error(w, "Not Found", http.StatusNotFound)
 }
+
+type routeHandler func(gw *gateway.NenyaGateway, w http.ResponseWriter, r *http.Request)
 
 func (p *Proxy) recoverPanic(w http.ResponseWriter) {
 	if rec := recover(); rec != nil {
 		if gw := p.Gateway(); gw != nil {
-			gw.Logger.Error("panic recovered", "err", rec, "stack", string(debug.Stack()))
+			gw.Logger.Error("panic recovered", "err", rec)
 			gw.Metrics.RecordPanic()
 		}
 		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
 	}
 }
 
-func (p *Proxy) serveHealthzRoute(gw *gateway.NenyaGateway, w http.ResponseWriter, r *http.Request) {
+func (p *Proxy) resolveRoute(path string) routeHandler {
+	type entry struct {
+		prefix  bool
+		pattern string
+		handler func(gw *gateway.NenyaGateway, w http.ResponseWriter, r *http.Request)
+	}
+
+	handlers := []entry{
+		{false, "/healthz", p.chainHealthz},
+		{false, "/statsz", p.chainAuthStats},
+		{false, "/metrics", p.chainAuthMetric},
+		{false, "/v1/models", p.chainModels},
+		{false, "/v1/chat/completions", p.chainChat},
+		{false, "/v1/embeddings", p.chainEmbeddings},
+		{false, "/v1/responses", p.chainResponses},
+		{true, "/proxy/", p.chainProxy},
+		{true, "/v1/files", p.chainFiles},
+		{true, "/v1/batches", p.chainBatches},
+	}
+
+	for _, e := range handlers {
+		if e.prefix {
+			if strings.HasPrefix(path, e.pattern) {
+				return e.handler
+			}
+		} else if e.pattern == path {
+			return e.handler
+		}
+	}
+	return nil
+}
+
+func (p *Proxy) chainHealthz(gw *gateway.NenyaGateway, w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
 		return
@@ -88,7 +106,7 @@ func (p *Proxy) serveHealthzRoute(gw *gateway.NenyaGateway, w http.ResponseWrite
 	})(w, r)
 }
 
-func (p *Proxy) serveStatszRoute(gw *gateway.NenyaGateway, w http.ResponseWriter, r *http.Request) {
+func (p *Proxy) chainAuthStats(gw *gateway.NenyaGateway, w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
 		return
@@ -99,21 +117,25 @@ func (p *Proxy) serveStatszRoute(gw *gateway.NenyaGateway, w http.ResponseWriter
 	infra.ObserveHTTP(gw.Metrics, p.handleStats)(w, r)
 }
 
-func (p *Proxy) serveMetricsRoute(gw *gateway.NenyaGateway, w http.ResponseWriter, r *http.Request) {
+func (p *Proxy) chainAuthMetric(gw *gateway.NenyaGateway, w http.ResponseWriter, r *http.Request) {
 	if !p.authenticateRequest(r, w) {
 		return
 	}
 	infra.ObserveHTTPFunc(gw.Metrics, p.handleMetrics)(w, r)
 }
 
-func (p *Proxy) serveModelsRoute(gw *gateway.NenyaGateway, w http.ResponseWriter, r *http.Request) {
+func (p *Proxy) chainModels(gw *gateway.NenyaGateway, w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+		return
+	}
 	if !p.authenticateRequest(r, w) {
 		return
 	}
 	infra.ObserveHTTP(gw.Metrics, p.handleModels)(w, r)
 }
 
-func (p *Proxy) serveChatRoute(gw *gateway.NenyaGateway, w http.ResponseWriter, r *http.Request) {
+func (p *Proxy) chainChat(gw *gateway.NenyaGateway, w http.ResponseWriter, r *http.Request) {
 	if !p.authenticateRequest(r, w) {
 		return
 	}
@@ -122,7 +144,7 @@ func (p *Proxy) serveChatRoute(gw *gateway.NenyaGateway, w http.ResponseWriter, 
 	})(w, r)
 }
 
-func (p *Proxy) serveEmbeddingsRoute(gw *gateway.NenyaGateway, w http.ResponseWriter, r *http.Request) {
+func (p *Proxy) chainEmbeddings(gw *gateway.NenyaGateway, w http.ResponseWriter, r *http.Request) {
 	if !p.authenticateRequest(r, w) {
 		return
 	}
@@ -131,7 +153,7 @@ func (p *Proxy) serveEmbeddingsRoute(gw *gateway.NenyaGateway, w http.ResponseWr
 	})(w, r)
 }
 
-func (p *Proxy) serveResponsesRoute(gw *gateway.NenyaGateway, w http.ResponseWriter, r *http.Request) {
+func (p *Proxy) chainResponses(gw *gateway.NenyaGateway, w http.ResponseWriter, r *http.Request) {
 	if !p.authenticateRequest(r, w) {
 		return
 	}
@@ -140,12 +162,30 @@ func (p *Proxy) serveResponsesRoute(gw *gateway.NenyaGateway, w http.ResponseWri
 	})(w, r)
 }
 
-func (p *Proxy) serveProxyRoute(gw *gateway.NenyaGateway, w http.ResponseWriter, r *http.Request) {
+func (p *Proxy) chainProxy(gw *gateway.NenyaGateway, w http.ResponseWriter, r *http.Request) {
 	if !p.authenticateRequest(r, w) {
 		return
 	}
 	infra.ObserveHTTPFunc(gw.Metrics, func(w http.ResponseWriter, r *http.Request) {
 		p.handlePassthrough(gw, w, r)
+	})(w, r)
+}
+
+func (p *Proxy) chainFiles(gw *gateway.NenyaGateway, w http.ResponseWriter, r *http.Request) {
+	if !p.authenticateRequest(r, w) {
+		return
+	}
+	infra.ObserveHTTPFunc(gw.Metrics, func(w http.ResponseWriter, r *http.Request) {
+		p.handleFiles(gw, w, r)
+	})(w, r)
+}
+
+func (p *Proxy) chainBatches(gw *gateway.NenyaGateway, w http.ResponseWriter, r *http.Request) {
+	if !p.authenticateRequest(r, w) {
+		return
+	}
+	infra.ObserveHTTPFunc(gw.Metrics, func(w http.ResponseWriter, r *http.Request) {
+		p.handleBatches(gw, w, r)
 	})(w, r)
 }
 
