@@ -19,7 +19,7 @@ When a **file** is specified, only that file is loaded (single-file mode, unchan
 | Compaction | `compaction` | Text compaction (whitespace, blank lines, JSON) |
 | Window | `window` | Sliding window conversation compaction with configurable engine |
 | Response Cache | `response_cache` | In-memory LRU cache for deterministic response caching |
- | Agents | `agents` | Named agent definitions with fallback chains, circuit breaker, optional system prompts, optional memory integration, and optional MCP server integration |
+| Agents | `agents` | Named agent definitions with fallback chains, circuit breaker, optional system prompts, optional memory integration, and optional MCP server integration |
 | Providers | `providers` | Upstream provider registry |
 
 ## Multi-File Configuration (Directory Mode)
@@ -89,7 +89,7 @@ The interceptor implements a 3-tier pipeline for the last user message content, 
 | `auto_reorder_by_latency` | bool | `false` | Dynamically sort targets based on historical response times. When enabled, targets are reordered by median latency (fastest first) with ±5% jitter to prevent thundering herd. Requires `infra.LatencyTracker` to be initialized. |
 | `routing_strategy` | string | `""` (latency) | Routing strategy when `auto_reorder_by_latency` is enabled. `""` or `"latency"` = latency-only sorting. `"balanced"` = weighted scoring using latency, cost, capability matching, and per-model score bonus. |
 | `routing_latency_weight` | float64 | `1.0` | Weight for latency normalization in balanced scoring (0.0-10.0). Higher = prioritize faster models. |
- | `routing_cost_weight` | float64 | `0.0` | Weight for cost normalization in balanced scoring (0.0-10.0). Higher = prioritize cheaper models. |
+| `routing_cost_weight` | float64 | `0.0` | Weight for cost normalization in balanced scoring (0.0-10.0). Higher = prioritize cheaper models. |
 | `max_cost_per_request` | float64 | `0` (disabled) | Maximum allowed cost in USD per request. 0 = no limit. Logged but not yet enforced. |
 | `retryable_status_codes` | []int | `[429, 500, 502, 503, 504]` | HTTP status codes that trigger fallback to the next model in an agent chain. **Warning: setting this field REPLACES the built-in defaults entirely.** You must include all codes you want retryable (including the standard ones). Per-provider override available via `providers.<name>.retryable_status_codes` (provider-level replaces global for that provider). |
 | `empty_stream_as_error` | bool | `true` | Treat upstream responses with `200 OK` and zero-byte body as errors. When enabled, an SSE error payload is emitted to the client (code: `empty_response`), which OpenCode recognizes as a retryable error, allowing fallback to the next target. The metric `nenya_empty_stream_total` is incremented. Set to `false` to preserve backward compatibility (empty streams treated as successful responses, resulting in empty assistant messages). |
@@ -434,7 +434,7 @@ Each model entry (object form):
 |-------|------|-------------|
 | `provider` | string | Provider name (must match a key in `providers` or a built-in). If set without `model`, expands to all models from that provider. |
 | `model` | string | Model identifier sent to the upstream API. If set without `provider`, expands to all providers offering this model (deferred provider expansion). |
-| `format` | string | (optional) Override wire format for this model. `"openai"` (default), `"anthropic"` (converts to Anthropic Messages API), `"gemini"`. When set, takes precedence over catalog and static registry resolution. |
+| `format` | string | (optional) Override wire format for this model. `"openai"` (default), `"anthropic"` (full request body + SSE response conversion to Anthropic Messages API), `"gemini"` (URL routing only; body/SSE conversion handled by Gemini provider adapter). When set, takes precedence over catalog and static registry resolution. |
 | `provider_rgx` | string | Regex pattern to match provider names from the discovery catalog. Expands to all models from matching providers. |
 | `model_rgx` | string | Regex pattern to match model names from the discovery catalog. Expands to all models matching the pattern. |
 | `url` | string | (optional) Override provider URL for this specific model |
@@ -450,28 +450,28 @@ Each model entry (object form):
 
 Upstream LLM provider registry. Built-in providers are automatically loaded from the internal Provider Registry:
 
-| Name | URL | Prefixes | Auth Style |
-|------|-----|----------|------------|
-| `gemini` | `https://generativelanguage.googleapis.com/v1beta/openai/chat/completions` | `gemini-` | `bearer+x-goog` |
-| `deepseek` | `https://api.deepseek.com/chat/completions` | `deepseek-` | `bearer` |
-| `zai` | `https://api.z.ai/api/paas/v4/chat/completions` | `glm-` | `bearer` |
-| `groq` | `https://api.groq.com/openai/v1/chat/completions` | (none) | `bearer` |
-| `together` | `https://api.together.xyz/v1/chat/completions` | `together/` | `bearer` |
-| `anthropic` | `https://api.anthropic.com/v1/messages` | `claude-` | `anthropic` |
-| `mistral` | `https://api.mistral.ai/v1/chat/completions` | `mistral-`, `codestral-`, `devstral-` | `bearer` |
-| `xai` | `https://api.x.ai/v1/chat/completions` | `grok-` | `bearer` |
-| `perplexity` | `https://api.perplexity.ai/chat/completions` | (none) | `bearer` |
-| `cohere` | `https://api.cohere.com/v1/chat/completions` | (none) | `bearer` |
-| `deepinfra` | `https://api.deepinfra.com/v1/chat/completions` | (none) | `bearer` |
-| `openrouter` | `https://openrouter.ai/api/v1/chat/completions` | (none) | `bearer` |
-| `nvidia_free` | `https://integrate.api.nvidia.com/v1/chat/completions` | (none) | `bearer` |
-| `qwen_free` | `https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions` | (none) | `bearer` |
-| `minimax_free` | `https://api.minimax.chat/v1/chat/completions` | (none) | `bearer` |
-| `sambanova` | `https://api.sambanova.ai/v1/chat/completions` | (none) | `bearer` |
-| `cerebras` | `https://api.cerebras.ai/v1/chat/completions` | (none) | `bearer` |
-| `github` | `https://models.inference.ai.azure.com/chat/completions` | (none) | `bearer` |
-| `ollama` | `http://127.0.0.1:11434/v1/chat/completions` | (none) | `none` |
-| `zen` | `https://opencode.ai/zen/v1/chat/completions` | (none) | `bearer` |
+| Name | URL | Auth Style |
+|------|-----|------------|
+| `gemini` | `https://generativelanguage.googleapis.com/v1beta/openai/chat/completions` | `bearer+x-goog` |
+| `deepseek` | `https://api.deepseek.com/chat/completions` | `bearer` |
+| `zai` | `https://api.z.ai/api/paas/v4/chat/completions` | `bearer` |
+| `groq` | `https://api.groq.com/openai/v1/chat/completions` | `bearer` |
+| `together` | `https://api.together.xyz/v1/chat/completions` | `bearer` |
+| `anthropic` | `https://api.anthropic.com/v1/messages` | `anthropic` |
+| `mistral` | `https://api.mistral.ai/v1/chat/completions` | `bearer` |
+| `xai` | `https://api.x.ai/v1/chat/completions` | `bearer` |
+| `perplexity` | `https://api.perplexity.ai/chat/completions` | `bearer` |
+| `cohere` | `https://api.cohere.com/v1/chat/completions` | `bearer` |
+| `deepinfra` | `https://api.deepinfra.com/v1/chat/completions` | `bearer` |
+| `openrouter` | `https://openrouter.ai/api/v1/chat/completions` | `bearer` |
+| `nvidia_free` | `https://integrate.api.nvidia.com/v1/chat/completions` | `bearer` |
+| `qwen_free` | `https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions` | `bearer` |
+| `minimax_free` | `https://api.minimax.chat/v1/chat/completions` | `bearer` |
+| `sambanova` | `https://api.sambanova.ai/v1/chat/completions` | `bearer` |
+| `cerebras` | `https://api.cerebras.ai/v1/chat/completions` | `bearer` |
+| `github` | `https://models.inference.ai.azure.com/chat/completions` | `bearer` |
+| `ollama` | `http://127.0.0.1:11434/v1/chat/completions` | `none` |
+| `zen` | `https://opencode.ai/zen/v1/chat/completions` | `bearer` |
 
 To add or override a provider:
 
@@ -520,94 +520,76 @@ Gemini 3 models include `extra_content.google.thought_signature` in tool_calls r
 
 ## Model Registry
 
-Built-in models that can be referenced by string shorthand in agent `models` arrays. Each entry maps to a provider and includes a default `max_context`.
+Built-in models that can be referenced by string shorthand in agent `models` arrays. Each entry maps to a provider and includes a default `max_context` and optionally a `format` for per-model wire format routing.
 
-| Model | Provider | Max Context | Score Bonus |
-|-------|----------|-------------|-------------|
-| `gemini-3.1-flash-lite-preview` | `gemini` | 128000 | 0.1 |
-| `gemini-3.1-flash` | `gemini` | 128000 | 0.1 |
-| `gemini-2.5-flash-lite` | `gemini` | 128000 | 0.1 |
-| `gemini-2.5-flash` | `gemini` | 128000 | 0.1 |
-| `deepseek-reasoner` | `deepseek` | 128000 | 0.2 |
-| `deepseek-chat` | `deepseek` | 128000 | 0.2 |
-| `glm-5.1` | `zai` | 128000 | 0.0 |
-| `glm-5-turbo` | `zai` | 128000 | 0.0 |
-| `glm-5v-turbo` | `zai` | 128000 | 0.0 |
-| `glm-5` | `zai` | 128000 | 0.0 |
-| `glm-4.7` | `zai` | 128000 | 0.0 |
-| `glm-4.7-flash` | `zai` | 128000 | 0.0 |
-| `glm-4.7-flashx` | `zai` | 128000 | 0.0 |
-| `glm-4.6` | `zai` | 128000 | 0.0 |
-| `glm-4.6v` | `zai` | 128000 | 0.0 |
-| `glm-4.5` | `zai` | 128000 | 0.0 |
-| `glm-4.5-air` | `zai` | 128000 | 0.0 |
-| `glm-4.5-flash` | `zai` | 128000 | 0.0 |
-| `glm-4.5v` | `zai` | 128000 | 0.0 |
-| `claude-opus-4-5` | `anthropic` | 200000 | 0.3 |
-| `claude-opus-4-0` | `anthropic` | 200000 | 0.3 |
-| `claude-sonnet-4-5` | `anthropic` | 200000 | 0.2 |
-| `claude-sonnet-4-0` | `anthropic` | 200000 | 0.2 |
-| `claude-haiku-4-5` | `anthropic` | 200000 | 0.1 |
-| `claude-3-7-sonnet-20250219` | `anthropic` | 200000 | 0.2 |
-| `claude-3-5-sonnet-20241022` | `anthropic` | 200000 | 0.2 |
-| `claude-3-5-haiku-latest` | `anthropic` | 200000 | 0.1 |
-| `mistral-large-latest` | `mistral` | 262144 | 0.0 |
-| `mistral-small-latest` | `mistral` | 256000 | 0.0 |
-| `mistral-medium-latest` | `mistral` | 128000 | 0.0 |
-| `codestral-latest` | `mistral` | 256000 | 0.0 |
-| `devstral-medium-latest` | `mistral` | 262144 | 0.0 |
-| `magistral-medium-latest` | `mistral` | 128000 | 0.0 |
-| `pixtral-large-latest` | `mistral` | 128000 | 0.0 |
-| `grok-4` | `xai` | 256000 | 0.0 |
-| `grok-4-fast` | `xai` | 2000000 | 0.0 |
-| `grok-3` | `xai` | 131072 | 0.0 |
-| `grok-3-fast` | `xai` | 131072 | 0.0 |
-| `grok-3-mini` | `xai` | 131072 | 0.0 |
-| `sonar-pro` | `perplexity` | 200000 | 0.0 |
-| `sonar-reasoning-pro` | `perplexity` | 128000 | 0.1 |
-| `sonar-deep-research` | `perplexity` | 128000 | 0.1 |
-| `sonar` | `perplexity` | 128000 | 0.0 |
-| `nemotron-3-super` | `nvidia_free` | 4000 | 0.0 |
-| `qwen-3.6-plus` | `qwen_free` | 8000 | 0.0 |
-| `minimax-m2.5` | `minimax_free` | 8000 | 0.0 |
-| `llama-3.3-70b-versatile` | `groq` | 131072 | 0.0 |
-| `mixtral-8x7b-32768` | `groq` | 32768 | 0.0 |
-| `llama-3.1-405b-instruct` | `sambanova` | 128000 | 0.1 |
-| `llama-3.3-70b` | `cerebras` | 8192 | 0.0 |
-| `gpt-4o` | `github` | 128000 | 0.1 |
-| `phi-3.5-mini-instruct` | `github` | 128000 | 0.0 |
-| `qwen2.5-72b-turbo` | `together` | 32768 | 0.0 |
-
-## Per-Model Wire Format (`format` attribute)
-
-Nenya supports the `format` attribute on model entries, enabling per-model wire format routing independent of the provider. This is useful for multi-format gateways like OpenCode Zen that serve models from different API families through a single provider endpoint.
-
-| Format | Description | Request Body | Response SSE |
-|--------|-------------|--------------|--------------|
-| `"openai"` (default) | OpenAI Chat Completions + standard SSE | Passthrough | Passthrough |
-| `"anthropic"` | Anthropic Messages API | OpenAI → Anthropic conversion | Anthropic → OpenAI conversion |
-| `"gemini"` | Gemini API | OpenAI → Gemini conversion | Gemini → OpenAI conversion |
-
-When a model has `format: "anthropic"`:
-1. **URL routing**: The request is sent to the provider's `FormatURLs["anthropic"]` endpoint (e.g., `/v1/messages`)
-2. **Body conversion**: The OpenAI-format request is automatically converted to Anthropic Messages API format
-3. **Response transformation**: Anthropic SSE events (`content_block_delta`, `message_delta`) are converted to OpenAI SSE format
-
-This enables providers like OpenCode Zen to serve Claude models (format: `"anthropic"`) and OpenAI-compatible models (format: `"openai"`) through a single provider entry with zero user configuration.
-
-Providers can declare multiple format endpoints via `format_urls` in their provider config:
-```json
-{
-  "providers": {
-    "zen": {
-      "url": "https://opencode.ai/zen/v1/chat/completions",
-      "format_urls": {
-        "anthropic": "https://opencode.ai/zen/v1/messages"
-      }
-    }
-  }
-}
-```
+| Model | Provider | Format | Max Context | Score Bonus |
+|-------|----------|--------|-------------|-------------|
+| `gemini-3.1-flash-lite-preview` | `gemini` | — | 128000 | 0.1 |
+| `gemini-3.1-flash` | `gemini` | — | 128000 | 0.1 |
+| `gemini-2.5-flash-lite` | `gemini` | — | 128000 | 0.1 |
+| `gemini-2.5-flash` | `gemini` | — | 128000 | 0.1 |
+| `deepseek-reasoner` | `deepseek` | — | 128000 | 0.2 |
+| `deepseek-chat` | `deepseek` | — | 128000 | 0.2 |
+| `glm-5.1` | `zai` | — | 128000 | 0.0 |
+| `glm-5-turbo` | `zai` | — | 128000 | 0.0 |
+| `glm-5v-turbo` | `zai` | — | 128000 | 0.0 |
+| `glm-5` | `zai` | — | 128000 | 0.0 |
+| `glm-4.7` | `zai` | — | 128000 | 0.0 |
+| `glm-4.7-flash` | `zai` | — | 128000 | 0.0 |
+| `glm-4.7-flashx` | `zai` | — | 128000 | 0.0 |
+| `glm-4.6` | `zai` | — | 128000 | 0.0 |
+| `glm-4.6v` | `zai` | — | 128000 | 0.0 |
+| `glm-4.5` | `zai` | — | 128000 | 0.0 |
+| `glm-4.5-air` | `zai` | — | 128000 | 0.0 |
+| `glm-4.5-flash` | `zai` | — | 128000 | 0.0 |
+| `glm-4.5v` | `zai` | — | 128000 | 0.0 |
+| `claude-opus-4-5` | `anthropic` | — | 200000 | 0.3 |
+| `claude-opus-4-0` | `anthropic` | — | 200000 | 0.3 |
+| `claude-sonnet-4-5` | `anthropic` | — | 200000 | 0.2 |
+| `claude-sonnet-4-0` | `anthropic` | — | 200000 | 0.2 |
+| `claude-haiku-4-5` | `anthropic` | — | 200000 | 0.1 |
+| `claude-3-7-sonnet-20250219` | `anthropic` | — | 200000 | 0.2 |
+| `claude-3-5-sonnet-20241022` | `anthropic` | — | 200000 | 0.2 |
+| `claude-3-5-haiku-latest` | `anthropic` | — | 200000 | 0.1 |
+| `mistral-large-latest` | `mistral` | — | 262144 | 0.0 |
+| `mistral-small-latest` | `mistral` | — | 256000 | 0.0 |
+| `mistral-medium-latest` | `mistral` | — | 128000 | 0.0 |
+| `codestral-latest` | `mistral` | — | 256000 | 0.0 |
+| `devstral-medium-latest` | `mistral` | — | 262144 | 0.0 |
+| `magistral-medium-latest` | `mistral` | — | 128000 | 0.0 |
+| `pixtral-large-latest` | `mistral` | — | 128000 | 0.0 |
+| `grok-4` | `xai` | — | 256000 | 0.0 |
+| `grok-4-fast` | `xai` | — | 2000000 | 0.0 |
+| `grok-3` | `xai` | — | 131072 | 0.0 |
+| `grok-3-fast` | `xai` | — | 131072 | 0.0 |
+| `grok-3-mini` | `xai` | — | 131072 | 0.0 |
+| `sonar-pro` | `perplexity` | — | 200000 | 0.0 |
+| `sonar-reasoning-pro` | `perplexity` | — | 128000 | 0.1 |
+| `sonar-deep-research` | `perplexity` | — | 128000 | 0.1 |
+| `sonar` | `perplexity` | — | 128000 | 0.0 |
+| `nemotron-3-super` | `nvidia_free` | — | 4000 | 0.0 |
+| `qwen-3.6-plus` | `qwen_free` | — | 8000 | 0.0 |
+| `minimax-m2.5` | `minimax_free` | — | 8000 | 0.0 |
+| `llama-3.3-70b-versatile` | `groq` | — | 131072 | 0.0 |
+| `mixtral-8x7b-32768` | `groq` | — | 32768 | 0.0 |
+| `llama-3.1-405b-instruct` | `sambanova` | — | 128000 | 0.1 |
+| `llama-3.3-70b` | `cerebras` | — | 8192 | 0.0 |
+| `gpt-4o` | `github` | — | 128000 | 0.1 |
+| `phi-3.5-mini-instruct` | `github` | — | 128000 | 0.0 |
+| `qwen2.5-72b-turbo` | `together` | — | 32768 | 0.0 |
+| `qwen3.5-plus` | `zen` | — | 131072 | 0.0 |
+| `minimax-m2.7` | `zen` | — | 200000 | 0.0 |
+| `minimax-m2.5-free` | `zen` | — | 200000 | 0.0 |
+| `kimi-k2.6` | `zen` | — | 200000 | 0.0 |
+| `kimi-k2.5` | `zen` | — | 200000 | 0.0 |
+| `big-pickle` | `zen` | — | 200000 | 0.0 |
+| `ling-2.6-flash-free` | `zen` | — | 200000 | 0.0 |
+| `hy3-preview-free` | `zen` | — | 131072 | 0.0 |
+| `nemotron-3-super-free` | `zen` | — | 4000 | 0.0 |
+| `gpt-5-nano` | `zen` | — | 200000 | 0.0 |
+| `claude-opus-4-7` | `zen` | `anthropic` | 200000 | 0.0 |
+| `claude-opus-4-6` | `zen` | `anthropic` | 200000 | 0.0 |
+| `claude-sonnet-4-6` | `zen` | `anthropic` | 200000 | 0.0 |
 
 Models not in this registry (e.g., local Ollama models, custom endpoints) must be specified as full objects with explicit `provider` and `model` fields.
 
@@ -628,7 +610,7 @@ When resolving a model (for routing, `/v1/models` catalog, or `max_tokens` injec
 
 | Priority | Source | Description |
 |----------|--------|-------------|
-| 1 | Config overrides | Agent model entries with explicit `provider`, `max_context`, or `max_output` fields |
+| 1 | Config overrides | Agent model entries with explicit `provider`, `max_context`, `max_output`, or `format` fields |
 | 2 | Discovered models | Models fetched from provider `/v1/models` endpoints at startup/reload |
 | 3 | Static registry | Built-in ModelRegistry fallback for known models |
 
@@ -788,7 +770,7 @@ Cost data is also exposed via the `/statsz` endpoint and in the `/v1/models` res
 
 ## `/v1/models` Response Fields
 
-The model catalog endpoint now includes capability and pricing metadata when available:
+The model catalog endpoint includes capability and pricing metadata when available:
 
 ```json
 {
@@ -819,9 +801,10 @@ The model catalog endpoint now includes capability and pricing metadata when ava
    9. **Thought pruning** (if `prune_thoughts` enabled, strip reasoning blocks from assistant messages)
    10. **Window compaction** (if enabled and threshold exceeded)
    11. **Engine interception** (3-tier last-message summarization using `security_filter.engine`, with TF-IDF relevance-scored truncation when `tfidf_query_source` is set, with fallback chain if agent-referenced)
-   12. **JSON minification** (final body compaction)
-   13. **Response cache store** (if enabled, store completed SSE response)
-   14. **MCP auto-save** (if agent has mcp.auto_save, async store of assistant response to MCP server)
+   12. **Format-aware body conversion** (if model has `format: "anthropic"`, convert OpenAI request body to Anthropic Messages API format)
+    13. **JSON minification** (final body compaction)
+   14. **Response cache store** (if enabled, store completed SSE response)
+    15. **MCP auto-save** (if agent has mcp.auto_save, async store of assistant response to MCP server)
 
 ### Best-Effort Pipeline
 
