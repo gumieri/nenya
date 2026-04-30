@@ -18,6 +18,14 @@ Buffer the full upstream response and return as a single JSON object. Some clien
 - Return standard OpenAI-compatible JSON format
 - Maintain existing streaming behavior as default
 
+**Implementation** (Completed 2026-04-30):
+- Extract `stream` boolean from JSON payload in `validateChatRequest`
+- Thread `stream` through `forwardOptions` → `retryLoop` → `prepareAndSend`
+- `handleUpstreamResponse` returns `actionResponse` for non-streaming (vs `actionStream` for streaming)
+- `handleNonStreamingResponse` buffers full body, parses JSON, returns single object
+- Retry loop handles `actionResponse` similarly to `actionStream` (with fallback to next target on empty response)
+- Comprehensive test coverage: non-streaming happy path, empty response handling
+
 ---
 
 ### 2. Responses API: Full Lifecycle
@@ -36,7 +44,7 @@ Implement the OpenAI Responses API with full CRUD operations beyond blind passth
 ---
 
 ### 3. Embeddings (Enhanced)
-**Current**: Blind passthrough (`/v1/embeddings`)  
+**Current**: Enhanced (`/v1/embeddings`) — **Completed 2026-04-30**
 **Planned**: Proper routing with token counting
 
 Add intelligent routing and token counting for embeddings requests, not just blind proxying.
@@ -47,10 +55,17 @@ Add intelligent routing and token counting for embeddings requests, not just bli
 - Usage tracking via `/statsz` and metrics
 - Per-provider request/response transformation if needed
 
+**Implementation**:
+- Added `countEmbeddingInputTokens` helper (estimates tokens from `input` string or array)
+- `handleEmbeddings` now calls `gw.RateLimiter.Check` and records `Stats.RecordRequest` / `Metrics.RecordUpstreamRequest`
+- Changed URL derivation from `provider.URL` trimming to `provider.BaseURL + "/embeddings"`
+- `forwardEmbeddingsRequest` parses response `usage` field and records `Stats.RecordOutput` / `Metrics.RecordTokens` for output tokens
+- Extracted `recordEmbeddingUsage` helper to reduce nesting complexity
+
 ---
 
 ### 4. File Operations
-**Current**: Not supported  
+**Current**: Implemented (`/v1/files`) — **Completed 2026-04-30**
 **Planned**: CRUD: create/list/get/delete/content
 
 Implement file upload, retrieval, and management per provider (OpenAI, Anthropic, etc.).
@@ -63,10 +78,18 @@ Implement file upload, retrieval, and management per provider (OpenAI, Anthropic
 - `DELETE /v1/files/{file_id}` — delete file
 - Provider-specific handling (OpenAI vs Anthropic file APIs)
 
+**Implementation**:
+- Shared `handleFilesOrBatches` function handles all endpoints
+- `isPathSafe` uses `url.PathUnescape` + `path.Clean` to block URL-encoded traversal (`%2e%2e`)
+- Rate limiting and metrics recording consistent with passthrough handler
+- `buildFilesContext` returns idiomatic cancel func (no nil)
+- Comprehensive test coverage: JSON upload, multipart, empty body, too-large body, list, get, delete, content download
+- Uses `provider.BaseURL + "/files"` for URL derivation
+
 ---
 
 ### 5. Batch Processing
-**Current**: Not supported  
+**Current**: Implemented (`/v1/batches`) — **Completed 2026-04-30**
 **Planned**: Native batch lifecycle
 
 Implement batch API for processing multiple requests efficiently.
@@ -77,6 +100,10 @@ Implement batch API for processing multiple requests efficiently.
 - `POST /v1/batches/{batch_id}/cancel` — cancel batch
 - `GET /v1/batches/{batch_id}/results` — retrieve batch results
 - Per-provider batch API translation
+
+**Implementation**:
+- Shared `handleFilesOrBatches` for both files and batches
+- Same rate limiting, metrics, auth, retry, and timeout patterns as files
 
 ---
 
@@ -308,4 +335,4 @@ Each feature must include:
 
 ---
 
-*Last updated: 2026-04-22*
+*Last updated: 2026-04-30*

@@ -33,6 +33,7 @@ type chatRequest struct {
 	Payload      map[string]any
 	ModelName    string
 	TokenCount   int
+	Stream       bool
 	Targets      []routing.UpstreamTarget
 	AgentName    string
 	Cooldown     time.Duration
@@ -90,6 +91,12 @@ func (p *Proxy) validateChatRequest(w http.ResponseWriter, r *http.Request, gw *
 		Payload:    payload,
 		ModelName:  modelName,
 		TokenCount: gw.CountRequestTokens(payload),
+		Stream:     true, // Default to streaming for backward compatibility
+	}
+	if streamRaw, ok := payload["stream"]; ok {
+		if s, ok := streamRaw.(bool); ok {
+			req.Stream = s
+		}
 	}
 
 	var herr *httpError
@@ -282,6 +289,7 @@ func (p *Proxy) handleChatCompletions(gw *gateway.NenyaGateway, w http.ResponseW
 		p.forwardToUpstreamWithMCP(gw, w, r, forwardOptions{
 			Targets:    req.Targets,
 			Payload:    req.Payload,
+			Stream:     true,
 			Cooldown:   req.Cooldown,
 			TokenCount: req.TokenCount,
 			AgentName:  req.AgentName,
@@ -294,6 +302,7 @@ func (p *Proxy) handleChatCompletions(gw *gateway.NenyaGateway, w http.ResponseW
 	p.forwardToUpstream(gw, w, r, forwardOptions{
 		Targets:    req.Targets,
 		Payload:    req.Payload,
+		Stream:     req.Stream,
 		Cooldown:   req.Cooldown,
 		TokenCount: req.TokenCount,
 		AgentName:  req.AgentName,
@@ -633,10 +642,22 @@ func (p *Proxy) handleEmbeddings(gw *gateway.NenyaGateway, w http.ResponseWriter
 		return
 	}
 
-	embeddingURL := strings.TrimSuffix(provider.URL, "/chat/completions") + "/embeddings"
-	if embeddingURL == provider.URL {
-		gw.Logger.Warn("provider URL does not end with /chat/completions, cannot derive embeddings endpoint",
-			"provider", provider.Name, "url", provider.URL)
+	if !gw.RateLimiter.Check(provider.BaseURL, 0) {
+		http.Error(w, "Rate limit exceeded", http.StatusTooManyRequests)
+		return
+	}
+
+	tokenCount := countEmbeddingInputTokens(payload)
+
+	gw.Stats.RecordRequest(modelName, tokenCount)
+	if gw.Metrics != nil {
+		gw.Metrics.RecordUpstreamRequest(modelName, "", provider.Name)
+	}
+
+	embeddingURL := provider.BaseURL + "/embeddings"
+	if embeddingURL == "/embeddings" {
+		gw.Logger.Warn("provider BaseURL is empty, cannot derive embeddings endpoint",
+			"provider", provider.Name)
 		http.Error(w, "Provider does not support embeddings", http.StatusBadRequest)
 		return
 	}
@@ -654,6 +675,39 @@ func (p *Proxy) handleEmbeddings(gw *gateway.NenyaGateway, w http.ResponseWriter
 	}
 
 	p.forwardEmbeddingsRequest(gw, w, ctx, http.MethodPost, embeddingURL, bodyBytes, provider.Name, r.Header, maxAttempts)
+}
+
+func countEmbeddingInputTokens(payload map[string]interface{}) int {
+	inputRaw, ok := payload["input"]
+	if !ok {
+		return 0
+	}
+
+	var totalText string
+	switch input := inputRaw.(type) {
+	case string:
+		totalText = input
+	case []interface{}:
+		var texts []string
+		for _, item := range input {
+			if s, ok := item.(string); ok {
+				texts = append(texts, s)
+			}
+		}
+		totalText = strings.Join(texts, " ")
+	default:
+		return 0
+	}
+
+	if totalText == "" {
+		return 0
+	}
+
+	tokens := len(totalText) / 4
+	if tokens < 1 {
+		tokens = 1
+	}
+	return tokens
 }
 
 func (p *Proxy) forwardEmbeddingsRequest(gw *gateway.NenyaGateway, w http.ResponseWriter, ctx context.Context, method, url string, bodyBytes []byte, providerName string, srcHeaders http.Header, maxAttempts int) {
@@ -685,11 +739,46 @@ func (p *Proxy) forwardEmbeddingsRequest(gw *gateway.NenyaGateway, w http.Respon
 	}
 	defer func() { _ = resp.Body.Close() }()
 
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		gw.Logger.Error("failed to read embeddings response body", "err", err)
+		http.Error(w, "Failed to read upstream response", http.StatusBadGateway)
+		return
+	}
+
+	recordEmbeddingUsage(gw, respBody, providerName)
+
 	routing.CopyHeaders(resp.Header, w.Header())
 	w.WriteHeader(resp.StatusCode)
 
-	if _, err := copyStream(ctx, w, resp.Body, nil); err != nil {
-		gw.Logger.Debug("embeddings response copy ended", "err", err)
+	if _, err := w.Write(respBody); err != nil {
+		gw.Logger.Debug("embeddings response write ended", "err", err)
+	}
+}
+
+func recordEmbeddingUsage(gw *gateway.NenyaGateway, respBody []byte, providerName string) {
+	var responseMap map[string]interface{}
+	if err := json.Unmarshal(respBody, &responseMap); err != nil {
+		return
+	}
+	usage, ok := responseMap["usage"].(map[string]interface{})
+	if !ok {
+		return
+	}
+	totalTokens, ok := usage["total_tokens"].(float64)
+	if !ok {
+		return
+	}
+	inputTokens := 0
+	if inputRaw, ok := usage["prompt_tokens"].(float64); ok {
+		inputTokens = int(inputRaw)
+	}
+	outputTokens := int(totalTokens) - inputTokens
+	if gw.Stats != nil {
+		gw.Stats.RecordOutput("", outputTokens)
+	}
+	if gw.Metrics != nil {
+		gw.Metrics.RecordTokens("output", "", "", providerName, outputTokens)
 	}
 }
 
@@ -1299,7 +1388,7 @@ func (p *Proxy) forwardBuffered(gw *gateway.NenyaGateway,
 			continue
 		}
 
-		action := p.prepareAndSend(gw, r, i, targets, target, workingPayload, cooldownDuration, tokenCount, agentName)
+		action := p.prepareAndSend(gw, r, i, targets, target, workingPayload, cooldownDuration, tokenCount, agentName, true)
 		result, shouldContinue := p.handleBufferedAction(ctx, gw, i, targets, target, cooldownDuration, agentName, action, attempt, maxRetries)
 		if result != nil {
 			return result, nil
@@ -1472,4 +1561,40 @@ func applyRedactToContent(msgNode map[string]interface{}, redactFn func(string) 
 		}
 	}
 	return changed
+}
+
+// handleNonStreamingResponse buffers the full upstream response and returns it as a complete JSON object.
+func (p *Proxy) handleNonStreamingResponse(gw *gateway.NenyaGateway, w http.ResponseWriter, r *http.Request, target routing.UpstreamTarget, agentName string, action upstreamAction, cacheKey string, cooldownDuration time.Duration) streamResult {
+	defer action.cancel()
+
+	respBody, err := io.ReadAll(action.resp.Body)
+	if err != nil {
+		gw.Logger.Error("failed to read non-streaming response body", "err", err)
+		http.Error(w, "Failed to read upstream response", http.StatusBadGateway)
+		return streamResult{empty: true}
+	}
+	_ = action.resp.Body.Close()
+
+	if len(respBody) == 0 {
+		gw.AgentState.RecordFailure(target, cooldownDuration)
+		gw.Logger.Warn("empty non-streaming response from upstream", "model", target.Model)
+		return streamResult{empty: true}
+	}
+
+	routing.CopyHeaders(action.resp.Header, w.Header())
+	w.WriteHeader(action.resp.StatusCode)
+
+	var responseMap map[string]interface{}
+	if err := json.Unmarshal(respBody, &responseMap); err != nil {
+		gw.Logger.Error("failed to parse non-streaming JSON response", "err", err, "body", string(respBody))
+		http.Error(w, "Invalid JSON response from upstream", http.StatusBadGateway)
+		return streamResult{}
+	}
+
+	if gw.Stats != nil {
+		gw.Stats.RecordOutput(target.Model, 0)
+	}
+
+	_ = json.NewEncoder(w).Encode(responseMap)
+	return streamResult{}
 }
