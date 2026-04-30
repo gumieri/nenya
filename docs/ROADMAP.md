@@ -29,7 +29,7 @@ Buffer the full upstream response and return as a single JSON object. Some clien
 ---
 
 ### 2. Responses API: Full Lifecycle
-**Current**: Passthrough only (`/v1/responses`)  
+**Current**: Full lifecycle (`/v1/responses`) — **Completed 2026-04-30**
 **Planned**: Full lifecycle management (GET/cancel/delete/compact)
 
 Implement the OpenAI Responses API with full CRUD operations beyond blind passthrough.
@@ -40,6 +40,14 @@ Implement the OpenAI Responses API with full CRUD operations beyond blind passth
 - `DELETE /v1/responses/{response_id}` — delete response
 - `POST /v1/responses/{response_id}/compact` — compact response content
 - Maintain passthrough for unsupported providers
+
+**Implementation**:
+- `handleResponses` supports all HTTP methods (GET, POST, DELETE) with path-based routing
+- Model resolution via `ResolveProviders` with fallback to `getDefaultResponseProvider`
+- URL derivation uses `provider.BaseURL + "/responses"` with sub-path forwarding
+- `isPathSafeResponses`, `readResponsesBody`, `resolveResponsesURL`, `buildResponsesContext` helpers keep complexity ≤15
+- Retry logic via `util.DoWithRetry`
+- Existing retry/error tests pass unchanged
 
 ---
 

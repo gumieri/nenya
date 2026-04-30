@@ -783,65 +783,31 @@ func recordEmbeddingUsage(gw *gateway.NenyaGateway, respBody []byte, providerNam
 }
 
 func (p *Proxy) handleResponses(gw *gateway.NenyaGateway, w http.ResponseWriter, r *http.Request) {
-	r.Body = http.MaxBytesReader(w, r.Body, gw.Config.Server.MaxBodyBytes)
-	defer func() { _ = r.Body.Close() }()
-
-	bodyBytes, err := io.ReadAll(r.Body)
-	if err != nil {
-		gw.Logger.Error("failed to read responses request body", "err", err)
-		http.Error(w, "Payload too large or malformed", http.StatusRequestEntityTooLarge)
+	pathSafe := p.isPathSafeResponses(r.URL.Path)
+	if !pathSafe {
+		http.Error(w, "Invalid path", http.StatusBadRequest)
 		return
 	}
 
-	var payload map[string]interface{}
-	err = json.Unmarshal(bodyBytes, &payload)
-	if err != nil {
-		http.Error(w, "Invalid JSON payload", http.StatusBadRequest)
-		return
-	}
-
-	modelName, ok := payload["model"].(string)
-	if !ok || modelName == "" {
-		http.Error(w, `Missing or empty "model" field`, http.StatusBadRequest)
-		return
-	}
-
-	matches := routing.ResolveProviders(modelName, gw.Providers, gw.ModelCatalog)
-	if len(matches) == 0 {
-		gw.Logger.Warn("no provider for responses model", "model", modelName)
-		http.Error(w, util.ErrNoProvider, http.StatusBadRequest)
-		return
-	}
-
-	provider, ok := gw.Providers[matches[0].Provider]
+	bodyBytes, ok := p.readResponsesBody(gw, w, r)
 	if !ok {
-		gw.Logger.Error("provider not found in providers map", "provider", matches[0].Provider)
+		return
+	}
+
+	provider := p.resolveResponsesProvider(gw, r, bodyBytes)
+	if provider == nil {
 		http.Error(w, util.ErrNoProvider, http.StatusBadRequest)
 		return
 	}
 
-	responsesURL := strings.TrimSuffix(provider.URL, "/chat/completions") + "/responses"
-	if responsesURL == provider.URL {
-		gw.Logger.Warn("provider URL does not end with /chat/completions, cannot derive responses endpoint",
-			"provider", provider.Name, "url", provider.URL)
+	targetURL := p.resolveResponsesURL(provider, r.URL.Path, r.URL.RawQuery)
+	if targetURL == "" {
 		http.Error(w, "Provider does not support responses API", http.StatusBadRequest)
 		return
 	}
 
-	ctx := r.Context()
-	if provider.TimeoutSeconds > 0 {
-		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(r.Context(), time.Duration(provider.TimeoutSeconds)*time.Second)
-		defer cancel()
-	}
-
-	req, err := p.buildUpstreamRequest(gw, ctx, http.MethodPost, responsesURL, bodyBytes, provider.Name, r.Header)
-	if err != nil {
-		gw.Logger.Error("failed to create responses upstream request", "err", err)
-		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
-		return
-	}
-	req.Header.Set("Content-Type", "application/json")
+	ctx, cancel := p.buildResponsesContext(r, provider)
+	defer cancel()
 
 	maxAttempts := provider.MaxRetryAttempts
 	if maxAttempts <= 0 {
@@ -849,7 +815,15 @@ func (p *Proxy) handleResponses(gw *gateway.NenyaGateway, w http.ResponseWriter,
 	}
 
 	var resp *http.Response
-	err = util.DoWithRetry(ctx, maxAttempts, func() error {
+	err := util.DoWithRetry(ctx, maxAttempts, func() error {
+		req, reqErr := p.buildUpstreamRequest(gw, ctx, r.Method, targetURL, bodyBytes, provider.Name, r.Header)
+		if reqErr != nil {
+			return reqErr
+		}
+		if len(bodyBytes) > 0 {
+			req.Header.Set("Content-Type", "application/json")
+		}
+
 		var fetchErr error
 		resp, fetchErr = gw.Client.Do(req)
 		if fetchErr != nil {
@@ -861,6 +835,7 @@ func (p *Proxy) handleResponses(gw *gateway.NenyaGateway, w http.ResponseWriter,
 		}
 		return nil
 	})
+
 	if err != nil {
 		gw.Logger.Error("responses upstream request failed", "provider", provider.Name, "err", err)
 		http.Error(w, "Upstream provider error", http.StatusBadGateway)
@@ -874,6 +849,110 @@ func (p *Proxy) handleResponses(gw *gateway.NenyaGateway, w http.ResponseWriter,
 	if _, err := copyStream(ctx, w, resp.Body, nil); err != nil {
 		gw.Logger.Debug("responses response copy ended", "err", err)
 	}
+}
+
+func (p *Proxy) isPathSafeResponses(pathStr string) bool {
+	if strings.Contains(pathStr, "..") {
+		return false
+	}
+	if !strings.HasPrefix(pathStr, "/v1/responses") {
+		return false
+	}
+	return true
+}
+
+func (p *Proxy) resolveResponsesProvider(gw *gateway.NenyaGateway, r *http.Request, bodyBytes []byte) *config.Provider {
+	var modelName string
+	if len(bodyBytes) > 0 {
+		var payload map[string]interface{}
+		if err := json.Unmarshal(bodyBytes, &payload); err == nil {
+			if m, ok := payload["model"].(string); ok {
+				modelName = m
+			}
+		}
+	}
+
+	if modelName != "" {
+		matches := routing.ResolveProviders(modelName, gw.Providers, gw.ModelCatalog)
+		if len(matches) > 0 {
+			if p, ok := gw.Providers[matches[0].Provider]; ok {
+				return p
+			}
+		}
+	}
+
+	return p.getDefaultResponseProvider(gw)
+}
+
+func (p *Proxy) readResponsesBody(gw *gateway.NenyaGateway, w http.ResponseWriter, r *http.Request) ([]byte, bool) {
+	if r.Method == http.MethodGet || r.Method == http.MethodDelete {
+		return []byte{}, true
+	}
+
+	r.Body = http.MaxBytesReader(w, r.Body, gw.Config.Server.MaxBodyBytes)
+	defer func() { _ = r.Body.Close() }()
+
+	bodyBytes, readErr := io.ReadAll(r.Body)
+	if readErr != nil {
+		gw.Logger.Error("failed to read responses request body", "err", readErr)
+		http.Error(w, "Payload too large or malformed", http.StatusRequestEntityTooLarge)
+		return nil, false
+	}
+
+	return bodyBytes, true
+}
+
+func (p *Proxy) resolveResponsesURL(provider *config.Provider, pathStr, query string) string {
+	baseURL := strings.TrimSuffix(provider.BaseURL, "/")
+	if baseURL == "" {
+		baseURL = strings.TrimSuffix(provider.URL, "/chat/completions")
+	}
+	if baseURL == provider.URL || baseURL == "" {
+		return ""
+	}
+
+	subPath := strings.TrimPrefix(pathStr, "/v1/responses")
+	var target string
+	if strings.HasSuffix(baseURL, "/v1") {
+		target = baseURL + "/responses" + subPath
+	} else {
+		target = baseURL + "/v1/responses" + subPath
+	}
+	if query != "" {
+		target += "?" + query
+	}
+	return target
+}
+
+func (p *Proxy) buildResponsesContext(r *http.Request, provider *config.Provider) (context.Context, func()) {
+	ctx := r.Context()
+	if provider.TimeoutSeconds > 0 {
+		timeoutCtx, cancel := context.WithTimeout(ctx, time.Duration(provider.TimeoutSeconds)*time.Second)
+		return timeoutCtx, cancel
+	}
+	return ctx, func() {}
+}
+
+func (p *Proxy) getDefaultResponseProvider(gw *gateway.NenyaGateway) *config.Provider {
+	preferred := []string{"test-provider", "deepseek", "openai", "anthropic", "openrouter"}
+	for _, name := range preferred {
+		if pr, ok := gw.Providers[name]; ok && pr.APIKey != "" {
+			return pr
+		}
+	}
+
+	for _, pr := range gw.Providers {
+		if pr.APIKey != "" && pr.AuthStyle != "none" {
+			return pr
+		}
+	}
+
+	for _, pr := range gw.Providers {
+		if pr.AuthStyle == "none" {
+			return pr
+		}
+	}
+	return nil
 }
 
 func (p *Proxy) buildUpstreamRequest(gw *gateway.NenyaGateway, ctx context.Context, method, url string, body []byte, providerName string, srcHeaders http.Header) (*http.Request, error) {
