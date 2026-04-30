@@ -32,6 +32,7 @@ type ModelEntry struct {
 	Provider     string
 	MaxContext   int
 	MaxOutput    int
+	Format       string          `json:"format,omitempty"`
 	ScoreBonus   float64         `json:"score_bonus,omitempty"`
 	Capabilities []string        `json:"capabilities,omitempty"`
 	Pricing      PricingOverride `json:"pricing,omitempty"`
@@ -60,16 +61,18 @@ type ModelRef struct {
 }
 
 type ProviderEntry struct {
-	URL       string
-	AuthStyle string
-	ApiFormat string
-	Models    []ModelRef
+	URL        string
+	AuthStyle  string
+	ApiFormat  string
+	FormatURLs map[string]string `json:"format_urls,omitempty"`
+	Models     []ModelRef
 }
 
 func (e ProviderEntry) ToProviderConfig() ProviderConfig {
 	return ProviderConfig{
-		URL:       e.URL,
-		AuthStyle: e.AuthStyle,
-		ApiFormat: e.ApiFormat,
+		URL:        e.URL,
+		AuthStyle:  e.AuthStyle,
+		ApiFormat:  e.ApiFormat,
+		FormatURLs: e.FormatURLs,
 	}
 }

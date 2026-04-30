@@ -208,7 +208,7 @@ func restoreOriginalModel(payload map[string]interface{}, origModel interface{})
 	}
 }
 
-func TransformRequestForUpstream(deps TransformDeps, providerName, upstreamURL string, payload map[string]interface{}, model string, maxOutput int) ([]byte, string, error) {
+func TransformRequestForUpstream(deps TransformDeps, providerName, upstreamURL string, payload map[string]interface{}, model string, maxOutput int, format string) ([]byte, string, error) {
 	origModel := payload["model"]
 
 	if model != "" {
@@ -242,6 +242,15 @@ func TransformRequestForUpstream(deps TransformDeps, providerName, upstreamURL s
 
 	effectiveMaxOutput := resolveEffectiveMaxOutput(deps, finalModel, maxOutput)
 	applyMaxTokens(payload, effectiveMaxOutput)
+
+	if format == "anthropic" {
+		stream := false
+		if s, ok := payload["stream"].(bool); ok {
+			stream = s
+		}
+		anthropicAdapter := adapter.GetAnthropicAdapter()
+		payload = anthropicAdapter.ConvertOpenAIToAnthropicBody(payload, modelName, stream)
+	}
 
 	newBody, err := json.Marshal(payload)
 	restoreOriginalModel(payload, origModel)

@@ -290,10 +290,23 @@ func (p *Proxy) streamResponse(gw *gateway.NenyaGateway, w http.ResponseWriter, 
 
 func (p *Proxy) setupTransformingReader(gw *gateway.NenyaGateway, target routing.UpstreamTarget, agentName string, action upstreamAction, ctx context.Context) (*stream.SSETransformingReader, *contentBuilder) {
 	var transformer stream.ResponseTransformer
-	if spec, ok := providerpkg.Get(target.Provider); ok && spec.NewResponseTransformer != nil {
-		transformer = spec.NewResponseTransformer(gw.ThoughtSigCache)
-		if transformer != nil {
-			gw.Logger.Debug("SSE transformer active", "provider", target.Provider)
+	switch target.Format {
+	case "anthropic":
+		transformer = stream.NewAnthropicTransformer()
+		gw.Logger.Debug("SSE transformer active", "provider", target.Provider, "format", target.Format)
+	case "gemini":
+		if spec, ok := providerpkg.Get(target.Provider); ok && spec.NewResponseTransformer != nil {
+			transformer = spec.NewResponseTransformer(gw.ThoughtSigCache)
+			if transformer != nil {
+				gw.Logger.Debug("SSE transformer active", "provider", target.Provider)
+			}
+		}
+	default:
+		if spec, ok := providerpkg.Get(target.Provider); ok && spec.NewResponseTransformer != nil {
+			transformer = spec.NewResponseTransformer(gw.ThoughtSigCache)
+			if transformer != nil {
+				gw.Logger.Debug("SSE transformer active", "provider", target.Provider)
+			}
 		}
 	}
 

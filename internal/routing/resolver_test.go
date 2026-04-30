@@ -120,7 +120,7 @@ func TestDetermineUpstream_NoProviders(t *testing.T) {
 func TestProviderURL_KnownProvider(t *testing.T) {
 	p := providers()
 
-	got := ProviderURL("gemini", "", p)
+	got := ProviderURL("gemini", "", "", nil, p)
 	expected := "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions"
 	if got != expected {
 		t.Fatalf("expected %q, got %q", expected, got)
@@ -130,7 +130,7 @@ func TestProviderURL_KnownProvider(t *testing.T) {
 func TestProviderURL_UnknownProvider(t *testing.T) {
 	p := providers()
 
-	got := ProviderURL("nonexistent", "", p)
+	got := ProviderURL("nonexistent", "", "", nil, p)
 	if got != "" {
 		t.Fatalf("expected empty string for unknown provider, got %q", got)
 	}
@@ -139,12 +139,12 @@ func TestProviderURL_UnknownProvider(t *testing.T) {
 func TestProviderURL_AgentURLOverride(t *testing.T) {
 	p := providers()
 
-	got := ProviderURL("gemini", "https://custom.example.com/v1/chat/completions", p)
+	got := ProviderURL("gemini", "https://custom.example.com/v1/chat/completions", "", nil, p)
 	if got != "https://custom.example.com/v1/chat/completions" {
 		t.Fatalf("expected agent URL override, got %q", got)
 	}
 
-	got = ProviderURL("nonexistent", "https://override.example.com", p)
+	got = ProviderURL("nonexistent", "https://override.example.com", "", nil, p)
 	if got != "https://override.example.com" {
 		t.Fatalf("expected agent URL override even for unknown provider, got %q", got)
 	}

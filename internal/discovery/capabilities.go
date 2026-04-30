@@ -71,3 +71,14 @@ func InferCapabilities(modelID string) *ModelMetadata {
 	)
 	return &meta
 }
+
+func InferFormat(modelID string) string {
+	switch {
+	case strings.HasPrefix(modelID, "claude-"):
+		return "anthropic"
+	case strings.HasPrefix(modelID, "gemini-"):
+		return "gemini"
+	default:
+		return ""
+	}
+}

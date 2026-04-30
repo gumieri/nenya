@@ -196,9 +196,11 @@ func buildProviderTargets(matches []routing.ProviderMatch, gw *gateway.NenyaGate
 		if !ok {
 			continue
 		}
+		url := routing.ProviderURL(m.Provider, "", m.Format, provider.FormatURLs, gw.Providers)
 		targets = append(targets, routing.UpstreamTarget{
-			URL:        provider.URL,
+			URL:        url,
 			Model:      m.Model,
+			Format:     m.Format,
 			Provider:   m.Provider,
 			MaxContext: m.MaxContext,
 			MaxOutput:  m.MaxOutput,

@@ -52,6 +52,8 @@ func mergeWithOverride(merged *ModelCatalog, modelID string, catalog *ModelCatal
 		ID: modelID,
 		Provider: firstNonEmpty(override.Provider,
 			pickProvider(hasStatic, static.Provider, hasDiscovered, discovered.Provider)),
+		Format: pickFormat(hasStatic, static.Format,
+			hasDiscovered, discovered.Format),
 		MaxContext: firstPositive(override.MaxContext,
 			pickInt(hasDiscovered, discovered.MaxContext),
 			pickInt(hasStatic, static.MaxContext)),
@@ -72,6 +74,8 @@ func mergeWithStatic(merged *ModelCatalog, modelID string, catalog *ModelCatalog
 		ID: modelID,
 		Provider: firstNonEmpty(static.Provider,
 			pickProvider(false, "", hasDiscovered, discovered.Provider)),
+		Format: pickFormat(true, static.Format,
+			hasDiscovered, discovered.Format),
 		MaxContext: firstPositive(static.MaxContext,
 			pickInt(hasDiscovered, discovered.MaxContext)),
 		MaxOutput: firstPositive(static.MaxOutput,
@@ -84,6 +88,7 @@ func mergeWithStatic(merged *ModelCatalog, modelID string, catalog *ModelCatalog
 		merged.Add(DiscoveredModel{
 			ID:         modelID,
 			Provider:   discovered.Provider,
+			Format:     discovered.Format,
 			MaxContext: firstPositive(discovered.MaxContext, static.MaxContext),
 			MaxOutput:  firstPositive(discovered.MaxOutput, static.MaxOutput),
 			OwnedBy:    firstNonEmpty(discovered.OwnedBy, "nenya"),
@@ -163,6 +168,16 @@ func firstPositive(values ...int) int {
 }
 
 func pickProvider(staticExists bool, staticVal string, discExists bool, discVal string) string {
+	if staticExists && staticVal != "" {
+		return staticVal
+	}
+	if discExists && discVal != "" {
+		return discVal
+	}
+	return ""
+}
+
+func pickFormat(staticExists bool, staticVal string, discExists bool, discVal string) string {
 	if staticExists && staticVal != "" {
 		return staticVal
 	}

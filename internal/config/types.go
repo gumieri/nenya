@@ -123,13 +123,14 @@ func (a *AgentConfig) UnmarshalJSON(data []byte) error {
 }
 
 type ProviderConfig struct {
-	URL                  string          `json:"url"`
-	AuthStyle            string          `json:"auth_style"`
-	ApiFormat            string          `json:"api_format"`
-	TimeoutSeconds       int             `json:"timeout_seconds"`
-	RetryableStatusCodes []int           `json:"retryable_status_codes"`
-	MaxRetryAttempts     int             `json:"max_retry_attempts"`
-	Thinking             *ThinkingConfig `json:"thinking,omitempty"`
+	URL                  string            `json:"url"`
+	AuthStyle            string            `json:"auth_style"`
+	ApiFormat            string            `json:"api_format"`
+	FormatURLs           map[string]string `json:"format_urls,omitempty"`
+	TimeoutSeconds       int               `json:"timeout_seconds"`
+	RetryableStatusCodes []int             `json:"retryable_status_codes"`
+	MaxRetryAttempts     int               `json:"max_retry_attempts"`
+	Thinking             *ThinkingConfig   `json:"thinking,omitempty"`
 }
 
 // ThinkingConfig controls thinking/reasoning mode activation for a provider.
@@ -148,6 +149,7 @@ type Provider struct {
 	APIKey               string
 	AuthStyle            string
 	ApiFormat            string
+	FormatURLs           map[string]string
 	TimeoutSeconds       int
 	RetryableStatusCodes []int
 	MaxRetryAttempts     int

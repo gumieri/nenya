@@ -5,10 +5,36 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"sync"
 )
 
 type AnthropicAdapter struct {
 	version string
+}
+
+var (
+	anthropicOnce    sync.Once
+	anthropicAdapter *AnthropicAdapter
+)
+
+// GetAnthropicAdapter returns a singleton AnthropicAdapter instance.
+func GetAnthropicAdapter() *AnthropicAdapter {
+	anthropicOnce.Do(func() {
+		anthropicAdapter = NewAnthropicAdapter()
+	})
+	return anthropicAdapter
+}
+
+// ConvertOpenAIToAnthropicBody converts an OpenAI-format request body
+// (as a parsed map) to the Anthropic Messages API format.
+func (a *AnthropicAdapter) ConvertOpenAIToAnthropicBody(openai map[string]interface{}, model string, stream bool) map[string]interface{} {
+	return a.convertOpenAIToAnthropic(openai, model, stream)
+}
+
+// ConvertAnthropicToOpenAIBody converts an Anthropic-format response
+// (as a parsed map) to the OpenAI chat completions format.
+func (a *AnthropicAdapter) ConvertAnthropicToOpenAIBody(anthropic map[string]interface{}) map[string]interface{} {
+	return a.convertAnthropicToOpenAI(anthropic)
 }
 
 func NewAnthropicAdapter() *AnthropicAdapter {
