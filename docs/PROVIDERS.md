@@ -31,7 +31,9 @@ Nenya supports the `format` attribute on model entries, enabling per-model wire 
 |--------|-------------|--------------|--------------|
 | `"openai"` (default) | OpenAI Chat Completions + standard SSE | Passthrough | Passthrough |
 | `"anthropic"` | Anthropic Messages API | OpenAI → Anthropic conversion | Anthropic → OpenAI conversion |
-| `"gemini"` | Gemini API | OpenAI → Gemini conversion | Gemini → OpenAI conversion |
+| `"gemini"` | Gemini API | URL routing only* | See note* |
+
+> *Gemini format conversion is handled by the existing Gemini provider adapter (`bearer+x-goog` auth style). Setting `format: "gemini"` on a model only affects URL routing (selects the Gemini endpoint from `FormatURLs["gemini"]`). Request body sanitization and SSE response transformation are performed by the Gemini provider's own `ProviderSpec` hooks, not by the format pipeline.
 
 When a model has `format: "anthropic"`:
 1. **URL routing**: The request is sent to the provider's `FormatURLs["anthropic"]` endpoint (e.g., `/v1/messages`)
