@@ -13,6 +13,7 @@ import (
 type AgentModel struct {
 	Provider             string   `json:"provider"`
 	Model                string   `json:"model"`
+	Format               string   `json:"format,omitempty"`
 	URL                  string   `json:"url"`
 	MaxContext           int      `json:"max_context"`
 	MaxOutput            int      `json:"max_output"`

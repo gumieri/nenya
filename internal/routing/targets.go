@@ -403,7 +403,11 @@ func (a *AgentState) selectStart(agent config.AgentConfig, agentName string, n i
 	return start
 }
 
-func resolveTargetFormat(model string, catalog *discovery.ModelCatalog) string {
+func resolveTargetFormat(model string, agentModel *config.AgentModel, catalog *discovery.ModelCatalog) string {
+	// Priority: agent model entry > catalog > static registry
+	if agentModel != nil && agentModel.Format != "" {
+		return agentModel.Format
+	}
 	if catalog != nil {
 		if dm, ok := catalog.Lookup(model); ok {
 			return dm.Format
@@ -449,7 +453,7 @@ func (a *AgentState) buildTarget(logger *slog.Logger, agentName string, m config
 			formatURLs = provider.FormatURLs
 		}
 	}
-	p := ProviderURL(m.Provider, m.URL, "", formatURLs, providers)
+	p := ProviderURL(m.Provider, m.URL, m.Format, formatURLs, providers)
 	if p == "" {
 		logger.Warn("unknown provider, skipping model", "provider", m.Provider, "model", m.Model)
 		return nil, false
@@ -458,7 +462,7 @@ func (a *AgentState) buildTarget(logger *slog.Logger, agentName string, m config
 	return &UpstreamTarget{
 		URL:        p,
 		Model:      m.Model,
-		Format:     resolveTargetFormat(m.Model, catalog),
+		Format:     resolveTargetFormat(m.Model, &m, catalog),
 		CoolKey:    agentName + ":" + m.Provider + ":" + m.Model,
 		Provider:   m.Provider,
 		MaxOutput:  maxOut,

@@ -311,6 +311,12 @@ For custom or local models (not in the registry), or to override registry defaul
           "model": "qwen2.5-coder:7b",
           "max_context": 32000,
           "url": "http://localhost:11434/v1/chat/completions"
+        },
+        {
+          "provider": "zen",
+          "model": "claude-opus-4-7",
+          "format": "anthropic",
+          "max_context": 200000
         }
       ]
     }
@@ -428,6 +434,7 @@ Each model entry (object form):
 |-------|------|-------------|
 | `provider` | string | Provider name (must match a key in `providers` or a built-in). If set without `model`, expands to all models from that provider. |
 | `model` | string | Model identifier sent to the upstream API. If set without `provider`, expands to all providers offering this model (deferred provider expansion). |
+| `format` | string | (optional) Override wire format for this model. `"openai"` (default), `"anthropic"` (converts to Anthropic Messages API), `"gemini"`. When set, takes precedence over catalog and static registry resolution. |
 | `provider_rgx` | string | Regex pattern to match provider names from the discovery catalog. Expands to all models from matching providers. |
 | `model_rgx` | string | Regex pattern to match model names from the discovery catalog. Expands to all models matching the pattern. |
 | `url` | string | (optional) Override provider URL for this specific model |
