@@ -464,6 +464,7 @@ Upstream LLM provider registry. Built-in providers are automatically loaded from
 | `cerebras` | `https://api.cerebras.ai/v1/chat/completions` | (none) | `bearer` |
 | `github` | `https://models.inference.ai.azure.com/chat/completions` | (none) | `bearer` |
 | `ollama` | `http://127.0.0.1:11434/v1/chat/completions` | (none) | `none` |
+| `zen` | `https://opencode.ai/zen/v1/chat/completions` | (none) | `bearer` |
 
 To add or override a provider:
 
@@ -486,6 +487,7 @@ To add or override a provider:
 |-------|------|-------------|
 | `url` | string | Upstream chat completions endpoint |
 | `auth_style` | string | `"bearer"`, `"bearer+x-goog"` (Gemini), `"anthropic"` (Anthropic), `"azure"` (Azure OpenAI), or `"none"` (Ollama) |
+| `format_urls` | map[string]string | Maps wire format to endpoint URL override. Enables per-model wire format routing (e.g., `{"anthropic": "https://opencode.ai/zen/v1/messages"}`). See Per-Model Wire Format section. |
 | `timeout_seconds` | int | Per-provider timeout in seconds. For the `ollama` provider, sets the HTTP transport's `ResponseHeaderTimeout` (time-to-first-byte). For other providers, applies as a request context timeout on `/v1/embeddings` and `/v1/responses` endpoints. Also used as a fallback for engine calls (`security_filter.engine`, `window.engine`) when the engine's own `timeout_seconds` is not explicitly set. Default: `30` (transport-level). |
 | `retryable_status_codes` | []int | Provider-level override for retryable status codes. **Replaces** both global and built-in defaults for this provider. If not set, falls back to `governance.retryable_status_codes`, then built-in defaults `[429, 500, 502, 503, 504]`. |
 
@@ -568,6 +570,37 @@ Built-in models that can be referenced by string shorthand in agent `models` arr
 | `gpt-4o` | `github` | 128000 | 0.1 |
 | `phi-3.5-mini-instruct` | `github` | 128000 | 0.0 |
 | `qwen2.5-72b-turbo` | `together` | 32768 | 0.0 |
+
+## Per-Model Wire Format (`format` attribute)
+
+Nenya supports the `format` attribute on model entries, enabling per-model wire format routing independent of the provider. This is useful for multi-format gateways like OpenCode Zen that serve models from different API families through a single provider endpoint.
+
+| Format | Description | Request Body | Response SSE |
+|--------|-------------|--------------|--------------|
+| `"openai"` (default) | OpenAI Chat Completions + standard SSE | Passthrough | Passthrough |
+| `"anthropic"` | Anthropic Messages API | OpenAI → Anthropic conversion | Anthropic → OpenAI conversion |
+| `"gemini"` | Gemini API | OpenAI → Gemini conversion | Gemini → OpenAI conversion |
+
+When a model has `format: "anthropic"`:
+1. **URL routing**: The request is sent to the provider's `FormatURLs["anthropic"]` endpoint (e.g., `/v1/messages`)
+2. **Body conversion**: The OpenAI-format request is automatically converted to Anthropic Messages API format
+3. **Response transformation**: Anthropic SSE events (`content_block_delta`, `message_delta`) are converted to OpenAI SSE format
+
+This enables providers like OpenCode Zen to serve Claude models (format: `"anthropic"`) and OpenAI-compatible models (format: `"openai"`) through a single provider entry with zero user configuration.
+
+Providers can declare multiple format endpoints via `format_urls` in their provider config:
+```json
+{
+  "providers": {
+    "zen": {
+      "url": "https://opencode.ai/zen/v1/chat/completions",
+      "format_urls": {
+        "anthropic": "https://opencode.ai/zen/v1/messages"
+      }
+    }
+  }
+}
+```
 
 Models not in this registry (e.g., local Ollama models, custom endpoints) must be specified as full objects with explicit `provider` and `model` fields.
 

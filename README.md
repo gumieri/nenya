@@ -76,11 +76,12 @@ Flow notes:
 ### Routing & Agents
 
 - **Config-driven provider registry** — add providers via JSON, zero code changes
-- **22 built-in providers** with specialized adapters for wire format differences
+- **23 built-in providers** with specialized adapters for wire format differences
 - **Dynamic model discovery** — fetches live model catalogs from providers at startup and on reload
 - **Model registry** — reference models by string shorthand with automatic provider/context resolution
 - **Multi-provider model resolution** — when a model exists in multiple providers, all are added to the agent's fallback chain
 - **Three-tier model resolution** — config overrides > discovered models > static registry
+- **Per-model wire format** — models from multi-format gateways (OpenCode Zen) auto-convert between OpenAI, Anthropic, and Gemini wire formats based on the model's `format` attribute
 - **Agent fallback chains** — round-robin or sequential with circuit breaker and automatic failover
 - **Latency-aware routing** — auto-reorder targets by historical median response time with ±5% jitter to prevent thundering herd
 - **Per-agent system prompts** — inline or file-based
@@ -135,6 +136,7 @@ Flow notes:
 
 | Provider | Auth | Notes |
 |----------|------|-------|
+| **OpenCode Zen** | `bearer` | Multi-format gateway — Claude models auto-convert to Anthropic wire format |
 | **DeepSeek** | `bearer` | Thinking mode default, reasoning_content injection, parameter stripping in thinking mode |
 | **Mistral** | `bearer` |
 | **xAI** | `bearer` |
