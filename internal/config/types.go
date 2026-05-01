@@ -2,8 +2,10 @@ package config
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"regexp"
+	"time"
 )
 
 // AgentModel defines a single model entry within an agent's model list,
@@ -212,8 +214,61 @@ func (g *GovernanceConfig) EffectiveMaxRetryAttempts() int {
 }
 
 type SecretsConfig struct {
-	ClientToken  string            `json:"client_token"`
-	ProviderKeys map[string]string `json:"provider_keys"`
+	ClientToken  string            `json:"client_token,omitempty"`
+	ProviderKeys map[string]string `json:"provider_keys,omitempty"`
+	ApiKeys      map[string]ApiKey `json:"api_keys,omitempty"`
+}
+
+// ApiKey defines a client API key with roles and agent access control.
+type ApiKey struct {
+	Name          string         `json:"name"`
+	Token         string         `json:"token"`
+	Roles         []string       `json:"roles"`
+	AllowedAgents []string       `json:"allowed_agents"`
+	CreatedAt     string         `json:"created_at,omitempty"`
+	ExpiresAt     string         `json:"expires_at,omitempty"`
+	Enabled       bool           `json:"enabled"`
+	Permissions   map[string]any `json:"permissions,omitempty"`
+}
+
+// Validate checks the ApiKey fields and returns an error if invalid.
+func (k *ApiKey) Validate() error {
+	if k.Token == "" {
+		return errors.New("token cannot be empty")
+	}
+	if len(k.Token) < 16 {
+		return errors.New("token too short (minimum 16 characters)")
+	}
+	if len(k.Roles) == 0 {
+		return errors.New("at least one role is required")
+	}
+	for _, role := range k.Roles {
+		if !isValidRole(role) {
+			return fmt.Errorf("invalid role: %q", role)
+		}
+	}
+	if k.ExpiresAt != "" {
+		if _, err := time.Parse(time.RFC3339, k.ExpiresAt); err != nil {
+			return fmt.Errorf("invalid expires_at format (use RFC3339): %w", err)
+		}
+	}
+	return nil
+}
+
+// Role constants for API key authorization.
+const (
+	RoleAdmin    = "admin"
+	RoleUser     = "user"
+	RoleReadOnly = "read-only"
+)
+
+func isValidRole(role string) bool {
+	switch role {
+	case RoleAdmin, RoleUser, RoleReadOnly:
+		return true
+	default:
+		return false
+	}
 }
 
 type EngineConfig struct {
