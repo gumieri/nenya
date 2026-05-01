@@ -84,11 +84,12 @@ func run(logger *slog.Logger, cfg *config.Config, secrets *config.SecretsConfig,
 	defer startupCancel()
 
 	gw := gateway.New(startupCtx, *cfg, secrets, logger)
-	p := &proxy.Proxy{}
-	p.StoreGateway(gw)
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
+
+	p := &proxy.Proxy{ShutdownCtx: ctx}
+	p.StoreGateway(gw)
 
 	sighup := make(chan os.Signal, 1)
 	signal.Notify(sighup, syscall.SIGHUP)
@@ -152,9 +153,11 @@ func eventLoop(logger *slog.Logger, configFile string, p *proxy.Proxy, ctx conte
 			logger.Error("server failed", "err", err)
 			os.Exit(1)
 		case <-sighup:
-			reloadCtx, reloadCancel := context.WithTimeout(context.Background(), 60*time.Second)
-			reloadConfig(reloadCtx, p, configFile, logger)
-			reloadCancel()
+			go func() {
+				reloadCtx, reloadCancel := context.WithTimeout(context.Background(), 60*time.Second)
+				defer reloadCancel()
+				reloadConfig(reloadCtx, p, configFile, logger)
+			}()
 		case <-ctx.Done():
 			logger.Info("shutting down gracefully...")
 

@@ -223,7 +223,8 @@ func (p *Proxy) resolveCache(w http.ResponseWriter, r *http.Request, gw *gateway
 		return "", nil
 	}
 
-	cacheKey := infra.FingerprintPayload(req.Payload)
+	authToken := strings.TrimSpace(strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer "))
+	cacheKey := infra.FingerprintPayloadWithAuth(req.Payload, authToken)
 	if r.Header.Get(gw.Config.ResponseCache.ForceRefreshHeader) == "" {
 		if data, ok := gw.ResponseCache.Lookup(cacheKey); ok {
 			p.replayCachedSSE(gw, w, r, data)
@@ -958,7 +959,7 @@ func (p *Proxy) buildResponsesContext(r *http.Request, provider *config.Provider
 }
 
 func (p *Proxy) getDefaultResponseProvider(gw *gateway.NenyaGateway) *config.Provider {
-	preferred := []string{"test-provider", "deepseek", "openai", "anthropic", "openrouter"}
+	preferred := []string{"deepseek", "openai", "anthropic", "openrouter"}
 	for _, name := range preferred {
 		if pr, ok := gw.Providers[name]; ok && pr.APIKey != "" {
 			return pr
@@ -1390,8 +1391,7 @@ func (p *Proxy) mcpIteration(in mcpIterInput) int {
 		return mcpIterStop
 	}
 
-	if in.iteration > 0 {
-	} else {
+	if in.iteration == 0 {
 		working = in.opts.Payload
 	}
 
@@ -1532,7 +1532,7 @@ func (p *Proxy) handleBufferedAction(ctx context.Context, gw *gateway.NenyaGatew
 			"status", action.resp.StatusCode,
 			"model", target.Model,
 			"body_len", len(action.body))
-		shouldRetry, retryDelay := p.handleUpstreamError(nil, idx, targets, target, cooldownDuration, agentName, action)
+		shouldRetry, retryDelay := p.handleUpstreamError(gw, idx, targets, target, cooldownDuration, agentName, action)
 		action.cancel()
 		if shouldRetry {
 			if maxRetries > 0 && attempt >= maxRetries {
@@ -1576,11 +1576,44 @@ func (p *Proxy) handleBufferedStream(ctx context.Context, action upstreamAction,
 }
 
 func (p *Proxy) recordMCPUsage(gw *gateway.NenyaGateway, buf *bufferedSSE, agentName string) {
-	// Usage is tracked by the upstream forwarding, but for MCP loop
-	// iterations, we should record the token usage from the final response
-	// via the existing stream metrics if available
-	_ = buf
-	_ = agentName
+	if buf == nil || gw == nil || agentName == "" {
+		return
+	}
+	var lastData map[string]interface{}
+	for _, line := range strings.Split(string(buf.rawBytes), "\n") {
+		line = strings.TrimPrefix(line, "data: ")
+		line = strings.TrimSpace(line)
+		if line == "" || line == "[DONE]" {
+			continue
+		}
+		var chunk map[string]interface{}
+		if err := json.Unmarshal([]byte(line), &chunk); err != nil {
+			continue
+		}
+		if _, hasUsage := chunk["usage"]; hasUsage {
+			lastData = chunk
+		}
+	}
+	if lastData == nil {
+		return
+	}
+	usage, ok := lastData["usage"].(map[string]interface{})
+	if !ok {
+		return
+	}
+	model := buf.model
+	if model == "" {
+		if m, ok := lastData["model"].(string); ok {
+			model = m
+		}
+	}
+	if model == "" {
+		return
+	}
+	gw.Logger.Debug("MCP loop usage recorded",
+		"agent", agentName, "model", model,
+		"usage", usage)
+	recordChatUsage(gw, model, usage)
 }
 
 // applyRedactToContent runs redactFn against every text surface of msgNode's
@@ -1684,9 +1717,6 @@ func (p *Proxy) handleNonStreamingResponse(gw *gateway.NenyaGateway, w http.Resp
 		return streamResult{empty: true}
 	}
 
-	routing.CopyHeaders(action.resp.Header, w.Header())
-	w.WriteHeader(action.resp.StatusCode)
-
 	var responseMap map[string]interface{}
 	if err := json.Unmarshal(respBody, &responseMap); err != nil {
 		gw.Logger.Error("failed to parse non-streaming JSON response", "err", err, "body", string(respBody))
@@ -1698,6 +1728,8 @@ func (p *Proxy) handleNonStreamingResponse(gw *gateway.NenyaGateway, w http.Resp
 		recordChatUsage(gw, target.Model, usage)
 	}
 
+	routing.CopyHeaders(action.resp.Header, w.Header())
+	w.WriteHeader(action.resp.StatusCode)
 	_ = json.NewEncoder(w).Encode(responseMap)
 	return streamResult{}
 }

@@ -32,6 +32,10 @@ func InjectAPIKey(providerName string, providers map[string]*config.Provider, he
 		return fmt.Errorf("unknown provider: %s", providerName)
 	}
 
+	if p.AuthStyle != "none" && p.APIKey == "" {
+		return fmt.Errorf("provider %s has no API key configured", providerName)
+	}
+
 	a := adapter.ForProviderWithAuth(providerName, p.AuthStyle)
 	req := &http.Request{Header: headers}
 	return a.InjectAuth(req, p.APIKey)

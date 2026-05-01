@@ -38,6 +38,34 @@ type DiscoveryConfig struct {
 	Enabled          bool              `json:"enabled"`
 	AutoAgents       bool              `json:"auto_agents"`
 	AutoAgentsConfig *AutoAgentsConfig `json:"auto_agents_config,omitempty"`
+	enabledSet       bool              `json:"-"`
+	autoAgentsSet    bool              `json:"-"`
+}
+
+func (d *DiscoveryConfig) EnabledWasSet() bool    { return d.enabledSet }
+func (d *DiscoveryConfig) AutoAgentsWasSet() bool { return d.autoAgentsSet }
+
+func (d *DiscoveryConfig) UnmarshalJSON(data []byte) error {
+	type alias DiscoveryConfig
+	aux := struct {
+		Enabled    *bool `json:"enabled"`
+		AutoAgents *bool `json:"auto_agents"`
+		*alias
+	}{
+		alias: (*alias)(d),
+	}
+	if err := json.Unmarshal(data, &aux); err != nil {
+		return err
+	}
+	if aux.Enabled != nil {
+		d.Enabled = *aux.Enabled
+		d.enabledSet = true
+	}
+	if aux.AutoAgents != nil {
+		d.AutoAgents = *aux.AutoAgents
+		d.autoAgentsSet = true
+	}
+	return nil
 }
 
 type AutoAgentCategoryConfig struct {

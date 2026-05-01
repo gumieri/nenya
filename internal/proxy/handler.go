@@ -2,7 +2,7 @@ package proxy
 
 import (
 	"context"
-	"crypto/subtle"
+	"crypto/hmac"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -22,7 +22,8 @@ const MaxModelNameLength = 256
 
 // Proxy handles HTTP requests and routes them to upstream AI providers.
 type Proxy struct {
-	gw atomic.Pointer[gateway.NenyaGateway]
+	gw          atomic.Pointer[gateway.NenyaGateway]
+	ShutdownCtx context.Context
 }
 
 // StoreGateway sets the gateway instance for the proxy.
@@ -222,15 +223,53 @@ func (p *Proxy) authenticateRequest(r *http.Request, w http.ResponseWriter) bool
 		return false
 	}
 	clientToken := strings.TrimSpace(strings.TrimPrefix(authHeader, "Bearer "))
-	if subtle.ConstantTimeCompare([]byte(clientToken), []byte(gw.Secrets.ClientToken)) != 1 {
-		gw.Logger.Warn("invalid client token",
-			"correlation_id", correlationID,
-			"remote_addr", r.RemoteAddr,
-			"user_agent", r.Header.Get("User-Agent"))
-		http.Error(w, "Forbidden", http.StatusForbidden)
+
+	// Check the primary ClientToken first.
+	if gw.Secrets.ClientToken != "" {
+		var tokenOK bool
+		if gw.SecureMem != nil {
+			tokenOK = gw.SecureMem.CompareToken(gw.ClientTokenRef, clientToken)
+		} else {
+			tokenOK = hmac.Equal([]byte(clientToken), []byte(gw.Secrets.ClientToken))
+		}
+		if tokenOK {
+			return true
+		}
+	}
+
+	// Fall through to per-key RBAC check.
+	if checkApiKeys(gw, clientToken) {
+		return true
+	}
+
+	gw.Logger.Warn("invalid or expired client token",
+		"correlation_id", correlationID,
+		"remote_addr", r.RemoteAddr,
+		"user_agent", r.Header.Get("User-Agent"))
+	http.Error(w, "Forbidden", http.StatusForbidden)
+	return false
+}
+
+// checkApiKeys checks whether clientToken matches any enabled, non-expired API key.
+// AllowedAgents enforcement requires the agent name from the request path and is done downstream.
+func checkApiKeys(gw *gateway.NenyaGateway, clientToken string) bool {
+	if gw.Secrets == nil {
 		return false
 	}
-	return true
+	for _, key := range gw.Secrets.ApiKeys {
+		if !key.Enabled {
+			continue
+		}
+		if key.ExpiresAt != "" {
+			if t, err := time.Parse(time.RFC3339, key.ExpiresAt); err == nil && time.Now().After(t) {
+				continue
+			}
+		}
+		if hmac.Equal([]byte(clientToken), []byte(key.Token)) {
+			return true
+		}
+	}
+	return false
 }
 
 // handleMetrics serves the Prometheus-compatible metrics endpoint.

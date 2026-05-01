@@ -96,6 +96,19 @@ func extractEngineOutput(response map[string]interface{}, apiFormat string) (str
 	}
 }
 
+func extractTextFromParts(parts []interface{}) (string, bool) {
+	for _, part := range parts {
+		p, ok := part.(map[string]interface{})
+		if !ok || p["type"] != "text" {
+			continue
+		}
+		if text, ok := p["text"].(string); ok {
+			return text, true
+		}
+	}
+	return "", false
+}
+
 func extractOllamaOutput(response map[string]interface{}) (string, error) {
 	output, ok := response["response"].(string)
 	if !ok {
@@ -120,12 +133,19 @@ func extractOpenAIOutput(response map[string]interface{}) (string, error) {
 		return "", fmt.Errorf("openai choice missing message")
 	}
 
-	content, ok := msg["content"].(string)
-	if !ok {
-		return "", fmt.Errorf("openai message missing content")
+	// Handle string content (standard OpenAI format).
+	if content, ok := msg["content"].(string); ok {
+		return content, nil
 	}
 
-	return content, nil
+	// Handle array content (Anthropic-style or multimodal).
+	if parts, ok := msg["content"].([]interface{}); ok {
+		if text, found := extractTextFromParts(parts); found {
+			return text, nil
+		}
+	}
+
+	return "", fmt.Errorf("openai message missing content")
 }
 
 func CallEngineChain(ctx context.Context, httpClient, ollamaClient *http.Client,

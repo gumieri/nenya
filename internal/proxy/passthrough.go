@@ -63,7 +63,7 @@ func (p *Proxy) handlePassthrough(gw *gateway.NenyaGateway, w http.ResponseWrite
 		return
 	}
 
-	bodyBytes, err := readPassthroughBody(gw, r)
+	bodyBytes, err := readPassthroughBody(gw, w, r)
 	if err != nil {
 		gw.Logger.Error("passthrough: failed to read request body", "provider", providerName, "err", err)
 		http.Error(w, "Payload too large or malformed", http.StatusRequestEntityTooLarge)
@@ -117,11 +117,11 @@ func (p *Proxy) handlePassthrough(gw *gateway.NenyaGateway, w http.ResponseWrite
 	}
 }
 
-func readPassthroughBody(gw *gateway.NenyaGateway, r *http.Request) ([]byte, error) {
+func readPassthroughBody(gw *gateway.NenyaGateway, w http.ResponseWriter, r *http.Request) ([]byte, error) {
 	if r.Method != http.MethodPost && r.Method != http.MethodPut && r.Method != http.MethodPatch {
 		return nil, nil
 	}
-	r.Body = http.MaxBytesReader(nil, r.Body, gw.Config.Server.MaxBodyBytes)
+	r.Body = http.MaxBytesReader(w, r.Body, gw.Config.Server.MaxBodyBytes)
 	defer func() { _ = r.Body.Close() }()
 	return io.ReadAll(r.Body)
 }

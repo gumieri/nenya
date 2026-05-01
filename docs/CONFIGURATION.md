@@ -20,6 +20,7 @@ When a **file** is specified, only that file is loaded (single-file mode, unchan
 | Window | `window` | Sliding window conversation compaction with configurable engine |
 | Response Cache | `response_cache` | In-memory LRU cache for deterministic response caching |
 | Agents | `agents` | Named agent definitions with fallback chains, circuit breaker, optional system prompts, optional memory integration, and optional MCP server integration |
+| Discovery | `discovery` | Model catalog fetching from upstream providers; auto-agent generation from discovered models |
 | Providers | `providers` | Upstream provider registry |
 
 ## Multi-File Configuration (Directory Mode)
@@ -419,6 +420,7 @@ Static fields always win over regex when both are present on the same key. When 
 | `strategy` | string | `"round-robin"` | `"round-robin"` or `"fallback"` |
 | `cooldown_seconds` | int | `60` | Seconds to skip a model after a retryable error |
 | `failure_threshold` | int | `5` | Circuit breaker: consecutive failures before tripping to Open state |
+| `failure_window_secs` | int | `0` (disabled) | Circuit breaker: time window in seconds over which failures are counted. 0 = no window (all-time count) |
 | `success_threshold` | int | `1` | Circuit breaker: consecutive successes in HalfOpen to recover to Closed state |
 | `max_retries` | int | `0` | Cap on retry attempts per request (0 = unlimited) |
 | `system_prompt` | string | `""` | Inline system prompt injected as the first message (only if no existing system message, unless `force_system_prompt` is true). |

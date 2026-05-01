@@ -18,6 +18,7 @@ import (
 	"nenya/internal/mcp"
 	"nenya/internal/pipeline"
 	"nenya/internal/routing"
+	"nenya/internal/security"
 	"nenya/internal/tiktoken"
 )
 
@@ -46,6 +47,8 @@ type NenyaGateway struct {
 	HealthRegistry  *discovery.HealthRegistry
 	LatencyTracker  *infra.LatencyTracker
 	CostTracker     *infra.CostTracker
+	SecureMem       *security.SecureMem
+	ClientTokenRef  security.SecureToken
 }
 
 // New creates a new NenyaGateway with the given configuration, secrets,
@@ -56,7 +59,7 @@ func New(ctx context.Context, cfg config.Config, secrets *config.SecretsConfig, 
 	secureClient, ollamaClient := createHTTPClients(cfg)
 	providers := config.ResolveProviders(&cfg, secrets)
 
-	mergedCatalog, healthRegistry := performModelDiscovery(ctx, cfg, providers, logger)
+	mergedCatalog, healthRegistry := performModelDiscovery(ctx, &cfg, providers, logger)
 
 	secretPatterns, blockedPatterns := compilePatterns(cfg, logger)
 	entropyFilter := createEntropyFilter(cfg, logger)
@@ -132,18 +135,18 @@ func createHTTPClients(cfg config.Config) (*http.Client, *http.Client) {
 	return secureClient, ollamaClient
 }
 
-func performModelDiscovery(ctx context.Context, cfg config.Config, providers map[string]*config.Provider, logger *slog.Logger) (*discovery.ModelCatalog, *discovery.HealthRegistry) {
+func performModelDiscovery(ctx context.Context, cfg *config.Config, providers map[string]*config.Provider, logger *slog.Logger) (*discovery.ModelCatalog, *discovery.HealthRegistry) {
 	var mergedCatalog *discovery.ModelCatalog
 	var healthRegistry *discovery.HealthRegistry
 
 	if !cfg.Discovery.Enabled {
-		mergedCatalog = discovery.MergeCatalog(discovery.NewModelCatalog(), &cfg)
+		mergedCatalog = discovery.MergeCatalog(discovery.NewModelCatalog(), cfg)
 		return mergedCatalog, nil
 	}
 
 	fetcher := discovery.NewDiscoveryFetcher(cfg.Governance.EffectiveMaxRetryAttempts())
 	catalog := fetcher.FetchAll(ctx, providers, logger)
-	mergedCatalog = discovery.MergeCatalog(catalog, &cfg)
+	mergedCatalog = discovery.MergeCatalog(catalog, cfg)
 
 	if _, hasOR := providers["openrouter"]; hasOR {
 		fetchOpenRouterPricing(ctx, providers, mergedCatalog, logger)
@@ -171,7 +174,7 @@ func fetchOpenRouterPricing(ctx context.Context, providers map[string]*config.Pr
 	}
 }
 
-func generateAutoAgents(cfg config.Config, catalog *discovery.ModelCatalog, providers map[string]*config.Provider, logger *slog.Logger) {
+func generateAutoAgents(cfg *config.Config, catalog *discovery.ModelCatalog, providers map[string]*config.Provider, logger *slog.Logger) {
 	logger.Debug("auto-agents check", "discovery_enabled", cfg.Discovery.Enabled, "auto_agents", cfg.Discovery.AutoAgents)
 	if !cfg.Discovery.AutoAgents {
 		return
@@ -184,6 +187,10 @@ func generateAutoAgents(cfg config.Config, catalog *discovery.ModelCatalog, prov
 	}
 }
 
+// compilePatterns compiles security filter and blocked execution regexps.
+// Pattern order matters: patterns are applied in config order, and the first
+// matching pattern wins for redaction label assignment. Place more specific
+// patterns before more general ones to ensure correct label attribution.
 func compilePatterns(cfg config.Config, logger *slog.Logger) ([]*regexp.Regexp, []*regexp.Regexp) {
 	var secretPatterns []*regexp.Regexp
 	if cfg.SecurityFilter.Enabled && len(cfg.SecurityFilter.Patterns) > 0 {
@@ -227,7 +234,7 @@ func createEntropyFilter(cfg config.Config, logger *slog.Logger) *pipeline.Entro
 }
 
 func buildGateway(cfg config.Config, secrets *config.SecretsConfig, secureClient *http.Client, ollamaClient *http.Client, providers map[string]*config.Provider, secretPatterns []*regexp.Regexp, blockedPatterns []*regexp.Regexp, entropyFilter *pipeline.EntropyFilter, mergedCatalog *discovery.ModelCatalog, healthRegistry *discovery.HealthRegistry, logger *slog.Logger) *NenyaGateway {
-	return &NenyaGateway{
+	gw := &NenyaGateway{
 		Config:          cfg,
 		Client:          secureClient,
 		OllamaClient:    ollamaClient,
@@ -250,6 +257,28 @@ func buildGateway(cfg config.Config, secrets *config.SecretsConfig, secureClient
 		LatencyTracker:  infra.NewLatencyTracker(),
 		CostTracker:     infra.NewCostTracker(),
 	}
+	gw.SecureMem, gw.ClientTokenRef = initSecureMem(secrets, logger)
+	return gw
+}
+
+func initSecureMem(secrets *config.SecretsConfig, logger *slog.Logger) (*security.SecureMem, security.SecureToken) {
+	if secrets == nil || secrets.ClientToken == "" {
+		return nil, security.SecureToken{}
+	}
+	numKeys := 1 + len(secrets.ApiKeys)
+	numProviderKeys := len(secrets.ProviderKeys)
+	sm, err := security.NewSecureMem(security.TokenSizeHint(numKeys, numProviderKeys))
+	if err != nil {
+		logger.Warn("secure memory unavailable, falling back to heap storage", "err", err)
+		return nil, security.SecureToken{}
+	}
+	ref, err := sm.StoreToken(secrets.ClientToken)
+	if err != nil {
+		logger.Warn("failed to store client token in secure memory", "err", err)
+		sm.Destroy()
+		return nil, security.SecureToken{}
+	}
+	return sm, ref
 }
 
 func debugLogAgentModels(ctx context.Context, logger *slog.Logger, cfg config.Config, mergedCatalog *discovery.ModelCatalog, providers map[string]*config.Provider) {
@@ -337,13 +366,6 @@ func lookupStringModelInCatalog(m config.AgentModel, catalog *discovery.ModelCat
 		return nil
 	}
 	return modelEntries
-}
-
-func (g *NenyaGateway) InitMetrics() {
-	g.Metrics = infra.NewMetrics()
-	g.Metrics.RateLimits = g.RateLimiter.Snapshot
-	g.Metrics.Cooldowns = g.AgentState.ActiveCooldowns
-	g.Metrics.CBStates = g.AgentState.CBSnapshot
 }
 
 // CountTokens estimates the number of tokens in the given text using the
@@ -454,6 +476,9 @@ func (g *NenyaGateway) Close() {
 	for name, client := range g.MCPClients {
 		_ = client.Close()
 		g.Logger.Debug("MCP client closed", "server", name)
+	}
+	if g.SecureMem != nil {
+		g.SecureMem.Destroy()
 	}
 }
 

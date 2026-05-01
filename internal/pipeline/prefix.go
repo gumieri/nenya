@@ -79,9 +79,12 @@ func StabilizeTools(payload map[string]interface{}) bool {
 		return false
 	}
 
-	sort.Slice(tools, func(i, j int) bool {
-		return ToolSortKey(tools[i]) < ToolSortKey(tools[j])
+	sorted := make([]interface{}, len(tools))
+	copy(sorted, tools)
+	sort.Slice(sorted, func(i, j int) bool {
+		return ToolSortKey(sorted[i]) < ToolSortKey(sorted[j])
 	})
+	payload["tools"] = sorted
 
 	return true
 }

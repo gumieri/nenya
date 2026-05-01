@@ -116,29 +116,68 @@ func mergeServerConfig(base, overlay *Config) {
 }
 
 func mergeGovernanceConfig(base, overlay *Config) {
-	if overlay.Governance.TruncationStrategy != "" {
-		base.Governance.TruncationStrategy = overlay.Governance.TruncationStrategy
+	mergeGovernanceScalars(base, overlay)
+	mergeGovernanceBools(base, overlay)
+}
+
+func mergeGovernanceScalars(base, overlay *Config) {
+	og := &overlay.Governance
+	bg := &base.Governance
+	if og.TruncationStrategy != "" {
+		bg.TruncationStrategy = og.TruncationStrategy
 	}
-	if overlay.Governance.KeepFirstPercent != 0 {
-		base.Governance.KeepFirstPercent = overlay.Governance.KeepFirstPercent
+	if og.KeepFirstPercent != 0 {
+		bg.KeepFirstPercent = og.KeepFirstPercent
 	}
-	if overlay.Governance.KeepLastPercent != 0 {
-		base.Governance.KeepLastPercent = overlay.Governance.KeepLastPercent
+	if og.KeepLastPercent != 0 {
+		bg.KeepLastPercent = og.KeepLastPercent
 	}
-	if overlay.Governance.TFIDFQuerySource != "" {
-		base.Governance.TFIDFQuerySource = overlay.Governance.TFIDFQuerySource
+	if og.TFIDFQuerySource != "" {
+		bg.TFIDFQuerySource = og.TFIDFQuerySource
 	}
-	if len(overlay.Governance.BlockedExecutionPatterns) > 0 {
-		base.Governance.BlockedExecutionPatterns = overlay.Governance.BlockedExecutionPatterns
+	if len(og.BlockedExecutionPatterns) > 0 {
+		bg.BlockedExecutionPatterns = og.BlockedExecutionPatterns
 	}
-	if len(overlay.Governance.RetryableStatusCodes) > 0 {
-		base.Governance.RetryableStatusCodes = overlay.Governance.RetryableStatusCodes
+	if len(og.RetryableStatusCodes) > 0 {
+		bg.RetryableStatusCodes = og.RetryableStatusCodes
 	}
-	if overlay.Governance.RPMSet() {
-		base.Governance.RatelimitMaxRPM = overlay.Governance.RatelimitMaxRPM
+	if og.RPMSet() {
+		bg.RatelimitMaxRPM = og.RatelimitMaxRPM
 	}
-	if overlay.Governance.TPMSet() {
-		base.Governance.RatelimitMaxTPM = overlay.Governance.RatelimitMaxTPM
+	if og.TPMSet() {
+		bg.RatelimitMaxTPM = og.RatelimitMaxTPM
+	}
+	if og.MaxRetryAttempts != 0 {
+		bg.MaxRetryAttempts = og.MaxRetryAttempts
+	}
+	if og.RoutingStrategy != "" {
+		bg.RoutingStrategy = og.RoutingStrategy
+	}
+	if og.RoutingLatencyWeight != 0 {
+		bg.RoutingLatencyWeight = og.RoutingLatencyWeight
+	}
+	if og.RoutingCostWeight != 0 {
+		bg.RoutingCostWeight = og.RoutingCostWeight
+	}
+	if og.MaxCostPerRequest != 0 {
+		bg.MaxCostPerRequest = og.MaxCostPerRequest
+	}
+}
+
+func mergeGovernanceBools(base, overlay *Config) {
+	og := &overlay.Governance
+	bg := &base.Governance
+	if og.EmptyStreamAsErrorSet() {
+		bg.EmptyStreamAsError = og.EmptyStreamAsError
+		bg.emptyStreamAsErrorSet = true
+	}
+	if og.AutoContextSkipSet() {
+		bg.AutoContextSkip = og.AutoContextSkip
+		bg.autoContextSkipSet = true
+	}
+	if og.AutoReorderByLatencySet() {
+		bg.AutoReorderByLatency = og.AutoReorderByLatency
+		bg.autoReorderByLatencySet = true
 	}
 }
 
@@ -164,6 +203,15 @@ func mergeSecurityFilterConfig(base, overlay *Config) {
 	}
 	if overlay.SecurityFilter.Engine.AgentName != "" || overlay.SecurityFilter.Engine.Provider != "" {
 		base.SecurityFilter.Engine = overlay.SecurityFilter.Engine
+	}
+	if overlay.SecurityFilter.EntropyEnabled {
+		base.SecurityFilter.EntropyEnabled = true
+	}
+	if overlay.SecurityFilter.EntropyThreshold != 0 {
+		base.SecurityFilter.EntropyThreshold = overlay.SecurityFilter.EntropyThreshold
+	}
+	if overlay.SecurityFilter.EntropyMinToken != 0 {
+		base.SecurityFilter.EntropyMinToken = overlay.SecurityFilter.EntropyMinToken
 	}
 }
 
@@ -263,10 +311,10 @@ func mergeResponseCacheConfig(base, overlay *Config) {
 }
 
 func mergeDiscoveryConfig(base, overlay *Config) {
-	if overlay.Discovery.Enabled {
+	if overlay.Discovery.EnabledWasSet() {
 		base.Discovery.Enabled = overlay.Discovery.Enabled
 	}
-	if overlay.Discovery.AutoAgents {
+	if overlay.Discovery.AutoAgentsWasSet() {
 		base.Discovery.AutoAgents = overlay.Discovery.AutoAgents
 	}
 	if overlay.Discovery.AutoAgentsConfig != nil {
@@ -355,6 +403,11 @@ func LoadPromptFile(filePath string, directPrompt string, defaultPrompt string) 
 }
 
 func validatePromptPath(filePath string) error {
+	cleaned := filepath.Clean(filePath)
+	if strings.HasPrefix(cleaned, ".."+string(filepath.Separator)) || cleaned == ".." {
+		return fmt.Errorf("prompt file path escapes working directory: %s", filePath)
+	}
+
 	absPath, err := filepath.Abs(filePath)
 	if err != nil {
 		return nil
@@ -375,7 +428,7 @@ func validatePromptPath(filePath string) error {
 		return nil
 	}
 
-	if strings.Contains(relPath, "..") {
+	if strings.HasPrefix(relPath, ".."+string(filepath.Separator)) || relPath == ".." {
 		return fmt.Errorf("prompt file path escapes config directory: %s", filePath)
 	}
 
@@ -564,12 +617,9 @@ func mergeSecrets(a, b *SecretsConfig) *SecretsConfig {
 }
 
 func validateSecretsPath(path string) error {
-	absPath, err := filepath.Abs(path)
+	_, err := filepath.Abs(path)
 	if err != nil {
 		return fmt.Errorf("invalid secrets path: %w", err)
-	}
-	if strings.Contains(absPath, "..") {
-		return errors.New("path traversal not allowed in secrets path")
 	}
 	return nil
 }
