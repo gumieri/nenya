@@ -6,7 +6,6 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
-	"unicode/utf8"
 
 	"nenya/internal/config"
 	"nenya/internal/util"
@@ -182,8 +181,15 @@ func generateEngineSummary(ctx context.Context, deps WindowDeps, windowCfg confi
 }
 
 func trimSummaryToMaxRunes(summary string, maxRunes int) string {
-	if maxRunes > 0 && utf8.RuneCountInString(summary) > maxRunes {
-		summary = string([]rune(summary)[:maxRunes])
+	if maxRunes <= 0 {
+		return summary
+	}
+	i := 0
+	for pos := range summary {
+		if i == maxRunes {
+			return summary[:pos]
+		}
+		i++
 	}
 	return summary
 }

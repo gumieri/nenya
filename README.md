@@ -76,7 +76,7 @@ Flow notes:
 ### Routing & Agents
 
 - **Config-driven provider registry** — add providers via JSON, zero code changes
-- **23 built-in providers** with specialized adapters for wire format differences
+- **22 built-in providers** with specialized adapters for wire format differences
 - **Dynamic model discovery** — fetches live model catalogs from providers at startup and on reload
 - **Model registry** — reference models by string shorthand with automatic provider/context resolution
 - **Multi-provider model resolution** — when a model exists in multiple providers, all are added to the agent's fallback chain

@@ -39,7 +39,7 @@ const (
 type AgentState struct {
 	Counters        map[string]uint64
 	CB              *resilience.CircuitBreaker
-	Mu              sync.Mutex
+	mu              sync.Mutex
 	selectorCache   map[string]selectorCacheEntry
 	selectorCacheMu sync.RWMutex
 }
@@ -391,8 +391,8 @@ func expandDynamicModels(models []config.AgentModel, catalog *discovery.ModelCat
 }
 
 func (a *AgentState) selectStart(agent config.AgentConfig, agentName string, n int) int {
-	a.Mu.Lock()
-	defer a.Mu.Unlock()
+	a.mu.Lock()
+	defer a.mu.Unlock()
 
 	if agent.Strategy == "fallback" {
 		return 0

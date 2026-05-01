@@ -200,11 +200,15 @@ type GovernanceConfig struct {
 	rpmSet                   bool     `json:"-"`
 	tpmSet                   bool     `json:"-"`
 	emptyStreamAsErrorSet    bool     `json:"-"`
+	autoContextSkipSet       bool     `json:"-"`
+	autoReorderByLatencySet  bool     `json:"-"`
 }
 
-func (g *GovernanceConfig) RPMSet() bool                { return g.rpmSet }
-func (g *GovernanceConfig) TPMSet() bool                { return g.tpmSet }
-func (g *GovernanceConfig) EmptyStreamAsErrorSet() bool { return g.emptyStreamAsErrorSet }
+func (g *GovernanceConfig) RPMSet() bool                  { return g.rpmSet }
+func (g *GovernanceConfig) TPMSet() bool                  { return g.tpmSet }
+func (g *GovernanceConfig) EmptyStreamAsErrorSet() bool   { return g.emptyStreamAsErrorSet }
+func (g *GovernanceConfig) AutoContextSkipSet() bool      { return g.autoContextSkipSet }
+func (g *GovernanceConfig) AutoReorderByLatencySet() bool { return g.autoReorderByLatencySet }
 
 func (g *GovernanceConfig) EffectiveMaxRetryAttempts() int {
 	if g.MaxRetryAttempts > 0 {
@@ -349,9 +353,11 @@ func (s *SecurityFilterConfig) UnmarshalJSON(data []byte) error {
 func (g *GovernanceConfig) UnmarshalJSON(data []byte) error {
 	type alias GovernanceConfig
 	aux := struct {
-		RatelimitMaxRPM    *int  `json:"ratelimit_max_rpm"`
-		RatelimitMaxTPM    *int  `json:"ratelimit_max_tpm"`
-		EmptyStreamAsError *bool `json:"empty_stream_as_error"`
+		RatelimitMaxRPM      *int  `json:"ratelimit_max_rpm"`
+		RatelimitMaxTPM      *int  `json:"ratelimit_max_tpm"`
+		EmptyStreamAsError   *bool `json:"empty_stream_as_error"`
+		AutoContextSkip      *bool `json:"auto_context_skip"`
+		AutoReorderByLatency *bool `json:"auto_reorder_by_latency"`
 		*alias
 	}{
 		alias: (*alias)(g),
@@ -359,23 +365,25 @@ func (g *GovernanceConfig) UnmarshalJSON(data []byte) error {
 	if err := json.Unmarshal(data, &aux); err != nil {
 		return err
 	}
-	if aux.RatelimitMaxRPM == nil {
-		g.rpmSet = false
-	} else {
+	if aux.RatelimitMaxRPM != nil {
 		g.rpmSet = true
 		g.RatelimitMaxRPM = *aux.RatelimitMaxRPM
 	}
-	if aux.RatelimitMaxTPM == nil {
-		g.tpmSet = false
-	} else {
+	if aux.RatelimitMaxTPM != nil {
 		g.tpmSet = true
 		g.RatelimitMaxTPM = *aux.RatelimitMaxTPM
 	}
-	if aux.EmptyStreamAsError == nil {
-		g.emptyStreamAsErrorSet = false
-	} else {
+	if aux.EmptyStreamAsError != nil {
 		g.emptyStreamAsErrorSet = true
 		g.EmptyStreamAsError = *aux.EmptyStreamAsError
+	}
+	if aux.AutoContextSkip != nil {
+		g.autoContextSkipSet = true
+		g.AutoContextSkip = *aux.AutoContextSkip
+	}
+	if aux.AutoReorderByLatency != nil {
+		g.autoReorderByLatencySet = true
+		g.AutoReorderByLatency = *aux.AutoReorderByLatency
 	}
 	return nil
 }

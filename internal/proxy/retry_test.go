@@ -169,97 +169,97 @@ func TestParseQuotaExhaustion_EmptyBody(t *testing.T) {
 }
 
 func TestIsRetryableClientError_UnavailableModel(t *testing.T) {
-	if !isRetryableClientError(http.StatusBadRequest, []byte(`{"error":"unavailable_model"}`)) {
+	if !isRetryableClientErrorForProvider(http.StatusBadRequest, []byte(`{"error":"unavailable_model"}`), "") {
 		t.Fatal("expected true")
 	}
 }
 
 func TestIsRetryableClientError_TokensLimitReached(t *testing.T) {
-	if !isRetryableClientError(http.StatusBadRequest, []byte(`{"error":"tokens_limit_reached"}`)) {
+	if !isRetryableClientErrorForProvider(http.StatusBadRequest, []byte(`{"error":"tokens_limit_reached"}`), "") {
 		t.Fatal("expected true")
 	}
 }
 
 func TestIsRetryableClientError_ContextLengthExceeded(t *testing.T) {
-	if !isRetryableClientError(http.StatusBadRequest, []byte(`{"error":"context_length_exceeded"}`)) {
+	if !isRetryableClientErrorForProvider(http.StatusBadRequest, []byte(`{"error":"context_length_exceeded"}`), "") {
 		t.Fatal("expected true")
 	}
 }
 
 func TestIsRetryableClientError_ThoughtSignature(t *testing.T) {
-	if !isRetryableClientError(http.StatusBadRequest, []byte(`{"error":"thought_signature"}`)) {
+	if !isRetryableClientErrorForProvider(http.StatusBadRequest, []byte(`{"error":"thought_signature"}`), "") {
 		t.Fatal("expected true")
 	}
 }
 
 func TestIsRetryableClientError_UnknownPattern(t *testing.T) {
-	if isRetryableClientError(http.StatusBadRequest, []byte(`{"error":"something_else"}`)) {
+	if isRetryableClientErrorForProvider(http.StatusBadRequest, []byte(`{"error":"something_else"}`), "") {
 		t.Fatal("expected false")
 	}
 }
 
 func TestIsRetryableClientError_413WithContextLength(t *testing.T) {
-	if !isRetryableClientError(http.StatusRequestEntityTooLarge, []byte(`{"error":"context_length_exceeded"}`)) {
+	if !isRetryableClientErrorForProvider(http.StatusRequestEntityTooLarge, []byte(`{"error":"context_length_exceeded"}`), "") {
 		t.Fatal("expected true")
 	}
 }
 
 func TestIsRetryableClientError_UnknownModel(t *testing.T) {
-	if !isRetryableClientError(http.StatusBadRequest, []byte(`{"error":{"code":"unknown_model","message":"Unknown model: foo"}}`)) {
+	if !isRetryableClientErrorForProvider(http.StatusBadRequest, []byte(`{"error":{"code":"unknown_model","message":"Unknown model: foo"}}`), "") {
 		t.Fatal("expected true for unknown_model")
 	}
 }
 
 func TestIsRetryableClientError_MaxTokensExceeded(t *testing.T) {
-	if !isRetryableClientError(http.StatusBadRequest, []byte(`{"error":{"message":"max_tokens must be less than or equal to 4096","type":"invalid_request_error"}}`)) {
+	if !isRetryableClientErrorForProvider(http.StatusBadRequest, []byte(`{"error":{"message":"max_tokens must be less than or equal to 4096","type":"invalid_request_error"}}`), "") {
 		t.Fatal("expected true for max_tokens error")
 	}
 }
 
 func TestIsRetryableClientError_ExtraForbidden(t *testing.T) {
-	if !isRetryableClientError(http.StatusUnprocessableEntity, []byte(`{"error":{"code":"Invalid input","message":"extra_forbidden"}}`)) {
+	if !isRetryableClientErrorForProvider(http.StatusUnprocessableEntity, []byte(`{"error":{"code":"Invalid input","message":"extra_forbidden"}}`), "") {
 		t.Fatal("expected true for extra_forbidden")
 	}
 }
 
 func TestIsRetryableClientError_422Status(t *testing.T) {
-	if !isRetryableClientError(http.StatusUnprocessableEntity, []byte(`{"error":"stream_options extra_forbidden"}`)) {
+	if !isRetryableClientErrorForProvider(http.StatusUnprocessableEntity, []byte(`{"error":"stream_options extra_forbidden"}`), "") {
 		t.Fatal("expected true for 422 status")
 	}
 }
 
 func TestIsRetryableClientError_AutoToolChoice(t *testing.T) {
-	if !isRetryableClientError(http.StatusBadRequest, []byte(`{"error":{"message":"auto tool choice requires --enable-auto-tool-choice","type":"BadRequestError"}}`)) {
+	if !isRetryableClientErrorForProvider(http.StatusBadRequest, []byte(`{"error":{"message":"auto tool choice requires --enable-auto-tool-choice","type":"BadRequestError"}}`), "") {
 		t.Fatal("expected true for auto tool choice error")
 	}
 }
 
 func TestIsRetryableClientError_ContextLengthOpenRouter(t *testing.T) {
-	if !isRetryableClientError(http.StatusBadRequest, []byte(`{"error":{"message":"maximum context length is 131000 tokens","code":400}}`)) {
+	if !isRetryableClientErrorForProvider(http.StatusBadRequest, []byte(`{"error":{"message":"maximum context length is 131000 tokens","code":400}}`), "") {
 		t.Fatal("expected true for context length (OpenRouter format)")
 	}
 }
 
 func TestIsRetryableClientError_ContentNotString(t *testing.T) {
-	if !isRetryableClientError(http.StatusBadRequest, []byte(`{"error":"Input should be a valid string"}`)) {
+	if !isRetryableClientErrorForProvider(http.StatusBadRequest, []byte(`{"error":"Input should be a valid string"}`), "") {
 		t.Fatal("expected true for valid string error")
 	}
 }
 
 func TestIsRetryableClientError_NonRetryable400(t *testing.T) {
-	if isRetryableClientError(http.StatusBadRequest, []byte(`{"error":"invalid API key"}`)) {
+	if isRetryableClientErrorForProvider(http.StatusBadRequest, []byte(`{"error":"invalid API key"}`), "") {
 		t.Fatal("expected false for generic 400 error")
 	}
 }
 
 func TestIsRetryableClientError_500NotRetryable(t *testing.T) {
-	if isRetryableClientError(http.StatusInternalServerError, []byte(`{"error":"context_length_exceeded"}`)) {
+	if isRetryableClientErrorForProvider(http.StatusInternalServerError, []byte(`{"error":"context_length_exceeded"}`), "") {
 		t.Fatal("expected false")
 	}
 }
 
 func TestIsRetryableClientError_EmptyBody(t *testing.T) {
-	if isRetryableClientError(http.StatusBadRequest, []byte{}) {
+	if isRetryableClientErrorForProvider(http.StatusBadRequest, []byte{}, "") {
 		t.Fatal("expected false")
 	}
 }
@@ -464,25 +464,25 @@ func TestParseRetryDelay_BodyRPCDetailBeforeMessage(t *testing.T) {
 }
 
 func TestIsRetryableClientError_ModelOverloaded(t *testing.T) {
-	if !isRetryableClientError(http.StatusBadRequest, []byte(`{"error":"model_overloaded"}`)) {
+	if !isRetryableClientErrorForProvider(http.StatusBadRequest, []byte(`{"error":"model_overloaded"}`), "") {
 		t.Fatal("expected true")
 	}
 }
 
 func TestIsRetryableClientError_Overloaded(t *testing.T) {
-	if !isRetryableClientError(http.StatusBadRequest, []byte(`{"error":"overloaded"}`)) {
+	if !isRetryableClientErrorForProvider(http.StatusBadRequest, []byte(`{"error":"overloaded"}`), "") {
 		t.Fatal("expected true")
 	}
 }
 
 func TestIsRetryableClientError_NameCannotBeEmpty(t *testing.T) {
-	if !isRetryableClientError(http.StatusBadRequest, []byte(`{"error":"name cannot be empty"}`)) {
+	if !isRetryableClientErrorForProvider(http.StatusBadRequest, []byte(`{"error":"name cannot be empty"}`), "") {
 		t.Fatal("expected true")
 	}
 }
 
 func TestIsRetryableClientError_MessagesParameterIllegal(t *testing.T) {
-	if !isRetryableClientError(http.StatusBadRequest, []byte(`{"error":"messages parameter is illegal"}`)) {
+	if !isRetryableClientErrorForProvider(http.StatusBadRequest, []byte(`{"error":"messages parameter is illegal"}`), "") {
 		t.Fatal("expected true")
 	}
 }

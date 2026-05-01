@@ -16,6 +16,10 @@ var cacheableFields = []string{
 }
 
 func FingerprintPayload(payload map[string]interface{}) string {
+	return FingerprintPayloadWithAuth(payload, "")
+}
+
+func FingerprintPayloadWithAuth(payload map[string]interface{}, authToken string) string {
 	canonical := make(map[string]interface{}, len(cacheableFields))
 	for _, field := range cacheableFields {
 		if v, ok := payload[field]; ok {
@@ -26,8 +30,13 @@ func FingerprintPayload(payload map[string]interface{}) string {
 	if err != nil {
 		return ""
 	}
-	h := sha256.Sum256(data)
-	return hex.EncodeToString(h[:])
+	h := sha256.New()
+	if authToken != "" {
+		authHash := sha256.Sum256([]byte(authToken))
+		h.Write(authHash[:])
+	}
+	h.Write(data)
+	return hex.EncodeToString(h.Sum(nil))
 }
 
 type responseCacheEntry struct {

@@ -144,9 +144,7 @@ func (c *Client) RefreshTools(ctx context.Context) ([]Tool, error) {
 func (c *Client) ListTools() []Tool {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-	result := make([]Tool, len(c.tools))
-	copy(result, c.tools)
-	return result
+	return c.tools
 }
 
 func (c *Client) GetTool(name string) (Tool, bool) {

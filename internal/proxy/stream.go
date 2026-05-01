@@ -53,12 +53,11 @@ func (b *contentBuilder) build() string {
 }
 
 type readResult struct {
-	n   int
-	err error
+	data []byte
+	err  error
 }
 
 type stallReader struct {
-	src       io.Reader
 	mu        sync.Mutex
 	timer     *time.Timer
 	stalled   bool
@@ -69,7 +68,6 @@ type stallReader struct {
 
 func newStallReader(src io.Reader, timeout time.Duration) *stallReader {
 	sr := &stallReader{
-		src:     src,
 		stallCh: make(chan struct{}),
 		ch:      make(chan readResult, 1),
 	}
@@ -79,7 +77,24 @@ func newStallReader(src io.Reader, timeout time.Duration) *stallReader {
 		sr.mu.Unlock()
 		sr.closeOnce.Do(func() { close(sr.stallCh) })
 	})
+	go sr.readLoop(src)
 	return sr
+}
+
+func (sr *stallReader) readLoop(src io.Reader) {
+	buf := make([]byte, 32*1024)
+	for {
+		n, err := src.Read(buf)
+		var data []byte
+		if n > 0 {
+			data = make([]byte, n)
+			copy(data, buf[:n])
+		}
+		sr.ch <- readResult{data, err}
+		if err != nil {
+			return
+		}
+	}
 }
 
 func (sr *stallReader) Read(p []byte) (int, error) {
@@ -90,28 +105,25 @@ func (sr *stallReader) Read(p []byte) (int, error) {
 	}
 	sr.mu.Unlock()
 
-	go func() {
-		n, err := sr.src.Read(p)
-		sr.ch <- readResult{n, err}
-	}()
-
 	select {
 	case <-sr.stallCh:
 		return 0, errStreamStalled
 	case rr := <-sr.ch:
-		if rr.n > 0 {
+		if len(rr.data) > 0 {
 			sr.timer.Reset(streamIdleTimeout)
 		}
 		sr.mu.Lock()
-		if sr.stalled {
-			sr.mu.Unlock()
-			if rr.n > 0 {
-				return rr.n, errStreamStalled
+		stalled := sr.stalled
+		sr.mu.Unlock()
+		if stalled {
+			if len(rr.data) > 0 {
+				n := copy(p, rr.data)
+				return n, errStreamStalled
 			}
 			return 0, errStreamStalled
 		}
-		sr.mu.Unlock()
-		return rr.n, rr.err
+		n := copy(p, rr.data)
+		return n, rr.err
 	}
 }
 
@@ -131,7 +143,7 @@ func (sr *stallReader) DrainPending(timeout time.Duration) (int, error) {
 	sr.closeOnce.Do(func() { close(sr.stallCh) })
 	select {
 	case rr := <-sr.ch:
-		return rr.n, rr.err
+		return len(rr.data), rr.err
 	case <-time.After(timeout):
 		return 0, errors.New("stall reader drain timeout")
 	}
@@ -289,21 +301,9 @@ func (p *Proxy) streamResponse(gw *gateway.NenyaGateway, w http.ResponseWriter, 
 	flushWriter, canFlush := newImmediateFlushWriterSafe(w)
 	dst, captureBuf, tee := p.setupStreamWriter(gw, flushWriter, canFlush, w, cacheKey)
 
-	var copyErr error
-	var written int64
-	done := make(chan struct{})
-	// Defer handleStreamCompletion until the copy goroutine finishes so that copyErr
-	// and written are fully populated before we read them. Without this barrier,
-	// the select on done races on these variables: the main goroutine reads them
-	// while the copy goroutine is still writing them.
-	go func() {
-		defer close(done)
-		written, copyErr = copyStream(r.Context(), dst, transformingReader, *buf)
-	}()
+	_, copyErr := copyStream(r.Context(), dst, transformingReader, *buf)
 
-	<-done
-
-	p.handleStreamCompletion(r.Context(), gw, w, target, agentName, action, cacheKey, cooldownDuration, buf, done, copyErr, written, captureBuf, tee, contentBuilder, stallR)
+	p.handleStreamCompletion(gw, w, target, agentName, action, cacheKey, cooldownDuration, buf, copyErr, captureBuf, tee, contentBuilder, stallR)
 	return streamResult{}
 }
 
@@ -351,7 +351,7 @@ func (p *Proxy) makeUsageCallback(gw *gateway.NenyaGateway, target routing.Upstr
 		if cacheMiss > 0 {
 			gw.Stats.RecordCacheMiss(target.Model, cacheMiss)
 		}
-		if gw.CostTracker != nil && prompt > 0 || completion > 0 {
+		if gw.CostTracker != nil && (prompt > 0 || completion > 0) {
 			if dm, ok := gw.ModelCatalog.Lookup(target.Model); ok && dm.Pricing != nil && !dm.Pricing.IsZero() {
 				cost := dm.Pricing.CalculateCost(int64(prompt), int64(completion))
 				gw.CostTracker.RecordUsage(target.Model, cost)
@@ -422,16 +422,11 @@ func (p *Proxy) setupStreamWriter(gw *gateway.NenyaGateway, flushWriter *immedia
 	return dst, captureBuf, tee
 }
 
-func (p *Proxy) handleStreamCompletion(ctx context.Context, gw *gateway.NenyaGateway, w http.ResponseWriter, target routing.UpstreamTarget, agentName string, action upstreamAction, cacheKey string, cooldownDuration time.Duration, buf *[]byte, done chan struct{}, copyErr error, written int64, captureBuf *bytes.Buffer, tee *sseTeeWriter, contentBuilder *contentBuilder, stallR *stallReader) {
-	select {
-	case <-done:
-		p.handleStreamDone(gw, w, target, agentName, action, cacheKey, cooldownDuration, buf, copyErr, written, captureBuf, tee, contentBuilder, stallR)
-	case <-ctx.Done():
-		p.handleClientDisconnect(gw, w, target, action, buf, done, stallR)
-	}
+func (p *Proxy) handleStreamCompletion(gw *gateway.NenyaGateway, w http.ResponseWriter, target routing.UpstreamTarget, agentName string, action upstreamAction, cacheKey string, cooldownDuration time.Duration, buf *[]byte, copyErr error, captureBuf *bytes.Buffer, tee *sseTeeWriter, contentBuilder *contentBuilder, stallR *stallReader) {
+	p.handleStreamDone(gw, w, target, agentName, action, cacheKey, cooldownDuration, buf, copyErr, captureBuf, tee, contentBuilder, stallR)
 }
 
-func (p *Proxy) handleStreamDone(gw *gateway.NenyaGateway, w http.ResponseWriter, target routing.UpstreamTarget, agentName string, action upstreamAction, cacheKey string, cooldownDuration time.Duration, buf *[]byte, copyErr error, written int64, captureBuf *bytes.Buffer, tee *sseTeeWriter, contentBuilder *contentBuilder, stallR *stallReader) {
+func (p *Proxy) handleStreamDone(gw *gateway.NenyaGateway, w http.ResponseWriter, target routing.UpstreamTarget, agentName string, action upstreamAction, cacheKey string, cooldownDuration time.Duration, buf *[]byte, copyErr error, captureBuf *bytes.Buffer, tee *sseTeeWriter, contentBuilder *contentBuilder, stallR *stallReader) {
 	streamingBufPool.Put(buf)
 
 	if errors.Is(copyErr, stream.ErrStreamBlocked) {
@@ -453,6 +448,12 @@ func (p *Proxy) handleStreamDone(gw *gateway.NenyaGateway, w http.ResponseWriter
 			"model", target.Model, "provider", target.Provider,
 			"idle_timeout", streamIdleTimeout)
 		return
+	}
+	if errors.Is(copyErr, context.Canceled) || errors.Is(copyErr, context.DeadlineExceeded) {
+		gw.Logger.Info("client disconnected, aborting upstream stream", "model", target.Model)
+		if stallR != nil {
+			_, _ = stallR.DrainPending(3 * time.Second)
+		}
 	}
 	_ = action.resp.Body.Close()
 
@@ -483,20 +484,6 @@ func storeStreamCache(gw *gateway.NenyaGateway, cacheKey string, captureBuf *byt
 	}
 	gw.ResponseCache.Store(cacheKey, captureBuf.Bytes())
 	gw.Logger.Debug("response cache stored", "model", captureBuf.Len())
-}
-
-func (p *Proxy) handleClientDisconnect(gw *gateway.NenyaGateway, w http.ResponseWriter, target routing.UpstreamTarget, action upstreamAction, buf *[]byte, done chan struct{}, stallR *stallReader) {
-	gw.Logger.Info("client disconnected, aborting upstream stream", "model", target.Model)
-	if stallR != nil {
-		_, _ = stallR.DrainPending(3 * time.Second)
-	}
-	_ = action.resp.Body.Close()
-	select {
-	case <-done:
-		streamingBufPool.Put(buf)
-	case <-time.After(5 * time.Second):
-		gw.Logger.Warn("timed out waiting for stream copy to finish after client disconnect", "model", target.Model)
-	}
 }
 
 func (p *Proxy) writeBlockedSSE(gw *gateway.NenyaGateway, w http.ResponseWriter) {
@@ -559,7 +546,11 @@ func (p *Proxy) asyncMCPAutoSave(gw *gateway.NenyaGateway, agentName string, con
 				}
 			}
 
-			saveCtx, cancel := context.WithTimeout(context.Background(), mcpExecTimeout)
+			baseCtx := p.ShutdownCtx
+			if baseCtx == nil {
+				baseCtx = context.Background()
+			}
+			saveCtx, cancel := context.WithTimeout(baseCtx, mcpExecTimeout)
 
 			start := time.Now()
 			_, err := client.CallTool(saveCtx, saveTool, map[string]any{

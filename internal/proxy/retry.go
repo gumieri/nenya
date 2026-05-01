@@ -91,7 +91,6 @@ type retryLoop struct {
 	originalPayload []byte
 	attempt         int
 	stream          bool
-	cancel          context.CancelFunc
 }
 
 // newRetryLoop creates a retryLoop with the given parameters.
@@ -126,8 +125,45 @@ func newRetryLoop(p *Proxy, gw *gateway.NenyaGateway, w http.ResponseWriter, r *
 	}, nil
 }
 
+// retrySignal controls the outer loop from action handlers.
+type retrySignal int
+
+const (
+	retrySignalContinue retrySignal = iota
+	retrySignalBreak
+	retrySignalDone
+)
+
+// handleActionError processes an upstream error action, applies backoff, and returns a loop signal.
+func (rl *retryLoop) handleActionError(i int, target routing.UpstreamTarget, action upstreamAction) retrySignal {
+	rl.attempt++
+	action.body, _ = io.ReadAll(io.LimitReader(action.resp.Body, pipeline.MaxErrorBodyBytes))
+	_ = action.resp.Body.Close()
+	shouldRetry, retryDelay := rl.handleUpstreamError(i, target, action)
+	action.cancel()
+	if !shouldRetry {
+		http.Error(rl.w, "Upstream provider error", action.resp.StatusCode)
+		return retrySignalDone
+	}
+	if rl.opts.MaxRetries > 0 && rl.attempt >= rl.opts.MaxRetries {
+		return retrySignalBreak
+	}
+	if retryDelay > 0 {
+		rl.ctxLogger.Info("retrying with parsed delay",
+			"model", target.Model, "delay_ms", retryDelay.Milliseconds())
+		waitWithCancel(rl.r.Context(), retryDelay)
+	} else {
+		backoff := calculateBackoff(rl.attempt - 1)
+		rl.ctxLogger.Info("retrying with exponential backoff",
+			"model", target.Model, "attempt", rl.attempt, "delay_ms", backoff.Milliseconds())
+		waitWithCancel(rl.r.Context(), backoff)
+	}
+	return retrySignalContinue
+}
+
 // Run executes the retry loop, returning true if a response was successfully streamed.
 func (rl *retryLoop) Run() bool {
+	workingPayload := make(map[string]interface{}, 16)
 retryLoop:
 	for i, target := range rl.opts.Targets {
 		if rl.opts.MaxRetries > 0 && rl.attempt >= rl.opts.MaxRetries {
@@ -135,7 +171,9 @@ retryLoop:
 			break retryLoop
 		}
 
-		workingPayload := make(map[string]interface{})
+		for k := range workingPayload {
+			delete(workingPayload, k)
+		}
 		if err := json.Unmarshal(rl.originalPayload, &workingPayload); err != nil {
 			rl.ctxLogger.Error("failed to unmarshal payload for target",
 				"target", i+1, "total", len(rl.opts.Targets), "err", err)
@@ -147,31 +185,14 @@ retryLoop:
 		case actionContinue:
 			continue
 		case actionError:
-			rl.attempt++
-			action.body, _ = io.ReadAll(io.LimitReader(action.resp.Body, pipeline.MaxErrorBodyBytes))
-			_ = action.resp.Body.Close()
-			shouldRetry, retryDelay := rl.handleUpstreamError(i, target, action)
-			action.cancel()
-			if shouldRetry {
-				if rl.opts.MaxRetries > 0 && rl.attempt >= rl.opts.MaxRetries {
-					break retryLoop
-				}
-				if retryDelay > 0 {
-					rl.ctxLogger.Info("retrying with parsed delay",
-						"model", target.Model, "delay_ms", retryDelay.Milliseconds())
-					waitWithCancel(rl.r.Context(), retryDelay)
-				} else {
-					backoff := calculateBackoff(rl.attempt - 1)
-					rl.ctxLogger.Info("retrying with exponential backoff",
-						"model", target.Model, "attempt", rl.attempt, "delay_ms", backoff.Milliseconds())
-					waitWithCancel(rl.r.Context(), backoff)
-				}
-				continue
+			switch rl.handleActionError(i, target, action) {
+			case retrySignalDone:
+				return true
+			case retrySignalBreak:
+				break retryLoop
 			}
-			http.Error(rl.w, "Upstream provider error", action.resp.StatusCode)
-			return true
+			continue
 		case actionStream:
-			rl.cancel = action.cancel
 			result := rl.p.streamResponse(rl.gw, rl.w, rl.r, target, rl.opts.AgentName, action, rl.opts.CacheKey, rl.opts.Cooldown)
 			if result.empty {
 				rl.ctxLogger.Warn("empty stream from upstream, trying next target",
@@ -180,7 +201,6 @@ retryLoop:
 			}
 			return true
 		case actionResponse:
-			rl.cancel = action.cancel
 			result := rl.p.handleNonStreamingResponse(rl.gw, rl.w, rl.r, target, rl.opts.AgentName, action, rl.opts.CacheKey, rl.opts.Cooldown)
 			if result.empty {
 				rl.ctxLogger.Warn("empty non-streaming response from upstream, trying next target",
@@ -599,10 +619,6 @@ func isRetryableClientErrorForProvider(statusCode int, body []byte, provider str
 	return matchProviderSpecificPatterns(lower, provider)
 }
 
-func isRetryableClientError(statusCode int, body []byte) bool {
-	return isRetryableClientErrorForProvider(statusCode, body, "")
-}
-
 type rpcDetail struct {
 	RetryDelay string `json:"retryDelay"`
 	Type       string `json:"@type"`
@@ -704,20 +720,31 @@ func parseRetryDelayFromErrorArray(body []byte) time.Duration {
 	return parseRetryDelayFromMessage(arr[0].Error.Message)
 }
 
-func parseRetryDelay(header http.Header, body []byte) time.Duration {
-	if v := header.Get("Retry-After"); v != "" {
-		if secs, err := time.ParseDuration(v + "s"); err == nil && secs > 0 {
-			return capRetryDelay(secs)
+func parseRetryAfterHeader(header http.Header) time.Duration {
+	v := header.Get("Retry-After")
+	if v == "" {
+		return 0
+	}
+	if secs, err := time.ParseDuration(v + "s"); err == nil && secs > 0 {
+		return capRetryDelay(secs)
+	}
+	if t, err := http.ParseTime(v); err == nil {
+		if d := time.Until(t); d > 0 {
+			return capRetryDelay(d)
 		}
 	}
+	return 0
+}
 
+func parseRetryDelay(header http.Header, body []byte) time.Duration {
+	if d := parseRetryAfterHeader(header); d > 0 {
+		return d
+	}
 	if len(body) == 0 {
 		return 0
 	}
-
 	if d := parseRetryDelayFromErrorObject(body); d > 0 {
 		return d
 	}
-
 	return parseRetryDelayFromErrorArray(body)
 }

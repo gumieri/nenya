@@ -55,7 +55,7 @@ func PruneStaleToolCalls(payload map[string]interface{}, cfg config.CompactionCo
 			continue
 		}
 
-		if !areToolResultsPaired(messages, i, numToolCalls, pruneEnd) {
+		if !areToolResultsPaired(messages, i, tcSlice, pruneEnd) {
 			i--
 			continue
 		}
@@ -107,8 +107,8 @@ func extractToolCallInfo(tc interface{}) (string, string) {
 	return toolName, toolCallID
 }
 
-func areToolResultsPaired(messages []interface{}, i int, numToolCalls int, pruneEnd int) bool {
-	for j := 0; j < numToolCalls; j++ {
+func areToolResultsPaired(messages []interface{}, i int, tcSlice []interface{}, pruneEnd int) bool {
+	for j, tc := range tcSlice {
 		respIdx := i + 1 + j
 		if respIdx >= pruneEnd {
 			return false
@@ -120,6 +120,12 @@ func areToolResultsPaired(messages []interface{}, i int, numToolCalls int, prune
 		respRole, _ := respMsg["role"].(string)
 		if respRole != "tool" {
 			return false
+		}
+		if wantID := extractToolCallID(tc); wantID != "" {
+			gotID, _ := respMsg["tool_call_id"].(string)
+			if gotID != wantID {
+				return false
+			}
 		}
 	}
 	return true
