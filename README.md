@@ -283,6 +283,53 @@ sudo systemctl daemon-reload
 sudo systemctl enable --now nenya.socket
 ```
 
+### Podman / Container Runtime
+
+The container image is available on GitHub Container Registry with multi-arch support (amd64/arm64).
+
+**Using podman directly:**
+
+```bash
+podman run -d \
+  --name nenya \
+  --publish 8080:8080 \
+  --volume ./config:/etc/nenya:ro \
+  --volume ./secrets:/run/secrets/nenya:ro \
+  --env NENYA_SECRETS_DIR=/run/secrets/nenya \
+  --cap-drop=ALL \
+  --cap-add=IPC_LOCK \
+  --security-opt=no-new-privileges:true \
+  --read-only \
+  --tmpfs /tmp:rw,noexec,nosuid,size=64M \
+  ghcr.io/gumieri/nenya:latest
+```
+
+**Using compose.yml:**
+
+```bash
+mkdir -p config secrets
+# Create config files in ./config/ (e.g., config.json)
+# Create secrets files in ./secrets/*.json
+podman compose -f deploy/compose.yml up -d
+```
+
+**Verify signed image:**
+
+```bash
+# Verify image signature
+cosign verify ghcr.io/gumieri/nenya:latest
+
+# Verify SBOM attestation
+cosign verify-attestation --type spdx ghcr.io/gumieri/nenya:latest
+```
+
+**Security notes:**
+- `--cap-drop=ALL --cap-add=IPC_LOCK` required for secure memory (mlock)
+- `--security-opt=no-new-privileges:true` prevents privilege escalation
+- `--read-only` enforces immutable root filesystem
+- Container runs as non-root user (UID 65532)
+- Multi-arch image supports both AMD64 and ARM64
+
 ## API Endpoints
 
 All `/v1/*` endpoints require `Authorization: Bearer <client_token>`.

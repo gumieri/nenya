@@ -8,6 +8,8 @@ on:
 permissions:
   contents: read
   packages: write
+  id-token: write
+  attestations: write
 
 jobs:
   publish:
@@ -18,15 +20,70 @@ jobs:
       - name: Log in to GHCR
         run: echo "${{ secrets.GITHUB_TOKEN }}" | podman login ghcr.io -u "${{ github.actor }}" --password-stdin
 
-      - name: Build and push image
+      - name: Install syft
+        run: curl -sSfL https://raw.githubusercontent.com/anchore/syft/main/install.sh | sh -s -- -b /usr/local/bin
+
+      - uses: sigstore/cosign-installer@v3
+
+      - name: Build multi-arch images
         run: |
           IMAGE="ghcr.io/${{ github.repository }}/nenya"
           VERSION="${{ github.ref_name }}"
 
-          podman build -f deploy/Containerfile \
-            -t "${IMAGE}:${VERSION}" \
-            -t "${IMAGE}:latest" \
-            .
+          for arch in amd64 arm64; do
+            podman build --platform linux/${arch} \
+              -f deploy/Containerfile \
+              -t "${IMAGE}:${VERSION}-${arch}" .
+          done
 
-          podman push "${IMAGE}:${VERSION}"
-          podman push "${IMAGE}:latest"
+      - name: Generate SBOM for each architecture
+        run: |
+          IMAGE="ghcr.io/${{ github.repository }}/nenya"
+          VERSION="${{ github.ref_name }}"
+
+          for arch in amd64 arm64; do
+            syft "${IMAGE}:${VERSION}-${arch}" -o spdx-json > nenya-${VERSION}-linux-${arch}.spdx.json
+          done
+
+      - name: Create manifest and push
+        run: |
+          IMAGE="ghcr.io/${{ github.repository }}/nenya"
+          VERSION="${{ github.ref_name }}"
+
+          podman manifest create "${IMAGE}:${VERSION}"
+          podman manifest add "${IMAGE}:${VERSION}" "${IMAGE}:${VERSION}-amd64"
+          podman manifest add "${IMAGE}:${VERSION}" "${IMAGE}:${VERSION}-arm64"
+          podman manifest push "${IMAGE}:${VERSION}"
+
+          podman manifest create "${IMAGE}:latest"
+          podman manifest add "${IMAGE}:latest" "${IMAGE}:${VERSION}-amd64"
+          podman manifest add "${IMAGE}:latest" "${IMAGE}:${VERSION}-arm64"
+          podman manifest push "${IMAGE}:latest"
+
+      - name: Sign each single-arch image
+        run: |
+          IMAGE="ghcr.io/${{ github.repository }}/nenya"
+          VERSION="${{ github.ref_name }}"
+
+          for arch in amd64 arm64; do
+            DIGEST=$(podman inspect --format='{{.Digest}}' "${IMAGE}:${VERSION}-${arch}")
+            cosign sign --yes "ghcr.io/${{ github.repository }}@${DIGEST}"
+          done
+
+      - name: Sign multi-arch manifest
+        run: |
+          IMAGE="ghcr.io/${{ github.repository }}/nenya"
+          VERSION="${{ github.ref_name }}"
+          MANIFEST_DIGEST=$(podman manifest inspect --format='{{.ManifestDigest}}' "${IMAGE}:${VERSION}")
+          cosign sign --yes "ghcr.io/${{ github.repository }}@${MANIFEST_DIGEST}"
+
+      - name: Attest SBOM for each architecture
+        run: |
+          IMAGE="ghcr.io/${{ github.repository }}/nenya"
+          VERSION="${{ github.ref_name }}"
+
+          for arch in amd64 arm64; do
+            DIGEST=$(podman inspect --format='{{.Digest}}' "${IMAGE}:${VERSION}-${arch}")
+            cosign attest --predicate "nenya-${VERSION}-linux-${arch}.spdx.json" \
+                          --type spdx --yes "ghcr.io/${{ github.repository }}@${DIGEST}"
+          done
