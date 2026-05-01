@@ -52,10 +52,10 @@ jobs:
       - name: Generate checksums
         run: sha256sum nenya-*.tar.gz > checksums.txt
 
-       - name: Create GitHub Release
-         env:
-           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-         run: |
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
            VERSION="${GITHUB_REF_NAME}"
 
            if gh release view "$VERSION" >/dev/null 2>&1; then
