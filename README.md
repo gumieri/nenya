@@ -222,26 +222,64 @@ Nenya loads all `*.json` files from `/etc/nenya/` (excluding `secrets.json`), so
 
 ### 4. Create secrets
 
-```json
+Create a JSON file with your secrets:
+
+```bash
+sudo mkdir -p /etc/nenya
+sudo tee /etc/nenya/secrets.json << 'EOF'
 {
-  "client_token": "<generate with: openssl rand -hex 32>",
+  "client_token": "nk-$(openssl rand -hex 32)",
   "provider_keys": {
     "gemini": "AIza...",
     "deepseek": "sk-..."
   }
 }
+EOF
+
+sudo chmod 600 /etc/nenya/secrets.json
 ```
+
+**Alternative:** Use a directory with multiple files (auto-merged):
+
+```bash
+sudo mkdir -p /etc/nenya/secrets.d
+
+sudo tee /etc/nenya/secrets.d/01-client.json << 'EOF'
+{"client_token": "nk-$(openssl rand -hex 32)"}
+EOF
+
+sudo tee /etc/nenya/secrets.d/02-providers.json << 'EOF'
+{"provider_keys": {"gemini": "AIza...", "deepseek": "sk-..."}}
+EOF
+
+sudo chmod 600 /etc/nenya/secrets.d/*.json
+```
+
+See [`docs/SECRETS_FORMAT.md`](docs/SECRETS_FORMAT.md) for full documentation on Docker/K8s deployment and advanced options (api_keys, NENYA_SECRETS_DIR).
 
 ### 5. Configure systemd
 
+A hardened systemd unit file is provided in `deploy/nenya.service`. Key security features:
+
 ```ini
 [Service]
+LimitMEMLOCK=infinity  # Required for secure memory (mlock)
+NoNewPrivileges=yes    # Prevent privilege escalation
+ProtectSystem=strict   # Read-only filesystem
+ProtectHome=yes        # No home directory access
+PrivateTmp=yes         # Isolated /tmp
+
 ExecStart=/usr/local/bin/nenya
 ExecReload=/bin/kill -HUP $MAINPID
 LoadCredential=secrets:/etc/nenya/secrets.json
 ```
 
+**Note:** `LimitMEMLOCK=infinity` is required for secure memory storage. Without it, Nenya will fail to start with `ErrMLockFailure`.
+
 ```bash
+sudo install -m 644 deploy/nenya.service /etc/systemd/system/
+sudo install -m 644 deploy/nenya.socket /etc/systemd/system/
+sudo systemctl daemon-reload
 sudo systemctl enable --now nenya.socket
 ```
 

@@ -334,6 +334,20 @@ All new features must maintain backward compatibility with existing `/v1/chat/co
 ### Security
 All admin APIs require `client_token` authentication. Passthrough proxy must strip sensitive headers and inject provider-specific auth securely.
 
+### Secrets Storage
+**Current**: Secured (mlock/mmap) — **Completed 2026-05-01**
+**Planned**: API key permissions and RBAC
+
+Tokens are stored in RAM-locked memory to prevent swapping to disk:
+- `syscall.Mmap` + `syscall.Mlock` for memory allocation
+- `subtle.ConstantTimeCompare` for timing-safe token comparison
+- Zero-fill before munmap, prevented from compiler optimization by `runtime.KeepAlive`
+- Mutex-protected read/write to prevent race conditions
+- Overflow-safe capacity calculation with `safeMultiply()`
+- Systemd unit requires `LimitMEMLOCK=infinity`
+
+**Upcoming**: API key permissions model with granular endpoint control, role definitions (admin/user/read-only), and agent-level access restrictions.
+
 ### Testing
 Each feature must include:
 - Unit tests for core logic
@@ -343,4 +357,4 @@ Each feature must include:
 
 ---
 
-*Last updated: 2026-04-30*
+*Last updated: 2026-05-01*

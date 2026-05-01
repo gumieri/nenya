@@ -7,7 +7,8 @@
 # Install paths:
 #   Binary:    /usr/local/bin/nenya
 #   Config:    /etc/nenya/  (directory, loaded and deep-merged)
-#   Secrets:   /etc/nenya/secrets.json  (loaded via systemd credential)
+#   Secrets:   /etc/nenya/secrets.json  (single file, loaded via systemd credential)
+#               /etc/nenya/secrets.d/*.json  (directory, multiple files merged)
 #   Config ref: /etc/nenya/config.json.example (installed on first install if no config exists)
 #
 # Hot reload:
@@ -33,6 +34,9 @@ ProtectHome=yes
 ProtectKernelTunables=yes
 ProtectKernelModules=yes
 ProtectControlGroups=yes
+
+# Allow mlock for secure memory (tokens stored in locked RAM)
+LimitMEMLOCK=infinity
 
 LoadCredential=secrets:/etc/nenya/secrets.json
 

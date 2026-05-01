@@ -1,11 +1,11 @@
 package security
 
 import (
+	"crypto/rand"
 	"crypto/subtle"
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"math/rand"
 	"runtime"
 	"sync"
 	"syscall"
@@ -44,7 +44,7 @@ func NewSecureMem(capacity int) (*SecureMem, error) {
 	}
 
 	if err = syscall.Mlock(data); err != nil {
-		syscall.Munmap(data)
+		_ = syscall.Munmap(data)
 		return nil, fmt.Errorf("%w", ErrMLockFailure)
 	}
 
@@ -105,7 +105,7 @@ func (sm *SecureMem) Destroy() {
 		}
 		runtime.KeepAlive(sm.data)
 		sm.locked = false
-		syscall.Munmap(sm.data)
+		_ = syscall.Munmap(sm.data)
 		sm.data = nil
 		sm.used = 0
 	}
@@ -126,6 +126,6 @@ func GenerateToken() string {
 }
 
 func TokenSizeHint(numKeys int, providerKeyCount int) int {
-	const avgTokenLen = 50
+	const avgTokenLen = 64
 	return (numKeys + providerKeyCount) * (avgTokenLen + 8)
 }

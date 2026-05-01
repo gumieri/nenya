@@ -2,6 +2,7 @@ package config
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/url"
 	"os"
@@ -382,34 +383,63 @@ func validatePromptPath(filePath string) error {
 }
 
 func LoadSecrets() (*SecretsConfig, error) {
-	if secrets, err := tryLoadCredFile(); err != nil {
+	credDir := os.Getenv("CREDENTIALS_DIRECTORY")
+	secretsDir := os.Getenv("NENYA_SECRETS_DIR")
+
+	// 1. systemd single file
+	secrets, err := tryLoadCredFile()
+	if err != nil {
 		return nil, err
-	} else if secrets != nil {
-		return secrets, nil
+	}
+	if secrets != nil {
+		return validateSecretsResult(secrets)
 	}
 
-	clientToken := os.Getenv("NENYA_CLIENT_TOKEN")
-	if clientToken == "" {
-		return nil, fmt.Errorf("CREDENTIALS_DIRECTORY not set and NENYA_CLIENT_TOKEN not set")
-	}
-
-	secrets := &SecretsConfig{
-		ClientToken:  clientToken,
-		ProviderKeys: make(map[string]string),
-	}
-
-	for _, env := range os.Environ() {
-		if strings.HasPrefix(env, "NENYA_PROVIDER_KEY_") {
-			parts := strings.SplitN(env, "=", 2)
-			if len(parts) != 2 {
-				continue
-			}
-			providerName := strings.ToLower(strings.TrimPrefix(parts[0], "NENYA_PROVIDER_KEY_"))
-			secrets.ProviderKeys[providerName] = parts[1]
+	// 2. CREDENTIALS_DIRECTORY/secrets.d/*.json
+	if credDir != "" {
+		secrets, err = loadSecretsFromPath(credDir + "/secrets.d")
+		if err != nil {
+			return nil, err
+		}
+		if secrets != nil {
+			return validateSecretsResult(secrets)
 		}
 	}
 
+	// 3. NENYA_SECRETS_DIR or /run/secrets/nenya
+	if secretsDir == "" {
+		secretsDir = "/run/secrets/nenya"
+	}
+	secrets, err = loadSecretsFromPath(secretsDir)
+	if err != nil {
+		return nil, err
+	}
+	if secrets != nil {
+		return validateSecretsResult(secrets)
+	}
+
+	return nil, errors.New("secrets not found: checked " +
+		"$CREDENTIALS_DIRECTORY/secrets, $CREDENTIALS_DIRECTORY/secrets.d/, " +
+		"$NENYA_SECRETS_DIR/, /run/secrets/nenya/")
+}
+
+func validateSecretsResult(secrets *SecretsConfig) (*SecretsConfig, error) {
+	if err := validateSecrets(secrets); err != nil {
+		return nil, err
+	}
 	return secrets, nil
+}
+
+func validateSecrets(secrets *SecretsConfig) error {
+	if secrets.ClientToken == "" {
+		return errors.New("client_token is required")
+	}
+	for name, key := range secrets.ApiKeys {
+		if err := key.Validate(); err != nil {
+			return fmt.Errorf("invalid api_key %q: %w", name, err)
+		}
+	}
+	return nil
 }
 
 func tryLoadCredFile() (*SecretsConfig, error) {
@@ -425,15 +455,123 @@ func tryLoadCredFile() (*SecretsConfig, error) {
 
 	var secrets SecretsConfig
 	if err := json.Unmarshal(data, &secrets); err != nil {
-		return nil, fmt.Errorf("failed to parse secrets JSON: %v", err)
-	}
-	if secrets.ClientToken == "" {
-		return nil, fmt.Errorf("client_token missing in secrets")
+		return nil, fmt.Errorf("failed to parse secrets: %v", err)
 	}
 	if secrets.ProviderKeys == nil {
 		secrets.ProviderKeys = make(map[string]string)
 	}
+	if secrets.ApiKeys == nil {
+		secrets.ApiKeys = make(map[string]ApiKey)
+	}
 	return &secrets, nil
+}
+
+func loadSecretsFromPath(path string) (*SecretsConfig, error) {
+	fi, err := os.Stat(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("failed to stat secrets path %q: %w", path, err)
+	}
+
+	if fi.IsDir() {
+		return loadSecretsFromDir(path)
+	}
+	return loadSecretsSingleFile(path)
+}
+
+func loadSecretsFromDir(dir string) (*SecretsConfig, error) {
+	if err := validateSecretsPath(dir); err != nil {
+		return nil, err
+	}
+
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("failed to read secrets directory: %w", err)
+	}
+
+	var result *SecretsConfig
+	for _, entry := range entries {
+		if entry.IsDir() || filepath.Ext(entry.Name()) != ".json" {
+			continue
+		}
+		secrets, err := loadSecretsSingleFile(filepath.Join(dir, entry.Name()))
+		if err != nil {
+			return nil, fmt.Errorf("failed to load secret %q: %w", entry.Name(), err)
+		}
+		result = mergeSecrets(result, secrets)
+	}
+	return result, nil
+}
+
+func loadSecretsSingleFile(path string) (*SecretsConfig, error) {
+	if err := validateSecretsPath(path); err != nil {
+		return nil, err
+	}
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("failed to read secrets file: %w", err)
+	}
+
+	var secrets SecretsConfig
+	if err := json.Unmarshal(data, &secrets); err != nil {
+		return nil, fmt.Errorf("failed to parse secrets JSON: %w", err)
+	}
+	return &secrets, nil
+}
+
+func mergeSecrets(a, b *SecretsConfig) *SecretsConfig {
+	if a == nil {
+		return b
+	}
+	if b == nil {
+		return a
+	}
+
+	if b.ClientToken != "" {
+		a.ClientToken = b.ClientToken
+	}
+
+	if b.ProviderKeys != nil {
+		if a.ProviderKeys == nil {
+			a.ProviderKeys = make(map[string]string)
+		}
+		for k, v := range b.ProviderKeys {
+			a.ProviderKeys[k] = v
+		}
+	}
+
+	if b.ApiKeys != nil {
+		if a.ApiKeys == nil {
+			a.ApiKeys = make(map[string]ApiKey)
+		}
+		for k, v := range b.ApiKeys {
+			if v.Enabled {
+				a.ApiKeys[k] = v
+			}
+		}
+	}
+
+	return a
+}
+
+func validateSecretsPath(path string) error {
+	absPath, err := filepath.Abs(path)
+	if err != nil {
+		return fmt.Errorf("invalid secrets path: %w", err)
+	}
+	if strings.Contains(absPath, "..") {
+		return errors.New("path traversal not allowed in secrets path")
+	}
+	return nil
 }
 
 func ResolveProviders(cfg *Config, secrets *SecretsConfig) map[string]*Provider {
