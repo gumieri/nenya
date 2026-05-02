@@ -197,6 +197,7 @@ func ollamaSpec() ProviderSpec {
 		SupportsToolCalls:      true,
 		SupportsReasoning:      true,
 		SupportsVision:         false,
+		NewResponseTransformer: newOllamaTransformer,
 		ValidationEndpoint:     ollamaValidationEndpoint,
 	}
 }
