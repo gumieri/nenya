@@ -175,18 +175,36 @@ curl -fsSL https://raw.githubusercontent.com/gumieri/nenya/main/install.sh | sh 
 sudo mkdir -p /etc/nenya
 ```
 
-### 3. Split configuration across files
+### 3. Configuration files
 
-Nenya loads all `*.json` files from `/etc/nenya/` (excluding `secrets.json`), sorted alphabetically, and deep-merges them. Map fields (`agents`, `providers`, `mcp_servers`) merge per-key; struct fields use last-file-wins.
+Nenya supports two configuration modes:
 
+**Directory mode (default):**
 ```
 /etc/nenya/
-├── 00-server.json          # server, governance, security_filter, compaction
-├── 10-providers.json       # provider overrides
-├── 20-agents.json          # agent definitions with fallback chains
-├── 30-agents-mcp.json      # MCP server integration per agent
-└── secrets.json            # excluded (loaded via systemd credential)
+├── config.json           # single config file
+# OR
+├── config.d/
+│   ├── 01-server.json    # server, governance, security_filter, compaction
+│   ├── 02-providers.json # provider overrides
+│   ├── 03-agents.json   # agent definitions with fallback chains
+│   └── 04-mcp.json      # MCP server integration per agent
 ```
+
+**Single file mode:**
+```bash
+./nenya --config /path/to/config.json
+```
+
+**Environment variables:**
+```bash
+NENYA_CONFIG_DIR=/etc/nenya ./nenya           # directory mode
+NENYA_CONFIG_FILE=/path/to/config.json ./nenya  # single file mode
+```
+
+`config.d/*.json` files are merged alphabetically. Map fields (`agents`, `providers`, `mcp_servers`) merge per-key; struct fields use last-file-wins.
+
+**Note:** `config.d/` and `config.json` are mutually exclusive — if `config.d/` exists and is non-empty, `config.json` is ignored.
 
 `00-server.json`:
 ```json

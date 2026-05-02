@@ -445,18 +445,22 @@ func TestLoadPromptFile(t *testing.T) {
 }
 
 func TestLoadDirectory(t *testing.T) {
-	t.Run("multiple files merged", func(t *testing.T) {
+	t.Run("config.d directory merged", func(t *testing.T) {
 		dir := t.TempDir()
-		if err := os.WriteFile(filepath.Join(dir, "00-server.json"), []byte(`{"server":{"listen_addr":":9090"}}`), 0644); err != nil {
+		configD := filepath.Join(dir, "config.d")
+		if err := os.MkdirAll(configD, 0755); err != nil {
+			t.Fatalf("failed to create config.d: %v", err)
+		}
+		if err := os.WriteFile(filepath.Join(configD, "00-server.json"), []byte(`{"server":{"listen_addr":":9090"}}`), 0644); err != nil {
 			t.Fatalf("failed to create 00-server.json: %v", err)
 		}
-		if err := os.WriteFile(filepath.Join(dir, "10-governance.json"), []byte(`{"governance":{"truncation_strategy":"middle-out"}}`), 0644); err != nil {
+		if err := os.WriteFile(filepath.Join(configD, "10-governance.json"), []byte(`{"governance":{"truncation_strategy":"middle-out"}}`), 0644); err != nil {
 			t.Fatalf("failed to create 10-governance.json: %v", err)
 		}
 
-		cfg, err := Load(dir)
+		cfg, err := LoadFromDir(dir)
 		if err != nil {
-			t.Fatalf("Load failed: %v", err)
+			t.Fatalf("LoadFromDir failed: %v", err)
 		}
 		if cfg.Server.ListenAddr != ":9090" {
 			t.Errorf("ListenAddr: got %q", cfg.Server.ListenAddr)
@@ -468,43 +472,48 @@ func TestLoadDirectory(t *testing.T) {
 
 	t.Run("sorted alphabetically", func(t *testing.T) {
 		dir := t.TempDir()
-		if err := os.WriteFile(filepath.Join(dir, "20-later.json"), []byte(`{"server":{"listen_addr":":9090"}}`), 0644); err != nil {
+		configD := filepath.Join(dir, "config.d")
+		if err := os.MkdirAll(configD, 0755); err != nil {
+			t.Fatalf("failed to create config.d: %v", err)
+		}
+		if err := os.WriteFile(filepath.Join(configD, "20-later.json"), []byte(`{"server":{"listen_addr":":9090"}}`), 0644); err != nil {
 			t.Fatalf("failed to create 20-later.json: %v", err)
 		}
-		if err := os.WriteFile(filepath.Join(dir, "10-earlier.json"), []byte(`{"server":{"listen_addr":":8080"}}`), 0644); err != nil {
+		if err := os.WriteFile(filepath.Join(configD, "10-earlier.json"), []byte(`{"server":{"listen_addr":":8080"}}`), 0644); err != nil {
 			t.Fatalf("failed to create 10-earlier.json: %v", err)
 		}
 
-		cfg, err := Load(dir)
+		cfg, err := LoadFromDir(dir)
 		if err != nil {
-			t.Fatalf("Load failed: %v", err)
+			t.Fatalf("LoadFromDir failed: %v", err)
 		}
 		if cfg.Server.ListenAddr != ":9090" {
 			t.Errorf("expected later file to win, got ListenAddr %q", cfg.Server.ListenAddr)
 		}
 	})
 
-	t.Run("excludes secrets.json", func(t *testing.T) {
+	t.Run("config.json single file", func(t *testing.T) {
 		dir := t.TempDir()
-		if err := os.WriteFile(filepath.Join(dir, "secrets.json"), []byte(`{"server":{"listen_addr":":9999"}}`), 0644); err != nil {
-			t.Fatalf("failed to create secrets.json: %v", err)
-		}
 		if err := os.WriteFile(filepath.Join(dir, "config.json"), []byte(`{"server":{"listen_addr":":8080"}}`), 0644); err != nil {
 			t.Fatalf("failed to create config.json: %v", err)
 		}
 
-		cfg, err := Load(dir)
+		cfg, err := LoadFromDir(dir)
 		if err != nil {
-			t.Fatalf("Load failed: %v", err)
+			t.Fatalf("LoadFromDir failed: %v", err)
 		}
-		if cfg.Server.ListenAddr == ":9999" {
-			t.Error("secrets.json should be excluded from merge")
+		if cfg.Server.ListenAddr != ":8080" {
+			t.Errorf("ListenAddr: got %q", cfg.Server.ListenAddr)
 		}
 	})
 
 	t.Run("map fields merge per-key", func(t *testing.T) {
 		dir := t.TempDir()
-		if err := os.WriteFile(filepath.Join(dir, "10-providers.json"), []byte(`{
+		configD := filepath.Join(dir, "config.d")
+		if err := os.MkdirAll(configD, 0755); err != nil {
+			t.Fatalf("failed to create config.d: %v", err)
+		}
+		if err := os.WriteFile(filepath.Join(configD, "10-providers.json"), []byte(`{
 			"providers": {
 				"gemini": {"url": "http://gemini"},
 				"deepseek": {"url": "http://deepseek"}
@@ -512,7 +521,7 @@ func TestLoadDirectory(t *testing.T) {
 		}`), 0644); err != nil {
 			t.Fatalf("failed to create 10-providers.json: %v", err)
 		}
-		if err := os.WriteFile(filepath.Join(dir, "20-providers-override.json"), []byte(`{
+		if err := os.WriteFile(filepath.Join(configD, "20-providers-override.json"), []byte(`{
 			"providers": {
 				"gemini": {"url": "http://custom-gemini"}
 			}
@@ -520,9 +529,9 @@ func TestLoadDirectory(t *testing.T) {
 			t.Fatalf("failed to create 20-providers-override.json: %v", err)
 		}
 
-		cfg, err := Load(dir)
+		cfg, err := LoadFromDir(dir)
 		if err != nil {
-			t.Fatalf("Load failed: %v", err)
+			t.Fatalf("LoadFromDir failed: %v", err)
 		}
 		if cfg.Providers["gemini"].URL != "http://custom-gemini" {
 			t.Errorf("gemini URL: got %q", cfg.Providers["gemini"].URL)
@@ -534,14 +543,18 @@ func TestLoadDirectory(t *testing.T) {
 
 	t.Run("agents map merge", func(t *testing.T) {
 		dir := t.TempDir()
-		if err := os.WriteFile(filepath.Join(dir, "10-agents.json"), []byte(`{
+		configD := filepath.Join(dir, "config.d")
+		if err := os.MkdirAll(configD, 0755); err != nil {
+			t.Fatalf("failed to create config.d: %v", err)
+		}
+		if err := os.WriteFile(filepath.Join(configD, "10-agents.json"), []byte(`{
 			"agents": {
 				"coder": {"models": [{"provider":"gemini","model":"gemini-2.5-pro"}]}
 			}
 		}`), 0644); err != nil {
 			t.Fatalf("failed to create 10-agents.json: %v", err)
 		}
-		if err := os.WriteFile(filepath.Join(dir, "20-agents-extra.json"), []byte(`{
+		if err := os.WriteFile(filepath.Join(configD, "20-agents-extra.json"), []byte(`{
 			"agents": {
 				"researcher": {"models": [{"provider":"gemini","model":"gemini-2.5-flash"}]}
 			}
@@ -549,9 +562,9 @@ func TestLoadDirectory(t *testing.T) {
 			t.Fatalf("failed to create 20-agents-extra.json: %v", err)
 		}
 
-		cfg, err := Load(dir)
+		cfg, err := LoadFromDir(dir)
 		if err != nil {
-			t.Fatalf("Load failed: %v", err)
+			t.Fatalf("LoadFromDir failed: %v", err)
 		}
 		if _, ok := cfg.Agents["coder"]; !ok {
 			t.Error("expected coder agent from first file")
@@ -563,14 +576,14 @@ func TestLoadDirectory(t *testing.T) {
 
 	t.Run("empty directory returns error", func(t *testing.T) {
 		dir := t.TempDir()
-		_, err := Load(dir)
+		_, err := LoadFromDir(dir)
 		if err == nil {
 			t.Fatal("expected error for empty directory")
 		}
 	})
 
 	t.Run("non-existent directory returns error", func(t *testing.T) {
-		_, err := Load("/nonexistent/dir")
+		_, err := LoadFromDir("/nonexistent/dir")
 		if err == nil {
 			t.Fatal("expected error for non-existent directory")
 		}
@@ -578,13 +591,17 @@ func TestLoadDirectory(t *testing.T) {
 
 	t.Run("defaults applied after merge", func(t *testing.T) {
 		dir := t.TempDir()
-		if err := os.WriteFile(filepath.Join(dir, "config.json"), []byte(`{}`), 0644); err != nil {
-			t.Fatalf("failed to create config.json: %v", err)
+		configD := filepath.Join(dir, "config.d")
+		if err := os.MkdirAll(configD, 0755); err != nil {
+			t.Fatalf("failed to create config.d: %v", err)
+		}
+		if err := os.WriteFile(filepath.Join(configD, "00-config.json"), []byte(`{}`), 0644); err != nil {
+			t.Fatalf("failed to create 00-config.json: %v", err)
 		}
 
-		cfg, err := Load(dir)
+		cfg, err := LoadFromDir(dir)
 		if err != nil {
-			t.Fatalf("Load failed: %v", err)
+			t.Fatalf("LoadFromDir failed: %v", err)
 		}
 		if cfg.Server.ListenAddr != ":8080" {
 			t.Errorf("expected default ListenAddr, got %q", cfg.Server.ListenAddr)
@@ -594,33 +611,41 @@ func TestLoadDirectory(t *testing.T) {
 		}
 	})
 
-	t.Run("single file still works", func(t *testing.T) {
-		tmpfile := filepath.Join(t.TempDir(), "config.json")
-		if err := os.WriteFile(tmpfile, []byte(`{"server":{"listen_addr":":9090"}}`), 0644); err != nil {
+	t.Run("config.json priority over empty config.d", func(t *testing.T) {
+		dir := t.TempDir()
+		configD := filepath.Join(dir, "config.d")
+		if err := os.MkdirAll(configD, 0755); err != nil {
+			t.Fatalf("failed to create config.d: %v", err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "config.json"), []byte(`{"server":{"listen_addr":":9090"}}`), 0644); err != nil {
 			t.Fatalf("failed to create config.json: %v", err)
 		}
 
-		cfg, err := Load(tmpfile)
+		cfg, err := LoadFromDir(dir)
 		if err != nil {
-			t.Fatalf("Load failed: %v", err)
+			t.Fatalf("LoadFromDir failed: %v", err)
 		}
 		if cfg.Server.ListenAddr != ":9090" {
 			t.Errorf("ListenAddr: got %q", cfg.Server.ListenAddr)
 		}
 	})
 
-	t.Run("non-json files ignored", func(t *testing.T) {
+	t.Run("non-json files in config.d ignored", func(t *testing.T) {
 		dir := t.TempDir()
-		if err := os.WriteFile(filepath.Join(dir, "README.md"), []byte("not json"), 0644); err != nil {
+		configD := filepath.Join(dir, "config.d")
+		if err := os.MkdirAll(configD, 0755); err != nil {
+			t.Fatalf("failed to create config.d: %v", err)
+		}
+		if err := os.WriteFile(filepath.Join(configD, "README.md"), []byte("not json"), 0644); err != nil {
 			t.Fatalf("failed to create README.md: %v", err)
 		}
-		if err := os.WriteFile(filepath.Join(dir, "config.json"), []byte(`{"server":{"listen_addr":":9090"}}`), 0644); err != nil {
-			t.Fatalf("failed to create config.json: %v", err)
+		if err := os.WriteFile(filepath.Join(configD, "00-config.json"), []byte(`{"server":{"listen_addr":":9090"}}`), 0644); err != nil {
+			t.Fatalf("failed to create 00-config.json: %v", err)
 		}
 
-		cfg, err := Load(dir)
+		cfg, err := LoadFromDir(dir)
 		if err != nil {
-			t.Fatalf("Load failed: %v", err)
+			t.Fatalf("LoadFromDir failed: %v", err)
 		}
 		if cfg.Server.ListenAddr != ":9090" {
 			t.Errorf("ListenAddr: got %q", cfg.Server.ListenAddr)
