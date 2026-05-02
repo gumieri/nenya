@@ -14,6 +14,7 @@ import (
 
 	"nenya/config"
 	"nenya/internal/adapter"
+	"nenya/internal/infra"
 	"nenya/internal/util"
 )
 
@@ -26,13 +27,14 @@ const (
 
 type DiscoveryFetcher struct {
 	client      *http.Client
+	metrics     *infra.Metrics
 	maxAttempts int
 }
 
+// NewDiscoveryFetcher creates a DiscoveryFetcher that fetches model catalogs
+// from upstream providers. maxAttempts must be >= 1 (use EffectiveMaxRetryAttempts
+// from GovernanceConfig to ensure a minimum fallback of 3).
 func NewDiscoveryFetcher(maxAttempts int) *DiscoveryFetcher {
-	if maxAttempts <= 0 {
-		maxAttempts = 3
-	}
 	return &DiscoveryFetcher{
 		maxAttempts: maxAttempts,
 		client: &http.Client{
@@ -49,6 +51,11 @@ func NewDiscoveryFetcher(maxAttempts int) *DiscoveryFetcher {
 			},
 		},
 	}
+}
+
+func (df *DiscoveryFetcher) WithMetrics(m *infra.Metrics) *DiscoveryFetcher {
+	df.metrics = m
+	return df
 }
 
 func (df *DiscoveryFetcher) FetchAll(ctx context.Context, providers map[string]*config.Provider, logger *slog.Logger) *ModelCatalog {
@@ -93,6 +100,11 @@ func (df *DiscoveryFetcher) FetchAll(ctx context.Context, providers map[string]*
 	for result := range results {
 		if result.err != nil {
 			logger.Warn("model discovery failed", "provider", result.provider, "err", result.err)
+		}
+		if df.metrics != nil {
+			df.metrics.RecordModelDiscovery(result.provider, result.err)
+		}
+		if result.err != nil {
 			continue
 		}
 		for _, m := range result.models {
@@ -178,25 +190,7 @@ func (df *DiscoveryFetcher) fetchProviderModels(ctx context.Context, providerNam
 		return nil, fmt.Errorf("discovery auth: %w", err)
 	}
 
-	maxAttempts := df.maxAttempts
-	if provider.MaxRetryAttempts > 0 {
-		maxAttempts = provider.MaxRetryAttempts
-	}
-
-	var resp *http.Response
-	err = util.DoWithRetry(providerCtx, maxAttempts, func() error {
-		var fetchErr error
-		resp, fetchErr = df.client.Do(req)
-		if fetchErr != nil {
-			return fetchErr
-		}
-		if resp.StatusCode >= 500 {
-			_ = resp.Body.Close()
-			return fmt.Errorf("upstream error: %d", resp.StatusCode)
-		}
-		return nil
-	})
-
+	resp, err := df.fetchWithRetry(req, provider, providerCtx)
 	if err != nil {
 		return nil, fmt.Errorf("discovery fetch: %w", err)
 	}
@@ -229,6 +223,41 @@ func (df *DiscoveryFetcher) fetchProviderModels(ctx context.Context, providerNam
 	}
 
 	return models, nil
+}
+
+// fetchWithRetry executes the HTTP request with retries and records retry metrics.
+func (df *DiscoveryFetcher) fetchWithRetry(req *http.Request, provider *config.Provider, ctx context.Context) (*http.Response, error) {
+	maxAttempts := df.maxAttempts
+	if provider.MaxRetryAttempts > 0 {
+		maxAttempts = provider.MaxRetryAttempts
+	}
+
+	var resp *http.Response
+	attempt := 0
+	providerName := provider.Name
+	err := util.DoWithRetry(ctx, maxAttempts, func() error {
+		attempt++
+		var fetchErr error
+		resp, fetchErr = df.client.Do(req)
+		if fetchErr != nil {
+			if attempt > 1 && df.metrics != nil {
+				df.metrics.RecordRetry("model_discovery", providerName, fetchErr)
+			}
+			return fetchErr
+		}
+		if resp.StatusCode >= 500 {
+			_ = resp.Body.Close()
+			if attempt > 1 && df.metrics != nil {
+				df.metrics.RecordRetry("model_discovery", providerName, fmt.Errorf("upstream error: %d", resp.StatusCode))
+			}
+			return fmt.Errorf("upstream error: %d", resp.StatusCode)
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return resp, nil
 }
 
 func injectAuth(req *http.Request, providerName string, provider *config.Provider) error {
