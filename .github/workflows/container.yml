@@ -122,7 +122,6 @@ jobs:
               --format '{{.Manifest.Digest}}' \
               "${IMAGE}:${VERSION}-${arch}")
             cosign attest \
-              --predicate-type spdx \
               --predicate "nenya-${VERSION}-linux-${arch}.spdx.json" \
               --yes \
               "ghcr.io/${{ github.repository }}@${DIGEST}"
