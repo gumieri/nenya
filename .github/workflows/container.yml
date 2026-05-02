@@ -20,7 +20,7 @@ jobs:
           fetch-depth: 1
 
       - name: Install Cosign
-        uses: sigstore/cosign-installer@v4.1.0
+        uses: sigstore/cosign-installer@v4.2.0
 
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3.6.0
@@ -83,6 +83,11 @@ jobs:
           image: ghcr.io/${{ github.repository }}:${{ github.ref_name }}-arm64
           format: spdx-json
           output-file: nenya-${{ github.ref_name }}-linux-arm64.spdx.json
+
+      - name: Validate SBOM JSON
+        run: |
+          jq . nenya-${{ github.ref_name }}-linux-amd64.spdx.json > /dev/null
+          jq . nenya-${{ github.ref_name }}-linux-arm64.spdx.json > /dev/null
 
       - name: Create GitHub release
         id: create_release
