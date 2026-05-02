@@ -2,6 +2,24 @@
 
 Nenya reads its configuration from a JSON file or directory (default: `/etc/nenya/`). See [`PROVIDERS.md`](PROVIDERS.md) for the full provider reference and [`ARCHITECTURE.md`](ARCHITECTURE.md) for request flow and internal components.
 
+## Table of Contents
+- [Environment variables](#environment-variables)
+- [HTTP endpoints (summary)](#http-endpoints-summary)
+- [Configuration file structure](#configuration-file-structure)
+- [Top-Level Sections](#top-level-sections)
+  - [Server](#server)
+  - [Governance](#governance)
+  - [Security Filter](#security-filter)
+  - [Prefix Cache](#prefix-cache)
+  - [Compaction](#compaction)
+  - [Window](#window)
+  - [Response Cache](#response-cache)
+  - [Agents](#agents)
+  - [Discovery](#discovery)
+  - [Providers](#providers)
+- [Multi-File Configuration (Directory Mode)](#multi-file-configuration-directory-mode)
+- [Hot Reload](#hot-reload)
+
 ## Environment variables
 
 | Variable | Effect |
@@ -12,18 +30,7 @@ Nenya reads its configuration from a JSON file or directory (default: `/etc/neny
 
 After flags are parsed, `NENYA_CONFIG_DIR` and `NENYA_CONFIG_FILE` **override** `-config-dir` and `-config` if set. If both env vars are set, `NENYA_CONFIG_FILE` still wins at load time (single-file mode).
 
-## HTTP endpoints (summary)
-
-| Endpoint | Auth | Description |
-|----------|------|-------------|
-| `POST /v1/chat/completions` | Bearer | OpenAI-compatible chat, SSE streaming, agent routing, optional MCP |
-| `GET /v1/models` | Bearer | Merged model catalog (discovery + static registry) |
-| `POST /v1/embeddings` | Bearer | Passthrough to upstream |
-| `POST /v1/responses` | Bearer | Passthrough to upstream |
-| `/proxy/{provider}/*` | Bearer | Raw provider proxy (GET, POST, …; SSE if `text/event-stream`) — no content pipeline; see [ARCHITECTURE.md](ARCHITECTURE.md) |
-| `GET /healthz` | None | Liveness / engine health |
-| `GET /statsz` | None | Usage, circuit breakers, MCP status |
-| `GET /metrics` | None | Prometheus metrics |
+## Configuration file structure
 
 All `/v1/*` and `/proxy/*` routes require `Authorization: Bearer <client_token>` from secrets.
 
@@ -339,7 +346,7 @@ In-memory LRU cache for deterministic response caching. Responses are cached by 
 
 Named agent definitions with model fallback chains and optional system prompts. When a request specifies `model: "<agent_name>"`, the gateway routes through the agent's model list.
 
-### Model Shorthand (Convention)
+### Model Shorthand
 
 Models listed in the built-in **Model Registry** can be specified as plain strings. Provider and `max_context` are resolved automatically:
 
@@ -357,7 +364,7 @@ Models listed in the built-in **Model Registry** can be specified as plain strin
 }
 ```
 
-### Model Object Notation (Configuration/Override)
+#### Model Object Notation
 
 For custom or local models (not in the registry), or to override registry defaults, use full objects:
 
@@ -388,7 +395,7 @@ For custom or local models (not in the registry), or to override registry defaul
 
 Both styles can be mixed in the same `models` array.
 
-### Model Selector Syntax
+#### Model Selector Syntax
 
 Model entries support flexible selectors that expand at runtime against the discovery catalog. You can select models by provider name, model name, or regex patterns — in any combination:
 
@@ -429,7 +436,7 @@ Model entries support flexible selectors that expand at runtime against the disc
 
 Static fields (`provider`, `model`) act as exact filters. Regex fields (`provider_rgx`, `model_rgx`) act as pattern matchers. When both are set on the same dimension (e.g., `provider` + `provider_rgx`), both must match (AND logic).
 
-### Dynamic Model Discovery (Regex Patterns)
+#### Regex Patterns
 
 Model entries can use regex patterns to dynamically match against the discovery catalog. This enables auto-updating agent model lists when new models appear at providers without manual config changes.
 
@@ -583,78 +590,9 @@ Gemini 3 models include `extra_content.google.thought_signature` in tool_calls r
 
 ## Model Registry
 
-Built-in models that can be referenced by string shorthand in agent `models` arrays. Each entry maps to a provider and includes a default `max_context` and optionally a `format` for per-model wire format routing.
+Built-in models that can be referenced as string shorthand in agent `models` arrays. Each entry maps to a provider and includes a default `max_context` and optionally a `format` for per-model wire format routing.
 
-| Model | Provider | Format | Max Context | Score Bonus |
-|-------|----------|--------|-------------|-------------|
-| `gemini-3.1-flash-lite-preview` | `gemini` | — | 128000 | 0.1 |
-| `gemini-3.1-flash` | `gemini` | — | 128000 | 0.1 |
-| `gemini-2.5-flash-lite` | `gemini` | — | 128000 | 0.1 |
-| `gemini-2.5-flash` | `gemini` | — | 128000 | 0.1 |
-| `deepseek-reasoner` | `deepseek` | — | 128000 | 0.2 |
-| `deepseek-chat` | `deepseek` | — | 128000 | 0.2 |
-| `glm-5.1` | `zai` | — | 128000 | 0.0 |
-| `glm-5-turbo` | `zai` | — | 128000 | 0.0 |
-| `glm-5v-turbo` | `zai` | — | 128000 | 0.0 |
-| `glm-5` | `zai` | — | 128000 | 0.0 |
-| `glm-4.7` | `zai` | — | 128000 | 0.0 |
-| `glm-4.7-flash` | `zai` | — | 128000 | 0.0 |
-| `glm-4.7-flashx` | `zai` | — | 128000 | 0.0 |
-| `glm-4.6` | `zai` | — | 128000 | 0.0 |
-| `glm-4.6v` | `zai` | — | 128000 | 0.0 |
-| `glm-4.5` | `zai` | — | 128000 | 0.0 |
-| `glm-4.5-air` | `zai` | — | 128000 | 0.0 |
-| `glm-4.5-flash` | `zai` | — | 128000 | 0.0 |
-| `glm-4.5v` | `zai` | — | 128000 | 0.0 |
-| `claude-opus-4-5` | `anthropic` | — | 200000 | 0.3 |
-| `claude-opus-4-0` | `anthropic` | — | 200000 | 0.3 |
-| `claude-sonnet-4-5` | `anthropic` | — | 200000 | 0.2 |
-| `claude-sonnet-4-0` | `anthropic` | — | 200000 | 0.2 |
-| `claude-haiku-4-5` | `anthropic` | — | 200000 | 0.1 |
-| `claude-3-7-sonnet-20250219` | `anthropic` | — | 200000 | 0.2 |
-| `claude-3-5-sonnet-20241022` | `anthropic` | — | 200000 | 0.2 |
-| `claude-3-5-haiku-latest` | `anthropic` | — | 200000 | 0.1 |
-| `mistral-large-latest` | `mistral` | — | 262144 | 0.0 |
-| `mistral-small-latest` | `mistral` | — | 256000 | 0.0 |
-| `mistral-medium-latest` | `mistral` | — | 128000 | 0.0 |
-| `codestral-latest` | `mistral` | — | 256000 | 0.0 |
-| `devstral-medium-latest` | `mistral` | — | 262144 | 0.0 |
-| `magistral-medium-latest` | `mistral` | — | 128000 | 0.0 |
-| `pixtral-large-latest` | `mistral` | — | 128000 | 0.0 |
-| `grok-4` | `xai` | — | 256000 | 0.0 |
-| `grok-4-fast` | `xai` | — | 2000000 | 0.0 |
-| `grok-3` | `xai` | — | 131072 | 0.0 |
-| `grok-3-fast` | `xai` | — | 131072 | 0.0 |
-| `grok-3-mini` | `xai` | — | 131072 | 0.0 |
-| `sonar-pro` | `perplexity` | — | 200000 | 0.0 |
-| `sonar-reasoning-pro` | `perplexity` | — | 128000 | 0.1 |
-| `sonar-deep-research` | `perplexity` | — | 128000 | 0.1 |
-| `sonar` | `perplexity` | — | 128000 | 0.0 |
-| `nemotron-3-super` | `nvidia_free` | — | 4000 | 0.0 |
-| `qwen-3.6-plus` | `qwen_free` | — | 8000 | 0.0 |
-| `minimax-m2.5` | `minimax_free` | — | 8000 | 0.0 |
-| `llama-3.3-70b-versatile` | `groq` | — | 131072 | 0.0 |
-| `mixtral-8x7b-32768` | `groq` | — | 32768 | 0.0 |
-| `llama-3.1-405b-instruct` | `sambanova` | — | 128000 | 0.1 |
-| `llama-3.3-70b` | `cerebras` | — | 8192 | 0.0 |
-| `gpt-4o` | `github` | — | 128000 | 0.1 |
-| `phi-3.5-mini-instruct` | `github` | — | 128000 | 0.0 |
-| `qwen2.5-72b-turbo` | `together` | — | 32768 | 0.0 |
-| `qwen3.5-plus` | `zen` | — | 131072 | 0.0 |
-| `minimax-m2.7` | `zen` | — | 200000 | 0.0 |
-| `minimax-m2.5-free` | `zen` | — | 200000 | 0.0 |
-| `kimi-k2.6` | `zen` | — | 200000 | 0.0 |
-| `kimi-k2.5` | `zen` | — | 200000 | 0.0 |
-| `big-pickle` | `zen` | — | 200000 | 0.0 |
-| `ling-2.6-flash-free` | `zen` | — | 200000 | 0.0 |
-| `hy3-preview-free` | `zen` | — | 131072 | 0.0 |
-| `nemotron-3-super-free` | `zen` | — | 4000 | 0.0 |
-| `gpt-5-nano` | `zen` | — | 200000 | 0.0 |
-| `claude-opus-4-7` | `zen` | `anthropic` | 200000 | 0.0 |
-| `claude-opus-4-6` | `zen` | `anthropic` | 200000 | 0.0 |
-| `claude-sonnet-4-6` | `zen` | `anthropic` | 200000 | 0.0 |
-
-Models not in this registry (e.g., local Ollama models, custom endpoints) must be specified as full objects with explicit `provider` and `model` fields.
+For the current catalog, query the `/v1/models` endpoint or enable [dynamic discovery](#model-discovery). Models not in this registry (e.g., local Ollama models, custom endpoints) must be specified as full objects with explicit `provider` and `model` fields.
 
 ## Model Discovery
 
@@ -852,22 +790,24 @@ The model catalog endpoint includes capability and pricing metadata when availab
 
 ## Processing Pipeline Order
 
-  1. **Response cache lookup** (if enabled, bypass entire pipeline on hit)
-  2. **MCP auto-search** (if agent has mcp.auto_search, query MCP server and inject as system message)
-  3. **MCP tool injection** (if agent has MCP servers, inject tools as OpenAI function tools + system prompt)
-  4. **Prefix cache optimizations** (pin system messages, sort tools — includes MCP tools)
-  5. **Agent system prompt injection** (if agent has prompt and no system message exists)
-   6. **Tier-0 regex redaction** (secret patterns via `security_filter`)
-   6b. **Shannon entropy redaction** (high-entropy token detection via `security_filter.entropy_enabled`, runs after regex)
-   7. **Text compaction** (normalize, trim, collapse blanks)
-   8. **Stale tool call pruning** (if `prune_stale_tools` enabled, compact old assistant+tool pairs)
-   9. **Thought pruning** (if `prune_thoughts` enabled, strip reasoning blocks from assistant messages)
-   10. **Window compaction** (if enabled and threshold exceeded)
-   11. **Engine interception** (3-tier last-message summarization using `security_filter.engine`, with TF-IDF relevance-scored truncation when `tfidf_query_source` is set, with fallback chain if agent-referenced)
-   12. **Format-aware body conversion** (if model has `format: "anthropic"`, convert OpenAI request body to Anthropic Messages API format)
-    13. **JSON minification** (final body compaction)
-   14. **Response cache store** (if enabled, store completed SSE response)
-    15. **MCP auto-save** (if agent has mcp.auto_save, async store of assistant response to MCP server)
+| Step | Action | Condition |
+|------|--------|-----------|
+| 1 | **Response cache lookup** | if enabled (bypass entire pipeline on hit) |
+| 2 | **MCP auto-search** | if agent has `mcp.auto_search` |
+| 3 | **MCP tool injection** | if agent has MCP servers |
+| 4 | **Prefix cache optimizations** | pin system messages, sort tools |
+| 5 | **Agent system prompt injection** | if agent has prompt and no system message exists |
+| 6 | **Tier-0 regex redaction** | secret patterns via `security_filter` |
+| 6b | **Shannon entropy redaction** | if `security_filter.entropy_enabled` (runs after regex) |
+| 7 | **Text compaction** | normalize, trim, collapse blanks |
+| 8 | **Stale tool call pruning** | if `prune_stale_tools` enabled |
+| 9 | **Thought pruning** | if `prune_thoughts` enabled |
+| 10 | **Window compaction** | if enabled and threshold exceeded |
+| 11 | **Engine interception** | 3-tier summarization with TF-IDF and fallback chain |
+| 12 | **Format-aware body conversion** | if model has `format: "anthropic"` |
+| 13 | **JSON minification** | final body compaction |
+| 14 | **Response cache store** | if enabled |
+| 15 | **MCP auto-save** | if agent has `mcp.auto_save` (async) |
 
 ### Best-Effort Pipeline
 
@@ -876,19 +816,10 @@ The content pipeline (steps 2–9) is **best-effort**: if any step fails (e.g., 
 ## Configuration Notes
 
 - **JSON with Comments**: Configuration files support `//` and `/* */` comments
-- **Model Registry**: Built-in models can be referenced as strings in agent configs; custom/local models use full object notation
-- **Provider Registry**: All built-in providers are loaded automatically; user providers are merged on top
-- **External Prompts**: System prompts can be inline (`system_prompt`) or external files (`system_prompt_file`) in `./prompts/` directory
-- **Separate Engines**: `security_filter.engine` and `window.engine` can use different models/APIs, or share the same agent reference
-- **Agent-as-Engine**: Engine fields accept a string (agent name) or inline object. Agent references inherit the agent's model list as a fallback chain
+- **External Prompts**: System prompts can be inline (`system_prompt`) or external files (`system_prompt_file`) relative to the config directory (or absolute if validated)
 - **API Format Abstraction**: Supports `"ollama"` (native `/api/generate`) and `"openai"` (compatible `/v1/chat/completions`) formats
-- **Auto-enable**: `security_filter.enabled` defaults to `true` when patterns are provided; `prefix_cache` and `compaction` auto-enable when sub-fields are set
-- **max_tokens injection**: `max_tokens` is injected from per-model `MaxOutput` in the `ModelRegistry` when the client doesn't set it. Unknown models (not in registry) are not injected.
-- **Provider Adapters**: Provider-specific wire format differences (auth, request/response mutation, error classification) are handled by the adapter system. See [`ADAPTERS.md`](ADAPTERS.md) for details.
-- **Capability-Based Routing**: When model entries include `required_capabilities`, models without matching metadata are skipped during target building. Capabilities are inferred from provider responses, static registry entries, or heuristic model name patterns (e.g., `claude-` → vision+tool_calls, `gemini-2` → vision+tool_calls+reasoning).
-- **Circuit Breaker**: Each agent+provider+model combination has an independent circuit breaker (Closed/Open/HalfOpen states). See [`ARCHITECTURE.md`](ARCHITECTURE.md#circuit-breaker) for the state machine.
-- **Graceful Degradation**: When `skip_on_engine_failure` is `true`, the gateway operates normally even without a local Ollama instance. Secret redaction (Tier-0 regex) still runs; only the LLM-based summarization is skipped. When `tfidf_query_source` is set, Tier 3 payloads that reduce below `soft_limit` via TF-IDF scoring skip the engine call entirely.
-- **TF-IDF Truncation**: When `tfidf_query_source` is set, Tier 3 uses a local TF-IDF algorithm (no external dependencies) to score content blocks by relevance to the user's query terms. This is a pure Go implementation using `strings.Fields` for tokenization and TF-IDF math for scoring. See `internal/pipeline/tfidf.go`.
+- **Provider Adapters**: Provider-specific wire format differences are handled by the adapter system. See [`ADAPTERS.md`](ADAPTERS.md) for details.
+- **Circuit Breaker**: Each agent+provider+model combination has an independent circuit breaker. See [`ARCHITECTURE.md`](ARCHITECTURE.md#circuit-breaker) for the state machine.
 
 ## Configuration Validation
 
