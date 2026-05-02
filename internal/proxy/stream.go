@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"nenya/internal/config"
 	"nenya/internal/gateway"
 	providerpkg "nenya/internal/providers"
 	"nenya/internal/routing"
@@ -512,6 +513,57 @@ func (p *Proxy) writeBlockedSSE(gw *gateway.NenyaGateway, w http.ResponseWriter)
 	}
 }
 
+// autoSaveTryServer runs MCP auto-save on one server. It returns true if the save
+// succeeded; false means the caller may try another server.
+func (p *Proxy) autoSaveTryServer(liveGW *gateway.NenyaGateway, agent *config.AgentConfig, serverName, agentName, assistantContent string) bool {
+	client, ok := liveGW.MCPClients[serverName]
+	if !ok || !client.Ready() {
+		return false
+	}
+
+	saveTool := agent.MCP.SaveTool
+	if saveTool == "" {
+		saveTool = p.discoverToolByPrefix(liveGW, serverName, "add")
+		if saveTool == "" {
+			saveTool = p.discoverToolByPrefix(liveGW, serverName, "save")
+			if saveTool == "" {
+				liveGW.Logger.Warn("MCP auto-save: no 'add'/'save' tool found on server",
+					"server", serverName, "agent", agentName)
+				return false
+			}
+		}
+	}
+
+	baseCtx := p.ShutdownCtx
+	if baseCtx == nil {
+		baseCtx = context.Background()
+	}
+	saveCtx, cancel := context.WithTimeout(baseCtx, mcpExecTimeout)
+	defer cancel()
+
+	start := time.Now()
+	_, err := client.CallTool(saveCtx, saveTool, map[string]any{
+		"wing":     agentName,
+		"room":     "conversation",
+		"content":  assistantContent,
+		"added_by": "nenya",
+	})
+	duration := time.Since(start)
+	if err != nil {
+		liveGW.Logger.Warn("MCP auto-save failed (best-effort)",
+			"server", serverName, "agent", agentName, "err", err,
+			"duration_ms", duration.Milliseconds())
+		liveGW.Metrics.RecordMCPAutoSave(serverName, agentName, err)
+		return false
+	}
+	liveGW.Logger.Debug("MCP auto-save completed",
+		"server", serverName, "agent", agentName,
+		"duration_ms", duration.Milliseconds(),
+		"content_len", len(assistantContent))
+	liveGW.Metrics.RecordMCPAutoSave(serverName, agentName, nil)
+	return true
+}
+
 func (p *Proxy) asyncMCPAutoSave(gw *gateway.NenyaGateway, agentName string, contentBuilder *contentBuilder) {
 	if agentName == "" || contentBuilder == nil {
 		return
@@ -527,53 +579,19 @@ func (p *Proxy) asyncMCPAutoSave(gw *gateway.NenyaGateway, agentName string, con
 	}
 
 	go func() {
-		for _, serverName := range agent.MCP.Servers {
-			client, ok := gw.MCPClients[serverName]
-			if !ok || !client.Ready() {
-				continue
-			}
-
-			saveTool := agent.MCP.SaveTool
-			if saveTool == "" {
-				saveTool = p.discoverToolByPrefix(gw, serverName, "add")
-				if saveTool == "" {
-					saveTool = p.discoverToolByPrefix(gw, serverName, "save")
-					if saveTool == "" {
-						gw.Logger.Warn("MCP auto-save: no 'add'/'save' tool found on server",
-							"server", serverName, "agent", agentName)
-						continue
-					}
-				}
-			}
-
-			baseCtx := p.ShutdownCtx
-			if baseCtx == nil {
-				baseCtx = context.Background()
-			}
-			saveCtx, cancel := context.WithTimeout(baseCtx, mcpExecTimeout)
-
-			start := time.Now()
-			_, err := client.CallTool(saveCtx, saveTool, map[string]any{
-				"wing":     agentName,
-				"room":     "conversation",
-				"content":  assistantContent,
-				"added_by": "nenya",
-			})
-			duration := time.Since(start)
-			cancel()
-			if err != nil {
-				gw.Logger.Warn("MCP auto-save failed (best-effort)",
-					"server", serverName, "agent", agentName, "err", err,
-					"duration_ms", duration.Milliseconds())
-				gw.Metrics.RecordMCPAutoSave(serverName, agentName, err)
-			} else {
-				gw.Logger.Debug("MCP auto-save completed",
-					"server", serverName, "agent", agentName,
-					"duration_ms", duration.Milliseconds(),
-					"content_len", len(assistantContent))
-				gw.Metrics.RecordMCPAutoSave(serverName, agentName, nil)
-			}
+		liveGW := p.Gateway()
+		if liveGW == nil {
 			return
+		}
+		agent, ok := liveGW.Config.Agents[agentName]
+		if !ok || agent.MCP == nil || !agent.MCP.AutoSave {
+			return
+		}
+
+		for _, serverName := range agent.MCP.Servers {
+			if p.autoSaveTryServer(liveGW, &agent, serverName, agentName, assistantContent) {
+				return
+			}
 		}
 	}()
 }

@@ -11,21 +11,13 @@ func ApplyPrefixCacheOptimizations(payload map[string]interface{}, messages []in
 		return
 	}
 
-	mutated := false
-
 	if cfg.PinSystemFirst {
-		if PinSystemMessages(messages) {
-			mutated = true
-		}
+		PinSystemMessages(messages)
 	}
 
 	if cfg.StableTools {
-		if StabilizeTools(payload) {
-			mutated = true
-		}
+		StabilizeTools(payload)
 	}
-
-	_ = mutated
 }
 
 func PinSystemMessages(messages []interface{}) bool {

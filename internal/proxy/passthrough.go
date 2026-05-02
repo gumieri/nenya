@@ -2,6 +2,7 @@ package proxy
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -13,6 +14,7 @@ import (
 	"nenya/internal/gateway"
 	"nenya/internal/infra"
 	"nenya/internal/routing"
+	"nenya/internal/util"
 )
 
 func (p *Proxy) handlePassthrough(gw *gateway.NenyaGateway, w http.ResponseWriter, r *http.Request) {
@@ -73,16 +75,6 @@ func (p *Proxy) handlePassthrough(gw *gateway.NenyaGateway, w http.ResponseWrite
 	upstreamURL := buildPassthroughURL(provider, subPath, r.URL.RawQuery)
 	ctx, cancel := buildPassthroughContextAndCancel(r.Context(), provider)
 	defer cancel()
-	req, err := p.buildUpstreamRequest(gw, ctx, r.Method, upstreamURL, bodyBytes, provider.Name, r.Header)
-	if err != nil {
-		gw.Logger.Error("passthrough: failed to create upstream request", "provider", providerName, "err", err)
-		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
-		return
-	}
-
-	if ct := r.Header.Get("Content-Type"); ct != "" {
-		req.Header.Set("Content-Type", ct)
-	}
 
 	ctxLogger := gw.Logger.With(
 		"operation", "passthrough",
@@ -91,7 +83,7 @@ func (p *Proxy) handlePassthrough(gw *gateway.NenyaGateway, w http.ResponseWrite
 		"path", subPath,
 	)
 
-	resp, err := gw.Client.Do(req)
+	resp, err := p.executePassthroughUpstream(gw, ctx, r, upstreamURL, bodyBytes, provider)
 	if err != nil {
 		ctxLogger.Error("upstream request failed", "err", err)
 		http.Error(w, "Upstream provider error", http.StatusBadGateway)
@@ -115,6 +107,37 @@ func (p *Proxy) handlePassthrough(gw *gateway.NenyaGateway, w http.ResponseWrite
 			ctxLogger.Debug("response copy ended", "err", err)
 		}
 	}
+}
+
+// executePassthroughUpstream performs the retried upstream HTTP round-trip for passthrough.
+func (p *Proxy) executePassthroughUpstream(gw *gateway.NenyaGateway, ctx context.Context, r *http.Request, upstreamURL string, bodyBytes []byte, provider *config.Provider) (*http.Response, error) {
+	maxAttempts := provider.MaxRetryAttempts
+	if maxAttempts <= 0 {
+		maxAttempts = gw.Config.Governance.EffectiveMaxRetryAttempts()
+	}
+
+	var resp *http.Response
+	err := util.DoWithRetry(ctx, maxAttempts, func() error {
+		req, reqErr := p.buildUpstreamRequest(gw, ctx, r.Method, upstreamURL, bodyBytes, provider.Name, r.Header)
+		if reqErr != nil {
+			return reqErr
+		}
+		if ct := r.Header.Get("Content-Type"); ct != "" {
+			req.Header.Set("Content-Type", ct)
+		}
+
+		var fetchErr error
+		resp, fetchErr = gw.Client.Do(req)
+		if fetchErr != nil {
+			return fetchErr
+		}
+		if resp.StatusCode >= 500 {
+			_ = resp.Body.Close()
+			return fmt.Errorf("upstream error: %d", resp.StatusCode)
+		}
+		return nil
+	})
+	return resp, err
 }
 
 func readPassthroughBody(gw *gateway.NenyaGateway, w http.ResponseWriter, r *http.Request) ([]byte, error) {

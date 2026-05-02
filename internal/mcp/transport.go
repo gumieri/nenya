@@ -388,6 +388,8 @@ func (t *HTTPTransport) SendNotification(method string, params any) error {
 		return ErrTransportNotReady
 	}
 
+	// Notifications are decoupled from any HTTP request; use a bounded timeout.
+	// Shutdown is not wired here (best-effort fire-and-forget).
 	ctx, cancel := context.WithTimeout(context.Background(), t.cfg.RequestTimeout)
 	defer cancel()
 
