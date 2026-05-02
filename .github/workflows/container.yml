@@ -40,15 +40,18 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Build and push per-arch images
+      - name: Build & push multi-arch images
         uses: docker/build-push-action@v6
         with:
           context: .
           file: deploy/Containerfile
           platforms: linux/amd64,linux/arm64
           tags: |
+            ghcr.io/${{ github.repository }}:${{ github.ref_name }}
+            ghcr.io/${{ github.repository }}:latest
             ghcr.io/${{ github.repository }}:${{ github.ref_name }}-amd64
             ghcr.io/${{ github.repository }}:${{ github.ref_name }}-arm64
+          push: true
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
@@ -64,22 +67,6 @@ jobs:
         with:
           image: ghcr.io/${{ github.repository }}:${{ github.ref_name }}-arm64
           output-file: nenya-${{ github.ref_name }}-linux-arm64.spdx.json
-          format: spdx-json
-
-      - name: Create multi-arch manifest
-        run: |
-          IMAGE="ghcr.io/${{ github.repository }}"
-          VERSION="${{ github.ref_name }}"
-
-          docker manifest create "${IMAGE}:${VERSION}" \
-            "${IMAGE}:${VERSION}-amd64" \
-            "${IMAGE}:${VERSION}-arm64"
-          docker manifest push "${IMAGE}:${VERSION}"
-
-          docker manifest create "${IMAGE}:latest" \
-            "${IMAGE}:${VERSION}-amd64" \
-            "${IMAGE}:${VERSION}-arm64"
-          docker manifest push "${IMAGE}:latest"
 
       - name: Sign images
         run: |
