@@ -6,7 +6,7 @@ on:
       - 'v*'
 
 permissions:
-  contents: read
+  contents: write
   packages: write
   id-token: write
   attestations: write
@@ -83,6 +83,27 @@ jobs:
           image: ghcr.io/${{ github.repository }}:${{ github.ref_name }}-arm64
           format: spdx-json
           output-file: nenya-${{ github.ref_name }}-linux-arm64.spdx.json
+
+      - name: Create GitHub release
+        id: create_release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: "Nenya ${{ github.ref_name }}"
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload SBOMs to release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          files: |
+            nenya-${{ github.ref_name }}-linux-amd64.spdx.json
+            nenya-${{ github.ref_name }}-linux-arm64.spdx.json
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Attest SBOM for each architecture
         run: |
