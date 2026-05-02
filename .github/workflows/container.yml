@@ -53,18 +53,18 @@ jobs:
           cache-to: type=gha,mode=max
 
       - name: Generate SBOM for amd64
-        uses: github/sbom-action@v3
+        uses: anchore/sbom-action@v1
         with:
-          sbom-output-type: spdx-json
           image: ghcr.io/${{ github.repository }}:${{ github.ref_name }}-amd64
           output-file: nenya-${{ github.ref_name }}-linux-amd64.spdx.json
+          format: spdx-json
 
       - name: Generate SBOM for arm64
-        uses: github/sbom-action@v3
+        uses: anchore/sbom-action@v1
         with:
-          sbom-output-type: spdx-json
           image: ghcr.io/${{ github.repository }}:${{ github.ref_name }}-arm64
           output-file: nenya-${{ github.ref_name }}-linux-arm64.spdx.json
+          format: spdx-json
 
       - name: Create multi-arch manifest
         run: |
