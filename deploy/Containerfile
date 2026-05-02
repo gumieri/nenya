@@ -1,8 +1,7 @@
 FROM golang:1.26-alpine AS builder
 
-RUN apk add --no-cache ca-certificates
-
-RUN adduser -D -H -u 65532 -g '' -s /sbin/nologin nenya && \
+RUN apk add --no-cache ca-certificates && \
+    adduser -D -H -u 65532 -g '' -s /sbin/nologin nenya && \
     mkdir -p /tmp/etc && \
     echo "nenya:x:65532:65532::/home/nenya:/sbin/nologin" > /tmp/etc/passwd && \
     echo "nenya:x:65532:" > /tmp/etc/group
