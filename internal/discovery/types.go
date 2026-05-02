@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strings"
 
-	"nenya/internal/config"
+	"nenya/config"
 )
 
 const (

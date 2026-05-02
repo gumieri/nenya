@@ -5,7 +5,7 @@ import (
 	"sort"
 	"strings"
 
-	"nenya/internal/config"
+	"nenya/config"
 )
 
 const (

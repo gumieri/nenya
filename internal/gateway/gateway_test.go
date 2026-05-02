@@ -5,7 +5,7 @@ import (
 	"log/slog"
 	"testing"
 
-	"nenya/internal/config"
+	"nenya/config"
 )
 
 func testConfig() config.Config {

@@ -20,15 +20,13 @@ type AgentModel struct {
 	MaxContext           int      `json:"max_context"`
 	MaxOutput            int      `json:"max_output"`
 	RequiredCapabilities []string `json:"required_capabilities,omitempty"`
-	ProviderRgx          string   `json:"provider_rgx,omitempty"` // regex matching provider name from discovery
-	ModelRgx             string   `json:"model_rgx,omitempty"`    // regex matching model name from discovery
+	ProviderRgx          string   `json:"provider_rgx,omitempty"`
+	ModelRgx             string   `json:"model_rgx,omitempty"`
 
-	providerRE *regexp.Regexp // compiled regex for provider matching
-	modelRE    *regexp.Regexp // compiled regex for model matching
+	providerRE *regexp.Regexp
+	modelRE    *regexp.Regexp
 }
 
-// CompileRegex compiles the regex patterns in the model entry.
-// Returns an error if any pattern is invalid.
 func (m *AgentModel) CompileRegex() error {
 	if m.ProviderRgx != "" {
 		re, err := regexp.Compile(m.ProviderRgx)
@@ -47,8 +45,6 @@ func (m *AgentModel) CompileRegex() error {
 	return nil
 }
 
-// MatchesCatalog returns true if the model entry matches the given provider and model
-// from the discovery catalog using the compiled regex patterns and exact field matches.
 func (m *AgentModel) MatchesCatalog(provider, model string) bool {
 	if m.Provider != "" && m.Provider != provider {
 		return false
@@ -65,14 +61,10 @@ func (m *AgentModel) MatchesCatalog(provider, model string) bool {
 	return true
 }
 
-// IsDynamic returns true if the model entry has regex patterns and should be
-// expanded against the discovery catalog at runtime.
 func (m *AgentModel) IsDynamic() bool {
 	return m.providerRE != nil || m.modelRE != nil
 }
 
-// AgentConfig defines an agent (a named alias for one or more models)
-// with routing strategy, cooldown, retry, and MCP configuration.
 type AgentConfig struct {
 	Strategy          string          `json:"strategy"`
 	CooldownSeconds   int             `json:"cooldown_seconds"`
@@ -136,10 +128,6 @@ type ProviderConfig struct {
 	Thinking             *ThinkingConfig   `json:"thinking,omitempty"`
 }
 
-// ThinkingConfig controls thinking/reasoning mode activation for a provider.
-// When nil (omitted in config), auto mode is used: thinking is enabled when
-// the model's capabilities indicate it supports reasoning.
-// When set, the Enabled field takes precedence over model-level detection.
 type ThinkingConfig struct {
 	Enabled       bool `json:"enabled"`
 	ClearThinking bool `json:"clear_thinking"`
@@ -223,7 +211,6 @@ type SecretsConfig struct {
 	ApiKeys      map[string]ApiKey `json:"api_keys,omitempty"`
 }
 
-// ApiKey defines a client API key with roles and agent access control.
 type ApiKey struct {
 	Name          string         `json:"name"`
 	Token         string         `json:"token"`
@@ -235,7 +222,6 @@ type ApiKey struct {
 	Permissions   map[string]any `json:"permissions,omitempty"`
 }
 
-// Validate checks the ApiKey fields and returns an error if invalid.
 func (k *ApiKey) Validate() error {
 	if k.Token == "" {
 		return errors.New("token cannot be empty")
@@ -259,7 +245,6 @@ func (k *ApiKey) Validate() error {
 	return nil
 }
 
-// Role constants for API key authorization.
 const (
 	RoleAdmin    = "admin"
 	RoleUser     = "user"
@@ -305,7 +290,6 @@ func (e *EngineRef) UnmarshalJSON(data []byte) error {
 	return json.Unmarshal(data, aux)
 }
 
-// EngineTarget describes a resolved engine target with timeout and configuration.
 type EngineTarget struct {
 	Engine   EngineConfig
 	Provider *Provider
@@ -532,4 +516,111 @@ type AgentMCPConfig struct {
 	AutoSearch    bool     `json:"auto_search,omitempty"`
 	SearchTool    string   `json:"search_tool,omitempty"`
 	SaveTool      string   `json:"save_tool,omitempty"`
+}
+
+type DiscoveryConfig struct {
+	Enabled          bool              `json:"enabled"`
+	AutoAgents       bool              `json:"auto_agents"`
+	AutoAgentsConfig *AutoAgentsConfig `json:"auto_agents_config,omitempty"`
+	enabledSet       bool              `json:"-"`
+	autoAgentsSet    bool              `json:"-"`
+}
+
+type AutoAgentCategoryConfig struct {
+	Enabled bool `json:"enabled"`
+}
+
+type AutoAgentsConfig struct {
+	Fast      *AutoAgentCategoryConfig `json:"fast,omitempty"`
+	Reasoning *AutoAgentCategoryConfig `json:"reasoning,omitempty"`
+	Vision    *AutoAgentCategoryConfig `json:"vision,omitempty"`
+	Tools     *AutoAgentCategoryConfig `json:"tools,omitempty"`
+	Large     *AutoAgentCategoryConfig `json:"large,omitempty"`
+	Balanced  *AutoAgentCategoryConfig `json:"balanced,omitempty"`
+	Coding    *AutoAgentCategoryConfig `json:"coding,omitempty"`
+}
+
+func (a *AutoAgentsConfig) IsEnabled(category string) bool {
+	if a == nil {
+		return true
+	}
+	var cfg *AutoAgentCategoryConfig
+	switch category {
+	case "fast":
+		cfg = a.Fast
+	case "reasoning":
+		cfg = a.Reasoning
+	case "vision":
+		cfg = a.Vision
+	case "tools":
+		cfg = a.Tools
+	case "large":
+		cfg = a.Large
+	case "balanced":
+		cfg = a.Balanced
+	case "coding":
+		cfg = a.Coding
+	default:
+		return false
+	}
+	if cfg == nil {
+		return false
+	}
+	return cfg.Enabled
+}
+
+func (d *DiscoveryConfig) EnabledWasSet() bool    { return d.enabledSet }
+func (d *DiscoveryConfig) AutoAgentsWasSet() bool { return d.autoAgentsSet }
+
+func (d *DiscoveryConfig) UnmarshalJSON(data []byte) error {
+	type alias DiscoveryConfig
+	aux := struct {
+		Enabled    *bool `json:"enabled"`
+		AutoAgents *bool `json:"auto_agents"`
+		*alias
+	}{
+		alias: (*alias)(d),
+	}
+	if err := json.Unmarshal(data, &aux); err != nil {
+		return err
+	}
+	if aux.Enabled != nil {
+		d.Enabled = *aux.Enabled
+		d.enabledSet = true
+	}
+	if aux.AutoAgents != nil {
+		d.AutoAgents = *aux.AutoAgents
+		d.autoAgentsSet = true
+	}
+	return nil
+}
+
+type ResponseCacheConfig struct {
+	Enabled            bool   `json:"enabled"`
+	MaxEntries         int    `json:"max_entries"`
+	MaxEntryBytes      int64  `json:"max_entry_bytes"`
+	TTLSeconds         int    `json:"ttl_seconds"`
+	EvictEverySeconds  int    `json:"evict_every_seconds"`
+	ForceRefreshHeader string `json:"force_refresh_header"`
+	enabledSet         bool   `json:"-"`
+}
+
+func (c *ResponseCacheConfig) EnabledWasSet() bool { return c.enabledSet }
+
+func (c *ResponseCacheConfig) UnmarshalJSON(data []byte) error {
+	type alias ResponseCacheConfig
+	aux := struct {
+		Enabled *bool `json:"enabled"`
+		*alias
+	}{
+		alias: (*alias)(c),
+	}
+	if err := json.Unmarshal(data, &aux); err != nil {
+		return err
+	}
+	if aux.Enabled != nil {
+		c.Enabled = *aux.Enabled
+		c.enabledSet = true
+	}
+	return nil
 }

@@ -7,7 +7,7 @@ import (
 	"net/http"
 	"strings"
 
-	"nenya/internal/config"
+	"nenya/config"
 	"nenya/internal/util"
 )
 

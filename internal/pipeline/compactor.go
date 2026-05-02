@@ -3,7 +3,7 @@ package pipeline
 import (
 	"strings"
 
-	"nenya/internal/config"
+	"nenya/config"
 )
 
 func ApplyCompaction(messages []interface{}, cfg config.CompactionConfig) bool {

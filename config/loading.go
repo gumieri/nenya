@@ -25,7 +25,7 @@ func Load(path string) (*Config, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to read config file %s: %v", path, err)
 	}
-	data = stripComments(data)
+	data = StripComments(data)
 	var cfg Config
 	if err := json.Unmarshal(data, &cfg); err != nil {
 		return nil, fmt.Errorf("failed to parse config file %s: %v", path, err)
@@ -37,7 +37,6 @@ func Load(path string) (*Config, error) {
 }
 
 func LoadFromDir(dir string) (*Config, error) {
-	// 1. Try config.d/*.json (merge all) - only if it exists and is a directory
 	configDirPath := dir + "/config.d"
 	if info, err := os.Stat(configDirPath); err == nil && info.IsDir() {
 		dirCfg, dirErr := loadConfigDirectory(configDirPath)
@@ -49,7 +48,6 @@ func LoadFromDir(dir string) (*Config, error) {
 		}
 	}
 
-	// 2. Try config.json
 	configFilePath := dir + "/config.json"
 	if info, err := os.Stat(configFilePath); err == nil && !info.IsDir() {
 		fileCfg, fileErr := Load(configFilePath)
@@ -64,7 +62,6 @@ func LoadFromDir(dir string) (*Config, error) {
 	return nil, fmt.Errorf("no config found in %s (tried %s/config.d/*.json and %s/config.json)", dir, dir, dir)
 }
 
-// loadConfigDirectory loads and merges all *.json files in the given directory alphabetically.
 func loadConfigDirectory(dir string) (*Config, error) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
@@ -80,7 +77,6 @@ func loadConfigDirectory(dir string) (*Config, error) {
 		if !strings.HasSuffix(name, ".json") {
 			continue
 		}
-		// Skip secrets.json to avoid accidentally loading secrets as config
 		if name == "secrets.json" {
 			continue
 		}
@@ -99,7 +95,7 @@ func loadConfigDirectory(dir string) (*Config, error) {
 		if err != nil {
 			return nil, fmt.Errorf("failed to read config file %s: %v", filePath, err)
 		}
-		data = stripComments(data)
+		data = StripComments(data)
 
 		var partial Config
 		if err := json.Unmarshal(data, &partial); err != nil {
@@ -284,12 +280,12 @@ func mergeCompactionConfig(base, overlay *Config) {
 		base.Compaction.PruneStaleTools = overlay.Compaction.PruneStaleTools
 		base.Compaction.pruneSet = true
 	}
+	if overlay.Compaction.ToolProtectionWindow != 0 {
+		base.Compaction.ToolProtectionWindow = overlay.Compaction.ToolProtectionWindow
+	}
 	if overlay.Compaction.PruneThoughtsWasSet() {
 		base.Compaction.PruneThoughts = overlay.Compaction.PruneThoughts
 		base.Compaction.pruneThoughtsSet = true
-	}
-	if overlay.Compaction.ToolProtectionWindow != 0 {
-		base.Compaction.ToolProtectionWindow = overlay.Compaction.ToolProtectionWindow
 	}
 }
 
@@ -363,7 +359,7 @@ func mergeMap[T any](base, overlay *Config, baseField *map[string]T, overlayFiel
 	}
 }
 
-func stripComments(data []byte) []byte {
+func StripComments(data []byte) []byte {
 	var result []byte
 	i := 0
 	inString := false
@@ -468,7 +464,6 @@ func LoadSecrets() (*SecretsConfig, error) {
 	credDir := os.Getenv("CREDENTIALS_DIRECTORY")
 	secretsDir := os.Getenv("NENYA_SECRETS_DIR")
 
-	// 1. systemd single file
 	secrets, err := tryLoadCredFile()
 	if err != nil {
 		return nil, err
@@ -477,7 +472,6 @@ func LoadSecrets() (*SecretsConfig, error) {
 		return validateSecretsResult(secrets)
 	}
 
-	// 2. CREDENTIALS_DIRECTORY/secrets.d/*.json
 	if credDir != "" {
 		secrets, err = loadSecretsFromPath(credDir + "/secrets.d")
 		if err != nil {
@@ -488,7 +482,6 @@ func LoadSecrets() (*SecretsConfig, error) {
 		}
 	}
 
-	// 3. NENYA_SECRETS_DIR or /run/secrets/nenya
 	if secretsDir == "" {
 		secretsDir = "/run/secrets/nenya"
 	}

@@ -5,13 +5,11 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"math/rand"
 	"net/http"
 	"regexp"
 	"strings"
 	"time"
-
-	providerpkg "nenya/internal/providers"
-	"nenya/internal/util"
 )
 
 func closeBody(resp *http.Response) {
@@ -74,8 +72,8 @@ func collectValidationErrors(ctx context.Context, cfg *Config, providers map[str
 	errors := []string{}
 
 	errors = append(errors, validateTFIDFQuerySource(cfg.Governance.TFIDFQuerySource)...)
-	errors = append(errors, validatePatternsErrors("security_filter.patterns", cfg.SecurityFilter.Patterns, logger)...)
-	errors = append(errors, validatePatternsErrors("governance.blocked_execution_patterns", cfg.Governance.BlockedExecutionPatterns, logger)...)
+	errors = append(errors, validatePatternsToList("security_filter.patterns", cfg.SecurityFilter.Patterns, logger)...)
+	errors = append(errors, validatePatternsToList("governance.blocked_execution_patterns", cfg.Governance.BlockedExecutionPatterns, logger)...)
 	errors = append(errors, validateModelRegistryErrors(logger)...)
 	errors = append(errors, validateEntropyConfig(cfg.SecurityFilter)...)
 
@@ -93,13 +91,6 @@ func validateTFIDFQuerySource(source string) []string {
 	default:
 		return []string{fmt.Sprintf("governance.tfidf_query_source: invalid value %q, must be empty, \"prior_messages\", or \"self\"", source)}
 	}
-}
-
-func validatePatternsErrors(label string, patterns []string, logger *slog.Logger) []string {
-	if err := ValidatePatterns(label, patterns, logger); err != nil {
-		return []string{err.Error()}
-	}
-	return nil
 }
 
 func validateModelRegistryErrors(logger *slog.Logger) []string {
@@ -146,59 +137,13 @@ func validateProviders(ctx context.Context, providers map[string]*Provider, logg
 	return errors
 }
 
-func validateOllamaHealth(ctx context.Context, ollamaURL string) bool {
-	healthURL := OllamaHealthURL(ollamaURL)
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, healthURL, nil)
-	if err != nil {
-		return false
-	}
-	resp, err := validationClient.Do(req)
-	if err != nil {
-		return false
-	}
-	defer closeBody(resp)
-	return resp.StatusCode == http.StatusOK
-}
-
 var validationClient = &http.Client{Timeout: 30 * time.Second}
 
 func validateProvider(ctx context.Context, name string, provider *Provider, logger *slog.Logger) error {
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 
-	var validationURL string
-	if spec, ok := providerpkg.Get(name); ok && spec.ValidationEndpoint != nil {
-		validationURL = spec.ValidationEndpoint(provider.URL)
-	}
-
-	if validationURL == "" {
-		return validateWithMinimalRequest(provider, ctx, logger)
-	}
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, validationURL, nil)
-	if err != nil {
-		return fmt.Errorf("failed to create request: %v", err)
-	}
-
-	if err = ApplyAuthHeader(req, provider); err != nil {
-		return fmt.Errorf("failed to apply authentication: %v", err)
-	}
-
-	resp, err := validationClient.Do(req)
-	if err != nil {
-		return fmt.Errorf("request failed: %v", err)
-	}
-	defer closeBody(resp)
-
-	if resp.StatusCode == http.StatusOK || resp.StatusCode == http.StatusUnauthorized {
-		if resp.StatusCode == http.StatusUnauthorized {
-			return fmt.Errorf("API key rejected (HTTP 401)")
-		}
-		return nil
-	}
-
-	body, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
-	return fmt.Errorf("unexpected status %d: %s", resp.StatusCode, string(body))
+	return validateWithMinimalRequest(provider, ctx, logger)
 }
 
 func validateWithMinimalRequest(provider *Provider, ctx context.Context, logger *slog.Logger) error {
@@ -209,12 +154,12 @@ func validateWithMinimalRequest(provider *Provider, ctx context.Context, logger 
 	}
 	req.Header.Set("Content-Type", "application/json")
 
-	if err = ApplyAuthHeader(req, provider); err != nil {
-		return fmt.Errorf("failed to apply authentication: %v", err)
+	if authErr := applyAuthHeader(req, provider); authErr != nil {
+		return fmt.Errorf("failed to apply authentication: %w", authErr)
 	}
 
 	var resp *http.Response
-	err = util.DoWithRetry(ctx, 3, func() error {
+	err = doWithRetry(ctx, 3, func() error {
 		var doErr error
 		resp, doErr = validationClient.Do(req)
 		if doErr != nil {
@@ -242,7 +187,7 @@ func validateWithMinimalRequest(provider *Provider, ctx context.Context, logger 
 	return fmt.Errorf("unexpected status %d: %s", resp.StatusCode, string(body))
 }
 
-func ApplyAuthHeader(req *http.Request, provider *Provider) error {
+func applyAuthHeader(req *http.Request, provider *Provider) error {
 	switch provider.AuthStyle {
 	case "bearer":
 		req.Header.Set("Authorization", "Bearer "+provider.APIKey)
@@ -256,7 +201,7 @@ func ApplyAuthHeader(req *http.Request, provider *Provider) error {
 	return nil
 }
 
-func ValidatePatterns(label string, patterns []string, logger *slog.Logger) error {
+func validatePatternsToList(label string, patterns []string, logger *slog.Logger) []string {
 	var errs []string
 	for i, p := range patterns {
 		if _, err := regexp.Compile(p); err != nil {
@@ -265,6 +210,11 @@ func ValidatePatterns(label string, patterns []string, logger *slog.Logger) erro
 			logger.Error("pattern compile failed", "label", label, "index", i, "pattern", p, "err", err)
 		}
 	}
+	return errs
+}
+
+func ValidatePatterns(label string, patterns []string, logger *slog.Logger) error {
+	errs := validatePatternsToList(label, patterns, logger)
 	if len(errs) > 0 {
 		return fmt.Errorf("invalid patterns in %s:\n  - %s", label, strings.Join(errs, "\n  - "))
 	}
@@ -278,7 +228,62 @@ func OllamaHealthURL(engineURL string) string {
 		return engineURL[:len(engineURL)-len(nativeSuffix)] + "/api/tags"
 	}
 	if strings.HasSuffix(engineURL, openaiSuffix) {
-		return engineURL[:len(engineURL)-len(openaiSuffix)] + "/api/tags"
+		return engineURL[:len(openaiSuffix)] + "/api/tags"
 	}
 	return engineURL
+}
+
+func validateOllamaHealth(ctx context.Context, ollamaURL string) bool {
+	healthURL := OllamaHealthURL(ollamaURL)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, healthURL, nil)
+	if err != nil {
+		return false
+	}
+	resp, err := validationClient.Do(req)
+	if err != nil {
+		return false
+	}
+	defer closeBody(resp)
+	return resp.StatusCode == http.StatusOK
+}
+
+func doWithRetry(ctx context.Context, maxAttempts int, fn func() error) error {
+	if maxAttempts <= 1 {
+		return fn()
+	}
+
+	var lastErr error
+	for attempt := 0; attempt < maxAttempts; attempt++ {
+		if err := fn(); err != nil {
+			lastErr = err
+			if attempt == maxAttempts-1 {
+				return lastErr
+			}
+			backoff := calculateBackoff(attempt)
+			timer := time.NewTimer(backoff)
+			select {
+			case <-timer.C:
+			case <-ctx.Done():
+				timer.Stop()
+				return ctx.Err()
+			}
+			continue
+		}
+		return nil
+	}
+	return lastErr
+}
+
+func calculateBackoff(attempt int) time.Duration {
+	base := 500 * time.Millisecond
+	max := 8 * time.Second
+	delay := base
+	for i := 0; i < attempt; i++ {
+		delay *= 2
+		if delay >= max {
+			return max
+		}
+	}
+	jitter := time.Duration(rand.Int63n(int64(delay / 10))) // 10% jitter
+	return delay + jitter
 }

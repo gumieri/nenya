@@ -3,7 +3,7 @@ package pipeline
 import (
 	"testing"
 
-	"nenya/internal/config"
+	"nenya/config"
 )
 
 func TestNormalizeLineEndings(t *testing.T) {

@@ -12,7 +12,7 @@ import (
 	"sync"
 	"time"
 
-	"nenya/internal/config"
+	"nenya/config"
 	"nenya/internal/gateway"
 	providerpkg "nenya/internal/providers"
 	"nenya/internal/routing"

@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"nenya/internal/config"
+	"nenya/config"
 )
 
 func TestFetchProviderModels_RetryOnNetworkError(t *testing.T) {

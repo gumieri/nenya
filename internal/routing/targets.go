@@ -2,13 +2,11 @@ package routing
 
 import (
 	"log/slog"
-	"math/rand"
-	"sort"
 	"strings"
 	"sync"
 	"time"
 
-	"nenya/internal/config"
+	"nenya/config"
 	"nenya/internal/discovery"
 	"nenya/internal/infra"
 	"nenya/internal/resilience"
@@ -29,10 +27,6 @@ const DefaultSuccessThreshold = 1
 // DefaultHalfOpenMaxRequests is the default maximum number of probe
 // requests allowed while a circuit is in half-open state.
 const DefaultHalfOpenMaxRequests = 3
-
-const (
-	latencyJitterPct = 0.10
-)
 
 // AgentState tracks per-model request counters, circuit breaker state,
 // and cached selector resolution results.
@@ -562,38 +556,22 @@ func ResolveWindowMaxContext(modelName string, agents map[string]config.AgentCon
 	return maxCtx
 }
 
-func SortTargetsByLatency(targets []UpstreamTarget, latencyTracker *infra.LatencyTracker, jitterFn func() float64) []UpstreamTarget {
-	if latencyTracker == nil || len(targets) <= 1 {
+func SortTargetsByLatency(targets []UpstreamTarget, lt *infra.LatencyTracker, jitterFn func() float64) []UpstreamTarget {
+	if lt == nil || len(targets) <= 1 {
 		return targets
 	}
 
-	if jitterFn == nil {
-		jitterFn = rand.Float64
+	keys := make([]infra.LatencyKey, len(targets))
+	for i, t := range targets {
+		keys[i] = infra.LatencyKey{Model: t.Model, Provider: t.Provider}
 	}
 
+	indices := lt.SortByLatency(keys, jitterFn)
+
 	sorted := make([]UpstreamTarget, len(targets))
-	copy(sorted, targets)
-
-	sort.SliceStable(sorted, func(i, j int) bool {
-		latencyI, okI := latencyTracker.Get(sorted[i].Model, sorted[i].Provider)
-		latencyJ, okJ := latencyTracker.Get(sorted[j].Model, sorted[j].Provider)
-
-		if !okI && !okJ {
-			return false
-		}
-		if !okI {
-			return false
-		}
-		if !okJ {
-			return true
-		}
-
-		jitterI := latencyI.MedianMs * (1.0 + (jitterFn()*latencyJitterPct - latencyJitterPct/2))
-		jitterJ := latencyJ.MedianMs * (1.0 + (jitterFn()*latencyJitterPct - latencyJitterPct/2))
-
-		return jitterI < jitterJ
-	})
-
+	for i, idx := range indices {
+		sorted[i] = targets[idx]
+	}
 	return sorted
 }
 

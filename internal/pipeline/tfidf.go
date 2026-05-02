@@ -5,7 +5,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	"nenya/internal/config"
+	"nenya/config"
 )
 
 type Block struct {

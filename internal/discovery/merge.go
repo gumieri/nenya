@@ -1,7 +1,7 @@
 package discovery
 
 import (
-	"nenya/internal/config"
+	"nenya/config"
 )
 
 // MergeCatalog rebuilds the merged model catalog from scratch on every call.

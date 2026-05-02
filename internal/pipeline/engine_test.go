@@ -7,7 +7,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"nenya/internal/config"
+	"nenya/config"
 )
 
 func noopInject(providerName string, headers http.Header) error {

@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"nenya/internal/config"
+	"nenya/config"
 	"nenya/internal/discovery"
 )
 

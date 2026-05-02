@@ -3,7 +3,7 @@ package pipeline
 import (
 	"fmt"
 
-	"nenya/internal/config"
+	"nenya/config"
 )
 
 const defaultToolProtectionWindow = 4
