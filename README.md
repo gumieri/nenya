@@ -122,25 +122,7 @@ Flow notes:
 
 ## Quick Start
 
-### 1. Install
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/gumieri/nenya/main/install.sh | sudo sh
-```
-
-This detects your OS and architecture, downloads the correct binary from GitHub Releases, verifies the checksum, and installs the binary, example config, and systemd unit.
-
-Pinned version:
-```bash
-curl -fsSL https://raw.githubusercontent.com/gumieri/nenya/main/install.sh | sudo sh -s -- -v 0.1.0
-```
-
-Dry run (audit before installing):
-```bash
-curl -fsSL https://raw.githubusercontent.com/gumieri/nenya/main/install.sh | sh -s -- --dry-run
-```
-
-### 2. Run with Podman
+### Run with Podman
 
 Create minimal config and secrets:
 
@@ -197,7 +179,7 @@ curl -H "Authorization: Bearer $(jq -r '.client_token' secrets/client.json)" \
   http://localhost:8080/healthz
 ```
 
-### 3. Choose Your Deployment
+### Or Choose Your Deployment
 
 - **[Deploy Bare Metal (systemd)](docs/DEPLOY_BAREMETAL.md)** — Direct binary install, socket activation, hot reload
 - **[Deploy Container (Podman/Docker Compose)](docs/DEPLOY_CONTAINER.md)** — compose.yml, image verification, security hardening
