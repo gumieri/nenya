@@ -17,13 +17,24 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+
+      - uses: actions/cache@v4
+        with:
+          path: ~/go/pkg/mod
+          key: go-mod-${{ hashFiles('go.sum') }}
+
       - name: Log in to GHCR
         run: echo "${{ secrets.GITHUB_TOKEN }}" | podman login ghcr.io -u "${{ github.actor }}" --password-stdin
 
-      - name: Install syft
-        run: curl -sSfL https://raw.githubusercontent.com/anchore/syft/main/install.sh | sh -s -- -b /usr/local/bin
+      - uses: docker/setup-qemu-action@v3
 
-      - uses: sigstore/cosign-installer@v3
+      - name: Pre-download Go modules
+        run: go mod download
+
+      - uses: anchore/sbom-action/download-syft@v0
 
       - name: Build multi-arch images
         run: |
@@ -33,6 +44,7 @@ jobs:
           for arch in amd64 arm64; do
             podman build --platform linux/${arch} \
               -f deploy/Containerfile \
+              -v ~/go/pkg/mod:/go/pkg/mod \
               -t "${IMAGE}:${VERSION}-${arch}" .
           done
 
@@ -60,7 +72,7 @@ jobs:
           podman manifest add "${IMAGE}:latest" "${IMAGE}:${VERSION}-arm64"
           podman manifest push "${IMAGE}:latest"
 
-      - name: Sign each single-arch image
+      - name: Sign images
         run: |
           IMAGE="ghcr.io/${{ github.repository }}/nenya"
           VERSION="${{ github.ref_name }}"
@@ -70,10 +82,6 @@ jobs:
             cosign sign --yes "ghcr.io/${{ github.repository }}@${DIGEST}"
           done
 
-      - name: Sign multi-arch manifest
-        run: |
-          IMAGE="ghcr.io/${{ github.repository }}/nenya"
-          VERSION="${{ github.ref_name }}"
           MANIFEST_DIGEST=$(podman manifest inspect --format='{{.ManifestDigest}}' "${IMAGE}:${VERSION}")
           cosign sign --yes "ghcr.io/${{ github.repository }}@${MANIFEST_DIGEST}"
 
@@ -87,3 +95,4 @@ jobs:
             cosign attest --predicate "nenya-${VERSION}-linux-${arch}.spdx.json" \
                           --type spdx --yes "ghcr.io/${{ github.repository }}@${DIGEST}"
           done
+
