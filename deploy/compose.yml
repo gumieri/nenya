@@ -1,3 +1,4 @@
+# Podman/Docker Compose reference. For Kubernetes, see deploy/chart/nenya/ (Helm).
 services:
   nenya:
     image: ghcr.io/gumieri/nenya:latest

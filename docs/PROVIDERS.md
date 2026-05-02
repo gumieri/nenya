@@ -143,6 +143,11 @@ DeepSeek v4 models support a **thinking mode** controlled by the `thinking` para
 - **Auth**: `bearer`
 - **Error**: Zhipu error codes (1302/1303 → rate-limited, 1308/1310 → quota exhausted, 1312 → retryable, 1311/1313 → permanent) + `model_context_window_exceeded` → retryable
 
+### OpenCode Zen
+- **Multi-format gateway** — Claude models auto-convert to Anthropic wire format
+- Supports both `format: "openai"` and `format: "anthropic"` per model
+- See [Per-Model Wire Format](#per-model-wire-format-format-attribute) for details
+
 ### Ollama
 - **Request**: Identity (no transformation)
 - **Auth**: Optional Bearer (only if API key is non-empty)

@@ -1,8 +1,35 @@
 # Configuration Reference
 
-Nenya reads its configuration from a JSON file or directory (default: `/etc/nenya/`). See [`PROVIDERS.md`](PROVIDERS.md) for the full provider reference.
+Nenya reads its configuration from a JSON file or directory (default: `/etc/nenya/`). See [`PROVIDERS.md`](PROVIDERS.md) for the full provider reference and [`ARCHITECTURE.md`](ARCHITECTURE.md) for request flow and internal components.
+
+## Environment variables
+
+| Variable | Effect |
+|----------|--------|
+| `NENYA_CONFIG_DIR` | Config root directory (`config.d/` or `config.json` inside it). Same idea as `-config-dir`. Default `/etc/nenya/` when no file mode is selected. |
+| `NENYA_CONFIG_FILE` | Single JSON config file. Same idea as `-config`. **If set, directory mode is not used** — this takes precedence over `NENYA_CONFIG_DIR`. |
+| `NENYA_SECRETS_DIR` | Secrets directory (merged `*.json` files). Used by containers; see [`SECRETS_FORMAT.md`](SECRETS_FORMAT.md). |
+
+After flags are parsed, `NENYA_CONFIG_DIR` and `NENYA_CONFIG_FILE` **override** `-config-dir` and `-config` if set. If both env vars are set, `NENYA_CONFIG_FILE` still wins at load time (single-file mode).
+
+## HTTP endpoints (summary)
+
+| Endpoint | Auth | Description |
+|----------|------|-------------|
+| `POST /v1/chat/completions` | Bearer | OpenAI-compatible chat, SSE streaming, agent routing, optional MCP |
+| `GET /v1/models` | Bearer | Merged model catalog (discovery + static registry) |
+| `POST /v1/embeddings` | Bearer | Passthrough to upstream |
+| `POST /v1/responses` | Bearer | Passthrough to upstream |
+| `/proxy/{provider}/*` | Bearer | Raw provider proxy (GET, POST, …; SSE if `text/event-stream`) — no content pipeline; see [ARCHITECTURE.md](ARCHITECTURE.md) |
+| `GET /healthz` | None | Liveness / engine health |
+| `GET /statsz` | None | Usage, circuit breakers, MCP status |
+| `GET /metrics` | None | Prometheus metrics |
+
+All `/v1/*` and `/proxy/*` routes require `Authorization: Bearer <client_token>` from secrets.
 
 When a **directory** is specified, all `*.json` files (excluding `secrets.json`) are loaded in alphabetical order and deep-merged. Map fields (`agents`, `providers`, `mcp_servers`) merge per-key; struct fields use last-file-wins. Defaults are applied once after the merge.
+
+**`config.json` vs `config.d/`:** Under the config root directory, if `config.d/` exists and contains at least one `*.json` file, those files are merged and **`config.json` in the parent directory is not read**. If `config.d/` exists but has no JSON files, the loader falls back to `config.json` at the parent level (see `internal/config/loading.go`).
 
 When a **file** is specified, only that file is loaded (single-file mode, unchanged behavior).
 
@@ -45,6 +72,40 @@ When `-config` points to a directory (the default), Nenya loads all `*.json` fil
 | `server`, `governance`, `security_filter`, etc. (struct) | Last file wins — if multiple files set the same field, the last one in alphabetical order takes precedence |
 
 This lets you split configuration however makes sense for your deployment — e.g., separate files for server settings, provider credentials, and agent definitions managed by different teams.
+
+### Example: `00-server.json`
+
+```json
+{
+  "server": {
+    "listen_addr": ":8080"
+  },
+  "security_filter": {
+    "enabled": true,
+    "engine": {
+      "provider": "ollama",
+      "model": "qwen2.5-coder:7b"
+    }
+  }
+}
+```
+
+### Example: `20-agents.json`
+
+```json
+{
+  "agents": {
+    "plan": {
+      "strategy": "fallback",
+      "models": ["deepseek-reasoner"]
+    },
+    "build": {
+      "strategy": "fallback",
+      "models": ["gemini-2.5-flash"]
+    }
+  }
+}
+```
 
 ## Hot Reload
 

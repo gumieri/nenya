@@ -4,9 +4,9 @@
 
 ![go-version] ![License][license] ![zero-deps] ![CI][ci] ![CodeQL][codeql] ![Release][release] ![Sponsor][sponsor]
 
-A lightweight, zero-dependency AI API Gateway written in Go. Nenya sits between your AI coding clients and upstream LLM providers, adding secret redaction, context management, agent routing, and MCP tool integration — all with transparent SSE streaming.
+A lightweight, zero-dependency AI API Gateway written in Go. Nenya sits between your AI coding clients and upstream LLM providers, adding secret redaction, context management, agent routing, and MCP tool integration — all with transparent SSE streaming. Security-hardened: non-root execution, mlock for secrets, seccomp + no-new-privileges.
 
-**Compatible with any provider that implements the OpenAI Chat Completions API.** For 22 providers we ship built-in adapters with specialized handling.
+**Compatible with any provider that implements the OpenAI Or Anthropic Chat Completions API.** For 22 providers we ship built-in adapters with specialized handling.
 
 ## How Nenya handles the requests
 
@@ -93,16 +93,25 @@ Flow notes:
 - **Context window compaction** — sliding window summarization with configurable engine
 - **Stale tool call pruning** — compact old assistant+tool response pairs to save tokens
 - **Thought pruning** — strip reasoning blocks from assistant message history
+- **Input validation** — strict body limits, JSON sanitization, header filtering
+- **Graceful degradation** — never blocks requests due to engine or pipeline failures
+
+### Hardening (Deployment Security)
+
+- **Non-root execution** — runs as UID 65532 with dropped capabilities
+- **Memory protection** — `IPC_LOCK` for mlock; prevents secrets from swapping to disk
+- **Read-only filesystem** — immutable root + private `/tmp`
+- **Seccomp + no-new-privileges** — restricted syscalls, prevents privilege escalation
+- **Zero-trust secrets** — loaded via systemd credentials or container mounts, never to disk
+- **Socket activation** — seamless restarts with zero dropped connections
 
 ### Reliability
 
 - **Zero external dependencies** — Go standard library only
 - **Hot reload** — `systemctl reload nenya` for zero-downtime config changes
-- **Seamless restarts** — `systemctl enable nenya.socket` enables socket activation; when the service restarts, connections queue in the socket and the new process inherits the file descriptor — no dropped requests
 - **Circuit breaker** — per agent+provider+model with automatic failover and backoff
 - **Rate limiting** — per upstream host (RPM/TPM)
 - **Response cache** — in-memory LRU with SHA-256 fingerprinting
-- **Graceful degradation** — works without Ollama; never returns 500 for pipeline failures
 
 ### MCP Tool Integration
 
@@ -110,44 +119,6 @@ Flow notes:
 - **Multi-turn execution** — intercept tool calls, execute against MCP servers, forward results
 - **Auto-search** — pre-fetch relevant context from MCP servers before forwarding
 - **Auto-save** — persist assistant responses to MCP memory servers
-
-## Supported Providers
-
-### Full Adapters (custom wire format handling)
-
-| Provider | Auth | Special Behavior |
-|----------|------|-----------------|
-| **Anthropic** | `x-api-key` | Full bidirectional OpenAI↔Anthropic format conversion |
-| **Gemini** | `bearer+x-goog` | Thought signature preservation, orphaned tool_call cleanup, model aliasing |
-| **z.ai** (Zhipu) | `bearer` | Orphaned tool message removal, user message merging, auto-thinking for reasoning models, model-specific temperature defaults, Zhipu error code classification |
-| **Ollama** | `none` | Local-first, optional auth, conservative error classification |
-
-### OpenAI-Compatible with Adjustments
-
-| Provider | Auth | Notes |
-|----------|------|-------|
-| **OpenRouter** | `bearer` | Adds `HTTP-Referer` and `X-Title` headers |
-| **Azure OpenAI** | `api-key` | Uses `api-key` header instead of `Authorization: Bearer` |
-| **Perplexity** | `bearer` | Does not support function calling |
-| **Cohere** | `bearer` | Content arrays flattened |
-| **DeepInfra** | `bearer` | Standard capabilities |
-
-### Drop-in OpenAI-Compatible
-
-| Provider | Auth | Notes |
-|----------|------|-------|
-| **OpenCode Zen** | `bearer` | Multi-format gateway — Claude models auto-convert to Anthropic wire format |
-| **DeepSeek** | `bearer` | Thinking mode default, reasoning_content injection, parameter stripping in thinking mode |
-| **Mistral** | `bearer` |
-| **xAI** | `bearer` |
-| **Groq** | `bearer` |
-| **Together** | `bearer` |
-| **SambaNova** | `bearer` |
-| **Cerebras** | `bearer` |
-| **NVIDIA** | `bearer` |
-| **GitHub** | `bearer` |
-
-> **Any** OpenAI-compatible provider can be added via JSON config — no code changes required. See [`docs/PROVIDERS.md`](docs/PROVIDERS.md) for the full provider reference.
 
 ## Quick Start
 
@@ -169,151 +140,48 @@ Dry run (audit before installing):
 curl -fsSL https://raw.githubusercontent.com/gumieri/nenya/main/install.sh | sh -s -- --dry-run
 ```
 
-### 2. Create config directory
+### 2. Run with Podman
+
+Create minimal config and secrets:
 
 ```bash
-sudo mkdir -p /etc/nenya
-```
-
-### 3. Configuration files
-
-Nenya supports two configuration modes:
-
-**Directory mode (default):**
-```
-/etc/nenya/
-├── config.json           # single config file
-# OR
-├── config.d/
-│   ├── 01-server.json    # server, governance, security_filter, compaction
-│   ├── 02-providers.json # provider overrides
-│   ├── 03-agents.json   # agent definitions with fallback chains
-│   └── 04-mcp.json      # MCP server integration per agent
-```
-
-**Single file mode:**
-```bash
-./nenya --config /path/to/config.json
-```
-
-**Environment variables:**
-```bash
-NENYA_CONFIG_DIR=/etc/nenya ./nenya           # directory mode
-NENYA_CONFIG_FILE=/path/to/config.json ./nenya  # single file mode
-```
-
-`config.d/*.json` files are merged alphabetically. Map fields (`agents`, `providers`, `mcp_servers`) merge per-key; struct fields use last-file-wins.
-
-**Note:** `config.d/` and `config.json` are mutually exclusive — if `config.d/` exists and is non-empty, `config.json` is ignored.
-
-`00-server.json`:
-```json
+mkdir -p config secrets
+cat > config/config.json << 'EOF'
 {
-  "server": {
-    "listen_addr": ":8080"
-  },
-  "security_filter": {
-    "enabled": true,
-    "engine": {
-      "provider": "ollama",
-      "model": "qwen2.5-coder:7b"
-    }
-  }
-}
-```
-
-`20-agents.json`:
-```json
-{
+  "server": { "listen_addr": ":8080" },
   "agents": {
-    "plan": {
-      "strategy": "fallback",
-      "models": ["deepseek-reasoner"]
-    },
-    "build": {
+    "default": {
       "strategy": "fallback",
       "models": ["gemini-2.5-flash"]
     }
   }
 }
-```
+EOF
 
-### 4. Create secrets
-
-Create a JSON file with your secrets:
-
-```bash
-sudo mkdir -p /etc/nenya
-sudo tee /etc/nenya/secrets.json << 'EOF'
+cat > secrets/provider_keys.json << 'EOF'
 {
-  "client_token": "nk-$(openssl rand -hex 32)",
   "provider_keys": {
-    "gemini": "AIza...",
-    "deepseek": "sk-..."
+    "gemini": "AIza..."
   }
 }
 EOF
 
-sudo chmod 600 /etc/nenya/secrets.json
-```
-
-**Alternative:** Use a directory with multiple files (auto-merged):
-
-```bash
-sudo mkdir -p /etc/nenya/secrets.d
-
-sudo tee /etc/nenya/secrets.d/01-client.json << 'EOF'
-{"client_token": "nk-$(openssl rand -hex 32)"}
+cat > secrets/client.json << 'EOF'
+{
+  "client_token": "nk-$(openssl rand -hex 32)"
+}
 EOF
-
-sudo tee /etc/nenya/secrets.d/02-providers.json << 'EOF'
-{"provider_keys": {"gemini": "AIza...", "deepseek": "sk-..."}}
-EOF
-
-sudo chmod 600 /etc/nenya/secrets.d/*.json
 ```
 
-See [`docs/SECRETS_FORMAT.md`](docs/SECRETS_FORMAT.md) for full documentation on Docker/K8s deployment and advanced options (api_keys, NENYA_SECRETS_DIR).
-
-### 5. Configure systemd
-
-A hardened systemd unit file is provided in `deploy/nenya.service`. Key security features:
-
-```ini
-[Service]
-LimitMEMLOCK=infinity  # Required for secure memory (mlock)
-NoNewPrivileges=yes    # Prevent privilege escalation
-ProtectSystem=strict   # Read-only filesystem
-ProtectHome=yes        # No home directory access
-PrivateTmp=yes         # Isolated /tmp
-
-ExecStart=/usr/local/bin/nenya
-ExecReload=/bin/kill -HUP $MAINPID
-LoadCredential=secrets:/etc/nenya/secrets.json
-```
-
-**Note:** `LimitMEMLOCK=infinity` is required for secure memory storage. Without it, Nenya will fail to start with `ErrMLockFailure`.
-
-```bash
-sudo install -m 644 deploy/nenya.service /etc/systemd/system/
-sudo install -m 644 deploy/nenya.socket /etc/systemd/system/
-sudo systemctl daemon-reload
-sudo systemctl enable --now nenya.socket
-```
-
-### Podman / Container Runtime
-
-The container image is available on GitHub Container Registry with multi-arch support (amd64/arm64).
-
-**Using podman directly:**
+Run the container:
 
 ```bash
 podman run -d \
   --name nenya \
-  --publish 8080:8080 \
-  --volume ./config:/etc/nenya:ro \
-  --volume ./secrets:/run/secrets/nenya:ro \
-  --env NENYA_SECRETS_DIR=/run/secrets/nenya \
+  -p 8080:8080 \
+  -v ./config:/etc/nenya:ro \
+  -v ./secrets:/run/secrets/nenya:ro \
+  -e NENYA_SECRETS_DIR=/run/secrets/nenya \
   --cap-drop=ALL \
   --cap-add=IPC_LOCK \
   --security-opt=no-new-privileges:true \
@@ -322,31 +190,18 @@ podman run -d \
   ghcr.io/gumieri/nenya:latest
 ```
 
-**Using compose.yml:**
+Test it:
 
 ```bash
-mkdir -p config secrets
-# Create config files in ./config/ (e.g., config.json)
-# Create secrets files in ./secrets/*.json
-podman compose -f deploy/compose.yml up -d
+curl -H "Authorization: Bearer $(jq -r '.client_token' secrets/client.json)" \
+  http://localhost:8080/healthz
 ```
 
-**Verify signed image:**
+### 3. Choose Your Deployment
 
-```bash
-# Verify image signature
-cosign verify ghcr.io/gumieri/nenya:latest
-
-# Verify SBOM attestation
-cosign verify-attestation --type spdx ghcr.io/gumieri/nenya:latest
-```
-
-**Security notes:**
-- `--cap-drop=ALL --cap-add=IPC_LOCK` required for secure memory (mlock)
-- `--security-opt=no-new-privileges:true` prevents privilege escalation
-- `--read-only` enforces immutable root filesystem
-- Container runs as non-root user (UID 65532)
-- Multi-arch image supports both AMD64 and ARM64
+- **[Deploy Bare Metal (systemd)](docs/DEPLOY_BAREMETAL.md)** — Direct binary install, socket activation, hot reload
+- **[Deploy Container (Podman/Docker Compose)](docs/DEPLOY_CONTAINER.md)** — compose.yml, image verification, security hardening
+- **[Deploy Kubernetes (Helm)](docs/DEPLOY_KUBERNETES.md)** — Helm chart, ConfigMap/Secret, ingress setup
 
 ## API Endpoints
 
@@ -363,47 +218,7 @@ All `/v1/*` endpoints require `Authorization: Bearer <client_token>`.
 | `GET /statsz` | None | Token usage, circuit breaker state, MCP server status |
 | `GET /metrics` | None | Prometheus-compatible metrics |
 
-### Passthrough Proxy
-
-The `/proxy/{provider}/*` endpoint enables raw proxying to any provider endpoint:
-
-```bash
-# Get Anthropic models
-curl -H "Authorization: Bearer $CLIENT_TOKEN" \
-  http://localhost:8080/proxy/anthropic/v1/models
-
-# Upload file to OpenAI
-curl -X POST -H "Authorization: Bearer $CLIENT_TOKEN" \
-  -F "file=@document.pdf" -F "purpose=fine-tune" \
-  http://localhost:8080/proxy/openai/v1/files
-
-# Any provider endpoint
-curl -H "Authorization: Bearer $CLIENT_TOKEN" \
-  http://localhost:8080/proxy/{provider}/{path}
-```
-
-**Features:**
-- All HTTP methods: GET, POST, PUT, PATCH, DELETE, HEAD, OPTIONS
-- Automatic auth injection (provider-specific API keys)
-- Header sanitization (strips hop-by-hop, auth, host headers)
-- SSE streaming auto-detect (`text/event-stream` → pipe as-is)
-- Rate limiting, usage tracking, and metrics
-- Bypasses content pipeline, circuit breaker, and retry (raw proxy)
-
-## Hot Reload
-
-Send `SIGHUP` to reload configuration without downtime:
-
-```bash
-systemctl reload nenya
-```
-
-- Reloads config files from `/etc/nenya/` and re-reads secrets
-- Re-discovers model catalogs from all configured providers
-- Validates config structure (patterns, enums) but does not ping providers
-- Preserves UsageTracker, Metrics, and ThoughtSignatureCache across reloads
-- On validation failure: logs error, continues serving with old config
-- In-flight requests complete with the gateway they started with
+See [`docs/PASSTHROUGH_PROXY.md`](docs/PASSTHROUGH_PROXY.md) for detailed passthrough proxy usage.
 
 ## Documentation
 
@@ -411,6 +226,10 @@ systemctl reload nenya
 |----------|-------------|
 | [Providers](docs/PROVIDERS.md) | All 22 providers, capabilities matrix, special behaviors, adding custom providers |
 | [Configuration](docs/CONFIGURATION.md) | Full config reference, directory mode, all sections and fields |
+| [Deploy Bare Metal](docs/DEPLOY_BAREMETAL.md) | Systemd unit, config.d layout, secrets, hot reload |
+| [Deploy Container](docs/DEPLOY_CONTAINER.md) | Podman/Docker Compose, image verification, security notes |
+| [Deploy Kubernetes](docs/DEPLOY_KUBERNETES.md) | Helm chart usage, ConfigMap/Secret, ingress setup |
+| [Passthrough Proxy](docs/PASSTHROUGH_PROXY.md) | Raw provider endpoint proxying, SSE streaming, auth injection |
 | [Architecture](docs/ARCHITECTURE.md) | Package DAG, request lifecycle, circuit breaker, SSE pipeline |
 | [MCP Integration](docs/MCP_INTEGRATION.md) | MCP server integration, tool discovery, multi-turn execution |
 | [Adapters](docs/ADAPTERS.md) | Adapter system internals, auth styles, capability flags |
