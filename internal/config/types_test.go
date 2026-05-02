@@ -30,8 +30,8 @@ func TestAgentConfig_UnmarshalJSON_StringShorthand_DeferredProvider(t *testing.T
 	if cfg.Models[0].MaxContext != 1000000 {
 		t.Errorf("expected MaxContext 1000000 from ModelRegistry, got %d", cfg.Models[0].MaxContext)
 	}
-	if cfg.Models[0].MaxOutput != 393216 {
-		t.Errorf("expected MaxOutput 393216 from ModelRegistry, got %d", cfg.Models[0].MaxOutput)
+	if cfg.Models[0].MaxOutput != 384000 {
+		t.Errorf("expected MaxOutput 384000 from ModelRegistry, got %d", cfg.Models[0].MaxOutput)
 	}
 
 	if cfg.Models[1].Model != "glm-5-turbo" {
