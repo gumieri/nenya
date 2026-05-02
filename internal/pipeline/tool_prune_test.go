@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"nenya/internal/config"
+	"nenya/config"
 )
 
 func makePayload(msgs ...interface{}) map[string]interface{} {

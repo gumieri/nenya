@@ -3,7 +3,7 @@ package routing
 import (
 	"testing"
 
-	"nenya/internal/config"
+	"nenya/config"
 )
 
 func providers() map[string]*config.Provider {

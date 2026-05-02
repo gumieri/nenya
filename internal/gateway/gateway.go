@@ -11,8 +11,8 @@ import (
 	"strings"
 	"time"
 
+	"nenya/config"
 	"nenya/internal/adapter"
-	"nenya/internal/config"
 	"nenya/internal/discovery"
 	"nenya/internal/infra"
 	"nenya/internal/mcp"

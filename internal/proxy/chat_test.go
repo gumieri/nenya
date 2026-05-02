@@ -11,7 +11,7 @@ import (
 	"strings"
 	"testing"
 
-	"nenya/internal/config"
+	"nenya/config"
 	"nenya/internal/gateway"
 	"nenya/internal/testutil"
 )

@@ -2,14 +2,63 @@ package config
 
 import (
 	"fmt"
-	"nenya/internal/infra"
+	"log/slog"
+	"os"
+	"syscall"
 )
+
+var configLogLevel slog.LevelVar
 
 func applyLogLevel(level string) error {
 	if level == "" {
 		return nil
 	}
-	return infra.SetLogLevel(level)
+	return setConfigLogLevel(level)
+}
+
+func setConfigLogLevel(level string) error {
+	var slogLevel slog.Level
+	switch level {
+	case "debug":
+		slogLevel = slog.LevelDebug
+	case "info":
+		slogLevel = slog.LevelInfo
+	case "warn":
+		slogLevel = slog.LevelWarn
+	case "error":
+		slogLevel = slog.LevelError
+	default:
+		return fmt.Errorf("invalid log level: %s (must be debug, info, warn, or error)", level)
+	}
+	configLogLevel.Set(slogLevel)
+	return nil
+}
+
+func SetupLogger(verbose bool) *slog.Logger {
+	level := slog.LevelInfo
+	if verbose {
+		level = slog.LevelDebug
+	}
+	configLogLevel.Set(level)
+
+	var handler slog.Handler
+	if isatty(os.Stderr.Fd()) {
+		handler = slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: &configLogLevel})
+	} else {
+		handler = slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{Level: &configLogLevel})
+	}
+
+	logger := slog.New(handler)
+	slog.SetDefault(logger)
+	return logger
+}
+
+func isatty(fd uintptr) bool {
+	var st syscall.Stat_t
+	if err := syscall.Fstat(int(fd), &st); err != nil {
+		return false
+	}
+	return st.Mode&syscall.S_IFMT == syscall.S_IFCHR
 }
 
 func applyEngineRefDefaults(e *EngineRef) {
@@ -321,13 +370,10 @@ func applyWindowDefaults(cfg *Config) {
 	}
 }
 
-// looksLikeRegex returns true if s contains characters commonly used in regex
-// patterns, suggesting the user may have intended to use model_rgx instead of model.
 func looksLikeRegex(s string) bool {
 	if s == "" {
 		return false
 	}
-	// Common regex pattern indicators in model strings
 	for i := 0; i < len(s); i++ {
 		switch s[i] {
 		case '.', '*', '+', '^', '$', '(', ')', '[', ']', '{', '}', '|', '\\', '?':

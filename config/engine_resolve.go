@@ -1,11 +1,7 @@
 package config
 
-import (
-	"fmt"
-)
+import "fmt"
 
-// ResolveEngineRef resolves an engine reference to a list of concrete targets.
-// It handles both inline engine configurations and agent-based references.
 func ResolveEngineRef(ref EngineRef, agents map[string]AgentConfig, providers map[string]*Provider) ([]EngineTarget, error) {
 	if ref.AgentName != "" {
 		return resolveAgentEngineRef(ref, agents, providers)

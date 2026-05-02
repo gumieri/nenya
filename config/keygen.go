@@ -7,7 +7,6 @@ import (
 	"regexp"
 )
 
-// GenerateToken creates a new API token with the "nk-" prefix + 48 hex chars.
 func GenerateToken() string {
 	b := make([]byte, 24)
 	if _, err := rand.Read(b); err != nil {
@@ -16,7 +15,6 @@ func GenerateToken() string {
 	return "nk-" + hex.EncodeToString(b)
 }
 
-// ValidateKeyID checks that a key ID is a valid slug (letters, digits, hyphens).
 func ValidateKeyID(id string) error {
 	if id == "" {
 		return fmt.Errorf("key ID cannot be empty")

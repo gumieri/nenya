@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"nenya/internal/config"
+	"nenya/config"
 	"nenya/internal/gateway"
 	"nenya/internal/infra"
 	"nenya/internal/routing"

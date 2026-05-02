@@ -14,7 +14,7 @@ import (
 	"syscall"
 	"time"
 
-	"nenya/internal/config"
+	"nenya/config"
 	"nenya/internal/gateway"
 	"nenya/internal/infra"
 	"nenya/internal/proxy"

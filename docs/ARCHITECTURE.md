@@ -314,7 +314,7 @@ When the flag is disabled, empty streams are treated as a successful response an
 - **Sorted buffer**: Samples are maintained in sorted order via incremental binary-search insertion — O(n) per `Record()` instead of O(n log n) full sort. The median is a direct index lookup (`buf[len/2]`).
 - **Sliding window**: At most 100 samples per model/provider key. When the buffer overflows, the oldest sample is dropped via explicit copy to a new slice (prevents the underlying array from leaking memory).
 - **Eviction**: Stale entries (no updates for 1 hour) are evicted on each `Record()` call.
-- **Jitter**: `SortTargetsByLatency` applies ±5% random jitter to median latencies before comparison to prevent thundering herd — all clients hitting the same fastest provider simultaneously. The jitter function is injectable for deterministic testing.
+- **Jitter**: `LatencyTracker.SortByLatency` applies ±5% random jitter to median latencies before comparison to prevent thundering herd — all clients hitting the same fastest provider simultaneously. The jitter function is injectable for deterministic testing.
 
 ## Graceful Degradation
 

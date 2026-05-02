@@ -8,8 +8,8 @@ import (
 	"net/http"
 	"strings"
 
+	"nenya/config"
 	"nenya/internal/adapter"
-	"nenya/internal/config"
 	"nenya/internal/discovery"
 	"nenya/internal/infra"
 	providerpkg "nenya/internal/providers"

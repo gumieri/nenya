@@ -5,10 +5,6 @@ import (
 	"fmt"
 )
 
-// PricingOverride represents pricing data for static model registry entries.
-// It is converted to discovery.PricingEntry (which adds Currency field and CalculateCost method)
-// when merging static entries into the ModelCatalog. The conversion is implicit via field
-// name matching in discovery.MergeCatalog.
 type PricingOverride struct {
 	InputCostPer1M  float64 `json:"input_cost_per_1m"`
 	OutputCostPer1M float64 `json:"output_cost_per_1m"`

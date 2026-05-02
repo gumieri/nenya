@@ -1,6 +1,8 @@
 package infra
 
 import (
+	"math/rand"
+	"sort"
 	"sync"
 	"time"
 )
@@ -23,6 +25,12 @@ type LatencyTracker struct {
 	mu      sync.RWMutex
 	latency map[string]*ModelLatency
 	sorted  map[string][]time.Duration
+}
+
+// LatencyKey is a model+provider pair used for latency lookups.
+type LatencyKey struct {
+	Model    string
+	Provider string
 }
 
 func NewLatencyTracker() *LatencyTracker {
@@ -113,4 +121,51 @@ func (l *LatencyTracker) Snapshot() map[string]*ModelLatency {
 		snapshot[k] = v
 	}
 	return snapshot
+}
+
+const latencyJitterPct = 0.10
+
+// SortByLatency sorts keys by median latency from this tracker,
+// applying ±5% random jitter to prevent thundering herd.
+// Returns the indices of the sorted keys. Targets without latency
+// data are placed last.
+func (l *LatencyTracker) SortByLatency(keys []LatencyKey, jitterFn func() float64) []int {
+	if l == nil || len(keys) <= 1 {
+		indices := make([]int, len(keys))
+		for i := range keys {
+			indices[i] = i
+		}
+		return indices
+	}
+
+	if jitterFn == nil {
+		jitterFn = rand.Float64
+	}
+
+	indices := make([]int, len(keys))
+	for i := range keys {
+		indices[i] = i
+	}
+
+	sort.SliceStable(indices, func(i, j int) bool {
+		latencyI, okI := l.Get(keys[indices[i]].Model, keys[indices[i]].Provider)
+		latencyJ, okJ := l.Get(keys[indices[j]].Model, keys[indices[j]].Provider)
+
+		if !okI && !okJ {
+			return false
+		}
+		if !okI {
+			return false
+		}
+		if !okJ {
+			return true
+		}
+
+		jitterI := latencyI.MedianMs * (1.0 + (jitterFn()*latencyJitterPct - latencyJitterPct/2))
+		jitterJ := latencyJ.MedianMs * (1.0 + (jitterFn()*latencyJitterPct - latencyJitterPct/2))
+
+		return jitterI < jitterJ
+	})
+
+	return indices
 }

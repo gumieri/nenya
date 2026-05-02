@@ -10,7 +10,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"nenya/internal/config"
+	"nenya/config"
 	"nenya/internal/discovery"
 	"nenya/internal/gateway"
 	"nenya/internal/infra"

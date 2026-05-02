@@ -14,7 +14,7 @@ import (
 	"testing"
 	"time"
 
-	"nenya/internal/config"
+	"nenya/config"
 	"nenya/internal/gateway"
 	"nenya/internal/infra"
 	providerpkg "nenya/internal/providers"

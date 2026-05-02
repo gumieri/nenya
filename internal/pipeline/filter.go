@@ -4,7 +4,7 @@ import (
 	"regexp"
 	"strings"
 
-	"nenya/internal/config"
+	"nenya/config"
 )
 
 // RedactSecrets replaces all matches of the given regex patterns in text

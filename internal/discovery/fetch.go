@@ -12,8 +12,8 @@ import (
 	"sync"
 	"time"
 
+	"nenya/config"
 	"nenya/internal/adapter"
-	"nenya/internal/config"
 	"nenya/internal/util"
 )
 
