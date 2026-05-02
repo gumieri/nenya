@@ -21,23 +21,43 @@ After=nenya.socket
 
 [Service]
 Type=simple
-DynamicUser=yes 
+DynamicUser=yes
 ExecStart=/usr/local/bin/nenya
 ExecReload=/bin/kill -HUP $MAINPID
 Restart=on-failure
 RestartSec=5s
 
+# Capability and privilege restrictions
 NoNewPrivileges=yes
+LockPersonality=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+RestrictNamespaces=yes
+
+# Filesystem and process isolation
 PrivateTmp=yes
+PrivateDevices=yes
 ProtectSystem=strict
 ProtectHome=yes
 ProtectKernelTunables=yes
 ProtectKernelModules=yes
 ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+RemoveIPC=yes
+UMask=0077
+
+# Network restrictions
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+
+# Memory protection
+MemoryDenyWriteExecute=yes
 
 # Allow mlock for secure memory (tokens stored in locked RAM)
 LimitMEMLOCK=infinity
 
+# Secrets loaded via systemd credential
 LoadCredential=secrets:/etc/nenya/secrets.json
 
 [Install]
