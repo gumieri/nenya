@@ -38,7 +38,7 @@ jobs:
 
       - name: Build multi-arch images
         run: |
-          IMAGE="ghcr.io/${{ github.repository }}/nenya"
+          IMAGE="ghcr.io/${{ github.repository }}"
           VERSION="${{ github.ref_name }}"
 
           for arch in amd64 arm64; do
@@ -50,7 +50,7 @@ jobs:
 
       - name: Generate SBOM for each architecture
         run: |
-          IMAGE="ghcr.io/${{ github.repository }}/nenya"
+          IMAGE="ghcr.io/${{ github.repository }}"
           VERSION="${{ github.ref_name }}"
 
           for arch in amd64 arm64; do
@@ -59,7 +59,7 @@ jobs:
 
       - name: Create manifest and push
         run: |
-          IMAGE="ghcr.io/${{ github.repository }}/nenya"
+          IMAGE="ghcr.io/${{ github.repository }}"
           VERSION="${{ github.ref_name }}"
 
           podman manifest create "${IMAGE}:${VERSION}"
@@ -74,7 +74,7 @@ jobs:
 
       - name: Sign images
         run: |
-          IMAGE="ghcr.io/${{ github.repository }}/nenya"
+          IMAGE="ghcr.io/${{ github.repository }}"
           VERSION="${{ github.ref_name }}"
 
           for arch in amd64 arm64; do
@@ -87,7 +87,7 @@ jobs:
 
       - name: Attest SBOM for each architecture
         run: |
-          IMAGE="ghcr.io/${{ github.repository }}/nenya"
+          IMAGE="ghcr.io/${{ github.repository }}"
           VERSION="${{ github.ref_name }}"
 
           for arch in amd64 arm64; do
