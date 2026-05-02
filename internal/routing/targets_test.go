@@ -225,7 +225,7 @@ func TestBuildTargetList_TargetFields(t *testing.T) {
 	if tgt.CoolKey != "my-agent:deepseek:deepseek-v4-flash" {
 		t.Fatalf("unexpected CoolKey: %s", tgt.CoolKey)
 	}
-	if tgt.MaxOutput != 393216 {
+	if tgt.MaxOutput != 384000 {
 		t.Fatalf("unexpected MaxOutput: %d", tgt.MaxOutput)
 	}
 }
