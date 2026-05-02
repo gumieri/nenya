@@ -18,7 +18,7 @@ func Load(path string) (*Config, error) {
 	}
 
 	if info.IsDir() {
-		return loadFromDirectory(path)
+		return nil, fmt.Errorf("config path %s is a directory, use LoadFromDir() instead", path)
 	}
 
 	data, err := os.ReadFile(path)
@@ -36,7 +36,36 @@ func Load(path string) (*Config, error) {
 	return &cfg, nil
 }
 
-func loadFromDirectory(dir string) (*Config, error) {
+func LoadFromDir(dir string) (*Config, error) {
+	// 1. Try config.d/*.json (merge all) - only if it exists and is a directory
+	configDirPath := dir + "/config.d"
+	if info, err := os.Stat(configDirPath); err == nil && info.IsDir() {
+		dirCfg, dirErr := loadConfigDirectory(configDirPath)
+		if dirErr != nil {
+			return nil, dirErr
+		}
+		if dirCfg != nil {
+			return dirCfg, nil
+		}
+	}
+
+	// 2. Try config.json
+	configFilePath := dir + "/config.json"
+	if info, err := os.Stat(configFilePath); err == nil && !info.IsDir() {
+		fileCfg, fileErr := Load(configFilePath)
+		if fileErr != nil {
+			return nil, fileErr
+		}
+		if fileCfg != nil {
+			return fileCfg, nil
+		}
+	}
+
+	return nil, fmt.Errorf("no config found in %s (tried %s/config.d/*.json and %s/config.json)", dir, dir, dir)
+}
+
+// loadConfigDirectory loads and merges all *.json files in the given directory alphabetically.
+func loadConfigDirectory(dir string) (*Config, error) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read config directory %s: %v", dir, err)
@@ -51,6 +80,7 @@ func loadFromDirectory(dir string) (*Config, error) {
 		if !strings.HasSuffix(name, ".json") {
 			continue
 		}
+		// Skip secrets.json to avoid accidentally loading secrets as config
 		if name == "secrets.json" {
 			continue
 		}
@@ -59,11 +89,10 @@ func loadFromDirectory(dir string) (*Config, error) {
 	slices.Sort(jsonFiles)
 
 	if len(jsonFiles) == 0 {
-		return nil, fmt.Errorf("no JSON config files found in %s", dir)
+		return nil, nil
 	}
 
 	merged := &Config{}
-
 	for _, name := range jsonFiles {
 		filePath := filepath.Join(dir, name)
 		data, err := os.ReadFile(filePath)

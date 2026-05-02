@@ -21,11 +21,11 @@ import (
 )
 
 func main() {
-	configFile, verbose, validateOnly := parseFlags()
+	configDir, configFile, verbose, validateOnly := parseFlags()
 
 	logger := infra.SetupLogger(verbose)
 
-	cfg, secrets, err := loadConfig(configFile, validateOnly, logger)
+	cfg, secrets, err := loadConfig(configDir, configFile, validateOnly, logger)
 	if err != nil {
 		logger.Error("setup failed", "err", err)
 		os.Exit(1)
@@ -42,19 +42,39 @@ func main() {
 		return
 	}
 
-	run(logger, cfg, secrets, configFile)
+	run(logger, cfg, secrets, configDir, configFile)
 }
 
-func parseFlags() (configFile string, verbose, validateOnly bool) {
-	flag.StringVar(&configFile, "config", "/etc/nenya/", "Path to configuration file or directory")
+func parseFlags() (configDir, configFile string, verbose, validateOnly bool) {
+	flag.StringVar(&configDir, "config-dir", "", "Configuration directory (contains config.d/ or config.json)")
+	flag.StringVar(&configFile, "config", "", "Single configuration file")
 	flag.BoolVar(&verbose, "verbose", false, "Enable debug-level request/response logging")
 	flag.BoolVar(&validateOnly, "validate", false, "Validate configuration and exit")
 	flag.Parse()
+
+	if envConfigDir := os.Getenv("NENYA_CONFIG_DIR"); envConfigDir != "" {
+		configDir = envConfigDir
+	}
+	if envConfigFile := os.Getenv("NENYA_CONFIG_FILE"); envConfigFile != "" {
+		configFile = envConfigFile
+	}
+
+	if configDir == "" && configFile == "" {
+		configDir = "/etc/nenya/"
+	}
+
 	return
 }
 
-func loadConfig(configFile string, validateOnly bool, logger *slog.Logger) (*config.Config, *config.SecretsConfig, error) {
-	cfg, err := config.Load(configFile)
+func loadConfig(configDir, configFile string, validateOnly bool, logger *slog.Logger) (*config.Config, *config.SecretsConfig, error) {
+	var cfg *config.Config
+	var err error
+
+	if configFile != "" {
+		cfg, err = config.Load(configFile)
+	} else {
+		cfg, err = config.LoadFromDir(configDir)
+	}
 	if err != nil {
 		return nil, nil, fmt.Errorf("load config: %w", err)
 	}
@@ -79,7 +99,7 @@ func loadConfig(configFile string, validateOnly bool, logger *slog.Logger) (*con
 	return cfg, secrets, nil
 }
 
-func run(logger *slog.Logger, cfg *config.Config, secrets *config.SecretsConfig, configFile string) {
+func run(logger *slog.Logger, cfg *config.Config, secrets *config.SecretsConfig, configDir, configFile string) {
 	startupCtx, startupCancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer startupCancel()
 
@@ -108,7 +128,7 @@ func run(logger *slog.Logger, cfg *config.Config, secrets *config.SecretsConfig,
 	serverErr := make(chan error, 1)
 	go serveHTTP(srv, listener, serverErr)
 
-	eventLoop(logger, configFile, p, ctx, sighup, serverErr, srv)
+	eventLoop(logger, configDir, configFile, p, ctx, sighup, serverErr, srv)
 }
 
 func buildServer(p *proxy.Proxy, listenAddr string) *http.Server {
@@ -146,7 +166,7 @@ func serveHTTP(srv *http.Server, listener net.Listener, serverErr chan error) {
 	close(serverErr)
 }
 
-func eventLoop(logger *slog.Logger, configFile string, p *proxy.Proxy, ctx context.Context, sighup chan os.Signal, serverErr chan error, srv *http.Server) {
+func eventLoop(logger *slog.Logger, configDir, configFile string, p *proxy.Proxy, ctx context.Context, sighup chan os.Signal, serverErr chan error, srv *http.Server) {
 	for {
 		select {
 		case err := <-serverErr:
@@ -156,7 +176,7 @@ func eventLoop(logger *slog.Logger, configFile string, p *proxy.Proxy, ctx conte
 			go func() {
 				reloadCtx, reloadCancel := context.WithTimeout(context.Background(), 60*time.Second)
 				defer reloadCancel()
-				reloadConfig(reloadCtx, p, configFile, logger)
+				reloadConfig(reloadCtx, p, configDir, configFile, logger)
 			}()
 		case <-ctx.Done():
 			logger.Info("shutting down gracefully...")
@@ -173,12 +193,19 @@ func eventLoop(logger *slog.Logger, configFile string, p *proxy.Proxy, ctx conte
 	}
 }
 
-func reloadConfig(ctx context.Context, p *proxy.Proxy, configFile string, logger *slog.Logger) {
-	logger.Info("reloading configuration", "file", configFile)
+func reloadConfig(ctx context.Context, p *proxy.Proxy, configDir, configFile string, logger *slog.Logger) {
+	logger.Info("reloading configuration", "config_dir", configDir, "config_file", configFile)
 
-	newCfg, err := config.Load(configFile)
+	var newCfg *config.Config
+	var err error
+
+	if configFile != "" {
+		newCfg, err = config.Load(configFile)
+	} else {
+		newCfg, err = config.LoadFromDir(configDir)
+	}
 	if err != nil {
-		logger.Error("reload failed: could not load configuration file", "err", err)
+		logger.Error("reload failed: could not load configuration", "err", err)
 		return
 	}
 
