@@ -71,14 +71,14 @@ jobs:
           cosign sign --yes ${images}
 
       - name: Generate SBOM for amd64
-        uses: anchore/sbom-action@v1
+        uses: anchore/sbom-action@v0
         with:
           image: ghcr.io/${{ github.repository }}:${{ github.ref_name }}-amd64
           format: spdx-json
           output-file: nenya-${{ github.ref_name }}-linux-amd64.spdx.json
 
       - name: Generate SBOM for arm64
-        uses: anchore/sbom-action@v1
+        uses: anchore/sbom-action@v0
         with:
           image: ghcr.io/${{ github.repository }}:${{ github.ref_name }}-arm64
           format: spdx-json
