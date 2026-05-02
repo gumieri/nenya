@@ -93,6 +93,70 @@ type retryLoop struct {
 	stream          bool
 }
 
+// trackInFlight increments the in-flight gauge for the first target in
+// the agent's fallback chain and returns a function that decrements it.
+// The gauge uses the first target's model/agent/provider labels to represent
+// the entire agent group's in-flight status. Safe to defer.
+func (rl *retryLoop) trackInFlight() func() {
+	if len(rl.opts.Targets) == 0 || rl.gw.Metrics == nil {
+		return func() {}
+	}
+	rl.gw.Metrics.IncInFlight(rl.opts.Targets[0].Model, rl.opts.AgentName, rl.opts.Targets[0].Provider)
+	return func() {
+		rl.gw.Metrics.DecInFlight(rl.opts.Targets[0].Model, rl.opts.AgentName, rl.opts.Targets[0].Provider)
+	}
+}
+
+// copyPayload clears and unmarshals the original payload into dest. Returns
+// false on unmarshal failure (logs and skips target).
+func (rl *retryLoop) copyPayload(dest map[string]any, idx int) bool {
+	for k := range dest {
+		delete(dest, k)
+	}
+	if err := json.Unmarshal(rl.originalPayload, &dest); err != nil {
+		rl.ctxLogger.Error("failed to unmarshal payload for target",
+			"target", idx+1, "total", len(rl.opts.Targets), "err", err)
+		return false
+	}
+	return true
+}
+
+// handleActionResult dispatches on action.kind and returns true when the
+// request is considered handled (success or terminal failure), false when
+// the loop should try the next target.
+func (rl *retryLoop) handleActionResult(i int, target routing.UpstreamTarget, action upstreamAction) bool {
+	switch action.kind {
+	case actionContinue:
+		return false
+	case actionError:
+		switch rl.handleActionError(i, target, action) {
+		case retrySignalDone:
+			return true
+		case retrySignalBreak:
+			return false
+		}
+		return false
+	case actionStream:
+		result := rl.p.streamResponse(rl.gw, rl.w, rl.r, target, rl.opts.AgentName, action, rl.opts.CacheKey, rl.opts.Cooldown)
+		if result.empty {
+			rl.ctxLogger.Warn("empty stream from upstream, trying next target",
+				"model", target.Model, "provider", target.Provider)
+			return false
+		}
+		return true
+	case actionResponse:
+		result := rl.p.handleNonStreamingResponse(rl.gw, rl.w, rl.r, target, rl.opts.AgentName, action, rl.opts.CacheKey, rl.opts.Cooldown)
+		if result.empty {
+			rl.ctxLogger.Warn("empty non-streaming response from upstream, trying next target",
+				"model", target.Model, "provider", target.Provider)
+			return false
+		}
+		return true
+	default:
+		return false
+	}
+}
+
 // newRetryLoop creates a retryLoop with the given parameters.
 func newRetryLoop(p *Proxy, gw *gateway.NenyaGateway, w http.ResponseWriter, r *http.Request, opts forwardOptions) (*retryLoop, error) {
 	ctxLogger := gw.Logger.With("operation", "forward", "agent", opts.AgentName)
@@ -166,6 +230,7 @@ func (rl *retryLoop) handleActionError(i int, target routing.UpstreamTarget, act
 // written to the client). It returns false when all targets are exhausted
 // without sending a complete response, so the caller should respond with 503.
 func (rl *retryLoop) Run() bool {
+	defer rl.trackInFlight()
 	workingPayload := make(map[string]interface{}, 16)
 retryLoop:
 	for i, target := range rl.opts.Targets {
@@ -174,44 +239,15 @@ retryLoop:
 			break retryLoop
 		}
 
-		for k := range workingPayload {
-			delete(workingPayload, k)
-		}
-		if err := json.Unmarshal(rl.originalPayload, &workingPayload); err != nil {
-			rl.ctxLogger.Error("failed to unmarshal payload for target",
-				"target", i+1, "total", len(rl.opts.Targets), "err", err)
+		if !rl.copyPayload(workingPayload, i) {
 			continue
 		}
 
 		action := rl.prepareAndSend(i, target, workingPayload)
-		switch action.kind {
-		case actionContinue:
+		if !rl.handleActionResult(i, target, action) {
 			continue
-		case actionError:
-			switch rl.handleActionError(i, target, action) {
-			case retrySignalDone:
-				return true
-			case retrySignalBreak:
-				break retryLoop
-			}
-			continue
-		case actionStream:
-			result := rl.p.streamResponse(rl.gw, rl.w, rl.r, target, rl.opts.AgentName, action, rl.opts.CacheKey, rl.opts.Cooldown)
-			if result.empty {
-				rl.ctxLogger.Warn("empty stream from upstream, trying next target",
-					"model", target.Model, "provider", target.Provider)
-				continue
-			}
-			return true
-		case actionResponse:
-			result := rl.p.handleNonStreamingResponse(rl.gw, rl.w, rl.r, target, rl.opts.AgentName, action, rl.opts.CacheKey, rl.opts.Cooldown)
-			if result.empty {
-				rl.ctxLogger.Warn("empty non-streaming response from upstream, trying next target",
-					"model", target.Model, "provider", target.Provider)
-				continue
-			}
-			return true
 		}
+		return true
 	}
 	return false
 }
@@ -361,6 +397,7 @@ func (p *Proxy) prepareAndSend(gw *gateway.NenyaGateway,
 	}
 
 	duration := time.Since(startTime)
+	gw.Metrics.RecordUpstreamLatency(target.Model, agentName, target.Provider, duration)
 	if gw.LatencyTracker != nil {
 		gw.LatencyTracker.Record(target.Model, target.Provider, duration)
 	}

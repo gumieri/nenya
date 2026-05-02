@@ -273,6 +273,7 @@ func (p *Proxy) resolvePipelineContext(r *http.Request, gw *gateway.NenyaGateway
 
 // handleChatCompletions processes chat completion requests with optional content filtering and tool integration.
 func (p *Proxy) handleChatCompletions(gw *gateway.NenyaGateway, w http.ResponseWriter, r *http.Request) {
+	gwStart := time.Now()
 	req, herr := p.validateChatRequest(w, r, gw)
 	if herr != nil {
 		if herr.Code == http.StatusNoContent {
@@ -285,6 +286,7 @@ func (p *Proxy) handleChatCompletions(gw *gateway.NenyaGateway, w http.ResponseW
 	if err := p.applyContentPipeline(gw, r.Context(), req.Payload, req.TokenCount, req.WindowMaxCtx, req.Profile, req.SoftLimit, req.HardLimit); err != nil {
 		gw.Logger.Warn("content pipeline failed, proceeding with original payload", "err", err)
 	}
+	gw.Metrics.RecordGatewayProcessing(r.Method, infra.NormalizeMetricPath(r.URL.Path), time.Since(gwStart))
 
 	if req.HasMCPTools {
 		p.forwardToUpstreamWithMCP(gw, w, r, forwardOptions{
@@ -558,6 +560,7 @@ func (p *Proxy) summarizeWithOllama(gw *gateway.NenyaGateway, ctx context.Contex
 	if len(gw.Config.SecurityFilter.Engine.ResolvedTargets) == 0 {
 		return "", fmt.Errorf("security_filter engine: no resolved targets")
 	}
+	gw.Metrics.RecordOllamaSummarizedBytes(len(heavyText))
 
 	defaultPrompt := "You are a data privacy filter. Review the following text and remove or replace any IP addresses, AWS keys (AKIA...), passwords, tokens, or credentials with [REDACTED]. Preserve the original structure, detail level, and all non-sensitive content exactly as provided. Do NOT summarize or shorten the text."
 

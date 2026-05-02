@@ -33,14 +33,21 @@ type Metrics struct {
 	streamBlocked sync.Map
 	emptyStreams  sync.Map
 
+	upstreamLatency sync.Map
+	gatewayProcess  sync.Map
+	ollamaBytes     atomic.Uint64
+	modelDiscovery  sync.Map
+	retryTotal      sync.Map
+	inflightReqs    sync.Map
+
 	// MCP metrics
-	mcpToolCallsTotal   sync.Map // labels: server, tool, agent, status (success/error)
-	mcpToolCallDuration sync.Map // labels: server, tool (histogram)
-	mcpAutoSearchTotal  sync.Map // labels: server, agent, status (hit/miss/error)
-	mcpAutoSaveTotal    sync.Map // labels: server, agent, status (success/error)
-	mcpLoopIterations   sync.Map // labels: agent
-	mcpLoopDuration     sync.Map // labels: agent (histogram)
-	mcpServerReady      sync.Map // labels: server (gauge: 1=ready, 0=not ready)
+	mcpToolCallsTotal   sync.Map
+	mcpToolCallDuration sync.Map
+	mcpAutoSearchTotal  sync.Map
+	mcpAutoSaveTotal    sync.Map
+	mcpLoopIterations   sync.Map
+	mcpLoopDuration     sync.Map
+	mcpServerReady      sync.Map
 
 	RateLimits func() map[string]*RateLimitSnapshot
 	Cooldowns  func() (active int)
@@ -325,6 +332,89 @@ func (m *Metrics) SetMCPServerReady(server string, ready bool) {
 	e.value.Store(val)
 }
 
+func (m *Metrics) RecordUpstreamLatency(model, agent, provider string, duration time.Duration) {
+	if m == nil {
+		return
+	}
+	h := getOrCreateHist(&m.upstreamLatency, map[string]string{
+		"model": model, "agent": agent, "provider": provider,
+	}, HTTPDurationBuckets)
+	h.Observe(duration.Seconds())
+}
+
+func (m *Metrics) RecordGatewayProcessing(method, path string, duration time.Duration) {
+	if m == nil {
+		return
+	}
+	h := getOrCreateHist(&m.gatewayProcess, map[string]string{
+		"method": method, "path": path,
+	}, HTTPDurationBuckets)
+	h.Observe(duration.Seconds())
+}
+
+func (m *Metrics) RecordOllamaSummarizedBytes(n int) {
+	if m == nil {
+		return
+	}
+	m.ollamaBytes.Add(uint64(n))
+}
+
+func (m *Metrics) RecordModelDiscovery(provider string, err error) {
+	if m == nil {
+		return
+	}
+	status := "success"
+	if err != nil {
+		status = "error"
+	}
+	e := getOrCreateEntry(&m.modelDiscovery, map[string]string{
+		"provider": provider, "status": status,
+	})
+	e.value.Add(1)
+}
+
+func (m *Metrics) RecordRetry(operation, provider string, err error) {
+	if m == nil {
+		return
+	}
+	status := "success"
+	if err != nil {
+		status = "error"
+	}
+	e := getOrCreateEntry(&m.retryTotal, map[string]string{
+		"operation": operation, "provider": provider, "status": status,
+	})
+	e.value.Add(1)
+}
+
+func (m *Metrics) IncInFlight(model, agent, provider string) {
+	if m == nil {
+		return
+	}
+	e := getOrCreateEntry(&m.inflightReqs, map[string]string{
+		"model": model, "agent": agent, "provider": provider,
+	})
+	e.value.Add(1)
+}
+
+func (m *Metrics) DecInFlight(model, agent, provider string) {
+	if m == nil {
+		return
+	}
+	e := getOrCreateEntry(&m.inflightReqs, map[string]string{
+		"model": model, "agent": agent, "provider": provider,
+	})
+	for {
+		old := e.value.Load()
+		if old == 0 {
+			return
+		}
+		if e.value.CompareAndSwap(old, old-1) {
+			return
+		}
+	}
+}
+
 func (m *Metrics) WritePrometheus(w io.Writer) {
 	if m == nil {
 		return
@@ -374,6 +464,19 @@ func (m *Metrics) WritePrometheus(w io.Writer) {
 		"Total upstream streams killed by execution policy.", &m.streamBlocked)
 	m.writeCounterMap(w, "nenya_empty_stream_total",
 		"Total upstream streams that returned empty body.", &m.emptyStreams)
+
+	m.writeHistogramMap(w, "nenya_upstream_request_duration_seconds",
+		"Upstream provider request duration in seconds.", &m.upstreamLatency)
+	m.writeHistogramMap(w, "nenya_gateway_processing_duration_seconds",
+		"Gateway processing time (before upstream) in seconds.", &m.gatewayProcess)
+	m.writeCounterAtomic(w, "nenya_ollama_summarized_bytes_total",
+		"Total bytes sent to Ollama for summarization.", m.ollamaBytes.Load())
+	m.writeCounterMap(w, "nenya_model_discovery_total",
+		"Total model discovery fetch attempts by provider.", &m.modelDiscovery)
+	m.writeCounterMap(w, "nenya_retries_total",
+		"Total retry attempts by operation and provider.", &m.retryTotal)
+	m.writeGaugeMap(w, "nenya_inflight_requests",
+		"Current in-flight requests by model, agent, and provider.", &m.inflightReqs)
 
 	m.writeHistogramMap(w, "nenya_http_request_duration_seconds",
 		"HTTP request duration in seconds.", &m.httpDur)
@@ -484,11 +587,19 @@ func (m *Metrics) writeHistogramMap(w io.Writer, name, help string, mmap *sync.M
 	})
 	for _, h := range hists {
 		ls := labelStr(h.labels)
+		labelSuffix := stripTrailingBrace(ls)
 		for i, bkt := range h.buckets {
-			_, _ = fmt.Fprintf(w, "%s_bucket%s,le=\"%g\"} %d\n", name, ls[:len(ls)-1], bkt, h.counts[i].Load())
+			_, _ = fmt.Fprintf(w, "%s_bucket%s,le=\"%g\"} %d\n", name, labelSuffix, bkt, h.counts[i].Load())
 		}
-		_, _ = fmt.Fprintf(w, "%s_bucket%s,le=\"+Inf\"} %d\n", name, ls[:len(ls)-1], h.count.Load())
+		_, _ = fmt.Fprintf(w, "%s_bucket%s,le=\"+Inf\"} %d\n", name, labelSuffix, h.count.Load())
 		_, _ = fmt.Fprintf(w, "%s_sum%s %g\n", name, ls, float64(h.sumNS.Load())/1e9)
 		_, _ = fmt.Fprintf(w, "%s_count%s %d\n", name, ls, h.count.Load())
 	}
+}
+
+func stripTrailingBrace(s string) string {
+	if s == "" {
+		return ""
+	}
+	return s[:len(s)-1]
 }

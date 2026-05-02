@@ -59,7 +59,8 @@ func New(ctx context.Context, cfg config.Config, secrets *config.SecretsConfig, 
 	secureClient, ollamaClient := createHTTPClients(cfg)
 	providers := config.ResolveProviders(&cfg, secrets)
 
-	mergedCatalog, healthRegistry := performModelDiscovery(ctx, &cfg, providers, logger)
+	metrics := infra.NewMetrics()
+	mergedCatalog, healthRegistry := performModelDiscovery(ctx, &cfg, providers, metrics, logger)
 
 	secretPatterns, blockedPatterns := compilePatterns(cfg, logger)
 	entropyFilter := createEntropyFilter(cfg, logger)
@@ -67,12 +68,12 @@ func New(ctx context.Context, cfg config.Config, secrets *config.SecretsConfig, 
 	gw := buildGateway(cfg, secrets, secureClient, ollamaClient, providers,
 		secretPatterns, blockedPatterns, entropyFilter, mergedCatalog, healthRegistry, logger)
 
-	gw.buildMCPToolIndex(ctx, logger)
-
-	gw.Metrics = infra.NewMetrics()
+	gw.Metrics = metrics
 	gw.Metrics.RateLimits = gw.RateLimiter.Snapshot
 	gw.Metrics.Cooldowns = gw.AgentState.ActiveCooldowns
 	gw.Metrics.CBStates = gw.AgentState.CBSnapshot
+
+	gw.buildMCPToolIndex(ctx, logger)
 
 	debugLogAgentModels(ctx, logger, cfg, mergedCatalog, providers)
 
@@ -135,7 +136,7 @@ func createHTTPClients(cfg config.Config) (*http.Client, *http.Client) {
 	return secureClient, ollamaClient
 }
 
-func performModelDiscovery(ctx context.Context, cfg *config.Config, providers map[string]*config.Provider, logger *slog.Logger) (*discovery.ModelCatalog, *discovery.HealthRegistry) {
+func performModelDiscovery(ctx context.Context, cfg *config.Config, providers map[string]*config.Provider, metrics *infra.Metrics, logger *slog.Logger) (*discovery.ModelCatalog, *discovery.HealthRegistry) {
 	var mergedCatalog *discovery.ModelCatalog
 	var healthRegistry *discovery.HealthRegistry
 
@@ -144,7 +145,7 @@ func performModelDiscovery(ctx context.Context, cfg *config.Config, providers ma
 		return mergedCatalog, nil
 	}
 
-	fetcher := discovery.NewDiscoveryFetcher(cfg.Governance.EffectiveMaxRetryAttempts())
+	fetcher := discovery.NewDiscoveryFetcher(cfg.Governance.EffectiveMaxRetryAttempts()).WithMetrics(metrics)
 	catalog := fetcher.FetchAll(ctx, providers, logger)
 	mergedCatalog = discovery.MergeCatalog(catalog, cfg)
 
