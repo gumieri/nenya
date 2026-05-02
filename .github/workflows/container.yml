@@ -14,6 +14,7 @@ permissions:
 jobs:
   publish:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
         with:
@@ -64,7 +65,7 @@ jobs:
           DIGEST: ${{ steps.build-and-push.outputs.digest }}
           TAGS: ${{ steps.build-and-push.outputs.tags }}
         run: |
-          echo "${TAGS}" | tr ' ' '\n' | while read -r tag; do
+          echo "${TAGS}" | while read -r tag; do
             [ -z "$tag" ] && continue
             echo "Signing ${tag}@${DIGEST}"
             cosign sign --yes "${tag}@${DIGEST}"
@@ -90,19 +91,26 @@ jobs:
           jq . nenya-${{ github.ref_name }}-linux-amd64.spdx.json > /dev/null
           jq . nenya-${{ github.ref_name }}-linux-arm64.spdx.json > /dev/null
 
-      - name: Create GitHub release
-        id: create_release
-        uses: softprops/action-gh-release@v3.0.0
-        with:
-          tag_name: ${{ github.ref_name }}
-          name: "Nenya ${{ github.ref_name }}"
-          draft: false
-          prerelease: false
-          files: |
-            nenya-${{ github.ref_name }}-linux-amd64.spdx.json
-            nenya-${{ github.ref_name }}-linux-arm64.spdx.json
+      - name: Create release and upload SBOMs
+        run: |
+          VERSION="${{ github.ref_name }}"
+
+          if gh release view "$VERSION" >/dev/null 2>&1; then
+            echo "Release ${VERSION} already exists, uploading assets..."
+          else
+            echo "Creating release ${VERSION}..."
+            gh release create "$VERSION" \
+              --verify-tag \
+              --title "Nenya ${VERSION}" \
+              --generate-notes
+          fi
+
+          gh release upload "$VERSION" \
+            nenya-${VERSION}-linux-amd64.spdx.json \
+            nenya-${VERSION}-linux-arm64.spdx.json \
+            --clobber
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Attest SBOM for each architecture
         run: |
@@ -114,7 +122,7 @@ jobs:
               --format '{{.Manifest.Digest}}' \
               "${IMAGE}:${VERSION}-${arch}")
             cosign attest \
-              --predicate-type spdxjson \
+              --predicate-type spdx \
               --predicate "nenya-${VERSION}-linux-${arch}.spdx.json" \
               --yes \
               "ghcr.io/${{ github.repository }}@${DIGEST}"
