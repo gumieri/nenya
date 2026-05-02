@@ -161,7 +161,10 @@ func (rl *retryLoop) handleActionError(i int, target routing.UpstreamTarget, act
 	return retrySignalContinue
 }
 
-// Run executes the retry loop, returning true if a response was successfully streamed.
+// Run executes the retry loop. It returns true when the request has been fully
+// handled (streaming or non-streaming success, or a terminal HTTP error response
+// written to the client). It returns false when all targets are exhausted
+// without sending a complete response, so the caller should respond with 503.
 func (rl *retryLoop) Run() bool {
 	workingPayload := make(map[string]interface{}, 16)
 retryLoop:
