@@ -78,6 +78,7 @@ type forwardOptions struct {
 	AgentName  string
 	MaxRetries int
 	CacheKey   string
+	KeyRef     string
 }
 
 // retryLoop encapsulates the state and logic for retrying upstream requests.
@@ -159,7 +160,7 @@ func (rl *retryLoop) handleActionResult(i int, target routing.UpstreamTarget, ac
 
 // newRetryLoop creates a retryLoop with the given parameters.
 func newRetryLoop(p *Proxy, gw *gateway.NenyaGateway, w http.ResponseWriter, r *http.Request, opts forwardOptions) (*retryLoop, error) {
-	ctxLogger := gw.Logger.With("operation", "forward", "agent", opts.AgentName)
+	ctxLogger := gw.Logger.With("operation", "forward", "agent", opts.AgentName, "api_key", opts.KeyRef)
 
 	originalPayload, err := json.Marshal(opts.Payload)
 	if err != nil {

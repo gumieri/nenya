@@ -16,17 +16,17 @@ import (
 	"nenya/internal/util"
 )
 
-func (p *Proxy) handleFiles(gw *gateway.NenyaGateway, w http.ResponseWriter, r *http.Request) {
-	p.handleFilesOrBatches(gw, w, r, "files")
+func (p *Proxy) handleFiles(gw *gateway.NenyaGateway, w http.ResponseWriter, r *http.Request, keyRef string) {
+	p.handleFilesOrBatches(gw, w, r, "files", keyRef)
 }
 
-func (p *Proxy) handleBatches(gw *gateway.NenyaGateway, w http.ResponseWriter, r *http.Request) {
-	p.handleFilesOrBatches(gw, w, r, "batches")
+func (p *Proxy) handleBatches(gw *gateway.NenyaGateway, w http.ResponseWriter, r *http.Request, keyRef string) {
+	p.handleFilesOrBatches(gw, w, r, "batches", keyRef)
 }
 
 // handleFilesOrBatches handles both Files and Batches API endpoints with shared logic.
 // The endpoint parameter should be "files" or "batches".
-func (p *Proxy) handleFilesOrBatches(gw *gateway.NenyaGateway, w http.ResponseWriter, r *http.Request, endpoint string) {
+func (p *Proxy) handleFilesOrBatches(gw *gateway.NenyaGateway, w http.ResponseWriter, r *http.Request, endpoint string, keyRef string) {
 	if !p.isPathSafe(r.URL.Path, "/v1/"+endpoint) {
 		http.Error(w, "Invalid path", http.StatusBadRequest)
 		return
@@ -62,6 +62,7 @@ func (p *Proxy) handleFilesOrBatches(gw *gateway.NenyaGateway, w http.ResponseWr
 	}
 
 	contentType := r.Header.Get("Content-Type")
+	ctxLogger := gw.Logger.With("operation", endpoint, "provider", provider.Name, "api_key", keyRef)
 
 	var resp *http.Response
 	err = util.DoWithRetry(ctx, maxAttempts, func() error {
@@ -86,7 +87,7 @@ func (p *Proxy) handleFilesOrBatches(gw *gateway.NenyaGateway, w http.ResponseWr
 	})
 
 	if err != nil {
-		gw.Logger.Error("files/batches upstream request failed", "provider", provider.Name, "endpoint", endpoint, "err", err)
+		ctxLogger.Error("files/batches upstream request failed", "endpoint", endpoint, "err", err)
 		http.Error(w, "Upstream provider error", http.StatusBadGateway)
 		return
 	}
@@ -101,7 +102,7 @@ func (p *Proxy) handleFilesOrBatches(gw *gateway.NenyaGateway, w http.ResponseWr
 	w.WriteHeader(resp.StatusCode)
 
 	if _, err := copyStream(ctx, w, resp.Body, nil); err != nil {
-		gw.Logger.Debug("files/batches response copy ended", "err", err)
+		ctxLogger.Debug("files/batches response copy ended", "err", err)
 	}
 }
 
