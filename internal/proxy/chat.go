@@ -45,6 +45,7 @@ type chatRequest struct {
 	WindowMaxCtx int
 	Profile      pipeline.ClientProfile
 	Messages     []any
+	KeyRef       string
 }
 
 // httpError pairs an HTTP status code with a user-facing message.
@@ -57,7 +58,7 @@ func (e *httpError) Error() string { return e.Message }
 
 // validateChatRequest reads and validates the incoming request body,
 // returning a populated chatRequest or an httpError.
-func (p *Proxy) validateChatRequest(w http.ResponseWriter, r *http.Request, gw *gateway.NenyaGateway) (*chatRequest, *httpError) {
+func (p *Proxy) validateChatRequest(w http.ResponseWriter, r *http.Request, gw *gateway.NenyaGateway, keyRef string) (*chatRequest, *httpError) {
 	r.Body = http.MaxBytesReader(w, r.Body, gw.Config.Server.MaxBodyBytes)
 
 	bodyBytes, err := io.ReadAll(r.Body)
@@ -92,6 +93,7 @@ func (p *Proxy) validateChatRequest(w http.ResponseWriter, r *http.Request, gw *
 		ModelName:  modelName,
 		TokenCount: gw.CountRequestTokens(payload),
 		Stream:     true, // Default to streaming for backward compatibility
+		KeyRef:     keyRef,
 	}
 	if streamRaw, ok := payload["stream"]; ok {
 		if s, ok := streamRaw.(bool); ok {
@@ -272,9 +274,9 @@ func (p *Proxy) resolvePipelineContext(r *http.Request, gw *gateway.NenyaGateway
 }
 
 // handleChatCompletions processes chat completion requests with optional content filtering and tool integration.
-func (p *Proxy) handleChatCompletions(gw *gateway.NenyaGateway, w http.ResponseWriter, r *http.Request) {
+func (p *Proxy) handleChatCompletions(gw *gateway.NenyaGateway, w http.ResponseWriter, r *http.Request, keyRef string) {
 	gwStart := time.Now()
-	req, herr := p.validateChatRequest(w, r, gw)
+	req, herr := p.validateChatRequest(w, r, gw, keyRef)
 	if herr != nil {
 		if herr.Code == http.StatusNoContent {
 			return
@@ -298,6 +300,7 @@ func (p *Proxy) handleChatCompletions(gw *gateway.NenyaGateway, w http.ResponseW
 			AgentName:  req.AgentName,
 			MaxRetries: req.MaxRetries,
 			CacheKey:   req.CacheKey,
+			KeyRef:     req.KeyRef,
 		})
 		return
 	}
@@ -311,6 +314,7 @@ func (p *Proxy) handleChatCompletions(gw *gateway.NenyaGateway, w http.ResponseW
 		AgentName:  req.AgentName,
 		MaxRetries: req.MaxRetries,
 		CacheKey:   req.CacheKey,
+		KeyRef:     req.KeyRef,
 	})
 }
 
@@ -602,7 +606,7 @@ func (p *Proxy) summarizeOrForward(gw *gateway.NenyaGateway, ctx context.Context
 	return fmt.Sprintf("[Nenya Sanitized via Ollama (%s input)]:\n%s", label, summarized), true
 }
 
-func (p *Proxy) handleEmbeddings(gw *gateway.NenyaGateway, w http.ResponseWriter, r *http.Request) {
+func (p *Proxy) handleEmbeddings(gw *gateway.NenyaGateway, w http.ResponseWriter, r *http.Request, keyRef string) {
 	r.Body = http.MaxBytesReader(w, r.Body, gw.Config.Server.MaxBodyBytes)
 	defer func() { _ = r.Body.Close() }()
 
@@ -678,7 +682,7 @@ func (p *Proxy) handleEmbeddings(gw *gateway.NenyaGateway, w http.ResponseWriter
 		maxAttempts = gw.Config.Governance.EffectiveMaxRetryAttempts()
 	}
 
-	p.forwardEmbeddingsRequest(gw, w, ctx, http.MethodPost, embeddingURL, bodyBytes, provider.Name, r.Header, maxAttempts)
+	p.forwardEmbeddingsRequest(gw, w, ctx, http.MethodPost, embeddingURL, bodyBytes, provider.Name, r.Header, maxAttempts, keyRef)
 }
 
 func countEmbeddingInputTokens(payload map[string]interface{}) int {
@@ -714,10 +718,11 @@ func countEmbeddingInputTokens(payload map[string]interface{}) int {
 	return tokens
 }
 
-func (p *Proxy) forwardEmbeddingsRequest(gw *gateway.NenyaGateway, w http.ResponseWriter, ctx context.Context, method, url string, bodyBytes []byte, providerName string, srcHeaders http.Header, maxAttempts int) {
+func (p *Proxy) forwardEmbeddingsRequest(gw *gateway.NenyaGateway, w http.ResponseWriter, ctx context.Context, method, url string, bodyBytes []byte, providerName string, srcHeaders http.Header, maxAttempts int, keyRef string) {
 	req, err := p.buildUpstreamRequest(gw, ctx, method, url, bodyBytes, providerName, srcHeaders)
 	if err != nil {
-		gw.Logger.Error("failed to create embeddings upstream request", "err", err)
+		ctxLogger := gw.Logger.With("operation", "forward", "api_key", keyRef)
+		ctxLogger.Error("failed to create embeddings upstream request", "err", err)
 		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
 		return
 	}
@@ -737,15 +742,18 @@ func (p *Proxy) forwardEmbeddingsRequest(gw *gateway.NenyaGateway, w http.Respon
 		return nil
 	})
 	if err != nil {
-		gw.Logger.Error("embeddings upstream request failed", "provider", providerName, "err", err)
+		ctxLogger := gw.Logger.With("operation", "forward", "api_key", keyRef, "provider", providerName)
+		ctxLogger.Error("embeddings upstream request failed", "err", err)
 		http.Error(w, "Upstream provider error", http.StatusBadGateway)
 		return
 	}
 	defer func() { _ = resp.Body.Close() }()
 
+	// Use context-aware logger for response logging
+	ctxLogger := gw.Logger.With("operation", "forward", "api_key", keyRef, "provider", providerName)
 	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {
-		gw.Logger.Error("failed to read embeddings response body", "err", err)
+		ctxLogger.Error("failed to read embeddings response body", "err", err)
 		http.Error(w, "Failed to read upstream response", http.StatusBadGateway)
 		return
 	}
@@ -756,7 +764,7 @@ func (p *Proxy) forwardEmbeddingsRequest(gw *gateway.NenyaGateway, w http.Respon
 	w.WriteHeader(resp.StatusCode)
 
 	if _, err := w.Write(respBody); err != nil {
-		gw.Logger.Debug("embeddings response write ended", "err", err)
+		ctxLogger.Debug("embeddings response write ended", "err", err)
 	}
 }
 
@@ -805,7 +813,7 @@ func recordUsageFromMap(gw *gateway.NenyaGateway, responseMap map[string]interfa
 	}
 }
 
-func (p *Proxy) handleResponses(gw *gateway.NenyaGateway, w http.ResponseWriter, r *http.Request) {
+func (p *Proxy) handleResponses(gw *gateway.NenyaGateway, w http.ResponseWriter, r *http.Request, keyRef string) {
 	pathSafe := p.isPathSafeResponses(r.URL.Path)
 	if !pathSafe {
 		http.Error(w, "Invalid path", http.StatusBadRequest)
@@ -837,6 +845,8 @@ func (p *Proxy) handleResponses(gw *gateway.NenyaGateway, w http.ResponseWriter,
 		maxAttempts = gw.Config.Governance.EffectiveMaxRetryAttempts()
 	}
 
+	ctxLogger := gw.Logger.With("operation", "responses", "provider", provider.Name, "api_key", keyRef)
+
 	var resp *http.Response
 	err := util.DoWithRetry(ctx, maxAttempts, func() error {
 		req, reqErr := p.buildUpstreamRequest(gw, ctx, r.Method, targetURL, bodyBytes, provider.Name, r.Header)
@@ -860,7 +870,7 @@ func (p *Proxy) handleResponses(gw *gateway.NenyaGateway, w http.ResponseWriter,
 	})
 
 	if err != nil {
-		gw.Logger.Error("responses upstream request failed", "provider", provider.Name, "err", err)
+		ctxLogger.Error("responses upstream request failed", "err", err)
 		http.Error(w, "Upstream provider error", http.StatusBadGateway)
 		return
 	}
@@ -870,7 +880,7 @@ func (p *Proxy) handleResponses(gw *gateway.NenyaGateway, w http.ResponseWriter,
 	w.WriteHeader(resp.StatusCode)
 
 	if _, err := copyStream(ctx, w, resp.Body, nil); err != nil {
-		gw.Logger.Debug("responses response copy ended", "err", err)
+		ctxLogger.Debug("responses response copy ended", "err", err)
 	}
 }
 

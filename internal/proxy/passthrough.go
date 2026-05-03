@@ -17,7 +17,7 @@ import (
 	"nenya/internal/util"
 )
 
-func (p *Proxy) handlePassthrough(gw *gateway.NenyaGateway, w http.ResponseWriter, r *http.Request) {
+func (p *Proxy) handlePassthrough(gw *gateway.NenyaGateway, w http.ResponseWriter, r *http.Request, keyRef string) {
 	segments := strings.Split(strings.Trim(r.URL.Path, "/"), "/")
 	if len(segments) < 2 {
 		gw.Logger.Warn("passthrough: invalid path format", "path", r.URL.Path)
@@ -81,6 +81,7 @@ func (p *Proxy) handlePassthrough(gw *gateway.NenyaGateway, w http.ResponseWrite
 		"provider", providerName,
 		"method", r.Method,
 		"path", subPath,
+		"api_key", keyRef,
 	)
 
 	resp, err := p.executePassthroughUpstream(gw, ctx, r, upstreamURL, bodyBytes, provider)

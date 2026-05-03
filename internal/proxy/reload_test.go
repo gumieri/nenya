@@ -54,13 +54,116 @@ func TestAuthenticateRequest_NilGateway(t *testing.T) {
 	req.Header.Set("Authorization", "Bearer test-token")
 	rec := httptest.NewRecorder()
 
-	ok := p.authenticateRequest(req, rec)
+	_, ok := p.authenticateRequest(req, rec)
 	if ok {
 		t.Fatal("expected false for nil gateway")
 	}
 	if rec.Code != http.StatusServiceUnavailable {
 		t.Fatalf("expected 503, got %d", rec.Code)
 	}
+}
+
+func TestAuthenticateRequest_ReturnsKeyName(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+
+	t.Run("primary token returns primary", func(t *testing.T) {
+		gw := gateway.New(context.Background(), config.Config{}, &config.SecretsConfig{
+			ClientToken: "test-client-token",
+			ApiKeys:     map[string]config.ApiKey{},
+		}, logger)
+		p := &Proxy{}
+		p.StoreGateway(gw)
+		defer p.StoreGateway(nil)
+
+		req := httptest.NewRequest(http.MethodGet, "/v1/models", nil)
+		req.Header.Set("Authorization", "Bearer test-client-token")
+		rec := httptest.NewRecorder()
+
+		keyRef, ok := p.authenticateRequest(req, rec)
+		if !ok {
+			t.Fatal("expected true for primary token")
+		}
+		if keyRef != "primary" {
+			t.Fatalf("expected 'primary', got %q", keyRef)
+		}
+	})
+
+	t.Run("named API key returns its name", func(t *testing.T) {
+		gw := gateway.New(context.Background(), config.Config{}, &config.SecretsConfig{
+			ClientToken: "",
+			ApiKeys: map[string]config.ApiKey{
+				"my-key": {
+					Name:    "my-key",
+					Token:   "super-secret-token",
+					Roles:   []string{"user"},
+					Enabled: true,
+				},
+			},
+		}, logger)
+		p := &Proxy{}
+		p.StoreGateway(gw)
+		defer p.StoreGateway(nil)
+
+		req := httptest.NewRequest(http.MethodGet, "/v1/models", nil)
+		req.Header.Set("Authorization", "Bearer super-secret-token")
+		rec := httptest.NewRecorder()
+
+		keyRef, ok := p.authenticateRequest(req, rec)
+		if !ok {
+			t.Fatal("expected true for named API key")
+		}
+		if keyRef != "my-key" {
+			t.Fatalf("expected 'my-key', got %q", keyRef)
+		}
+	})
+
+	t.Run("invalid token returns empty keyRef", func(t *testing.T) {
+		gw := gateway.New(context.Background(), config.Config{}, &config.SecretsConfig{
+			ClientToken: "valid-token",
+			ApiKeys:     map[string]config.ApiKey{},
+		}, logger)
+		p := &Proxy{}
+		p.StoreGateway(gw)
+		defer p.StoreGateway(nil)
+
+		req := httptest.NewRequest(http.MethodGet, "/v1/models", nil)
+		req.Header.Set("Authorization", "Bearer invalid-token")
+		rec := httptest.NewRecorder()
+
+		keyRef, ok := p.authenticateRequest(req, rec)
+		if ok {
+			t.Fatal("expected false for invalid token")
+		}
+		if keyRef != "" {
+			t.Fatalf("expected empty keyRef for invalid token, got %q", keyRef)
+		}
+		if rec.Code != http.StatusForbidden {
+			t.Fatalf("expected 403, got %d", rec.Code)
+		}
+	})
+
+	t.Run("missing Authorization header returns empty keyRef", func(t *testing.T) {
+		gw := gateway.New(context.Background(), config.Config{}, &config.SecretsConfig{
+			ClientToken: "valid-token",
+		}, logger)
+		p := &Proxy{}
+		p.StoreGateway(gw)
+		defer p.StoreGateway(nil)
+
+		req := httptest.NewRequest(http.MethodGet, "/v1/models", nil)
+		rec := httptest.NewRecorder()
+
+		keyRef, ok := p.authenticateRequest(req, rec)
+		if ok {
+			t.Fatal("expected false for missing auth header")
+		}
+		if keyRef != "" {
+			t.Fatalf("expected empty keyRef for missing header, got %q", keyRef)
+		}
+		if rec.Code != http.StatusUnauthorized {
+			t.Fatalf("expected 401, got %d", rec.Code)
+		}
+	})
 }
 
 func TestServeHTTP_NilGateway(t *testing.T) {
