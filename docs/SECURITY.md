@@ -40,14 +40,14 @@ Nenya stores all authentication tokens (client token, provider API keys, API key
 
 - **mlock/mmap**: All tokens are allocated using `syscall.Mmap` with `syscall.Mlock`, keeping them in physical RAM and preventing swapping to disk
 - **Read-only sealing**: After all tokens are stored, the memory region is locked to read-only via `syscall.Mprotect`. Any accidental write (e.g., buffer overflow, use-after-free) triggers an immediate `SIGSEGV`
-- **Core dump prevention**: The process disables core dumps via `setrlimit(RLIMIT_CORE, 0)` at startup, preventing memory contents from reaching disk on crash
+- **Core dump prevention**: The systemd service unit sets `LimitCORE=0` to prevent crash-dump exposure. On macOS, core dumps are handled by the system's crash reporter (see platform notes below)
 - **Zero-fill on destroy**: Memory is explicitly zeroed before release via `syscall.Munmap`. Sealed memory is temporarily toggled to writable for zeroing, then unmapped
 - **Constant-time comparison**: Token comparison uses `subtle.ConstantTimeCompare` to prevent timing side-channel attacks
 - **No string copies**: Tokens are stored as `[]byte` slices, not Go strings (avoids GC-promoted copies that are hard to erase)
 
 ### Secure Memory Default
 
-Starting from version X.Y.Z, `secure_memory_required` defaults to `true` in the configuration. If `mlock` is unavailable (e.g., missing `CAP_IPC_LOCK` or `LimitMEMLOCK` ulimit), the gateway fails to start.
+Starting from version 0.1.0, `secure_memory_required` defaults to `true` in the configuration. If `mlock` is unavailable (e.g., missing `CAP_IPC_LOCK` or `LimitMEMLOCK` ulimit), the gateway fails to start.
 
 To opt out (e.g., for development environments), set `"secure_memory_required": false` in the server config. This logs a warning and falls back to heap storage.
 
@@ -69,7 +69,7 @@ The gateway exposes Prometheus counters for authentication events:
 For secure memory to work properly, the process needs:
 
 - **Linux**: `CAP_IPC_LOCK` capability or `LimitMEMLOCK=infinity` in systemd (see below)
-- **macOS**: Run with `sudo` or use `"secure_memory_required": false` (mlock is blocked by SIP for unprivileged processes)
+- **macOS**: Default soft limit is 512KB per process. For typical token counts, run `ulimit -l unlimited` before starting, or use `"secure_memory_required": false` to opt out
 
 Configure systemd with:
 
@@ -79,9 +79,36 @@ LimitMEMLOCK=infinity
 LimitCORE=0
 ```
 
-Without `LimitMEMLOCK=infinity`, `mlock` will fail and the gateway reports `ErrMLockFailure`. Without `LimitCORE=0`, a crash could dump locked memory to a core file on disk.
+Without `LimitMEMLOCK=infinity` (Linux) or sufficient mlock limit (macOS), `mlock` will fail and the gateway reports `ErrMLockFailure`. Without `LimitCORE=0`, a crash could dump locked memory to a core file on disk.
 
 See `deploy/nenya.service` for a complete hardened unit file.
+
+**macOS mlock Limits (512KB)**
+
+On macOS, the default `RLIMIT_MEMLOCK` soft limit is 512KB per process for non-root users. If your token storage needs exceed this, you have two options:
+
+1. **Increase the limit** (recommended for development):
+   ```bash
+   ulimit -l unlimited  # or a higher value like 8192 (8MB)
+   ```
+
+2. **Disable secure memory** (for testing only):
+   ```json
+   {
+     "server": {
+       "secure_memory_required": false
+     }
+   }
+   ```
+
+On Linux with systemd, `LimitMEMLOCK=infinity` in the service unit automatically grants the required capability.
+
+**Platform-Specific Behavior with `secure_memory_required=true`**
+
+| Platform | mlock unavailable | Gateway behavior |
+|----------|------------------|------------------|
+| Linux | Missing `CAP_IPC_LOCK` or `LimitMEMLOCK` | **Fails to start** with error, log points to `docs/SECURITY.md` |
+| macOS | Default 512KB limit exceeded | **Fails to start** with error, log points to `docs/SECURITY.md` and suggests `ulimit -l unlimited` |
 
 ### Rate Limiting
 
