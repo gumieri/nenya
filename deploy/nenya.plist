@@ -1,0 +1,63 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+        "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!-- Service label (used with launchctl) -->
+    <key>Label</key>
+    <string>com.gumieri.nenya</string>
+
+    <!-- Binary path -->
+    <key>Program</key>
+    <string>/usr/bin/nenya</string>
+
+    <!-- Run as root for mlock. On Linux systemd does this via LimitMEMLOCK even
+         with DynamicUser, but macOS requires root to set unlimited memlock. -->
+    <key>UserName</key>
+    <string>root</string>
+
+    <!-- Restart on crash/unexpected exit (approximates Restart=on-failure) -->
+    <key>KeepAlive</key>
+    <true/>
+    <key>ThrottleInterval</key>
+    <integer>5</integer>
+
+    <!-- Resource limits (no core dumps, unlimited memlock) -->
+    <key>HardResourceLimits</key>
+    <dict>
+        <key>core</key>
+        <integer>0</integer>
+        <key>memlock</key>
+        <integer>-1</integer>
+    </dict>
+    <key>SoftResourceLimits</key>
+    <dict>
+        <key>memlock</key>
+        <integer>-1</integer>
+    </dict>
+
+    <!-- Environment: config and secrets paths -->
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>NENYA_CONFIG_DIR</key>
+        <string>/etc/nenya</string>
+        <key>NENYA_SECRETS_DIR</key>
+        <string>/etc/nenya</string>
+    </dict>
+
+    <!-- Logging -->
+    <key>StandardOutPath</key>
+    <string>/var/log/nenya.log</string>
+    <key>StandardErrorPath</key>
+    <string>/var/log/nenya.err</string>
+
+    <!-- Start on boot (like WantedBy=multi-user.target) -->
+    <key>RunAtLoad</key>
+    <true/>
+
+    <!-- SIGHUP reload: sudo launchctl kill -HUP com.gumieri.nenya -->
+
+    <!-- Graceful shutdown on system reboot/poweroff -->
+    <!-- KeepAlive handled above; ThrottleInterval prevents rapid restarts -->
+</dict>
+</plist>
