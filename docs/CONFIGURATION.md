@@ -133,6 +133,8 @@ systemctl reload nenya
 | `listen_addr` | string | `":8080"` | Bind address and port |
 | `max_body_bytes` | int | `10485760` (10 MB) | Maximum incoming request body size |
 | `log_level` | string | `"info"` | Log level: `"debug"`, `"info"`, `"warn"`, or `"error"`. The `-verbose` flag overrides this to `"debug"`. |
+| `secure_memory_required` | bool | `true` | Require mlock-backed secure memory for tokens. When `true`, gateway fails to start if `mlock` is unavailable. Set to `false` to allow heap fallback (e.g., macOS development). |
+| `user_agent` | string | `"nenya/1.0"` | User-Agent header sent to upstream providers |
 
 ## `governance`
 

@@ -9,58 +9,58 @@ import (
 
 func TestCapabilityOverlap(t *testing.T) {
 	tests := []struct {
-		name     string
-		source   *discovery.ModelMetadata
+		name      string
+		source    *discovery.ModelMetadata
 		candidate *discovery.ModelMetadata
-		want     int
+		want      int
 	}{
 		{
-			name:     "both nil",
-			source:   nil,
+			name:      "both nil",
+			source:    nil,
 			candidate: nil,
-			want:     0,
+			want:      0,
 		},
 		{
-			name:     "source nil",
-			source:   nil,
+			name:      "source nil",
+			source:    nil,
 			candidate: &discovery.ModelMetadata{SupportsVision: true},
-			want:     0,
+			want:      0,
 		},
 		{
-			name:     "candidate nil",
-			source:   &discovery.ModelMetadata{SupportsVision: true},
+			name:      "candidate nil",
+			source:    &discovery.ModelMetadata{SupportsVision: true},
 			candidate: nil,
-			want:     0,
+			want:      0,
 		},
 		{
-			name:     "no overlap",
-			source:   &discovery.ModelMetadata{SupportsVision: true},
+			name:      "no overlap",
+			source:    &discovery.ModelMetadata{SupportsVision: true},
 			candidate: &discovery.ModelMetadata{SupportsToolCalls: true},
-			want:     0,
+			want:      0,
 		},
 		{
-			name:     "single overlap",
-			source:   &discovery.ModelMetadata{SupportsVision: true, SupportsToolCalls: true},
+			name:      "single overlap",
+			source:    &discovery.ModelMetadata{SupportsVision: true, SupportsToolCalls: true},
 			candidate: &discovery.ModelMetadata{SupportsVision: true},
-			want:     1,
+			want:      1,
 		},
 		{
-			name:     "multiple overlap",
-			source:   &discovery.ModelMetadata{SupportsVision: true, SupportsToolCalls: true, SupportsReasoning: true},
+			name:      "multiple overlap",
+			source:    &discovery.ModelMetadata{SupportsVision: true, SupportsToolCalls: true, SupportsReasoning: true},
 			candidate: &discovery.ModelMetadata{SupportsVision: true, SupportsToolCalls: true},
-			want:     2,
+			want:      2,
 		},
 		{
-			name:     "all overlap",
-			source:   &discovery.ModelMetadata{SupportsVision: true, SupportsToolCalls: true, SupportsReasoning: true, SupportsContentArrays: true, SupportsStreamOptions: true, SupportsAutoToolChoice: true},
+			name:      "all overlap",
+			source:    &discovery.ModelMetadata{SupportsVision: true, SupportsToolCalls: true, SupportsReasoning: true, SupportsContentArrays: true, SupportsStreamOptions: true, SupportsAutoToolChoice: true},
 			candidate: &discovery.ModelMetadata{SupportsVision: true, SupportsToolCalls: true, SupportsReasoning: true, SupportsContentArrays: true, SupportsStreamOptions: true, SupportsAutoToolChoice: true},
-			want:     6,
+			want:      6,
 		},
 		{
-			name:     "partial overlap",
-			source:   &discovery.ModelMetadata{SupportsVision: true, SupportsToolCalls: true, SupportsReasoning: true},
+			name:      "partial overlap",
+			source:    &discovery.ModelMetadata{SupportsVision: true, SupportsToolCalls: true, SupportsReasoning: true},
 			candidate: &discovery.ModelMetadata{SupportsVision: true, SupportsReasoning: true},
-			want:     2,
+			want:      2,
 		},
 	}
 
@@ -172,52 +172,52 @@ func TestAbsInt(t *testing.T) {
 
 func TestEloDiff(t *testing.T) {
 	tests := []struct {
-		name        string
-		sourceElo   *float64
+		name         string
+		sourceElo    *float64
 		candidateElo *float64
-		want        float64
+		want         float64
 	}{
 		{
-			name:        "both nil",
-			sourceElo:   nil,
+			name:         "both nil",
+			sourceElo:    nil,
 			candidateElo: nil,
-			want:        0,
+			want:         0,
 		},
 		{
-			name:        "source nil",
-			sourceElo:   nil,
+			name:         "source nil",
+			sourceElo:    nil,
 			candidateElo: float64Ptr(1000.0),
-			want:        0,
+			want:         0,
 		},
 		{
-			name:        "candidate nil",
-			sourceElo:   float64Ptr(1000.0),
+			name:         "candidate nil",
+			sourceElo:    float64Ptr(1000.0),
 			candidateElo: nil,
-			want:        0,
+			want:         0,
 		},
 		{
-			name:        "same elo",
-			sourceElo:   float64Ptr(1000.0),
+			name:         "same elo",
+			sourceElo:    float64Ptr(1000.0),
 			candidateElo: float64Ptr(1000.0),
-			want:        0,
+			want:         0,
 		},
 		{
-			name:        "positive diff",
-			sourceElo:   float64Ptr(1000.0),
+			name:         "positive diff",
+			sourceElo:    float64Ptr(1000.0),
 			candidateElo: float64Ptr(1200.0),
-			want:        200,
+			want:         200,
 		},
 		{
-			name:        "negative diff",
-			sourceElo:   float64Ptr(1200.0),
+			name:         "negative diff",
+			sourceElo:    float64Ptr(1200.0),
 			candidateElo: float64Ptr(1000.0),
-			want:        200,
+			want:         200,
 		},
 		{
-			name:        "large diff",
-			sourceElo:   float64Ptr(1000.0),
+			name:         "large diff",
+			sourceElo:    float64Ptr(1000.0),
 			candidateElo: float64Ptr(2000.0),
-			want:        1000,
+			want:         1000,
 		},
 	}
 
@@ -233,52 +233,52 @@ func TestEloDiff(t *testing.T) {
 
 func TestRankDiff(t *testing.T) {
 	tests := []struct {
-		name        string
-		sourceRank  *int
+		name          string
+		sourceRank    *int
 		candidateRank *int
-		want        int
+		want          int
 	}{
 		{
-			name:         "both nil",
-			sourceRank:   nil,
+			name:          "both nil",
+			sourceRank:    nil,
 			candidateRank: nil,
-			want:         0,
+			want:          0,
 		},
 		{
-			name:         "source nil",
-			sourceRank:   nil,
+			name:          "source nil",
+			sourceRank:    nil,
 			candidateRank: intPtr(5),
-			want:         0,
+			want:          0,
 		},
 		{
-			name:         "candidate nil",
-			sourceRank:   intPtr(5),
+			name:          "candidate nil",
+			sourceRank:    intPtr(5),
 			candidateRank: nil,
-			want:         0,
+			want:          0,
 		},
 		{
-			name:         "same rank",
-			sourceRank:   intPtr(5),
+			name:          "same rank",
+			sourceRank:    intPtr(5),
 			candidateRank: intPtr(5),
-			want:         0,
+			want:          0,
 		},
 		{
-			name:         "positive diff",
-			sourceRank:   intPtr(5),
+			name:          "positive diff",
+			sourceRank:    intPtr(5),
 			candidateRank: intPtr(7),
-			want:         2,
+			want:          2,
 		},
 		{
-			name:         "negative diff",
-			sourceRank:   intPtr(7),
+			name:          "negative diff",
+			sourceRank:    intPtr(7),
 			candidateRank: intPtr(5),
-			want:         2,
+			want:          2,
 		},
 		{
-			name:         "large diff",
-			sourceRank:   intPtr(1),
+			name:          "large diff",
+			sourceRank:    intPtr(1),
 			candidateRank: intPtr(100),
-			want:         99,
+			want:          99,
 		},
 	}
 

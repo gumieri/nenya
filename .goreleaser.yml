@@ -1,0 +1,96 @@
+version: 2
+project_name: nenya
+env:
+  - GOFLAGS=-mod=readonly
+
+builds:
+  - id: nenya
+    builder: go
+    binary: nenya
+    goos:
+      - linux
+      - darwin
+    goarch:
+      - amd64
+      - arm64
+    env:
+      - CGO_ENABLED=0
+    ldflags:
+      - -s -w
+    main: ./cmd/nenya
+
+archives:
+  - builds: [nenya]
+    format: tar.gz
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}{{ if .Arm }}v{{ .Arm }}{{ end }}"
+    files:
+      - src: deploy/nenya.service
+      - src: deploy/nenya.socket
+      - src: configs/example.config.json
+
+nfpms:
+  - id: nenya
+    package_name: nenya
+    bindir: /usr/bin
+    formats:
+      - deb
+      - rpm
+      - archlinux
+    contents:
+      - src: deploy/nenya.service
+        dst: /usr/lib/systemd/system/nenya.service
+      - src: deploy/nenya.socket
+        dst: /usr/lib/systemd/system/nenya.socket
+      - src: configs/example.config.json
+        dst: /etc/nenya/config.json.example
+        type: config|noreplace
+    dependencies:
+      - systemd
+    maintainer: Rafael Gumieri <rmg@0ur.uk>
+    description: Nenya AI Gateway & Bouncer
+    homepage: https://github.com/gumieri/nenya
+    license: MIT
+    scripts:
+      postinstall: packaging/scripts/postinstall.sh
+      preremove: packaging/scripts/preremove.sh
+
+aurs:
+  - name: nenya-bin
+    description: Nenya AI Gateway & Bouncer
+    homepage: https://github.com/gumieri/nenya
+    license: MIT
+    depends:
+      - systemd
+    provides:
+      - nenya
+    conflicts:
+      - nenya
+    git_url: ssh://aur@aur.archlinux.org/nenya-bin.git
+    private_key: "{{ .Env.AUR_KEY }}"
+    package: |
+      install -Dm755 "./nenya" "${pkgdir}/usr/bin/nenya"
+      install -Dm644 "./nenya.service" "${pkgdir}/usr/lib/systemd/system/nenya.service"
+      install -Dm644 "./nenya.socket" "${pkgdir}/usr/lib/systemd/system/nenya.socket"
+      install -Dm644 "./example.config.json" "${pkgdir}/etc/nenya/config.json.example"
+
+nix:
+  - name: nenya
+    description: Nenya AI Gateway & Bouncer
+    homepage: https://github.com/gumieri/nenya
+    license: mit
+    repository:
+      owner: gumieri
+      name: nur-packages
+      branch: main
+    extra_install: |
+      install -Dm644 ./nenya.service $out/lib/systemd/system/nenya.service
+      install -Dm644 ./nenya.socket $out/lib/systemd/system/nenya.socket
+      install -Dm644 ./example.config.json $out/etc/nenya/config.json.example
+
+release:
+  github:
+    owner: gumieri
+    name: nenya
+
+checksum:
+  name_template: "checksums.txt"

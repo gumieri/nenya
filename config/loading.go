@@ -138,6 +138,10 @@ func mergeServerConfig(base, overlay *Config) {
 	if overlay.Server.LogLevel != "" {
 		base.Server.LogLevel = overlay.Server.LogLevel
 	}
+	if overlay.Server.SecureMemoryRequiredWasSet() {
+		base.Server.SecureMemoryRequired = overlay.Server.SecureMemoryRequired
+		base.Server.secureMemoryRequiredSet = true
+	}
 }
 
 func mergeGovernanceConfig(base, overlay *Config) {

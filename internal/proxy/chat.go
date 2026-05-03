@@ -395,7 +395,7 @@ func buildWindowDeps(gw *gateway.NenyaGateway) pipeline.WindowDeps {
 		OllamaClient: gw.OllamaClient,
 		Providers:    gw.Providers,
 		InjectAPIKey: func(providerName string, headers http.Header) error {
-			return routing.InjectAPIKey(providerName, gw.Providers, headers)
+			return routing.InjectAPIKeyWithGateway(providerName, gw, headers)
 		},
 		CountTokens: gw.CountTokens,
 	}
@@ -587,7 +587,7 @@ func (p *Proxy) summarizeWithOllama(gw *gateway.NenyaGateway, ctx context.Contex
 	return pipeline.CallEngineChain(ctx, gw.Client, gw.OllamaClient,
 		ref.ResolvedTargets, gw.Logger,
 		func(providerName string, headers http.Header) error {
-			return routing.InjectAPIKey(providerName, gw.Providers, headers)
+			return routing.InjectAPIKeyWithGateway(providerName, gw, headers)
 		},
 		"security_filter", agentName, systemPrompt, heavyText)
 }
@@ -998,7 +998,7 @@ func (p *Proxy) buildUpstreamRequest(gw *gateway.NenyaGateway, ctx context.Conte
 	if err != nil {
 		return nil, fmt.Errorf("failed to create upstream request: %w", err)
 	}
-	if err := routing.InjectAPIKey(providerName, gw.Providers, req.Header); err != nil {
+	if err := routing.InjectAPIKeyWithGateway(providerName, gw, req.Header); err != nil {
 		return nil, fmt.Errorf("API key injection failed: %w", err)
 	}
 	// Forward only safe passthrough headers; never let client-supplied
