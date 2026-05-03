@@ -315,6 +315,12 @@ func mergeWindowConfig(base, overlay *Config) {
 	if overlay.Window.Engine.AgentName != "" || overlay.Window.Engine.Provider != "" {
 		base.Window.Engine = overlay.Window.Engine
 	}
+	if overlay.Window.KeepFirstPercent != 0 {
+		base.Window.KeepFirstPercent = overlay.Window.KeepFirstPercent
+	}
+	if overlay.Window.KeepLastPercent != 0 {
+		base.Window.KeepLastPercent = overlay.Window.KeepLastPercent
+	}
 }
 
 func mergeResponseCacheConfig(base, overlay *Config) {

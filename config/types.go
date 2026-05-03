@@ -515,13 +515,15 @@ func (c *CompactionConfig) UnmarshalJSON(data []byte) error {
 }
 
 type WindowConfig struct {
-	Enabled         bool      `json:"enabled"`
-	Mode            string    `json:"mode"`
-	ActiveMessages  int       `json:"active_messages"`
-	TriggerRatio    float64   `json:"trigger_ratio"`
-	SummaryMaxRunes int       `json:"summary_max_runes"`
-	MaxContext      int       `json:"max_context"`
-	Engine          EngineRef `json:"engine"`
+	Enabled          bool      `json:"enabled"`
+	Mode             string    `json:"mode"`
+	ActiveMessages   int       `json:"active_messages"`
+	TriggerRatio     float64   `json:"trigger_ratio"`
+	SummaryMaxRunes  int       `json:"summary_max_runes"`
+	MaxContext       int       `json:"max_context"`
+	Engine           EngineRef `json:"engine"`
+	KeepFirstPercent float64   `json:"keep_first_percent"`
+	KeepLastPercent  float64   `json:"keep_last_percent"`
 }
 
 type MCPServerConfig struct {

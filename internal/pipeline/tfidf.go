@@ -330,13 +330,9 @@ func TruncateTFIDFCodeAware(text string, maxSize int, query string, cfg config.G
 	return before + sepMarker + after
 }
 
-func TruncateTFIDFHistory(historyText string, maxRunes int, query string) string {
+func TruncateTFIDFHistory(historyText string, maxRunes int, query string, cfg config.GovernanceConfig) string {
 	if maxRunes <= 0 {
 		maxRunes = 4000
-	}
-	cfg := config.GovernanceConfig{
-		KeepFirstPercent: 10.0,
-		KeepLastPercent:  15.0,
 	}
 	return TruncateTFIDF(historyText, maxRunes, query, cfg)
 }
