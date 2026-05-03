@@ -18,12 +18,14 @@ import (
 	"nenya/internal/gateway"
 	"nenya/internal/infra"
 	"nenya/internal/proxy"
+	"nenya/internal/version"
 )
 
 func main() {
 	configDir, configFile, verbose, validateOnly := parseFlags()
 
 	logger := infra.SetupLogger(verbose)
+	logger.Info("starting nenya", "version", version.Version, "commit", version.Commit, "build_time", version.BuildTime)
 
 	cfg, secrets, err := loadConfig(configDir, configFile, validateOnly, logger)
 	if err != nil {

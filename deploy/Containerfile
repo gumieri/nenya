@@ -14,7 +14,12 @@ RUN --mount=type=cache,target=/go/pkg/mod go mod download
 COPY . .
 
 ARG TARGETARCH
-RUN CGO_ENABLED=0 GOOS=linux GOARCH="${TARGETARCH:-amd64}" go build -ldflags="-s -w" -o nenya ./cmd/nenya
+ARG VERSION=dev
+ARG COMMIT=unknown
+ARG BUILDTIME=unknown
+RUN CGO_ENABLED=0 GOOS=linux GOARCH="${TARGETARCH:-amd64}" go build \
+  -ldflags="-s -w -X nenya/internal/version.Version=${VERSION} -X nenya/internal/version.Commit=${COMMIT} -X nenya/internal/version.BuildTime=${BUILDTIME}" \
+  -o nenya ./cmd/nenya
 
 FROM scratch
 

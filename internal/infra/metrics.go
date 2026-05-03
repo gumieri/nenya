@@ -10,6 +10,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"nenya/internal/version"
 )
 
 type Metrics struct {
@@ -467,7 +469,7 @@ func (m *Metrics) WritePrometheus(w io.Writer) {
 
 	fprintln("# HELP nenya_build_info Nenya gateway build information.")
 	fprintln("# TYPE nenya_build_info gauge")
-	fprintln(`nenya_build_info{version="dev",go_version="%s"} 1`, runtime.Version())
+	fprintln(`nenya_build_info{version="%s",go_version="%s"} 1`, version.Version, runtime.Version())
 
 	fprintln("# HELP nenya_uptime_seconds Gateway uptime in seconds.")
 	fprintln("# TYPE nenya_uptime_seconds gauge")

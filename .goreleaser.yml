@@ -3,6 +3,11 @@ project_name: nenya
 env:
   - GOFLAGS=-mod=readonly
 
+before:
+  hooks:
+    - go test ./... -race -timeout 5m
+    - go vet ./...
+
 builds:
   - id: nenya
     builder: go
@@ -17,6 +22,9 @@ builds:
       - CGO_ENABLED=0
     ldflags:
       - -s -w
+      - -X nenya/internal/version.Version={{.Version}}
+      - -X nenya/internal/version.Commit={{.Commit}}
+      - -X nenya/internal/version.BuildTime={{.Date}}
     main: ./cmd/nenya
 
 archives:
@@ -47,7 +55,13 @@ nfpms:
     dependencies:
       - systemd
     maintainer: Rafael Gumieri <rmg@0ur.uk>
-    description: Nenya AI Gateway & Bouncer
+    description: |
+      Nenya is a lightweight, highly secure AI API Gateway/Proxy written in Go.
+      It acts as transparent middleware between local AI coding clients and
+      upstream LLM providers (Anthropic, Gemini, DeepSeek, Mistral, xAI, and more),
+      featuring context summarization via local Ollama, PII/secret redaction,
+      dynamic routing with circuit breakers, agent fallback chains, and MCP tool integration.
+      Built with zero external dependencies, seccomp hardening, and IPC_LOCK memory protection.
     homepage: https://github.com/gumieri/nenya
     license: MIT
     scripts:
@@ -56,7 +70,7 @@ nfpms:
 
 aurs:
   - name: nenya-bin
-    description: Nenya AI Gateway & Bouncer
+    description: Nenya is a lightweight, highly secure AI API Gateway/Proxy written in Go. Transparent middleware between AI coding clients and upstream LLM providers.
     homepage: https://github.com/gumieri/nenya
     license: MIT
     depends:
@@ -75,7 +89,7 @@ aurs:
 
 nix:
   - name: nenya
-    description: Nenya AI Gateway & Bouncer
+    description: Nenya is a lightweight, highly secure AI API Gateway/Proxy written in Go.
     homepage: https://github.com/gumieri/nenya
     license: mit
     repository:
@@ -87,10 +101,32 @@ nix:
       install -Dm644 ./nenya.socket $out/lib/systemd/system/nenya.socket
       install -Dm644 ./example.config.json $out/etc/nenya/config.json.example
 
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^chore:"
+      - "^Merge pull request"
+      - "^Merge branch"
+      - "^refactor:"
+
+checksum:
+  name_template: "checksums.txt"
+
+# signs:
+#   - id: checksums
+#     artifacts: checksum
+#     args: ["sign", "-y", "{{ .Artifact }}"]
+#     cmd: cosign
+# TODO: enable COSIGN_KEY secret in repo settings, then uncomment
+
 release:
   github:
     owner: gumieri
     name: nenya
-
-checksum:
-  name_template: "checksums.txt"
+  mode: replace
+  name_template: "Nenya {{ .Version }}"
+  draft: false
+  prerelease: auto
