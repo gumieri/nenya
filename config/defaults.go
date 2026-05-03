@@ -371,6 +371,12 @@ func applyWindowDefaults(cfg *Config) {
 	if cfg.Window.MaxContext == 0 {
 		cfg.Window.MaxContext = 128000
 	}
+	if cfg.Window.KeepFirstPercent == 0 {
+		cfg.Window.KeepFirstPercent = 25.0
+	}
+	if cfg.Window.KeepLastPercent == 0 {
+		cfg.Window.KeepLastPercent = 30.0
+	}
 }
 
 func looksLikeRegex(s string) bool {

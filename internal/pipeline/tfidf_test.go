@@ -293,11 +293,15 @@ func TestTruncateTFIDFCodeAware(t *testing.T) {
 }
 
 func TestTruncateTFIDFHistory(t *testing.T) {
+	cfg := config.GovernanceConfig{
+		KeepFirstPercent: 25.0,
+		KeepLastPercent:  30.0,
+	}
 	history := strings.Repeat("old conversation about weather and cooking. ", 200) +
 		"\n\nFix the authentication bug in login.go\n\n" +
 		strings.Repeat("more old chat about gardening. ", 200)
 
-	result := TruncateTFIDFHistory(history, 4000, "fix authentication bug login.go")
+	result := TruncateTFIDFHistory(history, 4000, "fix authentication bug login.go", cfg)
 
 	if utf8.RuneCountInString(result) > 4100 {
 		t.Errorf("history result %d runes should be near 4000 limit", utf8.RuneCountInString(result))
