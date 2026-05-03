@@ -311,7 +311,9 @@ func initSecureMem(secrets *config.SecretsConfig, logger *slog.Logger, secureMem
 			metrics.RecordSecureMemInitFailure()
 		}
 		if secureMemoryRequired {
-			logger.Error("secure memory unavailable but secure_memory_required is set", "err", err)
+			logger.Error("secure memory unavailable but secure_memory_required is set",
+				"err", err,
+				"hint", "see docs/SECURITY.md for platform-specific mlock configuration")
 			return nil, security.SecureToken{}
 		}
 		logger.Warn("secure memory unavailable, falling back to heap storage", "err", err)
