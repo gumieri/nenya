@@ -26,6 +26,8 @@ type TransformDeps struct {
 	Catalog            *discovery.ModelCatalog
 }
 
+// Deprecated: Use InjectAPIKeyWithGateway instead. This function accesses
+// provider API keys directly from the Provider struct, bypassing secure memory.
 func InjectAPIKey(providerName string, providers map[string]*config.Provider, headers http.Header) error {
 	p, ok := providers[providerName]
 	if !ok {
@@ -39,6 +41,29 @@ func InjectAPIKey(providerName string, providers map[string]*config.Provider, he
 	a := adapter.ForProviderWithAuth(providerName, p.AuthStyle)
 	req := &http.Request{Header: headers}
 	return a.InjectAuth(req, p.APIKey)
+}
+
+func InjectAPIKeyWithGateway(providerName string, gw interface {
+	GetProviderAPIKey(providerName string) ([]byte, bool)
+	GetProvidersMap() map[string]*config.Provider
+}, headers http.Header) error {
+	providers := gw.GetProvidersMap()
+	p, ok := providers[providerName]
+	if !ok {
+		return fmt.Errorf("unknown provider: %s", providerName)
+	}
+
+	if p.AuthStyle != "none" {
+		keyBytes, ok := gw.GetProviderAPIKey(providerName)
+		if !ok {
+			return fmt.Errorf("provider %s has no API key configured", providerName)
+		}
+		a := adapter.ForProviderWithAuth(providerName, p.AuthStyle)
+		req := &http.Request{Header: headers}
+		return a.InjectAuth(req, string(keyBytes))
+	}
+
+	return nil
 }
 
 func resolveModelMapping(deps TransformDeps, payload map[string]interface{}, providerName, modelName string) string {

@@ -226,25 +226,25 @@ func (p *Proxy) authenticateRequest(r *http.Request, w http.ResponseWriter) (str
 				}
 				return authHeader
 			}())
+		if gw.Metrics != nil {
+			gw.Metrics.RecordAuthFailure("missing_header")
+		}
 		http.Error(w, "Unauthorized", http.StatusUnauthorized)
 		return "", false
 	}
 	clientToken := strings.TrimSpace(strings.TrimPrefix(authHeader, "Bearer "))
 
-	// Check the primary ClientToken first.
-	if gw.Secrets.ClientToken != "" {
-		var tokenOK bool
-		if gw.SecureMem != nil {
-			tokenOK = gw.SecureMem.CompareToken(gw.ClientTokenRef, clientToken)
-		} else {
-			tokenOK = hmac.Equal([]byte(clientToken), []byte(gw.Secrets.ClientToken))
-		}
-		if tokenOK {
-			gw.Logger.Debug("authentication successful",
-				"correlation_id", correlationID,
-				"api_key", "primary")
-			return "primary", true
-		}
+	keyRef, ok := p.authenticateClientToken(gw, correlationID, clientToken)
+	if !ok {
+		http.Error(w, "Forbidden", http.StatusForbidden)
+		return "", false
+	}
+	return keyRef, true
+}
+
+func (p *Proxy) authenticateClientToken(gw *gateway.NenyaGateway, correlationID, clientToken string) (string, bool) {
+	if keyRef, ok := p.checkPrimaryToken(gw, correlationID, clientToken); ok {
+		return keyRef, true
 	}
 
 	// Fall through to per-key RBAC check.
@@ -252,15 +252,44 @@ func (p *Proxy) authenticateRequest(r *http.Request, w http.ResponseWriter) (str
 		gw.Logger.Debug("authentication successful",
 			"correlation_id", correlationID,
 			"api_key", keyName)
+		if gw.Metrics != nil {
+			gw.Metrics.RecordAuthSuccess("api_key", keyName)
+		}
 		return keyName, true
 	}
 
 	gw.Logger.Warn("invalid or expired client token",
-		"correlation_id", correlationID,
-		"remote_addr", r.RemoteAddr,
-		"user_agent", r.Header.Get("User-Agent"))
-	http.Error(w, "Forbidden", http.StatusForbidden)
+		"correlation_id", correlationID)
+	if gw.Metrics != nil {
+		gw.Metrics.RecordAuthFailure("api_key_mismatch")
+	}
 	return "", false
+}
+
+func (p *Proxy) checkPrimaryToken(gw *gateway.NenyaGateway, correlationID, clientToken string) (string, bool) {
+	if gw.Secrets.ClientToken == "" {
+		return "", false
+	}
+
+	tokenOK := false
+	if gw.SecureMem != nil {
+		tokenOK = gw.SecureMem.CompareToken(gw.ClientTokenRef, clientToken)
+	} else {
+		tokenOK = hmac.Equal([]byte(clientToken), []byte(gw.Secrets.ClientToken))
+	}
+
+	if !tokenOK {
+		if gw.Metrics != nil {
+			gw.Metrics.RecordAuthFailure("client_token_mismatch")
+		}
+		return "", false
+	}
+
+	gw.Logger.Debug("authentication successful",
+		"correlation_id", correlationID,
+		"api_key", "primary")
+	gw.Metrics.RecordAuthSuccess("client_token", "primary")
+	return "primary", true
 }
 
 // checkApiKeys checks whether clientToken matches any enabled, non-expired API key.

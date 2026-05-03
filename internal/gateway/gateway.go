@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 
 	"nenya/config"
@@ -26,29 +27,31 @@ import (
 // configuration, HTTP clients, provider registry, MCP clients, metrics,
 // rate limiter, caches, and the token counter.
 type NenyaGateway struct {
-	Config          config.Config
-	Client          *http.Client
-	OllamaClient    *http.Client
-	Secrets         *config.SecretsConfig
-	Providers       map[string]*config.Provider
-	RateLimiter     *infra.RateLimiter
-	SecretPatterns  []*regexp.Regexp
-	BlockedPatterns []*regexp.Regexp
-	EntropyFilter   *pipeline.EntropyFilter
-	Stats           *infra.UsageTracker
-	Metrics         *infra.Metrics
-	Logger          *slog.Logger
-	AgentState      *routing.AgentState
-	ThoughtSigCache *infra.ThoughtSignatureCache
-	ResponseCache   *infra.ResponseCache
-	MCPClients      map[string]*mcp.Client
-	MCPToolIndex    *mcp.ToolRegistry
-	ModelCatalog    *discovery.ModelCatalog
-	HealthRegistry  *discovery.HealthRegistry
-	LatencyTracker  *infra.LatencyTracker
-	CostTracker     *infra.CostTracker
-	SecureMem       *security.SecureMem
-	ClientTokenRef  security.SecureToken
+	Config            config.Config
+	Client            *http.Client
+	OllamaClient      *http.Client
+	Secrets           *config.SecretsConfig
+	Providers         map[string]*config.Provider
+	RateLimiter       *infra.RateLimiter
+	SecretPatterns    []*regexp.Regexp
+	BlockedPatterns   []*regexp.Regexp
+	EntropyFilter     *pipeline.EntropyFilter
+	Stats             *infra.UsageTracker
+	Metrics           *infra.Metrics
+	Logger            *slog.Logger
+	AgentState        *routing.AgentState
+	ThoughtSigCache   *infra.ThoughtSignatureCache
+	ResponseCache     *infra.ResponseCache
+	MCPClients        map[string]*mcp.Client
+	MCPToolIndex      *mcp.ToolRegistry
+	ModelCatalog      *discovery.ModelCatalog
+	HealthRegistry    *discovery.HealthRegistry
+	LatencyTracker    *infra.LatencyTracker
+	CostTracker       *infra.CostTracker
+	SecureMem         *security.SecureMem
+	ClientTokenRef    security.SecureToken
+	ProviderKeyTokens map[string]security.SecureToken
+	tokMu             sync.RWMutex
 }
 
 // New creates a new NenyaGateway with the given configuration, secrets,
@@ -60,13 +63,21 @@ func New(ctx context.Context, cfg config.Config, secrets *config.SecretsConfig, 
 	providers := config.ResolveProviders(&cfg, secrets)
 
 	metrics := infra.NewMetrics()
-	mergedCatalog, healthRegistry := performModelDiscovery(ctx, &cfg, providers, metrics, logger)
+
+	sm, clientTokenRef := initSecureMem(secrets, logger, cfg.Server.SecureMemoryRequired, metrics)
+	providerKeyTokens := initProviderKeyTokens(sm, secrets, logger, metrics)
+
+	sealSecureMem(sm, logger, metrics)
+
+	keyProvider := buildKeyProvider(sm, providerKeyTokens, providers)
+
+	mergedCatalog, healthRegistry := performModelDiscovery(ctx, &cfg, providers, metrics, logger, keyProvider)
 
 	secretPatterns, blockedPatterns := compilePatterns(cfg, logger)
 	entropyFilter := createEntropyFilter(cfg, logger)
 
 	gw := buildGateway(cfg, secrets, secureClient, ollamaClient, providers,
-		secretPatterns, blockedPatterns, entropyFilter, mergedCatalog, healthRegistry, logger)
+		secretPatterns, blockedPatterns, entropyFilter, mergedCatalog, healthRegistry, logger, sm, clientTokenRef, providerKeyTokens)
 
 	gw.Metrics = metrics
 	gw.Metrics.RateLimits = gw.RateLimiter.Snapshot
@@ -80,6 +91,28 @@ func New(ctx context.Context, cfg config.Config, secrets *config.SecretsConfig, 
 	adapter.InitWithDeps(logger, gw.ThoughtSigCache, ExtractContentText)
 
 	return gw
+}
+
+// buildKeyProvider creates a callback for retrieving provider API keys.
+// The callback first checks secure memory (ProviderKeyTokens), then falls back
+// to Provider.APIKey from config. This fallback is intentional: if a provider key
+// cannot be stored securely (e.g., SecureMem not available), the gateway continues
+// with reduced security rather than failing entirely. Operators should ensure
+// secure_memory_required=true in production to enforce secure storage.
+func buildKeyProvider(sm *security.SecureMem, providerKeyTokens map[string]security.SecureToken, providers map[string]*config.Provider) func(providerName string) ([]byte, bool) {
+	return func(providerName string) ([]byte, bool) {
+		if sm != nil && providerKeyTokens != nil {
+			if ref, ok := providerKeyTokens[providerName]; ok {
+				return sm.GetToken(ref)
+			}
+		}
+		if provider, ok := providers[providerName]; ok {
+			if provider.APIKey != "" {
+				return []byte(provider.APIKey), true
+			}
+		}
+		return nil, false
+	}
 }
 
 func mergeBuiltInProviders(cfg config.Config) config.Config {
@@ -136,7 +169,7 @@ func createHTTPClients(cfg config.Config) (*http.Client, *http.Client) {
 	return secureClient, ollamaClient
 }
 
-func performModelDiscovery(ctx context.Context, cfg *config.Config, providers map[string]*config.Provider, metrics *infra.Metrics, logger *slog.Logger) (*discovery.ModelCatalog, *discovery.HealthRegistry) {
+func performModelDiscovery(ctx context.Context, cfg *config.Config, providers map[string]*config.Provider, metrics *infra.Metrics, logger *slog.Logger, keyProvider func(string) ([]byte, bool)) (*discovery.ModelCatalog, *discovery.HealthRegistry) {
 	var mergedCatalog *discovery.ModelCatalog
 	var healthRegistry *discovery.HealthRegistry
 
@@ -145,7 +178,9 @@ func performModelDiscovery(ctx context.Context, cfg *config.Config, providers ma
 		return mergedCatalog, nil
 	}
 
-	fetcher := discovery.NewDiscoveryFetcher(cfg.Governance.EffectiveMaxRetryAttempts()).WithMetrics(metrics)
+	fetcher := discovery.NewDiscoveryFetcher(cfg.Governance.EffectiveMaxRetryAttempts()).
+		WithMetrics(metrics).
+		WithKeyProvider(keyProvider)
 	catalog := fetcher.FetchAll(ctx, providers, logger)
 	mergedCatalog = discovery.MergeCatalog(catalog, cfg)
 
@@ -234,35 +269,37 @@ func createEntropyFilter(cfg config.Config, logger *slog.Logger) *pipeline.Entro
 	return entropyFilter
 }
 
-func buildGateway(cfg config.Config, secrets *config.SecretsConfig, secureClient *http.Client, ollamaClient *http.Client, providers map[string]*config.Provider, secretPatterns []*regexp.Regexp, blockedPatterns []*regexp.Regexp, entropyFilter *pipeline.EntropyFilter, mergedCatalog *discovery.ModelCatalog, healthRegistry *discovery.HealthRegistry, logger *slog.Logger) *NenyaGateway {
+func buildGateway(cfg config.Config, secrets *config.SecretsConfig, secureClient *http.Client, ollamaClient *http.Client, providers map[string]*config.Provider, secretPatterns []*regexp.Regexp, blockedPatterns []*regexp.Regexp, entropyFilter *pipeline.EntropyFilter, mergedCatalog *discovery.ModelCatalog, healthRegistry *discovery.HealthRegistry, logger *slog.Logger, sm *security.SecureMem, clientTokenRef security.SecureToken, providerKeyTokens map[string]security.SecureToken) *NenyaGateway {
 	gw := &NenyaGateway{
-		Config:          cfg,
-		Client:          secureClient,
-		OllamaClient:    ollamaClient,
-		Secrets:         secrets,
-		Providers:       providers,
-		RateLimiter:     infra.NewRateLimiter(cfg.Governance.RatelimitMaxRPM, cfg.Governance.RatelimitMaxTPM),
-		SecretPatterns:  secretPatterns,
-		BlockedPatterns: blockedPatterns,
-		EntropyFilter:   entropyFilter,
-		Stats:           infra.NewUsageTracker(),
-		Metrics:         nil,
-		Logger:          logger,
-		AgentState:      routing.NewAgentState(logger),
-		ThoughtSigCache: infra.NewThoughtSignatureCache(1000, 30*time.Minute),
-		ResponseCache:   newResponseCache(cfg, logger),
-		MCPClients:      buildMCPClients(cfg, logger),
-		MCPToolIndex:    mcp.NewToolRegistry(),
-		ModelCatalog:    mergedCatalog,
-		HealthRegistry:  healthRegistry,
-		LatencyTracker:  infra.NewLatencyTracker(),
-		CostTracker:     infra.NewCostTracker(),
+		Config:            cfg,
+		Client:            secureClient,
+		OllamaClient:      ollamaClient,
+		Secrets:           secrets,
+		Providers:         providers,
+		RateLimiter:       infra.NewRateLimiter(cfg.Governance.RatelimitMaxRPM, cfg.Governance.RatelimitMaxTPM),
+		SecretPatterns:    secretPatterns,
+		BlockedPatterns:   blockedPatterns,
+		EntropyFilter:     entropyFilter,
+		Stats:             infra.NewUsageTracker(),
+		Metrics:           nil,
+		Logger:            logger,
+		AgentState:        routing.NewAgentState(logger),
+		ThoughtSigCache:   infra.NewThoughtSignatureCache(1000, 30*time.Minute),
+		ResponseCache:     newResponseCache(cfg, logger),
+		MCPClients:        buildMCPClients(cfg, logger),
+		MCPToolIndex:      mcp.NewToolRegistry(),
+		ModelCatalog:      mergedCatalog,
+		HealthRegistry:    healthRegistry,
+		LatencyTracker:    infra.NewLatencyTracker(),
+		CostTracker:       infra.NewCostTracker(),
+		SecureMem:         sm,
+		ClientTokenRef:    clientTokenRef,
+		ProviderKeyTokens: providerKeyTokens,
 	}
-	gw.SecureMem, gw.ClientTokenRef = initSecureMem(secrets, logger)
 	return gw
 }
 
-func initSecureMem(secrets *config.SecretsConfig, logger *slog.Logger) (*security.SecureMem, security.SecureToken) {
+func initSecureMem(secrets *config.SecretsConfig, logger *slog.Logger, secureMemoryRequired bool, metrics *infra.Metrics) (*security.SecureMem, security.SecureToken) {
 	if secrets == nil || secrets.ClientToken == "" {
 		return nil, security.SecureToken{}
 	}
@@ -270,6 +307,13 @@ func initSecureMem(secrets *config.SecretsConfig, logger *slog.Logger) (*securit
 	numProviderKeys := len(secrets.ProviderKeys)
 	sm, err := security.NewSecureMem(security.TokenSizeHint(numKeys, numProviderKeys))
 	if err != nil {
+		if metrics != nil {
+			metrics.RecordSecureMemInitFailure()
+		}
+		if secureMemoryRequired {
+			logger.Error("secure memory unavailable but secure_memory_required is set", "err", err)
+			return nil, security.SecureToken{}
+		}
 		logger.Warn("secure memory unavailable, falling back to heap storage", "err", err)
 		return nil, security.SecureToken{}
 	}
@@ -280,6 +324,47 @@ func initSecureMem(secrets *config.SecretsConfig, logger *slog.Logger) (*securit
 		return nil, security.SecureToken{}
 	}
 	return sm, ref
+}
+
+func sealSecureMem(sm *security.SecureMem, logger *slog.Logger, metrics *infra.Metrics) {
+	if sm == nil {
+		return
+	}
+	if err := sm.Seal(); err != nil {
+		if metrics != nil {
+			metrics.RecordSecureMemSealFailure()
+		}
+		logger.Warn("failed to seal secure memory", "err", err)
+		return
+	}
+	logger.Debug("secure memory sealed (read-only)")
+}
+
+func initProviderKeyTokens(sm *security.SecureMem, secrets *config.SecretsConfig, logger *slog.Logger, metrics *infra.Metrics) map[string]security.SecureToken {
+	if sm == nil || secrets == nil || len(secrets.ProviderKeys) == 0 {
+		return nil
+	}
+	tokens := make(map[string]security.SecureToken, len(secrets.ProviderKeys))
+	skipped := 0
+	for name, key := range secrets.ProviderKeys {
+		if key == "" {
+			continue
+		}
+		ref, err := sm.StoreToken(key)
+		if err != nil {
+			logger.Warn("failed to store provider key in secure memory (provider skipped)", "provider", name, "err", err)
+			skipped++
+			continue
+		}
+		tokens[name] = ref
+	}
+	if len(tokens) > 0 {
+		logger.Info("provider API keys stored in secure memory", "count", len(tokens))
+	}
+	if skipped > 0 {
+		logger.Warn("some provider keys were not stored in secure memory", "skipped", skipped)
+	}
+	return tokens
 }
 
 func debugLogAgentModels(ctx context.Context, logger *slog.Logger, cfg config.Config, mergedCatalog *discovery.ModelCatalog, providers map[string]*config.Provider) {
@@ -480,6 +565,8 @@ func (g *NenyaGateway) Close() {
 	}
 	if g.SecureMem != nil {
 		g.SecureMem.Destroy()
+		g.ProviderKeyTokens = nil
+		g.ClientTokenRef = security.SecureToken{}
 	}
 }
 
@@ -568,6 +655,43 @@ func (g *NenyaGateway) GetMCPClientsForAgent(agentName string) map[string]*mcp.C
 		return nil
 	}
 	return clients
+}
+
+func (g *NenyaGateway) GetProviderAPIKey(providerName string) ([]byte, bool) {
+	if g.SecureMem != nil {
+		g.tokMu.RLock()
+		ref, ok := g.ProviderKeyTokens[providerName]
+		g.tokMu.RUnlock()
+		if ok {
+			keyBytes, ok := g.SecureMem.GetToken(ref)
+			return keyBytes, ok
+		}
+	}
+	if provider, ok := g.Providers[providerName]; ok {
+		if provider.APIKey != "" {
+			return []byte(provider.APIKey), true
+		}
+	}
+	return nil, false
+}
+
+func (g *NenyaGateway) GetProvidersMap() map[string]*config.Provider {
+	return g.Providers
+}
+
+func (g *NenyaGateway) ProviderHasAPIKey(providerName string) bool {
+	if g.SecureMem != nil {
+		g.tokMu.RLock()
+		_, ok := g.ProviderKeyTokens[providerName]
+		g.tokMu.RUnlock()
+		if ok {
+			return true
+		}
+	}
+	if provider, ok := g.Providers[providerName]; ok {
+		return provider.APIKey != "" || provider.AuthStyle == "none"
+	}
+	return false
 }
 
 func contextWithTimeout(parent context.Context, d time.Duration) (context.Context, context.CancelFunc) {

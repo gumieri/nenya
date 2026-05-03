@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"nenya/config"
+	"nenya/internal/security"
 )
 
 func testConfig() config.Config {
@@ -320,4 +321,44 @@ func TestReload_ProvidersRebuilt(t *testing.T) {
 	if newGW.Secrets != newSecrets {
 		t.Fatal("expected new secrets reference")
 	}
+}
+
+func TestClose_ClearsSecureMem(t *testing.T) {
+	cfg := testConfig()
+	secrets := testSecrets()
+	secrets.ClientToken = "test-client-token"
+	secrets.ProviderKeys["test-provider"] = "test-provider-key"
+	gw := New(context.Background(), cfg, secrets, testLogger())
+
+	if gw.SecureMem == nil {
+		t.Skip("secure memory not available, skipping")
+	}
+
+	if gw.ProviderKeyTokens == nil {
+		t.Fatal("expected ProviderKeyTokens to be initialized")
+	}
+	if gw.ClientTokenRef == (security.SecureToken{}) {
+		t.Fatal("expected ClientTokenRef to be initialized")
+	}
+
+	gw.Close()
+
+	if gw.ProviderKeyTokens != nil {
+		t.Error("expected ProviderKeyTokens to be cleared after Close")
+	}
+	if gw.ClientTokenRef != (security.SecureToken{}) {
+		t.Error("expected ClientTokenRef to be cleared after Close")
+	}
+}
+
+func TestMetrics_SecureMemFailures(t *testing.T) {
+	cfg := testConfig()
+	gw := New(context.Background(), cfg, testSecrets(), testLogger())
+
+	if gw.Metrics == nil {
+		t.Fatal("expected Metrics to be initialized")
+	}
+	// Verify metric recording methods are safe to call
+	gw.Metrics.RecordSecureMemInitFailure()
+	gw.Metrics.RecordSecureMemSealFailure()
 }

@@ -95,16 +95,16 @@ func TestAutoAgentsConfig_IsEnabled(t *testing.T) {
 
 func TestDiscoveredModel_HasCapability(t *testing.T) {
 	tests := []struct {
-		name      string
-		model     DiscoveredModel
+		name       string
+		model      DiscoveredModel
 		capability string
-		want      bool
+		want       bool
 	}{
 		{
-			name:      "nil metadata returns false",
-			model:     DiscoveredModel{ID: "test", Metadata: nil},
+			name:       "nil metadata returns false",
+			model:      DiscoveredModel{ID: "test", Metadata: nil},
 			capability: "vision",
-			want:      false,
+			want:       false,
 		},
 		{
 			name: "vision capability true",
@@ -115,7 +115,7 @@ func TestDiscoveredModel_HasCapability(t *testing.T) {
 				},
 			},
 			capability: "vision",
-			want:      true,
+			want:       true,
 		},
 		{
 			name: "vision capability false",
@@ -126,7 +126,7 @@ func TestDiscoveredModel_HasCapability(t *testing.T) {
 				},
 			},
 			capability: "vision",
-			want:      false,
+			want:       false,
 		},
 		{
 			name: "tool_calls capability true",
@@ -137,7 +137,7 @@ func TestDiscoveredModel_HasCapability(t *testing.T) {
 				},
 			},
 			capability: "tool_calls",
-			want:      true,
+			want:       true,
 		},
 		{
 			name: "reasoning capability true",
@@ -148,7 +148,7 @@ func TestDiscoveredModel_HasCapability(t *testing.T) {
 				},
 			},
 			capability: "reasoning",
-			want:      true,
+			want:       true,
 		},
 		{
 			name: "content_arrays capability true",
@@ -159,7 +159,7 @@ func TestDiscoveredModel_HasCapability(t *testing.T) {
 				},
 			},
 			capability: "content_arrays",
-			want:      true,
+			want:       true,
 		},
 		{
 			name: "stream_options capability true",
@@ -170,16 +170,16 @@ func TestDiscoveredModel_HasCapability(t *testing.T) {
 				},
 			},
 			capability: "stream_options",
-			want:      true,
+			want:       true,
 		},
 		{
 			name: "unknown capability returns false",
 			model: DiscoveredModel{
-				ID: "test",
+				ID:       "test",
 				Metadata: &ModelMetadata{},
 			},
 			capability: "unknown",
-			want:      false,
+			want:       false,
 		},
 	}
 
@@ -455,7 +455,7 @@ func TestIsCodingModel(t *testing.T) {
 		{
 			name: "coding model - codestral with tools",
 			model: DiscoveredModel{
-				ID: "codestral-latest",
+				ID:       "codestral-latest",
 				Metadata: &ModelMetadata{SupportsToolCalls: true},
 			},
 			want: true,
@@ -463,7 +463,7 @@ func TestIsCodingModel(t *testing.T) {
 		{
 			name: "coding model - deepseek-v4 with tools",
 			model: DiscoveredModel{
-				ID: "deepseek-v4-pro",
+				ID:       "deepseek-v4-pro",
 				Metadata: &ModelMetadata{SupportsToolCalls: true},
 			},
 			want: true,
@@ -471,7 +471,7 @@ func TestIsCodingModel(t *testing.T) {
 		{
 			name: "coding model - qwen2.5 with tools",
 			model: DiscoveredModel{
-				ID: "qwen2.5-72b-turbo",
+				ID:       "qwen2.5-72b-turbo",
 				Metadata: &ModelMetadata{SupportsToolCalls: true},
 			},
 			want: true,
@@ -479,7 +479,7 @@ func TestIsCodingModel(t *testing.T) {
 		{
 			name: "coding model - claude-sonnet with tools",
 			model: DiscoveredModel{
-				ID: "claude-sonnet-4-5",
+				ID:       "claude-sonnet-4-5",
 				Metadata: &ModelMetadata{SupportsToolCalls: true},
 			},
 			want: true,
@@ -487,7 +487,7 @@ func TestIsCodingModel(t *testing.T) {
 		{
 			name: "not coding - no tools",
 			model: DiscoveredModel{
-				ID: "gpt-4o",
+				ID:       "gpt-4o",
 				Metadata: &ModelMetadata{SupportsToolCalls: false},
 			},
 			want: false,
@@ -495,7 +495,7 @@ func TestIsCodingModel(t *testing.T) {
 		{
 			name: "not coding - tools but unknown prefix",
 			model: DiscoveredModel{
-				ID: "unknown-model",
+				ID:       "unknown-model",
 				Metadata: &ModelMetadata{SupportsToolCalls: true},
 			},
 			want: false,
@@ -503,7 +503,7 @@ func TestIsCodingModel(t *testing.T) {
 		{
 			name: "not coding - no metadata",
 			model: DiscoveredModel{
-				ID: "test-model",
+				ID:       "test-model",
 				Metadata: nil,
 			},
 			want: false,
@@ -578,8 +578,8 @@ func TestGenerateAutoAgents(t *testing.T) {
 	// Create providers map with API key
 	providers := map[string]*config.Provider{
 		"test": {
-			Name:     "test",
-			APIKey:   "test-key",
+			Name:      "test",
+			APIKey:    "test-key",
 			AuthStyle: "bearer",
 		},
 	}

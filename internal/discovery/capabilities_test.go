@@ -6,12 +6,12 @@ import (
 
 func TestInferCapabilities_ProviderQualifiedModels(t *testing.T) {
 	tests := []struct {
-		name                string
-		modelID             string
-		wantToolCalls       bool
-		wantReasoning       bool
-		wantVision          bool
-		wantNil             bool
+		name          string
+		modelID       string
+		wantToolCalls bool
+		wantReasoning bool
+		wantVision    bool
+		wantNil       bool
 	}{
 		{
 			name:          "external-deepseek v4-pro trial",

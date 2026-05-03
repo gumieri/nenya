@@ -466,4 +466,3 @@ func TestHandleResponses_PathTraversal(t *testing.T) {
 		t.Errorf("expected 400 for path traversal, got %d", rec.Code)
 	}
 }
-

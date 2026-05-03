@@ -98,8 +98,9 @@ Flow notes:
 
 ### Hardening (Deployment Security)
 
+- **Secure memory (default)**: All tokens stored in mlock-protected RAM, sealed read-only after init, core dumps disabled
 - **Non-root execution** — runs as UID 65532 with dropped capabilities
-- **Memory protection** — `IPC_LOCK` for mlock; prevents secrets from swapping to disk
+- **Memory protection** — `LimitMEMLOCK=infinity` and `LimitCORE=0` in systemd
 - **Read-only filesystem** — immutable root + private `/tmp`
 - **Seccomp + no-new-privileges** — restricted syscalls, prevents privilege escalation
 - **Zero-trust secrets** — loaded via systemd credentials or container mounts, never to disk
@@ -177,6 +178,25 @@ Test it:
 ```bash
 curl -H "Authorization: Bearer $(jq -r '.client_token' secrets/client.json)" \
   http://localhost:8080/healthz
+```
+
+### Or Install via Package Manager
+
+Nenya provides native packages for major Linux distributions and community package managers:
+
+| Distribution | Command |
+|-------------|---------|
+| **Debian/Ubuntu (.deb)** | Download `nenya_<version>_linux_amd64.deb` from the release page and run `sudo dpkg -i` |
+| **Fedora/RHEL (.rpm)** | Download `nenya-<version>.x86_64.rpm` from the release page and run `sudo rpm -i` |
+| **Arch Linux (.pkg.tar.zst)** | Download `nenya-<version>-x86_64.pkg.tar.zst` from the release page and run `sudo pacman -U` |
+| **Arch Linux (AUR)** | `yay -S nenya-bin` (or your preferred AUR helper) |
+| **Nix/NixOS** | Add `gumieri/nur-packages` to your NUR registry and use `nenya` |
+
+All packages install the binary to `/usr/bin/nenya` and include systemd service and socket units. After install, enable and start:
+
+```bash
+sudo systemctl enable --now nenya.socket
+sudo systemctl enable --now nenya.service
 ```
 
 ### Or Choose Your Deployment

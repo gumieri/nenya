@@ -122,6 +122,9 @@ func applyServerDefaults(cfg *Config) {
 	if cfg.Server.UserAgent == "" {
 		cfg.Server.UserAgent = "nenya/1.0"
 	}
+	if !cfg.Server.SecureMemoryRequired && !cfg.Server.SecureMemoryRequiredWasSet() {
+		cfg.Server.SecureMemoryRequired = true
+	}
 }
 
 func applyGovernanceDefaults(cfg *Config) {

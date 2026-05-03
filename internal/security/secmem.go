@@ -24,6 +24,7 @@ type SecureMem struct {
 	used   int
 	size   int
 	locked bool
+	sealed bool
 }
 
 func NewSecureMem(capacity int) (*SecureMem, error) {
@@ -33,6 +34,11 @@ func NewSecureMem(capacity int) (*SecureMem, error) {
 
 	if capacity <= 0 {
 		return nil, errors.New("secure memory capacity must be positive")
+	}
+
+	// Disable core dumps so tokens never reach disk on crash
+	if err := syscall.Setrlimit(syscall.RLIMIT_CORE, &syscall.Rlimit{Cur: 0, Max: 0}); err != nil {
+		return nil, fmt.Errorf("disable core dumps: %w", err)
 	}
 
 	pageSize := syscall.Getpagesize()
@@ -95,26 +101,59 @@ func (sm *SecureMem) CompareToken(st SecureToken, input string) bool {
 	return subtle.ConstantTimeCompare(stored, []byte(input)) == 1
 }
 
-func (sm *SecureMem) Destroy() {
+func (sm *SecureMem) GetToken(st SecureToken) ([]byte, bool) {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
 
-	if sm.data != nil {
-		for i := range sm.data {
-			sm.data[i] = 0
-		}
-		runtime.KeepAlive(sm.data)
-		sm.locked = false
-		_ = syscall.Munmap(sm.data)
-		sm.data = nil
-		sm.used = 0
+	if sm.data == nil || st.length == 0 || st.offset < 0 || st.offset+st.length > len(sm.data) {
+		return nil, false
 	}
+	out := make([]byte, st.length)
+	copy(out, sm.data[st.offset:st.offset+st.length])
+	return out, true
 }
 
 func (sm *SecureMem) Used() int {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
 	return sm.used
+}
+
+// Seal makes the secure memory region read-only. Call this after all tokens
+// have been stored to prevent accidental writes (e.g., buffer overflows).
+func (sm *SecureMem) Seal() error {
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
+
+	if sm.data == nil || sm.sealed {
+		return nil
+	}
+	if err := syscall.Mprotect(sm.data[:sm.size], syscall.PROT_READ); err != nil {
+		return fmt.Errorf("seal secure memory: %w", err)
+	}
+	sm.sealed = true
+	return nil
+}
+
+func (sm *SecureMem) Destroy() {
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
+
+	if sm.data != nil {
+		// If sealed, temporarily make writable so we can zero-wipe
+		if sm.sealed {
+			_ = syscall.Mprotect(sm.data[:sm.size], syscall.PROT_READ|syscall.PROT_WRITE)
+		}
+		for i := range sm.data {
+			sm.data[i] = 0
+		}
+		runtime.KeepAlive(sm.data)
+		sm.locked = false
+		sm.sealed = false
+		_ = syscall.Munmap(sm.data)
+		sm.data = nil
+		sm.used = 0
+	}
 }
 
 func GenerateToken() string {

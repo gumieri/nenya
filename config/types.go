@@ -162,10 +162,32 @@ type Config struct {
 }
 
 type ServerConfig struct {
-	ListenAddr   string `json:"listen_addr"`
-	MaxBodyBytes int64  `json:"max_body_bytes"`
-	UserAgent    string `json:"user_agent"`
-	LogLevel     string `json:"log_level"`
+	ListenAddr              string `json:"listen_addr"`
+	MaxBodyBytes            int64  `json:"max_body_bytes"`
+	UserAgent               string `json:"user_agent"`
+	LogLevel                string `json:"log_level"`
+	SecureMemoryRequired    bool   `json:"secure_memory_required"`
+	secureMemoryRequiredSet bool
+}
+
+func (s *ServerConfig) SecureMemoryRequiredWasSet() bool { return s.secureMemoryRequiredSet }
+
+func (s *ServerConfig) UnmarshalJSON(data []byte) error {
+	type alias ServerConfig
+	aux := struct {
+		SecureMemoryRequired *bool `json:"secure_memory_required"`
+		*alias
+	}{
+		alias: (*alias)(s),
+	}
+	if err := json.Unmarshal(data, &aux); err != nil {
+		return err
+	}
+	if aux.SecureMemoryRequired != nil {
+		s.SecureMemoryRequired = *aux.SecureMemoryRequired
+		s.secureMemoryRequiredSet = true
+	}
+	return nil
 }
 
 type GovernanceConfig struct {

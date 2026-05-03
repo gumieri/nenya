@@ -29,7 +29,13 @@ type DiscoveryFetcher struct {
 	client      *http.Client
 	metrics     *infra.Metrics
 	maxAttempts int
+	keyProvider ProviderKeyProvider
 }
+
+// ProviderKeyProvider is a callback to retrieve provider API keys.
+// This allows the fetcher to obtain keys from secure memory without
+// depending on the gateway directly.
+type ProviderKeyProvider func(providerName string) ([]byte, bool)
 
 // NewDiscoveryFetcher creates a DiscoveryFetcher that fetches model catalogs
 // from upstream providers. maxAttempts must be >= 1 (use EffectiveMaxRetryAttempts
@@ -58,6 +64,11 @@ func (df *DiscoveryFetcher) WithMetrics(m *infra.Metrics) *DiscoveryFetcher {
 	return df
 }
 
+func (df *DiscoveryFetcher) WithKeyProvider(kp ProviderKeyProvider) *DiscoveryFetcher {
+	df.keyProvider = kp
+	return df
+}
+
 func (df *DiscoveryFetcher) FetchAll(ctx context.Context, providers map[string]*config.Provider, logger *slog.Logger) *ModelCatalog {
 	catalog := NewModelCatalog()
 
@@ -71,7 +82,13 @@ func (df *DiscoveryFetcher) FetchAll(ctx context.Context, providers map[string]*
 
 	var wg sync.WaitGroup
 	for name, p := range providers {
-		if p.APIKey == "" && p.AuthStyle != "none" {
+		hasKey := false
+		if df.keyProvider != nil {
+			if keyBytes, ok := df.keyProvider(name); ok {
+				hasKey = len(keyBytes) > 0
+			}
+		}
+		if !hasKey && p.AuthStyle != "none" {
 			logger.Debug("skipping model discovery: no API key", "provider", name)
 			continue
 		}
@@ -186,7 +203,7 @@ func (df *DiscoveryFetcher) fetchProviderModels(ctx context.Context, providerNam
 		return nil, fmt.Errorf("discovery request: %w", err)
 	}
 
-	if err = injectAuth(req, providerName, provider); err != nil {
+	if err = injectAuth(req, providerName, provider, df); err != nil {
 		return nil, fmt.Errorf("discovery auth: %w", err)
 	}
 
@@ -260,10 +277,15 @@ func (df *DiscoveryFetcher) fetchWithRetry(req *http.Request, provider *config.P
 	return resp, nil
 }
 
-func injectAuth(req *http.Request, providerName string, provider *config.Provider) error {
+func injectAuth(req *http.Request, providerName string, provider *config.Provider, df *DiscoveryFetcher) error {
 	a := adapter.ForProviderWithAuth(providerName, provider.AuthStyle)
-	if a != nil {
-		return a.InjectAuth(req, provider.APIKey)
+	if a == nil {
+		return nil
 	}
-	return nil
+	if df != nil && df.keyProvider != nil {
+		if keyBytes, ok := df.keyProvider(providerName); ok {
+			return a.InjectAuth(req, string(keyBytes))
+		}
+	}
+	return a.InjectAuth(req, provider.APIKey)
 }

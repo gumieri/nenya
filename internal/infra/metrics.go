@@ -49,6 +49,14 @@ type Metrics struct {
 	mcpLoopDuration     sync.Map
 	mcpServerReady      sync.Map
 
+	// Auth metrics
+	authSuccess sync.Map
+	authFailure sync.Map
+
+	// Secure memory metrics
+	secureMemInitFailures atomic.Uint64
+	secureMemSealFailures atomic.Uint64
+
 	RateLimits func() map[string]*RateLimitSnapshot
 	Cooldowns  func() (active int)
 	CBStates   func() map[string]string
@@ -332,6 +340,40 @@ func (m *Metrics) SetMCPServerReady(server string, ready bool) {
 	e.value.Store(val)
 }
 
+func (m *Metrics) RecordAuthSuccess(authType, keyName string) {
+	if m == nil {
+		return
+	}
+	e := getOrCreateEntry(&m.authSuccess, map[string]string{
+		"type": authType, "key": keyName,
+	})
+	e.value.Add(1)
+}
+
+func (m *Metrics) RecordAuthFailure(authType string) {
+	if m == nil {
+		return
+	}
+	e := getOrCreateEntry(&m.authFailure, map[string]string{
+		"type": authType,
+	})
+	e.value.Add(1)
+}
+
+func (m *Metrics) RecordSecureMemInitFailure() {
+	if m == nil {
+		return
+	}
+	m.secureMemInitFailures.Add(1)
+}
+
+func (m *Metrics) RecordSecureMemSealFailure() {
+	if m == nil {
+		return
+	}
+	m.secureMemSealFailures.Add(1)
+}
+
 func (m *Metrics) RecordUpstreamLatency(model, agent, provider string, duration time.Duration) {
 	if m == nil {
 		return
@@ -471,6 +513,10 @@ func (m *Metrics) WritePrometheus(w io.Writer) {
 		"Gateway processing time (before upstream) in seconds.", &m.gatewayProcess)
 	m.writeCounterAtomic(w, "nenya_ollama_summarized_bytes_total",
 		"Total bytes sent to Ollama for summarization.", m.ollamaBytes.Load())
+	m.writeCounterAtomic(w, "nenya_secure_mem_init_failures_total",
+		"Total secure memory allocation failures.", m.secureMemInitFailures.Load())
+	m.writeCounterAtomic(w, "nenya_secure_mem_seal_failures_total",
+		"Total secure memory seal (mprotect) failures.", m.secureMemSealFailures.Load())
 	m.writeCounterMap(w, "nenya_model_discovery_total",
 		"Total model discovery fetch attempts by provider.", &m.modelDiscovery)
 	m.writeCounterMap(w, "nenya_retries_total",
@@ -495,6 +541,10 @@ func (m *Metrics) WritePrometheus(w io.Writer) {
 		"Total MCP multi-turn loop duration in seconds.", &m.mcpLoopDuration)
 	m.writeGaugeMap(w, "nenya_mcp_server_ready",
 		"MCP server readiness (1=ready, 0=not ready).", &m.mcpServerReady)
+	m.writeCounterMap(w, "nenya_auth_success_total",
+		"Total successful authentications by type and key name.", &m.authSuccess)
+	m.writeCounterMap(w, "nenya_auth_failure_total",
+		"Total failed authentication attempts by type.", &m.authFailure)
 
 	if m.RateLimits != nil {
 		fprintln("# HELP nenya_ratelimit_rpm_available Current RPM bucket available.")
