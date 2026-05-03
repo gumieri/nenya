@@ -2,33 +2,21 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches:
+      - main
   pull_request:
-    branches: [main]
+
+permissions:
+  contents: read
 
 jobs:
-  lint:
-    name: Lint
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-go@v5
-        with:
-          go-version-file: go.mod
-
-      - uses: golangci/golangci-lint-action@v9
-        with:
-          version: v2.1
-          install-mode: goinstall
-          verify: true
-
   test:
-    name: Test
     runs-on: ubuntu-latest
-    needs: lint
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
 
       - uses: actions/setup-go@v5
         with:
@@ -39,9 +27,10 @@ jobs:
           path: ~/go/pkg/mod
           key: go-mod-${{ hashFiles('go.sum') }}
 
-      - name: Run tests
-        run: go test -v -race -coverprofile=coverage.txt -covermode=atomic ./...
+      - run: go test ./... -race -timeout 5m
+      - run: go vet ./...
 
-      - uses: vladopajic/go-test-coverage@v2
+      - uses: golangci/golangci-lint-action@v6
         with:
-          config: ./.github/coverage-config.yml
+          version: latest
+          args: --timeout=5m

@@ -18,7 +18,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 1
+          fetch-depth: 0
 
       - name: Install Cosign
         uses: sigstore/cosign-installer@v4.1.1
@@ -47,11 +47,15 @@ jobs:
 
       - name: Build and push container images
         id: build-and-push
-        uses: docker/build-push-action@v6.18.0
+        uses: docker/build-push-action@v6
         with:
           context: .
           file: deploy/Containerfile
           platforms: linux/amd64,linux/arm64
+          build-args: |
+            VERSION=${{ github.ref_name }}
+            COMMIT=${{ github.sha }}
+            BUILDTIME=${{ github.event.created_at }}
           tags: |
             ${{ steps.meta.outputs.tags }}
             ghcr.io/${{ github.repository }}:${{ github.ref_name }}-amd64
@@ -60,15 +64,25 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-      - name: Sign image with a key
+      - name: Sign image with provenance
         env:
-          DIGEST: ${{ steps.build-and-push.outputs.digest }}
-          TAGS: ${{ steps.build-and-push.outputs.tags }}
+          IMAGE: ghcr.io/${{ github.repository }}
         run: |
-          echo "${TAGS}" | while read -r tag; do
-            [ -z "$tag" ] && continue
-            echo "Signing ${tag}@${DIGEST}"
-            cosign sign --yes "${tag}@${DIGEST}"
+          VERSION="${{ github.ref_name }}"
+
+          for arch in amd64 arm64; do
+            TAG="${IMAGE}:${VERSION}-${arch}"
+            ARCH_DIGEST=$(docker buildx imagetools inspect \
+              --format '{{.Manifest.Digest}}' \
+              "${TAG}")
+            echo "Signing ${TAG}@${ARCH_DIGEST}"
+            cosign sign --yes "${TAG}@${ARCH_DIGEST}"
+            echo "Attesting ${TAG}@${ARCH_DIGEST}"
+            cosign attest \
+              --yes \
+              --type slsaprovenance \
+              --predicate nenya-${VERSION}-linux-${arch}.spdx.json \
+              "${TAG}@${ARCH_DIGEST}"
           done
 
       - name: Generate SBOM for amd64
@@ -95,15 +109,17 @@ jobs:
         run: |
           VERSION="${{ github.ref_name }}"
 
-          if gh release view "$VERSION" >/dev/null 2>&1; then
-            echo "Release ${VERSION} already exists, uploading assets..."
-          else
-            echo "Creating release ${VERSION}..."
-            gh release create "$VERSION" \
-              --verify-tag \
-              --title "Nenya ${VERSION}" \
-              --generate-notes
-          fi
+          # Wait up to 60s for goreleaser to create the release
+          timeout=60
+          while ! gh release view "$VERSION" >/dev/null 2>&1; do
+            if [ $timeout -le 0 ]; then
+              echo "Timeout: Release ${VERSION} not found"
+              exit 1
+            fi
+            echo "Waiting for release ${VERSION} to be created..."
+            sleep 5
+            timeout=$((timeout - 5))
+          done
 
           gh release upload "$VERSION" \
             nenya-${VERSION}-linux-amd64.spdx.json \
@@ -111,18 +127,3 @@ jobs:
             --clobber
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Attest SBOM for each architecture
-        run: |
-          IMAGE="ghcr.io/${{ github.repository }}"
-          VERSION="${{ github.ref_name }}"
-
-          for arch in amd64 arm64; do
-            DIGEST=$(docker buildx imagetools inspect \
-              --format '{{.Manifest.Digest}}' \
-              "${IMAGE}:${VERSION}-${arch}")
-            cosign attest \
-              --predicate "nenya-${VERSION}-linux-${arch}.spdx.json" \
-              --yes \
-              "ghcr.io/${{ github.repository }}@${DIGEST}"
-          done
