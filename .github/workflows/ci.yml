@@ -30,7 +30,5 @@ jobs:
       - run: go test ./... -race -timeout 5m
       - run: go vet ./...
 
-      - uses: golangci/golangci-lint-action@v6
-        with:
-          version: latest
-          args: --timeout=5m
+      - run: go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest
+      - run: golangci-lint run --timeout=5m
