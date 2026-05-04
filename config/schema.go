@@ -19,7 +19,7 @@ func PrintSchema() (string, error) {
 func buildSchema(t reflect.Type, seen map[reflect.Type]bool) map[string]any {
 	s := map[string]any{}
 
-	if t.Kind() == reflect.Ptr {
+	if t.Kind() == 22 {
 		t = t.Elem()
 	}
 
@@ -84,7 +84,7 @@ func buildSchema(t reflect.Type, seen map[reflect.Type]bool) map[string]any {
 func buildFieldSchema(t reflect.Type, seen map[reflect.Type]bool) map[string]any {
 	s := map[string]any{}
 
-	if t.Kind() == reflect.Ptr {
+	if t.Kind() == 22 {
 		t = t.Elem()
 	}
 
