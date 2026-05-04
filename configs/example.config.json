@@ -25,12 +25,12 @@
     // "retryable_status_codes": [429, 500, 502, 503, 504, 400, 413]
   },
 
-  "security_filter": {
+  "bouncer": {
     "enabled": true,
     "redaction_label": "[REDACTED]",
     // When true, if the engine (Ollama/cloud) is unreachable, skip summarization
     // and forward the original payload. Allows Nenya to work without Ollama.
-    "skip_on_engine_failure": true,
+    "fail_open": true,
     // Engine can be a string (agent name) or an inline object.
     // String form: references an agent's model list as a fallback chain.
     // Object form: directly specifies provider/model (backward compatible).
@@ -88,7 +88,7 @@
   },
 
   "agents": {
-    // Agents can also be used as engines for security_filter and window.
+    // Agents can also be used as engines for bouncer and window.
     // Reference them by name: "engine": "summarizer"
     "summarizer": {
       "strategy": "fallback",

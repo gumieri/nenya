@@ -40,7 +40,7 @@ When a **directory** is specified, all `*.json` files (excluding `secrets.json`)
 
 When a **file** is specified, only that file is loaded (single-file mode, unchanged behavior).
 
-**Important**: Configuration format changed from TOML to JSON with semantic grouping. Old `interceptor`, `ollama`, `ratelimit`, and `filter` sections are now unified under `governance` and `security_filter` with engine abstraction.
+**Important**: Configuration format changed from TOML to JSON with semantic grouping. Old `interceptor`, `ollama`, `ratelimit`, and `filter` sections are now unified under `governance` and `bouncer` with engine abstraction.
 
 ## Top-Level Sections
 
@@ -48,7 +48,7 @@ When a **file** is specified, only that file is loaded (single-file mode, unchan
 |---------|----------|-------------|
 | Server | `server` | Listen address, body limits, token estimation |
 | Governance | `governance` | Unified context limits, truncation, and rate limiting |
-| Security Filter | `security_filter` | Tier-0 regex secret redaction with configurable engine |
+| Bouncer | `bouncer` | Tier-0 regex secret redaction with configurable engine |
 | Prefix Cache | `prefix_cache` | Prompt cache alignment optimizations |
 | Compaction | `compaction` | Text compaction (whitespace, blank lines, JSON) |
 | Window | `window` | Sliding window conversation compaction with configurable engine |
@@ -63,7 +63,7 @@ When `-config` points to a directory (the default), Nenya loads all `*.json` fil
 
 ```
 /etc/nenya/
-├── 00-server.json          # server, governance, security_filter, compaction
+ ├── 00-server.json          # server, governance, bouncer, compaction
 ├── 10-providers.json       # provider URL or auth overrides
 ├── 20-agents.json          # agent definitions
 └── secrets.json            # EXCLUDED (loaded via systemd credential)
@@ -76,7 +76,7 @@ When `-config` points to a directory (the default), Nenya loads all `*.json` fil
 | `agents` (map) | Per-key merge — later files add or override individual agents |
 | `providers` (map) | Per-key merge — later files add or override individual providers |
 | `mcp_servers` (map) | Per-key merge |
-| `server`, `governance`, `security_filter`, etc. (struct) | Last file wins — if multiple files set the same field, the last one in alphabetical order takes precedence |
+| `server`, `governance`, `bouncer`, etc. (struct) | Last file wins — if multiple files set the same field, the last one in alphabetical order takes precedence |
 
 This lets you split configuration however makes sense for your deployment — e.g., separate files for server settings, provider credentials, and agent definitions managed by different teams.
 
@@ -87,7 +87,7 @@ This lets you split configuration however makes sense for your deployment — e.
   "server": {
     "listen_addr": ":8080"
   },
-  "security_filter": {
+  "bouncer": {
     "enabled": true,
     "engine": {
       "provider": "ollama",
@@ -165,7 +165,7 @@ The interceptor implements a 3-tier pipeline for the last user message content, 
 | `retryable_status_codes` | []int | `[429, 500, 502, 503, 504]` | HTTP status codes that trigger fallback to the next model in an agent chain. **Warning: setting this field REPLACES the built-in defaults entirely.** You must include all codes you want retryable (including the standard ones). Per-provider override available via `providers.<name>.retryable_status_codes` (provider-level replaces global for that provider). |
 | `empty_stream_as_error` | bool | `true` | Treat upstream responses with `200 OK` and zero-byte body as errors. When enabled, an SSE error payload is emitted to the client (code: `empty_response`), which OpenCode recognizes as a retryable error, allowing fallback to the next target. The metric `nenya_empty_stream_total` is incremented. Set to `false` to preserve backward compatibility (empty streams treated as successful responses, resulting in empty assistant messages). |
 
-## `security_filter`
+## `bouncer`
 
 Tier-0 regex-based secret redaction runs on every request, before any other pipeline step. Includes configurable engine for privacy filtering and optional Shannon entropy detection for unknown high-entropy tokens.
 
@@ -176,7 +176,7 @@ Tier-0 regex-based secret redaction runs on every request, before any other pipe
 | `redaction_label` | string | `"[REDACTED]"` | Replacement string for matched secrets |
 | `output_enabled` | bool | `false` | Enable stream output filtering (secret redaction and execution policy blocking on responses) |
 | `output_window_chars` | int | `4096` | Sliding window size (in chars) for cross-chunk pattern matching in output streams |
-| `skip_on_engine_failure` | bool | `true` | When the engine (Ollama/cloud) is unreachable, skip summarization and forward the original payload. If `false`, hard-limit payloads are truncated even when the engine fails. |
+| `fail_open` | bool | `true` | When the engine (Ollama/cloud) is unreachable, skip summarization and forward the original payload. If `false`, hard-limit payloads are truncated even when the engine fails. |
 | `entropy_enabled` | bool | `false` | Enable Shannon entropy-based secret detection. Catches high-entropy tokens that don't match regex patterns (JWTs, opaque API keys, base64 credentials). |
 | `entropy_threshold` | float64 | `4.5` | Shannon entropy threshold in bits/character. Tokens above this value are redacted. English text: ~3.5, hex secrets: ~4.0, base64 tokens: ~5.5, random API keys: ~4.5-5.5. |
 | `entropy_min_token` | int | `20` | Minimum token length (in characters) to evaluate for entropy. Shorter tokens are skipped to reduce false positives. |
@@ -184,7 +184,7 @@ Tier-0 regex-based secret redaction runs on every request, before any other pipe
 
 ### Engine Configuration (`engine`)
 
-Both `security_filter.engine` and `window.engine` support two forms:
+Both `bouncer.engine` and `window.engine` support two forms:
 
 #### Form 1: Agent Reference (string)
 
@@ -192,7 +192,7 @@ References a named agent by name. The agent's model list becomes the engine's fa
 
 ```json
 {
-  "security_filter": {
+  "bouncer": {
     "engine": "summarizer"
   }
 }
@@ -206,7 +206,7 @@ Directly specifies the engine model, identical to the previous `EngineConfig` fo
 
 ```json
 {
-  "security_filter": {
+  "bouncer": {
     "engine": {
       "provider": "ollama",
       "model": "qwen2.5-coder:7b",
@@ -246,7 +246,7 @@ When an agent reference is used, the engine inherits the agent's full model list
       ]
     }
   },
-  "security_filter": {
+  "bouncer": {
     "engine": "summarizer"
   },
   "window": {
@@ -255,7 +255,7 @@ When an agent reference is used, the engine inherits the agent's full model list
 }
 ```
 
-**Structured logging**: Engine calls log the `caller` (`security_filter` or `window`), `agent` name (or `inline`), `provider`, `model`, and `attempt`/`total` for observability.
+**Structured logging**: Engine calls log the `caller` (`bouncer` or `window`), `agent` name (or `inline`), `provider`, `model`, and `attempt`/`total` for observability.
 
 ## `prefix_cache`
 
@@ -567,7 +567,7 @@ To add or override a provider:
 | `url` | string | Upstream chat completions endpoint |
 | `auth_style` | string | `"bearer"`, `"bearer+x-goog"` (Gemini), `"anthropic"` (Anthropic), `"azure"` (Azure OpenAI), or `"none"` (Ollama) |
 | `format_urls` | map[string]string | Maps wire format to endpoint URL override. Enables per-model wire format routing (e.g., `{"anthropic": "https://opencode.ai/zen/v1/messages"}`). See Per-Model Wire Format section. |
-| `timeout_seconds` | int | Per-provider timeout in seconds. For the `ollama` provider, sets the HTTP transport's `ResponseHeaderTimeout` (time-to-first-byte). For other providers, applies as a request context timeout on `/v1/embeddings` and `/v1/responses` endpoints. Also used as a fallback for engine calls (`security_filter.engine`, `window.engine`) when the engine's own `timeout_seconds` is not explicitly set. Default: `30` (transport-level). |
+| `timeout_seconds` | int | Per-provider timeout in seconds. For the `ollama` provider, sets the HTTP transport's `ResponseHeaderTimeout` (time-to-first-byte). For other providers, applies as a request context timeout on `/v1/embeddings` and `/v1/responses` endpoints. Also used as a fallback for engine calls (`bouncer.engine`, `window.engine`) when the engine's own `timeout_seconds` is not explicitly set. Default: `30` (transport-level). |
 | `retryable_status_codes` | []int | Provider-level override for retryable status codes. **Replaces** both global and built-in defaults for this provider. If not set, falls back to `governance.retryable_status_codes`, then built-in defaults `[429, 500, 502, 503, 504]`. |
 
 **Note**: The `BaseURL` field is automatically derived from `url` by stripping the path component. This is used by the `/proxy/{provider}/*` passthrough endpoint to construct arbitrary provider URLs. For example, if `url` is `https://api.anthropic.com/v1/messages`, the derived `BaseURL` is `https://api.anthropic.com`, allowing passthrough to `/proxy/anthropic/v1/models`.
@@ -875,8 +875,8 @@ The model catalog endpoint includes capability and pricing metadata when availab
 | 3 | **MCP tool injection** | if agent has MCP servers |
 | 4 | **Prefix cache optimizations** | pin system messages, sort tools |
 | 5 | **Agent system prompt injection** | if agent has prompt and no system message exists |
-| 6 | **Tier-0 regex redaction** | secret patterns via `security_filter` |
-| 6b | **Shannon entropy redaction** | if `security_filter.entropy_enabled` (runs after regex) |
+| 6 | **Tier-0 regex redaction** | secret patterns via `bouncer` |
+| 6b | **Shannon entropy redaction** | if `bouncer.entropy_enabled` (runs after regex) |
 | 7 | **Text compaction** | normalize, trim, collapse blanks |
 | 8 | **Stale tool call pruning** | if `prune_stale_tools` enabled |
 | 9 | **Thought pruning** | if `prune_thoughts` enabled |
@@ -889,7 +889,7 @@ The model catalog endpoint includes capability and pricing metadata when availab
 
 ### Best-Effort Pipeline
 
-The content pipeline (steps 2–9) is **best-effort**: if any step fails (e.g., engine unreachable, Ollama down), the gateway logs a warning and proceeds with the original payload. This ensures the proxy never blocks or returns errors due to pipeline failures — the request always reaches an upstream provider. When `skip_on_engine_failure` is `true` (default), hard-limit payloads that fail engine summarization are forwarded unchanged instead of being truncated.
+The content pipeline (steps 2–9) is **best-effort**: if any step fails (e.g., engine unreachable, Ollama down), the gateway logs a warning and proceeds with the original payload. This ensures the proxy never blocks or returns errors due to pipeline failures — the request always reaches an upstream provider. When `fail_open` is `true` (default), hard-limit payloads that fail engine summarization are forwarded unchanged instead of being truncated.
 
 ## Configuration Notes
 
@@ -908,7 +908,7 @@ Validate your configuration without starting the gateway:
 ```
 
 This checks:
-1. Ollama engine health (if `security_filter` is enabled and engine is `ollama`)
+1. Ollama engine health (if `bouncer` is enabled and engine is `ollama`)
 2. Provider API endpoint reachability
 3. API key validity
 4. Model registry integrity (validates every `ModelRegistry` entry has a non-empty provider and non-negative limits)
