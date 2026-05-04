@@ -1,0 +1,13 @@
+{
+  "agents": {
+    "build": {
+      "models": ["glm-5-turbo"]
+    }
+  },
+  "providers": {
+    "zai": {
+      "url": "https://api.z.ai/v1/chat/completions",
+      "auth_style": "bearer"
+    }
+  }
+}

@@ -241,7 +241,42 @@ func applyPrefixCacheDefaults(cfg *Config) {
 	}
 }
 
+var compactionPresets = map[CompactionPreset]struct {
+	JSONMinify             bool
+	CollapseBlankLines     bool
+	TrimTrailingWhitespace bool
+	NormalizeLineEndings   bool
+	PruneStaleTools        bool
+	PruneThoughts          bool
+}{
+	CompactionPresetAggressive: {
+		JSONMinify:             true,
+		CollapseBlankLines:     true,
+		TrimTrailingWhitespace: true,
+		NormalizeLineEndings:   true,
+		PruneStaleTools:        true,
+		PruneThoughts:          true,
+	},
+	CompactionPresetBalanced: {
+		JSONMinify:             true,
+		CollapseBlankLines:     true,
+		TrimTrailingWhitespace: true,
+		NormalizeLineEndings:   true,
+		PruneStaleTools:        false,
+		PruneThoughts:          false,
+	},
+	CompactionPresetMinimal: {
+		JSONMinify:             false,
+		CollapseBlankLines:     false,
+		TrimTrailingWhitespace: false,
+		NormalizeLineEndings:   false,
+		PruneStaleTools:        false,
+		PruneThoughts:          false,
+	},
+}
+
 func applyCompactionDefaults(cfg *Config) {
+	resolveCompactionPreset(cfg)
 	applyJSONMinifyDefaults(cfg)
 	applyCollapseDefaults(cfg)
 	applyTrimDefaults(cfg)
@@ -249,6 +284,42 @@ func applyCompactionDefaults(cfg *Config) {
 	applyPruneToolsDefaults(cfg)
 	applyPruneThoughtsDefaults(cfg)
 	applyCompactionEnabledDefaults(cfg)
+}
+
+func resolveCompactionPreset(cfg *Config) {
+	if cfg.Compaction.Preset == "" {
+		return
+	}
+	preset, ok := compactionPresets[cfg.Compaction.Preset]
+	if !ok {
+		slog.Warn("unknown compaction_preset, falling back to individual defaults",
+			"preset", cfg.Compaction.Preset,
+			"valid", []CompactionPreset{CompactionPresetAggressive, CompactionPresetBalanced, CompactionPresetMinimal},
+		)
+		return
+	}
+	// Preset values are set only for fields not explicitly configured by the user.
+	// The WasSet() check ensures explicit values survive, and the preset acts as a
+	// group default. Individual apply*Defaults functions then skip fields already
+	// set by the preset (since WasSet() now returns true).
+	if !cfg.Compaction.MinifyWasSet() {
+		cfg.Compaction.JSONMinify = PtrTo(preset.JSONMinify)
+	}
+	if !cfg.Compaction.CollapseWasSet() {
+		cfg.Compaction.CollapseBlankLines = PtrTo(preset.CollapseBlankLines)
+	}
+	if !cfg.Compaction.TrimWasSet() {
+		cfg.Compaction.TrimTrailingWhitespace = PtrTo(preset.TrimTrailingWhitespace)
+	}
+	if !cfg.Compaction.NormWasSet() {
+		cfg.Compaction.NormalizeLineEndings = PtrTo(preset.NormalizeLineEndings)
+	}
+	if !cfg.Compaction.PruneWasSet() {
+		cfg.Compaction.PruneStaleTools = PtrTo(preset.PruneStaleTools)
+	}
+	if !cfg.Compaction.PruneThoughtsWasSet() {
+		cfg.Compaction.PruneThoughts = PtrTo(preset.PruneThoughts)
+	}
 }
 
 func applyJSONMinifyDefaults(cfg *Config) {
@@ -279,7 +350,7 @@ func applyPruneToolsDefaults(cfg *Config) {
 	if (cfg.Compaction.PruneStaleTools == nil || !*cfg.Compaction.PruneStaleTools) && !cfg.Compaction.PruneWasSet() {
 		cfg.Compaction.PruneStaleTools = PtrTo(false)
 	}
-	if cfg.Compaction.ToolProtectionWindow == 0 && !cfg.Compaction.PruneWasSet() {
+	if cfg.Compaction.ToolProtectionWindow == 0 {
 		cfg.Compaction.ToolProtectionWindow = 4
 	}
 }

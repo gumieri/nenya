@@ -131,12 +131,12 @@ func (p *Proxy) resolveAgentRouting(req *chatRequest, gw *gateway.NenyaGateway, 
 	cooldown := getAgentCooldown(agent)
 	maxRetries := agent.MaxRetries
 
-	targets := gw.AgentState.BuildTargetList(gw.Logger, req.ModelName, agent, req.TokenCount, gw.Providers, gw.ModelCatalog, gw.Config.Context.AutoContextSkip != nil && *gw.Config.Context.AutoContextSkip)
+	targets := gw.AgentState.BuildTargetList(gw.Logger, req.ModelName, agent, req.TokenCount, gw.Providers, gw.ModelCatalog, gw.Config.Governance.AutoContextSkip != nil && *gw.Config.Governance.AutoContextSkip)
 	if len(targets) == 0 {
 		return handleEmptyAgentTargets(req, gw, agent)
 	}
 
-	if gw.Config.Context.AutoReorderByLatency != nil && *gw.Config.Context.AutoReorderByLatency {
+	if gw.Config.Governance.AutoReorderByLatency != nil && *gw.Config.Governance.AutoReorderByLatency {
 		targets = reorderTargetsByLatency(req, gw, targets)
 	}
 
