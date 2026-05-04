@@ -215,6 +215,14 @@ All `/v1/*` endpoints require `Authorization: Bearer <client_token>`.
 | `GET /v1/models` | Bearer | Live model catalog from discovered providers + static registry (context window, max tokens) |
 | `POST /v1/embeddings` | Bearer | Passthrough proxy |
 | `POST /v1/responses` | Bearer | Passthrough proxy |
+| `POST /v1/images/generations` | Bearer | Image generation (OpenAI-compatible) |
+| `POST /v1/audio/transcriptions` | Bearer | Audio transcription (Whisper-compatible, multipart support) |
+| `POST /v1/audio/speech` | Bearer | Text-to-speech synthesis (OpenAI-compatible) |
+| `POST /v1/moderations` | Bearer | Content moderation (OpenAI-compatible) |
+| `POST /v1/rerank` | Bearer | Re-ranking API (Cohere/Jina/Voyage-compatible) |
+| `POST /v1/a2a` | Bearer | Agent-to-Agent protocol (Google A2A) |
+| `GET /v1/files` | Bearer | File listing, upload, retrieval, deletion |
+| `POST /v1/batches` | Bearer | Batch API operations |
 | `POST /proxy/{provider}/*` | Bearer | Arbitrary provider endpoint passthrough (all HTTP methods, SSE streaming) |
 | `GET /healthz` | None | Engine health probe |
 | `GET /statsz` | None | Token usage, circuit breaker state, MCP server status |
