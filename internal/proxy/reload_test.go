@@ -23,7 +23,7 @@ func newReloadTestGateway(t *testing.T, upstreamURL string) *gateway.NenyaGatewa
 			RatelimitMaxRPM: 60,
 			RatelimitMaxTPM: 100000,
 		},
-		SecurityFilter: config.BouncerConfig{
+		Bouncer: config.BouncerConfig{
 			Enabled: false,
 		},
 		Providers: map[string]config.ProviderConfig{

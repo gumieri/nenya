@@ -209,7 +209,7 @@ func TestHandleChatCompletions_AgentWithModels(t *testing.T) {
 			RatelimitMaxRPM: 60,
 			RatelimitMaxTPM: 100000,
 		},
-		SecurityFilter: config.BouncerConfig{
+		Bouncer: config.BouncerConfig{
 			Enabled: false,
 		},
 		Providers: map[string]config.ProviderConfig{

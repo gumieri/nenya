@@ -15,9 +15,9 @@ func testConfig() config.Config {
 			RatelimitMaxRPM: 60,
 			RatelimitMaxTPM: 100000,
 		},
-		SecurityFilter: config.BouncerConfig{
-			Enabled:  true,
-			Patterns: []string{`(?i)AKIA[0-9A-Z]{16}`, `sk-[a-zA-Z0-9]{48}`},
+		Bouncer: config.BouncerConfig{
+			Enabled:       true,
+			RedactPatterns: []string{`(?i)AKIA[0-9A-Z]{16}`, `sk-[a-zA-Z0-9]{48}`},
 		},
 	}
 }

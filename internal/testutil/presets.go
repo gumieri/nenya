@@ -14,18 +14,18 @@ func MinimalConfig() *config.Config {
 			UserAgent:    "Nenya-Test/1.0",
 		},
 		Governance: config.GovernanceConfig{
-			RatelimitMaxRPM:      1000,
-			RatelimitMaxTPM:      100000,
-			TruncationStrategy:   "keep_first_last",
-			KeepFirstPercent:     0.2,
-			KeepLastPercent:      0.8,
-			RetryableStatusCodes: []int{429, 500, 502, 503, 504},
+			RatelimitMaxRPM:        1000,
+			RatelimitMaxTPM:        100000,
+			TruncationStrategy:     "keep_first_last",
+			TruncationKeepFirstPct: 0.2,
+			TruncationKeepLastPct:  0.8,
+			RetryableStatusCodes:   []int{429, 500, 502, 503, 504},
 		},
-		SecurityFilter: config.BouncerConfig{
-			Enabled:             false,
-			RedactionLabel:      "[REDACTED]",
-			OutputEnabled:       false,
-			SkipOnEngineFailure: true,
+		Bouncer: config.BouncerConfig{
+			Enabled:        false,
+			RedactionLabel: "[REDACTED]",
+			RedactOutput:   false,
+			FailOpen:       true,
 		},
 		PrefixCache: config.PrefixCacheConfig{
 			Enabled: false,
@@ -56,10 +56,6 @@ func NewBouncerConfig() *config.Config {
 	}
 	cfg.Bouncer.RedactOutput = true
 	cfg.Bouncer.RedactOutputWindow = 1000
-	cfg.Bouncer.Engine = config.EngineRef{
-		Provider: "ollama",
-		Model:    "qwen2.5-coder",
-	}
 	return cfg
 }
 

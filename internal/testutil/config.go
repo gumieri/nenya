@@ -56,8 +56,8 @@ func WithRatelimit(rpm, tpm int) ConfigOption {
 func WithTruncationStrategy(strategy string, first, last float64) ConfigOption {
 	return func(c *config.Config) {
 		c.Governance.TruncationStrategy = strategy
-		c.Governance.KeepFirstPercent = first
-		c.Governance.KeepLastPercent = last
+		c.Governance.TruncationKeepFirstPct = first
+		c.Governance.TruncationKeepLastPct = last
 	}
 }
 

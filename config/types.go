@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"strings"
 	"time"
 )
 
@@ -148,17 +149,17 @@ type Provider struct {
 }
 
 type Config struct {
-	Server         ServerConfig               `json:"server"`
-	Governance     GovernanceConfig           `json:"governance"`
-	Bouncer        BouncerConfig              `json:"bouncer,omitempty"`
-	PrefixCache    PrefixCacheConfig          `json:"prefix_cache,omitempty"`
-	Compaction     CompactionConfig           `json:"compaction,omitempty"`
-	Window         WindowConfig               `json:"window,omitempty"`
-	ResponseCache  ResponseCacheConfig        `json:"response_cache,omitempty"`
-	Discovery      DiscoveryConfig            `json:"discovery,omitempty"`
-	MCPServers     map[string]MCPServerConfig `json:"mcp_servers,omitempty"`
-	Agents         map[string]AgentConfig     `json:"agents,omitempty"`
-	Providers      map[string]ProviderConfig  `json:"providers,omitempty"`
+	Server        ServerConfig               `json:"server"`
+	Governance    GovernanceConfig           `json:"governance"`
+	Bouncer       BouncerConfig              `json:"bouncer,omitempty"`
+	PrefixCache   PrefixCacheConfig          `json:"prefix_cache,omitempty"`
+	Compaction    CompactionConfig           `json:"compaction,omitempty"`
+	Window        WindowConfig               `json:"window,omitempty"`
+	ResponseCache ResponseCacheConfig        `json:"response_cache,omitempty"`
+	Discovery     DiscoveryConfig            `json:"discovery,omitempty"`
+	MCPServers    map[string]MCPServerConfig `json:"mcp_servers,omitempty"`
+	Agents        map[string]AgentConfig     `json:"agents,omitempty"`
+	Providers     map[string]ProviderConfig  `json:"providers,omitempty"`
 }
 
 type ServerConfig struct {
@@ -195,8 +196,8 @@ type GovernanceConfig struct {
 	RatelimitMaxRPM          int      `json:"ratelimit_max_rpm"`
 	RatelimitMaxTPM          int      `json:"ratelimit_max_tpm"`
 	TruncationStrategy       string   `json:"truncation_strategy"`
-	KeepFirstPercent         float64  `json:"keep_first_percent"`
-	KeepLastPercent          float64  `json:"keep_last_percent"`
+	TruncationKeepFirstPct   float64  `json:"truncation_keep_first_pct"`
+	TruncationKeepLastPct    float64  `json:"truncation_keep_last_pct"`
 	RetryableStatusCodes     []int    `json:"retryable_status_codes"`
 	MaxRetryAttempts         int      `json:"max_retry_attempts"`
 	TFIDFQuerySource         string   `json:"tfidf_query_source"`
@@ -292,21 +293,29 @@ type EngineConfig struct {
 
 type EngineRef struct {
 	AgentName        string         `json:"-"`
-	Provider         string         `json:"provider"`
-	Model            string         `json:"model"`
-	SystemPrompt     string         `json:"system_prompt"`
-	SystemPromptFile string         `json:"system_prompt_file"`
-	TimeoutSeconds   int            `json:"timeout_seconds"`
+	Provider         string         `json:"provider,omitempty"`
+	Model            string         `json:"model,omitempty"`
+	SystemPrompt     string         `json:"system_prompt,omitempty"`
+	SystemPromptFile string         `json:"system_prompt_file,omitempty"`
+	TimeoutSeconds   int            `json:"timeout_seconds,omitempty"`
 	ResolvedTargets  []EngineTarget `json:"-"`
 }
 
 func (e *EngineRef) UnmarshalJSON(data []byte) error {
+	// First try unmarshaling as a raw string (for shorthand forms)
 	var s string
 	if err := json.Unmarshal(data, &s); err == nil {
-		e.AgentName = s
+		if strings.Contains(s, "/") {
+			parts := strings.SplitN(s, "/", 2)
+			e.Provider = parts[0]
+			e.Model = parts[1]
+		} else {
+			e.AgentName = s
+		}
 		return nil
 	}
 
+	// Fallback to object unmarshaling
 	type alias EngineRef
 	aux := (*alias)(e)
 	return json.Unmarshal(data, aux)
@@ -318,25 +327,29 @@ type EngineTarget struct {
 }
 
 type BouncerConfig struct {
-	Enabled             bool      `json:"enabled"`
-	RedactionLabel      string    `json:"redaction_label"`
-	Patterns            []string  `json:"patterns"`
-	OutputEnabled       bool      `json:"output_enabled"`
-	OutputWindowChars   int       `json:"output_window_chars"`
-	SkipOnEngineFailure bool      `json:"skip_on_engine_failure"`
-	Engine              EngineRef `json:"engine"`
-	EntropyEnabled      bool      `json:"entropy_enabled"`
-	EntropyThreshold    float64   `json:"entropy_threshold"`
-	EntropyMinToken     int       `json:"entropy_min_token"`
-	enabledSet          bool      `json:"-"`
+	Enabled            bool      `json:"enabled"`
+	RedactionLabel     string    `json:"redaction_label"`
+	RedactPreset       string    `json:"redact_preset,omitempty"`
+	RedactPatterns     []string  `json:"redact_patterns,omitempty"`
+	RedactOutput       bool      `json:"redact_output,omitempty"`
+	RedactOutputWindow int       `json:"redact_output_window,omitempty"`
+	FailOpen           bool      `json:"fail_open,omitempty"`
+	Engine             EngineRef `json:"engine,omitempty"`
+	EntropyEnabled     bool      `json:"entropy_enabled,omitempty"`
+	EntropyThreshold   float64   `json:"entropy_threshold,omitempty"`
+	EntropyMinToken    int       `json:"entropy_min_token,omitempty"`
+	enabledSet         bool      `json:"-"`
+	failOpenSet        bool      `json:"-"`
 }
 
-func (s *BouncerConfig) EnabledWasSet() bool { return s.enabledSet }
+func (s *BouncerConfig) EnabledWasSet() bool  { return s.enabledSet }
+func (s *BouncerConfig) FailOpenWasSet() bool { return s.failOpenSet }
 
 func (s *BouncerConfig) UnmarshalJSON(data []byte) error {
 	type alias BouncerConfig
 	aux := struct {
-		Enabled *bool `json:"enabled"`
+		Enabled  *bool `json:"enabled"`
+		FailOpen *bool `json:"fail_open"`
 		*alias
 	}{
 		alias: (*alias)(s),
@@ -352,6 +365,10 @@ func (s *BouncerConfig) UnmarshalJSON(data []byte) error {
 	} else {
 		s.Enabled = *aux.Enabled
 		s.enabledSet = true
+	}
+	if aux.FailOpen != nil {
+		s.FailOpen = *aux.FailOpen
+		s.failOpenSet = true
 	}
 	return nil
 }
@@ -515,15 +532,15 @@ func (c *CompactionConfig) UnmarshalJSON(data []byte) error {
 }
 
 type WindowConfig struct {
-	Enabled          bool      `json:"enabled"`
-	Mode             string    `json:"mode"`
-	ActiveMessages   int       `json:"active_messages"`
-	TriggerRatio     float64   `json:"trigger_ratio"`
-	SummaryMaxRunes  int       `json:"summary_max_runes"`
-	MaxContext       int       `json:"max_context"`
-	Engine           EngineRef `json:"engine"`
-	KeepFirstPercent float64   `json:"keep_first_percent"`
-	KeepLastPercent  float64   `json:"keep_last_percent"`
+	Enabled         bool      `json:"enabled"`
+	Mode            string    `json:"mode"`
+	ActiveMessages  int       `json:"active_messages"`
+	TriggerRatio    float64   `json:"trigger_ratio"`
+	SummaryMaxRunes int       `json:"summary_max_runes"`
+	MaxContext      int       `json:"max_context"`
+	Engine          EngineRef `json:"engine"`
+	KeepFirstPct    float64   `json:"keep_first_pct"`
+	KeepLastPct     float64   `json:"keep_last_pct"`
 }
 
 type MCPServerConfig struct {
