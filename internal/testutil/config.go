@@ -62,17 +62,17 @@ func WithTruncationStrategy(strategy string, first, last float64) ConfigOption {
 }
 
 // WithSecurityFilter sets the security filter config.
-func WithSecurityFilter(s config.SecurityFilterConfig) ConfigOption {
+func WithSecurityFilter(s config.BouncerConfig) ConfigOption {
 	return func(c *config.Config) {
-		c.SecurityFilter = s
+		c.Bouncer = s
 	}
 }
 
 // WithSecurityFilterEnabled enables the security filter with basic settings.
 func WithSecurityFilterEnabled(patterns []string) ConfigOption {
 	return func(c *config.Config) {
-		c.SecurityFilter.Enabled = true
-		c.SecurityFilter.Patterns = patterns
+		c.Bouncer.Enabled = true
+		c.Bouncer.RedactPatterns = patterns
 	}
 }
 

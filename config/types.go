@@ -150,15 +150,15 @@ type Provider struct {
 type Config struct {
 	Server         ServerConfig               `json:"server"`
 	Governance     GovernanceConfig           `json:"governance"`
-	SecurityFilter SecurityFilterConfig       `json:"security_filter"`
-	PrefixCache    PrefixCacheConfig          `json:"prefix_cache"`
-	Compaction     CompactionConfig           `json:"compaction"`
-	Window         WindowConfig               `json:"window"`
-	ResponseCache  ResponseCacheConfig        `json:"response_cache"`
-	Discovery      DiscoveryConfig            `json:"discovery"`
+	Bouncer        BouncerConfig              `json:"bouncer,omitempty"`
+	PrefixCache    PrefixCacheConfig          `json:"prefix_cache,omitempty"`
+	Compaction     CompactionConfig           `json:"compaction,omitempty"`
+	Window         WindowConfig               `json:"window,omitempty"`
+	ResponseCache  ResponseCacheConfig        `json:"response_cache,omitempty"`
+	Discovery      DiscoveryConfig            `json:"discovery,omitempty"`
 	MCPServers     map[string]MCPServerConfig `json:"mcp_servers,omitempty"`
-	Agents         map[string]AgentConfig     `json:"agents"`
-	Providers      map[string]ProviderConfig  `json:"providers"`
+	Agents         map[string]AgentConfig     `json:"agents,omitempty"`
+	Providers      map[string]ProviderConfig  `json:"providers,omitempty"`
 }
 
 type ServerConfig struct {
@@ -317,7 +317,7 @@ type EngineTarget struct {
 	Provider *Provider
 }
 
-type SecurityFilterConfig struct {
+type BouncerConfig struct {
 	Enabled             bool      `json:"enabled"`
 	RedactionLabel      string    `json:"redaction_label"`
 	Patterns            []string  `json:"patterns"`
@@ -331,10 +331,10 @@ type SecurityFilterConfig struct {
 	enabledSet          bool      `json:"-"`
 }
 
-func (s *SecurityFilterConfig) EnabledWasSet() bool { return s.enabledSet }
+func (s *BouncerConfig) EnabledWasSet() bool { return s.enabledSet }
 
-func (s *SecurityFilterConfig) UnmarshalJSON(data []byte) error {
-	type alias SecurityFilterConfig
+func (s *BouncerConfig) UnmarshalJSON(data []byte) error {
+	type alias BouncerConfig
 	aux := struct {
 		Enabled *bool `json:"enabled"`
 		*alias
@@ -345,7 +345,7 @@ func (s *SecurityFilterConfig) UnmarshalJSON(data []byte) error {
 		return err
 	}
 	if aux.Enabled == nil {
-		if len(s.Patterns) > 0 {
+		if len(s.RedactPatterns) > 0 {
 			s.Enabled = true
 		}
 		s.enabledSet = false

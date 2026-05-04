@@ -26,7 +26,7 @@ func TestHandleChatCompletions_EmptyUpstreamStream(t *testing.T) {
 	cfg.Governance.RatelimitMaxRPM = 60
 	cfg.Governance.RatelimitMaxTPM = 100000
 	cfg.Governance.EmptyStreamAsError = true
-	cfg.SecurityFilter.Enabled = false
+	cfg.Bouncer.Enabled = false
 	cfg.Providers = map[string]config.ProviderConfig{
 		"test-provider": {
 			URL:       upstream.URL + "/v1/chat/completions",
@@ -73,7 +73,7 @@ func TestHandleChatCompletions_EmptyUpstreamStream_FlagDisabled(t *testing.T) {
 	cfg.Governance.RatelimitMaxRPM = 60
 	cfg.Governance.RatelimitMaxTPM = 100000
 	cfg.Governance.EmptyStreamAsError = false
-	cfg.SecurityFilter.Enabled = false
+	cfg.Bouncer.Enabled = false
 	cfg.Providers = map[string]config.ProviderConfig{
 		"test-provider": {
 			URL:       upstream.URL + "/v1/chat/completions",
@@ -122,7 +122,7 @@ func TestHandleChatCompletions_EmptyUpstreamStream_RecordsMetric(t *testing.T) {
 	cfg.Governance.RatelimitMaxRPM = 60
 	cfg.Governance.RatelimitMaxTPM = 100000
 	cfg.Governance.EmptyStreamAsError = true
-	cfg.SecurityFilter.Enabled = false
+	cfg.Bouncer.Enabled = false
 	cfg.Providers = map[string]config.ProviderConfig{
 		"test-provider": {
 			URL:       upstream.URL + "/v1/chat/completions",
@@ -185,7 +185,7 @@ func TestHandleChatCompletions_EmptyUpstreamStream_FallbackToNextTarget(t *testi
 	cfg.Governance.RatelimitMaxRPM = 60
 	cfg.Governance.RatelimitMaxTPM = 100000
 	cfg.Governance.EmptyStreamAsError = true
-	cfg.SecurityFilter.Enabled = false
+	cfg.Bouncer.Enabled = false
 	cfg.Providers = map[string]config.ProviderConfig{
 		"test-provider": {
 			URL:       upstream.URL + "/v1/chat/completions",

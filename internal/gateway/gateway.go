@@ -229,8 +229,8 @@ func generateAutoAgents(cfg *config.Config, catalog *discovery.ModelCatalog, pro
 // patterns before more general ones to ensure correct label attribution.
 func compilePatterns(cfg config.Config, logger *slog.Logger) ([]*regexp.Regexp, []*regexp.Regexp) {
 	var secretPatterns []*regexp.Regexp
-	if cfg.SecurityFilter.Enabled && len(cfg.SecurityFilter.Patterns) > 0 {
-		for _, pattern := range cfg.SecurityFilter.Patterns {
+	if cfg.Bouncer.Enabled && len(cfg.Bouncer.RedactPatterns) > 0 {
+		for _, pattern := range cfg.Bouncer.RedactPatterns {
 			re, err := regexp.Compile(pattern)
 			if err != nil {
 				logger.Warn("failed to compile secret pattern, skipping", "pattern", pattern, "err", err)
@@ -258,14 +258,14 @@ func compilePatterns(cfg config.Config, logger *slog.Logger) ([]*regexp.Regexp, 
 }
 
 func createEntropyFilter(cfg config.Config, logger *slog.Logger) *pipeline.EntropyFilter {
-	if !cfg.SecurityFilter.EntropyEnabled {
+	if !cfg.Bouncer.EntropyEnabled {
 		return nil
 	}
 	entropyFilter := pipeline.NewEntropyFilter(
-		cfg.SecurityFilter.EntropyThreshold,
-		cfg.SecurityFilter.EntropyMinToken,
+		cfg.Bouncer.EntropyThreshold,
+		cfg.Bouncer.EntropyMinToken,
 	)
-	logger.Info("entropy filter enabled", "threshold", cfg.SecurityFilter.EntropyThreshold, "min_token", cfg.SecurityFilter.EntropyMinToken)
+	logger.Info("entropy filter enabled", "threshold", cfg.Bouncer.EntropyThreshold, "min_token", cfg.Bouncer.EntropyMinToken)
 	return entropyFilter
 }
 

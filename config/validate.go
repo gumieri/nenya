@@ -48,21 +48,21 @@ func validateOllamaEngine(ctx context.Context, cfg *Config, providers map[string
 	if !pingProviders {
 		return nil
 	}
-	if !cfg.SecurityFilter.Enabled {
+	if !cfg.Bouncer.Enabled {
 		return nil
 	}
-	if cfg.SecurityFilter.Engine.Provider != "ollama" {
+	if cfg.Bouncer.Engine.Provider != "ollama" {
 		return nil
 	}
 
-	p, ok := providers[cfg.SecurityFilter.Engine.Provider]
+	p, ok := providers[cfg.Bouncer.Engine.Provider]
 	if !ok || p.URL == "" {
 		return nil
 	}
 
-	logger.Info("checking Ollama engine health", "provider", cfg.SecurityFilter.Engine.Provider, "url", p.URL)
+	logger.Info("checking Ollama engine health", "provider", cfg.Bouncer.Engine.Provider, "url", p.URL)
 	if !validateOllamaHealth(ctx, p.URL) {
-		return fmt.Errorf("ollama engine provider %q at %s is not reachable", cfg.SecurityFilter.Engine.Provider, p.URL)
+		return fmt.Errorf("ollama engine provider %q at %s is not reachable", cfg.Bouncer.Engine.Provider, p.URL)
 	}
 	logger.Info("Ollama engine health check passed")
 	return nil
@@ -72,10 +72,10 @@ func collectValidationErrors(ctx context.Context, cfg *Config, providers map[str
 	errors := []string{}
 
 	errors = append(errors, validateTFIDFQuerySource(cfg.Governance.TFIDFQuerySource)...)
-	errors = append(errors, validatePatternsToList("security_filter.patterns", cfg.SecurityFilter.Patterns, logger)...)
+	errors = append(errors, validatePatternsToList("bouncer.patterns", cfg.Bouncer.RedactPatterns, logger)...)
 	errors = append(errors, validatePatternsToList("governance.blocked_execution_patterns", cfg.Governance.BlockedExecutionPatterns, logger)...)
 	errors = append(errors, validateModelRegistryErrors(logger)...)
-	errors = append(errors, validateEntropyConfig(cfg.SecurityFilter)...)
+	errors = append(errors, validateEntropyConfig(cfg.Bouncer)...)
 
 	if pingProviders {
 		errors = append(errors, validateProviders(ctx, providers, logger)...)
@@ -103,17 +103,17 @@ func validateModelRegistryErrors(logger *slog.Logger) []string {
 	return errors
 }
 
-func validateEntropyConfig(sf SecurityFilterConfig) []string {
+func validateEntropyConfig(sf BouncerConfig) []string {
 	if !sf.EntropyEnabled {
 		return nil
 	}
 
 	errors := []string{}
 	if sf.EntropyThreshold <= 0 || sf.EntropyThreshold > 8.0 {
-		errors = append(errors, "security_filter.entropy_threshold must be between 0 and 8.0")
+		errors = append(errors, "bouncer.entropy_threshold must be between 0 and 8.0")
 	}
 	if sf.EntropyMinToken < 8 {
-		errors = append(errors, "security_filter.entropy_min_token must be >= 8")
+		errors = append(errors, "bouncer.entropy_min_token must be >= 8")
 	}
 	return errors
 }

@@ -114,7 +114,7 @@ func loadConfigDirectory(dir string) (*Config, error) {
 func mergeConfig(base, overlay *Config) {
 	mergeServerConfig(base, overlay)
 	mergeGovernanceConfig(base, overlay)
-	mergeSecurityFilterConfig(base, overlay)
+	mergeBouncerConfig(base, overlay)
 	mergePrefixCacheConfig(base, overlay)
 	mergeCompactionConfig(base, overlay)
 	mergeWindowConfig(base, overlay)
@@ -210,37 +210,37 @@ func mergeGovernanceBools(base, overlay *Config) {
 	}
 }
 
-func mergeSecurityFilterConfig(base, overlay *Config) {
-	if overlay.SecurityFilter.EnabledWasSet() {
-		base.SecurityFilter.Enabled = overlay.SecurityFilter.Enabled
-		base.SecurityFilter.enabledSet = true
+func mergeBouncerConfig(base, overlay *Config) {
+	if overlay.Bouncer.EnabledWasSet() {
+		base.Bouncer.Enabled = overlay.Bouncer.Enabled
+		base.Bouncer.enabledSet = true
 	}
-	if overlay.SecurityFilter.RedactionLabel != "" {
-		base.SecurityFilter.RedactionLabel = overlay.SecurityFilter.RedactionLabel
+	if overlay.Bouncer.RedactionLabel != "" {
+		base.Bouncer.RedactionLabel = overlay.Bouncer.RedactionLabel
 	}
-	if len(overlay.SecurityFilter.Patterns) > 0 {
-		base.SecurityFilter.Patterns = overlay.SecurityFilter.Patterns
+	if len(overlay.Bouncer.RedactPatterns) > 0 {
+		base.Bouncer.RedactPatterns = overlay.Bouncer.RedactPatterns
 	}
-	if overlay.SecurityFilter.OutputEnabled {
-		base.SecurityFilter.OutputEnabled = true
+	if overlay.Bouncer.RedactOutput {
+		base.Bouncer.RedactOutput = true
 	}
-	if overlay.SecurityFilter.OutputWindowChars != 0 {
-		base.SecurityFilter.OutputWindowChars = overlay.SecurityFilter.OutputWindowChars
+	if overlay.Bouncer.RedactOutputWindow != 0 {
+		base.Bouncer.RedactOutputWindow = overlay.Bouncer.RedactOutputWindow
 	}
-	if overlay.SecurityFilter.SkipOnEngineFailure {
-		base.SecurityFilter.SkipOnEngineFailure = true
+	if overlay.Bouncer.FailOpen {
+		base.Bouncer.FailOpen = true
 	}
-	if overlay.SecurityFilter.Engine.AgentName != "" || overlay.SecurityFilter.Engine.Provider != "" {
-		base.SecurityFilter.Engine = overlay.SecurityFilter.Engine
+	if overlay.Bouncer.Engine.AgentName != "" || overlay.Bouncer.Engine.Provider != "" {
+		base.Bouncer.Engine = overlay.Bouncer.Engine
 	}
-	if overlay.SecurityFilter.EntropyEnabled {
-		base.SecurityFilter.EntropyEnabled = true
+	if overlay.Bouncer.EntropyEnabled {
+		base.Bouncer.EntropyEnabled = true
 	}
-	if overlay.SecurityFilter.EntropyThreshold != 0 {
-		base.SecurityFilter.EntropyThreshold = overlay.SecurityFilter.EntropyThreshold
+	if overlay.Bouncer.EntropyThreshold != 0 {
+		base.Bouncer.EntropyThreshold = overlay.Bouncer.EntropyThreshold
 	}
-	if overlay.SecurityFilter.EntropyMinToken != 0 {
-		base.SecurityFilter.EntropyMinToken = overlay.SecurityFilter.EntropyMinToken
+	if overlay.Bouncer.EntropyMinToken != 0 {
+		base.Bouncer.EntropyMinToken = overlay.Bouncer.EntropyMinToken
 	}
 }
 

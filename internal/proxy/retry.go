@@ -419,7 +419,7 @@ func (p *Proxy) prepareAndSend(gw *gateway.NenyaGateway,
 
 func logRetryableError(ctxLogger *slog.Logger, errorBody []byte, gw *gateway.NenyaGateway) {
 	if len(errorBody) > 0 {
-		logBody := pipeline.RedactSecrets(string(errorBody), gw.Config.SecurityFilter.Enabled, gw.SecretPatterns, gw.Config.SecurityFilter.RedactionLabel)
+		logBody := pipeline.RedactSecrets(string(errorBody), gw.Config.Bouncer.Enabled, gw.SecretPatterns, gw.Config.Bouncer.RedactionLabel)
 		if len(logBody) > 512 {
 			logBody = logBody[:512] + "...[truncated]"
 		}
@@ -526,7 +526,7 @@ func logErrorRetryable(ctxLogger *slog.Logger, errorBody []byte, gw *gateway.Nen
 // redactForLog applies secret redaction and truncation to error body text before
 // writing to logs, preventing upstream error responses from leaking secrets.
 func redactForLog(body string, gw *gateway.NenyaGateway) string {
-	s := pipeline.RedactSecrets(body, gw.Config.SecurityFilter.Enabled, gw.SecretPatterns, gw.Config.SecurityFilter.RedactionLabel)
+	s := pipeline.RedactSecrets(body, gw.Config.Bouncer.Enabled, gw.SecretPatterns, gw.Config.Bouncer.RedactionLabel)
 	if len(s) > 512 {
 		s = s[:512] + "...[truncated]"
 	}

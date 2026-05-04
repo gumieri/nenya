@@ -19,7 +19,7 @@ import (
 func newTestProxy(t *testing.T) (*Proxy, *httptest.Server) {
 	t.Helper()
 	cfg := testutil.MinimalConfig()
-	cfg.SecurityFilter.Engine = config.EngineRef{
+	cfg.Bouncer.Engine = config.EngineRef{
 		Provider: "ollama",
 		Model:    "qwen2.5-coder",
 	}
@@ -199,7 +199,7 @@ func TestCheckOllamaProviderHealth_RetryOnce(t *testing.T) {
 	defer server.Close()
 
 	cfg := testutil.MinimalConfig()
-	cfg.SecurityFilter.Engine = config.EngineRef{
+	cfg.Bouncer.Engine = config.EngineRef{
 		Provider: "ollama",
 		Model:    "qwen2.5-coder",
 	}
@@ -230,7 +230,7 @@ func TestCheckOllamaProviderHealth_AllFailed(t *testing.T) {
 	defer server.Close()
 
 	cfg := testutil.MinimalConfig()
-	cfg.SecurityFilter.Engine = config.EngineRef{
+	cfg.Bouncer.Engine = config.EngineRef{
 		Provider: "ollama",
 		Model:    "qwen2.5-coder",
 	}
@@ -263,7 +263,7 @@ func TestCheckOllamaProviderHealth_ContextDeadline(t *testing.T) {
 	defer server.Close()
 
 	cfg := testutil.MinimalConfig()
-	cfg.SecurityFilter.Engine = config.EngineRef{
+	cfg.Bouncer.Engine = config.EngineRef{
 		Provider: "ollama",
 		Model:    "qwen2.5-coder",
 	}

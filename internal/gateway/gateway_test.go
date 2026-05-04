@@ -15,7 +15,7 @@ func testConfig() config.Config {
 			RatelimitMaxRPM: 60,
 			RatelimitMaxTPM: 100000,
 		},
-		SecurityFilter: config.SecurityFilterConfig{
+		SecurityFilter: config.BouncerConfig{
 			Enabled:  true,
 			Patterns: []string{`(?i)AKIA[0-9A-Z]{16}`, `sk-[a-zA-Z0-9]{48}`},
 		},
@@ -51,8 +51,8 @@ func TestNew_BuiltInProvidersMerged(t *testing.T) {
 
 func TestNew_SecretPatternsCompiled(t *testing.T) {
 	cfg := testConfig()
-	cfg.SecurityFilter.Enabled = true
-	cfg.SecurityFilter.Patterns = []string{`(?i)AKIA[0-9A-Z]{16}`, `sk-[a-zA-Z0-9]+`}
+	cfg.Bouncer.Enabled = true
+	cfg.Bouncer.RedactPatterns = []string{`(?i)AKIA[0-9A-Z]{16}`, `sk-[a-zA-Z0-9]+`}
 	gw := New(context.Background(), cfg, testSecrets(), testLogger())
 
 	if len(gw.SecretPatterns) != 2 {

@@ -362,34 +362,34 @@ func (p *Proxy) makeUsageCallback(gw *gateway.NenyaGateway, target routing.Upstr
 }
 
 func (p *Proxy) setupStreamFilterIfEnabled(gw *gateway.NenyaGateway, r *stream.SSETransformingReader) {
-	if !gw.Config.SecurityFilter.OutputEnabled {
+	if !gw.Config.Bouncer.RedactOutput {
 		return
 	}
 	if len(gw.SecretPatterns) == 0 && len(gw.BlockedPatterns) == 0 {
 		return
 	}
-	sf := stream.NewStreamFilter(gw.SecretPatterns, gw.BlockedPatterns, gw.Config.SecurityFilter.RedactionLabel, gw.Config.SecurityFilter.OutputWindowChars)
+	sf := stream.NewStreamFilter(gw.SecretPatterns, gw.BlockedPatterns, gw.Config.Bouncer.RedactionLabel, gw.Config.Bouncer.RedactOutputWindow)
 	r.SetStreamFilter(sf)
 	gw.Logger.Debug("stream filter active",
 		"secret_patterns", len(gw.SecretPatterns),
 		"block_patterns", len(gw.BlockedPatterns),
-		"window_size", gw.Config.SecurityFilter.OutputWindowChars)
+		"window_size", gw.Config.Bouncer.RedactOutputWindow)
 }
 
 func (p *Proxy) setupStreamEntropyFilterIfEnabled(gw *gateway.NenyaGateway, r *stream.SSETransformingReader) {
-	if gw.EntropyFilter == nil || !gw.Config.SecurityFilter.OutputEnabled {
+	if gw.EntropyFilter == nil || !gw.Config.Bouncer.RedactOutput {
 		return
 	}
 	ef := stream.NewStreamEntropyFilter(
 		gw.EntropyFilter.RedactHighEntropy,
-		gw.Config.SecurityFilter.RedactionLabel,
-		gw.Config.SecurityFilter.OutputWindowChars,
+		gw.Config.Bouncer.RedactionLabel,
+		gw.Config.Bouncer.RedactOutputWindow,
 	)
 	r.SetStreamEntropyFilter(ef)
 	gw.Logger.Debug("stream entropy filter active",
-		"threshold", gw.Config.SecurityFilter.EntropyThreshold,
-		"min_token", gw.Config.SecurityFilter.EntropyMinToken,
-		"window_size", gw.Config.SecurityFilter.OutputWindowChars)
+		"threshold", gw.Config.Bouncer.EntropyThreshold,
+		"min_token", gw.Config.Bouncer.EntropyMinToken,
+		"window_size", gw.Config.Bouncer.RedactOutputWindow)
 }
 
 func (p *Proxy) setupContentBuilderIfNeeded(gw *gateway.NenyaGateway, agentName string, r *stream.SSETransformingReader) *contentBuilder {
