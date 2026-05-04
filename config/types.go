@@ -171,7 +171,10 @@ type ServerConfig struct {
 	SecureMemoryRequired *bool  `json:"secure_memory_required"`
 }
 
-func (s *ServerConfig) SecureMemoryRequiredWasSet() bool { return s.SecureMemoryRequired != nil }
+// wasSet returns true if v is non-nil (field was explicitly set by user).
+func wasSet[T any](v *T) bool { return v != nil }
+
+func (s *ServerConfig) SecureMemoryRequiredWasSet() bool { return wasSet(s.SecureMemoryRequired) }
 
 type ContextConfig struct {
 	TruncationStrategy     string  `json:"truncation_strategy"`
@@ -182,8 +185,8 @@ type ContextConfig struct {
 	AutoReorderByLatency   *bool   `json:"auto_reorder_by_latency,omitempty"`
 }
 
-func (c *ContextConfig) AutoContextSkipSet() bool      { return c.AutoContextSkip != nil }
-func (c *ContextConfig) AutoReorderByLatencySet() bool { return c.AutoReorderByLatency != nil }
+func (c *ContextConfig) AutoContextSkipSet() bool      { return wasSet(c.AutoContextSkip) }
+func (c *ContextConfig) AutoReorderByLatencySet() bool { return wasSet(c.AutoReorderByLatency) }
 
 type GovernanceConfig struct {
 	BlockedExecutionPatterns []string `json:"blocked_execution_patterns"`
@@ -198,9 +201,9 @@ type GovernanceConfig struct {
 	EmptyStreamAsError       *bool    `json:"empty_stream_as_error,omitempty"`
 }
 
-func (g *GovernanceConfig) RPMSet() bool                { return g.RatelimitMaxRPM != nil }
-func (g *GovernanceConfig) TPMSet() bool                { return g.RatelimitMaxTPM != nil }
-func (g *GovernanceConfig) EmptyStreamAsErrorSet() bool { return g.EmptyStreamAsError != nil }
+func (g *GovernanceConfig) RPMSet() bool                { return wasSet(g.RatelimitMaxRPM) }
+func (g *GovernanceConfig) TPMSet() bool                { return wasSet(g.RatelimitMaxTPM) }
+func (g *GovernanceConfig) EmptyStreamAsErrorSet() bool { return wasSet(g.EmptyStreamAsError) }
 
 func (g *GovernanceConfig) EffectiveMaxRetryAttempts() int {
 	if g.MaxRetryAttempts > 0 {
@@ -321,8 +324,8 @@ type BouncerConfig struct {
 	EntropyMinToken    int       `json:"entropy_min_token,omitempty"`
 }
 
-func (s *BouncerConfig) EnabledWasSet() bool  { return s.Enabled != nil }
-func (s *BouncerConfig) FailOpenWasSet() bool { return s.FailOpen != nil }
+func (s *BouncerConfig) EnabledWasSet() bool  { return wasSet(s.Enabled) }
+func (s *BouncerConfig) FailOpenWasSet() bool { return wasSet(s.FailOpen) }
 
 func (s *BouncerConfig) UnmarshalJSON(data []byte) error {
 	type alias BouncerConfig
@@ -348,9 +351,9 @@ type PrefixCacheConfig struct {
 	SkipRedactionOnSystem *bool `json:"skip_redaction_on_system,omitempty"`
 }
 
-func (c *PrefixCacheConfig) PinWasSet() bool           { return c.PinSystemFirst != nil }
-func (c *PrefixCacheConfig) StableWasSet() bool        { return c.StableTools != nil }
-func (c *PrefixCacheConfig) SkipRedactionWasSet() bool { return c.SkipRedactionOnSystem != nil }
+func (c *PrefixCacheConfig) PinWasSet() bool           { return wasSet(c.PinSystemFirst) }
+func (c *PrefixCacheConfig) StableWasSet() bool        { return wasSet(c.StableTools) }
+func (c *PrefixCacheConfig) SkipRedactionWasSet() bool { return wasSet(c.SkipRedactionOnSystem) }
 
 type CompactionConfig struct {
 	Enabled                *bool `json:"enabled,omitempty"`
@@ -363,13 +366,13 @@ type CompactionConfig struct {
 	PruneThoughts          *bool `json:"prune_thoughts,omitempty"`
 }
 
-func (c *CompactionConfig) EnabledWasSet() bool       { return c.Enabled != nil }
-func (c *CompactionConfig) MinifyWasSet() bool        { return c.JSONMinify != nil }
-func (c *CompactionConfig) CollapseWasSet() bool      { return c.CollapseBlankLines != nil }
-func (c *CompactionConfig) TrimWasSet() bool          { return c.TrimTrailingWhitespace != nil }
-func (c *CompactionConfig) NormWasSet() bool          { return c.NormalizeLineEndings != nil }
-func (c *CompactionConfig) PruneWasSet() bool         { return c.PruneStaleTools != nil }
-func (c *CompactionConfig) PruneThoughtsWasSet() bool { return c.PruneThoughts != nil }
+func (c *CompactionConfig) EnabledWasSet() bool       { return wasSet(c.Enabled) }
+func (c *CompactionConfig) MinifyWasSet() bool        { return wasSet(c.JSONMinify) }
+func (c *CompactionConfig) CollapseWasSet() bool      { return wasSet(c.CollapseBlankLines) }
+func (c *CompactionConfig) TrimWasSet() bool          { return wasSet(c.TrimTrailingWhitespace) }
+func (c *CompactionConfig) NormWasSet() bool          { return wasSet(c.NormalizeLineEndings) }
+func (c *CompactionConfig) PruneWasSet() bool         { return wasSet(c.PruneStaleTools) }
+func (c *CompactionConfig) PruneThoughtsWasSet() bool { return wasSet(c.PruneThoughts) }
 
 type WindowConfig struct {
 	Enabled         bool      `json:"enabled"`
@@ -448,8 +451,8 @@ func (a *AutoAgentsConfig) IsEnabled(category string) bool {
 	return cfg.Enabled
 }
 
-func (d *DiscoveryConfig) EnabledWasSet() bool    { return d.Enabled != nil }
-func (d *DiscoveryConfig) AutoAgentsWasSet() bool { return d.AutoAgents != nil }
+func (d *DiscoveryConfig) EnabledWasSet() bool    { return wasSet(d.Enabled) }
+func (d *DiscoveryConfig) AutoAgentsWasSet() bool { return wasSet(d.AutoAgents) }
 
 type ResponseCacheConfig struct {
 	Enabled            *bool  `json:"enabled,omitempty"`
@@ -460,6 +463,9 @@ type ResponseCacheConfig struct {
 	ForceRefreshHeader string `json:"force_refresh_header"`
 }
 
-func (c *ResponseCacheConfig) EnabledWasSet() bool { return c.Enabled != nil }
+func (c *ResponseCacheConfig) EnabledWasSet() bool { return wasSet(c.Enabled) }
 
+// PtrTo returns a pointer to v. Used for ergonomic *bool/*int construction
+// in config structs and test helpers. The zero value (nil) represents
+// "not set" vs an explicit false/zero value.
 func PtrTo[T any](v T) *T { return &v }

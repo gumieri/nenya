@@ -4,8 +4,6 @@ import (
 	"nenya/config"
 )
 
-func ptrTo[T any](v T) *T { return &v }
-
 // MinimalConfig returns a minimal config with only required fields set.
 // Useful for tests that don't need specific features enabled.
 func MinimalConfig() *config.Config {
@@ -32,7 +30,7 @@ func MinimalConfig() *config.Config {
 			Enabled:        &falseVal,
 			RedactionLabel: "[REDACTED]",
 			RedactOutput:   false,
-			FailOpen:       ptrTo(true),
+			FailOpen:       config.PtrTo(true),
 		},
 		PrefixCache: config.PrefixCacheConfig{
 			Enabled: false,
@@ -56,7 +54,7 @@ func MinimalConfig() *config.Config {
 // Useful for testing PII redaction and content filtering.
 func NewBouncerConfig() *config.Config {
 	cfg := MinimalConfig()
-	cfg.Bouncer.Enabled = ptrTo(true)
+	cfg.Bouncer.Enabled = config.PtrTo(true)
 	cfg.Bouncer.RedactPatterns = []string{
 		`\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b`,
 		`\b\d{3}-\d{2}-\d{4}\b`,
@@ -70,14 +68,14 @@ func NewBouncerConfig() *config.Config {
 // Useful for testing message compaction and tool pruning.
 func NewCompactionConfig() *config.Config {
 	cfg := MinimalConfig()
-	cfg.Compaction.Enabled = ptrTo(true)
-	cfg.Compaction.JSONMinify = ptrTo(true)
-	cfg.Compaction.CollapseBlankLines = ptrTo(true)
-	cfg.Compaction.TrimTrailingWhitespace = ptrTo(true)
-	cfg.Compaction.NormalizeLineEndings = ptrTo(true)
-	cfg.Compaction.PruneStaleTools = ptrTo(true)
+	cfg.Compaction.Enabled = config.PtrTo(true)
+	cfg.Compaction.JSONMinify = config.PtrTo(true)
+	cfg.Compaction.CollapseBlankLines = config.PtrTo(true)
+	cfg.Compaction.TrimTrailingWhitespace = config.PtrTo(true)
+	cfg.Compaction.NormalizeLineEndings = config.PtrTo(true)
+	cfg.Compaction.PruneStaleTools = config.PtrTo(true)
 	cfg.Compaction.ToolProtectionWindow = 60
-	cfg.Compaction.PruneThoughts = ptrTo(true)
+	cfg.Compaction.PruneThoughts = config.PtrTo(true)
 	return cfg
 }
 
@@ -103,9 +101,9 @@ func NewWindowConfig() *config.Config {
 func NewPrefixCacheConfig() *config.Config {
 	cfg := MinimalConfig()
 	cfg.PrefixCache.Enabled = true
-	cfg.PrefixCache.PinSystemFirst = ptrTo(true)
-	cfg.PrefixCache.StableTools = ptrTo(true)
-	cfg.PrefixCache.SkipRedactionOnSystem = ptrTo(true)
+	cfg.PrefixCache.PinSystemFirst = config.PtrTo(true)
+	cfg.PrefixCache.StableTools = config.PtrTo(true)
+	cfg.PrefixCache.SkipRedactionOnSystem = config.PtrTo(true)
 	return cfg
 }
 
@@ -113,7 +111,7 @@ func NewPrefixCacheConfig() *config.Config {
 // Useful for testing response caching.
 func NewResponseCacheConfig() *config.Config {
 	cfg := MinimalConfig()
-	cfg.ResponseCache.Enabled = ptrTo(true)
+	cfg.ResponseCache.Enabled = config.PtrTo(true)
 	return cfg
 }
 
@@ -179,7 +177,7 @@ func FullConfig() *config.Config {
 	cfg := MinimalConfig()
 
 	// Apply security filter settings
-	cfg.Bouncer.Enabled = ptrTo(true)
+	cfg.Bouncer.Enabled = config.PtrTo(true)
 	cfg.Bouncer.RedactPatterns = []string{
 		`\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b`,
 	}
@@ -191,14 +189,14 @@ func FullConfig() *config.Config {
 	}
 
 	// Apply compaction settings
-	cfg.Compaction.Enabled = ptrTo(true)
-	cfg.Compaction.JSONMinify = ptrTo(true)
-	cfg.Compaction.CollapseBlankLines = ptrTo(true)
-	cfg.Compaction.TrimTrailingWhitespace = ptrTo(true)
-	cfg.Compaction.NormalizeLineEndings = ptrTo(true)
-	cfg.Compaction.PruneStaleTools = ptrTo(true)
+	cfg.Compaction.Enabled = config.PtrTo(true)
+	cfg.Compaction.JSONMinify = config.PtrTo(true)
+	cfg.Compaction.CollapseBlankLines = config.PtrTo(true)
+	cfg.Compaction.TrimTrailingWhitespace = config.PtrTo(true)
+	cfg.Compaction.NormalizeLineEndings = config.PtrTo(true)
+	cfg.Compaction.PruneStaleTools = config.PtrTo(true)
 	cfg.Compaction.ToolProtectionWindow = 60
-	cfg.Compaction.PruneThoughts = ptrTo(true)
+	cfg.Compaction.PruneThoughts = config.PtrTo(true)
 
 	// Apply window settings
 	cfg.Window.Enabled = true
@@ -214,12 +212,12 @@ func FullConfig() *config.Config {
 
 	// Apply prefix cache settings
 	cfg.PrefixCache.Enabled = true
-	cfg.PrefixCache.PinSystemFirst = ptrTo(true)
-	cfg.PrefixCache.StableTools = ptrTo(true)
-	cfg.PrefixCache.SkipRedactionOnSystem = ptrTo(true)
+	cfg.PrefixCache.PinSystemFirst = config.PtrTo(true)
+	cfg.PrefixCache.StableTools = config.PtrTo(true)
+	cfg.PrefixCache.SkipRedactionOnSystem = config.PtrTo(true)
 
 	// Apply response cache settings
-	cfg.ResponseCache.Enabled = ptrTo(true)
+	cfg.ResponseCache.Enabled = config.PtrTo(true)
 
 	// Apply MCP server settings
 	cfg.MCPServers = map[string]config.MCPServerConfig{
