@@ -9,32 +9,39 @@ before:
     - go vet ./...
 
 builds:
-  - id: nenya
-    builder: go
+  - &build_defaults
+    id: nenya-linux
     binary: nenya
-    goos:
-      - linux
-      - darwin
-    goarch:
-      - amd64
-      - arm64
-    env:
+    goos: [linux]
+    goarch: [amd64, arm64]
+    env: &build_env
       - CGO_ENABLED=0
-    ldflags:
+    ldflags: &ldflags
       - -s -w
       - -X nenya/internal/version.Version={{.Version}}
       - -X nenya/internal/version.Commit={{.Commit}}
       - -X nenya/internal/version.BuildTime={{.Date}}
     main: ./cmd/nenya
 
+  - <<: *build_defaults
+    id: nenya-darwin
+    goos: [darwin]
+
 archives:
-  - builds: [nenya]
+  - id: linux
+    builds: [nenya-linux]
     format: tar.gz
     name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}{{ if .Arm }}v{{ .Arm }}{{ end }}"
     files:
       - src: deploy/nenya.service
       - src: deploy/nenya.socket
-      - src: configs/example.config.json
+
+  - id: darwin
+    builds: [nenya-darwin]
+    format: tar.gz
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}{{ if .Arm }}v{{ .Arm }}{{ end }}"
+    files:
+      - src: deploy/nenya.plist
 
 nfpms:
   - id: nenya
@@ -49,7 +56,7 @@ nfpms:
         dst: /usr/lib/systemd/system/nenya.service
       - src: deploy/nenya.socket
         dst: /usr/lib/systemd/system/nenya.socket
-      - src: configs/example.config.json
+      - src: examples/example.config.json
         dst: /etc/nenya/config.json.example
         type: config|noreplace
     dependencies:
