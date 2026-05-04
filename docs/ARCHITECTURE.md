@@ -123,7 +123,7 @@ Request with MCP tools injected
 
 ## Engine Reference System
 
-Both `security_filter.engine` and `window.engine` use the `EngineRef` type which supports two JSON forms:
+Both `bouncer.engine` and `window.engine` use the `EngineRef` type which supports two JSON forms:
 
 | Form | Syntax | Resolution |
 |------|--------|------------|
@@ -141,7 +141,7 @@ Resolution happens once at config load time (`resolveEngineRefs` in `internal/co
 3. On failure, logs a structured warning and tries the next target
 4. Returns on first success; on all failures, returns the last error
 
-All engine calls log `caller` (`security_filter` or `window`), `agent` name (or `inline`), `provider`, `model`, and `attempt`/`total` for observability.
+All engine calls log `caller` (`bouncer` or `window`), `agent` name (or `inline`), `provider`, `model`, and `attempt`/`total` for observability.
 
 ## Model Discovery
 
@@ -326,7 +326,7 @@ The entire content pipeline (prefix cache, redaction, compaction, tool call prun
 
 ### Skip on Engine Failure
 
-When `security_filter.skip_on_engine_failure` is `true` (default):
+When `bouncer.fail_open` is `true` (default):
 - **Soft limit** (Tier 2): Engine summarization fails → original payload forwarded unchanged
 - **Hard limit** (Tier 3): Engine summarization fails → original payload forwarded unchanged (not truncated). When `tfidf_query_source` is set and TF-IDF reduces the payload below `soft_limit`, the engine call is skipped entirely.
 

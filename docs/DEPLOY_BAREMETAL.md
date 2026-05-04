@@ -36,7 +36,7 @@ Nenya supports two configuration modes:
 ├── config.json           # single config file
 # OR
 ├── config.d/
-│   ├── 01-server.json    # server, governance, security_filter, compaction
+│   ├── 01-server.json    # server, governance, bouncer, compaction
 │   ├── 02-providers.json # provider overrides
 │   ├── 03-agents.json   # agent definitions with fallback chains
 │   └── 04-mcp.json      # MCP server integration per agent
@@ -64,7 +64,7 @@ When using directory mode, `config.d/*.json` files are loaded in alphabetical or
 | `agents` (map) | Per-key merge — later files add or override individual agents |
 | `providers` (map) | Per-key merge — later files add or override individual providers |
 | `mcp_servers` (map) | Per-key merge |
-| `server`, `governance`, `security_filter`, etc. (struct) | Last file wins — if multiple files set the same field, the last one in alphabetical order takes precedence |
+| `server`, `governance`, `bouncer`, etc. (struct) | Last file wins — if multiple files set the same field, the last one in alphabetical order takes precedence |
 
 **Note:** `config.d/` and `config.json` are mutually exclusive — if `config.d/` exists and is non-empty, `config.json` is ignored.
 
@@ -76,7 +76,7 @@ When using directory mode, `config.d/*.json` files are loaded in alphabetical or
   "server": {
     "listen_addr": ":8080"
   },
-  "security_filter": {
+  "bouncer": {
     "enabled": true,
     "engine": {
       "provider": "ollama",

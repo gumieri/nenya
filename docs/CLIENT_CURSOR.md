@@ -115,4 +115,4 @@ Cursor sends full file contents, git diffs, and multi-file context. This can eas
 2. **Between soft/hard**: send to Ollama for privacy-preserving summarization (code structure preserved for IDE clients)
 3. **Above hard limit**: truncate (TF-IDF relevance-scored when `tfidf_query_source` is set, otherwise code-boundary middle-out), then summarize. If TF-IDF reduces payload below `soft_limit`, engine call is skipped entirely.
 
-If Ollama is unavailable and `skip_on_engine_failure` is `true` (default), the original payload is forwarded unchanged.
+If Ollama is unavailable and `fail_open` is `true` (default), the original payload is forwarded unchanged.
