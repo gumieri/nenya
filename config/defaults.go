@@ -92,7 +92,7 @@ func applyResolvedEngineDefaults(targets []EngineTarget) {
 func ApplyDefaults(cfg *Config) error {
 	applyServerDefaults(cfg)
 	applyGovernanceDefaults(cfg)
-	applySecurityFilterDefaults(cfg)
+	applyBouncerDefaults(cfg)
 	applyEngineRefDefaults(&cfg.Bouncer.Engine)
 	applyEngineRefDefaults(&cfg.Window.Engine)
 	applyPrefixCacheDefaults(cfg)
@@ -140,11 +140,11 @@ func applyGovernanceDefaults(cfg *Config) {
 	if cfg.Governance.TruncationStrategy == "" {
 		cfg.Governance.TruncationStrategy = "middle-out"
 	}
-	if cfg.Governance.KeepFirstPercent == 0 {
-		cfg.Governance.KeepFirstPercent = 15.0
+	if cfg.Governance.TruncationKeepFirstPct == 0 {
+		cfg.Governance.TruncationKeepFirstPct = 15.0
 	}
-	if cfg.Governance.KeepLastPercent == 0 {
-		cfg.Governance.KeepLastPercent = 25.0
+	if cfg.Governance.TruncationKeepLastPct == 0 {
+		cfg.Governance.TruncationKeepLastPct = 25.0
 	}
 	if len(cfg.Governance.BlockedExecutionPatterns) == 0 {
 		cfg.Governance.BlockedExecutionPatterns = []string{
@@ -166,22 +166,42 @@ func applyGovernanceDefaults(cfg *Config) {
 	}
 }
 
-func applySecurityFilterDefaults(cfg *Config) {
+var redactPresets = map[string][]string{
+	"credentials": {
+		`(?i)AKIA[0-9A-Z]{16}`,
+		`(?i)gh(p|o|s)_[a-zA-Z0-9]{36,255}`,
+		`(?i)ya29\.[0-9A-Za-z\-_]+`,
+		`(?i)sk-[a-zA-Z0-9]{48}`,
+		`(?i)-----BEGIN\s+(RSA\s+)?(DSA\s+)?(EC\s+)?PRIVATE\s+KEY\s*-----`,
+		`(?i)(aws_access_key_id|aws_secret_access_key)\s*=\s*['"][^'"]{10,}['"]`,
+		`(?i)(password|passwd|pwd|secret|token)[\s:=]+['"][^'"]{6,}['"]`,
+		`[a-f0-9]{32}:`,
+		`(?i)SG\.[a-zA-Z0-9\-_]{22}\.[a-zA-Z0-9\-_]{43}`,
+	},
+	"pii": {
+		`\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b`,
+		`\b\d{3}-\d{2}-\d{4}\b`,
+		`\b(?:\d{4}[ -]?){3}\d{4}\b`,
+		`\+\d{1,3}\s?\(?\d{3}\)?[\s.-]?\d{3}[\s.-]?\d{4}`,
+	},
+}
+
+func expandRedactPreset(cfg *BouncerConfig) {
+	if cfg.RedactPreset != "" && cfg.RedactPatterns == nil {
+		patterns, ok := redactPresets[cfg.RedactPreset]
+		if ok {
+			cfg.RedactPatterns = patterns
+		}
+	}
+}
+
+func applyBouncerDefaults(cfg *Config) {
+	expandRedactPreset(&cfg.Bouncer)
 	if cfg.Bouncer.RedactPatterns == nil {
 		if !cfg.Bouncer.EnabledWasSet() {
 			cfg.Bouncer.Enabled = true
 		}
-		cfg.Bouncer.RedactPatterns = []string{
-			`(?i)AKIA[0-9A-Z]{16}`,
-			`(?i)gh(p|o|s)_[a-zA-Z0-9]{36,255}`,
-			`(?i)ya29\.[0-9A-Za-z\-_]+`,
-			`(?i)sk-[a-zA-Z0-9]{48}`,
-			`(?i)-----BEGIN\s+(RSA\s+)?(DSA\s+)?(EC\s+)?PRIVATE\s+KEY\s*-----`,
-			`(?i)(aws_access_key_id|aws_secret_access_key)\s*=\s*['"][^'"]{10,}['"]`,
-			`(?i)(password|passwd|pwd|secret|token)[\s:=]+['"][^'"]{6,}['"]`,
-			`[a-f0-9]{32}:`,
-			`(?i)SG\.[a-zA-Z0-9\-_]{22}\.[a-zA-Z0-9\-_]{43}`,
-		}
+		cfg.Bouncer.RedactPatterns = redactPresets["credentials"]
 	} else if !cfg.Bouncer.EnabledWasSet() {
 		cfg.Bouncer.Enabled = true
 	}
@@ -191,7 +211,9 @@ func applySecurityFilterDefaults(cfg *Config) {
 	if cfg.Bouncer.RedactOutputWindow == 0 {
 		cfg.Bouncer.RedactOutputWindow = 4096
 	}
-	cfg.Bouncer.FailOpen = true
+	if !cfg.Bouncer.failOpenSet {
+		cfg.Bouncer.FailOpen = true
+	}
 	if cfg.Bouncer.EntropyThreshold == 0 {
 		cfg.Bouncer.EntropyThreshold = 4.5
 	}
@@ -371,11 +393,11 @@ func applyWindowDefaults(cfg *Config) {
 	if cfg.Window.MaxContext == 0 {
 		cfg.Window.MaxContext = 128000
 	}
-	if cfg.Window.KeepFirstPercent == 0 {
-		cfg.Window.KeepFirstPercent = 25.0
+	if cfg.Window.KeepFirstPct == 0 {
+		cfg.Window.KeepFirstPct = 25.0
 	}
-	if cfg.Window.KeepLastPercent == 0 {
-		cfg.Window.KeepLastPercent = 30.0
+	if cfg.Window.KeepLastPct == 0 {
+		cfg.Window.KeepLastPct = 30.0
 	}
 }
 

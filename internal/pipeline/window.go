@@ -135,8 +135,8 @@ func generateWindowSummary(ctx context.Context, deps WindowDeps, windowCfg confi
 	case "tfidf":
 		query := extractQueryFromActiveMessages(active)
 		cfg := config.GovernanceConfig{
-			KeepFirstPercent: windowCfg.KeepFirstPercent,
-			KeepLastPercent:  windowCfg.KeepLastPercent,
+			TruncationKeepFirstPct: windowCfg.KeepFirstPct,
+			TruncationKeepLastPct:  windowCfg.KeepLastPct,
 		}
 		return TruncateTFIDFHistory(historyText, windowCfg.SummaryMaxRunes, query, cfg), nil
 	case "summarize", "":

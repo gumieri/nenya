@@ -77,8 +77,8 @@ func TestRedactSecrets(t *testing.T) {
 
 func TestTruncateMiddleOut(t *testing.T) {
 	cfg := config.GovernanceConfig{
-		KeepFirstPercent: 40,
-		KeepLastPercent:  40,
+		TruncationKeepFirstPct: 40,
+		TruncationKeepLastPct:  40,
 	}
 	sep := "\n... [NENYA: MASSIVE PAYLOAD TRUNCATED] ...\n"
 	sepLen := utf8.RuneCountInString(sep)
@@ -188,8 +188,8 @@ func TestRedactSecrets_CodeFenceNotBypassed(t *testing.T) {
 
 func TestTruncateMiddleOutCodeAware(t *testing.T) {
 	cfg := config.GovernanceConfig{
-		KeepFirstPercent: 40,
-		KeepLastPercent:  40,
+		TruncationKeepFirstPct: 40,
+		TruncationKeepLastPct:  40,
 	}
 
 	t.Run("short text no truncation", func(t *testing.T) {

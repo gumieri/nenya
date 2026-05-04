@@ -205,8 +205,8 @@ func TestScoreBlocksEmptyQuery(t *testing.T) {
 
 func TestTruncateTFIDF(t *testing.T) {
 	cfg := config.GovernanceConfig{
-		KeepFirstPercent: 15.0,
-		KeepLastPercent:  25.0,
+		TruncationKeepFirstPct: 15.0,
+		TruncationKeepLastPct:  25.0,
 	}
 
 	t.Run("within limit returns unchanged", func(t *testing.T) {
@@ -266,8 +266,8 @@ func TestTruncateTFIDF(t *testing.T) {
 
 func TestTruncateTFIDFCodeAware(t *testing.T) {
 	cfg := config.GovernanceConfig{
-		KeepFirstPercent: 15.0,
-		KeepLastPercent:  25.0,
+		TruncationKeepFirstPct: 15.0,
+		TruncationKeepLastPct:  25.0,
 	}
 
 	text := strings.Repeat("irrelevant paragraph. ", 100) + "\n\n" +
@@ -294,8 +294,8 @@ func TestTruncateTFIDFCodeAware(t *testing.T) {
 
 func TestTruncateTFIDFHistory(t *testing.T) {
 	cfg := config.GovernanceConfig{
-		KeepFirstPercent: 25.0,
-		KeepLastPercent:  30.0,
+		TruncationKeepFirstPct: 25.0,
+		TruncationKeepLastPct:  30.0,
 	}
 	history := strings.Repeat("old conversation about weather and cooking. ", 200) +
 		"\n\nFix the authentication bug in login.go\n\n" +

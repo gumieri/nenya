@@ -41,8 +41,8 @@ func TruncateMiddleOut(text string, maxSize int, cfg config.GovernanceConfig) st
 		return string(separatorRunes[:maxSize])
 	}
 
-	keepFirst := int(float64(available) * cfg.KeepFirstPercent / 100.0)
-	keepLast := int(float64(available) * cfg.KeepLastPercent / 100.0)
+	keepFirst := int(float64(available) * cfg.TruncationKeepFirstPct / 100.0)
+	keepLast := int(float64(available) * cfg.TruncationKeepLastPct / 100.0)
 
 	if keepFirst+keepLast > available {
 		total := keepFirst + keepLast

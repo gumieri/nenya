@@ -226,8 +226,8 @@ func capQueryRunes(query string) string {
 }
 
 func calculateBudget(n int, blockRunes []int, cfg config.GovernanceConfig, available int) (pinFirst, pinLast, middleBudget, reservedForPinned int) {
-	pinFirst = max(1, int(float64(n)*cfg.KeepFirstPercent/100.0))
-	pinLast = max(1, int(float64(n)*cfg.KeepLastPercent/100.0))
+	pinFirst = max(1, int(float64(n)*cfg.TruncationKeepFirstPct/100.0))
+	pinLast = max(1, int(float64(n)*cfg.TruncationKeepLastPct/100.0))
 
 	pinFirstRunes := 0
 	for i := 0; i < pinFirst; i++ {

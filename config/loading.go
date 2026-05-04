@@ -155,11 +155,11 @@ func mergeGovernanceScalars(base, overlay *Config) {
 	if og.TruncationStrategy != "" {
 		bg.TruncationStrategy = og.TruncationStrategy
 	}
-	if og.KeepFirstPercent != 0 {
-		bg.KeepFirstPercent = og.KeepFirstPercent
+	if og.TruncationKeepFirstPct != 0 {
+		bg.TruncationKeepFirstPct = og.TruncationKeepFirstPct
 	}
-	if og.KeepLastPercent != 0 {
-		bg.KeepLastPercent = og.KeepLastPercent
+	if og.TruncationKeepLastPct != 0 {
+		bg.TruncationKeepLastPct = og.TruncationKeepLastPct
 	}
 	if og.TFIDFQuerySource != "" {
 		bg.TFIDFQuerySource = og.TFIDFQuerySource
@@ -315,11 +315,11 @@ func mergeWindowConfig(base, overlay *Config) {
 	if overlay.Window.Engine.AgentName != "" || overlay.Window.Engine.Provider != "" {
 		base.Window.Engine = overlay.Window.Engine
 	}
-	if overlay.Window.KeepFirstPercent != 0 {
-		base.Window.KeepFirstPercent = overlay.Window.KeepFirstPercent
+	if overlay.Window.KeepFirstPct != 0 {
+		base.Window.KeepFirstPct = overlay.Window.KeepFirstPct
 	}
-	if overlay.Window.KeepLastPercent != 0 {
-		base.Window.KeepLastPercent = overlay.Window.KeepLastPercent
+	if overlay.Window.KeepLastPct != 0 {
+		base.Window.KeepLastPct = overlay.Window.KeepLastPct
 	}
 }
 
