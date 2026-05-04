@@ -168,7 +168,7 @@ func resolveEngineRefs(cfg *Config) error {
 		}
 	}
 
-	if err := resolveSingleEngineRef(&cfg.SecurityFilter.Engine, cfg.Agents, providers, "security_filter"); err != nil {
+	if err := resolveSingleEngineRef(&cfg.Bouncer.Engine, cfg.Agents, providers, "security_filter"); err != nil {
 		return err
 	}
 	if err := resolveSingleEngineRef(&cfg.Window.Engine, cfg.Agents, providers, "window"); err != nil {

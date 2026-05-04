@@ -73,7 +73,7 @@ func AssertConfigHasMCPServer(t *testing.T, cfg *config.Config, serverName strin
 func AssertSecurityFilterEnabled(t *testing.T, cfg *config.Config) {
 	t.Helper()
 
-	if !cfg.SecurityFilter.Enabled {
+	if !cfg.Bouncer.Enabled {
 		t.Errorf("expected security filter to be enabled")
 	}
 }
@@ -82,7 +82,7 @@ func AssertSecurityFilterEnabled(t *testing.T, cfg *config.Config) {
 func AssertSecurityFilterDisabled(t *testing.T, cfg *config.Config) {
 	t.Helper()
 
-	if cfg.SecurityFilter.Enabled {
+	if cfg.Bouncer.Enabled {
 		t.Errorf("expected security filter to be disabled")
 	}
 }

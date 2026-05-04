@@ -413,7 +413,7 @@ func applyPatternRedaction(gw *gateway.NenyaGateway, messages []interface{}) {
 			continue
 		}
 		if applyRedactToContent(msgNode, func(s string) string {
-			return pipeline.RedactSecrets(s, gw.Config.SecurityFilter.Enabled, gw.SecretPatterns, gw.Config.SecurityFilter.RedactionLabel)
+			return pipeline.RedactSecrets(s, gw.Config.Bouncer.Enabled, gw.SecretPatterns, gw.Config.Bouncer.RedactionLabel)
 		}) {
 			patternRedacted = true
 		}
@@ -439,7 +439,7 @@ func applyEntropyRedaction(gw *gateway.NenyaGateway, messages []interface{}) {
 			continue
 		}
 		if applyRedactToContent(msgNode, func(s string) string {
-			return gw.EntropyFilter.RedactHighEntropy(s, gw.Config.SecurityFilter.RedactionLabel)
+			return gw.EntropyFilter.RedactHighEntropy(s, gw.Config.Bouncer.RedactionLabel)
 		}) {
 			entropyRedacted = true
 		}
@@ -561,7 +561,7 @@ func (p *Proxy) interceptWithMiddleOut(gw *gateway.NenyaGateway, ctx context.Con
 
 // summarizeWithOllama sends content to the security filter engine for redaction and summarization.
 func (p *Proxy) summarizeWithOllama(gw *gateway.NenyaGateway, ctx context.Context, heavyText string, isIDE bool) (string, error) {
-	if len(gw.Config.SecurityFilter.Engine.ResolvedTargets) == 0 {
+	if len(gw.Config.Bouncer.Engine.ResolvedTargets) == 0 {
 		return "", fmt.Errorf("security_filter engine: no resolved targets")
 	}
 	gw.Metrics.RecordOllamaSummarizedBytes(len(heavyText))
@@ -572,7 +572,7 @@ func (p *Proxy) summarizeWithOllama(gw *gateway.NenyaGateway, ctx context.Contex
 		defaultPrompt = "You are a data privacy filter for code. The following text contains code blocks (marked with ``` fences). Remove or replace any IP addresses, AWS keys (AKIA...), passwords, tokens, or credentials that appear OUTSIDE code blocks with [REDACTED]. Inside code blocks, only redact actual hardcoded secrets in string literals — preserve all code structure, function signatures, import statements, variable names, and line-number references exactly. Do NOT summarize, shorten, or restructure any code. Do NOT modify non-sensitive code."
 	}
 
-	ref := gw.Config.SecurityFilter.Engine
+	ref := gw.Config.Bouncer.Engine
 	systemPrompt, err := config.LoadPromptFile(ref.SystemPromptFile, ref.SystemPrompt, defaultPrompt)
 	if err != nil {
 		gw.Logger.Warn("failed to load privacy filter prompt, using default", "err", err)
@@ -596,7 +596,7 @@ func (p *Proxy) summarizeWithOllama(gw *gateway.NenyaGateway, ctx context.Contex
 func (p *Proxy) summarizeOrForward(gw *gateway.NenyaGateway, ctx context.Context, truncated string, isIDE bool, label string) (string, bool) {
 	summarized, err := p.summarizeWithOllama(gw, ctx, truncated, isIDE)
 	if err != nil {
-		if gw.Config.SecurityFilter.SkipOnEngineFailure {
+		if gw.Config.Bouncer.FailOpen {
 			gw.Logger.Warn("engine summarization failed, skip_on_engine_failure=true, forwarding original payload", "err", err)
 			return "", false
 		}
@@ -1186,9 +1186,9 @@ func (p *Proxy) extractAutoSearchQuery(messages []interface{}) (string, map[stri
 }
 
 func (p *Proxy) redactQuery(gw *gateway.NenyaGateway, query string) string {
-	query = pipeline.RedactSecrets(query, gw.Config.SecurityFilter.Enabled, gw.SecretPatterns, gw.Config.SecurityFilter.RedactionLabel)
+	query = pipeline.RedactSecrets(query, gw.Config.Bouncer.Enabled, gw.SecretPatterns, gw.Config.Bouncer.RedactionLabel)
 	if gw.EntropyFilter != nil {
-		query = gw.EntropyFilter.RedactHighEntropy(query, gw.Config.SecurityFilter.RedactionLabel)
+		query = gw.EntropyFilter.RedactHighEntropy(query, gw.Config.Bouncer.RedactionLabel)
 	}
 	return query
 }
@@ -1259,9 +1259,9 @@ func (p *Proxy) mcpClientCallTool(gw *gateway.NenyaGateway, ctx context.Context,
 }
 
 func (p *Proxy) redactSearchResult(gw *gateway.NenyaGateway, resultText string) string {
-	resultText = pipeline.RedactSecrets(resultText, gw.Config.SecurityFilter.Enabled, gw.SecretPatterns, gw.Config.SecurityFilter.RedactionLabel)
+	resultText = pipeline.RedactSecrets(resultText, gw.Config.Bouncer.Enabled, gw.SecretPatterns, gw.Config.Bouncer.RedactionLabel)
 	if gw.EntropyFilter != nil {
-		resultText = gw.EntropyFilter.RedactHighEntropy(resultText, gw.Config.SecurityFilter.RedactionLabel)
+		resultText = gw.EntropyFilter.RedactHighEntropy(resultText, gw.Config.Bouncer.RedactionLabel)
 	}
 	return resultText
 }

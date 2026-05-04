@@ -22,7 +22,7 @@ func newChatProxy(t *testing.T, upstreamURL string) *Proxy {
 	cfg.Server.MaxBodyBytes = 10 << 20
 	cfg.Governance.RatelimitMaxRPM = 60
 	cfg.Governance.RatelimitMaxTPM = 100000
-	cfg.SecurityFilter.Enabled = false
+	cfg.Bouncer.Enabled = false
 	cfg.Providers = map[string]config.ProviderConfig{
 		"test-provider": {
 			URL:       upstreamURL + "/v1/chat/completions",
@@ -209,7 +209,7 @@ func TestHandleChatCompletions_AgentWithModels(t *testing.T) {
 			RatelimitMaxRPM: 60,
 			RatelimitMaxTPM: 100000,
 		},
-		SecurityFilter: config.SecurityFilterConfig{
+		SecurityFilter: config.BouncerConfig{
 			Enabled: false,
 		},
 		Providers: map[string]config.ProviderConfig{

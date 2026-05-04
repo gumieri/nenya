@@ -21,7 +21,7 @@ func MinimalConfig() *config.Config {
 			KeepLastPercent:      0.8,
 			RetryableStatusCodes: []int{429, 500, 502, 503, 504},
 		},
-		SecurityFilter: config.SecurityFilterConfig{
+		SecurityFilter: config.BouncerConfig{
 			Enabled:             false,
 			RedactionLabel:      "[REDACTED]",
 			OutputEnabled:       false,
@@ -45,18 +45,18 @@ func MinimalConfig() *config.Config {
 	}
 }
 
-// NewSecurityFilterConfig returns a config with security filter enabled.
+// NewBouncerConfig returns a config with security filter enabled.
 // Useful for testing PII redaction and content filtering.
-func NewSecurityFilterConfig() *config.Config {
+func NewBouncerConfig() *config.Config {
 	cfg := MinimalConfig()
-	cfg.SecurityFilter.Enabled = true
-	cfg.SecurityFilter.Patterns = []string{
+	cfg.Bouncer.Enabled = true
+	cfg.Bouncer.RedactPatterns = []string{
 		`\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b`,
 		`\b\d{3}-\d{2}-\d{4}\b`,
 	}
-	cfg.SecurityFilter.OutputEnabled = true
-	cfg.SecurityFilter.OutputWindowChars = 1000
-	cfg.SecurityFilter.Engine = config.EngineRef{
+	cfg.Bouncer.RedactOutput = true
+	cfg.Bouncer.RedactOutputWindow = 1000
+	cfg.Bouncer.Engine = config.EngineRef{
 		Provider: "ollama",
 		Model:    "qwen2.5-coder",
 	}
@@ -176,13 +176,13 @@ func FullConfig() *config.Config {
 	cfg := MinimalConfig()
 
 	// Apply security filter settings
-	cfg.SecurityFilter.Enabled = true
-	cfg.SecurityFilter.Patterns = []string{
+	cfg.Bouncer.Enabled = true
+	cfg.Bouncer.RedactPatterns = []string{
 		`\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b`,
 	}
-	cfg.SecurityFilter.OutputEnabled = true
-	cfg.SecurityFilter.OutputWindowChars = 1000
-	cfg.SecurityFilter.Engine = config.EngineRef{
+	cfg.Bouncer.RedactOutput = true
+	cfg.Bouncer.RedactOutputWindow = 1000
+	cfg.Bouncer.Engine = config.EngineRef{
 		Provider: "ollama",
 		Model:    "qwen2.5-coder",
 	}

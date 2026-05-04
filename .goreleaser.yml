@@ -54,7 +54,7 @@ nfpms:
         type: config|noreplace
     dependencies:
       - systemd
-    maintainer: Rafael Gumieri <rmg@0ur.uk>
+    maintainer: Rafael Gumieri <rgumieri@gmail.com>
     description: |
       Nenya is a lightweight, highly secure AI API Gateway/Proxy written in Go.
       It acts as transparent middleware between local AI coding clients and
@@ -115,12 +115,11 @@ changelog:
 checksum:
   name_template: "checksums.txt"
 
-# signs:
-#   - id: checksums
-#     artifacts: checksum
-#     args: ["sign", "-y", "{{ .Artifact }}"]
-#     cmd: cosign
-# TODO: enable COSIGN_KEY secret in repo settings, then uncomment
+signs:
+  - id: checksums
+    artifacts: checksum
+    args: ["sign", "-y", "{{ .Artifact }}"]
+    cmd: cosign
 
 release:
   github:

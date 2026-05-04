@@ -93,7 +93,7 @@ func ApplyDefaults(cfg *Config) error {
 	applyServerDefaults(cfg)
 	applyGovernanceDefaults(cfg)
 	applySecurityFilterDefaults(cfg)
-	applyEngineRefDefaults(&cfg.SecurityFilter.Engine)
+	applyEngineRefDefaults(&cfg.Bouncer.Engine)
 	applyEngineRefDefaults(&cfg.Window.Engine)
 	applyPrefixCacheDefaults(cfg)
 	applyCompactionDefaults(cfg)
@@ -107,7 +107,7 @@ func ApplyDefaults(cfg *Config) error {
 	if err := resolveEngineRefs(cfg); err != nil {
 		return err
 	}
-	applyResolvedEngineDefaults(cfg.SecurityFilter.Engine.ResolvedTargets)
+	applyResolvedEngineDefaults(cfg.Bouncer.Engine.ResolvedTargets)
 	applyResolvedEngineDefaults(cfg.Window.Engine.ResolvedTargets)
 	return nil
 }
@@ -167,11 +167,11 @@ func applyGovernanceDefaults(cfg *Config) {
 }
 
 func applySecurityFilterDefaults(cfg *Config) {
-	if cfg.SecurityFilter.Patterns == nil {
-		if !cfg.SecurityFilter.EnabledWasSet() {
-			cfg.SecurityFilter.Enabled = true
+	if cfg.Bouncer.RedactPatterns == nil {
+		if !cfg.Bouncer.EnabledWasSet() {
+			cfg.Bouncer.Enabled = true
 		}
-		cfg.SecurityFilter.Patterns = []string{
+		cfg.Bouncer.RedactPatterns = []string{
 			`(?i)AKIA[0-9A-Z]{16}`,
 			`(?i)gh(p|o|s)_[a-zA-Z0-9]{36,255}`,
 			`(?i)ya29\.[0-9A-Za-z\-_]+`,
@@ -182,21 +182,21 @@ func applySecurityFilterDefaults(cfg *Config) {
 			`[a-f0-9]{32}:`,
 			`(?i)SG\.[a-zA-Z0-9\-_]{22}\.[a-zA-Z0-9\-_]{43}`,
 		}
-	} else if !cfg.SecurityFilter.EnabledWasSet() {
-		cfg.SecurityFilter.Enabled = true
+	} else if !cfg.Bouncer.EnabledWasSet() {
+		cfg.Bouncer.Enabled = true
 	}
-	if cfg.SecurityFilter.RedactionLabel == "" {
-		cfg.SecurityFilter.RedactionLabel = "[REDACTED]"
+	if cfg.Bouncer.RedactionLabel == "" {
+		cfg.Bouncer.RedactionLabel = "[REDACTED]"
 	}
-	if cfg.SecurityFilter.OutputWindowChars == 0 {
-		cfg.SecurityFilter.OutputWindowChars = 4096
+	if cfg.Bouncer.RedactOutputWindow == 0 {
+		cfg.Bouncer.RedactOutputWindow = 4096
 	}
-	cfg.SecurityFilter.SkipOnEngineFailure = true
-	if cfg.SecurityFilter.EntropyThreshold == 0 {
-		cfg.SecurityFilter.EntropyThreshold = 4.5
+	cfg.Bouncer.FailOpen = true
+	if cfg.Bouncer.EntropyThreshold == 0 {
+		cfg.Bouncer.EntropyThreshold = 4.5
 	}
-	if cfg.SecurityFilter.EntropyMinToken == 0 {
-		cfg.SecurityFilter.EntropyMinToken = 20
+	if cfg.Bouncer.EntropyMinToken == 0 {
+		cfg.Bouncer.EntropyMinToken = 20
 	}
 }
 

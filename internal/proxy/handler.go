@@ -471,7 +471,7 @@ func (p *Proxy) checkSecurityFilterEngineHealth(ctx context.Context) bool {
 	if gw == nil {
 		return false
 	}
-	ref := gw.Config.SecurityFilter.Engine
+	ref := gw.Config.Bouncer.Engine
 
 	if len(ref.ResolvedTargets) > 0 {
 		for _, target := range ref.ResolvedTargets {
