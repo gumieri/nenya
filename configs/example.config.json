@@ -53,11 +53,12 @@
   },
 
   "compaction": {
-    "enabled": true,
-    "json_minify": true,
-    "collapse_blank_lines": true,
-    "trim_trailing_whitespace": true,
-    "normalize_line_endings": true
+    "compaction_preset": "balanced"
+
+    // Presets: "aggressive" (all optimizations), "balanced" (text only), "minimal" (off)
+    // You can override individual settings after choosing a preset:
+    // "prune_stale_tools": true,
+    // "prune_thoughts": false
   },
 
   "window": {

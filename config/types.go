@@ -181,12 +181,7 @@ type ContextConfig struct {
 	TruncationKeepFirstPct float64 `json:"truncation_keep_first_pct"`
 	TruncationKeepLastPct  float64 `json:"truncation_keep_last_pct"`
 	TFIDFQuerySource       string  `json:"tfidf_query_source"`
-	AutoContextSkip        *bool   `json:"auto_context_skip,omitempty"`
-	AutoReorderByLatency   *bool   `json:"auto_reorder_by_latency,omitempty"`
 }
-
-func (c *ContextConfig) AutoContextSkipSet() bool      { return wasSet(c.AutoContextSkip) }
-func (c *ContextConfig) AutoReorderByLatencySet() bool { return wasSet(c.AutoReorderByLatency) }
 
 type GovernanceConfig struct {
 	BlockedExecutionPatterns []string `json:"blocked_execution_patterns"`
@@ -199,11 +194,15 @@ type GovernanceConfig struct {
 	RoutingCostWeight        float64  `json:"routing_cost_weight"`
 	MaxCostPerRequest        float64  `json:"max_cost_per_request"`
 	EmptyStreamAsError       *bool    `json:"empty_stream_as_error,omitempty"`
+	AutoContextSkip          *bool    `json:"auto_context_skip,omitempty"`
+	AutoReorderByLatency     *bool    `json:"auto_reorder_by_latency,omitempty"`
 }
 
-func (g *GovernanceConfig) RPMSet() bool                { return wasSet(g.RatelimitMaxRPM) }
-func (g *GovernanceConfig) TPMSet() bool                { return wasSet(g.RatelimitMaxTPM) }
-func (g *GovernanceConfig) EmptyStreamAsErrorSet() bool { return wasSet(g.EmptyStreamAsError) }
+func (g *GovernanceConfig) RPMSet() bool                  { return wasSet(g.RatelimitMaxRPM) }
+func (g *GovernanceConfig) TPMSet() bool                  { return wasSet(g.RatelimitMaxTPM) }
+func (g *GovernanceConfig) EmptyStreamAsErrorSet() bool   { return wasSet(g.EmptyStreamAsError) }
+func (g *GovernanceConfig) AutoContextSkipSet() bool      { return wasSet(g.AutoContextSkip) }
+func (g *GovernanceConfig) AutoReorderByLatencySet() bool { return wasSet(g.AutoReorderByLatency) }
 
 func (g *GovernanceConfig) EffectiveMaxRetryAttempts() int {
 	if g.MaxRetryAttempts > 0 {
@@ -355,15 +354,24 @@ func (c *PrefixCacheConfig) PinWasSet() bool           { return wasSet(c.PinSyst
 func (c *PrefixCacheConfig) StableWasSet() bool        { return wasSet(c.StableTools) }
 func (c *PrefixCacheConfig) SkipRedactionWasSet() bool { return wasSet(c.SkipRedactionOnSystem) }
 
+type CompactionPreset string
+
+const (
+	CompactionPresetAggressive CompactionPreset = "aggressive"
+	CompactionPresetBalanced   CompactionPreset = "balanced"
+	CompactionPresetMinimal    CompactionPreset = "minimal"
+)
+
 type CompactionConfig struct {
-	Enabled                *bool `json:"enabled,omitempty"`
-	JSONMinify             *bool `json:"json_minify,omitempty"`
-	CollapseBlankLines     *bool `json:"collapse_blank_lines,omitempty"`
-	TrimTrailingWhitespace *bool `json:"trim_trailing_whitespace,omitempty"`
-	NormalizeLineEndings   *bool `json:"normalize_line_endings,omitempty"`
-	PruneStaleTools        *bool `json:"prune_stale_tools,omitempty"`
-	ToolProtectionWindow   int   `json:"tool_protection_window"`
-	PruneThoughts          *bool `json:"prune_thoughts,omitempty"`
+	Preset                 CompactionPreset `json:"compaction_preset,omitempty"`
+	Enabled                *bool            `json:"enabled,omitempty"`
+	JSONMinify             *bool            `json:"json_minify,omitempty"`
+	CollapseBlankLines     *bool            `json:"collapse_blank_lines,omitempty"`
+	TrimTrailingWhitespace *bool            `json:"trim_trailing_whitespace,omitempty"`
+	NormalizeLineEndings   *bool            `json:"normalize_line_endings,omitempty"`
+	PruneStaleTools        *bool            `json:"prune_stale_tools,omitempty"`
+	ToolProtectionWindow   int              `json:"tool_protection_window"`
+	PruneThoughts          *bool            `json:"prune_thoughts,omitempty"`
 }
 
 func (c *CompactionConfig) EnabledWasSet() bool       { return wasSet(c.Enabled) }

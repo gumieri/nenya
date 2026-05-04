@@ -45,15 +45,16 @@ order). Config files support `//` line comments and `/* */` block comments.
 
 ## `context`
 
+Context management settings control how Nenya prepares the request payload before forwarding
+upstream. This includes truncation strategies and TF-IDF relevance scoring.
+
 ```json
 {
   "context": {
     "truncation_strategy": "middle-out",
     "truncation_keep_first_pct": 15,
     "truncation_keep_last_pct": 25,
-    "tfidf_query_source": "",
-    "auto_context_skip": false,
-    "auto_reorder_by_latency": false
+    "tfidf_query_source": ""
   }
 }
 ```
@@ -64,10 +65,11 @@ order). Config files support `//` line comments and `/* */` block comments.
 | `truncation_keep_first_pct` | float | `15` | First portion % to preserve during truncation |
 | `truncation_keep_last_pct` | float | `25` | Last portion % to preserve during truncation |
 | `tfidf_query_source` | string | `""` | TF-IDF query source: `""`, `"prior_messages"`, `"self"` |
-| `auto_context_skip` | bool | `false` | Auto-skip context-limit models in agent routing |
-| `auto_reorder_by_latency` | bool | `false` | Reorder agent targets by median latency with jitter |
 
 ## `governance`
+
+Governance settings control operational policies: rate limits, retries, routing decisions,
+and safety constraints.
 
 ```json
 {
@@ -80,7 +82,9 @@ order). Config files support `//` line comments and `/* */` block comments.
     "routing_strategy": "",
     "routing_latency_weight": 0,
     "routing_cost_weight": 0,
-    "max_cost_per_request": 0
+    "max_cost_per_request": 0,
+    "auto_context_skip": false,
+    "auto_reorder_by_latency": false
   }
 }
 ```
@@ -96,6 +100,8 @@ order). Config files support `//` line comments and `/* */` block comments.
 | `routing_latency_weight` | float | `0` | Weight for latency in balanced routing (0-1) |
 | `routing_cost_weight` | float | `0` | Weight for cost in balanced routing (0-1) |
 | `max_cost_per_request` | float | `0` | Max USD per request (0 = unlimited) |
+| `auto_context_skip` | bool | `false` | Auto-skip models with insufficient context window for payload size |
+| `auto_reorder_by_latency` | bool | `false` | Reorder agent targets by median latency with jitter |
 
 ## `bouncer`
 
@@ -221,23 +227,37 @@ Controls context window compaction — reducing payload size when approaching co
 
 ## `compaction`
 
+Payload compaction optimizes message size before forwarding upstream. Use presets for
+common configurations or tune individual settings.
+
 ```json
 {
   "compaction": {
-    "enabled": true,
-    "json_minify": true,
-    "collapse_blank_lines": true,
-    "trim_trailing_whitespace": true,
-    "normalize_line_endings": true,
+    "compaction_preset": "balanced",
     "prune_stale_tools": false,
-    "tool_protection_window": 4,
-    "prune_thoughts": false
+    "tool_protection_window": 4
   }
 }
 ```
 
+### Presets
+
+| Setting | `"aggressive"` | `"balanced"` | `"minimal"` |
+|---------|:---:|:---:|:---:|
+| `json_minify` | true | true | false |
+| `collapse_blank_lines` | true | true | false |
+| `trim_trailing_whitespace` | true | true | false |
+| `normalize_line_endings` | true | true | false |
+| `prune_stale_tools` | true | false | false |
+| `prune_thoughts` | true | false | false |
+
+Individual settings can be overridden after choosing a preset.
+
+### Individual Settings
+
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
+| `compaction_preset` | string | `""` | Preset: `"aggressive"`, `"balanced"`, `"minimal"` |
 | `enabled` | bool | auto | Auto-enabled if any feature is on |
 | `json_minify` | bool | `true` | Remove unnecessary whitespace from JSON |
 | `collapse_blank_lines` | bool | `true` | Collapse multiple blank lines |
@@ -506,5 +526,10 @@ that has models configured.
 | `governance.truncation_keep_first_pct` | `context.truncation_keep_first_pct` |
 | `governance.truncation_keep_last_pct` | `context.truncation_keep_last_pct` |
 | `governance.tfidf_query_source` | `context.tfidf_query_source` |
-| `governance.auto_context_skip` | `context.auto_context_skip` |
-| `governance.auto_reorder_by_latency` | `context.auto_reorder_by_latency` |
+
+## Breaking Changes (v1.1)
+
+| Change | Details |
+|--------|---------|
+| Routing booleans moved | `context.auto_context_skip` and `context.auto_reorder_by_latency` moved to `governance.*` |
+| Compaction presets | Added `compaction.compaction_preset`: `"aggressive"`, `"balanced"`, `"minimal"`. Individual fields still work. |

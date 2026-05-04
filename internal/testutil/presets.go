@@ -68,14 +68,8 @@ func NewBouncerConfig() *config.Config {
 // Useful for testing message compaction and tool pruning.
 func NewCompactionConfig() *config.Config {
 	cfg := MinimalConfig()
-	cfg.Compaction.Enabled = config.PtrTo(true)
-	cfg.Compaction.JSONMinify = config.PtrTo(true)
-	cfg.Compaction.CollapseBlankLines = config.PtrTo(true)
-	cfg.Compaction.TrimTrailingWhitespace = config.PtrTo(true)
-	cfg.Compaction.NormalizeLineEndings = config.PtrTo(true)
-	cfg.Compaction.PruneStaleTools = config.PtrTo(true)
+	cfg.Compaction.Preset = config.CompactionPresetAggressive
 	cfg.Compaction.ToolProtectionWindow = 60
-	cfg.Compaction.PruneThoughts = config.PtrTo(true)
 	return cfg
 }
 
@@ -189,14 +183,8 @@ func FullConfig() *config.Config {
 	}
 
 	// Apply compaction settings
-	cfg.Compaction.Enabled = config.PtrTo(true)
-	cfg.Compaction.JSONMinify = config.PtrTo(true)
-	cfg.Compaction.CollapseBlankLines = config.PtrTo(true)
-	cfg.Compaction.TrimTrailingWhitespace = config.PtrTo(true)
-	cfg.Compaction.NormalizeLineEndings = config.PtrTo(true)
-	cfg.Compaction.PruneStaleTools = config.PtrTo(true)
+	cfg.Compaction.Preset = config.CompactionPresetAggressive
 	cfg.Compaction.ToolProtectionWindow = 60
-	cfg.Compaction.PruneThoughts = config.PtrTo(true)
 
 	// Apply window settings
 	cfg.Window.Enabled = true

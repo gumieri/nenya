@@ -164,12 +164,6 @@ func mergeContextConfig(base, overlay *Config) {
 	if oc.TFIDFQuerySource != "" {
 		bc.TFIDFQuerySource = oc.TFIDFQuerySource
 	}
-	if oc.AutoContextSkipSet() {
-		bc.AutoContextSkip = oc.AutoContextSkip
-	}
-	if oc.AutoReorderByLatencySet() {
-		bc.AutoReorderByLatency = oc.AutoReorderByLatency
-	}
 }
 
 func mergeGovernanceScalars(base, overlay *Config) {
@@ -209,6 +203,12 @@ func mergeGovernanceBools(base, overlay *Config) {
 	bg := &base.Governance
 	if og.EmptyStreamAsErrorSet() {
 		bg.EmptyStreamAsError = og.EmptyStreamAsError
+	}
+	if og.AutoContextSkipSet() {
+		bg.AutoContextSkip = og.AutoContextSkip
+	}
+	if og.AutoReorderByLatencySet() {
+		bg.AutoReorderByLatency = og.AutoReorderByLatency
 	}
 }
 
@@ -258,6 +258,9 @@ func mergePrefixCacheConfig(base, overlay *Config) {
 }
 
 func mergeCompactionConfig(base, overlay *Config) {
+	if overlay.Compaction.Preset != "" {
+		base.Compaction.Preset = overlay.Compaction.Preset
+	}
 	if overlay.Compaction.EnabledWasSet() {
 		base.Compaction.Enabled = overlay.Compaction.Enabled
 	}
