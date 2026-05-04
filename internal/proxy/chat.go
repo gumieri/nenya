@@ -937,7 +937,6 @@ func (p *Proxy) readResponsesBody(gw *gateway.NenyaGateway, w http.ResponseWrite
 
 func (p *Proxy) resolveResponsesURL(provider *config.Provider, pathStr, query string) string {
 	// Fallback chain: BaseURL → trimmed URL → empty (Provider uses BaseURL if set,
-	// legacy configs only have URL ending in /chat/completions which we strip).
 	baseURL := strings.TrimSuffix(provider.BaseURL, "/")
 	if baseURL == "" {
 		baseURL = strings.TrimSuffix(provider.URL, "/chat/completions")
