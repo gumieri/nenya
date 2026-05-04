@@ -83,6 +83,12 @@ func (p *Proxy) resolveRoute(path string) routeHandler {
 		{true, "/proxy/", p.chainProxy},
 		{true, "/v1/files", p.chainFiles},
 		{true, "/v1/batches", p.chainBatches},
+		{true, "/v1/images/generations", p.chainImages},
+		{true, "/v1/audio/transcriptions", p.chainAudioTranscriptions},
+		{true, "/v1/audio/speech", p.chainAudioSpeech},
+		{true, "/v1/moderations", p.chainModerations},
+		{true, "/v1/rerank", p.chainRerank},
+		{true, "/v1/a2a", p.chainA2A},
 	}
 
 	for _, e := range handlers {
@@ -193,6 +199,90 @@ func (p *Proxy) chainBatches(gw *gateway.NenyaGateway, w http.ResponseWriter, r 
 	}
 	infra.ObserveHTTPFunc(gw.Metrics, func(w http.ResponseWriter, r *http.Request) {
 		p.handleBatches(gw, w, r, keyRef)
+	})(w, r)
+}
+
+func (p *Proxy) chainImages(gw *gateway.NenyaGateway, w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	keyRef, ok := p.authenticateRequest(r, w)
+	if !ok {
+		return
+	}
+	infra.ObserveHTTPFunc(gw.Metrics, func(w http.ResponseWriter, r *http.Request) {
+		p.handleImages(gw, w, r, keyRef)
+	})(w, r)
+}
+
+func (p *Proxy) chainAudioTranscriptions(gw *gateway.NenyaGateway, w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	keyRef, ok := p.authenticateRequest(r, w)
+	if !ok {
+		return
+	}
+	infra.ObserveHTTPFunc(gw.Metrics, func(w http.ResponseWriter, r *http.Request) {
+		p.handleAudioTranscriptions(gw, w, r, keyRef)
+	})(w, r)
+}
+
+func (p *Proxy) chainAudioSpeech(gw *gateway.NenyaGateway, w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	keyRef, ok := p.authenticateRequest(r, w)
+	if !ok {
+		return
+	}
+	infra.ObserveHTTPFunc(gw.Metrics, func(w http.ResponseWriter, r *http.Request) {
+		p.handleAudioSpeech(gw, w, r, keyRef)
+	})(w, r)
+}
+
+func (p *Proxy) chainModerations(gw *gateway.NenyaGateway, w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	keyRef, ok := p.authenticateRequest(r, w)
+	if !ok {
+		return
+	}
+	infra.ObserveHTTPFunc(gw.Metrics, func(w http.ResponseWriter, r *http.Request) {
+		p.handleModerations(gw, w, r, keyRef)
+	})(w, r)
+}
+
+func (p *Proxy) chainRerank(gw *gateway.NenyaGateway, w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	keyRef, ok := p.authenticateRequest(r, w)
+	if !ok {
+		return
+	}
+	infra.ObserveHTTPFunc(gw.Metrics, func(w http.ResponseWriter, r *http.Request) {
+		p.handleRerank(gw, w, r, keyRef)
+	})(w, r)
+}
+
+func (p *Proxy) chainA2A(gw *gateway.NenyaGateway, w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	keyRef, ok := p.authenticateRequest(r, w)
+	if !ok {
+		return
+	}
+	infra.ObserveHTTPFunc(gw.Metrics, func(w http.ResponseWriter, r *http.Request) {
+		p.handleA2A(gw, w, r, keyRef)
 	})(w, r)
 }
 

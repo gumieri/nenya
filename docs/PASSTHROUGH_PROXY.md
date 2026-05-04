@@ -2,6 +2,8 @@
 
 The `/proxy/{provider}/*` endpoint enables raw proxying to any provider endpoint, bypassing Nenya's content pipeline.
 
+> **Note:** For common OpenAI-compatible endpoints (image generation, audio transcription, moderation, etc.), Nenya provides dedicated first-class endpoints at `/v1/images/generations`, `/v1/audio/transcriptions`, `/v1/audio/speech`, `/v1/moderations`, `/v1/rerank`, and `/v1/a2a`. See [`ENDPOINTS.md`](ENDPOINTS.md). Use the passthrough proxy for any other provider-specific paths.
+
 ## Endpoint
 
 ```
