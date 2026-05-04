@@ -8,8 +8,9 @@ Nenya reads its configuration from a JSON file or directory (default: `/etc/neny
 - [Configuration file structure](#configuration-file-structure)
 - [Top-Level Sections](#top-level-sections)
   - [Server](#server)
+  - [Context](#context)
   - [Governance](#governance)
-  - [Security Filter](#security-filter)
+  - [Bouncer](#bouncer)
   - [Prefix Cache](#prefix-cache)
   - [Compaction](#compaction)
   - [Window](#window)
@@ -47,7 +48,16 @@ When a **file** is specified, only that file is loaded (single-file mode, unchan
 | Section | JSON key | Description |
 |---------|----------|-------------|
 | Server | `server` | Listen address, body limits, token estimation |
-| Governance | `governance` | Unified context limits, truncation, and rate limiting |
+| Context | `context` | Truncation, TF-IDF relevance scoring, context management |
+| Governance | `governance` | Rate limiting, retries, routing policy |
+| Bouncer | `bouncer` | PII redaction, entropy detection, engine interception |
+| Prefix Cache | `prefix_cache` | System prompt and tool caching |
+| Compaction | `compaction` | JSON minification, whitespace collapse, tool pruning |
+| Window | `window` | Sliding context window with summarization |
+| Response Cache | `response-cache` | Response caching with LRU eviction |
+| Agents | `agents` | Model lists, strategies, circuit breakers, MCP config |
+| Discovery | `discovery` | Dynamic model discovery, auto-agents |
+| Providers | `providers` | Upstream API endpoints
 | Bouncer | `bouncer` | Tier-0 regex secret redaction with configurable engine |
 | Prefix Cache | `prefix_cache` | Prompt cache alignment optimizations |
 | Compaction | `compaction` | Text compaction (whitespace, blank lines, JSON) |
@@ -136,9 +146,9 @@ systemctl reload nenya
 | `secure_memory_required` | bool | `true` | Require mlock-backed secure memory for tokens. When `true`, gateway fails to start if `mlock` is unavailable. Set to `false` to allow heap fallback (e.g., macOS development). |
 | `user_agent` | string | `"nenya/1.0"` | User-Agent header sent to upstream providers |
 
-## `governance`
+## `context`
 
-Unified configuration for context management, truncation, and rate limiting.
+Unified configuration for context management and truncation.
 
 The interceptor implements a 3-tier pipeline for the last user message content, with limits derived from the target model's `max_context` (characters, not tokens). If the model has no `max_context`, fallback defaults of 4000/24000 are used.
 
@@ -150,14 +160,21 @@ The interceptor implements a 3-tier pipeline for the last user message content, 
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `ratelimit_max_tpm` | int | `250000` | Max tokens per minute per upstream host (0 = disabled) |
-| `ratelimit_max_rpm` | int | `15` | Max requests per minute per upstream host (0 = disabled) |
 | `truncation_strategy` | string | `"middle-out"` | Truncation method. `"middle-out"` (positional) or any value — TF-IDF is activated by setting `tfidf_query_source` instead. |
-| `keep_first_percent` | float | `15.0` | Percentage of blocks to pin from the start when truncating (safety net for both middle-out and TF-IDF) |
-| `keep_last_percent` | float | `25.0` | Percentage of blocks to pin from the end when truncating (safety net for both middle-out and TF-IDF) |
+| `truncation_keep_first_pct` | float | `15.0` | Percentage of blocks to pin from the start when truncating (safety net for both middle-out and TF-IDF) |
+| `truncation_keep_last_pct` | float | `25.0` | Percentage of blocks to pin from the end when truncating (safety net for both middle-out and TF-IDF) |
 | `tfidf_query_source` | string | `""` (disabled) | Enable TF-IDF relevance-scored truncation for Tier 3. `""` = disabled (use middle-out). `"prior_messages"` = use previous user messages as query terms. `"self"` = use first 500 runes of the massive message as query terms. When enabled, if TF-IDF reduces the payload below `soft_limit`, the engine call is skipped entirely. |
 | `auto_context_skip` | bool | `false` | Automatically skip models that do not meet context requirements for the current request. When enabled, models with `max_context` smaller than the request's input token count are excluded from routing, preventing errors and improving latency. |
 | `auto_reorder_by_latency` | bool | `false` | Dynamically sort targets based on historical response times. When enabled, targets are reordered by median latency (fastest first) with ±5% jitter to prevent thundering herd. Requires `infra.LatencyTracker` to be initialized. |
+
+## `governance`
+
+Rate limiting, routing weights, and circuit breaker configuration.
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `ratelimit_max_tpm` | int | `250000` | Max tokens per minute per upstream host (0 = disabled) |
+| `ratelimit_max_rpm` | int | `15` | Max requests per minute per upstream host (0 = disabled) |
 | `routing_strategy` | string | `""` (latency) | Routing strategy when `auto_reorder_by_latency` is enabled. `""` or `"latency"` = latency-only sorting. `"balanced"` = weighted scoring using latency, cost, capability matching, and per-model score bonus. |
 | `routing_latency_weight` | float64 | `1.0` | Weight for latency normalization in balanced scoring (0.0-10.0). Higher = prioritize faster models. |
 | `routing_cost_weight` | float64 | `0.0` | Weight for cost normalization in balanced scoring (0.0-10.0). Higher = prioritize cheaper models. |

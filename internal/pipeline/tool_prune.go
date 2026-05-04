@@ -12,7 +12,7 @@ const defaultToolProtectionWindow = 4
 // from the conversation history, keeping only the most recent ones within
 // the configured protection window.
 func PruneStaleToolCalls(payload map[string]interface{}, cfg config.CompactionConfig) bool {
-	if !cfg.PruneStaleTools {
+	if cfg.PruneStaleTools == nil || !*cfg.PruneStaleTools {
 		return false
 	}
 

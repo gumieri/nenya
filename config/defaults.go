@@ -91,6 +91,7 @@ func applyResolvedEngineDefaults(targets []EngineTarget) {
 
 func ApplyDefaults(cfg *Config) error {
 	applyServerDefaults(cfg)
+	applyContextDefaults(cfg)
 	applyGovernanceDefaults(cfg)
 	applyBouncerDefaults(cfg)
 	applyEngineRefDefaults(&cfg.Bouncer.Engine)
@@ -122,8 +123,20 @@ func applyServerDefaults(cfg *Config) {
 	if cfg.Server.UserAgent == "" {
 		cfg.Server.UserAgent = "nenya/1.0"
 	}
-	if !cfg.Server.SecureMemoryRequired && !cfg.Server.SecureMemoryRequiredWasSet() {
-		cfg.Server.SecureMemoryRequired = true
+	if (cfg.Server.SecureMemoryRequired == nil || !*cfg.Server.SecureMemoryRequired) && !cfg.Server.SecureMemoryRequiredWasSet() {
+		cfg.Server.SecureMemoryRequired = PtrTo(true)
+	}
+}
+
+func applyContextDefaults(cfg *Config) {
+	if cfg.Context.TruncationStrategy == "" {
+		cfg.Context.TruncationStrategy = "middle-out"
+	}
+	if cfg.Context.TruncationKeepFirstPct == 0 {
+		cfg.Context.TruncationKeepFirstPct = 15.0
+	}
+	if cfg.Context.TruncationKeepLastPct == 0 {
+		cfg.Context.TruncationKeepLastPct = 25.0
 	}
 }
 
@@ -131,20 +144,11 @@ func applyGovernanceDefaults(cfg *Config) {
 	if err := applyLogLevel(cfg.Server.LogLevel); err != nil {
 		return
 	}
-	if !cfg.Governance.TPMSet() && cfg.Governance.RatelimitMaxTPM == 0 {
-		cfg.Governance.RatelimitMaxTPM = 250000
+	if !cfg.Governance.TPMSet() && cfg.Governance.RatelimitMaxTPM == nil {
+		cfg.Governance.RatelimitMaxTPM = PtrTo(250000)
 	}
-	if !cfg.Governance.RPMSet() && cfg.Governance.RatelimitMaxRPM == 0 {
-		cfg.Governance.RatelimitMaxRPM = 15
-	}
-	if cfg.Governance.TruncationStrategy == "" {
-		cfg.Governance.TruncationStrategy = "middle-out"
-	}
-	if cfg.Governance.TruncationKeepFirstPct == 0 {
-		cfg.Governance.TruncationKeepFirstPct = 15.0
-	}
-	if cfg.Governance.TruncationKeepLastPct == 0 {
-		cfg.Governance.TruncationKeepLastPct = 25.0
+	if !cfg.Governance.RPMSet() && cfg.Governance.RatelimitMaxRPM == nil {
+		cfg.Governance.RatelimitMaxRPM = PtrTo(15)
 	}
 	if len(cfg.Governance.BlockedExecutionPatterns) == 0 {
 		cfg.Governance.BlockedExecutionPatterns = []string{
@@ -162,7 +166,7 @@ func applyGovernanceDefaults(cfg *Config) {
 		}
 	}
 	if !cfg.Governance.EmptyStreamAsErrorSet() {
-		cfg.Governance.EmptyStreamAsError = true
+		cfg.Governance.EmptyStreamAsError = PtrTo(true)
 	}
 }
 
@@ -199,11 +203,11 @@ func applyBouncerDefaults(cfg *Config) {
 	expandRedactPreset(&cfg.Bouncer)
 	if cfg.Bouncer.RedactPatterns == nil {
 		if !cfg.Bouncer.EnabledWasSet() {
-			cfg.Bouncer.Enabled = true
+			cfg.Bouncer.Enabled = PtrTo(true)
 		}
 		cfg.Bouncer.RedactPatterns = redactPresets["credentials"]
 	} else if !cfg.Bouncer.EnabledWasSet() {
-		cfg.Bouncer.Enabled = true
+		cfg.Bouncer.Enabled = PtrTo(true)
 	}
 	if cfg.Bouncer.RedactionLabel == "" {
 		cfg.Bouncer.RedactionLabel = "[REDACTED]"
@@ -211,8 +215,8 @@ func applyBouncerDefaults(cfg *Config) {
 	if cfg.Bouncer.RedactOutputWindow == 0 {
 		cfg.Bouncer.RedactOutputWindow = 4096
 	}
-	if !cfg.Bouncer.failOpenSet {
-		cfg.Bouncer.FailOpen = true
+	if !cfg.Bouncer.FailOpenWasSet() {
+		cfg.Bouncer.FailOpen = PtrTo(true)
 	}
 	if cfg.Bouncer.EntropyThreshold == 0 {
 		cfg.Bouncer.EntropyThreshold = 4.5
@@ -223,17 +227,17 @@ func applyBouncerDefaults(cfg *Config) {
 }
 
 func applyPrefixCacheDefaults(cfg *Config) {
-	if !cfg.PrefixCache.Enabled && (cfg.PrefixCache.PinSystemFirst || cfg.PrefixCache.StableTools || cfg.PrefixCache.SkipRedactionOnSystem) {
+	if !cfg.PrefixCache.Enabled && (cfg.PrefixCache.PinSystemFirst != nil && *cfg.PrefixCache.PinSystemFirst || cfg.PrefixCache.StableTools != nil && *cfg.PrefixCache.StableTools || cfg.PrefixCache.SkipRedactionOnSystem != nil && *cfg.PrefixCache.SkipRedactionOnSystem) {
 		cfg.PrefixCache.Enabled = true
 	}
-	if !cfg.PrefixCache.PinSystemFirst && !cfg.PrefixCache.PinWasSet() {
-		cfg.PrefixCache.PinSystemFirst = true
+	if (cfg.PrefixCache.PinSystemFirst == nil || !*cfg.PrefixCache.PinSystemFirst) && !cfg.PrefixCache.PinWasSet() {
+		cfg.PrefixCache.PinSystemFirst = PtrTo(true)
 	}
-	if !cfg.PrefixCache.StableTools && !cfg.PrefixCache.StableWasSet() {
-		cfg.PrefixCache.StableTools = true
+	if (cfg.PrefixCache.StableTools == nil || !*cfg.PrefixCache.StableTools) && !cfg.PrefixCache.StableWasSet() {
+		cfg.PrefixCache.StableTools = PtrTo(true)
 	}
 	if !cfg.PrefixCache.SkipRedactionWasSet() {
-		cfg.PrefixCache.SkipRedactionOnSystem = false
+		cfg.PrefixCache.SkipRedactionOnSystem = PtrTo(false)
 	}
 }
 
@@ -248,32 +252,32 @@ func applyCompactionDefaults(cfg *Config) {
 }
 
 func applyJSONMinifyDefaults(cfg *Config) {
-	if !cfg.Compaction.JSONMinify && !cfg.Compaction.MinifyWasSet() {
-		cfg.Compaction.JSONMinify = true
+	if (cfg.Compaction.JSONMinify == nil || !*cfg.Compaction.JSONMinify) && !cfg.Compaction.MinifyWasSet() {
+		cfg.Compaction.JSONMinify = PtrTo(true)
 	}
 }
 
 func applyCollapseDefaults(cfg *Config) {
-	if !cfg.Compaction.CollapseBlankLines && !cfg.Compaction.CollapseWasSet() {
-		cfg.Compaction.CollapseBlankLines = true
+	if (cfg.Compaction.CollapseBlankLines == nil || !*cfg.Compaction.CollapseBlankLines) && !cfg.Compaction.CollapseWasSet() {
+		cfg.Compaction.CollapseBlankLines = PtrTo(true)
 	}
 }
 
 func applyTrimDefaults(cfg *Config) {
-	if !cfg.Compaction.TrimTrailingWhitespace && !cfg.Compaction.TrimWasSet() {
-		cfg.Compaction.TrimTrailingWhitespace = true
+	if (cfg.Compaction.TrimTrailingWhitespace == nil || !*cfg.Compaction.TrimTrailingWhitespace) && !cfg.Compaction.TrimWasSet() {
+		cfg.Compaction.TrimTrailingWhitespace = PtrTo(true)
 	}
 }
 
 func applyNormalizeDefaults(cfg *Config) {
-	if !cfg.Compaction.NormalizeLineEndings && !cfg.Compaction.NormWasSet() {
-		cfg.Compaction.NormalizeLineEndings = true
+	if (cfg.Compaction.NormalizeLineEndings == nil || !*cfg.Compaction.NormalizeLineEndings) && !cfg.Compaction.NormWasSet() {
+		cfg.Compaction.NormalizeLineEndings = PtrTo(true)
 	}
 }
 
 func applyPruneToolsDefaults(cfg *Config) {
-	if !cfg.Compaction.PruneStaleTools && !cfg.Compaction.PruneWasSet() {
-		cfg.Compaction.PruneStaleTools = false
+	if (cfg.Compaction.PruneStaleTools == nil || !*cfg.Compaction.PruneStaleTools) && !cfg.Compaction.PruneWasSet() {
+		cfg.Compaction.PruneStaleTools = PtrTo(false)
 	}
 	if cfg.Compaction.ToolProtectionWindow == 0 && !cfg.Compaction.PruneWasSet() {
 		cfg.Compaction.ToolProtectionWindow = 4
@@ -281,23 +285,23 @@ func applyPruneToolsDefaults(cfg *Config) {
 }
 
 func applyPruneThoughtsDefaults(cfg *Config) {
-	if !cfg.Compaction.PruneThoughts && !cfg.Compaction.PruneThoughtsWasSet() {
-		cfg.Compaction.PruneThoughts = false
+	if (cfg.Compaction.PruneThoughts == nil || !*cfg.Compaction.PruneThoughts) && !cfg.Compaction.PruneThoughtsWasSet() {
+		cfg.Compaction.PruneThoughts = PtrTo(false)
 	}
 }
 
 func applyCompactionEnabledDefaults(cfg *Config) {
-	hasAnyFeature := cfg.Compaction.JSONMinify || cfg.Compaction.CollapseBlankLines || cfg.Compaction.TrimTrailingWhitespace || cfg.Compaction.NormalizeLineEndings
-	if !cfg.Compaction.Enabled && !cfg.Compaction.EnabledWasSet() && hasAnyFeature {
-		cfg.Compaction.Enabled = true
+	hasAnyFeature := cfg.Compaction.JSONMinify != nil && *cfg.Compaction.JSONMinify || cfg.Compaction.CollapseBlankLines != nil && *cfg.Compaction.CollapseBlankLines || cfg.Compaction.TrimTrailingWhitespace != nil && *cfg.Compaction.TrimTrailingWhitespace || cfg.Compaction.NormalizeLineEndings != nil && *cfg.Compaction.NormalizeLineEndings
+	if (cfg.Compaction.Enabled == nil || !*cfg.Compaction.Enabled) && !cfg.Compaction.EnabledWasSet() && hasAnyFeature {
+		cfg.Compaction.Enabled = PtrTo(true)
 	}
 }
 
 func applyResponseCacheDefaults(cfg *Config) {
-	if !cfg.ResponseCache.Enabled && !cfg.ResponseCache.EnabledWasSet() && cfg.ResponseCache.MaxEntries > 0 {
-		cfg.ResponseCache.Enabled = true
+	if (cfg.ResponseCache.Enabled == nil || !*cfg.ResponseCache.Enabled) && !cfg.ResponseCache.EnabledWasSet() && cfg.ResponseCache.MaxEntries > 0 {
+		cfg.ResponseCache.Enabled = PtrTo(true)
 	}
-	if !cfg.ResponseCache.Enabled {
+	if cfg.ResponseCache.Enabled == nil || !*cfg.ResponseCache.Enabled {
 		return
 	}
 	if cfg.ResponseCache.MaxEntries <= 0 {
@@ -357,7 +361,7 @@ func applyAgentModelRegexDefaults(cfg *Config, name string, i int, m *AgentModel
 	if m.Model != "" && m.ModelRgx != "" {
 		fmt.Printf("[WARN] agent %q model %d: both model and model_rgx set; model_rgx takes precedence\n", name, i)
 	}
-	if !cfg.Discovery.Enabled {
+	if cfg.Discovery.Enabled == nil || !*cfg.Discovery.Enabled {
 		fmt.Printf("[WARN] agent %q model %d: model_rgx requires discovery to expand into concrete models; only static registry entries will match\n", name, i)
 	}
 	if err := m.CompileRegex(); err != nil {

@@ -113,6 +113,7 @@ func loadConfigDirectory(dir string) (*Config, error) {
 
 func mergeConfig(base, overlay *Config) {
 	mergeServerConfig(base, overlay)
+	mergeContextConfig(base, overlay)
 	mergeGovernanceConfig(base, overlay)
 	mergeBouncerConfig(base, overlay)
 	mergePrefixCacheConfig(base, overlay)
@@ -140,7 +141,6 @@ func mergeServerConfig(base, overlay *Config) {
 	}
 	if overlay.Server.SecureMemoryRequiredWasSet() {
 		base.Server.SecureMemoryRequired = overlay.Server.SecureMemoryRequired
-		base.Server.secureMemoryRequiredSet = true
 	}
 }
 
@@ -149,21 +149,32 @@ func mergeGovernanceConfig(base, overlay *Config) {
 	mergeGovernanceBools(base, overlay)
 }
 
+func mergeContextConfig(base, overlay *Config) {
+	oc := &overlay.Context
+	bc := &base.Context
+	if oc.TruncationStrategy != "" {
+		bc.TruncationStrategy = oc.TruncationStrategy
+	}
+	if oc.TruncationKeepFirstPct != 0 {
+		bc.TruncationKeepFirstPct = oc.TruncationKeepFirstPct
+	}
+	if oc.TruncationKeepLastPct != 0 {
+		bc.TruncationKeepLastPct = oc.TruncationKeepLastPct
+	}
+	if oc.TFIDFQuerySource != "" {
+		bc.TFIDFQuerySource = oc.TFIDFQuerySource
+	}
+	if oc.AutoContextSkipSet() {
+		bc.AutoContextSkip = oc.AutoContextSkip
+	}
+	if oc.AutoReorderByLatencySet() {
+		bc.AutoReorderByLatency = oc.AutoReorderByLatency
+	}
+}
+
 func mergeGovernanceScalars(base, overlay *Config) {
 	og := &overlay.Governance
 	bg := &base.Governance
-	if og.TruncationStrategy != "" {
-		bg.TruncationStrategy = og.TruncationStrategy
-	}
-	if og.TruncationKeepFirstPct != 0 {
-		bg.TruncationKeepFirstPct = og.TruncationKeepFirstPct
-	}
-	if og.TruncationKeepLastPct != 0 {
-		bg.TruncationKeepLastPct = og.TruncationKeepLastPct
-	}
-	if og.TFIDFQuerySource != "" {
-		bg.TFIDFQuerySource = og.TFIDFQuerySource
-	}
 	if len(og.BlockedExecutionPatterns) > 0 {
 		bg.BlockedExecutionPatterns = og.BlockedExecutionPatterns
 	}
@@ -198,22 +209,12 @@ func mergeGovernanceBools(base, overlay *Config) {
 	bg := &base.Governance
 	if og.EmptyStreamAsErrorSet() {
 		bg.EmptyStreamAsError = og.EmptyStreamAsError
-		bg.emptyStreamAsErrorSet = true
-	}
-	if og.AutoContextSkipSet() {
-		bg.AutoContextSkip = og.AutoContextSkip
-		bg.autoContextSkipSet = true
-	}
-	if og.AutoReorderByLatencySet() {
-		bg.AutoReorderByLatency = og.AutoReorderByLatency
-		bg.autoReorderByLatencySet = true
 	}
 }
 
 func mergeBouncerConfig(base, overlay *Config) {
 	if overlay.Bouncer.EnabledWasSet() {
 		base.Bouncer.Enabled = overlay.Bouncer.Enabled
-		base.Bouncer.enabledSet = true
 	}
 	if overlay.Bouncer.RedactionLabel != "" {
 		base.Bouncer.RedactionLabel = overlay.Bouncer.RedactionLabel
@@ -221,14 +222,14 @@ func mergeBouncerConfig(base, overlay *Config) {
 	if len(overlay.Bouncer.RedactPatterns) > 0 {
 		base.Bouncer.RedactPatterns = overlay.Bouncer.RedactPatterns
 	}
+	if overlay.Bouncer.FailOpenWasSet() {
+		base.Bouncer.FailOpen = overlay.Bouncer.FailOpen
+	}
 	if overlay.Bouncer.RedactOutput {
 		base.Bouncer.RedactOutput = true
 	}
 	if overlay.Bouncer.RedactOutputWindow != 0 {
 		base.Bouncer.RedactOutputWindow = overlay.Bouncer.RedactOutputWindow
-	}
-	if overlay.Bouncer.FailOpen {
-		base.Bouncer.FailOpen = true
 	}
 	if overlay.Bouncer.Engine.AgentName != "" || overlay.Bouncer.Engine.Provider != "" {
 		base.Bouncer.Engine = overlay.Bouncer.Engine
@@ -247,49 +248,39 @@ func mergeBouncerConfig(base, overlay *Config) {
 func mergePrefixCacheConfig(base, overlay *Config) {
 	if overlay.PrefixCache.PinWasSet() {
 		base.PrefixCache.PinSystemFirst = overlay.PrefixCache.PinSystemFirst
-		base.PrefixCache.pinSet = true
 	}
 	if overlay.PrefixCache.StableWasSet() {
 		base.PrefixCache.StableTools = overlay.PrefixCache.StableTools
-		base.PrefixCache.stableSet = true
 	}
 	if overlay.PrefixCache.SkipRedactionWasSet() {
 		base.PrefixCache.SkipRedactionOnSystem = overlay.PrefixCache.SkipRedactionOnSystem
-		base.PrefixCache.skipRedactionSet = true
 	}
 }
 
 func mergeCompactionConfig(base, overlay *Config) {
 	if overlay.Compaction.EnabledWasSet() {
 		base.Compaction.Enabled = overlay.Compaction.Enabled
-		base.Compaction.enabledSet = true
 	}
 	if overlay.Compaction.MinifyWasSet() {
 		base.Compaction.JSONMinify = overlay.Compaction.JSONMinify
-		base.Compaction.minifySet = true
 	}
 	if overlay.Compaction.CollapseWasSet() {
 		base.Compaction.CollapseBlankLines = overlay.Compaction.CollapseBlankLines
-		base.Compaction.collapseSet = true
 	}
 	if overlay.Compaction.TrimWasSet() {
 		base.Compaction.TrimTrailingWhitespace = overlay.Compaction.TrimTrailingWhitespace
-		base.Compaction.trimSet = true
 	}
 	if overlay.Compaction.NormWasSet() {
 		base.Compaction.NormalizeLineEndings = overlay.Compaction.NormalizeLineEndings
-		base.Compaction.normalizeSet = true
 	}
 	if overlay.Compaction.PruneWasSet() {
 		base.Compaction.PruneStaleTools = overlay.Compaction.PruneStaleTools
-		base.Compaction.pruneSet = true
 	}
 	if overlay.Compaction.ToolProtectionWindow != 0 {
 		base.Compaction.ToolProtectionWindow = overlay.Compaction.ToolProtectionWindow
 	}
 	if overlay.Compaction.PruneThoughtsWasSet() {
 		base.Compaction.PruneThoughts = overlay.Compaction.PruneThoughts
-		base.Compaction.pruneThoughtsSet = true
 	}
 }
 
@@ -326,7 +317,6 @@ func mergeWindowConfig(base, overlay *Config) {
 func mergeResponseCacheConfig(base, overlay *Config) {
 	if overlay.ResponseCache.EnabledWasSet() {
 		base.ResponseCache.Enabled = overlay.ResponseCache.Enabled
-		base.ResponseCache.enabledSet = true
 	}
 	if overlay.ResponseCache.MaxEntries != 0 {
 		base.ResponseCache.MaxEntries = overlay.ResponseCache.MaxEntries

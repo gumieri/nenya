@@ -83,9 +83,9 @@ func TestCollapseBlankLines(t *testing.T) {
 func TestCompactText(t *testing.T) {
 	t.Run("full pipeline normalize trim collapse", func(t *testing.T) {
 		cc := config.CompactionConfig{
-			NormalizeLineEndings:   true,
-			TrimTrailingWhitespace: true,
-			CollapseBlankLines:     true,
+			NormalizeLineEndings:   config.PtrTo(true),
+			TrimTrailingWhitespace: config.PtrTo(true),
+			CollapseBlankLines:     config.PtrTo(true),
 		}
 		in := "hello \r\n   \nworld   \n\n\n\n\nend  "
 		want := "hello\n\nworld\n\n\nend"
@@ -97,9 +97,9 @@ func TestCompactText(t *testing.T) {
 
 	t.Run("empty text", func(t *testing.T) {
 		cc := config.CompactionConfig{
-			NormalizeLineEndings:   true,
-			TrimTrailingWhitespace: true,
-			CollapseBlankLines:     true,
+			NormalizeLineEndings:   config.PtrTo(true),
+			TrimTrailingWhitespace: config.PtrTo(true),
+			CollapseBlankLines:     config.PtrTo(true),
 		}
 		got := CompactText("", cc)
 		if got != "" {
@@ -110,10 +110,10 @@ func TestCompactText(t *testing.T) {
 
 func TestApplyCompaction(t *testing.T) {
 	cc := config.CompactionConfig{
-		Enabled:                true,
-		NormalizeLineEndings:   true,
-		TrimTrailingWhitespace: true,
-		CollapseBlankLines:     true,
+		Enabled:                config.PtrTo(true),
+		NormalizeLineEndings:   config.PtrTo(true),
+		TrimTrailingWhitespace: config.PtrTo(true),
+		CollapseBlankLines:     config.PtrTo(true),
 	}
 
 	t.Run("messages with string content", func(t *testing.T) {
@@ -155,7 +155,7 @@ func TestApplyCompaction(t *testing.T) {
 	})
 
 	t.Run("disabled returns false", func(t *testing.T) {
-		disabled := config.CompactionConfig{Enabled: false}
+		disabled := config.CompactionConfig{Enabled: config.PtrTo(false)}
 		messages := []interface{}{
 			map[string]interface{}{"content": "hello   \n\n\n\n\nworld"},
 		}

@@ -186,8 +186,8 @@ func TestHandlePassthrough(t *testing.T) {
 					MaxBodyBytes: 10 * 1024 * 1024,
 				},
 				Governance: config.GovernanceConfig{
-					RatelimitMaxRPM: 10,
-					RatelimitMaxTPM: 10000,
+			RatelimitMaxRPM: config.PtrTo(10),
+			RatelimitMaxTPM: config.PtrTo(10000),
 				},
 			}
 
@@ -208,7 +208,7 @@ func TestHandlePassthrough(t *testing.T) {
 				Secrets:     &config.SecretsConfig{ClientToken: "client-token"},
 				Client:      http.DefaultClient,
 				Providers:   providers,
-				RateLimiter: infra.NewRateLimiter(cfg.Governance.RatelimitMaxRPM, cfg.Governance.RatelimitMaxTPM),
+				RateLimiter: infra.NewRateLimiter(derefInt(cfg.Governance.RatelimitMaxRPM), derefInt(cfg.Governance.RatelimitMaxTPM)),
 				Stats:       infra.NewUsageTracker(),
 				Logger:      infra.SetupLogger(false),
 			}

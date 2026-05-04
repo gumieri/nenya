@@ -134,7 +134,7 @@ func generateWindowSummary(ctx context.Context, deps WindowDeps, windowCfg confi
 		return TruncateHistory(historyText, windowCfg.SummaryMaxRunes), nil
 	case "tfidf":
 		query := extractQueryFromActiveMessages(active)
-		cfg := config.GovernanceConfig{
+		cfg := config.ContextConfig{
 			TruncationKeepFirstPct: windowCfg.KeepFirstPct,
 			TruncationKeepLastPct:  windowCfg.KeepLastPct,
 		}

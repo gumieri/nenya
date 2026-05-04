@@ -15,13 +15,13 @@ func FuzzCompactText(f *testing.F) {
 			return
 		}
 		result := CompactText(text, config.CompactionConfig{
-			JSONMinify:             true,
-			CollapseBlankLines:     true,
-			TrimTrailingWhitespace: true,
-			NormalizeLineEndings:   true,
-			PruneStaleTools:        false,
+			JSONMinify:             config.PtrTo(true),
+			CollapseBlankLines:     config.PtrTo(true),
+			TrimTrailingWhitespace: config.PtrTo(true),
+			NormalizeLineEndings:   config.PtrTo(true),
+			PruneStaleTools:        config.PtrTo(false),
 			ToolProtectionWindow:   60,
-			PruneThoughts:          false,
+			PruneThoughts:          config.PtrTo(false),
 		})
 		if len(result) > len(text)+100 {
 			t.Errorf("result longer than input: input=%d, output=%d", len(text), len(result))

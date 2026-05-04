@@ -15,7 +15,7 @@ func makePayload(msgs ...interface{}) map[string]interface{} {
 
 func TestPruneStaleToolCalls_Disabled(t *testing.T) {
 	cfg := config.CompactionConfig{
-		PruneStaleTools: false,
+		PruneStaleTools: config.PtrTo(false),
 	}
 
 	payload := makePayload(
@@ -29,7 +29,7 @@ func TestPruneStaleToolCalls_Disabled(t *testing.T) {
 
 func TestPruneStaleToolCalls_BelowProtectionWindow(t *testing.T) {
 	cfg := config.CompactionConfig{
-		PruneStaleTools:      true,
+		PruneStaleTools: config.PtrTo(true),
 		ToolProtectionWindow: 4,
 	}
 
@@ -51,7 +51,7 @@ func TestPruneStaleToolCalls_BelowProtectionWindow(t *testing.T) {
 
 func TestPruneStaleToolCalls_SimplePair(t *testing.T) {
 	cfg := config.CompactionConfig{
-		PruneStaleTools:      true,
+		PruneStaleTools: config.PtrTo(true),
 		ToolProtectionWindow: 1,
 	}
 
@@ -96,7 +96,7 @@ func TestPruneStaleToolCalls_SimplePair(t *testing.T) {
 
 func TestPruneStaleToolCalls_MultipleCallsSameTurn(t *testing.T) {
 	cfg := config.CompactionConfig{
-		PruneStaleTools:      true,
+		PruneStaleTools: config.PtrTo(true),
 		ToolProtectionWindow: 1,
 	}
 
@@ -143,7 +143,7 @@ func TestPruneStaleToolCalls_MultipleCallsSameTurn(t *testing.T) {
 
 func TestPruneStaleToolCalls_UnmatchedToolCall(t *testing.T) {
 	cfg := config.CompactionConfig{
-		PruneStaleTools:      true,
+		PruneStaleTools: config.PtrTo(true),
 		ToolProtectionWindow: 1,
 	}
 
@@ -170,7 +170,7 @@ func TestPruneStaleToolCalls_UnmatchedToolCall(t *testing.T) {
 
 func TestPruneStaleToolCalls_ProtectedPairNotPruned(t *testing.T) {
 	cfg := config.CompactionConfig{
-		PruneStaleTools:      true,
+		PruneStaleTools: config.PtrTo(true),
 		ToolProtectionWindow: 2,
 	}
 
@@ -198,7 +198,7 @@ func TestPruneStaleToolCalls_ProtectedPairNotPruned(t *testing.T) {
 
 func TestPruneStaleToolCalls_NoToolCallsField(t *testing.T) {
 	cfg := config.CompactionConfig{
-		PruneStaleTools:      true,
+		PruneStaleTools: config.PtrTo(true),
 		ToolProtectionWindow: 1,
 	}
 
@@ -218,7 +218,7 @@ func TestPruneStaleToolCalls_NoToolCallsField(t *testing.T) {
 
 func TestPruneStaleToolCalls_NonMapMessages(t *testing.T) {
 	cfg := config.CompactionConfig{
-		PruneStaleTools:      true,
+		PruneStaleTools: config.PtrTo(true),
 		ToolProtectionWindow: 1,
 	}
 
@@ -263,7 +263,7 @@ func TestPruneStaleToolCalls_NonMapMessages(t *testing.T) {
 
 func TestPruneStaleToolCalls_MultiplePrunablePairs(t *testing.T) {
 	cfg := config.CompactionConfig{
-		PruneStaleTools:      true,
+		PruneStaleTools: config.PtrTo(true),
 		ToolProtectionWindow: 2,
 	}
 
@@ -327,7 +327,7 @@ func TestPruneStaleToolCalls_MultiplePrunablePairs(t *testing.T) {
 
 func TestPruneStaleToolCalls_ToolCallWithoutName(t *testing.T) {
 	cfg := config.CompactionConfig{
-		PruneStaleTools:      true,
+		PruneStaleTools: config.PtrTo(true),
 		ToolProtectionWindow: 1,
 	}
 
@@ -355,7 +355,7 @@ func TestPruneStaleToolCalls_ToolCallWithoutName(t *testing.T) {
 
 func TestPruneStaleToolCalls_EmptyToolCalls(t *testing.T) {
 	cfg := config.CompactionConfig{
-		PruneStaleTools:      true,
+		PruneStaleTools: config.PtrTo(true),
 		ToolProtectionWindow: 1,
 	}
 
@@ -371,7 +371,7 @@ func TestPruneStaleToolCalls_EmptyToolCalls(t *testing.T) {
 
 func TestPruneStaleToolCalls_NilMessages(t *testing.T) {
 	cfg := config.CompactionConfig{
-		PruneStaleTools:      true,
+		PruneStaleTools: config.PtrTo(true),
 		ToolProtectionWindow: 4,
 	}
 
@@ -384,7 +384,7 @@ func TestPruneStaleToolCalls_NilMessages(t *testing.T) {
 
 func TestPruneStaleToolCalls_PairBrokenByUserMessage(t *testing.T) {
 	cfg := config.CompactionConfig{
-		PruneStaleTools:      true,
+		PruneStaleTools: config.PtrTo(true),
 		ToolProtectionWindow: 1,
 	}
 
@@ -412,7 +412,7 @@ func TestPruneStaleToolCalls_PairBrokenByUserMessage(t *testing.T) {
 
 func TestPruneStaleToolCalls_PartialPair(t *testing.T) {
 	cfg := config.CompactionConfig{
-		PruneStaleTools:      true,
+		PruneStaleTools: config.PtrTo(true),
 		ToolProtectionWindow: 1,
 	}
 
@@ -470,7 +470,7 @@ func TestExtractToolCallID(t *testing.T) {
 
 func TestPruneStaleToolCalls_PreserveReasoningContent(t *testing.T) {
 	cfg := config.CompactionConfig{
-		PruneStaleTools:      true,
+		PruneStaleTools: config.PtrTo(true),
 		ToolProtectionWindow: 4,
 	}
 

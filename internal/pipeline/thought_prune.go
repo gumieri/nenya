@@ -21,7 +21,7 @@ const (
 // routing.SanitizePayload per-target so that providers requiring it
 // (e.g. DeepSeek v4 thinking mode) receive it intact.
 func PruneThoughts(payload map[string]interface{}, cfg config.CompactionConfig) bool {
-	if !cfg.PruneThoughts {
+	if cfg.PruneThoughts == nil || !*cfg.PruneThoughts {
 		return false
 	}
 

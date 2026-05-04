@@ -7,7 +7,7 @@ import (
 )
 
 func ApplyCompaction(messages []interface{}, cfg config.CompactionConfig) bool {
-	if !cfg.Enabled {
+	if cfg.Enabled == nil || !*cfg.Enabled {
 		return false
 	}
 
@@ -54,15 +54,15 @@ func ApplyCompaction(messages []interface{}, cfg config.CompactionConfig) bool {
 func CompactText(text string, cc config.CompactionConfig) string {
 	result := text
 
-	if cc.NormalizeLineEndings {
+	if cc.NormalizeLineEndings != nil && *cc.NormalizeLineEndings {
 		result = NormalizeLineEndings(result)
 	}
 
-	if cc.TrimTrailingWhitespace {
+	if cc.TrimTrailingWhitespace != nil && *cc.TrimTrailingWhitespace {
 		result = TrimTrailingWhitespace(result)
 	}
 
-	if cc.CollapseBlankLines {
+	if cc.CollapseBlankLines != nil && *cc.CollapseBlankLines {
 		result = CollapseBlankLines(result)
 	}
 

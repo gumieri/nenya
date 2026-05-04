@@ -20,11 +20,11 @@ func newReloadTestGateway(t *testing.T, upstreamURL string) *gateway.NenyaGatewa
 			MaxBodyBytes: 10 << 20,
 		},
 		Governance: config.GovernanceConfig{
-			RatelimitMaxRPM: 60,
-			RatelimitMaxTPM: 100000,
+			RatelimitMaxRPM: config.PtrTo(60),
+			RatelimitMaxTPM: config.PtrTo(100000),
 		},
 		Bouncer: config.BouncerConfig{
-			Enabled: false,
+			Enabled: config.PtrTo(false),
 		},
 		Providers: map[string]config.ProviderConfig{
 			"test-provider": {

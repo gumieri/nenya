@@ -131,12 +131,12 @@ func (p *Proxy) resolveAgentRouting(req *chatRequest, gw *gateway.NenyaGateway, 
 	cooldown := getAgentCooldown(agent)
 	maxRetries := agent.MaxRetries
 
-	targets := gw.AgentState.BuildTargetList(gw.Logger, req.ModelName, agent, req.TokenCount, gw.Providers, gw.ModelCatalog, gw.Config.Governance.AutoContextSkip)
+	targets := gw.AgentState.BuildTargetList(gw.Logger, req.ModelName, agent, req.TokenCount, gw.Providers, gw.ModelCatalog, gw.Config.Context.AutoContextSkip != nil && *gw.Config.Context.AutoContextSkip)
 	if len(targets) == 0 {
 		return handleEmptyAgentTargets(req, gw, agent)
 	}
 
-	if gw.Config.Governance.AutoReorderByLatency {
+	if gw.Config.Context.AutoReorderByLatency != nil && *gw.Config.Context.AutoReorderByLatency {
 		targets = reorderTargetsByLatency(req, gw, targets)
 	}
 
@@ -413,7 +413,7 @@ func applyPatternRedaction(gw *gateway.NenyaGateway, messages []interface{}) {
 			continue
 		}
 		if applyRedactToContent(msgNode, func(s string) string {
-			return pipeline.RedactSecrets(s, gw.Config.Bouncer.Enabled, gw.SecretPatterns, gw.Config.Bouncer.RedactionLabel)
+			return pipeline.RedactSecrets(s, (gw.Config.Bouncer.Enabled != nil && *gw.Config.Bouncer.Enabled), gw.SecretPatterns, gw.Config.Bouncer.RedactionLabel)
 		}) {
 			patternRedacted = true
 		}
@@ -508,7 +508,7 @@ func (p *Proxy) interceptHardLimit(gw *gateway.NenyaGateway, ctx context.Context
 	gw.Metrics.RecordInterception("hard_limit")
 
 	hardLimitRunes := hardLimit * 3
-	querySource := gw.Config.Governance.TFIDFQuerySource
+	querySource := gw.Config.Context.TFIDFQuerySource
 
 	if querySource != "" {
 		return p.interceptWithTFIDF(gw, ctx, text, messages, profile, softLimit, hardLimitRunes, contentTokens, querySource)
@@ -533,9 +533,9 @@ func (p *Proxy) interceptWithTFIDF(gw *gateway.NenyaGateway, ctx context.Context
 
 	var truncated string
 	if profile.IsIDE {
-		truncated = pipeline.TruncateTFIDFCodeAware(text, hardLimitRunes, query, gw.Config.Governance)
+		truncated = pipeline.TruncateTFIDFCodeAware(text, hardLimitRunes, query, gw.Config.Context)
 	} else {
-		truncated = pipeline.TruncateTFIDF(text, hardLimitRunes, query, gw.Config.Governance)
+		truncated = pipeline.TruncateTFIDF(text, hardLimitRunes, query, gw.Config.Context)
 	}
 
 	if gw.CountTokens(truncated) < softLimit {
@@ -552,9 +552,9 @@ func (p *Proxy) interceptWithTFIDF(gw *gateway.NenyaGateway, ctx context.Context
 func (p *Proxy) interceptWithMiddleOut(gw *gateway.NenyaGateway, ctx context.Context, text string, profile pipeline.ClientProfile, hardLimitRunes int) (string, bool) {
 	var truncated string
 	if profile.IsIDE {
-		truncated = pipeline.TruncateMiddleOutCodeAware(text, hardLimitRunes, gw.Config.Governance)
+		truncated = pipeline.TruncateMiddleOutCodeAware(text, hardLimitRunes, gw.Config.Context)
 	} else {
-		truncated = pipeline.TruncateMiddleOut(text, hardLimitRunes, gw.Config.Governance)
+		truncated = pipeline.TruncateMiddleOut(text, hardLimitRunes, gw.Config.Context)
 	}
 	return p.summarizeOrForward(gw, ctx, truncated, profile.IsIDE, "Truncated")
 }
@@ -596,7 +596,7 @@ func (p *Proxy) summarizeWithOllama(gw *gateway.NenyaGateway, ctx context.Contex
 func (p *Proxy) summarizeOrForward(gw *gateway.NenyaGateway, ctx context.Context, truncated string, isIDE bool, label string) (string, bool) {
 	summarized, err := p.summarizeWithOllama(gw, ctx, truncated, isIDE)
 	if err != nil {
-		if gw.Config.Bouncer.FailOpen {
+		if gw.Config.Bouncer.FailOpen != nil && *gw.Config.Bouncer.FailOpen {
 			gw.Logger.Warn("engine summarization failed, skip_on_engine_failure=true, forwarding original payload", "err", err)
 			return "", false
 		}
@@ -1186,7 +1186,7 @@ func (p *Proxy) extractAutoSearchQuery(messages []interface{}) (string, map[stri
 }
 
 func (p *Proxy) redactQuery(gw *gateway.NenyaGateway, query string) string {
-	query = pipeline.RedactSecrets(query, gw.Config.Bouncer.Enabled, gw.SecretPatterns, gw.Config.Bouncer.RedactionLabel)
+	query = pipeline.RedactSecrets(query, (gw.Config.Bouncer.Enabled != nil && *gw.Config.Bouncer.Enabled), gw.SecretPatterns, gw.Config.Bouncer.RedactionLabel)
 	if gw.EntropyFilter != nil {
 		query = gw.EntropyFilter.RedactHighEntropy(query, gw.Config.Bouncer.RedactionLabel)
 	}
@@ -1259,7 +1259,7 @@ func (p *Proxy) mcpClientCallTool(gw *gateway.NenyaGateway, ctx context.Context,
 }
 
 func (p *Proxy) redactSearchResult(gw *gateway.NenyaGateway, resultText string) string {
-	resultText = pipeline.RedactSecrets(resultText, gw.Config.Bouncer.Enabled, gw.SecretPatterns, gw.Config.Bouncer.RedactionLabel)
+	resultText = pipeline.RedactSecrets(resultText, (gw.Config.Bouncer.Enabled != nil && *gw.Config.Bouncer.Enabled), gw.SecretPatterns, gw.Config.Bouncer.RedactionLabel)
 	if gw.EntropyFilter != nil {
 		resultText = gw.EntropyFilter.RedactHighEntropy(resultText, gw.Config.Bouncer.RedactionLabel)
 	}
@@ -1523,7 +1523,7 @@ func prepareOriginalPayload(gw *gateway.NenyaGateway, payload map[string]interfa
 		return nil, fmt.Errorf("marshal payload: %w", err)
 	}
 
-	if gw.Config.Compaction.Enabled && gw.Config.Compaction.JSONMinify {
+	if (gw.Config.Compaction.Enabled != nil && *gw.Config.Compaction.Enabled) && gw.Config.Compaction.JSONMinify != nil && *gw.Config.Compaction.JSONMinify {
 		minified := bytes.NewBuffer(make([]byte, 0, len(originalPayload)))
 		if err := json.Compact(minified, originalPayload); err == nil {
 			originalPayload = minified.Bytes()

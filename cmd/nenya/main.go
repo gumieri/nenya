@@ -22,7 +22,17 @@ import (
 )
 
 func main() {
-	configDir, configFile, verbose, validateOnly := parseFlags()
+	configDir, configFile, verbose, validateOnly, printSchema := parseFlags()
+
+	if printSchema {
+		schema, err := config.PrintSchema()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "error generating schema: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Println(schema)
+		return
+	}
 
 	logger := infra.SetupLogger(verbose)
 	logger.Info("starting nenya", "version", version.Version, "commit", version.Commit, "build_time", version.BuildTime)
@@ -47,11 +57,12 @@ func main() {
 	run(logger, cfg, secrets, configDir, configFile)
 }
 
-func parseFlags() (configDir, configFile string, verbose, validateOnly bool) {
+func parseFlags() (configDir, configFile string, verbose, validateOnly, printSchema bool) {
 	flag.StringVar(&configDir, "config-dir", "", "Configuration directory (contains config.d/ or config.json)")
 	flag.StringVar(&configFile, "config", "", "Single configuration file")
 	flag.BoolVar(&verbose, "verbose", false, "Enable debug-level request/response logging")
 	flag.BoolVar(&validateOnly, "validate", false, "Validate configuration and exit")
+	flag.BoolVar(&printSchema, "print-config-schema", false, "Print JSON Schema of config and exit")
 	flag.Parse()
 
 	if envConfigDir := os.Getenv("NENYA_CONFIG_DIR"); envConfigDir != "" {

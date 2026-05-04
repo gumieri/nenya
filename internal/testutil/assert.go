@@ -73,7 +73,7 @@ func AssertConfigHasMCPServer(t *testing.T, cfg *config.Config, serverName strin
 func AssertSecurityFilterEnabled(t *testing.T, cfg *config.Config) {
 	t.Helper()
 
-	if !cfg.Bouncer.Enabled {
+	if cfg.Bouncer.Enabled == nil || !*cfg.Bouncer.Enabled {
 		t.Errorf("expected security filter to be enabled")
 	}
 }
@@ -82,7 +82,7 @@ func AssertSecurityFilterEnabled(t *testing.T, cfg *config.Config) {
 func AssertSecurityFilterDisabled(t *testing.T, cfg *config.Config) {
 	t.Helper()
 
-	if cfg.Bouncer.Enabled {
+	if cfg.Bouncer.Enabled != nil && *cfg.Bouncer.Enabled {
 		t.Errorf("expected security filter to be disabled")
 	}
 }
@@ -91,7 +91,7 @@ func AssertSecurityFilterDisabled(t *testing.T, cfg *config.Config) {
 func AssertCompactionEnabled(t *testing.T, cfg *config.Config) {
 	t.Helper()
 
-	if !cfg.Compaction.Enabled {
+	if cfg.Compaction.Enabled == nil || !*cfg.Compaction.Enabled {
 		t.Errorf("expected compaction to be enabled")
 	}
 }
@@ -118,7 +118,7 @@ func AssertPrefixCacheEnabled(t *testing.T, cfg *config.Config) {
 func AssertResponseCacheEnabled(t *testing.T, cfg *config.Config) {
 	t.Helper()
 
-	if !cfg.ResponseCache.Enabled {
+	if cfg.ResponseCache.Enabled == nil || !*cfg.ResponseCache.Enabled {
 		t.Errorf("expected response cache to be enabled")
 	}
 }
@@ -127,12 +127,12 @@ func AssertResponseCacheEnabled(t *testing.T, cfg *config.Config) {
 func AssertRatelimitSet(t *testing.T, cfg *config.Config, rpm, tpm int) {
 	t.Helper()
 
-	if cfg.Governance.RatelimitMaxRPM != rpm {
-		t.Errorf("expected RPM limit %d, got %d", rpm, cfg.Governance.RatelimitMaxRPM)
+	if cfg.Governance.RatelimitMaxRPM == nil || *cfg.Governance.RatelimitMaxRPM != rpm {
+		t.Errorf("expected RPM limit %d, got %v", rpm, cfg.Governance.RatelimitMaxRPM)
 	}
 
-	if cfg.Governance.RatelimitMaxTPM != tpm {
-		t.Errorf("expected TPM limit %d, got %d", tpm, cfg.Governance.RatelimitMaxTPM)
+	if cfg.Governance.RatelimitMaxTPM == nil || *cfg.Governance.RatelimitMaxTPM != tpm {
+		t.Errorf("expected TPM limit %d, got %v", tpm, cfg.Governance.RatelimitMaxTPM)
 	}
 }
 

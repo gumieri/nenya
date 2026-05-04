@@ -265,7 +265,7 @@ func (p *Proxy) streamResponse(gw *gateway.NenyaGateway, w http.ResponseWriter, 
 	// When EmptyStreamAsError is enabled, probe the upstream body before writing
 	// headers so we can detect empty streams and fall back to the next target
 	// rather than sending an error SSE chunk to the client.
-	if gw.Config.Governance.EmptyStreamAsError {
+	if gw.Config.Governance.EmptyStreamAsError != nil && *gw.Config.Governance.EmptyStreamAsError {
 		firstBuf := make([]byte, 4096)
 		n, readErr := action.resp.Body.Read(firstBuf)
 

@@ -23,10 +23,10 @@ func TestHandleChatCompletions_EmptyUpstreamStream(t *testing.T) {
 
 	cfg := testutil.MinimalConfig()
 	cfg.Server.MaxBodyBytes = 10 << 20
-	cfg.Governance.RatelimitMaxRPM = 60
-	cfg.Governance.RatelimitMaxTPM = 100000
-	cfg.Governance.EmptyStreamAsError = true
-	cfg.Bouncer.Enabled = false
+	cfg.Governance.RatelimitMaxRPM = config.PtrTo(60)
+	cfg.Governance.RatelimitMaxTPM = config.PtrTo(100000)
+	cfg.Governance.EmptyStreamAsError = config.PtrTo(true)
+	cfg.Bouncer.Enabled = config.PtrTo(false)
 	cfg.Providers = map[string]config.ProviderConfig{
 		"test-provider": {
 			URL:       upstream.URL + "/v1/chat/completions",
@@ -70,10 +70,10 @@ func TestHandleChatCompletions_EmptyUpstreamStream_FlagDisabled(t *testing.T) {
 
 	cfg := testutil.MinimalConfig()
 	cfg.Server.MaxBodyBytes = 10 << 20
-	cfg.Governance.RatelimitMaxRPM = 60
-	cfg.Governance.RatelimitMaxTPM = 100000
-	cfg.Governance.EmptyStreamAsError = false
-	cfg.Bouncer.Enabled = false
+	cfg.Governance.RatelimitMaxRPM = config.PtrTo(60)
+	cfg.Governance.RatelimitMaxTPM = config.PtrTo(100000)
+	cfg.Governance.EmptyStreamAsError = config.PtrTo(false)
+	cfg.Bouncer.Enabled = config.PtrTo(false)
 	cfg.Providers = map[string]config.ProviderConfig{
 		"test-provider": {
 			URL:       upstream.URL + "/v1/chat/completions",
@@ -119,10 +119,10 @@ func TestHandleChatCompletions_EmptyUpstreamStream_RecordsMetric(t *testing.T) {
 
 	cfg := testutil.MinimalConfig()
 	cfg.Server.MaxBodyBytes = 10 << 20
-	cfg.Governance.RatelimitMaxRPM = 60
-	cfg.Governance.RatelimitMaxTPM = 100000
-	cfg.Governance.EmptyStreamAsError = true
-	cfg.Bouncer.Enabled = false
+	cfg.Governance.RatelimitMaxRPM = config.PtrTo(60)
+	cfg.Governance.RatelimitMaxTPM = config.PtrTo(100000)
+	cfg.Governance.EmptyStreamAsError = config.PtrTo(true)
+	cfg.Bouncer.Enabled = config.PtrTo(false)
 	cfg.Providers = map[string]config.ProviderConfig{
 		"test-provider": {
 			URL:       upstream.URL + "/v1/chat/completions",
@@ -182,10 +182,10 @@ func TestHandleChatCompletions_EmptyUpstreamStream_FallbackToNextTarget(t *testi
 
 	cfg := testutil.MinimalConfig()
 	cfg.Server.MaxBodyBytes = 10 << 20
-	cfg.Governance.RatelimitMaxRPM = 60
-	cfg.Governance.RatelimitMaxTPM = 100000
-	cfg.Governance.EmptyStreamAsError = true
-	cfg.Bouncer.Enabled = false
+	cfg.Governance.RatelimitMaxRPM = config.PtrTo(60)
+	cfg.Governance.RatelimitMaxTPM = config.PtrTo(100000)
+	cfg.Governance.EmptyStreamAsError = config.PtrTo(true)
+	cfg.Bouncer.Enabled = config.PtrTo(false)
 	cfg.Providers = map[string]config.ProviderConfig{
 		"test-provider": {
 			URL:       upstream.URL + "/v1/chat/completions",
@@ -225,3 +225,4 @@ func TestHandleChatCompletions_EmptyUpstreamStream_FallbackToNextTarget(t *testi
 		t.Errorf("expected 2 upstream calls (empty + fallback), got %d", callCount)
 	}
 }
+
