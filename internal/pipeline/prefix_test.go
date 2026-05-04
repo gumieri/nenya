@@ -234,19 +234,19 @@ func TestShouldSkipRedaction(t *testing.T) {
 		{
 			name: "enabled skip on system system role",
 			msg:  map[string]interface{}{"role": "system", "content": "instructions"},
-			cfg:  config.PrefixCacheConfig{Enabled: true, SkipRedactionOnSystem: true},
+			cfg:  config.PrefixCacheConfig{Enabled: true, SkipRedactionOnSystem: config.PtrTo(true)},
 			want: true,
 		},
 		{
 			name: "enabled skip on system user role",
 			msg:  map[string]interface{}{"role": "user", "content": "hello"},
-			cfg:  config.PrefixCacheConfig{Enabled: true, SkipRedactionOnSystem: true},
+			cfg:  config.PrefixCacheConfig{Enabled: true, SkipRedactionOnSystem: config.PtrTo(true)},
 			want: false,
 		},
 		{
 			name: "disabled",
 			msg:  map[string]interface{}{"role": "system", "content": "instructions"},
-			cfg:  config.PrefixCacheConfig{Enabled: false, SkipRedactionOnSystem: true},
+			cfg:  config.PrefixCacheConfig{Enabled: false, SkipRedactionOnSystem: config.PtrTo(true)},
 			want: false,
 		},
 	}
@@ -279,7 +279,7 @@ func TestApplyPrefixCacheOptimizations(t *testing.T) {
 			msg("user", "u1"),
 			msg("system", "s1"),
 		}
-		cfg := config.PrefixCacheConfig{Enabled: false, PinSystemFirst: true, StableTools: true}
+		cfg := config.PrefixCacheConfig{Enabled: false, PinSystemFirst: config.PtrTo(true), StableTools: config.PtrTo(true)}
 
 		ApplyPrefixCacheOptimizations(payload, messages, cfg)
 
@@ -309,7 +309,7 @@ func TestApplyPrefixCacheOptimizations(t *testing.T) {
 			msg("user", "u1"),
 			msg("system", "s1"),
 		}
-		cfg := config.PrefixCacheConfig{Enabled: true, PinSystemFirst: true, StableTools: true}
+		cfg := config.PrefixCacheConfig{Enabled: true, PinSystemFirst: config.PtrTo(true), StableTools: config.PtrTo(true)}
 
 		ApplyPrefixCacheOptimizations(payload, messages, cfg)
 

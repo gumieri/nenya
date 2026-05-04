@@ -48,7 +48,7 @@ func validateOllamaEngine(ctx context.Context, cfg *Config, providers map[string
 	if !pingProviders {
 		return nil
 	}
-	if !cfg.Bouncer.Enabled {
+	if cfg.Bouncer.Enabled == nil || !*cfg.Bouncer.Enabled {
 		return nil
 	}
 	if cfg.Bouncer.Engine.Provider != "ollama" {
@@ -71,7 +71,7 @@ func validateOllamaEngine(ctx context.Context, cfg *Config, providers map[string
 func collectValidationErrors(ctx context.Context, cfg *Config, providers map[string]*Provider, pingProviders bool, logger *slog.Logger) []string {
 	errors := []string{}
 
-	errors = append(errors, validateTFIDFQuerySource(cfg.Governance.TFIDFQuerySource)...)
+	errors = append(errors, validateTFIDFQuerySource(cfg.Context.TFIDFQuerySource)...)
 	errors = append(errors, validatePatternsToList("bouncer.patterns", cfg.Bouncer.RedactPatterns, logger)...)
 	errors = append(errors, validatePatternsToList("governance.blocked_execution_patterns", cfg.Governance.BlockedExecutionPatterns, logger)...)
 	errors = append(errors, validateModelRegistryErrors(logger)...)

@@ -4,40 +4,47 @@ import (
 	"nenya/config"
 )
 
+func ptrTo[T any](v T) *T { return &v }
+
 // MinimalConfig returns a minimal config with only required fields set.
 // Useful for tests that don't need specific features enabled.
 func MinimalConfig() *config.Config {
+	rpm := 1000
+	tpm := 100000
+	falseVal := false
 	return &config.Config{
 		Server: config.ServerConfig{
 			ListenAddr:   ":0",
 			MaxBodyBytes: 10 * 1024 * 1024,
 			UserAgent:    "Nenya-Test/1.0",
 		},
-		Governance: config.GovernanceConfig{
-			RatelimitMaxRPM:        1000,
-			RatelimitMaxTPM:        100000,
+		Context: config.ContextConfig{
 			TruncationStrategy:     "keep_first_last",
 			TruncationKeepFirstPct: 0.2,
 			TruncationKeepLastPct:  0.8,
-			RetryableStatusCodes:   []int{429, 500, 502, 503, 504},
+		},
+		Governance: config.GovernanceConfig{
+			RatelimitMaxRPM:      &rpm,
+			RatelimitMaxTPM:      &tpm,
+			RetryableStatusCodes: []int{429, 500, 502, 503, 504},
 		},
 		Bouncer: config.BouncerConfig{
-			Enabled:        false,
+			Enabled:        &falseVal,
 			RedactionLabel: "[REDACTED]",
 			RedactOutput:   false,
-			FailOpen:       true,
+			FailOpen:       ptrTo(true),
 		},
 		PrefixCache: config.PrefixCacheConfig{
 			Enabled: false,
 		},
 		Compaction: config.CompactionConfig{
-			Enabled: false,
+			Enabled: &falseVal,
 		},
 		Window: config.WindowConfig{
 			Enabled: false,
 		},
 		ResponseCache: config.ResponseCacheConfig{
-			Enabled: false,
+			Enabled: &falseVal,
 		},
 		MCPServers: map[string]config.MCPServerConfig{},
 		Agents:     map[string]config.AgentConfig{},
@@ -49,7 +56,7 @@ func MinimalConfig() *config.Config {
 // Useful for testing PII redaction and content filtering.
 func NewBouncerConfig() *config.Config {
 	cfg := MinimalConfig()
-	cfg.Bouncer.Enabled = true
+	cfg.Bouncer.Enabled = ptrTo(true)
 	cfg.Bouncer.RedactPatterns = []string{
 		`\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b`,
 		`\b\d{3}-\d{2}-\d{4}\b`,
@@ -63,14 +70,14 @@ func NewBouncerConfig() *config.Config {
 // Useful for testing message compaction and tool pruning.
 func NewCompactionConfig() *config.Config {
 	cfg := MinimalConfig()
-	cfg.Compaction.Enabled = true
-	cfg.Compaction.JSONMinify = true
-	cfg.Compaction.CollapseBlankLines = true
-	cfg.Compaction.TrimTrailingWhitespace = true
-	cfg.Compaction.NormalizeLineEndings = true
-	cfg.Compaction.PruneStaleTools = true
+	cfg.Compaction.Enabled = ptrTo(true)
+	cfg.Compaction.JSONMinify = ptrTo(true)
+	cfg.Compaction.CollapseBlankLines = ptrTo(true)
+	cfg.Compaction.TrimTrailingWhitespace = ptrTo(true)
+	cfg.Compaction.NormalizeLineEndings = ptrTo(true)
+	cfg.Compaction.PruneStaleTools = ptrTo(true)
 	cfg.Compaction.ToolProtectionWindow = 60
-	cfg.Compaction.PruneThoughts = true
+	cfg.Compaction.PruneThoughts = ptrTo(true)
 	return cfg
 }
 
@@ -96,9 +103,9 @@ func NewWindowConfig() *config.Config {
 func NewPrefixCacheConfig() *config.Config {
 	cfg := MinimalConfig()
 	cfg.PrefixCache.Enabled = true
-	cfg.PrefixCache.PinSystemFirst = true
-	cfg.PrefixCache.StableTools = true
-	cfg.PrefixCache.SkipRedactionOnSystem = true
+	cfg.PrefixCache.PinSystemFirst = ptrTo(true)
+	cfg.PrefixCache.StableTools = ptrTo(true)
+	cfg.PrefixCache.SkipRedactionOnSystem = ptrTo(true)
 	return cfg
 }
 
@@ -106,7 +113,7 @@ func NewPrefixCacheConfig() *config.Config {
 // Useful for testing response caching.
 func NewResponseCacheConfig() *config.Config {
 	cfg := MinimalConfig()
-	cfg.ResponseCache.Enabled = true
+	cfg.ResponseCache.Enabled = ptrTo(true)
 	return cfg
 }
 
@@ -172,7 +179,7 @@ func FullConfig() *config.Config {
 	cfg := MinimalConfig()
 
 	// Apply security filter settings
-	cfg.Bouncer.Enabled = true
+	cfg.Bouncer.Enabled = ptrTo(true)
 	cfg.Bouncer.RedactPatterns = []string{
 		`\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b`,
 	}
@@ -184,14 +191,14 @@ func FullConfig() *config.Config {
 	}
 
 	// Apply compaction settings
-	cfg.Compaction.Enabled = true
-	cfg.Compaction.JSONMinify = true
-	cfg.Compaction.CollapseBlankLines = true
-	cfg.Compaction.TrimTrailingWhitespace = true
-	cfg.Compaction.NormalizeLineEndings = true
-	cfg.Compaction.PruneStaleTools = true
+	cfg.Compaction.Enabled = ptrTo(true)
+	cfg.Compaction.JSONMinify = ptrTo(true)
+	cfg.Compaction.CollapseBlankLines = ptrTo(true)
+	cfg.Compaction.TrimTrailingWhitespace = ptrTo(true)
+	cfg.Compaction.NormalizeLineEndings = ptrTo(true)
+	cfg.Compaction.PruneStaleTools = ptrTo(true)
 	cfg.Compaction.ToolProtectionWindow = 60
-	cfg.Compaction.PruneThoughts = true
+	cfg.Compaction.PruneThoughts = ptrTo(true)
 
 	// Apply window settings
 	cfg.Window.Enabled = true
@@ -207,12 +214,12 @@ func FullConfig() *config.Config {
 
 	// Apply prefix cache settings
 	cfg.PrefixCache.Enabled = true
-	cfg.PrefixCache.PinSystemFirst = true
-	cfg.PrefixCache.StableTools = true
-	cfg.PrefixCache.SkipRedactionOnSystem = true
+	cfg.PrefixCache.PinSystemFirst = ptrTo(true)
+	cfg.PrefixCache.StableTools = ptrTo(true)
+	cfg.PrefixCache.SkipRedactionOnSystem = ptrTo(true)
 
 	// Apply response cache settings
-	cfg.ResponseCache.Enabled = true
+	cfg.ResponseCache.Enabled = ptrTo(true)
 
 	// Apply MCP server settings
 	cfg.MCPServers = map[string]config.MCPServerConfig{

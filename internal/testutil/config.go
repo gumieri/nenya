@@ -47,17 +47,17 @@ func WithGovernance(g config.GovernanceConfig) ConfigOption {
 // WithRatelimit sets the rate limits.
 func WithRatelimit(rpm, tpm int) ConfigOption {
 	return func(c *config.Config) {
-		c.Governance.RatelimitMaxRPM = rpm
-		c.Governance.RatelimitMaxTPM = tpm
+		c.Governance.RatelimitMaxRPM = ptrTo(rpm)
+		c.Governance.RatelimitMaxTPM = ptrTo(tpm)
 	}
 }
 
 // WithTruncationStrategy sets the truncation strategy and percentages.
 func WithTruncationStrategy(strategy string, first, last float64) ConfigOption {
 	return func(c *config.Config) {
-		c.Governance.TruncationStrategy = strategy
-		c.Governance.TruncationKeepFirstPct = first
-		c.Governance.TruncationKeepLastPct = last
+		c.Context.TruncationStrategy = strategy
+		c.Context.TruncationKeepFirstPct = first
+		c.Context.TruncationKeepLastPct = last
 	}
 }
 
@@ -71,7 +71,7 @@ func WithSecurityFilter(s config.BouncerConfig) ConfigOption {
 // WithSecurityFilterEnabled enables the security filter with basic settings.
 func WithSecurityFilterEnabled(patterns []string) ConfigOption {
 	return func(c *config.Config) {
-		c.Bouncer.Enabled = true
+		c.Bouncer.Enabled = ptrTo(true)
 		c.Bouncer.RedactPatterns = patterns
 	}
 }

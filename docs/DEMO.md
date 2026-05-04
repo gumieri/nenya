@@ -109,7 +109,7 @@ EOF
 ```
 
 ### Tier 3 (TF-IDF Truncation) – Relevance-scored pruning
-When `tfidf_query_source` is set in governance, TF-IDF scores content blocks by relevance to prior messages:
+When `tfidf_query_source` is set in context, TF-IDF scores content blocks by relevance to prior messages:
 ```bash
 curl -X POST http://localhost:8080/v1/chat/completions \
   -H "Authorization: Bearer test-client-token" \

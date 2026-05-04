@@ -9,6 +9,7 @@ order). Config files support `//` line comments and `/* */` block comments.
 | Section | Required | Description |
 |---------|----------|-------------|
 | `server` | no | HTTP server settings (listen addr, body limits) |
+| `context` | no | Context management (truncation, TF-IDF, routing behavior) |
 | `governance` | no | Rate limits, retries, routing policy |
 | `bouncer` | no | Content interception, PII redaction, summarization engine |
 | `window` | no | Context window compaction settings |
@@ -42,6 +43,30 @@ order). Config files support `//` line comments and `/* */` block comments.
 | `log_level` | string | `"info"` | Log level: `debug`, `info`, `warn`, `error` |
 | `secure_memory_required` | bool | `true` | Require secure memory for secrets (mlock) |
 
+## `context`
+
+```json
+{
+  "context": {
+    "truncation_strategy": "middle-out",
+    "truncation_keep_first_pct": 15,
+    "truncation_keep_last_pct": 25,
+    "tfidf_query_source": "",
+    "auto_context_skip": false,
+    "auto_reorder_by_latency": false
+  }
+}
+```
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `truncation_strategy` | string | `"middle-out"` | Context truncation: `"middle-out"`, `"keep_first_last"` |
+| `truncation_keep_first_pct` | float | `15` | First portion % to preserve during truncation |
+| `truncation_keep_last_pct` | float | `25` | Last portion % to preserve during truncation |
+| `tfidf_query_source` | string | `""` | TF-IDF query source: `""`, `"prior_messages"`, `"self"` |
+| `auto_context_skip` | bool | `false` | Auto-skip context-limit models in agent routing |
+| `auto_reorder_by_latency` | bool | `false` | Reorder agent targets by median latency with jitter |
+
 ## `governance`
 
 ```json
@@ -50,12 +75,8 @@ order). Config files support `//` line comments and `/* */` block comments.
     "ratelimit_max_rpm": 15,
     "ratelimit_max_tpm": 250000,
     "max_retry_attempts": 3,
-    "truncation_strategy": "middle-out",
-    "truncation_keep_first_pct": 15,
-    "truncation_keep_last_pct": 25,
     "empty_stream_as_error": true,
     "blocked_execution_patterns": ["..."],
-    "tfidf_query_source": "",
     "routing_strategy": "",
     "routing_latency_weight": 0,
     "routing_cost_weight": 0,
@@ -69,12 +90,8 @@ order). Config files support `//` line comments and `/* */` block comments.
 | `ratelimit_max_rpm` | int | `15` | Max requests per minute (0 = unlimited) |
 | `ratelimit_max_tpm` | int | `250000` | Max tokens per minute (0 = unlimited) |
 | `max_retry_attempts` | int | `3` | Max retries for transient upstream failures |
-| `truncation_strategy` | string | `"middle-out"` | Context truncation: `"middle-out"`, `"keep_first_last"` |
-| `truncation_keep_first_pct` | float | `15` | First portion % to preserve during truncation |
-| `truncation_keep_last_pct` | float | `25` | Last portion % to preserve during truncation |
 | `empty_stream_as_error` | bool | `true` | Treat empty SSE as 500 error |
 | `blocked_execution_patterns` | []string | built-in | Regexes for commands to block (kill switch) |
-| `tfidf_query_source` | string | `""` | TF-IDF query source: `""`, `"prior_messages"`, `"self"` |
 | `routing_strategy` | string | `""` | `""` (default), `"latency"`, `"balanced"` |
 | `routing_latency_weight` | float | `0` | Weight for latency in balanced routing (0-1) |
 | `routing_cost_weight` | float | `0` | Weight for cost in balanced routing (0-1) |
@@ -480,3 +497,14 @@ located in `$CREDENTIALS_DIRECTORY/secrets` or `$NENYA_SECRETS_DIR/secrets`.
 The engine no longer defaults to `ollama`/`qwen2.5-coder:7b`. You must explicitly
 set `bouncer.engine.provider` and `bouncer.engine.model`, or reference an agent
 that has models configured.
+
+## Migrating from `governance` (v1.0 context consolidation)
+
+| Old Key | New Key |
+|---------|---------|
+| `governance.truncation_strategy` | `context.truncation_strategy` |
+| `governance.truncation_keep_first_pct` | `context.truncation_keep_first_pct` |
+| `governance.truncation_keep_last_pct` | `context.truncation_keep_last_pct` |
+| `governance.tfidf_query_source` | `context.tfidf_query_source` |
+| `governance.auto_context_skip` | `context.auto_context_skip` |
+| `governance.auto_reorder_by_latency` | `context.auto_reorder_by_latency` |

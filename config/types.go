@@ -150,6 +150,7 @@ type Provider struct {
 
 type Config struct {
 	Server        ServerConfig               `json:"server"`
+	Context       ContextConfig              `json:"context"`
 	Governance    GovernanceConfig           `json:"governance"`
 	Bouncer       BouncerConfig              `json:"bouncer,omitempty"`
 	PrefixCache   PrefixCacheConfig          `json:"prefix_cache,omitempty"`
@@ -163,63 +164,43 @@ type Config struct {
 }
 
 type ServerConfig struct {
-	ListenAddr              string `json:"listen_addr"`
-	MaxBodyBytes            int64  `json:"max_body_bytes"`
-	UserAgent               string `json:"user_agent"`
-	LogLevel                string `json:"log_level"`
-	SecureMemoryRequired    bool   `json:"secure_memory_required"`
-	secureMemoryRequiredSet bool
+	ListenAddr           string `json:"listen_addr"`
+	MaxBodyBytes         int64  `json:"max_body_bytes"`
+	UserAgent            string `json:"user_agent"`
+	LogLevel             string `json:"log_level"`
+	SecureMemoryRequired *bool  `json:"secure_memory_required"`
 }
 
-func (s *ServerConfig) SecureMemoryRequiredWasSet() bool { return s.secureMemoryRequiredSet }
+func (s *ServerConfig) SecureMemoryRequiredWasSet() bool { return s.SecureMemoryRequired != nil }
 
-func (s *ServerConfig) UnmarshalJSON(data []byte) error {
-	type alias ServerConfig
-	aux := struct {
-		SecureMemoryRequired *bool `json:"secure_memory_required"`
-		*alias
-	}{
-		alias: (*alias)(s),
-	}
-	if err := json.Unmarshal(data, &aux); err != nil {
-		return err
-	}
-	if aux.SecureMemoryRequired != nil {
-		s.SecureMemoryRequired = *aux.SecureMemoryRequired
-		s.secureMemoryRequiredSet = true
-	}
-	return nil
+type ContextConfig struct {
+	TruncationStrategy     string  `json:"truncation_strategy"`
+	TruncationKeepFirstPct float64 `json:"truncation_keep_first_pct"`
+	TruncationKeepLastPct  float64 `json:"truncation_keep_last_pct"`
+	TFIDFQuerySource       string  `json:"tfidf_query_source"`
+	AutoContextSkip        *bool   `json:"auto_context_skip,omitempty"`
+	AutoReorderByLatency   *bool   `json:"auto_reorder_by_latency,omitempty"`
 }
+
+func (c *ContextConfig) AutoContextSkipSet() bool      { return c.AutoContextSkip != nil }
+func (c *ContextConfig) AutoReorderByLatencySet() bool { return c.AutoReorderByLatency != nil }
 
 type GovernanceConfig struct {
 	BlockedExecutionPatterns []string `json:"blocked_execution_patterns"`
-	RatelimitMaxRPM          int      `json:"ratelimit_max_rpm"`
-	RatelimitMaxTPM          int      `json:"ratelimit_max_tpm"`
-	TruncationStrategy       string   `json:"truncation_strategy"`
-	TruncationKeepFirstPct   float64  `json:"truncation_keep_first_pct"`
-	TruncationKeepLastPct    float64  `json:"truncation_keep_last_pct"`
+	RatelimitMaxRPM          *int     `json:"ratelimit_max_rpm,omitempty"`
+	RatelimitMaxTPM          *int     `json:"ratelimit_max_tpm,omitempty"`
 	RetryableStatusCodes     []int    `json:"retryable_status_codes"`
 	MaxRetryAttempts         int      `json:"max_retry_attempts"`
-	TFIDFQuerySource         string   `json:"tfidf_query_source"`
-	AutoContextSkip          bool     `json:"auto_context_skip"`
-	AutoReorderByLatency     bool     `json:"auto_reorder_by_latency"`
 	RoutingStrategy          string   `json:"routing_strategy"`
 	RoutingLatencyWeight     float64  `json:"routing_latency_weight"`
 	RoutingCostWeight        float64  `json:"routing_cost_weight"`
 	MaxCostPerRequest        float64  `json:"max_cost_per_request"`
-	EmptyStreamAsError       bool     `json:"empty_stream_as_error"`
-	rpmSet                   bool     `json:"-"`
-	tpmSet                   bool     `json:"-"`
-	emptyStreamAsErrorSet    bool     `json:"-"`
-	autoContextSkipSet       bool     `json:"-"`
-	autoReorderByLatencySet  bool     `json:"-"`
+	EmptyStreamAsError       *bool    `json:"empty_stream_as_error,omitempty"`
 }
 
-func (g *GovernanceConfig) RPMSet() bool                  { return g.rpmSet }
-func (g *GovernanceConfig) TPMSet() bool                  { return g.tpmSet }
-func (g *GovernanceConfig) EmptyStreamAsErrorSet() bool   { return g.emptyStreamAsErrorSet }
-func (g *GovernanceConfig) AutoContextSkipSet() bool      { return g.autoContextSkipSet }
-func (g *GovernanceConfig) AutoReorderByLatencySet() bool { return g.autoReorderByLatencySet }
+func (g *GovernanceConfig) RPMSet() bool                { return g.RatelimitMaxRPM != nil }
+func (g *GovernanceConfig) TPMSet() bool                { return g.RatelimitMaxTPM != nil }
+func (g *GovernanceConfig) EmptyStreamAsErrorSet() bool { return g.EmptyStreamAsError != nil }
 
 func (g *GovernanceConfig) EffectiveMaxRetryAttempts() int {
 	if g.MaxRetryAttempts > 0 {
@@ -327,209 +308,68 @@ type EngineTarget struct {
 }
 
 type BouncerConfig struct {
-	Enabled            bool      `json:"enabled"`
+	Enabled            *bool     `json:"enabled,omitempty"`
 	RedactionLabel     string    `json:"redaction_label"`
 	RedactPreset       string    `json:"redact_preset,omitempty"`
 	RedactPatterns     []string  `json:"redact_patterns,omitempty"`
 	RedactOutput       bool      `json:"redact_output,omitempty"`
 	RedactOutputWindow int       `json:"redact_output_window,omitempty"`
-	FailOpen           bool      `json:"fail_open,omitempty"`
+	FailOpen           *bool     `json:"fail_open,omitempty"`
 	Engine             EngineRef `json:"engine,omitempty"`
 	EntropyEnabled     bool      `json:"entropy_enabled,omitempty"`
 	EntropyThreshold   float64   `json:"entropy_threshold,omitempty"`
 	EntropyMinToken    int       `json:"entropy_min_token,omitempty"`
-	enabledSet         bool      `json:"-"`
-	failOpenSet        bool      `json:"-"`
 }
 
-func (s *BouncerConfig) EnabledWasSet() bool  { return s.enabledSet }
-func (s *BouncerConfig) FailOpenWasSet() bool { return s.failOpenSet }
+func (s *BouncerConfig) EnabledWasSet() bool  { return s.Enabled != nil }
+func (s *BouncerConfig) FailOpenWasSet() bool { return s.FailOpen != nil }
 
 func (s *BouncerConfig) UnmarshalJSON(data []byte) error {
 	type alias BouncerConfig
-	aux := struct {
-		Enabled  *bool `json:"enabled"`
-		FailOpen *bool `json:"fail_open"`
+	aux := &struct {
+		RedactPatterns []string `json:"redact_patterns"`
 		*alias
 	}{
 		alias: (*alias)(s),
 	}
-	if err := json.Unmarshal(data, &aux); err != nil {
+	if err := json.Unmarshal(data, aux); err != nil {
 		return err
 	}
-	if aux.Enabled == nil {
-		if len(s.RedactPatterns) > 0 {
-			s.Enabled = true
-		}
-		s.enabledSet = false
-	} else {
-		s.Enabled = *aux.Enabled
-		s.enabledSet = true
-	}
-	if aux.FailOpen != nil {
-		s.FailOpen = *aux.FailOpen
-		s.failOpenSet = true
-	}
-	return nil
-}
-
-func (g *GovernanceConfig) UnmarshalJSON(data []byte) error {
-	type alias GovernanceConfig
-	aux := struct {
-		RatelimitMaxRPM      *int  `json:"ratelimit_max_rpm"`
-		RatelimitMaxTPM      *int  `json:"ratelimit_max_tpm"`
-		EmptyStreamAsError   *bool `json:"empty_stream_as_error"`
-		AutoContextSkip      *bool `json:"auto_context_skip"`
-		AutoReorderByLatency *bool `json:"auto_reorder_by_latency"`
-		*alias
-	}{
-		alias: (*alias)(g),
-	}
-	if err := json.Unmarshal(data, &aux); err != nil {
-		return err
-	}
-	if aux.RatelimitMaxRPM != nil {
-		g.rpmSet = true
-		g.RatelimitMaxRPM = *aux.RatelimitMaxRPM
-	}
-	if aux.RatelimitMaxTPM != nil {
-		g.tpmSet = true
-		g.RatelimitMaxTPM = *aux.RatelimitMaxTPM
-	}
-	if aux.EmptyStreamAsError != nil {
-		g.emptyStreamAsErrorSet = true
-		g.EmptyStreamAsError = *aux.EmptyStreamAsError
-	}
-	if aux.AutoContextSkip != nil {
-		g.autoContextSkipSet = true
-		g.AutoContextSkip = *aux.AutoContextSkip
-	}
-	if aux.AutoReorderByLatency != nil {
-		g.autoReorderByLatencySet = true
-		g.AutoReorderByLatency = *aux.AutoReorderByLatency
+	if aux.Enabled == nil && len(aux.RedactPatterns) > 0 {
+		s.Enabled = PtrTo(true)
 	}
 	return nil
 }
 
 type PrefixCacheConfig struct {
-	Enabled               bool `json:"enabled"`
-	PinSystemFirst        bool `json:"pin_system_first"`
-	StableTools           bool `json:"stable_tools"`
-	SkipRedactionOnSystem bool `json:"skip_redaction_on_system"`
-	pinSet                bool `json:"-"`
-	stableSet             bool `json:"-"`
-	skipRedactionSet      bool `json:"-"`
+	Enabled               bool  `json:"enabled"`
+	PinSystemFirst        *bool `json:"pin_system_first,omitempty"`
+	StableTools           *bool `json:"stable_tools,omitempty"`
+	SkipRedactionOnSystem *bool `json:"skip_redaction_on_system,omitempty"`
 }
 
-func (c *PrefixCacheConfig) PinWasSet() bool           { return c.pinSet }
-func (c *PrefixCacheConfig) StableWasSet() bool        { return c.stableSet }
-func (c *PrefixCacheConfig) SkipRedactionWasSet() bool { return c.skipRedactionSet }
-
-func (c *PrefixCacheConfig) UnmarshalJSON(data []byte) error {
-	type alias PrefixCacheConfig
-	aux := struct {
-		PinSystemFirst        *bool `json:"pin_system_first"`
-		StableTools           *bool `json:"stable_tools"`
-		SkipRedactionOnSystem *bool `json:"skip_redaction_on_system"`
-		*alias
-	}{
-		alias: (*alias)(c),
-	}
-	if err := json.Unmarshal(data, &aux); err != nil {
-		return err
-	}
-	if aux.PinSystemFirst != nil {
-		c.PinSystemFirst = *aux.PinSystemFirst
-		c.pinSet = true
-	}
-	if aux.StableTools != nil {
-		c.StableTools = *aux.StableTools
-		c.stableSet = true
-	}
-	if aux.SkipRedactionOnSystem != nil {
-		c.SkipRedactionOnSystem = *aux.SkipRedactionOnSystem
-		c.skipRedactionSet = true
-	}
-	return nil
-}
+func (c *PrefixCacheConfig) PinWasSet() bool           { return c.PinSystemFirst != nil }
+func (c *PrefixCacheConfig) StableWasSet() bool        { return c.StableTools != nil }
+func (c *PrefixCacheConfig) SkipRedactionWasSet() bool { return c.SkipRedactionOnSystem != nil }
 
 type CompactionConfig struct {
-	Enabled                bool `json:"enabled"`
-	JSONMinify             bool `json:"json_minify"`
-	CollapseBlankLines     bool `json:"collapse_blank_lines"`
-	TrimTrailingWhitespace bool `json:"trim_trailing_whitespace"`
-	NormalizeLineEndings   bool `json:"normalize_line_endings"`
-	PruneStaleTools        bool `json:"prune_stale_tools"`
-	ToolProtectionWindow   int  `json:"tool_protection_window"`
-	PruneThoughts          bool `json:"prune_thoughts"`
-	enabledSet             bool `json:"-"`
-	minifySet              bool `json:"-"`
-	collapseSet            bool `json:"-"`
-	trimSet                bool `json:"-"`
-	normalizeSet           bool `json:"-"`
-	pruneSet               bool `json:"-"`
-	pruneThoughtsSet       bool `json:"-"`
+	Enabled                *bool `json:"enabled,omitempty"`
+	JSONMinify             *bool `json:"json_minify,omitempty"`
+	CollapseBlankLines     *bool `json:"collapse_blank_lines,omitempty"`
+	TrimTrailingWhitespace *bool `json:"trim_trailing_whitespace,omitempty"`
+	NormalizeLineEndings   *bool `json:"normalize_line_endings,omitempty"`
+	PruneStaleTools        *bool `json:"prune_stale_tools,omitempty"`
+	ToolProtectionWindow   int   `json:"tool_protection_window"`
+	PruneThoughts          *bool `json:"prune_thoughts,omitempty"`
 }
 
-func (c *CompactionConfig) EnabledWasSet() bool       { return c.enabledSet }
-func (c *CompactionConfig) MinifyWasSet() bool        { return c.minifySet }
-func (c *CompactionConfig) CollapseWasSet() bool      { return c.collapseSet }
-func (c *CompactionConfig) TrimWasSet() bool          { return c.trimSet }
-func (c *CompactionConfig) NormWasSet() bool          { return c.normalizeSet }
-func (c *CompactionConfig) PruneWasSet() bool         { return c.pruneSet }
-func (c *CompactionConfig) PruneThoughtsWasSet() bool { return c.pruneThoughtsSet }
-
-func (c *CompactionConfig) UnmarshalJSON(data []byte) error {
-	type alias CompactionConfig
-	aux := struct {
-		Enabled                *bool `json:"enabled"`
-		JSONMinify             *bool `json:"json_minify"`
-		CollapseBlankLines     *bool `json:"collapse_blank_lines"`
-		TrimTrailingWhitespace *bool `json:"trim_trailing_whitespace"`
-		NormalizeLineEndings   *bool `json:"normalize_line_endings"`
-		PruneStaleTools        *bool `json:"prune_stale_tools"`
-		ToolProtectionWindow   *int  `json:"tool_protection_window"`
-		PruneThoughts          *bool `json:"prune_thoughts"`
-		*alias
-	}{
-		alias: (*alias)(c),
-	}
-	if err := json.Unmarshal(data, &aux); err != nil {
-		return err
-	}
-	if aux.Enabled != nil {
-		c.Enabled = *aux.Enabled
-		c.enabledSet = true
-	}
-	if aux.JSONMinify != nil {
-		c.JSONMinify = *aux.JSONMinify
-		c.minifySet = true
-	}
-	if aux.CollapseBlankLines != nil {
-		c.CollapseBlankLines = *aux.CollapseBlankLines
-		c.collapseSet = true
-	}
-	if aux.TrimTrailingWhitespace != nil {
-		c.TrimTrailingWhitespace = *aux.TrimTrailingWhitespace
-		c.trimSet = true
-	}
-	if aux.NormalizeLineEndings != nil {
-		c.NormalizeLineEndings = *aux.NormalizeLineEndings
-		c.normalizeSet = true
-	}
-	if aux.PruneStaleTools != nil {
-		c.PruneStaleTools = *aux.PruneStaleTools
-		c.pruneSet = true
-	}
-	if aux.ToolProtectionWindow != nil {
-		c.ToolProtectionWindow = *aux.ToolProtectionWindow
-	}
-	if aux.PruneThoughts != nil {
-		c.PruneThoughts = *aux.PruneThoughts
-		c.pruneThoughtsSet = true
-	}
-	return nil
-}
+func (c *CompactionConfig) EnabledWasSet() bool       { return c.Enabled != nil }
+func (c *CompactionConfig) MinifyWasSet() bool        { return c.JSONMinify != nil }
+func (c *CompactionConfig) CollapseWasSet() bool      { return c.CollapseBlankLines != nil }
+func (c *CompactionConfig) TrimWasSet() bool          { return c.TrimTrailingWhitespace != nil }
+func (c *CompactionConfig) NormWasSet() bool          { return c.NormalizeLineEndings != nil }
+func (c *CompactionConfig) PruneWasSet() bool         { return c.PruneStaleTools != nil }
+func (c *CompactionConfig) PruneThoughtsWasSet() bool { return c.PruneThoughts != nil }
 
 type WindowConfig struct {
 	Enabled         bool      `json:"enabled"`
@@ -560,11 +400,9 @@ type AgentMCPConfig struct {
 }
 
 type DiscoveryConfig struct {
-	Enabled          bool              `json:"enabled"`
-	AutoAgents       bool              `json:"auto_agents"`
+	Enabled          *bool             `json:"enabled,omitempty"`
+	AutoAgents       *bool             `json:"auto_agents,omitempty"`
 	AutoAgentsConfig *AutoAgentsConfig `json:"auto_agents_config,omitempty"`
-	enabledSet       bool              `json:"-"`
-	autoAgentsSet    bool              `json:"-"`
 }
 
 type AutoAgentCategoryConfig struct {
@@ -610,58 +448,18 @@ func (a *AutoAgentsConfig) IsEnabled(category string) bool {
 	return cfg.Enabled
 }
 
-func (d *DiscoveryConfig) EnabledWasSet() bool    { return d.enabledSet }
-func (d *DiscoveryConfig) AutoAgentsWasSet() bool { return d.autoAgentsSet }
-
-func (d *DiscoveryConfig) UnmarshalJSON(data []byte) error {
-	type alias DiscoveryConfig
-	aux := struct {
-		Enabled    *bool `json:"enabled"`
-		AutoAgents *bool `json:"auto_agents"`
-		*alias
-	}{
-		alias: (*alias)(d),
-	}
-	if err := json.Unmarshal(data, &aux); err != nil {
-		return err
-	}
-	if aux.Enabled != nil {
-		d.Enabled = *aux.Enabled
-		d.enabledSet = true
-	}
-	if aux.AutoAgents != nil {
-		d.AutoAgents = *aux.AutoAgents
-		d.autoAgentsSet = true
-	}
-	return nil
-}
+func (d *DiscoveryConfig) EnabledWasSet() bool    { return d.Enabled != nil }
+func (d *DiscoveryConfig) AutoAgentsWasSet() bool { return d.AutoAgents != nil }
 
 type ResponseCacheConfig struct {
-	Enabled            bool   `json:"enabled"`
+	Enabled            *bool  `json:"enabled,omitempty"`
 	MaxEntries         int    `json:"max_entries"`
 	MaxEntryBytes      int64  `json:"max_entry_bytes"`
 	TTLSeconds         int    `json:"ttl_seconds"`
 	EvictEverySeconds  int    `json:"evict_every_seconds"`
 	ForceRefreshHeader string `json:"force_refresh_header"`
-	enabledSet         bool   `json:"-"`
 }
 
-func (c *ResponseCacheConfig) EnabledWasSet() bool { return c.enabledSet }
+func (c *ResponseCacheConfig) EnabledWasSet() bool { return c.Enabled != nil }
 
-func (c *ResponseCacheConfig) UnmarshalJSON(data []byte) error {
-	type alias ResponseCacheConfig
-	aux := struct {
-		Enabled *bool `json:"enabled"`
-		*alias
-	}{
-		alias: (*alias)(c),
-	}
-	if err := json.Unmarshal(data, &aux); err != nil {
-		return err
-	}
-	if aux.Enabled != nil {
-		c.Enabled = *aux.Enabled
-		c.enabledSet = true
-	}
-	return nil
-}
+func PtrTo[T any](v T) *T { return &v }

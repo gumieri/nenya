@@ -8,7 +8,7 @@ import (
 
 func TestPruneThoughts_Disabled(t *testing.T) {
 	cfg := config.CompactionConfig{
-		PruneThoughts: false,
+		PruneThoughts: config.PtrTo(false),
 	}
 
 	payload := map[string]interface{}{
@@ -27,7 +27,7 @@ func TestPruneThoughts_Disabled(t *testing.T) {
 
 func TestPruneThoughts_NoAssistantMessages(t *testing.T) {
 	cfg := config.CompactionConfig{
-		PruneThoughts: true,
+		PruneThoughts: config.PtrTo(true),
 	}
 
 	payload := map[string]interface{}{
@@ -50,7 +50,7 @@ func TestPruneThoughts_NoAssistantMessages(t *testing.T) {
 
 func TestPruneThoughts_ReasoningContentFieldPreserved(t *testing.T) {
 	cfg := config.CompactionConfig{
-		PruneThoughts: true,
+		PruneThoughts: config.PtrTo(true),
 	}
 
 	payload := map[string]interface{}{
@@ -76,7 +76,7 @@ func TestPruneThoughts_ReasoningContentFieldPreserved(t *testing.T) {
 
 func TestPruneThoughts_SimpleThoughtTags(t *testing.T) {
 	cfg := config.CompactionConfig{
-		PruneThoughts: true,
+		PruneThoughts: config.PtrTo(true),
 	}
 
 	payload := map[string]interface{}{
@@ -105,7 +105,7 @@ func TestPruneThoughts_SimpleThoughtTags(t *testing.T) {
 
 func TestPruneThoughts_ThoughtTagsWithSurroundingText(t *testing.T) {
 	cfg := config.CompactionConfig{
-		PruneThoughts: true,
+		PruneThoughts: config.PtrTo(true),
 	}
 
 	payload := map[string]interface{}{
@@ -133,7 +133,7 @@ func TestPruneThoughts_ThoughtTagsWithSurroundingText(t *testing.T) {
 
 func TestPruneThoughts_MultipleThoughtBlocks(t *testing.T) {
 	cfg := config.CompactionConfig{
-		PruneThoughts: true,
+		PruneThoughts: config.PtrTo(true),
 	}
 
 	payload := map[string]interface{}{
@@ -163,7 +163,7 @@ func TestPruneThoughts_MultipleThoughtBlocks(t *testing.T) {
 
 func TestPruneThoughts_UnclosedThoughtTag(t *testing.T) {
 	cfg := config.CompactionConfig{
-		PruneThoughts: true,
+		PruneThoughts: config.PtrTo(true),
 	}
 
 	payload := map[string]interface{}{
@@ -191,7 +191,7 @@ func TestPruneThoughts_UnclosedThoughtTag(t *testing.T) {
 
 func TestPruneThoughts_NoThoughtTags(t *testing.T) {
 	cfg := config.CompactionConfig{
-		PruneThoughts: true,
+		PruneThoughts: config.PtrTo(true),
 	}
 
 	payload := map[string]interface{}{
@@ -210,7 +210,7 @@ func TestPruneThoughts_NoThoughtTags(t *testing.T) {
 
 func TestPruneThoughts_OnlyOpenTag(t *testing.T) {
 	cfg := config.CompactionConfig{
-		PruneThoughts: true,
+		PruneThoughts: config.PtrTo(true),
 	}
 
 	payload := map[string]interface{}{
@@ -238,7 +238,7 @@ func TestPruneThoughts_OnlyOpenTag(t *testing.T) {
 
 func TestPruneThoughts_OnlyCloseTag(t *testing.T) {
 	cfg := config.CompactionConfig{
-		PruneThoughts: true,
+		PruneThoughts: config.PtrTo(true),
 	}
 
 	payload := map[string]interface{}{
@@ -257,7 +257,7 @@ func TestPruneThoughts_OnlyCloseTag(t *testing.T) {
 
 func TestPruneThoughts_AdjacentThoughtTags(t *testing.T) {
 	cfg := config.CompactionConfig{
-		PruneThoughts: true,
+		PruneThoughts: config.PtrTo(true),
 	}
 
 	payload := map[string]interface{}{
@@ -276,7 +276,7 @@ func TestPruneThoughts_AdjacentThoughtTags(t *testing.T) {
 
 func TestPruneThoughts_EmptyReasoningBetweenTags(t *testing.T) {
 	cfg := config.CompactionConfig{
-		PruneThoughts: true,
+		PruneThoughts: config.PtrTo(true),
 	}
 
 	payload := map[string]interface{}{
@@ -304,7 +304,7 @@ func TestPruneThoughts_EmptyReasoningBetweenTags(t *testing.T) {
 
 func TestPruneThoughts_ReasoningContentAndTagsBoth(t *testing.T) {
 	cfg := config.CompactionConfig{
-		PruneThoughts: true,
+		PruneThoughts: config.PtrTo(true),
 	}
 
 	payload := map[string]interface{}{
@@ -337,7 +337,7 @@ func TestPruneThoughts_ReasoningContentAndTagsBoth(t *testing.T) {
 
 func TestPruneThoughts_NilMessages(t *testing.T) {
 	cfg := config.CompactionConfig{
-		PruneThoughts: true,
+		PruneThoughts: config.PtrTo(true),
 	}
 
 	payload := map[string]interface{}{}
@@ -349,7 +349,7 @@ func TestPruneThoughts_NilMessages(t *testing.T) {
 
 func TestPruneThoughts_ThinkingTagNotMatched(t *testing.T) {
 	cfg := config.CompactionConfig{
-		PruneThoughts: true,
+		PruneThoughts: config.PtrTo(true),
 	}
 
 	payload := map[string]interface{}{
@@ -373,7 +373,7 @@ func TestPruneThoughts_ThinkingTagNotMatched(t *testing.T) {
 
 func TestPruneThoughts_ThinkTagWithNewline(t *testing.T) {
 	cfg := config.CompactionConfig{
-		PruneThoughts: true,
+		PruneThoughts: config.PtrTo(true),
 	}
 
 	payload := map[string]interface{}{
@@ -397,7 +397,7 @@ func TestPruneThoughts_ThinkTagWithNewline(t *testing.T) {
 
 func TestPruneThoughts_ThinkTagWithClosingBracket(t *testing.T) {
 	cfg := config.CompactionConfig{
-		PruneThoughts: true,
+		PruneThoughts: config.PtrTo(true),
 	}
 
 	payload := map[string]interface{}{
@@ -421,7 +421,7 @@ func TestPruneThoughts_ThinkTagWithClosingBracket(t *testing.T) {
 
 func TestPruneThoughts_ThinkTagMixedWithThinkingTag(t *testing.T) {
 	cfg := config.CompactionConfig{
-		PruneThoughts: true,
+		PruneThoughts: config.PtrTo(true),
 	}
 
 	payload := map[string]interface{}{

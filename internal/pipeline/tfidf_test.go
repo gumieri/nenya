@@ -204,7 +204,7 @@ func TestScoreBlocksEmptyQuery(t *testing.T) {
 }
 
 func TestTruncateTFIDF(t *testing.T) {
-	cfg := config.GovernanceConfig{
+	cfg := config.ContextConfig{
 		TruncationKeepFirstPct: 15.0,
 		TruncationKeepLastPct:  25.0,
 	}
@@ -265,7 +265,7 @@ func TestTruncateTFIDF(t *testing.T) {
 }
 
 func TestTruncateTFIDFCodeAware(t *testing.T) {
-	cfg := config.GovernanceConfig{
+	cfg := config.ContextConfig{
 		TruncationKeepFirstPct: 15.0,
 		TruncationKeepLastPct:  25.0,
 	}
@@ -293,7 +293,7 @@ func TestTruncateTFIDFCodeAware(t *testing.T) {
 }
 
 func TestTruncateTFIDFHistory(t *testing.T) {
-	cfg := config.GovernanceConfig{
+	cfg := config.ContextConfig{
 		TruncationKeepFirstPct: 25.0,
 		TruncationKeepLastPct:  30.0,
 	}

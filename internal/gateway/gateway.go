@@ -173,7 +173,7 @@ func performModelDiscovery(ctx context.Context, cfg *config.Config, providers ma
 	var mergedCatalog *discovery.ModelCatalog
 	var healthRegistry *discovery.HealthRegistry
 
-	if !cfg.Discovery.Enabled {
+	if cfg.Discovery.Enabled == nil || !*cfg.Discovery.Enabled {
 		mergedCatalog = discovery.MergeCatalog(discovery.NewModelCatalog(), cfg)
 		return mergedCatalog, nil
 	}
@@ -211,12 +211,14 @@ func fetchOpenRouterPricing(ctx context.Context, providers map[string]*config.Pr
 }
 
 func generateAutoAgents(cfg *config.Config, catalog *discovery.ModelCatalog, providers map[string]*config.Provider, logger *slog.Logger) {
-	logger.Debug("auto-agents check", "discovery_enabled", cfg.Discovery.Enabled, "auto_agents", cfg.Discovery.AutoAgents)
-	if !cfg.Discovery.AutoAgents {
+	enabled := cfg.Discovery.Enabled != nil && *cfg.Discovery.Enabled
+	hasAutoAgents := cfg.Discovery.AutoAgents != nil && *cfg.Discovery.AutoAgents
+	logger.Debug("auto-agents check", "discovery_enabled", enabled, "auto_agents", hasAutoAgents)
+	if !hasAutoAgents {
 		return
 	}
-	autoAgents := discovery.GenerateAutoAgents(catalog, providers, cfg.Discovery.AutoAgentsConfig, logger)
-	for name, agent := range autoAgents {
+	agents := discovery.GenerateAutoAgents(catalog, providers, cfg.Discovery.AutoAgentsConfig, logger)
+	for name, agent := range agents {
 		if _, exists := cfg.Agents[name]; !exists {
 			cfg.Agents[name] = agent
 		}
@@ -229,7 +231,7 @@ func generateAutoAgents(cfg *config.Config, catalog *discovery.ModelCatalog, pro
 // patterns before more general ones to ensure correct label attribution.
 func compilePatterns(cfg config.Config, logger *slog.Logger) ([]*regexp.Regexp, []*regexp.Regexp) {
 	var secretPatterns []*regexp.Regexp
-	if cfg.Bouncer.Enabled && len(cfg.Bouncer.RedactPatterns) > 0 {
+	if cfg.Bouncer.Enabled != nil && *cfg.Bouncer.Enabled && len(cfg.Bouncer.RedactPatterns) > 0 {
 		for _, pattern := range cfg.Bouncer.RedactPatterns {
 			re, err := regexp.Compile(pattern)
 			if err != nil {
@@ -270,13 +272,21 @@ func createEntropyFilter(cfg config.Config, logger *slog.Logger) *pipeline.Entro
 }
 
 func buildGateway(cfg config.Config, secrets *config.SecretsConfig, secureClient *http.Client, ollamaClient *http.Client, providers map[string]*config.Provider, secretPatterns []*regexp.Regexp, blockedPatterns []*regexp.Regexp, entropyFilter *pipeline.EntropyFilter, mergedCatalog *discovery.ModelCatalog, healthRegistry *discovery.HealthRegistry, logger *slog.Logger, sm *security.SecureMem, clientTokenRef security.SecureToken, providerKeyTokens map[string]security.SecureToken) *NenyaGateway {
+	var rpm, tpm int
+	if cfg.Governance.RatelimitMaxRPM != nil {
+		rpm = *cfg.Governance.RatelimitMaxRPM
+	}
+	if cfg.Governance.RatelimitMaxTPM != nil {
+		tpm = *cfg.Governance.RatelimitMaxTPM
+	}
+
 	gw := &NenyaGateway{
 		Config:            cfg,
 		Client:            secureClient,
 		OllamaClient:      ollamaClient,
 		Secrets:           secrets,
 		Providers:         providers,
-		RateLimiter:       infra.NewRateLimiter(cfg.Governance.RatelimitMaxRPM, cfg.Governance.RatelimitMaxTPM),
+		RateLimiter:       infra.NewRateLimiter(rpm, tpm),
 		SecretPatterns:    secretPatterns,
 		BlockedPatterns:   blockedPatterns,
 		EntropyFilter:     entropyFilter,
@@ -299,7 +309,7 @@ func buildGateway(cfg config.Config, secrets *config.SecretsConfig, secureClient
 	return gw
 }
 
-func initSecureMem(secrets *config.SecretsConfig, logger *slog.Logger, secureMemoryRequired bool, metrics *infra.Metrics) (*security.SecureMem, security.SecureToken) {
+func initSecureMem(secrets *config.SecretsConfig, logger *slog.Logger, secureMemoryRequired *bool, metrics *infra.Metrics) (*security.SecureMem, security.SecureToken) {
 	if secrets == nil || secrets.ClientToken == "" {
 		return nil, security.SecureToken{}
 	}
@@ -310,7 +320,7 @@ func initSecureMem(secrets *config.SecretsConfig, logger *slog.Logger, secureMem
 		if metrics != nil {
 			metrics.RecordSecureMemInitFailure()
 		}
-		if secureMemoryRequired {
+		if secureMemoryRequired != nil && *secureMemoryRequired {
 			logger.Error("secure memory unavailable but secure_memory_required is set",
 				"err", err,
 				"hint", "see docs/SECURITY.md for platform-specific mlock configuration")
@@ -539,7 +549,7 @@ func extractInputJSONFromPart(part map[string]interface{}) string {
 }
 
 func newResponseCache(cfg config.Config, logger *slog.Logger) *infra.ResponseCache {
-	if !cfg.ResponseCache.Enabled {
+	if cfg.ResponseCache.Enabled == nil || !*cfg.ResponseCache.Enabled {
 		return nil
 	}
 	rc := cfg.ResponseCache

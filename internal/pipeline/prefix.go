@@ -11,11 +11,11 @@ func ApplyPrefixCacheOptimizations(payload map[string]interface{}, messages []in
 		return
 	}
 
-	if cfg.PinSystemFirst {
+	if cfg.PinSystemFirst != nil && *cfg.PinSystemFirst {
 		PinSystemMessages(messages)
 	}
 
-	if cfg.StableTools {
+	if cfg.StableTools != nil && *cfg.StableTools {
 		StabilizeTools(payload)
 	}
 }
@@ -95,7 +95,7 @@ func ToolSortKey(tool interface{}) string {
 }
 
 func ShouldSkipRedaction(msgNode map[string]interface{}, cfg config.PrefixCacheConfig) bool {
-	if cfg.Enabled && cfg.SkipRedactionOnSystem {
+	if cfg.Enabled && cfg.SkipRedactionOnSystem != nil && *cfg.SkipRedactionOnSystem {
 		role, _ := msgNode["role"].(string)
 		if role == "system" {
 			return true

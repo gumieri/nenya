@@ -12,11 +12,11 @@ import (
 func testConfig() config.Config {
 	return config.Config{
 		Governance: config.GovernanceConfig{
-			RatelimitMaxRPM: 60,
-			RatelimitMaxTPM: 100000,
+			RatelimitMaxRPM: config.PtrTo(60),
+			RatelimitMaxTPM: config.PtrTo(100000),
 		},
 		Bouncer: config.BouncerConfig{
-			Enabled:       true,
+			Enabled:       config.PtrTo(true),
 			RedactPatterns: []string{`(?i)AKIA[0-9A-Z]{16}`, `sk-[a-zA-Z0-9]{48}`},
 		},
 	}
@@ -51,7 +51,7 @@ func TestNew_BuiltInProvidersMerged(t *testing.T) {
 
 func TestNew_SecretPatternsCompiled(t *testing.T) {
 	cfg := testConfig()
-	cfg.Bouncer.Enabled = true
+	cfg.Bouncer.Enabled = config.PtrTo(true)
 	cfg.Bouncer.RedactPatterns = []string{`(?i)AKIA[0-9A-Z]{16}`, `sk-[a-zA-Z0-9]+`}
 	gw := New(context.Background(), cfg, testSecrets(), testLogger())
 
@@ -94,8 +94,8 @@ func TestNew_ThoughtSigCacheInitialized(t *testing.T) {
 
 func TestNew_RateLimiterInitialized(t *testing.T) {
 	cfg := testConfig()
-	cfg.Governance.RatelimitMaxRPM = 42
-	cfg.Governance.RatelimitMaxTPM = 99999
+	cfg.Governance.RatelimitMaxRPM = config.PtrTo(42)
+	cfg.Governance.RatelimitMaxTPM = config.PtrTo(99999)
 	gw := New(context.Background(), cfg, testSecrets(), testLogger())
 
 	if gw.RateLimiter == nil {
@@ -276,7 +276,7 @@ func TestReload_StatePreserved(t *testing.T) {
 	sigCache := gw.ThoughtSigCache
 
 	newCfg := testConfig()
-	newCfg.Governance.RatelimitMaxRPM = 99
+	newCfg.Governance.RatelimitMaxRPM = config.PtrTo(99)
 	newSecrets := testSecrets()
 	newSecrets.ClientToken = "new-token"
 
@@ -297,11 +297,11 @@ func TestReload_ConfigUpdated(t *testing.T) {
 	gw := New(context.Background(), testConfig(), testSecrets(), testLogger())
 
 	newCfg := testConfig()
-	newCfg.Governance.RatelimitMaxRPM = 42
+	newCfg.Governance.RatelimitMaxRPM = config.PtrTo(42)
 	newGW := gw.Reload(context.Background(), newCfg, testSecrets())
 
-	if newGW.Config.Governance.RatelimitMaxRPM != 42 {
-		t.Fatalf("expected new RatelimitMaxRPM=42, got %d", newGW.Config.Governance.RatelimitMaxRPM)
+	if newGW.Config.Governance.RatelimitMaxRPM == nil || *newGW.Config.Governance.RatelimitMaxRPM != 42 {
+		t.Fatalf("expected new RatelimitMaxRPM=42, got %v", newGW.Config.Governance.RatelimitMaxRPM)
 	}
 }
 

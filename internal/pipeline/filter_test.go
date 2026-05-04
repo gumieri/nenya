@@ -76,7 +76,7 @@ func TestRedactSecrets(t *testing.T) {
 }
 
 func TestTruncateMiddleOut(t *testing.T) {
-	cfg := config.GovernanceConfig{
+	cfg := config.ContextConfig{
 		TruncationKeepFirstPct: 40,
 		TruncationKeepLastPct:  40,
 	}
@@ -187,7 +187,7 @@ func TestRedactSecrets_CodeFenceNotBypassed(t *testing.T) {
 }
 
 func TestTruncateMiddleOutCodeAware(t *testing.T) {
-	cfg := config.GovernanceConfig{
+	cfg := config.ContextConfig{
 		TruncationKeepFirstPct: 40,
 		TruncationKeepLastPct:  40,
 	}

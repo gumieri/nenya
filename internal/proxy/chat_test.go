@@ -20,9 +20,9 @@ func newChatProxy(t *testing.T, upstreamURL string) *Proxy {
 	t.Helper()
 	cfg := testutil.MinimalConfig()
 	cfg.Server.MaxBodyBytes = 10 << 20
-	cfg.Governance.RatelimitMaxRPM = 60
-	cfg.Governance.RatelimitMaxTPM = 100000
-	cfg.Bouncer.Enabled = false
+	cfg.Governance.RatelimitMaxRPM = config.PtrTo(60)
+	cfg.Governance.RatelimitMaxTPM = config.PtrTo(100000)
+	cfg.Bouncer.Enabled = config.PtrTo(false)
 	cfg.Providers = map[string]config.ProviderConfig{
 		"test-provider": {
 			URL:       upstreamURL + "/v1/chat/completions",
@@ -206,11 +206,11 @@ func TestHandleChatCompletions_AgentWithModels(t *testing.T) {
 			MaxBodyBytes: 10 << 20,
 		},
 		Governance: config.GovernanceConfig{
-			RatelimitMaxRPM: 60,
-			RatelimitMaxTPM: 100000,
+			RatelimitMaxRPM: config.PtrTo(60),
+			RatelimitMaxTPM: config.PtrTo(100000),
 		},
 		Bouncer: config.BouncerConfig{
-			Enabled: false,
+			Enabled: config.PtrTo(false),
 		},
 		Providers: map[string]config.ProviderConfig{
 			"test-provider": {
@@ -466,3 +466,4 @@ func TestHandleResponses_PathTraversal(t *testing.T) {
 		t.Errorf("expected 400 for path traversal, got %d", rec.Code)
 	}
 }
+

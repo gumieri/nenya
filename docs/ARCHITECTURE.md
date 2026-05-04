@@ -307,7 +307,7 @@ When the flag is disabled, empty streams are treated as a successful response an
 
 ## Latency Tracker
 
-`infra.LatencyTracker` tracks per-model response times for latency-aware routing. When `governance.auto_reorder_by_latency` is enabled, targets are sorted by historical median latency (fastest first) before routing.
+`infra.LatencyTracker` tracks per-model response times for latency-aware routing. When `context.auto_reorder_by_latency` is enabled, targets are sorted by historical median latency (fastest first) before routing.
 
 ### Implementation
 

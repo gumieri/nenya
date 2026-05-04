@@ -17,7 +17,7 @@ func TestApplyDefaults_Bouncer(t *testing.T) {
 	if err := ApplyDefaults(cfg); err != nil {
 		t.Fatal(err)
 	}
-	if !cfg.Bouncer.Enabled {
+	if cfg.Bouncer.Enabled == nil || !*cfg.Bouncer.Enabled {
 		t.Error("bouncer should be auto-enabled with defaults")
 	}
 	if len(cfg.Bouncer.RedactPatterns) == 0 {
@@ -29,7 +29,7 @@ func TestApplyDefaults_Bouncer(t *testing.T) {
 	if cfg.Bouncer.RedactOutputWindow != 4096 {
 		t.Errorf("expected 4096, got %d", cfg.Bouncer.RedactOutputWindow)
 	}
-	if !cfg.Bouncer.FailOpen {
+	if cfg.Bouncer.FailOpen == nil || !*cfg.Bouncer.FailOpen {
 		t.Error("fail_open should default to true")
 	}
 }
@@ -43,7 +43,7 @@ func TestApplyDefaults_Bouncer_RespectsExplicitFailOpen(t *testing.T) {
 	if err := ApplyDefaults(&cfg); err != nil {
 		t.Fatal(err)
 	}
-	if cfg.Bouncer.FailOpen {
+	if cfg.Bouncer.FailOpen != nil && *cfg.Bouncer.FailOpen {
 		t.Error("bouncer.fail_open should be false when explicitly set")
 	}
 }
@@ -57,7 +57,7 @@ func TestApplyDefaults_Bouncer_WithRedactPreset(t *testing.T) {
 	if err := ApplyDefaults(&cfg); err != nil {
 		t.Fatal(err)
 	}
-	if !cfg.Bouncer.Enabled {
+	if cfg.Bouncer.Enabled == nil || !*cfg.Bouncer.Enabled {
 		t.Error("bouncer should be enabled when redact_preset is set")
 	}
 	if len(cfg.Bouncer.RedactPatterns) == 0 {
@@ -70,11 +70,11 @@ func TestApplyDefaults_Governance(t *testing.T) {
 	if err := ApplyDefaults(cfg); err != nil {
 		t.Fatal(err)
 	}
-	if cfg.Governance.TruncationKeepFirstPct != 15.0 {
-		t.Errorf("expected 15.0, got %f", cfg.Governance.TruncationKeepFirstPct)
+	if cfg.Context.TruncationKeepFirstPct != 15.0 {
+		t.Errorf("expected 15.0, got %f", cfg.Context.TruncationKeepFirstPct)
 	}
-	if cfg.Governance.TruncationKeepLastPct != 25.0 {
-		t.Errorf("expected 25.0, got %f", cfg.Governance.TruncationKeepLastPct)
+	if cfg.Context.TruncationKeepLastPct != 25.0 {
+		t.Errorf("expected 25.0, got %f", cfg.Context.TruncationKeepLastPct)
 	}
 }
 
@@ -261,25 +261,11 @@ func TestBouncerConfig_UnmarshalJSON_RespectsEnabled(t *testing.T) {
 	if err := ApplyDefaults(&cfg); err != nil {
 		t.Fatal(err)
 	}
-	if cfg.Bouncer.Enabled {
+	if cfg.Bouncer.Enabled != nil && *cfg.Bouncer.Enabled {
 		t.Error("bouncer should remain disabled when explicitly set to false")
 	}
 	if len(cfg.Bouncer.RedactPatterns) == 0 {
 		t.Error("patterns should still be loaded even when disabled")
-	}
-}
-
-func TestBouncerConfig_UnmarshalJSON_FailOpenTracking(t *testing.T) {
-	raw := `{"fail_open": false}`
-	var b BouncerConfig
-	if err := json.Unmarshal([]byte(raw), &b); err != nil {
-		t.Fatal(err)
-	}
-	if !b.FailOpenWasSet() {
-		t.Error("failOpenSet should be true after explicit setting")
-	}
-	if b.FailOpen {
-		t.Error("fail_open should be false")
 	}
 }
 

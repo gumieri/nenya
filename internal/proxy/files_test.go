@@ -20,7 +20,7 @@ func TestFilesRouteRegistration(t *testing.T) {
 	}))
 	defer upstream.Close()
 
-	cfg := config.Config{Server: config.ServerConfig{MaxBodyBytes: 10 * 1024 * 1024}, Governance: config.GovernanceConfig{RatelimitMaxRPM: 10, RatelimitMaxTPM: 10000}}
+	cfg := config.Config{Server: config.ServerConfig{MaxBodyBytes: 10 * 1024 * 1024}, Governance: config.GovernanceConfig{RatelimitMaxRPM: config.PtrTo(10), RatelimitMaxTPM: config.PtrTo(10000)}}
 	providers := map[string]*config.Provider{"openai": {Name: "openai", URL: upstream.URL + "/v1/chat/completions", BaseURL: upstream.URL + "/v1", APIKey: "test-key", AuthStyle: "bearer", TimeoutSeconds: 30}}
 	logger := infra.SetupLogger(false)
 	gw := &gateway.NenyaGateway{Config: cfg, Secrets: &config.SecretsConfig{ClientToken: "client-token"}, Client: http.DefaultClient, Providers: providers, RateLimiter: infra.NewRateLimiter(10, 10000), Stats: infra.NewUsageTracker(), Logger: logger}
@@ -68,7 +68,7 @@ func TestHandleFiles_POST_JSON(t *testing.T) {
 	}))
 	defer upstream.Close()
 
-	cfg := config.Config{Server: config.ServerConfig{MaxBodyBytes: 10 * 1024 * 1024}, Governance: config.GovernanceConfig{RatelimitMaxRPM: 10, RatelimitMaxTPM: 10000}}
+	cfg := config.Config{Server: config.ServerConfig{MaxBodyBytes: 10 * 1024 * 1024}, Governance: config.GovernanceConfig{RatelimitMaxRPM: config.PtrTo(10), RatelimitMaxTPM: config.PtrTo(10000)}}
 	providers := map[string]*config.Provider{"openai": {Name: "openai", URL: upstream.URL + "/v1/chat/completions", BaseURL: upstream.URL + "/v1", APIKey: "test-key", AuthStyle: "bearer", TimeoutSeconds: 30}}
 	logger := infra.SetupLogger(false)
 	gw := &gateway.NenyaGateway{Config: cfg, Secrets: &config.SecretsConfig{ClientToken: "client-token"}, Client: http.DefaultClient, Providers: providers, RateLimiter: infra.NewRateLimiter(10, 10000), Stats: infra.NewUsageTracker(), Logger: logger}
@@ -109,7 +109,7 @@ func TestHandleFiles_POST_Multipart(t *testing.T) {
 	}))
 	defer upstream.Close()
 
-	cfg := config.Config{Server: config.ServerConfig{MaxBodyBytes: 10 * 1024 * 1024}, Governance: config.GovernanceConfig{RatelimitMaxRPM: 10, RatelimitMaxTPM: 10000}}
+	cfg := config.Config{Server: config.ServerConfig{MaxBodyBytes: 10 * 1024 * 1024}, Governance: config.GovernanceConfig{RatelimitMaxRPM: config.PtrTo(10), RatelimitMaxTPM: config.PtrTo(10000)}}
 	providers := map[string]*config.Provider{"openai": {Name: "openai", URL: upstream.URL + "/v1/chat/completions", BaseURL: upstream.URL + "/v1", APIKey: "test-key", AuthStyle: "bearer", TimeoutSeconds: 30}}
 	logger := infra.SetupLogger(false)
 	gw := &gateway.NenyaGateway{Config: cfg, Secrets: &config.SecretsConfig{ClientToken: "client-token"}, Client: http.DefaultClient, Providers: providers, RateLimiter: infra.NewRateLimiter(10, 10000), Stats: infra.NewUsageTracker(), Logger: logger}
@@ -136,7 +136,7 @@ func TestHandleFiles_POST_Multipart(t *testing.T) {
 }
 
 func TestHandleFiles_TooLarge(t *testing.T) {
-	cfg := config.Config{Server: config.ServerConfig{MaxBodyBytes: 1}, Governance: config.GovernanceConfig{RatelimitMaxRPM: 10, RatelimitMaxTPM: 10000}}
+	cfg := config.Config{Server: config.ServerConfig{MaxBodyBytes: 1}, Governance: config.GovernanceConfig{RatelimitMaxRPM: config.PtrTo(10), RatelimitMaxTPM: config.PtrTo(10000)}}
 	providers := map[string]*config.Provider{"openai": {Name: "openai", URL: "https://api.openai.com/v1/chat/completions", BaseURL: "https://api.openai.com", APIKey: "test-key", AuthStyle: "bearer", TimeoutSeconds: 30}}
 	logger := infra.SetupLogger(false)
 	gw := &gateway.NenyaGateway{Config: cfg, Secrets: &config.SecretsConfig{ClientToken: "client-token"}, Client: http.DefaultClient, Providers: providers, RateLimiter: infra.NewRateLimiter(10, 10000), Stats: infra.NewUsageTracker(), Logger: logger}
@@ -155,7 +155,7 @@ func TestHandleFiles_TooLarge(t *testing.T) {
 }
 
 func TestHandleFiles_EmptyBody(t *testing.T) {
-	cfg := config.Config{Server: config.ServerConfig{MaxBodyBytes: 10 * 1024 * 1024}, Governance: config.GovernanceConfig{RatelimitMaxRPM: 10, RatelimitMaxTPM: 10000}}
+	cfg := config.Config{Server: config.ServerConfig{MaxBodyBytes: 10 * 1024 * 1024}, Governance: config.GovernanceConfig{RatelimitMaxRPM: config.PtrTo(10), RatelimitMaxTPM: config.PtrTo(10000)}}
 	providers := map[string]*config.Provider{"openai": {Name: "openai", URL: "https://api.openai.com/v1/chat/completions", BaseURL: "https://api.openai.com", APIKey: "test-key", AuthStyle: "bearer", TimeoutSeconds: 30}}
 	logger := infra.SetupLogger(false)
 	gw := &gateway.NenyaGateway{Config: cfg, Secrets: &config.SecretsConfig{ClientToken: "client-token"}, Client: http.DefaultClient, Providers: providers, RateLimiter: infra.NewRateLimiter(10, 10000), Stats: infra.NewUsageTracker(), Logger: logger}
@@ -191,7 +191,7 @@ func TestHandleFiles_GET_List(t *testing.T) {
 	}))
 	defer upstream.Close()
 
-	cfg := config.Config{Server: config.ServerConfig{MaxBodyBytes: 10 * 1024 * 1024}, Governance: config.GovernanceConfig{RatelimitMaxRPM: 10, RatelimitMaxTPM: 10000}}
+	cfg := config.Config{Server: config.ServerConfig{MaxBodyBytes: 10 * 1024 * 1024}, Governance: config.GovernanceConfig{RatelimitMaxRPM: config.PtrTo(10), RatelimitMaxTPM: config.PtrTo(10000)}}
 	providers := map[string]*config.Provider{"openai": {Name: "openai", URL: upstream.URL + "/v1/chat/completions", BaseURL: upstream.URL + "/v1", APIKey: "test-key", AuthStyle: "bearer", TimeoutSeconds: 30}}
 	logger := infra.SetupLogger(false)
 	gw := &gateway.NenyaGateway{Config: cfg, Secrets: &config.SecretsConfig{ClientToken: "client-token"}, Client: http.DefaultClient, Providers: providers, RateLimiter: infra.NewRateLimiter(10, 10000), Stats: infra.NewUsageTracker(), Logger: logger}
@@ -226,7 +226,7 @@ func TestHandleFiles_GET_ByID(t *testing.T) {
 	}))
 	defer upstream.Close()
 
-	cfg := config.Config{Server: config.ServerConfig{MaxBodyBytes: 10 * 1024 * 1024}, Governance: config.GovernanceConfig{RatelimitMaxRPM: 10, RatelimitMaxTPM: 10000}}
+	cfg := config.Config{Server: config.ServerConfig{MaxBodyBytes: 10 * 1024 * 1024}, Governance: config.GovernanceConfig{RatelimitMaxRPM: config.PtrTo(10), RatelimitMaxTPM: config.PtrTo(10000)}}
 	providers := map[string]*config.Provider{"openai": {Name: "openai", URL: upstream.URL + "/v1/chat/completions", BaseURL: upstream.URL + "/v1", APIKey: "test-key", AuthStyle: "bearer", TimeoutSeconds: 30}}
 	logger := infra.SetupLogger(false)
 	gw := &gateway.NenyaGateway{Config: cfg, Secrets: &config.SecretsConfig{ClientToken: "client-token"}, Client: http.DefaultClient, Providers: providers, RateLimiter: infra.NewRateLimiter(10, 10000), Stats: infra.NewUsageTracker(), Logger: logger}
@@ -252,7 +252,7 @@ func TestHandleFiles_DELETE_ByID(t *testing.T) {
 	}))
 	defer upstream.Close()
 
-	cfg := config.Config{Server: config.ServerConfig{MaxBodyBytes: 10 * 1024 * 1024}, Governance: config.GovernanceConfig{RatelimitMaxRPM: 10, RatelimitMaxTPM: 10000}}
+	cfg := config.Config{Server: config.ServerConfig{MaxBodyBytes: 10 * 1024 * 1024}, Governance: config.GovernanceConfig{RatelimitMaxRPM: config.PtrTo(10), RatelimitMaxTPM: config.PtrTo(10000)}}
 	providers := map[string]*config.Provider{"openai": {Name: "openai", URL: upstream.URL + "/v1/chat/completions", BaseURL: upstream.URL + "/v1", APIKey: "test-key", AuthStyle: "bearer", TimeoutSeconds: 30}}
 	logger := infra.SetupLogger(false)
 	gw := &gateway.NenyaGateway{Config: cfg, Secrets: &config.SecretsConfig{ClientToken: "client-token"}, Client: http.DefaultClient, Providers: providers, RateLimiter: infra.NewRateLimiter(10, 10000), Stats: infra.NewUsageTracker(), Logger: logger}
@@ -279,7 +279,7 @@ func TestHandleFiles_GET_Content(t *testing.T) {
 	}))
 	defer upstream.Close()
 
-	cfg := config.Config{Server: config.ServerConfig{MaxBodyBytes: 10 * 1024 * 1024}, Governance: config.GovernanceConfig{RatelimitMaxRPM: 10, RatelimitMaxTPM: 10000}}
+	cfg := config.Config{Server: config.ServerConfig{MaxBodyBytes: 10 * 1024 * 1024}, Governance: config.GovernanceConfig{RatelimitMaxRPM: config.PtrTo(10), RatelimitMaxTPM: config.PtrTo(10000)}}
 	providers := map[string]*config.Provider{"openai": {Name: "openai", URL: upstream.URL + "/v1/chat/completions", BaseURL: upstream.URL + "/v1", APIKey: "test-key", AuthStyle: "bearer", TimeoutSeconds: 30}}
 	logger := infra.SetupLogger(false)
 	gw := &gateway.NenyaGateway{Config: cfg, Secrets: &config.SecretsConfig{ClientToken: "client-token"}, Client: http.DefaultClient, Providers: providers, RateLimiter: infra.NewRateLimiter(10, 10000), Stats: infra.NewUsageTracker(), Logger: logger}
@@ -312,7 +312,7 @@ func TestHandleBatches_POST(t *testing.T) {
 	}))
 	defer upstream.Close()
 
-	cfg := config.Config{Server: config.ServerConfig{MaxBodyBytes: 10 * 1024 * 1024}, Governance: config.GovernanceConfig{RatelimitMaxRPM: 10, RatelimitMaxTPM: 10000}}
+	cfg := config.Config{Server: config.ServerConfig{MaxBodyBytes: 10 * 1024 * 1024}, Governance: config.GovernanceConfig{RatelimitMaxRPM: config.PtrTo(10), RatelimitMaxTPM: config.PtrTo(10000)}}
 	providers := map[string]*config.Provider{"openai": {Name: "openai", URL: upstream.URL + "/v1/chat/completions", BaseURL: upstream.URL + "/v1", APIKey: "test-key", AuthStyle: "bearer", TimeoutSeconds: 30}}
 	logger := infra.SetupLogger(false)
 	gw := &gateway.NenyaGateway{Config: cfg, Secrets: &config.SecretsConfig{ClientToken: "client-token"}, Client: http.DefaultClient, Providers: providers, RateLimiter: infra.NewRateLimiter(10, 10000), Stats: infra.NewUsageTracker(), Logger: logger}
@@ -355,7 +355,7 @@ func TestHandleBatches_GET_List(t *testing.T) {
 	}))
 	defer upstream.Close()
 
-	cfg := config.Config{Server: config.ServerConfig{MaxBodyBytes: 10 * 1024 * 1024}, Governance: config.GovernanceConfig{RatelimitMaxRPM: 10, RatelimitMaxTPM: 10000}}
+	cfg := config.Config{Server: config.ServerConfig{MaxBodyBytes: 10 * 1024 * 1024}, Governance: config.GovernanceConfig{RatelimitMaxRPM: config.PtrTo(10), RatelimitMaxTPM: config.PtrTo(10000)}}
 	providers := map[string]*config.Provider{"openai": {Name: "openai", URL: upstream.URL + "/v1/chat/completions", BaseURL: upstream.URL + "/v1", APIKey: "test-key", AuthStyle: "bearer", TimeoutSeconds: 30}}
 	logger := infra.SetupLogger(false)
 	gw := &gateway.NenyaGateway{Config: cfg, Secrets: &config.SecretsConfig{ClientToken: "client-token"}, Client: http.DefaultClient, Providers: providers, RateLimiter: infra.NewRateLimiter(10, 10000), Stats: infra.NewUsageTracker(), Logger: logger}
@@ -390,7 +390,7 @@ func TestHandleBatches_GET_ByID(t *testing.T) {
 	}))
 	defer upstream.Close()
 
-	cfg := config.Config{Server: config.ServerConfig{MaxBodyBytes: 10 * 1024 * 1024}, Governance: config.GovernanceConfig{RatelimitMaxRPM: 10, RatelimitMaxTPM: 10000}}
+	cfg := config.Config{Server: config.ServerConfig{MaxBodyBytes: 10 * 1024 * 1024}, Governance: config.GovernanceConfig{RatelimitMaxRPM: config.PtrTo(10), RatelimitMaxTPM: config.PtrTo(10000)}}
 	providers := map[string]*config.Provider{"openai": {Name: "openai", URL: upstream.URL + "/v1/chat/completions", BaseURL: upstream.URL + "/v1", APIKey: "test-key", AuthStyle: "bearer", TimeoutSeconds: 30}}
 	logger := infra.SetupLogger(false)
 	gw := &gateway.NenyaGateway{Config: cfg, Secrets: &config.SecretsConfig{ClientToken: "client-token"}, Client: http.DefaultClient, Providers: providers, RateLimiter: infra.NewRateLimiter(10, 10000), Stats: infra.NewUsageTracker(), Logger: logger}
@@ -417,7 +417,7 @@ func TestHandleBatches_Cancel(t *testing.T) {
 	}))
 	defer upstream.Close()
 
-	cfg := config.Config{Server: config.ServerConfig{MaxBodyBytes: 10 * 1024 * 1024}, Governance: config.GovernanceConfig{RatelimitMaxRPM: 10, RatelimitMaxTPM: 10000}}
+	cfg := config.Config{Server: config.ServerConfig{MaxBodyBytes: 10 * 1024 * 1024}, Governance: config.GovernanceConfig{RatelimitMaxRPM: config.PtrTo(10), RatelimitMaxTPM: config.PtrTo(10000)}}
 	providers := map[string]*config.Provider{"openai": {Name: "openai", URL: upstream.URL + "/v1/chat/completions", BaseURL: upstream.URL + "/v1", APIKey: "test-key", AuthStyle: "bearer", TimeoutSeconds: 30}}
 	logger := infra.SetupLogger(false)
 	gw := &gateway.NenyaGateway{Config: cfg, Secrets: &config.SecretsConfig{ClientToken: "client-token"}, Client: http.DefaultClient, Providers: providers, RateLimiter: infra.NewRateLimiter(10, 10000), Stats: infra.NewUsageTracker(), Logger: logger}

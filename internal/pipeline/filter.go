@@ -26,7 +26,7 @@ func RedactSecrets(text string, enabled bool, patterns []*regexp.Regexp, label s
 // TruncateMiddleOut truncates text that exceeds maxSize runes by keeping
 // the beginning and end, separated by a marker. Used for payloads that
 // exceed the hard context limit.
-func TruncateMiddleOut(text string, maxSize int, cfg config.GovernanceConfig) string {
+func TruncateMiddleOut(text string, maxSize int, cfg config.ContextConfig) string {
 	runes := []rune(text)
 	if len(runes) <= maxSize {
 		return text
@@ -66,7 +66,7 @@ func TruncateMiddleOut(text string, maxSize int, cfg config.GovernanceConfig) st
 	return string(result)
 }
 
-func TruncateMiddleOutCodeAware(text string, maxSize int, cfg config.GovernanceConfig) string {
+func TruncateMiddleOutCodeAware(text string, maxSize int, cfg config.ContextConfig) string {
 	runes := []rune(text)
 	if len(runes) <= maxSize {
 		return text

@@ -167,7 +167,7 @@ func scoreBlocks(query string, blocks []Block) []scoredBlock {
 	return result
 }
 
-func TruncateTFIDF(text string, maxSize int, query string, cfg config.GovernanceConfig) string {
+func TruncateTFIDF(text string, maxSize int, query string, cfg config.ContextConfig) string {
 	runes := []rune(text)
 	if len(runes) <= maxSize {
 		return text
@@ -225,7 +225,7 @@ func capQueryRunes(query string) string {
 	return query
 }
 
-func calculateBudget(n int, blockRunes []int, cfg config.GovernanceConfig, available int) (pinFirst, pinLast, middleBudget, reservedForPinned int) {
+func calculateBudget(n int, blockRunes []int, cfg config.ContextConfig, available int) (pinFirst, pinLast, middleBudget, reservedForPinned int) {
 	pinFirst = max(1, int(float64(n)*cfg.TruncationKeepFirstPct/100.0))
 	pinLast = max(1, int(float64(n)*cfg.TruncationKeepLastPct/100.0))
 
@@ -307,7 +307,7 @@ func assembleResult(blocks []Block, blockRunes []int, pinFirst, middleStart, mid
 	return sb.String()
 }
 
-func TruncateTFIDFCodeAware(text string, maxSize int, query string, cfg config.GovernanceConfig) string {
+func TruncateTFIDFCodeAware(text string, maxSize int, query string, cfg config.ContextConfig) string {
 	result := TruncateTFIDF(text, maxSize, query, cfg)
 
 	sepMarker := "\n... [NENYA: TF-IDF PRUNED] ...\n"
@@ -330,7 +330,7 @@ func TruncateTFIDFCodeAware(text string, maxSize int, query string, cfg config.G
 	return before + sepMarker + after
 }
 
-func TruncateTFIDFHistory(historyText string, maxRunes int, query string, cfg config.GovernanceConfig) string {
+func TruncateTFIDFHistory(historyText string, maxRunes int, query string, cfg config.ContextConfig) string {
 	if maxRunes <= 0 {
 		maxRunes = 4000
 	}
