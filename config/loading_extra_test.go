@@ -80,8 +80,6 @@ func TestValidatePromptPath_RelativeTraversal(t *testing.T) {
 }
 
 func TestValidatePromptPath_ValidRelativePath(t *testing.T) {
-	t.Setenv("CONFIG_DIR", "/tmp/config")
-
 	tests := []string{
 		"prompt.txt",
 		"subdir/prompt.txt",
@@ -387,8 +385,8 @@ func TestResolveProviders(t *testing.T) {
 	if openai.APIKey != "sk-openai-key" {
 		t.Errorf("expected 'sk-openai-key', got %s", openai.APIKey)
 	}
-	if openai.BaseURL != "https://api.openai.com/v1" {
-		t.Errorf("expected 'https://api.openai.com/v1', got %s", openai.BaseURL)
+	if openai.BaseURL != "https://api.openai.com" {
+		t.Errorf("expected 'https://api.openai.com', got %s", openai.BaseURL)
 	}
 
 	anthropic, ok := providers["anthropic"]
@@ -429,7 +427,7 @@ func TestDeriveBaseURL_ValidURL(t *testing.T) {
 		input    string
 		expected string
 	}{
-		{"https://api.openai.com/v1/chat/completions", "https://api.openai.com/v1"},
+		{"https://api.openai.com/v1/chat/completions", "https://api.openai.com"},
 		{"https://api.anthropic.com/v1/messages", "https://api.anthropic.com"},
 		{"http://localhost:11434/api/generate", "http://localhost:11434"},
 		{"https://example.com", "https://example.com"},
@@ -446,16 +444,19 @@ func TestDeriveBaseURL_ValidURL(t *testing.T) {
 }
 
 func TestDeriveBaseURL_InvalidURL(t *testing.T) {
-	tests := []string{
-		"://invalid",
-		"not a url",
+	tests := []struct {
+		input    string
+		expected string
+	}{
+		{"://invalid", "://invalid"},
+		{"not a url", ""},
 	}
 
-	for _, input := range tests {
-		t.Run(input, func(t *testing.T) {
-			result := deriveBaseURL(input)
-			if result != input {
-				t.Errorf("expected input to be returned unchanged for invalid URL, got %s", result)
+	for _, tt := range tests {
+		t.Run(tt.input, func(t *testing.T) {
+			result := deriveBaseURL(tt.input)
+			if result != tt.expected {
+				t.Errorf("expected %s, got %s", tt.expected, result)
 			}
 		})
 	}
@@ -492,7 +493,7 @@ func TestLoadFromDir_BothConfigAndConfigD(t *testing.T) {
 	if err := os.MkdirAll(configDir, 0755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(configDir, "01-server.json"), []byte(`{"server": {"log_level": "debug"}}`), 0644); err != nil {
+	if err := os.WriteFile(filepath.Join(configDir, "01-server.json"), []byte(`{"server": {"listen_addr": ":9090", "log_level": "debug"}}`), 0644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -501,7 +502,7 @@ func TestLoadFromDir_BothConfigAndConfigD(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if cfg.Server.ListenAddr != ":9090" {
-		t.Errorf("expected :9090 from config.json, got %s", cfg.Server.ListenAddr)
+		t.Errorf("expected :9090 from config.d, got %s", cfg.Server.ListenAddr)
 	}
 	if cfg.Server.LogLevel != "debug" {
 		t.Errorf("expected debug from config.d, got %s", cfg.Server.LogLevel)

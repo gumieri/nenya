@@ -1,6 +1,7 @@
 package proxy
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -21,6 +22,134 @@ import (
 	"nenya/internal/routing"
 	"nenya/internal/testutil"
 )
+
+func TestContentBuilder(t *testing.T) {
+	b := newContentBuilder()
+	if b == nil {
+		t.Fatal("expected non-nil builder")
+	}
+
+	b.addContent("hello")
+	b.addContent(" ")
+	b.addContent("world")
+
+	result := b.build()
+	if result != "hello world" {
+		t.Errorf("expected 'hello world', got %q", result)
+	}
+}
+
+func TestContentBuilder_Empty(t *testing.T) {
+	b := newContentBuilder()
+	result := b.build()
+	if result != "" {
+		t.Errorf("expected empty string, got %q", result)
+	}
+}
+
+func TestStallReader_DrainPending_WithData(t *testing.T) {
+	// Use a slow reader that blocks so readLoop doesn't race with us writing to sr.ch.
+	src := &slowReader{}
+	sr := newStallReader(src, time.Hour)
+	sr.Stop()
+
+	sr.ch <- readResult{data: []byte("test"), err: nil}
+
+	n, err := sr.DrainPending(100 * time.Millisecond)
+	if err != nil {
+		t.Errorf("unexpected error: %v", err)
+	}
+	if n != 4 {
+		t.Errorf("expected 4 bytes, got %d", n)
+	}
+}
+
+func TestStallReader_DrainPending_Timeout(t *testing.T) {
+	src := &timeoutReader{}
+	sr := newStallReader(src, time.Hour)
+	sr.Stop()
+
+	_, err := sr.DrainPending(10 * time.Millisecond)
+	if err == nil {
+		t.Error("expected timeout error")
+	}
+}
+
+type timeoutReader struct{}
+
+func (r *timeoutReader) Read(p []byte) (int, error) {
+	return 0, io.EOF
+}
+
+type slowReader struct{}
+
+func (r *slowReader) Read(p []byte) (int, error) {
+	// Block forever so the background readLoop never sends data to sr.ch,
+	// preventing a race when the test manually writes to sr.ch.
+	select {}
+}
+
+func TestSSETeeWriter_Write(t *testing.T) {
+	var buf bytes.Buffer
+	dst := &bytes.Buffer{}
+	tee := &sseTeeWriter{
+		dst:      dst,
+		buf:      &buf,
+		maxBytes: 10,
+	}
+
+	n, err := tee.Write([]byte("hello"))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if n != 5 {
+		t.Errorf("expected 5 bytes written, got %d", n)
+	}
+
+	// Data should be buffered and forwarded
+	if buf.String() != "hello" {
+		t.Errorf("expected buf to contain 'hello', got %q", buf.String())
+	}
+	if dst.String() != "hello" {
+		t.Errorf("expected dst to contain 'hello', got %q", dst.String())
+	}
+}
+
+func TestSSETeeWriter_Write_ExceedsMax(t *testing.T) {
+	var buf bytes.Buffer
+	dst := &bytes.Buffer{}
+	tee := &sseTeeWriter{
+		dst:      dst,
+		buf:      &buf,
+		maxBytes: 10,
+	}
+
+	_, _ = tee.Write([]byte("1234567890")) // exactly at limit — allowed
+	_, _ = tee.Write([]byte("1234567890")) // exceeds — should not buffer
+	_, _ = tee.Write([]byte("1234567890")) // exceeds — should not buffer
+
+	if buf.Len() != 10 {
+		t.Errorf("expected buf to have 10 bytes, got %d", buf.Len())
+	}
+	if !tee.exceeded {
+		t.Error("expected tee to be marked as exceeded")
+	}
+}
+
+func TestSSETeeWriter_Write_NoLimit(t *testing.T) {
+	var buf bytes.Buffer
+	dst := &bytes.Buffer{}
+	tee := &sseTeeWriter{
+		dst:      dst,
+		buf:      &buf,
+		maxBytes: 0, // 0 means no limit
+	}
+
+	_, _ = tee.Write([]byte("hello world this is a long test"))
+	if buf.Len() != 31 {
+		t.Errorf("expected buf to have 31 bytes with no limit, got %d", buf.Len())
+	}
+}
 
 func TestWriteBlockedSSE(t *testing.T) {
 	p := &Proxy{}

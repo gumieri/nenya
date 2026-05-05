@@ -16,21 +16,27 @@ import (
 	"nenya/internal/testutil"
 )
 
-func newTestProxy(t *testing.T) (*Proxy, *httptest.Server) {
+func newTestProxyWithSecrets(t *testing.T, secrets *config.SecretsConfig) (*Proxy, *httptest.Server) {
 	t.Helper()
 	cfg := testutil.MinimalConfig()
 	cfg.Bouncer.Engine = config.EngineRef{
 		Provider: "ollama",
 		Model:    "qwen2.5-coder",
 	}
-	secrets := &config.SecretsConfig{
-		ClientToken:  "test-token",
-		ProviderKeys: map[string]string{"gemini": "test-key"},
+	if secrets == nil {
+		secrets = &config.SecretsConfig{
+			ClientToken:   "test-token",
+			ProviderKeys:  map[string]string{"gemini": "test-key"},
+		}
 	}
 	gw := gateway.New(context.Background(), *cfg, secrets, slog.Default())
 	p := &Proxy{}
 	p.StoreGateway(gw)
 	return p, nil
+}
+
+func newTestProxy(t *testing.T) (*Proxy, *httptest.Server) {
+	return newTestProxyWithSecrets(t, nil)
 }
 
 func TestServeHTTP_Healthz_NoAuth(t *testing.T) {
@@ -155,6 +161,174 @@ func TestServeHTTP_Metrics_ValidAuth(t *testing.T) {
 	p.ServeHTTP(rec, req)
 
 	testutil.AssertResponseStatusCode(t, rec, http.StatusOK)
+}
+
+// Test authenticateRequest: missing Authorization header
+func TestAuthenticateRequest_MissingHeader(t *testing.T) {
+	p, _ := newTestProxy(t)
+	req := httptest.NewRequest(http.MethodGet, "/v1/models", nil)
+	// No Authorization header
+	rec := httptest.NewRecorder()
+	token, ok := p.authenticateRequest(req, rec)
+	if ok {
+		t.Fatalf("expected authentication to fail, got token=%q", token)
+	}
+	if rec.Code != http.StatusUnauthorized {
+		t.Errorf("expected status 401, got %d", rec.Code)
+	}
+	if token != "" {
+		t.Fatalf("expected empty token, got %q", token)
+	}
+}
+
+// Test authenticateRequest: malformed Authorization header (wrong prefix)
+func TestAuthenticateRequest_WrongPrefix(t *testing.T) {
+	p, _ := newTestProxy(t)
+	req := httptest.NewRequest(http.MethodGet, "/v1/models", nil)
+	req.Header.Set("Authorization", "Basic wrong-token")
+	rec := httptest.NewRecorder()
+	token, ok := p.authenticateRequest(req, rec)
+	if ok {
+		t.Fatalf("expected authentication to fail, got token=%q", token)
+	}
+	if rec.Code != http.StatusUnauthorized {
+		t.Errorf("expected status 401, got %d", rec.Code)
+	}
+	if token != "" {
+		t.Fatalf("expected empty token, got %q", token)
+	}
+}
+
+// Test authenticateRequest: empty Bearer token
+func TestAuthenticateRequest_EmptyBearer(t *testing.T) {
+	p, _ := newTestProxy(t)
+	req := httptest.NewRequest(http.MethodGet, "/v1/models", nil)
+	req.Header.Set("Authorization", "Bearer ")
+	rec := httptest.NewRecorder()
+	token, ok := p.authenticateRequest(req, rec)
+	if ok {
+		t.Fatalf("expected authentication to fail, got token=%q", token)
+	}
+	if rec.Code != http.StatusForbidden {
+		t.Errorf("expected status 403, got %d", rec.Code)
+	}
+	if token != "" {
+		t.Fatalf("expected empty token, got %q", token)
+	}
+}
+
+// Test authenticateRequest: whitespace-only Bearer token
+func TestAuthenticateRequest_WhitespaceBearer(t *testing.T) {
+	p, _ := newTestProxy(t)
+	req := httptest.NewRequest(http.MethodGet, "/v1/models", nil)
+	req.Header.Set("Authorization", "Bearer   ")
+	rec := httptest.NewRecorder()
+	token, ok := p.authenticateRequest(req, rec)
+	if ok {
+		t.Fatalf("expected authentication to fail, got token=%q", token)
+	}
+	if rec.Code != http.StatusForbidden {
+		t.Errorf("expected status 403, got %d", rec.Code)
+	}
+	if token != "" {
+		t.Fatalf("expected empty token, got %q", token)
+	}
+}
+
+// Test authenticateRequest: client token mismatch via secure memory
+func TestAuthenticateRequest_ClientTokenMismatch(t *testing.T) {
+	p, _ := newTestProxyWithSecrets(t, &config.SecretsConfig{
+		ClientToken:  "correct-token",
+		ProviderKeys: map[string]string{},
+	})
+	req := httptest.NewRequest(http.MethodGet, "/v1/models", nil)
+	req.Header.Set("Authorization", "Bearer wrong-token")
+	rec := httptest.NewRecorder()
+	token, ok := p.authenticateRequest(req, rec)
+	if ok {
+		t.Fatalf("expected authentication to fail, got token=%q", token)
+	}
+	if rec.Code != http.StatusForbidden {
+		t.Errorf("expected status 403, got %d", rec.Code)
+	}
+	if token != "" {
+		t.Fatalf("expected empty token, got %q", token)
+	}
+}
+
+// Test authenticateRequest: expired API key
+func TestAuthenticateRequest_ExpiredKey(t *testing.T) {
+	expired := time.Now().Add(-time.Hour).Format(time.RFC3339)
+	p, _ := newTestProxyWithSecrets(t, &config.SecretsConfig{
+		ClientToken:  "",
+		ProviderKeys: map[string]string{},
+		ApiKeys: map[string]config.ApiKey{
+			"expired-key": {
+				Name:       "expired-key",
+				Token:      "secret-token",
+				ExpiresAt:  expired,
+			},
+		},
+	})
+	req := httptest.NewRequest(http.MethodGet, "/v1/models", nil)
+	req.Header.Set("Authorization", "Bearer secret-token")
+	rec := httptest.NewRecorder()
+	token, ok := p.authenticateRequest(req, rec)
+	if ok {
+		t.Fatalf("expected authentication to fail (expired), got token=%q", token)
+	}
+	if rec.Code != http.StatusForbidden {
+		t.Errorf("expected status 403, got %d", rec.Code)
+	}
+	if token != "" {
+		t.Fatalf("expected empty token, got %q", token)
+	}
+}
+
+// Test authenticateRequest: disabled API key
+func TestAuthenticateRequest_DisabledKey(t *testing.T) {
+	p, _ := newTestProxyWithSecrets(t, &config.SecretsConfig{
+		ClientToken:  "",
+		ProviderKeys: map[string]string{},
+		ApiKeys: map[string]config.ApiKey{
+			"disabled-key": {
+				Name:    "disabled-key",
+				Token:   "secret-token",
+				Enabled: false,
+			},
+		},
+	})
+	req := httptest.NewRequest(http.MethodGet, "/v1/models", nil)
+	req.Header.Set("Authorization", "Bearer secret-token")
+	rec := httptest.NewRecorder()
+	token, ok := p.authenticateRequest(req, rec)
+	if ok {
+		t.Fatalf("expected authentication to fail (disabled), got token=%q", token)
+	}
+	if rec.Code != http.StatusForbidden {
+		t.Errorf("expected status 403, got %d", rec.Code)
+	}
+	if token != "" {
+		t.Fatalf("expected empty token, got %q", token)
+	}
+}
+
+// Test authenticateRequest: valid token succeeds
+func TestAuthenticateRequest_ValidToken(t *testing.T) {
+	p, _ := newTestProxyWithSecrets(t, &config.SecretsConfig{
+		ClientToken:  "valid-token",
+		ProviderKeys: map[string]string{},
+	})
+	req := httptest.NewRequest(http.MethodGet, "/v1/models", nil)
+	req.Header.Set("Authorization", "Bearer valid-token")
+	rec := httptest.NewRecorder()
+	token, ok := p.authenticateRequest(req, rec)
+	if !ok {
+		t.Fatalf("expected authentication to succeed, got status %d", rec.Code)
+	}
+	if token != "primary" {
+		t.Fatalf("expected token reference 'primary', got %q", token)
+	}
 }
 
 func TestServeHTTP_Models_NoDeepSeekWithoutAPIKey(t *testing.T) {

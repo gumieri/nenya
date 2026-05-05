@@ -1,8 +1,11 @@
 package proxy
 
 import (
+	"context"
 	"log/slog"
 	"net/http"
+	"regexp"
+	"strings"
 	"testing"
 	"time"
 
@@ -634,5 +637,104 @@ func TestDeepseekRetryablePatterns(t *testing.T) {
 
 	if isRetryableClientErrorForProvider(http.StatusBadRequest, body2, "gemini") {
 		t.Fatal("expected non-retryable for gemini with deepseek-specific error")
+	}
+}
+
+func TestCalculateBackoff(t *testing.T) {
+	testCases := []struct {
+		name     string
+		attempt  int
+		minDelay time.Duration
+		maxDelay time.Duration
+	}{
+		{"attempt 0", 0, 500 * time.Millisecond, 1250 * time.Millisecond},
+		{"attempt 1", 1, 1000 * time.Millisecond, 1750 * time.Millisecond},
+		{"attempt 2", 2, 2000 * time.Millisecond, 2750 * time.Millisecond},
+		{"attempt 5", 5, 8000 * time.Millisecond, 8750 * time.Millisecond},
+		{"attempt 10", 10, 8000 * time.Millisecond, 8750 * time.Millisecond},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			backoff := calculateBackoff(tc.attempt)
+			if backoff < tc.minDelay {
+				t.Errorf("backoff %v below minimum %v", backoff, tc.minDelay)
+			}
+			if backoff > tc.maxDelay {
+				t.Errorf("backoff %v above maximum %v", backoff, tc.maxDelay)
+			}
+		})
+	}
+}
+
+func TestWaitWithCancel(t *testing.T) {
+	ctx := context.Background()
+
+	// Zero duration should return immediately
+	waitWithCancel(ctx, 0)
+
+	// Negative duration should return immediately
+	waitWithCancel(ctx, -1*time.Second)
+
+	// Cancelled context should return early
+	ctx, cancel := context.WithCancel(ctx)
+	cancel()
+	waitWithCancel(ctx, time.Minute)
+
+	// Normal wait should complete after delay
+	start := time.Now()
+	ctx, cancel = context.WithCancel(context.Background())
+	defer cancel()
+	waitWithCancel(ctx, 50*time.Millisecond)
+	elapsed := time.Since(start)
+	if elapsed < 50*time.Millisecond {
+		t.Errorf("wait returned too early: %v", elapsed)
+	}
+	// Keep a generous upper bound to avoid OS scheduling flakes.
+	if elapsed > 5*time.Second {
+		t.Errorf("wait took too long: %v", elapsed)
+	}
+}
+
+func TestRedactForLog_BouncerDisabled(t *testing.T) {
+	gw := newTestGateway(nil, nil)
+	gw.Config.Bouncer.Enabled = config.PtrTo(false)
+	gw.SecretPatterns = nil
+
+	result := redactForLog("hello world", gw)
+	if result != "hello world" {
+		t.Errorf("expected no redaction, got %q", result)
+	}
+}
+
+func TestRedactForLog_BouncerEnabled(t *testing.T) {
+	gw := newTestGateway(&config.Config{
+		Bouncer: config.BouncerConfig{
+			Enabled:        config.PtrTo(true),
+			RedactionLabel: "[CRED]",
+		},
+	}, nil)
+	gw.SecretPatterns = []*regexp.Regexp{regexp.MustCompile(`AKIA[0-9A-Z]{16}`)}
+
+	result := redactForLog("key=AKIAIOSFODNN7EXAMPLE", gw)
+	if result != "key=[CRED]" {
+		t.Errorf("expected redacted, got %q", result)
+	}
+}
+
+func TestRedactForLog_TruncatesLongBody(t *testing.T) {
+	gw := newTestGateway(nil, nil)
+	gw.Config.Bouncer.Enabled = config.PtrTo(false)
+	long := strings.Repeat("a", 600)
+
+	result := redactForLog(long, gw)
+	if len(result) > 512+len("...[truncated]") {
+		t.Errorf("expected truncated result, got length %d", len(result))
+	}
+	if len(result) != 512+len("...[truncated]") {
+		t.Errorf("expected result length %d, got %d", 512+len("...[truncated]"), len(result))
+	}
+	if result[512:] != "...[truncated]" {
+		t.Errorf("expected truncated suffix, got %q", result[512:])
 	}
 }
