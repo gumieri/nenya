@@ -2,6 +2,7 @@ package proxy
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"testing"
 )
@@ -348,6 +349,23 @@ func TestGatewayErrorError(t *testing.T) {
 				t.Errorf("GatewayError.Error() = %v, want %v", got, tt.wantMsg)
 			}
 		})
+	}
+}
+
+func TestGatewayError_Unwrap(t *testing.T) {
+	wrapped := errors.New("wrapped error")
+	err := NewInvalidRequestError("test", wrapped)
+
+	if err.Unwrap() != wrapped {
+		t.Errorf("expected Unwrap to return the wrapped error")
+	}
+}
+
+func TestGatewayError_UnwrapNil(t *testing.T) {
+	err := NewInvalidRequestError("test", nil)
+
+	if err.Unwrap() != nil {
+		t.Errorf("expected Unwrap to return nil when no wrapped error")
 	}
 }
 

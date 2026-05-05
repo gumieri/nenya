@@ -88,7 +88,7 @@ func TestBuiltInProviders_NotEmpty(t *testing.T) {
 	}
 
 	expected := []string{
-		"openai", "anthropic", "gemini", "ollama",
+		"anthropic", "gemini", "ollama",
 		"deepseek", "mistral", "xai", "groq",
 	}
 

@@ -375,8 +375,8 @@ func TestProviderEntry_ToProviderConfig(t *testing.T) {
 func TestAgentConfig_UnmarshalJSON_StringShorthand(t *testing.T) {
 	data := `{
 		"models": [
-			"gpt-4",
-			"claude-3-opus"
+			"gpt-4o",
+			"claude-sonnet-4-5"
 		]
 	}`
 
@@ -390,11 +390,11 @@ func TestAgentConfig_UnmarshalJSON_StringShorthand(t *testing.T) {
 		t.Fatalf("expected 2 models, got %d", len(cfg.Models))
 	}
 
-	if cfg.Models[0].Model != "gpt-4" {
-		t.Errorf("expected 'gpt-4', got %s", cfg.Models[0].Model)
+	if cfg.Models[0].Model != "gpt-4o" {
+		t.Errorf("expected 'gpt-4o', got %s", cfg.Models[0].Model)
 	}
-	if cfg.Models[1].Model != "claude-3-opus" {
-		t.Errorf("expected 'claude-3-opus', got %s", cfg.Models[1].Model)
+	if cfg.Models[1].Model != "claude-sonnet-4-5" {
+		t.Errorf("expected 'claude-sonnet-4-5', got %s", cfg.Models[1].Model)
 	}
 }
 
@@ -447,7 +447,7 @@ func TestAgentConfig_UnmarshalJSON_UnknownModel(t *testing.T) {
 func TestAgentConfig_UnmarshalJSON_MixedForms(t *testing.T) {
 	data := `{
 		"models": [
-			"gpt-4",
+			"gpt-4o",
 			{
 				"provider": "anthropic",
 				"model": "claude-3-opus",
@@ -466,8 +466,8 @@ func TestAgentConfig_UnmarshalJSON_MixedForms(t *testing.T) {
 		t.Fatalf("expected 2 models, got %d", len(cfg.Models))
 	}
 
-	if cfg.Models[0].Model != "gpt-4" {
-		t.Errorf("expected 'gpt-4', got %s", cfg.Models[0].Model)
+	if cfg.Models[0].Model != "gpt-4o" {
+		t.Errorf("expected 'gpt-4o', got %s", cfg.Models[0].Model)
 	}
 
 	if cfg.Models[1].Provider != "anthropic" {

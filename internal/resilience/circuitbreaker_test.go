@@ -133,3 +133,94 @@ func TestCircuitBreaker_StateTransitions(t *testing.T) {
 		t.Errorf("expected StateClosed, got %v", cb.State(key))
 	}
 }
+
+func TestCircuitBreaker_ForceOpen_EdgeCases(t *testing.T) {
+	cb := NewCircuitBreaker(1, 1, 1, time.Hour, nil)
+
+	// ForceOpen with empty key should be no-op
+	cb.ForceOpen("", time.Hour)
+	if cb.State("") != StateClosed {
+		t.Error("expected ForceOpen with empty key to be no-op")
+	}
+
+	// ForceOpen with zero cooldown should be no-op
+	cb.ForceOpen("test", 0)
+	if cb.State("test") != StateClosed {
+		t.Error("expected ForceOpen with zero cooldown to be no-op")
+	}
+
+	// ForceOpen with negative cooldown should be no-op
+	cb.ForceOpen("test", -1)
+	if cb.State("test") != StateClosed {
+		t.Error("expected ForceOpen with negative cooldown to be no-op")
+	}
+}
+
+func TestCircuitBreaker_RecordFailure_CooldownOverride(t *testing.T) {
+	cb := NewCircuitBreaker(2, 1, 1, time.Second, nil)
+	key := "test"
+
+	// Record failures with cooldown override
+	cb.RecordFailure(key)
+	cb.RecordFailure(key, 100*time.Millisecond)
+
+	// Circuit should be open with the overridden cooldown
+	if cb.State(key) != StateOpen {
+		t.Error("expected circuit to be open after failures with cooldown override")
+	}
+
+	// Wait for the overridden cooldown
+	time.Sleep(150 * time.Millisecond)
+
+	// Should transition to half-open
+	if cb.State(key) != StateHalfOpen {
+		t.Errorf("expected StateHalfOpen after overridden cooldown, got %v", cb.State(key))
+	}
+}
+
+func TestCircuitBreaker_Peek_ReadOnly(t *testing.T) {
+	cb := NewCircuitBreaker(2, 1, 1, time.Hour, nil)
+	key := "test"
+
+	// Peek on closed circuit should return true without side effects
+	if !cb.Peek(key) {
+		t.Error("expected Peek to return true for closed circuit")
+	}
+
+	// Trip the breaker
+	cb.RecordFailure(key)
+	cb.RecordFailure(key)
+
+	// Peek should return false for open circuit
+	if cb.Peek(key) {
+		t.Error("expected Peek to return false for open circuit")
+	}
+
+	// Peek should not increment inflight counter like Allow does
+	cb.Allow(key) // This enters half-open and increments inflight
+
+	// Peek should still check inflight correctly
+	if cb.Peek(key) {
+		t.Error("expected Peek to return false when half-open with inflight")
+	}
+}
+
+func TestCircuitBreaker_RecordFailure_OpenWithOverride(t *testing.T) {
+	cb := NewCircuitBreaker(1, 1, 1, time.Hour, nil)
+	key := "test"
+
+	// Trip the breaker
+	cb.RecordFailure(key)
+
+	if cb.State(key) != StateOpen {
+		t.Error("expected circuit to be open")
+	}
+
+	// RecordFailure in open state with longer cooldown override should extend expiry
+	cb.RecordFailure(key, 2*time.Hour)
+
+	// Circuit should remain open
+	if cb.State(key) != StateOpen {
+		t.Error("expected circuit to remain open")
+	}
+}

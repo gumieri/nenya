@@ -593,6 +593,16 @@ func TestExtractInputJSONFromPart_NilInput(t *testing.T) {
 	}
 }
 
+func TestExtractInputJSONFromPart_MarshalFailure(t *testing.T) {
+	part := map[string]interface{}{
+		"input_json": make(chan int),
+	}
+	result := extractInputJSONFromPart(part)
+	if result != "" {
+		t.Errorf("expected empty string on marshal failure, got %q", result)
+	}
+}
+
 func TestExtractInputJSONFromPart_MissingField(t *testing.T) {
 	part := map[string]interface{}{
 		"type": "other",
