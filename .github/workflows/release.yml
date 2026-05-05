@@ -7,11 +7,14 @@ on:
 
 permissions:
   contents: write
+  packages: write
+  id-token: write
+  attestations: write
 
 jobs:
   release:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@v4
         with:
@@ -25,6 +28,50 @@ jobs:
         with:
           path: ~/go/pkg/mod
           key: go-mod-${{ hashFiles('go.sum') }}
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3.6.0
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3.11.1
+
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v3.4.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata for tags
+        id: meta
+        uses: docker/metadata-action@v5.7.0
+        with:
+          images: ghcr.io/${{ github.repository }}
+          tags: |
+            type=semver,pattern={{version}}
+            type=raw,value=latest
+
+      - name: Build and push container images
+        id: build-and-push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: deploy/Containerfile
+          platforms: linux/amd64,linux/arm64
+          build-args: |
+            VERSION=${{ github.ref_name }}
+            COMMIT=${{ github.sha }}
+            BUILDTIME=${{ github.event.created_at }}
+          tags: |
+            ${{ steps.meta.outputs.tags }}
+            ghcr.io/${{ github.repository }}:${{ github.ref_name }}-amd64
+            ghcr.io/${{ github.repository }}:${{ github.ref_name }}-arm64
+          push: true
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Install Cosign
+        uses: sigstore/cosign-installer@v4.1.1
 
       - uses: goreleaser/goreleaser-action@v6
         with:
@@ -42,11 +89,52 @@ jobs:
           format: spdx-json
           output-file: nenya-${{ github.ref_name }}-spdx.json
 
-      - name: Upload SBOM to release
+      - name: Generate SBOM for containers
         run: |
-          gh release upload "${{ github.ref_name }}" \
-            nenya-${{ github.ref_name }}-spdx.json \
+          set -e
+          VERSION="${{ github.ref_name }}"
+          IMAGE="ghcr.io/${{ github.repository }}"
+
+          for arch in amd64 arm64; do
+            echo "Generating SBOM for $arch"
+            docker run --rm -v /var/run/docker.sock:/var/run/docker.sock \
+              anchore/syft:latest \
+              "${IMAGE}:${VERSION}-${arch}" \
+              -o spdx-json > "nenya-${VERSION}-linux-${arch}.spdx.json"
+
+            echo "Validating SBOM for $arch"
+            jq . "nenya-${VERSION}-linux-${arch}.spdx.json" > /dev/null || exit 1
+          done
+
+      - name: Sign images with provenance
+        env:
+          IMAGE: ghcr.io/${{ github.repository }}
+        run: |
+          VERSION="${{ github.ref_name }}"
+
+          for arch in amd64 arm64; do
+            TAG="${IMAGE}:${VERSION}-${arch}"
+            ARCH_DIGEST=$(docker buildx imagetools inspect \
+              --format '{{.Manifest.Digest}}' \
+              "${TAG}")
+            echo "Signing ${TAG}@${ARCH_DIGEST}"
+            cosign sign --yes "${TAG}@${ARCH_DIGEST}"
+            echo "Attesting ${TAG}@${ARCH_DIGEST}"
+            cosign attest \
+              --yes \
+              --type spdxjson \
+              --predicate nenya-${VERSION}-linux-${arch}.spdx.json \
+              "${TAG}@${ARCH_DIGEST}"
+          done
+
+      - name: Upload SBOMs to release
+        run: |
+          VERSION="${{ github.ref_name }}"
+
+          gh release upload "$VERSION" \
+            nenya-${VERSION}-spdx.json \
+            nenya-${VERSION}-linux-amd64.spdx.json \
+            nenya-${VERSION}-linux-arm64.spdx.json \
             --clobber
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-

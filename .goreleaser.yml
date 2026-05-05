@@ -29,16 +29,16 @@ builds:
 
 archives:
   - id: linux
-    builds: [nenya-linux]
-    format: tar.gz
+    ids: [nenya-linux]
+    formats: [tar.gz]
     name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}{{ if .Arm }}v{{ .Arm }}{{ end }}"
     files:
       - src: deploy/nenya.service
       - src: deploy/nenya.socket
 
   - id: darwin
-    builds: [nenya-darwin]
-    format: tar.gz
+    ids: [nenya-darwin]
+    formats: [tar.gz]
     name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}{{ if .Arm }}v{{ .Arm }}{{ end }}"
     files:
       - src: deploy/nenya.plist
@@ -125,7 +125,12 @@ checksum:
 signs:
   - id: checksums
     artifacts: checksum
-    args: ["sign", "-y", "{{ .Artifact }}"]
+    signature: "${artifact}.sigstore.json"
+    args:
+      - "sign-blob"
+      - "--bundle=${signature}"
+      - "--yes"
+      - "${artifact}"
     cmd: cosign
 
 release:
