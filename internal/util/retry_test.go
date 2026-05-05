@@ -94,14 +94,23 @@ func TestDoWithRetry_ZeroAttempts(t *testing.T) {
 }
 
 func TestCalculateBackoff_Increases(t *testing.T) {
-	d0 := CalculateBackoff(0)
-	d1 := CalculateBackoff(1)
-	d2 := CalculateBackoff(2)
-	if d0 >= d1 {
-		t.Errorf("expected backoff(0) < backoff(1), got %v >= %v", d0, d1)
+	// Jitter can make individual calls non-monotonic, so average over
+	// multiple samples. The base backoffs differ by 500ms–1000ms and
+	// average jitter is ~375ms, so 10 samples is more than enough.
+	const samples = 10
+	var sums [3]time.Duration
+	for i := 0; i < samples; i++ {
+		sums[0] += CalculateBackoff(0)
+		sums[1] += CalculateBackoff(1)
+		sums[2] += CalculateBackoff(2)
 	}
-	if d1 >= d2 {
-		t.Errorf("expected backoff(1) < backoff(2), got %v >= %v", d1, d2)
+	if sums[0] >= sums[1] {
+		t.Errorf("expected avg backoff(0) < avg backoff(1), got %v >= %v",
+			sums[0]/samples, sums[1]/samples)
+	}
+	if sums[1] >= sums[2] {
+		t.Errorf("expected avg backoff(1) < avg backoff(2), got %v >= %v",
+			sums[1]/samples, sums[2]/samples)
 	}
 }
 
