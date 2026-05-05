@@ -103,187 +103,122 @@ func (p *Proxy) resolveRoute(path string) routeHandler {
 	return nil
 }
 
-func (p *Proxy) chainHealthz(gw *gateway.NenyaGateway, w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
-		return
+// chainEndpoint wraps a handler with optional method validation, authentication,
+// and metrics observation. This eliminates repetition across all chain methods.
+func (p *Proxy) chainEndpoint(method, path string, requireAuth bool, handler func(*gateway.NenyaGateway, http.ResponseWriter, *http.Request, string)) func(*gateway.NenyaGateway, http.ResponseWriter, *http.Request) {
+	return func(gw *gateway.NenyaGateway, w http.ResponseWriter, r *http.Request) {
+		if method != "" && r.Method != method {
+			http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		var keyRef string
+		var ok bool
+		if requireAuth {
+			keyRef, ok = p.authenticateRequest(r, w)
+			if !ok {
+				return
+			}
+		}
+		infra.ObserveHTTPFunc(gw.Metrics, func(w http.ResponseWriter, r *http.Request) {
+			handler(gw, w, r, keyRef)
+		})(w, r)
 	}
-	infra.ObserveHTTPFunc(gw.Metrics, func(w http.ResponseWriter, r *http.Request) {
+}
+
+func (p *Proxy) chainHealthz(gw *gateway.NenyaGateway, w http.ResponseWriter, r *http.Request) {
+	p.chainEndpoint(http.MethodGet, "/healthz", false, func(gw *gateway.NenyaGateway, w http.ResponseWriter, r *http.Request, keyRef string) {
 		p.handleHealthz(w, r)
-	})(w, r)
+	})(gw, w, r)
 }
 
 func (p *Proxy) chainAuthStats(gw *gateway.NenyaGateway, w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
-		return
-	}
-	if _, ok := p.authenticateRequest(r, w); !ok {
-		return
-	}
-	infra.ObserveHTTP(gw.Metrics, p.handleStats)(w, r)
+	p.chainEndpoint(http.MethodGet, "/statsz", true, func(gw *gateway.NenyaGateway, w http.ResponseWriter, r *http.Request, keyRef string) {
+		infra.ObserveHTTP(gw.Metrics, p.handleStats)(w, r)
+	})(gw, w, r)
 }
 
 func (p *Proxy) chainAuthMetric(gw *gateway.NenyaGateway, w http.ResponseWriter, r *http.Request) {
-	if _, ok := p.authenticateRequest(r, w); !ok {
-		return
-	}
-	infra.ObserveHTTPFunc(gw.Metrics, p.handleMetrics)(w, r)
+	p.chainEndpoint("", "/metrics", true, func(gw *gateway.NenyaGateway, w http.ResponseWriter, r *http.Request, keyRef string) {
+		p.handleMetrics(w, r)
+	})(gw, w, r)
 }
 
 func (p *Proxy) chainModels(gw *gateway.NenyaGateway, w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
-		return
-	}
-	if _, ok := p.authenticateRequest(r, w); !ok {
-		return
-	}
-	infra.ObserveHTTP(gw.Metrics, p.handleModels)(w, r)
+	p.chainEndpoint(http.MethodGet, "/v1/models", true, func(gw *gateway.NenyaGateway, w http.ResponseWriter, r *http.Request, keyRef string) {
+		infra.ObserveHTTP(gw.Metrics, p.handleModels)(w, r)
+	})(gw, w, r)
 }
 
 func (p *Proxy) chainChat(gw *gateway.NenyaGateway, w http.ResponseWriter, r *http.Request) {
-	keyRef, ok := p.authenticateRequest(r, w)
-	if !ok {
-		return
-	}
-	infra.ObserveHTTPFunc(gw.Metrics, func(w http.ResponseWriter, r *http.Request) {
+	p.chainEndpoint("", "/v1/chat/completions", true, func(gw *gateway.NenyaGateway, w http.ResponseWriter, r *http.Request, keyRef string) {
 		p.handleChatCompletions(gw, w, r, keyRef)
-	})(w, r)
+	})(gw, w, r)
 }
 
 func (p *Proxy) chainEmbeddings(gw *gateway.NenyaGateway, w http.ResponseWriter, r *http.Request) {
-	keyRef, ok := p.authenticateRequest(r, w)
-	if !ok {
-		return
-	}
-	infra.ObserveHTTPFunc(gw.Metrics, func(w http.ResponseWriter, r *http.Request) {
+	p.chainEndpoint("", "/v1/embeddings", true, func(gw *gateway.NenyaGateway, w http.ResponseWriter, r *http.Request, keyRef string) {
 		p.handleEmbeddings(gw, w, r, keyRef)
-	})(w, r)
+	})(gw, w, r)
 }
 
 func (p *Proxy) chainResponses(gw *gateway.NenyaGateway, w http.ResponseWriter, r *http.Request) {
-	keyRef, ok := p.authenticateRequest(r, w)
-	if !ok {
-		return
-	}
-	infra.ObserveHTTPFunc(gw.Metrics, func(w http.ResponseWriter, r *http.Request) {
+	p.chainEndpoint("", "/v1/responses", true, func(gw *gateway.NenyaGateway, w http.ResponseWriter, r *http.Request, keyRef string) {
 		p.handleResponses(gw, w, r, keyRef)
-	})(w, r)
+	})(gw, w, r)
 }
 
 func (p *Proxy) chainProxy(gw *gateway.NenyaGateway, w http.ResponseWriter, r *http.Request) {
-	keyRef, ok := p.authenticateRequest(r, w)
-	if !ok {
-		return
-	}
-	infra.ObserveHTTPFunc(gw.Metrics, func(w http.ResponseWriter, r *http.Request) {
+	p.chainEndpoint("", "/proxy/", true, func(gw *gateway.NenyaGateway, w http.ResponseWriter, r *http.Request, keyRef string) {
 		p.handlePassthrough(gw, w, r, keyRef)
-	})(w, r)
+	})(gw, w, r)
 }
 
 func (p *Proxy) chainFiles(gw *gateway.NenyaGateway, w http.ResponseWriter, r *http.Request) {
-	keyRef, ok := p.authenticateRequest(r, w)
-	if !ok {
-		return
-	}
-	infra.ObserveHTTPFunc(gw.Metrics, func(w http.ResponseWriter, r *http.Request) {
+	p.chainEndpoint("", "/v1/files", true, func(gw *gateway.NenyaGateway, w http.ResponseWriter, r *http.Request, keyRef string) {
 		p.handleFiles(gw, w, r, keyRef)
-	})(w, r)
+	})(gw, w, r)
 }
 
 func (p *Proxy) chainBatches(gw *gateway.NenyaGateway, w http.ResponseWriter, r *http.Request) {
-	keyRef, ok := p.authenticateRequest(r, w)
-	if !ok {
-		return
-	}
-	infra.ObserveHTTPFunc(gw.Metrics, func(w http.ResponseWriter, r *http.Request) {
+	p.chainEndpoint("", "/v1/batches", true, func(gw *gateway.NenyaGateway, w http.ResponseWriter, r *http.Request, keyRef string) {
 		p.handleBatches(gw, w, r, keyRef)
-	})(w, r)
+	})(gw, w, r)
 }
 
 func (p *Proxy) chainImages(gw *gateway.NenyaGateway, w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
-		return
-	}
-	keyRef, ok := p.authenticateRequest(r, w)
-	if !ok {
-		return
-	}
-	infra.ObserveHTTPFunc(gw.Metrics, func(w http.ResponseWriter, r *http.Request) {
+	p.chainEndpoint(http.MethodPost, "/v1/images/generations", true, func(gw *gateway.NenyaGateway, w http.ResponseWriter, r *http.Request, keyRef string) {
 		p.handleImages(gw, w, r, keyRef)
-	})(w, r)
+	})(gw, w, r)
 }
 
 func (p *Proxy) chainAudioTranscriptions(gw *gateway.NenyaGateway, w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
-		return
-	}
-	keyRef, ok := p.authenticateRequest(r, w)
-	if !ok {
-		return
-	}
-	infra.ObserveHTTPFunc(gw.Metrics, func(w http.ResponseWriter, r *http.Request) {
+	p.chainEndpoint(http.MethodPost, "/v1/audio/transcriptions", true, func(gw *gateway.NenyaGateway, w http.ResponseWriter, r *http.Request, keyRef string) {
 		p.handleAudioTranscriptions(gw, w, r, keyRef)
-	})(w, r)
+	})(gw, w, r)
 }
 
 func (p *Proxy) chainAudioSpeech(gw *gateway.NenyaGateway, w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
-		return
-	}
-	keyRef, ok := p.authenticateRequest(r, w)
-	if !ok {
-		return
-	}
-	infra.ObserveHTTPFunc(gw.Metrics, func(w http.ResponseWriter, r *http.Request) {
+	p.chainEndpoint(http.MethodPost, "/v1/audio/speech", true, func(gw *gateway.NenyaGateway, w http.ResponseWriter, r *http.Request, keyRef string) {
 		p.handleAudioSpeech(gw, w, r, keyRef)
-	})(w, r)
+	})(gw, w, r)
 }
 
 func (p *Proxy) chainModerations(gw *gateway.NenyaGateway, w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
-		return
-	}
-	keyRef, ok := p.authenticateRequest(r, w)
-	if !ok {
-		return
-	}
-	infra.ObserveHTTPFunc(gw.Metrics, func(w http.ResponseWriter, r *http.Request) {
+	p.chainEndpoint(http.MethodPost, "/v1/moderations", true, func(gw *gateway.NenyaGateway, w http.ResponseWriter, r *http.Request, keyRef string) {
 		p.handleModerations(gw, w, r, keyRef)
-	})(w, r)
+	})(gw, w, r)
 }
 
 func (p *Proxy) chainRerank(gw *gateway.NenyaGateway, w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
-		return
-	}
-	keyRef, ok := p.authenticateRequest(r, w)
-	if !ok {
-		return
-	}
-	infra.ObserveHTTPFunc(gw.Metrics, func(w http.ResponseWriter, r *http.Request) {
+	p.chainEndpoint(http.MethodPost, "/v1/rerank", true, func(gw *gateway.NenyaGateway, w http.ResponseWriter, r *http.Request, keyRef string) {
 		p.handleRerank(gw, w, r, keyRef)
-	})(w, r)
+	})(gw, w, r)
 }
 
 func (p *Proxy) chainA2A(gw *gateway.NenyaGateway, w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
-		return
-	}
-	keyRef, ok := p.authenticateRequest(r, w)
-	if !ok {
-		return
-	}
-	infra.ObserveHTTPFunc(gw.Metrics, func(w http.ResponseWriter, r *http.Request) {
+	p.chainEndpoint(http.MethodPost, "/v1/a2a", true, func(gw *gateway.NenyaGateway, w http.ResponseWriter, r *http.Request, keyRef string) {
 		p.handleA2A(gw, w, r, keyRef)
-	})(w, r)
+	})(gw, w, r)
 }
 
 // authenticateRequest validates the authorization token in incoming requests.
@@ -316,9 +251,7 @@ func (p *Proxy) authenticateRequest(r *http.Request, w http.ResponseWriter) (str
 				}
 				return authHeader
 			}())
-		if gw.Metrics != nil {
-			gw.Metrics.RecordAuthFailure("missing_header")
-		}
+		gw.Metrics.RecordAuthFailure("missing_header")
 		http.Error(w, "Unauthorized", http.StatusUnauthorized)
 		return "", false
 	}
@@ -342,17 +275,13 @@ func (p *Proxy) authenticateClientToken(gw *gateway.NenyaGateway, correlationID,
 		gw.Logger.Debug("authentication successful",
 			"correlation_id", correlationID,
 			"api_key", keyName)
-		if gw.Metrics != nil {
-			gw.Metrics.RecordAuthSuccess("api_key", keyName)
-		}
+		gw.Metrics.RecordAuthSuccess("api_key", keyName)
 		return keyName, true
 	}
 
 	gw.Logger.Warn("invalid or expired client token",
 		"correlation_id", correlationID)
-	if gw.Metrics != nil {
-		gw.Metrics.RecordAuthFailure("api_key_mismatch")
-	}
+	gw.Metrics.RecordAuthFailure("api_key_mismatch")
 	return "", false
 }
 
@@ -369,9 +298,7 @@ func (p *Proxy) checkPrimaryToken(gw *gateway.NenyaGateway, correlationID, clien
 	}
 
 	if !tokenOK {
-		if gw.Metrics != nil {
-			gw.Metrics.RecordAuthFailure("client_token_mismatch")
-		}
+		gw.Metrics.RecordAuthFailure("client_token_mismatch")
 		return "", false
 	}
 

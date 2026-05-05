@@ -658,9 +658,7 @@ func (p *Proxy) handleEmbeddings(gw *gateway.NenyaGateway, w http.ResponseWriter
 	tokenCount := countEmbeddingInputTokens(payload)
 
 	gw.Stats.RecordRequest(modelName, tokenCount)
-	if gw.Metrics != nil {
-		gw.Metrics.RecordUpstreamRequest(modelName, "", provider.Name)
-	}
+	gw.Metrics.RecordUpstreamRequest(modelName, "", provider.Name)
 
 	embeddingURL := provider.BaseURL + "/embeddings"
 	if embeddingURL == "/embeddings" {
@@ -808,7 +806,7 @@ func recordUsageFromMap(gw *gateway.NenyaGateway, responseMap map[string]interfa
 	if gw.Stats != nil {
 		gw.Stats.RecordOutput(model, outputTokens)
 	}
-	if gw.Metrics != nil && providerName != "" {
+	if providerName != "" {
 		gw.Metrics.RecordTokens("output", model, "", providerName, outputTokens)
 	}
 }

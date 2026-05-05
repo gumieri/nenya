@@ -94,9 +94,7 @@ func (p *Proxy) handleFilesOrBatches(gw *gateway.NenyaGateway, w http.ResponseWr
 	defer func() { _ = resp.Body.Close() }()
 
 	gw.Stats.RecordRequest("proxy:"+provider.Name, 0)
-	if gw.Metrics != nil {
-		gw.Metrics.RecordUpstreamRequest("proxy:"+provider.Name, "", provider.Name)
-	}
+	gw.Metrics.RecordUpstreamRequest("proxy:"+provider.Name, "", provider.Name)
 
 	routing.CopyHeaders(resp.Header, w.Header())
 	w.WriteHeader(resp.StatusCode)
