@@ -228,7 +228,7 @@ func OllamaHealthURL(engineURL string) string {
 		return engineURL[:len(engineURL)-len(nativeSuffix)] + "/api/tags"
 	}
 	if strings.HasSuffix(engineURL, openaiSuffix) {
-		return engineURL[:len(openaiSuffix)] + "/api/tags"
+		return engineURL[:len(engineURL)-len(openaiSuffix)] + "/api/tags"
 	}
 	return engineURL
 }

@@ -58,12 +58,17 @@ func main() {
 }
 
 func parseFlags() (configDir, configFile string, verbose, validateOnly, printSchema bool) {
-	flag.StringVar(&configDir, "config-dir", "", "Configuration directory (contains config.d/ or config.json)")
-	flag.StringVar(&configFile, "config", "", "Single configuration file")
-	flag.BoolVar(&verbose, "verbose", false, "Enable debug-level request/response logging")
-	flag.BoolVar(&validateOnly, "validate", false, "Validate configuration and exit")
-	flag.BoolVar(&printSchema, "print-config-schema", false, "Print JSON Schema of config and exit")
-	flag.Parse()
+	return parseArgs(os.Args[1:])
+}
+
+func parseArgs(args []string) (configDir, configFile string, verbose, validateOnly, printSchema bool) {
+	fs := flag.NewFlagSet("nenya", flag.ContinueOnError)
+	fs.StringVar(&configDir, "config-dir", "", "Configuration directory (contains config.d/ or config.json)")
+	fs.StringVar(&configFile, "config", "", "Single configuration file")
+	fs.BoolVar(&verbose, "verbose", false, "Enable debug-level request/response logging")
+	fs.BoolVar(&validateOnly, "validate", false, "Validate configuration and exit")
+	fs.BoolVar(&printSchema, "print-config-schema", false, "Print JSON Schema of config and exit")
+	_ = fs.Parse(args)
 
 	if envConfigDir := os.Getenv("NENYA_CONFIG_DIR"); envConfigDir != "" {
 		configDir = envConfigDir

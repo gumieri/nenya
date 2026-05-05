@@ -150,6 +150,19 @@ func (ms *testMCPServer) writeRPCError(w http.ResponseWriter, id any, code int, 
 	}
 }
 
+func (ms *testMCPServer) serverName() string {
+	return "test-server"
+}
+
+func (ms *testMCPServer) clients() map[string]*mcp.Client {
+	cfg := mcp.ClientConfig{
+		Name: ms.serverName(),
+		URL:  ms.server.URL + "/sse",
+	}
+	client := mcp.NewClient(cfg)
+	return map[string]*mcp.Client{ms.serverName(): client}
+}
+
 func newTestLogger() *slog.Logger {
 	return slog.New(slog.NewTextHandler(io.Discard, &slog.HandlerOptions{Level: slog.LevelError}))
 }
