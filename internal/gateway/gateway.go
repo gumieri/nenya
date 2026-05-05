@@ -541,6 +541,9 @@ func extractTextFromContentPart(part map[string]interface{}) string {
 
 func extractInputJSONFromPart(part map[string]interface{}) string {
 	if input, ok := part["input_json"]; ok {
+		if input == nil {
+			return ""
+		}
 		if jsonBytes, err := json.Marshal(input); err == nil {
 			return string(jsonBytes)
 		}

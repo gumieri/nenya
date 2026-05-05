@@ -337,7 +337,10 @@ func (s *BouncerConfig) UnmarshalJSON(data []byte) error {
 	if err := json.Unmarshal(data, aux); err != nil {
 		return err
 	}
-	if aux.Enabled == nil && len(aux.RedactPatterns) > 0 {
+	if len(aux.RedactPatterns) > 0 {
+		s.RedactPatterns = aux.RedactPatterns
+	}
+	if aux.Enabled == nil && len(s.RedactPatterns) > 0 {
 		s.Enabled = PtrTo(true)
 	}
 	return nil
