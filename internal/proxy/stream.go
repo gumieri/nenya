@@ -334,6 +334,7 @@ func (p *Proxy) setupTransformingReader(gw *gateway.NenyaGateway, target routing
 
 	transformingReader := stream.NewSSETransformingReader(stallR, transformer)
 	transformingReader.SetOnUsage(p.makeUsageCallback(gw, target, agentName))
+	transformingReader.SetObserver(newUpstreamErrorObserver(gw, target))
 
 	p.setupStreamFilterIfEnabled(gw, transformingReader)
 	p.setupStreamEntropyFilterIfEnabled(gw, transformingReader)
@@ -341,6 +342,30 @@ func (p *Proxy) setupTransformingReader(gw *gateway.NenyaGateway, target routing
 
 	return transformingReader, contentBuilder, stallR
 }
+
+type upstreamErrorObserver struct {
+	gw     *gateway.NenyaGateway
+	target routing.UpstreamTarget
+}
+
+// newUpstreamErrorObserver creates an SSE observer that detects error events
+// within a 200 OK stream and records them as circuit breaker failures.
+func newUpstreamErrorObserver(gw *gateway.NenyaGateway, target routing.UpstreamTarget) *upstreamErrorObserver {
+	return &upstreamErrorObserver{gw: gw, target: target}
+}
+
+func (o *upstreamErrorObserver) OnSSEEvent(event stream.SSEEvent) {
+	if event.Type != "error" || o.gw == nil {
+		return
+	}
+	o.gw.Logger.Warn("upstream error event detected in stream",
+		"model", o.target.Model, "provider", o.target.Provider,
+		"error_type", fmt.Sprintf("%v", event.Data["type"]),
+		"error_message", fmt.Sprintf("%v", event.Data["message"]))
+	o.gw.AgentState.RecordFailure(o.target, 0)
+}
+
+func (o *upstreamErrorObserver) OnStreamClose(err error) {}
 
 func (p *Proxy) makeUsageCallback(gw *gateway.NenyaGateway, target routing.UpstreamTarget, agentName string) func(int, int, int, int, int) {
 	return func(completion, prompt, total, cacheHit, cacheMiss int) {
@@ -432,18 +457,20 @@ func (p *Proxy) handleStreamDone(gw *gateway.NenyaGateway, w http.ResponseWriter
 
 	if errors.Is(copyErr, stream.ErrStreamBlocked) {
 		action.cancel()
-		_ = action.resp.Body.Close()
 		gw.Logger.Warn("stream blocked by execution policy, upstream killed",
 			"model", target.Model, "provider", target.Provider)
 		gw.Metrics.RecordStreamBlock(target.Model, target.Provider)
 		p.writeBlockedSSE(gw, w)
+		_ = action.resp.Body.Close()
 		return
 	}
+
+	if stallR != nil {
+		_, _ = stallR.DrainPending(3 * time.Second)
+	}
+
 	if errors.Is(copyErr, errStreamStalled) {
 		action.cancel()
-		if stallR != nil {
-			_, _ = stallR.DrainPending(3 * time.Second)
-		}
 		_ = action.resp.Body.Close()
 		gw.Logger.Warn("stream stalled, aborting upstream",
 			"model", target.Model, "provider", target.Provider,
@@ -452,13 +479,12 @@ func (p *Proxy) handleStreamDone(gw *gateway.NenyaGateway, w http.ResponseWriter
 		writeStreamErrorSSE(w, "upstream stream stalled: no data received within idle timeout")
 		return
 	}
+
+	_ = action.resp.Body.Close()
+
 	if errors.Is(copyErr, context.Canceled) || errors.Is(copyErr, context.DeadlineExceeded) {
 		gw.Logger.Info("client disconnected, aborting upstream stream", "model", target.Model)
-		if stallR != nil {
-			_, _ = stallR.DrainPending(3 * time.Second)
-		}
 	}
-	_ = action.resp.Body.Close()
 
 	recordStreamResult(gw, target, agentName, cooldownDuration, copyErr)
 

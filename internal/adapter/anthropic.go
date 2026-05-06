@@ -1,6 +1,7 @@
 package adapter
 
 import (
+	"crypto/rand"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -233,8 +234,9 @@ func (a *AnthropicAdapter) convertMessages(msgs []interface{}) []interface{} {
 				"role": role,
 			}
 			if role == "tool" {
+				toolCallID, _ := msg["tool_call_id"].(string)
 				anthMsg["role"] = "user"
-				anthMsg["content"] = a.convertToolMessage(content)
+				anthMsg["content"] = a.convertToolMessage(content, toolCallID)
 			} else if content != nil {
 				anthMsg["content"] = content
 			}
@@ -244,19 +246,21 @@ func (a *AnthropicAdapter) convertMessages(msgs []interface{}) []interface{} {
 	return result
 }
 
-func (a *AnthropicAdapter) convertToolMessage(content interface{}) []interface{} {
+func (a *AnthropicAdapter) convertToolMessage(content interface{}, toolUseID string) []interface{} {
 	toolContent := ""
 	if content != nil {
 		if s, ok := content.(string); ok {
 			toolContent = s
 		}
 	}
-	return []interface{}{
-		map[string]interface{}{
-			"type":    "tool_result",
-			"content": toolContent,
-		},
+	result := map[string]interface{}{
+		"type":    "tool_result",
+		"content": toolContent,
 	}
+	if toolUseID != "" {
+		result["tool_use_id"] = toolUseID
+	}
+	return []interface{}{result}
 }
 
 func (a *AnthropicAdapter) convertTools(tools []interface{}) []interface{} {
@@ -422,8 +426,9 @@ func addFloat64(a, b interface{}) float64 {
 func generateID() string {
 	const charset = "abcdefghijklmnopqrstuvwxyz0123456789"
 	b := make([]byte, 24)
+	_, _ = rand.Read(b)
 	for i := range b {
-		b[i] = charset[i%len(charset)]
+		b[i] = charset[b[i]%byte(len(charset))]
 	}
 	return string(b)
 }
