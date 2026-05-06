@@ -77,16 +77,12 @@ func writeSSEError(w http.ResponseWriter, statusCode int, message string) {
 		},
 	}
 	errBytes, _ := json.Marshal(errPayload)
-	sseData := fmt.Sprintf("data: %s\n\n", errBytes)
+	sseData := fmt.Sprintf("data: %s\n\ndata: [DONE]\n\n", errBytes)
 
 	if fw, ok := newImmediateFlushWriterSafe(w); ok {
-		if _, err := fw.Write([]byte(sseData)); err != nil {
-			return
-		}
+		_, _ = fw.Write([]byte(sseData))
 	} else {
-		if _, err := w.Write([]byte(sseData)); err != nil {
-			return
-		}
+		_, _ = w.Write([]byte(sseData))
 	}
 }
 

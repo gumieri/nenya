@@ -43,7 +43,8 @@ func TestSSETransformingReader_DataLines(t *testing.T) {
 }
 
 func TestSSETransformingReader_NonSSEJSON(t *testing.T) {
-	input := `{"choices":[{"delta":{"content":"raw json"}}]}
+	input := `data: {"choices":[{"delta":{"content":"raw json"}}]}
+data: [DONE]
 `
 	reader := NewSSETransformingReader(strings.NewReader(input), &mockTransformer{})
 	var buf bytes.Buffer
@@ -52,8 +53,10 @@ func TestSSETransformingReader_NonSSEJSON(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	output := buf.String()
+	data := strings.TrimPrefix(output, "data: ")
+	data = strings.TrimSuffix(data, "\ndata: [DONE]\n")
 	var parsed map[string]interface{}
-	if err := json.Unmarshal([]byte(output), &parsed); err != nil {
+	if err := json.Unmarshal([]byte(data), &parsed); err != nil {
 		t.Fatalf("output not valid JSON: %v", err)
 	}
 	choices := parsed["choices"].([]interface{})

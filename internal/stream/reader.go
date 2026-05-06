@@ -53,6 +53,7 @@ type SSETransformingReader struct {
 	pos                 int
 	err                 error
 	closed              bool
+	sawDone             bool
 
 	lastCompletionTokens int
 	lastPromptTokens     int
@@ -111,6 +112,11 @@ func (r *SSETransformingReader) SetObserver(obs SSEObserver) {
 	r.observer = obs
 }
 
+// SawDone returns true if the reader has observed a data: [DONE] event.
+func (r *SSETransformingReader) SawDone() bool {
+	return r.sawDone
+}
+
 func (r *SSETransformingReader) Read(p []byte) (int, error) {
 	// Drain pending buffer before returning any error so that an error
 	// event we injected (e.g. ErrTooLong) reaches the client.
@@ -129,35 +135,8 @@ func (r *SSETransformingReader) Read(p []byte) (int, error) {
 	}
 
 	if !r.scanner.Scan() {
-		switch r.scanner.Err() {
-		case nil:
-			r.err = io.EOF
-		case bufio.ErrTooLong:
-			errPayload, _ := json.Marshal(map[string]any{
-				"error": map[string]any{
-					"message": "upstream SSE line exceeded maximum scanner buffer",
-					"type":    "gateway_error",
-				},
-			})
-			r.buffer = append(append([]byte("data: "), errPayload...), []byte("\n\ndata: [DONE]\n\n")...)
-			r.pos = 0
-			r.err = r.scanner.Err()
-			if r.observer != nil {
-				var errMap map[string]any
-				_ = json.Unmarshal(errPayload, &errMap)
-				r.observer.OnSSEEvent(SSEEvent{
-					Type: "error",
-					Data: errMap,
-				})
-			}
-		default:
-			r.err = r.scanner.Err()
-		}
-		if r.observer != nil && !r.closed {
-			r.closed = true
-			r.observer.OnStreamClose(r.err)
-		}
-		return 0, r.err
+		r.handleScannerDone()
+		return r.drainAfterScanDone(p)
 	}
 
 	line := r.scanner.Bytes()
@@ -192,10 +171,66 @@ func (r *SSETransformingReader) transformLine(line []byte) []byte {
 	return r.transformSSEData(line)
 }
 
+// handleScannerDone is called when the scanner has no more input.
+// It sets r.err and optionally injects error+[DONE] into r.buffer.
+func (r *SSETransformingReader) handleScannerDone() {
+	switch r.scanner.Err() {
+	case nil:
+		if !r.sawDone {
+			r.injectErrorBuffer("upstream stream ended without [DONE]")
+		}
+		r.err = io.EOF
+	case bufio.ErrTooLong:
+		r.injectErrorBuffer("upstream SSE line exceeded maximum scanner buffer")
+		r.err = r.scanner.Err()
+	default:
+		r.err = r.scanner.Err()
+	}
+}
+
+// injectErrorBuffer creates a gateway_error SSE event + [DONE] and places it
+// in r.buffer so the client receives the error before EOF.
+func (r *SSETransformingReader) injectErrorBuffer(message string) {
+	errPayload, _ := json.Marshal(map[string]any{
+		"error": map[string]any{
+			"message": message,
+			"type":    "gateway_error",
+		},
+	})
+	r.buffer = append(append([]byte("data: "), errPayload...), []byte("\n\ndata: [DONE]\n\n")...)
+	r.pos = 0
+	if r.observer != nil {
+		var errMap map[string]any
+		_ = json.Unmarshal(errPayload, &errMap)
+		r.observer.OnSSEEvent(SSEEvent{Type: "error", Data: errMap})
+	}
+}
+
+// drainAfterScanDone returns any injected error buffer data before signaling
+// the terminal error. This ensures error+[DONE] events reach the client
+// when the upstream stream ends without [DONE].
+func (r *SSETransformingReader) drainAfterScanDone(p []byte) (int, error) {
+	if r.pos < len(r.buffer) {
+		n := copy(p, r.buffer[r.pos:])
+		r.pos += n
+		if r.pos >= len(r.buffer) {
+			r.buffer = nil
+			r.pos = 0
+		}
+		return n, nil
+	}
+	if r.observer != nil && !r.closed {
+		r.closed = true
+		r.observer.OnStreamClose(r.err)
+	}
+	return 0, r.err
+}
+
 func (r *SSETransformingReader) transformSSEData(line []byte) []byte {
 	origData := bytes.TrimPrefix(line, []byte("data: "))
 
 	if len(origData) == 0 || bytes.Equal(origData, []byte("[DONE]")) {
+		r.sawDone = true
 		r.notifySSEObserver(line, nil, "done")
 		return line
 	}
