@@ -329,3 +329,37 @@ func jsonScalarString(raw json.RawMessage) string {
 	}
 	return number.String()
 }
+
+// writeGatewayError writes an OpenAI-compatible JSON error response to the
+// client with the appropriate Content-Type header.
+func writeGatewayError(w http.ResponseWriter, statusCode int, errType ErrorType, message string) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(statusCode)
+	_ = json.NewEncoder(w).Encode(OpenAIErrorEnvelope{
+		Error: OpenAIErrorObject{
+			Type:    errType,
+			Message: message,
+		},
+	})
+}
+
+// writeGatewayStreamError writes an OpenAI-compatible error as an SSE event
+// followed by [DONE]. Use this for streaming requests that fail before headers
+// are written, so the client receives a properly terminated SSE stream.
+func writeGatewayStreamError(w http.ResponseWriter, statusCode int, errType ErrorType, message string) {
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.WriteHeader(statusCode)
+	errPayload := map[string]any{
+		"error": map[string]any{
+			"message": message,
+			"type":    string(errType),
+		},
+	}
+	errBytes, _ := json.Marshal(errPayload)
+	_, _ = fmt.Fprintf(w, "data: %s\n\n", errBytes)
+	_, _ = fmt.Fprint(w, "data: [DONE]\n\n")
+	if flusher, ok := w.(http.Flusher); ok {
+		flusher.Flush()
+	}
+}

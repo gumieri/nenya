@@ -33,6 +33,7 @@ type Metrics struct {
 	cooldowns     sync.Map
 	exhausted     sync.Map
 	streamBlocked sync.Map
+	streamStalled sync.Map
 	emptyStreams  sync.Map
 
 	upstreamLatency sync.Map
@@ -250,6 +251,17 @@ func (m *Metrics) RecordStreamBlock(model, provider string) {
 		return
 	}
 	e := getOrCreateEntry(&m.streamBlocked, map[string]string{
+		"model": model, "provider": provider,
+	})
+	e.value.Add(1)
+}
+
+// RecordStreamStall increments the stream stall counter for the given model/provider.
+func (m *Metrics) RecordStreamStall(model, provider string) {
+	if m == nil {
+		return
+	}
+	e := getOrCreateEntry(&m.streamStalled, map[string]string{
 		"model": model, "provider": provider,
 	})
 	e.value.Add(1)
@@ -506,6 +518,8 @@ func (m *Metrics) WritePrometheus(w io.Writer) {
 		"Total times all agent targets were exhausted.", &m.exhausted)
 	m.writeCounterMap(w, "nenya_stream_blocked_total",
 		"Total upstream streams killed by execution policy.", &m.streamBlocked)
+	m.writeCounterMap(w, "nenya_stream_stalled_total",
+		"Total upstream streams killed by idle timeout.", &m.streamStalled)
 	m.writeCounterMap(w, "nenya_empty_stream_total",
 		"Total upstream streams that returned empty body.", &m.emptyStreams)
 

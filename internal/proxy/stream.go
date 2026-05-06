@@ -20,7 +20,7 @@ import (
 )
 
 const (
-	streamIdleTimeout = 120 * time.Second
+	streamIdleTimeout = 60 * time.Second
 	streamBufferSize  = 32 * 1024
 )
 
@@ -448,6 +448,8 @@ func (p *Proxy) handleStreamDone(gw *gateway.NenyaGateway, w http.ResponseWriter
 		gw.Logger.Warn("stream stalled, aborting upstream",
 			"model", target.Model, "provider", target.Provider,
 			"idle_timeout", streamIdleTimeout)
+		gw.Metrics.RecordStreamStall(target.Model, target.Provider)
+		writeStreamErrorSSE(w, "upstream stream stalled: no data received within idle timeout")
 		return
 	}
 	if errors.Is(copyErr, context.Canceled) || errors.Is(copyErr, context.DeadlineExceeded) {
@@ -463,7 +465,12 @@ func (p *Proxy) handleStreamDone(gw *gateway.NenyaGateway, w http.ResponseWriter
 	if copyErr == nil {
 		storeStreamCache(gw, cacheKey, captureBuf, tee)
 		p.asyncMCPAutoSave(gw, agentName, contentBuilder)
+		return
 	}
+	if errors.Is(copyErr, context.Canceled) || errors.Is(copyErr, context.DeadlineExceeded) {
+		return
+	}
+	writeStreamErrorSSE(w, "upstream stream interrupted")
 }
 
 func recordStreamResult(gw *gateway.NenyaGateway, target routing.UpstreamTarget, agentName string, cooldownDuration time.Duration, copyErr error) {
@@ -507,6 +514,24 @@ func (p *Proxy) writeBlockedSSE(gw *gateway.NenyaGateway, w http.ResponseWriter)
 		return
 	}
 	_, _ = fmt.Fprintf(w, "data: %s\n\n", blockJSON)
+	_, _ = fmt.Fprint(w, "data: [DONE]\n\n")
+	if flusher, ok := w.(http.Flusher); ok {
+		flusher.Flush()
+	}
+}
+
+// writeStreamErrorSSE sends an OpenAI-compatible error event followed by
+// [DONE] to the client, ensuring the SSE stream is properly terminated.
+// This must be called AFTER headers have already been written.
+func writeStreamErrorSSE(w http.ResponseWriter, message string) {
+	errPayload := map[string]any{
+		"error": map[string]any{
+			"message": message,
+			"type":    "gateway_error",
+		},
+	}
+	errBytes, _ := json.Marshal(errPayload)
+	_, _ = fmt.Fprintf(w, "data: %s\n\n", errBytes)
 	_, _ = fmt.Fprint(w, "data: [DONE]\n\n")
 	if flusher, ok := w.(http.Flusher); ok {
 		flusher.Flush()

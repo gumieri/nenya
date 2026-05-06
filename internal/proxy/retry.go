@@ -207,7 +207,12 @@ func (rl *retryLoop) handleActionError(i int, target routing.UpstreamTarget, act
 	shouldRetry, retryDelay := rl.handleUpstreamError(i, target, action)
 	action.cancel()
 	if !shouldRetry {
-		http.Error(rl.w, "Upstream provider error", action.resp.StatusCode)
+		gwErr := ParseProviderError(target.Provider, action.resp.StatusCode, action.body, nil)
+		if rl.stream {
+			writeGatewayStreamError(rl.w, action.resp.StatusCode, gwErr.Type, gwErr.Message)
+		} else {
+			writeGatewayError(rl.w, action.resp.StatusCode, gwErr.Type, gwErr.Message)
+		}
 		return retrySignalDone
 	}
 	if rl.opts.MaxRetries > 0 && rl.attempt >= rl.opts.MaxRetries {
@@ -269,14 +274,18 @@ func (rl *retryLoop) Exhausted() {
 	if rl.opts.AgentName != "" {
 		rl.gw.Metrics.RecordExhausted(rl.opts.AgentName)
 	}
-	http.Error(rl.w, "All upstream targets exhausted", http.StatusServiceUnavailable)
+	if rl.stream {
+		writeGatewayStreamError(rl.w, http.StatusServiceUnavailable, ErrorTypeProvider, "All upstream targets exhausted")
+	} else {
+		writeGatewayError(rl.w, http.StatusServiceUnavailable, ErrorTypeProvider, "All upstream targets exhausted")
+	}
 }
 
 // forwardToUpstream processes chat completion requests with retry logic.
 func (p *Proxy) forwardToUpstream(gw *gateway.NenyaGateway, w http.ResponseWriter, r *http.Request, opts forwardOptions) {
 	rl, err := newRetryLoop(p, gw, w, r, opts)
 	if err != nil {
-		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+		writeGatewayError(w, http.StatusInternalServerError, ErrorTypeProvider, "Internal Server Error")
 		return
 	}
 
@@ -616,6 +625,17 @@ var geminiRetryablePatterns = []string{
 	"content has no parts",
 }
 
+var openrouterRetryablePatterns = []string{
+	"insufficient_quota",
+	"insufficient balance",
+	"no available provider",
+	"no available model",
+	"capacity exceeded",
+	"capacity_limit",
+	"provider overloaded",
+	"free tier rate limit",
+}
+
 type providerMatcher struct {
 	name     string
 	patterns []string
@@ -626,6 +646,7 @@ var providerMatchers = []providerMatcher{
 	{name: "gemini", patterns: geminiRetryablePatterns},
 	{name: "vertex", patterns: geminiRetryablePatterns},
 	{name: "deepseek", patterns: deepseekRetryablePatterns},
+	{name: "openrouter", patterns: openrouterRetryablePatterns},
 }
 
 func matchProviderSpecificPatterns(lowerBody string, provider string) bool {
