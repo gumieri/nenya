@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"nenya/config"
+	"nenya/internal/adapter"
 	"nenya/internal/gateway"
 	"nenya/internal/infra"
 	"nenya/internal/mcp"
@@ -808,6 +809,46 @@ func recordUsageFromMap(gw *gateway.NenyaGateway, responseMap map[string]interfa
 	}
 	if providerName != "" {
 		gw.Metrics.RecordTokens("output", model, "", providerName, outputTokens)
+	}
+}
+
+// recordNonStreamingUsage records usage metrics, cost tracking, and cache stats
+// for non-streaming responses, matching what the streaming path does.
+func recordNonStreamingUsage(gw *gateway.NenyaGateway, target routing.UpstreamTarget, agentName string, usage map[string]interface{}) {
+	outputTokens := 0
+	if raw, ok := usage["completion_tokens"].(float64); ok {
+		outputTokens = int(raw)
+	}
+	inputTokens := 0
+	if raw, ok := usage["prompt_tokens"].(float64); ok {
+		inputTokens = int(raw)
+	}
+	cacheHitTokens := 0
+	if raw, ok := usage["prompt_cache_hit_tokens"].(float64); ok {
+		cacheHitTokens = int(raw)
+	}
+	cacheMissTokens := 0
+	if raw, ok := usage["prompt_cache_miss_tokens"].(float64); ok {
+		cacheMissTokens = int(raw)
+	}
+
+	if gw.Stats != nil {
+		gw.Stats.RecordOutput(target.Model, outputTokens)
+		if cacheHitTokens > 0 {
+			gw.Stats.RecordCacheHit(target.Model, cacheHitTokens)
+		}
+		if cacheMissTokens > 0 {
+			gw.Stats.RecordCacheMiss(target.Model, cacheMissTokens)
+		}
+	}
+	if gw.Metrics != nil {
+		gw.Metrics.RecordTokens("output", target.Model, agentName, target.Provider, outputTokens)
+	}
+	if gw.CostTracker != nil && (inputTokens > 0 || outputTokens > 0) {
+		if dm, ok := gw.ModelCatalog.Lookup(target.Model); ok && dm.Pricing != nil && !dm.Pricing.IsZero() {
+			cost := dm.Pricing.CalculateCost(int64(inputTokens), int64(outputTokens))
+			gw.CostTracker.RecordUsage(target.Model, cost)
+		}
 	}
 }
 
@@ -1713,10 +1754,11 @@ func applyRedactToContent(msgNode map[string]interface{}, redactFn func(string) 
 func (p *Proxy) handleNonStreamingResponse(gw *gateway.NenyaGateway, w http.ResponseWriter, r *http.Request, target routing.UpstreamTarget, agentName string, action upstreamAction, cacheKey string, cooldownDuration time.Duration) streamResult {
 	defer action.cancel()
 
-	respBody, err := io.ReadAll(action.resp.Body)
+	const maxNonStreamingResponseBytes = 10 * 1024 * 1024
+	respBody, err := io.ReadAll(io.LimitReader(action.resp.Body, maxNonStreamingResponseBytes))
 	if err != nil {
 		gw.Logger.Error("failed to read non-streaming response body", "err", err)
-		http.Error(w, "Failed to read upstream response", http.StatusBadGateway)
+		writeGatewayError(w, http.StatusBadGateway, ErrorTypeProvider, "Failed to read upstream response")
 		return streamResult{empty: true}
 	}
 	_ = action.resp.Body.Close()
@@ -1726,20 +1768,32 @@ func (p *Proxy) handleNonStreamingResponse(gw *gateway.NenyaGateway, w http.Resp
 		gw.Logger.Warn("empty non-streaming response from upstream", "model", target.Model)
 		return streamResult{empty: true}
 	}
+	if len(respBody) >= maxNonStreamingResponseBytes {
+		gw.Logger.Error("non-streaming response exceeded size limit", "model", target.Model)
+		writeGatewayError(w, http.StatusBadGateway, ErrorTypeProvider, "Upstream response too large")
+		return streamResult{empty: true}
+	}
 
 	var responseMap map[string]interface{}
 	if err := json.Unmarshal(respBody, &responseMap); err != nil {
 		gw.Logger.Error("failed to parse non-streaming JSON response", "err", err, "body", string(respBody))
-		http.Error(w, "Invalid JSON response from upstream", http.StatusBadGateway)
+		writeGatewayError(w, http.StatusBadGateway, ErrorTypeProvider, "Invalid JSON response from upstream")
 		return streamResult{}
 	}
 
+	if target.Format == "anthropic" {
+		a := adapter.GetAnthropicAdapter()
+		responseMap = a.ConvertAnthropicToOpenAIBody(responseMap)
+	}
+
 	if usage, ok := responseMap["usage"].(map[string]interface{}); ok {
-		recordChatUsage(gw, target.Model, usage)
+		recordNonStreamingUsage(gw, target, agentName, usage)
 	}
 
 	routing.CopyHeaders(action.resp.Header, w.Header())
 	w.WriteHeader(action.resp.StatusCode)
-	_ = json.NewEncoder(w).Encode(responseMap)
+	if err := json.NewEncoder(w).Encode(responseMap); err != nil {
+		gw.Logger.Debug("non-streaming response write failed", "err", err)
+	}
 	return streamResult{}
 }

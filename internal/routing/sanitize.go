@@ -221,42 +221,37 @@ func repairMessageOrdering(messages []interface{}) (bool, []interface{}) {
 
 	repaired := false
 	sawToolSinceLastAssistant := false
+	out := make([]interface{}, 0, len(messages)+4)
 
-	bridgeMsg := map[string]interface{}{
-		"role":    "assistant",
-		"content": "",
-	}
-
-	i := 0
-	for i < len(messages) {
-		msg, ok := messages[i].(map[string]interface{})
+	for _, msgRaw := range messages {
+		msg, ok := msgRaw.(map[string]interface{})
 		if !ok {
-			i++
+			out = append(out, msgRaw)
 			continue
 		}
 
 		role, ok := msg["role"].(string)
 		if !ok {
-			i++
+			out = append(out, msgRaw)
 			continue
 		}
 
 		switch {
 		case role == "tool":
 			sawToolSinceLastAssistant = true
-			i++
+			out = append(out, msgRaw)
 
 		case role == "user" && sawToolSinceLastAssistant:
-			messages = append(messages[:i], append([]interface{}{bridgeMsg}, messages[i:]...)...)
+			out = append(out, map[string]interface{}{"role": "assistant", "content": ""})
+			out = append(out, msgRaw)
 			repaired = true
 			sawToolSinceLastAssistant = false
-			i += 2
 
 		default:
 			sawToolSinceLastAssistant = false
-			i++
+			out = append(out, msgRaw)
 		}
 	}
 
-	return repaired, messages
+	return repaired, out
 }

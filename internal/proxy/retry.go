@@ -205,7 +205,6 @@ func (rl *retryLoop) handleActionError(i int, target routing.UpstreamTarget, act
 	action.body, _ = io.ReadAll(io.LimitReader(action.resp.Body, pipeline.MaxErrorBodyBytes))
 	_ = action.resp.Body.Close()
 	shouldRetry, retryDelay := rl.handleUpstreamError(i, target, action)
-	action.cancel()
 	if !shouldRetry {
 		gwErr := ParseProviderError(target.Provider, action.resp.StatusCode, action.body, nil)
 		if rl.stream {

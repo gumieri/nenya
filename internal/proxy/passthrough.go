@@ -166,20 +166,18 @@ func buildPassthroughContextAndCancel(ctx context.Context, provider *config.Prov
 	return ctx, func() {}
 }
 func (p *Proxy) pipeSSE(ctx context.Context, ctxLogger *slog.Logger, src io.Reader, dst http.ResponseWriter) {
+	stallR := newStallReader(src, 120*time.Second)
 	buf := make([]byte, 4096)
-	stallTimer := time.NewTimer(120 * time.Second)
-	defer stallTimer.Stop()
+	defer func() {
+		stallR.Stop()
+		if stallR != nil {
+			_, _ = stallR.DrainPending(3 * time.Second)
+		}
+	}()
 
 	for {
-		n, err := src.Read(buf)
+		n, err := stallR.Read(buf)
 		if n > 0 {
-			if !stallTimer.Stop() {
-				select {
-				case <-stallTimer.C:
-				default:
-				}
-			}
-			stallTimer.Reset(120 * time.Second)
 			if _, writeErr := dst.Write(buf[:n]); writeErr != nil {
 				ctxLogger.Debug("SSE write error", "err", writeErr)
 				return
@@ -189,20 +187,17 @@ func (p *Proxy) pipeSSE(ctx context.Context, ctxLogger *slog.Logger, src io.Read
 			}
 		}
 		if err != nil {
-			if err != io.EOF {
-				ctxLogger.Debug("SSE read error", "err", err)
+			if err == errStreamStalled {
+				ctxLogger.Warn("passthrough SSE stream stalled, aborting")
+			} else if err != io.EOF {
+				ctxLogger.Debug("passthrough SSE read error", "err", err)
 			}
 			return
 		}
 
-		select {
-		case <-ctx.Done():
-			ctxLogger.Debug("SSE stream canceled by context")
+		if ctx.Err() != nil {
+			ctxLogger.Debug("passthrough SSE stream canceled by context")
 			return
-		case <-stallTimer.C:
-			ctxLogger.Warn("SSE stream stalled, aborting")
-			return
-		default:
 		}
 	}
 }

@@ -229,7 +229,11 @@ func (r *SSETransformingReader) drainAfterScanDone(p []byte) (int, error) {
 func (r *SSETransformingReader) transformSSEData(line []byte) []byte {
 	origData := bytes.TrimPrefix(line, []byte("data: "))
 
-	if len(origData) == 0 || bytes.Equal(origData, []byte("[DONE]")) {
+	if len(origData) == 0 {
+		r.notifySSEObserver(line, nil, "keepalive")
+		return line
+	}
+	if bytes.Equal(origData, []byte("[DONE]")) {
 		r.sawDone = true
 		r.notifySSEObserver(line, nil, "done")
 		return line
