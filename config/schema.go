@@ -7,6 +7,9 @@ import (
 	"strings"
 )
 
+// PrintSchema generates a JSON Schema (draft) from the Config struct
+// using reflection. The schema includes all exported fields, their types,
+// and any description tags. Intended for documentation and editor validation.
 func PrintSchema() (string, error) {
 	schema := buildSchema(reflect.TypeOf(Config{}), map[reflect.Type]bool{})
 	b, err := json.MarshalIndent(schema, "", "  ")

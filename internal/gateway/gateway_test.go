@@ -680,7 +680,7 @@ func TestBuildMCPClients_MultipleServers(t *testing.T) {
 func TestNewResponseCache_Disabled(t *testing.T) {
 	cfg := testConfig()
 	cfg.ResponseCache.Enabled = config.PtrTo(false)
-	cache := newResponseCache(cfg, testLogger())
+	cache := newResponseCache(cfg, testLogger(), &infra.Metrics{})
 
 	if cache != nil {
 		t.Error("expected nil cache when disabled")
@@ -696,7 +696,7 @@ func TestNewResponseCache_Enabled(t *testing.T) {
 		TTLSeconds:        300,
 		EvictEverySeconds: 60,
 	}
-	cache := newResponseCache(cfg, testLogger())
+	cache := newResponseCache(cfg, testLogger(), &infra.Metrics{})
 
 	if cache == nil {
 		t.Fatal("expected non-nil cache when enabled")

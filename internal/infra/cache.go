@@ -83,6 +83,8 @@ func (c *ThoughtSignatureCache) Load(key string) (interface{}, bool) {
 	return entry.value, true
 }
 
+// evictLocked removes expired entries and enforces LRU eviction when
+// the cache is full. Caller must hold c.mu.
 func (c *ThoughtSignatureCache) evictLocked() {
 	now := time.Now()
 	for k, e := range c.entries {

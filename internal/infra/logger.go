@@ -46,6 +46,7 @@ func SetLogLevel(level string) error {
 	return nil
 }
 
+// isatty returns true if the given file descriptor refers to a terminal.
 func isatty(fd uintptr) bool {
 	var st syscall.Stat_t
 	if err := syscall.Fstat(int(fd), &st); err != nil {

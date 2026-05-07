@@ -107,14 +107,32 @@ func NewPricingFetcher(logger *slog.Logger) *PricingFetcher {
 }
 
 func (pf *PricingFetcher) FetchOpenRouterPricing(ctx context.Context) (map[string]PricingEntry, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, pf.baseURL+"/models", nil)
-	if err != nil {
-		return nil, fmt.Errorf("creating request: %w", err)
+	var resp *http.Response
+	var fetchErr error
+
+	maxAttempts := 3
+	for attempt := 1; attempt <= maxAttempts; attempt++ {
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, pf.baseURL+"/models", nil)
+		if err != nil {
+			return nil, fmt.Errorf("creating request: %w", err)
+		}
+
+		resp, fetchErr = pf.client.Do(req)
+		if fetchErr == nil {
+			break
+		}
+
+		if attempt < maxAttempts {
+			select {
+			case <-time.After(time.Second):
+			case <-ctx.Done():
+				return nil, fmt.Errorf("fetch canceled: %w", ctx.Err())
+			}
+		}
 	}
 
-	resp, err := pf.client.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("fetching models: %w", err)
+	if fetchErr != nil {
+		return nil, fmt.Errorf("fetching models: %w", fetchErr)
 	}
 	defer func() { _ = resp.Body.Close() }()
 

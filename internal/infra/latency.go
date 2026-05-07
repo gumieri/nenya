@@ -76,6 +76,8 @@ func (l *LatencyTracker) Record(model, provider string, duration time.Duration) 
 	}
 }
 
+// insertSorted inserts a duration into a sorted slice using binary search.
+// The returned slice is guaranteed to be sorted.
 func insertSorted(sorted []time.Duration, val time.Duration) []time.Duration {
 	lo, hi := 0, len(sorted)
 	for lo < hi {
@@ -92,6 +94,8 @@ func insertSorted(sorted []time.Duration, val time.Duration) []time.Duration {
 	return sorted
 }
 
+// evictStaleLocked removes latency entries that have not been updated
+// within the stale timeout (1 hour). Caller must hold l.mu.
 func (l *LatencyTracker) evictStaleLocked() {
 	cutoff := time.Now().Add(-latencyStaleTimeout)
 	for key, ml := range l.latency {
@@ -123,7 +127,7 @@ func (l *LatencyTracker) Snapshot() map[string]*ModelLatency {
 	return snapshot
 }
 
-const latencyJitterPct = 0.10
+const latencyJitterRange = 0.10 // Full range (0.10), halved by formula: ±latencyJitterRange/2 = ±0.05 = ±5%
 
 // SortByLatency sorts keys by median latency from this tracker,
 // applying ±5% random jitter to prevent thundering herd.
@@ -161,8 +165,8 @@ func (l *LatencyTracker) SortByLatency(keys []LatencyKey, jitterFn func() float6
 			return true
 		}
 
-		jitterI := latencyI.MedianMs * (1.0 + (jitterFn()*latencyJitterPct - latencyJitterPct/2))
-		jitterJ := latencyJ.MedianMs * (1.0 + (jitterFn()*latencyJitterPct - latencyJitterPct/2))
+		jitterI := latencyI.MedianMs * (1.0 + (jitterFn()*latencyJitterRange - latencyJitterRange/2))
+		jitterJ := latencyJ.MedianMs * (1.0 + (jitterFn()*latencyJitterRange - latencyJitterRange/2))
 
 		return jitterI < jitterJ
 	})

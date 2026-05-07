@@ -3,6 +3,7 @@ package stream
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -54,6 +55,8 @@ type SSETransformingReader struct {
 	err                 error
 	closed              bool
 	sawDone             bool
+	ctx                 context.Context
+	poolBuf             *[]byte
 
 	lastCompletionTokens int
 	lastPromptTokens     int
@@ -81,14 +84,17 @@ func newToolCallState() toolCallState {
 	}
 }
 
-func NewSSETransformingReader(src io.Reader, transformer ResponseTransformer) *SSETransformingReader {
+func NewSSETransformingReader(src io.Reader, transformer ResponseTransformer, ctx context.Context) *SSETransformingReader {
+	poolBuf := getStreamBuffer()
 	reader := &SSETransformingReader{
 		src:         src,
 		scanner:     bufio.NewScanner(src),
 		transformer: transformer,
+		ctx:         ctx,
 		tcState:     newToolCallState(),
+		poolBuf:     poolBuf,
 	}
-	reader.scanner.Buffer(make([]byte, 0, SSEScannerInitialBuf), SSEScannerMaxBuf)
+	reader.scanner.Buffer(*poolBuf, SSEScannerMaxBuf)
 	return reader
 }
 
@@ -118,8 +124,16 @@ func (r *SSETransformingReader) SawDone() bool {
 }
 
 func (r *SSETransformingReader) Read(p []byte) (int, error) {
-	// Drain pending buffer before returning any error so that an error
-	// event we injected (e.g. ErrTooLong) reaches the client.
+	if r.ctx != nil {
+		select {
+		case <-r.ctx.Done():
+			putStreamBuffer(r.poolBuf)
+			r.poolBuf = nil
+			return 0, r.ctx.Err()
+		default:
+		}
+	}
+
 	if r.pos < len(r.buffer) {
 		n := copy(p, r.buffer[r.pos:])
 		r.pos += n
@@ -131,6 +145,8 @@ func (r *SSETransformingReader) Read(p []byte) (int, error) {
 	}
 
 	if r.err != nil {
+		putStreamBuffer(r.poolBuf)
+		r.poolBuf = nil
 		return 0, r.err
 	}
 
@@ -146,6 +162,8 @@ func (r *SSETransformingReader) Read(p []byte) (int, error) {
 
 	if r.streamFilter != nil && r.streamFilter.IsBlocked() {
 		r.err = ErrStreamBlocked
+		putStreamBuffer(r.poolBuf)
+		r.poolBuf = nil
 		return 0, r.err
 	}
 
@@ -223,6 +241,8 @@ func (r *SSETransformingReader) drainAfterScanDone(p []byte) (int, error) {
 		r.closed = true
 		r.observer.OnStreamClose(r.err)
 	}
+	putStreamBuffer(r.poolBuf)
+	r.poolBuf = nil
 	return 0, r.err
 }
 
@@ -455,6 +475,8 @@ func (r *SSETransformingReader) extractUsageFromMap(chunk map[string]interface{}
 	r.onUsage(dCompletion, dPrompt, dTotal, dCacheHit, dCacheMiss)
 }
 
+// ToInt converts an interface{} value to int, handling float64 and int types.
+// Returns 0 for unsupported types.
 func ToInt(v interface{}) int {
 	switch n := v.(type) {
 	case float64:
@@ -466,6 +488,9 @@ func ToInt(v interface{}) int {
 	}
 }
 
+// normalizeToolCalls processes tool_calls deltas in a streaming response chunk.
+// It normalizes missing tool_call IDs, buffers args chunks that arrive before names,
+// and merges pending data when names arrive. Returns true if the chunk was mutated.
 func normalizeToolCalls(chunk map[string]interface{}, state *toolCallState) bool {
 	choices, ok := chunk["choices"].([]interface{})
 	if !ok {

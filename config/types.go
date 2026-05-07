@@ -66,6 +66,9 @@ func (m *AgentModel) IsDynamic() bool {
 	return m.providerRE != nil || m.modelRE != nil
 }
 
+// AgentConfig defines the configuration for a named AI agent within the
+// gateway. It includes strategy selection, circuit breaker thresholds,
+// model lists, MCP tool integration, and prompt configuration.
 type AgentConfig struct {
 	Strategy          string          `json:"strategy"`
 	CooldownSeconds   int             `json:"cooldown_seconds"`
@@ -118,6 +121,9 @@ func (a *AgentConfig) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
+// ProviderConfig defines the wire-level configuration for an upstream LLM
+// provider: the endpoint URL, authentication style, API format, timeouts,
+// and retry settings. User-provided configs override built-in defaults.
 type ProviderConfig struct {
 	URL                  string            `json:"url"`
 	AuthStyle            string            `json:"auth_style"`
@@ -129,11 +135,16 @@ type ProviderConfig struct {
 	Thinking             *ThinkingConfig   `json:"thinking,omitempty"`
 }
 
+// ThinkingConfig controls whether reasoning/thinking tokens are requested
+// from a provider and whether they are stripped from the response.
 type ThinkingConfig struct {
 	Enabled       bool `json:"enabled"`
 	ClearThinking bool `json:"clear_thinking"`
 }
 
+// Provider is the resolved runtime representation of a provider,
+// combining user config with secrets and derived defaults. Created by
+// ResolveProviders at startup.
 type Provider struct {
 	Name                 string
 	URL                  string
@@ -148,6 +159,9 @@ type Provider struct {
 	Thinking             *ThinkingConfig
 }
 
+// Config is the top-level configuration for the Nenya gateway. It is
+// loaded from a JSON file (or merged from config.d/*.json) and populated
+// with built-in provider defaults before validation.
 type Config struct {
 	Server        ServerConfig               `json:"server"`
 	Context       ContextConfig              `json:"context"`
@@ -163,6 +177,8 @@ type Config struct {
 	Providers     map[string]ProviderConfig  `json:"providers,omitempty"`
 }
 
+// ServerConfig defines the HTTP server settings: listen address, body
+// size limits, user agent string, log level, and secure memory policy.
 type ServerConfig struct {
 	ListenAddr           string `json:"listen_addr"`
 	MaxBodyBytes         int64  `json:"max_body_bytes"`
@@ -176,6 +192,9 @@ func wasSet[T any](v *T) bool { return v != nil }
 
 func (s *ServerConfig) SecureMemoryRequiredWasSet() bool { return wasSet(s.SecureMemoryRequired) }
 
+// ContextConfig controls how message context is truncated before
+// forwarding upstream. Supports middle-out truncation with configurable
+// keep percentages and TF-IDF query source for relevance scoring.
 type ContextConfig struct {
 	TruncationStrategy     string  `json:"truncation_strategy"`
 	TruncationKeepFirstPct float64 `json:"truncation_keep_first_pct"`
@@ -183,6 +202,9 @@ type ContextConfig struct {
 	TFIDFQuerySource       string  `json:"tfidf_query_source"`
 }
 
+// GovernanceConfig defines security, rate-limiting, and routing policies
+// for the gateway: blocked execution patterns, retry behavior, circuit
+// breaker thresholds, latency- and cost-weighted routing, and auto-tuning flags.
 type GovernanceConfig struct {
 	BlockedExecutionPatterns []string `json:"blocked_execution_patterns"`
 	RatelimitMaxRPM          *int     `json:"ratelimit_max_rpm,omitempty"`
@@ -211,12 +233,16 @@ func (g *GovernanceConfig) EffectiveMaxRetryAttempts() int {
 	return 3
 }
 
+// SecretsConfig holds sensitive credentials loaded from systemd credential
+// files or /run/secrets/nenya. Not serialized in the main config file.
 type SecretsConfig struct {
 	ClientToken  string            `json:"client_token,omitempty"`
 	ProviderKeys map[string]string `json:"provider_keys,omitempty"`
 	ApiKeys      map[string]ApiKey `json:"api_keys,omitempty"`
 }
 
+// ApiKey defines an API key entry for client authentication, with
+// associated roles, expiration, and fine-grained permissions.
 type ApiKey struct {
 	Name          string         `json:"name"`
 	Token         string         `json:"token"`
@@ -252,8 +278,11 @@ func (k *ApiKey) Validate() error {
 }
 
 const (
-	RoleAdmin    = "admin"
-	RoleUser     = "user"
+	// RoleAdmin grants full access to all agents and endpoints.
+	RoleAdmin = "admin"
+	// RoleUser grants access to configured agents.
+	RoleUser = "user"
+	// RoleReadOnly grants read-only access to non-mutating endpoints.
 	RoleReadOnly = "read-only"
 )
 
@@ -266,6 +295,9 @@ func isValidRole(role string) bool {
 	}
 }
 
+// EngineConfig defines a concrete engine endpoint for the bouncer
+// summarization or window summarization pipeline: provider, model,
+// prompt, and timeout.
 type EngineConfig struct {
 	Provider         string `json:"provider"`
 	Model            string `json:"model"`
@@ -274,6 +306,9 @@ type EngineConfig struct {
 	TimeoutSeconds   int    `json:"timeout_seconds"`
 }
 
+// EngineRef references an engine either by agent name (with fallback
+// chain) or inline provider/model pair. After resolution via
+// ResolveEngineRef, ResolvedTargets is populated with concrete EngineTargets.
 type EngineRef struct {
 	AgentName        string         `json:"-"`
 	Provider         string         `json:"provider,omitempty"`
@@ -304,11 +339,17 @@ func (e *EngineRef) UnmarshalJSON(data []byte) error {
 	return json.Unmarshal(data, aux)
 }
 
+// EngineTarget is a fully resolved engine endpoint containing both the
+// EngineConfig (provider, model, prompts, timeout) and the resolved
+// Provider (with URL and auth details).
 type EngineTarget struct {
 	Engine   EngineConfig
 	Provider *Provider
 }
 
+// BouncerConfig controls the payload interception (bouncer) mechanism.
+// When enabled, oversized messages are sent to a local Ollama engine
+// for summarization and PII/credential redaction before forwarding upstream.
 type BouncerConfig struct {
 	Enabled            *bool     `json:"enabled,omitempty"`
 	RedactionLabel     string    `json:"redaction_label"`
@@ -346,6 +387,8 @@ func (s *BouncerConfig) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
+// PrefixCacheConfig controls prompt prefix caching behavior, including
+// pinning system prompts, stable tool definitions, and redaction skipping.
 type PrefixCacheConfig struct {
 	Enabled               bool  `json:"enabled"`
 	PinSystemFirst        *bool `json:"pin_system_first,omitempty"`
@@ -357,14 +400,24 @@ func (c *PrefixCacheConfig) PinWasSet() bool           { return wasSet(c.PinSyst
 func (c *PrefixCacheConfig) StableWasSet() bool        { return wasSet(c.StableTools) }
 func (c *PrefixCacheConfig) SkipRedactionWasSet() bool { return wasSet(c.SkipRedactionOnSystem) }
 
+// CompactionPreset is a named preset for content compaction options.
 type CompactionPreset string
 
 const (
+	// CompactionPresetAggressive enables all compaction features: JSON
+	// minification, whitespace collapse, trailing whitespace trim, line
+	// ending normalization, tool pruning, and thought pruning.
 	CompactionPresetAggressive CompactionPreset = "aggressive"
-	CompactionPresetBalanced   CompactionPreset = "balanced"
-	CompactionPresetMinimal    CompactionPreset = "minimal"
+	// CompactionPresetBalanced enables JSON minification, whitespace
+	// collapse, trailing whitespace trim, and line ending normalization,
+	// but not tool or thought pruning.
+	CompactionPresetBalanced CompactionPreset = "balanced"
+	// CompactionPresetMinimal disables all compaction features.
+	CompactionPresetMinimal CompactionPreset = "minimal"
 )
 
+// CompactionConfig controls content compaction (minification, whitespace
+// normalization, tool pruning) before forwarding payloads upstream.
 type CompactionConfig struct {
 	Preset                 CompactionPreset `json:"compaction_preset,omitempty"`
 	Enabled                *bool            `json:"enabled,omitempty"`
@@ -385,6 +438,9 @@ func (c *CompactionConfig) NormWasSet() bool          { return wasSet(c.Normaliz
 func (c *CompactionConfig) PruneWasSet() bool         { return wasSet(c.PruneStaleTools) }
 func (c *CompactionConfig) PruneThoughtsWasSet() bool { return wasSet(c.PruneThoughts) }
 
+// WindowConfig controls the context window management strategy:
+// truncation mode, active message count, trigger ratios, and the
+// summarization engine to use.
 type WindowConfig struct {
 	Enabled         bool      `json:"enabled"`
 	Mode            string    `json:"mode"`
@@ -397,6 +453,8 @@ type WindowConfig struct {
 	KeepLastPct     float64   `json:"keep_last_pct"`
 }
 
+// MCPServerConfig defines the connection parameters for an external MCP
+// (Model Context Protocol) server: URL, optional headers, and timeout.
 type MCPServerConfig struct {
 	URL               string            `json:"url"`
 	Headers           map[string]string `json:"headers,omitempty"`
@@ -404,6 +462,8 @@ type MCPServerConfig struct {
 	KeepAliveInterval int               `json:"keep_alive_interval,omitempty"`
 }
 
+// AgentMCPConfig defines the MCP tool integration for an agent, listing
+// the MCP servers to use, iteration limits, and auto-tool behavior.
 type AgentMCPConfig struct {
 	Servers       []string `json:"servers"`
 	MaxIterations int      `json:"max_iterations,omitempty"`
@@ -413,16 +473,24 @@ type AgentMCPConfig struct {
 	SaveTool      string   `json:"save_tool,omitempty"`
 }
 
+// DiscoveryConfig controls dynamic model discovery from upstream
+// providers, including the optional auto-generated agent configs for
+// discovered model categories (fast, reasoning, vision, etc.).
 type DiscoveryConfig struct {
 	Enabled          *bool             `json:"enabled,omitempty"`
 	AutoAgents       *bool             `json:"auto_agents,omitempty"`
 	AutoAgentsConfig *AutoAgentsConfig `json:"auto_agents_config,omitempty"`
 }
 
+// AutoAgentCategoryConfig enables or disables a specific auto-agent
+// category (e.g. fast, reasoning, vision).
 type AutoAgentCategoryConfig struct {
 	Enabled bool `json:"enabled"`
 }
 
+// AutoAgentsConfig controls which categories of auto-generated agents
+// are enabled during discovery. Each category maps to a pool of
+// providers offering models in that category.
 type AutoAgentsConfig struct {
 	Fast      *AutoAgentCategoryConfig `json:"fast,omitempty"`
 	Reasoning *AutoAgentCategoryConfig `json:"reasoning,omitempty"`
@@ -465,6 +533,8 @@ func (a *AutoAgentsConfig) IsEnabled(category string) bool {
 func (d *DiscoveryConfig) EnabledWasSet() bool    { return wasSet(d.Enabled) }
 func (d *DiscoveryConfig) AutoAgentsWasSet() bool { return wasSet(d.AutoAgents) }
 
+// ResponseCacheConfig controls the upstream response cache: max entries,
+// entry size, TTL, eviction interval, and the force-refresh header name.
 type ResponseCacheConfig struct {
 	Enabled            *bool  `json:"enabled,omitempty"`
 	MaxEntries         int    `json:"max_entries"`

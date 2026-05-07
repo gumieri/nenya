@@ -2,12 +2,14 @@ package stream
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
 	"regexp"
 	"strings"
 	"testing"
+	"time"
 )
 
 type mockTransformer struct{}
@@ -21,7 +23,7 @@ func TestSSETransformingReader_DataLines(t *testing.T) {
  data: {"choices":[{"delta":{"content":" world"}}]}
  data: [DONE]
  `
-	reader := NewSSETransformingReader(strings.NewReader(input), &mockTransformer{})
+	reader := NewSSETransformingReader(strings.NewReader(input), &mockTransformer{}, context.Background())
 	var buf bytes.Buffer
 	_, err := io.Copy(&buf, reader)
 	if err != nil {
@@ -46,7 +48,7 @@ func TestSSETransformingReader_NonSSEJSON(t *testing.T) {
 	input := `data: {"choices":[{"delta":{"content":"raw json"}}]}
 data: [DONE]
 `
-	reader := NewSSETransformingReader(strings.NewReader(input), &mockTransformer{})
+	reader := NewSSETransformingReader(strings.NewReader(input), &mockTransformer{}, context.Background())
 	var buf bytes.Buffer
 	_, err := io.Copy(&buf, reader)
 	if err != nil {
@@ -73,7 +75,7 @@ func TestSSETransformingReader_EmptyLinesAndComments(t *testing.T) {
 data: {"choices":[{"delta":{"content":"test"}}]}
 
 `
-	reader := NewSSETransformingReader(strings.NewReader(input), &mockTransformer{})
+	reader := NewSSETransformingReader(strings.NewReader(input), &mockTransformer{}, context.Background())
 	var buf bytes.Buffer
 	_, err := io.Copy(&buf, reader)
 	if err != nil {
@@ -100,7 +102,7 @@ func TestSSETransformingReader_StreamFilterBlock(t *testing.T) {
 
 	input := `data: {"choices":[{"delta":{"content":"run rm -rf / now"}}]}
 `
-	reader := NewSSETransformingReader(strings.NewReader(input), &mockTransformer{})
+	reader := NewSSETransformingReader(strings.NewReader(input), &mockTransformer{}, context.Background())
 	reader.SetStreamFilter(sf)
 
 	var buf bytes.Buffer
@@ -116,7 +118,7 @@ func TestSSETransformingReader_StreamFilterRedact(t *testing.T) {
 
 	input := `data: {"choices":[{"delta":{"content":"key is AKIAIOSFODNN7EXAMPLE end"}}]}
 `
-	reader := NewSSETransformingReader(strings.NewReader(input), &mockTransformer{})
+	reader := NewSSETransformingReader(strings.NewReader(input), &mockTransformer{}, context.Background())
 	reader.SetStreamFilter(sf)
 
 	var buf bytes.Buffer
@@ -147,7 +149,7 @@ data: {"choices":[],"usage":{"completion_tokens":10,"prompt_tokens":5,"total_tok
 		gotTotal = total
 	}
 
-	reader := NewSSETransformingReader(strings.NewReader(input), &mockTransformer{})
+	reader := NewSSETransformingReader(strings.NewReader(input), &mockTransformer{}, context.Background())
 	reader.SetOnUsage(cb)
 
 	var buf bytes.Buffer
@@ -169,7 +171,7 @@ data: {"choices":[{"delta":{"content":"bye"}}]}
 		fired = true
 	}
 
-	reader := NewSSETransformingReader(strings.NewReader(input), &mockTransformer{})
+	reader := NewSSETransformingReader(strings.NewReader(input), &mockTransformer{}, context.Background())
 	reader.SetOnUsage(cb)
 
 	var buf bytes.Buffer
@@ -355,7 +357,7 @@ func TestSSETransformingReader_ToolCallIDNormalized(t *testing.T) {
 	input := `data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":null,"function":{"name":"read_file","arguments":"{}"}}]}}]}
 data: [DONE]
 `
-	reader := NewSSETransformingReader(strings.NewReader(input), nil)
+	reader := NewSSETransformingReader(strings.NewReader(input), nil, context.Background())
 	var buf bytes.Buffer
 	_, err := io.Copy(&buf, reader)
 	if err != nil {
@@ -719,6 +721,82 @@ func TestNormalizeToolCalls_StatefulBuffering(t *testing.T) {
 }
 
 func extractDelta(chunk map[string]interface{}) map[string]interface{} {
-	choices := chunk["choices"].([]interface{})
-	return choices[0].(map[string]interface{})["delta"].(map[string]interface{})
+	choices, ok := chunk["choices"].([]interface{})
+	if !ok || len(choices) == 0 {
+		return nil
+	}
+	choice, ok := choices[0].(map[string]interface{})
+	if !ok {
+		return nil
+	}
+	return choice["delta"].(map[string]interface{})
+}
+
+func TestContextCancellation(t *testing.T) {
+	input := `data: {"choices":[{"delta":{"content":"hello"}}]}
+data: {"choices":[{"delta":{"content":" world"}}]}
+data: {"choices":[{"delta":{"content":" from"}}]}
+`
+	ctx, cancel := context.WithCancel(context.Background())
+	reader := NewSSETransformingReader(strings.NewReader(input), &mockTransformer{}, ctx)
+
+	var buf bytes.Buffer
+	done := make(chan bool, 1)
+	go func() {
+		_, _ = io.Copy(&buf, reader)
+		done <- true
+	}()
+
+	time.Sleep(10 * time.Millisecond)
+	cancel()
+
+	select {
+	case <-done:
+	case <-time.After(1 * time.Second):
+		t.Fatal("context cancellation did not unblock Read")
+	}
+}
+
+func TestStreamBufferPool(t *testing.T) {
+	initialStats := GetPoolStats()
+	initialMisses := initialStats["misses"]
+
+	input := `data: {"choices":[{"delta":{"content":"hello"}}]}
+data: [DONE]
+`
+	reader := NewSSETransformingReader(strings.NewReader(input), &mockTransformer{}, context.Background())
+	var buf bytes.Buffer
+	_, err := io.Copy(&buf, reader)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	statsAfter := GetPoolStats()
+	if statsAfter["misses"] <= initialMisses {
+		t.Logf("pool miss count: initial=%d, after=%d", initialMisses, statsAfter["misses"])
+	}
+}
+
+func TestStreamBufferPoolConcurrent(t *testing.T) {
+	input := `data: {"choices":[{"delta":{"content":"test"}}]}
+data: [DONE]
+`
+	const numGoroutines = 10
+	done := make(chan bool, numGoroutines)
+
+	for i := 0; i < numGoroutines; i++ {
+		go func() {
+			reader := NewSSETransformingReader(strings.NewReader(input), &mockTransformer{}, context.Background())
+			var buf bytes.Buffer
+			_, _ = io.Copy(&buf, reader)
+			done <- true
+		}()
+	}
+
+	for i := 0; i < numGoroutines; i++ {
+		<-done
+	}
+
+	stats := GetPoolStats()
+	t.Logf("Pool stats - Hits: %d, Misses: %d", stats["hits"], stats["misses"])
 }

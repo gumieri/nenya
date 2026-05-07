@@ -77,7 +77,7 @@ func New(ctx context.Context, cfg config.Config, secrets *config.SecretsConfig, 
 	entropyFilter := createEntropyFilter(cfg, logger)
 
 	gw := buildGateway(cfg, secrets, secureClient, ollamaClient, providers,
-		secretPatterns, blockedPatterns, entropyFilter, mergedCatalog, healthRegistry, logger, sm, clientTokenRef, providerKeyTokens)
+		secretPatterns, blockedPatterns, entropyFilter, mergedCatalog, healthRegistry, logger, sm, clientTokenRef, providerKeyTokens, metrics)
 
 	gw.Metrics = metrics
 	gw.Metrics.RateLimits = gw.RateLimiter.Snapshot
@@ -271,7 +271,7 @@ func createEntropyFilter(cfg config.Config, logger *slog.Logger) *pipeline.Entro
 	return entropyFilter
 }
 
-func buildGateway(cfg config.Config, secrets *config.SecretsConfig, secureClient *http.Client, ollamaClient *http.Client, providers map[string]*config.Provider, secretPatterns []*regexp.Regexp, blockedPatterns []*regexp.Regexp, entropyFilter *pipeline.EntropyFilter, mergedCatalog *discovery.ModelCatalog, healthRegistry *discovery.HealthRegistry, logger *slog.Logger, sm *security.SecureMem, clientTokenRef security.SecureToken, providerKeyTokens map[string]security.SecureToken) *NenyaGateway {
+func buildGateway(cfg config.Config, secrets *config.SecretsConfig, secureClient *http.Client, ollamaClient *http.Client, providers map[string]*config.Provider, secretPatterns []*regexp.Regexp, blockedPatterns []*regexp.Regexp, entropyFilter *pipeline.EntropyFilter, mergedCatalog *discovery.ModelCatalog, healthRegistry *discovery.HealthRegistry, logger *slog.Logger, sm *security.SecureMem, clientTokenRef security.SecureToken, providerKeyTokens map[string]security.SecureToken, metrics *infra.Metrics) *NenyaGateway {
 	var rpm, tpm int
 	if cfg.Governance.RatelimitMaxRPM != nil {
 		rpm = *cfg.Governance.RatelimitMaxRPM
@@ -295,7 +295,7 @@ func buildGateway(cfg config.Config, secrets *config.SecretsConfig, secureClient
 		Logger:            logger,
 		AgentState:        routing.NewAgentState(logger),
 		ThoughtSigCache:   infra.NewThoughtSignatureCache(1000, 30*time.Minute),
-		ResponseCache:     newResponseCache(cfg, logger),
+		ResponseCache:     newResponseCache(cfg, logger, metrics),
 		MCPClients:        buildMCPClients(cfg, logger),
 		MCPToolIndex:      mcp.NewToolRegistry(),
 		ModelCatalog:      mergedCatalog,
@@ -551,7 +551,7 @@ func extractInputJSONFromPart(part map[string]interface{}) string {
 	return ""
 }
 
-func newResponseCache(cfg config.Config, logger *slog.Logger) *infra.ResponseCache {
+func newResponseCache(cfg config.Config, logger *slog.Logger, metrics *infra.Metrics) *infra.ResponseCache {
 	if cfg.ResponseCache.Enabled == nil || !*cfg.ResponseCache.Enabled {
 		return nil
 	}
@@ -561,12 +561,14 @@ func newResponseCache(cfg config.Config, logger *slog.Logger) *infra.ResponseCac
 		rc.MaxEntryBytes,
 		time.Duration(rc.TTLSeconds)*time.Second,
 		time.Duration(rc.EvictEverySeconds)*time.Second,
+		metrics,
 	)
 	logger.Info("response cache enabled",
 		"max_entries", rc.MaxEntries,
 		"max_entry_bytes", rc.MaxEntryBytes,
 		"ttl_seconds", rc.TTLSeconds,
 		"evict_every_seconds", rc.EvictEverySeconds)
+
 	return cache
 }
 

@@ -332,7 +332,7 @@ func (p *Proxy) setupTransformingReader(gw *gateway.NenyaGateway, target routing
 
 	stallR := newStallReader(action.resp.Body, streamIdleTimeout)
 
-	transformingReader := stream.NewSSETransformingReader(stallR, transformer)
+	transformingReader := stream.NewSSETransformingReader(stallR, transformer, ctx)
 	transformingReader.SetOnUsage(p.makeUsageCallback(gw, target, agentName))
 	transformingReader.SetObserver(newUpstreamErrorObserver(gw, target))
 

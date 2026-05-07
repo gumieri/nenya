@@ -11,6 +11,9 @@ import (
 	"strings"
 )
 
+// Load reads and parses a single JSON config file from path. Returns
+// the parsed Config with defaults applied, or an error if the file
+// cannot be read, contains invalid JSON, or defaults cannot be applied.
 func Load(path string) (*Config, error) {
 	info, err := os.Stat(path)
 	if err != nil {
@@ -36,6 +39,10 @@ func Load(path string) (*Config, error) {
 	return &cfg, nil
 }
 
+// LoadFromDir loads configuration from a directory. It first checks for a
+// config.d/ subdirectory (merging all *.json files in sorted order, skipping
+// secrets.json), then falls back to a single config.json file. Returns the
+// parsed Config with defaults applied, or an error if no config is found.
 func LoadFromDir(dir string) (*Config, error) {
 	configDirPath := dir + "/config.d"
 	if info, err := os.Stat(configDirPath); err == nil && info.IsDir() {
@@ -362,6 +369,9 @@ func mergeMap[T any](base, overlay *Config, baseField *map[string]T, overlayFiel
 	}
 }
 
+// StripComments removes C-style (// and /* */) comments from JSON data,
+// preserving strings that contain comment-like sequences. Returns the
+// comment-free byte slice.
 func StripComments(data []byte) []byte {
 	var result []byte
 	i := 0
@@ -411,6 +421,9 @@ func isUnescapedQuote(data []byte, i int) bool {
 	return backslashCount%2 == 0
 }
 
+// LoadPromptFile loads a prompt from a file, returning directPrompt if
+// non-empty, defaultPrompt if filePath is empty, or reading filePath
+// with path traversal validation. Returns the prompt string or an error.
 func LoadPromptFile(filePath string, directPrompt string, defaultPrompt string) (string, error) {
 	if directPrompt != "" {
 		return directPrompt, nil
@@ -463,6 +476,13 @@ func validatePromptPath(filePath string) error {
 	return nil
 }
 
+// LoadSecrets loads the secrets configuration from systemd credential
+// files or standard secrets paths. It checks in order:
+//  1. $CREDENTIALS_DIRECTORY/secrets
+//  2. $CREDENTIALS_DIRECTORY/secrets.d/ (directory)
+//  3. $NENYA_SECRETS_DIR/ (or /run/secrets/nenya/ as default)
+//
+// Returns an error if no secrets are found or validation fails.
 func LoadSecrets() (*SecretsConfig, error) {
 	credDir := os.Getenv("CREDENTIALS_DIRECTORY")
 	secretsDir := os.Getenv("NENYA_SECRETS_DIR")
@@ -649,6 +669,9 @@ func validateSecretsPath(path string) error {
 	return nil
 }
 
+// ResolveProviders creates the runtime Provider map from Config and
+// Secrets. Each ProviderConfig is merged with the matching API key from
+// secrets and derives additional fields (BaseURL, etc.).
 func ResolveProviders(cfg *Config, secrets *SecretsConfig) map[string]*Provider {
 	providers := make(map[string]*Provider, len(cfg.Providers))
 	for name, pc := range cfg.Providers {
@@ -682,6 +705,9 @@ func deriveBaseURL(rawURL string) string {
 	return u.String()
 }
 
+// BuiltInProviders returns the default provider configurations from the
+// ProviderRegistry as ProviderConfig values, ready for merging into the
+// user's config via applyBuiltInProviders.
 func BuiltInProviders() map[string]ProviderConfig {
 	providers := make(map[string]ProviderConfig, len(ProviderRegistry))
 	for name, entry := range ProviderRegistry {
