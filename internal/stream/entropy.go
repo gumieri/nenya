@@ -38,23 +38,7 @@ func (f *StreamEntropyFilter) FilterContent(content string) (string, FilterActio
 }
 
 func (f *StreamEntropyFilter) appendToWindow(text string) {
-	runes := []rune(text)
-	total := f.windowLen + len(runes)
-	if total <= f.windowSize {
-		f.window = append(f.window, runes...)
-		f.windowLen = total
-		return
-	}
-	if total > f.windowSize {
-		drop := total - f.windowSize
-		if drop >= f.windowLen {
-			f.window = f.window[:0]
-		} else {
-			f.window = f.window[drop:]
-		}
-		f.window = append(f.window, runes...)
-		f.windowLen = f.windowSize
-	}
+	f.windowLen = AppendRuneWindow(&f.window, &f.windowLen, f.windowSize, text)
 }
 
 func (f *StreamEntropyFilter) WindowLen() int {

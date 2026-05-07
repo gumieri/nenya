@@ -53,9 +53,10 @@ type ResponseCache struct {
 	maxBytes int64
 	ttl      time.Duration
 	stopCh   chan struct{}
+	metrics  *Metrics
 }
 
-func NewResponseCache(maxSize int, maxBytes int64, ttl, evictInterval time.Duration) *ResponseCache {
+func NewResponseCache(maxSize int, maxBytes int64, ttl, evictInterval time.Duration, metrics *Metrics) *ResponseCache {
 	if maxSize <= 0 {
 		maxSize = 512
 	}
@@ -75,6 +76,7 @@ func NewResponseCache(maxSize int, maxBytes int64, ttl, evictInterval time.Durat
 		maxBytes: maxBytes,
 		ttl:      ttl,
 		stopCh:   make(chan struct{}),
+		metrics:  metrics,
 	}
 	c.startEvicter(evictInterval)
 	return c
@@ -88,21 +90,44 @@ func (c *ResponseCache) Lookup(key string) ([]byte, bool) {
 	entry, ok := c.items[key]
 	if !ok {
 		c.mu.RUnlock()
+		c.recordMiss()
 		return nil, false
 	}
 	if time.Now().After(entry.expireAt) {
 		c.mu.RUnlock()
-		c.mu.Lock()
-		if current, exists := c.items[key]; exists && time.Now().After(current.expireAt) {
-			c.order.Remove(current.element)
-			delete(c.items, key)
-		}
-		c.mu.Unlock()
+		c.deleteExpiredLocked(key)
+		c.recordMiss()
 		return nil, false
 	}
 	data := entry.data
 	c.mu.RUnlock()
+	c.recordHit()
 	return data, true
+}
+
+// recordMiss records a cache miss if metrics are configured.
+func (c *ResponseCache) recordMiss() {
+	if c.metrics != nil {
+		c.metrics.RecordCacheMiss("response")
+	}
+}
+
+// recordHit records a cache hit if metrics are configured.
+func (c *ResponseCache) recordHit() {
+	if c.metrics != nil {
+		c.metrics.RecordCacheHit("response")
+	}
+}
+
+// deleteExpiredLocked deletes an entry if it exists and is expired.
+// Caller must NOT hold any lock (this method handles the lock).
+func (c *ResponseCache) deleteExpiredLocked(key string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if entry, exists := c.items[key]; exists && time.Now().After(entry.expireAt) {
+		c.order.Remove(entry.element)
+		delete(c.items, key)
+	}
 }
 
 func (c *ResponseCache) Store(key string, data []byte) {
@@ -134,6 +159,8 @@ func (c *ResponseCache) Store(key string, data []byte) {
 	}
 }
 
+// evictLocked removes expired entries and enforces LRU eviction when
+// the cache is full. Caller must hold c.mu.
 func (c *ResponseCache) evictLocked() {
 	now := time.Now()
 

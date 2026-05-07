@@ -2,6 +2,11 @@ package config
 
 import "fmt"
 
+// ResolveEngineRef resolves an EngineRef into concrete EngineTargets.
+// If the ref references an agent by name, the agent's model list is expanded
+// into individual targets. If the ref specifies an inline provider/model pair,
+// a single target is returned. Returns an error if the agent or provider
+// cannot be found, or no models can be resolved.
 func ResolveEngineRef(ref EngineRef, agents map[string]AgentConfig, providers map[string]*Provider) ([]EngineTarget, error) {
 	if ref.AgentName != "" {
 		return resolveAgentEngineRef(ref, agents, providers)

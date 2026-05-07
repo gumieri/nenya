@@ -5,6 +5,8 @@ import (
 	"fmt"
 )
 
+// PricingOverride allows overriding a model's default per-token pricing.
+// Zero values mean "use the built-in pricing".
 type PricingOverride struct {
 	InputCostPer1M  float64 `json:"input_cost_per_1m"`
 	OutputCostPer1M float64 `json:"output_cost_per_1m"`
@@ -24,6 +26,8 @@ func (p PricingOverride) Validate() error {
 	return nil
 }
 
+// ModelEntry defines a model in the static ModelRegistry: its provider,
+// context limits, wire format, capabilities, scoring bonus, and pricing.
 type ModelEntry struct {
 	Provider     string
 	MaxContext   int
@@ -50,12 +54,15 @@ func (e ModelEntry) Validate() error {
 	return nil
 }
 
+// ModelRef is a lightweight reference to a model with its context limits.
 type ModelRef struct {
 	ID         string
 	MaxContext int
 	MaxOutput  int
 }
 
+// ProviderEntry defines a built-in provider's URL, auth style, API
+// format, format-specific URL overrides, and associated model references.
 type ProviderEntry struct {
 	URL        string
 	AuthStyle  string

@@ -14,6 +14,7 @@ import (
 	"nenya/internal/discovery"
 	"nenya/internal/gateway"
 	"nenya/internal/infra"
+	"nenya/internal/stream"
 	"nenya/internal/util"
 )
 
@@ -446,6 +447,12 @@ func (p *Proxy) handleStats(w http.ResponseWriter) {
 
 	if gw.HealthRegistry != nil {
 		stats["provider_health"] = gw.HealthRegistry.Snapshot()
+	}
+
+	streamPool := stream.GetPoolStats()
+	stats["stream_buffer_pool"] = map[string]interface{}{
+		"hits":   streamPool["hits"],
+		"misses": streamPool["misses"],
 	}
 
 	if err := json.NewEncoder(w).Encode(stats); err != nil {

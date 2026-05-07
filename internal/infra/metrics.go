@@ -56,6 +56,10 @@ type Metrics struct {
 	authSuccess sync.Map
 	authFailure sync.Map
 
+	// Cache metrics
+	cacheHit  sync.Map
+	cacheMiss sync.Map
+
 	// Secure memory metrics
 	secureMemInitFailures atomic.Uint64
 	secureMemSealFailures atomic.Uint64
@@ -120,6 +124,9 @@ func (h *histogram) Observe(seconds float64) {
 	h.count.Add(1)
 }
 
+// labelKey converts a map of labels to a comma-separated string
+// sorted by key for consistent hashing.
+// Example: map[string]string{"a":"1", "b":"2"} -> "a=1,b=2"
 func labelKey(labels map[string]string) string {
 	pairs := make([]string, 0, len(labels))
 	for k, v := range labels {
@@ -129,6 +136,9 @@ func labelKey(labels map[string]string) string {
 	return strings.Join(pairs, ",")
 }
 
+// labelStr formats labels for Prometheus output with proper escaping.
+// Example: map[string]string{"job":"api-server"} -> {job="api-server"}
+// Special characters are escaped: \ -> \\, " -> \", newline -> \n
 func labelStr(labels map[string]string) string {
 	if len(labels) == 0 {
 		return ""
@@ -388,6 +398,22 @@ func (m *Metrics) RecordSecureMemSealFailure() {
 	m.secureMemSealFailures.Add(1)
 }
 
+func (m *Metrics) RecordCacheHit(cacheType string) {
+	if m == nil {
+		return
+	}
+	e := getOrCreateEntry(&m.cacheHit, map[string]string{"type": cacheType})
+	e.value.Add(1)
+}
+
+func (m *Metrics) RecordCacheMiss(cacheType string) {
+	if m == nil {
+		return
+	}
+	e := getOrCreateEntry(&m.cacheMiss, map[string]string{"type": cacheType})
+	e.value.Add(1)
+}
+
 func (m *Metrics) RecordUpstreamLatency(model, agent, provider string, duration time.Duration) {
 	if m == nil {
 		return
@@ -561,6 +587,10 @@ func (m *Metrics) WritePrometheus(w io.Writer) {
 		"Total successful authentications by type and key name.", &m.authSuccess)
 	m.writeCounterMap(w, "nenya_auth_failure_total",
 		"Total failed authentication attempts by type.", &m.authFailure)
+	m.writeCounterMap(w, "nenya_cache_hit_total",
+		"Total cache hits by cache type.", &m.cacheHit)
+	m.writeCounterMap(w, "nenya_cache_miss_total",
+		"Total cache misses by cache type.", &m.cacheMiss)
 
 	if m.RateLimits != nil {
 		fprintln("# HELP nenya_ratelimit_rpm_available Current RPM bucket available.")
@@ -663,6 +693,9 @@ func (m *Metrics) writeHistogramMap(w io.Writer, name, help string, mmap *sync.M
 	}
 }
 
+// stripTrailingBrace removes the trailing '}' from a label string,
+// used for constructing Prometheus bucket labels.
+// Example: {model="gpt-4"} -> {model="gpt-4"
 func stripTrailingBrace(s string) string {
 	if s == "" {
 		return ""

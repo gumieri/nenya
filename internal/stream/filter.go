@@ -135,23 +135,7 @@ func (f *StreamFilter) redactFromWindow(content string, prevWindowBytes int) (st
 }
 
 func (f *StreamFilter) appendToWindow(text string) {
-	runes := []rune(text)
-	total := f.windowLen + len(runes)
-	if total <= f.windowSize {
-		f.window = append(f.window, runes...)
-		f.windowLen = total
-		return
-	}
-	if total > f.windowSize {
-		drop := total - f.windowSize
-		if drop >= f.windowLen {
-			f.window = f.window[:0]
-		} else {
-			f.window = f.window[drop:]
-		}
-		f.window = append(f.window, runes...)
-		f.windowLen = f.windowSize
-	}
+	f.windowLen = AppendRuneWindow(&f.window, &f.windowLen, f.windowSize, text)
 }
 
 func (f *StreamFilter) checkWindowBlock() bool {
@@ -194,10 +178,16 @@ func (f *StreamFilter) WindowLen() int {
 	return f.windowLen
 }
 
+// ExtractDeltaContent extracts the delta content from SSE chunk data by parsing
+// the JSON and navigating the OpenAI-style structure: choices[0].delta.content.
+// Returns an empty string if the structure is invalid or the data is not valid JSON.
 func ExtractDeltaContent(data []byte) string {
 	return ExtractDeltaContentFromMap(ParseSSEChunk(data))
 }
 
+// ExtractDeltaContentFromMap extracts the delta content field from a parsed SSE chunk.
+// It navigates the OpenAI-style structure: choices[0].delta.content and returns the
+// content string, or an empty string if the structure is invalid.
 func ExtractDeltaContentFromMap(chunk map[string]interface{}) string {
 	choices, ok := chunk["choices"].([]interface{})
 	if !ok || len(choices) == 0 {
@@ -223,6 +213,9 @@ func ReplaceDeltaContent(data []byte, newContent string) []byte {
 	return ReplaceDeltaContentMap(chunk, newContent)
 }
 
+// ReplaceDeltaContentMap replaces the delta content field in a parsed SSE chunk with
+// newContent and returns the modified chunk as JSON bytes. If the chunk structure is
+// invalid, it returns the original chunk marshaled.
 func ReplaceDeltaContentMap(chunk map[string]interface{}, newContent string) []byte {
 	choices, ok := chunk["choices"].([]interface{})
 	if !ok || len(choices) == 0 {
@@ -249,6 +242,8 @@ func ReplaceDeltaContentMap(chunk map[string]interface{}, newContent string) []b
 	return result
 }
 
+// ParseSSEChunk parses SSE chunk JSON data into a map. Returns nil if the data
+// is not valid JSON.
 func ParseSSEChunk(data []byte) map[string]interface{} {
 	var chunk map[string]interface{}
 	if err := json.Unmarshal(data, &chunk); err != nil {

@@ -7,6 +7,9 @@ import (
 	"regexp"
 )
 
+// GenerateToken generates a cryptographically random API token with an
+// "nk-" prefix. Uses crypto/rand for secure randomness. The token is 48
+// hex characters (24 bytes) plus the prefix.
 func GenerateToken() string {
 	b := make([]byte, 24)
 	if _, err := rand.Read(b); err != nil {
@@ -15,6 +18,9 @@ func GenerateToken() string {
 	return "nk-" + hex.EncodeToString(b)
 }
 
+// ValidateKeyID validates an API key ID string: must be non-empty, at
+// most 64 characters, and contain only lowercase letters, digits, and
+// hyphens.
 func ValidateKeyID(id string) error {
 	if id == "" {
 		return fmt.Errorf("key ID cannot be empty")

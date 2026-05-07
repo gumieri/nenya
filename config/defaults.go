@@ -34,6 +34,9 @@ func setConfigLogLevel(level string) error {
 	return nil
 }
 
+// SetupLogger creates a slog.Logger with auto-detected text or JSON
+// output format (text for TTY, JSON for non-TTY such as systemd). The
+// verbosity flag controls debug vs info level.
 func SetupLogger(verbose bool) *slog.Logger {
 	level := slog.LevelInfo
 	if verbose {
@@ -89,6 +92,8 @@ func applyResolvedEngineDefaults(targets []EngineTarget) {
 	}
 }
 
+// ApplyDefaults populates all unset configuration fields with sensible
+// defaults, resolves engine references, and applies built-in providers.
 func ApplyDefaults(cfg *Config) error {
 	applyServerDefaults(cfg)
 	applyContextDefaults(cfg)

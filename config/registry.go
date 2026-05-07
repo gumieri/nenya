@@ -1,5 +1,8 @@
 package config
 
+// ProviderRegistry contains the built-in provider definitions (URLs,
+// auth styles, and model references). User configs are merged on top of
+// these defaults at startup.
 var ProviderRegistry = map[string]ProviderEntry{
 	"gemini": {
 		URL:       "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
@@ -119,6 +122,9 @@ var ProviderRegistry = map[string]ProviderEntry{
 	},
 }
 
+// ModelRegistry contains the static model definitions with provider
+// mapping, context limits, output limits, and pricing. Dynamic discovery
+// results are merged with this registry at runtime.
 var ModelRegistry = map[string]ModelEntry{
 	"gemini-3.1-flash-lite-preview": {Provider: "gemini", MaxContext: 128000, MaxOutput: 8192, Pricing: PricingOverride{InputCostPer1M: 0.075, OutputCostPer1M: 0.3}},
 	"gemini-3-flash-preview":        {Provider: "gemini", MaxContext: 128000, MaxOutput: 8192, Pricing: PricingOverride{InputCostPer1M: 0.075, OutputCostPer1M: 0.3}},

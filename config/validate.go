@@ -18,14 +18,22 @@ func closeBody(resp *http.Response) {
 	}
 }
 
+// ValidateConfiguration validates the entire configuration, including
+// the bouncer engine health (if pingProviders is true). Returns an error
+// if any validation rule fails.
 func ValidateConfiguration(ctx context.Context, cfg *Config, secrets *SecretsConfig, logger *slog.Logger) error {
 	return ValidateConfigurationWithPing(ctx, cfg, secrets, logger, true)
 }
 
+// ValidateConfigurationNoPing validates the configuration without
+// performing health checks on providers or the bouncer engine. Useful for
+// offline validation or tests that mock network calls.
 func ValidateConfigurationNoPing(ctx context.Context, cfg *Config, secrets *SecretsConfig, logger *slog.Logger) error {
 	return ValidateConfigurationWithPing(ctx, cfg, secrets, logger, false)
 }
 
+// ValidateConfigurationWithPing is the internal implementation of
+// configuration validation, optionally enabling provider health checks.
 func ValidateConfigurationWithPing(ctx context.Context, cfg *Config, secrets *SecretsConfig, logger *slog.Logger, pingProviders bool) error {
 	logger.Info("starting configuration validation")
 
@@ -213,6 +221,8 @@ func validatePatternsToList(label string, patterns []string, logger *slog.Logger
 	return errs
 }
 
+// ValidatePatterns compiles all patterns in the slice and returns an
+// error if any pattern is invalid. Uses label in error messages for context.
 func ValidatePatterns(label string, patterns []string, logger *slog.Logger) error {
 	errs := validatePatternsToList(label, patterns, logger)
 	if len(errs) > 0 {
@@ -221,6 +231,9 @@ func ValidatePatterns(label string, patterns []string, logger *slog.Logger) erro
 	return nil
 }
 
+// OllamaHealthURL derives the health check URL (/api/tags) from an
+// Ollama engine URL by stripping common suffixes (e.g., /v1/chat/completions,
+// /api/generate).
 func OllamaHealthURL(engineURL string) string {
 	const nativeSuffix = "/api/generate"
 	const openaiSuffix = "/v1/chat/completions"
