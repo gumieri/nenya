@@ -49,6 +49,10 @@ func PruneStaleToolCalls(payload map[string]interface{}, cfg config.CompactionCo
 
 		toolName, toolCallID := extractToolCallInfo(tcSlice[0])
 		numToolCalls := len(tcSlice)
+		if numToolCalls > 256 {
+			i--
+			continue
+		}
 
 		if i+numToolCalls >= pruneEnd {
 			i--
@@ -131,6 +135,8 @@ func areToolResultsPaired(messages []interface{}, i int, tcSlice []interface{}, 
 	return true
 }
 
+// createToolCallReplacement builds a compact placeholder message that replaces
+// a pruned tool call and its results. Preserves reasoning_content if present.
 func createToolCallReplacement(msg map[string]interface{}, toolName, toolCallID string) map[string]interface{} {
 	displayName := toolName
 	if displayName == "" {
@@ -155,6 +161,9 @@ func createToolCallReplacement(msg map[string]interface{}, toolName, toolCallID 
 	return replacement
 }
 
+// pruneToolCallResults replaces a tool call and its response messages with a
+// single compact summary message. Returns the updated messages slice, new length,
+// and updated prune end index.
 func pruneToolCallResults(messages []interface{}, i int, numToolCalls int, replacement map[string]interface{}, n int, protectionWindow int) ([]interface{}, int, int) {
 	messages[i] = replacement
 	total := 1 + numToolCalls

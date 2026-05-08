@@ -2,17 +2,21 @@ package pipeline
 
 import (
 	"math"
+	"sort"
 	"strings"
 	"unicode/utf8"
 
 	"nenya/config"
+	"nenya/internal/util"
 )
 
+// Block represents a contiguous text segment, tagged as code or prose.
 type Block struct {
 	Content string
 	IsCode  bool
 }
 
+// scoredBlock wraps a Block with its TF-IDF relevance score and original index.
 type scoredBlock struct {
 	block Block
 	score float64
@@ -176,10 +180,11 @@ func TruncateTFIDF(text string, maxSize int, query string, cfg config.ContextCon
 	query = capQueryRunes(query)
 	separator := "\n... [NENYA: TF-IDF PRUNED] ...\n"
 	sepLen := utf8.RuneCountInString(separator)
-	available := maxSize - sepLen
-	if available <= 0 {
-		return string([]rune(separator)[:maxSize])
+
+	if maxSize <= sepLen {
+		return TruncateMiddleOut(text, maxSize, cfg)
 	}
+	available := maxSize - sepLen
 
 	blocks := splitIntoBlocks(text)
 	if len(blocks) <= 1 {
@@ -238,7 +243,7 @@ func calculateBudget(n int, blockRunes []int, cfg config.ContextConfig, availabl
 		pinLastRunes += blockRunes[i]
 	}
 
-	reservedForPinned = pinFirstRunes + pinLastRunes
+	reservedForPinned = util.AddCap(pinFirstRunes, pinLastRunes)
 	maxReserved := int(float64(available) * 0.5)
 	if reservedForPinned > maxReserved {
 		reservedForPinned = maxReserved
@@ -267,11 +272,11 @@ func selectKeptBlocks(scored []scoredBlock, runes []int, budget int) map[int]boo
 func assembleResult(blocks []Block, blockRunes []int, pinFirst, middleStart, middleEnd, n int, keptMiddle map[int]bool, separator string, available, reservedForPinned int) string {
 	totalKept := 0
 	for i := 0; i < pinFirst; i++ {
-		totalKept += blockRunes[i]
+		totalKept = util.AddCap(totalKept, blockRunes[i])
 	}
 	for i, kept := range keptMiddle {
 		if kept {
-			totalKept += blockRunes[middleStart+i]
+			totalKept = util.AddCap(totalKept, blockRunes[middleStart+i])
 		}
 	}
 
@@ -301,7 +306,7 @@ func assembleResult(blocks []Block, blockRunes []int, pinFirst, middleStart, mid
 			break
 		}
 		sb.WriteString(blocks[i].Content)
-		totalKept += blockRunes[i]
+		totalKept = util.AddCap(totalKept, blockRunes[i])
 	}
 
 	return sb.String()
@@ -338,17 +343,9 @@ func TruncateTFIDFHistory(historyText string, maxRunes int, query string, cfg co
 }
 
 func sortScoredDesc(blocks []scoredBlock) {
-	for i := 0; i < len(blocks)-1; i++ {
-		maxIdx := i
-		for j := i + 1; j < len(blocks); j++ {
-			if blocks[j].score > blocks[maxIdx].score {
-				maxIdx = j
-			}
-		}
-		if maxIdx != i {
-			blocks[i], blocks[maxIdx] = blocks[maxIdx], blocks[i]
-		}
-	}
+	sort.Slice(blocks, func(i, j int) bool {
+		return blocks[i].score > blocks[j].score
+	})
 }
 
 func ExtractPriorUserMessages(messages []interface{}, maxMessages int) string {

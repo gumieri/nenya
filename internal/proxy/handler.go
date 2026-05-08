@@ -27,6 +27,14 @@ type Proxy struct {
 	ShutdownCtx context.Context
 }
 
+// Shutdown gracefully shuts down the gateway and waits for in-flight operations.
+func (p *Proxy) Shutdown(ctx context.Context) error {
+	if gw := p.Gateway(); gw != nil {
+		return gw.Shutdown(ctx)
+	}
+	return nil
+}
+
 // StoreGateway sets the gateway instance for the proxy.
 func (p *Proxy) StoreGateway(gw *gateway.NenyaGateway) {
 	p.gw.Store(gw)
@@ -77,6 +85,7 @@ func (p *Proxy) resolveRoute(path string) routeHandler {
 		{false, "/healthz", p.chainHealthz},
 		{false, "/statsz", p.chainAuthStats},
 		{false, "/metrics", p.chainAuthMetric},
+		{false, "/debug/pprof", p.chainAuthPprof},
 		{false, "/v1/models", p.chainModels},
 		{false, "/v1/chat/completions", p.chainChat},
 		{false, "/v1/embeddings", p.chainEmbeddings},
@@ -141,6 +150,12 @@ func (p *Proxy) chainAuthStats(gw *gateway.NenyaGateway, w http.ResponseWriter, 
 func (p *Proxy) chainAuthMetric(gw *gateway.NenyaGateway, w http.ResponseWriter, r *http.Request) {
 	p.chainEndpoint("", "/metrics", true, func(gw *gateway.NenyaGateway, w http.ResponseWriter, r *http.Request, keyRef string) {
 		p.handleMetrics(w, r)
+	})(gw, w, r)
+}
+
+func (p *Proxy) chainAuthPprof(gw *gateway.NenyaGateway, w http.ResponseWriter, r *http.Request) {
+	p.chainEndpoint("", "/debug/pprof", true, func(gw *gateway.NenyaGateway, w http.ResponseWriter, r *http.Request, keyRef string) {
+		p.handlePprof(w, r)
 	})(gw, w, r)
 }
 
@@ -548,4 +563,21 @@ func (p *Proxy) checkOllamaProviderHealth(ctx context.Context, gw *gateway.Nenya
 	}
 	defer func() { _ = resp.Body.Close() }()
 	return resp.StatusCode == http.StatusOK
+}
+
+// handlePprof serves pprof profiles for performance analysis.
+func (p *Proxy) handlePprof(w http.ResponseWriter, r *http.Request) {
+	gw := p.Gateway()
+	if gw == nil {
+		http.Error(w, "Gateway not initialized", http.StatusServiceUnavailable)
+		return
+	}
+
+	if gw.Config.Debug.PprofEnabled == nil || !*gw.Config.Debug.PprofEnabled {
+		http.Error(w, "pprof is disabled", http.StatusForbidden)
+		return
+	}
+
+	handler := http.DefaultServeMux
+	handler.ServeHTTP(w, r)
 }

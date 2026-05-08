@@ -2,7 +2,6 @@ package proxy
 
 import (
 	"context"
-	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -14,7 +13,6 @@ import (
 	"nenya/internal/gateway"
 	"nenya/internal/infra"
 	"nenya/internal/routing"
-	"nenya/internal/util"
 )
 
 func (p *Proxy) handlePassthrough(gw *gateway.NenyaGateway, w http.ResponseWriter, r *http.Request, keyRef string) {
@@ -116,29 +114,7 @@ func (p *Proxy) executePassthroughUpstream(gw *gateway.NenyaGateway, ctx context
 	if maxAttempts <= 0 {
 		maxAttempts = gw.Config.Governance.EffectiveMaxRetryAttempts()
 	}
-
-	var resp *http.Response
-	err := util.DoWithRetry(ctx, maxAttempts, func() error {
-		req, reqErr := p.buildUpstreamRequest(gw, ctx, r.Method, upstreamURL, bodyBytes, provider.Name, r.Header)
-		if reqErr != nil {
-			return reqErr
-		}
-		if ct := r.Header.Get("Content-Type"); ct != "" {
-			req.Header.Set("Content-Type", ct)
-		}
-
-		var fetchErr error
-		resp, fetchErr = gw.Client.Do(req)
-		if fetchErr != nil {
-			return fetchErr
-		}
-		if resp.StatusCode >= 500 {
-			_ = resp.Body.Close()
-			return fmt.Errorf("upstream error: %d", resp.StatusCode)
-		}
-		return nil
-	})
-	return resp, err
+	return p.doUpstreamRoundTrip(ctx, gw, r.Method, upstreamURL, bodyBytes, provider.Name, r.Header, r.Header.Get("Content-Type"), maxAttempts)
 }
 
 func readPassthroughBody(gw *gateway.NenyaGateway, w http.ResponseWriter, r *http.Request) ([]byte, error) {
@@ -166,7 +142,7 @@ func buildPassthroughContextAndCancel(ctx context.Context, provider *config.Prov
 	return ctx, func() {}
 }
 func (p *Proxy) pipeSSE(ctx context.Context, ctxLogger *slog.Logger, src io.Reader, dst http.ResponseWriter) {
-	stallR := newStallReader(src, 120*time.Second)
+	stallR := newStallReader(ctx, src, 120*time.Second)
 	buf := make([]byte, 4096)
 	defer func() {
 		stallR.Stop()

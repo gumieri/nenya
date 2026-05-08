@@ -22,6 +22,9 @@ const (
 	mcpExecTimeout = 30 * time.Second
 )
 
+// bufferedSSE holds a buffered streaming response from the upstream LLM.
+// It contains raw SSE bytes, extracted tool calls, the assistant message,
+// and metadata about the response.
 type bufferedSSE struct {
 	rawBytes         []byte
 	toolCalls        []mcpToolCall
@@ -32,12 +35,16 @@ type bufferedSSE struct {
 	reasoningContent string
 }
 
+// mcpToolCall represents a tool call extracted from an upstream LLM response.
 type mcpToolCall struct {
 	ID        string
 	Name      string
 	Arguments map[string]any
 }
 
+// replayBufferedResponse writes a buffered SSE response to the client.
+// This is used during MCP tool call loops to replay the assistant message
+// and tool calls before sending tool results.
 func replayBufferedResponse(w http.ResponseWriter, buf *bufferedSSE, logger *slog.Logger) {
 	if len(buf.rawBytes) == 0 {
 		logger.Warn("MCP loop: empty buffered response, sending error")
@@ -65,25 +72,10 @@ func replayBufferedResponse(w http.ResponseWriter, buf *bufferedSSE, logger *slo
 	}
 }
 
+// writeSSEError sends an SSE error event to the client with the given status code and message.
+// The error is formatted as an OpenAI-compatible error object and followed by [DONE].
 func writeSSEError(w http.ResponseWriter, statusCode int, message string) {
-	w.Header().Set("Content-Type", "text/event-stream")
-	w.Header().Set("Cache-Control", "no-cache")
-	w.WriteHeader(statusCode)
-
-	errPayload := map[string]any{
-		"error": map[string]any{
-			"message": message,
-			"type":    "gateway_error",
-		},
-	}
-	errBytes, _ := json.Marshal(errPayload)
-	sseData := fmt.Sprintf("data: %s\n\ndata: [DONE]\n\n", errBytes)
-
-	if fw, ok := newImmediateFlushWriterSafe(w); ok {
-		_, _ = fw.Write([]byte(sseData))
-	} else {
-		_, _ = w.Write([]byte(sseData))
-	}
+	writeGatewayStreamError(w, statusCode, ErrorTypeGateway, message)
 }
 
 // sseAccumulator accumulates SSE stream state during buffered reading,
@@ -338,6 +330,7 @@ func bufferStreamResponse(ctx context.Context, r io.Reader, logger *slog.Logger)
 	return acc.result(), nil
 }
 
+// buildOpenAIToolCalls converts internal mcpToolCall structs to OpenAI function call format.
 func buildOpenAIToolCalls(calls []mcpToolCall) []any {
 	result := make([]any, 0, len(calls))
 	for _, call := range calls {
@@ -354,6 +347,8 @@ func buildOpenAIToolCalls(calls []mcpToolCall) []any {
 	return result
 }
 
+// partitionMCPToolCalls splits tool calls into MCP and non-MCP categories.
+// This is used to route MCP tools to the MCP server while passing other tools upstream.
 func partitionMCPToolCalls(calls []mcpToolCall, toolIndex *mcp.ToolRegistry) (mcpCalls, nonMcpCalls []mcpToolCall) {
 	for _, call := range calls {
 		if toolIndex.IsMCPTool(call.Name) {
@@ -365,6 +360,8 @@ func partitionMCPToolCalls(calls []mcpToolCall, toolIndex *mcp.ToolRegistry) (mc
 	return
 }
 
+// executeMCPCalls executes MCP tool calls concurrently using the registered MCP servers.
+// Returns a slice of tool results in the same order as the input calls.
 func executeMCPCalls(ctx context.Context, calls []mcpToolCall, gw *gateway.NenyaGateway, agentName string) []*mcp.CallToolResult {
 	if len(calls) == 0 {
 		return nil
@@ -449,6 +446,8 @@ func executeMCPCalls(ctx context.Context, calls []mcpToolCall, gw *gateway.Nenya
 	return results
 }
 
+// appendMCPResults appends MCP tool results to the request payload's messages array.
+// The results are formatted as OpenAI tool messages with the corresponding tool call IDs.
 func appendMCPResults(payload map[string]any, calls []mcpToolCall, results []*mcp.CallToolResult, assistantMsg map[string]any) {
 	if len(calls) == 0 || len(results) == 0 {
 		return

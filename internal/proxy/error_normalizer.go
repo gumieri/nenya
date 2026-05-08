@@ -27,6 +27,8 @@ const (
 	ErrorTypeAuthentication ErrorType = "authentication_error"
 	// ErrorTypeNotFound indicates a not found error (404)
 	ErrorTypeNotFound ErrorType = "not_found_error"
+	// ErrorTypeGateway indicates a generic gateway error
+	ErrorTypeGateway ErrorType = "gateway_error"
 )
 
 // GatewayError is the base error type for all gateway errors

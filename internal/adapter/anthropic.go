@@ -38,21 +38,24 @@ func (a *AnthropicAdapter) ConvertAnthropicToOpenAIBody(anthropic map[string]int
 	return a.convertAnthropicToOpenAI(anthropic)
 }
 
+// NewAnthropicAdapter creates a new AnthropicAdapter instance.
 func NewAnthropicAdapter() *AnthropicAdapter {
 	return &AnthropicAdapter{
 		version: "2023-06-01",
 	}
 }
 
+// InjectAuth adds the Anthropic-specific authentication headers (x-api-key and anthropic-version).
 func (a *AnthropicAdapter) InjectAuth(req *http.Request, apiKey string) error {
-	if apiKey == "" {
-		return fmt.Errorf("anthropic auth: API key is empty")
+	if err := verifyAPIKey(apiKey, "anthropic"); err != nil {
+		return err
 	}
 	req.Header.Set("x-api-key", apiKey)
 	req.Header.Set("anthropic-version", a.version)
 	return nil
 }
 
+// MutateRequest converts an OpenAI-format request body to Anthropic format.
 func (a *AnthropicAdapter) MutateRequest(body []byte, model string, stream bool) ([]byte, error) {
 	if len(body) == 0 {
 		return body, nil
@@ -72,6 +75,7 @@ func (a *AnthropicAdapter) MutateRequest(body []byte, model string, stream bool)
 	return out, nil
 }
 
+// MutateResponse converts an Anthropic-format response to OpenAI format.
 func (a *AnthropicAdapter) MutateResponse(body []byte) ([]byte, error) {
 	if len(body) == 0 {
 		return body, nil
@@ -91,6 +95,7 @@ func (a *AnthropicAdapter) MutateResponse(body []byte) ([]byte, error) {
 	return out, nil
 }
 
+// NormalizeError classifies Anthropic HTTP errors into retryable, rate-limited, quota-exhausted, or permanent.
 func (a *AnthropicAdapter) NormalizeError(statusCode int, body []byte) ErrorClass {
 	switch statusCode {
 	case 429:
@@ -223,25 +228,27 @@ func (a *AnthropicAdapter) convertMessages(msgs []interface{}) []interface{} {
 		if !ok {
 			continue
 		}
+
 		role, _ := msg["role"].(string)
 		content := msg["content"]
 
-		switch role {
-		case "system":
+		if role == "system" {
 			continue
-		case "user", "assistant", "tool":
-			anthMsg := map[string]interface{}{
-				"role": role,
-			}
-			if role == "tool" {
-				toolCallID, _ := msg["tool_call_id"].(string)
-				anthMsg["role"] = "user"
-				anthMsg["content"] = a.convertToolMessage(content, toolCallID)
-			} else if content != nil {
-				anthMsg["content"] = content
-			}
-			result = append(result, anthMsg)
 		}
+
+		anthMsg := map[string]interface{}{
+			"role": role,
+		}
+
+		if role == "tool" {
+			toolCallID, _ := msg["tool_call_id"].(string)
+			anthMsg["role"] = "user"
+			anthMsg["content"] = a.convertToolMessage(content, toolCallID)
+		} else if content != nil {
+			anthMsg["content"] = content
+		}
+
+		result = append(result, anthMsg)
 	}
 	return result
 }
@@ -270,13 +277,16 @@ func (a *AnthropicAdapter) convertTools(tools []interface{}) []interface{} {
 		if !ok {
 			continue
 		}
+
 		if tool["type"] != "function" {
 			continue
 		}
+
 		fn, ok := tool["function"].(map[string]interface{})
 		if !ok {
 			continue
 		}
+
 		name, _ := fn["name"].(string)
 		desc, _ := fn["description"].(string)
 		params := fn["parameters"]
@@ -285,11 +295,13 @@ func (a *AnthropicAdapter) convertTools(tools []interface{}) []interface{} {
 			"name":        name,
 			"description": desc,
 		}
+
 		if params != nil {
 			anthTool["input_schema"] = params
 		} else {
 			anthTool["input_schema"] = map[string]interface{}{"type": "object", "properties": map[string]interface{}{}}
 		}
+
 		result = append(result, anthTool)
 	}
 	return result

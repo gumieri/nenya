@@ -439,7 +439,7 @@ func newTestGateway(cfg *config.Config, providers map[string]*config.Provider) *
 		Logger:     slog.Default(),
 		Stats:      infra.NewUsageTracker(),
 		Metrics:    infra.NewMetrics(),
-		AgentState: routing.NewAgentState(slog.Default()),
+		AgentState: routing.NewAgentState(slog.Default(), nil),
 		Providers:  providers,
 	}
 }

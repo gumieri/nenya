@@ -34,19 +34,20 @@ func NewEntropyFilter(threshold float64, minTokenLen int) *EntropyFilter {
 	}
 }
 
+// ShannonEntropy calculates the Shannon entropy (bits per character) of the
+// given token. Uses a rune-frequency map to handle Unicode strings.
+// Returns 0.0 for empty tokens.
 func ShannonEntropy(token string) float64 {
 	if len(token) == 0 {
 		return 0.0
 	}
 
-	var freq [256]int
+	freq := make(map[rune]int)
 	total := 0
 
 	for _, r := range token {
-		if r < 256 {
-			freq[r]++
-			total++
-		}
+		freq[r]++
+		total++
 	}
 
 	if total == 0 {
@@ -55,10 +56,8 @@ func ShannonEntropy(token string) float64 {
 
 	entropy := 0.0
 	for _, count := range freq {
-		if count > 0 {
-			p := float64(count) / float64(total)
-			entropy -= p * math.Log2(p)
-		}
+		p := float64(count) / float64(total)
+		entropy -= p * math.Log2(p)
 	}
 
 	return entropy
@@ -89,6 +88,9 @@ func tokenizeForEntropy(text string) []tokenSpan {
 
 func finalizeToken(spans []tokenSpan, start, end int) []tokenSpan {
 	if start < 0 {
+		return spans
+	}
+	if end <= start {
 		return spans
 	}
 	length := end - start

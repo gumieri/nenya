@@ -9,6 +9,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"nenya/internal/infra"
 )
 
 const ClientVersion = "0.1.0"
@@ -105,7 +107,7 @@ func (c *Client) Initialize(ctx context.Context) error {
 		"version", initResult.ServerInfo.Version,
 		"protocol", initResult.ProtocolVersion)
 
-	if err := c.transport.SendNotification("notifications/initialized", nil); err != nil {
+	if err := c.transport.SendNotification(ctx, "notifications/initialized", nil); err != nil {
 		c.logger.Warn("failed to send initialized notification", "err", err)
 	}
 
@@ -214,4 +216,9 @@ func (c *Client) Ready() bool {
 func (c *Client) Close() error {
 	c.initialized.Store(false)
 	return c.transport.Close()
+}
+
+// SetGatewayMetrics sets the metrics instance for tracking MCP transport goroutines.
+func (c *Client) SetGatewayMetrics(metrics *infra.Metrics) {
+	c.transport.SetGatewayMetrics(metrics)
 }

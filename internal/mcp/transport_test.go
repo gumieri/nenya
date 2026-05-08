@@ -449,7 +449,7 @@ func TestHTTPTransport_SendNotification(t *testing.T) {
 	}
 	defer func() { _ = transport.Close() }()
 
-	err := transport.SendNotification("notifications/initialized", nil)
+	err := transport.SendNotification(t.Context(), "notifications/initialized", nil)
 	if err != nil {
 		t.Fatalf("SendNotification failed: %v", err)
 	}
@@ -461,7 +461,7 @@ func TestHTTPTransport_SendNotification_NotConnected(t *testing.T) {
 		Logger: newTestLogger(),
 	})
 
-	err := transport.SendNotification("notifications/initialized", nil)
+	err := transport.SendNotification(t.Context(), "notifications/initialized", nil)
 	if err != ErrTransportClosed {
 		t.Fatalf("expected ErrTransportClosed, got %v", err)
 	}

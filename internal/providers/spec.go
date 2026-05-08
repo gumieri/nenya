@@ -35,14 +35,16 @@ type ProviderSpec struct {
 }
 
 // SupportsToolCalls reports whether the named provider supports tool calls.
+// Returns false for unknown providers (safe default).
 func SupportsToolCalls(name string) bool {
 	if spec, ok := Get(name); ok {
 		return spec.SupportsToolCalls
 	}
-	return true
+	return false
 }
 
 // SupportsReasoning reports whether the named provider supports reasoning/thinking.
+// Returns false for unknown providers (safe default).
 func SupportsReasoning(name string) bool {
 	if spec, ok := Get(name); ok {
 		return spec.SupportsReasoning
@@ -51,6 +53,7 @@ func SupportsReasoning(name string) bool {
 }
 
 // SupportsVision reports whether the named provider supports vision/image inputs.
+// Returns false for unknown providers (safe default).
 func SupportsVision(name string) bool {
 	if spec, ok := Get(name); ok {
 		return spec.SupportsVision

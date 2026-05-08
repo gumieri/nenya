@@ -1,19 +1,34 @@
 package resilience
 
 import (
+	"math"
 	"sync"
 	"time"
 )
+
+// incUint32 safely increments a uint32 counter, capping at math.MaxUint32
+// to prevent integer overflow (CWE-190).
+func incUint32(v *uint32) uint32 {
+	if *v == math.MaxUint32 {
+		return *v
+	}
+	*v++
+	return *v
+}
 
 // State represents the current state of a circuit breaker.
 type State int
 
 const (
+	// StateClosed is the normal operating state where requests pass through.
 	StateClosed State = iota
+	// StateOpen is the failure state where requests are blocked until cooldown expires.
 	StateOpen
+	// StateHalfOpen is the probe state where limited requests are allowed to test recovery.
 	StateHalfOpen
 )
 
+// String returns a human-readable representation of the state.
 func (s State) String() string {
 	switch s {
 	case StateClosed:
@@ -29,11 +44,11 @@ func (s State) String() string {
 
 // Counts holds the request statistics for a single circuit.
 type Counts struct {
-	Requests             uint32
-	TotalSuccesses       uint32
-	TotalFailures        uint32
-	ConsecutiveSuccesses uint32
-	ConsecutiveFailures  uint32
+	Requests             uint32 // Total requests attempted
+	TotalSuccesses       uint32 // Total successful requests
+	TotalFailures        uint32 // Total failed requests
+	ConsecutiveSuccesses uint32 // Consecutive successful requests
+	ConsecutiveFailures  uint32 // Consecutive failed requests
 }
 
 type circuit struct {
@@ -47,6 +62,9 @@ type circuit struct {
 
 // CircuitBreaker manages per-key circuit breakers with configurable
 // failure/success thresholds and automatic recovery.
+//
+// Thread-safety: All methods are safe to call concurrently. Internal state
+// is protected by a sync.Mutex. Each key has an independent circuit.
 type CircuitBreaker struct {
 	mu                  sync.Mutex
 	circuits            map[string]*circuit
@@ -55,6 +73,7 @@ type CircuitBreaker struct {
 	halfOpenMaxRequests uint32
 	cooldown            time.Duration
 	onStateChange       func(key string, from, to State)
+	onStateChangeMetric func(key, from, to string)
 }
 
 // NewCircuitBreaker creates a CircuitBreaker with the given thresholds.
@@ -67,7 +86,7 @@ func NewCircuitBreaker(failureThreshold, successThreshold int, halfOpenMaxReques
 		successThreshold = 1
 	}
 	if halfOpenMaxRequests == 0 {
-		halfOpenMaxRequests = 1
+		halfOpenMaxRequests = 3
 	}
 	if cooldown <= 0 {
 		cooldown = 60 * time.Second
@@ -81,6 +100,14 @@ func NewCircuitBreaker(failureThreshold, successThreshold int, halfOpenMaxReques
 		cooldown:            cooldown,
 		onStateChange:       onStateChange,
 	}
+}
+
+// onStateChangeMetric is called while holding the circuit mutex.
+// The callback must be fast and non-blocking (no I/O, no locks).
+func (cb *CircuitBreaker) SetStateChangeMetricCallback(fn func(key, from, to string)) {
+	cb.mu.Lock()
+	defer cb.mu.Unlock()
+	cb.onStateChangeMetric = fn
 }
 
 func (cb *CircuitBreaker) getOrCreate(key string) *circuit {
@@ -127,8 +154,15 @@ func (cb *CircuitBreaker) setState(c *circuit, newState State, key string) {
 	if cb.onStateChange != nil {
 		cb.onStateChange(key, from, newState)
 	}
+	if cb.onStateChangeMetric != nil {
+		cb.onStateChangeMetric(key, from.String(), newState.String())
+	}
 }
 
+// Allow checks whether a request should be permitted for the given key.
+// Returns true if the request is allowed, advancing the request count.
+// For Open state, transitions to HalfOpen after cooldown expires.
+// For HalfOpen, respects the halfOpenMaxRequests limit.
 func (cb *CircuitBreaker) Allow(key string) bool {
 	cb.mu.Lock()
 	defer cb.mu.Unlock()
@@ -138,15 +172,15 @@ func (cb *CircuitBreaker) Allow(key string) bool {
 
 	switch c.state {
 	case StateClosed:
-		c.counts.Requests++
+		incUint32(&c.counts.Requests)
 		c.lastChange = now
 		return true
 
 	case StateOpen:
 		if now.After(c.expiry) {
 			cb.setState(c, StateHalfOpen, key)
-			c.counts.Requests++
-			c.halfOpenInflight++
+			incUint32(&c.counts.Requests)
+			incUint32(&c.halfOpenInflight)
 			c.lastChange = now
 			return true
 		}
@@ -156,8 +190,8 @@ func (cb *CircuitBreaker) Allow(key string) bool {
 		if c.halfOpenInflight >= cb.halfOpenMaxRequests {
 			return false
 		}
-		c.counts.Requests++
-		c.halfOpenInflight++
+		incUint32(&c.counts.Requests)
+		incUint32(&c.halfOpenInflight)
 		c.lastChange = now
 		return true
 	}
@@ -165,6 +199,9 @@ func (cb *CircuitBreaker) Allow(key string) bool {
 	return false
 }
 
+// RecordFailure records a failed request for the given key.
+// May trigger a state transition to Open based on consecutive failures.
+// For Open state, optionally extends the cooldown with cooldownOverride.
 func (cb *CircuitBreaker) RecordFailure(key string, cooldownOverride ...time.Duration) {
 	cb.mu.Lock()
 	defer cb.mu.Unlock()
@@ -174,9 +211,9 @@ func (cb *CircuitBreaker) RecordFailure(key string, cooldownOverride ...time.Dur
 
 	switch c.state {
 	case StateClosed:
-		c.counts.Requests++
-		c.counts.TotalFailures++
-		c.counts.ConsecutiveFailures++
+		incUint32(&c.counts.Requests)
+		incUint32(&c.counts.TotalFailures)
+		incUint32(&c.counts.ConsecutiveFailures)
 		c.counts.ConsecutiveSuccesses = 0
 		c.lastChange = now
 
@@ -208,6 +245,8 @@ func (cb *CircuitBreaker) RecordFailure(key string, cooldownOverride ...time.Dur
 	}
 }
 
+// RecordSuccess records a successful request for the given key.
+// May trigger a state transition from HalfOpen to Closed based on success threshold.
 func (cb *CircuitBreaker) RecordSuccess(key string) {
 	cb.mu.Lock()
 	defer cb.mu.Unlock()
@@ -217,16 +256,16 @@ func (cb *CircuitBreaker) RecordSuccess(key string) {
 
 	switch c.state {
 	case StateClosed:
-		c.counts.Requests++
-		c.counts.TotalSuccesses++
-		c.counts.ConsecutiveSuccesses++
+		incUint32(&c.counts.Requests)
+		incUint32(&c.counts.TotalSuccesses)
+		incUint32(&c.counts.ConsecutiveSuccesses)
 		c.counts.ConsecutiveFailures = 0
 		c.lastChange = now
 
 	case StateHalfOpen:
-		c.counts.Requests++
-		c.counts.TotalSuccesses++
-		c.counts.ConsecutiveSuccesses++
+		incUint32(&c.counts.Requests)
+		incUint32(&c.counts.TotalSuccesses)
+		incUint32(&c.counts.ConsecutiveSuccesses)
 		c.counts.ConsecutiveFailures = 0
 		if c.halfOpenInflight > 0 {
 			c.halfOpenInflight--
@@ -240,6 +279,9 @@ func (cb *CircuitBreaker) RecordSuccess(key string) {
 	}
 }
 
+// ForceOpen forces the circuit breaker for the given key into the Open state
+// for the specified cooldown duration. Used for manual circuit breaking
+// (e.g., on HTTP 429 rate limit errors).
 func (cb *CircuitBreaker) ForceOpen(key string, cooldown time.Duration) {
 	if key == "" || cooldown <= 0 {
 		return
@@ -276,6 +318,8 @@ func (cb *CircuitBreaker) Peek(key string) bool {
 	return false
 }
 
+// State returns the current state of the circuit breaker for the given key.
+// For Open circuits past their cooldown, reports HalfOpen without side effects.
 func (cb *CircuitBreaker) State(key string) State {
 	cb.mu.Lock()
 	defer cb.mu.Unlock()
@@ -292,6 +336,8 @@ func (cb *CircuitBreaker) State(key string) State {
 	return c.state
 }
 
+// ActiveCount returns the number of circuits currently in the Open state
+// (i.e., actively blocking requests). Circuits past cooldown are excluded.
 func (cb *CircuitBreaker) ActiveCount() int {
 	cb.mu.Lock()
 	defer cb.mu.Unlock()
@@ -306,6 +352,8 @@ func (cb *CircuitBreaker) ActiveCount() int {
 	return count
 }
 
+// Snapshot returns a map of all circuit keys to their current state names.
+// For Open circuits past cooldown, reports "half_open" without side effects.
 func (cb *CircuitBreaker) Snapshot() map[string]string {
 	cb.mu.Lock()
 	defer cb.mu.Unlock()

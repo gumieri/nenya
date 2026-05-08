@@ -8,6 +8,7 @@ import (
 	"strings"
 )
 
+// GeminiModelMap maps short Gemini model names to their full API names.
 var GeminiModelMap = map[string]string{
 	"gemini-3-flash":        "gemini-3-flash-preview",
 	"gemini-3-pro":          "gemini-3-pro-preview",
@@ -26,6 +27,7 @@ var geminiRetryablePatterns = []string{
 	"quota exceeded",
 }
 
+// GeminiAdapter handles request/response mutation for Google Gemini API.
 type GeminiAdapter struct {
 	thoughtSigCache ThoughtSigCache
 	modelMap        map[string]string
@@ -33,16 +35,19 @@ type GeminiAdapter struct {
 	logger          geminiLogger
 }
 
+// ThoughtSigCache is an interface for caching and retrieving thought signatures.
 type ThoughtSigCache interface {
 	Load(key string) (interface{}, bool)
 	Store(key string, value interface{})
 }
 
+// geminiLogger is an interface for structured logging in the Gemini adapter.
 type geminiLogger interface {
 	Debug(msg string, args ...any)
 	Warn(msg string, args ...any)
 }
 
+// GeminiAdapterDeps contains dependencies for creating a GeminiAdapter.
 type GeminiAdapterDeps struct {
 	ThoughtSigCache ThoughtSigCache
 	ExtractContent  func(msg map[string]interface{}) string
@@ -50,6 +55,7 @@ type GeminiAdapterDeps struct {
 	ModelMap        map[string]string
 }
 
+// NewGeminiAdapter creates a new GeminiAdapter with the given dependencies.
 func NewGeminiAdapter(deps GeminiAdapterDeps) *GeminiAdapter {
 	mm := deps.ModelMap
 	if mm == nil {
@@ -63,6 +69,7 @@ func NewGeminiAdapter(deps GeminiAdapterDeps) *GeminiAdapter {
 	}
 }
 
+// MutateRequest mutates the request body for Gemini-specific requirements.
 func (a *GeminiAdapter) MutateRequest(body []byte, model string, stream bool) ([]byte, error) {
 	if len(body) == 0 {
 		return body, nil
@@ -104,10 +111,12 @@ func (a *GeminiAdapter) MutateRequest(body []byte, model string, stream bool) ([
 	return out, nil
 }
 
+// InjectAuth adds the Bearer and x-goog-api-key headers for Gemini authentication.
 func (a *GeminiAdapter) InjectAuth(req *http.Request, apiKey string) error {
 	return (&BearerPlusGoogAuth{}).InjectAuth(req, apiKey)
 }
 
+// MutateResponse mutates the response body to add tool call indices and extra content.
 func (a *GeminiAdapter) MutateResponse(body []byte) ([]byte, error) {
 	if len(body) == 0 || !bytes.HasPrefix(bytes.TrimSpace(body), []byte("{")) {
 		return body, nil
@@ -129,6 +138,7 @@ func (a *GeminiAdapter) MutateResponse(body []byte) ([]byte, error) {
 	return out, nil
 }
 
+// transformToolCallsInDelta navigates to the tool_calls array in the delta and enriches them.
 func (a *GeminiAdapter) transformToolCallsInDelta(chunk map[string]interface{}) bool {
 	choices, ok := chunk["choices"].([]interface{})
 	if !ok || len(choices) == 0 {
@@ -149,6 +159,7 @@ func (a *GeminiAdapter) transformToolCallsInDelta(chunk map[string]interface{}) 
 	return a.enrichToolCalls(toolCalls)
 }
 
+// enrichToolCalls adds indices and stores extra content for tool calls.
 func (a *GeminiAdapter) enrichToolCalls(toolCalls []interface{}) bool {
 	transformed := false
 	for i, tc := range toolCalls {
@@ -167,6 +178,7 @@ func (a *GeminiAdapter) enrichToolCalls(toolCalls []interface{}) bool {
 	return transformed
 }
 
+// storeExtraContent stores the extra_content field in the thought signature cache.
 func (a *GeminiAdapter) storeExtraContent(tcMap map[string]interface{}) bool {
 	if a.thoughtSigCache == nil {
 		return false
@@ -183,6 +195,7 @@ func (a *GeminiAdapter) storeExtraContent(tcMap map[string]interface{}) bool {
 	return true
 }
 
+// NormalizeError classifies Gemini HTTP errors into retryable, rate-limited, quota-exhausted, or permanent.
 func (a *GeminiAdapter) NormalizeError(statusCode int, body []byte) ErrorClass {
 	switch statusCode {
 	case 429:
@@ -210,6 +223,7 @@ func (a *GeminiAdapter) NormalizeError(statusCode int, body []byte) ErrorClass {
 	}
 }
 
+// toolCallInfo holds metadata about a tool call.
 type toolCallInfo struct {
 	id       string
 	name     string

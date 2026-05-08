@@ -50,7 +50,7 @@ func TestContentBuilder_Empty(t *testing.T) {
 func TestStallReader_DrainPending_WithData(t *testing.T) {
 	// Use a slow reader that blocks so readLoop doesn't race with us writing to sr.ch.
 	src := &slowReader{}
-	sr := newStallReader(src, time.Hour)
+	sr := newStallReader(context.Background(), src, time.Hour)
 	sr.Stop()
 
 	sr.ch <- readResult{data: []byte("test"), err: nil}
@@ -66,7 +66,7 @@ func TestStallReader_DrainPending_WithData(t *testing.T) {
 
 func TestStallReader_DrainPending_Timeout(t *testing.T) {
 	src := &timeoutReader{}
-	sr := newStallReader(src, time.Hour)
+	sr := newStallReader(context.Background(), src, time.Hour)
 	sr.Stop()
 
 	_, err := sr.DrainPending(10 * time.Millisecond)
@@ -198,7 +198,7 @@ func TestWriteBlockedSSE_Flush(t *testing.T) {
 
 func TestStallReader_ReadsNormally(t *testing.T) {
 	src := strings.NewReader("hello world")
-	sr := newStallReader(src, 50*time.Millisecond)
+	sr := newStallReader(context.Background(), src, 50*time.Millisecond)
 	defer sr.Stop()
 
 	buf := make([]byte, 11)
@@ -217,7 +217,7 @@ func TestStallReader_ReadsNormally(t *testing.T) {
 func TestStallReader_StallsAfterTimeout(t *testing.T) {
 	src := &testutil.BlockingReader{Closed: make(chan struct{})}
 
-	sr := newStallReader(src, 30*time.Millisecond)
+	sr := newStallReader(context.Background(), src, 30*time.Millisecond)
 	defer sr.Stop()
 
 	time.Sleep(50 * time.Millisecond)
@@ -237,7 +237,7 @@ func TestStallReader_StallsAfterTimeout(t *testing.T) {
 func TestStallReader_ResetOnRead(t *testing.T) {
 	data := "chunk1"
 	src := strings.NewReader(data)
-	sr := newStallReader(src, 30*time.Millisecond)
+	sr := newStallReader(context.Background(), src, 30*time.Millisecond)
 	defer sr.Stop()
 
 	buf := make([]byte, 1024)
@@ -313,7 +313,7 @@ func TestErrStreamStalled(t *testing.T) {
 func TestStallReader_StopPreventsStall(t *testing.T) {
 	src := &testutil.BlockingReader{Closed: make(chan struct{})}
 
-	sr := newStallReader(src, 30*time.Millisecond)
+	sr := newStallReader(context.Background(), src, 30*time.Millisecond)
 	sr.Stop()
 
 	time.Sleep(50 * time.Millisecond)
@@ -365,7 +365,7 @@ func TestResponseTransformer_GeminiTransformerHasOnExtraContent(t *testing.T) {
 func TestStallReader_ConcurrentReadAndStall(t *testing.T) {
 	src := &testutil.BlockingReader{Closed: make(chan struct{})}
 
-	sr := newStallReader(src, 20*time.Millisecond)
+	sr := newStallReader(context.Background(), src, 20*time.Millisecond)
 	defer sr.Stop()
 
 	doneCh := make(chan error, 1)
@@ -713,7 +713,7 @@ func newStreamTestGateway() *gateway.NenyaGateway {
 		Logger:     slog.Default(),
 		Stats:      infra.NewUsageTracker(),
 		Metrics:    infra.NewMetrics(),
-		AgentState: routing.NewAgentState(slog.Default()),
+		AgentState: routing.NewAgentState(slog.Default(), nil),
 		Providers:  make(map[string]*config.Provider),
 	}
 }

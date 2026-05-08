@@ -27,7 +27,7 @@ type discardWriter struct{}
 func (d *discardWriter) Write(p []byte) (int, error) { return len(p), nil }
 
 func TestNewAgentState(t *testing.T) {
-	a := NewAgentState(testLogger())
+	a := NewAgentState(testLogger(), nil)
 	if a == nil {
 		t.Fatal("NewAgentState returned nil")
 	}
@@ -44,7 +44,7 @@ func TestNewAgentState(t *testing.T) {
 
 func TestBuildTargetList_RoundRobin(t *testing.T) {
 	p := targetProviders()
-	a := NewAgentState(testLogger())
+	a := NewAgentState(testLogger(), nil)
 	agent := config.AgentConfig{
 		Models: []config.AgentModel{
 			{Provider: "gemini", Model: "gemini-2.5-flash"},
@@ -82,7 +82,7 @@ func TestBuildTargetList_RoundRobin(t *testing.T) {
 
 func TestBuildTargetList_CooldownSkip(t *testing.T) {
 	p := targetProviders()
-	a := NewAgentState(testLogger())
+	a := NewAgentState(testLogger(), nil)
 	agent := config.AgentConfig{
 		Models: []config.AgentModel{
 			{Provider: "gemini", Model: "gemini-2.5-flash"},
@@ -110,7 +110,7 @@ func TestBuildTargetList_CooldownSkip(t *testing.T) {
 
 func TestBuildTargetList_FallbackStrategy(t *testing.T) {
 	p := targetProviders()
-	a := NewAgentState(testLogger())
+	a := NewAgentState(testLogger(), nil)
 	agent := config.AgentConfig{
 		Strategy: "fallback",
 		Models: []config.AgentModel{
@@ -129,7 +129,7 @@ func TestBuildTargetList_FallbackStrategy(t *testing.T) {
 
 func TestBuildTargetList_UnknownProviderSkipped(t *testing.T) {
 	p := targetProviders()
-	a := NewAgentState(testLogger())
+	a := NewAgentState(testLogger(), nil)
 	agent := config.AgentConfig{
 		Models: []config.AgentModel{
 			{Provider: "gemini", Model: "gemini-2.5-flash"},
@@ -151,7 +151,7 @@ func TestBuildTargetList_UnknownProviderSkipped(t *testing.T) {
 
 func TestBuildTargetList_EmptyModels(t *testing.T) {
 	p := targetProviders()
-	a := NewAgentState(testLogger())
+	a := NewAgentState(testLogger(), nil)
 	agent := config.AgentConfig{}
 
 	targets := a.BuildTargetList(testLogger(), "test-agent", agent, 1000, p, nil, false)
@@ -162,7 +162,7 @@ func TestBuildTargetList_EmptyModels(t *testing.T) {
 
 func TestBuildTargetList_TokenCountExceedsMaxContext(t *testing.T) {
 	p := targetProviders()
-	a := NewAgentState(testLogger())
+	a := NewAgentState(testLogger(), nil)
 	agent := config.AgentConfig{
 		Models: []config.AgentModel{
 			{Provider: "nvidia_free", Model: "nemotron-3-super"},
@@ -181,7 +181,7 @@ func TestBuildTargetList_TokenCountExceedsMaxContext(t *testing.T) {
 
 func TestBuildTargetList_MaxContextFromAgentModel(t *testing.T) {
 	p := targetProviders()
-	a := NewAgentState(testLogger())
+	a := NewAgentState(testLogger(), nil)
 	agent := config.AgentConfig{
 		Models: []config.AgentModel{
 			{Provider: "gemini", Model: "gemini-2.5-flash", MaxContext: 500},
@@ -200,7 +200,7 @@ func TestBuildTargetList_MaxContextFromAgentModel(t *testing.T) {
 
 func TestBuildTargetList_TargetFields(t *testing.T) {
 	p := targetProviders()
-	a := NewAgentState(testLogger())
+	a := NewAgentState(testLogger(), nil)
 	agent := config.AgentConfig{
 		Models: []config.AgentModel{
 			{Provider: "deepseek", Model: "deepseek-v4-flash"},
@@ -231,7 +231,7 @@ func TestBuildTargetList_TargetFields(t *testing.T) {
 }
 
 func TestActivateCooldown_Active(t *testing.T) {
-	a := NewAgentState(testLogger())
+	a := NewAgentState(testLogger(), nil)
 	target := UpstreamTarget{
 		CoolKey: "agent:gemini:gemini-2.5-flash",
 	}
@@ -244,7 +244,7 @@ func TestActivateCooldown_Active(t *testing.T) {
 }
 
 func TestActivateCooldown_ZeroDuration(t *testing.T) {
-	a := NewAgentState(testLogger())
+	a := NewAgentState(testLogger(), nil)
 	target := UpstreamTarget{
 		CoolKey: "agent:gemini:gemini-2.5-flash",
 	}
@@ -257,7 +257,7 @@ func TestActivateCooldown_ZeroDuration(t *testing.T) {
 }
 
 func TestActivateCooldown_EmptyCoolKey(t *testing.T) {
-	a := NewAgentState(testLogger())
+	a := NewAgentState(testLogger(), nil)
 	target := UpstreamTarget{
 		CoolKey: "",
 	}
@@ -270,7 +270,7 @@ func TestActivateCooldown_EmptyCoolKey(t *testing.T) {
 }
 
 func TestActivateCooldown_Expires(t *testing.T) {
-	a := NewAgentState(testLogger())
+	a := NewAgentState(testLogger(), nil)
 	target := UpstreamTarget{
 		CoolKey: "agent:gemini:gemini-2.5-flash",
 	}
@@ -284,7 +284,7 @@ func TestActivateCooldown_Expires(t *testing.T) {
 }
 
 func TestActiveCooldowns_Multiple(t *testing.T) {
-	a := NewAgentState(testLogger())
+	a := NewAgentState(testLogger(), nil)
 
 	a.ActivateCooldown(UpstreamTarget{CoolKey: "a"}, 5*time.Minute)
 	a.ActivateCooldown(UpstreamTarget{CoolKey: "b"}, 5*time.Minute)
@@ -348,7 +348,7 @@ func TestExpandModels_DeferredProvider(t *testing.T) {
 		},
 	}
 
-	a := NewAgentState(testLogger())
+	a := NewAgentState(testLogger(), nil)
 	expanded := a.expandModels("test-agent", agent, catalog, providers, testLogger())
 
 	if len(expanded) != 2 {
@@ -383,7 +383,7 @@ func TestExpandModels_DeferredProvider_CatalogFallback(t *testing.T) {
 		},
 	}
 
-	a := NewAgentState(testLogger())
+	a := NewAgentState(testLogger(), nil)
 	expanded := a.expandModels("test-agent", agent, catalog, providers, testLogger())
 
 	if len(expanded) != 1 {
@@ -417,7 +417,7 @@ func TestExpandModels_ProviderOnly_Catalog(t *testing.T) {
 		},
 	}
 
-	a := NewAgentState(testLogger())
+	a := NewAgentState(testLogger(), nil)
 	expanded := a.expandModels("test-agent", agent, catalog, providers, testLogger())
 
 	if len(expanded) != 2 {
@@ -452,7 +452,7 @@ func TestExpandModels_ProviderOnly_CatalogFallback(t *testing.T) {
 		},
 	}
 
-	a := NewAgentState(testLogger())
+	a := NewAgentState(testLogger(), nil)
 	expanded := a.expandModels("test-agent", agent, catalog, providers, testLogger())
 
 	if len(expanded) < 2 {
@@ -481,7 +481,7 @@ func TestExpandModels_ProviderOnly_UnknownProvider(t *testing.T) {
 		},
 	}
 
-	a := NewAgentState(testLogger())
+	a := NewAgentState(testLogger(), nil)
 	expanded := a.expandModels("test-agent", agent, catalog, providers, testLogger())
 
 	if len(expanded) != 0 {
@@ -502,7 +502,7 @@ func TestExpandModels_ProviderOnly_MixedWithStatic(t *testing.T) {
 		},
 	}
 
-	a := NewAgentState(testLogger())
+	a := NewAgentState(testLogger(), nil)
 	expanded := a.expandModels("test-agent", agent, catalog, providers, testLogger())
 
 	if len(expanded) != 3 {
@@ -547,7 +547,7 @@ func TestExpandModels_ProviderOnly_MixedWithDynamic(t *testing.T) {
 		t.Fatalf("failed to compile regex: %v", err)
 	}
 
-	a := NewAgentState(testLogger())
+	a := NewAgentState(testLogger(), nil)
 	expanded := a.expandModels("test-agent", agent, catalog, providers, testLogger())
 
 	if len(expanded) != 4 {

@@ -7,6 +7,8 @@ import (
 	"nenya/internal/discovery"
 )
 
+// UpstreamTarget represents a concrete routing target with all necessary
+// fields to forward a request to a specific provider/model combination.
 type UpstreamTarget struct {
 	URL        string
 	Model      string
@@ -17,6 +19,8 @@ type UpstreamTarget struct {
 	MaxContext int
 }
 
+// ProviderMatch holds the resolved provider details for a model,
+// including format, context limits, and the provider name.
 type ProviderMatch struct {
 	Provider   string
 	Model      string
@@ -25,6 +29,9 @@ type ProviderMatch struct {
 	MaxOutput  int
 }
 
+// ResolveProviders returns all matching providers for a model name,
+// checking the dynamic discovery catalog first, then falling back to the
+// static ModelRegistry. Returns an empty slice for unknown models.
 func ResolveProviders(modelName string, providers map[string]*config.Provider, catalog *discovery.ModelCatalog) []ProviderMatch {
 	if providers == nil {
 		return nil
@@ -85,6 +92,9 @@ func resolveFromRegistry(modelName string, providers map[string]*config.Provider
 	}}
 }
 
+// ResolveProvider resolves the first provider for a model name,
+// checking the dynamic discovery catalog first, then falling back to the
+// static ModelRegistry. Returns nil for unknown models.
 func ResolveProvider(modelName string, providers map[string]*config.Provider, catalog *discovery.ModelCatalog) *config.Provider {
 	matches := ResolveProviders(modelName, providers, catalog)
 	if len(matches) == 0 {
@@ -96,6 +106,8 @@ func ResolveProvider(modelName string, providers map[string]*config.Provider, ca
 	return nil
 }
 
+// DetermineUpstream returns the base endpoint URL for a model's provider.
+// Returns an empty string if the model cannot be resolved.
 func DetermineUpstream(modelName string, providers map[string]*config.Provider) string {
 	if p := ResolveProvider(modelName, providers, nil); p != nil {
 		return p.URL
@@ -103,6 +115,8 @@ func DetermineUpstream(modelName string, providers map[string]*config.Provider) 
 	return ""
 }
 
+// ProviderURL selects the final endpoint URL for a given provider/model/format
+// combination. Priority: agent URL > format-specific URL > provider default URL.
 func ProviderURL(provider, agentURL, format string, formatURLs map[string]string, providers map[string]*config.Provider) string {
 	if agentURL != "" {
 		return agentURL
@@ -118,6 +132,9 @@ func ProviderURL(provider, agentURL, format string, formatURLs map[string]string
 	return ""
 }
 
+// ResolveModelLimits returns the max_context and max_output for a model,
+// checking the dynamic discovery catalog first, then falling back to the
+// static ModelRegistry.
 func ResolveModelLimits(modelID string, catalog *discovery.ModelCatalog) (maxContext, maxOutput int) {
 	if catalog != nil {
 		entries := catalog.LookupAll(modelID)

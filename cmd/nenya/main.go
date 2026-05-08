@@ -4,6 +4,7 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"io"
 	"log/slog"
 	"net"
 	"net/http"
@@ -11,6 +12,7 @@ import (
 	"os/signal"
 	"sort"
 	"strconv"
+	"sync"
 	"syscall"
 	"time"
 
@@ -21,8 +23,79 @@ import (
 	"nenya/internal/version"
 )
 
+// configPaths holds the resolved configuration file paths.
+type configPaths struct {
+	dir  string
+	file string
+}
+
+// reloadLimiter prevents concurrent configuration reloads and adds
+// a debounce delay to coalesce rapid SIGHUP signals.
+type reloadLimiter struct {
+	mu          sync.Mutex
+	pending     bool
+	debounce    *time.Timer
+	debounceMu  sync.Mutex
+}
+
+// Stop cleans up the debounce timer if one is pending. Should be called
+// during shutdown to prevent timer callbacks from executing after resources
+// have been cleaned up.
+func (rl *reloadLimiter) Stop() {
+	rl.debounceMu.Lock()
+	defer rl.debounceMu.Unlock()
+	if rl.debounce != nil {
+		rl.debounce.Stop()
+		rl.debounce = nil
+	}
+}
+
+func (rl *reloadLimiter) tryStart() bool {
+	rl.mu.Lock()
+	defer rl.mu.Unlock()
+	if rl.pending {
+		return false
+	}
+	rl.pending = true
+	return true
+}
+
+func (rl *reloadLimiter) done() {
+	rl.mu.Lock()
+	defer rl.mu.Unlock()
+	rl.pending = false
+}
+
+// scheduleReload schedules a reload with debounce delay. Returns true if
+// a new reload was scheduled, false if one is already pending.
+func (rl *reloadLimiter) scheduleReload(reloadFunc func()) bool {
+	rl.debounceMu.Lock()
+	defer rl.debounceMu.Unlock()
+
+	if rl.debounce != nil {
+		rl.debounce.Stop()
+	}
+
+	rl.debounce = time.AfterFunc(200*time.Millisecond, func() {
+		rl.debounceMu.Lock()
+		rl.debounce = nil
+		rl.debounceMu.Unlock()
+
+		if rl.tryStart() {
+			defer rl.done()
+			reloadFunc()
+		}
+	})
+
+	return true
+}
+
+const (
+	sdListenFdsStart = 3 // First file descriptor after stdin (0), stdout (1), stderr (2)
+)
+
 func main() {
-	configDir, configFile, verbose, validateOnly, printSchema := parseFlags()
+	paths, verbose, validateOnly, printSchema := parseFlags()
 
 	if printSchema {
 		schema, err := config.PrintSchema()
@@ -37,7 +110,7 @@ func main() {
 	logger := infra.SetupLogger(verbose)
 	logger.Info("starting nenya", "version", version.Version, "commit", version.Commit, "build_time", version.BuildTime)
 
-	cfg, secrets, err := loadConfig(configDir, configFile, validateOnly, logger)
+	cfg, secrets, paths, err := loadConfig(paths, validateOnly, logger)
 	if err != nil {
 		logger.Error("setup failed", "err", err)
 		os.Exit(1)
@@ -54,15 +127,19 @@ func main() {
 		return
 	}
 
-	run(logger, cfg, secrets, configDir, configFile)
+	run(logger, cfg, secrets, paths)
 }
 
-func parseFlags() (configDir, configFile string, verbose, validateOnly, printSchema bool) {
+func parseFlags() (configPaths, bool, bool, bool) {
 	return parseArgs(os.Args[1:])
 }
 
-func parseArgs(args []string) (configDir, configFile string, verbose, validateOnly, printSchema bool) {
+func parseArgs(args []string) (configPaths, bool, bool, bool) {
 	fs := flag.NewFlagSet("nenya", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	var configDir, configFile string
+	var verbose, validateOnly, printSchema bool
+
 	fs.StringVar(&configDir, "config-dir", "", "Configuration directory (contains config.d/ or config.json)")
 	fs.StringVar(&configFile, "config", "", "Single configuration file")
 	fs.BoolVar(&verbose, "verbose", false, "Enable debug-level request/response logging")
@@ -70,31 +147,41 @@ func parseArgs(args []string) (configDir, configFile string, verbose, validateOn
 	fs.BoolVar(&printSchema, "print-config-schema", false, "Print JSON Schema of config and exit")
 	_ = fs.Parse(args)
 
-	if envConfigDir := os.Getenv("NENYA_CONFIG_DIR"); envConfigDir != "" {
-		configDir = envConfigDir
-	}
-	if envConfigFile := os.Getenv("NENYA_CONFIG_FILE"); envConfigFile != "" {
-		configFile = envConfigFile
-	}
-
-	if configDir == "" && configFile == "" {
-		configDir = "/etc/nenya/"
-	}
-
-	return
+	paths := effectiveConfigPaths(configDir, configFile)
+	return paths, verbose, validateOnly, printSchema
 }
 
-func loadConfig(configDir, configFile string, validateOnly bool, logger *slog.Logger) (*config.Config, *config.SecretsConfig, error) {
+func effectiveConfigPaths(configDir, configFile string) configPaths {
+	dir, file := configDir, configFile
+
+	if envConfigDir := os.Getenv("NENYA_CONFIG_DIR"); envConfigDir != "" {
+		dir = envConfigDir
+	}
+	if envConfigFile := os.Getenv("NENYA_CONFIG_FILE"); envConfigFile != "" {
+		file = envConfigFile
+	}
+
+	if dir == "" && file == "" {
+		dir = "/etc/nenya/"
+	}
+
+	return configPaths{dir: dir, file: file}
+}
+
+// loadConfig loads the configuration from the specified paths.
+// When paths.file is set, it takes precedence over paths.dir.
+// Returns the loaded config, secrets, the resolved paths, and any error.
+func loadConfig(paths configPaths, validateOnly bool, logger *slog.Logger) (*config.Config, *config.SecretsConfig, configPaths, error) {
 	var cfg *config.Config
 	var err error
 
-	if configFile != "" {
-		cfg, err = config.Load(configFile)
+	if paths.file != "" {
+		cfg, err = config.Load(paths.file)
 	} else {
-		cfg, err = config.LoadFromDir(configDir)
+		cfg, err = config.LoadFromDir(paths.dir)
 	}
 	if err != nil {
-		return nil, nil, fmt.Errorf("load config: %w", err)
+		return nil, nil, paths, fmt.Errorf("load config: %w", err)
 	}
 
 	logger.Debug("configuration loaded",
@@ -111,13 +198,13 @@ func loadConfig(configDir, configFile string, validateOnly bool, logger *slog.Lo
 
 	secrets, err := config.LoadSecrets()
 	if err != nil {
-		return nil, nil, fmt.Errorf("load secrets: %w", err)
+		return nil, nil, paths, fmt.Errorf("load secrets: %w", err)
 	}
 
-	return cfg, secrets, nil
+	return cfg, secrets, paths, nil
 }
 
-func run(logger *slog.Logger, cfg *config.Config, secrets *config.SecretsConfig, configDir, configFile string) {
+func run(logger *slog.Logger, cfg *config.Config, secrets *config.SecretsConfig, paths configPaths) {
 	startupCtx, startupCancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer startupCancel()
 
@@ -146,7 +233,7 @@ func run(logger *slog.Logger, cfg *config.Config, secrets *config.SecretsConfig,
 	serverErr := make(chan error, 1)
 	go serveHTTP(srv, listener, serverErr)
 
-	eventLoop(logger, configDir, configFile, p, ctx, sighup, serverErr, srv)
+	eventLoop(logger, paths, p, ctx, sighup, serverErr, srv)
 }
 
 func buildServer(p *proxy.Proxy, listenAddr string) *http.Server {
@@ -184,26 +271,35 @@ func serveHTTP(srv *http.Server, listener net.Listener, serverErr chan error) {
 	close(serverErr)
 }
 
-func eventLoop(logger *slog.Logger, configDir, configFile string, p *proxy.Proxy, ctx context.Context, sighup chan os.Signal, serverErr chan error, srv *http.Server) {
+func eventLoop(logger *slog.Logger, paths configPaths, p *proxy.Proxy, ctx context.Context, sighup chan os.Signal, serverErr chan error, srv *http.Server) {
+	var rl reloadLimiter
+
 	for {
 		select {
 		case err := <-serverErr:
 			logger.Error("server failed", "err", err)
 			os.Exit(1)
 		case <-sighup:
-			go func() {
+			logger.Debug("received SIGHUP, scheduling debounced reload")
+			rl.scheduleReload(func() {
 				reloadCtx, reloadCancel := context.WithTimeout(context.Background(), 60*time.Second)
 				defer reloadCancel()
-				reloadConfig(reloadCtx, p, configDir, configFile, logger)
-			}()
+				reloadConfig(reloadCtx, p, paths, logger)
+			})
 		case <-ctx.Done():
 			logger.Info("shutting down gracefully...")
+
+			rl.Stop()
 
 			shutdownCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 			defer cancel()
 
+			if err := p.Shutdown(shutdownCtx); err != nil {
+				logger.Error("gateway shutdown failed", "err", err)
+			}
+
 			if err := srv.Shutdown(shutdownCtx); err != nil {
-				logger.Error("graceful shutdown failed", "err", err)
+				logger.Error("HTTP server shutdown failed", "err", err)
 			}
 			logger.Info("server stopped")
 			return
@@ -211,16 +307,16 @@ func eventLoop(logger *slog.Logger, configDir, configFile string, p *proxy.Proxy
 	}
 }
 
-func reloadConfig(ctx context.Context, p *proxy.Proxy, configDir, configFile string, logger *slog.Logger) {
-	logger.Info("reloading configuration", "config_dir", configDir, "config_file", configFile)
+func reloadConfig(ctx context.Context, p *proxy.Proxy, paths configPaths, logger *slog.Logger) {
+	logger.Info("reloading configuration", "config_dir", paths.dir, "config_file", paths.file)
 
 	var newCfg *config.Config
 	var err error
 
-	if configFile != "" {
-		newCfg, err = config.Load(configFile)
+	if paths.file != "" {
+		newCfg, err = config.Load(paths.file)
 	} else {
-		newCfg, err = config.LoadFromDir(configDir)
+		newCfg, err = config.LoadFromDir(paths.dir)
 	}
 	if err != nil {
 		logger.Error("reload failed: could not load configuration", "err", err)
@@ -244,10 +340,6 @@ func reloadConfig(ctx context.Context, p *proxy.Proxy, configDir, configFile str
 
 	logger.Info("configuration reloaded successfully")
 }
-
-const (
-	sdListenFdsStart = 3
-)
 
 func systemdListener(defaultAddr string) (net.Listener, string, error) {
 	listenPid := os.Getenv("LISTEN_PID")

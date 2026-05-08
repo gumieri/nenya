@@ -2,6 +2,7 @@ package routing
 
 import (
 	"log/slog"
+	"math"
 	"strings"
 
 	"nenya/internal/pipeline"
@@ -221,6 +222,9 @@ func repairMessageOrdering(messages []interface{}) (bool, []interface{}) {
 
 	repaired := false
 	sawToolSinceLastAssistant := false
+	if len(messages) >= math.MaxInt-4 {
+		return false, messages
+	}
 	out := make([]interface{}, 0, len(messages)+4)
 
 	for _, msgRaw := range messages {
