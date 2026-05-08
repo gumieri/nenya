@@ -431,7 +431,7 @@ func (m *Metrics) RecordCBStateTransition(key string, from, to string) {
 		return
 	}
 	e := getOrCreateEntry(&m.cbStateTransitions, map[string]string{
-		"key":   key,
+		"key":  key,
 		"from": from,
 		"to":   to,
 	})
