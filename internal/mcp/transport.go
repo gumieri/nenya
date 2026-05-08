@@ -60,9 +60,9 @@ type HTTPTransport struct {
 	httpClient *http.Client
 	ctx        context.Context
 
-	mu     sync.Mutex
-	closed atomic.Bool
-	ready  atomic.Bool
+	mu        sync.Mutex
+	closed    atomic.Bool
+	ready     atomic.Bool
 	gwMetrics *infra.Metrics
 
 	sessionEndpoint string

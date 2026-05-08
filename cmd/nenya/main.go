@@ -32,10 +32,10 @@ type configPaths struct {
 // reloadLimiter prevents concurrent configuration reloads and adds
 // a debounce delay to coalesce rapid SIGHUP signals.
 type reloadLimiter struct {
-	mu          sync.Mutex
-	pending     bool
-	debounce    *time.Timer
-	debounceMu  sync.Mutex
+	mu         sync.Mutex
+	pending    bool
+	debounce   *time.Timer
+	debounceMu sync.Mutex
 }
 
 // Stop cleans up the debounce timer if one is pending. Should be called

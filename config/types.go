@@ -214,19 +214,19 @@ type ContextConfig struct {
 // for the gateway: blocked execution patterns, retry behavior, circuit
 // breaker thresholds, latency- and cost-weighted routing, and auto-tuning flags.
 type GovernanceConfig struct {
-	BlockedExecutionPatterns   []string `json:"blocked_execution_patterns"`
-	RatelimitMaxRPM            *int     `json:"ratelimit_max_rpm,omitempty"`
-	RatelimitMaxTPM            *int     `json:"ratelimit_max_tpm,omitempty"`
-	RetryableStatusCodes       []int    `json:"retryable_status_codes"`
-	MaxRetryAttempts           int      `json:"max_retry_attempts"`
-	RoutingStrategy            string   `json:"routing_strategy"`
-	RoutingLatencyWeight       float64  `json:"routing_latency_weight"`
-	RoutingCostWeight          float64  `json:"routing_cost_weight"`
-	MaxCostPerRequest          float64  `json:"max_cost_per_request"`
-	EmptyStreamAsError         *bool    `json:"empty_stream_as_error,omitempty"`
-	AutoContextSkip            *bool    `json:"auto_context_skip,omitempty"`
-	AutoReorderByLatency       *bool    `json:"auto_reorder_by_latency,omitempty"`
-	HalfOpenMaxRequests        int      `json:"half_open_max_requests,omitempty"`
+	BlockedExecutionPatterns []string `json:"blocked_execution_patterns"`
+	RatelimitMaxRPM          *int     `json:"ratelimit_max_rpm,omitempty"`
+	RatelimitMaxTPM          *int     `json:"ratelimit_max_tpm,omitempty"`
+	RetryableStatusCodes     []int    `json:"retryable_status_codes"`
+	MaxRetryAttempts         int      `json:"max_retry_attempts"`
+	RoutingStrategy          string   `json:"routing_strategy"`
+	RoutingLatencyWeight     float64  `json:"routing_latency_weight"`
+	RoutingCostWeight        float64  `json:"routing_cost_weight"`
+	MaxCostPerRequest        float64  `json:"max_cost_per_request"`
+	EmptyStreamAsError       *bool    `json:"empty_stream_as_error,omitempty"`
+	AutoContextSkip          *bool    `json:"auto_context_skip,omitempty"`
+	AutoReorderByLatency     *bool    `json:"auto_reorder_by_latency,omitempty"`
+	HalfOpenMaxRequests      int      `json:"half_open_max_requests,omitempty"`
 }
 
 func (g *GovernanceConfig) RPMSet() bool                  { return wasSet(g.RatelimitMaxRPM) }
