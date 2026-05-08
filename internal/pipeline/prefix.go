@@ -90,7 +90,10 @@ func ToolSortKey(tool interface{}) string {
 	if !ok {
 		return ""
 	}
-	name, _ := fn["name"].(string)
+	name, ok := fn["name"].(string)
+	if !ok {
+		return ""
+	}
 	return name
 }
 

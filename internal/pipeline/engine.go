@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"nenya/config"
+	"nenya/internal/util"
 )
 
 // MaxOllamaResponseBytes is the maximum response size accepted from the
@@ -54,26 +55,44 @@ func CallEngine(ctx context.Context, httpClient *http.Client, provider *config.P
 		return "", fmt.Errorf("failed to marshal engine payload: %v", err)
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, provider.URL, bytes.NewBuffer(encoded))
-	if err != nil {
-		return "", fmt.Errorf("failed to create engine request: %v", err)
-	}
-	req.Header.Set("Content-Type", "application/json")
-
-	if err = injectAPIKey(engine.Provider, req.Header); err != nil {
-		return "", fmt.Errorf("engine auth failed: %v", err)
+	maxRetries := provider.MaxRetryAttempts
+	if maxRetries <= 0 {
+		maxRetries = util.DefaultMaxRetryAttempts()
 	}
 
-	resp, err := httpClient.Do(req)
+	var resp *http.Response
+	err = util.DoWithRetry(ctx, maxRetries, func() error {
+		req, reqErr := http.NewRequestWithContext(ctx, http.MethodPost, provider.URL, bytes.NewBuffer(encoded))
+		if reqErr != nil {
+			return reqErr
+		}
+		req.Header.Set("Content-Type", "application/json")
+
+		if authErr := injectAPIKey(engine.Provider, req.Header); authErr != nil {
+			return fmt.Errorf("engine auth failed: %v", authErr)
+		}
+
+		var doErr error
+		resp, doErr = httpClient.Do(req)
+		if doErr != nil {
+			return doErr
+		}
+		if resp.StatusCode >= 400 && resp.StatusCode < 500 {
+			body, _ := io.ReadAll(io.LimitReader(resp.Body, MaxErrorBodyBytes))
+			_ = resp.Body.Close()
+			return fmt.Errorf("engine returned status %d: %s", resp.StatusCode, string(body))
+		}
+		if resp.StatusCode >= 500 {
+			body, _ := io.ReadAll(io.LimitReader(resp.Body, MaxErrorBodyBytes))
+			_ = resp.Body.Close()
+			return fmt.Errorf("engine returned status %d: %s", resp.StatusCode, string(body))
+		}
+		return nil
+	})
 	if err != nil {
-		return "", fmt.Errorf("engine unreachable: %v", err)
+		return "", err
 	}
 	defer func() { _ = resp.Body.Close() }()
-
-	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(io.LimitReader(resp.Body, MaxErrorBodyBytes))
-		return "", fmt.Errorf("engine returned status %d: %s", resp.StatusCode, string(body))
-	}
 
 	var response map[string]interface{}
 	if decodeErr := json.NewDecoder(io.LimitReader(resp.Body, MaxOllamaResponseBytes)).Decode(&response); decodeErr != nil {
@@ -123,26 +142,27 @@ func extractOpenAIOutput(response map[string]interface{}) (string, error) {
 		return "", fmt.Errorf("openai response missing choices")
 	}
 
-	choice, ok := choices[0].(map[string]interface{})
-	if !ok {
+	choice, cok := choices[0].(map[string]interface{})
+	if !cok {
 		return "", fmt.Errorf("openai choice is not an object")
 	}
 
-	msg, ok := choice["message"].(map[string]interface{})
-	if !ok {
+	msg, mok := choice["message"].(map[string]interface{})
+	if !mok {
 		return "", fmt.Errorf("openai choice missing message")
 	}
 
-	// Handle string content (standard OpenAI format).
-	if content, ok := msg["content"].(string); ok {
-		return content, nil
+	if contentStr, cok := msg["content"].(string); cok {
+		return contentStr, nil
 	}
 
-	// Handle array content (Anthropic-style or multimodal).
-	if parts, ok := msg["content"].([]interface{}); ok {
-		if text, found := extractTextFromParts(parts); found {
-			return text, nil
-		}
+	parts, pok := msg["content"].([]interface{})
+	if !pok {
+		return "", fmt.Errorf("openai message missing content")
+	}
+
+	if text, found := extractTextFromParts(parts); found {
+		return text, nil
 	}
 
 	return "", fmt.Errorf("openai message missing content")

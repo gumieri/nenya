@@ -143,6 +143,7 @@ func createHTTPClients(cfg config.Config) (*http.Client, *http.Client) {
 
 	secureClient := &http.Client{
 		Transport: transport,
+		Timeout:   120 * time.Second,
 	}
 
 	ollamaResponseHeaderTimeout := 30 * time.Second
@@ -293,7 +294,7 @@ func buildGateway(cfg config.Config, secrets *config.SecretsConfig, secureClient
 		Stats:             infra.NewUsageTracker(),
 		Metrics:           nil,
 		Logger:            logger,
-		AgentState:        routing.NewAgentState(logger),
+		AgentState:        nil,
 		ThoughtSigCache:   infra.NewThoughtSignatureCache(1000, 30*time.Minute),
 		ResponseCache:     newResponseCache(cfg, logger, metrics),
 		MCPClients:        buildMCPClients(cfg, logger),
@@ -306,6 +307,7 @@ func buildGateway(cfg config.Config, secrets *config.SecretsConfig, secureClient
 		ClientTokenRef:    clientTokenRef,
 		ProviderKeyTokens: providerKeyTokens,
 	}
+	gw.AgentState = routing.NewAgentStateWithConfig(logger, metrics, &cfg.Governance)
 	return gw
 }
 
@@ -572,6 +574,8 @@ func newResponseCache(cfg config.Config, logger *slog.Logger, metrics *infra.Met
 	return cache
 }
 
+// Close cleans up gateway resources: response cache, MCP clients,
+// and secure memory. Waits for in-flight MCP operations to complete.
 func (g *NenyaGateway) Close() {
 	if g.ResponseCache != nil {
 		g.ResponseCache.Stop()
@@ -584,6 +588,27 @@ func (g *NenyaGateway) Close() {
 		g.SecureMem.Destroy()
 		g.ProviderKeyTokens = nil
 		g.ClientTokenRef = security.SecureToken{}
+	}
+}
+
+// Shutdown gracefully shuts down the gateway with a context timeout.
+// It waits for in-flight MCP operations to complete and cleans up resources.
+func (g *NenyaGateway) Shutdown(ctx context.Context) error {
+	g.Logger.Info("starting graceful shutdown")
+
+	done := make(chan struct{})
+	go func() {
+		g.Close()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		g.Logger.Info("graceful shutdown completed")
+		return nil
+	case <-ctx.Done():
+		g.Logger.Warn("graceful shutdown timed out", "err", ctx.Err())
+		return ctx.Err()
 	}
 }
 
@@ -631,6 +656,10 @@ func buildMCPClients(cfg config.Config, logger *slog.Logger) map[string]*mcp.Cli
 
 func (g *NenyaGateway) buildMCPToolIndex(ctx context.Context, logger *slog.Logger) {
 	for name, client := range g.MCPClients {
+		if g.Metrics != nil {
+			client.SetGatewayMetrics(g.Metrics)
+		}
+
 		initCtx, cancel := contextWithTimeout(ctx, 10*time.Second)
 		err := client.Initialize(initCtx)
 		cancel()

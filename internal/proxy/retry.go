@@ -18,6 +18,7 @@ import (
 	"nenya/internal/infra"
 	"nenya/internal/pipeline"
 	"nenya/internal/routing"
+	"nenya/internal/util"
 )
 
 const maxRetryBackoff = 5 * time.Second
@@ -29,6 +30,8 @@ const (
 	exponentialBackoffJitter = 750 * time.Millisecond
 )
 
+// upstreamAction holds the result of a single upstream HTTP request attempt.
+// The kind field distinguishes between streaming, response, and error outcomes.
 type upstreamAction struct {
 	kind   int
 	resp   *http.Response
@@ -66,6 +69,33 @@ func waitWithCancel(ctx context.Context, d time.Duration) {
 	case <-timer.C:
 	case <-ctx.Done():
 	}
+}
+
+// doUpstreamRoundTrip executes a retried upstream HTTP round-trip.
+// It builds the request, sets Content-Type (if non-empty), executes with retry,
+// and returns the response. 5xx responses are retried.
+func (p *Proxy) doUpstreamRoundTrip(ctx context.Context, gw *gateway.NenyaGateway, method, targetURL string, bodyBytes []byte, providerName string, srcHeaders http.Header, contentType string, maxAttempts int) (*http.Response, error) {
+	var resp *http.Response
+	err := util.DoWithRetry(ctx, maxAttempts, func() error {
+		upstreamReq, reqErr := p.buildUpstreamRequest(gw, ctx, method, targetURL, bodyBytes, providerName, srcHeaders)
+		if reqErr != nil {
+			return reqErr
+		}
+		if contentType != "" {
+			upstreamReq.Header.Set("Content-Type", contentType)
+		}
+		var fetchErr error
+		resp, fetchErr = gw.Client.Do(upstreamReq)
+		if fetchErr != nil {
+			return fetchErr
+		}
+		if resp.StatusCode >= 500 {
+			_ = resp.Body.Close()
+			return fmt.Errorf("upstream error: %d", resp.StatusCode)
+		}
+		return nil
+	})
+	return resp, err
 }
 
 // forwardOptions holds the parameters for forwarding a request upstream.

@@ -162,10 +162,6 @@ func injectSystemMessage(deps TransformDeps, payload map[string]interface{}, age
 		"content": systemPrompt,
 	}
 	capMsg := safeCapPlusOne(len(messages))
-	if capMsg < 0 {
-		deps.Logger.Warn("message count overflow, truncating", "count", len(messages))
-		capMsg = len(messages)
-	}
 	newMessages := make([]interface{}, 0, capMsg)
 	newMessages = append(newMessages, systemMsg)
 	newMessages = append(newMessages, messages...)
@@ -291,6 +287,8 @@ func TransformRequestForUpstream(deps TransformDeps, providerName, upstreamURL s
 	return newBody, finalModel, nil
 }
 
+// CopyHeaders copies non-hop-by-hop headers from src to dst, filtering
+// out connection-specific headers (Connection, Content-Length, Transfer-Encoding, etc.).
 func CopyHeaders(src, dst http.Header) {
 	for k, vv := range src {
 		lk := strings.ToLower(k)
@@ -306,6 +304,7 @@ func CopyHeaders(src, dst http.Header) {
 	}
 }
 
+// SliceContains reports whether needle exists in haystack.
 func SliceContains(haystack []int, needle int) bool {
 	for _, v := range haystack {
 		if v == needle {

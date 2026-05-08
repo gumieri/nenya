@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/url"
 	"strings"
@@ -15,6 +16,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"nenya/internal/infra"
 	"nenya/internal/util"
 )
 
@@ -61,8 +63,10 @@ type HTTPTransport struct {
 	mu     sync.Mutex
 	closed atomic.Bool
 	ready  atomic.Bool
+	gwMetrics *infra.Metrics
 
 	sessionEndpoint string
+	baseHost        string
 	sseCancel       context.CancelFunc
 
 	pendingMu sync.Mutex
@@ -92,7 +96,12 @@ func NewHTTPTransport(cfg TransportConfig) *HTTPTransport {
 	}
 
 	t.httpClient = &http.Client{
+		Timeout: cfg.RequestTimeout + 5*time.Second,
 		Transport: &http.Transport{
+			DialContext: (&net.Dialer{
+				Timeout:   30 * time.Second,
+				KeepAlive: 30 * time.Second,
+			}).DialContext,
 			ResponseHeaderTimeout: cfg.RequestTimeout,
 			IdleConnTimeout:       cfg.IdleTimeout,
 			MaxIdleConns:          2,
@@ -101,6 +110,23 @@ func NewHTTPTransport(cfg TransportConfig) *HTTPTransport {
 	}
 
 	return t
+}
+
+// SetGatewayMetrics sets the metrics instance for tracking MCP goroutines.
+func (t *HTTPTransport) SetGatewayMetrics(metrics *infra.Metrics) {
+	t.gwMetrics = metrics
+}
+
+func (t *HTTPTransport) trackGoroutineStart() {
+	if t.gwMetrics != nil {
+		t.gwMetrics.IncMCPActiveGoroutines()
+	}
+}
+
+func (t *HTTPTransport) trackGoroutineEnd() {
+	if t.gwMetrics != nil {
+		t.gwMetrics.DecMCPActiveGoroutines()
+	}
 }
 
 func (t *HTTPTransport) Connect(ctx context.Context) error {
@@ -119,6 +145,8 @@ func (t *HTTPTransport) Connect(ctx context.Context) error {
 	}
 
 	t.cfg.Logger.Debug("connecting to MCP SSE endpoint", "url", sseURL)
+
+	t.baseHost = baseURL.Host
 
 	sseCtx, sseCancel := context.WithCancel(t.ctx)
 	req, err := http.NewRequestWithContext(sseCtx, http.MethodGet, sseURL, nil)
@@ -175,9 +203,21 @@ func (t *HTTPTransport) Connect(ctx context.Context) error {
 	t.cfg.Logger.Debug("received MCP session endpoint", "endpoint", endpointURL)
 
 	t.sseCancel = sseCancel
-	go t.sseReadLoop(sseReader)
-	go t.eventDispatchLoop()
-	go t.keepaliveLoop()
+	go func() {
+		t.trackGoroutineStart()
+		t.sseReadLoop(sseReader)
+		t.trackGoroutineEnd()
+	}()
+	go func() {
+		t.trackGoroutineStart()
+		t.eventDispatchLoop()
+		t.trackGoroutineEnd()
+	}()
+	go func() {
+		t.trackGoroutineStart()
+		t.keepaliveLoop()
+		t.trackGoroutineEnd()
+	}()
 
 	t.ready.Store(true)
 	return nil
@@ -364,7 +404,7 @@ func (t *HTTPTransport) waitForJSONRPCResponse(ctx context.Context, ch chan *Res
 	}
 }
 
-func (t *HTTPTransport) SendNotification(method string, params any) error {
+func (t *HTTPTransport) SendNotification(ctx context.Context, method string, params any) error {
 	if t.closed.Load() || !t.ready.Load() {
 		return ErrTransportClosed
 	}
@@ -389,11 +429,15 @@ func (t *HTTPTransport) SendNotification(method string, params any) error {
 	}
 
 	// Notifications are decoupled from any HTTP request; use a bounded timeout.
-	// Shutdown is not wired here (best-effort fire-and-forget).
-	ctx, cancel := context.WithTimeout(context.Background(), t.cfg.RequestTimeout)
+	// Use parent context when available (e.g. from Initialize), fall back to
+	// Background() for fire-and-forget goroutines (e.g. keepalive).
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	reqCtx, cancel := context.WithTimeout(ctx, t.cfg.RequestTimeout)
 	defer cancel()
 
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, strings.NewReader(string(reqBytes)))
+	httpReq, err := http.NewRequestWithContext(reqCtx, http.MethodPost, endpoint, strings.NewReader(string(reqBytes)))
 	if err != nil {
 		return fmt.Errorf("creating notification request: %w", err)
 	}
@@ -434,9 +478,11 @@ func (t *HTTPTransport) Close() error {
 		}
 		t.pendingMu.Unlock()
 
+		timer := time.NewTimer(5 * time.Second)
 		select {
 		case <-t.doneCh:
-		case <-time.After(5 * time.Second):
+			timer.Stop()
+		case <-timer.C:
 		}
 	})
 	return nil
@@ -459,9 +505,9 @@ func (t *HTTPTransport) keepaliveLoop() {
 			return
 		case <-ticker.C:
 			if !t.ready.Load() {
-				return
+				continue
 			}
-			if err := t.SendNotification("ping", nil); err != nil {
+			if err := t.SendNotification(context.TODO(), "ping", nil); err != nil {
 				if !t.closed.Load() {
 					t.cfg.Logger.Warn("MCP keepalive ping failed", "err", err)
 					t.ready.Store(false)
@@ -553,16 +599,15 @@ func (t *HTTPTransport) eventDispatchLoop() {
 			}
 
 			if event.Event == "endpoint" {
-				var parsed struct {
-					Endpoint string `json:"endpoint"`
-				}
-				if err := json.Unmarshal([]byte(event.Data), &parsed); err == nil && parsed.Endpoint != "" {
-					t.mu.Lock()
-					t.sessionEndpoint = parsed.Endpoint
-					t.mu.Unlock()
-					t.ready.Store(true)
+				endpointURL, ok := parseAndValidateEndpoint(t, event.Data)
+				if !ok {
 					continue
 				}
+				t.mu.Lock()
+				t.sessionEndpoint = endpointURL
+				t.mu.Unlock()
+				t.ready.Store(true)
+				continue
 			}
 
 			var rpcResp Response
@@ -611,4 +656,27 @@ func (t *HTTPTransport) SessionEndpoint() string {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	return t.sessionEndpoint
+}
+
+func parseAndValidateEndpoint(t *HTTPTransport, data string) (string, bool) {
+	var parsed struct {
+		Endpoint string `json:"endpoint"`
+	}
+	if err := json.Unmarshal([]byte(data), &parsed); err != nil {
+		return "", false
+	}
+	if parsed.Endpoint == "" {
+		return "", false
+	}
+	epURL, err := url.Parse(parsed.Endpoint)
+	if err != nil {
+		return "", false
+	}
+	if epURL.Host != t.baseHost {
+		gotHost := epURL.Host
+		t.cfg.Logger.Warn("MCP server sent dynamic endpoint with unexpected host, rejecting",
+			"expected_host", t.baseHost, "got_host", gotHost, "endpoint", parsed.Endpoint)
+		return "", false
+	}
+	return parsed.Endpoint, true
 }

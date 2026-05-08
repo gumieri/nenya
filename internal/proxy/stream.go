@@ -58,6 +58,9 @@ type readResult struct {
 	err  error
 }
 
+// stallReader wraps an io.Reader and detects stalls where no data is received
+// within the configured timeout. It runs a background goroutine to read from
+// the underlying source and signals stall detection via a channel.
 type stallReader struct {
 	mu        sync.Mutex
 	timer     *time.Timer
@@ -67,7 +70,9 @@ type stallReader struct {
 	ch        chan readResult
 }
 
-func newStallReader(src io.Reader, timeout time.Duration) *stallReader {
+// newStallReader creates a stallReader that reads from src with the given timeout.
+// The context is used to cancel the background read goroutine on shutdown.
+func newStallReader(ctx context.Context, src io.Reader, timeout time.Duration) *stallReader {
 	sr := &stallReader{
 		stallCh: make(chan struct{}),
 		ch:      make(chan readResult, 1),
@@ -78,11 +83,11 @@ func newStallReader(src io.Reader, timeout time.Duration) *stallReader {
 		sr.mu.Unlock()
 		sr.closeOnce.Do(func() { close(sr.stallCh) })
 	})
-	go sr.readLoop(src)
+	go sr.readLoop(ctx, src)
 	return sr
 }
 
-func (sr *stallReader) readLoop(src io.Reader) {
+func (sr *stallReader) readLoop(ctx context.Context, src io.Reader) {
 	buf := make([]byte, 32*1024)
 	for {
 		n, err := src.Read(buf)
@@ -91,7 +96,11 @@ func (sr *stallReader) readLoop(src io.Reader) {
 			data = make([]byte, n)
 			copy(data, buf[:n])
 		}
-		sr.ch <- readResult{data, err}
+		select {
+		case sr.ch <- readResult{data, err}:
+		case <-ctx.Done():
+			return
+		}
 		if err != nil {
 			return
 		}
@@ -128,6 +137,8 @@ func (sr *stallReader) Read(p []byte) (int, error) {
 	}
 }
 
+// Stop stops the stall reader timer and marks the reader as stalled.
+// Safe to call multiple times.
 func (sr *stallReader) Stop() {
 	sr.timer.Stop()
 	sr.mu.Lock()
@@ -140,6 +151,8 @@ func (sr *stallReader) Stop() {
 	}
 }
 
+// DrainPending reads any remaining buffered data from the reader with the given timeout.
+// Returns the number of bytes drained and any error.
 func (sr *stallReader) DrainPending(timeout time.Duration) (int, error) {
 	sr.closeOnce.Do(func() { close(sr.stallCh) })
 	select {
@@ -188,6 +201,8 @@ func newImmediateFlushWriter(w http.ResponseWriter) *immediateFlushWriter {
 	return fw
 }
 
+// newImmediateFlushWriterSafe returns an immediateFlushWriter if the response writer
+// supports http.Flusher, otherwise returns nil. The boolean indicates success.
 func newImmediateFlushWriterSafe(w http.ResponseWriter) (*immediateFlushWriter, bool) {
 	flusher, ok := w.(http.Flusher)
 	if !ok {
@@ -230,6 +245,8 @@ func (t *sseTeeWriter) Write(p []byte) (int, error) {
 	return t.dst.Write(p)
 }
 
+// copyStream copies data from src to dst using the provided buffer, respecting context cancellation.
+// Returns the number of bytes copied and any error encountered.
 func copyStream(ctx context.Context, dst io.Writer, src io.Reader, buf []byte) (int64, error) {
 	if len(buf) == 0 {
 		buf = make([]byte, streamBufferSize)
@@ -259,6 +276,8 @@ func copyStream(ctx context.Context, dst io.Writer, src io.Reader, buf []byte) (
 	}
 }
 
+// streamResponse handles streaming responses from upstream providers.
+// It sets up SSE transformation, monitors for stalls, and streams the response to the client.
 func (p *Proxy) streamResponse(gw *gateway.NenyaGateway, w http.ResponseWriter, r *http.Request, target routing.UpstreamTarget, agentName string, action upstreamAction, cacheKey string, cooldownDuration time.Duration) streamResult {
 	defer action.cancel()
 
@@ -308,6 +327,8 @@ func (p *Proxy) streamResponse(gw *gateway.NenyaGateway, w http.ResponseWriter, 
 	return streamResult{}
 }
 
+// setupTransformingReader creates and configures the SSE transforming reader, content builder, and stall reader.
+// Returns the transforming reader for streaming, the content builder for post-processing, and the stall reader for cleanup.
 func (p *Proxy) setupTransformingReader(gw *gateway.NenyaGateway, target routing.UpstreamTarget, agentName string, action upstreamAction, ctx context.Context) (*stream.SSETransformingReader, *contentBuilder, *stallReader) {
 	var transformer stream.ResponseTransformer
 	switch target.Format {
@@ -330,7 +351,7 @@ func (p *Proxy) setupTransformingReader(gw *gateway.NenyaGateway, target routing
 		}
 	}
 
-	stallR := newStallReader(action.resp.Body, streamIdleTimeout)
+	stallR := newStallReader(ctx, action.resp.Body, streamIdleTimeout)
 
 	transformingReader := stream.NewSSETransformingReader(stallR, transformer, ctx)
 	transformingReader.SetOnUsage(p.makeUsageCallback(gw, target, agentName))
@@ -343,6 +364,8 @@ func (p *Proxy) setupTransformingReader(gw *gateway.NenyaGateway, target routing
 	return transformingReader, contentBuilder, stallR
 }
 
+// upstreamErrorObserver is an SSE observer that detects error events within
+// a 200 OK stream and records them as circuit breaker failures.
 type upstreamErrorObserver struct {
 	gw     *gateway.NenyaGateway
 	target routing.UpstreamTarget
@@ -365,8 +388,11 @@ func (o *upstreamErrorObserver) OnSSEEvent(event stream.SSEEvent) {
 	o.gw.AgentState.RecordFailure(o.target, 0)
 }
 
+// OnStreamClose is called when the SSE stream closes.
 func (o *upstreamErrorObserver) OnStreamClose(err error) {}
 
+// makeUsageCallback returns a callback function that records token usage statistics.
+// The callback is invoked by the SSE transformer when usage metadata is received.
 func (p *Proxy) makeUsageCallback(gw *gateway.NenyaGateway, target routing.UpstreamTarget, agentName string) func(int, int, int, int, int) {
 	return func(completion, prompt, total, cacheHit, cacheMiss int) {
 		gw.Stats.RecordOutput(target.Model, completion)
@@ -476,7 +502,7 @@ func (p *Proxy) handleStreamDone(gw *gateway.NenyaGateway, w http.ResponseWriter
 			"model", target.Model, "provider", target.Provider,
 			"idle_timeout", streamIdleTimeout)
 		gw.Metrics.RecordStreamStall(target.Model, target.Provider)
-		writeStreamErrorSSE(w, "upstream stream stalled: no data received within idle timeout")
+		writeSSEError(w, http.StatusOK, "upstream stream stalled: no data received within idle timeout")
 		return
 	}
 
@@ -496,9 +522,10 @@ func (p *Proxy) handleStreamDone(gw *gateway.NenyaGateway, w http.ResponseWriter
 	if errors.Is(copyErr, context.Canceled) || errors.Is(copyErr, context.DeadlineExceeded) {
 		return
 	}
-	writeStreamErrorSSE(w, "upstream stream interrupted")
+	writeSSEError(w, http.StatusOK, "upstream stream interrupted")
 }
 
+// recordStreamResult records the outcome of a streaming request to the agent state and metrics.
 func recordStreamResult(gw *gateway.NenyaGateway, target routing.UpstreamTarget, agentName string, cooldownDuration time.Duration, copyErr error) {
 	if copyErr == nil || errors.Is(copyErr, context.Canceled) || errors.Is(copyErr, context.DeadlineExceeded) {
 		if copyErr != nil {
@@ -520,6 +547,8 @@ func storeStreamCache(gw *gateway.NenyaGateway, cacheKey string, captureBuf *byt
 	gw.Logger.Debug("response cache stored", "model", captureBuf.Len())
 }
 
+// writeBlockedSSE sends a blocked response SSE stream to the client.
+// This is used when the execution policy blocks a request.
 func (p *Proxy) writeBlockedSSE(gw *gateway.NenyaGateway, w http.ResponseWriter) {
 	blockPayload := map[string]interface{}{
 		"id":     "blocked",
@@ -540,24 +569,6 @@ func (p *Proxy) writeBlockedSSE(gw *gateway.NenyaGateway, w http.ResponseWriter)
 		return
 	}
 	_, _ = fmt.Fprintf(w, "data: %s\n\n", blockJSON)
-	_, _ = fmt.Fprint(w, "data: [DONE]\n\n")
-	if flusher, ok := w.(http.Flusher); ok {
-		flusher.Flush()
-	}
-}
-
-// writeStreamErrorSSE sends an OpenAI-compatible error event followed by
-// [DONE] to the client, ensuring the SSE stream is properly terminated.
-// This must be called AFTER headers have already been written.
-func writeStreamErrorSSE(w http.ResponseWriter, message string) {
-	errPayload := map[string]any{
-		"error": map[string]any{
-			"message": message,
-			"type":    "gateway_error",
-		},
-	}
-	errBytes, _ := json.Marshal(errPayload)
-	_, _ = fmt.Fprintf(w, "data: %s\n\n", errBytes)
 	_, _ = fmt.Fprint(w, "data: [DONE]\n\n")
 	if flusher, ok := w.(http.Flusher); ok {
 		flusher.Flush()

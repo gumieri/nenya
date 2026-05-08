@@ -164,6 +164,7 @@ type Provider struct {
 // with built-in provider defaults before validation.
 type Config struct {
 	Server        ServerConfig               `json:"server"`
+	Debug         DebugConfig                `json:"debug,omitempty"`
 	Context       ContextConfig              `json:"context"`
 	Governance    GovernanceConfig           `json:"governance"`
 	Bouncer       BouncerConfig              `json:"bouncer,omitempty"`
@@ -176,6 +177,13 @@ type Config struct {
 	Agents        map[string]AgentConfig     `json:"agents,omitempty"`
 	Providers     map[string]ProviderConfig  `json:"providers,omitempty"`
 }
+
+// DebugConfig controls debug and profiling features.
+type DebugConfig struct {
+	PprofEnabled *bool `json:"pprof_enabled,omitempty"`
+}
+
+func (d *DebugConfig) PprofEnabledWasSet() bool { return wasSet(d.PprofEnabled) }
 
 // ServerConfig defines the HTTP server settings: listen address, body
 // size limits, user agent string, log level, and secure memory policy.
@@ -206,18 +214,19 @@ type ContextConfig struct {
 // for the gateway: blocked execution patterns, retry behavior, circuit
 // breaker thresholds, latency- and cost-weighted routing, and auto-tuning flags.
 type GovernanceConfig struct {
-	BlockedExecutionPatterns []string `json:"blocked_execution_patterns"`
-	RatelimitMaxRPM          *int     `json:"ratelimit_max_rpm,omitempty"`
-	RatelimitMaxTPM          *int     `json:"ratelimit_max_tpm,omitempty"`
-	RetryableStatusCodes     []int    `json:"retryable_status_codes"`
-	MaxRetryAttempts         int      `json:"max_retry_attempts"`
-	RoutingStrategy          string   `json:"routing_strategy"`
-	RoutingLatencyWeight     float64  `json:"routing_latency_weight"`
-	RoutingCostWeight        float64  `json:"routing_cost_weight"`
-	MaxCostPerRequest        float64  `json:"max_cost_per_request"`
-	EmptyStreamAsError       *bool    `json:"empty_stream_as_error,omitempty"`
-	AutoContextSkip          *bool    `json:"auto_context_skip,omitempty"`
-	AutoReorderByLatency     *bool    `json:"auto_reorder_by_latency,omitempty"`
+	BlockedExecutionPatterns   []string `json:"blocked_execution_patterns"`
+	RatelimitMaxRPM            *int     `json:"ratelimit_max_rpm,omitempty"`
+	RatelimitMaxTPM            *int     `json:"ratelimit_max_tpm,omitempty"`
+	RetryableStatusCodes       []int    `json:"retryable_status_codes"`
+	MaxRetryAttempts           int      `json:"max_retry_attempts"`
+	RoutingStrategy            string   `json:"routing_strategy"`
+	RoutingLatencyWeight       float64  `json:"routing_latency_weight"`
+	RoutingCostWeight          float64  `json:"routing_cost_weight"`
+	MaxCostPerRequest          float64  `json:"max_cost_per_request"`
+	EmptyStreamAsError         *bool    `json:"empty_stream_as_error,omitempty"`
+	AutoContextSkip            *bool    `json:"auto_context_skip,omitempty"`
+	AutoReorderByLatency       *bool    `json:"auto_reorder_by_latency,omitempty"`
+	HalfOpenMaxRequests        int      `json:"half_open_max_requests,omitempty"`
 }
 
 func (g *GovernanceConfig) RPMSet() bool                  { return wasSet(g.RatelimitMaxRPM) }

@@ -64,6 +64,10 @@ type Metrics struct {
 	secureMemInitFailures atomic.Uint64
 	secureMemSealFailures atomic.Uint64
 
+	overflowGuardTriggers sync.Map
+	cbStateTransitions    sync.Map
+	mcpActiveGoroutines   atomic.Int64
+
 	RateLimits func() map[string]*RateLimitSnapshot
 	Cooldowns  func() (active int)
 	CBStates   func() map[string]string
@@ -414,6 +418,40 @@ func (m *Metrics) RecordCacheMiss(cacheType string) {
 	e.value.Add(1)
 }
 
+func (m *Metrics) RecordOverflowGuardTrigger(location string) {
+	if m == nil {
+		return
+	}
+	e := getOrCreateEntry(&m.overflowGuardTriggers, map[string]string{"location": location})
+	e.value.Add(1)
+}
+
+func (m *Metrics) RecordCBStateTransition(key string, from, to string) {
+	if m == nil {
+		return
+	}
+	e := getOrCreateEntry(&m.cbStateTransitions, map[string]string{
+		"key":   key,
+		"from": from,
+		"to":   to,
+	})
+	e.value.Add(1)
+}
+
+func (m *Metrics) IncMCPActiveGoroutines() {
+	if m == nil {
+		return
+	}
+	m.mcpActiveGoroutines.Add(1)
+}
+
+func (m *Metrics) DecMCPActiveGoroutines() {
+	if m == nil {
+		return
+	}
+	m.mcpActiveGoroutines.Add(-1)
+}
+
 func (m *Metrics) RecordUpstreamLatency(model, agent, provider string, duration time.Duration) {
 	if m == nil {
 		return
@@ -591,6 +629,15 @@ func (m *Metrics) WritePrometheus(w io.Writer) {
 		"Total cache hits by cache type.", &m.cacheHit)
 	m.writeCounterMap(w, "nenya_cache_miss_total",
 		"Total cache misses by cache type.", &m.cacheMiss)
+	m.writeCounterMap(w, "nenya_overflow_guard_triggers_total",
+		"Total overflow guard triggers by location.", &m.overflowGuardTriggers)
+	m.writeCounterMap(w, "nenya_cb_state_transitions_total",
+		"Total circuit breaker state transitions.", &m.cbStateTransitions)
+	// Note: Using writeCounterAtomic for a gauge metric. Prometheus doesn't
+	// distinguish between counters and gauges for display purposes, and
+	// this simplifies the implementation while maintaining correct semantics.
+	m.writeCounterAtomic(w, "nenya_mcp_active_goroutines",
+		"Current number of active MCP transport goroutines.", uint64(m.mcpActiveGoroutines.Load()))
 
 	if m.RateLimits != nil {
 		fprintln("# HELP nenya_ratelimit_rpm_available Current RPM bucket available.")

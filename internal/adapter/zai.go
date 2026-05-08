@@ -7,20 +7,24 @@ import (
 	"strings"
 )
 
+// ZAIAdapter handles request/response mutation for Zai (Zhipu AI) API.
 type ZAIAdapter struct {
 	extractContent func(msg map[string]interface{}) string
 	logger         zaiLogger
 }
 
+// zaiLogger is an interface for structured logging in the Zai adapter.
 type zaiLogger interface {
 	Debug(msg string, args ...any)
 }
 
+// ZAIAdapterDeps contains dependencies for creating a ZAIAdapter.
 type ZAIAdapterDeps struct {
 	ExtractContent func(msg map[string]interface{}) string
 	Logger         zaiLogger
 }
 
+// NewZAIAdapter creates a new ZAIAdapter with the given dependencies.
 func NewZAIAdapter(deps ZAIAdapterDeps) *ZAIAdapter {
 	return &ZAIAdapter{
 		extractContent: deps.ExtractContent,
@@ -28,6 +32,7 @@ func NewZAIAdapter(deps ZAIAdapterDeps) *ZAIAdapter {
 	}
 }
 
+// MutateRequest mutates the request body for Zai-specific requirements.
 func (a *ZAIAdapter) MutateRequest(body []byte, model string, stream bool) ([]byte, error) {
 	if len(body) == 0 {
 		return body, nil
@@ -53,14 +58,17 @@ func (a *ZAIAdapter) MutateRequest(body []byte, model string, stream bool) ([]by
 	return body, nil
 }
 
+// InjectAuth adds the Bearer Authorization header to the request.
 func (a *ZAIAdapter) InjectAuth(req *http.Request, apiKey string) error {
 	return (&BearerAuth{}).InjectAuth(req, apiKey)
 }
 
+// MutateResponse returns the response body unchanged.
 func (a *ZAIAdapter) MutateResponse(body []byte) ([]byte, error) {
 	return body, nil
 }
 
+// NormalizeError classifies Zai HTTP errors into retryable, rate-limited, quota-exhausted, or permanent.
 func (a *ZAIAdapter) NormalizeError(statusCode int, body []byte) ErrorClass {
 	if len(body) > 0 {
 		var errResp struct {

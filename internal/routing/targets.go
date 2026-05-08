@@ -2,6 +2,7 @@ package routing
 
 import (
 	"log/slog"
+	"math"
 	"strings"
 	"sync"
 	"time"
@@ -33,6 +34,7 @@ const DefaultHalfOpenMaxRequests = 3
 type AgentState struct {
 	Counters        map[string]uint64
 	CB              *resilience.CircuitBreaker
+	Metrics         *infra.Metrics
 	mu              sync.Mutex
 	selectorCache   map[string]selectorCacheEntry
 	selectorCacheMu sync.RWMutex
@@ -46,7 +48,13 @@ type selectorCacheEntry struct {
 
 // NewAgentState creates an AgentState with a circuit breaker and
 // optional state-change logging.
-func NewAgentState(logger *slog.Logger) *AgentState {
+func NewAgentState(logger *slog.Logger, metrics *infra.Metrics) *AgentState {
+	return NewAgentStateWithConfig(logger, metrics, nil)
+}
+
+// NewAgentStateWithConfig creates an AgentState with a circuit breaker using
+// governance configuration for halfOpenMaxRequests.
+func NewAgentStateWithConfig(logger *slog.Logger, metrics *infra.Metrics, govConfig *config.GovernanceConfig) *AgentState {
 	onChange := func(key string, from, to resilience.State) {
 		switch to {
 		case resilience.StateOpen:
@@ -61,17 +69,32 @@ func NewAgentState(logger *slog.Logger) *AgentState {
 		}
 	}
 
-	return &AgentState{
+	// Default halfOpenMaxRequests is 3, but can be overridden by governance config
+	halfOpenMaxRequests := uint32(3)
+	if govConfig != nil && govConfig.HalfOpenMaxRequests > 0 {
+		halfOpenMaxRequests = uint32(govConfig.HalfOpenMaxRequests)
+	}
+
+	as := &AgentState{
 		Counters:      make(map[string]uint64),
+		Metrics:       metrics,
 		selectorCache: make(map[string]selectorCacheEntry),
 		CB: resilience.NewCircuitBreaker(
 			DefaultFailureThreshold,
 			DefaultSuccessThreshold,
-			DefaultHalfOpenMaxRequests,
+			halfOpenMaxRequests,
 			time.Duration(DefaultAgentCooldownSec)*time.Second,
 			onChange,
 		),
 	}
+
+	if metrics != nil {
+		as.CB.SetStateChangeMetricCallback(func(key, from, to string) {
+			metrics.RecordCBStateTransition(key, from, to)
+		})
+	}
+
+	return as
 }
 
 func (a *AgentState) BuildTargetList(logger *slog.Logger, agentName string, agent config.AgentConfig, tokenCount int, providers map[string]*config.Provider, catalog *discovery.ModelCatalog, autoContextSkip bool) []UpstreamTarget {
@@ -167,6 +190,66 @@ func (a *AgentState) expandDynamicWithCache(agentName string, models []config.Ag
 	return models
 }
 
+// buildAgentModelWithFallback constructs an AgentModel for a discovered model,
+// using fallback values from the discovery entry when agent model fields are zero.
+func buildAgentModelWithFallback(modelName string, base config.AgentModel, disc discovery.DiscoveredModel) config.AgentModel {
+	am := config.AgentModel{
+		Provider:   disc.Provider,
+		Model:      modelName,
+		MaxContext: base.MaxContext,
+		MaxOutput:  base.MaxOutput,
+	}
+	if am.MaxContext <= 0 {
+		am.MaxContext = disc.MaxContext
+	}
+	if am.MaxOutput <= 0 {
+		am.MaxOutput = disc.MaxOutput
+	}
+	return am
+}
+
+// resolveModelIntField resolves an integer field (max_context or max_output) for
+// a model using the three-tier priority: agent model > catalog > registry.
+func resolveModelIntField(m config.AgentModel, catalog *discovery.ModelCatalog,
+	getAgent func(config.AgentModel) int,
+	getCatalog func(discovery.DiscoveredModel) int,
+	getRegistry func(config.ModelEntry) int) int {
+	if v := getAgent(m); v > 0 {
+		return v
+	}
+	if catalog != nil {
+		if dm, ok := catalog.Lookup(m.Model); ok {
+			if v := getCatalog(dm); v > 0 {
+				return v
+			}
+		}
+	}
+	if entry, ok := config.ModelRegistry[m.Model]; ok {
+		if v := getRegistry(entry); v > 0 {
+			return v
+		}
+	}
+	return 0
+}
+
+// resolveMaxContext returns the max context window for a model, checking
+// agent model entry, then discovery catalog, then static registry.
+func resolveMaxContext(m config.AgentModel, catalog *discovery.ModelCatalog) int {
+	return resolveModelIntField(m, catalog,
+		func(am config.AgentModel) int { return am.MaxContext },
+		func(dm discovery.DiscoveredModel) int { return dm.MaxContext },
+		func(re config.ModelEntry) int { return re.MaxContext })
+}
+
+// resolveMaxOutput returns the max output tokens for a model, checking
+// agent model entry, then discovery catalog, then static registry.
+func resolveMaxOutput(m config.AgentModel, catalog *discovery.ModelCatalog) int {
+	return resolveModelIntField(m, catalog,
+		func(am config.AgentModel) int { return am.MaxOutput },
+		func(dm discovery.DiscoveredModel) int { return dm.MaxOutput },
+		func(re config.ModelEntry) int { return re.MaxOutput })
+}
+
 func expandDeferredFromCatalog(m config.AgentModel, catalog *discovery.ModelCatalog, providers map[string]*config.Provider, logger *slog.Logger) ([]config.AgentModel, bool) {
 	if catalog == nil {
 		return nil, false
@@ -180,18 +263,7 @@ func expandDeferredFromCatalog(m config.AgentModel, catalog *discovery.ModelCata
 		if _, ok := providers[e.Provider]; !ok {
 			continue
 		}
-		am := config.AgentModel{
-			Provider:   e.Provider,
-			Model:      m.Model,
-			MaxContext: m.MaxContext,
-			MaxOutput:  m.MaxOutput,
-		}
-		if am.MaxContext <= 0 {
-			am.MaxContext = e.MaxContext
-		}
-		if am.MaxOutput <= 0 {
-			am.MaxOutput = e.MaxOutput
-		}
+		am := buildAgentModelWithFallback(m.Model, m, e)
 		logger.Debug("expanded deferred provider",
 			"model", m.Model, "provider", e.Provider,
 			"max_context", am.MaxContext, "max_output", am.MaxOutput)
@@ -227,6 +299,10 @@ func expandDeferredFromRegistry(m config.AgentModel, providers map[string]*confi
 }
 
 func (a *AgentState) expandDeferredProviders(models []config.AgentModel, catalog *discovery.ModelCatalog, providers map[string]*config.Provider, logger *slog.Logger) []config.AgentModel {
+	if len(models) >= math.MaxInt/2 {
+		logger.Error("model count overflow in expandDeferredProviders", "count", len(models))
+		return nil
+	}
 	expanded := make([]config.AgentModel, 0, len(models)*2)
 	for _, m := range models {
 		if m.Provider != "" || m.Model == "" {
@@ -274,18 +350,7 @@ func expandWithCatalog(m config.AgentModel, providerName string, catalog *discov
 	}
 	expanded := make([]config.AgentModel, 0, len(discModels))
 	for _, dm := range discModels {
-		am := config.AgentModel{
-			Provider:   dm.Provider,
-			Model:      dm.ID,
-			MaxContext: m.MaxContext,
-			MaxOutput:  m.MaxOutput,
-		}
-		if am.MaxContext <= 0 {
-			am.MaxContext = dm.MaxContext
-		}
-		if am.MaxOutput <= 0 {
-			am.MaxOutput = dm.MaxOutput
-		}
+		am := buildAgentModelWithFallback(dm.ID, m, dm)
 		logger.Debug("expanded provider-only entry from catalog",
 			"provider", providerName, "model", dm.ID,
 			"max_context", am.MaxContext, "max_output", am.MaxOutput)
@@ -322,6 +387,10 @@ func expandWithRegistryFallback(providerName string, m config.AgentModel, logger
 }
 
 func (a *AgentState) expandProviderOnly(models []config.AgentModel, catalog *discovery.ModelCatalog, providers map[string]*config.Provider, logger *slog.Logger) []config.AgentModel {
+	if len(models) >= math.MaxInt/2 {
+		logger.Error("model count overflow in expandProviderOnly", "count", len(models))
+		return nil
+	}
 	expanded := make([]config.AgentModel, 0, len(models)*2)
 	for _, m := range models {
 		if m.Provider == "" || m.Model != "" || m.ProviderRgx != "" || m.ModelRgx != "" {
@@ -464,10 +533,14 @@ func (a *AgentState) buildTarget(logger *slog.Logger, agentName string, m config
 	}, true
 }
 
+// ActivateCooldown forces the circuit breaker for a target into the open state
+// for the specified cooldown duration.
 func (a *AgentState) ActivateCooldown(target UpstreamTarget, cooldownDuration time.Duration) {
 	a.CB.ForceOpen(target.CoolKey, cooldownDuration)
 }
 
+// RecordFailure records a failure for a target's circuit breaker,
+// potentially opening the circuit after the threshold is reached.
 func (a *AgentState) RecordFailure(target UpstreamTarget, cooldownDuration time.Duration) {
 	if target.CoolKey == "" {
 		return
@@ -475,52 +548,21 @@ func (a *AgentState) RecordFailure(target UpstreamTarget, cooldownDuration time.
 	a.CB.RecordFailure(target.CoolKey, cooldownDuration)
 }
 
+// RecordSuccess records a successful request for the given circuit breaker key,
+// potentially transitioning the circuit to closed state.
 func (a *AgentState) RecordSuccess(key string) {
 	a.CB.RecordSuccess(key)
 }
 
+// ActiveCooldowns returns the number of currently active cooldowns.
 func (a *AgentState) ActiveCooldowns() int {
 	return a.CB.ActiveCount()
 }
 
+// CBSnapshot returns a snapshot of all circuit breaker states as a map
+// from key to state name.
 func (a *AgentState) CBSnapshot() map[string]string {
 	return a.CB.Snapshot()
-}
-
-func resolveMaxContext(m config.AgentModel, catalog *discovery.ModelCatalog) int {
-	if m.MaxContext > 0 {
-		return m.MaxContext
-	}
-
-	if catalog != nil {
-		if disc, ok := catalog.Lookup(m.Model); ok && disc.MaxContext > 0 {
-			return disc.MaxContext
-		}
-	}
-
-	if entry, ok := config.ModelRegistry[m.Model]; ok && entry.MaxContext > 0 {
-		return entry.MaxContext
-	}
-
-	return 0
-}
-
-func resolveMaxOutput(m config.AgentModel, catalog *discovery.ModelCatalog) int {
-	if m.MaxOutput > 0 {
-		return m.MaxOutput
-	}
-
-	if catalog != nil {
-		if disc, ok := catalog.Lookup(m.Model); ok && disc.MaxOutput > 0 {
-			return disc.MaxOutput
-		}
-	}
-
-	if entry, ok := config.ModelRegistry[m.Model]; ok && entry.MaxOutput > 0 {
-		return entry.MaxOutput
-	}
-
-	return 0
 }
 
 func checkCapabilities(m config.AgentModel, catalog *discovery.ModelCatalog) bool {
@@ -540,6 +582,8 @@ func checkCapabilities(m config.AgentModel, catalog *discovery.ModelCatalog) boo
 	return modelHasCapabilities(dm.Metadata, m.RequiredCapabilities)
 }
 
+// ResolveWindowMaxContext returns the maximum context window across all models
+// configured for a given agent name. Returns 0 if the agent is not found.
 func ResolveWindowMaxContext(modelName string, agents map[string]config.AgentConfig, catalog *discovery.ModelCatalog) int {
 	agent, ok := agents[modelName]
 	if !ok {
@@ -556,6 +600,10 @@ func ResolveWindowMaxContext(modelName string, agents map[string]config.AgentCon
 	return maxCtx
 }
 
+// SortTargetsByLatency orders targets by median latency using the provided
+// latency tracker. If jitterFn is non-nil, it applies randomization (±5%)
+// to prevent thundering herd. Returns the original slice if latencyTracker
+// is nil or the slice has ≤1 element.
 func SortTargetsByLatency(targets []UpstreamTarget, lt *infra.LatencyTracker, jitterFn func() float64) []UpstreamTarget {
 	if lt == nil || len(targets) <= 1 {
 		return targets

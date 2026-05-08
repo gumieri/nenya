@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"strings"
 	"time"
@@ -508,7 +509,10 @@ func (p *Proxy) interceptHardLimit(gw *gateway.NenyaGateway, ctx context.Context
 		"tokens", contentTokens, "hard_limit", hardLimit)
 	gw.Metrics.RecordInterception("hard_limit")
 
-	hardLimitRunes := hardLimit * 3
+	hardLimitRunes := hardLimit
+	if hardLimit <= math.MaxInt/3 {
+		hardLimitRunes = hardLimit * 3
+	}
 	querySource := gw.Config.Context.TFIDFQuerySource
 
 	if querySource != "" {
@@ -814,6 +818,7 @@ func recordUsageFromMap(gw *gateway.NenyaGateway, responseMap map[string]interfa
 
 // recordNonStreamingUsage records usage metrics, cost tracking, and cache stats
 // for non-streaming responses, matching what the streaming path does.
+// recordNonStreamingUsage records token usage statistics from a non-streaming response.
 func recordNonStreamingUsage(gw *gateway.NenyaGateway, target routing.UpstreamTarget, agentName string, usage map[string]interface{}) {
 	outputTokens := 0
 	if raw, ok := usage["completion_tokens"].(float64); ok {
@@ -1690,6 +1695,8 @@ func detectRequestCapabilities(payload map[string]interface{}) routing.RequestCa
 	return caps
 }
 
+// inspectMessageCaps inspects a message object and updates the RequestCapabilities struct.
+// Returns true if both HasVision and HasReasoning capabilities are detected.
 func inspectMessageCaps(msg any, caps *routing.RequestCapabilities) bool {
 	m, ok := msg.(map[string]interface{})
 	if !ok {
@@ -1698,14 +1705,7 @@ func inspectMessageCaps(msg any, caps *routing.RequestCapabilities) bool {
 	content := m["content"]
 	if arr, ok := content.([]interface{}); ok && len(arr) > 0 {
 		caps.HasContentArr = true
-		for _, part := range arr {
-			if p, ok := part.(map[string]interface{}); ok {
-				if t, ok := p["type"].(string); ok && t == "image_url" {
-					caps.HasVision = true
-					break
-				}
-			}
-		}
+		checkContentArrayForVision(arr, caps)
 	}
 	if reasoning, ok := m["reasoning"].(map[string]interface{}); ok && len(reasoning) > 0 {
 		caps.HasReasoning = true
@@ -1713,6 +1713,23 @@ func inspectMessageCaps(msg any, caps *routing.RequestCapabilities) bool {
 	return caps.HasVision && caps.HasReasoning
 }
 
+// checkContentArrayForVision scans a content array for vision content (image_url).
+func checkContentArrayForVision(arr []interface{}, caps *routing.RequestCapabilities) {
+	for _, part := range arr {
+		p, ok := part.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		if t, ok := p["type"].(string); ok && t == "image_url" {
+			caps.HasVision = true
+			return
+		}
+	}
+}
+
+// applyRedactToContent applies the redact function to the content field of a message node.
+// Supports both string content and content arrays (redacting only text parts).
+// Returns true if any content was modified.
 func applyRedactToContent(msgNode map[string]interface{}, redactFn func(string) string) bool {
 	contentRaw, ok := msgNode["content"]
 	if !ok {

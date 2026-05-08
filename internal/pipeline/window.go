@@ -285,7 +285,7 @@ func TruncateHistory(historyText string, maxRunes int) string {
 	}
 	separator := "\n... [NENYA: HISTORY TRUNCATED] ...\n"
 	sepRunes := []rune(separator)
-	capacity := keepFirst + len(sepRunes) + keepLast
+	capacity := util.AddCap(util.AddCap(keepFirst, len(sepRunes)), keepLast)
 	if capacity < 0 || capacity > int(float64(maxRunes)*1.5) {
 		capacity = maxRunes
 	}

@@ -13,7 +13,6 @@ import (
 	"nenya/config"
 	"nenya/internal/gateway"
 	"nenya/internal/routing"
-	"nenya/internal/util"
 )
 
 func (p *Proxy) handleFiles(gw *gateway.NenyaGateway, w http.ResponseWriter, r *http.Request, keyRef string) {
@@ -64,27 +63,7 @@ func (p *Proxy) handleFilesOrBatches(gw *gateway.NenyaGateway, w http.ResponseWr
 	contentType := r.Header.Get("Content-Type")
 	ctxLogger := gw.Logger.With("operation", endpoint, "provider", provider.Name, "api_key", keyRef)
 
-	var resp *http.Response
-	err = util.DoWithRetry(ctx, maxAttempts, func() error {
-		upstreamReq, reqErr := p.buildUpstreamRequest(gw, ctx, r.Method, targetURL, bodyBytes, provider.Name, r.Header)
-		if reqErr != nil {
-			return reqErr
-		}
-		if contentType != "" {
-			upstreamReq.Header.Set("Content-Type", contentType)
-		}
-
-		var fetchErr error
-		resp, fetchErr = gw.Client.Do(upstreamReq)
-		if fetchErr != nil {
-			return fetchErr
-		}
-		if resp.StatusCode >= 500 {
-			_ = resp.Body.Close()
-			return fmt.Errorf("upstream error: %d", resp.StatusCode)
-		}
-		return nil
-	})
+	resp, err := p.doUpstreamRoundTrip(ctx, gw, r.Method, targetURL, bodyBytes, provider.Name, r.Header, contentType, maxAttempts)
 
 	if err != nil {
 		ctxLogger.Error("files/batches upstream request failed", "endpoint", endpoint, "err", err)

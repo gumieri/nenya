@@ -6,14 +6,17 @@ import (
 	"strings"
 )
 
+// OpenAIAdapter handles request/response mutation for OpenAI-compatible APIs.
 type OpenAIAdapter struct {
 	Caps Capabilities
 }
 
+// NewOpenAIAdapter creates a new OpenAIAdapter with the given capabilities.
 func NewOpenAIAdapter(caps Capabilities) *OpenAIAdapter {
 	return &OpenAIAdapter{Caps: caps}
 }
 
+// MutateRequest mutates the request body based on the provider's capabilities.
 func (a *OpenAIAdapter) MutateRequest(body []byte, model string, stream bool) ([]byte, error) {
 	if len(body) == 0 {
 		return body, nil
@@ -59,6 +62,7 @@ func (a *OpenAIAdapter) MutateRequest(body []byte, model string, stream bool) ([
 	return out, nil
 }
 
+// flattenMessages flattens content arrays in messages into plain text.
 func (a *OpenAIAdapter) flattenMessages(payload map[string]interface{}) bool {
 	msgsRaw, has := payload["messages"]
 	if !has {
@@ -71,18 +75,22 @@ func (a *OpenAIAdapter) flattenMessages(payload map[string]interface{}) bool {
 	return flattenContentArrays(msgs)
 }
 
+// InjectAuth adds the Bearer Authorization header to the request.
 func (a *OpenAIAdapter) InjectAuth(req *http.Request, apiKey string) error {
 	return (&BearerAuth{}).InjectAuth(req, apiKey)
 }
 
+// MutateResponse returns the response body unchanged.
 func (a *OpenAIAdapter) MutateResponse(body []byte) ([]byte, error) {
 	return body, nil
 }
 
+// NormalizeError classifies OpenAI HTTP errors into retryable, rate-limited, quota-exhausted, or permanent.
 func (a *OpenAIAdapter) NormalizeError(statusCode int, body []byte) ErrorClass {
 	return defaultNormalizeError(statusCode, body)
 }
 
+// flattenContentArrays flattens content arrays in messages into plain text.
 func flattenContentArrays(msgs []interface{}) bool {
 	changed := false
 	for i, msgRaw := range msgs {
@@ -118,6 +126,7 @@ func flattenContentArrays(msgs []interface{}) bool {
 	return changed
 }
 
+// defaultNormalizeError classifies HTTP errors into retryable, rate-limited, quota-exhausted, or permanent.
 func defaultNormalizeError(statusCode int, body []byte) ErrorClass {
 	switch statusCode {
 	case 429:

@@ -7,6 +7,8 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"sync"
+	"syscall"
 	"testing"
 	"time"
 
@@ -17,12 +19,12 @@ import (
 )
 
 func TestParseFlags_Defaults(t *testing.T) {
-	configDir, configFile, verbose, validateOnly, printSchema := parseFlags()
-	if configDir != "/etc/nenya/" {
-		t.Errorf("expected /etc/nenya/, got %s", configDir)
+	paths, verbose, validateOnly, printSchema := parseFlags()
+	if paths.dir != "/etc/nenya/" {
+		t.Errorf("expected /etc/nenya/, got %s", paths.dir)
 	}
-	if configFile != "" {
-		t.Errorf("expected empty config file, got %s", configFile)
+	if paths.file != "" {
+		t.Errorf("expected empty config file, got %s", paths.file)
 	}
 	if verbose {
 		t.Error("expected verbose=false")
@@ -37,28 +39,28 @@ func TestParseFlags_Defaults(t *testing.T) {
 
 func TestParseFlags_EnvConfigDir(t *testing.T) {
 	t.Setenv("NENYA_CONFIG_DIR", "/custom/config")
-	configDir, configFile, _, _, _ := parseFlags()
-	if configDir != "/custom/config" {
-		t.Errorf("expected /custom/config, got %s", configDir)
+	paths, _, _, _ := parseFlags()
+	if paths.dir != "/custom/config" {
+		t.Errorf("expected /custom/config, got %s", paths.dir)
 	}
-	if configFile != "" {
-		t.Errorf("expected empty config file, got %s", configFile)
+	if paths.file != "" {
+		t.Errorf("expected empty config file, got %s", paths.file)
 	}
 }
 
 func TestParseFlags_EnvConfigFile(t *testing.T) {
 	t.Setenv("NENYA_CONFIG_FILE", "/custom/config.json")
-	_, configFile, _, _, _ := parseFlags()
-	if configFile != "/custom/config.json" {
-		t.Errorf("expected /custom/config.json, got %s", configFile)
+	paths, _, _, _ := parseFlags()
+	if paths.file != "/custom/config.json" {
+		t.Errorf("expected /custom/config.json, got %s", paths.file)
 	}
 }
 
 func TestParseFlags_ConfigDirTakesPrecedence(t *testing.T) {
 	t.Setenv("NENYA_CONFIG_DIR", "/env/config")
-	configDir, _, _, _, _ := parseFlags()
-	if configDir != "/env/config" {
-		t.Errorf("expected /env/config, got %s", configDir)
+	paths, _, _, _ := parseFlags()
+	if paths.dir != "/env/config" {
+		t.Errorf("expected /env/config, got %s", paths.dir)
 	}
 }
 
@@ -115,7 +117,8 @@ func TestLoadConfig_FromFile(t *testing.T) {
 	t.Setenv("NENYA_SECRETS_DIR", secretsDir)
 
 	logger := testutil.NewTestLogger()
-	cfg, secrets, err := loadConfig("", configPath, false, logger)
+	paths := configPaths{file: configPath}
+	cfg, secrets, _, err := loadConfig(paths, false, logger)
 	if err != nil {
 		t.Fatalf("loadConfig failed: %v", err)
 	}
@@ -146,7 +149,8 @@ func TestLoadConfig_FromDir(t *testing.T) {
 	t.Setenv("NENYA_SECRETS_DIR", secretsDir)
 
 	logger := testutil.NewTestLogger()
-	cfg, secrets, err := loadConfig(dir, "", false, logger)
+	paths := configPaths{dir: dir}
+	cfg, secrets, _, err := loadConfig(paths, false, logger)
 	if err != nil {
 		t.Fatalf("loadConfig failed: %v", err)
 	}
@@ -160,7 +164,8 @@ func TestLoadConfig_FromDir(t *testing.T) {
 
 func TestLoadConfig_ConfigFail(t *testing.T) {
 	logger := testutil.NewTestLogger()
-	_, _, err := loadConfig("/nonexistent", "", false, logger)
+	paths := configPaths{dir: "/nonexistent"}
+	_, _, _, err := loadConfig(paths, false, logger)
 	if err == nil {
 		t.Fatal("expected error for nonexistent config")
 	}
@@ -183,7 +188,8 @@ func TestLoadConfig_EnvListenAddr(t *testing.T) {
 	t.Setenv("NENYA_SECRETS_DIR", secretsDir)
 
 	logger := testutil.NewTestLogger()
-	cfg, _, err := loadConfig("", configPath, false, logger)
+	paths := configPaths{file: configPath}
+	cfg, _, _, err := loadConfig(paths, false, logger)
 	if err != nil {
 		t.Fatalf("loadConfig failed: %v", err)
 	}
@@ -209,7 +215,8 @@ func TestLoadConfig_EnvPort(t *testing.T) {
 	t.Setenv("NENYA_SECRETS_DIR", secretsDir)
 
 	logger := testutil.NewTestLogger()
-	cfg, _, err := loadConfig("", configPath, false, logger)
+	paths := configPaths{file: configPath}
+	cfg, _, _, err := loadConfig(paths, false, logger)
 	if err != nil {
 		t.Fatalf("loadConfig failed: %v", err)
 	}
@@ -336,7 +343,7 @@ func TestEventLoop_Shutdown(t *testing.T) {
 
 	done := make(chan struct{})
 	go func() {
-		eventLoop(logger, "", "", p, ctx, sighup, serverErr, srv)
+		eventLoop(logger, configPaths{}, p, ctx, sighup, serverErr, srv)
 		close(done)
 	}()
 
@@ -372,7 +379,7 @@ func TestReloadConfig_Success(t *testing.T) {
 	p.StoreGateway(gw)
 
 	ctx := context.Background()
-	reloadConfig(ctx, p, "", configPath, logger)
+	reloadConfig(ctx, p, configPaths{file: configPath}, logger)
 
 	newGW := p.Gateway()
 	if newGW == nil {
@@ -389,7 +396,7 @@ func TestReloadConfig_ConfigFail(t *testing.T) {
 	p.StoreGateway(gw)
 
 	ctx := context.Background()
-	reloadConfig(ctx, p, "", "/nonexistent/config.json", logger)
+	reloadConfig(ctx, p, configPaths{file: "/nonexistent/config.json"}, logger)
 
 	if p.Gateway() != gw {
 		t.Error("gateway should remain unchanged after failed reload")
@@ -415,5 +422,76 @@ func TestServeHTTP_ServerError(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("timeout waiting for serveHTTP error")
+	}
+}
+
+func TestReloadLimiter_TryStart(t *testing.T) {
+	var rl reloadLimiter
+
+	if !rl.tryStart() {
+		t.Error("expected tryStart to return true on first call")
+	}
+	if rl.tryStart() {
+		t.Error("expected tryStart to return false while pending")
+	}
+
+	rl.done()
+	if !rl.tryStart() {
+		t.Error("expected tryStart to return true after done")
+	}
+}
+
+func TestReloadLimiter_ConcurrentAccess(t *testing.T) {
+	var rl reloadLimiter
+	var wg sync.WaitGroup
+
+	for i := 0; i < 100; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			rl.done()
+			_ = rl.tryStart()
+		}()
+	}
+	wg.Wait()
+}
+
+func TestEventLoop_ConcurrentSighup(t *testing.T) {
+	logger := testutil.NewTestLogger()
+	cfg := testutil.MinimalConfig()
+	gw := gateway.New(context.Background(), *cfg, &config.SecretsConfig{ClientToken: "test"}, logger)
+
+	p := &proxy.Proxy{}
+	p.StoreGateway(gw)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	sighup := make(chan os.Signal, 10)
+	serverErr := make(chan error, 1)
+	srv := buildServer(p, ":0")
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("failed to create listener: %v", err)
+	}
+	defer listener.Close()
+
+	go serveHTTP(srv, listener, serverErr)
+
+	done := make(chan struct{})
+	go func() {
+		eventLoop(logger, configPaths{}, p, ctx, sighup, serverErr, srv)
+		close(done)
+	}()
+
+	for i := 0; i < 5; i++ {
+		sighup <- syscall.SIGHUP
+	}
+
+	time.Sleep(50 * time.Millisecond)
+	cancel()
+
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("timeout waiting for eventLoop shutdown")
 	}
 }

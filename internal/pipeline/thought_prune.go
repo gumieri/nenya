@@ -186,7 +186,8 @@ func isThinkTagBoundary(s string, pos int) bool {
 }
 
 func findCloseTag(s string) int {
-	for {
+	maxIter := len(s)
+	for i := 0; i < maxIter; i++ {
 		idx := strings.Index(s, thoughtCloseTag)
 		if idx < 0 {
 			return -1
@@ -196,4 +197,5 @@ func findCloseTag(s string) int {
 		}
 		s = s[idx+len(thoughtCloseTag):]
 	}
+	return -1
 }
