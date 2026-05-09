@@ -323,8 +323,7 @@ func (p *Proxy) streamResponse(gw *gateway.NenyaGateway, w http.ResponseWriter, 
 
 	_, copyErr := copyStream(r.Context(), dst, transformingReader, *buf)
 
-	p.handleStreamCompletion(gw, w, target, agentName, action, cacheKey, cooldownDuration, buf, copyErr, captureBuf, tee, contentBuilder, stallR)
-	return streamResult{}
+	return p.handleStreamCompletion(gw, w, target, agentName, action, cacheKey, cooldownDuration, buf, copyErr, captureBuf, tee, contentBuilder, stallR)
 }
 
 // setupTransformingReader creates and configures the SSE transforming reader, content builder, and stall reader.
@@ -474,21 +473,23 @@ func (p *Proxy) setupStreamWriter(gw *gateway.NenyaGateway, flushWriter *immedia
 	return dst, captureBuf, tee
 }
 
-func (p *Proxy) handleStreamCompletion(gw *gateway.NenyaGateway, w http.ResponseWriter, target routing.UpstreamTarget, agentName string, action upstreamAction, cacheKey string, cooldownDuration time.Duration, buf *[]byte, copyErr error, captureBuf *bytes.Buffer, tee *sseTeeWriter, contentBuilder *contentBuilder, stallR *stallReader) {
-	p.handleStreamDone(gw, w, target, agentName, action, cacheKey, cooldownDuration, buf, copyErr, captureBuf, tee, contentBuilder, stallR)
+// handleStreamCompletion handles completion of a stream and returns a streamResult.
+// Returns empty=true when the stream should be retried with the next target.
+func (p *Proxy) handleStreamCompletion(gw *gateway.NenyaGateway, w http.ResponseWriter, target routing.UpstreamTarget, agentName string, action upstreamAction, cacheKey string, cooldownDuration time.Duration, buf *[]byte, copyErr error, captureBuf *bytes.Buffer, tee *sseTeeWriter, contentBuilder *contentBuilder, stallR *stallReader) streamResult {
+	return p.handleStreamDone(gw, w, target, agentName, action, cacheKey, cooldownDuration, buf, copyErr, captureBuf, tee, contentBuilder, stallR)
 }
 
-func (p *Proxy) handleStreamDone(gw *gateway.NenyaGateway, w http.ResponseWriter, target routing.UpstreamTarget, agentName string, action upstreamAction, cacheKey string, cooldownDuration time.Duration, buf *[]byte, copyErr error, captureBuf *bytes.Buffer, tee *sseTeeWriter, contentBuilder *contentBuilder, stallR *stallReader) {
+func (p *Proxy) handleStreamDone(gw *gateway.NenyaGateway, w http.ResponseWriter, target routing.UpstreamTarget, agentName string, action upstreamAction, cacheKey string, cooldownDuration time.Duration, buf *[]byte, copyErr error, captureBuf *bytes.Buffer, tee *sseTeeWriter, contentBuilder *contentBuilder, stallR *stallReader) streamResult {
 	streamingBufPool.Put(buf)
 
 	if errors.Is(copyErr, stream.ErrStreamBlocked) {
 		action.cancel()
+		_ = action.resp.Body.Close()
 		gw.Logger.Warn("stream blocked by execution policy, upstream killed",
 			"model", target.Model, "provider", target.Provider)
 		gw.Metrics.RecordStreamBlock(target.Model, target.Provider)
 		p.writeBlockedSSE(gw, w)
-		_ = action.resp.Body.Close()
-		return
+		return streamResult{}
 	}
 
 	if stallR != nil {
@@ -498,12 +499,12 @@ func (p *Proxy) handleStreamDone(gw *gateway.NenyaGateway, w http.ResponseWriter
 	if errors.Is(copyErr, errStreamStalled) {
 		action.cancel()
 		_ = action.resp.Body.Close()
-		gw.Logger.Warn("stream stalled, aborting upstream",
+		gw.AgentState.RecordFailure(target, cooldownDuration)
+		gw.Logger.Warn("stream stalled, falling back to next target",
 			"model", target.Model, "provider", target.Provider,
 			"idle_timeout", streamIdleTimeout)
 		gw.Metrics.RecordStreamStall(target.Model, target.Provider)
-		writeSSEError(w, http.StatusOK, "upstream stream stalled: no data received within idle timeout")
-		return
+		return streamResult{empty: true}
 	}
 
 	_ = action.resp.Body.Close()
@@ -517,12 +518,13 @@ func (p *Proxy) handleStreamDone(gw *gateway.NenyaGateway, w http.ResponseWriter
 	if copyErr == nil {
 		storeStreamCache(gw, cacheKey, captureBuf, tee)
 		p.asyncMCPAutoSave(gw, agentName, contentBuilder)
-		return
+		return streamResult{}
 	}
 	if errors.Is(copyErr, context.Canceled) || errors.Is(copyErr, context.DeadlineExceeded) {
-		return
+		return streamResult{}
 	}
 	writeSSEError(w, http.StatusOK, "upstream stream interrupted")
+	return streamResult{}
 }
 
 // recordStreamResult records the outcome of a streaming request to the agent state and metrics.
