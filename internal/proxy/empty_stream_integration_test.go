@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"nenya/config"
 	"nenya/internal/gateway"
@@ -223,6 +224,93 @@ func TestHandleChatCompletions_EmptyUpstreamStream_FallbackToNextTarget(t *testi
 	}
 	if callCount != 2 {
 		t.Errorf("expected 2 upstream calls (empty + fallback), got %d", callCount)
+	}
+}
+
+func TestHandleChatCompletions_StalledStream_FallbackToNextTarget(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping slow test in short mode")
+	}
+
+	var callCount int
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		callCount++
+		w.Header().Set("Content-Type", "text/event-stream")
+		if callCount == 1 {
+			w.WriteHeader(http.StatusOK)
+			w.(http.Flusher).Flush()
+			_, _ = w.Write([]byte("data: {\"choices\":[{\"delta\":{\"content\":\"initial\"}}]}\n\n"))
+			w.(http.Flusher).Flush()
+			time.Sleep(70 * time.Second)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("data: {\"choices\":[{\"delta\":{\"content\":\"hello\"}}]}\n\n"))
+		_, _ = w.Write([]byte("data: [DONE]\n\n"))
+	}))
+	defer upstream.Close()
+
+	cfg := testutil.MinimalConfig()
+	cfg.Server.MaxBodyBytes = 10 << 20
+	cfg.Governance.RatelimitMaxRPM = config.PtrTo(60)
+	cfg.Governance.RatelimitMaxTPM = config.PtrTo(100000)
+	cfg.Governance.EmptyStreamAsError = config.PtrTo(true)
+	cfg.Bouncer.Enabled = config.PtrTo(false)
+	cfg.Providers = map[string]config.ProviderConfig{
+		"test-provider": {
+			URL:       upstream.URL + "/v1/chat/completions",
+			AuthStyle: "none",
+		},
+	}
+	cfg.Agents = map[string]config.AgentConfig{
+		"test-agent": {
+			Strategy: "fallback",
+			Models: []config.AgentModel{
+				{Provider: "test-provider", Model: "test-model"},
+				{Provider: "test-provider", Model: "test-model"},
+			},
+		},
+	}
+	secrets := &config.SecretsConfig{
+		ClientToken: "test-token",
+	}
+	gw := gateway.New(context.Background(), *cfg, secrets, slog.Default())
+	p := &Proxy{}
+	p.StoreGateway(gw)
+
+	body := `{"model":"test-agent","messages":[{"role":"user","content":"hi"}]}`
+	req := testutil.NewTestRequest(t, http.MethodPost, "/v1/chat/completions", body)
+	rec := httptest.NewRecorder()
+
+	done := make(chan struct{})
+	go func() {
+		p.ServeHTTP(rec, req)
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(80 * time.Second):
+		t.Fatal("test timed out waiting for response")
+	}
+
+	testutil.AssertResponseStatusCode(t, rec, http.StatusOK)
+	respBody, _ := io.ReadAll(rec.Body)
+	respStr := string(respBody)
+
+	if !strings.Contains(respStr, "hello") {
+		t.Errorf("expected fallback response content 'hello', got: %s", respStr)
+	}
+	if callCount != 2 {
+		t.Errorf("expected 2 upstream calls (stalled + fallback), got %d", callCount)
+	}
+
+	var out strings.Builder
+	gw.Metrics.WritePrometheus(&out)
+	metricsOutput := out.String()
+
+	if !strings.Contains(metricsOutput, `nenya_stream_stalled_total`) {
+		t.Errorf("expected stream_stalled metric to be recorded, got:\n%s", metricsOutput)
 	}
 }
 
