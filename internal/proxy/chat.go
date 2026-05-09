@@ -660,7 +660,7 @@ func (p *Proxy) handleEmbeddings(gw *gateway.NenyaGateway, w http.ResponseWriter
 		return
 	}
 
-	tokenCount := countEmbeddingInputTokens(payload)
+	tokenCount := countEmbeddingInputTokens(gw, payload)
 
 	gw.Stats.RecordRequest(modelName, tokenCount)
 	gw.Metrics.RecordUpstreamRequest(modelName, "", provider.Name)
@@ -688,37 +688,24 @@ func (p *Proxy) handleEmbeddings(gw *gateway.NenyaGateway, w http.ResponseWriter
 	p.forwardEmbeddingsRequest(gw, w, ctx, http.MethodPost, embeddingURL, bodyBytes, provider.Name, r.Header, maxAttempts, keyRef)
 }
 
-func countEmbeddingInputTokens(payload map[string]interface{}) int {
+func countEmbeddingInputTokens(gw *gateway.NenyaGateway, payload map[string]interface{}) int {
 	inputRaw, ok := payload["input"]
 	if !ok {
 		return 0
 	}
 
-	var totalText string
+	var totalTokens int
 	switch input := inputRaw.(type) {
 	case string:
-		totalText = input
+		totalTokens = gw.CountTokens(input)
 	case []interface{}:
-		var texts []string
 		for _, item := range input {
 			if s, ok := item.(string); ok {
-				texts = append(texts, s)
+				totalTokens += gw.CountTokens(s)
 			}
 		}
-		totalText = strings.Join(texts, " ")
-	default:
-		return 0
 	}
-
-	if totalText == "" {
-		return 0
-	}
-
-	tokens := len(totalText) / 4
-	if tokens < 1 {
-		tokens = 1
-	}
-	return tokens
+	return totalTokens
 }
 
 func (p *Proxy) forwardEmbeddingsRequest(gw *gateway.NenyaGateway, w http.ResponseWriter, ctx context.Context, method, url string, bodyBytes []byte, providerName string, srcHeaders http.Header, maxAttempts int, keyRef string) {

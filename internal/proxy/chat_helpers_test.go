@@ -1,6 +1,7 @@
 package proxy
 
 import (
+	"context"
 	"encoding/json"
 	"log/slog"
 	"net/http"
@@ -15,6 +16,7 @@ import (
 	"nenya/internal/mcp"
 	"nenya/internal/routing"
 	"nenya/internal/testutil"
+	"nenya/internal/tiktoken"
 )
 
 func TestHTTPError_Error(t *testing.T) {
@@ -86,28 +88,35 @@ func TestHandleEmptyAgentTargets(t *testing.T) {
 }
 
 func TestCountEmbeddingInputTokens(t *testing.T) {
+	gw := gateway.New(context.Background(), config.Config{}, &config.SecretsConfig{}, slog.New(slog.DiscardHandler))
+
 	tests := []struct {
 		name     string
 		payload  map[string]interface{}
 		expected int
 	}{
 		{name: "no input", payload: map[string]interface{}{}, expected: 0},
-		{name: "string input", payload: map[string]interface{}{"input": "hello world"}, expected: len("hello world") / 4},
-		{name: "string short", payload: map[string]interface{}{"input": "ab"}, expected: 1},
-		{name: "array of strings", payload: map[string]interface{}{"input": []interface{}{"hello", "world"}}, expected: len("hello world") / 4},
+		{name: "string input", payload: map[string]interface{}{"input": "hello world"}, expected: mustCountTokens(gw, "hello world")},
+		{name: "string short", payload: map[string]interface{}{"input": "ab"}, expected: mustCountTokens(gw, "ab")},
+		{name: "array of strings", payload: map[string]interface{}{"input": []interface{}{"hello", "world"}}, expected: mustCountTokens(gw, "hello") + mustCountTokens(gw, "world")},
 		{name: "empty array", payload: map[string]interface{}{"input": []interface{}{}}, expected: 0},
 		{name: "wrong type", payload: map[string]interface{}{"input": 42}, expected: 0},
-		{name: "mixed array", payload: map[string]interface{}{"input": []interface{}{"hello", 42}}, expected: len("hello ") / 4},
+		{name: "mixed array", payload: map[string]interface{}{"input": []interface{}{"hello", 42}}, expected: mustCountTokens(gw, "hello")},
 		{name: "empty string", payload: map[string]interface{}{"input": ""}, expected: 0},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			got := countEmbeddingInputTokens(tc.payload)
+			got := countEmbeddingInputTokens(gw, tc.payload)
 			if got != tc.expected {
 				t.Errorf("expected %d, got %d", tc.expected, got)
 			}
 		})
 	}
+}
+
+func mustCountTokens(gw *gateway.NenyaGateway, s string) int {
+	n, _ := tiktoken.CountTokens(s)
+	return n
 }
 
 func TestIsPathSafeResponses(t *testing.T) {
