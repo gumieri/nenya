@@ -1,3 +1,17 @@
+// Package discovery merges static model registry with dynamically discovered
+// models from provider /v1/models endpoints.
+//
+// Merge priority (highest to lowest):
+// 1. Agent model overrides (per-model max_context/max_output/provider)
+// 2. Dynamically discovered models (from provider catalogs)
+// 3. Static model registry (built-in defaults)
+//
+// The merged catalog is used throughout Nenya for:
+// - Model resolution in routing (resolveProvider)
+// - /v1/models endpoint responses
+// - max_tokens injection by provider capabilities
+//
+// Merge is performed at startup and on SIGHUP reload.
 package discovery
 
 import (
