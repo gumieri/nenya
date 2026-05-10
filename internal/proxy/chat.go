@@ -469,21 +469,42 @@ func (p *Proxy) interceptContent(gw *gateway.NenyaGateway, ctx context.Context, 
 
 	contentTokens := gw.CountTokens(textForInterception)
 
-	var processed string
-	var needsUpdate bool
+	var actualHardLimit int
+	if gw.Config.Context.HardLimitTokens > 0 {
+		actualHardLimit = gw.Config.Context.HardLimitTokens
+	} else {
+		actualHardLimit = hardLimit
+	}
+
+	if contentTokens > actualHardLimit {
+		gw.Logger.Warn("payload exceeds hard limit, trimming before interception",
+			"tokens", contentTokens, "hard_limit", actualHardLimit)
+		modified, _ := pipeline.TrimPayload(gw.Logger, payload, actualHardLimit, gw.CountTokens, gw.Config.Context)
+		if modified {
+			gw.Metrics.RecordTrimmedRequest("interception", contentTokens)
+			lastMsgNode = messages[len(messages)-1].(map[string]interface{})
+			textForInterception = gateway.ExtractContentText(lastMsgNode)
+			if textForInterception != "" {
+				contentTokens = gw.CountTokens(textForInterception)
+			}
+		}
+	}
 
 	if contentTokens < softLimit {
 		gw.Logger.Debug("payload within soft limit, passing through",
 			"tokens", contentTokens, "soft_limit", softLimit)
-	} else if contentTokens <= hardLimit {
-		processed, needsUpdate = p.interceptSoftLimit(gw, ctx, textForInterception, profile.IsIDE)
+	} else if contentTokens <= actualHardLimit {
+		processed, needsUpdate := p.interceptSoftLimit(gw, ctx, textForInterception, profile.IsIDE)
+		if needsUpdate {
+			lastMsgNode["content"] = processed
+		}
 	} else {
-		processed, needsUpdate = p.interceptHardLimit(gw, ctx, textForInterception, messages, profile, softLimit, hardLimit, contentTokens)
+		processed, needsUpdate := p.interceptHardLimit(gw, ctx, textForInterception, messages, profile, softLimit, actualHardLimit, contentTokens)
+		if needsUpdate {
+			lastMsgNode["content"] = processed
+		}
 	}
 
-	if needsUpdate {
-		lastMsgNode["content"] = processed
-	}
 	return nil
 }
 

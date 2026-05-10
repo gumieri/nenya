@@ -93,3 +93,48 @@ func TruncateMiddleOutCodeAware(text string, maxSize int, cfg config.ContextConf
 
 	return before + sepMarker + after
 }
+
+// TruncateMiddleOutByTokens truncates text to fit within maxTokens
+// by using actual token count via CountTokens. Preserves the same
+// keep-first/keep-last percentages as TruncateMiddleOut but
+// counts tokens instead of runes for more precise truncation.
+func TruncateMiddleOutByTokens(text string, maxTokens int, countTokens func(string) int, cfg config.ContextConfig) string {
+	curTokens := countTokens(text)
+	if curTokens <= maxTokens {
+		return text
+	}
+
+	runes := []rune(text)
+	separator := "\n... [NENYA: MASSIVE PAYLOAD TRUNCATED] ...\n"
+	separatorRunes := []rune(separator)
+	separatorLen := len(separatorRunes)
+
+	availableRunes := maxTokens * 3
+	if availableRunes <= separatorLen {
+		return string(separatorRunes[:availableRunes])
+	}
+
+	available := availableRunes - separatorLen
+
+	keepFirst := int(float64(available) * cfg.TruncationKeepFirstPct / 100.0)
+	keepLast := int(float64(available) * cfg.TruncationKeepLastPct / 100.0)
+
+	if keepFirst+keepLast > available {
+		total := keepFirst + keepLast
+		keepFirst = keepFirst * available / total
+		keepLast = available - keepFirst
+	} else if keepFirst == 0 && keepLast > 0 {
+		keepFirst = 1
+		keepLast = available - 1
+	} else if keepLast == 0 && keepLast > 0 {
+		keepLast = 1
+		keepFirst = available - 1
+	}
+
+	result := make([]rune, 0, maxTokens)
+	result = append(result, runes[:keepFirst]...)
+	result = append(result, separatorRunes...)
+	result = append(result, runes[len(runes)-keepLast:]...)
+
+	return string(result)
+}

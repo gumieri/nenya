@@ -479,6 +479,14 @@ func (m *Metrics) RecordOllamaSummarizedBytes(n int) {
 	m.ollamaBytes.Add(uint64(n))
 }
 
+func (m *Metrics) RecordTrimmedRequest(model string, savedTokens int) {
+	if m == nil {
+		return
+	}
+	e := getOrCreateEntry(&m.interceptions, map[string]string{"model": model})
+	e.value.Add(1)
+}
+
 func (m *Metrics) RecordModelDiscovery(provider string, err error) {
 	if m == nil {
 		return

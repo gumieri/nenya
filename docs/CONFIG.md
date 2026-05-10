@@ -46,7 +46,7 @@ order). Config files support `//` line comments and `/* */` block comments.
 ## `context`
 
 Context management settings control how Nenya prepares the request payload before forwarding
-upstream. This includes truncation strategies and TF-IDF relevance scoring.
+upstream. This includes truncation strategies, TF-IDF relevance scoring, and token budget enforcement.
 
 ```json
 {
@@ -54,7 +54,8 @@ upstream. This includes truncation strategies and TF-IDF relevance scoring.
     "truncation_strategy": "middle-out",
     "truncation_keep_first_pct": 15,
     "truncation_keep_last_pct": 25,
-    "tfidf_query_source": ""
+    "tfidf_query_source": "",
+    "hard_limit_tokens": 0
   }
 }
 ```
@@ -65,6 +66,9 @@ upstream. This includes truncation strategies and TF-IDF relevance scoring.
 | `truncation_keep_first_pct` | float | `15` | First portion % to preserve during truncation |
 | `truncation_keep_last_pct` | float | `25` | Last portion % to preserve during truncation |
 | `tfidf_query_source` | string | `""` | TF-IDF query source: `""`, `"prior_messages"`, `"self"` |
+| `hard_limit_tokens` | int | `0` | Hard token limit before Bouncer interception. `0` (default) uses `softLimit × 2` (backward-compatible). Non-zero values replace the hard limit with a configurable absolute token budget. When exceeded, `TrimPayload` drops oldest non-system messages and truncates the next using `TruncateMiddleOutByTokens`. |
+
+**Token Counting Note**: Token counting uses a character-based heuristic (1 token ≈ 4 characters) for budget enforcement. The `TruncateMiddleOutByTokens` function operates on rune budgets using `maxTokens * 3`. For testing purposes, payloads use `len(s)` with the same heuristic. Real-world token counts may vary; this implementation provides deterministic budget enforcement. |
 
 ## `governance`
 

@@ -402,6 +402,7 @@ func (p *Proxy) prepareAndSend(gw *gateway.NenyaGateway,
 		ThoughtSigCache:    gw.ThoughtSigCache,
 		ExtractContentText: gateway.ExtractContentText,
 		Catalog:            gw.ModelCatalog,
+		CountTokens:        gw.CountTokens,
 	}
 	transformedBody, _, err := routing.TransformRequestForUpstream(transformDeps, target.Provider, target.URL, payload, target.Model, target.MaxOutput, target.Format)
 	if err != nil {
