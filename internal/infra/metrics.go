@@ -603,22 +603,8 @@ func (m *Metrics) WritePrometheus(w io.Writer) {
 	if m == nil {
 		return
 	}
-	fprintln := func(format string, args ...interface{}) {
-		_, _ = fmt.Fprintf(w, format+"\n", args...)
-	}
 
-	fprintln("# HELP nenya_build_info Nenya gateway build information.")
-	fprintln("# TYPE nenya_build_info gauge")
-	fprintln(`nenya_build_info{version="%s",go_version="%s"} 1`, version.Version, runtime.Version())
-
-	fprintln("# HELP nenya_uptime_seconds Gateway uptime in seconds.")
-	fprintln("# TYPE nenya_uptime_seconds gauge")
-	fprintln("nenya_uptime_seconds %g", time.Since(m.startTime).Seconds())
-
-	fprintln("# HELP nenya_go_goroutines Number of running goroutines.")
-	fprintln("# TYPE nenya_go_goroutines gauge")
-	fprintln("nenya_go_goroutines %d", runtime.NumGoroutine())
-
+	m.writeBuildMetrics(w)
 	m.writeCounterMap(w, "nenya_tokens_estimated_total",
 		"Estimated token usage by direction, model, agent, and provider.", &m.tokens)
 	m.writeCounterMap(w, "nenya_upstream_requests_total",
@@ -697,9 +683,7 @@ func (m *Metrics) WritePrometheus(w io.Writer) {
 		"Embedding generation duration in seconds.", &m.embeddingDuration)
 	m.writeCounterMap(w, "nenya_embedding_errors_total",
 		"Total embedding generation errors.", &m.embeddingErrors)
-	fprintln("# HELP nenya_semantic_cache_entries Current number of entries in semantic cache.")
-	fprintln("# TYPE nenya_semantic_cache_entries gauge")
-	fprintln("nenya_semantic_cache_entries %g", m.semanticCacheEntries.Load())
+	m.writeSemanticCacheGauge(w)
 	m.writeCounterMap(w, "nenya_overflow_guard_triggers_total",
 		"Total overflow guard triggers by location.", &m.overflowGuardTriggers)
 	m.writeCounterMap(w, "nenya_cb_state_transitions_total",
@@ -710,44 +694,9 @@ func (m *Metrics) WritePrometheus(w io.Writer) {
 	m.writeCounterAtomic(w, "nenya_mcp_active_goroutines",
 		"Current number of active MCP transport goroutines.", uint64(m.mcpActiveGoroutines.Load()))
 
-	if m.RateLimits != nil {
-		fprintln("# HELP nenya_ratelimit_rpm_available Current RPM bucket available.")
-		fprintln("# TYPE nenya_ratelimit_rpm_available gauge")
-		fprintln("# HELP nenya_ratelimit_tpm_available Current TPM bucket available.")
-		fprintln("# TYPE nenya_ratelimit_tpm_available gauge")
-		for host, rl := range m.RateLimits() {
-			fprintln(`nenya_ratelimit_rpm_available{host="%s"} %g`, host, rl.RPM)
-			fprintln(`nenya_ratelimit_tpm_available{host="%s"} %g`, host, rl.TPM)
-		}
-	}
-
-	if m.Cooldowns != nil {
-		active := m.Cooldowns()
-		fprintln("# HELP nenya_agent_active_cooldowns Number of currently active model cooldowns.")
-		fprintln("# TYPE nenya_agent_active_cooldowns gauge")
-		fprintln("nenya_agent_active_cooldowns %d", active)
-	}
-
-	if m.CBStates != nil {
-		fprintln("# HELP nenya_cb_state Circuit breaker state per model key.")
-		fprintln("# TYPE nenya_cb_state gauge")
-		states := m.CBStates()
-		keys := make([]string, 0, len(states))
-		for k := range states {
-			keys = append(keys, k)
-		}
-		sort.Strings(keys)
-		for _, key := range keys {
-			stateVal := 0
-			switch states[key] {
-			case "open":
-				stateVal = 1
-			case "half_open":
-				stateVal = 2
-			}
-			fprintln(`nenya_cb_state{key="%s",state="%s"} %d`, key, states[key], stateVal)
-		}
-	}
+	m.writeRateLimitMetrics(w)
+	m.writeCooldownMetrics(w)
+	m.writeCBStateMetrics(w)
 }
 
 func (m *Metrics) writeCounterMap(w io.Writer, name, help string, mmap *sync.Map) {
@@ -808,6 +757,100 @@ func (m *Metrics) writeHistogramMap(w io.Writer, name, help string, mmap *sync.M
 		_, _ = fmt.Fprintf(w, "%s_bucket%s,le=\"+Inf\"} %d\n", name, labelSuffix, h.count.Load())
 		_, _ = fmt.Fprintf(w, "%s_sum%s %g\n", name, ls, float64(h.sumNS.Load())/1e9)
 		_, _ = fmt.Fprintf(w, "%s_count%s %d\n", name, ls, h.count.Load())
+	}
+}
+
+func (m *Metrics) writeBuildMetrics(w io.Writer) {
+	fprintln := func(format string, args ...interface{}) {
+		_, _ = fmt.Fprintf(w, format+"\n", args...)
+	}
+
+	fprintln("# HELP nenya_build_info Nenya gateway build information.")
+	fprintln("# TYPE nenya_build_info gauge")
+	fprintln(`nenya_build_info{version="%s",go_version="%s"} 1`, version.Version, runtime.Version())
+
+	fprintln("# HELP nenya_uptime_seconds Gateway uptime in seconds.")
+	fprintln("# TYPE nenya_uptime_seconds gauge")
+	fprintln("nenya_uptime_seconds %g", time.Since(m.startTime).Seconds())
+
+	fprintln("# HELP nenya_go_goroutines Number of running goroutines.")
+	fprintln("# TYPE nenya_go_goroutines gauge")
+	fprintln("nenya_go_goroutines %d", runtime.NumGoroutine())
+}
+
+func (m *Metrics) writeSemanticCacheGauge(w io.Writer) {
+	fprintln := func(format string, args ...interface{}) {
+		_, _ = fmt.Fprintf(w, format+"\n", args...)
+	}
+
+	fprintln("# HELP nenya_semantic_cache_entries Current number of entries in semantic cache.")
+	fprintln("# TYPE nenya_semantic_cache_entries gauge")
+	fprintln("nenya_semantic_cache_entries %g", m.semanticCacheEntries.Load())
+}
+
+func (m *Metrics) writeRateLimitMetrics(w io.Writer) {
+	if m.RateLimits == nil {
+		return
+	}
+
+	fprintln := func(format string, args ...interface{}) {
+		_, _ = fmt.Fprintf(w, format+"\n", args...)
+	}
+
+	fprintln("# HELP nenya_ratelimit_rpm_available Current RPM bucket available.")
+	fprintln("# TYPE nenya_ratelimit_rpm_available gauge")
+	fprintln("# HELP nenya_ratelimit_tpm_available Current TPM bucket available.")
+	fprintln("# TYPE nenya_ratelimit_tpm_available gauge")
+
+	for host, rl := range m.RateLimits() {
+		fprintln(`nenya_ratelimit_rpm_available{host="%s"} %g`, host, rl.RPM)
+		fprintln(`nenya_ratelimit_tpm_available{host="%s"} %g`, host, rl.TPM)
+	}
+}
+
+func (m *Metrics) writeCooldownMetrics(w io.Writer) {
+	if m.Cooldowns == nil {
+		return
+	}
+
+	fprintln := func(format string, args ...interface{}) {
+		_, _ = fmt.Fprintf(w, format+"\n", args...)
+	}
+
+	active := m.Cooldowns()
+	fprintln("# HELP nenya_agent_active_cooldowns Number of currently active model cooldowns.")
+	fprintln("# TYPE nenya_agent_active_cooldowns gauge")
+	fprintln("nenya_agent_active_cooldowns %d", active)
+}
+
+func (m *Metrics) writeCBStateMetrics(w io.Writer) {
+	if m.CBStates == nil {
+		return
+	}
+
+	fprintln := func(format string, args ...interface{}) {
+		_, _ = fmt.Fprintf(w, format+"\n", args...)
+	}
+
+	fprintln("# HELP nenya_cb_state Circuit breaker state per model key.")
+	fprintln("# TYPE nenya_cb_state gauge")
+
+	states := m.CBStates()
+	keys := make([]string, 0, len(states))
+	for k := range states {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+
+	for _, key := range keys {
+		stateVal := 0
+		switch states[key] {
+		case "open":
+			stateVal = 1
+		case "half_open":
+			stateVal = 2
+		}
+		fprintln(`nenya_cb_state{key="%s",state="%s"} %d`, key, states[key], stateVal)
 	}
 }
 
