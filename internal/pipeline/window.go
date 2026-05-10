@@ -1,3 +1,21 @@
+// Package pipeline implements content processing pipelines for incoming requests,
+// including message compaction, secret redaction, and window summarization.
+//
+// The window compaction feature reduces conversation history size when approaching
+// context limits by:
+// - Detecting when message count exceeds threshold (configurable trigger ratio)
+// - Compacting older messages via summarization, truncation, or TF-IDF relevance filtering
+// - Keeping recent messages intact for conversation continuity
+//
+// Compaction modes (configurable via governance.window.mode):
+// - "summarize": Engine-based summarization using Ollama or configured agent
+// - "truncate": Simple truncation keeping first N% and last M% of history
+// - "tfidf": Relevance scoring against recent user query, keeping only relevant blocks
+//
+// Window compaction is applied when:
+// 1. Total message count > window.max_context * window.trigger_ratio
+// 2. At least window.active_messages are preserved (default 2)
+// 3. Configured governance.window.enabled == true
 package pipeline
 
 import (
