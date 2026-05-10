@@ -168,7 +168,7 @@ func (rl *retryLoop) handleActionResult(i int, target routing.UpstreamTarget, ac
 		}
 		return false
 	case actionStream:
-		result := rl.p.streamResponse(rl.gw, rl.w, rl.r, target, rl.opts.AgentName, action, rl.opts.CacheKey, rl.opts.Cooldown)
+		result := rl.p.streamResponse(rl.gw, rl.w, rl.r, target, rl.opts.AgentName, action, rl.opts.CacheKey, rl.opts.Cooldown, rl.opts.Payload)
 		if result.empty {
 			rl.ctxLogger.Warn("empty stream from upstream, trying next target",
 				"model", target.Model, "provider", target.Provider)

@@ -278,7 +278,7 @@ func copyStream(ctx context.Context, dst io.Writer, src io.Reader, buf []byte) (
 
 // streamResponse handles streaming responses from upstream providers.
 // It sets up SSE transformation, monitors for stalls, and streams the response to the client.
-func (p *Proxy) streamResponse(gw *gateway.NenyaGateway, w http.ResponseWriter, r *http.Request, target routing.UpstreamTarget, agentName string, action upstreamAction, cacheKey string, cooldownDuration time.Duration) streamResult {
+func (p *Proxy) streamResponse(gw *gateway.NenyaGateway, w http.ResponseWriter, r *http.Request, target routing.UpstreamTarget, agentName string, action upstreamAction, cacheKey string, cooldownDuration time.Duration, payload map[string]any) streamResult {
 	defer action.cancel()
 
 	// When EmptyStreamAsError is enabled, probe the upstream body before writing
@@ -323,7 +323,7 @@ func (p *Proxy) streamResponse(gw *gateway.NenyaGateway, w http.ResponseWriter, 
 
 	_, copyErr := copyStream(r.Context(), dst, transformingReader, *buf)
 
-	return p.handleStreamCompletion(gw, w, target, agentName, action, cacheKey, cooldownDuration, buf, copyErr, captureBuf, tee, contentBuilder, stallR)
+	return p.handleStreamCompletion(gw, w, target, agentName, action, cacheKey, cooldownDuration, payload, buf, copyErr, captureBuf, tee, contentBuilder, stallR)
 }
 
 // setupTransformingReader creates and configures the SSE transforming reader, content builder, and stall reader.
@@ -475,11 +475,11 @@ func (p *Proxy) setupStreamWriter(gw *gateway.NenyaGateway, flushWriter *immedia
 
 // handleStreamCompletion handles completion of a stream and returns a streamResult.
 // Returns empty=true when the stream should be retried with the next target.
-func (p *Proxy) handleStreamCompletion(gw *gateway.NenyaGateway, w http.ResponseWriter, target routing.UpstreamTarget, agentName string, action upstreamAction, cacheKey string, cooldownDuration time.Duration, buf *[]byte, copyErr error, captureBuf *bytes.Buffer, tee *sseTeeWriter, contentBuilder *contentBuilder, stallR *stallReader) streamResult {
-	return p.handleStreamDone(gw, w, target, agentName, action, cacheKey, cooldownDuration, buf, copyErr, captureBuf, tee, contentBuilder, stallR)
+func (p *Proxy) handleStreamCompletion(gw *gateway.NenyaGateway, w http.ResponseWriter, target routing.UpstreamTarget, agentName string, action upstreamAction, cacheKey string, cooldownDuration time.Duration, payload map[string]any, buf *[]byte, copyErr error, captureBuf *bytes.Buffer, tee *sseTeeWriter, contentBuilder *contentBuilder, stallR *stallReader) streamResult {
+	return p.handleStreamDone(gw, w, target, agentName, action, cacheKey, cooldownDuration, payload, buf, copyErr, captureBuf, tee, contentBuilder, stallR)
 }
 
-func (p *Proxy) handleStreamDone(gw *gateway.NenyaGateway, w http.ResponseWriter, target routing.UpstreamTarget, agentName string, action upstreamAction, cacheKey string, cooldownDuration time.Duration, buf *[]byte, copyErr error, captureBuf *bytes.Buffer, tee *sseTeeWriter, contentBuilder *contentBuilder, stallR *stallReader) streamResult {
+func (p *Proxy) handleStreamDone(gw *gateway.NenyaGateway, w http.ResponseWriter, target routing.UpstreamTarget, agentName string, action upstreamAction, cacheKey string, cooldownDuration time.Duration, payload map[string]any, buf *[]byte, copyErr error, captureBuf *bytes.Buffer, tee *sseTeeWriter, contentBuilder *contentBuilder, stallR *stallReader) streamResult {
 	streamingBufPool.Put(buf)
 
 	if errors.Is(copyErr, stream.ErrStreamBlocked) {
@@ -516,7 +516,7 @@ func (p *Proxy) handleStreamDone(gw *gateway.NenyaGateway, w http.ResponseWriter
 	recordStreamResult(gw, target, agentName, cooldownDuration, copyErr)
 
 	if copyErr == nil {
-		storeStreamCache(gw, cacheKey, captureBuf, tee)
+		storeStreamCache(gw, cacheKey, captureBuf, tee, payload)
 		p.asyncMCPAutoSave(gw, agentName, contentBuilder)
 		return streamResult{}
 	}
@@ -541,12 +541,91 @@ func recordStreamResult(gw *gateway.NenyaGateway, target routing.UpstreamTarget,
 	}
 }
 
-func storeStreamCache(gw *gateway.NenyaGateway, cacheKey string, captureBuf *bytes.Buffer, tee *sseTeeWriter) {
+func storeStreamCache(gw *gateway.NenyaGateway, cacheKey string, captureBuf *bytes.Buffer, tee *sseTeeWriter, payload map[string]any) {
 	if cacheKey == "" || gw.ResponseCache == nil || tee == nil || tee.exceeded || captureBuf.Len() <= 0 {
 		return
 	}
-	gw.ResponseCache.Store(cacheKey, captureBuf.Bytes())
-	gw.Logger.Debug("response cache stored", "model", captureBuf.Len())
+
+	var embedding []float32
+	if gw.Config.ResponseCache.EnableSemantic && payload != nil {
+		embedding = computeEmbedding(gw, payload)
+	}
+
+	gw.ResponseCache.Store(cacheKey, captureBuf.Bytes(), embedding)
+	gw.Logger.Debug("response cache stored", "size", captureBuf.Len(), "has_embedding", embedding != nil)
+}
+
+func computeEmbedding(gw *gateway.NenyaGateway, payload map[string]any) []float32 {
+	if !gw.Config.ResponseCache.EnableSemantic {
+		return nil
+	}
+
+	text := extractUserTextForEmbedding(payload)
+	if text == "" {
+		return nil
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	start := time.Now()
+	embedding, err := gw.Embedder.Embed(ctx, text)
+	duration := time.Since(start)
+
+	if gw.Metrics != nil {
+		gw.Metrics.RecordEmbeddingDuration(duration)
+		if err != nil {
+			gw.Metrics.RecordEmbeddingError()
+		}
+	}
+
+	if err != nil {
+		gw.Logger.Debug("failed to compute embedding for cache store", "error", err)
+		return nil
+	}
+	return embedding
+}
+
+func extractUserTextForEmbedding(payload map[string]any) string {
+	const maxEmbeddingTextLen = 10000
+
+	messagesRaw, ok := payload["messages"]
+	if !ok {
+		return ""
+	}
+	messages, ok := messagesRaw.([]any)
+	if !ok || len(messages) == 0 {
+		return ""
+	}
+
+	var userMsgs strings.Builder
+	estimatedLen := len(messages) * 100
+	if estimatedLen > maxEmbeddingTextLen {
+		estimatedLen = maxEmbeddingTextLen
+	}
+	userMsgs.Grow(estimatedLen)
+
+	for _, m := range messages {
+		msg, ok := m.(map[string]any)
+		if !ok {
+			continue
+		}
+		role, ok := msg["role"].(string)
+		if !ok || role != "user" {
+			continue
+		}
+		content, ok := msg["content"].(string)
+		if !ok {
+			continue
+		}
+		if userMsgs.Len()+len(content) > maxEmbeddingTextLen {
+			break
+		}
+		userMsgs.WriteString(content)
+		userMsgs.WriteString("\n")
+	}
+
+	return userMsgs.String()
 }
 
 // writeBlockedSSE sends a blocked response SSE stream to the client.

@@ -42,7 +42,7 @@ func TrimPayload(logger *slog.Logger, payload map[string]interface{}, maxTokens 
 			remaining := maxTokens - keptTokens
 			truncated := truncateMessageByTokens(msgRaw, remaining, countTokens, cfg)
 			kept = append(kept, truncated)
-			keptTokens = keptTokens + tokenForMessage(truncated, countTokens)
+			keptTokens += tokenForMessage(truncated, countTokens) //nolint:ineffassign // intentional: updates token count for consistency
 			if logger != nil {
 				logger.Info("truncated single message to fit budget",
 					"original_tokens", msgTokens,
@@ -102,10 +102,10 @@ func partitionByRole(messages []interface{}) (system, nonSystem []interface{}) {
 			nonSystem = append(nonSystem, msgRaw)
 			continue
 		}
-			role, ok := msg["role"].(string)
+		role, ok := msg["role"].(string)
 		if !ok || role != "system" {
 			nonSystem = append(nonSystem, msgRaw)
-		continue
+			continue
 		}
 		system = append(system, msgRaw)
 	}
