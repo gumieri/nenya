@@ -174,3 +174,46 @@ func assertCompactionBool(t *testing.T, got *bool, want bool, name string) {
 		t.Errorf("%s: got %v, want %v", name, *got, want)
 	}
 }
+
+func TestContextHardLimitDefaults(t *testing.T) {
+	raw := `{}`
+	var cfg Config
+	if err := json.Unmarshal([]byte(raw), &cfg); err != nil {
+		t.Fatal(err)
+	}
+	if err := ApplyDefaults(&cfg); err != nil {
+		t.Fatal(err)
+	}
+	// HardLimitTokens should default to 0 (backward compat)
+	if cfg.Context.HardLimitTokens != 0 {
+		t.Errorf("expected HardLimitTokens=0, got %d", cfg.Context.HardLimitTokens)
+	}
+}
+
+func TestContextHardLimitCustom(t *testing.T) {
+	raw := `{"context": {"hard_limit_tokens": 4000}}`
+	var cfg Config
+	if err := json.Unmarshal([]byte(raw), &cfg); err != nil {
+		t.Fatal(err)
+	}
+	if err := ApplyDefaults(&cfg); err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Context.HardLimitTokens != 4000 {
+		t.Errorf("expected HardLimitTokens=4000, got %d", cfg.Context.HardLimitTokens)
+	}
+}
+
+func TestNegativeHardLimitNormalized(t *testing.T) {
+	raw := `{"context": {"hard_limit_tokens": -100}}`
+	var cfg Config
+	if err := json.Unmarshal([]byte(raw), &cfg); err != nil {
+		t.Fatal(err)
+	}
+	if err := ApplyDefaults(&cfg); err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Context.HardLimitTokens != 0 {
+		t.Errorf("expected HardLimitTokens=0 (negative normalized), got %d", cfg.Context.HardLimitTokens)
+	}
+}

@@ -12,6 +12,7 @@ import (
 	"nenya/internal/adapter"
 	"nenya/internal/discovery"
 	"nenya/internal/infra"
+	"nenya/internal/pipeline"
 	providerpkg "nenya/internal/providers"
 )
 
@@ -24,6 +25,7 @@ type TransformDeps struct {
 	ThoughtSigCache    *infra.ThoughtSignatureCache
 	ExtractContentText func(msg map[string]interface{}) string
 	Catalog            *discovery.ModelCatalog
+	CountTokens        func(string) int
 }
 
 // Deprecated: Use InjectAPIKeyWithGateway instead. This function accesses
@@ -267,6 +269,14 @@ func TransformRequestForUpstream(deps TransformDeps, providerName, upstreamURL s
 
 	effectiveMaxOutput := resolveEffectiveMaxOutput(deps, finalModel, maxOutput)
 	applyMaxTokens(payload, effectiveMaxOutput)
+
+	if deps.CountTokens != nil && effectiveMaxOutput > 0 {
+		modified, _ := pipeline.TrimPayload(deps.Logger, payload, effectiveMaxOutput, deps.CountTokens, deps.Config.Context)
+		if modified {
+			deps.Logger.Info("payload trimmed to fit token budget",
+				"effective_max_output", effectiveMaxOutput)
+		}
+	}
 
 	if format == "anthropic" {
 		stream := false

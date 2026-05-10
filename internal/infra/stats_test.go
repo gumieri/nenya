@@ -1,9 +1,42 @@
 package infra
 
 import (
+	"encoding/json"
 	"sync"
 	"testing"
 )
+
+func TestTokenSnapshot_JSON(t *testing.T) {
+	snap := TokenSnapshot{
+		InputTokens:  100,
+		OutputTokens: 50,
+		TotalTokens:  150,
+	}
+	data, err := json.Marshal(snap)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var decoded TokenSnapshot
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		t.Fatal(err)
+	}
+	if decoded.InputTokens != 100 {
+		t.Errorf("expected InputTokens=100, got %d", decoded.InputTokens)
+	}
+	if decoded.OutputTokens != 50 {
+		t.Errorf("expected OutputTokens=50, got %d", decoded.OutputTokens)
+	}
+	if decoded.TotalTokens != 150 {
+		t.Errorf("expected TotalTokens=150, got %d", decoded.TotalTokens)
+	}
+}
+
+func TestTokenSnapshot_ZeroValues(t *testing.T) {
+	snap := TokenSnapshot{}
+	if snap.InputTokens != 0 || snap.OutputTokens != 0 || snap.TotalTokens != 0 {
+		t.Error("expected all zero values")
+	}
+}
 
 func TestUsageTracker_RecordRequest(t *testing.T) {
 	u := NewUsageTracker()

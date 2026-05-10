@@ -6,6 +6,14 @@ import (
 	"time"
 )
 
+// TokenSnapshot holds per-request token usage statistics.
+// It captures input, output, and total token counts for a single request.
+type TokenSnapshot struct {
+	InputTokens  int `json:"input_tokens"`
+	OutputTokens int `json:"output_tokens"`
+	TotalTokens  int `json:"total_tokens"`
+}
+
 type modelStats struct {
 	Requests        uint64 `json:"requests"`
 	InputTokens     uint64 `json:"input_tokens"`

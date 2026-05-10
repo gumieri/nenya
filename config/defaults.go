@@ -143,6 +143,11 @@ func applyContextDefaults(cfg *Config) {
 	if cfg.Context.TruncationKeepLastPct == 0 {
 		cfg.Context.TruncationKeepLastPct = 25.0
 	}
+	// HardLimitTokens defaults to 0 (backward-compat softLimit*2)
+	// If 0, interceptContent uses softLimit * 2 as hard limit.
+	if cfg.Context.HardLimitTokens < 0 {
+		cfg.Context.HardLimitTokens = 0
+	}
 }
 
 func applyGovernanceDefaults(cfg *Config) {
