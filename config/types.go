@@ -546,12 +546,16 @@ func (d *DiscoveryConfig) AutoAgentsWasSet() bool { return wasSet(d.AutoAgents) 
 // ResponseCacheConfig controls the upstream response cache: max entries,
 // entry size, TTL, eviction interval, and the force-refresh header name.
 type ResponseCacheConfig struct {
-	Enabled            *bool  `json:"enabled,omitempty"`
-	MaxEntries         int    `json:"max_entries"`
-	MaxEntryBytes      int64  `json:"max_entry_bytes"`
-	TTLSeconds         int    `json:"ttl_seconds"`
-	EvictEverySeconds  int    `json:"evict_every_seconds"`
-	ForceRefreshHeader string `json:"force_refresh_header"`
+	Enabled             *bool   `json:"enabled,omitempty"`
+	MaxEntries          int     `json:"max_entries"`
+	MaxEntryBytes       int64   `json:"max_entry_bytes"`
+	TTLSeconds          int     `json:"ttl_seconds"`
+	EvictEverySeconds   int     `json:"evict_every_seconds"`
+	ForceRefreshHeader  string  `json:"force_refresh_header"`
+	EnableSemantic      bool    `json:"enable_semantic,omitempty"`
+	SimilarityThreshold float64 `json:"similarity_threshold,omitempty"`
+	EmbeddingModel      string  `json:"embedding_model,omitempty"`
+	EmbeddingURL        string  `json:"embedding_url,omitempty"`
 }
 
 func (c *ResponseCacheConfig) EnabledWasSet() bool { return wasSet(c.Enabled) }

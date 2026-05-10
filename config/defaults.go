@@ -386,7 +386,7 @@ func applyResponseCacheDefaults(cfg *Config) {
 		return
 	}
 	if cfg.ResponseCache.MaxEntries <= 0 {
-		cfg.ResponseCache.MaxEntries = 512
+		cfg.ResponseCache.MaxEntries = 256
 	}
 	if cfg.ResponseCache.MaxEntryBytes <= 0 {
 		cfg.ResponseCache.MaxEntryBytes = 1 << 20
@@ -399,6 +399,22 @@ func applyResponseCacheDefaults(cfg *Config) {
 	}
 	if cfg.ResponseCache.ForceRefreshHeader == "" {
 		cfg.ResponseCache.ForceRefreshHeader = "x-nenya-cache-force-refresh"
+	}
+	applyResponseCacheSemanticDefaults(cfg)
+}
+
+func applyResponseCacheSemanticDefaults(cfg *Config) {
+	if !cfg.ResponseCache.EnableSemantic {
+		return
+	}
+	if cfg.ResponseCache.SimilarityThreshold <= 0 {
+		cfg.ResponseCache.SimilarityThreshold = 0.9
+	}
+	if cfg.ResponseCache.EmbeddingModel == "" {
+		cfg.ResponseCache.EmbeddingModel = "mxbai-embed-large"
+	}
+	if cfg.ResponseCache.EmbeddingURL == "" {
+		cfg.ResponseCache.EmbeddingURL = "http://localhost:11434"
 	}
 }
 

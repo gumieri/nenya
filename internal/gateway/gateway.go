@@ -42,6 +42,7 @@ type NenyaGateway struct {
 	AgentState        *routing.AgentState
 	ThoughtSigCache   *infra.ThoughtSignatureCache
 	ResponseCache     *infra.ResponseCache
+	Embedder          infra.EmbeddingProvider
 	MCPClients        map[string]*mcp.Client
 	MCPToolIndex      *mcp.ToolRegistry
 	ModelCatalog      *discovery.ModelCatalog
@@ -83,6 +84,10 @@ func New(ctx context.Context, cfg config.Config, secrets *config.SecretsConfig, 
 	gw.Metrics.RateLimits = gw.RateLimiter.Snapshot
 	gw.Metrics.Cooldowns = gw.AgentState.ActiveCooldowns
 	gw.Metrics.CBStates = gw.AgentState.CBSnapshot
+
+	if gw.ResponseCache != nil {
+		gw.Embedder = gw.ResponseCache.GetEmbedder()
+	}
 
 	gw.buildMCPToolIndex(ctx, logger)
 
@@ -297,6 +302,7 @@ func buildGateway(cfg config.Config, secrets *config.SecretsConfig, secureClient
 		AgentState:        nil,
 		ThoughtSigCache:   infra.NewThoughtSignatureCache(1000, 30*time.Minute),
 		ResponseCache:     newResponseCache(cfg, logger, metrics),
+		Embedder:          nil,
 		MCPClients:        buildMCPClients(cfg, logger),
 		MCPToolIndex:      mcp.NewToolRegistry(),
 		ModelCatalog:      mergedCatalog,
@@ -558,18 +564,34 @@ func newResponseCache(cfg config.Config, logger *slog.Logger, metrics *infra.Met
 		return nil
 	}
 	rc := cfg.ResponseCache
+
+	var embedder infra.EmbeddingProvider
+	if rc.EnableSemantic {
+		// Create an HTTP client with a reasonable timeout for embedding requests.
+		embedder = infra.NewOllamaEmbedder(&http.Client{
+			Timeout: 10 * time.Second,
+		}, rc.EmbeddingModel, rc.EmbeddingURL)
+	}
+
 	cache := infra.NewResponseCache(
 		rc.MaxEntries,
 		rc.MaxEntryBytes,
 		time.Duration(rc.TTLSeconds)*time.Second,
 		time.Duration(rc.EvictEverySeconds)*time.Second,
 		metrics,
+		rc.EnableSemantic,
+		rc.SimilarityThreshold,
+		embedder,
 	)
 	logger.Info("response cache enabled",
 		"max_entries", rc.MaxEntries,
 		"max_entry_bytes", rc.MaxEntryBytes,
 		"ttl_seconds", rc.TTLSeconds,
-		"evict_every_seconds", rc.EvictEverySeconds)
+		"evict_every_seconds", rc.EvictEverySeconds,
+		"semantic_enabled", rc.EnableSemantic,
+		"similarity_threshold", rc.SimilarityThreshold,
+		"embedding_model", rc.EmbeddingModel,
+		"embedding_url", rc.EmbeddingURL)
 
 	return cache
 }

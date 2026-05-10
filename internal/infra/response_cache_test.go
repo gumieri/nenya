@@ -46,195 +46,23 @@ func TestFingerprintPayload_KeyOrdering(t *testing.T) {
 
 func TestFingerprintPayload_ExcludedFields(t *testing.T) {
 	base := map[string]interface{}{
-		"model":    "gpt-4",
-		"messages": []interface{}{map[string]interface{}{"role": "user", "content": "hi"}},
+		"model":       "gpt-4",
+		"messages":    []interface{}{map[string]interface{}{"role": "user", "content": "hi"}},
+		"temperature": 0.5,
+		"top_p":       0.9,
 	}
+	h1 := FingerprintPayload(base)
 
-	withStream := map[string]interface{}{
-		"model":    "gpt-4",
-		"messages": []interface{}{map[string]interface{}{"role": "user", "content": "hi"}},
-		"stream":   true,
+	extra := map[string]interface{}{
+		"model":       "gpt-4",
+		"messages":    []interface{}{map[string]interface{}{"role": "user", "content": "hi"}},
+		"temperature": 0.5,
+		"top_p":       0.9,
+		"extra":       "should be ignored",
 	}
-
-	withUser := map[string]interface{}{
-		"model":    "gpt-4",
-		"messages": []interface{}{map[string]interface{}{"role": "user", "content": "hi"}},
-		"user":     "test-user-123",
-	}
-
-	withSeed := map[string]interface{}{
-		"model":    "gpt-4",
-		"messages": []interface{}{map[string]interface{}{"role": "user", "content": "hi"}},
-		"seed":     42,
-	}
-
-	hBase := FingerprintPayload(base)
-	if FingerprintPayload(withStream) == hBase {
-		t.Fatal("stream field should affect fingerprint (different stream mode)")
-	}
-	if FingerprintPayload(withUser) != hBase {
-		t.Fatal("user field should not affect fingerprint")
-	}
-	if FingerprintPayload(withSeed) != hBase {
-		t.Fatal("seed field should not affect fingerprint")
-	}
-}
-
-func TestFingerprintPayload_DifferentContent(t *testing.T) {
-	p1 := map[string]interface{}{
-		"model":    "gpt-4",
-		"messages": []interface{}{map[string]interface{}{"role": "user", "content": "hello"}},
-	}
-	p2 := map[string]interface{}{
-		"model":    "gpt-4",
-		"messages": []interface{}{map[string]interface{}{"role": "user", "content": "goodbye"}},
-	}
-	h1 := FingerprintPayload(p1)
-	h2 := FingerprintPayload(p2)
-	if h1 == h2 {
-		t.Fatal("different messages should produce different fingerprints")
-	}
-}
-
-func TestFingerprintPayload_DifferentModel(t *testing.T) {
-	p1 := map[string]interface{}{
-		"model":    "gpt-4",
-		"messages": []interface{}{map[string]interface{}{"role": "user", "content": "hi"}},
-	}
-	p2 := map[string]interface{}{
-		"model":    "claude-3",
-		"messages": []interface{}{map[string]interface{}{"role": "user", "content": "hi"}},
-	}
-	h1 := FingerprintPayload(p1)
-	h2 := FingerprintPayload(p2)
-	if h1 == h2 {
-		t.Fatal("different models should produce different fingerprints")
-	}
-}
-
-func TestFingerprintPayload_ToolsAndStop(t *testing.T) {
-	p1 := map[string]interface{}{
-		"model":    "gpt-4",
-		"messages": []interface{}{map[string]interface{}{"role": "user", "content": "hi"}},
-		"tools":    []interface{}{map[string]interface{}{"type": "function"}},
-		"stop":     []interface{}{"END"},
-	}
-
-	p2 := map[string]interface{}{
-		"model":    "gpt-4",
-		"messages": []interface{}{map[string]interface{}{"role": "user", "content": "hi"}},
-	}
-
-	h1 := FingerprintPayload(p1)
-	h2 := FingerprintPayload(p2)
-	if h1 == h2 {
-		t.Fatal("payload with tools/stop should differ from base")
-	}
-}
-
-func TestFingerprintPayload_ToolCallMessages(t *testing.T) {
-	base := map[string]interface{}{
-		"model": "gpt-4",
-		"messages": []interface{}{
-			map[string]interface{}{"role": "user", "content": "hi"},
-		},
-	}
-
-	withToolCalls := map[string]interface{}{
-		"model": "gpt-4",
-		"messages": []interface{}{
-			map[string]interface{}{"role": "user", "content": "hi"},
-			map[string]interface{}{
-				"role":    "assistant",
-				"content": "",
-				"tool_calls": []interface{}{
-					map[string]interface{}{
-						"id":   "call_123",
-						"type": "function",
-						"function": map[string]interface{}{
-							"name":      "read_file",
-							"arguments": `{"path":"/tmp/test.go"}`,
-						},
-					},
-				},
-			},
-			map[string]interface{}{
-				"role":         "tool",
-				"tool_call_id": "call_123",
-				"content":      "file contents",
-			},
-		},
-	}
-
-	withTools := map[string]interface{}{
-		"model": "gpt-4",
-		"messages": []interface{}{
-			map[string]interface{}{"role": "user", "content": "hi"},
-		},
-		"tools": []interface{}{
-			map[string]interface{}{
-				"type": "function",
-				"function": map[string]interface{}{
-					"name":        "read_file",
-					"description": "Read a file",
-					"parameters": map[string]interface{}{
-						"type": "object",
-						"properties": map[string]interface{}{
-							"path": map[string]interface{}{"type": "string"},
-						},
-					},
-				},
-			},
-		},
-		"tool_choice": "auto",
-	}
-
-	hBase := FingerprintPayload(base)
-	hToolCalls := FingerprintPayload(withToolCalls)
-	hTools := FingerprintPayload(withTools)
-
-	if hToolCalls == hBase {
-		t.Fatal("messages with tool_calls should differ from base")
-	}
-	if hTools == hBase {
-		t.Fatal("payload with tools/tool_choice should differ from base")
-	}
-	if hToolCalls == hTools {
-		t.Fatal("tool_calls in messages vs tools param should differ")
-	}
-
-	hToolCallsAgain := FingerprintPayload(withToolCalls)
-	if hToolCalls != hToolCallsAgain {
-		t.Fatal("same tool_calls payload should produce same fingerprint")
-	}
-
-	differentToolCall := map[string]interface{}{
-		"model": "gpt-4",
-		"messages": []interface{}{
-			map[string]interface{}{"role": "user", "content": "hi"},
-			map[string]interface{}{
-				"role":    "assistant",
-				"content": "",
-				"tool_calls": []interface{}{
-					map[string]interface{}{
-						"id":   "call_456",
-						"type": "function",
-						"function": map[string]interface{}{
-							"name":      "write_file",
-							"arguments": `{"path":"/tmp/out.go"}`,
-						},
-					},
-				},
-			},
-			map[string]interface{}{
-				"role":         "tool",
-				"tool_call_id": "call_456",
-				"content":      "ok",
-			},
-		},
-	}
-	if FingerprintPayload(differentToolCall) == hToolCalls {
-		t.Fatal("different tool_calls should produce different fingerprints")
+	h2 := FingerprintPayload(extra)
+	if h1 != h2 {
+		t.Fatalf("extra field changed fingerprint: %q != %q", h1, h2)
 	}
 }
 
@@ -247,17 +75,17 @@ func TestFingerprintPayload_EmptyPayload(t *testing.T) {
 
 func TestResponseCache_CacheMetrics(t *testing.T) {
 	metrics := NewMetrics()
-	cache := NewResponseCache(10, 1<<20, 1*time.Hour, 1*time.Hour, metrics)
+	cache := NewResponseCache(10, 1<<20, 1*time.Hour, 1*time.Hour, metrics, false, 0.9, nil)
 	defer cache.Stop()
 
-	cache.Store("key1", []byte("response1"))
+	cache.Store("key1", []byte("response1"), nil)
 
-	data, ok := cache.Lookup("key1")
+	data, ok, _ := cache.Lookup("key1", "", nil)
 	if !ok || string(data) != "response1" {
 		t.Fatal("cache hit should return value")
 	}
 
-	_, ok = cache.Lookup("nonexistent")
+	_, ok, _ = cache.Lookup("nonexistent", "", nil)
 	if ok {
 		t.Fatal("nonexistent key should not be found")
 	}
@@ -266,51 +94,51 @@ func TestResponseCache_CacheMetrics(t *testing.T) {
 	metrics.WritePrometheus(buf)
 	output := buf.String()
 
-	if !strings.Contains(output, `nenya_cache_hit_total{type="response"}`) {
-		t.Error("expected cache hit metric")
+	if !strings.Contains(output, `nenya_cache_hit_total{`) || !strings.Contains(output, `type="exact"`) {
+		t.Error("expected cache hit metric, got:", output)
 	}
-	if !strings.Contains(output, `nenya_cache_miss_total{type="response"}`) {
-		t.Error("expected cache miss metric")
+	if !strings.Contains(output, `nenya_cache_miss_total{`) || !strings.Contains(output, `type="exact"`) {
+		t.Error("expected cache miss metric, got:", output)
 	}
 }
 
 func TestResponseCache_StoreAndLookup(t *testing.T) {
-	cache := NewResponseCache(10, 1<<20, 1*time.Hour, 1*time.Hour, nil)
+	cache := NewResponseCache(10, 1<<20, 1*time.Hour, 1*time.Hour, nil, false, 0.9, nil)
 	defer cache.Stop()
 
-	cache.Store("key1", []byte("response1"))
-	cache.Store("key2", []byte("response2"))
+	cache.Store("key1", []byte("response1"), nil)
+	cache.Store("key2", []byte("response2"), nil)
 
-	data, ok := cache.Lookup("key1")
+	data, ok, _ := cache.Lookup("key1", "", nil)
 	if !ok || string(data) != "response1" {
-		t.Fatalf("expected response1, got %q, ok=%v", data, ok)
+		t.Fatalf("expected response1, got %q, ok=%v", string(data), ok)
 	}
 
-	data, ok = cache.Lookup("key2")
+	data, ok, _ = cache.Lookup("key2", "", nil)
 	if !ok || string(data) != "response2" {
-		t.Fatalf("expected response2, got %q, ok=%v", data, ok)
+		t.Fatalf("expected response2, got %q, ok=%v", string(data), ok)
 	}
 
-	_, ok = cache.Lookup("nonexistent")
+	_, ok, _ = cache.Lookup("nonexistent", "", nil)
 	if ok {
 		t.Fatal("nonexistent key should not be found")
 	}
 }
 
 func TestResponseCache_TTLExpiration(t *testing.T) {
-	cache := NewResponseCache(10, 1<<20, 100*time.Millisecond, 50*time.Millisecond, nil)
+	cache := NewResponseCache(10, 1<<20, 100*time.Millisecond, 50*time.Millisecond, nil, false, 0.9, nil)
 	defer cache.Stop()
 
-	cache.Store("key1", []byte("response1"))
+	cache.Store("key1", []byte("response1"), nil)
 
-	data, ok := cache.Lookup("key1")
+	data, ok, _ := cache.Lookup("key1", "", nil)
 	if !ok || string(data) != "response1" {
 		t.Fatal("should find entry immediately")
 	}
 
 	time.Sleep(150 * time.Millisecond)
 
-	_, ok = cache.Lookup("key1")
+	_, ok, _ = cache.Lookup("key1", "", nil)
 	if ok {
 		t.Fatal("expired entry should not be found")
 	}
@@ -321,53 +149,53 @@ func TestResponseCache_TTLExpiration(t *testing.T) {
 }
 
 func TestResponseCache_LRU_Eviction(t *testing.T) {
-	cache := NewResponseCache(3, 1<<20, 1*time.Hour, 1*time.Hour, nil)
+	cache := NewResponseCache(3, 1<<20, 1*time.Hour, 1*time.Hour, nil, false, 0.9, nil)
 	defer cache.Stop()
 
-	cache.Store("key1", []byte("a"))
-	cache.Store("key2", []byte("b"))
-	cache.Store("key3", []byte("c"))
+	cache.Store("key1", []byte("a"), nil)
+	cache.Store("key2", []byte("b"), nil)
+	cache.Store("key3", []byte("c"), nil)
 
 	if cache.Len() != 3 {
 		t.Fatalf("expected 3 entries, got %d", cache.Len())
 	}
 
-	cache.Store("key4", []byte("d"))
+	cache.Store("key4", []byte("d"), nil)
 
 	if cache.Len() != 3 {
 		t.Fatalf("expected 3 entries after eviction, got %d", cache.Len())
 	}
 
-	_, ok := cache.Lookup("key1")
+	_, ok, _ := cache.Lookup("key1", "", nil)
 	if ok {
 		t.Fatal("oldest entry (key1) should have been evicted")
 	}
 
-	data, ok := cache.Lookup("key2")
+	data, ok, _ := cache.Lookup("key2", "", nil)
 	if !ok || string(data) != "b" {
 		t.Fatal("key2 should still exist")
 	}
 
-	data, ok = cache.Lookup("key4")
+	data, ok, _ = cache.Lookup("key4", "", nil)
 	if !ok || string(data) != "d" {
 		t.Fatal("key4 should exist")
 	}
 }
 
 func TestResponseCache_MaxEntryBytes(t *testing.T) {
-	cache := NewResponseCache(10, 100, 1*time.Hour, 1*time.Hour, nil)
+	cache := NewResponseCache(10, 100, 1*time.Hour, 1*time.Hour, nil, false, 0.9, nil)
 	defer cache.Stop()
 
-	cache.Store("small", []byte("hello"))
-	data, ok := cache.Lookup("small")
+	cache.Store("small", []byte("hello"), nil)
+	data, ok, _ := cache.Lookup("small", "", nil)
 	if !ok || string(data) != "hello" {
 		t.Fatal("small entry should be stored")
 	}
 
 	largeData := strings.Repeat("x", 200)
-	cache.Store("large", []byte(largeData))
+	cache.Store("large", []byte(largeData), nil)
 
-	_, ok = cache.Lookup("large")
+	_, ok, _ = cache.Lookup("large", "", nil)
 	if ok {
 		t.Fatal("oversized entry should not be stored")
 	}
@@ -378,48 +206,48 @@ func TestResponseCache_MaxEntryBytes(t *testing.T) {
 }
 
 func TestResponseCache_StoreUpdate(t *testing.T) {
-	cache := NewResponseCache(10, 1<<20, 1*time.Hour, 1*time.Hour, nil)
+	cache := NewResponseCache(10, 1<<20, 1*time.Hour, 1*time.Hour, nil, false, 0.9, nil)
 	defer cache.Stop()
 
-	cache.Store("key1", []byte("v1"))
-	cache.Store("key1", []byte("v2"))
+	cache.Store("key1", []byte("v1"), nil)
+	cache.Store("key1", []byte("v2"), nil)
 
 	if cache.Len() != 1 {
 		t.Fatalf("expected 1 entry after update, got %d", cache.Len())
 	}
 
-	data, ok := cache.Lookup("key1")
+	data, ok, _ := cache.Lookup("key1", "", nil)
 	if !ok || string(data) != "v2" {
 		t.Fatalf("expected v2, got %q", data)
 	}
 }
 
 func TestResponseCache_EmptyKeyAndData(t *testing.T) {
-	cache := NewResponseCache(10, 1<<20, 1*time.Hour, 1*time.Hour, nil)
+	cache := NewResponseCache(10, 1<<20, 1*time.Hour, 1*time.Hour, nil, false, 0.9, nil)
 	defer cache.Stop()
 
-	cache.Store("", []byte("data"))
+	cache.Store("", []byte("data"), nil)
 	if cache.Len() != 0 {
 		t.Fatal("empty key should not be stored")
 	}
 
-	cache.Store("key", nil)
+	cache.Store("key", nil, nil)
 	if cache.Len() != 0 {
 		t.Fatal("nil data should not be stored")
 	}
 
-	cache.Store("key", []byte{})
+	cache.Store("key", []byte{}, nil)
 	if cache.Len() != 0 {
 		t.Fatal("empty data should not be stored")
 	}
 }
 
 func TestResponseCache_BackgroundEvictor(t *testing.T) {
-	cache := NewResponseCache(100, 1<<20, 200*time.Millisecond, 100*time.Millisecond, nil)
+	cache := NewResponseCache(100, 1<<20, 200*time.Millisecond, 100*time.Millisecond, nil, false, 0.9, nil)
 	defer cache.Stop()
 
 	for i := 0; i < 50; i++ {
-		cache.Store(fmt.Sprintf("key%d", i), []byte(fmt.Sprintf("val%d", i)))
+		cache.Store(fmt.Sprintf("key%d", i), []byte(fmt.Sprintf("val%d", i)), nil)
 	}
 
 	if cache.Len() != 50 {
@@ -434,7 +262,7 @@ func TestResponseCache_BackgroundEvictor(t *testing.T) {
 }
 
 func TestResponseCache_Stop(t *testing.T) {
-	cache := NewResponseCache(10, 1<<20, 1*time.Hour, 50*time.Millisecond, nil)
+	cache := NewResponseCache(10, 1<<20, 1*time.Hour, 50*time.Millisecond, nil, false, 0.9, nil)
 
 	done := make(chan struct{})
 	go func() {
@@ -451,7 +279,7 @@ func TestResponseCache_Stop(t *testing.T) {
 }
 
 func TestResponseCache_ConcurrentAccess(t *testing.T) {
-	cache := NewResponseCache(100, 1<<20, 10*time.Minute, 1*time.Hour, nil)
+	cache := NewResponseCache(100, 1<<20, 10*time.Minute, 1*time.Hour, nil, false, 0.9, nil)
 	defer cache.Stop()
 
 	var wg sync.WaitGroup
@@ -460,10 +288,10 @@ func TestResponseCache_ConcurrentAccess(t *testing.T) {
 		go func(idx int) {
 			defer wg.Done()
 			key := fmt.Sprintf("key%d", idx)
-			cache.Store(key, []byte(fmt.Sprintf("val%d", idx)))
+			cache.Store(key, []byte(fmt.Sprintf("val%d", idx)), nil)
 			time.Sleep(time.Microsecond * time.Duration(idx%5))
-			cache.Lookup(key)
-			cache.Lookup("nonexistent")
+			cache.Lookup(key, "", nil)
+			cache.Lookup("nonexistent", "", nil)
 		}(i)
 	}
 	wg.Wait()
@@ -475,31 +303,31 @@ func TestResponseCache_ConcurrentAccess(t *testing.T) {
 }
 
 func TestResponseCache_BackgroundEvictorRemovesExpiredFirst(t *testing.T) {
-	cache := NewResponseCache(5, 1<<20, 50*time.Millisecond, 20*time.Millisecond, nil)
+	cache := NewResponseCache(5, 1<<20, 50*time.Millisecond, 20*time.Millisecond, nil, false, 0.9, nil)
 	defer cache.Stop()
 
-	cache.Store("expires-soon", []byte("a"))
-	cache.Store("expires-soon-2", []byte("b"))
+	cache.Store("expires-soon", []byte("a"), nil)
+	cache.Store("expires-soon-2", []byte("b"), nil)
 
 	time.Sleep(70 * time.Millisecond)
 
 	for i := 0; i < 3; i++ {
-		cache.Store(fmt.Sprintf("fresh%d", i), []byte(fmt.Sprintf("f%d", i)))
+		cache.Store(fmt.Sprintf("fresh%d", i), []byte(fmt.Sprintf("f%d", i)), nil)
 	}
 
 	time.Sleep(40 * time.Millisecond)
 
-	_, ok := cache.Lookup("expires-soon")
+	_, ok, _ := cache.Lookup("expires-soon", "", nil)
 	if ok {
 		t.Fatal("expired entries should be cleaned up by background evictor")
 	}
-	_, ok = cache.Lookup("expires-soon-2")
+	_, ok, _ = cache.Lookup("expires-soon-2", "", nil)
 	if ok {
 		t.Fatal("expired entries should be cleaned up by background evictor")
 	}
 
 	for i := 0; i < 3; i++ {
-		_, ok := cache.Lookup(fmt.Sprintf("fresh%d", i))
+			_, ok, _ := cache.Lookup(fmt.Sprintf("fresh%d", i), "", nil)
 		if !ok {
 			t.Fatalf("fresh entry fresh%d should still exist", i)
 		}

@@ -60,6 +60,13 @@ type Metrics struct {
 	cacheHit  sync.Map
 	cacheMiss sync.Map
 
+	// Embedding generation metrics
+	embeddingDuration sync.Map
+	embeddingErrors   sync.Map
+
+	// Semantic cache metrics
+	semanticCacheEntries atomic.Int64
+
 	// Secure memory metrics
 	secureMemInitFailures atomic.Uint64
 	secureMemSealFailures atomic.Uint64
@@ -410,12 +417,61 @@ func (m *Metrics) RecordCacheHit(cacheType string) {
 	e.value.Add(1)
 }
 
-func (m *Metrics) RecordCacheMiss(cacheType string) {
+func (m *Metrics) RecordExactCacheHit(model string) {
 	if m == nil {
 		return
 	}
-	e := getOrCreateEntry(&m.cacheMiss, map[string]string{"type": cacheType})
+	e := getOrCreateEntry(&m.cacheHit, map[string]string{
+		"type":  "exact",
+		"model": model,
+	})
 	e.value.Add(1)
+}
+
+func (m *Metrics) RecordSemanticCacheHit(model string, similarity float64) {
+	if m == nil {
+		return
+	}
+	e := getOrCreateEntry(&m.cacheHit, map[string]string{
+		"type":       "semantic",
+		"model":      model,
+		"similarity": fmt.Sprintf("%.3f", similarity),
+	})
+	e.value.Add(1)
+}
+
+func (m *Metrics) RecordCacheMiss(cacheType, model string) {
+	if m == nil {
+		return
+	}
+	e := getOrCreateEntry(&m.cacheMiss, map[string]string{
+		"type":  cacheType,
+		"model": model,
+	})
+	e.value.Add(1)
+}
+
+func (m *Metrics) RecordEmbeddingDuration(duration time.Duration) {
+	if m == nil {
+		return
+	}
+	h := getOrCreateHist(&m.embeddingDuration, nil, HTTPDurationBuckets)
+	h.Observe(duration.Seconds())
+}
+
+func (m *Metrics) RecordEmbeddingError() {
+	if m == nil {
+		return
+	}
+	e := getOrCreateEntry(&m.embeddingErrors, nil)
+	e.value.Add(1)
+}
+
+func (m *Metrics) SetSemanticCacheEntries(count int64) {
+	if m == nil {
+		return
+	}
+	m.semanticCacheEntries.Store(count)
 }
 
 func (m *Metrics) RecordOverflowGuardTrigger(location string) {
@@ -637,6 +693,13 @@ func (m *Metrics) WritePrometheus(w io.Writer) {
 		"Total cache hits by cache type.", &m.cacheHit)
 	m.writeCounterMap(w, "nenya_cache_miss_total",
 		"Total cache misses by cache type.", &m.cacheMiss)
+	m.writeHistogramMap(w, "nenya_embedding_duration_seconds",
+		"Embedding generation duration in seconds.", &m.embeddingDuration)
+	m.writeCounterMap(w, "nenya_embedding_errors_total",
+		"Total embedding generation errors.", &m.embeddingErrors)
+	fprintln("# HELP nenya_semantic_cache_entries Current number of entries in semantic cache.")
+	fprintln("# TYPE nenya_semantic_cache_entries gauge")
+	fprintln("nenya_semantic_cache_entries %g", m.semanticCacheEntries.Load())
 	m.writeCounterMap(w, "nenya_overflow_guard_triggers_total",
 		"Total overflow guard triggers by location.", &m.overflowGuardTriggers)
 	m.writeCounterMap(w, "nenya_cb_state_transitions_total",

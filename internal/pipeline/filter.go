@@ -126,9 +126,9 @@ func TruncateMiddleOutByTokens(text string, maxTokens int, countTokens func(stri
 	} else if keepFirst == 0 && keepLast > 0 {
 		keepFirst = 1
 		keepLast = available - 1
-	} else if keepLast == 0 && keepLast > 0 {
-		keepLast = 1
+	} else if keepLast == 0 && keepFirst > 0 {
 		keepFirst = available - 1
+		keepLast = 1
 	}
 
 	result := make([]rune, 0, maxTokens)

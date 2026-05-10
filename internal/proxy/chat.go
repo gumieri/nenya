@@ -230,12 +230,80 @@ func (p *Proxy) resolveCache(w http.ResponseWriter, r *http.Request, gw *gateway
 	authToken := strings.TrimSpace(strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer "))
 	cacheKey := infra.FingerprintPayloadWithAuth(req.Payload, authToken)
 	if r.Header.Get(gw.Config.ResponseCache.ForceRefreshHeader) == "" {
-		if data, ok := gw.ResponseCache.Lookup(cacheKey); ok {
-			p.replayCachedSSE(gw, w, r, data)
+		embedFunc := p.buildEmbedFunc(gw, r, req.Payload)
+		model := req.ModelName
+		if data, ok, cacheType := gw.ResponseCache.Lookup(cacheKey, model, embedFunc); ok {
+			p.replayCachedSSE(gw, w, r, data, cacheType)
 			return "", &httpError{http.StatusOK, "cache hit"}
 		}
 	}
 	return cacheKey, nil
+}
+
+func (p *Proxy) buildEmbedFunc(gw *gateway.NenyaGateway, r *http.Request, payload map[string]any) func() ([]float32, error) {
+	if !gw.Config.ResponseCache.EnableSemantic {
+		return nil
+	}
+
+	return func() ([]float32, error) {
+		messagesRaw, ok := payload["messages"]
+		if !ok {
+			return nil, nil
+		}
+		messages, ok := messagesRaw.([]any)
+		if !ok || len(messages) == 0 {
+			return nil, nil
+		}
+
+		userText := p.extractUserMessagesForEmbedding(gw, messages)
+		if userText == "" {
+			return nil, nil
+		}
+
+		ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+		defer cancel()
+		return gw.Embedder.Embed(ctx, userText)
+	}
+}
+
+func (p *Proxy) extractUserMessagesForEmbedding(gw *gateway.NenyaGateway, messages []any) string {
+	const maxEmbeddingTextLen = 10000
+
+	var userMsgs strings.Builder
+	userMsgs.Grow(min(maxEmbeddingTextLen, len(messages)*100))
+
+	for _, m := range messages {
+		msg, ok := m.(map[string]any)
+		if !ok {
+			gw.Logger.Debug("skipping non-object message in semantic embedding")
+			continue
+		}
+		role, ok := msg["role"].(string)
+		if !ok || role != "user" {
+			continue
+		}
+		content, ok := msg["content"].(string)
+		if !ok {
+			gw.Logger.Debug("skipping non-string content in semantic embedding", "role", role)
+			continue
+		}
+
+		// Enforce size limit to prevent unbounded string growth
+		if userMsgs.Len()+len(content) > maxEmbeddingTextLen {
+			break
+		}
+
+		userMsgs.WriteString(content)
+		userMsgs.WriteString("\n")
+	}
+	return userMsgs.String()
+}
+
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
 }
 
 // resolvePipelineContext extracts messages, MCP tool state, limits, and client
@@ -321,11 +389,21 @@ func (p *Proxy) handleChatCompletions(gw *gateway.NenyaGateway, w http.ResponseW
 }
 
 // replayCachedSSE serves a previously cached response using Server-Sent Events.
-func (p *Proxy) replayCachedSSE(gw *gateway.NenyaGateway, w http.ResponseWriter, r *http.Request, data []byte) {
-	gw.Logger.Info("response cache hit")
+func (p *Proxy) replayCachedSSE(gw *gateway.NenyaGateway, w http.ResponseWriter, r *http.Request, data []byte, cacheType string) {
+	var cacheStatus string
+	switch cacheType {
+	case "exact":
+		cacheStatus = "HIT"
+	case "semantic":
+		cacheStatus = "SEMI-HIT"
+	default:
+		cacheStatus = "HIT"
+	}
+
+	gw.Logger.Info("response cache hit", "type", cacheType)
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
-	w.Header().Set("X-Nenya-Cache-Status", "HIT")
+	w.Header().Set("X-Nenya-Cache-Status", cacheStatus)
 	w.WriteHeader(http.StatusOK)
 
 	var dst io.Writer
@@ -490,22 +568,30 @@ func (p *Proxy) interceptContent(gw *gateway.NenyaGateway, ctx context.Context, 
 		}
 	}
 
+	p.handlePayloadSizeCheck(gw, ctx, contentTokens, softLimit, actualHardLimit, textForInterception, messages, profile, lastMsgNode)
+
+	return nil
+}
+
+func (p *Proxy) handlePayloadSizeCheck(gw *gateway.NenyaGateway, ctx context.Context, contentTokens, softLimit, actualHardLimit int, textForInterception string, messages []any, profile pipeline.ClientProfile, lastMsgNode map[string]interface{}) {
 	if contentTokens < softLimit {
 		gw.Logger.Debug("payload within soft limit, passing through",
 			"tokens", contentTokens, "soft_limit", softLimit)
-	} else if contentTokens <= actualHardLimit {
+		return
+	}
+
+	if contentTokens <= actualHardLimit {
 		processed, needsUpdate := p.interceptSoftLimit(gw, ctx, textForInterception, profile.IsIDE)
 		if needsUpdate {
 			lastMsgNode["content"] = processed
 		}
-	} else {
-		processed, needsUpdate := p.interceptHardLimit(gw, ctx, textForInterception, messages, profile, softLimit, actualHardLimit, contentTokens)
-		if needsUpdate {
-			lastMsgNode["content"] = processed
-		}
+		return
 	}
 
-	return nil
+	processed, needsUpdate := p.interceptHardLimit(gw, ctx, textForInterception, messages, profile, softLimit, actualHardLimit, contentTokens)
+	if needsUpdate {
+		lastMsgNode["content"] = processed
+	}
 }
 
 // interceptSoftLimit handles the case where content tokens exceed the soft
