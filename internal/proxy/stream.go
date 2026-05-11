@@ -323,7 +323,7 @@ func (p *Proxy) streamResponse(gw *gateway.NenyaGateway, w http.ResponseWriter, 
 
 	_, copyErr := copyStream(r.Context(), dst, transformingReader, *buf)
 
-	return p.handleStreamCompletion(gw, w, target, agentName, action, cacheKey, cooldownDuration, payload, buf, copyErr, captureBuf, tee, contentBuilder, stallR)
+	return p.handleStreamCompletion(gw, w, target, agentName, action, cacheKey, cooldownDuration, payload, buf, copyErr, captureBuf, tee, contentBuilder, stallR, r.Context())
 }
 
 // setupTransformingReader creates and configures the SSE transforming reader, content builder, and stall reader.
@@ -475,11 +475,11 @@ func (p *Proxy) setupStreamWriter(gw *gateway.NenyaGateway, flushWriter *immedia
 
 // handleStreamCompletion handles completion of a stream and returns a streamResult.
 // Returns empty=true when the stream should be retried with the next target.
-func (p *Proxy) handleStreamCompletion(gw *gateway.NenyaGateway, w http.ResponseWriter, target routing.UpstreamTarget, agentName string, action upstreamAction, cacheKey string, cooldownDuration time.Duration, payload map[string]any, buf *[]byte, copyErr error, captureBuf *bytes.Buffer, tee *sseTeeWriter, contentBuilder *contentBuilder, stallR *stallReader) streamResult {
-	return p.handleStreamDone(gw, w, target, agentName, action, cacheKey, cooldownDuration, payload, buf, copyErr, captureBuf, tee, contentBuilder, stallR)
+func (p *Proxy) handleStreamCompletion(gw *gateway.NenyaGateway, w http.ResponseWriter, target routing.UpstreamTarget, agentName string, action upstreamAction, cacheKey string, cooldownDuration time.Duration, payload map[string]any, buf *[]byte, copyErr error, captureBuf *bytes.Buffer, tee *sseTeeWriter, contentBuilder *contentBuilder, stallR *stallReader, reqCtx context.Context) streamResult {
+	return p.handleStreamDone(gw, w, target, agentName, action, cacheKey, cooldownDuration, payload, buf, copyErr, captureBuf, tee, contentBuilder, stallR, reqCtx)
 }
 
-func (p *Proxy) handleStreamDone(gw *gateway.NenyaGateway, w http.ResponseWriter, target routing.UpstreamTarget, agentName string, action upstreamAction, cacheKey string, cooldownDuration time.Duration, payload map[string]any, buf *[]byte, copyErr error, captureBuf *bytes.Buffer, tee *sseTeeWriter, contentBuilder *contentBuilder, stallR *stallReader) streamResult {
+func (p *Proxy) handleStreamDone(gw *gateway.NenyaGateway, w http.ResponseWriter, target routing.UpstreamTarget, agentName string, action upstreamAction, cacheKey string, cooldownDuration time.Duration, payload map[string]any, buf *[]byte, copyErr error, captureBuf *bytes.Buffer, tee *sseTeeWriter, contentBuilder *contentBuilder, stallR *stallReader, reqCtx context.Context) streamResult {
 	streamingBufPool.Put(buf)
 
 	if errors.Is(copyErr, stream.ErrStreamBlocked) {
@@ -516,7 +516,7 @@ func (p *Proxy) handleStreamDone(gw *gateway.NenyaGateway, w http.ResponseWriter
 	recordStreamResult(gw, target, agentName, cooldownDuration, copyErr)
 
 	if copyErr == nil {
-		storeStreamCache(gw, cacheKey, captureBuf, tee, payload)
+		storeStreamCache(gw, cacheKey, captureBuf, tee, payload, reqCtx)
 		p.asyncMCPAutoSave(gw, agentName, contentBuilder)
 		return streamResult{}
 	}
@@ -541,21 +541,21 @@ func recordStreamResult(gw *gateway.NenyaGateway, target routing.UpstreamTarget,
 	}
 }
 
-func storeStreamCache(gw *gateway.NenyaGateway, cacheKey string, captureBuf *bytes.Buffer, tee *sseTeeWriter, payload map[string]any) {
+func storeStreamCache(gw *gateway.NenyaGateway, cacheKey string, captureBuf *bytes.Buffer, tee *sseTeeWriter, payload map[string]any, reqCtx context.Context) {
 	if cacheKey == "" || gw.ResponseCache == nil || tee == nil || tee.exceeded || captureBuf.Len() <= 0 {
 		return
 	}
 
 	var embedding []float32
 	if gw.Config.ResponseCache.EnableSemantic && payload != nil {
-		embedding = computeEmbedding(gw, payload)
+		embedding = computeEmbedding(gw, payload, reqCtx)
 	}
 
 	gw.ResponseCache.Store(cacheKey, captureBuf.Bytes(), embedding)
 	gw.Logger.Debug("response cache stored", "size", captureBuf.Len(), "has_embedding", embedding != nil)
 }
 
-func computeEmbedding(gw *gateway.NenyaGateway, payload map[string]any) []float32 {
+func computeEmbedding(gw *gateway.NenyaGateway, payload map[string]any, reqCtx context.Context) []float32 {
 	if !gw.Config.ResponseCache.EnableSemantic {
 		return nil
 	}
@@ -565,7 +565,7 @@ func computeEmbedding(gw *gateway.NenyaGateway, payload map[string]any) []float3
 		return nil
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(reqCtx, 10*time.Second)
 	defer cancel()
 
 	start := time.Now()
