@@ -6,6 +6,11 @@ import (
 	"nenya/config"
 )
 
+// TrimPayload reduces the payload's message list until its token count
+// is <= maxTokens. It operates on individual user/assistant messages,
+// starting from the oldest non-system message, and uses TruncateMiddleOutByTokens
+// when a single message must be shortened. Returns modified status and
+// number of tokens removed.
 func TrimPayload(logger *slog.Logger, payload map[string]interface{}, maxTokens int, countTokens func(string) int, cfg config.ContextConfig) (bool, int) {
 	messagesRaw, ok := payload["messages"]
 	if !ok {
@@ -42,7 +47,7 @@ func TrimPayload(logger *slog.Logger, payload map[string]interface{}, maxTokens 
 			remaining := maxTokens - keptTokens
 			truncated := truncateMessageByTokens(msgRaw, remaining, countTokens, cfg)
 			kept = append(kept, truncated)
-			keptTokens += tokenForMessage(truncated, countTokens) //nolint:ineffassign // intentional: updates token count for consistency
+			keptTokens += tokenForMessage(truncated, countTokens)
 			if logger != nil {
 				logger.Info("truncated single message to fit budget",
 					"original_tokens", msgTokens,
