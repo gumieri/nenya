@@ -380,7 +380,7 @@ func (m *Metrics) RecordAuthSuccess(authType, keyName string) {
 		return
 	}
 	e := getOrCreateEntry(&m.authSuccess, map[string]string{
-		"type": authType, "key": keyName,
+		"type": authType, "key_name": keyName,
 	})
 	e.value.Add(1)
 }
@@ -459,11 +459,11 @@ func (m *Metrics) RecordEmbeddingDuration(duration time.Duration) {
 	h.Observe(duration.Seconds())
 }
 
-func (m *Metrics) RecordEmbeddingError() {
+func (m *Metrics) RecordEmbeddingError(provider string) {
 	if m == nil {
 		return
 	}
-	e := getOrCreateEntry(&m.embeddingErrors, nil)
+	e := getOrCreateEntry(&m.embeddingErrors, map[string]string{"provider": provider})
 	e.value.Add(1)
 }
 

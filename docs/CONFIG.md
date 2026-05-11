@@ -281,7 +281,11 @@ Individual settings can be overridden after choosing a preset.
     "max_entry_bytes": 1048576,
     "ttl_seconds": 3600,
     "evict_every_seconds": 300,
-    "force_refresh_header": "x-nenya-cache-force-refresh"
+    "force_refresh_header": "x-nenya-cache-force-refresh",
+    "enable_semantic": false,
+    "similarity_threshold": 0.9,
+    "embedding_model": "mxbai-embed-large",
+    "embedding_url": "http://localhost:11434"
   }
 }
 ```
@@ -294,6 +298,10 @@ Individual settings can be overridden after choosing a preset.
 | `ttl_seconds` | int | `3600` | Entry TTL (1 hour) |
 | `evict_every_seconds` | int | `300` | Background eviction sweep interval (5 min) |
 | `force_refresh_header` | string | `"x-nenya-cache-force-refresh"` | Header that bypasses cache |
+| `enable_semantic` | bool | `false` | Enable semantic caching (embedding-based similarity) |
+| `similarity_threshold` | float | `0.9` | Min cosine similarity for semantic cache hit |
+| `embedding_model` | string | `"mxbai-embed-large"` | Ollama model for embedding generation |
+| `embedding_url` | string | `"http://localhost:11434"` | Ollama API endpoint for embeddings |
 
 ## `discovery`
 

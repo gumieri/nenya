@@ -575,7 +575,7 @@ func computeEmbedding(gw *gateway.NenyaGateway, payload map[string]any, reqCtx c
 	if gw.Metrics != nil {
 		gw.Metrics.RecordEmbeddingDuration(duration)
 		if err != nil {
-			gw.Metrics.RecordEmbeddingError()
+			gw.Metrics.RecordEmbeddingError("ollama")
 		}
 	}
 
