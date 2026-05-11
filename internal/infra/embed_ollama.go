@@ -11,21 +11,26 @@ import (
 	"nenya/internal/util"
 )
 
+// OllamaEmbedder implements EmbeddingProvider via the Ollama /api/embed endpoint.
+// Uses configurable model and URL with retry logic for transient failures.
 type OllamaEmbedder struct {
 	client *http.Client
 	model  string
 	url    string
 }
 
+// ollamaEmbedRequest is sent to the Ollama embedding API.
 type ollamaEmbedRequest struct {
 	Model  string `json:"model"`
 	Prompt string `json:"prompt"`
 }
 
+// ollamaEmbedResponse is received from the Ollama embedding API.
 type ollamaEmbedResponse struct {
 	Embedding []float32 `json:"embedding"`
 }
 
+// NewOllamaEmbedder creates a new embedder with the given HTTP client, model name, and base URL.
 func NewOllamaEmbedder(client *http.Client, model, url string) *OllamaEmbedder {
 	return &OllamaEmbedder{
 		client: client,
@@ -34,6 +39,9 @@ func NewOllamaEmbedder(client *http.Client, model, url string) *OllamaEmbedder {
 	}
 }
 
+// Embed sends text to the Ollama embedding endpoint and returns the embedding vector.
+// Returns an error if the text exceeds 10000 characters, or if the upstream request fails.
+// Uses DoWithRetry for transient network failures.
 func (o *OllamaEmbedder) Embed(ctx context.Context, text string) ([]float32, error) {
 	if len(text) > 10000 {
 		return nil, fmt.Errorf("text too long for embedding: %d characters", len(text))

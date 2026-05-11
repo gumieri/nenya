@@ -5,17 +5,23 @@ import (
 	"sync"
 )
 
+// EmbedIndex provides in-memory vector similarity search for semantic caching.
+// It maintains a linear index of embedding vectors and supports
+// insertion, removal, and similarity search using cosine distance.
 type EmbedIndex struct {
 	mu         sync.RWMutex
 	entries    []embedIndexEntry
 	maxEntries int
 }
 
+// embedIndexEntry stores a cache key with its embedding vector.
 type embedIndexEntry struct {
 	key       string
 	embedding []float32
 }
 
+// NewEmbedIndex creates a new vector index with specified maximum entries.
+// If maxEntries <= 0, defaults to 10000.
 func NewEmbedIndex(maxEntries int) *EmbedIndex {
 	if maxEntries <= 0 {
 		maxEntries = 10000
@@ -26,6 +32,8 @@ func NewEmbedIndex(maxEntries int) *EmbedIndex {
 	}
 }
 
+// CosineSimilarity computes the cosine similarity between two vectors.
+// Returns 0 for zero vectors or vectors of different lengths.
 func CosineSimilarity(a, b []float32) float64 {
 	if len(a) != len(b) {
 		return 0
@@ -48,6 +56,9 @@ func CosineSimilarity(a, b []float32) float64 {
 	return float64(dotProduct) / (math.Sqrt(float64(normA)) * math.Sqrt(float64(normB)))
 }
 
+// Search finds the most similar entry to vec with similarity >= threshold.
+// Returns the cache key as bytes, similarity score, and true if found.
+// Returns nil, 0.0, false if no entry meets the threshold.
 func (idx *EmbedIndex) Search(vec []float32, threshold float64) ([]byte, float64, bool) {
 	idx.mu.RLock()
 	defer idx.mu.RUnlock()
@@ -74,6 +85,9 @@ func (idx *EmbedIndex) Search(vec []float32, threshold float64) ([]byte, float64
 	return []byte(bestKey), bestScore, true
 }
 
+// Insert adds a new key-vector pair to the index.
+// If the index is at capacity, the oldest entry is removed.
+// Silently ignores empty keys, empty vectors, or vectors exceeding 8192 dimensions.
 func (idx *EmbedIndex) Insert(key string, vec []float32) {
 	if key == "" || len(vec) == 0 {
 		return
@@ -103,6 +117,8 @@ func (idx *EmbedIndex) Insert(key string, vec []float32) {
 	})
 }
 
+// Remove deletes a key from the index by shifting the slice.
+// Silently ignores empty keys and missing keys.
 func (idx *EmbedIndex) Remove(key string) {
 	if key == "" {
 		return
@@ -121,6 +137,7 @@ func (idx *EmbedIndex) Remove(key string) {
 	}
 }
 
+// Len returns the current number of entries in the index.
 func (idx *EmbedIndex) Len() int {
 	idx.mu.RLock()
 	defer idx.mu.RUnlock()

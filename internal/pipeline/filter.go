@@ -98,6 +98,10 @@ func TruncateMiddleOutCodeAware(text string, maxSize int, cfg config.ContextConf
 // by using actual token count via CountTokens. Preserves the same
 // keep-first/keep-last percentages as TruncateMiddleOut but
 // counts tokens instead of runes for more precise truncation.
+// TruncateMiddleOutByTokens truncates text to fit within maxTokens
+// by using actual token count via CountTokens. Preserves the same
+// keep-first/keep-last percentages as TruncateMiddleOut but
+// counts tokens instead of runes for more precise truncation.
 func TruncateMiddleOutByTokens(text string, maxTokens int, countTokens func(string) int, cfg config.ContextConfig) string {
 	curTokens := countTokens(text)
 	if curTokens <= maxTokens {

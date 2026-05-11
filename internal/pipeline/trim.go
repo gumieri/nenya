@@ -11,6 +11,11 @@ import (
 // starting from the oldest non-system message, and uses TruncateMiddleOutByTokens
 // when a single message must be shortened. Returns modified status and
 // number of tokens removed.
+// TrimPayload reduces the payload's message list until its token count
+// is <= maxTokens. It operates on individual user/assistant messages,
+// starting from the oldest non-system message, and uses TruncateMiddleOutByTokens
+// when a single message must be shortened. Returns modified status and
+// number of tokens removed.
 func TrimPayload(logger *slog.Logger, payload map[string]interface{}, maxTokens int, countTokens func(string) int, cfg config.ContextConfig) (bool, int) {
 	messagesRaw, ok := payload["messages"]
 	if !ok {
