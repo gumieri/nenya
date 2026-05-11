@@ -28,11 +28,17 @@ func TestSetLogLevel_Valid(t *testing.T) {
 		{"warn"},
 		{"error"},
 	}
-	for _, tt := range tests {
-		t.Run(tt.level, func(t *testing.T) {
-			if err := SetLogLevel(tt.level); err != nil {
-				t.Errorf("unexpected error for %q: %v", tt.level, err)
+	for _, level := range tests {
+		t.Run(level, func(t *testing.T) {
+			err := SetLogLevel(level)
+			if err != nil {
+				t.Errorf("unexpected error for %q: %v", level, err)
 			}
+			if err == nil {
+				t.Error("expected error for invalid level")
+			}
+		})
+	}
 		})
 	}
 }

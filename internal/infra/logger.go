@@ -14,6 +14,10 @@ func SetupLogger(verbose bool) *slog.Logger {
 	if verbose {
 		level = slog.LevelDebug
 	}
+	return SetupLoggerWithLevel(level)
+}
+
+func SetupLoggerWithLevel(level slog.Level) *slog.Logger {
 	logLevel.Set(level)
 
 	var handler slog.Handler
@@ -29,6 +33,10 @@ func SetupLogger(verbose bool) *slog.Logger {
 }
 
 func SetLogLevel(level string) error {
+	if level == "" {
+		return nil
+	}
+
 	var slogLevel slog.Level
 	switch level {
 	case "debug":
@@ -42,11 +50,21 @@ func SetLogLevel(level string) error {
 	default:
 		return fmt.Errorf("invalid log level: %s (must be debug, info, warn, or error)", level)
 	}
+
 	logLevel.Set(slogLevel)
+
+	var handler slog.Handler
+	if isatty(os.Stderr.Fd()) {
+		handler = slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: &logLevel})
+	} else {
+		handler = slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{Level: &logLevel})
+	}
+
+	logger := slog.New(handler)
+	slog.SetDefault(logger)
 	return nil
 }
 
-// isatty returns true if the given file descriptor refers to a terminal.
 func isatty(fd uintptr) bool {
 	var st syscall.Stat_t
 	if err := syscall.Fstat(int(fd), &st); err != nil {

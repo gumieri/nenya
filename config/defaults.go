@@ -9,6 +9,21 @@ import (
 
 var configLogLevel slog.LevelVar
 
+func LogLevelFromString(level string) slog.Level {
+	switch level {
+	case "debug":
+		return slog.LevelDebug
+	case "info":
+		return slog.LevelInfo
+	case "warn":
+		return slog.LevelWarn
+	case "error":
+		return slog.LevelError
+	default:
+		return slog.LevelInfo
+	}
+}
+
 func applyLogLevel(level string) error {
 	if level == "" {
 		return nil

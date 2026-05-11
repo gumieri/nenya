@@ -118,17 +118,22 @@ func TestLoadConfig_FromFile(t *testing.T) {
 
 	logger := testutil.NewTestLogger()
 	paths := configPaths{file: configPath}
-	cfg, secrets, _, err := loadConfig(paths, false, logger)
+	cfg, err := loadConfig(paths)
 	if err != nil {
 		t.Fatalf("loadConfig failed: %v", err)
 	}
-	if cfg.Server.ListenAddr != ":9090" {
+	secrets, err := config.LoadSecrets()
+	if err != nil {
+		t.Fatalf("loadSecrets failed: %v", err)
+	}
+	if cfg != nil && cfg.Server.ListenAddr != ":9090" {
 		t.Errorf("expected :9090, got %s", cfg.Server.ListenAddr)
 	}
 	if secrets == nil || secrets.ClientToken != "test-token-12345" {
 		t.Errorf("expected client_token test-token-12345, got %v", secrets)
 	}
 }
+
 
 func TestLoadConfig_FromDir(t *testing.T) {
 	dir := t.TempDir()
@@ -150,9 +155,13 @@ func TestLoadConfig_FromDir(t *testing.T) {
 
 	logger := testutil.NewTestLogger()
 	paths := configPaths{dir: dir}
-	cfg, secrets, _, err := loadConfig(paths, false, logger)
+	cfg, err := loadConfig(paths)
 	if err != nil {
 		t.Fatalf("loadConfig failed: %v", err)
+	}
+	secrets, err := config.LoadSecrets()
+	if err != nil {
+		t.Fatalf("loadSecrets failed: %v", err)
 	}
 	if cfg.Server.ListenAddr != ":7070" {
 		t.Errorf("expected :7070, got %s", cfg.Server.ListenAddr)
@@ -163,9 +172,8 @@ func TestLoadConfig_FromDir(t *testing.T) {
 }
 
 func TestLoadConfig_ConfigFail(t *testing.T) {
-	logger := testutil.NewTestLogger()
 	paths := configPaths{dir: "/nonexistent"}
-	_, _, _, err := loadConfig(paths, false, logger)
+	_, err := loadConfig(paths)
 	if err == nil {
 		t.Fatal("expected error for nonexistent config")
 	}
@@ -187,11 +195,18 @@ func TestLoadConfig_EnvListenAddr(t *testing.T) {
 	}
 	t.Setenv("NENYA_SECRETS_DIR", secretsDir)
 
+	t.Setenv("NENYA_LISTEN_ADDR", "")
+	t.Setenv("NENYA_SECRETS_DIR", "")
+
 	logger := testutil.NewTestLogger()
 	paths := configPaths{file: configPath}
-	cfg, _, _, err := loadConfig(paths, false, logger)
+	cfg, err := loadConfig(paths)
 	if err != nil {
 		t.Fatalf("loadConfig failed: %v", err)
+	}
+	_ = logger // logger used in original, kept for future use
+	if cfg.Server.ListenAddr != ":9090" {
+		t.Errorf("expected :9090, got %s", cfg.Server.ListenAddr)
 	}
 	if cfg.Server.ListenAddr != ":3000" {
 		t.Errorf("expected :3000 from env, got %s", cfg.Server.ListenAddr)
@@ -216,7 +231,7 @@ func TestLoadConfig_EnvPort(t *testing.T) {
 
 	logger := testutil.NewTestLogger()
 	paths := configPaths{file: configPath}
-	cfg, _, _, err := loadConfig(paths, false, logger)
+	cfg, err := loadConfig(paths)
 	if err != nil {
 		t.Fatalf("loadConfig failed: %v", err)
 	}

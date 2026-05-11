@@ -23,14 +23,11 @@ import (
 	"nenya/internal/version"
 )
 
-// configPaths holds the resolved configuration file paths.
 type configPaths struct {
 	dir  string
 	file string
 }
 
-// reloadLimiter prevents concurrent configuration reloads and adds
-// a debounce delay to coalesce rapid SIGHUP signals.
 type reloadLimiter struct {
 	mu         sync.Mutex
 	pending    bool
@@ -38,9 +35,6 @@ type reloadLimiter struct {
 	debounceMu sync.Mutex
 }
 
-// Stop cleans up the debounce timer if one is pending. Should be called
-// during shutdown to prevent timer callbacks from executing after resources
-// have been cleaned up.
 func (rl *reloadLimiter) Stop() {
 	rl.debounceMu.Lock()
 	defer rl.debounceMu.Unlock()
@@ -66,8 +60,6 @@ func (rl *reloadLimiter) done() {
 	rl.pending = false
 }
 
-// scheduleReload schedules a reload with debounce delay. Returns true if
-// a new reload was scheduled, false if one is already pending.
 func (rl *reloadLimiter) scheduleReload(reloadFunc func()) bool {
 	rl.debounceMu.Lock()
 	defer rl.debounceMu.Unlock()
@@ -91,7 +83,7 @@ func (rl *reloadLimiter) scheduleReload(reloadFunc func()) bool {
 }
 
 const (
-	sdListenFdsStart = 3 // First file descriptor after stdin (0), stdout (1), stderr (2)
+	sdListenFdsStart = 3
 )
 
 func main() {
@@ -107,14 +99,14 @@ func main() {
 		return
 	}
 
-	logger := infra.SetupLogger(verbose)
-	logger.Info("starting nenya", "version", version.Version, "commit", version.Commit, "build_time", version.BuildTime)
-
-	cfg, secrets, paths, err := loadConfig(paths, validateOnly, logger)
+	cfg, secrets, err := loadConfig(paths)
 	if err != nil {
-		logger.Error("setup failed", "err", err)
+		fmt.Fprintf(os.Stderr, "failed to load config: %v\n", err)
 		os.Exit(1)
 	}
+
+	logger := setupLoggerFromConfig(cfg, verbose)
+	logger.Info("starting nenya", "version", version.Version, "commit", version.Commit, "build_time", version.BuildTime)
 
 	if validateOnly {
 		validateCtx, validateCancel := context.WithTimeout(context.Background(), 60*time.Second)
@@ -168,10 +160,7 @@ func effectiveConfigPaths(configDir, configFile string) configPaths {
 	return configPaths{dir: dir, file: file}
 }
 
-// loadConfig loads the configuration from the specified paths.
-// When paths.file is set, it takes precedence over paths.dir.
-// Returns the loaded config, secrets, the resolved paths, and any error.
-func loadConfig(paths configPaths, validateOnly bool, logger *slog.Logger) (*config.Config, *config.SecretsConfig, configPaths, error) {
+func loadConfig(paths configPaths) (*config.Config, error) {
 	var cfg *config.Config
 	var err error
 
@@ -181,27 +170,19 @@ func loadConfig(paths configPaths, validateOnly bool, logger *slog.Logger) (*con
 		cfg, err = config.LoadFromDir(paths.dir)
 	}
 	if err != nil {
-		return nil, nil, paths, fmt.Errorf("load config: %w", err)
+		return nil, err
+	}
+	return cfg, nil
+}
+
+func setupLoggerFromConfig(cfg *config.Config, verbose bool) *slog.Logger {
+	if verbose {
+		return infra.SetupLogger(true)
 	}
 
-	logger.Debug("configuration loaded",
-		"discovery_enabled", cfg.Discovery.Enabled,
-		"auto_agents", cfg.Discovery.AutoAgents,
-		"auto_agents_config_provided", cfg.Discovery.AutoAgentsConfig != nil,
-	)
-
-	if listenAddr := os.Getenv("NENYA_LISTEN_ADDR"); listenAddr != "" {
-		cfg.Server.ListenAddr = listenAddr
-	} else if port := os.Getenv("PORT"); port != "" {
-		cfg.Server.ListenAddr = ":" + port
-	}
-
-	secrets, err := config.LoadSecrets()
-	if err != nil {
-		return nil, nil, paths, fmt.Errorf("load secrets: %w", err)
-	}
-
-	return cfg, secrets, paths, nil
+	level := config.LogLevelFromString(cfg.Server.LogLevel)
+	infra.SetLogLevel(cfg.Server.LogLevel)
+	return infra.SetupLoggerWithLevel(level)
 }
 
 func run(logger *slog.Logger, cfg *config.Config, secrets *config.SecretsConfig, paths configPaths) {
@@ -368,7 +349,7 @@ func systemdListener(defaultAddr string) (net.Listener, string, error) {
 
 	fd := os.NewFile(uintptr(sdListenFdsStart), "systemd")
 	listener, err := net.FileListener(fd)
-	_ = fd.Close() // FileListener dups the fd; close the original in all cases
+	_ = fd.Close()
 	if err != nil {
 		return nil, defaultAddr, err
 	}
