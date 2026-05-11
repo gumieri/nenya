@@ -47,7 +47,7 @@ func TrimPayload(logger *slog.Logger, payload map[string]interface{}, maxTokens 
 			remaining := maxTokens - keptTokens
 			truncated := truncateMessageByTokens(msgRaw, remaining, countTokens, cfg)
 			kept = append(kept, truncated)
-			keptTokens += tokenForMessage(truncated, countTokens)
+			keptTokens += tokenForMessage(truncated, countTokens) //nolint:ineffassign // intentional: updates token count for consistency
 			if logger != nil {
 				logger.Info("truncated single message to fit budget",
 					"original_tokens", msgTokens,
