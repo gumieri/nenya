@@ -785,7 +785,7 @@ func (m *Metrics) writeSemanticCacheGauge(w io.Writer) {
 
 	fprintln("# HELP nenya_semantic_cache_entries Current number of entries in semantic cache.")
 	fprintln("# TYPE nenya_semantic_cache_entries gauge")
-	fprintln("nenya_semantic_cache_entries %g", m.semanticCacheEntries.Load())
+	fprintln("nenya_semantic_cache_entries %d", m.semanticCacheEntries.Load())
 }
 
 func (m *Metrics) writeRateLimitMetrics(w io.Writer) {
