@@ -9,6 +9,7 @@ import (
 	"nenya/config"
 	"nenya/internal/infra"
 	"nenya/internal/security"
+	"nenya/internal/util"
 )
 
 func testConfig() config.Config {
@@ -366,27 +367,27 @@ func TestMetrics_SecureMemFailures(t *testing.T) {
 
 func TestProviderCanServe_WithAPIKey(t *testing.T) {
 	provider := &config.Provider{APIKey: "test-key"}
-	if !providerCanServe(provider) {
+	if !util.ProviderCanServe(provider) {
 		t.Error("expected provider with API key to be servable")
 	}
 }
 
 func TestProviderCanServe_WithAuthStyleNone(t *testing.T) {
 	provider := &config.Provider{AuthStyle: "none"}
-	if !providerCanServe(provider) {
+	if !util.ProviderCanServe(provider) {
 		t.Error("expected provider with auth_style='none' to be servable")
 	}
 }
 
 func TestProviderCanServe_WithoutAPIKeyOrNone(t *testing.T) {
 	provider := &config.Provider{AuthStyle: "bearer"}
-	if providerCanServe(provider) {
+	if util.ProviderCanServe(provider) {
 		t.Error("expected provider without API key and auth_style != 'none' to not be servable")
 	}
 }
 
 func TestProviderCanServe_NilProvider(t *testing.T) {
-	if providerCanServe(nil) {
+	if util.ProviderCanServe(nil) {
 		t.Error("expected nil provider to not be servable")
 	}
 }

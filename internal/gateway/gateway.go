@@ -21,6 +21,7 @@ import (
 	"nenya/internal/routing"
 	"nenya/internal/security"
 	"nenya/internal/tiktoken"
+	"nenya/internal/util"
 )
 
 // NenyaGateway is the top-level container that holds all gateway components:
@@ -427,20 +428,25 @@ func resolveModelEntry(m config.AgentModel, catalog *discovery.ModelCatalog, pro
 func resolveRegexModelEntry(m config.AgentModel, catalog *discovery.ModelCatalog, providers map[string]*config.Provider) []string {
 	modelEntries := make([]string, 0)
 	if catalog != nil {
-		matched := false
 		for _, dm := range catalog.AllModels() {
 			if !m.MatchesCatalog(dm.Provider, dm.ID) {
 				continue
 			}
-			if !providerCanServe(providers[dm.Provider]) {
+			if !util.ProviderCanServe(providers[dm.Provider]) {
 				continue
 			}
-			matched = true
 			modelEntries = append(modelEntries, fmt.Sprintf("%s/%s", dm.Provider, dm.ID))
 		}
-		if matched {
+		if len(modelEntries) > 0 {
 			return modelEntries
 		}
+	}
+	registryModels := util.FindRegistryModels(m, providers)
+	for _, rm := range registryModels {
+		modelEntries = append(modelEntries, fmt.Sprintf("%s/%s", rm.Provider, rm.Model))
+	}
+	if len(modelEntries) > 0 {
+		return modelEntries
 	}
 	return []string{fmt.Sprintf("rx:%s (unresolved)", m.ModelRgx)}
 }
@@ -451,7 +457,7 @@ func resolveStringModelEntry(m config.AgentModel, catalog *discovery.ModelCatalo
 			return entries
 		}
 	}
-	if entry, ok := config.ModelRegistry[m.Model]; ok && providerCanServe(providers[entry.Provider]) {
+	if entry, ok := config.ModelRegistry[m.Model]; ok && util.ProviderCanServe(providers[entry.Provider]) {
 		return []string{fmt.Sprintf("%s/%s", entry.Provider, m.Model)}
 	}
 	return []string{fmt.Sprintf("%s (unresolved)", m.Model)}
@@ -464,7 +470,7 @@ func lookupStringModelInCatalog(m config.AgentModel, catalog *discovery.ModelCat
 	}
 	modelEntries := make([]string, 0, len(entries))
 	for _, e := range entries {
-		if providerCanServe(providers[e.Provider]) {
+		if util.ProviderCanServe(providers[e.Provider]) {
 			modelEntries = append(modelEntries, fmt.Sprintf("%s/%s", e.Provider, m.Model))
 		}
 	}
@@ -648,12 +654,6 @@ func (g *NenyaGateway) Reload(ctx context.Context, cfg config.Config, secrets *c
 	g.Close()
 
 	return newGW
-}
-
-// providerCanServe returns true if the provider is configured with either
-// an API key or auth_style "none" (i.e. can actually make upstream requests).
-func providerCanServe(p *config.Provider) bool {
-	return p != nil && (p.APIKey != "" || p.AuthStyle == "none")
 }
 
 func buildMCPClients(cfg config.Config, logger *slog.Logger) map[string]*mcp.Client {

@@ -572,3 +572,51 @@ func TestExpandModels_ProviderOnly_MixedWithDynamic(t *testing.T) {
 		t.Errorf("expected 2 gemini entries, got %d", geminiCount)
 	}
 }
+
+func TestExpandDynamicModels_EmptyCatalogRegistryFallback(t *testing.T) {
+	catalog := discovery.NewModelCatalog()
+	providers := targetProviders()
+	agent := config.AgentConfig{
+		Models: []config.AgentModel{
+			{ModelRgx: "^claude-opus-4-.*$"},
+		},
+	}
+
+	if err := agent.Models[0].CompileRegex(); err != nil {
+		t.Fatalf("failed to compile regex: %v", err)
+	}
+
+	a := NewAgentState(testLogger(), nil)
+	expanded := a.expandModels("test-agent", agent, catalog, providers, testLogger())
+
+	if len(expanded) == 0 {
+		t.Fatal("expected registry fallback to return models")
+	}
+
+	for _, m := range expanded {
+		if m.Provider != "anthropic" {
+			t.Errorf("expected anthropic provider, got %s", m.Provider)
+		}
+	}
+}
+
+func TestExpandDynamicModels_EmptyCatalogNoMatches(t *testing.T) {
+	catalog := discovery.NewModelCatalog()
+	providers := targetProviders()
+	agent := config.AgentConfig{
+		Models: []config.AgentModel{
+			{ModelRgx: "^nonexistent-.*$"},
+		},
+	}
+
+	if err := agent.Models[0].CompileRegex(); err != nil {
+		t.Fatalf("failed to compile regex: %v", err)
+	}
+
+	a := NewAgentState(testLogger(), nil)
+	expanded := a.expandModels("test-agent", agent, catalog, providers, testLogger())
+
+	if len(expanded) != 0 {
+		t.Errorf("expected no matches, got %d entries", len(expanded))
+	}
+}

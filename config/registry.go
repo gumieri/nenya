@@ -171,14 +171,17 @@ var ModelRegistry = map[string]ModelEntry{
 
 	"qwen2.5-72b-turbo": {Provider: "together", MaxContext: 32768, MaxOutput: 4096, Pricing: PricingOverride{InputCostPer1M: 0.9, OutputCostPer1M: 0.9}},
 
-	"claude-opus-4-5":            {Provider: "anthropic", MaxContext: 200000, MaxOutput: 64000, Pricing: PricingOverride{InputCostPer1M: 5.0, OutputCostPer1M: 25.0}},
-	"claude-opus-4-0":            {Provider: "anthropic", MaxContext: 200000, MaxOutput: 32000, Pricing: PricingOverride{InputCostPer1M: 15.0, OutputCostPer1M: 75.0}},
-	"claude-sonnet-4-5":          {Provider: "anthropic", MaxContext: 200000, MaxOutput: 64000, Pricing: PricingOverride{InputCostPer1M: 3.0, OutputCostPer1M: 15.0}},
-	"claude-sonnet-4-0":          {Provider: "anthropic", MaxContext: 200000, MaxOutput: 64000, Pricing: PricingOverride{InputCostPer1M: 3.0, OutputCostPer1M: 15.0}},
-	"claude-haiku-4-5":           {Provider: "anthropic", MaxContext: 200000, MaxOutput: 64000, Pricing: PricingOverride{InputCostPer1M: 1.0, OutputCostPer1M: 5.0}},
-	"claude-3-7-sonnet-20250219": {Provider: "anthropic", MaxContext: 200000, MaxOutput: 64000, Pricing: PricingOverride{InputCostPer1M: 3.0, OutputCostPer1M: 15.0}},
-	"claude-3-5-sonnet-20241022": {Provider: "anthropic", MaxContext: 200000, MaxOutput: 8192, Pricing: PricingOverride{InputCostPer1M: 3.0, OutputCostPer1M: 15.0}},
-	"claude-3-5-haiku-latest":    {Provider: "anthropic", MaxContext: 200000, MaxOutput: 8192, Pricing: PricingOverride{InputCostPer1M: 0.25, OutputCostPer1M: 1.25}},
+	"claude-opus-4-5":            {Provider: "anthropic", Format: "anthropic", MaxContext: 200000, MaxOutput: 64000, Pricing: PricingOverride{InputCostPer1M: 5.0, OutputCostPer1M: 25.0}},
+	"claude-opus-4-0":            {Provider: "anthropic", Format: "anthropic", MaxContext: 200000, MaxOutput: 32000, Pricing: PricingOverride{InputCostPer1M: 15.0, OutputCostPer1M: 75.0}},
+	"claude-sonnet-4-5":          {Provider: "anthropic", Format: "anthropic", MaxContext: 200000, MaxOutput: 64000, Pricing: PricingOverride{InputCostPer1M: 3.0, OutputCostPer1M: 15.0}},
+	"claude-sonnet-4-0":          {Provider: "anthropic", Format: "anthropic", MaxContext: 200000, MaxOutput: 64000, Pricing: PricingOverride{InputCostPer1M: 3.0, OutputCostPer1M: 15.0}},
+	"claude-haiku-4-5":           {Provider: "anthropic", Format: "anthropic", MaxContext: 200000, MaxOutput: 64000, Pricing: PricingOverride{InputCostPer1M: 1.0, OutputCostPer1M: 5.0}},
+	"claude-opus-4-7":            {Provider: "anthropic", Format: "anthropic", MaxContext: 1000000, MaxOutput: 128000, Pricing: PricingOverride{InputCostPer1M: 5.0, OutputCostPer1M: 25.0}},
+	"claude-opus-4-6":            {Provider: "anthropic", Format: "anthropic", MaxContext: 1000000, MaxOutput: 128000, Pricing: PricingOverride{InputCostPer1M: 5.0, OutputCostPer1M: 25.0}},
+	"claude-sonnet-4-6":          {Provider: "anthropic", Format: "anthropic", MaxContext: 1000000, MaxOutput: 64000, Pricing: PricingOverride{InputCostPer1M: 3.0, OutputCostPer1M: 15.0}},
+	"claude-3-7-sonnet-20250219": {Provider: "anthropic", Format: "anthropic", MaxContext: 200000, MaxOutput: 64000, Pricing: PricingOverride{InputCostPer1M: 3.0, OutputCostPer1M: 15.0}},
+	"claude-3-5-sonnet-20241022": {Provider: "anthropic", Format: "anthropic", MaxContext: 200000, MaxOutput: 8192, Pricing: PricingOverride{InputCostPer1M: 3.0, OutputCostPer1M: 15.0}},
+	"claude-3-5-haiku-latest":    {Provider: "anthropic", Format: "anthropic", MaxContext: 200000, MaxOutput: 8192, Pricing: PricingOverride{InputCostPer1M: 0.25, OutputCostPer1M: 1.25}},
 
 	"mistral-large-latest":    {Provider: "mistral", MaxContext: 256000, MaxOutput: 262144, Pricing: PricingOverride{InputCostPer1M: 4.0, OutputCostPer1M: 12.0}},
 	"mistral-small-latest":    {Provider: "mistral", MaxContext: 256000, MaxOutput: 256000, Pricing: PricingOverride{InputCostPer1M: 0.2, OutputCostPer1M: 0.6}},
@@ -209,7 +212,4 @@ var ModelRegistry = map[string]ModelEntry{
 	"hy3-preview-free":      {Provider: "zen", MaxContext: 131072, MaxOutput: 8192},
 	"nemotron-3-super-free": {Provider: "zen", MaxContext: 4000, MaxOutput: 1024},
 	"gpt-5-nano":            {Provider: "zen", MaxContext: 200000, MaxOutput: 8192},
-	"claude-opus-4-7":       {Provider: "zen", Format: "anthropic", MaxContext: 1000000, MaxOutput: 128000, Pricing: PricingOverride{InputCostPer1M: 5.0, OutputCostPer1M: 25.0}},
-	"claude-opus-4-6":       {Provider: "zen", Format: "anthropic", MaxContext: 1000000, MaxOutput: 128000, Pricing: PricingOverride{InputCostPer1M: 5.0, OutputCostPer1M: 25.0}},
-	"claude-sonnet-4-6":     {Provider: "zen", Format: "anthropic", MaxContext: 1000000, MaxOutput: 64000, Pricing: PricingOverride{InputCostPer1M: 3.0, OutputCostPer1M: 15.0}},
 }

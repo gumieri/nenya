@@ -3,6 +3,8 @@ package util
 import (
 	"math"
 	"testing"
+
+	"nenya/config"
 )
 
 func TestAddCap_NoOverflow(t *testing.T) {
@@ -78,5 +80,39 @@ func TestErrNoProviderFmt(t *testing.T) {
 	want := "No provider configured for this model: claude-3"
 	if got != want {
 		t.Errorf("ErrNoProviderFmt = %q, want %q", got, want)
+	}
+}
+
+func TestProviderCanServe_Nil(t *testing.T) {
+	if ProviderCanServe(nil) {
+		t.Error("ProviderCanServe(nil) should return false")
+	}
+}
+
+func TestProviderCanServe_WithAPIKey(t *testing.T) {
+	p := &config.Provider{APIKey: "sk-test"}
+	if !ProviderCanServe(p) {
+		t.Error("ProviderCanServe with API key should return true")
+	}
+}
+
+func TestProviderCanServe_NoneAuthStyle(t *testing.T) {
+	p := &config.Provider{AuthStyle: "none"}
+	if !ProviderCanServe(p) {
+		t.Error("ProviderCanServe with auth_style 'none' should return true")
+	}
+}
+
+func TestProviderCanServe_MissingAPIKey(t *testing.T) {
+	p := &config.Provider{AuthStyle: "bearer"}
+	if ProviderCanServe(p) {
+		t.Error("ProviderCanServe without API key and auth_style 'none' should return false")
+	}
+}
+
+func TestProviderCanServe_BothConditions(t *testing.T) {
+	p := &config.Provider{APIKey: "sk-test", AuthStyle: "none"}
+	if !ProviderCanServe(p) {
+		t.Error("ProviderCanServe with both API key and auth_style 'none' should return true")
 	}
 }

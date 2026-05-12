@@ -11,6 +11,7 @@ import (
 	"nenya/internal/discovery"
 	"nenya/internal/infra"
 	"nenya/internal/resilience"
+	"nenya/internal/util"
 )
 
 // DefaultAgentCooldownSec is the default cooldown between requests to the
@@ -446,7 +447,14 @@ func expandDynamicModels(models []config.AgentModel, catalog *discovery.ModelCat
 			expanded = append(expanded, am)
 		}
 		if !matchedAny {
-			logger.Warn("dynamic model entry matched no catalog entries",
+			registryModels := util.FindRegistryModels(m, providers)
+			expanded = append(expanded, registryModels...)
+			if len(registryModels) > 0 {
+				matchedAny = true
+			}
+		}
+		if !matchedAny {
+			logger.Warn("dynamic model entry matched no catalog or registry entries",
 				"provider_rgx", m.ProviderRgx, "model_rgx", m.ModelRgx)
 		}
 	}
@@ -467,7 +475,6 @@ func (a *AgentState) selectStart(agent config.AgentConfig, agentName string, n i
 }
 
 func resolveTargetFormat(model string, agentModel *config.AgentModel, catalog *discovery.ModelCatalog) string {
-	// Priority: agent model entry > catalog > static registry
 	if agentModel != nil && agentModel.Format != "" {
 		return agentModel.Format
 	}
@@ -478,6 +485,9 @@ func resolveTargetFormat(model string, agentModel *config.AgentModel, catalog *d
 	}
 	if entry, ok := config.ModelRegistry[model]; ok {
 		return entry.Format
+	}
+	if catalog != nil && model != "" {
+		return discovery.InferFormat(model)
 	}
 	return ""
 }

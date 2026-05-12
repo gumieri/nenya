@@ -160,7 +160,7 @@ func effectiveConfigPaths(configDir, configFile string) configPaths {
 	return configPaths{dir: dir, file: file}
 }
 
-func loadConfig(paths configPaths) (*config.Config, error) {
+func loadConfig(paths configPaths) (*config.Config, *config.SecretsConfig, error) {
 	var cfg *config.Config
 	var err error
 
@@ -170,9 +170,14 @@ func loadConfig(paths configPaths) (*config.Config, error) {
 		cfg, err = config.LoadFromDir(paths.dir)
 	}
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	return cfg, nil
+
+	secrets, err := config.LoadSecrets()
+	if err != nil {
+		return nil, nil, err
+	}
+	return cfg, secrets, nil
 }
 
 func setupLoggerFromConfig(cfg *config.Config, verbose bool) *slog.Logger {
@@ -181,7 +186,9 @@ func setupLoggerFromConfig(cfg *config.Config, verbose bool) *slog.Logger {
 	}
 
 	level := config.LogLevelFromString(cfg.Server.LogLevel)
-	infra.SetLogLevel(cfg.Server.LogLevel)
+	if err := infra.SetLogLevel(cfg.Server.LogLevel); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: failed to set log level: %v\n", err)
+	}
 	return infra.SetupLoggerWithLevel(level)
 }
 
