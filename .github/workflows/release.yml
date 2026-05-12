@@ -73,7 +73,7 @@ jobs:
       - name: Install Cosign
         uses: sigstore/cosign-installer@v4.1.1
 
-      - uses: goreleaser/goreleaser-action@v6
+      - uses: goreleaser/goreleaser-action@v7
         with:
           distribution: goreleaser
           version: "~> 2"
