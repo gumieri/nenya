@@ -223,6 +223,8 @@ func (a *AnthropicAdapter) convertToolChoice(tc interface{}, anthropic map[strin
 
 func (a *AnthropicAdapter) convertMessages(msgs []interface{}) []interface{} {
 	var result []interface{}
+	toolUseIDs := a.extractToolUseIDs(msgs)
+	nextID := 0
 	for _, msgRaw := range msgs {
 		msg, ok := msgRaw.(map[string]interface{})
 		if !ok {
@@ -241,9 +243,13 @@ func (a *AnthropicAdapter) convertMessages(msgs []interface{}) []interface{} {
 		}
 
 		if role == "tool" {
-			toolCallID, _ := msg["tool_call_id"].(string)
 			anthMsg["role"] = "user"
-			anthMsg["content"] = a.convertToolMessage(content, toolCallID)
+			toolUseID := ""
+			if nextID < len(toolUseIDs) {
+				toolUseID = toolUseIDs[nextID]
+				nextID++
+			}
+			anthMsg["content"] = a.convertToolMessage(content, toolUseID)
 		} else if content != nil {
 			anthMsg["content"] = content
 		}
@@ -251,6 +257,37 @@ func (a *AnthropicAdapter) convertMessages(msgs []interface{}) []interface{} {
 		result = append(result, anthMsg)
 	}
 	return result
+}
+
+// extractToolUseIDs scans the messages for assistant messages with tool_calls
+// and returns a slice of the Anthropic tool_use.id values in order of appearance.
+// These are extracted from the client's OpenAI-format tool_calls[].id field
+// (which should contain the Anthropic tool_use.id from the original response).
+func (a *AnthropicAdapter) extractToolUseIDs(msgs []interface{}) []string {
+	var ids []string
+	for _, msgRaw := range msgs {
+		msg, ok := msgRaw.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		if msg["role"] != "assistant" {
+			continue
+		}
+		tcs, ok := msg["tool_calls"].([]interface{})
+		if !ok {
+			continue
+		}
+		for _, tc := range tcs {
+			tcm, ok := tc.(map[string]interface{})
+			if !ok {
+				continue
+			}
+			if id, ok := tcm["id"].(string); ok && id != "" {
+				ids = append(ids, id)
+			}
+		}
+	}
+	return ids
 }
 
 func (a *AnthropicAdapter) convertToolMessage(content interface{}, toolUseID string) []interface{} {
@@ -332,31 +369,7 @@ func (a *AnthropicAdapter) convertAnthropicToOpenAI(anthropic map[string]interfa
 	return openai
 }
 
-func (a *AnthropicAdapter) processAnthropicContent(anthropic, delta, choice map[string]interface{}) {
-	content, ok := anthropic["content"]
-	if !ok {
-		return
-	}
-
-	switch c := content.(type) {
-	case string:
-		delta["content"] = c
-		choice["finish_reason"] = "stop"
-	case []interface{}:
-		textParts, toolCalls := a.extractContentBlocks(c)
-		if len(textParts) > 0 {
-			delta["content"] = strings.Join(textParts, "")
-		}
-		if len(toolCalls) > 0 {
-			delta["tool_calls"] = toolCalls
-			choice["finish_reason"] = "tool_calls"
-		}
-		if choice["finish_reason"] == nil {
-			choice["finish_reason"] = "stop"
-		}
-	}
-}
-
+// extractContentBlocks extracts text parts and tool calls from Anthropic content blocks.
 func (a *AnthropicAdapter) extractContentBlocks(blocks []interface{}) ([]string, []interface{}) {
 	var textParts []string
 	var toolCalls []interface{}
@@ -380,6 +393,31 @@ func (a *AnthropicAdapter) extractContentBlocks(blocks []interface{}) ([]string,
 		}
 	}
 	return textParts, toolCalls
+}
+
+func (a *AnthropicAdapter) processAnthropicContent(anthropic, delta, choice map[string]interface{}) {
+	content, ok := anthropic["content"]
+	if !ok {
+		return
+	}
+
+	switch c := content.(type) {
+	case string:
+		delta["content"] = c
+		choice["finish_reason"] = "stop"
+	case []interface{}:
+		textParts, toolCalls := a.extractContentBlocks(c)
+		if len(textParts) > 0 {
+			delta["content"] = strings.Join(textParts, "")
+		}
+		if len(toolCalls) > 0 {
+			delta["tool_calls"] = toolCalls
+			choice["finish_reason"] = "tool_calls"
+		}
+		if choice["finish_reason"] == nil {
+			choice["finish_reason"] = "stop"
+		}
+	}
 }
 
 func (a *AnthropicAdapter) convertToolUseBlock(bm map[string]interface{}) map[string]interface{} {

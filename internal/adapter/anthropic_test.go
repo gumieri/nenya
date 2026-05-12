@@ -197,6 +197,182 @@ func TestAnthropicAdapter_MutateRequest_ToolMessage(t *testing.T) {
 	if toolMsg["role"] != "user" {
 		t.Errorf("expected tool message role 'user', got %v", toolMsg["role"])
 	}
+	content := toolMsg["content"].([]interface{})
+	if len(content) != 1 {
+		t.Fatalf("expected 1 content block, got %d", len(content))
+	}
+	block := content[0].(map[string]interface{})
+	if block["type"] != "tool_result" {
+		t.Errorf("expected block type 'tool_result', got %v", block["type"])
+	}
+	if block["tool_use_id"] != "tc1" {
+		t.Errorf("expected tool_use_id 'tc1', got %v", block["tool_use_id"])
+	}
+	if block["content"] != "sunny" {
+		t.Errorf("expected content 'sunny', got %v", block["content"])
+	}
+}
+
+func TestAnthropicAdapter_MutateRequest_ToolMessage_ClientModifiedID(t *testing.T) {
+	a := NewAnthropicAdapter()
+	body := []byte(`{"model":"claude-3","messages":[{"role":"assistant","content":"","tool_calls":[{"id":"tu_original_1","type":"function","function":{"name":"get_weather","arguments":"{}"}}]},{"role":"tool","tool_call_id":"chatcmpl-tool-xxx","content":"sunny"}]}`)
+	out, err := a.MutateRequest(body, "claude-3", true)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var m map[string]interface{}
+	if err := json.Unmarshal(out, &m); err != nil {
+		t.Fatalf("failed to parse output: %v", err)
+	}
+
+	msgs := m["messages"].([]interface{})
+	if len(msgs) != 2 {
+		t.Fatalf("expected 2 messages, got %d", len(msgs))
+	}
+
+	toolMsg := msgs[1].(map[string]interface{})
+	if toolMsg["role"] != "user" {
+		t.Errorf("expected tool message role 'user', got %v", toolMsg["role"])
+	}
+
+	content := toolMsg["content"].([]interface{})
+	if len(content) != 1 {
+		t.Fatalf("expected 1 content block, got %d", len(content))
+	}
+
+	block := content[0].(map[string]interface{})
+	if block["type"] != "tool_result" {
+		t.Errorf("expected block type 'tool_result', got %v", block["type"])
+	}
+
+	if block["tool_use_id"] != "tu_original_1" {
+		t.Errorf("expected tool_use_id 'tu_original_1' (original tool_use.id), got %v", block["tool_use_id"])
+	}
+
+	if block["content"] != "sunny" {
+		t.Errorf("expected content 'sunny', got %v", block["content"])
+	}
+}
+
+func TestAnthropicAdapter_MutateRequest_ToolMessage_MultiTool(t *testing.T) {
+	a := NewAnthropicAdapter()
+	body := []byte(`{"model":"claude-3","messages":[{"role":"assistant","content":"","tool_calls":[{"id":"tu_1","type":"function","function":{"name":"get_weather","arguments":"{}"}},{"id":"tu_2","type":"function","function":{"name":"get_time","arguments":"{}"}}]},{"role":"tool","tool_call_id":"whatever_1","content":"sunny"},{"role":"tool","tool_call_id":"whatever_2","content":"12:00"}]}`)
+	out, err := a.MutateRequest(body, "claude-3", true)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var m map[string]interface{}
+	if err := json.Unmarshal(out, &m); err != nil {
+		t.Fatalf("failed to parse output: %v", err)
+	}
+
+	msgs := m["messages"].([]interface{})
+	if len(msgs) != 3 {
+		t.Fatalf("expected 3 messages, got %d", len(msgs))
+	}
+
+	tool1 := msgs[1].(map[string]interface{})
+	content1 := tool1["content"].([]interface{})
+	if len(content1) != 1 {
+		t.Fatalf("expected 1 content block for tool1, got %d", len(content1))
+	}
+
+	block1 := content1[0].(map[string]interface{})
+	if block1["tool_use_id"] != "tu_1" {
+		t.Errorf("expected tool_use_id 'tu_1' for first tool, got %v", block1["tool_use_id"])
+	}
+
+	tool2 := msgs[2].(map[string]interface{})
+	content2 := tool2["content"].([]interface{})
+	if len(content2) != 1 {
+		t.Fatalf("expected 1 content block for tool2, got %d", len(content2))
+	}
+
+	block2 := content2[0].(map[string]interface{})
+	if block2["tool_use_id"] != "tu_2" {
+		t.Errorf("expected tool_use_id 'tu_2' for second tool, got %v", block2["tool_use_id"])
+	}
+}
+
+func TestAnthropicAdapter_MutateRequest_ToolMessage_MoreToolsThanIDs(t *testing.T) {
+	a := NewAnthropicAdapter()
+	body := []byte(`{"model":"claude-3","messages":[{"role":"assistant","content":"","tool_calls":[{"id":"tu_1","type":"function","function":{"name":"get_weather","arguments":"{}"}}]},{"role":"tool","tool_call_id":"tc1","content":"sunny"},{"role":"tool","tool_call_id":"tc2","content":"12:00"}]}`)
+	out, err := a.MutateRequest(body, "claude-3", true)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var m map[string]interface{}
+	if err := json.Unmarshal(out, &m); err != nil {
+		t.Fatalf("failed to parse output: %v", err)
+	}
+
+	msgs := m["messages"].([]interface{})
+	if len(msgs) != 3 {
+		t.Fatalf("expected 3 messages, got %d", len(msgs))
+	}
+
+	tool1 := msgs[1].(map[string]interface{})
+	content1 := tool1["content"].([]interface{})
+	if len(content1) != 1 {
+		t.Fatalf("expected 1 content block for tool1, got %d", len(content1))
+	}
+
+	block1 := content1[0].(map[string]interface{})
+	if block1["type"] != "tool_result" {
+		t.Errorf("expected block type 'tool_result', got %v", block1["type"])
+	}
+
+	if block1["tool_use_id"] != "tu_1" {
+		t.Errorf("expected tool_use_id 'tu_1' for first tool, got %v", block1["tool_use_id"])
+	}
+
+	tool2 := msgs[2].(map[string]interface{})
+	content2 := tool2["content"].([]interface{})
+	if len(content2) != 1 {
+		t.Fatalf("expected 1 content block for tool2, got %d", len(content2))
+	}
+
+	block2 := content2[0].(map[string]interface{})
+	if _, ok := block2["tool_use_id"]; ok {
+		t.Errorf("expected no tool_use_id for orphaned tool result, got %v", block2["tool_use_id"])
+	}
+}
+
+func TestAnthropicAdapter_MutateRequest_ToolMessage_NoAssistant(t *testing.T) {
+	a := NewAnthropicAdapter()
+	body := []byte(`{"model":"claude-3","messages":[{"role":"user","content":"hello"},{"role":"tool","tool_call_id":"tc1","content":"result"}]}`)
+	out, err := a.MutateRequest(body, "claude-3", true)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var m map[string]interface{}
+	if err := json.Unmarshal(out, &m); err != nil {
+		t.Fatalf("failed to parse output: %v", err)
+	}
+
+	msgs := m["messages"].([]interface{})
+	if len(msgs) != 2 {
+		t.Fatalf("expected 2 messages, got %d", len(msgs))
+	}
+
+	toolMsg := msgs[1].(map[string]interface{})
+	content := toolMsg["content"].([]interface{})
+	if len(content) != 1 {
+		t.Fatalf("expected 1 content block for tool, got %d", len(content))
+	}
+
+	block := content[0].(map[string]interface{})
+	if block["type"] != "tool_result" {
+		t.Errorf("expected block type 'tool_result', got %v", block["type"])
+	}
+
+	if _, ok := block["tool_use_id"]; ok {
+		t.Errorf("expected no tool_use_id for orphaned tool result, got %v", block["tool_use_id"])
+	}
 }
 
 func TestAnthropicAdapter_MutateResponse_NonEmpty(t *testing.T) {
