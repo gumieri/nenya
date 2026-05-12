@@ -29,6 +29,10 @@ COPY --from=builder /src/nenya /nenya
 
 USER nenya:nenya
 
-EXPOSE 8080
+# ARG PORT=8080 sets default for build, ENV makes it available at runtime
+# Note: Binary defaults to :8080 via config.ApplyDefaults(), not this ENV
+ARG PORT=8080
+ENV PORT=${PORT}
+EXPOSE ${PORT}
 
 ENTRYPOINT ["/nenya"]

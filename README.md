@@ -199,6 +199,28 @@ sudo systemctl enable --now nenya.socket
 sudo systemctl enable --now nenya.service
 ```
 
+### Runtime Configuration
+
+Nenya supports standard environment variables for deployment portability:
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `PORT` | `8080` | Listening port (overrides `server.listen_addr`) |
+| `HOST` | — | Optional bind address (e.g. `127.0.0.1`). Only used when combined with `PORT` |
+| `NENYA_CONFIG_DIR` | `/etc/nenya/` | Configuration directory path |
+| `NENYA_CONFIG_FILE` | — | Single config file path (takes precedence over `NENYA_CONFIG_DIR`) |
+| `NENYA_SECRETS_DIR` | — | Secrets directory (overrides `CREDENTIALS_DIRECTORY`) |
+
+Example usage:
+```bash
+PORT=9090 HOST=127.0.0.1 ./nenya --config /path/to/config.json
+```
+
+Or in Docker:
+```bash
+docker run -e PORT=9090 -p 9090:9090 ghcr.io/gumieri/nenya:latest
+```
+
 ### Or Choose Your Deployment
 
 - **[Deploy Bare Metal (systemd)](docs/DEPLOY_BAREMETAL.md)** — Direct binary install, socket activation, hot reload

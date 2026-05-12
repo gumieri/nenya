@@ -12,6 +12,7 @@ import (
 	"os/signal"
 	"sort"
 	"strconv"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -192,9 +193,39 @@ func setupLoggerFromConfig(cfg *config.Config, verbose bool) *slog.Logger {
 	return infra.SetupLoggerWithLevel(level)
 }
 
+func applyListenAddrFromEnv(cfg *config.Config, logger *slog.Logger) {
+	port := strings.TrimSpace(os.Getenv("PORT"))
+	host := strings.TrimSpace(os.Getenv("HOST"))
+
+	if port == "" && host == "" {
+		return
+	}
+
+	if port == "" {
+		if host != "" {
+			logger.Debug("HOST set but PORT unset, ignoring HOST", "HOST", host)
+		}
+		return
+	}
+
+	p, err := net.LookupPort("tcp", port)
+	if err != nil || p < 0 || p > 65535 {
+		logger.Warn("invalid PORT value, ignoring", "PORT", port, "err", err)
+		return
+	}
+
+	addr := ":" + port
+	if host != "" {
+		addr = net.JoinHostPort(host, port)
+	}
+	cfg.Server.ListenAddr = addr
+}
+
 func run(logger *slog.Logger, cfg *config.Config, secrets *config.SecretsConfig, paths configPaths) {
 	startupCtx, startupCancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer startupCancel()
+
+	applyListenAddrFromEnv(cfg, logger)
 
 	gw := gateway.New(startupCtx, *cfg, secrets, logger)
 
@@ -226,6 +257,7 @@ func run(logger *slog.Logger, cfg *config.Config, secrets *config.SecretsConfig,
 
 func buildServer(p *proxy.Proxy, listenAddr string) *http.Server {
 	return &http.Server{
+		Addr:           listenAddr,
 		Handler:        p,
 		ReadTimeout:    10 * time.Second,
 		WriteTimeout:   0,

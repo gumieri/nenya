@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"net"
 	"net/http"
 	"os"
@@ -69,6 +70,9 @@ func TestBuildServer(t *testing.T) {
 	srv := buildServer(p, ":9090")
 	if srv.Handler != p {
 		t.Error("server handler should be the proxy")
+	}
+	if srv.Addr != ":9090" {
+		t.Errorf("expected Addr :9090, got %s", srv.Addr)
 	}
 	if srv.ReadTimeout != 10*time.Second {
 		t.Errorf("expected ReadTimeout 10s, got %v", srv.ReadTimeout)
@@ -166,6 +170,122 @@ func TestLoadConfig_ConfigFail(t *testing.T) {
 	_, _, err := loadConfig(paths)
 	if err == nil {
 		t.Fatal("expected error for nonexistent config")
+	}
+}
+
+func TestApplyListenAddrFromEnv_PORTOnly(t *testing.T) {
+	t.Setenv("PORT", "9090")
+	t.Setenv("HOST", "")
+	cfg := &config.Config{Server: config.ServerConfig{ListenAddr: ":8080"}}
+	applyListenAddrFromEnv(cfg, slog.Default())
+	if cfg.Server.ListenAddr != ":9090" {
+		t.Errorf("expected :9090, got %s", cfg.Server.ListenAddr)
+	}
+}
+
+func TestApplyListenAddrFromEnv_PORTAndHOST(t *testing.T) {
+	t.Setenv("PORT", "9090")
+	t.Setenv("HOST", "127.0.0.1")
+	cfg := &config.Config{Server: config.ServerConfig{ListenAddr: ":8080"}}
+	applyListenAddrFromEnv(cfg, slog.Default())
+	if cfg.Server.ListenAddr != "127.0.0.1:9090" {
+		t.Errorf("expected 127.0.0.1:9090, got %s", cfg.Server.ListenAddr)
+	}
+}
+
+func TestApplyListenAddrFromEnv_NoEnv(t *testing.T) {
+	t.Setenv("PORT", "")
+	t.Setenv("HOST", "")
+	cfg := &config.Config{Server: config.ServerConfig{ListenAddr: ":8080"}}
+	applyListenAddrFromEnv(cfg, slog.Default())
+	if cfg.Server.ListenAddr != ":8080" {
+		t.Errorf("expected :8080 (unchanged), got %s", cfg.Server.ListenAddr)
+	}
+}
+
+func TestApplyListenAddrFromEnv_InvalidPort(t *testing.T) {
+	t.Setenv("PORT", "not-a-number")
+	t.Setenv("HOST", "")
+	cfg := &config.Config{Server: config.ServerConfig{ListenAddr: ":8080"}}
+	applyListenAddrFromEnv(cfg, slog.Default())
+	if cfg.Server.ListenAddr != ":8080" {
+		t.Errorf("expected :8080 (unchanged after invalid PORT), got %s", cfg.Server.ListenAddr)
+	}
+}
+
+func TestApplyListenAddrFromEnv_HostOnly(t *testing.T) {
+	t.Setenv("PORT", "")
+	t.Setenv("HOST", "127.0.0.1")
+	cfg := &config.Config{Server: config.ServerConfig{ListenAddr: ":8080"}}
+	applyListenAddrFromEnv(cfg, slog.Default())
+	if cfg.Server.ListenAddr != ":8080" {
+		t.Errorf("expected :8080 (HOST alone ignored), got %s", cfg.Server.ListenAddr)
+	}
+}
+
+func TestApplyListenAddrFromEnv_EmptyConfigAddr(t *testing.T) {
+	t.Setenv("PORT", "9090")
+	t.Setenv("HOST", "")
+	cfg := &config.Config{Server: config.ServerConfig{ListenAddr: ""}}
+	applyListenAddrFromEnv(cfg, slog.Default())
+	if cfg.Server.ListenAddr != ":9090" {
+		t.Errorf("expected :9090, got %s", cfg.Server.ListenAddr)
+	}
+}
+
+func TestApplyListenAddrFromEnv_PortZero(t *testing.T) {
+	t.Setenv("PORT", "0")
+	cfg := &config.Config{Server: config.ServerConfig{ListenAddr: ":8080"}}
+	applyListenAddrFromEnv(cfg, slog.Default())
+	if cfg.Server.ListenAddr != ":0" {
+		t.Errorf("expected :0 (random port), got %s", cfg.Server.ListenAddr)
+	}
+}
+
+func TestApplyListenAddrFromEnv_PortMax(t *testing.T) {
+	t.Setenv("PORT", "65535")
+	cfg := &config.Config{Server: config.ServerConfig{ListenAddr: ":8080"}}
+	applyListenAddrFromEnv(cfg, slog.Default())
+	if cfg.Server.ListenAddr != ":65535" {
+		t.Errorf("expected :65535, got %s", cfg.Server.ListenAddr)
+	}
+}
+
+func TestApplyListenAddrFromEnv_PortOutOfRange(t *testing.T) {
+	t.Setenv("PORT", "99999")
+	cfg := &config.Config{Server: config.ServerConfig{ListenAddr: ":8080"}}
+	applyListenAddrFromEnv(cfg, slog.Default())
+	if cfg.Server.ListenAddr != ":8080" {
+		t.Errorf("expected :8080 unchanged for out-of-range port, got %s", cfg.Server.ListenAddr)
+	}
+}
+
+func TestApplyListenAddrFromEnv_IPv6Host(t *testing.T) {
+	t.Setenv("PORT", "9090")
+	t.Setenv("HOST", "::1")
+	cfg := &config.Config{Server: config.ServerConfig{ListenAddr: ":8080"}}
+	applyListenAddrFromEnv(cfg, slog.Default())
+	if cfg.Server.ListenAddr != "[::1]:9090" {
+		t.Errorf("expected [::1]:9090, got %s", cfg.Server.ListenAddr)
+	}
+}
+
+func TestApplyListenAddrFromEnv_Whitespace(t *testing.T) {
+	t.Setenv("PORT", "  9090  ")
+	t.Setenv("HOST", "  127.0.0.1  ")
+	cfg := &config.Config{Server: config.ServerConfig{ListenAddr: ":8080"}}
+	applyListenAddrFromEnv(cfg, slog.Default())
+	if cfg.Server.ListenAddr != "127.0.0.1:9090" {
+		t.Errorf("expected 127.0.0.1:9090 (trimmed whitespace), got %s", cfg.Server.ListenAddr)
+	}
+}
+
+func TestApplyListenAddrFromEnv_NegativePort(t *testing.T) {
+	t.Setenv("PORT", "-1")
+	cfg := &config.Config{Server: config.ServerConfig{ListenAddr: ":8080"}}
+	applyListenAddrFromEnv(cfg, slog.Default())
+	if cfg.Server.ListenAddr != ":8080" {
+		t.Errorf("expected :8080 unchanged for negative port, got %s", cfg.Server.ListenAddr)
 	}
 }
 
