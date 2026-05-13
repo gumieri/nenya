@@ -124,6 +124,10 @@ var ProviderRegistry = map[string]ProviderEntry{
 		URL:       "http://127.0.0.1:11434/v1/chat/completions",
 		AuthStyle: "none",
 	},
+	"moonshot": {
+		URL:       "https://api.moonshot.cn/v1/chat/completions",
+		AuthStyle: "bearer",
+	},
 }
 
 // ModelRegistry contains the static model definitions with provider
@@ -216,6 +220,7 @@ var ModelRegistry = map[string]ModelEntry{
 	"kimi-k2.6":             {Provider: "zen", MaxContext: 262144, MaxOutput: 65536, Thinking: ModelThinkingConfig{Min: 1024, Max: 32000, ZeroAllowed: true, DynamicAllowed: true}},
 	"kimi-k2.5":             {Provider: "zen", MaxContext: 131072, MaxOutput: 32768, Thinking: ModelThinkingConfig{Min: 1024, Max: 32000, ZeroAllowed: true, DynamicAllowed: true}},
 	"kimi-k2-thinking":      {Provider: "zen", MaxContext: 131072, MaxOutput: 32768, Thinking: ModelThinkingConfig{Min: 1024, Max: 32000, ZeroAllowed: true, DynamicAllowed: true}},
+	"kimi-k2":               {Provider: "moonshot", MaxContext: 131072, MaxOutput: 32768},
 	"big-pickle":            {Provider: "zen", MaxContext: 200000, MaxOutput: 8192},
 	"ling-2.6-flash-free":   {Provider: "zen", MaxContext: 200000, MaxOutput: 8192},
 	"hy3-preview-free":      {Provider: "zen", MaxContext: 131072, MaxOutput: 8192},
