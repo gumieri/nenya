@@ -232,33 +232,110 @@ func (a *AnthropicAdapter) convertMessages(msgs []interface{}) []interface{} {
 		}
 
 		role, _ := msg["role"].(string)
-		content := msg["content"]
 
 		if role == "system" {
 			continue
 		}
 
-		anthMsg := map[string]interface{}{
-			"role": role,
-		}
-
 		if role == "tool" {
-			anthMsg["role"] = "user"
 			toolUseID := ""
 			if nextID < len(toolUseIDs) {
 				toolUseID = toolUseIDs[nextID]
 				nextID++
 			}
-			anthMsg["content"] = a.convertToolMessage(content, toolUseID)
-		} else if s, ok := content.(string); ok && strings.TrimSpace(s) != "" {
-			anthMsg["content"] = s
-		} else if arr, ok := content.([]interface{}); ok && len(arr) > 0 {
-			anthMsg["content"] = arr
+			anthMsg := map[string]interface{}{
+				"role":    "user",
+				"content": a.convertToolMessage(msg["content"], toolUseID),
+			}
+			result = append(result, anthMsg)
+			continue
 		}
 
+		contentBlocks := a.buildContentBlocks(msg)
+		anthMsg := map[string]interface{}{
+			"role":    role,
+			"content": contentBlocks,
+		}
 		result = append(result, anthMsg)
 	}
 	return result
+}
+
+// emptyTextBlock is a minimal Anthropic text content block used as a fallback
+// when a message has no text or tool_use content. Anthropic requires every
+// user/assistant message to have a non-empty content array.
+var emptyTextBlock = map[string]interface{}{"type": "text", "text": " "}
+
+// buildContentBlocks constructs an Anthropic content array from an OpenAI-format
+// message. It converts text content into typed text blocks and OpenAI tool_calls
+// into Anthropic tool_use blocks. Returns a non-empty slice guaranteed to have at
+// least one content block to satisfy Anthropic's API requirement.
+func (a *AnthropicAdapter) buildContentBlocks(msg map[string]interface{}) []interface{} {
+	var blocks []interface{}
+
+	content := msg["content"]
+	switch c := content.(type) {
+	case string:
+		if strings.TrimSpace(c) != "" {
+			blocks = append(blocks, map[string]interface{}{
+				"type": "text",
+				"text": c,
+			})
+		}
+	case []interface{}:
+		for _, part := range c {
+			if pm, ok := part.(map[string]interface{}); ok {
+				blocks = append(blocks, pm)
+			}
+		}
+	}
+
+	if role, _ := msg["role"].(string); role == "assistant" {
+		if tcs, ok := msg["tool_calls"].([]interface{}); ok {
+			for _, tc := range tcs {
+				toolUse := a.convertToolCallToUse(tc)
+				if toolUse != nil {
+					blocks = append(blocks, toolUse)
+				}
+			}
+		}
+	}
+
+	if len(blocks) == 0 {
+		blocks = []interface{}{emptyTextBlock}
+	}
+	return blocks
+}
+
+// convertToolCallToUse converts a single OpenAI tool_call object to an Anthropic
+// tool_use content block. Returns nil if the input is not a valid function tool call.
+func (a *AnthropicAdapter) convertToolCallToUse(tc interface{}) map[string]interface{} {
+	tcm, ok := tc.(map[string]interface{})
+	if !ok {
+		return nil
+	}
+	fn, ok := tcm["function"].(map[string]interface{})
+	if !ok {
+		return nil
+	}
+
+	id, _ := tcm["id"].(string)
+	name, _ := fn["name"].(string)
+
+	var input interface{}
+	if args, ok := fn["arguments"].(string); ok && args != "" {
+		_ = json.Unmarshal([]byte(args), &input)
+	}
+	if input == nil {
+		input = map[string]interface{}{}
+	}
+
+	return map[string]interface{}{
+		"type":  "tool_use",
+		"id":    id,
+		"name":  name,
+		"input": input,
+	}
 }
 
 // extractToolUseIDs scans the messages for assistant messages with tool_calls

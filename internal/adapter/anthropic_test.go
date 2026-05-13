@@ -193,6 +193,22 @@ func TestAnthropicAdapter_MutateRequest_ToolMessage(t *testing.T) {
 		t.Fatalf("expected 2 messages, got %d", len(msgs))
 	}
 
+	assistantMsg := msgs[0].(map[string]interface{})
+	assistantContent := assistantMsg["content"].([]interface{})
+	if len(assistantContent) != 1 {
+		t.Fatalf("expected 1 assistant content block, got %d", len(assistantContent))
+	}
+	toolUse := assistantContent[0].(map[string]interface{})
+	if toolUse["type"] != "tool_use" {
+		t.Errorf("expected tool_use block, got type %v", toolUse["type"])
+	}
+	if toolUse["id"] != "tc1" {
+		t.Errorf("expected tool_use id 'tc1', got %v", toolUse["id"])
+	}
+	if toolUse["name"] != "get_weather" {
+		t.Errorf("expected tool_use name 'get_weather', got %v", toolUse["name"])
+	}
+
 	toolMsg := msgs[1].(map[string]interface{})
 	if toolMsg["role"] != "user" {
 		t.Errorf("expected tool message role 'user', got %v", toolMsg["role"])
@@ -271,6 +287,20 @@ func TestAnthropicAdapter_MutateRequest_ToolMessage_MultiTool(t *testing.T) {
 	msgs := m["messages"].([]interface{})
 	if len(msgs) != 3 {
 		t.Fatalf("expected 3 messages, got %d", len(msgs))
+	}
+
+	assistantMsg := msgs[0].(map[string]interface{})
+	assistantContent := assistantMsg["content"].([]interface{})
+	if len(assistantContent) != 2 {
+		t.Fatalf("expected 2 tool_use blocks in assistant, got %d", len(assistantContent))
+	}
+	tu1 := assistantContent[0].(map[string]interface{})
+	if tu1["id"] != "tu_1" || tu1["name"] != "get_weather" {
+		t.Errorf("expected first tool_use {id:tu_1 name:get_weather}, got %v", tu1)
+	}
+	tu2 := assistantContent[1].(map[string]interface{})
+	if tu2["id"] != "tu_2" || tu2["name"] != "get_time" {
+		t.Errorf("expected second tool_use {id:tu_2 name:get_time}, got %v", tu2)
 	}
 
 	tool1 := msgs[1].(map[string]interface{})
@@ -599,5 +629,128 @@ func TestGenerateID(t *testing.T) {
 	id := generateID()
 	if len(id) != 24 {
 		t.Errorf("expected ID length 24, got %d", len(id))
+	}
+}
+
+func TestAnthropicAdapter_MutateRequest_AssistantWithTextAndToolCalls(t *testing.T) {
+	a := NewAnthropicAdapter()
+	body := []byte(`{"model":"claude-3","messages":[{"role":"assistant","content":"I will check the weather.","tool_calls":[{"id":"tc1","type":"function","function":{"name":"get_weather","arguments":"{\"city\":\"London\"}"}}]},{"role":"tool","tool_call_id":"tc1","content":"sunny"}]}`)
+	out, err := a.MutateRequest(body, "claude-3", true)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var m map[string]interface{}
+	if err := json.Unmarshal(out, &m); err != nil {
+		t.Fatalf("failed to parse output: %v", err)
+	}
+
+	msgs := m["messages"].([]interface{})
+	assistantMsg := msgs[0].(map[string]interface{})
+	assistantContent := assistantMsg["content"].([]interface{})
+	if len(assistantContent) != 2 {
+		t.Fatalf("expected 2 content blocks (text + tool_use), got %d", len(assistantContent))
+	}
+
+	textBlock := assistantContent[0].(map[string]interface{})
+	if textBlock["type"] != "text" {
+		t.Errorf("expected first block type 'text', got %v", textBlock["type"])
+	}
+	if textBlock["text"] != "I will check the weather." {
+		t.Errorf("expected text content, got %v", textBlock["text"])
+	}
+
+	toolUse := assistantContent[1].(map[string]interface{})
+	if toolUse["type"] != "tool_use" {
+		t.Errorf("expected second block type 'tool_use', got %v", toolUse["type"])
+	}
+	if toolUse["name"] != "get_weather" {
+		t.Errorf("expected tool_use name 'get_weather', got %v", toolUse["name"])
+	}
+	input := toolUse["input"].(map[string]interface{})
+	if input["city"] != "London" {
+		t.Errorf("expected input city 'London', got %v", input["city"])
+	}
+}
+
+func TestAnthropicAdapter_MutateRequest_AssistantNoContentNoToolCalls(t *testing.T) {
+	a := NewAnthropicAdapter()
+	body := []byte(`{"model":"claude-3","messages":[{"role":"user","content":"hi"},{"role":"assistant","content":""}]}`)
+	out, err := a.MutateRequest(body, "claude-3", true)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var m map[string]interface{}
+	if err := json.Unmarshal(out, &m); err != nil {
+		t.Fatalf("failed to parse output: %v", err)
+	}
+
+	msgs := m["messages"].([]interface{})
+	assistantMsg := msgs[1].(map[string]interface{})
+	content := assistantMsg["content"].([]interface{})
+	if len(content) == 0 {
+		t.Fatal("expected non-empty content for empty assistant message")
+	}
+	textBlock := content[0].(map[string]interface{})
+	if textBlock["type"] != "text" {
+		t.Errorf("expected fallback text block, got type %v", textBlock["type"])
+	}
+}
+
+func TestAnthropicAdapter_MutateRequest_AssistantNilContentWithToolCalls(t *testing.T) {
+	a := NewAnthropicAdapter()
+	body := []byte(`{"model":"claude-3","messages":[{"role":"assistant","tool_calls":[{"id":"tu1","type":"function","function":{"name":"bash","arguments":"{\"command\":\"ls\"}"}}]},{"role":"tool","tool_call_id":"tu1","content":"file.txt"}]}`)
+	out, err := a.MutateRequest(body, "claude-3", true)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var m map[string]interface{}
+	if err := json.Unmarshal(out, &m); err != nil {
+		t.Fatalf("failed to parse output: %v", err)
+	}
+
+	msgs := m["messages"].([]interface{})
+	assistantMsg := msgs[0].(map[string]interface{})
+	content := assistantMsg["content"].([]interface{})
+	if len(content) != 1 {
+		t.Fatalf("expected 1 tool_use block (no text), got %d", len(content))
+	}
+	toolUse := content[0].(map[string]interface{})
+	if toolUse["type"] != "tool_use" {
+		t.Errorf("expected tool_use, got %v", toolUse["type"])
+	}
+	if toolUse["id"] != "tu1" {
+		t.Errorf("expected id 'tu1', got %v", toolUse["id"])
+	}
+	input := toolUse["input"].(map[string]interface{})
+	if input["command"] != "ls" {
+		t.Errorf("expected input command 'ls', got %v", input["command"])
+	}
+}
+
+func TestAnthropicAdapter_MutateRequest_UserEmptyContent(t *testing.T) {
+	a := NewAnthropicAdapter()
+	body := []byte(`{"model":"claude-3","messages":[{"role":"user","content":""}]}`)
+	out, err := a.MutateRequest(body, "claude-3", true)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var m map[string]interface{}
+	if err := json.Unmarshal(out, &m); err != nil {
+		t.Fatalf("failed to parse output: %v", err)
+	}
+
+	msgs := m["messages"].([]interface{})
+	userMsg := msgs[0].(map[string]interface{})
+	content := userMsg["content"].([]interface{})
+	if len(content) == 0 {
+		t.Fatal("expected non-empty content for empty user message")
+	}
+	textBlock := content[0].(map[string]interface{})
+	if textBlock["type"] != "text" {
+		t.Errorf("expected fallback text block, got type %v", textBlock["type"])
 	}
 }
