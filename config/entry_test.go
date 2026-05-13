@@ -132,6 +132,94 @@ func TestModelEntry_Validate(t *testing.T) {
 	}
 }
 
+func TestModelThinkingConfig_Validate(t *testing.T) {
+	tests := []struct {
+		name    string
+		c       ModelThinkingConfig
+		wantErr bool
+	}{
+		{
+			name:    "valid zero",
+			c:       ModelThinkingConfig{},
+			wantErr: false,
+		},
+		{
+			name:    "valid min only",
+			c:       ModelThinkingConfig{Min: 1024},
+			wantErr: false,
+		},
+		{
+			name:    "valid max only",
+			c:       ModelThinkingConfig{Max: 2048},
+			wantErr: false,
+		},
+		{
+			name:    "valid min less than max",
+			c:       ModelThinkingConfig{Min: 1024, Max: 2048},
+			wantErr: false,
+		},
+		{
+			name:    "valid min equals max",
+			c:       ModelThinkingConfig{Min: 1024, Max: 1024},
+			wantErr: false,
+		},
+		{
+			name:    "valid with zero allowed",
+			c:       ModelThinkingConfig{Min: 1024, Max: 2048, ZeroAllowed: true},
+			wantErr: false,
+		},
+		{
+			name:    "valid with levels",
+			c:       ModelThinkingConfig{Min: 1024, Max: 2048, Levels: []string{"low", "high"}},
+			wantErr: false,
+		},
+		{
+			name:    "valid dynamic allowed",
+			c:       ModelThinkingConfig{Min: 1024, Max: 2048, DynamicAllowed: true},
+			wantErr: false,
+		},
+		{
+			name:    "invalid negative min",
+			c:       ModelThinkingConfig{Min: -1},
+			wantErr: true,
+		},
+		{
+			name:    "invalid negative max",
+			c:       ModelThinkingConfig{Max: -1},
+			wantErr: true,
+		},
+		{
+			name:    "invalid negative both",
+			c:       ModelThinkingConfig{Min: -1, Max: -1},
+			wantErr: true,
+		},
+		{
+			name:    "invalid min greater than max",
+			c:       ModelThinkingConfig{Min: 2048, Max: 1024},
+			wantErr: true,
+		},
+		{
+			name:    "invalid min greater than max with zero",
+			c:       ModelThinkingConfig{Min: 2048, Max: 1024, ZeroAllowed: true},
+			wantErr: true,
+		},
+		{
+			name:    "invalid min greater than max with levels",
+			c:       ModelThinkingConfig{Min: 2048, Max: 1024, Levels: []string{"low"}},
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := tt.c.Validate()
+			if (err != nil) != tt.wantErr {
+				t.Errorf("Validate() error = %v, wantErr %v", err, tt.wantErr)
+			}
+		})
+	}
+}
+
 func TestAgentModel_CompileRegex_Valid(t *testing.T) {
 	tests := []struct {
 		name    string

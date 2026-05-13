@@ -355,8 +355,8 @@ func TestTransformRequest_MaxTokensCapping(t *testing.T) {
 		if !ok {
 			t.Fatal("expected max_tokens to be set")
 		}
-		if mt.(float64) != 8192 {
-			t.Errorf("expected max_tokens=8192, got %v", mt)
+		if mt.(float64) != 65536 {
+			t.Errorf("expected max_tokens=65536, got %v", mt)
 		}
 	})
 
@@ -364,7 +364,7 @@ func TestTransformRequest_MaxTokensCapping(t *testing.T) {
 		payload := map[string]interface{}{
 			"model":      "gemini-2.5-flash",
 			"messages":   []interface{}{},
-			"max_tokens": float64(16000),
+			"max_tokens": float64(128000),
 		}
 		body, _, err := TransformRequestForUpstream(deps, "gemini", "http://example.com", payload, "", 0, "")
 		if err != nil {
@@ -374,8 +374,8 @@ func TestTransformRequest_MaxTokensCapping(t *testing.T) {
 		if err := json.Unmarshal(body, &parsed); err != nil {
 			t.Fatalf("failed to unmarshal body: %v", err)
 		}
-		if parsed["max_tokens"].(float64) != 8192 {
-			t.Errorf("expected max_tokens capped to 8192, got %v", parsed["max_tokens"])
+		if parsed["max_tokens"].(float64) != 65536 {
+			t.Errorf("expected max_tokens capped to 65536, got %v", parsed["max_tokens"])
 		}
 	})
 

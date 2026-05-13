@@ -306,8 +306,8 @@ func TestResolveWindowMaxContext_WithModels(t *testing.T) {
 	}
 
 	got := ResolveWindowMaxContext("test-agent", agents, nil)
-	if got != 128000 {
-		t.Fatalf("expected 128000 (max of 4000 and 128000), got %d", got)
+	if got != 1048576 {
+		t.Fatalf("expected 1048576 (max of 4000 and 1048576), got %d", got)
 	}
 }
 

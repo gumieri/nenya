@@ -90,8 +90,14 @@ func buildSanitizeDeps(deps TransformDeps) *providerpkg.SanitizeDeps {
 	}
 	if deps.Catalog != nil {
 		sanitizeDeps.SupportsReasoning = func(model string) bool {
+			// Check dynamic discovery catalog first.
 			if dm, ok := deps.Catalog.Lookup(model); ok && dm.Metadata != nil {
 				return dm.Metadata.SupportsReasoning
+			}
+			// Fall back to static model registry: a model supports reasoning
+			// if its Thinking config has any non-zero fields.
+			if entry, ok := config.ModelRegistry[model]; ok {
+				return entry.Thinking.Min > 0 || entry.Thinking.Max > 0 || len(entry.Thinking.Levels) > 0
 			}
 			return false
 		}
