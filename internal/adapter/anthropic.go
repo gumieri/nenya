@@ -250,8 +250,10 @@ func (a *AnthropicAdapter) convertMessages(msgs []interface{}) []interface{} {
 				nextID++
 			}
 			anthMsg["content"] = a.convertToolMessage(content, toolUseID)
-		} else if content != nil {
-			anthMsg["content"] = content
+		} else if s, ok := content.(string); ok && strings.TrimSpace(s) != "" {
+			anthMsg["content"] = s
+		} else if arr, ok := content.([]interface{}); ok && len(arr) > 0 {
+			anthMsg["content"] = arr
 		}
 
 		result = append(result, anthMsg)
