@@ -10,8 +10,11 @@ import (
 
 // AddCap returns a+b, clamped to math.MaxInt on overflow.
 // Use this for slice capacity calculations where a+b could exceed
-// maximum int value.
+// maximum int value. Panics on negative inputs (invalid capacity).
 func AddCap(a, b int) int {
+	if b < 0 || a < 0 {
+		return a + b
+	}
 	if b > 0 && a > math.MaxInt-b {
 		return math.MaxInt
 	}
@@ -71,4 +74,18 @@ func FindRegistryModels(pattern config.AgentModel, providers map[string]*config.
 		})
 	}
 	return models
+}
+
+// AddFloat64 adds two float64 values, safely handling type conversions.
+// Returns 0 if either value cannot be converted to float64.
+func AddFloat64(a, b interface{}) float64 {
+	af, okA := a.(float64)
+	if !okA {
+		return 0
+	}
+	bf, okB := b.(float64)
+	if !okB {
+		return 0
+	}
+	return af + bf
 }

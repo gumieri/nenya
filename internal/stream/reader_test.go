@@ -14,7 +14,7 @@ import (
 
 type mockTransformer struct{}
 
-func (m *mockTransformer) TransformSSEChunk(data []byte) ([]byte, error) {
+func (m *mockTransformer) TransformSSEChunk(_ context.Context, data []byte) ([]byte, error) {
 	return data, nil
 }
 

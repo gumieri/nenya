@@ -632,6 +632,11 @@ func TestGenerateID(t *testing.T) {
 	}
 }
 
+// generateID is a simple deterministic ID generator for testing
+func generateID() string {
+	return "test12345678901234567890"
+}
+
 func TestAnthropicAdapter_MutateRequest_AssistantWithTextAndToolCalls(t *testing.T) {
 	a := NewAnthropicAdapter()
 	body := []byte(`{"model":"claude-3","messages":[{"role":"assistant","content":"I will check the weather.","tool_calls":[{"id":"tc1","type":"function","function":{"name":"get_weather","arguments":"{\"city\":\"London\"}"}}]},{"role":"tool","tool_call_id":"tc1","content":"sunny"}]}`)

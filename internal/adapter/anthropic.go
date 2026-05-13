@@ -1,12 +1,19 @@
 package adapter
 
 import (
-	"crypto/rand"
 	"encoding/json"
 	"fmt"
+	"log/slog"
+	"math"
 	"net/http"
 	"strings"
 	"sync"
+
+	"nenya/internal/util"
+)
+
+const (
+	maxPreFlightBodyBytes = 1 * 1024 * 1024
 )
 
 type AnthropicAdapter struct {
@@ -59,6 +66,10 @@ func (a *AnthropicAdapter) InjectAuth(req *http.Request, apiKey string) error {
 func (a *AnthropicAdapter) MutateRequest(body []byte, model string, stream bool) ([]byte, error) {
 	if len(body) == 0 {
 		return body, nil
+	}
+
+	if len(body) > maxPreFlightBodyBytes {
+		return nil, fmt.Errorf("anthropic: request body too large (%d bytes, max %d)", len(body), maxPreFlightBodyBytes)
 	}
 
 	var openai map[string]interface{}
@@ -145,6 +156,9 @@ func (a *AnthropicAdapter) convertOpenAIToAnthropic(openai map[string]interface{
 
 func (a *AnthropicAdapter) copyOpenAIFields(openai, anthropic map[string]interface{}) {
 	if v, ok := openai["max_tokens"].(float64); ok && v > 0 {
+		if v > math.MaxInt32 {
+			v = math.MaxInt32
+		}
 		anthropic["max_tokens"] = int(v)
 	}
 	if v, ok := openai["temperature"].(float64); ok {
@@ -425,7 +439,7 @@ func (a *AnthropicAdapter) convertTools(tools []interface{}) []interface{} {
 
 func (a *AnthropicAdapter) convertAnthropicToOpenAI(anthropic map[string]interface{}) map[string]interface{} {
 	openai := map[string]interface{}{
-		"id":      "anthropic-" + generateID(),
+		"id":      "anthropic-" + util.GenerateID(),
 		"object":  "chat.completion",
 		"created": 0,
 		"model":   anthropic["model"],
@@ -469,6 +483,8 @@ func (a *AnthropicAdapter) extractContentBlocks(blocks []interface{}) ([]string,
 			if t, ok := bm["content"].(string); ok {
 				textParts = append(textParts, t)
 			}
+		default:
+			slog.Debug("Unknown Anthropic content block type", "type", bType)
 		}
 	}
 	return textParts, toolCalls
@@ -529,6 +545,7 @@ func (a *AnthropicAdapter) processStopReason(anthropic, choice map[string]interf
 	case "max_tokens":
 		choice["finish_reason"] = "length"
 	default:
+		slog.Debug("Unknown Anthropic stop_reason, defaulting to 'stop'", "reason", stopReason)
 		choice["finish_reason"] = "stop"
 	}
 }
@@ -542,22 +559,6 @@ func (a *AnthropicAdapter) processUsage(anthropic, openai map[string]interface{}
 	openai["usage"] = map[string]interface{}{
 		"prompt_tokens":     usage["input_tokens"],
 		"completion_tokens": usage["output_tokens"],
-		"total_tokens":      addFloat64(usage["input_tokens"], usage["output_tokens"]),
+		"total_tokens":      util.AddFloat64(usage["input_tokens"], usage["output_tokens"]),
 	}
-}
-
-func addFloat64(a, b interface{}) float64 {
-	af, _ := a.(float64)
-	bf, _ := b.(float64)
-	return af + bf
-}
-
-func generateID() string {
-	const charset = "abcdefghijklmnopqrstuvwxyz0123456789"
-	b := make([]byte, 24)
-	_, _ = rand.Read(b)
-	for i := range b {
-		b[i] = charset[b[i]%byte(len(charset))]
-	}
-	return string(b)
 }

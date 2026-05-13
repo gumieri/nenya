@@ -2,6 +2,7 @@ package providers
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/url"
@@ -51,7 +52,13 @@ func newGeminiTransformer(cache *infra.ThoughtSignatureCache) stream.ResponseTra
 	}
 }
 
-func (t *GeminiTransformer) TransformSSEChunk(data []byte) ([]byte, error) {
+func (t *GeminiTransformer) TransformSSEChunk(ctx context.Context, data []byte) ([]byte, error) {
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	default:
+	}
+
 	if len(data) == 0 || !bytes.HasPrefix(bytes.TrimSpace(data), []byte("{")) {
 		return data, nil
 	}

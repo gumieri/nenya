@@ -1,181 +1,371 @@
 package stream
 
 import (
+	"context"
 	"encoding/json"
+	"fmt"
+	"log/slog"
+	"math"
 	"strings"
+	"sync"
+
+	"nenya/internal/util"
 )
 
+type anthropicBlock struct {
+	index       int
+	blockType   string
+	toolUseID   string
+	toolUseName string
+}
+
 type AnthropicTransformer struct {
-	version string
+	mu           sync.Mutex
+	messageID    string
+	model        string
+	promptTokens int
+	outputTokens int
+	hasToolCalls bool
+	blockMap     map[int]*anthropicBlock
+	streamDone   bool
 }
 
 func NewAnthropicTransformer() *AnthropicTransformer {
 	return &AnthropicTransformer{
-		version: "2023-06-01",
+		blockMap: make(map[int]*anthropicBlock),
 	}
 }
 
-func (t *AnthropicTransformer) TransformSSEChunk(data []byte) ([]byte, error) {
-	var anthropicChunk map[string]interface{}
-	if err := json.Unmarshal(data, &anthropicChunk); err != nil {
-		return data, nil
+func (t *AnthropicTransformer) TransformSSEChunk(ctx context.Context, data []byte) ([]byte, error) {
+	if len(data) == 0 {
+		return nil, nil
 	}
 
-	openaiChunk := t.convertAnthropicToOpenAI(anthropicChunk)
-	if openaiChunk == nil {
-		return data, nil
-	}
-
-	return json.Marshal(openaiChunk)
-}
-
-func (t *AnthropicTransformer) convertAnthropicToOpenAI(anthropic map[string]interface{}) map[string]interface{} {
-	openai := map[string]interface{}{
-		"id":      "anthropic-" + generateID(),
-		"object":  "chat.completion",
-		"created": 0,
-		"model":   anthropic["model"],
-	}
-
-	choice := map[string]interface{}{
-		"index": 0,
-	}
-	delta := map[string]interface{}{}
-
-	t.processAnthropicContent(anthropic, delta, choice)
-
-	t.processStopReason(anthropic, choice)
-
-	choice["delta"] = delta
-	openai["choices"] = []interface{}{choice}
-
-	t.processUsage(anthropic, openai)
-
-	return openai
-}
-
-func (t *AnthropicTransformer) processAnthropicContent(anthropic, delta, choice map[string]interface{}) {
-	content, ok := anthropic["content"]
-	if !ok {
-		return
-	}
-
-	switch c := content.(type) {
-	case string:
-		delta["content"] = c
-		choice["finish_reason"] = "stop"
-	case []interface{}:
-		textParts, toolCalls := t.extractContentBlocks(c)
-		if len(textParts) > 0 {
-			delta["content"] = joinStrings(textParts)
-		}
-		if len(toolCalls) > 0 {
-			delta["tool_calls"] = toolCalls
-			choice["finish_reason"] = "tool_calls"
-		}
-		if choice["finish_reason"] == nil {
-			choice["finish_reason"] = "stop"
-		}
-	}
-}
-
-func (t *AnthropicTransformer) extractContentBlocks(blocks []interface{}) ([]string, []interface{}) {
-	var textParts []string
-	var toolCalls []interface{}
-	for _, block := range blocks {
-		bm, ok := block.(map[string]interface{})
-		if !ok {
-			continue
-		}
-		bType, _ := bm["type"].(string)
-		switch bType {
-		case "text":
-			if text, ok := bm["text"].(string); ok {
-				textParts = append(textParts, text)
-			}
-		case "tool_use":
-			toolCalls = append(toolCalls, t.convertToolUseBlock(bm))
-		case "tool_result":
-			if text, ok := bm["content"].(string); ok {
-				textParts = append(textParts, text)
-			}
-		}
-	}
-	return textParts, toolCalls
-}
-
-func (t *AnthropicTransformer) convertToolUseBlock(bm map[string]interface{}) map[string]interface{} {
-	tc := map[string]interface{}{
-		"id":   bm["id"],
-		"type": "function",
-		"function": map[string]interface{}{
-			"name":      bm["name"],
-			"arguments": "{}",
-		},
-	}
-	if inp, ok := bm["input"]; ok {
-		argsBytes, _ := json.Marshal(inp)
-		tc["function"].(map[string]interface{})["arguments"] = string(argsBytes)
-	}
-	return tc
-}
-
-func (t *AnthropicTransformer) processStopReason(anthropic, choice map[string]interface{}) {
-	stopReason, ok := anthropic["stop_reason"].(string)
-	if !ok {
-		return
-	}
-
-	switch stopReason {
-	case "end_turn":
-		choice["finish_reason"] = "stop"
-	case "tool_use":
-		choice["finish_reason"] = "tool_calls"
-	case "max_tokens":
-		choice["finish_reason"] = "length"
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
 	default:
-		choice["finish_reason"] = "stop"
+	}
+
+	var event map[string]interface{}
+	if err := json.Unmarshal(data, &event); err != nil {
+		slog.Debug("Failed to unmarshal SSE event, passthrough", "error", err, "data", string(data))
+		return data, nil
+	}
+
+	eventType, _ := event["type"].(string)
+
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	if t.streamDone {
+		slog.Debug("Dropping chunk after stream_done", "event", eventType)
+		return nil, nil
+	}
+
+	switch eventType {
+	case "message_start":
+		return t.handleMessageStart(event)
+	case "content_block_start":
+		return t.handleContentBlockStart(event)
+	case "content_block_delta":
+		return t.handleContentBlockDelta(event)
+	case "content_block_stop":
+		return t.handleContentBlockStop()
+	case "message_delta":
+		return t.handleMessageDelta(event)
+	case "message_stop":
+		return t.handleMessageStop()
+	case "ping":
+		return nil, nil
+	default:
+		return data, nil
 	}
 }
 
-func (t *AnthropicTransformer) processUsage(anthropic, openai map[string]interface{}) {
-	usage, ok := anthropic["usage"].(map[string]interface{})
+func (t *AnthropicTransformer) handleMessageStart(event map[string]interface{}) ([]byte, error) {
+	msg, ok := event["message"].(map[string]interface{})
 	if !ok {
-		return
+		return nil, nil
 	}
 
-	openai["usage"] = map[string]interface{}{
-		"prompt_tokens":     usage["input_tokens"],
-		"completion_tokens": usage["output_tokens"],
-		"total_tokens":      addFloat64(usage["input_tokens"], usage["output_tokens"]),
+	t.messageID, _ = msg["id"].(string)
+	t.model, _ = msg["model"].(string)
+
+	if t.messageID == "" {
+		t.messageID = "anthropic-" + util.GenerateID()
+	}
+
+	if usage, ok := msg["usage"].(map[string]interface{}); ok {
+		if it, ok := usage["input_tokens"].(float64); ok {
+			t.promptTokens = int(it)
+		}
+	}
+
+	return nil, nil
+}
+
+func (t *AnthropicTransformer) handleContentBlockStart(event map[string]interface{}) ([]byte, error) {
+	idx := getFloat64(event, "index")
+	if idx > math.MaxInt32 {
+		slog.Warn("Content block index exceeds int32 range", "index", idx)
+		return nil, nil
+	}
+	index := int(idx)
+
+	blockRaw, ok := event["content_block"].(map[string]interface{})
+	if !ok {
+		return nil, nil
+	}
+
+	blockType, _ := blockRaw["type"].(string)
+	blockTypeLower := strings.ToLower(blockType)
+	block := &anthropicBlock{index: index, blockType: blockTypeLower}
+	t.blockMap[index] = block
+
+	switch blockTypeLower {
+	case "text":
+		if text, ok := blockRaw["text"].(string); ok && text != "" {
+			return t.marshalChunk(t.makeOpenAIChunk(
+				map[string]interface{}{"content": text}, nil))
+		}
+		return nil, nil
+	case "thinking":
+		if thinking, ok := blockRaw["thinking"].(string); ok && thinking != "" {
+			return t.marshalChunk(t.makeOpenAIChunk(
+				map[string]interface{}{"content": "<thinking>" + thinking + "</thinking>"}, nil))
+		}
+		return nil, nil
+	case "redacted_thinking":
+		return nil, nil
+	case "tool_use":
+		block.toolUseID, _ = blockRaw["id"].(string)
+		block.toolUseName, _ = blockRaw["name"].(string)
+		t.hasToolCalls = true
+
+		tcIndex := indexToToolCall(index, t.blockMap)
+		tc := map[string]interface{}{
+			"index": tcIndex,
+			"id":    block.toolUseID,
+			"type":  "function",
+			"function": map[string]interface{}{
+				"name":      block.toolUseName,
+				"arguments": "",
+			},
+		}
+		return t.marshalChunk(t.makeOpenAIChunk(
+			map[string]interface{}{"tool_calls": []interface{}{tc}}, nil))
+	default:
+		slog.Debug("Unknown Anthropic content block type", "type", blockType, "normalized", blockTypeLower, "index", index)
+		return nil, nil
 	}
 }
 
-func addFloat64(a, b interface{}) float64 {
-	af, _ := a.(float64)
-	bf, _ := b.(float64)
-	return af + bf
+func (t *AnthropicTransformer) handleContentBlockDelta(event map[string]interface{}) ([]byte, error) {
+	idx := getFloat64(event, "index")
+	if idx > math.MaxInt32 {
+		slog.Warn("Content block delta index exceeds int32 range", "index", idx)
+		return nil, nil
+	}
+	index := int(idx)
+
+	block, ok := t.blockMap[index]
+	if !ok {
+		return nil, nil
+	}
+
+	deltaRaw, ok := event["delta"].(map[string]interface{})
+	if !ok {
+		return nil, nil
+	}
+
+	deltaType, _ := deltaRaw["type"].(string)
+
+	switch block.blockType {
+	case "text":
+		return t.handleTextDelta(deltaRaw, deltaType, index)
+	case "thinking":
+		return t.handleThinkingDelta(deltaRaw, deltaType, index)
+	case "redacted_thinking":
+		return nil, nil
+	case "tool_use":
+		return t.handleToolUseDelta(deltaRaw, deltaType, index, t.blockMap)
+	default:
+		slog.Debug("Unknown Anthropic content block type in delta", "type", block.blockType, "index", index)
+		return nil, nil
+	}
 }
 
-func generateID() string {
-	const charset = "abcdefghijklmnopqrstuvwxyz0123456789"
-	b := make([]byte, 24)
-	for i := range b {
-		b[i] = charset[i%len(charset)]
+func (t *AnthropicTransformer) handleTextDelta(deltaRaw map[string]interface{}, deltaType string, index int) ([]byte, error) {
+	if deltaType != "text_delta" {
+		return nil, nil
 	}
-	return string(b)
+
+	payload := map[string]interface{}{}
+	if text, ok := deltaRaw["text"].(string); ok && text != "" {
+		payload["content"] = text
+	}
+
+	if len(payload) == 0 {
+		return nil, nil
+	}
+
+	return t.marshalChunk(t.makeOpenAIChunk(payload, nil))
 }
 
-func joinStrings(parts []string) string {
-	if len(parts) == 0 {
-		return ""
+func (t *AnthropicTransformer) handleThinkingDelta(deltaRaw map[string]interface{}, deltaType string, index int) ([]byte, error) {
+	if deltaType != "thinking_delta" {
+		return nil, nil
 	}
-	if len(parts) == 1 {
-		return parts[0]
+
+	payload := map[string]interface{}{}
+	if thinking, ok := deltaRaw["thinking"].(string); ok && thinking != "" {
+		payload["content"] = thinking
 	}
-	var sb strings.Builder
-	for _, p := range parts {
-		sb.WriteString(p)
+
+	if len(payload) == 0 {
+		return nil, nil
 	}
-	return sb.String()
+
+	return t.marshalChunk(t.makeOpenAIChunk(payload, nil))
+}
+
+func (t *AnthropicTransformer) handleToolUseDelta(deltaRaw map[string]interface{}, deltaType string, index int, blocks map[int]*anthropicBlock) ([]byte, error) {
+	if deltaType != "input_json_delta" {
+		return nil, nil
+	}
+
+	payload := map[string]interface{}{}
+	if partial, ok := deltaRaw["partial_json"].(string); ok && partial != "" {
+		tcIndex := indexToToolCall(index, blocks)
+		payload["tool_calls"] = []interface{}{
+			map[string]interface{}{
+				"index": tcIndex,
+				"function": map[string]interface{}{
+					"arguments": partial,
+				},
+			},
+		}
+	}
+
+	if len(payload) == 0 {
+		return nil, nil
+	}
+
+	return t.marshalChunk(t.makeOpenAIChunk(payload, nil))
+}
+
+func (t *AnthropicTransformer) handleContentBlockStop() ([]byte, error) {
+	return nil, nil
+}
+
+func (t *AnthropicTransformer) handleMessageDelta(event map[string]interface{}) ([]byte, error) {
+	delta, ok := event["delta"].(map[string]interface{})
+	if !ok {
+		return nil, nil
+	}
+
+	stopReason, _ := delta["stop_reason"].(string)
+
+	if usage, ok := event["usage"].(map[string]interface{}); ok {
+		if ot, ok := usage["output_tokens"].(float64); ok {
+			t.outputTokens = int(ot)
+		}
+	}
+
+	finishReason := mapStopReason(stopReason)
+
+	chunk := t.makeOpenAIChunk(map[string]interface{}{}, &finishReason)
+	chunk["usage"] = map[string]interface{}{
+		"prompt_tokens":     t.promptTokens,
+		"completion_tokens": t.outputTokens,
+		"total_tokens":      t.promptTokens + t.outputTokens,
+	}
+
+	return t.marshalChunk(chunk)
+}
+
+func (t *AnthropicTransformer) handleMessageStop() ([]byte, error) {
+	t.streamDone = true
+	t.blockMap = make(map[int]*anthropicBlock)
+	return []byte("[DONE]"), nil
+}
+
+// Reset clears all transformer state for reuse with a new stream.
+func (t *AnthropicTransformer) Reset() {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.messageID = ""
+	t.model = ""
+	t.promptTokens = 0
+	t.outputTokens = 0
+	t.hasToolCalls = false
+	t.blockMap = make(map[int]*anthropicBlock)
+	t.streamDone = false
+}
+
+func (t *AnthropicTransformer) makeOpenAIChunk(delta map[string]interface{}, finishReason *string) map[string]interface{} {
+	chunk := map[string]interface{}{
+		"id":      t.messageID,
+		"object":  "chat.completion.chunk",
+		"created": 0,
+		"model":   t.model,
+	}
+
+	choice := map[string]interface{}{"index": 0}
+	if delta != nil {
+		choice["delta"] = delta
+	} else {
+		choice["delta"] = map[string]interface{}{}
+	}
+	if finishReason != nil {
+		choice["finish_reason"] = *finishReason
+	} else {
+		choice["finish_reason"] = nil
+	}
+	chunk["choices"] = []interface{}{choice}
+
+	return chunk
+}
+
+func (t *AnthropicTransformer) marshalChunk(chunk map[string]interface{}) ([]byte, error) {
+	b, err := json.Marshal(chunk)
+	if err != nil {
+		return nil, fmt.Errorf("anthropic: failed to marshal streaming chunk: %w", err)
+	}
+	return b, nil
+}
+
+func getFloat64(m map[string]interface{}, key string) float64 {
+	if v, ok := m[key].(float64); ok {
+		return v
+	}
+	return 0
+}
+
+func mapStopReason(reason string) string {
+	switch reason {
+	case "end_turn":
+		return "stop"
+	case "tool_use":
+		return "tool_calls"
+	case "max_tokens":
+		return "length"
+	default:
+		slog.Debug("Unknown Anthropic stop_reason, defaulting to 'stop'", "reason", reason)
+		return "stop"
+	}
+}
+
+func indexToToolCall(idx int, blocks map[int]*anthropicBlock) int {
+	if idx < 0 {
+		return -1
+	}
+	tcCount := 0
+	for i := 0; i <= idx; i++ {
+		if b, ok := blocks[i]; ok && b.blockType == "tool_use" {
+			tcCount++
+		}
+	}
+	return tcCount - 1
 }

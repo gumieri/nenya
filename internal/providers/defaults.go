@@ -210,7 +210,7 @@ func anthropicSpec() ProviderSpec {
 	return ProviderSpec{
 		SupportsStreamOptions:  false,
 		SupportsAutoToolChoice: true,
-		SupportsContentArrays:  false,
+		SupportsContentArrays:  true,
 		SupportsToolCalls:      true,
 		SupportsReasoning:      true,
 		SupportsVision:         true,

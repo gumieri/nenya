@@ -1,6 +1,7 @@
 package adapter
 
 import (
+	"context"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -342,6 +343,6 @@ type geminiTransformerShim struct {
 	inner *GeminiAdapter
 }
 
-func (t *geminiTransformerShim) TransformSSEChunk(data []byte) ([]byte, error) {
+func (t *geminiTransformerShim) TransformSSEChunk(ctx context.Context, data []byte) ([]byte, error) {
 	return t.inner.MutateResponse(data)
 }

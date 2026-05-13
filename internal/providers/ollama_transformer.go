@@ -2,6 +2,7 @@ package providers
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 
@@ -43,7 +44,13 @@ type OllamaTransformer struct {
 // TransformSSEChunk converts an Ollama SSE chunk to OpenAI format.
 // If the chunk contains a "name" field, it's treated as a tool call
 // and transformed. Otherwise, the chunk is passed through unchanged.
-func (t *OllamaTransformer) TransformSSEChunk(data []byte) ([]byte, error) {
+func (t *OllamaTransformer) TransformSSEChunk(ctx context.Context, data []byte) ([]byte, error) {
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	default:
+	}
+
 	data = bytes.TrimSpace(data)
 	if len(data) == 0 || data[0] != '{' {
 		return data, nil

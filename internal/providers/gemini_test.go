@@ -2,6 +2,7 @@ package providers
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"log/slog"
 	"os"
@@ -395,7 +396,7 @@ func TestGeminiTransformer_TransformSSEChunk(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := transformer.TransformSSEChunk(tt.data)
+			got, err := transformer.TransformSSEChunk(context.Background(), tt.data)
 			if err != nil {
 				t.Fatalf("unexpected error: %v", err)
 			}
@@ -427,7 +428,7 @@ func TestGeminiTransformer_OnExtraContent(t *testing.T) {
 	}
 
 	data := []byte(`{"choices":[{"delta":{"tool_calls":[{"id":"call_1","type":"function","function":{"name":"foo","arguments":""},"extra_content":{"reasoning":"because"}}]}}]}`)
-	_, err := transformer.TransformSSEChunk(data)
+	_, err := transformer.TransformSSEChunk(context.Background(), data)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -447,7 +448,7 @@ func TestGeminiTransformer_OnExtraContent_Nil(t *testing.T) {
 	transformer := &GeminiTransformer{}
 
 	data := []byte(`{"choices":[{"delta":{"tool_calls":[{"id":"call_1","type":"function","function":{"name":"foo","arguments":""},"extra_content":{"reasoning":"because"}}]}}]}`)
-	_, err := transformer.TransformSSEChunk(data)
+	_, err := transformer.TransformSSEChunk(context.Background(), data)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

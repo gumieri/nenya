@@ -17,7 +17,7 @@ const (
 )
 
 type ResponseTransformer interface {
-	TransformSSEChunk(data []byte) ([]byte, error)
+	TransformSSEChunk(ctx context.Context, data []byte) ([]byte, error)
 }
 
 type UsageCallback func(completionTokens, promptTokens, totalTokens, cacheHitTokens, cacheMissTokens int)
@@ -386,7 +386,7 @@ func (r *SSETransformingReader) handleNoTransformer(parsed map[string]interface{
 }
 
 func (r *SSETransformingReader) handleWithTransformer(parsed map[string]interface{}, data []byte, origData []byte, line []byte) []byte {
-	transformed, err := r.transformer.TransformSSEChunk(data)
+	transformed, err := r.transformer.TransformSSEChunk(r.ctx, data)
 	if err != nil {
 		r.notifySSEObserver(line, parsed, "")
 		return line
@@ -439,7 +439,7 @@ func (r *SSETransformingReader) transformNonSSELine(line []byte) []byte {
 	if r.transformer == nil {
 		return line
 	}
-	transformed, err := r.transformer.TransformSSEChunk(trimmed)
+	transformed, err := r.transformer.TransformSSEChunk(r.ctx, trimmed)
 	if err != nil || bytes.Equal(transformed, trimmed) {
 		return line
 	}

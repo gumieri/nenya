@@ -1,6 +1,7 @@
 package providers
 
 import (
+	"context"
 	"encoding/json"
 	"testing"
 )
@@ -9,7 +10,7 @@ func TestOllamaTransformer_TransformToolCall(t *testing.T) {
 	transformer := newOllamaTransformer(nil)
 
 	input := `{"name": "git_status", "arguments": {"includeUntracked": true, "path": "/absolute/path/to/repo"}}`
-	got, err := transformer.TransformSSEChunk([]byte(input))
+	got, err := transformer.TransformSSEChunk(context.Background(), []byte(input))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -62,7 +63,7 @@ func TestOllamaTransformer_TransformNullArguments(t *testing.T) {
 	transformer := newOllamaTransformer(nil)
 
 	input := `{"name": "some_tool", "arguments": null}`
-	got, err := transformer.TransformSSEChunk([]byte(input))
+	got, err := transformer.TransformSSEChunk(context.Background(), []byte(input))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -84,7 +85,7 @@ func TestOllamaTransformer_PassthroughNonToolCall(t *testing.T) {
 	transformer := newOllamaTransformer(nil)
 
 	input := `{"content": "hello world"}`
-	got, err := transformer.TransformSSEChunk([]byte(input))
+	got, err := transformer.TransformSSEChunk(context.Background(), []byte(input))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -97,8 +98,8 @@ func TestOllamaTransformer_PassthroughNonToolCall(t *testing.T) {
 func TestOllamaTransformer_IncrementsIndex(t *testing.T) {
 	transformer := newOllamaTransformer(nil)
 
-	first, _ := transformer.TransformSSEChunk([]byte(`{"name": "tool_one", "arguments": {}}`))
-	second, _ := transformer.TransformSSEChunk([]byte(`{"name": "tool_two", "arguments": {}}`))
+	first, _ := transformer.TransformSSEChunk(context.Background(), []byte(`{"name": "tool_one", "arguments": {}}`))
+	second, _ := transformer.TransformSSEChunk(context.Background(), []byte(`{"name": "tool_two", "arguments": {}}`))
 
 	var f, s map[string]any
 	json.Unmarshal(first, &f)
@@ -115,7 +116,7 @@ func TestOllamaTransformer_IncrementsIndex(t *testing.T) {
 func TestOllamaTransformer_EmptyObjectPassthrough(t *testing.T) {
 	transformer := newOllamaTransformer(nil)
 
-	got, err := transformer.TransformSSEChunk([]byte(`{}`))
+	got, err := transformer.TransformSSEChunk(context.Background(), []byte(`{}`))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -128,7 +129,7 @@ func TestOllamaTransformer_EmptyArgumentsMap(t *testing.T) {
 	transformer := newOllamaTransformer(nil)
 
 	input := `{"name": "some_tool", "arguments": {}}`
-	got, err := transformer.TransformSSEChunk([]byte(input))
+	got, err := transformer.TransformSSEChunk(context.Background(), []byte(input))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
