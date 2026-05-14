@@ -277,8 +277,8 @@ func (a *AnthropicAdapter) convertMessages(msgs []interface{}) []interface{} {
 
 // emptyTextBlock is a minimal Anthropic text content block used as a fallback
 // when a message has no text or tool_use content. Anthropic requires every
-// user/assistant message to have a non-empty content array.
-var emptyTextBlock = map[string]interface{}{"type": "text", "text": " "}
+// user/assistant message to have a non-empty content array with non-whitespace text.
+var emptyTextBlock = map[string]interface{}{"type": "text", "text": "."}
 
 // buildContentBlocks constructs an Anthropic content array from an OpenAI-format
 // message. It converts text content into typed text blocks and OpenAI tool_calls

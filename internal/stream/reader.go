@@ -9,6 +9,7 @@ import (
 	"io"
 	"log/slog"
 	"reflect"
+	"sync"
 )
 
 const (
@@ -41,6 +42,7 @@ type SSEEvent struct {
 	Raw  []byte
 }
 
+// SSETransformingReader reads from an SSE source and transforms SSE data lines.
 type SSETransformingReader struct {
 	src                 io.Reader
 	scanner             *bufio.Scanner
@@ -73,6 +75,7 @@ type pendingToolCall struct {
 }
 
 type toolCallState struct {
+	mu          sync.RWMutex
 	seenIndices map[int]bool
 	pending     map[int]*pendingToolCall
 }
@@ -84,6 +87,7 @@ func newToolCallState() toolCallState {
 	}
 }
 
+// NewSSETransformingReader creates a new reader that transforms SSE data lines using the provided transformer.
 func NewSSETransformingReader(src io.Reader, transformer ResponseTransformer, ctx context.Context) *SSETransformingReader {
 	poolBuf := getStreamBuffer()
 	reader := &SSETransformingReader{
@@ -98,22 +102,27 @@ func NewSSETransformingReader(src io.Reader, transformer ResponseTransformer, ct
 	return reader
 }
 
+// SetOnUsage sets a callback that receives token usage statistics from the stream.
 func (r *SSETransformingReader) SetOnUsage(cb UsageCallback) {
 	r.onUsage = cb
 }
 
+// SetStreamFilter sets a stream filter for content filtering.
 func (r *SSETransformingReader) SetStreamFilter(sf *StreamFilter) {
 	r.streamFilter = sf
 }
 
+// SetStreamEntropyFilter sets an entropy filter for stream content.
 func (r *SSETransformingReader) SetStreamEntropyFilter(ef *StreamEntropyFilter) {
 	r.streamEntropyFilter = ef
 }
 
+// SetOnContent sets a callback that receives content chunks from the stream.
 func (r *SSETransformingReader) SetOnContent(cb ContentCallback) {
 	r.onContent = cb
 }
 
+// SetObserver sets an observer for SSE events during streaming.
 func (r *SSETransformingReader) SetObserver(obs SSEObserver) {
 	r.observer = obs
 }
@@ -351,6 +360,7 @@ func copyMap(m map[string]interface{}) map[string]interface{} {
 }
 
 func (r *SSETransformingReader) applyContentFilters(data []byte, parsed map[string]interface{}) []byte {
+	// TODO: Implement content filtering if needed (currently no-op)
 	return data
 }
 
@@ -388,6 +398,11 @@ func (r *SSETransformingReader) handleNoTransformer(parsed map[string]interface{
 func (r *SSETransformingReader) handleWithTransformer(parsed map[string]interface{}, data []byte, origData []byte, line []byte) []byte {
 	transformed, err := r.transformer.TransformSSEChunk(r.ctx, data)
 	if err != nil {
+		r.notifySSEObserver(line, parsed, "")
+		return line
+	}
+
+	if len(transformed) == 0 {
 		r.notifySSEObserver(line, parsed, "")
 		return line
 	}
@@ -440,7 +455,7 @@ func (r *SSETransformingReader) transformNonSSELine(line []byte) []byte {
 		return line
 	}
 	transformed, err := r.transformer.TransformSSEChunk(r.ctx, trimmed)
-	if err != nil || bytes.Equal(transformed, trimmed) {
+	if err != nil || len(transformed) == 0 || bytes.Equal(transformed, trimmed) {
 		return line
 	}
 	return transformed
@@ -492,6 +507,8 @@ func ToInt(v interface{}) int {
 // It normalizes missing tool_call IDs, buffers args chunks that arrive before names,
 // and merges pending data when names arrive. Returns true if the chunk was mutated.
 func normalizeToolCalls(chunk map[string]interface{}, state *toolCallState) bool {
+	state.mu.Lock()
+	defer state.mu.Unlock()
 	choices, ok := chunk["choices"].([]interface{})
 	if !ok {
 		return false
