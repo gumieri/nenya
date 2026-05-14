@@ -507,7 +507,9 @@ func (t *HTTPTransport) keepaliveLoop() {
 			if !t.ready.Load() {
 				continue
 			}
-			if err := t.SendNotification(context.TODO(), "ping", nil); err != nil {
+			pingCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			if err := t.SendNotification(pingCtx, "ping", nil); err != nil {
 				if !t.closed.Load() {
 					t.cfg.Logger.Warn("MCP keepalive ping failed", "err", err)
 					t.ready.Store(false)
