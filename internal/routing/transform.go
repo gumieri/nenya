@@ -1,6 +1,7 @@
 package routing
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -57,6 +58,35 @@ func InjectAPIKeyWithGateway(providerName string, gw interface {
 
 	if p.AuthStyle != "none" {
 		keyBytes, ok := gw.GetProviderAPIKey(providerName)
+		if !ok {
+			return fmt.Errorf("provider %s has no API key configured", providerName)
+		}
+		a := adapter.ForProviderWithAuth(providerName, p.AuthStyle)
+		req := &http.Request{Header: headers}
+		return a.InjectAuth(req, string(keyBytes))
+	}
+
+	return nil
+}
+
+// APIKeyProviderModel extends APIKeyProvider with model-aware key selection.
+type APIKeyProviderModel interface {
+	GetProviderAPIKey(providerName string) ([]byte, bool)
+	GetProviderAPIKeyForModel(ctx context.Context, providerName, model string) ([]byte, bool)
+	GetProvidersMap() map[string]*config.Provider
+}
+
+// InjectAPIKeyWithGatewayCtx selects an API key using multi-account routing
+// when available, falling back to the legacy single-key path.
+func InjectAPIKeyWithGatewayCtx(ctx context.Context, providerName, modelName string, gw APIKeyProviderModel, headers http.Header) error {
+	providers := gw.GetProvidersMap()
+	p, ok := providers[providerName]
+	if !ok {
+		return fmt.Errorf("unknown provider: %s", providerName)
+	}
+
+	if p.AuthStyle != "none" {
+		keyBytes, ok := gw.GetProviderAPIKeyForModel(ctx, providerName, modelName)
 		if !ok {
 			return fmt.Errorf("provider %s has no API key configured", providerName)
 		}

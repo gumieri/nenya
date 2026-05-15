@@ -114,7 +114,7 @@ func (p *Proxy) executePassthroughUpstream(gw *gateway.NenyaGateway, ctx context
 	if maxAttempts <= 0 {
 		maxAttempts = gw.Config.Governance.EffectiveMaxRetryAttempts()
 	}
-	return p.doUpstreamRoundTrip(ctx, gw, r.Method, upstreamURL, bodyBytes, provider.Name, r.Header, r.Header.Get("Content-Type"), maxAttempts)
+	return p.doUpstreamRoundTrip(ctx, gw, r.Method, upstreamURL, bodyBytes, provider.Name, "", r.Header, r.Header.Get("Content-Type"), maxAttempts)
 }
 
 func readPassthroughBody(gw *gateway.NenyaGateway, w http.ResponseWriter, r *http.Request) ([]byte, error) {

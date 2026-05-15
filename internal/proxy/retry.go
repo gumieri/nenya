@@ -74,10 +74,10 @@ func waitWithCancel(ctx context.Context, d time.Duration) {
 // doUpstreamRoundTrip executes a retried upstream HTTP round-trip.
 // It builds the request, sets Content-Type (if non-empty), executes with retry,
 // and returns the response. 5xx responses are retried.
-func (p *Proxy) doUpstreamRoundTrip(ctx context.Context, gw *gateway.NenyaGateway, method, targetURL string, bodyBytes []byte, providerName string, srcHeaders http.Header, contentType string, maxAttempts int) (*http.Response, error) {
+func (p *Proxy) doUpstreamRoundTrip(ctx context.Context, gw *gateway.NenyaGateway, method, targetURL string, bodyBytes []byte, providerName, modelName string, srcHeaders http.Header, contentType string, maxAttempts int) (*http.Response, error) {
 	var resp *http.Response
 	err := util.DoWithRetry(ctx, maxAttempts, func() error {
-		upstreamReq, reqErr := p.buildUpstreamRequest(gw, ctx, method, targetURL, bodyBytes, providerName, srcHeaders)
+		upstreamReq, reqErr := p.buildUpstreamRequest(gw, ctx, method, targetURL, bodyBytes, providerName, modelName, srcHeaders)
 		if reqErr != nil {
 			return reqErr
 		}
@@ -410,7 +410,7 @@ func (p *Proxy) prepareAndSend(gw *gateway.NenyaGateway,
 		transformedBody, _ = json.Marshal(payload)
 	}
 
-	req, err := p.buildUpstreamRequest(gw, r.Context(), r.Method, target.URL, transformedBody, target.Provider, r.Header)
+	req, err := p.buildUpstreamRequest(gw, r.Context(), r.Method, target.URL, transformedBody, target.Provider, target.Model, r.Header)
 	if err != nil {
 		ctxLogger.Error("failed to create upstream request", "err", err)
 		return upstreamAction{kind: actionContinue}

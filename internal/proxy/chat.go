@@ -801,7 +801,7 @@ func (p *Proxy) handleEmbeddings(gw *gateway.NenyaGateway, w http.ResponseWriter
 		maxAttempts = gw.Config.Governance.EffectiveMaxRetryAttempts()
 	}
 
-	p.forwardEmbeddingsRequest(gw, w, ctx, http.MethodPost, embeddingURL, bodyBytes, provider.Name, r.Header, maxAttempts, keyRef)
+	p.forwardEmbeddingsRequest(gw, w, ctx, http.MethodPost, embeddingURL, bodyBytes, provider.Name, modelName, r.Header, maxAttempts, keyRef)
 }
 
 func countEmbeddingInputTokens(gw *gateway.NenyaGateway, payload map[string]interface{}) int {
@@ -824,8 +824,8 @@ func countEmbeddingInputTokens(gw *gateway.NenyaGateway, payload map[string]inte
 	return totalTokens
 }
 
-func (p *Proxy) forwardEmbeddingsRequest(gw *gateway.NenyaGateway, w http.ResponseWriter, ctx context.Context, method, url string, bodyBytes []byte, providerName string, srcHeaders http.Header, maxAttempts int, keyRef string) {
-	req, err := p.buildUpstreamRequest(gw, ctx, method, url, bodyBytes, providerName, srcHeaders)
+func (p *Proxy) forwardEmbeddingsRequest(gw *gateway.NenyaGateway, w http.ResponseWriter, ctx context.Context, method, url string, bodyBytes []byte, providerName, modelName string, srcHeaders http.Header, maxAttempts int, keyRef string) {
+	req, err := p.buildUpstreamRequest(gw, ctx, method, url, bodyBytes, providerName, modelName, srcHeaders)
 	if err != nil {
 		ctxLogger := gw.Logger.With("operation", "forward", "api_key", keyRef)
 		ctxLogger.Error("failed to create embeddings upstream request", "err", err)
@@ -997,12 +997,12 @@ func (p *Proxy) handleResponses(gw *gateway.NenyaGateway, w http.ResponseWriter,
 		return
 	}
 
-	_, herr := p.authorizeResponsesAgent(gw, w, r, apiKey, bodyBytes)
+	responsesModel, herr := p.authorizeResponsesAgent(gw, w, r, apiKey, bodyBytes)
 	if herr != nil {
 		return
 	}
 
-	provider := p.resolveResponsesProvider(gw, r, bodyBytes)
+	provider := p.resolveResponsesProviderFromModel(gw, responsesModel)
 	if provider == nil {
 		http.Error(w, util.ErrNoProvider, http.StatusBadRequest)
 		return
@@ -1026,7 +1026,7 @@ func (p *Proxy) handleResponses(gw *gateway.NenyaGateway, w http.ResponseWriter,
 
 	var resp *http.Response
 	err := util.DoWithRetry(ctx, maxAttempts, func() error {
-		req, reqErr := p.buildUpstreamRequest(gw, ctx, r.Method, targetURL, bodyBytes, provider.Name, r.Header)
+		req, reqErr := p.buildUpstreamRequest(gw, ctx, r.Method, targetURL, bodyBytes, provider.Name, responsesModel, r.Header)
 		if reqErr != nil {
 			return reqErr
 		}
@@ -1071,17 +1071,7 @@ func (p *Proxy) isPathSafeResponses(pathStr string) bool {
 	return true
 }
 
-func (p *Proxy) resolveResponsesProvider(gw *gateway.NenyaGateway, r *http.Request, bodyBytes []byte) *config.Provider {
-	var modelName string
-	if len(bodyBytes) > 0 {
-		var payload map[string]interface{}
-		if err := json.Unmarshal(bodyBytes, &payload); err == nil {
-			if m, ok := payload["model"].(string); ok {
-				modelName = m
-			}
-		}
-	}
-
+func (p *Proxy) resolveResponsesProviderFromModel(gw *gateway.NenyaGateway, modelName string) *config.Provider {
 	if modelName != "" {
 		matches := routing.ResolveProviders(modelName, gw.Providers, gw.ModelCatalog)
 		if len(matches) > 0 {
@@ -1169,12 +1159,12 @@ func (p *Proxy) getDefaultResponseProvider(gw *gateway.NenyaGateway) *config.Pro
 	return nil
 }
 
-func (p *Proxy) buildUpstreamRequest(gw *gateway.NenyaGateway, ctx context.Context, method, url string, body []byte, providerName string, srcHeaders http.Header) (*http.Request, error) {
+func (p *Proxy) buildUpstreamRequest(gw *gateway.NenyaGateway, ctx context.Context, method, url string, body []byte, providerName, modelName string, srcHeaders http.Header) (*http.Request, error) {
 	req, err := http.NewRequestWithContext(ctx, method, url, bytes.NewBuffer(body))
 	if err != nil {
 		return nil, fmt.Errorf("failed to create upstream request: %w", err)
 	}
-	if err := routing.InjectAPIKeyWithGateway(providerName, gw, req.Header); err != nil {
+	if err := routing.InjectAPIKeyWithGatewayCtx(ctx, providerName, modelName, gw, req.Header); err != nil {
 		return nil, fmt.Errorf("API key injection failed: %w", err)
 	}
 	// Forward only safe passthrough headers; never let client-supplied

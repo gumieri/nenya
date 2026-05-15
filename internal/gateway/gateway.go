@@ -14,6 +14,7 @@ import (
 
 	"nenya/config"
 	"nenya/internal/adapter"
+	"nenya/internal/auth"
 	"nenya/internal/discovery"
 	"nenya/internal/infra"
 	"nenya/internal/mcp"
@@ -50,6 +51,7 @@ type NenyaGateway struct {
 	HealthRegistry    *discovery.HealthRegistry
 	LatencyTracker    *infra.LatencyTracker
 	CostTracker       *infra.CostTracker
+	AccountManager    *auth.AccountManager
 	SecureMem         *security.SecureMem
 	ClientTokenRef    security.SecureToken
 	ProviderKeyTokens map[string]security.SecureToken
@@ -315,6 +317,16 @@ func buildGateway(cfg config.Config, secrets *config.SecretsConfig, secureClient
 		ProviderKeyTokens: providerKeyTokens,
 	}
 	gw.AgentState = routing.NewAgentStateWithConfig(logger, metrics, &cfg.Governance)
+	// Account pool initialized with nil storage — backoff levels and cooldowns
+	// are not persisted across restarts. Wire JSONFileStorage here when needed.
+	gw.AccountManager = auth.NewAccountManager(nil)
+	for name, pcfg := range cfg.Providers {
+		accounts := auth.ToProviderAccounts(&pcfg)
+		if len(accounts) > 0 {
+			pool := auth.NewAccountPool(name, accounts)
+			gw.AccountManager.RegisterPool(name, pool)
+		}
+	}
 	return gw
 }
 
@@ -741,6 +753,19 @@ func (g *NenyaGateway) GetProviderAPIKey(providerName string) ([]byte, bool) {
 		}
 	}
 	return nil, false
+}
+
+// GetProviderAPIKeyForModel returns an API key for the given provider and model.
+// It checks the multi-account pool first (selecting the least-recently-used account),
+// then falls back to the legacy single-key path.
+func (g *NenyaGateway) GetProviderAPIKeyForModel(ctx context.Context, providerName, model string) ([]byte, bool) {
+	if g.AccountManager != nil {
+		selected, err := g.AccountManager.SelectCredential(ctx, providerName, model)
+		if err == nil && selected != "" {
+			return []byte(selected), true
+		}
+	}
+	return g.GetProviderAPIKey(providerName)
 }
 
 func (g *NenyaGateway) GetProvidersMap() map[string]*config.Provider {

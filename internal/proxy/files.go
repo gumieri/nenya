@@ -63,7 +63,7 @@ func (p *Proxy) handleFilesOrBatches(gw *gateway.NenyaGateway, w http.ResponseWr
 	contentType := r.Header.Get("Content-Type")
 	ctxLogger := gw.Logger.With("operation", endpoint, "provider", provider.Name, "api_key", keyRef)
 
-	resp, err := p.doUpstreamRoundTrip(ctx, gw, r.Method, targetURL, bodyBytes, provider.Name, r.Header, contentType, maxAttempts)
+	resp, err := p.doUpstreamRoundTrip(ctx, gw, r.Method, targetURL, bodyBytes, provider.Name, "", r.Header, contentType, maxAttempts)
 
 	if err != nil {
 		ctxLogger.Error("files/batches upstream request failed", "endpoint", endpoint, "err", err)

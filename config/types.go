@@ -133,6 +133,15 @@ type ProviderConfig struct {
 	RetryableStatusCodes []int             `json:"retryable_status_codes"`
 	MaxRetryAttempts     int               `json:"max_retry_attempts"`
 	Thinking             *ThinkingConfig   `json:"thinking,omitempty"`
+	APIKey               string            `json:"api_key,omitempty"`
+	Accounts             []AccountConfig   `json:"accounts,omitempty"`
+}
+
+// AccountConfig defines a single credential/account for multi-account providers.
+type AccountConfig struct {
+	ID         string `json:"id"`
+	Type       string `json:"type"`
+	Credential string `json:"credential"`
 }
 
 // ThinkingConfig controls whether reasoning/thinking tokens are requested

@@ -334,7 +334,7 @@ func TestBuildUpstreamRequest(t *testing.T) {
 	req.Header.Set("X-Request-Id", "req-123")
 	req.Header.Set("Content-Type", "application/json")
 
-	upstreamReq, err := proxy.buildUpstreamRequest(gw, context.Background(), "POST", "https://api.test.com/v1/models", []byte(`{"test":true}`), "test", req.Header)
+	upstreamReq, err := proxy.buildUpstreamRequest(gw, context.Background(), "POST", "https://api.test.com/v1/models", []byte(`{"test":true}`), "test", "", req.Header)
 	if err != nil {
 		t.Fatalf("failed to build upstream request: %v", err)
 	}
