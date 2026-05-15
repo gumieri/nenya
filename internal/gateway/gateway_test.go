@@ -19,7 +19,7 @@ func testConfig() config.Config {
 			RatelimitMaxTPM: config.PtrTo(100000),
 		},
 		Bouncer: config.BouncerConfig{
-			Enabled:       config.PtrTo(true),
+			Enabled:        config.PtrTo(true),
 			RedactPatterns: []string{`(?i)AKIA[0-9A-Z]{16}`, `sk-[a-zA-Z0-9]{48}`},
 		},
 	}
@@ -549,7 +549,7 @@ func TestProviderHasAPIKey_FromConfig(t *testing.T) {
 
 	if !gw.ProviderHasAPIKey("test-provider") {
 		t.Error("expected provider to have API key from config")
-}
+	}
 }
 func TestProviderHasAPIKey_AuthStyleNone(t *testing.T) {
 	cfg := testConfig()
@@ -613,7 +613,6 @@ func TestExtractInputJSONFromPart_MissingField(t *testing.T) {
 		t.Errorf("expected empty string for missing input_json, got %q", result)
 	}
 }
-
 
 func TestContextWithTimeout(t *testing.T) {
 	ctx := context.Background()

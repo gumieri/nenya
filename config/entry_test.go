@@ -6,9 +6,9 @@ import (
 
 func TestPricingOverride_IsZero(t *testing.T) {
 	tests := []struct {
-		name  string
-		p     PricingOverride
-		zero  bool
+		name string
+		p    PricingOverride
+		zero bool
 	}{
 		{
 			name: "both zero",
@@ -295,11 +295,11 @@ func TestAgentModel_CompileRegex_CompilesFields(t *testing.T) {
 
 func TestAgentModel_MatchesCatalog(t *testing.T) {
 	tests := []struct {
-		name        string
-		m           AgentModel
-		provider    string
-		model       string
-		wantMatch   bool
+		name         string
+		m            AgentModel
+		provider     string
+		model        string
+		wantMatch    bool
 		setupCompile bool
 	}{
 		{
@@ -309,7 +309,7 @@ func TestAgentModel_MatchesCatalog(t *testing.T) {
 				Model:    "gpt-4",
 			},
 			provider:  "openai",
-			model:    "gpt-4",
+			model:     "gpt-4",
 			wantMatch: true,
 		},
 		{
@@ -319,7 +319,7 @@ func TestAgentModel_MatchesCatalog(t *testing.T) {
 				Model:    "gpt-4",
 			},
 			provider:  "openai",
-			model:    "gpt-3.5",
+			model:     "gpt-3.5",
 			wantMatch: false,
 		},
 		{
@@ -327,10 +327,10 @@ func TestAgentModel_MatchesCatalog(t *testing.T) {
 			m: AgentModel{
 				ProviderRgx: "openai|anthropic",
 			},
-			provider:      "openai",
-			model:         "gpt-4",
-			wantMatch:     true,
-			setupCompile:  true,
+			provider:     "openai",
+			model:        "gpt-4",
+			wantMatch:    true,
+			setupCompile: true,
 		},
 		{
 			name: "model regex match",
@@ -434,9 +434,9 @@ func TestAgentModel_IsDynamic(t *testing.T) {
 
 func TestProviderEntry_ToProviderConfig(t *testing.T) {
 	e := ProviderEntry{
-		URL:        "https://api.openai.com/v1/chat/completions",
-		AuthStyle:  "bearer",
-		ApiFormat:  "openai",
+		URL:       "https://api.openai.com/v1/chat/completions",
+		AuthStyle: "bearer",
+		ApiFormat: "openai",
 		FormatURLs: map[string]string{
 			"anthropic": "https://api.openai.com/v1/anthropic/messages",
 		},

@@ -12,9 +12,9 @@ import (
 
 func TestPricingEntry_IsZero(t *testing.T) {
 	tests := []struct {
-		name  string
-		p     PricingEntry
-		zero  bool
+		name string
+		p    PricingEntry
+		zero bool
 	}{
 		{"all zero", PricingEntry{}, true},
 		{"input cost set", PricingEntry{InputCostPer1M: 1.0}, false},
@@ -474,12 +474,12 @@ func TestFirstPositive(t *testing.T) {
 
 func TestPickProvider(t *testing.T) {
 	tests := []struct {
-		name       string
-		staticOk   bool
-		staticVal  string
-		discOk     bool
-		discVal    string
-		want       string
+		name      string
+		staticOk  bool
+		staticVal string
+		discOk    bool
+		discVal   string
+		want      string
 	}{
 		{"static exists", true, "p1", false, "", "p1"},
 		{"static missing, discovered exists", false, "", true, "p2", "p2"},
@@ -497,12 +497,12 @@ func TestPickProvider(t *testing.T) {
 
 func TestPickFormat(t *testing.T) {
 	tests := []struct {
-		name       string
-		staticOk   bool
-		staticVal  string
-		discOk     bool
-		discVal    string
-		want       string
+		name      string
+		staticOk  bool
+		staticVal string
+		discOk    bool
+		discVal   string
+		want      string
 	}{
 		{"static exists", true, "openai", false, "", "openai"},
 		{"discovered only", false, "", true, "anthropic", "anthropic"},

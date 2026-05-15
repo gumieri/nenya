@@ -353,15 +353,15 @@ func TestResolveProviders(t *testing.T) {
 	cfg := &Config{
 		Providers: map[string]ProviderConfig{
 			"openai": {
-				URL:         "https://api.openai.com/v1/chat/completions",
-				AuthStyle:   "bearer",
-				ApiFormat:   "openai",
+				URL:            "https://api.openai.com/v1/chat/completions",
+				AuthStyle:      "bearer",
+				ApiFormat:      "openai",
 				TimeoutSeconds: 30,
 			},
 			"anthropic": {
-				URL:         "https://api.anthropic.com/v1/messages",
-				AuthStyle:   "bearer",
-				ApiFormat:   "anthropic",
+				URL:            "https://api.anthropic.com/v1/messages",
+				AuthStyle:      "bearer",
+				ApiFormat:      "anthropic",
 				TimeoutSeconds: 60,
 			},
 		},
@@ -472,8 +472,6 @@ func TestLoad_DirectoryPath(t *testing.T) {
 		t.Errorf("expected 'is a directory' error, got %v", err)
 	}
 }
-
-
 
 func TestLoadFromDir_NoConfig(t *testing.T) {
 	dir := t.TempDir()

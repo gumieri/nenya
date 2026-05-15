@@ -57,6 +57,9 @@ type Metrics struct {
 	authFailure sync.Map
 	authDenials sync.Map
 
+	// Backoff metrics
+	backoffIncrements sync.Map
+
 	// Cache metrics
 	cacheHit  sync.Map
 	cacheMiss sync.Map
@@ -406,6 +409,16 @@ func (m *Metrics) IncAuthDenials(keyName, reason string) {
 	e.value.Add(1)
 }
 
+func (m *Metrics) RecordBackoffIncrement(agent, provider, model string, level int) {
+	if m == nil {
+		return
+	}
+	e := getOrCreateEntry(&m.backoffIncrements, map[string]string{
+		"agent": agent, "provider": provider, "model": model, "level": strconv.Itoa(level),
+	})
+	e.value.Add(1)
+}
+
 func (m *Metrics) RecordSecureMemInitFailure() {
 	if m == nil {
 		return
@@ -647,6 +660,8 @@ func (m *Metrics) WritePrometheus(w io.Writer) {
 		"Total upstream streams killed by idle timeout.", &m.streamStalled)
 	m.writeCounterMap(w, "nenya_empty_stream_total",
 		"Total upstream streams that returned empty body.", &m.emptyStreams)
+	m.writeCounterMap(w, "nenya_backoff_increments_total",
+		"Total backoff level increments by model.", &m.backoffIncrements)
 
 	m.writeHistogramMap(w, "nenya_upstream_request_duration_seconds",
 		"Upstream provider request duration in seconds.", &m.upstreamLatency)

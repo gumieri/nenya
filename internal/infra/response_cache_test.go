@@ -327,7 +327,7 @@ func TestResponseCache_BackgroundEvictorRemovesExpiredFirst(t *testing.T) {
 	}
 
 	for i := 0; i < 3; i++ {
-			_, ok, _ := cache.Lookup(fmt.Sprintf("fresh%d", i), "", nil)
+		_, ok, _ := cache.Lookup(fmt.Sprintf("fresh%d", i), "", nil)
 		if !ok {
 			t.Fatalf("fresh entry fresh%d should still exist", i)
 		}

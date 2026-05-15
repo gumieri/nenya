@@ -560,7 +560,7 @@ func TestGeminiAdapter_Sanitize_ToolMessageAlreadyHasName(t *testing.T) {
 
 func TestGeminiAdapter_Sanitize_NoMessages(t *testing.T) {
 	a := NewGeminiAdapter(GeminiAdapterDeps{
-		ModelMap:       map[string]string{},
+		ModelMap: map[string]string{},
 	})
 	body := []byte(`{"model":"gemini-pro"}`)
 	out, err := a.MutateRequest(body, "gemini-pro", true)

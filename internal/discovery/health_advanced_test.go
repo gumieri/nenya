@@ -193,8 +193,8 @@ func TestAdvancedHealthChecker_CheckAllProviders(t *testing.T) {
 
 func TestAdvancedHealthChecker_AnalyzeDrift(t *testing.T) {
 	registry := map[string]config.ModelEntry{
-		"openai:gpt-4": {Provider: "openai"},
-		"openai:gpt-3.5": {Provider: "openai"},
+		"openai:gpt-4":       {Provider: "openai"},
+		"openai:gpt-3.5":     {Provider: "openai"},
 		"anthropic:claude-3": {Provider: "anthropic"},
 	}
 
@@ -264,10 +264,10 @@ func TestAdvancedHealthChecker_GetSummary(t *testing.T) {
 	hc := NewAdvancedHealthChecker(HealthCheckConfig{}, nil, nil, testHealthLogger())
 
 	hc.results["p1"] = HealthCheckResult{
-		Status:       HealthStatusOK,
-		ModelsFound:  10,
+		Status:        HealthStatusOK,
+		ModelsFound:   10,
 		MissingModels: []string{"m1"},
-		NewModels:    []string{"m2"},
+		NewModels:     []string{"m2"},
 	}
 	hc.results["p2"] = HealthCheckResult{
 		Status:      HealthStatusDegraded,
@@ -297,9 +297,9 @@ func TestAdvancedHealthChecker_GetDriftReport(t *testing.T) {
 	hc := NewAdvancedHealthChecker(HealthCheckConfig{}, nil, nil, testHealthLogger())
 
 	hc.results["p1"] = HealthCheckResult{
-		Status:       HealthStatusDegraded,
+		Status:        HealthStatusDegraded,
 		MissingModels: []string{"m1"},
-		NewModels:    []string{"m2"},
+		NewModels:     []string{"m2"},
 	}
 	hc.results["p2"] = HealthCheckResult{
 		Status: HealthStatusOK,
@@ -369,9 +369,9 @@ func TestAdvancedHealthChecker_GetUnhealthyProviders(t *testing.T) {
 func TestAdvancedHealthChecker_LogSummary(t *testing.T) {
 	hc := NewAdvancedHealthChecker(HealthCheckConfig{}, nil, nil, testHealthLogger())
 	hc.results["p1"] = HealthCheckResult{
-		Status:       HealthStatusDegraded,
+		Status:        HealthStatusDegraded,
 		MissingModels: []string{"m1"},
-		NewModels:    []string{"m2"},
+		NewModels:     []string{"m2"},
 	}
 
 	hc.LogSummary()

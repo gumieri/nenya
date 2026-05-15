@@ -22,17 +22,17 @@ func FuzzChatHandler(f *testing.F) {
 	f.Add(`{"model":"test-model","messages":[{"role":"user","content":"hello"}]}`)
 	f.Add(`{"model":"test-model","messages":[{"role":"user","content":""}],"stream":true}`)
 	f.Add(`{"messages":[]}`) // Empty messages
-	f.Add(`{"model":""}`)   // Empty model
-	
+	f.Add(`{"model":""}`)    // Empty model
+
 	f.Fuzz(func(t *testing.T, jsonData string) {
 		t.Helper()
-		
+
 		// Skip invalid JSON to focus on logic errors
 		var raw map[string]interface{}
 		if err := json.Unmarshal([]byte(jsonData), &raw); err != nil {
 			return
 		}
-		
+
 		// Create test setup
 		upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Content-Type", "application/json")
@@ -67,16 +67,16 @@ func FuzzChatHandler(f *testing.F) {
 		defer gw.Close()
 		p := &Proxy{}
 		p.StoreGateway(gw)
-		
+
 		// Create request
 		req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(jsonData))
 		req.Header.Set("Authorization", "Bearer test-token")
 		req.Header.Set("Content-Type", "application/json")
-		
+
 		// Execute handler - should not panic
 		rr := httptest.NewRecorder()
 		p.ServeHTTP(rr, req)
-		
+
 		// Basic validation - should return either success or client error (not 500 unless truly invalid)
 		if rr.Code >= 500 && rr.Code < 600 {
 			// Only fail if it's a server error - client errors (4xx) are expected for bad input

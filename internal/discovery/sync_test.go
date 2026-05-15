@@ -139,7 +139,7 @@ func TestPersistentProviderCache_Load_InvalidJSON(t *testing.T) {
 }
 
 func TestPersistentProviderCache_Get(t *testing.T) {
-	cache := NewPersistentProviderCache("", 	1*time.Hour, testCacheLogger())
+	cache := NewPersistentProviderCache("", 1*time.Hour, testCacheLogger())
 
 	_, ok := cache.Get("nonexistent")
 	if ok {
@@ -220,7 +220,7 @@ func TestPersistentProviderCache_Prune(t *testing.T) {
 	}
 	defer os.RemoveAll(tmpDir)
 
-	cache := NewPersistentProviderCache(tmpDir, 	100*time.Millisecond, testCacheLogger())
+	cache := NewPersistentProviderCache(tmpDir, 100*time.Millisecond, testCacheLogger())
 
 	oldResult := ProviderDiscoveryResult{
 		ProviderRef: "old",

@@ -84,8 +84,8 @@ func TestResolveEngineRef_InlineWithOverride(t *testing.T) {
 func TestResolveEngineRef_AgentEngine(t *testing.T) {
 	providers := map[string]*Provider{
 		"openai": {
-			Name:  "openai",
-			URL:   "https://api.openai.com/v1",
+			Name:      "openai",
+			URL:       "https://api.openai.com/v1",
 			AuthStyle: "bearer",
 		},
 	}
@@ -182,9 +182,9 @@ func TestResolveSystemPrompts(t *testing.T) {
 
 func TestResolveTimeout(t *testing.T) {
 	tests := []struct {
-		refTimeout     int
+		refTimeout      int
 		providerTimeout int
-		want           int
+		want            int
 	}{
 		{60, 30, 60},
 		{0, 30, 30},

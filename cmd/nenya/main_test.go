@@ -133,7 +133,6 @@ func TestLoadConfig_FromFile(t *testing.T) {
 	}
 }
 
-
 func TestLoadConfig_FromDir(t *testing.T) {
 	dir := t.TempDir()
 	configDir := filepath.Join(dir, "config.d")

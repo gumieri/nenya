@@ -98,7 +98,7 @@ func TestEmbedIndex_MaxVectorElements(t *testing.T) {
 	// Insert a vector with maximum allowed dimensions
 	maxElements := make([]float32, 8192)
 	for i := range maxElements {
-		maxElements[i] = float32(i % 10) / 10.0
+		maxElements[i] = float32(i%10) / 10.0
 	}
 	idx.Insert("max", maxElements)
 

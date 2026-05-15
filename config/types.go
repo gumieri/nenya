@@ -254,14 +254,15 @@ type SecretsConfig struct {
 // ApiKey defines an API key entry for client authentication, with
 // associated roles, expiration, and fine-grained permissions.
 type ApiKey struct {
-	Name          string         `json:"name"`
-	Token         string         `json:"token"`
-	Roles         []string       `json:"roles"`
-	AllowedAgents []string       `json:"allowed_agents"`
-	CreatedAt     string         `json:"created_at,omitempty"`
-	ExpiresAt     string         `json:"expires_at,omitempty"`
-	Enabled       bool           `json:"enabled"`
-	Permissions   map[string]any `json:"permissions,omitempty"`
+	Name             string         `json:"name"`
+	Token            string         `json:"token"`
+	Roles            []string       `json:"roles"`
+	AllowedAgents    []string       `json:"allowed_agents"`
+	AllowedEndpoints []string       `json:"allowed_endpoints,omitempty"`
+	CreatedAt        string         `json:"created_at,omitempty"`
+	ExpiresAt        string         `json:"expires_at,omitempty"`
+	Enabled          bool           `json:"enabled"`
+	Permissions      map[string]any `json:"permissions,omitempty"`
 }
 
 func (k *ApiKey) Validate() error {

@@ -173,13 +173,13 @@ func TestAutoAgentsConfig_IsEnabled_AllCategories(t *testing.T) {
 	}
 
 	cases := map[string]bool{
-		"fast":     true,
+		"fast":      true,
 		"reasoning": false,
-		"vision":   true,
-		"tools":    false,
-		"large":    true,
-		"balanced": false,
-		"coding":   true,
+		"vision":    true,
+		"tools":     false,
+		"large":     true,
+		"balanced":  false,
+		"coding":    true,
 	}
 
 	for category, expected := range cases {

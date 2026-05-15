@@ -52,6 +52,7 @@ func TestMetrics_RecordAndWritePrometheus(t *testing.T) {
 		"nenya_uptime_seconds",
 		"nenya_go_goroutines",
 		"nenya_cb_state",
+		"nenya_pipeline_compaction_applied_total",
 	}
 
 	for _, metric := range expectedMetrics {
