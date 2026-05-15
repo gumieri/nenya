@@ -38,7 +38,7 @@ func NewAnthropicTransformer() *AnthropicTransformer {
 
 func (t *AnthropicTransformer) TransformSSEChunk(ctx context.Context, data []byte) ([]byte, error) {
 	if len(data) == 0 {
-		return nil, nil
+		return nil, ErrEventConsumed
 	}
 
 	select {
@@ -60,7 +60,7 @@ func (t *AnthropicTransformer) TransformSSEChunk(ctx context.Context, data []byt
 
 	if t.streamDone {
 		slog.Debug("Dropping chunk after stream_done", "event", eventType)
-		return nil, nil
+		return nil, ErrEventConsumed
 	}
 
 	switch eventType {
@@ -77,7 +77,7 @@ func (t *AnthropicTransformer) TransformSSEChunk(ctx context.Context, data []byt
 	case "message_stop":
 		return t.handleMessageStop()
 	case "ping":
-		return nil, nil
+		return nil, ErrEventConsumed
 	default:
 		return data, nil
 	}
@@ -86,7 +86,7 @@ func (t *AnthropicTransformer) TransformSSEChunk(ctx context.Context, data []byt
 func (t *AnthropicTransformer) handleMessageStart(event map[string]interface{}) ([]byte, error) {
 	msg, ok := event["message"].(map[string]interface{})
 	if !ok {
-		return nil, nil
+		return nil, ErrEventConsumed
 	}
 
 	t.messageID, _ = msg["id"].(string)
@@ -102,20 +102,20 @@ func (t *AnthropicTransformer) handleMessageStart(event map[string]interface{}) 
 		}
 	}
 
-	return nil, nil
+	return nil, ErrEventConsumed
 }
 
 func (t *AnthropicTransformer) handleContentBlockStart(event map[string]interface{}) ([]byte, error) {
 	idx := getFloat64(event, "index")
 	if idx > math.MaxInt32 {
 		slog.Warn("Content block index exceeds int32 range", "index", idx)
-		return nil, nil
+		return nil, ErrEventConsumed
 	}
 	index := int(idx)
 
 	blockRaw, ok := event["content_block"].(map[string]interface{})
 	if !ok {
-		return nil, nil
+		return nil, ErrEventConsumed
 	}
 
 	blockType, _ := blockRaw["type"].(string)
@@ -129,15 +129,15 @@ func (t *AnthropicTransformer) handleContentBlockStart(event map[string]interfac
 			return t.marshalChunk(t.makeOpenAIChunk(
 				map[string]interface{}{"content": text}, nil))
 		}
-		return nil, nil
+		return nil, ErrEventConsumed
 	case "thinking":
 		if thinking, ok := blockRaw["thinking"].(string); ok && thinking != "" {
 			return t.marshalChunk(t.makeOpenAIChunk(
 				map[string]interface{}{"content": "<thinking>" + thinking + "</thinking>"}, nil))
 		}
-		return nil, nil
+		return nil, ErrEventConsumed
 	case "redacted_thinking":
-		return nil, nil
+		return nil, ErrEventConsumed
 	case "tool_use":
 		block.toolUseID, _ = blockRaw["id"].(string)
 		block.toolUseName, _ = blockRaw["name"].(string)
@@ -157,7 +157,7 @@ func (t *AnthropicTransformer) handleContentBlockStart(event map[string]interfac
 			map[string]interface{}{"tool_calls": []interface{}{tc}}, nil))
 	default:
 		slog.Debug("Unknown Anthropic content block type", "type", blockType, "normalized", blockTypeLower, "index", index)
-		return nil, nil
+		return nil, ErrEventConsumed
 	}
 }
 
@@ -165,18 +165,18 @@ func (t *AnthropicTransformer) handleContentBlockDelta(event map[string]interfac
 	idx := getFloat64(event, "index")
 	if idx > math.MaxInt32 {
 		slog.Warn("Content block delta index exceeds int32 range", "index", idx)
-		return nil, nil
+		return nil, ErrEventConsumed
 	}
 	index := int(idx)
 
 	block, ok := t.blockMap[index]
 	if !ok {
-		return nil, nil
+		return nil, ErrEventConsumed
 	}
 
 	deltaRaw, ok := event["delta"].(map[string]interface{})
 	if !ok {
-		return nil, nil
+		return nil, ErrEventConsumed
 	}
 
 	deltaType, _ := deltaRaw["type"].(string)
@@ -187,18 +187,18 @@ func (t *AnthropicTransformer) handleContentBlockDelta(event map[string]interfac
 	case "thinking":
 		return t.handleThinkingDelta(deltaRaw, deltaType, index)
 	case "redacted_thinking":
-		return nil, nil
+		return nil, ErrEventConsumed
 	case "tool_use":
 		return t.handleToolUseDelta(deltaRaw, deltaType, index, t.blockMap)
 	default:
 		slog.Debug("Unknown Anthropic content block type in delta", "type", block.blockType, "index", index)
-		return nil, nil
+		return nil, ErrEventConsumed
 	}
 }
 
 func (t *AnthropicTransformer) handleTextDelta(deltaRaw map[string]interface{}, deltaType string, index int) ([]byte, error) {
 	if deltaType != "text_delta" {
-		return nil, nil
+		return nil, ErrEventConsumed
 	}
 
 	payload := map[string]interface{}{}
@@ -207,7 +207,7 @@ func (t *AnthropicTransformer) handleTextDelta(deltaRaw map[string]interface{}, 
 	}
 
 	if len(payload) == 0 {
-		return nil, nil
+		return nil, ErrEventConsumed
 	}
 
 	return t.marshalChunk(t.makeOpenAIChunk(payload, nil))
@@ -215,7 +215,7 @@ func (t *AnthropicTransformer) handleTextDelta(deltaRaw map[string]interface{}, 
 
 func (t *AnthropicTransformer) handleThinkingDelta(deltaRaw map[string]interface{}, deltaType string, index int) ([]byte, error) {
 	if deltaType != "thinking_delta" {
-		return nil, nil
+		return nil, ErrEventConsumed
 	}
 
 	payload := map[string]interface{}{}
@@ -224,7 +224,7 @@ func (t *AnthropicTransformer) handleThinkingDelta(deltaRaw map[string]interface
 	}
 
 	if len(payload) == 0 {
-		return nil, nil
+		return nil, ErrEventConsumed
 	}
 
 	return t.marshalChunk(t.makeOpenAIChunk(payload, nil))
@@ -232,7 +232,7 @@ func (t *AnthropicTransformer) handleThinkingDelta(deltaRaw map[string]interface
 
 func (t *AnthropicTransformer) handleToolUseDelta(deltaRaw map[string]interface{}, deltaType string, index int, blocks map[int]*anthropicBlock) ([]byte, error) {
 	if deltaType != "input_json_delta" {
-		return nil, nil
+		return nil, ErrEventConsumed
 	}
 
 	payload := map[string]interface{}{}
@@ -249,20 +249,20 @@ func (t *AnthropicTransformer) handleToolUseDelta(deltaRaw map[string]interface{
 	}
 
 	if len(payload) == 0 {
-		return nil, nil
+		return nil, ErrEventConsumed
 	}
 
 	return t.marshalChunk(t.makeOpenAIChunk(payload, nil))
 }
 
 func (t *AnthropicTransformer) handleContentBlockStop() ([]byte, error) {
-	return nil, nil
+	return nil, ErrEventConsumed
 }
 
 func (t *AnthropicTransformer) handleMessageDelta(event map[string]interface{}) ([]byte, error) {
 	delta, ok := event["delta"].(map[string]interface{})
 	if !ok {
-		return nil, nil
+		return nil, ErrEventConsumed
 	}
 
 	stopReason, _ := delta["stop_reason"].(string)

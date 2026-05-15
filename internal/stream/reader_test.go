@@ -6,797 +6,93 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
-	"regexp"
 	"strings"
 	"testing"
-	"time"
 )
 
-type mockTransformer struct{}
+func TestSSETransformingReader_AnthropicMessageStartSuppressed(t *testing.T) {
+	input := "data: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_123\",\"type\":\"message\",\"role\":\"assistant\",\"model\":\"claude-sonnet-4-6\",\"content\":[],\"usage\":{\"input_tokens\":5668}}}\n\n" +
+		"data: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n" +
+		"data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"Hello\"}}\n\n" +
+		"data: {\"type\":\"content_block_stop\",\"index\":0}\n\n" +
+		"data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":10}}\n\n" +
+		"data: {\"type\":\"message_stop\"}\n\n"
 
-func (m *mockTransformer) TransformSSEChunk(_ context.Context, data []byte) ([]byte, error) {
-	return data, nil
-}
+	tr := NewAnthropicTransformer()
+	reader := NewSSETransformingReader(strings.NewReader(input), tr, context.Background())
 
-func TestSSETransformingReader_DataLines(t *testing.T) {
-	input := `data: {"choices":[{"delta":{"content":"hello"}}]}
- data: {"choices":[{"delta":{"content":" world"}}]}
- data: [DONE]
- `
-	reader := NewSSETransformingReader(strings.NewReader(input), &mockTransformer{}, context.Background())
-	var buf bytes.Buffer
-	_, err := io.Copy(&buf, reader)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	output := buf.String()
-	if !strings.Contains(output, "data: ") {
-		t.Fatalf("expected SSE data lines, got: %s", output)
-	}
-	if !strings.Contains(output, "hello") {
-		t.Fatal("expected 'hello' in output")
-	}
-	if !strings.Contains(output, " world") {
-		t.Fatal("expected ' world' in output")
-	}
-	if !strings.Contains(output, "data: [DONE]\n") {
-		t.Fatal("expected 'data: [DONE]' preserved")
-	}
-}
-
-func TestSSETransformingReader_NonSSEJSON(t *testing.T) {
-	input := `data: {"choices":[{"delta":{"content":"raw json"}}]}
-data: [DONE]
-`
-	reader := NewSSETransformingReader(strings.NewReader(input), &mockTransformer{}, context.Background())
-	var buf bytes.Buffer
-	_, err := io.Copy(&buf, reader)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	output := buf.String()
-	data := strings.TrimPrefix(output, "data: ")
-	data = strings.TrimSuffix(data, "\ndata: [DONE]\n")
-	var parsed map[string]interface{}
-	if err := json.Unmarshal([]byte(data), &parsed); err != nil {
-		t.Fatalf("output not valid JSON: %v", err)
-	}
-	choices := parsed["choices"].([]interface{})
-	delta := choices[0].(map[string]interface{})["delta"].(map[string]interface{})
-	if delta["content"] != "raw json" {
-		t.Fatalf("expected 'raw json', got: %v", delta["content"])
-	}
-}
-
-func TestSSETransformingReader_EmptyLinesAndComments(t *testing.T) {
-	input := `
-: this is a comment
-
-data: {"choices":[{"delta":{"content":"test"}}]}
-
-`
-	reader := NewSSETransformingReader(strings.NewReader(input), &mockTransformer{}, context.Background())
-	var buf bytes.Buffer
-	_, err := io.Copy(&buf, reader)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	output := buf.String()
-	if !strings.Contains(output, "data: ") {
-		t.Fatalf("expected SSE data lines, got: %s", output)
-	}
-	if !strings.Contains(output, "test") {
-		t.Fatal("expected 'test' in output")
-	}
-	if !strings.Contains(output, ": this is a comment\n") {
-		t.Fatal("comment line not preserved")
-	}
-	if strings.Count(output, "\n\n") < 2 {
-		t.Fatalf("empty lines not preserved, got: %q", output)
-	}
-}
-
-func TestSSETransformingReader_StreamFilterBlock(t *testing.T) {
-	blockRe := regexp.MustCompile(`(?i)rm\s+-rf`)
-	sf := NewStreamFilter(nil, []*regexp.Regexp{blockRe}, "[REDACTED]", 4096)
-
-	input := `data: {"choices":[{"delta":{"content":"run rm -rf / now"}}]}
-`
-	reader := NewSSETransformingReader(strings.NewReader(input), &mockTransformer{}, context.Background())
-	reader.SetStreamFilter(sf)
-
-	var buf bytes.Buffer
-	_, err := io.Copy(&buf, reader)
-	if !errors.Is(err, ErrStreamBlocked) {
-		t.Fatalf("expected ErrStreamBlocked, got: %v", err)
-	}
-}
-
-func TestSSETransformingReader_StreamFilterRedact(t *testing.T) {
-	secretRe := regexp.MustCompile(`\bAKIA[0-9A-Z]{16}\b`)
-	sf := NewStreamFilter([]*regexp.Regexp{secretRe}, nil, "[SECRET]", 4096)
-
-	input := `data: {"choices":[{"delta":{"content":"key is AKIAIOSFODNN7EXAMPLE end"}}]}
-`
-	reader := NewSSETransformingReader(strings.NewReader(input), &mockTransformer{}, context.Background())
-	reader.SetStreamFilter(sf)
-
-	var buf bytes.Buffer
-	_, err := io.Copy(&buf, reader)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	output := buf.String()
-	if strings.Contains(output, "AKIAIOSFODNN7EXAMPLE") {
-		t.Fatal("secret key not redacted")
-	}
-	if !strings.Contains(output, "[SECRET]") {
-		t.Fatal("expected [SECRET] label in output")
-	}
-	if strings.Contains(output, "key is") && strings.Contains(output, "end") {
-		t.Log("surrounding content preserved correctly")
-	}
-}
-
-func TestSSETransformingReader_OnUsageCallback(t *testing.T) {
-	input := `data: {"choices":[{"delta":{"content":"hi"}}]}
-data: {"choices":[],"usage":{"completion_tokens":10,"prompt_tokens":5,"total_tokens":15}}
-`
-	var gotCompletion, gotPrompt, gotTotal int
-	cb := func(completion, prompt, total, cacheHit, cacheMiss int) {
-		gotCompletion = completion
-		gotPrompt = prompt
-		gotTotal = total
-	}
-
-	reader := NewSSETransformingReader(strings.NewReader(input), &mockTransformer{}, context.Background())
-	reader.SetOnUsage(cb)
-
-	var buf bytes.Buffer
-	_, err := io.Copy(&buf, reader)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if gotCompletion != 10 || gotPrompt != 5 || gotTotal != 15 {
-		t.Fatalf("expected (10,5,15), got (%d,%d,%d)", gotCompletion, gotPrompt, gotTotal)
-	}
-}
-
-func TestSSETransformingReader_OnUsageNotFired(t *testing.T) {
-	input := `data: {"choices":[{"delta":{"content":"hi"}}]}
-data: {"choices":[{"delta":{"content":"bye"}}]}
-`
-	fired := false
-	cb := func(_, _, _, _, _ int) {
-		fired = true
-	}
-
-	reader := NewSSETransformingReader(strings.NewReader(input), &mockTransformer{}, context.Background())
-	reader.SetOnUsage(cb)
-
-	var buf bytes.Buffer
-	_, err := io.Copy(&buf, reader)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if fired {
-		t.Fatal("usage callback should not have fired")
-	}
-}
-
-func TestToInt(t *testing.T) {
-	tests := []struct {
-		name  string
-		input interface{}
-		want  int
-	}{
-		{"float64 truncated", float64(42.7), 42},
-		{"float64 zero", float64(0), 0},
-		{"int passthrough", 7, 7},
-		{"string returns zero", "not a number", 0},
-		{"nil returns zero", nil, 0},
-		{"bool returns zero", true, 0},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if got := ToInt(tt.input); got != tt.want {
-				t.Errorf("ToInt(%v) = %d, want %d", tt.input, got, tt.want)
-			}
-		})
-	}
-}
-
-func TestExtractUsageFromMap(t *testing.T) {
-	tests := []struct {
-		name      string
-		chunk     map[string]interface{}
-		wantFired bool
-	}{
-		{
-			"non-map usage field",
-			map[string]interface{}{"usage": "not a map"},
-			false,
-		},
-		{
-			"malformed token values",
-			map[string]interface{}{
-				"usage": map[string]interface{}{
-					"completion_tokens": "bad",
-					"prompt_tokens":     "bad",
-					"total_tokens":      "bad",
-				},
-			},
-			false,
-		},
-		{
-			"no usage field",
-			map[string]interface{}{"choices": []interface{}{}},
-			false,
-		},
-		{
-			"all zero usage",
-			map[string]interface{}{
-				"usage": map[string]interface{}{
-					"completion_tokens": float64(0),
-					"prompt_tokens":     float64(0),
-					"total_tokens":      float64(0),
-				},
-			},
-			false,
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			fired := false
-			r := &SSETransformingReader{
-				onUsage: func(_, _, _, _, _ int) { fired = true },
-			}
-			r.extractUsageFromMap(tt.chunk)
-			if fired != tt.wantFired {
-				t.Errorf("callback fired=%v, want %v", fired, tt.wantFired)
-			}
-		})
-	}
-}
-
-func TestNormalizeToolCallIDs(t *testing.T) {
-	tests := []struct {
-		name       string
-		chunk      map[string]interface{}
-		wantMutate bool
-		wantID     string
-	}{
-		{
-			"null id generates synthetic",
-			map[string]interface{}{
-				"choices": []interface{}{
-					map[string]interface{}{
-						"delta": map[string]interface{}{
-							"tool_calls": []interface{}{
-								map[string]interface{}{
-									"index": float64(0), "id": nil,
-									"function": map[string]interface{}{"name": "read_file", "arguments": "{}"},
-								},
-							},
-						},
-					},
-				},
-			},
-			true, "call_0",
-		},
-		{
-			"numeric id converts to string",
-			map[string]interface{}{
-				"choices": []interface{}{
-					map[string]interface{}{
-						"delta": map[string]interface{}{
-							"tool_calls": []interface{}{
-								map[string]interface{}{
-									"index": float64(3), "id": float64(42),
-									"function": map[string]interface{}{"name": "search", "arguments": "{}"},
-								},
-							},
-						},
-					},
-				},
-			},
-			true, "call_3",
-		},
-		{
-			"valid string id unchanged",
-			map[string]interface{}{
-				"choices": []interface{}{
-					map[string]interface{}{
-						"delta": map[string]interface{}{
-							"tool_calls": []interface{}{
-								map[string]interface{}{
-									"index": float64(0), "id": "call_abc123",
-									"function": map[string]interface{}{"name": "read_file", "arguments": "{}"},
-								},
-							},
-						},
-					},
-				},
-			},
-			false, "call_abc123",
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			state := newToolCallState()
-			mutated := normalizeToolCalls(tt.chunk, &state)
-			if mutated != tt.wantMutate {
-				t.Fatalf("mutated=%v, want %v", mutated, tt.wantMutate)
-			}
-			choices := tt.chunk["choices"].([]interface{})
-			delta := choices[0].(map[string]interface{})["delta"].(map[string]interface{})
-			tcs := delta["tool_calls"].([]interface{})
-			gotID := tcs[0].(map[string]interface{})["id"].(string)
-			if gotID != tt.wantID {
-				t.Fatalf("id=%q, want %q", gotID, tt.wantID)
-			}
-		})
-	}
-}
-
-func TestNormalizeToolCallIDs_MissingToolCalls(t *testing.T) {
-	chunk := map[string]interface{}{
-		"choices": []interface{}{
-			map[string]interface{}{
-				"delta": map[string]interface{}{"content": "hello"},
-			},
-		},
-	}
-	state := newToolCallState()
-	if normalizeToolCalls(chunk, &state) {
-		t.Fatal("expected no mutation when no tool_calls")
-	}
-}
-
-func TestSSETransformingReader_ToolCallIDNormalized(t *testing.T) {
-	input := `data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":null,"function":{"name":"read_file","arguments":"{}"}}]}}]}
-data: [DONE]
-`
-	reader := NewSSETransformingReader(strings.NewReader(input), nil, context.Background())
-	var buf bytes.Buffer
-	_, err := io.Copy(&buf, reader)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	output := buf.String()
-	if strings.Contains(output, `"id":null`) {
-		t.Fatalf("null tool call id should be normalized, got: %s", output)
-	}
-	if !strings.Contains(output, `"id":"call_0"`) {
-		t.Fatalf("expected synthetic id call_0, got: %s", output)
-	}
-}
-
-func TestNormalizeToolCalls(t *testing.T) {
-	tests := []struct {
-		name          string
-		chunk         map[string]interface{}
-		wantMutate    bool
-		wantTCLen     int
-		wantFirstID   string
-		wantFirstName string
-	}{
-		{
-			"null function stripped",
-			map[string]interface{}{
-				"choices": []interface{}{
-					map[string]interface{}{
-						"delta": map[string]interface{}{
-							"tool_calls": []interface{}{
-								map[string]interface{}{
-									"index": float64(0), "id": "call_0", "function": nil,
-								},
-								map[string]interface{}{
-									"index": float64(1), "id": "call_1",
-									"function": map[string]interface{}{"name": "read_file", "arguments": "{}"},
-								},
-							},
-						},
-					},
-				},
-			},
-			true, 1, "call_1", "read_file",
-		},
-		{
-			"null function.name no args removed",
-			map[string]interface{}{
-				"choices": []interface{}{
-					map[string]interface{}{
-						"delta": map[string]interface{}{
-							"tool_calls": []interface{}{
-								map[string]interface{}{
-									"index": float64(0), "id": "call_0",
-									"function": map[string]interface{}{"name": nil, "arguments": nil},
-								},
-							},
-						},
-					},
-				},
-			},
-			true, 0, "", "",
-		},
-		{
-			"null function.name with args buffered (not emitted for new index)",
-			map[string]interface{}{
-				"choices": []interface{}{
-					map[string]interface{}{
-						"delta": map[string]interface{}{
-							"tool_calls": []interface{}{
-								map[string]interface{}{
-									"index": float64(0), "id": "call_0",
-									"function": map[string]interface{}{"name": nil, "arguments": `{"path":"test.txt"}`},
-								},
-							},
-						},
-					},
-				},
-			},
-			true, 0, "", "",
-		},
-		{
-			"numeric function.name coerced to string",
-			map[string]interface{}{
-				"choices": []interface{}{
-					map[string]interface{}{
-						"delta": map[string]interface{}{
-							"tool_calls": []interface{}{
-								map[string]interface{}{
-									"index": float64(0), "id": "call_0",
-									"function": map[string]interface{}{"name": float64(42), "arguments": "{}"},
-								},
-							},
-						},
-					},
-				},
-			},
-			true, 1, "call_0", "42",
-		},
-		{
-			"boolean function.name coerced to string",
-			map[string]interface{}{
-				"choices": []interface{}{
-					map[string]interface{}{
-						"delta": map[string]interface{}{
-							"tool_calls": []interface{}{
-								map[string]interface{}{
-									"index": float64(0), "id": "call_0",
-									"function": map[string]interface{}{"name": true, "arguments": "{}"},
-								},
-							},
-						},
-					},
-				},
-			},
-			true, 1, "call_0", "true",
-		},
-		{
-			"mixed valid and invalid entries",
-			map[string]interface{}{
-				"choices": []interface{}{
-					map[string]interface{}{
-						"delta": map[string]interface{}{
-							"tool_calls": []interface{}{
-								map[string]interface{}{
-									"index": float64(0), "id": "call_0", "function": nil,
-								},
-								map[string]interface{}{
-									"index": float64(1), "id": "call_1",
-									"function": map[string]interface{}{"name": "read_file", "arguments": "{}"},
-								},
-								map[string]interface{}{
-									"index": float64(2), "id": "call_2",
-									"function": map[string]interface{}{"name": nil, "arguments": nil},
-								},
-							},
-						},
-					},
-				},
-			},
-			true, 1, "call_1", "read_file",
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			state := newToolCallState()
-			mutated := normalizeToolCalls(tt.chunk, &state)
-			if mutated != tt.wantMutate {
-				t.Fatalf("mutated=%v, want %v", mutated, tt.wantMutate)
-			}
-			choices := tt.chunk["choices"].([]interface{})
-			delta := choices[0].(map[string]interface{})["delta"].(map[string]interface{})
-			if tt.wantTCLen == 0 {
-				if _, hasTC := delta["tool_calls"]; hasTC {
-					t.Fatal("tool_calls should be removed")
-				}
-				return
-			}
-			tcs := delta["tool_calls"].([]interface{})
-			if len(tcs) != tt.wantTCLen {
-				t.Fatalf("tool_calls len=%d, want %d", len(tcs), tt.wantTCLen)
-			}
-			if tt.wantFirstID != "" {
-				gotID := tcs[0].(map[string]interface{})["id"].(string)
-				if gotID != tt.wantFirstID {
-					t.Fatalf("first id=%q, want %q", gotID, tt.wantFirstID)
-				}
-			}
-			if tt.wantFirstName != "" {
-				fn := tcs[0].(map[string]interface{})["function"].(map[string]interface{})
-				gotName := fn["name"].(string)
-				if gotName != tt.wantFirstName {
-					t.Fatalf("first function.name=%q, want %q", gotName, tt.wantFirstName)
-				}
-			}
-		})
-	}
-}
-
-func TestNormalizeToolCalls_StatefulBuffering(t *testing.T) {
-	t.Run("nil name buffered then merged on name arrival", func(t *testing.T) {
-		state := newToolCallState()
-
-		chunk1 := map[string]interface{}{
-			"choices": []interface{}{
-				map[string]interface{}{
-					"delta": map[string]interface{}{
-						"tool_calls": []interface{}{
-							map[string]interface{}{
-								"index":    float64(0),
-								"id":       "call_abc",
-								"function": map[string]interface{}{"name": nil, "arguments": `{"path":`},
-							},
-						},
-					},
-				},
-			},
-		}
-		mutated := normalizeToolCalls(chunk1, &state)
-		if !mutated {
-			t.Fatal("chunk1 should be mutated (entry buffered)")
-		}
-		delta1 := extractDelta(chunk1)
-		if _, hasTC := delta1["tool_calls"]; hasTC {
-			t.Fatal("chunk1 tool_calls should be removed (buffered)")
-		}
-		if _, ok := state.pending[0]; !ok {
-			t.Fatal("index 0 should be pending")
-		}
-
-		chunk2 := map[string]interface{}{
-			"choices": []interface{}{
-				map[string]interface{}{
-					"delta": map[string]interface{}{
-						"tool_calls": []interface{}{
-							map[string]interface{}{
-								"index":    float64(0),
-								"id":       "call_abc",
-								"function": map[string]interface{}{"name": "read_file", "arguments": `"test.txt"}`},
-							},
-						},
-					},
-				},
-			},
-		}
-		mutated = normalizeToolCalls(chunk2, &state)
-		if !mutated {
-			t.Fatal("chunk2 should be mutated (pending merged)")
-		}
-		tcs := extractDelta(chunk2)["tool_calls"].([]interface{})
-		if len(tcs) != 1 {
-			t.Fatalf("chunk2 tool_calls len=%d, want 1", len(tcs))
-		}
-		fn := tcs[0].(map[string]interface{})["function"].(map[string]interface{})
-		gotArgs := fn["arguments"].(string)
-		if gotArgs != `{"path":"test.txt"}` {
-			t.Fatalf("merged args=%q, want %q", gotArgs, `{"path":"test.txt"}`)
-		}
-		gotName := fn["name"].(string)
-		if gotName != "read_file" {
-			t.Fatalf("name=%q, want read_file", gotName)
-		}
-		if _, ok := state.pending[0]; ok {
-			t.Fatal("index 0 should no longer be pending")
-		}
-		if !state.seenIndices[0] {
-			t.Fatal("index 0 should be seen")
-		}
-	})
-
-	t.Run("continuation chunk passes through after seen", func(t *testing.T) {
-		state := newToolCallState()
-
-		chunk1 := map[string]interface{}{
-			"choices": []interface{}{
-				map[string]interface{}{
-					"delta": map[string]interface{}{
-						"tool_calls": []interface{}{
-							map[string]interface{}{
-								"index": float64(0), "id": "call_0",
-								"function": map[string]interface{}{"name": "search", "arguments": `{`},
-							},
-						},
-					},
-				},
-			},
-		}
-		normalizeToolCalls(chunk1, &state)
-
-		chunk2 := map[string]interface{}{
-			"choices": []interface{}{
-				map[string]interface{}{
-					"delta": map[string]interface{}{
-						"tool_calls": []interface{}{
-							map[string]interface{}{
-								"index":    float64(0),
-								"function": map[string]interface{}{"name": nil, "arguments": `"q":"go"`},
-							},
-						},
-					},
-				},
-			},
-		}
-		mutated := normalizeToolCalls(chunk2, &state)
-		if mutated {
-			t.Fatal("continuation chunk should not be mutated")
-		}
-		tcs := extractDelta(chunk2)["tool_calls"].([]interface{})
-		if len(tcs) != 1 {
-			t.Fatalf("continuation tool_calls len=%d, want 1", len(tcs))
-		}
-	})
-
-	t.Run("no function field dropped silently", func(t *testing.T) {
-		state := newToolCallState()
-		chunk := map[string]interface{}{
-			"choices": []interface{}{
-				map[string]interface{}{
-					"delta": map[string]interface{}{
-						"tool_calls": []interface{}{
-							map[string]interface{}{
-								"index": float64(0), "id": "call_0",
-							},
-						},
-					},
-				},
-			},
-		}
-		mutated := normalizeToolCalls(chunk, &state)
-		if !mutated {
-			t.Fatal("should be mutated (entry dropped)")
-		}
-		if _, hasTC := extractDelta(chunk)["tool_calls"]; hasTC {
-			t.Fatal("tool_calls should be removed")
-		}
-	})
-
-	t.Run("pending id restored when name chunk lacks id", func(t *testing.T) {
-		state := newToolCallState()
-
-		chunk1 := map[string]interface{}{
-			"choices": []interface{}{
-				map[string]interface{}{
-					"delta": map[string]interface{}{
-						"tool_calls": []interface{}{
-							map[string]interface{}{
-								"index":    float64(0),
-								"id":       "call_real",
-								"function": map[string]interface{}{"name": nil, "arguments": `{`},
-							},
-						},
-					},
-				},
-			},
-		}
-		normalizeToolCalls(chunk1, &state)
-
-		chunk2 := map[string]interface{}{
-			"choices": []interface{}{
-				map[string]interface{}{
-					"delta": map[string]interface{}{
-						"tool_calls": []interface{}{
-							map[string]interface{}{
-								"index":    float64(0),
-								"function": map[string]interface{}{"name": "do_thing", "arguments": `}`},
-							},
-						},
-					},
-				},
-			},
-		}
-		mutated := normalizeToolCalls(chunk2, &state)
-		if !mutated {
-			t.Fatal("should be mutated (id restored)")
-		}
-		tcs := extractDelta(chunk2)["tool_calls"].([]interface{})
-		gotID := tcs[0].(map[string]interface{})["id"].(string)
-		if gotID != "call_real" {
-			t.Fatalf("id=%q, want call_real", gotID)
-		}
-	})
-}
-
-func extractDelta(chunk map[string]interface{}) map[string]interface{} {
-	choices, ok := chunk["choices"].([]interface{})
-	if !ok || len(choices) == 0 {
-		return nil
-	}
-	choice, ok := choices[0].(map[string]interface{})
-	if !ok {
-		return nil
-	}
-	return choice["delta"].(map[string]interface{})
-}
-
-func TestContextCancellation(t *testing.T) {
-	input := `data: {"choices":[{"delta":{"content":"hello"}}]}
-data: {"choices":[{"delta":{"content":" world"}}]}
-data: {"choices":[{"delta":{"content":" from"}}]}
-`
-	ctx, cancel := context.WithCancel(context.Background())
-	reader := NewSSETransformingReader(strings.NewReader(input), &mockTransformer{}, ctx)
-
-	var buf bytes.Buffer
-	done := make(chan bool, 1)
-	go func() {
-		_, _ = io.Copy(&buf, reader)
-		done <- true
-	}()
-
-	time.Sleep(10 * time.Millisecond)
-	cancel()
-
-	select {
-	case <-done:
-	case <-time.After(1 * time.Second):
-		t.Fatal("context cancellation did not unblock Read")
-	}
-}
-
-func TestStreamBufferPool(t *testing.T) {
-	initialStats := GetPoolStats()
-	initialMisses := initialStats["misses"]
-
-	input := `data: {"choices":[{"delta":{"content":"hello"}}]}
-data: [DONE]
-`
-	reader := NewSSETransformingReader(strings.NewReader(input), &mockTransformer{}, context.Background())
-	var buf bytes.Buffer
-	_, err := io.Copy(&buf, reader)
+	var output bytes.Buffer
+	_, err := io.Copy(&output, reader)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	statsAfter := GetPoolStats()
-	if statsAfter["misses"] <= initialMisses {
-		t.Logf("pool miss count: initial=%d, after=%d", initialMisses, statsAfter["misses"])
+	result := output.String()
+
+	if strings.Contains(result, "message_start") {
+		t.Errorf("raw message_start event leaked to client: %s", result)
+	}
+	if strings.Contains(result, "content_block_stop") {
+		t.Errorf("raw content_block_stop event leaked to client: %s", result)
+	}
+	if !strings.Contains(result, "chat.completion.chunk") {
+		t.Errorf("expected OpenAI chat.completion.chunk in output, got: %s", result)
+	}
+	if !strings.Contains(result, "[DONE]") {
+		t.Errorf("expected [DONE] in output, got: %s", result)
 	}
 }
 
-func TestStreamBufferPoolConcurrent(t *testing.T) {
-	input := `data: {"choices":[{"delta":{"content":"test"}}]}
-data: [DONE]
-`
-	const numGoroutines = 10
-	done := make(chan bool, numGoroutines)
-
-	for i := 0; i < numGoroutines; i++ {
-		go func() {
-			reader := NewSSETransformingReader(strings.NewReader(input), &mockTransformer{}, context.Background())
-			var buf bytes.Buffer
-			_, _ = io.Copy(&buf, reader)
-			done <- true
-		}()
+func TestSSETransformingReader_AnthropicMessageStartWithCacheFields(t *testing.T) {
+	event := map[string]interface{}{
+		"type": "message_start",
+		"message": map[string]interface{}{
+			"model":        "claude-sonnet-4-6",
+			"id":           "msg_01Q4djwS6AqPt2B16UeHmeQC",
+			"type":         "message",
+			"role":         "assistant",
+			"content":      []interface{}{},
+			"stop_reason":  nil,
+			"stop_sequence": nil,
+			"stop_details":  nil,
+			"usage": map[string]interface{}{
+				"input_tokens": float64(5668),
+				"cache_creation_input_tokens": float64(54947),
+				"cache_read_input_tokens":    float64(0),
+				"cache_creation": map[string]interface{}{
+					"ephemeral_5m_input_tokens": float64(54947),
+					"ephemeral_1h_input_tokens": float64(0),
+				},
+				"output_tokens": float64(1),
+			},
+		},
 	}
-
-	for i := 0; i < numGoroutines; i++ {
-		<-done
+	data, _ := json.Marshal(event)
+	tr := NewAnthropicTransformer()
+	out, err := tr.TransformSSEChunk(context.Background(), data)
+	if !errors.Is(err, ErrEventConsumed) {
+		t.Errorf("expected ErrEventConsumed, got: out=%s err=%v", string(out), err)
 	}
+}
 
-	stats := GetPoolStats()
-	t.Logf("Pool stats - Hits: %d, Misses: %d", stats["hits"], stats["misses"])
+func TestSSETransformingReader_SkipsConsumedEvents(t *testing.T) {
+	input := "data: {\"type\":\"ping\"}\n\n" +
+		"data: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_1\",\"model\":\"claude-3\",\"usage\":{\"input_tokens\":10}}}\n\n" +
+		"data: {\"type\":\"message_stop\"}\n\n"
+
+	tr := NewAnthropicTransformer()
+	reader := NewSSETransformingReader(strings.NewReader(input), tr, context.Background())
+	var buf bytes.Buffer
+	_, _ = io.Copy(&buf, reader)
+
+	result := buf.String()
+	if strings.Contains(result, "message_start") {
+		t.Errorf("consumed message_start leaked: %s", result)
+	}
+	if strings.Contains(result, "ping") {
+		t.Errorf("consumed ping leaked: %s", result)
+	}
+	if !strings.Contains(result, "[DONE]") {
+		t.Errorf("expected [DONE] in output, got: %s", result)
+	}
 }

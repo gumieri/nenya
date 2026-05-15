@@ -5,12 +5,17 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
 	"reflect"
 	"sync"
 )
+
+// ErrEventConsumed signals that the transformer consumed the SSE event
+// and no output should be forwarded to the client.
+var ErrEventConsumed = errors.New("sse event consumed by transformer")
 
 const (
 	SSEScannerInitialBuf = 64 * 1024
@@ -164,26 +169,36 @@ func (r *SSETransformingReader) Read(p []byte) (int, error) {
 		return r.drainAfterScanDone(p)
 	}
 
-	line := r.scanner.Bytes()
-	lineCopy := make([]byte, len(line))
-	copy(lineCopy, line)
-	transformed := r.transformLine(lineCopy)
+	for {
+		line := r.scanner.Bytes()
+		lineCopy := make([]byte, len(line))
+		copy(lineCopy, line)
+		transformed := r.transformLine(lineCopy)
 
-	if r.streamFilter != nil && r.streamFilter.IsBlocked() {
-		r.err = ErrStreamBlocked
-		putStreamBuffer(r.poolBuf)
-		r.poolBuf = nil
-		return 0, r.err
+		if transformed == nil {
+			if !r.scanner.Scan() {
+				r.handleScannerDone()
+				return r.drainAfterScanDone(p)
+			}
+			continue
+		}
+
+		if r.streamFilter != nil && r.streamFilter.IsBlocked() {
+			r.err = ErrStreamBlocked
+			putStreamBuffer(r.poolBuf)
+			r.poolBuf = nil
+			return 0, r.err
+		}
+
+		if !bytes.HasSuffix(transformed, []byte("\n")) {
+			transformed = append(transformed, '\n')
+		}
+
+		r.buffer = transformed
+		r.pos = 0
+
+		return r.Read(p)
 	}
-
-	if !bytes.HasSuffix(transformed, []byte("\n")) {
-		transformed = append(transformed, '\n')
-	}
-
-	r.buffer = transformed
-	r.pos = 0
-
-	return r.Read(p)
 }
 
 func (r *SSETransformingReader) transformLine(line []byte) []byte {
@@ -192,10 +207,18 @@ func (r *SSETransformingReader) transformLine(line []byte) []byte {
 	}
 
 	if !bytes.HasPrefix(line, []byte("data: ")) {
-		return r.transformNonSSELine(line)
+		result := r.transformNonSSELine(line)
+		if result == nil {
+			return nil
+		}
+		return result
 	}
 
-	return r.transformSSEData(line)
+	result := r.transformSSEData(line)
+	if result == nil {
+		return nil
+	}
+	return result
 }
 
 // handleScannerDone is called when the scanner has no more input.
@@ -281,10 +304,18 @@ func (r *SSETransformingReader) transformSSEData(line []byte) []byte {
 	r.callUsageAndContentCallbacks(parsed)
 
 	if r.transformer == nil {
-		return r.handleNoTransformer(parsed, data, origData, line)
+		result := r.handleNoTransformer(parsed, data, origData, line)
+		if result == nil {
+			return nil
+		}
+		return result
 	}
 
-	return r.handleWithTransformer(parsed, data, origData, line)
+	result := r.handleWithTransformer(parsed, data, origData, line)
+	if result == nil {
+		return nil
+	}
+	return result
 }
 
 func (r *SSETransformingReader) notifySSEObserver(line []byte, parsed map[string]interface{}, eventType string) {
@@ -398,6 +429,10 @@ func (r *SSETransformingReader) handleNoTransformer(parsed map[string]interface{
 func (r *SSETransformingReader) handleWithTransformer(parsed map[string]interface{}, data []byte, origData []byte, line []byte) []byte {
 	transformed, err := r.transformer.TransformSSEChunk(r.ctx, data)
 	if err != nil {
+		if errors.Is(err, ErrEventConsumed) {
+			r.notifySSEObserver(line, parsed, "consumed")
+			return nil
+		}
 		r.notifySSEObserver(line, parsed, "")
 		return line
 	}
@@ -455,7 +490,14 @@ func (r *SSETransformingReader) transformNonSSELine(line []byte) []byte {
 		return line
 	}
 	transformed, err := r.transformer.TransformSSEChunk(r.ctx, trimmed)
-	if err != nil || len(transformed) == 0 || bytes.Equal(transformed, trimmed) {
+	if err != nil {
+		if errors.Is(err, ErrEventConsumed) {
+			r.notifySSEObserver(line, nil, "consumed")
+			return nil
+		}
+		return line
+	}
+	if len(transformed) == 0 || bytes.Equal(transformed, trimmed) {
 		return line
 	}
 	return transformed

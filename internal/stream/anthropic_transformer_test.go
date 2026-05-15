@@ -3,6 +3,7 @@ package stream
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 )
@@ -53,8 +54,8 @@ func TestAnthropicTransformer_MessageStart(t *testing.T) {
 	}
 	data, _ := json.Marshal(input)
 	out, err := tr.TransformSSEChunk(context.Background(), data)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+	if !errors.Is(err, ErrEventConsumed) {
+		t.Fatalf("expected ErrEventConsumed, got: out=%s err=%v", string(out), err)
 	}
 	if out != nil {
 		t.Fatalf("expected nil output for message_start, got %s", string(out))
@@ -127,8 +128,8 @@ func TestAnthropicTransformer_TextContent(t *testing.T) {
 	}
 	data, _ = json.Marshal(blockStop)
 	out, err = tr.TransformSSEChunk(context.Background(), data)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+	if !errors.Is(err, ErrEventConsumed) {
+		t.Fatalf("expected ErrEventConsumed for content_block_stop, got: out=%s err=%v", string(out), err)
 	}
 	if out != nil {
 		t.Errorf("expected nil for content_block_stop, got %s", string(out))
@@ -423,8 +424,8 @@ func TestAnthropicTransformer_PingEvent(t *testing.T) {
 	}
 	data, _ := json.Marshal(input)
 	out, err := tr.TransformSSEChunk(context.Background(), data)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+	if !errors.Is(err, ErrEventConsumed) {
+		t.Fatalf("expected ErrEventConsumed for ping, got: out=%s err=%v", string(out), err)
 	}
 	if out != nil {
 		t.Errorf("expected nil for ping, got %s", string(out))
@@ -466,8 +467,8 @@ func TestAnthropicTransformer_EmptyBody(t *testing.T) {
 	tr := NewAnthropicTransformer()
 	data := []byte("")
 	out, err := tr.TransformSSEChunk(context.Background(), data)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+	if !errors.Is(err, ErrEventConsumed) {
+		t.Fatalf("expected ErrEventConsumed for empty body, got: out=%s err=%v", string(out), err)
 	}
 	if string(out) != "" {
 		t.Errorf("expected empty, got %s", string(out))
