@@ -13,6 +13,7 @@ import (
 
 	"nenya/config"
 	"nenya/internal/adapter"
+	"nenya/internal/auth"
 	"nenya/internal/gateway"
 	"nenya/internal/infra"
 	"nenya/internal/mcp"
@@ -344,8 +345,12 @@ func (p *Proxy) resolvePipelineContext(r *http.Request, gw *gateway.NenyaGateway
 }
 
 // handleChatCompletions processes chat completion requests with optional content filtering and tool integration.
-func (p *Proxy) handleChatCompletions(gw *gateway.NenyaGateway, w http.ResponseWriter, r *http.Request, keyRef string) {
+func (p *Proxy) handleChatCompletions(gw *gateway.NenyaGateway, w http.ResponseWriter, r *http.Request, apiKey *config.ApiKey) {
 	gwStart := time.Now()
+	keyRef := ""
+	if apiKey != nil {
+		keyRef = apiKey.Name
+	}
 	req, herr := p.validateChatRequest(w, r, gw, keyRef)
 	if herr != nil {
 		if herr.Code == http.StatusNoContent {
@@ -718,7 +723,11 @@ func (p *Proxy) summarizeOrForward(gw *gateway.NenyaGateway, ctx context.Context
 	return fmt.Sprintf("[Nenya Sanitized via Ollama (%s input)]:\n%s", label, summarized), true
 }
 
-func (p *Proxy) handleEmbeddings(gw *gateway.NenyaGateway, w http.ResponseWriter, r *http.Request, keyRef string) {
+func (p *Proxy) handleEmbeddings(gw *gateway.NenyaGateway, w http.ResponseWriter, r *http.Request, apiKey *config.ApiKey) {
+	keyRef := ""
+	if apiKey != nil {
+		keyRef = apiKey.Name
+	}
 	r.Body = http.MaxBytesReader(w, r.Body, gw.Config.Server.MaxBodyBytes)
 	defer func() { _ = r.Body.Close() }()
 
@@ -951,7 +960,32 @@ func recordNonStreamingUsage(gw *gateway.NenyaGateway, target routing.UpstreamTa
 	}
 }
 
-func (p *Proxy) handleResponses(gw *gateway.NenyaGateway, w http.ResponseWriter, r *http.Request, keyRef string) {
+// authorizeResponsesAgent extracts the model from responses request body and checks if the API key is authorized for it.
+// Returns the model name and any error encountered.
+func (p *Proxy) authorizeResponsesAgent(gw *gateway.NenyaGateway, w http.ResponseWriter, r *http.Request, apiKey *config.ApiKey, bodyBytes []byte) (string, *httpError) {
+	var modelName string
+	if len(bodyBytes) > 0 {
+		var payload map[string]interface{}
+		if err := json.Unmarshal(bodyBytes, &payload); err == nil {
+			if m, ok := payload["model"].(string); ok {
+				modelName = m
+			}
+		}
+	}
+
+	if modelName != "" && apiKey != nil && !auth.AuthorizeAgent(apiKey, modelName) {
+		gw.Metrics.IncAuthDenials(apiKey.Name, "agent")
+		p.logAuthDenial(gw, apiKey, fmt.Sprintf("agent %s", modelName), r)
+		return "", &httpError{http.StatusForbidden, "Forbidden"}
+	}
+	return modelName, nil
+}
+
+func (p *Proxy) handleResponses(gw *gateway.NenyaGateway, w http.ResponseWriter, r *http.Request, apiKey *config.ApiKey) {
+	keyRef := ""
+	if apiKey != nil {
+		keyRef = apiKey.Name
+	}
 	pathSafe := p.isPathSafeResponses(r.URL.Path)
 	if !pathSafe {
 		http.Error(w, "Invalid path", http.StatusBadRequest)
@@ -960,6 +994,11 @@ func (p *Proxy) handleResponses(gw *gateway.NenyaGateway, w http.ResponseWriter,
 
 	bodyBytes, ok := p.readResponsesBody(gw, w, r)
 	if !ok {
+		return
+	}
+
+	_, herr := p.authorizeResponsesAgent(gw, w, r, apiKey, bodyBytes)
+	if herr != nil {
 		return
 	}
 

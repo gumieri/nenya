@@ -95,6 +95,8 @@ Flow notes:
 - **Thought pruning** — strip reasoning blocks from assistant message history
 - **Input validation** — strict body limits, JSON sanitization, header filtering
 - **Graceful degradation** — never blocks requests due to engine or pipeline failures
+- **Role-Based Access Control (RBAC)** — per-API key roles (admin, user, read-only) with agent and endpoint restrictions
+- **Secure memory** — mlock-protected token storage, read-only sealing, core dump prevention
 
 ### Hardening (Deployment Security)
 
@@ -229,23 +231,24 @@ docker run -e PORT=9090 -p 9090:9090 ghcr.io/gumieri/nenya:latest
 
 ## API Endpoints
 
-All `/v1/*` endpoints require `Authorization: Bearer <client_token>`.
+All `/v1/*` endpoints require `Authorization: Bearer <client_token>` or `Bearer <api_key_token>`.
+API keys support **RBAC enforcement** — agent scoping, endpoint allowlists, role-based permissions (admin bypasses all checks).
 
 | Endpoint | Auth | Description |
 |----------|------|-------------|
-| `POST /v1/chat/completions` | Bearer | OpenAI-compatible chat with SSE streaming, agent fallback, MCP multi-turn |
-| `GET /v1/models` | Bearer | Live model catalog from discovered providers + static registry (context window, max tokens) |
-| `POST /v1/embeddings` | Bearer | Passthrough proxy |
-| `POST /v1/responses` | Bearer | Passthrough proxy |
-| `POST /v1/images/generations` | Bearer | Image generation (OpenAI-compatible) |
-| `POST /v1/audio/transcriptions` | Bearer | Audio transcription (Whisper-compatible, multipart support) |
-| `POST /v1/audio/speech` | Bearer | Text-to-speech synthesis (OpenAI-compatible) |
-| `POST /v1/moderations` | Bearer | Content moderation (OpenAI-compatible) |
-| `POST /v1/rerank` | Bearer | Re-ranking API (Cohere/Jina/Voyage-compatible) |
-| `POST /v1/a2a` | Bearer | Agent-to-Agent protocol (Google A2A) |
-| `GET /v1/files` | Bearer | File listing, upload, retrieval, deletion |
-| `POST /v1/batches` | Bearer | Batch API operations |
-| `POST /proxy/{provider}/*` | Bearer | Arbitrary provider endpoint passthrough (all HTTP methods, SSE streaming) |
+| `POST /v1/chat/completions` | Bearer + RBAC | OpenAI-compatible chat with SSE streaming, agent fallback, MCP multi-turn |
+| `GET /v1/models` | Bearer + RBAC | Live model catalog from discovered providers + static registry (context window, max tokens) |
+| `POST /v1/embeddings` | Bearer + RBAC | Passthrough proxy |
+| `POST /v1/responses` | Bearer + RBAC | Passthrough proxy |
+| `POST /v1/images/generations` | Bearer + RBAC | Image generation (OpenAI-compatible) |
+| `POST /v1/audio/transcriptions` | Bearer + RBAC | Audio transcription (Whisper-compatible, multipart support) |
+| `POST /v1/audio/speech` | Bearer + RBAC | Text-to-speech synthesis (OpenAI-compatible) |
+| `POST /v1/moderations` | Bearer + RBAC | Content moderation (OpenAI-compatible) |
+| `POST /v1/rerank` | Bearer + RBAC | Re-ranking API (Cohere/Jina/Voyage-compatible) |
+| `POST /v1/a2a` | Bearer + RBAC | Agent-to-Agent protocol (Google A2A) |
+| `GET /v1/files` | Bearer + RBAC | File listing, upload, retrieval, deletion |
+| `POST /v1/batches` | Bearer + RBAC | Batch API operations |
+| `POST /proxy/{provider}/*` | Bearer + RBAC | Arbitrary provider endpoint passthrough (all HTTP methods, SSE streaming) |
 | `GET /healthz` | None | Engine health probe |
 | `GET /statsz` | None | Token usage, circuit breaker state, MCP server status |
 | `GET /metrics` | None | Prometheus-compatible metrics |

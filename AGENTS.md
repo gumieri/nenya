@@ -60,7 +60,7 @@ You are acting as a **Senior Go Security Engineer and Network Architect**. Your 
 - **Dynamic Routing:** The proxy must inspect the JSON body, read the `"model"` string, and dynamically route to the correct provider via `resolveProvider()`. Agents with fallback chains are resolved via `buildTargetList()`. Agent model lists support string shorthand (looked up from `ModelRegistry`), full object notation (explicit provider/model/format), or regex-based patterns (`provider_rgx`/`model_rgx` inline on any model entry) that dynamically match against the discovery catalog at runtime.
 - **The Ollama Interceptor:** If the `messages[-1].content` exceeds the context soft limit, the proxy must synchronously call the local Ollama API to summarize the text BEFORE forwarding the request upstream. The engine is configured via `bouncer.engine` which supports a string (agent name reference with fallback chain), a shorthand (`provider/model`), or an inline object (direct provider/model). See `config/engine_resolve.go` for resolution logic and `internal/pipeline/engine.go` `CallEngineChain` for the fallback chain implementation. When `governance.tfidf_query_source` is set, Tier 3 uses TF-IDF relevance scoring (`internal/pipeline/tfidf.go`) to prune content blocks by relevance to the user's query terms, potentially eliminating the engine call entirely if the payload drops below the soft limit.
 - **Transparent Streaming:** The proxy must flawlessly pipe the upstream SSE (Server-Sent Events) stream to the client, applying provider-specific response transformations (e.g. Gemini tool_calls normalization, Anthropic OpenAI↔Anthropic format conversion) as needed via the adapter system.
-- **Endpoints:** The gateway exposes `/v1/chat/completions` (streaming with Ollama interception), `/v1/models` (model catalog), `/v1/embeddings` (passthrough proxy), `/v1/responses` (passthrough proxy), `/v1/images/generations` (Image generation), `/v1/audio/transcriptions` (Audio transcription, multipart), `/v1/audio/speech` (Text-to-speech), `/v1/moderations` (Content moderation), `/v1/rerank` (Re-ranking), `/v1/a2a` (Agent-to-Agent protocol), `/v1/files` (File upload/retrieval/delete), `/v1/batches` (Batch operations), `/proxy/` (generic passthrough), `/healthz` (engine health probe, no auth), `/statsz` (per-model token usage counters + circuit breaker state, no auth), and `/metrics` (Prometheus-compatible metrics, no auth). All `/v1/*` endpoints require `Authorization: Bearer <client_token>`.
+- **Endpoints:** The gateway exposes `/v1/chat/completions` (streaming with Ollama interception), `/v1/models` (model catalog), `/v1/embeddings` (passthrough proxy), `/v1/responses` (passthrough proxy), `/v1/images/generations` (Image generation), `/v1/audio/transcriptions` (Audio transcription, multipart), `/v1/audio/speech` (Text-to-speech), `/v1/moderations` (Content moderation), `/v1/rerank` (Re-ranking), `/v1/a2a` (Agent-to-Agent protocol), `/v1/files` (File upload/retrieval/delete), `/v1/batches` (Batch operations), `/proxy/` (generic passthrough), `/healthz` (engine health probe, no auth), `/statsz` (per-model token usage counters + circuit breaker state, no auth), and `/metrics` (Prometheus-compatible metrics, no auth). All `/v1/*` endpoints require `Authorization: Bearer <client_token>`. API keys additionally enforce RBAC (agent scoping, endpoint allowlists, roles — see §16).
 - **Token Usage Tracking:** `infra/usage_tracker.go` implements `UsageTracker` with atomic per-model counters (requests, input_tokens, output_tokens, errors). Input tokens are counted at dispatch; output tokens are extracted from SSE `usage` fields via `stream.SSETransformingReader.OnUsage` callback.
 - **Latency Tracking:** `infra/latency.go` implements `LatencyTracker` which maintains per-model sorted sample buffers (incremental binary-search insertion, O(n) per record) and computes median latency. When `governance.auto_reorder_by_latency` is enabled, `LatencyTracker.SortByLatency` reorders targets by median latency with ±5% jitter to prevent thundering herd. The jitter function is injectable for deterministic testing.
 - **Structured Logging:** All logging uses `slog` with structured key-value pairs. The logger auto-detects TTY (text) vs systemd (JSON) format. Debug-level logs are gated behind `g.logger.Enabled(ctx, slog.LevelDebug)`.
@@ -71,6 +71,7 @@ You are acting as a **Senior Go Security Engineer and Network Architect**. Your 
 - **Provider-Specific Thinking Activation:** `ProviderSpec.SanitizeRequest` hooks receive `SanitizeDeps` with `SupportsReasoning` and `ProviderThinking` closure functions (avoiding import cycles with `config`). Zai's `zaiSanitize` injects `thinking: {type: "enabled", clear_thinking: false}` for reasoning-capable models, configurable per-provider via `thinking.enabled` in the config file. Temperature defaults are applied model-specifically (GLM-4.6/4.7 → 1.0). See `internal/providers/zai.go`.
 - **DeepSeek v4 Reasoning Injection:** `internal/routing/sanitize.go:ensureDeepSeekReasoningContent` injects `reasoning_content: ""` on all assistant messages for DeepSeek. Required because DeepSeek v4 returns 400 if any assistant message lacks `reasoning_content` in multi-turn conversations where tool calls occurred.
 - **MCP Tool Integration:** The gateway supports Model Context Protocol servers via HTTP+SSE transport. When an agent has MCP servers configured, tools are discovered at startup, injected into requests as OpenAI function tools with `tool_choice: "auto"`, and a multi-turn loop executes tool calls between the client and upstream model. See `internal/mcp/` and `internal/proxy/mcp_tools.go` for the implementation.
+- **Per-Key RBAC Enforcement:** `internal/auth/rbac.go` implements authorization on top of authentication. API keys (from `secrets.json` → `api_keys`) have roles (admin/user/read-only), agent allowlists, endpoint allowlists, expiration, and enable/disable flags. See §16.
 
 ### 7. Integer Overflow Prevention (CWE-190)
 - **Vulnerable Patterns:** Arithmetic on length values before slice allocation can cause integer overflow:
@@ -237,3 +238,57 @@ All outbound HTTP dispatch points vulnerable to transient network errors (TLS ha
 - **Compilation Check:** Run `go build ./...` to ensure all code compiles without errors.
 - **CI Enforcement:** The GitHub Actions workflow requires lint to pass before tests run. Failing lint will block PRs.
 - **Format Enforcement:** `golangci-lint` automatically runs `gofmt` and `goimports` - do not run these separately.
+
+### 16. RBAC Enforcement (Per-Key Access Control)
+
+**Implementation:** `internal/auth/rbac.go` provides role-based authorization on top of authentication.
+
+**Roles:**
+- `admin` — Unrestricted access to all agents and endpoints (bypasses RBAC checks)
+- `user` — Access to configured agents and all non-admin endpoints (`/v1/chat/completions`, `/v1/embeddings`, `/v1/responses`, `/v1/images/generations`, `/v1/audio/transcriptions`, `/v1/audio/speech`, `/v1/moderations`, `/v1/rerank`, `/v1/a2a`, `/v1/files`, `/v1/batches`, `/proxy/*`)
+- `read-only` — Read-only access: GET requests only (`/v1/models`, `/healthz`, `/statsz`, `/metrics`)
+
+**Agent Scoping:**
+- API keys define `allowed_agents` list to restrict which agents they can access
+- Empty list grants access to all agents (backward compatible)
+- Admin keys bypass agent restrictions
+
+**Endpoint Restrictions:**
+- API keys define `allowed_endpoints` list for fine-grained allowlisting (HTTP method + path: `GET /v1/models`, `POST /v1/chat/completions`)
+- Overrides default role-based permissions when set
+- Empty list uses role-based default permissions
+- Admin keys bypass endpoint restrictions
+
+**Key Configuration Fields:**
+```go
+type ApiKey struct {
+    Name             string         `json:"name"`
+    Token            string         `json:"token"`
+    Roles            []string       `json:"roles"`
+    AllowedAgents    []string       `json:"allowed_agents"`
+    AllowedEndpoints []string       `json:"allowed_endpoints,omitempty"`
+    CreatedAt        string         `json:"created_at,omitempty"`
+    ExpiresAt        string         `json:"expires_at,omitempty"`
+    Enabled          bool           `json:"enabled"`
+    Permissions      map[string]any `json:"permissions,omitempty"`
+}
+```
+
+**Authorization Functions:**
+- `AuthorizeAgent(apiKey *config.ApiKey, agentName string) bool` — Returns true if key can access the agent
+- `AuthorizeEndpoint(apiKey *config.ApiKey, method, path string) bool` — Returns true if key can call the endpoint
+- `HasPermission(role Role, perm Permission) bool` — Checks if role grants a specific permission
+
+**Metrics:**
+- `nenya_auth_denials_total` counter with `reason` label: `agent_not_allowed`, `endpoint_not_allowed`, `key_disabled`, `key_expired`
+
+**Integration:**
+- `internal/proxy/handler.go:authenticateAndAuthorize()` — Validates token/primary, checks enabled/expired, enforces RBAC
+- All `/v1/*` handlers receive `*config.ApiKey` instead of raw token string
+- Primary token returns synthetic `&config.ApiKey{Name: "primary", Roles: []string{"admin"}, Enabled: true}` for metrics/logging
+
+**Security Notes:**
+- Nil-safe functions (return false on `nil` key)
+- Admin role bypasses all restrictions (intentional security design)
+- Empty lists grant full access (backward compatible)
+- Key validation enforces at least one role and minimum token length (16 chars)

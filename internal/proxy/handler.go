@@ -1,16 +1,19 @@
 package proxy
 
 import (
+	"bytes"
 	"context"
 	"crypto/hmac"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"strings"
 	"sync/atomic"
 	"time"
 
 	"nenya/config"
+	"nenya/internal/auth"
 	"nenya/internal/discovery"
 	"nenya/internal/gateway"
 	"nenya/internal/infra"
@@ -115,237 +118,322 @@ func (p *Proxy) resolveRoute(path string) routeHandler {
 
 // chainEndpoint wraps a handler with optional method validation, authentication,
 // and metrics observation. This eliminates repetition across all chain methods.
-func (p *Proxy) chainEndpoint(method, path string, requireAuth bool, handler func(*gateway.NenyaGateway, http.ResponseWriter, *http.Request, string)) func(*gateway.NenyaGateway, http.ResponseWriter, *http.Request) {
+func (p *Proxy) chainEndpoint(method, path string, requireAuth bool, handler func(*gateway.NenyaGateway, http.ResponseWriter, *http.Request, *config.ApiKey)) func(*gateway.NenyaGateway, http.ResponseWriter, *http.Request) {
 	return func(gw *gateway.NenyaGateway, w http.ResponseWriter, r *http.Request) {
 		if method != "" && r.Method != method {
 			http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
 			return
 		}
-		var keyRef string
+		var apiKey *config.ApiKey
 		var ok bool
 		if requireAuth {
-			keyRef, ok = p.authenticateRequest(r, w)
+			apiKey, ok = p.authenticateAndAuthorize(r, w)
 			if !ok {
 				return
 			}
 		}
 		infra.ObserveHTTPFunc(gw.Metrics, func(w http.ResponseWriter, r *http.Request) {
-			handler(gw, w, r, keyRef)
+			handler(gw, w, r, apiKey)
 		})(w, r)
 	}
 }
 
 func (p *Proxy) chainHealthz(gw *gateway.NenyaGateway, w http.ResponseWriter, r *http.Request) {
-	p.chainEndpoint(http.MethodGet, "/healthz", false, func(gw *gateway.NenyaGateway, w http.ResponseWriter, r *http.Request, keyRef string) {
+	p.chainEndpoint(http.MethodGet, "/healthz", false, func(gw *gateway.NenyaGateway, w http.ResponseWriter, r *http.Request, apiKey *config.ApiKey) {
 		p.handleHealthz(w, r)
 	})(gw, w, r)
 }
 
 func (p *Proxy) chainAuthStats(gw *gateway.NenyaGateway, w http.ResponseWriter, r *http.Request) {
-	p.chainEndpoint(http.MethodGet, "/statsz", true, func(gw *gateway.NenyaGateway, w http.ResponseWriter, r *http.Request, keyRef string) {
+	p.chainEndpoint(http.MethodGet, "/statsz", true, func(gw *gateway.NenyaGateway, w http.ResponseWriter, r *http.Request, apiKey *config.ApiKey) {
 		infra.ObserveHTTP(gw.Metrics, p.handleStats)(w, r)
 	})(gw, w, r)
 }
 
 func (p *Proxy) chainAuthMetric(gw *gateway.NenyaGateway, w http.ResponseWriter, r *http.Request) {
-	p.chainEndpoint("", "/metrics", true, func(gw *gateway.NenyaGateway, w http.ResponseWriter, r *http.Request, keyRef string) {
+	p.chainEndpoint("", "/metrics", true, func(gw *gateway.NenyaGateway, w http.ResponseWriter, r *http.Request, apiKey *config.ApiKey) {
 		p.handleMetrics(w, r)
 	})(gw, w, r)
 }
 
 func (p *Proxy) chainAuthPprof(gw *gateway.NenyaGateway, w http.ResponseWriter, r *http.Request) {
-	p.chainEndpoint("", "/debug/pprof", true, func(gw *gateway.NenyaGateway, w http.ResponseWriter, r *http.Request, keyRef string) {
+	p.chainEndpoint("", "/debug/pprof", true, func(gw *gateway.NenyaGateway, w http.ResponseWriter, r *http.Request, apiKey *config.ApiKey) {
 		p.handlePprof(w, r)
 	})(gw, w, r)
 }
 
 func (p *Proxy) chainModels(gw *gateway.NenyaGateway, w http.ResponseWriter, r *http.Request) {
-	p.chainEndpoint(http.MethodGet, "/v1/models", true, func(gw *gateway.NenyaGateway, w http.ResponseWriter, r *http.Request, keyRef string) {
+	p.chainEndpoint(http.MethodGet, "/v1/models", true, func(gw *gateway.NenyaGateway, w http.ResponseWriter, r *http.Request, apiKey *config.ApiKey) {
 		infra.ObserveHTTP(gw.Metrics, p.handleModels)(w, r)
 	})(gw, w, r)
 }
 
 func (p *Proxy) chainChat(gw *gateway.NenyaGateway, w http.ResponseWriter, r *http.Request) {
-	p.chainEndpoint("", "/v1/chat/completions", true, func(gw *gateway.NenyaGateway, w http.ResponseWriter, r *http.Request, keyRef string) {
-		p.handleChatCompletions(gw, w, r, keyRef)
+	p.chainEndpoint("", "/v1/chat/completions", true, func(gw *gateway.NenyaGateway, w http.ResponseWriter, r *http.Request, apiKey *config.ApiKey) {
+		p.handleChatCompletions(gw, w, r, apiKey)
 	})(gw, w, r)
 }
 
 func (p *Proxy) chainEmbeddings(gw *gateway.NenyaGateway, w http.ResponseWriter, r *http.Request) {
-	p.chainEndpoint("", "/v1/embeddings", true, func(gw *gateway.NenyaGateway, w http.ResponseWriter, r *http.Request, keyRef string) {
-		p.handleEmbeddings(gw, w, r, keyRef)
+	p.chainEndpoint("", "/v1/embeddings", true, func(gw *gateway.NenyaGateway, w http.ResponseWriter, r *http.Request, apiKey *config.ApiKey) {
+		p.handleEmbeddings(gw, w, r, apiKey)
 	})(gw, w, r)
 }
 
 func (p *Proxy) chainResponses(gw *gateway.NenyaGateway, w http.ResponseWriter, r *http.Request) {
-	p.chainEndpoint("", "/v1/responses", true, func(gw *gateway.NenyaGateway, w http.ResponseWriter, r *http.Request, keyRef string) {
-		p.handleResponses(gw, w, r, keyRef)
+	p.chainEndpoint("", "/v1/responses", true, func(gw *gateway.NenyaGateway, w http.ResponseWriter, r *http.Request, apiKey *config.ApiKey) {
+		p.handleResponses(gw, w, r, apiKey)
 	})(gw, w, r)
 }
 
 func (p *Proxy) chainProxy(gw *gateway.NenyaGateway, w http.ResponseWriter, r *http.Request) {
-	p.chainEndpoint("", "/proxy/", true, func(gw *gateway.NenyaGateway, w http.ResponseWriter, r *http.Request, keyRef string) {
+	p.chainEndpoint("", "/proxy/", true, func(gw *gateway.NenyaGateway, w http.ResponseWriter, r *http.Request, apiKey *config.ApiKey) {
+		keyRef := ""
+		if apiKey != nil {
+			keyRef = apiKey.Name
+		}
 		p.handlePassthrough(gw, w, r, keyRef)
 	})(gw, w, r)
 }
 
 func (p *Proxy) chainFiles(gw *gateway.NenyaGateway, w http.ResponseWriter, r *http.Request) {
-	p.chainEndpoint("", "/v1/files", true, func(gw *gateway.NenyaGateway, w http.ResponseWriter, r *http.Request, keyRef string) {
+	p.chainEndpoint("", "/v1/files", true, func(gw *gateway.NenyaGateway, w http.ResponseWriter, r *http.Request, apiKey *config.ApiKey) {
+		keyRef := ""
+		if apiKey != nil {
+			keyRef = apiKey.Name
+		}
 		p.handleFiles(gw, w, r, keyRef)
 	})(gw, w, r)
 }
 
 func (p *Proxy) chainBatches(gw *gateway.NenyaGateway, w http.ResponseWriter, r *http.Request) {
-	p.chainEndpoint("", "/v1/batches", true, func(gw *gateway.NenyaGateway, w http.ResponseWriter, r *http.Request, keyRef string) {
+	p.chainEndpoint("", "/v1/batches", true, func(gw *gateway.NenyaGateway, w http.ResponseWriter, r *http.Request, apiKey *config.ApiKey) {
+		keyRef := ""
+		if apiKey != nil {
+			keyRef = apiKey.Name
+		}
 		p.handleBatches(gw, w, r, keyRef)
 	})(gw, w, r)
 }
 
 func (p *Proxy) chainImages(gw *gateway.NenyaGateway, w http.ResponseWriter, r *http.Request) {
-	p.chainEndpoint(http.MethodPost, "/v1/images/generations", true, func(gw *gateway.NenyaGateway, w http.ResponseWriter, r *http.Request, keyRef string) {
+	p.chainEndpoint(http.MethodPost, "/v1/images/generations", true, func(gw *gateway.NenyaGateway, w http.ResponseWriter, r *http.Request, apiKey *config.ApiKey) {
+		keyRef := ""
+		if apiKey != nil {
+			keyRef = apiKey.Name
+		}
 		p.handleImages(gw, w, r, keyRef)
 	})(gw, w, r)
 }
 
 func (p *Proxy) chainAudioTranscriptions(gw *gateway.NenyaGateway, w http.ResponseWriter, r *http.Request) {
-	p.chainEndpoint(http.MethodPost, "/v1/audio/transcriptions", true, func(gw *gateway.NenyaGateway, w http.ResponseWriter, r *http.Request, keyRef string) {
+	p.chainEndpoint(http.MethodPost, "/v1/audio/transcriptions", true, func(gw *gateway.NenyaGateway, w http.ResponseWriter, r *http.Request, apiKey *config.ApiKey) {
+		keyRef := ""
+		if apiKey != nil {
+			keyRef = apiKey.Name
+		}
 		p.handleAudioTranscriptions(gw, w, r, keyRef)
 	})(gw, w, r)
 }
 
 func (p *Proxy) chainAudioSpeech(gw *gateway.NenyaGateway, w http.ResponseWriter, r *http.Request) {
-	p.chainEndpoint(http.MethodPost, "/v1/audio/speech", true, func(gw *gateway.NenyaGateway, w http.ResponseWriter, r *http.Request, keyRef string) {
+	p.chainEndpoint(http.MethodPost, "/v1/audio/speech", true, func(gw *gateway.NenyaGateway, w http.ResponseWriter, r *http.Request, apiKey *config.ApiKey) {
+		keyRef := ""
+		if apiKey != nil {
+			keyRef = apiKey.Name
+		}
 		p.handleAudioSpeech(gw, w, r, keyRef)
 	})(gw, w, r)
 }
 
 func (p *Proxy) chainModerations(gw *gateway.NenyaGateway, w http.ResponseWriter, r *http.Request) {
-	p.chainEndpoint(http.MethodPost, "/v1/moderations", true, func(gw *gateway.NenyaGateway, w http.ResponseWriter, r *http.Request, keyRef string) {
+	p.chainEndpoint(http.MethodPost, "/v1/moderations", true, func(gw *gateway.NenyaGateway, w http.ResponseWriter, r *http.Request, apiKey *config.ApiKey) {
+		keyRef := ""
+		if apiKey != nil {
+			keyRef = apiKey.Name
+		}
 		p.handleModerations(gw, w, r, keyRef)
 	})(gw, w, r)
 }
 
 func (p *Proxy) chainRerank(gw *gateway.NenyaGateway, w http.ResponseWriter, r *http.Request) {
-	p.chainEndpoint(http.MethodPost, "/v1/rerank", true, func(gw *gateway.NenyaGateway, w http.ResponseWriter, r *http.Request, keyRef string) {
+	p.chainEndpoint(http.MethodPost, "/v1/rerank", true, func(gw *gateway.NenyaGateway, w http.ResponseWriter, r *http.Request, apiKey *config.ApiKey) {
+		keyRef := ""
+		if apiKey != nil {
+			keyRef = apiKey.Name
+		}
 		p.handleRerank(gw, w, r, keyRef)
 	})(gw, w, r)
 }
 
 func (p *Proxy) chainA2A(gw *gateway.NenyaGateway, w http.ResponseWriter, r *http.Request) {
-	p.chainEndpoint(http.MethodPost, "/v1/a2a", true, func(gw *gateway.NenyaGateway, w http.ResponseWriter, r *http.Request, keyRef string) {
+	p.chainEndpoint(http.MethodPost, "/v1/a2a", true, func(gw *gateway.NenyaGateway, w http.ResponseWriter, r *http.Request, apiKey *config.ApiKey) {
+		keyRef := ""
+		if apiKey != nil {
+			keyRef = apiKey.Name
+		}
 		p.handleA2A(gw, w, r, keyRef)
 	})(gw, w, r)
 }
 
-// authenticateRequest validates the authorization token in incoming requests.
-// Returns the API key reference name and a boolean indicating success.
-func (p *Proxy) authenticateRequest(r *http.Request, w http.ResponseWriter) (string, bool) {
+// authenticateAndAuthorize validates the token and enforces RBAC permissions.
+// Returns the matched ApiKey and a boolean indicating success.
+func (p *Proxy) authenticateAndAuthorize(r *http.Request, w http.ResponseWriter) (*config.ApiKey, bool) {
 	gw := p.Gateway()
 	if gw == nil {
 		http.Error(w, "Gateway not initialized", http.StatusServiceUnavailable)
-		return "", false
-	}
-
-	correlationID := r.Header.Get("X-Request-Id")
-	if correlationID == "" {
-		correlationID = r.Header.Get("X-Correlation-Id")
-	}
-	if correlationID == "" {
-		correlationID = "unknown"
+		return nil, false
 	}
 
 	authHeader := r.Header.Get("Authorization")
 	if !strings.HasPrefix(authHeader, "Bearer ") {
-		gw.Logger.Warn("missing or malformed Authorization header",
-			"correlation_id", correlationID,
-			"remote_addr", r.RemoteAddr,
-			"user_agent", r.Header.Get("User-Agent"),
-			"auth_header_present", authHeader != "",
-			"auth_header_prefix", func() string {
-				if len(authHeader) > 10 {
-					return authHeader[:10] + "..."
-				}
-				return authHeader
-			}())
+		p.logAuthWarning(gw, "missing or malformed Authorization header", r)
 		gw.Metrics.RecordAuthFailure("missing_header")
 		http.Error(w, "Unauthorized", http.StatusUnauthorized)
-		return "", false
+		return nil, false
 	}
 	clientToken := strings.TrimSpace(strings.TrimPrefix(authHeader, "Bearer "))
 
-	keyRef, ok := p.authenticateClientToken(gw, correlationID, clientToken)
+	apiKey, ok := p.resolveAuthenticatedKey(gw, clientToken)
 	if !ok {
 		http.Error(w, "Forbidden", http.StatusForbidden)
-		return "", false
+		return nil, false
 	}
-	return keyRef, true
+
+	// Primary token has full access — skip RBAC.
+	// Record success metric for auth telemetry.
+	if apiKey == nil {
+		gw.Metrics.RecordAuthSuccess("client_token", "primary")
+		return &config.ApiKey{Name: "primary", Roles: []string{"admin"}, Enabled: true}, true
+	}
+
+	if !apiKey.Enabled {
+		gw.Metrics.IncAuthDenials(apiKey.Name, "disabled")
+		p.logAuthDenial(gw, apiKey, "disabled key", r)
+		http.Error(w, "Forbidden", http.StatusForbidden)
+		return nil, false
+	}
+
+	if apiKey.ExpiresAt != "" {
+		if t, err := time.Parse(time.RFC3339, apiKey.ExpiresAt); err == nil && time.Now().After(t) {
+			gw.Metrics.IncAuthDenials(apiKey.Name, "expired")
+			p.logAuthDenial(gw, apiKey, "expired key", r)
+			http.Error(w, "Forbidden", http.StatusForbidden)
+			return nil, false
+		}
+	}
+
+	// Enforce endpoint-level RBAC.
+	if !auth.AuthorizeEndpoint(apiKey, r.Method, r.URL.Path) {
+		gw.Metrics.IncAuthDenials(apiKey.Name, "endpoint")
+		p.logAuthDenial(gw, apiKey, fmt.Sprintf("endpoint %s %s", r.Method, r.URL.Path), r)
+		http.Error(w, "Forbidden", http.StatusForbidden)
+		return nil, false
+	}
+
+	// Agent-level authorization for endpoints carrying a model/agent name.
+	// NOTE: Only /v1/chat/completions is checked here. /v1/responses
+	// is handled by its handler (handleResponses) which reads the body for
+	// the model field and performs RBAC checks there.
+	if r.URL.Path == "/v1/chat/completions" {
+		agentName := extractAgentName(r)
+		if agentName != "" && !auth.AuthorizeAgent(apiKey, agentName) {
+			gw.Metrics.IncAuthDenials(apiKey.Name, "agent")
+			p.logAuthDenial(gw, apiKey, fmt.Sprintf("agent %s", agentName), r)
+			http.Error(w, "Forbidden", http.StatusForbidden)
+			return nil, false
+		}
+	}
+
+	gw.Metrics.RecordAuthSuccess("api_key", apiKey.Name)
+	return apiKey, true
 }
 
-func (p *Proxy) authenticateClientToken(gw *gateway.NenyaGateway, correlationID, clientToken string) (string, bool) {
-	if keyRef, ok := p.checkPrimaryToken(gw, correlationID, clientToken); ok {
-		return keyRef, true
+// resolveAuthenticatedKey checks the Bearer token against configured credentials.
+// Returns (*config.ApiKey, true) for a matched API key, (nil, true) for a
+// matching primary token, or (nil, false) on failure.
+func (p *Proxy) resolveAuthenticatedKey(gw *gateway.NenyaGateway, clientToken string) (*config.ApiKey, bool) {
+	// Primary token check
+	if gw.Secrets.ClientToken != "" {
+		tokenOK := false
+		if gw.SecureMem != nil {
+			tokenOK = gw.SecureMem.CompareToken(gw.ClientTokenRef, clientToken)
+		} else {
+			tokenOK = hmac.Equal([]byte(clientToken), []byte(gw.Secrets.ClientToken))
+		}
+		if tokenOK {
+			return nil, true
+		}
 	}
 
-	// Fall through to per-key RBAC check.
-	if keyName, ok := checkApiKeys(gw, clientToken); ok {
-		gw.Logger.Debug("authentication successful",
-			"correlation_id", correlationID,
-			"api_key", keyName)
-		gw.Metrics.RecordAuthSuccess("api_key", keyName)
-		return keyName, true
-	}
-
-	gw.Logger.Warn("invalid or expired client token",
-		"correlation_id", correlationID)
-	gw.Metrics.RecordAuthFailure("api_key_mismatch")
-	return "", false
-}
-
-func (p *Proxy) checkPrimaryToken(gw *gateway.NenyaGateway, correlationID, clientToken string) (string, bool) {
-	if gw.Secrets.ClientToken == "" {
-		return "", false
-	}
-
-	tokenOK := false
-	if gw.SecureMem != nil {
-		tokenOK = gw.SecureMem.CompareToken(gw.ClientTokenRef, clientToken)
-	} else {
-		tokenOK = hmac.Equal([]byte(clientToken), []byte(gw.Secrets.ClientToken))
-	}
-
-	if !tokenOK {
-		gw.Metrics.RecordAuthFailure("client_token_mismatch")
-		return "", false
-	}
-
-	gw.Logger.Debug("authentication successful",
-		"correlation_id", correlationID,
-		"api_key", "primary")
-	gw.Metrics.RecordAuthSuccess("client_token", "primary")
-	return "primary", true
-}
-
-// checkApiKeys checks whether clientToken matches any enabled, non-expired API key.
-// Returns the name of the matched key (or empty string) and a boolean indicating success.
-// AllowedAgents enforcement requires the agent name from the request path and is done downstream.
-func checkApiKeys(gw *gateway.NenyaGateway, clientToken string) (string, bool) {
+	// Per-key check
 	if gw.Secrets == nil {
-		return "", false
+		return nil, false
 	}
 	for _, key := range gw.Secrets.ApiKeys {
-		if !key.Enabled {
-			continue
-		}
-		if key.ExpiresAt != "" {
-			if t, err := time.Parse(time.RFC3339, key.ExpiresAt); err == nil && time.Now().After(t) {
-				continue
-			}
-		}
 		if hmac.Equal([]byte(clientToken), []byte(key.Token)) {
-			return key.Name, true
+			matched := key
+			return &matched, true
 		}
 	}
-	return "", false
+
+	return nil, false
+}
+
+// extractAgentName reads the model name from the request body for chat/responses endpoints.
+// The body is restored after reading.
+func extractAgentName(r *http.Request) string {
+	if r.Body == nil {
+		return ""
+	}
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		return ""
+	}
+	r.Body = io.NopCloser(bytes.NewReader(body))
+
+	var req struct {
+		Model string `json:"model"`
+	}
+	if json.Unmarshal(body, &req) == nil {
+		return req.Model
+	}
+	return ""
+}
+
+func (p *Proxy) logAuthWarning(gw *gateway.NenyaGateway, msg string, r *http.Request) {
+	if gw.Logger == nil {
+		return
+	}
+	gw.Logger.Warn(msg,
+		"remote_addr", r.RemoteAddr,
+		"method", r.Method,
+		"path", r.URL.Path,
+		"user_agent", r.Header.Get("User-Agent"),
+	)
+}
+
+func (p *Proxy) logAuthDenial(gw *gateway.NenyaGateway, key *config.ApiKey, reason string, r *http.Request) {
+	if gw.Logger == nil {
+		return
+	}
+	gw.Logger.Warn("auth denied",
+		"key_name", key.Name,
+		"reason", reason,
+		"method", r.Method,
+		"path", r.URL.Path,
+		"remote_addr", r.RemoteAddr,
+	)
+}
+
+// authenticateRequest is a thin wrapper around authenticateAndAuthorize
+// that returns the key name (string) for backward compatibility in tests.
+func (p *Proxy) authenticateRequest(r *http.Request, w http.ResponseWriter) (string, bool) {
+	key, ok := p.authenticateAndAuthorize(r, w)
+	if !ok || key == nil {
+		return "", ok
+	}
+	return key.Name, ok
 }
 
 // handleMetrics serves the Prometheus-compatible metrics endpoint.

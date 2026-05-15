@@ -63,6 +63,46 @@ The gateway exposes Prometheus counters for authentication events:
 |--------|--------|-------------|
 | `nenya_auth_success_total` | `type` (client_token, api_key), `key` (name) | Successful authentications |
 | `nenya_auth_failure_total` | `type` (missing_header, client_token_mismatch, api_key_mismatch) | Failed authentication attempts |
+| `nenya_auth_denials_total` | `reason` (agent_not_allowed, endpoint_not_allowed, key_disabled, key_expired) | RBAC authorization denials |
+
+### Role-Based Access Control (RBAC)
+
+Nenya enforces per-API key access controls via RBAC. API keys defined in `secrets.json` under `api_keys` support:
+
+**Roles:**
+- `admin` — Unrestricted access to all agents and endpoints (bypasses RBAC checks)
+- `user` — Access to configured agents and all non-admin endpoints
+- `read-only` — Read-only access: GET requests only (e.g., `/v1/models`, `/healthz`, `/statsz`, `/metrics`)
+
+**Agent Scoping:**
+- `allowed_agents` list restricts which agents the key can access
+- Empty list grants access to all agents (backward compatible)
+- Admin keys bypass agent restrictions
+
+**Endpoint Restrictions:**
+- `allowed_endpoints` list allows fine-grained HTTP method + path allowlisting (e.g., `GET /v1/models`, `POST /v1/chat/completions`)
+- Overrides default role-based permissions when set
+- Empty list uses role-based default permissions
+- Admin keys bypass endpoint restrictions
+
+**Example API key configuration:**
+```json
+{
+  "api_keys": {
+    "dev-user": {
+      "name": "dev-user",
+      "token": "nk-...",
+      "roles": ["user"],
+      "allowed_agents": ["build", "plan"],
+      "allowed_endpoints": ["GET /v1/models", "POST /v1/chat/completions"],
+      "expires_at": "2026-12-31T23:59:59Z",
+      "enabled": true
+    }
+  }
+}
+```
+
+See [`SECRETS_FORMAT.md`](SECRETS_FORMAT.md#api-keys-for-client-rbac) for full API key configuration details.
 
 ### Deployment Requirements
 

@@ -190,11 +190,96 @@ openssl rand -hex 32
 
 ### API keys (for client RBAC)
 
-Use the provided utility:
+Use the provided utility or manually create `ApiKey` entries in JSON:
 
 ```bash
-# Generate key with roles
+# Generate key with roles (alias: a2a)
 go run ./cmd/nenya keygen --name "dev-user" --roles user,read-only --agents build,plan
+```
+
+**Manual configuration:**
+```json
+{
+  "api_keys": {
+    "dev-user": {
+      "name": "dev-user",
+      "token": "nk-...",
+      "roles": ["user"],
+      "allowed_agents": ["build", "plan"],
+      "allowed_endpoints": ["GET /v1/models", "POST /v1/chat/completions"],
+      "enabled": true
+    }
+  }
+}
+```
+
+**ApiKey Field Reference:**
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `name` | string | Yes | Human-readable key identifier (for logging/metrics) |
+| `token` | string | Yes | API key token (minimum 16 characters, prefix `nk-` recommended) |
+| `roles` | []string | Yes | List of roles (one or more): `"admin"`, `"user"`, `"read-only"` |
+| `allowed_agents` | []string | No | Agent names this key can access (empty = all agents) |
+| `allowed_endpoints` | []string | No | HTTP method + path allowlist (empty = role-based defaults) |
+| `created_at` | string | No | ISO 8601 timestamp for audit trail |
+| `expires_at` | string | No | ISO 8601 timestamp for key expiration |
+| `enabled` | bool | No | Enable/disable key without deletion |
+
+**Roles:**
+
+| Role | Permissions | Agent Access | Endpoint Access |
+|-------|-------------|--------------|----------------|
+| `admin` | Full access (bypasses RBAC) | All agents | All endpoints |
+| `user` | Chat, models, embed | Scoped by `allowed_agents` (or all if empty) | All non-admin endpoints |
+| `read-only` | Models, metrics only | Scoped by `allowed_agents` (or all if empty) | GET requests only |
+
+**Examples:**
+
+**Read-only key for model catalog:**
+```json
+{
+  "api_keys": {
+    "model-reader": {
+      "name": "Model Catalog Reader",
+      "token": "nk-abc123...",
+      "roles": ["read-only"],
+      "allowed_agents": [],
+      "enabled": true
+    }
+  }
+}
+```
+
+**User key scoped to specific agents with endpoint allowlist:**
+```json
+{
+  "api_keys": {
+    "build-agent-user": {
+      "name": "Build Agent User",
+      "token": "nk-def456...",
+      "roles": ["user"],
+      "allowed_agents": ["build", "test"],
+      "allowed_endpoints": ["GET /v1/models", "POST /v1/chat/completions", "POST /v1/embeddings"],
+      "enabled": true
+    }
+  }
+}
+```
+
+**Admin key with expiration:**
+```json
+{
+  "api_keys": {
+    "ops-admin": {
+      "name": "Operations Admin",
+      "token": "nk-ghi789...",
+      "roles": ["admin"],
+      "expires_at": "2026-12-31T23:59:59Z",
+      "enabled": true
+    }
+  }
+}
 ```
 
 Or manually create an `ApiKey` entry in JSON:

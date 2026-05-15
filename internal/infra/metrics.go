@@ -55,6 +55,7 @@ type Metrics struct {
 	// Auth metrics
 	authSuccess sync.Map
 	authFailure sync.Map
+	authDenials sync.Map
 
 	// Cache metrics
 	cacheHit  sync.Map
@@ -395,6 +396,16 @@ func (m *Metrics) RecordAuthFailure(authType string) {
 	e.value.Add(1)
 }
 
+func (m *Metrics) IncAuthDenials(keyName, reason string) {
+	if m == nil {
+		return
+	}
+	e := getOrCreateEntry(&m.authDenials, map[string]string{
+		"key_name": keyName, "reason": reason,
+	})
+	e.value.Add(1)
+}
+
 func (m *Metrics) RecordSecureMemInitFailure() {
 	if m == nil {
 		return
@@ -675,6 +686,8 @@ func (m *Metrics) WritePrometheus(w io.Writer) {
 		"Total successful authentications by type and key name.", &m.authSuccess)
 	m.writeCounterMap(w, "nenya_auth_failure_total",
 		"Total failed authentication attempts by type.", &m.authFailure)
+	m.writeCounterMap(w, "nenya_auth_denials_total",
+		"Total authorized requests denied by RBAC policy.", &m.authDenials)
 	m.writeCounterMap(w, "nenya_cache_hit_total",
 		"Total cache hits by cache type.", &m.cacheHit)
 	m.writeCounterMap(w, "nenya_cache_miss_total",
