@@ -93,6 +93,25 @@ func NewAgentStateWithConfig(logger *slog.Logger, metrics *infra.Metrics, govCon
 		as.CB.SetStateChangeMetricCallback(func(key, from, to string) {
 			metrics.RecordCBStateTransition(key, from, to)
 		})
+		as.CB.SetBackoffIncrementCallback(func(key string, level int) {
+			if key == "" {
+				return
+			}
+			parts := strings.SplitN(key, ":", 3)
+			agent := "unknown"
+			provider := "unknown"
+			model := key
+			switch len(parts) {
+			case 3:
+				agent = parts[0]
+				provider = parts[1]
+				model = parts[2]
+			case 2:
+				provider = parts[0]
+				model = parts[1]
+			}
+			metrics.RecordBackoffIncrement(agent, provider, model, level)
+		})
 	}
 
 	return as
@@ -558,10 +577,25 @@ func (a *AgentState) RecordFailure(target UpstreamTarget, cooldownDuration time.
 	a.CB.RecordFailure(target.CoolKey, cooldownDuration)
 }
 
+// RecordFailureWithStatus records a failure with HTTP status and body for
+// error-semantic classification. Returns the CooldownDecision for observability.
+func (a *AgentState) RecordFailureWithStatus(target UpstreamTarget, status int, body string) resilience.CooldownDecision {
+	if target.CoolKey == "" {
+		return resilience.CooldownDecision{}
+	}
+	return a.CB.RecordFailureWithStatus(target.CoolKey, status, body)
+}
+
 // RecordSuccess records a successful request for the given circuit breaker key,
 // potentially transitioning the circuit to closed state.
 func (a *AgentState) RecordSuccess(key string) {
 	a.CB.RecordSuccess(key)
+}
+
+// RecordSuccessWithModel records a successful request and clears the model
+// lock and backoff for the given key and model.
+func (a *AgentState) RecordSuccessWithModel(key, model string) {
+	a.CB.RecordSuccessWithModel(key, model)
 }
 
 // ActiveCooldowns returns the number of currently active cooldowns.

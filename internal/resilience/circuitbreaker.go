@@ -4,6 +4,7 @@ import (
 	"math"
 	"sync"
 	"time"
+	"unicode/utf8"
 )
 
 // incUint32 safely increments a uint32 counter, capping at math.MaxUint32
@@ -58,6 +59,11 @@ type circuit struct {
 	expiry           time.Time
 	halfOpenInflight uint32
 	lastChange       time.Time
+
+	// New fields for error-semantic tracking
+	LastErrorClass  ErrorClass
+	LastErrorBody   string
+	LastErrorStatus int
 }
 
 // CircuitBreaker manages per-key circuit breakers with configurable
@@ -74,6 +80,10 @@ type CircuitBreaker struct {
 	cooldown            time.Duration
 	onStateChange       func(key string, from, to State)
 	onStateChangeMetric func(key, from, to string)
+
+	modelLocks map[string]time.Time
+	backoff    *BackoffTracker
+	classifier func(status int, body string, level int) CooldownDecision
 }
 
 // NewCircuitBreaker creates a CircuitBreaker with the given thresholds.
@@ -99,7 +109,23 @@ func NewCircuitBreaker(failureThreshold, successThreshold int, halfOpenMaxReques
 		halfOpenMaxRequests: halfOpenMaxRequests,
 		cooldown:            cooldown,
 		onStateChange:       onStateChange,
+		modelLocks:          make(map[string]time.Time),
+		backoff:             NewBackoffTracker(),
+		classifier:          classifyHTTPError,
 	}
+}
+
+// SetBackoffIncrementCallback sets a callback that is invoked when the backoff level increments.
+// The callback receives the circuit key and the new backoff level.
+//
+// WARNING: The callback is invoked synchronously while holding the circuit breaker's mutex.
+// To avoid deadlocks, the callback MUST be fast and non-blocking. It MUST NOT call back into
+// any CircuitBreaker methods that acquire the mutex (e.g., Allow, RecordFailureWithStatus, etc.).
+// The callback is safe for metrics emission, logging, or simple state updates only.
+func (cb *CircuitBreaker) SetBackoffIncrementCallback(fn func(key string, level int)) {
+	cb.mu.Lock()
+	defer cb.mu.Unlock()
+	cb.backoff = NewBackoffTrackerWithCallback(fn)
 }
 
 // onStateChangeMetric is called while holding the circuit mutex.
@@ -209,6 +235,11 @@ func (cb *CircuitBreaker) RecordFailure(key string, cooldownOverride ...time.Dur
 	c := cb.getOrCreate(key)
 	now := time.Now()
 
+	cd := cb.cooldown
+	if len(cooldownOverride) > 0 && cooldownOverride[0] > 0 {
+		cd = cooldownOverride[0]
+	}
+
 	switch c.state {
 	case StateClosed:
 		incUint32(&c.counts.Requests)
@@ -218,31 +249,94 @@ func (cb *CircuitBreaker) RecordFailure(key string, cooldownOverride ...time.Dur
 		c.lastChange = now
 
 		if c.counts.ConsecutiveFailures >= cb.failureThreshold {
-			cd := cb.cooldown
-			if len(cooldownOverride) > 0 && cooldownOverride[0] > 0 {
-				cd = cooldownOverride[0]
-			}
 			cb.setState(c, StateOpen, key)
 			c.expiry = now.Add(cd)
 		}
 
 	case StateHalfOpen:
-		cd := cb.cooldown
-		if len(cooldownOverride) > 0 && cooldownOverride[0] > 0 {
-			cd = cooldownOverride[0]
-		}
 		cb.setState(c, StateOpen, key)
 		c.expiry = now.Add(cd)
 		c.lastChange = now
 
 	case StateOpen:
-		if len(cooldownOverride) > 0 && cooldownOverride[0] > 0 {
-			newExpiry := now.Add(cooldownOverride[0])
-			if newExpiry.After(c.expiry) {
-				c.expiry = newExpiry
-			}
+		newExpiry := now.Add(cd)
+		if newExpiry.After(c.expiry) {
+			c.expiry = newExpiry
 		}
 	}
+}
+
+// RecordFailureWithStatus records a failed request with HTTP status and body,
+// applying error-semantic classification and model locks.
+func (cb *CircuitBreaker) RecordFailureWithStatus(key string, status int, body string) CooldownDecision {
+	cb.mu.Lock()
+	defer cb.mu.Unlock()
+
+	c := cb.getOrCreate(key)
+	now := time.Now()
+
+	decision := cb.classifier(status, body, cb.backoff.GetLevel(key))
+
+	// Note: GetLevel and Increment acquire backoff.mu separately, so another
+	// goroutine could modify the level between classification and increment.
+	// This benign race is acceptable: at worst, a request uses a slightly stale
+	// backoff level for its cooldown calculation. The final level after Increment
+	// is always correct.
+
+	if decision.ShouldLock {
+		until := now.Add(decision.Cooldown)
+		cb.modelLocks[key] = until
+
+		if decision.IncrementBackoff {
+			cb.backoff.Increment(key)
+		}
+	}
+
+	c.LastErrorClass = decision.Class
+	c.LastErrorBody = truncate(body, 200)
+	c.LastErrorStatus = status
+
+	switch c.state {
+	case StateClosed:
+		incUint32(&c.counts.Requests)
+		incUint32(&c.counts.TotalFailures)
+		incUint32(&c.counts.ConsecutiveFailures)
+		c.counts.ConsecutiveSuccesses = 0
+		c.lastChange = now
+
+		if c.counts.ConsecutiveFailures >= cb.failureThreshold {
+			cb.setState(c, StateOpen, key)
+		}
+
+	case StateHalfOpen:
+		cb.setState(c, StateOpen, key)
+
+	case StateOpen:
+		// Reset expiry from now (not previous expiry) to apply new backoff level.
+		// The expiry is only extended, never shortened.
+		newExpiry := now.Add(decision.Cooldown)
+		if newExpiry.After(c.expiry) {
+			c.expiry = newExpiry
+		}
+	}
+
+	return decision
+}
+
+// truncate shortens s to at most maxLen runes, appending "..." if truncated.
+// It is rune-safe and will not split multi-byte UTF-8 sequences.
+func truncate(s string, maxLen int) string {
+	if utf8.RuneCountInString(s) <= maxLen {
+		return s
+	}
+	runes := 0
+	for i := range s {
+		if runes >= maxLen {
+			return s[:i] + "..."
+		}
+		runes++
+	}
+	return s
 }
 
 // RecordSuccess records a successful request for the given key.
@@ -273,6 +367,43 @@ func (cb *CircuitBreaker) RecordSuccess(key string) {
 
 		if c.counts.ConsecutiveSuccesses >= cb.successThreshold {
 			cb.setState(c, StateClosed, key)
+			cb.backoff.Reset(key)
+			delete(cb.modelLocks, key)
+		} else {
+			c.lastChange = now
+		}
+	}
+}
+
+// RecordSuccessWithModel records a successful request and clears model lock/backoff.
+func (cb *CircuitBreaker) RecordSuccessWithModel(key, model string) {
+	cb.mu.Lock()
+	defer cb.mu.Unlock()
+
+	c := cb.getOrCreate(key)
+	now := time.Now()
+
+	switch c.state {
+	case StateClosed:
+		incUint32(&c.counts.Requests)
+		incUint32(&c.counts.TotalSuccesses)
+		incUint32(&c.counts.ConsecutiveSuccesses)
+		c.counts.ConsecutiveFailures = 0
+		c.lastChange = now
+
+	case StateHalfOpen:
+		incUint32(&c.counts.Requests)
+		incUint32(&c.counts.TotalSuccesses)
+		incUint32(&c.counts.ConsecutiveSuccesses)
+		c.counts.ConsecutiveFailures = 0
+		if c.halfOpenInflight > 0 {
+			c.halfOpenInflight--
+		}
+
+		if c.counts.ConsecutiveSuccesses >= cb.successThreshold {
+			cb.setState(c, StateClosed, key)
+			cb.backoff.Reset(model)
+			delete(cb.modelLocks, model)
 		} else {
 			c.lastChange = now
 		}
@@ -367,4 +498,28 @@ func (cb *CircuitBreaker) Snapshot() map[string]string {
 		snap[key] = state.String()
 	}
 	return snap
+}
+
+// IsModelLocked returns true if the model is currently in cooldown.
+func (cb *CircuitBreaker) IsModelLocked(model string) bool {
+	cb.mu.Lock()
+	defer cb.mu.Unlock()
+
+	until, locked := cb.modelLocks[model]
+	if !locked {
+		return false
+	}
+	return time.Now().Before(until)
+}
+
+// GetModelLockUntil returns the cooldown expiry time for a model, or zero if not locked.
+func (cb *CircuitBreaker) GetModelLockUntil(model string) time.Time {
+	cb.mu.Lock()
+	defer cb.mu.Unlock()
+
+	until, locked := cb.modelLocks[model]
+	if !locked {
+		return time.Time{}
+	}
+	return until
 }

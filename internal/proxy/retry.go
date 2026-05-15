@@ -482,10 +482,11 @@ func handleRetryableError429(logger *slog.Logger, errorBody []byte, action upstr
 	if action.resp.StatusCode == http.StatusTooManyRequests {
 		gw.AgentState.ActivateCooldown(target, effectiveCooldown)
 		gw.Metrics.RecordCooldown(agentName, target.Provider, target.Model)
+		gw.AgentState.RecordFailureWithStatus(target, action.resp.StatusCode, string(errorBody))
 		return parseRetryDelay(action.resp.Header, errorBody)
 	}
 
-	gw.AgentState.RecordFailure(target, effectiveCooldown)
+	gw.AgentState.RecordFailureWithStatus(target, action.resp.StatusCode, string(errorBody))
 	return 0
 }
 
@@ -494,7 +495,7 @@ func handleAdapterRetryableError(ctxLogger *slog.Logger, target routing.Upstream
 	errClass := a.NormalizeError(action.resp.StatusCode, action.body)
 	if (errClass == adapter.ErrorRetryable || errClass == adapter.ErrorQuotaExhausted) && action.resp.StatusCode >= 400 && action.resp.StatusCode < 500 {
 		ctxLogger.Warn("adapter classified client error as retryable, trying next target", "error_class", errClass)
-		gw.AgentState.RecordFailure(target, cooldownDuration)
+		gw.AgentState.RecordFailureWithStatus(target, action.resp.StatusCode, string(action.body))
 		return true
 	}
 	return false
@@ -528,7 +529,7 @@ func (p *Proxy) handleUpstreamError(gw *gateway.NenyaGateway,
 	if isRetryableClientErrorForProvider(action.resp.StatusCode, errorBody, target.Provider) && len(targets) > 1 {
 		logBody := redactForLog(string(errorBody), gw)
 		ctxLogger.Warn("retryable client error from upstream, trying next target", "body", logBody)
-		gw.AgentState.RecordFailure(target, cooldownDuration)
+		gw.AgentState.RecordFailureWithStatus(target, action.resp.StatusCode, string(errorBody))
 		return true, 0
 	}
 
