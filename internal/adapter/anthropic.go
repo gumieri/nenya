@@ -237,8 +237,10 @@ func (a *AnthropicAdapter) convertToolChoice(tc interface{}, anthropic map[strin
 
 func (a *AnthropicAdapter) convertMessages(msgs []interface{}) []interface{} {
 	result := make([]interface{}, 0, len(msgs))
-	for _, msgRaw := range msgs {
-		msg, ok := msgRaw.(map[string]interface{})
+	var lastAssistantToolIDs map[string]bool
+
+	for i := 0; i < len(msgs); i++ {
+		msg, ok := msgs[i].(map[string]interface{})
 		if !ok {
 			continue
 		}
@@ -250,10 +252,15 @@ func (a *AnthropicAdapter) convertMessages(msgs []interface{}) []interface{} {
 		}
 
 		if role == "tool" {
-			toolCallID, _ := msg["tool_call_id"].(string)
+			toolBatch := a.collectToolMessages(msgs, &i)
+			toolResults := a.buildValidatedToolResults(toolBatch, lastAssistantToolIDs)
+			lastAssistantToolIDs = nil
+			if len(toolResults) == 0 {
+				continue
+			}
 			anthMsg := map[string]interface{}{
 				"role":    "user",
-				"content": a.convertToolMessage(msg["content"], toolCallID),
+				"content": toolResults,
 			}
 			result = append(result, anthMsg)
 			continue
@@ -265,8 +272,113 @@ func (a *AnthropicAdapter) convertMessages(msgs []interface{}) []interface{} {
 			"content": contentBlocks,
 		}
 		result = append(result, anthMsg)
+
+		if role == "assistant" {
+			ids := a.extractToolUseIDsFromBlocks(contentBlocks)
+			if len(ids) > 0 {
+				lastAssistantToolIDs = ids
+			} else {
+				lastAssistantToolIDs = nil
+			}
+		} else {
+			lastAssistantToolIDs = nil
+		}
 	}
 	return result
+}
+
+// collectToolMessages gathers consecutive tool-role messages starting at index *i.
+// It advances *i past all tool messages consumed. If it encounters a non-tool
+// message, it decrements *i so the caller's i++ lands on it. Returns the batch
+// of raw tool messages for validation.
+func (a *AnthropicAdapter) collectToolMessages(msgs []interface{}, i *int) []map[string]interface{} {
+	var batch []map[string]interface{}
+	for *i < len(msgs) {
+		msg, ok := msgs[*i].(map[string]interface{})
+		if !ok {
+			break
+		}
+		role, _ := msg["role"].(string)
+		if role != "tool" {
+			(*i)--
+			break
+		}
+		batch = append(batch, msg)
+		(*i)++
+	}
+	return batch
+}
+
+// extractToolUseIDsFromBlocks scans Anthropic content blocks and returns a set
+// of all tool_use block IDs. Returns a non-nil map only when tool_use blocks exist.
+func (a *AnthropicAdapter) extractToolUseIDsFromBlocks(blocks []interface{}) map[string]bool {
+	ids := make(map[string]bool)
+	for _, block := range blocks {
+		bm, ok := block.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		if typ, _ := bm["type"].(string); typ == "tool_use" {
+			if id, ok := bm["id"].(string); ok && id != "" {
+				ids[id] = true
+			}
+		}
+	}
+	return ids
+}
+
+// buildValidatedToolResults validates each tool message's tool_call_id against the
+// set of known tool_use IDs from the preceding assistant message. Orphaned results
+// (nil validIDs, missing tool_call_id, or ID not in validIDs) are dropped with a warning.
+func (a *AnthropicAdapter) buildValidatedToolResults(batch []map[string]interface{}, validIDs map[string]bool) []interface{} {
+	var results []interface{}
+	for _, msg := range batch {
+		toolCallID, _ := msg["tool_call_id"].(string)
+		if toolCallID == "" {
+			slog.Warn("anthropic: dropping tool message without tool_call_id")
+			continue
+		}
+		if validIDs == nil {
+			slog.Warn("anthropic: dropping orphaned tool result (no preceding assistant)", "tool_use_id", toolCallID)
+			continue
+		}
+		if !validIDs[toolCallID] {
+			slog.Warn("anthropic: dropping orphaned tool result (no matching tool_use)", "tool_use_id", toolCallID)
+			continue
+		}
+		results = append(results, a.buildToolResultBlock(msg["content"], toolCallID))
+	}
+	return results
+}
+
+// buildToolResultBlock constructs a single Anthropic tool_result content block
+// from a tool message's content and the validated tool_use_id.
+func (a *AnthropicAdapter) buildToolResultBlock(content interface{}, toolUseID string) map[string]interface{} {
+	toolResult := map[string]interface{}{
+		"type":        "tool_result",
+		"tool_use_id": toolUseID,
+	}
+
+	if content == nil {
+		toolResult["content"] = ""
+	} else {
+		switch c := content.(type) {
+		case string:
+			toolResult["content"] = c
+		case []interface{}:
+			anthropicBlocks := a.convertToolContentBlocks(c)
+			if len(anthropicBlocks) > 0 {
+				toolResult["content"] = anthropicBlocks
+			} else {
+				toolResult["content"] = ""
+			}
+		default:
+			slog.Debug("anthropic: tool message content has unexpected type, treating as string", "type", fmt.Sprintf("%T", content))
+			toolResult["content"] = fmt.Sprintf("%v", content)
+		}
+	}
+
+	return toolResult
 }
 
 // emptyTextBlock is a minimal Anthropic text content block used as a fallback
@@ -344,39 +456,6 @@ func (a *AnthropicAdapter) convertToolCallToUse(tc interface{}) map[string]inter
 		"name":  name,
 		"input": input,
 	}
-}
-
-func (a *AnthropicAdapter) convertToolMessage(content interface{}, toolUseID string) []interface{} {
-	toolResult := map[string]interface{}{
-		"type": "tool_result",
-	}
-
-	if toolUseID == "" {
-		slog.Warn("anthropic: tool message missing tool_call_id, generating synthetic ID (will not match upstream tool_use.id)")
-		toolUseID = "toolu_missing_" + util.GenerateID()
-	}
-	toolResult["tool_use_id"] = toolUseID
-
-	if content == nil {
-		toolResult["content"] = ""
-	} else {
-		switch c := content.(type) {
-		case string:
-			toolResult["content"] = c
-		case []interface{}:
-			anthropicBlocks := a.convertToolContentBlocks(c)
-			if len(anthropicBlocks) > 0 {
-				toolResult["content"] = anthropicBlocks
-			} else {
-				toolResult["content"] = ""
-			}
-		default:
-			slog.Debug("anthropic: tool message content has unexpected type, treating as string", "type", fmt.Sprintf("%T", content))
-			toolResult["content"] = fmt.Sprintf("%v", content)
-		}
-	}
-
-	return []interface{}{toolResult}
 }
 
 func (a *AnthropicAdapter) convertToolContentBlocks(blocks []interface{}) []interface{} {

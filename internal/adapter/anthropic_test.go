@@ -243,31 +243,14 @@ func TestAnthropicAdapter_MutateRequest_ToolMessage_ClientModifiedID(t *testing.
 	}
 
 	msgs := m["messages"].([]interface{})
-	if len(msgs) != 2 {
-		t.Fatalf("expected 2 messages, got %d", len(msgs))
+	if len(msgs) != 1 {
+		t.Fatalf("expected 1 message (orphaned tool result dropped), got %d", len(msgs))
 	}
 
-	toolMsg := msgs[1].(map[string]interface{})
-	if toolMsg["role"] != "user" {
-		t.Errorf("expected tool message role 'user', got %v", toolMsg["role"])
-	}
-
-	content := toolMsg["content"].([]interface{})
-	if len(content) != 1 {
-		t.Fatalf("expected 1 content block, got %d", len(content))
-	}
-
-	block := content[0].(map[string]interface{})
-	if block["type"] != "tool_result" {
-		t.Errorf("expected block type 'tool_result', got %v", block["type"])
-	}
-
-	if block["tool_use_id"] != "chatcmpl-tool-xxx" {
-		t.Errorf("expected tool_use_id 'chatcmpl-tool-xxx' (client tool_call_id), got %v", block["tool_use_id"])
-	}
-
-	if block["content"] != "sunny" {
-		t.Errorf("expected content 'sunny', got %v", block["content"])
+	assistantMsg := msgs[0].(map[string]interface{})
+	content := assistantMsg["content"].([]interface{})
+	if content[0].(map[string]interface{})["type"] != "tool_use" {
+		t.Errorf("expected assistant message with tool_use, got %v", content)
 	}
 }
 
@@ -285,8 +268,8 @@ func TestAnthropicAdapter_MutateRequest_ToolMessage_MultiTool(t *testing.T) {
 	}
 
 	msgs := m["messages"].([]interface{})
-	if len(msgs) != 3 {
-		t.Fatalf("expected 3 messages, got %d", len(msgs))
+	if len(msgs) != 2 {
+		t.Fatalf("expected 2 messages (assistant + coalesced tool results), got %d", len(msgs))
 	}
 
 	assistantMsg := msgs[0].(map[string]interface{})
@@ -303,26 +286,23 @@ func TestAnthropicAdapter_MutateRequest_ToolMessage_MultiTool(t *testing.T) {
 		t.Errorf("expected second tool_use {id:tu_2 name:get_time}, got %v", tu2)
 	}
 
-	tool1 := msgs[1].(map[string]interface{})
-	content1 := tool1["content"].([]interface{})
-	if len(content1) != 1 {
-		t.Fatalf("expected 1 content block for tool1, got %d", len(content1))
+	toolUser := msgs[1].(map[string]interface{})
+	if toolUser["role"] != "user" {
+		t.Errorf("expected coalesced tool results as user message, got role %v", toolUser["role"])
+	}
+	content := toolUser["content"].([]interface{})
+	if len(content) != 2 {
+		t.Fatalf("expected 2 tool_result blocks in coalesced user message, got %d", len(content))
 	}
 
-	block1 := content1[0].(map[string]interface{})
-	if block1["tool_use_id"] != "tu_1" {
-		t.Errorf("expected tool_use_id 'tu_1' for first tool, got %v", block1["tool_use_id"])
+	block1 := content[0].(map[string]interface{})
+	if block1["tool_use_id"] != "tu_1" || block1["content"] != "sunny" {
+		t.Errorf("expected first tool_result {tool_use_id:tu_1 content:sunny}, got %v", block1)
 	}
 
-	tool2 := msgs[2].(map[string]interface{})
-	content2 := tool2["content"].([]interface{})
-	if len(content2) != 1 {
-		t.Fatalf("expected 1 content block for tool2, got %d", len(content2))
-	}
-
-	block2 := content2[0].(map[string]interface{})
-	if block2["tool_use_id"] != "tu_2" {
-		t.Errorf("expected tool_use_id 'tu_2' for second tool, got %v", block2["tool_use_id"])
+	block2 := content[1].(map[string]interface{})
+	if block2["tool_use_id"] != "tu_2" || block2["content"] != "12:00" {
+		t.Errorf("expected second tool_result {tool_use_id:tu_2 content:12:00}, got %v", block2)
 	}
 }
 
@@ -340,34 +320,17 @@ func TestAnthropicAdapter_MutateRequest_ToolMessage_MoreToolsThanIDs(t *testing.
 	}
 
 	msgs := m["messages"].([]interface{})
-	if len(msgs) != 3 {
-		t.Fatalf("expected 3 messages, got %d", len(msgs))
+	if len(msgs) != 1 {
+		t.Fatalf("expected 1 message (orphaned tool results dropped), got %d", len(msgs))
 	}
 
-	tool1 := msgs[1].(map[string]interface{})
-	content1 := tool1["content"].([]interface{})
-	if len(content1) != 1 {
-		t.Fatalf("expected 1 content block for tool1, got %d", len(content1))
+	assistantMsg := msgs[0].(map[string]interface{})
+	content := assistantMsg["content"].([]interface{})
+	if len(content) != 1 {
+		t.Fatalf("expected 1 content block (tool_use), got %d", len(content))
 	}
-
-	block1 := content1[0].(map[string]interface{})
-	if block1["type"] != "tool_result" {
-		t.Errorf("expected block type 'tool_result', got %v", block1["type"])
-	}
-
-	if block1["tool_use_id"] != "tc1" {
-		t.Errorf("expected tool_use_id 'tc1' for first tool, got %v", block1["tool_use_id"])
-	}
-
-	tool2 := msgs[2].(map[string]interface{})
-	content2 := tool2["content"].([]interface{})
-	if len(content2) != 1 {
-		t.Fatalf("expected 1 content block for tool2, got %d", len(content2))
-	}
-
-	block2 := content2[0].(map[string]interface{})
-	if block2["tool_use_id"] != "tc2" {
-		t.Errorf("expected tool_use_id 'tc2' for second tool, got %v", block2["tool_use_id"])
+	if content[0].(map[string]interface{})["type"] != "tool_use" {
+		t.Errorf("expected tool_use block, got %v", content[0])
 	}
 }
 
@@ -385,23 +348,13 @@ func TestAnthropicAdapter_MutateRequest_ToolMessage_NoAssistant(t *testing.T) {
 	}
 
 	msgs := m["messages"].([]interface{})
-	if len(msgs) != 2 {
-		t.Fatalf("expected 2 messages, got %d", len(msgs))
+	if len(msgs) != 1 {
+		t.Fatalf("expected 1 message (orphaned tool result dropped), got %d", len(msgs))
 	}
 
-	toolMsg := msgs[1].(map[string]interface{})
-	content := toolMsg["content"].([]interface{})
-	if len(content) != 1 {
-		t.Fatalf("expected 1 content block for tool, got %d", len(content))
-	}
-
-	block := content[0].(map[string]interface{})
-	if block["type"] != "tool_result" {
-		t.Errorf("expected block type 'tool_result', got %v", block["type"])
-	}
-
-	if block["tool_use_id"] != "tc1" {
-		t.Errorf("expected tool_use_id 'tc1' (direct from tool_call_id), got %v", block["tool_use_id"])
+	userMsg := msgs[0].(map[string]interface{})
+	if userMsg["role"] != "user" {
+		t.Errorf("expected user message, got role %v", userMsg["role"])
 	}
 }
 
@@ -419,15 +372,13 @@ func TestAnthropicAdapter_MutateRequest_ToolMessage_MissingToolCallID(t *testing
 	}
 
 	msgs := m["messages"].([]interface{})
-	toolMsg := msgs[1].(map[string]interface{})
-	content := toolMsg["content"].([]interface{})
-	block := content[0].(map[string]interface{})
-	if block["type"] != "tool_result" {
-		t.Errorf("expected block type 'tool_result', got %v", block["type"])
+	if len(msgs) != 1 {
+		t.Fatalf("expected 1 message (tool without ID dropped), got %d", len(msgs))
 	}
-	toolUseID, ok := block["tool_use_id"].(string)
-	if !ok || !strings.HasPrefix(toolUseID, "toolu_missing_") {
-		t.Errorf("expected synthetic ID prefix 'toolu_missing_', got %v", block["tool_use_id"])
+
+	userMsg := msgs[0].(map[string]interface{})
+	if userMsg["role"] != "user" {
+		t.Errorf("expected user message, got role %v", userMsg["role"])
 	}
 }
 
@@ -800,22 +751,27 @@ func TestAnthropicAdapter_MutateRequest_ToolMessage_ReorderedResults(t *testing.
 	}
 
 	msgs := m["messages"].([]interface{})
-	if len(msgs) != 3 {
-		t.Fatalf("expected 3 messages, got %d", len(msgs))
+	if len(msgs) != 2 {
+		t.Fatalf("expected 2 messages (assistant + coalesced tool results), got %d", len(msgs))
 	}
 
-	tool1 := msgs[1].(map[string]interface{})
-	content1 := tool1["content"].([]interface{})
-	block1 := content1[0].(map[string]interface{})
+	toolUser := msgs[1].(map[string]interface{})
+	if toolUser["role"] != "user" {
+		t.Errorf("expected coalesced tool results as user message, got role %v", toolUser["role"])
+	}
+	content := toolUser["content"].([]interface{})
+	if len(content) != 2 {
+		t.Fatalf("expected 2 tool_result blocks, got %d", len(content))
+	}
+
+	block1 := content[0].(map[string]interface{})
 	if block1["tool_use_id"] != "tu_2" || block1["content"] != "12:00" {
-		t.Errorf("expected first tool result tu_2 with '12:00', got %v", block1)
+		t.Errorf("expected first tool_result tu_2 with '12:00', got %v", block1)
 	}
 
-	tool2 := msgs[2].(map[string]interface{})
-	content2 := tool2["content"].([]interface{})
-	block2 := content2[0].(map[string]interface{})
+	block2 := content[1].(map[string]interface{})
 	if block2["tool_use_id"] != "tu_1" || block2["content"] != "sunny" {
-		t.Errorf("expected second tool result tu_1 with 'sunny', got %v", block2)
+		t.Errorf("expected second tool_result tu_1 with 'sunny', got %v", block2)
 	}
 }
 
@@ -833,10 +789,14 @@ func TestAnthropicAdapter_MutateRequest_ToolMessage_ArrayContent(t *testing.T) {
 	}
 
 	msgs := m["messages"].([]interface{})
+	if len(msgs) != 2 {
+		t.Fatalf("expected 2 messages, got %d", len(msgs))
+	}
+
 	toolMsg := msgs[1].(map[string]interface{})
 	content := toolMsg["content"].([]interface{})
 	if len(content) != 1 {
-		t.Fatalf("expected 1 content block, got %d", len(content))
+		t.Fatalf("expected 1 tool_result block, got %d", len(content))
 	}
 
 	block := content[0].(map[string]interface{})
@@ -949,5 +909,115 @@ func TestAnthropicAdapter_MutateRequest_ToolMessage_NativeToolResultBlock(t *tes
 	}
 	if nestedBlock["tool_use_id"] != "nested_tu1" {
 		t.Errorf("expected nested tool_use_id 'nested_tu1', got %v", nestedBlock["tool_use_id"])
+	}
+}
+
+func TestAnthropicAdapter_MutateRequest_ToolMessage_PartialOrphans(t *testing.T) {
+	a := NewAnthropicAdapter()
+	body := []byte(`{"model":"claude-3","messages":[{"role":"assistant","content":"","tool_calls":[{"id":"tu_1","type":"function","function":{"name":"get_weather","arguments":"{}"}}]},{"role":"tool","tool_call_id":"tu_1","content":"sunny"},{"role":"tool","tool_call_id":"orphan_1","content":"stale"}]}`)
+	out, err := a.MutateRequest(body, "claude-3", true)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var m map[string]interface{}
+	if err := json.Unmarshal(out, &m); err != nil {
+		t.Fatalf("failed to parse output: %v", err)
+	}
+
+	msgs := m["messages"].([]interface{})
+	if len(msgs) != 2 {
+		t.Fatalf("expected 2 messages (assistant + coalesced valid results), got %d", len(msgs))
+	}
+
+	toolUser := msgs[1].(map[string]interface{})
+	content := toolUser["content"].([]interface{})
+	if len(content) != 1 {
+		t.Fatalf("expected 1 tool_result (orphan dropped), got %d", len(content))
+	}
+	block := content[0].(map[string]interface{})
+	if block["tool_use_id"] != "tu_1" {
+		t.Errorf("expected tool_use_id 'tu_1', got %v", block["tool_use_id"])
+	}
+}
+
+func TestAnthropicAdapter_MutateRequest_ToolMessage_MultiTurnToolUse(t *testing.T) {
+	a := NewAnthropicAdapter()
+	body := []byte(`{"model":"claude-3","messages":[
+		{"role":"user","content":"check weather"},
+		{"role":"assistant","content":"","tool_calls":[{"id":"tu_1","type":"function","function":{"name":"get_weather","arguments":"{}"}}]},
+		{"role":"tool","tool_call_id":"tu_1","content":"sunny"},
+		{"role":"assistant","content":"The weather is sunny."},
+		{"role":"user","content":"also check time"},
+		{"role":"assistant","content":"","tool_calls":[{"id":"tu_2","type":"function","function":{"name":"get_time","arguments":"{}"}},{"id":"tu_3","type":"function","function":{"name":"get_timezone","arguments":"{}"}}]},
+		{"role":"tool","tool_call_id":"tu_3","content":"UTC"},
+		{"role":"tool","tool_call_id":"tu_2","content":"12:00"}
+	]}`)
+	out, err := a.MutateRequest(body, "claude-3", true)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var m map[string]interface{}
+	if err := json.Unmarshal(out, &m); err != nil {
+		t.Fatalf("failed to parse output: %v", err)
+	}
+
+	msgs := m["messages"].([]interface{})
+
+	assistantCount := 0
+	for _, msgRaw := range msgs {
+		msg := msgRaw.(map[string]interface{})
+		if msg["role"] == "assistant" {
+			assistantCount++
+		}
+	}
+	if assistantCount != 3 {
+		t.Errorf("expected 3 assistant messages, got %d", assistantCount)
+	}
+
+	lastAssistant := msgs[len(msgs)-2].(map[string]interface{})
+	assistantContent := lastAssistant["content"].([]interface{})
+	var toolUseIDs []string
+	for _, b := range assistantContent {
+		bm := b.(map[string]interface{})
+		if bm["type"] == "tool_use" {
+			toolUseIDs = append(toolUseIDs, bm["id"].(string))
+		}
+	}
+	if len(toolUseIDs) != 2 {
+		t.Fatalf("expected 2 tool_use blocks in last assistant, got %d", len(toolUseIDs))
+	}
+
+	toolUser := msgs[len(msgs)-1].(map[string]interface{})
+	if toolUser["role"] != "user" {
+		t.Errorf("expected coalesced tool results as user, got %v", toolUser["role"])
+	}
+	content := toolUser["content"].([]interface{})
+	if len(content) != 2 {
+		t.Fatalf("expected 2 tool_result blocks (coalesced), got %d", len(content))
+	}
+}
+
+func TestAnthropicAdapter_MutateRequest_ToolMessage_AssistantWithoutTools(t *testing.T) {
+	a := NewAnthropicAdapter()
+	body := []byte(`{"model":"claude-3","messages":[
+		{"role":"user","content":"hello"},
+		{"role":"assistant","content":"hi"},
+		{"role":"tool","tool_call_id":"tc1","content":"result"}
+	]}`)
+	out, err := a.MutateRequest(body, "claude-3", true)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var m map[string]interface{}
+	if err := json.Unmarshal(out, &m); err != nil {
+		t.Fatalf("failed to parse output: %v", err)
+	}
+
+	msgs := m["messages"].([]interface{})
+	if len(msgs) != 2 {
+		t.Fatalf("expected 2 messages (orphaned tool result dropped), got %d", len(msgs))
 	}
 }
