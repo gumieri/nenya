@@ -236,9 +236,7 @@ func (a *AnthropicAdapter) convertToolChoice(tc interface{}, anthropic map[strin
 }
 
 func (a *AnthropicAdapter) convertMessages(msgs []interface{}) []interface{} {
-	var result []interface{}
-	toolUseIDs := a.extractToolUseIDs(msgs)
-	nextID := 0
+	result := make([]interface{}, 0, len(msgs))
 	for _, msgRaw := range msgs {
 		msg, ok := msgRaw.(map[string]interface{})
 		if !ok {
@@ -252,14 +250,10 @@ func (a *AnthropicAdapter) convertMessages(msgs []interface{}) []interface{} {
 		}
 
 		if role == "tool" {
-			toolUseID := ""
-			if nextID < len(toolUseIDs) {
-				toolUseID = toolUseIDs[nextID]
-				nextID++
-			}
+			toolCallID, _ := msg["tool_call_id"].(string)
 			anthMsg := map[string]interface{}{
 				"role":    "user",
-				"content": a.convertToolMessage(msg["content"], toolUseID),
+				"content": a.convertToolMessage(msg["content"], toolCallID),
 			}
 			result = append(result, anthMsg)
 			continue
@@ -352,52 +346,87 @@ func (a *AnthropicAdapter) convertToolCallToUse(tc interface{}) map[string]inter
 	}
 }
 
-// extractToolUseIDs scans the messages for assistant messages with tool_calls
-// and returns a slice of the Anthropic tool_use.id values in order of appearance.
-// These are extracted from the client's OpenAI-format tool_calls[].id field
-// (which should contain the Anthropic tool_use.id from the original response).
-func (a *AnthropicAdapter) extractToolUseIDs(msgs []interface{}) []string {
-	var ids []string
-	for _, msgRaw := range msgs {
-		msg, ok := msgRaw.(map[string]interface{})
-		if !ok {
-			continue
-		}
-		if msg["role"] != "assistant" {
-			continue
-		}
-		tcs, ok := msg["tool_calls"].([]interface{})
-		if !ok {
-			continue
-		}
-		for _, tc := range tcs {
-			tcm, ok := tc.(map[string]interface{})
-			if !ok {
-				continue
+func (a *AnthropicAdapter) convertToolMessage(content interface{}, toolUseID string) []interface{} {
+	toolResult := map[string]interface{}{
+		"type": "tool_result",
+	}
+
+	if toolUseID == "" {
+		slog.Warn("anthropic: tool message missing tool_call_id, generating synthetic ID (will not match upstream tool_use.id)")
+		toolUseID = "toolu_missing_" + util.GenerateID()
+	}
+	toolResult["tool_use_id"] = toolUseID
+
+	if content == nil {
+		toolResult["content"] = ""
+	} else {
+		switch c := content.(type) {
+		case string:
+			toolResult["content"] = c
+		case []interface{}:
+			anthropicBlocks := a.convertToolContentBlocks(c)
+			if len(anthropicBlocks) > 0 {
+				toolResult["content"] = anthropicBlocks
+			} else {
+				toolResult["content"] = ""
 			}
-			if id, ok := tcm["id"].(string); ok && id != "" {
-				ids = append(ids, id)
-			}
+		default:
+			slog.Debug("anthropic: tool message content has unexpected type, treating as string", "type", fmt.Sprintf("%T", content))
+			toolResult["content"] = fmt.Sprintf("%v", content)
 		}
 	}
-	return ids
+
+	return []interface{}{toolResult}
 }
 
-func (a *AnthropicAdapter) convertToolMessage(content interface{}, toolUseID string) []interface{} {
-	toolContent := ""
-	if content != nil {
-		if s, ok := content.(string); ok {
-			toolContent = s
+func (a *AnthropicAdapter) convertToolContentBlocks(blocks []interface{}) []interface{} {
+	var result []interface{}
+	for _, blockRaw := range blocks {
+		block, ok := blockRaw.(map[string]interface{})
+		if !ok {
+			continue
+		}
+
+		blockType, _ := block["type"].(string)
+		switch blockType {
+		case "text":
+			if text, ok := block["text"].(string); ok {
+				result = append(result, map[string]interface{}{
+					"type": "text",
+					"text": text,
+				})
+			}
+		case "image_url":
+			if imageURL, ok := block["image_url"].(map[string]interface{}); ok {
+				if url, ok := imageURL["url"].(string); ok {
+					parts := strings.SplitN(url, ",", 2)
+					if len(parts) == 2 && strings.HasPrefix(parts[0], "data:") {
+						mediaType := strings.TrimPrefix(parts[0], "data:")
+						mediaType = strings.TrimSuffix(mediaType, ";base64")
+						result = append(result, map[string]interface{}{
+							"type": "image",
+							"source": map[string]interface{}{
+								"type":       "base64",
+								"media_type": mediaType,
+								"data":       parts[1],
+							},
+						})
+					}
+				}
+			}
+		case "image":
+			if source, ok := block["source"].(map[string]interface{}); ok {
+				result = append(result, map[string]interface{}{
+					"type":   "image",
+					"source": source,
+				})
+			}
+		case "tool_result":
+			slog.Debug("anthropic: tool_result block inside tool message content, forwarding as-is")
+			result = append(result, block)
 		}
 	}
-	result := map[string]interface{}{
-		"type":    "tool_result",
-		"content": toolContent,
-	}
-	if toolUseID != "" {
-		result["tool_use_id"] = toolUseID
-	}
-	return []interface{}{result}
+	return result
 }
 
 func (a *AnthropicAdapter) convertTools(tools []interface{}) []interface{} {

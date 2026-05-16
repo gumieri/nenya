@@ -262,8 +262,8 @@ func TestAnthropicAdapter_MutateRequest_ToolMessage_ClientModifiedID(t *testing.
 		t.Errorf("expected block type 'tool_result', got %v", block["type"])
 	}
 
-	if block["tool_use_id"] != "tu_original_1" {
-		t.Errorf("expected tool_use_id 'tu_original_1' (original tool_use.id), got %v", block["tool_use_id"])
+	if block["tool_use_id"] != "chatcmpl-tool-xxx" {
+		t.Errorf("expected tool_use_id 'chatcmpl-tool-xxx' (client tool_call_id), got %v", block["tool_use_id"])
 	}
 
 	if block["content"] != "sunny" {
@@ -273,7 +273,7 @@ func TestAnthropicAdapter_MutateRequest_ToolMessage_ClientModifiedID(t *testing.
 
 func TestAnthropicAdapter_MutateRequest_ToolMessage_MultiTool(t *testing.T) {
 	a := NewAnthropicAdapter()
-	body := []byte(`{"model":"claude-3","messages":[{"role":"assistant","content":"","tool_calls":[{"id":"tu_1","type":"function","function":{"name":"get_weather","arguments":"{}"}},{"id":"tu_2","type":"function","function":{"name":"get_time","arguments":"{}"}}]},{"role":"tool","tool_call_id":"whatever_1","content":"sunny"},{"role":"tool","tool_call_id":"whatever_2","content":"12:00"}]}`)
+	body := []byte(`{"model":"claude-3","messages":[{"role":"assistant","content":"","tool_calls":[{"id":"tu_1","type":"function","function":{"name":"get_weather","arguments":"{}"}},{"id":"tu_2","type":"function","function":{"name":"get_time","arguments":"{}"}}]},{"role":"tool","tool_call_id":"tu_1","content":"sunny"},{"role":"tool","tool_call_id":"tu_2","content":"12:00"}]}`)
 	out, err := a.MutateRequest(body, "claude-3", true)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -355,8 +355,8 @@ func TestAnthropicAdapter_MutateRequest_ToolMessage_MoreToolsThanIDs(t *testing.
 		t.Errorf("expected block type 'tool_result', got %v", block1["type"])
 	}
 
-	if block1["tool_use_id"] != "tu_1" {
-		t.Errorf("expected tool_use_id 'tu_1' for first tool, got %v", block1["tool_use_id"])
+	if block1["tool_use_id"] != "tc1" {
+		t.Errorf("expected tool_use_id 'tc1' for first tool, got %v", block1["tool_use_id"])
 	}
 
 	tool2 := msgs[2].(map[string]interface{})
@@ -366,8 +366,8 @@ func TestAnthropicAdapter_MutateRequest_ToolMessage_MoreToolsThanIDs(t *testing.
 	}
 
 	block2 := content2[0].(map[string]interface{})
-	if _, ok := block2["tool_use_id"]; ok {
-		t.Errorf("expected no tool_use_id for orphaned tool result, got %v", block2["tool_use_id"])
+	if block2["tool_use_id"] != "tc2" {
+		t.Errorf("expected tool_use_id 'tc2' for second tool, got %v", block2["tool_use_id"])
 	}
 }
 
@@ -400,8 +400,34 @@ func TestAnthropicAdapter_MutateRequest_ToolMessage_NoAssistant(t *testing.T) {
 		t.Errorf("expected block type 'tool_result', got %v", block["type"])
 	}
 
-	if _, ok := block["tool_use_id"]; ok {
-		t.Errorf("expected no tool_use_id for orphaned tool result, got %v", block["tool_use_id"])
+	if block["tool_use_id"] != "tc1" {
+		t.Errorf("expected tool_use_id 'tc1' (direct from tool_call_id), got %v", block["tool_use_id"])
+	}
+}
+
+func TestAnthropicAdapter_MutateRequest_ToolMessage_MissingToolCallID(t *testing.T) {
+	a := NewAnthropicAdapter()
+	body := []byte(`{"model":"claude-3","messages":[{"role":"user","content":"hello"},{"role":"tool","content":"result"}]}`)
+	out, err := a.MutateRequest(body, "claude-3", true)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var m map[string]interface{}
+	if err := json.Unmarshal(out, &m); err != nil {
+		t.Fatalf("failed to parse output: %v", err)
+	}
+
+	msgs := m["messages"].([]interface{})
+	toolMsg := msgs[1].(map[string]interface{})
+	content := toolMsg["content"].([]interface{})
+	block := content[0].(map[string]interface{})
+	if block["type"] != "tool_result" {
+		t.Errorf("expected block type 'tool_result', got %v", block["type"])
+	}
+	toolUseID, ok := block["tool_use_id"].(string)
+	if !ok || !strings.HasPrefix(toolUseID, "toolu_missing_") {
+		t.Errorf("expected synthetic ID prefix 'toolu_missing_', got %v", block["tool_use_id"])
 	}
 }
 
@@ -757,5 +783,171 @@ func TestAnthropicAdapter_MutateRequest_UserEmptyContent(t *testing.T) {
 	textBlock := content[0].(map[string]interface{})
 	if textBlock["type"] != "text" {
 		t.Errorf("expected fallback text block, got type %v", textBlock["type"])
+	}
+}
+
+func TestAnthropicAdapter_MutateRequest_ToolMessage_ReorderedResults(t *testing.T) {
+	a := NewAnthropicAdapter()
+	body := []byte(`{"model":"claude-3","messages":[{"role":"assistant","content":"","tool_calls":[{"id":"tu_1","type":"function","function":{"name":"get_weather","arguments":"{}"}},{"id":"tu_2","type":"function","function":{"name":"get_time","arguments":"{}"}}]},{"role":"tool","tool_call_id":"tu_2","content":"12:00"},{"role":"tool","tool_call_id":"tu_1","content":"sunny"}]}`)
+	out, err := a.MutateRequest(body, "claude-3", true)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var m map[string]interface{}
+	if err := json.Unmarshal(out, &m); err != nil {
+		t.Fatalf("failed to parse output: %v", err)
+	}
+
+	msgs := m["messages"].([]interface{})
+	if len(msgs) != 3 {
+		t.Fatalf("expected 3 messages, got %d", len(msgs))
+	}
+
+	tool1 := msgs[1].(map[string]interface{})
+	content1 := tool1["content"].([]interface{})
+	block1 := content1[0].(map[string]interface{})
+	if block1["tool_use_id"] != "tu_2" || block1["content"] != "12:00" {
+		t.Errorf("expected first tool result tu_2 with '12:00', got %v", block1)
+	}
+
+	tool2 := msgs[2].(map[string]interface{})
+	content2 := tool2["content"].([]interface{})
+	block2 := content2[0].(map[string]interface{})
+	if block2["tool_use_id"] != "tu_1" || block2["content"] != "sunny" {
+		t.Errorf("expected second tool result tu_1 with 'sunny', got %v", block2)
+	}
+}
+
+func TestAnthropicAdapter_MutateRequest_ToolMessage_ArrayContent(t *testing.T) {
+	a := NewAnthropicAdapter()
+	body := []byte(`{"model":"claude-3","messages":[{"role":"assistant","content":"","tool_calls":[{"id":"tu1","type":"function","function":{"name":"read_file","arguments":"{}"}}]},{"role":"tool","tool_call_id":"tu1","content":[{"type":"text","text":"Hello world"},{"type":"image_url","image_url":{"url":"data:image/jpeg;base64,/9j/4AAQSkZJRg=="}}]}]}`)
+	out, err := a.MutateRequest(body, "claude-3", true)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var m map[string]interface{}
+	if err := json.Unmarshal(out, &m); err != nil {
+		t.Fatalf("failed to parse output: %v", err)
+	}
+
+	msgs := m["messages"].([]interface{})
+	toolMsg := msgs[1].(map[string]interface{})
+	content := toolMsg["content"].([]interface{})
+	if len(content) != 1 {
+		t.Fatalf("expected 1 content block, got %d", len(content))
+	}
+
+	block := content[0].(map[string]interface{})
+	if block["type"] != "tool_result" {
+		t.Fatalf("expected tool_result block, got %v", block["type"])
+	}
+	if block["tool_use_id"] != "tu1" {
+		t.Errorf("expected tool_use_id 'tu1', got %v", block["tool_use_id"])
+	}
+
+	resultContent, ok := block["content"].([]interface{})
+	if !ok {
+		t.Fatalf("expected array content, got %T", block["content"])
+	}
+	if len(resultContent) != 2 {
+		t.Fatalf("expected 2 content blocks in tool_result, got %d", len(resultContent))
+	}
+
+	textBlock := resultContent[0].(map[string]interface{})
+	if textBlock["type"] != "text" || textBlock["text"] != "Hello world" {
+		t.Errorf("expected text block, got %v", textBlock)
+	}
+
+	imageBlock := resultContent[1].(map[string]interface{})
+	if imageBlock["type"] != "image" {
+		t.Fatalf("expected image block, got %v", imageBlock["type"])
+	}
+	source, ok := imageBlock["source"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("expected image source, got %T", imageBlock["source"])
+	}
+	if source["type"] != "base64" || source["media_type"] != "image/jpeg" {
+		t.Errorf("expected image source with base64 type and jpeg media_type, got %v", source)
+	}
+}
+
+func TestAnthropicAdapter_MutateRequest_ToolMessage_NativeAnthropicImage(t *testing.T) {
+	a := NewAnthropicAdapter()
+	body := []byte(`{"model":"claude-3","messages":[{"role":"assistant","content":"","tool_calls":[{"id":"tu1","type":"function","function":{"name":"capture_screen","arguments":"{}"}}]},{"role":"tool","tool_call_id":"tu1","content":[{"type":"image","source":{"type":"base64","media_type":"image/png","data":"iVBORw0KGgoAAAANSUhEUgAAAQ"}}]}]}`)
+	out, err := a.MutateRequest(body, "claude-3", true)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var m map[string]interface{}
+	if err := json.Unmarshal(out, &m); err != nil {
+		t.Fatalf("failed to parse output: %v", err)
+	}
+
+	msgs := m["messages"].([]interface{})
+	toolMsg := msgs[1].(map[string]interface{})
+	content := toolMsg["content"].([]interface{})
+	block := content[0].(map[string]interface{})
+	resultContent := block["content"].([]interface{})
+	imageBlock := resultContent[0].(map[string]interface{})
+	if imageBlock["type"] != "image" {
+		t.Errorf("expected image block type, got %v", imageBlock["type"])
+	}
+	if imageBlock["source"].(map[string]interface{})["media_type"] != "image/png" {
+		t.Errorf("expected image/png media_type, got %v", imageBlock["source"].(map[string]interface{})["media_type"])
+	}
+}
+
+func TestAnthropicAdapter_MutateRequest_ToolMessage_EmptyArrayContent(t *testing.T) {
+	a := NewAnthropicAdapter()
+	body := []byte(`{"model":"claude-3","messages":[{"role":"assistant","content":"","tool_calls":[{"id":"tu1","type":"function","function":{"name":"nop","arguments":"{}"}}]},{"role":"tool","tool_call_id":"tu1","content":[]}]}`)
+	out, err := a.MutateRequest(body, "claude-3", true)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var m map[string]interface{}
+	if err := json.Unmarshal(out, &m); err != nil {
+		t.Fatalf("failed to parse output: %v", err)
+	}
+
+	msgs := m["messages"].([]interface{})
+	toolMsg := msgs[1].(map[string]interface{})
+	content := toolMsg["content"].([]interface{})
+	block := content[0].(map[string]interface{})
+	if block["content"] != "" {
+		t.Errorf("expected empty string content for empty array, got %v", block["content"])
+	}
+}
+
+func TestAnthropicAdapter_MutateRequest_ToolMessage_NativeToolResultBlock(t *testing.T) {
+	a := NewAnthropicAdapter()
+	body := []byte(`{"model":"claude-3","messages":[{"role":"assistant","content":"","tool_calls":[{"id":"tu1","type":"function","function":{"name":"nested_tool","arguments":"{}"}}]},{"role":"tool","tool_call_id":"tu1","content":[{"type":"tool_result","tool_use_id":"nested_tu1","content":"nested result"}]}]}`)
+	out, err := a.MutateRequest(body, "claude-3", true)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var m map[string]interface{}
+	if err := json.Unmarshal(out, &m); err != nil {
+		t.Fatalf("failed to parse output: %v", err)
+	}
+
+	msgs := m["messages"].([]interface{})
+	toolMsg := msgs[1].(map[string]interface{})
+	content := toolMsg["content"].([]interface{})
+	block := content[0].(map[string]interface{})
+	if block["tool_use_id"] != "tu1" {
+		t.Errorf("expected tool_use_id 'tu1', got %v", block["tool_use_id"])
+	}
+	resultContent := block["content"].([]interface{})
+	nestedBlock := resultContent[0].(map[string]interface{})
+	if nestedBlock["type"] != "tool_result" {
+		t.Errorf("expected nested tool_result block, got %v", nestedBlock["type"])
+	}
+	if nestedBlock["tool_use_id"] != "nested_tu1" {
+		t.Errorf("expected nested tool_use_id 'nested_tu1', got %v", nestedBlock["tool_use_id"])
 	}
 }
