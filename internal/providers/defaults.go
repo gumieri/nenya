@@ -109,7 +109,7 @@ func cerebrasSpec() ProviderSpec {
 		SupportsAutoToolChoice: true,
 		SupportsContentArrays:  true,
 		SupportsToolCalls:      true,
-		SupportsReasoning:      true,
+		SupportsReasoning:      false,
 		SupportsVision:         false,
 		ValidationEndpoint:     cerebrasValidationEndpoint,
 	}
