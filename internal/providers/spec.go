@@ -22,43 +22,11 @@ type SanitizeDeps struct {
 // ProviderSpec describes a provider's capabilities and optional hooks
 // for request sanitization and response transformation.
 type ProviderSpec struct {
-	SupportsStreamOptions  bool
-	SupportsAutoToolChoice bool
-	SupportsContentArrays  bool
-	SupportsToolCalls      bool
-	SupportsReasoning      bool
-	SupportsVision         bool
+	ServiceKinds           []ServiceKind
 	ModelMap               map[string]string
 	SanitizeRequest        func(deps *SanitizeDeps, payload map[string]interface{})
 	NewResponseTransformer func(cache *infra.ThoughtSignatureCache) stream.ResponseTransformer
 	ValidationEndpoint     func(providerURL string) string
-}
-
-// SupportsToolCalls reports whether the named provider supports tool calls.
-// Returns false for unknown providers (safe default).
-func SupportsToolCalls(name string) bool {
-	if spec, ok := Get(name); ok {
-		return spec.SupportsToolCalls
-	}
-	return false
-}
-
-// SupportsReasoning reports whether the named provider supports reasoning/thinking.
-// Returns false for unknown providers (safe default).
-func SupportsReasoning(name string) bool {
-	if spec, ok := Get(name); ok {
-		return spec.SupportsReasoning
-	}
-	return false
-}
-
-// SupportsVision reports whether the named provider supports vision/image inputs.
-// Returns false for unknown providers (safe default).
-func SupportsVision(name string) bool {
-	if spec, ok := Get(name); ok {
-		return spec.SupportsVision
-	}
-	return false
 }
 
 // Registry maps provider format names to their ProviderSpec definitions.
@@ -95,27 +63,6 @@ func init() {
 func Get(name string) (ProviderSpec, bool) {
 	spec, ok := Registry[strings.ToLower(name)]
 	return spec, ok
-}
-
-func SupportsStreamOptions(name string) bool {
-	if spec, ok := Get(name); ok {
-		return spec.SupportsStreamOptions
-	}
-	return false
-}
-
-func SupportsAutoToolChoice(name string) bool {
-	if spec, ok := Get(name); ok {
-		return spec.SupportsAutoToolChoice
-	}
-	return false
-}
-
-func SupportsContentArrays(name string) bool {
-	if spec, ok := Get(name); ok {
-		return spec.SupportsContentArrays
-	}
-	return false
 }
 
 func defaultValidationEndpoint(host string, path string) string {

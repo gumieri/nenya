@@ -2,6 +2,7 @@ package discovery
 
 import (
 	"fmt"
+	"log/slog"
 	"strings"
 
 	"nenya/config"
@@ -52,24 +53,53 @@ func (m *ModelMetadata) Validate() error {
 	return nil
 }
 
-func applyCapabilities(meta *ModelMetadata, caps []string) *ModelMetadata {
+// HasCapability returns true if the metadata indicates support for the given capability.
+func (m *ModelMetadata) HasCapability(cap Capability) bool {
+	if m == nil {
+		return false
+	}
+	switch cap {
+	case CapVision:
+		return m.SupportsVision
+	case CapToolCalls:
+		return m.SupportsToolCalls
+	case CapReasoning:
+		return m.SupportsReasoning
+	case CapContentArrays:
+		return m.SupportsContentArrays
+	case CapStreamOptions:
+		return m.SupportsStreamOptions
+	case CapAutoToolChoice:
+		return m.SupportsAutoToolChoice
+	default:
+		return false
+	}
+}
+
+func applyCapabilities(meta *ModelMetadata, caps []Capability) *ModelMetadata {
 	if meta == nil || len(caps) == 0 {
 		return meta
 	}
 	for _, c := range caps {
+		valid := true
 		switch c {
-		case "vision":
+		case CapVision:
 			meta.SupportsVision = true
-		case "tool_calls":
+		case CapToolCalls:
 			meta.SupportsToolCalls = true
-		case "reasoning":
+		case CapReasoning:
 			meta.SupportsReasoning = true
-		case "content_arrays":
+		case CapContentArrays:
 			meta.SupportsContentArrays = true
-		case "stream_options":
+		case CapStreamOptions:
 			meta.SupportsStreamOptions = true
-		case "auto_tool_choice":
+		case CapAutoToolChoice:
 			meta.SupportsAutoToolChoice = true
+		default:
+			valid = false
+		}
+		if !valid {
+			slog.Warn("unknown capability ignored during metadata merge", "capability", c)
 		}
 	}
 	return meta

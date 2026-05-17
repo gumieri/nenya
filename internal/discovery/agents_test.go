@@ -97,13 +97,13 @@ func TestDiscoveredModel_HasCapability(t *testing.T) {
 	tests := []struct {
 		name       string
 		model      DiscoveredModel
-		capability string
+		capability Capability
 		want       bool
 	}{
 		{
 			name:       "nil metadata returns false",
 			model:      DiscoveredModel{ID: "test", Metadata: nil},
-			capability: "vision",
+			capability: CapVision,
 			want:       false,
 		},
 		{
@@ -114,7 +114,7 @@ func TestDiscoveredModel_HasCapability(t *testing.T) {
 					SupportsVision: true,
 				},
 			},
-			capability: "vision",
+			capability: CapVision,
 			want:       true,
 		},
 		{
@@ -125,7 +125,7 @@ func TestDiscoveredModel_HasCapability(t *testing.T) {
 					SupportsVision: false,
 				},
 			},
-			capability: "vision",
+			capability: CapVision,
 			want:       false,
 		},
 		{
@@ -136,7 +136,7 @@ func TestDiscoveredModel_HasCapability(t *testing.T) {
 					SupportsToolCalls: true,
 				},
 			},
-			capability: "tool_calls",
+			capability: CapToolCalls,
 			want:       true,
 		},
 		{
@@ -147,7 +147,7 @@ func TestDiscoveredModel_HasCapability(t *testing.T) {
 					SupportsReasoning: true,
 				},
 			},
-			capability: "reasoning",
+			capability: CapReasoning,
 			want:       true,
 		},
 		{
@@ -158,7 +158,7 @@ func TestDiscoveredModel_HasCapability(t *testing.T) {
 					SupportsContentArrays: true,
 				},
 			},
-			capability: "content_arrays",
+			capability: CapContentArrays,
 			want:       true,
 		},
 		{
@@ -169,7 +169,7 @@ func TestDiscoveredModel_HasCapability(t *testing.T) {
 					SupportsStreamOptions: true,
 				},
 			},
-			capability: "stream_options",
+			capability: CapStreamOptions,
 			want:       true,
 		},
 		{

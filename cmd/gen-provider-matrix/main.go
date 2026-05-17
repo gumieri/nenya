@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"strings"
 
 	providerpkg "nenya/internal/providers"
 )
@@ -14,12 +15,14 @@ func main() {
 		"xai", "zai", "zen",
 	}
 
-	fmt.Println("# Provider Capabilities Matrix")
+	fmt.Println("# Provider Service Kinds Matrix")
 	fmt.Println()
-	fmt.Println("This document provides a comprehensive overview of all supported LLM providers and their capabilities within the Nenya gateway.")
+	fmt.Println("This document provides a comprehensive overview of all supported providers and the service kinds (endpoints) they support within the Nenya gateway.")
 	fmt.Println()
-	fmt.Println("| Provider | Stream Options | Auto Tool Choice | Content Arrays | Tool Calls | Reasoning | Vision | Notes |")
-	fmt.Println("|----------|---------------|-----------------|----------------|------------|-----------|--------|-------|")
+	fmt.Println("Note: Wire format capabilities (stream_options, tool_calls, reasoning, vision) are now **model-level** and inferred dynamically via `discovery.InferCapabilities()` from model IDs.")
+	fmt.Println()
+	fmt.Println("| Provider | Service Kinds | Notes |")
+	fmt.Println("|----------|--------------|-------|")
 
 	for _, name := range providers {
 		spec, ok := providerpkg.Get(name)
@@ -27,24 +30,18 @@ func main() {
 			continue
 		}
 
-		fmt.Printf("| %s | %s | %s | %s | %s | %s | %s | %s |\n",
+		kindNames := make([]string, len(spec.ServiceKinds))
+		for i, k := range spec.ServiceKinds {
+			kindNames[i] = string(k)
+		}
+		kindsStr := strings.Join(kindNames, ", ")
+
+		fmt.Printf("| %s | %s | %s |\n",
 			name,
-			checkmark(spec.SupportsStreamOptions),
-			checkmark(spec.SupportsAutoToolChoice),
-			checkmark(spec.SupportsContentArrays),
-			checkmark(spec.SupportsToolCalls),
-			checkmark(spec.SupportsReasoning),
-			checkmark(spec.SupportsVision),
+			kindsStr,
 			getNotes(name),
 		)
 	}
-}
-
-func checkmark(b bool) string {
-	if b {
-		return "✅"
-	}
-	return "❌"
 }
 
 func getNotes(name string) string {

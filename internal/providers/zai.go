@@ -7,14 +7,9 @@ import (
 
 func zaiSpec() ProviderSpec {
 	return ProviderSpec{
-		SupportsStreamOptions:  true,
-		SupportsAutoToolChoice: true,
-		SupportsContentArrays:  true,
-		SupportsToolCalls:      true,
-		SupportsReasoning:      true,
-		SupportsVision:         false,
-		SanitizeRequest:        zaiSanitize,
-		ValidationEndpoint:     zaiValidationEndpoint,
+		ServiceKinds:       []ServiceKind{ServiceKindLLM},
+		SanitizeRequest:    zaiSanitize,
+		ValidationEndpoint: zaiValidationEndpoint,
 	}
 }
 

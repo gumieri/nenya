@@ -51,12 +51,14 @@ Agents can configure routing weights in their configuration:
 
 ## Capability Matching
 
-Models are scored based on their metadata capabilities:
+Models are scored based on their `ModelMetadata` capabilities (inferred dynamically via `discovery.InferCapabilities()`):
 
-- `SupportsToolCalls`: Model supports tool/function calling
-- `SupportsReasoning`: Model optimized for reasoning tasks
-- `SupportsVision`: Model supports image inputs
-- `SupportsContentArrays`: Model supports complex content arrays
+- `CapToolCalls`: Model supports tool/function calling
+- `CapReasoning`: Model optimized for reasoning tasks
+- `CapVision`: Model supports image inputs
+- `CapContentArrays`: Model supports complex content arrays
+- `CapStreamOptions`: Model supports `stream_options.include_usage`
+- `CapAutoToolChoice`: Model supports `tool_choice: "auto"`
 
 Requests specify required capabilities, and models receive bonuses for matching capabilities or penalties for mismatches.
 

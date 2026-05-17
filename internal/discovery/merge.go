@@ -117,17 +117,24 @@ func pickMetadata(discovered DiscoveredModel, hasDiscovered bool, static config.
 		metadata = discovered.Metadata
 	}
 
-	if hasStatic && (static.ScoreBonus != 0 || len(static.Capabilities) > 0 || !static.Pricing.IsZero()) {
-		if metadata == nil {
-			metadata = &ModelMetadata{}
+	if !hasStatic || (static.ScoreBonus == 0 && len(static.Capabilities) == 0 && static.Pricing.IsZero()) {
+		return metadata
+	}
+	if metadata == nil {
+		metadata = &ModelMetadata{}
+	}
+	if static.ScoreBonus != 0 {
+		metadata.ScoreBonus = static.ScoreBonus
+	}
+	if len(static.Capabilities) > 0 {
+		caps := make([]Capability, len(static.Capabilities))
+		for i, c := range static.Capabilities {
+			caps[i] = Capability(c)
 		}
-		if static.ScoreBonus != 0 {
-			metadata.ScoreBonus = static.ScoreBonus
-		}
-		metadata = applyCapabilities(metadata, static.Capabilities)
-		if !static.Pricing.IsZero() {
-			metadata.Pricing = &static.Pricing
-		}
+		metadata = applyCapabilities(metadata, caps)
+	}
+	if !static.Pricing.IsZero() {
+		metadata.Pricing = &static.Pricing
 	}
 	return metadata
 }

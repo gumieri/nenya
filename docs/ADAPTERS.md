@@ -33,9 +33,9 @@ const (
 )
 ```
 
-## Capabilities
+## Adapter Capabilities (Request Field Stripping)
 
-Each adapter declares what the upstream provider supports. Parameters not supported are automatically stripped from the request:
+Each adapter declares what the upstream provider supports at the wire-format level. Parameters not supported are automatically stripped from the request. These are **provider-level** capabilities, distinct from model-level capabilities (vision, reasoning, etc.) which are inferred dynamically via `discovery.InferCapabilities()`.
 
 ```go
 type Capabilities struct {

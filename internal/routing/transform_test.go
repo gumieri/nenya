@@ -630,7 +630,7 @@ func TestTransformRequest_ZAIWithTools_PreservesMessages(t *testing.T) {
 	deps := testDeps(providers)
 
 	payload := map[string]interface{}{
-		"model": "glm-5-turbo",
+		"model": "gpt-4o",
 		"messages": []interface{}{
 			map[string]interface{}{"role": "user", "content": "first part"},
 			map[string]interface{}{"role": "user", "content": "second part"},
@@ -700,7 +700,7 @@ func TestTransformRequest_ZAIWithTools_KeepsStreamOptions(t *testing.T) {
 	deps := testDeps(providers)
 
 	payload := map[string]interface{}{
-		"model":    "glm-5-turbo",
+		"model":    "gpt-4o",
 		"messages": []interface{}{map[string]interface{}{"role": "user", "content": "hello"}},
 		"stream_options": map[string]interface{}{
 			"include_usage": true,
@@ -718,6 +718,6 @@ func TestTransformRequest_ZAIWithTools_KeepsStreamOptions(t *testing.T) {
 		t.Fatalf("failed to unmarshal: %v", err)
 	}
 	if _, ok := parsed["stream_options"]; !ok {
-		t.Error("stream_options should be kept for zai (SupportsStreamOptions: true)")
+		t.Error("stream_options should be kept for gpt-4o (inferred supports_stream_options)")
 	}
 }

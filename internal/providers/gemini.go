@@ -25,12 +25,7 @@ var GeminiModelMap = map[string]string{
 
 func geminiSpec() ProviderSpec {
 	return ProviderSpec{
-		SupportsStreamOptions:  false,
-		SupportsAutoToolChoice: true,
-		SupportsContentArrays:  true,
-		SupportsToolCalls:      true,
-		SupportsReasoning:      true,
-		SupportsVision:         true,
+		ServiceKinds:           []ServiceKind{ServiceKindLLM},
 		ModelMap:               GeminiModelMap,
 		SanitizeRequest:        geminiSanitize,
 		NewResponseTransformer: newGeminiTransformer,

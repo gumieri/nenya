@@ -12,8 +12,8 @@ func TestGet_ExistingProvider(t *testing.T) {
 			if !ok {
 				t.Fatalf("expected provider %q to exist", name)
 			}
-			if spec.SupportsAutoToolChoice && spec.SupportsContentArrays {
-				return
+			if len(spec.ServiceKinds) == 0 {
+				t.Fatalf("expected provider %q to have ServiceKinds", name)
 			}
 		})
 	}
@@ -26,80 +26,46 @@ func TestGet_NonExistingProvider(t *testing.T) {
 	}
 }
 
-func TestSupportsStreamOptions(t *testing.T) {
-	tests := []struct {
-		provider string
-		want     bool
-	}{
-		{"deepseek", true},
-		{"DeepSeek", true},
-		{"zai", true},
-		{"openrouter", true},
-		{"groq", true},
-		{"sambanova", true},
-		{"cerebras", true},
-		{"qwen_free", true},
-		{"minimax_free", true},
-		{"nvidia", false},
-		{"gemini", false},
-	}
-	for _, tt := range tests {
-		t.Run(tt.provider, func(t *testing.T) {
-			got := SupportsStreamOptions(tt.provider)
-			if got != tt.want {
-				t.Fatalf("got %v, want %v", got, tt.want)
-			}
-		})
+func TestAllProvidersHaveLLMKind(t *testing.T) {
+	for name, spec := range Registry {
+		if !spec.Supports(ServiceKindLLM) {
+			t.Errorf("provider %q should support ServiceKindLLM", name)
+		}
 	}
 }
 
-func TestSupportsAutoToolChoice(t *testing.T) {
-	tests := []struct {
-		provider string
-		want     bool
-	}{
-		{"gemini", true},
-		{"deepseek", true},
-		{"zai", true},
-		{"groq", true},
-		{"together", true},
-		{"sambanova", true},
-		{"cerebras", true},
-		{"nvidia", false},
+func TestOpenAIHasEmbedding(t *testing.T) {
+	spec, ok := Get("openai")
+	if !ok {
+		t.Fatal("expected openai provider to exist")
 	}
-	for _, tt := range tests {
-		t.Run(tt.provider, func(t *testing.T) {
-			got := SupportsAutoToolChoice(tt.provider)
-			if got != tt.want {
-				t.Fatalf("got %v, want %v", got, tt.want)
-			}
-		})
+	if !spec.Supports(ServiceKindEmbedding) {
+		t.Error("expected openai to support ServiceKindEmbedding")
+	}
+	if !spec.Supports(ServiceKindTTS) {
+		t.Error("expected openai to support ServiceKindTTS")
+	}
+	if !spec.Supports(ServiceKindSTT) {
+		t.Error("expected openai to support ServiceKindSTT")
 	}
 }
 
-func TestSupportsContentArrays(t *testing.T) {
-	tests := []struct {
-		provider string
-		want     bool
-	}{
-		{"gemini", true},
-		{"deepseek", true},
-		{"openrouter", true},
-		{"groq", true},
-		{"sambanova", true},
-		{"cerebras", true},
-		{"nvidia", true},
-		{"nvidia_free", true},
-		{"qwen_free", true},
-		{"minimax_free", true},
-		{"cohere", true},
+func TestPerplexityHasWebSearch(t *testing.T) {
+	spec, ok := Get("perplexity")
+	if !ok {
+		t.Fatal("expected perplexity provider to exist")
 	}
-	for _, tt := range tests {
-		t.Run(tt.provider, func(t *testing.T) {
-			got := SupportsContentArrays(tt.provider)
-			if got != tt.want {
-				t.Fatalf("got %v, want %v", got, tt.want)
-			}
-		})
+	if !spec.Supports(ServiceKindWebSearch) {
+		t.Error("expected perplexity to support ServiceKindWebSearch")
+	}
+}
+
+func TestCohereHasRerank(t *testing.T) {
+	spec, ok := Get("cohere")
+	if !ok {
+		t.Fatal("expected cohere provider to exist")
+	}
+	if !spec.Supports(ServiceKindRerank) {
+		t.Error("expected cohere to support ServiceKindRerank")
 	}
 }

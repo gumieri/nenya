@@ -669,31 +669,9 @@ func SortTargetsByLatency(targets []UpstreamTarget, lt *infra.LatencyTracker, ji
 
 func modelHasCapabilities(meta *discovery.ModelMetadata, required []string) bool {
 	for _, cap := range required {
-		switch cap {
-		case "vision":
-			if !meta.SupportsVision {
-				return false
-			}
-		case "tool_calls":
-			if !meta.SupportsToolCalls {
-				return false
-			}
-		case "reasoning":
-			if !meta.SupportsReasoning {
-				return false
-			}
-		case "content_arrays":
-			if !meta.SupportsContentArrays {
-				return false
-			}
-		case "stream_options":
-			if !meta.SupportsStreamOptions {
-				return false
-			}
-		case "auto_tool_choice":
-			if !meta.SupportsAutoToolChoice {
-				return false
-			}
+		parsed := discovery.Capability(cap)
+		if !meta.HasCapability(parsed) {
+			return false
 		}
 	}
 	return true

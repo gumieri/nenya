@@ -300,7 +300,7 @@ func TransformRequestForUpstream(deps TransformDeps, providerName, upstreamURL s
 
 	finalModel := resolveModelMapping(deps, payload, providerName, modelName)
 	applyProviderSanitize(deps, payload, providerName)
-	SanitizePayload(deps, payload, providerName, modelName)
+	SanitizePayload(deps, payload, modelName)
 	resolveAgentSystemPrompt(deps, payload, origModel, providerName)
 
 	effectiveMaxOutput := resolveEffectiveMaxOutput(deps, finalModel, maxOutput)

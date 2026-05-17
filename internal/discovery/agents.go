@@ -150,15 +150,15 @@ func isFastModel(m DiscoveredModel) bool {
 }
 
 func isReasoningModel(m DiscoveredModel) bool {
-	return m.HasCapability("reasoning") && m.MaxContext >= 128000
+	return m.HasCapability(CapReasoning) && m.MaxContext >= 128000
 }
 
 func isVisionModel(m DiscoveredModel) bool {
-	return m.HasCapability("vision")
+	return m.HasCapability(CapVision)
 }
 
 func isToolModel(m DiscoveredModel) bool {
-	return m.HasCapability("tool_calls")
+	return m.HasCapability(CapToolCalls)
 }
 
 func isLargeModel(m DiscoveredModel) bool {
@@ -179,7 +179,7 @@ var codingPrefixes = []string{
 }
 
 func isCodingModel(m DiscoveredModel) bool {
-	if !m.HasCapability("tool_calls") {
+	if !m.HasCapability(CapToolCalls) {
 		return false
 	}
 	id := strings.ToLower(m.ID)

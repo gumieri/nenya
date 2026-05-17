@@ -7,13 +7,8 @@ import (
 
 func groqSpec() ProviderSpec {
 	return ProviderSpec{
-		SupportsStreamOptions:  true,
-		SupportsAutoToolChoice: true,
-		SupportsContentArrays:  true,
-		SupportsToolCalls:      true,
-		SupportsReasoning:      true,
-		SupportsVision:         true,
-		ValidationEndpoint:     groqValidationEndpoint,
+		ServiceKinds:       []ServiceKind{ServiceKindLLM},
+		ValidationEndpoint: groqValidationEndpoint,
 	}
 }
 

@@ -21,13 +21,8 @@ import (
 //   - reasoning_content from non-tool-call turns is optional (API ignores it)
 func deepseekSpec() ProviderSpec {
 	return ProviderSpec{
-		SupportsStreamOptions:  true,
-		SupportsAutoToolChoice: true,
-		SupportsContentArrays:  true,
-		SupportsToolCalls:      true,
-		SupportsReasoning:      true,
-		SupportsVision:         false,
-		ValidationEndpoint:     deepseekValidationEndpoint,
+		ServiceKinds:       []ServiceKind{ServiceKindLLM},
+		ValidationEndpoint: deepseekValidationEndpoint,
 	}
 }
 

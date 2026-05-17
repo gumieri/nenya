@@ -5,26 +5,43 @@ import (
 	"math"
 	"strings"
 
+	"nenya/internal/discovery"
 	"nenya/internal/pipeline"
-	providerpkg "nenya/internal/providers"
 )
 
+func modelSupportsCapability(deps TransformDeps, modelName string, cap discovery.Capability) bool {
+	meta := resolveModelMeta(deps, modelName)
+	if meta == nil {
+		return false
+	}
+	return meta.HasCapability(cap)
+}
+
+func resolveModelMeta(deps TransformDeps, modelName string) *discovery.ModelMetadata {
+	if deps.Catalog != nil && modelName != "" {
+		if dm, ok := deps.Catalog.Lookup(modelName); ok && dm.Metadata != nil {
+			return dm.Metadata
+		}
+	}
+	return discovery.InferCapabilities(modelName)
+}
+
 // SanitizePayload removes unsupported fields from the request payload
-// based on the target provider's capabilities (e.g. stream_options,
+// based on the target model's capabilities (e.g. stream_options,
 // tool_choice, reasoning parameters). It also validates and repairs
 // message role ordering to comply with the OpenAI chat completions spec.
-func stripStreamOptions(deps TransformDeps, payload map[string]interface{}, providerName string) {
+func stripStreamOptions(deps TransformDeps, payload map[string]interface{}, modelName string) {
 	if _, ok := payload["stream_options"]; !ok {
 		return
 	}
-	if providerpkg.SupportsStreamOptions(providerName) {
+	if modelSupportsCapability(deps, modelName, discovery.CapStreamOptions) {
 		return
 	}
 	delete(payload, "stream_options")
-	deps.Logger.Debug("stripped stream_options for provider", "provider", providerName)
+	deps.Logger.Debug("stripped stream_options", "model", modelName)
 }
 
-func stripToolChoice(deps TransformDeps, payload map[string]interface{}, providerName string) {
+func stripToolChoice(deps TransformDeps, payload map[string]interface{}, modelName string) {
 	toolChoice, ok := payload["tool_choice"]
 	if !ok {
 		return
@@ -33,14 +50,14 @@ func stripToolChoice(deps TransformDeps, payload map[string]interface{}, provide
 	if !ok || tc != "auto" {
 		return
 	}
-	if providerpkg.SupportsAutoToolChoice(providerName) {
+	if modelSupportsCapability(deps, modelName, discovery.CapAutoToolChoice) {
 		return
 	}
 	delete(payload, "tool_choice")
-	deps.Logger.Debug("stripped tool_choice \"auto\" for provider", "provider", providerName)
+	deps.Logger.Debug("stripped tool_choice \"auto\"", "model", modelName)
 }
 
-func flattenContentArrays(deps TransformDeps, payload map[string]interface{}, providerName string) {
+func flattenContentArrays(deps TransformDeps, payload map[string]interface{}, modelName string) {
 	messagesRaw, ok := payload["messages"]
 	if !ok {
 		return
@@ -49,7 +66,7 @@ func flattenContentArrays(deps TransformDeps, payload map[string]interface{}, pr
 	if !ok {
 		return
 	}
-	if providerpkg.SupportsContentArrays(providerName) {
+	if modelSupportsCapability(deps, modelName, discovery.CapContentArrays) {
 		return
 	}
 	changed := false
@@ -74,34 +91,24 @@ func flattenContentArrays(deps TransformDeps, payload map[string]interface{}, pr
 		changed = true
 	}
 	if changed {
-		deps.Logger.Debug("flattened content arrays for provider", "provider", providerName)
+		deps.Logger.Debug("flattened content arrays", "model", modelName)
 	}
 }
 
-func shouldStripReasoning(deps TransformDeps, providerName, modelName string) bool {
-	if providerName == "deepseek" {
-		return false
-	}
-	if deps.Catalog != nil && modelName != "" {
-		dm, ok := deps.Catalog.Lookup(modelName)
-		if ok && dm.Metadata != nil {
-			return !dm.Metadata.SupportsReasoning
-		}
-	}
-	return !providerpkg.SupportsReasoning(providerName)
+func shouldStripReasoning(deps TransformDeps, modelName string) bool {
+	return !modelSupportsCapability(deps, modelName, discovery.CapReasoning)
 }
 
-func processReasoningContent(deps TransformDeps, payload map[string]interface{}, providerName, modelName string) {
-	if !shouldStripReasoning(deps, providerName, modelName) {
+func processReasoningContent(deps TransformDeps, payload map[string]interface{}, modelName string) {
+	if !shouldStripReasoning(deps, modelName) {
 		return
 	}
 	if pipeline.StripReasoningContent(payload) {
-		deps.Logger.Debug("stripped reasoning_content",
-			"provider", providerName, "model", modelName)
+		deps.Logger.Debug("stripped reasoning_content", "model", modelName)
 	}
 }
 
-func processMessages(deps TransformDeps, payload map[string]interface{}, providerName, modelName string) {
+func processMessages(deps TransformDeps, payload map[string]interface{}, modelName string) {
 	messagesRaw, ok := payload["messages"]
 	if !ok {
 		return
@@ -110,29 +117,29 @@ func processMessages(deps TransformDeps, payload map[string]interface{}, provide
 	if !ok {
 		return
 	}
-	flattenContentArrays(deps, payload, providerName)
-	processReasoningContent(deps, payload, providerName, modelName)
+	flattenContentArrays(deps, payload, modelName)
+	processReasoningContent(deps, payload, modelName)
 	repaired, repairedMessages := repairMessageOrdering(messages)
 	if !repaired {
 		return
 	}
 	payload["messages"] = repairedMessages
-	deps.Logger.Info("repaired invalid message role ordering", "provider", providerName)
+	deps.Logger.Info("repaired invalid message role ordering", "model", modelName)
 }
 
-func applyDeepSeekFixes(deps TransformDeps, payload map[string]interface{}, providerName string) {
-	if providerName != "deepseek" {
+func applyDeepSeekFixes(deps TransformDeps, payload map[string]interface{}, modelName string) {
+	if !strings.HasPrefix(modelName, "deepseek") {
 		return
 	}
 	ensureDeepSeekReasoningContent(payload, deps.Logger)
-	stripDeepSeekThinkingParams(payload, providerName, deps.Logger)
+	stripDeepSeekThinkingParams(payload, modelName, deps.Logger)
 }
 
-func SanitizePayload(deps TransformDeps, payload map[string]interface{}, providerName string, modelName string) {
-	stripStreamOptions(deps, payload, providerName)
-	stripToolChoice(deps, payload, providerName)
-	processMessages(deps, payload, providerName, modelName)
-	applyDeepSeekFixes(deps, payload, providerName)
+func SanitizePayload(deps TransformDeps, payload map[string]interface{}, modelName string) {
+	stripStreamOptions(deps, payload, modelName)
+	stripToolChoice(deps, payload, modelName)
+	processMessages(deps, payload, modelName)
+	applyDeepSeekFixes(deps, payload, modelName)
 }
 
 // ensureDeepSeekReasoningContent injects an empty reasoning_content field
@@ -168,8 +175,8 @@ func ensureDeepSeekReasoningContent(payload map[string]interface{}, logger *slog
 	}
 }
 
-func stripDeepSeekThinkingParams(payload map[string]interface{}, providerName string, logger *slog.Logger) {
-	if providerName != "deepseek" {
+func stripDeepSeekThinkingParams(payload map[string]interface{}, modelName string, logger *slog.Logger) {
+	if !strings.HasPrefix(modelName, "deepseek") {
 		return
 	}
 	thinking, ok := payload["thinking"]
@@ -187,7 +194,7 @@ func stripDeepSeekThinkingParams(payload map[string]interface{}, providerName st
 	for _, key := range []string{"temperature", "top_p", "presence_penalty", "frequency_penalty"} {
 		if _, has := payload[key]; has {
 			delete(payload, key)
-			logger.Debug("stripped param ignored in thinking mode", "param", key, "provider", providerName)
+			logger.Debug("stripped param ignored in thinking mode", "param", key, "model", modelName)
 		}
 	}
 }

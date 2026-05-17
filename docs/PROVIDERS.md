@@ -195,20 +195,44 @@ Auth style resolution priority:
 2. `ProviderConfig.AuthStyle` from JSON config (for dynamic providers)
 3. Default `BearerAuth` fallback
 
-## Provider Spec Capabilities
+## Capabilities Architecture
 
-Each provider declares its capabilities through a `ProviderSpec`:
+Nenya uses a two-layer capabilities system:
+
+### Provider-Level: Service Kinds
+
+Each provider declares which endpoint types it supports via `ProviderSpec.ServiceKinds`:
+
+| Service Kind | Endpoint |
+|-------------|----------|
+| `ServiceKindLLM` | `/v1/chat/completions` |
+| `ServiceKindEmbedding` | `/v1/embeddings` |
+| `ServiceKindTTS` | `/v1/audio/speech` |
+| `ServiceKindSTT` | `/v1/audio/transcriptions` |
+| `ServiceKindImage` | `/v1/images/generations` |
+| `ServiceKindRerank` | `/v1/rerank` |
+| `ServiceKindWebSearch` | `/v1/search` |
+
+See `internal/providers/kinds.go` for all constants and `internal/providers/defaults.go` for per-provider assignments.
+
+### Model-Level: Wire Format Capabilities
+
+Model-specific features are inferred dynamically from model IDs via `discovery.InferCapabilities()` and stored in `ModelMetadata`:
 
 | Capability | Description |
 |------------|-------------|
-| `SupportsStreamOptions` | Provider supports `stream_options.include_usage` |
-| `SupportsAutoToolChoice` | Provider supports `tool_choice: "auto"` |
-| `SupportsContentArrays` | Provider supports content as array of objects (vision) |
-| `SupportsToolCalls` | Provider supports function calling |
-| `SupportsReasoning` | Provider returns reasoning tokens (`reasoning_content` field) |
-| `SupportsVision` | Provider accepts image inputs |
+| `CapToolCalls` | Model supports function/tool calling |
+| `CapReasoning` | Model returns reasoning tokens (`reasoning_content` field) |
+| `CapVision` | Model accepts image inputs |
+| `CapContentArrays` | Model supports complex content arrays |
+| `CapStreamOptions` | Model supports `stream_options.include_usage` |
+| `CapAutoToolChoice` | Model supports `tool_choice: "auto"` |
 
-See `internal/providers/spec.go` for the full specification.
+These are used for routing decisions, request sanitization, fallback scoring, and `/v1/models` metadata. See `internal/discovery/capabilities.go` for inference rules.
+
+### Adapter-Level: Request Field Stripping
+
+Provider-specific wire format handling (stripping unsupported fields from requests) is managed separately by the adapter system in `internal/adapter/`. See `docs/ADAPTERS.md` for details.
 
 ## Model Discovery Support
 

@@ -7,13 +7,8 @@ import (
 
 func togetherSpec() ProviderSpec {
 	return ProviderSpec{
-		SupportsStreamOptions:  false,
-		SupportsAutoToolChoice: true,
-		SupportsContentArrays:  true,
-		SupportsToolCalls:      true,
-		SupportsReasoning:      false,
-		SupportsVision:         true,
-		ValidationEndpoint:     togetherValidationEndpoint,
+		ServiceKinds:       []ServiceKind{ServiceKindLLM},
+		ValidationEndpoint: togetherValidationEndpoint,
 	}
 }
 
@@ -32,13 +27,15 @@ func togetherValidationEndpoint(providerURL string) string {
 
 func openaiSpec() ProviderSpec {
 	return ProviderSpec{
-		SupportsStreamOptions:  false,
-		SupportsAutoToolChoice: true,
-		SupportsContentArrays:  true,
-		SupportsToolCalls:      true,
-		SupportsReasoning:      true,
-		SupportsVision:         true,
-		ValidationEndpoint:     openaiValidationEndpoint,
+		ServiceKinds: []ServiceKind{
+			ServiceKindLLM,
+			ServiceKindEmbedding,
+			ServiceKindTTS,
+			ServiceKindSTT,
+			ServiceKindImage,
+			ServiceKindImageToText,
+		},
+		ValidationEndpoint: openaiValidationEndpoint,
 	}
 }
 
@@ -57,13 +54,8 @@ func openaiValidationEndpoint(providerURL string) string {
 
 func githubSpec() ProviderSpec {
 	return ProviderSpec{
-		SupportsStreamOptions:  false,
-		SupportsAutoToolChoice: true,
-		SupportsContentArrays:  true,
-		SupportsToolCalls:      true,
-		SupportsReasoning:      true,
-		SupportsVision:         true,
-		ValidationEndpoint:     githubValidationEndpoint,
+		ServiceKinds:       []ServiceKind{ServiceKindLLM},
+		ValidationEndpoint: githubValidationEndpoint,
 	}
 }
 
@@ -73,13 +65,8 @@ func githubValidationEndpoint(providerURL string) string {
 
 func openrouterSpec() ProviderSpec {
 	return ProviderSpec{
-		SupportsStreamOptions:  true,
-		SupportsAutoToolChoice: true,
-		SupportsContentArrays:  true,
-		SupportsToolCalls:      true,
-		SupportsReasoning:      true,
-		SupportsVision:         true,
-		ValidationEndpoint:     openrouterValidationEndpoint,
+		ServiceKinds:       []ServiceKind{ServiceKindLLM},
+		ValidationEndpoint: openrouterValidationEndpoint,
 	}
 }
 
@@ -89,13 +76,8 @@ func openrouterValidationEndpoint(providerURL string) string {
 
 func sambanovaSpec() ProviderSpec {
 	return ProviderSpec{
-		SupportsStreamOptions:  true,
-		SupportsAutoToolChoice: true,
-		SupportsContentArrays:  true,
-		SupportsToolCalls:      true,
-		SupportsReasoning:      true,
-		SupportsVision:         true,
-		ValidationEndpoint:     sambanovaValidationEndpoint,
+		ServiceKinds:       []ServiceKind{ServiceKindLLM},
+		ValidationEndpoint: sambanovaValidationEndpoint,
 	}
 }
 
@@ -105,13 +87,8 @@ func sambanovaValidationEndpoint(providerURL string) string {
 
 func cerebrasSpec() ProviderSpec {
 	return ProviderSpec{
-		SupportsStreamOptions:  true,
-		SupportsAutoToolChoice: true,
-		SupportsContentArrays:  true,
-		SupportsToolCalls:      true,
-		SupportsReasoning:      false,
-		SupportsVision:         false,
-		ValidationEndpoint:     cerebrasValidationEndpoint,
+		ServiceKinds:       []ServiceKind{ServiceKindLLM},
+		ValidationEndpoint: cerebrasValidationEndpoint,
 	}
 }
 
@@ -121,13 +98,8 @@ func cerebrasValidationEndpoint(providerURL string) string {
 
 func nvidiaSpec() ProviderSpec {
 	return ProviderSpec{
-		SupportsStreamOptions:  false,
-		SupportsAutoToolChoice: false,
-		SupportsContentArrays:  true,
-		SupportsToolCalls:      true,
-		SupportsReasoning:      false,
-		SupportsVision:         true,
-		ValidationEndpoint:     nvidiaValidationEndpoint,
+		ServiceKinds:       []ServiceKind{ServiceKindLLM},
+		ValidationEndpoint: nvidiaValidationEndpoint,
 	}
 }
 
@@ -137,23 +109,15 @@ func nvidiaValidationEndpoint(providerURL string) string {
 
 func nvidiaFreeSpec() ProviderSpec {
 	return ProviderSpec{
-		SupportsStreamOptions:  false,
-		SupportsAutoToolChoice: false,
-		SupportsContentArrays:  true,
-		SupportsToolCalls:      true,
-		SupportsVision:         false,
-		ValidationEndpoint:     nvidiaValidationEndpoint,
+		ServiceKinds:       []ServiceKind{ServiceKindLLM},
+		ValidationEndpoint: nvidiaValidationEndpoint,
 	}
 }
 
 func qwenFreeSpec() ProviderSpec {
 	return ProviderSpec{
-		SupportsStreamOptions:  true,
-		SupportsAutoToolChoice: false,
-		SupportsContentArrays:  true,
-		SupportsToolCalls:      true,
-		SupportsVision:         false,
-		ValidationEndpoint:     qwenFreeValidationEndpoint,
+		ServiceKinds:       []ServiceKind{ServiceKindLLM},
+		ValidationEndpoint: qwenFreeValidationEndpoint,
 	}
 }
 
@@ -163,13 +127,8 @@ func qwenFreeValidationEndpoint(providerURL string) string {
 
 func minimaxFreeSpec() ProviderSpec {
 	return ProviderSpec{
-		SupportsStreamOptions:  true,
-		SupportsAutoToolChoice: false,
-		SupportsContentArrays:  true,
-		SupportsToolCalls:      true,
-		SupportsReasoning:      true,
-		SupportsVision:         false,
-		ValidationEndpoint:     minimaxFreeValidationEndpoint,
+		ServiceKinds:       []ServiceKind{ServiceKindLLM},
+		ValidationEndpoint: minimaxFreeValidationEndpoint,
 	}
 }
 
@@ -179,24 +138,14 @@ func minimaxFreeValidationEndpoint(providerURL string) string {
 
 func zaiCodingPlanSpec() ProviderSpec {
 	return ProviderSpec{
-		SupportsStreamOptions:  true,
-		SupportsAutoToolChoice: true,
-		SupportsContentArrays:  true,
-		SupportsToolCalls:      true,
-		SupportsReasoning:      true,
-		SupportsVision:         false,
-		ValidationEndpoint:     zaiValidationEndpoint,
+		ServiceKinds:       []ServiceKind{ServiceKindLLM},
+		ValidationEndpoint: zaiValidationEndpoint,
 	}
 }
 
 func ollamaSpec() ProviderSpec {
 	return ProviderSpec{
-		SupportsStreamOptions:  false,
-		SupportsAutoToolChoice: true,
-		SupportsContentArrays:  false,
-		SupportsToolCalls:      true,
-		SupportsReasoning:      true,
-		SupportsVision:         false,
+		ServiceKinds:           []ServiceKind{ServiceKindLLM},
 		NewResponseTransformer: newOllamaTransformer,
 		ValidationEndpoint:     ollamaValidationEndpoint,
 	}
@@ -208,13 +157,8 @@ func ollamaValidationEndpoint(providerURL string) string {
 
 func anthropicSpec() ProviderSpec {
 	return ProviderSpec{
-		SupportsStreamOptions:  false,
-		SupportsAutoToolChoice: true,
-		SupportsContentArrays:  true,
-		SupportsToolCalls:      true,
-		SupportsReasoning:      true,
-		SupportsVision:         true,
-		ValidationEndpoint:     anthropicValidationEndpoint,
+		ServiceKinds:       []ServiceKind{ServiceKindLLM},
+		ValidationEndpoint: anthropicValidationEndpoint,
 	}
 }
 
@@ -227,13 +171,8 @@ func anthropicValidationEndpoint(providerURL string) string {
 
 func mistralSpec() ProviderSpec {
 	return ProviderSpec{
-		SupportsStreamOptions:  false,
-		SupportsAutoToolChoice: true,
-		SupportsContentArrays:  true,
-		SupportsToolCalls:      true,
-		SupportsReasoning:      true,
-		SupportsVision:         true,
-		ValidationEndpoint:     mistralValidationEndpoint,
+		ServiceKinds:       []ServiceKind{ServiceKindLLM},
+		ValidationEndpoint: mistralValidationEndpoint,
 	}
 }
 
@@ -243,13 +182,8 @@ func mistralValidationEndpoint(providerURL string) string {
 
 func xaiSpec() ProviderSpec {
 	return ProviderSpec{
-		SupportsStreamOptions:  true,
-		SupportsAutoToolChoice: true,
-		SupportsContentArrays:  true,
-		SupportsToolCalls:      true,
-		SupportsReasoning:      true,
-		SupportsVision:         true,
-		ValidationEndpoint:     xaiValidationEndpoint,
+		ServiceKinds:       []ServiceKind{ServiceKindLLM},
+		ValidationEndpoint: xaiValidationEndpoint,
 	}
 }
 
@@ -259,13 +193,8 @@ func xaiValidationEndpoint(providerURL string) string {
 
 func azureSpec() ProviderSpec {
 	return ProviderSpec{
-		SupportsStreamOptions:  false,
-		SupportsAutoToolChoice: true,
-		SupportsContentArrays:  true,
-		SupportsToolCalls:      true,
-		SupportsReasoning:      true,
-		SupportsVision:         true,
-		ValidationEndpoint:     azureValidationEndpoint,
+		ServiceKinds:       []ServiceKind{ServiceKindLLM},
+		ValidationEndpoint: azureValidationEndpoint,
 	}
 }
 
@@ -275,13 +204,8 @@ func azureValidationEndpoint(providerURL string) string {
 
 func perplexitySpec() ProviderSpec {
 	return ProviderSpec{
-		SupportsStreamOptions:  false,
-		SupportsAutoToolChoice: false,
-		SupportsContentArrays:  true,
-		SupportsToolCalls:      false,
-		SupportsReasoning:      false,
-		SupportsVision:         true,
-		ValidationEndpoint:     perplexityValidationEndpoint,
+		ServiceKinds:       []ServiceKind{ServiceKindLLM, ServiceKindWebSearch},
+		ValidationEndpoint: perplexityValidationEndpoint,
 	}
 }
 
@@ -291,13 +215,8 @@ func perplexityValidationEndpoint(providerURL string) string {
 
 func cohereSpec() ProviderSpec {
 	return ProviderSpec{
-		SupportsStreamOptions:  false,
-		SupportsAutoToolChoice: true,
-		SupportsContentArrays:  true,
-		SupportsToolCalls:      true,
-		SupportsReasoning:      false,
-		SupportsVision:         true,
-		ValidationEndpoint:     cohereValidationEndpoint,
+		ServiceKinds:       []ServiceKind{ServiceKindLLM, ServiceKindRerank},
+		ValidationEndpoint: cohereValidationEndpoint,
 	}
 }
 
@@ -307,13 +226,8 @@ func cohereValidationEndpoint(providerURL string) string {
 
 func deepinfraSpec() ProviderSpec {
 	return ProviderSpec{
-		SupportsStreamOptions:  false,
-		SupportsAutoToolChoice: true,
-		SupportsContentArrays:  true,
-		SupportsToolCalls:      true,
-		SupportsReasoning:      false,
-		SupportsVision:         true,
-		ValidationEndpoint:     deepinfraValidationEndpoint,
+		ServiceKinds:       []ServiceKind{ServiceKindLLM},
+		ValidationEndpoint: deepinfraValidationEndpoint,
 	}
 }
 
@@ -323,13 +237,8 @@ func deepinfraValidationEndpoint(providerURL string) string {
 
 func zenSpec() ProviderSpec {
 	return ProviderSpec{
-		SupportsStreamOptions:  true,
-		SupportsAutoToolChoice: true,
-		SupportsContentArrays:  true,
-		SupportsToolCalls:      true,
-		SupportsReasoning:      true,
-		SupportsVision:         true,
-		ValidationEndpoint:     zenValidationEndpoint,
+		ServiceKinds:       []ServiceKind{ServiceKindLLM},
+		ValidationEndpoint: zenValidationEndpoint,
 	}
 }
 
