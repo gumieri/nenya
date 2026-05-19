@@ -317,14 +317,34 @@ func buildGateway(cfg config.Config, secrets *config.SecretsConfig, secureClient
 		ProviderKeyTokens: providerKeyTokens,
 	}
 	gw.AgentState = routing.NewAgentStateWithConfig(logger, metrics, &cfg.Governance)
-	// Account pool initialized with nil storage — backoff levels and cooldowns
-	// are not persisted across restarts. Wire JSONFileStorage here when needed.
 	gw.AccountManager = auth.NewAccountManager(nil)
 	for name, pcfg := range cfg.Providers {
 		accounts := auth.ToProviderAccounts(&pcfg)
 		if len(accounts) > 0 {
 			pool := auth.NewAccountPool(name, accounts)
 			gw.AccountManager.RegisterPool(name, pool)
+		}
+
+		if p, ok := providers[name]; ok {
+			var providerRPM, providerTPM int
+			if pcfg.RatelimitMaxRPM != nil && *pcfg.RatelimitMaxRPM > 0 {
+				providerRPM = *pcfg.RatelimitMaxRPM
+			}
+			if pcfg.RatelimitMaxTPM != nil && *pcfg.RatelimitMaxTPM > 0 {
+				providerTPM = *pcfg.RatelimitMaxTPM
+			}
+			if providerRPM > 0 || providerTPM > 0 {
+				host := infra.ExtractHost(p.BaseURL)
+				gw.RateLimiter.SetProviderLimits(host, infra.ProviderRateLimits{
+					MaxRPM: providerRPM,
+					MaxTPM: providerTPM,
+				})
+				logger.Debug("applied per-provider rate limits",
+					"provider", name,
+					"host", host,
+					"rpm", providerRPM,
+					"tpm", providerTPM)
+			}
 		}
 	}
 	return gw

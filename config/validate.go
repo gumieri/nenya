@@ -84,6 +84,7 @@ func collectValidationErrors(ctx context.Context, cfg *Config, providers map[str
 	errors = append(errors, validatePatternsToList("governance.blocked_execution_patterns", cfg.Governance.BlockedExecutionPatterns, logger)...)
 	errors = append(errors, validateModelRegistryErrors(logger)...)
 	errors = append(errors, validateEntropyConfig(cfg.Bouncer)...)
+	errors = append(errors, validateProviderRateLimits(cfg)...)
 
 	if pingProviders {
 		errors = append(errors, validateProviders(ctx, providers, logger)...)
@@ -297,6 +298,19 @@ func calculateBackoff(attempt int) time.Duration {
 			return max
 		}
 	}
-	jitter := time.Duration(rand.Int63n(int64(delay / 10))) // 10% jitter
+	jitter := time.Duration(rand.Int63n(int64(delay / 10)))
 	return delay + jitter
+}
+
+func validateProviderRateLimits(cfg *Config) []string {
+	var errs []string
+	for name, p := range cfg.Providers {
+		if p.RatelimitMaxRPM != nil && *p.RatelimitMaxRPM < 0 {
+			errs = append(errs, fmt.Sprintf("providers[%q].ratelimit_max_rpm must be non-negative, got %d", name, *p.RatelimitMaxRPM))
+		}
+		if p.RatelimitMaxTPM != nil && *p.RatelimitMaxTPM < 0 {
+			errs = append(errs, fmt.Sprintf("providers[%q].ratelimit_max_tpm must be non-negative, got %d", name, *p.RatelimitMaxTPM))
+		}
+	}
+	return errs
 }

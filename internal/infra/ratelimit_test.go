@@ -141,11 +141,10 @@ func TestCheckRateLimitHostCapacityEviction(t *testing.T) {
 		}
 	}
 
-	// Age out all entries
 	rl.mu.Lock()
 	for _, l := range rl.limits {
 		l.mu.Lock()
-		l.lastRefill = time.Now().Add(-10 * time.Minute)
+		l.lastRefill = time.Now().Add(-staleHostThreshold)
 		l.mu.Unlock()
 	}
 	rl.mu.Unlock()
@@ -170,5 +169,113 @@ func TestRateLimiterSnapshot(t *testing.T) {
 	}
 	if s1.RPM >= 10 || s1.RPM < 8 {
 		t.Errorf("host1 RPM out of range: %f", s1.RPM)
+	}
+}
+
+func TestSetProviderLimits_OverridesBucket(t *testing.T) {
+	rl := NewRateLimiter(10, 1000)
+
+	if !rl.Check("http://fast.example.com/api", 0) {
+		t.Fatal("first request should be allowed with global limits")
+	}
+
+	rl.SetProviderLimits("fast.example.com", ProviderRateLimits{MaxRPM: 500, MaxTPM: 200000})
+
+	if !rl.Check("http://fast.example.com/api", 0) {
+		t.Fatal("request should still be allowed after limit upgrade")
+	}
+}
+
+func TestSetProviderLimits_NewHostUsesGlobalThenUpgraded(t *testing.T) {
+	rl := NewRateLimiter(2, 0)
+
+	rl.Check("http://limited.example.com/api", 0)
+	rl.Check("http://limited.example.com/api", 0)
+
+	if rl.Check("http://limited.example.com/api", 0) {
+		t.Fatal("third request should be blocked with global RPM=2")
+	}
+
+	rl.SetProviderLimits("limited.example.com", ProviderRateLimits{MaxRPM: 100, MaxTPM: 0})
+
+	rl.mu.Lock()
+	bucket := rl.limits["limited.example.com"]
+	rl.mu.Unlock()
+
+	bucket.mu.Lock()
+	bucket.lastRefill = time.Now().Add(-60 * time.Second)
+	bucket.rpmBucket = 0
+	bucket.mu.Unlock()
+
+	if !rl.Check("http://limited.example.com/api", 0) {
+		t.Fatal("request should be allowed after refill with upgraded RPM=100")
+	}
+}
+
+func TestSetProviderLimits_ZeroFallsBackToGlobal(t *testing.T) {
+	rl := NewRateLimiter(15, 5000)
+
+	rl.SetProviderLimits("fallback.example.com", ProviderRateLimits{MaxRPM: 0, MaxTPM: 0})
+
+	rl.Check("http://fallback.example.com/api", 0)
+
+	rl.mu.Lock()
+	bucket := rl.limits["fallback.example.com"]
+	rl.mu.Unlock()
+
+	bucket.mu.Lock()
+	gotRPM := bucket.maxRPM
+	gotTPM := bucket.maxTPM
+	bucket.mu.Unlock()
+
+	if gotRPM != 15 {
+		t.Errorf("expected maxRPM to fall back to global 15, got %d", gotRPM)
+	}
+	if gotTPM != 5000 {
+		t.Errorf("expected maxTPM to fall back to global 5000, got %d", gotTPM)
+	}
+}
+
+func TestSetProviderLimits_NegativeValues(t *testing.T) {
+	rl := NewRateLimiter(15, 5000)
+
+	rl.SetProviderLimits("fallback.example.com", ProviderRateLimits{MaxRPM: -5, MaxTPM: -100})
+
+	rl.Check("http://fallback.example.com/api", 0)
+
+	rl.mu.Lock()
+	bucket := rl.limits["fallback.example.com"]
+	rl.mu.Unlock()
+
+	bucket.mu.Lock()
+	gotRPM := bucket.maxRPM
+	gotTPM := bucket.maxTPM
+	bucket.mu.Unlock()
+
+	if gotRPM != 15 {
+		t.Errorf("expected maxRPM to fall back to global 15, got %d", gotRPM)
+	}
+	if gotTPM != 5000 {
+		t.Errorf("expected maxTPM to fall back to global 5000, got %d", gotTPM)
+	}
+}
+
+func TestPerProviderIsolation(t *testing.T) {
+	rl := NewRateLimiter(2, 0)
+
+	rl.SetProviderLimits("provider-a.example.com", ProviderRateLimits{MaxRPM: 2, MaxTPM: 0})
+	rl.SetProviderLimits("provider-b.example.com", ProviderRateLimits{MaxRPM: 100, MaxTPM: 0})
+
+	rl.Check("http://provider-a.example.com/api", 0)
+	rl.Check("http://provider-a.example.com/api", 0)
+
+	if rl.Check("http://provider-a.example.com/api", 0) {
+		t.Fatal("provider-a (RPM=2) should be blocked after 2 requests")
+	}
+
+	for i := 0; i < 50; i++ {
+		if !rl.Check("http://provider-b.example.com/api", 0) {
+			t.Fatalf("provider-b (RPM=100) request %d should be allowed", i+1)
+		}
 	}
 }

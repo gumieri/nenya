@@ -123,7 +123,8 @@ func (a *AgentConfig) UnmarshalJSON(data []byte) error {
 
 // ProviderConfig defines the wire-level configuration for an upstream LLM
 // provider: the endpoint URL, authentication style, API format, timeouts,
-// and retry settings. User-provided configs override built-in defaults.
+// retry settings, and per-provider rate limits. User-provided configs override
+// built-in defaults.
 type ProviderConfig struct {
 	URL                  string            `json:"url"`
 	AuthStyle            string            `json:"auth_style"`
@@ -135,6 +136,8 @@ type ProviderConfig struct {
 	Thinking             *ThinkingConfig   `json:"thinking,omitempty"`
 	APIKey               string            `json:"api_key,omitempty"`
 	Accounts             []AccountConfig   `json:"accounts,omitempty"`
+	RatelimitMaxRPM      *int              `json:"ratelimit_max_rpm,omitempty"`
+	RatelimitMaxTPM      *int              `json:"ratelimit_max_tpm,omitempty"`
 }
 
 // AccountConfig defines a single credential/account for multi-account providers.
