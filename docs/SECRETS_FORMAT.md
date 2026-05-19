@@ -302,7 +302,7 @@ Or manually create an `ApiKey` entry in JSON:
 
 The `provider_keys` object maps provider names to their API keys. See [`PROVIDERS.md`](PROVIDERS.md) for the full list of built-in providers.
 
-To add a custom provider (e.g., OpenAI):
+**Legacy single-key format:**
 
 ```json
 {
@@ -312,7 +312,51 @@ To add a custom provider (e.g., OpenAI):
 }
 ```
 
-At least one provider key must be present for the corresponding provider to work.
+**Multi-account format (recommended for high-volume providers):**
+
+For providers with multiple API keys or credentials, use the `accounts` field in the provider config instead:
+
+```json
+{
+  "providers": {
+    "openai": {
+      "url": "https://api.openai.com/v1/chat/completions",
+      "accounts": [
+        {
+          "id": "account-1",
+          "type": "apikey",
+          "credential": "sk-proj-xxxxx"
+        },
+        {
+          "id": "account-2",
+          "type": "apikey",
+          "credential": "sk-proj-yyyyy"
+        }
+      ]
+    },
+    "google": {
+      "url": "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
+      "accounts": [
+        {
+          "id": "oauth-dev",
+          "type": "oauth",
+          "credential": "ya29.a0..."
+        }
+      ]
+    }
+  }
+}
+```
+
+### Multi-Account Behavior
+
+- **LRU Selection**: Credentials are selected using least-recently-used strategy with mutex-guarded access
+- **Error Classification**: 6 error classes (auth, rate_limit, quota, capacity, server, unknown) with semantic cooldowns
+- **Exponential Backoff**: Failed accounts receive exponentially increasing backoff (±10% jitter) up to level 15
+- **Model Locks**: Individual model+provider combinations are locked during cooldown
+- **Account State Persistence**: State is persisted in `<provider>.accounts.json` files in the config directory
+
+At least one provider key must be present for the corresponding provider to work. If `accounts` is configured, it takes precedence over `provider_keys` for that provider.
 
 ## Security Notes
 

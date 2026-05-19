@@ -238,12 +238,60 @@ Each agent+provider+model combination is tracked independently by a circuit brea
 
 | State | Behavior |
 |-------|----------|
-| **Closed** | Normal operation. Tracks consecutive failures. Trips to Open after `failure_threshold` failures. |
+| **Closed** | Normal operation. Tracks consecutive failures with semantic error classification. Trips to Open after `failure_threshold` failures (or immediately for auth errors). |
 | **Open** | All requests skipped. After `cooldown_seconds`, transitions to HalfOpen. |
 | **HalfOpen** | Allows up to `halfOpenMaxRequests` (3) probe requests. All succeed → Closed. Any fail → Open. |
 | **ForceOpen** | Immediately opened (used for HTTP 429 rate limits). Extends cooldown for quota exhaustion patterns. |
 
 The circuit breaker is checked twice per target: once during target list construction (`BuildTargetList`) and again immediately before sending the request (`prepareAndSend`). This prevents sending requests to providers that tripped while queued behind other targets.
+
+### Semantic Error Classification
+
+Failures are classified into 6 error classes for appropriate circuit breaker and backoff decisions:
+
+| Error Class | HTTP Status | Backoff | Lock Behavior |
+|-------------|-------------|---------|---------------|
+| `auth` | 401, 403 | 5 min cooldown | Immediate trip to Open |
+| `rate_limit` | 429 | Exponential (500ms base, ±10% jitter) | Model-level lock with cooldown |
+| `quota` | 400 (quota messages) | Exponential (60s base) | Long cooldown, tracked separately |
+| `capacity` | 503 (capacity/overload) | Exponential (30s base) | Model-level lock |
+| `server` | 500, 502, 504 | 5s cooldown | Transient, short backoff |
+| `unknown` | Other 4xx/5xx | No backoff | No lock |
+
+`classifyHTTPError(status, body, backoffLevel)` parses provider-specific error messages for quota/capacity keywords and returns `CooldownDecision` with the appropriate class.
+
+### Exponential Backoff
+
+The `BackoffTracker` manages per-model backoff levels with capped exponential growth:
+
+- **Backoff Levels**: 0–15 (capped at max)
+- **Base Delays**: rate_limit=500ms, quota=60s, capacity=30s
+- **Jitter**: ±10% per level to prevent thundering herd
+- **Increment**: `RecordFailureWithStatus` calls `cb.Increment(model)` which increments the backoff level
+- **Reset**: `RecordSuccessWithModel` calls `cb.Reset(model)` which clears the backoff state
+- **Callback**: `SetBackoffIncrementCallback(onIncrement func(key string, level int))` for metrics emission (`nenya_backoff_level_total`)
+
+### Model-Level Locks
+
+Individual model+provider combinations can be locked (skipped) without tripping the circuit breaker:
+
+| Method | Purpose |
+|--------|---------|
+| `IsModelLocked(model)` | Check if model is in cooldown |
+| `GetModelLockUntil(model)` | Get remaining cooldown duration |
+| `UnlockModel(model)` | Manually clear a model lock |
+| `GetBackoffLevel(model)` | Query current backoff level for a model |
+
+Model locks are checked during `BuildTargetList` — locked models are skipped before dispatch. Locks are automatically cleared when `RecordSuccessWithModel` is called.
+
+### Observability
+
+- `/statsz` endpoint exposes `circuit_breakers` map with per-key state, plus `model_locks` and `backoff_level` from `SnapshotDetailed`
+- State transitions are logged: WARN on trip, INFO on recovery/probe
+- Prometheus gauges:
+  - `nenya_cb_state{key, state}` — 0/1 for Closed/Open per circuit key
+  - `nenya_cb_state_transitions_total{key, from, to}` — state change counter
+  - `nenya_backoff_level_total{key, provider, model, level}` — backoff level distribution
 
 ### Configuration
 
@@ -253,12 +301,7 @@ The circuit breaker is checked twice per target: once during target list constru
 | `success_threshold` | `success_threshold` | `1` | Consecutive successes in HalfOpen to recover |
 | `max_retries` | `max_retries` | `0` | Cap on retry attempts per request (0 = unlimited) |
 | `cooldown_seconds` | `cooldown_seconds` | `60` | Duration to wait before transitioning Open → HalfOpen |
-
-### Observability
-
-- `/statsz` endpoint exposes `circuit_breakers` map with per-key state
-- State transitions are logged: WARN on trip, INFO on recovery/probe
-- Prometheus gauge `nenya_cb_state` exposed on `/metrics`
+| `halfOpenMaxRequests` | `half_open_max_requests` | `3` | Max probe requests in HalfOpen state |
 
 ## Provider Adapter Pattern
 
@@ -278,6 +321,57 @@ The streaming pipeline is built from composable `io.Reader` and `io.Writer` wrap
 | `emptyStreamSSE` | Write to client | Emits SSE error payload when upstream returns 200 with empty body (when `empty_stream_as_error` is enabled) |
 
 Buffer pooling via `sync.Pool` (32KB buffers) reduces GC pressure under high concurrency.
+
+## Graceful Shutdown
+
+The gateway supports graceful shutdown with a configurable context deadline:
+
+### Shutdown Process
+
+1. **Signal Handling**: `SIGTERM` / `SIGINT` triggers `Shutdown(ctx)` on the gateway and proxy
+2. **In-Flight Requests**: HTTP server accepts new connections for 5s grace period, then stops accepting
+3. **Upstream Connections**: In-flight SSE streams complete normally; clients receive full responses
+4. **MCP Clients**: `Shutdown` calls `Close()` on all MCP client connections with a 10s timeout
+5. **Response Cache**: Background evictor goroutine stops
+6. **Metrics**: Final metrics flush before exit
+
+### Implementation
+
+- **Gateway**: `func (g *NenyaGateway) Shutdown(ctx context.Context) error` — closes HTTP client, MCP clients, clears secure memory
+- **Proxy**: `func (p *Proxy) Shutdown(ctx context.Context) error` — shuts down HTTP server with grace period
+- **Hot Reload**: `Reload()` uses atomic pointer swap (`atomic.StorePointer`) for zero-downtime config changes without shutdown
+
+## Debug Profiling
+
+When `debug.pprof_enabled` is `true` (default: `false`), Nenya exposes Go's `net/http/pprof` endpoints:
+
+| Endpoint | Description |
+|----------|-------------|
+| `GET /debug/pprof/` | Profiling index |
+| `GET /debug/pprof/goroutine` | Goroutine stack traces |
+| `GET /debug/pprof/heap` | Heap allocation profile |
+| `GET /debug/pprof/threadcreate` | Thread creation profile |
+| `GET /debug/pprof/block` | Goroutine blocking profile |
+| `GET /debug/pprof/mutex` | Mutex contention profile |
+| `GET /debug/pprof/allocs` | Allocation profile |
+| `GET /debug/pprof/profile?seconds=30` | CPU profile (30s capture) |
+
+**Security**: All `/debug/pprof/*` endpoints require `Authorization: Bearer <client_token>` or valid API key (same as `/v1/*`).
+
+**Configuration**:
+
+```json
+{
+  "server": {
+    "log_level": "info"
+  },
+  "debug": {
+    "pprof_enabled": false
+  }
+}
+```
+
+Enabling debug profiling is **not recommended for production** — use only during development or performance troubleshooting.
 
 ## Response Cache
 

@@ -4,7 +4,7 @@ import (
 	"log/slog"
 
 	"nenya/config"
-	"nenya/util"
+	"nenya/internal/util"
 )
 
 // TrimPayload reduces the payload's message list until its token count

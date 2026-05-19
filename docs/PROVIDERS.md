@@ -21,7 +21,7 @@ OpenAI-compatible with specific adjustments for auth, headers, or capabilities:
 
 ### Tier 3: Drop-in OpenAI-Compatible
 Zero-config integration for providers using the standard OpenAI wire format:
-- **DeepSeek**, **Mistral**, **xAI**, **Groq**, **Together**, **SambaNova**, **Cerebras**, **NVIDIA**, **GitHub**, **Qwen**, **MiniMax**, **OpenCode Zen**
+- **DeepSeek**, **Mistral**, **xAI**, **Groq**, **Together**, **SambaNova**, **Cerebras**, **NVIDIA**, **GitHub**, **Qwen**, **MiniMax**, **Moonshot**, **OpenCode Zen**
 
 ## Per-Model Wire Format (`format` attribute)
 
@@ -101,6 +101,10 @@ DeepSeek v4 models support a **thinking mode** controlled by the `thinking` para
 ### Anthropic
 - **Request**: Converts OpenAI format to Anthropic native format
   - Messages: `system` → `user`/`assistant` pair, `tool` → `user` with `tool_result` content block
+  - Consecutive OpenAI tool messages are coalesced into a single Anthropic user message with multiple `tool_result` content blocks
+  - Each `tool_call_id` is validated against `tool_use` IDs in the preceding assistant message; orphaned tool results are dropped with a warning
+  - Assistant messages with `tool_calls` are converted to `tool_use` content blocks inside the content array (required by Anthropic API — the `tool_calls` field is rejected)
+  - Empty content falls back to minimal text block to satisfy API requirements
   - Tools: OpenAI `function` tools → Anthropic tool format (with `input_schema`)
   - `tool_choice`: `"auto"` → `{"type":"auto"}`, `"required"` → `{"type":"required"}`, named tool → `{"type":"tool","name":"..."}`
   - Parameters mapped: `max_tokens`, `temperature`, `top_p`, `stop` → `stop_sequences`, `user` → `metadata.user_id`
@@ -110,6 +114,8 @@ DeepSeek v4 models support a **thinking mode** controlled by the `thinking` para
   - Usage: `input_tokens`/`output_tokens` → OpenAI usage format
 - **Auth**: `x-api-key` header + `anthropic-version: 2023-06-01`
 - **Error**: 529 treated as rate-limited (Anthropic overloaded)
+- **Tool ID Matching**: Uses positional ID matching to ensure `tool_use.id` from Anthropic responses matches correctly when clients modify `tool_call_id` format
+- **Whitespace Handling**: Whitespace-only content blocks are trimmed to prevent empty text blocks (rejected by Anthropic API)
 
 ### Gemini
 - **Request**: 

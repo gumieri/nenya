@@ -6,7 +6,7 @@
 
 A lightweight, zero-dependency AI API Gateway written in Go. Nenya sits between your AI coding clients and upstream LLM providers, adding secret redaction, context management, agent routing, and MCP tool integration — all with transparent SSE streaming. Security-hardened: non-root execution, mlock for secrets, seccomp + no-new-privileges.
 
-**Compatible with any provider that implements the OpenAI Or Anthropic Chat Completions API.** For 22 providers we ship built-in adapters with specialized handling.
+**Compatible with any provider that implements the OpenAI Or Anthropic Chat Completions API.** For 23 providers we ship built-in adapters with specialized handling.
 
 ## How Nenya handles the requests
 
@@ -76,7 +76,7 @@ Flow notes:
 ### Routing & Agents
 
 - **Config-driven provider registry** — add providers via JSON, zero code changes
-- **22 built-in providers** with specialized adapters for wire format differences
+- **23 built-in providers** with specialized adapters for wire format differences
 - **Dynamic model discovery** — fetches live model catalogs from providers at startup and on reload
 - **Model registry** — reference models by string shorthand with automatic provider/context resolution
 - **Multi-provider model resolution** — when a model exists in multiple providers, all are added to the agent's fallback chain
@@ -112,9 +112,10 @@ Flow notes:
 
 - **Zero external dependencies** — Go standard library only
 - **Hot reload** — `systemctl reload nenya` for zero-downtime config changes
-- **Circuit breaker** — per agent+provider+model with automatic failover and backoff
-- **Rate limiting** — per upstream host (RPM/TPM)
-- **Response cache** — in-memory LRU with SHA-256 fingerprinting
+- **Circuit breaker** — per agent+provider+model with automatic failover, exponential backoff, and semantic error classification
+- **Rate limiting** — per upstream host (RPM/TPM) with per-provider overrides
+- **Response cache** — in-memory LRU with SHA-256 fingerprinting and optional semantic similarity search
+- **Graceful shutdown** — 5s grace period for in-flight requests, MCP client cleanup
 
 ### MCP Tool Integration
 
@@ -252,6 +253,7 @@ API keys support **RBAC enforcement** — agent scoping, endpoint allowlists, ro
 | `GET /healthz` | None | Engine health probe |
 | `GET /statsz` | None | Token usage, circuit breaker state, MCP server status |
 | `GET /metrics` | None | Prometheus-compatible metrics |
+| `GET /debug/pprof/*` | Bearer | Go profiling endpoints (disabled by default, see `debug.pprof_enabled`) |
 
 See [`docs/PASSTHROUGH_PROXY.md`](docs/PASSTHROUGH_PROXY.md) for detailed passthrough proxy usage.
 
@@ -259,7 +261,7 @@ See [`docs/PASSTHROUGH_PROXY.md`](docs/PASSTHROUGH_PROXY.md) for detailed passth
 
 | Document | Description |
 |----------|-------------|
-| [Providers](docs/PROVIDERS.md) | All 22 providers, capabilities matrix, special behaviors, adding custom providers |
+| [Providers](docs/PROVIDERS.md) | All 23 providers, capabilities matrix, special behaviors, adding custom providers |
 | [Configuration](docs/CONFIGURATION.md) | Full config reference, directory mode, all sections and fields |
 | [Deploy Bare Metal](docs/DEPLOY_BAREMETAL.md) | Systemd unit, config.d layout, secrets, hot reload |
 | [Deploy Container](docs/DEPLOY_CONTAINER.md) | Podman/Docker Compose, image verification, security notes |

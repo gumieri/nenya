@@ -25,6 +25,8 @@ Nenya reads its configuration from a JSON file or directory (default: `/etc/neny
 
 | Variable | Effect |
 |----------|--------|
+| `PORT` | Listening port (overrides `server.listen_addr` port). Validated via `net.LookupPort` with IPv6 support. |
+| `HOST` | Optional bind address (e.g. `127.0.0.1`). Only used when combined with `PORT`. |
 | `NENYA_CONFIG_DIR` | Config root directory (`config.d/` or `config.json` inside it). Same idea as `-config-dir`. Default `/etc/nenya/` when no file mode is selected. |
 | `NENYA_CONFIG_FILE` | Single JSON config file. Same idea as `-config`. **If set, directory mode is not used** — this takes precedence over `NENYA_CONFIG_DIR`. |
 | `NENYA_SECRETS_DIR` | Secrets directory (merged `*.json` files). Used by containers; see [`SECRETS_FORMAT.md`](SECRETS_FORMAT.md). |
@@ -543,6 +545,7 @@ Upstream LLM provider registry. Built-in providers are automatically loaded from
 |------|-----|------------|
 | `gemini` | `https://generativelanguage.googleapis.com/v1beta/openai/chat/completions` | `bearer+x-goog` |
 | `deepseek` | `https://api.deepseek.com/chat/completions` | `bearer` |
+| `moonshot` | `https://api.moonshot.cn/v1/chat/completions` | `bearer` |
 | `zai` | `https://api.z.ai/api/paas/v4/chat/completions` | `bearer` |
 | `groq` | `https://api.groq.com/openai/v1/chat/completions` | `bearer` |
 | `together` | `https://api.together.xyz/v1/chat/completions` | `bearer` |
@@ -586,6 +589,11 @@ To add or override a provider:
 | `format_urls` | map[string]string | Maps wire format to endpoint URL override. Enables per-model wire format routing (e.g., `{"anthropic": "https://opencode.ai/zen/v1/messages"}`). See Per-Model Wire Format section. |
 | `timeout_seconds` | int | Per-provider timeout in seconds. For the `ollama` provider, sets the HTTP transport's `ResponseHeaderTimeout` (time-to-first-byte). For other providers, applies as a request context timeout on `/v1/embeddings` and `/v1/responses` endpoints. Also used as a fallback for engine calls (`bouncer.engine`, `window.engine`) when the engine's own `timeout_seconds` is not explicitly set. Default: `30` (transport-level). |
 | `retryable_status_codes` | []int | Provider-level override for retryable status codes. **Replaces** both global and built-in defaults for this provider. If not set, falls back to `governance.retryable_status_codes`, then built-in defaults `[429, 500, 502, 503, 504]`. |
+| `ratelimit_max_rpm` | int | Per-provider override for max requests per minute. Overrides global `governance.ratelimit_max_rpm` (default 15). |
+| `ratelimit_max_tpm` | int | Per-provider override for max tokens per minute. Overrides global `governance.ratelimit_max_tpm` (default 250000). |
+| `api_key` | string | Legacy single API key. Deprecated in favor of `accounts` for multi-account support. |
+| `accounts` | []AccountConfig | Multi-account credential pool with LRU selection and error classification. See Multi-Account Per-Provider Keys below. |
+| `thinking` | ThinkingConfig | Per-provider thinking/reasoning mode configuration for reasoning-capable models. See Thinking Configuration below. |
 
 **Note**: The `BaseURL` field is automatically derived from `url` by stripping the path component. This is used by the `/proxy/{provider}/*` passthrough endpoint to construct arbitrary provider URLs. For example, if `url` is `https://api.anthropic.com/v1/messages`, the derived `BaseURL` is `https://api.anthropic.com`, allowing passthrough to `/proxy/anthropic/v1/models`.
 
@@ -606,6 +614,159 @@ Azure OpenAI uses `api-key` header instead of `Authorization: Bearer`.
 ### Gemini `extra_content` (Thought Signatures)
 
 Gemini 3 models include `extra_content.google.thought_signature` in tool_calls responses. Nenya preserves this field (it is required for multi-turn function calling with Gemini 3) and adds the missing `index` field to comply with the OpenAI spec.
+
+### Multi-Account Per-Provider Keys
+
+For high-volume providers with multiple API keys or credentials, configure a multi-account pool for automatic LRU selection with error classification and exponential backoff.
+
+**Configuration:**
+
+```json
+{
+  "providers": {
+    "openai": {
+      "url": "https://api.openai.com/v1/chat/completions",
+      "accounts": [
+        {
+          "id": "account-1",
+          "type": "apikey",
+          "credential": "sk-proj-xxxxx"
+        },
+        {
+          "id": "account-2",
+          "type": "apikey",
+          "credential": "sk-proj-yyyyy"
+        }
+      ],
+      "ratelimit_max_rpm": 500,
+      "ratelimit_max_tpm": 2000000
+    }
+  }
+}
+```
+
+**AccountPool Behavior:**
+
+- **LRU Selection**: Uses least-recently-used strategy with mutex-protected access
+- **Error Classification**: 6 error classes (auth, rate_limit, quota, capacity, server, unknown) with semantic cooldowns
+- **Exponential Backoff**: Rate-limited and quota-exceeded accounts receive exponentially increasing backoff (±5% jitter)
+- **Model Locks**: Failed models on an account are locked until cooldown expires (tracked in `model_locks`)
+- **Graceful Degradation**: If multi-account is unavailable, falls back to legacy single-key path
+
+**Account Status Management:**
+
+Account state is persisted in `<provider>.accounts.json` files in the config directory:
+
+```json
+[
+  {
+    "id": "account-1",
+    "credential_type": "apikey",
+    "credential": "sk-proj-xxxxx",
+    "status": "active",
+    "rate_limited_until": "0001-01-01T00:00:00Z",
+    "last_used": "2025-05-19T12:00:00Z",
+    "model_locks": {},
+    "backoff_level": 0,
+    "created_at": "2025-05-19T10:00:00Z"
+  }
+]
+```
+
+**Supported Credential Types:**
+
+| Type | Description |
+|------|-------------|
+| `apikey` | Standard API key (most providers) |
+| `oauth` | OAuth bearer token |
+| `cookie` | Cookie-based authentication |
+
+**Account Status:**
+
+| Status | Behavior |
+|--------|----------|
+| `active` | Normal operation, eligible for selection |
+| `error` | Last request failed (short cooldown) |
+| `disabled` | Permanently excluded from rotation (manual intervention) |
+
+See [`SECRETS_FORMAT.md`](SECRETS_FORMAT.md) for detailed account management and error classification.
+
+### Thinking Configuration
+
+Configure thinking/reasoning mode for reasoning-capable models (e.g., DeepSeek v4, z.ai GLM, Gemini). This controls how models return structured reasoning tokens (`reasoning_content` field).
+
+**Per-Provider Configuration:**
+
+```json
+{
+  "providers": {
+    "zai": {
+      "url": "https://api.z.ai/api/paas/v4/chat/completions",
+      "thinking": {
+        "enabled": true,
+        "min": 1000,
+        "max": 32000,
+        "zero_allowed": false,
+        "dynamic_allowed": true,
+        "levels": ["low", "medium", "high", "max"]
+      }
+    },
+    "deepseek": {
+      "url": "https://api.deepseek.com/chat/completions",
+      "thinking": {
+        "enabled": true,
+        "min": 1000,
+        "max": 128000,
+        "zero_allowed": false,
+        "dynamic_allowed": false,
+        "levels": ["low", "high", "max"]
+      }
+    }
+  }
+}
+```
+
+**ThinkingConfig Fields:**
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `enabled` | bool | `true` | Enable thinking mode for reasoning-capable models on this provider. |
+| `min` | int | `1000` | Minimum reasoning tokens to request. |
+| `max` | int | `64000` | Maximum reasoning tokens allowed. |
+| `zero_allowed` | bool | `false` | Allow requests with zero reasoning tokens (disabled thinking). |
+| `dynamic_allowed` | bool | `true` | Allow dynamic adjustment of reasoning budget by the model. |
+| `levels` | []string | `["low", "medium", "high", "max"]` | Named reasoning effort levels for client selection. |
+
+**Model-Level Overrides:**
+
+Model entries can override provider defaults:
+
+```json
+{
+  "agents": {
+    "build": {
+      "models": [
+        {
+          "provider": "deepseek",
+          "model": "deepseek-v4-pro",
+          "thinking": {
+            "enabled": true,
+            "min": 5000,
+            "max": 128000,
+            "levels": ["medium", "high", "max"]
+          }
+        }
+      ]
+    }
+  }
+}
+```
+
+**Integration:**
+
+- **z.ai**: Auto-activates thinking for GLM-4.6/4.7 models; temperature defaults to 1.0 when thinking is enabled.
+- **DeepSeek**: `reasoning_content` is mandatory in multi-turn conversations with tool calls — the gateway preserves this field for reasoning providers and strips it for others.
+- **Request Sanitization**: `reasoning_content` is preserved in the shared pipeline and stripped per-target during request sanitization for providers that do not support reasoning.
 
 ## Model Registry
 
@@ -688,6 +849,7 @@ For the current catalog, query the `/v1/models` endpoint or enable [dynamic disc
 | `claude-opus-4-7` | zen | 1,000,000 | 128,000 | $5.00/M | $25.00/M |
 | `claude-opus-4-6` | zen | 1,000,000 | 128,000 | $5.00/M | $25.00/M |
 | `claude-sonnet-4-6` | zen | 1,000,000 | 64,000 | $3.00/M | $15.00/M |
+| `kimi-k2` | moonshot | 131,072 | 32,768 | $0.10/M | $0.10/M |
 
 ## Model Discovery
 
