@@ -4,6 +4,7 @@ import (
 	"log/slog"
 
 	"nenya/config"
+	"nenya/util"
 )
 
 // TrimPayload reduces the payload's message list until its token count
@@ -63,7 +64,7 @@ func TrimPayload(logger *slog.Logger, payload map[string]interface{}, maxTokens 
 		}
 	}
 
-	result := make([]interface{}, 0, len(systemMessages)+len(kept))
+	result := make([]interface{}, 0, util.AddCap(len(systemMessages), len(kept)))
 	result = append(result, systemMessages...)
 	for i := len(kept) - 1; i >= 0; i-- {
 		result = append(result, kept[i])
