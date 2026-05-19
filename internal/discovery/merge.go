@@ -51,21 +51,34 @@ func mergeModel(merged *ModelCatalog, modelID string, catalog *ModelCatalog, ove
 		return
 	}
 
-	if discovered, hasDiscovered := catalog.Lookup(modelID); hasDiscovered {
-		merged.Add(discovered)
+	entries := catalog.LookupAll(modelID)
+	seenProviders := map[string]bool{}
+	for _, dm := range entries {
+		if !seenProviders[dm.Provider] {
+			seenProviders[dm.Provider] = true
+			merged.Add(dm)
+		}
 	}
 }
 
 func mergeWithOverride(merged *ModelCatalog, modelID string, catalog *ModelCatalog, override agentOverride) {
 	static, hasStatic := config.ModelRegistry[modelID]
-	discovered, hasDiscovered := catalog.Lookup(modelID)
+	allDiscovered := catalog.LookupAll(modelID)
+
+	var discovered DiscoveredModel
+	hasDiscovered := len(allDiscovered) > 0
+	if hasDiscovered {
+		discovered = allDiscovered[0]
+	}
 
 	metadata := pickMetadata(discovered, hasDiscovered, static, hasStatic)
 
+	primaryProvider := firstNonEmpty(override.Provider,
+		pickProvider(hasStatic, static.Provider, hasDiscovered, discovered.Provider))
+
 	merged.Add(DiscoveredModel{
-		ID: modelID,
-		Provider: firstNonEmpty(override.Provider,
-			pickProvider(hasStatic, static.Provider, hasDiscovered, discovered.Provider)),
+		ID:       modelID,
+		Provider: primaryProvider,
 		Format: pickFormat(hasStatic, static.Format,
 			hasDiscovered, discovered.Format),
 		MaxContext: firstPositive(override.MaxContext,
@@ -77,17 +90,49 @@ func mergeWithOverride(merged *ModelCatalog, modelID string, catalog *ModelCatal
 		OwnedBy:  firstNonEmpty(discovered.OwnedBy, "nenya"),
 		Metadata: metadata,
 	})
+
+	seenProviders := map[string]bool{primaryProvider: true}
+	for _, dm := range allDiscovered {
+		if dm.Provider != "" && !seenProviders[dm.Provider] {
+			seenProviders[dm.Provider] = true
+			merged.Add(DiscoveredModel{
+				ID:       modelID,
+				Provider: dm.Provider,
+				Format:   dm.Format,
+				MaxContext: firstPositive(dm.MaxContext,
+					pickInt(hasDiscovered, discovered.MaxContext),
+					pickInt(hasStatic, static.MaxContext)),
+				MaxOutput: firstPositive(dm.MaxOutput,
+					pickInt(hasDiscovered, discovered.MaxOutput),
+					pickInt(hasStatic, static.MaxOutput)),
+				OwnedBy:  firstNonEmpty(dm.OwnedBy, "nenya"),
+				Metadata: metadata,
+			})
+		}
+	}
 }
 
 func mergeWithStatic(merged *ModelCatalog, modelID string, catalog *ModelCatalog, static config.ModelEntry) {
-	discovered, hasDiscovered := catalog.Lookup(modelID)
+	allDiscovered := catalog.LookupAll(modelID)
+
+	// Use the first discovered entry for metadata and format fallback.
+	// All provider entries for a model share the same metadata (merged from
+	// discovered + static capabilities/pricing) since capabilities and pricing
+	// are model-level attributes, not provider-level.
+	var discovered DiscoveredModel
+	hasDiscovered := len(allDiscovered) > 0
+	if hasDiscovered {
+		discovered = allDiscovered[0]
+	}
 
 	metadata := pickMetadata(discovered, hasDiscovered, static, true)
 
+	primaryProvider := firstNonEmpty(static.Provider,
+		pickProvider(false, "", hasDiscovered, discovered.Provider))
+
 	merged.Add(DiscoveredModel{
-		ID: modelID,
-		Provider: firstNonEmpty(static.Provider,
-			pickProvider(false, "", hasDiscovered, discovered.Provider)),
+		ID:       modelID,
+		Provider: primaryProvider,
 		Format: pickFormat(true, static.Format,
 			hasDiscovered, discovered.Format),
 		MaxContext: firstPositive(static.MaxContext,
@@ -98,16 +143,24 @@ func mergeWithStatic(merged *ModelCatalog, modelID string, catalog *ModelCatalog
 		Metadata: metadata,
 	})
 
-	if hasDiscovered && discovered.Provider != "" && discovered.Provider != static.Provider {
-		merged.Add(DiscoveredModel{
-			ID:         modelID,
-			Provider:   discovered.Provider,
-			Format:     discovered.Format,
-			MaxContext: firstPositive(discovered.MaxContext, static.MaxContext),
-			MaxOutput:  firstPositive(discovered.MaxOutput, static.MaxOutput),
-			OwnedBy:    firstNonEmpty(discovered.OwnedBy, "nenya"),
-			Metadata:   metadata,
-		})
+	seenProviders := map[string]bool{primaryProvider: true}
+	for _, dm := range allDiscovered {
+		if dm.Provider != "" && !seenProviders[dm.Provider] {
+			seenProviders[dm.Provider] = true
+			merged.Add(DiscoveredModel{
+				ID:       modelID,
+				Provider: dm.Provider,
+				Format:   dm.Format,
+				MaxContext: firstPositive(dm.MaxContext,
+					pickInt(hasDiscovered, discovered.MaxContext),
+					static.MaxContext),
+				MaxOutput: firstPositive(dm.MaxOutput,
+					pickInt(hasDiscovered, discovered.MaxOutput),
+					static.MaxOutput),
+				OwnedBy:  firstNonEmpty(dm.OwnedBy, "nenya"),
+				Metadata: metadata,
+			})
+		}
 	}
 }
 

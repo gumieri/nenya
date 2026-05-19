@@ -381,6 +381,181 @@ func TestMergeCatalog(t *testing.T) {
 	})
 }
 
+func TestMergeCatalog_PreservesAllMultiProviderEntries(t *testing.T) {
+	t.Run("discovered-only model from multiple providers", func(t *testing.T) {
+		catalog := NewModelCatalog()
+		catalog.Add(DiscoveredModel{ID: "glm-5.1", Provider: "zen", MaxContext: 100000, MaxOutput: 8192})
+		catalog.Add(DiscoveredModel{ID: "glm-5.1", Provider: "nvidia", MaxContext: 50000, MaxOutput: 4096})
+		catalog.Add(DiscoveredModel{ID: "glm-5.1", Provider: "zai", MaxContext: 200000, MaxOutput: 16384})
+		catalog.Add(DiscoveredModel{ID: "glm-5.1", Provider: "other", MaxContext: 75000, MaxOutput: 6000})
+
+		cfg := &config.Config{
+			Providers: map[string]config.ProviderConfig{},
+			Agents:    map[string]config.AgentConfig{},
+		}
+		merged := MergeCatalog(catalog, cfg)
+
+		entries := merged.LookupAll("glm-5.1")
+		if len(entries) != 4 {
+			t.Fatalf("expected 4 multi-provider entries, got %d", len(entries))
+		}
+
+		providers := make(map[string]bool)
+		for _, e := range entries {
+			providers[e.Provider] = true
+		}
+		expectedProviders := map[string]bool{"zen": true, "nvidia": true, "zai": true, "other": true}
+		for p := range expectedProviders {
+			if !providers[p] {
+				t.Errorf("missing provider %s in merged catalog", p)
+			}
+		}
+	})
+
+	t.Run("model in static registry with multiple discovered providers", func(t *testing.T) {
+		catalog := NewModelCatalog()
+		catalog.Add(DiscoveredModel{ID: "glm-5.1", Provider: "zen", MaxContext: 100000, MaxOutput: 8192})
+		catalog.Add(DiscoveredModel{ID: "glm-5.1", Provider: "nvidia", MaxContext: 50000, MaxOutput: 4096})
+		catalog.Add(DiscoveredModel{ID: "glm-5.1", Provider: "zai", MaxContext: 200000, MaxOutput: 16384})
+
+		cfg := &config.Config{
+			Providers: map[string]config.ProviderConfig{},
+			Agents:    map[string]config.AgentConfig{},
+		}
+
+		merged := MergeCatalog(catalog, cfg)
+
+		entries := merged.LookupAll("glm-5.1")
+		if len(entries) != 3 {
+			t.Fatalf("expected 3 multi-provider entries, got %d", len(entries))
+		}
+
+		providers := make(map[string]bool)
+		for _, e := range entries {
+			providers[e.Provider] = true
+		}
+		expectedProviders := map[string]bool{"zen": true, "nvidia": true, "zai": true}
+		for p := range expectedProviders {
+			if !providers[p] {
+				t.Errorf("missing provider %s in merged catalog", p)
+			}
+		}
+	})
+
+	t.Run("model with override preserves all discovered providers", func(t *testing.T) {
+		catalog := NewModelCatalog()
+		catalog.Add(DiscoveredModel{ID: "glm-5.1", Provider: "zen", MaxContext: 100000, MaxOutput: 8192})
+		catalog.Add(DiscoveredModel{ID: "glm-5.1", Provider: "nvidia", MaxContext: 50000, MaxOutput: 4096})
+		catalog.Add(DiscoveredModel{ID: "glm-5.1", Provider: "zai", MaxContext: 200000, MaxOutput: 16384})
+
+		cfg := &config.Config{
+			Agents: map[string]config.AgentConfig{
+				"test-agent": {
+					Models: []config.AgentModel{
+						{Model: "glm-5.1", Provider: "override", MaxContext: 30000},
+					},
+				},
+			},
+			Providers: map[string]config.ProviderConfig{},
+		}
+
+		merged := MergeCatalog(catalog, cfg)
+
+		entries := merged.LookupAll("glm-5.1")
+		if len(entries) != 4 {
+			t.Fatalf("expected 4 entries (1 override + 3 discovered), got %d", len(entries))
+		}
+
+		providers := make(map[string]bool)
+		for _, e := range entries {
+			providers[e.Provider] = true
+		}
+		expectedProviders := map[string]bool{"override": true, "zen": true, "nvidia": true, "zai": true}
+		for p := range expectedProviders {
+			if !providers[p] {
+				t.Errorf("missing provider %s in merged catalog", p)
+			}
+		}
+	})
+}
+
+func TestMergeCatalog_DeduplicationEdgeCases(t *testing.T) {
+	t.Run("duplicate provider in raw catalog", func(t *testing.T) {
+		catalog := NewModelCatalog()
+		catalog.Add(DiscoveredModel{ID: "nonexistent-model", Provider: "zen", MaxContext: 100000, MaxOutput: 8192})
+		catalog.Add(DiscoveredModel{ID: "nonexistent-model", Provider: "zen", MaxContext: 50000, MaxOutput: 4096})
+		catalog.Add(DiscoveredModel{ID: "nonexistent-model", Provider: "nvidia", MaxContext: 75000, MaxOutput: 6000})
+
+		cfg := &config.Config{
+			Providers: map[string]config.ProviderConfig{},
+			Agents:    map[string]config.AgentConfig{},
+		}
+		merged := MergeCatalog(catalog, cfg)
+
+		entries := merged.LookupAll("nonexistent-model")
+		if len(entries) != 2 {
+			t.Fatalf("expected 2 entries (zen + nvidia), got %d", len(entries))
+		}
+
+		providers := make(map[string]int)
+		for _, e := range entries {
+			providers[e.Provider]++
+		}
+		if providers["zen"] != 1 {
+			t.Errorf("expected 1 zen entry, got %d", providers["zen"])
+		}
+		if providers["nvidia"] != 1 {
+			t.Errorf("expected 1 nvidia entry, got %d", providers["nvidia"])
+		}
+	})
+
+	t.Run("multiple discovered providers for unregistered model", func(t *testing.T) {
+		catalog := NewModelCatalog()
+		catalog.Add(DiscoveredModel{ID: "nonexistent-model", Provider: "zen", MaxContext: 100000, MaxOutput: 8192})
+		catalog.Add(DiscoveredModel{ID: "nonexistent-model", Provider: "nvidia", MaxContext: 50000, MaxOutput: 4096})
+		catalog.Add(DiscoveredModel{ID: "nonexistent-model", Provider: "zai", MaxContext: 200000, MaxOutput: 16384})
+
+		cfg := &config.Config{
+			Providers: map[string]config.ProviderConfig{},
+			Agents:    map[string]config.AgentConfig{},
+		}
+
+		merged := MergeCatalog(catalog, cfg)
+
+		entries := merged.LookupAll("nonexistent-model")
+		if len(entries) != 3 {
+			t.Fatalf("expected 3 entries (zen + nvidia + zai), got %d", len(entries))
+		}
+
+		providers := make(map[string]int)
+		for _, e := range entries {
+			providers[e.Provider]++
+		}
+		for _, p := range []string{"zen", "nvidia", "zai"} {
+			if providers[p] != 1 {
+				t.Errorf("expected 1 %s entry, got %d", p, providers[p])
+			}
+		}
+	})
+
+	t.Run("empty provider in discovered entries preserved", func(t *testing.T) {
+		catalog := NewModelCatalog()
+		catalog.Add(DiscoveredModel{ID: "test-model", Provider: "", MaxContext: 100000})
+		catalog.Add(DiscoveredModel{ID: "test-model", Provider: "zen", MaxContext: 50000})
+
+		cfg := &config.Config{
+			Providers: map[string]config.ProviderConfig{},
+			Agents:    map[string]config.AgentConfig{},
+		}
+		merged := MergeCatalog(catalog, cfg)
+
+		entries := merged.LookupAll("test-model")
+		if len(entries) != 2 {
+			t.Fatalf("expected 2 entries (empty + zen), got %d", len(entries))
+		}
+	})
+}
+
 func TestBuildAgentOverrides(t *testing.T) {
 	t.Run("nil config", func(t *testing.T) {
 		overrides := buildAgentOverrides(nil)
