@@ -230,6 +230,37 @@ func TestBuildTargetList_TargetFields(t *testing.T) {
 	}
 }
 
+func TestBuildTargetList_SkipLockedModels(t *testing.T) {
+	p := targetProviders()
+	a := NewAgentState(testLogger(), nil)
+	agent := config.AgentConfig{
+		Models: []config.AgentModel{
+			{Provider: "deepseek", Model: "deepseek-v4-flash"},
+			{Provider: "groq", Model: "llama3.1-70b-versatile"},
+		},
+	}
+
+	// Lock the first model
+	coolKey := "my-agent:deepseek:deepseek-v4-flash"
+	a.RecordFailureWithStatus(UpstreamTarget{CoolKey: coolKey}, 429, "rate limit")
+
+	// Build target list - should skip the locked model
+	targets := a.BuildTargetList(testLogger(), "my-agent", agent, 1000, p, nil, false)
+	if len(targets) != 1 {
+		t.Fatalf("expected 1 target (locked model skipped), got %d", len(targets))
+	}
+
+	// Should only have the unlocked model
+	if targets[0].Model != "llama3.1-70b-versatile" {
+		t.Errorf("expected unlocked model, got %s", targets[0].Model)
+	}
+
+	// Verify backoff level was incremented for the locked model
+	if a.CB.GetBackoffLevel(coolKey) != 1 {
+		t.Errorf("locked model should have backoff level 1, got %d", a.CB.GetBackoffLevel(coolKey))
+	}
+}
+
 func TestActivateCooldown_Active(t *testing.T) {
 	a := NewAgentState(testLogger(), nil)
 	target := UpstreamTarget{

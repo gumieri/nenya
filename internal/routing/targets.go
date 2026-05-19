@@ -134,6 +134,12 @@ func (a *AgentState) BuildTargetList(logger *slog.Logger, agentName string, agen
 		if !ok {
 			continue
 		}
+
+		if a.CB.IsModelLocked(t.CoolKey) {
+			logger.Debug("model locked due to backoff, skipping", "model", t.Model, "provider", t.Provider)
+			continue
+		}
+
 		if a.CB.Peek(t.CoolKey) {
 			active = append(active, *t)
 		} else {
@@ -607,6 +613,13 @@ func (a *AgentState) ActiveCooldowns() int {
 // from key to state name.
 func (a *AgentState) CBSnapshot() map[string]string {
 	return a.CB.Snapshot()
+}
+
+// CBDetailedSnapshot returns a detailed snapshot including circuit states,
+// model locks, and backoff levels. Used by the /statsz endpoint for
+// observability.
+func (a *AgentState) CBDetailedSnapshot() map[string]interface{} {
+	return a.CB.SnapshotDetailed()
 }
 
 func checkCapabilities(m config.AgentModel, catalog *discovery.ModelCatalog) bool {

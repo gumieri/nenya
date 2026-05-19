@@ -534,7 +534,7 @@ func (p *Proxy) handleStats(w http.ResponseWriter) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	stats := gw.Stats.Snapshot()
-	stats["circuit_breakers"] = gw.AgentState.CBSnapshot()
+	stats["circuit_breakers"] = gw.AgentState.CBDetailedSnapshot()
 
 	mcpServers := make(map[string]interface{})
 	for name, client := range gw.MCPClients {

@@ -321,3 +321,76 @@ func TestCircuitBreaker_RecordSuccessWithModel(t *testing.T) {
 		t.Error("model lock should be cleared after success")
 	}
 }
+
+func TestCircuitBreaker_UnlockModel(t *testing.T) {
+	cb := NewCircuitBreaker(1, 1, 1, time.Hour, nil)
+	key := "agent:provider:model"
+
+	// Lock the model
+	cb.RecordFailureWithStatus(key, 429, "rate limit")
+
+	if !cb.IsModelLocked(key) {
+		t.Error("model should be locked")
+	}
+
+	// Unlock the model
+	cb.UnlockModel(key)
+
+	if cb.IsModelLocked(key) {
+		t.Error("model should be unlocked after UnlockModel")
+	}
+
+	// Backoff level should be reset
+	if cb.GetBackoffLevel(key) != 0 {
+		t.Errorf("backoff level should be 0 after unlock, got %d", cb.GetBackoffLevel(key))
+	}
+}
+
+func TestCircuitBreaker_SnapshotDetailed(t *testing.T) {
+	cb := NewCircuitBreaker(2, 1, 1, time.Minute, nil)
+	key1 := "agent1:provider1:model1"
+	key2 := "agent2:provider2:model2"
+
+	// Record failures to create circuits and locks
+	cb.RecordFailureWithStatus(key1, 429, "rate limit")
+	cb.RecordFailureWithStatus(key1, 500, "server error")
+	cb.RecordFailureWithStatus(key2, 401, "unauthorized")
+
+	snap := cb.SnapshotDetailed()
+
+	circuits, ok := snap["circuits"].(map[string]interface{})
+	if !ok {
+		t.Fatal("circuits should be a map")
+	}
+
+	if len(circuits) != 2 {
+		t.Errorf("expected 2 circuits, got %d", len(circuits))
+	}
+
+	c1, ok := circuits[key1].(map[string]interface{})
+	if !ok {
+		t.Fatal("circuit data should be a map")
+	}
+
+	if c1["state"] != "open" {
+		t.Errorf("expected circuit state 'open', got %v", c1["state"])
+	}
+
+	locks, ok := snap["model_locks"].(map[string]string)
+	if !ok {
+		t.Fatal("model_locks should be a map")
+	}
+
+	if len(locks) == 0 {
+		t.Error("expected at least one model lock")
+	}
+
+	backoffLevels, ok := snap["backoff_levels"].(map[string]int)
+	if !ok {
+		t.Fatal("backoff_levels should be a map")
+	}
+
+	if backoffLevels[key1] == 0 {
+		t.Error("expected backoff level > 0 for rate-limited model")
+	}
+}

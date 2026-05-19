@@ -128,8 +128,10 @@ func (cb *CircuitBreaker) SetBackoffIncrementCallback(fn func(key string, level 
 	cb.backoff = NewBackoffTrackerWithCallback(fn)
 }
 
-// onStateChangeMetric is called while holding the circuit mutex.
-// The callback must be fast and non-blocking (no I/O, no locks).
+// SetStateChangeMetricCallback sets a callback that is invoked when the circuit state changes.
+// The callback receives the circuit key and the old/new state strings.
+// The callback must be fast and non-blocking (no I/O, no locks) as it is invoked
+// while holding the circuit mutex.
 func (cb *CircuitBreaker) SetStateChangeMetricCallback(fn func(key, from, to string)) {
 	cb.mu.Lock()
 	defer cb.mu.Unlock()
@@ -375,7 +377,9 @@ func (cb *CircuitBreaker) RecordSuccess(key string) {
 	}
 }
 
-// RecordSuccessWithModel records a successful request and clears model lock/backoff.
+// RecordSuccessWithModel records a successful request and clears the model
+// lock and backoff. The key parameter is the circuit breaker key
+// (agent:provider:model) and model is used for lock/backoff tracking.
 func (cb *CircuitBreaker) RecordSuccessWithModel(key, model string) {
 	cb.mu.Lock()
 	defer cb.mu.Unlock()
@@ -522,4 +526,76 @@ func (cb *CircuitBreaker) GetModelLockUntil(model string) time.Time {
 		return time.Time{}
 	}
 	return until
+}
+
+// UnlockModel immediately unlocks a model, clearing its cooldown and backoff.
+// Used for manual intervention when a model has recovered before its scheduled expiry.
+func (cb *CircuitBreaker) UnlockModel(model string) {
+	if model == "" {
+		return
+	}
+
+	cb.mu.Lock()
+	defer cb.mu.Unlock()
+
+	delete(cb.modelLocks, model)
+	cb.backoff.Reset(model)
+}
+
+// GetBackoffLevel returns the current backoff level for a model.
+// Returns 0 if the backoff tracker is nil or the model has no backoff level.
+func (cb *CircuitBreaker) GetBackoffLevel(model string) int {
+	if cb.backoff == nil {
+		return 0
+	}
+	return cb.backoff.GetLevel(model)
+}
+
+// SnapshotDetailed returns a detailed snapshot including circuit states,
+// model locks, and backoff levels.
+func (cb *CircuitBreaker) SnapshotDetailed() map[string]interface{} {
+	cb.mu.Lock()
+	defer cb.mu.Unlock()
+
+	now := time.Now()
+	snap := make(map[string]interface{})
+
+	circuits := make(map[string]interface{})
+	for key, c := range cb.circuits {
+		state := c.state
+		if c.state == StateOpen && now.After(c.expiry) {
+			state = StateHalfOpen
+		}
+
+		var expiryStr string
+		if !c.expiry.IsZero() {
+			expiryStr = c.expiry.Format(time.RFC3339)
+		}
+
+		circuits[key] = map[string]interface{}{
+			"state":             state.String(),
+			"failure_count":     c.counts.ConsecutiveFailures,
+			"success_count":     c.counts.ConsecutiveSuccesses,
+			"expiry":            expiryStr,
+			"last_error":        c.LastErrorBody,
+			"last_error_status": c.LastErrorStatus,
+		}
+	}
+	snap["circuits"] = circuits
+
+	locks := make(map[string]string)
+	for model, until := range cb.modelLocks {
+		if now.Before(until) {
+			locks[model] = until.Format(time.RFC3339)
+		}
+	}
+	snap["model_locks"] = locks
+
+	backoffLevels := make(map[string]int)
+	for model, level := range cb.backoff.levels {
+		backoffLevels[model] = level
+	}
+	snap["backoff_levels"] = backoffLevels
+
+	return snap
 }
