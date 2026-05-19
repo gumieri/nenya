@@ -380,10 +380,24 @@ func (o *upstreamErrorObserver) OnSSEEvent(event stream.SSEEvent) {
 	if event.Type != "error" || o.gw == nil {
 		return
 	}
-	o.gw.Logger.Warn("upstream error event detected in stream",
-		"model", o.target.Model, "provider", o.target.Provider,
-		"error_type", fmt.Sprintf("%v", event.Data["type"]),
-		"error_message", fmt.Sprintf("%v", event.Data["message"]))
+	errData := event.Data["error"]
+	if errData == nil {
+		o.gw.Logger.Warn("upstream error event detected in stream (malformed, missing 'error' field)",
+			"model", o.target.Model, "provider", o.target.Provider,
+			"event_data", event.Data)
+		o.gw.AgentState.RecordFailure(o.target, 0)
+		return
+	}
+	if errMap, ok := errData.(map[string]any); ok {
+		o.gw.Logger.Warn("upstream error event detected in stream",
+			"model", o.target.Model, "provider", o.target.Provider,
+			"error_type", fmt.Sprintf("%v", errMap["type"]),
+			"error_message", fmt.Sprintf("%v", errMap["message"]))
+	} else {
+		o.gw.Logger.Warn("upstream error event detected in stream (malformed 'error' field)",
+			"model", o.target.Model, "provider", o.target.Provider,
+			"error_data", errData)
+	}
 	o.gw.AgentState.RecordFailure(o.target, 0)
 }
 

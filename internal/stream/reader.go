@@ -227,13 +227,18 @@ func (r *SSETransformingReader) handleScannerDone() {
 	switch r.scanner.Err() {
 	case nil:
 		if !r.sawDone {
+			slog.Warn("SSE scanner ended without [DONE] marker, injecting gateway_error",
+				"has_transformer", r.transformer != nil,
+				"scanner_error", r.scanner.Err())
 			r.injectErrorBuffer("upstream stream ended without [DONE]")
 		}
 		r.err = io.EOF
 	case bufio.ErrTooLong:
+		slog.Warn("SSE scanner error: line too long, injecting gateway_error")
 		r.injectErrorBuffer("upstream SSE line exceeded maximum scanner buffer")
 		r.err = r.scanner.Err()
 	default:
+		slog.Warn("SSE scanner error", "err", r.scanner.Err())
 		r.err = r.scanner.Err()
 	}
 }
@@ -241,6 +246,7 @@ func (r *SSETransformingReader) handleScannerDone() {
 // injectErrorBuffer creates a gateway_error SSE event + [DONE] and places it
 // in r.buffer so the client receives the error before EOF.
 func (r *SSETransformingReader) injectErrorBuffer(message string) {
+	slog.Warn("injecting gateway_error into stream", "message", message, "sawDone", r.sawDone)
 	errPayload, _ := json.Marshal(map[string]any{
 		"error": map[string]any{
 			"message": message,
@@ -443,6 +449,12 @@ func (r *SSETransformingReader) handleWithTransformer(parsed map[string]interfac
 	}
 
 	transformed = r.applyToolCallNormalization(transformed, &r.tcState)
+
+	if bytes.Equal(transformed, []byte("[DONE]")) {
+		r.sawDone = true
+		r.notifySSEObserver([]byte("data: [DONE]"), nil, "done")
+		return []byte("data: [DONE]")
+	}
 
 	if bytes.Equal(transformed, origData) && bytes.Equal(data, origData) {
 		if parsed != nil {
