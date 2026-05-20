@@ -10,9 +10,9 @@ import (
 	"strings"
 	"time"
 
-	"nenya/config"
-	"nenya/internal/gateway"
-	"nenya/internal/routing"
+	"git.0ur.uk/nenya/config"
+	"git.0ur.uk/nenya/internal/gateway"
+	"git.0ur.uk/nenya/internal/routing"
 )
 
 func (p *Proxy) handleFiles(gw *gateway.NenyaGateway, w http.ResponseWriter, r *http.Request, keyRef string) {

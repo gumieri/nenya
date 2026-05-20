@@ -5,8 +5,8 @@ import (
 	"os"
 	"testing"
 
-	"nenya/config"
-	"nenya/internal/discovery"
+	"git.0ur.uk/nenya/config"
+	"git.0ur.uk/nenya/internal/discovery"
 )
 
 func defaultSanitizeDeps() TransformDeps {

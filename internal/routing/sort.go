@@ -4,8 +4,8 @@ import (
 	"math"
 	"sort"
 
-	"nenya/internal/discovery"
-	"nenya/internal/infra"
+	"git.0ur.uk/nenya/internal/discovery"
+	"git.0ur.uk/nenya/internal/infra"
 )
 
 // SortOptions configures the weights used by balanced sorting strategies.

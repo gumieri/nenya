@@ -3,7 +3,7 @@ package pipeline
 import (
 	"testing"
 
-	"nenya/config"
+	"git.0ur.uk/nenya/config"
 )
 
 func msg(role, content string) map[string]interface{} {

@@ -6,8 +6,8 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	"nenya/config"
-	"nenya/internal/util"
+	"git.0ur.uk/nenya/config"
+	"git.0ur.uk/nenya/internal/util"
 )
 
 // Block represents a contiguous text segment, tagged as code or prose.

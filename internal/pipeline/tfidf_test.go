@@ -6,7 +6,7 @@ import (
 	"testing"
 	"unicode/utf8"
 
-	"nenya/config"
+	"git.0ur.uk/nenya/config"
 )
 
 func TestTokenize(t *testing.T) {

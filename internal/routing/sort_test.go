@@ -4,8 +4,8 @@ import (
 	"testing"
 	"time"
 
-	"nenya/internal/discovery"
-	"nenya/internal/infra"
+	"git.0ur.uk/nenya/internal/discovery"
+	"git.0ur.uk/nenya/internal/infra"
 )
 
 func TestSortTargetsByBalanced_LatencyOnly(t *testing.T) {

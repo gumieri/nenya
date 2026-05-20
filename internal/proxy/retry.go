@@ -13,12 +13,12 @@ import (
 	"strings"
 	"time"
 
-	"nenya/internal/adapter"
-	"nenya/internal/gateway"
-	"nenya/internal/infra"
-	"nenya/internal/pipeline"
-	"nenya/internal/routing"
-	"nenya/internal/util"
+	"git.0ur.uk/nenya/internal/adapter"
+	"git.0ur.uk/nenya/internal/gateway"
+	"git.0ur.uk/nenya/internal/infra"
+	"git.0ur.uk/nenya/internal/pipeline"
+	"git.0ur.uk/nenya/internal/routing"
+	"git.0ur.uk/nenya/internal/util"
 )
 
 const maxRetryBackoff = 5 * time.Second

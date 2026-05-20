@@ -10,7 +10,7 @@ import (
 	"sync"
 	"time"
 
-	"nenya/config"
+	"git.0ur.uk/nenya/config"
 )
 
 // JSONFileStorage provides JSON file-based persistence for provider accounts.

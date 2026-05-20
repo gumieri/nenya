@@ -16,8 +16,8 @@ import (
 	"sync/atomic"
 	"time"
 
-	"nenya/internal/infra"
-	"nenya/internal/util"
+	"git.0ur.uk/nenya/internal/infra"
+	"git.0ur.uk/nenya/internal/util"
 )
 
 var (

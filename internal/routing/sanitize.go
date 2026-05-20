@@ -5,8 +5,8 @@ import (
 	"math"
 	"strings"
 
-	"nenya/internal/discovery"
-	"nenya/internal/pipeline"
+	"git.0ur.uk/nenya/internal/discovery"
+	"git.0ur.uk/nenya/internal/pipeline"
 )
 
 func modelSupportsCapability(deps TransformDeps, modelName string, cap discovery.Capability) bool {

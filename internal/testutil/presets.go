@@ -1,7 +1,7 @@
 package testutil
 
 import (
-	"nenya/config"
+	"git.0ur.uk/nenya/config"
 )
 
 // MinimalConfig returns a minimal config with only required fields set.

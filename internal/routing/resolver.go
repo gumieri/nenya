@@ -3,8 +3,8 @@ package routing
 import (
 	"strings"
 
-	"nenya/config"
-	"nenya/internal/discovery"
+	"git.0ur.uk/nenya/config"
+	"git.0ur.uk/nenya/internal/discovery"
 )
 
 // UpstreamTarget represents a concrete routing target with all necessary

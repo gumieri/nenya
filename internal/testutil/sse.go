@@ -6,7 +6,7 @@ import (
 	"sync"
 	"testing"
 
-	"nenya/internal/stream"
+	"git.0ur.uk/nenya/internal/stream"
 )
 
 // SSECollector is a test double implementing stream.SSEObserver.

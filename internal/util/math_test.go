@@ -4,7 +4,7 @@ import (
 	"math"
 	"testing"
 
-	"nenya/config"
+	"git.0ur.uk/nenya/config"
 )
 
 func TestAddCap_NoOverflow(t *testing.T) {

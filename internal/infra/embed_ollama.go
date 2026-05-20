@@ -8,7 +8,7 @@ import (
 	"io"
 	"net/http"
 
-	"nenya/internal/util"
+	"git.0ur.uk/nenya/internal/util"
 )
 
 // OllamaEmbedder implements EmbeddingProvider via the Ollama /api/embed endpoint.

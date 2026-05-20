@@ -9,10 +9,10 @@ import (
 	"testing"
 	"time"
 
-	"nenya/config"
-	"nenya/internal/gateway"
-	"nenya/internal/infra"
-	"nenya/internal/routing"
+	"git.0ur.uk/nenya/config"
+	"git.0ur.uk/nenya/internal/gateway"
+	"git.0ur.uk/nenya/internal/infra"
+	"git.0ur.uk/nenya/internal/routing"
 )
 
 func TestParseRetryDelay_NoHeaderNoBody(t *testing.T) {

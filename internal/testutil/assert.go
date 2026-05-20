@@ -4,7 +4,7 @@ import (
 	"reflect"
 	"testing"
 
-	"nenya/config"
+	"git.0ur.uk/nenya/config"
 )
 
 // AssertConfigEqual asserts that two configs are equal by comparing exported fields.

@@ -5,9 +5,9 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"nenya/config"
-	"nenya/internal/gateway"
-	"nenya/internal/infra"
+	"git.0ur.uk/nenya/config"
+	"git.0ur.uk/nenya/internal/gateway"
+	"git.0ur.uk/nenya/internal/infra"
 )
 
 func derefInt(p *int) int {

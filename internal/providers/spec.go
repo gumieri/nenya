@@ -5,8 +5,8 @@ import (
 	"net/url"
 	"strings"
 
-	"nenya/internal/infra"
-	"nenya/internal/stream"
+	"git.0ur.uk/nenya/internal/infra"
+	"git.0ur.uk/nenya/internal/stream"
 )
 
 // SanitizeDeps provides the dependencies needed by provider-specific

@@ -5,7 +5,7 @@ import (
 	"log/slog"
 	"testing"
 
-	"nenya/config"
+	"git.0ur.uk/nenya/config"
 )
 
 func TestSerializeMessages(t *testing.T) {

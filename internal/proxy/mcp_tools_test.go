@@ -9,8 +9,8 @@ import (
 	"strings"
 	"testing"
 
-	"nenya/internal/gateway"
-	"nenya/internal/mcp"
+	"git.0ur.uk/nenya/internal/gateway"
+	"git.0ur.uk/nenya/internal/mcp"
 )
 
 func TestBufferStreamResponse_ContentOnly(t *testing.T) {

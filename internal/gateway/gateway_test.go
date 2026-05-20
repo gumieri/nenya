@@ -6,10 +6,10 @@ import (
 	"testing"
 	"time"
 
-	"nenya/config"
-	"nenya/internal/infra"
-	"nenya/internal/security"
-	"nenya/internal/util"
+	"git.0ur.uk/nenya/config"
+	"git.0ur.uk/nenya/internal/infra"
+	"git.0ur.uk/nenya/internal/security"
+	"git.0ur.uk/nenya/internal/util"
 )
 
 func testConfig() config.Config {

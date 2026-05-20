@@ -13,10 +13,10 @@ import (
 	"testing"
 	"time"
 
-	"nenya/config"
-	"nenya/internal/gateway"
-	"nenya/internal/proxy"
-	"nenya/internal/testutil"
+	"git.0ur.uk/nenya/config"
+	"git.0ur.uk/nenya/internal/gateway"
+	"git.0ur.uk/nenya/internal/proxy"
+	"git.0ur.uk/nenya/internal/testutil"
 )
 
 func TestParseFlags_Defaults(t *testing.T) {

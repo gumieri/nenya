@@ -10,9 +10,9 @@ import (
 	"strings"
 	"testing"
 
-	"nenya/config"
-	"nenya/internal/gateway"
-	"nenya/internal/testutil"
+	"git.0ur.uk/nenya/config"
+	"git.0ur.uk/nenya/internal/gateway"
+	"git.0ur.uk/nenya/internal/testutil"
 )
 
 // FuzzChatHandler fuzzes the chat completion handler with random JSON payloads.

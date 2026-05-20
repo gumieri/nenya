@@ -8,9 +8,9 @@ import (
 	"strings"
 	"time"
 
-	"nenya/config"
-	"nenya/internal/gateway"
-	"nenya/internal/routing"
+	"git.0ur.uk/nenya/config"
+	"git.0ur.uk/nenya/internal/gateway"
+	"git.0ur.uk/nenya/internal/routing"
 )
 
 // endpointConfig maps an API endpoint to its default provider and URL path.

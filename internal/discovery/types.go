@@ -5,7 +5,7 @@ import (
 	"log/slog"
 	"strings"
 
-	"nenya/config"
+	"git.0ur.uk/nenya/config"
 )
 
 const (

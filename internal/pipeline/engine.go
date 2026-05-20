@@ -10,8 +10,8 @@ import (
 	"net/http"
 	"time"
 
-	"nenya/config"
-	"nenya/internal/util"
+	"git.0ur.uk/nenya/config"
+	"git.0ur.uk/nenya/internal/util"
 )
 
 // MaxOllamaResponseBytes is the maximum response size accepted from the

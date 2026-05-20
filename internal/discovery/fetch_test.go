@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"nenya/config"
+	"git.0ur.uk/nenya/config"
 )
 
 func TestFetchProviderModels_RetryOnNetworkError(t *testing.T) {

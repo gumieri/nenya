@@ -9,7 +9,7 @@ import (
 	"strings"
 	"sync"
 
-	"nenya/internal/util"
+	"git.0ur.uk/nenya/internal/util"
 )
 
 type anthropicBlock struct {

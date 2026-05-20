@@ -6,7 +6,7 @@ import (
 	"sync"
 	"time"
 
-	"nenya/config"
+	"git.0ur.uk/nenya/config"
 )
 
 type SelectedAccount struct {

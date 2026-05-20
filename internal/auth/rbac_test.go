@@ -3,7 +3,7 @@ package auth
 import (
 	"testing"
 
-	"nenya/config"
+	"git.0ur.uk/nenya/config"
 )
 
 // TestNilKeySafety verifies that auth functions correctly reject nil keys.

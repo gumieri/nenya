@@ -3,8 +3,8 @@ package routing
 import (
 	"testing"
 
-	"nenya/config"
-	"nenya/internal/discovery"
+	"git.0ur.uk/nenya/config"
+	"git.0ur.uk/nenya/internal/discovery"
 )
 
 func TestResolveProviders_MultiProviderFromCatalog(t *testing.T) {

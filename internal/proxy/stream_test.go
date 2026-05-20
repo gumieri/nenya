@@ -15,12 +15,12 @@ import (
 	"testing"
 	"time"
 
-	"nenya/config"
-	"nenya/internal/gateway"
-	"nenya/internal/infra"
-	providerpkg "nenya/internal/providers"
-	"nenya/internal/routing"
-	"nenya/internal/testutil"
+	"git.0ur.uk/nenya/config"
+	"git.0ur.uk/nenya/internal/gateway"
+	"git.0ur.uk/nenya/internal/infra"
+	providerpkg "git.0ur.uk/nenya/internal/providers"
+	"git.0ur.uk/nenya/internal/routing"
+	"git.0ur.uk/nenya/internal/testutil"
 )
 
 func TestContentBuilder(t *testing.T) {

@@ -7,11 +7,11 @@ import (
 	"sync"
 	"time"
 
-	"nenya/config"
-	"nenya/internal/discovery"
-	"nenya/internal/infra"
-	"nenya/internal/resilience"
-	"nenya/internal/util"
+	"git.0ur.uk/nenya/config"
+	"git.0ur.uk/nenya/internal/discovery"
+	"git.0ur.uk/nenya/internal/infra"
+	"git.0ur.uk/nenya/internal/resilience"
+	"git.0ur.uk/nenya/internal/util"
 )
 
 // DefaultAgentCooldownSec is the default cooldown between requests to the

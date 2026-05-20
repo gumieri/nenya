@@ -11,7 +11,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"nenya/internal/version"
+	"git.0ur.uk/nenya/internal/version"
 )
 
 type Metrics struct {

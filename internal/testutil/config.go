@@ -3,7 +3,7 @@ package testutil
 import (
 	"testing"
 
-	"nenya/config"
+	"git.0ur.uk/nenya/config"
 )
 
 // DefaultConfig returns a minimal valid Config for testing.

@@ -25,8 +25,8 @@ import (
 	"net/http"
 	"strings"
 
-	"nenya/config"
-	"nenya/internal/util"
+	"git.0ur.uk/nenya/config"
+	"git.0ur.uk/nenya/internal/util"
 )
 
 const WindowSystemPrompt = `You are a conversation summarizer. Summarize the following conversation history into a concise summary.

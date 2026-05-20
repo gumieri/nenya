@@ -12,17 +12,17 @@ import (
 	"sync"
 	"time"
 
-	"nenya/config"
-	"nenya/internal/adapter"
-	"nenya/internal/auth"
-	"nenya/internal/discovery"
-	"nenya/internal/infra"
-	"nenya/internal/mcp"
-	"nenya/internal/pipeline"
-	"nenya/internal/routing"
-	"nenya/internal/security"
-	"nenya/internal/tiktoken"
-	"nenya/internal/util"
+	"git.0ur.uk/nenya/config"
+	"git.0ur.uk/nenya/internal/adapter"
+	"git.0ur.uk/nenya/internal/auth"
+	"git.0ur.uk/nenya/internal/discovery"
+	"git.0ur.uk/nenya/internal/infra"
+	"git.0ur.uk/nenya/internal/mcp"
+	"git.0ur.uk/nenya/internal/pipeline"
+	"git.0ur.uk/nenya/internal/routing"
+	"git.0ur.uk/nenya/internal/security"
+	"git.0ur.uk/nenya/internal/tiktoken"
+	"git.0ur.uk/nenya/internal/util"
 )
 
 // NenyaGateway is the top-level container that holds all gateway components:

@@ -15,7 +15,7 @@
 package discovery
 
 import (
-	"nenya/config"
+	"git.0ur.uk/nenya/config"
 )
 
 // MergeCatalog rebuilds the merged model catalog from scratch on every call.

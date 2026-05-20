@@ -9,12 +9,12 @@ import (
 	"net/http"
 	"strings"
 
-	"nenya/config"
-	"nenya/internal/adapter"
-	"nenya/internal/discovery"
-	"nenya/internal/infra"
-	"nenya/internal/pipeline"
-	providerpkg "nenya/internal/providers"
+	"git.0ur.uk/nenya/config"
+	"git.0ur.uk/nenya/internal/adapter"
+	"git.0ur.uk/nenya/internal/discovery"
+	"git.0ur.uk/nenya/internal/infra"
+	"git.0ur.uk/nenya/internal/pipeline"
+	providerpkg "git.0ur.uk/nenya/internal/providers"
 )
 
 // TransformDeps provides the dependencies needed for request payload

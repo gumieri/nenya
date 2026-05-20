@@ -12,10 +12,10 @@ import (
 	"sync"
 	"time"
 
-	"nenya/config"
-	"nenya/internal/adapter"
-	"nenya/internal/infra"
-	"nenya/internal/util"
+	"git.0ur.uk/nenya/config"
+	"git.0ur.uk/nenya/internal/adapter"
+	"git.0ur.uk/nenya/internal/infra"
+	"git.0ur.uk/nenya/internal/util"
 )
 
 const (

@@ -17,11 +17,11 @@ import (
 	"syscall"
 	"time"
 
-	"nenya/config"
-	"nenya/internal/gateway"
-	"nenya/internal/infra"
-	"nenya/internal/proxy"
-	"nenya/internal/version"
+	"git.0ur.uk/nenya/config"
+	"git.0ur.uk/nenya/internal/gateway"
+	"git.0ur.uk/nenya/internal/infra"
+	"git.0ur.uk/nenya/internal/proxy"
+	"git.0ur.uk/nenya/internal/version"
 )
 
 type configPaths struct {
