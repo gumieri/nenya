@@ -17,6 +17,7 @@ import (
 	"git.0ur.uk/nenya/internal/auth"
 	"git.0ur.uk/nenya/internal/discovery"
 	"git.0ur.uk/nenya/internal/infra"
+	"git.0ur.uk/nenya/internal/local"
 	"git.0ur.uk/nenya/internal/mcp"
 	"git.0ur.uk/nenya/internal/pipeline"
 	"git.0ur.uk/nenya/internal/routing"
@@ -29,33 +30,34 @@ import (
 // configuration, HTTP clients, provider registry, MCP clients, metrics,
 // rate limiter, caches, and the token counter.
 type NenyaGateway struct {
-	Config            config.Config
-	Client            *http.Client
-	OllamaClient      *http.Client
-	Secrets           *config.SecretsConfig
-	Providers         map[string]*config.Provider
-	RateLimiter       *infra.RateLimiter
-	SecretPatterns    []*regexp.Regexp
-	BlockedPatterns   []*regexp.Regexp
-	EntropyFilter     *pipeline.EntropyFilter
-	Stats             *infra.UsageTracker
-	Metrics           *infra.Metrics
-	Logger            *slog.Logger
-	AgentState        *routing.AgentState
-	ThoughtSigCache   *infra.ThoughtSignatureCache
-	ResponseCache     *infra.ResponseCache
-	Embedder          infra.EmbeddingProvider
-	MCPClients        map[string]*mcp.Client
-	MCPToolIndex      *mcp.ToolRegistry
-	ModelCatalog      *discovery.ModelCatalog
-	HealthRegistry    *discovery.HealthRegistry
-	LatencyTracker    *infra.LatencyTracker
-	CostTracker       *infra.CostTracker
-	AccountManager    *auth.AccountManager
-	SecureMem         *security.SecureMem
-	ClientTokenRef    security.SecureToken
-	ProviderKeyTokens map[string]security.SecureToken
-	tokMu             sync.RWMutex
+	Config             config.Config
+	Client             *http.Client
+	OllamaClient       *http.Client
+	Secrets            *config.SecretsConfig
+	Providers          map[string]*config.Provider
+	RateLimiter        *infra.RateLimiter
+	SecretPatterns     []*regexp.Regexp
+	BlockedPatterns    []*regexp.Regexp
+	EntropyFilter      *pipeline.EntropyFilter
+	Stats              *infra.UsageTracker
+	Metrics            *infra.Metrics
+	Logger             *slog.Logger
+	AgentState         *routing.AgentState
+	ThoughtSigCache    *infra.ThoughtSignatureCache
+	ResponseCache      *infra.ResponseCache
+	Embedder           infra.EmbeddingProvider
+	MCPClients         map[string]*mcp.Client
+	MCPToolIndex       *mcp.ToolRegistry
+	ModelCatalog       *discovery.ModelCatalog
+	HealthRegistry     *discovery.HealthRegistry
+	LatencyTracker     *infra.LatencyTracker
+	CostTracker        *infra.CostTracker
+	AccountManager     *auth.AccountManager
+	SecureMem          *security.SecureMem
+	ClientTokenRef     security.SecureToken
+	ProviderKeyTokens  map[string]security.SecureToken
+	LocalEngineManager *local.EngineManager
+	tokMu              sync.RWMutex
 }
 
 // New creates a new NenyaGateway with the given configuration, secrets,

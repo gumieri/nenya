@@ -120,6 +120,7 @@ func ApplyDefaults(cfg *Config) error {
 	applyCompactionDefaults(cfg)
 	applyResponseCacheDefaults(cfg)
 	applyProviderMapDefaults(cfg)
+	applyLocalEngineDefaults(cfg)
 	if err := applyAgentDefaults(cfg); err != nil {
 		return err
 	}
@@ -514,6 +515,21 @@ func applyWindowDefaults(cfg *Config) {
 	}
 	if cfg.Window.KeepLastPct == 0 {
 		cfg.Window.KeepLastPct = 30.0
+	}
+}
+
+func applyLocalEngineDefaults(cfg *Config) {
+	if cfg.LocalEngine == nil {
+		return
+	}
+	if cfg.LocalEngine.BaseURL == "" {
+		cfg.LocalEngine.BaseURL = "http://127.0.0.1:11434"
+	}
+	if cfg.LocalEngine.TimeoutSeconds == 0 {
+		cfg.LocalEngine.TimeoutSeconds = 120
+	}
+	if cfg.LocalEngine.MaxSessions == 0 {
+		cfg.LocalEngine.MaxSessions = 3
 	}
 }
 

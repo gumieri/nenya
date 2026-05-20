@@ -20,6 +20,7 @@ import (
 	"git.0ur.uk/nenya/config"
 	"git.0ur.uk/nenya/internal/gateway"
 	"git.0ur.uk/nenya/internal/infra"
+	"git.0ur.uk/nenya/internal/local"
 	"git.0ur.uk/nenya/internal/proxy"
 	"git.0ur.uk/nenya/internal/version"
 )
@@ -228,6 +229,19 @@ func run(logger *slog.Logger, cfg *config.Config, secrets *config.SecretsConfig,
 	applyListenAddrFromEnv(cfg, logger)
 
 	gw := gateway.New(startupCtx, *cfg, secrets, logger)
+
+	if cfg.LocalEngine != nil {
+		engineManager := local.NewEngineManager(cfg.LocalEngine, logger)
+		gw.LocalEngineManager = engineManager
+		gw.AgentState.LocalEngineCheck = engineManager
+		logger.Info("local engine manager initialized",
+			"base_url", cfg.LocalEngine.BaseURL,
+			"auto_load", cfg.LocalEngine.AutoLoad)
+
+		if err := engineManager.Startup(startupCtx); err != nil {
+			logger.Warn("failed to load startup models", "error", err)
+		}
+	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()

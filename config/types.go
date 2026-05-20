@@ -188,6 +188,7 @@ type Config struct {
 	MCPServers    map[string]MCPServerConfig `json:"mcp_servers,omitempty"`
 	Agents        map[string]AgentConfig     `json:"agents,omitempty"`
 	Providers     map[string]ProviderConfig  `json:"providers,omitempty"`
+	LocalEngine   *LocalEngineConfig         `json:"local_engine,omitempty"`
 }
 
 // DebugConfig controls debug and profiling features.
@@ -196,6 +197,15 @@ type DebugConfig struct {
 }
 
 func (d *DebugConfig) PprofEnabledWasSet() bool { return wasSet(d.PprofEnabled) }
+
+// LocalEngineConfig defines the configuration for the local Ollama engine lifecycle manager.
+type LocalEngineConfig struct {
+	BaseURL        string   `json:"base_url"`
+	TimeoutSeconds int      `json:"timeout_seconds"`
+	MaxSessions    int      `json:"max_sessions"`
+	AutoLoad       bool     `json:"auto_load"`
+	StartupModels  []string `json:"startup_models"`
+}
 
 // ServerConfig defines the HTTP server settings: listen address, body
 // size limits, user agent string, log level, and secure memory policy.

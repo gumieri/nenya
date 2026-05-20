@@ -30,15 +30,22 @@ const DefaultSuccessThreshold = 1
 // requests allowed while a circuit is in half-open state.
 const DefaultHalfOpenMaxRequests = 3
 
+// LocalEngineCheck provides an interface for checking local model availability
+// without creating a circular dependency on the gateway package.
+type LocalEngineCheck interface {
+	IsLoaded(modelID string) bool
+}
+
 // AgentState tracks per-model request counters, circuit breaker state,
 // and cached selector resolution results.
 type AgentState struct {
-	Counters        map[string]uint64
-	CB              *resilience.CircuitBreaker
-	Metrics         *infra.Metrics
-	mu              sync.Mutex
-	selectorCache   map[string]selectorCacheEntry
-	selectorCacheMu sync.RWMutex
+	Counters         map[string]uint64
+	CB               *resilience.CircuitBreaker
+	Metrics          *infra.Metrics
+	LocalEngineCheck LocalEngineCheck
+	mu               sync.Mutex
+	selectorCache    map[string]selectorCacheEntry
+	selectorCacheMu  sync.RWMutex
 }
 
 type selectorCacheEntry struct {
@@ -517,6 +524,28 @@ func resolveTargetFormat(model string, agentModel *config.AgentModel, catalog *d
 	return ""
 }
 
+func checkLocalModelAvailability(a *AgentState, m config.AgentModel, logger *slog.Logger) bool {
+	if m.Provider != "ollama" || a.LocalEngineCheck == nil {
+		return true
+	}
+	if !a.LocalEngineCheck.IsLoaded(m.Model) {
+		logger.Debug("local model not loaded, skipping", "provider", m.Provider, "model", m.Model)
+		return false
+	}
+	return true
+}
+
+func checkProviderAndLocal(a *AgentState, m config.AgentModel, providers map[string]*config.Provider, logger *slog.Logger) bool {
+	if m.Provider != "" {
+		provider := providers[m.Provider]
+		if provider == nil || (provider.APIKey == "" && provider.AuthStyle != "none") {
+			logger.Debug("provider has no API key, skipping model", "provider", m.Provider, "model", m.Model)
+			return false
+		}
+	}
+	return checkLocalModelAvailability(a, m, logger)
+}
+
 func (a *AgentState) buildTarget(logger *slog.Logger, agentName string, m config.AgentModel, tokenCount int, providers map[string]*config.Provider, catalog *discovery.ModelCatalog, autoContextSkip bool) (*UpstreamTarget, bool) {
 	maxCtx := resolveMaxContext(m, catalog)
 	if maxCtx > 0 && tokenCount > maxCtx {
@@ -535,12 +564,8 @@ func (a *AgentState) buildTarget(logger *slog.Logger, agentName string, m config
 		return nil, false
 	}
 
-	if m.Provider != "" {
-		provider := providers[m.Provider]
-		if provider == nil || (provider.APIKey == "" && provider.AuthStyle != "none") {
-			logger.Debug("provider has no API key, skipping model", "provider", m.Provider, "model", m.Model)
-			return nil, false
-		}
+	if !checkProviderAndLocal(a, m, providers, logger) {
+		return nil, false
 	}
 
 	maxOut := resolveMaxOutput(m, catalog)

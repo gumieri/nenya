@@ -43,6 +43,10 @@ func ValidateConfigurationWithPing(ctx context.Context, cfg *Config, secrets *Se
 		return err
 	}
 
+	if err := validateLocalEngine(ctx, cfg, pingProviders, logger); err != nil {
+		return err
+	}
+
 	errors := collectValidationErrors(ctx, cfg, providers, pingProviders, logger)
 	if len(errors) > 0 {
 		return fmt.Errorf("provider validation failed:\n  - %s", strings.Join(errors, "\n  - "))
@@ -73,6 +77,22 @@ func validateOllamaEngine(ctx context.Context, cfg *Config, providers map[string
 		return fmt.Errorf("ollama engine provider %q at %s is not reachable", cfg.Bouncer.Engine.Provider, p.URL)
 	}
 	logger.Info("Ollama engine health check passed")
+	return nil
+}
+
+func validateLocalEngine(ctx context.Context, cfg *Config, pingProviders bool, logger *slog.Logger) error {
+	if !pingProviders {
+		return nil
+	}
+	if cfg.LocalEngine == nil {
+		return nil
+	}
+
+	logger.Info("checking local engine health", "url", cfg.LocalEngine.BaseURL)
+	if !validateOllamaHealth(ctx, cfg.LocalEngine.BaseURL) {
+		return fmt.Errorf("local engine at %s is not reachable", cfg.LocalEngine.BaseURL)
+	}
+	logger.Info("local engine health check passed")
 	return nil
 }
 
