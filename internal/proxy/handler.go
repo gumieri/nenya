@@ -91,6 +91,7 @@ func (p *Proxy) resolveRoute(path string) routeHandler {
 		{false, "/debug/pprof", p.chainAuthPprof},
 		{false, "/v1/models", p.chainModels},
 		{false, "/v1/chat/completions", p.chainChat},
+		{false, "/v1/messages", p.chainChat},
 		{false, "/v1/embeddings", p.chainEmbeddings},
 		{true, "/v1/responses", p.chainResponses},
 		{true, "/proxy/", p.chainProxy},

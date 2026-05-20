@@ -45,6 +45,22 @@ func (a *AnthropicAdapter) ConvertAnthropicToOpenAIBody(anthropic map[string]int
 	return a.convertAnthropicToOpenAI(anthropic)
 }
 
+// ConvertAnthropicRequestToOpenAIBody converts an Anthropic-format request body
+// (as a parsed map) to the OpenAI chat completions format. This is the reverse
+// of ConvertOpenAIToAnthropicBody and is used when clients send Anthropic-format
+// requests to the gateway.
+func (a *AnthropicAdapter) ConvertAnthropicRequestToOpenAIBody(anthropic map[string]interface{}) map[string]interface{} {
+	return a.convertAnthropicToOpenAIRequest(anthropic)
+}
+
+// ConvertOpenAIResponseToAnthropicBody converts an OpenAI-format response
+// (as a parsed map) to the Anthropic Messages API format. This is the reverse
+// of ConvertAnthropicToOpenAIBody and is used when the gateway needs to send
+// Anthropic-format responses to clients that sent Anthropic-format requests.
+func (a *AnthropicAdapter) ConvertOpenAIResponseToAnthropicBody(openai map[string]interface{}) map[string]interface{} {
+	return a.convertOpenAIToAnthropicResponse(openai)
+}
+
 // NewAnthropicAdapter creates a new AnthropicAdapter instance.
 func NewAnthropicAdapter() *AnthropicAdapter {
 	return &AnthropicAdapter{
@@ -74,6 +90,7 @@ func (a *AnthropicAdapter) MutateRequest(body []byte, model string, stream bool)
 
 	var openai map[string]interface{}
 	if err := json.Unmarshal(body, &openai); err != nil {
+		slog.Debug("anthropic: request body is not valid JSON, passing through", "error", err)
 		return body, nil
 	}
 
@@ -94,6 +111,7 @@ func (a *AnthropicAdapter) MutateResponse(body []byte) ([]byte, error) {
 
 	var anthropic map[string]interface{}
 	if err := json.Unmarshal(body, &anthropic); err != nil {
+		slog.Debug("anthropic: response body is not valid JSON, passing through", "error", err)
 		return body, nil
 	}
 
@@ -391,7 +409,7 @@ var emptyTextBlock = map[string]interface{}{"type": "text", "text": "."}
 // into Anthropic tool_use blocks. Returns a non-empty slice guaranteed to have at
 // least one content block to satisfy Anthropic's API requirement.
 func (a *AnthropicAdapter) buildContentBlocks(msg map[string]interface{}) []interface{} {
-	var blocks []interface{}
+	blocks := make([]interface{}, 0, 2)
 
 	content := msg["content"]
 	switch c := content.(type) {
@@ -668,5 +686,622 @@ func (a *AnthropicAdapter) processUsage(anthropic, openai map[string]interface{}
 		"prompt_tokens":     usage["input_tokens"],
 		"completion_tokens": usage["output_tokens"],
 		"total_tokens":      util.AddFloat64(usage["input_tokens"], usage["output_tokens"]),
+	}
+}
+
+func (a *AnthropicAdapter) convertAnthropicToOpenAIRequest(anthropic map[string]interface{}) map[string]interface{} {
+	openai := map[string]interface{}{}
+
+	if model, ok := anthropic["model"].(string); ok {
+		openai["model"] = model
+	}
+
+	if msgs, ok := anthropic["messages"].([]interface{}); ok {
+		openai["messages"] = a.reverseConvertMessages(anthropic, msgs)
+	}
+
+	if tools, ok := anthropic["tools"].([]interface{}); ok && len(tools) > 0 {
+		openai["tools"] = a.reverseConvertTools(tools)
+	}
+
+	if tc, ok := anthropic["tool_choice"]; ok {
+		a.reverseConvertToolChoice(tc, openai)
+	}
+
+	a.copyAnthropicFields(anthropic, openai)
+
+	return openai
+}
+
+func (a *AnthropicAdapter) copyAnthropicFields(anthropic, openai map[string]interface{}) {
+	if v, ok := anthropic["max_tokens"]; ok {
+		openai["max_tokens"] = v
+	}
+	if v, ok := anthropic["temperature"]; ok {
+		openai["temperature"] = v
+	}
+	if v, ok := anthropic["top_p"]; ok {
+		openai["top_p"] = v
+	}
+	if v, ok := anthropic["top_k"]; ok {
+		openai["top_k"] = v
+	}
+	if v, ok := anthropic["stop_sequences"]; ok {
+		openai["stop"] = v
+	}
+	if v, ok := anthropic["stream"].(bool); ok {
+		openai["stream"] = v
+	}
+	if meta, ok := anthropic["metadata"].(map[string]interface{}); ok {
+		if uid, ok := meta["user_id"].(string); ok {
+			openai["user"] = uid
+		}
+	}
+}
+
+func (a *AnthropicAdapter) reverseConvertMessages(anthropic map[string]interface{}, msgs []interface{}) []interface{} {
+	var result []interface{}
+
+	if systemContent := anthropic["system"]; systemContent != nil {
+		sysMsg := a.buildOpenAISystemMessage(systemContent)
+		if sysMsg != nil {
+			result = append(result, sysMsg)
+		}
+	}
+
+	for i := 0; i < len(msgs); i++ {
+		msg, ok := msgs[i].(map[string]interface{})
+		if !ok {
+			continue
+		}
+
+		role, _ := msg["role"].(string)
+
+		if role == "user" {
+			result = a.processUserMessage(result, msgs, msg, &i)
+			continue
+		}
+
+		if role == "assistant" {
+			result = append(result, a.buildOpenAIAssistantMessage(msg))
+			continue
+		}
+
+		oMsg := map[string]interface{}{"role": role}
+		if content, ok := msg["content"]; ok {
+			oMsg["content"] = a.contentBlocksToString(content)
+		}
+		result = append(result, oMsg)
+	}
+
+	return result
+}
+
+func (a *AnthropicAdapter) processUserMessage(result []interface{}, msgs []interface{}, msg map[string]interface{}, i *int) []interface{} {
+	toolMsgs := a.extractToolResultMessages(msgs, i)
+	if len(toolMsgs) > 0 {
+		result = append(result, toolMsgs...)
+		result = a.appendRemainingUserMessage(result, msgs, i)
+		return result
+	}
+	return append(result, a.buildOpenAIUserMessage(msg))
+}
+
+func (a *AnthropicAdapter) appendRemainingUserMessage(result []interface{}, msgs []interface{}, i *int) []interface{} {
+	if *i >= len(msgs) {
+		(*i)--
+		return result
+	}
+	msg, ok := msgs[*i].(map[string]interface{})
+	if !ok {
+		(*i)--
+		return result
+	}
+	role, _ := msg["role"].(string)
+	if role == "user" {
+		return append(result, a.buildOpenAIUserMessage(msg))
+	}
+	(*i)--
+	return result
+}
+
+func (a *AnthropicAdapter) buildOpenAISystemMessage(systemContent interface{}) map[string]interface{} {
+	switch sc := systemContent.(type) {
+	case string:
+		if sc != "" {
+			return map[string]interface{}{
+				"role":    "system",
+				"content": sc,
+			}
+		}
+	case []interface{}:
+		var parts []string
+		for _, blockRaw := range sc {
+			if block, ok := blockRaw.(map[string]interface{}); ok {
+				if t, ok := block["text"].(string); ok && t != "" {
+					parts = append(parts, t)
+				}
+			}
+		}
+		if len(parts) > 0 {
+			return map[string]interface{}{
+				"role":    "system",
+				"content": strings.Join(parts, "\n\n"),
+			}
+		}
+	}
+	return nil
+}
+
+// extractToolResultMessages checks if a user message contains only tool_result
+// blocks. If so, it converts them to OpenAI tool-role messages and peeks ahead
+// for more consecutive user messages that are purely tool_results. It advances
+// *i past consumed messages and decrements if a non-tool-result user message
+// is encountered so the caller can process it.
+func (a *AnthropicAdapter) extractToolResultMessages(msgs []interface{}, i *int) []interface{} {
+	msg, ok := msgs[*i].(map[string]interface{})
+	if !ok {
+		return nil
+	}
+
+	content := msg["content"]
+	if !a.isPureToolResults(content) {
+		return nil
+	}
+
+	var result []interface{}
+	for *i < len(msgs) {
+		msg, ok := msgs[*i].(map[string]interface{})
+		if !ok {
+			break
+		}
+		role, _ := msg["role"].(string)
+		if role != "user" {
+			(*i)--
+			break
+		}
+		content := msg["content"]
+		if !a.isPureToolResults(content) {
+			(*i)--
+			break
+		}
+		result = append(result, a.convertToolResultContent(content)...)
+		(*i)++
+	}
+	return result
+}
+
+func (a *AnthropicAdapter) isPureToolResults(content interface{}) bool {
+	blocks, ok := content.([]interface{})
+	if !ok {
+		return false
+	}
+	if len(blocks) == 0 {
+		return false
+	}
+	for _, blockRaw := range blocks {
+		block, ok := blockRaw.(map[string]interface{})
+		if !ok {
+			return false
+		}
+		if typ, _ := block["type"].(string); typ != "tool_result" {
+			return false
+		}
+	}
+	return true
+}
+
+func (a *AnthropicAdapter) convertToolResultContent(content interface{}) []interface{} {
+	blocks, ok := content.([]interface{})
+	if !ok {
+		return nil
+	}
+	var result []interface{}
+	for _, blockRaw := range blocks {
+		block, ok := blockRaw.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		toolUseID, _ := block["tool_use_id"].(string)
+		toolContent := a.extractToolResultText(block["content"])
+		result = append(result, map[string]interface{}{
+			"role":         "tool",
+			"tool_call_id": toolUseID,
+			"content":      toolContent,
+		})
+	}
+	return result
+}
+
+func (a *AnthropicAdapter) extractToolResultText(content interface{}) string {
+	if content == nil {
+		return ""
+	}
+	switch c := content.(type) {
+	case string:
+		return c
+	case []interface{}:
+		var parts []string
+		for _, blockRaw := range c {
+			if block, ok := blockRaw.(map[string]interface{}); ok {
+				if typ, _ := block["type"].(string); typ == "text" {
+					if t, ok := block["text"].(string); ok {
+						parts = append(parts, t)
+					}
+				}
+			}
+		}
+		return strings.Join(parts, "\n")
+	}
+	return fmt.Sprintf("%v", content)
+}
+
+func (a *AnthropicAdapter) buildOpenAIUserMessage(msg map[string]interface{}) map[string]interface{} {
+	content := msg["content"]
+	switch c := content.(type) {
+	case string:
+		return map[string]interface{}{
+			"role":    "user",
+			"content": c,
+		}
+	case []interface{}:
+		parts := a.convertContentBlocksToOpenAI(c)
+		if text := a.extractSingleText(parts); text != nil {
+			return map[string]interface{}{
+				"role":    "user",
+				"content": *text,
+			}
+		}
+		return map[string]interface{}{
+			"role":    "user",
+			"content": parts,
+		}
+	default:
+		return map[string]interface{}{
+			"role":    "user",
+			"content": fmt.Sprintf("%v", content),
+		}
+	}
+}
+
+func (a *AnthropicAdapter) extractSingleText(parts []interface{}) *string {
+	if len(parts) != 1 {
+		return nil
+	}
+	text, ok := parts[0].(map[string]interface{})
+	if !ok {
+		return nil
+	}
+	if typ, _ := text["type"].(string); typ != "text" {
+		return nil
+	}
+	t, ok := text["text"].(string)
+	if !ok {
+		return nil
+	}
+	return &t
+}
+
+func (a *AnthropicAdapter) convertContentBlocksToOpenAI(blocks []interface{}) []interface{} {
+	var result []interface{}
+	for _, blockRaw := range blocks {
+		block, ok := blockRaw.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		bType, _ := block["type"].(string)
+		switch bType {
+		case "text":
+			if text, ok := block["text"].(string); ok {
+				result = append(result, map[string]interface{}{
+					"type": "text",
+					"text": text,
+				})
+			}
+		case "image":
+			if source, ok := block["source"].(map[string]interface{}); ok {
+				result = append(result, a.convertImageSourceToOpenAI(source))
+			}
+		case "tool_use", "tool_result":
+			continue
+		}
+	}
+	return result
+}
+
+func (a *AnthropicAdapter) convertImageSourceToOpenAI(source map[string]interface{}) map[string]interface{} {
+	if srcType, _ := source["type"].(string); srcType == "base64" {
+		mediaType, _ := source["media_type"].(string)
+		data, _ := source["data"].(string)
+		if mediaType != "" && data != "" {
+			return map[string]interface{}{
+				"type": "image_url",
+				"image_url": map[string]interface{}{
+					"url": fmt.Sprintf("data:%s;base64,%s", mediaType, data),
+				},
+			}
+		}
+	}
+	return map[string]interface{}{
+		"type":   "image",
+		"source": source,
+	}
+}
+
+func (a *AnthropicAdapter) buildOpenAIAssistantMessage(msg map[string]interface{}) map[string]interface{} {
+	textParts, toolCalls := a.extractAssistantContent(msg["content"])
+
+	oMsg := map[string]interface{}{
+		"role": "assistant",
+	}
+	if len(textParts) > 0 {
+		oMsg["content"] = strings.Join(textParts, "")
+	} else if len(toolCalls) > 0 {
+		oMsg["content"] = ""
+	}
+
+	if len(toolCalls) > 0 {
+		oMsg["tool_calls"] = toolCalls
+	}
+
+	return oMsg
+}
+
+func (a *AnthropicAdapter) extractAssistantContent(content interface{}) ([]string, []interface{}) {
+	var textParts []string
+	var toolCalls []interface{}
+
+	blocks, ok := content.([]interface{})
+	if !ok {
+		if text, ok := content.(string); ok {
+			return []string{text}, nil
+		}
+		return nil, nil
+	}
+
+	for _, blockRaw := range blocks {
+		block, ok := blockRaw.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		bType, _ := block["type"].(string)
+		switch bType {
+		case "text":
+			if t, ok := block["text"].(string); ok && t != "" {
+				textParts = append(textParts, t)
+			}
+		case "tool_use":
+			tc := a.reverseConvertToolUseBlock(block)
+			if tc != nil {
+				toolCalls = append(toolCalls, tc)
+			}
+		case "thinking", "redacted_thinking":
+			continue
+		}
+	}
+	return textParts, toolCalls
+}
+
+func (a *AnthropicAdapter) reverseConvertToolUseBlock(block map[string]interface{}) map[string]interface{} {
+	id, _ := block["id"].(string)
+	name, _ := block["name"].(string)
+
+	var argsStr string
+	if input, ok := block["input"]; ok {
+		argsBytes, err := json.Marshal(input)
+		if err == nil {
+			argsStr = string(argsBytes)
+		}
+	}
+	if argsStr == "" {
+		argsStr = "{}"
+	}
+
+	return map[string]interface{}{
+		"id":   id,
+		"type": "function",
+		"function": map[string]interface{}{
+			"name":      name,
+			"arguments": argsStr,
+		},
+	}
+}
+
+func (a *AnthropicAdapter) reverseConvertTools(tools []interface{}) []interface{} {
+	var result []interface{}
+	for _, toolRaw := range tools {
+		tool, ok := toolRaw.(map[string]interface{})
+		if !ok {
+			continue
+		}
+
+		name, _ := tool["name"].(string)
+		desc, _ := tool["description"].(string)
+
+		var params interface{}
+		if schema, ok := tool["input_schema"]; ok {
+			params = schema
+		} else {
+			params = map[string]interface{}{"type": "object", "properties": map[string]interface{}{}}
+		}
+
+		result = append(result, map[string]interface{}{
+			"type": "function",
+			"function": map[string]interface{}{
+				"name":        name,
+				"description": desc,
+				"parameters":  params,
+			},
+		})
+	}
+	return result
+}
+
+func (a *AnthropicAdapter) reverseConvertToolChoice(tc interface{}, openai map[string]interface{}) {
+	if m, ok := tc.(map[string]interface{}); ok {
+		tcType, _ := m["type"].(string)
+		switch tcType {
+		case "auto", "required":
+			openai["tool_choice"] = tcType
+		case "tool":
+			if name, ok := m["name"].(string); ok {
+				openai["tool_choice"] = map[string]interface{}{
+					"type": "function",
+					"function": map[string]interface{}{
+						"name": name,
+					},
+				}
+			}
+		}
+		return
+	}
+	if s, ok := tc.(string); ok {
+		openai["tool_choice"] = s
+	}
+}
+
+func (a *AnthropicAdapter) contentBlocksToString(content interface{}) interface{} {
+	switch c := content.(type) {
+	case string:
+		return c
+	case []interface{}:
+		var parts []string
+		for _, blockRaw := range c {
+			if block, ok := blockRaw.(map[string]interface{}); ok {
+				if typ, _ := block["type"].(string); typ == "text" {
+					if t, ok := block["text"].(string); ok {
+						parts = append(parts, t)
+					}
+				}
+			}
+		}
+		if len(parts) == 1 {
+			return parts[0]
+		}
+		if len(parts) > 1 {
+			return strings.Join(parts, "")
+		}
+	}
+	return ""
+}
+
+func (a *AnthropicAdapter) convertOpenAIToAnthropicResponse(openai map[string]interface{}) map[string]interface{} {
+	anthropic := map[string]interface{}{
+		"id":   a.extractResponseID(openai),
+		"type": "message",
+		"role": "assistant",
+	}
+
+	if model, ok := openai["model"]; ok {
+		anthropic["model"] = model
+	}
+
+	var contentBlocks []interface{}
+	var stopReason string
+
+	choices, ok := openai["choices"].([]interface{})
+	if ok && len(choices) > 0 {
+		choice, ok := choices[0].(map[string]interface{})
+		if ok {
+			contentBlocks, stopReason = a.extractOpenAIChoiceContent(choice)
+		}
+	}
+
+	if len(contentBlocks) == 0 {
+		contentBlocks = []interface{}{map[string]interface{}{"type": "text", "text": ""}}
+	}
+	anthropic["content"] = contentBlocks
+
+	if stopReason != "" {
+		anthropic["stop_reason"] = stopReason
+	}
+
+	if usage, ok := openai["usage"].(map[string]interface{}); ok {
+		anthropic["usage"] = map[string]interface{}{
+			"input_tokens":  usage["prompt_tokens"],
+			"output_tokens": usage["completion_tokens"],
+		}
+	}
+
+	return anthropic
+}
+
+func (a *AnthropicAdapter) extractResponseID(openai map[string]interface{}) string {
+	if id, ok := openai["id"].(string); ok && id != "" {
+		return id
+	}
+	return "msg_" + util.GenerateID()
+}
+
+func (a *AnthropicAdapter) extractOpenAIChoiceContent(choice map[string]interface{}) ([]interface{}, string) {
+	var contentBlocks []interface{}
+	var stopReason string
+
+	message := choice
+	if msg, ok := choice["message"].(map[string]interface{}); ok {
+		message = msg
+	}
+
+	if content, ok := message["content"].(string); ok && content != "" {
+		contentBlocks = append(contentBlocks, map[string]interface{}{
+			"type": "text",
+			"text": content,
+		})
+	}
+
+	if toolCalls, ok := message["tool_calls"].([]interface{}); ok {
+		for _, tcRaw := range toolCalls {
+			tc, ok := tcRaw.(map[string]interface{})
+			if !ok {
+				continue
+			}
+			block := a.convertToolCallToAnthropic(tc)
+			if block != nil {
+				contentBlocks = append(contentBlocks, block)
+			}
+		}
+	}
+
+	if fr, ok := choice["finish_reason"].(string); ok {
+		stopReason = a.mapFinishReason(fr)
+	}
+
+	return contentBlocks, stopReason
+}
+
+func (a *AnthropicAdapter) convertToolCallToAnthropic(tc map[string]interface{}) map[string]interface{} {
+	id, _ := tc["id"].(string)
+	fn, ok := tc["function"].(map[string]interface{})
+	if !ok {
+		return nil
+	}
+	name, _ := fn["name"].(string)
+
+	var input interface{}
+	if args, ok := fn["arguments"].(string); ok && args != "" {
+		_ = json.Unmarshal([]byte(args), &input)
+	}
+	if input == nil {
+		input = map[string]interface{}{}
+	}
+
+	return map[string]interface{}{
+		"type":  "tool_use",
+		"id":    id,
+		"name":  name,
+		"input": input,
+	}
+}
+
+func (a *AnthropicAdapter) mapFinishReason(reason string) string {
+	switch reason {
+	case "stop":
+		return "end_turn"
+	case "tool_calls":
+		return "tool_use"
+	case "length":
+		return "max_tokens"
+	default:
+		return reason
 	}
 }

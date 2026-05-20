@@ -359,3 +359,52 @@ func SliceContains(haystack []int, needle int) bool {
 	}
 	return false
 }
+
+// TransformIncomingAnthropicRequest converts an Anthropic-format request body to
+// OpenAI chat completions format. This is called when the gateway receives a request
+// from an Anthropic-native client (e.g., Claude Desktop) using the /v1/messages endpoint.
+// The converted request is then processed through the standard OpenAI-format pipeline.
+func TransformIncomingAnthropicRequest(ctx context.Context, body []byte) ([]byte, error) {
+	if len(body) == 0 {
+		return body, nil
+	}
+
+	if ctx.Err() != nil {
+		return nil, ctx.Err()
+	}
+
+	var anthropic map[string]interface{}
+	if err := json.Unmarshal(body, &anthropic); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal request: %w", err)
+	}
+
+	_, hasType := anthropic["type"]
+	_, hasMessages := anthropic["messages"]
+	if !hasType || !hasMessages {
+		return body, nil
+	}
+
+	if ctx.Err() != nil {
+		return nil, ctx.Err()
+	}
+
+	a := adapter.GetAnthropicAdapter()
+	openai := a.ConvertAnthropicRequestToOpenAIBody(anthropic)
+
+	out, err := json.Marshal(openai)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal converted OpenAI request: %w", err)
+	}
+	return out, nil
+}
+
+// ExtractField performs a lightweight JSON field extraction without full unmarshaling.
+// Returns the value and true if the field exists, nil and false otherwise.
+func ExtractField(body []byte, field string) (interface{}, bool) {
+	var data map[string]interface{}
+	if err := json.Unmarshal(body, &data); err != nil {
+		return nil, false
+	}
+	v, ok := data[field]
+	return v, ok
+}

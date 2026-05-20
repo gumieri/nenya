@@ -31,7 +31,7 @@ const (
 )
 
 // chatRequest holds the validated request data extracted from an incoming
-// /v1/chat/completions payload.
+// /v1/chat/completions or /v1/messages payload.
 type chatRequest struct {
 	Payload      map[string]any
 	ModelName    string
@@ -49,6 +49,7 @@ type chatRequest struct {
 	Profile      pipeline.ClientProfile
 	Messages     []any
 	KeyRef       string
+	SourceFormat string // "openai" or "anthropic" - indicates the original client request format
 }
 
 // httpError pairs an HTTP status code with a user-facing message.
@@ -58,6 +59,30 @@ type httpError struct {
 }
 
 func (e *httpError) Error() string { return e.Message }
+
+// parseRequestBody parses the request body and converts it to OpenAI format if needed.
+// Returns the parsed payload, source format ("openai" or "anthropic"), and an error if parsing fails.
+func (p *Proxy) parseRequestBody(gw *gateway.NenyaGateway, r *http.Request, bodyBytes []byte) (map[string]any, string, *httpError) {
+	sourceFormat := "openai"
+	if _, hasType := routing.ExtractField(bodyBytes, "type"); hasType {
+		converted, err := routing.TransformIncomingAnthropicRequest(r.Context(), bodyBytes)
+		if err != nil {
+			gw.Logger.Warn("failed to convert Anthropic request", "err", err)
+			return nil, "", &httpError{http.StatusBadRequest, "Failed to convert Anthropic format request"}
+		}
+		if converted != nil && string(converted) != string(bodyBytes) {
+			sourceFormat = "anthropic"
+			bodyBytes = converted
+		}
+	}
+
+	var payload map[string]any
+	if err := json.Unmarshal(bodyBytes, &payload); err != nil {
+		gw.Logger.Warn("failed to parse JSON, returning Bad Request")
+		return nil, "", &httpError{http.StatusBadRequest, "Invalid JSON payload"}
+	}
+	return payload, sourceFormat, nil
+}
 
 // validateChatRequest reads and validates the incoming request body,
 // returning a populated chatRequest or an httpError.
@@ -75,10 +100,9 @@ func (p *Proxy) validateChatRequest(w http.ResponseWriter, r *http.Request, gw *
 		return nil, &httpError{http.StatusRequestEntityTooLarge, "Request canceled"}
 	}
 
-	var payload map[string]any
-	if err := json.Unmarshal(bodyBytes, &payload); err != nil {
-		gw.Logger.Warn("failed to parse JSON, returning Bad Request")
-		return nil, &httpError{http.StatusBadRequest, "Invalid JSON payload"}
+	payload, sourceFormat, herr := p.parseRequestBody(gw, r, bodyBytes)
+	if herr != nil {
+		return nil, herr
 	}
 
 	modelName, ok := payload["model"].(string)
@@ -92,11 +116,12 @@ func (p *Proxy) validateChatRequest(w http.ResponseWriter, r *http.Request, gw *
 	}
 
 	req := &chatRequest{
-		Payload:    payload,
-		ModelName:  modelName,
-		TokenCount: gw.CountRequestTokens(payload),
-		Stream:     true, // Default to streaming for backward compatibility
-		KeyRef:     keyRef,
+		Payload:      payload,
+		ModelName:    modelName,
+		TokenCount:   gw.CountRequestTokens(payload),
+		Stream:       true,
+		KeyRef:       keyRef,
+		SourceFormat: sourceFormat,
 	}
 	if streamRaw, ok := payload["stream"]; ok {
 		if s, ok := streamRaw.(bool); ok {
@@ -104,7 +129,6 @@ func (p *Proxy) validateChatRequest(w http.ResponseWriter, r *http.Request, gw *
 		}
 	}
 
-	var herr *httpError
 	req.Targets, req.AgentName, req.Cooldown, req.MaxRetries, herr = p.resolveRouting(req, gw)
 	if herr != nil {
 		return nil, herr
@@ -367,29 +391,31 @@ func (p *Proxy) handleChatCompletions(gw *gateway.NenyaGateway, w http.ResponseW
 
 	if req.HasMCPTools {
 		p.forwardToUpstreamWithMCP(gw, w, r, forwardOptions{
-			Targets:    req.Targets,
-			Payload:    req.Payload,
-			Stream:     true,
-			Cooldown:   req.Cooldown,
-			TokenCount: req.TokenCount,
-			AgentName:  req.AgentName,
-			MaxRetries: req.MaxRetries,
-			CacheKey:   req.CacheKey,
-			KeyRef:     req.KeyRef,
+			Targets:      req.Targets,
+			Payload:      req.Payload,
+			Stream:       true,
+			Cooldown:     req.Cooldown,
+			TokenCount:   req.TokenCount,
+			AgentName:    req.AgentName,
+			MaxRetries:   req.MaxRetries,
+			CacheKey:     req.CacheKey,
+			KeyRef:       req.KeyRef,
+			SourceFormat: req.SourceFormat,
 		})
 		return
 	}
 
 	p.forwardToUpstream(gw, w, r, forwardOptions{
-		Targets:    req.Targets,
-		Payload:    req.Payload,
-		Stream:     req.Stream,
-		Cooldown:   req.Cooldown,
-		TokenCount: req.TokenCount,
-		AgentName:  req.AgentName,
-		MaxRetries: req.MaxRetries,
-		CacheKey:   req.CacheKey,
-		KeyRef:     req.KeyRef,
+		Targets:      req.Targets,
+		Payload:      req.Payload,
+		Stream:       req.Stream,
+		Cooldown:     req.Cooldown,
+		TokenCount:   req.TokenCount,
+		AgentName:    req.AgentName,
+		MaxRetries:   req.MaxRetries,
+		CacheKey:     req.CacheKey,
+		KeyRef:       req.KeyRef,
+		SourceFormat: req.SourceFormat,
 	})
 }
 
@@ -1891,7 +1917,7 @@ func applyRedactToContent(msgNode map[string]interface{}, redactFn func(string) 
 }
 
 // handleNonStreamingResponse buffers the full upstream response and returns it as a complete JSON object.
-func (p *Proxy) handleNonStreamingResponse(gw *gateway.NenyaGateway, w http.ResponseWriter, r *http.Request, target routing.UpstreamTarget, agentName string, action upstreamAction, cacheKey string, cooldownDuration time.Duration) streamResult {
+func (p *Proxy) handleNonStreamingResponse(gw *gateway.NenyaGateway, w http.ResponseWriter, r *http.Request, target routing.UpstreamTarget, agentName, sourceFormat string, action upstreamAction, cacheKey string, cooldownDuration time.Duration) streamResult {
 	defer action.cancel()
 
 	const maxNonStreamingResponseBytes = 10 * 1024 * 1024
@@ -1921,7 +1947,10 @@ func (p *Proxy) handleNonStreamingResponse(gw *gateway.NenyaGateway, w http.Resp
 		return streamResult{}
 	}
 
-	if target.Format == "anthropic" {
+	if sourceFormat == "anthropic" && target.Format != "anthropic" {
+		a := adapter.GetAnthropicAdapter()
+		responseMap = a.ConvertOpenAIResponseToAnthropicBody(responseMap)
+	} else if target.Format == "anthropic" {
 		a := adapter.GetAnthropicAdapter()
 		responseMap = a.ConvertAnthropicToOpenAIBody(responseMap)
 	}

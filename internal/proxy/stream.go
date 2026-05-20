@@ -278,7 +278,7 @@ func copyStream(ctx context.Context, dst io.Writer, src io.Reader, buf []byte) (
 
 // streamResponse handles streaming responses from upstream providers.
 // It sets up SSE transformation, monitors for stalls, and streams the response to the client.
-func (p *Proxy) streamResponse(gw *gateway.NenyaGateway, w http.ResponseWriter, r *http.Request, target routing.UpstreamTarget, agentName string, action upstreamAction, cacheKey string, cooldownDuration time.Duration, payload map[string]any) streamResult {
+func (p *Proxy) streamResponse(gw *gateway.NenyaGateway, w http.ResponseWriter, r *http.Request, target routing.UpstreamTarget, agentName, sourceFormat string, action upstreamAction, cacheKey string, cooldownDuration time.Duration, payload map[string]any) streamResult {
 	defer action.cancel()
 
 	// When EmptyStreamAsError is enabled, probe the upstream body before writing
@@ -312,7 +312,7 @@ func (p *Proxy) streamResponse(gw *gateway.NenyaGateway, w http.ResponseWriter, 
 	}
 	w.WriteHeader(action.resp.StatusCode)
 
-	transformingReader, contentBuilder, stallR := p.setupTransformingReader(gw, target, agentName, action, r.Context())
+	transformingReader, contentBuilder, stallR := p.setupTransformingReader(gw, target, agentName, sourceFormat, action, r.Context())
 	if transformingReader == nil {
 		return streamResult{}
 	}
@@ -326,29 +326,33 @@ func (p *Proxy) streamResponse(gw *gateway.NenyaGateway, w http.ResponseWriter, 
 	return p.handleStreamCompletion(gw, w, target, agentName, action, cacheKey, cooldownDuration, payload, buf, copyErr, captureBuf, tee, contentBuilder, stallR, r.Context())
 }
 
+// resolveTransformer selects the appropriate SSE transformer based on source format and target format.
+func (p *Proxy) resolveTransformer(gw *gateway.NenyaGateway, target routing.UpstreamTarget, sourceFormat string) stream.ResponseTransformer {
+	if sourceFormat == "anthropic" && target.Format != "anthropic" {
+		gw.Logger.Debug("SSE reverse transformer active (Anthropic client, OpenAI upstream)", "provider", target.Provider)
+		return stream.NewOpenAIToAnthropicTransformer()
+	}
+
+	if target.Format == "anthropic" {
+		gw.Logger.Debug("SSE transformer active", "provider", target.Provider, "format", target.Format)
+		return stream.NewAnthropicTransformer()
+	}
+
+	if spec, ok := providerpkg.Get(target.Provider); ok && spec.NewResponseTransformer != nil {
+		transformer := spec.NewResponseTransformer(gw.ThoughtSigCache)
+		if transformer != nil {
+			gw.Logger.Debug("SSE transformer active", "provider", target.Provider)
+		}
+		return transformer
+	}
+
+	return nil
+}
+
 // setupTransformingReader creates and configures the SSE transforming reader, content builder, and stall reader.
 // Returns the transforming reader for streaming, the content builder for post-processing, and the stall reader for cleanup.
-func (p *Proxy) setupTransformingReader(gw *gateway.NenyaGateway, target routing.UpstreamTarget, agentName string, action upstreamAction, ctx context.Context) (*stream.SSETransformingReader, *contentBuilder, *stallReader) {
-	var transformer stream.ResponseTransformer
-	switch target.Format {
-	case "anthropic":
-		transformer = stream.NewAnthropicTransformer()
-		gw.Logger.Debug("SSE transformer active", "provider", target.Provider, "format", target.Format)
-	case "gemini":
-		if spec, ok := providerpkg.Get(target.Provider); ok && spec.NewResponseTransformer != nil {
-			transformer = spec.NewResponseTransformer(gw.ThoughtSigCache)
-			if transformer != nil {
-				gw.Logger.Debug("SSE transformer active", "provider", target.Provider)
-			}
-		}
-	default:
-		if spec, ok := providerpkg.Get(target.Provider); ok && spec.NewResponseTransformer != nil {
-			transformer = spec.NewResponseTransformer(gw.ThoughtSigCache)
-			if transformer != nil {
-				gw.Logger.Debug("SSE transformer active", "provider", target.Provider)
-			}
-		}
-	}
+func (p *Proxy) setupTransformingReader(gw *gateway.NenyaGateway, target routing.UpstreamTarget, agentName, sourceFormat string, action upstreamAction, ctx context.Context) (*stream.SSETransformingReader, *contentBuilder, *stallReader) {
+	transformer := p.resolveTransformer(gw, target, sourceFormat)
 
 	stallR := newStallReader(ctx, action.resp.Body, streamIdleTimeout)
 

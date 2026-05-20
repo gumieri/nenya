@@ -2,6 +2,7 @@ package adapter
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -602,16 +603,315 @@ func TestAnthropicAdapter_GetAnthropicAdapter(t *testing.T) {
 	}
 }
 
-func TestGenerateID(t *testing.T) {
-	id := generateID()
-	if len(id) != 24 {
-		t.Errorf("expected ID length 24, got %d", len(id))
+func TestAnthropicAdapter_ConvertAnthropicRequestToOpenAIBody_Basic(t *testing.T) {
+	a := NewAnthropicAdapter()
+	anthropic := map[string]interface{}{
+		"type":    "message",
+		"model":   "claude-3-opus",
+		"stream":  true,
+		"messages": []interface{}{
+			map[string]interface{}{
+				"role":    "user",
+				"content": []interface{}{
+					map[string]interface{}{"type": "text", "text": "hello"},
+				},
+			},
+		},
+	}
+
+	openai := a.ConvertAnthropicRequestToOpenAIBody(anthropic)
+
+	if openai["model"] != "claude-3-opus" {
+		t.Errorf("expected model 'claude-3-opus', got %v", openai["model"])
+	}
+	if openai["stream"] != true {
+		t.Error("expected stream=true")
+	}
+	msgs := openai["messages"].([]interface{})
+	if len(msgs) != 1 {
+		t.Fatalf("expected 1 message, got %d", len(msgs))
+	}
+	msg := msgs[0].(map[string]interface{})
+	if msg["role"] != "user" {
+		t.Errorf("expected role 'user', got %v", msg["role"])
+	}
+}
+
+func TestAnthropicAdapter_ConvertAnthropicRequestToOpenAIBody_SystemPrompt(t *testing.T) {
+	a := NewAnthropicAdapter()
+	anthropic := map[string]interface{}{
+		"type":    "message",
+		"model":   "claude-3-opus",
+		"stream":  false,
+		"system":  "You are helpful.",
+		"messages": []interface{}{
+			map[string]interface{}{
+				"role":    "user",
+				"content": "hi",
+			},
+		},
+	}
+
+	openai := a.ConvertAnthropicRequestToOpenAIBody(anthropic)
+
+	msgs := openai["messages"].([]interface{})
+	if len(msgs) != 2 {
+		t.Fatalf("expected 2 messages (system + user), got %d", len(msgs))
+	}
+	sysMsg := msgs[0].(map[string]interface{})
+	if sysMsg["role"] != "system" || sysMsg["content"] != "You are helpful." {
+		t.Errorf("system message not converted correctly: %v", sysMsg)
+	}
+}
+
+func TestAnthropicAdapter_ConvertOpenAIResponseToAnthropicBody_Basic(t *testing.T) {
+	a := NewAnthropicAdapter()
+	openai := map[string]interface{}{
+		"id": "chatcmpl-123",
+		"object":  "chat.completion",
+		"created": 0,
+		"model":   "gpt-4",
+		"choices": []interface{}{
+			map[string]interface{}{
+				"index": 0,
+				"delta": map[string]interface{}{
+					"content": "Hello!",
+				},
+				"finish_reason": "stop",
+			},
+		},
+		"usage": map[string]interface{}{
+			"prompt_tokens":     10,
+			"completion_tokens": 5,
+			"total_tokens":      15,
+		},
+	}
+
+	anthropic := a.ConvertOpenAIResponseToAnthropicBody(openai)
+
+	if anthropic["type"] != "message" {
+		t.Errorf("expected type 'message', got %v", anthropic["type"])
+	}
+	if anthropic["role"] != "assistant" {
+		t.Errorf("expected role 'assistant', got %v", anthropic["role"])
+	}
+	stopReason := anthropic["stop_reason"].(string)
+	if stopReason != "end_turn" {
+		t.Errorf("expected stop_reason 'end_turn', got %s", stopReason)
+	}
+}
+
+func TestAnthropicAdapter_ConvertOpenAIResponseToAnthropicBody_ToolCalls(t *testing.T) {
+	a := NewAnthropicAdapter()
+	openai := map[string]interface{}{
+		"id":     "chatcmpl-123",
+		"object": "chat.completion",
+		"model":  "gpt-4",
+		"choices": []interface{}{
+			map[string]interface{}{
+				"index": 0,
+				"delta": map[string]interface{}{},
+				"finish_reason": "tool_calls",
+			},
+		},
+		"usage": map[string]interface{}{
+			"prompt_tokens": 10,
+			"completion_tokens": 20,
+		},
+	}
+
+	anthropic := a.ConvertOpenAIResponseToAnthropicBody(openai)
+
+	if anthropic["stop_reason"] != "tool_use" {
+		t.Errorf("expected stop_reason 'tool_use', got %v", anthropic["stop_reason"])
+	}
+}
+
+func TestAnthropicAdapter_ConvertAnthropicRequestToOpenAIBody_EdgeCases(t *testing.T) {
+	a := NewAnthropicAdapter()
+
+	tests := []struct {
+		name    string
+		input   map[string]interface{}
+		want    func(map[string]interface{}) error
+	}{
+		{
+			name: "system_prompt_array",
+			input: map[string]interface{}{
+				"type":    "message",
+				"model":   "claude-3",
+				"system":  []interface{}{map[string]interface{}{"type": "text", "text": "Part one."}, map[string]interface{}{"type": "text", "text": "Part two."}},
+				"messages": []interface{}{map[string]interface{}{"role": "user", "content": "hi"}},
+			},
+			want: func(openai map[string]interface{}) error {
+				msgs := openai["messages"].([]interface{})
+				sysMsg := msgs[0].(map[string]interface{})
+				if sysMsg["role"] != "system" {
+					return fmt.Errorf("expected system role, got %v", sysMsg["role"])
+				}
+				sysContent := sysMsg["content"].(string)
+				if !strings.Contains(sysContent, "Part one.") || !strings.Contains(sysContent, "Part two.") {
+					return fmt.Errorf("system content should contain both parts, got %q", sysContent)
+				}
+				return nil
+			},
+		},
+		{
+			name: "tool_choice_specific_function",
+			input: map[string]interface{}{
+				"type":    "message",
+				"model":   "claude-3",
+				"messages": []interface{}{map[string]interface{}{"role": "user", "content": "hi"}},
+				"tool_choice": map[string]interface{}{"type": "tool", "name": "get_weather"},
+			},
+			want: func(openai map[string]interface{}) error {
+				tc := openai["tool_choice"].(map[string]interface{})
+				if tc["type"] != "function" {
+					return fmt.Errorf("expected tool_choice type 'function', got %v", tc["type"])
+				}
+				fn := tc["function"].(map[string]interface{})
+				if fn["name"] != "get_weather" {
+					return fmt.Errorf("expected function name 'get_weather', got %v", fn["name"])
+				}
+				return nil
+			},
+		},
+		{
+			name: "tool_choice_auto",
+			input: map[string]interface{}{
+				"type":    "message",
+				"model":   "claude-3",
+				"messages": []interface{}{map[string]interface{}{"role": "user", "content": "hi"}},
+				"tool_choice": map[string]interface{}{"type": "auto"},
+			},
+			want: func(openai map[string]interface{}) error {
+				if openai["tool_choice"] != "auto" {
+					return fmt.Errorf("expected tool_choice 'auto', got %v", openai["tool_choice"])
+				}
+				return nil
+			},
+		},
+		{
+			name: "stop_sequences",
+			input: map[string]interface{}{
+				"type":    "message",
+				"model":   "claude-3",
+				"messages": []interface{}{map[string]interface{}{"role": "user", "content": "hi"}},
+				"stop_sequences": []interface{}{"\n\n", "."},
+			},
+			want: func(openai map[string]interface{}) error {
+				stop := openai["stop"].([]interface{})
+				if len(stop) != 2 {
+					return fmt.Errorf("expected 2 stop sequences, got %d", len(stop))
+				}
+				return nil
+			},
+		},
+		{
+			name: "max_tokens",
+			input: map[string]interface{}{
+				"type":    "message",
+				"model":   "claude-3",
+				"messages": []interface{}{map[string]interface{}{"role": "user", "content": "hi"}},
+				"max_tokens": float64(4096),
+			},
+			want: func(openai map[string]interface{}) error {
+				if openai["max_tokens"] != float64(4096) {
+					return fmt.Errorf("expected max_tokens 4096, got %v", openai["max_tokens"])
+				}
+				return nil
+			},
+		},
+		{
+			name: "tools_conversion",
+			input: map[string]interface{}{
+				"type":    "message",
+				"model":   "claude-3",
+				"messages": []interface{}{map[string]interface{}{"role": "user", "content": "hi"}},
+				"tools": []interface{}{
+					map[string]interface{}{
+						"name":        "get_weather",
+						"description": "Get weather",
+						"input_schema": map[string]interface{}{"type": "object"},
+					},
+				},
+			},
+			want: func(openai map[string]interface{}) error {
+				tools := openai["tools"].([]interface{})
+				if len(tools) != 1 {
+					return fmt.Errorf("expected 1 tool, got %d", len(tools))
+				}
+				tool := tools[0].(map[string]interface{})
+				if tool["type"] != "function" {
+					return fmt.Errorf("expected tool type 'function', got %v", tool["type"])
+				}
+				fn := tool["function"].(map[string]interface{})
+				if fn["name"] != "get_weather" {
+					return fmt.Errorf("expected function name 'get_weather', got %v", fn["name"])
+				}
+				if fn["parameters"] == nil {
+					return fmt.Errorf("expected parameters to be set")
+				}
+				return nil
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			openai := a.ConvertAnthropicRequestToOpenAIBody(tt.input)
+			if err := tt.want(openai); err != nil {
+				t.Error(err)
+			}
+		})
+	}
+}
+
+func TestAnthropicAdapter_ConvertOpenAIResponseToAnthropicBody_FinishReasons(t *testing.T) {
+	a := NewAnthropicAdapter()
+
+	tests := []struct {
+		name         string
+		finishReason string
+		wantStop     string
+	}{
+		{"stop_to_end_turn", "stop", "end_turn"},
+		{"tool_calls_to_tool_use", "tool_calls", "tool_use"},
+		{"length_to_max_tokens", "length", "max_tokens"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			openai := map[string]interface{}{
+				"id":     "chatcmpl-123",
+				"object": "chat.completion",
+				"model":  "gpt-4",
+				"choices": []interface{}{
+					map[string]interface{}{
+						"index":         0,
+						"delta":         map[string]interface{}{},
+						"finish_reason": tt.finishReason,
+					},
+				},
+			}
+			anthropic := a.ConvertOpenAIResponseToAnthropicBody(openai)
+			if anthropic["stop_reason"] != tt.wantStop {
+				t.Errorf("expected stop_reason %q, got %v", tt.wantStop, anthropic["stop_reason"])
+			}
+		})
 	}
 }
 
 // generateID is a simple deterministic ID generator for testing
 func generateID() string {
 	return "test12345678901234567890"
+}
+
+func TestGenerateID(t *testing.T) {
+	id := generateID()
+	if len(id) != 24 {
+		t.Errorf("expected ID length 24, got %d", len(id))
+	}
 }
 
 func TestAnthropicAdapter_MutateRequest_AssistantWithTextAndToolCalls(t *testing.T) {

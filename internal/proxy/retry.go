@@ -100,15 +100,16 @@ func (p *Proxy) doUpstreamRoundTrip(ctx context.Context, gw *gateway.NenyaGatewa
 
 // forwardOptions holds the parameters for forwarding a request upstream.
 type forwardOptions struct {
-	Targets    []routing.UpstreamTarget
-	Payload    map[string]any
-	Stream     bool
-	Cooldown   time.Duration
-	TokenCount int
-	AgentName  string
-	MaxRetries int
-	CacheKey   string
-	KeyRef     string
+	Targets      []routing.UpstreamTarget
+	Payload      map[string]any
+	Stream       bool
+	Cooldown     time.Duration
+	TokenCount   int
+	AgentName    string
+	MaxRetries   int
+	CacheKey     string
+	KeyRef       string
+	SourceFormat string
 }
 
 // retryLoop encapsulates the state and logic for retrying upstream requests.
@@ -168,7 +169,7 @@ func (rl *retryLoop) handleActionResult(i int, target routing.UpstreamTarget, ac
 		}
 		return false
 	case actionStream:
-		result := rl.p.streamResponse(rl.gw, rl.w, rl.r, target, rl.opts.AgentName, action, rl.opts.CacheKey, rl.opts.Cooldown, rl.opts.Payload)
+		result := rl.p.streamResponse(rl.gw, rl.w, rl.r, target, rl.opts.AgentName, rl.opts.SourceFormat, action, rl.opts.CacheKey, rl.opts.Cooldown, rl.opts.Payload)
 		if result.empty {
 			rl.ctxLogger.Warn("empty stream from upstream, trying next target",
 				"model", target.Model, "provider", target.Provider)
@@ -176,7 +177,7 @@ func (rl *retryLoop) handleActionResult(i int, target routing.UpstreamTarget, ac
 		}
 		return true
 	case actionResponse:
-		result := rl.p.handleNonStreamingResponse(rl.gw, rl.w, rl.r, target, rl.opts.AgentName, action, rl.opts.CacheKey, rl.opts.Cooldown)
+		result := rl.p.handleNonStreamingResponse(rl.gw, rl.w, rl.r, target, rl.opts.AgentName, rl.opts.SourceFormat, action, rl.opts.CacheKey, rl.opts.Cooldown)
 		if result.empty {
 			rl.ctxLogger.Warn("empty non-streaming response from upstream, trying next target",
 				"model", target.Model, "provider", target.Provider)
