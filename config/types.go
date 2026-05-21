@@ -250,6 +250,7 @@ type GovernanceConfig struct {
 	AutoContextSkip          *bool    `json:"auto_context_skip,omitempty"`
 	AutoReorderByLatency     *bool    `json:"auto_reorder_by_latency,omitempty"`
 	HalfOpenMaxRequests      int      `json:"half_open_max_requests,omitempty"`
+	AutoRetryOnContextLimit  *bool    `json:"auto_retry_on_context_limit,omitempty"`
 }
 
 func (g *GovernanceConfig) RPMSet() bool                  { return wasSet(g.RatelimitMaxRPM) }
@@ -263,6 +264,10 @@ func (g *GovernanceConfig) EffectiveMaxRetryAttempts() int {
 		return g.MaxRetryAttempts
 	}
 	return 3
+}
+
+func (g *GovernanceConfig) AutoRetryOnContextLimitEnabled() bool {
+	return g.AutoRetryOnContextLimit != nil && *g.AutoRetryOnContextLimit
 }
 
 // SecretsConfig holds sensitive credentials loaded from systemd credential

@@ -3,6 +3,8 @@ package resilience
 import (
 	"strings"
 	"time"
+
+	"git.0ur.uk/nenya/internal/util"
 )
 
 // ErrorClass represents the semantic category of an error response.
@@ -19,6 +21,8 @@ const (
 	ErrorClassCapacity ErrorClass = "capacity"
 	// ErrorClassServer indicates generic server errors (5xx).
 	ErrorClassServer ErrorClass = "server"
+	// ErrorClassContextLimit indicates context length exceeded errors.
+	ErrorClassContextLimit ErrorClass = "context_limit"
 	// ErrorClassUnknown indicates unclassified errors.
 	ErrorClassUnknown ErrorClass = "unknown"
 )
@@ -75,6 +79,27 @@ func classifyHTTPError(status int, body string, backoffLevel int) CooldownDecisi
 				ShouldLock:       true,
 				Cooldown:         cooldown,
 				IncrementBackoff: true,
+			}
+		}
+		if util.IsContextLengthError(status, body) {
+			return CooldownDecision{
+				Class:      ErrorClassContextLimit,
+				ShouldLock: false,
+				Cooldown:   0,
+			}
+		}
+		return CooldownDecision{
+			Class:      ErrorClassUnknown,
+			ShouldLock: false,
+			Cooldown:   5 * time.Second,
+		}
+
+	case status == 413 || status == 422:
+		if util.IsContextLengthError(status, body) {
+			return CooldownDecision{
+				Class:      ErrorClassContextLimit,
+				ShouldLock: false,
+				Cooldown:   0,
 			}
 		}
 		return CooldownDecision{

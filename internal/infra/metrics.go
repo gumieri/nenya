@@ -79,6 +79,10 @@ type Metrics struct {
 	cbStateTransitions    sync.Map
 	mcpActiveGoroutines   atomic.Int64
 
+	// Context-limit and summarization retry metrics
+	contextLimitErrors   sync.Map
+	summarizationRetries sync.Map
+
 	RateLimits func() map[string]*RateLimitSnapshot
 	Cooldowns  func() (active int)
 	CBStates   func() map[string]string
@@ -532,6 +536,32 @@ func (m *Metrics) DecMCPActiveGoroutines() {
 	m.mcpActiveGoroutines.Add(-1)
 }
 
+// RecordContextLimitError increments the context-limit error counter for the given agent/provider/model.
+func (m *Metrics) RecordContextLimitError(agent, provider, model string) {
+	if m == nil {
+		return
+	}
+	e := getOrCreateEntry(&m.contextLimitErrors, map[string]string{
+		"agent":    agent,
+		"provider": provider,
+		"model":    model,
+	})
+	e.value.Add(1)
+}
+
+// RecordSummarizationRetry increments the summarization retry counter for the given agent/provider/model.
+func (m *Metrics) RecordSummarizationRetry(agent, provider, model string) {
+	if m == nil {
+		return
+	}
+	e := getOrCreateEntry(&m.summarizationRetries, map[string]string{
+		"agent":    agent,
+		"provider": provider,
+		"model":    model,
+	})
+	e.value.Add(1)
+}
+
 func (m *Metrics) RecordUpstreamLatency(model, agent, provider string, duration time.Duration) {
 	if m == nil {
 		return
@@ -716,6 +746,10 @@ func (m *Metrics) WritePrometheus(w io.Writer) {
 		"Total overflow guard triggers by location.", &m.overflowGuardTriggers)
 	m.writeCounterMap(w, "nenya_cb_state_transitions_total",
 		"Total circuit breaker state transitions.", &m.cbStateTransitions)
+	m.writeCounterMap(w, "nenya_context_limit_errors_total",
+		"Total context-length exceeded errors from upstream providers.", &m.contextLimitErrors)
+	m.writeCounterMap(w, "nenya_summarization_retries_total",
+		"Total retry attempts with summarized payload after context-limit errors.", &m.summarizationRetries)
 	// Note: Using writeCounterAtomic for a gauge metric. Prometheus doesn't
 	// distinguish between counters and gauges for display purposes, and
 	// this simplifies the implementation while maintaining correct semantics.

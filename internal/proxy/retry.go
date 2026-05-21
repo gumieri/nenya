@@ -23,6 +23,7 @@ import (
 
 const maxRetryBackoff = 5 * time.Second
 const maxQuotaCooldown = 30 * time.Minute
+const retrySystemPrompt = "Summarize the following conversation messages into a single coherent response. Preserve key context and important details. Remove redundant information."
 
 const (
 	exponentialBackoffBase   = 500 * time.Millisecond
@@ -57,6 +58,46 @@ func calculateBackoff(attempt int) time.Duration {
 	}
 	jitter := time.Duration(rand.Int63n(int64(exponentialBackoffJitter)))
 	return delay + jitter
+}
+
+// summarizeMessages compresses the messages array using the configured engine chain.
+// It serializes all messages, sends them to the summarization engine, and returns
+// a replacement message array with a single assistant message containing the summary.
+// Only one summarization attempt is allowed per request to avoid loops.
+func (p *Proxy) summarizeMessages(ctx context.Context, gw *gateway.NenyaGateway, messages []interface{}) ([]interface{}, error) {
+	if len(gw.Config.Bouncer.Engine.ResolvedTargets) == 0 {
+		return nil, fmt.Errorf("engine chain not configured")
+	}
+
+	var textForSummary strings.Builder
+	for _, msgRaw := range messages {
+		if msgMap, ok := msgRaw.(map[string]interface{}); ok {
+			fmt.Fprintf(&textForSummary, "%s: %s\n", msgMap["role"], gateway.ExtractContentText(msgMap))
+		}
+	}
+
+	if textForSummary.Len() == 0 {
+		return nil, fmt.Errorf("no text content to summarize")
+	}
+
+	summary, err := pipeline.CallEngineChain(
+		ctx, gw.Client, gw.OllamaClient,
+		gw.Config.Bouncer.Engine.ResolvedTargets, gw.Logger,
+		func(providerName string, headers http.Header) error {
+			return routing.InjectAPIKeyWithGateway(providerName, gw, headers)
+		},
+		"context_limit_retry", gw.Config.Bouncer.Engine.AgentName, retrySystemPrompt, textForSummary.String())
+
+	if err != nil {
+		return nil, fmt.Errorf("engine summarization failed: %w", err)
+	}
+
+	return []interface{}{
+		map[string]interface{}{
+			"role":    "assistant",
+			"content": fmt.Sprintf("[Context Limit Summary]: %s", summary),
+		},
+	}, nil
 }
 
 func waitWithCancel(ctx context.Context, d time.Duration) {
@@ -114,15 +155,17 @@ type forwardOptions struct {
 
 // retryLoop encapsulates the state and logic for retrying upstream requests.
 type retryLoop struct {
-	p               *Proxy
-	gw              *gateway.NenyaGateway
-	w               http.ResponseWriter
-	r               *http.Request
-	opts            forwardOptions
-	ctxLogger       *slog.Logger
-	originalPayload []byte
-	attempt         int
-	stream          bool
+	p                 *Proxy
+	gw                *gateway.NenyaGateway
+	w                 http.ResponseWriter
+	r                 *http.Request
+	opts              forwardOptions
+	ctxLogger         *slog.Logger
+	originalPayload   []byte
+	attempt           int
+	stream            bool
+	summarized        bool
+	summarizedPayload map[string]interface{}
 }
 
 // trackInFlight increments the in-flight gauge for the first target in
@@ -235,6 +278,11 @@ func (rl *retryLoop) handleActionError(i int, target routing.UpstreamTarget, act
 	rl.attempt++
 	action.body, _ = io.ReadAll(io.LimitReader(action.resp.Body, pipeline.MaxErrorBodyBytes))
 	_ = action.resp.Body.Close()
+
+	if util.IsContextLengthError(action.resp.StatusCode, string(action.body)) {
+		return rl.handleContextLimitError(i, target, action)
+	}
+
 	shouldRetry, retryDelay := rl.handleUpstreamError(i, target, action)
 	if !shouldRetry {
 		gwErr := ParseProviderError(target.Provider, action.resp.StatusCode, action.body, nil)
@@ -261,6 +309,40 @@ func (rl *retryLoop) handleActionError(i int, target routing.UpstreamTarget, act
 	return retrySignalContinue
 }
 
+// handleContextLimitError processes context-length exceeded errors with optional summarization.
+func (rl *retryLoop) handleContextLimitError(i int, target routing.UpstreamTarget, action upstreamAction) retrySignal {
+	rl.gw.Metrics.RecordContextLimitError(rl.opts.AgentName, target.Provider, target.Model)
+	rl.ctxLogger.Warn("context length exceeded error from upstream",
+		"status", action.resp.StatusCode,
+		"provider", target.Provider,
+		"model", target.Model)
+
+	if !rl.gw.Config.Governance.AutoRetryOnContextLimitEnabled() {
+		rl.ctxLogger.Info("auto_retry_on_context_limit disabled")
+	} else if !rl.summarized {
+		summarizedPayload, sumErr := rl.p.attemptContextLimitSummarization(
+			rl.r.Context(), rl.ctxLogger, rl.gw, rl.originalPayload, action.body)
+		if sumErr == nil && summarizedPayload != nil {
+			rl.summarized = true
+			rl.summarizedPayload = summarizedPayload
+			rl.gw.Metrics.RecordSummarizationRetry(rl.opts.AgentName, target.Provider, target.Model)
+			rl.ctxLogger.Info("context limit summarization succeeded, retrying with summarized payload")
+			return retrySignalContinue
+		}
+		rl.ctxLogger.Warn("context limit summarization failed", "err", sumErr)
+	} else {
+		rl.ctxLogger.Warn("already attempted summarization")
+	}
+
+	gwErr := ParseProviderError(target.Provider, action.resp.StatusCode, action.body, nil)
+	if rl.stream {
+		writeGatewayStreamError(rl.w, action.resp.StatusCode, gwErr.Type, gwErr.Message)
+	} else {
+		writeGatewayError(rl.w, action.resp.StatusCode, gwErr.Type, gwErr.Message)
+	}
+	return retrySignalDone
+}
+
 // Run executes the retry loop. It returns true when the request has been fully
 // handled (streaming or non-streaming success, or a terminal HTTP error response
 // written to the client). It returns false when all targets are exhausted
@@ -275,11 +357,17 @@ retryLoop:
 			break retryLoop
 		}
 
-		if !rl.copyPayload(workingPayload, i) {
-			continue
+		var payloadToUse map[string]interface{}
+		if rl.summarized && rl.summarizedPayload != nil {
+			payloadToUse = rl.summarizedPayload
+		} else {
+			if !rl.copyPayload(workingPayload, i) {
+				continue
+			}
+			payloadToUse = workingPayload
 		}
 
-		action := rl.prepareAndSend(i, target, workingPayload)
+		action := rl.prepareAndSend(i, target, payloadToUse)
 		if !rl.handleActionResult(i, target, action) {
 			continue
 		}
@@ -562,6 +650,44 @@ func logErrorRetryable(ctxLogger *slog.Logger, errorBody []byte, gw *gateway.Nen
 		return
 	}
 	ctxLogger.Error(msg, "body", redactForLog(string(errorBody), gw))
+}
+
+// attemptContextLimitSummarization attempts to summarize the request messages
+// after a context-length error. It parses the original payload, extracts messages,
+// sends them to the configured summarization engine with the provided context,
+// and returns a summarized payload map on success.
+func (p *Proxy) attemptContextLimitSummarization(ctx context.Context, ctxLogger *slog.Logger, gw *gateway.NenyaGateway, originalPayload []byte, errorBody []byte) (map[string]interface{}, error) {
+	if len(gw.Config.Bouncer.Engine.ResolvedTargets) == 0 {
+		return nil, fmt.Errorf("engine chain not configured")
+	}
+
+	var payload map[string]interface{}
+	if err := json.Unmarshal(originalPayload, &payload); err != nil {
+		ctxLogger.Warn("failed to unmarshal original payload for summarization", "err", err)
+		return nil, fmt.Errorf("failed to unmarshal original payload: %w", err)
+	}
+
+	messagesRaw, ok := payload["messages"]
+	if !ok || messagesRaw == nil {
+		return nil, fmt.Errorf("no messages in payload")
+	}
+
+	messages, ok := messagesRaw.([]interface{})
+	if !ok || len(messages) == 0 {
+		return nil, fmt.Errorf("messages is not a valid array or is empty")
+	}
+
+	summarized, err := p.summarizeMessages(ctx, gw, messages)
+	if err != nil {
+		return nil, err
+	}
+
+	newPayload := make(map[string]interface{}, len(payload))
+	for k, v := range payload {
+		newPayload[k] = v
+	}
+	newPayload["messages"] = summarized
+	return newPayload, nil
 }
 
 // redactForLog applies secret redaction and truncation to error body text before
