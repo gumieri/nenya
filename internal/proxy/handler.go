@@ -54,7 +54,7 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	gw := p.Gateway()
 	if gw == nil {
-		http.Error(w, "Gateway not initialized", http.StatusServiceUnavailable)
+		writeStructuredError(w, http.StatusServiceUnavailable, infra.ErrorKindInternal, "Gateway not initialized")
 		return
 	}
 
@@ -62,7 +62,7 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		handler(gw, w, r)
 		return
 	}
-	http.Error(w, "Not Found", http.StatusNotFound)
+	writeStructuredError(w, http.StatusNotFound, infra.ErrorKindInvalidRequest, "Not Found")
 }
 
 type routeHandler func(gw *gateway.NenyaGateway, w http.ResponseWriter, r *http.Request)
@@ -73,7 +73,7 @@ func (p *Proxy) recoverPanic(w http.ResponseWriter) {
 			gw.Logger.Error("panic recovered", "err", rec)
 			gw.Metrics.RecordPanic()
 		}
-		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+		writeStructuredError(w, http.StatusInternalServerError, infra.ErrorKindInternal, "Internal Server Error")
 	}
 }
 
@@ -122,7 +122,7 @@ func (p *Proxy) resolveRoute(path string) routeHandler {
 func (p *Proxy) chainEndpoint(method, path string, requireAuth bool, handler func(*gateway.NenyaGateway, http.ResponseWriter, *http.Request, *config.ApiKey)) func(*gateway.NenyaGateway, http.ResponseWriter, *http.Request) {
 	return func(gw *gateway.NenyaGateway, w http.ResponseWriter, r *http.Request) {
 		if method != "" && r.Method != method {
-			http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+			writeStructuredError(w, http.StatusMethodNotAllowed, infra.ErrorKindInvalidRequest, "Method Not Allowed")
 			return
 		}
 		var apiKey *config.ApiKey
@@ -282,7 +282,7 @@ func (p *Proxy) chainA2A(gw *gateway.NenyaGateway, w http.ResponseWriter, r *htt
 func (p *Proxy) authenticateAndAuthorize(r *http.Request, w http.ResponseWriter) (*config.ApiKey, bool) {
 	gw := p.Gateway()
 	if gw == nil {
-		http.Error(w, "Gateway not initialized", http.StatusServiceUnavailable)
+		writeStructuredError(w, http.StatusServiceUnavailable, infra.ErrorKindInternal, "Gateway not initialized")
 		return nil, false
 	}
 
@@ -290,14 +290,14 @@ func (p *Proxy) authenticateAndAuthorize(r *http.Request, w http.ResponseWriter)
 	if !strings.HasPrefix(authHeader, "Bearer ") {
 		p.logAuthWarning(gw, "missing or malformed Authorization header", r)
 		gw.Metrics.RecordAuthFailure("missing_header")
-		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		writeStructuredError(w, http.StatusUnauthorized, infra.ErrorKindAuthFailed, "Unauthorized")
 		return nil, false
 	}
 	clientToken := strings.TrimSpace(strings.TrimPrefix(authHeader, "Bearer "))
 
 	apiKey, ok := p.resolveAuthenticatedKey(gw, clientToken)
 	if !ok {
-		http.Error(w, "Forbidden", http.StatusForbidden)
+		writeStructuredError(w, http.StatusForbidden, infra.ErrorKindAuthFailed, "Forbidden")
 		return nil, false
 	}
 
@@ -311,7 +311,7 @@ func (p *Proxy) authenticateAndAuthorize(r *http.Request, w http.ResponseWriter)
 	if !apiKey.Enabled {
 		gw.Metrics.IncAuthDenials(apiKey.Name, "disabled")
 		p.logAuthDenial(gw, apiKey, "disabled key", r)
-		http.Error(w, "Forbidden", http.StatusForbidden)
+		writeStructuredError(w, http.StatusForbidden, infra.ErrorKindAuthFailed, "Forbidden")
 		return nil, false
 	}
 
@@ -319,7 +319,7 @@ func (p *Proxy) authenticateAndAuthorize(r *http.Request, w http.ResponseWriter)
 		if t, err := time.Parse(time.RFC3339, apiKey.ExpiresAt); err == nil && time.Now().After(t) {
 			gw.Metrics.IncAuthDenials(apiKey.Name, "expired")
 			p.logAuthDenial(gw, apiKey, "expired key", r)
-			http.Error(w, "Forbidden", http.StatusForbidden)
+			writeStructuredError(w, http.StatusForbidden, infra.ErrorKindAuthFailed, "Forbidden")
 			return nil, false
 		}
 	}
@@ -328,7 +328,7 @@ func (p *Proxy) authenticateAndAuthorize(r *http.Request, w http.ResponseWriter)
 	if !auth.AuthorizeEndpoint(apiKey, r.Method, r.URL.Path) {
 		gw.Metrics.IncAuthDenials(apiKey.Name, "endpoint")
 		p.logAuthDenial(gw, apiKey, fmt.Sprintf("endpoint %s %s", r.Method, r.URL.Path), r)
-		http.Error(w, "Forbidden", http.StatusForbidden)
+		writeStructuredError(w, http.StatusForbidden, infra.ErrorKindAuthFailed, "Forbidden")
 		return nil, false
 	}
 
@@ -341,7 +341,7 @@ func (p *Proxy) authenticateAndAuthorize(r *http.Request, w http.ResponseWriter)
 		if agentName != "" && !auth.AuthorizeAgent(apiKey, agentName) {
 			gw.Metrics.IncAuthDenials(apiKey.Name, "agent")
 			p.logAuthDenial(gw, apiKey, fmt.Sprintf("agent %s", agentName), r)
-			http.Error(w, "Forbidden", http.StatusForbidden)
+			writeStructuredError(w, http.StatusForbidden, infra.ErrorKindAuthFailed, "Forbidden")
 			return nil, false
 		}
 	}
@@ -441,7 +441,7 @@ func (p *Proxy) authenticateRequest(r *http.Request, w http.ResponseWriter) (str
 func (p *Proxy) handleMetrics(w http.ResponseWriter, r *http.Request) {
 	gw := p.Gateway()
 	if gw == nil {
-		http.Error(w, "Gateway not initialized", http.StatusServiceUnavailable)
+		writeStructuredError(w, http.StatusServiceUnavailable, infra.ErrorKindInternal, "Gateway not initialized")
 		return
 	}
 	infra.HandleMetrics(gw.Metrics, w, r)
@@ -451,7 +451,7 @@ func (p *Proxy) handleMetrics(w http.ResponseWriter, r *http.Request) {
 func (p *Proxy) handleModels(w http.ResponseWriter) {
 	gw := p.Gateway()
 	if gw == nil {
-		http.Error(w, "Gateway not initialized", http.StatusServiceUnavailable)
+		writeStructuredError(w, http.StatusServiceUnavailable, infra.ErrorKindInternal, "Gateway not initialized")
 		return
 	}
 	type modelEntry struct {
@@ -530,7 +530,7 @@ func (p *Proxy) handleModels(w http.ResponseWriter) {
 func (p *Proxy) handleStats(w http.ResponseWriter) {
 	gw := p.Gateway()
 	if gw == nil {
-		http.Error(w, "Gateway not initialized", http.StatusServiceUnavailable)
+		writeStructuredError(w, http.StatusServiceUnavailable, infra.ErrorKindInternal, "Gateway not initialized")
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
@@ -568,7 +568,7 @@ func (p *Proxy) handleStats(w http.ResponseWriter) {
 func (p *Proxy) handleHealthz(w http.ResponseWriter, r *http.Request) {
 	gw := p.Gateway()
 	if gw == nil {
-		http.Error(w, "Gateway not initialized", http.StatusServiceUnavailable)
+		writeStructuredError(w, http.StatusServiceUnavailable, infra.ErrorKindInternal, "Gateway not initialized")
 		return
 	}
 	engineOK := p.checkSecurityFilterEngineHealth(r.Context())
@@ -658,12 +658,12 @@ func (p *Proxy) checkOllamaProviderHealth(ctx context.Context, gw *gateway.Nenya
 func (p *Proxy) handlePprof(w http.ResponseWriter, r *http.Request) {
 	gw := p.Gateway()
 	if gw == nil {
-		http.Error(w, "Gateway not initialized", http.StatusServiceUnavailable)
+		writeStructuredError(w, http.StatusServiceUnavailable, infra.ErrorKindInternal, "Gateway not initialized")
 		return
 	}
 
 	if gw.Config.Debug.PprofEnabled == nil || !*gw.Config.Debug.PprofEnabled {
-		http.Error(w, "pprof is disabled", http.StatusForbidden)
+		writeStructuredError(w, http.StatusForbidden, infra.ErrorKindInvalidRequest, "pprof is disabled")
 		return
 	}
 

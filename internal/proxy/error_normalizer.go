@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+
+	"git.0ur.uk/nenya/internal/infra"
 )
 
 const (
@@ -27,8 +29,8 @@ const (
 	ErrorTypeAuthentication ErrorType = "authentication_error"
 	// ErrorTypeNotFound indicates a not found error (404)
 	ErrorTypeNotFound ErrorType = "not_found_error"
-	// ErrorTypeGateway indicates a generic gateway error
-	ErrorTypeGateway ErrorType = "gateway_error"
+	ErrorTypeGateway  ErrorType = "gateway_error"
+	ErrorTypeBouncer  ErrorType = "bouncer_error"
 )
 
 // GatewayError is the base error type for all gateway errors
@@ -345,6 +347,22 @@ func writeGatewayError(w http.ResponseWriter, statusCode int, errType ErrorType,
 	})
 }
 
+// mapErrorKind converts ErrorType to ErrorKind for error_kind field.
+func mapErrorKind(errType ErrorType) infra.ErrorKind {
+	switch errType {
+	case ErrorTypeAuthentication:
+		return infra.ErrorKindAuthFailed
+	case ErrorTypeRateLimit:
+		return infra.ErrorKindRateLimited
+	case ErrorTypeProvider, ErrorTypeGateway:
+		return infra.ErrorKindNetworkError
+	case ErrorTypeBouncer:
+		return infra.ErrorKindBouncerError
+	default:
+		return infra.ErrorKindInternal
+	}
+}
+
 // writeGatewayStreamError writes an OpenAI-compatible error as an SSE event
 // followed by [DONE]. Use this for streaming requests that fail before headers
 // are written, so the client receives a properly terminated SSE stream.
@@ -354,8 +372,9 @@ func writeGatewayStreamError(w http.ResponseWriter, statusCode int, errType Erro
 	w.WriteHeader(statusCode)
 	errPayload := map[string]any{
 		"error": map[string]any{
-			"message": message,
-			"type":    string(errType),
+			"message":    message,
+			"type":       string(errType),
+			"error_kind": string(mapErrorKind(errType)),
 		},
 	}
 	errBytes, _ := json.Marshal(errPayload)

@@ -12,6 +12,7 @@ import (
 
 	"git.0ur.uk/nenya/config"
 	"git.0ur.uk/nenya/internal/gateway"
+	"git.0ur.uk/nenya/internal/infra"
 	"git.0ur.uk/nenya/internal/routing"
 )
 
@@ -27,7 +28,7 @@ func (p *Proxy) handleBatches(gw *gateway.NenyaGateway, w http.ResponseWriter, r
 // The endpoint parameter should be "files" or "batches".
 func (p *Proxy) handleFilesOrBatches(gw *gateway.NenyaGateway, w http.ResponseWriter, r *http.Request, endpoint string, keyRef string) {
 	if !p.isPathSafe(r.URL.Path, "/v1/"+endpoint) {
-		http.Error(w, "Invalid path", http.StatusBadRequest)
+		writeStructuredError(w, http.StatusBadRequest, infra.ErrorKindInvalidRequest, "Invalid path")
 		return
 	}
 
@@ -37,13 +38,13 @@ func (p *Proxy) handleFilesOrBatches(gw *gateway.NenyaGateway, w http.ResponseWr
 	}
 
 	if !gw.RateLimiter.Check(provider.BaseURL, 0) {
-		http.Error(w, "Rate limit exceeded", http.StatusTooManyRequests)
+		writeStructuredError(w, http.StatusTooManyRequests, infra.ErrorKindRateLimited, "Rate limit exceeded")
 		return
 	}
 
 	targetURL, err := p.resolveAPIURL(provider, endpoint, r.URL.Path, r.URL.RawQuery)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		writeStructuredError(w, http.StatusBadRequest, infra.ErrorKindInvalidRequest, err.Error())
 		return
 	}
 
@@ -67,7 +68,7 @@ func (p *Proxy) handleFilesOrBatches(gw *gateway.NenyaGateway, w http.ResponseWr
 
 	if err != nil {
 		ctxLogger.Error("files/batches upstream request failed", "endpoint", endpoint, "err", err)
-		http.Error(w, "Upstream provider error", http.StatusBadGateway)
+		writeStructuredError(w, http.StatusBadGateway, infra.ErrorKindProviderError, "Upstream provider error")
 		return
 	}
 	defer func() { _ = resp.Body.Close() }()
@@ -108,12 +109,12 @@ func (p *Proxy) isPathSafe(pathStr, prefix string) bool {
 func (p *Proxy) validateFilesProvider(gw *gateway.NenyaGateway, w http.ResponseWriter) *config.Provider {
 	provider, ok := gw.Providers["openai"]
 	if !ok {
-		http.Error(w, "No provider configured for files", http.StatusServiceUnavailable)
+		writeStructuredError(w, http.StatusServiceUnavailable, infra.ErrorKindModelNotFound, "No provider configured for files")
 		return nil
 	}
 
 	if provider.APIKey == "" && provider.AuthStyle != "none" {
-		http.Error(w, "Provider not configured", http.StatusServiceUnavailable)
+		writeStructuredError(w, http.StatusServiceUnavailable, infra.ErrorKindInvalidRequest, "Provider not configured")
 		return nil
 	}
 
@@ -152,12 +153,12 @@ func (p *Proxy) readFilesBody(gw *gateway.NenyaGateway, w http.ResponseWriter, r
 	bodyBytes, readErr := io.ReadAll(r.Body)
 	if readErr != nil {
 		gw.Logger.Error("failed to read files request body", "err", readErr)
-		http.Error(w, "Payload too large or malformed", http.StatusRequestEntityTooLarge)
+		writeStructuredError(w, http.StatusRequestEntityTooLarge, infra.ErrorKindPayloadTooLarge, "Payload too large or malformed")
 		return nil, false
 	}
 
 	if len(bodyBytes) == 0 {
-		http.Error(w, "Empty request body", http.StatusBadRequest)
+		writeStructuredError(w, http.StatusBadRequest, infra.ErrorKindInvalidRequest, "Empty request body")
 		return nil, false
 	}
 

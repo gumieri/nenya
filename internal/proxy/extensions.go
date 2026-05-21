@@ -10,6 +10,7 @@ import (
 
 	"git.0ur.uk/nenya/config"
 	"git.0ur.uk/nenya/internal/gateway"
+	"git.0ur.uk/nenya/internal/infra"
 	"git.0ur.uk/nenya/internal/routing"
 )
 
@@ -35,12 +36,12 @@ func (p *Proxy) handleExtensionEndpoint(gw *gateway.NenyaGateway, w http.Respons
 	cfg, ok := endpointDefaults[endpoint]
 	if !ok {
 		gw.Logger.Error("unknown extension endpoint", "endpoint", endpoint)
-		http.Error(w, "Unknown endpoint", http.StatusInternalServerError)
+		writeStructuredError(w, http.StatusInternalServerError, infra.ErrorKindInternal, "Unknown endpoint")
 		return
 	}
 
 	if !p.isPathSafe(r.URL.Path, "/v1/"+endpoint) {
-		http.Error(w, "Invalid path", http.StatusBadRequest)
+		writeStructuredError(w, http.StatusBadRequest, infra.ErrorKindInvalidRequest, "Invalid path")
 		return
 	}
 
@@ -48,7 +49,7 @@ func (p *Proxy) handleExtensionEndpoint(gw *gateway.NenyaGateway, w http.Respons
 	if provider == nil {
 		gw.Logger.Error("no provider available for endpoint",
 			"endpoint", endpoint, "preferred", cfg.ProviderName)
-		http.Error(w, "No provider available for endpoint", http.StatusServiceUnavailable)
+		writeStructuredError(w, http.StatusServiceUnavailable, infra.ErrorKindModelNotFound, "No provider available for endpoint")
 		return
 	}
 
@@ -56,13 +57,13 @@ func (p *Proxy) handleExtensionEndpoint(gw *gateway.NenyaGateway, w http.Respons
 		gw.Metrics.RecordRateLimitRejected(endpoint)
 		gw.Logger.Warn("rate limit exceeded for endpoint",
 			"endpoint", endpoint, "provider", provider.Name)
-		http.Error(w, "Rate limit exceeded", http.StatusTooManyRequests)
+		writeStructuredError(w, http.StatusTooManyRequests, infra.ErrorKindRateLimited, "Rate limit exceeded")
 		return
 	}
 
 	targetURL, err := p.resolveExtensionAPIURL(provider, cfg, r.URL.Path, r.URL.RawQuery)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		writeStructuredError(w, http.StatusBadRequest, infra.ErrorKindInvalidRequest, err.Error())
 		return
 	}
 
@@ -86,7 +87,7 @@ func (p *Proxy) handleExtensionEndpoint(gw *gateway.NenyaGateway, w http.Respons
 
 	if err != nil {
 		ctxLogger.Error("upstream request failed", "endpoint", endpoint, "err", err)
-		http.Error(w, "Upstream provider error", http.StatusBadGateway)
+		writeStructuredError(w, http.StatusBadGateway, infra.ErrorKindProviderError, "Upstream provider error")
 		return
 	}
 	defer func() { _ = resp.Body.Close() }()
@@ -166,12 +167,12 @@ func (p *Proxy) readExtensionBody(gw *gateway.NenyaGateway, w http.ResponseWrite
 	bodyBytes, readErr := io.ReadAll(r.Body)
 	if readErr != nil {
 		gw.Logger.Error("failed to read extension request body", "err", readErr)
-		http.Error(w, "Payload too large or malformed", http.StatusRequestEntityTooLarge)
+		writeStructuredError(w, http.StatusRequestEntityTooLarge, infra.ErrorKindPayloadTooLarge, "Payload too large or malformed")
 		return nil, false
 	}
 
 	if len(bodyBytes) == 0 && r.Method == http.MethodPost {
-		http.Error(w, "Empty request body", http.StatusBadRequest)
+		writeStructuredError(w, http.StatusBadRequest, infra.ErrorKindInvalidRequest, "Empty request body")
 		return nil, false
 	}
 

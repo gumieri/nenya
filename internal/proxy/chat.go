@@ -380,7 +380,7 @@ func (p *Proxy) handleChatCompletions(gw *gateway.NenyaGateway, w http.ResponseW
 		if herr.Code == http.StatusNoContent {
 			return
 		}
-		http.Error(w, herr.Message, herr.Code)
+		writeStructuredError(w, herr.Code, infra.ErrorKindInvalidRequest, herr.Message)
 		return
 	}
 
@@ -760,45 +760,45 @@ func (p *Proxy) handleEmbeddings(gw *gateway.NenyaGateway, w http.ResponseWriter
 	bodyBytes, err := io.ReadAll(r.Body)
 	if err != nil {
 		gw.Logger.Error("failed to read embeddings request body", "err", err)
-		http.Error(w, "Payload too large or malformed", http.StatusRequestEntityTooLarge)
+		writeStructuredError(w, http.StatusRequestEntityTooLarge, infra.ErrorKindPayloadTooLarge, "Payload too large or malformed")
 		return
 	}
 
 	var payload map[string]interface{}
 	if err = json.Unmarshal(bodyBytes, &payload); err != nil {
 		gw.Logger.Warn("failed to parse embeddings JSON")
-		http.Error(w, "Invalid JSON payload", http.StatusBadRequest)
+		writeStructuredError(w, http.StatusBadRequest, infra.ErrorKindInvalidRequest, "Invalid JSON payload")
 		return
 	}
 
 	modelName, ok := payload["model"].(string)
 	if !ok || modelName == "" {
 		gw.Logger.Warn("missing or empty model in embeddings request")
-		http.Error(w, `Missing or empty "model" field`, http.StatusBadRequest)
+		writeStructuredError(w, http.StatusBadRequest, infra.ErrorKindInvalidRequest, `Missing or empty "model" field`)
 		return
 	}
 	if len(modelName) > MaxModelNameLength {
 		gw.Logger.Warn("model name exceeds maximum length in embeddings request", "length", len(modelName))
-		http.Error(w, "Model name too long", http.StatusBadRequest)
+		writeStructuredError(w, http.StatusBadRequest, infra.ErrorKindInvalidRequest, "Model name too long")
 		return
 	}
 
 	matches := routing.ResolveProviders(modelName, gw.Providers, gw.ModelCatalog)
 	if len(matches) == 0 {
 		gw.Logger.Warn("no provider for embeddings model", "model", modelName)
-		http.Error(w, util.ErrNoProvider, http.StatusBadRequest)
+		writeStructuredError(w, http.StatusBadRequest, infra.ErrorKindModelNotFound, util.ErrNoProvider)
 		return
 	}
 
 	provider, ok := gw.Providers[matches[0].Provider]
 	if !ok {
 		gw.Logger.Error("provider not found in providers map", "provider", matches[0].Provider)
-		http.Error(w, util.ErrNoProvider, http.StatusBadRequest)
+		writeStructuredError(w, http.StatusBadRequest, infra.ErrorKindModelNotFound, util.ErrNoProvider)
 		return
 	}
 
 	if !gw.RateLimiter.Check(provider.BaseURL, 0) {
-		http.Error(w, "Rate limit exceeded", http.StatusTooManyRequests)
+		writeStructuredError(w, http.StatusTooManyRequests, infra.ErrorKindRateLimited, "Rate limit exceeded")
 		return
 	}
 
@@ -811,7 +811,7 @@ func (p *Proxy) handleEmbeddings(gw *gateway.NenyaGateway, w http.ResponseWriter
 	if embeddingURL == "/embeddings" {
 		gw.Logger.Warn("provider BaseURL is empty, cannot derive embeddings endpoint",
 			"provider", provider.Name)
-		http.Error(w, "Provider does not support embeddings", http.StatusBadRequest)
+		writeStructuredError(w, http.StatusBadRequest, infra.ErrorKindInvalidRequest, "Provider does not support embeddings")
 		return
 	}
 
@@ -855,7 +855,7 @@ func (p *Proxy) forwardEmbeddingsRequest(gw *gateway.NenyaGateway, w http.Respon
 	if err != nil {
 		ctxLogger := gw.Logger.With("operation", "forward", "api_key", keyRef)
 		ctxLogger.Error("failed to create embeddings upstream request", "err", err)
-		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+		writeStructuredError(w, http.StatusInternalServerError, infra.ErrorKindInternal, "Internal Server Error")
 		return
 	}
 	req.Header.Set("Content-Type", "application/json")
@@ -886,7 +886,7 @@ func (p *Proxy) forwardEmbeddingsRequest(gw *gateway.NenyaGateway, w http.Respon
 	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {
 		ctxLogger.Error("failed to read embeddings response body", "err", err)
-		http.Error(w, "Failed to read upstream response", http.StatusBadGateway)
+		writeStructuredError(w, http.StatusBadGateway, infra.ErrorKindNetworkError, "Failed to read upstream response")
 		return
 	}
 
@@ -1014,7 +1014,7 @@ func (p *Proxy) handleResponses(gw *gateway.NenyaGateway, w http.ResponseWriter,
 	}
 	pathSafe := p.isPathSafeResponses(r.URL.Path)
 	if !pathSafe {
-		http.Error(w, "Invalid path", http.StatusBadRequest)
+		writeStructuredError(w, http.StatusBadRequest, infra.ErrorKindInvalidRequest, "Invalid path")
 		return
 	}
 
@@ -1030,13 +1030,13 @@ func (p *Proxy) handleResponses(gw *gateway.NenyaGateway, w http.ResponseWriter,
 
 	provider := p.resolveResponsesProviderFromModel(gw, responsesModel)
 	if provider == nil {
-		http.Error(w, util.ErrNoProvider, http.StatusBadRequest)
+		writeStructuredError(w, http.StatusBadRequest, infra.ErrorKindModelNotFound, util.ErrNoProvider)
 		return
 	}
 
 	targetURL := p.resolveResponsesURL(provider, r.URL.Path, r.URL.RawQuery)
 	if targetURL == "" {
-		http.Error(w, "Provider does not support responses API", http.StatusBadRequest)
+		writeStructuredError(w, http.StatusBadRequest, infra.ErrorKindInvalidRequest, "Provider does not support responses API")
 		return
 	}
 
@@ -1074,7 +1074,7 @@ func (p *Proxy) handleResponses(gw *gateway.NenyaGateway, w http.ResponseWriter,
 
 	if err != nil {
 		ctxLogger.Error("responses upstream request failed", "err", err)
-		http.Error(w, "Upstream provider error", http.StatusBadGateway)
+		writeStructuredError(w, http.StatusBadGateway, infra.ErrorKindNetworkError, "Upstream provider error")
 		return
 	}
 	defer func() { _ = resp.Body.Close() }()
@@ -1121,7 +1121,7 @@ func (p *Proxy) readResponsesBody(gw *gateway.NenyaGateway, w http.ResponseWrite
 	bodyBytes, readErr := io.ReadAll(r.Body)
 	if readErr != nil {
 		gw.Logger.Error("failed to read responses request body", "err", readErr)
-		http.Error(w, "Payload too large or malformed", http.StatusRequestEntityTooLarge)
+		writeStructuredError(w, http.StatusRequestEntityTooLarge, infra.ErrorKindPayloadTooLarge, "Payload too large or malformed")
 		return nil, false
 	}
 
@@ -1552,7 +1552,7 @@ loop:
 		return
 	}
 
-	http.Error(w, "MCP loop ended without response", http.StatusInternalServerError)
+	writeStructuredError(w, http.StatusInternalServerError, infra.ErrorKindInternal, "MCP loop ended without response")
 }
 
 const (
