@@ -21,6 +21,7 @@ import (
 	"git.0ur.uk/nenya/internal/gateway"
 	"git.0ur.uk/nenya/internal/infra"
 	"git.0ur.uk/nenya/internal/local"
+	"git.0ur.uk/nenya/internal/pipeline"
 	"git.0ur.uk/nenya/internal/proxy"
 	"git.0ur.uk/nenya/internal/version"
 )
@@ -243,6 +244,8 @@ func run(logger *slog.Logger, cfg *config.Config, secrets *config.SecretsConfig,
 		}
 	}
 
+	gw.InterceptorChain = buildInterceptorChain(gw, cfg, logger)
+
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
@@ -267,6 +270,29 @@ func run(logger *slog.Logger, cfg *config.Config, secrets *config.SecretsConfig,
 	go serveHTTP(srv, listener, serverErr)
 
 	eventLoop(logger, paths, p, ctx, sighup, serverErr, srv)
+}
+
+func buildInterceptorChain(gw *gateway.NenyaGateway, cfg *config.Config, logger *slog.Logger) *pipeline.InterceptorChain {
+	chain := pipeline.NewInterceptorChain(logger)
+
+	if enabled := (cfg.Bouncer.Enabled != nil && *cfg.Bouncer.Enabled); enabled && len(gw.SecretPatterns) > 0 {
+		chain.Register(pipeline.NewRedactInterceptor(enabled, gw.SecretPatterns, cfg.Bouncer.RedactionLabel, logger))
+	}
+
+	if gw.EntropyFilter != nil {
+		chain.Register(pipeline.NewEntropyInterceptor(gw.EntropyFilter, cfg.Bouncer.RedactionLabel, logger))
+	}
+
+	if cfg.Context.TFIDFQuerySource != "" {
+		chain.Register(pipeline.NewTFIDFInterceptor(cfg.Context.TFIDFQuerySource, logger))
+	}
+
+	if len(cfg.Bouncer.Engine.ResolvedTargets) > 0 {
+		chain.Register(proxy.NewBouncerInterceptor(gw, logger))
+	}
+
+	logger.Info("interceptor chain initialized", "count", len(chain.List()))
+	return chain
 }
 
 func buildServer(p *proxy.Proxy, listenAddr string) *http.Server {

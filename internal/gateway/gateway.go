@@ -57,6 +57,7 @@ type NenyaGateway struct {
 	ClientTokenRef     security.SecureToken
 	ProviderKeyTokens  map[string]security.SecureToken
 	LocalEngineManager *local.EngineManager
+	InterceptorChain   *pipeline.InterceptorChain
 	tokMu              sync.RWMutex
 }
 

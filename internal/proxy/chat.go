@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"math"
 	"net/http"
 	"strings"
 	"time"
@@ -451,6 +450,10 @@ func (p *Proxy) replayCachedSSE(gw *gateway.NenyaGateway, w http.ResponseWriter,
 }
 
 func (p *Proxy) applyContentPipeline(gw *gateway.NenyaGateway, ctx context.Context, payload map[string]interface{}, tokenCount int, windowMaxCtx int, profile pipeline.ClientProfile, softLimit, hardLimit int) error {
+	if gw.InterceptorChain == nil {
+		return nil
+	}
+
 	messages, ok := payload["messages"].([]interface{})
 	if !ok || len(messages) == 0 {
 		return nil
@@ -464,13 +467,6 @@ func (p *Proxy) applyContentPipeline(gw *gateway.NenyaGateway, ctx context.Conte
 		}
 	}
 
-	applyPatternRedaction(gw, messages)
-	applyEntropyRedaction(gw, messages)
-
-	messages = payload["messages"].([]interface{})
-	if len(messages) == 0 {
-		return nil
-	}
 	if !profile.IsIDE {
 		if pipeline.PruneStaleToolCalls(payload, gw.Config.Compaction) {
 			gw.Metrics.RecordCompaction()
@@ -480,10 +476,6 @@ func (p *Proxy) applyContentPipeline(gw *gateway.NenyaGateway, ctx context.Conte
 		}
 	}
 
-	messages = payload["messages"].([]interface{})
-	if len(messages) == 0 {
-		return nil
-	}
 	deps := buildWindowDeps(gw)
 	if windowed, err := pipeline.ApplyWindowCompaction(ctx, deps, payload, messages, tokenCount, gw.Config.Window, windowMaxCtx, gw.CountRequestTokens); err != nil {
 		gw.Logger.Warn("window compaction failed, proceeding without it", "err", err)
@@ -495,7 +487,25 @@ func (p *Proxy) applyContentPipeline(gw *gateway.NenyaGateway, ctx context.Conte
 	if len(messages) == 0 {
 		return nil
 	}
-	return p.interceptContent(gw, ctx, messages, payload, profile, softLimit, hardLimit)
+
+	msgObjs := make([]map[string]any, len(messages))
+	for i, m := range messages {
+		if obj, ok := m.(map[string]any); ok {
+			msgObjs[i] = obj
+		}
+	}
+
+	req := &pipeline.InterceptRequest{
+		Payload:    payload,
+		Messages:   msgObjs,
+		Profile:    profile,
+		SoftLimit:  softLimit,
+		HardLimit:  hardLimit,
+		TokenCount: tokenCount,
+	}
+
+	_, err := gw.InterceptorChain.Execute(ctx, req)
+	return err
 }
 
 // buildWindowDeps creates a WindowDeps from the gateway state.
@@ -510,243 +520,6 @@ func buildWindowDeps(gw *gateway.NenyaGateway) pipeline.WindowDeps {
 		},
 		CountTokens: gw.CountTokens,
 	}
-}
-
-// applyPatternRedaction runs pattern-based secret redaction on all messages.
-func applyPatternRedaction(gw *gateway.NenyaGateway, messages []interface{}) {
-	patternRedacted := false
-	for _, msgRaw := range messages {
-		msgNode, isMap := msgRaw.(map[string]interface{})
-		if !isMap {
-			continue
-		}
-		if pipeline.ShouldSkipRedaction(msgNode, gw.Config.PrefixCache) {
-			continue
-		}
-		if applyRedactToContent(msgNode, func(s string) string {
-			return pipeline.RedactSecrets(s, (gw.Config.Bouncer.Enabled != nil && *gw.Config.Bouncer.Enabled), gw.SecretPatterns, gw.Config.Bouncer.RedactionLabel)
-		}) {
-			patternRedacted = true
-		}
-	}
-	if patternRedacted {
-		gw.Metrics.RecordRedaction()
-	}
-}
-
-// applyEntropyRedaction runs entropy-based high-entropy string redaction on all
-// messages when an entropy filter is configured.
-func applyEntropyRedaction(gw *gateway.NenyaGateway, messages []interface{}) {
-	if gw.EntropyFilter == nil {
-		return
-	}
-	entropyRedacted := false
-	for _, msgRaw := range messages {
-		msgNode, isMap := msgRaw.(map[string]interface{})
-		if !isMap {
-			continue
-		}
-		if pipeline.ShouldSkipRedaction(msgNode, gw.Config.PrefixCache) {
-			continue
-		}
-		if applyRedactToContent(msgNode, func(s string) string {
-			return gw.EntropyFilter.RedactHighEntropy(s, gw.Config.Bouncer.RedactionLabel)
-		}) {
-			entropyRedacted = true
-		}
-	}
-	if entropyRedacted {
-		gw.Metrics.RecordRedaction()
-	}
-}
-
-// interceptContent extracts the last user message and applies the content
-// interception pipeline (soft limit → Ollama engine, hard limit → truncate +
-// engine with optional TF-IDF scoring).
-func (p *Proxy) interceptContent(gw *gateway.NenyaGateway, ctx context.Context, messages []interface{}, payload map[string]interface{}, profile pipeline.ClientProfile, softLimit, hardLimit int) error {
-	lastMsgRaw := messages[len(messages)-1]
-	lastMsgNode, ok := lastMsgRaw.(map[string]interface{})
-	if !ok {
-		return nil
-	}
-
-	textForInterception := gateway.ExtractContentText(lastMsgNode)
-	if textForInterception == "" {
-		gw.Logger.Warn("last message has no text content, skipping interception")
-		return nil
-	}
-
-	contentTokens := gw.CountTokens(textForInterception)
-
-	var actualHardLimit int
-	if gw.Config.Context.HardLimitTokens > 0 {
-		actualHardLimit = gw.Config.Context.HardLimitTokens
-	} else {
-		actualHardLimit = hardLimit
-	}
-
-	if contentTokens > actualHardLimit {
-		gw.Logger.Warn("payload exceeds hard limit, trimming before interception",
-			"tokens", contentTokens, "hard_limit", actualHardLimit)
-		modified, _ := pipeline.TrimPayload(gw.Logger, payload, actualHardLimit, gw.CountTokens, gw.Config.Context)
-		if modified {
-			gw.Metrics.RecordTrimmedRequest("interception", contentTokens)
-			lastMsgNode = messages[len(messages)-1].(map[string]interface{})
-			textForInterception = gateway.ExtractContentText(lastMsgNode)
-			if textForInterception != "" {
-				contentTokens = gw.CountTokens(textForInterception)
-			}
-		}
-	}
-
-	p.handlePayloadSizeCheck(gw, ctx, contentTokens, softLimit, actualHardLimit, textForInterception, messages, profile, lastMsgNode)
-
-	return nil
-}
-
-func (p *Proxy) handlePayloadSizeCheck(gw *gateway.NenyaGateway, ctx context.Context, contentTokens, softLimit, actualHardLimit int, textForInterception string, messages []any, profile pipeline.ClientProfile, lastMsgNode map[string]interface{}) {
-	if contentTokens < softLimit {
-		gw.Logger.Debug("payload within soft limit, passing through",
-			"tokens", contentTokens, "soft_limit", softLimit)
-		return
-	}
-
-	if contentTokens <= actualHardLimit {
-		processed, needsUpdate := p.interceptSoftLimit(gw, ctx, textForInterception, profile.IsIDE)
-		if needsUpdate {
-			lastMsgNode["content"] = processed
-		}
-		return
-	}
-
-	processed, needsUpdate := p.interceptHardLimit(gw, ctx, textForInterception, messages, profile, softLimit, actualHardLimit, contentTokens)
-	if needsUpdate {
-		lastMsgNode["content"] = processed
-	}
-}
-
-// interceptSoftLimit handles the case where content tokens exceed the soft
-// limit but are within the hard limit: send to engine for summarization.
-func (p *Proxy) interceptSoftLimit(gw *gateway.NenyaGateway, ctx context.Context, text string, isIDE bool) (string, bool) {
-	gw.Logger.Warn("payload exceeds soft limit, sending to engine",
-		"tokens", gw.CountTokens(text))
-	gw.Metrics.RecordInterception("soft_limit")
-	summarized, err := p.summarizeWithOllama(gw, ctx, text, isIDE)
-	if err != nil {
-		gw.Logger.Warn("engine summarization failed, proceeding with original payload", "err", err)
-		return "", false
-	}
-	return fmt.Sprintf("[Nenya Sanitized via Ollama]:\n%s", summarized), true
-}
-
-// interceptHardLimit handles the case where content tokens exceed the hard
-// limit: truncate first, then optionally apply TF-IDF relevance scoring before
-// sending to the engine.
-func (p *Proxy) interceptHardLimit(gw *gateway.NenyaGateway, ctx context.Context, text string, messages []interface{}, profile pipeline.ClientProfile, softLimit, hardLimit, contentTokens int) (string, bool) {
-	gw.Logger.Warn("payload exceeds hard limit, truncating before engine",
-		"tokens", contentTokens, "hard_limit", hardLimit)
-	gw.Metrics.RecordInterception("hard_limit")
-
-	hardLimitRunes := hardLimit
-	if hardLimit <= math.MaxInt/3 {
-		hardLimitRunes = hardLimit * 3
-	}
-	querySource := gw.Config.Context.TFIDFQuerySource
-
-	if querySource != "" {
-		return p.interceptWithTFIDF(gw, ctx, text, messages, profile, softLimit, hardLimitRunes, contentTokens, querySource)
-	}
-
-	return p.interceptWithMiddleOut(gw, ctx, text, profile, hardLimitRunes)
-}
-
-// interceptWithTFIDF applies TF-IDF relevance truncation, then optionally sends
-// to engine if still above the soft limit.
-func (p *Proxy) interceptWithTFIDF(gw *gateway.NenyaGateway, ctx context.Context, text string, messages []interface{}, profile pipeline.ClientProfile, softLimit, hardLimitRunes, contentTokens int, querySource string) (string, bool) {
-	var query string
-	switch querySource {
-	case "prior_messages":
-		query = pipeline.ExtractPriorUserMessages(messages[:len(messages)-1], 5)
-	case "self":
-		query = pipeline.ExtractSelfQuery(text, 500)
-	}
-	gw.Logger.Info("TF-IDF truncation enabled",
-		"query_source", querySource,
-		"input_tokens", contentTokens)
-
-	var truncated string
-	if profile.IsIDE {
-		truncated = pipeline.TruncateTFIDFCodeAware(text, hardLimitRunes, query, gw.Config.Context)
-	} else {
-		truncated = pipeline.TruncateTFIDF(text, hardLimitRunes, query, gw.Config.Context)
-	}
-
-	if gw.CountTokens(truncated) < softLimit {
-		gw.Logger.Info("TF-IDF reduced payload below soft limit, skipping engine",
-			"soft_limit", softLimit)
-		return fmt.Sprintf("[Nenya TF-IDF Pruned]:\n%s", truncated), true
-	}
-
-	return p.summarizeOrForward(gw, ctx, truncated, profile.IsIDE, "TF-IDF Pruned")
-}
-
-// interceptWithMiddleOut applies middle-out truncation, then sends to the
-// engine.
-func (p *Proxy) interceptWithMiddleOut(gw *gateway.NenyaGateway, ctx context.Context, text string, profile pipeline.ClientProfile, hardLimitRunes int) (string, bool) {
-	var truncated string
-	if profile.IsIDE {
-		truncated = pipeline.TruncateMiddleOutCodeAware(text, hardLimitRunes, gw.Config.Context)
-	} else {
-		truncated = pipeline.TruncateMiddleOut(text, hardLimitRunes, gw.Config.Context)
-	}
-	return p.summarizeOrForward(gw, ctx, truncated, profile.IsIDE, "Truncated")
-}
-
-// summarizeWithOllama sends content to the security filter engine for redaction and summarization.
-func (p *Proxy) summarizeWithOllama(gw *gateway.NenyaGateway, ctx context.Context, heavyText string, isIDE bool) (string, error) {
-	if len(gw.Config.Bouncer.Engine.ResolvedTargets) == 0 {
-		return "", fmt.Errorf("security_filter engine: no resolved targets")
-	}
-	gw.Metrics.RecordOllamaSummarizedBytes(len(heavyText))
-
-	defaultPrompt := "You are a data privacy filter. Review the following text and remove or replace any IP addresses, AWS keys (AKIA...), passwords, tokens, or credentials with [REDACTED]. Preserve the original structure, detail level, and all non-sensitive content exactly as provided. Do NOT summarize or shorten the text."
-
-	if isIDE && pipeline.HasCodeFences(heavyText) {
-		defaultPrompt = "You are a data privacy filter for code. The following text contains code blocks (marked with ``` fences). Remove or replace any IP addresses, AWS keys (AKIA...), passwords, tokens, or credentials that appear OUTSIDE code blocks with [REDACTED]. Inside code blocks, only redact actual hardcoded secrets in string literals — preserve all code structure, function signatures, import statements, variable names, and line-number references exactly. Do NOT summarize, shorten, or restructure any code. Do NOT modify non-sensitive code."
-	}
-
-	ref := gw.Config.Bouncer.Engine
-	systemPrompt, err := config.LoadPromptFile(ref.SystemPromptFile, ref.SystemPrompt, defaultPrompt)
-	if err != nil {
-		gw.Logger.Warn("failed to load privacy filter prompt, using default", "err", err)
-		systemPrompt = defaultPrompt
-	}
-
-	agentName := ref.AgentName
-	if agentName == "" {
-		agentName = "inline"
-	}
-
-	return pipeline.CallEngineChain(ctx, gw.Client, gw.OllamaClient,
-		ref.ResolvedTargets, gw.Logger,
-		func(providerName string, headers http.Header) error {
-			return routing.InjectAPIKeyWithGateway(providerName, gw, headers)
-		},
-		"security_filter", agentName, systemPrompt, heavyText)
-}
-
-// summarizeOrForward attempts engine summarization with fallback to raw content if engine fails.
-func (p *Proxy) summarizeOrForward(gw *gateway.NenyaGateway, ctx context.Context, truncated string, isIDE bool, label string) (string, bool) {
-	summarized, err := p.summarizeWithOllama(gw, ctx, truncated, isIDE)
-	if err != nil {
-		if gw.Config.Bouncer.FailOpen != nil && *gw.Config.Bouncer.FailOpen {
-			gw.Logger.Warn("engine summarization failed, skip_on_engine_failure=true, forwarding original payload", "err", err)
-			return "", false
-		}
-		gw.Logger.Warn("engine summarization failed after truncation, forwarding truncated", "err", err)
-		return fmt.Sprintf("[Nenya %s (engine unreachable)]:\n%s", label, truncated), true
-	}
-	return fmt.Sprintf("[Nenya Sanitized via Ollama (%s input)]:\n%s", label, summarized), true
 }
 
 func (p *Proxy) handleEmbeddings(gw *gateway.NenyaGateway, w http.ResponseWriter, r *http.Request, apiKey *config.ApiKey) {
