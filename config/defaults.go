@@ -485,9 +485,47 @@ func applyAgentModelRegexDefaults(cfg *Config, name string, i int, m *AgentModel
 
 func applyBuiltInProviders(cfg *Config) {
 	for name, builtIn := range BuiltInProviders() {
-		if _, exists := cfg.Providers[name]; !exists {
+		if userCfg, exists := cfg.Providers[name]; exists {
+			cfg.Providers[name] = mergeProviderConfig(userCfg, builtIn)
+		} else {
 			cfg.Providers[name] = builtIn
 		}
+	}
+}
+
+// mergeProviderConfig merges user config over built-in defaults.
+// User values take precedence; missing fields are filled from builtIn.
+// MUST only be called once during initialization.
+func mergeProviderConfig(user, builtIn ProviderConfig) ProviderConfig {
+	merged := user
+	mergeString(&merged.URL, builtIn.URL)
+	mergeString(&merged.AuthStyle, builtIn.AuthStyle)
+	mergeString(&merged.ApiFormat, builtIn.ApiFormat)
+	if merged.TimeoutSeconds == 0 && builtIn.TimeoutSeconds != 0 {
+		merged.TimeoutSeconds = builtIn.TimeoutSeconds
+	}
+	if merged.MaxRetryAttempts == 0 && builtIn.MaxRetryAttempts != 0 {
+		merged.MaxRetryAttempts = builtIn.MaxRetryAttempts
+	}
+	if len(merged.RetryableStatusCodes) == 0 && len(builtIn.RetryableStatusCodes) > 0 {
+		merged.RetryableStatusCodes = builtIn.RetryableStatusCodes
+	}
+	if merged.FormatURLs == nil && builtIn.FormatURLs != nil {
+		merged.FormatURLs = make(map[string]string)
+		for k, v := range builtIn.FormatURLs {
+			merged.FormatURLs[k] = v
+		}
+	}
+	if merged.Thinking == nil && builtIn.Thinking != nil {
+		merged.Thinking = builtIn.Thinking
+	}
+	return merged
+}
+
+// mergeString sets *dst to src if dst is non-nil and empty, and src is non-empty.
+func mergeString(dst *string, src string) {
+	if dst != nil && *dst == "" && src != "" {
+		*dst = src
 	}
 }
 

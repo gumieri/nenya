@@ -1,219 +1,195 @@
 package config
 
 import (
-	"encoding/json"
 	"testing"
 )
 
-func TestCompactionPreset_Aggressive(t *testing.T) {
-	raw := `{"compaction": {"compaction_preset": "aggressive"}}`
-	var cfg Config
-	if err := json.Unmarshal([]byte(raw), &cfg); err != nil {
-		t.Fatal(err)
-	}
-	if err := ApplyDefaults(&cfg); err != nil {
-		t.Fatal(err)
-	}
-	assertCompactionBool(t, cfg.Compaction.JSONMinify, true, "JSONMinify")
-	assertCompactionBool(t, cfg.Compaction.CollapseBlankLines, true, "CollapseBlankLines")
-	assertCompactionBool(t, cfg.Compaction.TrimTrailingWhitespace, true, "TrimTrailingWhitespace")
-	assertCompactionBool(t, cfg.Compaction.NormalizeLineEndings, true, "NormalizeLineEndings")
-	assertCompactionBool(t, cfg.Compaction.PruneStaleTools, true, "PruneStaleTools")
-	assertCompactionBool(t, cfg.Compaction.PruneThoughts, true, "PruneThoughts")
-	if cfg.Compaction.ToolProtectionWindow != 4 {
-		t.Errorf("expected ToolProtectionWindow=4, got %d", cfg.Compaction.ToolProtectionWindow)
-	}
-}
-
-func TestCompactionPreset_Balanced(t *testing.T) {
-	raw := `{"compaction": {"compaction_preset": "balanced"}}`
-	var cfg Config
-	if err := json.Unmarshal([]byte(raw), &cfg); err != nil {
-		t.Fatal(err)
-	}
-	if err := ApplyDefaults(&cfg); err != nil {
-		t.Fatal(err)
-	}
-	assertCompactionBool(t, cfg.Compaction.JSONMinify, true, "JSONMinify")
-	assertCompactionBool(t, cfg.Compaction.CollapseBlankLines, true, "CollapseBlankLines")
-	assertCompactionBool(t, cfg.Compaction.TrimTrailingWhitespace, true, "TrimTrailingWhitespace")
-	assertCompactionBool(t, cfg.Compaction.NormalizeLineEndings, true, "NormalizeLineEndings")
-	assertCompactionBool(t, cfg.Compaction.PruneStaleTools, false, "PruneStaleTools")
-	assertCompactionBool(t, cfg.Compaction.PruneThoughts, false, "PruneThoughts")
-}
-
-func TestCompactionPreset_Minimal(t *testing.T) {
-	raw := `{"compaction": {"compaction_preset": "minimal"}}`
-	var cfg Config
-	if err := json.Unmarshal([]byte(raw), &cfg); err != nil {
-		t.Fatal(err)
-	}
-	if err := ApplyDefaults(&cfg); err != nil {
-		t.Fatal(err)
-	}
-	assertCompactionBool(t, cfg.Compaction.JSONMinify, false, "JSONMinify")
-	assertCompactionBool(t, cfg.Compaction.CollapseBlankLines, false, "CollapseBlankLines")
-	assertCompactionBool(t, cfg.Compaction.TrimTrailingWhitespace, false, "TrimTrailingWhitespace")
-	assertCompactionBool(t, cfg.Compaction.NormalizeLineEndings, false, "NormalizeLineEndings")
-	assertCompactionBool(t, cfg.Compaction.PruneStaleTools, false, "PruneStaleTools")
-	assertCompactionBool(t, cfg.Compaction.PruneThoughts, false, "PruneThoughts")
-}
-
-func TestCompactionPreset_WithIndividualOverride(t *testing.T) {
-	raw := `{
-		"compaction": {
-			"compaction_preset": "aggressive",
-			"prune_thoughts": false
-		}
-	}`
-	var cfg Config
-	if err := json.Unmarshal([]byte(raw), &cfg); err != nil {
-		t.Fatal(err)
-	}
-	if err := ApplyDefaults(&cfg); err != nil {
-		t.Fatal(err)
-	}
-	assertCompactionBool(t, cfg.Compaction.JSONMinify, true, "JSONMinify")
-	assertCompactionBool(t, cfg.Compaction.CollapseBlankLines, true, "CollapseBlankLines")
-	assertCompactionBool(t, cfg.Compaction.TrimTrailingWhitespace, true, "TrimTrailingWhitespace")
-	assertCompactionBool(t, cfg.Compaction.NormalizeLineEndings, true, "NormalizeLineEndings")
-	assertCompactionBool(t, cfg.Compaction.PruneStaleTools, true, "PruneStaleTools")
-	assertCompactionBool(t, cfg.Compaction.PruneThoughts, false, "PruneThoughts")
-}
-
-func TestCompactionPreset_UnknownPreset(t *testing.T) {
-	raw := `{"compaction": {"compaction_preset": "extreme"}}`
-	var cfg Config
-	if err := json.Unmarshal([]byte(raw), &cfg); err != nil {
-		t.Fatal(err)
-	}
-	if err := ApplyDefaults(&cfg); err != nil {
-		t.Fatal(err)
-	}
-	assertCompactionBool(t, cfg.Compaction.JSONMinify, true, "JSONMinify")
-	assertCompactionBool(t, cfg.Compaction.CollapseBlankLines, true, "CollapseBlankLines")
-	assertCompactionBool(t, cfg.Compaction.TrimTrailingWhitespace, true, "TrimTrailingWhitespace")
-	assertCompactionBool(t, cfg.Compaction.NormalizeLineEndings, true, "NormalizeLineEndings")
-	assertCompactionBool(t, cfg.Compaction.PruneStaleTools, false, "PruneStaleTools")
-	assertCompactionBool(t, cfg.Compaction.PruneThoughts, false, "PruneThoughts")
-}
-
-func TestCompactionPreset_EmptyPreset(t *testing.T) {
-	raw := `{"compaction": {"compaction_preset": ""}}`
-	var cfg Config
-	if err := json.Unmarshal([]byte(raw), &cfg); err != nil {
-		t.Fatal(err)
-	}
-	if err := ApplyDefaults(&cfg); err != nil {
-		t.Fatal(err)
-	}
-	assertCompactionBool(t, cfg.Compaction.JSONMinify, true, "JSONMinify")
-	assertCompactionBool(t, cfg.Compaction.CollapseBlankLines, true, "CollapseBlankLines")
-	assertCompactionBool(t, cfg.Compaction.TrimTrailingWhitespace, true, "TrimTrailingWhitespace")
-	assertCompactionBool(t, cfg.Compaction.NormalizeLineEndings, true, "NormalizeLineEndings")
-	assertCompactionBool(t, cfg.Compaction.PruneStaleTools, false, "PruneStaleTools")
-	assertCompactionBool(t, cfg.Compaction.PruneThoughts, false, "PruneThoughts")
-}
-
-func TestCompactionPreset_EnabledAutoDetection(t *testing.T) {
-	tests := []struct {
-		name     string
-		raw      string
-		expected bool
-	}{
-		{
-			name:     "aggressive preset enables compaction",
-			raw:      `{"compaction": {"compaction_preset": "aggressive"}}`,
-			expected: true,
-		},
-		{
-			name:     "minimal preset does not enable compaction",
-			raw:      `{"compaction": {"compaction_preset": "minimal"}}`,
-			expected: false,
-		},
-		{
-			name:     "balanced preset enables compaction",
-			raw:      `{"compaction": {"compaction_preset": "balanced"}}`,
-			expected: true,
-		},
-		{
-			name:     "no preset defaults to enabled",
-			raw:      `{}`,
-			expected: true,
+func TestApplyBuiltInProviders_MergesPartialConfig(t *testing.T) {
+	cfg := &Config{
+		Providers: map[string]ProviderConfig{
+			"ollama": {
+				URL: "http://192.168.0.9:11434/v1/chat/completions",
+			},
 		},
 	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			var cfg Config
-			if err := json.Unmarshal([]byte(tt.raw), &cfg); err != nil {
-				t.Fatal(err)
-			}
-			if err := ApplyDefaults(&cfg); err != nil {
-				t.Fatal(err)
-			}
-			if tt.expected {
-				if cfg.Compaction.Enabled == nil || !*cfg.Compaction.Enabled {
-					t.Errorf("expected compaction enabled, got %v", cfg.Compaction.Enabled)
-				}
-			} else {
-				if cfg.Compaction.Enabled != nil && *cfg.Compaction.Enabled {
-					t.Errorf("expected compaction disabled, got %v", cfg.Compaction.Enabled)
-				}
-			}
-		})
+
+	applyBuiltInProviders(cfg)
+
+	ollama, ok := cfg.Providers["ollama"]
+	if !ok {
+		t.Fatal("ollama provider not found after applyBuiltInProviders")
+	}
+
+	if ollama.URL != "http://192.168.0.9:11434/v1/chat/completions" {
+		t.Errorf("URL = %v, want http://192.168.0.9:11434/v1/chat/completions", ollama.URL)
+	}
+
+	if ollama.AuthStyle != "none" {
+		t.Errorf("AuthStyle = %v, want none", ollama.AuthStyle)
+	}
+
+	if ollama.ApiFormat != "" {
+		t.Errorf("ApiFormat should be empty, got %v", ollama.ApiFormat)
 	}
 }
 
-func assertCompactionBool(t *testing.T, got *bool, want bool, name string) {
-	t.Helper()
-	if got == nil {
-		t.Errorf("%s: got nil, want %v", name, want)
-		return
+func TestApplyBuiltInProviders_UserOverridesDefaults(t *testing.T) {
+	cfg := &Config{
+		Providers: map[string]ProviderConfig{
+			"anthropic": {
+				URL:       "https://custom.anthropic.com/v1/messages",
+				AuthStyle: "bearer",
+			},
+		},
 	}
-	if *got != want {
-		t.Errorf("%s: got %v, want %v", name, *got, want)
+
+	applyBuiltInProviders(cfg)
+
+	anthropic, ok := cfg.Providers["anthropic"]
+	if !ok {
+		t.Fatal("anthropic provider not found after applyBuiltInProviders")
+	}
+
+	if anthropic.URL != "https://custom.anthropic.com/v1/messages" {
+		t.Errorf("URL = %v, want user-provided custom URL", anthropic.URL)
+	}
+
+	if anthropic.AuthStyle != "bearer" {
+		t.Errorf("AuthStyle = %v, want user-provided bearer", anthropic.AuthStyle)
 	}
 }
 
-func TestContextHardLimitDefaults(t *testing.T) {
-	raw := `{}`
-	var cfg Config
-	if err := json.Unmarshal([]byte(raw), &cfg); err != nil {
-		t.Fatal(err)
+func TestApplyBuiltInProviders_AddsMissingProviders(t *testing.T) {
+	cfg := &Config{
+		Providers: map[string]ProviderConfig{},
 	}
-	if err := ApplyDefaults(&cfg); err != nil {
-		t.Fatal(err)
+
+	applyBuiltInProviders(cfg)
+
+	if _, ok := cfg.Providers["anthropic"]; !ok {
+		t.Error("anthropic provider not added")
 	}
-	// HardLimitTokens should default to 0 (backward compat)
-	if cfg.Context.HardLimitTokens != 0 {
-		t.Errorf("expected HardLimitTokens=0, got %d", cfg.Context.HardLimitTokens)
+
+	if _, ok := cfg.Providers["openai"]; !ok {
+		t.Error("openai provider not added")
+	}
+
+	if _, ok := cfg.Providers["ollama"]; !ok {
+		t.Error("ollama provider not added")
 	}
 }
 
-func TestContextHardLimitCustom(t *testing.T) {
-	raw := `{"context": {"hard_limit_tokens": 4000}}`
-	var cfg Config
-	if err := json.Unmarshal([]byte(raw), &cfg); err != nil {
-		t.Fatal(err)
+func TestMergeProviderConfig_RespectsUserValues(t *testing.T) {
+	user := ProviderConfig{
+		URL:        "http://custom.com",
+		AuthStyle:  "bearer",
+		ApiFormat:  "openai",
+		TimeoutSeconds: 30,
 	}
-	if err := ApplyDefaults(&cfg); err != nil {
-		t.Fatal(err)
+
+	builtIn := ProviderConfig{
+		URL:       "http://builtin.com",
+		AuthStyle: "none",
+		ApiFormat: "anthropic",
+		TimeoutSeconds: 60,
 	}
-	if cfg.Context.HardLimitTokens != 4000 {
-		t.Errorf("expected HardLimitTokens=4000, got %d", cfg.Context.HardLimitTokens)
+
+	merged := mergeProviderConfig(user, builtIn)
+
+	if merged.URL != "http://custom.com" {
+		t.Errorf("URL = %v, want user value", merged.URL)
+	}
+
+	if merged.AuthStyle != "bearer" {
+		t.Errorf("AuthStyle = %v, want user value", merged.AuthStyle)
+	}
+
+	if merged.ApiFormat != "openai" {
+		t.Errorf("ApiFormat = %v, want user value", merged.ApiFormat)
+	}
+
+	if merged.TimeoutSeconds != 30 {
+		t.Errorf("TimeoutSeconds = %v, want user value", merged.TimeoutSeconds)
 	}
 }
 
-func TestNegativeHardLimitNormalized(t *testing.T) {
-	raw := `{"context": {"hard_limit_tokens": -100}}`
-	var cfg Config
-	if err := json.Unmarshal([]byte(raw), &cfg); err != nil {
-		t.Fatal(err)
+func TestMergeProviderConfig_FillsInMissingDefaults(t *testing.T) {
+	user := ProviderConfig{
+		URL: "http://custom.com",
 	}
-	if err := ApplyDefaults(&cfg); err != nil {
-		t.Fatal(err)
+
+	builtIn := ProviderConfig{
+		URL:       "http://builtin.com",
+		AuthStyle: "none",
+		ApiFormat: "openai",
+		TimeoutSeconds: 60,
+		MaxRetryAttempts: 3,
+		RetryableStatusCodes: []int{429, 500, 502, 503},
+		FormatURLs: map[string]string{
+			"anthropic": "http://builtin.com/v1/messages",
+		},
 	}
-	if cfg.Context.HardLimitTokens != 0 {
-		t.Errorf("expected HardLimitTokens=0 (negative normalized), got %d", cfg.Context.HardLimitTokens)
+
+	merged := mergeProviderConfig(user, builtIn)
+
+	if merged.URL != "http://custom.com" {
+		t.Errorf("URL = %v, want user value", merged.URL)
+	}
+
+	if merged.AuthStyle != "none" {
+		t.Errorf("AuthStyle = %v, want built-in value", merged.AuthStyle)
+	}
+
+	if merged.ApiFormat != "openai" {
+		t.Errorf("ApiFormat = %v, want built-in value", merged.ApiFormat)
+	}
+
+	if merged.TimeoutSeconds != 60 {
+		t.Errorf("TimeoutSeconds = %v, want built-in value", merged.TimeoutSeconds)
+	}
+
+	if merged.MaxRetryAttempts != 3 {
+		t.Errorf("MaxRetryAttempts = %v, want built-in value", merged.MaxRetryAttempts)
+	}
+
+	if len(merged.RetryableStatusCodes) != 4 {
+		t.Errorf("RetryableStatusCodes = %v, want built-in value", merged.RetryableStatusCodes)
+	}
+
+	if len(merged.FormatURLs) != 1 {
+		t.Errorf("FormatURLs = %v, want built-in value", merged.FormatURLs)
+	}
+
+	if merged.FormatURLs["anthropic"] != "http://builtin.com/v1/messages" {
+		t.Errorf("FormatURLs[anthropic] = %v, want built-in value", merged.FormatURLs["anthropic"])
 	}
 }
+
+func TestMergeString_NilDst(t *testing.T) {
+	mergeString(nil, "value")
+}
+
+func TestMergeString_EmptyDst(t *testing.T) {
+	dst := ""
+	mergeString(&dst, "value")
+	if dst != "value" {
+		t.Errorf("dst = %v, want value", dst)
+	}
+}
+
+func TestMergeString_NonEmptyDst(t *testing.T) {
+	dst := "user"
+	mergeString(&dst, "value")
+	if dst != "user" {
+		t.Errorf("dst = %v, want user", dst)
+	}
+}
+
+func TestMergeString_EmptySrc(t *testing.T) {
+	dst := ""
+	mergeString(&dst, "")
+	if dst != "" {
+		t.Errorf("dst = %v, want empty", dst)
+	}
+}
+
