@@ -31,7 +31,7 @@ func NewTFIDFInterceptor(querySource string, logger *slog.Logger) *TFIDFIntercep
 func (t *TFIDFInterceptor) Name() string  { return t.name }
 func (t *TFIDFInterceptor) Priority() int { return t.priority }
 func (t *TFIDFInterceptor) CanHandle(_ context.Context, req *InterceptRequest) bool {
-	return t.querySource != "" && len(req.Messages) > 1 && req.TokenCount > req.SoftLimit
+	return t.querySource != "" && len(req.Messages) > 1 && req.SoftLimit > 0 && req.TokenCount > req.SoftLimit
 }
 
 func (t *TFIDFInterceptor) Process(ctx context.Context, req *InterceptRequest) (*InterceptResult, error) {

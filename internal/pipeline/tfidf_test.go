@@ -1,6 +1,8 @@
 package pipeline
 
 import (
+	"context"
+	"log/slog"
 	"math"
 	"strings"
 	"testing"
@@ -200,6 +202,76 @@ func TestScoreBlocksEmptyQuery(t *testing.T) {
 		if s.score != 0 {
 			t.Errorf("empty query should produce zero scores, got %f", s.score)
 		}
+	}
+}
+
+func TestTFIDFInterceptorCanHandle(t *testing.T) {
+	logger := slog.Default()
+	interceptor := NewTFIDFInterceptor("self", logger)
+
+	tests := []struct {
+		name         string
+		querySource  string
+		messages     []map[string]any
+		tokenCount   int
+		softLimit    int
+		wantCanHandle bool
+	}{
+		{
+			name:         "handles when query_source set and tokens exceed soft_limit",
+			querySource:  "self",
+			messages:     []map[string]any{{"role": "user", "content": "query"}, {"role": "user", "content": "content"}},
+			tokenCount:   5000,
+			softLimit:    4000,
+			wantCanHandle: true,
+		},
+		{
+			name:         "does not handle when query_source empty",
+			querySource:  "",
+			messages:     []map[string]any{{"role": "user", "content": "query"}, {"role": "user", "content": "content"}},
+			tokenCount:   5000,
+			softLimit:    4000,
+			wantCanHandle: false,
+		},
+		{
+			name:         "does not handle when only one message",
+			querySource:  "self",
+			messages:     []map[string]any{{"role": "user", "content": "query"}},
+			tokenCount:   5000,
+			softLimit:    4000,
+			wantCanHandle: false,
+		},
+		{
+			name:         "does not handle when soft_limit is zero (unknown MaxContext)",
+			querySource:  "self",
+			messages:     []map[string]any{{"role": "user", "content": "query"}, {"role": "user", "content": "content"}},
+			tokenCount:   5000,
+			softLimit:    0,
+			wantCanHandle: false,
+		},
+		{
+			name:         "does not handle when tokens below soft_limit",
+			querySource:  "self",
+			messages:     []map[string]any{{"role": "user", "content": "query"}, {"role": "user", "content": "content"}},
+			tokenCount:   3000,
+			softLimit:    4000,
+			wantCanHandle: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			interceptor.querySource = tt.querySource
+			req := &InterceptRequest{
+				Messages:   tt.messages,
+				TokenCount: tt.tokenCount,
+				SoftLimit:  tt.softLimit,
+			}
+			got := interceptor.CanHandle(context.Background(), req)
+			if got != tt.wantCanHandle {
+				t.Errorf("CanHandle() = %v, want %v", got, tt.wantCanHandle)
+			}
+		})
 	}
 }
 

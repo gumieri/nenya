@@ -337,6 +337,7 @@ func min(a, b int) int {
 // Proactive truncation thresholds:
 //   - SoftLimit: triggers Ollama summarization (1/8 of MaxContext)
 //   - HardLimit: absolute truncation limit (3/4 of MaxContext, leaves room for response)
+//
 // If MaxContext is unknown (<=0), truncation is disabled (limits=0) and the full payload
 // is sent upstream. The upstream provider may return context_length_exceeded, which triggers
 // automatic retry with summarization.
