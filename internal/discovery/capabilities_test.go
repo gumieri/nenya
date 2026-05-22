@@ -211,3 +211,19 @@ func TestInferCapabilities_BackwardCompatibility(t *testing.T) {
 		})
 	}
 }
+
+func TestCapAudio(t *testing.T) {
+	if CapAudio == "" {
+		t.Fatal("CapAudio constant is not defined")
+	}
+
+	meta := &ModelMetadata{SupportsAudio: true}
+	if !meta.HasCapability(CapAudio) {
+		t.Error("HasCapability(CapAudio) returned false, want true")
+	}
+
+	meta = &ModelMetadata{SupportsAudio: false}
+	if meta.HasCapability(CapAudio) {
+		t.Error("HasCapability(CapAudio) returned true, want false")
+	}
+}

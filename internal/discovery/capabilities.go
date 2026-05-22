@@ -14,6 +14,7 @@ const (
 	CapContentArrays  Capability = "content_arrays"
 	CapStreamOptions  Capability = "stream_options"
 	CapAutoToolChoice Capability = "auto_tool_choice"
+	CapAudio          Capability = "audio"
 )
 
 type capabilityRule struct {

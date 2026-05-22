@@ -32,6 +32,7 @@ type ModelMetadata struct {
 	SupportsToolCalls      bool `json:"supports_tool_calls,omitempty"`
 	SupportsReasoning      bool `json:"supports_reasoning,omitempty"`
 	SupportsVision         bool `json:"supports_vision,omitempty"`
+	SupportsAudio          bool `json:"supports_audio,omitempty"`
 
 	ScoreBonus float64 `json:"score_bonus,omitempty"`
 
@@ -71,6 +72,8 @@ func (m *ModelMetadata) HasCapability(cap Capability) bool {
 		return m.SupportsStreamOptions
 	case CapAutoToolChoice:
 		return m.SupportsAutoToolChoice
+	case CapAudio:
+		return m.SupportsAudio
 	default:
 		return false
 	}
@@ -95,6 +98,8 @@ func applyCapabilities(meta *ModelMetadata, caps []Capability) *ModelMetadata {
 			meta.SupportsStreamOptions = true
 		case CapAutoToolChoice:
 			meta.SupportsAutoToolChoice = true
+		case CapAudio:
+			meta.SupportsAudio = true
 		default:
 			valid = false
 		}

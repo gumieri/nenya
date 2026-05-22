@@ -1,7 +1,9 @@
 package discovery
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"log/slog"
@@ -185,6 +187,9 @@ func buildCapabilityMetadata(meta *ModelMetadata) string {
 	if meta.SupportsAutoToolChoice {
 		caps = append(caps, "auto_tool_choice")
 	}
+	if meta.SupportsAudio {
+		caps = append(caps, "audio")
+	}
 	return strings.Join(caps, ",")
 }
 
@@ -232,6 +237,15 @@ func (df *DiscoveryFetcher) fetchProviderModels(ctx context.Context, providerNam
 	models, err := ParseModelsResponse(body, providerName, logger)
 	if err != nil {
 		return nil, fmt.Errorf("discovery parse: %w", err)
+	}
+
+	if strings.ToLower(providerName) == "ollama" {
+		enrichedModels, err := enrichOllamaModels(ctx, provider.URL, models, df.client, logger)
+		if err != nil {
+			logger.Warn("Ollama model enrichment failed, using basic model list", "err", err)
+		} else {
+			models = enrichedModels
+		}
 	}
 
 	if len(models) > maxModelsPerSrc {
@@ -288,4 +302,128 @@ func injectAuth(req *http.Request, providerName string, provider *config.Provide
 		}
 	}
 	return a.InjectAuth(req, provider.APIKey)
+}
+
+const ollamaEnrichConcurrency = 5
+const ollamaShowTimeout = 10 * time.Second
+
+type ollamaShowResult struct {
+	modelName    string
+	maxCtx       int
+	caps         []Capability
+	serviceKinds []string
+	err          error
+}
+
+func enrichSingleOllamaModel(ctx context.Context, modelName, showEndpoint string, client *http.Client) ollamaShowResult {
+	res := ollamaShowResult{modelName: modelName}
+	body, _ := json.Marshal(map[string]string{"name": modelName})
+	showCtx, cancel := context.WithTimeout(ctx, ollamaShowTimeout)
+	req, reqErr := http.NewRequestWithContext(showCtx, "POST", showEndpoint, bytes.NewReader(body))
+	if reqErr != nil {
+		cancel()
+		res.err = reqErr
+		return res
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, doErr := client.Do(req)
+	if doErr != nil {
+		cancel()
+		res.err = doErr
+		return res
+	}
+	respBody, readErr := io.ReadAll(io.LimitReader(resp.Body, maxModelsBody))
+	_ = resp.Body.Close()
+	cancel()
+	if readErr != nil {
+		res.err = readErr
+		return res
+	}
+	if resp.StatusCode != http.StatusOK {
+		res.err = fmt.Errorf("ollama /api/show returned status %d", resp.StatusCode)
+		return res
+	}
+	var showResp OllamaShowResponse
+	if jsonErr := json.Unmarshal(respBody, &showResp); jsonErr != nil {
+		res.err = fmt.Errorf("ollama /api/show parse: %w", jsonErr)
+		return res
+	}
+	res.maxCtx = extractContextLength(showResp.ModelInfo)
+	res.caps = mapOllamaCaps(showResp.Capabilities)
+	hasEmbeddings := extractHasEmbeddings(showResp.ModelInfo)
+	res.serviceKinds = mapOllamaServiceKinds(showResp.Capabilities, hasEmbeddings)
+	return res
+}
+
+func enrichOllamaModels(ctx context.Context, baseURL string, models []DiscoveredModel, client *http.Client, logger *slog.Logger) ([]DiscoveredModel, error) {
+	showEndpoint := GetOllamaShowEndpoint(baseURL)
+	if showEndpoint == "" {
+		return nil, fmt.Errorf("no /api/show endpoint for Ollama URL: %s", baseURL)
+	}
+
+	type job struct {
+		index     int
+		modelName string
+	}
+
+	jobs := make(chan job, len(models))
+	resultsCh := make(chan ollamaShowResult, len(models))
+
+	var wg sync.WaitGroup
+	for w := 0; w < ollamaEnrichConcurrency; w++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for j := range jobs {
+				res := enrichSingleOllamaModel(ctx, j.modelName, showEndpoint, client)
+				resultsCh <- res
+			}
+		}()
+	}
+
+	for i, m := range models {
+		jobs <- job{index: i, modelName: m.ID}
+	}
+	close(jobs)
+
+	go func() {
+		wg.Wait()
+		close(resultsCh)
+	}()
+
+	modelMap := make(map[string]*DiscoveredModel)
+	for i := range models {
+		modelMap[models[i].ID] = &models[i]
+	}
+
+	for res := range resultsCh {
+		m, ok := modelMap[res.modelName]
+		if !ok {
+			continue
+		}
+		if res.err != nil {
+			logger.Debug("ollama model enrichment failed, using zero values",
+				"model", res.modelName, "err", res.err)
+			continue
+		}
+		if res.maxCtx > 0 {
+			m.MaxContext = res.maxCtx
+		}
+		if len(res.caps) > 0 {
+			if m.Metadata == nil {
+				m.Metadata = &ModelMetadata{}
+			}
+			applyCapabilities(m.Metadata, res.caps)
+		}
+		if len(res.serviceKinds) > 0 {
+			m.ServiceKinds = res.serviceKinds
+		}
+		logger.Debug("ollama model enriched",
+			"model", res.modelName,
+			"max_context", res.maxCtx,
+			"caps", res.caps,
+			"service_kinds", res.serviceKinds)
+	}
+
+	return models, nil
 }

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/url"
+	"sort"
 	"strings"
 	"unicode"
 )
@@ -207,6 +208,17 @@ func GetParser(provider string) Parser {
 	}
 }
 
+func GetOllamaShowEndpoint(providerURL string) string {
+	if providerURL == "" {
+		return ""
+	}
+	u, err := url.Parse(providerURL)
+	if err != nil {
+		return ""
+	}
+	return u.Scheme + "://" + u.Host + "/api/show"
+}
+
 func GetModelsEndpoint(providerURL, provider string) string {
 	if providerURL == "" {
 		return ""
@@ -270,4 +282,132 @@ func isValidModelID(id string) bool {
 		}
 	}
 	return true
+}
+
+type OllamaShowDetails struct {
+	Family            string   `json:"family"`
+	Families          []string `json:"families"`
+	ParameterSize     string   `json:"parameter_size"`
+	QuantizationLevel string   `json:"quantization_level"`
+	Format            string   `json:"format"`
+}
+
+type OllamaShowResponse struct {
+	Details      OllamaShowDetails `json:"details"`
+	ModelInfo    map[string]any    `json:"model_info"`
+	Capabilities []string          `json:"capabilities"`
+	Parameters   string            `json:"parameters"`
+}
+
+func extractContextLength(modelInfo map[string]any) int {
+	var maxCtx int
+	for key, val := range modelInfo {
+		if !strings.HasSuffix(key, ".context_length") {
+			continue
+		}
+		n, ok := toInt(val)
+		if ok && n > 0 && n > maxCtx {
+			maxCtx = n
+		}
+	}
+	return maxCtx
+}
+
+func extractHasEmbeddings(modelInfo map[string]any) bool {
+	for key := range modelInfo {
+		if strings.HasSuffix(key, ".embedding_length") {
+			return true
+		}
+	}
+	return false
+}
+
+func mapOllamaCaps(caps []string) []Capability {
+	if len(caps) == 0 {
+		return nil
+	}
+	capMap := make(map[Capability]bool)
+	for _, c := range caps {
+		switch c {
+		case "vision":
+			capMap[CapVision] = true
+		case "tools":
+			capMap[CapToolCalls] = true
+		case "thinking":
+			capMap[CapReasoning] = true
+		case "audio":
+			capMap[CapAudio] = true
+		}
+	}
+	if len(capMap) == 0 {
+		return nil
+	}
+	result := make([]Capability, 0, len(capMap))
+	for cap := range capMap {
+		result = append(result, cap)
+	}
+	sort.Slice(result, func(i, j int) bool {
+		return result[i] < result[j]
+	})
+	return result
+}
+
+func mapOllamaServiceKinds(caps []string, hasEmbeddings bool) []string {
+	var kinds []string
+	hasCompletion := false
+	for _, c := range caps {
+		if c == "completion" {
+			hasCompletion = true
+			break
+		}
+	}
+	if hasCompletion {
+		kinds = append(kinds, "llm")
+	}
+	if hasEmbeddings {
+		kinds = append(kinds, "embedding")
+	}
+	hasAudio := false
+	for _, c := range caps {
+		if c == "audio" {
+			hasAudio = true
+			break
+		}
+	}
+	if hasAudio {
+		kinds = append(kinds, "tts", "stt")
+	}
+	if len(kinds) == 0 {
+		return nil
+	}
+	return kinds
+}
+
+func toInt(v any) (int, bool) {
+	switch n := v.(type) {
+	case int:
+		return n, true
+	case int32:
+		return int(n), true
+	case int64:
+		return int(n), true
+	case uint:
+		return int(n), true
+	case uint32:
+		return int(n), true
+	case uint64:
+		return int(n), true
+	case float32:
+		return int(n), true
+	case float64:
+		return int(n), true
+	case json.Number:
+		i, err := n.Int64()
+		if err != nil {
+			return 0, false
+		}
+		return int(i), true
+	default:
+		return 0, false
+	}
 }

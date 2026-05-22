@@ -6,14 +6,15 @@ import (
 )
 
 type DiscoveredModel struct {
-	ID         string         `json:"id"`
-	Provider   string         `json:"provider"`
-	Format     string         `json:"format,omitempty"`
-	MaxContext int            `json:"max_context"`
-	MaxOutput  int            `json:"max_output"`
-	OwnedBy    string         `json:"owned_by"`
-	Metadata   *ModelMetadata `json:"metadata,omitempty"`
-	Pricing    *PricingEntry  `json:"pricing,omitempty"`
+	ID           string         `json:"id"`
+	Provider     string         `json:"provider"`
+	Format       string         `json:"format,omitempty"`
+	MaxContext   int            `json:"max_context"`
+	MaxOutput    int            `json:"max_output"`
+	OwnedBy      string         `json:"owned_by"`
+	Metadata     *ModelMetadata `json:"metadata,omitempty"`
+	Pricing      *PricingEntry  `json:"pricing,omitempty"`
+	ServiceKinds []string       `json:"service_kinds,omitempty"`
 }
 
 func (m DiscoveredModel) HasCapability(cap Capability) bool {
