@@ -332,15 +332,23 @@ func min(a, b int) int {
 
 // resolvePipelineContext extracts messages, MCP tool state, limits, and client
 // profile from the validated request.
+// resolvePipelineContext prepares the payload for content filtering pipeline.
+// Returns messages, MCP tools flag, soft/hard limits, window max context, and client profile.
+// Proactive truncation thresholds:
+//   - SoftLimit: triggers Ollama summarization (1/8 of MaxContext)
+//   - HardLimit: absolute truncation limit (3/4 of MaxContext, leaves room for response)
+// If MaxContext is unknown (<=0), truncation is disabled (limits=0) and the full payload
+// is sent upstream. The upstream provider may return context_length_exceeded, which triggers
+// automatic retry with summarization.
 func (p *Proxy) resolvePipelineContext(r *http.Request, gw *gateway.NenyaGateway, req *chatRequest) ([]any, bool, int, int, int, pipeline.ClientProfile) {
 	messagesRaw, ok := req.Payload["messages"]
 	if !ok {
-		return nil, false, 4000, 24000, 0, pipeline.ClientProfile{}
+		return nil, false, 0, 0, 0, pipeline.ClientProfile{}
 	}
 	messages, ok := messagesRaw.([]any)
 	if !ok || len(messages) == 0 {
 		gw.Logger.Warn("messages field is not a non-empty array, skipping Ollama interception")
-		return nil, false, 4000, 24000, 0, pipeline.ClientProfile{}
+		return nil, false, 0, 0, 0, pipeline.ClientProfile{}
 	}
 
 	autoSearchCtx, autoSearchCancel := context.WithTimeout(r.Context(), mcpAutoSearchTimeout)
@@ -348,13 +356,17 @@ func (p *Proxy) resolvePipelineContext(r *http.Request, gw *gateway.NenyaGateway
 	autoSearchCancel()
 	p.injectMCPTools(gw, req.Payload, req.AgentName)
 
-	softLimit := 4000
-	hardLimit := 24000
+	softLimit := 0
+	hardLimit := 0
 	if len(req.Targets) > 0 {
 		primaryTarget := req.Targets[0]
 		if primaryTarget.MaxContext > 0 {
 			softLimit = primaryTarget.MaxContext / 8
 			hardLimit = primaryTarget.MaxContext * 3 / 4
+		} else {
+			gw.Logger.Warn("MaxContext unknown for model, proactive truncation disabled — configure max_context to enable",
+				"model", req.ModelName,
+				"provider", primaryTarget.Provider)
 		}
 	}
 

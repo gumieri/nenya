@@ -20,6 +20,11 @@ func (m DiscoveredModel) HasCapability(cap Capability) bool {
 	return m.Metadata.HasCapability(cap)
 }
 
+// MaxContext is the model's maximum context window in tokens.
+// A value > 0 indicates a known limit. Values <= 0 are treated as unknown,
+// disabling proactive truncation. Upstream providers may still reject
+// payloads with context_length_exceeded errors (triggers retry with summarization).
+
 type ModelCatalog struct {
 	mu          sync.RWMutex
 	models      map[string][]DiscoveredModel

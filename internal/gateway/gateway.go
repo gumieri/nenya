@@ -26,6 +26,31 @@ import (
 	"git.0ur.uk/nenya/internal/util"
 )
 
+// warnModelsMissingMaxContext logs warnings for providers with models that lack MaxContext.
+// When MaxContext is unknown, proactive truncation is disabled. The full payload is
+// sent upstream; if the provider returns context_length_exceeded, Nenya will
+// automatically retry with summarization (if AutoRetryOnContextLimitEnabled).
+func warnModelsMissingMaxContext(logger *slog.Logger, providers map[string]*config.Provider, catalog *discovery.ModelCatalog) {
+	providersMissingMaxContext := make(map[string][]string)
+
+	for _, m := range catalog.AllModels() {
+		if m.MaxContext <= 0 {
+			providersMissingMaxContext[m.Provider] = append(providersMissingMaxContext[m.Provider], m.ID)
+		}
+	}
+
+	for provider, models := range providersMissingMaxContext {
+		if provider == "" {
+			provider = "static config"
+		}
+		modelList := util.JoinBackticks(models)
+		logger.Warn("provider has models without max_context configured — proactive truncation disabled; upstream may return context_length_exceeded (retries with summarization will be attempted)",
+			"provider", provider,
+			"models", modelList,
+			"count", len(models))
+	}
+}
+
 // NenyaGateway is the top-level container that holds all gateway components:
 // configuration, HTTP clients, provider registry, MCP clients, metrics,
 // rate limiter, caches, and the token counter.
@@ -201,6 +226,8 @@ func performModelDiscovery(ctx context.Context, cfg *config.Config, providers ma
 	}
 
 	logger.Info("model discovery completed", "total_models", len(mergedCatalog.AllModels()), "fetched_at", catalog.FetchedAt().Format(time.RFC3339))
+
+	warnModelsMissingMaxContext(logger, providers, mergedCatalog)
 
 	healthRegistry = discovery.ValidateAllProviders(providers, mergedCatalog, logger)
 
