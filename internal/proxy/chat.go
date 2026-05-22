@@ -331,8 +331,8 @@ func min(a, b int) int {
 }
 
 // resolvePipelineContext extracts messages, MCP tool state, limits, and client
-// profile from the validated request.
-// resolvePipelineContext prepares the payload for content filtering pipeline.
+// profile from the validated request, preparing the payload for the content
+// filtering pipeline.
 // Returns messages, MCP tools flag, soft/hard limits, window max context, and client profile.
 // Proactive truncation thresholds:
 //   - SoftLimit: triggers Ollama summarization (1/8 of MaxContext)
