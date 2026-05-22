@@ -14,7 +14,7 @@ type DiscoveredModel struct {
 	OwnedBy      string         `json:"owned_by"`
 	Metadata     *ModelMetadata `json:"metadata,omitempty"`
 	Pricing      *PricingEntry  `json:"pricing,omitempty"`
-	ServiceKinds []string       `json:"service_kinds,omitempty"`
+	ServiceKinds []string       `json:"service_kinds,omitempty"` // Future: use for intelligent model routing to embedding/TTS endpoints
 }
 
 func (m DiscoveredModel) HasCapability(cap Capability) bool {

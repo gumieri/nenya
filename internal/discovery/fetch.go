@@ -319,22 +319,20 @@ func enrichSingleOllamaModel(ctx context.Context, modelName, showEndpoint string
 	res := ollamaShowResult{modelName: modelName}
 	body, _ := json.Marshal(map[string]string{"name": modelName})
 	showCtx, cancel := context.WithTimeout(ctx, ollamaShowTimeout)
+	defer cancel()
 	req, reqErr := http.NewRequestWithContext(showCtx, "POST", showEndpoint, bytes.NewReader(body))
 	if reqErr != nil {
-		cancel()
 		res.err = reqErr
 		return res
 	}
 	req.Header.Set("Content-Type", "application/json")
 	resp, doErr := client.Do(req)
 	if doErr != nil {
-		cancel()
 		res.err = doErr
 		return res
 	}
 	respBody, readErr := io.ReadAll(io.LimitReader(resp.Body, maxModelsBody))
 	_ = resp.Body.Close()
-	cancel()
 	if readErr != nil {
 		res.err = readErr
 		return res
@@ -358,6 +356,7 @@ func enrichSingleOllamaModel(ctx context.Context, modelName, showEndpoint string
 func enrichOllamaModels(ctx context.Context, baseURL string, models []DiscoveredModel, client *http.Client, logger *slog.Logger) ([]DiscoveredModel, error) {
 	showEndpoint := GetOllamaShowEndpoint(baseURL)
 	if showEndpoint == "" {
+		logger.Debug("cannot build /api/show endpoint", "url", baseURL)
 		return nil, fmt.Errorf("no /api/show endpoint for Ollama URL: %s", baseURL)
 	}
 

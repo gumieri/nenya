@@ -295,6 +295,7 @@ func TestMapOllamaServiceKinds(t *testing.T) {
 	}
 }
 
+// equalCapabilities returns true if two Capability slices are equal.
 func equalCapabilities(a, b []Capability) bool {
 	if len(a) != len(b) {
 		return false
@@ -307,6 +308,7 @@ func equalCapabilities(a, b []Capability) bool {
 	return true
 }
 
+// equalStringSlices returns true if two string slices are equal.
 func equalStringSlices(a, b []string) bool {
 	if len(a) != len(b) {
 		return false
