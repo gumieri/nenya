@@ -28,14 +28,7 @@ const MaxModelNameLength = 256
 type Proxy struct {
 	gw          atomic.Pointer[gateway.NenyaGateway]
 	ShutdownCtx context.Context
-}
-
-// Shutdown gracefully shuts down the gateway and waits for in-flight operations.
-func (p *Proxy) Shutdown(ctx context.Context) error {
-	if gw := p.Gateway(); gw != nil {
-		return gw.Shutdown(ctx)
-	}
-	return nil
+	Shutdown    atomic.Bool
 }
 
 // StoreGateway sets the gateway instance for the proxy.

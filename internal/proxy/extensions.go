@@ -33,9 +33,10 @@ var endpointDefaults = map[string]endpointConfig{
 // It validates path safety, selects a provider with the preferred name,
 // builds the upstream URL, reads the request body, executes with retry, and copies the response.
 func (p *Proxy) handleExtensionEndpoint(gw *gateway.NenyaGateway, w http.ResponseWriter, r *http.Request, keyRef, endpoint string) {
+	ctxLogger := gw.Logger.With("operation", endpoint, "api_key", keyRef)
 	cfg, ok := endpointDefaults[endpoint]
 	if !ok {
-		gw.Logger.Error("unknown extension endpoint", "endpoint", endpoint)
+		ctxLogger.Error("unknown extension endpoint")
 		writeStructuredError(w, http.StatusInternalServerError, infra.ErrorKindInternal, "Unknown endpoint")
 		return
 	}
@@ -47,16 +48,14 @@ func (p *Proxy) handleExtensionEndpoint(gw *gateway.NenyaGateway, w http.Respons
 
 	provider := p.selectExtensionProvider(gw, cfg.ProviderName)
 	if provider == nil {
-		gw.Logger.Error("no provider available for endpoint",
-			"endpoint", endpoint, "preferred", cfg.ProviderName)
+		ctxLogger.Error("no provider available", "preferred", cfg.ProviderName)
 		writeStructuredError(w, http.StatusServiceUnavailable, infra.ErrorKindModelNotFound, "No provider available for endpoint")
 		return
 	}
 
 	if !gw.RateLimiter.Check(provider.BaseURL, 0) {
 		gw.Metrics.RecordRateLimitRejected(endpoint)
-		gw.Logger.Warn("rate limit exceeded for endpoint",
-			"endpoint", endpoint, "provider", provider.Name)
+		ctxLogger.Warn("rate limit exceeded", "provider", provider.Name)
 		writeStructuredError(w, http.StatusTooManyRequests, infra.ErrorKindRateLimited, "Rate limit exceeded")
 		return
 	}
@@ -81,12 +80,12 @@ func (p *Proxy) handleExtensionEndpoint(gw *gateway.NenyaGateway, w http.Respons
 	}
 
 	contentType := r.Header.Get("Content-Type")
-	ctxLogger := gw.Logger.With("operation", endpoint, "provider", provider.Name, "api_key", keyRef)
+	ctxLogger = ctxLogger.With("provider", provider.Name)
 
 	resp, err := p.doUpstreamRoundTrip(ctx, gw, r.Method, targetURL, bodyBytes, provider.Name, "", r.Header, contentType, maxAttempts)
 
 	if err != nil {
-		ctxLogger.Error("upstream request failed", "endpoint", endpoint, "err", err)
+		ctxLogger.Error("upstream request failed", "err", err)
 		writeStructuredError(w, http.StatusBadGateway, infra.ErrorKindProviderError, "Upstream provider error")
 		return
 	}
@@ -166,7 +165,6 @@ func (p *Proxy) readExtensionBody(gw *gateway.NenyaGateway, w http.ResponseWrite
 
 	bodyBytes, readErr := io.ReadAll(r.Body)
 	if readErr != nil {
-		gw.Logger.Error("failed to read extension request body", "err", readErr)
 		writeStructuredError(w, http.StatusRequestEntityTooLarge, infra.ErrorKindPayloadTooLarge, "Payload too large or malformed")
 		return nil, false
 	}

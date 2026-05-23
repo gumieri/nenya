@@ -13,7 +13,6 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-	"sync"
 	"syscall"
 	"time"
 
@@ -29,60 +28,6 @@ import (
 type configPaths struct {
 	dir  string
 	file string
-}
-
-type reloadLimiter struct {
-	mu         sync.Mutex
-	pending    bool
-	debounce   *time.Timer
-	debounceMu sync.Mutex
-}
-
-func (rl *reloadLimiter) Stop() {
-	rl.debounceMu.Lock()
-	defer rl.debounceMu.Unlock()
-	if rl.debounce != nil {
-		rl.debounce.Stop()
-		rl.debounce = nil
-	}
-}
-
-func (rl *reloadLimiter) tryStart() bool {
-	rl.mu.Lock()
-	defer rl.mu.Unlock()
-	if rl.pending {
-		return false
-	}
-	rl.pending = true
-	return true
-}
-
-func (rl *reloadLimiter) done() {
-	rl.mu.Lock()
-	defer rl.mu.Unlock()
-	rl.pending = false
-}
-
-func (rl *reloadLimiter) scheduleReload(reloadFunc func()) bool {
-	rl.debounceMu.Lock()
-	defer rl.debounceMu.Unlock()
-
-	if rl.debounce != nil {
-		rl.debounce.Stop()
-	}
-
-	rl.debounce = time.AfterFunc(200*time.Millisecond, func() {
-		rl.debounceMu.Lock()
-		rl.debounce = nil
-		rl.debounceMu.Unlock()
-
-		if rl.tryStart() {
-			defer rl.done()
-			reloadFunc()
-		}
-	})
-
-	return true
 }
 
 const (
@@ -332,31 +277,21 @@ func serveHTTP(srv *http.Server, listener net.Listener, serverErr chan error) {
 }
 
 func eventLoop(logger *slog.Logger, paths configPaths, p *proxy.Proxy, ctx context.Context, sighup chan os.Signal, serverErr chan error, srv *http.Server) {
-	var rl reloadLimiter
-
 	for {
 		select {
 		case err := <-serverErr:
 			logger.Error("server failed", "err", err)
 			os.Exit(1)
 		case <-sighup:
-			logger.Debug("received SIGHUP, scheduling debounced reload")
-			rl.scheduleReload(func() {
-				reloadCtx, reloadCancel := context.WithTimeout(context.Background(), 60*time.Second)
-				defer reloadCancel()
-				reloadConfig(reloadCtx, p, paths, logger)
-			})
+			logger.Info("SIGHUP received, reloading configuration...")
+			reloadConfig(ctx, p, paths, logger)
 		case <-ctx.Done():
 			logger.Info("shutting down gracefully...")
-
-			rl.Stop()
 
 			shutdownCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 			defer cancel()
 
-			if err := p.Shutdown(shutdownCtx); err != nil {
-				logger.Error("gateway shutdown failed", "err", err)
-			}
+			p.Shutdown.Store(true)
 
 			if err := srv.Shutdown(shutdownCtx); err != nil {
 				logger.Error("HTTP server shutdown failed", "err", err)

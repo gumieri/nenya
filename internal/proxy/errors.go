@@ -77,13 +77,21 @@ func classifyServerError(body []byte) infra.ErrorKind {
 
 // writeStructuredError writes a structured error response to the HTTP writer.
 func writeStructuredError(w http.ResponseWriter, statusCode int, kind infra.ErrorKind, msg string) {
+	writeStructuredErrorWithContext(w, statusCode, kind, msg, "", "")
+}
+
+// writeStructuredErrorWithContext writes a structured error with optional provider and model context.
+func writeStructuredErrorWithContext(w http.ResponseWriter, statusCode int, kind infra.ErrorKind, msg, provider, model string) {
+	if w == nil {
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(statusCode)
 	resp := infra.ErrorResponse{
 		Error: infra.ErrorBody{
 			Message: msg,
 		},
 		Kind: kind,
 	}
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(statusCode)
 	_ = json.NewEncoder(w).Encode(resp)
 }

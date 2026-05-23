@@ -64,7 +64,7 @@ func calculateBackoff(attempt int) time.Duration {
 // It serializes all messages, sends them to the summarization engine, and returns
 // a replacement message array with a single assistant message containing the summary.
 // Only one summarization attempt is allowed per request to avoid loops.
-func (p *Proxy) summarizeMessages(ctx context.Context, gw *gateway.NenyaGateway, messages []interface{}) ([]interface{}, error) {
+func (p *Proxy) summarizeMessages(ctx context.Context, gw *gateway.NenyaGateway, messages []interface{}, agentName, providerName, modelName string) ([]interface{}, error) {
 	if len(gw.Config.Bouncer.Engine.ResolvedTargets) == 0 {
 		return nil, fmt.Errorf("engine chain not configured")
 	}
@@ -80,6 +80,7 @@ func (p *Proxy) summarizeMessages(ctx context.Context, gw *gateway.NenyaGateway,
 		return nil, fmt.Errorf("no text content to summarize")
 	}
 
+	start := time.Now()
 	summary, err := pipeline.CallEngineChain(
 		ctx, gw.Client, gw.OllamaClient,
 		gw.Config.Bouncer.Engine.ResolvedTargets, gw.Logger,
@@ -88,14 +89,18 @@ func (p *Proxy) summarizeMessages(ctx context.Context, gw *gateway.NenyaGateway,
 		},
 		"context_limit_retry", gw.Config.Bouncer.Engine.AgentName, retrySystemPrompt, textForSummary.String())
 
+	if gw.Metrics != nil {
+		gw.Metrics.RecordSummarizationDuration(agentName, providerName, modelName, time.Since(start))
+	}
+
 	if err != nil {
-		return nil, fmt.Errorf("engine summarization failed: %w", err)
+		return nil, fmt.Errorf("summarization failed: %w", err)
 	}
 
 	return []interface{}{
 		map[string]interface{}{
 			"role":    "assistant",
-			"content": fmt.Sprintf("[Context Limit Summary]: %s", summary),
+			"content": summary,
 		},
 	}, nil
 }
@@ -321,7 +326,7 @@ func (rl *retryLoop) handleContextLimitError(i int, target routing.UpstreamTarge
 		rl.ctxLogger.Info("auto_retry_on_context_limit disabled")
 	} else if !rl.summarized {
 		summarizedPayload, sumErr := rl.p.attemptContextLimitSummarization(
-			rl.r.Context(), rl.ctxLogger, rl.gw, rl.originalPayload, action.body)
+			rl.r.Context(), rl.ctxLogger, rl.gw, rl.originalPayload, action.body, rl.opts.AgentName, target.Provider, target.Model)
 		if sumErr == nil && summarizedPayload != nil {
 			rl.summarized = true
 			rl.summarizedPayload = summarizedPayload
@@ -656,7 +661,7 @@ func logErrorRetryable(ctxLogger *slog.Logger, errorBody []byte, gw *gateway.Nen
 // after a context-length error. It parses the original payload, extracts messages,
 // sends them to the configured summarization engine with the provided context,
 // and returns a summarized payload map on success.
-func (p *Proxy) attemptContextLimitSummarization(ctx context.Context, ctxLogger *slog.Logger, gw *gateway.NenyaGateway, originalPayload []byte, errorBody []byte) (map[string]interface{}, error) {
+func (p *Proxy) attemptContextLimitSummarization(ctx context.Context, ctxLogger *slog.Logger, gw *gateway.NenyaGateway, originalPayload []byte, errorBody []byte, agentName, providerName, modelName string) (map[string]interface{}, error) {
 	if len(gw.Config.Bouncer.Engine.ResolvedTargets) == 0 {
 		return nil, fmt.Errorf("engine chain not configured")
 	}
@@ -677,7 +682,7 @@ func (p *Proxy) attemptContextLimitSummarization(ctx context.Context, ctxLogger 
 		return nil, fmt.Errorf("messages is not a valid array or is empty")
 	}
 
-	summarized, err := p.summarizeMessages(ctx, gw, messages)
+	summarized, err := p.summarizeMessages(ctx, gw, messages, agentName, providerName, modelName)
 	if err != nil {
 		return nil, err
 	}

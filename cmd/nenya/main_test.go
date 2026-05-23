@@ -8,7 +8,6 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"sync"
 	"syscall"
 	"testing"
 	"time"
@@ -486,37 +485,6 @@ func TestServeHTTP_ServerError(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("timeout waiting for serveHTTP error")
 	}
-}
-
-func TestReloadLimiter_TryStart(t *testing.T) {
-	var rl reloadLimiter
-
-	if !rl.tryStart() {
-		t.Error("expected tryStart to return true on first call")
-	}
-	if rl.tryStart() {
-		t.Error("expected tryStart to return false while pending")
-	}
-
-	rl.done()
-	if !rl.tryStart() {
-		t.Error("expected tryStart to return true after done")
-	}
-}
-
-func TestReloadLimiter_ConcurrentAccess(t *testing.T) {
-	var rl reloadLimiter
-	var wg sync.WaitGroup
-
-	for i := 0; i < 100; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			rl.done()
-			_ = rl.tryStart()
-		}()
-	}
-	wg.Wait()
 }
 
 func TestEventLoop_ConcurrentSighup(t *testing.T) {

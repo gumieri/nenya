@@ -2,9 +2,11 @@ package infra
 
 import (
 	"container/list"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"log/slog"
 	"sync"
 	"time"
 )
@@ -55,13 +57,14 @@ type ResponseCache struct {
 	ttl                 time.Duration
 	stopCh              chan struct{}
 	metrics             *Metrics
+	logger              *slog.Logger
 	semanticEnabled     bool
 	similarityThreshold float64
 	embedder            EmbeddingProvider
 	idx                 *EmbedIndex
 }
 
-func NewResponseCache(maxSize int, maxBytes int64, ttl, evictInterval time.Duration, metrics *Metrics, semanticEnabled bool, similarityThreshold float64, embedder EmbeddingProvider) *ResponseCache {
+func NewResponseCache(maxSize int, maxBytes int64, ttl, evictInterval time.Duration, metrics *Metrics, logger *slog.Logger, semanticEnabled bool, similarityThreshold float64, embedder EmbeddingProvider) *ResponseCache {
 	if maxSize <= 0 {
 		maxSize = 512
 	}
@@ -80,8 +83,6 @@ func NewResponseCache(maxSize int, maxBytes int64, ttl, evictInterval time.Durat
 
 	var idx *EmbedIndex
 	if semanticEnabled && embedder != nil {
-		// Use smaller max entries for semantic index (256 vs 512 for exact cache)
-		// to keep linear search O(256) vs O(512) for better performance
 		idx = NewEmbedIndex(256)
 	}
 
@@ -93,6 +94,7 @@ func NewResponseCache(maxSize int, maxBytes int64, ttl, evictInterval time.Durat
 		ttl:                 ttl,
 		stopCh:              make(chan struct{}),
 		metrics:             metrics,
+		logger:              logger,
 		semanticEnabled:     semanticEnabled,
 		similarityThreshold: similarityThreshold,
 		embedder:            embedder,
@@ -107,7 +109,6 @@ func (c *ResponseCache) Lookup(key, model string, embed func() ([]float32, error
 		return nil, false, ""
 	}
 
-	// 1. exact-match fast path
 	c.mu.RLock()
 	entry, ok := c.items[key]
 	if ok {
@@ -118,23 +119,27 @@ func (c *ResponseCache) Lookup(key, model string, embed func() ([]float32, error
 				model = "unknown"
 			}
 			c.recordExactHit(model)
+			if c.logger != nil && c.logger.Enabled(context.TODO(), slog.LevelDebug) {
+				c.logger.Debug("cache exact hit", "model", model)
+			}
 			return data, true, "exact"
 		}
 	}
 	c.mu.RUnlock()
 
-	// 2. semantic fallback
 	if c.semanticEnabled && c.embedder != nil && c.idx != nil {
 		if data, ok := c.lookupSemantic(key, embed, model); ok {
 			return data, true, "semantic"
 		}
 	}
 
-	// 3. miss
 	if model == "" {
 		model = "unknown"
 	}
 	c.recordMiss("exact", model)
+	if c.logger != nil && c.logger.Enabled(context.TODO(), slog.LevelDebug) {
+		c.logger.Debug("cache miss", "model", model, "type", "exact")
+	}
 	return nil, false, ""
 }
 
@@ -142,12 +147,18 @@ func (c *ResponseCache) lookupSemantic(key string, embed func() ([]float32, erro
 	vec, err := embed()
 	if err != nil {
 		c.recordMiss("semantic", model)
+		if c.logger != nil && c.logger.Enabled(context.TODO(), slog.LevelDebug) {
+			c.logger.Debug("cache semantic embedding failed", "model", model, "err", err)
+		}
 		return nil, false
 	}
 
 	cachedKeyBytes, similarity, ok := c.idx.Search(vec, c.similarityThreshold)
 	if !ok {
 		c.recordMiss("semantic", model)
+		if c.logger != nil && c.logger.Enabled(context.TODO(), slog.LevelDebug) {
+			c.logger.Debug("cache semantic miss", "model", model)
+		}
 		return nil, false
 	}
 
@@ -157,6 +168,9 @@ func (c *ResponseCache) lookupSemantic(key string, embed func() ([]float32, erro
 		data := semEntry.data
 		c.mu.RUnlock()
 		c.recordSemanticHit(model, similarity)
+		if c.logger != nil && c.logger.Enabled(context.TODO(), slog.LevelDebug) {
+			c.logger.Debug("cache semantic hit", "model", model, "similarity", similarity)
+		}
 		return data, true
 	}
 	c.mu.RUnlock()
@@ -230,17 +244,18 @@ func (c *ResponseCache) Store(key string, data []byte, embedding []float32) {
 
 func (c *ResponseCache) evictLocked() {
 	now := time.Now()
+	evictedCount := 0
 
 	for e := c.order.Back(); e != nil; {
 		next := e.Prev()
 		key := e.Value.(string)
 		if entry, ok := c.items[key]; ok && now.After(entry.expireAt) {
-			// Remove from semantic index if embedding was stored
 			if c.idx != nil && entry.embedding != nil {
 				c.idx.Remove(key)
 			}
 			c.order.Remove(e)
 			delete(c.items, key)
+			evictedCount++
 		}
 		e = next
 	}
@@ -252,16 +267,19 @@ func (c *ResponseCache) evictLocked() {
 		}
 		key := e.Value.(string)
 		if entry, ok := c.items[key]; ok {
-			// Remove from semantic index if embedding was stored
 			if c.idx != nil && entry.embedding != nil {
 				c.idx.Remove(key)
 			}
 		}
 		c.order.Remove(e)
 		delete(c.items, key)
+		evictedCount++
 	}
 	if c.semanticEnabled && c.idx != nil && c.metrics != nil {
 		c.metrics.SetSemanticCacheEntries(int64(c.idx.Len()))
+	}
+	if evictedCount > 0 && c.logger != nil && c.logger.Enabled(context.TODO(), slog.LevelDebug) {
+		c.logger.Debug("cache eviction", "evicted", evictedCount)
 	}
 }
 

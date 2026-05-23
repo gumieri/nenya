@@ -80,8 +80,31 @@ type Metrics struct {
 	mcpActiveGoroutines   atomic.Int64
 
 	// Context-limit and summarization retry metrics
-	contextLimitErrors   sync.Map
-	summarizationRetries sync.Map
+	contextLimitErrors    sync.Map
+	summarizationRetries  sync.Map
+	summarizationDuration sync.Map
+
+	// Error kind metrics
+	errorKinds sync.Map
+
+	// Circuit breaker failure/success metrics
+	cbFailures  sync.Map
+	cbSuccesses sync.Map
+
+	// Interceptor metrics
+	interceptorDuration sync.Map
+	interceptorApplied  sync.Map
+	interceptorErrors   sync.Map
+
+	// Adapter conversion metrics
+	adapterConversions sync.Map
+
+	// Ollama enrichment metrics
+	ollamaEnrichmentTotal    sync.Map
+	ollamaEnrichmentDuration sync.Map
+
+	// Multi-account provider selection metrics
+	accountSelection sync.Map
 
 	RateLimits func() map[string]*RateLimitSnapshot
 	Cooldowns  func() (active int)
@@ -562,6 +585,113 @@ func (m *Metrics) RecordSummarizationRetry(agent, provider, model string) {
 	e.value.Add(1)
 }
 
+// RecordSummarizationDuration records the duration of a summarization call.
+func (m *Metrics) RecordSummarizationDuration(agent, provider, model string, duration time.Duration) {
+	if m == nil {
+		return
+	}
+	h := getOrCreateHist(&m.summarizationDuration, map[string]string{
+		"agent": agent, "provider": provider, "model": model,
+	}, HTTPDurationBuckets)
+	h.Observe(duration.Seconds())
+}
+
+// RecordErrorKind increments the error kind counter for the given kind and provider.
+func (m *Metrics) RecordErrorKind(kind, provider string) {
+	if m == nil {
+		return
+	}
+	e := getOrCreateEntry(&m.errorKinds, map[string]string{
+		"kind": kind, "provider": provider,
+	})
+	e.value.Add(1)
+}
+
+// RecordCBFailure increments the circuit breaker failure counter for the given key.
+func (m *Metrics) RecordCBFailure(key string) {
+	if m == nil {
+		return
+	}
+	e := getOrCreateEntry(&m.cbFailures, map[string]string{"key": key})
+	e.value.Add(1)
+}
+
+// RecordCBSuccess increments the circuit breaker success counter for the given key.
+func (m *Metrics) RecordCBSuccess(key string) {
+	if m == nil {
+		return
+	}
+	e := getOrCreateEntry(&m.cbSuccesses, map[string]string{"key": key})
+	e.value.Add(1)
+}
+
+// RecordInterceptorDuration records the execution duration of an interceptor.
+func (m *Metrics) RecordInterceptorDuration(name string, duration time.Duration) {
+	if m == nil {
+		return
+	}
+	h := getOrCreateHist(&m.interceptorDuration, map[string]string{"name": name}, HTTPDurationBuckets)
+	h.Observe(duration.Seconds())
+}
+
+// RecordInterceptorApplied increments the interceptor applied counter for the given name.
+func (m *Metrics) RecordInterceptorApplied(name string) {
+	if m == nil {
+		return
+	}
+	e := getOrCreateEntry(&m.interceptorApplied, map[string]string{"name": name})
+	e.value.Add(1)
+}
+
+// RecordInterceptorError increments the interceptor error counter for the given name.
+func (m *Metrics) RecordInterceptorError(name string) {
+	if m == nil {
+		return
+	}
+	e := getOrCreateEntry(&m.interceptorErrors, map[string]string{"name": name})
+	e.value.Add(1)
+}
+
+// RecordAdapterConversion increments the adapter conversion counter for the given adapter and status.
+func (m *Metrics) RecordAdapterConversion(adapter, status string) {
+	if m == nil {
+		return
+	}
+	e := getOrCreateEntry(&m.adapterConversions, map[string]string{
+		"adapter": adapter, "status": status,
+	})
+	e.value.Add(1)
+}
+
+// RecordOllamaEnrichment increments the Ollama enrichment counter for the given status.
+func (m *Metrics) RecordOllamaEnrichment(status string) {
+	if m == nil {
+		return
+	}
+	e := getOrCreateEntry(&m.ollamaEnrichmentTotal, map[string]string{"status": status})
+	e.value.Add(1)
+}
+
+// RecordOllamaEnrichmentDuration records the duration of an Ollama enrichment cycle.
+func (m *Metrics) RecordOllamaEnrichmentDuration(duration time.Duration) {
+	if m == nil {
+		return
+	}
+	h := getOrCreateHist(&m.ollamaEnrichmentDuration, nil, HTTPDurationBuckets)
+	h.Observe(duration.Seconds())
+}
+
+// RecordAccountSelection increments the account selection counter for the given provider and status.
+func (m *Metrics) RecordAccountSelection(provider, status string) {
+	if m == nil {
+		return
+	}
+	e := getOrCreateEntry(&m.accountSelection, map[string]string{
+		"provider": provider, "status": status,
+	})
+	e.value.Add(1)
+}
+
 func (m *Metrics) RecordUpstreamLatency(model, agent, provider string, duration time.Duration) {
 	if m == nil {
 		return
@@ -750,6 +880,28 @@ func (m *Metrics) WritePrometheus(w io.Writer) {
 		"Total context-length exceeded errors from upstream providers.", &m.contextLimitErrors)
 	m.writeCounterMap(w, "nenya_summarization_retries_total",
 		"Total retry attempts with summarized payload after context-limit errors.", &m.summarizationRetries)
+	m.writeHistogramMap(w, "nenya_summarization_duration_seconds",
+		"Summarization call duration in seconds.", &m.summarizationDuration)
+	m.writeCounterMap(w, "nenya_error_kind_total",
+		"Total structured errors by kind and provider.", &m.errorKinds)
+	m.writeCounterMap(w, "nenya_cb_failures_total",
+		"Total circuit breaker failures by key.", &m.cbFailures)
+	m.writeCounterMap(w, "nenya_cb_successes_total",
+		"Total circuit breaker successes by key.", &m.cbSuccesses)
+	m.writeHistogramMap(w, "nenya_interceptor_duration_seconds",
+		"Interceptor execution duration in seconds.", &m.interceptorDuration)
+	m.writeCounterMap(w, "nenya_interceptor_applied_total",
+		"Total interceptor applications by name.", &m.interceptorApplied)
+	m.writeCounterMap(w, "nenya_interceptor_errors_total",
+		"Total interceptor errors by name.", &m.interceptorErrors)
+	m.writeCounterMap(w, "nenya_adapter_conversions_total",
+		"Total adapter conversions by adapter and status.", &m.adapterConversions)
+	m.writeCounterMap(w, "nenya_ollama_enrichment_total",
+		"Total Ollama model enrichments by status.", &m.ollamaEnrichmentTotal)
+	m.writeHistogramMap(w, "nenya_ollama_enrichment_duration_seconds",
+		"Ollama enrichment duration in seconds.", &m.ollamaEnrichmentDuration)
+	m.writeCounterMap(w, "nenya_account_selection_total",
+		"Total account selection attempts by provider and status.", &m.accountSelection)
 	// Note: Using writeCounterAtomic for a gauge metric. Prometheus doesn't
 	// distinguish between counters and gauges for display purposes, and
 	// this simplifies the implementation while maintaining correct semantics.

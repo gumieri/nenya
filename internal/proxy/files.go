@@ -27,6 +27,7 @@ func (p *Proxy) handleBatches(gw *gateway.NenyaGateway, w http.ResponseWriter, r
 // handleFilesOrBatches handles both Files and Batches API endpoints with shared logic.
 // The endpoint parameter should be "files" or "batches".
 func (p *Proxy) handleFilesOrBatches(gw *gateway.NenyaGateway, w http.ResponseWriter, r *http.Request, endpoint string, keyRef string) {
+	ctxLogger := gw.Logger.With("operation", endpoint, "api_key", keyRef)
 	if !p.isPathSafe(r.URL.Path, "/v1/"+endpoint) {
 		writeStructuredError(w, http.StatusBadRequest, infra.ErrorKindInvalidRequest, "Invalid path")
 		return
@@ -62,12 +63,12 @@ func (p *Proxy) handleFilesOrBatches(gw *gateway.NenyaGateway, w http.ResponseWr
 	}
 
 	contentType := r.Header.Get("Content-Type")
-	ctxLogger := gw.Logger.With("operation", endpoint, "provider", provider.Name, "api_key", keyRef)
+	ctxLogger = ctxLogger.With("provider", provider.Name)
 
 	resp, err := p.doUpstreamRoundTrip(ctx, gw, r.Method, targetURL, bodyBytes, provider.Name, "", r.Header, contentType, maxAttempts)
 
 	if err != nil {
-		ctxLogger.Error("files/batches upstream request failed", "endpoint", endpoint, "err", err)
+		ctxLogger.Error("upstream request failed", "err", err)
 		writeStructuredError(w, http.StatusBadGateway, infra.ErrorKindProviderError, "Upstream provider error")
 		return
 	}
@@ -80,7 +81,7 @@ func (p *Proxy) handleFilesOrBatches(gw *gateway.NenyaGateway, w http.ResponseWr
 	w.WriteHeader(resp.StatusCode)
 
 	if _, err := copyStream(ctx, w, resp.Body, nil); err != nil {
-		ctxLogger.Debug("files/batches response copy ended", "err", err)
+		ctxLogger.Debug("response copy ended", "err", err)
 	}
 }
 
@@ -152,7 +153,6 @@ func (p *Proxy) readFilesBody(gw *gateway.NenyaGateway, w http.ResponseWriter, r
 
 	bodyBytes, readErr := io.ReadAll(r.Body)
 	if readErr != nil {
-		gw.Logger.Error("failed to read files request body", "err", readErr)
 		writeStructuredError(w, http.StatusRequestEntityTooLarge, infra.ErrorKindPayloadTooLarge, "Payload too large or malformed")
 		return nil, false
 	}

@@ -647,6 +647,7 @@ func newResponseCache(cfg config.Config, logger *slog.Logger, metrics *infra.Met
 		time.Duration(rc.TTLSeconds)*time.Second,
 		time.Duration(rc.EvictEverySeconds)*time.Second,
 		metrics,
+		logger,
 		rc.EnableSemantic,
 		rc.SimilarityThreshold,
 		embedder,
@@ -812,7 +813,17 @@ func (g *NenyaGateway) GetProviderAPIKeyForModel(ctx context.Context, providerNa
 	if g.AccountManager != nil {
 		selected, err := g.AccountManager.SelectCredential(ctx, providerName, model)
 		if err == nil && selected != "" {
+			if g.Metrics != nil {
+				g.Metrics.RecordAccountSelection(providerName, "selected")
+			}
 			return []byte(selected), true
+		}
+		if g.Metrics != nil {
+			if err != nil {
+				g.Metrics.RecordAccountSelection(providerName, "error")
+			} else {
+				g.Metrics.RecordAccountSelection(providerName, "none_available")
+			}
 		}
 	}
 	return g.GetProviderAPIKey(providerName)

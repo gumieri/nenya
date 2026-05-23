@@ -5,6 +5,9 @@ import (
 	"fmt"
 	"log/slog"
 	"sort"
+	"time"
+
+	"git.0ur.uk/nenya/internal/infra"
 )
 
 // Interceptor defines a preprocessing step that can inspect and modify
@@ -71,12 +74,19 @@ type InterceptorChain struct {
 	interceptors []Interceptor
 	strict       bool
 	logger       *slog.Logger
+	metrics      *infra.Metrics
 }
 
 // NewInterceptorChain creates a new interceptor chain.
 func NewInterceptorChain(logger *slog.Logger) *InterceptorChain {
+	return NewInterceptorChainWithMetrics(logger, nil)
+}
+
+// NewInterceptorChainWithMetrics creates a new interceptor chain with metrics support.
+func NewInterceptorChainWithMetrics(logger *slog.Logger, metrics *infra.Metrics) *InterceptorChain {
 	return &InterceptorChain{
-		logger: logger,
+		logger:  logger,
+		metrics: metrics,
 	}
 }
 
@@ -109,9 +119,19 @@ func (c *InterceptorChain) Execute(ctx context.Context, req *InterceptRequest) (
 			continue
 		}
 
+		start := time.Now()
 		result, err := interceptor.Process(ctx, req)
+		duration := time.Since(start)
+
+		if c.metrics != nil {
+			c.metrics.RecordInterceptorDuration(interceptor.Name(), duration)
+		}
+
 		if err != nil {
-			c.logger.WarnContext(ctx, "interceptor failed", "name", interceptor.Name(), "err", err)
+			if c.metrics != nil {
+				c.metrics.RecordInterceptorError(interceptor.Name())
+			}
+			c.logger.WarnContext(ctx, "interceptor failed", "name", interceptor.Name(), "err", err, "duration_ms", duration.Milliseconds())
 			if c.strict {
 				return nil, fmt.Errorf("interceptor %q failed: %w", interceptor.Name(), err)
 			}
@@ -123,11 +143,16 @@ func (c *InterceptorChain) Execute(ctx context.Context, req *InterceptRequest) (
 			continue
 		}
 
+		if c.metrics != nil {
+			c.metrics.RecordInterceptorApplied(interceptor.Name())
+		}
+
 		c.logger.DebugContext(ctx, "interceptor applied",
 			"name", interceptor.Name(),
 			"truncated", result.Truncated,
 			"tokens", result.TokenCount,
-			"reason", result.Reason)
+			"reason", result.Reason,
+			"duration_ms", duration.Milliseconds())
 
 		if result.Payload != nil {
 			req.Payload = result.Payload

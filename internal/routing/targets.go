@@ -614,13 +614,20 @@ func (a *AgentState) RecordFailureWithStatus(target UpstreamTarget, status int, 
 	if target.CoolKey == "" {
 		return resilience.CooldownDecision{}
 	}
-	return a.CB.RecordFailureWithStatus(target.CoolKey, status, body)
+	decision := a.CB.RecordFailureWithStatus(target.CoolKey, status, body)
+	if a.Metrics != nil {
+		a.Metrics.RecordCBFailure(target.CoolKey)
+	}
+	return decision
 }
 
 // RecordSuccess records a successful request for the given circuit breaker key,
 // potentially transitioning the circuit to closed state.
 func (a *AgentState) RecordSuccess(key string) {
 	a.CB.RecordSuccess(key)
+	if a.Metrics != nil {
+		a.Metrics.RecordCBSuccess(key)
+	}
 }
 
 // RecordSuccessWithModel records a successful request and clears the model

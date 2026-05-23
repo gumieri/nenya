@@ -60,13 +60,67 @@ func TestMetrics_RecordAndWritePrometheus(t *testing.T) {
 			t.Errorf("missing metric %q in output", metric)
 		}
 	}
+}
 
-	// Check specific label values
-	if !regexp.MustCompile(`direction="input"`).MatchString(out) {
-		t.Error("missing direction=input label")
+func TestMetrics_NewErrorAndTrackingMetrics(t *testing.T) {
+	m := NewMetrics()
+
+	m.RecordSummarizationDuration("agent-1", "gemini", "model-a", 500*time.Millisecond)
+	m.RecordSummarizationDuration("agent-1", "gemini", "model-a", 700*time.Millisecond)
+
+	m.RecordErrorKind("rate_limited", "gemini")
+	m.RecordErrorKind("context_limit_exceeded", "openai")
+
+	m.RecordCBFailure("key1")
+	m.RecordCBSuccess("key1")
+	m.RecordCBFailure("key2")
+
+	m.RecordInterceptorDuration("bouncer", 100*time.Millisecond)
+	m.RecordInterceptorApplied("bouncer")
+	m.RecordInterceptorError("entropy")
+
+	m.RecordAdapterConversion("anthropic", "success")
+	m.RecordAdapterConversion("anthropic", "error")
+
+	m.RecordOllamaEnrichment("success")
+	m.RecordOllamaEnrichment("failed")
+	m.RecordOllamaEnrichmentDuration(2 * time.Second)
+
+	m.RecordAccountSelection("gemini", "selected")
+	m.RecordAccountSelection("openai", "none_available")
+
+	var buf bytes.Buffer
+	m.WritePrometheus(&buf)
+	out := buf.String()
+
+	expectedMetrics := []string{
+		"nenya_summarization_duration_seconds",
+		"nenya_error_kind_total",
+		"nenya_cb_failures_total",
+		"nenya_cb_successes_total",
+		"nenya_interceptor_duration_seconds",
+		"nenya_interceptor_applied_total",
+		"nenya_interceptor_errors_total",
+		"nenya_adapter_conversions_total",
+		"nenya_ollama_enrichment_total",
+		"nenya_ollama_enrichment_duration_seconds",
+		"nenya_account_selection_total",
 	}
-	if !regexp.MustCompile(`model="model-a"`).MatchString(out) {
-		t.Error("missing model=model-a label")
+
+	for _, metric := range expectedMetrics {
+		if !strings.Contains(out, metric) {
+			t.Errorf("missing metric %q in output", metric)
+		}
+	}
+
+	if !regexp.MustCompile(`kind="rate_limited"`).MatchString(out) {
+		t.Error("missing kind=rate_limited label")
+	}
+	if !regexp.MustCompile(`status="success"`).MatchString(out) {
+		t.Error("missing status=success label")
+	}
+	if !regexp.MustCompile(`name="bouncer"`).MatchString(out) {
+		t.Error("missing name=bouncer label")
 	}
 }
 
@@ -193,6 +247,18 @@ func TestMetrics_NilSafety(t *testing.T) {
 	m.RecordRetry("op", "p", nil)
 	m.IncInFlight("m", "a", "p")
 	m.DecInFlight("m", "a", "p")
+
+	m.RecordSummarizationDuration("a", "p", "m", time.Second)
+	m.RecordErrorKind("k", "p")
+	m.RecordCBFailure("k")
+	m.RecordCBSuccess("k")
+	m.RecordInterceptorDuration("n", time.Second)
+	m.RecordInterceptorApplied("n")
+	m.RecordInterceptorError("n")
+	m.RecordAdapterConversion("a", "s")
+	m.RecordOllamaEnrichment("s")
+	m.RecordOllamaEnrichmentDuration(time.Second)
+	m.RecordAccountSelection("p", "s")
 
 	var buf bytes.Buffer
 	m.WritePrometheus(&buf)

@@ -16,56 +16,57 @@ import (
 )
 
 func (p *Proxy) handlePassthrough(gw *gateway.NenyaGateway, w http.ResponseWriter, r *http.Request, keyRef string) {
+	ctxLogger := gw.Logger.With("operation", "passthrough", "api_key", keyRef)
 	segments := strings.Split(strings.Trim(r.URL.Path, "/"), "/")
 	if len(segments) < 2 {
-		gw.Logger.Warn("passthrough: invalid path format", "path", r.URL.Path)
+		ctxLogger.Warn("invalid path format", "path", r.URL.Path)
 		writeStructuredError(w, http.StatusBadRequest, infra.ErrorKindInvalidRequest, "Invalid passthrough path format")
 		return
 	}
 
 	providerName := segments[1]
 	if providerName == "" {
-		gw.Logger.Warn("passthrough: missing provider name", "path", r.URL.Path)
+		ctxLogger.Warn("missing provider name", "path", r.URL.Path)
 		writeStructuredError(w, http.StatusBadRequest, infra.ErrorKindInvalidRequest, "Missing provider name")
 		return
 	}
 
 	provider, ok := gw.Providers[providerName]
 	if !ok {
-		gw.Logger.Warn("passthrough: unknown provider", "provider", providerName)
+		ctxLogger.Warn("unknown provider", "provider", providerName)
 		writeStructuredError(w, http.StatusNotFound, infra.ErrorKindModelNotFound, "Unknown provider")
 		return
 	}
 
 	if provider.APIKey == "" && provider.AuthStyle != "none" {
-		gw.Logger.Warn("passthrough: provider not configured", "provider", providerName)
+		ctxLogger.Warn("provider not configured", "provider", providerName)
 		writeStructuredError(w, http.StatusServiceUnavailable, infra.ErrorKindInvalidRequest, "Provider not configured")
 		return
 	}
 
 	if len(segments) < 3 {
-		gw.Logger.Warn("passthrough: missing endpoint path", "provider", providerName)
+		ctxLogger.Warn("missing endpoint path", "provider", providerName)
 		writeStructuredError(w, http.StatusBadRequest, infra.ErrorKindInvalidRequest, "Missing endpoint path")
 		return
 	}
 
 	subPath := path.Join(segments[2:]...)
 	if strings.Contains(subPath, "..") {
-		gw.Logger.Warn("passthrough: path traversal attempt", "provider", providerName, "path", subPath)
+		ctxLogger.Warn("path traversal attempt", "provider", providerName, "path", subPath)
 		writeStructuredError(w, http.StatusBadRequest, infra.ErrorKindInvalidRequest, "Invalid path")
 		return
 	}
 
 	if !gw.RateLimiter.Check(provider.BaseURL, 0) {
 		gw.Metrics.RecordRateLimitRejected(infra.ExtractHost(provider.BaseURL))
-		gw.Logger.Warn("passthrough: rate limit exceeded", "provider", providerName)
+		ctxLogger.Warn("rate limit exceeded", "provider", providerName)
 		writeStructuredError(w, http.StatusTooManyRequests, infra.ErrorKindRateLimited, "Rate limit exceeded")
 		return
 	}
 
 	bodyBytes, err := readPassthroughBody(gw, w, r)
 	if err != nil {
-		gw.Logger.Error("passthrough: failed to read request body", "provider", providerName, "err", err)
+		ctxLogger.Error("failed to read request body", "provider", providerName, "err", err)
 		writeStructuredError(w, http.StatusRequestEntityTooLarge, infra.ErrorKindPayloadTooLarge, "Payload too large or malformed")
 		return
 	}
@@ -74,12 +75,10 @@ func (p *Proxy) handlePassthrough(gw *gateway.NenyaGateway, w http.ResponseWrite
 	ctx, cancel := buildPassthroughContextAndCancel(r.Context(), provider)
 	defer cancel()
 
-	ctxLogger := gw.Logger.With(
-		"operation", "passthrough",
+	ctxLogger = ctxLogger.With(
 		"provider", providerName,
 		"method", r.Method,
 		"path", subPath,
-		"api_key", keyRef,
 	)
 
 	resp, err := p.executePassthroughUpstream(gw, ctx, r, upstreamURL, bodyBytes, provider)

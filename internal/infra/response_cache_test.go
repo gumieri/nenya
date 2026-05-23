@@ -75,7 +75,7 @@ func TestFingerprintPayload_EmptyPayload(t *testing.T) {
 
 func TestResponseCache_CacheMetrics(t *testing.T) {
 	metrics := NewMetrics()
-	cache := NewResponseCache(10, 1<<20, 1*time.Hour, 1*time.Hour, metrics, false, 0.9, nil)
+	cache := NewResponseCache(10, 1<<20, 1*time.Hour, 1*time.Hour, metrics, nil, false, 0.9, nil)
 	defer cache.Stop()
 
 	cache.Store("key1", []byte("response1"), nil)
@@ -103,7 +103,7 @@ func TestResponseCache_CacheMetrics(t *testing.T) {
 }
 
 func TestResponseCache_StoreAndLookup(t *testing.T) {
-	cache := NewResponseCache(10, 1<<20, 1*time.Hour, 1*time.Hour, nil, false, 0.9, nil)
+	cache := NewResponseCache(10, 1<<20, 1*time.Hour, 1*time.Hour, nil, nil, false, 0.9, nil)
 	defer cache.Stop()
 
 	cache.Store("key1", []byte("response1"), nil)
@@ -126,7 +126,7 @@ func TestResponseCache_StoreAndLookup(t *testing.T) {
 }
 
 func TestResponseCache_TTLExpiration(t *testing.T) {
-	cache := NewResponseCache(10, 1<<20, 100*time.Millisecond, 50*time.Millisecond, nil, false, 0.9, nil)
+	cache := NewResponseCache(10, 1<<20, 100*time.Millisecond, 50*time.Millisecond, nil, nil, false, 0.9, nil)
 	defer cache.Stop()
 
 	cache.Store("key1", []byte("response1"), nil)
@@ -149,7 +149,7 @@ func TestResponseCache_TTLExpiration(t *testing.T) {
 }
 
 func TestResponseCache_LRU_Eviction(t *testing.T) {
-	cache := NewResponseCache(3, 1<<20, 1*time.Hour, 1*time.Hour, nil, false, 0.9, nil)
+	cache := NewResponseCache(3, 1<<20, 1*time.Hour, 1*time.Hour, nil, nil, false, 0.9, nil)
 	defer cache.Stop()
 
 	cache.Store("key1", []byte("a"), nil)
@@ -183,7 +183,7 @@ func TestResponseCache_LRU_Eviction(t *testing.T) {
 }
 
 func TestResponseCache_MaxEntryBytes(t *testing.T) {
-	cache := NewResponseCache(10, 100, 1*time.Hour, 1*time.Hour, nil, false, 0.9, nil)
+	cache := NewResponseCache(10, 100, 1*time.Hour, 1*time.Hour, nil, nil, false, 0.9, nil)
 	defer cache.Stop()
 
 	cache.Store("small", []byte("hello"), nil)
@@ -206,7 +206,7 @@ func TestResponseCache_MaxEntryBytes(t *testing.T) {
 }
 
 func TestResponseCache_StoreUpdate(t *testing.T) {
-	cache := NewResponseCache(10, 1<<20, 1*time.Hour, 1*time.Hour, nil, false, 0.9, nil)
+	cache := NewResponseCache(10, 1<<20, 1*time.Hour, 1*time.Hour, nil, nil, false, 0.9, nil)
 	defer cache.Stop()
 
 	cache.Store("key1", []byte("v1"), nil)
@@ -223,7 +223,7 @@ func TestResponseCache_StoreUpdate(t *testing.T) {
 }
 
 func TestResponseCache_EmptyKeyAndData(t *testing.T) {
-	cache := NewResponseCache(10, 1<<20, 1*time.Hour, 1*time.Hour, nil, false, 0.9, nil)
+	cache := NewResponseCache(10, 1<<20, 1*time.Hour, 1*time.Hour, nil, nil, false, 0.9, nil)
 	defer cache.Stop()
 
 	cache.Store("", []byte("data"), nil)
@@ -243,7 +243,7 @@ func TestResponseCache_EmptyKeyAndData(t *testing.T) {
 }
 
 func TestResponseCache_BackgroundEvictor(t *testing.T) {
-	cache := NewResponseCache(100, 1<<20, 200*time.Millisecond, 100*time.Millisecond, nil, false, 0.9, nil)
+	cache := NewResponseCache(100, 1<<20, 200*time.Millisecond, 100*time.Millisecond, nil, nil, false, 0.9, nil)
 	defer cache.Stop()
 
 	for i := 0; i < 50; i++ {
@@ -262,7 +262,7 @@ func TestResponseCache_BackgroundEvictor(t *testing.T) {
 }
 
 func TestResponseCache_Stop(t *testing.T) {
-	cache := NewResponseCache(10, 1<<20, 1*time.Hour, 50*time.Millisecond, nil, false, 0.9, nil)
+	cache := NewResponseCache(10, 1<<20, 1*time.Hour, 50*time.Millisecond, nil, nil, false, 0.9, nil)
 
 	done := make(chan struct{})
 	go func() {
@@ -279,7 +279,7 @@ func TestResponseCache_Stop(t *testing.T) {
 }
 
 func TestResponseCache_ConcurrentAccess(t *testing.T) {
-	cache := NewResponseCache(100, 1<<20, 10*time.Minute, 1*time.Hour, nil, false, 0.9, nil)
+	cache := NewResponseCache(100, 1<<20, 10*time.Minute, 1*time.Hour, nil, nil, false, 0.9, nil)
 	defer cache.Stop()
 
 	var wg sync.WaitGroup
@@ -303,7 +303,7 @@ func TestResponseCache_ConcurrentAccess(t *testing.T) {
 }
 
 func TestResponseCache_BackgroundEvictorRemovesExpiredFirst(t *testing.T) {
-	cache := NewResponseCache(5, 1<<20, 50*time.Millisecond, 20*time.Millisecond, nil, false, 0.9, nil)
+	cache := NewResponseCache(5, 1<<20, 50*time.Millisecond, 20*time.Millisecond, nil, nil, false, 0.9, nil)
 	defer cache.Stop()
 
 	cache.Store("expires-soon", []byte("a"), nil)

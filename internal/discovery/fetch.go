@@ -240,10 +240,18 @@ func (df *DiscoveryFetcher) fetchProviderModels(ctx context.Context, providerNam
 	}
 
 	if strings.ToLower(providerName) == "ollama" {
+		start := time.Now()
 		enrichedModels, err := enrichOllamaModels(ctx, provider.URL, models, df.client, logger)
 		if err != nil {
+			if df.metrics != nil {
+				df.metrics.RecordOllamaEnrichment("failed")
+			}
 			logger.Warn("Ollama model enrichment failed, using basic model list", "err", err)
 		} else {
+			if df.metrics != nil {
+				df.metrics.RecordOllamaEnrichment("success")
+				df.metrics.RecordOllamaEnrichmentDuration(time.Since(start))
+			}
 			models = enrichedModels
 		}
 	}
