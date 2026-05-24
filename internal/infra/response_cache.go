@@ -104,6 +104,19 @@ func NewResponseCache(maxSize int, maxBytes int64, ttl, evictInterval time.Durat
 	return c
 }
 
+func (c *ResponseCache) handleExactHit(entry *responseCacheEntry, model string) ([]byte, bool, string) {
+	data := entry.data
+	c.mu.RUnlock()
+	if model == "" {
+		model = "unknown"
+	}
+	c.recordExactHit(model)
+	if c.logger != nil && c.logger.Enabled(context.TODO(), slog.LevelDebug) {
+		c.logger.Debug("cache exact hit", "model", model)
+	}
+	return data, true, "exact"
+}
+
 func (c *ResponseCache) Lookup(key, model string, embed func() ([]float32, error)) ([]byte, bool, string) {
 	if key == "" {
 		return nil, false, ""
@@ -111,19 +124,8 @@ func (c *ResponseCache) Lookup(key, model string, embed func() ([]float32, error
 
 	c.mu.RLock()
 	entry, ok := c.items[key]
-	if ok {
-		if !time.Now().After(entry.expireAt) {
-			data := entry.data
-			c.mu.RUnlock()
-			if model == "" {
-				model = "unknown"
-			}
-			c.recordExactHit(model)
-			if c.logger != nil && c.logger.Enabled(context.TODO(), slog.LevelDebug) {
-				c.logger.Debug("cache exact hit", "model", model)
-			}
-			return data, true, "exact"
-		}
+	if ok && !time.Now().After(entry.expireAt) {
+		return c.handleExactHit(entry, model)
 	}
 	c.mu.RUnlock()
 
@@ -242,10 +244,8 @@ func (c *ResponseCache) Store(key string, data []byte, embedding []float32) {
 	}
 }
 
-func (c *ResponseCache) evictLocked() {
-	now := time.Now()
+func (c *ResponseCache) evictExpiredLocked(now time.Time) int {
 	evictedCount := 0
-
 	for e := c.order.Back(); e != nil; {
 		next := e.Prev()
 		key := e.Value.(string)
@@ -259,7 +259,11 @@ func (c *ResponseCache) evictLocked() {
 		}
 		e = next
 	}
+	return evictedCount
+}
 
+func (c *ResponseCache) evictOverflowLocked() int {
+	evictedCount := 0
 	for len(c.items) >= c.maxSize {
 		e := c.order.Back()
 		if e == nil {
@@ -275,6 +279,14 @@ func (c *ResponseCache) evictLocked() {
 		delete(c.items, key)
 		evictedCount++
 	}
+	return evictedCount
+}
+
+func (c *ResponseCache) evictLocked() {
+	now := time.Now()
+	evictedCount := c.evictExpiredLocked(now)
+	evictedCount += c.evictOverflowLocked()
+
 	if c.semanticEnabled && c.idx != nil && c.metrics != nil {
 		c.metrics.SetSemanticCacheEntries(int64(c.idx.Len()))
 	}

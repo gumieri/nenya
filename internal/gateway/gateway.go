@@ -806,24 +806,31 @@ func (g *NenyaGateway) GetProviderAPIKey(providerName string) ([]byte, bool) {
 	return nil, false
 }
 
+func (g *NenyaGateway) selectAccountKey(ctx context.Context, providerName, model string) ([]byte, bool) {
+	selected, err := g.AccountManager.SelectCredential(ctx, providerName, model)
+	if err == nil && selected != "" {
+		if g.Metrics != nil {
+			g.Metrics.RecordAccountSelection(providerName, "selected")
+		}
+		return []byte(selected), true
+	}
+	if g.Metrics != nil {
+		if err != nil {
+			g.Metrics.RecordAccountSelection(providerName, "error")
+		} else {
+			g.Metrics.RecordAccountSelection(providerName, "none_available")
+		}
+	}
+	return nil, false
+}
+
 // GetProviderAPIKeyForModel returns an API key for the given provider and model.
 // It checks the multi-account pool first (selecting the least-recently-used account),
 // then falls back to the legacy single-key path.
 func (g *NenyaGateway) GetProviderAPIKeyForModel(ctx context.Context, providerName, model string) ([]byte, bool) {
 	if g.AccountManager != nil {
-		selected, err := g.AccountManager.SelectCredential(ctx, providerName, model)
-		if err == nil && selected != "" {
-			if g.Metrics != nil {
-				g.Metrics.RecordAccountSelection(providerName, "selected")
-			}
-			return []byte(selected), true
-		}
-		if g.Metrics != nil {
-			if err != nil {
-				g.Metrics.RecordAccountSelection(providerName, "error")
-			} else {
-				g.Metrics.RecordAccountSelection(providerName, "none_available")
-			}
+		if key, ok := g.selectAccountKey(ctx, providerName, model); ok {
+			return key, true
 		}
 	}
 	return g.GetProviderAPIKey(providerName)

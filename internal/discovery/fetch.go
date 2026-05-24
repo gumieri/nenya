@@ -193,6 +193,23 @@ func buildCapabilityMetadata(meta *ModelMetadata) string {
 	return strings.Join(caps, ",")
 }
 
+func (df *DiscoveryFetcher) enrichOllama(ctx context.Context, baseURL string, models []DiscoveredModel, logger *slog.Logger) []DiscoveredModel {
+	start := time.Now()
+	enriched, err := enrichOllamaModels(ctx, baseURL, models, df.client, logger)
+	if err != nil {
+		if df.metrics != nil {
+			df.metrics.RecordOllamaEnrichment("failed")
+		}
+		logger.Warn("Ollama model enrichment failed, using basic model list", "err", err)
+		return models
+	}
+	if df.metrics != nil {
+		df.metrics.RecordOllamaEnrichment("success")
+		df.metrics.RecordOllamaEnrichmentDuration(time.Since(start))
+	}
+	return enriched
+}
+
 func (df *DiscoveryFetcher) fetchProviderModels(ctx context.Context, providerName string, provider *config.Provider, logger *slog.Logger) ([]DiscoveredModel, error) {
 	endpoint := GetModelsEndpoint(provider.URL, providerName)
 	if endpoint == "" {
@@ -239,21 +256,8 @@ func (df *DiscoveryFetcher) fetchProviderModels(ctx context.Context, providerNam
 		return nil, fmt.Errorf("discovery parse: %w", err)
 	}
 
-	if strings.ToLower(providerName) == "ollama" {
-		start := time.Now()
-		enrichedModels, err := enrichOllamaModels(ctx, provider.URL, models, df.client, logger)
-		if err != nil {
-			if df.metrics != nil {
-				df.metrics.RecordOllamaEnrichment("failed")
-			}
-			logger.Warn("Ollama model enrichment failed, using basic model list", "err", err)
-		} else {
-			if df.metrics != nil {
-				df.metrics.RecordOllamaEnrichment("success")
-				df.metrics.RecordOllamaEnrichmentDuration(time.Since(start))
-			}
-			models = enrichedModels
-		}
+	if strings.EqualFold(providerName, "ollama") {
+		models = df.enrichOllama(ctx, provider.URL, models, logger)
 	}
 
 	if len(models) > maxModelsPerSrc {
