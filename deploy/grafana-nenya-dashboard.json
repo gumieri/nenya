@@ -1353,6 +1353,44 @@
     },
 
     {
+      "id": 48,
+      "type": "stat",
+      "title": "Context Limit Errors",
+      "gridPos": { "h": 4, "w": 4, "x": 20, "y": 120 },
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "expr": "nenya_context_limit_errors_total{job=~\"$job\", instance=~\"$instance\"} or vector(0)",
+          "legendFormat": "errors",
+          "refId": "A"
+        }
+      ],
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "colorMode": "background",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "textMode": "auto"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 1 },
+              { "color": "red", "value": 10 }
+            ]
+          },
+          "color": { "mode": "thresholds" }
+        },
+        "overrides": []
+      }
+    },
+
+    {
       "id": 108,
       "type": "row",
       "title": "Stream Health",
@@ -1642,6 +1680,105 @@
           "datasource": { "type": "prometheus", "uid": "${datasource}" },
           "expr": "sum(rate(nenya_cb_state_transitions_total{job=~\"$job\", instance=~\"$instance\"}[$__rate_interval])) by (key)",
           "legendFormat": "{{key}}",
+          "refId": "A"
+        }
+      ],
+      "options": {
+        "tooltip": { "mode": "multi", "sort": "desc" },
+        "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "custom": { "lineWidth": 1, "fillOpacity": 10, "spanNulls": false, "showPoints": "never" },
+          "color": { "mode": "palette-classic" }
+        },
+        "overrides": []
+      }
+    },
+
+    {
+      "id": 49,
+      "type": "stat",
+      "title": "Summarization Retries",
+      "gridPos": { "h": 4, "w": 6, "x": 0, "y": 160 },
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "expr": "nenya_summarization_retries_total{job=~\"$job\", instance=~\"$instance\"} or vector(0)",
+          "legendFormat": "retries",
+          "refId": "A"
+        }
+      ],
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "colorMode": "background",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "textMode": "auto"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 5 },
+              { "color": "red", "value": 20 }
+            ]
+          },
+          "color": { "mode": "thresholds" }
+        },
+        "overrides": []
+      }
+    },
+
+    {
+      "id": 50,
+      "type": "timeseries",
+      "title": "Auth Denials by Reason",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 164 },
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "expr": "sum(rate(nenya_auth_denials_total{job=~\"$job\", instance=~\"$instance\"}[$__rate_interval])) by (reason) or vector(0)",
+          "legendFormat": "{{reason}}",
+          "refId": "A"
+        }
+      ],
+      "options": {
+        "tooltip": { "mode": "multi", "sort": "desc" },
+        "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "custom": { "lineWidth": 1, "fillOpacity": 10, "spanNulls": false, "showPoints": "never" },
+          "color": { "mode": "palette-classic" }
+        },
+        "overrides": [
+          {
+            "matcher": { "id": "byRegexp", "options": ".*" },
+            "properties": [ { "id": "color", "value": { "mode": "fixed", "fixedColor": "red" } } ]
+          }
+        ]
+      }
+    },
+
+    {
+      "id": 51,
+      "type": "timeseries",
+      "title": "Backoff Level Distribution",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 164 },
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "expr": "sum(rate(nenya_backoff_level_total{job=~\"$job\", instance=~\"$instance\"}[$__rate_interval])) by (level) or vector(0)",
+          "legendFormat": "level {{level}}",
           "refId": "A"
         }
       ],

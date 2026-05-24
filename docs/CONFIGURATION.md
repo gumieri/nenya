@@ -183,6 +183,7 @@ Rate limiting, routing weights, and circuit breaker configuration.
 | `max_cost_per_request` | float64 | `0` (disabled) | Maximum allowed cost in USD per request. 0 = no limit. Logged but not yet enforced. |
 | `retryable_status_codes` | []int | `[429, 500, 502, 503, 504]` | HTTP status codes that trigger fallback to the next model in an agent chain. **Warning: setting this field REPLACES the built-in defaults entirely.** You must include all codes you want retryable (including the standard ones). Per-provider override available via `providers.<name>.retryable_status_codes` (provider-level replaces global for that provider). |
 | `empty_stream_as_error` | bool | `true` | Treat upstream responses with `200 OK` and zero-byte body as errors. When enabled, an SSE error payload is emitted to the client (code: `empty_response`), which OpenCode recognizes as a retryable error, allowing fallback to the next target. The metric `nenya_empty_stream_total` is incremented. Set to `false` to preserve backward compatibility (empty streams treated as successful responses, resulting in empty assistant messages). |
+| `auto_retry_on_context_limit` | bool | `false` | Automatically retry the request with reduced max_tokens when the upstream provider returns a context limit exceeded error. When enabled, the gateway halves the max_tokens value and retries up to `max_retry_attempts` times before giving up. This is useful for models with variable context windows or when token estimation is imprecise. Opt-in only (default `false`). |
 
 ## `bouncer`
 
@@ -946,6 +947,41 @@ The `/v1/models` catalog endpoint returns actual discovered models instead of wi
 }
 ```
 
+## `local_engine`
+
+Ollama session management for engine calls (bouncer, window). When configured, the gateway maintains LRU-managed model sessions to minimize load time for repeated engine invocations.
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `base_url` | string | `"http://127.0.0.1:11434"` | Ollama API endpoint (base URL without `/v1/...` paths) |
+| `timeout_seconds` | int | `120` | Per-operation timeout in seconds for engine calls (load, generate) |
+| `max_sessions` | int | `3` | Maximum number of loaded models to cache simultaneously. LRU eviction unloads least-recently-used models when this limit is exceeded. Set to `0` for unlimited sessions (not recommended for memory-constrained systems). |
+| `auto_load` | bool | `false` | Automatically load models at startup. When `true`, models listed in `startup_models` are pre-loaded before serving requests. |
+| `startup_models` | []string | `[]` | List of models to load at startup when `auto_load` is `true`. Models are loaded in sequence; load failures are logged but do not prevent gateway startup. Example: `["qwen2.5-coder:7b", "deepseek-coder:6.7b"]`. |
+
+### Session Management
+
+When `local_engine` is configured, engine calls use the Ollama session API (`/api/generate`) instead of the standard `/v1/chat/completions` endpoint. This allows:
+
+- **Warm models**: Models remain loaded in memory across requests, reducing first-token latency
+- **LRU eviction**: When `max_sessions` is exceeded, the least-recently-used model is unloaded
+- **Startup warm-up**: `auto_load` + `startup_models` pre-loads frequently-used models
+
+**Configuration Example**:
+```json
+{
+  "local_engine": {
+    "base_url": "http://127.0.0.1:11434",
+    "timeout_seconds": 120,
+    "max_sessions": 3,
+    "auto_load": false,
+    "startup_models": ["qwen2.5-coder:7b"]
+  }
+}
+```
+
+**Fallback Behavior**: If Ollama is unreachable or a model fails to load, the gateway logs a warning and proceeds with the original payload (fail-open). The `bouncer.fail_open` setting does not apply to local engine errors — those always fail-open to preserve gateway availability.
+
 ## Auto-Agents
 
 When `discovery.auto_agents` is enabled, Nenya automatically generates agent definitions from discovered models. These agents group models by capability and context size, providing convenient routing targets without manual configuration.
@@ -1060,11 +1096,12 @@ The model catalog endpoint includes capability and pricing metadata when availab
 | 8 | **Stale tool call pruning** | if `prune_stale_tools` enabled |
 | 9 | **Thought pruning** | if `prune_thoughts` enabled |
 | 10 | **Window compaction** | if enabled and threshold exceeded |
-| 11 | **Engine interception** | 3-tier summarization with TF-IDF and fallback chain |
-| 12 | **Format-aware body conversion** | if model has `format: "anthropic"` |
-| 13 | **JSON minification** | final body compaction |
-| 14 | **Response cache store** | if enabled |
-| 15 | **MCP auto-save** | if agent has `mcp.auto_save` (async) |
+| 11 | **Engine interception** | 3-tier summarization: redact → entropy → TF-IDF relevance → engine summarization (with fallback chain) |
+| 12 | **Token budget trimming** | if `hard_limit_tokens` exceeded (drop oldest messages, truncate next with middle-out) |
+| 13 | **Format-aware body conversion** | if model has `format: "anthropic"` |
+| 14 | **JSON minification** | final body compaction |
+| 15 | **Response cache store** | if enabled |
+| 16 | **MCP auto-save** | if agent has `mcp.auto_save` (async) |
 
 ### Best-Effort Pipeline
 

@@ -17,6 +17,7 @@ order). Config files support `//` line comments and `/* */` block comments.
 | `compaction` | no | Payload compaction (minify, prune, trim) |
 | `response_cache` | no | Response caching (LRU) |
 | `discovery` | no | Dynamic model discovery from upstream providers |
+| `local_engine` | no | Ollama session management for engine calls |
 | `agents` | yes | Named agent configurations with model lists |
 | `providers` | yes | Upstream provider API endpoints |
 | `mcp_servers` | no | MCP server connections for tool integration |
@@ -99,6 +100,7 @@ and safety constraints.
 | `ratelimit_max_tpm` | int | `250000` | Max tokens per minute (0 = unlimited) |
 | `max_retry_attempts` | int | `3` | Max retries for transient upstream failures |
 | `empty_stream_as_error` | bool | `true` | Treat empty SSE as 500 error |
+| `auto_retry_on_context_limit` | bool | `false` | Auto-retry with reduced max_tokens on context limit errors |
 | `blocked_execution_patterns` | []string | built-in | Regexes for commands to block (kill switch) |
 | `routing_strategy` | string | `""` | `""` (default), `"latency"`, `"balanced"` |
 | `routing_latency_weight` | float | `0` | Weight for latency in balanced routing (0-1) |
@@ -323,6 +325,28 @@ Individual settings can be overridden after choosing a preset.
 | `enabled` | bool | `false` | Enable dynamic model discovery |
 | `auto_agents` | bool | `false` | Auto-generate agents from discovered models |
 | `auto_agents_config` | object | `nil` | Per-category auto-agent toggles |
+
+## `local_engine`
+
+```json
+{
+  "local_engine": {
+    "base_url": "http://127.0.0.1:11434",
+    "timeout_seconds": 120,
+    "max_sessions": 3,
+    "auto_load": false,
+    "startup_models": ["qwen2.5-coder:7b"]
+  }
+}
+```
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `base_url` | string | `"http://127.0.0.1:11434"` | Ollama API endpoint |
+| `timeout_seconds` | int | `120` | Per-operation timeout for engine calls |
+| `max_sessions` | int | `3` | Max loaded models cached (LRU eviction) |
+| `auto_load` | bool | `false` | Load `startup_models` at gateway startup |
+| `startup_models` | []string | `[]` | Models to preload when `auto_load` is true |
 
 ## `agents`
 

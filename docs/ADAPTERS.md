@@ -1,6 +1,6 @@
 # Provider Adapter System
 
-The `internal/adapter` package manages provider-specific differences in wire format, authentication, response transformation, and error classification through a clean Go interface. For a user-facing provider guide with capabilities and special behaviors, see [`PROVIDERS.md`](PROVIDERS.md).
+The `internal/adapter` package manages provider-specific differences in wire format, authentication, response transformation, and error classification through a clean Go interface. Nenya includes adapters for 23 built-in providers (OpenAI, Anthropic, Gemini, DeepSeek, Ollama, Groq, Together, SambaNova, Cerebras, NVIDIA, GitHub, Qwen, MiniMax, Moonshot, Mistral, xAI, OpenRouter, Azure, Perplexity, Cohere, DeepInfra, z.ai, and OpenCode Zen). For a user-facing provider guide with capabilities and special behaviors, see [`PROVIDERS.md`](PROVIDERS.md).
 
 ## The Interface
 
@@ -49,7 +49,7 @@ type Capabilities struct {
 
 | Style | Header(s) | Used By |
 |-------|-----------|---------|
-| `bearer` | `Authorization: Bearer <key>` | OpenAI, DeepSeek, Groq, Together, SambaNova, Cerebras, GitHub, z.ai, Mistral, xAI, Perplexity, Cohere, DeepInfra |
+| `bearer` | `Authorization: Bearer <key>` | OpenAI, DeepSeek, Groq, Together, SambaNova, Cerebras, GitHub, z.ai, Mistral, xAI, Perplexity, Cohere, DeepInfra, Moonshot, Qwen |
 | `bearer+x-goog` | `Authorization: Bearer <key>` + `x-goog-api-key: <key>` | Gemini |
 | `anthropic` | `x-api-key: <key>` + `anthropic-version: 2023-06-01` | Anthropic |
 | `azure` | `api-key: <key>` | Azure OpenAI |
@@ -59,6 +59,8 @@ Auth style is resolved in priority order:
 1. Adapter-specific `InjectAuth()` (for registered providers)
 2. `ProviderConfig.AuthStyle` from JSON config (for dynamic providers)
 3. Default `BearerAuth` fallback
+
+> **Multi-account key selection**: When a provider is configured with multiple credentials via the `accounts` field, the gateway uses LRU-based account selection per model. The auth style from the resolved adapter is applied to each selected account's credential. See [CONFIGURATION.md](CONFIGURATION.md#multi-account-per-provider-keys) for configuration details.
 
 ## Built-in Adapters
 
@@ -70,7 +72,7 @@ Identity transform for request/response. Capability-based parameter stripping:
 - `AutoToolChoice: false` → strips `tool_choice: "auto"` from request
 - `ContentArrays: false` → flattens `content: [{type:"text",text:"..."}]` to `content: "..."`
 
-**Used by**: `deepseek`, `groq`, `together`, `github`, `sambanova`, `cerebras`, `nvidia`, `nvidia_free`, `qwen_free`, `minimax_free`, `zai-coding-plan`
+**Used by**: `openai`, `deepseek`, `groq`, `together`, `github`, `sambanova`, `cerebras`, `nvidia`, `nvidia_free`, `qwen_free`, `minimax_free`, `zai-coding-plan`, `moonshot`, `qwen`
 
 ### GeminiAdapter
 
@@ -87,7 +89,7 @@ Identity transform for request/response. Capability-based parameter stripping:
 
 ### OllamaAdapter
 
-- **Request**: Identity (no transformation)
+- **Request**: Strips unsupported `tool_choice` field from request body (Ollama does not support tool choice control)
 - **Auth**: Optional Bearer (only if API key is non-empty)
 - **Error**: Conservative — only 429/5xx are retryable
 
@@ -162,6 +164,22 @@ OpenAI-compatible with standard capabilities.
 - **Request**: Content arrays preserved, auto tool choice preserved
 - **Auth**: Bearer
 - **Error**: Standard classification
+
+### Provider Adapter Mappings
+
+Many providers are OpenAI-compatible and use the default `OpenAIAdapter` rather than a dedicated adapter:
+
+| Provider | Adapter | Notes |
+|----------|---------|-------|
+| **Moonshot** | `OpenAIAdapter` | OpenAI-compatible, full capabilities |
+| **Qwen** | `OpenAIAdapter` | OpenAI-compatible, `AutoToolChoice: false` |
+| **Qwen Free** | `OpenAIAdapter` | Same as Qwen, rate-limited variant |
+| **MiniMax** | `OpenAIAdapter` | OpenAI-compatible, full capabilities |
+| **MiniMax Free** | `OpenAIAdapter` | Same as MiniMax, rate-limited variant |
+| **NVIDIA** | `OpenAIAdapter` | OpenAI-compatible, restricted capabilities |
+| **NVIDIA Free** | `OpenAIAdapter` | Same as NVIDIA, rate-limited variant |
+
+These providers are registered in the adapter registry with provider-specific capability settings (see `internal/adapter/registry.go`). Adding a new OpenAI-compatible provider typically requires zero Go code — only a JSON config entry and a secrets key.
 
 ## Adding a New Provider
 

@@ -15,52 +15,67 @@ A lightweight, zero-dependency AI API Gateway written in Go. Nenya sits between 
 | Client (Cursor / OpenCode / Aider / etc.)    |
 | OpenAI-compatible request                    |
 | POST /v1/chat/completions + Bearer token     |
+| or                                           |
+| Anthropic Messages API request               |
+| POST /v1/messages + x-api-key                |
 +----------------------------------------------+
-                       |
-                       v
+                        |
+                        v
 +----------------------------------------------+
 | Nenya Gateway                                |
-| - auth check                                 |
+| - auth check + RBAC enforcement              |
 | - parse JSON + extract model                 |
 | - resolve agent/provider                     |
 | - optional cache (HIT => replay SSE)         |
 | - optional MCP context/tool injection        |
 +----------------------------------------------+
-                       |
-                       v
+                        |
+                        v
 +----------------------------------------------+
-| Privacy / Context Pipeline (best-effort)     |
-| - Tier-0 regex + entropy secret redaction    |
-| - compaction / pruning / window mgmt         |
-| - engine summarize (usually local Ollama)    |
+| Interceptor Chain (pluggable, best-effort)   |
+| - RedactInterceptor  (regex patterns)        |
+| - EntropyInterceptor (high-entropy strings)  |
+| - TFIDFInterceptor   (relevance scoring)     |
+| - BouncerInterceptor (engine summarization)  |
 +----------------------------------------------+
-                       |
-                       v
+                        |
+                        v
++----------------------------------------------+
+| Token Budget Trimming (if payload > hard     |
+| limit) drops oldest non-system messages and  |
+| applies token-aware middle-out truncation    |
++----------------------------------------------+
+                        |
+                        v
 +----------------------------------------------+
 | Routing                                      |
 |  A) Standard forwarding                      |
 |     - fallback chain + circuit breaker + RL  |
 |  B) MCP multi-turn tool loop (if enabled)    |
 |     - buffer SSE, execute MCP tools, re-send |
+|  C) Context-limit retry                      |
+|     - on upstream 413/context_exceeded,      |
+|       summarize payload, retry with fallback |
 +----------------------------------------------+
-                       |
-                       v
+                        |
+                        v
 +----------------------------------------------+
 | Upstream LLM Providers                       |
 | Anthropic | Gemini | DeepSeek | Mistral | ...|
 +----------------------------------------------+
-                       |
-                       |  SSE stream
-                       v
+                        |
+                        |  SSE stream
+                        v
 +----------------------------------------------+
 | Nenya SSE Pipeline                           |
 | - adapter response transforms                |
+| - (optional) OpenAI→Anthropic conversion     |
 | - usage accounting + stream filter           |
 | - flush + (optional) cache capture           |
 | - (optional) MCP auto-save                   |
 +----------------------------------------------+
-                       |
-                       v
+                        |
+                        v
 +----------------------------------------------+
 | Client receives transparent SSE output       |
 +----------------------------------------------+
@@ -89,7 +104,7 @@ Flow notes:
 ### Security & Privacy
 
 - **Tier-0 regex secret filter** — always-on redaction of AWS keys, GitHub tokens, passwords, etc.
-- **3-Tier content pipeline** — pass-through, engine summarization, or TF-IDF relevance-scored truncation
+- **3-Tier content pipeline** — pluggable interceptor chain: regex redaction, entropy filtering, TF-IDF relevance scoring, engine summarization
 - **Context window compaction** — sliding window summarization with configurable engine
 - **Stale tool call pruning** — compact old assistant+tool response pairs to save tokens
 - **Thought pruning** — strip reasoning blocks from assistant message history
@@ -116,6 +131,9 @@ Flow notes:
 - **Rate limiting** — per upstream host (RPM/TPM) with per-provider overrides
 - **Response cache** — in-memory LRU with SHA-256 fingerprinting and optional semantic similarity search
 - **Graceful shutdown** — 5s grace period for in-flight requests, MCP client cleanup
+- **Context-limit auto-retry** — upstream context-length errors trigger summarization and retry
+- **Local engine lifecycle** — pre-load and manage local Ollama models with LRU eviction
+- **Structured errors** — all error responses include `error_kind` field for programmatic diagnostics
 
 ### MCP Tool Integration
 
@@ -238,6 +256,7 @@ API keys support **RBAC enforcement** — agent scoping, endpoint allowlists, ro
 | Endpoint | Auth | Description |
 |----------|------|-------------|
 | `POST /v1/chat/completions` | Bearer + RBAC | OpenAI-compatible chat with SSE streaming, agent fallback, MCP multi-turn |
+| `POST /v1/messages` | Bearer + RBAC | Anthropic Messages API with bidirectional format conversion |
 | `GET /v1/models` | Bearer + RBAC | Live model catalog from discovered providers + static registry (context window, max tokens) |
 | `POST /v1/embeddings` | Bearer + RBAC | Passthrough proxy |
 | `POST /v1/responses` | Bearer + RBAC | Passthrough proxy |

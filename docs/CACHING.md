@@ -25,6 +25,10 @@ Exact-match caching is always enabled when `response_cache.enabled` is true. The
 
 This means identical requests (same model, messages, parameters, and auth token) will hit the cache.
 
+**Note on token-budget trimming:** When the `bouncer` or context window management trims messages via `TrimPayload` (respecting `hard_limit_tokens`), truncated messages produce different SHA-256 hashes. This means cache entries are keyed to the *trimmed* payload — identical full requests may miss the cache if one was trimmed and another was not. Cache key computation occurs *after* all payload transformations (trimming, summarization).
+
+**Error responses:** Structured error responses (those containing `error_kind` fields) are never cached. Only successful HTTP 200 responses with valid completion data are eligible for caching.
+
 ## Semantic Caching
 
 Semantic caching provides a second-level fallback when exact-match misses but the request is semantically similar to a previous request. This is useful for:

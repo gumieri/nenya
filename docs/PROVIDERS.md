@@ -80,6 +80,8 @@ Providers can declare multiple format endpoints via `FormatURLs` in their regist
 | **GitHub** | `bearer` | ❌ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | **Qwen** | `bearer` | ✅ | ❌ | ✅ | ✅ | ✅ | ❌ |
 | **MiniMax** | `bearer` | ✅ | ❌ | ✅ | ✅ | ✅ | ❌ |
+| **Moonshot** | `bearer` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| **OpenAI** | `bearer` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | **OpenCode Zen** | `bearer` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 
 > ✅ = Supported | ❌ = Not Supported
@@ -155,9 +157,38 @@ DeepSeek v4 models support a **thinking mode** controlled by the `thinking` para
 - See [Per-Model Wire Format](#per-model-wire-format-format-attribute) for details
 
 ### Ollama
-- **Request**: Identity (no transformation)
+- **Request**: Strips unsupported `tool_choice` field from request body
 - **Auth**: Optional Bearer (only if API key is non-empty)
 - **Error**: Conservative — only 429/5xx are retryable
+- **Discovery**: Enriches model metadata via `/api/show` for accurate context length and capabilities (vision, tools, thinking, audio)
+
+### Multi-Account Key Selection
+
+Providers support multiple API keys with **LRU-based selection per model**. When a provider is configured with multiple accounts, the gateway selects the least-recently-used key for each model, distributing load and providing automatic failover on rate limits or errors.
+
+Configured via the `accounts` field in provider config (not `provider_keys` in secrets):
+
+```json
+{
+  "providers": {
+    "openai": {
+      "accounts": [
+        {"id": "acct-1", "type": "apikey", "credential": "sk-..."},
+        {"id": "acct-2", "type": "apikey", "credential": "sk-..."}
+      ]
+    }
+  }
+}
+```
+
+Key behaviors:
+- **LRU rotation**: The account used longest ago is selected first
+- **Per-model tracking**: Selection is independent per model
+- **Error classification**: Rate-limited accounts are cooled down, not retried
+- **Exponential backoff**: Accounts with persistent errors get progressively longer cooldowns
+- **Graceful degradation**: Falls back to the legacy `provider_keys` path when no accounts are configured
+
+See [`CONFIGURATION.md`](CONFIGURATION.md#multi-account-per-provider-keys) for full details.
 
 ## Adding Custom Providers
 
@@ -190,11 +221,13 @@ See `gemini.go` or `zai.go` for examples.
 
 | Style | Header(s) | Used By |
 |-------|-----------|---------|
-| `bearer` | `Authorization: Bearer <key>` | OpenAI, DeepSeek, Groq, Together, SambaNova, Cerebras, GitHub, z.ai, Mistral, xAI, Perplexity, Cohere, DeepInfra |
+| `bearer` | `Authorization: Bearer <key>` | OpenAI, DeepSeek, Groq, Together, SambaNova, Cerebras, GitHub, z.ai, Mistral, xAI, Perplexity, Cohere, DeepInfra, Moonshot, Qwen |
 | `bearer+x-goog` | `Authorization: Bearer <key>` + `x-goog-api-key: <key>` | Gemini |
 | `anthropic` | `x-api-key: <key>` + `anthropic-version: 2023-06-01` | Anthropic |
 | `azure` | `api-key: <key>` | Azure OpenAI |
 | `none` | (no auth) | Ollama |
+
+> **Multi-account support**: All auth styles support multi-account credential pools via the `accounts` provider config field. See [Multi-Account Key Selection](#multi-account-key-selection) above.
 
 Auth style resolution priority:
 1. Adapter-specific `InjectAuth()` (for registered providers)
@@ -215,6 +248,7 @@ Each provider declares which endpoint types it supports via `ProviderSpec.Servic
 | `ServiceKindEmbedding` | `/v1/embeddings` |
 | `ServiceKindTTS` | `/v1/audio/speech` |
 | `ServiceKindSTT` | `/v1/audio/transcriptions` |
+| `ServiceKindAudio` | `/v1/audio/*` (TTS + STT) |
 | `ServiceKindImage` | `/v1/images/generations` |
 | `ServiceKindRerank` | `/v1/rerank` |
 | `ServiceKindWebSearch` | `/v1/search` |
@@ -230,9 +264,12 @@ Model-specific features are inferred dynamically from model IDs via `discovery.I
 | `CapToolCalls` | Model supports function/tool calling |
 | `CapReasoning` | Model returns reasoning tokens (`reasoning_content` field) |
 | `CapVision` | Model accepts image inputs |
+| `CapAudio` | Model supports audio (TTS/STT endpoints) |
 | `CapContentArrays` | Model supports complex content arrays |
 | `CapStreamOptions` | Model supports `stream_options.include_usage` |
 | `CapAutoToolChoice` | Model supports `tool_choice: "auto"` |
+
+> **Dynamic enrichment**: For providers that return capability data via model discovery (e.g., Ollama's `/api/show`), these capabilities are merged with static registry metadata and inference rules. Discovery-provided capabilities take precedence over static rules.
 
 These are used for routing decisions, request sanitization, fallback scoring, and `/v1/models` metadata. See `internal/discovery/capabilities.go` for inference rules.
 

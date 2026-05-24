@@ -3,28 +3,31 @@
 ## Package Dependency DAG
 
 ```
-config → infra → discovery → stream → pipeline → resilience → providers → adapter → routing → gateway → proxy → mcp
+util, tiktoken -> config -> infra -> discovery -> stream -> pipeline -> resilience -> providers -> adapter -> routing -> local -> gateway -> proxy -> mcp
 ```
 
-Each layer may only import from layers to its left. This prevents circular dependencies and keeps the codebase testable in isolation.
+Each layer may only import from layers to its left. This prevents circular dependencies and keeps the codebase testable in isolation. Leaf dependencies (`util`, `tiktoken`) contain shared utilities. The `local` package manages Ollama model lifecycles.
 
 ## Package Overview
 
 | Package | Responsibility |
 |---------|---------------|
 | `cmd/nenya/` | Entry point, server bootstrap with graceful shutdown |
+| `internal/util/` | Shared utilities: overflow-safe integer arithmetic, ID generation, string formatting, error helpers, retry primitive (`DoWithRetry`) |
+| `internal/tiktoken/` | cl100k_base BPE token counter for prompt token estimation (zero external dependencies) |
 | `internal/config/` | Configuration types, JSON loading, model/provider registries, defaults, validation, engine reference resolution |
-| `internal/infra/` | Structured logging, thought signature cache, Prometheus metrics, rate limiter, usage tracker, latency tracker (sorted-buffer median with incremental insertion), response cache |
+| `internal/infra/` | Structured logging, thought signature cache, Prometheus metrics, rate limiter, usage tracker, latency tracker (sorted-buffer median with incremental insertion), response cache, structured errors (`ErrorKind`, `ErrorResponse`) |
 | `internal/discovery/` | Dynamic model catalog discovery from upstream providers, three-tier merge (config > discovered > static), per-provider response parsers |
 | `internal/stream/` | SSE transforming reader, sliding window stream filter |
-| `internal/pipeline/` | Client classification, code fence detection, tier-0 regex secret redaction, Shannon entropy redaction, TF-IDF relevance-scored truncation, middle-out truncation (code-boundary-aware for IDEs), text compaction, stale tool call pruning, thought pruning, context window compaction, engine calls with fallback chains |
+| `internal/pipeline/` | Client classification, code fence detection, interceptor chain (Redact/Entropy/TF-IDF/Bouncer), tier-0 regex secret redaction, Shannon entropy redaction, TF-IDF relevance-scored truncation, middle-out truncation (code-boundary-aware for IDEs), text compaction, stale tool call pruning, thought pruning, context window compaction, engine calls with fallback chains |
 | `internal/resilience/` | Circuit breaker with Closed/Open/HalfOpen states, exponential backoff |
 | `internal/providers/` | Provider capability specs (stream_options, auto_tool_choice, content_arrays), per-provider sanitization, response transformers |
-| `internal/adapter/` | Provider Adapter pattern: request mutation, auth injection, response mutation, error classification |
-| `internal/routing/` | Dynamic provider resolution, agent fallback chains, latency-aware reordering with jitter (thundering herd prevention), upstream request transformation, API key injection |
+| `internal/adapter/` | Provider Adapter pattern: request mutation, auth injection, response mutation, error classification, bidirectional OpenAI↔Anthropic format conversion |
+| `internal/routing/` | Dynamic provider resolution, agent fallback chains, latency-aware reordering with jitter (thundering herd prevention), upstream request transformation, API key injection, format detection |
+| `internal/local/` | Local Ollama model lifecycle management: GPU load/unload, session tracking with LRU eviction, startup preloading |
 | `internal/mcp/` | MCP (Model Context Protocol) client: HTTP+SSE transport, tool discovery, tool call execution, OpenAI schema transformation |
 | `internal/gateway/` | NenyaGateway struct, HTTP client configuration, token counting, MCP client initialization, MCP tool index |
-| `internal/proxy/` | HTTP handlers, content pipeline orchestration, upstream forwarding with retry, transparent SSE streaming, MCP multi-turn tool call loop, buffered SSE response, empty-stream detection with SSE error payload |
+| `internal/proxy/` | HTTP handlers, content pipeline orchestration, upstream forwarding with retry, transparent SSE streaming, MCP multi-turn tool call loop, buffered SSE response, empty-stream detection with SSE error payload, structured error normalization |
 
 ## Request Lifecycle
 
@@ -33,7 +36,8 @@ Client Request
   │
   ├─ POST /v1/chat/completions
   │   ├─ Auth check (Bearer token)
-  │   ├─ Parse JSON body, extract model
+  │   ├─ RBAC enforcement (agent scoping, endpoint allowlists, role-based permissions)
+  │   ├─ Parse JSON body, extract model, detect source format (OpenAI/Anthropic)
   │   ├─ Classify client (IDE detection via User-Agent)
   │   ├─ Resolve agent or provider
   │   ├─ Response cache lookup (if enabled)
@@ -45,12 +49,16 @@ Client Request
   │   │   └─ Inject system prompt instructing LLM to use MCP tools for memory retrieval
   │   ├─ Content pipeline (best-effort — failures logged, never block request):
   │   │   ├─ Prefix cache optimizations
-  │   │   ├─ Tier-0 regex secret redaction + Shannon entropy redaction (applied unconditionally)
+  │   │   ├─ Interceptor chain execution (priority order):
+  │   │   │   ├─ RedactInterceptor (Priority 10): Tier-0 regex secret redaction
+  │   │   │   ├─ EntropyInterceptor (Priority 20): Shannon entropy redaction
+  │   │   │   ├─ TFIDFInterceptor (Priority 30): TF-IDF relevance-scored truncation
+  │   │   │   └─ BouncerInterceptor (Priority 50): 3-tier engine interception (soft/hard limits)
   │   │   ├─ Text compaction (skipped for IDE clients)
   │   │   ├─ Stale tool call pruning (if enabled, skipped for IDE clients)
   │   │   ├─ Thought pruning (if enabled — strip <think.../think> reasoning blocks. reasoning_content field is preserved in shared pipeline and stripped per-target for non-reasoning providers)
   │   │   ├─ Window compaction (if enabled)
-  │   │   ├─ 3-tier engine interception (soft/hard limits, code-aware prompt for IDEs)
+  │   │   ├─ Token budget trimming (if enabled, trims oldest messages to fit context window)
   │   │   └─ JSON minification
   │   ├─ MCP routing decision:
   │   │   ├─ Agent has MCP tools → MCP multi-turn loop (see below)
@@ -67,6 +75,7 @@ Client Request
   │       │   │   ├─ ErrorRetryable → exponential backoff, retry
   │       │   │   ├─ ErrorRateLimited → cooldown, retry with delay
   │       │   │   ├─ ErrorQuotaExhausted → long cooldown
+  │       │   │   ├─ ErrorContextExceeded → context-limit retry with summarization
   │       │   │   └─ ErrorPermanent → try next target (or return error if no more targets)
   │       │   └─ On success → circuit breaker.RecordSuccess()
   │   └─ MCP multi-turn forwarding:
@@ -82,12 +91,13 @@ Client Request
   ├─ SSE stream pipeline:
   │       ├─ stallReader (120s idle timeout)
   │       ├─ SSETransformingReader (adapter.MutateResponse per chunk)
+  │       ├─ Bidirectional format conversion (OpenAI ↔ Anthropic for Anthropic clients)
   │       ├─ OnContent callback (capture assistant response for memory storage)
-   │       ├─ StreamFilter (blocked execution patterns)
-   │       ├─ immediateFlushWriter (Flush after every Write)
-   │       ├─ sseTeeWriter (capture for response cache)
-   │       └─ Empty-stream detection (if enabled, emit SSE error payload on zero-byte response)
-   │           └─ Async MCP auto-save (if agent has mcp.auto_save)
+  │       ├─ StreamFilter (blocked execution patterns)
+  │       ├─ immediateFlushWriter (Flush after every Write)
+  │       ├─ sseTeeWriter (capture for response cache)
+  │       └─ Empty-stream detection (if enabled, emit SSE error payload on zero-byte response)
+  │           └─ Async MCP auto-save (if agent has mcp.auto_save)
   │           └─ POST to MCP server with assistant content (best-effort, tool name configurable)
   ├─ GET /v1/models
   ├─ POST /v1/embeddings
@@ -96,6 +106,151 @@ Client Request
   ├─ GET /healthz
   └─ GET /statsz
 ```
+
+## Interceptor Chain
+
+The interceptor chain (`internal/pipeline/interceptor.go:72`) implements the **Chain of Responsibility** pattern. Execution is deterministic by priority (lower numbers run first). All interceptors run best-effort — failures log warnings and fall through to the next interceptor unless `StrictMode` is enabled.
+
+### Interface
+
+```go
+type Interceptor interface {
+    Name() string
+    CanHandle(ctx context.Context, req *InterceptRequest) bool
+    Process(ctx context.Context, req *InterceptRequest) (*InterceptResult, error)
+    Priority() int
+}
+```
+
+### Registered Interceptors
+
+| Priority | Interceptor | File | Purpose |
+|----------|-------------|------|---------|
+| 10 | `RedactInterceptor` | `internal/pipeline/redact_interceptor.go` | Tier-0 regex pattern matching for secrets, tokens, and credentials across the entire payload |
+| 20 | `EntropyInterceptor` | `internal/pipeline/entropy_interceptor.go` | Shannon entropy redaction — identifies and redacts high-entropy strings (potential secrets) |
+| 30 | `TFIDFInterceptor` | `internal/pipeline/tfidf_interceptor.go` | TF-IDF relevance scoring — prunes content blocks by relevance to user query when `governance.tfidf_query_source` is set |
+| 50 | `BouncerInterceptor` | `internal/proxy/bouncer_interceptor.go` | 3-tier engine interception: Tier 1 (soft limit — engine summarization), Tier 2 (hard limit — TF-IDF fallback), Tier 3 (hard limit — engine call with code-aware prompt for IDEs) |
+
+### Execution
+
+`InterceptorChain.Execute()` (`internal/pipeline/interceptor.go:111`) walks interceptors in priority order. Each successful interceptor mutates the request's `Payload` map in-place. On failure, behavior depends on `StrictMode`: fallback to next interceptor (default) or return error (strict). Context cancellation is checked at each interceptor boundary.
+
+### InterceptRequest / InterceptResult
+
+`InterceptRequest` (`internal/pipeline/interceptor.go:33`) carries the full payload, parsed messages slice, client profile, soft/hard limits, and current token count. `InterceptResult` (`internal/pipeline/interceptor.go:54`) returns the modified payload, a truncated flag, new token count, reason string, and skip flag.
+
+### Metrics
+
+Each interceptor reports duration, error count, and applied count via Prometheus metrics (`nenya_interceptor_duration_seconds`, `nenya_interceptor_errors_total`, `nenya_interceptor_applied_total`).
+
+## Context-Limit Retry
+
+When an upstream provider returns an HTTP 400 with a `context_length` or `max_tokens` error, Nenya can automatically retry with a summarized payload (`internal/proxy/retry.go:318`).
+
+### Trigger
+
+The error classification in `handleContextLimitError` (`internal/proxy/retry.go:318`) checks:
+1. `util.IsContextLengthError(statusCode, body)` — inspects status code and body for context limit patterns
+2. `governance.auto_retry_on_context_limit` — must be enabled (default: true in config)
+
+### Flow
+
+1. **Detection**: Upstream returns 400 with context-limit error body
+2. **Summarization**: `attemptContextLimitSummarization` parses the original payload, extracts messages, and calls `summarizeMessages` which invokes `CallEngineChain` with the configured engine targets
+3. **Single attempt**: Only one summarization is attempted per request to prevent loops (`summarized` flag on `retryLoop`)
+4. **Engine fallback**: Uses the full engine fallback chain (local Ollama → remote provider), same as the Bouncer
+5. **Retry**: If summarization succeeds, the summarized payload is re-sent through the standard `retryLoop`. If it fails, the original error is returned to the client
+
+### Configuration
+
+Controlled by `governance.auto_retry_on_context_limit` (boolean, default `false`). Requires at least one configured engine target in `bouncer.engine`.
+
+### Metrics
+
+- `nenya_context_limit_errors_total{agent, provider, model}` — incremented on each context-limit error
+- `nenya_summarization_retries_total{agent, provider, model}` — incremented on successful summarization and retry
+
+## Local Engine Lifecycle
+
+The `internal/local/` package manages the lifecycle of local Ollama models, handling load/unload from GPU memory, session tracking, and LRU eviction.
+
+### Architecture
+
+```
+EngineManager (internal/local/manager.go:13)
+  ├─ SessionManager (internal/local/session.go)
+  │   ├─ model-loading/unloading via Ollama API
+  │   └─ session state per model (loaded, loading, failed)
+  └─ LRU eviction when MaxSessions exceeded
+```
+
+### Key Design Decisions
+
+**Standard routing path**: Local models are NOT routed through a separate code path. They flow through the existing `retryLoop` → `prepareAndSend` → `streamResponse` pipeline as standard `UpstreamTarget`s. The `SessionManager` only handles load/unload lifecycle; chat completions are proxied by the existing Ollama provider adapter and `OllamaTransformer`.
+
+**Startup preloading**: `EngineManager.Startup()` (`internal/local/manager.go:37`) loads all models in `config.local_engine.startup_models` sequentially at gateway startup. Failures are logged as warnings — the gateway continues without the local model.
+
+**LRU eviction**: When `MaxSessions` is reached and a new model needs loading, the oldest session is evicted via `evictLRU` (`internal/local/manager.go:106`). Eviction creates a 30s context timeout for unloading.
+
+**Thread safety**: Two mutexes with strict ordering: `EngineManager.mu` is acquired BEFORE `SessionManager.mu` to prevent deadlocks. All exports are goroutine-safe.
+
+**Lock ordering**: `em.mu` (EngineManager) → `sm.mu` (SessionManager). Must be maintained in all methods.
+
+### Configuration
+
+```json
+{
+  "local_engine": {
+    "base_url": "http://localhost:11434",
+    "max_sessions": 3,
+    "timeout_seconds": 120,
+    "startup_models": ["qwen2.5-coder:7b"]
+  }
+}
+```
+
+## Structured Error Handling
+
+Nenya uses a typed error system for client-facing diagnostics and internal retry decisions (`internal/infra/errors.go`, `internal/proxy/errors.go`, `internal/proxy/error_normalizer.go`).
+
+### ErrorKind
+
+The `ErrorKind` type (`internal/infra/errors.go:4`) categorizes errors into semantic classes:
+
+| Kind | HTTP Mapping | Description |
+|------|-------------|-------------|
+| `context_exceeded` | 400 | Upstream context-length exceeded |
+| `rate_limited` | 429 | Rate limit hit |
+| `auth_failed` | 401/403 | Authentication failure |
+| `model_not_found` | 404 | Model unavailable |
+| `provider_timeout` | 504 | Upstream timeout |
+| `provider_error` | 502 | Generic upstream failure |
+| `network_error` | 502 | Transport-level failure |
+| `payload_too_large` | 413 | Request exceeds size limits |
+| `invalid_request` | 400 | Malformed or invalid request |
+| `bouncer_error` | 502 | Engine interception failure |
+| `internal_error` | 500 | Gateway internal error |
+
+### GatewayError
+
+The structured `GatewayError` (`internal/proxy/error_normalizer.go:37`) wraps provider errors with:
+
+- **Type**: `provider_error`, `rate_limit_error`, `invalid_request_error`, `authentication_error`, `not_found_error`, `gateway_error`, `bouncer_error`
+- **OpenAI-compatible envelope**: `{"error": {"type": ..., "message": ..., "param": ..., "code": ...}}`
+- **Provider context**: `Provider` field for multi-provider diagnostics
+- **Error classification**: `Retryable()` and `ShouldFailover()` methods on `ErrorKind` for automated decisions
+
+### Normalization
+
+`ParseProviderError` (`internal/proxy/error_normalizer.go:189`) converts raw HTTP responses from upstream providers into `GatewayError` instances. It handles:
+- Body parsing with 64KB limit (`maxErrorBodySize`)
+- OpenRouter wrapper error unwrapping (metadata.raw extraction)
+- Provider-specific error details (param, code fields)
+- Body redaction for logging (secrets stripped before writing to logs)
+
+### SSE Error Payloads
+
+For streaming requests, `writeGatewayStreamError` (`internal/proxy/error_normalizer.go:369`) emits an OpenAI-compatible error as an SSE event followed by `[DONE]`, ensuring clients receive a properly terminated stream on failure.
 
 ## MCP Multi-Turn Tool Call Flow
 
@@ -301,7 +456,15 @@ Model locks are checked during `BuildTargetList` — locked models are skipped b
 | `success_threshold` | `success_threshold` | `1` | Consecutive successes in HalfOpen to recover |
 | `max_retries` | `max_retries` | `0` | Cap on retry attempts per request (0 = unlimited) |
 | `cooldown_seconds` | `cooldown_seconds` | `60` | Duration to wait before transitioning Open → HalfOpen |
-| `halfOpenMaxRequests` | `half_open_max_requests` | `3` | Max probe requests in HalfOpen state |
+| `half_open_max_requests` | `half_open_max_requests` | `3` | Max probe requests in HalfOpen state |
+
+### Per-Provider Multi-Account Handling
+
+For providers with multiple credential accounts (configured via `accounts[]` in the config), circuit breaker tracking is scoped to `provider + model` only — not the individual account. This allows automatic account rotation when a specific account hits a rate limit, while tracking failures across the entire provider. The `UpstreamTarget` includes the `AccountKey` field for credential selection, but circuit breaker keys omit it.
+
+### Backoff and Threshold Enhancements
+
+The circuit breaker integrates with the `BackoffTracker` for exponential backoff on rate-limit and quota errors. `calculateBackoff` (`internal/proxy/retry.go:50`) implements base 500ms exponential doubling with ±750ms jitter, capped at 8 seconds. Per-provider `RetryableStatusCodes` allow custom retry policies beyond the standard defaults (429, 500, 502, 503, 504).
 
 ## Provider Adapter Pattern
 
@@ -314,7 +477,7 @@ The streaming pipeline is built from composable `io.Reader` and `io.Writer` wrap
 | Component | Direction | Purpose |
 |-----------|-----------|---------|
 | `stallReader` | Read from upstream | Aborts after 120s of no data (stall detection) |
-| `SSETransformingReader` | Read from upstream | Parses SSE frames, calls `adapter.MutateResponse()` per chunk, extracts usage, fires `OnContent` callback |
+| `SSETransformingReader` | Read from upstream | Parses SSE frames, calls `adapter.MutateResponse()` per chunk, extracts usage, fires `OnContent` callback. Handles bidirectional format conversion (OpenAI ↔ Anthropic) when `SourceFormat` is `"anthropic"` via `AnthropicAdapter.ConvertAnthropicToOpenAI()` |
 | `StreamFilter` | Read | Kills stream if blocked execution patterns detected |
 | `immediateFlushWriter` | Write to client | Wraps `http.ResponseWriter`, calls `Flush()` after every `Write()` |
 | `sseTeeWriter` | Write to client + buffer | Captures response bytes for response cache storage |
