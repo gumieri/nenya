@@ -100,12 +100,11 @@ func (bt *BillingTracker) RecordSpend(ctx context.Context, entry SpendEntry) {
 func (bt *BillingTracker) MarkExhausted(ctx context.Context, provider, account string, reason string) {
 	key := provider + ":" + account
 
-	bt.mu.RLock()
-	accountStatus, exists := bt.accounts[key]
-	bt.mu.RUnlock()
+	bt.mu.Lock()
+	defer bt.mu.Unlock()
 
+	accountStatus, exists := bt.accounts[key]
 	if !exists {
-		bt.mu.Lock()
 		accountStatus = &AccountStatus{
 			AccountName: account,
 			Provider:    provider,
@@ -115,7 +114,6 @@ func (bt *BillingTracker) MarkExhausted(ctx context.Context, provider, account s
 			LastResetAt: time.Time{},
 		}
 		bt.accounts[key] = accountStatus
-		bt.mu.Unlock()
 	}
 
 	accountStatus.IsExhausted.Store(true)
