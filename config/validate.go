@@ -105,6 +105,7 @@ func collectValidationErrors(ctx context.Context, cfg *Config, providers map[str
 	errors = append(errors, validateModelRegistryErrors(logger)...)
 	errors = append(errors, validateEntropyConfig(cfg.Bouncer)...)
 	errors = append(errors, validateProviderRateLimits(cfg)...)
+	errors = append(errors, validateBillingConfig(cfg)...)
 
 	if pingProviders {
 		errors = append(errors, validateProviders(ctx, providers, logger)...)
@@ -333,4 +334,115 @@ func validateProviderRateLimits(cfg *Config) []string {
 		}
 	}
 	return errs
+}
+
+func validateBillingConfig(cfg *Config) []string {
+	var errs []string
+
+	validModes := map[string]bool{
+		"economy":  true,
+		"balanced": true,
+		"quality":  true,
+	}
+
+	if cfg.Governance.CostMode != "" {
+		if !validModes[cfg.Governance.CostMode] {
+			errs = append(errs, fmt.Sprintf("governance.cost_mode: invalid value %q, must be one of economy, balanced, quality", cfg.Governance.CostMode))
+		}
+	}
+
+	if cfg.Governance.BillingEconomyScale < 0 {
+		errs = append(errs, fmt.Sprintf("governance.billing_economy_scale must be non-negative, got %f", cfg.Governance.BillingEconomyScale))
+	}
+
+	if cfg.Governance.BillingQualityScale < 0 {
+		errs = append(errs, fmt.Sprintf("governance.billing_quality_scale must be non-negative, got %f", cfg.Governance.BillingQualityScale))
+	}
+
+	for name, provider := range cfg.Providers {
+		if provider.Billing == nil {
+			continue
+		}
+		if provider.Billing.Model == "" {
+			errs = append(errs, fmt.Sprintf("providers[%q].billing.model: billing model must be set", name))
+		}
+
+		validModels := map[string]bool{
+			"subscription": true,
+			"credit":       true,
+			"free":         true,
+			"mixed":        true,
+		}
+		if provider.Billing.Model != "" && !validModels[string(provider.Billing.Model)] {
+			errs = append(errs, fmt.Sprintf("providers[%q].billing.model: invalid value %q, must be one of subscription, credit, free, mixed", name, provider.Billing.Model))
+		}
+
+		if provider.Billing.FreeOnly && provider.Billing.Model != "mixed" {
+			errs = append(errs, fmt.Sprintf("providers[%q].billing.free_only requires billing.model to be \"mixed\"", name))
+		}
+
+		validateProviderBillingConfig(name, provider, &errs)
+	}
+
+	return errs
+}
+
+func validateProviderBillingConfig(name string, provider ProviderConfig, errs *[]string) {
+	if provider.Billing == nil {
+		return
+	}
+	bc := provider.Billing
+	if bc.Model == "" {
+		*errs = append(*errs, fmt.Sprintf("providers[%q].billing.model: billing model must be set", name))
+	}
+
+	validModels := map[string]bool{
+		"subscription": true,
+		"credit":       true,
+		"free":         true,
+		"mixed":        true,
+	}
+	if bc.Model != "" && !validModels[string(bc.Model)] {
+		*errs = append(*errs, fmt.Sprintf("providers[%q].billing.model: invalid value %q, must be one of subscription, credit, free, mixed", name, bc.Model))
+	}
+
+	if bc.FreeOnly && bc.Model != "mixed" {
+		*errs = append(*errs, fmt.Sprintf("providers[%q].billing.free_only requires billing.model to be \"mixed\"", name))
+	}
+
+	validateQuotaSource(name, bc, errs)
+	validateQuotaExtractionConfig(name, bc, errs)
+}
+
+func validateQuotaSource(name string, billingCfg *BillingConfig, errs *[]string) {
+	switch billingCfg.QuotaSource {
+	case "api":
+		if billingCfg.QuotaURL == "" {
+			*errs = append(*errs, fmt.Sprintf("providers[%q].billing.quota_url: required when quota_source is \"api\"", name))
+		}
+		if billingCfg.QuotaExtraction == nil {
+			*errs = append(*errs, fmt.Sprintf("providers[%q].billing.quota_extraction: required when quota_source is \"api\"", name))
+		}
+	case "headers":
+		if billingCfg.QuotaExtraction == nil {
+			*errs = append(*errs, fmt.Sprintf("providers[%q].billing.quota_extraction: required when quota_source is \"headers\"", name))
+		}
+	case "none", "":
+	default:
+		*errs = append(*errs, fmt.Sprintf("providers[%q].billing.quota_source: invalid value %q, must be one of none, api, headers", name, billingCfg.QuotaSource))
+	}
+}
+
+func validateQuotaExtractionConfig(name string, billingCfg *BillingConfig, errs *[]string) {
+	if billingCfg.QuotaExtraction == nil {
+		return
+	}
+	validModes := map[string]bool{
+		"simple_json":    true,
+		"max_from_array": true,
+		"headers":        true,
+	}
+	if !validModes[string(billingCfg.QuotaExtraction.Mode)] {
+		*errs = append(*errs, fmt.Sprintf("providers[%q].billing.quota_extraction.mode: invalid value %q, must be one of simple_json, max_from_array, headers", name, billingCfg.QuotaExtraction.Mode))
+	}
 }

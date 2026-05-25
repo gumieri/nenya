@@ -203,6 +203,15 @@ func mergeGovernanceScalars(base, overlay *Config) {
 	if og.MaxCostPerRequest != 0 {
 		bg.MaxCostPerRequest = og.MaxCostPerRequest
 	}
+	if og.CostMode != "" {
+		bg.CostMode = og.CostMode
+	}
+	if og.BillingEconomyScale != 0 {
+		bg.BillingEconomyScale = og.BillingEconomyScale
+	}
+	if og.BillingQualityScale != 0 {
+		bg.BillingQualityScale = og.BillingQualityScale
+	}
 }
 
 func mergeGovernanceBools(base, overlay *Config) {
@@ -690,6 +699,7 @@ func ResolveProviders(cfg *Config, secrets *SecretsConfig) map[string]*Provider 
 			RetryableStatusCodes: pc.RetryableStatusCodes,
 			MaxRetryAttempts:     pc.MaxRetryAttempts,
 			Thinking:             pc.Thinking,
+			Billing:              pc.Billing,
 		}
 	}
 	return providers

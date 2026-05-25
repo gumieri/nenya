@@ -15,6 +15,7 @@ import (
 	"git.0ur.uk/nenya/config"
 	"git.0ur.uk/nenya/internal/adapter"
 	"git.0ur.uk/nenya/internal/auth"
+	"git.0ur.uk/nenya/internal/billing"
 	"git.0ur.uk/nenya/internal/discovery"
 	"git.0ur.uk/nenya/internal/infra"
 	"git.0ur.uk/nenya/internal/local"
@@ -77,6 +78,8 @@ type NenyaGateway struct {
 	HealthRegistry     *discovery.HealthRegistry
 	LatencyTracker     *infra.LatencyTracker
 	CostTracker        *infra.CostTracker
+	BillingTracker     *billing.BillingTracker
+	QuotaFetcher       *billing.QuotaFetcher
 	AccountManager     *auth.AccountManager
 	SecureMem          *security.SecureMem
 	ClientTokenRef     security.SecureToken
@@ -115,6 +118,8 @@ func New(ctx context.Context, cfg config.Config, secrets *config.SecretsConfig, 
 	gw.Metrics.RateLimits = gw.RateLimiter.Snapshot
 	gw.Metrics.Cooldowns = gw.AgentState.ActiveCooldowns
 	gw.Metrics.CBStates = gw.AgentState.CBSnapshot
+
+	gw.QuotaFetcher.Start(ctx, gw.BillingTracker, cfg.Providers, secrets)
 
 	if gw.ResponseCache != nil {
 		gw.Embedder = gw.ResponseCache.GetEmbedder()
@@ -342,6 +347,8 @@ func buildGateway(cfg config.Config, secrets *config.SecretsConfig, secureClient
 		HealthRegistry:    healthRegistry,
 		LatencyTracker:    infra.NewLatencyTracker(),
 		CostTracker:       infra.NewCostTracker(),
+		BillingTracker:    billing.NewBillingTracker(logger, metrics),
+		QuotaFetcher:      billing.NewQuotaFetcher(logger),
 		SecureMem:         sm,
 		ClientTokenRef:    clientTokenRef,
 		ProviderKeyTokens: providerKeyTokens,
@@ -666,10 +673,14 @@ func newResponseCache(cfg config.Config, logger *slog.Logger, metrics *infra.Met
 }
 
 // Close cleans up gateway resources: response cache, MCP clients,
-// and secure memory. Waits for in-flight MCP operations to complete.
+// quota fetcher, and secure memory. Waits for in-flight MCP operations
+// to complete.
 func (g *NenyaGateway) Close() {
 	if g.ResponseCache != nil {
 		g.ResponseCache.Stop()
+	}
+	if g.QuotaFetcher != nil {
+		g.QuotaFetcher.Stop()
 	}
 	for name, client := range g.MCPClients {
 		_ = client.Close()
@@ -709,6 +720,7 @@ func (g *NenyaGateway) Reload(ctx context.Context, cfg config.Config, secrets *c
 	newGW.Stats = g.Stats
 	newGW.Metrics = g.Metrics
 	newGW.ThoughtSigCache = g.ThoughtSigCache
+	newGW.BillingTracker = g.BillingTracker
 
 	newGW.Metrics.RateLimits = newGW.RateLimiter.Snapshot
 	newGW.Metrics.Cooldowns = newGW.AgentState.ActiveCooldowns
@@ -806,13 +818,16 @@ func (g *NenyaGateway) GetProviderAPIKey(providerName string) ([]byte, bool) {
 	return nil, false
 }
 
-func (g *NenyaGateway) selectAccountKey(ctx context.Context, providerName, model string) ([]byte, bool) {
-	selected, err := g.AccountManager.SelectCredential(ctx, providerName, model)
-	if err == nil && selected != "" {
+func (g *NenyaGateway) selectAccountKey(ctx context.Context, providerName, model string) ([]byte, string, bool) {
+	if g.AccountManager == nil {
+		return nil, "", false
+	}
+	selected, err := g.AccountManager.SelectAccount(ctx, providerName, model)
+	if err == nil && selected != nil {
 		if g.Metrics != nil {
 			g.Metrics.RecordAccountSelection(providerName, "selected")
 		}
-		return []byte(selected), true
+		return []byte(selected.Credential), selected.ID, true
 	}
 	if g.Metrics != nil {
 		if err != nil {
@@ -821,19 +836,22 @@ func (g *NenyaGateway) selectAccountKey(ctx context.Context, providerName, model
 			g.Metrics.RecordAccountSelection(providerName, "none_available")
 		}
 	}
-	return nil, false
+	return nil, "", false
 }
 
 // GetProviderAPIKeyForModel returns an API key for the given provider and model.
 // It checks the multi-account pool first (selecting the least-recently-used account),
 // then falls back to the legacy single-key path.
-func (g *NenyaGateway) GetProviderAPIKeyForModel(ctx context.Context, providerName, model string) ([]byte, bool) {
+// Returns the key, the selected account name (empty if not using multi-account), and
+// whether a key was found.
+func (g *NenyaGateway) GetProviderAPIKeyForModel(ctx context.Context, providerName, model string) ([]byte, string, bool) {
 	if g.AccountManager != nil {
-		if key, ok := g.selectAccountKey(ctx, providerName, model); ok {
-			return key, true
+		if key, accountID, ok := g.selectAccountKey(ctx, providerName, model); ok {
+			return key, accountID, true
 		}
 	}
-	return g.GetProviderAPIKey(providerName)
+	key, ok := g.GetProviderAPIKey(providerName)
+	return key, "", ok
 }
 
 func (g *NenyaGateway) GetProvidersMap() map[string]*config.Provider {
@@ -857,4 +875,23 @@ func (g *NenyaGateway) ProviderHasAPIKey(providerName string) bool {
 
 func contextWithTimeout(parent context.Context, d time.Duration) (context.Context, context.CancelFunc) {
 	return context.WithTimeout(parent, d)
+}
+
+func (g *NenyaGateway) ExtractQuotaFromResponseHeaders(ctx context.Context, provider, accountName string, headers http.Header) {
+	p, ok := g.Providers[provider]
+	if !ok || p.Billing == nil {
+		return
+	}
+	if p.Billing.QuotaSource != "headers" || p.Billing.QuotaExtraction == nil {
+		return
+	}
+	info, err := billing.ExtractQuotaFromHeaders(ctx, headers, billing.QuotaExtractionConfig{
+		Mode:            string(p.Billing.QuotaExtraction.Mode),
+		RemainingHeader: p.Billing.QuotaExtraction.RemainingHeader,
+		LimitHeader:     p.Billing.QuotaExtraction.LimitHeader,
+		ResetHeader:     p.Billing.QuotaExtraction.ResetHeader,
+	}, g.Logger)
+	if err == nil && info != nil && info.BalanceUSD <= 0 && g.BillingTracker != nil {
+		g.BillingTracker.MarkExhausted(ctx, provider, accountName, "quota exhausted via response headers")
+	}
 }

@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"git.0ur.uk/nenya/config"
+	"git.0ur.uk/nenya/internal/billing"
 	"git.0ur.uk/nenya/internal/gateway"
 	providerpkg "git.0ur.uk/nenya/internal/providers"
 	"git.0ur.uk/nenya/internal/routing"
@@ -312,6 +313,8 @@ func (p *Proxy) streamResponse(gw *gateway.NenyaGateway, w http.ResponseWriter, 
 	}
 	w.WriteHeader(action.resp.StatusCode)
 
+	gw.ExtractQuotaFromResponseHeaders(r.Context(), target.Provider, target.AccountName, action.resp.Header)
+
 	transformingReader, contentBuilder, stallR := p.setupTransformingReader(gw, target, agentName, sourceFormat, action, r.Context())
 	if transformingReader == nil {
 		return streamResult{}
@@ -357,7 +360,7 @@ func (p *Proxy) setupTransformingReader(gw *gateway.NenyaGateway, target routing
 	stallR := newStallReader(ctx, action.resp.Body, streamIdleTimeout)
 
 	transformingReader := stream.NewSSETransformingReader(stallR, transformer, ctx)
-	transformingReader.SetOnUsage(p.makeUsageCallback(gw, target, agentName))
+	transformingReader.SetOnUsage(p.makeUsageCallback(ctx, gw, target, agentName))
 	transformingReader.SetObserver(newUpstreamErrorObserver(gw, target))
 
 	p.setupStreamFilterIfEnabled(gw, transformingReader)
@@ -410,7 +413,7 @@ func (o *upstreamErrorObserver) OnStreamClose(err error) {}
 
 // makeUsageCallback returns a callback function that records token usage statistics.
 // The callback is invoked by the SSE transformer when usage metadata is received.
-func (p *Proxy) makeUsageCallback(gw *gateway.NenyaGateway, target routing.UpstreamTarget, agentName string) func(int, int, int, int, int) {
+func (p *Proxy) makeUsageCallback(ctx context.Context, gw *gateway.NenyaGateway, target routing.UpstreamTarget, agentName string) func(int, int, int, int, int) {
 	return func(completion, prompt, total, cacheHit, cacheMiss int) {
 		gw.Stats.RecordOutput(target.Model, completion)
 		gw.Metrics.RecordTokens("output", target.Model, agentName, target.Provider, completion)
@@ -424,6 +427,17 @@ func (p *Proxy) makeUsageCallback(gw *gateway.NenyaGateway, target routing.Upstr
 			if dm, ok := gw.ModelCatalog.Lookup(target.Model); ok && dm.Pricing != nil && !dm.Pricing.IsZero() {
 				cost := dm.Pricing.CalculateCost(int64(prompt), int64(completion))
 				gw.CostTracker.RecordUsage(target.Model, cost)
+				if gw.BillingTracker != nil {
+					gw.BillingTracker.RecordSpend(ctx, billing.SpendEntry{
+						ProviderName: target.Provider,
+						AccountName:  target.AccountName,
+						RequestID:    "",
+						InputTokens:  prompt,
+						OutputTokens: completion,
+						CostUSD:      cost,
+						Timestamp:    time.Now(),
+					})
+				}
 			}
 		}
 	}

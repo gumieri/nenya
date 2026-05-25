@@ -72,7 +72,7 @@ func InjectAPIKeyWithGateway(providerName string, gw interface {
 // APIKeyProviderModel extends APIKeyProvider with model-aware key selection.
 type APIKeyProviderModel interface {
 	GetProviderAPIKey(providerName string) ([]byte, bool)
-	GetProviderAPIKeyForModel(ctx context.Context, providerName, model string) ([]byte, bool)
+	GetProviderAPIKeyForModel(ctx context.Context, providerName, model string) ([]byte, string, bool)
 	GetProvidersMap() map[string]*config.Provider
 }
 
@@ -86,7 +86,7 @@ func InjectAPIKeyWithGatewayCtx(ctx context.Context, providerName, modelName str
 	}
 
 	if p.AuthStyle != "none" {
-		keyBytes, ok := gw.GetProviderAPIKeyForModel(ctx, providerName, modelName)
+		keyBytes, _, ok := gw.GetProviderAPIKeyForModel(ctx, providerName, modelName)
 		if !ok {
 			return fmt.Errorf("provider %s has no API key configured", providerName)
 		}

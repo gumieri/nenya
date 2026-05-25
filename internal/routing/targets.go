@@ -14,6 +14,10 @@ import (
 	"git.0ur.uk/nenya/internal/util"
 )
 
+const (
+	DefaultFreeOnlyInputPriceThreshold = 0.0001
+)
+
 // DefaultAgentCooldownSec is the default cooldown between requests to the
 // same agent+provider+model combination when not explicitly configured.
 const DefaultAgentCooldownSec = 60
@@ -136,8 +140,15 @@ func (a *AgentState) BuildTargetList(logger *slog.Logger, agentName string, agen
 	active := make([]UpstreamTarget, 0, n)
 	cooling := make([]UpstreamTarget, 0, n)
 
+	freeOnlyProviders := collectFreeOnlyProviders(providers)
+
 	for i := 0; i < n; i++ {
-		t, ok := a.buildTarget(logger, agentName, models[(start+i)%n], tokenCount, providers, catalog, autoContextSkip)
+		m := models[(start+i)%n]
+		if isPaidModelOnFreeOnlyProvider(m, freeOnlyProviders, catalog, providers) {
+			logger.Debug("free_only provider skipping paid model", "provider", m.Provider, "model", m.Model)
+			continue
+		}
+		t, ok := a.buildTarget(logger, agentName, m, tokenCount, providers, catalog, autoContextSkip)
 		if !ok {
 			continue
 		}
@@ -154,6 +165,66 @@ func (a *AgentState) BuildTargetList(logger *slog.Logger, agentName string, agen
 		}
 	}
 	return append(active, cooling...)
+}
+
+func collectFreeOnlyProviders(providers map[string]*config.Provider) map[string]bool {
+	result := make(map[string]bool)
+	for name, p := range providers {
+		if p.Billing != nil && p.Billing.FreeOnly {
+			result[name] = true
+		}
+	}
+	return result
+}
+
+func isPaidModelOnFreeOnlyProvider(m config.AgentModel, freeOnlyProviders map[string]bool, catalog *discovery.ModelCatalog, providers map[string]*config.Provider) bool {
+	if !freeOnlyProviders[m.Provider] {
+		return false
+	}
+
+	provider, ok := providers[m.Provider]
+	if ok && provider.Billing != nil && len(provider.Billing.FreeModels) > 0 {
+		for _, fm := range provider.Billing.FreeModels {
+			if fm == m.Model {
+				return false
+			}
+		}
+	}
+
+	if catalog == nil {
+		return true
+	}
+	dm, ok := catalog.Lookup(m.Model)
+	if !ok {
+		return true
+	}
+	if dm.Pricing == nil || dm.Pricing.IsZero() {
+		return false
+	}
+	if dm.Pricing.InputCostPer1M > DefaultFreeOnlyInputPriceThreshold {
+		return true
+	}
+	if dm.Pricing.OutputCostPer1M > DefaultFreeOnlyInputPriceThreshold {
+		return true
+	}
+	if isFreeModelName(m.Model) {
+		return false
+	}
+	return true
+}
+
+func isFreeModelName(id string) bool {
+	lower := strings.ToLower(id)
+	if strings.HasSuffix(lower, "-free") {
+		return true
+	}
+	if strings.HasSuffix(lower, ":free") {
+		return true
+	}
+	if strings.Contains(lower, "/free") {
+		return true
+	}
+	return false
 }
 
 type modelFlags struct {

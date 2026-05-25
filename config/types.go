@@ -138,6 +138,7 @@ type ProviderConfig struct {
 	Accounts             []AccountConfig   `json:"accounts,omitempty"`
 	RatelimitMaxRPM      *int              `json:"ratelimit_max_rpm,omitempty"`
 	RatelimitMaxTPM      *int              `json:"ratelimit_max_tpm,omitempty"`
+	Billing              *BillingConfig    `json:"billing,omitempty"`
 }
 
 // AccountConfig defines a single credential/account for multi-account providers.
@@ -169,6 +170,7 @@ type Provider struct {
 	RetryableStatusCodes []int
 	MaxRetryAttempts     int
 	Thinking             *ThinkingConfig
+	Billing              *BillingConfig
 }
 
 // Config is the top-level configuration for the Nenya gateway. It is
@@ -251,6 +253,9 @@ type GovernanceConfig struct {
 	AutoReorderByLatency     *bool    `json:"auto_reorder_by_latency,omitempty"`
 	HalfOpenMaxRequests      int      `json:"half_open_max_requests,omitempty"`
 	AutoRetryOnContextLimit  *bool    `json:"auto_retry_on_context_limit,omitempty"`
+	CostMode                 string   `json:"cost_mode,omitempty"`
+	BillingEconomyScale      float64  `json:"billing_economy_scale,omitempty"`
+	BillingQualityScale      float64  `json:"billing_quality_scale,omitempty"`
 }
 
 func (g *GovernanceConfig) RPMSet() bool                  { return wasSet(g.RatelimitMaxRPM) }

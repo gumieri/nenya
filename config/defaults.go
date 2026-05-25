@@ -194,6 +194,15 @@ func applyGovernanceDefaults(cfg *Config) {
 	if !cfg.Governance.EmptyStreamAsErrorSet() {
 		cfg.Governance.EmptyStreamAsError = PtrTo(true)
 	}
+	if cfg.Governance.CostMode == "" {
+		cfg.Governance.CostMode = "balanced"
+	}
+	if cfg.Governance.BillingEconomyScale == 0 {
+		cfg.Governance.BillingEconomyScale = 1.5
+	}
+	if cfg.Governance.BillingQualityScale == 0 {
+		cfg.Governance.BillingQualityScale = 0.0
+	}
 }
 
 var redactPresets = map[string][]string{

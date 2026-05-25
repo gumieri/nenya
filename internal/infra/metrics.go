@@ -106,6 +106,15 @@ type Metrics struct {
 	// Multi-account provider selection metrics
 	accountSelection sync.Map
 
+	// Billing metrics
+	billingSpend               sync.Map
+	billingExhausted           sync.Map
+	billingUtilization         sync.Map
+	billingQuotaFetch          sync.Map
+	billingQuotaFetchErrors    sync.Map
+	billingCostLimitRejected   sync.Map
+	billingBudgetLimitRejected sync.Map
+
 	RateLimits func() map[string]*RateLimitSnapshot
 	Cooldowns  func() (active int)
 	CBStates   func() map[string]string
@@ -692,6 +701,77 @@ func (m *Metrics) RecordAccountSelection(provider, status string) {
 	e.value.Add(1)
 }
 
+func (m *Metrics) RecordBillingSpend(provider, account string, spendCents int64) {
+	if m == nil {
+		return
+	}
+	e := getOrCreateEntry(&m.billingSpend, map[string]string{
+		"provider": provider, "account": account,
+	})
+	e.value.Add(uint64(spendCents))
+}
+
+func (m *Metrics) RecordBillingExhausted(provider, account string) {
+	if m == nil {
+		return
+	}
+	e := getOrCreateEntry(&m.billingExhausted, map[string]string{
+		"provider": provider, "account": account,
+	})
+	e.value.Add(1)
+}
+
+func (m *Metrics) RecordBillingUtilization(provider string, ratio float64) {
+	if m == nil {
+		return
+	}
+	e := getOrCreateEntry(&m.billingUtilization, map[string]string{
+		"provider": provider,
+	})
+	val := uint64(max(0, min(100, int(ratio*100))))
+	e.value.Store(val)
+}
+
+func (m *Metrics) RecordQuotaFetch(provider string) {
+	if m == nil {
+		return
+	}
+	e := getOrCreateEntry(&m.billingQuotaFetch, map[string]string{
+		"provider": provider,
+	})
+	e.value.Add(1)
+}
+
+func (m *Metrics) RecordQuotaFetchError(provider string) {
+	if m == nil {
+		return
+	}
+	e := getOrCreateEntry(&m.billingQuotaFetchErrors, map[string]string{
+		"provider": provider,
+	})
+	e.value.Add(1)
+}
+
+func (m *Metrics) RecordCostLimitRejected(model string) {
+	if m == nil {
+		return
+	}
+	e := getOrCreateEntry(&m.billingCostLimitRejected, map[string]string{
+		"model": model,
+	})
+	e.value.Add(1)
+}
+
+func (m *Metrics) RecordBudgetLimitRejected(model string) {
+	if m == nil {
+		return
+	}
+	e := getOrCreateEntry(&m.billingBudgetLimitRejected, map[string]string{
+		"model": model,
+	})
+	e.value.Add(1)
+}
+
 func (m *Metrics) RecordUpstreamLatency(model, agent, provider string, duration time.Duration) {
 	if m == nil {
 		return
@@ -787,6 +867,23 @@ func (m *Metrics) WritePrometheus(w io.Writer) {
 	if m == nil {
 		return
 	}
+
+	m.writeCounterMap(w, "nenya_account_selection_total",
+		"Total account selections by provider and outcome.", &m.accountSelection)
+	m.writeCounterMap(w, "nenya_billing_spend_usd",
+		"Total spend by provider and account in USD.", &m.billingSpend)
+	m.writeCounterMap(w, "nenya_billing_exhausted",
+		"Total times billing accounts were marked exhausted.", &m.billingExhausted)
+	m.writeGaugeMap(w, "nenya_billing_utilization_ratio",
+		"Billing utilization ratio (0-100) by provider.", &m.billingUtilization)
+	m.writeCounterMap(w, "nenya_billing_quota_fetch_total",
+		"Total quota fetch requests by provider.", &m.billingQuotaFetch)
+	m.writeCounterMap(w, "nenya_billing_quota_fetch_errors_total",
+		"Total quota fetch errors by provider.", &m.billingQuotaFetchErrors)
+	m.writeCounterMap(w, "nenya_billing_cost_limit_rejected_total",
+		"Total requests rejected due to max_cost_per_request.", &m.billingCostLimitRejected)
+	m.writeCounterMap(w, "nenya_billing_budget_limit_rejected_total",
+		"Total requests rejected due to agent budget_limit_usd.", &m.billingBudgetLimitRejected)
 
 	m.writeBuildMetrics(w)
 	m.writeCounterMap(w, "nenya_tokens_estimated_total",

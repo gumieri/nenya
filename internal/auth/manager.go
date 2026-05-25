@@ -103,15 +103,26 @@ func (m *AccountManager) GetPool(ctx context.Context, provider string) (*Account
 // This is the primary API for key injection — returns only the credential,
 // not a mutable pointer to the internal account struct.
 func (m *AccountManager) SelectCredential(ctx context.Context, provider, model string) (string, error) {
-	pool, err := m.GetPool(ctx, provider)
-	if err != nil {
-		return "", err
-	}
-	selected, err := pool.SelectAccount(ctx, model)
+	selected, err := m.SelectAccount(ctx, provider, model)
 	if err != nil {
 		return "", err
 	}
 	return selected.Credential, nil
+}
+
+// SelectAccount selects an account and returns the full SelectedAccount
+// including both the account ID and credential string. Use this when the
+// caller needs the account ID for billing tracking or observability.
+func (m *AccountManager) SelectAccount(ctx context.Context, provider, model string) (*SelectedAccount, error) {
+	pool, err := m.GetPool(ctx, provider)
+	if err != nil {
+		return nil, err
+	}
+	selected, err := pool.SelectAccount(ctx, model)
+	if err != nil {
+		return nil, err
+	}
+	return selected, nil
 }
 
 // ReportError reports an error for an account.

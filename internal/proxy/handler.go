@@ -552,6 +552,8 @@ func (p *Proxy) handleStats(w http.ResponseWriter) {
 		"misses": streamPool["misses"],
 	}
 
+	p.addBillingStats(stats, gw)
+
 	if err := json.NewEncoder(w).Encode(stats); err != nil {
 		gw.Logger.Error("failed to encode stats response", "err", err)
 	}
@@ -662,4 +664,34 @@ func (p *Proxy) handlePprof(w http.ResponseWriter, r *http.Request) {
 
 	handler := http.DefaultServeMux
 	handler.ServeHTTP(w, r)
+}
+
+func (p *Proxy) addBillingStats(stats map[string]interface{}, gw *gateway.NenyaGateway) {
+	if gw.BillingTracker == nil {
+		return
+	}
+	accounts := gw.BillingTracker.GetAllAccounts()
+	billingInfo := make([]map[string]interface{}, 0, len(accounts))
+	totalSpend := 0.0
+	exhaustedCount := 0
+	for _, acc := range accounts {
+		spend := gw.BillingTracker.GetTotalSpend(acc.Provider, acc.AccountName)
+		isExhausted := gw.BillingTracker.IsExhausted(acc.Provider, acc.AccountName)
+		totalSpend += spend
+		if isExhausted {
+			exhaustedCount++
+		}
+		billingInfo = append(billingInfo, map[string]interface{}{
+			"provider":     acc.Provider,
+			"account":      acc.AccountName,
+			"total_spend":  spend,
+			"is_exhausted": isExhausted,
+		})
+	}
+	stats["billing"] = map[string]interface{}{
+		"accounts":        billingInfo,
+		"total_spend_usd": totalSpend,
+		"exhausted_count": exhaustedCount,
+		"total_requests":  gw.BillingTracker.TotalRequests.Load(),
+	}
 }

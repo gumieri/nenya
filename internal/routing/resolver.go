@@ -10,13 +10,14 @@ import (
 // UpstreamTarget represents a concrete routing target with all necessary
 // fields to forward a request to a specific provider/model combination.
 type UpstreamTarget struct {
-	URL        string
-	Model      string
-	Format     string
-	CoolKey    string
-	Provider   string
-	MaxOutput  int
-	MaxContext int
+	URL         string
+	Model       string
+	Format      string
+	CoolKey     string
+	Provider    string
+	MaxOutput   int
+	MaxContext  int
+	AccountName string
 }
 
 // ProviderMatch holds the resolved provider details for a model,
