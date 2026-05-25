@@ -478,38 +478,8 @@ func (p *Proxy) prepareAndSend(gw *gateway.NenyaGateway,
 	gw.Metrics.RecordTokens("input", target.Model, agentName, target.Provider, tokenCount)
 	gw.Metrics.RecordUpstreamRequest(target.Model, agentName, target.Provider)
 
-	if !gw.RateLimiter.Check(target.URL, tokenCount) {
-		gw.Metrics.RecordRateLimitRejected(infra.ExtractHost(target.URL))
-		ctxLogger.Warn("target skipped: rate limit exceeded")
-		return upstreamAction{kind: actionContinue}
-	}
-
-	if gw.Config.Governance.MaxCostPerRequest > 0 {
-		if dm, ok := gw.ModelCatalog.Lookup(target.Model); ok && dm.Pricing != nil && !dm.Pricing.IsZero() {
-			estCost := dm.Pricing.CalculateCost(int64(tokenCount), int64(target.MaxOutput))
-			if estCost > gw.Config.Governance.MaxCostPerRequest {
-				gw.Metrics.RecordCostLimitRejected(target.Model)
-				ctxLogger.Warn("target skipped: estimated cost exceeds max_cost_per_request",
-					"estimated_cost_usd", estCost, "max_cost_usd", gw.Config.Governance.MaxCostPerRequest)
-				return upstreamAction{kind: actionContinue}
-			}
-		}
-	}
-
-	agent, ok := gw.Config.Agents[agentName]
-	if ok && agent.BudgetLimitUSD > 0 && gw.BillingTracker != nil {
-		account := gw.BillingTracker.GetTotalSpend(target.Provider, target.AccountName)
-		if account >= agent.BudgetLimitUSD {
-			gw.Metrics.RecordBudgetLimitRejected(target.Model)
-			ctxLogger.Warn("target skipped: agent budget exhausted",
-				"agent", agentName, "spent_usd", account, "budget_usd", agent.BudgetLimitUSD)
-			return upstreamAction{kind: actionContinue}
-		}
-	}
-
-	if target.CoolKey != "" && !gw.AgentState.CB.Allow(target.CoolKey) {
-		ctxLogger.Warn("target skipped: circuit breaker open")
-		return upstreamAction{kind: actionContinue}
+	if action := p.checkPreDispatchGuards(gw, ctxLogger, target, tokenCount, agentName); action != nil {
+		return *action
 	}
 
 	transformDeps := routing.TransformDeps{
@@ -571,6 +541,49 @@ func (p *Proxy) prepareAndSend(gw *gateway.NenyaGateway,
 	}
 
 	return handleUpstreamResponse(ctxLogger, resp, upstreamCancel, stream)
+}
+
+func (p *Proxy) checkPreDispatchGuards(gw *gateway.NenyaGateway, ctxLogger *slog.Logger, target routing.UpstreamTarget, tokenCount int, agentName string) *upstreamAction {
+	if !gw.RateLimiter.Check(target.URL, tokenCount) {
+		gw.Metrics.RecordRateLimitRejected(infra.ExtractHost(target.URL))
+		ctxLogger.Warn("target skipped: rate limit exceeded")
+		return ptrAction(upstreamAction{kind: actionContinue})
+	}
+
+	if gw.Config.Governance.MaxCostPerRequest > 0 {
+		dm, ok := gw.ModelCatalog.Lookup(target.Model)
+		if ok && dm.Pricing != nil && !dm.Pricing.IsZero() {
+			estCost := dm.Pricing.CalculateCost(int64(tokenCount), int64(target.MaxOutput))
+			if estCost > gw.Config.Governance.MaxCostPerRequest {
+				gw.Metrics.RecordCostLimitRejected(target.Model)
+				ctxLogger.Warn("target skipped: estimated cost exceeds max_cost_per_request",
+					"estimated_cost_usd", estCost, "max_cost_usd", gw.Config.Governance.MaxCostPerRequest)
+				return ptrAction(upstreamAction{kind: actionContinue})
+			}
+		}
+	}
+
+	agent, ok := gw.Config.Agents[agentName]
+	if ok && agent.BudgetLimitUSD > 0 && gw.BillingTracker != nil {
+		account := gw.BillingTracker.GetTotalSpend(target.Provider, target.AccountName)
+		if account >= agent.BudgetLimitUSD {
+			gw.Metrics.RecordBudgetLimitRejected(target.Model)
+			ctxLogger.Warn("target skipped: agent budget exhausted",
+				"agent", agentName, "spent_usd", account, "budget_usd", agent.BudgetLimitUSD)
+			return ptrAction(upstreamAction{kind: actionContinue})
+		}
+	}
+
+	if target.CoolKey != "" && !gw.AgentState.CB.Allow(target.CoolKey) {
+		ctxLogger.Warn("target skipped: circuit breaker open")
+		return ptrAction(upstreamAction{kind: actionContinue})
+	}
+
+	return nil
+}
+
+func ptrAction(a upstreamAction) *upstreamAction {
+	return &a
 }
 
 func logRetryableError(ctxLogger *slog.Logger, errorBody []byte, gw *gateway.NenyaGateway) {
