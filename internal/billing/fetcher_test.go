@@ -1,0 +1,313 @@
+package billing
+
+import (
+	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+	"time"
+
+	"git.0ur.uk/nenya/config"
+	"git.0ur.uk/nenya/internal/testutil"
+)
+
+func TestQuotaFetcher_Lifecycle(t *testing.T) {
+	logger := testutil.NewTestLogger()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer test-key" {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		if r.URL.Path == "/quota/provider1" {
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(map[string]any{
+				"balance": 100.0,
+			})
+		} else if r.URL.Path == "/quota/provider2" {
+			w.WriteHeader(http.StatusTooManyRequests)
+		} else if r.URL.Path == "/quota/provider3" {
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(map[string]any{
+				"balance": []map[string]any{
+					{"percentage": 75, "name": "tier1"},
+					{"percentage": 95, "name": "tier2"},
+				},
+			})
+		} else {
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+
+	providers := map[string]config.ProviderConfig{
+		"provider1": {
+			Billing: &config.BillingConfig{
+				Model:         config.BillingCredit,
+				QuotaSource:   config.QuotaSourceAPI,
+				QuotaURL:      server.URL + "/quota/provider1",
+				QuotaInterval: "100ms",
+				QuotaExtraction: &config.QuotaExtractionConfig{
+					Mode:        config.ExtractionModeSimpleJSON,
+					BalancePath: "balance",
+				},
+			},
+		},
+		"provider2": {
+			Billing: &config.BillingConfig{
+				Model:         config.BillingSubscription,
+				QuotaSource:   config.QuotaSourceAPI,
+				QuotaURL:      server.URL + "/quota/provider2",
+				QuotaInterval: "200ms",
+				QuotaExtraction: &config.QuotaExtractionConfig{
+					Mode:        config.ExtractionModeSimpleJSON,
+					BalancePath: "balance",
+				},
+			},
+		},
+		"provider3": {
+			Billing: &config.BillingConfig{
+				Model:         config.BillingFree,
+				QuotaSource:   config.QuotaSourceAPI,
+				QuotaURL:      server.URL + "/quota/provider3",
+				QuotaInterval: "150ms",
+				QuotaExtraction: &config.QuotaExtractionConfig{
+					Mode:          config.ExtractionModeMaxFromArray,
+					ArrayPath:     "balance",
+					ValueField:    "percentage",
+					ValueDivideBy: 1,
+				},
+			},
+		},
+		"provider_no_billing": {
+			Billing: nil,
+		},
+	}
+	secrets := &config.SecretsConfig{
+		ProviderKeys: map[string]string{
+			"provider1": "Bearer test-key",
+		},
+	}
+
+	tracker := NewBillingTracker(logger, nil)
+	fetcher := NewQuotaFetcher(logger)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	fetcher.Start(ctx, tracker, providers, secrets)
+
+	time.Sleep(350 * time.Millisecond)
+
+	if tracker.GetTotalSpend("provider1", "") != 0 {
+		t.Errorf("provider1 should have spend=0, got %f", tracker.GetTotalSpend("provider1", ""))
+	}
+
+	if tracker.IsExhausted("provider1", "") {
+		t.Error("provider1 should not be exhausted")
+	}
+
+	fetcher.Stop()
+}
+
+func TestQuotaFetcher_InitialFetch(t *testing.T) {
+	logger := testutil.NewTestLogger()
+	_ = NewBillingTracker(logger, nil)
+	fetcher := NewQuotaFetcher(logger)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{
+			"balance": 50.0,
+		})
+	}))
+	defer server.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	result := fetcher.FetchQuota(ctx, "test-provider", "default", server.URL, "", string(config.ExtractionModeSimpleJSON), config.QuotaExtractionConfig{
+		Mode:        config.ExtractionModeSimpleJSON,
+		BalancePath: "balance",
+	})
+
+	if result.Error != nil {
+		t.Fatalf("Unexpected error: %v", result.Error)
+	}
+	if result.Provider != "test-provider" {
+		t.Errorf("Provider = %q, want test-provider", result.Provider)
+	}
+	if result.Info == nil {
+		t.Fatal("Info is nil")
+	}
+	if result.Info.BalanceUSD != 50.0 {
+		t.Errorf("BalanceUSD = %f, want 50.0", result.Info.BalanceUSD)
+	}
+}
+
+func TestQuotaFetcher_AuthHeaderInjection(t *testing.T) {
+	logger := testutil.NewTestLogger()
+	_ = NewBillingTracker(logger, nil)
+	fetcher := NewQuotaFetcher(logger)
+
+	var receivedAuth string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		receivedAuth = r.Header.Get("Authorization")
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{
+			"balance": 1.0,
+		})
+	}))
+	defer server.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	result := fetcher.FetchQuota(ctx, "test", "default", server.URL, "Bearer my-token", string(config.ExtractionModeSimpleJSON), config.QuotaExtractionConfig{
+		Mode:        config.ExtractionModeSimpleJSON,
+		BalancePath: "balance",
+	})
+
+	if receivedAuth != "Bearer my-token" {
+		t.Errorf("Authorization header = %q, want \"Bearer my-token\"", receivedAuth)
+	}
+
+	if result.Error != nil {
+		t.Fatalf("Unexpected error with auth: %v", result.Error)
+	}
+}
+
+func TestQuotaFetcher_HTTPError(t *testing.T) {
+	logger := testutil.NewTestLogger()
+	_ = NewBillingTracker(logger, nil)
+	fetcher := NewQuotaFetcher(logger)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+		w.Write([]byte("internal error"))
+	}))
+	defer server.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	result := fetcher.FetchQuota(ctx, "test", "default", server.URL, "", string(config.ExtractionModeSimpleJSON), config.QuotaExtractionConfig{
+		Mode:        config.ExtractionModeSimpleJSON,
+		BalancePath: "balance",
+	})
+
+	if result.Error == nil {
+		t.Error("Expected error for 500 response, got nil")
+	}
+	if result.StatusCode != http.StatusInternalServerError {
+		t.Errorf("StatusCode = %d, want 500", result.StatusCode)
+	}
+}
+
+func TestQuotaFetcher_ParseError(t *testing.T) {
+	logger := testutil.NewTestLogger()
+	_ = NewBillingTracker(logger, nil)
+	fetcher := NewQuotaFetcher(logger)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte("invalid json{{{"))
+	}))
+	defer server.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	result := fetcher.FetchQuota(ctx, "test", "default", server.URL, "", string(config.ExtractionModeSimpleJSON), config.QuotaExtractionConfig{
+		Mode:        config.ExtractionModeSimpleJSON,
+		BalancePath: "balance",
+	})
+
+	if result.Error == nil {
+		t.Error("Expected error for invalid JSON, got nil")
+	} else if !strings.Contains(result.Error.Error(), "failed to extract quota") {
+		t.Errorf("Error message = %q, want substring %q", result.Error, "failed to extract quota")
+	}
+	if result.Info != nil {
+		t.Error("Info should be nil for parse error")
+	}
+}
+
+func TestQuotaFetcher_UnsupportedMode(t *testing.T) {
+	logger := testutil.NewTestLogger()
+	_ = NewBillingTracker(logger, nil)
+	fetcher := NewQuotaFetcher(logger)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{"balance": 1.0})
+	}))
+	defer server.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	result := fetcher.FetchQuota(ctx, "test", "default", server.URL, "", "invalid_mode", config.QuotaExtractionConfig{
+		Mode:        "invalid_mode",
+		BalancePath: "balance",
+	})
+
+	if result.Error == nil {
+		t.Fatal("Expected error for unsupported mode, got nil")
+	}
+	if !strings.Contains(result.Error.Error(), "unsupported quota mode") {
+		t.Errorf("Error message = %q, want substring %q", result.Error, "unsupported quota mode")
+	}
+	if !strings.Contains(result.Error.Error(), "simple_json") || !strings.Contains(result.Error.Error(), "headers") {
+		t.Errorf("Error message should list supported modes: %q", result.Error)
+	}
+}
+
+func TestQuotaFetcher_ErrorWrapping(t *testing.T) {
+	logger := testutil.NewTestLogger()
+	fetcher := NewQuotaFetcher(logger)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	result := fetcher.FetchQuota(ctx, "test", "default", "http://127.0.0.1:1/nonexistent", "", string(config.ExtractionModeSimpleJSON), config.QuotaExtractionConfig{
+		Mode:        config.ExtractionModeSimpleJSON,
+		BalancePath: "balance",
+	})
+
+	if result.Error == nil {
+		t.Fatal("Expected error for connection refused, got nil")
+	}
+	if !strings.Contains(result.Error.Error(), "request failed") {
+		t.Errorf("Error message = %q, want substring %q", result.Error, "request failed")
+	}
+}
+
+func TestQuotaFetcher_RetryAfterHeader(t *testing.T) {
+	logger := testutil.NewTestLogger()
+	_ = NewBillingTracker(logger, nil)
+	fetcher := NewQuotaFetcher(logger)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Retry-After", "30")
+		w.WriteHeader(http.StatusTooManyRequests)
+	}))
+	defer server.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	result := fetcher.FetchQuota(ctx, "test", "default", server.URL, "", string(config.ExtractionModeSimpleJSON), config.QuotaExtractionConfig{
+		Mode:        config.ExtractionModeSimpleJSON,
+		BalancePath: "balance",
+	})
+
+	if result.Error == nil {
+		t.Error("Expected error for 429, got nil")
+	}
+	if result.RetryAfter != 30*time.Second {
+		t.Errorf("RetryAfter = %v, want 30s", result.RetryAfter)
+	}
+}

@@ -4,15 +4,36 @@ import (
 	"math"
 	"sort"
 
+	"git.0ur.uk/nenya/config"
 	"git.0ur.uk/nenya/internal/discovery"
 	"git.0ur.uk/nenya/internal/infra"
 )
 
+const (
+	BillingEconomyDefaultScale  = 1.5
+	BillingBalancedDefaultScale = 1.0
+	BillingQualityDefaultScale  = 0.0
+)
+
+type BillingMode string
+
+const (
+	BillingEconomy  BillingMode = "economy"
+	BillingBalanced BillingMode = "balanced"
+	BillingQuality  BillingMode = "quality"
+)
+
 // SortOptions configures the weights used by balanced sorting strategies.
 type SortOptions struct {
-	LatencyWeight float64
-	CostWeight    float64
-	RequestCaps   RequestCapabilities
+	LatencyWeight     float64
+	CostWeight        float64
+	BillingMode       BillingMode
+	BillingEconomy    float64
+	BillingQuality    float64
+	RequestCaps       RequestCapabilities
+	BillingModel      map[string]string
+	BillingFreeOnly   map[string]bool
+	BillingFreeModels map[string][]string // static config for scoring bonuses only; runtime exhaustion uses BillingTracker.IsExhausted
 }
 
 // RequestCapabilities describes the features detected in an incoming request
@@ -133,19 +154,82 @@ func calculateScore(target UpstreamTarget, latencyTracker *infra.LatencyTracker,
 		}
 	}
 
-	scoreBonus := 0.0
-	if catalog != nil {
-		if meta, ok := catalog.Lookup(target.Model); ok && meta.Metadata != nil {
-			scoreBonus += meta.Metadata.ScoreBonus
-			scoreBonus += capabilityBoost(meta.Metadata, opts.RequestCaps)
-		}
-	}
+	billingWeight := getBillingWeight(opts, target.Provider)
 
-	score := (latencyNorm * opts.LatencyWeight) - (costNorm * opts.CostWeight) + scoreBonus
+	scoreBonus := computeScoreBonus(target, opts, catalog)
+
+	score := (latencyNorm * opts.LatencyWeight) - (costNorm * opts.CostWeight) - (costNorm * billingWeight) + scoreBonus
 	if math.IsNaN(score) || math.IsInf(score, 0) {
 		return 0
 	}
 	return score
+}
+
+func computeScoreBonus(target UpstreamTarget, opts SortOptions, catalog *discovery.ModelCatalog) float64 {
+	bonus := 0.0
+	if catalog != nil {
+		if meta, ok := catalog.Lookup(target.Model); ok && meta.Metadata != nil {
+			bonus += meta.Metadata.ScoreBonus
+			bonus += capabilityBoost(meta.Metadata, opts.RequestCaps)
+		}
+	}
+
+	if opts.BillingFreeOnly[target.Provider] {
+		bonus += 0.4
+	} else if bm, ok := opts.BillingModel[target.Provider]; ok && bm == string(config.BillingMixed) {
+		if isModelFreeInProvider(target.Model, target.Provider, opts, catalog) {
+			bonus += 0.4
+		}
+	}
+	return bonus
+}
+
+func isModelFreeInProvider(model, provider string, opts SortOptions, catalog *discovery.ModelCatalog) bool {
+	// Priority: explicit config list > name suffix heuristic > catalog pricing.
+	// This priority order is intentionally optimistic (favors treating models
+	// as free) because the +0.4 bonus is mild. Contrast with
+	// isPaidModelOnFreeOnlyProvider which uses pricing before name suffix
+	// (conservative for filtering, where false positives are costly).
+	if freeModels, ok := opts.BillingFreeModels[provider]; ok {
+		for _, fm := range freeModels {
+			if fm == model {
+				return true
+			}
+		}
+	}
+
+	if isFreeModelName(model) {
+		return true
+	}
+
+	if catalog != nil {
+		if dm, ok := catalog.Lookup(model); ok && dm.Pricing != nil && !dm.Pricing.IsZero() {
+			if dm.Pricing.InputCostPer1M <= DefaultFreeOnlyInputPriceThreshold &&
+				dm.Pricing.OutputCostPer1M <= DefaultFreeOnlyInputPriceThreshold {
+				return true
+			}
+		}
+	}
+
+	return false
+}
+
+func getBillingWeight(opts SortOptions, provider string) float64 {
+	billingModel := BillingBalanced
+	if bm, ok := opts.BillingModel[provider]; ok {
+		billingModel = BillingMode(bm)
+	}
+	if opts.BillingFreeOnly[provider] {
+		billingModel = BillingEconomy
+	}
+	switch billingModel {
+	case BillingEconomy:
+		return opts.BillingEconomy
+	case BillingQuality:
+		return opts.BillingQuality
+	default:
+		return BillingBalancedDefaultScale
+	}
 }
 
 func capabilityBoost(meta *discovery.ModelMetadata, caps RequestCapabilities) float64 {

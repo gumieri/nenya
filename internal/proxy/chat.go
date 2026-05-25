@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"strings"
 	"time"
@@ -13,6 +14,7 @@ import (
 	"git.0ur.uk/nenya/config"
 	"git.0ur.uk/nenya/internal/adapter"
 	"git.0ur.uk/nenya/internal/auth"
+	"git.0ur.uk/nenya/internal/billing"
 	"git.0ur.uk/nenya/internal/gateway"
 	"git.0ur.uk/nenya/internal/infra"
 	"git.0ur.uk/nenya/internal/mcp"
@@ -158,6 +160,7 @@ func (p *Proxy) resolveAgentRouting(req *chatRequest, gw *gateway.NenyaGateway, 
 	maxRetries := agent.MaxRetries
 
 	targets := gw.AgentState.BuildTargetList(gw.Logger, req.ModelName, agent, req.TokenCount, gw.Providers, gw.ModelCatalog, gw.Config.Governance.AutoContextSkip != nil && *gw.Config.Governance.AutoContextSkip)
+	targets = filterExhaustedTargets(targets, gw.BillingTracker, gw.Logger)
 	if len(targets) == 0 {
 		return handleEmptyAgentTargets(req, gw, agent)
 	}
@@ -198,13 +201,65 @@ func reorderTargetsByLatency(req *chatRequest, gw *gateway.NenyaGateway, targets
 	switch gw.Config.Governance.RoutingStrategy {
 	case "balanced":
 		return routing.SortTargetsByBalanced(targets, gw.LatencyTracker, gw.CostTracker, gw.ModelCatalog, routing.SortOptions{
-			LatencyWeight: gw.Config.Governance.RoutingLatencyWeight,
-			CostWeight:    gw.Config.Governance.RoutingCostWeight,
-			RequestCaps:   detectRequestCapabilities(req.Payload),
+			LatencyWeight:     gw.Config.Governance.RoutingLatencyWeight,
+			CostWeight:        gw.Config.Governance.RoutingCostWeight,
+			BillingMode:       routing.BillingMode(gw.Config.Governance.CostMode),
+			BillingEconomy:    gw.Config.Governance.BillingEconomyScale,
+			BillingQuality:    gw.Config.Governance.BillingQualityScale,
+			BillingModel:      collectProviderBillingModels(gw.Providers),
+			BillingFreeOnly:   collectProviderFreeOnly(gw.Providers),
+			BillingFreeModels: collectProviderFreeModels(gw.Providers),
+			RequestCaps:       detectRequestCapabilities(req.Payload),
 		})
 	default:
 		return routing.SortTargetsByLatency(targets, gw.LatencyTracker, nil)
 	}
+}
+
+func collectProviderBillingModels(providers map[string]*config.Provider) map[string]string {
+	result := make(map[string]string)
+	for name, p := range providers {
+		if p.Billing != nil && p.Billing.Model != "" {
+			result[name] = string(p.Billing.Model)
+		}
+	}
+	return result
+}
+
+func collectProviderFreeOnly(providers map[string]*config.Provider) map[string]bool {
+	result := make(map[string]bool)
+	for name, p := range providers {
+		if p.Billing != nil && p.Billing.FreeOnly {
+			result[name] = true
+		}
+	}
+	return result
+}
+
+func collectProviderFreeModels(providers map[string]*config.Provider) map[string][]string {
+	result := make(map[string][]string)
+	for name, p := range providers {
+		if p.Billing != nil && len(p.Billing.FreeModels) > 0 {
+			result[name] = p.Billing.FreeModels
+		}
+	}
+	return result
+}
+
+func filterExhaustedTargets(targets []routing.UpstreamTarget, tracker *billing.BillingTracker, logger *slog.Logger) []routing.UpstreamTarget {
+	if tracker == nil || len(targets) == 0 {
+		return targets
+	}
+	filtered := make([]routing.UpstreamTarget, 0, len(targets))
+	for _, t := range targets {
+		if tracker.IsExhausted(t.Provider, t.AccountName) {
+			logger.Debug("skipping exhausted billing account",
+				"provider", t.Provider, "account", t.AccountName, "model", t.Model)
+			continue
+		}
+		filtered = append(filtered, t)
+	}
+	return filtered
 }
 
 func (p *Proxy) resolveModelRouting(req *chatRequest, gw *gateway.NenyaGateway) ([]routing.UpstreamTarget, string, time.Duration, int, *httpError) {
@@ -215,6 +270,7 @@ func (p *Proxy) resolveModelRouting(req *chatRequest, gw *gateway.NenyaGateway) 
 	}
 
 	targets := buildProviderTargets(matches, gw)
+	targets = filterExhaustedTargets(targets, gw.BillingTracker, gw.Logger)
 	if len(targets) == 0 {
 		gw.Logger.Error("no valid providers after filtering", "model", req.ModelName)
 		return nil, "", 0, 0, &httpError{http.StatusInternalServerError, "No valid providers available"}
@@ -233,12 +289,13 @@ func buildProviderTargets(matches []routing.ProviderMatch, gw *gateway.NenyaGate
 		}
 		url := routing.ProviderURL(m.Provider, "", m.Format, provider.FormatURLs, gw.Providers)
 		targets = append(targets, routing.UpstreamTarget{
-			URL:        url,
-			Model:      m.Model,
-			Format:     m.Format,
-			Provider:   m.Provider,
-			MaxContext: m.MaxContext,
-			MaxOutput:  m.MaxOutput,
+			URL:         url,
+			Model:       m.Model,
+			Format:      m.Format,
+			Provider:    m.Provider,
+			MaxContext:  m.MaxContext,
+			MaxOutput:   m.MaxOutput,
+			AccountName: "",
 		})
 	}
 	return targets
@@ -734,7 +791,7 @@ func recordUsageFromMap(gw *gateway.NenyaGateway, responseMap map[string]interfa
 // recordNonStreamingUsage records usage metrics, cost tracking, and cache stats
 // for non-streaming responses, matching what the streaming path does.
 // recordNonStreamingUsage records token usage statistics from a non-streaming response.
-func recordNonStreamingUsage(gw *gateway.NenyaGateway, target routing.UpstreamTarget, agentName string, usage map[string]interface{}) {
+func recordNonStreamingUsage(ctx context.Context, gw *gateway.NenyaGateway, target routing.UpstreamTarget, agentName string, usage map[string]interface{}) {
 	outputTokens := 0
 	if raw, ok := usage["completion_tokens"].(float64); ok {
 		outputTokens = int(raw)
@@ -752,24 +809,51 @@ func recordNonStreamingUsage(gw *gateway.NenyaGateway, target routing.UpstreamTa
 		cacheMissTokens = int(raw)
 	}
 
-	if gw.Stats != nil {
-		gw.Stats.RecordOutput(target.Model, outputTokens)
-		if cacheHitTokens > 0 {
-			gw.Stats.RecordCacheHit(target.Model, cacheHitTokens)
-		}
-		if cacheMissTokens > 0 {
-			gw.Stats.RecordCacheMiss(target.Model, cacheMissTokens)
-		}
+	recordNonStreamingStats(gw, target.Model, outputTokens, cacheHitTokens, cacheMissTokens)
+	recordNonStreamingMetrics(gw, target, agentName, outputTokens)
+	recordCostAndBilling(ctx, gw, target, inputTokens, outputTokens)
+}
+
+func recordCostAndBilling(ctx context.Context, gw *gateway.NenyaGateway, target routing.UpstreamTarget, inputTokens, outputTokens int) {
+	if gw.CostTracker == nil || (inputTokens <= 0 && outputTokens <= 0) {
+		return
 	}
-	if gw.Metrics != nil {
-		gw.Metrics.RecordTokens("output", target.Model, agentName, target.Provider, outputTokens)
+	dm, ok := gw.ModelCatalog.Lookup(target.Model)
+	if !ok || dm.Pricing == nil || dm.Pricing.IsZero() {
+		return
 	}
-	if gw.CostTracker != nil && (inputTokens > 0 || outputTokens > 0) {
-		if dm, ok := gw.ModelCatalog.Lookup(target.Model); ok && dm.Pricing != nil && !dm.Pricing.IsZero() {
-			cost := dm.Pricing.CalculateCost(int64(inputTokens), int64(outputTokens))
-			gw.CostTracker.RecordUsage(target.Model, cost)
-		}
+	cost := dm.Pricing.CalculateCost(int64(inputTokens), int64(outputTokens))
+	gw.CostTracker.RecordUsage(target.Model, cost)
+	if gw.BillingTracker != nil {
+		gw.BillingTracker.RecordSpend(ctx, billing.SpendEntry{
+			ProviderName: target.Provider,
+			AccountName:  target.AccountName,
+			InputTokens:  inputTokens,
+			OutputTokens: outputTokens,
+			CostUSD:      cost,
+			Timestamp:    time.Now(),
+		})
 	}
+}
+
+func recordNonStreamingStats(gw *gateway.NenyaGateway, model string, outputTokens, cacheHitTokens, cacheMissTokens int) {
+	if gw.Stats == nil {
+		return
+	}
+	gw.Stats.RecordOutput(model, outputTokens)
+	if cacheHitTokens > 0 {
+		gw.Stats.RecordCacheHit(model, cacheHitTokens)
+	}
+	if cacheMissTokens > 0 {
+		gw.Stats.RecordCacheMiss(model, cacheMissTokens)
+	}
+}
+
+func recordNonStreamingMetrics(gw *gateway.NenyaGateway, target routing.UpstreamTarget, agentName string, outputTokens int) {
+	if gw.Metrics == nil {
+		return
+	}
+	gw.Metrics.RecordTokens("output", target.Model, agentName, target.Provider, outputTokens)
 }
 
 // authorizeResponsesAgent extracts the model from responses request body and checks if the API key is authorized for it.
@@ -1742,8 +1826,10 @@ func (p *Proxy) handleNonStreamingResponse(gw *gateway.NenyaGateway, w http.Resp
 	}
 
 	if usage, ok := responseMap["usage"].(map[string]interface{}); ok {
-		recordNonStreamingUsage(gw, target, agentName, usage)
+		recordNonStreamingUsage(r.Context(), gw, target, agentName, usage)
 	}
+
+	gw.ExtractQuotaFromResponseHeaders(r.Context(), target.Provider, target.AccountName, action.resp.Header)
 
 	routing.CopyHeaders(action.resp.Header, w.Header())
 	w.WriteHeader(action.resp.StatusCode)
