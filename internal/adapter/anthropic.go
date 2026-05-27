@@ -302,7 +302,152 @@ func (a *AnthropicAdapter) convertMessages(msgs []interface{}) []interface{} {
 			lastAssistantToolIDs = nil
 		}
 	}
+	return a.sanitizeOrphanedToolUse(result)
+}
+
+// sanitizeOrphanedToolUse strips tool_use blocks from assistant messages
+// when the immediately following user message lacks matching tool_result blocks.
+// Anthropic's API requires every tool_use to have a corresponding tool_result
+// in the next message. This handles cases where message pruning or other
+// preprocessing has broken the pairing.
+func (a *AnthropicAdapter) sanitizeOrphanedToolUse(result []interface{}) []interface{} {
+	if len(result) < 2 {
+		return result
+	}
+
+	for i := 0; i < len(result); i++ {
+		msg, ok := result[i].(map[string]interface{})
+		if !ok {
+			continue
+		}
+		role, _ := msg["role"].(string)
+		if role != "assistant" {
+			continue
+		}
+
+		content, ok := msg["content"].([]interface{})
+		if !ok || len(content) == 0 {
+			continue
+		}
+
+		toolUseIDs := a.collectToolUseIDs(content)
+		if len(toolUseIDs) == 0 {
+			continue
+		}
+
+		nextResultIDs := a.collectNextToolResultIDs(result, i)
+		orphaned := a.findOrphanedIDs(toolUseIDs, nextResultIDs)
+		if len(orphaned) == 0 {
+			continue
+		}
+
+		for _, id := range orphaned {
+			slog.Warn("anthropic: stripping orphaned tool_use block (no matching tool_result)", "tool_use_id", id)
+		}
+
+		result[i] = a.stripToolUseBlocks(msg, content, orphaned)
+	}
+
 	return result
+}
+
+// collectToolUseIDs returns the tool_use IDs present in the given content blocks.
+func (a *AnthropicAdapter) collectToolUseIDs(blocks []interface{}) []string {
+	var ids []string
+	for _, block := range blocks {
+		bm, ok := block.(map[string]interface{})
+		if !ok || bm["type"] != "tool_use" {
+			continue
+		}
+		if id, _ := bm["id"].(string); id != "" {
+			ids = append(ids, id)
+		}
+	}
+	return ids
+}
+
+// collectNextToolResultIDs returns the set of tool_use_id values in the message
+// immediately following result[i]. Returns nil if there is no next message or
+// the next message is not a user message with tool_result content.
+func (a *AnthropicAdapter) collectNextToolResultIDs(result []interface{}, i int) map[string]bool {
+	if i+1 >= len(result) {
+		return nil
+	}
+	nextMsg, ok := result[i+1].(map[string]interface{})
+	if !ok {
+		return nil
+	}
+	if role, _ := nextMsg["role"].(string); role != "user" {
+		return nil
+	}
+	nextContent, ok := nextMsg["content"].([]interface{})
+	if !ok {
+		return nil
+	}
+	ids := make(map[string]bool, len(nextContent))
+	for _, block := range nextContent {
+		bm, ok := block.(map[string]interface{})
+		if !ok || bm["type"] != "tool_result" {
+			continue
+		}
+		if id, _ := bm["tool_use_id"].(string); id != "" {
+			ids[id] = true
+		}
+	}
+	return ids
+}
+
+// findOrphanedIDs returns tool_use IDs that are not present in nextResultIDs.
+// Returns nil when no IDs are orphaned.
+func (a *AnthropicAdapter) findOrphanedIDs(toolUseIDs []string, nextResultIDs map[string]bool) []string {
+	if nextResultIDs == nil {
+		// No next message at all — all tool_use IDs are orphaned
+		result := make([]string, len(toolUseIDs))
+		copy(result, toolUseIDs)
+		return result
+	}
+	var orphaned []string
+	for _, id := range toolUseIDs {
+		if !nextResultIDs[id] {
+			orphaned = append(orphaned, id)
+		}
+	}
+	return orphaned
+}
+
+// stripToolUseBlocks removes orphaned tool_use content blocks from the message
+// and returns a new map. If all blocks are removed, a fallback text block is added.
+func (a *AnthropicAdapter) stripToolUseBlocks(msg map[string]interface{}, content []interface{}, orphaned []string) map[string]interface{} {
+	orphanedSet := make(map[string]bool, len(orphaned))
+	for _, id := range orphaned {
+		orphanedSet[id] = true
+	}
+
+	newContent := make([]interface{}, 0, len(content))
+	for _, block := range content {
+		bm, ok := block.(map[string]interface{})
+		if !ok {
+			newContent = append(newContent, block)
+			continue
+		}
+		if bm["type"] == "tool_use" {
+			if id, _ := bm["id"].(string); orphanedSet[id] {
+				continue
+			}
+		}
+		newContent = append(newContent, block)
+	}
+
+	if len(newContent) == 0 {
+		newContent = []interface{}{emptyTextBlock}
+	}
+
+	updated := make(map[string]interface{}, len(msg))
+	for k, v := range msg {
+		updated[k] = v
+	}
+	updated["content"] = newContent
+	return updated
 }
 
 // collectToolMessages gathers consecutive tool-role messages starting at index *i.
@@ -400,9 +545,10 @@ func (a *AnthropicAdapter) buildToolResultBlock(content interface{}, toolUseID s
 }
 
 // emptyTextBlock is a minimal Anthropic text content block used as a fallback
-// when a message has no text or tool_use content. Anthropic requires every
-// user/assistant message to have a non-empty content array with non-whitespace text.
-var emptyTextBlock = map[string]interface{}{"type": "text", "text": "."}
+// when a message has no text or tool_use content after sanitization. Using a minimal
+// placeholder satisfies Anthropic's API requirement that assistant messages have
+// non-empty content. The "..." placeholder indicates content was removed.
+var emptyTextBlock = map[string]interface{}{"type": "text", "text": "..."}
 
 // buildContentBlocks constructs an Anthropic content array from an OpenAI-format
 // message. It converts text content into typed text blocks and OpenAI tool_calls
