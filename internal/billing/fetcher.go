@@ -27,16 +27,9 @@ type quotaProviderConfig struct {
 	url          string
 	extraction   config.QuotaExtractionConfig
 	pollInterval time.Duration
+	timeout      time.Duration
 	auth         string
 	tracker      *BillingTracker
-}
-
-type QuotaFetcherOption func(*QuotaFetcher)
-
-func WithTimeout(d time.Duration) QuotaFetcherOption {
-	return func(qf *QuotaFetcher) {
-		qf.client.Timeout = d
-	}
 }
 
 type QuotaFetchResult struct {
@@ -49,10 +42,15 @@ type QuotaFetchResult struct {
 	Error      error
 }
 
-func NewQuotaFetcher(logger *slog.Logger, opts ...QuotaFetcherOption) *QuotaFetcher {
+// NewQuotaFetcher creates a new QuotaFetcher with a shared HTTP client.
+// The client has no global timeout (Timeout=0) to allow per-provider
+// timeout control via context.WithTimeout in the polling goroutines.
+// Per-provider timeouts are read from BillingConfig.QuotaTimeoutSeconds
+// during Start() (default: 10s).
+func NewQuotaFetcher(logger *slog.Logger) *QuotaFetcher {
 	qf := &QuotaFetcher{
 		client: &http.Client{
-			Timeout: 10 * time.Second,
+			Timeout: 0, // per-provider timeout via context.WithTimeout in fetchAndUpdate
 			Transport: &http.Transport{
 				MaxIdleConns:    10,
 				IdleConnTimeout: 30 * time.Second,
@@ -61,9 +59,6 @@ func NewQuotaFetcher(logger *slog.Logger, opts ...QuotaFetcherOption) *QuotaFetc
 		logger:    logger,
 		providers: make(map[string]*quotaProviderConfig),
 		stopCh:    make(chan struct{}),
-	}
-	for _, opt := range opts {
-		opt(qf)
 	}
 	return qf
 }
@@ -146,11 +141,17 @@ func (qf *QuotaFetcher) Start(ctx context.Context, tracker *BillingTracker, prov
 		interval := qf.parsePollInterval(name, p.Billing.QuotaInterval)
 		apiKey := qf.getProviderKey(name, secrets)
 
+		timeout := 10 * time.Second
+		if p.Billing.QuotaTimeoutSeconds > 0 {
+			timeout = time.Duration(p.Billing.QuotaTimeoutSeconds) * time.Second
+		}
+
 		qf.providers[name] = &quotaProviderConfig{
 			name:         name,
 			url:          p.Billing.QuotaURL,
 			extraction:   *p.Billing.QuotaExtraction,
 			pollInterval: interval,
+			timeout:      timeout,
 			auth:         apiKey,
 			tracker:      tracker,
 		}
@@ -245,7 +246,7 @@ func (qf *QuotaFetcher) pollLoop(ctx context.Context, cfg *quotaProviderConfig) 
 }
 
 func (qf *QuotaFetcher) fetchAndUpdate(ctx context.Context, cfg *quotaProviderConfig) {
-	pollCtx, cancel := context.WithTimeout(ctx, qf.client.Timeout+5*time.Second)
+	pollCtx, cancel := context.WithTimeout(ctx, cfg.timeout+5*time.Second)
 	defer cancel()
 
 	result := qf.FetchQuota(pollCtx, cfg.name, "default", cfg.url, cfg.auth, string(cfg.extraction.Mode), cfg.extraction)

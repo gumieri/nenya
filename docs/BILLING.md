@@ -303,6 +303,36 @@ Billing metrics are emitted via Prometheus:
 | `nenya_billing_exhausted` | `provider`, `account` | Number of times account was marked exhausted |
 | `nenya_budget_limit_rejected` | `model` | Number of targets rejected due to agent budget limit |
 
+## Quota Fetcher Timeouts
+
+The `QuotaFetcher` uses per-provider timeouts configured via `quota_timeout_seconds`
+in the provider's billing config (default: 10s). The timeout is enforced at two
+levels:
+
+1. **Context deadline** via `context.WithTimeout` with the per-provider timeout
+   plus a 5-second buffer for body reading after headers arrive
+2. **No global HTTP client timeout** — the shared `http.Client` has `Timeout: 0`,
+   allowing independent timeout control per provider via context
+
+If `quota_timeout_seconds` is set to 0 or omitted, the default of 10s is used.
+Negative values are rejected by config validation.
+
+Example:
+```json
+{
+  "providers": {
+    "slow-quota-provider": {
+      "billing": {
+        "quota_source": "api",
+        "quota_url": "https://api.example.com/quota",
+        "quota_timeout_seconds": 30,
+        "quota_interval": "5m"
+      }
+    }
+  }
+}
+```
+
 ## Testing
 
 ### Unit Tests
@@ -326,6 +356,4 @@ Integration tests cover the full billing pipeline:
 
 1. **Account Attribution**: Spend tracking uses `"default"` as the account name in most cases. The gateway has `AccountManager` for multi-account provider selection, but billing tracking doesn't yet integrate with the selected account. This requires a refactor to `AccountManager.SelectCredential` to return account IDs along with credentials.
 
-2. **QuotaFetcher Timeout**: The quota fetch timeout is hardcoded to 10 seconds. It should be configurable per provider via `BillingConfig.QuotaTimeoutSeconds`.
-
-3. **Backoff for Quota Fetches**: There is no per-provider rate limiting or backoff for quota fetch operations. If a provider's quota API returns 429, the fetcher retries immediately.
+2. **Backoff for Quota Fetches**: There is no per-provider rate limiting or backoff for quota fetch operations. If a provider's quota API returns 429, the fetcher retries immediately.

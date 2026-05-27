@@ -412,6 +412,7 @@ func validateProviderBillingConfig(name string, provider ProviderConfig, errs *[
 
 	validateQuotaSource(name, bc, errs)
 	validateQuotaExtractionConfig(name, bc, errs)
+	validateQuotaTimeoutSeconds(name, bc, errs)
 }
 
 func validateQuotaSource(name string, billingCfg *BillingConfig, errs *[]string) {
@@ -444,5 +445,11 @@ func validateQuotaExtractionConfig(name string, billingCfg *BillingConfig, errs 
 	}
 	if !validModes[string(billingCfg.QuotaExtraction.Mode)] {
 		*errs = append(*errs, fmt.Sprintf("providers[%q].billing.quota_extraction.mode: invalid value %q, must be one of simple_json, max_from_array, headers", name, billingCfg.QuotaExtraction.Mode))
+	}
+}
+
+func validateQuotaTimeoutSeconds(name string, billingCfg *BillingConfig, errs *[]string) {
+	if billingCfg.QuotaTimeoutSeconds < 0 {
+		*errs = append(*errs, fmt.Sprintf("providers[%q].billing.quota_timeout_seconds must be non-negative, got %d", name, billingCfg.QuotaTimeoutSeconds))
 	}
 }
