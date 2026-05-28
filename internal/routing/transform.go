@@ -86,23 +86,31 @@ func InjectAPIKeyWithGatewayCtx(ctx context.Context, providerName, modelName str
 		return fmt.Errorf("unknown provider: %s", providerName)
 	}
 
-	if p.AuthStyle != "none" {
-		var key string
-		if preselectedCredential != "" {
-			key = preselectedCredential
-		} else {
-			keyBytes, _, ok := gw.GetProviderAPIKeyForModel(ctx, providerName, modelName)
-			if !ok {
-				return fmt.Errorf("provider %s has no API key configured", providerName)
-			}
-			key = string(keyBytes)
-		}
-		a := adapter.ForProviderWithAuth(providerName, p.AuthStyle)
-		req := &http.Request{Header: headers}
-		return a.InjectAuth(req, key)
+	if p.AuthStyle == "none" {
+		return nil
 	}
 
-	return nil
+	key, err := resolveCredential(ctx, providerName, modelName, gw, preselectedCredential)
+	if err != nil {
+		return err
+	}
+
+	a := adapter.ForProviderWithAuth(providerName, p.AuthStyle)
+	req := &http.Request{Header: headers}
+	return a.InjectAuth(req, key)
+}
+
+// resolveCredential returns the credential to use, preferring preselectedCredential
+// over legacy single-key path via GetProviderAPIKeyForModel.
+func resolveCredential(ctx context.Context, providerName, modelName string, gw APIKeyProviderModel, preselectedCredential string) (string, error) {
+	if preselectedCredential != "" {
+		return preselectedCredential, nil
+	}
+	keyBytes, _, ok := gw.GetProviderAPIKeyForModel(ctx, providerName, modelName)
+	if !ok {
+		return "", fmt.Errorf("provider %s has no API key configured", providerName)
+	}
+	return string(keyBytes), nil
 }
 
 func resolveModelMapping(deps TransformDeps, payload map[string]interface{}, providerName, modelName string) string {
