@@ -19,6 +19,12 @@ const (
 	defaultQuotaBackoffMax = 5 * time.Minute
 )
 
+// AccountLister returns all account IDs for a provider.
+// Used by QuotaFetcher to poll quota per account.
+type AccountLister interface {
+	ListAccountIDs(ctx context.Context, provider string) []string
+}
+
 type QuotaFetcher struct {
 	client    *http.Client
 	logger    *slog.Logger
@@ -33,6 +39,7 @@ type QuotaFetcher struct {
 // including backoff state, timeouts, and extraction settings.
 type quotaProviderConfig struct {
 	name         string
+	accounts     []string
 	url          string
 	extraction   config.QuotaExtractionConfig
 	pollInterval time.Duration
@@ -127,7 +134,58 @@ func (qf *QuotaFetcher) FetchQuota(ctx context.Context, provider, account, url, 
 	return result
 }
 
-func (qf *QuotaFetcher) Start(ctx context.Context, tracker *BillingTracker, providers map[string]config.ProviderConfig, secrets *config.SecretsConfig) {
+func (qf *QuotaFetcher) configureProvider(ctx context.Context, tracker *BillingTracker, name string, p config.ProviderConfig, secrets *config.SecretsConfig, backoffTracker *resilience.BackoffTracker, accountLister AccountLister) *quotaProviderConfig {
+	if p.Billing == nil {
+		return nil
+	}
+	if p.Billing.QuotaSource != "api" {
+		return nil
+	}
+	if p.Billing.QuotaURL == "" || p.Billing.QuotaExtraction == nil {
+		qf.logger.Warn("provider has quota_source=api but missing quota_url or quota_extraction",
+			"provider", name)
+		return nil
+	}
+
+	if !qf.validateExtractionConfig(name, *p.Billing.QuotaExtraction) {
+		return nil
+	}
+
+	interval := qf.parsePollInterval(name, p.Billing.QuotaInterval)
+	apiKey := qf.getProviderKey(name, secrets)
+
+	timeout := 10 * time.Second
+	if p.Billing.QuotaTimeoutSeconds > 0 {
+		timeout = time.Duration(p.Billing.QuotaTimeoutSeconds) * time.Second
+	}
+
+	maxBackoff := defaultQuotaBackoffMax
+	if p.Billing.QuotaBackoffMaxSeconds > 0 {
+		maxBackoff = time.Duration(p.Billing.QuotaBackoffMaxSeconds) * time.Second
+	}
+
+	accounts := []string{"default"}
+	if accountLister != nil {
+		if ids := accountLister.ListAccountIDs(ctx, name); len(ids) > 0 {
+			accounts = ids
+		}
+	}
+
+	return &quotaProviderConfig{
+		name:         name,
+		accounts:     accounts,
+		url:          p.Billing.QuotaURL,
+		extraction:   *p.Billing.QuotaExtraction,
+		pollInterval: interval,
+		timeout:      timeout,
+		auth:         apiKey,
+		tracker:      tracker,
+		backoff:      backoffTracker,
+		maxBackoff:   maxBackoff,
+	}
+}
+
+func (qf *QuotaFetcher) Start(ctx context.Context, tracker *BillingTracker, providers map[string]config.ProviderConfig, secrets *config.SecretsConfig, accountLister AccountLister) {
 	qf.mu.Lock()
 	defer qf.mu.Unlock()
 
@@ -138,45 +196,9 @@ func (qf *QuotaFetcher) Start(ctx context.Context, tracker *BillingTracker, prov
 	backoffTracker := resilience.NewBackoffTracker()
 
 	for name, p := range providers {
-		if p.Billing == nil {
-			continue
-		}
-		if p.Billing.QuotaSource != "api" {
-			continue
-		}
-		if p.Billing.QuotaURL == "" || p.Billing.QuotaExtraction == nil {
-			qf.logger.Warn("provider has quota_source=api but missing quota_url or quota_extraction",
-				"provider", name)
-			continue
-		}
-
-		if !qf.validateExtractionConfig(name, *p.Billing.QuotaExtraction) {
-			continue
-		}
-
-		interval := qf.parsePollInterval(name, p.Billing.QuotaInterval)
-		apiKey := qf.getProviderKey(name, secrets)
-
-		timeout := 10 * time.Second
-		if p.Billing.QuotaTimeoutSeconds > 0 {
-			timeout = time.Duration(p.Billing.QuotaTimeoutSeconds) * time.Second
-		}
-
-		maxBackoff := defaultQuotaBackoffMax
-		if p.Billing.QuotaBackoffMaxSeconds > 0 {
-			maxBackoff = time.Duration(p.Billing.QuotaBackoffMaxSeconds) * time.Second
-		}
-
-		qf.providers[name] = &quotaProviderConfig{
-			name:         name,
-			url:          p.Billing.QuotaURL,
-			extraction:   *p.Billing.QuotaExtraction,
-			pollInterval: interval,
-			timeout:      timeout,
-			auth:         apiKey,
-			tracker:      tracker,
-			backoff:      backoffTracker,
-			maxBackoff:   maxBackoff,
+		cfg := qf.configureProvider(ctx, tracker, name, p, secrets, backoffTracker, accountLister)
+		if cfg != nil {
+			qf.providers[name] = cfg
 		}
 	}
 
@@ -188,9 +210,21 @@ func (qf *QuotaFetcher) Start(ctx context.Context, tracker *BillingTracker, prov
 
 	qf.started = true
 
+	var pollTasks []func()
 	for _, cfg := range qf.providers {
-		qf.wg.Add(1)
-		go qf.pollLoop(ctx, cfg)
+		for _, acct := range cfg.accounts {
+			pollCfg := *cfg
+			pollCfg.accounts = nil
+			acctName := acct
+			pollTasks = append(pollTasks, func() {
+				qf.wg.Add(1)
+				go qf.pollLoop(ctx, &pollCfg, acctName)
+			})
+		}
+	}
+
+	for _, fn := range pollTasks {
+		fn()
 	}
 
 	qf.logger.Info("quota fetcher started", "providers", len(qf.providers))
@@ -248,7 +282,7 @@ func (qf *QuotaFetcher) Stop() {
 	qf.logger.Info("quota fetcher stopped")
 }
 
-func (qf *QuotaFetcher) pollLoop(ctx context.Context, cfg *quotaProviderConfig) {
+func (qf *QuotaFetcher) pollLoop(ctx context.Context, cfg *quotaProviderConfig, accountName string) {
 	defer qf.wg.Done()
 
 	timer := time.NewTimer(0)
@@ -261,7 +295,7 @@ func (qf *QuotaFetcher) pollLoop(ctx context.Context, cfg *quotaProviderConfig) 
 		case <-qf.stopCh:
 			return
 		case <-timer.C:
-			result := qf.fetchAndUpdate(ctx, cfg)
+			result := qf.fetchAndUpdate(ctx, cfg, accountName)
 			timer.Reset(qf.nextPollDelay(cfg, result))
 		}
 	}
@@ -270,20 +304,20 @@ func (qf *QuotaFetcher) pollLoop(ctx context.Context, cfg *quotaProviderConfig) 
 // fetchAndUpdate fetches quota from the provider API and updates the
 // billing tracker with the result. Returns the result so callers can
 // inspect RetryAfter, StatusCode, and Error for backoff decisions.
-func (qf *QuotaFetcher) fetchAndUpdate(ctx context.Context, cfg *quotaProviderConfig) QuotaFetchResult {
+func (qf *QuotaFetcher) fetchAndUpdate(ctx context.Context, cfg *quotaProviderConfig, accountName string) QuotaFetchResult {
 	pollCtx, cancel := context.WithTimeout(ctx, cfg.timeout+5*time.Second)
 	defer cancel()
 
-	result := qf.FetchQuota(pollCtx, cfg.name, "default", cfg.url, cfg.auth, string(cfg.extraction.Mode), cfg.extraction)
+	result := qf.FetchQuota(pollCtx, cfg.name, accountName, cfg.url, cfg.auth, string(cfg.extraction.Mode), cfg.extraction)
 	if result.Error != nil {
 		qf.logger.WarnContext(ctx, "quota fetch failed",
-			"provider", cfg.name, "error", result.Error)
+			"provider", cfg.name, "account", accountName, "error", result.Error)
 		return result
 	}
 
 	if result.Info != nil && cfg.tracker != nil {
 		if result.Info.BalanceUSD <= 0 {
-			cfg.tracker.MarkExhausted(ctx, cfg.name, "default", "quota exhausted via API polling")
+			cfg.tracker.MarkExhausted(ctx, cfg.name, accountName, "quota exhausted via API polling")
 		}
 	}
 	return result

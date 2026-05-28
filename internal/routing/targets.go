@@ -1,6 +1,7 @@
 package routing
 
 import (
+	"context"
 	"log/slog"
 	"math"
 	"strings"
@@ -38,6 +39,13 @@ const DefaultHalfOpenMaxRequests = 3
 // without creating a circular dependency on the gateway package.
 type LocalEngineCheck interface {
 	IsLoaded(modelID string) bool
+}
+
+// AccountSelector selects a credential and account ID for a provider/model
+// pair. SelectCredentialForModel is called at target-build time once per
+// request to ensure consistent billing and exhaustion tracking across retries.
+type AccountSelector interface {
+	SelectCredentialForModel(ctx context.Context, provider, model string) (credential, accountID string, ok bool)
 }
 
 // AgentState tracks per-model request counters, circuit breaker state,
@@ -128,7 +136,7 @@ func NewAgentStateWithConfig(logger *slog.Logger, metrics *infra.Metrics, govCon
 	return as
 }
 
-func (a *AgentState) BuildTargetList(logger *slog.Logger, agentName string, agent config.AgentConfig, tokenCount int, providers map[string]*config.Provider, catalog *discovery.ModelCatalog, autoContextSkip bool) []UpstreamTarget {
+func (a *AgentState) BuildTargetList(ctx context.Context, logger *slog.Logger, agentName string, agent config.AgentConfig, tokenCount int, providers map[string]*config.Provider, catalog *discovery.ModelCatalog, autoContextSkip bool, accountSelector AccountSelector) []UpstreamTarget {
 	models := a.expandModels(agentName, agent, catalog, providers, logger)
 	if len(models) == 0 {
 		return nil
@@ -148,7 +156,7 @@ func (a *AgentState) BuildTargetList(logger *slog.Logger, agentName string, agen
 			logger.Debug("free_only provider skipping paid model", "provider", m.Provider, "model", m.Model)
 			continue
 		}
-		t, ok := a.buildTarget(logger, agentName, m, tokenCount, providers, catalog, autoContextSkip)
+		t, ok := a.buildTarget(ctx, logger, agentName, m, tokenCount, providers, catalog, autoContextSkip, accountSelector)
 		if !ok {
 			continue
 		}
@@ -617,7 +625,7 @@ func checkProviderAndLocal(a *AgentState, m config.AgentModel, providers map[str
 	return checkLocalModelAvailability(a, m, logger)
 }
 
-func (a *AgentState) buildTarget(logger *slog.Logger, agentName string, m config.AgentModel, tokenCount int, providers map[string]*config.Provider, catalog *discovery.ModelCatalog, autoContextSkip bool) (*UpstreamTarget, bool) {
+func (a *AgentState) buildTarget(ctx context.Context, logger *slog.Logger, agentName string, m config.AgentModel, tokenCount int, providers map[string]*config.Provider, catalog *discovery.ModelCatalog, autoContextSkip bool, accountSelector AccountSelector) (*UpstreamTarget, bool) {
 	maxCtx := resolveMaxContext(m, catalog)
 	if maxCtx > 0 && tokenCount > maxCtx {
 		logger.Info("skipping model: exceeds max_context",
@@ -653,7 +661,7 @@ func (a *AgentState) buildTarget(logger *slog.Logger, agentName string, m config
 		return nil, false
 	}
 
-	return &UpstreamTarget{
+	t := &UpstreamTarget{
 		URL:        p,
 		Model:      m.Model,
 		Format:     resolveTargetFormat(m.Model, &m, catalog),
@@ -661,7 +669,16 @@ func (a *AgentState) buildTarget(logger *slog.Logger, agentName string, m config
 		Provider:   m.Provider,
 		MaxOutput:  maxOut,
 		MaxContext: maxCtx,
-	}, true
+	}
+
+	if accountSelector != nil && m.Provider != "" {
+		if cred, acctID, ok := accountSelector.SelectCredentialForModel(ctx, m.Provider, m.Model); ok {
+			t.AccountName = acctID
+			t.Credential = cred
+		}
+	}
+
+	return t, true
 }
 
 // ActivateCooldown forces the circuit breaker for a target into the open state

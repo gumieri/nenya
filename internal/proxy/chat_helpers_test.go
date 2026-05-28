@@ -360,7 +360,7 @@ func TestBuildProviderTargets(t *testing.T) {
 		matches := []routing.ProviderMatch{
 			{Provider: "test-provider", Model: "test-model", MaxContext: 8000, MaxOutput: 2048},
 		}
-		targets := buildProviderTargets(matches, gw)
+		targets := buildProviderTargets(context.Background(), matches, gw, nil)
 		if len(targets) != 1 {
 			t.Fatalf("expected 1 target, got %d", len(targets))
 		}
@@ -376,14 +376,14 @@ func TestBuildProviderTargets(t *testing.T) {
 		matches := []routing.ProviderMatch{
 			{Provider: "nonexistent", Model: "test-model"},
 		}
-		targets := buildProviderTargets(matches, gw)
+		targets := buildProviderTargets(context.Background(), matches, gw, nil)
 		if len(targets) != 0 {
 			t.Errorf("expected 0 targets for unknown provider, got %d", len(targets))
 		}
 	})
 
 	t.Run("empty matches", func(t *testing.T) {
-		targets := buildProviderTargets(nil, gw)
+		targets := buildProviderTargets(context.Background(), nil, gw, nil)
 		if len(targets) != 0 {
 			t.Errorf("expected 0 targets for nil matches, got %d", len(targets))
 		}

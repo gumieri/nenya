@@ -99,7 +99,7 @@ func TestQuotaFetcher_Lifecycle(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 
-	fetcher.Start(ctx, tracker, providers, secrets)
+	fetcher.Start(ctx, tracker, providers, secrets, nil)
 
 	time.Sleep(350 * time.Millisecond)
 
@@ -149,35 +149,106 @@ func TestQuotaFetcher_InitialFetch(t *testing.T) {
 	}
 }
 
-func TestQuotaFetcher_AuthHeaderInjection(t *testing.T) {
+func TestFetchAndUpdate_AccountName(t *testing.T) {
 	logger := testutil.NewTestLogger()
-	_ = NewBillingTracker(logger, nil)
-	fetcher := NewQuotaFetcher(logger)
 
-	var receivedAuth string
+	tracker := NewBillingTracker(logger, nil)
+	tracker.RecordSpend(context.Background(), SpendEntry{
+		ProviderName: "test-provider",
+		AccountName:  "account-1",
+		InputTokens:  1000,
+		OutputTokens: 500,
+		CostUSD:      0.001,
+		Timestamp:    time.Now(),
+	})
+
+	qf := NewQuotaFetcher(logger)
+
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		receivedAuth = r.Header.Get("Authorization")
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]any{
-			"balance": 1.0,
+			"balance": 100.0,
 		})
 	}))
 	defer server.Close()
 
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-
-	result := fetcher.FetchQuota(ctx, "test", "default", server.URL, "Bearer my-token", string(config.ExtractionModeSimpleJSON), config.QuotaExtractionConfig{
-		Mode:        config.ExtractionModeSimpleJSON,
-		BalancePath: "balance",
-	})
-
-	if receivedAuth != "Bearer my-token" {
-		t.Errorf("Authorization header = %q, want \"Bearer my-token\"", receivedAuth)
+	cfg := &quotaProviderConfig{
+		name:  "test-provider",
+		url:   server.URL,
+		auth:  "test-key",
+		tracker: tracker,
+		extraction: config.QuotaExtractionConfig{
+			Mode:        config.ExtractionModeSimpleJSON,
+			BalancePath: "balance",
+		},
 	}
 
+	result := qf.fetchAndUpdate(context.Background(), cfg, "account-1")
 	if result.Error != nil {
-		t.Fatalf("Unexpected error with auth: %v", result.Error)
+		t.Fatalf("unexpected error: %v", result.Error)
+	}
+	if result.Account != "account-1" {
+		t.Errorf("expected account-1, got %s", result.Account)
+	}
+	if result.Provider != "test-provider" {
+		t.Errorf("expected test-provider, got %s", result.Provider)
+	}
+}
+
+type mockAccountLister struct {
+	accounts map[string][]string
+}
+
+func (m *mockAccountLister) ListAccountIDs(ctx context.Context, provider string) []string {
+	return m.accounts[provider]
+}
+
+func TestStart_MultipleAccounts(t *testing.T) {
+	logger := testutil.NewTestLogger()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{"balance": 100.0})
+	}))
+	defer server.Close()
+
+	providers := map[string]config.ProviderConfig{
+		"provider1": {
+			Billing: &config.BillingConfig{
+				QuotaSource:   "api",
+				QuotaURL:      server.URL + "/quota/provider1",
+				QuotaInterval: "10ms",
+				QuotaExtraction: &config.QuotaExtractionConfig{
+					Mode:        config.ExtractionModeSimpleJSON,
+					BalancePath: "balance",
+				},
+			},
+		},
+	}
+
+	tracker := NewBillingTracker(logger, nil)
+	fetcher := NewQuotaFetcher(logger)
+	lister := &mockAccountLister{
+		accounts: map[string][]string{
+			"provider1": {"account-1", "account-2"},
+		},
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+
+	fetcher.Start(ctx, tracker, providers, nil, lister)
+
+	time.Sleep(50 * time.Millisecond)
+
+	spend := tracker.GetTotalSpend("provider1", "account-1")
+	if spend != 0 {
+		t.Errorf("expected 0 spend, got %f", spend)
+	}
+
+	spend2 := tracker.GetTotalSpend("provider1", "account-2")
+	if spend2 != 0 {
+		t.Errorf("expected 0 spend, got %f", spend2)
 	}
 }
 

@@ -77,8 +77,9 @@ type APIKeyProviderModel interface {
 }
 
 // InjectAPIKeyWithGatewayCtx selects an API key using multi-account routing
-// when available, falling back to the legacy single-key path.
-func InjectAPIKeyWithGatewayCtx(ctx context.Context, providerName, modelName string, gw APIKeyProviderModel, headers http.Header) error {
+// when available, falling back to the legacy single-key path. If preselectedCredential
+// is non-empty, it is used directly without calling SelectAccount again.
+func InjectAPIKeyWithGatewayCtx(ctx context.Context, providerName, modelName string, gw APIKeyProviderModel, headers http.Header, preselectedCredential string) error {
 	providers := gw.GetProvidersMap()
 	p, ok := providers[providerName]
 	if !ok {
@@ -86,13 +87,19 @@ func InjectAPIKeyWithGatewayCtx(ctx context.Context, providerName, modelName str
 	}
 
 	if p.AuthStyle != "none" {
-		keyBytes, _, ok := gw.GetProviderAPIKeyForModel(ctx, providerName, modelName)
-		if !ok {
-			return fmt.Errorf("provider %s has no API key configured", providerName)
+		var key string
+		if preselectedCredential != "" {
+			key = preselectedCredential
+		} else {
+			keyBytes, _, ok := gw.GetProviderAPIKeyForModel(ctx, providerName, modelName)
+			if !ok {
+				return fmt.Errorf("provider %s has no API key configured", providerName)
+			}
+			key = string(keyBytes)
 		}
 		a := adapter.ForProviderWithAuth(providerName, p.AuthStyle)
 		req := &http.Request{Header: headers}
-		return a.InjectAuth(req, string(keyBytes))
+		return a.InjectAuth(req, key)
 	}
 
 	return nil

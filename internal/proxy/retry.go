@@ -123,7 +123,7 @@ func waitWithCancel(ctx context.Context, d time.Duration) {
 func (p *Proxy) doUpstreamRoundTrip(ctx context.Context, gw *gateway.NenyaGateway, method, targetURL string, bodyBytes []byte, providerName, modelName string, srcHeaders http.Header, contentType string, maxAttempts int) (*http.Response, error) {
 	var resp *http.Response
 	err := util.DoWithRetry(ctx, maxAttempts, func() error {
-		upstreamReq, reqErr := p.buildUpstreamRequest(gw, ctx, method, targetURL, bodyBytes, providerName, modelName, srcHeaders)
+		upstreamReq, reqErr := p.buildUpstreamRequest(gw, ctx, method, targetURL, bodyBytes, providerName, modelName, "", srcHeaders)
 		if reqErr != nil {
 			return reqErr
 		}
@@ -497,7 +497,7 @@ func (p *Proxy) prepareAndSend(gw *gateway.NenyaGateway,
 		transformedBody, _ = json.Marshal(payload)
 	}
 
-	req, err := p.buildUpstreamRequest(gw, r.Context(), r.Method, target.URL, transformedBody, target.Provider, target.Model, r.Header)
+	req, err := p.buildUpstreamRequest(gw, r.Context(), r.Method, target.URL, transformedBody, target.Provider, target.Model, target.Credential, r.Header)
 	if err != nil {
 		ctxLogger.Error("failed to create upstream request", "err", err)
 		return upstreamAction{kind: actionContinue}

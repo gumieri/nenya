@@ -1,6 +1,7 @@
 package routing
 
 import (
+	"context"
 	"log/slog"
 	"testing"
 	"time"
@@ -53,7 +54,7 @@ func TestBuildTargetList_RoundRobin(t *testing.T) {
 		},
 	}
 
-	t1 := a.BuildTargetList(testLogger(), "test-agent", agent, 1000, p, nil, false)
+	t1 := a.BuildTargetList(context.Background(), testLogger(), "test-agent", agent, 1000, p, nil, false, nil)
 	if len(t1) != 3 {
 		t.Fatalf("expected 3 targets, got %d", len(t1))
 	}
@@ -61,7 +62,7 @@ func TestBuildTargetList_RoundRobin(t *testing.T) {
 		t.Fatalf("first call: expected gemini first, got %s", t1[0].Provider)
 	}
 
-	t2 := a.BuildTargetList(testLogger(), "test-agent", agent, 1000, p, nil, false)
+	t2 := a.BuildTargetList(context.Background(), testLogger(), "test-agent", agent, 1000, p, nil, false, nil)
 	if len(t2) != 3 {
 		t.Fatalf("expected 3 targets, got %d", len(t2))
 	}
@@ -69,12 +70,12 @@ func TestBuildTargetList_RoundRobin(t *testing.T) {
 		t.Fatalf("second call: expected deepseek first, got %s", t2[0].Provider)
 	}
 
-	t3 := a.BuildTargetList(testLogger(), "test-agent", agent, 1000, p, nil, false)
+	t3 := a.BuildTargetList(context.Background(), testLogger(), "test-agent", agent, 1000, p, nil, false, nil)
 	if t3[0].Provider != "zai" {
 		t.Fatalf("third call: expected zai first, got %s", t3[0].Provider)
 	}
 
-	t4 := a.BuildTargetList(testLogger(), "test-agent", agent, 1000, p, nil, false)
+	t4 := a.BuildTargetList(context.Background(), testLogger(), "test-agent", agent, 1000, p, nil, false, nil)
 	if t4[0].Provider != "gemini" {
 		t.Fatalf("fourth call: expected gemini first (wrap), got %s", t4[0].Provider)
 	}
@@ -91,12 +92,12 @@ func TestBuildTargetList_CooldownSkip(t *testing.T) {
 		},
 	}
 
-	t1 := a.BuildTargetList(testLogger(), "test-agent", agent, 1000, p, nil, false)
+	t1 := a.BuildTargetList(context.Background(), testLogger(), "test-agent", agent, 1000, p, nil, false, nil)
 	geminiTarget := t1[0]
 
 	a.ActivateCooldown(geminiTarget, 10*time.Minute)
 
-	t2 := a.BuildTargetList(testLogger(), "test-agent", agent, 1000, p, nil, false)
+	t2 := a.BuildTargetList(context.Background(), testLogger(), "test-agent", agent, 1000, p, nil, false, nil)
 	if len(t2) != 3 {
 		t.Fatalf("expected 3 targets, got %d", len(t2))
 	}
@@ -120,7 +121,7 @@ func TestBuildTargetList_FallbackStrategy(t *testing.T) {
 	}
 
 	for i := 0; i < 5; i++ {
-		targets := a.BuildTargetList(testLogger(), "test-agent", agent, 1000, p, nil, false)
+		targets := a.BuildTargetList(context.Background(), testLogger(), "test-agent", agent, 1000, p, nil, false, nil)
 		if targets[0].Provider != "gemini" {
 			t.Fatalf("iteration %d: fallback strategy should always start with gemini, got %s", i, targets[0].Provider)
 		}
@@ -138,7 +139,7 @@ func TestBuildTargetList_UnknownProviderSkipped(t *testing.T) {
 		},
 	}
 
-	targets := a.BuildTargetList(testLogger(), "test-agent", agent, 1000, p, nil, false)
+	targets := a.BuildTargetList(context.Background(), testLogger(), "test-agent", agent, 1000, p, nil, false, nil)
 	if len(targets) != 2 {
 		t.Fatalf("expected 2 targets (unknown provider skipped), got %d", len(targets))
 	}
@@ -154,7 +155,7 @@ func TestBuildTargetList_EmptyModels(t *testing.T) {
 	a := NewAgentState(testLogger(), nil)
 	agent := config.AgentConfig{}
 
-	targets := a.BuildTargetList(testLogger(), "test-agent", agent, 1000, p, nil, false)
+	targets := a.BuildTargetList(context.Background(), testLogger(), "test-agent", agent, 1000, p, nil, false, nil)
 	if targets != nil {
 		t.Fatalf("expected nil for empty models, got %v", targets)
 	}
@@ -170,7 +171,7 @@ func TestBuildTargetList_TokenCountExceedsMaxContext(t *testing.T) {
 		},
 	}
 
-	targets := a.BuildTargetList(testLogger(), "test-agent", agent, 5000, p, nil, false)
+	targets := a.BuildTargetList(context.Background(), testLogger(), "test-agent", agent, 5000, p, nil, false, nil)
 	if len(targets) != 1 {
 		t.Fatalf("expected 1 target (nemotron skipped), got %d", len(targets))
 	}
@@ -189,7 +190,7 @@ func TestBuildTargetList_MaxContextFromAgentModel(t *testing.T) {
 		},
 	}
 
-	targets := a.BuildTargetList(testLogger(), "test-agent", agent, 1000, p, nil, false)
+	targets := a.BuildTargetList(context.Background(), testLogger(), "test-agent", agent, 1000, p, nil, false, nil)
 	if len(targets) != 1 {
 		t.Fatalf("expected 1 target (gemini skipped due to agent-level max_context), got %d", len(targets))
 	}
@@ -207,7 +208,7 @@ func TestBuildTargetList_TargetFields(t *testing.T) {
 		},
 	}
 
-	targets := a.BuildTargetList(testLogger(), "my-agent", agent, 1000, p, nil, false)
+	targets := a.BuildTargetList(context.Background(), testLogger(), "my-agent", agent, 1000, p, nil, false, nil)
 	if len(targets) != 1 {
 		t.Fatalf("expected 1 target, got %d", len(targets))
 	}
@@ -245,7 +246,7 @@ func TestBuildTargetList_SkipLockedModels(t *testing.T) {
 	a.RecordFailureWithStatus(UpstreamTarget{CoolKey: coolKey}, 429, "rate limit")
 
 	// Build target list - should skip the locked model
-	targets := a.BuildTargetList(testLogger(), "my-agent", agent, 1000, p, nil, false)
+	targets := a.BuildTargetList(context.Background(), testLogger(), "my-agent", agent, 1000, p, nil, false, nil)
 	if len(targets) != 1 {
 		t.Fatalf("expected 1 target (locked model skipped), got %d", len(targets))
 	}

@@ -202,3 +202,15 @@ func (p *AccountPool) ExpiredLocks() int {
 	}
 	return count
 }
+
+// ListAccountIDs returns all account IDs in the pool.
+func (p *AccountPool) ListAccountIDs(ctx context.Context) []string {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+
+	ids := make([]string, len(p.accounts))
+	for i, acc := range p.accounts {
+		ids[i] = acc.ID
+	}
+	return ids
+}

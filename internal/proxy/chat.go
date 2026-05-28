@@ -130,7 +130,7 @@ func (p *Proxy) validateChatRequest(w http.ResponseWriter, r *http.Request, gw *
 		}
 	}
 
-	req.Targets, req.AgentName, req.Cooldown, req.MaxRetries, herr = p.resolveRouting(req, gw)
+	req.Targets, req.AgentName, req.Cooldown, req.MaxRetries, herr = p.resolveRouting(r.Context(), req, gw)
 	if herr != nil {
 		return nil, herr
 	}
@@ -147,19 +147,19 @@ func (p *Proxy) validateChatRequest(w http.ResponseWriter, r *http.Request, gw *
 
 // resolveRouting determines the upstream targets, agent name, cooldown, and
 // max retries for the given model.
-func (p *Proxy) resolveRouting(req *chatRequest, gw *gateway.NenyaGateway) ([]routing.UpstreamTarget, string, time.Duration, int, *httpError) {
+func (p *Proxy) resolveRouting(ctx context.Context, req *chatRequest, gw *gateway.NenyaGateway) ([]routing.UpstreamTarget, string, time.Duration, int, *httpError) {
 	if agent, ok := gw.Config.Agents[req.ModelName]; ok {
-		return p.resolveAgentRouting(req, gw, agent)
+		return p.resolveAgentRouting(ctx, req, gw, agent)
 	}
-	return p.resolveModelRouting(req, gw)
+	return p.resolveModelRouting(ctx, req, gw)
 }
 
-func (p *Proxy) resolveAgentRouting(req *chatRequest, gw *gateway.NenyaGateway, agent config.AgentConfig) ([]routing.UpstreamTarget, string, time.Duration, int, *httpError) {
+func (p *Proxy) resolveAgentRouting(ctx context.Context, req *chatRequest, gw *gateway.NenyaGateway, agent config.AgentConfig) ([]routing.UpstreamTarget, string, time.Duration, int, *httpError) {
 	req.AgentName = req.ModelName
 	cooldown := getAgentCooldown(agent)
 	maxRetries := agent.MaxRetries
 
-	targets := gw.AgentState.BuildTargetList(gw.Logger, req.ModelName, agent, req.TokenCount, gw.Providers, gw.ModelCatalog, gw.Config.Governance.AutoContextSkip != nil && *gw.Config.Governance.AutoContextSkip)
+	targets := gw.AgentState.BuildTargetList(ctx, gw.Logger, req.ModelName, agent, req.TokenCount, gw.Providers, gw.ModelCatalog, gw.Config.Governance.AutoContextSkip != nil && *gw.Config.Governance.AutoContextSkip, gw)
 	targets = filterExhaustedTargets(targets, gw.BillingTracker, gw.Logger)
 	if len(targets) == 0 {
 		return handleEmptyAgentTargets(req, gw, agent)
@@ -262,14 +262,14 @@ func filterExhaustedTargets(targets []routing.UpstreamTarget, tracker *billing.B
 	return filtered
 }
 
-func (p *Proxy) resolveModelRouting(req *chatRequest, gw *gateway.NenyaGateway) ([]routing.UpstreamTarget, string, time.Duration, int, *httpError) {
+func (p *Proxy) resolveModelRouting(ctx context.Context, req *chatRequest, gw *gateway.NenyaGateway) ([]routing.UpstreamTarget, string, time.Duration, int, *httpError) {
 	matches := routing.ResolveProviders(req.ModelName, gw.Providers, gw.ModelCatalog)
 	if len(matches) == 0 {
 		gw.Logger.Warn("no provider found for model", "model", req.ModelName)
 		return nil, "", 0, 0, &httpError{http.StatusBadRequest, util.ErrNoProvider}
 	}
 
-	targets := buildProviderTargets(matches, gw)
+	targets := buildProviderTargets(ctx, matches, gw, gw)
 	targets = filterExhaustedTargets(targets, gw.BillingTracker, gw.Logger)
 	if len(targets) == 0 {
 		gw.Logger.Error("no valid providers after filtering", "model", req.ModelName)
@@ -280,7 +280,7 @@ func (p *Proxy) resolveModelRouting(req *chatRequest, gw *gateway.NenyaGateway) 
 	return targets, "", 0, 0, nil
 }
 
-func buildProviderTargets(matches []routing.ProviderMatch, gw *gateway.NenyaGateway) []routing.UpstreamTarget {
+func buildProviderTargets(ctx context.Context, matches []routing.ProviderMatch, gw *gateway.NenyaGateway, accountSelector routing.AccountSelector) []routing.UpstreamTarget {
 	targets := make([]routing.UpstreamTarget, 0, len(matches))
 	for _, m := range matches {
 		provider, ok := gw.Providers[m.Provider]
@@ -288,15 +288,21 @@ func buildProviderTargets(matches []routing.ProviderMatch, gw *gateway.NenyaGate
 			continue
 		}
 		url := routing.ProviderURL(m.Provider, "", m.Format, provider.FormatURLs, gw.Providers)
-		targets = append(targets, routing.UpstreamTarget{
-			URL:         url,
-			Model:       m.Model,
-			Format:      m.Format,
-			Provider:    m.Provider,
-			MaxContext:  m.MaxContext,
-			MaxOutput:   m.MaxOutput,
-			AccountName: "",
-		})
+		t := routing.UpstreamTarget{
+			URL:        url,
+			Model:      m.Model,
+			Format:     m.Format,
+			Provider:   m.Provider,
+			MaxContext: m.MaxContext,
+			MaxOutput:  m.MaxOutput,
+		}
+		if accountSelector != nil {
+			if cred, acctID, ok := accountSelector.SelectCredentialForModel(ctx, m.Provider, m.Model); ok {
+				t.AccountName = acctID
+				t.Credential = cred
+			}
+		}
+		targets = append(targets, t)
 	}
 	return targets
 }
@@ -694,7 +700,7 @@ func countEmbeddingInputTokens(gw *gateway.NenyaGateway, payload map[string]inte
 }
 
 func (p *Proxy) forwardEmbeddingsRequest(gw *gateway.NenyaGateway, w http.ResponseWriter, ctx context.Context, method, url string, bodyBytes []byte, providerName, modelName string, srcHeaders http.Header, maxAttempts int, keyRef string) {
-	req, err := p.buildUpstreamRequest(gw, ctx, method, url, bodyBytes, providerName, modelName, srcHeaders)
+	req, err := p.buildUpstreamRequest(gw, ctx, method, url, bodyBytes, providerName, modelName, "", srcHeaders)
 	if err != nil {
 		ctxLogger := gw.Logger.With("operation", "forward", "api_key", keyRef)
 		ctxLogger.Error("failed to create embeddings upstream request", "err", err)
@@ -922,7 +928,7 @@ func (p *Proxy) handleResponses(gw *gateway.NenyaGateway, w http.ResponseWriter,
 
 	var resp *http.Response
 	err := util.DoWithRetry(ctx, maxAttempts, func() error {
-		req, reqErr := p.buildUpstreamRequest(gw, ctx, r.Method, targetURL, bodyBytes, provider.Name, responsesModel, r.Header)
+		req, reqErr := p.buildUpstreamRequest(gw, ctx, r.Method, targetURL, bodyBytes, provider.Name, responsesModel, "", r.Header)
 		if reqErr != nil {
 			return reqErr
 		}
@@ -1055,12 +1061,12 @@ func (p *Proxy) getDefaultResponseProvider(gw *gateway.NenyaGateway) *config.Pro
 	return nil
 }
 
-func (p *Proxy) buildUpstreamRequest(gw *gateway.NenyaGateway, ctx context.Context, method, url string, body []byte, providerName, modelName string, srcHeaders http.Header) (*http.Request, error) {
+func (p *Proxy) buildUpstreamRequest(gw *gateway.NenyaGateway, ctx context.Context, method, url string, body []byte, providerName, modelName, preselectedCredential string, srcHeaders http.Header) (*http.Request, error) {
 	req, err := http.NewRequestWithContext(ctx, method, url, bytes.NewBuffer(body))
 	if err != nil {
 		return nil, fmt.Errorf("failed to create upstream request: %w", err)
 	}
-	if err := routing.InjectAPIKeyWithGatewayCtx(ctx, providerName, modelName, gw, req.Header); err != nil {
+	if err := routing.InjectAPIKeyWithGatewayCtx(ctx, providerName, modelName, gw, req.Header, preselectedCredential); err != nil {
 		return nil, fmt.Errorf("API key injection failed: %w", err)
 	}
 	// Forward only safe passthrough headers; never let client-supplied

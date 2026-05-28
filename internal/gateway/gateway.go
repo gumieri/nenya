@@ -27,6 +27,9 @@ import (
 	"git.0ur.uk/nenya/internal/util"
 )
 
+var _ routing.AccountSelector = (*NenyaGateway)(nil)
+var _ billing.AccountLister = (*NenyaGateway)(nil)
+
 // warnModelsMissingMaxContext logs warnings for providers with models that lack MaxContext.
 // When MaxContext is unknown, proactive truncation is disabled. The full payload is
 // sent upstream; if the provider returns context_length_exceeded, Nenya will
@@ -119,7 +122,7 @@ func New(ctx context.Context, cfg config.Config, secrets *config.SecretsConfig, 
 	gw.Metrics.Cooldowns = gw.AgentState.ActiveCooldowns
 	gw.Metrics.CBStates = gw.AgentState.CBSnapshot
 
-	gw.QuotaFetcher.Start(ctx, gw.BillingTracker, cfg.Providers, secrets)
+	gw.QuotaFetcher.Start(ctx, gw.BillingTracker, cfg.Providers, secrets, gw)
 
 	if gw.ResponseCache != nil {
 		gw.Embedder = gw.ResponseCache.GetEmbedder()
@@ -856,6 +859,26 @@ func (g *NenyaGateway) GetProviderAPIKeyForModel(ctx context.Context, providerNa
 
 func (g *NenyaGateway) GetProvidersMap() map[string]*config.Provider {
 	return g.Providers
+}
+
+// SelectCredentialForModel satisfies the routing.AccountSelector interface.
+func (g *NenyaGateway) SelectCredentialForModel(ctx context.Context, provider, model string) (string, string, bool) {
+	key, accountID, ok := g.GetProviderAPIKeyForModel(ctx, provider, model)
+	return string(key), accountID, ok
+}
+
+// ListAccountIDs satisfies the billing.AccountLister interface.
+func (g *NenyaGateway) ListAccountIDs(ctx context.Context, provider string) []string {
+	if g.AccountManager == nil {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	pool, err := g.AccountManager.GetPool(ctx, provider)
+	if err != nil {
+		return nil
+	}
+	return pool.ListAccountIDs(ctx)
 }
 
 func (g *NenyaGateway) ProviderHasAPIKey(providerName string) bool {

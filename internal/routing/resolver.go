@@ -18,6 +18,7 @@ type UpstreamTarget struct {
 	MaxOutput   int
 	MaxContext  int
 	AccountName string
+	Credential  string
 }
 
 // ProviderMatch holds the resolved provider details for a model,

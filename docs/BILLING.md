@@ -367,10 +367,6 @@ Unit tests cover:
 Integration tests cover the full billing pipeline:
 - `TestFilterExhaustedTargets` — exhaustion filtering with and without nil tracker
 - `TestCollectProviderFreeModels` — free models map from config
-- `TestIntegration_BillingPipelineWithExhaustion` — spend → exhaustion → filter → reset flow
+ - `TestIntegration_BillingPipelineWithExhaustion` — spend → exhaustion → filter → reset flow
 - `TestIntegration_ScoringWithFreeModels` — per-model free bonus on mixed providers
 - `TestIntegration_ConcurrentStressAndExhaustion` — 100 concurrent goroutines, exhaustion state verification
-
-## Known Limitations
-
-1. **Account Attribution**: Spend tracking uses `"default"` as the account name in most cases. The gateway has `AccountManager` for multi-account provider selection, but billing tracking doesn't yet integrate with the selected account. This requires a refactor to `AccountManager.SelectCredential` to return account IDs along with credentials.
