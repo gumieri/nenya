@@ -10,6 +10,13 @@ import (
 	"time"
 
 	"git.0ur.uk/nenya/config"
+	"git.0ur.uk/nenya/internal/resilience"
+)
+
+const (
+	// defaultQuotaBackoffMax is the default maximum backoff between
+	// quota fetch retries after consecutive failures.
+	defaultQuotaBackoffMax = 5 * time.Minute
 )
 
 type QuotaFetcher struct {
@@ -22,6 +29,8 @@ type QuotaFetcher struct {
 	mu        sync.Mutex
 }
 
+// quotaProviderConfig holds per-provider quota polling configuration,
+// including backoff state, timeouts, and extraction settings.
 type quotaProviderConfig struct {
 	name         string
 	url          string
@@ -30,8 +39,13 @@ type quotaProviderConfig struct {
 	timeout      time.Duration
 	auth         string
 	tracker      *BillingTracker
+	backoff      *resilience.BackoffTracker
+	maxBackoff   time.Duration
 }
 
+// QuotaFetchResult holds the result of a single quota fetch operation,
+// including parsed quota info, HTTP status, Retry-After directive, and
+// any error encountered during the request or extraction.
 type QuotaFetchResult struct {
 	Provider   string
 	Account    string
@@ -121,6 +135,8 @@ func (qf *QuotaFetcher) Start(ctx context.Context, tracker *BillingTracker, prov
 		return
 	}
 
+	backoffTracker := resilience.NewBackoffTracker()
+
 	for name, p := range providers {
 		if p.Billing == nil {
 			continue
@@ -146,6 +162,11 @@ func (qf *QuotaFetcher) Start(ctx context.Context, tracker *BillingTracker, prov
 			timeout = time.Duration(p.Billing.QuotaTimeoutSeconds) * time.Second
 		}
 
+		maxBackoff := defaultQuotaBackoffMax
+		if p.Billing.QuotaBackoffMaxSeconds > 0 {
+			maxBackoff = time.Duration(p.Billing.QuotaBackoffMaxSeconds) * time.Second
+		}
+
 		qf.providers[name] = &quotaProviderConfig{
 			name:         name,
 			url:          p.Billing.QuotaURL,
@@ -154,6 +175,8 @@ func (qf *QuotaFetcher) Start(ctx context.Context, tracker *BillingTracker, prov
 			timeout:      timeout,
 			auth:         apiKey,
 			tracker:      tracker,
+			backoff:      backoffTracker,
+			maxBackoff:   maxBackoff,
 		}
 	}
 
@@ -228,10 +251,8 @@ func (qf *QuotaFetcher) Stop() {
 func (qf *QuotaFetcher) pollLoop(ctx context.Context, cfg *quotaProviderConfig) {
 	defer qf.wg.Done()
 
-	qf.fetchAndUpdate(ctx, cfg)
-
-	ticker := time.NewTicker(cfg.pollInterval)
-	defer ticker.Stop()
+	timer := time.NewTimer(0)
+	defer timer.Stop()
 
 	for {
 		select {
@@ -239,13 +260,17 @@ func (qf *QuotaFetcher) pollLoop(ctx context.Context, cfg *quotaProviderConfig) 
 			return
 		case <-qf.stopCh:
 			return
-		case <-ticker.C:
-			qf.fetchAndUpdate(ctx, cfg)
+		case <-timer.C:
+			result := qf.fetchAndUpdate(ctx, cfg)
+			timer.Reset(qf.nextPollDelay(cfg, result))
 		}
 	}
 }
 
-func (qf *QuotaFetcher) fetchAndUpdate(ctx context.Context, cfg *quotaProviderConfig) {
+// fetchAndUpdate fetches quota from the provider API and updates the
+// billing tracker with the result. Returns the result so callers can
+// inspect RetryAfter, StatusCode, and Error for backoff decisions.
+func (qf *QuotaFetcher) fetchAndUpdate(ctx context.Context, cfg *quotaProviderConfig) QuotaFetchResult {
 	pollCtx, cancel := context.WithTimeout(ctx, cfg.timeout+5*time.Second)
 	defer cancel()
 
@@ -253,7 +278,7 @@ func (qf *QuotaFetcher) fetchAndUpdate(ctx context.Context, cfg *quotaProviderCo
 	if result.Error != nil {
 		qf.logger.WarnContext(ctx, "quota fetch failed",
 			"provider", cfg.name, "error", result.Error)
-		return
+		return result
 	}
 
 	if result.Info != nil && cfg.tracker != nil {
@@ -261,8 +286,40 @@ func (qf *QuotaFetcher) fetchAndUpdate(ctx context.Context, cfg *quotaProviderCo
 			cfg.tracker.MarkExhausted(ctx, cfg.name, "default", "quota exhausted via API polling")
 		}
 	}
+	return result
 }
 
+// nextPollDelay computes the delay until the next quota fetch based on
+// the previous fetch result:
+//   - Success: resets backoff and returns the normal poll interval
+//   - 429 with Retry-After: uses the Retry-After value, capped at maxBackoff
+//   - Other errors: increments backoff level and returns exponential delay
+func (qf *QuotaFetcher) nextPollDelay(cfg *quotaProviderConfig, result QuotaFetchResult) time.Duration {
+	if result.Error != nil {
+		if result.StatusCode == http.StatusTooManyRequests && result.RetryAfter > 0 {
+			return clampDuration(result.RetryAfter, 0, cfg.maxBackoff)
+		}
+		level := cfg.backoff.Increment(cfg.name)
+		delay := resilience.ComputeExponentialBackoffWithJitter(level, cfg.pollInterval.Milliseconds())
+		return clampDuration(delay, 0, cfg.maxBackoff)
+	}
+	cfg.backoff.Reset(cfg.name)
+	return cfg.pollInterval
+}
+
+// clampDuration clamps d to the range [min, max].
+func clampDuration(d, min, max time.Duration) time.Duration {
+	if d < min {
+		return min
+	}
+	if d > max {
+		return max
+	}
+	return d
+}
+
+// getRetryAfter parses the Retry-After header from a 429 response.
+// Returns the duration to wait, or 0 if parsing fails.
 func getRetryAfter(resp *http.Response) time.Duration {
 	if resp.StatusCode != http.StatusTooManyRequests {
 		return 0
@@ -304,6 +361,8 @@ func (qf *QuotaFetcher) extractQuotaInfo(ctx context.Context, resp *http.Respons
 	}
 }
 
+// toQuotaExtractionConfig converts a config.QuotaExtractionConfig to the
+// billing package's QuotaExtractionConfig type.
 func toQuotaExtractionConfig(cfg config.QuotaExtractionConfig) QuotaExtractionConfig {
 	return QuotaExtractionConfig{
 		Mode:            string(cfg.Mode),
@@ -320,6 +379,8 @@ func toQuotaExtractionConfig(cfg config.QuotaExtractionConfig) QuotaExtractionCo
 	}
 }
 
+// toProviderExtractionConfig converts a billing.QuotaExtractionConfig to
+// the config package's QuotaExtractionConfig type.
 func toProviderExtractionConfig(cfg QuotaExtractionConfig) config.QuotaExtractionConfig {
 	return config.QuotaExtractionConfig{
 		Mode:            config.QuotaExtractionMode(cfg.Mode),

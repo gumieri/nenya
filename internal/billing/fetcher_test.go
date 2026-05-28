@@ -3,6 +3,7 @@ package billing
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -10,6 +11,7 @@ import (
 	"time"
 
 	"git.0ur.uk/nenya/config"
+	"git.0ur.uk/nenya/internal/resilience"
 	"git.0ur.uk/nenya/internal/testutil"
 )
 
@@ -309,5 +311,154 @@ func TestQuotaFetcher_RetryAfterHeader(t *testing.T) {
 	}
 	if result.RetryAfter != 30*time.Second {
 		t.Errorf("RetryAfter = %v, want 30s", result.RetryAfter)
+	}
+}
+
+func TestQuotaFetcher_ClampDuration(t *testing.T) {
+	tests := []struct {
+		name        string
+		d, min, max time.Duration
+		want        time.Duration
+	}{
+		{"in range", 5 * time.Second, 0, 10 * time.Second, 5 * time.Second},
+		{"below min", -1 * time.Second, 0, 10 * time.Second, 0},
+		{"above max", 20 * time.Second, 0, 10 * time.Second, 10 * time.Second},
+		{"equals min", 0, 0, 10 * time.Second, 0},
+		{"equals max", 10 * time.Second, 0, 10 * time.Second, 10 * time.Second},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := clampDuration(tt.d, tt.min, tt.max); got != tt.want {
+				t.Errorf("clampDuration(%v, %v, %v) = %v, want %v", tt.d, tt.min, tt.max, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestQuotaFetcher_NextPollDelay_SuccessResetsBackoff(t *testing.T) {
+	qf := &QuotaFetcher{logger: testutil.NewTestLogger()}
+	cfg := &quotaProviderConfig{
+		name:         "test-provider",
+		pollInterval: 1 * time.Minute,
+		backoff:      resilience.NewBackoffTracker(),
+		maxBackoff:   5 * time.Minute,
+	}
+
+	cfg.backoff.Increment("test-provider")
+	if cfg.backoff.GetLevel("test-provider") != 1 {
+		t.Fatalf("backoff level should be 1 before success, got %d", cfg.backoff.GetLevel("test-provider"))
+	}
+
+	result := QuotaFetchResult{Error: nil}
+	delay := qf.nextPollDelay(cfg, result)
+
+	if delay != cfg.pollInterval {
+		t.Errorf("delay = %v, want pollInterval %v", delay, cfg.pollInterval)
+	}
+	if cfg.backoff.GetLevel("test-provider") != 0 {
+		t.Errorf("backoff level should reset to 0 on success, got %d", cfg.backoff.GetLevel("test-provider"))
+	}
+}
+
+func TestQuotaFetcher_NextPollDelay_429UsesRetryAfter(t *testing.T) {
+	qf := &QuotaFetcher{logger: testutil.NewTestLogger()}
+	cfg := &quotaProviderConfig{
+		name:         "test-provider",
+		pollInterval: 1 * time.Minute,
+		backoff:      resilience.NewBackoffTracker(),
+		maxBackoff:   5 * time.Minute,
+	}
+
+	result := QuotaFetchResult{
+		Error:      fmt.Errorf("rate limited"),
+		StatusCode: http.StatusTooManyRequests,
+		RetryAfter: 2 * time.Minute,
+	}
+	delay := qf.nextPollDelay(cfg, result)
+
+	if delay != 2*time.Minute {
+		t.Errorf("delay = %v, want 2min", delay)
+	}
+	if cfg.backoff.GetLevel("test-provider") != 0 {
+		t.Errorf("backoff level should not increment when Retry-After is used, got %d", cfg.backoff.GetLevel("test-provider"))
+	}
+}
+
+func TestQuotaFetcher_NextPollDelay_ErrorIncrementsBackoff(t *testing.T) {
+	qf := &QuotaFetcher{logger: testutil.NewTestLogger()}
+	cfg := &quotaProviderConfig{
+		name:         "test-provider",
+		pollInterval: 10 * time.Second,
+		backoff:      resilience.NewBackoffTracker(),
+		maxBackoff:   5 * time.Minute,
+	}
+
+	result := QuotaFetchResult{
+		Error:      fmt.Errorf("network error"),
+		StatusCode: http.StatusInternalServerError,
+	}
+
+	var delays []time.Duration
+	for i := 0; i < 5; i++ {
+		delay := qf.nextPollDelay(cfg, result)
+		delays = append(delays, delay)
+	}
+
+	if cfg.backoff.GetLevel("test-provider") != 5 {
+		t.Errorf("backoff level after 5 errors = %d, want 5", cfg.backoff.GetLevel("test-provider"))
+	}
+
+	if delays[0] >= delays[1] {
+		t.Errorf("delays should increase: delay[0]=%v, delay[1]=%v", delays[0], delays[1])
+	}
+
+	if cfg.backoff.GetLevel("test-provider") > 1 {
+		qf.nextPollDelay(cfg, QuotaFetchResult{})
+		if cfg.backoff.GetLevel("test-provider") != 0 {
+			t.Errorf("backoff level should reset to 0 after success, got %d", cfg.backoff.GetLevel("test-provider"))
+		}
+	}
+}
+
+func TestQuotaFetcher_NextPollDelay_RetryAfterCappedAtMax(t *testing.T) {
+	qf := &QuotaFetcher{logger: testutil.NewTestLogger()}
+	cfg := &quotaProviderConfig{
+		name:         "test-provider",
+		pollInterval: 1 * time.Minute,
+		backoff:      resilience.NewBackoffTracker(),
+		maxBackoff:   2 * time.Minute,
+	}
+
+	result := QuotaFetchResult{
+		Error:      fmt.Errorf("rate limited"),
+		StatusCode: http.StatusTooManyRequests,
+		RetryAfter: 10 * time.Minute,
+	}
+	delay := qf.nextPollDelay(cfg, result)
+
+	if delay != 2*time.Minute {
+		t.Errorf("delay = %v, want 2min (maxBackoff)", delay)
+	}
+}
+
+func TestQuotaFetcher_NextPollDelay_ExponentialCappedAtMax(t *testing.T) {
+	qf := &QuotaFetcher{logger: testutil.NewTestLogger()}
+	cfg := &quotaProviderConfig{
+		name:         "test-provider",
+		pollInterval: 1 * time.Minute,
+		backoff:      resilience.NewBackoffTracker(),
+		maxBackoff:   3 * time.Minute,
+	}
+
+	result := QuotaFetchResult{
+		Error:      fmt.Errorf("network error"),
+		StatusCode: http.StatusInternalServerError,
+	}
+
+	for i := 0; i < 10; i++ {
+		delay := qf.nextPollDelay(cfg, result)
+		if delay > cfg.maxBackoff {
+			t.Errorf("delay %d = %v exceeds maxBackoff %v", i, delay, cfg.maxBackoff)
+		}
 	}
 }

@@ -91,6 +91,7 @@ Agents can enforce per-agent spend limits via `budget_limit_usd`. This is checke
         "quota_url": "https://api.zai.com/v1/billing/quota",
         "quota_interval": "1h",
         "quota_timeout_seconds": 10,
+        "quota_backoff_max_seconds": 300,
         "quota_extraction": {
           "mode": "simple_json",
           "balance_path": "credits_remaining",
@@ -123,6 +124,7 @@ Agents can enforce per-agent spend limits via `budget_limit_usd`. This is checke
 | `quota_url` | `string` | URL to fetch quota (for `api` source) |
 | `quota_interval` | `string` | Poll interval (e.g., `1h`, `30m`) |
 | `quota_timeout_seconds` | `int` | Timeout for quota fetch (default 10s) |
+| `quota_backoff_max_seconds` | `int` | Max backoff delay on consecutive quota fetch failures (default 300s) |
 | `quota_extraction` | `object` | Extraction config (see below) |
 | `free_only` | `bool` | Strip paid models from target list (only for `model: free`) |
 | `free_models` | `[]string` | Explicit list of free model IDs (for scoring bonus) |
@@ -317,6 +319,23 @@ levels:
 If `quota_timeout_seconds` is set to 0 or omitted, the default of 10s is used.
 Negative values are rejected by config validation.
 
+If `quota_backoff_max_seconds` is set to 0 or omitted, the default of 300s (5min) is used.
+Negative values are rejected by config validation.
+
+### Backoff Behavior
+
+The `QuotaFetcher` applies dynamic backoff between quota fetch attempts:
+
+| Fetch Result | Behavior | Maximum Delay |
+|---|---|---|
+| **Success** | Resets failure count, returns to normal poll interval | — |
+| **HTTP 429 with `Retry-After`** | Uses server-specified delay | Capped at `quota_backoff_max_seconds` (default 5min) |
+| **Network error / other error** | Increments exponential backoff level (`baseMs × 2^level` with ±5% jitter) | Capped at `quota_backoff_max_seconds` (default 5min) |
+
+The backoff uses `resilience.BackoffTracker` (shared across all providers) and
+`ComputeExponentialBackoffWithJitter` for jittered delays. Consecutive failures
+escalate the delay exponentially; a single success resets the failure count.
+
 Example:
 ```json
 {
@@ -355,5 +374,3 @@ Integration tests cover the full billing pipeline:
 ## Known Limitations
 
 1. **Account Attribution**: Spend tracking uses `"default"` as the account name in most cases. The gateway has `AccountManager` for multi-account provider selection, but billing tracking doesn't yet integrate with the selected account. This requires a refactor to `AccountManager.SelectCredential` to return account IDs along with credentials.
-
-2. **Backoff for Quota Fetches**: There is no per-provider rate limiting or backoff for quota fetch operations. If a provider's quota API returns 429, the fetcher retries immediately.

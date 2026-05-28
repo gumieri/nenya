@@ -413,6 +413,7 @@ func validateProviderBillingConfig(name string, provider ProviderConfig, errs *[
 	validateQuotaSource(name, bc, errs)
 	validateQuotaExtractionConfig(name, bc, errs)
 	validateQuotaTimeoutSeconds(name, bc, errs)
+	validateQuotaBackoffMaxSeconds(name, bc, errs)
 }
 
 func validateQuotaSource(name string, billingCfg *BillingConfig, errs *[]string) {
@@ -451,5 +452,11 @@ func validateQuotaExtractionConfig(name string, billingCfg *BillingConfig, errs 
 func validateQuotaTimeoutSeconds(name string, billingCfg *BillingConfig, errs *[]string) {
 	if billingCfg.QuotaTimeoutSeconds < 0 {
 		*errs = append(*errs, fmt.Sprintf("providers[%q].billing.quota_timeout_seconds must be non-negative, got %d", name, billingCfg.QuotaTimeoutSeconds))
+	}
+}
+
+func validateQuotaBackoffMaxSeconds(name string, billingCfg *BillingConfig, errs *[]string) {
+	if billingCfg.QuotaBackoffMaxSeconds < 0 {
+		*errs = append(*errs, fmt.Sprintf("providers[%q].billing.quota_backoff_max_seconds must be non-negative, got %d", name, billingCfg.QuotaBackoffMaxSeconds))
 	}
 }

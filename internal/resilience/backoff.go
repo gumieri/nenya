@@ -40,8 +40,16 @@ func computeExponentialBackoffWithJitter(level int, baseMs int64) time.Duration 
 	return time.Duration(jittered)
 }
 
+// ComputeExponentialBackoffWithJitter calculates cooldown with exponential
+// backoff and applies ±5% random jitter to prevent thundering herd.
+// baseMs × 2^level, capped at maxBackoffLevel. Exported for use by
+// packages outside resilience (e.g., billing/QuotaFetcher).
+func ComputeExponentialBackoffWithJitter(level int, baseMs int64) time.Duration {
+	return computeExponentialBackoffWithJitter(level, baseMs)
+}
+
 // computeExponentialBackoff calculates cooldown: baseMs * 2^level, capped at max.
-// This is the base function without jitter. Use computeExponentialBackoffWithJitter
+// This is the base function without jitter. Use ComputeExponentialBackoffWithJitter
 // for production code to add jitter and prevent thundering herd.
 func computeExponentialBackoff(level int, baseMs int64) time.Duration {
 	if level > maxBackoffLevel {
