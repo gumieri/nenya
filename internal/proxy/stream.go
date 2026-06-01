@@ -110,6 +110,9 @@ func (sr *stallReader) readLoop(ctx context.Context, src io.Reader) {
 	}
 }
 
+// Read reads data from the upstream source, buffering any excess bytes from a
+// single readResult that do not fit in the caller's buffer. Buffered bytes are
+// returned on subsequent Read calls before reading from the channel again.
 func (sr *stallReader) Read(p []byte) (int, error) {
 	sr.mu.Lock()
 	if sr.stalled {
@@ -173,7 +176,7 @@ func (sr *stallReader) Stop() {
 }
 
 // DrainPending reads any remaining buffered data from the reader with the given timeout.
-// Returns the number of bytes drained (including stale remainBuf) and any error.
+// Returns the number of bytes drained (including leftover remainBuf) and any error.
 func (sr *stallReader) DrainPending(timeout time.Duration) (int, error) {
 	sr.closeOnce.Do(func() { close(sr.stallCh) })
 

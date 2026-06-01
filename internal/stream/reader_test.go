@@ -195,6 +195,9 @@ func TestSSETransformingReader_LogsMalformedJSON(t *testing.T) {
 	if !strings.Contains(logStr, "malformed JSON in SSE data line") {
 		t.Errorf("expected malformed JSON warning in logs, got: %s", logStr)
 	}
+	if !strings.Contains(logStr, "data_len") {
+		t.Errorf("expected data_len in log, got: %s", logStr)
+	}
 }
 
 func TestSSETransformingReader_ValidJSONNoLog(t *testing.T) {

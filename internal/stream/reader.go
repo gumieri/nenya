@@ -135,6 +135,7 @@ func (r *SSETransformingReader) SetObserver(obs SSEObserver) {
 
 // SetLogger sets a logger for the transforming reader. Used for warning
 // messages about malformed SSE data.
+// NOTE: Must be called before the reader is used (before any Read calls).
 func (r *SSETransformingReader) SetLogger(logger *slog.Logger) {
 	r.logger = logger
 }
@@ -344,13 +345,8 @@ func (r *SSETransformingReader) tryParseJSON(data []byte) map[string]interface{}
 	var parsed map[string]interface{}
 	if err := json.Unmarshal(data, &parsed); err != nil {
 		if r.logger != nil {
-			preview := string(data)
-			if len(preview) > 512 {
-				preview = preview[:512]
-			}
 			r.logger.Warn("malformed JSON in SSE data line",
 				"err", err,
-				"data_preview", preview,
 				"data_len", len(data))
 		}
 		return nil

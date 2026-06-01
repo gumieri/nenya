@@ -242,23 +242,6 @@ func TestStallReader_PartialRead_BuffersRemainder(t *testing.T) {
 	}
 }
 
-type partialDataReader struct {
-	chunks [][]byte
-	idx    int
-}
-
-func (r *partialDataReader) Read(p []byte) (int, error) {
-	if r.idx >= len(r.chunks) {
-		return 0, io.EOF
-	}
-	n := copy(p, r.chunks[r.idx])
-	r.idx++
-	if r.idx >= len(r.chunks) {
-		return n, io.EOF
-	}
-	return n, nil
-}
-
 func TestStallReader_StallsAfterTimeout(t *testing.T) {
 	src := &testutil.BlockingReader{Closed: make(chan struct{})}
 
