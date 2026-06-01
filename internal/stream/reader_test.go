@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"log/slog"
 	"strings"
 	"testing"
 )
@@ -168,5 +169,50 @@ func TestSSETransformingReader_SkipsConsumedEvents(t *testing.T) {
 	}
 	if !strings.Contains(result, "[DONE]") {
 		t.Errorf("expected [DONE] in output, got: %s", result)
+	}
+}
+
+func TestSSETransformingReader_LogsMalformedJSON(t *testing.T) {
+	var logBuf bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&logBuf, nil))
+
+	malformedData := "data: {\"id\":\"123\",\"incomplete\ndata: {\"valid\":\"json\"}\n\ndata: [DONE]\n\n"
+	reader := NewSSETransformingReader(strings.NewReader(malformedData), nil, context.Background())
+	reader.SetLogger(logger)
+
+	var output bytes.Buffer
+	_, err := io.Copy(&output, reader)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	outputStr := output.String()
+	if !strings.Contains(outputStr, "incomplete\ndata:") {
+		t.Errorf("output should contain malformed data: %s", outputStr)
+	}
+
+	logStr := logBuf.String()
+	if !strings.Contains(logStr, "malformed JSON in SSE data line") {
+		t.Errorf("expected malformed JSON warning in logs, got: %s", logStr)
+	}
+}
+
+func TestSSETransformingReader_ValidJSONNoLog(t *testing.T) {
+	var logBuf bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&logBuf, nil))
+
+	validData := "data: {\"id\":\"123\",\"chunk\":\"hello\"}\n\ndata: [DONE]\n\n"
+	reader := NewSSETransformingReader(strings.NewReader(validData), nil, context.Background())
+	reader.SetLogger(logger)
+
+	var output bytes.Buffer
+	_, err := io.Copy(&output, reader)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	logStr := logBuf.String()
+	if strings.Contains(logStr, "malformed JSON") {
+		t.Errorf("unexpected malformed JSON warning for valid data: %s", logStr)
 	}
 }

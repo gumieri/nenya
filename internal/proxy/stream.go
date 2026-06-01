@@ -69,6 +69,8 @@ type stallReader struct {
 	stallCh   chan struct{}
 	closeOnce sync.Once
 	ch        chan readResult
+	remainBuf []byte // leftover bytes from partial reads
+	remainPos int
 }
 
 // newStallReader creates a stallReader that reads from src with the given timeout.
@@ -116,6 +118,16 @@ func (sr *stallReader) Read(p []byte) (int, error) {
 	}
 	sr.mu.Unlock()
 
+	if sr.remainPos < len(sr.remainBuf) {
+		n := copy(p, sr.remainBuf[sr.remainPos:])
+		sr.remainPos += n
+		if sr.remainPos >= len(sr.remainBuf) {
+			sr.remainBuf = nil
+			sr.remainPos = 0
+		}
+		return n, nil
+	}
+
 	select {
 	case <-sr.stallCh:
 		return 0, errStreamStalled
@@ -129,11 +141,19 @@ func (sr *stallReader) Read(p []byte) (int, error) {
 		if stalled {
 			if len(rr.data) > 0 {
 				n := copy(p, rr.data)
+				if n < len(rr.data) {
+					sr.remainBuf = rr.data[n:]
+					sr.remainPos = 0
+				}
 				return n, errStreamStalled
 			}
 			return 0, errStreamStalled
 		}
 		n := copy(p, rr.data)
+		if n < len(rr.data) {
+			sr.remainBuf = rr.data[n:]
+			sr.remainPos = 0
+		}
 		return n, rr.err
 	}
 }
@@ -153,14 +173,23 @@ func (sr *stallReader) Stop() {
 }
 
 // DrainPending reads any remaining buffered data from the reader with the given timeout.
-// Returns the number of bytes drained and any error.
+// Returns the number of bytes drained (including stale remainBuf) and any error.
 func (sr *stallReader) DrainPending(timeout time.Duration) (int, error) {
 	sr.closeOnce.Do(func() { close(sr.stallCh) })
+
+	total := 0
+	if sr.remainPos < len(sr.remainBuf) {
+		total += len(sr.remainBuf) - sr.remainPos
+		sr.remainBuf = nil
+		sr.remainPos = 0
+	}
+
 	select {
 	case rr := <-sr.ch:
-		return len(rr.data), rr.err
+		total += len(rr.data)
+		return total, rr.err
 	case <-time.After(timeout):
-		return 0, errors.New("stall reader drain timeout")
+		return total, errors.New("stall reader drain timeout")
 	}
 }
 
@@ -362,6 +391,7 @@ func (p *Proxy) setupTransformingReader(gw *gateway.NenyaGateway, target routing
 	transformingReader := stream.NewSSETransformingReader(stallR, transformer, ctx)
 	transformingReader.SetOnUsage(p.makeUsageCallback(ctx, gw, target, agentName))
 	transformingReader.SetObserver(newUpstreamErrorObserver(gw, target))
+	transformingReader.SetLogger(gw.Logger)
 
 	p.setupStreamFilterIfEnabled(gw, transformingReader)
 	p.setupStreamEntropyFilterIfEnabled(gw, transformingReader)

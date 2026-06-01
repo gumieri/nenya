@@ -214,6 +214,51 @@ func TestStallReader_ReadsNormally(t *testing.T) {
 	}
 }
 
+func TestStallReader_PartialRead_BuffersRemainder(t *testing.T) {
+	largeData := strings.Repeat("A", 32000)
+	src := strings.NewReader(largeData)
+	sr := newStallReader(context.Background(), src, time.Hour)
+	defer sr.Stop()
+
+	var dst bytes.Buffer
+	buf := make([]byte, 16384)
+
+	for {
+		n, err := sr.Read(buf)
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if n > len(buf) {
+			t.Fatalf("read returned %d bytes, but buffer is only %d bytes", n, len(buf))
+		}
+		dst.Write(buf[:n])
+	}
+
+	if dst.String() != largeData {
+		t.Errorf("data mismatch: expected %d bytes, got %d bytes", len(largeData), dst.Len())
+	}
+}
+
+type partialDataReader struct {
+	chunks [][]byte
+	idx    int
+}
+
+func (r *partialDataReader) Read(p []byte) (int, error) {
+	if r.idx >= len(r.chunks) {
+		return 0, io.EOF
+	}
+	n := copy(p, r.chunks[r.idx])
+	r.idx++
+	if r.idx >= len(r.chunks) {
+		return n, io.EOF
+	}
+	return n, nil
+}
+
 func TestStallReader_StallsAfterTimeout(t *testing.T) {
 	src := &testutil.BlockingReader{Closed: make(chan struct{})}
 
