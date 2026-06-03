@@ -460,7 +460,7 @@ func validatePromptPath(filePath string) error {
 
 	absPath, err := filepath.Abs(filePath)
 	if err != nil {
-		return nil
+		return fmt.Errorf("cannot resolve absolute path for prompt file: %w", err)
 	}
 
 	configDir := os.Getenv("CONFIG_DIR")
@@ -470,12 +470,12 @@ func validatePromptPath(filePath string) error {
 
 	absConfigDir, err := filepath.Abs(configDir)
 	if err != nil {
-		return nil
+		return fmt.Errorf("cannot resolve absolute path for config directory: %w", err)
 	}
 
 	relPath, err := filepath.Rel(absConfigDir, absPath)
 	if err != nil {
-		return nil
+		return fmt.Errorf("cannot compute relative path for prompt file: %w", err)
 	}
 
 	if strings.HasPrefix(relPath, ".."+string(filepath.Separator)) || relPath == ".." {
