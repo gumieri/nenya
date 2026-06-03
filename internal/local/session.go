@@ -73,11 +73,6 @@ type generateRequest struct {
 	Options   map[string]any `json:"options,omitempty"`
 }
 
-type generateResponse struct {
-	Done     bool   `json:"done"`
-	Response string `json:"response"`
-}
-
 type tagsResponse struct {
 	Models []struct {
 		Name       string `json:"name"`
@@ -110,12 +105,12 @@ func NewSessionManager(baseURL string, timeout time.Duration) *SessionManager {
 }
 
 func (sm *SessionManager) LoadModel(ctx context.Context, modelID string, opts LoadOptions) (*Session, error) {
-	sm.mu.Lock()
-	defer sm.mu.Unlock()
-
+	sm.mu.RLock()
 	if existing, ok := sm.sessions[modelID]; ok {
+		sm.mu.RUnlock()
 		return existing, nil
 	}
+	sm.mu.RUnlock()
 
 	payload := generateRequest{
 		Model:     modelID,
@@ -142,7 +137,6 @@ func (sm *SessionManager) LoadModel(ctx context.Context, modelID string, opts Lo
 		return nil, fmt.Errorf("marshal load request: %w", err)
 	}
 
-	var responseBody []byte
 	err = util.DoWithRetry(ctx, maxRetryAttempts, func() error {
 		var loadErr error
 		req, loadErr := http.NewRequestWithContext(ctx, http.MethodPost, sm.baseURL+"/api/generate", bytes.NewReader(body))
@@ -163,13 +157,8 @@ func (sm *SessionManager) LoadModel(ctx context.Context, modelID string, opts Lo
 			return fmt.Errorf("ollama generate failed: %d", resp.StatusCode)
 		}
 
-		responseBody, loadErr = io.ReadAll(io.LimitReader(resp.Body, maxResponseBytes))
+		_, loadErr = io.ReadAll(io.LimitReader(resp.Body, maxResponseBytes))
 		if loadErr != nil {
-			return loadErr
-		}
-
-		var gr generateResponse
-		if loadErr := json.Unmarshal(responseBody, &gr); loadErr != nil {
 			return loadErr
 		}
 
@@ -187,15 +176,20 @@ func (sm *SessionManager) LoadModel(ctx context.Context, modelID string, opts Lo
 		CreatedAt:   time.Now(),
 	}
 
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
+	if existing, ok := sm.sessions[modelID]; ok {
+		return existing, nil
+	}
 	sm.sessions[modelID] = session
 	return session, nil
 }
 
 func (sm *SessionManager) UnloadModel(ctx context.Context, modelID string) error {
-	sm.mu.Lock()
-	defer sm.mu.Unlock()
-
-	if _, ok := sm.sessions[modelID]; !ok {
+	sm.mu.RLock()
+	_, exists := sm.sessions[modelID]
+	sm.mu.RUnlock()
+	if !exists {
 		return nil
 	}
 
@@ -237,6 +231,8 @@ func (sm *SessionManager) UnloadModel(ctx context.Context, modelID string) error
 		return fmt.Errorf("unload model: %w", err)
 	}
 
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
 	delete(sm.sessions, modelID)
 	return nil
 }

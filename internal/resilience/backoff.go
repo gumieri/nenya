@@ -106,10 +106,11 @@ func (bt *BackoffTracker) GetLevel(model string) int {
 	return bt.levels[model]
 }
 
-// Increment increments the backoff level for a model and returns the new level.
-func (bt *BackoffTracker) Increment(model string) int {
+// Increment increments the backoff level for a model and returns the new level
+// and an optional callback to invoke after releasing the lock.
+func (bt *BackoffTracker) Increment(model string) (int, func()) {
 	if bt == nil {
-		return 0
+		return 0, nil
 	}
 	bt.mu.Lock()
 	defer bt.mu.Unlock()
@@ -119,11 +120,13 @@ func (bt *BackoffTracker) Increment(model string) int {
 	}
 	newLevel := bt.levels[model]
 
+	var callback func()
 	if bt.onIncrement != nil {
-		bt.onIncrement(model, newLevel)
+		fn := bt.onIncrement
+		callback = func() { fn(model, newLevel) }
 	}
 
-	return newLevel
+	return newLevel, callback
 }
 
 // Reset clears the backoff level for a model.

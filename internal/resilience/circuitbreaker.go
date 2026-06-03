@@ -290,7 +290,9 @@ func (cb *CircuitBreaker) RecordFailureWithStatus(key string, status int, body s
 		cb.modelLocks[key] = until
 
 		if decision.IncrementBackoff {
-			cb.backoff.Increment(key)
+			if _, callback := cb.backoff.Increment(key); callback != nil {
+				callback()
+			}
 		}
 	}
 
@@ -592,9 +594,11 @@ func (cb *CircuitBreaker) SnapshotDetailed() map[string]interface{} {
 	snap["model_locks"] = locks
 
 	backoffLevels := make(map[string]int)
+	cb.backoff.mu.Lock()
 	for model, level := range cb.backoff.levels {
 		backoffLevels[model] = level
 	}
+	cb.backoff.mu.Unlock()
 	snap["backoff_levels"] = backoffLevels
 
 	return snap

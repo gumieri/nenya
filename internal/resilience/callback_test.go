@@ -90,9 +90,12 @@ func TestBackoffTracker_Callback(t *testing.T) {
 		}{model, level})
 	})
 
-	bt.Increment("model1")
-	bt.Increment("model1")
-	bt.Increment("model2")
+	_, cb1 := bt.Increment("model1")
+	_, cb2 := bt.Increment("model1")
+	_, cb3 := bt.Increment("model2")
+	cb1()
+	cb2()
+	cb3()
 
 	if len(capturedCalls) != 3 {
 		t.Errorf("expected 3 callbacks, got %d", len(capturedCalls))
@@ -114,8 +117,10 @@ func TestBackoffTracker_Callback(t *testing.T) {
 func TestBackoffTracker_ResetAfterCallback(t *testing.T) {
 	bt := NewBackoffTrackerWithCallback(func(model string, level int) {})
 
-	bt.Increment("model1")
-	bt.Increment("model1")
+	_, cb1 := bt.Increment("model1")
+	_, cb2 := bt.Increment("model1")
+	cb1()
+	cb2()
 
 	bt.Reset("model1")
 
@@ -130,7 +135,7 @@ func TestBackoffTracker_CallbackNil(t *testing.T) {
 	// NewBackoffTracker() should create a tracker without callback
 	bt := NewBackoffTracker()
 
-	level := bt.Increment("model1")
+	level, _ := bt.Increment("model1")
 	if level != 1 {
 		t.Errorf("expected level 1, got %d", level)
 	}
