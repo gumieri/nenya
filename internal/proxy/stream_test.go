@@ -370,6 +370,22 @@ func TestWriteBlockedSSE_MultipleChunks(t *testing.T) {
 	}
 }
 
+func TestWriteSSEDONE(t *testing.T) {
+	p := &Proxy{}
+	p.StoreGateway(newStreamTestGateway())
+	rec := httptest.NewRecorder()
+	p.writeSSEDONE(p.Gateway(), rec)
+
+	body := rec.Body.String()
+	if !strings.Contains(body, "data: [DONE]\n\n") {
+		t.Fatalf("expected [DONE] event, got: %q", body)
+	}
+
+	if !rec.Flushed {
+		t.Fatal("response should be flushed")
+	}
+}
+
 func TestResponseTransformer_GeminiTransformerHasOnExtraContent(t *testing.T) {
 	spec, ok := providerpkg.Get("gemini")
 	if !ok {

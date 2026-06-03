@@ -565,10 +565,11 @@ func (p *Proxy) handleStreamDone(gw *gateway.NenyaGateway, w http.ResponseWriter
 		action.cancel()
 		_ = action.resp.Body.Close()
 		gw.AgentState.RecordFailure(target, cooldownDuration)
-		gw.Logger.Warn("stream stalled, falling back to next target",
+		gw.Logger.Warn("stream stalled, terminating SSE before fallback",
 			"model", target.Model, "provider", target.Provider,
 			"idle_timeout", streamIdleTimeout)
 		gw.Metrics.RecordStreamStall(target.Model, target.Provider)
+		p.writeSSEDONE(gw, w)
 		return streamResult{empty: true}
 	}
 
@@ -691,6 +692,15 @@ func extractUserTextForEmbedding(payload map[string]any) string {
 	}
 
 	return userMsgs.String()
+}
+
+// writeSSEDONE sends a terminating [DONE] event to the SSE stream.
+// This is used to cleanly terminate a stream before fallback to another target.
+func (p *Proxy) writeSSEDONE(gw *gateway.NenyaGateway, w http.ResponseWriter) {
+	_, _ = fmt.Fprint(w, "data: [DONE]\n\n")
+	if flusher, ok := w.(http.Flusher); ok {
+		flusher.Flush()
+	}
 }
 
 // writeBlockedSSE sends a blocked response SSE stream to the client.
