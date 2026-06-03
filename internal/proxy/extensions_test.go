@@ -21,11 +21,11 @@ func newExtensionTestProxy(t *testing.T, upstream *httptest.Server) (*Proxy, *ga
 	}
 	providers := map[string]*config.Provider{
 		"openai": {
-			Name:          "openai",
-			URL:           upstream.URL + "/v1/chat/completions",
-			BaseURL:       upstream.URL + "/v1",
-			APIKey:        "test-key",
-			AuthStyle:     "bearer",
+			Name:           "openai",
+			URL:            upstream.URL + "/v1/chat/completions",
+			BaseURL:        upstream.URL + "/v1",
+			APIKey:         "test-key",
+			AuthStyle:      "bearer",
 			TimeoutSeconds: 30,
 		},
 	}
@@ -35,13 +35,13 @@ func newExtensionTestProxy(t *testing.T, upstream *httptest.Server) (*Proxy, *ga
 		ProviderKeys: map[string]string{"openai": "test-key"},
 	}
 	gw := &gateway.NenyaGateway{
-		Config:       cfg,
-		Secrets:      secrets,
-		Client:       http.DefaultClient,
-		Providers:    providers,
-		RateLimiter:  infra.NewRateLimiter(10, 10000),
-		Stats:        infra.NewUsageTracker(),
-		Logger:       logger,
+		Config:      cfg,
+		Secrets:     secrets,
+		Client:      http.DefaultClient,
+		Providers:   providers,
+		RateLimiter: infra.NewRateLimiter(10, 10000),
+		Stats:       infra.NewUsageTracker(),
+		Logger:      logger,
 	}
 	proxy := &Proxy{}
 	proxy.StoreGateway(gw)
@@ -67,7 +67,7 @@ func TestHandleImagesGenerations(t *testing.T) {
 			"created": 1234567890,
 			"data": []interface{}{
 				map[string]interface{}{
-					"b64_json": "iVBORw0KGgoAAAANS",
+					"b64_json":       "iVBORw0KGgoAAAANS",
 					"revised_prompt": "A beautiful sunset",
 				},
 			},
@@ -180,12 +180,12 @@ func TestHandleModerations(t *testing.T) {
 		}
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]interface{}{
-			"id": "modr-abc123",
+			"id":    "modr-abc123",
 			"model": "text-moderation-latest",
 			"results": []interface{}{
 				map[string]interface{}{
-					"flagged": false,
-					"categories": map[string]interface{}{},
+					"flagged":         false,
+					"categories":      map[string]interface{}{},
 					"category_scores": map[string]interface{}{},
 				},
 			},
@@ -263,8 +263,8 @@ func TestHandleA2A(t *testing.T) {
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]interface{}{
 			"agent_id": "agent-123",
-			"status": "completed",
-			"result": "Agent-to-agent communication successful",
+			"status":   "completed",
+			"result":   "Agent-to-agent communication successful",
 		})
 	}))
 	defer upstream.Close()
@@ -296,11 +296,11 @@ func TestHandleExtensions_TooLarge(t *testing.T) {
 	}
 	providers := map[string]*config.Provider{
 		"openai": {
-			Name:          "openai",
-			URL:           "https://api.openai.com/v1/chat/completions",
-			BaseURL:       "https://api.openai.com",
-			APIKey:        "test-key",
-			AuthStyle:     "bearer",
+			Name:           "openai",
+			URL:            "https://api.openai.com/v1/chat/completions",
+			BaseURL:        "https://api.openai.com",
+			APIKey:         "test-key",
+			AuthStyle:      "bearer",
 			TimeoutSeconds: 30,
 		},
 	}
@@ -310,13 +310,13 @@ func TestHandleExtensions_TooLarge(t *testing.T) {
 		ProviderKeys: map[string]string{"openai": "test-key"},
 	}
 	gw := &gateway.NenyaGateway{
-		Config:       cfg,
-		Secrets:      secrets,
-		Client:       http.DefaultClient,
-		Providers:    providers,
-		RateLimiter:  infra.NewRateLimiter(10, 10000),
-		Stats:        infra.NewUsageTracker(),
-		Logger:       logger,
+		Config:      cfg,
+		Secrets:     secrets,
+		Client:      http.DefaultClient,
+		Providers:   providers,
+		RateLimiter: infra.NewRateLimiter(10, 10000),
+		Stats:       infra.NewUsageTracker(),
+		Logger:      logger,
 	}
 	proxy := &Proxy{}
 	proxy.StoreGateway(gw)
@@ -328,15 +328,15 @@ func TestHandleExtensions_TooLarge(t *testing.T) {
 		headers map[string]string
 	}{
 		{
-			name: "images generations too large",
-			path: "/v1/images/generations",
-			body: `{"prompt":"A beautiful sunset"}`,
+			name:    "images generations too large",
+			path:    "/v1/images/generations",
+			body:    `{"prompt":"A beautiful sunset"}`,
 			headers: map[string]string{"Content-Type": "application/json"},
 		},
 		{
-			name: "moderations too large",
-			path: "/v1/moderations",
-			body: `{"input":"Test message"}`,
+			name:    "moderations too large",
+			path:    "/v1/moderations",
+			body:    `{"input":"Test message"}`,
 			headers: map[string]string{"Content-Type": "application/json"},
 		},
 	}
@@ -369,13 +369,13 @@ func TestHandleExtensions_NoProvider(t *testing.T) {
 		ProviderKeys: map[string]string{},
 	}
 	gw := &gateway.NenyaGateway{
-		Config:       cfg,
-		Secrets:      secrets,
-		Client:       http.DefaultClient,
-		Providers:    map[string]*config.Provider{},
-		RateLimiter:  infra.NewRateLimiter(10, 10000),
-		Stats:        infra.NewUsageTracker(),
-		Logger:       logger,
+		Config:      cfg,
+		Secrets:     secrets,
+		Client:      http.DefaultClient,
+		Providers:   map[string]*config.Provider{},
+		RateLimiter: infra.NewRateLimiter(10, 10000),
+		Stats:       infra.NewUsageTracker(),
+		Logger:      logger,
 	}
 	proxy := &Proxy{}
 	proxy.StoreGateway(gw)
@@ -398,11 +398,11 @@ func TestHandleExtensions_PathTraversal(t *testing.T) {
 	}
 	providers := map[string]*config.Provider{
 		"openai": {
-			Name:          "openai",
-			URL:           "https://api.openai.com/v1/chat/completions",
-			BaseURL:       "https://api.openai.com",
-			APIKey:        "test-key",
-			AuthStyle:     "bearer",
+			Name:           "openai",
+			URL:            "https://api.openai.com/v1/chat/completions",
+			BaseURL:        "https://api.openai.com",
+			APIKey:         "test-key",
+			AuthStyle:      "bearer",
 			TimeoutSeconds: 30,
 		},
 	}
@@ -412,13 +412,13 @@ func TestHandleExtensions_PathTraversal(t *testing.T) {
 		ProviderKeys: map[string]string{"openai": "test-key"},
 	}
 	gw := &gateway.NenyaGateway{
-		Config:       cfg,
-		Secrets:      secrets,
-		Client:       http.DefaultClient,
-		Providers:    providers,
-		RateLimiter:  infra.NewRateLimiter(10, 10000),
-		Stats:        infra.NewUsageTracker(),
-		Logger:       logger,
+		Config:      cfg,
+		Secrets:     secrets,
+		Client:      http.DefaultClient,
+		Providers:   providers,
+		RateLimiter: infra.NewRateLimiter(10, 10000),
+		Stats:       infra.NewUsageTracker(),
+		Logger:      logger,
 	}
 	proxy := &Proxy{}
 	proxy.StoreGateway(gw)
@@ -447,11 +447,11 @@ func TestHandleExtensions_RateLimitExceeded(t *testing.T) {
 	}
 	providers := map[string]*config.Provider{
 		"openai": {
-			Name:          "openai",
-			URL:           upstream.URL + "/v1/images/generations",
-			BaseURL:       upstream.URL + "/v1",
-			APIKey:        "test-key",
-			AuthStyle:     "bearer",
+			Name:           "openai",
+			URL:            upstream.URL + "/v1/images/generations",
+			BaseURL:        upstream.URL + "/v1",
+			APIKey:         "test-key",
+			AuthStyle:      "bearer",
 			TimeoutSeconds: 30,
 		},
 	}
@@ -461,13 +461,13 @@ func TestHandleExtensions_RateLimitExceeded(t *testing.T) {
 		ProviderKeys: map[string]string{"openai": "test-key"},
 	}
 	gw := &gateway.NenyaGateway{
-		Config:       cfg,
-		Secrets:      secrets,
-		Client:       http.DefaultClient,
-		Providers:    providers,
-		RateLimiter:  infra.NewRateLimiter(1, 10000),
-		Stats:        infra.NewUsageTracker(),
-		Logger:       logger,
+		Config:      cfg,
+		Secrets:     secrets,
+		Client:      http.DefaultClient,
+		Providers:   providers,
+		RateLimiter: infra.NewRateLimiter(1, 10000),
+		Stats:       infra.NewUsageTracker(),
+		Logger:      logger,
 	}
 	proxy := &Proxy{}
 	proxy.StoreGateway(gw)
@@ -504,11 +504,11 @@ func TestHandleExtensions_Upstream5xxFailure(t *testing.T) {
 	}
 	providers := map[string]*config.Provider{
 		"openai": {
-			Name:          "openai",
-			URL:           upstream.URL + "/v1/images/generations",
-			BaseURL:       upstream.URL + "/v1",
-			APIKey:        "test-key",
-			AuthStyle:     "bearer",
+			Name:           "openai",
+			URL:            upstream.URL + "/v1/images/generations",
+			BaseURL:        upstream.URL + "/v1",
+			APIKey:         "test-key",
+			AuthStyle:      "bearer",
 			TimeoutSeconds: 30,
 		},
 	}
@@ -518,13 +518,13 @@ func TestHandleExtensions_Upstream5xxFailure(t *testing.T) {
 		ProviderKeys: map[string]string{"openai": "test-key"},
 	}
 	gw := &gateway.NenyaGateway{
-		Config:       cfg,
-		Secrets:      secrets,
-		Client:       http.DefaultClient,
-		Providers:    providers,
-		RateLimiter:  infra.NewRateLimiter(10, 10000),
-		Stats:        infra.NewUsageTracker(),
-		Logger:       logger,
+		Config:      cfg,
+		Secrets:     secrets,
+		Client:      http.DefaultClient,
+		Providers:   providers,
+		RateLimiter: infra.NewRateLimiter(10, 10000),
+		Stats:       infra.NewUsageTracker(),
+		Logger:      logger,
 	}
 	proxy := &Proxy{}
 	proxy.StoreGateway(gw)

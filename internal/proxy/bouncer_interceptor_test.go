@@ -11,45 +11,45 @@ import (
 
 func TestBouncerInterceptorCanHandle(t *testing.T) {
 	tests := []struct {
-		name         string
-		tokenCount   int
-		softLimit    int
-		ctxCancelled bool
+		name          string
+		tokenCount    int
+		softLimit     int
+		ctxCancelled  bool
 		wantCanHandle bool
 	}{
 		{
-			name:         "handles when tokens exceed soft_limit",
-			tokenCount:   5000,
-			softLimit:    4000,
-			ctxCancelled: false,
+			name:          "handles when tokens exceed soft_limit",
+			tokenCount:    5000,
+			softLimit:     4000,
+			ctxCancelled:  false,
 			wantCanHandle: true,
 		},
 		{
-			name:         "does not handle when tokens below soft_limit",
-			tokenCount:   3000,
-			softLimit:    4000,
-			ctxCancelled: false,
+			name:          "does not handle when tokens below soft_limit",
+			tokenCount:    3000,
+			softLimit:     4000,
+			ctxCancelled:  false,
 			wantCanHandle: false,
 		},
 		{
-			name:         "does not handle when soft_limit is zero (unknown MaxContext)",
-			tokenCount:   5000,
-			softLimit:    0,
-			ctxCancelled: false,
+			name:          "does not handle when soft_limit is zero (unknown MaxContext)",
+			tokenCount:    5000,
+			softLimit:     0,
+			ctxCancelled:  false,
 			wantCanHandle: false,
 		},
 		{
-			name:         "does not handle when context cancelled",
-			tokenCount:   5000,
-			softLimit:    4000,
-			ctxCancelled: true,
+			name:          "does not handle when context cancelled",
+			tokenCount:    5000,
+			softLimit:     4000,
+			ctxCancelled:  true,
 			wantCanHandle: false,
 		},
 		{
-			name:         "does not handle when tokens equal soft_limit",
-			tokenCount:   4000,
-			softLimit:    4000,
-			ctxCancelled: false,
+			name:          "does not handle when tokens equal soft_limit",
+			tokenCount:    4000,
+			softLimit:     4000,
+			ctxCancelled:  false,
 			wantCanHandle: true,
 		},
 	}

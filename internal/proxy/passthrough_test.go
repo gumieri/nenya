@@ -186,8 +186,8 @@ func TestHandlePassthrough(t *testing.T) {
 					MaxBodyBytes: 10 * 1024 * 1024,
 				},
 				Governance: config.GovernanceConfig{
-			RatelimitMaxRPM: config.PtrTo(10),
-			RatelimitMaxTPM: config.PtrTo(10000),
+					RatelimitMaxRPM: config.PtrTo(10),
+					RatelimitMaxTPM: config.PtrTo(10000),
 				},
 			}
 

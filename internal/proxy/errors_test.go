@@ -131,6 +131,9 @@ func newMockResponseWriter() *mockResponseWriter {
 	return &mockResponseWriter{header: make(http.Header)}
 }
 
-func (m *mockResponseWriter) Header() http.Header         { return m.header }
-func (m *mockResponseWriter) Write(b []byte) (int, error) { m.body = append(m.body, b...); return len(b), nil }
-func (m *mockResponseWriter) WriteHeader(code int)         { m.statusCode = code }
+func (m *mockResponseWriter) Header() http.Header { return m.header }
+func (m *mockResponseWriter) Write(b []byte) (int, error) {
+	m.body = append(m.body, b...)
+	return len(b), nil
+}
+func (m *mockResponseWriter) WriteHeader(code int) { m.statusCode = code }

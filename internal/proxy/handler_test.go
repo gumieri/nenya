@@ -25,8 +25,8 @@ func newTestProxyWithSecrets(t *testing.T, secrets *config.SecretsConfig) (*Prox
 	}
 	if secrets == nil {
 		secrets = &config.SecretsConfig{
-			ClientToken:   "test-token",
-			ProviderKeys:  map[string]string{"gemini": "test-key"},
+			ClientToken:  "test-token",
+			ProviderKeys: map[string]string{"gemini": "test-key"},
 		}
 	}
 	gw := gateway.New(context.Background(), *cfg, secrets, slog.Default())
@@ -264,9 +264,9 @@ func TestAuthenticateRequest_ExpiredKey(t *testing.T) {
 		ProviderKeys: map[string]string{},
 		ApiKeys: map[string]config.ApiKey{
 			"expired-key": {
-				Name:       "expired-key",
-				Token:      "secret-token",
-				ExpiresAt:  expired,
+				Name:      "expired-key",
+				Token:     "secret-token",
+				ExpiresAt: expired,
 			},
 		},
 	})

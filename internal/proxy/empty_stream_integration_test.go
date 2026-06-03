@@ -313,4 +313,3 @@ func TestHandleChatCompletions_StalledStream_FallbackToNextTarget(t *testing.T) 
 		t.Errorf("expected stream_stalled metric to be recorded, got:\n%s", metricsOutput)
 	}
 }
-
