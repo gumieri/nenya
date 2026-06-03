@@ -380,7 +380,8 @@ func extractAgentName(r *http.Request) string {
 	if r.Body == nil {
 		return ""
 	}
-	body, err := io.ReadAll(r.Body)
+	const maxAuthBody = 1 << 20
+	body, err := io.ReadAll(io.LimitReader(r.Body, int64(maxAuthBody)))
 	if err != nil {
 		return ""
 	}

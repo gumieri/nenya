@@ -17,6 +17,7 @@ const (
 	// defaultQuotaBackoffMax is the default maximum backoff between
 	// quota fetch retries after consecutive failures.
 	defaultQuotaBackoffMax = 5 * time.Minute
+	maxQuotaResponseBytes  = 10 << 20
 )
 
 // AccountLister returns all account IDs for a provider.
@@ -373,7 +374,7 @@ func (qf *QuotaFetcher) extractQuotaInfo(ctx context.Context, resp *http.Respons
 	billingCfg := toQuotaExtractionConfig(cfg)
 	switch config.QuotaExtractionMode(mode) {
 	case config.ExtractionModeSimpleJSON, config.ExtractionModeMaxFromArray:
-		body, err := io.ReadAll(resp.Body)
+		body, err := io.ReadAll(io.LimitReader(resp.Body, maxQuotaResponseBytes))
 		if err != nil {
 			return nil, fmt.Errorf("failed to read quota response body: %w", err)
 		}

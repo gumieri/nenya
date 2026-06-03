@@ -11,6 +11,8 @@ import (
 	"git.0ur.uk/nenya/internal/util"
 )
 
+const maxOllamaEmbeddingResponse = 10 << 20
+
 // OllamaEmbedder implements EmbeddingProvider via the Ollama /api/embed endpoint.
 // Uses configurable model and URL with retry logic for transient failures.
 type OllamaEmbedder struct {
@@ -71,11 +73,11 @@ func (o *OllamaEmbedder) Embed(ctx context.Context, text string) ([]float32, err
 		defer func() { _ = resp.Body.Close() }()
 
 		if resp.StatusCode != http.StatusOK {
-			body, _ := io.ReadAll(resp.Body)
-			return fmt.Errorf("embed request failed with status %d: %s", resp.StatusCode, string(body))
+			errBody, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+			return fmt.Errorf("embed request failed with status %d: %s", resp.StatusCode, string(errBody))
 		}
 
-		body, err := io.ReadAll(resp.Body)
+		body, err := io.ReadAll(io.LimitReader(resp.Body, maxOllamaEmbeddingResponse))
 		if err != nil {
 			return fmt.Errorf("failed to read embed response body: %w", err)
 		}

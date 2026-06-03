@@ -29,6 +29,7 @@ const (
 	mcpLoopMaxDuration          = 5 * time.Minute
 	mcpMaxIterations            = 10
 	mcpMaxIterationsHardCeiling = 50
+	maxEmbeddingsResponseBytes  = 10 << 20
 )
 
 // chatRequest holds the validated request data extracted from an incoming
@@ -730,7 +731,7 @@ func (p *Proxy) forwardEmbeddingsRequest(gw *gateway.NenyaGateway, w http.Respon
 
 	// Use context-aware logger for response logging
 	ctxLogger := gw.Logger.With("operation", "forward", "api_key", keyRef, "provider", providerName)
-	respBody, err := io.ReadAll(resp.Body)
+	respBody, err := io.ReadAll(io.LimitReader(resp.Body, maxEmbeddingsResponseBytes))
 	if err != nil {
 		ctxLogger.Error("failed to read embeddings response body", "err", err)
 		writeStructuredError(w, http.StatusBadGateway, infra.ErrorKindNetworkError, "Failed to read upstream response")
