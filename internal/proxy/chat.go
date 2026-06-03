@@ -120,7 +120,7 @@ func (p *Proxy) validateChatRequest(w http.ResponseWriter, r *http.Request, gw *
 		Payload:      payload,
 		ModelName:    modelName,
 		TokenCount:   gw.CountRequestTokens(payload),
-		Stream:       true,
+		Stream:       false,
 		KeyRef:       keyRef,
 		SourceFormat: sourceFormat,
 	}
@@ -320,8 +320,8 @@ func (p *Proxy) resolveCache(w http.ResponseWriter, r *http.Request, gw *gateway
 		embedFunc := p.buildEmbedFunc(gw, r, req.Payload)
 		model := req.ModelName
 		if data, ok, cacheType := gw.ResponseCache.Lookup(cacheKey, model, embedFunc); ok {
-			p.replayCachedSSE(gw, w, r, data, cacheType)
-			return "", &httpError{http.StatusOK, "cache hit"}
+			p.replayCachedResponse(gw, w, r, data, cacheType, req.Stream)
+			return "", &httpError{http.StatusNoContent, "cache hit"}
 		}
 	}
 	return cacheKey, nil
@@ -468,7 +468,7 @@ func (p *Proxy) handleChatCompletions(gw *gateway.NenyaGateway, w http.ResponseW
 		p.forwardToUpstreamWithMCP(gw, w, r, forwardOptions{
 			Targets:      req.Targets,
 			Payload:      req.Payload,
-			Stream:       true,
+			Stream:       req.Stream,
 			Cooldown:     req.Cooldown,
 			TokenCount:   req.TokenCount,
 			AgentName:    req.AgentName,
@@ -494,8 +494,9 @@ func (p *Proxy) handleChatCompletions(gw *gateway.NenyaGateway, w http.ResponseW
 	})
 }
 
-// replayCachedSSE serves a previously cached response using Server-Sent Events.
-func (p *Proxy) replayCachedSSE(gw *gateway.NenyaGateway, w http.ResponseWriter, r *http.Request, data []byte, cacheType string) {
+// replayCachedResponse serves a previously cached response, setting Content-Type
+// based on whether the original request was streaming (SSE) or non-streaming (JSON).
+func (p *Proxy) replayCachedResponse(gw *gateway.NenyaGateway, w http.ResponseWriter, r *http.Request, data []byte, cacheType string, stream bool) {
 	var cacheStatus string
 	switch cacheType {
 	case "exact":
@@ -507,7 +508,11 @@ func (p *Proxy) replayCachedSSE(gw *gateway.NenyaGateway, w http.ResponseWriter,
 	}
 
 	gw.Logger.Info("response cache hit", "type", cacheType)
-	w.Header().Set("Content-Type", "text/event-stream")
+	if stream {
+		w.Header().Set("Content-Type", "text/event-stream")
+	} else {
+		w.Header().Set("Content-Type", "application/json")
+	}
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("X-Nenya-Cache-Status", cacheStatus)
 	w.WriteHeader(http.StatusOK)
@@ -1572,7 +1577,7 @@ func (p *Proxy) forwardBuffered(gw *gateway.NenyaGateway,
 			continue
 		}
 
-		action := p.prepareAndSend(gw, r, i, targets, target, workingPayload, cooldownDuration, tokenCount, agentName, true)
+		action := p.prepareAndSend(gw, r, i, targets, target, workingPayload, cooldownDuration, tokenCount, agentName)
 		result, shouldContinue := p.handleBufferedAction(ctx, gw, i, targets, target, cooldownDuration, agentName, action, attempt, maxRetries)
 		if result != nil {
 			return result, nil
@@ -1828,7 +1833,7 @@ func (p *Proxy) handleNonStreamingResponse(gw *gateway.NenyaGateway, w http.Resp
 		responseMap = a.ConvertOpenAIResponseToAnthropicBody(responseMap)
 	} else if target.Format == "anthropic" {
 		a := adapter.GetAnthropicAdapter()
-		responseMap = a.ConvertAnthropicToOpenAIBody(responseMap)
+		responseMap = a.ConvertAnthropicToOpenAIBody(responseMap, false)
 	}
 
 	if usage, ok := responseMap["usage"].(map[string]interface{}); ok {

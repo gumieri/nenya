@@ -383,7 +383,7 @@ retryLoop:
 
 // prepareAndSend wraps the proxy's prepareAndSend method.
 func (rl *retryLoop) prepareAndSend(idx int, target routing.UpstreamTarget, payload map[string]interface{}) upstreamAction {
-	return rl.p.prepareAndSend(rl.gw, rl.r, idx, rl.opts.Targets, target, payload, rl.opts.Cooldown, rl.opts.TokenCount, rl.opts.AgentName, rl.stream)
+	return rl.p.prepareAndSend(rl.gw, rl.r, idx, rl.opts.Targets, target, payload, rl.opts.Cooldown, rl.opts.TokenCount, rl.opts.AgentName)
 }
 
 // handleUpstreamError wraps the proxy's handleUpstreamError method.
@@ -439,7 +439,7 @@ func logRequestIfDebug(ctx context.Context, logger *slog.Logger, req *http.Reque
 	}
 }
 
-func handleUpstreamResponse(ctxLogger *slog.Logger, resp *http.Response, cancel context.CancelFunc, stream bool) upstreamAction {
+func handleUpstreamResponse(ctxLogger *slog.Logger, resp *http.Response, cancel context.CancelFunc) upstreamAction {
 	ct := resp.Header.Get("Content-Type")
 	if strings.Contains(strings.ToLower(ct), "text/html") {
 		ctxLogger.Warn("upstream returned HTML instead of API response, skipping target",
@@ -449,7 +449,8 @@ func handleUpstreamResponse(ctxLogger *slog.Logger, resp *http.Response, cancel 
 		cancel()
 		return upstreamAction{kind: actionContinue}
 	}
-	if stream {
+	isSSE := strings.Contains(strings.ToLower(ct), "text/event-stream")
+	if isSSE {
 		return upstreamAction{kind: actionStream, resp: resp, cancel: cancel}
 	}
 	return upstreamAction{kind: actionResponse, resp: resp, cancel: cancel}
@@ -464,7 +465,6 @@ func (p *Proxy) prepareAndSend(gw *gateway.NenyaGateway,
 	cooldownDuration time.Duration,
 	tokenCount int,
 	agentName string,
-	stream bool,
 ) upstreamAction {
 	ctxLogger := gw.Logger.With(
 		"operation", "upstream",
@@ -540,7 +540,7 @@ func (p *Proxy) prepareAndSend(gw *gateway.NenyaGateway,
 		return upstreamAction{kind: actionError, resp: resp, cancel: upstreamCancel}
 	}
 
-	return handleUpstreamResponse(ctxLogger, resp, upstreamCancel, stream)
+	return handleUpstreamResponse(ctxLogger, resp, upstreamCancel)
 }
 
 func (p *Proxy) checkPreDispatchGuards(gw *gateway.NenyaGateway, ctxLogger *slog.Logger, target routing.UpstreamTarget, tokenCount int, agentName string) *upstreamAction {
