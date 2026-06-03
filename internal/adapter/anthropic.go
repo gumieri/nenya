@@ -41,8 +41,8 @@ func (a *AnthropicAdapter) ConvertOpenAIToAnthropicBody(openai map[string]interf
 
 // ConvertAnthropicToOpenAIBody converts an Anthropic-format response
 // (as a parsed map) to the OpenAI chat completions format.
-func (a *AnthropicAdapter) ConvertAnthropicToOpenAIBody(anthropic map[string]interface{}) map[string]interface{} {
-	return a.convertAnthropicToOpenAI(anthropic)
+func (a *AnthropicAdapter) ConvertAnthropicToOpenAIBody(anthropic map[string]interface{}, stream bool) map[string]interface{} {
+	return a.convertAnthropicToOpenAI(anthropic, stream)
 }
 
 // ConvertAnthropicRequestToOpenAIBody converts an Anthropic-format request body
@@ -115,7 +115,7 @@ func (a *AnthropicAdapter) MutateResponse(body []byte) ([]byte, error) {
 		return body, nil
 	}
 
-	openai := a.convertAnthropicToOpenAI(anthropic)
+	openai := a.convertAnthropicToOpenAI(anthropic, true)
 
 	out, err := json.Marshal(openai)
 	if err != nil {
@@ -709,7 +709,7 @@ func (a *AnthropicAdapter) convertTools(tools []interface{}) []interface{} {
 	return result
 }
 
-func (a *AnthropicAdapter) convertAnthropicToOpenAI(anthropic map[string]interface{}) map[string]interface{} {
+func (a *AnthropicAdapter) convertAnthropicToOpenAI(anthropic map[string]interface{}, stream bool) map[string]interface{} {
 	openai := map[string]interface{}{
 		"id":      "anthropic-" + util.GenerateID(),
 		"object":  "chat.completion",
@@ -720,15 +720,23 @@ func (a *AnthropicAdapter) convertAnthropicToOpenAI(anthropic map[string]interfa
 	choice := map[string]interface{}{
 		"index": 0,
 	}
-	delta := map[string]interface{}{}
 
-	a.processAnthropicContent(anthropic, delta, choice)
+	if stream {
+		delta := map[string]interface{}{}
+		a.processAnthropicContent(anthropic, delta, choice)
+		a.processStopReason(anthropic, choice)
+		choice["delta"] = delta
+		openai["object"] = "chat.completion.chunk"
+	} else {
+		message := map[string]interface{}{
+			"role": "assistant",
+		}
+		a.processAnthropicContent(anthropic, message, choice)
+		a.processStopReason(anthropic, choice)
+		choice["message"] = message
+	}
 
-	a.processStopReason(anthropic, choice)
-
-	choice["delta"] = delta
 	openai["choices"] = []interface{}{choice}
-
 	a.processUsage(anthropic, openai)
 
 	return openai

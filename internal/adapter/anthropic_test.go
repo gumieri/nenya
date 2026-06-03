@@ -396,8 +396,8 @@ func TestAnthropicAdapter_MutateResponse_NonEmpty(t *testing.T) {
 		t.Fatalf("failed to parse output: %v", err)
 	}
 
-	if m["object"] != "chat.completion" {
-		t.Errorf("expected object 'chat.completion', got %v", m["object"])
+	if m["object"] != "chat.completion.chunk" {
+		t.Errorf("expected object 'chat.completion.chunk', got %v", m["object"])
 	}
 	choices := m["choices"].([]interface{})
 	choice := choices[0].(map[string]interface{})
@@ -586,9 +586,40 @@ func TestAnthropicAdapter_ConvertAnthropicToOpenAIBody(t *testing.T) {
 		"content": []interface{}{map[string]interface{}{"type": "text", "text": "hi"}},
 		"model":   "claude-3",
 	}
-	result := a.ConvertAnthropicToOpenAIBody(anthropic)
+	result := a.ConvertAnthropicToOpenAIBody(anthropic, true)
+	if result["object"] != "chat.completion.chunk" {
+		t.Errorf("expected object 'chat.completion.chunk', got %v", result["object"])
+	}
+}
+
+func TestAnthropicAdapter_ConvertAnthropicToOpenAIBody_NonStreaming(t *testing.T) {
+	a := NewAnthropicAdapter()
+	anthropic := map[string]interface{}{
+		"id":      "msg_456",
+		"type":    "message",
+		"role":    "assistant",
+		"content": []interface{}{map[string]interface{}{"type": "text", "text": "hello"}},
+		"model":   "claude-3",
+	}
+	result := a.ConvertAnthropicToOpenAIBody(anthropic, false)
 	if result["object"] != "chat.completion" {
 		t.Errorf("expected object 'chat.completion', got %v", result["object"])
+	}
+	choices := result["choices"].([]interface{})
+	choice := choices[0].(map[string]interface{})
+	message, ok := choice["message"].(map[string]interface{})
+	if !ok {
+		t.Fatal("expected choices[0].message to be a map")
+	}
+	if message["role"] != "assistant" {
+		t.Errorf("expected role 'assistant', got %v", message["role"])
+	}
+	if message["content"] != "hello" {
+		t.Errorf("expected content 'hello', got %v", message["content"])
+	}
+	_, hasDelta := choice["delta"]
+	if hasDelta {
+		t.Error("non-streaming response should not have 'delta' key")
 	}
 }
 
