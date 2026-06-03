@@ -386,13 +386,6 @@ func (p *Proxy) extractUserMessagesForEmbedding(gw *gateway.NenyaGateway, messag
 	return userMsgs.String()
 }
 
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
-}
-
 // resolvePipelineContext extracts messages, MCP tool state, limits, and client
 // profile from the validated request, preparing the payload for the content
 // filtering pipeline.
