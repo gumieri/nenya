@@ -62,6 +62,9 @@ type ResponseCache struct {
 	similarityThreshold float64
 	embedder            EmbeddingProvider
 	idx                 *EmbedIndex
+	evictionWg          sync.WaitGroup
+	evictionMu          sync.Mutex
+	evictionStarted     bool
 }
 
 func NewResponseCache(maxSize int, maxBytes int64, ttl, evictInterval time.Duration, metrics *Metrics, logger *slog.Logger, semanticEnabled bool, similarityThreshold float64, embedder EmbeddingProvider) *ResponseCache {
@@ -296,7 +299,16 @@ func (c *ResponseCache) evictLocked() {
 }
 
 func (c *ResponseCache) startEvicter(interval time.Duration) {
+	c.evictionMu.Lock()
+	defer c.evictionMu.Unlock()
+	if c.evictionStarted {
+		return
+	}
+	c.evictionStarted = true
+
+	c.evictionWg.Add(1)
 	go func() {
+		defer c.evictionWg.Done()
 		ticker := time.NewTicker(interval)
 		defer ticker.Stop()
 		for {
@@ -314,6 +326,18 @@ func (c *ResponseCache) startEvicter(interval time.Duration) {
 
 func (c *ResponseCache) Stop() {
 	close(c.stopCh)
+	done := make(chan struct{})
+	go func() {
+		c.evictionWg.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		if c.logger != nil {
+			c.logger.Warn("response cache eviction goroutine did not stop in time")
+		}
+	}
 }
 
 func (c *ResponseCache) Len() int {

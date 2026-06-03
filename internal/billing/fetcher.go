@@ -334,7 +334,10 @@ func (qf *QuotaFetcher) nextPollDelay(cfg *quotaProviderConfig, result QuotaFetc
 		if result.StatusCode == http.StatusTooManyRequests && result.RetryAfter > 0 {
 			return clampDuration(result.RetryAfter, 0, cfg.maxBackoff)
 		}
-		level := cfg.backoff.Increment(cfg.name)
+		level, cb := cfg.backoff.Increment(cfg.name)
+		if cb != nil {
+			cb()
+		}
 		delay := resilience.ComputeExponentialBackoffWithJitter(level, cfg.pollInterval.Milliseconds())
 		return clampDuration(delay, 0, cfg.maxBackoff)
 	}

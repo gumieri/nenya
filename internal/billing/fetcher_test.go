@@ -415,7 +415,7 @@ func TestQuotaFetcher_NextPollDelay_SuccessResetsBackoff(t *testing.T) {
 		maxBackoff:   5 * time.Minute,
 	}
 
-	cfg.backoff.Increment("test-provider")
+	_, _ = cfg.backoff.Increment("test-provider")
 	if cfg.backoff.GetLevel("test-provider") != 1 {
 		t.Fatalf("backoff level should be 1 before success, got %d", cfg.backoff.GetLevel("test-provider"))
 	}

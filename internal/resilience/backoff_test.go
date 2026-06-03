@@ -22,7 +22,7 @@ func TestBackoffTracker_GetLevel(t *testing.T) {
 func TestBackoffTracker_Increment(t *testing.T) {
 	bt := NewBackoffTracker()
 
-	level := bt.Increment("model1")
+	level, _ := bt.Increment("model1")
 	if level != 1 {
 		t.Errorf("expected first increment to return 1, got %d", level)
 	}
@@ -33,7 +33,7 @@ func TestBackoffTracker_Increment(t *testing.T) {
 
 	bt.Increment("model1")
 	bt.Increment("model1")
-	level = bt.Increment("model1")
+	level, _ = bt.Increment("model1")
 	if level != 4 {
 		t.Errorf("expected fourth increment to return 4, got %d", level)
 	}
@@ -47,7 +47,7 @@ func TestBackoffTracker_Increment_Cap(t *testing.T) {
 	bt := NewBackoffTracker()
 
 	bt.levels["model1"] = maxBackoffLevel
-	level := bt.Increment("model1")
+	level, _ := bt.Increment("model1")
 	if level != maxBackoffLevel {
 		t.Errorf("expected increment to cap at %d, got %d", maxBackoffLevel, level)
 	}
@@ -77,7 +77,8 @@ func TestBackoffTracker_NilSafe(t *testing.T) {
 		t.Error("nil tracker should return 0")
 	}
 
-	if bt.Increment("model") != 0 {
+	level, _ := bt.Increment("model")
+	if level != 0 {
 		t.Error("nil tracker should return 0 on increment")
 	}
 
@@ -90,7 +91,7 @@ func TestBackoffTracker_ConcurrentSafety(t *testing.T) {
 	done := make(chan bool)
 	for i := 0; i < 100; i++ {
 		go func() {
-			bt.Increment("concurrent")
+			_, _ = bt.Increment("concurrent")
 			done <- true
 		}()
 	}

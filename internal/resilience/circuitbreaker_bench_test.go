@@ -69,7 +69,7 @@ func BenchmarkBackoffTracker_Increment_Parallel(b *testing.B) {
 
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {
-			bt.Increment("model1")
+			_, _ = bt.Increment("model1")
 		}
 	})
 }
