@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
+	"path"
 	"strings"
 	"time"
 
@@ -72,10 +74,18 @@ func (p *Proxy) handleResponses(gw *gateway.NenyaGateway, w http.ResponseWriter,
 	ctx, cancel := p.buildResponsesContext(r, provider)
 	defer cancel()
 
+	if !gw.RateLimiter.Check(provider.BaseURL, 0) {
+		writeStructuredError(w, http.StatusTooManyRequests, infra.ErrorKindRateLimited, "Rate limit exceeded")
+		return
+	}
+
 	maxAttempts := provider.MaxRetryAttempts
 	if maxAttempts <= 0 {
 		maxAttempts = gw.Config.Governance.EffectiveMaxRetryAttempts()
 	}
+
+	gw.Stats.RecordRequest(responsesModel, 0)
+	gw.Metrics.RecordUpstreamRequest(responsesModel, "", provider.Name)
 
 	ctxLogger := gw.Logger.With("operation", "responses", "provider", provider.Name, "api_key", keyRef)
 
@@ -108,19 +118,23 @@ func (p *Proxy) handleResponses(gw *gateway.NenyaGateway, w http.ResponseWriter,
 	}
 	defer func() { _ = resp.Body.Close() }()
 
-	routing.CopyHeaders(resp.Header, w.Header())
-	w.WriteHeader(resp.StatusCode)
-
-	if _, err := copyStream(ctx, w, resp.Body, nil); err != nil {
-		ctxLogger.Debug("responses response copy ended", "err", err)
-	}
+	writeUpstreamResponse(ctx, w, resp, ctxLogger)
 }
 
+// isPathSafeResponses checks if the decoded and cleaned path is safe (no path
+// traversal) and has the expected /v1/responses prefix.
 func (p *Proxy) isPathSafeResponses(pathStr string) bool {
-	if strings.Contains(pathStr, "..") {
+	decodedPath, err := url.PathUnescape(pathStr)
+	if err != nil {
 		return false
 	}
-	if !strings.HasPrefix(pathStr, "/v1/responses") {
+
+	cleanPath := path.Clean(decodedPath)
+	if strings.Contains(cleanPath, "..") || strings.Contains(decodedPath, "..") {
+		return false
+	}
+
+	if !strings.HasPrefix(cleanPath, "/v1/responses") {
 		return false
 	}
 	return true
@@ -158,14 +172,11 @@ func (p *Proxy) readResponsesBody(gw *gateway.NenyaGateway, w http.ResponseWrite
 }
 
 func (p *Proxy) resolveResponsesURL(provider *config.Provider, pathStr, query string) string {
-	// Fallback chain: BaseURL → trimmed URL → empty (Provider uses BaseURL if set,
+	// Fallback: BaseURL → trimmed URL → empty (provider must have BaseURL or URL ending with /v1)
 	baseURL := strings.TrimSuffix(provider.BaseURL, "/")
 	if baseURL == "" {
 		baseURL = strings.TrimSuffix(provider.URL, "/chat/completions")
 	}
-	// If BaseURL was empty and URL doesn't end with /chat/completions, the
-	// TrimSuffix is a no-op and baseURL == provider.URL — the provider likely
-	// only supports chat completions, not responses.
 	if baseURL == provider.URL || baseURL == "" {
 		return ""
 	}

@@ -5,6 +5,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"path"
 	"strings"
 	"time"
@@ -51,11 +52,19 @@ func (p *Proxy) handlePassthrough(gw *gateway.NenyaGateway, w http.ResponseWrite
 	}
 
 	subPath := path.Join(segments[2:]...)
-	if strings.Contains(subPath, "..") {
+	decodedPath, err := url.PathUnescape(subPath)
+	if err != nil {
+		ctxLogger.Warn("path decode failed", "provider", providerName, "path", subPath)
+		writeStructuredError(w, http.StatusBadRequest, infra.ErrorKindInvalidRequest, "Invalid path")
+		return
+	}
+	cleanPath := path.Clean(decodedPath)
+	if strings.Contains(cleanPath, "..") || strings.Contains(decodedPath, "..") {
 		ctxLogger.Warn("path traversal attempt", "provider", providerName, "path", subPath)
 		writeStructuredError(w, http.StatusBadRequest, infra.ErrorKindInvalidRequest, "Invalid path")
 		return
 	}
+	subPath = cleanPath
 
 	if !gw.RateLimiter.Check(provider.BaseURL, 0) {
 		gw.Metrics.RecordRateLimitRejected(infra.ExtractHost(provider.BaseURL))
@@ -87,7 +96,11 @@ func (p *Proxy) handlePassthrough(gw *gateway.NenyaGateway, w http.ResponseWrite
 		writeStructuredError(w, http.StatusBadGateway, infra.ErrorKindNetworkError, "Upstream provider error")
 		return
 	}
-	defer func() { _ = resp.Body.Close() }()
+	defer func() {
+		if resp != nil {
+			_ = resp.Body.Close()
+		}
+	}()
 
 	ctxLogger.Info("upstream response", "status", resp.StatusCode)
 
@@ -101,9 +114,7 @@ func (p *Proxy) handlePassthrough(gw *gateway.NenyaGateway, w http.ResponseWrite
 	if strings.Contains(contentType, "text/event-stream") {
 		p.pipeSSE(ctx, ctxLogger, resp.Body, w)
 	} else {
-		if _, err := copyStream(ctx, w, resp.Body, nil); err != nil {
-			ctxLogger.Debug("response copy ended", "err", err)
-		}
+		writeUpstreamResponse(ctx, w, resp, ctxLogger)
 	}
 }
 
@@ -145,9 +156,7 @@ func (p *Proxy) pipeSSE(ctx context.Context, ctxLogger *slog.Logger, src io.Read
 	buf := make([]byte, 4096)
 	defer func() {
 		stallR.Stop()
-		if stallR != nil {
-			_, _ = stallR.DrainPending(3 * time.Second)
-		}
+		_, _ = stallR.DrainPending(3 * time.Second)
 	}()
 
 	for {

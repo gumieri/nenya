@@ -142,7 +142,7 @@ func (p *Proxy) forwardEmbeddingsRequest(gw *gateway.NenyaGateway, w http.Respon
 	if err != nil {
 		ctxLogger := gw.Logger.With("operation", "forward", "api_key", keyRef, "provider", providerName)
 		ctxLogger.Error("embeddings upstream request failed", "err", err)
-		http.Error(w, "Upstream provider error", http.StatusBadGateway)
+		writeStructuredError(w, http.StatusBadGateway, infra.ErrorKindNetworkError, "Upstream provider error")
 		return
 	}
 	defer func() { _ = resp.Body.Close() }()
@@ -157,12 +157,7 @@ func (p *Proxy) forwardEmbeddingsRequest(gw *gateway.NenyaGateway, w http.Respon
 
 	recordEmbeddingUsage(gw, respBody, providerName)
 
-	routing.CopyHeaders(resp.Header, w.Header())
-	w.WriteHeader(resp.StatusCode)
-
-	if _, err := w.Write(respBody); err != nil {
-		ctxLogger.Debug("embeddings response write ended", "err", err)
-	}
+	writeUpstreamBytesResponse(ctx, w, resp, respBody, ctxLogger)
 }
 
 func recordEmbeddingUsage(gw *gateway.NenyaGateway, respBody []byte, providerName string) {
