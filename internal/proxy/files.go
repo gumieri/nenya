@@ -13,7 +13,6 @@ import (
 	"git.0ur.uk/nenya/config"
 	"git.0ur.uk/nenya/internal/gateway"
 	"git.0ur.uk/nenya/internal/infra"
-	"git.0ur.uk/nenya/internal/routing"
 )
 
 func (p *Proxy) handleFiles(gw *gateway.NenyaGateway, w http.ResponseWriter, r *http.Request, keyRef string) {
@@ -77,12 +76,7 @@ func (p *Proxy) handleFilesOrBatches(gw *gateway.NenyaGateway, w http.ResponseWr
 	gw.Stats.RecordRequest("proxy:"+provider.Name, 0)
 	gw.Metrics.RecordUpstreamRequest("proxy:"+provider.Name, "", provider.Name)
 
-	routing.CopyHeaders(resp.Header, w.Header())
-	w.WriteHeader(resp.StatusCode)
-
-	if _, err := copyStream(ctx, w, resp.Body, nil); err != nil {
-		ctxLogger.Debug("response copy ended", "err", err)
-	}
+	writeUpstreamResponse(ctx, w, resp, ctxLogger)
 }
 
 // isPathSafe checks if the decoded and cleaned path is safe (no path traversal)

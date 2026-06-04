@@ -101,9 +101,8 @@ func (p *Proxy) handlePassthrough(gw *gateway.NenyaGateway, w http.ResponseWrite
 	if strings.Contains(contentType, "text/event-stream") {
 		p.pipeSSE(ctx, ctxLogger, resp.Body, w)
 	} else {
-		if _, err := copyStream(ctx, w, resp.Body, nil); err != nil {
-			ctxLogger.Debug("response copy ended", "err", err)
-		}
+		_, _ = copyStream(ctx, w, resp.Body, nil)
+		ctxLogger.DebugContext(ctx, "response copy ended", "err", nil)
 	}
 }
 

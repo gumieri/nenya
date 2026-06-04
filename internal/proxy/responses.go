@@ -108,12 +108,7 @@ func (p *Proxy) handleResponses(gw *gateway.NenyaGateway, w http.ResponseWriter,
 	}
 	defer func() { _ = resp.Body.Close() }()
 
-	routing.CopyHeaders(resp.Header, w.Header())
-	w.WriteHeader(resp.StatusCode)
-
-	if _, err := copyStream(ctx, w, resp.Body, nil); err != nil {
-		ctxLogger.Debug("responses response copy ended", "err", err)
-	}
+	writeUpstreamResponse(ctx, w, resp, ctxLogger)
 }
 
 func (p *Proxy) isPathSafeResponses(pathStr string) bool {
