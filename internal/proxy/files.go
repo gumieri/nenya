@@ -88,7 +88,7 @@ func (p *Proxy) isPathSafe(pathStr, prefix string) bool {
 	}
 
 	cleanPath := path.Clean(decodedPath)
-	if strings.Contains(cleanPath, "..") {
+	if strings.Contains(cleanPath, "..") || strings.Contains(decodedPath, "..") {
 		return false
 	}
 

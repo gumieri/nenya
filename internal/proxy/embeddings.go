@@ -142,7 +142,7 @@ func (p *Proxy) forwardEmbeddingsRequest(gw *gateway.NenyaGateway, w http.Respon
 	if err != nil {
 		ctxLogger := gw.Logger.With("operation", "forward", "api_key", keyRef, "provider", providerName)
 		ctxLogger.Error("embeddings upstream request failed", "err", err)
-		http.Error(w, "Upstream provider error", http.StatusBadGateway)
+		writeStructuredError(w, http.StatusBadGateway, infra.ErrorKindNetworkError, "Upstream provider error")
 		return
 	}
 	defer func() { _ = resp.Body.Close() }()
