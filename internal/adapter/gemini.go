@@ -27,6 +27,14 @@ var geminiRetryablePatterns = []string{
 	"quota exceeded",
 }
 
+// isGemini35OrNewer checks if the model ID indicates a Gemini 3.5 or 4 model.
+// These models require forwarding function call IDs from tool calls to tool responses.
+// Note: This is duplicated from internal/providers/gemini.go to avoid circular dependencies.
+func isGemini35OrNewer(model string) bool {
+	modelLower := strings.ToLower(model)
+	return strings.Contains(modelLower, "gemini-3.5") || strings.Contains(modelLower, "gemini-4")
+}
+
 // GeminiAdapter handles request/response mutation for Google Gemini API.
 type GeminiAdapter struct {
 	thoughtSigCache ThoughtSigCache
@@ -254,7 +262,68 @@ func (a *GeminiAdapter) geminiSanitize(payload map[string]interface{}) bool {
 	}
 
 	payload["messages"] = filtered
+	model, _ := payload["model"].(string)
+	if model != "" && isGemini35OrNewer(model) {
+		a.forwardFunctionCallIDs(filtered)
+	}
 	return true
+}
+
+// forwardFunctionCallIDs forwards tool call IDs from assistant messages to tool messages.
+// Gemini 3.5+ returns unique id fields with every functionCall and requires echoing them in functionResponse.
+// This function builds a map of tool_call_id → functionName from assistant messages, then injects the name field
+// into tool messages that reference those IDs.
+// Note: This is duplicated from internal/providers/gemini.go to avoid circular dependencies.
+func (a *GeminiAdapter) forwardFunctionCallIDs(messages []interface{}) {
+	toolCallIDToName := make(map[string]string)
+	for _, msgRaw := range messages {
+		msg, ok := msgRaw.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		role, _ := msg["role"].(string)
+		if role != "assistant" {
+			continue
+		}
+		toolCallsRaw, ok := msg["tool_calls"]
+		if !ok {
+			continue
+		}
+		toolCalls, ok := toolCallsRaw.([]interface{})
+		if !ok {
+			continue
+		}
+		for _, tcRaw := range toolCalls {
+			tc, ok := tcRaw.(map[string]interface{})
+			if !ok {
+				continue
+			}
+			tcID, _ := tc["id"].(string)
+			if tcID != "" {
+				fn, ok := tc["function"].(map[string]interface{})
+				if ok {
+					fnName, _ := fn["name"].(string)
+					toolCallIDToName[tcID] = fnName
+				}
+			}
+		}
+	}
+	for _, msgRaw := range messages {
+		msg, ok := msgRaw.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		role, _ := msg["role"].(string)
+		if role != "tool" {
+			continue
+		}
+		tcID, _ := msg["tool_call_id"].(string)
+		if tcID != "" {
+			if fnName, ok := toolCallIDToName[tcID]; ok {
+				msg["name"] = fnName
+			}
+		}
+	}
 }
 
 func (a *GeminiAdapter) buildToolCallMap(messages []interface{}) map[string]*toolCallInfo {

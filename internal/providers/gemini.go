@@ -138,6 +138,13 @@ func isGemini3OrNewer(model string) bool {
 	return strings.HasPrefix(strings.ToLower(model), "gemini-3")
 }
 
+// isGemini35OrNewer checks if the model ID indicates a Gemini 3.5 or 4 model.
+// These models require forwarding function call IDs from tool calls to tool responses.
+func isGemini35OrNewer(model string) bool {
+	modelLower := strings.ToLower(model)
+	return strings.Contains(modelLower, "gemini-3.5") || strings.Contains(modelLower, "gemini-4")
+}
+
 // mapReasoningEffortToLevel converts a reasoning_effort value to a Gemini
 // thinkingLevel string for Gemini 3+ models. Unknown values default to "medium".
 func mapReasoningEffortToLevel(reasoningEffort string, logger geminiLogger) string {
@@ -244,6 +251,59 @@ func injectTemperatureDefaultsForGemini(payload map[string]interface{}) {
 	payload["temperature"] = 1.0
 }
 
+// forwardFunctionCallIDs forwards tool call IDs from assistant messages to tool messages.
+// Gemini 3.5+ returns unique id fields with every functionCall and requires echoing them in functionResponse.
+// This function builds a map of tool_call_id → functionName from assistant messages, then injects the name field
+// into tool messages that reference those IDs.
+func forwardFunctionCallIDs(deps *SanitizeDeps, messages []interface{}) {
+	toolCallIDToName := make(map[string]string)
+	for _, msgRaw := range messages {
+		msg, ok := msgRaw.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		role, _ := msg["role"].(string)
+		if role != "assistant" {
+			continue
+		}
+		toolCallsRaw, ok := msg["tool_calls"]
+		if !ok {
+			continue
+		}
+		toolCalls, ok := toolCallsRaw.([]interface{})
+		if !ok {
+			continue
+		}
+		for _, tcRaw := range toolCalls {
+			tc, ok := tcRaw.(map[string]interface{})
+			if !ok {
+				continue
+			}
+			tcID, _ := tc["id"].(string)
+			if tcID != "" {
+				fnName := geminiExtractFunctionName(tc)
+				toolCallIDToName[tcID] = fnName
+			}
+		}
+	}
+	for _, msgRaw := range messages {
+		msg, ok := msgRaw.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		role, _ := msg["role"].(string)
+		if role != "tool" {
+			continue
+		}
+		tcID, _ := msg["tool_call_id"].(string)
+		if tcID != "" {
+			if fnName, ok := toolCallIDToName[tcID]; ok {
+				msg["name"] = fnName
+			}
+		}
+	}
+}
+
 func geminiSanitize(deps *SanitizeDeps, payload map[string]interface{}) {
 	injectThinkingForGemini(deps, payload)
 	injectTemperatureDefaultsForGemini(payload)
@@ -267,6 +327,11 @@ func geminiSanitize(deps *SanitizeDeps, payload map[string]interface{}) {
 	filtered := geminiFilterMessages(deps, messages, toolCallMap, orphanedIDs)
 	if len(filtered) != len(messages) {
 		payload["messages"] = filtered
+	}
+
+	model, _ := payload["model"].(string)
+	if model != "" && isGemini35OrNewer(model) {
+		forwardFunctionCallIDs(deps, filtered)
 	}
 }
 
@@ -342,6 +407,8 @@ func geminiEnsureExtraContent(deps *SanitizeDeps, tc map[string]interface{}, tcI
 	return true
 }
 
+// geminiExtractFunctionName extracts the function name from a tool call map safely.
+// Returns empty string if the function field is missing or not a map.
 func geminiExtractFunctionName(tc map[string]interface{}) string {
 	fn, ok := tc["function"].(map[string]interface{})
 	if !ok {
