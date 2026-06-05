@@ -114,7 +114,7 @@ func (c *ResponseCache) handleExactHit(entry *responseCacheEntry, model string) 
 		model = "unknown"
 	}
 	c.recordExactHit(model)
-	if c.logger != nil && c.logger.Enabled(context.TODO(), slog.LevelDebug) {
+	if c.logger != nil && c.logger.Enabled(context.Background(), slog.LevelDebug) {
 		c.logger.Debug("cache exact hit", "model", model)
 	}
 	return data, true, "exact"
@@ -142,7 +142,7 @@ func (c *ResponseCache) Lookup(key, model string, embed func() ([]float32, error
 		model = "unknown"
 	}
 	c.recordMiss("exact", model)
-	if c.logger != nil && c.logger.Enabled(context.TODO(), slog.LevelDebug) {
+	if c.logger != nil && c.logger.Enabled(context.Background(), slog.LevelDebug) {
 		c.logger.Debug("cache miss", "model", model, "type", "exact")
 	}
 	return nil, false, ""
@@ -152,7 +152,7 @@ func (c *ResponseCache) lookupSemantic(key string, embed func() ([]float32, erro
 	vec, err := embed()
 	if err != nil {
 		c.recordMiss("semantic", model)
-		if c.logger != nil && c.logger.Enabled(context.TODO(), slog.LevelDebug) {
+		if c.logger != nil && c.logger.Enabled(context.Background(), slog.LevelDebug) {
 			c.logger.Debug("cache semantic embedding failed", "model", model, "err", err)
 		}
 		return nil, false
@@ -161,7 +161,7 @@ func (c *ResponseCache) lookupSemantic(key string, embed func() ([]float32, erro
 	cachedKeyBytes, similarity, ok := c.idx.Search(vec, c.similarityThreshold)
 	if !ok {
 		c.recordMiss("semantic", model)
-		if c.logger != nil && c.logger.Enabled(context.TODO(), slog.LevelDebug) {
+		if c.logger != nil && c.logger.Enabled(context.Background(), slog.LevelDebug) {
 			c.logger.Debug("cache semantic miss", "model", model)
 		}
 		return nil, false
@@ -173,7 +173,7 @@ func (c *ResponseCache) lookupSemantic(key string, embed func() ([]float32, erro
 		data := semEntry.data
 		c.mu.RUnlock()
 		c.recordSemanticHit(model, similarity)
-		if c.logger != nil && c.logger.Enabled(context.TODO(), slog.LevelDebug) {
+		if c.logger != nil && c.logger.Enabled(context.Background(), slog.LevelDebug) {
 			c.logger.Debug("cache semantic hit", "model", model, "similarity", similarity)
 		}
 		return data, true
@@ -293,7 +293,7 @@ func (c *ResponseCache) evictLocked() {
 	if c.semanticEnabled && c.idx != nil && c.metrics != nil {
 		c.metrics.SetSemanticCacheEntries(int64(c.idx.Len()))
 	}
-	if evictedCount > 0 && c.logger != nil && c.logger.Enabled(context.TODO(), slog.LevelDebug) {
+	if evictedCount > 0 && c.logger != nil && c.logger.Enabled(context.Background(), slog.LevelDebug) {
 		c.logger.Debug("cache eviction", "evicted", evictedCount)
 	}
 }
