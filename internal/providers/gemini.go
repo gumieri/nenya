@@ -126,7 +126,110 @@ func (t *GeminiTransformer) handleExtraContent(tcMap map[string]interface{}) {
 	t.OnExtraContent(tcID, extra)
 }
 
+// geminiLogger is a minimal logger interface used by Gemini provider helpers.
+// Defined here to avoid circular dependencies with internal/adapter.
+type geminiLogger interface {
+	Debug(msg string, args ...any)
+	Warn(msg string, args ...any)
+}
+
+// isGemini3OrNewer checks if the model ID indicates a Gemini 3.x or newer model.
+func isGemini3OrNewer(model string) bool {
+	return strings.HasPrefix(strings.ToLower(model), "gemini-3")
+}
+
+// mapReasoningEffortToLevel converts a reasoning_effort value to a Gemini
+// thinkingLevel string for Gemini 3+ models. Unknown values default to "medium".
+func mapReasoningEffortToLevel(reasoningEffort string, logger geminiLogger) string {
+	var level string
+	switch strings.ToLower(reasoningEffort) {
+	case "none", "disable":
+		level = "minimal"
+	case "low", "minimal":
+		level = "low"
+	case "medium":
+		level = "medium"
+	case "high":
+		level = "high"
+	default:
+		if logger != nil {
+			logger.Warn("gemini: unknown reasoning_effort value, using default", "value", reasoningEffort, "default", "medium")
+		}
+		level = "medium"
+	}
+	return level
+}
+
+// mapReasoningEffortToBudget converts a reasoning_effort value to a Gemini
+// thinkingBudget token count for Gemini 2.5 models. Unknown values default to 8192.
+func mapReasoningEffortToBudget(reasoningEffort string, logger geminiLogger) int {
+	var budget int
+	switch strings.ToLower(reasoningEffort) {
+	case "none", "disable":
+		budget = 0
+	case "low", "minimal":
+		budget = 1024
+	case "medium":
+		budget = 8192
+	case "high":
+		budget = 24576
+	default:
+		if logger != nil {
+			logger.Warn("gemini: unknown reasoning_effort value, using default", "value", reasoningEffort, "default", "medium")
+		}
+		budget = 8192
+	}
+	return budget
+}
+
+// injectThinkingForGemini maps reasoning_effort to Gemini's thinking config.
+// For Gemini 3+ models it uses thinkingLevel (enum); for older models (Gemini 2.5)
+// it uses thinkingBudget (token count). Removes reasoning_effort from the payload.
+func injectThinkingForGemini(deps *SanitizeDeps, payload map[string]interface{}) {
+	model, _ := payload["model"].(string)
+	if model == "" {
+		return
+	}
+	reasoningEffortRaw, hasReasoning := payload["reasoning_effort"]
+	if !hasReasoning {
+		return
+	}
+	reasoningEffort, ok := reasoningEffortRaw.(string)
+	if !ok {
+		if deps.Logger != nil {
+			deps.Logger.Warn("gemini: reasoning_effort must be a string", "type", fmt.Sprintf("%T", reasoningEffortRaw))
+		}
+		return
+	}
+
+	var thinkingConfig map[string]interface{}
+
+	if isGemini3OrNewer(model) {
+		level := mapReasoningEffortToLevel(reasoningEffort, deps.Logger)
+		thinkingConfig = map[string]interface{}{"thinkingLevel": level}
+	} else {
+		budget := mapReasoningEffortToBudget(reasoningEffort, deps.Logger)
+		thinkingConfig = map[string]interface{}{"thinkingBudget": budget}
+	}
+
+	google := map[string]interface{}{"thinking_config": thinkingConfig}
+	if extraBody, ok := payload["extra_body"].(map[string]interface{}); ok {
+		if existing, ok := extraBody["google"].(map[string]interface{}); ok {
+			existing["thinking_config"] = thinkingConfig
+		} else {
+			extraBody["google"] = google
+		}
+	} else {
+		payload["extra_body"] = map[string]interface{}{"google": google}
+	}
+	delete(payload, "reasoning_effort")
+	if deps.Logger != nil {
+		deps.Logger.Debug("gemini: mapped reasoning_effort to thinking config", "model", model, "reasoning_effort", reasoningEffort)
+	}
+}
+
 func geminiSanitize(deps *SanitizeDeps, payload map[string]interface{}) {
+	injectThinkingForGemini(deps, payload)
 	messagesRaw, ok := payload["messages"]
 	if !ok {
 		return
