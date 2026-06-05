@@ -25,6 +25,7 @@ type capabilityRule struct {
 var capabilityRules = []capabilityRule{
 	{prefix: "claude-3", caps: []Capability{CapVision, CapToolCalls, CapContentArrays, CapAutoToolChoice}},
 	{prefix: "claude-4", caps: []Capability{CapVision, CapToolCalls, CapReasoning, CapContentArrays, CapAutoToolChoice}},
+	{prefix: "gemini-3", caps: []Capability{CapVision, CapToolCalls, CapReasoning, CapContentArrays, CapAutoToolChoice}},
 	{prefix: "gemini-2", caps: []Capability{CapVision, CapToolCalls, CapReasoning, CapContentArrays, CapAutoToolChoice}},
 	{prefix: "gemini-1.5", caps: []Capability{CapVision, CapToolCalls, CapContentArrays, CapAutoToolChoice}},
 	{prefix: "gemini-1", caps: []Capability{CapVision}},
