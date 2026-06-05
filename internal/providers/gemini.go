@@ -228,8 +228,25 @@ func injectThinkingForGemini(deps *SanitizeDeps, payload map[string]interface{})
 	}
 }
 
+// injectTemperatureDefaultsForGemini sets model-specific temperature defaults.
+// Gemini 3+ models require temperature=1.0 to prevent looping behavior on reasoning tasks.
+func injectTemperatureDefaultsForGemini(payload map[string]interface{}) {
+	model, _ := payload["model"].(string)
+	if model == "" {
+		return
+	}
+	if !isGemini3OrNewer(model) {
+		return
+	}
+	if _, hasTemp := payload["temperature"]; hasTemp {
+		return
+	}
+	payload["temperature"] = 1.0
+}
+
 func geminiSanitize(deps *SanitizeDeps, payload map[string]interface{}) {
 	injectThinkingForGemini(deps, payload)
+	injectTemperatureDefaultsForGemini(payload)
 	messagesRaw, ok := payload["messages"]
 	if !ok {
 		return
