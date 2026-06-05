@@ -121,8 +121,8 @@ All outbound HTTP dispatch points vulnerable to transient network errors (TLS ha
 
 **Retry is required for these request types:**
 - Model discovery fetches (`internal/discovery/fetch.go:fetchProviderModels`)
-- Embeddings passthrough (`internal/proxy/chat.go:handleEmbeddings`)
-- Responses passthrough (`internal/proxy/chat.go:handleResponses`)
+- Embeddings passthrough (`internal/proxy/embeddings.go:handleEmbeddings`)
+- Responses passthrough (`internal/proxy/responses.go:handleResponses`)
 - Health-check probes (`internal/proxy/handler.go:checkOllamaProviderHealth`)
 - MCP transport SSE connections and POST requests (`internal/mcp/transport.go:Connect`, `SendRequest`)
 - Provider validation at startup (`internal/config/validate.go:validateWithMinimalRequest`)

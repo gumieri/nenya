@@ -5,6 +5,19 @@ All notable changes to this project will be documented in this file.
 ## [Unreleased]
 
 ### Added
+- Path traversal security tests in `config/loading_path_security_test.go` for config loading and prompt file resolution
+- Centralized secure memory zeroing primitive in `internal/util/zero.go`
+
+### Changed
+- **Phase 014**: Decomposed monolithic `chat.go` into focused modules: `constants.go`, `embeddings.go`, `usage.go`, `responses.go`, `mcp_loop.go`, `response_writer.go` for better maintainability
+- **Phase 015**: Unified 6x duplicated passthrough response-handler pattern into a single `response_writer.go` module with shared `writeUpstreamResponse()` and `writeUpstreamBytesResponse()` helpers
+- `interceptContent` now checks against configurable hard limit and applies trimming before Bouncer interception when payload exceeds the hard limit
+- Updated `TransformDeps` to include `CountTokens` for token-aware truncation during request transformation
+- Updated `prepareAndSend` to pass `CountTokens` to `TransformDeps`
+- Models without `max_context` configured no longer get incorrect truncation (disabled with warning)
+- Provider config merging now correctly merges user values over built-in defaults instead of overriding
+- All error responses now include structured `error_kind` field
+- Retry loop extracted into dedicated `retryLoop` struct for better readability
 - Bidirectional Anthropic Messages API support via `/v1/messages` endpoint with full format conversion
 - Pluggable interceptor chain for content preprocessing (redaction, entropy, TF-IDF, bouncer)
 - Token-budget trimming pipeline (`TrimPayload`) that drops oldest non-system messages and applies token-aware middle-out truncation when payload exceeds hard limit
@@ -18,16 +31,19 @@ All notable changes to this project will be documented in this file.
 - Response cache instrumentation with debug-level logging
 - Metrics for interceptors (duration, applied, errors), context-limit errors, summarization retries
 
-### Changed
-- `interceptContent` now checks against configurable hard limit and applies trimming before Bouncer interception when payload exceeds the hard limit
-- Updated `TransformDeps` to include `CountTokens` for token-aware truncation during request transformation
-- Updated `prepareAndSend` to pass `CountTokens` to `TransformDeps`
-- Models without `max_context` configured no longer get incorrect truncation (disabled with warning)
-- Provider config merging now correctly merges user values over built-in defaults instead of overriding
-- All error responses now include structured `error_kind` field
-- Retry loop extracted into dedicated `retryLoop` struct for better readability
-
 ### Fixed
+- **Phase 013**: Fixed data race in circuit breaker `SnapshotDetailed()` — now acquires `cb.backoff.mu` lock before accessing `backoff` map
+- **Phase 013**: Fixed potential goroutine leak in response cache evictor — now uses `sync.WaitGroup` for clean shutdown on gateway stop
+- **Phase 013**: Fixed goroutine leak in Ollama transport loops on context cancellation — added proper `select` on `closeCh` in all long-running loops
+- **Phase 013**: Fixed lock deadlock risk in `SessionManager` — enforced strict lock ordering (EngineManager.mu → SessionManager.mu) in all methods
+- **Phase 017**: Fixed metrics label sanitization — added package-level `labelEscaper` to sanitize Prometheus labels with double-quotes
+- **Phase 017**: Fixed integer overflow risk in `CountRequestTokens()` — added `math.MaxInt` guard before `sb.Grow(n*500)` capacity allocation
+- **Phase 017**: Fixed panic in `writeHistogramMap()` when labels contain empty strings — added explicit nil check before building label array
+- **Phase 018**: Replaced `context.TODO()` with `context.Background()` in 6 locations in `response_cache.go` (startup evictor goroutine and caching operations)
+- **Regression (HIGH)**: Fixed silent response dropping in `writeUpstreamResponse()` and `writeUpstreamBytesResponse()` — removed `ctx.Err() != nil` early return that was aborting entire HTTP responses when client disconnected before headers were sent
+- **Regression (MEDIUM)**: Fixed TOCTOU race in `SessionManager.UnloadModel()` — re-checks model existence after acquiring Lock to prevent deleting freshly-reloaded models
+- **Regression (MEDIUM)**: Responses passthrough now uses URL-decoded path for `isPathSafe()` checks (hardened against double-encoded traversal)
+- **Regression (MEDIUM)**: `LoadModel()` double-check pattern preserves data safety across concurrent loads (occasional duplicate HTTP fetches are acceptable)
 - Summarization retry loop now correctly passes agent/provider/model parameters instead of attempting to extract from payload
 - Main.go shutdown bug: fixed atomic.Bool usage (was calling as function instead of Store method)
 - Staticcheck SA1012 violations in response_cache.go (never pass nil Context)

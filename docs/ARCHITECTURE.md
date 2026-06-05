@@ -635,7 +635,7 @@ Each outbound call path applies appropriate timeouts:
 All goroutines respect context cancellation or use detached contexts:
 - **Stream copying goroutines**: Use request context via `copyStream(ctx, ...)`
 - **Discovery goroutines**: Use parent context with per-provider timeout via `context.WithTimeout`
-- **Scheids/response cache evictor**: Use dedicated shutdown channels
+- **Response cache evictor**: Uses `sync.WaitGroup` for clean shutdown on gateway stop
 - **MCP auto-save**: Uses `context.Background()` for fire-and-forget semantics (best-effort, outlives request)
 - **Background loops**: Use dedicated cancellation channels (`closeCh`, `stopCh`)
 

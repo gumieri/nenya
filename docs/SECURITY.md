@@ -41,7 +41,7 @@ Nenya stores all authentication tokens (client token, provider API keys, API key
 - **mlock/mmap**: All tokens are allocated using `syscall.Mmap` with `syscall.Mlock`, keeping them in physical RAM and preventing swapping to disk
 - **Read-only sealing**: After all tokens are stored, the memory region is locked to read-only via `syscall.Mprotect`. Any accidental write (e.g., buffer overflow, use-after-free) triggers an immediate `SIGSEGV`
 - **Core dump prevention**: The systemd service unit sets `LimitCORE=0` to prevent crash-dump exposure. On macOS, core dumps are handled by the system's crash reporter (see platform notes below)
-- **Zero-fill on destroy**: Memory is explicitly zeroed before release via `syscall.Munmap`. Sealed memory is temporarily toggled to writable for zeroing, then unmapped
+- **Zero-fill on destroy**: Memory is explicitly zeroed before release via `syscall.Munmap`. Sealed memory is temporarily toggled to writable for zeroing, then unmapped. A centralized `util.ZeroBytes()` helper in `internal/util/zero.go` provides a reusable zeroing primitive for other subsystems
 - **Constant-time comparison**: Token comparison uses `subtle.ConstantTimeCompare` to prevent timing side-channel attacks
 - **No string copies**: Tokens are stored as `[]byte` slices, not Go strings (avoids GC-promoted copies that are hard to erase)
 
@@ -163,5 +163,14 @@ Security vulnerabilities include but are not limited to:
 - Denial of service (resource exhaustion)
 - Information disclosure (leaked secrets, headers, or internal state)
 - SSRF or injection vulnerabilities
+- Path traversal attacks on config file loading and prompt file resolution
+
+### File Path Security
+
+Config file loading functions (`LoadConfig`, `LoadSecrets`, `LoadPromptFile`) are hardened against path traversal attacks:
+- All user-supplied paths are resolved via `filepath.Abs` and checked against the config directory prefix
+- Paths containing `..` segments are rejected
+- Absolute paths pointing outside the config root are rejected
+- Extensive test coverage in `config/loading_path_security_test.go` validates all traversal vectors
 
 Issues outside scope (feature requests, bugs without security impact) should be reported via [GitHub Issues](https://github.com/gumieri/nenya/issues).
