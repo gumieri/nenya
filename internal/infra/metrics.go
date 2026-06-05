@@ -14,6 +14,8 @@ import (
 	"git.0ur.uk/nenya/internal/version"
 )
 
+var labelEscaper = strings.NewReplacer(`\`, `\\`, `"`, `\"`, "\n", `\n`)
+
 type Metrics struct {
 	startTime time.Time
 
@@ -196,7 +198,7 @@ func labelStr(labels map[string]string) string {
 	}
 	pairs := make([]string, 0, len(labels))
 	for k, v := range labels {
-		escaped := strings.NewReplacer(`\`, `\\`, `"`, `\"`, "\n", `\n`).Replace(v)
+		escaped := labelEscaper.Replace(v)
 		pairs = append(pairs, k+"=\""+escaped+"\"")
 	}
 	sort.Strings(pairs)
@@ -1061,13 +1063,22 @@ func (m *Metrics) writeHistogramMap(w io.Writer, name, help string, mmap *sync.M
 	})
 	for _, h := range hists {
 		ls := labelStr(h.labels)
-		labelSuffix := stripTrailingBrace(ls)
-		for i, bkt := range h.buckets {
-			_, _ = fmt.Fprintf(w, "%s_bucket%s,le=\"%g\"} %d\n", name, labelSuffix, bkt, h.counts[i].Load())
+		if ls == "" {
+			for i, bkt := range h.buckets {
+				_, _ = fmt.Fprintf(w, "%s_bucket{le=\"%g\"} %d\n", name, bkt, h.counts[i].Load())
+			}
+			_, _ = fmt.Fprintf(w, "%s_bucket{le=\"+Inf\"} %d\n", name, h.count.Load())
+			_, _ = fmt.Fprintf(w, "%s_sum %g\n", name, float64(h.sumNS.Load())/1e9)
+			_, _ = fmt.Fprintf(w, "%s_count %d\n", name, h.count.Load())
+		} else {
+			labelSuffix := stripTrailingBrace(ls)
+			for i, bkt := range h.buckets {
+				_, _ = fmt.Fprintf(w, "%s_bucket%s,le=\"%g\"} %d\n", name, labelSuffix, bkt, h.counts[i].Load())
+			}
+			_, _ = fmt.Fprintf(w, "%s_bucket%s,le=\"+Inf\"} %d\n", name, labelSuffix, h.count.Load())
+			_, _ = fmt.Fprintf(w, "%s_sum%s %g\n", name, ls, float64(h.sumNS.Load())/1e9)
+			_, _ = fmt.Fprintf(w, "%s_count%s %d\n", name, ls, h.count.Load())
 		}
-		_, _ = fmt.Fprintf(w, "%s_bucket%s,le=\"+Inf\"} %d\n", name, labelSuffix, h.count.Load())
-		_, _ = fmt.Fprintf(w, "%s_sum%s %g\n", name, ls, float64(h.sumNS.Load())/1e9)
-		_, _ = fmt.Fprintf(w, "%s_count%s %d\n", name, ls, h.count.Load())
 	}
 }
 

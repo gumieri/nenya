@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"math"
 	"net"
 	"net/http"
 	"regexp"
@@ -570,6 +571,11 @@ func (g *NenyaGateway) CountRequestTokens(payload map[string]interface{}) int {
 		return 0
 	}
 	var sb strings.Builder
+	n := len(msgs)
+	if n > math.MaxInt/500 {
+		n = math.MaxInt / 500
+	}
+	sb.Grow(n * 500)
 	for _, msgRaw := range msgs {
 		msg, ok := msgRaw.(map[string]interface{})
 		if !ok {
