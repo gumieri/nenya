@@ -234,7 +234,7 @@ func (sm *SessionManager) UnloadModel(ctx context.Context, modelID string) error
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
 	_, stillExists := sm.sessions[modelID]
-	if stillExists {
+	if !stillExists {
 		return nil
 	}
 	delete(sm.sessions, modelID)
