@@ -51,7 +51,7 @@ func TestTransformRequest_GeminiModelMapping(t *testing.T) {
 		expected string
 	}{
 		{"gemini-3-flash to preview", "gemini-3-flash", "gemini-3-flash-preview"},
-		{"gemini-3-pro to preview", "gemini-3-pro", "gemini-3-pro-preview"},
+		{"gemini-3.5-flash identity", "gemini-3.5-flash", "gemini-3.5-flash"},
 		{"gemini-3.1-flash to preview", "gemini-3.1-flash", "gemini-3.1-flash-preview"},
 		{"gemini-3.1-flash-lite to preview", "gemini-3.1-flash-lite", "gemini-3.1-flash-lite-preview"},
 		{"gemini-flash to 2.5", "gemini-flash", "gemini-2.5-flash"},
