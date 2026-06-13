@@ -55,17 +55,17 @@ func TestServeHTTP_Healthz_NoAuth(t *testing.T) {
 	}
 }
 
-func TestServeHTTP_Statsz_NoAuth(t *testing.T) {
+func TestServeHTTP_Statsz_PublicAccess(t *testing.T) {
 	p, _ := newTestProxy(t)
 	req := testutil.NewTestRequest(t, http.MethodGet, "/statsz", nil)
 	req.Header.Set("Authorization", "")
 	rec := httptest.NewRecorder()
 	p.ServeHTTP(rec, req)
 
-	testutil.AssertResponseStatusCode(t, rec, http.StatusUnauthorized)
+	testutil.AssertResponseStatusCode(t, rec, http.StatusOK)
 }
 
-func TestServeHTTP_Statsz_ValidAuth(t *testing.T) {
+func TestServeHTTP_Statsz_WithAuth(t *testing.T) {
 	p, _ := newTestProxy(t)
 	req := testutil.NewTestRequest(t, http.MethodGet, "/statsz", nil)
 	rec := httptest.NewRecorder()
@@ -76,6 +76,33 @@ func TestServeHTTP_Statsz_ValidAuth(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
 		t.Fatalf("expected JSON body, got error: %v", err)
 	}
+}
+
+func TestServeHTTP_ChatCompletions_WrongMethod(t *testing.T) {
+	p, _ := newTestProxy(t)
+	req := testutil.NewTestRequest(t, http.MethodGet, "/v1/chat/completions", nil)
+	rec := httptest.NewRecorder()
+	p.ServeHTTP(rec, req)
+
+	testutil.AssertResponseStatusCode(t, rec, http.StatusMethodNotAllowed)
+}
+
+func TestServeHTTP_Embeddings_WrongMethod(t *testing.T) {
+	p, _ := newTestProxy(t)
+	req := testutil.NewTestRequest(t, http.MethodGet, "/v1/embeddings", nil)
+	rec := httptest.NewRecorder()
+	p.ServeHTTP(rec, req)
+
+	testutil.AssertResponseStatusCode(t, rec, http.StatusMethodNotAllowed)
+}
+
+func TestServeHTTP_Metrics_WrongMethod(t *testing.T) {
+	p, _ := newTestProxy(t)
+	req := testutil.NewTestRequest(t, http.MethodPost, "/metrics", nil)
+	rec := httptest.NewRecorder()
+	p.ServeHTTP(rec, req)
+
+	testutil.AssertResponseStatusCode(t, rec, http.StatusMethodNotAllowed)
 }
 
 func TestServeHTTP_Models_ValidAuth(t *testing.T) {

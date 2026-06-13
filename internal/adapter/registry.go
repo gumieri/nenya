@@ -86,21 +86,23 @@ var defaultAdapter ProviderAdapter = &OpenAIAdapter{
 	Caps: Capabilities{},
 }
 
+func registerOpenAI(name string, caps Capabilities) {
+	Register(name, AdapterEntry{
+		Adapter: NewOpenAIAdapter(caps),
+	})
+}
+
 func init() {
-	Register("openai", AdapterEntry{
-		Adapter: NewOpenAIAdapter(Capabilities{
-			StreamOptions:  false,
-			AutoToolChoice: true,
-			ContentArrays:  true,
-		}),
+	registerOpenAI("openai", Capabilities{
+		StreamOptions:  false,
+		AutoToolChoice: true,
+		ContentArrays:  true,
 	})
 
-	Register("deepseek", AdapterEntry{
-		Adapter: NewOpenAIAdapter(Capabilities{
-			StreamOptions:  true,
-			AutoToolChoice: true,
-			ContentArrays:  true,
-		}),
+	registerOpenAI("deepseek", Capabilities{
+		StreamOptions:  true,
+		AutoToolChoice: true,
+		ContentArrays:  true,
 	})
 
 	Register("gemini", AdapterEntry{
@@ -112,36 +114,28 @@ func init() {
 		Adapter: &zaiAdapterShim{},
 	})
 
-	Register("zai-coding-plan", AdapterEntry{
-		Adapter: NewOpenAIAdapter(Capabilities{
-			StreamOptions:  true,
-			AutoToolChoice: true,
-			ContentArrays:  true,
-		}),
+	registerOpenAI("zai-coding-plan", Capabilities{
+		StreamOptions:  true,
+		AutoToolChoice: true,
+		ContentArrays:  true,
 	})
 
-	Register("groq", AdapterEntry{
-		Adapter: NewOpenAIAdapter(Capabilities{
-			StreamOptions:  true,
-			AutoToolChoice: true,
-			ContentArrays:  true,
-		}),
+	registerOpenAI("groq", Capabilities{
+		StreamOptions:  true,
+		AutoToolChoice: true,
+		ContentArrays:  true,
 	})
 
-	Register("together", AdapterEntry{
-		Adapter: NewOpenAIAdapter(Capabilities{
-			StreamOptions:  false,
-			AutoToolChoice: true,
-			ContentArrays:  true,
-		}),
+	registerOpenAI("together", Capabilities{
+		StreamOptions:  false,
+		AutoToolChoice: true,
+		ContentArrays:  true,
 	})
 
-	Register("github", AdapterEntry{
-		Adapter: NewOpenAIAdapter(Capabilities{
-			StreamOptions:  false,
-			AutoToolChoice: true,
-			ContentArrays:  true,
-		}),
+	registerOpenAI("github", Capabilities{
+		StreamOptions:  false,
+		AutoToolChoice: true,
+		ContentArrays:  true,
 	})
 
 	Register("openrouter", AdapterEntry{
@@ -176,64 +170,56 @@ func init() {
 		Adapter: NewDeepInfraAdapter(),
 	})
 
-	Register("sambanova", AdapterEntry{
-		Adapter: NewOpenAIAdapter(Capabilities{
-			StreamOptions:  true,
-			AutoToolChoice: true,
-			ContentArrays:  true,
-		}),
+	registerOpenAI("sambanova", Capabilities{
+		StreamOptions:  true,
+		AutoToolChoice: true,
+		ContentArrays:  true,
 	})
 
-	Register("cerebras", AdapterEntry{
-		Adapter: NewOpenAIAdapter(Capabilities{
-			StreamOptions:  true,
-			AutoToolChoice: true,
-			ContentArrays:  true,
-		}),
+	registerOpenAI("cerebras", Capabilities{
+		StreamOptions:  true,
+		AutoToolChoice: true,
+		ContentArrays:  true,
 	})
 
-	Register("nvidia", AdapterEntry{
-		Adapter: NewOpenAIAdapter(Capabilities{
-			StreamOptions:  false,
-			AutoToolChoice: false,
-			ContentArrays:  true,
-		}),
+	registerOpenAI("nvidia", Capabilities{
+		StreamOptions:  false,
+		AutoToolChoice: false,
+		ContentArrays:  true,
 	})
 
-	Register("nvidia_free", AdapterEntry{
-		Adapter: NewOpenAIAdapter(Capabilities{
-			StreamOptions:  false,
-			AutoToolChoice: false,
-			ContentArrays:  true,
-		}),
+	registerOpenAI("nvidia_free", Capabilities{
+		StreamOptions:  false,
+		AutoToolChoice: false,
+		ContentArrays:  true,
 	})
 
-	Register("qwen_free", AdapterEntry{
-		Adapter: NewOpenAIAdapter(Capabilities{
-			StreamOptions:  true,
-			AutoToolChoice: false,
-			ContentArrays:  true,
-		}),
+	registerOpenAI("qwen_free", Capabilities{
+		StreamOptions:  true,
+		AutoToolChoice: false,
+		ContentArrays:  true,
 	})
 
-	Register("minimax_free", AdapterEntry{
-		Adapter: NewOpenAIAdapter(Capabilities{
-			StreamOptions:  true,
-			AutoToolChoice: true,
-			ContentArrays:  true,
-		}),
+	registerOpenAI("minimax_free", Capabilities{
+		StreamOptions:  true,
+		AutoToolChoice: true,
+		ContentArrays:  true,
 	})
 
 	Register("ollama", AdapterEntry{
 		Adapter: NewOllamaAdapter(),
 	})
 
-	Register("zen", AdapterEntry{
-		Adapter: NewOpenAIAdapter(Capabilities{
-			StreamOptions:  true,
-			AutoToolChoice: true,
-			ContentArrays:  true,
-		}),
+	registerOpenAI("zen", Capabilities{
+		StreamOptions:  true,
+		AutoToolChoice: true,
+		ContentArrays:  true,
+	})
+
+	registerOpenAI("moonshot", Capabilities{
+		StreamOptions:  true,
+		AutoToolChoice: true,
+		ContentArrays:  true,
 	})
 }
 

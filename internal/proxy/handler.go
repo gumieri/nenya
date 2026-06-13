@@ -79,9 +79,9 @@ func (p *Proxy) resolveRoute(path string) routeHandler {
 
 	handlers := []entry{
 		{false, "/healthz", p.chainHealthz},
-		{false, "/statsz", p.chainAuthStats},
-		{false, "/metrics", p.chainAuthMetric},
-		{false, "/debug/pprof", p.chainAuthPprof},
+		{false, "/statsz", p.chainStats},
+		{false, "/metrics", p.chainMetrics},
+		{true, "/debug/pprof", p.chainAuthPprof},
 		{false, "/v1/models", p.chainModels},
 		{false, "/v1/chat/completions", p.chainChat},
 		{false, "/v1/messages", p.chainChat},
@@ -138,14 +138,14 @@ func (p *Proxy) chainHealthz(gw *gateway.NenyaGateway, w http.ResponseWriter, r 
 	})(gw, w, r)
 }
 
-func (p *Proxy) chainAuthStats(gw *gateway.NenyaGateway, w http.ResponseWriter, r *http.Request) {
-	p.chainEndpoint(http.MethodGet, "/statsz", true, func(gw *gateway.NenyaGateway, w http.ResponseWriter, r *http.Request, apiKey *config.ApiKey) {
+func (p *Proxy) chainStats(gw *gateway.NenyaGateway, w http.ResponseWriter, r *http.Request) {
+	p.chainEndpoint(http.MethodGet, "/statsz", false, func(gw *gateway.NenyaGateway, w http.ResponseWriter, r *http.Request, apiKey *config.ApiKey) {
 		infra.ObserveHTTP(gw.Metrics, p.handleStats)(w, r)
 	})(gw, w, r)
 }
 
-func (p *Proxy) chainAuthMetric(gw *gateway.NenyaGateway, w http.ResponseWriter, r *http.Request) {
-	p.chainEndpoint("", "/metrics", true, func(gw *gateway.NenyaGateway, w http.ResponseWriter, r *http.Request, apiKey *config.ApiKey) {
+func (p *Proxy) chainMetrics(gw *gateway.NenyaGateway, w http.ResponseWriter, r *http.Request) {
+	p.chainEndpoint(http.MethodGet, "/metrics", false, func(gw *gateway.NenyaGateway, w http.ResponseWriter, r *http.Request, apiKey *config.ApiKey) {
 		p.handleMetrics(w, r)
 	})(gw, w, r)
 }
@@ -163,13 +163,13 @@ func (p *Proxy) chainModels(gw *gateway.NenyaGateway, w http.ResponseWriter, r *
 }
 
 func (p *Proxy) chainChat(gw *gateway.NenyaGateway, w http.ResponseWriter, r *http.Request) {
-	p.chainEndpoint("", "/v1/chat/completions", true, func(gw *gateway.NenyaGateway, w http.ResponseWriter, r *http.Request, apiKey *config.ApiKey) {
+	p.chainEndpoint(http.MethodPost, "/v1/chat/completions", true, func(gw *gateway.NenyaGateway, w http.ResponseWriter, r *http.Request, apiKey *config.ApiKey) {
 		p.handleChatCompletions(gw, w, r, apiKey)
 	})(gw, w, r)
 }
 
 func (p *Proxy) chainEmbeddings(gw *gateway.NenyaGateway, w http.ResponseWriter, r *http.Request) {
-	p.chainEndpoint("", "/v1/embeddings", true, func(gw *gateway.NenyaGateway, w http.ResponseWriter, r *http.Request, apiKey *config.ApiKey) {
+	p.chainEndpoint(http.MethodPost, "/v1/embeddings", true, func(gw *gateway.NenyaGateway, w http.ResponseWriter, r *http.Request, apiKey *config.ApiKey) {
 		p.handleEmbeddings(gw, w, r, apiKey)
 	})(gw, w, r)
 }
