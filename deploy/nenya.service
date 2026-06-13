@@ -60,6 +60,10 @@ LimitMEMLOCK=infinity
 # Disable core dumps to prevent locked memory from reaching disk
 LimitCORE=0
 
+# Syscall filtering (seccomp)
+SystemCallFilter=@system-service
+SystemCallFilter=~@mount @privileged @raw-io @reboot @swap
+
 # Secrets loaded via systemd credential
 LoadCredential=secrets:/etc/nenya/secrets.json
 
