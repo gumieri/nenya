@@ -17,7 +17,7 @@ A lightweight, zero-dependency AI API Gateway written in Go. Nenya sits between 
 | POST /v1/chat/completions + Bearer token     |
 | or                                           |
 | Anthropic Messages API request               |
-| POST /v1/messages + x-api-key                |
+| POST /v1/messages + Bearer token |
 +----------------------------------------------+
                         |
                         v
@@ -130,7 +130,7 @@ Flow notes:
 - **Circuit breaker** — per agent+provider+model with automatic failover, exponential backoff, and semantic error classification
 - **Rate limiting** — per upstream host (RPM/TPM) with per-provider overrides
 - **Response cache** — in-memory LRU with SHA-256 fingerprinting and optional semantic similarity search
-- **Graceful shutdown** — 5s grace period for in-flight requests, MCP client cleanup
+- **Graceful shutdown** — 30s grace period for in-flight requests, MCP client cleanup
 - **Context-limit auto-retry** — upstream context-length errors trigger summarization and retry
 - **Local engine lifecycle** — pre-load and manage local Ollama models with LRU eviction
 - **Structured errors** — all error responses include `error_kind` field for programmatic diagnostics
@@ -266,8 +266,8 @@ API keys support **RBAC enforcement** — agent scoping, endpoint allowlists, ro
 | `POST /v1/moderations` | Bearer + RBAC | Content moderation (OpenAI-compatible) |
 | `POST /v1/rerank` | Bearer + RBAC | Re-ranking API (Cohere/Jina/Voyage-compatible) |
 | `POST /v1/a2a` | Bearer + RBAC | Agent-to-Agent protocol (Google A2A) |
-| `GET /v1/files` | Bearer + RBAC | File listing, upload, retrieval, deletion |
-| `POST /v1/batches` | Bearer + RBAC | Batch API operations |
+| `GET/POST/DELETE /v1/files` | Bearer + RBAC | File listing, upload, retrieval, deletion |
+| `POST/GET /v1/batches` | Bearer + RBAC | Batch API operations |
 | `POST /proxy/{provider}/*` | Bearer + RBAC | Arbitrary provider endpoint passthrough (all HTTP methods, SSE streaming) |
 | `GET /healthz` | None | Engine health probe |
 | `GET /statsz` | None | Token usage, circuit breaker state, MCP server status |
