@@ -7,7 +7,7 @@ set -euo pipefail
 
 GITHUB_REPO="gumieri/nenya"
 BIN_NAME="nenya"
-INSTALL_DIR="/usr/local/bin"
+INSTALL_DIR="/usr/bin"
 CONFIG_DIR="/etc/nenya"
 SERVICE_DIR="/etc/systemd/system"
 SERVICE_FILE="nenya.service"
@@ -222,7 +222,7 @@ main() {
 	VERSION=""
 	DRY_RUN=false
 	BINARY_ONLY=false
-	INSTALL_DIR="/usr/local/bin"
+INSTALL_DIR="/usr/bin"
 	OS=""
 	ARCH=""
 
@@ -241,7 +241,7 @@ main() {
 				echo "  -v, --version <version>  Install specific version (default: latest)"
 				echo "      --dry-run           Download and verify only, no filesystem changes"
 				echo "      --binary-only       Install binary only, skip config and service"
-				echo "  -b, --bindir <dir>    Install binary to <dir> (default: /usr/local/bin)"
+				echo "  -b, --bindir <dir>    Install binary to <dir> (default: /usr/bin)"
 				echo "  -h, --help            Show this help message"
 				echo ""
 				echo "After installation:"

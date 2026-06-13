@@ -151,7 +151,7 @@ ProtectSystem=strict   # Read-only filesystem
 ProtectHome=yes        # No home directory access
 PrivateTmp=yes         # Isolated /tmp
 
-ExecStart=/usr/local/bin/nenya
+ExecStart=/usr/bin/nenya
 ExecReload=/bin/kill -HUP $MAINPID
 LoadCredential=secrets:/etc/nenya/secrets.json
 ```
@@ -226,7 +226,7 @@ Enable debug logging by setting `server.log_level` in config or using the `-verb
 
 ```ini
 [Service]
-ExecStart=/usr/local/bin/nenya -verbose
+ExecStart=/usr/bin/nenya -verbose
 ```
 
 ## Troubleshooting
