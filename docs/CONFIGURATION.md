@@ -14,7 +14,7 @@ Nenya reads its configuration from a JSON file or directory (default: `/etc/neny
   - [Prefix Cache](#prefix-cache)
   - [Compaction](#compaction)
   - [Window](#window)
-  - [Response Cache](#response-cache)
+  - [Response Cache](#response_cache)
   - [Agents](#agents)
   - [Discovery](#discovery)
   - [Providers](#providers)
@@ -56,18 +56,11 @@ When a **file** is specified, only that file is loaded (single-file mode, unchan
 | Prefix Cache | `prefix_cache` | System prompt and tool caching |
 | Compaction | `compaction` | JSON minification, whitespace collapse, tool pruning |
 | Window | `window` | Sliding context window with summarization |
-| Response Cache | `response-cache` | Response caching with LRU eviction |
+| Response Cache | `response_cache` | Response caching with LRU eviction |
 | Agents | `agents` | Model lists, strategies, circuit breakers, MCP config |
 | Discovery | `discovery` | Dynamic model discovery, auto-agents |
 | Providers | `providers` | Upstream API endpoints
-| Bouncer | `bouncer` | Tier-0 regex secret redaction with configurable engine |
-| Prefix Cache | `prefix_cache` | Prompt cache alignment optimizations |
-| Compaction | `compaction` | Text compaction (whitespace, blank lines, JSON) |
-| Window | `window` | Sliding window conversation compaction with configurable engine |
-| Response Cache | `response_cache` | In-memory LRU cache for deterministic response caching |
-| Agents | `agents` | Named agent definitions with fallback chains, circuit breaker, optional system prompts, optional memory integration, and optional MCP server integration |
-| Discovery | `discovery` | Model catalog fetching from upstream providers; auto-agent generation from discovered models |
-| Providers | `providers` | Upstream provider registry |
+
 
 ## Multi-File Configuration (Directory Mode)
 
@@ -168,6 +161,7 @@ The interceptor implements a 3-tier pipeline for the last user message content, 
 | `tfidf_query_source` | string | `""` (disabled) | Enable TF-IDF relevance-scored truncation for Tier 3. `""` = disabled (use middle-out). `"prior_messages"` = use previous user messages as query terms. `"self"` = use first 500 runes of the massive message as query terms. When enabled, if TF-IDF reduces the payload below `soft_limit`, the engine call is skipped entirely. |
 | `auto_context_skip` | bool | `false` | Automatically skip models that do not meet context requirements for the current request. When enabled, models with `max_context` smaller than the request's input token count are excluded from routing, preventing errors and improving latency. |
 | `auto_reorder_by_latency` | bool | `false` | Dynamically sort targets based on historical response times. When enabled, targets are reordered by median latency (fastest first) with ±5% jitter to prevent thundering herd. Requires `infra.LatencyTracker` to be initialized. |
+| `hard_limit_tokens` | int | `0` (auto) | Hard token limit — if payload exceeds this after all pipeline steps, trim by dropping oldest non-system messages and apply middle-out truncation. `0` (default) uses `soft_limit × 2` (backward-compatible). Non-zero values set an absolute token budget. |
 
 ## `governance`
 
@@ -184,6 +178,9 @@ Rate limiting, routing weights, and circuit breaker configuration.
 | `retryable_status_codes` | []int | `[429, 500, 502, 503, 504]` | HTTP status codes that trigger fallback to the next model in an agent chain. **Warning: setting this field REPLACES the built-in defaults entirely.** You must include all codes you want retryable (including the standard ones). Per-provider override available via `providers.<name>.retryable_status_codes` (provider-level replaces global for that provider). |
 | `empty_stream_as_error` | bool | `true` | Treat upstream responses with `200 OK` and zero-byte body as errors. When enabled, an SSE error payload is emitted to the client (code: `empty_response`), which OpenCode recognizes as a retryable error, allowing fallback to the next target. The metric `nenya_empty_stream_total` is incremented. Set to `false` to preserve backward compatibility (empty streams treated as successful responses, resulting in empty assistant messages). |
 | `auto_retry_on_context_limit` | bool | `false` | Automatically retry the request with reduced max_tokens when the upstream provider returns a context limit exceeded error. When enabled, the gateway halves the max_tokens value and retries up to `max_retry_attempts` times before giving up. This is useful for models with variable context windows or when token estimation is imprecise. Opt-in only (default `false`). |
+| `cost_mode` | string | `"balanced"` | Cost optimization strategy for balanced routing: `"economy"` (cheapest first), `"balanced"` (default tradeoff), or `"quality"` (quality/scoring priority). Controls cost weight scaling. |
+| `billing_economy_scale` | float64 | `1.5` | Multiplier for cost weight in `"economy"` mode. Applied when `cost_mode` is `"economy"` to prioritize cheaper models. |
+| `billing_quality_scale` | float64 | `0.0` | Multiplier for cost weight in `"quality"` mode. Applied when `cost_mode` is `"quality"` to reduce cost prioritization. |
 
 ## `bouncer`
 
@@ -191,11 +188,11 @@ Tier-0 regex-based secret redaction runs on every request, before any other pipe
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `enabled` | bool | `true` | Enable/disable the filter. Defaults to `true` if `patterns` are provided but field omitted. |
-| `patterns` | []string | (9 built-in) | Custom regex patterns. Replaces built-in patterns if set. Built-in patterns match: AWS keys, GitHub tokens, Google OAuth, sk- API keys, PEM private keys, AWS credential file lines, password/key assignments, Docker tokens, SendGrid keys. |
-| `redaction_label` | string | `"[REDACTED]"` | Replacement string for matched secrets |
-| `output_enabled` | bool | `false` | Enable stream output filtering (secret redaction and execution policy blocking on responses) |
-| `output_window_chars` | int | `4096` | Sliding window size (in chars) for cross-chunk pattern matching in output streams |
+| `enabled` | bool | `true` | Enable/disable the filter. Defaults to `true` if `redact_patterns` are provided but field omitted. |
+| `redact_patterns` | []string | (9 built-in) | Custom regex patterns. Replaces built-in patterns if set. Built-in patterns match: AWS keys, GitHub tokens, Google OAuth, sk- API keys, PEM private keys, AWS credential file lines, password/key assignments, Docker tokens, SendGrid keys. |
+| `redaction_label` | string | `[REDACTED]` | Replacement string for matched secrets |
+| `redact_output` | bool | `false` | Enable stream output filtering (secret redaction and execution policy blocking on responses) |
+| `redact_output_window` | int | `4096` | Sliding window size (in chars) for cross-chunk pattern matching in output streams |
 | `fail_open` | bool | `true` | When the engine (Ollama/cloud) is unreachable, skip summarization and forward the original payload. If `false`, hard-limit payloads are truncated even when the engine fails. |
 | `entropy_enabled` | bool | `false` | Enable Shannon entropy-based secret detection. Catches high-entropy tokens that don't match regex patterns (JWTs, opaque API keys, base64 credentials). |
 | `entropy_threshold` | float64 | `4.5` | Shannon entropy threshold in bits/character. Tokens above this value are redacted. English text: ~3.5, hex secrets: ~4.0, base64 tokens: ~5.5, random API keys: ~4.5-5.5. |
@@ -298,6 +295,7 @@ Text compaction applied to all message content (both string and multi-part conte
 | `normalize_line_endings` | bool | `true` | Convert CRLF to LF |
 | `trim_trailing_whitespace` | bool | `true` | Remove trailing spaces/tabs from each line |
 | `collapse_blank_lines` | bool | `true` | Collapse runs of 3+ blank lines to max 2 |
+| `compaction_preset` | string | `""` | Compaction preset: `"aggressive"` (all features), `"balanced"` (whitespace + JSON minify), or `"minimal"` (disabled). Individual fields override preset values. |
 | `json_minify` | bool | `true` | Minify the final JSON body with `json.Compact` |
 | `prune_stale_tools` | bool | `false` | Compact old assistant+tool response pairs into summary placeholders |
 | `tool_protection_window` | int | `4` | Number of most recent messages to protect from tool call pruning |
@@ -563,6 +561,7 @@ Upstream LLM provider registry. Built-in providers are automatically loaded from
 | `sambanova` | `https://api.sambanova.ai/v1/chat/completions` | `bearer` |
 | `cerebras` | `https://api.cerebras.ai/v1/chat/completions` | `bearer` |
 | `github` | `https://models.inference.ai.azure.com/chat/completions` | `bearer` |
+| `moonshot` | `https://api.moonshot.cn/v1/chat/completions` | `bearer` |
 | `ollama` | `http://127.0.0.1:11434/v1/chat/completions` | `none` |
 | `zen` | `https://opencode.ai/zen/v1/chat/completions` | `bearer` |
 
@@ -705,22 +704,14 @@ Configure thinking/reasoning mode for reasoning-capable models (e.g., DeepSeek v
       "url": "https://api.z.ai/api/paas/v4/chat/completions",
       "thinking": {
         "enabled": true,
-        "min": 1000,
-        "max": 32000,
-        "zero_allowed": false,
-        "dynamic_allowed": true,
-        "levels": ["low", "medium", "high", "max"]
+        "clear_thinking": false
       }
     },
     "deepseek": {
       "url": "https://api.deepseek.com/chat/completions",
       "thinking": {
         "enabled": true,
-        "min": 1000,
-        "max": 128000,
-        "zero_allowed": false,
-        "dynamic_allowed": false,
-        "levels": ["low", "high", "max"]
+        "clear_thinking": false
       }
     }
   }
@@ -732,42 +723,38 @@ Configure thinking/reasoning mode for reasoning-capable models (e.g., DeepSeek v
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `enabled` | bool | `true` | Enable thinking mode for reasoning-capable models on this provider. |
-| `min` | int | `1000` | Minimum reasoning tokens to request. |
-| `max` | int | `64000` | Maximum reasoning tokens allowed. |
-| `zero_allowed` | bool | `false` | Allow requests with zero reasoning tokens (disabled thinking). |
-| `dynamic_allowed` | bool | `true` | Allow dynamic adjustment of reasoning budget by the model. |
-| `levels` | []string | `["low", "medium", "high", "max"]` | Named reasoning effort levels for client selection. |
+| `clear_thinking` | bool | `false` | Strip `reasoning_content` from responses when thinking is enabled. When `true`, only the final text response is returned to the client. |
 
-**Model-Level Overrides:**
-
-Model entries can override provider defaults:
-
-```json
-{
-  "agents": {
-    "build": {
-      "models": [
-        {
-          "provider": "deepseek",
-          "model": "deepseek-v4-pro",
-          "thinking": {
-            "enabled": true,
-            "min": 5000,
-            "max": 128000,
-            "levels": ["medium", "high", "max"]
-          }
-        }
-      ]
-    }
-  }
-}
-```
+> **Note:** Per-model thinking metadata (`min`, `max`, `zero_allowed`, `dynamic_allowed`, `levels`) is defined in the internal `ModelRegistry` and configured on a per-model basis. These values are not user-configurable via `providers.<name>.thinking` — they affect model behavior at the registry level.
 
 **Integration:**
 
 - **z.ai**: Auto-activates thinking for GLM-4.6/4.7 models; temperature defaults to 1.0 when thinking is enabled.
 - **DeepSeek**: `reasoning_content` is mandatory in multi-turn conversations with tool calls — the gateway preserves this field for reasoning providers and strips it for others.
 - **Request Sanitization**: `reasoning_content` is preserved in the shared pipeline and stripped per-target during request sanitization for providers that do not support reasoning.
+
+### Billing Configuration
+
+Billing-aware routing configuration per provider, enabling scenarios like using only free models when credits run out.
+
+**BillingConfig Fields:**
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `model` | string | Billing model: `"subscription"`, `"credit"`, `"free"`, or `"mixed"`. |
+| `period` | string | Billing period: `"weekly"` or `"monthly"`. |
+| `period_hours` | int | Period length in hours (for period reset automation). |
+| `included_usd` | float64 | Included credit amount for computing utilization ratio. |
+| `balance_usd` | float64 | Static balance (used only if `quota_source: none`). |
+| `quota_source` | string | Quota source: `"none"`, `"api"`, or `"headers"`. |
+| `quota_url` | string | URL to fetch quota (for `api` source). |
+| `quota_interval` | string | Poll interval (e.g., `"1h"`, `"30m"`). |
+| `quota_timeout_seconds` | int | Timeout for quota fetch (default: 10s). |
+| `quota_backoff_max_seconds` | int | Max backoff delay on consecutive quota fetch failures (default: 300s). |
+| `quota_extraction` | object | Extraction config for parsing quota responses. See BILLING.md for full details. |
+| `free_models` | []string | List of model patterns to treat as free tier. |
+
+See [`docs/BILLING.md`](BILLING.md) for full documentation on quota fetchers, extraction modes, and provider-specific configuration.
 
 ## Model Registry
 
@@ -779,10 +766,10 @@ For the current catalog, query the `/v1/models` endpoint or enable [dynamic disc
 
 | Model ID | Provider | Max Context (tokens) | Max Output (tokens) | Input Price | Output Price |
 |----------|----------|--------------------:|-------------------:|------------:|------------:|
-| `gemini-3.1-flash-lite-preview` | gemini | 128,000 | 8,192 | $0.075/M | $0.30/M |
-| `gemini-3-flash-preview` | gemini | 128,000 | 8,192 | $0.075/M | $0.30/M |
-| `gemini-2.5-flash-lite` | gemini | 128,000 | 8,192 | $0.075/M | $0.30/M |
-| `gemini-2.5-flash` | gemini | 128,000 | 8,192 | $0.075/M | $0.30/M |
+| `gemini-3.1-flash-lite-preview` | gemini | 1,048,576 | 65,536 | $0.075/M | $0.30/M |
+| `gemini-3-flash-preview` | gemini | 1,048,576 | 65,536 | $0.075/M | $0.30/M |
+| `gemini-2.5-flash-lite` | gemini | 1,048,576 | 65,536 | $0.075/M | $0.30/M |
+| `gemini-2.5-flash` | gemini | 1,048,576 | 65,536 | $0.075/M | $0.30/M |
 | `deepseek-v4-pro` | deepseek | 1,000,000 | 384,000 | $2.00/M | $8.00/M |
 | `deepseek-v4-flash` | deepseek | 1,000,000 | 384,000 | $0.10/M | $0.10/M |
 | `glm-5.1` | zai | 200,000 | 128,000 | $0.50/M | $2.00/M |
@@ -818,8 +805,8 @@ For the current catalog, query the `/v1/models` endpoint or enable [dynamic disc
 | `claude-sonnet-4-5` | anthropic | 200,000 | 64,000 | $3.00/M | $15.00/M |
 | `claude-sonnet-4-0` | anthropic | 200,000 | 64,000 | $3.00/M | $15.00/M |
 | `claude-haiku-4-5` | anthropic | 200,000 | 64,000 | $1.00/M | $5.00/M |
-| `claude-3-7-sonnet-20250219` | anthropic | 200,000 | 64,000 | $3.00/M | $15.00/M |
-| `claude-3-5-sonnet-20241022` | anthropic | 200,000 | 8,192 | $3.00/M | $15.00/M |
+| `claude-3-7-sonnet-20250219` | anthropic | 128,000 | 8,192 | $3.00/M | $15.00/M |
+| `claude-3-5-sonnet-20241022` | anthropic | 200,000 | 64,000 | $3.00/M | $15.00/M |
 | `claude-3-5-haiku-latest` | anthropic | 200,000 | 8,192 | $0.25/M | $1.25/M |
 | `mistral-large-latest` | mistral | 256,000 | 262,144 | $4.00/M | $12.00/M |
 | `mistral-small-latest` | mistral | 256,000 | 256,000 | $0.20/M | $0.60/M |
@@ -840,12 +827,27 @@ For the current catalog, query the `/v1/models` endpoint or enable [dynamic disc
 | `qwen3.5-plus` | zen | 131,072 | 8,192 | — | — |
 | `minimax-m2.7` | zen | 200,000 | 8,192 | — | — |
 | `minimax-m2.5-free` | zen | 200,000 | 8,192 | — | — |
-| `kimi-k2.6` | zen | 200,000 | 8,192 | — | — |
-| `kimi-k2.5` | zen | 200,000 | 8,192 | — | — |
+| `kimi-k2.6` | zen | 262,144 | 65,536 | — | — |
+| `kimi-k2.5` | zen | 131,072 | 32,768 | — | — |
 | `big-pickle` | zen | 200,000 | 8,192 | — | — |
 | `ling-2.6-flash-free` | zen | 200,000 | 8,192 | — | — |
 | `hy3-preview-free` | zen | 131,072 | 8,192 | — | — |
 | `nemotron-3-super-free` | zen | 4,000 | 1,024 | — | — |
+| `gpt-5-nano` | zen | 200,000 | 8,192 | — | — |
+| `claude-opus-4-1-20250805` | anthropic | 200,000 | 32,000 | $15.00/M | $75.00/M |
+| `gemini-3.5-flash` | gemini | 1,048,576 | 65,536 | $0.075/M | $0.30/M |
+| `gemini-2.5-pro` | gemini | 1,048,576 | 65,536 | $1.25/M | $10.00/M |
+| `gemini-3.1-pro-preview` | gemini | 1,048,576 | 65,536 | $2.00/M | $15.00/M |
+| `gpt-5.2` | openai | 400,000 | 128,000 | — | — |
+| `gpt-5.3-codex` | openai | 400,000 | 128,000 | — | — |
+| `gpt-5.3-codex-spark` | openai | 128,000 | 128,000 | — | — |
+| `gpt-5.4` | openai | 1,050,000 | 128,000 | — | — |
+| `gpt-5.4-mini` | openai | 400,000 | 128,000 | — | — |
+| `gpt-5.5` | openai | 272,000 | 128,000 | — | — |
+| `codex-auto-review` | openai | 272,000 | 128,000 | — | — |
+| `kimi-k2-thinking` | zen | 131,072 | 32,768 | — | — |
+| `kimi-k2` | moonshot | 131,072 | 32,768 | $0.10/M | $0.10/M |
+| `nemotron-3-super` | nvidia_free | 4,000 | 1,024 | — | — |
 | `gpt-5-nano` | zen | 200,000 | 8,192 | — | — |
 | `claude-opus-4-7` | zen | 1,000,000 | 128,000 | $5.00/M | $25.00/M |
 | `claude-opus-4-6` | zen | 1,000,000 | 128,000 | $5.00/M | $25.00/M |
@@ -1116,6 +1118,56 @@ The content pipeline (steps 2–9) is **best-effort**: if any step fails (e.g., 
 - **Circuit Breaker**: Each agent+provider+model combination has an independent circuit breaker. See [`ARCHITECTURE.md`](ARCHITECTURE.md#circuit-breaker) for the state machine.
 
 ## Configuration Validation
+
+Run `nenya -validate` to validate the configuration file or directory without starting the server:
+
+- Checks required fields (server, providers, agents)
+- Validates JSON syntax and field types (string for url, integer for ports, boolean for flags)
+- Validates enum fields (truncation_strategy, routing_strategy, cost_mode, auth_style, etc.)
+- Reports file-level errors (invalid JSON files, missing files)
+- Does not ping providers or validate API keys (requires secrets)
+
+### Example:
+
+```bash
+./nenya -validate
+```
+
+## `mcp_servers`
+
+MCP server connections for tool integration. Each key defines a named MCP server endpoint.
+
+```json
+{
+  "mcp_servers": {
+    "mempalace": {
+      "url": "http://localhost:6060",
+      "timeout": 30,
+      "keep_alive_interval": 30
+    }
+  }
+}
+```
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `url` | string | required | MCP server HTTP+SSE endpoint |
+| `timeout` | int | `30` | Request timeout in seconds |
+| `keep_alive_interval` | int | `30` | SSE keep-alive interval in seconds |
+
+## Migration Guide
+
+### Migrating from `security_filter` (pre-v1.0)
+
+| Old Key | New Key |
+|---------|---------|
+| `security_filter` | `bouncer` |
+| `patterns` | `redact_patterns` |
+| `output_enabled` | `redact_output` |
+| `output_window_chars` | `redact_output_window` |
+| `skip_on_engine_failure` | `fail_open` |
+
+The engine no longer defaults to `ollama`/`qwen2.5-coder`.
 
 Validate your configuration without starting the gateway:
 
