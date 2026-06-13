@@ -245,3 +245,14 @@ func zenSpec() ProviderSpec {
 func zenValidationEndpoint(providerURL string) string {
 	return defaultValidationEndpoint(providerURL, "")
 }
+
+func moonshotSpec() ProviderSpec {
+	return ProviderSpec{
+		ServiceKinds:       []ServiceKind{ServiceKindLLM},
+		ValidationEndpoint: moonshotValidationEndpoint,
+	}
+}
+
+func moonshotValidationEndpoint(providerURL string) string {
+	return defaultValidationEndpoint(providerURL, "")
+}
