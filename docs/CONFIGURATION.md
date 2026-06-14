@@ -846,13 +846,11 @@ For the current catalog, query the `/v1/models` endpoint or enable [dynamic disc
 | `gpt-5.5` | openai | 272,000 | 128,000 | — | — |
 | `codex-auto-review` | openai | 272,000 | 128,000 | — | — |
 | `kimi-k2-thinking` | zen | 131,072 | 32,768 | — | — |
-| `kimi-k2` | moonshot | 131,072 | 32,768 | $0.10/M | $0.10/M |
-| `nemotron-3-super` | nvidia_free | 4,000 | 1,024 | — | — |
-| `gpt-5-nano` | zen | 200,000 | 8,192 | — | — |
-| `claude-opus-4-7` | zen | 1,000,000 | 128,000 | $5.00/M | $25.00/M |
-| `claude-opus-4-6` | zen | 1,000,000 | 128,000 | $5.00/M | $25.00/M |
-| `claude-sonnet-4-6` | zen | 1,000,000 | 64,000 | $3.00/M | $15.00/M |
-| `kimi-k2` | moonshot | 131,072 | 32,768 | $0.10/M | $0.10/M |
+| `kimi-k2` | moonshot | 131,072 | 32,768 | — | — |
+| `claude-opus-4-7` | anthropic | 1,000,000 | 128,000 | $5.00/M | $25.00/M |
+| `claude-opus-4-6` | anthropic | 1,000,000 | 128,000 | $5.00/M | $25.00/M |
+| `claude-sonnet-4-6` | anthropic | 200,000 | 64,000 | $3.00/M | $15.00/M |
+
 
 ## Model Discovery
 

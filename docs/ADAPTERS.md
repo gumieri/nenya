@@ -72,7 +72,7 @@ Identity transform for request/response. Capability-based parameter stripping:
 - `AutoToolChoice: false` → strips `tool_choice: "auto"` from request
 - `ContentArrays: false` → flattens `content: [{type:"text",text:"..."}]` to `content: "..."`
 
-**Used by**: `openai`, `deepseek`, `groq`, `together`, `github`, `sambanova`, `cerebras`, `nvidia`, `nvidia_free`, `qwen_free`, `minimax_free`, `zai-coding-plan`, `moonshot`, `qwen`
+**Used by**: `openai`, `deepseek`, `groq`, `together`, `github`, `sambanova`, `cerebras`, `nvidia`, `nvidia_free`, `qwen_free`, `minimax_free`, `moonshot`
 
 ### GeminiAdapter
 
@@ -169,17 +169,33 @@ OpenAI-compatible with standard capabilities.
 
 Many providers are OpenAI-compatible and use the default `OpenAIAdapter` rather than a dedicated adapter:
 
-| Provider | Adapter | Notes |
-|----------|---------|-------|
-| **Moonshot** | `OpenAIAdapter` | OpenAI-compatible, full capabilities |
-| **Qwen** | `OpenAIAdapter` | OpenAI-compatible, `AutoToolChoice: false` |
-| **Qwen Free** | `OpenAIAdapter` | Same as Qwen, rate-limited variant |
-| **MiniMax** | `OpenAIAdapter` | OpenAI-compatible, full capabilities |
-| **MiniMax Free** | `OpenAIAdapter` | Same as MiniMax, rate-limited variant |
-| **NVIDIA** | `OpenAIAdapter` | OpenAI-compatible, restricted capabilities |
-| **NVIDIA Free** | `OpenAIAdapter` | Same as NVIDIA, rate-limited variant |
+| Provider | Adapter | Registration | Caps | Notes |
+|----------|---------|-------------|------|-------|
+| **DeepSeek** | `OpenAIAdapter` | Explicit | `S:✓, A:✓, C:✓` | Stream options enabled |
+| **Moonshot** | `OpenAIAdapter` | Explicit | `S:✓, A:✓, C:✓` | Full capabilities |
+| **OpenCode Zen** | `OpenAIAdapter` | Explicit | `S:✓, A:✓, C:✓` | Full capabilities |
+| **Qwen Free** | `OpenAIAdapter` | Explicit | `S:✓, A:✗, C:✓` | Auto tool choice stripped |
+| **MiniMax Free** | `OpenAIAdapter` | Explicit | `S:✓, A:✓, C:✓` | Full capabilities |
+| **NVIDIA** | `OpenAIAdapter` | Explicit | `S:✗, A:✗, C:✓` | Restricted capabilities |
+| **NVIDIA Free** | `OpenAIAdapter` | Explicit | `S:✗, A:✗, C:✓` | Same as NVIDIA |
+| **Qwen** | `OpenAIAdapter` | Default fallback | All disabled | Not in init(); user-config only |
+| **MiniMax** | `OpenAIAdapter` | Default fallback | All disabled | Not in init(); user-config only |
 
-These providers are registered in the adapter registry with provider-specific capability settings (see `internal/adapter/registry.go`). Adding a new OpenAI-compatible provider typically requires zero Go code — only a JSON config entry and a secrets key.
+S = StreamOptions, A = AutoToolChoice, C = ContentArrays. ✓ = allowed, ✗ = stripped.
+
+These providers use the `OpenAIAdapter` with provider-specific capability settings registered in `internal/adapter/registry.go`. Adding a new OpenAI-compatible provider typically requires zero Go code — only a JSON config entry and a secrets key.
+
+### Explicit vs Default Registration
+
+Providers in the adapter registry fall into three categories:
+
+| Category | Providers | Behavior |
+|----------|-----------|----------|
+| **Custom adapter** | `gemini`, `zai`, `anthropic`, `openrouter`, `mistral`, `xai`, `azure`, `perplexity`, `cohere`, `deepinfra`, `ollama` | Dedicated adapter implementation registered via `Register()` |
+| **OpenAIAdapter (explicit caps)** | `openai`, `deepseek`, `groq`, `together`, `github`, `sambanova`, `cerebras`, `nvidia`, `nvidia_free`, `qwen_free`, `minimax_free`, `zen`, `moonshot` | Registered via `registerOpenAI()` with provider-specific capability settings |
+| **OpenAIAdapter (default fallback)** | `qwen`, `minimax`, and any user-configured provider not in the registry | Uses `OpenAIAdapter{Caps: Capabilities{}}` — all capabilities disabled, meaning `stream_options`, `tool_choice: "auto"`, and content arrays are all stripped |
+
+> **Runtime override**: `zai-coding-plan` is initially registered as an OpenAIAdapter in `init()` but is replaced by the `ZAIAdapter` during startup when `InitWithDeps()` is called. This ensures `zai-coding-plan` shares the same message sanitization logic as `zai` (orphaned tool removal, message merging, bridge insertion) and Zhipu-specific error classification.
 
 ## Adding a New Provider
 

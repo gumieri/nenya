@@ -9,6 +9,7 @@ Providers with custom wire formats requiring request/response transformation:
 - **Anthropic** - Bidirectional OpenAI↔Anthropic format conversion
 - **Gemini** - Thought signature preservation, orphaned tool_call cleanup, model aliasing
 - **z.ai** - Orphaned tool message removal, user message merging
+- **z.ai Coding Plan** - Same ZAIAdapter, coding-specific endpoint
 - **Ollama** - Local-first, optional auth, conservative error classification
 
 ### Tier 2: Adapter with Tweaks
@@ -63,6 +64,7 @@ Providers can declare multiple format endpoints via `FormatURLs` in their regist
 | **Anthropic** | `anthropic` | ❌ | ✅ | ❌ | ✅ | ✅ | ✅ |
 | **Gemini** | `bearer+x-goog` | ❌ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | **z.ai** | `bearer` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| **z.ai Coding Plan** | `bearer` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | **Ollama** | `none` | ❌ | ✅ | ❌ | ✅ | ✅ | ❌ |
 | **OpenRouter** | `bearer` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | **Azure OpenAI** | `api-key` | ❌ | ✅ | ✅ | ✅ | ✅ | ✅ |
@@ -131,13 +133,27 @@ DeepSeek v4 models support a **thinking mode** controlled by the `thinking` para
 - **Error**: Gemini-specific retryable patterns (`resource_exhausted`, `quota exceeded`, `the response was blocked`, `content has no parts`)
 
 ### z.ai (Zhipu)
-- **Request**:
+
+z.ai has two provider variants:
+
+| Variant | Provider Name | Endpoint URL |
+|---------|---------------|--------------|
+| **Standard** | `zai` | `https://api.z.ai/api/paas/v4/chat/completions` |
+| **Coding Plan** | `zai-coding-plan` | `https://api.z.ai/api/coding/paas/v4/chat/completions` |
+
+Both variants share the same `ZAIAdapter` at runtime, providing identical request sanitization and error classification. They differ only in endpoint URL (the coding plan variant uses a subscription-specific path).
+
+**Key differences from `zai`:**
+- `zai-coding-plan` does **not** include the `ProviderSpec.SanitizeRequest` hook (thinking injection and temperature defaults are not applied at the spec level). Message cleanup (orphaned tool removal, merging, bridge insertion) is still applied via the `ZAIAdapter.MutateRequest` at the adapter level.
+- The validation endpoint (`/v1/models`) is shared: both resolve to `https://api.z.ai/v1/models`.
+
+**Request sanitization (both variants):**
   - Orphaned tool message removal
   - Consecutive user message merging
   - User bridge insertion between consecutive assistant messages
   - System bridge prepending
-  - Thinking mode auto-activation for reasoning-capable models (e.g., GLM-5)
-  - Model-specific temperature defaults (GLM-4.6/4.7 → 1.0)
+  - Thinking mode auto-activation for reasoning-capable models (e.g., GLM-5) — **`zai` only, not `zai-coding-plan`**
+  - Model-specific temperature defaults (GLM-4.6/4.7 → 1.0) — **`zai` only, not `zai-coding-plan`**
 - **Thinking mode**: Auto-enabled when the model supports reasoning. Configurable per-provider via `thinking.enabled` in the provider config:
   ```json
   "zai": {
@@ -221,7 +237,7 @@ See `gemini.go` or `zai.go` for examples.
 
 | Style | Header(s) | Used By |
 |-------|-----------|---------|
-| `bearer` | `Authorization: Bearer <key>` | OpenAI, DeepSeek, Groq, Together, SambaNova, Cerebras, GitHub, z.ai, Mistral, xAI, Perplexity, Cohere, DeepInfra, Moonshot, Qwen |
+| `bearer` | `Authorization: Bearer <key>` | OpenAI, DeepSeek, Groq, Together, SambaNova, Cerebras, GitHub, z.ai, z.ai Coding Plan, Mistral, xAI, Perplexity, Cohere, DeepInfra, Moonshot, Qwen |
 | `bearer+x-goog` | `Authorization: Bearer <key>` + `x-goog-api-key: <key>` | Gemini |
 | `anthropic` | `x-api-key: <key>` + `anthropic-version: 2023-06-01` | Anthropic |
 | `azure` | `api-key: <key>` | Azure OpenAI |
