@@ -79,7 +79,7 @@ Providers can declare multiple format endpoints via `FormatURLs` in their regist
 | **NVIDIA** | `bearer` | ❌ | ❌ | ✅ | ✅ | ❌ | ✅ |
 | **GitHub** | `bearer` | ❌ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | **Qwen** | `bearer` | ✅ | ❌ | ✅ | ✅ | ✅ | ❌ |
-| **MiniMax** | `bearer` | ✅ | ❌ | ✅ | ✅ | ✅ | ❌ |
+| **MiniMax** | `bearer` | ✅ | ✅ | ✅ | ✅ | ✅ | ❌ |
 | **Moonshot** | `bearer` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | **OpenAI** | `bearer` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | **OpenCode Zen** | `bearer` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |

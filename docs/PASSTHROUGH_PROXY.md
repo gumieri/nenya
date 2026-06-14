@@ -63,7 +63,6 @@ curl -H "Authorization: Bearer $CLIENT_TOKEN" \
 | **SSE streaming** | Auto-detects `text/event-stream` and pipes as-is |
 | **Rate limiting** | Respects upstream host RPM/TPM limits |
 | **Usage tracking** | Records requests in metrics |
-| **Metrics** | Increments `nenya_proxy_requests_total` |
 
 ## Bypassed Features
 

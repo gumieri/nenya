@@ -15,7 +15,7 @@ Each layer may only import from layers to its left. This prevents circular depen
 | `cmd/nenya/` | Entry point, server bootstrap with graceful shutdown |
 | `internal/util/` | Shared utilities: overflow-safe integer arithmetic, ID generation, string formatting, error helpers, retry primitive (`DoWithRetry`) |
 | `internal/tiktoken/` | cl100k_base BPE token counter for prompt token estimation (zero external dependencies) |
-| `internal/config/` | Configuration types, JSON loading, model/provider registries, defaults, validation, engine reference resolution |
+| `config/` | Configuration types, JSON loading, model/provider registries, defaults, validation, engine reference resolution |
 | `internal/infra/` | Structured logging, thought signature cache, Prometheus metrics, rate limiter, usage tracker, latency tracker (sorted-buffer median with incremental insertion), response cache, structured errors (`ErrorKind`, `ErrorResponse`) |
 | `internal/discovery/` | Dynamic model catalog discovery from upstream providers, three-tier merge (config > discovered > static), per-provider response parsers |
 | `internal/stream/` | SSE transforming reader, sliding window stream filter |
@@ -27,6 +27,10 @@ Each layer may only import from layers to its left. This prevents circular depen
 | `internal/local/` | Local Ollama model lifecycle management: GPU load/unload, session tracking with LRU eviction, startup preloading |
 | `internal/mcp/` | MCP (Model Context Protocol) client: HTTP+SSE transport, tool discovery, tool call execution, OpenAI schema transformation |
 | `internal/gateway/` | NenyaGateway struct, HTTP client configuration, token counting, MCP client initialization, MCP tool index |
+| `internal/billing/` | Billing-aware routing: quota tracking, spend limits, account selection |
+| `internal/auth/` | Authentication (token validation, RBAC enforcement with agent scoping and endpoint allowlists) |
+| `internal/security/` | Secure memory: mlock-protected token storage, read-only sealing, core dump prevention |
+| `internal/version/` | Build metadata injection: version, commit, build time |
 | `internal/proxy/` | HTTP handlers, content pipeline orchestration, upstream forwarding with retry, transparent SSE streaming, MCP multi-turn tool call loop, buffered SSE response, empty-stream detection with SSE error payload, structured error normalization |
 
 ## Request Lifecycle
@@ -424,7 +428,7 @@ The `BackoffTracker` manages per-model backoff levels with capped exponential gr
 - **Jitter**: ±10% per level to prevent thundering herd
 - **Increment**: `RecordFailureWithStatus` calls `cb.Increment(model)` which increments the backoff level
 - **Reset**: `RecordSuccessWithModel` calls `cb.Reset(model)` which clears the backoff state
-- **Callback**: `SetBackoffIncrementCallback(onIncrement func(key string, level int))` for metrics emission (`nenya_backoff_level_total`)
+- **Callback**: `SetBackoffIncrementCallback(onIncrement func(key string, level int))` for metrics emission (`nenya_backoff_increments_total`)
 
 ### Model-Level Locks
 
@@ -446,7 +450,7 @@ Model locks are checked during `BuildTargetList` — locked models are skipped b
 - Prometheus gauges:
   - `nenya_cb_state{key, state}` — 0/1 for Closed/Open per circuit key
   - `nenya_cb_state_transitions_total{key, from, to}` — state change counter
-  - `nenya_backoff_level_total{key, provider, model, level}` — backoff level distribution
+  - `nenya_backoff_increments_total{key, provider, model, level}` — backoff level distribution
 
 ### Configuration
 
