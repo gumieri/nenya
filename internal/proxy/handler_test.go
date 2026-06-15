@@ -11,9 +11,9 @@ import (
 	"testing"
 	"time"
 
-	"git.0ur.uk/nenya/config"
-	"git.0ur.uk/nenya/internal/gateway"
-	"git.0ur.uk/nenya/internal/testutil"
+	"github.com/nenya/config"
+	"github.com/nenya/internal/gateway"
+	"github.com/nenya/internal/testutil"
 )
 
 func newTestProxyWithSecrets(t *testing.T, secrets *config.SecretsConfig) (*Proxy, *httptest.Server) {

@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"unicode/utf8"
 
-	"git.0ur.uk/nenya/config"
+	"github.com/nenya/config"
 
 	"testing"
 )

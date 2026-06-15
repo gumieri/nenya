@@ -4,7 +4,7 @@ import (
 	"math"
 	"testing"
 
-	"git.0ur.uk/nenya/internal/discovery"
+	"github.com/nenya/internal/discovery"
 )
 
 func TestCapabilityOverlap(t *testing.T) {

@@ -12,13 +12,13 @@ import (
 	"sync/atomic"
 	"time"
 
-	"git.0ur.uk/nenya/config"
-	"git.0ur.uk/nenya/internal/auth"
-	"git.0ur.uk/nenya/internal/discovery"
-	"git.0ur.uk/nenya/internal/gateway"
-	"git.0ur.uk/nenya/internal/infra"
-	"git.0ur.uk/nenya/internal/stream"
-	"git.0ur.uk/nenya/internal/util"
+	"github.com/nenya/config"
+	"github.com/nenya/internal/auth"
+	"github.com/nenya/internal/discovery"
+	"github.com/nenya/internal/gateway"
+	"github.com/nenya/internal/infra"
+	"github.com/nenya/internal/stream"
+	"github.com/nenya/internal/util"
 )
 
 // MaxModelNameLength is the maximum allowed length for model names.

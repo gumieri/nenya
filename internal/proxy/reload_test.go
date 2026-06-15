@@ -9,8 +9,8 @@ import (
 	"strings"
 	"testing"
 
-	"git.0ur.uk/nenya/config"
-	"git.0ur.uk/nenya/internal/gateway"
+	"github.com/nenya/config"
+	"github.com/nenya/internal/gateway"
 )
 
 func newReloadTestGateway(t *testing.T, upstreamURL string) *gateway.NenyaGateway {

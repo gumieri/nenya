@@ -5,7 +5,7 @@ import (
 	"log/slog"
 	"math"
 
-	"git.0ur.uk/nenya/config"
+	"github.com/nenya/config"
 )
 
 // TFIDFInterceptor applies TF-IDF relevance scoring to prune low-relevance

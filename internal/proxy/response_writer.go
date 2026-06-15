@@ -5,7 +5,7 @@ import (
 	"log/slog"
 	"net/http"
 
-	"git.0ur.uk/nenya/internal/routing"
+	"github.com/nenya/internal/routing"
 )
 
 // writeUpstreamResponse copies headers, status code, and body from an upstream

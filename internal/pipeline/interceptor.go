@@ -7,7 +7,7 @@ import (
 	"sort"
 	"time"
 
-	"git.0ur.uk/nenya/internal/infra"
+	"github.com/nenya/internal/infra"
 )
 
 // Interceptor defines a preprocessing step that can inspect and modify

@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strings"
 
-	providerpkg "git.0ur.uk/nenya/internal/providers"
+	providerpkg "github.com/nenya/internal/providers"
 )
 
 func main() {

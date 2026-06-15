@@ -4,9 +4,9 @@ import (
 	"math"
 	"sort"
 
-	"git.0ur.uk/nenya/config"
-	"git.0ur.uk/nenya/internal/discovery"
-	"git.0ur.uk/nenya/internal/infra"
+	"github.com/nenya/config"
+	"github.com/nenya/internal/discovery"
+	"github.com/nenya/internal/infra"
 )
 
 const (

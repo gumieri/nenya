@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"git.0ur.uk/nenya/internal/infra"
+	"github.com/nenya/internal/infra"
 )
 
 func geminiDeps() *SanitizeDeps {

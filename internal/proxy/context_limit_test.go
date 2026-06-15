@@ -3,7 +3,7 @@ package proxy
 import (
 	"testing"
 
-	"git.0ur.uk/nenya/internal/util"
+	"github.com/nenya/internal/util"
 )
 
 func TestIsContextLengthError(t *testing.T) {

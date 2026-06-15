@@ -10,13 +10,13 @@ import (
 	"testing"
 	"time"
 
-	"git.0ur.uk/nenya/config"
-	"git.0ur.uk/nenya/internal/gateway"
-	"git.0ur.uk/nenya/internal/infra"
-	"git.0ur.uk/nenya/internal/mcp"
-	"git.0ur.uk/nenya/internal/routing"
-	"git.0ur.uk/nenya/internal/testutil"
-	"git.0ur.uk/nenya/internal/tiktoken"
+	"github.com/nenya/config"
+	"github.com/nenya/internal/gateway"
+	"github.com/nenya/internal/infra"
+	"github.com/nenya/internal/mcp"
+	"github.com/nenya/internal/routing"
+	"github.com/nenya/internal/testutil"
+	"github.com/nenya/internal/tiktoken"
 )
 
 func TestHTTPError_Error(t *testing.T) {

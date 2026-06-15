@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	"git.0ur.uk/nenya/config"
-	"git.0ur.uk/nenya/internal/testutil"
+	"github.com/nenya/config"
+	"github.com/nenya/internal/testutil"
 )
 
 func TestPricingEntry_IsZero(t *testing.T) {

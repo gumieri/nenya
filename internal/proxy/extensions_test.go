@@ -8,9 +8,9 @@ import (
 	"strings"
 	"testing"
 
-	"git.0ur.uk/nenya/config"
-	"git.0ur.uk/nenya/internal/gateway"
-	"git.0ur.uk/nenya/internal/infra"
+	"github.com/nenya/config"
+	"github.com/nenya/internal/gateway"
+	"github.com/nenya/internal/infra"
 )
 
 func newExtensionTestProxy(t *testing.T, upstream *httptest.Server) (*Proxy, *gateway.NenyaGateway) {

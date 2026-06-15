@@ -6,8 +6,8 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"git.0ur.uk/nenya/internal/infra"
-	"git.0ur.uk/nenya/internal/stream"
+	"github.com/nenya/internal/infra"
+	"github.com/nenya/internal/stream"
 )
 
 func newOllamaTransformer(_ *infra.ThoughtSignatureCache) stream.ResponseTransformer {

@@ -5,8 +5,8 @@ import (
 	"log/slog"
 	"testing"
 
-	"git.0ur.uk/nenya/config"
-	"git.0ur.uk/nenya/internal/discovery"
+	"github.com/nenya/config"
+	"github.com/nenya/internal/discovery"
 )
 
 func TestWarnModelsMissingMaxContext(t *testing.T) {

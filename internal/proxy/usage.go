@@ -4,9 +4,9 @@ import (
 	"context"
 	"time"
 
-	"git.0ur.uk/nenya/internal/billing"
-	"git.0ur.uk/nenya/internal/gateway"
-	"git.0ur.uk/nenya/internal/routing"
+	"github.com/nenya/internal/billing"
+	"github.com/nenya/internal/gateway"
+	"github.com/nenya/internal/routing"
 )
 
 // extractTokenCounts extracts input, output, and total token counts from a usage map.

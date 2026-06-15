@@ -4,7 +4,7 @@ import (
 	"context"
 	"sync"
 
-	"git.0ur.uk/nenya/config"
+	"github.com/nenya/config"
 )
 
 // AccountStorage defines the interface for persisting account state.

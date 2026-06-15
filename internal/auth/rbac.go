@@ -1,6 +1,6 @@
 package auth
 
-import "git.0ur.uk/nenya/config"
+import "github.com/nenya/config"
 
 // Role represents a user role with specific permissions.
 type Role string

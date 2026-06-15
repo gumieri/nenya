@@ -4,7 +4,7 @@ import (
 	"log/slog"
 	"testing"
 
-	"git.0ur.uk/nenya/config"
+	"github.com/nenya/config"
 )
 
 func TestAutoAgentsConfig_IsEnabled(t *testing.T) {

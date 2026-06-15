@@ -10,7 +10,7 @@ import (
 	"sync"
 	"testing"
 
-	"git.0ur.uk/nenya/internal/mcp"
+	"github.com/nenya/internal/mcp"
 )
 
 type testMCPServer struct {

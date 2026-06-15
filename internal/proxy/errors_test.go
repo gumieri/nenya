@@ -5,7 +5,7 @@ import (
 	"net/http"
 	"testing"
 
-	"git.0ur.uk/nenya/internal/infra"
+	"github.com/nenya/internal/infra"
 )
 
 func TestClassifyError(t *testing.T) {

@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"git.0ur.uk/nenya/internal/testutil"
+	"github.com/nenya/internal/testutil"
 )
 
 func newTestLogger() *slog.Logger {

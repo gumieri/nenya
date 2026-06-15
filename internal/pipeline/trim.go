@@ -3,8 +3,8 @@ package pipeline
 import (
 	"log/slog"
 
-	"git.0ur.uk/nenya/config"
-	"git.0ur.uk/nenya/internal/util"
+	"github.com/nenya/config"
+	"github.com/nenya/internal/util"
 )
 
 // TrimPayload reduces the payload's message list until its token count

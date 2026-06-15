@@ -6,9 +6,9 @@ import (
 	"testing"
 	"time"
 
-	"git.0ur.uk/nenya/config"
-	"git.0ur.uk/nenya/internal/billing"
-	"git.0ur.uk/nenya/internal/routing"
+	"github.com/nenya/config"
+	"github.com/nenya/internal/billing"
+	"github.com/nenya/internal/routing"
 )
 
 func TestFilterExhaustedTargets(t *testing.T) {

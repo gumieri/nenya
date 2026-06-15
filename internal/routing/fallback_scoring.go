@@ -7,7 +7,7 @@ import (
 	"math"
 	"strings"
 
-	"git.0ur.uk/nenya/internal/discovery"
+	"github.com/nenya/internal/discovery"
 )
 
 // capabilityOverlap counts how many capability flags are both present and true

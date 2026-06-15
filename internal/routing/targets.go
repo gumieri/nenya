@@ -8,11 +8,11 @@ import (
 	"sync"
 	"time"
 
-	"git.0ur.uk/nenya/config"
-	"git.0ur.uk/nenya/internal/discovery"
-	"git.0ur.uk/nenya/internal/infra"
-	"git.0ur.uk/nenya/internal/resilience"
-	"git.0ur.uk/nenya/internal/util"
+	"github.com/nenya/config"
+	"github.com/nenya/internal/discovery"
+	"github.com/nenya/internal/infra"
+	"github.com/nenya/internal/resilience"
+	"github.com/nenya/internal/util"
 )
 
 const (

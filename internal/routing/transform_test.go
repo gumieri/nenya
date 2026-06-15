@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	"git.0ur.uk/nenya/config"
-	"git.0ur.uk/nenya/internal/infra"
+	"github.com/nenya/config"
+	"github.com/nenya/internal/infra"
 )
 
 func testProviders() map[string]*config.Provider {

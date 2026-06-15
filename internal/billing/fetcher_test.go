@@ -10,9 +10,9 @@ import (
 	"testing"
 	"time"
 
-	"git.0ur.uk/nenya/config"
-	"git.0ur.uk/nenya/internal/resilience"
-	"git.0ur.uk/nenya/internal/testutil"
+	"github.com/nenya/config"
+	"github.com/nenya/internal/resilience"
+	"github.com/nenya/internal/testutil"
 )
 
 func TestQuotaFetcher_Lifecycle(t *testing.T) {

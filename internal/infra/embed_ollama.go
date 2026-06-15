@@ -8,7 +8,7 @@ import (
 	"io"
 	"net/http"
 
-	"git.0ur.uk/nenya/internal/util"
+	"github.com/nenya/internal/util"
 )
 
 const maxOllamaEmbeddingResponse = 10 << 20

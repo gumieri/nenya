@@ -11,12 +11,12 @@ import (
 	"strings"
 	"time"
 
-	"git.0ur.uk/nenya/config"
-	"git.0ur.uk/nenya/internal/auth"
-	"git.0ur.uk/nenya/internal/gateway"
-	"git.0ur.uk/nenya/internal/infra"
-	"git.0ur.uk/nenya/internal/routing"
-	"git.0ur.uk/nenya/internal/util"
+	"github.com/nenya/config"
+	"github.com/nenya/internal/auth"
+	"github.com/nenya/internal/gateway"
+	"github.com/nenya/internal/infra"
+	"github.com/nenya/internal/routing"
+	"github.com/nenya/internal/util"
 )
 
 func (p *Proxy) authorizeResponsesAgent(gw *gateway.NenyaGateway, w http.ResponseWriter, r *http.Request, apiKey *config.ApiKey, bodyBytes []byte) (string, *httpError) {

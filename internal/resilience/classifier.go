@@ -4,7 +4,7 @@ import (
 	"strings"
 	"time"
 
-	"git.0ur.uk/nenya/internal/util"
+	"github.com/nenya/internal/util"
 )
 
 // ErrorClass represents the semantic category of an error response.

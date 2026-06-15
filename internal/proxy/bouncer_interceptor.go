@@ -6,10 +6,10 @@ import (
 	"log/slog"
 	"net/http"
 
-	"git.0ur.uk/nenya/config"
-	"git.0ur.uk/nenya/internal/gateway"
-	"git.0ur.uk/nenya/internal/pipeline"
-	"git.0ur.uk/nenya/internal/routing"
+	"github.com/nenya/config"
+	"github.com/nenya/internal/gateway"
+	"github.com/nenya/internal/pipeline"
+	"github.com/nenya/internal/routing"
 )
 
 // BouncerInterceptor sends content to the engine chain for summarization

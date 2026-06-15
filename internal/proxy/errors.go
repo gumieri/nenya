@@ -6,7 +6,7 @@ import (
 	"net/http"
 	"strings"
 
-	"git.0ur.uk/nenya/internal/infra"
+	"github.com/nenya/internal/infra"
 )
 
 // containsAny checks if the string contains any of the substrings.

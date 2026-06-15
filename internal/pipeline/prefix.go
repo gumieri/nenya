@@ -3,7 +3,7 @@ package pipeline
 import (
 	"sort"
 
-	"git.0ur.uk/nenya/config"
+	"github.com/nenya/config"
 )
 
 func ApplyPrefixCacheOptimizations(payload map[string]interface{}, messages []interface{}, cfg config.PrefixCacheConfig) {

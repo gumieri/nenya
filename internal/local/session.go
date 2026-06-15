@@ -29,7 +29,7 @@ import (
 	"sync"
 	"time"
 
-	"git.0ur.uk/nenya/internal/util"
+	"github.com/nenya/internal/util"
 )
 
 const maxRetryAttempts = 3

@@ -10,7 +10,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"git.0ur.uk/nenya/internal/infra"
+	"github.com/nenya/internal/infra"
 )
 
 const ClientVersion = "0.1.0"

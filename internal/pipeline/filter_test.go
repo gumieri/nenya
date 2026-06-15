@@ -6,7 +6,7 @@ import (
 	"testing"
 	"unicode/utf8"
 
-	"git.0ur.uk/nenya/config"
+	"github.com/nenya/config"
 )
 
 func TestRedactSecrets(t *testing.T) {

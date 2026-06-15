@@ -1,7 +1,7 @@
 package testutil
 
 import (
-	"git.0ur.uk/nenya/config"
+	"github.com/nenya/config"
 )
 
 // ConfigOption is a functional option for modifying a test Config.

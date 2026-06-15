@@ -12,12 +12,12 @@ import (
 	"sync"
 	"time"
 
-	"git.0ur.uk/nenya/config"
-	"git.0ur.uk/nenya/internal/billing"
-	"git.0ur.uk/nenya/internal/gateway"
-	providerpkg "git.0ur.uk/nenya/internal/providers"
-	"git.0ur.uk/nenya/internal/routing"
-	"git.0ur.uk/nenya/internal/stream"
+	"github.com/nenya/config"
+	"github.com/nenya/internal/billing"
+	"github.com/nenya/internal/gateway"
+	providerpkg "github.com/nenya/internal/providers"
+	"github.com/nenya/internal/routing"
+	"github.com/nenya/internal/stream"
 )
 
 const (

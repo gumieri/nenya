@@ -5,7 +5,7 @@ import (
 	"sync"
 	"time"
 
-	"git.0ur.uk/nenya/config"
+	"github.com/nenya/config"
 )
 
 const (

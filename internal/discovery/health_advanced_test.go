@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"git.0ur.uk/nenya/config"
+	"github.com/nenya/config"
 )
 
 func testHealthLogger() *slog.Logger {

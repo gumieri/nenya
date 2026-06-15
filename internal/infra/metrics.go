@@ -11,7 +11,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"git.0ur.uk/nenya/internal/version"
+	"github.com/nenya/internal/version"
 )
 
 var labelEscaper = strings.NewReplacer(`\`, `\\`, `"`, `\"`, "\n", `\n`)

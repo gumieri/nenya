@@ -35,3 +35,5 @@ coverage.out
 ehthumbs.db
 Thumbs.db
 dist/
+
+.opencode/

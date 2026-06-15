@@ -3,7 +3,7 @@ package auth
 import (
 	"time"
 
-	"git.0ur.uk/nenya/config"
+	"github.com/nenya/config"
 )
 
 // ToProviderAccounts converts a ProviderConfig to a slice of ProviderAccount.

@@ -5,7 +5,7 @@ import (
 	"math"
 	"strings"
 
-	"git.0ur.uk/nenya/config"
+	"github.com/nenya/config"
 )
 
 // AddCap returns a+b, clamped to math.MaxInt on overflow.

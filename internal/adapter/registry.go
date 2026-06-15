@@ -7,8 +7,8 @@ import (
 	"strings"
 	"sync"
 
-	"git.0ur.uk/nenya/internal/infra"
-	"git.0ur.uk/nenya/internal/stream"
+	"github.com/nenya/internal/infra"
+	"github.com/nenya/internal/stream"
 )
 
 type AdapterEntry struct {

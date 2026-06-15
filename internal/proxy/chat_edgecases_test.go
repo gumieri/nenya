@@ -8,9 +8,9 @@ import (
 	"strings"
 	"testing"
 
-	"git.0ur.uk/nenya/config"
-	"git.0ur.uk/nenya/internal/gateway"
-	"git.0ur.uk/nenya/internal/testutil"
+	"github.com/nenya/config"
+	"github.com/nenya/internal/gateway"
+	"github.com/nenya/internal/testutil"
 )
 
 // TestEdgeCasePayloads tests the chat handler with various edge case inputs

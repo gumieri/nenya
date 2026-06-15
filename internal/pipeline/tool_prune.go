@@ -3,7 +3,7 @@ package pipeline
 import (
 	"fmt"
 
-	"git.0ur.uk/nenya/config"
+	"github.com/nenya/config"
 )
 
 const defaultToolProtectionWindow = 4

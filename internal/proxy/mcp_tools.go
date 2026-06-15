@@ -13,9 +13,9 @@ import (
 	"sync"
 	"time"
 
-	"git.0ur.uk/nenya/internal/gateway"
-	"git.0ur.uk/nenya/internal/mcp"
-	"git.0ur.uk/nenya/internal/util"
+	"github.com/nenya/internal/gateway"
+	"github.com/nenya/internal/mcp"
+	"github.com/nenya/internal/util"
 )
 
 const (

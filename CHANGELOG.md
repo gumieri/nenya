@@ -62,7 +62,7 @@ All notable changes to this project will be documented in this file.
 
 ### Changed
 - Provider-level capability flags replaced with typed ServiceKinds
-- Module renamed from `nenya` to `git.0ur.uk/nenya` for Go 1.26 compatibility
+- Module renamed from `nenya` to `github.com/nenya` for Go 1.26 compatibility
 - All `context.TODO()` calls in MCP keepalive replaced with `context.WithTimeout`
 
 ### Fixed

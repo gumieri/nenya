@@ -142,7 +142,7 @@ func applyServerDefaults(cfg *Config) {
 		cfg.Server.MaxBodyBytes = 10 << 20
 	}
 	if cfg.Server.UserAgent == "" {
-		cfg.Server.UserAgent = "git.0ur.uk/nenya/1.0"
+		cfg.Server.UserAgent = "github.com/nenya/1.0"
 	}
 	if (cfg.Server.SecureMemoryRequired == nil || !*cfg.Server.SecureMemoryRequired) && !cfg.Server.SecureMemoryRequiredWasSet() {
 		cfg.Server.SecureMemoryRequired = PtrTo(true)

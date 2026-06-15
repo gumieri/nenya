@@ -5,8 +5,8 @@ import (
 	"log/slog"
 	"testing"
 
-	"git.0ur.uk/nenya/internal/gateway"
-	"git.0ur.uk/nenya/internal/pipeline"
+	"github.com/nenya/internal/gateway"
+	"github.com/nenya/internal/pipeline"
 )
 
 func TestBouncerInterceptorCanHandle(t *testing.T) {

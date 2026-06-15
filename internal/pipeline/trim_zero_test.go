@@ -5,7 +5,7 @@ import (
 	"os"
 	"testing"
 
-	"git.0ur.uk/nenya/config"
+	"github.com/nenya/config"
 )
 
 func TestTrimPayload_ZeroLimit(t *testing.T) {
