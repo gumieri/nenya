@@ -2,6 +2,7 @@ package proxy
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"regexp"
@@ -168,6 +169,113 @@ func TestParseQuotaExhaustion_EmptyBody(t *testing.T) {
 	d := parseQuotaExhaustion([]byte{})
 	if d != 0 {
 		t.Fatalf("expected 0, got %v", d)
+	}
+}
+
+func TestParseQuotaExhaustion_ZAI_1308_Fallback(t *testing.T) {
+	body := []byte(`{"error":{"code":"1308","message":"已达到5小时使用上限"}}`)
+	d := parseQuotaExhaustion(body)
+	if d != 5*time.Hour {
+		t.Fatalf("expected 5h for ZAI 1308 fallback, got %v", d)
+	}
+}
+
+func TestParseQuotaExhaustion_ZAI_1308_WithTimestamp(t *testing.T) {
+	futureTS := time.Now().Add(3 * time.Hour).UnixMilli()
+	body := []byte(fmt.Sprintf(`{"error":{"code":"1308","message":"已达到5小时使用上限。您的限额将在 %d 重置"}}`, futureTS))
+	d := parseQuotaExhaustion(body)
+	if d <= 0 || d > 6*time.Hour {
+		t.Fatalf("expected ~3h cooldown for ZAI 1308 with timestamp, got %v", d)
+	}
+}
+
+func TestParseQuotaExhaustion_ZAI_1310_Fallback(t *testing.T) {
+	body := []byte(`{"error":{"code":"1310","message":"已达到每周使用上限"}}`)
+	d := parseQuotaExhaustion(body)
+	if d != 1*time.Hour {
+		t.Fatalf("expected 1h for ZAI 1310 fallback, got %v", d)
+	}
+}
+
+func TestParseQuotaExhaustion_ZAI_1310_WithTimestamp(t *testing.T) {
+	futureTS := time.Now().Add(6 * time.Hour).UnixMilli()
+	body := []byte(fmt.Sprintf(`{"error":{"code":"1310","message":"已达到每周使用上限。您的限额将在 %d 重置"}}`, futureTS))
+	d := parseQuotaExhaustion(body)
+	if d <= 0 || d > 7*time.Hour {
+		t.Fatalf("expected ~6h cooldown for ZAI 1310 with timestamp, got %v", d)
+	}
+}
+
+func TestParseQuotaExhaustion_ZAI_UnknownCode(t *testing.T) {
+	body := []byte(`{"error":{"code":"1311","message":"some other error"}}`)
+	d := parseQuotaExhaustion(body)
+	if d != 0 {
+		t.Fatalf("expected 0 for unknown ZAI code, got %v", d)
+	}
+}
+
+func TestParseQuotaExhaustion_ZAI_1308_ExpiredTimestamp(t *testing.T) {
+	pastTS := time.Now().Add(-1 * time.Hour).UnixMilli()
+	body := []byte(fmt.Sprintf(`{"error":{"code":"1308","message":"限额将在 %d 重置"}}`, pastTS))
+	d := parseQuotaExhaustion(body)
+	if d != 5*time.Hour {
+		t.Fatalf("expected 5h fallback for expired timestamp, got %v", d)
+	}
+}
+
+func TestParseQuotaExhaustion_ZAI_1310_TimestampLessThan1Hour(t *testing.T) {
+	futureTS := time.Now().Add(30 * time.Minute).UnixMilli()
+	body := []byte(fmt.Sprintf(`{"error":{"code":"1310","message":"将在 %d 重置"}}`, futureTS))
+	d := parseQuotaExhaustion(body)
+	if d != 1*time.Hour {
+		t.Fatalf("expected 1h clamp for <1h timestamp, got %v", d)
+	}
+}
+
+func TestExtractUnixTimestampMs_OverflowMaxInt(t *testing.T) {
+	maxInt := int64(^uint64(0) >> 1)
+	ts := extractUnixTimestampMs(fmt.Sprintf("%d", maxInt))
+	if ts != maxInt {
+		t.Fatalf("expected MaxInt64, got %d", ts)
+	}
+	ts = extractUnixTimestampMs(fmt.Sprintf("%d", maxInt+1))
+	if ts != 0 {
+		t.Fatalf("expected 0 on overflow, got %d", ts)
+	}
+}
+
+func TestExtractUnixTimestampMs_13Digit(t *testing.T) {
+	ts := extractUnixTimestampMs("您的限额将在 1718236800000 重置")
+	if ts != 1718236800000 {
+		t.Fatalf("expected 1718236800000, got %d", ts)
+	}
+}
+
+func TestExtractUnixTimestampMs_NoNumber(t *testing.T) {
+	ts := extractUnixTimestampMs("没有数字的消息")
+	if ts != 0 {
+		t.Fatalf("expected 0, got %d", ts)
+	}
+}
+
+func TestExtractUnixTimestampMs_ShortNumber(t *testing.T) {
+	ts := extractUnixTimestampMs("编号 12345")
+	if ts != 0 {
+		t.Fatalf("expected 0 (shorter than 13 digits), got %d", ts)
+	}
+}
+
+func TestExtractUnixTimestampMs_OutOfRangeOld(t *testing.T) {
+	ts := extractUnixTimestampMs("1000000000000")
+	if ts != 0 {
+		t.Fatalf("expected 0 for pre-2023 timestamp, got %d", ts)
+	}
+}
+
+func TestExtractUnixTimestampMs_OutOfRangeFuture(t *testing.T) {
+	ts := extractUnixTimestampMs("300000000000000")
+	if ts != 0 {
+		t.Fatalf("expected 0 for post-9999 timestamp, got %d", ts)
 	}
 }
 

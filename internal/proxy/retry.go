@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"math"
 	"math/rand"
 	"net/http"
 	"strconv"
@@ -745,6 +746,35 @@ func parseQuotaExhaustion(body []byte) time.Duration {
 	if len(body) == 0 {
 		return 0
 	}
+
+	var errResp struct {
+		Error struct {
+			Code    string `json:"code"`
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	if json.Unmarshal(body, &errResp) == nil && errResp.Error.Code != "" {
+		switch errResp.Error.Code {
+		case "1308":
+			if ts := extractUnixTimestampMs(errResp.Error.Message); ts > 0 {
+				if dur := time.Until(time.UnixMilli(ts)); dur > 0 {
+					return dur
+				}
+			}
+			return 5 * time.Hour
+		case "1310":
+			if ts := extractUnixTimestampMs(errResp.Error.Message); ts > 0 {
+				if dur := time.Until(time.UnixMilli(ts)); dur > 0 {
+					if dur < 1*time.Hour {
+						return 1 * time.Hour
+					}
+					return dur
+				}
+			}
+			return 1 * time.Hour
+		}
+	}
+
 	lower := strings.ToLower(string(body))
 
 	if idx := strings.Index(lower, "per 86400s"); idx != -1 {
@@ -765,6 +795,47 @@ func parseQuotaExhaustion(body []byte) time.Duration {
 		}
 	}
 
+	return 0
+}
+
+// extractUnixTimestampMs searches for and extracts the first 13+ digit
+// number from the message, returning it as a millisecond-precision Unix timestamp.
+// Only timestamps between 2023-01-01 (1672531200000) and 9999-12-31
+// (253402300799999) are accepted — numbers outside this range are rejected.
+// Returns 0 if no 13+ digit number is found, or if the number is outside the valid range.
+// This function is stateless and safe for concurrent use.
+func extractUnixTimestampMs(msg string) int64 {
+	const (
+		minTimestamp = int64(1672531200000)
+		maxTimestamp = int64(253402300799999)
+	)
+
+	for i := 0; i < len(msg); i++ {
+		if msg[i] >= '0' && msg[i] <= '9' {
+			j := i
+			for j < len(msg) && msg[j] >= '0' && msg[j] <= '9' {
+				j++
+			}
+			if j-i >= 13 {
+				var ts int64
+				for k := i; k < j; k++ {
+					if ts > math.MaxInt/10 {
+						return 0
+					}
+					digit := int64(msg[k] - '0')
+					if ts == math.MaxInt/10 && digit > 7 {
+						return 0
+					}
+					ts = ts*10 + digit
+				}
+				if ts < minTimestamp || ts > maxTimestamp {
+					return 0
+				}
+				return ts
+			}
+			i = j
+		}
+	}
 	return 0
 }
 
