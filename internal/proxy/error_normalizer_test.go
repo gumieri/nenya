@@ -375,6 +375,51 @@ func jsonEqual(a, b map[string]any) bool {
 	return string(aj) == string(bj)
 }
 
+func TestMapErrorKind(t *testing.T) {
+	tests := []struct {
+		name     string
+		errType  ErrorType
+		wantKind string
+	}{
+		{"authentication maps to auth_failed", ErrorTypeAuthentication, "auth_failed"},
+		{"rate_limit maps to rate_limited", ErrorTypeRateLimit, "rate_limited"},
+		{"quota_exhausted maps to quota_exhausted", ErrorTypeQuotaExhausted, "quota_exhausted"},
+		{"provider maps to network_error", ErrorTypeProvider, "network_error"},
+		{"gateway maps to network_error", ErrorTypeGateway, "network_error"},
+		{"bouncer maps to bouncer_error", ErrorTypeBouncer, "bouncer_error"},
+		{"invalid_request maps to internal_error", ErrorTypeInvalidRequest, "internal_error"},
+		{"not_found maps to internal_error", ErrorTypeNotFound, "internal_error"},
+		{"unknown maps to internal_error", ErrorType("unknown"), "internal_error"},
+		{"empty maps to internal_error", ErrorType(""), "internal_error"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := mapErrorKind(tt.errType)
+			if string(got) != tt.wantKind {
+				t.Errorf("mapErrorKind(%v) = %v, want %v", tt.errType, got, tt.wantKind)
+			}
+		})
+	}
+}
+
+func TestGatewayErrorWithQuotaExhausted(t *testing.T) {
+	err := &GatewayError{
+		Type:    ErrorTypeQuotaExhausted,
+		Message: "Quota exceeded",
+	}
+	got := err.ToJSON()
+	errorObj, ok := got["error"].(map[string]any)
+	if !ok {
+		t.Fatal("error field missing or not a map")
+	}
+	if errorObj["type"] != string(ErrorTypeQuotaExhausted) {
+		t.Errorf("type = %v, want %v", errorObj["type"], ErrorTypeQuotaExhausted)
+	}
+	if errorObj["message"] != "Quota exceeded" {
+		t.Errorf("message = %v, want %v", errorObj["message"], "Quota exceeded")
+	}
+}
+
 func FuzzParseProviderErrorBody(f *testing.F) {
 	f.Add([]byte(`{"error":{"message":"test"}}`))
 	f.Add([]byte(`{"error":"plain"}`))

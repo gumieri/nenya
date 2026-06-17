@@ -161,17 +161,18 @@ type forwardOptions struct {
 
 // retryLoop encapsulates the state and logic for retrying upstream requests.
 type retryLoop struct {
-	p                 *Proxy
-	gw                *gateway.NenyaGateway
-	w                 http.ResponseWriter
-	r                 *http.Request
-	opts              forwardOptions
-	ctxLogger         *slog.Logger
-	originalPayload   []byte
-	attempt           int
-	stream            bool
-	summarized        bool
+	p               *Proxy
+	gw              *gateway.NenyaGateway
+	w               http.ResponseWriter
+	r               *http.Request
+	opts            forwardOptions
+	ctxLogger       *slog.Logger
+	originalPayload []byte
+	stream          bool
+	summarized      bool
 	summarizedPayload map[string]interface{}
+	attempt         int
+	quotaExhausted  bool
 }
 
 // trackInFlight increments the in-flight gauge for the first target in
@@ -389,7 +390,12 @@ func (rl *retryLoop) prepareAndSend(idx int, target routing.UpstreamTarget, payl
 
 // handleUpstreamError wraps the proxy's handleUpstreamError method.
 func (rl *retryLoop) handleUpstreamError(idx int, target routing.UpstreamTarget, action upstreamAction) (bool, time.Duration) {
-	return rl.p.handleUpstreamError(rl.gw, idx, rl.opts.Targets, target, rl.opts.Cooldown, rl.opts.AgentName, action)
+	shouldRetry, delay := rl.p.handleUpstreamError(rl.gw, idx, rl.opts.Targets, target, rl.opts.Cooldown, rl.opts.AgentName, action)
+	if rl.p.lastQuotaExhausted.Load() {
+		rl.quotaExhausted = true
+		rl.p.lastQuotaExhausted.Store(false)
+	}
+	return shouldRetry, delay
 }
 
 // Exhausted signals that all targets have been exhausted.
@@ -398,10 +404,19 @@ func (rl *retryLoop) Exhausted() {
 	if rl.opts.AgentName != "" {
 		rl.gw.Metrics.RecordExhausted(rl.opts.AgentName)
 	}
-	if rl.stream {
-		writeGatewayStreamError(rl.w, http.StatusServiceUnavailable, ErrorTypeProvider, "All upstream targets exhausted")
+	var errType ErrorType
+	var message string
+	if rl.quotaExhausted {
+		errType = ErrorTypeQuotaExhausted
+		message = "Quota exhausted on all upstream targets"
 	} else {
-		writeGatewayError(rl.w, http.StatusServiceUnavailable, ErrorTypeProvider, "All upstream targets exhausted")
+		errType = ErrorTypeProvider
+		message = "All upstream targets exhausted"
+	}
+	if rl.stream {
+		writeGatewayStreamError(rl.w, http.StatusServiceUnavailable, errType, message)
+	} else {
+		writeGatewayError(rl.w, http.StatusServiceUnavailable, errType, message)
 	}
 }
 
@@ -599,10 +614,12 @@ func logRetryableError(ctxLogger *slog.Logger, errorBody []byte, gw *gateway.Nen
 	}
 }
 
-func handleRetryableError429(logger *slog.Logger, errorBody []byte, action upstreamAction, cooldownDuration time.Duration, target routing.UpstreamTarget, agentName string, gw *gateway.NenyaGateway) time.Duration {
+func handleRetryableError429(logger *slog.Logger, errorBody []byte, action upstreamAction, cooldownDuration time.Duration, target routing.UpstreamTarget, agentName string, gw *gateway.NenyaGateway) (time.Duration, bool) {
+	isQuota := false
 	effectiveCooldown := cooldownDuration
 	if action.resp.StatusCode == http.StatusTooManyRequests && len(errorBody) > 0 {
 		if quotaCD := parseQuotaExhaustion(errorBody); quotaCD > 0 {
+			isQuota = true
 			if quotaCD > cooldownDuration {
 				effectiveCooldown = quotaCD
 				logger.Info("quota exhaustion detected, extending cooldown", "cooldown_s", effectiveCooldown.Seconds())
@@ -614,11 +631,11 @@ func handleRetryableError429(logger *slog.Logger, errorBody []byte, action upstr
 		gw.AgentState.ActivateCooldown(target, effectiveCooldown)
 		gw.Metrics.RecordCooldown(agentName, target.Provider, target.Model)
 		gw.AgentState.RecordFailureWithStatus(target, action.resp.StatusCode, string(errorBody))
-		return parseRetryDelay(action.resp.Header, errorBody)
+		return parseRetryDelay(action.resp.Header, errorBody), isQuota
 	}
 
 	gw.AgentState.RecordFailureWithStatus(target, action.resp.StatusCode, string(errorBody))
-	return 0
+	return 0, false
 }
 
 func handleAdapterRetryableError(ctxLogger *slog.Logger, target routing.UpstreamTarget, action upstreamAction, cooldownDuration time.Duration, gw *gateway.NenyaGateway) bool {
@@ -653,7 +670,10 @@ func (p *Proxy) handleUpstreamError(gw *gateway.NenyaGateway,
 
 	if p.isRetryableStatus(gw, target.Provider, action.resp.StatusCode) {
 		logRetryableError(ctxLogger, errorBody, gw)
-		delay := handleRetryableError429(ctxLogger, errorBody, action, cooldownDuration, target, agentName, gw)
+		delay, isQuota := handleRetryableError429(ctxLogger, errorBody, action, cooldownDuration, target, agentName, gw)
+		if isQuota {
+			p.lastQuotaExhausted.Store(true)
+		}
 		return true, delay
 	}
 

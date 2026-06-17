@@ -23,6 +23,8 @@ const (
 	ErrorTypeProvider ErrorType = "provider_error"
 	// ErrorTypeRateLimit indicates a rate limit error (429)
 	ErrorTypeRateLimit ErrorType = "rate_limit_error"
+	// ErrorTypeQuotaExhausted indicates a quota exhaustion error (429)
+	ErrorTypeQuotaExhausted ErrorType = "quota_exhausted_error"
 	// ErrorTypeInvalidRequest indicates a client error (4xx)
 	ErrorTypeInvalidRequest ErrorType = "invalid_request_error"
 	// ErrorTypeAuthentication indicates an authentication error (401)
@@ -354,6 +356,8 @@ func mapErrorKind(errType ErrorType) infra.ErrorKind {
 		return infra.ErrorKindAuthFailed
 	case ErrorTypeRateLimit:
 		return infra.ErrorKindRateLimited
+	case ErrorTypeQuotaExhausted:
+		return infra.ErrorKindQuotaExhausted
 	case ErrorTypeProvider, ErrorTypeGateway:
 		return infra.ErrorKindNetworkError
 	case ErrorTypeBouncer:

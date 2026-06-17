@@ -16,6 +16,7 @@ const (
 	ErrorKindInvalidRequest  ErrorKind = "invalid_request"
 	ErrorKindBouncerError    ErrorKind = "bouncer_error"
 	ErrorKindInternal        ErrorKind = "internal_error"
+	ErrorKindQuotaExhausted  ErrorKind = "quota_exhausted"
 )
 
 // ErrorResponse represents a structured API error.
@@ -37,6 +38,7 @@ type ErrorBody struct {
 func (k ErrorKind) Retryable() bool {
 	switch k {
 	case ErrorKindRateLimited,
+		ErrorKindQuotaExhausted,
 		ErrorKindProviderTimeout,
 		ErrorKindNetworkError:
 		return true

@@ -22,6 +22,7 @@ func TestErrorKind_Retryable(t *testing.T) {
 		{ErrorKindInvalidRequest, false},
 		{ErrorKindBouncerError, false},
 		{ErrorKindInternal, false},
+		{ErrorKindQuotaExhausted, true},
 	}
 	for _, tt := range tests {
 		got := tt.kind.Retryable()
