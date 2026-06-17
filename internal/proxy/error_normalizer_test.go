@@ -412,7 +412,7 @@ func TestGatewayErrorWithQuotaExhausted(t *testing.T) {
 	if !ok {
 		t.Fatal("error field missing or not a map")
 	}
-	if errorObj["type"] != string(ErrorTypeQuotaExhausted) {
+	if errorObj["type"].(ErrorType) != ErrorTypeQuotaExhausted {
 		t.Errorf("type = %v, want %v", errorObj["type"], ErrorTypeQuotaExhausted)
 	}
 	if errorObj["message"] != "Quota exceeded" {
