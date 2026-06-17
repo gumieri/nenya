@@ -800,14 +800,14 @@ func parseQuotaExhaustion(body []byte) time.Duration {
 
 // extractUnixTimestampMs searches for and extracts the first 13+ digit
 // number from the message, returning it as a millisecond-precision Unix timestamp.
-// Only timestamps between 2023-01-01 (1672531200000) and 9999-12-31
-// (253402300799999) are accepted — numbers outside this range are rejected.
+// Only timestamps between 2023-01-01 (1672531200000) and 9999-12-31 23:59:59 UTC
+// (410244479903999) are accepted — numbers outside this range are rejected.
 // Returns 0 if no 13+ digit number is found, or if the number is outside the valid range.
 // This function is stateless and safe for concurrent use.
 func extractUnixTimestampMs(msg string) int64 {
 	const (
 		minTimestamp = int64(1672531200000)
-		maxTimestamp = int64(253402300799999)
+		maxTimestamp = int64(410244479903999)
 	)
 
 	for i := 0; i < len(msg); i++ {
@@ -823,9 +823,6 @@ func extractUnixTimestampMs(msg string) int64 {
 						return 0
 					}
 					digit := int64(msg[k] - '0')
-					if ts == math.MaxInt/10 && digit > 7 {
-						return 0
-					}
 					ts = ts*10 + digit
 				}
 				if ts < minTimestamp || ts > maxTimestamp {

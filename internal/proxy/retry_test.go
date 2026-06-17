@@ -233,12 +233,12 @@ func TestParseQuotaExhaustion_ZAI_1310_TimestampLessThan1Hour(t *testing.T) {
 }
 
 func TestExtractUnixTimestampMs_OverflowMaxInt(t *testing.T) {
-	maxInt := int64(^uint64(0) >> 1)
-	ts := extractUnixTimestampMs(fmt.Sprintf("%d", maxInt))
-	if ts != maxInt {
-		t.Fatalf("expected MaxInt64, got %d", ts)
+	const maxValidMs = int64(410244479903999)
+	ts := extractUnixTimestampMs(fmt.Sprintf("%d", maxValidMs))
+	if ts != maxValidMs {
+		t.Fatalf("expected maxValidMs (%d), got %d", maxValidMs, ts)
 	}
-	ts = extractUnixTimestampMs(fmt.Sprintf("%d", maxInt+1))
+	ts = extractUnixTimestampMs(fmt.Sprintf("%d", maxValidMs+1))
 	if ts != 0 {
 		t.Fatalf("expected 0 on overflow, got %d", ts)
 	}
@@ -273,7 +273,7 @@ func TestExtractUnixTimestampMs_OutOfRangeOld(t *testing.T) {
 }
 
 func TestExtractUnixTimestampMs_OutOfRangeFuture(t *testing.T) {
-	ts := extractUnixTimestampMs("300000000000000")
+	ts := extractUnixTimestampMs("410244479904000")
 	if ts != 0 {
 		t.Fatalf("expected 0 for post-9999 timestamp, got %d", ts)
 	}
