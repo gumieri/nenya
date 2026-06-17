@@ -8,15 +8,17 @@ import (
 func zaiSpec() ProviderSpec {
 	return ProviderSpec{
 		ServiceKinds:       []ServiceKind{ServiceKindLLM},
-		SanitizeRequest:    zaiSanitize,
+		SanitizeRequest:    ZaiSanitizeSpecOnly,
 		ValidationEndpoint: zaiValidationEndpoint,
 	}
 }
 
-func zaiSanitize(deps *SanitizeDeps, payload map[string]interface{}) {
+func ZaiSanitizeSpecOnly(deps *SanitizeDeps, payload map[string]interface{}) {
 	injectThinkingForZai(deps, payload)
 	injectTemperatureDefaultsForZai(payload)
+}
 
+func zaiSanitizeAdapterOnly(deps *SanitizeDeps, payload map[string]interface{}) {
 	if _, hasTools := payload["tools"]; hasTools {
 		return
 	}
@@ -46,6 +48,11 @@ func zaiSanitize(deps *SanitizeDeps, payload map[string]interface{}) {
 	}
 
 	payload["messages"] = merged
+}
+
+func zaiSanitize(deps *SanitizeDeps, payload map[string]interface{}) {
+	ZaiSanitizeSpecOnly(deps, payload)
+	zaiSanitizeAdapterOnly(deps, payload)
 }
 
 func zaiExtractValidToolCallIDs(messages []interface{}) map[string]string {

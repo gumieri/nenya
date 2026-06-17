@@ -139,6 +139,7 @@ func minimaxFreeValidationEndpoint(providerURL string) string {
 func zaiCodingPlanSpec() ProviderSpec {
 	return ProviderSpec{
 		ServiceKinds:       []ServiceKind{ServiceKindLLM},
+		SanitizeRequest:    ZaiSanitizeSpecOnly,
 		ValidationEndpoint: zaiValidationEndpoint,
 	}
 }
