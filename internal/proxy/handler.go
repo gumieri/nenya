@@ -26,9 +26,9 @@ const MaxModelNameLength = 256
 
 // Proxy handles HTTP requests and routes them to upstream AI providers.
 type Proxy struct {
-	gw               atomic.Pointer[gateway.NenyaGateway]
-	ShutdownCtx      context.Context
-	Shutdown         atomic.Bool
+	gw                 atomic.Pointer[gateway.NenyaGateway]
+	ShutdownCtx        context.Context
+	Shutdown           atomic.Bool
 	lastQuotaExhausted atomic.Bool
 }
 

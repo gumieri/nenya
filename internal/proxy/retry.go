@@ -171,18 +171,18 @@ type forwardOptions struct {
 // retryLoop encapsulates the state and logic for retrying upstream requests.
 // Maintains attempt counter, quota exhaustion flag, and request context across retries.
 type retryLoop struct {
-	p               *Proxy
-	gw              *gateway.NenyaGateway
-	w               http.ResponseWriter
-	r               *http.Request
-	opts            forwardOptions
-	ctxLogger       *slog.Logger
-	originalPayload []byte
-	stream          bool
-	summarized      bool
+	p                 *Proxy
+	gw                *gateway.NenyaGateway
+	w                 http.ResponseWriter
+	r                 *http.Request
+	opts              forwardOptions
+	ctxLogger         *slog.Logger
+	originalPayload   []byte
+	stream            bool
+	summarized        bool
 	summarizedPayload map[string]interface{}
-	attempt         int
-	quotaExhausted  bool
+	attempt           int
+	quotaExhausted    bool
 }
 
 // trackInFlight increments the in-flight gauge for the first target in
@@ -794,37 +794,62 @@ func parseQuotaExhaustion(body []byte, logger *slog.Logger) time.Duration {
 			Message string `json:"message"`
 		} `json:"error"`
 	}
-	if json.Unmarshal(body, &errResp) == nil && errResp.Error.Code != "" {
-		switch errResp.Error.Code {
-		case "1308":
-			if ts := extractUnixTimestampMs(errResp.Error.Message); ts > 0 {
-				if dur := time.Until(time.UnixMilli(ts)); dur > 0 {
-					return dur
-				}
-			}
-			return zaiCode1308FallbackCooldown
-		case "1310":
-			if ts := extractUnixTimestampMs(errResp.Error.Message); ts > 0 {
-				if dur := time.Until(time.UnixMilli(ts)); dur > 0 {
-					if dur < zaiCode1310MinCooldown {
-						return zaiCode1310MinCooldown
-					}
-					if dur > maxQuotaCooldown {
-						return maxQuotaCooldown
-					}
-					return dur
-				}
-			}
-			return zaiCode1310FallbackCooldown
-		}
+
+	if json.Unmarshal(body, &errResp) != nil {
+		return parseGenericQuotaPatterns(body)
 	}
 
-	lower := strings.ToLower(string(body))
+	if errResp.Error.Code == "" {
+		return parseGenericQuotaPatterns(body)
+	}
 
-	if idx := strings.Index(lower, "per 86400s"); idx != -1 {
+	switch errResp.Error.Code {
+	case "1308":
+		return parseZaiQuota1308(errResp.Error.Message)
+	case "1310":
+		return parseZaiQuota1310(errResp.Error.Message)
+	default:
+		return parseGenericQuotaPatterns(body)
+	}
+}
+
+func parseZaiQuota1308(message string) time.Duration {
+	ts := extractUnixTimestampMs(message)
+	if ts <= 0 {
+		return zaiCode1308FallbackCooldown
+	}
+
+	dur := time.Until(time.UnixMilli(ts))
+	if dur > 0 {
+		return dur
+	}
+	return zaiCode1308FallbackCooldown
+}
+
+func parseZaiQuota1310(message string) time.Duration {
+	ts := extractUnixTimestampMs(message)
+	if ts <= 0 {
+		return zaiCode1310FallbackCooldown
+	}
+
+	dur := time.Until(time.UnixMilli(ts))
+	if dur <= 0 {
+		return zaiCode1310FallbackCooldown
+	}
+
+	if dur < zaiCode1310MinCooldown {
+		return zaiCode1310MinCooldown
+	}
+	if dur > maxQuotaCooldown {
 		return maxQuotaCooldown
 	}
-	if idx := strings.Index(lower, "perday"); idx != -1 {
+	return dur
+}
+
+func parseGenericQuotaPatterns(body []byte) time.Duration {
+	lower := strings.ToLower(string(body))
+
+	if strings.Contains(lower, "per 86400s") || strings.Contains(lower, "perday") {
 		return maxQuotaCooldown
 	}
 
@@ -855,29 +880,45 @@ func extractUnixTimestampMs(msg string) int64 {
 	)
 
 	for i := 0; i < len(msg); i++ {
-		if msg[i] >= '0' && msg[i] <= '9' {
-			j := i
-			for j < len(msg) && msg[j] >= '0' && msg[j] <= '9' {
-				j++
-			}
-			if j-i >= 13 {
-				var ts int64
-				for k := i; k < j; k++ {
-					digit := int64(msg[k] - '0')
-					if ts > (math.MaxInt64 - digit) / 10 {
-						return 0
-					}
-					ts = ts*10 + digit
-				}
-				if ts < minTimestamp || ts > maxTimestamp {
-					return 0
-				}
-				return ts
-			}
-			i = j
+		if msg[i] < '0' || msg[i] > '9' {
+			continue
 		}
+
+		j := i
+		for j < len(msg) && msg[j] >= '0' && msg[j] <= '9' {
+			j++
+		}
+
+		if j-i < 13 {
+			i = j
+			continue
+		}
+
+		ts := parseDigitsToTimestamp(msg[i:j], minTimestamp, maxTimestamp)
+		if ts > 0 {
+			return ts
+		}
+		i = j
 	}
 	return 0
+}
+
+// parseDigitsToTimestamp parses a digit string into an int64 timestamp,
+// applying overflow protection and range validation.
+func parseDigitsToTimestamp(digits string, minTimestamp, maxTimestamp int64) int64 {
+	var ts int64
+	for k := 0; k < len(digits); k++ {
+		digit := int64(digits[k] - '0')
+		if ts > (math.MaxInt64-digit)/10 {
+			return 0
+		}
+		ts = ts*10 + digit
+	}
+
+	if ts < minTimestamp || ts > maxTimestamp {
+		return 0
+	}
+	return ts
 }
 
 func (p *Proxy) isRetryableStatus(gw *gateway.NenyaGateway, providerName string, statusCode int) bool {
