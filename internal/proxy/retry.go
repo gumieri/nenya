@@ -27,6 +27,15 @@ const maxQuotaCooldown = 30 * time.Minute
 const retrySystemPrompt = "Summarize the following conversation messages into a single coherent response. Preserve key context and important details. Remove redundant information."
 
 const (
+	// ZAI code 1308: "已达到5小时使用上限" (5-hour usage limit reached)
+	zaiCode1308FallbackCooldown = 5 * time.Hour
+	// ZAI code 1310: "已达到每周使用上限" (weekly usage limit reached)
+	// Minimum 1-hour cooldown prevents retry storms on short windows
+	zaiCode1310FallbackCooldown = 1 * time.Hour
+	zaiCode1310MinCooldown      = 1 * time.Hour
+)
+
+const (
 	exponentialBackoffBase   = 500 * time.Millisecond
 	exponentialBackoffMax    = 8 * time.Second
 	exponentialBackoffJitter = 750 * time.Millisecond
@@ -160,6 +169,7 @@ type forwardOptions struct {
 }
 
 // retryLoop encapsulates the state and logic for retrying upstream requests.
+// Maintains attempt counter, quota exhaustion flag, and request context across retries.
 type retryLoop struct {
 	p               *Proxy
 	gw              *gateway.NenyaGateway
@@ -398,7 +408,9 @@ func (rl *retryLoop) handleUpstreamError(idx int, target routing.UpstreamTarget,
 	return shouldRetry, delay
 }
 
-// Exhausted signals that all targets have been exhausted.
+// Exhausted is called when all upstream targets have been exhausted without success.
+// Writes an error response to the client. If quota exhaustion was detected during retries,
+// returns error_kind=quota_exhausted; otherwise returns error_kind=provider_error.
 func (rl *retryLoop) Exhausted() {
 	rl.ctxLogger.Error("all upstream targets exhausted", "total", len(rl.opts.Targets), "attempts", rl.attempt)
 	if rl.opts.AgentName != "" {
@@ -420,7 +432,9 @@ func (rl *retryLoop) Exhausted() {
 	}
 }
 
-// forwardToUpstream processes chat completion requests with retry logic.
+// forwardToUpstream processes chat completion requests with retry logic across all targets.
+// Creates a retryLoop, tracks in-flight metrics, and runs the retry loop. If retry loop
+// creation fails, returns 500 Internal Server Error.
 func (p *Proxy) forwardToUpstream(gw *gateway.NenyaGateway, w http.ResponseWriter, r *http.Request, opts forwardOptions) {
 	rl, err := newRetryLoop(p, gw, w, r, opts)
 	if err != nil {
@@ -618,7 +632,7 @@ func handleRetryableError429(logger *slog.Logger, errorBody []byte, action upstr
 	isQuota := false
 	effectiveCooldown := cooldownDuration
 	if action.resp.StatusCode == http.StatusTooManyRequests && len(errorBody) > 0 {
-		if quotaCD := parseQuotaExhaustion(errorBody); quotaCD > 0 {
+		if quotaCD := parseQuotaExhaustion(errorBody, logger); quotaCD > 0 {
 			isQuota = true
 			if quotaCD > cooldownDuration {
 				effectiveCooldown = quotaCD
@@ -638,15 +652,15 @@ func handleRetryableError429(logger *slog.Logger, errorBody []byte, action upstr
 	return 0, false
 }
 
-func handleAdapterRetryableError(ctxLogger *slog.Logger, target routing.UpstreamTarget, action upstreamAction, cooldownDuration time.Duration, gw *gateway.NenyaGateway) bool {
+func handleAdapterRetryableError(ctxLogger *slog.Logger, target routing.UpstreamTarget, action upstreamAction, cooldownDuration time.Duration, gw *gateway.NenyaGateway) (bool, bool) {
 	a := adapter.ForProvider(target.Provider)
 	errClass := a.NormalizeError(action.resp.StatusCode, action.body)
 	if (errClass == adapter.ErrorRetryable || errClass == adapter.ErrorQuotaExhausted) && action.resp.StatusCode >= 400 && action.resp.StatusCode < 500 {
 		ctxLogger.Warn("adapter classified client error as retryable, trying next target", "error_class", errClass)
 		gw.AgentState.RecordFailureWithStatus(target, action.resp.StatusCode, string(action.body))
-		return true
+		return true, errClass == adapter.ErrorQuotaExhausted
 	}
-	return false
+	return false, false
 }
 
 func (p *Proxy) handleUpstreamError(gw *gateway.NenyaGateway,
@@ -684,7 +698,10 @@ func (p *Proxy) handleUpstreamError(gw *gateway.NenyaGateway,
 		return true, 0
 	}
 
-	if handleAdapterRetryableError(ctxLogger, target, action, cooldownDuration, gw) {
+	if retryable, isQuota := handleAdapterRetryableError(ctxLogger, target, action, cooldownDuration, gw); retryable {
+		if isQuota {
+			p.lastQuotaExhausted.Store(true)
+		}
 		return true, 0
 	}
 
@@ -762,7 +779,11 @@ func redactForLog(body string, gw *gateway.NenyaGateway) string {
 	return s
 }
 
-func parseQuotaExhaustion(body []byte) time.Duration {
+// parseQuotaExhaustion extracts quota cooldown duration from error responses.
+// It checks for ZAI-specific error codes (1308, 1310) with Unix millisecond
+// timestamps in the message, and falls back to generic quota pattern matching.
+// Returns 0 if no quota information is found.
+func parseQuotaExhaustion(body []byte, logger *slog.Logger) time.Duration {
 	if len(body) == 0 {
 		return 0
 	}
@@ -781,17 +802,20 @@ func parseQuotaExhaustion(body []byte) time.Duration {
 					return dur
 				}
 			}
-			return 5 * time.Hour
+			return zaiCode1308FallbackCooldown
 		case "1310":
 			if ts := extractUnixTimestampMs(errResp.Error.Message); ts > 0 {
 				if dur := time.Until(time.UnixMilli(ts)); dur > 0 {
-					if dur < 1*time.Hour {
-						return 1 * time.Hour
+					if dur < zaiCode1310MinCooldown {
+						return zaiCode1310MinCooldown
+					}
+					if dur > maxQuotaCooldown {
+						return maxQuotaCooldown
 					}
 					return dur
 				}
 			}
-			return 1 * time.Hour
+			return zaiCode1310FallbackCooldown
 		}
 	}
 
@@ -839,10 +863,10 @@ func extractUnixTimestampMs(msg string) int64 {
 			if j-i >= 13 {
 				var ts int64
 				for k := i; k < j; k++ {
-					if ts > math.MaxInt/10 {
+					digit := int64(msg[k] - '0')
+					if ts > (math.MaxInt64 - digit) / 10 {
 						return 0
 					}
-					digit := int64(msg[k] - '0')
 					ts = ts*10 + digit
 				}
 				if ts < minTimestamp || ts > maxTimestamp {

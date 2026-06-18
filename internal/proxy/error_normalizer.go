@@ -15,7 +15,8 @@ const (
 	maxParamLength   = 256       // 256 char limit for param/code fields
 )
 
-// ErrorType represents the type of error that occurred
+// ErrorType represents the type of error that occurred during request processing.
+// Maps to upstream provider error types (provider_error, rate_limit_error, etc.).
 type ErrorType string
 
 const (
@@ -35,7 +36,9 @@ const (
 	ErrorTypeBouncer  ErrorType = "bouncer_error"
 )
 
-// GatewayError is the base error type for all gateway errors
+// GatewayError represents an error that occurred in the gateway, with structured
+// fields for logging, client responses, and debugging. The Err field contains
+// the original error for debugging (not exposed to clients).
 type GatewayError struct {
 	Type       ErrorType `json:"type"`
 	Message    string    `json:"message"`
@@ -47,12 +50,14 @@ type GatewayError struct {
 	Err error `json:"-"`
 }
 
-// OpenAI-compatible envelope for responses
+// OpenAIErrorEnvelope is the OpenAI-compatible response envelope for errors.
+// Clients expect errors in this format for OpenAI wire format.
 type OpenAIErrorEnvelope struct {
 	Error OpenAIErrorObject `json:"error"`
 }
 
-// OpenAIErrorObject is the public error object
+// OpenAIErrorObject is the public error object exposed to clients in OpenAI format.
+// Contains type, message, optional param, and optional code fields.
 type OpenAIErrorObject struct {
 	Type    ErrorType `json:"type"`
 	Message string    `json:"message"`

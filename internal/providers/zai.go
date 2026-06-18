@@ -13,12 +13,20 @@ func zaiSpec() ProviderSpec {
 	}
 }
 
+// ZaiSanitizeSpecOnly applies Category A sanitization for Zai provider:
+// - Injects thinking mode for reasoning-capable models
+// - Sets model-specific temperature defaults (GLM-4.6/4.7 → 1.0)
 func ZaiSanitizeSpecOnly(deps *SanitizeDeps, payload map[string]interface{}) {
 	injectThinkingForZai(deps, payload)
 	injectTemperatureDefaultsForZai(payload)
 }
 
-func zaiSanitizeAdapterOnly(deps *SanitizeDeps, payload map[string]interface{}) {
+// ZaiSanitizeAdapterOnly applies Category B sanitization for Zai provider:
+// - Filters out invalid or orphaned tool messages
+// - Merges consecutive user messages
+// - Inserts bridge messages between consecutive assistant messages
+// - Prepends system bridge when conversation starts with user message
+func ZaiSanitizeAdapterOnly(deps *SanitizeDeps, payload map[string]interface{}) {
 	if _, hasTools := payload["tools"]; hasTools {
 		return
 	}
@@ -52,7 +60,7 @@ func zaiSanitizeAdapterOnly(deps *SanitizeDeps, payload map[string]interface{}) 
 
 func zaiSanitize(deps *SanitizeDeps, payload map[string]interface{}) {
 	ZaiSanitizeSpecOnly(deps, payload)
-	zaiSanitizeAdapterOnly(deps, payload)
+	ZaiSanitizeAdapterOnly(deps, payload)
 }
 
 func zaiExtractValidToolCallIDs(messages []interface{}) map[string]string {

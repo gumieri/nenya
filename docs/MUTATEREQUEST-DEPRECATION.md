@@ -26,7 +26,18 @@ type ProviderAdapter interface {
 }
 ```
 
-It transforms the request body **after** spec-level sanitization (`ProviderSpec.SanitizeRequest`) but **before** sending the request to the upstream provider.
+It transforms the request body **during dispatch** via the adapter system, distinct from the spec-level sanitization that runs earlier in the request pipeline.
+
+**Execution Order** (from `TransformRequestForUpstream` in `internal/routing/transform.go:289-341`):
+1. Resolve model mapping (`resolveModelMapping`)
+2. Spec-level sanitization: `ProviderSpec.SanitizeRequest` via `applyProviderSanitize()` (e.g., `ZaiSanitizeSpecOnly()` for thinking/temperature)
+3. Generic payload sanitization: `SanitizePayload` (model capability-based)
+4. Resolve agent system prompt (`resolveAgentSystemPrompt`)
+5. Apply max tokens and trim payload (`applyMaxTokens`, `TrimPayload`)
+6. Anthropic wire format conversion (if format=anthropic)
+7. Marshal and return payload
+
+**Note:** Adapter-level `MutateRequest()` is called during dispatch, not in `TransformRequestForUpstream`.
 
 ---
 
@@ -38,8 +49,8 @@ The codebase has evolved to use **ProviderSpec.SanitizeRequest** hooks instead f
 
 1. **Original Architecture:** All request mutations happened in `MutateRequest()`
 2. **Current Architecture:** Mutations split across two layers:
-   - **Spec-level (`ProviderSpec.SanitizeRequest`)**: Runs before adapter transformation
-   - **Adapter-level (`MutateRequest`)**: Runs after spec-level sanitization
+   - **Spec-level (`ProviderSpec.SanitizeRequest`)**: Runs early in `TransformRequestForUpstream` via `applyProviderSanitize()`
+   - **Adapter-level (`MutateRequest`)**: Runs during dispatch via adapter system (before sending to upstream)
 
 ### Current Usage Patterns
 
@@ -49,7 +60,7 @@ The codebase has evolved to use **ProviderSpec.SanitizeRequest** hooks instead f
 |----------|---------------|--------|
 | **Anthropic** | **Full transformation** (OpenAI → Anthropic format) | Wire format incompatibility |
 | **Gemini** | **Full transformation** (OpenAI → Gemini format) | Wire format incompatibility |
-| **ZAI** | **Category B only** (message cleanup) | Tool call filtering, message merging |
+| **ZAI** | **Message cleanup** (via `ZaiAdapter.zaiSanitize()`) | Tool call filtering, message merging |
 | **Ollama** | **Minimal** (remove tool_choice) | Tool choice not supported |
 | **XAI, OpenRouter, Perplexity** | **Delegate to OpenAI** | OpenAI-compatible |
 
@@ -90,10 +101,10 @@ func (a *AnthropicAdapter) MutateRequest(body []byte, model string, stream bool)
 
 **Providers:** Ollama, ZAI
 
-These providers perform minimal adjustments in `MutateRequest()`:
+These providers perform minor adjustments in `MutateRequest()`:
 
 - **Ollama:** Removes `tool_choice` field (not supported)
-- **ZAI:** Category B message cleanup (tool call filtering, message merging)
+- **ZAI:** Message cleanup via `ZaiAdapter.zaiSanitize()` (tool call filtering, message merging)
 
 ### 3. Delegation (Compatibility Shim)
 
@@ -124,7 +135,6 @@ Some providers (Anthropic, Gemini) require full request/response transformation.
 ZAI and Ollama perform minor adjustments that don't justify spec-level hooks:
 
 - **Ollama:** Single field removal (`tool_choice`)
-- **ZAI:** Category B message cleanup (already split from `ZaiSanitizeSpecOnly()`)
 
 ### 3. Backward Compatibility
 
@@ -171,7 +181,7 @@ The current architecture is **sound and intentional**. `MutateRequest()` serves 
 
 1. **Keep both layers:** Spec-level and adapter-level transformations serve different purposes
 2. **Document new additions:** When adding new providers, document which layer handles which transformations
-3. **Avoid double-mutation:** Ensure `SanitizeRequest` and `MutateRequest` don't duplicate work (use the split pattern demonstrated by `ZaiSanitizeSpecOnly()` + `zaiSanitizeAdapterOnly()`)
+3. **Avoid double-mutation:** Ensure `SanitizeRequest` and `MutateRequest` don't duplicate work (spec-level handles cross-cutting concerns like thinking/temperature; adapter-level handles wire format conversion and provider-specific cleanup)
 
 ---
 
@@ -180,7 +190,8 @@ The current architecture is **sound and intentional**. `MutateRequest()` serves 
 - **Interface Definition:** `internal/adapter/adapter.go:50-55`
 - **Spec-Level Hooks:** `internal/providers/spec.go:22-30`
 - **Adapter Registry:** `internal/adapter/registry.go:14-18`
-- **ZAI Split Pattern:** `internal/providers/zai.go:16-56`
+- **Spec-Level Hook Example:** `internal/providers/zai.go:16-22` (`ZaiSanitizeSpecOnly()` for thinking/temperature)
+- **Adapter-Level ZAI Cleanup:** `internal/adapter/zai.go:99-130` (`ZaiAdapter.zaiSanitize()` for message filtering/merging)
 
 ---
 

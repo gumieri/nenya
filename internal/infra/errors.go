@@ -34,7 +34,8 @@ type ErrorBody struct {
 	Param   string `json:"param,omitempty"`
 }
 
-// Retryable returns true if the error is potentially retryable.
+// Retryable returns true if the error is potentially retryable. Quota exhaustion,
+// rate limits, provider timeouts, and network errors are considered retryable.
 func (k ErrorKind) Retryable() bool {
 	switch k {
 	case ErrorKindRateLimited,
@@ -48,6 +49,8 @@ func (k ErrorKind) Retryable() bool {
 }
 
 // ShouldFailover returns true if this error should trigger provider failover.
+// Provider timeouts, provider errors, and network errors trigger failover.
+// Quota exhaustion and rate limits do NOT trigger failover (all targets quota-limited).
 func (k ErrorKind) ShouldFailover() bool {
 	switch k {
 	case ErrorKindProviderTimeout,
