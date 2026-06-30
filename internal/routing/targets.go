@@ -777,6 +777,137 @@ func ResolveWindowMaxContext(modelName string, agents map[string]config.AgentCon
 	return maxCtx
 }
 
+// ResolveWindowMaxOutput returns the maximum output token limit across all
+// models in an agent's chain, using the three-tier resolution.
+// Returns 0 if the agent is not found.
+// Note: Only inspects statically configured models. Dynamic/regex-based model
+// entries that expand at request time are not resolved here.
+func ResolveWindowMaxOutput(agentName string, agents map[string]config.AgentConfig, catalog *discovery.ModelCatalog) int {
+	agent, ok := agents[agentName]
+	if !ok {
+		return 0
+	}
+	maxOut := 0
+	for _, m := range agent.Models {
+		if mo := resolveMaxOutput(m, catalog); mo > maxOut {
+			maxOut = mo
+		}
+	}
+	return maxOut
+}
+
+// AgentCapabilities holds the intersection of capabilities across all models
+// in an agent's chain. A capability is true only if every model supports it.
+type AgentCapabilities struct {
+	SupportsVision    bool
+	SupportsToolCalls bool
+	SupportsReasoning bool
+}
+
+// ResolveAgentCapabilities computes the intersection of capabilities across
+// all models in an agent's chain. Returns all-false if the agent is not found,
+// has no models, or if any model's metadata cannot be resolved (conservative:
+// assume unsupported).
+// Note: Only inspects statically configured models. Dynamic/regex-based model
+// entries that expand at request time are not resolved and cause the function
+// to fall back to inference from the model ID, which may produce less accurate
+// capability data.
+func ResolveAgentCapabilities(agentName string, agents map[string]config.AgentConfig, catalog *discovery.ModelCatalog) AgentCapabilities {
+	agent, ok := agents[agentName]
+	if !ok || len(agent.Models) == 0 {
+		return AgentCapabilities{}
+	}
+	caps := AgentCapabilities{
+		SupportsVision:    true,
+		SupportsToolCalls: true,
+		SupportsReasoning: true,
+	}
+	for _, m := range agent.Models {
+		meta := resolveModelMetadata(m, catalog)
+		if meta == nil {
+			slog.Warn("could not resolve model metadata for agent capabilities",
+				"model", m.Model, "agent", agentName,
+			)
+			return AgentCapabilities{}
+		}
+		caps.SupportsVision = caps.SupportsVision && meta.SupportsVision
+		caps.SupportsToolCalls = caps.SupportsToolCalls && meta.SupportsToolCalls
+		caps.SupportsReasoning = caps.SupportsReasoning && meta.SupportsReasoning
+	}
+	return caps
+}
+
+// resolveModelMetadata returns the ModelMetadata for a model, checking the
+// discovery catalog first, then inferring from the model ID prefix patterns.
+// Returns nil only if the model is absent from the catalog AND no inference
+// rule matches the model ID.
+func resolveModelMetadata(m config.AgentModel, catalog *discovery.ModelCatalog) *discovery.ModelMetadata {
+	if catalog != nil {
+		if dm, ok := catalog.Lookup(m.Model); ok && dm.Metadata != nil {
+			return dm.Metadata
+		}
+	}
+	return discovery.InferCapabilities(m.Model)
+}
+
+// AgentPricing holds the average cost across all models in an agent's chain
+// that have pricing data.
+type AgentPricing struct {
+	InputCostPer1M  float64
+	OutputCostPer1M float64
+	HasPricing      bool
+}
+
+// ResolveAgentPricing computes the average pricing across all models in an
+// agent's chain. Models without pricing data are excluded from the average.
+// Returns HasPricing=false if the agent is not found or no models have pricing.
+// Note: Only inspects statically configured models. Dynamic/regex-based model
+// entries that expand at request time are not resolved here.
+func ResolveAgentPricing(agentName string, agents map[string]config.AgentConfig, catalog *discovery.ModelCatalog) AgentPricing {
+	agent, ok := agents[agentName]
+	if !ok {
+		return AgentPricing{}
+	}
+	var totalIn, totalOut float64
+	count := 0
+	for _, m := range agent.Models {
+		p := resolveModelPricing(m, catalog)
+		if p == nil {
+			continue
+		}
+		totalIn += p.InputCostPer1M
+		totalOut += p.OutputCostPer1M
+		count++
+	}
+	if count == 0 {
+		return AgentPricing{}
+	}
+	return AgentPricing{
+		InputCostPer1M:  totalIn / float64(count),
+		OutputCostPer1M: totalOut / float64(count),
+		HasPricing:      true,
+	}
+}
+
+// resolveModelPricing returns the pricing for a model, checking the discovery
+// catalog first, then the static registry. Returns nil if no pricing is available.
+func resolveModelPricing(m config.AgentModel, catalog *discovery.ModelCatalog) *discovery.PricingEntry {
+	if catalog != nil {
+		if dm, ok := catalog.Lookup(m.Model); ok && dm.Pricing != nil && !dm.Pricing.IsZero() {
+			p := *dm.Pricing
+			return &p
+		}
+	}
+	if entry, ok := config.ModelRegistry[m.Model]; ok && !entry.Pricing.IsZero() {
+		return &discovery.PricingEntry{
+			InputCostPer1M:  entry.Pricing.InputCostPer1M,
+			OutputCostPer1M: entry.Pricing.OutputCostPer1M,
+			Currency:        "USD",
+		}
+	}
+	return nil
+}
+
 // SortTargetsByLatency orders targets by median latency using the provided
 // latency tracker. If jitterFn is non-nil, it applies randomization (±5%)
 // to prevent thundering herd. Returns the original slice if latencyTracker
