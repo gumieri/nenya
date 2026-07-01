@@ -71,6 +71,7 @@ func (m *AgentModel) IsDynamic() bool {
 // model lists, MCP tool integration, and prompt configuration.
 type AgentConfig struct {
 	Strategy          string          `json:"strategy"`
+	Description       string          `json:"description,omitempty"`
 	CooldownSeconds   int             `json:"cooldown_seconds"`
 	FailureThreshold  int             `json:"failure_threshold"`
 	FailureWindowSec  int             `json:"failure_window_secs"`
