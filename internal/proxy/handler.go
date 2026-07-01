@@ -17,6 +17,7 @@ import (
 	"github.com/nenya/internal/discovery"
 	"github.com/nenya/internal/gateway"
 	"github.com/nenya/internal/infra"
+	"github.com/nenya/internal/routing"
 	"github.com/nenya/internal/stream"
 	"github.com/nenya/internal/util"
 )
@@ -442,6 +443,81 @@ func (p *Proxy) handleMetrics(w http.ResponseWriter, r *http.Request) {
 	infra.HandleMetrics(gw.Metrics, w, r)
 }
 
+// modelsEntry represents a single model in the /v1/models response.
+type modelEntry struct {
+	ID                string  `json:"id"`
+	Object            string  `json:"object"`
+	OwnedBy           string  `json:"owned_by"`
+	ContextWindow     int     `json:"context_window,omitempty"`
+	MaxTokens         int     `json:"max_tokens,omitempty"`
+	SupportsVision    bool    `json:"supports_vision,omitempty"`
+	SupportsTools     bool    `json:"supports_tool_calls,omitempty"`
+	SupportsReasoning bool    `json:"supports_reasoning,omitempty"`
+	InputCostPer1M    float64 `json:"input_cost_per_1m,omitempty"`
+	OutputCostPer1M   float64 `json:"output_cost_per_1m,omitempty"`
+	RoutingStrategy   string  `json:"routing_strategy,omitempty"`
+	Description       string  `json:"description,omitempty"`
+}
+
+// buildAgentModelEntry creates a modelEntry for an agent pseudo-model,
+// aggregating metadata (context window, capabilities, pricing) from the
+// agent's model chain using the routing resolution helpers.
+// Returns a default entry (zero metadata) if gw is nil.
+func buildAgentModelEntry(agentName string, agent config.AgentConfig, gw *gateway.NenyaGateway) modelEntry {
+	entry := modelEntry{
+		ID:      agentName,
+		Object:  "model",
+		OwnedBy: "nenya",
+	}
+	if gw == nil {
+		return entry
+	}
+
+	if maxCtx := routing.ResolveWindowMaxContext(agentName, gw.Config.Agents, gw.ModelCatalog); maxCtx > 0 {
+		entry.ContextWindow = maxCtx
+	}
+	if maxOut := routing.ResolveWindowMaxOutput(agentName, gw.Config.Agents, gw.ModelCatalog); maxOut > 0 {
+		entry.MaxTokens = maxOut
+	}
+
+	caps := routing.ResolveAgentCapabilities(agentName, gw.Config.Agents, gw.ModelCatalog)
+	entry.SupportsVision = caps.SupportsVision
+	entry.SupportsTools = caps.SupportsToolCalls
+	entry.SupportsReasoning = caps.SupportsReasoning
+
+	if pricing := routing.ResolveAgentPricing(agentName, gw.Config.Agents, gw.ModelCatalog); pricing.HasPricing {
+		entry.InputCostPer1M = pricing.InputCostPer1M
+		entry.OutputCostPer1M = pricing.OutputCostPer1M
+	}
+
+	if agent.Strategy != "" {
+		entry.RoutingStrategy = agent.Strategy
+	}
+	// Description populated in Phase 012
+	return entry
+}
+
+// applyModelFields sets optional metadata fields on a modelEntry from the
+// given discovery metadata and pricing, applying the same omitempty logic
+// as the /v1/models response.
+func applyModelFields(entry *modelEntry, maxCtx, maxOut int, meta *discovery.ModelMetadata, pricing *discovery.PricingEntry) {
+	if maxCtx > 0 {
+		entry.ContextWindow = maxCtx
+	}
+	if maxOut > 0 {
+		entry.MaxTokens = maxOut
+	}
+	if meta != nil {
+		entry.SupportsVision = meta.SupportsVision
+		entry.SupportsTools = meta.SupportsToolCalls
+		entry.SupportsReasoning = meta.SupportsReasoning
+	}
+	if pricing != nil && !pricing.IsZero() {
+		entry.InputCostPer1M = pricing.InputCostPer1M
+		entry.OutputCostPer1M = pricing.OutputCostPer1M
+	}
+}
+
 // handleModels returns the list of available models from all configured providers.
 func (p *Proxy) handleModels(w http.ResponseWriter) {
 	gw := p.Gateway()
@@ -449,52 +525,13 @@ func (p *Proxy) handleModels(w http.ResponseWriter) {
 		writeStructuredError(w, http.StatusServiceUnavailable, infra.ErrorKindInternal, "Gateway not initialized")
 		return
 	}
-	type modelEntry struct {
-		ID                string  `json:"id"`
-		Object            string  `json:"object"`
-		OwnedBy           string  `json:"owned_by"`
-		ContextWindow     int     `json:"context_window,omitempty"`
-		MaxTokens         int     `json:"max_tokens,omitempty"`
-		SupportsVision    bool    `json:"supports_vision,omitempty"`
-		SupportsTools     bool    `json:"supports_tool_calls,omitempty"`
-		SupportsReasoning bool    `json:"supports_reasoning,omitempty"`
-		InputCostPer1M    float64 `json:"input_cost_per_1m,omitempty"`
-		OutputCostPer1M   float64 `json:"output_cost_per_1m,omitempty"`
-	}
 
 	var models []modelEntry
 	seen := make(map[string]bool)
 
-	addModel := func(id, ownedBy string, maxCtx, maxOut int, meta *discovery.ModelMetadata, pricing *discovery.PricingEntry) {
-		if seen[id] {
-			return
-		}
-		seen[id] = true
-		entry := modelEntry{
-			ID:      id,
-			Object:  "model",
-			OwnedBy: ownedBy,
-		}
-		if maxCtx > 0 {
-			entry.ContextWindow = maxCtx
-		}
-		if maxOut > 0 {
-			entry.MaxTokens = maxOut
-		}
-		if meta != nil {
-			entry.SupportsVision = meta.SupportsVision
-			entry.SupportsTools = meta.SupportsToolCalls
-			entry.SupportsReasoning = meta.SupportsReasoning
-		}
-		if pricing != nil && !pricing.IsZero() {
-			entry.InputCostPer1M = pricing.InputCostPer1M
-			entry.OutputCostPer1M = pricing.OutputCostPer1M
-		}
-		models = append(models, entry)
-	}
-
-	for agentName := range gw.Config.Agents {
-		addModel(agentName, "nenya", 0, 0, nil, nil)
+	for agentName, agent := range gw.Config.Agents {
+		seen[agentName] = true
+		models = append(models, buildAgentModelEntry(agentName, agent, gw))
 	}
 
 	if gw.ModelCatalog != nil {
@@ -506,7 +543,13 @@ func (p *Proxy) handleModels(w http.ResponseWriter) {
 			if provider.APIKey == "" && provider.AuthStyle != "none" {
 				continue
 			}
-			addModel(m.ID, m.OwnedBy, m.MaxContext, m.MaxOutput, m.Metadata, m.Pricing)
+			if seen[m.ID] {
+				continue
+			}
+			seen[m.ID] = true
+			entry := modelEntry{ID: m.ID, Object: "model", OwnedBy: m.OwnedBy}
+			applyModelFields(&entry, m.MaxContext, m.MaxOutput, m.Metadata, m.Pricing)
+			models = append(models, entry)
 		}
 	}
 
