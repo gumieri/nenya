@@ -487,3 +487,134 @@ func TestCheckOllamaProviderHealth_ContextDeadline(t *testing.T) {
 		t.Errorf("expected at most 2 attempts due to timeout, got %d", attempts.Load())
 	}
 }
+
+func TestServeHTTP_Models_AgentMetadata(t *testing.T) {
+	cfg := testutil.TestConfig(
+		testutil.WithAgent("coder", config.AgentConfig{
+			Models: []config.AgentModel{
+				{Provider: "deepseek", Model: "deepseek-v4-flash"},
+				{Provider: "gemini", Model: "gemini-2.5-flash"},
+			},
+			Strategy: "fallback",
+		}),
+	)
+	secrets := &config.SecretsConfig{
+		ClientToken: "test-token",
+		ProviderKeys: map[string]string{"gemini": "test-key", "deepseek": "test-key"},
+	}
+	gw := gateway.New(context.Background(), *cfg, secrets, slog.Default())
+	p := &Proxy{}
+	p.StoreGateway(gw)
+
+	req := testutil.NewTestRequest(t, http.MethodGet, "/v1/models", nil)
+	rec := httptest.NewRecorder()
+	p.ServeHTTP(rec, req)
+
+	testutil.AssertResponseStatusCode(t, rec, http.StatusOK)
+
+	var body map[string]interface{}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("expected JSON body, got error: %v", err)
+	}
+	data, ok := body["data"].([]interface{})
+	if !ok {
+		t.Fatalf("expected data array, got %T", body["data"])
+	}
+
+	var agentEntry map[string]interface{}
+	for _, item := range data {
+		entry, ok := item.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		if entry["id"] == "coder" {
+			agentEntry = entry
+			break
+		}
+	}
+	if agentEntry == nil {
+		t.Fatal("agent 'coder' not found in models list")
+	}
+
+	if agentEntry["owned_by"] != "nenya" {
+		t.Errorf("expected owned_by=nenya, got %v", agentEntry["owned_by"])
+	}
+	if ctx, ok := agentEntry["context_window"].(float64); !ok || int(ctx) != 1048576 {
+		t.Errorf("expected context_window=1048576 (max of 1000000 and 1048576), got %v", agentEntry["context_window"])
+	}
+	if maxTok, ok := agentEntry["max_tokens"].(float64); !ok || int(maxTok) != 384000 {
+		t.Errorf("expected max_tokens=384000 (max of 384000 and 65536), got %v", agentEntry["max_tokens"])
+	}
+	if strategy, ok := agentEntry["routing_strategy"].(string); !ok || strategy != "fallback" {
+		t.Errorf("expected routing_strategy=fallback, got %v", agentEntry["routing_strategy"])
+	}
+
+	for _, item := range data {
+		entry, ok := item.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		if entry["id"] == "coder" {
+			continue
+		}
+		if _, hasID := entry["id"]; !hasID {
+			continue
+		}
+		if _, ok := entry["routing_strategy"]; ok {
+			t.Errorf("catalog model %v should not have routing_strategy", entry["id"])
+		}
+	}
+}
+
+func TestServeHTTP_Models_AgentDescription(t *testing.T) {
+	cfg := testutil.TestConfig(
+		testutil.WithAgent("with-desc", config.AgentConfig{
+			Models:       []config.AgentModel{{Provider: "deepseek", Model: "deepseek-v4-flash"}},
+			Strategy:     "fallback",
+			Description:  "Test agent with description",
+		}),
+	)
+	secrets := &config.SecretsConfig{
+		ClientToken:  "test-token",
+		ProviderKeys: map[string]string{"deepseek": "test-key"},
+	}
+	gw := gateway.New(context.Background(), *cfg, secrets, slog.Default())
+	p := &Proxy{}
+	p.StoreGateway(gw)
+
+	req := testutil.NewTestRequest(t, http.MethodGet, "/v1/models", nil)
+	rec := httptest.NewRecorder()
+	p.ServeHTTP(rec, req)
+
+	testutil.AssertResponseStatusCode(t, rec, http.StatusOK)
+
+	var body map[string]interface{}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("expected JSON body, got error: %v", err)
+	}
+	data, ok := body["data"].([]interface{})
+	if !ok {
+		t.Fatalf("expected data array, got %T", body["data"])
+	}
+
+	var agentEntry map[string]interface{}
+	found := false
+	for _, item := range data {
+		entry, ok := item.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		if entry["id"] == "with-desc" {
+			agentEntry = entry
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatal("agent 'with-desc' not found in models list")
+	}
+
+	if desc, ok := agentEntry["description"].(string); !ok || desc != "Test agent with description" {
+		t.Errorf("expected description='Test agent with description', got %v", agentEntry["description"])
+	}
+}

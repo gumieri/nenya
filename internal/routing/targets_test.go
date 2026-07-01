@@ -652,3 +652,4 @@ func TestExpandDynamicModels_EmptyCatalogNoMatches(t *testing.T) {
 		t.Errorf("expected no matches, got %d entries", len(expanded))
 	}
 }
+
