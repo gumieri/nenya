@@ -493,7 +493,9 @@ func buildAgentModelEntry(agentName string, agent config.AgentConfig, gw *gatewa
 	if agent.Strategy != "" {
 		entry.RoutingStrategy = agent.Strategy
 	}
-	// Description populated in Phase 012
+	if agent.Description != "" {
+		entry.Description = agent.Description
+	}
 	return entry
 }
 
