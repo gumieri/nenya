@@ -116,7 +116,9 @@ func ApplyDefaults(cfg *Config) error {
 	applyBouncerDefaults(cfg)
 	applyEngineRefDefaults(&cfg.Bouncer.Engine)
 	applyEngineRefDefaults(&cfg.Window.Engine)
-	applyPrefixCacheDefaults(cfg)
+	if err := applyPrefixCacheDefaults(cfg); err != nil {
+		return err
+	}
 	applyCompactionDefaults(cfg)
 	applyResponseCacheDefaults(cfg)
 	applyProviderMapDefaults(cfg)
@@ -261,7 +263,7 @@ func applyBouncerDefaults(cfg *Config) {
 	}
 }
 
-func applyPrefixCacheDefaults(cfg *Config) {
+func applyPrefixCacheDefaults(cfg *Config) error {
 	if !cfg.PrefixCache.Enabled {
 		cfg.PrefixCache.Enabled = anyCacheFeatureSet(cfg)
 	}
@@ -274,12 +276,12 @@ func applyPrefixCacheDefaults(cfg *Config) {
 	if !cfg.PrefixCache.SkipRedactionWasSet() {
 		cfg.PrefixCache.SkipRedactionOnSystem = PtrTo(false)
 	}
-	applyCacheControlDefaults(cfg)
+	return applyCacheControlDefaults(cfg)
 }
 
-func applyCacheControlDefaults(cfg *Config) {
+func applyCacheControlDefaults(cfg *Config) error {
 	if !cfg.PrefixCache.Enabled {
-		return
+		return nil
 	}
 	if !cfg.PrefixCache.CacheSystemWasSet() {
 		cfg.PrefixCache.CacheSystem = PtrTo(true)
@@ -293,6 +295,10 @@ func applyCacheControlDefaults(cfg *Config) {
 	if cfg.PrefixCache.CacheControlTTL == "" {
 		cfg.PrefixCache.CacheControlTTL = "ephemeral"
 	}
+	if cfg.PrefixCache.CacheControlTTL != "ephemeral" {
+		return fmt.Errorf("invalid cache_control_ttl: %q (must be 'ephemeral')", cfg.PrefixCache.CacheControlTTL)
+	}
+	return nil
 }
 
 func anyCacheFeatureSet(cfg *Config) bool {

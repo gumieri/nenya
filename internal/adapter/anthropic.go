@@ -179,7 +179,11 @@ func (a *AnthropicAdapter) convertOpenAIToAnthropic(openai map[string]interface{
 }
 
 func (a *AnthropicAdapter) setSystemPrompt(openai, anthropic map[string]interface{}, cacheSystem bool, ttl string) {
-	systemParts := a.extractSystemMessages(openai["messages"].([]interface{}))
+	msgs, ok := openai["messages"].([]interface{})
+	if !ok {
+		return
+	}
+	systemParts := a.extractSystemMessages(msgs)
 	if len(systemParts) == 0 {
 		return
 	}

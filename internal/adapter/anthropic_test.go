@@ -577,6 +577,273 @@ func TestAnthropicAdapter_ConvertOpenAIToAnthropicBody(t *testing.T) {
 	}
 }
 
+func TestAnthropicAdapter_CacheControlInjection(t *testing.T) {
+	a := NewAnthropicAdapter()
+	ttl := "ephemeral"
+
+	tests := []struct {
+		name         string
+		cacheSystem  bool
+		cacheTools   bool
+		cacheMessage bool
+		openai       map[string]interface{}
+		assertFunc   func(t *testing.T, result map[string]interface{})
+	}{
+		{
+			name:        "system_cache_control_injected",
+			cacheSystem: true,
+			openai: map[string]interface{}{
+				"model": "gpt-4",
+				"messages": []interface{}{
+					map[string]interface{}{"role": "system", "content": "You are helpful."},
+					map[string]interface{}{"role": "user", "content": "hello"},
+				},
+			},
+			assertFunc: func(t *testing.T, result map[string]interface{}) {
+				system, ok := result["system"].([]interface{})
+				if !ok {
+					t.Fatalf("expected system to be array when cacheSystem=true, got %T", result["system"])
+				}
+				if len(system) != 1 {
+					t.Fatalf("expected 1 system block, got %d", len(system))
+				}
+				block := system[0].(map[string]interface{})
+				if block["type"] != "text" {
+					t.Errorf("expected system block type 'text', got %v", block["type"])
+				}
+				cacheControl, ok := block["cache_control"].(map[string]interface{})
+				if !ok {
+					t.Fatal("expected cache_control on system block")
+				}
+				if cacheControl["type"] != ttl {
+					t.Errorf("expected cache_control.type %q, got %v", ttl, cacheControl["type"])
+				}
+			},
+		},
+		{
+			name:        "system_no_cache_control_when_disabled",
+			cacheSystem: false,
+			openai: map[string]interface{}{
+				"model": "gpt-4",
+				"messages": []interface{}{
+					map[string]interface{}{"role": "system", "content": "You are helpful."},
+					map[string]interface{}{"role": "user", "content": "hello"},
+				},
+			},
+			assertFunc: func(t *testing.T, result map[string]interface{}) {
+				system, ok := result["system"].(string)
+				if !ok {
+					t.Fatalf("expected system to be string when cacheSystem=false, got %T", result["system"])
+				}
+				if system != "You are helpful." {
+					t.Errorf("expected system string, got %q", system)
+				}
+			},
+		},
+		{
+			name:       "tools_cache_control_injected",
+			cacheTools: true,
+			openai: map[string]interface{}{
+				"model": "gpt-4",
+				"messages": []interface{}{
+					map[string]interface{}{"role": "user", "content": "what's the weather?"},
+				},
+				"tools": []interface{}{
+					map[string]interface{}{
+						"type": "function",
+						"function": map[string]interface{}{
+							"name":        "get_weather",
+							"description": "Get weather",
+							"parameters":  map[string]interface{}{"type": "object"},
+						},
+					},
+					map[string]interface{}{
+						"type": "function",
+						"function": map[string]interface{}{
+							"name":        "get_time",
+							"description": "Get time",
+							"parameters":  map[string]interface{}{"type": "object"},
+						},
+					},
+				},
+			},
+			assertFunc: func(t *testing.T, result map[string]interface{}) {
+				tools, ok := result["tools"].([]interface{})
+				if !ok {
+					t.Fatalf("expected tools array, got %T", result["tools"])
+				}
+				if len(tools) != 2 {
+					t.Fatalf("expected 2 tools, got %d", len(tools))
+				}
+				lastTool := tools[1].(map[string]interface{})
+				cacheControl, ok := lastTool["cache_control"].(map[string]interface{})
+				if !ok {
+					t.Fatal("expected cache_control on last tool")
+				}
+				if cacheControl["type"] != ttl {
+					t.Errorf("expected cache_control.type %q, got %v", ttl, cacheControl["type"])
+				}
+				firstTool := tools[0].(map[string]interface{})
+				if _, ok := firstTool["cache_control"]; ok {
+					t.Error("first tool should not have cache_control")
+				}
+			},
+		},
+		{
+			name:       "tools_no_cache_control_when_disabled",
+			cacheTools: false,
+			openai: map[string]interface{}{
+				"model": "gpt-4",
+				"messages": []interface{}{
+					map[string]interface{}{"role": "user", "content": "what's the weather?"},
+				},
+				"tools": []interface{}{
+					map[string]interface{}{
+						"type": "function",
+						"function": map[string]interface{}{
+							"name":        "get_weather",
+							"description": "Get weather",
+							"parameters":  map[string]interface{}{"type": "object"},
+						},
+					},
+				},
+			},
+			assertFunc: func(t *testing.T, result map[string]interface{}) {
+				tools, ok := result["tools"].([]interface{})
+				if !ok {
+					t.Fatalf("expected tools array, got %T", result["tools"])
+				}
+				if len(tools) != 1 {
+					t.Fatalf("expected 1 tool, got %d", len(tools))
+				}
+				tool := tools[0].(map[string]interface{})
+				if _, ok := tool["cache_control"]; ok {
+					t.Error("tool should not have cache_control when cacheTools=false")
+				}
+			},
+		},
+		{
+			name:          "message_cache_control_injected",
+			cacheMessage:  true,
+			openai: map[string]interface{}{
+				"model": "gpt-4",
+				"messages": []interface{}{
+					map[string]interface{}{"role": "system", "content": "You are helpful."},
+					map[string]interface{}{"role": "user", "content": "first question"},
+					map[string]interface{}{"role": "assistant", "content": "first answer"},
+					map[string]interface{}{"role": "user", "content": "second question"},
+				},
+			},
+			assertFunc: func(t *testing.T, result map[string]interface{}) {
+				msgs, ok := result["messages"].([]interface{})
+				if !ok {
+					t.Fatalf("expected messages array, got %T", result["messages"])
+				}
+				if len(msgs) != 3 {
+					t.Fatalf("expected 3 messages (system removed), got %d", len(msgs))
+				}
+				targetMsg := msgs[1].(map[string]interface{})
+				if targetMsg["role"] != "assistant" {
+					t.Fatalf("expected second message (index 1) to be assistant, got %v", targetMsg["role"])
+				}
+				content, ok := targetMsg["content"].([]interface{})
+				if !ok {
+					t.Fatalf("expected content array, got %T", targetMsg["content"])
+				}
+				if len(content) != 1 {
+					t.Fatalf("expected 1 content block, got %d", len(content))
+				}
+				block := content[0].(map[string]interface{})
+				cacheControl, ok := block["cache_control"].(map[string]interface{})
+				if !ok {
+					t.Fatal("expected cache_control on last content block of second-to-last message")
+				}
+				if cacheControl["type"] != ttl {
+					t.Errorf("expected cache_control.type %q, got %v", ttl, cacheControl["type"])
+				}
+			},
+		},
+		{
+			name:          "message_cache_control_skipped_when_less_than_2_messages",
+			cacheMessage:  true,
+			openai: map[string]interface{}{
+				"model": "gpt-4",
+				"messages": []interface{}{
+					map[string]interface{}{"role": "user", "content": "hello"},
+				},
+			},
+			assertFunc: func(t *testing.T, result map[string]interface{}) {
+				msgs, ok := result["messages"].([]interface{})
+				if !ok {
+					t.Fatalf("expected messages array, got %T", result["messages"])
+				}
+				if len(msgs) != 1 {
+					t.Fatalf("expected 1 message, got %d", len(msgs))
+				}
+				msg := msgs[0].(map[string]interface{})
+				content := msg["content"].([]interface{})
+				block := content[0].(map[string]interface{})
+				if _, ok := block["cache_control"]; ok {
+					t.Error("should not inject cache_control when messages < 2")
+				}
+			},
+		},
+		{
+			name:         "all_cache_controls_disabled",
+			cacheSystem:  false,
+			cacheTools:   false,
+			cacheMessage: false,
+			openai: map[string]interface{}{
+				"model": "gpt-4",
+				"messages": []interface{}{
+					map[string]interface{}{"role": "system", "content": "You are helpful."},
+					map[string]interface{}{"role": "user", "content": "hello"},
+				},
+				"tools": []interface{}{
+					map[string]interface{}{
+						"type": "function",
+						"function": map[string]interface{}{
+							"name":        "get_weather",
+							"description": "Get weather",
+							"parameters":  map[string]interface{}{"type": "object"},
+						},
+					},
+				},
+			},
+			assertFunc: func(t *testing.T, result map[string]interface{}) {
+				if sys, ok := result["system"].([]interface{}); ok {
+					t.Fatalf("system should be string when cacheSystem=false, got array: %v", sys)
+				}
+				tools, ok := result["tools"].([]interface{})
+				if ok && len(tools) > 0 {
+					tool := tools[0].(map[string]interface{})
+					if _, hasCache := tool["cache_control"]; hasCache {
+						t.Error("tools should not have cache_control when cacheTools=false")
+					}
+				}
+				msgs := result["messages"].([]interface{})
+				for _, m := range msgs {
+					msg := m.(map[string]interface{})
+					content := msg["content"].([]interface{})
+					for _, b := range content {
+						block := b.(map[string]interface{})
+						if _, hasCache := block["cache_control"]; hasCache {
+							t.Error("messages should not have cache_control when cacheMessages=false")
+						}
+					}
+				}
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := a.ConvertOpenAIToAnthropicBody(tt.openai, "claude-3", false, tt.cacheSystem, tt.cacheTools, tt.cacheMessage, ttl)
+			tt.assertFunc(t, result)
+		})
+	}
+}
+
 func TestAnthropicAdapter_ConvertAnthropicToOpenAIBody(t *testing.T) {
 	a := NewAnthropicAdapter()
 	anthropic := map[string]interface{}{

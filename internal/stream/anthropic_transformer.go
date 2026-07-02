@@ -115,8 +115,8 @@ func (t *AnthropicTransformer) handleMessageStart(event map[string]interface{}) 
 
 func (t *AnthropicTransformer) handleContentBlockStart(event map[string]interface{}) ([]byte, error) {
 	idx := getFloat64(event, "index")
-	if idx > math.MaxInt32 {
-		slog.Warn("Content block index exceeds int32 range", "index", idx)
+	if idx < 0 || idx > math.MaxInt32 {
+		slog.Warn("Content block index out of valid range", "index", idx)
 		return nil, ErrEventConsumed
 	}
 	index := int(idx)
@@ -171,8 +171,8 @@ func (t *AnthropicTransformer) handleContentBlockStart(event map[string]interfac
 
 func (t *AnthropicTransformer) handleContentBlockDelta(event map[string]interface{}) ([]byte, error) {
 	idx := getFloat64(event, "index")
-	if idx > math.MaxInt32 {
-		slog.Warn("Content block delta index exceeds int32 range", "index", idx)
+	if idx < 0 || idx > math.MaxInt32 {
+		slog.Warn("Content block delta index out of valid range", "index", idx)
 		return nil, ErrEventConsumed
 	}
 	index := int(idx)
@@ -290,6 +290,7 @@ func (t *AnthropicTransformer) handleMessageDelta(event map[string]interface{}) 
 		"total_tokens":             t.promptTokens + t.outputTokens,
 		"prompt_cache_hit_tokens":  t.cacheReadTokens,
 		"prompt_cache_miss_tokens": t.cacheCreationTokens,
+		"cache_creation_tokens":    t.cacheCreationTokens,
 	}
 
 	return t.marshalChunk(chunk)
@@ -309,6 +310,8 @@ func (t *AnthropicTransformer) Reset() {
 	t.model = ""
 	t.promptTokens = 0
 	t.outputTokens = 0
+	t.cacheCreationTokens = 0
+	t.cacheReadTokens = 0
 	t.hasToolCalls = false
 	t.blockMap = make(map[int]*anthropicBlock)
 	t.streamDone = false

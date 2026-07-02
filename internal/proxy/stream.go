@@ -448,8 +448,10 @@ func (o *upstreamErrorObserver) OnStreamClose(err error) {}
 // The callback is invoked by the SSE transformer when usage metadata is received.
 func (p *Proxy) makeUsageCallback(ctx context.Context, gw *gateway.NenyaGateway, target routing.UpstreamTarget, agentName string) func(int, int, int, int, int, int) {
 	return func(completion, prompt, total, cacheHit, cacheMiss, cacheCreation int) {
-		gw.Stats.RecordOutput(target.Model, completion)
-		gw.Metrics.RecordTokens("output", target.Model, agentName, target.Provider, completion)
+		if completion > 0 {
+			gw.Stats.RecordOutput(target.Model, completion)
+			gw.Metrics.RecordTokens("output", target.Model, agentName, target.Provider, completion)
+		}
 		if cacheHit > 0 {
 			gw.Stats.RecordCacheHit(target.Model, cacheHit)
 		}

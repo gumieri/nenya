@@ -193,3 +193,69 @@ func TestMergeString_EmptySrc(t *testing.T) {
 	}
 }
 
+func TestPrefixCache_ValidTTL_AcceptsEphemeral(t *testing.T) {
+	cfg := &Config{
+		PrefixCache: PrefixCacheConfig{
+			Enabled:         true,
+			CacheControlTTL: "ephemeral",
+		},
+	}
+	err := ApplyDefaults(cfg)
+	if err != nil {
+		t.Errorf("expected no error for valid TTL 'ephemeral', got: %v", err)
+	}
+}
+
+func TestPrefixCache_InvalidTTL_Rejected(t *testing.T) {
+	cfg := &Config{
+		PrefixCache: PrefixCacheConfig{
+			Enabled:         true,
+			CacheControlTTL: "bogus",
+		},
+	}
+	err := ApplyDefaults(cfg)
+	if err == nil {
+		t.Fatal("expected error for invalid TTL 'bogus', got nil")
+	}
+	if err.Error() != `invalid cache_control_ttl: "bogus" (must be 'ephemeral')` {
+		t.Errorf("unexpected error message: %v", err)
+	}
+}
+
+func TestPrefixCache_InvalidTTL_EmptyWithPrefixCacheDisabled(t *testing.T) {
+	cfg := &Config{
+		PrefixCache: PrefixCacheConfig{
+			Enabled:         false,
+			CacheControlTTL: "bogus",
+		},
+	}
+	err := ApplyDefaults(cfg)
+	if err != nil {
+		t.Errorf("expected no error when prefix cache is disabled, got: %v", err)
+	}
+}
+
+func TestPrefixCache_CacheDefaultsApplied(t *testing.T) {
+	cfg := &Config{
+		PrefixCache: PrefixCacheConfig{
+			Enabled: true,
+		},
+	}
+	err := ApplyDefaults(cfg)
+	if err != nil {
+		t.Fatalf("ApplyDefaults failed: %v", err)
+	}
+	if cfg.PrefixCache.CacheSystem == nil || !*cfg.PrefixCache.CacheSystem {
+		t.Error("expected CacheSystem to default to true")
+	}
+	if cfg.PrefixCache.CacheTools == nil || !*cfg.PrefixCache.CacheTools {
+		t.Error("expected CacheTools to default to true")
+	}
+	if cfg.PrefixCache.CacheMessages == nil || !*cfg.PrefixCache.CacheMessages {
+		t.Error("expected CacheMessages to default to true")
+	}
+	if cfg.PrefixCache.CacheControlTTL != "ephemeral" {
+		t.Errorf("expected CacheControlTTL to default to 'ephemeral', got %q", cfg.PrefixCache.CacheControlTTL)
+	}
+}
+

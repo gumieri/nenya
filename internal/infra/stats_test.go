@@ -143,3 +143,60 @@ func TestUsageTracker_Snapshot_Empty(t *testing.T) {
 		t.Errorf("expected 0 models, got %d", len(models))
 	}
 }
+
+func TestUsageTracker_CacheCreationTokens(t *testing.T) {
+	u := NewUsageTracker()
+	u.RecordCacheCreation("claude-3", 1234)
+	u.RecordCacheCreation("claude-3", 5678)
+	u.RecordCacheCreation("gpt-4", 1000)
+
+	snap := u.Snapshot()
+	models := snap["models"].(map[string]interface{})
+	c3 := models["claude-3"].(map[string]interface{})
+	g4 := models["gpt-4"].(map[string]interface{})
+
+	if c3["cache_creation_tokens"].(uint64) != 6912 {
+		t.Errorf("claude-3 cache_creation_tokens: got %d, want 6912", c3["cache_creation_tokens"])
+	}
+	if g4["cache_creation_tokens"].(uint64) != 1000 {
+		t.Errorf("gpt-4 cache_creation_tokens: got %d, want 1000", g4["cache_creation_tokens"])
+	}
+}
+
+func TestUsageTracker_CacheHitTokens(t *testing.T) {
+	u := NewUsageTracker()
+	u.RecordCacheHit("claude-3", 5000)
+	u.RecordCacheHit("claude-3", 3000)
+	u.RecordCacheHit("gpt-4", 2000)
+
+	snap := u.Snapshot()
+	models := snap["models"].(map[string]interface{})
+	c3 := models["claude-3"].(map[string]interface{})
+	g4 := models["gpt-4"].(map[string]interface{})
+
+	if c3["cache_hit_tokens"].(uint64) != 8000 {
+		t.Errorf("claude-3 cache_hit_tokens: got %d, want 8000", c3["cache_hit_tokens"])
+	}
+	if g4["cache_hit_tokens"].(uint64) != 2000 {
+		t.Errorf("gpt-4 cache_hit_tokens: got %d, want 2000", g4["cache_hit_tokens"])
+	}
+}
+
+func TestUsageTracker_CacheMissTokens(t *testing.T) {
+	u := NewUsageTracker()
+	u.RecordCacheMiss("claude-3", 10000)
+	u.RecordCacheMiss("claude-3", 5000)
+	u.RecordCacheMiss("gpt-4", 7000)
+
+	snap := u.Snapshot()
+	models := snap["models"].(map[string]interface{})
+	c3 := models["claude-3"].(map[string]interface{})
+	g4 := models["gpt-4"].(map[string]interface{})
+
+	if c3["cache_miss_tokens"].(uint64) != 15000 {
+		t.Errorf("claude-3 cache_miss_tokens: got %d, want 15000", c3["cache_miss_tokens"])
+	}
+	if g4["cache_miss_tokens"].(uint64) != 7000 {
+		t.Errorf("gpt-4 cache_miss_tokens: got %d, want 7000", g4["cache_miss_tokens"])
+	}
+}

@@ -26,6 +26,14 @@ type ResponseTransformer interface {
 	TransformSSEChunk(ctx context.Context, data []byte) ([]byte, error)
 }
 
+// UsageCallback is invoked by the SSE transformer when usage metadata is received.
+// Parameters:
+//   - completionTokens: delta output tokens since last callback (always >= 0)
+//   - promptTokens: delta input tokens since last callback (always >= 0)
+//   - totalTokens: delta total tokens since last callback (always >= 0)
+//   - cacheHitTokens: delta cache hit tokens since last callback (always >= 0)
+//   - cacheMissTokens: delta cache miss tokens since last callback (always >= 0)
+//   - cacheCreationTokens: delta cache creation tokens since last callback (always >= 0)
 type UsageCallback func(completionTokens, promptTokens, totalTokens, cacheHitTokens, cacheMissTokens, cacheCreationTokens int)
 
 type ContentCallback func(content string)

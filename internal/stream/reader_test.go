@@ -219,3 +219,86 @@ func TestSSETransformingReader_ValidJSONNoLog(t *testing.T) {
 		t.Errorf("unexpected malformed JSON warning for valid data: %s", logStr)
 	}
 }
+
+func TestSSETransformingReader_UsageCallbackWithCacheFields(t *testing.T) {
+	var receivedCompletion, receivedPrompt, receivedTotal, receivedCacheHit, receivedCacheMiss, receivedCacheCreation int
+
+	cb := func(completion, prompt, total, cacheHit, cacheMiss, cacheCreation int) {
+		receivedCompletion = completion
+		receivedPrompt = prompt
+		receivedTotal = total
+		receivedCacheHit = cacheHit
+		receivedCacheMiss = cacheMiss
+		receivedCacheCreation = cacheCreation
+	}
+
+	input := "data: {\"id\":\"msg_1\",\"object\":\"chat.completion.chunk\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"Hello\"}}],\"usage\":{\"prompt_tokens\":100,\"completion_tokens\":10,\"total_tokens\":110,\"prompt_cache_hit_tokens\":5000,\"prompt_cache_miss_tokens\":2000,\"cache_creation_tokens\":54947}}\n\ndata: [DONE]\n\n"
+
+	reader := NewSSETransformingReader(strings.NewReader(input), nil, context.Background())
+	reader.SetOnUsage(cb)
+
+	var output bytes.Buffer
+	_, err := io.Copy(&output, reader)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if receivedCompletion != 10 {
+		t.Errorf("expected completion_tokens=10, got %d", receivedCompletion)
+	}
+	if receivedPrompt != 100 {
+		t.Errorf("expected prompt_tokens=100, got %d", receivedPrompt)
+	}
+	if receivedTotal != 110 {
+		t.Errorf("expected total_tokens=110, got %d", receivedTotal)
+	}
+	if receivedCacheHit != 5000 {
+		t.Errorf("expected cache_hit_tokens=5000, got %d", receivedCacheHit)
+	}
+	if receivedCacheMiss != 2000 {
+		t.Errorf("expected cache_miss_tokens=2000, got %d", receivedCacheMiss)
+	}
+	if receivedCacheCreation != 54947 {
+		t.Errorf("expected cache_creation_tokens=54947, got %d", receivedCacheCreation)
+	}
+}
+
+func TestSSETransformingReader_UsageCallbackDeltaCalculation(t *testing.T) {
+	var callCount int
+	var lastDCompletion, lastDPrompt, lastDCacheCreation int
+
+	cb := func(completion, prompt, total, cacheHit, cacheMiss, cacheCreation int) {
+		callCount++
+		lastDCompletion = completion
+		lastDPrompt = prompt
+		lastDCacheCreation = cacheCreation
+	}
+
+	input := "data: {\"usage\":{\"prompt_tokens\":100,\"completion_tokens\":10,\"total_tokens\":110,\"cache_creation_tokens\":54947}}\n\n" +
+		"data: {\"usage\":{\"prompt_tokens\":200,\"completion_tokens\":20,\"total_tokens\":220,\"cache_creation_tokens\":54947}}\n\n" +
+		"data: [DONE]\n\n"
+
+	reader := NewSSETransformingReader(strings.NewReader(input), nil, context.Background())
+	reader.SetOnUsage(cb)
+
+	var output bytes.Buffer
+	_, err := io.Copy(&output, reader)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if callCount != 2 {
+		t.Errorf("expected 2 usage callbacks (1 per usage event), got %d", callCount)
+	}
+
+	if lastDCompletion != 10 {
+		t.Errorf("expected final delta completion=10 (20-10), got %d", lastDCompletion)
+	}
+	if lastDPrompt != 100 {
+		t.Errorf("expected final delta prompt=100 (200-100), got %d", lastDPrompt)
+	}
+
+	if lastDCacheCreation != 0 {
+		t.Errorf("expected delta cache_creation=0 (54947-54947, no new creation), got %d", lastDCacheCreation)
+	}
+}
