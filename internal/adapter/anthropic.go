@@ -36,8 +36,10 @@ func GetAnthropicAdapter() *AnthropicAdapter {
 
 // ConvertOpenAIToAnthropicBody converts an OpenAI-format request body
 // (as a parsed map) to the Anthropic Messages API format.
-func (a *AnthropicAdapter) ConvertOpenAIToAnthropicBody(openai map[string]interface{}, model string, stream bool) map[string]interface{} {
-	return a.convertOpenAIToAnthropic(openai, model, stream)
+// cacheSystem/cacheTools/cacheMessages control cache_control marker injection.
+// ttl is the cache_control TTL value (e.g. "ephemeral").
+func (a *AnthropicAdapter) ConvertOpenAIToAnthropicBody(openai map[string]interface{}, model string, stream bool, cacheSystem, cacheTools, cacheMessages bool, ttl string) map[string]interface{} {
+	return a.convertOpenAIToAnthropic(openai, model, stream, cacheSystem, cacheTools, cacheMessages, ttl)
 }
 
 // ConvertAnthropicToOpenAIBody converts an Anthropic-format response
@@ -95,7 +97,7 @@ func (a *AnthropicAdapter) MutateRequest(body []byte, model string, stream bool)
 		return body, nil
 	}
 
-	anthropic := a.convertOpenAIToAnthropic(openai, model, stream)
+	anthropic := a.convertOpenAIToAnthropic(openai, model, stream, false, false, false, "ephemeral")
 
 	out, err := json.Marshal(anthropic)
 	if err != nil {
@@ -145,7 +147,7 @@ func (a *AnthropicAdapter) NormalizeError(statusCode int, body []byte) ErrorClas
 	}
 }
 
-func (a *AnthropicAdapter) convertOpenAIToAnthropic(openai map[string]interface{}, model string, stream bool) map[string]interface{} {
+func (a *AnthropicAdapter) convertOpenAIToAnthropic(openai map[string]interface{}, model string, stream bool, cacheSystem, cacheTools, cacheMessages bool, ttl string) map[string]interface{} {
 	anthropic := map[string]interface{}{
 		"model":      model,
 		"stream":     stream,
@@ -155,15 +157,12 @@ func (a *AnthropicAdapter) convertOpenAIToAnthropic(openai map[string]interface{
 	a.copyOpenAIFields(openai, anthropic)
 
 	if msgs, ok := openai["messages"].([]interface{}); ok {
-		systemParts := a.extractSystemMessages(msgs)
-		if len(systemParts) > 0 {
-			anthropic["system"] = strings.Join(systemParts, "\n\n")
-		}
 		anthropic["messages"] = a.convertMessages(msgs)
+		a.setSystemPrompt(openai, anthropic, cacheSystem, ttl)
 	}
 
 	if tools, ok := openai["tools"].([]interface{}); ok && len(tools) > 0 {
-		anthropic["tools"] = a.convertTools(tools)
+		anthropic["tools"] = a.convertTools(tools, cacheTools, ttl)
 	}
 
 	if tc, ok := openai["tool_choice"]; ok {
@@ -172,7 +171,32 @@ func (a *AnthropicAdapter) convertOpenAIToAnthropic(openai map[string]interface{
 
 	a.injectReasoningEffort(openai, anthropic, model)
 
+	if cacheMessages {
+		a.injectMessageCache(anthropic, ttl)
+	}
+
 	return anthropic
+}
+
+func (a *AnthropicAdapter) setSystemPrompt(openai, anthropic map[string]interface{}, cacheSystem bool, ttl string) {
+	systemParts := a.extractSystemMessages(openai["messages"].([]interface{}))
+	if len(systemParts) == 0 {
+		return
+	}
+	joined := strings.Join(systemParts, "\n\n")
+	if cacheSystem {
+		anthropic["system"] = []interface{}{
+			map[string]interface{}{
+				"type": "text",
+				"text": joined,
+				"cache_control": map[string]interface{}{
+					"type": ttl,
+				},
+			},
+		}
+	} else {
+		anthropic["system"] = joined
+	}
 }
 
 func (a *AnthropicAdapter) injectReasoningEffort(openai, anthropic map[string]interface{}, model string) {
@@ -232,6 +256,28 @@ func (a *AnthropicAdapter) budgetForEffort(effort string, min, max int) int {
 		budget = max
 	}
 	return budget
+}
+
+func (a *AnthropicAdapter) injectMessageCache(anthropic map[string]interface{}, ttl string) {
+	msgs, ok := anthropic["messages"].([]interface{})
+	if !ok || len(msgs) < 2 {
+		return
+	}
+
+	targetMsg, ok := msgs[len(msgs)-2].(map[string]interface{})
+	if !ok {
+		return
+	}
+
+	content, ok := targetMsg["content"].([]interface{})
+	if !ok || len(content) == 0 {
+		return
+	}
+
+	lastBlock, ok := content[len(content)-1].(map[string]interface{})
+	if ok {
+		lastBlock["cache_control"] = map[string]interface{}{"type": ttl}
+	}
 }
 
 func (a *AnthropicAdapter) copyOpenAIFields(openai, anthropic map[string]interface{}) {
@@ -734,7 +780,7 @@ func (a *AnthropicAdapter) convertToolContentBlocks(blocks []interface{}) []inte
 	return result
 }
 
-func (a *AnthropicAdapter) convertTools(tools []interface{}) []interface{} {
+func (a *AnthropicAdapter) convertTools(tools []interface{}, cacheTools bool, ttl string) []interface{} {
 	var result []interface{}
 	for _, toolRaw := range tools {
 		tool, ok := toolRaw.(map[string]interface{})
@@ -768,6 +814,14 @@ func (a *AnthropicAdapter) convertTools(tools []interface{}) []interface{} {
 
 		result = append(result, anthTool)
 	}
+
+	if cacheTools && len(result) > 0 {
+		lastTool, ok := result[len(result)-1].(map[string]interface{})
+		if ok {
+			lastTool["cache_control"] = map[string]interface{}{"type": ttl}
+		}
+	}
+
 	return result
 }
 

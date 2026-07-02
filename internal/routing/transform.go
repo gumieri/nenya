@@ -295,21 +295,13 @@ func TransformRequestForUpstream(deps TransformDeps, providerName, upstreamURL s
 
 	modelRaw, ok := payload["model"]
 	if !ok {
-		if origModel == nil {
-			delete(payload, "model")
-		} else {
-			payload["model"] = origModel
-		}
+		restoreOriginalModel(payload, origModel)
 		return nil, "", nil
 	}
 
 	modelName, ok := modelRaw.(string)
 	if !ok {
-		if origModel == nil {
-			delete(payload, "model")
-		} else {
-			payload["model"] = origModel
-		}
+		restoreOriginalModel(payload, origModel)
 		return nil, "", nil
 	}
 
@@ -344,7 +336,15 @@ func TransformRequestForUpstream(deps TransformDeps, providerName, upstreamURL s
 			stream = s
 		}
 		anthropicAdapter := adapter.GetAnthropicAdapter()
-		payload = anthropicAdapter.ConvertOpenAIToAnthropicBody(payload, modelName, stream)
+		pc := deps.Config.PrefixCache
+		cacheSystem := pc.CacheSystem != nil && *pc.CacheSystem && pc.Enabled
+		cacheTools := pc.CacheTools != nil && *pc.CacheTools && pc.Enabled
+		cacheMessages := pc.CacheMessages != nil && *pc.CacheMessages && pc.Enabled
+		ttl := pc.CacheControlTTL
+		if ttl == "" {
+			ttl = "ephemeral"
+		}
+		payload = anthropicAdapter.ConvertOpenAIToAnthropicBody(payload, modelName, stream, cacheSystem, cacheTools, cacheMessages, ttl)
 	}
 
 	newBody, err := json.Marshal(payload)

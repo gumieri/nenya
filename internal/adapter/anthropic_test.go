@@ -571,7 +571,7 @@ func TestAnthropicAdapter_ConvertOpenAIToAnthropicBody(t *testing.T) {
 			map[string]interface{}{"role": "user", "content": "hello"},
 		},
 	}
-	result := a.ConvertOpenAIToAnthropicBody(openai, "claude-3", false)
+	result := a.ConvertOpenAIToAnthropicBody(openai, "claude-3", false, false, false, false, "ephemeral")
 	if result["model"] != "claude-3" {
 		t.Errorf("expected model 'claude-3', got %v", result["model"])
 	}

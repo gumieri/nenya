@@ -262,8 +262,8 @@ func applyBouncerDefaults(cfg *Config) {
 }
 
 func applyPrefixCacheDefaults(cfg *Config) {
-	if !cfg.PrefixCache.Enabled && (cfg.PrefixCache.PinSystemFirst != nil && *cfg.PrefixCache.PinSystemFirst || cfg.PrefixCache.StableTools != nil && *cfg.PrefixCache.StableTools || cfg.PrefixCache.SkipRedactionOnSystem != nil && *cfg.PrefixCache.SkipRedactionOnSystem) {
-		cfg.PrefixCache.Enabled = true
+	if !cfg.PrefixCache.Enabled {
+		cfg.PrefixCache.Enabled = anyCacheFeatureSet(cfg)
 	}
 	if (cfg.PrefixCache.PinSystemFirst == nil || !*cfg.PrefixCache.PinSystemFirst) && !cfg.PrefixCache.PinWasSet() {
 		cfg.PrefixCache.PinSystemFirst = PtrTo(true)
@@ -274,6 +274,47 @@ func applyPrefixCacheDefaults(cfg *Config) {
 	if !cfg.PrefixCache.SkipRedactionWasSet() {
 		cfg.PrefixCache.SkipRedactionOnSystem = PtrTo(false)
 	}
+	applyCacheControlDefaults(cfg)
+}
+
+func applyCacheControlDefaults(cfg *Config) {
+	if !cfg.PrefixCache.Enabled {
+		return
+	}
+	if !cfg.PrefixCache.CacheSystemWasSet() {
+		cfg.PrefixCache.CacheSystem = PtrTo(true)
+	}
+	if !cfg.PrefixCache.CacheToolsWasSet() {
+		cfg.PrefixCache.CacheTools = PtrTo(true)
+	}
+	if !cfg.PrefixCache.CacheMessagesWasSet() {
+		cfg.PrefixCache.CacheMessages = PtrTo(true)
+	}
+	if cfg.PrefixCache.CacheControlTTL == "" {
+		cfg.PrefixCache.CacheControlTTL = "ephemeral"
+	}
+}
+
+func anyCacheFeatureSet(cfg *Config) bool {
+	if cfg.PrefixCache.PinSystemFirst != nil && *cfg.PrefixCache.PinSystemFirst {
+		return true
+	}
+	if cfg.PrefixCache.StableTools != nil && *cfg.PrefixCache.StableTools {
+		return true
+	}
+	if cfg.PrefixCache.SkipRedactionOnSystem != nil && *cfg.PrefixCache.SkipRedactionOnSystem {
+		return true
+	}
+	if cfg.PrefixCache.CacheSystem != nil && *cfg.PrefixCache.CacheSystem {
+		return true
+	}
+	if cfg.PrefixCache.CacheTools != nil && *cfg.PrefixCache.CacheTools {
+		return true
+	}
+	if cfg.PrefixCache.CacheMessages != nil && *cfg.PrefixCache.CacheMessages {
+		return true
+	}
+	return false
 }
 
 var compactionPresets = map[CompactionPreset]struct {
