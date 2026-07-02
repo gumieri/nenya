@@ -20,14 +20,16 @@ type anthropicBlock struct {
 }
 
 type AnthropicTransformer struct {
-	mu           sync.Mutex
-	messageID    string
-	model        string
-	promptTokens int
-	outputTokens int
-	hasToolCalls bool
-	blockMap     map[int]*anthropicBlock
-	streamDone   bool
+	mu                  sync.Mutex
+	messageID           string
+	model               string
+	promptTokens        int
+	outputTokens        int
+	cacheCreationTokens int
+	cacheReadTokens     int
+	hasToolCalls        bool
+	blockMap            map[int]*anthropicBlock
+	streamDone          bool
 }
 
 func NewAnthropicTransformer() *AnthropicTransformer {
@@ -99,6 +101,12 @@ func (t *AnthropicTransformer) handleMessageStart(event map[string]interface{}) 
 	if usage, ok := msg["usage"].(map[string]interface{}); ok {
 		if it, ok := usage["input_tokens"].(float64); ok {
 			t.promptTokens = int(it)
+		}
+		if ct, ok := usage["cache_creation_input_tokens"].(float64); ok {
+			t.cacheCreationTokens = int(ct)
+		}
+		if rt, ok := usage["cache_read_input_tokens"].(float64); ok {
+			t.cacheReadTokens = int(rt)
 		}
 	}
 
@@ -277,9 +285,11 @@ func (t *AnthropicTransformer) handleMessageDelta(event map[string]interface{}) 
 
 	chunk := t.makeOpenAIChunk(map[string]interface{}{}, &finishReason)
 	chunk["usage"] = map[string]interface{}{
-		"prompt_tokens":     t.promptTokens,
-		"completion_tokens": t.outputTokens,
-		"total_tokens":      t.promptTokens + t.outputTokens,
+		"prompt_tokens":            t.promptTokens,
+		"completion_tokens":        t.outputTokens,
+		"total_tokens":             t.promptTokens + t.outputTokens,
+		"prompt_cache_hit_tokens":  t.cacheReadTokens,
+		"prompt_cache_miss_tokens": t.cacheCreationTokens,
 	}
 
 	return t.marshalChunk(chunk)

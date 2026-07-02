@@ -446,8 +446,8 @@ func (o *upstreamErrorObserver) OnStreamClose(err error) {}
 
 // makeUsageCallback returns a callback function that records token usage statistics.
 // The callback is invoked by the SSE transformer when usage metadata is received.
-func (p *Proxy) makeUsageCallback(ctx context.Context, gw *gateway.NenyaGateway, target routing.UpstreamTarget, agentName string) func(int, int, int, int, int) {
-	return func(completion, prompt, total, cacheHit, cacheMiss int) {
+func (p *Proxy) makeUsageCallback(ctx context.Context, gw *gateway.NenyaGateway, target routing.UpstreamTarget, agentName string) func(int, int, int, int, int, int) {
+	return func(completion, prompt, total, cacheHit, cacheMiss, cacheCreation int) {
 		gw.Stats.RecordOutput(target.Model, completion)
 		gw.Metrics.RecordTokens("output", target.Model, agentName, target.Provider, completion)
 		if cacheHit > 0 {
@@ -455,6 +455,9 @@ func (p *Proxy) makeUsageCallback(ctx context.Context, gw *gateway.NenyaGateway,
 		}
 		if cacheMiss > 0 {
 			gw.Stats.RecordCacheMiss(target.Model, cacheMiss)
+		}
+		if cacheCreation > 0 {
+			gw.Stats.RecordCacheCreation(target.Model, cacheCreation)
 		}
 		if gw.CostTracker != nil && (prompt > 0 || completion > 0) {
 			if dm, ok := gw.ModelCatalog.Lookup(target.Model); ok && dm.Pricing != nil && !dm.Pricing.IsZero() {

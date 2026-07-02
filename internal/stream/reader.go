@@ -26,7 +26,7 @@ type ResponseTransformer interface {
 	TransformSSEChunk(ctx context.Context, data []byte) ([]byte, error)
 }
 
-type UsageCallback func(completionTokens, promptTokens, totalTokens, cacheHitTokens, cacheMissTokens int)
+type UsageCallback func(completionTokens, promptTokens, totalTokens, cacheHitTokens, cacheMissTokens, cacheCreationTokens int)
 
 type ContentCallback func(content string)
 
@@ -66,11 +66,12 @@ type SSETransformingReader struct {
 	poolBuf             *[]byte
 	logger              *slog.Logger
 
-	lastCompletionTokens int
-	lastPromptTokens     int
-	lastTotalTokens      int
-	lastCacheHitTokens   int
-	lastCacheMissTokens  int
+	lastCompletionTokens    int
+	lastPromptTokens        int
+	lastTotalTokens         int
+	lastCacheHitTokens      int
+	lastCacheMissTokens     int
+	lastCacheCreationTokens int
 
 	tcState toolCallState
 }
@@ -538,7 +539,8 @@ func (r *SSETransformingReader) extractUsageFromMap(chunk map[string]interface{}
 	total := ToInt(usage["total_tokens"])
 	cacheHit := ToInt(usage["prompt_cache_hit_tokens"])
 	cacheMiss := ToInt(usage["prompt_cache_miss_tokens"])
-	if completion == 0 && prompt == 0 && total == 0 && cacheHit == 0 && cacheMiss == 0 {
+	cacheCreation := ToInt(usage["cache_creation_tokens"])
+	if completion == 0 && prompt == 0 && total == 0 && cacheHit == 0 && cacheMiss == 0 && cacheCreation == 0 {
 		return
 	}
 	dCompletion := completion - r.lastCompletionTokens
@@ -546,7 +548,8 @@ func (r *SSETransformingReader) extractUsageFromMap(chunk map[string]interface{}
 	dTotal := total - r.lastTotalTokens
 	dCacheHit := cacheHit - r.lastCacheHitTokens
 	dCacheMiss := cacheMiss - r.lastCacheMissTokens
-	if dCompletion <= 0 && dPrompt <= 0 && dTotal <= 0 && dCacheHit <= 0 && dCacheMiss <= 0 {
+	dCacheCreation := cacheCreation - r.lastCacheCreationTokens
+	if dCompletion <= 0 && dPrompt <= 0 && dTotal <= 0 && dCacheHit <= 0 && dCacheMiss <= 0 && dCacheCreation <= 0 {
 		return
 	}
 	r.lastCompletionTokens = completion
@@ -554,7 +557,8 @@ func (r *SSETransformingReader) extractUsageFromMap(chunk map[string]interface{}
 	r.lastTotalTokens = total
 	r.lastCacheHitTokens = cacheHit
 	r.lastCacheMissTokens = cacheMiss
-	r.onUsage(dCompletion, dPrompt, dTotal, dCacheHit, dCacheMiss)
+	r.lastCacheCreationTokens = cacheCreation
+	r.onUsage(dCompletion, dPrompt, dTotal, dCacheHit, dCacheMiss, dCacheCreation)
 }
 
 // ToInt converts an interface{} value to int, handling float64 and int types.
