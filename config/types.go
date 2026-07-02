@@ -23,6 +23,7 @@ type AgentModel struct {
 	RequiredCapabilities []string `json:"required_capabilities,omitempty"`
 	ProviderRgx          string   `json:"provider_rgx,omitempty"`
 	ModelRgx             string   `json:"model_rgx,omitempty"`
+	ReasoningEffort      string   `json:"reasoning_effort,omitempty"`
 
 	providerRE *regexp.Regexp
 	modelRE    *regexp.Regexp

@@ -67,10 +67,11 @@ func FindRegistryModels(pattern config.AgentModel, providers map[string]*config.
 			}
 		}
 		models = append(models, config.AgentModel{
-			Provider:   entry.Provider,
-			Model:      modelID,
-			MaxContext: entry.MaxContext,
-			MaxOutput:  entry.MaxOutput,
+			Provider:        entry.Provider,
+			Model:           modelID,
+			MaxContext:      entry.MaxContext,
+			MaxOutput:       entry.MaxOutput,
+			ReasoningEffort: pattern.ReasoningEffort,
 		})
 	}
 	return models

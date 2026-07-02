@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/nenya/config"
 	"github.com/nenya/internal/util"
 )
 
@@ -169,7 +170,68 @@ func (a *AnthropicAdapter) convertOpenAIToAnthropic(openai map[string]interface{
 		a.convertToolChoice(tc, anthropic)
 	}
 
+	a.injectReasoningEffort(openai, anthropic, model)
+
 	return anthropic
+}
+
+func (a *AnthropicAdapter) injectReasoningEffort(openai, anthropic map[string]interface{}, model string) {
+	reasoningEffort, ok := openai["reasoning_effort"].(string)
+	if !ok || reasoningEffort == "" {
+		return
+	}
+	if _, hasThinking := anthropic["thinking"]; hasThinking {
+		return
+	}
+	if model == "" {
+		return
+	}
+
+	lowerModel := strings.ToLower(model)
+
+	entry, ok := config.ModelRegistry[lowerModel]
+	if !ok || entry.Thinking.Max <= 0 {
+		return
+	}
+
+	thinkingMin := entry.Thinking.Min
+	thinkingMax := entry.Thinking.Max
+
+	budget := a.budgetForEffort(reasoningEffort, thinkingMin, thinkingMax)
+
+	if maxTokens, ok := anthropic["max_tokens"].(int); ok && maxTokens > 0 && budget > maxTokens {
+		budget = maxTokens
+	}
+
+	anthropic["thinking"] = map[string]interface{}{
+		"type":          "enabled",
+		"budget_tokens": budget,
+	}
+}
+
+func (a *AnthropicAdapter) budgetForEffort(effort string, min, max int) int {
+	var budget int
+	switch strings.ToLower(effort) {
+	case "low", "minimal":
+		budget = min
+	case "medium":
+		budget = max / 4
+	case "high":
+		budget = max / 2
+	case "xhigh":
+		budget = max - max/4
+	case "max":
+		budget = max
+	default:
+		budget = max / 4
+	}
+	if budget < min {
+		budget = min
+	}
+	if budget > max {
+		budget = max
+	}
+	return budget
 }
 
 func (a *AnthropicAdapter) copyOpenAIFields(openai, anthropic map[string]interface{}) {

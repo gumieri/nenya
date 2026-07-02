@@ -521,7 +521,7 @@ func (p *Proxy) prepareAndSend(gw *gateway.NenyaGateway,
 		Catalog:            gw.ModelCatalog,
 		CountTokens:        gw.CountTokens,
 	}
-	transformedBody, _, err := routing.TransformRequestForUpstream(transformDeps, target.Provider, target.URL, payload, target.Model, target.MaxOutput, target.Format)
+	transformedBody, _, err := routing.TransformRequestForUpstream(transformDeps, target.Provider, target.URL, payload, target.Model, target.MaxOutput, target.Format, target.ReasoningEffort)
 	if err != nil {
 		ctxLogger.Warn("failed to transform request, using original payload", "err", err)
 		transformedBody, _ = json.Marshal(payload)

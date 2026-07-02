@@ -35,7 +35,7 @@ func TestAnthropicAdapter_InjectAuth_EmptyKey(t *testing.T) {
 
 func TestAnthropicAdapter_MutateRequest_EmptyBody(t *testing.T) {
 	a := NewAnthropicAdapter()
-	out, err := a.MutateRequest(nil, "claude-3-opus", true)
+	out, err := a.MutateRequest(nil, "claude-sonnet-5", true)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -46,8 +46,8 @@ func TestAnthropicAdapter_MutateRequest_EmptyBody(t *testing.T) {
 
 func TestAnthropicAdapter_MutateRequest_Basic(t *testing.T) {
 	a := NewAnthropicAdapter()
-	body := []byte(`{"model":"claude-3-opus","messages":[{"role":"user","content":"hello"}],"max_tokens":4096,"temperature":0.7}`)
-	out, err := a.MutateRequest(body, "claude-3-opus", true)
+	body := []byte(`{"model":"claude-sonnet-5","messages":[{"role":"user","content":"hello"}],"max_tokens":4096,"temperature":0.7}`)
+	out, err := a.MutateRequest(body, "claude-sonnet-5", true)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -57,8 +57,8 @@ func TestAnthropicAdapter_MutateRequest_Basic(t *testing.T) {
 		t.Fatalf("failed to parse output: %v", err)
 	}
 
-	if m["model"] != "claude-3-opus" {
-		t.Errorf("expected model 'claude-3-opus', got %v", m["model"])
+	if m["model"] != "claude-sonnet-5" {
+		t.Errorf("expected model 'claude-sonnet-5', got %v", m["model"])
 	}
 	if m["stream"] != true {
 		t.Error("expected stream=true")
@@ -82,8 +82,8 @@ func TestAnthropicAdapter_MutateRequest_Basic(t *testing.T) {
 
 func TestAnthropicAdapter_MutateRequest_SystemMessage(t *testing.T) {
 	a := NewAnthropicAdapter()
-	body := []byte(`{"model":"claude-3-opus","messages":[{"role":"system","content":"You are a helpful assistant"},{"role":"user","content":"hi"}]}`)
-	out, err := a.MutateRequest(body, "claude-3-opus", true)
+	body := []byte(`{"model":"claude-sonnet-5","messages":[{"role":"system","content":"You are a helpful assistant"},{"role":"user","content":"hi"}]}`)
+	out, err := a.MutateRequest(body, "claude-sonnet-5", true)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -106,12 +106,12 @@ func TestAnthropicAdapter_MutateRequest_SystemMessage(t *testing.T) {
 func TestAnthropicAdapter_MutateRequest_Tools(t *testing.T) {
 	a := NewAnthropicAdapter()
 	body := []byte(`{
-		"model": "claude-3-opus",
+		"model": "claude-sonnet-5",
 		"messages": [{"role": "user", "content": "what's the weather?"}],
 		"tools": [{"type": "function", "function": {"name": "get_weather", "description": "Get weather", "parameters": {"type": "object"}}}],
 		"tool_choice": {"type": "function", "function": {"name": "get_weather"}}
 	}`)
-	out, err := a.MutateRequest(body, "claude-3-opus", true)
+	out, err := a.MutateRequest(body, "claude-sonnet-5", true)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -638,7 +638,7 @@ func TestAnthropicAdapter_ConvertAnthropicRequestToOpenAIBody_Basic(t *testing.T
 	a := NewAnthropicAdapter()
 	anthropic := map[string]interface{}{
 		"type":    "message",
-		"model":   "claude-3-opus",
+		"model":   "claude-sonnet-5",
 		"stream":  true,
 		"messages": []interface{}{
 			map[string]interface{}{
@@ -652,8 +652,8 @@ func TestAnthropicAdapter_ConvertAnthropicRequestToOpenAIBody_Basic(t *testing.T
 
 	openai := a.ConvertAnthropicRequestToOpenAIBody(anthropic)
 
-	if openai["model"] != "claude-3-opus" {
-		t.Errorf("expected model 'claude-3-opus', got %v", openai["model"])
+	if openai["model"] != "claude-sonnet-5" {
+		t.Errorf("expected model 'claude-sonnet-5', got %v", openai["model"])
 	}
 	if openai["stream"] != true {
 		t.Error("expected stream=true")
@@ -672,7 +672,7 @@ func TestAnthropicAdapter_ConvertAnthropicRequestToOpenAIBody_SystemPrompt(t *te
 	a := NewAnthropicAdapter()
 	anthropic := map[string]interface{}{
 		"type":    "message",
-		"model":   "claude-3-opus",
+		"model":   "claude-sonnet-5",
 		"stream":  false,
 		"system":  "You are helpful.",
 		"messages": []interface{}{
@@ -1655,5 +1655,274 @@ func TestAnthropicAdapter_OrphanedToolUse_LastMessageAssistant(t *testing.T) {
 	block := assistantContent[0].(map[string]interface{})
 	if block["type"] != "text" || block["text"] != "..." {
 		t.Errorf("expected fallback text block, got: %v", block)
+	}
+}
+
+func TestAnthropicAdapter_BudgetForEffort(t *testing.T) {
+	a := NewAnthropicAdapter()
+
+	tests := []struct {
+		name     string
+		effort   string
+		min      int
+		max      int
+		expected int
+	}{
+		{
+			name:     "low with min",
+			effort:   "low",
+			min:      1024,
+			max:      200000,
+			expected: 1024,
+		},
+		{
+			name:     "minimal with min",
+			effort:   "minimal",
+			min:      2048,
+			max:      200000,
+			expected: 2048,
+		},
+		{
+			name:     "medium with max/4",
+			effort:   "medium",
+			min:      1024,
+			max:      200000,
+			expected: 50000,
+		},
+		{
+			name:     "high with max/2",
+			effort:   "high",
+			min:      1024,
+			max:      200000,
+			expected: 100000,
+		},
+		{
+			name:     "xhigh with max-max/4 (overflow-safe)",
+			effort:   "xhigh",
+			min:      1024,
+			max:      200000,
+			expected: 150000,
+		},
+		{
+			name:     "max with max",
+			effort:   "max",
+			min:      1024,
+			max:      200000,
+			expected: 200000,
+		},
+		{
+			name:     "unknown defaults to medium",
+			effort:   "unknown",
+			min:      1024,
+			max:      200000,
+			expected: 50000,
+		},
+		{
+			name:     "empty string defaults to medium",
+			effort:   "",
+			min:      1024,
+			max:      200000,
+			expected: 50000,
+		},
+		{
+			name:     "case insensitive MEDIUM",
+			effort:   "MEDIUM",
+			min:      1024,
+			max:      200000,
+			expected: 50000,
+		},
+		{
+			name:     "case insensitive HIGH",
+			effort:   "HIGH",
+			min:      1024,
+			max:      200000,
+			expected: 100000,
+		},
+		{
+			name:     "clamp to min when budget below min",
+			effort:   "low",
+			min:      10000,
+			max:      10000,
+			expected: 10000,
+		},
+		{
+			name:     "clamp to max when budget exceeds max",
+			effort:   "max",
+			min:      1000,
+			max:      5000,
+			expected: 5000,
+		},
+		{
+			name:     "edge case max=0 uses min",
+			effort:   "medium",
+			min:      1024,
+			max:      0,
+			expected: 0,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := a.budgetForEffort(tt.effort, tt.min, tt.max)
+			if got != tt.expected {
+				t.Errorf("budgetForEffort(%q, %d, %d) = %d, want %d",
+					tt.effort, tt.min, tt.max, got, tt.expected)
+			}
+		})
+	}
+}
+
+func TestAnthropicAdapter_InjectReasoningEffort(t *testing.T) {
+	a := NewAnthropicAdapter()
+
+	tests := []struct {
+		name           string
+		openai         map[string]interface{}
+		anthropic      map[string]interface{}
+		model          string
+		expectThinking bool
+		expectedBudget int
+		skipBudgetCheck bool
+	}{
+		{
+			name:           "no reasoning_effort field",
+			openai:         map[string]interface{}{"model": "claude-sonnet-5", "max_tokens": 4096},
+			anthropic:      map[string]interface{}{"model": "claude-sonnet-5", "max_tokens": 4096},
+			model:          "claude-sonnet-5",
+			expectThinking: false,
+		},
+		{
+			name:           "empty reasoning_effort",
+			openai:         map[string]interface{}{"model": "claude-sonnet-5", "max_tokens": 4096, "reasoning_effort": ""},
+			anthropic:      map[string]interface{}{"model": "claude-sonnet-5", "max_tokens": 4096},
+			model:          "claude-sonnet-5",
+			expectThinking: false,
+		},
+		{
+			name:           "client already set thinking preserves client value",
+			openai:         map[string]interface{}{"model": "claude-sonnet-5", "max_tokens": 4096, "reasoning_effort": "medium"},
+			anthropic:      map[string]interface{}{"model": "claude-sonnet-5", "max_tokens": 4096, "thinking": map[string]interface{}{"type": "disabled"}},
+			model:          "claude-sonnet-5",
+			expectThinking: true,
+			skipBudgetCheck: true,
+		},
+		{
+			name:           "low reasoning effort",
+			openai:         map[string]interface{}{"model": "claude-sonnet-5", "max_tokens": 4096, "reasoning_effort": "low"},
+			anthropic:      map[string]interface{}{"model": "claude-sonnet-5", "max_tokens": 4096},
+			model:          "claude-sonnet-5",
+			expectThinking: true,
+		},
+		{
+			name:           "medium reasoning effort",
+			openai:         map[string]interface{}{"model": "claude-sonnet-5", "max_tokens": 4096, "reasoning_effort": "medium"},
+			anthropic:      map[string]interface{}{"model": "claude-sonnet-5", "max_tokens": 4096},
+			model:          "claude-sonnet-5",
+			expectThinking: true,
+		},
+		{
+			name:           "high reasoning effort",
+			openai:         map[string]interface{}{"model": "claude-sonnet-5", "max_tokens": 4096, "reasoning_effort": "high"},
+			anthropic:      map[string]interface{}{"model": "claude-sonnet-5", "max_tokens": 4096},
+			model:          "claude-sonnet-5",
+			expectThinking: true,
+		},
+		{
+			name:           "xhigh reasoning effort",
+			openai:         map[string]interface{}{"model": "claude-sonnet-5", "max_tokens": 4096, "reasoning_effort": "xhigh"},
+			anthropic:      map[string]interface{}{"model": "claude-sonnet-5", "max_tokens": 4096},
+			model:          "claude-sonnet-5",
+			expectThinking: true,
+		},
+		{
+			name:           "max reasoning effort",
+			openai:         map[string]interface{}{"model": "claude-sonnet-5", "max_tokens": 4096, "reasoning_effort": "max"},
+			anthropic:      map[string]interface{}{"model": "claude-sonnet-5", "max_tokens": 4096},
+			model:          "claude-sonnet-5",
+			expectThinking: true,
+		},
+		{
+			name:           "minimal reasoning effort (alias for low)",
+			openai:         map[string]interface{}{"model": "claude-sonnet-5", "max_tokens": 4096, "reasoning_effort": "minimal"},
+			anthropic:      map[string]interface{}{"model": "claude-sonnet-5", "max_tokens": 4096},
+			model:          "claude-sonnet-5",
+			expectThinking: true,
+		},
+		{
+			name:           "unknown reasoning effort defaults to medium",
+			openai:         map[string]interface{}{"model": "claude-sonnet-5", "max_tokens": 4096, "reasoning_effort": "unknown"},
+			anthropic:      map[string]interface{}{"model": "claude-sonnet-5", "max_tokens": 4096},
+			model:          "claude-sonnet-5",
+			expectThinking: true,
+		},
+		{
+			name:           "empty model name skips injection",
+			openai:         map[string]interface{}{"model": "", "max_tokens": 4096, "reasoning_effort": "medium"},
+			anthropic:      map[string]interface{}{"model": "", "max_tokens": 4096},
+			model:          "",
+			expectThinking: false,
+		},
+		{
+			name:           "model not in registry skips injection",
+			openai:         map[string]interface{}{"model": "unknown-model", "max_tokens": 4096, "reasoning_effort": "medium"},
+			anthropic:      map[string]interface{}{"model": "unknown-model", "max_tokens": 4096},
+			model:          "unknown-model",
+			expectThinking: false,
+		},
+		{
+			name:           "model without thinking capability skips injection",
+			openai:         map[string]interface{}{"model": "deepseek-v4-pro", "max_tokens": 4096, "reasoning_effort": "medium"},
+			anthropic:      map[string]interface{}{"model": "deepseek-v4-pro", "max_tokens": 4096},
+			model:          "deepseek-v4-pro",
+			expectThinking: false,
+		},
+		{
+			name:           "budget clamped to max_tokens when larger",
+			openai:         map[string]interface{}{"model": "claude-sonnet-5", "max_tokens": 1024, "reasoning_effort": "max"},
+			anthropic:      map[string]interface{}{"model": "claude-sonnet-5", "max_tokens": 1024},
+			model:          "claude-sonnet-5",
+			expectThinking: true,
+			expectedBudget: 1024,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			a.injectReasoningEffort(tt.openai, tt.anthropic, tt.model)
+
+			thinking, hasThinking := tt.anthropic["thinking"]
+			if hasThinking != tt.expectThinking {
+				t.Errorf("hasThinking = %v, want %v", hasThinking, tt.expectThinking)
+				return
+			}
+
+			if !tt.expectThinking {
+				return
+			}
+
+			thinkingMap, ok := thinking.(map[string]interface{})
+			if !ok {
+				t.Error("thinking is not a map[string]interface{}")
+				return
+			}
+
+			if tt.skipBudgetCheck {
+				return
+			}
+
+			if thinkingMap["type"] != "enabled" {
+				t.Errorf("thinking.type = %v, want 'enabled'", thinkingMap["type"])
+			}
+
+			budget, ok := thinkingMap["budget_tokens"].(int)
+			if !ok {
+				t.Error("budget_tokens is not an int")
+				return
+			}
+
+			if tt.expectedBudget > 0 && budget != tt.expectedBudget {
+				t.Errorf("budget_tokens = %d, want %d", budget, tt.expectedBudget)
+			}
+		})
 	}
 }

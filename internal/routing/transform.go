@@ -286,7 +286,7 @@ func restoreOriginalModel(payload map[string]interface{}, origModel interface{})
 	}
 }
 
-func TransformRequestForUpstream(deps TransformDeps, providerName, upstreamURL string, payload map[string]interface{}, model string, maxOutput int, format string) ([]byte, string, error) {
+func TransformRequestForUpstream(deps TransformDeps, providerName, upstreamURL string, payload map[string]interface{}, model string, maxOutput int, format string, reasoningEffort string) ([]byte, string, error) {
 	origModel := payload["model"]
 
 	if model != "" {
@@ -314,6 +314,15 @@ func TransformRequestForUpstream(deps TransformDeps, providerName, upstreamURL s
 	}
 
 	finalModel := resolveModelMapping(deps, payload, providerName, modelName)
+
+	if reasoningEffort != "" {
+		if _, exists := payload["reasoning_effort"]; !exists {
+			// Inject default reasoning_effort from agent config.
+			// Client-specified reasoning_effort always takes precedence.
+			payload["reasoning_effort"] = reasoningEffort
+		}
+	}
+
 	applyProviderSanitize(deps, payload, providerName)
 	SanitizePayload(deps, payload, modelName)
 	resolveAgentSystemPrompt(deps, payload, origModel, providerName)

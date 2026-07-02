@@ -19,6 +19,9 @@ type UpstreamTarget struct {
 	MaxContext  int
 	AccountName string
 	Credential  string
+	// ReasoningEffort is the default reasoning intensity (low, medium, high, xhigh, max)
+	// from agent config, used if the client didn't specify one.
+	ReasoningEffort string
 }
 
 // ProviderMatch holds the resolved provider details for a model,

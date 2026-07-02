@@ -4,6 +4,7 @@ import (
 	"context"
 	"log/slog"
 	"math"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -306,10 +307,11 @@ func (a *AgentState) expandDynamicWithCache(agentName string, models []config.Ag
 // using fallback values from the discovery entry when agent model fields are zero.
 func buildAgentModelWithFallback(modelName string, base config.AgentModel, disc discovery.DiscoveredModel) config.AgentModel {
 	am := config.AgentModel{
-		Provider:   disc.Provider,
-		Model:      modelName,
-		MaxContext: base.MaxContext,
-		MaxOutput:  base.MaxOutput,
+		Provider:        disc.Provider,
+		Model:           modelName,
+		MaxContext:      base.MaxContext,
+		MaxOutput:       base.MaxOutput,
+		ReasoningEffort: base.ReasoningEffort,
 	}
 	if am.MaxContext <= 0 {
 		am.MaxContext = disc.MaxContext
@@ -394,10 +396,11 @@ func expandDeferredFromRegistry(m config.AgentModel, providers map[string]*confi
 		return config.AgentModel{}, false
 	}
 	am := config.AgentModel{
-		Provider:   p.Name,
-		Model:      m.Model,
-		MaxContext: m.MaxContext,
-		MaxOutput:  m.MaxOutput,
+		Provider:        p.Name,
+		Model:           m.Model,
+		MaxContext:      m.MaxContext,
+		MaxOutput:       m.MaxOutput,
+		ReasoningEffort: m.ReasoningEffort,
 	}
 	if am.MaxContext <= 0 {
 		am.MaxContext = entry.MaxContext
@@ -476,10 +479,11 @@ func expandWithRegistryFallback(providerName string, m config.AgentModel, logger
 	for modelID, entry := range config.ModelRegistry {
 		if entry.Provider == providerName {
 			am := config.AgentModel{
-				Provider:   providerName,
-				Model:      modelID,
-				MaxContext: m.MaxContext,
-				MaxOutput:  m.MaxOutput,
+				Provider:        providerName,
+				Model:           modelID,
+				MaxContext:      m.MaxContext,
+				MaxOutput:       m.MaxOutput,
+				ReasoningEffort: m.ReasoningEffort,
 			}
 			if am.MaxContext <= 0 {
 				am.MaxContext = entry.MaxContext
@@ -532,10 +536,11 @@ func (a *AgentState) expandProviderOnly(models []config.AgentModel, catalog *dis
 }
 
 func expandDynamicModels(models []config.AgentModel, catalog *discovery.ModelCatalog, providers map[string]*config.Provider, logger *slog.Logger) []config.AgentModel {
-	expanded := make([]config.AgentModel, 0, len(models))
+	seen := make(map[string]config.AgentModel)
 	for _, m := range models {
 		if !m.IsDynamic() {
-			expanded = append(expanded, m)
+			key := m.Provider + ":" + m.Model
+			seen[key] = m
 			continue
 		}
 		matchedAny := false
@@ -548,18 +553,22 @@ func expandDynamicModels(models []config.AgentModel, catalog *discovery.ModelCat
 				logger.Debug("provider from catalog not found", "provider", dm.Provider, "model", dm.ID)
 				continue
 			}
-			am := config.AgentModel{
-				Provider:   dm.Provider,
-				Model:      dm.ID,
-				URL:        "",
-				MaxContext: dm.MaxContext,
-				MaxOutput:  dm.MaxOutput,
+			key := dm.Provider + ":" + dm.ID
+			seen[key] = config.AgentModel{
+				Provider:        dm.Provider,
+				Model:           dm.ID,
+				URL:             "",
+				MaxContext:      dm.MaxContext,
+				MaxOutput:       dm.MaxOutput,
+				ReasoningEffort: m.ReasoningEffort,
 			}
-			expanded = append(expanded, am)
 		}
 		if !matchedAny {
 			registryModels := util.FindRegistryModels(m, providers)
-			expanded = append(expanded, registryModels...)
+			for _, rm := range registryModels {
+				key := rm.Provider + ":" + rm.Model
+				seen[key] = rm
+			}
 			if len(registryModels) > 0 {
 				matchedAny = true
 			}
@@ -568,6 +577,16 @@ func expandDynamicModels(models []config.AgentModel, catalog *discovery.ModelCat
 			logger.Warn("dynamic model entry matched no catalog or registry entries",
 				"provider_rgx", m.ProviderRgx, "model_rgx", m.ModelRgx)
 		}
+	}
+
+	expanded := make([]config.AgentModel, 0, len(seen))
+	keys := make([]string, 0, len(seen))
+	for k := range seen {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	for _, k := range keys {
+		expanded = append(expanded, seen[k])
 	}
 	return expanded
 }
@@ -662,13 +681,14 @@ func (a *AgentState) buildTarget(ctx context.Context, logger *slog.Logger, agent
 	}
 
 	t := &UpstreamTarget{
-		URL:        p,
-		Model:      m.Model,
-		Format:     resolveTargetFormat(m.Model, &m, catalog),
-		CoolKey:    agentName + ":" + m.Provider + ":" + m.Model,
-		Provider:   m.Provider,
-		MaxOutput:  maxOut,
-		MaxContext: maxCtx,
+		URL:             p,
+		Model:           m.Model,
+		Format:          resolveTargetFormat(m.Model, &m, catalog),
+		CoolKey:         agentName + ":" + m.Provider + ":" + m.Model,
+		Provider:        m.Provider,
+		MaxOutput:       maxOut,
+		MaxContext:      maxCtx,
+		ReasoningEffort: m.ReasoningEffort,
 	}
 
 	if accountSelector != nil && m.Provider != "" {
