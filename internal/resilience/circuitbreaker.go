@@ -416,6 +416,22 @@ func (cb *CircuitBreaker) RecordSuccessWithModel(key, model string) {
 	}
 }
 
+// ReleaseHalfOpen releases a half-open inflight slot for the given key without
+// recording success or failure. Use when a request was allowed in HalfOpen state
+// but was canceled before dispatch (e.g., client disconnect). Safe to call when
+// the circuit doesn't exist, is not HalfOpen, or has no inflight slots — all are
+// no-ops.
+func (cb *CircuitBreaker) ReleaseHalfOpen(key string) {
+	cb.mu.Lock()
+	defer cb.mu.Unlock()
+
+	c, ok := cb.circuits[key]
+	if !ok || c.state != StateHalfOpen || c.halfOpenInflight == 0 {
+		return
+	}
+	c.halfOpenInflight--
+}
+
 // ForceOpen forces the circuit breaker for the given key into the Open state
 // for the specified cooldown duration. Used for manual circuit breaking
 // (e.g., on HTTP 429 rate limit errors).
