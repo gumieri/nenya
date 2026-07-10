@@ -394,3 +394,85 @@ func TestCircuitBreaker_SnapshotDetailed(t *testing.T) {
 		t.Error("expected backoff level > 0 for rate-limited model")
 	}
 }
+
+func TestCircuitBreaker_ReleaseHalfOpen_DecrementsInflight(t *testing.T) {
+	cb := NewCircuitBreaker(2, 1, 1, 10*time.Millisecond, nil)
+	key := "test"
+
+	// Trip the breaker
+	cb.RecordFailure(key)
+	cb.RecordFailure(key)
+
+	// Wait for cooldown
+	time.Sleep(15 * time.Millisecond)
+
+	// Allow enters HalfOpen and increments halfOpenInflight
+	if !cb.Allow(key) {
+		t.Fatal("expected Allow to succeed in HalfOpen")
+	}
+
+	// ReleaseHalfOpen should free the inflight slot
+	cb.ReleaseHalfOpen(key)
+
+	// Allow should succeed again since ReleaseHalfOpen freed the slot
+	if !cb.Allow(key) {
+		t.Error("expected Allow to succeed after ReleaseHalfOpen freed the slot")
+	}
+}
+
+func TestCircuitBreaker_ReleaseHalfOpen_NoopOnClosedState(t *testing.T) {
+	cb := NewCircuitBreaker(2, 1, 1, time.Second, nil)
+	key := "test"
+
+	// Circuit is Closed by default
+	cb.ReleaseHalfOpen(key)
+
+	// No panic, circuit still Closed
+	if cb.State(key) != StateClosed {
+		t.Error("expected circuit to remain Closed after ReleaseHalfOpen on Closed state")
+	}
+}
+
+func TestCircuitBreaker_ReleaseHalfOpen_NoopOnNonExistentCircuit(t *testing.T) {
+	cb := NewCircuitBreaker(2, 1, 1, time.Second, nil)
+	key := "non-existent"
+
+	// Circuit doesn't exist at all — should be no-op (no panic)
+	cb.ReleaseHalfOpen(key)
+
+	// Circuit should still not exist (StateClosed for non-existent)
+	if cb.State(key) != StateClosed {
+		t.Error("expected StateClosed for non-existent circuit after ReleaseHalfOpen")
+	}
+}
+
+func TestCircuitBreaker_HalfOpenInflightLeak_GuardsAgainstAbandonedProbe(t *testing.T) {
+	cb := NewCircuitBreaker(2, 1, 1, 10*time.Millisecond, nil)
+	key := "test"
+
+	// Trip the breaker
+	cb.RecordFailure(key)
+	cb.RecordFailure(key)
+
+	// Wait for cooldown
+	time.Sleep(15 * time.Millisecond)
+
+	// Allow enters HalfOpen and increments halfOpenInflight — simulating
+	// a probe that was allowed but never completed (no RecordSuccess/Failure)
+	if !cb.Allow(key) {
+		t.Fatal("expected Allow to succeed in HalfOpen")
+	}
+
+	// halfOpenMaxRequests is 1, so no further probes allowed
+	if cb.Allow(key) {
+		t.Error("expected Allow to be rejected when HalfOpen with inflight = 1")
+	}
+
+	// ReleaseHalfOpen cleans up the abandoned probe
+	cb.ReleaseHalfOpen(key)
+
+	// Now Allow should succeed again
+	if !cb.Allow(key) {
+		t.Error("expected Allow to succeed after ReleaseHalfOpen cleaned up abandoned probe")
+	}
+}

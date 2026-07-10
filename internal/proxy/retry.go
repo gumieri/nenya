@@ -596,7 +596,8 @@ func (p *Proxy) recordNetworkError(ctxLogger *slog.Logger, gw *gateway.NenyaGate
 			return
 		}
 		// Parent is also terminated → client disconnect, skip CB pollution
-		ctxLogger.Debug("target request canceled (client disconnect)", "err", err)
+		ctxLogger.Debug("request canceled (client disconnect), releasing half-open CB slot", "err", err)
+		gw.AgentState.CB.ReleaseHalfOpen(target.CoolKey)
 		return
 	}
 	ctxLogger.Warn("target network error", "err", err)
