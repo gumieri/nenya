@@ -178,6 +178,21 @@ func (r *SSETransformingReader) SawDone() bool {
 	return r.sawDone
 }
 
+// getTransformedLine returns the transformed line, using pooled buffers when possible.
+func (r *SSETransformingReader) getTransformedLine(line []byte) []byte {
+	if len(line) <= maxPooledBufSize {
+		buf := GetLineCopyBuffer()
+		*buf = (*buf)[:len(line)]
+		copy(*buf, line)
+		transformed := r.transformLine(*buf)
+		PutLineCopyBuffer(buf)
+		return transformed
+	}
+	lineCopy := make([]byte, len(line))
+	copy(lineCopy, line)
+	return r.transformLine(lineCopy)
+}
+
 func (r *SSETransformingReader) Read(p []byte) (int, error) {
 	if r.ctx != nil {
 		select {
@@ -217,10 +232,7 @@ func (r *SSETransformingReader) Read(p []byte) (int, error) {
 	}
 
 	for {
-		line := r.scanner.Bytes()
-		lineCopy := make([]byte, len(line))
-		copy(lineCopy, line)
-		transformed := r.transformLine(lineCopy)
+		transformed := r.getTransformedLine(r.scanner.Bytes())
 
 		if transformed == nil {
 			if !r.scanner.Scan() {

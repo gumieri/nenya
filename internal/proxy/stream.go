@@ -38,6 +38,15 @@ func getStreamBuffer() *[]byte {
 	return buf
 }
 
+func putStreamBuffer(buf *[]byte) {
+	if buf == nil || *buf == nil {
+		return
+	}
+	if cap(*buf) == streamBufferSize {
+		streamingBufPool.Put(buf)
+	}
+}
+
 type contentBuilder struct {
 	buf strings.Builder
 }
@@ -55,8 +64,9 @@ func (b *contentBuilder) build() string {
 }
 
 type readResult struct {
-	data []byte
-	err  error
+	data       []byte
+	err        error
+	poolBufPtr *[]byte // pool buffer to return after data is fully consumed
 }
 
 // stallReader wraps an io.Reader and detects stalls where no data is received
@@ -91,17 +101,21 @@ func newStallReader(ctx context.Context, src io.Reader, timeout time.Duration) *
 }
 
 func (sr *stallReader) readLoop(ctx context.Context, src io.Reader) {
-	buf := make([]byte, 32*1024)
+	localBuf := [32 * 1024]byte{}
 	for {
-		n, err := src.Read(buf)
+		n, err := src.Read(localBuf[:])
 		var data []byte
+		var poolBufPtr *[]byte
 		if n > 0 {
-			data = make([]byte, n)
-			copy(data, buf[:n])
+			poolBufPtr = getStreamBuffer()
+			*poolBufPtr = (*poolBufPtr)[:n]
+			copy(*poolBufPtr, localBuf[:n])
+			data = *poolBufPtr
 		}
 		select {
-		case sr.ch <- readResult{data, err}:
+		case sr.ch <- readResult{data: data, err: err, poolBufPtr: poolBufPtr}:
 		case <-ctx.Done():
+			putStreamBuffer(poolBufPtr)
 			return
 		}
 		if err != nil {
@@ -138,6 +152,9 @@ func (sr *stallReader) Read(p []byte) (int, error) {
 		if len(rr.data) > 0 {
 			sr.timer.Reset(streamIdleTimeout)
 		}
+		if rr.poolBufPtr != nil {
+			defer putStreamBuffer(rr.poolBufPtr)
+		}
 		sr.mu.Lock()
 		stalled := sr.stalled
 		sr.mu.Unlock()
@@ -145,7 +162,8 @@ func (sr *stallReader) Read(p []byte) (int, error) {
 			if len(rr.data) > 0 {
 				n := copy(p, rr.data)
 				if n < len(rr.data) {
-					sr.remainBuf = rr.data[n:]
+					sr.remainBuf = make([]byte, len(rr.data)-n)
+					copy(sr.remainBuf, rr.data[n:])
 					sr.remainPos = 0
 				}
 				return n, errStreamStalled
@@ -154,7 +172,8 @@ func (sr *stallReader) Read(p []byte) (int, error) {
 		}
 		n := copy(p, rr.data)
 		if n < len(rr.data) {
-			sr.remainBuf = rr.data[n:]
+			sr.remainBuf = make([]byte, len(rr.data)-n)
+			copy(sr.remainBuf, rr.data[n:])
 			sr.remainPos = 0
 		}
 		return n, rr.err
@@ -187,12 +206,17 @@ func (sr *stallReader) DrainPending(timeout time.Duration) (int, error) {
 		sr.remainPos = 0
 	}
 
-	select {
-	case rr := <-sr.ch:
-		total += len(rr.data)
-		return total, rr.err
-	case <-time.After(timeout):
-		return total, errors.New("stall reader drain timeout")
+	// Drain any pending channel messages to avoid leaks
+	for {
+		select {
+		case rr := <-sr.ch:
+			if rr.poolBufPtr != nil {
+				putStreamBuffer(rr.poolBufPtr)
+			}
+			total += len(rr.data)
+		case <-time.After(timeout):
+			return total, errors.New("stall reader drain timeout")
+		}
 	}
 }
 
