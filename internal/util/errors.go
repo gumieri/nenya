@@ -1,6 +1,10 @@
 package util
 
-import "strings"
+import (
+	"context"
+	"errors"
+	"strings"
+)
 
 // IsContextLengthError detects context-length exceeded errors from upstream providers.
 // It checks the status code (400, 413, 422) and parses the response body for known
@@ -26,4 +30,11 @@ func IsContextLengthError(status int, body string) bool {
 		}
 	}
 	return false
+}
+
+// IsContextCanceled detects whether an error matches or wraps context.Canceled
+// or context.DeadlineExceeded. Returns true for either context termination type,
+// false for all other errors including nil.
+func IsContextCanceled(err error) bool {
+	return errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)
 }

@@ -1,10 +1,14 @@
 package proxy
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
+	"net/http/httptest"
 	"regexp"
 	"strings"
 	"testing"
@@ -14,6 +18,7 @@ import (
 	"github.com/nenya/internal/gateway"
 	"github.com/nenya/internal/infra"
 	"github.com/nenya/internal/routing"
+	"github.com/nenya/internal/resilience"
 )
 
 func TestParseRetryDelay_NoHeaderNoBody(t *testing.T) {
@@ -844,5 +849,243 @@ func TestRedactForLog_TruncatesLongBody(t *testing.T) {
 	}
 	if result[512:] != "...[truncated]" {
 		t.Errorf("expected truncated suffix, got %q", result[512:])
+	}
+}
+
+// errorRoundTripper is a test-only http.RoundTripper that always returns the given error.
+type errorRoundTripper struct {
+	err error
+}
+
+func (rt *errorRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
+	return nil, rt.err
+}
+
+// getFailureCountFromSnapshot extracts the failure_count from a circuit breaker snapshot.
+// Returns 0 if the key doesn't exist or the structure is unexpected.
+func getFailureCountFromSnapshot(snapshot map[string]interface{}, key string) uint32 {
+	if circuits, ok := snapshot["circuits"].(map[string]interface{}); ok {
+		if circuit, ok := circuits[key].(map[string]interface{}); ok {
+			switch v := circuit["failure_count"].(type) {
+			case uint32:
+				return v
+			case float64:
+				return uint32(v)
+			}
+		}
+	}
+	return 0
+}
+
+func TestRetryLoop_StopsOnClientDisconnect(t *testing.T) {
+	gw := newTestGateway(nil, nil)
+
+	// Mock client that returns context.Canceled (simulating client disconnect)
+	gw.Client = &http.Client{
+		Transport: &errorRoundTripper{err: context.Canceled},
+	}
+
+	targets := []routing.UpstreamTarget{
+		{Provider: "provider1", Model: "model1", CoolKey: "agent:provider1:model1", URL: "http://p1/v1/chat/completions", Credential: "tok", MaxOutput: 4096},
+		{Provider: "provider2", Model: "model2", CoolKey: "agent:provider2:model2", URL: "http://p2/v1/chat/completions", Credential: "tok", MaxOutput: 4096},
+		{Provider: "provider3", Model: "model3", CoolKey: "agent:provider3:model3", URL: "http://p3/v1/chat/completions", Credential: "tok", MaxOutput: 4096},
+	}
+
+	opts := forwardOptions{
+		Targets:    targets,
+		MaxRetries: 3,
+		AgentName:  "test-agent",
+		Payload:    map[string]any{"model": "test", "messages": []any{}},
+	}
+
+	// Pre-cancel the context — simulates client already disconnected
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	r, err := http.NewRequestWithContext(ctx, "POST", "http://test.com", nil)
+	if err != nil {
+		t.Fatalf("NewRequestWithContext failed: %v", err)
+	}
+
+	p := &Proxy{}
+	p.StoreGateway(gw)
+	rl, err := newRetryLoop(p, gw, httptest.NewRecorder(), r, opts)
+	if err != nil {
+		t.Fatalf("newRetryLoop failed: %v", err)
+	}
+
+	result := rl.Run()
+	if result {
+		t.Fatal("expected Run to return false (no successful response)")
+	}
+
+	// Verify CircuitBreaker was NOT polluted for any target
+	for _, target := range targets {
+		state := gw.AgentState.CB.State(target.CoolKey)
+		if state != resilience.StateClosed {
+			t.Errorf("CB for %s should be Closed, got state %d", target.CoolKey, state)
+		}
+	}
+}
+
+func TestPrepareAndSend_ContextCanceledDoesNotRecordFailure(t *testing.T) {
+	gw := newTestGateway(nil, nil)
+	gw.Client = &http.Client{
+		Transport: &errorRoundTripper{err: context.Canceled},
+	}
+	gw.RateLimiter = infra.NewRateLimiter(0, 0)
+	gw.Providers["test-provider"] = &config.Provider{Name: "test-provider"}
+
+	target := routing.UpstreamTarget{
+		Provider:  "test-provider",
+		Model:     "test-model",
+		CoolKey:   "agent:test-provider:test-model",
+		URL:       "http://test-provider/v1/chat/completions",
+		Credential: "test-token",
+		MaxOutput: 4096,
+	}
+
+	payload := map[string]interface{}{"model": "test", "messages": []interface{}{}}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // Pre-cancel the parent context before creating request
+
+	payloadBytes, _ := json.Marshal(payload)
+	r, err := http.NewRequestWithContext(ctx, "POST", "http://test.com", bytes.NewReader(payloadBytes))
+	if err != nil {
+		t.Fatalf("NewRequestWithContext failed: %v", err)
+	}
+
+	p := &Proxy{}
+	p.StoreGateway(gw)
+	action := p.prepareAndSend(gw, r, 0, []routing.UpstreamTarget{target}, target, payload, 0, 0, "test-agent")
+
+	if action.kind != actionContinue {
+		t.Errorf("expected actionContinue, got %v", action.kind)
+	}
+
+	state := gw.AgentState.CB.State(target.CoolKey)
+	if state != resilience.StateClosed {
+		t.Errorf("CB should be Closed (no failures) after context.Canceled, got state %d", state)
+	}
+}
+
+func TestPrepareAndSend_DeadlineExceededDoesNotRecordFailure(t *testing.T) {
+	gw := newTestGateway(nil, nil)
+	gw.Client = &http.Client{
+		Transport: &errorRoundTripper{err: context.DeadlineExceeded},
+	}
+	gw.RateLimiter = infra.NewRateLimiter(0, 0)
+	gw.Providers["test-provider"] = &config.Provider{Name: "test-provider"}
+
+	target := routing.UpstreamTarget{
+		Provider:  "test-provider",
+		Model:     "test-model",
+		CoolKey:   "agent:test-provider:test-model",
+		URL:       "http://test-provider/v1/chat/completions",
+		Credential: "test-token",
+		MaxOutput:  4096,
+	}
+
+	payload := map[string]interface{}{"model": "test", "messages": []interface{}{}}
+
+	ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
+	defer cancel()
+
+	payloadBytes, _ := json.Marshal(payload)
+	r, err := http.NewRequestWithContext(ctx, "POST", "http://test.com", bytes.NewReader(payloadBytes))
+	if err != nil {
+		t.Fatalf("NewRequestWithContext failed: %v", err)
+	}
+
+	p := &Proxy{}
+	p.StoreGateway(gw)
+	action := p.prepareAndSend(gw, r, 0, []routing.UpstreamTarget{target}, target, payload, 0, 0, "test-agent")
+
+	if action.kind != actionContinue {
+		t.Errorf("expected actionContinue, got %v", action.kind)
+	}
+
+	state := gw.AgentState.CB.State(target.CoolKey)
+	if state != resilience.StateClosed {
+		t.Errorf("CB should be Closed (no failures) after context.DeadlineExceeded, got state %d", state)
+	}
+}
+
+func TestPrepareAndSend_NetworkErrorRecordsFailure(t *testing.T) {
+	gw := newTestGateway(nil, nil)
+	gw.Client = &http.Client{
+		Transport: &errorRoundTripper{err: errors.New("connection refused")},
+	}
+	gw.RateLimiter = infra.NewRateLimiter(0, 0)
+	gw.Providers["test-provider"] = &config.Provider{Name: "test-provider"}
+
+	target := routing.UpstreamTarget{
+		Provider:   "test-provider",
+		Model:      "test-model",
+		CoolKey:    "agent:test-provider:test-model",
+		URL:        "http://test-provider/v1/chat/completions",
+		Credential: "test-token",
+		MaxOutput:  4096,
+	}
+
+	payload := map[string]interface{}{"model": "test", "messages": []interface{}{}}
+	r, err := http.NewRequestWithContext(context.Background(), "POST", "http://test.com", nil)
+	if err != nil {
+		t.Fatalf("NewRequestWithContext failed: %v", err)
+	}
+
+	p := &Proxy{}
+	p.StoreGateway(gw)
+	action := p.prepareAndSend(gw, r, 0, []routing.UpstreamTarget{target}, target, payload, 0, 0, "test-agent")
+
+	if action.kind != actionContinue {
+		t.Errorf("expected actionContinue, got %v", action.kind)
+	}
+
+	detailed := gw.AgentState.CB.SnapshotDetailed()
+	failures := getFailureCountFromSnapshot(detailed, target.CoolKey)
+	if failures == 0 {
+		t.Errorf("CB should have failure_count > 0 for real network error, got %d", failures)
+	}
+}
+
+func TestPrepareAndSend_ProviderTimeoutRecordsFailure(t *testing.T) {
+	gw := newTestGateway(nil, nil)
+	gw.Client = &http.Client{
+		Transport: &errorRoundTripper{err: context.DeadlineExceeded},
+	}
+	gw.RateLimiter = infra.NewRateLimiter(0, 0)
+	gw.Providers["test-provider"] = &config.Provider{
+		Name:           "test-provider",
+		TimeoutSeconds: 1,
+	}
+
+	target := routing.UpstreamTarget{
+		Provider:   "test-provider",
+		Model:      "test-model",
+		CoolKey:    "agent:test-provider:test-model",
+		URL:        "http://test-provider/v1/chat/completions",
+		Credential: "test-token",
+		MaxOutput:  4096,
+	}
+
+	payload := map[string]interface{}{"model": "test", "messages": []interface{}{}}
+	r, err := http.NewRequestWithContext(context.Background(), "POST", "http://test.com", nil)
+	if err != nil {
+		t.Fatalf("NewRequestWithContext failed: %v", err)
+	}
+
+	p := &Proxy{}
+	p.StoreGateway(gw)
+	action := p.prepareAndSend(gw, r, 0, []routing.UpstreamTarget{target}, target, payload, 0, 0, "test-agent")
+
+	if action.kind != actionContinue {
+		t.Errorf("expected actionContinue, got %v", action.kind)
+	}
+
+	detailed := gw.AgentState.CB.SnapshotDetailed()
+	failures := getFailureCountFromSnapshot(detailed, target.CoolKey)
+	if failures == 0 {
+		t.Errorf("CB should have failure_count > 0 for provider timeout, got %d", failures)
 	}
 }

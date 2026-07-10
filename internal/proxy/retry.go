@@ -369,6 +369,10 @@ func (rl *retryLoop) Run() bool {
 	workingPayload := make(map[string]interface{}, 16)
 retryLoop:
 	for i, target := range rl.opts.Targets {
+		if err := rl.r.Context().Err(); err != nil {
+			rl.ctxLogger.Debug("request context canceled, stopping failover sweep", "err", err)
+			break retryLoop
+		}
 		if rl.opts.MaxRetries > 0 && rl.attempt >= rl.opts.MaxRetries {
 			rl.ctxLogger.Warn("max retries reached", "attempt", rl.attempt, "max", rl.opts.MaxRetries)
 			break retryLoop
@@ -385,6 +389,10 @@ retryLoop:
 		}
 
 		action := rl.prepareAndSend(i, target, payloadToUse)
+		if err := rl.r.Context().Err(); err != nil {
+			rl.ctxLogger.Debug("request context canceled during prepareAndSend, stopping failover sweep", "err", err)
+			break retryLoop
+		}
 		if !rl.handleActionResult(i, target, action) {
 			continue
 		}
@@ -548,8 +556,7 @@ func (p *Proxy) prepareAndSend(gw *gateway.NenyaGateway,
 	resp, err := gw.Client.Do(req)
 	if err != nil {
 		upstreamCancel()
-		ctxLogger.Warn("target network error", "err", err)
-		gw.AgentState.RecordFailure(target, cooldownDuration)
+		p.recordNetworkError(ctxLogger, gw, target, err, r, cooldownDuration)
 		return upstreamAction{kind: actionContinue}
 	}
 
@@ -571,6 +578,29 @@ func (p *Proxy) prepareAndSend(gw *gateway.NenyaGateway,
 	}
 
 	return handleUpstreamResponse(ctxLogger, resp, upstreamCancel)
+}
+
+// recordNetworkError records an upstream network error, distinguishing between
+// true client disconnects (parent context canceled or deadline exceeded — no CB
+// pollution) and real provider failures (connection refused, provider timeout on
+// child context). When the parent context is healthy but the error is
+// context-related, the provider timed out and RecordFailure is called.
+func (p *Proxy) recordNetworkError(ctxLogger *slog.Logger, gw *gateway.NenyaGateway, target routing.UpstreamTarget, err error, r *http.Request, cooldownDuration time.Duration) {
+	if util.IsContextCanceled(err) {
+		// Provider timeout (DeadlineExceeded on child context) IS a provider failure.
+		// Client disconnect (parent context terminated) is NOT.
+		if r.Context().Err() == nil {
+			// Parent is healthy → child timed out → provider failure
+			ctxLogger.Warn("target network error (provider timeout)", "err", err)
+			gw.AgentState.RecordFailure(target, cooldownDuration)
+			return
+		}
+		// Parent is also terminated → client disconnect, skip CB pollution
+		ctxLogger.Debug("target request canceled (client disconnect)", "err", err)
+		return
+	}
+	ctxLogger.Warn("target network error", "err", err)
+	gw.AgentState.RecordFailure(target, cooldownDuration)
 }
 
 func (p *Proxy) checkPreDispatchGuards(gw *gateway.NenyaGateway, ctxLogger *slog.Logger, target routing.UpstreamTarget, tokenCount int, agentName string) *upstreamAction {
