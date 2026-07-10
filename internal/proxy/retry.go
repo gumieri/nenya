@@ -968,6 +968,7 @@ var defaultRetryableStatusCodes = []int{
 	http.StatusBadGateway,
 	http.StatusServiceUnavailable,
 	http.StatusGatewayTimeout,
+	529, // Provider Overloaded (non-standard, used by xAI and some LLM gateways)
 }
 
 var commonRetryablePatterns = []string{
