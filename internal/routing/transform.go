@@ -286,6 +286,27 @@ func restoreOriginalModel(payload map[string]interface{}, origModel interface{})
 	}
 }
 
+// convertToAnthropicFormat converts an OpenAI-format payload to Anthropic format,
+// applying prefix cache configuration from agent config.
+// Returns the converted payload; the caller must use the return value as the
+// replacement for the input payload.
+func convertToAnthropicFormat(deps TransformDeps, payload map[string]interface{}, modelName string) map[string]interface{} {
+	stream := false
+	if s, ok := payload["stream"].(bool); ok {
+		stream = s
+	}
+	anthropicAdapter := adapter.GetAnthropicAdapter()
+	pc := deps.Config.PrefixCache
+	cacheSystem := pc.CacheSystem != nil && *pc.CacheSystem && pc.Enabled
+	cacheTools := pc.CacheTools != nil && *pc.CacheTools && pc.Enabled
+	cacheMessages := pc.CacheMessages != nil && *pc.CacheMessages && pc.Enabled
+	ttl := pc.CacheControlTTL
+	if ttl == "" {
+		ttl = "ephemeral"
+	}
+	return anthropicAdapter.ConvertOpenAIToAnthropicBody(payload, modelName, stream, cacheSystem, cacheTools, cacheMessages, ttl)
+}
+
 func TransformRequestForUpstream(deps TransformDeps, providerName, upstreamURL string, payload map[string]interface{}, model string, maxOutput int, format string, reasoningEffort string) ([]byte, string, error) {
 	origModel := payload["model"]
 
@@ -331,20 +352,7 @@ func TransformRequestForUpstream(deps TransformDeps, providerName, upstreamURL s
 	}
 
 	if format == "anthropic" {
-		stream := false
-		if s, ok := payload["stream"].(bool); ok {
-			stream = s
-		}
-		anthropicAdapter := adapter.GetAnthropicAdapter()
-		pc := deps.Config.PrefixCache
-		cacheSystem := pc.CacheSystem != nil && *pc.CacheSystem && pc.Enabled
-		cacheTools := pc.CacheTools != nil && *pc.CacheTools && pc.Enabled
-		cacheMessages := pc.CacheMessages != nil && *pc.CacheMessages && pc.Enabled
-		ttl := pc.CacheControlTTL
-		if ttl == "" {
-			ttl = "ephemeral"
-		}
-		payload = anthropicAdapter.ConvertOpenAIToAnthropicBody(payload, modelName, stream, cacheSystem, cacheTools, cacheMessages, ttl)
+		payload = convertToAnthropicFormat(deps, payload, modelName)
 	}
 
 	newBody, err := json.Marshal(payload)
