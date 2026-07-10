@@ -225,16 +225,35 @@ func (a *AnthropicAdapter) injectReasoningEffort(openai, anthropic map[string]in
 	thinkingMin := entry.Thinking.Min
 	thinkingMax := entry.Thinking.Max
 
-	budget := a.budgetForEffort(reasoningEffort, thinkingMin, thinkingMax)
+	var thinkingObj map[string]interface{}
 
-	if maxTokens, ok := anthropic["max_tokens"].(int); ok && maxTokens > 0 && budget > maxTokens {
-		budget = maxTokens
+	if entry.Thinking.Adaptive {
+		// Opus 4.7+, Sonnet 5, Fable 5 use adaptive thinking with display override
+		// NOTE: The exact wire format for "adaptive thinking" needs verification against live API.
+		// The AI SDK uses {thinking: { type: "adaptive", display: "summarized" }} with a sibling `effort` key.
+		// For now, we use the proven format: type:"enabled" with budget_tokens + display:"summarized".
+		budget := a.budgetForEffort(reasoningEffort, thinkingMin, thinkingMax)
+		if maxTokens, ok := anthropic["max_tokens"].(int); ok && maxTokens > 0 && budget > maxTokens {
+			budget = maxTokens
+		}
+		thinkingObj = map[string]interface{}{
+			"type":          "enabled",
+			"budget_tokens": budget,
+			"display":       "summarized",
+		}
+	} else {
+		// Legacy extended thinking: budget_token based
+		budget := a.budgetForEffort(reasoningEffort, thinkingMin, thinkingMax)
+		if maxTokens, ok := anthropic["max_tokens"].(int); ok && maxTokens > 0 && budget > maxTokens {
+			budget = maxTokens
+		}
+		thinkingObj = map[string]interface{}{
+			"type":          "enabled",
+			"budget_tokens": budget,
+		}
 	}
 
-	anthropic["thinking"] = map[string]interface{}{
-		"type":          "enabled",
-		"budget_tokens": budget,
-	}
+	anthropic["thinking"] = thinkingObj
 }
 
 func (a *AnthropicAdapter) budgetForEffort(effort string, min, max int) int {

@@ -44,6 +44,7 @@ type ModelThinkingConfig struct {
 	Max            int      `json:"max,omitempty"`
 	ZeroAllowed    bool     `json:"zero_allowed,omitempty"`
 	DynamicAllowed bool     `json:"dynamic_allowed,omitempty"`
+	Adaptive       bool     `json:"adaptive,omitempty"`
 	Levels         []string `json:"levels,omitempty"`
 }
 
