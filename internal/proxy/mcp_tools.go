@@ -15,6 +15,7 @@ import (
 
 	"github.com/nenya/internal/gateway"
 	"github.com/nenya/internal/mcp"
+	"github.com/nenya/internal/stream"
 	"github.com/nenya/internal/util"
 )
 
@@ -259,8 +260,10 @@ func (acc *sseAccumulator) buildToolCalls() []mcpToolCall {
 		if argsBuilder := acc.tcArgsAccum[idx]; argsBuilder != nil {
 			argsStr := argsBuilder.String()
 			if err := json.Unmarshal([]byte(argsStr), &args); err != nil {
-				acc.logger.Warn("MCP: failed to parse tool arguments, calling with empty args",
-					"tool", name, "err", err)
+				if acc.logger != nil {
+					acc.logger.Warn("MCP: failed to parse tool arguments, calling with empty args",
+						"tool", name, "err", err)
+				}
 				args = make(map[string]any)
 			}
 		}
@@ -272,8 +275,10 @@ func (acc *sseAccumulator) buildToolCalls() []mcpToolCall {
 // result produces the final bufferedSSE from accumulated state.
 func (acc *sseAccumulator) result() *bufferedSSE {
 	if acc.dataLines == 0 && acc.totalLines > 0 {
-		acc.logger.Warn("MCP stream: no SSE 'data:' lines found; possible non-SSE response",
-			"total_lines", acc.totalLines)
+		if acc.logger != nil {
+			acc.logger.Warn("MCP stream: no SSE 'data:' lines found; possible non-SSE response",
+				"total_lines", acc.totalLines)
+		}
 	}
 
 	toolCalls := acc.buildToolCalls()
@@ -313,6 +318,7 @@ func (acc *sseAccumulator) result() *bufferedSSE {
 func bufferStreamResponse(ctx context.Context, r io.Reader, logger *slog.Logger) (*bufferedSSE, error) {
 	acc := newSSEAccumulator(logger)
 	scanner := bufio.NewScanner(r)
+	scanner.Buffer(make([]byte, stream.SSEScannerInitialBuf), stream.SSEScannerMaxBuf)
 	for scanner.Scan() {
 		select {
 		case <-ctx.Done():
@@ -325,6 +331,9 @@ func bufferStreamResponse(ctx context.Context, r io.Reader, logger *slog.Logger)
 		}
 	}
 	if err := scanner.Err(); err != nil {
+		if err == bufio.ErrTooLong {
+			return nil, fmt.Errorf("MCP SSE line exceeded buffer limit: %w", err)
+		}
 		return nil, fmt.Errorf("reading SSE stream: %w", err)
 	}
 	return acc.result(), nil

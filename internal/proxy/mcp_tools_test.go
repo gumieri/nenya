@@ -2,6 +2,7 @@ package proxy
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -11,6 +12,7 @@ import (
 
 	"github.com/nenya/internal/gateway"
 	"github.com/nenya/internal/mcp"
+	"github.com/nenya/internal/stream"
 )
 
 func TestBufferStreamResponse_ContentOnly(t *testing.T) {
@@ -591,5 +593,78 @@ func TestAppendMCPResults_LargeContentNotTruncated(t *testing.T) {
 	content := toolMsg["content"].(string)
 	if len(content) != 10000 {
 		t.Fatalf("expected 10000 bytes of content, got %d", len(content))
+	}
+}
+
+func TestBufferStreamResponse_LargeSSELine(t *testing.T) {
+	// Generate ~100KB SSE line (100,000 bytes > 64KB default, < 1MiB limit)
+	largeContent := strings.Repeat("x", 100000)
+	largeEvent := fmt.Sprintf(`data: {"id":"1","choices":[{"delta":{"content":"%s"}}]}`, largeContent)
+
+	input := largeEvent + "\n\ndata: [DONE]\n\n"
+
+	ctx := context.Background()
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	result, err := bufferStreamResponse(ctx, strings.NewReader(input), logger)
+
+	if err != nil {
+		t.Fatalf("expected no error for 100KB SSE line, got %v", err)
+	}
+	if result == nil {
+		t.Fatal("expected non-nil result")
+	}
+	if !strings.Contains(string(result.rawBytes), strings.Repeat("x", 100)) {
+		t.Error("expected large content prefix in rawBytes")
+	}
+}
+
+func TestBufferStreamResponse_NormalLines(t *testing.T) {
+	input := `data: {"id":"1","choices":[{"delta":{"content":"Hello"}}]}
+
+data: {"id":"1","choices":[{"delta":{"content":" World"}}]}
+
+data: {"id":"1","choices":[{"delta":{},"finish_reason":"stop"}]}
+
+data: [DONE]
+
+`
+
+	ctx := context.Background()
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	result, err := bufferStreamResponse(ctx, strings.NewReader(input), logger)
+
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result == nil {
+		t.Fatal("expected non-nil result")
+	}
+	if !result.hasContent {
+		t.Error("expected hasContent=true")
+	}
+	if !strings.Contains(string(result.rawBytes), "Hello") {
+		t.Errorf("expected 'Hello' in rawBytes")
+	}
+	if !strings.Contains(string(result.rawBytes), " World") {
+		t.Errorf("expected ' World' in rawBytes")
+	}
+}
+
+func TestBufferStreamResponse_OverLimitLine(t *testing.T) {
+	// Generate line exceeding SSEScannerMaxBuf (1MiB)
+	overLimitContent := strings.Repeat("x", stream.SSEScannerMaxBuf+1)
+	overLimitEvent := fmt.Sprintf(`data: {"id":"1","choices":[{"delta":{"content":"%s"}}]}`, overLimitContent)
+
+	input := overLimitEvent + "\n\ndata: [DONE]\n\n"
+
+	ctx := context.Background()
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	_, err := bufferStreamResponse(ctx, strings.NewReader(input), logger)
+
+	if err == nil {
+		t.Fatal("expected error for line exceeding SSEScannerMaxBuf")
+	}
+	if !strings.Contains(err.Error(), "MCP SSE line exceeded buffer limit") {
+		t.Errorf("expected descriptive error message, got %v", err)
 	}
 }
