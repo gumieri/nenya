@@ -302,3 +302,76 @@ func TestSSETransformingReader_UsageCallbackDeltaCalculation(t *testing.T) {
 		t.Errorf("expected delta cache_creation=0 (54947-54947, no new creation), got %d", lastDCacheCreation)
 	}
 }
+
+func TestSSETransformingReader_TransformedSizeLimit(t *testing.T) {
+	// Generate SSE data that exceeds maxTransformedEventBytes (256KB)
+	// Each chunk is ~1KB of content
+	chunkSize := 1024
+	numChunks := 300 // 300KB total, well over the 256KB limit
+	var sb strings.Builder
+	for i := 0; i < numChunks; i++ {
+		content := strings.Repeat("x", chunkSize)
+		sb.WriteString("data: {\"choices\":[{\"delta\":{\"content\":\"")
+		sb.WriteString(content)
+		sb.WriteString("\"}}]}\n\n")
+	}
+	sb.WriteString("data: [DONE]\n\n")
+
+	reader := NewSSETransformingReader(strings.NewReader(sb.String()), nil, context.Background())
+
+	var output bytes.Buffer
+	_, err := io.Copy(&output, reader)
+
+	if !errors.Is(err, ErrTransformedSizeExceeded) {
+		t.Fatalf("expected ErrTransformedSizeExceeded, got %v", err)
+	}
+
+	result := output.String()
+	if !strings.Contains(result, "gateway_error") {
+		t.Error("expected gateway_error in output when size limit exceeded")
+	}
+	if !strings.Contains(result, "[DONE]") {
+		t.Error("expected [DONE] in output after size limit error")
+	}
+}
+
+func TestSSETransformingReader_NormalSizeDoesNotTrip(t *testing.T) {
+	input := "data: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_123\",\"model\":\"claude-sonnet-4-6\",\"usage\":{\"input_tokens\":10}}}\n\n" +
+		"data: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n" +
+		"data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"Hello world this is a test\"}}\n\n" +
+		"data: {\"type\":\"content_block_stop\",\"index\":0}\n\n" +
+		"data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":5}}\n\n" +
+		"data: {\"type\":\"message_stop\"}\n\n"
+
+	tr := NewAnthropicTransformer()
+	reader := NewSSETransformingReader(strings.NewReader(input), tr, context.Background())
+
+	var output bytes.Buffer
+	_, err := io.Copy(&output, reader)
+	if err != nil {
+		t.Fatalf("unexpected error for normal-sized stream: %v", err)
+	}
+
+	result := output.String()
+	if strings.Contains(result, "gateway_error") {
+		t.Errorf("unexpected gateway_error for normal stream: %s", result)
+	}
+	if !strings.Contains(result, "[DONE]") {
+		t.Errorf("expected [DONE] in normal stream output, got: %s", result)
+	}
+}
+
+func TestSSETransformingReader_ResetCounters(t *testing.T) {
+	reader := NewSSETransformingReader(strings.NewReader(""), nil, context.Background())
+	reader.transformedBytes = 50000
+	reader.discarding = true
+
+	reader.ResetCounters()
+
+	if reader.transformedBytes != 0 {
+		t.Errorf("expected transformedBytes=0 after reset, got %d", reader.transformedBytes)
+	}
+	if reader.discarding {
+		t.Error("expected discarding=false after reset")
+	}
+}
