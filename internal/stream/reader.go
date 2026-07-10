@@ -17,9 +17,17 @@ import (
 // and no output should be forwarded to the client.
 var ErrEventConsumed = errors.New("sse event consumed by transformer")
 
+// ErrTransformedSizeExceeded is returned when the accumulated transformed
+// SSE output exceeds the maximum allowed size.
+var ErrTransformedSizeExceeded = errors.New("transformed SSE output size exceeded")
+
 const (
 	SSEScannerInitialBuf = 64 * 1024
 	SSEScannerMaxBuf     = 1024 * 1024
+	// maxTransformedEventBytes caps the accumulated transformed output to
+	// prevent memory exhaustion from malicious or buggy upstreams that send
+	// many small events producing unbounded transformed output.
+	maxTransformedEventBytes = 256 * 1024
 )
 
 type ResponseTransformer interface {
@@ -82,6 +90,13 @@ type SSETransformingReader struct {
 	lastCacheCreationTokens int
 
 	tcState toolCallState
+
+	// transformedBytes tracks accumulated output size across the stream.
+	// When it exceeds maxTransformedEventBytes, discarding is set to true.
+	transformedBytes int
+	// discarding indicates output size limit was exceeded; new events are
+	// dropped except [DONE] which passes through for clean stream end.
+	discarding bool
 }
 
 type pendingToolCall struct {
@@ -149,6 +164,15 @@ func (r *SSETransformingReader) SetLogger(logger *slog.Logger) {
 	r.logger = logger
 }
 
+// ResetCounters resets the transformed byte counter and discarding state.
+// Used when a transformer is reused across multiple requests to prevent
+// state leakage between streams. Currently readers are created per-request,
+// so this is reserved for future reader-pooling implementations.
+func (r *SSETransformingReader) ResetCounters() {
+	r.transformedBytes = 0
+	r.discarding = false
+}
+
 // SawDone returns true if the reader has observed a data: [DONE] event.
 func (r *SSETransformingReader) SawDone() bool {
 	return r.sawDone
@@ -181,6 +205,12 @@ func (r *SSETransformingReader) Read(p []byte) (int, error) {
 		return 0, r.err
 	}
 
+	if r.discarding && !errors.Is(r.err, ErrTransformedSizeExceeded) {
+		r.injectErrorBuffer("transformed output exceeded maximum size")
+		r.err = ErrTransformedSizeExceeded
+		return r.Read(p)
+	}
+
 	if !r.scanner.Scan() {
 		r.handleScannerDone()
 		return r.drainAfterScanDone(p)
@@ -211,6 +241,8 @@ func (r *SSETransformingReader) Read(p []byte) (int, error) {
 			transformed = append(transformed, '\n')
 		}
 
+		r.trackTransformedSize(transformed)
+
 		r.buffer = transformed
 		r.pos = 0
 
@@ -218,7 +250,29 @@ func (r *SSETransformingReader) Read(p []byte) (int, error) {
 	}
 }
 
+// trackTransformedSize accumulates the transformed output size and sets the
+// discarding flag when the total exceeds maxTransformedEventBytes.
+func (r *SSETransformingReader) trackTransformedSize(transformed []byte) {
+	r.transformedBytes += len(transformed)
+	if r.transformedBytes > maxTransformedEventBytes && !r.discarding {
+		if r.logger != nil {
+			r.logger.Debug("transformed output exceeded size limit, will discard subsequent events",
+				"limit", maxTransformedEventBytes, "accumulated", r.transformedBytes)
+		}
+		r.discarding = true
+	}
+}
+
 func (r *SSETransformingReader) transformLine(line []byte) []byte {
+	if r.discarding {
+		// Allow [DONE] to pass through so the stream can end cleanly
+		if bytes.HasPrefix(line, []byte("data: ")) && bytes.Equal(bytes.TrimSpace(line[6:]), []byte("[DONE]")) {
+			r.sawDone = true
+			return line
+		}
+		return nil
+	}
+
 	if len(line) == 0 {
 		return line
 	}
