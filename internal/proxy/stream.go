@@ -474,10 +474,23 @@ func (o *upstreamErrorObserver) OnSSEEvent(event stream.SSEEvent) {
 		return
 	}
 	if errMap, ok := errData.(map[string]any); ok {
-		o.gw.Logger.Warn("upstream error event detected in stream",
-			"model", o.target.Model, "provider", o.target.Provider,
+		errCode := ""
+		for _, key := range []string{"code", "type", "error_code"} {
+			if v, exists := errMap[key]; exists && v != nil {
+				errCode = fmt.Sprintf("%v", v)
+				break
+			}
+		}
+		logAttrs := []any{
+			"model", o.target.Model,
+			"provider", o.target.Provider,
 			"error_type", fmt.Sprintf("%v", errMap["type"]),
-			"error_message", fmt.Sprintf("%v", errMap["message"]))
+			"error_message", fmt.Sprintf("%v", errMap["message"]),
+		}
+		if errCode != "" {
+			logAttrs = append(logAttrs, "error_code", errCode)
+		}
+		o.gw.Logger.Warn("upstream error event detected in stream", logAttrs...)
 	} else {
 		o.gw.Logger.Warn("upstream error event detected in stream (malformed 'error' field)",
 			"model", o.target.Model, "provider", o.target.Provider,

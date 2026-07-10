@@ -22,13 +22,19 @@ func containsAny(s string, substrs ...string) bool {
 // classifyError maps upstream responses to error kinds.
 func classifyError(statusCode int, body []byte) infra.ErrorKind {
 	switch {
-	case statusCode == http.StatusTooManyRequests:
+	case statusCode == http.StatusTooManyRequests || statusCode == 529:
+		// 529 is "Provider Overloaded" (non-standard, used by xAI and some LLM gateways)
 		return infra.ErrorKindRateLimited
 	case statusCode == http.StatusUnauthorized || statusCode == http.StatusForbidden:
 		return infra.ErrorKindAuthFailed
 	case statusCode == http.StatusNotFound:
 		return infra.ErrorKindModelNotFound
 	case statusCode == http.StatusRequestEntityTooLarge:
+		// Cross-check 413 body for context-overflow messages before classifying
+		// as payload-too-large — some providers return 413 for context limits
+		if inferErrorKind(body) == infra.ErrorKindContextExceeded {
+			return infra.ErrorKindContextExceeded
+		}
 		return infra.ErrorKindPayloadTooLarge
 	case statusCode == http.StatusBadRequest:
 		return inferErrorKind(body)
@@ -56,7 +62,9 @@ func inferErrorKind(body []byte) infra.ErrorKind {
 	}
 	msg := strings.ToLower(parsed.Error.Message)
 	switch {
-	case containsAny(msg, "context_length", "context length", "max_tokens", "too many tokens"):
+	case containsAny(msg, "context_length", "context length", "max_tokens", "too many tokens",
+		"exceeded model token", "maximum prompt length", "exceeds the available context",
+		"model_context_window", "too large for model"):
 		return infra.ErrorKindContextExceeded
 	case containsAny(msg, "rate limit", "rate_limit"):
 		return infra.ErrorKindRateLimited

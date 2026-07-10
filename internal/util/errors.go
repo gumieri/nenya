@@ -15,14 +15,20 @@ func IsContextLengthError(status int, body string) bool {
 	}
 	lower := strings.ToLower(body)
 	patterns := []string{
+		"context length is only ",
+		"context window exceeds limit",
+		"context length exceeded",
 		"context_length_exceeded",
-		"max_context_length",
-		"context_length",
-		"prompt too long",
-		"this model's maximum context length",
-		"maximum context length",
-		"too many tokens",
-		"prompt exceeds context",
+		"exceeded model token limit",
+		"exceeds the available context size",
+		"input length exceeds context length",
+		"maximum context length is ",
+		"maximum prompt length is ",
+		"model_context_window_exceeded",
+		"prompt exceeds maximum context length",
+		"reduce the length of the messages",
+		"tokens in request more than max tokens allowed",
+		"too large for model with ",
 	}
 	for _, p := range patterns {
 		if strings.Contains(lower, p) {
