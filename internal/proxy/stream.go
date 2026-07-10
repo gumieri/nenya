@@ -25,6 +25,9 @@ const (
 	streamBufferSize  = 32 * 1024
 )
 
+// streamingBufPool is a sync.Pool for 32KB read/transfer buffers used in the
+// streaming hot path. Buffers are resliced during use and restored to full
+// length when returned via putStreamBuffer.
 var streamingBufPool = sync.Pool{
 	New: func() any {
 		b := make([]byte, streamBufferSize)
@@ -38,13 +41,18 @@ func getStreamBuffer() *[]byte {
 	return buf
 }
 
+// putStreamBuffer returns a buffer to the pool after restoring its full length.
+// The buffer pointer is modified to point to the full-capacity slice before pooling.
+// Buffers with incorrect capacity are silently dropped to prevent pool pollution.
 func putStreamBuffer(buf *[]byte) {
 	if buf == nil || *buf == nil {
 		return
 	}
-	if cap(*buf) == streamBufferSize {
-		streamingBufPool.Put(buf)
+	if cap(*buf) != streamBufferSize {
+		return
 	}
+	*buf = (*buf)[:cap(*buf)]
+	streamingBufPool.Put(buf)
 }
 
 type contentBuilder struct {
@@ -101,7 +109,7 @@ func newStallReader(ctx context.Context, src io.Reader, timeout time.Duration) *
 }
 
 func (sr *stallReader) readLoop(ctx context.Context, src io.Reader) {
-	localBuf := [32 * 1024]byte{}
+	localBuf := [streamBufferSize]byte{}
 	for {
 		n, err := src.Read(localBuf[:])
 		var data []byte
@@ -195,7 +203,7 @@ func (sr *stallReader) Stop() {
 }
 
 // DrainPending reads any remaining buffered data from the reader with the given timeout.
-// Returns the number of bytes drained (including leftover remainBuf) and any error.
+// Returns the number of bytes drained (including remainBuf and drained channel messages) and any error.
 func (sr *stallReader) DrainPending(timeout time.Duration) (int, error) {
 	sr.closeOnce.Do(func() { close(sr.stallCh) })
 
@@ -206,17 +214,30 @@ func (sr *stallReader) DrainPending(timeout time.Duration) (int, error) {
 		sr.remainPos = 0
 	}
 
-	// Drain any pending channel messages to avoid leaks
-	for {
-		select {
-		case rr := <-sr.ch:
-			if rr.poolBufPtr != nil {
-				putStreamBuffer(rr.poolBufPtr)
-			}
-			total += len(rr.data)
-		case <-time.After(timeout):
-			return total, errors.New("stall reader drain timeout")
+	// Block on first message (or timeout)
+	t := time.NewTimer(timeout)
+	defer t.Stop()
+	select {
+	case rr := <-sr.ch:
+		if rr.poolBufPtr != nil {
+			putStreamBuffer(rr.poolBufPtr)
 		}
+		total += len(rr.data)
+		// Drain remaining messages without blocking to prevent pool buffer leaks
+		for {
+			select {
+			case pending := <-sr.ch:
+				if pending.poolBufPtr != nil {
+					putStreamBuffer(pending.poolBufPtr)
+				}
+				total += len(pending.data)
+			default:
+				// No more pending messages
+				return total, rr.err
+			}
+		}
+	case <-t.C:
+		return total, fmt.Errorf("stall reader drain timeout: drained %d bytes", total)
 	}
 }
 
@@ -574,7 +595,7 @@ func (p *Proxy) handleStreamCompletion(gw *gateway.NenyaGateway, w http.Response
 }
 
 func (p *Proxy) handleStreamDone(gw *gateway.NenyaGateway, w http.ResponseWriter, target routing.UpstreamTarget, agentName string, action upstreamAction, cacheKey string, cooldownDuration time.Duration, payload map[string]any, buf *[]byte, copyErr error, captureBuf *bytes.Buffer, tee *sseTeeWriter, contentBuilder *contentBuilder, stallR *stallReader, reqCtx context.Context) streamResult {
-	streamingBufPool.Put(buf)
+	putStreamBuffer(buf)
 
 	if errors.Is(copyErr, stream.ErrStreamBlocked) {
 		action.cancel()
