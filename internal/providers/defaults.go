@@ -184,6 +184,7 @@ func mistralValidationEndpoint(providerURL string) string {
 func xaiSpec() ProviderSpec {
 	return ProviderSpec{
 		ServiceKinds:       []ServiceKind{ServiceKindLLM},
+		SanitizeRequest:    XaiSanitize,
 		ValidationEndpoint: xaiValidationEndpoint,
 	}
 }
