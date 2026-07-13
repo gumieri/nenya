@@ -2043,12 +2043,13 @@ func TestAnthropicAdapter_InjectReasoningEffort(t *testing.T) {
 	a := NewAnthropicAdapter()
 
 	tests := []struct {
-		name           string
-		openai         map[string]interface{}
-		anthropic      map[string]interface{}
-		model          string
-		expectThinking bool
-		expectedBudget int
+		name            string
+		openai          map[string]interface{}
+		anthropic       map[string]interface{}
+		model           string
+		expectThinking  bool
+		expectedBudget  int
+		expectedDisplay string
 		skipBudgetCheck bool
 	}{
 		{
@@ -2151,6 +2152,22 @@ func TestAnthropicAdapter_InjectReasoningEffort(t *testing.T) {
 			expectThinking: true,
 			expectedBudget: 1024,
 		},
+		{
+			name:            "adaptive model injects display summarized",
+			openai:          map[string]interface{}{"model": "claude-opus-4-7", "max_tokens": 4096, "reasoning_effort": "medium"},
+			anthropic:       map[string]interface{}{"model": "claude-opus-4-7", "max_tokens": 4096},
+			model:           "claude-opus-4-7",
+			expectThinking:  true,
+			expectedDisplay: thinkingDisplaySummarized,
+		},
+		{
+			name:            "legacy model does not inject display field",
+			openai:          map[string]interface{}{"model": "claude-sonnet-4-5", "max_tokens": 4096, "reasoning_effort": "medium"},
+			anthropic:       map[string]interface{}{"model": "claude-sonnet-4-5", "max_tokens": 4096},
+			model:           "claude-sonnet-4-5",
+			expectThinking:  true,
+			expectedDisplay: "",
+		},
 	}
 
 	for _, tt := range tests {
@@ -2177,8 +2194,12 @@ func TestAnthropicAdapter_InjectReasoningEffort(t *testing.T) {
 				return
 			}
 
-			if thinkingMap["type"] != "enabled" {
-				t.Errorf("thinking.type = %v, want 'enabled'", thinkingMap["type"])
+			if thinkingMap["type"] != thinkingTypeEnabled {
+				t.Errorf("thinking.type = %v, want '%s'", thinkingMap["type"], thinkingTypeEnabled)
+			}
+
+			if tt.expectedDisplay != "" && thinkingMap["display"] != tt.expectedDisplay {
+				t.Errorf("thinking.display = %v, want '%s'", thinkingMap["display"], tt.expectedDisplay)
 			}
 
 			budget, ok := thinkingMap["budget_tokens"].(int)
