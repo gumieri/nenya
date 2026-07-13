@@ -14,8 +14,8 @@ import (
 )
 
 const (
-	maxPreFlightBodyBytes = 1 * 1024 * 1024
-	thinkingTypeEnabled   = "enabled"
+	maxPreFlightBodyBytes     = 1 * 1024 * 1024
+	thinkingTypeEnabled       = "enabled"
 	thinkingDisplaySummarized = "summarized"
 )
 
