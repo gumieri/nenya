@@ -70,7 +70,7 @@ func flattenContentArrays(deps TransformDeps, payload map[string]interface{}, mo
 		return
 	}
 	changed := false
-	for i, msgRaw := range messages {
+	for _, msgRaw := range messages {
 		msg, ok := msgRaw.(map[string]interface{})
 		if !ok {
 			continue
@@ -87,7 +87,7 @@ func flattenContentArrays(deps TransformDeps, payload map[string]interface{}, mo
 		if flat == "" {
 			continue
 		}
-		messages[i].(map[string]interface{})["content"] = flat
+		msg["content"] = flat
 		changed = true
 	}
 	if changed {
@@ -105,6 +105,29 @@ func processReasoningContent(deps TransformDeps, payload map[string]interface{},
 	}
 	if pipeline.StripReasoningContent(payload) {
 		deps.Logger.Debug("stripped reasoning_content", "model", modelName)
+	}
+}
+
+// stripBareReasoningField removes the non-standard "reasoning" field from the
+// payload when it is redundant with "reasoning_effort" or when the target model
+// does not support reasoning capabilities. This prevents upstream providers
+// from rejecting requests with unexpected fields.
+func stripBareReasoningField(deps TransformDeps, payload map[string]interface{}, modelName string) {
+	_, hasReasoning := payload["reasoning"]
+	if !hasReasoning {
+		return
+	}
+
+	_, hasReasoningEffort := payload["reasoning_effort"]
+	if hasReasoningEffort {
+		delete(payload, "reasoning")
+		deps.Logger.Debug("stripped bare reasoning field (redundant with reasoning_effort)", "model", modelName)
+		return
+	}
+
+	if shouldStripReasoning(deps, modelName) {
+		delete(payload, "reasoning")
+		deps.Logger.Debug("stripped bare reasoning field (model does not support reasoning)", "model", modelName)
 	}
 }
 
@@ -135,9 +158,13 @@ func applyDeepSeekFixes(deps TransformDeps, payload map[string]interface{}, mode
 	stripDeepSeekThinkingParams(payload, modelName, deps.Logger)
 }
 
+// SanitizePayload applies request sanitization transformations to the payload
+// before routing to the upstream provider. It removes unsupported fields,
+// strips incompatible parameters, and repairs message ordering issues.
 func SanitizePayload(deps TransformDeps, payload map[string]interface{}, modelName string) {
 	stripStreamOptions(deps, payload, modelName)
 	stripToolChoice(deps, payload, modelName)
+	stripBareReasoningField(deps, payload, modelName)
 	processMessages(deps, payload, modelName)
 	applyDeepSeekFixes(deps, payload, modelName)
 }
