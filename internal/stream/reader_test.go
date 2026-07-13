@@ -221,7 +221,7 @@ func TestSSETransformingReader_ValidJSONNoLog(t *testing.T) {
 }
 
 func TestSSETransformingReader_UsageCallbackWithCacheFields(t *testing.T) {
-	var receivedCompletion, receivedPrompt, receivedTotal, receivedCacheHit, receivedCacheMiss, receivedCacheCreation int
+	var receivedCompletion, receivedPrompt, receivedTotal, receivedCacheHit, receivedCacheMiss, receivedCacheCreation, receivedReasoning int
 
 	cb := func(completion, prompt, total, cacheHit, cacheMiss, cacheCreation, reasoning int) {
 		receivedCompletion = completion
@@ -230,6 +230,7 @@ func TestSSETransformingReader_UsageCallbackWithCacheFields(t *testing.T) {
 		receivedCacheHit = cacheHit
 		receivedCacheMiss = cacheMiss
 		receivedCacheCreation = cacheCreation
+		receivedReasoning = reasoning
 	}
 
 	input := "data: {\"id\":\"msg_1\",\"object\":\"chat.completion.chunk\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"Hello\"}}],\"usage\":{\"prompt_tokens\":100,\"completion_tokens\":10,\"total_tokens\":110,\"prompt_cache_hit_tokens\":5000,\"prompt_cache_miss_tokens\":2000,\"cache_creation_tokens\":54947}}\n\ndata: [DONE]\n\n"
@@ -260,6 +261,9 @@ func TestSSETransformingReader_UsageCallbackWithCacheFields(t *testing.T) {
 	}
 	if receivedCacheCreation != 54947 {
 		t.Errorf("expected cache_creation_tokens=54947, got %d", receivedCacheCreation)
+	}
+	if receivedReasoning != 0 {
+		t.Errorf("expected reasoning_tokens=0, got %d", receivedReasoning)
 	}
 }
 
@@ -300,6 +304,73 @@ func TestSSETransformingReader_UsageCallbackDeltaCalculation(t *testing.T) {
 
 	if lastDCacheCreation != 0 {
 		t.Errorf("expected delta cache_creation=0 (54947-54947, no new creation), got %d", lastDCacheCreation)
+	}
+}
+
+func TestSSETransformingReader_UsageCallbackWithReasoningTokens(t *testing.T) {
+	var receivedCompletion, receivedPrompt, receivedReasoning int
+
+	cb := func(completion, prompt, total, cacheHit, cacheMiss, cacheCreation, reasoning int) {
+		receivedCompletion = completion
+		receivedPrompt = prompt
+		receivedReasoning = reasoning
+	}
+
+	input := "data: {\"usage\":{\"prompt_tokens\":100,\"completion_tokens\":10,\"total_tokens\":110,\"reasoning_tokens\":500}}\n\ndata: [DONE]\n\n"
+
+	reader := NewSSETransformingReader(strings.NewReader(input), nil, context.Background())
+	reader.SetOnUsage(cb)
+
+	var output bytes.Buffer
+	_, err := io.Copy(&output, reader)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if receivedCompletion != 10 {
+		t.Errorf("expected completion_tokens=10, got %d", receivedCompletion)
+	}
+	if receivedPrompt != 100 {
+		t.Errorf("expected prompt_tokens=100, got %d", receivedPrompt)
+	}
+	if receivedReasoning != 500 {
+		t.Errorf("expected reasoning_tokens=500, got %d", receivedReasoning)
+	}
+}
+
+func TestSSETransformingReader_UsageCallbackReasoningDecrease(t *testing.T) {
+	var callCount int
+	var receivedCompletion, receivedReasoning int
+
+	cb := func(completion, prompt, total, cacheHit, cacheMiss, cacheCreation, reasoning int) {
+		callCount++
+		receivedCompletion = completion
+		receivedReasoning = reasoning
+	}
+
+	input := "data: {\"usage\":{\"prompt_tokens\":100,\"completion_tokens\":10,\"total_tokens\":110,\"reasoning_tokens\":500}}\n\n" +
+		"data: {\"usage\":{\"prompt_tokens\":200,\"completion_tokens\":20,\"total_tokens\":220,\"reasoning_tokens\":400}}\n\n" +
+		"data: [DONE]\n\n"
+
+	reader := NewSSETransformingReader(strings.NewReader(input), nil, context.Background())
+	reader.SetOnUsage(cb)
+
+	var output bytes.Buffer
+	_, err := io.Copy(&output, reader)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if callCount != 2 {
+		t.Fatalf("expected 2 callbacks, got %d", callCount)
+	}
+
+	if receivedCompletion != 10 {
+		t.Errorf("expected final delta completion=10, got %d", receivedCompletion)
+	}
+
+	if receivedReasoning != 0 {
+		t.Errorf("expected final callback reasoning=0 when reasoning decreased (500→400), got %d", receivedReasoning)
 	}
 }
 

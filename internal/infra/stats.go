@@ -88,6 +88,9 @@ func (u *UsageTracker) RecordCacheCreation(model string, tokens int) {
 }
 
 func (u *UsageTracker) RecordReasoning(model string, tokens int) {
+	if tokens < 0 {
+		return
+	}
 	s := u.GetOrCreate(model)
 	atomic.AddUint64(&s.ReasoningTokens, uint64(tokens))
 }

@@ -23,6 +23,8 @@ import (
 const (
 	streamIdleTimeout = 60 * time.Second
 	streamBufferSize  = 32 * 1024
+	// TokenDirectionReasoning is the direction label for reasoning token metrics
+	TokenDirectionReasoning = "reasoning"
 )
 
 // streamingBufPool is a sync.Pool for 32KB read/transfer buffers used in the
@@ -109,26 +111,29 @@ func newStallReader(ctx context.Context, src io.Reader, timeout time.Duration) *
 }
 
 func (sr *stallReader) readLoop(ctx context.Context, src io.Reader) {
-	localBuf := [streamBufferSize]byte{}
+	var poolBufPtr *[]byte
 	for {
-		n, err := src.Read(localBuf[:])
-		var data []byte
-		var poolBufPtr *[]byte
-		if n > 0 {
+		if poolBufPtr == nil {
 			poolBufPtr = getStreamBuffer()
+		}
+		n, err := src.Read((*poolBufPtr)[:])
+		var data []byte
+		if n > 0 {
 			*poolBufPtr = (*poolBufPtr)[:n]
-			copy(*poolBufPtr, localBuf[:n])
 			data = *poolBufPtr
 		}
 		select {
 		case sr.ch <- readResult{data: data, err: err, poolBufPtr: poolBufPtr}:
 		case <-ctx.Done():
-			putStreamBuffer(poolBufPtr)
+			if poolBufPtr != nil {
+				putStreamBuffer(poolBufPtr)
+			}
 			return
 		}
 		if err != nil {
 			return
 		}
+		poolBufPtr = nil
 	}
 }
 
@@ -504,6 +509,7 @@ func (o *upstreamErrorObserver) OnStreamClose(err error) {}
 
 // makeUsageCallback returns a callback function that records token usage statistics.
 // The callback is invoked by the SSE transformer when usage metadata is received.
+// The ctx parameter is reserved for future timeout/cancellation logic in cost tracking.
 func (p *Proxy) makeUsageCallback(ctx context.Context, gw *gateway.NenyaGateway, target routing.UpstreamTarget, agentName string) func(int, int, int, int, int, int, int) {
 	return func(completion, prompt, total, cacheHit, cacheMiss, cacheCreation, reasoning int) {
 		if completion > 0 {
@@ -512,7 +518,7 @@ func (p *Proxy) makeUsageCallback(ctx context.Context, gw *gateway.NenyaGateway,
 		}
 		if reasoning > 0 {
 			gw.Stats.RecordReasoning(target.Model, reasoning)
-			gw.Metrics.RecordTokens("reasoning", target.Model, agentName, target.Provider, reasoning)
+			gw.Metrics.RecordTokens(TokenDirectionReasoning, target.Model, agentName, target.Provider, reasoning)
 		}
 		if cacheHit > 0 {
 			gw.Stats.RecordCacheHit(target.Model, cacheHit)
