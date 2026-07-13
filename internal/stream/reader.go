@@ -42,7 +42,8 @@ type ResponseTransformer interface {
 //   - cacheHitTokens: delta cache hit tokens since last callback (always >= 0)
 //   - cacheMissTokens: delta cache miss tokens since last callback (always >= 0)
 //   - cacheCreationTokens: delta cache creation tokens since last callback (always >= 0)
-type UsageCallback func(completionTokens, promptTokens, totalTokens, cacheHitTokens, cacheMissTokens, cacheCreationTokens int)
+//   - reasoningTokens: delta reasoning tokens since last callback (always >= 0)
+type UsageCallback func(completionTokens, promptTokens, totalTokens, cacheHitTokens, cacheMissTokens, cacheCreationTokens, reasoningTokens int)
 
 type ContentCallback func(content string)
 
@@ -88,6 +89,7 @@ type SSETransformingReader struct {
 	lastCacheHitTokens      int
 	lastCacheMissTokens     int
 	lastCacheCreationTokens int
+	lastReasoningTokens     int
 
 	tcState toolCallState
 
@@ -118,7 +120,11 @@ func newToolCallState() toolCallState {
 }
 
 // NewSSETransformingReader creates a new reader that transforms SSE data lines using the provided transformer.
+// If ctx is nil, context.Background() is used as a safe default.
 func NewSSETransformingReader(src io.Reader, transformer ResponseTransformer, ctx context.Context) *SSETransformingReader {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	poolBuf := getStreamBuffer()
 	reader := &SSETransformingReader{
 		src:         src,
@@ -472,6 +478,7 @@ func applyEntropyFilter(parsed map[string]interface{}, filter *StreamEntropyFilt
 	redacted, action := filter.FilterContent(content)
 	if action == ActionRedact && redacted != content {
 		parsed = copyMap(parsed)
+		ReplaceDeltaContentMap(parsed, redacted)
 	}
 	return parsed
 }
@@ -605,7 +612,7 @@ func (r *SSETransformingReader) transformNonSSELine(line []byte) []byte {
 
 func (r *SSETransformingReader) extractUsageFromMap(chunk map[string]interface{}) {
 	usage, ok := chunk["usage"].(map[string]interface{})
-	if !ok {
+	if !ok || usage == nil {
 		return
 	}
 	completion := ToInt(usage["completion_tokens"])
@@ -614,16 +621,18 @@ func (r *SSETransformingReader) extractUsageFromMap(chunk map[string]interface{}
 	cacheHit := ToInt(usage["prompt_cache_hit_tokens"])
 	cacheMiss := ToInt(usage["prompt_cache_miss_tokens"])
 	cacheCreation := ToInt(usage["cache_creation_tokens"])
-	if completion == 0 && prompt == 0 && total == 0 && cacheHit == 0 && cacheMiss == 0 && cacheCreation == 0 {
+	reasoning := ToInt(usage["reasoning_tokens"])
+	if allUsageFieldsZero(completion, prompt, total, cacheHit, cacheMiss, cacheCreation, reasoning) {
 		return
 	}
-	dCompletion := completion - r.lastCompletionTokens
-	dPrompt := prompt - r.lastPromptTokens
-	dTotal := total - r.lastTotalTokens
-	dCacheHit := cacheHit - r.lastCacheHitTokens
-	dCacheMiss := cacheMiss - r.lastCacheMissTokens
-	dCacheCreation := cacheCreation - r.lastCacheCreationTokens
-	if dCompletion <= 0 && dPrompt <= 0 && dTotal <= 0 && dCacheHit <= 0 && dCacheMiss <= 0 && dCacheCreation <= 0 {
+	dCompletion := clampDelta(completion, r.lastCompletionTokens)
+	dPrompt := clampDelta(prompt, r.lastPromptTokens)
+	dTotal := clampDelta(total, r.lastTotalTokens)
+	dCacheHit := clampDelta(cacheHit, r.lastCacheHitTokens)
+	dCacheMiss := clampDelta(cacheMiss, r.lastCacheMissTokens)
+	dCacheCreation := clampDelta(cacheCreation, r.lastCacheCreationTokens)
+	dReasoning := clampDelta(reasoning, r.lastReasoningTokens)
+	if allDeltasZero(dCompletion, dPrompt, dTotal, dCacheHit, dCacheMiss, dCacheCreation, dReasoning) {
 		return
 	}
 	r.lastCompletionTokens = completion
@@ -632,7 +641,26 @@ func (r *SSETransformingReader) extractUsageFromMap(chunk map[string]interface{}
 	r.lastCacheHitTokens = cacheHit
 	r.lastCacheMissTokens = cacheMiss
 	r.lastCacheCreationTokens = cacheCreation
-	r.onUsage(dCompletion, dPrompt, dTotal, dCacheHit, dCacheMiss, dCacheCreation)
+	r.lastReasoningTokens = reasoning
+	r.onUsage(dCompletion, dPrompt, dTotal, dCacheHit, dCacheMiss, dCacheCreation, dReasoning)
+}
+
+func allUsageFieldsZero(completion, prompt, total, cacheHit, cacheMiss, cacheCreation, reasoning int) bool {
+	return completion == 0 && prompt == 0 && total == 0 && cacheHit == 0 && cacheMiss == 0 && cacheCreation == 0 && reasoning == 0
+}
+
+func allDeltasZero(dCompletion, dPrompt, dTotal, dCacheHit, dCacheMiss, dCacheCreation, dReasoning int) bool {
+	return dCompletion <= 0 && dPrompt <= 0 && dTotal <= 0 && dCacheHit <= 0 && dCacheMiss <= 0 && dCacheCreation <= 0 && dReasoning <= 0
+}
+
+// clampDelta computes a non-negative delta between current and last value.
+// Returns 0 when current < last (e.g. counter reset), preventing underflow.
+func clampDelta(current, last int) int {
+	d := current - last
+	if d < 0 {
+		return 0
+	}
+	return d
 }
 
 // ToInt converts an interface{} value to int, handling float64 and int types.
