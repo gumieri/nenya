@@ -2,6 +2,8 @@ package routing
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -27,6 +29,7 @@ type TransformDeps struct {
 	ExtractContentText func(msg map[string]interface{}) string
 	Catalog            *discovery.ModelCatalog
 	CountTokens        func(string) int
+	AgentName          string
 }
 
 // Deprecated: Use InjectAPIKeyWithGateway instead. This function accesses
@@ -169,6 +172,40 @@ func applyProviderSanitize(deps TransformDeps, payload map[string]interface{}, p
 	}
 	sanitizeDeps := buildSanitizeDeps(deps)
 	spec.SanitizeRequest(sanitizeDeps, payload)
+}
+
+// injectPromptCacheKey injects a stable cache key into the request body for
+// providers that support prompt caching (xAI, OpenAI). The key is derived from
+// the agent name and model, giving providers a per-session cache key to improve
+// prompt-cache hit rates. Controlled by prefix_cache.enabled in config.
+//
+// The key is SHA-256(agentName:model) truncated to 16 hex chars (64 bits),
+// providing sufficient entropy for per-session cache routing with low collision
+// risk across typical agent+model counts (< 1M combinations).
+func injectPromptCacheKey(deps TransformDeps, payload map[string]interface{}, providerName, modelName string) {
+	if deps.Config == nil || !deps.Config.PrefixCache.Enabled {
+		return
+	}
+
+	lower := strings.ToLower(providerName)
+	if lower != "xai" && lower != "openai" {
+		return
+	}
+
+	if _, exists := payload["prompt_cache_key"]; exists {
+		return
+	}
+
+	if deps.AgentName == "" {
+		if deps.Logger != nil {
+			deps.Logger.Debug("skipped prompt_cache_key injection: empty agent name",
+				"provider", providerName, "model", modelName)
+		}
+		return
+	}
+
+	h := sha256.Sum256([]byte(deps.AgentName + ":" + modelName))
+	payload["prompt_cache_key"] = hex.EncodeToString(h[:])[:16]
 }
 
 func shouldInjectSystem(firstMsg map[string]interface{}, agent config.AgentConfig) bool {
@@ -338,6 +375,7 @@ func TransformRequestForUpstream(deps TransformDeps, providerName, upstreamURL s
 
 	applyProviderSanitize(deps, payload, providerName)
 	SanitizePayload(deps, payload, modelName)
+	injectPromptCacheKey(deps, payload, providerName, modelName)
 	resolveAgentSystemPrompt(deps, payload, origModel, providerName)
 
 	effectiveMaxOutput := resolveEffectiveMaxOutput(deps, finalModel, maxOutput)
