@@ -7,11 +7,11 @@ import (
 func TestXAI_InjectReasoningEffortForReasoningModel(t *testing.T) {
 	deps := &SanitizeDeps{}
 	deps.SupportsReasoning = func(model string) bool {
-		return model == "grok-2"
+		return model == "grok-4.3"
 	}
 
 	payload := map[string]interface{}{
-		"model": "grok-2",
+		"model": "grok-4.3",
 		"messages": []interface{}{
 			map[string]interface{}{"role": "user", "content": "hello"},
 		},
@@ -35,7 +35,7 @@ func TestXAI_SkipReasoningEffortForNonReasoningModel(t *testing.T) {
 	}
 
 	payload := map[string]interface{}{
-		"model": "grok-1",
+		"model": "grok-4",
 		"messages": []interface{}{
 			map[string]interface{}{"role": "user", "content": "hello"},
 		},
@@ -51,11 +51,11 @@ func TestXAI_SkipReasoningEffortForNonReasoningModel(t *testing.T) {
 func TestXAI_RespectsClientReasoningEffort(t *testing.T) {
 	deps := &SanitizeDeps{}
 	deps.SupportsReasoning = func(model string) bool {
-		return model == "grok-2"
+		return model == "grok-4.3"
 	}
 
 	payload := map[string]interface{}{
-		"model":            "grok-2",
+		"model":            "grok-4.3",
 		"reasoning_effort": "high",
 		"messages": []interface{}{
 			map[string]interface{}{"role": "user", "content": "hello"},
@@ -73,12 +73,12 @@ func TestXAI_RespectsClientReasoningEffort(t *testing.T) {
 	}
 }
 
-func TestXAI_NoReasoningWithoutSupportsReasoning(t *testing.T) {
+func TestXAI_NoReasoningWhenSupportsReasoningNil(t *testing.T) {
 	deps := &SanitizeDeps{}
 	deps.SupportsReasoning = nil
 
 	payload := map[string]interface{}{
-		"model": "grok-2",
+		"model": "grok-4.3",
 		"messages": []interface{}{
 			map[string]interface{}{"role": "user", "content": "hello"},
 		},
