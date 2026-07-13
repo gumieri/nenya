@@ -51,6 +51,9 @@ func TestInjectPromptCacheKey_InjectsForOpenAI(t *testing.T) {
 	if len(key) != 16 {
 		t.Fatalf("expected key to be 16 chars, got %d: %q", len(key), key)
 	}
+	if _, err := hex.DecodeString(key); err != nil {
+		t.Fatalf("expected key to be valid hex, got %q: %v", key, err)
+	}
 }
 
 func TestInjectPromptCacheKey_SkipsOtherProviders(t *testing.T) {
