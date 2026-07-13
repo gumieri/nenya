@@ -22,13 +22,17 @@ func IsContextLengthError(status int, body string) bool {
 		"exceeded model token limit",
 		"exceeds the available context size",
 		"input length exceeds context length",
+		"max_context_length",
 		"maximum context length is ",
 		"maximum prompt length is ",
 		"model_context_window_exceeded",
 		"prompt exceeds maximum context length",
+		"prompt too long",
 		"reduce the length of the messages",
+		"this model's maximum context length",
 		"tokens in request more than max tokens allowed",
 		"too large for model with ",
+		"too many tokens",
 	}
 	for _, p := range patterns {
 		if strings.Contains(lower, p) {
