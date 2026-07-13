@@ -15,6 +15,8 @@ import (
 
 const (
 	maxPreFlightBodyBytes = 1 * 1024 * 1024
+	thinkingTypeEnabled   = "enabled"
+	thinkingDisplaySummarized = "summarized"
 )
 
 type AnthropicAdapter struct {
@@ -222,19 +224,24 @@ func (a *AnthropicAdapter) injectReasoningEffort(openai, anthropic map[string]in
 		return
 	}
 
-	thinkingMin := entry.Thinking.Min
-	thinkingMax := entry.Thinking.Max
-
-	budget := a.budgetForEffort(reasoningEffort, thinkingMin, thinkingMax)
-
+	budget := a.budgetForEffort(reasoningEffort, entry.Thinking.Min, entry.Thinking.Max)
 	if maxTokens, ok := anthropic["max_tokens"].(int); ok && maxTokens > 0 && budget > maxTokens {
 		budget = maxTokens
 	}
 
-	anthropic["thinking"] = map[string]interface{}{
-		"type":          "enabled",
+	thinkingObj := map[string]interface{}{
+		"type":          thinkingTypeEnabled,
 		"budget_tokens": budget,
 	}
+	if entry.Thinking.Adaptive {
+		// Adaptive models (Opus 4.7+, Sonnet 5, Fable 5) support display override.
+		// NOTE: The exact wire format for "adaptive thinking" needs verification against live API.
+		// The AI SDK uses {thinking: { type: "adaptive", display: "summarized" }} with a sibling `effort` key.
+		// For now, we use the proven format: type:"enabled" with budget_tokens + display:"summarized".
+		thinkingObj["display"] = thinkingDisplaySummarized
+	}
+
+	anthropic["thinking"] = thinkingObj
 }
 
 func (a *AnthropicAdapter) budgetForEffort(effort string, min, max int) int {

@@ -208,6 +208,16 @@ func TestModelThinkingConfig_Validate(t *testing.T) {
 			c:       ModelThinkingConfig{Min: 2048, Max: 1024, Levels: []string{"low"}},
 			wantErr: true,
 		},
+		{
+			name:    "valid adaptive with max budget",
+			c:       ModelThinkingConfig{Min: 1024, Max: 2048, Adaptive: true},
+			wantErr: false,
+		},
+		{
+			name:    "invalid adaptive without max budget",
+			c:       ModelThinkingConfig{Min: 1024, Max: 0, Adaptive: true},
+			wantErr: true,
+		},
 	}
 
 	for _, tt := range tests {

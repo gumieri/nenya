@@ -34,6 +34,7 @@ func (p PricingOverride) Validate() error {
 //   - Max: Maximum number of thinking tokens (optional, default 0)
 //   - ZeroAllowed: Whether zero thinking tokens are permitted (default false)
 //   - DynamicAllowed: Whether dynamic thinking is supported (default false)
+//   - Adaptive: Whether the model supports adaptive thinking with display override (default false)
 //   - Levels: Available thinking intensity levels like "low", "medium", "high" (optional)
 //
 // Zero values for Min/Max mean the field is unset (no thinking).
@@ -44,6 +45,7 @@ type ModelThinkingConfig struct {
 	Max            int      `json:"max,omitempty"`
 	ZeroAllowed    bool     `json:"zero_allowed,omitempty"`
 	DynamicAllowed bool     `json:"dynamic_allowed,omitempty"`
+	Adaptive       bool     `json:"adaptive,omitempty"`
 	Levels         []string `json:"levels,omitempty"`
 }
 
@@ -53,6 +55,7 @@ type ModelThinkingConfig struct {
 // Returns an error if:
 //   - Min or Max is negative
 //   - Both Min and Max are set but Min > Max
+//   - Adaptive is true but Max is zero (adaptive requires a budget)
 func (c ModelThinkingConfig) Validate() error {
 	if c.Min < 0 {
 		return fmt.Errorf("ModelThinkingConfig.Min must be non-negative, got %d", c.Min)
@@ -62,6 +65,9 @@ func (c ModelThinkingConfig) Validate() error {
 	}
 	if c.Min > 0 && c.Max > 0 && c.Min > c.Max {
 		return fmt.Errorf("ModelThinkingConfig.Min (%d) must be <= Max (%d)", c.Min, c.Max)
+	}
+	if c.Adaptive && c.Max == 0 {
+		return fmt.Errorf("ModelThinkingConfig.Adaptive requires Max > 0")
 	}
 	return nil
 }
