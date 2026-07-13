@@ -87,3 +87,57 @@ func TestSanitizePayload_IntegratesBareReasoningStripping(t *testing.T) {
 		t.Error("expected reasoning_effort to be preserved in SanitizePayload")
 	}
 }
+
+func TestStripBareReasoningField_NilPayload(t *testing.T) {
+	deps := defaultSanitizeDeps()
+	stripBareReasoningField(deps, nil, "gpt-4-turbo")
+}
+
+func TestStripBareReasoningField_EmptyPayload(t *testing.T) {
+	deps := defaultSanitizeDeps()
+	payload := map[string]interface{}{}
+	stripBareReasoningField(deps, payload, "gpt-4-turbo")
+	if len(payload) != 0 {
+		t.Error("expected empty payload to remain empty")
+	}
+}
+
+func TestStripBareReasoningField_NonMapReasoning(t *testing.T) {
+	deps := defaultSanitizeDeps()
+	payload := map[string]interface{}{
+		"model":     "gpt-4-turbo",
+		"reasoning": "invalid",
+	}
+	stripBareReasoningField(deps, payload, "gpt-4-turbo")
+	if _, has := payload["reasoning"]; has {
+		t.Error("expected non-map reasoning field to be stripped even when not a map")
+	}
+}
+
+func TestStripBareReasoningField_NoSideEffects(t *testing.T) {
+	deps := defaultSanitizeDeps()
+	payload := map[string]interface{}{
+		"model":            "gpt-4-turbo",
+		"reasoning":        map[string]interface{}{"max_tokens": 10000},
+		"temperature":      0.7,
+		"max_tokens":       4096,
+		"top_p":            0.9,
+		"reasoning_effort": "low",
+	}
+	stripBareReasoningField(deps, payload, "gpt-4-turbo")
+	if _, has := payload["reasoning"]; has {
+		t.Error("expected reasoning to be stripped")
+	}
+	if _, has := payload["reasoning_effort"]; !has {
+		t.Error("expected reasoning_effort to be preserved")
+	}
+	if payload["temperature"] != 0.7 {
+		t.Error("expected temperature to be unchanged")
+	}
+	if payload["max_tokens"] != 4096 {
+		t.Error("expected max_tokens to be unchanged")
+	}
+	if payload["top_p"] != 0.9 {
+		t.Error("expected top_p to be unchanged")
+	}
+}

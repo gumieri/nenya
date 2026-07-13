@@ -70,7 +70,7 @@ func flattenContentArrays(deps TransformDeps, payload map[string]interface{}, mo
 		return
 	}
 	changed := false
-	for i, msgRaw := range messages {
+	for _, msgRaw := range messages {
 		msg, ok := msgRaw.(map[string]interface{})
 		if !ok {
 			continue
@@ -88,7 +88,6 @@ func flattenContentArrays(deps TransformDeps, payload map[string]interface{}, mo
 			continue
 		}
 		msg["content"] = flat
-		messages[i] = msg
 		changed = true
 	}
 	if changed {
@@ -109,14 +108,18 @@ func processReasoningContent(deps TransformDeps, payload map[string]interface{},
 	}
 }
 
+// stripBareReasoningField removes the non-standard "reasoning" field from the
+// payload when it is redundant with "reasoning_effort" or when the target model
+// does not support reasoning capabilities. This prevents upstream providers
+// from rejecting requests with unexpected fields.
 func stripBareReasoningField(deps TransformDeps, payload map[string]interface{}, modelName string) {
 	_, hasReasoning := payload["reasoning"]
 	if !hasReasoning {
 		return
 	}
 
-	_, hasEffort := payload["reasoning_effort"]
-	if hasEffort {
+	_, hasReasoningEffort := payload["reasoning_effort"]
+	if hasReasoningEffort {
 		delete(payload, "reasoning")
 		deps.Logger.Debug("stripped bare reasoning field (redundant with reasoning_effort)", "model", modelName)
 		return
@@ -155,6 +158,9 @@ func applyDeepSeekFixes(deps TransformDeps, payload map[string]interface{}, mode
 	stripDeepSeekThinkingParams(payload, modelName, deps.Logger)
 }
 
+// SanitizePayload applies request sanitization transformations to the payload
+// before routing to the upstream provider. It removes unsupported fields,
+// strips incompatible parameters, and repairs message ordering issues.
 func SanitizePayload(deps TransformDeps, payload map[string]interface{}, modelName string) {
 	stripStreamOptions(deps, payload, modelName)
 	stripToolChoice(deps, payload, modelName)
