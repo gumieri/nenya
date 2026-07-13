@@ -42,7 +42,8 @@ type ResponseTransformer interface {
 //   - cacheHitTokens: delta cache hit tokens since last callback (always >= 0)
 //   - cacheMissTokens: delta cache miss tokens since last callback (always >= 0)
 //   - cacheCreationTokens: delta cache creation tokens since last callback (always >= 0)
-type UsageCallback func(completionTokens, promptTokens, totalTokens, cacheHitTokens, cacheMissTokens, cacheCreationTokens int)
+//   - reasoningTokens: delta reasoning tokens since last callback (always >= 0)
+type UsageCallback func(completionTokens, promptTokens, totalTokens, cacheHitTokens, cacheMissTokens, cacheCreationTokens, reasoningTokens int)
 
 type ContentCallback func(content string)
 
@@ -88,6 +89,7 @@ type SSETransformingReader struct {
 	lastCacheHitTokens      int
 	lastCacheMissTokens     int
 	lastCacheCreationTokens int
+	lastReasoningTokens     int
 
 	tcState toolCallState
 
@@ -614,7 +616,8 @@ func (r *SSETransformingReader) extractUsageFromMap(chunk map[string]interface{}
 	cacheHit := ToInt(usage["prompt_cache_hit_tokens"])
 	cacheMiss := ToInt(usage["prompt_cache_miss_tokens"])
 	cacheCreation := ToInt(usage["cache_creation_tokens"])
-	if completion == 0 && prompt == 0 && total == 0 && cacheHit == 0 && cacheMiss == 0 && cacheCreation == 0 {
+	reasoning := ToInt(usage["reasoning_tokens"])
+	if completion == 0 && prompt == 0 && total == 0 && cacheHit == 0 && cacheMiss == 0 && cacheCreation == 0 && reasoning == 0 {
 		return
 	}
 	dCompletion := completion - r.lastCompletionTokens
@@ -623,7 +626,8 @@ func (r *SSETransformingReader) extractUsageFromMap(chunk map[string]interface{}
 	dCacheHit := cacheHit - r.lastCacheHitTokens
 	dCacheMiss := cacheMiss - r.lastCacheMissTokens
 	dCacheCreation := cacheCreation - r.lastCacheCreationTokens
-	if dCompletion <= 0 && dPrompt <= 0 && dTotal <= 0 && dCacheHit <= 0 && dCacheMiss <= 0 && dCacheCreation <= 0 {
+	dReasoning := reasoning - r.lastReasoningTokens
+	if dCompletion <= 0 && dPrompt <= 0 && dTotal <= 0 && dCacheHit <= 0 && dCacheMiss <= 0 && dCacheCreation <= 0 && dReasoning <= 0 {
 		return
 	}
 	r.lastCompletionTokens = completion
@@ -632,7 +636,8 @@ func (r *SSETransformingReader) extractUsageFromMap(chunk map[string]interface{}
 	r.lastCacheHitTokens = cacheHit
 	r.lastCacheMissTokens = cacheMiss
 	r.lastCacheCreationTokens = cacheCreation
-	r.onUsage(dCompletion, dPrompt, dTotal, dCacheHit, dCacheMiss, dCacheCreation)
+	r.lastReasoningTokens = reasoning
+	r.onUsage(dCompletion, dPrompt, dTotal, dCacheHit, dCacheMiss, dCacheCreation, dReasoning)
 }
 
 // ToInt converts an interface{} value to int, handling float64 and int types.

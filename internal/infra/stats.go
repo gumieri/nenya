@@ -18,6 +18,7 @@ type modelStats struct {
 	Requests            uint64 `json:"requests"`
 	InputTokens         uint64 `json:"input_tokens"`
 	OutputTokens        uint64 `json:"output_tokens"`
+	ReasoningTokens     uint64 `json:"reasoning_tokens"`
 	CacheHitTokens      uint64 `json:"cache_hit_tokens"`
 	CacheMissTokens     uint64 `json:"cache_miss_tokens"`
 	CacheCreationTokens uint64 `json:"cache_creation_tokens"`
@@ -86,6 +87,11 @@ func (u *UsageTracker) RecordCacheCreation(model string, tokens int) {
 	atomic.AddUint64(&s.CacheCreationTokens, uint64(tokens))
 }
 
+func (u *UsageTracker) RecordReasoning(model string, tokens int) {
+	s := u.GetOrCreate(model)
+	atomic.AddUint64(&s.ReasoningTokens, uint64(tokens))
+}
+
 func (u *UsageTracker) Snapshot() map[string]interface{} {
 	u.mu.RLock()
 	defer u.mu.RUnlock()
@@ -96,6 +102,7 @@ func (u *UsageTracker) Snapshot() map[string]interface{} {
 			"requests":              atomic.LoadUint64(&s.Requests),
 			"input_tokens":          atomic.LoadUint64(&s.InputTokens),
 			"output_tokens":         atomic.LoadUint64(&s.OutputTokens),
+			"reasoning_tokens":      atomic.LoadUint64(&s.ReasoningTokens),
 			"cache_hit_tokens":      atomic.LoadUint64(&s.CacheHitTokens),
 			"cache_miss_tokens":     atomic.LoadUint64(&s.CacheMissTokens),
 			"cache_creation_tokens": atomic.LoadUint64(&s.CacheCreationTokens),

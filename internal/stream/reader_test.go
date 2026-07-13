@@ -223,7 +223,7 @@ func TestSSETransformingReader_ValidJSONNoLog(t *testing.T) {
 func TestSSETransformingReader_UsageCallbackWithCacheFields(t *testing.T) {
 	var receivedCompletion, receivedPrompt, receivedTotal, receivedCacheHit, receivedCacheMiss, receivedCacheCreation int
 
-	cb := func(completion, prompt, total, cacheHit, cacheMiss, cacheCreation int) {
+	cb := func(completion, prompt, total, cacheHit, cacheMiss, cacheCreation, reasoning int) {
 		receivedCompletion = completion
 		receivedPrompt = prompt
 		receivedTotal = total
@@ -267,7 +267,7 @@ func TestSSETransformingReader_UsageCallbackDeltaCalculation(t *testing.T) {
 	var callCount int
 	var lastDCompletion, lastDPrompt, lastDCacheCreation int
 
-	cb := func(completion, prompt, total, cacheHit, cacheMiss, cacheCreation int) {
+	cb := func(completion, prompt, total, cacheHit, cacheMiss, cacheCreation, reasoning int) {
 		callCount++
 		lastDCompletion = completion
 		lastDPrompt = prompt

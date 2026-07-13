@@ -504,11 +504,15 @@ func (o *upstreamErrorObserver) OnStreamClose(err error) {}
 
 // makeUsageCallback returns a callback function that records token usage statistics.
 // The callback is invoked by the SSE transformer when usage metadata is received.
-func (p *Proxy) makeUsageCallback(ctx context.Context, gw *gateway.NenyaGateway, target routing.UpstreamTarget, agentName string) func(int, int, int, int, int, int) {
-	return func(completion, prompt, total, cacheHit, cacheMiss, cacheCreation int) {
+func (p *Proxy) makeUsageCallback(ctx context.Context, gw *gateway.NenyaGateway, target routing.UpstreamTarget, agentName string) func(int, int, int, int, int, int, int) {
+	return func(completion, prompt, total, cacheHit, cacheMiss, cacheCreation, reasoning int) {
 		if completion > 0 {
 			gw.Stats.RecordOutput(target.Model, completion)
 			gw.Metrics.RecordTokens("output", target.Model, agentName, target.Provider, completion)
+		}
+		if reasoning > 0 {
+			gw.Stats.RecordReasoning(target.Model, reasoning)
+			gw.Metrics.RecordTokens("reasoning", target.Model, agentName, target.Provider, reasoning)
 		}
 		if cacheHit > 0 {
 			gw.Stats.RecordCacheHit(target.Model, cacheHit)
