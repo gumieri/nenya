@@ -258,6 +258,7 @@ type GovernanceConfig struct {
 	CostMode                 string   `json:"cost_mode,omitempty"`
 	BillingEconomyScale      float64  `json:"billing_economy_scale,omitempty"`
 	BillingQualityScale      float64  `json:"billing_quality_scale,omitempty"`
+	MaxTransformedSSEBytes   int      `json:"max_transformed_sse_bytes,omitempty"`
 }
 
 func (g *GovernanceConfig) RPMSet() bool                  { return wasSet(g.RatelimitMaxRPM) }
@@ -275,6 +276,24 @@ func (g *GovernanceConfig) EffectiveMaxRetryAttempts() int {
 
 func (g *GovernanceConfig) AutoRetryOnContextLimitEnabled() bool {
 	return g.AutoRetryOnContextLimit != nil && *g.AutoRetryOnContextLimit
+}
+
+// EffectiveMaxTransformedSSEBytes returns the configured or default SSE
+// transformed-output size limit. Defaults to 50MB when unset (≤0) and is
+// capped at 1GB to prevent excessive memory allocation.
+func (g *GovernanceConfig) EffectiveMaxTransformedSSEBytes() int {
+	const (
+		defaultLimit = 50 * 1024 * 1024
+		maxLimit     = 1024 * 1024 * 1024
+	)
+	v := g.MaxTransformedSSEBytes
+	if v <= 0 {
+		return defaultLimit
+	}
+	if v > maxLimit {
+		return maxLimit
+	}
+	return v
 }
 
 // SecretsConfig holds sensitive credentials loaded from systemd credential
@@ -305,6 +324,9 @@ func (k *ApiKey) Validate() error {
 	}
 	if len(k.Token) < 16 {
 		return errors.New("token too short (minimum 16 characters)")
+	}
+	if len(k.Token) > 512 {
+		return errors.New("token too long (maximum 512 characters)")
 	}
 	if len(k.Roles) == 0 {
 		return errors.New("at least one role is required")

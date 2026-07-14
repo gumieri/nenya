@@ -375,10 +375,9 @@ func TestSSETransformingReader_UsageCallbackReasoningDecrease(t *testing.T) {
 }
 
 func TestSSETransformingReader_TransformedSizeLimit(t *testing.T) {
-	// Generate SSE data that exceeds maxTransformedEventBytes (256KB)
-	// Each chunk is ~1KB of content
+	// Generate SSE data that exceeds configured limit (256KB)
 	chunkSize := 1024
-	numChunks := 300 // 300KB total, well over the 256KB limit
+	numChunks := 300
 	var sb strings.Builder
 	for i := 0; i < numChunks; i++ {
 		content := strings.Repeat("x", chunkSize)
@@ -389,6 +388,7 @@ func TestSSETransformingReader_TransformedSizeLimit(t *testing.T) {
 	sb.WriteString("data: [DONE]\n\n")
 
 	reader := NewSSETransformingReader(strings.NewReader(sb.String()), nil, context.Background())
+	reader.SetMaxTransformedBytes(256 * 1024)
 
 	var output bytes.Buffer
 	_, err := io.Copy(&output, reader)
@@ -436,6 +436,7 @@ func TestSSETransformingReader_ResetCounters(t *testing.T) {
 	reader := NewSSETransformingReader(strings.NewReader(""), nil, context.Background())
 	reader.transformedBytes = 50000
 	reader.discarding = true
+	reader.warnedAtThreshold = true
 
 	reader.ResetCounters()
 
@@ -444,5 +445,31 @@ func TestSSETransformingReader_ResetCounters(t *testing.T) {
 	}
 	if reader.discarding {
 		t.Error("expected discarding=false after reset")
+	}
+	if reader.warnedAtThreshold {
+		t.Error("expected warnedAtThreshold=false after reset")
+	}
+}
+
+func TestSSETransformingReader_SetMaxTransformedBytes(t *testing.T) {
+	reader := NewSSETransformingReader(strings.NewReader(""), nil, context.Background())
+	if reader.maxTransformedBytes != DefaultMaxTransformedEventBytes {
+		t.Errorf("expected default %d, got %d", DefaultMaxTransformedEventBytes, reader.maxTransformedBytes)
+	}
+
+	customLimit := 10 * 1024 * 1024
+	reader.SetMaxTransformedBytes(customLimit)
+	if reader.maxTransformedBytes != customLimit {
+		t.Errorf("expected %d, got %d", customLimit, reader.maxTransformedBytes)
+	}
+
+	reader.SetMaxTransformedBytes(-1)
+	if reader.maxTransformedBytes != DefaultMaxTransformedEventBytes {
+		t.Errorf("expected reset to default %d on negative input, got %d", DefaultMaxTransformedEventBytes, reader.maxTransformedBytes)
+	}
+
+	reader.SetMaxTransformedBytes(0)
+	if reader.maxTransformedBytes != DefaultMaxTransformedEventBytes {
+		t.Errorf("expected reset to default %d on zero input, got %d", DefaultMaxTransformedEventBytes, reader.maxTransformedBytes)
 	}
 }
