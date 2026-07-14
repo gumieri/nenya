@@ -570,3 +570,138 @@ func TestZAI_PreservesClientTemperature(t *testing.T) {
 		t.Fatalf("expected client temperature 0.5 preserved, got %v", temp)
 	}
 }
+
+func TestZAI_ThinkingFromCodingPlan(t *testing.T) {
+	deps := zaiDeps()
+	// SupportsReasoning=false to isolate the ProviderThinking path.
+	deps.SupportsReasoning = func(model string) bool {
+		return false
+	}
+	deps.ProviderThinking = func(name string) (bool, bool, bool) {
+		if name == "zai-coding-plan" {
+			return true, true, true
+		}
+		return false, false, false
+	}
+
+	payload := map[string]interface{}{
+		"model": "glm-5",
+		"messages": []interface{}{
+			map[string]interface{}{"role": "user", "content": "hello"},
+		},
+	}
+
+	zaiSanitize(deps, payload)
+
+	thinking, ok := payload["thinking"].(map[string]interface{})
+	if !ok {
+		t.Fatal("expected thinking to be injected from zai-coding-plan provider")
+	}
+	if thinking["type"] != "enabled" {
+		t.Fatalf("expected thinking.type enabled, got %v", thinking["type"])
+	}
+	if thinking["clear_thinking"] != true {
+		t.Fatalf("expected clear_thinking=true from provider config, got %v", thinking["clear_thinking"])
+	}
+}
+
+func TestZAI_ThinkingFallbackToZai(t *testing.T) {
+	deps := zaiDeps()
+	// SupportsReasoning=false to isolate the ProviderThinking path.
+	deps.SupportsReasoning = func(model string) bool {
+		return false
+	}
+	deps.ProviderThinking = func(name string) (bool, bool, bool) {
+		if name == "zai-coding-plan" {
+			return false, false, false
+		}
+		if name == "zai" {
+			return true, false, true
+		}
+		return false, false, false
+	}
+
+	payload := map[string]interface{}{
+		"model": "glm-5",
+		"messages": []interface{}{
+			map[string]interface{}{"role": "user", "content": "hello"},
+		},
+	}
+
+	zaiSanitize(deps, payload)
+
+	thinking, ok := payload["thinking"].(map[string]interface{})
+	if !ok {
+		t.Fatal("expected thinking to be injected from fallback zai provider")
+	}
+	if thinking["type"] != "enabled" {
+		t.Fatalf("expected thinking.type enabled, got %v", thinking["type"])
+	}
+	if thinking["clear_thinking"] != false {
+		t.Fatalf("expected clear_thinking=false from zai fallback, got %v", thinking["clear_thinking"])
+	}
+}
+
+func TestZAI_ThinkingCodingPlanDisabledBlocksFallback(t *testing.T) {
+	deps := zaiDeps()
+	// SupportsReasoning=false to isolate the ProviderThinking path.
+	deps.SupportsReasoning = func(model string) bool {
+		return false
+	}
+	deps.ProviderThinking = func(name string) (bool, bool, bool) {
+		if name == "zai-coding-plan" {
+			return false, false, true
+		}
+		if name == "zai" {
+			return true, false, true
+		}
+		return false, false, false
+	}
+
+	payload := map[string]interface{}{
+		"model": "glm-5",
+		"messages": []interface{}{
+			map[string]interface{}{"role": "user", "content": "hello"},
+		},
+	}
+
+	zaiSanitize(deps, payload)
+
+	if _, hasThinking := payload["thinking"]; hasThinking {
+		t.Fatal("expected NO thinking injection when zai-coding-plan explicitly disables it")
+	}
+}
+
+func TestZAI_ThinkingCodingPlanPrecedence(t *testing.T) {
+	deps := zaiDeps()
+	// SupportsReasoning=false to isolate the ProviderThinking path.
+	deps.SupportsReasoning = func(model string) bool {
+		return false
+	}
+	deps.ProviderThinking = func(name string) (bool, bool, bool) {
+		if name == "zai-coding-plan" {
+			return true, true, true
+		}
+		if name == "zai" {
+			return true, false, true
+		}
+		return false, false, false
+	}
+
+	payload := map[string]interface{}{
+		"model": "glm-5",
+		"messages": []interface{}{
+			map[string]interface{}{"role": "user", "content": "hello"},
+		},
+	}
+
+	zaiSanitize(deps, payload)
+
+	thinking, ok := payload["thinking"].(map[string]interface{})
+	if !ok {
+		t.Fatal("expected thinking to be injected")
+	}
+	if thinking["clear_thinking"] != true {
+		t.Fatalf("expected clear_thinking=true from zai-coding-plan (precedence), got %v", thinking["clear_thinking"])
+	}
+}

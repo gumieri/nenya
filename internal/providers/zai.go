@@ -264,11 +264,17 @@ func zaiPrependSystemBridge(deps *SanitizeDeps, merged []interface{}) []interfac
 	return merged
 }
 
+var zaiThinkingProviders = []string{"zai-coding-plan", "zai"}
+
 // injectThinkingForZai enables thinking mode for Zai models that support reasoning.
 // Three modes are supported:
 //   - Auto (nil config): enabled when model's capabilities indicate reasoning support
 //   - Force enabled (config.Thinking.Enabled=true): always injects thinking
 //   - Force disabled (config.Thinking.Enabled=false): skips injection
+//
+// Provider thinking config is checked in order: zai-coding-plan first, then zai.
+// The first provider with an explicit Thinking config is authoritative — if it
+// sets enabled=false, no fallback occurs.
 func injectThinkingForZai(deps *SanitizeDeps, payload map[string]interface{}) {
 	model, _ := payload["model"].(string)
 	if model == "" {
@@ -276,16 +282,18 @@ func injectThinkingForZai(deps *SanitizeDeps, payload map[string]interface{}) {
 	}
 
 	if deps.ProviderThinking != nil {
-		if enabled, clearThinking, ok := deps.ProviderThinking("zai"); ok {
-			if !enabled {
+		for _, providerName := range zaiThinkingProviders {
+			if enabled, clearThinking, ok := deps.ProviderThinking(providerName); ok {
+				if !enabled {
+					return
+				}
+				payload["thinking"] = map[string]interface{}{
+					"type":           "enabled",
+					"clear_thinking": clearThinking,
+				}
+				logThinkingEnabled(deps.Logger, model, "force-enabled")
 				return
 			}
-			payload["thinking"] = map[string]interface{}{
-				"type":           "enabled",
-				"clear_thinking": clearThinking,
-			}
-			logThinkingEnabled(deps.Logger, model, "force-enabled")
-			return
 		}
 	}
 
