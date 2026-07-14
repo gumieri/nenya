@@ -8,14 +8,14 @@ import (
 func zaiSpec() ProviderSpec {
 	return ProviderSpec{
 		ServiceKinds:       []ServiceKind{ServiceKindLLM},
-		SanitizeRequest:    ZaiSanitizeSpecOnly,
+		SanitizeRequest:    zaiSanitize,
 		ValidationEndpoint: zaiValidationEndpoint,
 	}
 }
 
-// ZaiSanitizeSpecOnly applies Category A sanitization for Zai provider:
-// - Injects thinking mode for reasoning-capable models
-// - Sets model-specific temperature defaults (GLM-4.6/4.7 → 1.0)
+// Deprecated: Use zaiSanitize instead. This function applies only
+// Category A sanitization (thinking/temperature) and is kept for backward
+// compatibility. New code should use the combined zaiSanitize function.
 func ZaiSanitizeSpecOnly(deps *SanitizeDeps, payload map[string]interface{}) {
 	injectThinkingForZai(deps, payload)
 	injectTemperatureDefaultsForZai(payload)
@@ -27,10 +27,6 @@ func ZaiSanitizeSpecOnly(deps *SanitizeDeps, payload map[string]interface{}) {
 // - Inserts bridge messages between consecutive assistant messages
 // - Prepends system bridge when conversation starts with user message
 func ZaiSanitizeAdapterOnly(deps *SanitizeDeps, payload map[string]interface{}) {
-	if _, hasTools := payload["tools"]; hasTools {
-		return
-	}
-
 	messagesRaw, ok := payload["messages"]
 	if !ok {
 		return
@@ -47,6 +43,17 @@ func ZaiSanitizeAdapterOnly(deps *SanitizeDeps, payload map[string]interface{}) 
 		return
 	}
 
+	// For tool-carrying requests, only filter orphaned tools.
+	// Skip merge/bridge to avoid interfering with tool-call conversations.
+	if _, hasTools := payload["tools"]; hasTools {
+		if len(filtered) != len(messages) {
+			deps.Logger.Debug("zai: filtered orphaned tool messages",
+				"messages_before", len(messages), "messages_after", len(filtered))
+			payload["messages"] = filtered
+		}
+		return
+	}
+
 	merged := zaiMergeConsecutiveMessages(deps, filtered)
 	merged = zaiPrependSystemBridge(deps, merged)
 
@@ -54,7 +61,6 @@ func ZaiSanitizeAdapterOnly(deps *SanitizeDeps, payload map[string]interface{}) 
 		deps.Logger.Debug("zai: sanitized message sequence",
 			"messages_before", len(messages), "messages_after", len(merged))
 	}
-
 	payload["messages"] = merged
 }
 
