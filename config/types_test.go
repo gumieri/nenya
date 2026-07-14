@@ -2,6 +2,7 @@ package config
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 )
 
@@ -42,6 +43,15 @@ func TestApiKey_Validate(t *testing.T) {
 			key: ApiKey{
 				Token: "valid-token-1234567890",
 				Roles: []string{},
+			},
+			wantErr: true,
+		},
+		{
+			name: "token too long",
+			key: ApiKey{
+				Token:   "x" + strings.Repeat("a", 512),
+				Roles:   []string{"admin"},
+				Enabled: true,
 			},
 			wantErr: true,
 		},
@@ -286,5 +296,29 @@ func TestWithValue(t *testing.T) {
 				t.Errorf("wasSet(%v) = %v, want %v", tt.input, got, tt.want)
 			}
 		})
+	}
+}
+
+func TestEffectiveMaxTransformedSSEBytes_Default(t *testing.T) {
+	g := GovernanceConfig{}
+	limit := g.EffectiveMaxTransformedSSEBytes()
+	if limit != 50*1024*1024 {
+		t.Errorf("expected default 50MB limit, got %d", limit)
+	}
+}
+
+func TestEffectiveMaxTransformedSSEBytes_Custom(t *testing.T) {
+	g := GovernanceConfig{MaxTransformedSSEBytes: 10 * 1024 * 1024}
+	limit := g.EffectiveMaxTransformedSSEBytes()
+	if limit != 10*1024*1024 {
+		t.Errorf("expected 10MB limit, got %d", limit)
+	}
+}
+
+func TestEffectiveMaxTransformedSSEBytes_CappedAtOneGB(t *testing.T) {
+	g := GovernanceConfig{MaxTransformedSSEBytes: 2 * 1024 * 1024 * 1024}
+	limit := g.EffectiveMaxTransformedSSEBytes()
+	if limit != 1024*1024*1024 {
+		t.Errorf("expected capped 1GB limit, got %d", limit)
 	}
 }

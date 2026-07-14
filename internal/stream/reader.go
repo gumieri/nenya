@@ -24,10 +24,10 @@ var ErrTransformedSizeExceeded = errors.New("transformed SSE output size exceede
 const (
 	SSEScannerInitialBuf = 64 * 1024
 	SSEScannerMaxBuf     = 1024 * 1024
-	// maxTransformedEventBytes caps the accumulated transformed output to
+	// maxTransformedBytes caps the accumulated transformed output to
 	// prevent memory exhaustion from malicious or buggy upstreams that send
 	// many small events producing unbounded transformed output.
-	maxTransformedEventBytes = 256 * 1024
+	DefaultMaxTransformedEventBytes = 50 * 1024 * 1024
 )
 
 type ResponseTransformer interface {
@@ -94,8 +94,13 @@ type SSETransformingReader struct {
 	tcState toolCallState
 
 	// transformedBytes tracks accumulated output size across the stream.
-	// When it exceeds maxTransformedEventBytes, discarding is set to true.
-	transformedBytes int
+	// When it exceeds maxTransformedBytes, discarding is set to true.
+	transformedBytes uint64
+	// maxTransformedBytes caps the accumulated transformed output to
+	// prevent memory exhaustion from malicious or buggy upstreams.
+	maxTransformedBytes int
+	// warnedAtThreshold tracks whether the 80% threshold warning was logged.
+	warnedAtThreshold bool
 	// discarding indicates output size limit was exceeded; new events are
 	// dropped except [DONE] which passes through for clean stream end.
 	discarding bool
@@ -127,12 +132,14 @@ func NewSSETransformingReader(src io.Reader, transformer ResponseTransformer, ct
 	}
 	poolBuf := getStreamBuffer()
 	reader := &SSETransformingReader{
-		src:         src,
-		scanner:     bufio.NewScanner(src),
-		transformer: transformer,
-		ctx:         ctx,
-		tcState:     newToolCallState(),
-		poolBuf:     poolBuf,
+		src:                 src,
+		scanner:             bufio.NewScanner(src),
+		transformer:         transformer,
+		ctx:                 ctx,
+		tcState:             newToolCallState(),
+		poolBuf:             poolBuf,
+		maxTransformedBytes: DefaultMaxTransformedEventBytes,
+		warnedAtThreshold:   false,
 	}
 	reader.scanner.Buffer(*poolBuf, SSEScannerMaxBuf)
 	return reader
@@ -177,6 +184,17 @@ func (r *SSETransformingReader) SetLogger(logger *slog.Logger) {
 func (r *SSETransformingReader) ResetCounters() {
 	r.transformedBytes = 0
 	r.discarding = false
+	r.warnedAtThreshold = false
+}
+
+// SetMaxTransformedBytes sets the maximum allowed accumulated transformed output.
+// If zero or negative, resets to the default (50MB).
+func (r *SSETransformingReader) SetMaxTransformedBytes(maxBytes int) {
+	if maxBytes > 0 {
+		r.maxTransformedBytes = maxBytes
+	} else {
+		r.maxTransformedBytes = DefaultMaxTransformedEventBytes
+	}
 }
 
 // SawDone returns true if the reader has observed a data: [DONE] event.
@@ -203,8 +221,9 @@ func (r *SSETransformingReader) Read(p []byte) (int, error) {
 	if r.ctx != nil {
 		select {
 		case <-r.ctx.Done():
-			putStreamBuffer(r.poolBuf)
+			buf := r.poolBuf
 			r.poolBuf = nil
+			putStreamBuffer(buf)
 			return 0, r.ctx.Err()
 		default:
 		}
@@ -221,8 +240,9 @@ func (r *SSETransformingReader) Read(p []byte) (int, error) {
 	}
 
 	if r.err != nil {
-		putStreamBuffer(r.poolBuf)
+		buf := r.poolBuf
 		r.poolBuf = nil
+		putStreamBuffer(buf)
 		return 0, r.err
 	}
 
@@ -250,8 +270,9 @@ func (r *SSETransformingReader) Read(p []byte) (int, error) {
 
 		if r.streamFilter != nil && r.streamFilter.IsBlocked() {
 			r.err = ErrStreamBlocked
-			putStreamBuffer(r.poolBuf)
+			buf := r.poolBuf
 			r.poolBuf = nil
+			putStreamBuffer(buf)
 			return 0, r.err
 		}
 
@@ -269,13 +290,28 @@ func (r *SSETransformingReader) Read(p []byte) (int, error) {
 }
 
 // trackTransformedSize accumulates the transformed output size and sets the
-// discarding flag when the total exceeds maxTransformedEventBytes.
+// discarding flag when the total exceeds maxTransformedBytes.
 func (r *SSETransformingReader) trackTransformedSize(transformed []byte) {
-	r.transformedBytes += len(transformed)
-	if r.transformedBytes > maxTransformedEventBytes && !r.discarding {
+	blen := uint64(len(transformed))
+	if r.transformedBytes > ^uint64(0)-blen {
+		r.transformedBytes = ^uint64(0)
+	} else {
+		r.transformedBytes += blen
+	}
+	if r.logger != nil && !r.warnedAtThreshold && r.maxTransformedBytes > 0 {
+		threshold := uint64(r.maxTransformedBytes) * 8 / 10
+		if r.transformedBytes >= threshold {
+			r.warnedAtThreshold = true
+			r.logger.Warn("transformed SSE output approaching size limit",
+				"accumulated", r.transformedBytes,
+				"limit", r.maxTransformedBytes,
+				"pct", r.transformedBytes*100/uint64(r.maxTransformedBytes))
+		}
+	}
+	if r.transformedBytes > uint64(r.maxTransformedBytes) && !r.discarding {
 		if r.logger != nil {
-			r.logger.Debug("transformed output exceeded size limit, will discard subsequent events",
-				"limit", maxTransformedEventBytes, "accumulated", r.transformedBytes)
+			r.logger.Warn("transformed output exceeded size limit, will discard subsequent events",
+				"limit", r.maxTransformedBytes, "accumulated", r.transformedBytes)
 		}
 		r.discarding = true
 	}
@@ -336,18 +372,26 @@ func (r *SSETransformingReader) handleScannerDone() {
 // in r.buffer so the client receives the error before EOF.
 func (r *SSETransformingReader) injectErrorBuffer(message string) {
 	slog.Warn("injecting gateway_error into stream", "message", message, "sawDone", r.sawDone)
-	errPayload, _ := json.Marshal(map[string]any{
+	errPayload, err := json.Marshal(map[string]any{
 		"error": map[string]any{
 			"message": message,
 			"type":    "gateway_error",
 		},
 	})
+	if err != nil {
+		slog.Error("failed to marshal error payload", "error", err, "message", message)
+		errPayload = []byte(`{"error":{"message":"internal error","type":"gateway_error"}}`)
+	}
 	r.buffer = append(append([]byte("data: "), errPayload...), []byte("\n\ndata: [DONE]\n\n")...)
 	r.pos = 0
 	if r.observer != nil {
 		var errMap map[string]any
-		_ = json.Unmarshal(errPayload, &errMap)
-		r.observer.OnSSEEvent(SSEEvent{Type: "error", Data: errMap})
+		if err := json.Unmarshal(errPayload, &errMap); err != nil {
+			slog.Error("failed to unmarshal error payload for observer", "error", err)
+			r.observer.OnSSEEvent(SSEEvent{Type: "error", Data: map[string]any{"message": message, "type": "gateway_error"}})
+		} else {
+			r.observer.OnSSEEvent(SSEEvent{Type: "error", Data: errMap})
+		}
 	}
 }
 
@@ -368,8 +412,9 @@ func (r *SSETransformingReader) drainAfterScanDone(p []byte) (int, error) {
 		r.closed = true
 		r.observer.OnStreamClose(r.err)
 	}
-	putStreamBuffer(r.poolBuf)
+	buf := r.poolBuf
 	r.poolBuf = nil
+	putStreamBuffer(buf)
 	return 0, r.err
 }
 

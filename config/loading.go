@@ -212,6 +212,9 @@ func mergeGovernanceScalars(base, overlay *Config) {
 	if og.BillingQualityScale != 0 {
 		bg.BillingQualityScale = og.BillingQualityScale
 	}
+	if og.MaxTransformedSSEBytes != 0 {
+		bg.MaxTransformedSSEBytes = og.MaxTransformedSSEBytes
+	}
 }
 
 func mergeGovernanceBools(base, overlay *Config) {

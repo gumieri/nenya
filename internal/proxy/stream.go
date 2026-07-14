@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"strings"
 	"sync"
@@ -45,12 +46,13 @@ func getStreamBuffer() *[]byte {
 
 // putStreamBuffer returns a buffer to the pool after restoring its full length.
 // The buffer pointer is modified to point to the full-capacity slice before pooling.
-// Buffers with incorrect capacity are silently dropped to prevent pool pollution.
+// Buffers with incorrect capacity are dropped with a warning to prevent pool pollution.
 func putStreamBuffer(buf *[]byte) {
 	if buf == nil || *buf == nil {
 		return
 	}
 	if cap(*buf) != streamBufferSize {
+		slog.Warn("dropping mis-sized buffer from pool", "expected_cap", streamBufferSize, "actual_cap", cap(*buf))
 		return
 	}
 	*buf = (*buf)[:cap(*buf)]
@@ -442,6 +444,7 @@ func (p *Proxy) setupTransformingReader(gw *gateway.NenyaGateway, target routing
 	stallR := newStallReader(ctx, action.resp.Body, streamIdleTimeout)
 
 	transformingReader := stream.NewSSETransformingReader(stallR, transformer, ctx)
+	transformingReader.SetMaxTransformedBytes(gw.Config.Governance.EffectiveMaxTransformedSSEBytes())
 	transformingReader.SetOnUsage(p.makeUsageCallback(ctx, gw, target, agentName))
 	transformingReader.SetObserver(newUpstreamErrorObserver(gw, target))
 	transformingReader.SetLogger(gw.Logger)
