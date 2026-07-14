@@ -9,7 +9,9 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"math"
 	"reflect"
+	"strconv"
 	"sync"
 )
 
@@ -83,6 +85,9 @@ type SSETransformingReader struct {
 	poolBuf             *[]byte
 	logger              *slog.Logger
 
+	// last* fields track token usage between consecutive usage chunks.
+	// They are accessed only from the single goroutine calling Read().
+	// No mutex needed; callers must not call Read() concurrently.
 	lastCompletionTokens    int
 	lastPromptTokens        int
 	lastTotalTokens         int
@@ -91,6 +96,7 @@ type SSETransformingReader struct {
 	lastCacheCreationTokens int
 	lastReasoningTokens     int
 
+	// tcState tracks tool call state across stream chunks.
 	tcState toolCallState
 
 	// transformedBytes tracks accumulated output size across the stream.
@@ -146,6 +152,9 @@ func NewSSETransformingReader(src io.Reader, transformer ResponseTransformer, ct
 }
 
 // SetOnUsage sets a callback that receives token usage statistics from the stream.
+// The callback is invoked from the same goroutine that calls Read().
+// The callback must not access the reader instance concurrently, as internal
+// state (last* token fields) is updated without mutex protection.
 func (r *SSETransformingReader) SetOnUsage(cb UsageCallback) {
 	r.onUsage = cb
 }
@@ -215,6 +224,17 @@ func (r *SSETransformingReader) getTransformedLine(line []byte) []byte {
 	lineCopy := make([]byte, len(line))
 	copy(lineCopy, line)
 	return r.transformLine(lineCopy)
+}
+
+// safePercentage calculates percentage with overflow protection.
+func safePercentage(part, total uint64) uint64 {
+	if total == 0 {
+		return 0
+	}
+	if part < math.MaxUint64/100 {
+		return part * 100 / total
+	}
+	return 100
 }
 
 func (r *SSETransformingReader) Read(p []byte) (int, error) {
@@ -305,7 +325,7 @@ func (r *SSETransformingReader) trackTransformedSize(transformed []byte) {
 			r.logger.Warn("transformed SSE output approaching size limit",
 				"accumulated", r.transformedBytes,
 				"limit", r.maxTransformedBytes,
-				"pct", r.transformedBytes*100/uint64(r.maxTransformedBytes))
+				"pct", safePercentage(r.transformedBytes, uint64(r.maxTransformedBytes)))
 		}
 	}
 	if r.transformedBytes > uint64(r.maxTransformedBytes) && !r.discarding {
@@ -664,6 +684,11 @@ func (r *SSETransformingReader) extractUsageFromMap(chunk map[string]interface{}
 	prompt := ToInt(usage["prompt_tokens"])
 	total := ToInt(usage["total_tokens"])
 	cacheHit := ToInt(usage["prompt_cache_hit_tokens"])
+	if cacheHit == 0 {
+		if promptTokensDetails, ok := usage["prompt_tokens_details"].(map[string]interface{}); ok {
+			cacheHit = ToInt(promptTokensDetails["cached_tokens"])
+		}
+	}
 	cacheMiss := ToInt(usage["prompt_cache_miss_tokens"])
 	cacheCreation := ToInt(usage["cache_creation_tokens"])
 	reasoning := ToInt(usage["reasoning_tokens"])
@@ -695,7 +720,7 @@ func allUsageFieldsZero(completion, prompt, total, cacheHit, cacheMiss, cacheCre
 }
 
 func allDeltasZero(dCompletion, dPrompt, dTotal, dCacheHit, dCacheMiss, dCacheCreation, dReasoning int) bool {
-	return dCompletion <= 0 && dPrompt <= 0 && dTotal <= 0 && dCacheHit <= 0 && dCacheMiss <= 0 && dCacheCreation <= 0 && dReasoning <= 0
+	return dCompletion == 0 && dPrompt == 0 && dTotal == 0 && dCacheHit == 0 && dCacheMiss == 0 && dCacheCreation == 0 && dReasoning == 0
 }
 
 // clampDelta computes a non-negative delta between current and last value.
@@ -708,14 +733,23 @@ func clampDelta(current, last int) int {
 	return d
 }
 
-// ToInt converts an interface{} value to int, handling float64 and int types.
-// Returns 0 for unsupported types.
+// ToInt converts an interface{} value to int, handling float64, string, and int types.
+// Returns 0 for unsupported types or on parse error.
 func ToInt(v interface{}) int {
 	switch n := v.(type) {
 	case float64:
+		if n > math.MaxInt || n < math.MinInt {
+			return 0
+		}
 		return int(n)
 	case int:
 		return n
+	case string:
+		i, err := strconv.Atoi(n)
+		if err != nil {
+			return 0
+		}
+		return i
 	default:
 		return 0
 	}

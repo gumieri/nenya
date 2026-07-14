@@ -267,6 +267,54 @@ func TestSSETransformingReader_UsageCallbackWithCacheFields(t *testing.T) {
 	}
 }
 
+func TestSSETransformingReader_UsageCallbackNestedCachedTokens(t *testing.T) {
+	var capturedCacheHit int
+
+	cb := func(completion, prompt, total, cacheHit, cacheMiss, cacheCreation, reasoning int) {
+		capturedCacheHit = cacheHit
+	}
+
+	// Nested format: usage.prompt_tokens_details.cached_tokens (used by Z.AI)
+	input := "data: {\"id\":\"msg_1\",\"object\":\"chat.completion.chunk\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"Hello\"}}],\"usage\":{\"prompt_tokens\":100,\"completion_tokens\":10,\"total_tokens\":110,\"prompt_tokens_details\":{\"cached_tokens\":80}}}\n\ndata: [DONE]\n\n"
+
+	reader := NewSSETransformingReader(strings.NewReader(input), nil, context.Background())
+	reader.SetOnUsage(cb)
+
+	var output bytes.Buffer
+	_, err := io.Copy(&output, reader)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if capturedCacheHit != 80 {
+		t.Errorf("expected cached_tokens=80 from nested prompt_tokens_details, got %d", capturedCacheHit)
+	}
+}
+
+func TestSSETransformingReader_UsageCallbackFlatTakesPrecedenceOverNested(t *testing.T) {
+	var capturedCacheHit int
+
+	cb := func(completion, prompt, total, cacheHit, cacheMiss, cacheCreation, reasoning int) {
+		capturedCacheHit = cacheHit
+	}
+
+	// Both flat prompt_cache_hit_tokens (WINS) and nested prompt_tokens_details.cached_tokens present
+	input := "data: {\"usage\":{\"prompt_tokens\":100,\"completion_tokens\":10,\"total_tokens\":110,\"prompt_cache_hit_tokens\":5000,\"prompt_tokens_details\":{\"cached_tokens\":80}}}\n\ndata: [DONE]\n\n"
+
+	reader := NewSSETransformingReader(strings.NewReader(input), nil, context.Background())
+	reader.SetOnUsage(cb)
+
+	var output bytes.Buffer
+	_, err := io.Copy(&output, reader)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if capturedCacheHit != 5000 {
+		t.Errorf("expected cache_hit_tokens=5000 (flat wins over nested), got %d", capturedCacheHit)
+	}
+}
+
 func TestSSETransformingReader_UsageCallbackDeltaCalculation(t *testing.T) {
 	var callCount int
 	var lastDCompletion, lastDPrompt, lastDCacheCreation int
