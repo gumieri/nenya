@@ -309,7 +309,7 @@ func TestZAI_SkipsSanitizeWhenToolChoicePresent(t *testing.T) {
 	}
 }
 
-func TestZAI_SkipsSanitizeWhenToolsAndToolCalls(t *testing.T) {
+func TestZAI_FiltersOrphanedToolMessagesWhenToolsPresent(t *testing.T) {
 	deps := zaiDeps()
 
 	origMessages := []interface{}{
@@ -338,7 +338,7 @@ func TestZAI_SkipsSanitizeWhenToolsAndToolCalls(t *testing.T) {
 		},
 		map[string]interface{}{
 			"role":    "user",
-			"content": "",
+			"content": "continue",
 		},
 	}
 
@@ -350,16 +350,15 @@ func TestZAI_SkipsSanitizeWhenToolsAndToolCalls(t *testing.T) {
 	zaiSanitize(deps, payload)
 
 	msgs := payload["messages"].([]interface{})
-	if len(msgs) != 4 {
-		t.Fatalf("expected 4 messages (untouched), got %d", len(msgs))
+	if len(msgs) != 3 {
+		t.Fatalf("expected 3 messages (orphaned tool removed), got %d", len(msgs))
 	}
 	for _, m := range msgs {
 		msg := m.(map[string]interface{})
 		if msg["role"] == "tool" && msg["tool_call_id"] == "tc-orphan" {
-			return
+			t.Error("orphaned tool message should have been filtered even when tools is present")
 		}
 	}
-	t.Error("orphaned tool message should still be present when tools guard is active")
 }
 
 func TestZAI_SanitizesWhenNoTools(t *testing.T) {
