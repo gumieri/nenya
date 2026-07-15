@@ -99,6 +99,14 @@ type NenyaGateway struct {
 func New(ctx context.Context, cfg config.Config, secrets *config.SecretsConfig, logger *slog.Logger) *NenyaGateway {
 	cfg = mergeBuiltInProviders(cfg)
 	secureClient, ollamaClient := createHTTPClients(cfg)
+
+	timeout := cfg.Governance.EffectiveUpstreamTimeout()
+	if timeout == 0 {
+		logger.Warn("upstream client timeout is unlimited (governance.upstream_timeout_seconds=0), relying on streamIdleTimeout (60s) for stall detection")
+	} else {
+		logger.Info("upstream client timeout configured", "timeout", timeout, "timeout_h", timeout.Hours(), "config_field", "governance.upstream_timeout_seconds")
+	}
+
 	providers := config.ResolveProviders(&cfg, secrets)
 
 	metrics := infra.NewMetrics()
@@ -188,7 +196,7 @@ func createHTTPClients(cfg config.Config) (*http.Client, *http.Client) {
 
 	secureClient := &http.Client{
 		Transport: transport,
-		Timeout:   120 * time.Second,
+		Timeout:   cfg.Governance.EffectiveUpstreamTimeout(),
 	}
 
 	ollamaResponseHeaderTimeout := 30 * time.Second

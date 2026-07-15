@@ -2,6 +2,7 @@ package config
 
 import (
 	"testing"
+	"time"
 )
 
 func TestApplyBuiltInProviders_MergesPartialConfig(t *testing.T) {
@@ -256,6 +257,30 @@ func TestPrefixCache_CacheDefaultsApplied(t *testing.T) {
 	}
 	if cfg.PrefixCache.CacheControlTTL != "ephemeral" {
 		t.Errorf("expected CacheControlTTL to default to 'ephemeral', got %q", cfg.PrefixCache.CacheControlTTL)
+	}
+}
+
+func TestEffectiveUpstreamTimeout(t *testing.T) {
+	tests := []struct {
+		name            string
+		cfg             GovernanceConfig
+		expectedSeconds int
+	}{
+		{"not set defaults to 300s", GovernanceConfig{}, 300},
+		{"set to 0 returns 0 (unlimited)", GovernanceConfig{UpstreamTimeoutSeconds: PtrTo(0)}, 0},
+		{"set to 600 returns 600s", GovernanceConfig{UpstreamTimeoutSeconds: PtrTo(600)}, 600},
+		{"set to negative value returns 0 (unlimited)", GovernanceConfig{UpstreamTimeoutSeconds: PtrTo(-1)}, 0},
+		{"exactly 86400 passes through", GovernanceConfig{UpstreamTimeoutSeconds: PtrTo(86400)}, 86400},
+		{"exceeds 24h capped to 86400", GovernanceConfig{UpstreamTimeoutSeconds: PtrTo(86401)}, 86400},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := tt.cfg.EffectiveUpstreamTimeout()
+			want := time.Duration(tt.expectedSeconds) * time.Second
+			if got != want {
+				t.Errorf("EffectiveUpstreamTimeout() = %v, want %v", got, want)
+			}
+		})
 	}
 }
 

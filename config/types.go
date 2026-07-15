@@ -222,6 +222,7 @@ type ServerConfig struct {
 }
 
 // wasSet returns true if v is non-nil (field was explicitly set by user).
+// This distinguishes "not set" (nil) from "explicitly set to zero" (pointer to 0).
 func wasSet[T any](v *T) bool { return v != nil }
 
 func (s *ServerConfig) SecureMemoryRequiredWasSet() bool { return wasSet(s.SecureMemoryRequired) }
@@ -259,6 +260,7 @@ type GovernanceConfig struct {
 	BillingEconomyScale      float64  `json:"billing_economy_scale,omitempty"`
 	BillingQualityScale      float64  `json:"billing_quality_scale,omitempty"`
 	MaxTransformedSSEBytes   int      `json:"max_transformed_sse_bytes,omitempty"`
+	UpstreamTimeoutSeconds   *int     `json:"upstream_timeout_seconds,omitempty"`
 }
 
 func (g *GovernanceConfig) RPMSet() bool                  { return wasSet(g.RatelimitMaxRPM) }
@@ -294,6 +296,32 @@ func (g *GovernanceConfig) EffectiveMaxTransformedSSEBytes() int {
 		return maxLimit
 	}
 	return v
+}
+
+// EffectiveUpstreamTimeout returns the HTTP client timeout for upstream
+// provider requests. When unset, defaults to 300s (5 minutes). When
+// explicitly set to 0, returns 0 (no client-level deadline — relies on
+// streamIdleTimeout (60s) for stall detection; connections without data
+// flow will be killed). Negative values are rejected by validation at
+// startup, but this method defensively clamps negatives to 0 as well.
+// Values exceeding 86400 are capped at 86400 (24h). Additionally, a
+// second cap at 9223372036 prevents time.Duration overflow when converting
+// seconds to nanoseconds (floor(math.MaxInt64 / 1e9)).
+func (g *GovernanceConfig) EffectiveUpstreamTimeout() time.Duration {
+	if g.UpstreamTimeoutSeconds == nil {
+		return 300 * time.Second
+	}
+	v := *g.UpstreamTimeoutSeconds
+	if v <= 0 {
+		return 0
+	}
+	if v > 86400 {
+		v = 86400
+	}
+	if v > 9223372036 { // floor(math.MaxInt64 / 1e9): max safe seconds before time.Duration nanosecond overflow
+		v = 9223372036
+	}
+	return time.Duration(v) * time.Second
 }
 
 // SecretsConfig holds sensitive credentials loaded from systemd credential

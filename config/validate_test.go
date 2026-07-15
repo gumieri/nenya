@@ -469,3 +469,32 @@ func TestCloseBody(t *testing.T) {
 	closeBody(resp)
 	closeBody(nil)
 }
+
+func TestValidateUpstreamTimeoutSeconds(t *testing.T) {
+	tests := []struct {
+		name         string
+		v            *int
+		wantErr      bool
+		wantErrMsg   string
+	}{
+		{"nil passes", nil, false, ""},
+		{"zero passes", PtrTo(0), false, ""},
+		{"positive passes", PtrTo(300), false, ""},
+		{"large positive passes", PtrTo(86400), false, ""},
+		{"very large positive passes", PtrTo(2147483647), false, ""},
+		{"negative fails", PtrTo(-1), true, "governance.upstream_timeout_seconds must be non-negative (set to 0 for unlimited), got -1"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			errs := validateUpstreamTimeoutSeconds(tt.v)
+			hasErr := len(errs) > 0
+			if hasErr != tt.wantErr {
+				t.Errorf("validateUpstreamTimeoutSeconds() = %v, want hasErr=%v", errs, tt.wantErr)
+				return
+			}
+			if tt.wantErrMsg != "" && (len(errs) != 1 || errs[0] != tt.wantErrMsg) {
+				t.Errorf("validateUpstreamTimeoutSeconds() = %v, want exact error %q", errs, tt.wantErrMsg)
+			}
+		})
+	}
+}

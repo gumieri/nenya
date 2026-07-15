@@ -651,8 +651,12 @@ func (p *Proxy) handleStreamDone(gw *gateway.NenyaGateway, w http.ResponseWriter
 
 	_ = action.resp.Body.Close()
 
-	if errors.Is(copyErr, context.Canceled) || errors.Is(copyErr, context.DeadlineExceeded) {
-		gw.Logger.Info("client disconnected, aborting upstream stream", "model", target.Model)
+	if errors.Is(copyErr, context.Canceled) {
+		gw.Logger.Info("client disconnected, aborting upstream stream",
+			"model", target.Model, "provider", target.Provider)
+	} else if errors.Is(copyErr, context.DeadlineExceeded) {
+		gw.Logger.Info("upstream timeout reached, aborting stream",
+			"model", target.Model, "provider", target.Provider)
 	}
 
 	recordStreamResult(gw, target, agentName, cooldownDuration, copyErr)
@@ -669,18 +673,33 @@ func (p *Proxy) handleStreamDone(gw *gateway.NenyaGateway, w http.ResponseWriter
 	return streamResult{}
 }
 
+func streamErrorReason(err error) string {
+	if err == nil {
+		return "success"
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return "upstream timeout"
+	}
+	if errors.Is(err, context.Canceled) {
+		return "client disconnect"
+	}
+	return "unknown"
+}
+
 // recordStreamResult records the outcome of a streaming request to the agent state and metrics.
 func recordStreamResult(gw *gateway.NenyaGateway, target routing.UpstreamTarget, agentName string, cooldownDuration time.Duration, copyErr error) {
-	if copyErr == nil || errors.Is(copyErr, context.Canceled) || errors.Is(copyErr, context.DeadlineExceeded) {
-		if copyErr != nil {
-			gw.Logger.Debug("stream ended (client disconnect)", "model", target.Model, "provider", target.Provider)
-		}
+	if copyErr == nil {
 		gw.AgentState.RecordSuccess(target.CoolKey)
-	} else {
-		gw.Logger.Warn("stream copy error (upstream)",
-			"model", target.Model, "provider", target.Provider, "err", copyErr)
-		gw.AgentState.RecordFailure(target, cooldownDuration)
+		return
 	}
+	if errors.Is(copyErr, context.Canceled) || errors.Is(copyErr, context.DeadlineExceeded) {
+		gw.Logger.Debug("stream ended", "model", target.Model, "provider", target.Provider, "reason", streamErrorReason(copyErr))
+		gw.AgentState.RecordSuccess(target.CoolKey)
+		return
+	}
+	gw.Logger.Warn("stream copy error (upstream)",
+		"model", target.Model, "provider", target.Provider, "err", copyErr)
+	gw.AgentState.RecordFailure(target, cooldownDuration)
 }
 
 func storeStreamCache(gw *gateway.NenyaGateway, cacheKey string, captureBuf *bytes.Buffer, tee *sseTeeWriter, payload map[string]any, reqCtx context.Context) {
@@ -692,7 +711,9 @@ func storeStreamCache(gw *gateway.NenyaGateway, cacheKey string, captureBuf *byt
 
 	// Skip caching for refusal responses. The check is a simple substring match for performance.
 	// False positives are acceptable (conservative cache miss) and extremely unlikely in practice:
-	// "refusal" and "content_filter" are technical field values, not conversational content.
+	// - "refusal" and "content_filter" are technical field values (finish_reason, stop_reason), not conversational content
+	// - Models don't refuse via text content; they set structured stop_reason fields
+	// - Worst case: cache miss for non-refusal response (conservative)
 	if bytes.Contains(captured, []byte("refusal")) || bytes.Contains(captured, []byte("content_filter")) {
 		return
 	}

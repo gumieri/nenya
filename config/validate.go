@@ -106,6 +106,7 @@ func collectValidationErrors(ctx context.Context, cfg *Config, providers map[str
 	errors = append(errors, validateEntropyConfig(cfg.Bouncer)...)
 	errors = append(errors, validateProviderRateLimits(cfg)...)
 	errors = append(errors, validateBillingConfig(cfg)...)
+	errors = append(errors, validateUpstreamTimeoutSeconds(cfg.Governance.UpstreamTimeoutSeconds)...)
 
 	if pingProviders {
 		errors = append(errors, validateProviders(ctx, providers, logger)...)
@@ -385,6 +386,13 @@ func validateBillingConfig(cfg *Config) []string {
 	}
 
 	return errs
+}
+
+func validateUpstreamTimeoutSeconds(v *int) []string {
+	if v != nil && *v < 0 {
+		return []string{fmt.Sprintf("governance.upstream_timeout_seconds must be non-negative (set to 0 for unlimited), got %d", *v)}
+	}
+	return nil
 }
 
 func validateProviderBillingConfig(name string, provider ProviderConfig, errs *[]string) {

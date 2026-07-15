@@ -181,6 +181,7 @@ Rate limiting, routing weights, and circuit breaker configuration.
 | `cost_mode` | string | `"balanced"` | Cost optimization strategy for balanced routing: `"economy"` (cheapest first), `"balanced"` (default tradeoff), or `"quality"` (quality/scoring priority). Controls cost weight scaling. |
 | `billing_economy_scale` | float64 | `1.5` | Multiplier for cost weight in `"economy"` mode. Applied when `cost_mode` is `"economy"` to prioritize cheaper models. |
 | `billing_quality_scale` | float64 | `0.0` | Multiplier for cost weight in `"quality"` mode. Applied when `cost_mode` is `"quality"` to reduce cost prioritization. |
+| `upstream_timeout_seconds` | int | `300` | HTTP client timeout (in seconds) for all upstream provider requests, including SSE body reading. Set to `0` for unlimited (relies on `streamIdleTimeout` 60s stall detection only). Capped at `86400` (24h). The startup log displays both `timeout` (Go time.Duration format) and `timeout_h` (decimal hours for human readability). |
 
 ## `bouncer`
 
