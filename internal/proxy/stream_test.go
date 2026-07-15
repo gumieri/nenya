@@ -761,3 +761,46 @@ func newStreamTestGateway() *gateway.NenyaGateway {
 		Providers:  make(map[string]*config.Provider),
 	}
 }
+
+func TestStoreStreamCache_SkipsRefusal(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	gw := newStreamTestGateway()
+	gw.ResponseCache = infra.NewResponseCache(10, 1024, time.Minute, time.Minute, nil, logger, false, 0, nil)
+	defer gw.ResponseCache.Stop()
+	gw.Config.ResponseCache.MaxEntryBytes = 1024
+
+	tests := []struct {
+		name    string
+		content string
+		want    bool
+	}{
+		{name: "normal response cached", content: `{"choices":[{"finish_reason":"stop"}]}`, want: true},
+		{name: "refusal not cached", content: `{"choices":[{"finish_reason":"refusal"}]}`, want: false},
+		{name: "content_filter not cached", content: `{"choices":[{"finish_reason":"content_filter"}]}`, want: false},
+		{name: "anthropic refusal not cached", content: `{"type":"message_delta","delta":{"stop_reason":"refusal"}}`, want: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var captureBuf bytes.Buffer
+			captureBuf.WriteString(tt.content)
+			tee := &sseTeeWriter{
+				dst:      io.Discard,
+				buf:      &captureBuf,
+				maxBytes: 1024,
+			}
+
+			key := "test-key-" + tt.name
+			before := gw.ResponseCache.Len()
+			storeStreamCache(gw, key, &captureBuf, tee, nil, context.Background())
+			after := gw.ResponseCache.Len()
+
+			if tt.want && after <= before {
+				t.Error("expected cache to be stored (len increased)")
+			}
+			if !tt.want && after > before {
+				t.Error("expected cache NOT to be stored (len should not increase)")
+			}
+		})
+	}
+}

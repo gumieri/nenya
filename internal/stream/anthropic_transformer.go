@@ -364,6 +364,8 @@ func mapStopReason(reason string) string {
 		return "tool_calls"
 	case "max_tokens":
 		return "length"
+	case "refusal":
+		return "content_filter"
 	default:
 		slog.Debug("Unknown Anthropic stop_reason, defaulting to 'stop'", "reason", reason)
 		return "stop"

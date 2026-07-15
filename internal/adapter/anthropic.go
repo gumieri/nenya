@@ -951,6 +951,8 @@ func (a *AnthropicAdapter) processStopReason(anthropic, choice map[string]interf
 		choice["finish_reason"] = "tool_calls"
 	case "max_tokens":
 		choice["finish_reason"] = "length"
+	case "refusal":
+		choice["finish_reason"] = "content_filter"
 	default:
 		slog.Debug("Unknown Anthropic stop_reason, defaulting to 'stop'", "reason", stopReason)
 		choice["finish_reason"] = "stop"

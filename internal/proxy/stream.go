@@ -688,13 +688,22 @@ func storeStreamCache(gw *gateway.NenyaGateway, cacheKey string, captureBuf *byt
 		return
 	}
 
+	captured := captureBuf.Bytes()
+
+	// Skip caching for refusal responses. The check is a simple substring match for performance.
+	// False positives are acceptable (conservative cache miss) and extremely unlikely in practice:
+	// "refusal" and "content_filter" are technical field values, not conversational content.
+	if bytes.Contains(captured, []byte("refusal")) || bytes.Contains(captured, []byte("content_filter")) {
+		return
+	}
+
 	var embedding []float32
 	if gw.Config.ResponseCache.EnableSemantic && payload != nil {
 		embedding = computeEmbedding(gw, payload, reqCtx)
 	}
 
-	gw.ResponseCache.Store(cacheKey, captureBuf.Bytes(), embedding)
-	gw.Logger.Debug("response cache stored", "size", captureBuf.Len(), "has_embedding", embedding != nil)
+	gw.ResponseCache.Store(cacheKey, captured, embedding)
+	gw.Logger.Debug("response cache stored", "size", len(captured), "has_embedding", embedding != nil)
 }
 
 func computeEmbedding(gw *gateway.NenyaGateway, payload map[string]any, reqCtx context.Context) []float32 {

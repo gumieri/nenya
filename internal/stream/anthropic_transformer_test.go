@@ -330,6 +330,7 @@ func TestAnthropicTransformer_StopReasons(t *testing.T) {
 		{name: "end_turn", stopReason: "end_turn", wantFinish: "stop"},
 		{name: "tool_use", stopReason: "tool_use", wantFinish: "tool_calls"},
 		{name: "max_tokens", stopReason: "max_tokens", wantFinish: "length"},
+		{name: "refusal", stopReason: "refusal", wantFinish: "content_filter"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
