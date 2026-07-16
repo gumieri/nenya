@@ -32,7 +32,7 @@ func (p *Proxy) authorizeResponsesAgent(gw *gateway.NenyaGateway, w http.Respons
 
 	if modelName != "" && apiKey != nil && !auth.AuthorizeAgent(apiKey, modelName) {
 		gw.Metrics.IncAuthDenials(apiKey.Name, "agent")
-		p.logAuthDenial(gw, apiKey, fmt.Sprintf("agent %s", modelName), r)
+		p.logAuthDenial(gw, apiKey, "agent "+modelName, r)
 		return "", &httpError{http.StatusForbidden, "Forbidden"}
 	}
 	return modelName, nil
@@ -89,26 +89,27 @@ func (p *Proxy) handleResponses(gw *gateway.NenyaGateway, w http.ResponseWriter,
 
 	ctxLogger := gw.Logger.With("operation", "responses", "provider", provider.Name, "api_key", keyRef)
 
-	var resp *http.Response
-	err := util.DoWithRetry(ctx, maxAttempts, func() error {
+	resp, err := util.DoWithRetryResp(ctx, maxAttempts, func() (*http.Response, error) {
 		req, reqErr := p.buildUpstreamRequest(gw, ctx, r.Method, targetURL, bodyBytes, provider.Name, responsesModel, "", r.Header)
 		if reqErr != nil {
-			return reqErr
+			return nil, reqErr
 		}
 		if len(bodyBytes) > 0 {
 			req.Header.Set("Content-Type", "application/json")
 		}
 
-		var fetchErr error
-		resp, fetchErr = gw.Client.Do(req)
+		httpResp, fetchErr := gw.Client.Do(req)
 		if fetchErr != nil {
-			return fetchErr
+			if httpResp != nil {
+				_ = httpResp.Body.Close()
+			}
+			return nil, fetchErr
 		}
-		if resp.StatusCode >= 500 {
-			_ = resp.Body.Close()
-			return fmt.Errorf("upstream error: %d", resp.StatusCode)
+		if httpResp.StatusCode >= 500 {
+			_ = httpResp.Body.Close()
+			return nil, fmt.Errorf("upstream error: %d", httpResp.StatusCode)
 		}
-		return nil
+		return httpResp, nil
 	})
 
 	if err != nil {

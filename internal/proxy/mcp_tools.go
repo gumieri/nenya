@@ -401,7 +401,7 @@ func executeMCPCalls(ctx context.Context, calls []mcpToolCall, gw *gateway.Nenya
 			if !ok {
 				ctxLogger.Warn("MCP tool call failed: unknown tool", "tool", c.Name)
 				results[idx] = &mcp.CallToolResult{
-					Content: []mcp.ContentBlock{{Type: "text", Text: fmt.Sprintf("unknown MCP tool: %s", c.Name)}},
+					Content: []mcp.ContentBlock{{Type: "text", Text: "unknown MCP tool: " + c.Name}},
 					IsError: true,
 				}
 				gw.Metrics.RecordMCPToolCall("unknown", c.Name, agentName, time.Since(start), fmt.Errorf("unknown tool"))
@@ -417,7 +417,7 @@ func executeMCPCalls(ctx context.Context, calls []mcpToolCall, gw *gateway.Nenya
 			if client == nil {
 				ctxLogger.Warn("MCP tool call failed: server not available")
 				results[idx] = &mcp.CallToolResult{
-					Content: []mcp.ContentBlock{{Type: "text", Text: fmt.Sprintf("MCP server not available: %s", route.ServerName)}},
+					Content: []mcp.ContentBlock{{Type: "text", Text: "MCP server not available: " + route.ServerName}},
 					IsError: true,
 				}
 				gw.Metrics.RecordMCPToolCall(route.ServerName, c.Name, agentName, time.Since(start), fmt.Errorf("server not available"))
@@ -480,7 +480,7 @@ func appendMCPResults(payload map[string]any, calls []mcpToolCall, results []*mc
 		result := results[i]
 		content := result.Text()
 		if result.IsError {
-			content = fmt.Sprintf("[MCP Error] %s", content)
+			content = "[MCP Error] " + content
 		}
 
 		toolResults = append(toolResults, map[string]any{

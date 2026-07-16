@@ -1,6 +1,7 @@
 package discovery
 
 import (
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -49,7 +50,7 @@ func (m *ModelMetadata) Validate() error {
 		return fmt.Errorf("scoreBonus out of range [%f, %f]: %f", minScoreBonus, maxScoreBonus, m.ScoreBonus)
 	}
 	if m.Family != "" && len(strings.TrimSpace(m.Family)) == 0 {
-		return fmt.Errorf("family must be non-empty when set")
+		return errors.New("family must be non-empty when set")
 	}
 	return nil
 }

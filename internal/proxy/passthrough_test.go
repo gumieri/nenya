@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/nenya/config"
 	"github.com/nenya/internal/gateway"
@@ -151,7 +152,7 @@ func TestHandlePassthrough(t *testing.T) {
 			if tt.upstreamStatus != 0 {
 				upstreamHandler = func(w http.ResponseWriter, r *http.Request) {
 					auth := r.Header.Get("Authorization")
-					apiKey := r.Header.Get("x-api-key")
+					apiKey := r.Header.Get("X-Api-Key")
 					if tt.authStyle == "bearer" && auth != "Bearer "+tt.providerKey {
 						w.WriteHeader(http.StatusUnauthorized)
 						return
@@ -214,7 +215,7 @@ func TestHandlePassthrough(t *testing.T) {
 			}
 
 			if tt.name == "rate limit exceeded" {
-				for i := 0; i < 15; i++ {
+				for range 15 {
 					gw.RateLimiter.Check(tt.providerURL, 0)
 				}
 			}
@@ -290,7 +291,7 @@ func TestPipeSSE(t *testing.T) {
 			src := strings.NewReader(tt.input)
 			w := httptest.NewRecorder()
 
-			proxy.pipeSSE(context.Background(), logger, src, w)
+			proxy.pipeSSE(context.Background(), logger, src, w, 120*time.Second)
 
 			resp := w.Result()
 			defer func() { _ = resp.Body.Close() }()
@@ -300,6 +301,25 @@ func TestPipeSSE(t *testing.T) {
 				t.Errorf("expected %q, got %q", tt.expected, string(body))
 			}
 		})
+	}
+}
+
+func TestPipeSSE_StallTimeoutZero(t *testing.T) {
+	proxy := &Proxy{}
+	logger := infra.SetupLogger(false)
+
+	input := "data: chunk1\n\ndata: chunk2\n\n"
+	src := strings.NewReader(input)
+	w := httptest.NewRecorder()
+
+	proxy.pipeSSE(context.Background(), logger, src, w, 0)
+
+	resp := w.Result()
+	defer func() { _ = resp.Body.Close() }()
+
+	body, _ := io.ReadAll(resp.Body)
+	if string(body) != input {
+		t.Errorf("expected %q, got %q", input, string(body))
 	}
 }
 

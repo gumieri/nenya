@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strconv"
 
 	"github.com/nenya/internal/infra"
 	"github.com/nenya/internal/stream"
@@ -83,7 +84,7 @@ func (t *OllamaTransformer) TransformSSEChunk(ctx context.Context, data []byte) 
 	tcID := fmt.Sprintf("call_%d", t.callIdx)
 
 	openaiChunk := map[string]any{
-		"id":      "ollama-" + fmt.Sprintf("%d", t.idCounter),
+		"id":      "ollama-" + strconv.Itoa(t.idCounter),
 		"object":  "chat.completion.chunk",
 		"created": 0,
 		"model":   chunk["model"],

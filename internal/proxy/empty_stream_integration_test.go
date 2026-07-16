@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -167,11 +168,11 @@ func TestHandleChatCompletions_EmptyUpstreamStream_RecordsMetric(t *testing.T) {
 }
 
 func TestHandleChatCompletions_EmptyUpstreamStream_FallbackToNextTarget(t *testing.T) {
-	var callCount int
+	var callCount atomic.Int32
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		callCount++
+		n := callCount.Add(1)
 		w.Header().Set("Content-Type", "text/event-stream")
-		if callCount == 1 {
+		if n == 1 {
 			w.WriteHeader(http.StatusOK)
 			return
 		}
@@ -222,8 +223,8 @@ func TestHandleChatCompletions_EmptyUpstreamStream_FallbackToNextTarget(t *testi
 	if !strings.Contains(respStr, "hello") {
 		t.Errorf("expected fallback response content 'hello', got: %s", respStr)
 	}
-	if callCount != 2 {
-		t.Errorf("expected 2 upstream calls (empty + fallback), got %d", callCount)
+	if callCount.Load() != 2 {
+		t.Errorf("expected 2 upstream calls (empty + fallback), got %d", callCount.Load())
 	}
 }
 
@@ -232,16 +233,16 @@ func TestHandleChatCompletions_StalledStream_FallbackToNextTarget(t *testing.T) 
 		t.Skip("skipping slow test in short mode")
 	}
 
-	var callCount int
+	var callCount atomic.Int32
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		callCount++
+		n := callCount.Add(1)
 		w.Header().Set("Content-Type", "text/event-stream")
-		if callCount == 1 {
+		if n == 1 {
 			w.WriteHeader(http.StatusOK)
 			w.(http.Flusher).Flush()
 			_, _ = w.Write([]byte("data: {\"choices\":[{\"delta\":{\"content\":\"initial\"}}]}\n\n"))
 			w.(http.Flusher).Flush()
-			time.Sleep(70 * time.Second)
+			time.Sleep(5 * time.Second)
 			return
 		}
 		w.WriteHeader(http.StatusOK)
@@ -255,6 +256,7 @@ func TestHandleChatCompletions_StalledStream_FallbackToNextTarget(t *testing.T) 
 	cfg.Governance.RatelimitMaxRPM = config.PtrTo(60)
 	cfg.Governance.RatelimitMaxTPM = config.PtrTo(100000)
 	cfg.Governance.EmptyStreamAsError = config.PtrTo(true)
+	cfg.Governance.StreamIdleTimeoutSeconds = config.PtrTo(2)
 	cfg.Bouncer.Enabled = config.PtrTo(false)
 	cfg.Providers = map[string]config.ProviderConfig{
 		"test-provider": {
@@ -290,7 +292,7 @@ func TestHandleChatCompletions_StalledStream_FallbackToNextTarget(t *testing.T) 
 
 	select {
 	case <-done:
-	case <-time.After(80 * time.Second):
+	case <-time.After(20 * time.Second):
 		t.Fatal("test timed out waiting for response")
 	}
 
@@ -301,8 +303,8 @@ func TestHandleChatCompletions_StalledStream_FallbackToNextTarget(t *testing.T) 
 	if !strings.Contains(respStr, "hello") {
 		t.Errorf("expected fallback response content 'hello', got: %s", respStr)
 	}
-	if callCount != 2 {
-		t.Errorf("expected 2 upstream calls (stalled + fallback), got %d", callCount)
+	if callCount.Load() != 2 {
+		t.Errorf("expected 2 upstream calls (stalled + fallback), got %d", callCount.Load())
 	}
 
 	var out strings.Builder

@@ -59,16 +59,17 @@ func main() {
 
 	if validateOnly {
 		validateCtx, validateCancel := context.WithTimeout(context.Background(), 60*time.Second)
-		defer validateCancel()
 		if err := config.ValidateConfiguration(validateCtx, cfg, secrets, logger); err != nil {
+			validateCancel()
 			logger.Error("configuration validation failed", "err", err)
 			os.Exit(1)
 		}
+		validateCancel()
 		logger.Info("configuration validation passed")
 		return
 	}
 
-	run(logger, cfg, secrets, paths)
+	os.Exit(run(logger, cfg, secrets, paths))
 }
 
 func parseFlags() (configPaths, bool, bool, bool) {
@@ -169,7 +170,7 @@ func applyListenAddrFromEnv(cfg *config.Config, logger *slog.Logger) {
 	cfg.Server.ListenAddr = addr
 }
 
-func run(logger *slog.Logger, cfg *config.Config, secrets *config.SecretsConfig, paths configPaths) {
+func run(logger *slog.Logger, cfg *config.Config, secrets *config.SecretsConfig, paths configPaths) int {
 	startupCtx, startupCancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer startupCancel()
 
@@ -193,7 +194,6 @@ func run(logger *slog.Logger, cfg *config.Config, secrets *config.SecretsConfig,
 	gw.InterceptorChain = buildInterceptorChain(gw, cfg, logger)
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
-	defer stop()
 
 	p := &proxy.Proxy{ShutdownCtx: ctx}
 	p.StoreGateway(gw)
@@ -205,9 +205,12 @@ func run(logger *slog.Logger, cfg *config.Config, secrets *config.SecretsConfig,
 
 	listener, addr, err := systemdListener(cfg.Server.ListenAddr)
 	if err != nil {
+		stop()
 		logger.Error("failed to create listener", "err", err)
-		os.Exit(1)
+		return 1
 	}
+
+	defer stop()
 
 	logger.Info("nenya ai gateway listening", "addr", addr, "socket_activation", listener != nil)
 	logConfiguredAgents(logger, cfg)
@@ -215,7 +218,7 @@ func run(logger *slog.Logger, cfg *config.Config, secrets *config.SecretsConfig,
 	serverErr := make(chan error, 1)
 	go serveHTTP(srv, listener, serverErr)
 
-	eventLoop(logger, paths, p, ctx, sighup, serverErr, srv)
+	return eventLoop(logger, paths, p, ctx, sighup, serverErr, srv)
 }
 
 func buildInterceptorChain(gw *gateway.NenyaGateway, cfg *config.Config, logger *slog.Logger) *pipeline.InterceptorChain {
@@ -277,12 +280,12 @@ func serveHTTP(srv *http.Server, listener net.Listener, serverErr chan error) {
 	close(serverErr)
 }
 
-func eventLoop(logger *slog.Logger, paths configPaths, p *proxy.Proxy, ctx context.Context, sighup chan os.Signal, serverErr chan error, srv *http.Server) {
+func eventLoop(logger *slog.Logger, paths configPaths, p *proxy.Proxy, ctx context.Context, sighup chan os.Signal, serverErr chan error, srv *http.Server) int {
 	for {
 		select {
 		case err := <-serverErr:
 			logger.Error("server failed", "err", err)
-			os.Exit(1)
+			return 1
 		case <-sighup:
 			logger.Info("SIGHUP received, reloading configuration...")
 			reloadConfig(ctx, p, paths, logger)
@@ -290,15 +293,15 @@ func eventLoop(logger *slog.Logger, paths configPaths, p *proxy.Proxy, ctx conte
 			logger.Info("shutting down gracefully...")
 
 			shutdownCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-			defer cancel()
 
 			p.Shutdown.Store(true)
 
 			if err := srv.Shutdown(shutdownCtx); err != nil {
 				logger.Error("HTTP server shutdown failed", "err", err)
 			}
+			cancel()
 			logger.Info("server stopped")
-			return
+			return 0
 		}
 	}
 }

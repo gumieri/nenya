@@ -14,7 +14,7 @@ func BenchmarkStallReader_Read_Pooled(b *testing.B) {
 	chunk := strings.Repeat("x", 32*1024) // 32KB chunk
 
 	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+	for range b.N {
 		src := strings.NewReader(chunk)
 		sr := newStallReader(ctx, src, 5*60)
 

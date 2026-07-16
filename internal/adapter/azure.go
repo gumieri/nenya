@@ -30,7 +30,7 @@ func (a *AzureAdapter) InjectAuth(req *http.Request, apiKey string) error {
 	if err := verifyAPIKey(apiKey, "azure"); err != nil {
 		return err
 	}
-	req.Header.Set("api-key", apiKey)
+	req.Header.Set("Api-Key", apiKey)
 	return nil
 }
 

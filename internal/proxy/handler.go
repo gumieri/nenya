@@ -335,7 +335,7 @@ func (p *Proxy) authenticateAndAuthorize(r *http.Request, w http.ResponseWriter)
 		agentName := extractAgentName(r)
 		if agentName != "" && !auth.AuthorizeAgent(apiKey, agentName) {
 			gw.Metrics.IncAuthDenials(apiKey.Name, "agent")
-			p.logAuthDenial(gw, apiKey, fmt.Sprintf("agent %s", agentName), r)
+			p.logAuthDenial(gw, apiKey, "agent "+agentName, r)
 			writeStructuredError(w, http.StatusForbidden, infra.ErrorKindAuthFailed, "Forbidden")
 			return nil, false
 		}
@@ -351,7 +351,7 @@ func (p *Proxy) authenticateAndAuthorize(r *http.Request, w http.ResponseWriter)
 func (p *Proxy) resolveAuthenticatedKey(gw *gateway.NenyaGateway, clientToken string) (*config.ApiKey, bool) {
 	// Primary token check
 	if gw.Secrets.ClientToken != "" {
-		tokenOK := false
+		var tokenOK bool
 		if gw.SecureMem != nil {
 			tokenOK = gw.SecureMem.CompareToken(gw.ClientTokenRef, clientToken)
 		} else {
@@ -676,18 +676,19 @@ func (p *Proxy) checkOllamaProviderHealth(ctx context.Context, gw *gateway.Nenya
 		return false
 	}
 
-	var resp *http.Response
-	err = util.DoWithRetry(healthCtx, 2, func() error {
-		var fetchErr error
-		resp, fetchErr = gw.OllamaClient.Do(req)
+	resp, err := util.DoWithRetryResp(healthCtx, 2, func() (*http.Response, error) {
+		r, fetchErr := gw.OllamaClient.Do(req)
 		if fetchErr != nil {
-			return fetchErr
+			if r != nil {
+				_ = r.Body.Close()
+			}
+			return nil, fetchErr
 		}
-		if resp.StatusCode >= 500 {
-			_ = resp.Body.Close()
-			return fmt.Errorf("upstream error: %d", resp.StatusCode)
+		if r.StatusCode >= 500 {
+			_ = r.Body.Close()
+			return nil, fmt.Errorf("upstream error: %d", r.StatusCode)
 		}
-		return nil
+		return r, nil
 	})
 	if err != nil {
 		return false

@@ -246,7 +246,11 @@ func TestStallReader_StallsAfterTimeout(t *testing.T) {
 	src := &testutil.BlockingReader{Closed: make(chan struct{})}
 
 	sr := newStallReader(context.Background(), src, 30*time.Millisecond)
-	defer sr.Stop()
+	defer func() {
+		sr.Stop()
+		_, _ = sr.DrainPending(time.Second)
+		src.Close()
+	}()
 
 	time.Sleep(50 * time.Millisecond)
 
@@ -258,8 +262,6 @@ func TestStallReader_StallsAfterTimeout(t *testing.T) {
 	if n != 0 {
 		t.Fatalf("expected 0 bytes, got %d", n)
 	}
-
-	_ = src.Close()
 }
 
 func TestStallReader_ResetOnRead(t *testing.T) {
@@ -342,6 +344,11 @@ func TestStallReader_StopPreventsStall(t *testing.T) {
 	src := &testutil.BlockingReader{Closed: make(chan struct{})}
 
 	sr := newStallReader(context.Background(), src, 30*time.Millisecond)
+	defer func() {
+		sr.Stop()
+		_, _ = sr.DrainPending(time.Second)
+		src.Close()
+	}()
 	sr.Stop()
 
 	time.Sleep(50 * time.Millisecond)
@@ -354,8 +361,6 @@ func TestStallReader_StopPreventsStall(t *testing.T) {
 	if n != 0 {
 		t.Fatalf("expected 0 bytes, got %d", n)
 	}
-
-	_ = src.Close()
 }
 
 func TestWriteBlockedSSE_MultipleChunks(t *testing.T) {
@@ -367,22 +372,6 @@ func TestWriteBlockedSSE_MultipleChunks(t *testing.T) {
 	count := strings.Count(rec.Body.String(), "data: ")
 	if count != 2 {
 		t.Fatalf("expected 2 SSE data lines, got %d", count)
-	}
-}
-
-func TestWriteSSEDONE(t *testing.T) {
-	p := &Proxy{}
-	p.StoreGateway(newStreamTestGateway())
-	rec := httptest.NewRecorder()
-	p.writeSSEDONE(p.Gateway(), rec)
-
-	body := rec.Body.String()
-	if !strings.Contains(body, "data: [DONE]\n\n") {
-		t.Fatalf("expected [DONE] event, got: %q", body)
-	}
-
-	if !rec.Flushed {
-		t.Fatal("response should be flushed")
 	}
 }
 
@@ -410,7 +399,11 @@ func TestStallReader_ConcurrentReadAndStall(t *testing.T) {
 	src := &testutil.BlockingReader{Closed: make(chan struct{})}
 
 	sr := newStallReader(context.Background(), src, 20*time.Millisecond)
-	defer sr.Stop()
+	defer func() {
+		sr.Stop()
+		_, _ = sr.DrainPending(time.Second)
+		src.Close()
+	}()
 
 	doneCh := make(chan error, 1)
 	go func() {
@@ -427,8 +420,88 @@ func TestStallReader_ConcurrentReadAndStall(t *testing.T) {
 	case <-time.After(200 * time.Millisecond):
 		t.Fatal("timeout waiting for stall")
 	}
+}
 
-	_ = src.Close()
+// TestStallReader_DiscardsDataOnStallRace tests Fix 2: when the stall timer
+// fires AND data arrives simultaneously, the stallReader must return 0 bytes
+// + errStreamStalled, discarding the partial data chunk to prevent emitting
+// truncated JSON to the client.
+func TestStallReader_DiscardsDataOnStallRace(t *testing.T) {
+	src := &testutil.BlockingReader{Closed: make(chan struct{})}
+	sr := newStallReader(context.Background(), src, 30*time.Millisecond)
+	defer func() {
+		sr.Stop()
+		_, _ = sr.DrainPending(time.Second)
+		src.Close()
+	}()
+
+	time.Sleep(50 * time.Millisecond)
+
+	sr.mu.Lock()
+	sr.stalled = true
+	sr.mu.Unlock()
+
+	sr.ch <- readResult{data: []byte("partial-truncated-json"), err: nil, poolBufPtr: nil}
+
+	buf := make([]byte, 1024)
+	n, err := sr.Read(buf)
+	if !errors.Is(err, errStreamStalled) {
+		t.Fatalf("expected errStreamStalled, got: %v", err)
+	}
+	if n != 0 {
+		t.Fatalf("expected 0 bytes (partial data discarded), got %d bytes: %q", n, buf[:n])
+	}
+}
+
+// TestStallReader_UsesCustomTimeout verifies the stall reader stores and
+// resets the timer with the configured timeout, not a hardcoded constant.
+func TestStallReader_UsesCustomTimeout(t *testing.T) {
+	src := strings.NewReader("chunk1chunk2")
+	sr := newStallReader(context.Background(), src, 500*time.Millisecond)
+	defer sr.Stop()
+
+	if sr.timeout != 500*time.Millisecond {
+		t.Fatalf("expected stored timeout 500ms, got %v", sr.timeout)
+	}
+
+	buf := make([]byte, 6)
+	n, err := sr.Read(buf)
+	if err != nil || n != 6 {
+		t.Fatalf("first read failed: n=%d err=%v", n, err)
+	}
+
+	// Timer should be reset to 500ms, not the old 60s default.
+	// We can't easily assert the timer value, but we verify the field is correct.
+	if sr.timeout != 500*time.Millisecond {
+		t.Fatalf("timeout changed after read: got %v", sr.timeout)
+	}
+}
+
+func TestWriteStallSSE(t *testing.T) {
+	p := &Proxy{}
+	p.StoreGateway(newStreamTestGateway())
+	rec := httptest.NewRecorder()
+	p.writeStallSSE(p.Gateway(), rec)
+
+	body := rec.Body.String()
+	if !strings.Contains(body, `"type":"gateway_error"`) {
+		t.Fatalf("expected gateway_error type in response, got: %q", body)
+	}
+	if !strings.Contains(body, `"message":"upstream stream stalled`) {
+		t.Fatalf("expected stall message in response, got: %q", body)
+	}
+	if !strings.Contains(body, "data: [DONE]\n\n") {
+		t.Fatalf("expected [DONE] event, got: %q", body)
+	}
+
+	if !rec.Flushed {
+		t.Fatal("response should be flushed")
+	}
+
+	dataEvents := strings.Count(body, "data: ")
+	if dataEvents != 2 {
+		t.Fatalf("expected 2 data events (error + done), got %d", dataEvents)
+	}
 }
 
 // --- streamingBufPool tests ---

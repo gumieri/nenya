@@ -1,7 +1,6 @@
 package mcp
 
 import (
-	"fmt"
 	"strings"
 	"sync"
 )
@@ -98,7 +97,7 @@ func ParseMCPCall(openaiToolName string) (serverName string, mcpToolName string,
 func BuildToolResultMessage(toolCallID string, result *CallToolResult, isError bool) map[string]any {
 	content := result.Text()
 	if isError || result.IsError {
-		content = fmt.Sprintf("[MCP Error] %s", content)
+		content = "[MCP Error] " + content
 	}
 
 	return map[string]any{

@@ -30,7 +30,7 @@ func TestLoadPromptFile_DefaultPrompt(t *testing.T) {
 func TestLoadPromptFile_FromFile(t *testing.T) {
 	dir := t.TempDir()
 	promptPath := filepath.Join(dir, "prompt.txt")
-	if err := os.WriteFile(promptPath, []byte("file prompt content"), 0644); err != nil {
+	if err := os.WriteFile(promptPath, []byte("file prompt content"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("CONFIG_DIR", dir)
@@ -121,7 +121,7 @@ func TestTryLoadCredFile_NotFound(t *testing.T) {
 
 func TestTryLoadCredFile_InvalidJSON(t *testing.T) {
 	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, "secrets"), []byte("{invalid json"), 0644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "secrets"), []byte("{invalid json"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("CREDENTIALS_DIRECTORY", dir)
@@ -135,7 +135,7 @@ func TestTryLoadCredFile_InvalidJSON(t *testing.T) {
 func TestTryLoadCredFile_Valid(t *testing.T) {
 	dir := t.TempDir()
 	secretContent := `{"client_token": "test-token-1234567890", "provider_keys": {"openai": "sk-key"}}`
-	if err := os.WriteFile(filepath.Join(dir, "secrets"), []byte(secretContent), 0644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "secrets"), []byte(secretContent), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("CREDENTIALS_DIRECTORY", dir)
@@ -158,11 +158,11 @@ func TestTryLoadCredFile_Valid(t *testing.T) {
 func TestLoadSecretsFromPath_Directory(t *testing.T) {
 	dir := t.TempDir()
 	secretsDir := filepath.Join(dir, "secrets.d")
-	if err := os.MkdirAll(secretsDir, 0755); err != nil {
+	if err := os.MkdirAll(secretsDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
 	secretContent := `{"client_token": "test-token-1234567890"}`
-	if err := os.WriteFile(filepath.Join(secretsDir, "secrets.json"), []byte(secretContent), 0644); err != nil {
+	if err := os.WriteFile(filepath.Join(secretsDir, "secrets.json"), []byte(secretContent), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -179,7 +179,7 @@ func TestLoadSecretsFromPath_SingleFile(t *testing.T) {
 	dir := t.TempDir()
 	secretFile := filepath.Join(dir, "secrets.json")
 	secretContent := `{"client_token": "test-token-1234567890", "provider_keys": {"openai": "sk-key"}}`
-	if err := os.WriteFile(secretFile, []byte(secretContent), 0644); err != nil {
+	if err := os.WriteFile(secretFile, []byte(secretContent), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -205,14 +205,14 @@ func TestLoadSecretsFromPath_NotFound(t *testing.T) {
 func TestLoadSecretsFromDir_MultipleFiles(t *testing.T) {
 	dir := t.TempDir()
 	secretsDir := filepath.Join(dir, "secrets.d")
-	if err := os.MkdirAll(secretsDir, 0755); err != nil {
+	if err := os.MkdirAll(secretsDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
 
-	if err := os.WriteFile(filepath.Join(secretsDir, "01-client.json"), []byte(`{"client_token": "token-1"}`), 0644); err != nil {
+	if err := os.WriteFile(filepath.Join(secretsDir, "01-client.json"), []byte(`{"client_token": "token-1"}`), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(secretsDir, "02-provider.json"), []byte(`{"provider_keys": {"openai": "sk-key"}}`), 0644); err != nil {
+	if err := os.WriteFile(filepath.Join(secretsDir, "02-provider.json"), []byte(`{"provider_keys": {"openai": "sk-key"}}`), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -231,14 +231,14 @@ func TestLoadSecretsFromDir_MultipleFiles(t *testing.T) {
 func TestLoadSecretsFromDir_IgnoresNonJSON(t *testing.T) {
 	dir := t.TempDir()
 	secretsDir := filepath.Join(dir, "secrets.d")
-	if err := os.MkdirAll(secretsDir, 0755); err != nil {
+	if err := os.MkdirAll(secretsDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
 
-	if err := os.WriteFile(filepath.Join(secretsDir, "secrets.json"), []byte(`{"client_token": "token-1"}`), 0644); err != nil {
+	if err := os.WriteFile(filepath.Join(secretsDir, "secrets.json"), []byte(`{"client_token": "token-1"}`), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(secretsDir, "README.txt"), []byte("readme"), 0644); err != nil {
+	if err := os.WriteFile(filepath.Join(secretsDir, "README.txt"), []byte("readme"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -484,14 +484,14 @@ func TestLoadFromDir_NoConfig(t *testing.T) {
 func TestLoadFromDir_BothConfigAndConfigD(t *testing.T) {
 	dir := t.TempDir()
 	configPath := filepath.Join(dir, "config.json")
-	if err := os.WriteFile(configPath, []byte(`{"server": {"listen_addr": ":9090"}}`), 0644); err != nil {
+	if err := os.WriteFile(configPath, []byte(`{"server": {"listen_addr": ":9090"}}`), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	configDir := filepath.Join(dir, "config.d")
-	if err := os.MkdirAll(configDir, 0755); err != nil {
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(configDir, "01-server.json"), []byte(`{"server": {"listen_addr": ":9090", "log_level": "debug"}}`), 0644); err != nil {
+	if err := os.WriteFile(filepath.Join(configDir, "01-server.json"), []byte(`{"server": {"listen_addr": ":9090", "log_level": "debug"}}`), 0o644); err != nil {
 		t.Fatal(err)
 	}
 

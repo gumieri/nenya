@@ -284,3 +284,27 @@ func TestEffectiveUpstreamTimeout(t *testing.T) {
 	}
 }
 
+func TestEffectiveStreamIdleTimeout(t *testing.T) {
+	tests := []struct {
+		name            string
+		cfg             GovernanceConfig
+		expectedSeconds int
+	}{
+		{"not set defaults to 120s", GovernanceConfig{}, 120},
+		{"set to 0 returns 0 (disabled)", GovernanceConfig{StreamIdleTimeoutSeconds: PtrTo(0)}, 0},
+		{"set to 300 returns 300s", GovernanceConfig{StreamIdleTimeoutSeconds: PtrTo(300)}, 300},
+		{"set to negative returns 0 (disabled)", GovernanceConfig{StreamIdleTimeoutSeconds: PtrTo(-1)}, 0},
+		{"exactly 86400 passes through", GovernanceConfig{StreamIdleTimeoutSeconds: PtrTo(86400)}, 86400},
+		{"exceeds 24h capped to 86400", GovernanceConfig{StreamIdleTimeoutSeconds: PtrTo(86401)}, 86400},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := tt.cfg.EffectiveStreamIdleTimeout()
+			want := time.Duration(tt.expectedSeconds) * time.Second
+			if got != want {
+				t.Errorf("EffectiveStreamIdleTimeout() = %v, want %v", got, want)
+			}
+		})
+	}
+}
+

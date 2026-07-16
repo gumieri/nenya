@@ -76,7 +76,7 @@ func (a *BearerPlusGoogAuth) InjectAuth(req *http.Request, apiKey string) error 
 		return err
 	}
 	req.Header.Set("Authorization", "Bearer "+apiKey)
-	req.Header.Set("x-goog-api-key", apiKey)
+	req.Header.Set("X-Goog-Api-Key", apiKey)
 	return nil
 }
 

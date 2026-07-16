@@ -651,7 +651,7 @@ func TestIsRetryableStatus_ProviderOverridesGlobal(t *testing.T) {
 func BenchmarkParseRetryDelay_HeaderOnly(b *testing.B) {
 	h := http.Header{}
 	h.Set("Retry-After", "3")
-	for i := 0; i < b.N; i++ {
+	for range b.N {
 		parseRetryDelay(h, nil)
 	}
 }
@@ -662,21 +662,21 @@ func BenchmarkParseRetryDelay_RPCBody(b *testing.B) {
 			"details": [{"@type":"type.googleapis.com/google.rpc.RetryInfo","retryDelay":"2s"}]
 		}
 	}`)
-	for i := 0; i < b.N; i++ {
+	for range b.N {
 		parseRetryDelay(http.Header{}, body)
 	}
 }
 
 func BenchmarkIsRetryableClientError(b *testing.B) {
 	body := []byte(`{"error":"unavailable_model"}`)
-	for i := 0; i < b.N; i++ {
+	for range b.N {
 		isRetryableClientErrorForProvider(http.StatusBadRequest, body, "")
 	}
 }
 
 func BenchmarkParseQuotaExhaustion(b *testing.B) {
 	body := []byte(`{"error":"quota exceeded: per 86400s"}`)
-	for i := 0; i < b.N; i++ {
+	for range b.N {
 		parseQuotaExhaustion(body, slog.Default())
 	}
 }

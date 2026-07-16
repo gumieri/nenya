@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -60,34 +61,30 @@ func CallEngine(ctx context.Context, httpClient *http.Client, provider *config.P
 		maxRetries = util.DefaultMaxRetryAttempts()
 	}
 
-	var resp *http.Response
-	err = util.DoWithRetry(ctx, maxRetries, func() error {
+	resp, err := util.DoWithRetryResp(ctx, maxRetries, func() (*http.Response, error) {
 		req, reqErr := http.NewRequestWithContext(ctx, http.MethodPost, provider.URL, bytes.NewBuffer(encoded))
 		if reqErr != nil {
-			return reqErr
+			return nil, reqErr
 		}
 		req.Header.Set("Content-Type", "application/json")
 
 		if authErr := injectAPIKey(engine.Provider, req.Header); authErr != nil {
-			return fmt.Errorf("engine auth failed: %v", authErr)
+			return nil, fmt.Errorf("engine auth failed: %v", authErr)
 		}
 
-		var doErr error
-		resp, doErr = httpClient.Do(req)
+		r, doErr := httpClient.Do(req)
 		if doErr != nil {
-			return doErr
+			if r != nil {
+				_ = r.Body.Close()
+			}
+			return nil, doErr
 		}
-		if resp.StatusCode >= 400 && resp.StatusCode < 500 {
-			body, _ := io.ReadAll(io.LimitReader(resp.Body, MaxErrorBodyBytes))
-			_ = resp.Body.Close()
-			return fmt.Errorf("engine returned status %d: %s", resp.StatusCode, string(body))
+		if r.StatusCode >= 400 {
+			body, _ := io.ReadAll(io.LimitReader(r.Body, MaxErrorBodyBytes))
+			_ = r.Body.Close()
+			return nil, fmt.Errorf("engine returned status %d: %s", r.StatusCode, string(body))
 		}
-		if resp.StatusCode >= 500 {
-			body, _ := io.ReadAll(io.LimitReader(resp.Body, MaxErrorBodyBytes))
-			_ = resp.Body.Close()
-			return fmt.Errorf("engine returned status %d: %s", resp.StatusCode, string(body))
-		}
-		return nil
+		return r, nil
 	})
 	if err != nil {
 		return "", err
@@ -131,7 +128,7 @@ func extractTextFromParts(parts []interface{}) (string, bool) {
 func extractOllamaOutput(response map[string]interface{}) (string, error) {
 	output, ok := response["response"].(string)
 	if !ok {
-		return "", fmt.Errorf("engine response missing 'response' field")
+		return "", errors.New("engine response missing 'response' field")
 	}
 	return output, nil
 }
@@ -139,17 +136,17 @@ func extractOllamaOutput(response map[string]interface{}) (string, error) {
 func extractOpenAIOutput(response map[string]interface{}) (string, error) {
 	choices, ok := response["choices"].([]interface{})
 	if !ok || len(choices) == 0 {
-		return "", fmt.Errorf("openai response missing choices")
+		return "", errors.New("openai response missing choices")
 	}
 
 	choice, cok := choices[0].(map[string]interface{})
 	if !cok {
-		return "", fmt.Errorf("openai choice is not an object")
+		return "", errors.New("openai choice is not an object")
 	}
 
 	msg, mok := choice["message"].(map[string]interface{})
 	if !mok {
-		return "", fmt.Errorf("openai choice missing message")
+		return "", errors.New("openai choice missing message")
 	}
 
 	if contentStr, cok := msg["content"].(string); cok {
@@ -158,7 +155,7 @@ func extractOpenAIOutput(response map[string]interface{}) (string, error) {
 
 	parts, pok := msg["content"].([]interface{})
 	if !pok {
-		return "", fmt.Errorf("openai message missing content")
+		return "", errors.New("openai message missing content")
 	}
 
 	if text, found := extractTextFromParts(parts); found {
@@ -173,7 +170,7 @@ func CallEngineChain(ctx context.Context, httpClient, ollamaClient *http.Client,
 	injectAPIKey func(providerName string, headers http.Header) error,
 	caller, agentName, systemPrompt, prompt string) (string, error) {
 	if len(targets) == 0 {
-		return "", fmt.Errorf("engine chain: no targets available")
+		return "", errors.New("engine chain: no targets available")
 	}
 
 	var lastErr error

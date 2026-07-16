@@ -78,8 +78,8 @@ func (a *AnthropicAdapter) InjectAuth(req *http.Request, apiKey string) error {
 	if err := verifyAPIKey(apiKey, "anthropic"); err != nil {
 		return err
 	}
-	req.Header.Set("x-api-key", apiKey)
-	req.Header.Set("anthropic-version", a.version)
+	req.Header.Set("X-Api-Key", apiKey)
+	req.Header.Set("Anthropic-Version", a.version)
 	return nil
 }
 

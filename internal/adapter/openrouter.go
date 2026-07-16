@@ -30,7 +30,7 @@ func (a *OpenRouterAdapter) InjectAuth(req *http.Request, apiKey string) error {
 	if err := (&BearerAuth{}).InjectAuth(req, apiKey); err != nil {
 		return err
 	}
-	req.Header.Set("HTTP-Referer", "https://github.com/nenya-project/nenya")
+	req.Header.Set("Http-Referer", "https://github.com/nenya-project/nenya")
 	req.Header.Set("X-Title", "Nenya")
 	return nil
 }

@@ -9,6 +9,7 @@ package util
 import (
 	"context"
 	"math/rand"
+	"net/http"
 	"time"
 )
 
@@ -26,7 +27,7 @@ const (
 // simultaneously.
 func CalculateBackoff(attempt int) time.Duration {
 	delay := exponentialBackoffBase
-	for i := 0; i < attempt; i++ {
+	for range attempt {
 		delay *= 2
 		if delay >= exponentialBackoffMax {
 			delay = exponentialBackoffMax
@@ -56,7 +57,7 @@ func DoWithRetry(ctx context.Context, maxAttempts int, fn func() error) error {
 	}
 
 	var lastErr error
-	for attempt := 0; attempt < maxAttempts; attempt++ {
+	for attempt := range maxAttempts {
 		if err := fn(); err != nil {
 			lastErr = err
 			if attempt == maxAttempts-1 {
@@ -80,4 +81,42 @@ func DoWithRetry(ctx context.Context, maxAttempts int, fn func() error) error {
 // DefaultMaxRetryAttempts returns the default maximum retry attempts.
 func DefaultMaxRetryAttempts() int {
 	return defaultMaxRetryAttempts
+}
+
+// DoWithRetryResp is like DoWithRetry but for HTTP request functions that
+// return (*http.Response, error). The fn callback MUST close the response body
+// on error paths (network error, 5xx) and return the response on success.
+// The returned response's body is NOT closed — the caller must close it.
+//
+// This satisfies the bodyclose linter because the callback returns the
+// response on success paths, showing ownership is transferred.
+func DoWithRetryResp(ctx context.Context, maxAttempts int, fn func() (*http.Response, error)) (*http.Response, error) {
+	if maxAttempts <= 1 {
+		return fn()
+	}
+
+	var lastErr error
+	for attempt := range maxAttempts {
+		resp, err := fn()
+		if err != nil {
+			if resp != nil {
+				_ = resp.Body.Close()
+			}
+			lastErr = err
+			if attempt == maxAttempts-1 {
+				return nil, lastErr
+			}
+			backoff := CalculateBackoff(attempt)
+			timer := time.NewTimer(backoff)
+			select {
+			case <-timer.C:
+			case <-ctx.Done():
+				timer.Stop()
+				return nil, ctx.Err()
+			}
+			continue
+		}
+		return resp, nil
+	}
+	return nil, lastErr
 }

@@ -232,7 +232,7 @@ func TestShouldSkipRedaction(t *testing.T) {
 		want bool
 	}{
 		{
-			name: "enabled skip on system system role",
+			name: "enabled skip on system role",
 			msg:  map[string]interface{}{"role": "system", "content": "instructions"},
 			cfg:  config.PrefixCacheConfig{Enabled: true, SkipRedactionOnSystem: config.PtrTo(true)},
 			want: true,

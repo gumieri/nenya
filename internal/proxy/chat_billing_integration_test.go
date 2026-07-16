@@ -187,7 +187,7 @@ func TestIntegration_ConcurrentStressAndExhaustion(t *testing.T) {
 
 	errCh := make(chan error, numGoroutines)
 
-	for i := 0; i < numGoroutines; i++ {
+	for i := range numGoroutines {
 		go func(id int) {
 			account := "account1"
 			if id%3 == 0 {
@@ -208,7 +208,7 @@ func TestIntegration_ConcurrentStressAndExhaustion(t *testing.T) {
 		}(i)
 	}
 
-	for i := 0; i < numGoroutines; i++ {
+	for i := range numGoroutines {
 		if err := <-errCh; err != nil {
 			t.Errorf("Goroutine %d failed: %v", i, err)
 		}

@@ -275,32 +275,29 @@ func (df *DiscoveryFetcher) fetchWithRetry(req *http.Request, provider *config.P
 		maxAttempts = provider.MaxRetryAttempts
 	}
 
-	var resp *http.Response
-	attempt := 0
 	providerName := provider.Name
-	err := util.DoWithRetry(ctx, maxAttempts, func() error {
+	attempt := 0
+	return util.DoWithRetryResp(ctx, maxAttempts, func() (*http.Response, error) {
 		attempt++
-		var fetchErr error
-		resp, fetchErr = df.client.Do(req)
+		resp, fetchErr := df.client.Do(req)
 		if fetchErr != nil {
+			if resp != nil {
+				_ = resp.Body.Close()
+			}
 			if attempt > 1 && df.metrics != nil {
 				df.metrics.RecordRetry("model_discovery", providerName, fetchErr)
 			}
-			return fetchErr
+			return nil, fetchErr
 		}
 		if resp.StatusCode >= 500 {
 			_ = resp.Body.Close()
 			if attempt > 1 && df.metrics != nil {
 				df.metrics.RecordRetry("model_discovery", providerName, fmt.Errorf("upstream error: %d", resp.StatusCode))
 			}
-			return fmt.Errorf("upstream error: %d", resp.StatusCode)
+			return nil, fmt.Errorf("upstream error: %d", resp.StatusCode)
 		}
-		return nil
+		return resp, nil
 	})
-	if err != nil {
-		return nil, err
-	}
-	return resp, nil
 }
 
 func injectAuth(req *http.Request, providerName string, provider *config.Provider, df *DiscoveryFetcher) error {
@@ -332,7 +329,7 @@ func enrichSingleOllamaModel(ctx context.Context, modelName, showEndpoint string
 	body, _ := json.Marshal(map[string]string{"name": modelName})
 	showCtx, cancel := context.WithTimeout(ctx, ollamaShowTimeout)
 	defer cancel()
-	req, reqErr := http.NewRequestWithContext(showCtx, "POST", showEndpoint, bytes.NewReader(body))
+	req, reqErr := http.NewRequestWithContext(showCtx, http.MethodPost, showEndpoint, bytes.NewReader(body))
 	if reqErr != nil {
 		res.err = reqErr
 		return res

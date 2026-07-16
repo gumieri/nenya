@@ -126,18 +126,19 @@ func (p *Proxy) forwardEmbeddingsRequest(gw *gateway.NenyaGateway, w http.Respon
 	}
 	req.Header.Set("Content-Type", "application/json")
 
-	var resp *http.Response
-	err = util.DoWithRetry(ctx, maxAttempts, func() error {
-		var fetchErr error
-		resp, fetchErr = gw.Client.Do(req)
+	resp, err := util.DoWithRetryResp(ctx, maxAttempts, func() (*http.Response, error) {
+		r, fetchErr := gw.Client.Do(req)
 		if fetchErr != nil {
-			return fetchErr
+			if r != nil {
+				_ = r.Body.Close()
+			}
+			return nil, fetchErr
 		}
-		if resp.StatusCode >= 500 {
-			_ = resp.Body.Close()
-			return fmt.Errorf("upstream error: %d", resp.StatusCode)
+		if r.StatusCode >= 500 {
+			_ = r.Body.Close()
+			return nil, fmt.Errorf("upstream error: %d", r.StatusCode)
 		}
-		return nil
+		return r, nil
 	})
 	if err != nil {
 		ctxLogger := gw.Logger.With("operation", "forward", "api_key", keyRef, "provider", providerName)

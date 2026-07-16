@@ -168,7 +168,7 @@ func pruneToolCallResults(messages []interface{}, i int, numToolCalls int, repla
 	messages[i] = replacement
 	total := 1 + numToolCalls
 	copy(messages[i+1:], messages[i+total:])
-	for k := 0; k < numToolCalls; k++ {
+	for k := range numToolCalls {
 		messages[n-1-k] = nil
 	}
 	messages = messages[:n-numToolCalls]

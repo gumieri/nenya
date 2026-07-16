@@ -117,7 +117,7 @@ func TestApplyAuthHeader(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			req, _ := http.NewRequest("POST", "/", nil)
+			req, _ := http.NewRequest("POST", "/", http.NoBody)
 			provider := &Provider{
 				APIKey:    "mykey",
 				AuthStyle: tt.authStyle,
@@ -135,7 +135,7 @@ func TestApplyAuthHeader(t *testing.T) {
 			if got := req.Header.Get("Authorization"); got != tt.wantAuth {
 				t.Errorf("Authorization = %q, want %q", got, tt.wantAuth)
 			}
-			if got := req.Header.Get("x-goog-api-key"); got != tt.wantGoog {
+			if got := req.Header.Get("X-Goog-Api-Key"); got != tt.wantGoog {
 				t.Errorf("x-goog-api-key = %q, want %q", got, tt.wantGoog)
 			}
 		})
@@ -494,6 +494,34 @@ func TestValidateUpstreamTimeoutSeconds(t *testing.T) {
 			}
 			if tt.wantErrMsg != "" && (len(errs) != 1 || errs[0] != tt.wantErrMsg) {
 				t.Errorf("validateUpstreamTimeoutSeconds() = %v, want exact error %q", errs, tt.wantErrMsg)
+			}
+		})
+	}
+}
+
+func TestValidateStreamIdleTimeoutSeconds(t *testing.T) {
+	tests := []struct {
+		name       string
+		v          *int
+		wantErr    bool
+		wantErrMsg string
+	}{
+		{"nil passes", nil, false, ""},
+		{"zero passes", PtrTo(0), false, ""},
+		{"positive passes", PtrTo(120), false, ""},
+		{"large positive passes", PtrTo(86400), false, ""},
+		{"negative fails", PtrTo(-1), true, "governance.stream_idle_timeout_seconds must be non-negative (set to 0 to disable stall detection), got -1"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			errs := validateStreamIdleTimeoutSeconds(tt.v)
+			hasErr := len(errs) > 0
+			if hasErr != tt.wantErr {
+				t.Errorf("validateStreamIdleTimeoutSeconds() = %v, want hasErr=%v", errs, tt.wantErr)
+				return
+			}
+			if tt.wantErrMsg != "" && (len(errs) != 1 || errs[0] != tt.wantErrMsg) {
+				t.Errorf("validateStreamIdleTimeoutSeconds() = %v, want exact error %q", errs, tt.wantErrMsg)
 			}
 		})
 	}

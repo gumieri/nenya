@@ -261,6 +261,7 @@ type GovernanceConfig struct {
 	BillingQualityScale      float64  `json:"billing_quality_scale,omitempty"`
 	MaxTransformedSSEBytes   int      `json:"max_transformed_sse_bytes,omitempty"`
 	UpstreamTimeoutSeconds   *int     `json:"upstream_timeout_seconds,omitempty"`
+	StreamIdleTimeoutSeconds *int     `json:"stream_idle_timeout_seconds,omitempty"`
 }
 
 func (g *GovernanceConfig) RPMSet() bool                  { return wasSet(g.RatelimitMaxRPM) }
@@ -301,12 +302,11 @@ func (g *GovernanceConfig) EffectiveMaxTransformedSSEBytes() int {
 // EffectiveUpstreamTimeout returns the HTTP client timeout for upstream
 // provider requests. When unset, defaults to 300s (5 minutes). When
 // explicitly set to 0, returns 0 (no client-level deadline — relies on
-// streamIdleTimeout (60s) for stall detection; connections without data
-// flow will be killed). Negative values are rejected by validation at
-// startup, but this method defensively clamps negatives to 0 as well.
-// Values exceeding 86400 are capped at 86400 (24h). Additionally, a
-// second cap at 9223372036 prevents time.Duration overflow when converting
-// seconds to nanoseconds (floor(math.MaxInt64 / 1e9)).
+// the stream idle timeout (default 120s, configurable via
+// governance.stream_idle_timeout_seconds) for stall detection; connections
+// without data flow will be killed). Negative values are rejected by
+// validation at startup, but this method defensively clamps negatives to 0
+// as well. Values exceeding 86400 are capped at 86400 (24h).
 func (g *GovernanceConfig) EffectiveUpstreamTimeout() time.Duration {
 	if g.UpstreamTimeoutSeconds == nil {
 		return 300 * time.Second
@@ -318,8 +318,26 @@ func (g *GovernanceConfig) EffectiveUpstreamTimeout() time.Duration {
 	if v > 86400 {
 		v = 86400
 	}
-	if v > 9223372036 { // floor(math.MaxInt64 / 1e9): max safe seconds before time.Duration nanosecond overflow
-		v = 9223372036
+	return time.Duration(v) * time.Second
+}
+
+// EffectiveStreamIdleTimeout returns the stall detection timeout for upstream
+// SSE streams. When unset, defaults to 120s (2 minutes). When explicitly set
+// to 0, returns 0 (disabled — no stall detection). Otherwise returns the
+// configured value, capped at 86400 (24h). This timeout fires when NO data
+// arrives from the upstream for the configured duration; it resets on every
+// successful read. Models with long thinking phases (e.g. GLM-4.7) may have
+// natural SSE gaps that require a higher value.
+func (g *GovernanceConfig) EffectiveStreamIdleTimeout() time.Duration {
+	if g.StreamIdleTimeoutSeconds == nil {
+		return 120 * time.Second
+	}
+	v := *g.StreamIdleTimeoutSeconds
+	if v <= 0 {
+		return 0
+	}
+	if v > 86400 {
+		v = 86400
 	}
 	return time.Duration(v) * time.Second
 }

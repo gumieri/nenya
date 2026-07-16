@@ -134,7 +134,7 @@ func TestGeminiAdapter_InjectAuth(t *testing.T) {
 	if got := req.Header.Get("Authorization"); got != "Bearer test-key" {
 		t.Errorf("expected 'Bearer test-key', got %q", got)
 	}
-	if got := req.Header.Get("x-goog-api-key"); got != "test-key" {
+	if got := req.Header.Get("X-Goog-Api-Key"); got != "test-key" {
 		t.Errorf("expected 'test-key', got %q", got)
 	}
 }

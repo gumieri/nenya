@@ -235,7 +235,7 @@ func calculateBudget(n int, blockRunes []int, cfg config.ContextConfig, availabl
 	pinLast = max(1, int(float64(n)*cfg.TruncationKeepLastPct/100.0))
 
 	pinFirstRunes := 0
-	for i := 0; i < pinFirst; i++ {
+	for i := range pinFirst {
 		pinFirstRunes += blockRunes[i]
 	}
 	pinLastRunes := 0
@@ -271,7 +271,7 @@ func selectKeptBlocks(scored []scoredBlock, runes []int, budget int) map[int]boo
 
 func assembleResult(blocks []Block, blockRunes []int, pinFirst, middleStart, middleEnd, n int, keptMiddle map[int]bool, separator string, available, reservedForPinned int) string {
 	totalKept := 0
-	for i := 0; i < pinFirst; i++ {
+	for i := range pinFirst {
 		totalKept = util.AddCap(totalKept, blockRunes[i])
 	}
 	for i, kept := range keptMiddle {
@@ -281,7 +281,7 @@ func assembleResult(blocks []Block, blockRunes []int, pinFirst, middleStart, mid
 	}
 
 	var sb strings.Builder
-	for i := 0; i < pinFirst; i++ {
+	for i := range pinFirst {
 		sb.WriteString(blocks[i].Content)
 	}
 

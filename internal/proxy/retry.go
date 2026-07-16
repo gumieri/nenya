@@ -59,7 +59,7 @@ const (
 
 func calculateBackoff(attempt int) time.Duration {
 	delay := exponentialBackoffBase
-	for i := 0; i < attempt; i++ {
+	for range attempt {
 		delay *= 2
 		if delay >= exponentialBackoffMax {
 			delay = exponentialBackoffMax
@@ -131,27 +131,27 @@ func waitWithCancel(ctx context.Context, d time.Duration) {
 // It builds the request, sets Content-Type (if non-empty), executes with retry,
 // and returns the response. 5xx responses are retried.
 func (p *Proxy) doUpstreamRoundTrip(ctx context.Context, gw *gateway.NenyaGateway, method, targetURL string, bodyBytes []byte, providerName, modelName string, srcHeaders http.Header, contentType string, maxAttempts int) (*http.Response, error) {
-	var resp *http.Response
-	err := util.DoWithRetry(ctx, maxAttempts, func() error {
+	return util.DoWithRetryResp(ctx, maxAttempts, func() (*http.Response, error) {
 		upstreamReq, reqErr := p.buildUpstreamRequest(gw, ctx, method, targetURL, bodyBytes, providerName, modelName, "", srcHeaders)
 		if reqErr != nil {
-			return reqErr
+			return nil, reqErr
 		}
 		if contentType != "" {
 			upstreamReq.Header.Set("Content-Type", contentType)
 		}
-		var fetchErr error
-		resp, fetchErr = gw.Client.Do(upstreamReq)
+		resp, fetchErr := gw.Client.Do(upstreamReq)
 		if fetchErr != nil {
-			return fetchErr
+			if resp != nil {
+				_ = resp.Body.Close()
+			}
+			return nil, fetchErr
 		}
 		if resp.StatusCode >= 500 {
 			_ = resp.Body.Close()
-			return fmt.Errorf("upstream error: %d", resp.StatusCode)
+			return nil, fmt.Errorf("upstream error: %d", resp.StatusCode)
 		}
-		return nil
+		return resp, nil
 	})
-	return resp, err
 }
 
 // forwardOptions holds the parameters for forwarding a request upstream.
@@ -939,7 +939,7 @@ func extractUnixTimestampMs(msg string) int64 {
 // applying overflow protection and range validation.
 func parseDigitsToTimestamp(digits string, minTimestamp, maxTimestamp int64) int64 {
 	var ts int64
-	for k := 0; k < len(digits); k++ {
+	for k := range len(digits) {
 		digit := int64(digits[k] - '0')
 		if ts > (math.MaxInt64-digit)/10 {
 			return 0

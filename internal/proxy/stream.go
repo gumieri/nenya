@@ -22,8 +22,7 @@ import (
 )
 
 const (
-	streamIdleTimeout = 60 * time.Second
-	streamBufferSize  = 32 * 1024
+	streamBufferSize = 32 * 1024
 	// TokenDirectionReasoning is the direction label for reasoning token metrics
 	TokenDirectionReasoning = "reasoning"
 )
@@ -87,6 +86,7 @@ type readResult struct {
 type stallReader struct {
 	mu        sync.Mutex
 	timer     *time.Timer
+	timeout   time.Duration
 	stalled   bool
 	stallCh   chan struct{}
 	closeOnce sync.Once
@@ -99,6 +99,7 @@ type stallReader struct {
 // The context is used to cancel the background read goroutine on shutdown.
 func newStallReader(ctx context.Context, src io.Reader, timeout time.Duration) *stallReader {
 	sr := &stallReader{
+		timeout: timeout,
 		stallCh: make(chan struct{}),
 		ch:      make(chan readResult, 1),
 	}
@@ -164,9 +165,6 @@ func (sr *stallReader) Read(p []byte) (int, error) {
 	case <-sr.stallCh:
 		return 0, errStreamStalled
 	case rr := <-sr.ch:
-		if len(rr.data) > 0 {
-			sr.timer.Reset(streamIdleTimeout)
-		}
 		if rr.poolBufPtr != nil {
 			defer putStreamBuffer(rr.poolBufPtr)
 		}
@@ -174,16 +172,10 @@ func (sr *stallReader) Read(p []byte) (int, error) {
 		stalled := sr.stalled
 		sr.mu.Unlock()
 		if stalled {
-			if len(rr.data) > 0 {
-				n := copy(p, rr.data)
-				if n < len(rr.data) {
-					sr.remainBuf = make([]byte, len(rr.data)-n)
-					copy(sr.remainBuf, rr.data[n:])
-					sr.remainPos = 0
-				}
-				return n, errStreamStalled
-			}
 			return 0, errStreamStalled
+		}
+		if len(rr.data) > 0 {
+			sr.timer.Reset(sr.timeout)
 		}
 		n := copy(p, rr.data)
 		if n < len(rr.data) {
@@ -438,12 +430,18 @@ func (p *Proxy) resolveTransformer(gw *gateway.NenyaGateway, target routing.Upst
 
 // setupTransformingReader creates and configures the SSE transforming reader, content builder, and stall reader.
 // Returns the transforming reader for streaming, the content builder for post-processing, and the stall reader for cleanup.
+// When stream idle timeout is 0 (disabled), stallR is nil and the body is passed directly to the transforming reader.
 func (p *Proxy) setupTransformingReader(gw *gateway.NenyaGateway, target routing.UpstreamTarget, agentName, sourceFormat string, action upstreamAction, ctx context.Context) (*stream.SSETransformingReader, *contentBuilder, *stallReader) {
 	transformer := p.resolveTransformer(gw, target, sourceFormat)
 
-	stallR := newStallReader(ctx, action.resp.Body, streamIdleTimeout)
+	var bodyReader io.Reader = action.resp.Body
+	var stallR *stallReader
+	if timeout := gw.Config.Governance.EffectiveStreamIdleTimeout(); timeout > 0 {
+		stallR = newStallReader(ctx, action.resp.Body, timeout)
+		bodyReader = stallR
+	}
 
-	transformingReader := stream.NewSSETransformingReader(stallR, transformer, ctx)
+	transformingReader := stream.NewSSETransformingReader(bodyReader, transformer, ctx)
 	transformingReader.SetMaxTransformedBytes(gw.Config.Governance.EffectiveMaxTransformedSSEBytes())
 	transformingReader.SetOnUsage(p.makeUsageCallback(ctx, gw, target, agentName))
 	transformingReader.SetObserver(newUpstreamErrorObserver(gw, target))
@@ -633,23 +631,24 @@ func (p *Proxy) handleStreamDone(gw *gateway.NenyaGateway, w http.ResponseWriter
 		return streamResult{}
 	}
 
+	// Close upstream body and cancel context before draining to unblock
+	// the readLoop, preventing DrainPending from blocking for the full timeout.
+	action.cancel()
+	_ = action.resp.Body.Close()
+
 	if stallR != nil {
-		_, _ = stallR.DrainPending(3 * time.Second)
+		_, _ = stallR.DrainPending(100 * time.Millisecond)
 	}
 
 	if errors.Is(copyErr, errStreamStalled) {
-		action.cancel()
-		_ = action.resp.Body.Close()
 		gw.AgentState.RecordFailure(target, cooldownDuration)
 		gw.Logger.Warn("stream stalled, terminating SSE before fallback",
-			"model", target.Model, "provider", target.Provider,
-			"idle_timeout", streamIdleTimeout)
+			"agent", agentName, "model", target.Model, "provider", target.Provider,
+			"idle_timeout", gw.Config.Governance.EffectiveStreamIdleTimeout())
 		gw.Metrics.RecordStreamStall(target.Model, target.Provider)
-		p.writeSSEDONE(gw, w)
+		p.writeStallSSE(gw, w)
 		return streamResult{empty: true}
 	}
-
-	_ = action.resp.Body.Close()
 
 	if errors.Is(copyErr, context.Canceled) {
 		gw.Logger.Info("client disconnected, aborting upstream stream",
@@ -800,10 +799,22 @@ func extractUserTextForEmbedding(payload map[string]any) string {
 	return userMsgs.String()
 }
 
-// writeSSEDONE sends a terminating [DONE] event to the SSE stream.
-// This is used to cleanly terminate a stream before fallback to another target.
-func (p *Proxy) writeSSEDONE(gw *gateway.NenyaGateway, w http.ResponseWriter) {
-	_, _ = fmt.Fprint(w, "data: [DONE]\n\n")
+// writeStallSSE sends a gateway_error SSE event followed by [DONE] to the
+// client. This is used when the upstream stream stalls (no data within the
+// idle timeout). The error event lets the client distinguish a stall from a
+// normal completion.
+func (p *Proxy) writeStallSSE(gw *gateway.NenyaGateway, w http.ResponseWriter) {
+	errPayload, err := json.Marshal(map[string]any{
+		"error": map[string]any{
+			"message": "upstream stream stalled: no data received within idle timeout",
+			"type":    "gateway_error",
+		},
+	})
+	if err != nil {
+		gw.Logger.Error("failed to marshal stall error payload", "err", err)
+		errPayload = []byte(`{"error":{"message":"upstream stream stalled","type":"gateway_error"}}`)
+	}
+	_, _ = fmt.Fprintf(w, "data: %s\n\ndata: [DONE]\n\n", errPayload)
 	if flusher, ok := w.(http.Flusher); ok {
 		flusher.Flush()
 	}

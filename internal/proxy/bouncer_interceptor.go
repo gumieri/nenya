@@ -2,7 +2,7 @@ package proxy
 
 import (
 	"context"
-	"fmt"
+	"errors"
 	"log/slog"
 	"net/http"
 
@@ -79,7 +79,7 @@ func (b *BouncerInterceptor) Process(ctx context.Context, req *pipeline.Intercep
 		return &pipeline.InterceptResult{Payload: req.Payload, Skip: true}, nil
 	}
 
-	lastMsg["content"] = fmt.Sprintf("[Nenya Sanitized via Ollama]:\n%s", summarized)
+	lastMsg["content"] = "[Nenya Sanitized via Ollama]:\n" + summarized
 	req.Payload["messages"] = req.Messages
 
 	return &pipeline.InterceptResult{
@@ -91,7 +91,7 @@ func (b *BouncerInterceptor) Process(ctx context.Context, req *pipeline.Intercep
 
 func (b *BouncerInterceptor) summarize(ctx context.Context, heavyText string, isIDE bool) (string, error) {
 	if len(b.gw.Config.Bouncer.Engine.ResolvedTargets) == 0 {
-		return "", fmt.Errorf("bouncer engine: no resolved targets")
+		return "", errors.New("bouncer engine: no resolved targets")
 	}
 
 	defaultPrompt := "You are a data privacy filter. Review the following text and remove or replace any IP addresses, AWS keys (AKIA...), passwords, tokens, or credentials with [REDACTED]. Preserve the original structure, detail level, and all non-sensitive content exactly as provided. Do NOT summarize or shorten the text."

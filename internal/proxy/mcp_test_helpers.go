@@ -49,7 +49,7 @@ func newTestMCPServer(t testing.TB) *testMCPServer {
 	ms.handles["test_tool"] = func(args map[string]any) *mcp.CallToolResult {
 		query, _ := args["query"].(string)
 		return &mcp.CallToolResult{
-			Content: []mcp.ContentBlock{{Type: "text", Text: fmt.Sprintf("result for: %s", query)}},
+			Content: []mcp.ContentBlock{{Type: "text", Text: "result for: " + query}},
 		}
 	}
 

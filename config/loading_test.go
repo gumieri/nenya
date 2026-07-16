@@ -126,7 +126,7 @@ func TestStripComments(t *testing.T) {
 func TestLoadFromDir_ConfigFile(t *testing.T) {
 	dir := t.TempDir()
 	configPath := filepath.Join(dir, "config.json")
-	if err := os.WriteFile(configPath, []byte(`{"server": {"listen_addr": ":9090"}}`), 0644); err != nil {
+	if err := os.WriteFile(configPath, []byte(`{"server": {"listen_addr": ":9090"}}`), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	cfg, err := LoadFromDir(dir)
@@ -141,13 +141,13 @@ func TestLoadFromDir_ConfigFile(t *testing.T) {
 func TestLoadFromDir_ConfigDir(t *testing.T) {
 	dir := t.TempDir()
 	configDir := filepath.Join(dir, "config.d")
-	if err := os.MkdirAll(configDir, 0755); err != nil {
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(configDir, "00-server.json"), []byte(`{"server": {"listen_addr": ":9090"}}`), 0644); err != nil {
+	if err := os.WriteFile(filepath.Join(configDir, "00-server.json"), []byte(`{"server": {"listen_addr": ":9090"}}`), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(configDir, "01-bouncer.json"), []byte(`{"bouncer": {"redact_preset": "pii"}}`), 0644); err != nil {
+	if err := os.WriteFile(filepath.Join(configDir, "01-bouncer.json"), []byte(`{"bouncer": {"redact_preset": "pii"}}`), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	cfg, err := LoadFromDir(dir)
@@ -165,13 +165,13 @@ func TestLoadFromDir_ConfigDir(t *testing.T) {
 func TestLoadFromDir_MultiConfigMerge(t *testing.T) {
 	dir := t.TempDir()
 	configDir := filepath.Join(dir, "config.d")
-	if err := os.MkdirAll(configDir, 0755); err != nil {
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(configDir, "00-server.json"), []byte(`{"server": {"listen_addr": ":9090", "log_level": "debug"}}`), 0644); err != nil {
+	if err := os.WriteFile(filepath.Join(configDir, "00-server.json"), []byte(`{"server": {"listen_addr": ":9090", "log_level": "debug"}}`), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(configDir, "01-override.json"), []byte(`{"server": {"log_level": "info"}}`), 0644); err != nil {
+	if err := os.WriteFile(filepath.Join(configDir, "01-override.json"), []byte(`{"server": {"log_level": "info"}}`), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	cfg, err := LoadFromDir(dir)
@@ -197,7 +197,7 @@ func TestLoadFromDir_MissingConfig(t *testing.T) {
 func TestLoad_InvalidJSON(t *testing.T) {
 	dir := t.TempDir()
 	configPath := filepath.Join(dir, "config.json")
-	if err := os.WriteFile(configPath, []byte(`{invalid`), 0644); err != nil {
+	if err := os.WriteFile(configPath, []byte(`{invalid`), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	_, err := Load(configPath)

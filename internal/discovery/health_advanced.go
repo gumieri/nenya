@@ -44,25 +44,25 @@ type AdvancedHealthChecker struct {
 	mu       sync.RWMutex
 }
 
-func NewAdvancedHealthChecker(config HealthCheckConfig, catalog *ModelCatalog, registry map[string]config.ModelEntry, logger *slog.Logger) *AdvancedHealthChecker {
-	if config.Timeout == 0 {
-		config.Timeout = 10 * time.Second
+func NewAdvancedHealthChecker(hcConfig HealthCheckConfig, catalog *ModelCatalog, registry map[string]config.ModelEntry, logger *slog.Logger) *AdvancedHealthChecker {
+	if hcConfig.Timeout == 0 {
+		hcConfig.Timeout = 10 * time.Second
 	}
-	if config.MaxRetries == 0 {
-		config.MaxRetries = 3
+	if hcConfig.MaxRetries == 0 {
+		hcConfig.MaxRetries = 3
 	}
-	if config.RetryDelay == 0 {
-		config.RetryDelay = 1 * time.Second
+	if hcConfig.RetryDelay == 0 {
+		hcConfig.RetryDelay = 1 * time.Second
 	}
-	if config.DriftWarningLevel == 0 {
-		config.DriftWarningLevel = 5
+	if hcConfig.DriftWarningLevel == 0 {
+		hcConfig.DriftWarningLevel = 5
 	}
-	if config.MaxConcurrent <= 0 {
-		config.MaxConcurrent = defaultMaxConcurrentChecks
+	if hcConfig.MaxConcurrent <= 0 {
+		hcConfig.MaxConcurrent = defaultMaxConcurrentChecks
 	}
 
 	return &AdvancedHealthChecker{
-		config:   config,
+		config:   hcConfig,
 		catalog:  catalog,
 		registry: registry,
 		logger:   logger,

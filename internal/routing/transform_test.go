@@ -428,7 +428,7 @@ func TestInjectAPIKey_Bearer(t *testing.T) {
 	if got := headers.Get("Authorization"); got != "Bearer test-ds-key" {
 		t.Errorf("expected 'Bearer test-ds-key', got %q", got)
 	}
-	if got := headers.Get("x-goog-api-key"); got != "" {
+	if got := headers.Get("X-Goog-Api-Key"); got != "" {
 		t.Errorf("expected no x-goog-api-key header, got %q", got)
 	}
 }
@@ -444,7 +444,7 @@ func TestInjectAPIKey_BearerXGoog(t *testing.T) {
 	if got := headers.Get("Authorization"); got != "Bearer test-gemini-key" {
 		t.Errorf("expected 'Bearer test-gemini-key', got %q", got)
 	}
-	if got := headers.Get("x-goog-api-key"); got != "test-gemini-key" {
+	if got := headers.Get("X-Goog-Api-Key"); got != "test-gemini-key" {
 		t.Errorf("expected 'test-gemini-key', got %q", got)
 	}
 }

@@ -112,7 +112,7 @@ func (p *Proxy) handlePassthrough(gw *gateway.NenyaGateway, w http.ResponseWrite
 
 	contentType := resp.Header.Get("Content-Type")
 	if strings.Contains(contentType, "text/event-stream") {
-		p.pipeSSE(ctx, ctxLogger, resp.Body, w)
+		p.pipeSSE(ctx, ctxLogger, resp.Body, w, gw.Config.Governance.EffectiveStreamIdleTimeout())
 	} else {
 		writeUpstreamResponse(ctx, w, resp, ctxLogger)
 	}
@@ -151,12 +151,20 @@ func buildPassthroughContextAndCancel(ctx context.Context, provider *config.Prov
 	}
 	return ctx, func() {}
 }
-func (p *Proxy) pipeSSE(ctx context.Context, ctxLogger *slog.Logger, src io.Reader, dst http.ResponseWriter) {
-	stallR := newStallReader(ctx, src, 120*time.Second)
+
+// pipeSSE streams SSE data from src to dst with stall detection.
+// When stallTimeout is 0, stall detection is disabled and data is copied directly.
+func (p *Proxy) pipeSSE(ctx context.Context, ctxLogger *slog.Logger, src io.Reader, dst http.ResponseWriter, stallTimeout time.Duration) {
+	if stallTimeout <= 0 {
+		p.pipeSSERaw(ctx, ctxLogger, src, dst)
+		return
+	}
+
+	stallR := newStallReader(ctx, src, stallTimeout)
 	buf := make([]byte, 4096)
 	defer func() {
 		stallR.Stop()
-		_, _ = stallR.DrainPending(3 * time.Second)
+		_, _ = stallR.DrainPending(100 * time.Millisecond)
 	}()
 
 	for {
@@ -179,6 +187,33 @@ func (p *Proxy) pipeSSE(ctx context.Context, ctxLogger *slog.Logger, src io.Read
 			return
 		}
 
+		if ctx.Err() != nil {
+			ctxLogger.Debug("passthrough SSE stream canceled by context")
+			return
+		}
+	}
+}
+
+// pipeSSERaw copies SSE data from src to dst without stall detection.
+func (p *Proxy) pipeSSERaw(ctx context.Context, ctxLogger *slog.Logger, src io.Reader, dst http.ResponseWriter) {
+	buf := make([]byte, 4096)
+	for {
+		n, err := src.Read(buf)
+		if n > 0 {
+			if _, writeErr := dst.Write(buf[:n]); writeErr != nil {
+				ctxLogger.Debug("SSE write error", "err", writeErr)
+				return
+			}
+			if flusher, ok := dst.(http.Flusher); ok {
+				flusher.Flush()
+			}
+		}
+		if err != nil {
+			if err != io.EOF {
+				ctxLogger.Debug("passthrough SSE read error", "err", err)
+			}
+			return
+		}
 		if ctx.Err() != nil {
 			ctxLogger.Debug("passthrough SSE stream canceled by context")
 			return

@@ -59,7 +59,7 @@ func AdapterForAuthStyle(authStyle string) ProviderAdapter {
 
 type bearerPlusGoogAdapter struct{}
 
-func (a *bearerPlusGoogAdapter) MutateRequest(body []byte, model string, stream bool) ([]byte, error) {
+func (a *bearerPlusGoogAdapter) MutateRequest(body []byte, model string, streaming bool) ([]byte, error) {
 	return body, nil
 }
 
@@ -225,8 +225,8 @@ func init() {
 
 type geminiAdapterShim struct{}
 
-func (s *geminiAdapterShim) MutateRequest(body []byte, model string, stream bool) ([]byte, error) {
-	return ForProviderWithDeps("gemini", nil, nil).MutateRequest(body, model, stream)
+func (s *geminiAdapterShim) MutateRequest(body []byte, model string, streaming bool) ([]byte, error) {
+	return ForProviderWithDeps("gemini", nil, nil).MutateRequest(body, model, streaming)
 }
 
 func (s *geminiAdapterShim) InjectAuth(req *http.Request, apiKey string) error {
@@ -243,8 +243,8 @@ func (s *geminiAdapterShim) NormalizeError(statusCode int, body []byte) ErrorCla
 
 type zaiAdapterShim struct{}
 
-func (s *zaiAdapterShim) MutateRequest(body []byte, model string, stream bool) ([]byte, error) {
-	return ForProviderWithDeps("zai", nil, nil).MutateRequest(body, model, stream)
+func (s *zaiAdapterShim) MutateRequest(body []byte, model string, streaming bool) ([]byte, error) {
+	return ForProviderWithDeps("zai", nil, nil).MutateRequest(body, model, streaming)
 }
 
 func (s *zaiAdapterShim) InjectAuth(req *http.Request, apiKey string) error {

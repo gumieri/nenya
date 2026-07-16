@@ -68,6 +68,7 @@ type HTTPTransport struct {
 	sessionEndpoint string
 	baseHost        string
 	sseCancel       context.CancelFunc
+	sseBody         io.ReadCloser
 
 	pendingMu sync.Mutex
 	pending   map[int64]chan *Response
@@ -149,7 +150,7 @@ func (t *HTTPTransport) Connect(ctx context.Context) error {
 	t.baseHost = baseURL.Host
 
 	sseCtx, sseCancel := context.WithCancel(t.ctx)
-	req, err := http.NewRequestWithContext(sseCtx, http.MethodGet, sseURL, nil)
+	req, err := http.NewRequestWithContext(sseCtx, http.MethodGet, sseURL, http.NoBody)
 	if err != nil {
 		sseCancel()
 		return fmt.Errorf("creating SSE request: %w", err)
@@ -160,24 +161,26 @@ func (t *HTTPTransport) Connect(ctx context.Context) error {
 	connectCtx, connectCancel := context.WithTimeout(t.ctx, t.cfg.ConnectTimeout)
 	defer connectCancel()
 
-	var resp *http.Response
-	err = util.DoWithRetry(connectCtx, 3, func() error {
+	// Body intentionally kept open for SSE reading; closed via t.sseBody in sseReadLoop/Close().
+	resp, err := util.DoWithRetryResp(connectCtx, 3, func() (*http.Response, error) { //nolint:bodyclose // SSE body lifecycle spans goroutines
 		var fetchErr error
-		resp, fetchErr = t.httpClient.Do(req)
+		resp, fetchErr := t.httpClient.Do(req)
 		if fetchErr != nil {
-			return fetchErr
+			if resp != nil {
+				_ = resp.Body.Close()
+			}
+			return nil, fetchErr
 		}
 		if resp.StatusCode >= 500 {
 			_ = resp.Body.Close()
-			return fmt.Errorf("upstream error: %d", resp.StatusCode)
+			return nil, fmt.Errorf("upstream error: %d", resp.StatusCode)
 		}
 		if resp.StatusCode != http.StatusOK {
 			_ = resp.Body.Close()
-			return fmt.Errorf("SSE connection returned status %d", resp.StatusCode)
+			return nil, fmt.Errorf("SSE connection returned status %d", resp.StatusCode)
 		}
-		return nil
+		return resp, nil
 	})
-
 	if err != nil {
 		sseCancel()
 		return fmt.Errorf("SSE connection failed: %w", err)
@@ -185,6 +188,7 @@ func (t *HTTPTransport) Connect(ctx context.Context) error {
 
 	t.mu.Lock()
 	t.sessionEndpoint = ""
+	t.sseBody = resp.Body
 	t.mu.Unlock()
 
 	sseReader := bufio.NewReader(resp.Body)
@@ -192,7 +196,9 @@ func (t *HTTPTransport) Connect(ctx context.Context) error {
 	endpointURL, err := readSSEInitialEndpoint(connectCtx, sseReader, baseURL, t.cfg.Logger)
 	if err != nil {
 		sseCancel()
-		_ = resp.Body.Close()
+		if t.sseBody != nil {
+			_ = t.sseBody.Close()
+		}
 		return err
 	}
 
@@ -281,30 +287,27 @@ func readSSEInitialEndpoint(ctx context.Context, reader *bufio.Reader, baseURL *
 }
 
 func sendHTTPPost(client *http.Client, t *HTTPTransport, ctx context.Context, endpoint string, reqBytes []byte) (*http.Response, error) {
-	var httpResp *http.Response
-	err := util.DoWithRetry(ctx, 2, func() error {
+	return util.DoWithRetryResp(ctx, 2, func() (*http.Response, error) {
 		httpReq, reqErr := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, strings.NewReader(string(reqBytes)))
 		if reqErr != nil {
-			return fmt.Errorf("creating POST request: %w", reqErr)
+			return nil, fmt.Errorf("creating POST request: %w", reqErr)
 		}
 		t.setHeaders(httpReq)
 		httpReq.Header.Set("Content-Type", "application/json")
 
-		var doErr error
-		httpResp, doErr = client.Do(httpReq)
+		resp, doErr := client.Do(httpReq)
 		if doErr != nil {
-			return doErr
+			if resp != nil {
+				_ = resp.Body.Close()
+			}
+			return nil, doErr
 		}
-		if httpResp.StatusCode >= 500 {
-			_ = httpResp.Body.Close()
-			return fmt.Errorf("upstream error: %d", httpResp.StatusCode)
+		if resp.StatusCode >= 500 {
+			_ = resp.Body.Close()
+			return nil, fmt.Errorf("upstream error: %d", resp.StatusCode)
 		}
-		return nil
+		return resp, nil
 	})
-	if err != nil {
-		return nil, err
-	}
-	return httpResp, nil
 }
 
 func (t *HTTPTransport) SendRequest(ctx context.Context, method string, params any) (*Response, error) {
@@ -484,6 +487,9 @@ func (t *HTTPTransport) Close() error {
 			timer.Stop()
 		case <-timer.C:
 		}
+		if t.sseBody != nil {
+			_ = t.sseBody.Close()
+		}
 	})
 	return nil
 }
@@ -540,6 +546,11 @@ func readMultiLineEvent(reader *bufio.Reader) string {
 
 func (t *HTTPTransport) sseReadLoop(reader *bufio.Reader) {
 	defer close(t.doneCh)
+	defer func() {
+		if t.sseBody != nil {
+			_ = t.sseBody.Close()
+		}
+	}()
 
 	for {
 		select {

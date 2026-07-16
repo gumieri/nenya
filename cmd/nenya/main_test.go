@@ -107,14 +107,14 @@ func TestLogConfiguredAgents_WithAgents(t *testing.T) {
 func TestLoadConfig_FromFile(t *testing.T) {
 	dir := t.TempDir()
 	configPath := filepath.Join(dir, "config.json")
-	if err := os.WriteFile(configPath, []byte(`{"server": {"listen_addr": ":9090"}}`), 0644); err != nil {
+	if err := os.WriteFile(configPath, []byte(`{"server": {"listen_addr": ":9090"}}`), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	secretsDir := filepath.Join(dir, "secrets")
-	if err := os.MkdirAll(secretsDir, 0755); err != nil {
+	if err := os.MkdirAll(secretsDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(secretsDir, "secrets.json"), []byte(`{"client_token": "test-token-12345"}`), 0644); err != nil {
+	if err := os.WriteFile(filepath.Join(secretsDir, "secrets.json"), []byte(`{"client_token": "test-token-12345"}`), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("NENYA_SECRETS_DIR", secretsDir)
@@ -135,17 +135,17 @@ func TestLoadConfig_FromFile(t *testing.T) {
 func TestLoadConfig_FromDir(t *testing.T) {
 	dir := t.TempDir()
 	configDir := filepath.Join(dir, "config.d")
-	if err := os.MkdirAll(configDir, 0755); err != nil {
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(configDir, "00-server.json"), []byte(`{"server": {"listen_addr": ":7070"}}`), 0644); err != nil {
+	if err := os.WriteFile(filepath.Join(configDir, "00-server.json"), []byte(`{"server": {"listen_addr": ":7070"}}`), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	secretsDir := filepath.Join(dir, "secrets")
-	if err := os.MkdirAll(secretsDir, 0755); err != nil {
+	if err := os.MkdirAll(secretsDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(secretsDir, "secrets.json"), []byte(`{"client_token": "test-token-12345"}`), 0644); err != nil {
+	if err := os.WriteFile(filepath.Join(secretsDir, "secrets.json"), []byte(`{"client_token": "test-token-12345"}`), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("NENYA_SECRETS_DIR", secretsDir)
@@ -425,14 +425,14 @@ func TestReloadConfig_Success(t *testing.T) {
 
 	dir := t.TempDir()
 	configPath := filepath.Join(dir, "config.json")
-	if err := os.WriteFile(configPath, []byte(`{"server": {"listen_addr": ":9090"}}`), 0644); err != nil {
+	if err := os.WriteFile(configPath, []byte(`{"server": {"listen_addr": ":9090"}}`), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	secretsDir := filepath.Join(dir, "secrets")
-	if err := os.MkdirAll(secretsDir, 0755); err != nil {
+	if err := os.MkdirAll(secretsDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(secretsDir, "secrets.json"), []byte(`{"client_token": "test-token-1234567890"}`), 0644); err != nil {
+	if err := os.WriteFile(filepath.Join(secretsDir, "secrets.json"), []byte(`{"client_token": "test-token-1234567890"}`), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("NENYA_SECRETS_DIR", secretsDir)

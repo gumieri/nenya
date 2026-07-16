@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -88,7 +89,7 @@ func (o *OllamaEmbedder) Embed(ctx context.Context, text string) ([]float32, err
 		}
 
 		if len(ollamaResp.Embedding) == 0 {
-			return fmt.Errorf("empty embedding returned")
+			return errors.New("empty embedding returned")
 		}
 
 		result = ollamaResp.Embedding

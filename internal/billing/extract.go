@@ -3,6 +3,7 @@ package billing
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -42,7 +43,7 @@ func ExtractQuotaFromResponse(ctx context.Context, body []byte, config QuotaExtr
 	}
 
 	if len(body) == 0 {
-		return nil, fmt.Errorf("empty response body")
+		return nil, errors.New("empty response body")
 	}
 
 	var raw map[string]any
@@ -62,7 +63,7 @@ func ExtractQuotaFromResponse(ctx context.Context, body []byte, config QuotaExtr
 			return nil, err
 		}
 	case "headers":
-		return nil, fmt.Errorf("headers mode requires HTTP response, not JSON body")
+		return nil, errors.New("headers mode requires HTTP response, not JSON body")
 	default:
 		return nil, fmt.Errorf("unknown quota extraction mode: %s", config.Mode)
 	}
@@ -176,7 +177,7 @@ func extractMaxFromArray(raw map[string]any, config QuotaExtractionConfig, info 
 	}
 
 	if maxBalance == 0 {
-		return fmt.Errorf("no valid balance found in array")
+		return errors.New("no valid balance found in array")
 	}
 
 	info.BalanceUSD = maxBalance
@@ -296,7 +297,7 @@ func parseArrayIndex(key string) int {
 func getMapKey(current any, key string) (any, error) {
 	m, ok := current.(map[string]any)
 	if !ok {
-		return nil, fmt.Errorf("not a map")
+		return nil, errors.New("not a map")
 	}
 	val, exists := m[key]
 	if !exists {

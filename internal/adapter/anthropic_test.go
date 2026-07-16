@@ -16,10 +16,10 @@ func TestAnthropicAdapter_InjectAuth(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if got := req.Header.Get("x-api-key"); got != "sk-ant-test123" {
+	if got := req.Header.Get("X-Api-Key"); got != "sk-ant-test123" {
 		t.Errorf("expected x-api-key 'sk-ant-test123', got %q", got)
 	}
-	if got := req.Header.Get("anthropic-version"); got != "2023-06-01" {
+	if got := req.Header.Get("Anthropic-Version"); got != "2023-06-01" {
 		t.Errorf("expected anthropic-version '2023-06-01', got %q", got)
 	}
 }

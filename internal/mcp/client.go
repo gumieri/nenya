@@ -3,6 +3,7 @@ package mcp
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -158,7 +159,7 @@ func (c *Client) GetTool(name string) (Tool, bool) {
 
 func (c *Client) CallTool(ctx context.Context, name string, arguments map[string]any) (*CallToolResult, error) {
 	if !c.initialized.Load() {
-		return nil, fmt.Errorf("client not initialized")
+		return nil, errors.New("client not initialized")
 	}
 
 	c.mu.RLock()

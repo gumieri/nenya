@@ -107,6 +107,7 @@ func collectValidationErrors(ctx context.Context, cfg *Config, providers map[str
 	errors = append(errors, validateProviderRateLimits(cfg)...)
 	errors = append(errors, validateBillingConfig(cfg)...)
 	errors = append(errors, validateUpstreamTimeoutSeconds(cfg.Governance.UpstreamTimeoutSeconds)...)
+	errors = append(errors, validateStreamIdleTimeoutSeconds(cfg.Governance.StreamIdleTimeoutSeconds)...)
 
 	if pingProviders {
 		errors = append(errors, validateProviders(ctx, providers, logger)...)
@@ -189,23 +190,24 @@ func validateWithMinimalRequest(provider *Provider, ctx context.Context, logger 
 		return fmt.Errorf("failed to apply authentication: %w", authErr)
 	}
 
-	var resp *http.Response
-	err = doWithRetry(ctx, 3, func() error {
-		var doErr error
-		resp, doErr = validationClient.Do(req)
+	resp, err := doWithRetryResp(ctx, 3, func() (*http.Response, error) {
+		r, doErr := validationClient.Do(req)
 		if doErr != nil {
-			return doErr
+			if r != nil {
+				_ = r.Body.Close()
+			}
+			return nil, doErr
 		}
-		if resp.StatusCode >= 500 {
-			_ = resp.Body.Close()
-			return fmt.Errorf("upstream error: %d", resp.StatusCode)
+		if r.StatusCode >= 500 {
+			_ = r.Body.Close()
+			return nil, fmt.Errorf("upstream error: %d", r.StatusCode)
 		}
-		return nil
+		return r, nil
 	})
 	if err != nil {
 		return fmt.Errorf("request failed: %v", err)
 	}
-	defer closeBody(resp)
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode == http.StatusOK || resp.StatusCode == http.StatusBadRequest {
 		return nil
@@ -224,7 +226,7 @@ func applyAuthHeader(req *http.Request, provider *Provider) error {
 		req.Header.Set("Authorization", "Bearer "+provider.APIKey)
 	case "bearer+x-goog":
 		req.Header.Set("Authorization", "Bearer "+provider.APIKey)
-		req.Header.Set("x-goog-api-key", provider.APIKey)
+		req.Header.Set("X-Goog-Api-Key", provider.APIKey)
 	case "none":
 	default:
 		return fmt.Errorf("unsupported auth style: %s", provider.AuthStyle)
@@ -271,7 +273,7 @@ func OllamaHealthURL(engineURL string) string {
 
 func validateOllamaHealth(ctx context.Context, ollamaURL string) bool {
 	healthURL := OllamaHealthURL(ollamaURL)
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, healthURL, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, healthURL, http.NoBody)
 	if err != nil {
 		return false
 	}
@@ -289,7 +291,7 @@ func doWithRetry(ctx context.Context, maxAttempts int, fn func() error) error {
 	}
 
 	var lastErr error
-	for attempt := 0; attempt < maxAttempts; attempt++ {
+	for attempt := range maxAttempts {
 		if err := fn(); err != nil {
 			lastErr = err
 			if attempt == maxAttempts-1 {
@@ -310,14 +312,48 @@ func doWithRetry(ctx context.Context, maxAttempts int, fn func() error) error {
 	return lastErr
 }
 
+// doWithRetryResp is like doWithRetry but for HTTP functions returning
+// (*http.Response, error). Callback must close body on error and return
+// response on success.
+func doWithRetryResp(ctx context.Context, maxAttempts int, fn func() (*http.Response, error)) (*http.Response, error) {
+	if maxAttempts <= 1 {
+		return fn()
+	}
+
+	var lastErr error
+	for attempt := range maxAttempts {
+		resp, err := fn()
+		if err != nil {
+			if resp != nil {
+				_ = resp.Body.Close()
+			}
+			lastErr = err
+			if attempt == maxAttempts-1 {
+				return nil, lastErr
+			}
+			backoff := calculateBackoff(attempt)
+			timer := time.NewTimer(backoff)
+			select {
+			case <-timer.C:
+			case <-ctx.Done():
+				timer.Stop()
+				return nil, ctx.Err()
+			}
+			continue
+		}
+		return resp, nil
+	}
+	return nil, lastErr
+}
+
 func calculateBackoff(attempt int) time.Duration {
 	base := 500 * time.Millisecond
-	max := 8 * time.Second
+	maxDelay := 8 * time.Second
 	delay := base
-	for i := 0; i < attempt; i++ {
+	for range attempt {
 		delay *= 2
-		if delay >= max {
-			return max
+		if delay >= maxDelay {
+			return maxDelay
 		}
 	}
 	jitter := time.Duration(rand.Int63n(int64(delay / 10)))
@@ -391,6 +427,13 @@ func validateBillingConfig(cfg *Config) []string {
 func validateUpstreamTimeoutSeconds(v *int) []string {
 	if v != nil && *v < 0 {
 		return []string{fmt.Sprintf("governance.upstream_timeout_seconds must be non-negative (set to 0 for unlimited), got %d", *v)}
+	}
+	return nil
+}
+
+func validateStreamIdleTimeoutSeconds(v *int) []string {
+	if v != nil && *v < 0 {
+		return []string{fmt.Sprintf("governance.stream_idle_timeout_seconds must be non-negative (set to 0 to disable stall detection), got %d", *v)}
 	}
 	return nil
 }

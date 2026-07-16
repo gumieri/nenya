@@ -315,7 +315,7 @@ func (p *Proxy) forwardToUpstreamWithMCP(gw *gateway.NenyaGateway,
 	}()
 
 loop:
-	for iteration := 0; iteration < maxIter; iteration++ {
+	for iteration := range maxIter {
 		in := mcpIterInput{
 			gw:              gw,
 			mcpLoopCtx:      mcpLoopCtx,

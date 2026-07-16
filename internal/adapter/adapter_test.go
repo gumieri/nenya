@@ -136,7 +136,7 @@ func TestBearerPlusGoogAuth(t *testing.T) {
 	if got := req.Header.Get("Authorization"); got != "Bearer key" {
 		t.Errorf("expected 'Bearer key', got %q", got)
 	}
-	if got := req.Header.Get("x-goog-api-key"); got != "key" {
+	if got := req.Header.Get("X-Goog-Api-Key"); got != "key" {
 		t.Errorf("expected 'key', got %q", got)
 	}
 }
@@ -277,7 +277,7 @@ func TestAdapterForAuthStyle(t *testing.T) {
 			t.Errorf("AdapterForAuthStyle(%q).InjectAuth() Authorization = %q, want %q", tt.style, got, tt.wantAuth)
 		}
 		if tt.style == "bearer+x-goog" {
-			if got := req.Header.Get("x-goog-api-key"); got != "key" {
+			if got := req.Header.Get("X-Goog-Api-Key"); got != "key" {
 				t.Errorf("expected x-goog-api-key for bearer+x-goog, got %q", got)
 			}
 		}

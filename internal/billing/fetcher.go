@@ -92,7 +92,7 @@ func (qf *QuotaFetcher) FetchQuota(ctx context.Context, provider, account, url, 
 		FetchedAt: time.Now(),
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, http.NoBody)
 	if err != nil {
 		result.Error = fmt.Errorf("failed to create request: %w", err)
 		return result
@@ -346,12 +346,12 @@ func (qf *QuotaFetcher) nextPollDelay(cfg *quotaProviderConfig, result QuotaFetc
 }
 
 // clampDuration clamps d to the range [min, max].
-func clampDuration(d, min, max time.Duration) time.Duration {
-	if d < min {
-		return min
+func clampDuration(d, minDur, maxDur time.Duration) time.Duration {
+	if d < minDur {
+		return minDur
 	}
-	if d > max {
-		return max
+	if d > maxDur {
+		return maxDur
 	}
 	return d
 }

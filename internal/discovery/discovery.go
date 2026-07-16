@@ -17,8 +17,8 @@ type DiscoveredModel struct {
 	ServiceKinds []string       `json:"service_kinds,omitempty"` // Future: use for intelligent model routing to embedding/TTS endpoints
 }
 
-func (m DiscoveredModel) HasCapability(cap Capability) bool {
-	return m.Metadata.HasCapability(cap)
+func (m DiscoveredModel) HasCapability(c Capability) bool {
+	return m.Metadata.HasCapability(c)
 }
 
 // MaxContext is the model's maximum context window in tokens.

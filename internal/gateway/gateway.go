@@ -102,7 +102,12 @@ func New(ctx context.Context, cfg config.Config, secrets *config.SecretsConfig, 
 
 	timeout := cfg.Governance.EffectiveUpstreamTimeout()
 	if timeout == 0 {
-		logger.Warn("upstream client timeout is unlimited (governance.upstream_timeout_seconds=0), relying on streamIdleTimeout (60s) for stall detection")
+		idle := cfg.Governance.EffectiveStreamIdleTimeout()
+		if idle == 0 {
+			logger.Warn("upstream timeout and stream idle timeout are both unlimited (0) — no stall detection")
+		} else {
+			logger.Warn("upstream client timeout is unlimited (governance.upstream_timeout_seconds=0), relying on stream idle timeout", "idle_timeout", idle)
+		}
 	} else {
 		logger.Info("upstream client timeout configured", "timeout", timeout, "timeout_h", timeout.Hours(), "config_field", "governance.upstream_timeout_seconds")
 	}
@@ -541,7 +546,7 @@ func resolveStringModelEntry(m config.AgentModel, catalog *discovery.ModelCatalo
 	if entry, ok := config.ModelRegistry[m.Model]; ok && util.ProviderCanServe(providers[entry.Provider]) {
 		return []string{fmt.Sprintf("%s/%s", entry.Provider, m.Model)}
 	}
-	return []string{fmt.Sprintf("%s (unresolved)", m.Model)}
+	return []string{m.Model + " (unresolved)"}
 }
 
 func lookupStringModelInCatalog(m config.AgentModel, catalog *discovery.ModelCatalog, providers map[string]*config.Provider) []string {
