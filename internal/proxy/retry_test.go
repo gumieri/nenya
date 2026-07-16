@@ -1090,76 +1090,67 @@ func TestPrepareAndSend_ProviderTimeoutRecordsFailure(t *testing.T) {
 	}
 }
 
-func TestLogSafeHeaders_OnlyIncludesAllowed(t *testing.T) {
-	h := http.Header{}
-	h.Set("Content-Type", "application/json")
-	h.Set("Authorization", "Bearer sk-secret-123")
-	h.Set("Cookie", "session=abc123")
-	h.Set("X-Api-Key", "super-secret")
-	h.Set("User-Agent", "test-client/1.0")
-	h.Set("Accept", "*/*")
-	h.Set("Accept-Encoding", "gzip")
-	h.Set("X-Custom-Secret", "leaked")
+// Removed logSafeHeaders tests (formerly lines 1093-1165): CodeQL
+// go/clear-text-logging query traces all http.Header values as tainted
+// regardless of allow-list filtering. The fix removes header value logging
+// entirely and logs only header_count.
 
-	safe := logSafeHeaders(h)
+func TestLogRequestIfDebug_LogsHeaderCount(t *testing.T) {
+	var logBuf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelDebug}))
 
-	for _, name := range safeRequestHeaders {
-		if h.Get(name) == "" {
-			continue
-		}
-		got := safe.Get(name)
-		if got == "" {
-			t.Errorf("safe header %q should be present but isn't: %v", name, safe)
-		}
-		if got != h.Get(name) {
-			t.Errorf("safe header %q value mismatch: got %q, want %q", name, got, h.Get(name))
-		}
+	req := httptest.NewRequest("POST", "http://example.com/api", bytes.NewReader([]byte("test body")))
+	req.Header.Set("Authorization", "Bearer secret-token")
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Cookie", "session=abc")
+
+	logRequestIfDebug(context.Background(), logger, req, "http://upstream.com/api", []byte("test body"))
+
+	logOutput := logBuf.String()
+
+	if !strings.Contains(logOutput, "header_count=3") {
+		t.Errorf("expected header_count=3 in log output, got: %s", logOutput)
 	}
 
-	for _, hdr := range []string{"Authorization", "Cookie", "X-Api-Key", "X-Custom-Secret"} {
-		if _, ok := safe[http.CanonicalHeaderKey(hdr)]; ok {
-			t.Errorf("%s should NOT be in safe headers, got %q", hdr, safe.Get(hdr))
-		}
+	if strings.Contains(logOutput, "secret-token") || strings.Contains(logOutput, "abc") {
+		t.Errorf("header values leaked to log output: %s", logOutput)
+	}
+
+	if !strings.Contains(logOutput, "http://upstream.com/api") {
+		t.Errorf("expected target URL in log output, got: %s", logOutput)
 	}
 }
 
-func TestLogSafeHeaders_EmptyHeaders(t *testing.T) {
-	safe := logSafeHeaders(http.Header{})
-	if len(safe) != 0 {
-		t.Fatalf("expected empty result for empty headers, got %v", safe)
+func TestLogRequestIfDebug_LogsBody(t *testing.T) {
+	var logBuf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+
+	req := httptest.NewRequest("POST", "http://example.com/api", nil)
+	body := []byte(`{"model":"test","messages":[]}`)
+
+	logRequestIfDebug(context.Background(), logger, req, "http://upstream.com/api", body)
+
+	logOutput := logBuf.String()
+
+	if !strings.Contains(logOutput, `body=`) {
+		t.Errorf("expected body in log output, got: %s", logOutput)
 	}
 }
 
-func TestLogSafeHeaders_NilHeaders(t *testing.T) {
-	safe := logSafeHeaders(nil)
-	if len(safe) != 0 {
-		t.Fatalf("expected empty result for nil headers, got %v", safe)
+func TestLogRequestIfDebug_SkipsLargeBody(t *testing.T) {
+	var logBuf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+
+	req := httptest.NewRequest("POST", "http://example.com/api", nil)
+	body := make([]byte, 2000)
+
+	logRequestIfDebug(context.Background(), logger, req, "http://upstream.com/api", body)
+
+	logOutput := logBuf.String()
+
+	if strings.Contains(logOutput, "body=") {
+		t.Errorf("large body should not be logged, got: %s", logOutput)
 	}
 }
 
-func TestLogSafeHeaders_OnlyNonAllowedHeaders(t *testing.T) {
-	h := http.Header{}
-	h.Set("Authorization", "Bearer token")
-	h.Set("X-Secret", "value")
-	h.Set("Cookie", "session=1")
 
-	safe := logSafeHeaders(h)
-	if len(safe) != 0 {
-		t.Fatalf("expected empty result when only sensitive headers present, got %v", safe)
-	}
-}
-
-func TestLogSafeHeaders_MultiValuedHeader(t *testing.T) {
-	h := http.Header{}
-	h.Add("Accept", "text/html")
-	h.Add("Accept", "application/json")
-
-	safe := logSafeHeaders(h)
-	accepts := safe.Values("Accept")
-	if len(accepts) != 2 {
-		t.Fatalf("expected 2 Accept values, got %d: %v", len(accepts), accepts)
-	}
-	if accepts[0] != "text/html" || accepts[1] != "application/json" {
-		t.Fatalf("expected [text/html, application/json], got %v", accepts)
-	}
-}

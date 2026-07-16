@@ -266,7 +266,11 @@ func (p *Proxy) resolveModelRouting(ctx context.Context, req *chatRequest, gw *g
 		return nil, "", 0, 0, &httpError{http.StatusInternalServerError, "No valid providers available"}
 	}
 
-	gw.Logger.Info("model routing", "model", req.ModelName, "providers", len(targets), "upstreams", targets)
+	targetStrings := make([]string, len(targets))
+	for i, t := range targets {
+		targetStrings[i] = fmt.Sprintf("%s/%s", t.Provider, t.Model)
+	}
+	gw.Logger.Info("model routing", "model", req.ModelName, "providers", len(targets), "targets", targetStrings)
 	return targets, "", 0, 0, nil
 }
 

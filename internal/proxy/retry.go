@@ -457,46 +457,18 @@ func (p *Proxy) forwardToUpstream(gw *gateway.NenyaGateway, w http.ResponseWrite
 	rl.Exhausted()
 }
 
+// logRequestIfDebug logs request details at Debug level. Header values are
+// intentionally NOT logged — CodeQL's go/clear-text-logging query traces all
+// http.Header values as potentially sensitive (Authorization, Cookie, API keys).
+// Only header_count is logged for debugging context without exposing values.
 func logRequestIfDebug(ctx context.Context, logger *slog.Logger, req *http.Request, targetURL string, body []byte) {
 	if !logger.Enabled(ctx, slog.LevelDebug) {
 		return
 	}
-	logger.Debug("forwarding to upstream", "url", targetURL)
-	safe := logSafeHeaders(req.Header)
-	if len(safe) > 0 {
-		logger.Debug("request headers", "headers", safe)
-	} else if len(req.Header) > 0 {
-		logger.Debug("request headers", "headers", "all-redacted")
-	}
+	logger.Debug("forwarding to upstream", "url", targetURL, "header_count", len(req.Header))
 	if len(body) > 0 && len(body) < 1000 {
 		logger.Debug("request body", "body", string(body))
 	}
-}
-
-// logSafeHeaders returns a map of header names to values, only including
-// headers from an allow-list that are known to never contain sensitive data.
-// This prevents accidental logging of Authorization, Cookie, API keys, etc.
-func logSafeHeaders(h http.Header) http.Header {
-	result := make(http.Header, len(safeRequestHeaders))
-	for _, name := range safeRequestHeaders {
-		if v := h.Values(name); len(v) > 0 {
-			result[name] = v
-		}
-	}
-	return result
-}
-
-// safeRequestHeaders is the allow-list of HTTP headers that are safe to log.
-// Any header not in this list (Authorization, Cookie, X-API-Key, etc.)
-// is NEVER written to logs.
-var safeRequestHeaders = []string{
-	"Content-Type",
-	"Content-Length",
-	"Accept",
-	"Accept-Encoding",
-	"User-Agent",
-	"Cache-Control",
-	"X-Request-Id",
 }
 
 func handleUpstreamResponse(ctxLogger *slog.Logger, resp *http.Response, cancel context.CancelFunc) upstreamAction {
