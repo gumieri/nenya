@@ -1,6 +1,7 @@
 package routing
 
 import (
+	"log/slog"
 	"strings"
 
 	"github.com/nenya/config"
@@ -22,6 +23,21 @@ type UpstreamTarget struct {
 	// ReasoningEffort is the default reasoning intensity (low, medium, high, xhigh, max)
 	// from agent config, used if the client didn't specify one.
 	ReasoningEffort string
+}
+
+// LogValue implements slog.LogValuer to redact the Credential field when
+// UpstreamTarget is passed to any slog logging call.
+func (t UpstreamTarget) LogValue() slog.Value {
+	return slog.GroupValue(
+		slog.String("provider", t.Provider),
+		slog.String("model", t.Model),
+		slog.String("format", t.Format),
+		slog.String("url", t.URL),
+		slog.Int("max_context", t.MaxContext),
+		slog.Int("max_output", t.MaxOutput),
+		slog.String("account", t.AccountName),
+		slog.String("reasoning_effort", t.ReasoningEffort),
+	)
 }
 
 // ProviderMatch holds the resolved provider details for a model,

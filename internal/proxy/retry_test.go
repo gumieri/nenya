@@ -1089,3 +1089,77 @@ func TestPrepareAndSend_ProviderTimeoutRecordsFailure(t *testing.T) {
 		t.Errorf("CB should have failure_count > 0 for provider timeout, got %d", failures)
 	}
 }
+
+func TestLogSafeHeaders_OnlyIncludesAllowed(t *testing.T) {
+	h := http.Header{}
+	h.Set("Content-Type", "application/json")
+	h.Set("Authorization", "Bearer sk-secret-123")
+	h.Set("Cookie", "session=abc123")
+	h.Set("X-Api-Key", "super-secret")
+	h.Set("User-Agent", "test-client/1.0")
+	h.Set("Accept", "*/*")
+	h.Set("Accept-Encoding", "gzip")
+	h.Set("X-Custom-Secret", "leaked")
+
+	safe := logSafeHeaders(h)
+
+	for _, name := range safeRequestHeaders {
+		if h.Get(name) == "" {
+			continue
+		}
+		got := safe.Get(name)
+		if got == "" {
+			t.Errorf("safe header %q should be present but isn't: %v", name, safe)
+		}
+		if got != h.Get(name) {
+			t.Errorf("safe header %q value mismatch: got %q, want %q", name, got, h.Get(name))
+		}
+	}
+
+	for _, hdr := range []string{"Authorization", "Cookie", "X-Api-Key", "X-Custom-Secret"} {
+		if _, ok := safe[http.CanonicalHeaderKey(hdr)]; ok {
+			t.Errorf("%s should NOT be in safe headers, got %q", hdr, safe.Get(hdr))
+		}
+	}
+}
+
+func TestLogSafeHeaders_EmptyHeaders(t *testing.T) {
+	safe := logSafeHeaders(http.Header{})
+	if len(safe) != 0 {
+		t.Fatalf("expected empty result for empty headers, got %v", safe)
+	}
+}
+
+func TestLogSafeHeaders_NilHeaders(t *testing.T) {
+	safe := logSafeHeaders(nil)
+	if len(safe) != 0 {
+		t.Fatalf("expected empty result for nil headers, got %v", safe)
+	}
+}
+
+func TestLogSafeHeaders_OnlyNonAllowedHeaders(t *testing.T) {
+	h := http.Header{}
+	h.Set("Authorization", "Bearer token")
+	h.Set("X-Secret", "value")
+	h.Set("Cookie", "session=1")
+
+	safe := logSafeHeaders(h)
+	if len(safe) != 0 {
+		t.Fatalf("expected empty result when only sensitive headers present, got %v", safe)
+	}
+}
+
+func TestLogSafeHeaders_MultiValuedHeader(t *testing.T) {
+	h := http.Header{}
+	h.Add("Accept", "text/html")
+	h.Add("Accept", "application/json")
+
+	safe := logSafeHeaders(h)
+	accepts := safe.Values("Accept")
+	if len(accepts) != 2 {
+		t.Fatalf("expected 2 Accept values, got %d: %v", len(accepts), accepts)
+	}
+	if accepts[0] != "text/html" || accepts[1] != "application/json" {
+		t.Fatalf("expected [text/html, application/json], got %v", accepts)
+	}
+}
