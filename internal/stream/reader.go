@@ -49,6 +49,8 @@ type UsageCallback func(completionTokens, promptTokens, totalTokens, cacheHitTok
 
 type ContentCallback func(content string)
 
+type ThinkingCallback func(active bool)
+
 // SSEObserver receives notifications about SSE events during streaming.
 // Observers are called after transformation, so they see what the client receives.
 type SSEObserver interface {
@@ -73,6 +75,7 @@ type SSETransformingReader struct {
 	transformer         ResponseTransformer
 	onUsage             UsageCallback
 	onContent           ContentCallback
+	onThinking          ThinkingCallback
 	observer            SSEObserver
 	streamFilter        *StreamFilter
 	streamEntropyFilter *StreamEntropyFilter
@@ -174,7 +177,12 @@ func (r *SSETransformingReader) SetOnContent(cb ContentCallback) {
 	r.onContent = cb
 }
 
-// SetObserver sets an observer for SSE events during streaming.
+// SetOnThinking sets a callback that receives thinking state changes.
+// The callback is invoked when a stream starts or ends emitting reasoning/thinking tokens.
+func (r *SSETransformingReader) SetOnThinking(cb ThinkingCallback) {
+	r.onThinking = cb
+}
+
 func (r *SSETransformingReader) SetObserver(obs SSEObserver) {
 	r.observer = obs
 }
@@ -571,6 +579,11 @@ func (r *SSETransformingReader) callUsageAndContentCallbacks(parsed map[string]i
 	if r.onContent != nil {
 		if content := ExtractDeltaContentFromMap(parsed); content != "" {
 			r.onContent(content)
+		}
+	}
+	if r.onThinking != nil {
+		if active, hasSignal := ExtractThinkingSignal(parsed); hasSignal {
+			r.onThinking(active)
 		}
 	}
 }

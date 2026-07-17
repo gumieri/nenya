@@ -108,6 +108,7 @@ func collectValidationErrors(ctx context.Context, cfg *Config, providers map[str
 	errors = append(errors, validateBillingConfig(cfg)...)
 	errors = append(errors, validateUpstreamTimeoutSeconds(cfg.Governance.UpstreamTimeoutSeconds)...)
 	errors = append(errors, validateStreamIdleTimeoutSeconds(cfg.Governance.StreamIdleTimeoutSeconds)...)
+	errors = append(errors, validateThinkingStreamIdleTimeoutSeconds(cfg.Governance.ThinkingStreamIdleTimeoutSeconds)...)
 
 	if pingProviders {
 		errors = append(errors, validateProviders(ctx, providers, logger)...)
@@ -153,6 +154,12 @@ func validateEntropyConfig(sf BouncerConfig) []string {
 func validateProviders(ctx context.Context, providers map[string]*Provider, logger *slog.Logger) []string {
 	errors := []string{}
 	for name, provider := range providers {
+		if provider.StreamIdleTimeoutSeconds < 0 {
+			errors = append(errors, fmt.Sprintf("providers[%q].stream_idle_timeout_seconds must be non-negative (set to 0 to use global default), got %d", name, provider.StreamIdleTimeoutSeconds))
+		}
+		if provider.StreamIdleTimeoutSeconds > 86400 {
+			errors = append(errors, fmt.Sprintf("providers[%q].stream_idle_timeout_seconds exceeds maximum allowed value (86400 seconds / 24 hours), got %d", name, provider.StreamIdleTimeoutSeconds))
+		}
 		if provider.APIKey == "" {
 			logger.Warn("provider has no API key configured", "provider", name)
 			continue
@@ -432,8 +439,27 @@ func validateUpstreamTimeoutSeconds(v *int) []string {
 }
 
 func validateStreamIdleTimeoutSeconds(v *int) []string {
-	if v != nil && *v < 0 {
+	if v == nil {
+		return nil
+	}
+	if *v < 0 {
 		return []string{fmt.Sprintf("governance.stream_idle_timeout_seconds must be non-negative (set to 0 to disable stall detection), got %d", *v)}
+	}
+	if *v > 86400 {
+		return []string{fmt.Sprintf("governance.stream_idle_timeout_seconds exceeds maximum allowed value (86400 seconds / 24 hours), got %d", *v)}
+	}
+	return nil
+}
+
+func validateThinkingStreamIdleTimeoutSeconds(v *int) []string {
+	if v == nil {
+		return nil
+	}
+	if *v < 0 {
+		return []string{fmt.Sprintf("governance.thinking_stream_idle_timeout_seconds must be non-negative (set to 0 to disable thinking-aware extension), got %d", *v)}
+	}
+	if *v > 86400 {
+		return []string{fmt.Sprintf("governance.thinking_stream_idle_timeout_seconds exceeds maximum allowed value (86400 seconds / 24 hours), got %d", *v)}
 	}
 	return nil
 }

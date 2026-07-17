@@ -472,10 +472,10 @@ func TestCloseBody(t *testing.T) {
 
 func TestValidateUpstreamTimeoutSeconds(t *testing.T) {
 	tests := []struct {
-		name         string
-		v            *int
-		wantErr      bool
-		wantErrMsg   string
+		name       string
+		v          *int
+		wantErr    bool
+		wantErrMsg string
 	}{
 		{"nil passes", nil, false, ""},
 		{"zero passes", PtrTo(0), false, ""},
@@ -511,6 +511,7 @@ func TestValidateStreamIdleTimeoutSeconds(t *testing.T) {
 		{"positive passes", PtrTo(120), false, ""},
 		{"large positive passes", PtrTo(86400), false, ""},
 		{"negative fails", PtrTo(-1), true, "governance.stream_idle_timeout_seconds must be non-negative (set to 0 to disable stall detection), got -1"},
+		{"exceeds 86400 fails", PtrTo(86401), true, "governance.stream_idle_timeout_seconds exceeds maximum allowed value (86400 seconds / 24 hours), got 86401"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/nenya/config"
@@ -82,28 +83,62 @@ type readResult struct {
 
 // stallReader wraps an io.Reader and detects stalls where no data is received
 // within the configured timeout. It runs a background goroutine to read from
-// the underlying source and signals stall detection via a channel.
+// the underlying source and signals stall detection via a channel. The stallReader
+// supports thinking-aware timeout extension: when SetThinkingActive(true) is called
+// (by the SSETransformingReader detecting reasoning content), the stall timeout
+// automatically extends to thinkingTimeout instead of the base timeout.
 type stallReader struct {
-	mu        sync.Mutex
-	timer     *time.Timer
-	timeout   time.Duration
-	stalled   bool
-	stallCh   chan struct{}
-	closeOnce sync.Once
-	ch        chan readResult
-	remainBuf []byte // leftover bytes from partial reads
-	remainPos int
+	mu              sync.Mutex
+	timer           *time.Timer
+	timeout         time.Duration
+	thinkingTimeout time.Duration
+	thinkingActive  atomic.Bool
+	stalled         bool
+	stallCh         chan struct{}
+	closeOnce       sync.Once
+	ch              chan readResult
+	remainBuf       []byte
+	remainPos       int
 }
 
-// newStallReader creates a stallReader that reads from src with the given timeout.
-// The context is used to cancel the background read goroutine on shutdown.
-func newStallReader(ctx context.Context, src io.Reader, timeout time.Duration) *stallReader {
-	sr := &stallReader{
-		timeout: timeout,
-		stallCh: make(chan struct{}),
-		ch:      make(chan readResult, 1),
+// activeTimeout returns the appropriate timeout based on the current thinking state.
+// Uses atomic read, safe to call without holding sr.mu.
+func (sr *stallReader) activeTimeout() time.Duration {
+	if sr.thinkingActive.Load() {
+		return sr.thinkingTimeout
 	}
-	sr.timer = time.AfterFunc(timeout, func() {
+	return sr.timeout
+}
+
+// SetThinkingActive atomically transitions the thinking state and resets the
+// stall timer with the appropriate timeout. This method is thread-safe and can be
+// called concurrently with Read(). If the state changes, the timer is reset to
+// extend or contract the stall window based on the new state. When
+// thinkingTimeout is 0 (disabled), this method is a no-op to avoid Reset(0)
+// which fires immediately.
+func (sr *stallReader) SetThinkingActive(active bool) {
+	if sr.thinkingTimeout <= 0 {
+		return
+	}
+	sr.mu.Lock()
+	was := sr.thinkingActive.Swap(active)
+	if was != active && !sr.stalled {
+		sr.timer.Reset(sr.activeTimeout())
+	}
+	sr.mu.Unlock()
+}
+
+// newStallReader creates a stallReader that reads from src with the given
+// base timeout and extended timeout for thinking phases. The context is used
+// to cancel the background read goroutine on shutdown.
+func newStallReader(ctx context.Context, src io.Reader, timeout, thinkingTimeout time.Duration) *stallReader {
+	sr := &stallReader{
+		timeout:         timeout,
+		thinkingTimeout: thinkingTimeout,
+		stallCh:         make(chan struct{}),
+		ch:              make(chan readResult, 1),
+	}
+	sr.timer = time.AfterFunc(sr.activeTimeout(), func() {
 		sr.mu.Lock()
 		sr.stalled = true
 		sr.mu.Unlock()
@@ -170,12 +205,12 @@ func (sr *stallReader) Read(p []byte) (int, error) {
 		}
 		sr.mu.Lock()
 		stalled := sr.stalled
+		if !stalled && len(rr.data) > 0 {
+			sr.timer.Reset(sr.activeTimeout())
+		}
 		sr.mu.Unlock()
 		if stalled {
 			return 0, errStreamStalled
-		}
-		if len(rr.data) > 0 {
-			sr.timer.Reset(sr.timeout)
 		}
 		n := copy(p, rr.data)
 		if n < len(rr.data) {
@@ -428,6 +463,18 @@ func (p *Proxy) resolveTransformer(gw *gateway.NenyaGateway, target routing.Upst
 	return nil
 }
 
+func resolveStreamIdleTimeout(gw *gateway.NenyaGateway, providerName string) time.Duration {
+	timeout := gw.Config.Governance.EffectiveStreamIdleTimeout()
+	if provider, ok := gw.Providers[providerName]; ok && provider.StreamIdleTimeoutSeconds > 0 {
+		providerTimeout := time.Duration(provider.StreamIdleTimeoutSeconds) * time.Second
+		if providerTimeout > 86400*time.Second {
+			providerTimeout = 86400 * time.Second
+		}
+		return providerTimeout
+	}
+	return timeout
+}
+
 // setupTransformingReader creates and configures the SSE transforming reader, content builder, and stall reader.
 // Returns the transforming reader for streaming, the content builder for post-processing, and the stall reader for cleanup.
 // When stream idle timeout is 0 (disabled), stallR is nil and the body is passed directly to the transforming reader.
@@ -436,8 +483,10 @@ func (p *Proxy) setupTransformingReader(gw *gateway.NenyaGateway, target routing
 
 	var bodyReader io.Reader = action.resp.Body
 	var stallR *stallReader
-	if timeout := gw.Config.Governance.EffectiveStreamIdleTimeout(); timeout > 0 {
-		stallR = newStallReader(ctx, action.resp.Body, timeout)
+	timeout := resolveStreamIdleTimeout(gw, target.Provider)
+	if timeout > 0 {
+		thinkingTimeout := gw.Config.Governance.EffectiveThinkingStreamIdleTimeout()
+		stallR = newStallReader(ctx, action.resp.Body, timeout, thinkingTimeout)
 		bodyReader = stallR
 	}
 
@@ -450,6 +499,12 @@ func (p *Proxy) setupTransformingReader(gw *gateway.NenyaGateway, target routing
 	p.setupStreamFilterIfEnabled(gw, transformingReader)
 	p.setupStreamEntropyFilterIfEnabled(gw, transformingReader)
 	contentBuilder := p.setupContentBuilderIfNeeded(gw, agentName, transformingReader)
+
+	if stallR != nil {
+		transformingReader.SetOnThinking(func(active bool) {
+			stallR.SetThinkingActive(active)
+		})
+	}
 
 	return transformingReader, contentBuilder, stallR
 }

@@ -704,17 +704,19 @@ func ResolveProviders(cfg *Config, secrets *SecretsConfig) map[string]*Provider 
 			apiKey = secrets.ProviderKeys[name]
 		}
 		providers[name] = &Provider{
-			Name:                 name,
-			URL:                  pc.URL,
-			BaseURL:              deriveBaseURL(pc.URL),
-			APIKey:               apiKey,
-			AuthStyle:            pc.AuthStyle,
-			ApiFormat:            pc.ApiFormat,
-			TimeoutSeconds:       pc.TimeoutSeconds,
-			RetryableStatusCodes: pc.RetryableStatusCodes,
-			MaxRetryAttempts:     pc.MaxRetryAttempts,
-			Thinking:             pc.Thinking,
-			Billing:              pc.Billing,
+			Name:                     name,
+			URL:                      pc.URL,
+			BaseURL:                  deriveBaseURL(pc.URL),
+			FormatURLs:               pc.FormatURLs,
+			APIKey:                   apiKey,
+			AuthStyle:                pc.AuthStyle,
+			ApiFormat:                pc.ApiFormat,
+			TimeoutSeconds:           pc.TimeoutSeconds,
+			StreamIdleTimeoutSeconds: pc.StreamIdleTimeoutSeconds,
+			RetryableStatusCodes:     pc.RetryableStatusCodes,
+			MaxRetryAttempts:         pc.MaxRetryAttempts,
+			Thinking:                 pc.Thinking,
+			Billing:                  pc.Billing,
 		}
 	}
 	return providers

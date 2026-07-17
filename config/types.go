@@ -9,6 +9,8 @@ import (
 	"time"
 )
 
+const MaxTimeoutSeconds = 86400 // 24 hours
+
 // AgentModel defines a single model entry within an agent's model list,
 // specifying the provider, model name, URL override, and context limits.
 // Supports static entries (provider/model) and dynamic entries (provider_rgx/model_rgx)
@@ -128,19 +130,32 @@ func (a *AgentConfig) UnmarshalJSON(data []byte) error {
 // retry settings, and per-provider rate limits. User-provided configs override
 // built-in defaults.
 type ProviderConfig struct {
-	URL                  string            `json:"url"`
-	AuthStyle            string            `json:"auth_style"`
-	ApiFormat            string            `json:"api_format"`
-	FormatURLs           map[string]string `json:"format_urls,omitempty"`
-	TimeoutSeconds       int               `json:"timeout_seconds"`
-	RetryableStatusCodes []int             `json:"retryable_status_codes"`
-	MaxRetryAttempts     int               `json:"max_retry_attempts"`
-	Thinking             *ThinkingConfig   `json:"thinking,omitempty"`
-	APIKey               string            `json:"api_key,omitempty"`
-	Accounts             []AccountConfig   `json:"accounts,omitempty"`
-	RatelimitMaxRPM      *int              `json:"ratelimit_max_rpm,omitempty"`
-	RatelimitMaxTPM      *int              `json:"ratelimit_max_tpm,omitempty"`
-	Billing              *BillingConfig    `json:"billing,omitempty"`
+	URL        string            `json:"url"`
+	AuthStyle  string            `json:"auth_style"`
+	ApiFormat  string            `json:"api_format"`
+	FormatURLs map[string]string `json:"format_urls,omitempty"`
+	// TimeoutSeconds is the total request deadline for this provider.
+	TimeoutSeconds int `json:"timeout_seconds"`
+	// StreamIdleTimeoutSeconds is the stall detection timeout for SSE streams.
+	// When 0, uses the global governance default. When > 0, overrides the global
+	// default. Capped at 86400 (24 hours) by validation.
+	StreamIdleTimeoutSeconds int `json:"stream_idle_timeout_seconds,omitempty"`
+	// RetryableStatusCodes defines which HTTP status codes trigger automatic retry.
+	RetryableStatusCodes []int `json:"retryable_status_codes"`
+	// MaxRetryAttempts is the maximum number of retry attempts for failed requests.
+	MaxRetryAttempts int `json:"max_retry_attempts"`
+	// Thinking configures reasoning token behavior for this provider.
+	Thinking *ThinkingConfig `json:"thinking,omitempty"`
+	// APIKey is the authentication key (typically loaded from secrets).
+	APIKey string `json:"api_key,omitempty"`
+	// Accounts defines multi-account rotation for this provider.
+	Accounts []AccountConfig `json:"accounts,omitempty"`
+	// RatelimitMaxRPM is the requests-per-minute rate limit.
+	RatelimitMaxRPM *int `json:"ratelimit_max_rpm,omitempty"`
+	// RatelimitMaxTPM is the tokens-per-minute rate limit.
+	RatelimitMaxTPM *int `json:"ratelimit_max_tpm,omitempty"`
+	// Billing configures usage-based billing tracking for this provider.
+	Billing *BillingConfig `json:"billing,omitempty"`
 }
 
 // AccountConfig defines a single credential/account for multi-account providers.
@@ -161,18 +176,21 @@ type ThinkingConfig struct {
 // combining user config with secrets and derived defaults. Created by
 // ResolveProviders at startup.
 type Provider struct {
-	Name                 string
-	URL                  string
-	BaseURL              string
-	APIKey               string
-	AuthStyle            string
-	ApiFormat            string
-	FormatURLs           map[string]string
-	TimeoutSeconds       int
-	RetryableStatusCodes []int
-	MaxRetryAttempts     int
-	Thinking             *ThinkingConfig
-	Billing              *BillingConfig
+	Name           string
+	URL            string
+	BaseURL        string
+	APIKey         string
+	AuthStyle      string
+	ApiFormat      string
+	FormatURLs     map[string]string
+	TimeoutSeconds int
+	// StreamIdleTimeoutSeconds is the stall detection timeout for SSE streams.
+	// When 0, uses the global governance default. When > 0, overrides the global default.
+	StreamIdleTimeoutSeconds int
+	RetryableStatusCodes     []int
+	MaxRetryAttempts         int
+	Thinking                 *ThinkingConfig
+	Billing                  *BillingConfig
 }
 
 // Config is the top-level configuration for the Nenya gateway. It is
@@ -261,7 +279,11 @@ type GovernanceConfig struct {
 	BillingQualityScale      float64  `json:"billing_quality_scale,omitempty"`
 	MaxTransformedSSEBytes   int      `json:"max_transformed_sse_bytes,omitempty"`
 	UpstreamTimeoutSeconds   *int     `json:"upstream_timeout_seconds,omitempty"`
-	StreamIdleTimeoutSeconds *int     `json:"stream_idle_timeout_seconds,omitempty"`
+	// StreamIdleTimeoutSeconds is the stall detection timeout for SSE streams.
+	StreamIdleTimeoutSeconds *int `json:"stream_idle_timeout_seconds,omitempty"`
+	// ThinkingStreamIdleTimeoutSeconds is the stall detection timeout during
+	// thinking phases. When 0, disables thinking-aware extension.
+	ThinkingStreamIdleTimeoutSeconds *int `json:"thinking_stream_idle_timeout_seconds,omitempty"`
 }
 
 func (g *GovernanceConfig) RPMSet() bool                  { return wasSet(g.RatelimitMaxRPM) }
@@ -302,7 +324,7 @@ func (g *GovernanceConfig) EffectiveMaxTransformedSSEBytes() int {
 // EffectiveUpstreamTimeout returns the HTTP client timeout for upstream
 // provider requests. When unset, defaults to 300s (5 minutes). When
 // explicitly set to 0, returns 0 (no client-level deadline — relies on
-// the stream idle timeout (default 120s, configurable via
+// the stream idle timeout (default 300s, configurable via
 // governance.stream_idle_timeout_seconds) for stall detection; connections
 // without data flow will be killed). Negative values are rejected by
 // validation at startup, but this method defensively clamps negatives to 0
@@ -322,7 +344,7 @@ func (g *GovernanceConfig) EffectiveUpstreamTimeout() time.Duration {
 }
 
 // EffectiveStreamIdleTimeout returns the stall detection timeout for upstream
-// SSE streams. When unset, defaults to 120s (2 minutes). When explicitly set
+// SSE streams. When unset, defaults to 300s (5 minutes). When explicitly set
 // to 0, returns 0 (disabled — no stall detection). Otherwise returns the
 // configured value, capped at 86400 (24h). This timeout fires when NO data
 // arrives from the upstream for the configured duration; it resets on every
@@ -330,9 +352,29 @@ func (g *GovernanceConfig) EffectiveUpstreamTimeout() time.Duration {
 // natural SSE gaps that require a higher value.
 func (g *GovernanceConfig) EffectiveStreamIdleTimeout() time.Duration {
 	if g.StreamIdleTimeoutSeconds == nil {
-		return 120 * time.Second
+		return 300 * time.Second
 	}
 	v := *g.StreamIdleTimeoutSeconds
+	if v <= 0 {
+		return 0
+	}
+	if v > 86400 {
+		v = 86400
+	}
+	return time.Duration(v) * time.Second
+}
+
+// EffectiveThinkingStreamIdleTimeout returns the stall detection timeout
+// for thinking phases. When unset, defaults to 600s (10 minutes). When
+// explicitly set to 0, returns 0 (disabled — no thinking-aware extension).
+// Otherwise returns the configured value, capped at 86400 (24h). This is
+// the extended timeout used when the SSETransformingReader detects active
+// reasoning/thinking content in the stream.
+func (g *GovernanceConfig) EffectiveThinkingStreamIdleTimeout() time.Duration {
+	if g.ThinkingStreamIdleTimeoutSeconds == nil {
+		return 600 * time.Second
+	}
+	v := *g.ThinkingStreamIdleTimeoutSeconds
 	if v <= 0 {
 		return 0
 	}

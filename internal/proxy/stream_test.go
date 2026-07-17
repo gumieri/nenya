@@ -23,6 +23,67 @@ import (
 	"github.com/nenya/internal/testutil"
 )
 
+func TestStallReaderActiveTimeout(t *testing.T) {
+	sr := &stallReader{
+		timeout:         100 * time.Millisecond,
+		thinkingTimeout: 500 * time.Millisecond,
+	}
+	got := sr.activeTimeout()
+	if got != 100*time.Millisecond {
+		t.Errorf("activeTimeout() without thinking = %v, want 100ms", got)
+	}
+	sr.thinkingActive.Store(true)
+	got = sr.activeTimeout()
+	if got != 500*time.Millisecond {
+		t.Errorf("activeTimeout() with thinking = %v, want 500ms", got)
+	}
+	sr.thinkingActive.Store(false)
+	got = sr.activeTimeout()
+	if got != 100*time.Millisecond {
+		t.Errorf("activeTimeout() after thinking reset = %v, want 100ms", got)
+	}
+}
+
+func TestResolveStreamIdleTimeout(t *testing.T) {
+	tests := []struct {
+		name          string
+		providerName  string
+		governanceSec int
+		providerSec   int
+		wantSeconds   int
+	}{
+		{"nil provider uses governance default", "nonexistent", 300, 0, 300},
+		{"provider with 0 timeout uses governance default", "test-provider", 300, 0, 300},
+		{"provider with valid timeout overrides governance", "test-provider", 300, 600, 600},
+		{"provider exceeding 86400 capped at 86400", "test-provider", 300, 86401, 86400},
+		{"provider exactly 86400 passes through", "test-provider", 300, 86400, 86400},
+		{"governance timeout with nil provider", "nonexistent", 500, 0, 500},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			gw := &gateway.NenyaGateway{
+				Config: config.Config{
+					Governance: config.GovernanceConfig{
+						StreamIdleTimeoutSeconds: &tt.governanceSec,
+					},
+				},
+				Providers: map[string]*config.Provider{},
+			}
+			if tt.providerName != "nonexistent" {
+				gw.Providers[tt.providerName] = &config.Provider{
+					Name:                     tt.providerName,
+					StreamIdleTimeoutSeconds: tt.providerSec,
+				}
+			}
+			got := resolveStreamIdleTimeout(gw, tt.providerName)
+			want := time.Duration(tt.wantSeconds) * time.Second
+			if got != want {
+				t.Errorf("resolveStreamIdleTimeout() = %v, want %v", got, want)
+			}
+		})
+	}
+}
+
 func TestContentBuilder(t *testing.T) {
 	b := newContentBuilder()
 	if b == nil {
@@ -50,7 +111,7 @@ func TestContentBuilder_Empty(t *testing.T) {
 func TestStallReader_DrainPending_WithData(t *testing.T) {
 	// Use a slow reader that blocks so readLoop doesn't race with us writing to sr.ch.
 	src := &slowReader{}
-	sr := newStallReader(context.Background(), src, time.Hour)
+	sr := newStallReader(context.Background(), src, time.Hour, 600*time.Second)
 	sr.Stop()
 
 	sr.ch <- readResult{data: []byte("test"), err: nil}
@@ -66,7 +127,7 @@ func TestStallReader_DrainPending_WithData(t *testing.T) {
 
 func TestStallReader_DrainPending_Timeout(t *testing.T) {
 	src := &timeoutReader{}
-	sr := newStallReader(context.Background(), src, time.Hour)
+	sr := newStallReader(context.Background(), src, time.Hour, 600*time.Second)
 	sr.Stop()
 
 	_, err := sr.DrainPending(10 * time.Millisecond)
@@ -198,7 +259,7 @@ func TestWriteBlockedSSE_Flush(t *testing.T) {
 
 func TestStallReader_ReadsNormally(t *testing.T) {
 	src := strings.NewReader("hello world")
-	sr := newStallReader(context.Background(), src, 50*time.Millisecond)
+	sr := newStallReader(context.Background(), src, 50*time.Millisecond, 600*time.Second)
 	defer sr.Stop()
 
 	buf := make([]byte, 11)
@@ -217,7 +278,7 @@ func TestStallReader_ReadsNormally(t *testing.T) {
 func TestStallReader_PartialRead_BuffersRemainder(t *testing.T) {
 	largeData := strings.Repeat("A", 32000)
 	src := strings.NewReader(largeData)
-	sr := newStallReader(context.Background(), src, time.Hour)
+	sr := newStallReader(context.Background(), src, time.Hour, 600*time.Second)
 	defer sr.Stop()
 
 	var dst bytes.Buffer
@@ -245,7 +306,7 @@ func TestStallReader_PartialRead_BuffersRemainder(t *testing.T) {
 func TestStallReader_StallsAfterTimeout(t *testing.T) {
 	src := &testutil.BlockingReader{Closed: make(chan struct{})}
 
-	sr := newStallReader(context.Background(), src, 30*time.Millisecond)
+	sr := newStallReader(context.Background(), src, 30*time.Millisecond, 600*time.Second)
 	defer func() {
 		sr.Stop()
 		_, _ = sr.DrainPending(time.Second)
@@ -267,7 +328,7 @@ func TestStallReader_StallsAfterTimeout(t *testing.T) {
 func TestStallReader_ResetOnRead(t *testing.T) {
 	data := "chunk1"
 	src := strings.NewReader(data)
-	sr := newStallReader(context.Background(), src, 30*time.Millisecond)
+	sr := newStallReader(context.Background(), src, 30*time.Millisecond, 600*time.Second)
 	defer sr.Stop()
 
 	buf := make([]byte, 1024)
@@ -343,7 +404,7 @@ func TestErrStreamStalled(t *testing.T) {
 func TestStallReader_StopPreventsStall(t *testing.T) {
 	src := &testutil.BlockingReader{Closed: make(chan struct{})}
 
-	sr := newStallReader(context.Background(), src, 30*time.Millisecond)
+	sr := newStallReader(context.Background(), src, 30*time.Millisecond, 600*time.Second)
 	defer func() {
 		sr.Stop()
 		_, _ = sr.DrainPending(time.Second)
@@ -398,7 +459,7 @@ func TestResponseTransformer_GeminiTransformerHasOnExtraContent(t *testing.T) {
 func TestStallReader_ConcurrentReadAndStall(t *testing.T) {
 	src := &testutil.BlockingReader{Closed: make(chan struct{})}
 
-	sr := newStallReader(context.Background(), src, 20*time.Millisecond)
+	sr := newStallReader(context.Background(), src, 20*time.Millisecond, 600*time.Second)
 	defer func() {
 		sr.Stop()
 		_, _ = sr.DrainPending(time.Second)
@@ -428,7 +489,7 @@ func TestStallReader_ConcurrentReadAndStall(t *testing.T) {
 // truncated JSON to the client.
 func TestStallReader_DiscardsDataOnStallRace(t *testing.T) {
 	src := &testutil.BlockingReader{Closed: make(chan struct{})}
-	sr := newStallReader(context.Background(), src, 30*time.Millisecond)
+	sr := newStallReader(context.Background(), src, 30*time.Millisecond, 600*time.Second)
 	defer func() {
 		sr.Stop()
 		_, _ = sr.DrainPending(time.Second)
@@ -457,7 +518,7 @@ func TestStallReader_DiscardsDataOnStallRace(t *testing.T) {
 // resets the timer with the configured timeout, not a hardcoded constant.
 func TestStallReader_UsesCustomTimeout(t *testing.T) {
 	src := strings.NewReader("chunk1chunk2")
-	sr := newStallReader(context.Background(), src, 500*time.Millisecond)
+	sr := newStallReader(context.Background(), src, 500*time.Millisecond, 600*time.Second)
 	defer sr.Stop()
 
 	if sr.timeout != 500*time.Millisecond {

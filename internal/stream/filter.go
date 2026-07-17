@@ -213,6 +213,98 @@ func ReplaceDeltaContent(data []byte, newContent string) []byte {
 	return ReplaceDeltaContentMap(chunk, newContent)
 }
 
+// ExtractThinkingSignal detects whether an SSE event indicates active or
+// inactive thinking/reasoning phases. Returns (active, hasSignal) where
+// hasSignal indicates a definitive state transition (avoid false positives
+// from non-thinking events like pings or tool_calls). Handles OpenAI-format
+// reasoning_content deltas and Anthropic-format content_block events.
+func ExtractThinkingSignal(chunk map[string]interface{}) (active bool, hasSignal bool) {
+	if chunk == nil {
+		return false, false
+	}
+
+	choices, ok := chunk["choices"].([]interface{})
+	if !ok || len(choices) == 0 {
+		return checkAnthropicThinking(chunk)
+	}
+
+	choice, ok := choices[0].(map[string]interface{})
+	if !ok {
+		return checkAnthropicThinking(chunk)
+	}
+
+	delta, ok := choice["delta"].(map[string]interface{})
+	if !ok {
+		return checkAnthropicThinking(chunk)
+	}
+
+	reasoningContent, hasRC := delta["reasoning_content"].(string)
+	if hasRC && reasoningContent != "" {
+		return true, true
+	}
+	if hasRC && reasoningContent == "" {
+		return false, true
+	}
+
+	content, hasContent := delta["content"].(string)
+	if hasContent && content != "" {
+		return false, true
+	}
+
+	return checkAnthropicThinking(chunk)
+}
+
+// checkAnthropicThinking checks Anthropic-format events for thinking signals.
+// Recognizes content_block_start with type "thinking" and content_block_delta
+// with delta type "thinking_delta" as active thinking.
+func checkAnthropicThinking(chunk map[string]interface{}) (active bool, hasSignal bool) {
+	eventType, ok := chunk["type"].(string)
+	if !ok {
+		return false, false
+	}
+
+	switch eventType {
+	case "content_block_start":
+		return checkContentBlockStart(chunk)
+	case "content_block_delta":
+		delta, ok := chunk["delta"].(map[string]interface{})
+		if !ok {
+			return false, false
+		}
+		deltaType, ok := delta["type"].(string)
+		if !ok {
+			return false, false
+		}
+		if deltaType == "thinking_delta" {
+			return true, true
+		}
+		return false, false
+	}
+	return false, false
+}
+
+// checkContentBlockStart extracts thinking state from Anthropic
+// content_block_start events by examining the content_block type field.
+func checkContentBlockStart(chunk map[string]interface{}) (active bool, hasSignal bool) {
+	cb, ok := chunk["content_block"].(map[string]interface{})
+	if !ok {
+		return false, false
+	}
+	cbType, ok := cb["type"].(string)
+	if !ok {
+		return false, false
+	}
+	if cbType == "thinking" {
+		return true, true
+	}
+	// Explicit non-thinking type ("text", "tool_use", etc.) signals thinking ended.
+	// Empty string is treated as "no signal" to avoid false negatives on malformed events.
+	if cbType != "thinking" && cbType != "" {
+		return false, true
+	}
+	return false, false
+}
+
 // ReplaceDeltaContentMap replaces the delta content field in a parsed SSE chunk with
 // newContent and returns the modified chunk as JSON bytes. If the chunk structure is
 // invalid, it returns the original chunk marshaled.

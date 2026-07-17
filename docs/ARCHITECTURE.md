@@ -89,21 +89,22 @@ Client Request
   │       │   ├─ Has MCP tools → execute via MCP client (parallel), append results, re-send
   │       │   ├─ Has client tools only → replay to client
   │       │   └─ Mixed → resolve MCP, re-send (LLM may re-request client tools)
-  │       └─ Loop until: content response or max iterations reached
-  │           ├─ Content response → replay to client
-  │           └─ Max iterations → replay last response
-  ├─ SSE stream pipeline:
-  │       ├─ stallReader (120s idle timeout)
-  │       ├─ SSETransformingReader (adapter.MutateResponse per chunk)
-  │       ├─ Bidirectional format conversion (OpenAI ↔ Anthropic for Anthropic clients)
-  │       ├─ OnContent callback (capture assistant response for memory storage)
-  │       ├─ StreamFilter (blocked execution patterns)
-  │       ├─ immediateFlushWriter (Flush after every Write)
-  │       ├─ sseTeeWriter (capture for response cache)
-  │       └─ Empty-stream detection (if enabled, emit SSE error payload on zero-byte response)
-  │           └─ Async MCP auto-save (if agent has mcp.auto_save)
-  │           └─ POST to MCP server with assistant content (best-effort, tool name configurable)
-  ├─ GET /v1/models
+   │       └─ Loop until: content response or max iterations reached
+   │           ├─ Content response → replay to client
+   │           └─ Max iterations → replay last response
+   ├─ SSE stream pipeline:
+   │       ├─ stallReader (300s idle timeout, 600s during thinking)
+   │       ├─ SSETransformingReader (adapter.MutateResponse per chunk, thinking detection)
+   │       ├─ Bidirectional format conversion (OpenAI ↔ Anthropic for Anthropic clients)
+   │       ├─ OnContent callback (capture assistant response for memory storage)
+   │       ├─ OnThinking callback (extends stall timer during reasoning phases)
+   │       ├─ StreamFilter (blocked execution patterns)
+   │       ├─ immediateFlushWriter (Flush after every Write)
+   │       ├─ sseTeeWriter (capture for response cache)
+   │       └─ Empty-stream detection (if enabled, emit SSE error payload on zero-byte response)
+   │           └─ Async MCP auto-save (if agent has mcp.auto_save)
+   │           └─ POST to MCP server with assistant content (best-effort, tool name configurable)
+   ├─ GET /v1/models
   ├─ POST /v1/embeddings
   ├─ POST /v1/responses (transparent passthrough, no content pipeline)
   ├─ /proxy/{provider}/* (arbitrary endpoint passthrough, auth injection, SSE auto-detect)
@@ -480,8 +481,8 @@ The streaming pipeline is built from composable `io.Reader` and `io.Writer` wrap
 
 | Component | Direction | Purpose |
 |-----------|-----------|---------|
-| `stallReader` | Read from upstream | Aborts after 120s of no data (stall detection) |
-| `SSETransformingReader` | Read from upstream | Parses SSE frames, calls `adapter.MutateResponse()` per chunk, extracts usage, fires `OnContent` callback. Handles bidirectional format conversion (OpenAI ↔ Anthropic) when `SourceFormat` is `"anthropic"` via `AnthropicAdapter.ConvertAnthropicToOpenAI()` |
+| `stallReader` | Read from upstream | Aborts after 300s of no data (stall detection), extends to 600s during thinking/reasoning phases when SSETransformingReader detects thinking events (OpenAI `reasoning_content` deltas, Anthropic `content_block_start` with type `thinking` or `content_block_delta` with type `thinking_delta`). Per-provider override available via `providers.<name>.stream_idle_timeout_seconds`. |
+| `SSETransformingReader` | Read from upstream | Parses SSE frames, calls `adapter.MutateResponse()` per chunk, extracts usage, fires `OnContent` and `OnThinking` callbacks. Handles bidirectional format conversion (OpenAI ↔ Anthropic) when `SourceFormat` is `"anthropic"` via `AnthropicAdapter.ConvertAnthropicToOpenAI()`. Thinking detection via `ExtractThinkingSignal()` prevents false stall positives during extended silent reasoning phases. |
 | `StreamFilter` | Read | Kills stream if blocked execution patterns detected |
 | `immediateFlushWriter` | Write to client | Wraps `http.ResponseWriter`, calls `Flush()` after every `Write()` |
 | `sseTeeWriter` | Write to client + buffer | Captures response bytes for response cache storage |

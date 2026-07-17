@@ -82,16 +82,16 @@ func TestApplyBuiltInProviders_AddsMissingProviders(t *testing.T) {
 
 func TestMergeProviderConfig_RespectsUserValues(t *testing.T) {
 	user := ProviderConfig{
-		URL:        "http://custom.com",
-		AuthStyle:  "bearer",
-		ApiFormat:  "openai",
+		URL:            "http://custom.com",
+		AuthStyle:      "bearer",
+		ApiFormat:      "openai",
 		TimeoutSeconds: 30,
 	}
 
 	builtIn := ProviderConfig{
-		URL:       "http://builtin.com",
-		AuthStyle: "none",
-		ApiFormat: "anthropic",
+		URL:            "http://builtin.com",
+		AuthStyle:      "none",
+		ApiFormat:      "anthropic",
 		TimeoutSeconds: 60,
 	}
 
@@ -120,11 +120,11 @@ func TestMergeProviderConfig_FillsInMissingDefaults(t *testing.T) {
 	}
 
 	builtIn := ProviderConfig{
-		URL:       "http://builtin.com",
-		AuthStyle: "none",
-		ApiFormat: "openai",
-		TimeoutSeconds: 60,
-		MaxRetryAttempts: 3,
+		URL:                  "http://builtin.com",
+		AuthStyle:            "none",
+		ApiFormat:            "openai",
+		TimeoutSeconds:       60,
+		MaxRetryAttempts:     3,
 		RetryableStatusCodes: []int{429, 500, 502, 503},
 		FormatURLs: map[string]string{
 			"anthropic": "http://builtin.com/v1/messages",
@@ -266,7 +266,7 @@ func TestEffectiveUpstreamTimeout(t *testing.T) {
 		cfg             GovernanceConfig
 		expectedSeconds int
 	}{
-		{"not set defaults to 300s", GovernanceConfig{}, 300},
+		{"not set defaults to 300s (5 minutes)", GovernanceConfig{}, 300},
 		{"set to 0 returns 0 (unlimited)", GovernanceConfig{UpstreamTimeoutSeconds: PtrTo(0)}, 0},
 		{"set to 600 returns 600s", GovernanceConfig{UpstreamTimeoutSeconds: PtrTo(600)}, 600},
 		{"set to negative value returns 0 (unlimited)", GovernanceConfig{UpstreamTimeoutSeconds: PtrTo(-1)}, 0},
@@ -290,7 +290,7 @@ func TestEffectiveStreamIdleTimeout(t *testing.T) {
 		cfg             GovernanceConfig
 		expectedSeconds int
 	}{
-		{"not set defaults to 120s", GovernanceConfig{}, 120},
+		{"not set defaults to 300s (5 minutes)", GovernanceConfig{}, 300},
 		{"set to 0 returns 0 (disabled)", GovernanceConfig{StreamIdleTimeoutSeconds: PtrTo(0)}, 0},
 		{"set to 300 returns 300s", GovernanceConfig{StreamIdleTimeoutSeconds: PtrTo(300)}, 300},
 		{"set to negative returns 0 (disabled)", GovernanceConfig{StreamIdleTimeoutSeconds: PtrTo(-1)}, 0},
@@ -308,3 +308,26 @@ func TestEffectiveStreamIdleTimeout(t *testing.T) {
 	}
 }
 
+func TestEffectiveThinkingStreamIdleTimeout(t *testing.T) {
+	tests := []struct {
+		name            string
+		cfg             GovernanceConfig
+		expectedSeconds int
+	}{
+		{"not set defaults to 600s", GovernanceConfig{}, 600},
+		{"set to 0 returns 0 (disabled)", GovernanceConfig{ThinkingStreamIdleTimeoutSeconds: PtrTo(0)}, 0},
+		{"set to 300 returns 300s", GovernanceConfig{ThinkingStreamIdleTimeoutSeconds: PtrTo(300)}, 300},
+		{"set to negative returns 0 (disabled)", GovernanceConfig{ThinkingStreamIdleTimeoutSeconds: PtrTo(-1)}, 0},
+		{"exactly 86400 passes through", GovernanceConfig{ThinkingStreamIdleTimeoutSeconds: PtrTo(86400)}, 86400},
+		{"exceeds 24h capped to 86400", GovernanceConfig{ThinkingStreamIdleTimeoutSeconds: PtrTo(86401)}, 86400},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := tt.cfg.EffectiveThinkingStreamIdleTimeout()
+			want := time.Duration(tt.expectedSeconds) * time.Second
+			if got != want {
+				t.Errorf("EffectiveThinkingStreamIdleTimeout() = %v, want %v", got, want)
+			}
+		})
+	}
+}

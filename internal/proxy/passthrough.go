@@ -112,7 +112,8 @@ func (p *Proxy) handlePassthrough(gw *gateway.NenyaGateway, w http.ResponseWrite
 
 	contentType := resp.Header.Get("Content-Type")
 	if strings.Contains(contentType, "text/event-stream") {
-		p.pipeSSE(ctx, ctxLogger, resp.Body, w, gw.Config.Governance.EffectiveStreamIdleTimeout())
+		timeout := resolveStreamIdleTimeout(gw, providerName)
+		p.pipeSSE(ctx, ctxLogger, resp.Body, w, timeout)
 	} else {
 		writeUpstreamResponse(ctx, w, resp, ctxLogger)
 	}
@@ -160,7 +161,7 @@ func (p *Proxy) pipeSSE(ctx context.Context, ctxLogger *slog.Logger, src io.Read
 		return
 	}
 
-	stallR := newStallReader(ctx, src, stallTimeout)
+	stallR := newStallReader(ctx, src, stallTimeout, 0)
 	buf := make([]byte, 4096)
 	defer func() {
 		stallR.Stop()
