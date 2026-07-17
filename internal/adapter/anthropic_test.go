@@ -723,8 +723,8 @@ func TestAnthropicAdapter_CacheControlInjection(t *testing.T) {
 			},
 		},
 		{
-			name:          "message_cache_control_injected",
-			cacheMessage:  true,
+			name:         "message_cache_control_injected",
+			cacheMessage: true,
 			openai: map[string]interface{}{
 				"model": "gpt-4",
 				"messages": []interface{}{
@@ -764,8 +764,8 @@ func TestAnthropicAdapter_CacheControlInjection(t *testing.T) {
 			},
 		},
 		{
-			name:          "message_cache_control_skipped_when_less_than_2_messages",
-			cacheMessage:  true,
+			name:         "message_cache_control_skipped_when_less_than_2_messages",
+			cacheMessage: true,
 			openai: map[string]interface{}{
 				"model": "gpt-4",
 				"messages": []interface{}{
@@ -904,12 +904,12 @@ func TestAnthropicAdapter_GetAnthropicAdapter(t *testing.T) {
 func TestAnthropicAdapter_ConvertAnthropicRequestToOpenAIBody_Basic(t *testing.T) {
 	a := NewAnthropicAdapter()
 	anthropic := map[string]interface{}{
-		"type":    "message",
-		"model":   "claude-sonnet-5",
-		"stream":  true,
+		"type":   "message",
+		"model":  "claude-sonnet-5",
+		"stream": true,
 		"messages": []interface{}{
 			map[string]interface{}{
-				"role":    "user",
+				"role": "user",
 				"content": []interface{}{
 					map[string]interface{}{"type": "text", "text": "hello"},
 				},
@@ -938,10 +938,10 @@ func TestAnthropicAdapter_ConvertAnthropicRequestToOpenAIBody_Basic(t *testing.T
 func TestAnthropicAdapter_ConvertAnthropicRequestToOpenAIBody_SystemPrompt(t *testing.T) {
 	a := NewAnthropicAdapter()
 	anthropic := map[string]interface{}{
-		"type":    "message",
-		"model":   "claude-sonnet-5",
-		"stream":  false,
-		"system":  "You are helpful.",
+		"type":   "message",
+		"model":  "claude-sonnet-5",
+		"stream": false,
+		"system": "You are helpful.",
 		"messages": []interface{}{
 			map[string]interface{}{
 				"role":    "user",
@@ -965,7 +965,7 @@ func TestAnthropicAdapter_ConvertAnthropicRequestToOpenAIBody_SystemPrompt(t *te
 func TestAnthropicAdapter_ConvertOpenAIResponseToAnthropicBody_Basic(t *testing.T) {
 	a := NewAnthropicAdapter()
 	openai := map[string]interface{}{
-		"id": "chatcmpl-123",
+		"id":      "chatcmpl-123",
 		"object":  "chat.completion",
 		"created": 0,
 		"model":   "gpt-4",
@@ -1007,13 +1007,13 @@ func TestAnthropicAdapter_ConvertOpenAIResponseToAnthropicBody_ToolCalls(t *test
 		"model":  "gpt-4",
 		"choices": []interface{}{
 			map[string]interface{}{
-				"index": 0,
-				"delta": map[string]interface{}{},
+				"index":         0,
+				"delta":         map[string]interface{}{},
 				"finish_reason": "tool_calls",
 			},
 		},
 		"usage": map[string]interface{}{
-			"prompt_tokens": 10,
+			"prompt_tokens":     10,
 			"completion_tokens": 20,
 		},
 	}
@@ -1029,16 +1029,16 @@ func TestAnthropicAdapter_ConvertAnthropicRequestToOpenAIBody_EdgeCases(t *testi
 	a := NewAnthropicAdapter()
 
 	tests := []struct {
-		name    string
-		input   map[string]interface{}
-		want    func(map[string]interface{}) error
+		name  string
+		input map[string]interface{}
+		want  func(map[string]interface{}) error
 	}{
 		{
 			name: "system_prompt_array",
 			input: map[string]interface{}{
-				"type":    "message",
-				"model":   "claude-3",
-				"system":  []interface{}{map[string]interface{}{"type": "text", "text": "Part one."}, map[string]interface{}{"type": "text", "text": "Part two."}},
+				"type":     "message",
+				"model":    "claude-3",
+				"system":   []interface{}{map[string]interface{}{"type": "text", "text": "Part one."}, map[string]interface{}{"type": "text", "text": "Part two."}},
 				"messages": []interface{}{map[string]interface{}{"role": "user", "content": "hi"}},
 			},
 			want: func(openai map[string]interface{}) error {
@@ -1057,9 +1057,9 @@ func TestAnthropicAdapter_ConvertAnthropicRequestToOpenAIBody_EdgeCases(t *testi
 		{
 			name: "tool_choice_specific_function",
 			input: map[string]interface{}{
-				"type":    "message",
-				"model":   "claude-3",
-				"messages": []interface{}{map[string]interface{}{"role": "user", "content": "hi"}},
+				"type":        "message",
+				"model":       "claude-3",
+				"messages":    []interface{}{map[string]interface{}{"role": "user", "content": "hi"}},
 				"tool_choice": map[string]interface{}{"type": "tool", "name": "get_weather"},
 			},
 			want: func(openai map[string]interface{}) error {
@@ -1077,9 +1077,9 @@ func TestAnthropicAdapter_ConvertAnthropicRequestToOpenAIBody_EdgeCases(t *testi
 		{
 			name: "tool_choice_auto",
 			input: map[string]interface{}{
-				"type":    "message",
-				"model":   "claude-3",
-				"messages": []interface{}{map[string]interface{}{"role": "user", "content": "hi"}},
+				"type":        "message",
+				"model":       "claude-3",
+				"messages":    []interface{}{map[string]interface{}{"role": "user", "content": "hi"}},
 				"tool_choice": map[string]interface{}{"type": "auto"},
 			},
 			want: func(openai map[string]interface{}) error {
@@ -1092,9 +1092,9 @@ func TestAnthropicAdapter_ConvertAnthropicRequestToOpenAIBody_EdgeCases(t *testi
 		{
 			name: "stop_sequences",
 			input: map[string]interface{}{
-				"type":    "message",
-				"model":   "claude-3",
-				"messages": []interface{}{map[string]interface{}{"role": "user", "content": "hi"}},
+				"type":           "message",
+				"model":          "claude-3",
+				"messages":       []interface{}{map[string]interface{}{"role": "user", "content": "hi"}},
 				"stop_sequences": []interface{}{"\n\n", "."},
 			},
 			want: func(openai map[string]interface{}) error {
@@ -1108,9 +1108,9 @@ func TestAnthropicAdapter_ConvertAnthropicRequestToOpenAIBody_EdgeCases(t *testi
 		{
 			name: "max_tokens",
 			input: map[string]interface{}{
-				"type":    "message",
-				"model":   "claude-3",
-				"messages": []interface{}{map[string]interface{}{"role": "user", "content": "hi"}},
+				"type":       "message",
+				"model":      "claude-3",
+				"messages":   []interface{}{map[string]interface{}{"role": "user", "content": "hi"}},
 				"max_tokens": float64(4096),
 			},
 			want: func(openai map[string]interface{}) error {
@@ -1123,13 +1123,13 @@ func TestAnthropicAdapter_ConvertAnthropicRequestToOpenAIBody_EdgeCases(t *testi
 		{
 			name: "tools_conversion",
 			input: map[string]interface{}{
-				"type":    "message",
-				"model":   "claude-3",
+				"type":     "message",
+				"model":    "claude-3",
 				"messages": []interface{}{map[string]interface{}{"role": "user", "content": "hi"}},
 				"tools": []interface{}{
 					map[string]interface{}{
-						"name":        "get_weather",
-						"description": "Get weather",
+						"name":         "get_weather",
+						"description":  "Get weather",
 						"input_schema": map[string]interface{}{"type": "object"},
 					},
 				},
@@ -2067,11 +2067,11 @@ func TestAnthropicAdapter_InjectReasoningEffort(t *testing.T) {
 			expectThinking: false,
 		},
 		{
-			name:           "client already set thinking preserves client value",
-			openai:         map[string]interface{}{"model": "claude-sonnet-5", "max_tokens": 4096, "reasoning_effort": "medium"},
-			anthropic:      map[string]interface{}{"model": "claude-sonnet-5", "max_tokens": 4096, "thinking": map[string]interface{}{"type": "disabled"}},
-			model:          "claude-sonnet-5",
-			expectThinking: true,
+			name:            "client already set thinking preserves client value",
+			openai:          map[string]interface{}{"model": "claude-sonnet-5", "max_tokens": 4096, "reasoning_effort": "medium"},
+			anthropic:       map[string]interface{}{"model": "claude-sonnet-5", "max_tokens": 4096, "thinking": map[string]interface{}{"type": "disabled"}},
+			model:           "claude-sonnet-5",
+			expectThinking:  true,
 			skipBudgetCheck: true,
 		},
 		{

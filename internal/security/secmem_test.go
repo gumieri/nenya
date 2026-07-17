@@ -259,10 +259,10 @@ func TestGenerateToken_Unique(t *testing.T) {
 
 func TestTokenSizeHint(t *testing.T) {
 	tests := []struct {
-		name            string
-		numKeys         int
+		name             string
+		numKeys          int
 		providerKeyCount int
-		want            int
+		want             int
 	}{
 		{"zero_keys", 0, 0, 0},
 		{"single_key", 1, 0, 72},

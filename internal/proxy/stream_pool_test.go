@@ -27,7 +27,7 @@ func TestStallReaderReadLoopPool_NoAliasing(t *testing.T) {
 		strings.NewReader(largeChunk),
 		strings.NewReader("part2"),
 	)
-	sr := newStallReader(ctx, src, 5*time.Second)
+	sr := newStallReader(ctx, src, 5*time.Second, 600*time.Second)
 	defer sr.Stop() // Ensure timer and goroutine are cleaned up
 
 	// Read in small chunks to trigger remainBuf path
@@ -88,7 +88,7 @@ func TestStallReaderReadLoopPool_MultipleChunks(t *testing.T) {
 		strings.NewReader(chunks[1]),
 		strings.NewReader(chunks[2]),
 	)
-	sr := newStallReader(ctx, src, 5*time.Second)
+	sr := newStallReader(ctx, src, 5*time.Second, 600*time.Second)
 	defer sr.Stop() // Ensure timer and goroutine are cleaned up
 
 	// Read all data

@@ -173,9 +173,9 @@ func TestFetchAndUpdate_AccountName(t *testing.T) {
 	defer server.Close()
 
 	cfg := &quotaProviderConfig{
-		name:  "test-provider",
-		url:   server.URL,
-		auth:  "test-key",
+		name:    "test-provider",
+		url:     server.URL,
+		auth:    "test-key",
 		tracker: tracker,
 		extraction: config.QuotaExtractionConfig{
 			Mode:        config.ExtractionModeSimpleJSON,

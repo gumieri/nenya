@@ -53,7 +53,7 @@ func TestSanitizePayload_StripToolChoiceAuto(t *testing.T) {
 	deps := defaultSanitizeDeps()
 
 	payload := map[string]interface{}{
-		"model": "nemotron-3-super",
+		"model":       "nemotron-3-super",
 		"tool_choice": "auto",
 	}
 	SanitizePayload(deps, payload, "nemotron-3-super")
@@ -62,7 +62,7 @@ func TestSanitizePayload_StripToolChoiceAuto(t *testing.T) {
 	}
 
 	payload2 := map[string]interface{}{
-		"model": "gpt-4o",
+		"model":       "gpt-4o",
 		"tool_choice": "auto",
 	}
 	SanitizePayload(deps, payload2, "gpt-4o")
@@ -126,8 +126,8 @@ func TestSanitizePayload_StripReasoningContent(t *testing.T) {
 		"model": "nemotron-3-super",
 		"messages": []interface{}{
 			map[string]interface{}{
-				"role": "assistant",
-				"content": "hello",
+				"role":              "assistant",
+				"content":           "hello",
 				"reasoning_content": "thinking...",
 			},
 		},
@@ -146,8 +146,8 @@ func TestSanitizePayload_StripReasoningContent(t *testing.T) {
 		"model": "deepseek-v4-pro",
 		"messages": []interface{}{
 			map[string]interface{}{
-				"role": "assistant",
-				"content": "hello",
+				"role":              "assistant",
+				"content":           "hello",
 				"reasoning_content": "thinking...",
 			},
 		},
@@ -170,7 +170,7 @@ func TestSanitizePayload_DeepSeekReasoningInjection(t *testing.T) {
 		"model": "deepseek-v4-pro",
 		"messages": []interface{}{
 			map[string]interface{}{
-				"role": "assistant",
+				"role":    "assistant",
 				"content": "hello",
 			},
 		},
@@ -196,7 +196,7 @@ func TestSanitizePayload_DeepSeekStripThinkingParams(t *testing.T) {
 			"type": "enabled",
 		},
 		"temperature": 0.7,
-		"top_p": 0.9,
+		"top_p":       0.9,
 	}
 	SanitizePayload(deps, payload, "deepseek-v4-pro")
 	if _, has := payload["temperature"]; has {
@@ -214,7 +214,7 @@ func TestSanitizePayload_RepairMessageOrdering(t *testing.T) {
 		"model": "gpt-4o",
 		"messages": []interface{}{
 			map[string]interface{}{
-				"role": "user",
+				"role":    "user",
 				"content": "call tool",
 			},
 			map[string]interface{}{
@@ -259,7 +259,7 @@ func TestSanitizePayload_NoOpOnValidOrdering(t *testing.T) {
 		"model": "gpt-4o",
 		"messages": []interface{}{
 			map[string]interface{}{
-				"role": "user",
+				"role":    "user",
 				"content": "call tool",
 			},
 			map[string]interface{}{
@@ -279,7 +279,7 @@ func TestSanitizePayload_NoOpOnValidOrdering(t *testing.T) {
 				"content": "result",
 			},
 			map[string]interface{}{
-				"role": "assistant",
+				"role":    "assistant",
 				"content": "done",
 			},
 			map[string]interface{}{
@@ -303,7 +303,7 @@ func TestSanitizePayload_NonDeepSeekNoReasoningInjection(t *testing.T) {
 		"model": "gpt-4o",
 		"messages": []interface{}{
 			map[string]interface{}{
-				"role": "assistant",
+				"role":    "assistant",
 				"content": "hello",
 			},
 		},
@@ -326,8 +326,8 @@ func TestSanitizePayload_DeepSeekDoesNotStripReasoning(t *testing.T) {
 		"model": "deepseek-v4-pro",
 		"messages": []interface{}{
 			map[string]interface{}{
-				"role": "assistant",
-				"content": "hello",
+				"role":              "assistant",
+				"content":           "hello",
 				"reasoning_content": "thinking...",
 			},
 		},
@@ -366,7 +366,7 @@ func TestSanitizePayload_DeepSeekFlashReasoningInjection(t *testing.T) {
 		"model": "deepseek-v4-flash",
 		"messages": []interface{}{
 			map[string]interface{}{
-				"role": "assistant",
+				"role":    "assistant",
 				"content": "quick response",
 			},
 		},

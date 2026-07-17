@@ -79,8 +79,8 @@ func TestResolveAgentCapabilities_Intersection(t *testing.T) {
 			wantReasoning: false,
 		},
 		{
-			name: "agent not found",
-			agents: map[string]config.AgentConfig{},
+			name:       "agent not found",
+			agents:     map[string]config.AgentConfig{},
 			wantVision: false, wantToolCalls: false, wantReasoning: false,
 		},
 	}
@@ -102,15 +102,15 @@ func TestResolveAgentCapabilities_Intersection(t *testing.T) {
 
 func TestResolveAgentPricing_Average(t *testing.T) {
 	tests := []struct {
-		name          string
-		agentName     string
-		agents        map[string]config.AgentConfig
+		name           string
+		agentName      string
+		agents         map[string]config.AgentConfig
 		wantHasPricing bool
 		wantInputAvg   float64
 		wantOutputAvg  float64
 	}{
 		{
-			name: "two models with pricing averaged",
+			name:      "two models with pricing averaged",
 			agentName: "agent-both",
 			agents: map[string]config.AgentConfig{
 				"agent-both": {
@@ -125,7 +125,7 @@ func TestResolveAgentPricing_Average(t *testing.T) {
 			wantOutputAvg:  0.2,
 		},
 		{
-			name: "one model with pricing, one without",
+			name:      "one model with pricing, one without",
 			agentName: "agent-one",
 			agents: map[string]config.AgentConfig{
 				"agent-one": {
@@ -137,10 +137,10 @@ func TestResolveAgentPricing_Average(t *testing.T) {
 			},
 			wantHasPricing: true,
 			wantInputAvg:   0.1,
-			wantOutputAvg: 0.1,
+			wantOutputAvg:  0.1,
 		},
 		{
-			name: "no models with pricing",
+			name:      "no models with pricing",
 			agentName: "agent-none",
 			agents: map[string]config.AgentConfig{
 				"agent-none": {
@@ -153,8 +153,8 @@ func TestResolveAgentPricing_Average(t *testing.T) {
 			wantHasPricing: false,
 		},
 		{
-			name: "agent not found",
-			agents: map[string]config.AgentConfig{},
+			name:           "agent not found",
+			agents:         map[string]config.AgentConfig{},
 			wantHasPricing: false,
 		},
 	}

@@ -102,9 +102,9 @@ func TestAnthropicTransformer_TextContent(t *testing.T) {
 	}
 
 	blockDelta := map[string]interface{}{
-		"type":         "content_block_delta",
-		"index":        0,
-		"delta":        map[string]interface{}{
+		"type":  "content_block_delta",
+		"index": 0,
+		"delta": map[string]interface{}{
 			"type": "text_delta",
 			"text": " world",
 		},
@@ -143,7 +143,7 @@ func TestAnthropicTransformer_MessageDeltaStopReasonAndUsage(t *testing.T) {
 	tr.promptTokens = 10
 
 	msgDelta := map[string]interface{}{
-		"type":  "message_delta",
+		"type": "message_delta",
 		"delta": map[string]interface{}{
 			"stop_reason": "end_turn",
 		},
@@ -237,7 +237,7 @@ func TestAnthropicTransformer_ToolUseContentBlock(t *testing.T) {
 		"type":  "content_block_delta",
 		"index": 0,
 		"delta": map[string]interface{}{
-			"type":  "input_json_delta",
+			"type":         "input_json_delta",
 			"partial_json": `{"city": "`,
 		},
 	}
@@ -340,7 +340,7 @@ func TestAnthropicTransformer_StopReasons(t *testing.T) {
 			tr.promptTokens = 5
 
 			msgDelta := map[string]interface{}{
-				"type":  "message_delta",
+				"type": "message_delta",
 				"delta": map[string]interface{}{
 					"stop_reason": tt.stopReason,
 				},

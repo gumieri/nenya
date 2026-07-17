@@ -58,8 +58,8 @@ func TestOpenAIToAnthropicTransformer_FinishReason(t *testing.T) {
 	tr := NewOpenAIToAnthropicTransformer()
 
 	initChunk := map[string]interface{}{
-		"id":     "chatcmpl-123",
-		"model":  "gpt-4",
+		"id":    "chatcmpl-123",
+		"model": "gpt-4",
 		"choices": []interface{}{
 			map[string]interface{}{
 				"index":         0,
@@ -126,8 +126,8 @@ func TestOpenAIToAnthropicTransformer_ContextCancellation(t *testing.T) {
 	cancel()
 
 	chunk := map[string]interface{}{
-		"id":     "chatcmpl-123",
-		"model":  "gpt-4",
+		"id":    "chatcmpl-123",
+		"model": "gpt-4",
 		"choices": []interface{}{
 			map[string]interface{}{
 				"index": 0,
@@ -147,8 +147,8 @@ func TestOpenAIToAnthropicTransformer_Reset(t *testing.T) {
 	tr := NewOpenAIToAnthropicTransformer()
 
 	chunk := map[string]interface{}{
-		"id":     "chatcmpl-123",
-		"model":  "gpt-4",
+		"id":    "chatcmpl-123",
+		"model": "gpt-4",
 		"choices": []interface{}{
 			map[string]interface{}{
 				"index":         0,

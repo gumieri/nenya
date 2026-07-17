@@ -210,51 +210,51 @@ func TestTFIDFInterceptorCanHandle(t *testing.T) {
 	interceptor := NewTFIDFInterceptor("self", logger)
 
 	tests := []struct {
-		name         string
-		querySource  string
-		messages     []map[string]any
-		tokenCount   int
-		softLimit    int
+		name          string
+		querySource   string
+		messages      []map[string]any
+		tokenCount    int
+		softLimit     int
 		wantCanHandle bool
 	}{
 		{
-			name:         "handles when query_source set and tokens exceed soft_limit",
-			querySource:  "self",
-			messages:     []map[string]any{{"role": "user", "content": "query"}, {"role": "user", "content": "content"}},
-			tokenCount:   5000,
-			softLimit:    4000,
+			name:          "handles when query_source set and tokens exceed soft_limit",
+			querySource:   "self",
+			messages:      []map[string]any{{"role": "user", "content": "query"}, {"role": "user", "content": "content"}},
+			tokenCount:    5000,
+			softLimit:     4000,
 			wantCanHandle: true,
 		},
 		{
-			name:         "does not handle when query_source empty",
-			querySource:  "",
-			messages:     []map[string]any{{"role": "user", "content": "query"}, {"role": "user", "content": "content"}},
-			tokenCount:   5000,
-			softLimit:    4000,
+			name:          "does not handle when query_source empty",
+			querySource:   "",
+			messages:      []map[string]any{{"role": "user", "content": "query"}, {"role": "user", "content": "content"}},
+			tokenCount:    5000,
+			softLimit:     4000,
 			wantCanHandle: false,
 		},
 		{
-			name:         "does not handle when only one message",
-			querySource:  "self",
-			messages:     []map[string]any{{"role": "user", "content": "query"}},
-			tokenCount:   5000,
-			softLimit:    4000,
+			name:          "does not handle when only one message",
+			querySource:   "self",
+			messages:      []map[string]any{{"role": "user", "content": "query"}},
+			tokenCount:    5000,
+			softLimit:     4000,
 			wantCanHandle: false,
 		},
 		{
-			name:         "does not handle when soft_limit is zero (unknown MaxContext)",
-			querySource:  "self",
-			messages:     []map[string]any{{"role": "user", "content": "query"}, {"role": "user", "content": "content"}},
-			tokenCount:   5000,
-			softLimit:    0,
+			name:          "does not handle when soft_limit is zero (unknown MaxContext)",
+			querySource:   "self",
+			messages:      []map[string]any{{"role": "user", "content": "query"}, {"role": "user", "content": "content"}},
+			tokenCount:    5000,
+			softLimit:     0,
 			wantCanHandle: false,
 		},
 		{
-			name:         "does not handle when tokens below soft_limit",
-			querySource:  "self",
-			messages:     []map[string]any{{"role": "user", "content": "query"}, {"role": "user", "content": "content"}},
-			tokenCount:   3000,
-			softLimit:    4000,
+			name:          "does not handle when tokens below soft_limit",
+			querySource:   "self",
+			messages:      []map[string]any{{"role": "user", "content": "query"}, {"role": "user", "content": "content"}},
+			tokenCount:    3000,
+			softLimit:     4000,
 			wantCanHandle: false,
 		},
 	}

@@ -133,39 +133,39 @@ func TestOpenAIParser_FiltersInvalidIDs(t *testing.T) {
 
 func TestExtractContextLength(t *testing.T) {
 	tests := []struct {
-		name     string
+		name      string
 		modelInfo map[string]any
-		want     int
+		want      int
 	}{
 		{
-			name:     "gemma4 context length",
+			name:      "gemma4 context length",
 			modelInfo: map[string]any{"gemma4.context_length": 131072},
-			want:     131072,
+			want:      131072,
 		},
 		{
-			name:     "llama context length",
+			name:      "llama context length",
 			modelInfo: map[string]any{"llama.context_length": 4096},
-			want:     4096,
+			want:      4096,
 		},
 		{
-			name:     "no context length",
+			name:      "no context length",
 			modelInfo: map[string]any{"foo": "bar"},
-			want:     0,
+			want:      0,
 		},
 		{
-			name:     "zero context length",
+			name:      "zero context length",
 			modelInfo: map[string]any{"gemma4.context_length": 0},
-			want:     0,
+			want:      0,
 		},
 		{
-			name:     "float64 context length",
+			name:      "float64 context length",
 			modelInfo: map[string]any{"gemma4.context_length": 131072.0},
-			want:     131072,
+			want:      131072,
 		},
 		{
-			name:     "multiple context lengths",
+			name:      "multiple context lengths",
 			modelInfo: map[string]any{"gemma4.context_length": 131072, "llama.context_length": 4096},
-			want:     131072,
+			want:      131072,
 		},
 	}
 	for _, tt := range tests {
@@ -180,24 +180,24 @@ func TestExtractContextLength(t *testing.T) {
 
 func TestExtractHasEmbeddings(t *testing.T) {
 	tests := []struct {
-		name     string
+		name      string
 		modelInfo map[string]any
-		want     bool
+		want      bool
 	}{
 		{
-			name:     "has embedding length",
+			name:      "has embedding length",
 			modelInfo: map[string]any{"nomic-embed-text.embedding_length": 768},
-			want:     true,
+			want:      true,
 		},
 		{
-			name:     "no embedding length",
+			name:      "no embedding length",
 			modelInfo: map[string]any{"gemma4.context_length": 131072},
-			want:     false,
+			want:      false,
 		},
 		{
-			name:     "empty model info",
+			name:      "empty model info",
 			modelInfo: map[string]any{},
-			want:     false,
+			want:      false,
 		},
 	}
 	for _, tt := range tests {

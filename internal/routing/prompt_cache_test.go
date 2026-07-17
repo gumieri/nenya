@@ -135,8 +135,8 @@ func TestInjectPromptCacheKey_SkipsIfAlreadyPresent(t *testing.T) {
 
 func TestInjectPromptCacheKey_NilConfig(t *testing.T) {
 	deps := TransformDeps{
-		Config:     nil,
-		AgentName:  "test",
+		Config:    nil,
+		AgentName: "test",
 	}
 	payload := map[string]interface{}{"model": "grok-2"}
 	injectPromptCacheKey(deps, payload, "xai", "grok-2")

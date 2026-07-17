@@ -21,10 +21,10 @@ func mapsEqualJSON(got, want map[string]any) bool {
 
 func TestStripToolChoice(t *testing.T) {
 	tests := []struct {
-		name     string
-		input    map[string]any
-		want     map[string]any
-		changed  bool
+		name    string
+		input   map[string]any
+		want    map[string]any
+		changed bool
 	}{
 		{
 			name: "strips tool_choice auto",
@@ -89,15 +89,15 @@ func TestStripToolChoice(t *testing.T) {
 		{
 			name: "preserves stream_options with tools",
 			input: map[string]any{
-				"model": "qwen3:14b",
-				"messages": []any{},
-				"tools": []any{},
+				"model":          "qwen3:14b",
+				"messages":       []any{},
+				"tools":          []any{},
 				"stream_options": map[string]any{"include_usage": true},
 			},
 			want: map[string]any{
-				"model": "qwen3:14b",
-				"messages": []any{},
-				"tools": []any{},
+				"model":          "qwen3:14b",
+				"messages":       []any{},
+				"tools":          []any{},
 				"stream_options": map[string]any{"include_usage": true},
 			},
 			changed: false,
@@ -166,10 +166,10 @@ func TestOllamaAdapter_MutateRequest(t *testing.T) {
 		check   func(t *testing.T, got []byte, original []byte)
 	}{
 		{
-			name: "strips tool_choice from valid JSON",
-			body: []byte(`{"model":"qwen2.5-coder","messages":[],"tool_choice":"auto","tools":[]}`),
-			model: "qwen2.5-coder",
-			stream: true,
+			name:    "strips tool_choice from valid JSON",
+			body:    []byte(`{"model":"qwen2.5-coder","messages":[],"tool_choice":"auto","tools":[]}`),
+			model:   "qwen2.5-coder",
+			stream:  true,
 			wantErr: false,
 			check: func(t *testing.T, got []byte, original []byte) {
 				var result map[string]any

@@ -17,8 +17,8 @@ import (
 	"github.com/nenya/config"
 	"github.com/nenya/internal/gateway"
 	"github.com/nenya/internal/infra"
-	"github.com/nenya/internal/routing"
 	"github.com/nenya/internal/resilience"
+	"github.com/nenya/internal/routing"
 )
 
 func TestParseRetryDelay_NoHeaderNoBody(t *testing.T) {
@@ -936,12 +936,12 @@ func TestPrepareAndSend_ContextCanceledDoesNotRecordFailure(t *testing.T) {
 	gw.Providers["test-provider"] = &config.Provider{Name: "test-provider"}
 
 	target := routing.UpstreamTarget{
-		Provider:  "test-provider",
-		Model:     "test-model",
-		CoolKey:   "agent:test-provider:test-model",
-		URL:       "http://test-provider/v1/chat/completions",
+		Provider:   "test-provider",
+		Model:      "test-model",
+		CoolKey:    "agent:test-provider:test-model",
+		URL:        "http://test-provider/v1/chat/completions",
 		Credential: "test-token",
-		MaxOutput: 4096,
+		MaxOutput:  4096,
 	}
 
 	payload := map[string]interface{}{"model": "test", "messages": []interface{}{}}
@@ -978,10 +978,10 @@ func TestPrepareAndSend_DeadlineExceededDoesNotRecordFailure(t *testing.T) {
 	gw.Providers["test-provider"] = &config.Provider{Name: "test-provider"}
 
 	target := routing.UpstreamTarget{
-		Provider:  "test-provider",
-		Model:     "test-model",
-		CoolKey:   "agent:test-provider:test-model",
-		URL:       "http://test-provider/v1/chat/completions",
+		Provider:   "test-provider",
+		Model:      "test-model",
+		CoolKey:    "agent:test-provider:test-model",
+		URL:        "http://test-provider/v1/chat/completions",
 		Credential: "test-token",
 		MaxOutput:  4096,
 	}
@@ -1152,5 +1152,3 @@ func TestLogRequestIfDebug_SkipsLargeBody(t *testing.T) {
 		t.Errorf("large body should not be logged, got: %s", logOutput)
 	}
 }
-
-

@@ -9,9 +9,9 @@ import (
 
 func TestQuotaExtractionConfigIsValid(t *testing.T) {
 	tests := []struct {
-		name    string
-		config  QuotaExtractionConfig
-		want    bool
+		name   string
+		config QuotaExtractionConfig
+		want   bool
 	}{
 		{
 			name: "valid simple_json",
@@ -24,9 +24,9 @@ func TestQuotaExtractionConfigIsValid(t *testing.T) {
 		{
 			name: "valid max_from_array",
 			config: QuotaExtractionConfig{
-				Mode:         "max_from_array",
-				ArrayPath:    "data.accounts",
-				ValueField:   "balance",
+				Mode:          "max_from_array",
+				ArrayPath:     "data.accounts",
+				ValueField:    "balance",
 				ValueDivideBy: 100,
 			},
 			want: true,
@@ -34,10 +34,10 @@ func TestQuotaExtractionConfigIsValid(t *testing.T) {
 		{
 			name: "valid headers",
 			config: QuotaExtractionConfig{
-				Mode:              "headers",
-				RemainingHeader:  "X-RateLimit-Remaining",
-				LimitHeader:       "X-RateLimit-Limit",
-				ResetHeader:       "X-RateLimit-Reset",
+				Mode:            "headers",
+				RemainingHeader: "X-RateLimit-Remaining",
+				LimitHeader:     "X-RateLimit-Limit",
+				ResetHeader:     "X-RateLimit-Reset",
 			},
 			want: true,
 		},
@@ -236,9 +236,9 @@ func TestExtractQuotaFromResponse(t *testing.T) {
 	t.Run("max_from_array valid", func(t *testing.T) {
 		body := []byte(`{"accounts": [{"balance": 50}, {"balance": 150}, {"balance": 100}]}`)
 		config := QuotaExtractionConfig{
-			Mode:         "max_from_array",
-			ArrayPath:    "accounts",
-			ValueField:   "balance",
+			Mode:       "max_from_array",
+			ArrayPath:  "accounts",
+			ValueField: "balance",
 		}
 
 		info, err := ExtractQuotaFromResponse(ctx, body, config, nil)
@@ -254,9 +254,9 @@ func TestExtractQuotaFromResponse(t *testing.T) {
 	t.Run("max_from_array with divide", func(t *testing.T) {
 		body := []byte(`{"accounts": [{"balance": 5000}, {"balance": 3000}]}`)
 		config := QuotaExtractionConfig{
-			Mode:         "max_from_array",
-			ArrayPath:    "accounts",
-			ValueField:   "balance",
+			Mode:          "max_from_array",
+			ArrayPath:     "accounts",
+			ValueField:    "balance",
 			ValueDivideBy: 100,
 		}
 
@@ -313,9 +313,9 @@ func TestExtractQuotaFromResponse(t *testing.T) {
 	t.Run("max_from_array with nested path", func(t *testing.T) {
 		body := []byte(`{"data": {"limits": [{"group": "standard", "percentage": 0.75}, {"group": "premium", "percentage": 0.95}]}}`)
 		config := QuotaExtractionConfig{
-			Mode:         "max_from_array",
-			ArrayPath:    "data.limits",
-			ValueField:   "percentage",
+			Mode:       "max_from_array",
+			ArrayPath:  "data.limits",
+			ValueField: "percentage",
 		}
 
 		info, err := ExtractQuotaFromResponse(ctx, body, config, nil)
@@ -330,12 +330,12 @@ func TestExtractQuotaFromResponse(t *testing.T) {
 	t.Run("max_from_array with limit reset and level", func(t *testing.T) {
 		body := []byte(`{"data": {"limits": [{"group": "standard", "percentage": 0.75, "nextReset": 1818000000}, {"group": "premium", "percentage": 0.95, "nextReset": 1819000000}], "level": "premium"}}`)
 		config := QuotaExtractionConfig{
-			Mode:         "max_from_array",
-			ArrayPath:    "data.limits",
-			ValueField:   "percentage",
-			ResetField:   "data.limits[1].nextReset",
-			ResetUnit:    "unix_s",
-			LevelField:   "data.level",
+			Mode:       "max_from_array",
+			ArrayPath:  "data.limits",
+			ValueField: "percentage",
+			ResetField: "data.limits[1].nextReset",
+			ResetUnit:  "unix_s",
+			LevelField: "data.level",
 		}
 
 		info, err := ExtractQuotaFromResponse(ctx, body, config, nil)
@@ -365,10 +365,10 @@ func TestExtractQuotaFromHeaders(t *testing.T) {
 		headers.Set("X-RateLimit-Reset", "1718000000")
 
 		config := QuotaExtractionConfig{
-			Mode:              "headers",
-			RemainingHeader:  "X-RateLimit-Remaining",
-			LimitHeader:       "X-RateLimit-Limit",
-			ResetHeader:       "X-RateLimit-Reset",
+			Mode:            "headers",
+			RemainingHeader: "X-RateLimit-Remaining",
+			LimitHeader:     "X-RateLimit-Limit",
+			ResetHeader:     "X-RateLimit-Reset",
 		}
 
 		info, err := ExtractQuotaFromHeaders(ctx, headers, config, nil)
@@ -392,7 +392,7 @@ func TestExtractQuotaFromHeaders(t *testing.T) {
 		headers.Set("X-RateLimit-Remaining", "5000/10000")
 
 		config := QuotaExtractionConfig{
-			Mode:             "headers",
+			Mode:            "headers",
 			RemainingHeader: "X-RateLimit-Remaining",
 		}
 
@@ -418,7 +418,7 @@ func TestExtractQuotaFromHeaders(t *testing.T) {
 
 	t.Run("missing headers", func(t *testing.T) {
 		config := QuotaExtractionConfig{
-			Mode:             "headers",
+			Mode:            "headers",
 			RemainingHeader: "X-Nonexistent",
 		}
 

@@ -499,7 +499,7 @@ func TestServeHTTP_Models_AgentMetadata(t *testing.T) {
 		}),
 	)
 	secrets := &config.SecretsConfig{
-		ClientToken: "test-token",
+		ClientToken:  "test-token",
 		ProviderKeys: map[string]string{"gemini": "test-key", "deepseek": "test-key"},
 	}
 	gw := gateway.New(context.Background(), *cfg, secrets, slog.Default())
@@ -569,9 +569,9 @@ func TestServeHTTP_Models_AgentMetadata(t *testing.T) {
 func TestServeHTTP_Models_AgentDescription(t *testing.T) {
 	cfg := testutil.TestConfig(
 		testutil.WithAgent("with-desc", config.AgentConfig{
-			Models:       []config.AgentModel{{Provider: "deepseek", Model: "deepseek-v4-flash"}},
-			Strategy:     "fallback",
-			Description:  "Test agent with description",
+			Models:      []config.AgentModel{{Provider: "deepseek", Model: "deepseek-v4-flash"}},
+			Strategy:    "fallback",
+			Description: "Test agent with description",
 		}),
 	)
 	secrets := &config.SecretsConfig{

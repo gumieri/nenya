@@ -37,11 +37,11 @@ func TestIsContextLengthError(t *testing.T) {
 
 func TestClassifyHTTPErrorWithContextLimit(t *testing.T) {
 	tests := []struct {
-		name        string
-		status      int
-		body        string
+		name         string
+		status       int
+		body         string
 		backoffLevel int
-		wantClass   ErrorClass
+		wantClass    ErrorClass
 	}{
 		{
 			name:         "context_length_error_400",

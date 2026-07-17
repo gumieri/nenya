@@ -5,6 +5,7 @@ import (
 	"io"
 	"strings"
 	"testing"
+	"time"
 )
 
 // BenchmarkStallReader_Read_Pooled benchmarks readLoop pooling.
@@ -16,7 +17,7 @@ func BenchmarkStallReader_Read_Pooled(b *testing.B) {
 	b.ResetTimer()
 	for range b.N {
 		src := strings.NewReader(chunk)
-		sr := newStallReader(ctx, src, 5*60)
+		sr := newStallReader(ctx, src, 5*time.Minute, 600*time.Second)
 
 		buf := make([]byte, 1024)
 		for {
