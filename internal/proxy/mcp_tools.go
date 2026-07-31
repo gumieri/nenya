@@ -62,7 +62,7 @@ func replayBufferedResponse(w http.ResponseWriter, buf *bufferedSSE, logger *slo
 	w.Header().Set("Cache-Control", "no-cache")
 	w.WriteHeader(http.StatusOK)
 
-	if fw, ok := newImmediateFlushWriterSafe(w); ok {
+	if fw, ok := newImmediateFlushWriter(w); ok {
 		if _, err := fw.Write(buf.rawBytes); err != nil {
 			return
 		}

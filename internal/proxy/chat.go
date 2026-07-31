@@ -505,7 +505,7 @@ func (p *Proxy) replayCachedResponse(gw *gateway.NenyaGateway, w http.ResponseWr
 	w.WriteHeader(http.StatusOK)
 
 	var dst io.Writer
-	if fw, ok := newImmediateFlushWriterSafe(w); ok {
+	if fw, ok := newImmediateFlushWriter(w); ok {
 		dst = fw
 	} else {
 		dst = w

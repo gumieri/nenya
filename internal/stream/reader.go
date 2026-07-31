@@ -333,7 +333,7 @@ func (r *SSETransformingReader) trackTransformedSize(transformed []byte) {
 		r.transformedBytes += blen
 	}
 	if r.logger != nil && !r.warnedAtThreshold && r.maxTransformedBytes > 0 {
-		threshold := uint64(r.maxTransformedBytes) * 8 / 10
+		threshold := uint64(r.maxTransformedBytes) / 10 * 8
 		if r.transformedBytes >= threshold {
 			r.warnedAtThreshold = true
 			r.logger.Warn("transformed SSE output approaching size limit",
@@ -695,7 +695,11 @@ func (r *SSETransformingReader) transformNonSSELine(line []byte) []byte {
 }
 
 func (r *SSETransformingReader) extractUsageFromMap(chunk map[string]interface{}) {
-	usage, ok := chunk["usage"].(map[string]interface{})
+	rawUsage, ok := chunk["usage"]
+	if !ok || rawUsage == nil {
+		return
+	}
+	usage, ok := rawUsage.(map[string]interface{})
 	if !ok || usage == nil {
 		return
 	}
@@ -831,6 +835,9 @@ func normalizeToolCalls(chunk map[string]interface{}, state *toolCallState) bool
 	return mutated
 }
 
+// processToolCallDelta normalizes a single tool_calls delta array. It buffers
+// argument chunks that arrive before the tool name and merges pending data
+// when names arrive. Returns the filtered slice and whether it was mutated.
 func processToolCallDelta(tcs []interface{}, state *toolCallState) ([]interface{}, bool) {
 	keep := make([]interface{}, 0, len(tcs))
 	mutated := false
