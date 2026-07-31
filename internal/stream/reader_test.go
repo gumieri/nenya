@@ -223,14 +223,14 @@ func TestSSETransformingReader_ValidJSONNoLog(t *testing.T) {
 func TestSSETransformingReader_UsageCallbackWithCacheFields(t *testing.T) {
 	var receivedCompletion, receivedPrompt, receivedTotal, receivedCacheHit, receivedCacheMiss, receivedCacheCreation, receivedReasoning int
 
-	cb := func(completion, prompt, total, cacheHit, cacheMiss, cacheCreation, reasoning int) {
-		receivedCompletion = completion
-		receivedPrompt = prompt
-		receivedTotal = total
-		receivedCacheHit = cacheHit
-		receivedCacheMiss = cacheMiss
-		receivedCacheCreation = cacheCreation
-		receivedReasoning = reasoning
+	cb := func(u UsageData) {
+		receivedCompletion = u.CompletionTokens
+		receivedPrompt = u.PromptTokens
+		receivedTotal = u.TotalTokens
+		receivedCacheHit = u.CacheHitTokens
+		receivedCacheMiss = u.CacheMissTokens
+		receivedCacheCreation = u.CacheCreationTokens
+		receivedReasoning = u.ReasoningTokens
 	}
 
 	input := "data: {\"id\":\"msg_1\",\"object\":\"chat.completion.chunk\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"Hello\"}}],\"usage\":{\"prompt_tokens\":100,\"completion_tokens\":10,\"total_tokens\":110,\"prompt_cache_hit_tokens\":5000,\"prompt_cache_miss_tokens\":2000,\"cache_creation_tokens\":54947}}\n\ndata: [DONE]\n\n"
@@ -270,8 +270,8 @@ func TestSSETransformingReader_UsageCallbackWithCacheFields(t *testing.T) {
 func TestSSETransformingReader_UsageCallbackNestedCachedTokens(t *testing.T) {
 	var capturedCacheHit int
 
-	cb := func(completion, prompt, total, cacheHit, cacheMiss, cacheCreation, reasoning int) {
-		capturedCacheHit = cacheHit
+	cb := func(u UsageData) {
+		capturedCacheHit = u.CacheHitTokens
 	}
 
 	// Nested format: usage.prompt_tokens_details.cached_tokens (used by Z.AI)
@@ -294,8 +294,8 @@ func TestSSETransformingReader_UsageCallbackNestedCachedTokens(t *testing.T) {
 func TestSSETransformingReader_UsageCallbackFlatTakesPrecedenceOverNested(t *testing.T) {
 	var capturedCacheHit int
 
-	cb := func(completion, prompt, total, cacheHit, cacheMiss, cacheCreation, reasoning int) {
-		capturedCacheHit = cacheHit
+	cb := func(u UsageData) {
+		capturedCacheHit = u.CacheHitTokens
 	}
 
 	// Both flat prompt_cache_hit_tokens (WINS) and nested prompt_tokens_details.cached_tokens present
@@ -319,11 +319,11 @@ func TestSSETransformingReader_UsageCallbackDeltaCalculation(t *testing.T) {
 	var callCount int
 	var lastDCompletion, lastDPrompt, lastDCacheCreation int
 
-	cb := func(completion, prompt, total, cacheHit, cacheMiss, cacheCreation, reasoning int) {
+	cb := func(u UsageData) {
 		callCount++
-		lastDCompletion = completion
-		lastDPrompt = prompt
-		lastDCacheCreation = cacheCreation
+		lastDCompletion = u.CompletionTokens
+		lastDPrompt = u.PromptTokens
+		lastDCacheCreation = u.CacheCreationTokens
 	}
 
 	input := "data: {\"usage\":{\"prompt_tokens\":100,\"completion_tokens\":10,\"total_tokens\":110,\"cache_creation_tokens\":54947}}\n\n" +
@@ -358,10 +358,10 @@ func TestSSETransformingReader_UsageCallbackDeltaCalculation(t *testing.T) {
 func TestSSETransformingReader_UsageCallbackWithReasoningTokens(t *testing.T) {
 	var receivedCompletion, receivedPrompt, receivedReasoning int
 
-	cb := func(completion, prompt, total, cacheHit, cacheMiss, cacheCreation, reasoning int) {
-		receivedCompletion = completion
-		receivedPrompt = prompt
-		receivedReasoning = reasoning
+	cb := func(u UsageData) {
+		receivedCompletion = u.CompletionTokens
+		receivedPrompt = u.PromptTokens
+		receivedReasoning = u.ReasoningTokens
 	}
 
 	input := "data: {\"usage\":{\"prompt_tokens\":100,\"completion_tokens\":10,\"total_tokens\":110,\"reasoning_tokens\":500}}\n\ndata: [DONE]\n\n"
@@ -390,10 +390,10 @@ func TestSSETransformingReader_UsageCallbackReasoningDecrease(t *testing.T) {
 	var callCount int
 	var receivedCompletion, receivedReasoning int
 
-	cb := func(completion, prompt, total, cacheHit, cacheMiss, cacheCreation, reasoning int) {
+	cb := func(u UsageData) {
 		callCount++
-		receivedCompletion = completion
-		receivedReasoning = reasoning
+		receivedCompletion = u.CompletionTokens
+		receivedReasoning = u.ReasoningTokens
 	}
 
 	input := "data: {\"usage\":{\"prompt_tokens\":100,\"completion_tokens\":10,\"total_tokens\":110,\"reasoning_tokens\":500}}\n\n" +

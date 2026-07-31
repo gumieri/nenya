@@ -37,15 +37,21 @@ type ResponseTransformer interface {
 }
 
 // UsageCallback is invoked by the SSE transformer when usage metadata is received.
-// Parameters:
-//   - completionTokens: delta output tokens since last callback (always >= 0)
-//   - promptTokens: delta input tokens since last callback (always >= 0)
-//   - totalTokens: delta total tokens since last callback (always >= 0)
-//   - cacheHitTokens: delta cache hit tokens since last callback (always >= 0)
-//   - cacheMissTokens: delta cache miss tokens since last callback (always >= 0)
-//   - cacheCreationTokens: delta cache creation tokens since last callback (always >= 0)
-//   - reasoningTokens: delta reasoning tokens since last callback (always >= 0)
-type UsageCallback func(completionTokens, promptTokens, totalTokens, cacheHitTokens, cacheMissTokens, cacheCreationTokens, reasoningTokens int)
+// UsageCallback receives token usage statistics from the stream.
+// Parameters are deltas since the last callback (each field >= 0).
+type UsageCallback func(UsageData)
+
+type UsageData struct {
+	CompletionTokens         int
+	PromptTokens             int
+	TotalTokens              int
+	CacheHitTokens           int
+	CacheMissTokens          int
+	CacheCreationTokens      int
+	ReasoningTokens          int
+	CacheReadInputTokens     int
+	CacheCreationInputTokens int
+}
 
 type ContentCallback func(content string)
 
@@ -705,7 +711,10 @@ func (r *SSETransformingReader) extractUsageFromMap(chunk map[string]interface{}
 	cacheMiss := ToInt(usage["prompt_cache_miss_tokens"])
 	cacheCreation := ToInt(usage["cache_creation_tokens"])
 	reasoning := ToInt(usage["reasoning_tokens"])
-	if allUsageFieldsZero(completion, prompt, total, cacheHit, cacheMiss, cacheCreation, reasoning) {
+	cacheReadInput := ToInt(usage["cache_read_input_tokens"])
+	cacheCreationInput := ToInt(usage["cache_creation_input_tokens"])
+	if allUsageFieldsZero(completion, prompt, total, cacheHit, cacheMiss, cacheCreation, reasoning) &&
+		cacheReadInput == 0 && cacheCreationInput == 0 {
 		return
 	}
 	dCompletion := clampDelta(completion, r.lastCompletionTokens)
@@ -715,7 +724,10 @@ func (r *SSETransformingReader) extractUsageFromMap(chunk map[string]interface{}
 	dCacheMiss := clampDelta(cacheMiss, r.lastCacheMissTokens)
 	dCacheCreation := clampDelta(cacheCreation, r.lastCacheCreationTokens)
 	dReasoning := clampDelta(reasoning, r.lastReasoningTokens)
-	if allDeltasZero(dCompletion, dPrompt, dTotal, dCacheHit, dCacheMiss, dCacheCreation, dReasoning) {
+	dCacheReadInput := clampDelta(cacheReadInput, 0)
+	dCacheCreationInput := clampDelta(cacheCreationInput, 0)
+	if allDeltasZero(dCompletion, dPrompt, dTotal, dCacheHit, dCacheMiss, dCacheCreation, dReasoning) &&
+		dCacheReadInput == 0 && dCacheCreationInput == 0 {
 		return
 	}
 	r.lastCompletionTokens = completion
@@ -725,7 +737,17 @@ func (r *SSETransformingReader) extractUsageFromMap(chunk map[string]interface{}
 	r.lastCacheMissTokens = cacheMiss
 	r.lastCacheCreationTokens = cacheCreation
 	r.lastReasoningTokens = reasoning
-	r.onUsage(dCompletion, dPrompt, dTotal, dCacheHit, dCacheMiss, dCacheCreation, dReasoning)
+	r.onUsage(UsageData{
+		CompletionTokens:         dCompletion,
+		PromptTokens:             dPrompt,
+		TotalTokens:              dTotal,
+		CacheHitTokens:           dCacheHit,
+		CacheMissTokens:          dCacheMiss,
+		CacheCreationTokens:      dCacheCreation,
+		ReasoningTokens:          dReasoning,
+		CacheReadInputTokens:     dCacheReadInput,
+		CacheCreationInputTokens: dCacheCreationInput,
+	})
 }
 
 func allUsageFieldsZero(completion, prompt, total, cacheHit, cacheMiss, cacheCreation, reasoning int) bool {

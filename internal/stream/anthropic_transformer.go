@@ -284,13 +284,23 @@ func (t *AnthropicTransformer) handleMessageDelta(event map[string]interface{}) 
 	finishReason := mapStopReason(stopReason)
 
 	chunk := t.makeOpenAIChunk(map[string]interface{}{}, &finishReason)
+	totalPromptTokens := t.cacheReadTokens + t.cacheCreationTokens + t.promptTokens
+	if totalPromptTokens < 0 {
+		totalPromptTokens = math.MaxInt
+	}
+	totalAll := totalPromptTokens + t.outputTokens
+	if totalAll < 0 {
+		totalAll = math.MaxInt
+	}
 	chunk["usage"] = map[string]interface{}{
-		"prompt_tokens":            t.promptTokens,
-		"completion_tokens":        t.outputTokens,
-		"total_tokens":             t.promptTokens + t.outputTokens,
-		"prompt_cache_hit_tokens":  t.cacheReadTokens,
-		"prompt_cache_miss_tokens": t.cacheCreationTokens,
-		"cache_creation_tokens":    t.cacheCreationTokens,
+		"prompt_tokens":               totalPromptTokens,
+		"completion_tokens":           t.outputTokens,
+		"total_tokens":                totalAll,
+		"prompt_cache_hit_tokens":     t.cacheReadTokens,
+		"prompt_cache_miss_tokens":    t.promptTokens,
+		"cache_creation_tokens":       t.cacheCreationTokens,
+		"cache_read_input_tokens":     t.cacheReadTokens,
+		"cache_creation_input_tokens": t.cacheCreationTokens,
 	}
 
 	return t.marshalChunk(chunk)
