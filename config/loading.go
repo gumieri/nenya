@@ -286,6 +286,15 @@ func mergePrefixCacheConfig(base, overlay *Config) {
 	if overlay.PrefixCache.CacheControlTTL != "" {
 		base.PrefixCache.CacheControlTTL = overlay.PrefixCache.CacheControlTTL
 	}
+	if overlay.PrefixCache.CacheSystemTTLWasSet() {
+		base.PrefixCache.CacheSystemTTL = overlay.PrefixCache.CacheSystemTTL
+	}
+	if overlay.PrefixCache.CacheToolsTTLWasSet() {
+		base.PrefixCache.CacheToolsTTL = overlay.PrefixCache.CacheToolsTTL
+	}
+	if overlay.PrefixCache.CacheMessagesTTLWasSet() {
+		base.PrefixCache.CacheMessagesTTL = overlay.PrefixCache.CacheMessagesTTL
+	}
 }
 
 func mergeCompactionConfig(base, overlay *Config) {
