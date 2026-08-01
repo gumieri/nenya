@@ -298,6 +298,12 @@ func mergePrefixCacheConfig(base, overlay *Config) {
 	if overlay.PrefixCache.CacheMessagesTTLWasSet() {
 		base.PrefixCache.CacheMessagesTTL = overlay.PrefixCache.CacheMessagesTTL
 	}
+	if overlay.PrefixCache.OpenAIBreakpointWasSet() {
+		base.PrefixCache.OpenAIBreakpoint = overlay.PrefixCache.OpenAIBreakpoint
+	}
+	if overlay.PrefixCache.OpenAIModeWasSet() {
+		base.PrefixCache.OpenAIMode = overlay.PrefixCache.OpenAIMode
+	}
 }
 
 func mergeCompactionConfig(base, overlay *Config) {

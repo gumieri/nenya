@@ -14,6 +14,8 @@ const MaxTimeoutSeconds = 86400 // 24 hours
 const (
 	CacheModeExplicit  = "explicit"
 	CacheModeAutomatic = "automatic"
+	OpenAIModeImplicit = "implicit"
+	OpenAIModeExplicit = "explicit"
 )
 
 // AgentModel defines a single model entry within an agent's model list,
@@ -566,6 +568,8 @@ type PrefixCacheConfig struct {
 	CacheSystemTTL        *string `json:"cache_system_ttl,omitempty"`
 	CacheToolsTTL         *string `json:"cache_tools_ttl,omitempty"`
 	CacheMessagesTTL      *string `json:"cache_messages_ttl,omitempty"`
+	OpenAIBreakpoint      *bool   `json:"openai_breakpoint,omitempty"`
+	OpenAIMode            *string `json:"openai_mode,omitempty"`
 }
 
 func (c *PrefixCacheConfig) CacheModeWasSet() bool        { return wasSet(c.CacheMode) }
@@ -578,6 +582,8 @@ func (c *PrefixCacheConfig) CacheMessagesWasSet() bool    { return wasSet(c.Cach
 func (c *PrefixCacheConfig) CacheSystemTTLWasSet() bool   { return wasSet(c.CacheSystemTTL) }
 func (c *PrefixCacheConfig) CacheToolsTTLWasSet() bool    { return wasSet(c.CacheToolsTTL) }
 func (c *PrefixCacheConfig) CacheMessagesTTLWasSet() bool { return wasSet(c.CacheMessagesTTL) }
+func (c *PrefixCacheConfig) OpenAIBreakpointWasSet() bool { return wasSet(c.OpenAIBreakpoint) }
+func (c *PrefixCacheConfig) OpenAIModeWasSet() bool       { return wasSet(c.OpenAIMode) }
 
 // CompactionPreset is a named preset for content compaction options.
 type CompactionPreset string
