@@ -2339,3 +2339,149 @@ func TestAnthropicAdapter_InjectReasoningEffort(t *testing.T) {
 		})
 	}
 }
+
+func TestAnthropicAdapter_AutomaticCachingMode(t *testing.T) {
+	a := NewAnthropicAdapter()
+
+	t.Run("automatic mode emits top-level cache_control and skips block markers", func(t *testing.T) {
+		openai := map[string]interface{}{
+			"model": "gpt-4",
+			"messages": []interface{}{
+				map[string]interface{}{"role": "system", "content": "You are helpful."},
+				map[string]interface{}{"role": "user", "content": "hello"},
+			},
+			"tools": []interface{}{
+				map[string]interface{}{
+					"type": "function",
+					"function": map[string]interface{}{
+						"name":        "get_weather",
+						"description": "Get weather",
+						"parameters":  map[string]interface{}{"type": "object"},
+					},
+				},
+			},
+		}
+		opts := CacheOpts{Automatic: true, GlobalTTL: "ephemeral"}
+		result := a.ConvertOpenAIToAnthropicBody(openai, "claude-3", false, opts)
+
+		cc, ok := result["cache_control"].(map[string]interface{})
+		if !ok {
+			t.Fatal("expected top-level cache_control in automatic mode")
+		}
+		if cc["type"] != "ephemeral" {
+			t.Errorf("expected cache_control.type 'ephemeral', got %v", cc["type"])
+		}
+
+		if _, hasTTL := cc["ttl"]; hasTTL {
+			t.Error("expected no ttl key for ephemeral TTL")
+		}
+
+		if sys, isArray := result["system"].([]interface{}); isArray {
+			t.Errorf("expected system as string (no block marker), got array: %v", sys)
+		}
+
+		tools, hasTools := result["tools"].([]interface{})
+		if hasTools && len(tools) > 0 {
+			tool := tools[0].(map[string]interface{})
+			if _, hasCache := tool["cache_control"]; hasCache {
+				t.Error("tools should not have block-level cache_control in automatic mode")
+			}
+		}
+
+		msgs := result["messages"].([]interface{})
+		for _, m := range msgs {
+			msg := m.(map[string]interface{})
+			content := msg["content"].([]interface{})
+			for _, b := range content {
+				block := b.(map[string]interface{})
+				if _, hasCache := block["cache_control"]; hasCache {
+					t.Error("messages should not have block-level cache_control in automatic mode")
+				}
+			}
+		}
+	})
+
+	t.Run("automatic mode with 1h TTL emits ttl key", func(t *testing.T) {
+		openai := map[string]interface{}{
+			"model": "gpt-4",
+			"messages": []interface{}{
+				map[string]interface{}{"role": "user", "content": "hello"},
+			},
+		}
+		opts := CacheOpts{Automatic: true, GlobalTTL: "1h"}
+		result := a.ConvertOpenAIToAnthropicBody(openai, "claude-3", false, opts)
+
+		cc, ok := result["cache_control"].(map[string]interface{})
+		if !ok {
+			t.Fatal("expected top-level cache_control in automatic mode")
+		}
+		if cc["type"] != "ephemeral" {
+			t.Errorf("expected cache_control.type 'ephemeral', got %v", cc["type"])
+		}
+		if cc["ttl"] != "1h" {
+			t.Errorf("expected cache_control.ttl '1h', got %v", cc["ttl"])
+		}
+	})
+
+	t.Run("explicit mode unchanged", func(t *testing.T) {
+		openai := map[string]interface{}{
+			"model": "gpt-4",
+			"messages": []interface{}{
+				map[string]interface{}{"role": "system", "content": "You are helpful."},
+				map[string]interface{}{"role": "user", "content": "first"},
+				map[string]interface{}{"role": "assistant", "content": "answer"},
+				map[string]interface{}{"role": "user", "content": "second"},
+			},
+			"tools": []interface{}{
+				map[string]interface{}{
+					"type": "function",
+					"function": map[string]interface{}{
+						"name":        "get_weather",
+						"description": "Get weather",
+						"parameters":  map[string]interface{}{"type": "object"},
+					},
+				},
+			},
+		}
+		opts := CacheOpts{
+			System:   true,
+			Tools:    true,
+			Messages: true,
+			GlobalTTL: "ephemeral",
+		}
+		result := a.ConvertOpenAIToAnthropicBody(openai, "claude-3", false, opts)
+
+		if _, ok := result["cache_control"].(map[string]interface{}); ok {
+			t.Error("explicit mode should not have top-level cache_control")
+		}
+
+		sys, ok := result["system"].([]interface{})
+		if !ok {
+			t.Fatal("expected system array in explicit mode")
+		}
+		sysBlock := sys[0].(map[string]interface{})
+		if _, ok := sysBlock["cache_control"]; !ok {
+			t.Error("expected system block-level cache_control in explicit mode")
+		}
+
+		tools, ok := result["tools"].([]interface{})
+		if !ok || len(tools) == 0 {
+			t.Fatal("expected tools array in explicit mode")
+		}
+		lastTool := tools[len(tools)-1].(map[string]interface{})
+		if _, ok := lastTool["cache_control"]; !ok {
+			t.Error("expected tools block-level cache_control in explicit mode")
+		}
+
+		msgs, ok := result["messages"].([]interface{})
+		if !ok || len(msgs) < 2 {
+			t.Fatal("expected messages array with at least 2 entries in explicit mode")
+		}
+		targetMsg := msgs[1].(map[string]interface{})
+		content := targetMsg["content"].([]interface{})
+		block := content[0].(map[string]interface{})
+		if _, ok := block["cache_control"]; !ok {
+			t.Error("expected messages block-level cache_control in explicit mode")
+		}
+	})
+}

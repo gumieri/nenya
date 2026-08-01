@@ -24,6 +24,7 @@ type CacheOpts struct {
 	System      bool   // Enable system breakpoint caching
 	Tools       bool   // Enable tools breakpoint caching
 	Messages    bool   // Enable messages breakpoint caching
+	Automatic   bool   // Enable top-level automatic caching mode (Anthropic automatic caching). When true, a single top-level cache_control is emitted instead of block-level markers.
 	SystemTTL   string // TTL for system breakpoint ("ephemeral" or "1h")
 	ToolsTTL    string // TTL for tools breakpoint
 	MessagesTTL string // TTL for messages breakpoint
@@ -205,9 +206,10 @@ func (a *AnthropicAdapter) convertOpenAIToAnthropic(openai map[string]interface{
 
 	a.copyOpenAIFields(openai, anthropic)
 
+	hasMessages := false
 	if msgs, ok := openai["messages"].([]interface{}); ok {
+		hasMessages = ok
 		anthropic["messages"] = a.convertMessages(msgs)
-		a.setSystemPrompt(openai, anthropic, opts.System, opts.getSystemTTL())
 	}
 
 	if tools, ok := openai["tools"].([]interface{}); ok && len(tools) > 0 {
@@ -219,6 +221,17 @@ func (a *AnthropicAdapter) convertOpenAIToAnthropic(openai map[string]interface{
 	}
 
 	a.injectReasoningEffort(openai, anthropic, model)
+
+	if opts.Automatic {
+		// Automatic caching lets Anthropic place and advance a single
+		// breakpoint; no block-level markers are injected.
+		anthropic["cache_control"] = buildCacheControl(opts.getSystemTTL())
+		return anthropic
+	}
+
+	if hasMessages {
+		a.setSystemPrompt(openai, anthropic, opts.System, opts.getSystemTTL())
+	}
 
 	if opts.Messages {
 		a.injectMessageCache(anthropic, opts.getMessagesTTL())

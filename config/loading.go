@@ -265,6 +265,9 @@ func mergeBouncerConfig(base, overlay *Config) {
 }
 
 func mergePrefixCacheConfig(base, overlay *Config) {
+	if overlay.PrefixCache.CacheModeWasSet() {
+		base.PrefixCache.CacheMode = overlay.PrefixCache.CacheMode
+	}
 	if overlay.PrefixCache.PinWasSet() {
 		base.PrefixCache.PinSystemFirst = overlay.PrefixCache.PinSystemFirst
 	}

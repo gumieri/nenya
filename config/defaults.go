@@ -283,14 +283,31 @@ func applyCacheControlDefaults(cfg *Config) error {
 	if !cfg.PrefixCache.Enabled {
 		return nil
 	}
-	if !cfg.PrefixCache.CacheSystemWasSet() {
-		cfg.PrefixCache.CacheSystem = PtrTo(true)
+	if !cfg.PrefixCache.CacheModeWasSet() {
+		cfg.PrefixCache.CacheMode = PtrTo(CacheModeExplicit)
 	}
-	if !cfg.PrefixCache.CacheToolsWasSet() {
-		cfg.PrefixCache.CacheTools = PtrTo(true)
+	if cfg.PrefixCache.CacheMode == nil {
+		return fmt.Errorf("cache_mode is nil after WasSet check")
 	}
-	if !cfg.PrefixCache.CacheMessagesWasSet() {
-		cfg.PrefixCache.CacheMessages = PtrTo(true)
+	if *cfg.PrefixCache.CacheMode != CacheModeExplicit && *cfg.PrefixCache.CacheMode != CacheModeAutomatic {
+		return fmt.Errorf("invalid cache_mode: %q (must be `%s` or `%s`)", *cfg.PrefixCache.CacheMode, CacheModeExplicit, CacheModeAutomatic)
+	}
+	if *cfg.PrefixCache.CacheMode == CacheModeAutomatic {
+		// Automatic mode uses a single top-level breakpoint, so block-level
+		// markers are unused and forced off regardless of explicit config.
+		cfg.PrefixCache.CacheSystem = PtrTo(false)
+		cfg.PrefixCache.CacheTools = PtrTo(false)
+		cfg.PrefixCache.CacheMessages = PtrTo(false)
+	} else {
+		if !cfg.PrefixCache.CacheSystemWasSet() {
+			cfg.PrefixCache.CacheSystem = PtrTo(true)
+		}
+		if !cfg.PrefixCache.CacheToolsWasSet() {
+			cfg.PrefixCache.CacheTools = PtrTo(true)
+		}
+		if !cfg.PrefixCache.CacheMessagesWasSet() {
+			cfg.PrefixCache.CacheMessages = PtrTo(true)
+		}
 	}
 	if cfg.PrefixCache.CacheControlTTL == "" {
 		cfg.PrefixCache.CacheControlTTL = "ephemeral"
