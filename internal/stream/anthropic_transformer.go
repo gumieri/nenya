@@ -110,34 +110,56 @@ func (t *AnthropicTransformer) handleMessageStart(event map[string]interface{}) 
 	}
 
 	if usage, ok := msg["usage"].(map[string]interface{}); ok {
-		if it, ok := usage["input_tokens"].(float64); ok {
-			t.promptTokens = safeFloatToInt(it)
-		}
-		if ct, ok := usage["cache_creation_input_tokens"].(float64); ok {
-			t.cacheCreationTokens = safeFloatToInt(ct)
-		}
-		if rt, ok := usage["cache_read_input_tokens"].(float64); ok {
-			t.cacheReadTokens = safeFloatToInt(rt)
-		}
-		if cc, ok := usage["cache_creation"].(map[string]interface{}); ok {
-			if e5m, ok := cc["ephemeral_5m_input_tokens"].(float64); ok {
-				t.cacheCreation5mTokens = safeFloatToInt(e5m)
-			}
-			if e1h, ok := cc["ephemeral_1h_input_tokens"].(float64); ok {
-				t.cacheCreation1hTokens = safeFloatToInt(e1h)
-			}
-		}
-		if iterRaw, ok := usage["iterations"].([]interface{}); ok {
-			t.iterations = make([]map[string]interface{}, 0, len(iterRaw))
-			for _, i := range iterRaw {
-				if m, ok := i.(map[string]interface{}); ok {
-					t.iterations = append(t.iterations, m)
-				}
-			}
-		}
+		t.extractUsage(usage)
 	}
 
 	return nil, ErrEventConsumed
+}
+
+// extractUsage parses token accounting fields from an Anthropic usage object
+// into the transformer's cached counters. Unknown or malformed fields are
+// silently skipped to keep streaming resilient to provider schema drift.
+func (t *AnthropicTransformer) extractUsage(usage map[string]interface{}) {
+	if it, ok := usage["input_tokens"].(float64); ok {
+		t.promptTokens = safeFloatToInt(it)
+	}
+	if ct, ok := usage["cache_creation_input_tokens"].(float64); ok {
+		t.cacheCreationTokens = safeFloatToInt(ct)
+	}
+	if rt, ok := usage["cache_read_input_tokens"].(float64); ok {
+		t.cacheReadTokens = safeFloatToInt(rt)
+	}
+	t.extractCacheCreation(usage)
+	t.extractIterations(usage)
+}
+
+// extractCacheCreation parses the per-TTL cache_creation breakdown object.
+func (t *AnthropicTransformer) extractCacheCreation(usage map[string]interface{}) {
+	cc, ok := usage["cache_creation"].(map[string]interface{})
+	if !ok {
+		return
+	}
+	if e5m, ok := cc["ephemeral_5m_input_tokens"].(float64); ok {
+		t.cacheCreation5mTokens = safeFloatToInt(e5m)
+	}
+	if e1h, ok := cc["ephemeral_1h_input_tokens"].(float64); ok {
+		t.cacheCreation1hTokens = safeFloatToInt(e1h)
+	}
+}
+
+// extractIterations parses the iterations array, keeping only well-formed
+// map entries and dropping anything else.
+func (t *AnthropicTransformer) extractIterations(usage map[string]interface{}) {
+	iterRaw, ok := usage["iterations"].([]interface{})
+	if !ok {
+		return
+	}
+	t.iterations = make([]map[string]interface{}, 0, len(iterRaw))
+	for _, i := range iterRaw {
+		if m, ok := i.(map[string]interface{}); ok {
+			t.iterations = append(t.iterations, m)
+		}
+	}
 }
 
 func (t *AnthropicTransformer) handleContentBlockStart(event map[string]interface{}) ([]byte, error) {
