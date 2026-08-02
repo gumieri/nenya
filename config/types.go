@@ -545,22 +545,28 @@ func (s *BouncerConfig) UnmarshalJSON(data []byte) error {
 // PrefixCacheConfig controls prompt prefix caching behavior, including
 // pinning system prompts, stable tool definitions, and Anthropic cache_control.
 type PrefixCacheConfig struct {
-	Enabled               bool   `json:"enabled"`
-	PinSystemFirst        *bool  `json:"pin_system_first,omitempty"`
-	StableTools           *bool  `json:"stable_tools,omitempty"`
-	SkipRedactionOnSystem *bool  `json:"skip_redaction_on_system,omitempty"`
-	CacheSystem           *bool  `json:"cache_system,omitempty"`
-	CacheTools            *bool  `json:"cache_tools,omitempty"`
-	CacheMessages         *bool  `json:"cache_messages,omitempty"`
-	CacheControlTTL       string `json:"cache_control_ttl,omitempty"`
+	Enabled               bool    `json:"enabled"`
+	PinSystemFirst        *bool   `json:"pin_system_first,omitempty"`
+	StableTools           *bool   `json:"stable_tools,omitempty"`
+	SkipRedactionOnSystem *bool   `json:"skip_redaction_on_system,omitempty"`
+	CacheSystem           *bool   `json:"cache_system,omitempty"`
+	CacheTools            *bool   `json:"cache_tools,omitempty"`
+	CacheMessages         *bool   `json:"cache_messages,omitempty"`
+	CacheControlTTL       string  `json:"cache_control_ttl,omitempty"`
+	CacheSystemTTL        *string `json:"cache_system_ttl,omitempty"`
+	CacheToolsTTL         *string `json:"cache_tools_ttl,omitempty"`
+	CacheMessagesTTL      *string `json:"cache_messages_ttl,omitempty"`
 }
 
-func (c *PrefixCacheConfig) PinWasSet() bool           { return wasSet(c.PinSystemFirst) }
-func (c *PrefixCacheConfig) StableWasSet() bool        { return wasSet(c.StableTools) }
-func (c *PrefixCacheConfig) SkipRedactionWasSet() bool { return wasSet(c.SkipRedactionOnSystem) }
-func (c *PrefixCacheConfig) CacheSystemWasSet() bool   { return wasSet(c.CacheSystem) }
-func (c *PrefixCacheConfig) CacheToolsWasSet() bool    { return wasSet(c.CacheTools) }
-func (c *PrefixCacheConfig) CacheMessagesWasSet() bool { return wasSet(c.CacheMessages) }
+func (c *PrefixCacheConfig) PinWasSet() bool              { return wasSet(c.PinSystemFirst) }
+func (c *PrefixCacheConfig) StableWasSet() bool           { return wasSet(c.StableTools) }
+func (c *PrefixCacheConfig) SkipRedactionWasSet() bool    { return wasSet(c.SkipRedactionOnSystem) }
+func (c *PrefixCacheConfig) CacheSystemWasSet() bool      { return wasSet(c.CacheSystem) }
+func (c *PrefixCacheConfig) CacheToolsWasSet() bool       { return wasSet(c.CacheTools) }
+func (c *PrefixCacheConfig) CacheMessagesWasSet() bool    { return wasSet(c.CacheMessages) }
+func (c *PrefixCacheConfig) CacheSystemTTLWasSet() bool   { return wasSet(c.CacheSystemTTL) }
+func (c *PrefixCacheConfig) CacheToolsTTLWasSet() bool    { return wasSet(c.CacheToolsTTL) }
+func (c *PrefixCacheConfig) CacheMessagesTTLWasSet() bool { return wasSet(c.CacheMessagesTTL) }
 
 // CompactionPreset is a named preset for content compaction options.
 type CompactionPreset string

@@ -19,6 +19,51 @@ const (
 	thinkingDisplaySummarized = "summarized"
 )
 
+// CacheOpts groups cache control options for Anthropic adapter methods.
+type CacheOpts struct {
+	System      bool   // Enable system breakpoint caching
+	Tools       bool   // Enable tools breakpoint caching
+	Messages    bool   // Enable messages breakpoint caching
+	SystemTTL   string // TTL for system breakpoint ("ephemeral" or "1h")
+	ToolsTTL    string // TTL for tools breakpoint
+	MessagesTTL string // TTL for messages breakpoint
+	GlobalTTL   string // Fallback TTL for all breakpoints (from CacheControlTTL)
+}
+
+// getSystemTTL returns the effective TTL for the system breakpoint.
+func (o *CacheOpts) getSystemTTL() string {
+	if o.SystemTTL != "" {
+		return o.SystemTTL
+	}
+	return o.GlobalTTL
+}
+
+// getToolsTTL returns the effective TTL for the tools breakpoint.
+func (o *CacheOpts) getToolsTTL() string {
+	if o.ToolsTTL != "" {
+		return o.ToolsTTL
+	}
+	return o.GlobalTTL
+}
+
+// getMessagesTTL returns the effective TTL for the messages breakpoint.
+func (o *CacheOpts) getMessagesTTL() string {
+	if o.MessagesTTL != "" {
+		return o.MessagesTTL
+	}
+	return o.GlobalTTL
+}
+
+// buildCacheControl constructs the cache_control map for Anthropic API.
+// Returns {"type": "ephemeral"} for ephemeral TTL, or {"type": "ephemeral", "ttl": "1h"} for 1h TTL.
+func buildCacheControl(ttl string) map[string]interface{} {
+	cc := map[string]interface{}{"type": "ephemeral"}
+	if ttl == "1h" {
+		cc["ttl"] = "1h"
+	}
+	return cc
+}
+
 type AnthropicAdapter struct {
 	version string
 }
@@ -38,10 +83,9 @@ func GetAnthropicAdapter() *AnthropicAdapter {
 
 // ConvertOpenAIToAnthropicBody converts an OpenAI-format request body
 // (as a parsed map) to the Anthropic Messages API format.
-// cacheSystem/cacheTools/cacheMessages control cache_control marker injection.
-// ttl is the cache_control TTL value (e.g. "ephemeral").
-func (a *AnthropicAdapter) ConvertOpenAIToAnthropicBody(openai map[string]interface{}, model string, stream bool, cacheSystem, cacheTools, cacheMessages bool, ttl string) map[string]interface{} {
-	return a.convertOpenAIToAnthropic(openai, model, stream, cacheSystem, cacheTools, cacheMessages, ttl)
+// CacheOpts controls cache_control marker injection and per-breakpoint TTLs.
+func (a *AnthropicAdapter) ConvertOpenAIToAnthropicBody(openai map[string]interface{}, model string, stream bool, opts CacheOpts) map[string]interface{} {
+	return a.convertOpenAIToAnthropic(openai, model, stream, opts)
 }
 
 // ConvertAnthropicToOpenAIBody converts an Anthropic-format response
@@ -99,7 +143,10 @@ func (a *AnthropicAdapter) MutateRequest(body []byte, model string, stream bool)
 		return body, nil
 	}
 
-	anthropic := a.convertOpenAIToAnthropic(openai, model, stream, false, false, false, "ephemeral")
+	opts := CacheOpts{
+		GlobalTTL: "ephemeral",
+	}
+	anthropic := a.convertOpenAIToAnthropic(openai, model, stream, opts)
 
 	out, err := json.Marshal(anthropic)
 	if err != nil {
@@ -149,7 +196,7 @@ func (a *AnthropicAdapter) NormalizeError(statusCode int, body []byte) ErrorClas
 	}
 }
 
-func (a *AnthropicAdapter) convertOpenAIToAnthropic(openai map[string]interface{}, model string, stream bool, cacheSystem, cacheTools, cacheMessages bool, ttl string) map[string]interface{} {
+func (a *AnthropicAdapter) convertOpenAIToAnthropic(openai map[string]interface{}, model string, stream bool, opts CacheOpts) map[string]interface{} {
 	anthropic := map[string]interface{}{
 		"model":      model,
 		"stream":     stream,
@@ -160,11 +207,11 @@ func (a *AnthropicAdapter) convertOpenAIToAnthropic(openai map[string]interface{
 
 	if msgs, ok := openai["messages"].([]interface{}); ok {
 		anthropic["messages"] = a.convertMessages(msgs)
-		a.setSystemPrompt(openai, anthropic, cacheSystem, ttl)
+		a.setSystemPrompt(openai, anthropic, opts.System, opts.getSystemTTL())
 	}
 
 	if tools, ok := openai["tools"].([]interface{}); ok && len(tools) > 0 {
-		anthropic["tools"] = a.convertTools(tools, cacheTools, ttl)
+		anthropic["tools"] = a.convertTools(tools, opts.Tools, opts.getToolsTTL())
 	}
 
 	if tc, ok := openai["tool_choice"]; ok {
@@ -173,8 +220,8 @@ func (a *AnthropicAdapter) convertOpenAIToAnthropic(openai map[string]interface{
 
 	a.injectReasoningEffort(openai, anthropic, model)
 
-	if cacheMessages {
-		a.injectMessageCache(anthropic, ttl)
+	if opts.Messages {
+		a.injectMessageCache(anthropic, opts.getMessagesTTL())
 	}
 
 	return anthropic
@@ -193,11 +240,9 @@ func (a *AnthropicAdapter) setSystemPrompt(openai, anthropic map[string]interfac
 	if cacheSystem {
 		anthropic["system"] = []interface{}{
 			map[string]interface{}{
-				"type": "text",
-				"text": joined,
-				"cache_control": map[string]interface{}{
-					"type": ttl,
-				},
+				"type":          "text",
+				"text":          joined,
+				"cache_control": buildCacheControl(ttl),
 			},
 		}
 	} else {
@@ -287,7 +332,7 @@ func (a *AnthropicAdapter) injectMessageCache(anthropic map[string]interface{}, 
 
 	lastBlock, ok := content[len(content)-1].(map[string]interface{})
 	if ok {
-		lastBlock["cache_control"] = map[string]interface{}{"type": ttl}
+		lastBlock["cache_control"] = buildCacheControl(ttl)
 	}
 }
 
@@ -829,7 +874,7 @@ func (a *AnthropicAdapter) convertTools(tools []interface{}, cacheTools bool, tt
 	if cacheTools && len(result) > 0 {
 		lastTool, ok := result[len(result)-1].(map[string]interface{})
 		if ok {
-			lastTool["cache_control"] = map[string]interface{}{"type": ttl}
+			lastTool["cache_control"] = buildCacheControl(ttl)
 		}
 	}
 

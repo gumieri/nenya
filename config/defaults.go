@@ -295,8 +295,64 @@ func applyCacheControlDefaults(cfg *Config) error {
 	if cfg.PrefixCache.CacheControlTTL == "" {
 		cfg.PrefixCache.CacheControlTTL = "ephemeral"
 	}
-	if cfg.PrefixCache.CacheControlTTL != "ephemeral" {
-		return fmt.Errorf("invalid cache_control_ttl: %q (must be 'ephemeral')", cfg.PrefixCache.CacheControlTTL)
+	// Unset per-breakpoint TTLs intentionally alias the global CacheControlTTL
+	// field so they always reflect the effective global value (no copy drift).
+	if !cfg.PrefixCache.CacheSystemTTLWasSet() {
+		cfg.PrefixCache.CacheSystemTTL = &cfg.PrefixCache.CacheControlTTL
+	}
+	if !cfg.PrefixCache.CacheToolsTTLWasSet() {
+		cfg.PrefixCache.CacheToolsTTL = &cfg.PrefixCache.CacheControlTTL
+	}
+	if !cfg.PrefixCache.CacheMessagesTTLWasSet() {
+		cfg.PrefixCache.CacheMessagesTTL = &cfg.PrefixCache.CacheControlTTL
+	}
+
+	if err := validateCacheTTLs(cfg); err != nil {
+		return err
+	}
+	return validateCacheTTLOrdering(cfg)
+}
+
+func validateCacheTTLs(cfg *Config) error {
+	validTTLs := map[string]bool{"ephemeral": true, "1h": true}
+	all := []struct {
+		field string
+		val   *string
+	}{
+		{"cache_control_ttl", &cfg.PrefixCache.CacheControlTTL},
+		{"cache_system_ttl", cfg.PrefixCache.CacheSystemTTL},
+		{"cache_tools_ttl", cfg.PrefixCache.CacheToolsTTL},
+		{"cache_messages_ttl", cfg.PrefixCache.CacheMessagesTTL},
+	}
+	for _, ttl := range all {
+		if ttl.val != nil && *ttl.val != "" && !validTTLs[*ttl.val] {
+			return fmt.Errorf("invalid %s: %q (must be 'ephemeral' or '1h')", ttl.field, *ttl.val)
+		}
+	}
+	return nil
+}
+
+// validateCacheTTLOrdering ensures TTL values follow a non-increasing pattern:
+// longer TTLs ("1h") must precede shorter ones ("ephemeral").
+func validateCacheTTLOrdering(cfg *Config) error {
+	perBreakpoint := []*string{
+		cfg.PrefixCache.CacheSystemTTL,
+		cfg.PrefixCache.CacheToolsTTL,
+		cfg.PrefixCache.CacheMessagesTTL,
+	}
+	for i := 1; i < len(perBreakpoint); i++ {
+		prev := perBreakpoint[i-1]
+		cur := perBreakpoint[i]
+		// Skip if either is nil (falls back to global TTL)
+		if prev == nil || cur == nil {
+			continue
+		}
+		if *prev == "ephemeral" && *cur == "1h" {
+			return fmt.Errorf("invalid TTL ordering: per-breakpoint TTL %q must not follow %q (longer TTLs must precede shorter)", *cur, *prev)
+		}
+	}
+	if cfg.PrefixCache.CacheControlTTL == "1h" && (perBreakpoint[0] != nil && *perBreakpoint[0] == "ephemeral") {
+		return fmt.Errorf("invalid TTL ordering: global TTL %q requires all per-breakpoint TTLs to be %q", cfg.PrefixCache.CacheControlTTL, cfg.PrefixCache.CacheControlTTL)
 	}
 	return nil
 }

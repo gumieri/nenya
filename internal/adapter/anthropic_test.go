@@ -571,7 +571,8 @@ func TestAnthropicAdapter_ConvertOpenAIToAnthropicBody(t *testing.T) {
 			map[string]interface{}{"role": "user", "content": "hello"},
 		},
 	}
-	result := a.ConvertOpenAIToAnthropicBody(openai, "claude-3", false, false, false, false, "ephemeral")
+	opts := CacheOpts{GlobalTTL: "ephemeral"}
+	result := a.ConvertOpenAIToAnthropicBody(openai, "claude-3", false, opts)
 	if result["model"] != "claude-3" {
 		t.Errorf("expected model 'claude-3', got %v", result["model"])
 	}
@@ -838,10 +839,134 @@ func TestAnthropicAdapter_CacheControlInjection(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := a.ConvertOpenAIToAnthropicBody(tt.openai, "claude-3", false, tt.cacheSystem, tt.cacheTools, tt.cacheMessage, ttl)
+			opts := CacheOpts{
+				System:    tt.cacheSystem,
+				Tools:     tt.cacheTools,
+				Messages:  tt.cacheMessage,
+				GlobalTTL: ttl,
+			}
+			result := a.ConvertOpenAIToAnthropicBody(tt.openai, "claude-3", false, opts)
 			tt.assertFunc(t, result)
 		})
 	}
+}
+
+func TestCacheOpts_GetterFallbacks(t *testing.T) {
+	t.Run("specific TTL takes precedence over global", func(t *testing.T) {
+		opts := CacheOpts{SystemTTL: "1h", GlobalTTL: "ephemeral"}
+		if got := opts.getSystemTTL(); got != "1h" {
+			t.Errorf("getSystemTTL() = %q, want %q", got, "1h")
+		}
+	})
+
+	t.Run("empty specific TTL falls back to global", func(t *testing.T) {
+		opts := CacheOpts{GlobalTTL: "1h"}
+		if got := opts.getToolsTTL(); got != "1h" {
+			t.Errorf("getToolsTTL() = %q, want %q", got, "1h")
+		}
+	})
+
+	t.Run("all empty returns empty string", func(t *testing.T) {
+		opts := CacheOpts{}
+		if got := opts.getMessagesTTL(); got != "" {
+			t.Errorf("getMessagesTTL() = %q, want empty", got)
+		}
+	})
+}
+
+func TestAnthropicAdapter_CacheControlTTLVariants(t *testing.T) {
+	a := NewAnthropicAdapter()
+	openai := map[string]interface{}{
+		"model": "gpt-4",
+		"messages": []interface{}{
+			map[string]interface{}{"role": "system", "content": "You are helpful."},
+			map[string]interface{}{"role": "user", "content": "hello"},
+		},
+	}
+
+	t.Run("ephemeral omits ttl key", func(t *testing.T) {
+		opts := CacheOpts{System: true, GlobalTTL: "ephemeral"}
+		result := a.ConvertOpenAIToAnthropicBody(openai, "claude-3", false, opts)
+		system := result["system"].([]interface{})
+		block := system[0].(map[string]interface{})
+		cc := block["cache_control"].(map[string]interface{})
+		if cc["type"] != "ephemeral" {
+			t.Errorf("expected cache_control.type 'ephemeral', got %v", cc["type"])
+		}
+		if _, hasTTL := cc["ttl"]; hasTTL {
+			t.Error("expected no ttl key for ephemeral TTL")
+		}
+	})
+
+	t.Run("1h emits ttl key", func(t *testing.T) {
+		opts := CacheOpts{System: true, GlobalTTL: "1h"}
+		result := a.ConvertOpenAIToAnthropicBody(openai, "claude-3", false, opts)
+		system := result["system"].([]interface{})
+		block := system[0].(map[string]interface{})
+		cc := block["cache_control"].(map[string]interface{})
+		if cc["type"] != "ephemeral" {
+			t.Errorf("expected cache_control.type 'ephemeral', got %v", cc["type"])
+		}
+		if cc["ttl"] != "1h" {
+			t.Errorf("expected cache_control.ttl '1h', got %v", cc["ttl"])
+		}
+	})
+
+	t.Run("per-breakpoint TTLs applied independently", func(t *testing.T) {
+		openaiWithTools := map[string]interface{}{
+			"model": "gpt-4",
+			"messages": []interface{}{
+				map[string]interface{}{"role": "system", "content": "You are helpful."},
+				map[string]interface{}{"role": "user", "content": "first"},
+				map[string]interface{}{"role": "assistant", "content": "answer"},
+				map[string]interface{}{"role": "user", "content": "second"},
+			},
+			"tools": []interface{}{
+				map[string]interface{}{
+					"type": "function",
+					"function": map[string]interface{}{
+						"name":        "get_weather",
+						"description": "Get weather",
+						"parameters":  map[string]interface{}{"type": "object"},
+					},
+				},
+			},
+		}
+		opts := CacheOpts{
+			System:    true,
+			Tools:     true,
+			Messages:  true,
+			GlobalTTL: "ephemeral",
+			SystemTTL: "1h",
+			ToolsTTL:  "1h",
+		}
+		result := a.ConvertOpenAIToAnthropicBody(openaiWithTools, "claude-3", false, opts)
+
+		system := result["system"].([]interface{})
+		sysCC := system[0].(map[string]interface{})["cache_control"].(map[string]interface{})
+		if sysCC["ttl"] != "1h" {
+			t.Errorf("expected system TTL '1h', got %v", sysCC["ttl"])
+		}
+
+		tools := result["tools"].([]interface{})
+		lastTool := tools[len(tools)-1].(map[string]interface{})
+		toolCC := lastTool["cache_control"].(map[string]interface{})
+		if toolCC["ttl"] != "1h" {
+			t.Errorf("expected tools TTL '1h', got %v", toolCC["ttl"])
+		}
+
+		msgs := result["messages"].([]interface{})
+		targetMsg := msgs[1].(map[string]interface{})
+		content := targetMsg["content"].([]interface{})
+		block := content[0].(map[string]interface{})
+		msgCC := block["cache_control"].(map[string]interface{})
+		if msgCC["type"] != "ephemeral" {
+			t.Errorf("expected messages cache_control.type 'ephemeral', got %v", msgCC["type"])
+		}
+		if _, hasTTL := msgCC["ttl"]; hasTTL {
+			t.Error("expected messages TTL to fall back to 'ephemeral' without ttl key")
+		}
+	})
 }
 
 func TestAnthropicAdapter_ConvertAnthropicToOpenAIBody(t *testing.T) {

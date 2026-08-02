@@ -341,7 +341,22 @@ func convertToAnthropicFormat(deps TransformDeps, payload map[string]interface{}
 	if ttl == "" {
 		ttl = "ephemeral"
 	}
-	return anthropicAdapter.ConvertOpenAIToAnthropicBody(payload, modelName, stream, cacheSystem, cacheTools, cacheMessages, ttl)
+	opts := adapter.CacheOpts{
+		System:    cacheSystem,
+		Tools:     cacheTools,
+		Messages:  cacheMessages,
+		GlobalTTL: ttl,
+	}
+	if pc.CacheSystemTTL != nil {
+		opts.SystemTTL = *pc.CacheSystemTTL
+	}
+	if pc.CacheToolsTTL != nil {
+		opts.ToolsTTL = *pc.CacheToolsTTL
+	}
+	if pc.CacheMessagesTTL != nil {
+		opts.MessagesTTL = *pc.CacheMessagesTTL
+	}
+	return anthropicAdapter.ConvertOpenAIToAnthropicBody(payload, modelName, stream, opts)
 }
 
 func TransformRequestForUpstream(deps TransformDeps, providerName, upstreamURL string, payload map[string]interface{}, model string, maxOutput int, format string, reasoningEffort string) ([]byte, string, error) {
