@@ -11,6 +11,11 @@ import (
 
 const MaxTimeoutSeconds = 86400 // 24 hours
 
+const (
+	CacheModeExplicit  = "explicit"
+	CacheModeAutomatic = "automatic"
+)
+
 // AgentModel defines a single model entry within an agent's model list,
 // specifying the provider, model name, URL override, and context limits.
 // Supports static entries (provider/model) and dynamic entries (provider_rgx/model_rgx)
@@ -544,8 +549,13 @@ func (s *BouncerConfig) UnmarshalJSON(data []byte) error {
 
 // PrefixCacheConfig controls prompt prefix caching behavior, including
 // pinning system prompts, stable tool definitions, and Anthropic cache_control.
+// CacheMode selects the breakpoint strategy: CacheModeExplicit ("explicit",
+// default) injects block-level markers on system/tools/messages, while
+// CacheModeAutomatic ("automatic") emits a single top-level cache_control and
+// disables block markers.
 type PrefixCacheConfig struct {
 	Enabled               bool    `json:"enabled"`
+	CacheMode             *string `json:"cache_mode,omitempty"`
 	PinSystemFirst        *bool   `json:"pin_system_first,omitempty"`
 	StableTools           *bool   `json:"stable_tools,omitempty"`
 	SkipRedactionOnSystem *bool   `json:"skip_redaction_on_system,omitempty"`
@@ -558,6 +568,7 @@ type PrefixCacheConfig struct {
 	CacheMessagesTTL      *string `json:"cache_messages_ttl,omitempty"`
 }
 
+func (c *PrefixCacheConfig) CacheModeWasSet() bool        { return wasSet(c.CacheMode) }
 func (c *PrefixCacheConfig) PinWasSet() bool              { return wasSet(c.PinSystemFirst) }
 func (c *PrefixCacheConfig) StableWasSet() bool           { return wasSet(c.StableTools) }
 func (c *PrefixCacheConfig) SkipRedactionWasSet() bool    { return wasSet(c.SkipRedactionOnSystem) }

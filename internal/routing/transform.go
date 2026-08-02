@@ -337,6 +337,7 @@ func convertToAnthropicFormat(deps TransformDeps, payload map[string]interface{}
 	cacheSystem := pc.CacheSystem != nil && *pc.CacheSystem && pc.Enabled
 	cacheTools := pc.CacheTools != nil && *pc.CacheTools && pc.Enabled
 	cacheMessages := pc.CacheMessages != nil && *pc.CacheMessages && pc.Enabled
+	cacheAutomatic := pc.Enabled && pc.CacheMode != nil && *pc.CacheMode == config.CacheModeAutomatic
 	ttl := pc.CacheControlTTL
 	if ttl == "" {
 		ttl = "ephemeral"
@@ -345,6 +346,7 @@ func convertToAnthropicFormat(deps TransformDeps, payload map[string]interface{}
 		System:    cacheSystem,
 		Tools:     cacheTools,
 		Messages:  cacheMessages,
+		Automatic: cacheAutomatic,
 		GlobalTTL: ttl,
 	}
 	if pc.CacheSystemTTL != nil {

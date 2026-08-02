@@ -414,6 +414,99 @@ func TestPrefixCache_MergeTTLFields(t *testing.T) {
 	}
 }
 
+func TestPrefixCache_CacheModeDefaults(t *testing.T) {
+	cfg := &Config{
+		PrefixCache: PrefixCacheConfig{
+			Enabled: true,
+		},
+	}
+	err := ApplyDefaults(cfg)
+	if err != nil {
+		t.Fatalf("ApplyDefaults failed: %v", err)
+	}
+	if cfg.PrefixCache.CacheMode == nil || *cfg.PrefixCache.CacheMode != CacheModeExplicit {
+		t.Errorf("expected CacheMode to default to 'explicit', got %v", cfg.PrefixCache.CacheMode)
+	}
+}
+
+func TestPrefixCache_CacheModeAutomaticForcesBlockMarkersOff(t *testing.T) {
+	cfg := &Config{
+		PrefixCache: PrefixCacheConfig{
+			Enabled:          true,
+			CacheSystem:      PtrTo(true),
+			CacheTools:       PtrTo(true),
+			CacheMessages:    PtrTo(true),
+			CacheControlTTL:  "1h",
+		},
+	}
+	automatic := CacheModeAutomatic
+	cfg.PrefixCache.CacheMode = &automatic
+	err := ApplyDefaults(cfg)
+	if err != nil {
+		t.Fatalf("ApplyDefaults failed: %v", err)
+	}
+	if cfg.PrefixCache.CacheSystem == nil || *cfg.PrefixCache.CacheSystem != false {
+		t.Errorf("expected CacheSystem forced to false in automatic mode, got %v", cfg.PrefixCache.CacheSystem)
+	}
+	if cfg.PrefixCache.CacheTools == nil || *cfg.PrefixCache.CacheTools != false {
+		t.Errorf("expected CacheTools forced to false in automatic mode, got %v", cfg.PrefixCache.CacheTools)
+	}
+	if cfg.PrefixCache.CacheMessages == nil || *cfg.PrefixCache.CacheMessages != false {
+		t.Errorf("expected CacheMessages forced to false in automatic mode, got %v", cfg.PrefixCache.CacheMessages)
+	}
+}
+
+func TestPrefixCache_CacheModeNilWhenDisabled(t *testing.T) {
+	cfg := &Config{
+		PrefixCache: PrefixCacheConfig{
+			Enabled: false,
+		},
+	}
+	err := ApplyDefaults(cfg)
+	if err != nil {
+		t.Fatalf("ApplyDefaults failed: %v", err)
+	}
+	if cfg.PrefixCache.CacheMode != nil {
+		t.Errorf("expected CacheMode to remain nil when prefix cache is disabled, got %v", cfg.PrefixCache.CacheMode)
+	}
+}
+
+func TestPrefixCache_InvalidCacheModeRejected(t *testing.T) {
+	cfg := &Config{
+		PrefixCache: PrefixCacheConfig{
+			Enabled:  true,
+			CacheMode: PtrTo("bogus"),
+		},
+	}
+	err := ApplyDefaults(cfg)
+	if err == nil {
+		t.Fatal("expected error for invalid cache_mode 'bogus', got nil")
+	}
+	expectedMsg := `invalid cache_mode: "bogus" (must be ` + "`explicit`" + ` or ` + "`automatic`" + `)`
+	if err.Error() != expectedMsg {
+		t.Errorf("unexpected error message: got %v, want %v", err.Error(), expectedMsg)
+	}
+}
+
+func TestPrefixCache_MergeCacheMode(t *testing.T) {
+	base := &Config{
+		PrefixCache: PrefixCacheConfig{
+			Enabled:   true,
+			CacheMode: PtrTo(CacheModeExplicit),
+		},
+	}
+	automatic := CacheModeAutomatic
+	overlay := &Config{
+		PrefixCache: PrefixCacheConfig{
+			CacheMode: &automatic,
+		},
+	}
+	mergePrefixCacheConfig(base, overlay)
+	if base.PrefixCache.CacheMode == nil || *base.PrefixCache.CacheMode != CacheModeAutomatic {
+		t.Errorf("CacheMode not merged: got %v", base.PrefixCache.CacheMode)
+	}
+}
+
 func TestEffectiveUpstreamTimeout(t *testing.T) {
 	tests := []struct {
 		name            string
