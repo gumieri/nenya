@@ -28,16 +28,19 @@ type anthropicBlock struct {
 }
 
 type AnthropicTransformer struct {
-	mu                  sync.Mutex
-	messageID           string
-	model               string
-	promptTokens        int
-	outputTokens        int
-	cacheCreationTokens int
-	cacheReadTokens     int
-	hasToolCalls        bool
-	blockMap            map[int]*anthropicBlock
-	streamDone          bool
+	mu                    sync.Mutex
+	messageID             string
+	model                 string
+	promptTokens          int
+	outputTokens          int
+	cacheCreationTokens   int
+	cacheReadTokens       int
+	cacheCreation5mTokens int
+	cacheCreation1hTokens int
+	iterations            []map[string]interface{}
+	hasToolCalls          bool
+	blockMap              map[int]*anthropicBlock
+	streamDone            bool
 }
 
 func NewAnthropicTransformer() *AnthropicTransformer {
@@ -115,6 +118,22 @@ func (t *AnthropicTransformer) handleMessageStart(event map[string]interface{}) 
 		}
 		if rt, ok := usage["cache_read_input_tokens"].(float64); ok {
 			t.cacheReadTokens = safeFloatToInt(rt)
+		}
+		if cc, ok := usage["cache_creation"].(map[string]interface{}); ok {
+			if e5m, ok := cc["ephemeral_5m_input_tokens"].(float64); ok {
+				t.cacheCreation5mTokens = safeFloatToInt(e5m)
+			}
+			if e1h, ok := cc["ephemeral_1h_input_tokens"].(float64); ok {
+				t.cacheCreation1hTokens = safeFloatToInt(e1h)
+			}
+		}
+		if iterRaw, ok := usage["iterations"].([]interface{}); ok {
+			t.iterations = make([]map[string]interface{}, 0, len(iterRaw))
+			for _, i := range iterRaw {
+				if m, ok := i.(map[string]interface{}); ok {
+					t.iterations = append(t.iterations, m)
+				}
+			}
 		}
 	}
 
@@ -296,7 +315,8 @@ func (t *AnthropicTransformer) handleMessageDelta(event map[string]interface{}) 
 	// upstream usage fields, so clamp to math.MaxInt instead of wrapping.
 	totalPromptTokens := util.AddCap(util.AddCap(t.cacheReadTokens, t.cacheCreationTokens), t.promptTokens)
 	totalAll := util.AddCap(totalPromptTokens, t.outputTokens)
-	chunk["usage"] = map[string]interface{}{
+
+	usage := map[string]interface{}{
 		"prompt_tokens":               totalPromptTokens,
 		"completion_tokens":           t.outputTokens,
 		"total_tokens":                totalAll,
@@ -306,6 +326,19 @@ func (t *AnthropicTransformer) handleMessageDelta(event map[string]interface{}) 
 		"cache_read_input_tokens":     t.cacheReadTokens,
 		"cache_creation_input_tokens": t.cacheCreationTokens,
 	}
+
+	if t.cacheCreation5mTokens > 0 || t.cacheCreation1hTokens > 0 {
+		usage["cache_creation"] = map[string]interface{}{
+			"ephemeral_5m_input_tokens": t.cacheCreation5mTokens,
+			"ephemeral_1h_input_tokens": t.cacheCreation1hTokens,
+		}
+	}
+
+	if len(t.iterations) > 0 {
+		usage["iterations"] = t.iterations
+	}
+
+	chunk["usage"] = usage
 
 	return t.marshalChunk(chunk)
 }
@@ -326,6 +359,9 @@ func (t *AnthropicTransformer) Reset() {
 	t.outputTokens = 0
 	t.cacheCreationTokens = 0
 	t.cacheReadTokens = 0
+	t.cacheCreation5mTokens = 0
+	t.cacheCreation1hTokens = 0
+	t.iterations = nil
 	t.hasToolCalls = false
 	t.blockMap = make(map[int]*anthropicBlock)
 	t.streamDone = false

@@ -68,6 +68,53 @@ func TestAnthropicTransformer_MessageStart(t *testing.T) {
 	}
 }
 
+func TestAnthropicTransformer_MessageStartCacheBreakdown(t *testing.T) {
+	tr := NewAnthropicTransformer()
+	input := map[string]interface{}{
+		"type": "message_start",
+		"message": map[string]interface{}{
+			"id":    "msg_123",
+			"model": "claude-3",
+			"usage": map[string]interface{}{
+				"input_tokens":                float64(1000),
+				"cache_creation_input_tokens": float64(54947),
+				"cache_creation": map[string]interface{}{
+					"ephemeral_5m_input_tokens": float64(50000),
+					"ephemeral_1h_input_tokens": float64(4947),
+				},
+				"iterations": []interface{}{
+					map[string]interface{}{
+						"iteration":           1,
+						"input_tokens":        float64(1000),
+						"cache_creation_input_tokens": float64(54947),
+					},
+				},
+			},
+		},
+	}
+	data, _ := json.Marshal(input)
+	_, err := tr.TransformSSEChunk(context.Background(), data)
+	if !errors.Is(err, ErrEventConsumed) {
+		t.Fatalf("expected ErrEventConsumed, got: %v", err)
+	}
+	if tr.cacheCreationTokens != 54947 {
+		t.Errorf("expected cacheCreationTokens 54947, got %d", tr.cacheCreationTokens)
+	}
+	if tr.cacheCreation5mTokens != 50000 {
+		t.Errorf("expected cacheCreation5mTokens 50000, got %d", tr.cacheCreation5mTokens)
+	}
+	if tr.cacheCreation1hTokens != 4947 {
+		t.Errorf("expected cacheCreation1hTokens 4947, got %d", tr.cacheCreation1hTokens)
+	}
+	if len(tr.iterations) != 1 {
+		t.Fatalf("expected 1 iteration, got %d", len(tr.iterations))
+	}
+	it := tr.iterations[0]
+	if it["iteration"] != float64(1) {
+		t.Errorf("expected iteration 1, got %v", it["iteration"])
+	}
+}
+
 func TestAnthropicTransformer_TextContent(t *testing.T) {
 	tr := NewAnthropicTransformer()
 	tr.messageID = "msg_123"
@@ -252,7 +299,7 @@ func TestAnthropicTransformer_ToolUseContentBlock(t *testing.T) {
 	tcs = delta["tool_calls"].([]interface{})
 	tc = tcs[0].(map[string]interface{})
 	fn = tc["function"].(map[string]interface{})
-	if fn["arguments"] != `{"city": "` {
+if fn["arguments"] != `{"city": "` {
 		t.Errorf("expected partial json, got %v", fn["arguments"])
 	}
 }
