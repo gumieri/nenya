@@ -208,6 +208,83 @@ func injectPromptCacheKey(deps TransformDeps, payload map[string]interface{}, pr
 	payload["prompt_cache_key"] = hex.EncodeToString(h[:])[:16]
 }
 
+func injectOpenAICacheBreakpoints(deps TransformDeps, payload map[string]interface{}, providerName, modelName string) {
+	if deps.Config == nil || !deps.Config.PrefixCache.Enabled {
+		return
+	}
+
+	lower := strings.ToLower(providerName)
+	if lower != "openai" {
+		return
+	}
+
+	if !*deps.Config.PrefixCache.OpenAIBreakpoint {
+		return
+	}
+
+	if !supportsOpenAICacheBreakpoints(modelName) {
+		if deps.Logger != nil {
+			deps.Logger.Debug("skipped OpenAI cache breakpoint injection: model not in GPT-5.6+ family", "model", modelName)
+		}
+		return
+	}
+
+	if _, hasKey := payload["prompt_cache_key"]; !hasKey {
+		if deps.Logger != nil {
+			deps.Logger.Debug("skipped OpenAI cache breakpoint injection: prompt_cache_key missing", "model", modelName)
+		}
+		return
+	}
+
+	setOpenAICacheMode(deps, payload)
+	injectOpenAIBreakpointOnLastBlock(payload)
+}
+
+func supportsOpenAICacheBreakpoints(modelName string) bool {
+	lowerModel := strings.ToLower(modelName)
+	return strings.HasPrefix(lowerModel, "gpt-5.6") || strings.HasPrefix(lowerModel, "gpt-5.7")
+}
+
+func setOpenAICacheMode(deps TransformDeps, payload map[string]interface{}) {
+	if deps.Config.PrefixCache.OpenAIMode == nil {
+		return
+	}
+	if *deps.Config.PrefixCache.OpenAIMode != config.OpenAIModeExplicit {
+		return
+	}
+	if _, hasOptions := payload["prompt_cache_options"]; !hasOptions {
+		payload["prompt_cache_options"] = map[string]interface{}{"mode": "explicit"}
+	} else if options, ok := payload["prompt_cache_options"].(map[string]interface{}); ok {
+		options["mode"] = "explicit"
+	}
+}
+
+func injectOpenAIBreakpointOnLastBlock(payload map[string]interface{}) {
+	messagesRaw, ok := payload["messages"]
+	if !ok {
+		return
+	}
+	messages, ok := messagesRaw.([]interface{})
+	if !ok || len(messages) < 2 {
+		return
+	}
+
+	targetMsg, ok := messages[len(messages)-2].(map[string]interface{})
+	if !ok {
+		return
+	}
+
+	content, ok := targetMsg["content"].([]interface{})
+	if !ok || len(content) == 0 {
+		return
+	}
+
+	lastBlock, ok := content[len(content)-1].(map[string]interface{})
+	if ok {
+		lastBlock["prompt_cache_breakpoint"] = map[string]interface{}{"mode": "explicit"}
+	}
+}
+
 func shouldInjectSystem(firstMsg map[string]interface{}, agent config.AgentConfig) bool {
 	if agent.ForceSystemPrompt {
 		return true
@@ -393,6 +470,7 @@ func TransformRequestForUpstream(deps TransformDeps, providerName, upstreamURL s
 	applyProviderSanitize(deps, payload, providerName)
 	SanitizePayload(deps, payload, modelName)
 	injectPromptCacheKey(deps, payload, providerName, modelName)
+	injectOpenAICacheBreakpoints(deps, payload, providerName, modelName)
 	resolveAgentSystemPrompt(deps, payload, origModel, providerName)
 
 	effectiveMaxOutput := resolveEffectiveMaxOutput(deps, finalModel, maxOutput)

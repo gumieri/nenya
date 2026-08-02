@@ -507,6 +507,65 @@ func TestPrefixCache_MergeCacheMode(t *testing.T) {
 	}
 }
 
+func TestPrefixCache_OpenAIBreakpointDefaults(t *testing.T) {
+	cfg := &Config{
+		PrefixCache: PrefixCacheConfig{
+			Enabled: true,
+		},
+	}
+	err := ApplyDefaults(cfg)
+	if err != nil {
+		t.Fatalf("ApplyDefaults failed: %v", err)
+	}
+	if cfg.PrefixCache.OpenAIBreakpoint == nil || !*cfg.PrefixCache.OpenAIBreakpoint {
+		t.Errorf("expected OpenAIBreakpoint to default to true, got %v", cfg.PrefixCache.OpenAIBreakpoint)
+	}
+	if cfg.PrefixCache.OpenAIMode == nil || *cfg.PrefixCache.OpenAIMode != OpenAIModeImplicit {
+		t.Errorf("expected OpenAIMode to default to 'implicit', got %v", cfg.PrefixCache.OpenAIMode)
+	}
+}
+
+func TestPrefixCache_InvalidOpenAIModeRejected(t *testing.T) {
+	cfg := &Config{
+		PrefixCache: PrefixCacheConfig{
+			Enabled:    true,
+			OpenAIMode: PtrTo("bogus"),
+		},
+	}
+	err := ApplyDefaults(cfg)
+	if err == nil {
+		t.Fatal("expected error for invalid openai_mode 'bogus', got nil")
+	}
+	expectedMsg := `invalid openai_mode: "bogus" (must be ` + "`implicit`" + ` or ` + "`explicit`" + `)`
+	if err.Error() != expectedMsg {
+		t.Errorf("unexpected error message: got %v, want %v", err.Error(), expectedMsg)
+	}
+}
+
+func TestPrefixCache_MergeOpenAIFields(t *testing.T) {
+	base := &Config{
+		PrefixCache: PrefixCacheConfig{
+			Enabled:          true,
+			OpenAIBreakpoint: PtrTo(false),
+			OpenAIMode:       PtrTo(OpenAIModeImplicit),
+		},
+	}
+	explicit := OpenAIModeExplicit
+	overlay := &Config{
+		PrefixCache: PrefixCacheConfig{
+			OpenAIBreakpoint: PtrTo(true),
+			OpenAIMode:       &explicit,
+		},
+	}
+	mergePrefixCacheConfig(base, overlay)
+	if base.PrefixCache.OpenAIBreakpoint == nil || !*base.PrefixCache.OpenAIBreakpoint {
+		t.Errorf("OpenAIBreakpoint not merged: got %v", base.PrefixCache.OpenAIBreakpoint)
+	}
+	if base.PrefixCache.OpenAIMode == nil || *base.PrefixCache.OpenAIMode != OpenAIModeExplicit {
+		t.Errorf("OpenAIMode not merged: got %v", base.PrefixCache.OpenAIMode)
+	}
+}
+
 func TestEffectiveUpstreamTimeout(t *testing.T) {
 	tests := []struct {
 		name            string

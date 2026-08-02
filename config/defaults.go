@@ -283,31 +283,8 @@ func applyCacheControlDefaults(cfg *Config) error {
 	if !cfg.PrefixCache.Enabled {
 		return nil
 	}
-	if !cfg.PrefixCache.CacheModeWasSet() {
-		cfg.PrefixCache.CacheMode = PtrTo(CacheModeExplicit)
-	}
-	if cfg.PrefixCache.CacheMode == nil {
-		return fmt.Errorf("cache_mode is nil after WasSet check")
-	}
-	if *cfg.PrefixCache.CacheMode != CacheModeExplicit && *cfg.PrefixCache.CacheMode != CacheModeAutomatic {
-		return fmt.Errorf("invalid cache_mode: %q (must be `%s` or `%s`)", *cfg.PrefixCache.CacheMode, CacheModeExplicit, CacheModeAutomatic)
-	}
-	if *cfg.PrefixCache.CacheMode == CacheModeAutomatic {
-		// Automatic mode uses a single top-level breakpoint, so block-level
-		// markers are unused and forced off regardless of explicit config.
-		cfg.PrefixCache.CacheSystem = PtrTo(false)
-		cfg.PrefixCache.CacheTools = PtrTo(false)
-		cfg.PrefixCache.CacheMessages = PtrTo(false)
-	} else {
-		if !cfg.PrefixCache.CacheSystemWasSet() {
-			cfg.PrefixCache.CacheSystem = PtrTo(true)
-		}
-		if !cfg.PrefixCache.CacheToolsWasSet() {
-			cfg.PrefixCache.CacheTools = PtrTo(true)
-		}
-		if !cfg.PrefixCache.CacheMessagesWasSet() {
-			cfg.PrefixCache.CacheMessages = PtrTo(true)
-		}
+	if err := applyCacheModeDefaults(cfg); err != nil {
+		return err
 	}
 	if cfg.PrefixCache.CacheControlTTL == "" {
 		cfg.PrefixCache.CacheControlTTL = "ephemeral"
@@ -327,7 +304,59 @@ func applyCacheControlDefaults(cfg *Config) error {
 	if err := validateCacheTTLs(cfg); err != nil {
 		return err
 	}
-	return validateCacheTTLOrdering(cfg)
+	if err := validateCacheTTLOrdering(cfg); err != nil {
+		return err
+	}
+	return applyOpenAICacheDefaults(cfg)
+}
+
+func applyCacheModeDefaults(cfg *Config) error {
+	if !cfg.PrefixCache.CacheModeWasSet() {
+		cfg.PrefixCache.CacheMode = PtrTo(CacheModeExplicit)
+	}
+	if cfg.PrefixCache.CacheMode == nil {
+		return fmt.Errorf("cache_mode is nil after WasSet check")
+	}
+	if *cfg.PrefixCache.CacheMode != CacheModeExplicit && *cfg.PrefixCache.CacheMode != CacheModeAutomatic {
+		return fmt.Errorf("invalid cache_mode: %q (must be `%s` or `%s`)", *cfg.PrefixCache.CacheMode, CacheModeExplicit, CacheModeAutomatic)
+	}
+	if *cfg.PrefixCache.CacheMode == CacheModeAutomatic {
+		// Automatic mode uses a single top-level breakpoint, so block-level
+		// markers are unused and forced off regardless of explicit config.
+		cfg.PrefixCache.CacheSystem = PtrTo(false)
+		cfg.PrefixCache.CacheTools = PtrTo(false)
+		cfg.PrefixCache.CacheMessages = PtrTo(false)
+		return nil
+	}
+	if !cfg.PrefixCache.CacheSystemWasSet() {
+		cfg.PrefixCache.CacheSystem = PtrTo(true)
+	}
+	if !cfg.PrefixCache.CacheToolsWasSet() {
+		cfg.PrefixCache.CacheTools = PtrTo(true)
+	}
+	if !cfg.PrefixCache.CacheMessagesWasSet() {
+		cfg.PrefixCache.CacheMessages = PtrTo(true)
+	}
+	return nil
+}
+
+func applyOpenAICacheDefaults(cfg *Config) error {
+	if !cfg.PrefixCache.Enabled {
+		return nil
+	}
+	if !cfg.PrefixCache.OpenAIBreakpointWasSet() {
+		cfg.PrefixCache.OpenAIBreakpoint = PtrTo(true)
+	}
+	if !cfg.PrefixCache.OpenAIModeWasSet() {
+		cfg.PrefixCache.OpenAIMode = PtrTo(OpenAIModeImplicit)
+	}
+	if cfg.PrefixCache.OpenAIMode == nil {
+		return nil
+	}
+	if *cfg.PrefixCache.OpenAIMode != OpenAIModeImplicit && *cfg.PrefixCache.OpenAIMode != OpenAIModeExplicit {
+		return fmt.Errorf("invalid openai_mode: %q (must be `%s` or `%s`)", *cfg.PrefixCache.OpenAIMode, OpenAIModeImplicit, OpenAIModeExplicit)
+	}
+	return nil
 }
 
 func validateCacheTTLs(cfg *Config) error {
