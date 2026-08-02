@@ -30,6 +30,7 @@ type TransformDeps struct {
 	Catalog            *discovery.ModelCatalog
 	CountTokens        func(string) int
 	AgentName          string
+	CacheSalt          string
 }
 
 // Deprecated: Use InjectAPIKeyWithGateway instead. This function accesses
@@ -206,6 +207,18 @@ func injectPromptCacheKey(deps TransformDeps, payload map[string]interface{}, pr
 
 	h := sha256.Sum256([]byte(deps.AgentName + ":" + modelName))
 	payload["prompt_cache_key"] = hex.EncodeToString(h[:])[:16]
+}
+
+func injectCacheSalt(deps TransformDeps, payload map[string]interface{}, providerName string) {
+	if deps.CacheSalt == "" {
+		return
+	}
+	lower := strings.ToLower(providerName)
+	// vLLM/OpenAI-compatible providers support cache_salt
+	if lower != "openai" && lower != "vllm" && lower != "deepinfra" {
+		return
+	}
+	payload["cache_salt"] = deps.CacheSalt
 }
 
 func injectOpenAICacheBreakpoints(deps TransformDeps, payload map[string]interface{}, providerName, modelName string) {
@@ -471,6 +484,7 @@ func TransformRequestForUpstream(deps TransformDeps, providerName, upstreamURL s
 	SanitizePayload(deps, payload, modelName)
 	injectPromptCacheKey(deps, payload, providerName, modelName)
 	injectOpenAICacheBreakpoints(deps, payload, providerName, modelName)
+	injectCacheSalt(deps, payload, providerName)
 	resolveAgentSystemPrompt(deps, payload, origModel, providerName)
 
 	effectiveMaxOutput := resolveEffectiveMaxOutput(deps, finalModel, maxOutput)

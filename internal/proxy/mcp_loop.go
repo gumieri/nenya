@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/nenya/config"
 	"github.com/nenya/internal/gateway"
 	"github.com/nenya/internal/infra"
 	"github.com/nenya/internal/mcp"
@@ -393,7 +394,7 @@ func (p *Proxy) mcpIteration(in mcpIterInput) int {
 		working = in.opts.Payload
 	}
 
-	buf, err := p.forwardBuffered(in.gw, in.mcpLoopCtx, in.r, in.opts.Targets, working, in.opts.Cooldown, in.opts.TokenCount, in.opts.AgentName, in.opts.MaxRetries)
+	buf, err := p.forwardBuffered(in.gw, in.mcpLoopCtx, in.r, in.opts.Targets, working, in.opts.Cooldown, in.opts.TokenCount, in.opts.AgentName, in.opts.MaxRetries, in.opts.ApiKey)
 	if err != nil {
 		in.gw.Logger.Warn("MCP loop: upstream failed, streaming last response",
 			"iteration", in.iteration, "err", err)
@@ -468,6 +469,7 @@ func (p *Proxy) forwardBuffered(gw *gateway.NenyaGateway,
 	tokenCount int,
 	agentName string,
 	maxRetries int,
+	apiKey *config.ApiKey,
 ) (*bufferedSSE, error) {
 	originalPayload, err := prepareOriginalPayload(gw, payload)
 	if err != nil {
@@ -489,7 +491,7 @@ func (p *Proxy) forwardBuffered(gw *gateway.NenyaGateway,
 			continue
 		}
 
-		action := p.prepareAndSend(gw, r, i, targets, target, workingPayload, cooldownDuration, tokenCount, agentName)
+		action := p.prepareAndSend(gw, r, i, targets, target, workingPayload, cooldownDuration, tokenCount, agentName, apiKey)
 		result, shouldContinue := p.handleBufferedAction(ctx, gw, i, targets, target, cooldownDuration, agentName, action, attempt, maxRetries)
 		if result != nil {
 			return result, nil
