@@ -463,6 +463,7 @@ func (p *Proxy) handleChatCompletions(gw *gateway.NenyaGateway, w http.ResponseW
 			CacheKey:     req.CacheKey,
 			KeyRef:       req.KeyRef,
 			SourceFormat: req.SourceFormat,
+			ApiKey:       apiKey,
 		})
 		return
 	}
@@ -478,6 +479,7 @@ func (p *Proxy) handleChatCompletions(gw *gateway.NenyaGateway, w http.ResponseW
 		CacheKey:     req.CacheKey,
 		KeyRef:       req.KeyRef,
 		SourceFormat: req.SourceFormat,
+		ApiKey:       apiKey,
 	})
 }
 

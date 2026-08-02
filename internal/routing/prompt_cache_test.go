@@ -328,3 +328,51 @@ func TestInjectOpenAICacheBreakpoints_RespectsModeImplicit(t *testing.T) {
 		t.Errorf("expected prompt_cache_breakpoint.mode 'explicit', got %v", bp["mode"])
 	}
 }
+
+func TestInjectCacheSalt_InjectsForOpenAI(t *testing.T) {
+	deps := defaultInjectDeps()
+	deps.CacheSalt = "tenant-salt"
+	payload := map[string]interface{}{"model": "gpt-4o"}
+	injectCacheSalt(deps, payload, "openai")
+
+	salt, ok := payload["cache_salt"].(string)
+	if !ok {
+		t.Fatal("expected cache_salt to be injected")
+	}
+	if salt != "tenant-salt" {
+		t.Errorf("expected salt 'tenant-salt', got %q", salt)
+	}
+}
+
+func TestInjectCacheSalt_InjectsForVLLM(t *testing.T) {
+	deps := defaultInjectDeps()
+	deps.CacheSalt = "tenant-salt"
+	payload := map[string]interface{}{"model": "qwen2.5"}
+	injectCacheSalt(deps, payload, "vllm")
+
+	salt, ok := payload["cache_salt"].(string)
+	if !ok || salt != "tenant-salt" {
+		t.Errorf("expected salt for vllm provider, got %v", payload["cache_salt"])
+	}
+}
+
+func TestInjectCacheSalt_EmptySaltNotInjected(t *testing.T) {
+	deps := defaultInjectDeps()
+	payload := map[string]interface{}{"model": "gpt-4o"}
+	injectCacheSalt(deps, payload, "openai")
+
+	if _, has := payload["cache_salt"]; has {
+		t.Error("expected NO cache_salt when salt is empty")
+	}
+}
+
+func TestInjectCacheSalt_SkippedForAnthropic(t *testing.T) {
+	deps := defaultInjectDeps()
+	deps.CacheSalt = "tenant-salt"
+	payload := map[string]interface{}{"model": "claude-sonnet-5"}
+	injectCacheSalt(deps, payload, "anthropic")
+
+	if _, has := payload["cache_salt"]; has {
+		t.Error("expected NO cache_salt for anthropic provider")
+	}
+}

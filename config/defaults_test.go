@@ -1,6 +1,7 @@
 package config
 
 import (
+	"strings"
 	"testing"
 	"time"
 )
@@ -563,6 +564,34 @@ func TestPrefixCache_MergeOpenAIFields(t *testing.T) {
 	}
 	if base.PrefixCache.OpenAIMode == nil || *base.PrefixCache.OpenAIMode != OpenAIModeExplicit {
 		t.Errorf("OpenAIMode not merged: got %v", base.PrefixCache.OpenAIMode)
+	}
+}
+
+func TestApiKey_CacheSaltLengthValidation(t *testing.T) {
+	tests := []struct {
+		name      string
+		salt      string
+		wantError bool
+	}{
+		{"empty salt", "", false},
+		{"valid salt", "tenant-123", false},
+		{"max length salt", strings.Repeat("a", 64), false},
+		{"too long salt", strings.Repeat("b", 65), true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			apiKey := &ApiKey{
+				Token: strings.Repeat("x", 16),
+				Roles: []string{RoleUser},
+			}
+			if tt.salt != "" {
+				apiKey.CacheSalt = &tt.salt
+			}
+			err := apiKey.Validate()
+			if (err != nil) != tt.wantError {
+				t.Errorf("validate error: got %v, want error %v", err, tt.wantError)
+			}
+		})
 	}
 }
 

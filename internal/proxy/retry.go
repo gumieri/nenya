@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/nenya/config"
 	"github.com/nenya/internal/adapter"
 	"github.com/nenya/internal/gateway"
 	"github.com/nenya/internal/infra"
@@ -166,6 +167,7 @@ type forwardOptions struct {
 	CacheKey     string
 	KeyRef       string
 	SourceFormat string
+	ApiKey       *config.ApiKey
 }
 
 // retryLoop encapsulates the state and logic for retrying upstream requests.
@@ -403,7 +405,7 @@ retryLoop:
 
 // prepareAndSend wraps the proxy's prepareAndSend method.
 func (rl *retryLoop) prepareAndSend(idx int, target routing.UpstreamTarget, payload map[string]interface{}) upstreamAction {
-	return rl.p.prepareAndSend(rl.gw, rl.r, idx, rl.opts.Targets, target, payload, rl.opts.Cooldown, rl.opts.TokenCount, rl.opts.AgentName)
+	return rl.p.prepareAndSend(rl.gw, rl.r, idx, rl.opts.Targets, target, payload, rl.opts.Cooldown, rl.opts.TokenCount, rl.opts.AgentName, rl.opts.ApiKey)
 }
 
 // handleUpstreamError wraps the proxy's handleUpstreamError method.
@@ -488,6 +490,16 @@ func handleUpstreamResponse(ctxLogger *slog.Logger, resp *http.Response, cancel 
 	return upstreamAction{kind: actionResponse, resp: resp, cancel: cancel}
 }
 
+func resolveCacheSalt(apiKey *config.ApiKey, agentName string, cfg *config.Config) string {
+	if apiKey != nil && apiKey.CacheSalt != nil && *apiKey.CacheSalt != "" {
+		return *apiKey.CacheSalt
+	}
+	if agent, ok := cfg.Agents[agentName]; ok && agent.CacheSalt != nil && *agent.CacheSalt != "" {
+		return *agent.CacheSalt
+	}
+	return ""
+}
+
 func (p *Proxy) prepareAndSend(gw *gateway.NenyaGateway,
 	r *http.Request,
 	idx int,
@@ -497,6 +509,7 @@ func (p *Proxy) prepareAndSend(gw *gateway.NenyaGateway,
 	cooldownDuration time.Duration,
 	tokenCount int,
 	agentName string,
+	apiKey *config.ApiKey,
 ) upstreamAction {
 	ctxLogger := gw.Logger.With(
 		"operation", "upstream",
@@ -523,6 +536,7 @@ func (p *Proxy) prepareAndSend(gw *gateway.NenyaGateway,
 		Catalog:            gw.ModelCatalog,
 		CountTokens:        gw.CountTokens,
 		AgentName:          agentName,
+		CacheSalt:          resolveCacheSalt(apiKey, agentName, &gw.Config),
 	}
 	transformedBody, _, err := routing.TransformRequestForUpstream(transformDeps, target.Provider, target.URL, payload, target.Model, target.MaxOutput, target.Format, target.ReasoningEffort)
 	if err != nil {

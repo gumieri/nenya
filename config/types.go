@@ -93,6 +93,7 @@ type AgentConfig struct {
 	Models            []AgentModel    `json:"models,omitempty"`
 	MCP               *AgentMCPConfig `json:"mcp,omitempty"`
 	BudgetLimitUSD    float64         `json:"budget_limit_usd,omitempty"`
+	CacheSalt         *string         `json:"cache_salt,omitempty"`
 }
 
 func (a *AgentConfig) UnmarshalJSON(data []byte) error {
@@ -407,6 +408,7 @@ type ApiKey struct {
 	Roles            []string       `json:"roles"`
 	AllowedAgents    []string       `json:"allowed_agents"`
 	AllowedEndpoints []string       `json:"allowed_endpoints,omitempty"`
+	CacheSalt        *string        `json:"cache_salt,omitempty"`
 	CreatedAt        string         `json:"created_at,omitempty"`
 	ExpiresAt        string         `json:"expires_at,omitempty"`
 	Enabled          bool           `json:"enabled"`
@@ -436,8 +438,15 @@ func (k *ApiKey) Validate() error {
 			return fmt.Errorf("invalid expires_at format (use RFC3339): %w", err)
 		}
 	}
+	if k.CacheSalt != nil && len(*k.CacheSalt) > maxCacheSaltLength {
+		return fmt.Errorf("cache_salt too long (maximum %d characters)", maxCacheSaltLength)
+	}
 	return nil
 }
+
+// maxCacheSaltLength caps the cache salt length to keep it hash-safe while
+// allowing enough entropy for tenant isolation.
+const maxCacheSaltLength = 64
 
 const (
 	// RoleAdmin grants full access to all agents and endpoints.
