@@ -12,6 +12,14 @@ import (
 	"github.com/nenya/internal/util"
 )
 
+// safeFloatToInt converts a float64 to int with overflow protection.
+func safeFloatToInt(v float64) int {
+	if v > math.MaxInt || v < math.MinInt {
+		return 0
+	}
+	return int(v)
+}
+
 type anthropicBlock struct {
 	index       int
 	blockType   string
@@ -100,13 +108,13 @@ func (t *AnthropicTransformer) handleMessageStart(event map[string]interface{}) 
 
 	if usage, ok := msg["usage"].(map[string]interface{}); ok {
 		if it, ok := usage["input_tokens"].(float64); ok {
-			t.promptTokens = int(it)
+			t.promptTokens = safeFloatToInt(it)
 		}
 		if ct, ok := usage["cache_creation_input_tokens"].(float64); ok {
-			t.cacheCreationTokens = int(ct)
+			t.cacheCreationTokens = safeFloatToInt(ct)
 		}
 		if rt, ok := usage["cache_read_input_tokens"].(float64); ok {
-			t.cacheReadTokens = int(rt)
+			t.cacheReadTokens = safeFloatToInt(rt)
 		}
 	}
 
@@ -119,7 +127,7 @@ func (t *AnthropicTransformer) handleContentBlockStart(event map[string]interfac
 		slog.Warn("Content block index out of valid range", "index", idx)
 		return nil, ErrEventConsumed
 	}
-	index := int(idx)
+	index := safeFloatToInt(idx)
 
 	blockRaw, ok := event["content_block"].(map[string]interface{})
 	if !ok {
@@ -175,7 +183,7 @@ func (t *AnthropicTransformer) handleContentBlockDelta(event map[string]interfac
 		slog.Warn("Content block delta index out of valid range", "index", idx)
 		return nil, ErrEventConsumed
 	}
-	index := int(idx)
+	index := safeFloatToInt(idx)
 
 	block, ok := t.blockMap[index]
 	if !ok {
@@ -277,20 +285,26 @@ func (t *AnthropicTransformer) handleMessageDelta(event map[string]interface{}) 
 
 	if usage, ok := event["usage"].(map[string]interface{}); ok {
 		if ot, ok := usage["output_tokens"].(float64); ok {
-			t.outputTokens = int(ot)
+			t.outputTokens = safeFloatToInt(ot)
 		}
 	}
 
 	finishReason := mapStopReason(stopReason)
 
 	chunk := t.makeOpenAIChunk(map[string]interface{}{}, &finishReason)
+	// Use overflow-safe addition: token counters can originate from untrusted
+	// upstream usage fields, so clamp to math.MaxInt instead of wrapping.
+	totalPromptTokens := util.AddCap(util.AddCap(t.cacheReadTokens, t.cacheCreationTokens), t.promptTokens)
+	totalAll := util.AddCap(totalPromptTokens, t.outputTokens)
 	chunk["usage"] = map[string]interface{}{
-		"prompt_tokens":            t.promptTokens,
-		"completion_tokens":        t.outputTokens,
-		"total_tokens":             t.promptTokens + t.outputTokens,
-		"prompt_cache_hit_tokens":  t.cacheReadTokens,
-		"prompt_cache_miss_tokens": t.cacheCreationTokens,
-		"cache_creation_tokens":    t.cacheCreationTokens,
+		"prompt_tokens":               totalPromptTokens,
+		"completion_tokens":           t.outputTokens,
+		"total_tokens":                totalAll,
+		"prompt_cache_hit_tokens":     t.cacheReadTokens,
+		"prompt_cache_miss_tokens":    t.promptTokens,
+		"cache_creation_tokens":       t.cacheCreationTokens,
+		"cache_read_input_tokens":     t.cacheReadTokens,
+		"cache_creation_input_tokens": t.cacheCreationTokens,
 	}
 
 	return t.marshalChunk(chunk)

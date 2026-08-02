@@ -22,6 +22,8 @@ import (
 	"github.com/nenya/internal/stream"
 )
 
+// streamBufferSize is the size of buffers used in the streaming hot path (32KB).
+// This is a balanced tradeoff between allocation overhead and per-read throughput.
 const (
 	streamBufferSize = 32 * 1024
 	// TokenDirectionReasoning is the direction label for reasoning token metrics
@@ -59,6 +61,7 @@ func putStreamBuffer(buf *[]byte) {
 	streamingBufPool.Put(buf)
 }
 
+// contentBuilder accumulates SSE content chunks for MCP auto-save.
 type contentBuilder struct {
 	buf strings.Builder
 }
@@ -213,8 +216,12 @@ func (sr *stallReader) Read(p []byte) (int, error) {
 			return 0, errStreamStalled
 		}
 		n := copy(p, rr.data)
+		remaining := len(rr.data) - n
+		if remaining < 0 {
+			remaining = 0
+		}
 		if n < len(rr.data) {
-			sr.remainBuf = make([]byte, len(rr.data)-n)
+			sr.remainBuf = make([]byte, remaining)
 			copy(sr.remainBuf, rr.data[n:])
 			sr.remainPos = 0
 		}
@@ -223,7 +230,8 @@ func (sr *stallReader) Read(p []byte) (int, error) {
 }
 
 // Stop stops the stall reader timer and marks the reader as stalled.
-// Safe to call multiple times.
+// Safe to call multiple times. The closeOnce.Do pattern ensures the channel
+// is closed exactly once even when Stop races with the timer callback.
 func (sr *stallReader) Stop() {
 	sr.timer.Stop()
 	sr.mu.Lock()
@@ -282,8 +290,9 @@ type streamResult struct {
 	empty bool
 }
 
-// prefixedReadCloser returns a prefix buffer first, then delegates to the
-// underlying reader. Used to prepend already-read bytes to a stream body.
+// prefixedReadCloser wraps an io.Reader with a prefix buffer that is
+// returned before delegating to the underlying reader. Used to prepend
+// already-read bytes to a stream body.
 type prefixedReadCloser struct {
 	prefix []byte
 	pos    int
@@ -303,19 +312,16 @@ func (p *prefixedReadCloser) Close() error {
 	return p.reader.Close()
 }
 
+// immediateFlushWriter wraps an http.ResponseWriter and flushes after every
+// Write call when the underlying writer supports http.Flusher.
 type immediateFlushWriter struct {
 	dst     http.ResponseWriter
 	flusher http.Flusher
 }
 
-func newImmediateFlushWriter(w http.ResponseWriter) *immediateFlushWriter {
-	fw, _ := newImmediateFlushWriterSafe(w)
-	return fw
-}
-
-// newImmediateFlushWriterSafe returns an immediateFlushWriter if the response writer
-// supports http.Flusher, otherwise returns nil. The boolean indicates success.
-func newImmediateFlushWriterSafe(w http.ResponseWriter) (*immediateFlushWriter, bool) {
+// newImmediateFlushWriter creates an immediateFlushWriter if the response writer
+// supports http.Flusher. The boolean indicates whether Flusher was available.
+func newImmediateFlushWriter(w http.ResponseWriter) (*immediateFlushWriter, bool) {
 	flusher, ok := w.(http.Flusher)
 	if !ok {
 		return &immediateFlushWriter{dst: w}, false
@@ -339,6 +345,8 @@ func (fw *immediateFlushWriter) WriteHeader(statusCode int) {
 	fw.dst.WriteHeader(statusCode)
 }
 
+// sseTeeWriter copies SSE output to a buffer while forwarding to the client,
+// up to a configurable maximum to bound memory usage.
 type sseTeeWriter struct {
 	dst      io.Writer
 	buf      *bytes.Buffer
@@ -432,12 +440,12 @@ func (p *Proxy) streamResponse(gw *gateway.NenyaGateway, w http.ResponseWriter, 
 	}
 
 	buf := getStreamBuffer()
-	flushWriter, canFlush := newImmediateFlushWriterSafe(w)
+	flushWriter, canFlush := newImmediateFlushWriter(w)
 	dst, captureBuf, tee := p.setupStreamWriter(gw, flushWriter, canFlush, w, cacheKey)
 
 	_, copyErr := copyStream(r.Context(), dst, transformingReader, *buf)
 
-	return p.handleStreamCompletion(gw, w, target, agentName, action, cacheKey, cooldownDuration, payload, buf, copyErr, captureBuf, tee, contentBuilder, stallR, r.Context())
+	return p.handleStreamDone(gw, w, target, agentName, action, cacheKey, cooldownDuration, payload, buf, copyErr, captureBuf, tee, contentBuilder, stallR, r.Context())
 }
 
 // resolveTransformer selects the appropriate SSE transformer based on source format and target format.
@@ -566,8 +574,11 @@ func (o *upstreamErrorObserver) OnStreamClose(err error) {}
 // makeUsageCallback returns a callback function that records token usage statistics.
 // The callback is invoked by the SSE transformer when usage metadata is received.
 // The ctx parameter is reserved for future timeout/cancellation logic in cost tracking.
-func (p *Proxy) makeUsageCallback(ctx context.Context, gw *gateway.NenyaGateway, target routing.UpstreamTarget, agentName string) func(int, int, int, int, int, int, int) {
-	return func(completion, prompt, total, cacheHit, cacheMiss, cacheCreation, reasoning int) {
+func (p *Proxy) makeUsageCallback(ctx context.Context, gw *gateway.NenyaGateway, target routing.UpstreamTarget, agentName string) func(stream.UsageData) {
+	return func(u stream.UsageData) {
+		completion, prompt := u.CompletionTokens, u.PromptTokens
+		cacheHit, cacheMiss := u.CacheHitTokens, u.CacheMissTokens
+		cacheCreation, reasoning := u.CacheCreationTokens, u.ReasoningTokens
 		if completion > 0 {
 			gw.Stats.RecordOutput(target.Model, completion)
 			gw.Metrics.RecordTokens("output", target.Model, agentName, target.Provider, completion)
@@ -667,12 +678,6 @@ func (p *Proxy) setupStreamWriter(gw *gateway.NenyaGateway, flushWriter *immedia
 	return dst, captureBuf, tee
 }
 
-// handleStreamCompletion handles completion of a stream and returns a streamResult.
-// Returns empty=true when the stream should be retried with the next target.
-func (p *Proxy) handleStreamCompletion(gw *gateway.NenyaGateway, w http.ResponseWriter, target routing.UpstreamTarget, agentName string, action upstreamAction, cacheKey string, cooldownDuration time.Duration, payload map[string]any, buf *[]byte, copyErr error, captureBuf *bytes.Buffer, tee *sseTeeWriter, contentBuilder *contentBuilder, stallR *stallReader, reqCtx context.Context) streamResult {
-	return p.handleStreamDone(gw, w, target, agentName, action, cacheKey, cooldownDuration, payload, buf, copyErr, captureBuf, tee, contentBuilder, stallR, reqCtx)
-}
-
 func (p *Proxy) handleStreamDone(gw *gateway.NenyaGateway, w http.ResponseWriter, target routing.UpstreamTarget, agentName string, action upstreamAction, cacheKey string, cooldownDuration time.Duration, payload map[string]any, buf *[]byte, copyErr error, captureBuf *bytes.Buffer, tee *sseTeeWriter, contentBuilder *contentBuilder, stallR *stallReader, reqCtx context.Context) streamResult {
 	putStreamBuffer(buf)
 
@@ -692,7 +697,10 @@ func (p *Proxy) handleStreamDone(gw *gateway.NenyaGateway, w http.ResponseWriter
 	_ = action.resp.Body.Close()
 
 	if stallR != nil {
-		_, _ = stallR.DrainPending(100 * time.Millisecond)
+		drained, err := stallR.DrainPending(100 * time.Millisecond)
+		if err != nil {
+			gw.Logger.Debug("stall reader drain result", "drained_bytes", drained, "err", err)
+		}
 	}
 
 	if errors.Is(copyErr, errStreamStalled) {
