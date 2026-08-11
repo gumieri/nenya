@@ -178,6 +178,40 @@ Both variants share the same `ZAIAdapter` at runtime, providing identical reques
 - **Error**: Conservative — only 429/5xx are retryable
 - **Discovery**: Enriches model metadata via `/api/show` for accurate context length and capabilities (vision, tools, thinking, audio)
 
+
+### GPT-5.6
+
+OpenAI GPT-5.6+ models have distinct behaviors for caching and multistep reasoning:
+- **Cache breakpoints**: GPT-5.6+ requests get explicit `prompt_cache_breakpoint` markers on the stable prefix (second-to-last message block). `openai_mode: "explicit"` also sets `prompt_cache_options`; `implicit` (default) only sets the block breakpoint.
+- **Max tokens**: Up to 212,864. Note: when using explicit breakpoints, `prompt_cache_options.max_tokens` should stay below the model's max (212,864).
+
+### Z.AI (Zhipu)
+
+Z.AI (GLM models) implements caching and thinking-oriented defaults:
+- **Cached tokens**: Z.AI returns cache usage in `usage.prompt_tokens_details.cached_tokens` (nested format). This is mapped to cache-hit token accounting (see CACHING.md).
+- **Temperature**: GLM-4.6/4.7 default to `1.0` (vs Nenya's global `0.7`) — implemented in the Z.AI transformer.
+- **Thinking**: `type: enabled` thinking injection with `clear_thinking: false` for GLM reasoning models.
+
+### xAI
+
+xAI (Grok models) supports reasoning effort configuration:
+- **Reasoning effort**: For reasoning-capable Grok models (e.g., grok-4.3 with `thinking.levels` configured), Nenya injects `reasoning_effort: "medium"` by default when the client does not set one. Accepted values: `low`, `medium`, `high`, `none`.
+
+### OpenAI
+
+OpenAI supports prompt caching on request bodies with stable prefixes:
+- **Prompt cache key**: For OpenAI, Nenya injects a deterministic `prompt_cache_key` (SHA256 of agent:model, first 16 hex chars) to keep the cached block stable. Client-supplied keys are preserved.
+- **GPT-5.6+ breakpoints**: see GPT-5.6 section above.
+
+### Anthropic (Streaming)
+
+Summary of streaming-specific behaviors for Anthropic:
+- **Cache_control injection**: `cache_control` markers on system/tools/messages via `prefix_cache` (see CONFIGURATION.md).
+- **Adaptive thinking**: newer Anthropic models map `reasoning_effort` to a thinking budget range (`budgetForEffort`).
+- **Token counting**: `prompt_tokens = cache_read + cache_creation + input`; per-TTL creation breakdowns (`ephemeral_5m`, `ephemeral_1h`) and `iterations` array captured.
+- **Refusal skip**: streaming cache skip for `refusal`/`content_filter` stop reasons.
+- **529**: non-standard `529` (Provider Overloaded) treated as retryable, like 429.
+
 ### Multi-Account Key Selection
 
 Providers support multiple API keys with **LRU-based selection per model**. When a provider is configured with multiple accounts, the gateway selects the least-recently-used key for each model, distributing load and providing automatic failover on rate limits or errors.

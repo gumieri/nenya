@@ -225,7 +225,7 @@ go run ./cmd/nenya keygen --name "dev-user" --roles user,read-only --agents buil
 | `created_at` | string | No | ISO 8601 timestamp for audit trail |
 | `expires_at` | string | No | ISO 8601 timestamp for key expiration |
 | `enabled` | bool | No | Enable/disable key without deletion |
-
+| `cache_salt` | string | No | Tenant isolation salt injected as `cache_salt` for vLLM/OpenAI-compatible providers. Overrides the agent-level `cache_salt`. Max 64 characters (validation applied). |
 **Roles:**
 
 | Role | Permissions | Agent Access | Endpoint Access |

@@ -98,6 +98,47 @@ The Ollama embedder:
 - Higher threshold (0.95+) → fewer false positives, lower hit rate
 - Lower threshold (0.85-) → higher hit rate, risk of irrelevant responses
 
+## Prefix Cache (Prompt Caching)
+
+Nenya also supports **provider-side prompt prefix caching** (`prefix_cache`), which stabilizes the request prefix and injects cache control markers so the upstream provider can reuse previously computed KV blocks. This is independent of the exact/semantic response caches above. See [`CONFIGURATION.md#prefix_cache`](CONFIGURATION.md) for the full configuration reference.
+
+### How it works
+
+- **Prefix stabilization** — system messages are pinned first (`pin_system_first`), tools are sorted deterministically (`stable_tools`), and Tier-0 redaction is skipped on system messages (`skip_redaction_on_system`) so the prefix is byte-identical between requests.
+- **Anthropic breakpoints** (`cache_control`) — the gateway injects `cache_control` markers on the system, tools, and messages blocks. Two breakpoint strategies are available:
+  - `cache_mode: "explicit"` (default) — injects block-level `cache_control` markers on `CacheSystem`/`CacheTools`/`CacheMessages`.
+  - `cache_mode: "automatic"` — emits a single top-level `cache_control` (Anthropic automatic caching). Block-level markers are forced off.
+  - Per-breakpoint TTLs default to `cache_control_ttl` (`"ephemeral"` = 5m, `"1h"` supported). TTL order must be non-increasing (longer TTLs before shorter).
+- **OpenAI GPT-5.6+ breakpoints** (`prompt_cache_breakpoint` / `prompt_cache_options`) — for models with the `gpt-5.6`/`gpt-5.7` prefix, a breakpoint is injected on the second-to-last message block. `openai_mode: "explicit"` additionally sets `prompt_cache_options`; `openai_mode: "implicit"` (default) only sets the block breakpoint.
+- **Prompt cache key** (`prompt_cache_key`) — for xAI/OpenAI, a deterministic `SHA256(agent:model)[:16]` key is injected to keep the cached block stable across requests. A client-supplied key is preserved. OpenAI breakpoint injection skips if the key is missing.
+- **Cache salt** (`cache_salt`) — for vLLM/OpenAI-compatible providers, a tenant salt is injected to isolate cached KV blocks between tenants (per-API-key `cache_salt` overrides agent `cache_salt`). Never injected for Anthropic (server-side workspace isolation).
+
+### Token accounting
+
+Usage is parsed and surfaced as deltas via the stream `UsageData`:
+
+```go
+type UsageData struct {
+    CompletionTokens         int
+    PromptTokens             int
+    TotalTokens              int
+    CacheHitTokens           int
+    CacheMissTokens          int
+    CacheCreationTokens      int
+    ReasoningTokens          int
+    CacheReadInputTokens     int
+    CacheCreationInputTokens int
+}
+```
+
+- `prompt_tokens = cache_read + cache_creation + input` for Anthropic.
+- Cache-creation breakdown (`ephemeral_5m_input_tokens`, `ephemeral_1h_input_tokens`) and the `iterations` array are parsed into the transformer (capped at 1000 entries).
+- Z.AI's nested `prompt_tokens_details.cached_tokens` is mapped to `CacheHitTokens`; a flat OpenAI `prompt_cache_hit_tokens` wins when both are present.
+
+### Refusal and error cache exclusion
+
+Response caching also skips responses whose payload contains `refusal` or `content_filter` (structured `stop_reason`/`finish_reason` fields) so stale refusal responses are never served from cache.
+
 ## Metrics
 
 Cache metrics are exposed via `/metrics` endpoint with Prometheus format:

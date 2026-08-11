@@ -281,12 +281,26 @@ When an agent reference is used, the engine inherits the agent's full model list
 
 Optimizations to improve upstream provider prefix cache hit rates by stabilizing the prompt structure.
 
+
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `enabled` | bool | `true` (auto) | Master toggle. Auto-enabled when any sub-field is explicitly set to `true`. |
+| `cache_mode` | string | `"explicit"` | Breakpoint strategy: `"explicit"` (block-level `cache_control` markers) or `"automatic"` (single top-level `cache_control`; forces `cache_system`/`cache_tools`/`cache_messages` to `false`). |
 | `pin_system_first` | bool | `true` | Reorder all `system` role messages to the top of the messages array |
 | `stable_tools` | bool | `true` | Sort `tools[]` array by `function.name` for deterministic ordering |
 | `skip_redaction_on_system` | bool | `true` | Skip Tier-0 regex redaction on system messages to preserve prefix byte-identity |
+| `cache_system` | bool | `true` | Enable Anthropic `cache_control` marker on the system block (overridden by `cache_mode: automatic`) |
+| `cache_tools` | bool | `true` | Enable `cache_control` marker on the tools block (overridden by `cache_mode: automatic`) |
+| `cache_messages` | bool | `true` | Enable `cache_control` marker on the messages block (overridden by `cache_mode: automatic`) |
+| `cache_control_ttl` | string | `"ephemeral"` | Default TTL for all breakpoints. Allowed: `"ephemeral"` (5m) or `"1h"`. |
+| `cache_system_ttl` | string | `cache_control_ttl` | Per-breakpoint TTL override for the system block (`"ephemeral"` or `"1h"`) |
+| `cache_tools_ttl` | string | `cache_control_ttl` | Per-breakpoint TTL override for the tools block (`"ephemeral"` or `"1h"`) |
+| `cache_messages_ttl` | string | `cache_control_ttl` | Per-breakpoint TTL override for the messages block (`"ephemeral"` or `"1h"`) |
+| `openai_breakpoint` | bool | `true` | Inject `prompt_cache_breakpoint` for GPT-5.6+/GPT-5.7 models |
+| `openai_mode` | string | `"implicit"` | GPT-5.6+ breakpoint mode: `"implicit"` (block breakpoint only) or `"explicit"` (adds top-level `prompt_cache_options`) |
+
+**TTL ordering rule**: TTLs must appear in non-increasing order (longer TTLs before shorter). A global `cache_control_ttl` of `"1h"` with any per-breakpoint TTL of `"ephemeral"` is rejected.
+
 
 ## `compaction`
 
@@ -520,7 +534,7 @@ Static fields always win over regex when both are present on the same key. When 
 | `mcp` | object | (none) | Optional Model Context Protocol server integration. See [MCP Integration](MCP_INTEGRATION.md) for details. |
 | `models` | array | (required) | List of model entries (strings or objects) to try in order. Strings are looked up from the model registry. Objects can be static (`provider`+`model`) or dynamic (`provider_rgx`/`model_rgx` for catalog expansion). |
 | `budget_limit_usd` | float64 | `0` (disabled) | Per-agent cumulative budget limit in USD. 0 = no limit. Logged but not yet enforced. |
-
+| `cache_salt` | string | `""` | Tenant isolation salt injected as `cache_salt` for vLLM/OpenAI-compatible providers. Used when the API key has no `cache_salt`. Max 64 characters (validation applied). |
 Each model entry (object form):
 
 | Field | Type | Description |
