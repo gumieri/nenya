@@ -70,9 +70,19 @@ func recordNonStreamingUsage(ctx context.Context, gw *gateway.NenyaGateway, targ
 	if raw, ok := usage["prompt_cache_miss_tokens"].(float64); ok {
 		cacheMissTokens = int(raw)
 	}
+	cacheCreationTokens := 0
+	if raw, ok := usage["cache_creation_tokens"].(float64); ok {
+		cacheCreationTokens = int(raw)
+	}
+	if raw, ok := usage["cache_creation_input_tokens"].(float64); ok && cacheCreationTokens == 0 {
+		cacheCreationTokens = int(raw)
+	}
+	// Anthropic non-streaming responses return cache_creation_input_tokens natively
+	// (not normalized by the transformer), so we check it as a fallback for providers
+	// that use that field name.
 
-	recordNonStreamingStats(gw, target.Model, outputTokens, cacheHitTokens, cacheMissTokens)
-	recordNonStreamingMetrics(gw, target, agentName, outputTokens)
+	recordNonStreamingStats(gw, target.Model, outputTokens, cacheHitTokens, cacheMissTokens, cacheCreationTokens)
+	recordNonStreamingMetrics(gw, target, agentName, outputTokens, cacheHitTokens, cacheMissTokens, cacheCreationTokens)
 	recordCostAndBilling(ctx, gw, target, inputTokens, outputTokens)
 }
 
@@ -98,7 +108,7 @@ func recordCostAndBilling(ctx context.Context, gw *gateway.NenyaGateway, target 
 	}
 }
 
-func recordNonStreamingStats(gw *gateway.NenyaGateway, model string, outputTokens, cacheHitTokens, cacheMissTokens int) {
+func recordNonStreamingStats(gw *gateway.NenyaGateway, model string, outputTokens, cacheHitTokens, cacheMissTokens, cacheCreationTokens int) {
 	if gw.Stats == nil {
 		return
 	}
@@ -109,11 +119,23 @@ func recordNonStreamingStats(gw *gateway.NenyaGateway, model string, outputToken
 	if cacheMissTokens > 0 {
 		gw.Stats.RecordCacheMiss(model, cacheMissTokens)
 	}
+	if cacheCreationTokens > 0 {
+		gw.Stats.RecordCacheCreation(model, cacheCreationTokens)
+	}
 }
 
-func recordNonStreamingMetrics(gw *gateway.NenyaGateway, target routing.UpstreamTarget, agentName string, outputTokens int) {
+func recordNonStreamingMetrics(gw *gateway.NenyaGateway, target routing.UpstreamTarget, agentName string, outputTokens, cacheHitTokens, cacheMissTokens, cacheCreationTokens int) {
 	if gw.Metrics == nil {
 		return
 	}
 	gw.Metrics.RecordTokens("output", target.Model, agentName, target.Provider, outputTokens)
+	if cacheHitTokens > 0 {
+		gw.Metrics.RecordCacheReadTokens(target.Model, agentName, target.Provider, cacheHitTokens)
+	}
+	if cacheMissTokens > 0 {
+		gw.Metrics.RecordCacheMissTokens(target.Model, agentName, target.Provider, cacheMissTokens)
+	}
+	if cacheCreationTokens > 0 {
+		gw.Metrics.RecordCacheCreationTokens(target.Model, agentName, target.Provider, cacheCreationTokens)
+	}
 }

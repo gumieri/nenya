@@ -589,13 +589,18 @@ func (p *Proxy) makeUsageCallback(ctx context.Context, gw *gateway.NenyaGateway,
 		}
 		if cacheHit > 0 {
 			gw.Stats.RecordCacheHit(target.Model, cacheHit)
+			gw.Metrics.RecordCacheReadTokens(target.Model, agentName, target.Provider, cacheHit)
 		}
 		if cacheMiss > 0 {
 			gw.Stats.RecordCacheMiss(target.Model, cacheMiss)
+			gw.Metrics.RecordCacheMissTokens(target.Model, agentName, target.Provider, cacheMiss)
 		}
 		if cacheCreation > 0 {
 			gw.Stats.RecordCacheCreation(target.Model, cacheCreation)
+			gw.Metrics.RecordCacheCreationTokens(target.Model, agentName, target.Provider, cacheCreation)
 		}
+		// Note: Stats cache methods don't track agent/provider; Metrics methods do.
+		// This pattern (if count > 0 { Stats.*; Metrics.* }) is intentional.
 		if gw.CostTracker != nil && (prompt > 0 || completion > 0) {
 			if dm, ok := gw.ModelCatalog.Lookup(target.Model); ok && dm.Pricing != nil && !dm.Pricing.IsZero() {
 				cost := dm.Pricing.CalculateCost(int64(prompt), int64(completion))
