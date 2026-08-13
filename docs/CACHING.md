@@ -160,6 +160,31 @@ Monitor these metrics to:
 - Identify which models benefit most from semantic caching
 - Track degradation if embedder fails (semantic misses only)
 
+### Prefix-cache token accounting
+
+In addition to the response-cache event counters above, Nenya exposes upstream
+prefix/prompt-cache **token totals** for billing and cost reconciliation.
+These counters track tokens served from or written to the provider's own
+prompt cache (Anthropic, OpenAI, Z.AI, etc.) and are labeled per
+`model`/`agent`/`provider`:
+
+```
+# Tokens served from the upstream prefix cache
+nenya_cache_read_tokens_total{agent="opencode", model="claude-3-5-sonnet", provider="anthropic"} 5120
+
+# Tokens written to the upstream prefix cache (cacheable-system-prompt/ephemeral)
+nenya_cache_creation_tokens_total{agent="opencode", model="claude-3-5-sonnet", provider="anthropic"} 1024
+
+# Tokens not served from cache (uncached input)
+nenya_cache_miss_tokens_total{agent="opencode", model="claude-3-5-sonnet", provider="anthropic"} 2048
+```
+
+These token counters are distinct from the `nenya_cache_hit_total` /
+`nenya_cache_miss_total` event counters above: the former count *tokens* for
+upstream prompt caching, while the latter count *response events* for Nenya's
+own response cache. Both streaming and non-streaming requests are accounted,
+including Anthropic's native `cache_creation_input_tokens` field.
+
 ## Response Headers
 
 On a cache hit (exact or semantic), Nenya adds:
