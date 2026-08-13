@@ -20,6 +20,7 @@ import (
 	"github.com/nenya/internal/infra"
 	providerpkg "github.com/nenya/internal/providers"
 	"github.com/nenya/internal/routing"
+	"github.com/nenya/internal/stream"
 	"github.com/nenya/internal/testutil"
 )
 
@@ -936,5 +937,56 @@ func TestStoreStreamCache_SkipsRefusal(t *testing.T) {
 				t.Error("expected cache NOT to be stored (len should not increase)")
 			}
 		})
+	}
+}
+
+
+func TestMakeUsageCallback_RecordsCacheTokens(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	gw := newStreamTestGateway()
+	gw.Logger = logger
+
+	p := &Proxy{}
+	cb := p.makeUsageCallback(context.Background(), gw, routing.UpstreamTarget{
+		Model:    "claude-3",
+		Provider: "anthropic",
+	}, "agent-a")
+
+	cb(stream.UsageData{
+		CacheHitTokens:      5000,
+		CacheMissTokens:     1500,
+		CacheCreationTokens: 2000,
+	})
+
+	snapshot := gw.Stats.Snapshot()
+	models, ok := snapshot["models"].(map[string]interface{})
+	if !ok {
+		t.Fatal("expected models map in stats snapshot")
+	}
+	m, ok := models["claude-3"].(map[string]interface{})
+	if !ok {
+		t.Fatal("expected stats entry for claude-3")
+	}
+	if got := m["cache_hit_tokens"]; got != uint64(5000) {
+		t.Errorf("stats cache_hit_tokens = %v, want 5000", got)
+	}
+	if got := m["cache_miss_tokens"]; got != uint64(1500) {
+		t.Errorf("stats cache_miss_tokens = %v, want 1500", got)
+	}
+	if got := m["cache_creation_tokens"]; got != uint64(2000) {
+		t.Errorf("stats cache_creation_tokens = %v, want 2000", got)
+	}
+
+	var buf bytes.Buffer
+	gw.Metrics.WritePrometheus(&buf)
+	out := buf.String()
+	if !strings.Contains(out, `nenya_cache_read_tokens_total{agent="agent-a", model="claude-3", provider="anthropic"} 5000`) {
+		t.Errorf("missing nenya_cache_read_tokens_total metric")
+	}
+	if !strings.Contains(out, `nenya_cache_miss_tokens_total{agent="agent-a", model="claude-3", provider="anthropic"} 1500`) {
+		t.Errorf("missing nenya_cache_miss_tokens_total metric")
+	}
+	if !strings.Contains(out, `nenya_cache_creation_tokens_total{agent="agent-a", model="claude-3", provider="anthropic"} 2000`) {
+		t.Errorf("missing nenya_cache_creation_tokens_total metric")
 	}
 }

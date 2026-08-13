@@ -28,6 +28,9 @@ func TestMetrics_RecordAndWritePrometheus(t *testing.T) {
 	m.RecordCooldown("agent-1", "gemini", "model-a")
 	m.RecordExhausted("agent-1")
 	m.RecordStreamBlock("model-a", "gemini")
+	m.RecordCacheReadTokens("model-a", "agent-1", "gemini", 5000)
+	m.RecordCacheCreationTokens("model-a", "agent-1", "gemini", 2000)
+	m.RecordCacheMissTokens("model-a", "agent-1", "gemini", 100)
 
 	var buf bytes.Buffer
 	m.WritePrometheus(&buf)
@@ -52,7 +55,9 @@ func TestMetrics_RecordAndWritePrometheus(t *testing.T) {
 		"nenya_uptime_seconds",
 		"nenya_go_goroutines",
 		"nenya_cb_state",
-		"nenya_pipeline_compaction_applied_total",
+		"nenya_cache_read_tokens_total",
+		"nenya_cache_creation_tokens_total",
+		"nenya_cache_miss_tokens_total",
 	}
 
 	for _, metric := range expectedMetrics {
@@ -310,6 +315,37 @@ func TestExtractHost(t *testing.T) {
 		got := ExtractHost(tt.url)
 		if got != tt.want {
 			t.Errorf("ExtractHost(%q) = %q, want %q", tt.url, got, tt.want)
+		}
+	}
+}
+
+func TestMetrics_PrefixCacheTokenMetrics(t *testing.T) {
+	m := NewMetrics()
+	m.RecordCacheReadTokens("claude-3", "agent-a", "anthropic", 5000)
+	m.RecordCacheReadTokens("claude-3", "agent-a", "anthropic", 3000)
+	m.RecordCacheCreationTokens("claude-3", "agent-a", "anthropic", 2000)
+	m.RecordCacheMissTokens("claude-3", "agent-a", "anthropic", 1500)
+
+	var buf bytes.Buffer
+	m.WritePrometheus(&buf)
+	out := buf.String()
+
+	cases := []struct {
+		name   string
+		metric string
+		value  string
+	}{
+		{"cache read tokens", "nenya_cache_read_tokens_total", "8000"},
+		{"cache creation tokens", "nenya_cache_creation_tokens_total", "2000"},
+		{"cache miss tokens", "nenya_cache_miss_tokens_total", "1500"},
+	}
+
+	for _, c := range cases {
+		if !regexp.MustCompile(c.metric + `\{[^}]*model="claude-3"`).MatchString(out) {
+			t.Errorf("expected %s metric with model label", c.name)
+		}
+		if !regexp.MustCompile(c.metric + `\{[^}]*\} ` + c.value + `\n`).MatchString(out) {
+			t.Errorf("expected %s value %s", c.name, c.value)
 		}
 	}
 }

@@ -66,6 +66,11 @@ type Metrics struct {
 	cacheHit  sync.Map
 	cacheMiss sync.Map
 
+	// Prefix-cache token accounting metrics
+	cacheReadTokens     sync.Map
+	cacheCreationTokens sync.Map
+	cacheMissTokens     sync.Map
+
 	// Embedding generation metrics
 	embeddingDuration sync.Map
 	embeddingErrors   sync.Map
@@ -511,6 +516,42 @@ func (m *Metrics) RecordCacheMiss(cacheType, model string) {
 		"model": model,
 	})
 	e.value.Add(1)
+}
+
+// RecordCacheReadTokens records prompt cache read tokens (served from the
+// upstream prefix cache) for the given model, agent, and provider.
+func (m *Metrics) RecordCacheReadTokens(model, agent, provider string, tokens int) {
+	if m == nil {
+		return
+	}
+	e := getOrCreateEntry(&m.cacheReadTokens, map[string]string{
+		"model": model, "agent": agent, "provider": provider,
+	})
+	e.value.Add(uint64(tokens))
+}
+
+// RecordCacheCreationTokens records prompt cache creation tokens (newly
+// written to the upstream prefix cache) for the given model, agent, provider.
+func (m *Metrics) RecordCacheCreationTokens(model, agent, provider string, tokens int) {
+	if m == nil {
+		return
+	}
+	e := getOrCreateEntry(&m.cacheCreationTokens, map[string]string{
+		"model": model, "agent": agent, "provider": provider,
+	})
+	e.value.Add(uint64(tokens))
+}
+
+// RecordCacheMissTokens records prompt cache miss tokens (uncached input)
+// for the given model, agent, and provider.
+func (m *Metrics) RecordCacheMissTokens(model, agent, provider string, tokens int) {
+	if m == nil {
+		return
+	}
+	e := getOrCreateEntry(&m.cacheMissTokens, map[string]string{
+		"model": model, "agent": agent, "provider": provider,
+	})
+	e.value.Add(uint64(tokens))
 }
 
 func (m *Metrics) RecordEmbeddingDuration(duration time.Duration) {
@@ -966,6 +1007,16 @@ func (m *Metrics) WritePrometheus(w io.Writer) {
 		"Total cache hits by cache type.", &m.cacheHit)
 	m.writeCounterMap(w, "nenya_cache_miss_total",
 		"Total cache misses by cache type.", &m.cacheMiss)
+
+	// Prefix-cache token totals: these measure upstream prompt/prefix cache
+	// token accounting (read/creation/miss), distinct from the response-cache
+	// event counters above (exact/semantic cache hits and misses).
+	m.writeCounterMap(w, "nenya_cache_read_tokens_total",
+		"Prompt cache read tokens (served from upstream prefix cache) by model, agent, and provider.", &m.cacheReadTokens)
+	m.writeCounterMap(w, "nenya_cache_creation_tokens_total",
+		"Prompt cache creation tokens (newly written to upstream prefix cache) by model, agent, and provider.", &m.cacheCreationTokens)
+	m.writeCounterMap(w, "nenya_cache_miss_tokens_total",
+		"Prompt cache miss tokens (uncached input) by model, agent, and provider.", &m.cacheMissTokens)
 	m.writeHistogramMap(w, "nenya_embedding_duration_seconds",
 		"Embedding generation duration in seconds.", &m.embeddingDuration)
 	m.writeCounterMap(w, "nenya_embedding_errors_total",
