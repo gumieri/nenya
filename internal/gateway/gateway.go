@@ -201,7 +201,9 @@ func createHTTPClients(cfg config.Config) (*http.Client, *http.Client) {
 
 	secureClient := &http.Client{
 		Transport: transport,
-		Timeout:   cfg.Governance.EffectiveUpstreamTimeout(),
+		// No client-level Timeout. ResponseHeaderTimeout bounds header reading,
+		// and stream idle timeout (stall reader) bounds streaming stalls.
+		// Non-streaming dispatches use per-request ctx deadlines.
 	}
 
 	ollamaResponseHeaderTimeout := 30 * time.Second

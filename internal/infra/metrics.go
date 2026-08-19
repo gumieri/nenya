@@ -45,6 +45,9 @@ type Metrics struct {
 	retryTotal      sync.Map
 	inflightReqs    sync.Map
 
+	// Stream interruption metrics
+	streamInterrupts sync.Map
+
 	// MCP metrics
 	mcpToolCallsTotal   sync.Map
 	mcpToolCallDuration sync.Map
@@ -331,6 +334,16 @@ func (m *Metrics) RecordStreamStall(model, provider string) {
 	}
 	e := getOrCreateEntry(&m.streamStalled, map[string]string{
 		"model": model, "provider": provider,
+	})
+	e.value.Add(1)
+}
+
+func (m *Metrics) RecordStreamInterrupt(model, provider, reason string) {
+	if m == nil {
+		return
+	}
+	e := getOrCreateEntry(&m.streamInterrupts, map[string]string{
+		"model": model, "provider": provider, "reason": reason,
 	})
 	e.value.Add(1)
 }
@@ -958,6 +971,8 @@ func (m *Metrics) WritePrometheus(w io.Writer) {
 		"Total upstream streams killed by execution policy.", &m.streamBlocked)
 	m.writeCounterMap(w, "nenya_stream_stalled_total",
 		"Total upstream streams killed by idle timeout.", &m.streamStalled)
+	m.writeCounterMap(w, "nenya_stream_interrupts_total",
+		"Total upstream streams interrupted by timeout or network error.", &m.streamInterrupts)
 	m.writeCounterMap(w, "nenya_empty_stream_total",
 		"Total upstream streams that returned empty body.", &m.emptyStreams)
 	m.writeCounterMap(w, "nenya_backoff_increments_total",

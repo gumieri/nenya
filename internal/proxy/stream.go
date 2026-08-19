@@ -285,6 +285,15 @@ func (sr *stallReader) DrainPending(timeout time.Duration) (int, error) {
 
 var errStreamStalled = errors.New("stream stalled: no data received within idle timeout")
 
+var (
+	errClientWriteSide = errors.New("client write")
+	errUpstreamReadSide = errors.New("upstream read")
+)
+
+func isClientWriteError(err error) bool {
+	return errors.Is(err, errClientWriteSide)
+}
+
 // streamResult carries the outcome of streamResponse back to the retry loop.
 type streamResult struct {
 	empty bool
@@ -377,7 +386,10 @@ func copyStream(ctx context.Context, dst io.Writer, src io.Reader, buf []byte) (
 		if nr > 0 {
 			nw, werr := dst.Write(buf[:nr])
 			if werr != nil {
-				return written, fmt.Errorf("writing to client: %w", werr)
+				if ctx.Err() != nil {
+					return written, ctx.Err()
+				}
+				return written, fmt.Errorf("%w: %v", errClientWriteSide, werr)
 			}
 			if nr != nw {
 				return written, io.ErrShortWrite
@@ -388,7 +400,10 @@ func copyStream(ctx context.Context, dst io.Writer, src io.Reader, buf []byte) (
 			if rerr == io.EOF {
 				return written, nil
 			}
-			return written, fmt.Errorf("reading from upstream: %w", rerr)
+			if errors.Is(rerr, context.Canceled) || errors.Is(rerr, context.DeadlineExceeded) {
+				return written, rerr
+			}
+			return written, fmt.Errorf("%w: %v", errUpstreamReadSide, rerr)
 		}
 		if ctx.Err() != nil {
 			return written, ctx.Err()
@@ -718,12 +733,21 @@ func (p *Proxy) handleStreamDone(gw *gateway.NenyaGateway, w http.ResponseWriter
 		return streamResult{empty: true}
 	}
 
+	if isClientWriteError(copyErr) {
+		gw.Logger.Info("client disconnected mid-write, aborting upstream stream",
+			"model", target.Model, "provider", target.Provider)
+		return streamResult{}
+	}
+
 	if errors.Is(copyErr, context.Canceled) {
 		gw.Logger.Info("client disconnected, aborting upstream stream",
 			"model", target.Model, "provider", target.Provider)
 	} else if errors.Is(copyErr, context.DeadlineExceeded) {
-		gw.Logger.Info("upstream timeout reached, aborting stream",
-			"model", target.Model, "provider", target.Provider)
+		gw.Logger.Warn("upstream timeout reached, sending terminator SSE",
+			"model", target.Model, "provider", target.Provider,
+			"timeout", gw.Config.Governance.EffectiveUpstreamTimeout())
+		gw.Metrics.RecordStreamInterrupt(target.Model, target.Provider, "timeout")
+		p.writeTimeoutSSE(gw, w)
 	}
 
 	recordStreamResult(gw, target, agentName, cooldownDuration, copyErr)
@@ -881,6 +905,23 @@ func (p *Proxy) writeStallSSE(gw *gateway.NenyaGateway, w http.ResponseWriter) {
 	if err != nil {
 		gw.Logger.Error("failed to marshal stall error payload", "err", err)
 		errPayload = []byte(`{"error":{"message":"upstream stream stalled","type":"gateway_error"}}`)
+	}
+	_, _ = fmt.Fprintf(w, "data: %s\n\ndata: [DONE]\n\n", errPayload)
+	if flusher, ok := w.(http.Flusher); ok {
+		flusher.Flush()
+	}
+}
+
+func (p *Proxy) writeTimeoutSSE(gw *gateway.NenyaGateway, w http.ResponseWriter) {
+	errPayload, err := json.Marshal(map[string]any{
+		"error": map[string]any{
+			"message": "upstream timeout reached",
+			"type":    "gateway_error",
+		},
+	})
+	if err != nil {
+		gw.Logger.Error("failed to marshal timeout error payload", "err", err)
+		errPayload = []byte(`{"error":{"message":"upstream timeout reached","type":"gateway_error"}}`)
 	}
 	_, _ = fmt.Fprintf(w, "data: %s\n\ndata: [DONE]\n\n", errPayload)
 	if flusher, ok := w.(http.Flusher); ok {

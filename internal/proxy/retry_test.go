@@ -957,7 +957,7 @@ func TestPrepareAndSend_ContextCanceledDoesNotRecordFailure(t *testing.T) {
 
 	p := &Proxy{}
 	p.StoreGateway(gw)
-	action := p.prepareAndSend(gw, r, 0, []routing.UpstreamTarget{target}, target, payload, 0, 0, "test-agent", nil)
+	action := p.prepareAndSend(gw, r, 0, []routing.UpstreamTarget{target}, target, payload, 0, 0, "test-agent", nil, false)
 
 	if action.kind != actionContinue {
 		t.Errorf("expected actionContinue, got %v", action.kind)
@@ -999,7 +999,7 @@ func TestPrepareAndSend_DeadlineExceededDoesNotRecordFailure(t *testing.T) {
 
 	p := &Proxy{}
 	p.StoreGateway(gw)
-	action := p.prepareAndSend(gw, r, 0, []routing.UpstreamTarget{target}, target, payload, 0, 0, "test-agent", nil)
+	action := p.prepareAndSend(gw, r, 0, []routing.UpstreamTarget{target}, target, payload, 0, 0, "test-agent", nil, false)
 
 	if action.kind != actionContinue {
 		t.Errorf("expected actionContinue, got %v", action.kind)
@@ -1036,7 +1036,7 @@ func TestPrepareAndSend_NetworkErrorRecordsFailure(t *testing.T) {
 
 	p := &Proxy{}
 	p.StoreGateway(gw)
-	action := p.prepareAndSend(gw, r, 0, []routing.UpstreamTarget{target}, target, payload, 0, 0, "test-agent", nil)
+	action := p.prepareAndSend(gw, r, 0, []routing.UpstreamTarget{target}, target, payload, 0, 0, "test-agent", nil, false)
 
 	if action.kind != actionContinue {
 		t.Errorf("expected actionContinue, got %v", action.kind)
@@ -1077,7 +1077,7 @@ func TestPrepareAndSend_ProviderTimeoutRecordsFailure(t *testing.T) {
 
 	p := &Proxy{}
 	p.StoreGateway(gw)
-	action := p.prepareAndSend(gw, r, 0, []routing.UpstreamTarget{target}, target, payload, 0, 0, "test-agent", nil)
+	action := p.prepareAndSend(gw, r, 0, []routing.UpstreamTarget{target}, target, payload, 0, 0, "test-agent", nil, false)
 
 	if action.kind != actionContinue {
 		t.Errorf("expected actionContinue, got %v", action.kind)

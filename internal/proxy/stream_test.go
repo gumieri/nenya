@@ -718,8 +718,11 @@ func TestCopyStream_UpstreamReadError(t *testing.T) {
 	dst := testutil.NewBytesCapture()
 
 	_, err := copyStream(context.Background(), dst, src, make([]byte, 1024))
-	if !errors.Is(err, readErr) {
-		t.Fatalf("expected read error, got: %v", err)
+	if err == nil {
+		t.Fatal("expected error from upstream read failure")
+	}
+	if !errors.Is(err, errUpstreamReadSide) {
+		t.Fatalf("expected upstream read error, got: %v", err)
 	}
 }
 
@@ -732,11 +735,8 @@ func TestCopyStream_ClientWriteError(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error from client write failure")
 	}
-	if !strings.Contains(err.Error(), "writing to client") {
-		t.Fatalf("expected 'writing to client' error, got: %v", err)
-	}
-	if !strings.Contains(err.Error(), "broken pipe") {
-		t.Fatalf("expected wrapped write error, got: %v", err)
+	if !errors.Is(err, errClientWriteSide) {
+		t.Fatalf("expected client write error, got: %v", err)
 	}
 }
 
@@ -939,7 +939,6 @@ func TestStoreStreamCache_SkipsRefusal(t *testing.T) {
 		})
 	}
 }
-
 
 func TestMakeUsageCallback_RecordsCacheTokens(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))

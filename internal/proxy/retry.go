@@ -405,7 +405,7 @@ retryLoop:
 
 // prepareAndSend wraps the proxy's prepareAndSend method.
 func (rl *retryLoop) prepareAndSend(idx int, target routing.UpstreamTarget, payload map[string]interface{}) upstreamAction {
-	return rl.p.prepareAndSend(rl.gw, rl.r, idx, rl.opts.Targets, target, payload, rl.opts.Cooldown, rl.opts.TokenCount, rl.opts.AgentName, rl.opts.ApiKey)
+	return rl.p.prepareAndSend(rl.gw, rl.r, idx, rl.opts.Targets, target, payload, rl.opts.Cooldown, rl.opts.TokenCount, rl.opts.AgentName, rl.opts.ApiKey, rl.stream)
 }
 
 // handleUpstreamError wraps the proxy's handleUpstreamError method.
@@ -510,6 +510,7 @@ func (p *Proxy) prepareAndSend(gw *gateway.NenyaGateway,
 	tokenCount int,
 	agentName string,
 	apiKey *config.ApiKey,
+	streaming bool,
 ) upstreamAction {
 	ctxLogger := gw.Logger.With(
 		"operation", "upstream",
@@ -554,10 +555,19 @@ func (p *Proxy) prepareAndSend(gw *gateway.NenyaGateway,
 
 	var upstreamCtx context.Context
 	var upstreamCancel context.CancelFunc
-	if pr, ok := gw.Providers[target.Provider]; ok && pr.TimeoutSeconds > 0 {
-		upstreamCtx, upstreamCancel = context.WithTimeout(r.Context(), time.Duration(pr.TimeoutSeconds)*time.Second)
-	} else {
+	if streaming {
 		upstreamCtx, upstreamCancel = context.WithCancel(r.Context())
+	} else {
+		if pr, ok := gw.Providers[target.Provider]; ok && pr.TimeoutSeconds > 0 {
+			upstreamCtx, upstreamCancel = context.WithTimeout(r.Context(), time.Duration(pr.TimeoutSeconds)*time.Second)
+		} else {
+			timeout := gw.Config.Governance.EffectiveUpstreamTimeout()
+			if timeout > 0 {
+				upstreamCtx, upstreamCancel = context.WithTimeout(r.Context(), timeout)
+			} else {
+				upstreamCtx, upstreamCancel = context.WithCancel(r.Context())
+			}
+		}
 	}
 	req = req.WithContext(upstreamCtx)
 
