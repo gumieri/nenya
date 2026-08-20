@@ -165,3 +165,73 @@ func TestFetchProviderModels_ProviderOverride(t *testing.T) {
 		t.Errorf("expected 2 attempts (provider override), got %d", attempts.Load())
 	}
 }
+
+func TestFetchProviderModels_NoBackfillWithoutProviderAllows(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"object": "list",
+			"data":   []interface{}{map[string]string{"id": "gpt-4"}},
+		})
+	}))
+	defer server.Close()
+
+	provider := &config.Provider{
+		Name:           "test-provider",
+		URL:            server.URL + "/chat/completions",
+		AuthStyle:      "none",
+		TimeoutSeconds: 30,
+		AllowedModels:  []string{},
+	}
+
+	df := NewDiscoveryFetcher(5)
+	ctx := context.Background()
+	logger := slog.Default()
+
+	models, err := df.fetchProviderModels(ctx, "test-provider", provider, logger)
+	if err != nil {
+		t.Fatalf("expected success, got error: %v", err)
+	}
+
+	if len(models) != 1 {
+		t.Errorf("expected 1 model (no backfill), got %d", len(models))
+	}
+	if models[0].ID != "gpt-4" {
+		t.Errorf("expected model ID gpt-4, got %s", models[0].ID)
+	}
+}
+
+func TestFetchProviderModels_BackfillRespectsProviderAllows(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"object": "list",
+			"data":   []interface{}{map[string]string{"id": "gpt-4"}},
+		})
+	}))
+	defer server.Close()
+
+	provider := &config.Provider{
+		Name:           "test-provider",
+		URL:            server.URL + "/chat/completions",
+		AuthStyle:      "none",
+		TimeoutSeconds: 30,
+		AllowedModels:  []string{"^gpt-4$"},
+	}
+
+	df := NewDiscoveryFetcher(5)
+	ctx := context.Background()
+	logger := slog.Default()
+
+	models, err := df.fetchProviderModels(ctx, "test-provider", provider, logger)
+	if err != nil {
+		t.Fatalf("expected success, got error: %v", err)
+	}
+
+	if len(models) != 1 {
+		t.Errorf("expected 1 model (anchored pattern prevents backfill), got %d", len(models))
+	}
+	if models[0].ID != "gpt-4" {
+		t.Errorf("expected model ID gpt-4, got %s", models[0].ID)
+	}
+}

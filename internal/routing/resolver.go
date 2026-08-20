@@ -104,6 +104,9 @@ func resolveFromRegistry(modelName string, providers map[string]*config.Provider
 	if p.APIKey == "" && p.AuthStyle != "none" {
 		return nil
 	}
+	if !p.AllowsModel(modelName) {
+		return nil
+	}
 	return []ProviderMatch{{
 		Provider:   p.Name,
 		Model:      modelName,

@@ -572,3 +572,106 @@ func TestAgentConfig_UnmarshalJSON_MixedForms(t *testing.T) {
 		t.Errorf("expected 'anthropic', got %s", cfg.Models[1].Provider)
 	}
 }
+
+func TestProvider_AllowsModel(t *testing.T) {
+	tests := []struct {
+		name      string
+		provider  *Provider
+		modelID   string
+		wantAllow bool
+	}{
+		{
+			name: "empty allowed list allows all",
+			provider: &Provider{
+				AllowedModels: []string{},
+			},
+			modelID:   "any-model",
+			wantAllow: true,
+		},
+		{
+			name: "nil allowed list allows all",
+			provider: &Provider{
+				AllowedModels: nil,
+			},
+			modelID:   "any-model",
+			wantAllow: true,
+		},
+		{
+			name: "exact match",
+			provider: &Provider{
+				AllowedModels: []string{"gpt-4", "claude-3-opus"},
+			},
+			modelID:   "gpt-4",
+			wantAllow: true,
+		},
+		{
+			name: "exact match second item",
+			provider: &Provider{
+				AllowedModels: []string{"gpt-4", "claude-3-opus"},
+			},
+			modelID:   "claude-3-opus",
+			wantAllow: true,
+		},
+		{
+			name: "exact match not in list",
+			provider: &Provider{
+				AllowedModels: []string{"gpt-4", "claude-3-opus"},
+			},
+			modelID:   "gpt-3.5",
+			wantAllow: false,
+		},
+		{
+			name: "regex pattern match",
+			provider: &Provider{
+				AllowedModels: []string{"gpt-\\d+", "claude-.*"},
+			},
+			modelID:   "gpt-4",
+			wantAllow: true,
+		},
+		{
+			name: "regex pattern not match",
+			provider: &Provider{
+				AllowedModels: []string{"gpt-\\d+"},
+			},
+			modelID:   "claude-3-opus",
+			wantAllow: false,
+		},
+		{
+			name: "multiple regex patterns",
+			provider: &Provider{
+				AllowedModels: []string{"gpt-\\d+", "claude-.*-opus", "gemini-.*"},
+			},
+			modelID:   "claude-3-opus",
+			wantAllow: true,
+		},
+		{
+			name: "regex partial match",
+			provider: &Provider{
+				AllowedModels: []string{"gpt-\\d+"},
+			},
+			modelID:   "gpt-4-turbo",
+			wantAllow: true,
+		},
+		{
+			name: "regex with anchors",
+			provider: &Provider{
+				AllowedModels: []string{"^gpt-\\d+$"},
+			},
+			modelID:   "gpt-4-turbo",
+			wantAllow: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			re, err := CompileAllowedModels(tt.provider.AllowedModels)
+			if err != nil {
+				t.Fatalf("CompileAllowedModels() error = %v", err)
+			}
+			tt.provider.allowedRE = re
+			if got := tt.provider.AllowsModel(tt.modelID); got != tt.wantAllow {
+				t.Errorf("Provider.AllowsModel() = %v, want %v", got, tt.wantAllow)
+			}
+		})
+	}
+}

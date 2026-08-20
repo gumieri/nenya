@@ -62,17 +62,17 @@ func FindRegistryModels(pattern config.AgentModel, providers map[string]*config.
 			continue
 		}
 		if providers != nil {
-			if p, ok := providers[entry.Provider]; !ok || !ProviderCanServe(p) {
+			if p, ok := providers[entry.Provider]; !ok || !ProviderCanServe(p) || !p.AllowsModel(modelID) {
 				continue
 			}
+			models = append(models, config.AgentModel{
+				Provider:        entry.Provider,
+				Model:           modelID,
+				MaxContext:      entry.MaxContext,
+				MaxOutput:       entry.MaxOutput,
+				ReasoningEffort: pattern.ReasoningEffort,
+			})
 		}
-		models = append(models, config.AgentModel{
-			Provider:        entry.Provider,
-			Model:           modelID,
-			MaxContext:      entry.MaxContext,
-			MaxOutput:       entry.MaxOutput,
-			ReasoningEffort: pattern.ReasoningEffort,
-		})
 	}
 	return models
 }

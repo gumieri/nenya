@@ -164,6 +164,11 @@ type ProviderConfig struct {
 	RatelimitMaxTPM *int `json:"ratelimit_max_tpm,omitempty"`
 	// Billing configures usage-based billing tracking for this provider.
 	Billing *BillingConfig `json:"billing,omitempty"`
+	// AllowedModels is a list of RE2 regex patterns that models from this
+	// provider must match to be included in the catalog. Empty or omitted
+	// means all models are allowed (default behavior). Patterns are unanchored
+	// MatchString semantics — anchor with ^...$ for exact pinning.
+	AllowedModels []string `json:"allowed_models,omitempty"`
 }
 
 // AccountConfig defines a single credential/account for multi-account providers.
@@ -199,6 +204,39 @@ type Provider struct {
 	MaxRetryAttempts         int
 	Thinking                 *ThinkingConfig
 	Billing                  *BillingConfig
+	AllowedModels            []string
+	allowedRE                []*regexp.Regexp
+}
+
+// AllowsModel returns true if the provider allows the given model ID.
+// Empty allowed_models means all models are allowed.
+func (p *Provider) AllowsModel(id string) bool {
+	if len(p.allowedRE) == 0 {
+		return true
+	}
+	for _, re := range p.allowedRE {
+		if re.MatchString(id) {
+			return true
+		}
+	}
+	return false
+}
+
+// CompileAllowedModels compiles a list of regex patterns for provider model
+// allowlist validation. Returns compiled regexes or an error on invalid pattern.
+func CompileAllowedModels(patterns []string) ([]*regexp.Regexp, error) {
+	if len(patterns) == 0 {
+		return nil, nil
+	}
+	res := make([]*regexp.Regexp, len(patterns))
+	for i, pat := range patterns {
+		re, err := regexp.Compile(pat)
+		if err != nil {
+			return nil, fmt.Errorf("invalid allowed_models pattern %q: %w", pat, err)
+		}
+		res[i] = re
+	}
+	return res, nil
 }
 
 // Config is the top-level configuration for the Nenya gateway. It is

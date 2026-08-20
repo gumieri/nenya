@@ -256,6 +256,46 @@ func (df *DiscoveryFetcher) fetchProviderModels(ctx context.Context, providerNam
 		return nil, fmt.Errorf("discovery parse: %w", err)
 	}
 
+	filtered := make([]DiscoveredModel, 0, len(models))
+	for _, m := range models {
+		if !provider.AllowsModel(m.ID) {
+			logger.Debug("discovery filtered model by allowed_models", "provider", providerName, "model", m.ID)
+			continue
+		}
+		filtered = append(filtered, m)
+	}
+	models = filtered
+
+	if len(provider.AllowedModels) > 0 {
+		fetchedIDs := make(map[string]bool, len(models))
+		for _, m := range models {
+			fetchedIDs[m.ID] = true
+		}
+		for modelID, entry := range config.ModelRegistry {
+			if entry.Provider != providerName {
+				continue
+			}
+			if fetchedIDs[modelID] {
+				continue
+			}
+			if !provider.AllowsModel(modelID) {
+				continue
+			}
+			logger.Debug("discovery backfilled static model", "provider", providerName, "model", modelID)
+			models = append(models, DiscoveredModel{
+				ID:         modelID,
+				Provider:   providerName,
+				Format:     entry.Format,
+				MaxContext: entry.MaxContext,
+				MaxOutput:  entry.MaxOutput,
+				OwnedBy:    "nenya",
+				Metadata: &ModelMetadata{
+					SupportsReasoning: entry.Thinking.Min > 0,
+				},
+			})
+		}
+	}
+
 	if strings.EqualFold(providerName, "ollama") {
 		models = df.enrichOllama(ctx, provider.URL, models, logger)
 	}

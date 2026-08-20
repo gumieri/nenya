@@ -721,6 +721,11 @@ func ResolveProviders(cfg *Config, secrets *SecretsConfig) map[string]*Provider 
 		if secrets != nil {
 			apiKey = secrets.ProviderKeys[name]
 		}
+		compiledRE, err := CompileAllowedModels(pc.AllowedModels)
+		if err != nil {
+			fmt.Printf("[ERROR] failed to compile allowed_models for provider %q: %v (skipping provider)\n", name, err)
+			continue
+		}
 		providers[name] = &Provider{
 			Name:                     name,
 			URL:                      pc.URL,
@@ -735,6 +740,8 @@ func ResolveProviders(cfg *Config, secrets *SecretsConfig) map[string]*Provider 
 			MaxRetryAttempts:         pc.MaxRetryAttempts,
 			Thinking:                 pc.Thinking,
 			Billing:                  pc.Billing,
+			AllowedModels:            pc.AllowedModels,
+			allowedRE:                compiledRE,
 		}
 	}
 	return providers

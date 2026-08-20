@@ -286,7 +286,7 @@ func (sr *stallReader) DrainPending(timeout time.Duration) (int, error) {
 var errStreamStalled = errors.New("stream stalled: no data received within idle timeout")
 
 var (
-	errClientWriteSide = errors.New("client write")
+	errClientWriteSide  = errors.New("client write")
 	errUpstreamReadSide = errors.New("upstream read")
 )
 

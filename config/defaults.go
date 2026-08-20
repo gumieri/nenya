@@ -126,6 +126,9 @@ func ApplyDefaults(cfg *Config) error {
 	if err := applyAgentDefaults(cfg); err != nil {
 		return err
 	}
+	if err := applyProviderModelsDefaults(cfg); err != nil {
+		return err
+	}
 	applyBuiltInProviders(cfg)
 	applyWindowDefaults(cfg)
 	if err := resolveEngineRefs(cfg); err != nil {
@@ -637,6 +640,18 @@ func applyAgentModelRegexDefaults(cfg *Config, name string, i int, m *AgentModel
 	}
 	if err := m.CompileRegex(); err != nil {
 		return fmt.Errorf("agent %q model %d: %w", name, i, err)
+	}
+	return nil
+}
+
+func applyProviderModelsDefaults(cfg *Config) error {
+	for name, pc := range cfg.Providers {
+		if len(pc.AllowedModels) == 0 {
+			continue
+		}
+		if _, err := CompileAllowedModels(pc.AllowedModels); err != nil {
+			return fmt.Errorf("provider %q: %w", name, err)
+		}
 	}
 	return nil
 }
