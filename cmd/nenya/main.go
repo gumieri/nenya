@@ -236,7 +236,7 @@ func buildInterceptorChain(gw *gateway.NenyaGateway, cfg *config.Config, logger 
 		chain.Register(pipeline.NewTFIDFInterceptor(cfg.Context.TFIDFQuerySource, logger))
 	}
 
-	if len(cfg.Bouncer.Engine.ResolvedTargets) > 0 {
+	if enabled := (cfg.Bouncer.Enabled != nil && *cfg.Bouncer.Enabled); enabled && len(cfg.Bouncer.Engine.ResolvedTargets) > 0 {
 		chain.Register(proxy.NewBouncerInterceptor(gw, logger))
 	}
 
@@ -335,6 +335,7 @@ func reloadConfig(ctx context.Context, p *proxy.Proxy, paths configPaths, logger
 
 	oldGW := p.Gateway()
 	newGW := oldGW.Reload(ctx, *newCfg, newSecrets)
+	newGW.InterceptorChain = buildInterceptorChain(newGW, newCfg, logger)
 	p.StoreGateway(newGW)
 
 	logger.Info("configuration reloaded successfully")

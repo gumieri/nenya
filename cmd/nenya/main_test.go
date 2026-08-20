@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
 	"syscall"
 	"testing"
 	"time"
@@ -446,6 +447,74 @@ func TestReloadConfig_Success(t *testing.T) {
 	newGW := p.Gateway()
 	if newGW == nil {
 		t.Fatal("gateway should not be nil after reload")
+	}
+	if newGW.InterceptorChain == nil {
+		t.Error("interceptor chain should be rebuilt after reload")
+	}
+}
+
+func TestBuildInterceptorChain_BouncerGatedOnEnabled(t *testing.T) {
+	logger := testutil.NewTestLogger()
+
+	newGW := func(cfg *config.Config) *gateway.NenyaGateway {
+		gw := gateway.New(context.Background(), *cfg, &config.SecretsConfig{ClientToken: "test-token-1234567890"}, logger)
+		gw.SecretPatterns = []*regexp.Regexp{regexp.MustCompile(`AKIA[0-9A-Z]{16}`)}
+		return gw
+	}
+
+	tests := []struct {
+		name          string
+		enabled       *bool
+		engineTargets int
+		wantBouncer   bool
+	}{
+		{
+			name:          "enabled with resolved engine registers bouncer",
+			enabled:       config.PtrTo(true),
+			engineTargets: 1,
+			wantBouncer:   true,
+		},
+		{
+			name:          "disabled with resolved engine skips bouncer",
+			enabled:       config.PtrTo(false),
+			engineTargets: 1,
+			wantBouncer:   false,
+		},
+		{
+			name:          "disabled without engine skips bouncer",
+			enabled:       config.PtrTo(false),
+			engineTargets: 0,
+			wantBouncer:   false,
+		},
+		{
+			name:          "enabled without engine skips bouncer",
+			enabled:       config.PtrTo(true),
+			engineTargets: 0,
+			wantBouncer:   false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := testutil.MinimalConfig()
+			cfg.Bouncer.Enabled = tt.enabled
+			for i := 0; i < tt.engineTargets; i++ {
+				cfg.Bouncer.Engine.ResolvedTargets = append(cfg.Bouncer.Engine.ResolvedTargets, config.EngineTarget{})
+			}
+
+			chain := buildInterceptorChain(newGW(cfg), cfg, logger)
+
+			got := false
+			for _, interceptor := range chain.List() {
+				if interceptor.Name() == "bouncer" {
+					got = true
+					break
+				}
+			}
+			if got != tt.wantBouncer {
+				t.Errorf("bouncer interceptor registered = %v, want %v", got, tt.wantBouncer)
+			}
+		})
 	}
 }
 

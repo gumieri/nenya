@@ -38,6 +38,9 @@ func (b *BouncerInterceptor) CanHandle(ctx context.Context, req *pipeline.Interc
 	if ctx.Err() != nil {
 		return false
 	}
+	if b.gw.Config.Bouncer.Enabled != nil && !*b.gw.Config.Bouncer.Enabled {
+		return false
+	}
 	return req.SoftLimit > 0 && req.TokenCount >= req.SoftLimit
 }
 

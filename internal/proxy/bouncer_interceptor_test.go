@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"testing"
 
+	"github.com/nenya/config"
 	"github.com/nenya/internal/gateway"
 	"github.com/nenya/internal/pipeline"
 )
@@ -15,6 +16,7 @@ func TestBouncerInterceptorCanHandle(t *testing.T) {
 		tokenCount    int
 		softLimit     int
 		ctxCancelled  bool
+		enabled       *bool
 		wantCanHandle bool
 	}{
 		{
@@ -22,6 +24,7 @@ func TestBouncerInterceptorCanHandle(t *testing.T) {
 			tokenCount:    5000,
 			softLimit:     4000,
 			ctxCancelled:  false,
+			enabled:       config.PtrTo(true),
 			wantCanHandle: true,
 		},
 		{
@@ -29,6 +32,7 @@ func TestBouncerInterceptorCanHandle(t *testing.T) {
 			tokenCount:    3000,
 			softLimit:     4000,
 			ctxCancelled:  false,
+			enabled:       config.PtrTo(true),
 			wantCanHandle: false,
 		},
 		{
@@ -36,6 +40,7 @@ func TestBouncerInterceptorCanHandle(t *testing.T) {
 			tokenCount:    5000,
 			softLimit:     0,
 			ctxCancelled:  false,
+			enabled:       config.PtrTo(true),
 			wantCanHandle: false,
 		},
 		{
@@ -43,11 +48,28 @@ func TestBouncerInterceptorCanHandle(t *testing.T) {
 			tokenCount:    5000,
 			softLimit:     4000,
 			ctxCancelled:  true,
+			enabled:       config.PtrTo(true),
 			wantCanHandle: false,
 		},
 		{
 			name:          "does not handle when tokens equal soft_limit",
 			tokenCount:    4000,
+			softLimit:     4000,
+			ctxCancelled:  false,
+			enabled:       config.PtrTo(true),
+			wantCanHandle: true,
+		},
+		{
+			name:          "does not handle when bouncer explicitly disabled",
+			tokenCount:    5000,
+			softLimit:     4000,
+			ctxCancelled:  false,
+			enabled:       config.PtrTo(false),
+			wantCanHandle: false,
+		},
+		{
+			name:          "handles when enabled is unset (defaults to enabled)",
+			tokenCount:    5000,
 			softLimit:     4000,
 			ctxCancelled:  false,
 			wantCanHandle: true,
@@ -58,6 +80,9 @@ func TestBouncerInterceptorCanHandle(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			gw := &gateway.NenyaGateway{
 				Logger: slog.Default(),
+				Config: config.Config{
+					Bouncer: config.BouncerConfig{Enabled: tt.enabled},
+				},
 			}
 			interceptor := NewBouncerInterceptor(gw, slog.Default())
 
