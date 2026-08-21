@@ -133,7 +133,10 @@ type UsageData struct {
 
 - `prompt_tokens = cache_read + cache_creation + input` for Anthropic.
 - Cache-creation breakdown (`ephemeral_5m_input_tokens`, `ephemeral_1h_input_tokens`) and the `iterations` array are parsed into the transformer (capped at 1000 entries).
-- Z.AI's nested `prompt_tokens_details.cached_tokens` is mapped to `CacheHitTokens`; a flat OpenAI `prompt_cache_hit_tokens` wins when both are present.
+
+### Sticky routing and prefix cache warmth
+
+Prefix cache relies on stable request prefixes (system prompt, tools, pinned messages) and stable upstream provider placement. Using the `sticky` agent routing strategy (see [`ROUTING.md`](ROUTING.md#agent-routing-strategies)) preserves provider-side KV blocks across turns by pinning a session to a single provider/model combination. Without stickiness, round-robin or fallback routing would rotate requests across providers, breaking per-provider prefix caches and incurring repeated `cache_creation` token costs on every turn.
 
 ### Refusal and error cache exclusion
 

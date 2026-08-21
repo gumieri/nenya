@@ -90,6 +90,7 @@ type NenyaGateway struct {
 	ProviderKeyTokens  map[string]security.SecureToken
 	LocalEngineManager *local.EngineManager
 	InterceptorChain   *pipeline.InterceptorChain
+	SessionRouter      *routing.SessionRouter
 	tokMu              sync.RWMutex
 }
 
@@ -135,6 +136,7 @@ func New(ctx context.Context, cfg config.Config, secrets *config.SecretsConfig, 
 	gw.Metrics.RateLimits = gw.RateLimiter.Snapshot
 	gw.Metrics.Cooldowns = gw.AgentState.ActiveCooldowns
 	gw.Metrics.CBStates = gw.AgentState.CBSnapshot
+	gw.Metrics.SessionActive = gw.AgentState.SessionRouter.Active
 
 	gw.QuotaFetcher.Start(ctx, gw.BillingTracker, cfg.Providers, secrets, gw)
 
@@ -373,6 +375,7 @@ func buildGateway(cfg config.Config, secrets *config.SecretsConfig, secureClient
 		ProviderKeyTokens: providerKeyTokens,
 	}
 	gw.AgentState = routing.NewAgentStateWithConfig(logger, metrics, &cfg.Governance)
+	gw.SessionRouter = gw.AgentState.SessionRouter
 	gw.AccountManager = auth.NewAccountManager(nil)
 	for name, pcfg := range cfg.Providers {
 		accounts := auth.ToProviderAccounts(&pcfg)
@@ -745,6 +748,9 @@ func (g *NenyaGateway) Reload(ctx context.Context, cfg config.Config, secrets *c
 	newGW.Metrics = g.Metrics
 	newGW.ThoughtSigCache = g.ThoughtSigCache
 	newGW.BillingTracker = g.BillingTracker
+	newGW.SessionRouter = g.SessionRouter
+	newGW.AgentState.SessionRouter = g.SessionRouter
+	newGW.AgentState.CountersMerge(g.AgentState.CountersCopy())
 
 	newGW.Metrics.RateLimits = newGW.RateLimiter.Snapshot
 	newGW.Metrics.Cooldowns = newGW.AgentState.ActiveCooldowns

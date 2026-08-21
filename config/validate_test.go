@@ -31,6 +31,42 @@ func TestValidateTFIDFQuerySource(t *testing.T) {
 	}
 }
 
+func TestValidateAgentStrategies(t *testing.T) {
+	valid := []string{"", "round-robin", "fallback", "sticky"}
+	invalid := []string{"random", "sticky+", "ROUND-ROBIN"}
+	for _, s := range valid {
+		errs := validateAgentStrategies(map[string]AgentConfig{"a": {Strategy: s}})
+		if len(errs) != 0 {
+			t.Errorf("strategy %q should be valid, got %v", s, errs)
+		}
+	}
+	for _, s := range invalid {
+		errs := validateAgentStrategies(map[string]AgentConfig{"a": {Strategy: s}})
+		if len(errs) == 0 {
+			t.Errorf("strategy %q should be invalid", s)
+		}
+	}
+}
+
+func TestValidateStickySessionTTL(t *testing.T) {
+	ok := map[string]AgentConfig{"a": {Strategy: "sticky", StickySessionTTLSeconds: 3600}}
+	if errs := validateStickySessionTTL(ok); len(errs) != 0 {
+		t.Errorf("valid TTL got errors: %v", errs)
+	}
+	neg := map[string]AgentConfig{"a": {Strategy: "sticky", StickySessionTTLSeconds: -1}}
+	if errs := validateStickySessionTTL(neg); len(errs) == 0 {
+		t.Error("negative TTL should be invalid")
+	}
+	exceed := map[string]AgentConfig{"a": {Strategy: "sticky", StickySessionTTLSeconds: 99999}}
+	if errs := validateStickySessionTTL(exceed); len(errs) == 0 {
+		t.Error("TTL above 24h should be invalid")
+	}
+	nonSticky := map[string]AgentConfig{"a": {Strategy: "round-robin", StickySessionTTLSeconds: -5}}
+	if errs := validateStickySessionTTL(nonSticky); len(errs) != 0 {
+		t.Errorf("TTL validation must only apply to sticky agents, got %v", errs)
+	}
+}
+
 func testLogger() *slog.Logger {
 	return slog.New(slog.NewTextHandler(io.Discard, &slog.HandlerOptions{Level: slog.LevelDebug}))
 }

@@ -80,20 +80,21 @@ func (m *AgentModel) IsDynamic() bool {
 // gateway. It includes strategy selection, circuit breaker thresholds,
 // model lists, MCP tool integration, and prompt configuration.
 type AgentConfig struct {
-	Strategy          string          `json:"strategy"`
-	Description       string          `json:"description,omitempty"`
-	CooldownSeconds   int             `json:"cooldown_seconds"`
-	FailureThreshold  int             `json:"failure_threshold"`
-	FailureWindowSec  int             `json:"failure_window_secs"`
-	SuccessThreshold  int             `json:"success_threshold"`
-	MaxRetries        int             `json:"max_retries"`
-	SystemPrompt      string          `json:"system_prompt"`
-	SystemPromptFile  string          `json:"system_prompt_file"`
-	ForceSystemPrompt bool            `json:"force_system_prompt"`
-	Models            []AgentModel    `json:"models,omitempty"`
-	MCP               *AgentMCPConfig `json:"mcp,omitempty"`
-	BudgetLimitUSD    float64         `json:"budget_limit_usd,omitempty"`
-	CacheSalt         *string         `json:"cache_salt,omitempty"`
+	Strategy                string          `json:"strategy"`
+	Description             string          `json:"description,omitempty"`
+	CooldownSeconds         int             `json:"cooldown_seconds"`
+	FailureThreshold        int             `json:"failure_threshold"`
+	FailureWindowSec        int             `json:"failure_window_secs"`
+	SuccessThreshold        int             `json:"success_threshold"`
+	MaxRetries              int             `json:"max_retries"`
+	SystemPrompt            string          `json:"system_prompt"`
+	SystemPromptFile        string          `json:"system_prompt_file"`
+	ForceSystemPrompt       bool            `json:"force_system_prompt"`
+	Models                  []AgentModel    `json:"models,omitempty"`
+	MCP                     *AgentMCPConfig `json:"mcp,omitempty"`
+	BudgetLimitUSD          float64         `json:"budget_limit_usd,omitempty"`
+	CacheSalt               *string         `json:"cache_salt,omitempty"`
+	StickySessionTTLSeconds int             `json:"sticky_session_ttl_seconds,omitempty"`
 }
 
 func (a *AgentConfig) UnmarshalJSON(data []byte) error {

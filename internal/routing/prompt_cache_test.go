@@ -176,19 +176,19 @@ func openAIBreakpointPayload() map[string]interface{} {
 		"model": "gpt-5.6",
 		"messages": []interface{}{
 			map[string]interface{}{
-				"role":    "user",
+				"role": "user",
 				"content": []interface{}{
 					map[string]interface{}{"type": "text", "text": "first question"},
 				},
 			},
 			map[string]interface{}{
-				"role":    "assistant",
+				"role": "assistant",
 				"content": []interface{}{
 					map[string]interface{}{"type": "text", "text": "first answer"},
 				},
 			},
 			map[string]interface{}{
-				"role":    "user",
+				"role": "user",
 				"content": []interface{}{
 					map[string]interface{}{"type": "text", "text": "second question"},
 				},

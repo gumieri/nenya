@@ -125,9 +125,12 @@ type Metrics struct {
 	billingCostLimitRejected   sync.Map
 	billingBudgetLimitRejected sync.Map
 
-	RateLimits func() map[string]*RateLimitSnapshot
-	Cooldowns  func() (active int)
-	CBStates   func() map[string]string
+	sessionPinChanges sync.Map
+
+	RateLimits    func() map[string]*RateLimitSnapshot
+	Cooldowns     func() (active int)
+	CBStates      func() map[string]string
+	SessionActive func() (active int)
 }
 
 type RateLimitSnapshot struct {
@@ -590,6 +593,16 @@ func (m *Metrics) SetSemanticCacheEntries(count int64) {
 	m.semanticCacheEntries.Store(count)
 }
 
+// RecordSessionPinChange increments the session pin-change counter for the
+// given reason (new, reuse, failover, expired).
+func (m *Metrics) RecordSessionPinChange(reason string) {
+	if m == nil {
+		return
+	}
+	e := getOrCreateEntry(&m.sessionPinChanges, map[string]string{"reason": reason})
+	e.value.Add(1)
+}
+
 func (m *Metrics) RecordOverflowGuardTrigger(location string) {
 	if m == nil {
 		return
@@ -940,6 +953,7 @@ func (m *Metrics) WritePrometheus(w io.Writer) {
 		"Total requests rejected due to max_cost_per_request.", &m.billingCostLimitRejected)
 	m.writeCounterMap(w, "nenya_billing_budget_limit_rejected_total",
 		"Total requests rejected due to agent budget_limit_usd.", &m.billingBudgetLimitRejected)
+	m.writeSessionMetrics(w)
 
 	m.writeBuildMetrics(w)
 	m.writeCounterMap(w, "nenya_tokens_estimated_total",
@@ -998,30 +1012,7 @@ func (m *Metrics) WritePrometheus(w io.Writer) {
 	m.writeHistogramMap(w, "nenya_http_request_duration_seconds",
 		"HTTP request duration in seconds.", &m.httpDur)
 
-	m.writeCounterMap(w, "nenya_mcp_tool_calls_total",
-		"Total MCP tool call executions.", &m.mcpToolCallsTotal)
-	m.writeHistogramMap(w, "nenya_mcp_tool_call_duration_seconds",
-		"MCP tool call duration in seconds.", &m.mcpToolCallDuration)
-	m.writeCounterMap(w, "nenya_mcp_auto_search_total",
-		"Total MCP auto-search attempts by outcome.", &m.mcpAutoSearchTotal)
-	m.writeCounterMap(w, "nenya_mcp_auto_save_total",
-		"Total MCP auto-save attempts by outcome.", &m.mcpAutoSaveTotal)
-	m.writeCounterMap(w, "nenya_mcp_loop_iterations_total",
-		"Total MCP multi-turn loop iterations.", &m.mcpLoopIterations)
-	m.writeHistogramMap(w, "nenya_mcp_loop_duration_seconds",
-		"Total MCP multi-turn loop duration in seconds.", &m.mcpLoopDuration)
-	m.writeGaugeMap(w, "nenya_mcp_server_ready",
-		"MCP server readiness (1=ready, 0=not ready).", &m.mcpServerReady)
-	m.writeCounterMap(w, "nenya_auth_success_total",
-		"Total successful authentications by type and key name.", &m.authSuccess)
-	m.writeCounterMap(w, "nenya_auth_failure_total",
-		"Total failed authentication attempts by type.", &m.authFailure)
-	m.writeCounterMap(w, "nenya_auth_denials_total",
-		"Total authorized requests denied by RBAC policy.", &m.authDenials)
-	m.writeCounterMap(w, "nenya_cache_hit_total",
-		"Total cache hits by cache type.", &m.cacheHit)
-	m.writeCounterMap(w, "nenya_cache_miss_total",
-		"Total cache misses by cache type.", &m.cacheMiss)
+	m.writeServiceMetrics(w)
 
 	// Prefix-cache token totals: these measure upstream prompt/prefix cache
 	// token accounting (read/creation/miss), distinct from the response-cache
@@ -1174,6 +1165,52 @@ func (m *Metrics) writeSemanticCacheGauge(w io.Writer) {
 	fprintln("# HELP nenya_semantic_cache_entries Current number of entries in semantic cache.")
 	fprintln("# TYPE nenya_semantic_cache_entries gauge")
 	fprintln("nenya_semantic_cache_entries %d", m.semanticCacheEntries.Load())
+}
+
+func (m *Metrics) writeSessionActiveGauge(w io.Writer) {
+	if m.SessionActive == nil {
+		return
+	}
+	fprintln := func(format string, args ...interface{}) {
+		_, _ = fmt.Fprintf(w, format+"\n", args...)
+	}
+	fprintln("# HELP nenya_session_active Number of active session pins (non-expired).")
+	fprintln("# TYPE nenya_session_active gauge")
+	fprintln("nenya_session_active %d", m.SessionActive())
+}
+
+func (m *Metrics) writeSessionMetrics(w io.Writer) {
+	m.writeCounterMap(w, "nenya_session_pin_changes_total",
+		"Total session routing pin changes by reason.", &m.sessionPinChanges)
+	m.writeSessionActiveGauge(w)
+}
+
+// writeServiceMetrics writes the MCP, auth, and cache metrics in one block.
+func (m *Metrics) writeServiceMetrics(w io.Writer) {
+	m.writeCounterMap(w, "nenya_mcp_tool_calls_total",
+		"Total MCP tool call executions.", &m.mcpToolCallsTotal)
+	m.writeHistogramMap(w, "nenya_mcp_tool_call_duration_seconds",
+		"MCP tool call duration in seconds.", &m.mcpToolCallDuration)
+	m.writeCounterMap(w, "nenya_mcp_auto_search_total",
+		"Total MCP auto-search attempts by outcome.", &m.mcpAutoSearchTotal)
+	m.writeCounterMap(w, "nenya_mcp_auto_save_total",
+		"Total MCP auto-save attempts by outcome.", &m.mcpAutoSaveTotal)
+	m.writeCounterMap(w, "nenya_mcp_loop_iterations_total",
+		"Total MCP multi-turn loop iterations.", &m.mcpLoopIterations)
+	m.writeHistogramMap(w, "nenya_mcp_loop_duration_seconds",
+		"Total MCP multi-turn loop duration in seconds.", &m.mcpLoopDuration)
+	m.writeGaugeMap(w, "nenya_mcp_server_ready",
+		"MCP server readiness (1=ready, 0=not ready).", &m.mcpServerReady)
+	m.writeCounterMap(w, "nenya_auth_success_total",
+		"Total successful authentications by type and key name.", &m.authSuccess)
+	m.writeCounterMap(w, "nenya_auth_failure_total",
+		"Total failed authentication attempts by type.", &m.authFailure)
+	m.writeCounterMap(w, "nenya_auth_denials_total",
+		"Total authorized requests denied by RBAC policy.", &m.authDenials)
+	m.writeCounterMap(w, "nenya_cache_hit_total",
+		"Total cache hits by cache type.", &m.cacheHit)
+	m.writeCounterMap(w, "nenya_cache_miss_total",
+		"Total cache misses by cache type.", &m.cacheMiss)
 }
 
 func (m *Metrics) writeRateLimitMetrics(w io.Writer) {

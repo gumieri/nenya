@@ -20,6 +20,10 @@ type UpstreamTarget struct {
 	MaxContext  int
 	AccountName string
 	Credential  string
+	// Cooling indicates the target is in the cooling/cooldown section of the
+	// built list: present but not eligible for promotion to targets[0] by the
+	// sticky router. Sticky pin validation must exclude cooling targets.
+	Cooling bool
 	// ReasoningEffort is the default reasoning intensity (low, medium, high, xhigh, max)
 	// from agent config, used if the client didn't specify one.
 	ReasoningEffort string
@@ -36,6 +40,7 @@ func (t UpstreamTarget) LogValue() slog.Value {
 		slog.Int("max_context", t.MaxContext),
 		slog.Int("max_output", t.MaxOutput),
 		slog.String("account", t.AccountName),
+		slog.Bool("cooling", t.Cooling),
 		slog.String("reasoning_effort", t.ReasoningEffort),
 	)
 }

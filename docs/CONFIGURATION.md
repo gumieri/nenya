@@ -522,7 +522,8 @@ Static fields always win over regex when both are present on the same key. When 
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `strategy` | string | `"round-robin"` | `"round-robin"` or `"fallback"` |
+| `strategy` | string | `"round-robin"` | Routing across the model chain: `"round-robin"` (rotate per request), `"fallback"` (always start at index 0), or `"sticky"` (pin sessions to a provider/model for prefix-cache warmth). See [Agent Routing Strategies](ROUTING.md#agent-routing-strategies). |
+| `sticky_session_ttl_seconds` | int | `3600` | Idle timeout (max `86400`) for the `sticky` strategy's session pins. Non-positive falls back to the default. |
 | `cooldown_seconds` | int | `60` | Seconds to skip a model after a retryable error |
 | `failure_threshold` | int | `5` | Circuit breaker: consecutive failures before tripping to Open state |
 | `failure_window_secs` | int | `0` (disabled) | Circuit breaker: time window in seconds over which failures are counted. 0 = no window (all-time count) |

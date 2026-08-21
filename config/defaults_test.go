@@ -433,11 +433,11 @@ func TestPrefixCache_CacheModeDefaults(t *testing.T) {
 func TestPrefixCache_CacheModeAutomaticForcesBlockMarkersOff(t *testing.T) {
 	cfg := &Config{
 		PrefixCache: PrefixCacheConfig{
-			Enabled:          true,
-			CacheSystem:      PtrTo(true),
-			CacheTools:       PtrTo(true),
-			CacheMessages:    PtrTo(true),
-			CacheControlTTL:  "1h",
+			Enabled:         true,
+			CacheSystem:     PtrTo(true),
+			CacheTools:      PtrTo(true),
+			CacheMessages:   PtrTo(true),
+			CacheControlTTL: "1h",
 		},
 	}
 	automatic := CacheModeAutomatic
@@ -475,7 +475,7 @@ func TestPrefixCache_CacheModeNilWhenDisabled(t *testing.T) {
 func TestPrefixCache_InvalidCacheModeRejected(t *testing.T) {
 	cfg := &Config{
 		PrefixCache: PrefixCacheConfig{
-			Enabled:  true,
+			Enabled:   true,
 			CacheMode: PtrTo("bogus"),
 		},
 	}

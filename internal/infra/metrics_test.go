@@ -31,6 +31,9 @@ func TestMetrics_RecordAndWritePrometheus(t *testing.T) {
 	m.RecordCacheReadTokens("model-a", "agent-1", "gemini", 5000)
 	m.RecordCacheCreationTokens("model-a", "agent-1", "gemini", 2000)
 	m.RecordCacheMissTokens("model-a", "agent-1", "gemini", 100)
+	m.RecordSessionPinChange("new")
+	m.RecordSessionPinChange("failover")
+	m.SessionActive = func() int { return 2 }
 
 	var buf bytes.Buffer
 	m.WritePrometheus(&buf)
@@ -168,6 +171,8 @@ func TestMetrics_NewMetrics(t *testing.T) {
 	m.IncInFlight("model-a", "agent-1", "gemini")
 	m.IncInFlight("model-b", "agent-2", "openai")
 	m.DecInFlight("model-a", "agent-1", "gemini")
+	m.RecordSessionPinChange("new")
+	m.SessionActive = func() int { return 1 }
 
 	var buf bytes.Buffer
 	m.WritePrometheus(&buf)
@@ -194,6 +199,8 @@ func TestMetrics_NewMetrics(t *testing.T) {
 		"nenya_model_discovery_total",
 		"nenya_retries_total",
 		"nenya_inflight_requests",
+		"nenya_session_active",
+		"nenya_session_pin_changes_total",
 		"nenya_build_info",
 		"nenya_uptime_seconds",
 		"nenya_go_goroutines",

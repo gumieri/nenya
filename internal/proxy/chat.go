@@ -163,10 +163,161 @@ func (p *Proxy) resolveAgentRouting(ctx context.Context, req *chatRequest, gw *g
 	if strategy == "" {
 		strategy = "round-robin"
 	}
+
+	if strategy == "sticky" {
+		targets = applyStickyRouting(req, gw, agent, targets)
+	}
+
 	gw.Logger.Info("agent routing",
 		"agent", req.ModelName, "strategy", strategy, "models_in_chain", len(targets))
 
 	return targets, req.AgentName, cooldown, maxRetries, nil
+}
+
+// applyStickyRouting pins the session to its previously selected provider
+// and model, when the pin is still valid (active, present in the built
+// target list). Reorders the target list so the pinned target is first,
+// leaving the remainder as the ordered failover tail. When the pin target is
+// cooling, exhausted, or no longer present, the pin is promoted to the first
+// active target (failover path).
+func applyStickyRouting(req *chatRequest, gw *gateway.NenyaGateway, agent config.AgentConfig, targets []routing.UpstreamTarget) []routing.UpstreamTarget {
+	key, ok := sessionKeyFromRequest(req, gw, agent)
+	if !ok || gw.AgentState == nil || gw.AgentState.SessionRouter == nil {
+		return targets
+	}
+
+	ttl := agentStickyTTL(agent)
+	pin, ok := gw.AgentState.SessionRouter.Lookup(key)
+	if !ok {
+		if pinTarget, ok := firstActiveTarget(targets); ok {
+			gw.AgentState.SessionRouter.Pin(key, pinTarget.Provider, pinTarget.Model, pinTarget.AccountName, ttl)
+		}
+		return targets
+	}
+
+	if i := indexOfActiveTarget(targets, pin.Provider, pin.Model); i > 0 {
+		return moveToFront(targets, i)
+	}
+	if pinTarget, ok := firstActiveTarget(targets); ok {
+		gw.AgentState.SessionRouter.Promote(key, pinTarget.Provider, pinTarget.Model, pinTarget.AccountName, ttl)
+		gw.Logger.Debug("sticky pin promoted to alternative active target",
+			"agent", req.ModelName, "from", pin.Provider+"/"+pin.Model, "to", pinTarget.Provider+"/"+pinTarget.Model)
+	}
+	return targets
+}
+
+// sessionKeyFromRequest derives a stable session identifier from the agent
+// name, the resolved system prompt, and the first user message in the raw
+// client payload.
+func sessionKeyFromRequest(req *chatRequest, gw *gateway.NenyaGateway, agent config.AgentConfig) (string, bool) {
+	systemPrompt, err := config.LoadPromptFile(agent.SystemPromptFile, agent.SystemPrompt, "")
+	if err != nil || systemPrompt == "" {
+		systemPrompt = agent.SystemPrompt
+	}
+	firstUser, ok := firstUserMessage(req.Payload)
+	if !ok {
+		return "", false
+	}
+	return routing.SessionKey(req.ModelName, systemPrompt, firstUser), true
+}
+
+// agentStickyTTL returns the agent's configured sticky session idle TTL,
+// falling back to the routing default when unset or non-positive.
+func agentStickyTTL(agent config.AgentConfig) time.Duration {
+	if agent.StickySessionTTLSeconds <= 0 {
+		return routing.DefaultSessionTTL
+	}
+	return time.Duration(agent.StickySessionTTLSeconds) * time.Second
+}
+
+// firstUserMessage extracts the content of the first message with role
+// "user" from the payload messages. Falls back to the first message's
+// content if no user message is present yet.
+func firstUserMessage(payload map[string]any) (string, bool) {
+	messages, ok := payload["messages"].([]any)
+	if !ok || len(messages) == 0 {
+		return "", false
+	}
+	for _, m := range messages {
+		msg, ok := m.(map[string]any)
+		if !ok {
+			continue
+		}
+		role, _ := msg["role"].(string)
+		if role == "user" {
+			if text := messageText(msg["content"]); text != "" {
+				return text, true
+			}
+		}
+	}
+	if msg, ok := messages[0].(map[string]any); ok {
+		if text := messageText(msg["content"]); text != "" {
+			return text, true
+		}
+	}
+	return "", false
+}
+
+// messageText renders message content as a plain string for session keying.
+func messageText(content any) string {
+	switch c := content.(type) {
+	case string:
+		return c
+	case []any:
+		var sb strings.Builder
+		for _, part := range c {
+			if obj, ok := part.(map[string]any); ok {
+				if text, ok := obj["text"].(string); ok {
+					sb.WriteString(text)
+				}
+			}
+		}
+		return sb.String()
+	default:
+		return ""
+	}
+}
+
+// firstActiveTarget returns the first target not in cooling state, or the
+// first target if none are flagged.
+func firstActiveTarget(targets []routing.UpstreamTarget) (routing.UpstreamTarget, bool) {
+	for _, t := range targets {
+		if !t.Cooling {
+			return t, true
+		}
+	}
+	if len(targets) > 0 {
+		return targets[0], true
+	}
+	return routing.UpstreamTarget{}, false
+}
+
+// indexOfActiveTarget returns the index of the first ACTIVE (non-cooling)
+// target matching the given provider and model, or -1 if not found.
+// Cooling pins are never promoted back to targets[0] to avoid re-firing a
+// rate-limited provider mid-cooldown.
+func indexOfActiveTarget(targets []routing.UpstreamTarget, provider, model string) int {
+	for i, t := range targets {
+		if t.Cooling {
+			continue
+		}
+		if t.Provider == provider && t.Model == model {
+			return i
+		}
+	}
+	return -1
+}
+
+// moveToFront reorders the target slice placing the element at index i at
+// the front, preserving relative order of the rest.
+func moveToFront(targets []routing.UpstreamTarget, i int) []routing.UpstreamTarget {
+	if i <= 0 || i >= len(targets) {
+		return targets
+	}
+	t := targets[i]
+	copy(targets[1:i+1], targets[:i])
+	targets[0] = t
+	return targets
 }
 
 func getAgentCooldown(agent config.AgentConfig) time.Duration {

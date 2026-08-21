@@ -171,3 +171,5 @@ Define a resilient agent that tries multiple providers:
 ```
 
 Use `"model": "smart-coder"` in OpenCode. If OpenAI rate-limits (429), Nenya automatically falls back to DeepSeek, then to local Ollama. Circuit breakers prevent hammering a tripped provider.
+
+For multi-turn coding sessions where provider-side prefix caching matters (fewer `cache_creation` tokens, lower per-turn latency), set `"strategy": "sticky"`. Sessions are pinned to one provider/model and stay there for the lifetime of the conversation (`sticky_session_ttl_seconds`, default 1h). New conversations still spread across providers. See [Agent Routing Strategies](ROUTING.md#agent-routing-strategies).

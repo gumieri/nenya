@@ -109,6 +109,8 @@ func collectValidationErrors(ctx context.Context, cfg *Config, providers map[str
 	errors = append(errors, validateUpstreamTimeoutSeconds(cfg.Governance.UpstreamTimeoutSeconds)...)
 	errors = append(errors, validateStreamIdleTimeoutSeconds(cfg.Governance.StreamIdleTimeoutSeconds)...)
 	errors = append(errors, validateThinkingStreamIdleTimeoutSeconds(cfg.Governance.ThinkingStreamIdleTimeoutSeconds)...)
+	errors = append(errors, validateAgentStrategies(cfg.Agents)...)
+	errors = append(errors, validateStickySessionTTL(cfg.Agents)...)
 
 	if pingProviders {
 		errors = append(errors, validateProviders(ctx, providers, logger)...)
@@ -124,6 +126,39 @@ func validateTFIDFQuerySource(source string) []string {
 	default:
 		return []string{fmt.Sprintf("governance.tfidf_query_source: invalid value %q, must be empty, \"prior_messages\", or \"self\"", source)}
 	}
+}
+
+var validAgentStrategies = map[string]bool{
+	"":            true,
+	"round-robin": true,
+	"fallback":    true,
+	"sticky":      true,
+}
+
+func validateAgentStrategies(agents map[string]AgentConfig) []string {
+	var errs []string
+	for name, agent := range agents {
+		if !validAgentStrategies[agent.Strategy] {
+			errs = append(errs, fmt.Sprintf("agents[%q].strategy: invalid value %q, must be one of round-robin, fallback, sticky", name, agent.Strategy))
+		}
+	}
+	return errs
+}
+
+func validateStickySessionTTL(agents map[string]AgentConfig) []string {
+	var errs []string
+	for name, agent := range agents {
+		if agent.Strategy != "sticky" {
+			continue
+		}
+		if agent.StickySessionTTLSeconds < 0 {
+			errs = append(errs, fmt.Sprintf("agents[%q].sticky_session_ttl_seconds must be non-negative, got %d", name, agent.StickySessionTTLSeconds))
+		}
+		if agent.StickySessionTTLSeconds > 86400 {
+			errs = append(errs, fmt.Sprintf("agents[%q].sticky_session_ttl_seconds exceeds maximum allowed value (86400 seconds / 24 hours), got %d", name, agent.StickySessionTTLSeconds))
+		}
+	}
+	return errs
 }
 
 func validateModelRegistryErrors(logger *slog.Logger) []string {

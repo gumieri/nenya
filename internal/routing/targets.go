@@ -56,6 +56,7 @@ type AgentState struct {
 	CB               *resilience.CircuitBreaker
 	Metrics          *infra.Metrics
 	LocalEngineCheck LocalEngineCheck
+	SessionRouter    *SessionRouter
 	mu               sync.Mutex
 	selectorCache    map[string]selectorCacheEntry
 	selectorCacheMu  sync.RWMutex
@@ -99,6 +100,7 @@ func NewAgentStateWithConfig(logger *slog.Logger, metrics *infra.Metrics, govCon
 	as := &AgentState{
 		Counters:      make(map[string]uint64),
 		Metrics:       metrics,
+		SessionRouter: NewSessionRouter(DefaultSessionCap, DefaultSessionTTL, metrics, logger),
 		selectorCache: make(map[string]selectorCacheEntry),
 		CB: resilience.NewCircuitBreaker(
 			DefaultFailureThreshold,
@@ -170,6 +172,7 @@ func (a *AgentState) BuildTargetList(ctx context.Context, logger *slog.Logger, a
 		if a.CB.Peek(t.CoolKey) {
 			active = append(active, *t)
 		} else {
+			t.Cooling = true
 			cooling = append(cooling, *t)
 		}
 	}
@@ -760,6 +763,37 @@ func (a *AgentState) CBSnapshot() map[string]string {
 // observability.
 func (a *AgentState) CBDetailedSnapshot() map[string]interface{} {
 	return a.CB.SnapshotDetailed()
+}
+
+// CountersCopy returns a shallow copy of the per-agent request counters so
+// they can be preserved across config reloads.
+func (a *AgentState) CountersCopy() map[string]uint64 {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.Counters == nil {
+		return nil
+	}
+	cpy := make(map[string]uint64, len(a.Counters))
+	for k, v := range a.Counters {
+		cpy[k] = v
+	}
+	return cpy
+}
+
+// CountersMerge merges the provided counters into the AgentState, restoring
+// state after a config reload.
+func (a *AgentState) CountersMerge(src map[string]uint64) {
+	if src == nil {
+		return
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.Counters == nil {
+		a.Counters = make(map[string]uint64)
+	}
+	for k, v := range src {
+		a.Counters[k] = v
+	}
 }
 
 func checkCapabilities(m config.AgentModel, catalog *discovery.ModelCatalog) bool {

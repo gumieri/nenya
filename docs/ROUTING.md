@@ -36,6 +36,22 @@ Scores are normalized using min-max normalization:
 
 This ensures all factors are weighted equally in the 0-1 range.
 
+## Agent Routing Strategies
+
+The per-agent `strategy` field controls how targets in an agent's model chain are ordered for dispatch:
+
+- `round-robin` (default): Each request rotates to the next target, spreading traffic evenly. Used when providers do not meaningfully benefit from a stable primary.
+- `fallback`: The first target is always tried first; the rest form an ordered failover tail. Best when the primary is preferred on cost or quality grounds and alternates are purely for resilience.
+- `sticky`: Sessions (identified by agent + system prompt + first user message) are pinned to a provider/model so provider-side prefix-cache warmth is preserved across turns. See [Sticky Session Routing](DESIGN_STICKY_ROUTING.md).
+
+New sessions under `sticky` and `round-robin` still rotate via the agent request counter so concurrent sessions spread across providers. `fallback` always starts at index 0.
+
+Sticky-specific knobs:
+
+- `sticky_session_ttl_seconds` (default 3600, max 86400): idle timeout after which a pin expires and the session re-pins on its next request.
+
+Pin lifecycle: on an existing pin, the pinned target is reordered to the front so it is always tried first. If the pin's target is cooling (rate-limited), billing-exhausted, or no longer context-compatible, the pin is promoted to the first active target (re-pinning is logged at `Info`). Metrics: `nenya_session_active` (gauge), `nenya_session_pin_changes_total{reason="new|failover|expired"}`.
+
 ## Configuration
 
 Agents can configure routing weights in their configuration:
