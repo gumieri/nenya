@@ -205,6 +205,23 @@ func ExtractDeltaContentFromMap(chunk map[string]interface{}) string {
 	return content
 }
 
+// ExtractFinishReasonFromMap extracts the finish_reason from choices[0] of an
+// OpenAI-format SSE chunk. Returns "" when the finish_reason is absent, null,
+// or not a string. Used to determine whether a no-[DONE] stream ending is
+// benign truncation (finish_reason seen) or a genuine mid-generation cut.
+func ExtractFinishReasonFromMap(chunk map[string]interface{}) string {
+	choices, ok := chunk["choices"].([]interface{})
+	if !ok || len(choices) == 0 {
+		return ""
+	}
+	choice, ok := choices[0].(map[string]interface{})
+	if !ok {
+		return ""
+	}
+	fr, _ := choice["finish_reason"].(string)
+	return fr
+}
+
 func ReplaceDeltaContent(data []byte, newContent string) []byte {
 	chunk := ParseSSEChunk(data)
 	if chunk == nil {

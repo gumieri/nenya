@@ -549,6 +549,14 @@ func (o *upstreamErrorObserver) OnSSEEvent(event stream.SSEEvent) {
 	if event.Type != "error" || o.gw == nil {
 		return
 	}
+	if event.GatewayInjected {
+		// Errors synthesized by the gateway (e.g. a gateway_error injected
+		// when an upstream stream ends without [DONE]) are not provider
+		// failures and must not count toward the circuit breaker.
+		o.gw.Logger.Debug("ignoring gateway-injected error event for circuit breaker",
+			"model", o.target.Model, "provider", o.target.Provider)
+		return
+	}
 	errData := event.Data["error"]
 	if errData == nil {
 		o.gw.Logger.Warn("upstream error event detected in stream (malformed, missing 'error' field)",

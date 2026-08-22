@@ -111,12 +111,119 @@ func TestSSETransformingReader_NoDone_InjectsError(t *testing.T) {
 	if reader.SawDone() {
 		t.Error("expected SawDone() to be false when no [DONE] was received")
 	}
+	if reader.SawContent() {
+		t.Error("expected SawContent() to be false for a stream with no content chunks")
+	}
+	if reader.SawFinishReason() {
+		t.Error("expected SawFinishReason() to be false for a stream with no finish_reason")
+	}
 
 	result := output.String()
 	if !strings.Contains(result, "gateway_error") {
 		t.Errorf("expected gateway_error injection when stream ends without [DONE]: %s", result)
 	}
 }
+
+func TestSSETransformingReader_NoDone_FinishReason_Benign(t *testing.T) {
+	input := "data: {\"choices\":[{\"delta\":{\"content\":\"hi\"},\"finish_reason\":null}]}\n\n" +
+		"data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n"
+
+	reader := NewSSETransformingReader(strings.NewReader(input), nil, context.Background())
+
+	var output bytes.Buffer
+	_, err := io.Copy(&output, reader)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if !reader.SawContent() {
+		t.Error("expected SawContent() to be true after a content chunk was forwarded")
+	}
+	if !reader.SawFinishReason() {
+		t.Error("expected SawFinishReason() to be true after finish_reason was forwarded")
+	}
+	if reader.SawDone() {
+		t.Error("expected SawDone() to be false when no [DONE] was received from upstream")
+	}
+
+	result := output.String()
+	if strings.Contains(result, "gateway_error") {
+		t.Errorf("benign no-[DONE] ending with finish_reason must not inject gateway_error: %s", result)
+	}
+	if strings.Count(result, "[DONE]") != 1 {
+		t.Errorf("expected exactly one injected [DONE], got: %s", result)
+	}
+}
+
+func TestSSETransformingReader_NoDone_GenuineCut_InterimError(t *testing.T) {
+	input := "data: {\"choices\":[{\"delta\":{\"content\":\"partial answer\"}}]}\n\n"
+
+	reader := NewSSETransformingReader(strings.NewReader(input), nil, context.Background())
+
+	var output bytes.Buffer
+	_, err := io.Copy(&output, reader)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if !reader.SawContent() {
+		t.Error("expected SawContent() to be true after content was forwarded")
+	}
+	if reader.SawFinishReason() {
+		t.Error("expected SawFinishReason() to be false for a mid-generation cut")
+	}
+	if reader.SawDone() {
+		t.Error("expected SawDone() to be false when no [DONE] was received from upstream")
+	}
+
+	result := output.String()
+	if !strings.Contains(result, "gateway_error") {
+		t.Errorf("genuine cut must inject gateway_error as interim Phase 0 behavior: %s", result)
+	}
+}
+
+func TestSSETransformingReader_GatewayInjectedError_Tagged(t *testing.T) {
+	var received []streamSSEEvent
+	reader := NewSSETransformingReader(strings.NewReader("data: {\"chunk\":1}\n\n"), nil, context.Background())
+	reader.SetObserver(testObserver{onEvent: func(ev SSEEvent) { received = append(received, toStreamEvent(ev)) }})
+
+	var output bytes.Buffer
+	_, err := io.Copy(&output, reader)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var foundInjected bool
+	for _, ev := range received {
+		if ev.Type == "error" && ev.GatewayInjected {
+			foundInjected = true
+		}
+	}
+	if !foundInjected {
+		t.Errorf("expected a gateway-injected error event in observer notifications, got %+v", received)
+	}
+}
+
+type streamSSEEvent struct {
+	Type            string
+	GatewayInjected bool
+}
+
+func toStreamEvent(ev SSEEvent) streamSSEEvent {
+	return streamSSEEvent{Type: ev.Type, GatewayInjected: ev.GatewayInjected}
+}
+
+type testObserver struct {
+	onEvent func(SSEEvent)
+}
+
+func (o testObserver) OnSSEEvent(event SSEEvent) {
+	if o.onEvent != nil {
+		o.onEvent(event)
+	}
+}
+
+func (o testObserver) OnStreamClose(err error) {}
 
 func TestSSETransformingReader_AnthropicMessageStartWithCacheFields(t *testing.T) {
 	event := map[string]interface{}{

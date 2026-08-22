@@ -989,3 +989,36 @@ func TestMakeUsageCallback_RecordsCacheTokens(t *testing.T) {
 		t.Errorf("missing nenya_cache_creation_tokens_total metric")
 	}
 }
+
+func TestUpstreamErrorObserver_GatewayInjected_SkipsRecordFailure(t *testing.T) {
+	gw := newStreamTestGateway()
+	target := routing.UpstreamTarget{Provider: "p", Model: "m", CoolKey: "agent:p:m"}
+	obs := newUpstreamErrorObserver(gw, target)
+
+	obs.OnSSEEvent(stream.SSEEvent{
+		Type:            "error",
+		GatewayInjected: true,
+		Data:            map[string]any{"error": map[string]any{"type": "gateway_error", "message": "upstream stream ended without [DONE]"}},
+	})
+
+	detailed := gw.AgentState.CB.SnapshotDetailed()
+	if failures := getFailureCountFromSnapshot(detailed, target.CoolKey); failures != 0 {
+		t.Errorf("gateway-injected error must not record a circuit breaker failure, got failure_count=%d", failures)
+	}
+}
+
+func TestUpstreamErrorObserver_RealError_RecordsFailure(t *testing.T) {
+	gw := newStreamTestGateway()
+	target := routing.UpstreamTarget{Provider: "p", Model: "m", CoolKey: "agent:p:m"}
+	obs := newUpstreamErrorObserver(gw, target)
+
+	obs.OnSSEEvent(stream.SSEEvent{
+		Type: "error",
+		Data: map[string]any{"error": map[string]any{"type": "provider_error", "message": "upstream exploded"}},
+	})
+
+	detailed := gw.AgentState.CB.SnapshotDetailed()
+	if failures := getFailureCountFromSnapshot(detailed, target.CoolKey); failures == 0 {
+		t.Error("real upstream error should record a circuit breaker failure")
+	}
+}

@@ -72,6 +72,11 @@ type SSEEvent struct {
 	Type string // "content", "usage", "tool_call", "done", "error"
 	Data map[string]interface{}
 	Raw  []byte
+	// GatewayInjected marks events synthesized by the gateway itself (e.g. a
+	// gateway_error injected when an upstream stream ends without [DONE]).
+	// Observers use this to distinguish gateway failures from real provider
+	// errors, and should not attribute them to the provider.
+	GatewayInjected bool
 }
 
 // SSETransformingReader reads from an SSE source and transforms SSE data lines.
@@ -90,6 +95,8 @@ type SSETransformingReader struct {
 	err                 error
 	closed              bool
 	sawDone             bool
+	sawContent          bool
+	sawFinishReason     bool
 	ctx                 context.Context
 	poolBuf             *[]byte
 	logger              *slog.Logger
@@ -208,6 +215,63 @@ func (r *SSETransformingReader) ResetCounters() {
 	r.transformedBytes = 0
 	r.discarding = false
 	r.warnedAtThreshold = false
+	r.sawContent = false
+	r.sawFinishReason = false
+	r.sawDone = false
+}
+
+// trackStreamProgress marks whether assistant content or a completion
+// signal has been observed in the stream. Used together with SawDone to
+// classify no-[DONE] endings: finish_reason without DONE is benign truncation;
+// content without finish_reason is a genuine cut.
+func (r *SSETransformingReader) trackStreamProgress(transformed []byte) {
+	if r.sawContent && r.sawFinishReason {
+		return
+	}
+	data := bytes.TrimSpace(transformed)
+	if bytes.HasPrefix(data, []byte("data: ")) {
+		data = bytes.TrimSpace(data[6:])
+	}
+	if len(data) == 0 || data[0] != '{' {
+		return
+	}
+	parsed := ParseSSEChunk(data)
+	if parsed == nil {
+		return
+	}
+	content := ExtractDeltaContentFromMap(parsed)
+	if content != "" {
+		r.sawContent = true
+	}
+	if !r.sawContent && hasReasoningDelta(parsed) {
+		r.sawContent = true
+	}
+	if !r.sawFinishReason {
+		fr := ExtractFinishReasonFromMap(parsed)
+		if fr != "" {
+			r.sawFinishReason = true
+		}
+	}
+}
+
+// hasReasoningDelta reports whether an OpenAI-format chunk carries a non-empty
+// reasoning_content delta (e.g. DeepSeek/Zai thinking streams). Such chunks
+// indicate the model is generating even before visible content arrives.
+func hasReasoningDelta(chunk map[string]interface{}) bool {
+	choices, ok := chunk["choices"].([]interface{})
+	if !ok || len(choices) == 0 {
+		return false
+	}
+	choice, ok := choices[0].(map[string]interface{})
+	if !ok {
+		return false
+	}
+	delta, ok := choice["delta"].(map[string]interface{})
+	if !ok {
+		return false
+	}
+	rc, _ := delta["reasoning_content"].(string)
+	return rc != ""
 }
 
 // SetMaxTransformedBytes sets the maximum allowed accumulated transformed output.
@@ -223,6 +287,21 @@ func (r *SSETransformingReader) SetMaxTransformedBytes(maxBytes int) {
 // SawDone returns true if the reader has observed a data: [DONE] event.
 func (r *SSETransformingReader) SawDone() bool {
 	return r.sawDone
+}
+
+// SawContent returns true if any assistant content chunk has been forwarded
+// to the client. Used together with SawFinishReason to classify stream
+// endings that lack a [DONE] marker.
+func (r *SSETransformingReader) SawContent() bool {
+	return r.sawContent
+}
+
+// SawFinishReason returns true if the model signaled a completion
+// (non-null finish_reason) within the stream. A stream ending without [DONE]
+// after a finish_reason is benign truncation; without one it is a genuine
+// mid-generation cut.
+func (r *SSETransformingReader) SawFinishReason() bool {
+	return r.sawFinishReason
 }
 
 // getTransformedLine returns the transformed line, using pooled buffers when possible.
@@ -315,6 +394,7 @@ func (r *SSETransformingReader) Read(p []byte) (int, error) {
 		}
 
 		r.trackTransformedSize(transformed)
+		r.trackStreamProgress(transformed)
 
 		r.buffer = transformed
 		r.pos = 0
@@ -381,14 +461,31 @@ func (r *SSETransformingReader) transformLine(line []byte) []byte {
 }
 
 // handleScannerDone is called when the scanner has no more input.
-// It sets r.err and optionally injects error+[DONE] into r.buffer.
+// It sets r.err and optionally injects a terminal event into r.buffer.
+// Classification of a clean EOF (scanner.Err() == nil, no [DONE]):
+//   - finish_reason seen: benign truncation → inject silent [DONE], no error.
+//   - no content at all: empty stream → inject gateway_error + [DONE].
+//   - content seen but no finish_reason: genuine mid-generation cut → keep
+//     interim gateway_error injection (Phase 1 continuation intercepts this
+//     via SawContent/SawFinishReason).
 func (r *SSETransformingReader) handleScannerDone() {
 	switch r.scanner.Err() {
 	case nil:
-		if !r.sawDone {
-			slog.Warn("SSE scanner ended without [DONE] marker, injecting gateway_error",
+		switch {
+		case r.sawDone:
+			// Normal end.
+		case r.sawFinishReason:
+			slog.Debug("SSE scanner ended without [DONE] after finish_reason, injecting silent [DONE]",
+				"has_transformer", r.transformer != nil)
+			r.injectDoneOnly()
+		case !r.sawContent:
+			slog.Warn("SSE scanner ended without [DONE] marker and no content, injecting gateway_error",
+				"has_transformer", r.transformer != nil)
+			r.injectErrorBuffer("upstream stream ended without [DONE]")
+		default:
+			slog.Warn("SSE scanner ended without [DONE] marker mid-generation, injecting gateway_error",
 				"has_transformer", r.transformer != nil,
-				"scanner_error", r.scanner.Err())
+				"saw_content", r.sawContent)
 			r.injectErrorBuffer("upstream stream ended without [DONE]")
 		}
 		r.err = io.EOF
@@ -400,6 +497,14 @@ func (r *SSETransformingReader) handleScannerDone() {
 		slog.Warn("SSE scanner error", "err", r.scanner.Err())
 		r.err = r.scanner.Err()
 	}
+}
+
+// injectDoneOnly buffers a bare [DONE] event without a gateway_error. Used for
+// benign stream endings where the model signaled completion but the upstream
+// omitted the [DONE] marker.
+func (r *SSETransformingReader) injectDoneOnly() {
+	r.buffer = []byte("data: [DONE]\n\n")
+	r.pos = 0
 }
 
 // injectErrorBuffer creates a gateway_error SSE event + [DONE] and places it
@@ -422,9 +527,9 @@ func (r *SSETransformingReader) injectErrorBuffer(message string) {
 		var errMap map[string]any
 		if err := json.Unmarshal(errPayload, &errMap); err != nil {
 			slog.Error("failed to unmarshal error payload for observer", "error", err)
-			r.observer.OnSSEEvent(SSEEvent{Type: "error", Data: map[string]any{"message": message, "type": "gateway_error"}})
+			r.observer.OnSSEEvent(SSEEvent{Type: "error", Data: map[string]any{"message": message, "type": "gateway_error"}, GatewayInjected: true})
 		} else {
-			r.observer.OnSSEEvent(SSEEvent{Type: "error", Data: errMap})
+			r.observer.OnSSEEvent(SSEEvent{Type: "error", Data: errMap, GatewayInjected: true})
 		}
 	}
 }
