@@ -440,16 +440,22 @@ func (g *GovernanceConfig) EffectiveThinkingStreamIdleTimeout() time.Duration {
 // same target with the partial assistant message appended so the client sees
 // the stream keep flowing instead of a gateway_error. Recovery is skipped when
 // a tool call is in flight (arguments are incomplete and cannot be resumed).
+//
+// All fields are optional; see applyGovernanceDefaults for defaults.
 type StreamContinuationConfig struct {
+	// Enabled toggles continuation. Defaults to true.
 	Enabled *bool `json:"enabled,omitempty"`
 	// MaxAttempts is the total number of stream attempts, including the
-	// original. A value of 2 means one continuation retry.
+	// original. A value of 2 means one continuation retry. Defaults to 2 and
+	// is capped at 5.
 	MaxAttempts int `json:"max_attempts,omitempty"`
-	// SameModelOnly forces continuation onto the same target/model rather
-	// than allowing a fallback target to pick up the partial output.
-	SameModelOnly bool `json:"same_model_only,omitempty"`
+	// SameModelOnly restricts continuation to the same target/model. Defaults
+	// to true. Cross-model fallback resume is unsupported; setting to false
+	// opts out of continuation entirely.
+	SameModelOnly *bool `json:"same_model_only,omitempty"`
 	// IncludeReasoning appends partial reasoning_content to the assistant
-	// message so reasoning-capable models resume with full context.
+	// message so reasoning-capable models resume with full context. Defaults to
+	// false.
 	IncludeReasoning bool `json:"include_reasoning,omitempty"`
 }
 
@@ -484,9 +490,14 @@ func (g *GovernanceConfig) StreamContinuationIncludeReasoning() bool {
 }
 
 // StreamContinuationSameModelOnly reports whether continuation is restricted
-// to the same target/model. Defaults to true when the section is absent.
+// to the same target/model. Defaults to true when the section is absent or the
+// field is unset. Continuation currently only re-dispatches the same target
+// (cross-model fallback resume is unsupported), so an explicit false opts out
+// entirely.
 func (g *GovernanceConfig) StreamContinuationSameModelOnly() bool {
-	return g.StreamContinuation == nil || g.StreamContinuation.SameModelOnly
+	return g.StreamContinuation == nil ||
+		g.StreamContinuation.SameModelOnly == nil ||
+		*g.StreamContinuation.SameModelOnly
 }
 
 // SecretsConfig holds sensitive credentials loaded from systemd credential

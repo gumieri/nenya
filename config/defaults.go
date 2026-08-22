@@ -217,6 +217,9 @@ func applyGovernanceDefaults(cfg *Config) {
 	if cfg.Governance.StreamContinuation.MaxAttempts <= 0 {
 		cfg.Governance.StreamContinuation.MaxAttempts = 2
 	}
+	if cfg.Governance.StreamContinuation.SameModelOnly == nil {
+		cfg.Governance.StreamContinuation.SameModelOnly = PtrTo(true)
+	}
 }
 
 var redactPresets = map[string][]string{

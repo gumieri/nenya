@@ -71,6 +71,12 @@ func (p *Proxy) newStreamContinuation(gw *gateway.NenyaGateway, opts streamRespo
 	if opts.sourceFormat == "anthropic" || opts.target.Format == "anthropic" {
 		return nil
 	}
+	// Continuation always re-dispatches the exact same target; cross-model
+	// fallback resume is not supported yet. An explicit same_model_only=false
+	// therefore opts out rather than silently resuming onto a different model.
+	if !gw.Config.Governance.StreamContinuationSameModelOnly() {
+		return nil
+	}
 	return &streamContinuation{
 		capture:          newContinuationCapture(gw.Config.Governance.EffectiveMaxTransformedSSEBytes()),
 		maxAttempts:      maxAttempts,
