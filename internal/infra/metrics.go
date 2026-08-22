@@ -31,12 +31,13 @@ type Metrics struct {
 	windowApplied sync.Map
 	interceptions sync.Map
 
-	rlRejected    sync.Map
-	cooldowns     sync.Map
-	exhausted     sync.Map
-	streamBlocked sync.Map
-	streamStalled sync.Map
-	emptyStreams  sync.Map
+	rlRejected         sync.Map
+	cooldowns          sync.Map
+	exhausted          sync.Map
+	streamBlocked      sync.Map
+	streamStalled      sync.Map
+	emptyStreams       sync.Map
+	streamContinuation sync.Map
 
 	upstreamLatency sync.Map
 	gatewayProcess  sync.Map
@@ -357,6 +358,19 @@ func (m *Metrics) RecordEmptyStream(model, provider string) {
 	}
 	e := getOrCreateEntry(&m.emptyStreams, map[string]string{
 		"model": model, "provider": provider,
+	})
+	e.value.Add(1)
+}
+
+// RecordStreamContinuation increments the stream continuation counter for the
+// given model/provider and outcome reason. reason values: "recovered",
+// "gave_up_tool_call", "gave_up_exhausted", "gave_up_redispatch".
+func (m *Metrics) RecordStreamContinuation(model, provider, reason string) {
+	if m == nil {
+		return
+	}
+	e := getOrCreateEntry(&m.streamContinuation, map[string]string{
+		"model": model, "provider": provider, "reason": reason,
 	})
 	e.value.Add(1)
 }
@@ -989,6 +1003,8 @@ func (m *Metrics) WritePrometheus(w io.Writer) {
 		"Total upstream streams interrupted by timeout or network error.", &m.streamInterrupts)
 	m.writeCounterMap(w, "nenya_empty_stream_total",
 		"Total upstream streams that returned empty body.", &m.emptyStreams)
+	m.writeCounterMap(w, "nenya_stream_continuations_total",
+		"Total upstream stream continuations by outcome reason.", &m.streamContinuation)
 	m.writeCounterMap(w, "nenya_backoff_increments_total",
 		"Total backoff level increments by model.", &m.backoffIncrements)
 

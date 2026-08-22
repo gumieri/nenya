@@ -192,6 +192,7 @@ func TestMetrics_NewMetrics(t *testing.T) {
 		"nenya_agent_targets_exhausted_total",
 		"nenya_stream_blocked_total",
 		"nenya_empty_stream_total",
+		"nenya_stream_continuations_total",
 		"nenya_http_request_duration_seconds",
 		"nenya_upstream_request_duration_seconds",
 		"nenya_gateway_processing_duration_seconds",

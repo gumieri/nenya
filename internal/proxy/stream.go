@@ -411,34 +411,43 @@ func copyStream(ctx context.Context, dst io.Writer, src io.Reader, buf []byte) (
 	}
 }
 
-// streamResponse handles streaming responses from upstream providers.
-// It sets up SSE transformation, monitors for stalls, and streams the response to the client.
-func (p *Proxy) streamResponse(gw *gateway.NenyaGateway, w http.ResponseWriter, r *http.Request, target routing.UpstreamTarget, agentName, sourceFormat string, action upstreamAction, cacheKey string, cooldownDuration time.Duration, payload map[string]any) streamResult {
-	defer action.cancel()
-
-	// When EmptyStreamAsError is enabled, probe the upstream body before writing
-	// headers so we can detect empty streams and fall back to the next target
-	// rather than sending an error SSE chunk to the client.
-	if gw.Config.Governance.EmptyStreamAsError != nil && *gw.Config.Governance.EmptyStreamAsError {
-		firstBuf := make([]byte, 4096)
-		n, readErr := action.resp.Body.Read(firstBuf)
-
-		if n == 0 {
-			_ = action.resp.Body.Close()
-			gw.AgentState.RecordFailure(target, cooldownDuration)
-			gw.Metrics.RecordEmptyStream(target.Model, target.Provider)
-			gw.Logger.Warn("empty upstream stream detected, falling back to next target",
-				"model", target.Model, "provider", target.Provider)
-			if readErr != nil && readErr != io.EOF {
-				gw.Logger.Debug("upstream body read error", "err", readErr)
-			}
-			return streamResult{empty: true}
-		}
-
+// probeEmptyStream returns a non-nil streamResult when the upstream stream is
+// empty and EmptyStreamAsError is enabled, proxying the fallback to the next
+// target. When the stream has data, the first buffered chunk is preserved via a
+// prefixedReadCloser so no bytes are lost.
+func (p *Proxy) probeEmptyStream(gw *gateway.NenyaGateway, action upstreamAction, target routing.UpstreamTarget, cooldownDuration time.Duration) *streamResult {
+	if gw.Config.Governance.EmptyStreamAsError == nil || !*gw.Config.Governance.EmptyStreamAsError {
+		return nil
+	}
+	firstBuf := make([]byte, 4096)
+	n, readErr := action.resp.Body.Read(firstBuf)
+	if n > 0 {
 		action.resp.Body = &prefixedReadCloser{
 			prefix: firstBuf[:n],
 			reader: action.resp.Body,
 		}
+		return nil
+	}
+	_ = action.resp.Body.Close()
+	gw.AgentState.RecordFailure(target, cooldownDuration)
+	gw.Metrics.RecordEmptyStream(target.Model, target.Provider)
+	gw.Logger.Warn("empty upstream stream detected, falling back to next target",
+		"model", target.Model, "provider", target.Provider)
+	if readErr != nil && readErr != io.EOF {
+		gw.Logger.Debug("upstream body read error", "err", readErr)
+	}
+	return &streamResult{empty: true}
+}
+
+// streamResponse handles streaming responses from upstream providers.
+// It sets up SSE transformation, monitors for stalls, and streams the response to the client.
+func (p *Proxy) streamResponse(opts streamResponseOpts, action upstreamAction) streamResult {
+	gw, w, r, target := opts.gw, opts.w, opts.r, opts.target
+	cacheKey, cooldownDuration, payload := opts.cacheKey, opts.cooldown, opts.payload
+	defer action.cancel()
+
+	if res := p.probeEmptyStream(gw, action, target, cooldownDuration); res != nil {
+		return *res
 	}
 
 	routing.CopyHeaders(action.resp.Header, w.Header())
@@ -449,18 +458,73 @@ func (p *Proxy) streamResponse(gw *gateway.NenyaGateway, w http.ResponseWriter, 
 
 	gw.ExtractQuotaFromResponseHeaders(r.Context(), target.Provider, target.AccountName, action.resp.Header)
 
-	transformingReader, contentBuilder, stallR := p.setupTransformingReader(gw, target, agentName, sourceFormat, action, r.Context())
-	if transformingReader == nil {
-		return streamResult{}
-	}
-
 	buf := getStreamBuffer()
 	flushWriter, canFlush := newImmediateFlushWriter(w)
 	dst, captureBuf, tee := p.setupStreamWriter(gw, flushWriter, canFlush, w, cacheKey)
 
-	_, copyErr := copyStream(r.Context(), dst, transformingReader, *buf)
+	// Transparent stream continuation: when the upstream stream is cut
+	// mid-generation (content seen, no finish_reason, no [DONE]), re-dispatch
+	// the same target with the partial assistant message appended so the client
+	// sees the stream keep flowing instead of a gateway_error.
+	cont := p.newStreamContinuation(gw, opts)
+	if cont != nil {
+		contTee := &continuationTee{dst: dst, capture: cont.capture}
+		dst = contTee
+	}
 
-	return p.handleStreamDone(gw, w, target, agentName, action, cacheKey, cooldownDuration, payload, buf, copyErr, captureBuf, tee, contentBuilder, stallR, r.Context())
+	maxAttempts := 1
+	if cont != nil {
+		maxAttempts = cont.maxAttempts
+	}
+
+	for attempt := 0; attempt < maxAttempts; attempt++ {
+		if cont != nil {
+			cont.capture.reset()
+		}
+
+		transformingReader, contentBuilder, stallR := p.setupTransformingReader(gw, target, opts.agentName, opts.sourceFormat, action, r.Context())
+		if transformingReader == nil {
+			putStreamBuffer(buf)
+			return streamResult{}
+		}
+
+		// On all but the final continuation attempt, suppress the cut-error
+		// injection so the stream can end with a plain EOF and be resumed. On
+		// the final attempt we keep the default behavior (inject gateway_error).
+		if cont != nil {
+			transformingReader.SetSuppressCutError(attempt+1 < maxAttempts)
+		}
+
+		_, copyErr := copyStream(r.Context(), dst, transformingReader, *buf)
+
+		if isStreamCut(cont, transformingReader, copyErr) && attempt+1 < maxAttempts {
+			status, newAction := p.tryContinueStream(gw, w, r, opts, target, payload, cooldownDuration, action, cont, stallR, buf)
+			if status == streamContinueOK {
+				action = newAction
+				// The action swap happened for this attempt; the new action's
+				// http response carries the continuation's StatusCode, which is
+				// equal to the original (both should be 200). Ensure the
+				// deferred cancel on streamResponse doesn't leak the previous
+				// action's context.
+				defer action.cancel()
+				continue
+			}
+			return streamResult{}
+		}
+
+		// Final attempt: on a suppressed (non-continuable) cut the reader
+		// already injected its terminator, so finalize without polluting the
+		// response cache with the partial cut stream.
+		if isStreamCut(cont, transformingReader, copyErr) {
+			gw.Metrics.RecordStreamContinuation(target.Model, target.Provider, "gave_up_exhausted")
+			return p.handleStreamDone(gw, w, target, opts.agentName, action, "", cooldownDuration, payload, buf, copyErr, nil, nil, contentBuilder, stallR, r.Context())
+		}
+
+		return p.handleStreamDone(gw, w, target, opts.agentName, action, cacheKey, cooldownDuration, payload, buf, copyErr, captureBuf, tee, contentBuilder, stallR, r.Context())
+	}
+
+	putStreamBuffer(buf)
+	return streamResult{}
 }
 
 // resolveTransformer selects the appropriate SSE transformer based on source format and target format.

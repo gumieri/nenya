@@ -208,6 +208,15 @@ func applyGovernanceDefaults(cfg *Config) {
 	if cfg.Governance.BillingQualityScale == 0 {
 		cfg.Governance.BillingQualityScale = 0.0
 	}
+	if cfg.Governance.StreamContinuation == nil {
+		cfg.Governance.StreamContinuation = &StreamContinuationConfig{}
+	}
+	if cfg.Governance.StreamContinuation.Enabled == nil {
+		cfg.Governance.StreamContinuation.Enabled = PtrTo(true)
+	}
+	if cfg.Governance.StreamContinuation.MaxAttempts <= 0 {
+		cfg.Governance.StreamContinuation.MaxAttempts = 2
+	}
 }
 
 var redactPresets = map[string][]string{

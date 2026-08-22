@@ -126,6 +126,13 @@ type SSETransformingReader struct {
 	// discarding indicates output size limit was exceeded; new events are
 	// dropped except [DONE] which passes through for clean stream end.
 	discarding bool
+
+	// suppressCutError, when true, prevents the interim gateway_error + [DONE]
+	// injection for a genuine mid-generation cut (content seen, no finish_reason,
+	// no [DONE]). Used by the stream continuation mechanism so the proxy can
+	// resume the stream instead of terminating it. When suppressed, the reader
+	// ends with a plain EOF; the proxy decides whether to continue or terminate.
+	suppressCutError bool
 }
 
 type pendingToolCall struct {
@@ -220,6 +227,14 @@ func (r *SSETransformingReader) ResetCounters() {
 	r.sawDone = false
 }
 
+// SetSuppressCutError disables the interim gateway_error + [DONE] injection
+// for a genuine mid-generation cut (content seen, no finish_reason, no [DONE]).
+// When suppressed, the reader ends with a plain EOF; the calling proxy layer
+// decides whether to resume the stream instead of terminating it.
+func (r *SSETransformingReader) SetSuppressCutError(v bool) {
+	r.suppressCutError = v
+}
+
 // trackStreamProgress marks whether assistant content or a completion
 // signal has been observed in the stream. Used together with SawDone to
 // classify no-[DONE] endings: finish_reason without DONE is benign truncation;
@@ -302,6 +317,12 @@ func (r *SSETransformingReader) SawContent() bool {
 // mid-generation cut.
 func (r *SSETransformingReader) SawFinishReason() bool {
 	return r.sawFinishReason
+}
+
+// SuppressCutError returns true if the reader is suppressing the interim
+// gateway_error injection for a genuine mid-generation cut.
+func (r *SSETransformingReader) SuppressCutError() bool {
+	return r.suppressCutError
 }
 
 // getTransformedLine returns the transformed line, using pooled buffers when possible.
@@ -483,6 +504,12 @@ func (r *SSETransformingReader) handleScannerDone() {
 				"has_transformer", r.transformer != nil)
 			r.injectErrorBuffer("upstream stream ended without [DONE]")
 		default:
+			if r.suppressCutError {
+				slog.Debug("SSE scanner ended without [DONE] mid-generation, cut error suppressed for continuation",
+					"has_transformer", r.transformer != nil,
+					"saw_content", r.sawContent)
+				break
+			}
 			slog.Warn("SSE scanner ended without [DONE] marker mid-generation, injecting gateway_error",
 				"has_transformer", r.transformer != nil,
 				"saw_content", r.sawContent)

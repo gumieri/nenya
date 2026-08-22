@@ -331,6 +331,9 @@ type GovernanceConfig struct {
 	// ThinkingStreamIdleTimeoutSeconds is the stall detection timeout during
 	// thinking phases. When 0, disables thinking-aware extension.
 	ThinkingStreamIdleTimeoutSeconds *int `json:"thinking_stream_idle_timeout_seconds,omitempty"`
+	// StreamContinuation controls transparent continuation of upstream SSE
+	// streams that end mid-generation without a [DONE] marker.
+	StreamContinuation *StreamContinuationConfig `json:"stream_continuation,omitempty"`
 }
 
 func (g *GovernanceConfig) RPMSet() bool                  { return wasSet(g.RatelimitMaxRPM) }
@@ -429,6 +432,61 @@ func (g *GovernanceConfig) EffectiveThinkingStreamIdleTimeout() time.Duration {
 		v = 86400
 	}
 	return time.Duration(v) * time.Second
+}
+
+// StreamContinuationConfig controls transparent continuation of upstream SSE
+// streams. When enabled and an upstream stream ends mid-generation (content
+// streamed but no finish_reason and no [DONE]), the gateway re-dispatches the
+// same target with the partial assistant message appended so the client sees
+// the stream keep flowing instead of a gateway_error. Recovery is skipped when
+// a tool call is in flight (arguments are incomplete and cannot be resumed).
+type StreamContinuationConfig struct {
+	Enabled *bool `json:"enabled,omitempty"`
+	// MaxAttempts is the total number of stream attempts, including the
+	// original. A value of 2 means one continuation retry.
+	MaxAttempts int `json:"max_attempts,omitempty"`
+	// SameModelOnly forces continuation onto the same target/model rather
+	// than allowing a fallback target to pick up the partial output.
+	SameModelOnly bool `json:"same_model_only,omitempty"`
+	// IncludeReasoning appends partial reasoning_content to the assistant
+	// message so reasoning-capable models resume with full context.
+	IncludeReasoning bool `json:"include_reasoning,omitempty"`
+}
+
+// StreamContinuationEnabled reports whether stream continuation is enabled.
+func (g *GovernanceConfig) StreamContinuationEnabled() bool {
+	return g.StreamContinuation != nil &&
+		g.StreamContinuation.Enabled != nil &&
+		*g.StreamContinuation.Enabled
+}
+
+// EffectiveStreamContinuationMaxAttempts returns the maximum total stream
+// attempts for continuation. Defaults to 2 (one continuation retry) when
+// unset or non-positive, and is capped at 5 to bound amplification.
+func (g *GovernanceConfig) EffectiveStreamContinuationMaxAttempts() int {
+	const (
+		defaultAttempts = 2
+		maxAttempts     = 5
+	)
+	if g.StreamContinuation == nil || g.StreamContinuation.MaxAttempts <= 0 {
+		return defaultAttempts
+	}
+	if g.StreamContinuation.MaxAttempts > maxAttempts {
+		return maxAttempts
+	}
+	return g.StreamContinuation.MaxAttempts
+}
+
+// StreamContinuationIncludeReasoning reports whether partial reasoning
+// content should be appended on continuation attempts.
+func (g *GovernanceConfig) StreamContinuationIncludeReasoning() bool {
+	return g.StreamContinuation != nil && g.StreamContinuation.IncludeReasoning
+}
+
+// StreamContinuationSameModelOnly reports whether continuation is restricted
+// to the same target/model. Defaults to true when the section is absent.
+func (g *GovernanceConfig) StreamContinuationSameModelOnly() bool {
+	return g.StreamContinuation == nil || g.StreamContinuation.SameModelOnly
 }
 
 // SecretsConfig holds sensitive credentials loaded from systemd credential

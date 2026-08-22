@@ -231,7 +231,21 @@ func (rl *retryLoop) handleActionResult(i int, target routing.UpstreamTarget, ac
 		}
 		return false
 	case actionStream:
-		result := rl.p.streamResponse(rl.gw, rl.w, rl.r, target, rl.opts.AgentName, rl.opts.SourceFormat, action, rl.opts.CacheKey, rl.opts.Cooldown, rl.opts.Payload)
+		result := rl.p.streamResponse(streamResponseOpts{
+			gw:           rl.gw,
+			w:            rl.w,
+			r:            rl.r,
+			target:       target,
+			agentName:    rl.opts.AgentName,
+			sourceFormat: rl.opts.SourceFormat,
+			cacheKey:     rl.opts.CacheKey,
+			cooldown:     rl.opts.Cooldown,
+			payload:      rl.opts.Payload,
+			targets:      rl.opts.Targets,
+			idx:          i,
+			tokenCount:   rl.opts.TokenCount,
+			apiKey:       rl.opts.ApiKey,
+		}, action)
 		if result.empty {
 			rl.ctxLogger.Warn("empty stream from upstream, trying next target",
 				"model", target.Model, "provider", target.Provider)
