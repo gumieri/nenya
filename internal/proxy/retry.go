@@ -394,7 +394,7 @@ func (rl *retryLoop) handleContextLimitError(i int, target routing.UpstreamTarge
 // written to the client). It returns false when all targets are exhausted
 // without sending a complete response, so the caller should respond with 503.
 func (rl *retryLoop) Run() bool {
-	defer rl.trackInFlight()
+	defer rl.trackInFlight()()
 	workingPayload := make(map[string]interface{}, 16)
 retryLoop:
 	for i, target := range rl.opts.Targets {
