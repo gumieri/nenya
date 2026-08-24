@@ -99,7 +99,7 @@ func TestSessionRouterActive(t *testing.T) {
 }
 
 func TestSessionRouterConcurrentAccess(t *testing.T) {
-	sr := NewSessionRouter(512, 1*time.Hour, nil, nil)
+	sr := NewSessionRouter(1024, 1*time.Hour, nil, nil)
 	const goroutines = 16
 	const keysPerGoroutine = 64
 	var wg sync.WaitGroup
@@ -124,4 +124,25 @@ func TestSessionRouterConcurrentAccess(t *testing.T) {
 		}(g)
 	}
 	wg.Wait()
+}
+
+func TestSessionRouterConcurrentEviction(t *testing.T) {
+	sr := NewSessionRouter(128, 1*time.Hour, nil, nil)
+	const goroutines = 8
+	const keysPerGoroutine = 64
+	var wg sync.WaitGroup
+	for g := 0; g < goroutines; g++ {
+		wg.Add(1)
+		go func(g int) {
+			defer wg.Done()
+			for i := 0; i < keysPerGoroutine; i++ {
+				key := fmt.Sprintf("g%d-k%d", g, i)
+				sr.Pin(key, "p1", "m1", "a1", 0)
+			}
+		}(g)
+	}
+	wg.Wait()
+	if active := sr.Active(); active > sr.cap {
+		t.Fatalf("active count %d exceeds cap %d", active, sr.cap)
+	}
 }

@@ -90,6 +90,15 @@ func (r *SessionRouter) Pin(key, provider, model, account string, ttl time.Durat
 	if ttl <= 0 {
 		ttl = r.ttl
 	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.sessions == nil {
+		r.sessions = make(map[string]*sessionState)
+	}
+	// Timestamps are assigned under the lock so LastSeen reflects lock
+	// acquisition order; without this, two goroutines capturing time.Now()
+	// before locking can order the LRU incorrectly and evict an entry that
+	// was pinned more recently.
 	now := r.now()
 	entry := &sessionState{
 		Provider: provider,
@@ -98,13 +107,6 @@ func (r *SessionRouter) Pin(key, provider, model, account string, ttl time.Durat
 		ttl:      ttl,
 		Since:    now,
 		LastSeen: now,
-	}
-
-	r.mu.Lock()
-	defer r.mu.Unlock()
-
-	if r.sessions == nil {
-		r.sessions = make(map[string]*sessionState)
 	}
 	if _, exists := r.sessions[key]; !exists && len(r.sessions) >= r.cap {
 		r.evictLRU()
@@ -128,7 +130,6 @@ func (r *SessionRouter) Promote(key, provider, model, account string, ttl time.D
 	if ttl <= 0 {
 		ttl = r.ttl
 	}
-	now := r.now()
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.sessions == nil {
@@ -139,8 +140,8 @@ func (r *SessionRouter) Promote(key, provider, model, account string, ttl time.D
 		Model:    model,
 		Account:  account,
 		ttl:      ttl,
-		Since:    now,
-		LastSeen: now,
+		Since:    r.now(),
+		LastSeen: r.now(),
 	}
 	r.record("failover")
 	if r.logger != nil {
