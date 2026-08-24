@@ -256,45 +256,8 @@ func (df *DiscoveryFetcher) fetchProviderModels(ctx context.Context, providerNam
 		return nil, fmt.Errorf("discovery parse: %w", err)
 	}
 
-	filtered := make([]DiscoveredModel, 0, len(models))
-	for _, m := range models {
-		if !provider.AllowsModel(m.ID) {
-			logger.Debug("discovery filtered model by allowed_models", "provider", providerName, "model", m.ID)
-			continue
-		}
-		filtered = append(filtered, m)
-	}
-	models = filtered
-
-	if len(provider.AllowedModels) > 0 {
-		fetchedIDs := make(map[string]bool, len(models))
-		for _, m := range models {
-			fetchedIDs[m.ID] = true
-		}
-		for modelID, entry := range config.ModelRegistry {
-			if entry.Provider != providerName {
-				continue
-			}
-			if fetchedIDs[modelID] {
-				continue
-			}
-			if !provider.AllowsModel(modelID) {
-				continue
-			}
-			logger.Debug("discovery backfilled static model", "provider", providerName, "model", modelID)
-			models = append(models, DiscoveredModel{
-				ID:         modelID,
-				Provider:   providerName,
-				Format:     entry.Format,
-				MaxContext: entry.MaxContext,
-				MaxOutput:  entry.MaxOutput,
-				OwnedBy:    "nenya",
-				Metadata: &ModelMetadata{
-					SupportsReasoning: entry.Thinking.Min > 0,
-				},
-			})
-		}
-	}
+	models = filterDiscoveredModels(models, provider, logger)
+	models = backfillStaticModels(models, providerName, provider, logger)
 
 	if strings.EqualFold(providerName, "ollama") {
 		models = df.enrichOllama(ctx, provider.URL, models, logger)
@@ -306,6 +269,57 @@ func (df *DiscoveryFetcher) fetchProviderModels(ctx context.Context, providerNam
 	}
 
 	return models, nil
+}
+
+// filterDiscoveredModels drops discovered models not permitted by the
+// provider's allowed_models allowlist.
+func filterDiscoveredModels(models []DiscoveredModel, provider *config.Provider, logger *slog.Logger) []DiscoveredModel {
+	filtered := make([]DiscoveredModel, 0, len(models))
+	for _, m := range models {
+		if !provider.AllowsModel(m.ID) {
+			logger.Debug("discovery filtered model by allowed_models", "provider", provider.Name, "model", m.ID)
+			continue
+		}
+		filtered = append(filtered, m)
+	}
+	return filtered
+}
+
+// backfillStaticModels re-adds statically-registered models for the provider
+// that the /v1/models endpoint did not advertise, so an allowlist configure
+// with trusted models still exposes them even when discovery omits them.
+func backfillStaticModels(models []DiscoveredModel, providerName string, provider *config.Provider, logger *slog.Logger) []DiscoveredModel {
+	if len(provider.AllowedModels) == 0 {
+		return models
+	}
+	fetchedIDs := make(map[string]bool, len(models))
+	for _, m := range models {
+		fetchedIDs[m.ID] = true
+	}
+	for modelID, entry := range config.ModelRegistry {
+		if entry.Provider != providerName {
+			continue
+		}
+		if fetchedIDs[modelID] {
+			continue
+		}
+		if !provider.AllowsModel(modelID) {
+			continue
+		}
+		logger.Debug("discovery backfilled static model", "provider", providerName, "model", modelID)
+		models = append(models, DiscoveredModel{
+			ID:         modelID,
+			Provider:   providerName,
+			Format:     entry.Format,
+			MaxContext: entry.MaxContext,
+			MaxOutput:  entry.MaxOutput,
+			OwnedBy:    "nenya",
+			Metadata: &ModelMetadata{
+				SupportsReasoning: entry.Thinking.Min > 0,
+			},
+		})
+	}
+	return models
 }
 
 // fetchWithRetry executes the HTTP request with retries and records retry metrics.
