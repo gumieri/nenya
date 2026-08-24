@@ -317,15 +317,18 @@ type GovernanceConfig struct {
 	RoutingCostWeight        float64  `json:"routing_cost_weight"`
 	MaxCostPerRequest        float64  `json:"max_cost_per_request"`
 	EmptyStreamAsError       *bool    `json:"empty_stream_as_error,omitempty"`
-	AutoContextSkip          *bool    `json:"auto_context_skip,omitempty"`
-	AutoReorderByLatency     *bool    `json:"auto_reorder_by_latency,omitempty"`
-	HalfOpenMaxRequests      int      `json:"half_open_max_requests,omitempty"`
-	AutoRetryOnContextLimit  *bool    `json:"auto_retry_on_context_limit,omitempty"`
-	CostMode                 string   `json:"cost_mode,omitempty"`
-	BillingEconomyScale      float64  `json:"billing_economy_scale,omitempty"`
-	BillingQualityScale      float64  `json:"billing_quality_scale,omitempty"`
-	MaxTransformedSSEBytes   int      `json:"max_transformed_sse_bytes,omitempty"`
-	UpstreamTimeoutSeconds   *int     `json:"upstream_timeout_seconds,omitempty"`
+	// EarlyStreamErrorFailover fails over to the next target when the first
+	// SSE event of a stream is an upstream error, before headers are committed.
+	EarlyStreamErrorFailover *bool   `json:"early_stream_error_failover,omitempty"`
+	AutoContextSkip          *bool   `json:"auto_context_skip,omitempty"`
+	AutoReorderByLatency     *bool   `json:"auto_reorder_by_latency,omitempty"`
+	HalfOpenMaxRequests      int     `json:"half_open_max_requests,omitempty"`
+	AutoRetryOnContextLimit  *bool   `json:"auto_retry_on_context_limit,omitempty"`
+	CostMode                 string  `json:"cost_mode,omitempty"`
+	BillingEconomyScale      float64 `json:"billing_economy_scale,omitempty"`
+	BillingQualityScale      float64 `json:"billing_quality_scale,omitempty"`
+	MaxTransformedSSEBytes   int     `json:"max_transformed_sse_bytes,omitempty"`
+	UpstreamTimeoutSeconds   *int    `json:"upstream_timeout_seconds,omitempty"`
 	// StreamIdleTimeoutSeconds is the stall detection timeout for SSE streams.
 	StreamIdleTimeoutSeconds *int `json:"stream_idle_timeout_seconds,omitempty"`
 	// ThinkingStreamIdleTimeoutSeconds is the stall detection timeout during
@@ -336,9 +339,12 @@ type GovernanceConfig struct {
 	StreamContinuation *StreamContinuationConfig `json:"stream_continuation,omitempty"`
 }
 
-func (g *GovernanceConfig) RPMSet() bool                  { return wasSet(g.RatelimitMaxRPM) }
-func (g *GovernanceConfig) TPMSet() bool                  { return wasSet(g.RatelimitMaxTPM) }
-func (g *GovernanceConfig) EmptyStreamAsErrorSet() bool   { return wasSet(g.EmptyStreamAsError) }
+func (g *GovernanceConfig) RPMSet() bool                { return wasSet(g.RatelimitMaxRPM) }
+func (g *GovernanceConfig) TPMSet() bool                { return wasSet(g.RatelimitMaxTPM) }
+func (g *GovernanceConfig) EmptyStreamAsErrorSet() bool { return wasSet(g.EmptyStreamAsError) }
+func (g *GovernanceConfig) EarlyStreamErrorFailoverSet() bool {
+	return wasSet(g.EarlyStreamErrorFailover)
+}
 func (g *GovernanceConfig) AutoContextSkipSet() bool      { return wasSet(g.AutoContextSkip) }
 func (g *GovernanceConfig) AutoReorderByLatencySet() bool { return wasSet(g.AutoReorderByLatency) }
 

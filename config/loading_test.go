@@ -76,6 +76,9 @@ func TestApplyDefaults_Governance(t *testing.T) {
 	if cfg.Context.TruncationKeepLastPct != 25.0 {
 		t.Errorf("expected 25.0, got %f", cfg.Context.TruncationKeepLastPct)
 	}
+	if cfg.Governance.EarlyStreamErrorFailover == nil || !*cfg.Governance.EarlyStreamErrorFailover {
+		t.Errorf("expected EarlyStreamErrorFailover default true, got %v", cfg.Governance.EarlyStreamErrorFailover)
+	}
 }
 
 func TestApplyDefaults_Window(t *testing.T) {
@@ -98,6 +101,25 @@ func TestApplyDefaults_Server(t *testing.T) {
 	}
 	if cfg.Server.UserAgent == "" {
 		t.Error("user agent should have a default")
+	}
+}
+
+func TestMergeGovernance_EarlyStreamErrorFailover(t *testing.T) {
+	base := &Config{}
+	base.Governance.EarlyStreamErrorFailover = PtrTo(true)
+
+	overlay := &Config{}
+	overlay.Governance.EarlyStreamErrorFailover = PtrTo(false)
+	mergeGovernanceBools(base, overlay)
+	if base.Governance.EarlyStreamErrorFailover == nil || *base.Governance.EarlyStreamErrorFailover {
+		t.Errorf("expected overlay false to override, got %v", *base.Governance.EarlyStreamErrorFailover)
+	}
+
+	// Unset overlay leaves base untouched.
+	overlay.Governance.EarlyStreamErrorFailover = nil
+	mergeGovernanceBools(base, overlay)
+	if base.Governance.EarlyStreamErrorFailover == nil || *base.Governance.EarlyStreamErrorFailover {
+		t.Errorf("expected base value preserved, got %v", *base.Governance.EarlyStreamErrorFailover)
 	}
 }
 

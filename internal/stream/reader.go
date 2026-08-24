@@ -600,6 +600,14 @@ func (r *SSETransformingReader) transformSSEData(line []byte) []byte {
 	data := origData
 	parsed := r.tryParseJSON(data)
 
+	// Upstream error payloads routed through a healthy 200 stream (e.g. an
+	// aggregator whose provider leg failed after the stream opened) are tagged
+	// with "error" so observers can record circuit-breaker failures. The error
+	// line itself is still forwarded to the client unchanged below.
+	if IsStreamErrorPayload(parsed) {
+		r.notifySSEObserver(line, parsed, "error")
+	}
+
 	parsed = r.applyStreamFilters(parsed)
 	if r.streamFilter != nil && r.streamFilter.IsBlocked() {
 		return line
@@ -625,9 +633,16 @@ func (r *SSETransformingReader) transformSSEData(line []byte) []byte {
 }
 
 func (r *SSETransformingReader) notifySSEObserver(line []byte, parsed map[string]interface{}, eventType string) {
-	if r.observer != nil {
-		r.observer.OnSSEEvent(SSEEvent{Type: eventType, Raw: line, Data: parsed})
+	if r.observer == nil {
+		return
 	}
+	// Upstream error payloads are already notified with Type "error" when
+	// parsed; suppress the duplicate downstream notify so observers count each
+	// error event exactly once.
+	if eventType == "" && IsStreamErrorPayload(parsed) {
+		return
+	}
+	r.observer.OnSSEEvent(SSEEvent{Type: eventType, Raw: line, Data: parsed})
 }
 
 func (r *SSETransformingReader) tryParseJSON(data []byte) map[string]interface{} {

@@ -38,6 +38,7 @@ type Metrics struct {
 	streamStalled      sync.Map
 	emptyStreams       sync.Map
 	streamContinuation sync.Map
+	streamEarlyErrors  sync.Map
 
 	upstreamLatency sync.Map
 	gatewayProcess  sync.Map
@@ -358,6 +359,19 @@ func (m *Metrics) RecordEmptyStream(model, provider string) {
 	}
 	e := getOrCreateEntry(&m.emptyStreams, map[string]string{
 		"model": model, "provider": provider,
+	})
+	e.value.Add(1)
+}
+
+// RecordEarlyStreamError increments the counter for error events detected at
+// the head of an upstream SSE stream before any content was delivered.
+// outcome values: "failover", "forwarded_last_target".
+func (m *Metrics) RecordEarlyStreamError(model, provider, outcome string) {
+	if m == nil {
+		return
+	}
+	e := getOrCreateEntry(&m.streamEarlyErrors, map[string]string{
+		"model": model, "provider": provider, "outcome": outcome,
 	})
 	e.value.Add(1)
 }
@@ -1005,6 +1019,8 @@ func (m *Metrics) WritePrometheus(w io.Writer) {
 		"Total upstream streams that returned empty body.", &m.emptyStreams)
 	m.writeCounterMap(w, "nenya_stream_continuations_total",
 		"Total upstream stream continuations by outcome reason.", &m.streamContinuation)
+	m.writeCounterMap(w, "nenya_stream_early_errors_total",
+		"Total upstream error events at the head of an SSE stream by outcome.", &m.streamEarlyErrors)
 	m.writeCounterMap(w, "nenya_backoff_increments_total",
 		"Total backoff level increments by model.", &m.backoffIncrements)
 

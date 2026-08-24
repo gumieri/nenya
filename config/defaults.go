@@ -196,9 +196,7 @@ func applyGovernanceDefaults(cfg *Config) {
 			`(?i)\b(shutdown|reboot|poweroff|halt|init\s+0)\b`,
 		}
 	}
-	if !cfg.Governance.EmptyStreamAsErrorSet() {
-		cfg.Governance.EmptyStreamAsError = PtrTo(true)
-	}
+	applyStreamHeadDefaults(&cfg.Governance)
 	if cfg.Governance.CostMode == "" {
 		cfg.Governance.CostMode = "balanced"
 	}
@@ -219,6 +217,18 @@ func applyGovernanceDefaults(cfg *Config) {
 	}
 	if cfg.Governance.StreamContinuation.SameModelOnly == nil {
 		cfg.Governance.StreamContinuation.SameModelOnly = PtrTo(true)
+	}
+}
+
+// applyStreamHeadDefaults ensures the stream-head detection flags used by the
+// proxy's pre-header probe (empty-stream detection and early error failover)
+// default to enabled.
+func applyStreamHeadDefaults(gc *GovernanceConfig) {
+	if !gc.EmptyStreamAsErrorSet() {
+		gc.EmptyStreamAsError = PtrTo(true)
+	}
+	if !gc.EarlyStreamErrorFailoverSet() {
+		gc.EarlyStreamErrorFailover = PtrTo(true)
 	}
 }
 

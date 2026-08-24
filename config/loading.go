@@ -223,6 +223,9 @@ func mergeGovernanceBools(base, overlay *Config) {
 	if og.EmptyStreamAsErrorSet() {
 		bg.EmptyStreamAsError = og.EmptyStreamAsError
 	}
+	if og.EarlyStreamErrorFailoverSet() {
+		bg.EarlyStreamErrorFailover = og.EarlyStreamErrorFailover
+	}
 	if og.AutoContextSkipSet() {
 		bg.AutoContextSkip = og.AutoContextSkip
 	}

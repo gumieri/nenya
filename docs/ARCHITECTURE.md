@@ -567,6 +567,25 @@ When an upstream provider returns `200 OK` with a zero-byte body, the SSE stream
 
 When the flag is disabled, empty streams are treated as a successful response and the client receives a `200 OK` with no SSE events, preserving backward compatibility.
 
+## Early Stream-Error Detection
+
+Some providers return `200 OK` with SSE headers, then immediately emit a terminal error payload inside the stream — e.g. an OpenAI-style `{"error":{"message":"Streaming response failed: [502] ...","type":"server_error"}}` or an Anthropic `event: error` block. Because headers are already committed, Nenya historically forwarded these bytes to the client, interrupting the agent workflow mid-turn instead of failing over. When `governance.early_stream_error_failover` is enabled (default: `true`), Nenya probes the stream head before committing headers:
+
+1. **Probe** — Before `http.Flusher`/`WriteHeader`, the proxy reads the first chunk (up to the body-read buffer size, default 4096 bytes) from the upstream body.
+2. **Classification** — `classifyStreamHead` (`internal/proxy/stream_probe.go`) scans the chunk:
+   - **Empty** — zero bytes → empty-stream path (see above).
+   - **Error** — the first significant line is an OpenAI `{"error":...}`, an `event: error` SSE line, or any data payload carrying a flat `"type"` field ending in `_error` (e.g. `"type":"server_error"`). Content events before the error keep the stream classified as normal.
+   - **Normal** — an SSE `data:` payload or any content chunk → treat the stream as healthy.
+   - **Undetermined** — a partial JSON fragment that cannot yet be classified (no complete line). The stream is treated as normal and bytes are preserved; a true error would still be surfaced via the observer path below.
+3. **Action**
+   - **Error + next target exists** → close the upstream body, cancel the request, record a failure via `AgentState.RecordFailure` (feeding cooldown/circuit breaker), increment `nenya_stream_early_errors_total{model,provider,outcome="failover"}`, and return an empty stream result so the retry loop moves to the next target. The client never sees the error bytes.
+   - **Error + last target** → the error payload is forwarded to the client unchanged and `nenya_stream_early_errors_total{model,provider,outcome="forwarded_last_target"}` is incremented — no infinite failover loop.
+4. **Byte Preservation** — Any bytes read during the probe are replayed through a `prefixedReadCloser` so non-empty/non-error streams are forwarded exactly as received.
+
+**Mid-stream errors (after headers are committed)** are handled separately: `internal/stream/reader.go` classifies data payloads as errors via `IsStreamErrorPayload` (`internal/stream/errors.go`) and notifies the upstream observer with an `"error"` event, so the per-target circuit breaker records failures even when failover at the probe stage already occurred or when the probe was disabled. This keeps cooldown/circuit-breaker state accurate for future requests.
+
+When `early_stream_error_failover` is disabled, the probe still detects empty streams (driven by `empty_stream_as_error`), but SSE error payloads are forwarded to the client untouched.
+
 ## Latency Tracker
 
 `infra.LatencyTracker` tracks per-model response times for latency-aware routing. When `context.auto_reorder_by_latency` is enabled, targets are sorted by historical median latency (fastest first) before routing.

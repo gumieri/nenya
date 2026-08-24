@@ -411,32 +411,90 @@ func copyStream(ctx context.Context, dst io.Writer, src io.Reader, buf []byte) (
 	}
 }
 
-// probeEmptyStream returns a non-nil streamResult when the upstream stream is
-// empty and EmptyStreamAsError is enabled, proxying the fallback to the next
-// target. When the stream has data, the first buffered chunk is preserved via a
-// prefixedReadCloser so no bytes are lost.
-func (p *Proxy) probeEmptyStream(gw *gateway.NenyaGateway, action upstreamAction, target routing.UpstreamTarget, cooldownDuration time.Duration) *streamResult {
-	if gw.Config.Governance.EmptyStreamAsError == nil || !*gw.Config.Governance.EmptyStreamAsError {
+// probeStreamHead reads the first chunk of the upstream stream before any
+// headers are committed to the client and returns a non-nil streamResult when
+// the upstream must be treated as a failure:
+//   - empty body (governance.empty_stream_as_error): fall back to the next target;
+//   - the first SSE event is an upstream error with no content before it
+//     (governance.early_stream_error_failover): fall back to the next target
+//     when one exists; on the last target the error is forwarded unchanged.
+//
+// When the stream is healthy (or the early error is not actionable), the first
+// buffered chunk is preserved via a prefixedReadCloser so no bytes are lost.
+func (p *Proxy) probeStreamHead(gw *gateway.NenyaGateway, action upstreamAction, target routing.UpstreamTarget, cooldownDuration time.Duration, opts streamResponseOpts) *streamResult {
+	probe := headProbeEnabled(gw.Config.Governance)
+	if !probe.next {
 		return nil
 	}
 	firstBuf := make([]byte, 4096)
 	n, readErr := action.resp.Body.Read(firstBuf)
-	if n > 0 {
-		action.resp.Body = &prefixedReadCloser{
-			prefix: firstBuf[:n],
-			reader: action.resp.Body,
+	if n == 0 {
+		if !probe.empty {
+			return nil
 		}
-		return nil
+		_ = action.resp.Body.Close()
+		gw.AgentState.RecordFailure(target, cooldownDuration)
+		gw.Metrics.RecordEmptyStream(target.Model, target.Provider)
+		gw.Logger.Warn("empty upstream stream detected, falling back to next target",
+			"model", target.Model, "provider", target.Provider)
+		if readErr != nil && readErr != io.EOF {
+			gw.Logger.Debug("upstream body read error", "err", readErr)
+		}
+		return &streamResult{empty: true}
 	}
-	_ = action.resp.Body.Close()
-	gw.AgentState.RecordFailure(target, cooldownDuration)
-	gw.Metrics.RecordEmptyStream(target.Model, target.Provider)
-	gw.Logger.Warn("empty upstream stream detected, falling back to next target",
-		"model", target.Model, "provider", target.Provider)
-	if readErr != nil && readErr != io.EOF {
-		gw.Logger.Debug("upstream body read error", "err", readErr)
+
+	chunk := firstBuf[:n]
+	kind := streamHeadKind(headUndetermined)
+	if probe.earlyError {
+		kind = classifyStreamHead(chunk)
 	}
-	return &streamResult{empty: true}
+	if kind == headError && opts.idx+1 < len(opts.targets) {
+		// Fail over before any client byte is committed: close the upstream
+		// body and let the retry loop dispatch the next target. The retry loop
+		// treats result.empty as "try the next target".
+		_ = action.resp.Body.Close()
+		action.cancel()
+		gw.AgentState.RecordFailure(target, cooldownDuration)
+		gw.Metrics.RecordEarlyStreamError(target.Model, target.Provider, "failover")
+		gw.Logger.Warn("upstream error event at stream head, falling back to next target",
+			"model", target.Model, "provider", target.Provider)
+		return &streamResult{empty: true}
+	}
+
+	action.resp.Body = &prefixedReadCloser{
+		prefix: chunk,
+		reader: action.resp.Body,
+	}
+	if kind == headError {
+		// Last (or only) target: the error cannot be failed over, so it is
+		// forwarded to the client as today, but its circuit-breaker impact is
+		// recorded so the provider is de-prioritized on later requests.
+		gw.Metrics.RecordEarlyStreamError(target.Model, target.Provider, "forwarded_last_target")
+		gw.Logger.Warn("upstream error event at stream head, no alternate target; forwarding to client",
+			"model", target.Model, "provider", target.Provider)
+	}
+	return nil
+}
+
+// headProbe reports which stream-head probes are enabled by governance config.
+type headProbe struct {
+	next       bool
+	empty      bool
+	earlyError bool
+}
+
+// headProbeEnabled computes the enabled stream-head probe flags. Probes only
+// run when at least one of the governing config flags is enabled.
+func headProbeEnabled(gc config.GovernanceConfig) headProbe {
+	hp := headProbe{}
+	if gc.EmptyStreamAsError != nil && *gc.EmptyStreamAsError {
+		hp.empty = true
+	}
+	if gc.EarlyStreamErrorFailover != nil && *gc.EarlyStreamErrorFailover {
+		hp.earlyError = true
+	}
+	hp.next = hp.empty || hp.earlyError
+	return hp
 }
 
 // streamResponse handles streaming responses from upstream providers.
@@ -446,7 +504,7 @@ func (p *Proxy) streamResponse(opts streamResponseOpts, action upstreamAction) s
 	cacheKey, cooldownDuration, payload := opts.cacheKey, opts.cooldown, opts.payload
 	defer action.cancel()
 
-	if res := p.probeEmptyStream(gw, action, target, cooldownDuration); res != nil {
+	if res := p.probeStreamHead(gw, action, target, cooldownDuration, opts); res != nil {
 		return *res
 	}
 
