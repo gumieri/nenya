@@ -60,7 +60,7 @@ func TestBuildContinuationMessage_ToolCallInFlight(t *testing.T) {
 	}
 
 	cont := &streamContinuation{
-		capture:         newContinuationCapture(1024),
+		capture:          newContinuationCapture(1024),
 		includeReasoning: true,
 	}
 	cont.capture.buf.WriteString("data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"function\":{\"name\":\"add\",\"arguments\":\"{\"}}]}}]}\n\n")
@@ -82,7 +82,7 @@ func TestBuildContinuationMessage_ContentPartial(t *testing.T) {
 	}
 
 	cont := &streamContinuation{
-		capture:         newContinuationCapture(1024),
+		capture:          newContinuationCapture(1024),
 		includeReasoning: true,
 	}
 	cont.capture.buf.WriteString("data: {\"choices\":[{\"delta\":{\"content\":\"hello\"}}]}\n\ndata: [DONE]\n\n")
@@ -110,7 +110,7 @@ func TestBuildContinuationMessage_CaptureExceededGivesUp(t *testing.T) {
 	}
 
 	cont := &streamContinuation{
-		capture:         newContinuationCapture(4),
+		capture:          newContinuationCapture(4),
 		includeReasoning: true,
 	}
 	cont.capture.exceeded = true

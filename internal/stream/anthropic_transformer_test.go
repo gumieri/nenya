@@ -84,8 +84,8 @@ func TestAnthropicTransformer_MessageStartCacheBreakdown(t *testing.T) {
 				},
 				"iterations": []interface{}{
 					map[string]interface{}{
-						"iteration":           1,
-						"input_tokens":        float64(1000),
+						"iteration":                   1,
+						"input_tokens":                float64(1000),
 						"cache_creation_input_tokens": float64(54947),
 					},
 				},
@@ -299,7 +299,7 @@ func TestAnthropicTransformer_ToolUseContentBlock(t *testing.T) {
 	tcs = delta["tool_calls"].([]interface{})
 	tc = tcs[0].(map[string]interface{})
 	fn = tc["function"].(map[string]interface{})
-if fn["arguments"] != `{"city": "` {
+	if fn["arguments"] != `{"city": "` {
 		t.Errorf("expected partial json, got %v", fn["arguments"])
 	}
 }

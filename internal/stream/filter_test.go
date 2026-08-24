@@ -4,58 +4,58 @@ import "testing"
 
 func TestExtractThinkingSignal(t *testing.T) {
 	tests := []struct {
-		name           string
-		chunk          map[string]interface{}
-		wantActive     bool
-		wantHasSignal  bool
+		name          string
+		chunk         map[string]interface{}
+		wantActive    bool
+		wantHasSignal bool
 	}{
 		{
-			name:           "empty delta reasoning content",
-			chunk:          map[string]interface{}{"choices": []interface{}{map[string]interface{}{"delta": map[string]interface{}{"reasoning_content": ""}}}},
-			wantActive:     false,
-			wantHasSignal:  true,
+			name:          "empty delta reasoning content",
+			chunk:         map[string]interface{}{"choices": []interface{}{map[string]interface{}{"delta": map[string]interface{}{"reasoning_content": ""}}}},
+			wantActive:    false,
+			wantHasSignal: true,
 		},
 		{
-			name:           "non-empty delta reasoning content",
-			chunk:          map[string]interface{}{"choices": []interface{}{map[string]interface{}{"delta": map[string]interface{}{"reasoning_content": "thinking"}}}},
-			wantActive:     true,
-			wantHasSignal:  true,
+			name:          "non-empty delta reasoning content",
+			chunk:         map[string]interface{}{"choices": []interface{}{map[string]interface{}{"delta": map[string]interface{}{"reasoning_content": "thinking"}}}},
+			wantActive:    true,
+			wantHasSignal: true,
 		},
 		{
-			name:           "anthropic content_block_start thinking",
-			chunk:          map[string]interface{}{"type": "content_block_start", "index": 0, "content_block": map[string]interface{}{"type": "thinking", "text": "foo"}},
-			wantActive:     true,
-			wantHasSignal:  true,
+			name:          "anthropic content_block_start thinking",
+			chunk:         map[string]interface{}{"type": "content_block_start", "index": 0, "content_block": map[string]interface{}{"type": "thinking", "text": "foo"}},
+			wantActive:    true,
+			wantHasSignal: true,
 		},
 		{
-			name:           "anthropic content_block_delta thinking_delta",
-			chunk:          map[string]interface{}{"type": "content_block_delta", "index": 0, "delta": map[string]interface{}{"type": "thinking_delta", "text": "bar"}},
-			wantActive:     true,
-			wantHasSignal:  true,
+			name:          "anthropic content_block_delta thinking_delta",
+			chunk:         map[string]interface{}{"type": "content_block_delta", "index": 0, "delta": map[string]interface{}{"type": "thinking_delta", "text": "bar"}},
+			wantActive:    true,
+			wantHasSignal: true,
 		},
 		{
-			name:           "anthropic content_block_start text",
-			chunk:          map[string]interface{}{"type": "content_block_start", "content_block": map[string]interface{}{"type": "text", "text": "hello"}},
-			wantActive:     false,
-			wantHasSignal:  true,
+			name:          "anthropic content_block_start text",
+			chunk:         map[string]interface{}{"type": "content_block_start", "content_block": map[string]interface{}{"type": "text", "text": "hello"}},
+			wantActive:    false,
+			wantHasSignal: true,
 		},
 		{
-			name:           "anthropic content_block_start tool_use",
-			chunk:          map[string]interface{}{"type": "content_block_start", "content_block": map[string]interface{}{"type": "tool_use", "id": "123"}},
-			wantActive:     false,
-			wantHasSignal:  true,
+			name:          "anthropic content_block_start tool_use",
+			chunk:         map[string]interface{}{"type": "content_block_start", "content_block": map[string]interface{}{"type": "tool_use", "id": "123"}},
+			wantActive:    false,
+			wantHasSignal: true,
 		},
 		{
-			name:           "fallback chunk",
-			chunk:          map[string]interface{}{"foo": "bar"},
-			wantActive:     false,
-			wantHasSignal:  false,
+			name:          "fallback chunk",
+			chunk:         map[string]interface{}{"foo": "bar"},
+			wantActive:    false,
+			wantHasSignal: false,
 		},
 		{
-			name:           "nil chunk",
-			chunk:          nil,
-			wantActive:     false,
-			wantHasSignal:  false,
+			name:          "nil chunk",
+			chunk:         nil,
+			wantActive:    false,
+			wantHasSignal: false,
 		},
 	}
 	for _, tt := range tests {

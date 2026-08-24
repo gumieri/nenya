@@ -71,65 +71,65 @@ func TestBuildProviderAllows(t *testing.T) {
 
 func TestIsModelAllowed(t *testing.T) {
 	providerAllows := map[string][]*regexp.Regexp{
-		"openai": {regexp.MustCompile("gpt-\\d+"), regexp.MustCompile("gpt-4")},
+		"openai":    {regexp.MustCompile("gpt-\\d+"), regexp.MustCompile("gpt-4")},
 		"anthropic": {regexp.MustCompile("claude-.*")},
 	}
 
 	tests := []struct {
-		name          string
+		name           string
 		providerAllows map[string][]*regexp.Regexp
-		provider      string
-		modelID       string
-		wantAllowed   bool
+		provider       string
+		modelID        string
+		wantAllowed    bool
 	}{
 		{
-			name:          "nil allows allows all",
+			name:           "nil allows allows all",
 			providerAllows: nil,
-			provider:      "openai",
-			modelID:       "any-model",
-			wantAllowed:   true,
+			provider:       "openai",
+			modelID:        "any-model",
+			wantAllowed:    true,
 		},
 		{
-			name:          "empty allows allows all",
+			name:           "empty allows allows all",
 			providerAllows: map[string][]*regexp.Regexp{},
-			provider:      "openai",
-			modelID:       "any-model",
-			wantAllowed:   true,
+			provider:       "openai",
+			modelID:        "any-model",
+			wantAllowed:    true,
 		},
 		{
-			name:          "provider not in allows",
+			name:           "provider not in allows",
 			providerAllows: providerAllows,
-			provider:      "google",
-			modelID:       "gemini-pro",
-			wantAllowed:   true,
+			provider:       "google",
+			modelID:        "gemini-pro",
+			wantAllowed:    true,
 		},
 		{
-			name:          "exact match in allowed list",
+			name:           "exact match in allowed list",
 			providerAllows: providerAllows,
-			provider:      "openai",
-			modelID:       "gpt-4",
-			wantAllowed:   true,
+			provider:       "openai",
+			modelID:        "gpt-4",
+			wantAllowed:    true,
 		},
 		{
-			name:          "regex match in allowed list",
+			name:           "regex match in allowed list",
 			providerAllows: providerAllows,
-			provider:      "openai",
-			modelID:       "gpt-3.5",
-			wantAllowed:   true,
+			provider:       "openai",
+			modelID:        "gpt-3.5",
+			wantAllowed:    true,
 		},
 		{
-			name:          "no match in allowed list",
+			name:           "no match in allowed list",
 			providerAllows: providerAllows,
-			provider:      "openai",
-			modelID:       "claude-3",
-			wantAllowed:   false,
+			provider:       "openai",
+			modelID:        "claude-3",
+			wantAllowed:    false,
 		},
 		{
-			name:          "different provider regex match",
+			name:           "different provider regex match",
 			providerAllows: providerAllows,
-			provider:      "anthropic",
-			modelID:       "claude-3-opus",
-			wantAllowed:   true,
+			provider:       "anthropic",
+			modelID:        "claude-3-opus",
+			wantAllowed:    true,
 		},
 	}
 

@@ -2444,9 +2444,9 @@ func TestAnthropicAdapter_AutomaticCachingMode(t *testing.T) {
 			},
 		}
 		opts := CacheOpts{
-			System:   true,
-			Tools:    true,
-			Messages: true,
+			System:    true,
+			Tools:     true,
+			Messages:  true,
 			GlobalTTL: "ephemeral",
 		}
 		result := a.ConvertOpenAIToAnthropicBody(openai, "claude-3", false, opts)
