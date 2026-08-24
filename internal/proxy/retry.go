@@ -185,6 +185,11 @@ type retryLoop struct {
 	summarizedPayload map[string]interface{}
 	attempt           int
 	quotaExhausted    bool
+	// lastStreamErr holds the final transport-level stream read error observed
+	// across targets (distinct from an empty stream). Its detail is logged, not
+	// echoed to the client after Exhausted(), to avoid leaking internal
+	// network topology.
+	lastStreamErr error
 }
 
 // trackInFlight increments the in-flight gauge for the first target in
@@ -249,6 +254,14 @@ func (rl *retryLoop) handleActionResult(i int, target routing.UpstreamTarget, ac
 		if result.empty {
 			rl.ctxLogger.Warn("empty stream from upstream, trying next target",
 				"model", target.Model, "provider", target.Provider)
+			return false
+		}
+		if result.err != nil {
+			// Transport-level failure before any stream bytes. Fail over to the
+			// next target; on the last target Exhausted() surfaces the error.
+			rl.lastStreamErr = result.err
+			rl.ctxLogger.Warn("stream read error from upstream, trying next target",
+				"err", result.err, "model", target.Model, "provider", target.Provider)
 			return false
 		}
 		return true
@@ -449,6 +462,13 @@ func (rl *retryLoop) Exhausted() {
 		errType = ErrorTypeProvider
 		message = "All upstream targets exhausted"
 	}
+	if rl.lastStreamErr != nil {
+		// Last target died from a transport-level stream read error rather than
+		// an empty stream. Log the cause for operators; the client message
+		// stays generic so raw error text does not leak network topology.
+		rl.ctxLogger.Error("last upstream target failed with stream read error",
+			"err", rl.lastStreamErr)
+	}
 	if rl.stream {
 		writeGatewayStreamError(rl.w, http.StatusServiceUnavailable, errType, message)
 	} else {
@@ -502,6 +522,25 @@ func handleUpstreamResponse(ctxLogger *slog.Logger, resp *http.Response, cancel 
 		return upstreamAction{kind: actionStream, resp: resp, cancel: cancel}
 	}
 	return upstreamAction{kind: actionResponse, resp: resp, cancel: cancel}
+}
+
+// upstreamRequestContext builds the context for an outbound upstream call.
+// Streaming requests use an unbounded cancelable context — the stream idle
+// stall reader enforces inactivity limits — while non-streaming calls honor
+// the provider's TimeoutSeconds when set, falling back to the governance
+// upstream timeout and finally an unbounded context.
+func upstreamRequestContext(base context.Context, gw *gateway.NenyaGateway, target routing.UpstreamTarget, streaming bool) (context.Context, context.CancelFunc) {
+	if streaming {
+		return context.WithCancel(base)
+	}
+	if pr, ok := gw.Providers[target.Provider]; ok && pr.TimeoutSeconds > 0 {
+		return context.WithTimeout(base, time.Duration(pr.TimeoutSeconds)*time.Second)
+	}
+	timeout := gw.Config.Governance.EffectiveUpstreamTimeout()
+	if timeout > 0 {
+		return context.WithTimeout(base, timeout)
+	}
+	return context.WithCancel(base)
 }
 
 func resolveCacheSalt(apiKey *config.ApiKey, agentName string, cfg *config.Config) string {
@@ -567,22 +606,9 @@ func (p *Proxy) prepareAndSend(gw *gateway.NenyaGateway,
 
 	logRequestIfDebug(r.Context(), ctxLogger, req, target.URL, transformedBody)
 
-	var upstreamCtx context.Context
-	var upstreamCancel context.CancelFunc
-	if streaming {
-		upstreamCtx, upstreamCancel = context.WithCancel(r.Context())
-	} else {
-		if pr, ok := gw.Providers[target.Provider]; ok && pr.TimeoutSeconds > 0 {
-			upstreamCtx, upstreamCancel = context.WithTimeout(r.Context(), time.Duration(pr.TimeoutSeconds)*time.Second)
-		} else {
-			timeout := gw.Config.Governance.EffectiveUpstreamTimeout()
-			if timeout > 0 {
-				upstreamCtx, upstreamCancel = context.WithTimeout(r.Context(), timeout)
-			} else {
-				upstreamCtx, upstreamCancel = context.WithCancel(r.Context())
-			}
-		}
-	}
+	// Streaming keeps an unbounded context (bounded by the stream idle stall
+	// reader); non-streaming calls are bounded by the provider timeout.
+	upstreamCtx, upstreamCancel := upstreamRequestContext(r.Context(), gw, target, streaming)
 	req = req.WithContext(upstreamCtx)
 
 	startTime := time.Now()

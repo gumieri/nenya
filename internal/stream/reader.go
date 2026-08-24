@@ -632,6 +632,9 @@ func (r *SSETransformingReader) transformSSEData(line []byte) []byte {
 	return result
 }
 
+// notifySSEObserver forwards a parsed SSE event to the registered observer.
+// Events already classified and notified as upstream errors (eventType "error")
+// are suppressed here so observers count each error exactly once.
 func (r *SSETransformingReader) notifySSEObserver(line []byte, parsed map[string]interface{}, eventType string) {
 	if r.observer == nil {
 		return

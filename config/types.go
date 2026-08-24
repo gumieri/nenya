@@ -342,6 +342,9 @@ type GovernanceConfig struct {
 func (g *GovernanceConfig) RPMSet() bool                { return wasSet(g.RatelimitMaxRPM) }
 func (g *GovernanceConfig) TPMSet() bool                { return wasSet(g.RatelimitMaxTPM) }
 func (g *GovernanceConfig) EmptyStreamAsErrorSet() bool { return wasSet(g.EmptyStreamAsError) }
+
+// EarlyStreamErrorFailoverSet reports whether EarlyStreamErrorFailover was
+// explicitly set in config (as opposed to defaulted by applyGovernanceDefaults).
 func (g *GovernanceConfig) EarlyStreamErrorFailoverSet() bool {
 	return wasSet(g.EarlyStreamErrorFailover)
 }

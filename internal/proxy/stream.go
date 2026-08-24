@@ -26,6 +26,9 @@ import (
 // This is a balanced tradeoff between allocation overhead and per-read throughput.
 const (
 	streamBufferSize = 32 * 1024
+	// streamHeadBufferSize bounds the probe read for the pre-header stream-head
+	// check; enough to classify the opening SSE events of typical upstreams.
+	streamHeadBufferSize = 4096
 	// TokenDirectionReasoning is the direction label for reasoning token metrics
 	TokenDirectionReasoning = "reasoning"
 )
@@ -99,9 +102,16 @@ type stallReader struct {
 	stalled         bool
 	stallCh         chan struct{}
 	closeOnce       sync.Once
+	srcOnce         sync.Once
+	srcCloser       io.Closer
+	srcErr          error
 	ch              chan readResult
 	remainBuf       []byte
 	remainPos       int
+	// pendingErr retains a terminal read error (EOF or transport failure) seen
+	// by the background reader so it is returned only after buffered bytes have
+	// been drained, never deadlocking or dropping the stream tail.
+	pendingErr error
 }
 
 // activeTimeout returns the appropriate timeout based on the current thinking state.
@@ -147,8 +157,68 @@ func newStallReader(ctx context.Context, src io.Reader, timeout, thinkingTimeout
 		sr.mu.Unlock()
 		sr.closeOnce.Do(func() { close(sr.stallCh) })
 	})
+	if closer, ok := src.(io.Closer); ok {
+		sr.srcCloser = closer
+	}
 	go sr.readLoop(ctx, src)
 	return sr
+}
+
+// Close releases the upstream stream source. Idempotent and safe to call
+// concurrently with Read; the background read goroutine observes the closed
+// source and terminates on its next read. The stall signal is also fired so a
+// Read blocked waiting on data wakes promptly. The srcCloser.Close() error is
+// returned (first call wins).
+func (sr *stallReader) Close() error {
+	sr.srcOnce.Do(func() {
+		if sr.srcCloser != nil {
+			sr.srcErr = sr.srcCloser.Close()
+		}
+	})
+	sr.mu.Lock()
+	if !sr.stalled {
+		sr.stalled = true
+	}
+	sr.mu.Unlock()
+	sr.closeOnce.Do(func() { close(sr.stallCh) })
+	return sr.srcErr
+}
+
+// DrainBuffered releases pooled resources when a stream is abandoned
+// (failover/abort) so neither a queued read-ahead result nor an unread tail is
+// held until the request context cancels. Also drops any buffered remainder so
+// its backing slice is eligible for collection.
+//
+// The abort paths close the upstream source before calling this, so the
+// background reader's in-flight read is unblocked and its terminal result is
+// imminent; a short bounded receive after the non-blocking sweep catches it and
+// returns its pooled buffer instead of stranding it.
+func (sr *stallReader) DrainBuffered() {
+	sr.mu.Lock()
+	sr.remainBuf = nil
+	sr.remainPos = 0
+	sr.mu.Unlock()
+	release := func(rr readResult) {
+		if rr.poolBufPtr != nil {
+			putStreamBuffer(rr.poolBufPtr)
+		}
+	}
+	for {
+		select {
+		case rr := <-sr.ch:
+			release(rr)
+		default:
+			goto swept
+		}
+	}
+swept:
+	t := time.NewTimer(50 * time.Millisecond)
+	defer t.Stop()
+	select {
+	case rr := <-sr.ch:
+		release(rr)
+	case <-t.C:
+	}
 }
 
 func (sr *stallReader) readLoop(ctx context.Context, src io.Reader) {
@@ -181,13 +251,17 @@ func (sr *stallReader) readLoop(ctx context.Context, src io.Reader) {
 // Read reads data from the upstream source, buffering any excess bytes from a
 // single readResult that do not fit in the caller's buffer. Buffered bytes are
 // returned on subsequent Read calls before reading from the channel again.
+//
+// A terminal error delivered by the background reader (e.g. io.EOF) is retained
+// and returned only after every buffered byte has been served, so a caller that
+// consumes data and its terminating error from the same upstream read never
+// loses the tail or deadlocks waiting for a second channel message.
 func (sr *stallReader) Read(p []byte) (int, error) {
 	sr.mu.Lock()
 	if sr.stalled {
 		sr.mu.Unlock()
 		return 0, errStreamStalled
 	}
-	sr.mu.Unlock()
 
 	if sr.remainPos < len(sr.remainBuf) {
 		n := copy(p, sr.remainBuf[sr.remainPos:])
@@ -196,45 +270,80 @@ func (sr *stallReader) Read(p []byte) (int, error) {
 			sr.remainBuf = nil
 			sr.remainPos = 0
 		}
+		// Serving a buffered tail is still stream activity; keep the idle
+		// deadline coherent so a slow consumer trickling out a large remainder
+		// is not spuriously classified as a stalled upstream.
+		if !sr.stalled {
+			sr.timer.Reset(sr.activeTimeout())
+		}
+		sr.mu.Unlock()
 		return n, nil
 	}
+
+	if sr.pendingErr != nil {
+		err := sr.pendingErr
+		sr.mu.Unlock()
+		return 0, err
+	}
+	sr.mu.Unlock()
 
 	select {
 	case <-sr.stallCh:
 		return 0, errStreamStalled
 	case rr := <-sr.ch:
-		if rr.poolBufPtr != nil {
-			defer putStreamBuffer(rr.poolBufPtr)
-		}
-		sr.mu.Lock()
-		stalled := sr.stalled
-		if !stalled && len(rr.data) > 0 {
-			sr.timer.Reset(sr.activeTimeout())
-		}
-		sr.mu.Unlock()
-		if stalled {
-			return 0, errStreamStalled
-		}
-		n := copy(p, rr.data)
-		remaining := len(rr.data) - n
-		if remaining < 0 {
-			remaining = 0
-		}
-		if n < len(rr.data) {
-			sr.remainBuf = make([]byte, remaining)
-			copy(sr.remainBuf, rr.data[n:])
-			sr.remainPos = 0
-		}
-		return n, rr.err
+		return sr.serveResult(p, rr)
 	}
+}
+
+// serveResult relays a readResult produced by the background reader, retaining
+// a terminal error in pendingErr and re-buffering any head bytes that do not
+// fit the caller's buffer. Shared tail state is updated under sr.mu so a
+// concurrent DrainBuffered/DrainPending never observes a half-updated
+// remainBuf.
+func (sr *stallReader) serveResult(p []byte, rr readResult) (int, error) {
+	if rr.poolBufPtr != nil {
+		defer putStreamBuffer(rr.poolBufPtr)
+	}
+	sr.mu.Lock()
+	stalled := sr.stalled
+	if rr.err != nil {
+		sr.pendingErr = rr.err
+	}
+	if !stalled && len(rr.data) > 0 {
+		sr.timer.Reset(sr.activeTimeout())
+	}
+	if stalled {
+		sr.mu.Unlock()
+		return 0, errStreamStalled
+	}
+	n := copy(p, rr.data)
+	remaining := len(rr.data) - n
+	if remaining < 0 {
+		remaining = 0
+	}
+	buffered := remaining > 0
+	if buffered {
+		sr.remainBuf = make([]byte, remaining)
+		copy(sr.remainBuf, rr.data[n:])
+		sr.remainPos = 0
+	}
+	sr.mu.Unlock()
+	if buffered {
+		// Tail buffered: serve it before reporting the terminal error.
+		return n, nil
+	}
+	// Whole result fits the caller's buffer: report data and its terminal
+	// error together (standard Read contract), with pendingErr as a backup
+	// for callers that already consumed the stream head.
+	return n, rr.err
 }
 
 // Stop stops the stall reader timer and marks the reader as stalled.
 // Safe to call multiple times. The closeOnce.Do pattern ensures the channel
 // is closed exactly once even when Stop races with the timer callback.
 func (sr *stallReader) Stop() {
-	sr.timer.Stop()
 	sr.mu.Lock()
+	sr.timer.Stop()
 	if !sr.stalled {
 		sr.stalled = true
 		sr.mu.Unlock()
@@ -250,11 +359,13 @@ func (sr *stallReader) DrainPending(timeout time.Duration) (int, error) {
 	sr.closeOnce.Do(func() { close(sr.stallCh) })
 
 	total := 0
+	sr.mu.Lock()
 	if sr.remainPos < len(sr.remainBuf) {
 		total += len(sr.remainBuf) - sr.remainPos
 		sr.remainBuf = nil
 		sr.remainPos = 0
 	}
+	sr.mu.Unlock()
 
 	// Block on first message (or timeout)
 	t := time.NewTimer(timeout)
@@ -295,8 +406,11 @@ func isClientWriteError(err error) bool {
 }
 
 // streamResult carries the outcome of streamResponse back to the retry loop.
+// empty signals a zero-byte upstream stream; err signals a transport-level read
+// failure before any stream bytes were produced (distinct from empty).
 type streamResult struct {
 	empty bool
+	err   error
 }
 
 // prefixedReadCloser wraps an io.Reader with a prefix buffer that is
@@ -384,31 +498,48 @@ func copyStream(ctx context.Context, dst io.Writer, src io.Reader, buf []byte) (
 	for {
 		nr, rerr := src.Read(buf)
 		if nr > 0 {
-			nw, werr := dst.Write(buf[:nr])
+			var werr error
+			written, werr = writeStreamChunk(ctx, dst, buf[:nr], written)
 			if werr != nil {
-				if ctx.Err() != nil {
-					return written, ctx.Err()
-				}
-				return written, fmt.Errorf("%w: %v", errClientWriteSide, werr)
+				return written, werr
 			}
-			if nr != nw {
-				return written, io.ErrShortWrite
-			}
-			written += int64(nw)
 		}
 		if rerr != nil {
-			if rerr == io.EOF {
-				return written, nil
-			}
-			if errors.Is(rerr, context.Canceled) || errors.Is(rerr, context.DeadlineExceeded) {
-				return written, rerr
-			}
-			return written, fmt.Errorf("%w: %v", errUpstreamReadSide, rerr)
+			return written, classifyStreamReadErr(rerr)
 		}
 		if ctx.Err() != nil {
 			return written, ctx.Err()
 		}
 	}
+}
+
+// writeStreamChunk writes a single read chunk to dst, folding client-side write
+// failures into the client-side error sentinel and tracking progress.
+func writeStreamChunk(ctx context.Context, dst io.Writer, chunk []byte, written int64) (int64, error) {
+	nw, werr := dst.Write(chunk)
+	if werr != nil {
+		if ctx.Err() != nil {
+			return written, ctx.Err()
+		}
+		return written, fmt.Errorf("%w: %v", errClientWriteSide, werr)
+	}
+	if len(chunk) != nw {
+		return written, io.ErrShortWrite
+	}
+	return written + int64(nw), nil
+}
+
+// classifyStreamReadErr maps an upstream stream read error to its sentinel,
+// translating io.EOF into a clean (nil) termination and preserving context
+// cancellation as-is.
+func classifyStreamReadErr(rerr error) error {
+	if rerr == io.EOF {
+		return nil
+	}
+	if errors.Is(rerr, context.Canceled) || errors.Is(rerr, context.DeadlineExceeded) {
+		return rerr
+	}
+	return fmt.Errorf("%w: %v", errUpstreamReadSide, rerr)
 }
 
 // probeStreamHead reads the first chunk of the upstream stream before any
@@ -421,26 +552,32 @@ func copyStream(ctx context.Context, dst io.Writer, src io.Reader, buf []byte) (
 //
 // When the stream is healthy (or the early error is not actionable), the first
 // buffered chunk is preserved via a prefixedReadCloser so no bytes are lost.
-func (p *Proxy) probeStreamHead(gw *gateway.NenyaGateway, action upstreamAction, target routing.UpstreamTarget, cooldownDuration time.Duration, opts streamResponseOpts) *streamResult {
+//
+// opts is passed whole rather than extracting idx/targets so the receiver stays
+// within the project's <=5 parameter guideline (see AGENTS.md §11).
+//
+// stallR, when non-nil, is the stall-bounded reader built around the upstream
+// body; the probe reads through it so stream_idle_timeout_seconds bounds the
+// head read as well, and the stream phase must keep using the same reader so
+// read-ahead bytes buffered by its goroutine are not lost.
+func (p *Proxy) probeStreamHead(gw *gateway.NenyaGateway, action upstreamAction, target routing.UpstreamTarget, cooldownDuration time.Duration, opts streamResponseOpts, stallR *stallReader) *streamResult {
 	probe := headProbeEnabled(gw.Config.Governance)
-	if !probe.next {
+	if !probe.enabled {
 		return nil
 	}
-	firstBuf := make([]byte, 4096)
-	n, readErr := action.resp.Body.Read(firstBuf)
+	// Single use, once per stream request: a pooled buffer would only shift a
+	// one-time allocation off the request's stack frame without measurable gain.
+	firstBuf := make([]byte, streamHeadBufferSize)
+	bodyReader := action.resp.Body
+	if stallR != nil {
+		bodyReader = stallR
+	}
+	n, readErr := bodyReader.Read(firstBuf)
 	if n == 0 {
-		if !probe.empty {
-			return nil
+		if res := p.handleStreamHeadNoData(gw, action, target, cooldownDuration, probe.empty, readErr, stallR); res != nil {
+			return res
 		}
-		_ = action.resp.Body.Close()
-		gw.AgentState.RecordFailure(target, cooldownDuration)
-		gw.Metrics.RecordEmptyStream(target.Model, target.Provider)
-		gw.Logger.Warn("empty upstream stream detected, falling back to next target",
-			"model", target.Model, "provider", target.Provider)
-		if readErr != nil && readErr != io.EOF {
-			gw.Logger.Debug("upstream body read error", "err", readErr)
-		}
-		return &streamResult{empty: true}
+		return nil
 	}
 
 	chunk := firstBuf[:n]
@@ -449,21 +586,16 @@ func (p *Proxy) probeStreamHead(gw *gateway.NenyaGateway, action upstreamAction,
 		kind = classifyStreamHead(chunk)
 	}
 	if kind == headError && opts.idx+1 < len(opts.targets) {
-		// Fail over before any client byte is committed: close the upstream
-		// body and let the retry loop dispatch the next target. The retry loop
-		// treats result.empty as "try the next target".
-		_ = action.resp.Body.Close()
-		action.cancel()
-		gw.AgentState.RecordFailure(target, cooldownDuration)
-		gw.Metrics.RecordEarlyStreamError(target.Model, target.Provider, "failover")
-		gw.Logger.Warn("upstream error event at stream head, falling back to next target",
-			"model", target.Model, "provider", target.Provider)
-		return &streamResult{empty: true}
+		return p.failoverEarlyHeadError(gw, action, target, cooldownDuration, stallR)
 	}
 
+	// Wrap so the probe's first chunk is served before the stall reader
+	// continues. Any read-ahead bytes the reader already buffered (remainBuf
+	// or a queued channel result) stay in line behind the prefix — nothing is
+	// lost, because the stream phase keeps reading through this same reader.
 	action.resp.Body = &prefixedReadCloser{
 		prefix: chunk,
-		reader: action.resp.Body,
+		reader: bodyReader,
 	}
 	if kind == headError {
 		// Last (or only) target: the error cannot be failed over, so it is
@@ -476,9 +608,68 @@ func (p *Proxy) probeStreamHead(gw *gateway.NenyaGateway, action upstreamAction,
 	return nil
 }
 
+// handleStreamHeadNoData resolves a stream-head probe read that returned zero
+// bytes. A clean EOF (or nil error) with empty-stream detection enabled fails
+// over via streamResult{empty}; a transport-level read error is returned as-is
+// via streamResult{err} so the retry loop can distinguish it from emptiness.
+// Returns nil when the stream should continue unchanged.
+func (p *Proxy) handleStreamHeadNoData(gw *gateway.NenyaGateway, action upstreamAction, target routing.UpstreamTarget, cooldownDuration time.Duration, probeEmpty bool, readErr error, stallR *stallReader) *streamResult {
+	if readErr == nil || readErr == io.EOF {
+		if !probeEmpty {
+			return nil
+		}
+		if err := action.resp.Body.Close(); err != nil {
+			gw.Logger.Debug("close empty upstream body", "err", err, "provider", target.Provider)
+		}
+		if stallR != nil {
+			stallR.Stop()
+			stallR.DrainBuffered()
+		}
+		gw.AgentState.RecordFailure(target, cooldownDuration)
+		gw.Metrics.RecordEmptyStream(target.Model, target.Provider)
+		gw.Logger.Warn("empty upstream stream detected, falling back to next target",
+			"model", target.Model, "provider", target.Provider)
+		return &streamResult{empty: true}
+	}
+	// Transport-level failure before any bytes: distinct from a genuinely
+	// empty stream. Fail over without mislabeling it as empty; the retry
+	// loop surfaces the error on the last target.
+	if err := action.resp.Body.Close(); err != nil {
+		gw.Logger.Debug("close errored upstream body", "err", err, "provider", target.Provider)
+	}
+	if stallR != nil {
+		stallR.Stop()
+		stallR.DrainBuffered()
+	}
+	action.cancel()
+	gw.AgentState.RecordFailure(target, cooldownDuration)
+	gw.Logger.Warn("upstream stream read error at head, falling back to next target",
+		"err", readErr, "model", target.Model, "provider", target.Provider)
+	return &streamResult{err: readErr}
+}
+
+// failoverEarlyHeadError fails over before any client byte is committed: the
+// upstream body is closed and the retry loop dispatches the next target via
+// streamResult{empty}.
+func (p *Proxy) failoverEarlyHeadError(gw *gateway.NenyaGateway, action upstreamAction, target routing.UpstreamTarget, cooldownDuration time.Duration, stallR *stallReader) *streamResult {
+	if err := action.resp.Body.Close(); err != nil {
+		gw.Logger.Debug("close errored upstream body", "err", err, "provider", target.Provider)
+	}
+	if stallR != nil {
+		stallR.Stop()
+		stallR.DrainBuffered()
+	}
+	action.cancel()
+	gw.AgentState.RecordFailure(target, cooldownDuration)
+	gw.Metrics.RecordEarlyStreamError(target.Model, target.Provider, "failover")
+	gw.Logger.Warn("upstream error event at stream head, falling back to next target",
+		"model", target.Model, "provider", target.Provider)
+	return &streamResult{empty: true}
+}
+
 // headProbe reports which stream-head probes are enabled by governance config.
 type headProbe struct {
-	next       bool
+	enabled    bool
 	empty      bool
 	earlyError bool
 }
@@ -493,7 +684,7 @@ func headProbeEnabled(gc config.GovernanceConfig) headProbe {
 	if gc.EarlyStreamErrorFailover != nil && *gc.EarlyStreamErrorFailover {
 		hp.earlyError = true
 	}
-	hp.next = hp.empty || hp.earlyError
+	hp.enabled = hp.empty || hp.earlyError
 	return hp
 }
 
@@ -504,7 +695,16 @@ func (p *Proxy) streamResponse(opts streamResponseOpts, action upstreamAction) s
 	cacheKey, cooldownDuration, payload := opts.cacheKey, opts.cooldown, opts.payload
 	defer action.cancel()
 
-	if res := p.probeStreamHead(gw, action, target, cooldownDuration, opts); res != nil {
+	// Build the stall-bounded reader once, before the pre-header probe, so the
+	// head read is subject to stream_idle_timeout_seconds. The same reader is
+	// reused by the streaming phase (byte-preserving: read-ahead buffered by
+	// its goroutine stays in line).
+	var stallR *stallReader
+	if timeout := resolveStreamIdleTimeout(gw, target.Provider); timeout > 0 {
+		stallR = newStallReader(r.Context(), action.resp.Body, timeout, gw.Config.Governance.EffectiveThinkingStreamIdleTimeout())
+	}
+
+	if res := p.probeStreamHead(gw, action, target, cooldownDuration, opts, stallR); res != nil {
 		return *res
 	}
 
@@ -540,7 +740,14 @@ func (p *Proxy) streamResponse(opts streamResponseOpts, action upstreamAction) s
 			cont.capture.reset()
 		}
 
-		transformingReader, contentBuilder, stallR := p.setupTransformingReader(gw, target, opts.agentName, opts.sourceFormat, action, r.Context())
+		// Continuation attempts re-dispatch with a fresh upstream response, so
+		// they must build their own stall reader around the new body. Only the
+		// first attempt reuses the pre-probe reader (byte-preserving).
+		attemptStall := stallR
+		if attempt > 0 {
+			attemptStall = nil
+		}
+		transformingReader, contentBuilder, stallR := p.setupTransformingReader(gw, target, opts.agentName, opts.sourceFormat, action, r.Context(), attemptStall)
 		if transformingReader == nil {
 			putStreamBuffer(buf)
 			return streamResult{}
@@ -623,15 +830,29 @@ func resolveStreamIdleTimeout(gw *gateway.NenyaGateway, providerName string) tim
 // setupTransformingReader creates and configures the SSE transforming reader, content builder, and stall reader.
 // Returns the transforming reader for streaming, the content builder for post-processing, and the stall reader for cleanup.
 // When stream idle timeout is 0 (disabled), stallR is nil and the body is passed directly to the transforming reader.
-func (p *Proxy) setupTransformingReader(gw *gateway.NenyaGateway, target routing.UpstreamTarget, agentName, sourceFormat string, action upstreamAction, ctx context.Context) (*stream.SSETransformingReader, *contentBuilder, *stallReader) {
+// reuse, when non-nil, is a stall reader already built around this body (by the
+// stream-head probe); it is used as-is so its buffered read-ahead bytes stay in
+// line, and backgroundExhaust is not double-allocated.
+func (p *Proxy) setupTransformingReader(gw *gateway.NenyaGateway, target routing.UpstreamTarget, agentName, sourceFormat string, action upstreamAction, ctx context.Context, reuse *stallReader) (*stream.SSETransformingReader, *contentBuilder, *stallReader) {
 	transformer := p.resolveTransformer(gw, target, sourceFormat)
 
 	var bodyReader io.Reader = action.resp.Body
-	var stallR *stallReader
-	timeout := resolveStreamIdleTimeout(gw, target.Provider)
-	if timeout > 0 {
-		thinkingTimeout := gw.Config.Governance.EffectiveThinkingStreamIdleTimeout()
-		stallR = newStallReader(ctx, action.resp.Body, timeout, thinkingTimeout)
+	var stallR = reuse
+	if stallR == nil {
+		timeout := resolveStreamIdleTimeout(gw, target.Provider)
+		if timeout > 0 {
+			thinkingTimeout := gw.Config.Governance.EffectiveThinkingStreamIdleTimeout()
+			stallR = newStallReader(ctx, action.resp.Body, timeout, thinkingTimeout)
+			bodyReader = stallR
+		}
+	} else if _, wrapped := action.resp.Body.(*prefixedReadCloser); wrapped {
+		// The stream-head probe wrapped the body (prefix over the reused stall
+		// reader): keep reading through the wrapper so byte order is preserved.
+		bodyReader = action.resp.Body
+	} else {
+		// Probe disabled: the reused stall reader's goroutine is the sole
+		// consumer of the raw body. Reading the raw body directly here would
+		// race it and starve the stream, so read through the stall reader.
 		bodyReader = stallR
 	}
 

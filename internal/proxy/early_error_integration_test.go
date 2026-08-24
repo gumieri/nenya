@@ -207,12 +207,10 @@ func TestEarlyStreamErrorDisabled(t *testing.T) {
 // TestNormalStreamUnaffected verifies the probe doesn't break normal streams.
 func TestNormalStreamUnaffected(t *testing.T) {
 	var calls atomic.Int32
-	var reqBody atomic.Pointer[[]byte]
 
 	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		calls.Add(1)
-		body, _ := io.ReadAll(r.Body)
-		reqBody.Store(&body)
+		_, _ = io.ReadAll(r.Body)
 		w.Header().Set("Content-Type", "text/event-stream")
 		_, _ = fmt.Fprintf(w, "data: {\"choices\":[{\"delta\":{\"content\":\"Hello \"}}]}\n\n")
 		_, _ = fmt.Fprintf(w, "data: {\"choices\":[{\"delta\":{\"content\":\"world\"}}]}\n\n")

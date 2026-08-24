@@ -76,8 +76,11 @@ func TestApplyDefaults_Governance(t *testing.T) {
 	if cfg.Context.TruncationKeepLastPct != 25.0 {
 		t.Errorf("expected 25.0, got %f", cfg.Context.TruncationKeepLastPct)
 	}
-	if cfg.Governance.EarlyStreamErrorFailover == nil || !*cfg.Governance.EarlyStreamErrorFailover {
-		t.Errorf("expected EarlyStreamErrorFailover default true, got %v", cfg.Governance.EarlyStreamErrorFailover)
+	if cfg.Governance.EarlyStreamErrorFailover == nil {
+		t.Fatal("EarlyStreamErrorFailover default not set")
+	}
+	if !*cfg.Governance.EarlyStreamErrorFailover {
+		t.Error("expected EarlyStreamErrorFailover default true")
 	}
 }
 

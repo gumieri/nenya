@@ -3,9 +3,19 @@ package proxy
 import (
 	"bytes"
 	"encoding/json"
+	"sync"
 
 	"github.com/nenya/internal/stream"
 )
+
+// dataPrefixLen is the length of the "data:" SSE field prefix.
+const dataPrefixLen = len("data:")
+
+// jsonMapPool recycles the map[string]any used for probing SSE payloads; the
+// probe runs once per streaming request but avoids per-line allocations.
+var jsonMapPool = sync.Pool{
+	New: func() any { return map[string]any{} },
+}
 
 // streamHeadKind classifies the first chunk read from an upstream SSE stream
 // before any headers are committed to the client.
@@ -45,12 +55,22 @@ func classifyStreamHead(chunk []byte) streamHeadKind {
 		if bytes.Equal(data, []byte("[DONE]")) {
 			return headNormal
 		}
-		var parsed map[string]any
-		if err := json.Unmarshal(data, &parsed); err != nil {
+		parsed := jsonMapPool.Get().(map[string]any)
+		// json.Unmarshal only overwrites keys present in the new payload, so a
+		// reused map can otherwise carry stale keys (e.g. an "error" from a
+		// previous probe) that would corrupt classification — clear first.
+		clear(parsed)
+		err := json.Unmarshal(data, &parsed)
+		if err != nil {
+			clear(parsed)
+			jsonMapPool.Put(parsed)
 			// Incomplete/partial JSON: cannot decide, leave undetermined.
 			return headUndetermined
 		}
-		if stream.IsStreamErrorPayload(parsed) {
+		isErr := stream.IsStreamErrorPayload(parsed)
+		clear(parsed)
+		jsonMapPool.Put(parsed)
+		if isErr {
 			return headError
 		}
 		// The first complete, meaningful payload is not an upstream error:
@@ -76,7 +96,7 @@ func sseFieldLine(line []byte) bool {
 // upstreams emit raw JSON bodies under Content-Type: text/event-stream).
 func sseDataLine(line []byte) ([]byte, bool) {
 	if bytes.HasPrefix(line, []byte("data:")) {
-		return bytes.TrimSpace(line[len("data:"):]), true
+		return bytes.TrimSpace(line[dataPrefixLen:]), true
 	}
 	if line[0] == '{' {
 		return line, true

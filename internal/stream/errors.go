@@ -15,7 +15,7 @@ func IsStreamErrorPayload(parsed map[string]any) bool {
 	if parsed == nil {
 		return false
 	}
-	if _, hasError := parsed["error"]; hasError {
+	if v, hasError := parsed["error"]; hasError && v != nil {
 		return true
 	}
 	if t, ok := parsed["type"]; ok {
