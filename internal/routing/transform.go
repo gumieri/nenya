@@ -205,6 +205,11 @@ func injectPromptCacheKey(deps TransformDeps, payload map[string]interface{}, pr
 		return
 	}
 
+	// SHA-256 is used to derive a stable cache key from public identifiers
+	// (agent name, model name). This is not password hashing — the input
+	// data is non-secret (it's already transmitted to the upstream provider).
+	// We need fast, deterministic hashing for cache key stability; Argon2/
+	// scrypt/bcrypt would be inappropriate (too slow, unnecessary salt).
 	h := sha256.Sum256([]byte(deps.AgentName + ":" + modelName))
 	payload["prompt_cache_key"] = hex.EncodeToString(h[:])[:16]
 }
