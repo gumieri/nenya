@@ -44,7 +44,7 @@ jobs:
 
       - name: Extract metadata for tags
         id: meta
-        uses: docker/metadata-action@v5.7.0
+        uses: docker/metadata-action@v6.2.0
         with:
           images: ghcr.io/${{ github.repository }}
           tags: |
