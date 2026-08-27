@@ -195,7 +195,7 @@ Providers in the adapter registry fall into three categories:
 | **OpenAIAdapter (explicit caps)** | `openai`, `deepseek`, `groq`, `together`, `github`, `sambanova`, `cerebras`, `nvidia`, `nvidia_free`, `qwen_free`, `minimax_free`, `zen`, `moonshot` | Registered via `registerOpenAI()` with provider-specific capability settings |
 | **OpenAIAdapter (default fallback)** | `qwen`, `minimax`, and any user-configured provider not in the registry | Uses `OpenAIAdapter{Caps: Capabilities{}}` — all capabilities disabled, meaning `stream_options`, `tool_choice: "auto"`, and content arrays are all stripped |
 
-> **Runtime override**: `zai-coding-plan` is initially registered as an OpenAIAdapter in `init()` but is replaced by the `ZAIAdapter` during startup when `InitWithDeps()` is called. This ensures `zai-coding-plan` shares the same message sanitization logic as `zai` (orphaned tool removal, message merging, bridge insertion) and Zhipu-specific error classification.
+> **Runtime override**: `zai` and `zai-coding-plan` are registered as lightweight `zaiAdapterShim`s in `init()`. During startup, `InitWithDeps()` replaces them with the dependency-injected `ZAIAdapter` (message sanitization requires `ExtractContent`, so it stays inert until deps are injected). This ensures both variants share the same message sanitization logic (orphaned tool removal, message merging, bridge insertion) and Zhipu-specific error classification from the moment the gateway starts.
 
 ## Adding a New Provider
 
