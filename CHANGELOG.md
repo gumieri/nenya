@@ -4,49 +4,30 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-08-27
+
 ### Added
-- Path traversal security tests in `config/loading_path_security_test.go` for config loading and prompt file resolution
-- Centralized secure memory zeroing primitive in `internal/util/zero.go`
+- **Sticky session routing** (`strategy: "sticky"`): sessions (identified by agent + system prompt + first user message) pin to one provider/model so provider-side prefix caches stay warm across turns. LRU pin store (512 entries), `sticky_session_ttl_seconds` (default 3600, max 86400), failover re-pinning to the next healthy target, survives SIGHUP reloads. Metrics: `nenya_session_active`, `nenya_session_pin_changes_total{reason}`
+- **Stream continuation** (`governance.stream_continuation`): transparently resumes upstream SSE streams cut mid-generation (no `finish_reason`, no `[DONE]`) by re-dispatching the same target with the partial assistant message appended. Fields: `enabled` (default true), `max_attempts` (default 2, cap 5, includes original attempt), `same_model_only` (default true; explicit false opts out entirely), `include_reasoning` (default false). Skipped while a tool call is in flight. Metrics: `nenya_stream_continuations_total{reason}`, `nenya_stream_interrupts_total{reason}`
+- **Provider model allowlists** (`providers.<name>.allowed_models`): RE2 regex patterns restricting which models are usable per provider. Non-matching models are dropped from `/v1/models` discovery and blocked in routing (400 `model_not_found`); matching static-registry models are re-added when discovery omits them. Empty/omitted = all models allowed.
+- **Early stream-error failover** (`governance.early_stream_error_failover`, default true): upstream SSE error events at the stream head (before HTTP headers are committed) trigger failover to the next target in the agent chain instead of forwarding error bytes. Metric: `nenya_stream_early_errors_total{outcome="failover|forwarded_last_target"}`
 
 ### Changed
-- **Phase 014**: Decomposed monolithic `chat.go` into focused modules: `constants.go`, `embeddings.go`, `usage.go`, `responses.go`, `mcp_loop.go`, `response_writer.go` for better maintainability
-- **Phase 015**: Unified 6x duplicated passthrough response-handler pattern into a single `response_writer.go` module with shared `writeUpstreamResponse()` and `writeUpstreamBytesResponse()` helpers
-- `interceptContent` now checks against configurable hard limit and applies trimming before Bouncer interception when payload exceeds the hard limit
-- Updated `TransformDeps` to include `CountTokens` for token-aware truncation during request transformation
-- Updated `prepareAndSend` to pass `CountTokens` to `TransformDeps`
-- Models without `max_context` configured no longer get incorrect truncation (disabled with warning)
-- Provider config merging now correctly merges user values over built-in defaults instead of overriding
-- All error responses now include structured `error_kind` field
-- Retry loop extracted into dedicated `retryLoop` struct for better readability
-- Bidirectional Anthropic Messages API support via `/v1/messages` endpoint with full format conversion
-- Pluggable interceptor chain for content preprocessing (redaction, entropy, TF-IDF, bouncer)
-- Token-budget trimming pipeline (`TrimPayload`) that drops oldest non-system messages and applies token-aware middle-out truncation when payload exceeds hard limit
-- Configurable `hard_limit_tokens` in `context` section to override the default `softLimit * 2` behavior
-- Context-limit aware retry with automatic summarization fallback when `auto_retry_on_context_limit` is enabled
-- Structured error responses with `error_kind` field for programmatic client diagnostics
-- Local Ollama engine lifecycle manager with LRU eviction and startup preloading
-- Ollama model discovery enrichment via `/api/show` for accurate context limits and capabilities
-- Strip unsupported `tool_choice` field from Ollama requests automatically
-- Request-scoped logging with operation and API key correlation
-- Response cache instrumentation with debug-level logging
-- Metrics for interceptors (duration, applied, errors), context-limit errors, summarization retries
+- Removed the blanket client-side timeout that could interrupt long-running streams mid-flight; stall detection (`stream_idle_timeout_seconds`) now solely governs stalled upstreams
 
 ### Fixed
-- **Phase 013**: Fixed data race in circuit breaker `SnapshotDetailed()` — now acquires `cb.backoff.mu` lock before accessing `backoff` map
-- **Phase 013**: Fixed potential goroutine leak in response cache evictor — now uses `sync.WaitGroup` for clean shutdown on gateway stop
-- **Phase 013**: Fixed goroutine leak in Ollama transport loops on context cancellation — added proper `select` on `closeCh` in all long-running loops
-- **Phase 013**: Fixed lock deadlock risk in `SessionManager` — enforced strict lock ordering (EngineManager.mu → SessionManager.mu) in all methods
-- **Phase 017**: Fixed metrics label sanitization — added package-level `labelEscaper` to sanitize Prometheus labels with double-quotes
-- **Phase 017**: Fixed integer overflow risk in `CountRequestTokens()` — added `math.MaxInt` guard before `sb.Grow(n*500)` capacity allocation
-- **Phase 017**: Fixed panic in `writeHistogramMap()` when labels contain empty strings — added explicit nil check before building label array
-- **Phase 018**: Replaced `context.TODO()` with `context.Background()` in 6 locations in `response_cache.go` (startup evictor goroutine and caching operations)
-- **Regression (HIGH)**: Fixed silent response dropping in `writeUpstreamResponse()` and `writeUpstreamBytesResponse()` — removed `ctx.Err() != nil` early return that was aborting entire HTTP responses when client disconnected before headers were sent
-- **Regression (MEDIUM)**: Fixed TOCTOU race in `SessionManager.UnloadModel()` — re-checks model existence after acquiring Lock to prevent deleting freshly-reloaded models
-- **Regression (MEDIUM)**: Responses passthrough now uses URL-decoded path for `isPathSafe()` checks (hardened against double-encoded traversal)
-- **Regression (MEDIUM)**: `LoadModel()` double-check pattern preserves data safety across concurrent loads (occasional duplicate HTTP fetches are acceptable)
-- Summarization retry loop now correctly passes agent/provider/model parameters instead of attempting to extract from payload
-- Main.go shutdown bug: fixed atomic.Bool usage (was calling as function instead of Store method)
-- Staticcheck SA1012 violations in response_cache.go (never pass nil Context)
+- `bouncer.enabled=false` is now honored; the interceptor chain is rebuilt on SIGHUP reload
+- Stream endings without a terminal event are classified correctly, and the circuit breaker is no longer penalized for gateway-side errors
+- Session pin last-seen timestamps are updated under lock (data race)
+- `trackInFlight` cleanup is invoked via `defer` so the in-flight request counter cannot leak on early returns
+
+## [0.9.1] - 2026-08-13
+
+### Added
+- **Prefix-cache token accounting on `/metrics`**: new counters `nenya_cache_read_tokens_total`, `nenya_cache_creation_tokens_total`, and `nenya_cache_miss_tokens_total` with `{model, agent, provider}` labels. These track upstream prompt/prefix-cache token totals (distinct from the `nenya_cache_hit_total`/`nenya_cache_miss_total` response-cache event counters) for billing reconciliation. Wired into both the streaming usage callback and the non-streaming path, including Anthropic's native `cache_creation_input_tokens` field.
+
+### Fixed
+- Replaced `context.TODO()` with `context.Background()` in `response_cache.go` (startup evictor goroutine and caching operations)
 
 ## [0.3.0] - 2025-05-22
 

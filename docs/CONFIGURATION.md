@@ -185,6 +185,10 @@ Rate limiting, routing weights, and circuit breaker configuration.
 | `upstream_timeout_seconds` | int | `300` | HTTP client timeout (in seconds) for all upstream provider requests, including SSE body reading. Set to `0` for unlimited (relies on `stream_idle_timeout_seconds` for stall detection only). Capped at `86400` (24h). The startup log displays both `timeout` (Go time.Duration format) and `timeout_h` (decimal hours for human readability). |
 | `stream_idle_timeout_seconds` | int | `300` | Stall detection timeout (in seconds) for upstream SSE streams. Fires when NO data arrives from the upstream for the configured duration; resets on every successful read. Set to `0` to disable stall detection entirely (not recommended for production). Models with long thinking phases (e.g. GLM-4.7, DeepSeek-R1) may have natural SSE gaps during reasoning transitions that require a higher value. When a stall is detected, Nenya emits a `gateway_error` SSE event followed by `[DONE]`, then falls back to the next target in the agent's model chain. Capped at `86400` (24h). Can be overridden per-provider via `providers.<name>.stream_idle_timeout_seconds`. |
 | `thinking_stream_idle_timeout_seconds` | int | `600` | Extended stall detection timeout (in seconds) during thinking/reasoning phases for `/v1/chat/completions` and `/v1/messages` endpoints. When the proxy detects thinking events (OpenAI `reasoning_content` deltas, Anthropic `content_block_start` with type `thinking`, or `content_block_delta` with type `thinking_delta`), it automatically extends the stall timer to this value. This prevents false stall positives during extended silent periods when models are reasoning without streaming events. Set to `0` to disable thinking-aware extension (reverts to base `stream_idle_timeout_seconds` at all times). Capped at `86400` (24h). Does NOT apply to `/proxy/` passthrough endpoints (no SSE parser). |
+| `stream_continuation.enabled` | `*bool` | `true` | When `true` and an upstream SSE stream ends mid-generation (content streamed, no `finish_reason`, no `[DONE]`), Nenya re-dispatches the same target with the partial assistant message appended to the messages array, allowing the model to resume where it left off. Skipped when a tool call is in flight. Explicit `false` disables continuation (field is a tristate pointer; unset defaults to `true`). |
+| `stream_continuation.max_attempts` | int | `2` | Total continuation attempts including the original request. `2` means one continuation retry. Capped at `5`. Applies only when `stream_continuation.enabled` is `true`. |
+| `stream_continuation.same_model_only` | `*bool` | `true` | Restricts continuation to the same provider/model target. Continuation currently only re-dispatches the same target (cross-model fallback resume is not implemented), so an explicit `false` opts out of continuation entirely. |
+| `stream_continuation.include_reasoning` | bool | `false` | Append partial `reasoning_content` to the continuation payload so reasoning models resume with full context. Applies only to reasoning-capable models. |
 
 ## `bouncer`
 
@@ -614,6 +618,7 @@ To add or override a provider:
 | `api_key` | string | Legacy single API key. Deprecated in favor of `accounts` for multi-account support. |
 | `accounts` | []AccountConfig | Multi-account credential pool with LRU selection and error classification. See Multi-Account Per-Provider Keys below. |
 | `thinking` | ThinkingConfig | Per-provider thinking/reasoning mode configuration for reasoning-capable models. See Thinking Configuration below. |
+| `allowed_models` | []string | RE2 regex patterns for model allowlist filtering on this provider. Models that do not match any pattern are excluded from `/v1/models` discovery and blocked in routing (400 error). Empty/omitted = all models allowed. Use `^…$` anchoring for exact pinning. |
 
 **Note**: The `BaseURL` field is automatically derived from `url` by stripping the path component. This is used by the `/proxy/{provider}/*` passthrough endpoint to construct arbitrary provider URLs. For example, if `url` is `https://api.anthropic.com/v1/messages`, the derived `BaseURL` is `https://api.anthropic.com`, allowing passthrough to `/proxy/anthropic/v1/models`.
 
@@ -793,6 +798,9 @@ For the current catalog, query the `/v1/models` endpoint or enable [dynamic disc
 | `deepseek-v4-pro` | deepseek | 1,000,000 | 384,000 | $2.00/M | $8.00/M |
 | `deepseek-v4-flash` | deepseek | 1,000,000 | 384,000 | $0.10/M | $0.10/M |
 | `glm-5.1` | zai | 200,000 | 128,000 | $0.50/M | $2.00/M |
+| `glm-5.2` | zai | 1,000,000 | 128,000 | $1.40/M | $4.40/M |
+| `glm-5.3` | zai-coding-plan | 1,000,000 | 128,000 | $1.40/M | $4.40/M |
+| `glm-5.3-flash` | zai-coding-plan | 1,000,000 | 128,000 | $0.15/M | $0.50/M |
 | `glm-5-turbo` | zai | 200,000 | 128,000 | $0.50/M | $2.00/M |
 | `glm-5v-turbo` | zai | 200,000 | 128,000 | $0.50/M | $2.00/M |
 | `glm-5` | zai | 200,000 | 128,000 | $0.50/M | $2.00/M |

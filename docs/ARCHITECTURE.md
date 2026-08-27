@@ -586,6 +586,32 @@ Some providers return `200 OK` with SSE headers, then immediately emit a termina
 
 When `early_stream_error_failover` is disabled, the probe still detects empty streams (driven by `empty_stream_as_error`), but SSE error payloads are forwarded to the client untouched.
 
+## Stream Continuation
+
+Providers sometimes truncate an SSE stream mid-generation: the client has received content deltas, but the stream ends without a terminal `finish_reason` and without `data: [DONE]`. Historically this surfaced to the agent as a cut-off assistant message. When `governance.stream_continuation` is enabled (default: `true`), Nenya transparently resumes the interrupted generation:
+
+1. **Detection** — When an upstream stream ends with content already streamed but no terminal event, the recovery layer (`internal/proxy/stream_recovery.go`) classifies the ending. A tool call in flight disables continuation entirely (partial tool-call payloads cannot be safely resumed).
+2. **Re-dispatch** — The gateway re-sends the request to the **same target** with the partial assistant message appended to the `messages` array (including partial `reasoning_content` when `stream_continuation.include_reasoning` is set, default `false`). The model continues from where it stopped.
+3. **Attempt budget** — `stream_continuation.max_attempts` (default `2`, capped at `5`) bounds the total attempts *including* the original request, so amplification is bounded.
+4. **Transparency** — Continuation chunks are appended to the same SSE stream; the client sees one seamless response.
+
+Metrics: `nenya_stream_interrupts_total{model,provider,reason}` counts interrupted upstream streams (`reason="timeout"`), and `nenya_stream_continuations_total{model,provider,reason}` counts continuations by outcome: `recovered`, `gave_up_no_content`, `gave_up_tool_call`, `gave_up_redispatch`, or `gave_up_exhausted`.
+
+Cross-model fallback resume is not implemented: `stream_continuation.same_model_only` defaults to `true`, and an explicit `false` currently opts out of continuation entirely.
+
+## Sticky Session Routing (SessionRouter)
+
+The `sticky` agent routing strategy (`agents.<name>.strategy`) pins a conversation to a single provider/model so provider-side prefix caches stay warm across turns. Implementation lives in `internal/routing/session.go`:
+
+- **Session key** — SHA-256 over `agent name + system prompt + first user message`. Semantically identical conversations map to the same pin; unrelated conversations spread via the agent request counter (same rotation as `round-robin`).
+- **Pin store** — In-memory LRU map capped at 512 pins. Each pin records the chosen target and a last-seen timestamp; idle pins expire after `sticky_session_ttl_seconds` (default `3600`, max `86400`) and the session re-pins on its next request.
+- **Failover behavior** — If the pinned target fails, the session re-pins to the next healthy target (recorded as `reason="failover"`); it does not block on a dead provider.
+- **Reload survival** — Pins are held outside the agent config objects and survive SIGHUP configuration reloads.
+
+Metrics: `nenya_session_active` (gauge, non-expired pins) and `nenya_session_pin_changes_total{reason}` with reasons `new`, `failover`, and `expired`.
+
+See [Agent Routing Strategies](ROUTING.md#agent-routing-strategies) for configuration.
+
 ## Latency Tracker
 
 `infra.LatencyTracker` tracks per-model response times for latency-aware routing. When `context.auto_reorder_by_latency` is enabled, targets are sorted by historical median latency (fastest first) before routing.

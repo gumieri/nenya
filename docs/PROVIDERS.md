@@ -279,6 +279,28 @@ See `gemini.go` or `zai.go` for examples.
 
 > **Multi-account support**: All auth styles support multi-account credential pools via the `accounts` provider config field. See [Multi-Account Key Selection](#multi-account-key-selection) above.
 
+## Model Allowlists (`allowed_models`)
+
+The `allowed_models` field on a provider config restricts which models are usable for that provider via RE2 regex matching:
+
+```json
+{
+  "providers": {
+    "anthropic": {
+      "allowed_models": ["^claude-", "opus-4"]
+    }
+  }
+}
+```
+
+**Semantics:**
+
+- Patterns are unanchored `regexp.MatchString` — `claude-` matches any model ID containing `claude-`; anchor with `^…$` for exact pinning (e.g. `^claude-3-7-sonnet$`).
+- Empty or omitted `allowed_models` = all models allowed.
+- **Discovery filtering**: during `/v1/models` discovery, models that don't match any pattern are dropped (`filterDiscoveredModels`). When an allowlist is set, matching static-registry models are *re-added* even if discovery omitted them (`backfillStaticModels`).
+- **Routing block**: a model that doesn't match the provider's `allowed_models` is unresolvable → the gateway returns a `400 model_not_found` error rather than dispatching upstream.
+- The compiled list is matched at startup merge time; invalid regex patterns fail config validation.
+
 Auth style resolution priority:
 1. Adapter-specific `InjectAuth()` (for registered providers)
 2. `ProviderConfig.AuthStyle` from JSON config (for dynamic providers)
