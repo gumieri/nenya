@@ -229,23 +229,36 @@ func pickMetadata(discovered DiscoveredModel, hasDiscovered bool, static config.
 	if !hasStatic || (static.ScoreBonus == 0 && len(static.Capabilities) == 0 && static.Pricing.IsZero()) {
 		return metadata
 	}
-	if metadata == nil {
-		metadata = &ModelMetadata{}
+	return applyStaticEntryMetadata(metadata, static)
+}
+
+// applyStaticEntryMetadata overlays a static registry entry's metadata (score
+// bonus, explicit capabilities, pricing) onto meta. Merge semantics are
+// additive: config-supplied capabilities can add to inferred capabilities but
+// never remove them.
+func applyStaticEntryMetadata(meta *ModelMetadata, entry config.ModelEntry) *ModelMetadata {
+	if meta == nil {
+		meta = &ModelMetadata{}
 	}
-	if static.ScoreBonus != 0 {
-		metadata.ScoreBonus = static.ScoreBonus
+	if entry.ScoreBonus != 0 {
+		meta.ScoreBonus = entry.ScoreBonus
 	}
-	if len(static.Capabilities) > 0 {
-		caps := make([]Capability, len(static.Capabilities))
-		for i, c := range static.Capabilities {
+	if len(entry.Capabilities) > 0 {
+		caps := make([]Capability, len(entry.Capabilities))
+		for i, c := range entry.Capabilities {
 			caps[i] = Capability(c)
 		}
-		metadata = applyCapabilities(metadata, caps)
+		meta = applyCapabilities(meta, caps)
 	}
-	if !static.Pricing.IsZero() {
-		metadata.Pricing = &static.Pricing
+	if !entry.Pricing.IsZero() {
+		// Copy the value: all models referencing this static entry would
+		// otherwise share one *PricingOverride pointing into the global
+		// config registry, so mutating any catalog model's pricing would
+		// corrupt the shared registry entry.
+		p := entry.Pricing
+		meta.Pricing = &p
 	}
-	return metadata
+	return meta
 }
 
 type agentOverride struct {

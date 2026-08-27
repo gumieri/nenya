@@ -38,6 +38,14 @@ var capabilityRules = []capabilityRule{
 	{prefix: "deepseek-v4", caps: []Capability{CapReasoning, CapToolCalls, CapContentArrays, CapAutoToolChoice, CapStreamOptions}},
 	{prefix: "deepseek-r1", caps: []Capability{CapReasoning, CapToolCalls, CapContentArrays, CapAutoToolChoice}},
 	{prefix: "glm-4", caps: []Capability{CapToolCalls, CapContentArrays, CapAutoToolChoice, CapStreamOptions}},
+	// Order is load-bearing: InferCapabilities applies first-match-wins prefix
+	// matching. "glm-5.3-flash" must precede "glm-5.3" (otherwise it matches
+	// the text-only rule and loses CapVision), and both must precede "glm-5".
+	// Caveat: any future vision variant whose ID starts with "glm-5.3" but is
+	// not "glm-5.3-flash" (e.g. "glm-5.3v", "glm-5.3v-turbo") would match the
+	// text-only "glm-5.3" rule and need its own rule above it.
+	{prefix: "glm-5.3-flash", caps: []Capability{CapToolCalls, CapReasoning, CapVision, CapContentArrays, CapAutoToolChoice, CapStreamOptions}},
+	{prefix: "glm-5.3", caps: []Capability{CapToolCalls, CapReasoning, CapContentArrays, CapAutoToolChoice, CapStreamOptions}},
 	{prefix: "glm-5", caps: []Capability{CapToolCalls, CapReasoning, CapVision, CapContentArrays, CapAutoToolChoice, CapStreamOptions}},
 	{prefix: "qwen2.5", caps: []Capability{CapToolCalls, CapContentArrays, CapAutoToolChoice, CapStreamOptions}},
 	{prefix: "qwen3", caps: []Capability{CapToolCalls, CapReasoning, CapContentArrays, CapAutoToolChoice, CapStreamOptions}},

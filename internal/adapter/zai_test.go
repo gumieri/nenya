@@ -1,6 +1,9 @@
 package adapter
 
-import "testing"
+import (
+	"encoding/json"
+	"testing"
+)
 
 func TestZAIAdapter_NormalizeError(t *testing.T) {
 	a := NewZAIAdapter(ZAIAdapterDeps{})
@@ -38,4 +41,129 @@ func TestZAIAdapter_NormalizeError(t *testing.T) {
 			}
 		})
 	}
+}
+
+// testExtractContent returns a message's string content; messages whose
+// content is not a string (e.g. content arrays) yield "".
+func testExtractContent(msg map[string]interface{}) string {
+	c, _ := msg["content"].(string)
+	return c
+}
+
+func TestZAIAdapter_MutateRequest(t *testing.T) {
+	tests := []struct {
+		name string
+		in   string
+		// wantUnchanged asserts the output is byte-identical to the input
+		// (sanitize skipped or no-op). Mutually exclusive with wantMessages.
+		wantUnchanged bool
+		// wantMessages asserts the sanitized output message count and, for
+		// each entry, role plus optional exact content ("" to skip check).
+		wantMessages [][2]string
+	}{
+		{
+			name:          "already normalized sequence returns body byte-identical",
+			in:            `{"model":"glm-5.3","messages":[{"role":"system","content":"s"},{"role":"user","content":"hi"},{"role":"assistant","content":"ok"}]}`,
+			wantUnchanged: true,
+		},
+		{
+			name:          "tools present skips sanitize entirely",
+			in:            `{"model":"glm-5.3","tools":[{"type":"function","function":{"name":"f"}}],"messages":[{"role":"user","content":"a"},{"role":"user","content":"b"}]}`,
+			wantUnchanged: true,
+		},
+		{
+			name: "drops orphaned tool message",
+			in:   `{"model":"glm-5.3","messages":[{"role":"assistant","content":"","tool_calls":[{"id":"tc1","type":"function","function":{"name":"f","arguments":"{}"}}]},{"role":"tool","tool_call_id":"tc_orphan","content":"r"},{"role":"user","content":"q"}]}`,
+			wantMessages: [][2]string{
+				{"assistant", ""},
+				{"user", "q"},
+			},
+		},
+		{
+			name: "merges consecutive user messages",
+			// Leading system message keeps the bridge prepend out of this case.
+			in: `{"model":"glm-5.3","messages":[{"role":"system","content":"s"},{"role":"user","content":"a"},{"role":"user","content":"b"}]}`,
+			wantMessages: [][2]string{
+				{"system", "s"},
+				{"user", "a\n\nb"},
+			},
+		},
+		{
+			name: "prepends bridge before leading user message",
+			in:   `{"model":"glm-5.3","messages":[{"role":"user","content":"hi"}]}`,
+			wantMessages: [][2]string{
+				{"system", "Continue the conversation."},
+				{"user", "hi"},
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			a := NewZAIAdapter(ZAIAdapterDeps{ExtractContent: testExtractContent})
+			out, err := a.MutateRequest([]byte(tt.in), "glm-5.3", false)
+			if err != nil {
+				t.Fatalf("MutateRequest() error = %v", err)
+			}
+			if tt.wantUnchanged {
+				if string(out) != tt.in {
+					t.Errorf("MutateRequest() modified an unchanged body:\n in: %s\nout: %s", tt.in, out)
+				}
+				return
+			}
+			msgs := parseMutatedMessages(t, out)
+			if len(msgs) != len(tt.wantMessages) {
+				t.Fatalf("MutateRequest() produced %d messages, want %d: %s", len(msgs), len(tt.wantMessages), out)
+			}
+			for i, want := range tt.wantMessages {
+				role, _ := msgs[i]["role"].(string)
+				if role != want[0] {
+					t.Errorf("message[%d].role = %q, want %q", i, role, want[0])
+				}
+				if want[1] != "" {
+					content, _ := msgs[i]["content"].(string)
+					if content != want[1] {
+						t.Errorf("message[%d].content = %q, want %q", i, content, want[1])
+					}
+				}
+			}
+		})
+	}
+}
+
+func TestZAIAdapter_MutateRequestGuards(t *testing.T) {
+	body := `{"model":"glm-5.3","messages":[{"role":"user","content":"a"},{"role":"user","content":"b"}]}`
+
+	t.Run("nil extractContent returns body unchanged", func(t *testing.T) {
+		a := NewZAIAdapter(ZAIAdapterDeps{})
+		out, err := a.MutateRequest([]byte(body), "glm-5.3", false)
+		if err != nil {
+			t.Fatalf("MutateRequest() error = %v", err)
+		}
+		if string(out) != body {
+			t.Errorf("MutateRequest() with nil extractContent modified the body:\n in: %s\nout: %s", body, out)
+		}
+	})
+
+	t.Run("empty body returns unchanged", func(t *testing.T) {
+		a := NewZAIAdapter(ZAIAdapterDeps{ExtractContent: testExtractContent})
+		out, err := a.MutateRequest(nil, "glm-5.3", false)
+		if err != nil {
+			t.Fatalf("MutateRequest() error = %v", err)
+		}
+		if len(out) != 0 {
+			t.Errorf("MutateRequest(nil) = %q, want empty", out)
+		}
+	})
+}
+
+func parseMutatedMessages(t *testing.T, body []byte) []map[string]interface{} {
+	t.Helper()
+	var payload struct {
+		Messages []map[string]interface{} `json:"messages"`
+	}
+	if err := json.Unmarshal(body, &payload); err != nil {
+		t.Fatalf("failed to unmarshal mutated body %q: %v", body, err)
+	}
+	return payload.Messages
 }

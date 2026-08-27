@@ -27,6 +27,10 @@ func TestResolveProvider_KnownModels(t *testing.T) {
 		{"gemini-3.1-flash-lite-preview", "gemini"},
 		{"deepseek-v4-flash", "deepseek"},
 		{"deepseek-v4-pro", "deepseek"},
+		// glm cases are grouped newest-first: 5.3 variants, then 5.2/5, then 4.7.
+		{"glm-5.3", "zai-coding-plan"},
+		{"glm-5.3-flash", "zai-coding-plan"},
+		{"glm-5.2", "zai"},
 		{"glm-5", "zai"},
 		{"glm-4.7-flash", "zai"},
 		{"nemotron-3-super", "nvidia_free"},

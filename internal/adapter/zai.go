@@ -33,6 +33,12 @@ func NewZAIAdapter(deps ZAIAdapterDeps) *ZAIAdapter {
 }
 
 // MutateRequest mutates the request body for Zai-specific requirements.
+// The model and stream parameters are part of the ProviderAdapter interface
+// but are unused here; model-specific logic (thinking injection, temperature
+// defaults) lives in the provider spec layer (internal/providers/zai.go).
+// Note: this adapter layer is only exercised when an adapter is explicitly
+// registered for the provider; the default production sanitization path is
+// ZaiSanitizeAdapterOnly in internal/providers — keep the two in sync.
 func (a *ZAIAdapter) MutateRequest(body []byte, model string, stream bool) ([]byte, error) {
 	if len(body) == 0 {
 		return body, nil
@@ -117,13 +123,32 @@ func (a *ZAIAdapter) zaiSanitize(payload map[string]interface{}) bool {
 		return false
 	}
 
-	merged := a.zaiMergeSequentialMessages(filtered)
-	merged = a.zaiPrependBridgeIfNeeded(merged)
+	changed := len(filtered) != len(messages)
 
-	if len(merged) != len(messages) {
-		a.logDebug("zai: sanitized message sequence",
-			"messages_before", len(messages), "messages_after", len(merged))
+	merged := a.zaiMergeSequentialMessages(filtered)
+	if len(merged) != len(filtered) {
+		changed = true
 	}
+	lenBeforePrepend := len(merged)
+	merged = a.zaiPrependBridgeIfNeeded(merged)
+	if len(merged) != lenBeforePrepend {
+		changed = true
+	}
+
+	// Change-detection contract: each stage above (zaiFilterMessages,
+	// zaiMergeSequentialMessages, zaiPrependBridgeIfNeeded) only removes,
+	// merges, or inserts whole messages. Merging may mutate the surviving
+	// message's content in place, but that mutation always co-occurs with a
+	// message-count change. Under this contract, no length change means the
+	// sequence was already normalized. Skip the reassignment so MutateRequest
+	// can return the original body untouched. A future stage that mutates
+	// messages in place without a count change MUST extend this detection.
+	if !changed {
+		return false
+	}
+
+	a.logDebug("zai: sanitized message sequence",
+		"messages_before", len(messages), "messages_after", len(merged))
 
 	payload["messages"] = merged
 	return true
@@ -167,6 +192,12 @@ func (a *ZAIAdapter) collectValidToolCallIDs(messages []interface{}) map[string]
 	return ids
 }
 
+// zaiFilterMessages drops messages per the z.ai requirements: empty
+// user-style messages (empty content in roles other than tool, assistant, or
+// system), assistant messages with empty content and no tool calls, and tool
+// messages that are missing a tool_call_id or reference an unknown/orphaned
+// tool call ID. It only removes messages; see the change-detection contract
+// in zaiSanitize.
 func (a *ZAIAdapter) zaiFilterMessages(messages []interface{}, validIDs map[string]string) []interface{} {
 	filtered := make([]interface{}, 0, len(messages))
 	for _, msgRaw := range messages {
@@ -230,6 +261,9 @@ func (a *ZAIAdapter) shouldDropToolMessage(msg map[string]interface{}, validIDs 
 	return false
 }
 
+// zaiMergeSequentialMessages merges consecutive same-role messages into the
+// earlier message, mutating that message's content in place and reducing the
+// message count (see the change-detection contract in zaiSanitize).
 func (a *ZAIAdapter) zaiMergeSequentialMessages(filtered []interface{}) []interface{} {
 	merged := make([]interface{}, 0, len(filtered))
 	for i, msgRaw := range filtered {
@@ -276,6 +310,9 @@ func (a *ZAIAdapter) mergeIntoLast(merged []interface{}, msg map[string]interfac
 	return append(merged, msgRaw)
 }
 
+// zaiPrependBridgeIfNeeded prepends a synthetic system bridge message when the
+// sequence starts with a user message, increasing the message count by at most
+// one (see the change-detection contract in zaiSanitize).
 func (a *ZAIAdapter) zaiPrependBridgeIfNeeded(merged []interface{}) []interface{} {
 	if len(merged) == 0 {
 		return merged

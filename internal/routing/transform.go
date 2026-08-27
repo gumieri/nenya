@@ -146,7 +146,7 @@ func buildSanitizeDeps(deps TransformDeps) *providerpkg.SanitizeDeps {
 			// Fall back to static model registry: a model supports reasoning
 			// if its Thinking config has any non-zero fields.
 			if entry, ok := config.ModelRegistry[model]; ok {
-				return entry.Thinking.Min > 0 || entry.Thinking.Max > 0 || len(entry.Thinking.Levels) > 0
+				return entry.Thinking.HasThinking()
 			}
 			return false
 		}

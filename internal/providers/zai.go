@@ -26,6 +26,12 @@ func ZaiSanitizeSpecOnly(deps *SanitizeDeps, payload map[string]interface{}) {
 // - Merges consecutive user messages
 // - Inserts bridge messages between consecutive assistant messages
 // - Prepends system bridge when conversation starts with user message
+//
+// This is the production sanitization path (invoked via
+// ProviderSpec.SanitizeRequest). A parallel implementation lives in
+// internal/adapter (ZAIAdapter.zaiSanitize, used when an adapter is
+// explicitly registered); the two MUST stay in sync, including the no-op
+// change-detection contract documented there.
 func ZaiSanitizeAdapterOnly(deps *SanitizeDeps, payload map[string]interface{}) {
 	messagesRaw, ok := payload["messages"]
 	if !ok {
@@ -55,12 +61,21 @@ func ZaiSanitizeAdapterOnly(deps *SanitizeDeps, payload map[string]interface{}) 
 	}
 
 	merged := zaiMergeConsecutiveMessages(deps, filtered)
+	mergeChangedCount := len(merged) != len(filtered)
+	beforePrepend := len(merged)
 	merged = zaiPrependSystemBridge(deps, merged)
 
-	if len(merged) != len(messages) {
-		deps.Logger.Debug("zai: sanitized message sequence",
-			"messages_before", len(messages), "messages_after", len(merged))
+	// No-op detection, mirroring the adapter-level twin (internal/adapter
+	// zaiSanitize): merging may mutate the surviving message's content in
+	// place, but that mutation always co-occurs with a message-count change
+	// (reduction or bridge insertion). If no stage changed the count, keep
+	// the original slice instead of replacing it with a rebuilt copy.
+	if len(filtered) == len(messages) && !mergeChangedCount && len(merged) == beforePrepend {
+		return
 	}
+
+	deps.Logger.Debug("zai: sanitized message sequence",
+		"messages_before", len(messages), "messages_after", len(merged))
 	payload["messages"] = merged
 }
 
@@ -226,8 +241,11 @@ func checkMessageMerge(merged []interface{}, msg map[string]interface{}, role st
 func zaiShouldMergeUserMessages(prevMsg, msg map[string]interface{}, role string) bool {
 	prevRole, _ := prevMsg["role"].(string)
 	if prevRole == role && role == "user" {
-		prevContent := prevMsg["content"].(string)
-		currContent := msg["content"].(string)
+		prevContent, prevIsString := prevMsg["content"].(string)
+		currContent, currIsString := msg["content"].(string)
+		if !prevIsString || !currIsString {
+			return false
+		}
 		prevMsg["content"] = prevContent + "\n\n" + currContent
 		return true
 	}

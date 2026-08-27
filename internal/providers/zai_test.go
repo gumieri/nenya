@@ -3,6 +3,7 @@ package providers
 import (
 	"log/slog"
 	"os"
+	"reflect"
 	"testing"
 )
 
@@ -43,6 +44,34 @@ func TestZAI_MergesConsecutiveUserMessages(t *testing.T) {
 	user := msgs[1].(map[string]interface{})
 	if user["content"] != "first part\n\nsecond part" {
 		t.Errorf("expected merged user content, got %q", user["content"])
+	}
+}
+
+func TestZAI_NoOpOnNormalizedSequence(t *testing.T) {
+	deps := zaiDeps()
+
+	msgs := []interface{}{
+		map[string]interface{}{"role": "system", "content": "s"},
+		map[string]interface{}{"role": "user", "content": "hi"},
+		map[string]interface{}{"role": "assistant", "content": "ok"},
+	}
+	payload := map[string]interface{}{"messages": msgs}
+
+	zaiSanitize(deps, payload)
+
+	// Already-normalized sequences must keep the original slice: the no-op
+	// path returns before reassigning payload["messages"]. Compare slice
+	// identity via the underlying data pointer ([]interface{} is not
+	// directly comparable).
+	if reflect.ValueOf(payload["messages"]).Pointer() != reflect.ValueOf(msgs).Pointer() {
+		t.Error("zaiSanitize reassigned payload[\"messages\"] for an already-normalized sequence")
+	}
+	out := payload["messages"].([]interface{})
+	if len(out) != 3 {
+		t.Fatalf("expected 3 messages, got %d", len(out))
+	}
+	if out[1].(map[string]interface{})["content"] != "hi" {
+		t.Errorf("user content mutated on no-op path: %q", out[1].(map[string]interface{})["content"])
 	}
 }
 

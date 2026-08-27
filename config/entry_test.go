@@ -675,3 +675,25 @@ func TestProvider_AllowsModel(t *testing.T) {
 		})
 	}
 }
+
+func TestModelThinkingConfig_HasThinking(t *testing.T) {
+	tests := []struct {
+		name string
+		cfg  ModelThinkingConfig
+		want bool
+	}{
+		{"zero value", ModelThinkingConfig{}, false},
+		{"min only", ModelThinkingConfig{Min: 1024}, true},
+		{"max only", ModelThinkingConfig{Max: 128000}, true},
+		{"levels only", ModelThinkingConfig{Levels: []string{"low", "high"}}, true},
+		{"min and max", ModelThinkingConfig{Min: 1024, Max: 128000}, true},
+		{"zero allowed only", ModelThinkingConfig{ZeroAllowed: true}, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := tt.cfg.HasThinking(); got != tt.want {
+				t.Errorf("ModelThinkingConfig.HasThinking() = %v, want %v (cfg: %+v)", got, tt.want, tt.cfg)
+			}
+		})
+	}
+}

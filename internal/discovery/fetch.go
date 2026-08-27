@@ -286,8 +286,11 @@ func filterDiscoveredModels(models []DiscoveredModel, provider *config.Provider,
 }
 
 // backfillStaticModels re-adds statically-registered models for the provider
-// that the /v1/models endpoint did not advertise, so an allowlist configure
+// that the /v1/models endpoint did not advertise, so an allowlist configured
 // with trusted models still exposes them even when discovery omits them.
+// Backfilled metadata comes from InferCapabilities, overlaid with the static
+// entry's metadata (score bonus, explicit capabilities, pricing) and its
+// thinking configuration.
 func backfillStaticModels(models []DiscoveredModel, providerName string, provider *config.Provider, logger *slog.Logger) []DiscoveredModel {
 	if len(provider.AllowedModels) == 0 {
 		return models
@@ -307,6 +310,14 @@ func backfillStaticModels(models []DiscoveredModel, providerName string, provide
 			continue
 		}
 		logger.Debug("discovery backfilled static model", "provider", providerName, "model", modelID)
+		metadata := InferCapabilities(modelID)
+		if metadata == nil {
+			metadata = &ModelMetadata{}
+		}
+		if entry.Thinking.HasThinking() {
+			metadata.SupportsReasoning = true
+		}
+		metadata = applyStaticEntryMetadata(metadata, entry)
 		models = append(models, DiscoveredModel{
 			ID:         modelID,
 			Provider:   providerName,
@@ -314,9 +325,7 @@ func backfillStaticModels(models []DiscoveredModel, providerName string, provide
 			MaxContext: entry.MaxContext,
 			MaxOutput:  entry.MaxOutput,
 			OwnedBy:    "nenya",
-			Metadata: &ModelMetadata{
-				SupportsReasoning: entry.Thinking.Min > 0,
-			},
+			Metadata:   metadata,
 		})
 	}
 	return models

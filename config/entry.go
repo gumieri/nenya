@@ -49,6 +49,13 @@ type ModelThinkingConfig struct {
 	Levels         []string `json:"levels,omitempty"`
 }
 
+// HasThinking reports whether the model declares any thinking/reasoning
+// configuration. This is the canonical reasoning signal for static registry
+// entries when no dynamic capability metadata is available.
+func (c ModelThinkingConfig) HasThinking() bool {
+	return c.Min > 0 || c.Max > 0 || len(c.Levels) > 0
+}
+
 // Validate checks that Min <= Max when both fields are set and rejects
 // negative values for all fields.
 //

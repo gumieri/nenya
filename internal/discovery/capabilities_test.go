@@ -126,6 +126,30 @@ func TestInferCapabilities_ProviderQualifiedModels(t *testing.T) {
 			wantNil:       false,
 		},
 		{
+			name:          "provider-qualified glm-5.1 matches glm-5 rule (vision)",
+			modelID:       "zai/glm-5.1",
+			wantToolCalls: true,
+			wantReasoning: true,
+			wantVision:    true,
+			wantNil:       false,
+		},
+		{
+			name:          "provider-qualified glm-5.3 text only",
+			modelID:       "zai-coding-plan/glm-5.3",
+			wantToolCalls: true,
+			wantReasoning: true,
+			wantVision:    false,
+			wantNil:       false,
+		},
+		{
+			name:          "provider-qualified glm-5.3-flash multimodal",
+			modelID:       "zai-coding-plan/glm-5.3-flash",
+			wantToolCalls: true,
+			wantReasoning: true,
+			wantVision:    true,
+			wantNil:       false,
+		},
+		{
 			name:          "empty model ID",
 			modelID:       "",
 			wantToolCalls: false,
@@ -186,6 +210,9 @@ func TestInferCapabilities_BackwardCompatibility(t *testing.T) {
 		{"deepseek-r1", "deepseek-r1", true, true, false},
 		{"glm-4.6", "glm-4.6", true, false, false},
 		{"glm-5", "glm-5", true, true, true},
+		{"glm-5.2 falls through to glm-5 rule", "glm-5.2", true, true, true},
+		{"glm-5.3 text only", "glm-5.3", true, true, false},
+		{"glm-5.3-flash multimodal", "glm-5.3-flash", true, true, true},
 		{"qwen2.5-coder", "qwen2.5-coder", true, false, false},
 		{"qwen3-coder", "qwen3-coder", true, true, false},
 		{"mistral-large", "mistral-large", true, true, false},
@@ -212,6 +239,32 @@ func TestInferCapabilities_BackwardCompatibility(t *testing.T) {
 				t.Errorf("InferCapabilities(%q).SupportsVision = %v, want %v", tt.modelID, got.SupportsVision, tt.wantVision)
 			}
 		})
+	}
+}
+
+// TestAllCapabilities_ConsistentWithMetadata cross-checks the AllCapabilities
+// enumeration against applyCapabilities and HasCapability: every capability
+// advertised by AllCapabilities must round-trip through both, so adding a new
+// Capability constant without updating any of the three places fails here.
+func TestAllCapabilities_ConsistentWithMetadata(t *testing.T) {
+	all := AllCapabilities()
+	if len(all) == 0 {
+		t.Fatal("AllCapabilities() returned no capabilities")
+	}
+	seen := make(map[Capability]bool, len(all))
+	for _, c := range all {
+		if c == "" {
+			t.Fatal("AllCapabilities() contains an empty capability")
+		}
+		if seen[c] {
+			t.Errorf("AllCapabilities() contains duplicate capability %q", c)
+		}
+		seen[c] = true
+
+		meta := applyCapabilities(&ModelMetadata{}, []Capability{c})
+		if !meta.HasCapability(c) {
+			t.Errorf("capability %q from AllCapabilities() does not round-trip through applyCapabilities/HasCapability", c)
+		}
 	}
 }
 

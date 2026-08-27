@@ -143,17 +143,17 @@ z.ai has two provider variants:
 
 Both variants share the same `ZAIAdapter` at runtime, providing identical request sanitization and error classification. They differ only in endpoint URL (the coding plan variant uses a subscription-specific path).
 
-**Key differences from `zai`:**
-- `zai-coding-plan` does **not** include the `ProviderSpec.SanitizeRequest` hook (thinking injection and temperature defaults are not applied at the spec level). Message cleanup (orphaned tool removal, merging, bridge insertion) is still applied via the `ZAIAdapter.MutateRequest` at the adapter level.
+**Shared properties:**
 - The validation endpoint (`/v1/models`) is shared: both resolve to `https://api.z.ai/v1/models`.
+- Spec-level sanitization comes from the `ProviderSpec.SanitizeRequest` hook (`zaiSanitize`, defined in `internal/providers/zai.go`): thinking injection, temperature defaults, message cleanup (orphaned tool removal, merging, bridge insertion). `ZAIAdapter.MutateRequest` additionally re-applies the message cleanup at the adapter level (a no-op when messages are already normalized), so it runs regardless of the spec hook.
 
 **Request sanitization (both variants):**
   - Orphaned tool message removal
   - Consecutive user message merging
   - User bridge insertion between consecutive assistant messages
   - System bridge prepending
-  - Thinking mode auto-activation for reasoning-capable models (e.g., GLM-5) — **`zai` only, not `zai-coding-plan`**
-  - Model-specific temperature defaults (GLM-4.6/4.7 → 1.0) — **`zai` only, not `zai-coding-plan`**
+  - Thinking mode auto-activation for reasoning-capable models (e.g., GLM-5)
+  - Model-specific temperature defaults (GLM-4.6/4.7 → 1.0)
 - **Thinking mode**: Auto-enabled when the model supports reasoning. Configurable per-provider via `thinking.enabled` in the provider config:
   ```json
   "zai": {
@@ -166,6 +166,16 @@ Both variants share the same `ZAIAdapter` at runtime, providing identical reques
   - `{"enabled": false}` → force disable
 - **Auth**: `bearer`
 - **Error**: Zhipu error codes (1302/1303 → rate-limited, 1308/1310 → quota exhausted, 1312 → retryable, 1311/1313 → permanent) + `model_context_window_exceeded` → retryable
+
+**GLM-5.3 family:**
+<!-- Volatile external fact: re-verify glm-5.3/glm-5.3-flash availability on the standard zai API against Z.ai docs. -->
+- `glm-5.3` and `glm-5.3-flash` are served via the **Coding Plan** endpoint (`zai-coding-plan`) only; they are not yet available on the standard `zai` API.
+- Reasoning is **always enabled** for these models per Z.ai documentation (`thinking.type` only supports `enabled`; effort levels: `low`, `high`, `max`, documented default `max`). Z.ai reports that disabling thinking — via provider config `thinking.enabled: false` or a client-sent `thinking: {type: "disabled"}` — causes upstream 400 errors for these models. The gateway itself does not enforce this: client `thinking` objects are passed through unvalidated, so client-sent disabled thinking will surface as an upstream error. Operators who want to prevent it can set `thinking.enabled: true` (force mode), which overrides the client object entirely.
+- Effort level selection (`low`/`high`/`max`) is client-side: the gateway never validates effort levels (the registry `Levels` field is internal metadata, not advertised to clients).
+- Caution: an explicit provider `thinking` config overrides the client's `thinking` object entirely — force-enabled mode (`thinking.enabled: true`) replaces it with `{type: "enabled", clear_thinking: ...}`, silently dropping client-specified effort levels. In auto mode (no explicit provider config) the client's object is preserved.
+- `glm-5.3` accepts text-only input; `glm-5.3-flash` adds native vision (image content blocks).
+<!-- Volatile external fact: re-verify the promo end date and prices against Z.ai docs near 2026-09-09. -->
+- Reference pricing: `glm-5.3` $1.40/$4.40 per 1M tokens (input/output); `glm-5.3-flash` $0.15/$0.50 standard price. A 50% promotional discount ($0.075/$0.25) runs until 2026-09-09; the registry registers the standard (post-promo) price.
 
 ### OpenCode Zen
 - **Multi-format gateway** — Claude models auto-convert to Anthropic wire format

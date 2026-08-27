@@ -235,3 +235,99 @@ func TestFetchProviderModels_BackfillRespectsProviderAllows(t *testing.T) {
 		t.Errorf("expected model ID gpt-4, got %s", models[0].ID)
 	}
 }
+
+func TestBackfillStaticModels_PreservesInferredCapabilities(t *testing.T) {
+	logger := slog.Default()
+
+	t.Run("zai-coding-plan models keep inferred capabilities", func(t *testing.T) {
+		provider := &config.Provider{
+			Name:           "zai-coding-plan",
+			URL:            "https://api.z.ai/api/coding/paas/v4/chat/completions",
+			AuthStyle:      "none",
+			TimeoutSeconds: 30,
+			AllowedModels:  []string{"glm-5.3-flash"},
+		}
+		// Raw AllowedModels without compiled regexes (unit context: allowedRE
+		// is only populated by config loading) makes AllowsModel allow-all, so
+		// every static zai-coding-plan model is backfilled deterministically.
+
+		models := backfillStaticModels(nil, "zai-coding-plan", provider, logger)
+		// Exactly 2 because the zai-coding-plan registry has exactly two
+		// entries and the uncompiled allowlist (allowedRE nil) allow-alls.
+		if len(models) != 2 {
+			t.Fatalf("expected 2 backfilled models (glm-5.3, glm-5.3-flash), got %d", len(models))
+		}
+		byID := make(map[string]DiscoveredModel, len(models))
+		for _, m := range models {
+			byID[m.ID] = m
+		}
+
+		flash, ok := byID["glm-5.3-flash"]
+		if !ok {
+			t.Fatal("expected glm-5.3-flash to be backfilled")
+		}
+		if flash.Metadata == nil {
+			t.Fatal("expected non-nil metadata on backfilled glm-5.3-flash")
+		}
+		if !flash.Metadata.SupportsVision {
+			t.Error("backfilled glm-5.3-flash lost SupportsVision (InferCapabilities not applied)")
+		}
+		if !flash.Metadata.SupportsReasoning {
+			t.Error("backfilled glm-5.3-flash lost SupportsReasoning")
+		}
+		if !flash.Metadata.SupportsToolCalls {
+			t.Error("backfilled glm-5.3-flash lost SupportsToolCalls")
+		}
+		if flash.Metadata.Pricing == nil {
+			t.Fatal("expected static registry pricing to carry over to backfilled glm-5.3-flash")
+		}
+		if flash.Metadata.Pricing.InputCostPer1M != 0.15 || flash.Metadata.Pricing.OutputCostPer1M != 0.5 {
+			t.Errorf("unexpected pricing on backfilled glm-5.3-flash: input=%v output=%v, want 0.15/0.5",
+				flash.Metadata.Pricing.InputCostPer1M, flash.Metadata.Pricing.OutputCostPer1M)
+		}
+
+		text, ok := byID["glm-5.3"]
+		if !ok {
+			t.Fatal("expected glm-5.3 to be backfilled")
+		}
+		if text.Metadata == nil {
+			t.Fatal("expected non-nil metadata on backfilled glm-5.3")
+		}
+		if text.Metadata.SupportsVision {
+			t.Error("backfilled glm-5.3 must remain text-only (no SupportsVision)")
+		}
+		if !text.Metadata.SupportsReasoning {
+			t.Error("backfilled glm-5.3 lost SupportsReasoning")
+		}
+	})
+
+	// minimax-m2.5 has no capability prefix rule and no Thinking config, so
+	// backfill must produce empty-but-non-nil metadata rather than nil.
+	t.Run("model without capability rule gets empty metadata", func(t *testing.T) {
+		provider := &config.Provider{
+			Name:           "minimax_free",
+			URL:            "https://api.minimax.io/v1/chat/completions",
+			AuthStyle:      "none",
+			TimeoutSeconds: 30,
+			AllowedModels:  []string{"minimax-m2.5"},
+		}
+
+		models := backfillStaticModels(nil, "minimax_free", provider, logger)
+		var target *DiscoveredModel
+		for i := range models {
+			if models[i].ID == "minimax-m2.5" {
+				target = &models[i]
+				break
+			}
+		}
+		if target == nil {
+			t.Fatal("expected minimax-m2.5 to be backfilled")
+		}
+		if target.Metadata == nil {
+			t.Fatal("expected non-nil metadata on backfilled model without capability rules")
+		}
+		if target.Metadata.SupportsVision {
+			t.Error("minimax-m2.5 should not gain SupportsVision from fallback")
+		}
+	})
+}

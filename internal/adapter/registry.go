@@ -114,10 +114,8 @@ func init() {
 		Adapter: &zaiAdapterShim{},
 	})
 
-	registerOpenAI("zai-coding-plan", Capabilities{
-		StreamOptions:  true,
-		AutoToolChoice: true,
-		ContentArrays:  true,
+	Register("zai-coding-plan", AdapterEntry{
+		Adapter: &zaiAdapterShim{},
 	})
 
 	registerOpenAI("groq", Capabilities{

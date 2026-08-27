@@ -789,6 +789,8 @@ For the current catalog, query the `/v1/models` endpoint or enable [dynamic disc
 
 ### Model Reference Table
 
+`—` in the price columns means no pricing is configured for that model in the static registry.
+
 | Model ID | Provider | Max Context (tokens) | Max Output (tokens) | Input Price | Output Price |
 |----------|----------|--------------------:|-------------------:|------------:|------------:|
 | `gemini-3.1-flash-lite-preview` | gemini | 1,048,576 | 65,536 | $0.075/M | $0.30/M |
@@ -797,27 +799,27 @@ For the current catalog, query the `/v1/models` endpoint or enable [dynamic disc
 | `gemini-2.5-flash` | gemini | 1,048,576 | 65,536 | $0.075/M | $0.30/M |
 | `deepseek-v4-pro` | deepseek | 1,000,000 | 384,000 | $2.00/M | $8.00/M |
 | `deepseek-v4-flash` | deepseek | 1,000,000 | 384,000 | $0.10/M | $0.10/M |
-| `glm-5.1` | zai | 200,000 | 128,000 | $0.50/M | $2.00/M |
+| `glm-5.1` | zai | 200,000 | 128,000 | $1.40/M | $4.40/M |
 | `glm-5.2` | zai | 1,000,000 | 128,000 | $1.40/M | $4.40/M |
 | `glm-5.3` | zai-coding-plan | 1,000,000 | 128,000 | $1.40/M | $4.40/M |
 | `glm-5.3-flash` | zai-coding-plan | 1,000,000 | 128,000 | $0.15/M | $0.50/M |
-| `glm-5-turbo` | zai | 200,000 | 128,000 | $0.50/M | $2.00/M |
-| `glm-5v-turbo` | zai | 200,000 | 128,000 | $0.50/M | $2.00/M |
-| `glm-5` | zai | 200,000 | 128,000 | $0.50/M | $2.00/M |
-| `glm-4.7` | zai | 200,000 | 128,000 | $0.50/M | $2.00/M |
-| `glm-4.7-flash` | zai | 200,000 | 128,000 | $0.10/M | $0.10/M |
-| `glm-4.7-flashx` | zai | 200,000 | 128,000 | $0.10/M | $0.10/M |
-| `glm-4.6` | zai | 200,000 | 128,000 | $0.50/M | $2.00/M |
-| `glm-4.6v` | zai | 200,000 | 32,000 | $0.50/M | $2.00/M |
-| `glm-4.5` | zai | 128,000 | 96,000 | $0.50/M | $2.00/M |
-| `glm-4.5-air` | zai | 128,000 | 96,000 | $0.15/M | $0.15/M |
-| `glm-4.5-flash` | zai | 128,000 | 96,000 | $0.10/M | $0.10/M |
-| `glm-4.5v` | zai | 128,000 | 16,000 | $0.50/M | $2.00/M |
-| `glm-4.5-airx` | zai | 128,000 | 96,000 | $0.15/M | $0.15/M |
-| `glm-4.5-x` | zai | 128,000 | 96,000 | $0.50/M | $2.00/M |
-| `glm-4.6v-flash` | zai | 200,000 | 128,000 | $0.10/M | $0.10/M |
-| `glm-4.6v-flashx` | zai | 200,000 | 128,000 | $0.10/M | $0.10/M |
-| `glm-4-32b-0414-128k` | zai | 128,000 | 16,000 | $0.50/M | $2.00/M |
+| `glm-5-turbo` | zai | 200,000 | 128,000 | $1.20/M | $4.00/M |
+| `glm-5v-turbo` | zai | 200,000 | 128,000 | $1.20/M | $4.00/M |
+| `glm-5` | zai | 200,000 | 128,000 | $1.00/M | $3.20/M |
+| `glm-4.7` | zai | 200,000 | 128,000 | $0.60/M | $2.20/M |
+| `glm-4.7-flash` | zai | 200,000 | 128,000 | — | — |
+| `glm-4.7-flashx` | zai | 200,000 | 128,000 | $0.07/M | $0.40/M |
+| `glm-4.6` | zai | 200,000 | 128,000 | $0.60/M | $2.20/M |
+| `glm-4.6v` | zai | 128,000 | 32,768 | $0.30/M | $0.90/M |
+| `glm-4.5` | zai | 128,000 | 96,000 | $0.60/M | $2.20/M |
+| `glm-4.5-air` | zai | 128,000 | 96,000 | $0.20/M | $1.10/M |
+| `glm-4.5-flash` | zai | 128,000 | 96,000 | — | — |
+| `glm-4.5v` | zai | 64,000 | 16,384 | $0.60/M | $1.80/M |
+| `glm-4.5-airx` | zai | 128,000 | 96,000 | $1.10/M | $4.50/M |
+| `glm-4.5-x` | zai | 128,000 | 96,000 | $2.20/M | $8.90/M |
+| `glm-4.6v-flash` | zai | 200,000 | 128,000 | — | — |
+| `glm-4.6v-flashx` | zai | 200,000 | 128,000 | $0.04/M | $0.40/M |
+| `glm-4-32b-0414-128k` | zai | 128,000 | 16,000 | $0.10/M | $0.10/M |
 | `nemotron-3-super` | nvidia_free | 4,000 | 1,024 | $0.10/M | $0.10/M |
 | `qwen-3.6-plus` | qwen_free | 8,000 | 8,192 | $0.10/M | $0.10/M |
 | `minimax-m2.5` | minimax_free | 8,000 | 4,096 | $0.10/M | $0.10/M |

@@ -150,6 +150,8 @@ var ModelRegistry = map[string]ModelEntry{
 
 	"glm-5.1":             {Provider: "zai", MaxContext: 200000, MaxOutput: 128000, Thinking: ModelThinkingConfig{Min: 1024, Max: 128000}, Pricing: PricingOverride{InputCostPer1M: 1.4, OutputCostPer1M: 4.4}},
 	"glm-5.2":             {Provider: "zai", MaxContext: 1000000, MaxOutput: 128000, Thinking: ModelThinkingConfig{Min: 1024, Max: 128000}, Pricing: PricingOverride{InputCostPer1M: 1.4, OutputCostPer1M: 4.4}},
+	"glm-5.3":             {Provider: "zai-coding-plan", MaxContext: 1000000, MaxOutput: 128000, Thinking: ModelThinkingConfig{Min: 1024, Max: 128000, Levels: []string{"low", "high", "max"}}, Pricing: PricingOverride{InputCostPer1M: 1.4, OutputCostPer1M: 4.4}},
+	"glm-5.3-flash":       {Provider: "zai-coding-plan", MaxContext: 1000000, MaxOutput: 128000, Thinking: ModelThinkingConfig{Min: 1024, Max: 128000, Levels: []string{"low", "high", "max"}}, Pricing: PricingOverride{InputCostPer1M: 0.15, OutputCostPer1M: 0.5}},
 	"glm-5-turbo":         {Provider: "zai", MaxContext: 200000, MaxOutput: 128000, Thinking: ModelThinkingConfig{Min: 1024, Max: 128000}, Pricing: PricingOverride{InputCostPer1M: 1.2, OutputCostPer1M: 4.0}},
 	"glm-5v-turbo":        {Provider: "zai", MaxContext: 200000, MaxOutput: 128000, Thinking: ModelThinkingConfig{Min: 1024, Max: 128000}, Pricing: PricingOverride{InputCostPer1M: 1.2, OutputCostPer1M: 4.0}},
 	"glm-5":               {Provider: "zai", MaxContext: 200000, MaxOutput: 128000, Thinking: ModelThinkingConfig{Min: 1024, Max: 128000}, Pricing: PricingOverride{InputCostPer1M: 1.0, OutputCostPer1M: 3.2}},
