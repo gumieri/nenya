@@ -10,81 +10,62 @@ A lightweight, zero-dependency AI API Gateway written in Go. Nenya sits between 
 
 ## How Nenya handles the requests
 
-```text
-+----------------------------------------------+
-| Client (Cursor / OpenCode / Aider / etc.)    |
-| OpenAI-compatible request                    |
-| POST /v1/chat/completions + Bearer token     |
-| or                                           |
-| Anthropic Messages API request               |
-| POST /v1/messages + Bearer token |
-+----------------------------------------------+
-                        |
-                        v
-+----------------------------------------------+
-| Nenya Gateway                                |
-| - auth check + RBAC enforcement              |
-| - parse JSON + extract model                 |
-| - resolve agent/provider                     |
-| - optional cache (HIT => replay SSE)         |
-| - optional MCP context/tool injection        |
-+----------------------------------------------+
-                        |
-                        v
-+----------------------------------------------+
-| Interceptor Chain (pluggable, best-effort)   |
-| - RedactInterceptor  (regex patterns)        |
-| - EntropyInterceptor (high-entropy strings)  |
-| - TFIDFInterceptor   (relevance scoring)     |
-| - BouncerInterceptor (engine summarization)  |
-+----------------------------------------------+
-                        |
-                        v
-+----------------------------------------------+
-| Token Budget Trimming (if payload > hard     |
-| limit) drops oldest non-system messages and  |
-| applies token-aware middle-out truncation    |
-+----------------------------------------------+
-                        |
-                        v
-+----------------------------------------------+
-| Routing                                      |
-|  A) Standard forwarding                      |
-|     - fallback chain + circuit breaker + RL  |
-|  B) MCP multi-turn tool loop (if enabled)    |
-|     - buffer SSE, execute MCP tools, re-send |
-|  C) Context-limit retry                      |
-|     - on upstream 413/context_exceeded,      |
-|       summarize payload, retry with fallback |
-+----------------------------------------------+
-                        |
-                        v
-+----------------------------------------------+
-| Upstream LLM Providers                       |
-| Anthropic | Gemini | DeepSeek | Mistral | ...|
-+----------------------------------------------+
-                        |
-                        |  SSE stream
-                        v
-+----------------------------------------------+
-| Nenya SSE Pipeline                           |
-| - adapter response transforms                |
-| - (optional) OpenAI→Anthropic conversion     |
-| - usage accounting + stream filter           |
-| - flush + (optional) cache capture           |
-| - (optional) MCP auto-save                   |
-+----------------------------------------------+
-                        |
-                        v
-+----------------------------------------------+
-| Client receives transparent SSE output       |
-+----------------------------------------------+
+```mermaid
+flowchart TD
+    CLIENT["Client<br/>Cursor / OpenCode / Aider / etc.<br/>POST /v1/chat/completions · /v1/messages<br/>Bearer token"]
+
+    subgraph GW["Nenya Gateway"]
+        direction TB
+        AUTH["Auth + RBAC"]
+        RESOLVE["Parse body · resolve agent + targets<br/>strategy: fallback · round-robin · sticky"]
+        CACHE{"Response cache"}
+        MCPINJ["MCP auto-search + tool injection"]
+    end
+
+    CHAIN["Interceptor chain (best-effort)<br/>redact → entropy → TF-IDF → bouncer"]
+    TRIM["Token budget trim (hard limit)"]
+
+    subgraph LOOP["Dispatch loop — per target"]
+        direction TB
+        GUARDS["Circuit breaker · rate limits · cost guard"]
+        MODES["A standard forward<br/>B MCP multi-turn tool loop<br/>C context-limit retry"]
+    end
+
+    UPSTREAM["Upstream LLM providers<br/>23 built-in adapters"]
+
+    subgraph SSE["SSE pipeline"]
+        direction TB
+        PROBE["Stream-head probe (pre-header)<br/>empty / early-error failover"]
+        XFORM["Adapter transforms · format conversion"]
+        WATCH["Stall watchdog · stream continuation"]
+        ACCT["Usage accounting · cache capture · MCP auto-save"]
+    end
+
+    OUT["Client receives transparent SSE"]
+
+    CLIENT --> AUTH --> RESOLVE --> CACHE
+    CACHE -- "HIT → replay" --> OUT
+    CACHE -- "miss" --> MCPINJ --> CHAIN --> TRIM --> GUARDS --> MODES --> UPSTREAM
+    UPSTREAM --> PROBE --> XFORM --> WATCH --> ACCT --> OUT
+    PROBE -. "failover → next target" .-> GUARDS
+
+    classDef io fill:#e8ebf0,stroke:#57606a,color:#1f2328
+    classDef gw fill:#ddf4ff,stroke:#0969da,color:#1f2328
+    classDef pipe fill:#fff8c5,stroke:#9a6700,color:#1f2328
+    classDef sse fill:#dafbe1,stroke:#1a7f37,color:#1f2328
+
+    class CLIENT,OUT io
+    class GW,LOOP gw
+    class CHAIN,TRIM pipe
+    class SSE sse
 ```
 
 Flow notes:
 - `/v1/*` endpoints require client bearer auth; `/healthz`, `/statsz`, `/metrics` do not.
 - Pipeline failures degrade gracefully and forward the request instead of returning a 500.
 - MCP-enabled agents can run local/remote tools without exposing MCP complexity to the client.
+- Sticky strategy pins a session (agent + system prompt + first user message) to one provider/model, keeping provider-side prefix caches warm across turns.
+- Upstream streams are probed before headers commit: empty streams or early SSE errors fail over to the next target, and interrupted streams are auto-resumed via stream continuation.
 
 ## Features
 
