@@ -49,6 +49,34 @@ type AccountSelector interface {
 	SelectCredentialForModel(ctx context.Context, provider, model string) (credential, accountID string, ok bool)
 }
 
+// AccountPreference carries a sticky session's pinned account into target
+// building. When set, the matching provider/model target prefers this account
+// over LRU selection, keeping a session on the credential it was previously
+// served by. A zero pointer means no preference.
+type AccountPreference struct {
+	Provider  string
+	Model     string
+	AccountID string
+}
+
+// matches reports whether the preference applies to the given provider/model
+// target entry.
+func (p *AccountPreference) matches(provider, model string) bool {
+	return p != nil && p.Provider == provider && p.Model == model
+}
+
+// PreferredAccountSelector is an optional AccountSelector extension for
+// sticky-session account pinning. Implementations resolve the credential of a
+// specific previously-pinned account; buildTarget falls back to LRU selection
+// when the implementation is missing or the account is unavailable.
+type PreferredAccountSelector interface {
+	AccountSelector
+	// SelectCredentialForPreferredAccount returns the credential for the
+	// specific pinned account when it is present, healthy, and not
+	// billing-exhausted.
+	SelectCredentialForPreferredAccount(ctx context.Context, provider, model, preferredAccountID string) (credential, accountID string, ok bool)
+}
+
 // AgentState tracks per-model request counters, circuit breaker state,
 // and cached selector resolution results.
 type AgentState struct {
@@ -139,7 +167,7 @@ func NewAgentStateWithConfig(logger *slog.Logger, metrics *infra.Metrics, govCon
 	return as
 }
 
-func (a *AgentState) BuildTargetList(ctx context.Context, logger *slog.Logger, agentName string, agent config.AgentConfig, tokenCount int, providers map[string]*config.Provider, catalog *discovery.ModelCatalog, autoContextSkip bool, accountSelector AccountSelector) []UpstreamTarget {
+func (a *AgentState) BuildTargetList(ctx context.Context, logger *slog.Logger, agentName string, agent config.AgentConfig, tokenCount int, providers map[string]*config.Provider, catalog *discovery.ModelCatalog, autoContextSkip bool, accountSelector AccountSelector, preferred *AccountPreference) []UpstreamTarget {
 	models := a.expandModels(agentName, agent, catalog, providers, logger)
 	if len(models) == 0 {
 		return nil
@@ -159,7 +187,7 @@ func (a *AgentState) BuildTargetList(ctx context.Context, logger *slog.Logger, a
 			logger.Debug("free_only provider skipping paid model", "provider", m.Provider, "model", m.Model)
 			continue
 		}
-		t, ok := a.buildTarget(ctx, logger, agentName, m, tokenCount, providers, catalog, autoContextSkip, accountSelector)
+		t, ok := a.buildTarget(ctx, logger, agentName, m, tokenCount, providers, catalog, autoContextSkip, accountSelector, preferred)
 		if !ok {
 			continue
 		}
@@ -647,7 +675,7 @@ func checkProviderAndLocal(a *AgentState, m config.AgentModel, providers map[str
 	return checkLocalModelAvailability(a, m, logger)
 }
 
-func (a *AgentState) buildTarget(ctx context.Context, logger *slog.Logger, agentName string, m config.AgentModel, tokenCount int, providers map[string]*config.Provider, catalog *discovery.ModelCatalog, autoContextSkip bool, accountSelector AccountSelector) (*UpstreamTarget, bool) {
+func (a *AgentState) buildTarget(ctx context.Context, logger *slog.Logger, agentName string, m config.AgentModel, tokenCount int, providers map[string]*config.Provider, catalog *discovery.ModelCatalog, autoContextSkip bool, accountSelector AccountSelector, preferred *AccountPreference) (*UpstreamTarget, bool) {
 	maxCtx := resolveMaxContext(m, catalog)
 	if maxCtx > 0 && tokenCount > maxCtx {
 		logger.Info("skipping model: exceeds max_context",
@@ -694,14 +722,42 @@ func (a *AgentState) buildTarget(ctx context.Context, logger *slog.Logger, agent
 		ReasoningEffort: m.ReasoningEffort,
 	}
 
-	if accountSelector != nil && m.Provider != "" {
-		if cred, acctID, ok := accountSelector.SelectCredentialForModel(ctx, m.Provider, m.Model); ok {
-			t.AccountName = acctID
-			t.Credential = cred
-		}
-	}
+	a.applyAccountCredential(ctx, t, accountSelector, m.Provider, m.Model, preferred)
 
 	return t, true
+}
+
+// applyAccountCredential resolves and assigns the account credential for a
+// target: the sticky session's pinned account when the preference applies and
+// resolves, else the LRU-selected account via SelectCredentialForModel.
+func (a *AgentState) applyAccountCredential(ctx context.Context, t *UpstreamTarget, accountSelector AccountSelector, provider, model string, preferred *AccountPreference) {
+	if accountSelector == nil || provider == "" {
+		return
+	}
+	cred, acctID, ok := selectPreferredCredential(ctx, accountSelector, provider, model, preferred)
+	if !ok {
+		cred, acctID, ok = accountSelector.SelectCredentialForModel(ctx, provider, model)
+	}
+	if ok {
+		t.AccountName = acctID
+		t.Credential = cred
+	}
+}
+
+// selectPreferredCredential resolves the sticky session's pinned account for
+// a provider/model entry when the preference applies and the selector supports
+// by-ID selection. Returns ok=false when the preference does not apply, the
+// selector lacks the extension, or the pinned account is unavailable — the
+// caller then falls back to LRU selection.
+func selectPreferredCredential(ctx context.Context, accountSelector AccountSelector, provider, model string, preferred *AccountPreference) (string, string, bool) {
+	if !preferred.matches(provider, model) {
+		return "", "", false
+	}
+	pref, ok := accountSelector.(PreferredAccountSelector)
+	if !ok {
+		return "", "", false
+	}
+	return pref.SelectCredentialForPreferredAccount(ctx, provider, model, preferred.AccountID)
 }
 
 // ActivateCooldown forces the circuit breaker for a target into the open state

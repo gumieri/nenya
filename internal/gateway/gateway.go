@@ -922,6 +922,15 @@ func (g *NenyaGateway) SelectCredentialForModel(ctx context.Context, provider, m
 	return string(key), accountID, ok
 }
 
+// SelectCredentialForPreferredAccount satisfies the
+// routing.PreferredAccountSelector interface: it resolves the credential of a
+// sticky session's pinned account, or reports not-ok when the account is
+// absent, unhealthy, or billing-exhausted so the caller falls back to LRU.
+func (g *NenyaGateway) SelectCredentialForPreferredAccount(ctx context.Context, provider, model, preferredAccountID string) (string, string, bool) {
+	key, acctID, ok := g.selectPreferredAccountKey(ctx, provider, model, preferredAccountID)
+	return string(key), acctID, ok
+}
+
 // ListAccountIDs satisfies the billing.AccountLister interface.
 func (g *NenyaGateway) ListAccountIDs(ctx context.Context, provider string) []string {
 	if g.AccountManager == nil {

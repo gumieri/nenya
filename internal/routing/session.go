@@ -18,11 +18,11 @@ const (
 	DefaultSessionTTL = 1 * time.Hour
 )
 
-// sessionState is a single pinned routing target for one session.
+// SessionState is a single pinned routing target for one session.
 // It stores only identifiers (provider, model, account ID) and the agent's
 // configured idle TTL — credentials are re-resolved per request via the
 // AccountSelector, never retained here.
-type sessionState struct {
+type SessionState struct {
 	Provider string
 	Model    string
 	Account  string
@@ -36,7 +36,7 @@ type sessionState struct {
 // concurrent use; all methods are mutex-guarded.
 type SessionRouter struct {
 	mu       sync.Mutex
-	sessions map[string]*sessionState
+	sessions map[string]*SessionState
 	cap      int
 	ttl      time.Duration
 	now      func() time.Time
@@ -54,7 +54,7 @@ func NewSessionRouter(cap int, ttl time.Duration, metrics *infra.Metrics, logger
 		ttl = DefaultSessionTTL
 	}
 	return &SessionRouter{
-		sessions: make(map[string]*sessionState),
+		sessions: make(map[string]*SessionState),
 		cap:      cap,
 		ttl:      ttl,
 		now:      time.Now,
@@ -93,14 +93,14 @@ func (r *SessionRouter) Pin(key, provider, model, account string, ttl time.Durat
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.sessions == nil {
-		r.sessions = make(map[string]*sessionState)
+		r.sessions = make(map[string]*SessionState)
 	}
 	// Timestamps are assigned under the lock so LastSeen reflects lock
 	// acquisition order; without this, two goroutines capturing time.Now()
 	// before locking can order the LRU incorrectly and evict an entry that
 	// was pinned more recently.
 	now := r.now()
-	entry := &sessionState{
+	entry := &SessionState{
 		Provider: provider,
 		Model:    model,
 		Account:  account,
@@ -133,9 +133,9 @@ func (r *SessionRouter) Promote(key, provider, model, account string, ttl time.D
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.sessions == nil {
-		r.sessions = make(map[string]*sessionState)
+		r.sessions = make(map[string]*SessionState)
 	}
-	r.sessions[key] = &sessionState{
+	r.sessions[key] = &SessionState{
 		Provider: provider,
 		Model:    model,
 		Account:  account,
@@ -154,9 +154,9 @@ func (r *SessionRouter) Promote(key, provider, model, account string, ttl time.D
 // LastSeen so active sessions stay warm. A returned pin is only advisory:
 // pin validity (active vs cooling, context fit) is re-checked against the
 // freshly built target list on every request.
-func (r *SessionRouter) Lookup(key string) (sessionState, bool) {
+func (r *SessionRouter) Lookup(key string) (SessionState, bool) {
 	if r == nil {
-		return sessionState{}, false
+		return SessionState{}, false
 	}
 	now := r.now()
 	r.mu.Lock()
@@ -164,7 +164,7 @@ func (r *SessionRouter) Lookup(key string) (sessionState, bool) {
 
 	entry, ok := r.sessions[key]
 	if !ok {
-		return sessionState{}, false
+		return SessionState{}, false
 	}
 	ttl := entry.ttl
 	if ttl <= 0 {
@@ -173,7 +173,7 @@ func (r *SessionRouter) Lookup(key string) (sessionState, bool) {
 	if now.Sub(entry.LastSeen) > ttl {
 		delete(r.sessions, key)
 		r.record("expired")
-		return sessionState{}, false
+		return SessionState{}, false
 	}
 	entry.LastSeen = now
 	return *entry, true

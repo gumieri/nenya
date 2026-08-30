@@ -139,7 +139,7 @@ func TestApplyStickyRouting_NewPin(t *testing.T) {
 		{Provider: "zai", Model: "zai-free", MaxContext: 256000},
 		{Provider: "deepseek", Model: "deepseek-free", MaxContext: 64000},
 	}
-	out := applyStickyRouting(req, gw, agent, targets)
+	out := applyStickyRouting(req, gw, agent, targets, resolveStickyPin(req, gw, agent))
 	if out[0].Provider != "zai" {
 		t.Fatalf("expected first target pinned, got %+v", out[0])
 	}
@@ -166,7 +166,7 @@ func TestApplyStickyRouting_ReusePin(t *testing.T) {
 		{Provider: "zai", Model: "zai-free", CoolKey: "opencode:zai:zai-free"},
 		{Provider: "deepseek", Model: "deepseek-free", CoolKey: "opencode:deepseek:deepseek-free"},
 	}
-	out := applyStickyRouting(req, gw, agent, targets)
+	out := applyStickyRouting(req, gw, agent, targets, resolveStickyPin(req, gw, agent))
 	if out[0].Provider != "zai" || out[0].Model != "zai-free" {
 		t.Fatalf("expected pinned target promoted to front, got %+v", out[0])
 	}
@@ -189,7 +189,7 @@ func TestApplyStickyRouting_CoolingPinPromoted(t *testing.T) {
 		{Provider: "deepseek", Model: "deepseek-free", CoolKey: "opencode:deepseek:deepseek-free"},
 		{Provider: "zai", Model: "zai-free", CoolKey: "opencode:zai:zai-free", Cooling: true},
 	}
-	out := applyStickyRouting(req, gw, agent, targets)
+	out := applyStickyRouting(req, gw, agent, targets, resolveStickyPin(req, gw, agent))
 	if out[0].Provider != "deepseek" {
 		t.Fatalf("expected first active target at front, got %+v", out[0])
 	}

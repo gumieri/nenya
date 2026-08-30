@@ -149,7 +149,19 @@ func (p *Proxy) resolveAgentRouting(ctx context.Context, req *chatRequest, gw *g
 	cooldown := getAgentCooldown(agent)
 	maxRetries := agent.MaxRetries
 
-	targets := gw.AgentState.BuildTargetList(ctx, gw.Logger, req.ModelName, agent, req.TokenCount, gw.Providers, gw.ModelCatalog, gw.Config.Governance.AutoContextSkip != nil && *gw.Config.Governance.AutoContextSkip, gw)
+	strategy := agent.Strategy
+	if strategy == "" {
+		strategy = "round-robin"
+	}
+
+	// Resolve the sticky session pin before target build so the pinned
+	// account can steer credential selection via the account preference.
+	var sticky *stickyPin
+	if strategy == "sticky" {
+		sticky = resolveStickyPin(req, gw, agent)
+	}
+
+	targets := gw.AgentState.BuildTargetList(ctx, gw.Logger, req.ModelName, agent, req.TokenCount, gw.Providers, gw.ModelCatalog, gw.Config.Governance.AutoContextSkip != nil && *gw.Config.Governance.AutoContextSkip, gw, sticky.preference())
 	targets = filterExhaustedTargets(targets, gw.BillingTracker, gw.Logger)
 	if len(targets) == 0 {
 		return handleEmptyAgentTargets(req, gw, agent)
@@ -159,13 +171,8 @@ func (p *Proxy) resolveAgentRouting(ctx context.Context, req *chatRequest, gw *g
 		targets = reorderTargetsByLatency(req, gw, targets)
 	}
 
-	strategy := agent.Strategy
-	if strategy == "" {
-		strategy = "round-robin"
-	}
-
 	if strategy == "sticky" {
-		targets = applyStickyRouting(req, gw, agent, targets)
+		targets = applyStickyRouting(req, gw, agent, targets, sticky)
 	}
 
 	gw.Logger.Info("agent routing",
@@ -174,32 +181,70 @@ func (p *Proxy) resolveAgentRouting(ctx context.Context, req *chatRequest, gw *g
 	return targets, req.AgentName, cooldown, maxRetries, nil
 }
 
+// stickyPin holds the sticky session context resolved once before target
+// build: the session key, the current pin (when one exists), and whether the
+// pin was found. Both account-preference steering and reorder/promotion reuse
+// this single lookup, so one request observes one consistent pin.
+type stickyPin struct {
+	key   string
+	state routing.SessionState
+	found bool
+}
+
+// preference returns the pinned account for preferred credential selection
+// during target build, or nil when there is no account-bearing pin.
+func (s *stickyPin) preference() *routing.AccountPreference {
+	if s == nil || !s.found || s.state.Account == "" {
+		return nil
+	}
+	return &routing.AccountPreference{
+		Provider:  s.state.Provider,
+		Model:     s.state.Model,
+		AccountID: s.state.Account,
+	}
+}
+
+// resolveStickyPin resolves the sticky session context for a request: the
+// session key and, when present, the currently pinned provider/model/account.
+// Returns nil when sticky routing cannot apply (no session router, or no
+// session key derivable from the request).
+func resolveStickyPin(req *chatRequest, gw *gateway.NenyaGateway, agent config.AgentConfig) *stickyPin {
+	if gw.AgentState == nil || gw.AgentState.SessionRouter == nil {
+		return nil
+	}
+	key, ok := sessionKeyFromRequest(req, gw, agent)
+	if !ok {
+		return nil
+	}
+	pin, found := gw.AgentState.SessionRouter.Lookup(key)
+	return &stickyPin{key: key, state: pin, found: found}
+}
+
 // applyStickyRouting pins the session to its previously selected provider
 // and model, when the pin is still valid (active, present in the built
 // target list). Reorders the target list so the pinned target is first,
 // leaving the remainder as the ordered failover tail. When the pin target is
 // cooling, exhausted, or no longer present, the pin is promoted to the first
 // active target (failover path).
-func applyStickyRouting(req *chatRequest, gw *gateway.NenyaGateway, agent config.AgentConfig, targets []routing.UpstreamTarget) []routing.UpstreamTarget {
-	key, ok := sessionKeyFromRequest(req, gw, agent)
-	if !ok || gw.AgentState == nil || gw.AgentState.SessionRouter == nil {
+func applyStickyRouting(req *chatRequest, gw *gateway.NenyaGateway, agent config.AgentConfig, targets []routing.UpstreamTarget, sticky *stickyPin) []routing.UpstreamTarget {
+	if sticky == nil || gw.AgentState == nil || gw.AgentState.SessionRouter == nil {
 		return targets
 	}
 
 	ttl := agentStickyTTL(agent)
-	pin, ok := gw.AgentState.SessionRouter.Lookup(key)
-	if !ok {
+	if !sticky.found {
 		if pinTarget, ok := firstActiveTarget(targets); ok {
-			gw.AgentState.SessionRouter.Pin(key, pinTarget.Provider, pinTarget.Model, pinTarget.AccountName, ttl)
+			gw.AgentState.SessionRouter.Pin(sticky.key, pinTarget.Provider, pinTarget.Model, pinTarget.AccountName, ttl)
 		}
 		return targets
 	}
 
+	pin := sticky.state
 	if i := indexOfActiveTarget(targets, pin.Provider, pin.Model); i > 0 {
 		return moveToFront(targets, i)
 	}
 	if pinTarget, ok := firstActiveTarget(targets); ok {
-		gw.AgentState.SessionRouter.Promote(key, pinTarget.Provider, pinTarget.Model, pinTarget.AccountName, ttl)
+		gw.AgentState.SessionRouter.Promote(sticky.key, pinTarget.Provider, pinTarget.Model, pinTarget.AccountName, ttl)
 		gw.Logger.Debug("sticky pin promoted to alternative active target",
 			"agent", req.ModelName, "from", pin.Provider+"/"+pin.Model, "to", pinTarget.Provider+"/"+pinTarget.Model)
 	}
