@@ -136,7 +136,7 @@ type UsageData struct {
 
 ### Sticky routing and prefix cache warmth
 
-Prefix cache relies on stable request prefixes (system prompt, tools, pinned messages) and stable upstream provider placement. Using the `sticky` agent routing strategy (see [`ROUTING.md`](ROUTING.md#agent-routing-strategies)) preserves provider-side KV blocks across turns by pinning a session to a single provider/model combination. Without stickiness, round-robin or fallback routing would rotate requests across providers, breaking per-provider prefix caches and incurring repeated `cache_creation` token costs on every turn.
+Prefix cache relies on stable request prefixes (system prompt, tools, pinned messages) and stable upstream provider placement. Using the `sticky` agent routing strategy (see [`ROUTING.md`](ROUTING.md#agent-routing-strategies)) preserves provider-side KV blocks across turns by pinning a session to a single provider/model combination. Without stickiness, round-robin or fallback routing would rotate requests across providers, breaking per-provider prefix caches and incurring repeated `cache_creation` token costs on every turn. On multi-account providers the pin also carries the serving account and later turns prefer it (account pinning, with LRU fallback when the account is unavailable), keeping a session on the same API key — relevant when a provider shards prefix caches or rate-limit budgets per account.
 
 ### Refusal and error cache exclusion
 
