@@ -11,6 +11,7 @@ import (
 const (
 	AgentStrategyRoundRobin = "round-robin"
 	AgentStrategyFallback   = "fallback"
+	AgentStrategySticky     = "sticky"
 )
 
 type AutoAgentConfig struct {

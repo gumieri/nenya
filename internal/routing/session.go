@@ -118,11 +118,14 @@ func (r *SessionRouter) Pin(key, provider, model, account string, ttl time.Durat
 	}
 }
 
-// Promote overwrites the pinned target for the given session key following
-// a failover: the previous pin was invalidated (cooldown, exhaustion, or
-// context growth) and a different target is now sticky. The ttl argument is
-// the per-agent idle TTL (non-positive falls back to the router default).
-// Records a `failover` metric.
+// Promote unconditionally overwrites the pinned target for the given session
+// key following a failover: the previous pin was invalidated (cooldown,
+// exhaustion, or context growth) and a different target is now sticky. It
+// records a failover metric even when the new target equals the current pin —
+// prefer PromoteIfChanged, which dedupes no-change promotions; Promote is
+// retained as the unconditional variant for tests and external callers. The
+// ttl argument is the per-agent idle TTL (non-positive falls back to the
+// router default).
 func (r *SessionRouter) Promote(key, provider, model, account string, ttl time.Duration) {
 	if r == nil {
 		return
@@ -135,13 +138,14 @@ func (r *SessionRouter) Promote(key, provider, model, account string, ttl time.D
 	if r.sessions == nil {
 		r.sessions = make(map[string]*SessionState)
 	}
+	now := r.now()
 	r.sessions[key] = &SessionState{
 		Provider: provider,
 		Model:    model,
 		Account:  account,
 		ttl:      ttl,
-		Since:    r.now(),
-		LastSeen: r.now(),
+		Since:    now,
+		LastSeen: now,
 	}
 	r.record("failover")
 	if r.logger != nil {
@@ -177,6 +181,70 @@ func (r *SessionRouter) Lookup(key string) (SessionState, bool) {
 	}
 	entry.LastSeen = now
 	return *entry, true
+}
+
+// Peek returns a copy of the pinned target for the given session key without
+// refreshing LastSeen, deleting expired entries, or recording metrics. Used
+// for read-only decisions (e.g. account preference during target build) that
+// must not extend the pin TTL when the request later fails routing. Expired
+// pins are reported as absent.
+func (r *SessionRouter) Peek(key string) (SessionState, bool) {
+	if r == nil {
+		return SessionState{}, false
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	entry, ok := r.sessions[key]
+	if !ok {
+		return SessionState{}, false
+	}
+	ttl := entry.ttl
+	if ttl <= 0 {
+		ttl = r.ttl
+	}
+	if r.now().Sub(entry.LastSeen) > ttl {
+		return SessionState{}, false
+	}
+	return *entry, true
+}
+
+// PromoteIfChanged overwrites the pinned target for the given session key
+// following a failover, but only when the new provider/model/account differs
+// from the currently pinned one. Concurrent promotions of the same effective
+// target therefore record a single failover metric. The ttl argument is the
+// per-agent idle TTL (non-positive falls back to the router default).
+// Returns true when the pin was changed.
+func (r *SessionRouter) PromoteIfChanged(key, provider, model, account string, ttl time.Duration) bool {
+	if r == nil {
+		return false
+	}
+	if ttl <= 0 {
+		ttl = r.ttl
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if entry, ok := r.sessions[key]; ok &&
+		entry.Provider == provider && entry.Model == model && entry.Account == account {
+		return false
+	}
+	if r.sessions == nil {
+		r.sessions = make(map[string]*SessionState)
+	}
+	now := r.now()
+	r.sessions[key] = &SessionState{
+		Provider: provider,
+		Model:    model,
+		Account:  account,
+		ttl:      ttl,
+		Since:    now,
+		LastSeen: now,
+	}
+	r.record("failover")
+	if r.logger != nil {
+		r.logger.Info("session pin promoted after failover", "key", key, "provider", provider, "model", model, "account", account, "ttl", ttl)
+	}
+	return true
 }
 
 // Evict removes the pin for the given session key.

@@ -143,9 +143,43 @@ func TestApplyStickyRouting_NewPin(t *testing.T) {
 	if out[0].Provider != "zai" {
 		t.Fatalf("expected first target pinned, got %+v", out[0])
 	}
-	state, ok := gw.SessionRouter.Lookup("unused")
-	if ok {
-		t.Fatalf("pin should not be creatable without a stable key, got %+v", state)
+	key := routing.SessionKey("opencode", "", "first turn")
+	state, ok := gw.SessionRouter.Lookup(key)
+	if !ok || state.Provider != "zai" || state.Model != "zai-free" {
+		t.Fatalf("expected new pin under the real session key, got %+v, %v", state, ok)
+	}
+	if gw.SessionRouter.Len() != 1 {
+		t.Fatalf("expected exactly 1 pin, got %d", gw.SessionRouter.Len())
+	}
+}
+
+func TestApplyStickyRouting_EmptyAccountDoesNotWipePin(t *testing.T) {
+	gw := &gateway.NenyaGateway{
+		Logger:     testLog(t),
+		AgentState: routing.NewAgentState(testLog(t), nil),
+	}
+	gw.SessionRouter = gw.AgentState.SessionRouter
+	agent := config.AgentConfig{Strategy: "sticky"}
+	req := &chatRequest{ModelName: "opencode", Payload: map[string]any{
+		"messages": []any{map[string]any{"role": "user", "content": "first turn"}},
+	}}
+	key := routing.SessionKey("opencode", "", "first turn")
+	gw.SessionRouter.Pin(key, "zai", "zai-free", "acct-a", 0)
+
+	// Pinned account unavailable AND LRU fallback failed entirely: the front
+	// target carries no account. The pin's account must be preserved so the
+	// session can return to it once accounts recover.
+	targets := []routing.UpstreamTarget{
+		{Provider: "zai", Model: "zai-free", CoolKey: "opencode:zai:zai-free"},
+	}
+	before, ok := gw.SessionRouter.Lookup(key)
+	if !ok {
+		t.Fatal("expected pin before apply")
+	}
+	applyStickyRouting(req, gw, agent, targets, resolveStickyPin(req, gw, agent))
+	after, ok := gw.SessionRouter.Lookup(key)
+	if !ok || after.Account != "acct-a" || !after.Since.Equal(before.Since) {
+		t.Fatalf("expected pin account preserved untouched, got %+v (before Since %v)", after, before.Since)
 	}
 }
 

@@ -471,7 +471,7 @@ func TestAccountPool_SelectAccountByID_Healthy(t *testing.T) {
 	}
 	pool := NewAccountPool("test-provider", accounts)
 
-	acc, err := pool.SelectAccountByID("a2", "gpt-4")
+	acc, err := pool.SelectAccountByID(context.Background(), "a2", "gpt-4")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -491,13 +491,16 @@ func TestAccountPool_SelectAccountByID_Healthy(t *testing.T) {
 func TestAccountPool_SelectAccountByID_Missing(t *testing.T) {
 	pool := NewAccountPool("test-provider", []*config.ProviderAccount{newTestAccount("a1", "key1")})
 
-	_, err := pool.SelectAccountByID("nope", "gpt-4")
+	_, err := pool.SelectAccountByID(context.Background(), "nope", "gpt-4")
 	noAccountErr, ok := err.(*NoAvailableAccountError)
 	if !ok {
 		t.Fatalf("expected NoAvailableAccountError, got %T", err)
 	}
 	if noAccountErr.Provider != "test-provider" {
 		t.Errorf("expected provider 'test-provider', got %s", noAccountErr.Provider)
+	}
+	if noAccountErr.Reason != "not_found" {
+		t.Errorf("expected reason 'not_found', got %q", noAccountErr.Reason)
 	}
 }
 
@@ -506,8 +509,13 @@ func TestAccountPool_SelectAccountByID_Cooling(t *testing.T) {
 	acc.RateLimitedUntil = time.Now().Add(1 * time.Hour)
 	pool := NewAccountPool("test-provider", []*config.ProviderAccount{acc})
 
-	if _, err := pool.SelectAccountByID("a1", "gpt-4"); err == nil {
-		t.Error("expected error for cooling account")
+	_, err := pool.SelectAccountByID(context.Background(), "a1", "gpt-4")
+	noAccountErr, ok := err.(*NoAvailableAccountError)
+	if !ok {
+		t.Fatalf("expected NoAvailableAccountError, got %T", err)
+	}
+	if noAccountErr.Reason != "cooling" {
+		t.Errorf("expected reason 'cooling', got %q", noAccountErr.Reason)
 	}
 }
 
@@ -516,8 +524,13 @@ func TestAccountPool_SelectAccountByID_Inactive(t *testing.T) {
 	acc.Status = config.AccountStatusError
 	pool := NewAccountPool("test-provider", []*config.ProviderAccount{acc})
 
-	if _, err := pool.SelectAccountByID("a1", "gpt-4"); err == nil {
-		t.Error("expected error for inactive account")
+	_, err := pool.SelectAccountByID(context.Background(), "a1", "gpt-4")
+	noAccountErr, ok := err.(*NoAvailableAccountError)
+	if !ok {
+		t.Fatalf("expected NoAvailableAccountError, got %T", err)
+	}
+	if noAccountErr.Reason != "inactive" {
+		t.Errorf("expected reason 'inactive', got %q", noAccountErr.Reason)
 	}
 }
 
@@ -526,11 +539,43 @@ func TestAccountPool_SelectAccountByID_ModelLocked(t *testing.T) {
 	acc.ModelLocks["gpt-4"] = time.Now().Add(1 * time.Hour)
 	pool := NewAccountPool("test-provider", []*config.ProviderAccount{acc})
 
-	if _, err := pool.SelectAccountByID("a1", "gpt-4"); err == nil {
-		t.Error("expected error for model-locked account")
+	_, err := pool.SelectAccountByID(context.Background(), "a1", "gpt-4")
+	noAccountErr, ok := err.(*NoAvailableAccountError)
+	if !ok {
+		t.Fatalf("expected NoAvailableAccountError, got %T", err)
 	}
-	if _, err := pool.SelectAccountByID("a1", "claude-3"); err != nil {
+	if noAccountErr.Reason != "model_locked" {
+		t.Errorf("expected reason 'model_locked', got %q", noAccountErr.Reason)
+	}
+	if _, err := pool.SelectAccountByID(context.Background(), "a1", "claude-3"); err != nil {
 		t.Fatalf("unexpected error for unlocked model: %v", err)
+	}
+}
+
+func TestAccountPool_SelectAccountExcluding(t *testing.T) {
+	accounts := []*config.ProviderAccount{
+		newTestAccount("a1", "key1"),
+		newTestAccount("a2", "key2"),
+	}
+	pool := NewAccountPool("test-provider", accounts)
+	ctx := context.Background()
+
+	// LRU picks a1 first; excluding it must yield a2.
+	first, err := pool.SelectAccount(ctx, "gpt-4")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	second, err := pool.SelectAccountExcluding(ctx, "gpt-4", map[string]bool{first.ID: true})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if second.ID == first.ID {
+		t.Fatalf("excluded account %s re-selected", first.ID)
+	}
+
+	// Excluding every account reports no availability.
+	if _, err := pool.SelectAccountExcluding(ctx, "gpt-4", map[string]bool{"a1": true, "a2": true}); err == nil {
+		t.Fatal("expected error when all accounts are excluded")
 	}
 }
 
@@ -571,7 +616,7 @@ func TestAccountPool_SelectAccountByID_Concurrent(t *testing.T) {
 		go func(i int) {
 			defer wg.Done()
 			if i%2 == 0 {
-				if _, err := pool.SelectAccountByID("a1", "gpt-4"); err != nil {
+				if _, err := pool.SelectAccountByID(context.Background(), "a1", "gpt-4"); err != nil {
 					t.Errorf("unexpected error: %v", err)
 				}
 				return

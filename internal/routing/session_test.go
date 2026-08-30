@@ -76,6 +76,80 @@ func TestSessionRouterPromote(t *testing.T) {
 	}
 }
 
+func TestSessionRouterPeek(t *testing.T) {
+	sr := NewSessionRouter(10, 1*time.Hour, nil, nil)
+	if _, ok := sr.Peek("missing"); ok {
+		t.Fatal("expected absent pin for unknown key")
+	}
+
+	sr.Pin("k1", "p1", "m1", "a1", 0)
+	pin, ok := sr.Peek("k1")
+	if !ok || pin.Provider != "p1" || pin.Model != "m1" || pin.Account != "a1" {
+		t.Fatalf("unexpected peek: %+v, %v", pin, ok)
+	}
+
+	// Peek reports expired pins as absent without deleting them or recording
+	// metrics; the subsequent Lookup performs the destructive expiry.
+	sr.Pin("k2", "p2", "m2", "a2", 50*time.Millisecond)
+	time.Sleep(60 * time.Millisecond)
+	if _, ok := sr.Peek("k2"); ok {
+		t.Fatal("expected expired pin to be reported absent by Peek")
+	}
+	if _, ok := sr.Lookup("k2"); ok {
+		t.Fatal("expected expired pin to be reported absent by Lookup")
+	}
+
+	// Peek on a live pin leaves LastSeen untouched.
+	sr2 := NewSessionRouter(10, 1*time.Hour, nil, nil)
+	sr2.Pin("k1", "p1", "m1", "a1", 0)
+	before, _ := sr2.Peek("k1")
+	sr2.Peek("k1")
+	sr2.Peek("k1")
+	after, _ := sr2.Peek("k1")
+	if !after.LastSeen.Equal(before.LastSeen) {
+		t.Fatal("Peek must not refresh LastSeen")
+	}
+}
+
+func TestSessionRouterPromoteIfChanged(t *testing.T) {
+	sr := NewSessionRouter(10, 1*time.Hour, nil, nil)
+	sr.Pin("k1", "p1", "m1", "a1", 0)
+	before, _ := sr.Lookup("k1")
+
+	// Identical target: no change, no Since reset.
+	if sr.PromoteIfChanged("k1", "p1", "m1", "a1", 0) {
+		t.Fatal("expected false for unchanged pin")
+	}
+	after, ok := sr.Lookup("k1")
+	if !ok || !after.Since.Equal(before.Since) {
+		t.Fatalf("unchanged pin must be untouched, got %+v (before Since %v)", after, before.Since)
+	}
+
+	// Account change only.
+	if !sr.PromoteIfChanged("k1", "p1", "m1", "a2", 0) {
+		t.Fatal("expected true for account change")
+	}
+	state, _ := sr.Lookup("k1")
+	if state.Account != "a2" || state.Provider != "p1" || state.Model != "m1" {
+		t.Fatalf("unexpected pin after account change: %+v", state)
+	}
+
+	// Provider/model change.
+	if !sr.PromoteIfChanged("k1", "p2", "m2", "a2", 0) {
+		t.Fatal("expected true for provider/model change")
+	}
+	state, _ = sr.Lookup("k1")
+	if state.Provider != "p2" || state.Model != "m2" {
+		t.Fatalf("unexpected pin after provider/model change: %+v", state)
+	}
+
+	// Nil router is a safe no-op.
+	var nilRouter *SessionRouter
+	if nilRouter.PromoteIfChanged("k", "p", "m", "a", 0) {
+		t.Fatal("nil router must report no change")
+	}
+}
+
 func TestSessionRouterEvict(t *testing.T) {
 	sr := NewSessionRouter(10, 1*time.Hour, nil, nil)
 	sr.Pin("k1", "p1", "m1", "a1", 0)

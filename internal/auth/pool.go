@@ -9,6 +9,9 @@ import (
 	"github.com/nenya/config"
 )
 
+// SelectedAccount is the immutable snapshot returned by account selection:
+// the account ID and its credential copy. Callers must not mutate pool state
+// directly — use ReportError/ReportSuccess instead.
 type SelectedAccount struct {
 	ID         string
 	Credential string
@@ -35,6 +38,15 @@ func NewAccountPool(provider string, accounts []*config.ProviderAccount) *Accoun
 // Returns a copy of the selected account's immutable fields; caller
 // must use ReportError/ReportSuccess to mutate pool state.
 func (p *AccountPool) SelectAccount(ctx context.Context, model string) (*SelectedAccount, error) {
+	return p.SelectAccountExcluding(ctx, model, nil)
+}
+
+// SelectAccountExcluding picks the least-recently-used healthy account for
+// the given model, skipping accounts in the exclude set (by ID) on top of the
+// standard health gates (active, not rate-limited, not model-locked). Used by
+// callers with out-of-band health knowledge (e.g. billing exhaustion) to
+// retry sibling selection without re-selecting a known-bad account.
+func (p *AccountPool) SelectAccountExcluding(ctx context.Context, model string, exclude map[string]bool) (*SelectedAccount, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
@@ -42,13 +54,16 @@ func (p *AccountPool) SelectAccount(ctx context.Context, model string) (*Selecte
 
 	var available []*config.ProviderAccount
 	for _, acc := range p.accounts {
+		if exclude[acc.ID] {
+			continue
+		}
 		if acc.Status != config.AccountStatusActive {
 			continue
 		}
 		if now.Before(acc.RateLimitedUntil) {
 			continue
 		}
-		if p.isModelLocked(acc, model) {
+		if p.isModelLocked(acc, model, now) {
 			continue
 		}
 		available = append(available, acc)
@@ -76,29 +91,34 @@ func (p *AccountPool) SelectAccount(ctx context.Context, model string) (*Selecte
 // Used by sticky session routing to pin a session to the account it was
 // previously served by. The account is returned only when healthy for the
 // given model: present in the pool, active, not rate-limited (cooldown), and
-// not model-locked. On success LastUsed is updated, keeping LRU selection fair
-// for unpinned sessions. Returns a copy of the selected account's immutable
-// fields; caller must use ReportError/ReportSuccess to mutate pool state.
-// Billing exhaustion is not checked here — callers holding a BillingTracker
-// must layer that gate on top to keep this package billing-agnostic.
-func (p *AccountPool) SelectAccountByID(accountID, model string) (*SelectedAccount, error) {
+// not model-locked — each failure mode is reported via NoAvailableAccountError
+// with a distinct Reason. On success LastUsed is updated, keeping LRU
+// selection fair for unpinned sessions. Returns a copy of the selected
+// account's immutable fields; caller must use ReportError/ReportSuccess to
+// mutate pool state. Billing exhaustion is not checked here — callers holding
+// a BillingTracker must layer that gate on top to keep this package
+// billing-agnostic. The ctx parameter is currently unused; it is kept for
+// signature symmetry with SelectAccount and future storage-aware selection.
+func (p *AccountPool) SelectAccountByID(ctx context.Context, accountID, model string) (*SelectedAccount, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
+	now := time.Now()
+
 	acc := p.findAccount(accountID)
 	if acc == nil {
-		return nil, &NoAvailableAccountError{Provider: p.provider}
+		return nil, &NoAvailableAccountError{Provider: p.provider, Reason: "not_found"}
 	}
 	if acc.Status != config.AccountStatusActive {
-		return nil, &NoAvailableAccountError{Provider: p.provider}
+		return nil, &NoAvailableAccountError{Provider: p.provider, Reason: "inactive"}
 	}
-	if time.Now().Before(acc.RateLimitedUntil) {
-		return nil, &NoAvailableAccountError{Provider: p.provider}
+	if now.Before(acc.RateLimitedUntil) {
+		return nil, &NoAvailableAccountError{Provider: p.provider, Reason: "cooling"}
 	}
-	if p.isModelLocked(acc, model) {
-		return nil, &NoAvailableAccountError{Provider: p.provider}
+	if p.isModelLocked(acc, model, now) {
+		return nil, &NoAvailableAccountError{Provider: p.provider, Reason: "model_locked"}
 	}
-	acc.LastUsed = time.Now()
+	acc.LastUsed = now
 
 	return &SelectedAccount{
 		ID:         acc.ID,
@@ -106,13 +126,14 @@ func (p *AccountPool) SelectAccountByID(accountID, model string) (*SelectedAccou
 	}, nil
 }
 
-// isModelLocked checks if the account has a lock for the given model.
-func (p *AccountPool) isModelLocked(account *config.ProviderAccount, model string) bool {
+// isModelLocked checks if the account has a live lock for the given model at
+// the provided instant.
+func (p *AccountPool) isModelLocked(account *config.ProviderAccount, model string, now time.Time) bool {
 	until, locked := account.ModelLocks[model]
 	if !locked {
 		return false
 	}
-	return time.Now().Before(until)
+	return now.Before(until)
 }
 
 // ApplyError applies an error state to the account.

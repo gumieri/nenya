@@ -30,12 +30,19 @@ var (
 )
 
 // NoAvailableAccountError indicates no accounts are available for selection.
+// Reason distinguishes the failure mode ("not_found", "inactive", "cooling",
+// "model_locked", or empty for the LRU selection path) so sticky pin misses
+// are diagnosable in production logs.
 type NoAvailableAccountError struct {
 	Provider string
+	Reason   string
 }
 
 // Error implements the error interface.
 func (e *NoAvailableAccountError) Error() string {
+	if e.Reason != "" {
+		return fmt.Sprintf("no available accounts for provider %q (reason: %s)", e.Provider, e.Reason)
+	}
 	return fmt.Sprintf("no available accounts for provider %q", e.Provider)
 }
 

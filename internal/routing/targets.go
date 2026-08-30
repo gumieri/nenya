@@ -167,33 +167,59 @@ func NewAgentStateWithConfig(logger *slog.Logger, metrics *infra.Metrics, govCon
 	return as
 }
 
-func (a *AgentState) BuildTargetList(ctx context.Context, logger *slog.Logger, agentName string, agent config.AgentConfig, tokenCount int, providers map[string]*config.Provider, catalog *discovery.ModelCatalog, autoContextSkip bool, accountSelector AccountSelector, preferred *AccountPreference) []UpstreamTarget {
-	models := a.expandModels(agentName, agent, catalog, providers, logger)
+// TargetBuildOpts groups the inputs for building an agent's upstream target
+// list, keeping the BuildTargetList signature small and extensible.
+type TargetBuildOpts struct {
+	// Logger receives structured build diagnostics (required).
+	Logger *slog.Logger
+	// AgentName is the agent identifier, used in CoolKeys and start rotation.
+	AgentName string
+	// Agent is the agent configuration supplying the model chain.
+	Agent config.AgentConfig
+	// TokenCount is the request token estimate used for context-fit skips.
+	TokenCount int
+	// Providers is the resolved provider map used for URL/key/capability checks.
+	Providers map[string]*config.Provider
+	// Catalog is the merged model catalog (optional; nil skips catalog checks).
+	Catalog *discovery.ModelCatalog
+	// AutoContextSkip drops models with too little context headroom.
+	AutoContextSkip bool
+	// AccountSelector resolves per-target credentials (optional).
+	AccountSelector AccountSelector
+	// Preferred steers credential selection to the sticky session's pinned
+	// account for the matching provider/model entry (optional).
+	Preferred *AccountPreference
+}
+
+// BuildTargetList expands the agent's model chain and builds one upstream
+// target per usable entry, active targets first followed by cooling ones.
+func (a *AgentState) BuildTargetList(ctx context.Context, opts TargetBuildOpts) []UpstreamTarget {
+	models := a.expandModels(opts.AgentName, opts.Agent, opts.Catalog, opts.Providers, opts.Logger)
 	if len(models) == 0 {
 		return nil
 	}
 
 	n := len(models)
-	start := a.selectStart(agent, agentName, n)
+	start := a.selectStart(opts.Agent, opts.AgentName, n)
 
 	active := make([]UpstreamTarget, 0, n)
 	cooling := make([]UpstreamTarget, 0, n)
 
-	freeOnlyProviders := collectFreeOnlyProviders(providers)
+	freeOnlyProviders := collectFreeOnlyProviders(opts.Providers)
 
 	for i := 0; i < n; i++ {
 		m := models[(start+i)%n]
-		if isPaidModelOnFreeOnlyProvider(m, freeOnlyProviders, catalog, providers) {
-			logger.Debug("free_only provider skipping paid model", "provider", m.Provider, "model", m.Model)
+		if isPaidModelOnFreeOnlyProvider(m, freeOnlyProviders, opts.Catalog, opts.Providers) {
+			opts.Logger.Debug("free_only provider skipping paid model", "provider", m.Provider, "model", m.Model)
 			continue
 		}
-		t, ok := a.buildTarget(ctx, logger, agentName, m, tokenCount, providers, catalog, autoContextSkip, accountSelector, preferred)
+		t, ok := a.buildTarget(ctx, opts, m)
 		if !ok {
 			continue
 		}
 
 		if a.CB.IsModelLocked(t.CoolKey) {
-			logger.Debug("model locked due to backoff, skipping", "model", t.Model, "provider", t.Provider)
+			opts.Logger.Debug("model locked due to backoff, skipping", "model", t.Model, "provider", t.Provider)
 			continue
 		}
 
@@ -626,7 +652,7 @@ func (a *AgentState) selectStart(agent config.AgentConfig, agentName string, n i
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
-	if agent.Strategy == "fallback" {
+	if agent.Strategy == discovery.AgentStrategyFallback {
 		return 0
 	}
 
@@ -675,17 +701,22 @@ func checkProviderAndLocal(a *AgentState, m config.AgentModel, providers map[str
 	return checkLocalModelAvailability(a, m, logger)
 }
 
-func (a *AgentState) buildTarget(ctx context.Context, logger *slog.Logger, agentName string, m config.AgentModel, tokenCount int, providers map[string]*config.Provider, catalog *discovery.ModelCatalog, autoContextSkip bool, accountSelector AccountSelector, preferred *AccountPreference) (*UpstreamTarget, bool) {
+// buildTarget builds a single upstream target for the given model entry,
+// reporting ok=false when the entry is skipped (context fit, capabilities,
+// provider availability, unknown provider).
+func (a *AgentState) buildTarget(ctx context.Context, opts TargetBuildOpts, m config.AgentModel) (*UpstreamTarget, bool) {
+	catalog, providers, logger := opts.Catalog, opts.Providers, opts.Logger
+
 	maxCtx := resolveMaxContext(m, catalog)
-	if maxCtx > 0 && tokenCount > maxCtx {
+	if maxCtx > 0 && opts.TokenCount > maxCtx {
 		logger.Info("skipping model: exceeds max_context",
-			"provider", m.Provider, "model", m.Model, "max_context", maxCtx, "tokens", tokenCount)
+			"provider", m.Provider, "model", m.Model, "max_context", maxCtx, "tokens", opts.TokenCount)
 		return nil, false
 	}
 
-	if autoContextSkip && maxCtx > 0 && tokenCount > 0 && maxCtx < tokenCount*2 {
+	if opts.AutoContextSkip && maxCtx > 0 && opts.TokenCount > 0 && maxCtx < opts.TokenCount*2 {
 		logger.Info("skipping model: context headroom too small",
-			"provider", m.Provider, "model", m.Model, "max_context", maxCtx, "tokens", tokenCount)
+			"provider", m.Provider, "model", m.Model, "max_context", maxCtx, "tokens", opts.TokenCount)
 		return nil, false
 	}
 
@@ -715,49 +746,40 @@ func (a *AgentState) buildTarget(ctx context.Context, logger *slog.Logger, agent
 		URL:             p,
 		Model:           m.Model,
 		Format:          resolveTargetFormat(m.Model, &m, catalog),
-		CoolKey:         agentName + ":" + m.Provider + ":" + m.Model,
+		CoolKey:         opts.AgentName + ":" + m.Provider + ":" + m.Model,
 		Provider:        m.Provider,
 		MaxOutput:       maxOut,
 		MaxContext:      maxCtx,
 		ReasoningEffort: m.ReasoningEffort,
 	}
 
-	a.applyAccountCredential(ctx, t, accountSelector, m.Provider, m.Model, preferred)
+	applyAccountCredential(ctx, t, opts.AccountSelector, m, opts.Preferred)
 
 	return t, true
 }
 
 // applyAccountCredential resolves and assigns the account credential for a
 // target: the sticky session's pinned account when the preference applies and
-// resolves, else the LRU-selected account via SelectCredentialForModel.
-func (a *AgentState) applyAccountCredential(ctx context.Context, t *UpstreamTarget, accountSelector AccountSelector, provider, model string, preferred *AccountPreference) {
-	if accountSelector == nil || provider == "" {
+// the selector supports by-ID selection, else the LRU-selected account via
+// SelectCredentialForModel. Leaves the target's credential fields empty when
+// no account can be resolved.
+func applyAccountCredential(ctx context.Context, t *UpstreamTarget, accountSelector AccountSelector, m config.AgentModel, preferred *AccountPreference) {
+	if accountSelector == nil || m.Provider == "" {
 		return
 	}
-	cred, acctID, ok := selectPreferredCredential(ctx, accountSelector, provider, model, preferred)
+	cred, acctID, ok := "", "", false
+	if preferred.matches(m.Provider, m.Model) {
+		if pref, canPrefer := accountSelector.(PreferredAccountSelector); canPrefer {
+			cred, acctID, ok = pref.SelectCredentialForPreferredAccount(ctx, m.Provider, m.Model, preferred.AccountID)
+		}
+	}
 	if !ok {
-		cred, acctID, ok = accountSelector.SelectCredentialForModel(ctx, provider, model)
+		cred, acctID, ok = accountSelector.SelectCredentialForModel(ctx, m.Provider, m.Model)
 	}
 	if ok {
 		t.AccountName = acctID
 		t.Credential = cred
 	}
-}
-
-// selectPreferredCredential resolves the sticky session's pinned account for
-// a provider/model entry when the preference applies and the selector supports
-// by-ID selection. Returns ok=false when the preference does not apply, the
-// selector lacks the extension, or the pinned account is unavailable — the
-// caller then falls back to LRU selection.
-func selectPreferredCredential(ctx context.Context, accountSelector AccountSelector, provider, model string, preferred *AccountPreference) (string, string, bool) {
-	if !preferred.matches(provider, model) {
-		return "", "", false
-	}
-	pref, ok := accountSelector.(PreferredAccountSelector)
-	if !ok {
-		return "", "", false
-	}
-	return pref.SelectCredentialForPreferredAccount(ctx, provider, model, preferred.AccountID)
 }
 
 // ActivateCooldown forces the circuit breaker for a target into the open state

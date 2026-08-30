@@ -853,6 +853,15 @@ func (g *NenyaGateway) selectAccountKey(ctx context.Context, providerName, model
 		return nil, "", false
 	}
 	selected, err := g.AccountManager.SelectAccount(ctx, providerName, model)
+	if err == nil && selected != nil && g.BillingTracker != nil && g.BillingTracker.IsExhausted(providerName, selected.ID) {
+		// The LRU pick is billing-exhausted: retry once excluding it so a
+		// healthy sibling is preferred over the downstream target filter,
+		// which would otherwise drop the whole provider/model target and
+		// cause a spurious failover.
+		if sibling, serr := g.AccountManager.SelectAccountExcluding(ctx, providerName, model, map[string]bool{selected.ID: true}); serr == nil && sibling != nil {
+			selected = sibling
+		}
+	}
 	if err == nil && selected != nil {
 		if g.Metrics != nil {
 			g.Metrics.RecordAccountSelection(providerName, "selected")
@@ -870,31 +879,37 @@ func (g *NenyaGateway) selectAccountKey(ctx context.Context, providerName, model
 }
 
 // selectPreferredAccountKey resolves a specific account pinned by a sticky
-// session. The credential is returned only when the account is present in the
-// pool, healthy (active, not cooling, not model-locked — enforced by
-// AccountPool.SelectAccountByID), and not billing-exhausted. Any miss lets the
-// caller fall back to the LRU path via GetProviderAPIKeyForModel.
-func (g *NenyaGateway) selectPreferredAccountKey(ctx context.Context, providerName, model, accountID string) ([]byte, string, bool) {
+// session. The credential is returned only when the account is not
+// billing-exhausted (checked before the pool touch so a rejected account does
+// not get its LastUsed — and LRU position — bumped) and healthy for the model
+// (present, active, not cooling, not model-locked — enforced by
+// AccountPool.SelectAccountByID). Misses are logged at Debug and silently let
+// the caller fall back to the LRU path; no account-selection metric is
+// recorded on the miss itself so the fallback's own outcome stays accurate.
+// Successful resolutions are recorded with the distinct "selected_preferred"
+// status so sticky pin health is observable separately from LRU hits.
+func (g *NenyaGateway) selectPreferredAccountKey(ctx context.Context, providerName, model, accountID string) (string, string, bool) {
 	if g.AccountManager == nil || accountID == "" {
-		return nil, "", false
+		return "", "", false
+	}
+	if g.BillingTracker != nil && g.BillingTracker.IsExhausted(providerName, accountID) {
+		return "", "", false
 	}
 	selected, err := g.AccountManager.SelectAccountByID(ctx, providerName, model, accountID)
 	if err != nil || selected == nil {
-		if g.Metrics != nil {
-			g.Metrics.RecordAccountSelection(providerName, "none_available")
+		if g.Logger != nil {
+			attrs := []any{"provider", providerName, "account", accountID}
+			if err != nil {
+				attrs = append(attrs, "err", err)
+			}
+			g.Logger.Debug("sticky preferred account unavailable, falling back to LRU", attrs...)
 		}
-		return nil, "", false
-	}
-	if g.BillingTracker != nil && g.BillingTracker.IsExhausted(providerName, selected.ID) {
-		if g.Metrics != nil {
-			g.Metrics.RecordAccountSelection(providerName, "none_available")
-		}
-		return nil, "", false
+		return "", "", false
 	}
 	if g.Metrics != nil {
-		g.Metrics.RecordAccountSelection(providerName, "selected")
+		g.Metrics.RecordAccountSelection(providerName, "selected_preferred")
 	}
-	return []byte(selected.Credential), selected.ID, true
+	return selected.Credential, selected.ID, true
 }
 
 // GetProviderAPIKeyForModel returns an API key for the given provider and model.
@@ -927,8 +942,7 @@ func (g *NenyaGateway) SelectCredentialForModel(ctx context.Context, provider, m
 // sticky session's pinned account, or reports not-ok when the account is
 // absent, unhealthy, or billing-exhausted so the caller falls back to LRU.
 func (g *NenyaGateway) SelectCredentialForPreferredAccount(ctx context.Context, provider, model, preferredAccountID string) (string, string, bool) {
-	key, acctID, ok := g.selectPreferredAccountKey(ctx, provider, model, preferredAccountID)
-	return string(key), acctID, ok
+	return g.selectPreferredAccountKey(ctx, provider, model, preferredAccountID)
 }
 
 // ListAccountIDs satisfies the billing.AccountLister interface.

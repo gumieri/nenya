@@ -798,6 +798,20 @@ func (m *Metrics) RecordAccountSelection(provider, status string) {
 	e.value.Add(1)
 }
 
+// AccountSelectionCount returns the current value of the account selection
+// counter for the given provider and status. Intended for tests and
+// diagnostics; returns 0 when the series was never recorded.
+func (m *Metrics) AccountSelectionCount(provider, status string) uint64 {
+	if m == nil {
+		return 0
+	}
+	key := labelKey(map[string]string{"provider": provider, "status": status})
+	if v, ok := m.accountSelection.Load(key); ok {
+		return v.(*labeledEntry).value.Load()
+	}
+	return 0
+}
+
 func (m *Metrics) RecordBillingSpend(provider, account string, spendCents int64) {
 	if m == nil {
 		return

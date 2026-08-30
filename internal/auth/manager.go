@@ -114,15 +114,18 @@ func (m *AccountManager) SelectCredential(ctx context.Context, provider, model s
 // including both the account ID and credential string. Use this when the
 // caller needs the account ID for billing tracking or observability.
 func (m *AccountManager) SelectAccount(ctx context.Context, provider, model string) (*SelectedAccount, error) {
+	return m.SelectAccountExcluding(ctx, provider, model, nil)
+}
+
+// SelectAccountExcluding selects the least-recently-used healthy account for
+// the model, skipping the excluded account IDs (e.g. accounts known to be
+// billing-exhausted). See AccountPool.SelectAccountExcluding.
+func (m *AccountManager) SelectAccountExcluding(ctx context.Context, provider, model string, exclude map[string]bool) (*SelectedAccount, error) {
 	pool, err := m.GetPool(ctx, provider)
 	if err != nil {
 		return nil, err
 	}
-	selected, err := pool.SelectAccount(ctx, model)
-	if err != nil {
-		return nil, err
-	}
-	return selected, nil
+	return pool.SelectAccountExcluding(ctx, model, exclude)
 }
 
 // SelectAccountByID returns the specific account identified by accountID for
@@ -136,7 +139,7 @@ func (m *AccountManager) SelectAccountByID(ctx context.Context, provider, model,
 	if err != nil {
 		return nil, err
 	}
-	return pool.SelectAccountByID(accountID, model)
+	return pool.SelectAccountByID(ctx, accountID, model)
 }
 
 // ReportError reports an error for an account.

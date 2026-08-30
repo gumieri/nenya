@@ -14,6 +14,7 @@ import (
 	"github.com/nenya/config"
 	"github.com/nenya/internal/adapter"
 	"github.com/nenya/internal/billing"
+	"github.com/nenya/internal/discovery"
 	"github.com/nenya/internal/gateway"
 	"github.com/nenya/internal/infra"
 	"github.com/nenya/internal/pipeline"
@@ -149,19 +150,27 @@ func (p *Proxy) resolveAgentRouting(ctx context.Context, req *chatRequest, gw *g
 	cooldown := getAgentCooldown(agent)
 	maxRetries := agent.MaxRetries
 
-	strategy := agent.Strategy
-	if strategy == "" {
-		strategy = "round-robin"
-	}
+	strategy := getAgentStrategy(agent)
 
 	// Resolve the sticky session pin before target build so the pinned
-	// account can steer credential selection via the account preference.
+	// account can steer credential selection via the account preference. The
+	// read is non-touching (Peek): failed builds must not extend pin TTL.
 	var sticky *stickyPin
-	if strategy == "sticky" {
+	if strategy == discovery.AgentStrategySticky {
 		sticky = resolveStickyPin(req, gw, agent)
 	}
 
-	targets := gw.AgentState.BuildTargetList(ctx, gw.Logger, req.ModelName, agent, req.TokenCount, gw.Providers, gw.ModelCatalog, gw.Config.Governance.AutoContextSkip != nil && *gw.Config.Governance.AutoContextSkip, gw, sticky.preference())
+	targets := gw.AgentState.BuildTargetList(ctx, routing.TargetBuildOpts{
+		Logger:          gw.Logger,
+		AgentName:       req.ModelName,
+		Agent:           agent,
+		TokenCount:      req.TokenCount,
+		Providers:       gw.Providers,
+		Catalog:         gw.ModelCatalog,
+		AutoContextSkip: gw.Config.Governance.AutoContextSkip != nil && *gw.Config.Governance.AutoContextSkip,
+		AccountSelector: gw,
+		Preferred:       sticky.preference(),
+	})
 	targets = filterExhaustedTargets(targets, gw.BillingTracker, gw.Logger)
 	if len(targets) == 0 {
 		return handleEmptyAgentTargets(req, gw, agent)
@@ -171,7 +180,7 @@ func (p *Proxy) resolveAgentRouting(ctx context.Context, req *chatRequest, gw *g
 		targets = reorderTargetsByLatency(req, gw, targets)
 	}
 
-	if strategy == "sticky" {
+	if strategy == discovery.AgentStrategySticky {
 		targets = applyStickyRouting(req, gw, agent, targets, sticky)
 	}
 
@@ -181,20 +190,29 @@ func (p *Proxy) resolveAgentRouting(ctx context.Context, req *chatRequest, gw *g
 	return targets, req.AgentName, cooldown, maxRetries, nil
 }
 
+// getAgentStrategy returns the agent's routing strategy, defaulting to
+// round-robin when unset.
+func getAgentStrategy(agent config.AgentConfig) string {
+	if agent.Strategy == "" {
+		return discovery.AgentStrategyRoundRobin
+	}
+	return agent.Strategy
+}
+
 // stickyPin holds the sticky session context resolved once before target
-// build: the session key, the current pin (when one exists), and whether the
-// pin was found. Both account-preference steering and reorder/promotion reuse
-// this single lookup, so one request observes one consistent pin.
+// build: the session key and the current pin snapshot (read via Peek, which
+// does not refresh LastSeen — only a request that completes routing extends
+// the pin, via the Lookup inside applyStickyRouting). Account-preference
+// steering and reorder/promotion reuse this single observation.
 type stickyPin struct {
 	key   string
 	state routing.SessionState
-	found bool
 }
 
 // preference returns the pinned account for preferred credential selection
 // during target build, or nil when there is no account-bearing pin.
 func (s *stickyPin) preference() *routing.AccountPreference {
-	if s == nil || !s.found || s.state.Account == "" {
+	if s == nil || s.state.Account == "" {
 		return nil
 	}
 	return &routing.AccountPreference{
@@ -205,48 +223,62 @@ func (s *stickyPin) preference() *routing.AccountPreference {
 }
 
 // resolveStickyPin resolves the sticky session context for a request: the
-// session key and, when present, the currently pinned provider/model/account.
-// Returns nil when sticky routing cannot apply (no session router, or no
-// session key derivable from the request).
+// session key and, when present, the currently pinned provider/model/account
+// (read via Peek — no LastSeen refresh, no expiry side effects). Returns nil
+// when sticky routing cannot apply (no session router, or no session key
+// derivable from the request).
 func resolveStickyPin(req *chatRequest, gw *gateway.NenyaGateway, agent config.AgentConfig) *stickyPin {
 	if gw.AgentState == nil || gw.AgentState.SessionRouter == nil {
 		return nil
 	}
-	key, ok := sessionKeyFromRequest(req, gw, agent)
+	key, ok := sessionKeyFromRequest(req, agent)
 	if !ok {
 		return nil
 	}
-	pin, found := gw.AgentState.SessionRouter.Lookup(key)
-	return &stickyPin{key: key, state: pin, found: found}
+	pin, found := gw.AgentState.SessionRouter.Peek(key)
+	if !found {
+		return &stickyPin{key: key}
+	}
+	return &stickyPin{key: key, state: pin}
 }
 
 // applyStickyRouting pins the session to its previously selected provider,
 // model, and account when the pin is still valid (active, present in the
 // built target list). Reorders the target list so the pinned target is first,
 // leaving the remainder as the ordered failover tail. Promotion paths, each
-// recorded as a failover pin-change via SessionRouter.Promote:
+// recorded as a failover pin-change via SessionRouter.PromoteIfChanged:
 //
 //   - Pinned account drift: the pinned provider/model is active at the front
-//     but serves a different account — the pinned account was cooling,
-//     exhausted, or model-locked during target build and the LRU fallback
-//     selected a sibling account. The pin follows the sibling.
+//     but serves a different, non-empty account — the pinned account was
+//     cooling, exhausted, or model-locked during target build and the LRU
+//     fallback selected a sibling account. The pin follows the sibling.
 //   - Pinned provider/model lost: the pinned target is cooling, was filtered
 //     out (billing exhaustion), or no longer exists — the pin is promoted to
-//     the first active target (existing failover behavior).
+//     the first active target (existing failover behavior). Unlike the drift
+//     path, this promotion is unconditional even when the new target carries
+//     an empty account: the old provider/model is gone, so an empty-account
+//     pin (self-healing on the next successful resolution) beats a pin stuck
+//     on a lost target, and single-account legacy providers always run with
+//     empty account names.
+//
+// A pin that still matches the served provider/model and account is left
+// untouched: no re-pin, no failover metric, no Since reset.
 func applyStickyRouting(req *chatRequest, gw *gateway.NenyaGateway, agent config.AgentConfig, targets []routing.UpstreamTarget, sticky *stickyPin) []routing.UpstreamTarget {
 	if sticky == nil || gw.AgentState == nil || gw.AgentState.SessionRouter == nil {
 		return targets
 	}
 
 	ttl := agentStickyTTL(agent)
-	if !sticky.found {
+
+	// Refresh LastSeen only now that routing succeeded (targets non-empty).
+	pin, found := gw.AgentState.SessionRouter.Lookup(sticky.key)
+	if !found {
 		if pinTarget, ok := firstActiveTarget(targets); ok {
 			gw.AgentState.SessionRouter.Pin(sticky.key, pinTarget.Provider, pinTarget.Model, pinTarget.AccountName, ttl)
 		}
 		return targets
 	}
 
-	pin := sticky.state
 	i := indexOfActiveTarget(targets, pin.Provider, pin.Model)
 	if i > 0 {
 		targets = moveToFront(targets, i)
@@ -256,20 +288,25 @@ func applyStickyRouting(req *chatRequest, gw *gateway.NenyaGateway, agent config
 		// Pinned provider/model is active at the front. Re-pin only when the
 		// serving account drifted from the pin — a sibling account was
 		// selected during build because the pinned account was unavailable.
-		// An unchanged pin is left alone (no spurious failover metric).
+		// An empty front account (resolution failed entirely) must NOT wipe
+		// the pin's account: the session may return to the pinned account
+		// once it recovers. PromoteIfChanged also dedupes concurrent
+		// promotions of the same effective target under the router lock.
 		front := targets[0]
-		if pin.Account != "" && front.AccountName != pin.Account {
-			gw.AgentState.SessionRouter.Promote(sticky.key, front.Provider, front.Model, front.AccountName, ttl)
-			gw.Logger.Debug("sticky pin promoted to sibling account",
-				"agent", req.ModelName, "provider", front.Provider, "model", front.Model,
-				"from_account", pin.Account, "to_account", front.AccountName)
+		if front.AccountName != "" && front.AccountName != pin.Account {
+			if gw.AgentState.SessionRouter.PromoteIfChanged(sticky.key, front.Provider, front.Model, front.AccountName, ttl) {
+				gw.Logger.Debug("sticky pin promoted to sibling account",
+					"agent", req.ModelName, "provider", front.Provider, "model", front.Model,
+					"from_account", pin.Account, "to_account", front.AccountName)
+			}
 		}
 		return targets
 	}
 	if pinTarget, ok := firstActiveTarget(targets); ok {
-		gw.AgentState.SessionRouter.Promote(sticky.key, pinTarget.Provider, pinTarget.Model, pinTarget.AccountName, ttl)
-		gw.Logger.Debug("sticky pin promoted to alternative active target",
-			"agent", req.ModelName, "from", pin.Provider+"/"+pin.Model, "to", pinTarget.Provider+"/"+pinTarget.Model)
+		if gw.AgentState.SessionRouter.PromoteIfChanged(sticky.key, pinTarget.Provider, pinTarget.Model, pinTarget.AccountName, ttl) {
+			gw.Logger.Debug("sticky pin promoted to alternative active target",
+				"agent", req.ModelName, "from", pin.Provider+"/"+pin.Model, "to", pinTarget.Provider+"/"+pinTarget.Model)
+		}
 	}
 	return targets
 }
@@ -277,7 +314,7 @@ func applyStickyRouting(req *chatRequest, gw *gateway.NenyaGateway, agent config
 // sessionKeyFromRequest derives a stable session identifier from the agent
 // name, the resolved system prompt, and the first user message in the raw
 // client payload.
-func sessionKeyFromRequest(req *chatRequest, gw *gateway.NenyaGateway, agent config.AgentConfig) (string, bool) {
+func sessionKeyFromRequest(req *chatRequest, agent config.AgentConfig) (string, bool) {
 	systemPrompt, err := config.LoadPromptFile(agent.SystemPromptFile, agent.SystemPrompt, "")
 	if err != nil || systemPrompt == "" {
 		systemPrompt = agent.SystemPrompt

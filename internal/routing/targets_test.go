@@ -23,6 +23,17 @@ func testLogger() *slog.Logger {
 	return slog.New(slog.NewTextHandler(&discardWriter{}, &slog.HandlerOptions{Level: slog.LevelInfo}))
 }
 
+// buildOpts constructs TargetBuildOpts with the common test defaults.
+func buildOpts(agentName string, agent config.AgentConfig, providers map[string]*config.Provider) TargetBuildOpts {
+	return TargetBuildOpts{
+		Logger:     testLogger(),
+		AgentName:  agentName,
+		Agent:      agent,
+		TokenCount: 1000,
+		Providers:  providers,
+	}
+}
+
 type discardWriter struct{}
 
 func (d *discardWriter) Write(p []byte) (int, error) { return len(p), nil }
@@ -54,7 +65,7 @@ func TestBuildTargetList_RoundRobin(t *testing.T) {
 		},
 	}
 
-	t1 := a.BuildTargetList(context.Background(), testLogger(), "test-agent", agent, 1000, p, nil, false, nil, nil)
+	t1 := a.BuildTargetList(context.Background(), buildOpts("test-agent", agent, p))
 	if len(t1) != 3 {
 		t.Fatalf("expected 3 targets, got %d", len(t1))
 	}
@@ -62,7 +73,7 @@ func TestBuildTargetList_RoundRobin(t *testing.T) {
 		t.Fatalf("first call: expected gemini first, got %s", t1[0].Provider)
 	}
 
-	t2 := a.BuildTargetList(context.Background(), testLogger(), "test-agent", agent, 1000, p, nil, false, nil, nil)
+	t2 := a.BuildTargetList(context.Background(), buildOpts("test-agent", agent, p))
 	if len(t2) != 3 {
 		t.Fatalf("expected 3 targets, got %d", len(t2))
 	}
@@ -70,12 +81,12 @@ func TestBuildTargetList_RoundRobin(t *testing.T) {
 		t.Fatalf("second call: expected deepseek first, got %s", t2[0].Provider)
 	}
 
-	t3 := a.BuildTargetList(context.Background(), testLogger(), "test-agent", agent, 1000, p, nil, false, nil, nil)
+	t3 := a.BuildTargetList(context.Background(), buildOpts("test-agent", agent, p))
 	if t3[0].Provider != "zai" {
 		t.Fatalf("third call: expected zai first, got %s", t3[0].Provider)
 	}
 
-	t4 := a.BuildTargetList(context.Background(), testLogger(), "test-agent", agent, 1000, p, nil, false, nil, nil)
+	t4 := a.BuildTargetList(context.Background(), buildOpts("test-agent", agent, p))
 	if t4[0].Provider != "gemini" {
 		t.Fatalf("fourth call: expected gemini first (wrap), got %s", t4[0].Provider)
 	}
@@ -92,12 +103,12 @@ func TestBuildTargetList_CooldownSkip(t *testing.T) {
 		},
 	}
 
-	t1 := a.BuildTargetList(context.Background(), testLogger(), "test-agent", agent, 1000, p, nil, false, nil, nil)
+	t1 := a.BuildTargetList(context.Background(), buildOpts("test-agent", agent, p))
 	geminiTarget := t1[0]
 
 	a.ActivateCooldown(geminiTarget, 10*time.Minute)
 
-	t2 := a.BuildTargetList(context.Background(), testLogger(), "test-agent", agent, 1000, p, nil, false, nil, nil)
+	t2 := a.BuildTargetList(context.Background(), buildOpts("test-agent", agent, p))
 	if len(t2) != 3 {
 		t.Fatalf("expected 3 targets, got %d", len(t2))
 	}
@@ -121,7 +132,7 @@ func TestBuildTargetList_FallbackStrategy(t *testing.T) {
 	}
 
 	for i := 0; i < 5; i++ {
-		targets := a.BuildTargetList(context.Background(), testLogger(), "test-agent", agent, 1000, p, nil, false, nil, nil)
+		targets := a.BuildTargetList(context.Background(), buildOpts("test-agent", agent, p))
 		if targets[0].Provider != "gemini" {
 			t.Fatalf("iteration %d: fallback strategy should always start with gemini, got %s", i, targets[0].Provider)
 		}
@@ -139,7 +150,7 @@ func TestBuildTargetList_UnknownProviderSkipped(t *testing.T) {
 		},
 	}
 
-	targets := a.BuildTargetList(context.Background(), testLogger(), "test-agent", agent, 1000, p, nil, false, nil, nil)
+	targets := a.BuildTargetList(context.Background(), buildOpts("test-agent", agent, p))
 	if len(targets) != 2 {
 		t.Fatalf("expected 2 targets (unknown provider skipped), got %d", len(targets))
 	}
@@ -155,7 +166,7 @@ func TestBuildTargetList_EmptyModels(t *testing.T) {
 	a := NewAgentState(testLogger(), nil)
 	agent := config.AgentConfig{}
 
-	targets := a.BuildTargetList(context.Background(), testLogger(), "test-agent", agent, 1000, p, nil, false, nil, nil)
+	targets := a.BuildTargetList(context.Background(), buildOpts("test-agent", agent, p))
 	if targets != nil {
 		t.Fatalf("expected nil for empty models, got %v", targets)
 	}
@@ -171,7 +182,7 @@ func TestBuildTargetList_TokenCountExceedsMaxContext(t *testing.T) {
 		},
 	}
 
-	targets := a.BuildTargetList(context.Background(), testLogger(), "test-agent", agent, 5000, p, nil, false, nil, nil)
+	targets := a.BuildTargetList(context.Background(), func() TargetBuildOpts { o := buildOpts("test-agent", agent, p); o.TokenCount = 5000; return o }())
 	if len(targets) != 1 {
 		t.Fatalf("expected 1 target (nemotron skipped), got %d", len(targets))
 	}
@@ -190,7 +201,7 @@ func TestBuildTargetList_MaxContextFromAgentModel(t *testing.T) {
 		},
 	}
 
-	targets := a.BuildTargetList(context.Background(), testLogger(), "test-agent", agent, 1000, p, nil, false, nil, nil)
+	targets := a.BuildTargetList(context.Background(), buildOpts("test-agent", agent, p))
 	if len(targets) != 1 {
 		t.Fatalf("expected 1 target (gemini skipped due to agent-level max_context), got %d", len(targets))
 	}
@@ -208,7 +219,7 @@ func TestBuildTargetList_TargetFields(t *testing.T) {
 		},
 	}
 
-	targets := a.BuildTargetList(context.Background(), testLogger(), "my-agent", agent, 1000, p, nil, false, nil, nil)
+	targets := a.BuildTargetList(context.Background(), buildOpts("my-agent", agent, p))
 	if len(targets) != 1 {
 		t.Fatalf("expected 1 target, got %d", len(targets))
 	}
@@ -246,7 +257,7 @@ func TestBuildTargetList_SkipLockedModels(t *testing.T) {
 	a.RecordFailureWithStatus(UpstreamTarget{CoolKey: coolKey}, 429, "rate limit")
 
 	// Build target list - should skip the locked model
-	targets := a.BuildTargetList(context.Background(), testLogger(), "my-agent", agent, 1000, p, nil, false, nil, nil)
+	targets := a.BuildTargetList(context.Background(), buildOpts("my-agent", agent, p))
 	if len(targets) != 1 {
 		t.Fatalf("expected 1 target (locked model skipped), got %d", len(targets))
 	}
@@ -689,7 +700,7 @@ func TestBuildTargetList_PinnedAccountPreferred(t *testing.T) {
 	}
 	pref := &AccountPreference{Provider: "zai", Model: "glm-5", AccountID: "acct-a"}
 
-	targets := a.BuildTargetList(context.Background(), testLogger(), "test-agent", agent, 1000, p, nil, false, sel, pref)
+	targets := a.BuildTargetList(context.Background(), func() TargetBuildOpts { o := buildOpts("test-agent", agent, p); o.AccountSelector = sel; o.Preferred = pref; return o }())
 	if len(targets) != 2 {
 		t.Fatalf("expected 2 targets, got %d", len(targets))
 	}
@@ -731,7 +742,7 @@ func TestBuildTargetList_PinnedAccountUnavailableFallsBackToLRU(t *testing.T) {
 	}
 	pref := &AccountPreference{Provider: "zai", Model: "glm-5", AccountID: "acct-gone"}
 
-	targets := a.BuildTargetList(context.Background(), testLogger(), "test-agent", agent, 1000, p, nil, false, sel, pref)
+	targets := a.BuildTargetList(context.Background(), func() TargetBuildOpts { o := buildOpts("test-agent", agent, p); o.AccountSelector = sel; o.Preferred = pref; return o }())
 	if len(targets) != 1 {
 		t.Fatalf("expected 1 target, got %d", len(targets))
 	}
@@ -755,7 +766,7 @@ func TestBuildTargetList_PinnedPreferenceMismatchUsesLRU(t *testing.T) {
 	// Preference targets a different provider/model than any agent entry.
 	pref := &AccountPreference{Provider: "zai", Model: "glm-5", AccountID: "acct-a"}
 
-	targets := a.BuildTargetList(context.Background(), testLogger(), "test-agent", agent, 1000, p, nil, false, sel, pref)
+	targets := a.BuildTargetList(context.Background(), func() TargetBuildOpts { o := buildOpts("test-agent", agent, p); o.AccountSelector = sel; o.Preferred = pref; return o }())
 	if len(targets) != 1 {
 		t.Fatalf("expected 1 target, got %d", len(targets))
 	}
@@ -779,7 +790,7 @@ func TestBuildTargetList_SelectorWithoutPreferredExtension(t *testing.T) {
 	sel := &lruOnlySelector{cred: "lru-key", account: "acct-lru"}
 	pref := &AccountPreference{Provider: "zai", Model: "glm-5", AccountID: "acct-a"}
 
-	targets := a.BuildTargetList(context.Background(), testLogger(), "test-agent", agent, 1000, p, nil, false, sel, pref)
+	targets := a.BuildTargetList(context.Background(), func() TargetBuildOpts { o := buildOpts("test-agent", agent, p); o.AccountSelector = sel; o.Preferred = pref; return o }())
 	if len(targets) != 1 {
 		t.Fatalf("expected 1 target, got %d", len(targets))
 	}
