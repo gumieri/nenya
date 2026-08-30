@@ -125,6 +125,20 @@ func (m *AccountManager) SelectAccount(ctx context.Context, provider, model stri
 	return selected, nil
 }
 
+// SelectAccountByID returns the specific account identified by accountID for
+// a sticky session, skipping LRU iteration. The account is returned only when
+// healthy for the given model: present in the pool, active, not in cooldown,
+// and not model-locked. Billing exhaustion is not checked here — callers
+// holding a BillingTracker must layer that gate on top, keeping this package
+// free of billing dependencies.
+func (m *AccountManager) SelectAccountByID(ctx context.Context, provider, model, accountID string) (*SelectedAccount, error) {
+	pool, err := m.GetPool(ctx, provider)
+	if err != nil {
+		return nil, err
+	}
+	return pool.SelectAccountByID(accountID, model)
+}
+
 // ReportError reports an error for an account.
 // Updates the account's status, cooldown, and backoff level.
 func (m *AccountManager) ReportError(provider, accountID string, status int, message string) error {

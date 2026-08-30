@@ -869,6 +869,34 @@ func (g *NenyaGateway) selectAccountKey(ctx context.Context, providerName, model
 	return nil, "", false
 }
 
+// selectPreferredAccountKey resolves a specific account pinned by a sticky
+// session. The credential is returned only when the account is present in the
+// pool, healthy (active, not cooling, not model-locked — enforced by
+// AccountPool.SelectAccountByID), and not billing-exhausted. Any miss lets the
+// caller fall back to the LRU path via GetProviderAPIKeyForModel.
+func (g *NenyaGateway) selectPreferredAccountKey(ctx context.Context, providerName, model, accountID string) ([]byte, string, bool) {
+	if g.AccountManager == nil || accountID == "" {
+		return nil, "", false
+	}
+	selected, err := g.AccountManager.SelectAccountByID(ctx, providerName, model, accountID)
+	if err != nil || selected == nil {
+		if g.Metrics != nil {
+			g.Metrics.RecordAccountSelection(providerName, "none_available")
+		}
+		return nil, "", false
+	}
+	if g.BillingTracker != nil && g.BillingTracker.IsExhausted(providerName, selected.ID) {
+		if g.Metrics != nil {
+			g.Metrics.RecordAccountSelection(providerName, "none_available")
+		}
+		return nil, "", false
+	}
+	if g.Metrics != nil {
+		g.Metrics.RecordAccountSelection(providerName, "selected")
+	}
+	return []byte(selected.Credential), selected.ID, true
+}
+
 // GetProviderAPIKeyForModel returns an API key for the given provider and model.
 // It checks the multi-account pool first (selecting the least-recently-used account),
 // then falls back to the legacy single-key path.

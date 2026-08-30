@@ -72,6 +72,40 @@ func (p *AccountPool) SelectAccount(ctx context.Context, model string) (*Selecte
 	}, nil
 }
 
+// SelectAccountByID selects a specific account by ID, bypassing LRU iteration.
+// Used by sticky session routing to pin a session to the account it was
+// previously served by. The account is returned only when healthy for the
+// given model: present in the pool, active, not rate-limited (cooldown), and
+// not model-locked. On success LastUsed is updated, keeping LRU selection fair
+// for unpinned sessions. Returns a copy of the selected account's immutable
+// fields; caller must use ReportError/ReportSuccess to mutate pool state.
+// Billing exhaustion is not checked here — callers holding a BillingTracker
+// must layer that gate on top to keep this package billing-agnostic.
+func (p *AccountPool) SelectAccountByID(accountID, model string) (*SelectedAccount, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	acc := p.findAccount(accountID)
+	if acc == nil {
+		return nil, &NoAvailableAccountError{Provider: p.provider}
+	}
+	if acc.Status != config.AccountStatusActive {
+		return nil, &NoAvailableAccountError{Provider: p.provider}
+	}
+	if time.Now().Before(acc.RateLimitedUntil) {
+		return nil, &NoAvailableAccountError{Provider: p.provider}
+	}
+	if p.isModelLocked(acc, model) {
+		return nil, &NoAvailableAccountError{Provider: p.provider}
+	}
+	acc.LastUsed = time.Now()
+
+	return &SelectedAccount{
+		ID:         acc.ID,
+		Credential: acc.Credential,
+	}, nil
+}
+
 // isModelLocked checks if the account has a lock for the given model.
 func (p *AccountPool) isModelLocked(account *config.ProviderAccount, model string) bool {
 	until, locked := account.ModelLocks[model]
