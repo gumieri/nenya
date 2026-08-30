@@ -220,12 +220,19 @@ func resolveStickyPin(req *chatRequest, gw *gateway.NenyaGateway, agent config.A
 	return &stickyPin{key: key, state: pin, found: found}
 }
 
-// applyStickyRouting pins the session to its previously selected provider
-// and model, when the pin is still valid (active, present in the built
-// target list). Reorders the target list so the pinned target is first,
-// leaving the remainder as the ordered failover tail. When the pin target is
-// cooling, exhausted, or no longer present, the pin is promoted to the first
-// active target (failover path).
+// applyStickyRouting pins the session to its previously selected provider,
+// model, and account when the pin is still valid (active, present in the
+// built target list). Reorders the target list so the pinned target is first,
+// leaving the remainder as the ordered failover tail. Promotion paths, each
+// recorded as a failover pin-change via SessionRouter.Promote:
+//
+//   - Pinned account drift: the pinned provider/model is active at the front
+//     but serves a different account — the pinned account was cooling,
+//     exhausted, or model-locked during target build and the LRU fallback
+//     selected a sibling account. The pin follows the sibling.
+//   - Pinned provider/model lost: the pinned target is cooling, was filtered
+//     out (billing exhaustion), or no longer exists — the pin is promoted to
+//     the first active target (existing failover behavior).
 func applyStickyRouting(req *chatRequest, gw *gateway.NenyaGateway, agent config.AgentConfig, targets []routing.UpstreamTarget, sticky *stickyPin) []routing.UpstreamTarget {
 	if sticky == nil || gw.AgentState == nil || gw.AgentState.SessionRouter == nil {
 		return targets
@@ -240,8 +247,24 @@ func applyStickyRouting(req *chatRequest, gw *gateway.NenyaGateway, agent config
 	}
 
 	pin := sticky.state
-	if i := indexOfActiveTarget(targets, pin.Provider, pin.Model); i > 0 {
-		return moveToFront(targets, i)
+	i := indexOfActiveTarget(targets, pin.Provider, pin.Model)
+	if i > 0 {
+		targets = moveToFront(targets, i)
+		i = 0
+	}
+	if i == 0 {
+		// Pinned provider/model is active at the front. Re-pin only when the
+		// serving account drifted from the pin — a sibling account was
+		// selected during build because the pinned account was unavailable.
+		// An unchanged pin is left alone (no spurious failover metric).
+		front := targets[0]
+		if pin.Account != "" && front.AccountName != pin.Account {
+			gw.AgentState.SessionRouter.Promote(sticky.key, front.Provider, front.Model, front.AccountName, ttl)
+			gw.Logger.Debug("sticky pin promoted to sibling account",
+				"agent", req.ModelName, "provider", front.Provider, "model", front.Model,
+				"from_account", pin.Account, "to_account", front.AccountName)
+		}
+		return targets
 	}
 	if pinTarget, ok := firstActiveTarget(targets); ok {
 		gw.AgentState.SessionRouter.Promote(sticky.key, pinTarget.Provider, pinTarget.Model, pinTarget.AccountName, ttl)
