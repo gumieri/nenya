@@ -644,11 +644,156 @@ func TestExpandDynamicModels_EmptyCatalogNoMatches(t *testing.T) {
 	if err := agent.Models[0].CompileRegex(); err != nil {
 		t.Fatalf("failed to compile regex: %v", err)
 	}
-
 	a := NewAgentState(testLogger(), nil)
 	expanded := a.expandModels("test-agent", agent, catalog, providers, testLogger())
 
 	if len(expanded) != 0 {
 		t.Errorf("expected no matches, got %d entries", len(expanded))
 	}
+}
+
+// fakeAccountSelector satisfies AccountSelector and PreferredAccountSelector
+// for testing pinned-account preference during target build.
+type fakeAccountSelector struct {
+	lruCred     string
+	lruAccount  string
+	prefCred    string
+	prefAccount string
+	prefOK      bool
+	prefCalls   int
+	lruCalls    int
+}
+
+func (f *fakeAccountSelector) SelectCredentialForModel(ctx context.Context, provider, model string) (string, string, bool) {
+	f.lruCalls++
+	return f.lruCred, f.lruAccount, f.lruCred != ""
+}
+
+func (f *fakeAccountSelector) SelectCredentialForPreferredAccount(ctx context.Context, provider, model, preferredAccountID string) (string, string, bool) {
+	f.prefCalls++
+	return f.prefCred, f.prefAccount, f.prefOK
+}
+
+func TestBuildTargetList_PinnedAccountPreferred(t *testing.T) {
+	p := targetProviders()
+	a := NewAgentState(testLogger(), nil)
+	agent := config.AgentConfig{
+		Models: []config.AgentModel{
+			{Provider: "zai", Model: "glm-5"},
+			{Provider: "deepseek", Model: "deepseek-v4-flash"},
+		},
+	}
+	sel := &fakeAccountSelector{
+		lruCred: "lru-key", lruAccount: "acct-lru",
+		prefCred: "pin-key", prefAccount: "acct-a", prefOK: true,
+	}
+	pref := &AccountPreference{Provider: "zai", Model: "glm-5", AccountID: "acct-a"}
+
+	targets := a.BuildTargetList(context.Background(), testLogger(), "test-agent", agent, 1000, p, nil, false, sel, pref)
+	if len(targets) != 2 {
+		t.Fatalf("expected 2 targets, got %d", len(targets))
+	}
+
+	var zai, deepseek *UpstreamTarget
+	for i := range targets {
+		switch targets[i].Provider {
+		case "zai":
+			zai = &targets[i]
+		case "deepseek":
+			deepseek = &targets[i]
+		}
+	}
+	if zai == nil || deepseek == nil {
+		t.Fatalf("expected both targets, got %+v", targets)
+	}
+	if zai.AccountName != "acct-a" || zai.Credential != "pin-key" {
+		t.Errorf("expected pinned account on zai target, got account=%q cred=%q", zai.AccountName, zai.Credential)
+	}
+	if deepseek.AccountName != "acct-lru" || deepseek.Credential != "lru-key" {
+		t.Errorf("expected LRU account on deepseek target, got account=%q cred=%q", deepseek.AccountName, deepseek.Credential)
+	}
+	if sel.prefCalls != 1 {
+		t.Errorf("expected exactly 1 preferred lookup (pinned entry only), got %d", sel.prefCalls)
+	}
+}
+
+func TestBuildTargetList_PinnedAccountUnavailableFallsBackToLRU(t *testing.T) {
+	p := targetProviders()
+	a := NewAgentState(testLogger(), nil)
+	agent := config.AgentConfig{
+		Models: []config.AgentModel{
+			{Provider: "zai", Model: "glm-5"},
+		},
+	}
+	sel := &fakeAccountSelector{
+		lruCred: "lru-key", lruAccount: "acct-lru",
+		prefOK: false,
+	}
+	pref := &AccountPreference{Provider: "zai", Model: "glm-5", AccountID: "acct-gone"}
+
+	targets := a.BuildTargetList(context.Background(), testLogger(), "test-agent", agent, 1000, p, nil, false, sel, pref)
+	if len(targets) != 1 {
+		t.Fatalf("expected 1 target, got %d", len(targets))
+	}
+	if targets[0].AccountName != "acct-lru" || targets[0].Credential != "lru-key" {
+		t.Errorf("expected LRU fallback, got account=%q cred=%q", targets[0].AccountName, targets[0].Credential)
+	}
+	if sel.lruCalls != 1 {
+		t.Errorf("expected 1 LRU call after preferred miss, got %d", sel.lruCalls)
+	}
+}
+
+func TestBuildTargetList_PinnedPreferenceMismatchUsesLRU(t *testing.T) {
+	p := targetProviders()
+	a := NewAgentState(testLogger(), nil)
+	agent := config.AgentConfig{
+		Models: []config.AgentModel{
+			{Provider: "deepseek", Model: "deepseek-v4-flash"},
+		},
+	}
+	sel := &fakeAccountSelector{lruCred: "lru-key", lruAccount: "acct-lru"}
+	// Preference targets a different provider/model than any agent entry.
+	pref := &AccountPreference{Provider: "zai", Model: "glm-5", AccountID: "acct-a"}
+
+	targets := a.BuildTargetList(context.Background(), testLogger(), "test-agent", agent, 1000, p, nil, false, sel, pref)
+	if len(targets) != 1 {
+		t.Fatalf("expected 1 target, got %d", len(targets))
+	}
+	if targets[0].AccountName != "acct-lru" {
+		t.Errorf("expected LRU account, got %q", targets[0].AccountName)
+	}
+	if sel.prefCalls != 0 {
+		t.Errorf("expected 0 preferred lookups for non-matching preference, got %d", sel.prefCalls)
+	}
+}
+
+func TestBuildTargetList_SelectorWithoutPreferredExtension(t *testing.T) {
+	p := targetProviders()
+	a := NewAgentState(testLogger(), nil)
+	agent := config.AgentConfig{
+		Models: []config.AgentModel{
+			{Provider: "zai", Model: "glm-5"},
+		},
+	}
+	// Plain AccountSelector without the PreferredAccountSelector extension.
+	sel := &lruOnlySelector{cred: "lru-key", account: "acct-lru"}
+	pref := &AccountPreference{Provider: "zai", Model: "glm-5", AccountID: "acct-a"}
+
+	targets := a.BuildTargetList(context.Background(), testLogger(), "test-agent", agent, 1000, p, nil, false, sel, pref)
+	if len(targets) != 1 {
+		t.Fatalf("expected 1 target, got %d", len(targets))
+	}
+	if targets[0].AccountName != "acct-lru" {
+		t.Errorf("expected LRU account, got %q", targets[0].AccountName)
+	}
+}
+
+// lruOnlySelector implements only the base AccountSelector interface.
+type lruOnlySelector struct {
+	cred    string
+	account string
+}
+
+func (s *lruOnlySelector) SelectCredentialForModel(ctx context.Context, provider, model string) (string, string, bool) {
+	return s.cred, s.account, true
 }

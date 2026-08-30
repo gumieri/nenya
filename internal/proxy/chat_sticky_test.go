@@ -198,3 +198,66 @@ func TestApplyStickyRouting_CoolingPinPromoted(t *testing.T) {
 		t.Fatalf("pin not promoted, got %+v, %v", state, ok)
 	}
 }
+
+func TestApplyStickyRouting_AccountDriftPromotesToSibling(t *testing.T) {
+	gw := &gateway.NenyaGateway{
+		Logger:     testLog(t),
+		AgentState: routing.NewAgentState(testLog(t), nil),
+	}
+	gw.SessionRouter = gw.AgentState.SessionRouter
+	agent := config.AgentConfig{Strategy: "sticky"}
+	req := &chatRequest{ModelName: "opencode", Payload: map[string]any{
+		"messages": []any{map[string]any{"role": "user", "content": "first turn"}},
+	}}
+	key := routing.SessionKey("opencode", "", "first turn")
+	gw.SessionRouter.Pin(key, "zai", "zai-free", "acct-a", 0)
+
+	// Pinned account was cooling/exhausted at build time; the LRU fallback
+	// selected a sibling account for the same provider/model target.
+	targets := []routing.UpstreamTarget{
+		{Provider: "zai", Model: "zai-free", AccountName: "acct-b", CoolKey: "opencode:zai:zai-free"},
+	}
+	out := applyStickyRouting(req, gw, agent, targets, resolveStickyPin(req, gw, agent))
+	if out[0].AccountName != "acct-b" {
+		t.Fatalf("expected sibling-account target at front, got %+v", out[0])
+	}
+	state, ok := gw.SessionRouter.Lookup(key)
+	if !ok || state.Account != "acct-b" {
+		t.Fatalf("pin not re-pointed to sibling account, got %+v, %v", state, ok)
+	}
+	if state.Provider != "zai" || state.Model != "zai-free" {
+		t.Fatalf("sibling promotion must stay on the pinned provider/model, got %+v", state)
+	}
+}
+
+func TestApplyStickyRouting_ValidFrontPinNotRePinned(t *testing.T) {
+	gw := &gateway.NenyaGateway{
+		Logger:     testLog(t),
+		AgentState: routing.NewAgentState(testLog(t), nil),
+	}
+	gw.SessionRouter = gw.AgentState.SessionRouter
+	agent := config.AgentConfig{Strategy: "sticky"}
+	req := &chatRequest{ModelName: "opencode", Payload: map[string]any{
+		"messages": []any{map[string]any{"role": "user", "content": "first turn"}},
+	}}
+	key := routing.SessionKey("opencode", "", "first turn")
+	gw.SessionRouter.Pin(key, "zai", "zai-free", "acct-a", 0)
+
+	targets := []routing.UpstreamTarget{
+		{Provider: "zai", Model: "zai-free", AccountName: "acct-a", CoolKey: "opencode:zai:zai-free"},
+	}
+	before, ok := gw.SessionRouter.Lookup(key)
+	if !ok {
+		t.Fatal("expected pin before apply")
+	}
+	applyStickyRouting(req, gw, agent, targets, resolveStickyPin(req, gw, agent))
+	after, ok := gw.SessionRouter.Lookup(key)
+	if !ok {
+		t.Fatal("expected pin after apply")
+	}
+	// No drift: the pin must be untouched — Since is only reset by Promote,
+	// so equality proves no spurious failover was recorded.
+	if after.Account != "acct-a" || !after.Since.Equal(before.Since) {
+		t.Fatalf("expected unchanged pin, got %+v (before Since %v)", after, before.Since)
+	}
+}

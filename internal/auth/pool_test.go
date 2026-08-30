@@ -464,6 +464,126 @@ func TestAccountManager_ConcurrentAccess(t *testing.T) {
 	wg.Wait()
 }
 
+func TestAccountPool_SelectAccountByID_Healthy(t *testing.T) {
+	accounts := []*config.ProviderAccount{
+		newTestAccount("a1", "key1"),
+		newTestAccount("a2", "key2"),
+	}
+	pool := NewAccountPool("test-provider", accounts)
+
+	acc, err := pool.SelectAccountByID("a2", "gpt-4")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if acc.ID != "a2" {
+		t.Errorf("expected a2, got %s", acc.ID)
+	}
+	if acc.Credential != "key2" {
+		t.Errorf("expected key2, got %s", acc.Credential)
+	}
+
+	// LastUsed is refreshed so LRU selection stays fair for unpinned sessions.
+	if pool.GetAccount("a2").LastUsed.IsZero() {
+		t.Error("expected LastUsed to be updated after selection")
+	}
+}
+
+func TestAccountPool_SelectAccountByID_Missing(t *testing.T) {
+	pool := NewAccountPool("test-provider", []*config.ProviderAccount{newTestAccount("a1", "key1")})
+
+	_, err := pool.SelectAccountByID("nope", "gpt-4")
+	noAccountErr, ok := err.(*NoAvailableAccountError)
+	if !ok {
+		t.Fatalf("expected NoAvailableAccountError, got %T", err)
+	}
+	if noAccountErr.Provider != "test-provider" {
+		t.Errorf("expected provider 'test-provider', got %s", noAccountErr.Provider)
+	}
+}
+
+func TestAccountPool_SelectAccountByID_Cooling(t *testing.T) {
+	acc := newTestAccount("a1", "key1")
+	acc.RateLimitedUntil = time.Now().Add(1 * time.Hour)
+	pool := NewAccountPool("test-provider", []*config.ProviderAccount{acc})
+
+	if _, err := pool.SelectAccountByID("a1", "gpt-4"); err == nil {
+		t.Error("expected error for cooling account")
+	}
+}
+
+func TestAccountPool_SelectAccountByID_Inactive(t *testing.T) {
+	acc := newTestAccount("a1", "key1")
+	acc.Status = config.AccountStatusError
+	pool := NewAccountPool("test-provider", []*config.ProviderAccount{acc})
+
+	if _, err := pool.SelectAccountByID("a1", "gpt-4"); err == nil {
+		t.Error("expected error for inactive account")
+	}
+}
+
+func TestAccountPool_SelectAccountByID_ModelLocked(t *testing.T) {
+	acc := newTestAccount("a1", "key1")
+	acc.ModelLocks["gpt-4"] = time.Now().Add(1 * time.Hour)
+	pool := NewAccountPool("test-provider", []*config.ProviderAccount{acc})
+
+	if _, err := pool.SelectAccountByID("a1", "gpt-4"); err == nil {
+		t.Error("expected error for model-locked account")
+	}
+	if _, err := pool.SelectAccountByID("a1", "claude-3"); err != nil {
+		t.Fatalf("unexpected error for unlocked model: %v", err)
+	}
+}
+
+func TestAccountManager_SelectAccountByID(t *testing.T) {
+	mgr := NewAccountManager(nil)
+	mgr.RegisterPool("test-provider", NewAccountPool("test-provider", []*config.ProviderAccount{
+		newTestAccount("a1", "key1"),
+		newTestAccount("a2", "key2"),
+	}))
+
+	acc, err := mgr.SelectAccountByID(context.Background(), "test-provider", "gpt-4", "a2")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if acc.ID != "a2" || acc.Credential != "key2" {
+		t.Errorf("unexpected selection: %+v", acc)
+	}
+
+	if _, err := mgr.SelectAccountByID(context.Background(), "test-provider", "gpt-4", "nope"); err == nil {
+		t.Error("expected error for unknown account")
+	}
+	if _, err := mgr.SelectAccountByID(context.Background(), "unknown", "gpt-4", "a1"); err == nil {
+		t.Error("expected error for unknown provider")
+	}
+}
+
+func TestAccountPool_SelectAccountByID_Concurrent(t *testing.T) {
+	accounts := []*config.ProviderAccount{
+		newTestAccount("a1", "key1"),
+		newTestAccount("a2", "key2"),
+	}
+	pool := NewAccountPool("test-provider", accounts)
+	ctx := context.Background()
+
+	var wg sync.WaitGroup
+	for i := 0; i < 50; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			if i%2 == 0 {
+				if _, err := pool.SelectAccountByID("a1", "gpt-4"); err != nil {
+					t.Errorf("unexpected error: %v", err)
+				}
+				return
+			}
+			if _, err := pool.SelectAccount(ctx, "gpt-4"); err != nil {
+				t.Errorf("unexpected error: %v", err)
+			}
+		}(i)
+	}
+	wg.Wait()
+}
+
 func TestJSONFileStorage_SaveAndLoad(t *testing.T) {
 	dir := t.TempDir()
 	storage := NewJSONFileStorage(dir)
