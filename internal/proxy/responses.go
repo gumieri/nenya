@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"net/url"
 	"path"
@@ -49,8 +48,8 @@ func (p *Proxy) handleResponses(gw *gateway.NenyaGateway, w http.ResponseWriter,
 		return
 	}
 
-	bodyBytes, ok := p.readResponsesBody(gw, w, r)
-	if !ok {
+	bodyBytes, herr := p.readResponsesBody(gw, w, r)
+	if renderBodyReadError(w, herr) {
 		return
 	}
 
@@ -155,22 +154,15 @@ func (p *Proxy) resolveResponsesProviderFromModel(gw *gateway.NenyaGateway, mode
 	return p.getDefaultResponseProvider(gw)
 }
 
-func (p *Proxy) readResponsesBody(gw *gateway.NenyaGateway, w http.ResponseWriter, r *http.Request) ([]byte, bool) {
+func (p *Proxy) readResponsesBody(gw *gateway.NenyaGateway, w http.ResponseWriter, r *http.Request) ([]byte, *httpError) {
 	if r.Method == http.MethodGet || r.Method == http.MethodDelete {
-		return []byte{}, true
+		return []byte{}, nil
 	}
 
 	r.Body = http.MaxBytesReader(w, r.Body, gw.Config.Server.MaxBodyBytes)
 	defer func() { _ = r.Body.Close() }()
 
-	bodyBytes, readErr := io.ReadAll(r.Body)
-	if readErr != nil {
-		gw.Logger.Error("failed to read responses request body", "err", readErr)
-		writeStructuredError(w, http.StatusRequestEntityTooLarge, infra.ErrorKindPayloadTooLarge, "Payload too large or malformed")
-		return nil, false
-	}
-
-	return bodyBytes, true
+	return readRequestBody(r, gw, "failed to read responses request body")
 }
 
 func (p *Proxy) resolveResponsesURL(provider *config.Provider, pathStr, query string) string {

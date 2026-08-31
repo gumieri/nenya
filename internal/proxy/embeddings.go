@@ -23,15 +23,13 @@ func (p *Proxy) handleEmbeddings(gw *gateway.NenyaGateway, w http.ResponseWriter
 	r.Body = http.MaxBytesReader(w, r.Body, gw.Config.Server.MaxBodyBytes)
 	defer func() { _ = r.Body.Close() }()
 
-	bodyBytes, err := io.ReadAll(r.Body)
-	if err != nil {
-		gw.Logger.Error("failed to read embeddings request body", "err", err)
-		writeStructuredError(w, http.StatusRequestEntityTooLarge, infra.ErrorKindPayloadTooLarge, "Payload too large or malformed")
+	bodyBytes, herr := readRequestBody(r, gw, "failed to read embeddings request body")
+	if renderBodyReadError(w, herr) {
 		return
 	}
 
 	var payload map[string]interface{}
-	if err = json.Unmarshal(bodyBytes, &payload); err != nil {
+	if err := json.Unmarshal(bodyBytes, &payload); err != nil {
 		gw.Logger.Warn("failed to parse embeddings JSON")
 		writeStructuredError(w, http.StatusBadRequest, infra.ErrorKindInvalidRequest, "Invalid JSON payload")
 		return

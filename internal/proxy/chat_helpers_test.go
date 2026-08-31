@@ -756,9 +756,9 @@ func TestReadResponsesBody(t *testing.T) {
 		cfg := testutil.MinimalConfig()
 		gw := &gateway.NenyaGateway{Config: *cfg, Logger: slog.Default()}
 		w := httptest.NewRecorder()
-		body, ok := p.readResponsesBody(gw, w, req)
-		if !ok {
-			t.Errorf("expected ok=true")
+		body, herr := p.readResponsesBody(gw, w, req)
+		if herr != nil {
+			t.Errorf("unexpected error: %v", herr)
 		}
 		if len(body) != 0 {
 			t.Errorf("expected empty body, got %d bytes", len(body))
@@ -770,9 +770,9 @@ func TestReadResponsesBody(t *testing.T) {
 		cfg := testutil.MinimalConfig()
 		gw := &gateway.NenyaGateway{Config: *cfg, Logger: slog.Default()}
 		w := httptest.NewRecorder()
-		body, ok := p.readResponsesBody(gw, w, req)
-		if !ok {
-			t.Errorf("expected ok=true")
+		body, herr := p.readResponsesBody(gw, w, req)
+		if herr != nil {
+			t.Errorf("unexpected error: %v", herr)
 		}
 		if len(body) != 0 {
 			t.Errorf("expected empty body")
@@ -785,9 +785,9 @@ func TestReadResponsesBody(t *testing.T) {
 		cfg := testutil.MinimalConfig()
 		gw := &gateway.NenyaGateway{Config: *cfg, Logger: slog.Default()}
 		w := httptest.NewRecorder()
-		body, ok := p.readResponsesBody(gw, w, req)
-		if !ok {
-			t.Errorf("expected ok=true")
+		body, herr := p.readResponsesBody(gw, w, req)
+		if herr != nil {
+			t.Errorf("unexpected error: %v", herr)
 		}
 		if string(body) != bodyStr {
 			t.Errorf("expected %q, got %q", bodyStr, string(body))
@@ -801,9 +801,16 @@ func TestReadResponsesBody(t *testing.T) {
 		bodyReader := strings.NewReader(`{"model":"test with very long content that exceeds the limit"}`)
 		req := httptest.NewRequest(http.MethodPost, "/v1/responses", bodyReader)
 		w := httptest.NewRecorder()
-		_, ok := p.readResponsesBody(gw, w, req)
-		if ok {
-			t.Errorf("expected ok=false for too large body")
+		_, herr := p.readResponsesBody(gw, w, req)
+		if herr == nil {
+			t.Errorf("expected error for too large body")
+			return
+		}
+		if herr.Code != http.StatusRequestEntityTooLarge {
+			t.Errorf("expected 413, got %d", herr.Code)
+		}
+		if herr.Kind != infra.ErrorKindPayloadTooLarge {
+			t.Errorf("expected error_kind=payload_too_large, got %q", herr.Kind)
 		}
 	})
 }

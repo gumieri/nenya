@@ -59,10 +59,11 @@ type OpenAIErrorEnvelope struct {
 // OpenAIErrorObject is the public error object exposed to clients in OpenAI format.
 // Contains type, message, optional param, and optional code fields.
 type OpenAIErrorObject struct {
-	Type    ErrorType `json:"type"`
-	Message string    `json:"message"`
-	Param   *string   `json:"param,omitempty"`
-	Code    *string   `json:"code,omitempty"`
+	Type      ErrorType       `json:"type"`
+	Message   string          `json:"message"`
+	Param     *string         `json:"param,omitempty"`
+	Code      *string         `json:"code,omitempty"`
+	ErrorKind infra.ErrorKind `json:"error_kind,omitempty"`
 }
 
 // Error implements the error interface
@@ -342,14 +343,16 @@ func jsonScalarString(raw json.RawMessage) string {
 }
 
 // writeGatewayError writes an OpenAI-compatible JSON error response to the
-// client with the appropriate Content-Type header.
+// client with the appropriate Content-Type header and the structured
+// error_kind field (§6 contract: all error responses carry error_kind).
 func writeGatewayError(w http.ResponseWriter, statusCode int, errType ErrorType, message string) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(statusCode)
 	_ = json.NewEncoder(w).Encode(OpenAIErrorEnvelope{
 		Error: OpenAIErrorObject{
-			Type:    errType,
-			Message: message,
+			Type:      errType,
+			Message:   message,
+			ErrorKind: mapErrorKind(errType),
 		},
 	})
 }
@@ -363,7 +366,9 @@ func mapErrorKind(errType ErrorType) infra.ErrorKind {
 		return infra.ErrorKindRateLimited
 	case ErrorTypeQuotaExhausted:
 		return infra.ErrorKindQuotaExhausted
-	case ErrorTypeProvider, ErrorTypeGateway:
+	case ErrorTypeProvider:
+		return infra.ErrorKindProviderError
+	case ErrorTypeGateway:
 		return infra.ErrorKindNetworkError
 	case ErrorTypeBouncer:
 		return infra.ErrorKindBouncerError

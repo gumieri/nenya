@@ -73,10 +73,8 @@ func (p *Proxy) handlePassthrough(gw *gateway.NenyaGateway, w http.ResponseWrite
 		return
 	}
 
-	bodyBytes, err := readPassthroughBody(gw, w, r)
-	if err != nil {
-		ctxLogger.Error("failed to read request body", "provider", providerName, "err", err)
-		writeStructuredError(w, http.StatusRequestEntityTooLarge, infra.ErrorKindPayloadTooLarge, "Payload too large or malformed")
+	bodyBytes, herr := readPassthroughBody(gw, w, r)
+	if renderBodyReadError(w, herr) {
 		return
 	}
 
@@ -128,13 +126,13 @@ func (p *Proxy) executePassthroughUpstream(gw *gateway.NenyaGateway, ctx context
 	return p.doUpstreamRoundTrip(ctx, gw, r.Method, upstreamURL, bodyBytes, provider.Name, "", r.Header, r.Header.Get("Content-Type"), maxAttempts)
 }
 
-func readPassthroughBody(gw *gateway.NenyaGateway, w http.ResponseWriter, r *http.Request) ([]byte, error) {
+func readPassthroughBody(gw *gateway.NenyaGateway, w http.ResponseWriter, r *http.Request) ([]byte, *httpError) {
 	if r.Method != http.MethodPost && r.Method != http.MethodPut && r.Method != http.MethodPatch {
 		return nil, nil
 	}
 	r.Body = http.MaxBytesReader(w, r.Body, gw.Config.Server.MaxBodyBytes)
 	defer func() { _ = r.Body.Close() }()
-	return io.ReadAll(r.Body)
+	return readRequestBody(r, gw, "failed to read passthrough request body")
 }
 
 func buildPassthroughURL(provider *config.Provider, subPath, rawQuery string) string {

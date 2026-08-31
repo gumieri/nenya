@@ -1,6 +1,7 @@
 package proxy
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -182,6 +183,53 @@ func TestHandleResponses_RBACAgentDenial(t *testing.T) {
 	}
 	if resp.Kind != infra.ErrorKindAuthFailed {
 		t.Fatalf("error_kind = %q, want %q", resp.Kind, infra.ErrorKindAuthFailed)
+	}
+}
+
+func TestValidateChatRequest_ClientCanceled(t *testing.T) {
+	gw := &gateway.NenyaGateway{
+		Logger: testLog(t),
+		Config: config.Config{Server: config.ServerConfig{MaxBodyBytes: 1 << 20}},
+	}
+	p := &Proxy{}
+
+	r := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"m"}`))
+	ctx, cancel := context.WithCancel(r.Context())
+	r = r.WithContext(ctx)
+	cancel()
+
+	w := httptest.NewRecorder()
+	_, herr := p.validateChatRequest(w, r, gw, "")
+	if herr == nil {
+		t.Fatal("expected httpError, got nil")
+	}
+	if herr.Code != statusClientClosed {
+		t.Fatalf("expected 499 sentinel, got %d", herr.Code)
+	}
+	// The sentinel must not have rendered a body: the client is gone.
+	if w.Body.Len() != 0 {
+		t.Fatalf("expected no rendered body, got %q", w.Body.String())
+	}
+}
+
+func TestResolveModelRouting_UnknownModel(t *testing.T) {
+	gw := &gateway.NenyaGateway{
+		Logger:    testLog(t),
+		Config:    config.Config{},
+		Providers: map[string]*config.Provider{},
+	}
+	p := &Proxy{}
+
+	req := &chatRequest{ModelName: "no-such-model-anywhere"}
+	_, _, _, _, herr := p.resolveModelRouting(context.Background(), req, gw)
+	if herr == nil {
+		t.Fatal("expected httpError, got nil")
+	}
+	if herr.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d", herr.Code)
+	}
+	if herr.Kind != infra.ErrorKindModelNotFound {
+		t.Fatalf("error_kind = %q, want %q", herr.Kind, infra.ErrorKindModelNotFound)
 	}
 }
 

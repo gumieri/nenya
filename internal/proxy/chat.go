@@ -89,17 +89,9 @@ func (p *Proxy) parseRequestBody(gw *gateway.NenyaGateway, r *http.Request, body
 func (p *Proxy) validateChatRequest(w http.ResponseWriter, r *http.Request, gw *gateway.NenyaGateway, keyRef string) (*chatRequest, *httpError) {
 	r.Body = http.MaxBytesReader(w, r.Body, gw.Config.Server.MaxBodyBytes)
 
-	bodyBytes, err := io.ReadAll(r.Body)
-	if err != nil {
-		// A mid-body client disconnect surfaces as a read error, not as a
-		// context cancellation — check the context before classifying the
-		// failure as a payload problem.
-		if r.Context().Err() != nil {
-			gw.Logger.Debug("request canceled mid-body-read", "err", err)
-			return nil, &httpError{Code: statusClientClosed, Message: "Request canceled"}
-		}
-		gw.Logger.Error("failed to read request body", "err", err)
-		return nil, &httpError{Code: http.StatusRequestEntityTooLarge, Message: "Payload too large or malformed", Kind: infra.ErrorKindPayloadTooLarge}
+	bodyBytes, herr := readRequestBody(r, gw, "failed to read request body")
+	if herr != nil {
+		return nil, herr
 	}
 	defer func() { _ = r.Body.Close() }()
 
@@ -770,8 +762,12 @@ func (p *Proxy) handleChatCompletions(gw *gateway.NenyaGateway, w http.ResponseW
 	}
 	req, herr := p.validateChatRequest(w, r, gw, keyRef)
 	if herr != nil {
-		if herr.Code == http.StatusNoContent || herr.Code == statusClientClosed {
-			// Cache-hit sentinel or client-closed request: nothing to render.
+		if herr.Code == http.StatusNoContent {
+			// Cache-hit sentinel: nothing to render.
+			return
+		}
+		if herr.Code == statusClientClosed {
+			acknowledgeClientClosed(w)
 			return
 		}
 		writeHTTPError(w, herr)

@@ -3,9 +3,12 @@ package proxy
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
+	"io"
 	"net/http"
 	"strings"
 
+	"github.com/nenya/internal/gateway"
 	"github.com/nenya/internal/infra"
 )
 
@@ -32,6 +35,65 @@ func writeHTTPError(w http.ResponseWriter, herr *httpError) {
 		kind = infra.ErrorKindInvalidRequest
 	}
 	writeStructuredError(w, herr.Code, kind, herr.Message)
+}
+
+// acknowledgeClientClosed emits an empty statusClientClosed header with no
+// body: the client is gone, but writing the status keeps access logs and
+// status-code metrics honest instead of recording a phantom 200.
+func acknowledgeClientClosed(w http.ResponseWriter) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(statusClientClosed)
+}
+
+// renderBodyReadError renders an error returned by readRequestBody (or an
+// equivalent body-read helper): client-closed requests are acknowledged with
+// the empty 499 status, everything else is rendered via writeHTTPError.
+// Returns true when the caller must stop processing.
+func renderBodyReadError(w http.ResponseWriter, herr *httpError) bool {
+	if herr == nil {
+		return false
+	}
+	if herr.Code == statusClientClosed {
+		acknowledgeClientClosed(w)
+		return true
+	}
+	writeHTTPError(w, herr)
+	return true
+}
+
+// readRequestBody reads the (already MaxBytesReader-wrapped) request body,
+// uniformly distinguishing client disconnects from genuine payload errors
+// across all endpoints: a canceled context yields the 499 no-render
+// sentinel, a MaxBytesError the 413/payload_too_large rendering, and any
+// other transport error a 400/invalid_request. On a non-nil returned error
+// the caller must skip rendering when Code == statusClientClosed and
+// otherwise render via writeHTTPError.
+func readRequestBody(r *http.Request, gw *gateway.NenyaGateway, logMsg string) ([]byte, *httpError) {
+	bodyBytes, err := io.ReadAll(r.Body)
+	if err == nil {
+		return bodyBytes, nil
+	}
+	// Best-effort: background cancellation may land after ReadAll returns,
+	// in which case the payload branch below runs — writing a 413 to an
+	// already-disconnected client is harmless either way.
+	if r.Context().Err() != nil {
+		gw.Logger.Debug("request canceled mid-body-read", "err", err)
+		return nil, &httpError{Code: statusClientClosed, Message: "Request canceled"}
+	}
+	gw.Logger.Error(logMsg, "err", err)
+	var maxErr *http.MaxBytesError
+	if errors.As(err, &maxErr) {
+		return nil, &httpError{
+			Code:    http.StatusRequestEntityTooLarge,
+			Message: "Payload too large or malformed",
+			Kind:    infra.ErrorKindPayloadTooLarge,
+		}
+	}
+	return nil, &httpError{
+		Code:    http.StatusBadRequest,
+		Message: "Failed to read request body",
+		Kind:    infra.ErrorKindInvalidRequest,
+	}
 }
 
 // classifyError maps upstream responses to error kinds.

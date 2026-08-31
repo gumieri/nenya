@@ -384,7 +384,7 @@ func TestMapErrorKind(t *testing.T) {
 		{"authentication maps to auth_failed", ErrorTypeAuthentication, "auth_failed"},
 		{"rate_limit maps to rate_limited", ErrorTypeRateLimit, "rate_limited"},
 		{"quota_exhausted maps to quota_exhausted", ErrorTypeQuotaExhausted, "quota_exhausted"},
-		{"provider maps to network_error", ErrorTypeProvider, "network_error"},
+		{"provider maps to provider_error", ErrorTypeProvider, "provider_error"},
 		{"gateway maps to network_error", ErrorTypeGateway, "network_error"},
 		{"bouncer maps to bouncer_error", ErrorTypeBouncer, "bouncer_error"},
 		{"invalid_request maps to internal_error", ErrorTypeInvalidRequest, "internal_error"},

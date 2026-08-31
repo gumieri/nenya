@@ -3,7 +3,6 @@ package proxy
 import (
 	"context"
 	"fmt"
-	"io"
 	"net/http"
 	"strings"
 	"time"
@@ -157,9 +156,8 @@ func (p *Proxy) readExtensionBody(gw *gateway.NenyaGateway, w http.ResponseWrite
 	r.Body = http.MaxBytesReader(w, r.Body, gw.Config.Server.MaxBodyBytes)
 	defer func() { _ = r.Body.Close() }()
 
-	bodyBytes, readErr := io.ReadAll(r.Body)
-	if readErr != nil {
-		writeStructuredError(w, http.StatusRequestEntityTooLarge, infra.ErrorKindPayloadTooLarge, "Payload too large or malformed")
+	bodyBytes, herr := readRequestBody(r, gw, "failed to read extensions request body")
+	if renderBodyReadError(w, herr) {
 		return nil, false
 	}
 
