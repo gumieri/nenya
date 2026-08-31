@@ -61,6 +61,37 @@ func TestFilterExhaustedTargets_NilTracker(t *testing.T) {
 	}
 }
 
+func TestFilterExhaustedTargets_DropsEmptyCredential(t *testing.T) {
+	providers := map[string]*config.Provider{
+		"openai": {AuthStyle: "bearer"},
+		"ollama": {AuthStyle: config.AuthStyleNone},
+	}
+
+	targets := []routing.UpstreamTarget{
+		{Provider: "openai", AccountName: "acct", Credential: "key", Model: "gpt-4"},
+		// Misconfigured pool account: resolved to an account but with an
+		// empty credential — must be dropped for credential-requiring
+		// providers even though AccountName is set.
+		{Provider: "openai", AccountName: "broken", Credential: "", Model: "gpt-4"},
+		{Provider: "openai", AccountName: "", Credential: "", Model: "gpt-4"},
+		// AuthStyle none (and unknown providers, absent from the map) run
+		// without credentials and must pass.
+		{Provider: "ollama", Model: "llama3"},
+		{Provider: "mystery", Model: "m1"},
+	}
+
+	filtered := filterExhaustedTargets(targets, nil, providers, slog.Default())
+
+	if len(filtered) != 3 {
+		t.Fatalf("expected 3 targets after credential filtering, got %d", len(filtered))
+	}
+	for _, got := range filtered {
+		if got.Provider == "openai" && got.Credential == "" {
+			t.Errorf("credential-less openai target should have been dropped, got %+v", got)
+		}
+	}
+}
+
 func TestCollectProviderFreeModels(t *testing.T) {
 	providers := map[string]*config.Provider{
 		"openai": {

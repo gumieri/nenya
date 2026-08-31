@@ -81,8 +81,8 @@ func SessionKey(agent, systemPrompt, firstUserMessage string) string {
 // Pin records the pinned target for a BRAND-NEW session key with the given
 // per-agent idle TTL (non-positive falls back to the router default). It
 // respects the LRU cap and evicts the least-recently-seen entry when the
-// store is full, recording a `new` metric. Callers should use Lookup for
-// existing sessions and PromoteIfChanged after a failover.
+// store is full, recording a `new` metric for brand-new keys. Callers should
+// use Lookup for existing sessions and PromoteIfChanged after a failover.
 func (r *SessionRouter) Pin(key, provider, model, account string, ttl time.Duration) {
 	if r == nil {
 		return
@@ -288,13 +288,17 @@ func (r *SessionRouter) entryExpired(entry *SessionState, now time.Time) bool {
 func (r *SessionRouter) evictLRU() {
 	var oldestKey string
 	var oldest time.Time
+	found := false
 	for key, entry := range r.sessions {
-		if oldestKey == "" || entry.LastSeen.Before(oldest) {
+		// A bool sentinel (not the empty string) so an empty-string key can
+		// never masquerade as "unset" and win eviction regardless of age.
+		if !found || entry.LastSeen.Before(oldest) {
 			oldestKey = key
 			oldest = entry.LastSeen
+			found = true
 		}
 	}
-	if oldestKey != "" {
+	if found {
 		delete(r.sessions, oldestKey)
 		if r.logger != nil {
 			r.logger.Debug("session pin evicted (LRU cap reached)", "cap", r.cap)

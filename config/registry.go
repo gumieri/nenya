@@ -122,7 +122,7 @@ var ProviderRegistry = map[string]ProviderEntry{
 	},
 	"ollama": {
 		URL:       "http://127.0.0.1:11434/v1/chat/completions",
-		AuthStyle: "none",
+		AuthStyle: AuthStyleNone,
 	},
 	"moonshot": {
 		URL:       "https://api.moonshot.cn/v1/chat/completions",

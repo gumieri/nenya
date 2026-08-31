@@ -150,7 +150,7 @@ func TestSessionRouterPromoteIfChanged_CapAndTTLRefresh(t *testing.T) {
 	if _, ok := sr.Lookup("k1"); ok {
 		t.Fatal("expected least-recently-seen pin k1 to be evicted")
 	}
-	if _, ok := sr.Lookup("k3"); ok != true {
+	if _, ok := sr.Lookup("k3"); !ok {
 		t.Fatal("expected promoted pin k3 to be present")
 	}
 

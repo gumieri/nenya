@@ -44,10 +44,13 @@ type chatRequest struct {
 	SourceFormat string // "openai" or "anthropic" - indicates the original client request format
 }
 
-// httpError pairs an HTTP status code with a user-facing message.
+// httpError pairs an HTTP status code with a user-facing message and an
+// optional structured error kind. When Kind is empty the renderer falls back
+// to the status-derived default (invalid_request).
 type httpError struct {
 	Code    int
 	Message string
+	Kind    infra.ErrorKind
 }
 
 func (e *httpError) Error() string { return e.Message }
@@ -60,7 +63,7 @@ func (p *Proxy) parseRequestBody(gw *gateway.NenyaGateway, r *http.Request, body
 		converted, err := routing.TransformIncomingAnthropicRequest(r.Context(), bodyBytes)
 		if err != nil {
 			gw.Logger.Warn("failed to convert Anthropic request", "err", err)
-			return nil, "", &httpError{http.StatusBadRequest, "Failed to convert Anthropic format request"}
+			return nil, "", &httpError{Code: http.StatusBadRequest, Message: "Failed to convert Anthropic format request"}
 		}
 		if converted != nil && string(converted) != string(bodyBytes) {
 			sourceFormat = "anthropic"
@@ -71,7 +74,7 @@ func (p *Proxy) parseRequestBody(gw *gateway.NenyaGateway, r *http.Request, body
 	var payload map[string]any
 	if err := json.Unmarshal(bodyBytes, &payload); err != nil {
 		gw.Logger.Warn("failed to parse JSON, returning Bad Request")
-		return nil, "", &httpError{http.StatusBadRequest, "Invalid JSON payload"}
+		return nil, "", &httpError{Code: http.StatusBadRequest, Message: "Invalid JSON payload"}
 	}
 	return payload, sourceFormat, nil
 }
@@ -84,12 +87,12 @@ func (p *Proxy) validateChatRequest(w http.ResponseWriter, r *http.Request, gw *
 	bodyBytes, err := io.ReadAll(r.Body)
 	if err != nil {
 		gw.Logger.Error("failed to read request body", "err", err)
-		return nil, &httpError{http.StatusRequestEntityTooLarge, "Payload too large or malformed"}
+		return nil, &httpError{Code: http.StatusRequestEntityTooLarge, Message: "Payload too large or malformed"}
 	}
 	defer func() { _ = r.Body.Close() }()
 
 	if r.Context().Err() != nil {
-		return nil, &httpError{http.StatusRequestEntityTooLarge, "Request canceled"}
+		return nil, &httpError{Code: http.StatusRequestEntityTooLarge, Message: "Request canceled"}
 	}
 
 	payload, sourceFormat, herr := p.parseRequestBody(gw, r, bodyBytes)
@@ -100,11 +103,11 @@ func (p *Proxy) validateChatRequest(w http.ResponseWriter, r *http.Request, gw *
 	modelName, ok := payload["model"].(string)
 	if !ok || modelName == "" {
 		gw.Logger.Warn("missing or empty model field in request body")
-		return nil, &httpError{http.StatusBadRequest, `Missing or empty "model" field in request body`}
+		return nil, &httpError{Code: http.StatusBadRequest, Message: `Missing or empty "model" field in request body`}
 	}
 	if len(modelName) > MaxModelNameLength {
 		gw.Logger.Warn("model name exceeds maximum length", "length", len(modelName))
-		return nil, &httpError{http.StatusBadRequest, "Model name too long"}
+		return nil, &httpError{Code: http.StatusBadRequest, Message: "Model name too long"}
 	}
 
 	req := &chatRequest{
@@ -176,8 +179,15 @@ func (p *Proxy) resolveAgentRouting(ctx context.Context, req *chatRequest, gw *g
 		if len(built) > 0 {
 			// Every built target was dropped (billing exhaustion or missing
 			// credentials): a 503 distinguishes this from the context-fit
-			// 413 that handleEmptyAgentTargets reports for build-time skips.
-			return nil, "", 0, 0, &httpError{http.StatusServiceUnavailable, "All provider accounts are exhausted or unavailable"}
+			// 413 that handleEmptyAgentTargets reports for build-time skips,
+			// and quota_exhausted tells retry-aware clients to back off.
+			gw.Logger.Warn("all built targets filtered",
+				"agent", req.ModelName, "built", len(built))
+			return nil, "", 0, 0, &httpError{
+				Code:    http.StatusServiceUnavailable,
+				Message: "All provider accounts are exhausted or unavailable",
+				Kind:    infra.ErrorKindQuotaExhausted,
+			}
 		}
 		return handleEmptyAgentTargets(req, gw, agent)
 	}
@@ -443,10 +453,10 @@ func handleEmptyAgentTargets(req *chatRequest, gw *gateway.NenyaGateway, agent c
 	if len(agent.Models) > 0 {
 		gw.Logger.Warn("all models excluded by max_context",
 			"agent", req.ModelName, "tokens", req.TokenCount)
-		return nil, "", 0, 0, &httpError{http.StatusRequestEntityTooLarge, "Request too large for all configured models in this agent"}
+		return nil, "", 0, 0, &httpError{Code: http.StatusRequestEntityTooLarge, Message: "Request too large for all configured models in this agent"}
 	}
 	gw.Logger.Error("agent has no models configured", "agent", req.ModelName)
-	return nil, "", 0, 0, &httpError{http.StatusInternalServerError, "Agent has no models configured"}
+	return nil, "", 0, 0, &httpError{Code: http.StatusInternalServerError, Message: "Agent has no models configured"}
 }
 
 func reorderTargetsByLatency(req *chatRequest, gw *gateway.NenyaGateway, targets []routing.UpstreamTarget) []routing.UpstreamTarget {
@@ -541,14 +551,18 @@ func (p *Proxy) resolveModelRouting(ctx context.Context, req *chatRequest, gw *g
 	matches := routing.ResolveProviders(req.ModelName, gw.Providers, gw.ModelCatalog)
 	if len(matches) == 0 {
 		gw.Logger.Warn("no provider found for model", "model", req.ModelName)
-		return nil, "", 0, 0, &httpError{http.StatusBadRequest, util.ErrNoProvider}
+		return nil, "", 0, 0, &httpError{Code: http.StatusBadRequest, Message: util.ErrNoProvider}
 	}
 
 	targets := buildProviderTargets(ctx, matches, gw, gw)
 	targets = filterExhaustedTargets(targets, gw.BillingTracker, gw.Providers, gw.Logger)
 	if len(targets) == 0 {
 		gw.Logger.Error("no valid providers after filtering", "model", req.ModelName)
-		return nil, "", 0, 0, &httpError{http.StatusServiceUnavailable, "No valid providers available"}
+		return nil, "", 0, 0, &httpError{
+			Code:    http.StatusServiceUnavailable,
+			Message: "No valid providers available",
+			Kind:    infra.ErrorKindQuotaExhausted,
+		}
 	}
 
 	targetStrings := make([]string, len(targets))
@@ -600,7 +614,7 @@ func (p *Proxy) resolveCache(w http.ResponseWriter, r *http.Request, gw *gateway
 		model := req.ModelName
 		if data, ok, cacheType := gw.ResponseCache.Lookup(cacheKey, model, embedFunc); ok {
 			p.replayCachedResponse(gw, w, r, data, cacheType, req.Stream)
-			return "", &httpError{http.StatusNoContent, "cache hit"}
+			return "", &httpError{Code: http.StatusNoContent, Message: "cache hit"}
 		}
 	}
 	return cacheKey, nil
@@ -727,7 +741,11 @@ func (p *Proxy) handleChatCompletions(gw *gateway.NenyaGateway, w http.ResponseW
 		if herr.Code == http.StatusNoContent {
 			return
 		}
-		writeStructuredError(w, herr.Code, infra.ErrorKindInvalidRequest, herr.Message)
+		kind := herr.Kind
+		if kind == "" {
+			kind = infra.ErrorKindInvalidRequest
+		}
+		writeStructuredError(w, herr.Code, kind, herr.Message)
 		return
 	}
 

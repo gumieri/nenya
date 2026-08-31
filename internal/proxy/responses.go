@@ -33,7 +33,7 @@ func (p *Proxy) authorizeResponsesAgent(gw *gateway.NenyaGateway, w http.Respons
 	if modelName != "" && apiKey != nil && !auth.AuthorizeAgent(apiKey, modelName) {
 		gw.Metrics.IncAuthDenials(apiKey.Name, "agent")
 		p.logAuthDenial(gw, apiKey, "agent "+modelName, r)
-		return "", &httpError{http.StatusForbidden, "Forbidden"}
+		return "", &httpError{Code: http.StatusForbidden, Message: "Forbidden"}
 	}
 	return modelName, nil
 }

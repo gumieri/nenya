@@ -77,7 +77,8 @@ func TestSelectCredentialForModel_SkipsExhaustedLRUPick(t *testing.T) {
 		{ID: "a2", CredentialType: config.CredentialTypeAPIKey, Credential: "key2", Status: config.AccountStatusActive, ModelLocks: make(map[string]time.Time), CreatedAt: time.Now()},
 	}))
 	bt := billing.NewBillingTracker(logger, nil)
-	g := &NenyaGateway{AccountManager: mgr, BillingTracker: bt, Metrics: infra.NewMetrics(), Logger: logger}
+	metrics := infra.NewMetrics()
+	g := &NenyaGateway{AccountManager: mgr, BillingTracker: bt, Metrics: metrics, Logger: logger}
 	ctx := context.Background()
 
 	// LRU selects a1 first; mark it exhausted afterwards.
@@ -86,20 +87,30 @@ func TestSelectCredentialForModel_SkipsExhaustedLRUPick(t *testing.T) {
 	}
 	bt.MarkExhausted(ctx, "prov", "a1", "quota")
 
-	// The LRU path must skip the exhausted account and serve the sibling.
+	// The LRU path must skip the exhausted account and serve the sibling,
+	// recorded as a plain usable selection.
 	_, id, ok := g.SelectCredentialForModel(ctx, "prov", "m1")
 	if !ok || id != "a2" {
 		t.Fatalf("expected exhaustion-aware sibling a2, got %q, %v", id, ok)
 	}
+	if got := metrics.AccountSelectionCount("prov", "selected"); got != 2 {
+		t.Fatalf("expected 2 'selected' metrics (initial pick + healthy sibling), got %d", got)
+	}
 
 	// When every account is exhausted the exclusion retry still returns a
-	// pick (the pool is billing-agnostic), and the downstream
-	// filterExhaustedTargets drops the target as the full-exhaustion safety
-	// net — identical to the pre-fix behavior for that case.
+	// pick (the pool is billing-agnostic); the metric must be honest that
+	// the pick is a doomed fallback (the downstream chat target-build filter
+	// drops it), not a usable selection.
 	bt.MarkExhausted(ctx, "prov", "a2", "quota")
 	_, id, ok = g.SelectCredentialForModel(ctx, "prov", "m1")
 	if !ok || (id != "a1" && id != "a2") {
 		t.Fatalf("expected some pick when all accounts exhausted, got %q, %v", id, ok)
+	}
+	if got := metrics.AccountSelectionCount("prov", "selected_exhausted_fallback"); got != 1 {
+		t.Fatalf("expected 1 'selected_exhausted_fallback' metric, got %d", got)
+	}
+	if got := metrics.AccountSelectionCount("prov", "selected"); got != 2 {
+		t.Fatalf("exhausted fallback must not bump 'selected', got %d", got)
 	}
 }
 

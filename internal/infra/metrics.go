@@ -979,8 +979,6 @@ func (m *Metrics) WritePrometheus(w io.Writer) {
 		return
 	}
 
-	m.writeCounterMap(w, "nenya_account_selection_total",
-		"Total account selections by provider and outcome.", &m.accountSelection)
 	m.writeCounterMap(w, "nenya_billing_spend_usd",
 		"Total spend by provider and account in USD.", &m.billingSpend)
 	m.writeCounterMap(w, "nenya_billing_exhausted",

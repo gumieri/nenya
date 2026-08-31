@@ -854,10 +854,11 @@ func (g *NenyaGateway) GetProviderAPIKey(providerName string) ([]byte, bool) {
 // billing-exhausted — bounded by pool size — so a healthy sibling is served
 // instead of a target that filterExhaustedTargets would drop (spurious
 // provider/model failover). When no healthy sibling exists the exhausted pick
-// is returned and the downstream target filter remains the safety net. Each
+// is returned; on the chat target-build path the downstream target filter
+// remains the safety net, though other consumers of this credential (e.g.
+// passthrough auth injection) have no such filter. Each
 // skipped pick has its LastUsed bumped by the pool — a mild, self-correcting
-// LRU distortion accepted to keep the pool mutation-free and selection
-// simple.
+// LRU distortion accepted to avoid extra pool API surface.
 func (g *NenyaGateway) selectAccountKey(ctx context.Context, providerName, model string) ([]byte, string, bool) {
 	if g.AccountManager == nil {
 		return nil, "", false
@@ -871,7 +872,7 @@ func (g *NenyaGateway) selectAccountKey(ctx context.Context, providerName, model
 			status := "selected"
 			if g.BillingTracker != nil && g.BillingTracker.IsExhausted(providerName, selected.ID) {
 				// The pick is still exhausted (no healthy sibling): the
-				// downstream target filter will drop it, so keep the metric
+				// chat target-build filter will drop it, so keep the metric
 				// honest about usable selections.
 				status = "selected_exhausted_fallback"
 			}
@@ -892,8 +893,9 @@ func (g *NenyaGateway) selectAccountKey(ctx context.Context, providerName, model
 // skipExhaustedPick advances the LRU pick past billing-exhausted accounts by
 // retrying selection with a growing exclude set — bounded by pool size, so
 // no loop is possible. When no healthy sibling exists the (possibly
-// exhausted) pick is returned unchanged and the downstream target filter
-// remains the full-exhaustion safety net. Each skipped pick has its LastUsed
+// exhausted) pick is returned unchanged; on the chat target-build path the
+// downstream target filter remains the full-exhaustion safety net. Each
+// skipped pick has its LastUsed
 // bumped by the pool — a mild, self-correcting LRU distortion accepted to
 // keep selection simple.
 func (g *NenyaGateway) skipExhaustedPick(ctx context.Context, providerName, model string, selected *auth.SelectedAccount) *auth.SelectedAccount {
