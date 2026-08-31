@@ -3,10 +3,12 @@ package proxy
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"testing/iotest"
 
 	"github.com/nenya/config"
 	"github.com/nenya/internal/gateway"
@@ -210,6 +212,44 @@ func TestValidateChatRequest_ClientCanceled(t *testing.T) {
 	if w.Body.Len() != 0 {
 		t.Fatalf("expected no rendered body, got %q", w.Body.String())
 	}
+}
+
+func TestReadRequestBody_BranchClassification(t *testing.T) {
+	gw := &gateway.NenyaGateway{Logger: testLog(t)}
+
+	t.Run("canceled context yields 499 sentinel", func(t *testing.T) {
+		r := httptest.NewRequest(http.MethodPost, "/x", iotest.ErrReader(errors.New("boom")))
+		ctx, cancel := context.WithCancel(r.Context())
+		r = r.WithContext(ctx)
+		cancel()
+		_, herr := readRequestBody(r, gw, "test read")
+		if herr == nil || herr.Code != statusClientClosed {
+			t.Fatalf("expected 499 sentinel, got %+v", herr)
+		}
+	})
+
+	t.Run("transport error yields 400 invalid_request", func(t *testing.T) {
+		r := httptest.NewRequest(http.MethodPost, "/x", iotest.ErrReader(errors.New("boom")))
+		_, herr := readRequestBody(r, gw, "test read")
+		if herr == nil || herr.Code != http.StatusBadRequest {
+			t.Fatalf("expected 400, got %+v", herr)
+		}
+		if herr.Kind != infra.ErrorKindInvalidRequest {
+			t.Fatalf("error_kind = %q, want invalid_request", herr.Kind)
+		}
+	})
+
+	t.Run("max bytes error yields 413 payload_too_large", func(t *testing.T) {
+		r := httptest.NewRequest(http.MethodPost, "/x", strings.NewReader("data"))
+		r.Body = http.MaxBytesReader(httptest.NewRecorder(), r.Body, 2)
+		_, herr := readRequestBody(r, gw, "test read")
+		if herr == nil || herr.Code != http.StatusRequestEntityTooLarge {
+			t.Fatalf("expected 413, got %+v", herr)
+		}
+		if herr.Kind != infra.ErrorKindPayloadTooLarge {
+			t.Fatalf("error_kind = %q, want payload_too_large", herr.Kind)
+		}
+	})
 }
 
 func TestResolveModelRouting_UnknownModel(t *testing.T) {

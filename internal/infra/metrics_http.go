@@ -60,7 +60,7 @@ func HandleMetrics(m *Metrics, w http.ResponseWriter, r *http.Request) {
 
 func NormalizeMetricPath(path string) string {
 	switch path {
-	case "/healthz", "/statsz", "/metrics", "/v1/models", "/v1/chat/completions", "/v1/embeddings":
+	case "/healthz", "/statsz", "/metrics", "/v1/models", "/v1/chat/completions", "/v1/messages", "/v1/embeddings":
 		return path
 	default:
 		return "other"

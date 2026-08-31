@@ -53,11 +53,6 @@ type httpError struct {
 	Kind    infra.ErrorKind
 }
 
-// statusClientClosed is a non-standard sentinel status (nginx convention)
-// for requests whose context was canceled mid-read: the client is gone and
-// no response should be rendered.
-const statusClientClosed = 499
-
 func (e *httpError) Error() string { return e.Message }
 
 // parseRequestBody parses the request body and converts it to OpenAI format if needed.
@@ -88,16 +83,16 @@ func (p *Proxy) parseRequestBody(gw *gateway.NenyaGateway, r *http.Request, body
 // returning a populated chatRequest or an httpError.
 func (p *Proxy) validateChatRequest(w http.ResponseWriter, r *http.Request, gw *gateway.NenyaGateway, keyRef string) (*chatRequest, *httpError) {
 	r.Body = http.MaxBytesReader(w, r.Body, gw.Config.Server.MaxBodyBytes)
+	defer func() { _ = r.Body.Close() }()
 
 	bodyBytes, herr := readRequestBody(r, gw, "failed to read request body")
 	if herr != nil {
 		return nil, herr
 	}
-	defer func() { _ = r.Body.Close() }()
 
 	if r.Context().Err() != nil {
 		// The client is gone; there is no response worth rendering.
-		return nil, &httpError{Code: statusClientClosed, Message: "Request canceled"}
+		return nil, errClientClosed
 	}
 
 	payload, sourceFormat, herr := p.parseRequestBody(gw, r, bodyBytes)
@@ -766,11 +761,7 @@ func (p *Proxy) handleChatCompletions(gw *gateway.NenyaGateway, w http.ResponseW
 			// Cache-hit sentinel: nothing to render.
 			return
 		}
-		if herr.Code == statusClientClosed {
-			acknowledgeClientClosed(w)
-			return
-		}
-		writeHTTPError(w, herr)
+		renderBodyReadError(w, herr)
 		return
 	}
 

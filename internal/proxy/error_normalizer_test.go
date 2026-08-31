@@ -5,6 +5,8 @@ import (
 	"errors"
 	"net/http"
 	"testing"
+
+	"github.com/nenya/internal/infra"
 )
 
 type testCase struct {
@@ -220,6 +222,7 @@ func TestGatewayErrorToJSON(t *testing.T) {
 					"message": "test error",
 					"param":   nil,
 					"code":    nil,
+					"error_kind": string(infra.ErrorKindInvalidRequest),
 				},
 			},
 		},
@@ -228,10 +231,11 @@ func TestGatewayErrorToJSON(t *testing.T) {
 			err:  NewInvalidRequestError("test error", nil).WithParam("model"),
 			want: map[string]any{
 				"error": map[string]any{
-					"type":    ErrorTypeInvalidRequest,
-					"message": "test error",
-					"param":   "model",
-					"code":    nil,
+					"type":       ErrorTypeInvalidRequest,
+					"message":    "test error",
+					"param":      "model",
+					"code":       nil,
+					"error_kind": string(infra.ErrorKindInvalidRequest),
 				},
 			},
 		},
@@ -240,10 +244,11 @@ func TestGatewayErrorToJSON(t *testing.T) {
 			err:  NewInvalidRequestError("test error", nil).WithCode("invalid_request"),
 			want: map[string]any{
 				"error": map[string]any{
-					"type":    ErrorTypeInvalidRequest,
-					"message": "test error",
-					"param":   nil,
-					"code":    "invalid_request",
+					"type":       ErrorTypeInvalidRequest,
+					"message":    "test error",
+					"param":      nil,
+					"code":       "invalid_request",
+					"error_kind": string(infra.ErrorKindInvalidRequest),
 				},
 			},
 		},
@@ -252,10 +257,11 @@ func TestGatewayErrorToJSON(t *testing.T) {
 			err:  NewProviderError("openai", http.StatusInternalServerError, "upstream error", nil),
 			want: map[string]any{
 				"error": map[string]any{
-					"type":    ErrorTypeProvider,
-					"message": "upstream error",
-					"param":   nil,
-					"code":    nil,
+					"type":       ErrorTypeProvider,
+					"message":    "upstream error",
+					"param":      nil,
+					"code":       nil,
+					"error_kind": string(infra.ErrorKindProviderError),
 				},
 			},
 		},
@@ -385,10 +391,10 @@ func TestMapErrorKind(t *testing.T) {
 		{"rate_limit maps to rate_limited", ErrorTypeRateLimit, "rate_limited"},
 		{"quota_exhausted maps to quota_exhausted", ErrorTypeQuotaExhausted, "quota_exhausted"},
 		{"provider maps to provider_error", ErrorTypeProvider, "provider_error"},
+		{"not_found maps to model_not_found", ErrorTypeNotFound, "model_not_found"},
+		{"invalid_request maps to invalid_request", ErrorTypeInvalidRequest, "invalid_request"},
 		{"gateway maps to network_error", ErrorTypeGateway, "network_error"},
 		{"bouncer maps to bouncer_error", ErrorTypeBouncer, "bouncer_error"},
-		{"invalid_request maps to internal_error", ErrorTypeInvalidRequest, "internal_error"},
-		{"not_found maps to internal_error", ErrorTypeNotFound, "internal_error"},
 		{"unknown maps to internal_error", ErrorType("unknown"), "internal_error"},
 		{"empty maps to internal_error", ErrorType(""), "internal_error"},
 	}

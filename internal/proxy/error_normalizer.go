@@ -57,7 +57,7 @@ type OpenAIErrorEnvelope struct {
 }
 
 // OpenAIErrorObject is the public error object exposed to clients in OpenAI format.
-// Contains type, message, optional param, and optional code fields.
+// Contains type, message, optional param, code, and optional error_kind fields.
 type OpenAIErrorObject struct {
 	Type      ErrorType       `json:"type"`
 	Message   string          `json:"message"`
@@ -112,10 +112,11 @@ func (e *GatewayError) ToJSON() map[string]any {
 	}
 	return map[string]any{
 		"error": map[string]any{
-			"type":    e.Type,
-			"message": e.Message,
-			"param":   param,
-			"code":    code,
+			"type":       e.Type,
+			"message":    e.Message,
+			"param":      param,
+			"code":       code,
+			"error_kind": string(mapErrorKind(e.Type)),
 		},
 	}
 }
@@ -372,6 +373,10 @@ func mapErrorKind(errType ErrorType) infra.ErrorKind {
 		return infra.ErrorKindNetworkError
 	case ErrorTypeBouncer:
 		return infra.ErrorKindBouncerError
+	case ErrorTypeNotFound:
+		return infra.ErrorKindModelNotFound
+	case ErrorTypeInvalidRequest:
+		return infra.ErrorKindInvalidRequest
 	default:
 		return infra.ErrorKindInternal
 	}

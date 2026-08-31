@@ -37,11 +37,20 @@ func writeHTTPError(w http.ResponseWriter, herr *httpError) {
 	writeStructuredError(w, herr.Code, kind, herr.Message)
 }
 
-// acknowledgeClientClosed emits an empty statusClientClosed header with no
+// statusClientClosed is a non-standard sentinel status (nginx convention)
+// for requests whose context was canceled mid-read: the client is gone and
+// no error body should be rendered.
+const statusClientClosed = 499
+
+// errClientClosed is the shared sentinel for requests whose context was
+// canceled mid-read; render sites must acknowledge it via
+// renderBodyReadError/acknowledgeClientClosed instead of writing a body.
+var errClientClosed = &httpError{Code: statusClientClosed, Message: "Request canceled"}
+
+// acknowledgeClientClosed emits an empty statusClientClosed status with no
 // body: the client is gone, but writing the status keeps access logs and
 // status-code metrics honest instead of recording a phantom 200.
 func acknowledgeClientClosed(w http.ResponseWriter) {
-	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(statusClientClosed)
 }
 
@@ -67,8 +76,9 @@ func renderBodyReadError(w http.ResponseWriter, herr *httpError) bool {
 // sentinel, a MaxBytesError the 413/payload_too_large rendering, and any
 // other transport error a 400/invalid_request. On a non-nil returned error
 // the caller must skip rendering when Code == statusClientClosed and
-// otherwise render via writeHTTPError.
-func readRequestBody(r *http.Request, gw *gateway.NenyaGateway, logMsg string) ([]byte, *httpError) {
+// otherwise render via writeHTTPError. Extra attrs are attached to the
+// failure log line (e.g. provider context).
+func readRequestBody(r *http.Request, gw *gateway.NenyaGateway, logMsg string, attrs ...any) ([]byte, *httpError) {
 	bodyBytes, err := io.ReadAll(r.Body)
 	if err == nil {
 		return bodyBytes, nil
@@ -78,9 +88,10 @@ func readRequestBody(r *http.Request, gw *gateway.NenyaGateway, logMsg string) (
 	// already-disconnected client is harmless either way.
 	if r.Context().Err() != nil {
 		gw.Logger.Debug("request canceled mid-body-read", "err", err)
-		return nil, &httpError{Code: statusClientClosed, Message: "Request canceled"}
+		return nil, errClientClosed
 	}
-	gw.Logger.Error(logMsg, "err", err)
+	logAttrs := append([]any{"err", err}, attrs...)
+	gw.Logger.Warn(logMsg, logAttrs...)
 	var maxErr *http.MaxBytesError
 	if errors.As(err, &maxErr) {
 		return nil, &httpError{
