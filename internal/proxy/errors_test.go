@@ -3,8 +3,12 @@ package proxy
 import (
 	"encoding/json"
 	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
 
+	"github.com/nenya/config"
+	"github.com/nenya/internal/gateway"
 	"github.com/nenya/internal/infra"
 )
 
@@ -102,6 +106,81 @@ func TestWriteError(t *testing.T) {
 	}
 	if resp.Error.Message != "upstream failed" {
 		t.Errorf("Message = %q, want %q", resp.Error.Message, "upstream failed")
+	}
+}
+
+func TestWriteHTTPError(t *testing.T) {
+	tests := []struct {
+		name     string
+		herr     *httpError
+		wantCode int
+		wantKind infra.ErrorKind
+	}{
+		{
+			"explicit kind passes through",
+			&httpError{Code: http.StatusForbidden, Message: "denied", Kind: infra.ErrorKindAuthFailed},
+			http.StatusForbidden, infra.ErrorKindAuthFailed,
+		},
+		{
+			"empty kind falls back to invalid_request",
+			&httpError{Code: http.StatusBadRequest, Message: "bad input"},
+			http.StatusBadRequest, infra.ErrorKindInvalidRequest,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			w := newMockResponseWriter()
+			writeHTTPError(w, tt.herr)
+			if w.statusCode != tt.wantCode {
+				t.Errorf("status = %d, want %d", w.statusCode, tt.wantCode)
+			}
+			var resp infra.ErrorResponse
+			if err := json.Unmarshal(w.body, &resp); err != nil {
+				t.Fatalf("failed to unmarshal response: %v", err)
+			}
+			if resp.Kind != tt.wantKind {
+				t.Errorf("Kind = %q, want %q", resp.Kind, tt.wantKind)
+			}
+			if resp.Error.Message != tt.herr.Message {
+				t.Errorf("Message = %q, want %q", resp.Error.Message, tt.herr.Message)
+			}
+		})
+	}
+
+	// Nil herr must be a safe no-op.
+	w := newMockResponseWriter()
+	writeHTTPError(w, nil)
+	if w.statusCode != 0 || len(w.body) != 0 {
+		t.Errorf("nil herr must write nothing, got status=%d body=%q", w.statusCode, w.body)
+	}
+}
+
+func TestHandleResponses_RBACAgentDenial(t *testing.T) {
+	gw := &gateway.NenyaGateway{
+		Logger: testLog(t),
+		Config: config.Config{Server: config.ServerConfig{MaxBodyBytes: 1 << 20}},
+	}
+	p := &Proxy{}
+	apiKey := &config.ApiKey{
+		Name:          "restricted",
+		Roles:         []string{"user"},
+		AllowedAgents: []string{"other-agent"},
+		Enabled:       true,
+	}
+
+	r := httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(`{"model":"scoped-agent","input":"hi"}`))
+	w := httptest.NewRecorder()
+	p.handleResponses(gw, w, r, apiKey)
+
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("expected 403, got %d body=%q", w.Code, w.Body.String())
+	}
+	var resp infra.ErrorResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("failed to unmarshal response: %v", err)
+	}
+	if resp.Kind != infra.ErrorKindAuthFailed {
+		t.Fatalf("error_kind = %q, want %q", resp.Kind, infra.ErrorKindAuthFailed)
 	}
 }
 

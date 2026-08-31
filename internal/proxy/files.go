@@ -104,7 +104,7 @@ func (p *Proxy) isPathSafe(pathStr, prefix string) bool {
 func (p *Proxy) validateFilesProvider(gw *gateway.NenyaGateway, w http.ResponseWriter) *config.Provider {
 	provider, ok := gw.Providers["openai"]
 	if !ok {
-		writeStructuredError(w, http.StatusServiceUnavailable, infra.ErrorKindModelNotFound, "No provider configured for files")
+		writeStructuredError(w, http.StatusServiceUnavailable, infra.ErrorKindInternal, "No provider configured for files")
 		return nil
 	}
 

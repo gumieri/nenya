@@ -19,7 +19,7 @@ import (
 	"github.com/nenya/internal/util"
 )
 
-func (p *Proxy) authorizeResponsesAgent(gw *gateway.NenyaGateway, w http.ResponseWriter, r *http.Request, apiKey *config.ApiKey, bodyBytes []byte) (string, *httpError) {
+func (p *Proxy) authorizeResponsesAgent(gw *gateway.NenyaGateway, r *http.Request, apiKey *config.ApiKey, bodyBytes []byte) (string, *httpError) {
 	var modelName string
 	if len(bodyBytes) > 0 {
 		var payload map[string]interface{}
@@ -54,7 +54,7 @@ func (p *Proxy) handleResponses(gw *gateway.NenyaGateway, w http.ResponseWriter,
 		return
 	}
 
-	responsesModel, herr := p.authorizeResponsesAgent(gw, w, r, apiKey, bodyBytes)
+	responsesModel, herr := p.authorizeResponsesAgent(gw, r, apiKey, bodyBytes)
 	if herr != nil {
 		writeHTTPError(w, herr)
 		return

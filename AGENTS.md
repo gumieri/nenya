@@ -285,7 +285,7 @@ type ApiKey struct {
 - `HasPermission(role Role, perm Permission) bool` — Checks if role grants a specific permission
 
 **Metrics:**
-- `nenya_auth_denials_total` counter with `reason` label: `agent_not_allowed`, `endpoint_not_allowed`, `key_disabled`, `key_expired`
+- `nenya_auth_denials_total` counter with `reason` label: `agent`, `endpoint`, `disabled`, `expired`
 
 **Integration:**
 - `internal/proxy/handler.go:authenticateAndAuthorize()` — Validates token/primary, checks enabled/expired, enforces RBAC

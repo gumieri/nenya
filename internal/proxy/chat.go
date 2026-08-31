@@ -53,6 +53,11 @@ type httpError struct {
 	Kind    infra.ErrorKind
 }
 
+// statusClientClosed is a non-standard sentinel status (nginx convention)
+// for requests whose context was canceled mid-read: the client is gone and
+// no response should be rendered.
+const statusClientClosed = 499
+
 func (e *httpError) Error() string { return e.Message }
 
 // parseRequestBody parses the request body and converts it to OpenAI format if needed.
@@ -87,12 +92,13 @@ func (p *Proxy) validateChatRequest(w http.ResponseWriter, r *http.Request, gw *
 	bodyBytes, err := io.ReadAll(r.Body)
 	if err != nil {
 		gw.Logger.Error("failed to read request body", "err", err)
-		return nil, &httpError{Code: http.StatusRequestEntityTooLarge, Message: "Payload too large or malformed"}
+		return nil, &httpError{Code: http.StatusRequestEntityTooLarge, Message: "Payload too large or malformed", Kind: infra.ErrorKindPayloadTooLarge}
 	}
 	defer func() { _ = r.Body.Close() }()
 
 	if r.Context().Err() != nil {
-		return nil, &httpError{Code: http.StatusRequestEntityTooLarge, Message: "Request canceled"}
+		// The client is gone; there is no response worth rendering.
+		return nil, &httpError{Code: statusClientClosed, Message: "Request canceled"}
 	}
 
 	payload, sourceFormat, herr := p.parseRequestBody(gw, r, bodyBytes)
@@ -456,10 +462,18 @@ func handleEmptyAgentTargets(req *chatRequest, gw *gateway.NenyaGateway, agent c
 	if len(agent.Models) > 0 {
 		gw.Logger.Warn("all models excluded by max_context",
 			"agent", req.ModelName, "tokens", req.TokenCount)
-		return nil, "", 0, 0, &httpError{Code: http.StatusRequestEntityTooLarge, Message: "Request too large for all configured models in this agent"}
+		return nil, "", 0, 0, &httpError{
+			Code:    http.StatusRequestEntityTooLarge,
+			Message: "Request too large for all configured models in this agent",
+			Kind:    infra.ErrorKindPayloadTooLarge,
+		}
 	}
 	gw.Logger.Error("agent has no models configured", "agent", req.ModelName)
-	return nil, "", 0, 0, &httpError{Code: http.StatusInternalServerError, Message: "Agent has no models configured"}
+	return nil, "", 0, 0, &httpError{
+		Code:    http.StatusInternalServerError,
+		Message: "Agent has no models configured",
+		Kind:    infra.ErrorKindInternal,
+	}
 }
 
 func reorderTargetsByLatency(req *chatRequest, gw *gateway.NenyaGateway, targets []routing.UpstreamTarget) []routing.UpstreamTarget {
@@ -514,12 +528,13 @@ func collectProviderFreeModels(providers map[string]*config.Provider) map[string
 // filterExhaustedTargets drops targets whose serving account is
 // billing-exhausted and, for providers that require credentials (any
 // AuthStyle except config.AuthStyleNone), targets whose credential is empty.
-// An empty credential at build time means every source failed: the selector
-// (GetProviderAPIKeyForModel) already includes the legacy static-key
-// fallback, so forward-time resolution would fail identically — and a pool
-// account that resolved with an empty credential is misconfigured.
-// Forwarding such targets would produce a guaranteed upstream 401 (or
-// misattributed billing) instead of failing over to the next target.
+// Two distinct empty-credential cases are covered: (1) the selector reported
+// not-ok — the selector (GetProviderAPIKeyForModel) already includes the
+// legacy static-key fallback, so forward-time resolution fails identically;
+// (2) a pool account resolved ok but carries an empty credential — a
+// misconfiguration whose drop avoids billing misattribution and broken pins.
+// Forwarding either case would produce a guaranteed upstream 401 instead of
+// failing over to the next target.
 // tracker may be nil (skips exhaustion checks); logger must be non-nil.
 func filterExhaustedTargets(targets []routing.UpstreamTarget, tracker *billing.BillingTracker, providers map[string]*config.Provider, logger *slog.Logger) []routing.UpstreamTarget {
 	if len(targets) == 0 {
@@ -744,7 +759,8 @@ func (p *Proxy) handleChatCompletions(gw *gateway.NenyaGateway, w http.ResponseW
 	}
 	req, herr := p.validateChatRequest(w, r, gw, keyRef)
 	if herr != nil {
-		if herr.Code == http.StatusNoContent {
+		if herr.Code == http.StatusNoContent || herr.Code == statusClientClosed {
+			// Cache-hit sentinel or client-closed request: nothing to render.
 			return
 		}
 		writeHTTPError(w, herr)
