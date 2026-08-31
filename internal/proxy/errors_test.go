@@ -146,8 +146,9 @@ func TestWriteHTTPError(t *testing.T) {
 			}
 		})
 	}
+}
 
-	// Nil herr must be a safe no-op.
+func TestWriteHTTPError_NilHerr(t *testing.T) {
 	w := newMockResponseWriter()
 	writeHTTPError(w, nil)
 	if w.statusCode != 0 || len(w.body) != 0 {

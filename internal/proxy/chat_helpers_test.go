@@ -72,6 +72,9 @@ func TestHandleEmptyAgentTargets(t *testing.T) {
 		if herr.Code != http.StatusRequestEntityTooLarge {
 			t.Errorf("expected 413, got %d", herr.Code)
 		}
+		if herr.Kind != infra.ErrorKindPayloadTooLarge {
+			t.Errorf("expected error_kind=payload_too_large, got %q", herr.Kind)
+		}
 	})
 
 	t.Run("agent has no models", func(t *testing.T) {
@@ -83,6 +86,9 @@ func TestHandleEmptyAgentTargets(t *testing.T) {
 		}
 		if herr.Code != http.StatusInternalServerError {
 			t.Errorf("expected 500, got %d", herr.Code)
+		}
+		if herr.Kind != infra.ErrorKindInternal {
+			t.Errorf("expected error_kind=internal_error, got %q", herr.Kind)
 		}
 	})
 }

@@ -48,7 +48,7 @@ func (p *Proxy) handleExtensionEndpoint(gw *gateway.NenyaGateway, w http.Respons
 	provider := p.selectExtensionProvider(gw, cfg.ProviderName)
 	if provider == nil {
 		ctxLogger.Error("no provider available", "preferred", cfg.ProviderName)
-		writeStructuredError(w, http.StatusServiceUnavailable, infra.ErrorKindModelNotFound, "No provider available for endpoint")
+		writeStructuredError(w, http.StatusServiceUnavailable, infra.ErrorKindInternal, "No provider available for endpoint")
 		return
 	}
 

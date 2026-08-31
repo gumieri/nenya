@@ -411,7 +411,7 @@ func (p *Proxy) logAuthWarning(gw *gateway.NenyaGateway, msg string, r *http.Req
 }
 
 func (p *Proxy) logAuthDenial(gw *gateway.NenyaGateway, key *config.ApiKey, reason string, r *http.Request) {
-	if gw.Logger == nil {
+	if gw.Logger == nil || key == nil {
 		return
 	}
 	gw.Logger.Warn("auth denied",

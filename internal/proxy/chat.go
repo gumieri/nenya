@@ -91,6 +91,13 @@ func (p *Proxy) validateChatRequest(w http.ResponseWriter, r *http.Request, gw *
 
 	bodyBytes, err := io.ReadAll(r.Body)
 	if err != nil {
+		// A mid-body client disconnect surfaces as a read error, not as a
+		// context cancellation — check the context before classifying the
+		// failure as a payload problem.
+		if r.Context().Err() != nil {
+			gw.Logger.Debug("request canceled mid-body-read", "err", err)
+			return nil, &httpError{Code: statusClientClosed, Message: "Request canceled"}
+		}
 		gw.Logger.Error("failed to read request body", "err", err)
 		return nil, &httpError{Code: http.StatusRequestEntityTooLarge, Message: "Payload too large or malformed", Kind: infra.ErrorKindPayloadTooLarge}
 	}
@@ -572,7 +579,11 @@ func (p *Proxy) resolveModelRouting(ctx context.Context, req *chatRequest, gw *g
 	matches := routing.ResolveProviders(req.ModelName, gw.Providers, gw.ModelCatalog)
 	if len(matches) == 0 {
 		gw.Logger.Warn("no provider found for model", "model", req.ModelName)
-		return nil, "", 0, 0, &httpError{Code: http.StatusBadRequest, Message: util.ErrNoProvider}
+		return nil, "", 0, 0, &httpError{
+			Code:    http.StatusBadRequest,
+			Message: util.ErrNoProvider,
+			Kind:    infra.ErrorKindModelNotFound,
+		}
 	}
 
 	targets := buildProviderTargets(ctx, matches, gw, gw)

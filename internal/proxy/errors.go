@@ -20,8 +20,8 @@ func containsAny(s string, substrs ...string) bool {
 }
 
 // writeHTTPError renders an httpError with its structured kind, falling back
-// to invalid_request when the kind is unset. herr must be non-nil, and
-// non-error sentinels (e.g. the 204 cache-hit httpError) must be handled by
+// to invalid_request when the kind is unset. nil herr is a documented no-op.
+// Non-error sentinels (e.g. the 204 cache-hit httpError) must be handled by
 // the caller before calling this.
 func writeHTTPError(w http.ResponseWriter, herr *httpError) {
 	if herr == nil {
