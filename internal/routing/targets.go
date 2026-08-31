@@ -693,7 +693,7 @@ func checkLocalModelAvailability(a *AgentState, m config.AgentModel, logger *slo
 func checkProviderAndLocal(a *AgentState, m config.AgentModel, providers map[string]*config.Provider, logger *slog.Logger) bool {
 	if m.Provider != "" {
 		provider := providers[m.Provider]
-		if provider == nil || (provider.APIKey == "" && provider.AuthStyle != "none") {
+		if provider == nil || (provider.APIKey == "" && provider.AuthStyle != config.AuthStyleNone) {
 			logger.Debug("provider has no API key, skipping model", "provider", m.Provider, "model", m.Model)
 			return false
 		}

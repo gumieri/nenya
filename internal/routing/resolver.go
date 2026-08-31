@@ -83,7 +83,7 @@ func resolveFromCatalog(modelName string, providers map[string]*config.Provider,
 		if !ok {
 			continue
 		}
-		if p.APIKey == "" && p.AuthStyle != "none" {
+		if p.APIKey == "" && p.AuthStyle != config.AuthStyleNone {
 			continue
 		}
 		matches = append(matches, ProviderMatch{
@@ -106,7 +106,7 @@ func resolveFromRegistry(modelName string, providers map[string]*config.Provider
 	if !ok {
 		return nil
 	}
-	if p.APIKey == "" && p.AuthStyle != "none" {
+	if p.APIKey == "" && p.AuthStyle != config.AuthStyleNone {
 		return nil
 	}
 	if !p.AllowsModel(modelName) {

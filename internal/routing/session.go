@@ -107,13 +107,18 @@ func (r *SessionRouter) Pin(key, provider, model, account string, ttl time.Durat
 		Since:    now,
 		LastSeen: now,
 	}
-	if _, exists := r.sessions[key]; !exists && len(r.sessions) >= r.cap {
+	_, exists := r.sessions[key]
+	if !exists && len(r.sessions) >= r.cap {
 		r.evictLRU()
 	}
 	r.sessions[key] = entry
 	r.mu.Unlock()
 
-	r.record("new")
+	// Only a brand-new key counts as "new"; overwriting an existing key is a
+	// caller bookkeeping detail, not a pin-creation event.
+	if !exists {
+		r.record("new")
+	}
 	if r.logger != nil {
 		r.logger.Debug("session pin created", "key", key, "provider", provider, "model", model, "account", account, "ttl", ttl)
 	}
@@ -128,8 +133,11 @@ func (r *SessionRouter) Lookup(key string) (SessionState, bool) {
 	if r == nil {
 		return SessionState{}, false
 	}
-	now := r.now()
+	// The timestamp is captured inside the lock so LastSeen reflects lock
+	// acquisition order (same invariant as Pin): capturing it earlier lets
+	// two concurrent Lookups move LastSeen backward and corrupt LRU order.
 	r.mu.Lock()
+	now := r.now()
 	entry, ok := r.sessions[key]
 	if !ok {
 		r.mu.Unlock()
@@ -156,10 +164,11 @@ func (r *SessionRouter) Peek(key string) (SessionState, bool) {
 	if r == nil {
 		return SessionState{}, false
 	}
-	now := r.now()
+	// Read-only: capture the timestamp inside the lock for consistency with
+	// Lookup even though no state is mutated.
 	r.mu.Lock()
 	defer r.mu.Unlock()
-
+	now := r.now()
 	entry, ok := r.sessions[key]
 	if !ok || r.entryExpired(entry, now) {
 		return SessionState{}, false
@@ -187,6 +196,8 @@ func (r *SessionRouter) PromoteIfChanged(key, provider, model, account string, t
 	if r.sessions == nil {
 		r.sessions = make(map[string]*SessionState)
 	}
+	// Lock region: the two explicit unlocks below are exhaustive — every
+	// path between here and the unlocks falls through to exactly one of them.
 	if entry, ok := r.sessions[key]; ok {
 		if entry.Provider == provider && entry.Model == model && entry.Account == account {
 			entry.ttl = ttl
@@ -288,7 +299,9 @@ func (r *SessionRouter) evictLRU() {
 		if r.logger != nil {
 			r.logger.Debug("session pin evicted (LRU cap reached)", "cap", r.cap)
 		}
-		r.record("expired")
+		// Distinct from TTL expiry: capacity evictions and idle expirations
+		// are different operational signals sharing one counter's labels.
+		r.record("evicted")
 	}
 }
 

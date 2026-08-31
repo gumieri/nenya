@@ -108,7 +108,7 @@ func (p *Proxy) validateFilesProvider(gw *gateway.NenyaGateway, w http.ResponseW
 		return nil
 	}
 
-	if provider.APIKey == "" && provider.AuthStyle != "none" {
+	if provider.APIKey == "" && provider.AuthStyle != config.AuthStyleNone {
 		writeStructuredError(w, http.StatusServiceUnavailable, infra.ErrorKindInvalidRequest, "Provider not configured")
 		return nil
 	}

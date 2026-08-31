@@ -48,7 +48,7 @@ func ErrNoProviderFmt(model string) string {
 // ProviderCanServe returns true if the provider is configured with either
 // an API key or auth_style "none" (i.e. can actually make upstream requests).
 func ProviderCanServe(p *config.Provider) bool {
-	return p != nil && (p.APIKey != "" || p.AuthStyle == "none")
+	return p != nil && (p.APIKey != "" || p.AuthStyle == config.AuthStyleNone)
 }
 
 // FindRegistryModels returns models from ModelRegistry matching the given pattern.

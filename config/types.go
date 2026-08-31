@@ -186,6 +186,12 @@ type ThinkingConfig struct {
 	ClearThinking bool `json:"clear_thinking"`
 }
 
+// AuthStyle values for Provider.AuthStyle. AuthStyleNone indicates an
+// endpoint that requires no Authorization header (e.g. a local Ollama);
+// other supported values include "bearer", "anthropic", and "bearer+x-goog"
+// (see config validation).
+const AuthStyleNone = "none"
+
 // Provider is the resolved runtime representation of a provider,
 // combining user config with secrets and derived defaults. Created by
 // ResolveProviders at startup.

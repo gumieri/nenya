@@ -542,7 +542,7 @@ func (p *Proxy) handleModels(w http.ResponseWriter) {
 			if !ok {
 				continue
 			}
-			if provider.APIKey == "" && provider.AuthStyle != "none" {
+			if provider.APIKey == "" && provider.AuthStyle != config.AuthStyleNone {
 				continue
 			}
 			if seen[m.ID] {

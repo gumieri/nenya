@@ -160,7 +160,7 @@ func (p *Proxy) resolveAgentRouting(ctx context.Context, req *chatRequest, gw *g
 		sticky = resolveStickyPin(req, gw, agent)
 	}
 
-	targets := gw.AgentState.BuildTargetList(ctx, routing.TargetBuildOpts{
+	built := gw.AgentState.BuildTargetList(ctx, routing.TargetBuildOpts{
 		Logger:          gw.Logger,
 		AgentName:       req.ModelName,
 		Agent:           agent,
@@ -171,8 +171,14 @@ func (p *Proxy) resolveAgentRouting(ctx context.Context, req *chatRequest, gw *g
 		AccountSelector: gw,
 		Preferred:       sticky.preference(),
 	})
-	targets = filterExhaustedTargets(targets, gw.BillingTracker, gw.Providers, gw.Logger)
+	targets := filterExhaustedTargets(built, gw.BillingTracker, gw.Providers, gw.Logger)
 	if len(targets) == 0 {
+		if len(built) > 0 {
+			// Every built target was dropped (billing exhaustion or missing
+			// credentials): a 503 distinguishes this from the context-fit
+			// 413 that handleEmptyAgentTargets reports for build-time skips.
+			return nil, "", 0, 0, &httpError{http.StatusServiceUnavailable, "All provider accounts are exhausted or unavailable"}
+		}
 		return handleEmptyAgentTargets(req, gw, agent)
 	}
 
@@ -494,9 +500,11 @@ func collectProviderFreeModels(providers map[string]*config.Provider) map[string
 
 // filterExhaustedTargets drops targets whose serving account is
 // billing-exhausted and, for providers that require credentials (any
-// AuthStyle except "none"), targets whose credential resolution failed
-// entirely (empty credential AND account) — forwarding those would produce a
-// guaranteed upstream 401 instead of failing over to the next target.
+// AuthStyle except config.AuthStyleNone), targets whose credential is empty —
+// either resolution failed entirely or a pool account was misconfigured with
+// an empty credential. Forwarding such targets would produce a guaranteed
+// upstream 401 (or misattributed billing) instead of failing over to the
+// next target. tracker and logger must be non-nil.
 func filterExhaustedTargets(targets []routing.UpstreamTarget, tracker *billing.BillingTracker, providers map[string]*config.Provider, logger *slog.Logger) []routing.UpstreamTarget {
 	if len(targets) == 0 {
 		return targets
@@ -508,7 +516,7 @@ func filterExhaustedTargets(targets []routing.UpstreamTarget, tracker *billing.B
 				"provider", t.Provider, "account", t.AccountName, "model", t.Model)
 			continue
 		}
-		if t.Credential == "" && t.AccountName == "" && requiresCredentials(providers, t.Provider) {
+		if t.Credential == "" && requiresCredentials(providers, t.Provider) {
 			logger.Debug("skipping target without resolved credential",
 				"provider", t.Provider, "model", t.Model)
 			continue
@@ -519,14 +527,14 @@ func filterExhaustedTargets(targets []routing.UpstreamTarget, tracker *billing.B
 }
 
 // requiresCredentials reports whether the named provider needs an explicit
-// credential. Providers with AuthStyle "none" legitimately run without one;
-// unknown providers are given the benefit of the doubt.
+// credential. Providers with AuthStyle config.AuthStyleNone legitimately run
+// without one; unknown providers are given the benefit of the doubt.
 func requiresCredentials(providers map[string]*config.Provider, name string) bool {
 	p, ok := providers[name]
 	if !ok {
 		return false
 	}
-	return p.AuthStyle != "none"
+	return p.AuthStyle != config.AuthStyleNone
 }
 
 func (p *Proxy) resolveModelRouting(ctx context.Context, req *chatRequest, gw *gateway.NenyaGateway) ([]routing.UpstreamTarget, string, time.Duration, int, *httpError) {
@@ -540,7 +548,7 @@ func (p *Proxy) resolveModelRouting(ctx context.Context, req *chatRequest, gw *g
 	targets = filterExhaustedTargets(targets, gw.BillingTracker, gw.Providers, gw.Logger)
 	if len(targets) == 0 {
 		gw.Logger.Error("no valid providers after filtering", "model", req.ModelName)
-		return nil, "", 0, 0, &httpError{http.StatusInternalServerError, "No valid providers available"}
+		return nil, "", 0, 0, &httpError{http.StatusServiceUnavailable, "No valid providers available"}
 	}
 
 	targetStrings := make([]string, len(targets))

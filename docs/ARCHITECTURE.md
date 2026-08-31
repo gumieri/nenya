@@ -609,7 +609,7 @@ The `sticky` agent routing strategy (`agents.<name>.strategy`) pins a conversati
 - **Failover behavior** — If the pinned account goes cooling, model-locked, or billing-exhausted mid-session, target build silently selects a sibling account (LRU) for the same provider/model and the pin follows the sibling (recorded as `reason="failover"`). If the whole pinned target is lost (cooling, filtered by billing exhaustion, or no longer context-compatible), the session re-pins to the next healthy target. A pin whose provider/model **and account** still match the served target is never re-pinned; account drift re-pins the session to the served sibling, except when the served target carries no account (resolution failed entirely), in which case the pin is preserved for recovery.
 - **Reload survival** — Pins are held outside the agent config objects and survive SIGHUP configuration reloads.
 
-Metrics: `nenya_session_active` (gauge, non-expired pins) and `nenya_session_pin_changes_total{reason}` with reasons `new`, `failover`, and `expired`.
+Metrics: `nenya_session_active` (gauge, non-expired pins) and `nenya_session_pin_changes_total{reason}` with reasons `new`, `failover`, `expired` (idle TTL), and `evicted` (LRU cap).
 
 See [Agent Routing Strategies](ROUTING.md#agent-routing-strategies) for configuration.
 

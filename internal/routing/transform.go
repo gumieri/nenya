@@ -41,7 +41,7 @@ func InjectAPIKey(providerName string, providers map[string]*config.Provider, he
 		return fmt.Errorf("unknown provider: %s", providerName)
 	}
 
-	if p.AuthStyle != "none" && p.APIKey == "" {
+	if p.AuthStyle != config.AuthStyleNone && p.APIKey == "" {
 		return fmt.Errorf("provider %s has no API key configured", providerName)
 	}
 
@@ -60,7 +60,7 @@ func InjectAPIKeyWithGateway(providerName string, gw interface {
 		return fmt.Errorf("unknown provider: %s", providerName)
 	}
 
-	if p.AuthStyle != "none" {
+	if p.AuthStyle != config.AuthStyleNone {
 		keyBytes, ok := gw.GetProviderAPIKey(providerName)
 		if !ok {
 			return fmt.Errorf("provider %s has no API key configured", providerName)
@@ -90,7 +90,7 @@ func InjectAPIKeyWithGatewayCtx(ctx context.Context, providerName, modelName str
 		return fmt.Errorf("unknown provider: %s", providerName)
 	}
 
-	if p.AuthStyle == "none" {
+	if p.AuthStyle == config.AuthStyleNone {
 		return nil
 	}
 

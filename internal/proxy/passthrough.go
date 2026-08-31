@@ -39,7 +39,7 @@ func (p *Proxy) handlePassthrough(gw *gateway.NenyaGateway, w http.ResponseWrite
 		return
 	}
 
-	if provider.APIKey == "" && provider.AuthStyle != "none" {
+	if provider.APIKey == "" && provider.AuthStyle != config.AuthStyleNone {
 		ctxLogger.Warn("provider not configured", "provider", providerName)
 		writeStructuredError(w, http.StatusServiceUnavailable, infra.ErrorKindInvalidRequest, "Provider not configured")
 		return

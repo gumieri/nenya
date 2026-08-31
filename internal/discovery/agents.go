@@ -130,7 +130,7 @@ func filterModels(catalog *ModelCatalog, providersMap map[string]*config.Provide
 			continue
 		}
 
-		if provider.APIKey == "" && provider.AuthStyle != "none" {
+		if provider.APIKey == "" && provider.AuthStyle != config.AuthStyleNone {
 			continue
 		}
 

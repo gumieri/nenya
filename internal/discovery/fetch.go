@@ -90,7 +90,7 @@ func (df *DiscoveryFetcher) FetchAll(ctx context.Context, providers map[string]*
 				hasKey = len(keyBytes) > 0
 			}
 		}
-		if !hasKey && p.AuthStyle != "none" {
+		if !hasKey && p.AuthStyle != config.AuthStyleNone {
 			logger.Debug("skipping model discovery: no API key", "provider", name)
 			continue
 		}

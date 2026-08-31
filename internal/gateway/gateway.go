@@ -856,7 +856,8 @@ func (g *NenyaGateway) GetProviderAPIKey(providerName string) ([]byte, bool) {
 // provider/model failover). When no healthy sibling exists the exhausted pick
 // is returned and the downstream target filter remains the safety net. Each
 // skipped pick has its LastUsed bumped by the pool — a mild, self-correcting
-// LRU distortion accepted to keep selection non-mutating-free and simple.
+// LRU distortion accepted to keep the pool mutation-free and selection
+// simple.
 func (g *NenyaGateway) selectAccountKey(ctx context.Context, providerName, model string) ([]byte, string, bool) {
 	if g.AccountManager == nil {
 		return nil, "", false
@@ -867,7 +868,14 @@ func (g *NenyaGateway) selectAccountKey(ctx context.Context, providerName, model
 	}
 	if err == nil && selected != nil {
 		if g.Metrics != nil {
-			g.Metrics.RecordAccountSelection(providerName, "selected")
+			status := "selected"
+			if g.BillingTracker != nil && g.BillingTracker.IsExhausted(providerName, selected.ID) {
+				// The pick is still exhausted (no healthy sibling): the
+				// downstream target filter will drop it, so keep the metric
+				// honest about usable selections.
+				status = "selected_exhausted_fallback"
+			}
+			g.Metrics.RecordAccountSelection(providerName, status)
 		}
 		return []byte(selected.Credential), selected.ID, true
 	}
@@ -1003,7 +1011,7 @@ func (g *NenyaGateway) ProviderHasAPIKey(providerName string) bool {
 		}
 	}
 	if provider, ok := g.Providers[providerName]; ok {
-		return provider.APIKey != "" || provider.AuthStyle == "none"
+		return provider.APIKey != "" || provider.AuthStyle == config.AuthStyleNone
 	}
 	return false
 }

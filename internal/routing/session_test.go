@@ -135,6 +135,48 @@ func TestSessionRouterPromoteIfChanged(t *testing.T) {
 	}
 }
 
+func TestSessionRouterPromoteIfChanged_CapAndTTLRefresh(t *testing.T) {
+	// LRU cap: filling to cap and promoting a brand-new key evicts the
+	// least-recently-seen pin instead of growing the map unbounded.
+	sr := NewSessionRouter(2, 1*time.Hour, nil, nil)
+	sr.Pin("k1", "p1", "m1", "a1", 0)
+	sr.Pin("k2", "p2", "m2", "a2", 0)
+	if !sr.PromoteIfChanged("k3", "p3", "m3", "a3", 0) {
+		t.Fatal("expected new key promotion to succeed")
+	}
+	if sr.Len() != 2 {
+		t.Fatalf("expected cap-enforced len 2, got %d", sr.Len())
+	}
+	if _, ok := sr.Lookup("k1"); ok {
+		t.Fatal("expected least-recently-seen pin k1 to be evicted")
+	}
+	if _, ok := sr.Lookup("k3"); ok != true {
+		t.Fatal("expected promoted pin k3 to be present")
+	}
+
+	// TTL refresh: an unchanged pin adopts the new per-agent TTL in place
+	// (so SIGHUP TTL changes reach live pins) without resetting Since.
+	base := time.Now()
+	now := base
+	sr2 := NewSessionRouter(10, 1*time.Hour, nil, nil)
+	sr2.now = func() time.Time { return now }
+	sr2.Pin("k1", "p1", "m1", "a1", time.Hour)
+	if sr2.PromoteIfChanged("k1", "p1", "m1", "a1", 2*time.Hour) {
+		t.Fatal("expected false for unchanged pin")
+	}
+	sr2.mu.Lock()
+	entry := sr2.sessions["k1"]
+	gotTTL := entry.ttl
+	gotSince := entry.Since
+	sr2.mu.Unlock()
+	if gotTTL != 2*time.Hour {
+		t.Fatalf("expected TTL refreshed to 2h, got %v", gotTTL)
+	}
+	if !gotSince.Equal(base) {
+		t.Fatalf("expected Since untouched, got %v", gotSince)
+	}
+}
+
 func TestSessionRouterEvict(t *testing.T) {
 	sr := NewSessionRouter(10, 1*time.Hour, nil, nil)
 	sr.Pin("k1", "p1", "m1", "a1", 0)

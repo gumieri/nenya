@@ -622,7 +622,7 @@ func (m *Metrics) SetSemanticCacheEntries(count int64) {
 }
 
 // RecordSessionPinChange increments the session pin-change counter for the
-// given reason (new, reuse, failover, expired).
+// given reason (new, failover, expired, evicted).
 func (m *Metrics) RecordSessionPinChange(reason string) {
 	if m == nil {
 		return

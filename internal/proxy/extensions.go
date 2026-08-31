@@ -100,12 +100,12 @@ func (p *Proxy) handleExtensionEndpoint(gw *gateway.NenyaGateway, w http.Respons
 // to the first available provider with an API key.
 func (p *Proxy) selectExtensionProvider(gw *gateway.NenyaGateway, preferredName string) *config.Provider {
 	if preferred, ok := gw.Providers[preferredName]; ok {
-		if preferred.APIKey != "" || preferred.AuthStyle == "none" {
+		if preferred.APIKey != "" || preferred.AuthStyle == config.AuthStyleNone {
 			return preferred
 		}
 	}
 	for _, pr := range gw.Providers {
-		if pr.APIKey != "" || pr.AuthStyle == "none" {
+		if pr.APIKey != "" || pr.AuthStyle == config.AuthStyleNone {
 			return pr
 		}
 	}

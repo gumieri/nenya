@@ -202,6 +202,8 @@ The routing pipeline uses **four stages** for billing-aware decisions:
 ### Stage 2: Exhaustion Filtering
 
 - `filterExhaustedTargets()` removes targets where `BillingTracker.IsExhausted()` returns true
+- Also removes targets with an empty resolved credential for providers that require credentials (any `auth_style` except `none`) — forwarding those would only produce an upstream 401
+- The LRU account selection itself is exhaustion-aware: when the picked account is billing-exhausted, selection retries with the account excluded (bounded by pool size) so a healthy sibling is served; `selected_exhausted_fallback` is recorded on `nenya_account_selections_total` when no healthy sibling exists
 - Runs before scoring to prevent routing to exhausted accounts
 - Logs a debug message for each skipped target
 

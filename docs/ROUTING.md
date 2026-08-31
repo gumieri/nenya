@@ -50,7 +50,7 @@ Sticky-specific knobs:
 
 - `sticky_session_ttl_seconds` (default 3600, max 86400): idle timeout after which a pin expires and the session re-pins on its next request.
 
-Pin lifecycle: on an existing pin, the pinned target is reordered to the front so it is always tried first, and the pinned account is preferred when resolving credentials for that target (with LRU account selection as the fallback when the pinned account is cooling, model-locked, or billing-exhausted). If the pinned account was unavailable and a sibling account of the same provider/model now serves the session, the pin follows the sibling (account-granularity failover). If the pin's target is cooling (rate-limited), billing-exhausted, or no longer context-compatible, the pin is promoted to the first active target. Metrics: `nenya_session_active` (gauge, non-expired pins), `nenya_session_pin_changes_total{reason="new|failover|expired"}`.
+Pin lifecycle: on an existing pin, the pinned target is reordered to the front so it is always tried first, and the pinned account is preferred when resolving credentials for that target (with LRU account selection as the fallback when the pinned account is cooling, model-locked, or billing-exhausted). If the pinned account was unavailable and a sibling account of the same provider/model now serves the session, the pin follows the sibling (account-granularity failover). If the pin's target is cooling (rate-limited), billing-exhausted, or no longer context-compatible, the pin is promoted to the first active target. Metrics: `nenya_session_active` (gauge, non-expired pins), `nenya_session_pin_changes_total{reason="new|failover|expired|evicted"}`.
 
 ## Configuration
 

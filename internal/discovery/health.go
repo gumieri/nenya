@@ -64,7 +64,7 @@ func ValidateProviderHealth(providerName string, provider *config.Provider, cata
 		LastFetched: time.Now(),
 	}
 
-	if provider.APIKey == "" && provider.AuthStyle != "none" {
+	if provider.APIKey == "" && provider.AuthStyle != config.AuthStyleNone {
 		health.Status = HealthStatusUnreachable
 		health.Error = "no API key configured"
 		return health
@@ -87,7 +87,7 @@ func ValidateAllProviders(providers map[string]*config.Provider, catalog *ModelC
 	registry := NewHealthRegistry()
 
 	for name, p := range providers {
-		if p.APIKey == "" && p.AuthStyle != "none" {
+		if p.APIKey == "" && p.AuthStyle != config.AuthStyleNone {
 			logger.Debug("skipping health check: no API key", "provider", name)
 			continue
 		}

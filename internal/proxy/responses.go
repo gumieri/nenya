@@ -213,13 +213,13 @@ func (p *Proxy) getDefaultResponseProvider(gw *gateway.NenyaGateway) *config.Pro
 	}
 
 	for _, pr := range gw.Providers {
-		if pr.APIKey != "" && pr.AuthStyle != "none" {
+		if pr.APIKey != "" && pr.AuthStyle != config.AuthStyleNone {
 			return pr
 		}
 	}
 
 	for _, pr := range gw.Providers {
-		if pr.AuthStyle == "none" {
+		if pr.AuthStyle == config.AuthStyleNone {
 			return pr
 		}
 	}
