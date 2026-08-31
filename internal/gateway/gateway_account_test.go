@@ -87,8 +87,9 @@ func TestSelectCredentialForModel_SkipsExhaustedLRUPick(t *testing.T) {
 	}
 	bt.MarkExhausted(ctx, "prov", "a1", "quota")
 
-	// The LRU path must skip the exhausted account and serve the sibling,
-	// recorded as a plain usable selection.
+	// Call 1 bumped a1's LastUsed, so this call is a plain LRU pick of the
+	// sibling a2 (no skip needed) — recorded as a usable selection. The
+	// actual skip path is exercised below and in SkipsMultipleExhausted.
 	_, id, ok := g.SelectCredentialForModel(ctx, "prov", "m1")
 	if !ok || id != "a2" {
 		t.Fatalf("expected exhaustion-aware sibling a2, got %q, %v", id, ok)

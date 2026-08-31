@@ -187,9 +187,10 @@ type ThinkingConfig struct {
 }
 
 // AuthStyle values for Provider.AuthStyle. AuthStyleNone indicates an
-// endpoint that requires no Authorization header (e.g. a local Ollama);
-// other supported values include "bearer", "anthropic", and "bearer+x-goog"
-// (see config validation).
+// endpoint that requires no Authorization header (e.g. a local Ollama).
+// Other supported values (bearer, azure, bearer+x-goog, anthropic) are
+// applied by the adapter layer (adapter.AdapterForAuthStyle), which also
+// validates the style at request time.
 const AuthStyleNone = "none"
 
 // Provider is the resolved runtime representation of a provider,

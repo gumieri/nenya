@@ -856,9 +856,9 @@ func (g *NenyaGateway) GetProviderAPIKey(providerName string) ([]byte, bool) {
 // provider/model failover). When no healthy sibling exists the exhausted pick
 // is returned; on the chat target-build path the downstream target filter
 // remains the safety net, though other consumers of this credential (e.g.
-// passthrough auth injection) have no such filter. Each
-// skipped pick has its LastUsed bumped by the pool — a mild, self-correcting
-// LRU distortion accepted to avoid extra pool API surface.
+// passthrough auth injection) have no such filter. Each skipped pick has its
+// LastUsed bumped by the pool — a mild, self-correcting LRU distortion
+// accepted to avoid extra pool API surface.
 func (g *NenyaGateway) selectAccountKey(ctx context.Context, providerName, model string) ([]byte, string, bool) {
 	if g.AccountManager == nil {
 		return nil, "", false
@@ -895,9 +895,8 @@ func (g *NenyaGateway) selectAccountKey(ctx context.Context, providerName, model
 // no loop is possible. When no healthy sibling exists the (possibly
 // exhausted) pick is returned unchanged; on the chat target-build path the
 // downstream target filter remains the full-exhaustion safety net. Each
-// skipped pick has its LastUsed
-// bumped by the pool — a mild, self-correcting LRU distortion accepted to
-// keep selection simple.
+// skipped pick has its LastUsed bumped by the pool — a mild, self-correcting
+// LRU distortion accepted to avoid extra pool API surface.
 func (g *NenyaGateway) skipExhaustedPick(ctx context.Context, providerName, model string, selected *auth.SelectedAccount) *auth.SelectedAccount {
 	if g.BillingTracker == nil {
 		return selected

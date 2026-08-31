@@ -19,6 +19,17 @@ func containsAny(s string, substrs ...string) bool {
 	return false
 }
 
+// writeHTTPError renders an httpError with its structured kind, falling back
+// to invalid_request when the kind is unset. Callers must handle non-error
+// sentinels (e.g. the 204 cache-hit httpError) before calling this.
+func writeHTTPError(w http.ResponseWriter, herr *httpError) {
+	kind := herr.Kind
+	if kind == "" {
+		kind = infra.ErrorKindInvalidRequest
+	}
+	writeStructuredError(w, herr.Code, kind, herr.Message)
+}
+
 // classifyError maps upstream responses to error kinds.
 func classifyError(statusCode int, body []byte) infra.ErrorKind {
 	switch {

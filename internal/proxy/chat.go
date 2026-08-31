@@ -46,7 +46,7 @@ type chatRequest struct {
 
 // httpError pairs an HTTP status code with a user-facing message and an
 // optional structured error kind. When Kind is empty the renderer falls back
-// to the status-derived default (invalid_request).
+// to invalid_request.
 type httpError struct {
 	Code    int
 	Message string
@@ -179,8 +179,11 @@ func (p *Proxy) resolveAgentRouting(ctx context.Context, req *chatRequest, gw *g
 		if len(built) > 0 {
 			// Every built target was dropped (billing exhaustion or missing
 			// credentials): a 503 distinguishes this from the context-fit
-			// 413 that handleEmptyAgentTargets reports for build-time skips,
-			// and quota_exhausted tells retry-aware clients to back off.
+			// 413 that handleEmptyAgentTargets reports for build-time skips.
+			// quota_exhausted deliberately overloads both causes — it tells
+			// retry-aware clients to back off, which is correct for
+			// exhaustion and harmless for the rarer credential
+			// misconfiguration.
 			gw.Logger.Warn("all built targets filtered",
 				"agent", req.ModelName, "built", len(built))
 			return nil, "", 0, 0, &httpError{
@@ -510,11 +513,14 @@ func collectProviderFreeModels(providers map[string]*config.Provider) map[string
 
 // filterExhaustedTargets drops targets whose serving account is
 // billing-exhausted and, for providers that require credentials (any
-// AuthStyle except config.AuthStyleNone), targets whose credential is empty —
-// either resolution failed entirely or a pool account was misconfigured with
-// an empty credential. Forwarding such targets would produce a guaranteed
-// upstream 401 (or misattributed billing) instead of failing over to the
-// next target. tracker and logger must be non-nil.
+// AuthStyle except config.AuthStyleNone), targets whose credential is empty.
+// An empty credential at build time means every source failed: the selector
+// (GetProviderAPIKeyForModel) already includes the legacy static-key
+// fallback, so forward-time resolution would fail identically — and a pool
+// account that resolved with an empty credential is misconfigured.
+// Forwarding such targets would produce a guaranteed upstream 401 (or
+// misattributed billing) instead of failing over to the next target.
+// tracker may be nil (skips exhaustion checks); logger must be non-nil.
 func filterExhaustedTargets(targets []routing.UpstreamTarget, tracker *billing.BillingTracker, providers map[string]*config.Provider, logger *slog.Logger) []routing.UpstreamTarget {
 	if len(targets) == 0 {
 		return targets
@@ -741,11 +747,7 @@ func (p *Proxy) handleChatCompletions(gw *gateway.NenyaGateway, w http.ResponseW
 		if herr.Code == http.StatusNoContent {
 			return
 		}
-		kind := herr.Kind
-		if kind == "" {
-			kind = infra.ErrorKindInvalidRequest
-		}
-		writeStructuredError(w, herr.Code, kind, herr.Message)
+		writeHTTPError(w, herr)
 		return
 	}
 
