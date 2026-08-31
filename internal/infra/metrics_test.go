@@ -297,6 +297,7 @@ func TestNormalizeMetricPath(t *testing.T) {
 		{"/metrics", "/metrics"},
 		{"/v1/models", "/v1/models"},
 		{"/v1/chat/completions", "/v1/chat/completions"},
+		{"/v1/messages", "/v1/messages"},
 		{"/v1/embeddings", "/v1/embeddings"},
 		{"/api/other", "other"},
 		{"/random/path", "other"},

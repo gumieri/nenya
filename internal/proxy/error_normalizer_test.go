@@ -207,76 +207,6 @@ func TestParseProviderError(t *testing.T) {
 	}
 }
 
-func TestGatewayErrorToJSON(t *testing.T) {
-	tests := []struct {
-		name string
-		err  *GatewayError
-		want map[string]any
-	}{
-		{
-			name: "basic error",
-			err:  NewInvalidRequestError("test error", nil),
-			want: map[string]any{
-				"error": map[string]any{
-					"type":    ErrorTypeInvalidRequest,
-					"message": "test error",
-					"param":   nil,
-					"code":    nil,
-					"error_kind": string(infra.ErrorKindInvalidRequest),
-				},
-			},
-		},
-		{
-			name: "error with param",
-			err:  NewInvalidRequestError("test error", nil).WithParam("model"),
-			want: map[string]any{
-				"error": map[string]any{
-					"type":       ErrorTypeInvalidRequest,
-					"message":    "test error",
-					"param":      "model",
-					"code":       nil,
-					"error_kind": string(infra.ErrorKindInvalidRequest),
-				},
-			},
-		},
-		{
-			name: "error with code",
-			err:  NewInvalidRequestError("test error", nil).WithCode("invalid_request"),
-			want: map[string]any{
-				"error": map[string]any{
-					"type":       ErrorTypeInvalidRequest,
-					"message":    "test error",
-					"param":      nil,
-					"code":       "invalid_request",
-					"error_kind": string(infra.ErrorKindInvalidRequest),
-				},
-			},
-		},
-		{
-			name: "provider error",
-			err:  NewProviderError("openai", http.StatusInternalServerError, "upstream error", nil),
-			want: map[string]any{
-				"error": map[string]any{
-					"type":       ErrorTypeProvider,
-					"message":    "upstream error",
-					"param":      nil,
-					"code":       nil,
-					"error_kind": string(infra.ErrorKindProviderError),
-				},
-			},
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := tt.err.ToJSON()
-			if !jsonEqual(got, tt.want) {
-				t.Errorf("GatewayError.ToJSON() = %v, want %v", got, tt.want)
-			}
-		})
-	}
-}
-
 func TestGatewayErrorHTTPStatusCode(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -409,20 +339,27 @@ func TestMapErrorKind(t *testing.T) {
 }
 
 func TestGatewayErrorWithQuotaExhausted(t *testing.T) {
-	err := &GatewayError{
-		Type:    ErrorTypeQuotaExhausted,
-		Message: "Quota exceeded",
+	w := newMockResponseWriter()
+	writeGatewayError(w, http.StatusPaymentRequired, ErrorTypeQuotaExhausted, "Quota exceeded")
+
+	var got struct {
+		Error struct {
+			Type      ErrorType `json:"type"`
+			Message   string    `json:"message"`
+			ErrorKind string    `json:"error_kind"`
+		} `json:"error"`
 	}
-	got := err.ToJSON()
-	errorObj, ok := got["error"].(map[string]any)
-	if !ok {
-		t.Fatal("error field missing or not a map")
+	if err := json.Unmarshal(w.body, &got); err != nil {
+		t.Fatalf("failed to unmarshal response: %v", err)
 	}
-	if errorObj["type"].(ErrorType) != ErrorTypeQuotaExhausted {
-		t.Errorf("type = %v, want %v", errorObj["type"], ErrorTypeQuotaExhausted)
+	if got.Error.Type != ErrorTypeQuotaExhausted {
+		t.Errorf("type = %v, want %v", got.Error.Type, ErrorTypeQuotaExhausted)
 	}
-	if errorObj["message"] != "Quota exceeded" {
-		t.Errorf("message = %v, want %v", errorObj["message"], "Quota exceeded")
+	if got.Error.Message != "Quota exceeded" {
+		t.Errorf("message = %v, want %v", got.Error.Message, "Quota exceeded")
+	}
+	if got.Error.ErrorKind != string(infra.ErrorKindQuotaExhausted) {
+		t.Errorf("error_kind = %v, want %v", got.Error.ErrorKind, infra.ErrorKindQuotaExhausted)
 	}
 }
 

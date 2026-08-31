@@ -76,8 +76,9 @@ func renderBodyReadError(w http.ResponseWriter, herr *httpError) bool {
 // sentinel, a MaxBytesError the 413/payload_too_large rendering, and any
 // other transport error a 400/invalid_request. On a non-nil returned error
 // the caller must skip rendering when Code == statusClientClosed and
-// otherwise render via writeHTTPError. Extra attrs are attached to the
-// failure log line (e.g. provider context).
+// otherwise render via renderBodyReadError. Extra attrs are attached to the
+// failure log line (e.g. provider context); the "err" key is reserved and
+// must not be passed in attrs.
 func readRequestBody(r *http.Request, gw *gateway.NenyaGateway, logMsg string, attrs ...any) ([]byte, *httpError) {
 	bodyBytes, err := io.ReadAll(r.Body)
 	if err == nil {
