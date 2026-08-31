@@ -45,7 +45,9 @@ func (p *AccountPool) SelectAccount(ctx context.Context, model string) (*Selecte
 // the given model, skipping accounts in the exclude set (by ID) on top of the
 // standard health gates (active, not rate-limited, not model-locked). Used by
 // callers with out-of-band health knowledge (e.g. billing exhaustion) to
-// retry sibling selection without re-selecting a known-bad account.
+// retry sibling selection without re-selecting a known-bad account. The ctx
+// parameter is currently unused; it is kept for signature symmetry with
+// SelectAccount and future storage-aware selection.
 func (p *AccountPool) SelectAccountExcluding(ctx context.Context, model string, exclude map[string]bool) (*SelectedAccount, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -107,16 +109,16 @@ func (p *AccountPool) SelectAccountByID(ctx context.Context, accountID, model st
 
 	acc := p.findAccount(accountID)
 	if acc == nil {
-		return nil, &NoAvailableAccountError{Provider: p.provider, Reason: "not_found"}
+		return nil, &NoAvailableAccountError{Provider: p.provider, Reason: ReasonNotFound}
 	}
 	if acc.Status != config.AccountStatusActive {
-		return nil, &NoAvailableAccountError{Provider: p.provider, Reason: "inactive"}
+		return nil, &NoAvailableAccountError{Provider: p.provider, Reason: ReasonInactive}
 	}
 	if now.Before(acc.RateLimitedUntil) {
-		return nil, &NoAvailableAccountError{Provider: p.provider, Reason: "cooling"}
+		return nil, &NoAvailableAccountError{Provider: p.provider, Reason: ReasonCooling}
 	}
 	if p.isModelLocked(acc, model, now) {
-		return nil, &NoAvailableAccountError{Provider: p.provider, Reason: "model_locked"}
+		return nil, &NoAvailableAccountError{Provider: p.provider, Reason: ReasonModelLocked}
 	}
 	acc.LastUsed = now
 

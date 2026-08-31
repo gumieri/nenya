@@ -29,10 +29,22 @@ var (
 	ErrKeyExpired  = &AuthError{Status: http.StatusForbidden, Msg: "API key has expired"}
 )
 
+// Account-selection failure reasons reported via NoAvailableAccountError.Reason.
+const (
+	// ReasonNotFound means the account ID is not present in the pool.
+	ReasonNotFound = "not_found"
+	// ReasonInactive means the account exists but its status is not active.
+	ReasonInactive = "inactive"
+	// ReasonCooling means the account is rate-limited (cooldown active).
+	ReasonCooling = "cooling"
+	// ReasonModelLocked means the account is model-locked for the model.
+	ReasonModelLocked = "model_locked"
+)
+
 // NoAvailableAccountError indicates no accounts are available for selection.
-// Reason distinguishes the failure mode ("not_found", "inactive", "cooling",
-// "model_locked", or empty for the LRU selection path) so sticky pin misses
-// are diagnosable in production logs.
+// Reason distinguishes the failure mode (see the Reason* constants; empty for
+// the LRU selection path) so sticky pin misses are diagnosable in production
+// logs.
 type NoAvailableAccountError struct {
 	Provider string
 	Reason   string

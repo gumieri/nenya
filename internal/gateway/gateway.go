@@ -848,19 +848,22 @@ func (g *NenyaGateway) GetProviderAPIKey(providerName string) ([]byte, bool) {
 	return nil, false
 }
 
+// selectAccountKey resolves an LRU-selected account credential for a
+// provider/model. The pool is billing-agnostic, so after the LRU pick the
+// selection is retried with a growing exclude set while the pick is
+// billing-exhausted — bounded by pool size — so a healthy sibling is served
+// instead of a target that filterExhaustedTargets would drop (spurious
+// provider/model failover). When no healthy sibling exists the exhausted pick
+// is returned and the downstream target filter remains the safety net. Each
+// skipped pick has its LastUsed bumped by the pool — a mild, self-correcting
+// LRU distortion accepted to keep selection non-mutating-free and simple.
 func (g *NenyaGateway) selectAccountKey(ctx context.Context, providerName, model string) ([]byte, string, bool) {
 	if g.AccountManager == nil {
 		return nil, "", false
 	}
 	selected, err := g.AccountManager.SelectAccount(ctx, providerName, model)
-	if err == nil && selected != nil && g.BillingTracker != nil && g.BillingTracker.IsExhausted(providerName, selected.ID) {
-		// The LRU pick is billing-exhausted: retry once excluding it so a
-		// healthy sibling is preferred over the downstream target filter,
-		// which would otherwise drop the whole provider/model target and
-		// cause a spurious failover.
-		if sibling, serr := g.AccountManager.SelectAccountExcluding(ctx, providerName, model, map[string]bool{selected.ID: true}); serr == nil && sibling != nil {
-			selected = sibling
-		}
+	if err == nil && selected != nil {
+		selected = g.skipExhaustedPick(ctx, providerName, model, selected)
 	}
 	if err == nil && selected != nil {
 		if g.Metrics != nil {
@@ -876,6 +879,37 @@ func (g *NenyaGateway) selectAccountKey(ctx context.Context, providerName, model
 		}
 	}
 	return nil, "", false
+}
+
+// skipExhaustedPick advances the LRU pick past billing-exhausted accounts by
+// retrying selection with a growing exclude set — bounded by pool size, so
+// no loop is possible. When no healthy sibling exists the (possibly
+// exhausted) pick is returned unchanged and the downstream target filter
+// remains the full-exhaustion safety net. Each skipped pick has its LastUsed
+// bumped by the pool — a mild, self-correcting LRU distortion accepted to
+// keep selection simple.
+func (g *NenyaGateway) skipExhaustedPick(ctx context.Context, providerName, model string, selected *auth.SelectedAccount) *auth.SelectedAccount {
+	if g.BillingTracker == nil {
+		return selected
+	}
+	exclude := map[string]bool{}
+	for g.BillingTracker.IsExhausted(providerName, selected.ID) {
+		exclude[selected.ID] = true
+		sibling, serr := g.AccountManager.SelectAccountExcluding(ctx, providerName, model, exclude)
+		if serr != nil || sibling == nil {
+			if g.Logger != nil {
+				g.Logger.Debug("lru pick billing-exhausted, no healthy sibling; target filter will decide",
+					"provider", providerName, "model", model, "account", selected.ID)
+			}
+			break
+		}
+		if g.Logger != nil {
+			g.Logger.Debug("lru pick billing-exhausted, using healthy sibling",
+				"provider", providerName, "model", model, "from_account", selected.ID, "to_account", sibling.ID)
+		}
+		selected = sibling
+	}
+	return selected
 }
 
 // selectPreferredAccountKey resolves a specific account pinned by a sticky
@@ -898,7 +932,7 @@ func (g *NenyaGateway) selectPreferredAccountKey(ctx context.Context, providerNa
 	selected, err := g.AccountManager.SelectAccountByID(ctx, providerName, model, accountID)
 	if err != nil || selected == nil {
 		if g.Logger != nil {
-			attrs := []any{"provider", providerName, "account", accountID}
+			attrs := []any{"provider", providerName, "model", model, "account", accountID}
 			if err != nil {
 				attrs = append(attrs, "err", err)
 			}

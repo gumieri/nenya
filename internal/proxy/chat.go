@@ -171,7 +171,7 @@ func (p *Proxy) resolveAgentRouting(ctx context.Context, req *chatRequest, gw *g
 		AccountSelector: gw,
 		Preferred:       sticky.preference(),
 	})
-	targets = filterExhaustedTargets(targets, gw.BillingTracker, gw.Logger)
+	targets = filterExhaustedTargets(targets, gw.BillingTracker, gw.Providers, gw.Logger)
 	if len(targets) == 0 {
 		return handleEmptyAgentTargets(req, gw, agent)
 	}
@@ -492,20 +492,41 @@ func collectProviderFreeModels(providers map[string]*config.Provider) map[string
 	return result
 }
 
-func filterExhaustedTargets(targets []routing.UpstreamTarget, tracker *billing.BillingTracker, logger *slog.Logger) []routing.UpstreamTarget {
-	if tracker == nil || len(targets) == 0 {
+// filterExhaustedTargets drops targets whose serving account is
+// billing-exhausted and, for providers that require credentials (any
+// AuthStyle except "none"), targets whose credential resolution failed
+// entirely (empty credential AND account) — forwarding those would produce a
+// guaranteed upstream 401 instead of failing over to the next target.
+func filterExhaustedTargets(targets []routing.UpstreamTarget, tracker *billing.BillingTracker, providers map[string]*config.Provider, logger *slog.Logger) []routing.UpstreamTarget {
+	if len(targets) == 0 {
 		return targets
 	}
 	filtered := make([]routing.UpstreamTarget, 0, len(targets))
 	for _, t := range targets {
-		if tracker.IsExhausted(t.Provider, t.AccountName) {
+		if tracker != nil && tracker.IsExhausted(t.Provider, t.AccountName) {
 			logger.Debug("skipping exhausted billing account",
 				"provider", t.Provider, "account", t.AccountName, "model", t.Model)
+			continue
+		}
+		if t.Credential == "" && t.AccountName == "" && requiresCredentials(providers, t.Provider) {
+			logger.Debug("skipping target without resolved credential",
+				"provider", t.Provider, "model", t.Model)
 			continue
 		}
 		filtered = append(filtered, t)
 	}
 	return filtered
+}
+
+// requiresCredentials reports whether the named provider needs an explicit
+// credential. Providers with AuthStyle "none" legitimately run without one;
+// unknown providers are given the benefit of the doubt.
+func requiresCredentials(providers map[string]*config.Provider, name string) bool {
+	p, ok := providers[name]
+	if !ok {
+		return false
+	}
+	return p.AuthStyle != "none"
 }
 
 func (p *Proxy) resolveModelRouting(ctx context.Context, req *chatRequest, gw *gateway.NenyaGateway) ([]routing.UpstreamTarget, string, time.Duration, int, *httpError) {
@@ -516,7 +537,7 @@ func (p *Proxy) resolveModelRouting(ctx context.Context, req *chatRequest, gw *g
 	}
 
 	targets := buildProviderTargets(ctx, matches, gw, gw)
-	targets = filterExhaustedTargets(targets, gw.BillingTracker, gw.Logger)
+	targets = filterExhaustedTargets(targets, gw.BillingTracker, gw.Providers, gw.Logger)
 	if len(targets) == 0 {
 		gw.Logger.Error("no valid providers after filtering", "model", req.ModelName)
 		return nil, "", 0, 0, &httpError{http.StatusInternalServerError, "No valid providers available"}

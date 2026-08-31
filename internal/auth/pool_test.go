@@ -499,7 +499,7 @@ func TestAccountPool_SelectAccountByID_Missing(t *testing.T) {
 	if noAccountErr.Provider != "test-provider" {
 		t.Errorf("expected provider 'test-provider', got %s", noAccountErr.Provider)
 	}
-	if noAccountErr.Reason != "not_found" {
+	if noAccountErr.Reason != ReasonNotFound {
 		t.Errorf("expected reason 'not_found', got %q", noAccountErr.Reason)
 	}
 }
@@ -514,7 +514,7 @@ func TestAccountPool_SelectAccountByID_Cooling(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected NoAvailableAccountError, got %T", err)
 	}
-	if noAccountErr.Reason != "cooling" {
+	if noAccountErr.Reason != ReasonCooling {
 		t.Errorf("expected reason 'cooling', got %q", noAccountErr.Reason)
 	}
 }
@@ -529,7 +529,7 @@ func TestAccountPool_SelectAccountByID_Inactive(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected NoAvailableAccountError, got %T", err)
 	}
-	if noAccountErr.Reason != "inactive" {
+	if noAccountErr.Reason != ReasonInactive {
 		t.Errorf("expected reason 'inactive', got %q", noAccountErr.Reason)
 	}
 }
@@ -544,7 +544,7 @@ func TestAccountPool_SelectAccountByID_ModelLocked(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected NoAvailableAccountError, got %T", err)
 	}
-	if noAccountErr.Reason != "model_locked" {
+	if noAccountErr.Reason != ReasonModelLocked {
 		t.Errorf("expected reason 'model_locked', got %q", noAccountErr.Reason)
 	}
 	if _, err := pool.SelectAccountByID(context.Background(), "a1", "claude-3"); err != nil {

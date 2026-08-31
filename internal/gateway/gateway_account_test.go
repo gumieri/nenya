@@ -102,3 +102,27 @@ func TestSelectCredentialForModel_SkipsExhaustedLRUPick(t *testing.T) {
 		t.Fatalf("expected some pick when all accounts exhausted, got %q, %v", id, ok)
 	}
 }
+
+func TestSelectCredentialForModel_SkipsMultipleExhausted(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	mgr := auth.NewAccountManager(nil)
+	mgr.RegisterPool("prov", auth.NewAccountPool("prov", []*config.ProviderAccount{
+		{ID: "a1", CredentialType: config.CredentialTypeAPIKey, Credential: "key1", Status: config.AccountStatusActive, ModelLocks: make(map[string]time.Time), CreatedAt: time.Now()},
+		{ID: "a2", CredentialType: config.CredentialTypeAPIKey, Credential: "key2", Status: config.AccountStatusActive, ModelLocks: make(map[string]time.Time), CreatedAt: time.Now()},
+		{ID: "a3", CredentialType: config.CredentialTypeAPIKey, Credential: "key3", Status: config.AccountStatusActive, ModelLocks: make(map[string]time.Time), CreatedAt: time.Now()},
+	}))
+	bt := billing.NewBillingTracker(logger, nil)
+	g := &NenyaGateway{AccountManager: mgr, BillingTracker: bt, Metrics: infra.NewMetrics(), Logger: logger}
+	ctx := context.Background()
+
+	// With a1 and a2 billing-exhausted, the exhaustion-aware retry must walk
+	// past BOTH and land on the healthy a3 instead of returning a doomed
+	// pick that the downstream target filter would drop.
+	bt.MarkExhausted(ctx, "prov", "a1", "quota")
+	bt.MarkExhausted(ctx, "prov", "a2", "quota")
+
+	cred, id, ok := g.SelectCredentialForModel(ctx, "prov", "m1")
+	if !ok || id != "a3" || cred != "key3" {
+		t.Fatalf("expected healthy sibling a3 past multiple exhausted accounts, got id=%q cred=%q ok=%v", id, cred, ok)
+	}
+}

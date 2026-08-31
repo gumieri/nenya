@@ -34,6 +34,12 @@ func buildOpts(agentName string, agent config.AgentConfig, providers map[string]
 	}
 }
 
+// withOpts returns a copy of base with the given mutations applied.
+func withOpts(base TargetBuildOpts, mutate func(*TargetBuildOpts)) TargetBuildOpts {
+	mutate(&base)
+	return base
+}
+
 type discardWriter struct{}
 
 func (d *discardWriter) Write(p []byte) (int, error) { return len(p), nil }
@@ -182,7 +188,7 @@ func TestBuildTargetList_TokenCountExceedsMaxContext(t *testing.T) {
 		},
 	}
 
-	targets := a.BuildTargetList(context.Background(), func() TargetBuildOpts { o := buildOpts("test-agent", agent, p); o.TokenCount = 5000; return o }())
+	targets := a.BuildTargetList(context.Background(), withOpts(buildOpts("test-agent", agent, p), func(o *TargetBuildOpts) { o.TokenCount = 5000 }))
 	if len(targets) != 1 {
 		t.Fatalf("expected 1 target (nemotron skipped), got %d", len(targets))
 	}
@@ -700,7 +706,7 @@ func TestBuildTargetList_PinnedAccountPreferred(t *testing.T) {
 	}
 	pref := &AccountPreference{Provider: "zai", Model: "glm-5", AccountID: "acct-a"}
 
-	targets := a.BuildTargetList(context.Background(), func() TargetBuildOpts { o := buildOpts("test-agent", agent, p); o.AccountSelector = sel; o.Preferred = pref; return o }())
+	targets := a.BuildTargetList(context.Background(), withOpts(buildOpts("test-agent", agent, p), func(o *TargetBuildOpts) { o.AccountSelector = sel; o.Preferred = pref }))
 	if len(targets) != 2 {
 		t.Fatalf("expected 2 targets, got %d", len(targets))
 	}
@@ -742,7 +748,7 @@ func TestBuildTargetList_PinnedAccountUnavailableFallsBackToLRU(t *testing.T) {
 	}
 	pref := &AccountPreference{Provider: "zai", Model: "glm-5", AccountID: "acct-gone"}
 
-	targets := a.BuildTargetList(context.Background(), func() TargetBuildOpts { o := buildOpts("test-agent", agent, p); o.AccountSelector = sel; o.Preferred = pref; return o }())
+	targets := a.BuildTargetList(context.Background(), withOpts(buildOpts("test-agent", agent, p), func(o *TargetBuildOpts) { o.AccountSelector = sel; o.Preferred = pref }))
 	if len(targets) != 1 {
 		t.Fatalf("expected 1 target, got %d", len(targets))
 	}
@@ -766,7 +772,7 @@ func TestBuildTargetList_PinnedPreferenceMismatchUsesLRU(t *testing.T) {
 	// Preference targets a different provider/model than any agent entry.
 	pref := &AccountPreference{Provider: "zai", Model: "glm-5", AccountID: "acct-a"}
 
-	targets := a.BuildTargetList(context.Background(), func() TargetBuildOpts { o := buildOpts("test-agent", agent, p); o.AccountSelector = sel; o.Preferred = pref; return o }())
+	targets := a.BuildTargetList(context.Background(), withOpts(buildOpts("test-agent", agent, p), func(o *TargetBuildOpts) { o.AccountSelector = sel; o.Preferred = pref }))
 	if len(targets) != 1 {
 		t.Fatalf("expected 1 target, got %d", len(targets))
 	}
@@ -790,7 +796,7 @@ func TestBuildTargetList_SelectorWithoutPreferredExtension(t *testing.T) {
 	sel := &lruOnlySelector{cred: "lru-key", account: "acct-lru"}
 	pref := &AccountPreference{Provider: "zai", Model: "glm-5", AccountID: "acct-a"}
 
-	targets := a.BuildTargetList(context.Background(), func() TargetBuildOpts { o := buildOpts("test-agent", agent, p); o.AccountSelector = sel; o.Preferred = pref; return o }())
+	targets := a.BuildTargetList(context.Background(), withOpts(buildOpts("test-agent", agent, p), func(o *TargetBuildOpts) { o.AccountSelector = sel; o.Preferred = pref }))
 	if len(targets) != 1 {
 		t.Fatalf("expected 1 target, got %d", len(targets))
 	}

@@ -59,25 +59,12 @@ func TestSessionRouterLRUEviction(t *testing.T) {
 	}
 }
 
-func TestSessionRouterPromote(t *testing.T) {
-	sr := NewSessionRouter(10, 1*time.Hour, nil, nil)
-	sr.Pin("k1", "p1", "m1", "a1", 0)
-	state, ok := sr.Lookup("k1")
-	if !ok {
-		t.Fatalf("pin not found")
-	}
-	sr.Promote("k1", "p2", "m2", "a2", 0)
-	state, ok = sr.Lookup("k1")
-	if !ok {
-		t.Fatalf("pin lost after promote")
-	}
-	if state.Provider != "p2" || state.Model != "m2" {
-		t.Fatalf("promote did not overwrite")
-	}
-}
-
 func TestSessionRouterPeek(t *testing.T) {
+	base := time.Now()
+	now := base
 	sr := NewSessionRouter(10, 1*time.Hour, nil, nil)
+	sr.now = func() time.Time { return now }
+
 	if _, ok := sr.Peek("missing"); ok {
 		t.Fatal("expected absent pin for unknown key")
 	}
@@ -88,26 +75,24 @@ func TestSessionRouterPeek(t *testing.T) {
 		t.Fatalf("unexpected peek: %+v, %v", pin, ok)
 	}
 
+	// Peek on a live pin leaves LastSeen untouched.
+	before, _ := sr.Peek("k1")
+	sr.Peek("k1")
+	sr.Peek("k1")
+	after, _ := sr.Peek("k1")
+	if !after.LastSeen.Equal(before.LastSeen) {
+		t.Fatal("Peek must not refresh LastSeen")
+	}
+
 	// Peek reports expired pins as absent without deleting them or recording
 	// metrics; the subsequent Lookup performs the destructive expiry.
 	sr.Pin("k2", "p2", "m2", "a2", 50*time.Millisecond)
-	time.Sleep(60 * time.Millisecond)
+	now = base.Add(61 * time.Millisecond)
 	if _, ok := sr.Peek("k2"); ok {
 		t.Fatal("expected expired pin to be reported absent by Peek")
 	}
 	if _, ok := sr.Lookup("k2"); ok {
 		t.Fatal("expected expired pin to be reported absent by Lookup")
-	}
-
-	// Peek on a live pin leaves LastSeen untouched.
-	sr2 := NewSessionRouter(10, 1*time.Hour, nil, nil)
-	sr2.Pin("k1", "p1", "m1", "a1", 0)
-	before, _ := sr2.Peek("k1")
-	sr2.Peek("k1")
-	sr2.Peek("k1")
-	after, _ := sr2.Peek("k1")
-	if !after.LastSeen.Equal(before.LastSeen) {
-		t.Fatal("Peek must not refresh LastSeen")
 	}
 }
 

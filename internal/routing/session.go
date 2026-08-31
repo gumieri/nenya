@@ -82,7 +82,7 @@ func SessionKey(agent, systemPrompt, firstUserMessage string) string {
 // per-agent idle TTL (non-positive falls back to the router default). It
 // respects the LRU cap and evicts the least-recently-seen entry when the
 // store is full, recording a `new` metric. Callers should use Lookup for
-// existing sessions and Promote after a failover.
+// existing sessions and PromoteIfChanged after a failover.
 func (r *SessionRouter) Pin(key, provider, model, account string, ttl time.Duration) {
 	if r == nil {
 		return
@@ -91,7 +91,6 @@ func (r *SessionRouter) Pin(key, provider, model, account string, ttl time.Durat
 		ttl = r.ttl
 	}
 	r.mu.Lock()
-	defer r.mu.Unlock()
 	if r.sessions == nil {
 		r.sessions = make(map[string]*SessionState)
 	}
@@ -112,44 +111,11 @@ func (r *SessionRouter) Pin(key, provider, model, account string, ttl time.Durat
 		r.evictLRU()
 	}
 	r.sessions[key] = entry
+	r.mu.Unlock()
+
 	r.record("new")
 	if r.logger != nil {
 		r.logger.Debug("session pin created", "key", key, "provider", provider, "model", model, "account", account, "ttl", ttl)
-	}
-}
-
-// Promote unconditionally overwrites the pinned target for the given session
-// key following a failover: the previous pin was invalidated (cooldown,
-// exhaustion, or context growth) and a different target is now sticky. It
-// records a failover metric even when the new target equals the current pin —
-// prefer PromoteIfChanged, which dedupes no-change promotions; Promote is
-// retained as the unconditional variant for tests and external callers. The
-// ttl argument is the per-agent idle TTL (non-positive falls back to the
-// router default).
-func (r *SessionRouter) Promote(key, provider, model, account string, ttl time.Duration) {
-	if r == nil {
-		return
-	}
-	if ttl <= 0 {
-		ttl = r.ttl
-	}
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	if r.sessions == nil {
-		r.sessions = make(map[string]*SessionState)
-	}
-	now := r.now()
-	r.sessions[key] = &SessionState{
-		Provider: provider,
-		Model:    model,
-		Account:  account,
-		ttl:      ttl,
-		Since:    now,
-		LastSeen: now,
-	}
-	r.record("failover")
-	if r.logger != nil {
-		r.logger.Info("session pin promoted after failover", "key", key, "provider", provider, "model", model, "account", account, "ttl", ttl)
 	}
 }
 
@@ -164,23 +130,21 @@ func (r *SessionRouter) Lookup(key string) (SessionState, bool) {
 	}
 	now := r.now()
 	r.mu.Lock()
-	defer r.mu.Unlock()
-
 	entry, ok := r.sessions[key]
 	if !ok {
+		r.mu.Unlock()
 		return SessionState{}, false
 	}
-	ttl := entry.ttl
-	if ttl <= 0 {
-		ttl = r.ttl
-	}
-	if now.Sub(entry.LastSeen) > ttl {
+	if r.entryExpired(entry, now) {
 		delete(r.sessions, key)
+		r.mu.Unlock()
 		r.record("expired")
 		return SessionState{}, false
 	}
 	entry.LastSeen = now
-	return *entry, true
+	state := *entry
+	r.mu.Unlock()
+	return state, true
 }
 
 // Peek returns a copy of the pinned target for the given session key without
@@ -192,18 +156,12 @@ func (r *SessionRouter) Peek(key string) (SessionState, bool) {
 	if r == nil {
 		return SessionState{}, false
 	}
+	now := r.now()
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
 	entry, ok := r.sessions[key]
-	if !ok {
-		return SessionState{}, false
-	}
-	ttl := entry.ttl
-	if ttl <= 0 {
-		ttl = r.ttl
-	}
-	if r.now().Sub(entry.LastSeen) > ttl {
+	if !ok || r.entryExpired(entry, now) {
 		return SessionState{}, false
 	}
 	return *entry, true
@@ -212,9 +170,12 @@ func (r *SessionRouter) Peek(key string) (SessionState, bool) {
 // PromoteIfChanged overwrites the pinned target for the given session key
 // following a failover, but only when the new provider/model/account differs
 // from the currently pinned one. Concurrent promotions of the same effective
-// target therefore record a single failover metric. The ttl argument is the
-// per-agent idle TTL (non-positive falls back to the router default).
-// Returns true when the pin was changed.
+// target therefore record a single failover metric. An unchanged pin still
+// gets its per-agent idle TTL refreshed in place, so SIGHUP changes to
+// sticky_session_ttl_seconds apply to live pins. A brand-new key respects
+// the LRU cap like Pin. The ttl argument is the per-agent idle TTL
+// (non-positive falls back to the router default). Returns true when the pin
+// was changed.
 func (r *SessionRouter) PromoteIfChanged(key, provider, model, account string, ttl time.Duration) bool {
 	if r == nil {
 		return false
@@ -223,13 +184,17 @@ func (r *SessionRouter) PromoteIfChanged(key, provider, model, account string, t
 		ttl = r.ttl
 	}
 	r.mu.Lock()
-	defer r.mu.Unlock()
-	if entry, ok := r.sessions[key]; ok &&
-		entry.Provider == provider && entry.Model == model && entry.Account == account {
-		return false
-	}
 	if r.sessions == nil {
 		r.sessions = make(map[string]*SessionState)
+	}
+	if entry, ok := r.sessions[key]; ok {
+		if entry.Provider == provider && entry.Model == model && entry.Account == account {
+			entry.ttl = ttl
+			r.mu.Unlock()
+			return false
+		}
+	} else if len(r.sessions) >= r.cap {
+		r.evictLRU()
 	}
 	now := r.now()
 	r.sessions[key] = &SessionState{
@@ -240,6 +205,8 @@ func (r *SessionRouter) PromoteIfChanged(key, provider, model, account string, t
 		Since:    now,
 		LastSeen: now,
 	}
+	r.mu.Unlock()
+
 	r.record("failover")
 	if r.logger != nil {
 		r.logger.Info("session pin promoted after failover", "key", key, "provider", provider, "model", model, "account", account, "ttl", ttl)
@@ -274,24 +241,39 @@ func (r *SessionRouter) Active() int {
 		return 0
 	}
 	r.mu.Lock()
-	defer r.mu.Unlock()
 	now := r.now()
 	active := 0
+	expired := 0
 	for key, entry := range r.sessions {
-		ttl := entry.ttl
-		if ttl <= 0 {
-			ttl = r.ttl
-		}
-		if now.Sub(entry.LastSeen) > ttl {
+		if r.entryExpired(entry, now) {
 			delete(r.sessions, key)
-			r.record("expired")
+			expired++
 			continue
 		}
 		active++
 	}
+	r.mu.Unlock()
+
+	for i := 0; i < expired; i++ {
+		r.record("expired")
+	}
 	return active
 }
 
+// entryExpired reports whether the entry has exceeded its effective idle TTL
+// (the per-entry TTL, falling back to the router default when unset) at the
+// given instant. Callers must hold r.mu.
+func (r *SessionRouter) entryExpired(entry *SessionState, now time.Time) bool {
+	ttl := entry.ttl
+	if ttl <= 0 {
+		ttl = r.ttl
+	}
+	return now.Sub(entry.LastSeen) > ttl
+}
+
+// evictLRU removes the least-recently-seen entry when the store is at cap.
+// Callers must hold r.mu. Metrics and logging happen under the caller's lock
+// because eviction is always part of a larger mutation (Pin/PromoteIfChanged).
 func (r *SessionRouter) evictLRU() {
 	var oldestKey string
 	var oldest time.Time
