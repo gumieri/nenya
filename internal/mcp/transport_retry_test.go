@@ -40,7 +40,7 @@ func TestConnect_RetryOnNetworkError(t *testing.T) {
 	if attempts.Load() != 3 {
 		t.Errorf("expected 3 attempts, got %d", attempts.Load())
 	}
-	transport.Close()
+	_ = transport.Close()
 }
 
 func TestConnect_FirstAttemptSucceeds(t *testing.T) {
@@ -69,7 +69,7 @@ func TestConnect_FirstAttemptSucceeds(t *testing.T) {
 	if attempts.Load() != 1 {
 		t.Errorf("expected 1 attempt, got %d", attempts.Load())
 	}
-	transport.Close()
+	_ = transport.Close()
 }
 
 func TestSendRequest_RetryOnNetworkError(t *testing.T) {
@@ -111,7 +111,7 @@ func TestSendRequest_RetryOnNetworkError(t *testing.T) {
 	if err := transport.Connect(ctx); err != nil {
 		t.Fatalf("connect failed: %v", err)
 	}
-	defer transport.Close()
+	defer func() { _ = transport.Close() }()
 
 	if transport.SessionEndpoint() == "" {
 		t.Fatalf("expected session endpoint, got empty")

@@ -22,7 +22,7 @@ func TestFetchProviderModels_RetryOnNetworkError(t *testing.T) {
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]interface{}{
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
 			"object": "list",
 			"data":   []interface{}{map[string]string{"id": "test-model"}},
 		})
@@ -63,7 +63,7 @@ func TestFetchProviderModels_NoRetryOnContextTimeout(t *testing.T) {
 		time.Sleep(500 * time.Millisecond)
 		w.WriteHeader(http.StatusOK)
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]interface{}{
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
 			"object": "list",
 			"data":   []interface{}{},
 		})
@@ -96,7 +96,7 @@ func TestFetchProviderModels_FirstAttemptSucceeds(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		attempts.Add(1)
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]interface{}{
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
 			"object": "list",
 			"data":   []interface{}{map[string]string{"id": "model-1"}},
 		})
@@ -135,7 +135,7 @@ func TestFetchProviderModels_ProviderOverride(t *testing.T) {
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]interface{}{
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
 			"object": "list",
 			"data":   []interface{}{map[string]string{"id": "model-2"}},
 		})
@@ -169,7 +169,7 @@ func TestFetchProviderModels_ProviderOverride(t *testing.T) {
 func TestFetchProviderModels_NoBackfillWithoutProviderAllows(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]interface{}{
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
 			"object": "list",
 			"data":   []interface{}{map[string]string{"id": "gpt-4"}},
 		})
@@ -204,7 +204,7 @@ func TestFetchProviderModels_NoBackfillWithoutProviderAllows(t *testing.T) {
 func TestFetchProviderModels_BackfillRespectsProviderAllows(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]interface{}{
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
 			"object": "list",
 			"data":   []interface{}{map[string]string{"id": "gpt-4"}},
 		})

@@ -100,7 +100,6 @@ func (e *GatewayError) HTTPStatusCode() int {
 	}
 }
 
-// ToJSON converts the error to an OpenAI-compatible JSON map
 // WithParam sets the param field and returns the error
 func (e *GatewayError) WithParam(param string) *GatewayError {
 	if len(param) > maxParamLength {

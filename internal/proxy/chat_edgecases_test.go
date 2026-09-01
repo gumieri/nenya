@@ -72,7 +72,7 @@ func TestEdgeCasePayloads(t *testing.T) {
 			upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				w.Header().Set("Content-Type", "application/json")
 				w.WriteHeader(http.StatusOK)
-				w.Write([]byte(`{"choices":[{"message":{"role":"assistant","content":"ok"}}]}`))
+				_, _ = w.Write([]byte(`{"choices":[{"message":{"role":"assistant","content":"ok"}}]}`))
 			}))
 			defer upstream.Close()
 

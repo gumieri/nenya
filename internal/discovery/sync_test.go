@@ -19,7 +19,7 @@ func TestNewPersistentProviderCache(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create temp dir: %v", err)
 	}
-	defer os.RemoveAll(tmpDir)
+	defer func() { _ = os.RemoveAll(tmpDir) }()
 
 	cache := NewPersistentProviderCache(tmpDir, 1*time.Hour, testCacheLogger())
 	if cache.cacheDir != tmpDir {
@@ -35,7 +35,7 @@ func TestPersistentProviderCache_SaveAndLoad(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create temp dir: %v", err)
 	}
-	defer os.RemoveAll(tmpDir)
+	defer func() { _ = os.RemoveAll(tmpDir) }()
 
 	cache := NewPersistentProviderCache(tmpDir, 1*time.Hour, testCacheLogger())
 
@@ -68,7 +68,7 @@ func TestPersistentProviderCache_Load_Expired(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create temp dir: %v", err)
 	}
-	defer os.RemoveAll(tmpDir)
+	defer func() { _ = os.RemoveAll(tmpDir) }()
 
 	cache := NewPersistentProviderCache(tmpDir, 10*time.Millisecond, testCacheLogger())
 
@@ -99,7 +99,7 @@ func TestPersistentProviderCache_Load_NonJSONFiles(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create temp dir: %v", err)
 	}
-	defer os.RemoveAll(tmpDir)
+	defer func() { _ = os.RemoveAll(tmpDir) }()
 
 	if err := os.WriteFile(filepath.Join(tmpDir, "readme.txt"), []byte("not json"), 0644); err != nil {
 		t.Fatalf("failed to write file: %v", err)
@@ -122,7 +122,7 @@ func TestPersistentProviderCache_Load_InvalidJSON(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create temp dir: %v", err)
 	}
-	defer os.RemoveAll(tmpDir)
+	defer func() { _ = os.RemoveAll(tmpDir) }()
 
 	cachePath := filepath.Join(tmpDir, "provider.json")
 	if err := os.WriteFile(cachePath, []byte("{invalid json}"), 0644); err != nil {
@@ -152,7 +152,7 @@ func TestPersistentProviderCache_GetAll(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create temp dir: %v", err)
 	}
-	defer os.RemoveAll(tmpDir)
+	defer func() { _ = os.RemoveAll(tmpDir) }()
 
 	cache := NewPersistentProviderCache(tmpDir, 1*time.Hour, testCacheLogger())
 
@@ -176,7 +176,7 @@ func TestPersistentProviderCache_Clear(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create temp dir: %v", err)
 	}
-	defer os.RemoveAll(tmpDir)
+	defer func() { _ = os.RemoveAll(tmpDir) }()
 
 	cache := NewPersistentProviderCache(tmpDir, 1*time.Hour, testCacheLogger())
 
@@ -204,7 +204,7 @@ func TestPersistentProviderCache_Clear_EmptyDir(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create temp dir: %v", err)
 	}
-	defer os.RemoveAll(tmpDir)
+	defer func() { _ = os.RemoveAll(tmpDir) }()
 
 	cache := NewPersistentProviderCache(tmpDir, 1*time.Hour, testCacheLogger())
 
@@ -218,7 +218,7 @@ func TestPersistentProviderCache_Prune(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create temp dir: %v", err)
 	}
-	defer os.RemoveAll(tmpDir)
+	defer func() { _ = os.RemoveAll(tmpDir) }()
 
 	cache := NewPersistentProviderCache(tmpDir, 100*time.Millisecond, testCacheLogger())
 
@@ -252,7 +252,7 @@ func TestPersistentProviderCache_JSONRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create temp dir: %v", err)
 	}
-	defer os.RemoveAll(tmpDir)
+	defer func() { _ = os.RemoveAll(tmpDir) }()
 
 	cache := NewPersistentProviderCache(tmpDir, 1*time.Hour, testCacheLogger())
 
@@ -293,7 +293,7 @@ func TestPersistentProviderCache_MarshalIndent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create temp dir: %v", err)
 	}
-	defer os.RemoveAll(tmpDir)
+	defer func() { _ = os.RemoveAll(tmpDir) }()
 
 	cache := NewPersistentProviderCache(tmpDir, 1*time.Hour, testCacheLogger())
 
@@ -327,7 +327,7 @@ func TestPersistentProviderCache_Save_Overwrite(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create temp dir: %v", err)
 	}
-	defer os.RemoveAll(tmpDir)
+	defer func() { _ = os.RemoveAll(tmpDir) }()
 
 	cache := NewPersistentProviderCache(tmpDir, 1*time.Hour, testCacheLogger())
 

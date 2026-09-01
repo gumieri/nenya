@@ -156,7 +156,8 @@ func TestSecureMem_Seal(t *testing.T) {
 		t.Fatalf("StoreToken failed: %v", err)
 	}
 
-	if err := sm.Seal(); err != nil {
+	err = sm.Seal()
+	if err != nil {
 		t.Fatalf("Seal failed: %v", err)
 	}
 

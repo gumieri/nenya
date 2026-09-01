@@ -36,7 +36,7 @@ func FuzzChatHandler(f *testing.F) {
 		// Create test setup
 		upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Content-Type", "application/json")
-			fmt.Fprint(w, `{"choices":[{"message":{"role":"assistant","content":"hi"}}]}`)
+			_, _ = fmt.Fprint(w, `{"choices":[{"message":{"role":"assistant","content":"hi"}}]}`)
 		}))
 		defer upstream.Close()
 

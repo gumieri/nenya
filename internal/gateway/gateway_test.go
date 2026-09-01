@@ -627,7 +627,7 @@ func TestContextWithTimeout(t *testing.T) {
 
 	select {
 	case <-newCtx.Done():
-		t.Error("context should not be cancelled immediately")
+		t.Error("context should not be canceled immediately")
 	default:
 	}
 }

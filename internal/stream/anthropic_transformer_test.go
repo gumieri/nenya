@@ -135,7 +135,7 @@ func TestAnthropicTransformer_TextContent(t *testing.T) {
 	}
 
 	var m map[string]interface{}
-	json.Unmarshal(out, &m)
+	_ = json.Unmarshal(out, &m)
 	choices := m["choices"].([]interface{})
 	delta := choices[0].(map[string]interface{})["delta"].(map[string]interface{})
 	if delta["content"] != "Hello" {
@@ -162,7 +162,7 @@ func TestAnthropicTransformer_TextContent(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	json.Unmarshal(out, &m)
+	_ = json.Unmarshal(out, &m)
 	choices = m["choices"].([]interface{})
 	delta = choices[0].(map[string]interface{})["delta"].(map[string]interface{})
 	if delta["content"] != " world" {
@@ -205,7 +205,7 @@ func TestAnthropicTransformer_MessageDeltaStopReasonAndUsage(t *testing.T) {
 	}
 
 	var m map[string]interface{}
-	json.Unmarshal(out, &m)
+	_ = json.Unmarshal(out, &m)
 	choices := m["choices"].([]interface{})
 	choice := choices[0].(map[string]interface{})
 	if choice["finish_reason"] != "stop" {
@@ -259,7 +259,7 @@ func TestAnthropicTransformer_ToolUseContentBlock(t *testing.T) {
 	}
 
 	var m map[string]interface{}
-	json.Unmarshal(out, &m)
+	_ = json.Unmarshal(out, &m)
 	delta := m["choices"].([]interface{})[0].(map[string]interface{})["delta"].(map[string]interface{})
 	tcs := delta["tool_calls"].([]interface{})
 	if len(tcs) != 1 {
@@ -294,7 +294,7 @@ func TestAnthropicTransformer_ToolUseContentBlock(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	json.Unmarshal(out, &m)
+	_ = json.Unmarshal(out, &m)
 	delta = m["choices"].([]interface{})[0].(map[string]interface{})["delta"].(map[string]interface{})
 	tcs = delta["tool_calls"].([]interface{})
 	tc = tcs[0].(map[string]interface{})
@@ -324,7 +324,7 @@ func TestAnthropicTransformer_ThinkingContentBlock(t *testing.T) {
 	}
 
 	var m map[string]interface{}
-	json.Unmarshal(out, &m)
+	_ = json.Unmarshal(out, &m)
 	delta := m["choices"].([]interface{})[0].(map[string]interface{})["delta"].(map[string]interface{})
 	if delta["content"] != "<thinking>Let me think...</thinking>" {
 		t.Errorf("expected thinking content, got %v", delta["content"])
@@ -361,7 +361,7 @@ func TestAnthropicTransformer_ThinkingBlockDelta(t *testing.T) {
 	}
 
 	var m map[string]interface{}
-	json.Unmarshal(out, &m)
+	_ = json.Unmarshal(out, &m)
 	delta := m["choices"].([]interface{})[0].(map[string]interface{})["delta"].(map[string]interface{})
 	if delta["content"] != "more thoughts" {
 		t.Errorf("expected 'more thoughts', got %v", delta["content"])
@@ -402,7 +402,7 @@ func TestAnthropicTransformer_StopReasons(t *testing.T) {
 			}
 
 			var m map[string]interface{}
-			json.Unmarshal(out, &m)
+			_ = json.Unmarshal(out, &m)
 			choice := m["choices"].([]interface{})[0].(map[string]interface{})
 			if choice["finish_reason"] != tt.wantFinish {
 				t.Errorf("expected finish_reason %s, got %v", tt.wantFinish, choice["finish_reason"])
@@ -428,7 +428,7 @@ func TestAnthropicTransformer_MultipleContentBlocks(t *testing.T) {
 	out, _ := tr.TransformSSEChunk(context.Background(), data)
 
 	var m map[string]interface{}
-	json.Unmarshal(out, &m)
+	_ = json.Unmarshal(out, &m)
 	delta := m["choices"].([]interface{})[0].(map[string]interface{})["delta"].(map[string]interface{})
 	if delta["content"] != "Sure" {
 		t.Errorf("expected 'Sure', got %v", delta["content"])
@@ -439,7 +439,7 @@ func TestAnthropicTransformer_MultipleContentBlocks(t *testing.T) {
 		"index": 0,
 	}
 	data, _ = json.Marshal(textBlockStop)
-	out, _ = tr.TransformSSEChunk(context.Background(), data)
+	_, _ = tr.TransformSSEChunk(context.Background(), data)
 
 	toolBlock := map[string]interface{}{
 		"type":  "content_block_start",
@@ -453,7 +453,7 @@ func TestAnthropicTransformer_MultipleContentBlocks(t *testing.T) {
 	data, _ = json.Marshal(toolBlock)
 	out, _ = tr.TransformSSEChunk(context.Background(), data)
 
-	json.Unmarshal(out, &m)
+	_ = json.Unmarshal(out, &m)
 	delta = m["choices"].([]interface{})[0].(map[string]interface{})["delta"].(map[string]interface{})
 	tcs := delta["tool_calls"].([]interface{})
 	if len(tcs) != 1 {

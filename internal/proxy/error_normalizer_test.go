@@ -305,12 +305,6 @@ func TestGatewayError_UnwrapNil(t *testing.T) {
 	}
 }
 
-func jsonEqual(a, b map[string]any) bool {
-	aj, _ := json.Marshal(a)
-	bj, _ := json.Marshal(b)
-	return string(aj) == string(bj)
-}
-
 func TestMapErrorKind(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -342,6 +336,9 @@ func TestGatewayErrorWithQuotaExhausted(t *testing.T) {
 	w := newMockResponseWriter()
 	writeGatewayError(w, http.StatusPaymentRequired, ErrorTypeQuotaExhausted, "Quota exceeded")
 
+	if w.statusCode != http.StatusPaymentRequired {
+		t.Errorf("status = %d, want %d", w.statusCode, http.StatusPaymentRequired)
+	}
 	var got struct {
 		Error struct {
 			Type      ErrorType `json:"type"`

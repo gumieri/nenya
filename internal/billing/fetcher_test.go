@@ -23,22 +23,23 @@ func TestQuotaFetcher_Lifecycle(t *testing.T) {
 			w.WriteHeader(http.StatusUnauthorized)
 			return
 		}
-		if r.URL.Path == "/quota/provider1" {
+		switch r.URL.Path {
+		case "/quota/provider1":
 			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(map[string]any{
+			_ = json.NewEncoder(w).Encode(map[string]any{
 				"balance": 100.0,
 			})
-		} else if r.URL.Path == "/quota/provider2" {
+		case "/quota/provider2":
 			w.WriteHeader(http.StatusTooManyRequests)
-		} else if r.URL.Path == "/quota/provider3" {
+		case "/quota/provider3":
 			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(map[string]any{
+			_ = json.NewEncoder(w).Encode(map[string]any{
 				"balance": []map[string]any{
 					{"percentage": 75, "name": "tier1"},
 					{"percentage": 95, "name": "tier2"},
 				},
 			})
-		} else {
+		default:
 			w.WriteHeader(http.StatusNotFound)
 		}
 	}))
@@ -121,7 +122,7 @@ func TestQuotaFetcher_InitialFetch(t *testing.T) {
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]any{
+		_ = json.NewEncoder(w).Encode(map[string]any{
 			"balance": 50.0,
 		})
 	}))
@@ -166,7 +167,7 @@ func TestFetchAndUpdate_AccountName(t *testing.T) {
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]any{
+		_ = json.NewEncoder(w).Encode(map[string]any{
 			"balance": 100.0,
 		})
 	}))
@@ -208,7 +209,7 @@ func TestStart_MultipleAccounts(t *testing.T) {
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]any{"balance": 100.0})
+		_ = json.NewEncoder(w).Encode(map[string]any{"balance": 100.0})
 	}))
 	defer server.Close()
 
@@ -259,7 +260,7 @@ func TestQuotaFetcher_HTTPError(t *testing.T) {
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)
-		w.Write([]byte("internal error"))
+		_, _ = w.Write([]byte("internal error"))
 	}))
 	defer server.Close()
 
@@ -286,7 +287,7 @@ func TestQuotaFetcher_ParseError(t *testing.T) {
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		w.Write([]byte("invalid json{{{"))
+		_, _ = w.Write([]byte("invalid json{{{"))
 	}))
 	defer server.Close()
 
@@ -315,7 +316,7 @@ func TestQuotaFetcher_UnsupportedMode(t *testing.T) {
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]any{"balance": 1.0})
+		_ = json.NewEncoder(w).Encode(map[string]any{"balance": 1.0})
 	}))
 	defer server.Close()
 

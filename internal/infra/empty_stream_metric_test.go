@@ -60,7 +60,7 @@ func TestMetrics_RecordEmptyStream_WritePrometheusOrder(t *testing.T) {
 	if alphaIdx < 0 || betaIdx < 0 || zetaIdx < 0 {
 		t.Fatalf("missing entries in output")
 	}
-	if !(alphaIdx < betaIdx && betaIdx < zetaIdx) {
+	if alphaIdx >= betaIdx || betaIdx >= zetaIdx {
 		t.Fatalf("expected alphabetical order: alpha < beta < zeta, got indices alpha=%d, beta=%d, zeta=%d", alphaIdx, betaIdx, zetaIdx)
 	}
 }

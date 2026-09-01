@@ -32,7 +32,14 @@ linters:
     paths:
       - vendor$
       - third_party$
-      - ".*_test\\.go"
+    rules:
+      # Test files keep relaxed size/complexity limits but remain subject to
+      # correctness linters (dead code, staticcheck, vet, errcheck, gofmt).
+      - path: ".*_test\\.go"
+        linters:
+          - funlen
+          - gocyclo
+          - nestif
 
 formatters:
   enable:

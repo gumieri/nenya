@@ -35,7 +35,7 @@ func TestLoadModel_HappyPath(t *testing.T) {
 			t.Errorf("path = %q, want /api/generate", r.URL.Path)
 		}
 		w.Header().Set("Content-Type", "application/json")
-		w.Write([]byte(`{"done": true, "response": ""}`))
+		_, _ = w.Write([]byte(`{"done": true, "response": ""}`))
 	}))
 	defer server.Close()
 
@@ -63,7 +63,7 @@ func TestLoadModel_ReuseExisting(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		callCount++
 		w.Header().Set("Content-Type", "application/json")
-		w.Write([]byte(`{"done": true, "response": ""}`))
+		_, _ = w.Write([]byte(`{"done": true, "response": ""}`))
 	}))
 	defer server.Close()
 
@@ -89,7 +89,7 @@ func TestUnloadModel_HappyPath(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodPost && r.URL.Path == "/api/generate" {
 			w.Header().Set("Content-Type", "application/json")
-			w.Write([]byte(`{"done": true, "response": ""}`))
+			_, _ = w.Write([]byte(`{"done": true, "response": ""}`))
 		}
 	}))
 	defer server.Close()
@@ -123,7 +123,7 @@ func TestUnloadModel_NotLoaded(t *testing.T) {
 func TestIsLoaded(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		w.Write([]byte(`{"done": true, "response": ""}`))
+		_, _ = w.Write([]byte(`{"done": true, "response": ""}`))
 	}))
 	defer server.Close()
 
@@ -147,7 +147,7 @@ func TestIsLoaded(t *testing.T) {
 func TestGetLoadedModels(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		w.Write([]byte(`{"done": true, "response": ""}`))
+		_, _ = w.Write([]byte(`{"done": true, "response": ""}`))
 	}))
 	defer server.Close()
 
@@ -172,7 +172,7 @@ func TestListInstalledModels(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/api/tags" {
 			w.Header().Set("Content-Type", "application/json")
-			w.Write([]byte(`{
+			_, _ = w.Write([]byte(`{
 				"models": [
 					{"name": "qwen2.5-coder:7b", "size": 4678608524, "modified_at": "2024-01-15T10:30:00Z"},
 					{"name": "llama3.1:8b", "size": 4920487461, "modified_at": "2024-02-01T15:45:00Z"}
@@ -200,7 +200,7 @@ func TestListInstalledModels(t *testing.T) {
 func TestConcurrentLoad(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		w.Write([]byte(`{"done": true, "response": ""}`))
+		_, _ = w.Write([]byte(`{"done": true, "response": ""}`))
 	}))
 	defer server.Close()
 
@@ -248,7 +248,7 @@ func TestLoadModel_WithOptions(t *testing.T) {
 		}
 
 		w.Header().Set("Content-Type", "application/json")
-		w.Write([]byte(`{"done": true, "response": ""}`))
+		_, _ = w.Write([]byte(`{"done": true, "response": ""}`))
 	}))
 	defer server.Close()
 
@@ -297,7 +297,7 @@ func TestNewEngineManager_DefaultMaxSessions(t *testing.T) {
 func TestEngineManager_LoadModel(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		w.Write([]byte(`{"done": true, "response": ""}`))
+		_, _ = w.Write([]byte(`{"done": true, "response": ""}`))
 	}))
 	defer server.Close()
 
@@ -322,7 +322,7 @@ func TestEngineManager_LoadModel(t *testing.T) {
 func TestEngineManager_UnloadModel(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		w.Write([]byte(`{"done": true, "response": ""}`))
+		_, _ = w.Write([]byte(`{"done": true, "response": ""}`))
 	}))
 	defer server.Close()
 

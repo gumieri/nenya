@@ -7,11 +7,6 @@ import (
 	"testing"
 )
 
-func jsonString(v any) string {
-	b, _ := json.Marshal(v)
-	return string(b)
-}
-
 func TestApplyDefaults_Bouncer(t *testing.T) {
 	cfg := &Config{}
 	if err := ApplyDefaults(cfg); err != nil {

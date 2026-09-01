@@ -15,7 +15,7 @@ func TestBouncerInterceptorCanHandle(t *testing.T) {
 		name          string
 		tokenCount    int
 		softLimit     int
-		ctxCancelled  bool
+		ctxCanceled   bool
 		enabled       *bool
 		wantCanHandle bool
 	}{
@@ -23,7 +23,7 @@ func TestBouncerInterceptorCanHandle(t *testing.T) {
 			name:          "handles when tokens exceed soft_limit",
 			tokenCount:    5000,
 			softLimit:     4000,
-			ctxCancelled:  false,
+			ctxCanceled:   false,
 			enabled:       config.PtrTo(true),
 			wantCanHandle: true,
 		},
@@ -31,7 +31,7 @@ func TestBouncerInterceptorCanHandle(t *testing.T) {
 			name:          "does not handle when tokens below soft_limit",
 			tokenCount:    3000,
 			softLimit:     4000,
-			ctxCancelled:  false,
+			ctxCanceled:   false,
 			enabled:       config.PtrTo(true),
 			wantCanHandle: false,
 		},
@@ -39,15 +39,15 @@ func TestBouncerInterceptorCanHandle(t *testing.T) {
 			name:          "does not handle when soft_limit is zero (unknown MaxContext)",
 			tokenCount:    5000,
 			softLimit:     0,
-			ctxCancelled:  false,
+			ctxCanceled:   false,
 			enabled:       config.PtrTo(true),
 			wantCanHandle: false,
 		},
 		{
-			name:          "does not handle when context cancelled",
+			name:          "does not handle when context canceled",
 			tokenCount:    5000,
 			softLimit:     4000,
-			ctxCancelled:  true,
+			ctxCanceled:   true,
 			enabled:       config.PtrTo(true),
 			wantCanHandle: false,
 		},
@@ -55,7 +55,7 @@ func TestBouncerInterceptorCanHandle(t *testing.T) {
 			name:          "does not handle when tokens equal soft_limit",
 			tokenCount:    4000,
 			softLimit:     4000,
-			ctxCancelled:  false,
+			ctxCanceled:   false,
 			enabled:       config.PtrTo(true),
 			wantCanHandle: true,
 		},
@@ -63,7 +63,7 @@ func TestBouncerInterceptorCanHandle(t *testing.T) {
 			name:          "does not handle when bouncer explicitly disabled",
 			tokenCount:    5000,
 			softLimit:     4000,
-			ctxCancelled:  false,
+			ctxCanceled:   false,
 			enabled:       config.PtrTo(false),
 			wantCanHandle: false,
 		},
@@ -71,7 +71,7 @@ func TestBouncerInterceptorCanHandle(t *testing.T) {
 			name:          "handles when enabled is unset (defaults to enabled)",
 			tokenCount:    5000,
 			softLimit:     4000,
-			ctxCancelled:  false,
+			ctxCanceled:   false,
 			wantCanHandle: true,
 		},
 	}
@@ -87,10 +87,10 @@ func TestBouncerInterceptorCanHandle(t *testing.T) {
 			interceptor := NewBouncerInterceptor(gw, slog.Default())
 
 			var ctx context.Context
-			if tt.ctxCancelled {
-				cancelledCtx, cancel := context.WithCancel(context.Background())
+			if tt.ctxCanceled {
+				canceledCtx, cancel := context.WithCancel(context.Background())
 				cancel()
-				ctx = cancelledCtx
+				ctx = canceledCtx
 			} else {
 				ctx = context.Background()
 			}

@@ -63,7 +63,7 @@ func TestHandleImagesGenerations(t *testing.T) {
 			t.Errorf("expected Content-Type application/json, got %s", ct)
 		}
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]interface{}{
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
 			"created": 1234567890,
 			"data": []interface{}{
 				map[string]interface{}{
@@ -107,7 +107,7 @@ func TestHandleAudioTranscriptions(t *testing.T) {
 			t.Errorf("expected multipart/form-data, got %s", ct)
 		}
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]interface{}{
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
 			"text": "Hello world, this is a transcription.",
 		})
 	}))
@@ -146,7 +146,7 @@ func TestHandleAudioSpeech(t *testing.T) {
 			t.Errorf("expected application/json, got %s", ct)
 		}
 		w.Header().Set("Content-Type", "audio/mpeg")
-		w.Write([]byte("fake audio data"))
+		_, _ = w.Write([]byte("fake audio data"))
 	}))
 	defer upstream.Close()
 
@@ -179,7 +179,7 @@ func TestHandleModerations(t *testing.T) {
 			t.Errorf("expected /v1/moderations, got %s", r.URL.Path)
 		}
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]interface{}{
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
 			"id":    "modr-abc123",
 			"model": "text-moderation-latest",
 			"results": []interface{}{
@@ -222,7 +222,7 @@ func TestHandleRerank(t *testing.T) {
 			t.Errorf("expected /v1/rerank, got %s", r.URL.Path)
 		}
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]interface{}{
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
 			"id": "rerank-abc123",
 			"results": []interface{}{
 				map[string]interface{}{"index": 1, "relevance_score": 0.95},
@@ -261,7 +261,7 @@ func TestHandleA2A(t *testing.T) {
 			t.Errorf("expected /v1/a2a, got %s", r.URL.Path)
 		}
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]interface{}{
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
 			"agent_id": "agent-123",
 			"status":   "completed",
 			"result":   "Agent-to-agent communication successful",
@@ -437,7 +437,7 @@ func TestHandleExtensions_PathTraversal(t *testing.T) {
 func TestHandleExtensions_RateLimitExceeded(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]interface{}{"ok": true})
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"ok": true})
 	}))
 	defer upstream.Close()
 

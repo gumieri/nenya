@@ -395,7 +395,7 @@ func TestCheckOllamaProviderHealth_RetryOnce(t *testing.T) {
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]interface{}{"models": []interface{}{}})
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"models": []interface{}{}})
 	}))
 	defer server.Close()
 
@@ -459,7 +459,7 @@ func TestCheckOllamaProviderHealth_ContextDeadline(t *testing.T) {
 		attempts.Add(1)
 		time.Sleep(500 * time.Millisecond)
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]interface{}{"models": []interface{}{}})
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"models": []interface{}{}})
 	}))
 	defer server.Close()
 

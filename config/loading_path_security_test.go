@@ -7,10 +7,10 @@ import (
 
 func TestValidatePromptPath_Security(t *testing.T) {
 	origDir := os.Getenv("CONFIG_DIR")
-	defer os.Setenv("CONFIG_DIR", origDir)
+	defer func() { _ = os.Setenv("CONFIG_DIR", origDir) }()
 
 	configDir := t.TempDir()
-	os.Setenv("CONFIG_DIR", configDir)
+	_ = os.Setenv("CONFIG_DIR", configDir)
 
 	promptFile, err := os.CreateTemp(configDir, "prompt-*.txt")
 	if err != nil {

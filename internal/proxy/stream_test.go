@@ -311,7 +311,7 @@ func TestStallReader_StallsAfterTimeout(t *testing.T) {
 	defer func() {
 		sr.Stop()
 		_, _ = sr.DrainPending(time.Second)
-		src.Close()
+		_ = src.Close()
 	}()
 
 	time.Sleep(50 * time.Millisecond)
@@ -409,7 +409,7 @@ func TestStallReader_StopPreventsStall(t *testing.T) {
 	defer func() {
 		sr.Stop()
 		_, _ = sr.DrainPending(time.Second)
-		src.Close()
+		_ = src.Close()
 	}()
 	sr.Stop()
 
@@ -464,7 +464,7 @@ func TestStallReader_ConcurrentReadAndStall(t *testing.T) {
 	defer func() {
 		sr.Stop()
 		_, _ = sr.DrainPending(time.Second)
-		src.Close()
+		_ = src.Close()
 	}()
 
 	doneCh := make(chan error, 1)
@@ -494,7 +494,7 @@ func TestStallReader_DiscardsDataOnStallRace(t *testing.T) {
 	defer func() {
 		sr.Stop()
 		_, _ = sr.DrainPending(time.Second)
-		src.Close()
+		_ = src.Close()
 	}()
 
 	time.Sleep(50 * time.Millisecond)

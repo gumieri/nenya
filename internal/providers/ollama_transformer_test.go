@@ -24,7 +24,7 @@ func TestOllamaTransformer_TransformToolCall(t *testing.T) {
 	if !ok || id == "" {
 		t.Error("expected non-empty id")
 	}
-	if obj, ok := result["object"].(string); !ok || obj != "chat.completion.chunk" {
+	if obj, objOK := result["object"].(string); !objOK || obj != "chat.completion.chunk" {
 		t.Errorf("expected object 'chat.completion.chunk', got %q", obj)
 	}
 
@@ -102,8 +102,8 @@ func TestOllamaTransformer_IncrementsIndex(t *testing.T) {
 	second, _ := transformer.TransformSSEChunk(context.Background(), []byte(`{"name": "tool_two", "arguments": {}}`))
 
 	var f, s map[string]any
-	json.Unmarshal(first, &f)
-	json.Unmarshal(second, &s)
+	_ = json.Unmarshal(first, &f)
+	_ = json.Unmarshal(second, &s)
 
 	idxFirst := f["choices"].([]any)[0].(map[string]any)["delta"].(map[string]any)["tool_calls"].([]any)[0].(map[string]any)["index"].(float64)
 	idxSecond := s["choices"].([]any)[0].(map[string]any)["delta"].(map[string]any)["tool_calls"].([]any)[0].(map[string]any)["index"].(float64)
@@ -135,7 +135,7 @@ func TestOllamaTransformer_EmptyArgumentsMap(t *testing.T) {
 	}
 
 	var result map[string]any
-	json.Unmarshal(got, &result)
+	_ = json.Unmarshal(got, &result)
 
 	args := result["choices"].([]any)[0].(map[string]any)
 	delta := args["delta"].(map[string]any)

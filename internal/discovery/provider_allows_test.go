@@ -71,7 +71,7 @@ func TestBuildProviderAllows(t *testing.T) {
 
 func TestIsModelAllowed(t *testing.T) {
 	providerAllows := map[string][]*regexp.Regexp{
-		"openai":    {regexp.MustCompile("gpt-\\d+"), regexp.MustCompile("gpt-4")},
+		"openai":    {regexp.MustCompile(`gpt-\d+`), regexp.MustCompile("gpt-4")},
 		"anthropic": {regexp.MustCompile("claude-.*")},
 	}
 

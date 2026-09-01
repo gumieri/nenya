@@ -192,8 +192,8 @@ func TestOllamaAdapter_MutateRequest(t *testing.T) {
 			wantErr: false,
 			check: func(t *testing.T, got []byte, original []byte) {
 				var gotMap, origMap map[string]any
-				json.Unmarshal(got, &gotMap)
-				json.Unmarshal(original, &origMap)
+				_ = json.Unmarshal(got, &gotMap)
+				_ = json.Unmarshal(original, &origMap)
 				if !mapsEqualJSON(gotMap, origMap) {
 					t.Errorf("body should be unchanged when tool_choice absent")
 				}

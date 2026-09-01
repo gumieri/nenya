@@ -276,7 +276,7 @@ func TestDoWithRetry_NoRetry(t *testing.T) {
 	}
 }
 
-func TestDoWithRetry_CancelledContext(t *testing.T) {
+func TestDoWithRetry_CanceledContext(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
@@ -289,7 +289,7 @@ func TestDoWithRetry_CancelledContext(t *testing.T) {
 		t.Fatal("expected error")
 	}
 	if attempts != 1 {
-		t.Errorf("expected 1 attempt (cancelled), got %d", attempts)
+		t.Errorf("expected 1 attempt (canceled), got %d", attempts)
 	}
 }
 

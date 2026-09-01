@@ -132,7 +132,7 @@ func BenchmarkSSETransformingReader_Read_Pooled(b *testing.B) {
 		buf := make([]byte, 1024)
 		for {
 			_, err := reader.Read(buf)
-			if err == io.EOF || err == nil {
+			if err == io.EOF {
 				break
 			}
 			if err != nil {

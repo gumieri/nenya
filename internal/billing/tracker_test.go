@@ -255,13 +255,14 @@ func TestResetSpend_ConcurrentSafety(t *testing.T) {
 	for i := 0; i < numGoroutines; i++ {
 		go func(id int) {
 			defer func() { done <- true }()
-			if id%3 == 0 {
+			switch id % 3 {
+			case 0:
 				bt.RecordSpend(ctx, SpendEntry{
 					ProviderName: "openai",
 					AccountName:  "account1",
 					CostUSD:      0.01,
 				})
-			} else if id%3 == 1 {
+			case 1:
 				bt.ResetSpend(ctx, "openai", "account1")
 			}
 		}(i)

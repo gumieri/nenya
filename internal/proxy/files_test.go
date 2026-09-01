@@ -16,7 +16,7 @@ import (
 func TestFilesRouteRegistration(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]interface{}{"object": "list"})
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"object": "list"})
 	}))
 	defer upstream.Close()
 
@@ -64,7 +64,7 @@ func TestHandleFiles_POST_JSON(t *testing.T) {
 			t.Errorf("expected Content-Type application/json, got %s", ct)
 		}
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]interface{}{"id": "file-abc123", "object": "file", "bytes": 1200})
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"id": "file-abc123", "object": "file", "bytes": 1200})
 	}))
 	defer upstream.Close()
 
@@ -105,7 +105,7 @@ func TestHandleFiles_POST_Multipart(t *testing.T) {
 			t.Errorf("expected multipart/form-data, got %s", ct)
 		}
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]interface{}{"id": "file-multipart-xyz", "object": "file", "bytes": 500})
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"id": "file-multipart-xyz", "object": "file", "bytes": 500})
 	}))
 	defer upstream.Close()
 
@@ -182,7 +182,7 @@ func TestHandleFiles_GET_List(t *testing.T) {
 			t.Errorf("expected /v1/files, got %s", r.URL.Path)
 		}
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]interface{}{
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
 			"data": []interface{}{
 				map[string]interface{}{"id": "file-abc", "object": "file", "bytes": 100},
 				map[string]interface{}{"id": "file-def", "object": "file", "bytes": 200},
@@ -222,7 +222,7 @@ func TestHandleFiles_GET_ByID(t *testing.T) {
 			t.Errorf("expected /v1/files/file-abc123, got %s", r.URL.Path)
 		}
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]interface{}{"id": "file-abc123", "object": "file", "bytes": 500})
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"id": "file-abc123", "object": "file", "bytes": 500})
 	}))
 	defer upstream.Close()
 
@@ -275,7 +275,7 @@ func TestHandleFiles_GET_Content(t *testing.T) {
 			t.Errorf("expected /v1/files/file-abc123/content, got %s", r.URL.Path)
 		}
 		w.Header().Set("Content-Type", "application/jsonl")
-		w.Write([]byte("{\"prompt\":\"hello\"}\n"))
+		_, _ = w.Write([]byte("{\"prompt\":\"hello\"}\n"))
 	}))
 	defer upstream.Close()
 
@@ -308,7 +308,7 @@ func TestHandleBatches_POST(t *testing.T) {
 			t.Errorf("expected /v1/batches, got %s", r.URL.Path)
 		}
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]interface{}{"id": "batch-abc", "object": "batch", "status": "validating"})
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"id": "batch-abc", "object": "batch", "status": "validating"})
 	}))
 	defer upstream.Close()
 
@@ -347,7 +347,7 @@ func TestHandleBatches_GET_List(t *testing.T) {
 			t.Errorf("expected /v1/batches, got %s", r.URL.Path)
 		}
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]interface{}{
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
 			"data": []interface{}{
 				map[string]interface{}{"id": "batch-1", "status": "completed"},
 			},
@@ -386,7 +386,7 @@ func TestHandleBatches_GET_ByID(t *testing.T) {
 			t.Errorf("expected /v1/batches/batch-xyz, got %s", r.URL.Path)
 		}
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]interface{}{"id": "batch-xyz", "status": "completed"})
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"id": "batch-xyz", "status": "completed"})
 	}))
 	defer upstream.Close()
 
@@ -413,7 +413,7 @@ func TestHandleBatches_Cancel(t *testing.T) {
 			t.Errorf("expected /v1/batches/batch-xyz/cancel, got %s", r.URL.Path)
 		}
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]interface{}{"id": "batch-xyz", "status": "cancelling"})
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"id": "batch-xyz", "status": "canceling"})
 	}))
 	defer upstream.Close()
 

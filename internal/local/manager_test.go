@@ -20,7 +20,7 @@ func TestEngineManager_Startup(t *testing.T) {
 		callCount++
 		mu.Unlock()
 		w.Header().Set("Content-Type", "application/json")
-		w.Write([]byte(`{"done": true, "response": ""}`))
+		_, _ = w.Write([]byte(`{"done": true, "response": ""}`))
 	}))
 	defer server.Close()
 
@@ -56,7 +56,7 @@ func TestEngineManager_StartupPartialFailure(t *testing.T) {
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
-		w.Write([]byte(`{"done": true, "response": ""}`))
+		_, _ = w.Write([]byte(`{"done": true, "response": ""}`))
 	}))
 	defer server.Close()
 
@@ -88,12 +88,12 @@ func TestEngineManager_EvictLRU(t *testing.T) {
 
 		if keepAlive, ok := payload["keep_alive"].(float64); ok && keepAlive == 0 {
 			w.WriteHeader(http.StatusOK)
-			w.Write([]byte(`{"done": true, "response": ""}`))
+			_, _ = w.Write([]byte(`{"done": true, "response": ""}`))
 			return
 		}
 
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(`{"done": true, "response": ""}`))
+		_, _ = w.Write([]byte(`{"done": true, "response": ""}`))
 	}))
 	defer server.Close()
 
@@ -139,13 +139,13 @@ func TestEngineManager_EvictLRUFails(t *testing.T) {
 		// For the first 2 loads, respond with success
 		if callCount <= 2 {
 			w.Header().Set("Content-Type", "application/json")
-			w.Write([]byte(`{"done": true, "response": ""}`))
+			_, _ = w.Write([]byte(`{"done": true, "response": ""}`))
 			return
 		}
 		// For the 3rd load, respond with success for the load
 		if callCount == 3 {
 			w.Header().Set("Content-Type", "application/json")
-			w.Write([]byte(`{"done": true, "response": ""}`))
+			_, _ = w.Write([]byte(`{"done": true, "response": ""}`))
 			return
 		}
 		w.WriteHeader(http.StatusInternalServerError)

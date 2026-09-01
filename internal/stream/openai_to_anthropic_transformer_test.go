@@ -139,7 +139,7 @@ func TestOpenAIToAnthropicTransformer_ContextCancellation(t *testing.T) {
 
 	_, err := tr.TransformSSEChunk(ctx, data)
 	if err == nil {
-		t.Error("expected error from cancelled context")
+		t.Error("expected error from canceled context")
 	}
 }
 
@@ -158,7 +158,7 @@ func TestOpenAIToAnthropicTransformer_Reset(t *testing.T) {
 		},
 	}
 	data, _ := json.Marshal(chunk)
-	tr.TransformSSEChunk(context.Background(), data)
+	_, _ = tr.TransformSSEChunk(context.Background(), data)
 
 	tr.Reset()
 

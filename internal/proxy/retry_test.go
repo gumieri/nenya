@@ -789,7 +789,7 @@ func TestWaitWithCancel(t *testing.T) {
 	// Negative duration should return immediately
 	waitWithCancel(ctx, -1*time.Second)
 
-	// Cancelled context should return early
+	// Canceled context should return early
 	ctx, cancel := context.WithCancel(ctx)
 	cancel()
 	waitWithCancel(ctx, time.Minute)

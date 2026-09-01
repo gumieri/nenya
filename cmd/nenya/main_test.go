@@ -349,13 +349,13 @@ func TestServeHTTP(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create listener: %v", err)
 	}
-	defer listener.Close()
+	defer func() { _ = listener.Close() }()
 
 	srv := &http.Server{}
 	serverErr := make(chan error, 1)
 	go serveHTTP(srv, listener, serverErr)
 
-	srv.Close()
+	_ = srv.Close()
 	select {
 	case err := <-serverErr:
 		if err != nil && err != http.ErrServerClosed {
@@ -376,11 +376,11 @@ func TestServeHTTP_NilListener(t *testing.T) {
 		close(done)
 	}()
 
-	srv.Close()
+	_ = srv.Close()
 	select {
 	case <-done:
 	case <-time.After(time.Second):
-		srv.Close()
+		_ = srv.Close()
 		t.Fatal("timeout waiting for serveHTTP to finish")
 	}
 }
@@ -400,7 +400,7 @@ func TestEventLoop_Shutdown(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create listener: %v", err)
 	}
-	defer listener.Close()
+	defer func() { _ = listener.Close() }()
 
 	go serveHTTP(srv, listener, serverErr)
 
@@ -539,7 +539,7 @@ func TestServeHTTP_ServerError(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create listener: %v", err)
 	}
-	listener.Close()
+	_ = listener.Close()
 
 	srv := &http.Server{}
 	serverErr := make(chan error, 1)
@@ -572,7 +572,7 @@ func TestEventLoop_ConcurrentSighup(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create listener: %v", err)
 	}
-	defer listener.Close()
+	defer func() { _ = listener.Close() }()
 
 	go serveHTTP(srv, listener, serverErr)
 

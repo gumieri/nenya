@@ -22,7 +22,7 @@ func BenchmarkStallReader_Read_Pooled(b *testing.B) {
 		buf := make([]byte, 1024)
 		for {
 			_, err := sr.Read(buf)
-			if err == io.EOF || err == nil {
+			if err == io.EOF {
 				break
 			}
 			if err != nil {

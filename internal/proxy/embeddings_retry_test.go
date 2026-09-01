@@ -18,7 +18,7 @@ func TestHandleEmbeddings_RetryOnNetworkError(t *testing.T) {
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]interface{}{
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
 			"object": "list",
 			"data":   []interface{}{map[string]interface{}{"embedding": []float64{0.1, 0.2}}},
 		})
@@ -51,7 +51,7 @@ func TestHandleEmbeddings_NoRetryOn400(t *testing.T) {
 		attempts.Add(1)
 		w.WriteHeader(http.StatusBadRequest)
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]interface{}{"error": "bad request"})
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"error": "bad request"})
 	}))
 	defer upstream.Close()
 
@@ -83,7 +83,7 @@ func TestHandleResponses_RetryOnNetworkError(t *testing.T) {
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]interface{}{"id": "resp-123"})
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"id": "resp-123"})
 	}))
 	defer upstream.Close()
 
