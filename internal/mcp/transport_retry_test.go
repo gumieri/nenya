@@ -3,7 +3,6 @@ package mcp
 import (
 	"context"
 	"errors"
-	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"sync"
@@ -11,6 +10,25 @@ import (
 	"testing"
 	"time"
 )
+
+// newHandshakeServer returns a test MCP server that immediately completes
+// the SSE handshake (sends the endpoint event) and nothing else.
+func newHandshakeServer(t *testing.T) *httptest.Server {
+	t.Helper()
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte("data: {\"endpoint\":\"/message\"}\n\n"))
+	}))
+}
+
+// retryTestConfig returns a transport config for handshake-server tests.
+func retryTestConfig(url string) TransportConfig {
+	return TransportConfig{
+		URL:            url,
+		ConnectTimeout: 5 * time.Second,
+		Logger:         newTestLogger(),
+	}
+}
 
 func TestConnect_RetryOnNetworkError(t *testing.T) {
 	var attempts atomic.Int32
@@ -25,12 +43,7 @@ func TestConnect_RetryOnNetworkError(t *testing.T) {
 	}))
 	defer server.Close()
 
-	cfg := TransportConfig{
-		URL:            server.URL,
-		ConnectTimeout: 5 * time.Second,
-		Logger:         slog.Default(),
-	}
-	transport := NewHTTPTransport(cfg)
+	transport := NewHTTPTransport(retryTestConfig(server.URL))
 	defer func() { _ = transport.Close() }()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -54,12 +67,7 @@ func TestConnect_FirstAttemptSucceeds(t *testing.T) {
 	}))
 	defer server.Close()
 
-	cfg := TransportConfig{
-		URL:            server.URL,
-		ConnectTimeout: 5 * time.Second,
-		Logger:         slog.Default(),
-	}
-	transport := NewHTTPTransport(cfg)
+	transport := NewHTTPTransport(retryTestConfig(server.URL))
 	defer func() { _ = transport.Close() }()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -75,18 +83,10 @@ func TestConnect_FirstAttemptSucceeds(t *testing.T) {
 }
 
 func TestConnect_RejectsAfterClose(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "text/event-stream")
-		_, _ = w.Write([]byte("data: {\"endpoint\":\"/message\"}\n\n"))
-	}))
+	server := newHandshakeServer(t)
 	defer server.Close()
 
-	cfg := TransportConfig{
-		URL:            server.URL,
-		ConnectTimeout: 5 * time.Second,
-		Logger:         slog.Default(),
-	}
-	transport := NewHTTPTransport(cfg)
+	transport := NewHTTPTransport(retryTestConfig(server.URL))
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -103,18 +103,10 @@ func TestConnect_RejectsAfterClose(t *testing.T) {
 }
 
 func TestConnect_RejectsSecondConnection(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "text/event-stream")
-		_, _ = w.Write([]byte("data: {\"endpoint\":\"/message\"}\n\n"))
-	}))
+	server := newHandshakeServer(t)
 	defer server.Close()
 
-	cfg := TransportConfig{
-		URL:            server.URL,
-		ConnectTimeout: 5 * time.Second,
-		Logger:         slog.Default(),
-	}
-	transport := NewHTTPTransport(cfg)
+	transport := NewHTTPTransport(retryTestConfig(server.URL))
 	defer func() { _ = transport.Close() }()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -129,18 +121,10 @@ func TestConnect_RejectsSecondConnection(t *testing.T) {
 }
 
 func TestConnect_ConcurrentSecondCallRejected(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "text/event-stream")
-		_, _ = w.Write([]byte("data: {\"endpoint\":\"/message\"}\n\n"))
-	}))
+	server := newHandshakeServer(t)
 	defer server.Close()
 
-	cfg := TransportConfig{
-		URL:            server.URL,
-		ConnectTimeout: 5 * time.Second,
-		Logger:         slog.Default(),
-	}
-	transport := NewHTTPTransport(cfg)
+	transport := NewHTTPTransport(retryTestConfig(server.URL))
 	defer func() { _ = transport.Close() }()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -204,7 +188,7 @@ func TestSendRequest_RetryOnNetworkError(t *testing.T) {
 		URL:            server.URL,
 		ConnectTimeout: 5 * time.Second,
 		RequestTimeout: 10 * time.Second,
-		Logger:         slog.Default(),
+		Logger:         newTestLogger(),
 	}
 	transport := NewHTTPTransport(cfg)
 	defer func() { _ = transport.Close() }()
@@ -233,5 +217,105 @@ func TestSendRequest_RetryOnNetworkError(t *testing.T) {
 	}
 	if postAttempts.Load() != 2 {
 		t.Errorf("expected 2 POST attempts, got %d", postAttempts.Load())
+	}
+}
+
+func TestKeepalive_RecoversAfterTransientFailure(t *testing.T) {
+	var posts atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodGet:
+			// Complete the handshake, then hold the SSE stream open for the
+			// lifetime of the test connection.
+			w.Header().Set("Content-Type", "text/event-stream")
+			_, _ = w.Write([]byte("data: {\"endpoint\":\"/message\"}\n\n"))
+			if f, ok := w.(http.Flusher); ok {
+				f.Flush()
+			}
+			<-r.Context().Done()
+		case http.MethodPost:
+			// The first 2 keepalive pings (2 retry attempts each) fail;
+			// later ones succeed so a subsequent tick restores readiness.
+			if posts.Add(1) <= 4 {
+				w.WriteHeader(http.StatusInternalServerError)
+				return
+			}
+			w.WriteHeader(http.StatusAccepted)
+		}
+	}))
+	defer server.Close()
+
+	cfg := retryTestConfig(server.URL)
+	cfg.KeepAliveInterval = 25 * time.Millisecond
+	cfg.RequestTimeout = 2 * time.Second
+	transport := NewHTTPTransport(cfg)
+	defer func() { _ = transport.Close() }()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	if err := transport.Connect(ctx); err != nil {
+		t.Fatalf("connect failed: %v", err)
+	}
+
+	// Wait for the failed pings to mark the transport unhealthy. Each
+	// failed ping spans ~1s (retry backoff), so allow ample time.
+	sawUnhealthy := false
+	deadline := time.Now().Add(8 * time.Second)
+	for time.Now().Before(deadline) {
+		if !transport.Ready() {
+			sawUnhealthy = true
+			break
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+	if !sawUnhealthy {
+		t.Fatal("transport never became unhealthy after failed keepalive ping")
+	}
+
+	// Wait for the next successful ping to restore readiness.
+	sawRecovered := false
+	for time.Now().Before(deadline) {
+		if transport.Ready() {
+			sawRecovered = true
+			break
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+	if !sawRecovered {
+		t.Fatal("transport never recovered readiness after transient ping failure")
+	}
+}
+
+func TestConnect_HandshakeStallTimesOut(t *testing.T) {
+	// Server completes the SSE headers but never sends the endpoint event:
+	// Connect must fail within ConnectTimeout instead of hanging forever.
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		if f, ok := w.(http.Flusher); ok {
+			f.Flush()
+		}
+		<-r.Context().Done() // stall until the client gives up
+	}))
+	defer server.Close()
+
+	cfg := retryTestConfig(server.URL)
+	cfg.ConnectTimeout = 150 * time.Millisecond
+	transport := NewHTTPTransport(cfg)
+	defer func() { _ = transport.Close() }()
+
+	start := time.Now()
+	err := transport.Connect(context.Background())
+	elapsed := time.Since(start)
+
+	if err == nil {
+		t.Fatal("expected connect to fail on stalled handshake, got nil")
+	}
+	if elapsed > 2*time.Second {
+		t.Fatalf("connect took %v, expected failure within ~ConnectTimeout", elapsed)
+	}
+	if transport.Ready() {
+		t.Error("transport must not be ready after failed handshake")
 	}
 }

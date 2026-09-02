@@ -480,9 +480,6 @@ func TestHTTPTransport_Defaults(t *testing.T) {
 	if cfg.IdleTimeout != 60*time.Second {
 		t.Fatalf("IdleTimeout = %v, want 60s", cfg.IdleTimeout)
 	}
-	if cfg.ReconnectBackoff != 30*time.Second {
-		t.Fatalf("ReconnectBackoff = %v, want 30s", cfg.ReconnectBackoff)
-	}
 }
 
 func TestHTTPTransport_HeadersPassed(t *testing.T) {

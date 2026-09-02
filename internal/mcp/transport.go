@@ -31,20 +31,15 @@ var (
 	// already established or a connection attempt is in flight; transports
 	// are single-use.
 	ErrTransportAlreadyConnected = errors.New("mcp transport: already connected")
-	// ErrRequestTimeout is returned when a request exceeds RequestTimeout.
-	ErrRequestTimeout = errors.New("mcp transport: request timeout")
 )
 
 // TransportConfig configures an HTTPTransport.
 type TransportConfig struct {
-	URL            string
-	Headers        map[string]string
-	ConnectTimeout time.Duration
-	RequestTimeout time.Duration
-	IdleTimeout    time.Duration
-	// ReconnectBackoff is reserved for future automatic reconnection.
-	// Currently unused: transports do not reconnect automatically.
-	ReconnectBackoff  time.Duration
+	URL               string
+	Headers           map[string]string
+	ConnectTimeout    time.Duration
+	RequestTimeout    time.Duration
+	IdleTimeout       time.Duration
 	KeepAliveInterval time.Duration
 	Logger            *slog.Logger
 }
@@ -59,17 +54,15 @@ func (c *TransportConfig) setDefaults() {
 	if c.IdleTimeout <= 0 {
 		c.IdleTimeout = 60 * time.Second
 	}
-	if c.ReconnectBackoff <= 0 {
-		c.ReconnectBackoff = 30 * time.Second
-	}
 	if c.KeepAliveInterval <= 0 {
 		c.KeepAliveInterval = 4 * time.Second
 	}
 }
 
 // HTTPTransport implements Transport over the MCP HTTP+SSE wire protocol.
-// A transport is single-use: it serves exactly one SSE stream for its
-// lifetime and is torn down by Close.
+// A transport is single-use once connected: it serves exactly one SSE stream
+// for its lifetime and is torn down by Close. A Connect attempt that fails
+// before the stream is established may be retried.
 type HTTPTransport struct {
 	cfg        TransportConfig
 	httpClient *http.Client
@@ -180,8 +173,10 @@ func (t *HTTPTransport) reserveConnectSlot() error {
 // Connect establishes the SSE stream, performs the endpoint handshake, and
 // spawns the read/dispatch/keepalive goroutines. The stream's lifetime is
 // owned by the transport (torn down by Close), not by ctx; ctx bounds only
-// the connect phase. Transports are single-use: a second call returns
-// ErrTransportAlreadyConnected (or ErrTransportClosed after Close).
+// the connect phase. A second call after a successful connect (or while one
+// is in flight, or after the stream died) returns ErrTransportAlreadyConnected;
+// after Close it returns ErrTransportClosed. A failed connect attempt (no
+// stream established) may be retried.
 func (t *HTTPTransport) Connect(ctx context.Context) error {
 	// Reserve the connect slot atomically: concurrent Connect calls must not
 	// both reach the stream spawn (double doneCh close = process crash).
@@ -423,7 +418,7 @@ func readSSEInitialEndpoint(ctx context.Context, reader *bufio.Reader, baseURL *
 	}
 }
 
-func (t *HTTPTransport) sendHTTPPost(ctx context.Context, client *http.Client, endpoint string, reqBytes []byte) (*http.Response, error) {
+func (t *HTTPTransport) sendHTTPPost(ctx context.Context, endpoint string, reqBytes []byte) (*http.Response, error) {
 	return util.DoWithRetryResp(ctx, 2, func() (*http.Response, error) {
 		httpReq, reqErr := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(reqBytes))
 		if reqErr != nil {
@@ -432,7 +427,7 @@ func (t *HTTPTransport) sendHTTPPost(ctx context.Context, client *http.Client, e
 		t.setHeaders(httpReq)
 		httpReq.Header.Set("Content-Type", "application/json")
 
-		resp, doErr := client.Do(httpReq)
+		resp, doErr := t.httpClient.Do(httpReq)
 		if doErr != nil {
 			if resp != nil {
 				_ = resp.Body.Close()
@@ -493,7 +488,7 @@ func (t *HTTPTransport) SendRequest(ctx context.Context, method string, params a
 	postCtx, cancel := context.WithTimeout(ctx, t.cfg.RequestTimeout)
 	defer cancel()
 
-	httpResp, err := t.sendHTTPPost(postCtx, t.httpClient, endpoint, reqBytes)
+	httpResp, err := t.sendHTTPPost(postCtx, endpoint, reqBytes)
 	if err != nil {
 		if ctx.Err() != nil {
 			return nil, ctx.Err()
@@ -545,7 +540,8 @@ func (t *HTTPTransport) waitForJSONRPCResponse(ctx context.Context, ch chan *Res
 }
 
 // SendNotification posts a fire-and-forget JSON-RPC notification to the
-// session endpoint, bounded by RequestTimeout. ctx must be non-nil.
+// session endpoint, bounded by RequestTimeout. Requires a live stream.
+// ctx must be non-nil.
 func (t *HTTPTransport) SendNotification(ctx context.Context, method string, params any) error {
 	if t.closed.Load() {
 		return ErrTransportClosed
@@ -553,7 +549,13 @@ func (t *HTTPTransport) SendNotification(ctx context.Context, method string, par
 	if !t.ready.Load() {
 		return ErrTransportNotReady
 	}
+	return t.postNotification(ctx, method, params)
+}
 
+// postNotification sends a notification POST without the readiness gate so
+// the keepalive loop can probe (and recover) an unhealthy transport. Fails
+// on any 4xx/5xx response — a rejected POST means the session is broken.
+func (t *HTTPTransport) postNotification(ctx context.Context, method string, params any) error {
 	notif := Notification{
 		JSONRPC: JSONRPCVersion2,
 		Method:  method,
@@ -578,20 +580,16 @@ func (t *HTTPTransport) SendNotification(ctx context.Context, method string, par
 	reqCtx, cancel := context.WithTimeout(ctx, t.cfg.RequestTimeout)
 	defer cancel()
 
-	httpReq, err := http.NewRequestWithContext(reqCtx, http.MethodPost, endpoint, bytes.NewReader(reqBytes))
-	if err != nil {
-		return fmt.Errorf("creating notification request: %w", err)
-	}
-	t.setHeaders(httpReq)
-	httpReq.Header.Set("Content-Type", "application/json")
-
-	resp, err := t.httpClient.Do(httpReq)
+	resp, err := t.sendHTTPPost(reqCtx, endpoint, reqBytes)
 	if err != nil {
 		return fmt.Errorf("sending notification: %w", err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 	_, _ = io.ReadAll(io.LimitReader(resp.Body, 4096))
 
+	if resp.StatusCode >= 400 {
+		return fmt.Errorf("notification rejected with status %d", resp.StatusCode)
+	}
 	return nil
 }
 
@@ -677,12 +675,16 @@ func (t *HTTPTransport) keepaliveLoop() {
 		select {
 		case <-t.closeCh:
 			return
+		case <-t.doneCh:
+			// Stream died (not via Close): stop pinging a dead session.
+			return
 		case <-ticker.C:
-			// Ping regardless of readiness: after a transient blip the next
-			// successful ping restores readiness, so one failed POST cannot
-			// brick the client for its lifetime.
+			// Ping regardless of readiness, bypassing the ready gate via
+			// postNotification: after a transient blip the next successful
+			// ping restores readiness, so one failed POST cannot brick the
+			// client for its lifetime.
 			pingCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-			if err := t.SendNotification(pingCtx, "ping", nil); err != nil {
+			if err := t.postNotification(pingCtx, "ping", nil); err != nil {
 				cancel()
 				if !t.closed.Load() {
 					t.cfg.Logger.Warn("MCP keepalive ping failed", "err", err)
@@ -777,6 +779,9 @@ func (t *HTTPTransport) eventDispatchLoop() {
 	for {
 		select {
 		case <-t.closeCh:
+			return
+		case <-t.doneCh:
+			// Stream died (not via Close): stop dispatching events.
 			return
 		case event := <-t.eventCh:
 			if event.Data == "" {
