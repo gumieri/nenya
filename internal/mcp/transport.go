@@ -127,6 +127,7 @@ func NewHTTPTransport(cfg TransportConfig) *HTTPTransport {
 				KeepAlive: 30 * time.Second,
 			}).DialContext,
 			ResponseHeaderTimeout: cfg.RequestTimeout,
+			TLSHandshakeTimeout:   10 * time.Second,
 			IdleConnTimeout:       cfg.IdleTimeout,
 			MaxIdleConns:          2,
 			MaxIdleConnsPerHost:   2,
@@ -168,7 +169,8 @@ func (t *HTTPTransport) connectTransport() http.RoundTripper {
 	}
 	clone := tr.Clone()
 	clone.ResponseHeaderTimeout = t.cfg.ConnectTimeout
-	if clone.TLSHandshakeTimeout > t.cfg.ConnectTimeout {
+	// Zero means "no timeout": treat it as unbounded and clamp it too.
+	if clone.TLSHandshakeTimeout == 0 || clone.TLSHandshakeTimeout > t.cfg.ConnectTimeout {
 		clone.TLSHandshakeTimeout = t.cfg.ConnectTimeout
 	}
 	if clone.DialContext != nil {
@@ -630,6 +632,12 @@ func (t *HTTPTransport) awaitResponse(ctx context.Context, httpResp *http.Respon
 func (t *HTTPTransport) waitForJSONRPCResponse(ctx context.Context, ch chan *Response) (*Response, error) {
 	select {
 	case result := <-ch:
+		if result.Error != nil {
+			// Asynchronously delivered JSON-RPC errors (over SSE or the
+			// failPending drain) must surface as errors, matching the POST
+			// fast-path — callers like Initialize/Ping check err only.
+			return result, result.Error
+		}
 		return result, nil
 	case <-ctx.Done():
 		return nil, ctx.Err()

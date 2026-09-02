@@ -518,3 +518,43 @@ func TestConnect_RejectsUserinfoEndpoint(t *testing.T) {
 		t.Errorf("session endpoint = %q, want empty after rejection", transport.SessionEndpoint())
 	}
 }
+
+func TestConnectTransport_ClampsZeroTLSHandshakeTimeout(t *testing.T) {
+	cfg := retryTestConfig("http://127.0.0.1:1/sse")
+	cfg.ConnectTimeout = 3 * time.Second
+	transport := NewHTTPTransport(cfg)
+
+	// Simulate a base transport with no TLS timeout configured: the clone
+	// must still clamp it to ConnectTimeout (zero means "no timeout").
+	transport.httpClient.Transport = &http.Transport{}
+
+	ct, ok := transport.connectTransport().(*http.Transport)
+	if !ok {
+		t.Fatal("connectTransport did not return *http.Transport")
+	}
+	if ct.TLSHandshakeTimeout != 3*time.Second {
+		t.Errorf("TLSHandshakeTimeout = %v, want 3s", ct.TLSHandshakeTimeout)
+	}
+	if ct.ResponseHeaderTimeout != 3*time.Second {
+		t.Errorf("ResponseHeaderTimeout = %v, want 3s", ct.ResponseHeaderTimeout)
+	}
+}
+
+func TestWaitForJSONRPCResponse_SurfacesAsyncError(t *testing.T) {
+	transport := NewHTTPTransport(retryTestConfig("http://127.0.0.1:1/sse"))
+
+	ch := make(chan *Response, 1)
+	ch <- &Response{
+		JSONRPC: JSONRPCVersion2,
+		ID:      1,
+		Error:   &Error{Code: -32601, Message: "method not found"},
+	}
+
+	resp, err := transport.waitForJSONRPCResponse(context.Background(), ch)
+	if err == nil {
+		t.Fatal("expected error for asynchronously delivered JSON-RPC error, got nil")
+	}
+	if resp == nil || resp.Error == nil {
+		t.Fatalf("expected error response returned alongside err, got %+v", resp)
+	}
+}
