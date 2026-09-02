@@ -29,5 +29,6 @@ func BenchmarkStallReader_Read_Pooled(b *testing.B) {
 				b.Fatalf("read failed: %v", err)
 			}
 		}
+		sr.Stop()
 	}
 }

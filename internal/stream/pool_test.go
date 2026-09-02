@@ -123,10 +123,9 @@ func (passthroughTransformer) TransformSSEChunk(_ context.Context, data []byte) 
 // Measures allocation reduction when streaming SSE events.
 func BenchmarkSSETransformingReader_Read_Pooled(b *testing.B) {
 	events := "data: " + strings.Repeat("x", 256) + "\n\n"
-	src := strings.NewReader(events)
-
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
+		src := strings.NewReader(events)
 		reader := NewSSETransformingReader(src, passthroughTransformer{}, context.Background())
 
 		buf := make([]byte, 1024)

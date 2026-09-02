@@ -413,7 +413,7 @@ func TestHandleBatches_Cancel(t *testing.T) {
 			t.Errorf("expected /v1/batches/batch-xyz/cancel, got %s", r.URL.Path)
 		}
 		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(map[string]interface{}{"id": "batch-xyz", "status": "canceling"})
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"id": "batch-xyz", "status": "cancelling"}) //nolint:misspell // OpenAI Batch API wire status uses the British spelling
 	}))
 	defer upstream.Close()
 

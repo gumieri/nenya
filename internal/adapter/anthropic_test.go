@@ -2460,7 +2460,7 @@ func TestAnthropicAdapter_AutomaticCachingMode(t *testing.T) {
 			t.Fatal("expected system array in explicit mode")
 		}
 		sysBlock := sys[0].(map[string]interface{})
-		if _, sysCC := sysBlock["cache_control"]; !sysCC {
+		if _, hasSysCC := sysBlock["cache_control"]; !hasSysCC {
 			t.Error("expected system block-level cache_control in explicit mode")
 		}
 
@@ -2469,7 +2469,7 @@ func TestAnthropicAdapter_AutomaticCachingMode(t *testing.T) {
 			t.Fatal("expected tools array in explicit mode")
 		}
 		lastTool := tools[len(tools)-1].(map[string]interface{})
-		if _, toolCC := lastTool["cache_control"]; !toolCC {
+		if _, hasToolCC := lastTool["cache_control"]; !hasToolCC {
 			t.Error("expected tools block-level cache_control in explicit mode")
 		}
 

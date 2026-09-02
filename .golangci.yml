@@ -34,7 +34,9 @@ linters:
       - third_party$
     rules:
       # Test files keep relaxed size/complexity limits but remain subject to
-      # correctness linters (dead code, staticcheck, vet, errcheck, gofmt).
+      # correctness linters (dead code, staticcheck, vet, errcheck) and the
+      # gofmt/goimports formatters. Note: httptest.Server.Close stays exempt
+      # via golangci's built-in errcheck default exclusions — deliberate.
       - path: ".*_test\\.go"
         linters:
           - funlen
