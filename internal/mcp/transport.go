@@ -45,6 +45,9 @@ type TransportConfig struct {
 }
 
 func (c *TransportConfig) setDefaults() {
+	if c.Logger == nil {
+		c.Logger = slog.New(slog.NewTextHandler(io.Discard, nil))
+	}
 	if c.ConnectTimeout <= 0 {
 		c.ConnectTimeout = 10 * time.Second
 	}
@@ -327,8 +330,9 @@ func (t *HTTPTransport) completeConnect() error {
 		return ErrTransportClosed
 	}
 	if t.closed.Load() {
-		// Re-check immediately before storing: Close may have completed
-		// between the locked snapshot and here.
+		// Best-effort window shrink, not a guarantee: Close may still
+		// interleave before the store below. Ready() masks with !closed,
+		// so the flag cannot observably lie.
 		return ErrTransportClosed
 	}
 	t.ready.Store(true)
@@ -402,7 +406,11 @@ func readSSEInitialEndpoint(ctx context.Context, reader *bufio.Reader, baseURL *
 			Endpoint string `json:"endpoint"`
 		}
 		if jsonErr := json.Unmarshal([]byte(data), &parsed); jsonErr != nil {
-			logger.Debug("non-JSON SSE data, treating as endpoint", "data", data)
+			// Lenient fallback for non-compliant servers that send the raw
+			// endpoint URL instead of the spec's JSON object. Logged at Warn
+			// because it yields an unverifiable endpoint; compliant servers
+			// never hit this path.
+			logger.Warn("non-JSON SSE endpoint event, treating raw data as endpoint", "data", data)
 			parsed.Endpoint = data
 		}
 
@@ -588,7 +596,8 @@ func (t *HTTPTransport) postNotification(ctx context.Context, method string, par
 	}
 
 	// Notifications are decoupled from any HTTP request; bounded by
-	// RequestTimeout. ctx must be non-nil (§5: contexts are never repaired).
+	// RequestTimeout. ctx must be non-nil; a nil ctx is a caller bug and is
+	// not repaired here.
 	reqCtx, cancel := context.WithTimeout(ctx, t.cfg.RequestTimeout)
 	defer cancel()
 
@@ -612,6 +621,21 @@ func (t *HTTPTransport) Ready() bool {
 	return t.ready.Load() && !t.closed.Load()
 }
 
+// failPending fails all in-flight requests with the given error message and
+// empties the pending map. Caller-safe from both Close and sseReadLoop
+// cleanup: pending channels are buffered(1) so sends never block.
+func (t *HTTPTransport) failPending(message string) {
+	t.pendingMu.Lock()
+	defer t.pendingMu.Unlock()
+	for id, ch := range t.pending {
+		ch <- &Response{
+			JSONRPC: JSONRPCVersion2,
+			Error:   &Error{Code: ErrCodeInternal, Message: message},
+		}
+		delete(t.pending, id)
+	}
+}
+
 // Close tears down the transport exactly once: cancels the SSE stream and
 // its lifetime context, fails all pending requests, and waits up to 5s for
 // the read loop to exit. Idempotent; always returns nil.
@@ -632,15 +656,7 @@ func (t *HTTPTransport) Close() error {
 		t.streamCancel()
 		close(t.closeCh)
 
-		t.pendingMu.Lock()
-		for id, ch := range t.pending {
-			ch <- &Response{
-				JSONRPC: JSONRPCVersion2,
-				Error:   &Error{Code: ErrCodeInternal, Message: "transport closed"},
-			}
-			delete(t.pending, id)
-		}
-		t.pendingMu.Unlock()
+		t.failPending("transport closed")
 
 		// The done channel is only closed by the SSE read loop; skip the
 		// grace wait when that loop never started (Connect failed or was
@@ -739,6 +755,10 @@ func readMultiLineEvent(reader *bufio.Reader) string {
 func (t *HTTPTransport) sseReadLoop(reader *bufio.Reader) {
 	defer close(t.doneCh)
 	defer func() {
+		// The stream died without Close: fail in-flight requests now so
+		// they get a transport-level error instead of waiting out their
+		// full RequestTimeout.
+		t.failPending("SSE stream lost")
 		t.mu.Lock()
 		body := t.sseBody
 		t.sseBody = nil
@@ -815,11 +835,15 @@ func (t *HTTPTransport) eventDispatchLoop() {
 				t.mu.Lock()
 				t.sessionEndpoint = endpointURL
 				t.mu.Unlock()
-				// Only mark ready if the stream is still live.
+				// Only mark ready if the stream is still live and the
+				// transport is not closed (select may pick a ready event
+				// case even when closeCh is also ready).
 				select {
 				case <-t.doneCh:
 				default:
-					t.ready.Store(true)
+					if !t.closed.Load() {
+						t.ready.Store(true)
+					}
 				}
 				continue
 			}

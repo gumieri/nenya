@@ -94,11 +94,15 @@ func (c *Client) Initialize(ctx context.Context) error {
 
 	resultBytes, err := json.Marshal(resp.Result)
 	if err != nil {
+		// A half-initialized client can never recover (single-use transport):
+		// tear the stream down instead of leaking it.
+		_ = c.transport.Close()
 		return fmt.Errorf("marshaling initialize result: %w", err)
 	}
 
 	var initResult InitializeResult
 	if err := json.Unmarshal(resultBytes, &initResult); err != nil {
+		_ = c.transport.Close()
 		return fmt.Errorf("parsing initialize result: %w", err)
 	}
 
