@@ -26,7 +26,7 @@ var (
 	// ErrTransportClosed is returned when the transport has been closed.
 	ErrTransportClosed = errors.New("mcp transport: closed")
 	// ErrTransportNotReady is returned when no live SSE stream is available.
-	ErrTransportNotReady = errors.New("mcp transport: not connected")
+	ErrTransportNotReady = errors.New("mcp transport: not ready")
 	// ErrTransportAlreadyConnected is returned by Connect when a stream was
 	// already established or a connection attempt is in flight; transports
 	// are single-use.
@@ -309,14 +309,26 @@ func (t *HTTPTransport) Connect(ctx context.Context) error {
 		t.trackGoroutineEnd()
 	}()
 
+	return t.completeConnect()
+}
+
+// completeConnect finalizes a successful connect: releases the connect slot,
+// marks the transport ready, and reports failure instead of success when
+// Close has won the race.
+func (t *HTTPTransport) completeConnect() error {
 	t.mu.Lock()
 	t.connecting = false
 	closedNow := t.closed.Load()
 	t.mu.Unlock()
 	if closedNow {
-		// Close won the race between our closed check and completion; its
-		// streamCancel/re-snapshot already tears the stream down. Report
-		// failure, not success, on a closed transport.
+		// Close won the race between our closed check and completion; Close
+		// is guaranteed to tear the stream down via streamCancel and its
+		// re-snapshot. Report failure, not success, on a closed transport.
+		return ErrTransportClosed
+	}
+	if t.closed.Load() {
+		// Re-check immediately before storing: Close may have completed
+		// between the locked snapshot and here.
 		return ErrTransportClosed
 	}
 	t.ready.Store(true)
@@ -693,8 +705,15 @@ func (t *HTTPTransport) keepaliveLoop() {
 				continue
 			}
 			cancel()
-			if !t.closed.Load() {
-				t.ready.Store(true)
+			// Restore readiness only if the stream is still live: a ping
+			// completing exactly as the stream dies must not resurrect the
+			// flag on a transport that can never serve again.
+			select {
+			case <-t.doneCh:
+			default:
+				if !t.closed.Load() {
+					t.ready.Store(true)
+				}
 			}
 		}
 	}
@@ -796,7 +815,12 @@ func (t *HTTPTransport) eventDispatchLoop() {
 				t.mu.Lock()
 				t.sessionEndpoint = endpointURL
 				t.mu.Unlock()
-				t.ready.Store(true)
+				// Only mark ready if the stream is still live.
+				select {
+				case <-t.doneCh:
+				default:
+					t.ready.Store(true)
+				}
 				continue
 			}
 

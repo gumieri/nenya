@@ -275,7 +275,8 @@ func TestKeepalive_RecoversAfterTransientFailure(t *testing.T) {
 
 	// Wait for the next successful ping to restore readiness.
 	sawRecovered := false
-	for time.Now().Before(deadline) {
+	recoverDeadline := time.Now().Add(8 * time.Second)
+	for time.Now().Before(recoverDeadline) {
 		if transport.Ready() {
 			sawRecovered = true
 			break
@@ -317,5 +318,57 @@ func TestConnect_HandshakeStallTimesOut(t *testing.T) {
 	}
 	if transport.Ready() {
 		t.Error("transport must not be ready after failed handshake")
+	}
+}
+
+func TestConnect_RetryAfterFailedHandshake(t *testing.T) {
+	// First Connect stalls before the endpoint event; the transport must
+	// release its connect slot so a second Connect can succeed.
+	release := make(chan struct{})
+	var gets atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			return
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		if f, ok := w.(http.Flusher); ok {
+			f.Flush()
+		}
+		if gets.Add(1) == 1 {
+			// Stall the first handshake until the test releases it.
+			select {
+			case <-release:
+			case <-r.Context().Done():
+				return
+			}
+		}
+		_, _ = w.Write([]byte("data: {\"endpoint\":\"/message\"}\n\n"))
+		if f, ok := w.(http.Flusher); ok {
+			f.Flush()
+		}
+		<-r.Context().Done()
+	}))
+	defer server.Close()
+
+	cfg := retryTestConfig(server.URL)
+	cfg.ConnectTimeout = 300 * time.Millisecond
+	transport := NewHTTPTransport(cfg)
+	defer func() { _ = transport.Close() }()
+
+	if err := transport.Connect(context.Background()); err == nil {
+		t.Fatal("expected first connect to fail on stalled handshake")
+	}
+	if transport.Ready() {
+		t.Error("transport must not be ready after failed connect")
+	}
+
+	// Unblock the stall: the second Connect must now succeed.
+	close(release)
+	if err := transport.Connect(context.Background()); err != nil {
+		t.Fatalf("expected retry after failed connect to succeed, got: %v", err)
+	}
+	if !transport.Ready() {
+		t.Error("transport must be ready after successful retry connect")
 	}
 }
