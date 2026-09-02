@@ -172,7 +172,7 @@ func (ms *mockMCPServer) writeRPCError(w http.ResponseWriter, id any, code int, 
 	}
 	w.Header().Set("Content-Type", "application/json")
 	if err := json.NewEncoder(w).Encode(resp); err != nil {
-		ms.t.Fatalf("failed to encode response: %v", err)
+		ms.t.Errorf("failed to encode response: %v", err)
 	}
 }
 

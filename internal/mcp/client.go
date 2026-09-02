@@ -106,7 +106,9 @@ func (c *Client) Initialize(ctx context.Context) error {
 		return fmt.Errorf("parsing initialize result: %w", err)
 	}
 
+	c.mu.Lock()
 	c.serverInfo = initResult.ServerInfo
+	c.mu.Unlock()
 	c.logger.Info("MCP client initialized",
 		"server", initResult.ServerInfo.Name,
 		"version", initResult.ServerInfo.Version,
@@ -207,10 +209,14 @@ func (c *Client) Ping(ctx context.Context) error {
 }
 
 func (c *Client) ServerInfo() ImplementationInfo {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
 	return c.serverInfo
 }
 
 func (c *Client) ServerName() string {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
 	return c.serverInfo.Name
 }
 
@@ -223,7 +229,9 @@ func (c *Client) Close() error {
 	return c.transport.Close()
 }
 
-// SetGatewayMetrics sets the metrics instance for tracking MCP transport goroutines.
+// SetGatewayMetrics sets the metrics instance for tracking MCP transport
+// goroutines. Must be called before Connect/Initialize: afterwards the
+// transport's goroutines read the field concurrently.
 func (c *Client) SetGatewayMetrics(metrics *infra.Metrics) {
 	c.transport.SetGatewayMetrics(metrics)
 }

@@ -62,7 +62,8 @@ func (c *TransportConfig) setDefaults() {
 	}
 }
 
-// HTTPTransport implements Transport over the MCP HTTP+SSE wire protocol.
+// HTTPTransport is the HTTP+SSE implementation of the MCP client transport
+// wire protocol.
 // A transport is single-use once connected: it serves exactly one SSE stream
 // for its lifetime and is torn down by Close. A Connect attempt that fails
 // before the stream is established may be retried.
@@ -156,6 +157,31 @@ func (t *HTTPTransport) trackGoroutineEnd() {
 
 // reserveConnectSlot atomically reserves the single Connect slot, rejecting
 // closed, already-connected, or concurrently-connecting transports.
+// connectTransport returns a transport for the connect phase only: the
+// shared transport cloned with dial/TLS/header timeouts tightened to
+// ConnectTimeout. ResponseHeaderTimeout bounds stalled servers without
+// affecting the established stream's body lifetime.
+func (t *HTTPTransport) connectTransport() http.RoundTripper {
+	tr, ok := t.httpClient.Transport.(*http.Transport)
+	if !ok {
+		return t.httpClient.Transport
+	}
+	clone := tr.Clone()
+	clone.ResponseHeaderTimeout = t.cfg.ConnectTimeout
+	if clone.TLSHandshakeTimeout > t.cfg.ConnectTimeout {
+		clone.TLSHandshakeTimeout = t.cfg.ConnectTimeout
+	}
+	if clone.DialContext != nil {
+		baseDial := clone.DialContext
+		clone.DialContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
+			dialCtx, cancel := context.WithTimeout(ctx, t.cfg.ConnectTimeout)
+			defer cancel()
+			return baseDial(dialCtx, network, addr)
+		}
+	}
+	return clone
+}
+
 func (t *HTTPTransport) reserveConnectSlot() error {
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -199,25 +225,35 @@ func (t *HTTPTransport) Connect(ctx context.Context) error {
 		return fmt.Errorf("invalid MCP server URL: %w", err)
 	}
 
-	sseURL := baseURL.String()
-	if !strings.HasSuffix(sseURL, "/sse") && !strings.HasSuffix(sseURL, "/") {
-		sseURL += "/sse"
-	} else if strings.HasSuffix(sseURL, "/") {
-		sseURL += "sse"
+	// Build the SSE URL via path joining: string suffix checks would mangle
+	// URLs carrying query strings or fragments.
+	sseURL := *baseURL
+	switch {
+	case strings.HasSuffix(sseURL.Path, "/sse"):
+		// Already an SSE endpoint; leave path (and query) untouched.
+	case strings.HasSuffix(sseURL.Path, "/"):
+		sseURL.Path += "sse"
+	default:
+		if sseURL.Path == "" {
+			sseURL.Path = "/sse"
+		} else {
+			sseURL.Path += "/sse"
+		}
 	}
+	sseURLStr := sseURL.String()
 
 	t.mu.Lock()
 	t.baseHost = baseURL.Host
 	t.mu.Unlock()
 
-	t.cfg.Logger.Debug("connecting to MCP SSE endpoint", "url", sseURL)
+	t.cfg.Logger.Debug("connecting to MCP SSE endpoint", "url", sseURLStr)
 
 	// The SSE stream lifetime is owned by the transport (streamCtx, canceled
 	// only by Close) so a short-lived caller context (e.g. Initialize's)
 	// cannot kill the stream after Connect returns. The per-request client
 	// timeout is likewise bypassed — it would kill the stream mid-session.
 	sseCtx, sseCancel := context.WithCancel(t.streamCtx)
-	req, err := http.NewRequestWithContext(sseCtx, http.MethodGet, sseURL, http.NoBody)
+	req, err := http.NewRequestWithContext(sseCtx, http.MethodGet, sseURLStr, http.NoBody)
 	if err != nil {
 		sseCancel()
 		connectFailed()
@@ -234,13 +270,15 @@ func (t *HTTPTransport) Connect(ctx context.Context) error {
 
 	// SSE GET uses a client without Timeout: the stream lives for the
 	// connection lifetime (sseCtx), while the shared client's Timeout would
-	// forcibly kill it mid-session.
-	sseClient := &http.Client{Transport: t.httpClient.Transport}
+	// forcibly kill it mid-session. The connect-scoped transport bounds the
+	// dial/header wait by ConnectTimeout — ResponseHeaderTimeout stops
+	// time-to-headers only, so the established stream is not affected.
+	connectClient := &http.Client{Transport: t.connectTransport()}
 
 	// Body intentionally kept open for SSE reading; closed via t.sseBody in sseReadLoop/Close().
 	resp, err := util.DoWithRetryResp(connectCtx, 3, func() (*http.Response, error) { //nolint:bodyclose // SSE body lifecycle spans goroutines
 		var fetchErr error
-		resp, fetchErr := sseClient.Do(req)
+		resp, fetchErr := connectClient.Do(req)
 		if fetchErr != nil {
 			if resp != nil {
 				_ = resp.Body.Close()
@@ -369,7 +407,8 @@ func (t *HTTPTransport) abortHandshake(sseCancel context.CancelFunc, connectFail
 }
 
 // readEndpointWithTimeout bounds readSSEInitialEndpoint with ctx even though
-// the underlying ReadString cannot be interrupted: on ctx expiry the helper
+// the underlying blocking read (readBoundedLine) cannot be interrupted: on
+// ctx expiry the helper
 // returns immediately and the caller closes the body, which unblocks the
 // helper goroutine (result channel is buffered so it never leaks).
 func (t *HTTPTransport) readEndpointWithTimeout(ctx context.Context, reader *bufio.Reader, baseURL *url.URL) (string, error) {
@@ -435,7 +474,11 @@ func readSSEInitialEndpoint(ctx context.Context, reader *bufio.Reader, baseURL *
 
 		endpointURL := parsed.Endpoint
 		if !strings.HasPrefix(endpointURL, "http") {
-			return baseURL.Scheme + "://" + baseURL.Host + endpointURL, nil
+			// Resolve relative endpoints, then fall through to the SAME
+			// host validation as absolute ones: without it a crafted value
+			// like "@evil.com/x" would become userinfo and hijack the POST
+			// target (exfiltrating auth headers).
+			endpointURL = baseURL.Scheme + "://" + baseURL.Host + endpointURL
 		}
 
 		epURL, err := url.Parse(endpointURL)
@@ -640,7 +683,7 @@ func (t *HTTPTransport) postNotification(ctx context.Context, method string, par
 		return fmt.Errorf("sending notification: %w", err)
 	}
 	defer func() { _ = resp.Body.Close() }()
-	_, _ = io.ReadAll(io.LimitReader(resp.Body, 4096))
+	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4096))
 
 	if resp.StatusCode >= 400 {
 		return fmt.Errorf("notification rejected with status %d", resp.StatusCode)
@@ -970,11 +1013,11 @@ func (t *HTTPTransport) parseAndValidateEndpoint(data string) (string, bool) {
 	if parsed.Endpoint == "" {
 		return "", false
 	}
+	t.mu.Lock()
+	baseHost := t.baseHost
+	t.mu.Unlock()
 	endpointURL := parsed.Endpoint
 	if !strings.HasPrefix(endpointURL, "http") {
-		t.mu.Lock()
-		baseHost := t.baseHost
-		t.mu.Unlock()
 		scheme := "http"
 		if u, parseErr := url.Parse(t.cfg.URL); parseErr == nil && u.Scheme != "" {
 			scheme = u.Scheme
@@ -985,9 +1028,6 @@ func (t *HTTPTransport) parseAndValidateEndpoint(data string) (string, bool) {
 	if err != nil {
 		return "", false
 	}
-	t.mu.Lock()
-	baseHost := t.baseHost
-	t.mu.Unlock()
 	if epURL.Host != baseHost {
 		gotHost := epURL.Host
 		t.cfg.Logger.Warn("MCP server sent dynamic endpoint with unexpected host, rejecting",

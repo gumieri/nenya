@@ -497,3 +497,24 @@ func TestConnect_RetryAfterFailedHandshake(t *testing.T) {
 		t.Error("transport must be ready after successful retry connect")
 	}
 }
+
+func TestConnect_RejectsUserinfoEndpoint(t *testing.T) {
+	// A relative endpoint like "@evil.com/x" would resolve to
+	// "http://<basehost>@evil.com/x" (userinfo), redirecting authenticated
+	// POSTs to an attacker host. The handshake must reject it.
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte("data: {\"endpoint\":\"@evil.com/x\"}\n\n"))
+	}))
+	defer server.Close()
+
+	transport := NewHTTPTransport(retryTestConfig(server.URL))
+	defer func() { _ = transport.Close() }()
+
+	if err := transport.Connect(context.Background()); err == nil {
+		t.Fatal("expected connect to fail on userinfo endpoint hijack attempt")
+	}
+	if transport.SessionEndpoint() != "" {
+		t.Errorf("session endpoint = %q, want empty after rejection", transport.SessionEndpoint())
+	}
+}
