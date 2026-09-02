@@ -2,9 +2,11 @@ package mcp
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -69,6 +71,107 @@ func TestConnect_FirstAttemptSucceeds(t *testing.T) {
 	}
 	if attempts.Load() != 1 {
 		t.Errorf("expected 1 attempt, got %d", attempts.Load())
+	}
+}
+
+func TestConnect_RejectsAfterClose(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte("data: {\"endpoint\":\"/message\"}\n\n"))
+	}))
+	defer server.Close()
+
+	cfg := TransportConfig{
+		URL:            server.URL,
+		ConnectTimeout: 5 * time.Second,
+		Logger:         slog.Default(),
+	}
+	transport := NewHTTPTransport(cfg)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	if err := transport.Connect(ctx); err != nil {
+		t.Fatalf("first connect failed: %v", err)
+	}
+	if err := transport.Close(); err != nil {
+		t.Fatalf("close failed: %v", err)
+	}
+	if err := transport.Connect(ctx); !errors.Is(err, ErrTransportClosed) {
+		t.Errorf("expected ErrTransportClosed after Close, got: %v", err)
+	}
+}
+
+func TestConnect_RejectsSecondConnection(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte("data: {\"endpoint\":\"/message\"}\n\n"))
+	}))
+	defer server.Close()
+
+	cfg := TransportConfig{
+		URL:            server.URL,
+		ConnectTimeout: 5 * time.Second,
+		Logger:         slog.Default(),
+	}
+	transport := NewHTTPTransport(cfg)
+	defer func() { _ = transport.Close() }()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	if err := transport.Connect(ctx); err != nil {
+		t.Fatalf("first connect failed: %v", err)
+	}
+	if err := transport.Connect(ctx); !errors.Is(err, ErrTransportAlreadyConnected) {
+		t.Errorf("expected ErrTransportAlreadyConnected on second Connect, got: %v", err)
+	}
+}
+
+func TestConnect_ConcurrentSecondCallRejected(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte("data: {\"endpoint\":\"/message\"}\n\n"))
+	}))
+	defer server.Close()
+
+	cfg := TransportConfig{
+		URL:            server.URL,
+		ConnectTimeout: 5 * time.Second,
+		Logger:         slog.Default(),
+	}
+	transport := NewHTTPTransport(cfg)
+	defer func() { _ = transport.Close() }()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	// Two concurrent Connect calls: exactly one wins, the loser is rejected
+	// without panicking on a double doneCh close.
+	var wg sync.WaitGroup
+	errs := make([]error, 2)
+	wg.Add(2)
+	for i := range errs {
+		go func(i int) {
+			defer wg.Done()
+			errs[i] = transport.Connect(ctx)
+		}(i)
+	}
+	wg.Wait()
+
+	succeeded, rejected := 0, 0
+	for _, err := range errs {
+		switch {
+		case err == nil:
+			succeeded++
+		case errors.Is(err, ErrTransportAlreadyConnected):
+			rejected++
+		default:
+			t.Fatalf("unexpected concurrent connect error: %v", err)
+		}
+	}
+	if succeeded != 1 || rejected != 1 {
+		t.Errorf("expected 1 success + 1 rejection, got %d succeeded / %d rejected", succeeded, rejected)
 	}
 }
 
