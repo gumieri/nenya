@@ -196,9 +196,11 @@ func (t *HTTPTransport) Connect(ctx context.Context) error {
 	endpointURL, err := readSSEInitialEndpoint(connectCtx, sseReader, baseURL, t.cfg.Logger)
 	if err != nil {
 		sseCancel()
+		t.mu.Lock()
 		if t.sseBody != nil {
 			_ = t.sseBody.Close()
 		}
+		t.mu.Unlock()
 		return err
 	}
 
@@ -487,9 +489,11 @@ func (t *HTTPTransport) Close() error {
 			timer.Stop()
 		case <-timer.C:
 		}
+		t.mu.Lock()
 		if t.sseBody != nil {
 			_ = t.sseBody.Close()
 		}
+		t.mu.Unlock()
 	})
 	return nil
 }

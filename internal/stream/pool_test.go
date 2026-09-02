@@ -122,9 +122,9 @@ func (passthroughTransformer) TransformSSEChunk(_ context.Context, data []byte) 
 // BenchmarkSSETransformingReader_Read_Pooled benchmarks line-copy pooling.
 // Measures allocation reduction when streaming SSE events.
 func BenchmarkSSETransformingReader_Read_Pooled(b *testing.B) {
-	events := "data: " + strings.Repeat("x", 256) + "\n\n"
+	events := "data: " + strings.Repeat("x", 256) + "\n\ndata: [DONE]\n\n"
 	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+	for range b.N {
 		src := strings.NewReader(events)
 		reader := NewSSETransformingReader(src, passthroughTransformer{}, context.Background())
 

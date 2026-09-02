@@ -386,8 +386,9 @@ func TestHandleResponses_Cancel(t *testing.T) {
 		}
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]interface{}{
-			"id":     "resp_456",
-			"status": "cancelling", //nolint:misspell // OpenAI Responses API wire status uses the British spelling
+			"id": "resp_456",
+			// OpenAI Responses API wire status (spec enum uses the British spelling).
+			"status": "cancelled", //nolint:misspell
 		})
 	}))
 	defer upstream.Close()
