@@ -414,7 +414,10 @@ func TestHandleBatches_Cancel(t *testing.T) {
 		}
 		w.Header().Set("Content-Type", "application/json")
 		// OpenAI Batch API wire status uses the British spelling.
-		_ = json.NewEncoder(w).Encode(map[string]interface{}{"id": "batch-xyz", "status": "cancelling"}) //nolint:misspell
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"id":     "batch-xyz",
+			"status": "cancelling", //nolint:misspell
+		})
 	}))
 	defer upstream.Close()
 

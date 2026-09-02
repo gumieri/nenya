@@ -187,6 +187,9 @@ func (t *HTTPTransport) Connect(ctx context.Context) error {
 	}
 
 	t.mu.Lock()
+	if t.sseBody != nil {
+		_ = t.sseBody.Close()
+	}
 	t.sessionEndpoint = ""
 	t.sseBody = resp.Body
 	t.mu.Unlock()
@@ -200,17 +203,18 @@ func (t *HTTPTransport) Connect(ctx context.Context) error {
 		if t.sseBody != nil {
 			_ = t.sseBody.Close()
 		}
+		t.sseBody = nil
 		t.mu.Unlock()
 		return err
 	}
 
 	t.mu.Lock()
 	t.sessionEndpoint = endpointURL
+	t.sseCancel = sseCancel
 	t.mu.Unlock()
 
 	t.cfg.Logger.Debug("received MCP session endpoint", "endpoint", endpointURL)
 
-	t.sseCancel = sseCancel
 	go func() {
 		t.trackGoroutineStart()
 		t.sseReadLoop(sseReader)
@@ -468,8 +472,12 @@ func (t *HTTPTransport) Close() error {
 		t.closed.Store(true)
 		t.ready.Store(false)
 
-		if t.sseCancel != nil {
-			t.sseCancel()
+		t.mu.Lock()
+		sseCancel := t.sseCancel
+		t.mu.Unlock()
+
+		if sseCancel != nil {
+			sseCancel()
 		}
 		close(t.closeCh)
 
@@ -483,11 +491,21 @@ func (t *HTTPTransport) Close() error {
 		}
 		t.pendingMu.Unlock()
 
-		timer := time.NewTimer(5 * time.Second)
-		select {
-		case <-t.doneCh:
-			timer.Stop()
-		case <-timer.C:
+		t.mu.Lock()
+		sseBody := t.sseBody
+		t.mu.Unlock()
+
+		// The done channel is only closed by the SSE read loop; skip the
+		// grace wait when Connect never got that far (failed or never
+		// called) — otherwise every unconnected client stalls shutdown for
+		// the full grace period, sequentially per client.
+		if sseBody != nil {
+			timer := time.NewTimer(5 * time.Second)
+			select {
+			case <-t.doneCh:
+				timer.Stop()
+			case <-timer.C:
+			}
 		}
 		t.mu.Lock()
 		if t.sseBody != nil {
@@ -551,8 +569,11 @@ func readMultiLineEvent(reader *bufio.Reader) string {
 func (t *HTTPTransport) sseReadLoop(reader *bufio.Reader) {
 	defer close(t.doneCh)
 	defer func() {
-		if t.sseBody != nil {
-			_ = t.sseBody.Close()
+		t.mu.Lock()
+		body := t.sseBody
+		t.mu.Unlock()
+		if body != nil {
+			_ = body.Close()
 		}
 	}()
 

@@ -403,6 +403,9 @@ func TestHandleResponses_Cancel(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d", rec.Code)
 	}
+	if !strings.Contains(rec.Body.String(), `"status":"cancelled"`) { //nolint:misspell // OpenAI wire status
+		t.Fatalf("expected wire status pass-through, got body %q", rec.Body.String())
+	}
 }
 
 func TestHandleResponses_Delete(t *testing.T) {
