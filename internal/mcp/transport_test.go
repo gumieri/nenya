@@ -79,7 +79,9 @@ func newMockMCPServer(t *testing.T) *mockMCPServer {
 func (ms *mockMCPServer) handleSSE(w http.ResponseWriter, r *http.Request) {
 	flusher, ok := w.(http.Flusher)
 	if !ok {
-		ms.t.Fatal("mock server: response writer not a flusher")
+		// Errorf, not Fatalf: handlers run on non-test goroutines.
+		ms.t.Error("mock server: response writer not a flusher")
+		return
 	}
 
 	w.Header().Set("Content-Type", "text/event-stream")
@@ -158,7 +160,7 @@ func (ms *mockMCPServer) writeRPCResponse(w http.ResponseWriter, id any, result 
 	}
 	w.Header().Set("Content-Type", "application/json")
 	if err := json.NewEncoder(w).Encode(resp); err != nil {
-		ms.t.Fatalf("failed to encode response: %v", err)
+		ms.t.Errorf("failed to encode response: %v", err)
 	}
 }
 
@@ -468,9 +470,12 @@ func TestHTTPTransport_SendNotification_NotConnected(t *testing.T) {
 }
 
 func TestHTTPTransport_Defaults(t *testing.T) {
-	cfg := TransportConfig{URL: "http://localhost/sse", Logger: newTestLogger()}
+	cfg := TransportConfig{URL: "http://localhost/sse"}
 	cfg.setDefaults()
 
+	if cfg.Logger == nil {
+		t.Fatal("Logger = nil, want a discard default")
+	}
 	if cfg.ConnectTimeout != 10*time.Second {
 		t.Fatalf("ConnectTimeout = %v, want 10s", cfg.ConnectTimeout)
 	}
@@ -542,7 +547,9 @@ func newProxyMockMCPServer(t *testing.T) *proxyMockMCPServer {
 func (pm *proxyMockMCPServer) handleSSE(w http.ResponseWriter, r *http.Request) {
 	flusher, ok := w.(http.Flusher)
 	if !ok {
-		pm.t.Fatal("proxy mock: response writer not a flusher")
+		// Errorf, not Fatalf: handlers run on non-test goroutines.
+		pm.t.Error("proxy mock: response writer not a flusher")
+		return
 	}
 
 	w.Header().Set("Content-Type", "text/event-stream")
@@ -605,7 +612,8 @@ func (pm *proxyMockMCPServer) handleMessage(w http.ResponseWriter, r *http.Reque
 		var params CallToolParams
 		paramsBytes, _ := json.Marshal(req.Params)
 		if err := json.Unmarshal(paramsBytes, &params); err != nil {
-			pm.t.Fatalf("failed to unmarshal params: %v", err)
+			pm.t.Errorf("failed to unmarshal params: %v", err)
+			return
 		}
 		resp := Response{
 			JSONRPC: JSONRPCVersion2,

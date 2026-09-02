@@ -82,42 +82,167 @@ func TestConnect_FirstAttemptSucceeds(t *testing.T) {
 	}
 }
 
-func TestConnect_RejectsAfterClose(t *testing.T) {
-	server := newHandshakeServer(t)
-	defer server.Close()
+func TestConnect_RejectionPaths(t *testing.T) {
+	t.Run("after close", func(t *testing.T) {
+		server := newHandshakeServer(t)
+		defer server.Close()
 
-	transport := NewHTTPTransport(retryTestConfig(server.URL))
+		transport := NewHTTPTransport(retryTestConfig(server.URL))
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
 
-	if err := transport.Connect(ctx); err != nil {
-		t.Fatalf("first connect failed: %v", err)
-	}
-	if err := transport.Close(); err != nil {
-		t.Fatalf("close failed: %v", err)
-	}
-	if err := transport.Connect(ctx); !errors.Is(err, ErrTransportClosed) {
-		t.Errorf("expected ErrTransportClosed after Close, got: %v", err)
-	}
+		if err := transport.Connect(ctx); err != nil {
+			t.Fatalf("first connect failed: %v", err)
+		}
+		if err := transport.Close(); err != nil {
+			t.Fatalf("close failed: %v", err)
+		}
+		if err := transport.Connect(ctx); !errors.Is(err, ErrTransportClosed) {
+			t.Errorf("expected ErrTransportClosed after Close, got: %v", err)
+		}
+	})
+
+	t.Run("while stream alive", func(t *testing.T) {
+		// Held-open stream: the guard hit is sseBody != nil, pinning the
+		// healthy single-use rejection path.
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.Method != http.MethodGet {
+				return
+			}
+			w.Header().Set("Content-Type", "text/event-stream")
+			_, _ = w.Write([]byte("data: {\"endpoint\":\"/message\"}\n\n"))
+			if f, ok := w.(http.Flusher); ok {
+				f.Flush()
+			}
+			<-r.Context().Done()
+		}))
+		defer server.Close()
+
+		transport := NewHTTPTransport(retryTestConfig(server.URL))
+		defer func() { _ = transport.Close() }()
+
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+
+		if err := transport.Connect(ctx); err != nil {
+			t.Fatalf("first connect failed: %v", err)
+		}
+		if err := transport.Connect(ctx); !errors.Is(err, ErrTransportAlreadyConnected) {
+			t.Errorf("expected ErrTransportAlreadyConnected on second Connect, got: %v", err)
+		}
+	})
+
+	t.Run("after stream death", func(t *testing.T) {
+		// newHandshakeServer closes the stream immediately after the
+		// handshake: the guard hit is readLoopStarted, pinning the
+		// dead-stream rejection path.
+		server := newHandshakeServer(t)
+		defer server.Close()
+
+		transport := NewHTTPTransport(retryTestConfig(server.URL))
+		defer func() { _ = transport.Close() }()
+
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+
+		if err := transport.Connect(ctx); err != nil {
+			t.Fatalf("first connect failed: %v", err)
+		}
+		// Give the read loop time to exit and nil sseBody.
+		time.Sleep(100 * time.Millisecond)
+		if err := transport.Connect(ctx); !errors.Is(err, ErrTransportAlreadyConnected) {
+			t.Errorf("expected ErrTransportAlreadyConnected after stream death, got: %v", err)
+		}
+	})
 }
 
-func TestConnect_RejectsSecondConnection(t *testing.T) {
-	server := newHandshakeServer(t)
-	defer server.Close()
+func TestDispatch_MidSessionEndpointEvent(t *testing.T) {
+	t.Run("relative endpoint accepted", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.Method != http.MethodGet {
+				return
+			}
+			w.Header().Set("Content-Type", "text/event-stream")
+			_, _ = w.Write([]byte("data: {\"endpoint\":\"/message\"}\n\n"))
+			if f, ok := w.(http.Flusher); ok {
+				f.Flush()
+			}
+			// Spec-legal renegotiation: re-send the endpoint mid-session
+			// in relative form.
+			time.Sleep(150 * time.Millisecond)
+			_, _ = w.Write([]byte("event: endpoint\ndata: {\"endpoint\":\"/message2\"}\n\n"))
+			if f, ok := w.(http.Flusher); ok {
+				f.Flush()
+			}
+			<-r.Context().Done()
+		}))
+		defer server.Close()
 
-	transport := NewHTTPTransport(retryTestConfig(server.URL))
-	defer func() { _ = transport.Close() }()
+		transport := NewHTTPTransport(retryTestConfig(server.URL))
+		defer func() { _ = transport.Close() }()
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
 
-	if err := transport.Connect(ctx); err != nil {
-		t.Fatalf("first connect failed: %v", err)
-	}
-	if err := transport.Connect(ctx); !errors.Is(err, ErrTransportAlreadyConnected) {
-		t.Errorf("expected ErrTransportAlreadyConnected on second Connect, got: %v", err)
-	}
+		if err := transport.Connect(ctx); err != nil {
+			t.Fatalf("connect failed: %v", err)
+		}
+		if transport.SessionEndpoint() != server.URL+"/message" {
+			t.Fatalf("initial endpoint = %q, want %q", transport.SessionEndpoint(), server.URL+"/message")
+		}
+
+		deadline := time.Now().Add(3 * time.Second)
+		for time.Now().Before(deadline) {
+			if transport.SessionEndpoint() == server.URL+"/message2" {
+				break
+			}
+			time.Sleep(5 * time.Millisecond)
+		}
+		if transport.SessionEndpoint() != server.URL+"/message2" {
+			t.Errorf("mid-session endpoint = %q, want %q", transport.SessionEndpoint(), server.URL+"/message2")
+		}
+		if !transport.Ready() {
+			t.Error("transport must remain ready after endpoint renegotiation")
+		}
+	})
+
+	t.Run("cross-host endpoint rejected", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.Method != http.MethodGet {
+				return
+			}
+			w.Header().Set("Content-Type", "text/event-stream")
+			_, _ = w.Write([]byte("data: {\"endpoint\":\"/message\"}\n\n"))
+			if f, ok := w.(http.Flusher); ok {
+				f.Flush()
+			}
+			time.Sleep(150 * time.Millisecond)
+			_, _ = w.Write([]byte("event: endpoint\ndata: {\"endpoint\":\"http://evil.example.com/steal\"}\n\n"))
+			if f, ok := w.(http.Flusher); ok {
+				f.Flush()
+			}
+			<-r.Context().Done()
+		}))
+		defer server.Close()
+
+		transport := NewHTTPTransport(retryTestConfig(server.URL))
+		defer func() { _ = transport.Close() }()
+
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+
+		if err := transport.Connect(ctx); err != nil {
+			t.Fatalf("connect failed: %v", err)
+		}
+
+		// Give the malicious event time to arrive; it must be dropped.
+		time.Sleep(500 * time.Millisecond)
+		if transport.SessionEndpoint() != server.URL+"/message" {
+			t.Errorf("endpoint = %q, want unchanged %q after cross-host rejection",
+				transport.SessionEndpoint(), server.URL+"/message")
+		}
+	})
 }
 
 func TestConnect_ConcurrentSecondCallRejected(t *testing.T) {

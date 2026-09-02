@@ -248,12 +248,14 @@ func (t *HTTPTransport) Connect(ctx context.Context) error {
 			return nil, fetchErr
 		}
 		if resp.StatusCode >= 500 {
+			// Retryable upstream failure.
 			_ = resp.Body.Close()
 			return nil, fmt.Errorf("upstream error: %d", resp.StatusCode)
 		}
 		if resp.StatusCode != http.StatusOK {
-			_ = resp.Body.Close()
-			return nil, fmt.Errorf("SSE connection returned status %d", resp.StatusCode)
+			// 4xx and other statuses are terminal (§8: 4xx is never
+			// retried): hand the response back so the caller fails once.
+			return resp, nil
 		}
 		return resp, nil
 	})
@@ -261,6 +263,13 @@ func (t *HTTPTransport) Connect(ctx context.Context) error {
 		sseCancel()
 		connectFailed()
 		return fmt.Errorf("SSE connection failed: %w", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		// Terminal non-200 (e.g. 401/403): not retried, fail once.
+		_ = resp.Body.Close()
+		sseCancel()
+		connectFailed()
+		return fmt.Errorf("SSE connection returned status %d", resp.StatusCode)
 	}
 
 	t.mu.Lock()
@@ -335,7 +344,13 @@ func (t *HTTPTransport) completeConnect() error {
 		// so the flag cannot observably lie.
 		return ErrTransportClosed
 	}
-	t.ready.Store(true)
+	// The stream may have died between the goroutine spawn and here; never
+	// mark a dead single-use transport ready.
+	select {
+	case <-t.doneCh:
+	default:
+		t.ready.Store(true)
+	}
 	return nil
 }
 
@@ -385,7 +400,7 @@ func readSSEInitialEndpoint(ctx context.Context, reader *bufio.Reader, baseURL *
 		default:
 		}
 
-		line, err := reader.ReadString('\n')
+		line, err := readBoundedLine(reader)
 		if err != nil {
 			return "", fmt.Errorf("reading SSE endpoint event: %w", err)
 		}
@@ -491,6 +506,13 @@ func (t *HTTPTransport) SendRequest(ctx context.Context, method string, params a
 	t.pending[id] = ch
 	t.pendingMu.Unlock()
 
+	if t.closed.Load() {
+		// Close raced between the ready check and registration above: its
+		// failPending has already fired, so no response can ever arrive.
+		// Fail fast instead of waiting out RequestTimeout.
+		return nil, ErrTransportClosed
+	}
+
 	defer func() {
 		t.pendingMu.Lock()
 		delete(t.pending, id)
@@ -515,6 +537,13 @@ func (t *HTTPTransport) SendRequest(ctx context.Context, method string, params a
 		}
 		return nil, fmt.Errorf("POST to MCP endpoint failed: %w", err)
 	}
+	return t.awaitResponse(postCtx, httpResp, id, ch)
+}
+
+// awaitResponse interprets the POST reply: 202 means the response arrives
+// asynchronously over SSE (wait on ch); otherwise the body must carry the
+// JSON-RPC response for the given request ID.
+func (t *HTTPTransport) awaitResponse(ctx context.Context, httpResp *http.Response, id int64, ch chan *Response) (*Response, error) {
 	defer func() { _ = httpResp.Body.Close() }()
 
 	body, err := io.ReadAll(io.LimitReader(httpResp.Body, 1<<20))
@@ -523,7 +552,7 @@ func (t *HTTPTransport) SendRequest(ctx context.Context, method string, params a
 	}
 
 	if httpResp.StatusCode == http.StatusAccepted {
-		return t.waitForJSONRPCResponse(postCtx, ch)
+		return t.waitForJSONRPCResponse(ctx, ch)
 	}
 
 	if httpResp.StatusCode != http.StatusOK {
@@ -536,6 +565,11 @@ func (t *HTTPTransport) SendRequest(ctx context.Context, method string, params a
 	}
 
 	if rpcResp.ID == nil {
+		if rpcResp.Error != nil {
+			// Hostile/broken server: an ID-less error reply must surface as
+			// an error, not as a successful response with no result.
+			return nil, rpcResp.Error
+		}
 		return &rpcResp, nil
 	}
 
@@ -547,7 +581,7 @@ func (t *HTTPTransport) SendRequest(ctx context.Context, method string, params a
 		return &rpcResp, nil
 	}
 
-	return t.waitForJSONRPCResponse(postCtx, ch)
+	return t.waitForJSONRPCResponse(ctx, ch)
 }
 
 func (t *HTTPTransport) waitForJSONRPCResponse(ctx context.Context, ch chan *Response) (*Response, error) {
@@ -735,9 +769,34 @@ func (t *HTTPTransport) keepaliveLoop() {
 	}
 }
 
+// maxSSELineBytes bounds a single SSE line: a malicious server must not be
+// able to OOM the gateway with one unterminated line.
+const maxSSELineBytes = 1 << 20 // 1 MiB
+
+// readBoundedLine reads one '\n'-terminated line, failing if it exceeds
+// maxSSELineBytes (ReadString would otherwise grow unbounded).
+func readBoundedLine(reader *bufio.Reader) (string, error) {
+	var line []byte
+	for {
+		chunk, err := reader.ReadSlice('\n')
+		line = append(line, chunk...)
+		if len(line) > maxSSELineBytes {
+			return "", fmt.Errorf("SSE line exceeds %d bytes", maxSSELineBytes)
+		}
+		switch err {
+		case nil:
+			return string(line), nil
+		case bufio.ErrBufferFull:
+			// Line longer than the read buffer; keep accumulating.
+		default:
+			return "", err
+		}
+	}
+}
+
 func readMultiLineEvent(reader *bufio.Reader) string {
 	for {
-		nextLine, readErr := reader.ReadString('\n')
+		nextLine, readErr := readBoundedLine(reader)
 		if readErr != nil {
 			break
 		}
@@ -775,7 +834,7 @@ func (t *HTTPTransport) sseReadLoop(reader *bufio.Reader) {
 		default:
 		}
 
-		line, err := reader.ReadString('\n')
+		line, err := readBoundedLine(reader)
 		if err != nil {
 			if !t.closed.Load() {
 				t.cfg.Logger.Warn("SSE connection lost, marking transport as not ready", "err", err)
@@ -899,7 +958,8 @@ func (t *HTTPTransport) SessionEndpoint() string {
 }
 
 // parseAndValidateEndpoint validates the dynamic MCP endpoint event: the
-// endpoint must share the SSE connection's host.
+// endpoint must share the SSE connection's host. Relative endpoints are
+// resolved against the configured origin, matching the handshake path.
 func (t *HTTPTransport) parseAndValidateEndpoint(data string) (string, bool) {
 	var parsed struct {
 		Endpoint string `json:"endpoint"`
@@ -910,7 +970,18 @@ func (t *HTTPTransport) parseAndValidateEndpoint(data string) (string, bool) {
 	if parsed.Endpoint == "" {
 		return "", false
 	}
-	epURL, err := url.Parse(parsed.Endpoint)
+	endpointURL := parsed.Endpoint
+	if !strings.HasPrefix(endpointURL, "http") {
+		t.mu.Lock()
+		baseHost := t.baseHost
+		t.mu.Unlock()
+		scheme := "http"
+		if u, parseErr := url.Parse(t.cfg.URL); parseErr == nil && u.Scheme != "" {
+			scheme = u.Scheme
+		}
+		endpointURL = scheme + "://" + baseHost + endpointURL
+	}
+	epURL, err := url.Parse(endpointURL)
 	if err != nil {
 		return "", false
 	}
@@ -923,5 +994,5 @@ func (t *HTTPTransport) parseAndValidateEndpoint(data string) (string, bool) {
 			"expected_host", baseHost, "got_host", gotHost, "endpoint", parsed.Endpoint)
 		return "", false
 	}
-	return parsed.Endpoint, true
+	return endpointURL, true
 }
