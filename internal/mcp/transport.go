@@ -2,6 +2,7 @@ package mcp
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -20,13 +21,21 @@ import (
 	"github.com/nenya/internal/util"
 )
 
+// Sentinel errors returned by HTTPTransport methods.
 var (
-	ErrTransportClosed           = errors.New("mcp transport: closed")
-	ErrTransportNotReady         = errors.New("mcp transport: not connected")
+	// ErrTransportClosed is returned when the transport has been closed.
+	ErrTransportClosed = errors.New("mcp transport: closed")
+	// ErrTransportNotReady is returned when no live SSE stream is available.
+	ErrTransportNotReady = errors.New("mcp transport: not connected")
+	// ErrTransportAlreadyConnected is returned by Connect when a stream was
+	// already established or a connection attempt is in flight; transports
+	// are single-use.
 	ErrTransportAlreadyConnected = errors.New("mcp transport: already connected")
-	ErrRequestTimeout            = errors.New("mcp transport: request timeout")
+	// ErrRequestTimeout is returned when a request exceeds RequestTimeout.
+	ErrRequestTimeout = errors.New("mcp transport: request timeout")
 )
 
+// TransportConfig configures an HTTPTransport.
 type TransportConfig struct {
 	URL            string
 	Headers        map[string]string
@@ -58,6 +67,9 @@ func (c *TransportConfig) setDefaults() {
 	}
 }
 
+// HTTPTransport implements Transport over the MCP HTTP+SSE wire protocol.
+// A transport is single-use: it serves exactly one SSE stream for its
+// lifetime and is torn down by Close.
 type HTTPTransport struct {
 	cfg        TransportConfig
 	httpClient *http.Client
@@ -96,6 +108,8 @@ type sseEvent struct {
 	Data  string
 }
 
+// NewHTTPTransport creates a transport for the given config. Call Connect to
+// establish the SSE stream; Close tears it down.
 func NewHTTPTransport(cfg TransportConfig) *HTTPTransport {
 	cfg.setDefaults()
 
@@ -152,7 +166,10 @@ func (t *HTTPTransport) reserveConnectSlot() error {
 	switch {
 	case t.closed.Load():
 		return ErrTransportClosed
-	case t.sseBody != nil || t.connecting:
+	case t.sseBody != nil || t.connecting || t.readLoopStarted.Load():
+		// readLoopStarted makes the transport single-use: after the stream
+		// dies (sseReadLoop nils sseBody) a re-Connect would spawn a second
+		// sseReadLoop and double-close doneCh — rejected instead.
 		return ErrTransportAlreadyConnected
 	default:
 		t.connecting = true
@@ -160,6 +177,11 @@ func (t *HTTPTransport) reserveConnectSlot() error {
 	}
 }
 
+// Connect establishes the SSE stream, performs the endpoint handshake, and
+// spawns the read/dispatch/keepalive goroutines. The stream's lifetime is
+// owned by the transport (torn down by Close), not by ctx; ctx bounds only
+// the connect phase. Transports are single-use: a second call returns
+// ErrTransportAlreadyConnected (or ErrTransportClosed after Close).
 func (t *HTTPTransport) Connect(ctx context.Context) error {
 	// Reserve the connect slot atomically: concurrent Connect calls must not
 	// both reach the stream spawn (double doneCh close = process crash).
@@ -205,8 +227,10 @@ func (t *HTTPTransport) Connect(ctx context.Context) error {
 	}
 	t.setHeaders(req)
 
-	// connectCtx (caller-bounded) paces only the dial/retry phase; the
-	// handshake read below is bounded separately via a read deadline.
+	// connectCtx (caller-bounded) bounds the total connect phase including
+	// the endpoint-event read below (via readEndpointWithTimeout). The SSE
+	// dial/header wait itself rides sseCtx (no client Timeout) and is bounded
+	// by the shared transport's Dialer.Timeout/ResponseHeaderTimeout.
 	connectCtx, connectCancel := context.WithTimeout(ctx, t.cfg.ConnectTimeout)
 	defer connectCancel()
 
@@ -254,15 +278,7 @@ func (t *HTTPTransport) Connect(ctx context.Context) error {
 	// error path below closes the body, which unblocks a parked Read.
 	endpointURL, err := t.readEndpointWithTimeout(connectCtx, sseReader, baseURL)
 	if err != nil {
-		sseCancel()
-		t.mu.Lock()
-		body := t.sseBody
-		t.sseBody = nil
-		t.mu.Unlock()
-		if body != nil {
-			_ = body.Close()
-		}
-		connectFailed()
+		t.abortHandshake(sseCancel, connectFailed)
 		return err
 	}
 
@@ -300,9 +316,30 @@ func (t *HTTPTransport) Connect(ctx context.Context) error {
 
 	t.mu.Lock()
 	t.connecting = false
+	closedNow := t.closed.Load()
 	t.mu.Unlock()
+	if closedNow {
+		// Close won the race between our closed check and completion; its
+		// streamCancel/re-snapshot already tears the stream down. Report
+		// failure, not success, on a closed transport.
+		return ErrTransportClosed
+	}
 	t.ready.Store(true)
 	return nil
+}
+
+// abortHandshake rolls back a failed endpoint handshake: cancels the stream,
+// closes and unregisters the body, and releases the connect slot.
+func (t *HTTPTransport) abortHandshake(sseCancel context.CancelFunc, connectFailed func()) {
+	sseCancel()
+	t.mu.Lock()
+	body := t.sseBody
+	t.sseBody = nil
+	t.mu.Unlock()
+	if body != nil {
+		_ = body.Close()
+	}
+	connectFailed()
 }
 
 // readEndpointWithTimeout bounds readSSEInitialEndpoint with ctx even though
@@ -316,7 +353,9 @@ func (t *HTTPTransport) readEndpointWithTimeout(ctx context.Context, reader *buf
 	}
 	ch := make(chan endpointResult, 1)
 	go func() {
+		t.trackGoroutineStart()
 		endpoint, err := readSSEInitialEndpoint(ctx, reader, baseURL, t.cfg.Logger)
+		t.trackGoroutineEnd()
 		ch <- endpointResult{endpoint, err}
 	}()
 	select {
@@ -386,7 +425,7 @@ func readSSEInitialEndpoint(ctx context.Context, reader *bufio.Reader, baseURL *
 
 func (t *HTTPTransport) sendHTTPPost(ctx context.Context, client *http.Client, endpoint string, reqBytes []byte) (*http.Response, error) {
 	return util.DoWithRetryResp(ctx, 2, func() (*http.Response, error) {
-		httpReq, reqErr := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, strings.NewReader(string(reqBytes)))
+		httpReq, reqErr := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(reqBytes))
 		if reqErr != nil {
 			return nil, fmt.Errorf("creating POST request: %w", reqErr)
 		}
@@ -408,6 +447,9 @@ func (t *HTTPTransport) sendHTTPPost(ctx context.Context, client *http.Client, e
 	})
 }
 
+// SendRequest issues a JSON-RPC request over the SSE session's POST endpoint
+// and blocks until the response arrives, ctx expires, or RequestTimeout
+// elapses. Requires a live stream (ErrTransportNotReady otherwise).
 func (t *HTTPTransport) SendRequest(ctx context.Context, method string, params any) (*Response, error) {
 	if t.closed.Load() {
 		return nil, ErrTransportClosed
@@ -502,9 +544,14 @@ func (t *HTTPTransport) waitForJSONRPCResponse(ctx context.Context, ch chan *Res
 	}
 }
 
+// SendNotification posts a fire-and-forget JSON-RPC notification to the
+// session endpoint, bounded by RequestTimeout. ctx must be non-nil.
 func (t *HTTPTransport) SendNotification(ctx context.Context, method string, params any) error {
-	if t.closed.Load() || !t.ready.Load() {
+	if t.closed.Load() {
 		return ErrTransportClosed
+	}
+	if !t.ready.Load() {
+		return ErrTransportNotReady
 	}
 
 	notif := Notification{
@@ -531,7 +578,7 @@ func (t *HTTPTransport) SendNotification(ctx context.Context, method string, par
 	reqCtx, cancel := context.WithTimeout(ctx, t.cfg.RequestTimeout)
 	defer cancel()
 
-	httpReq, err := http.NewRequestWithContext(reqCtx, http.MethodPost, endpoint, strings.NewReader(string(reqBytes)))
+	httpReq, err := http.NewRequestWithContext(reqCtx, http.MethodPost, endpoint, bytes.NewReader(reqBytes))
 	if err != nil {
 		return fmt.Errorf("creating notification request: %w", err)
 	}
@@ -548,10 +595,16 @@ func (t *HTTPTransport) SendNotification(ctx context.Context, method string, par
 	return nil
 }
 
+// Ready reports whether the transport can currently carry requests: the SSE
+// stream is live, the session endpoint is known, and no keepalive failure
+// has marked it unhealthy. Cleared by Close.
 func (t *HTTPTransport) Ready() bool {
 	return t.ready.Load() && !t.closed.Load()
 }
 
+// Close tears down the transport exactly once: cancels the SSE stream and
+// its lifetime context, fails all pending requests, and waits up to 5s for
+// the read loop to exit. Idempotent; always returns nil.
 func (t *HTTPTransport) Close() error {
 	t.closeOnce.Do(func() {
 		t.closed.Store(true)
@@ -625,9 +678,9 @@ func (t *HTTPTransport) keepaliveLoop() {
 		case <-t.closeCh:
 			return
 		case <-ticker.C:
-			if !t.ready.Load() {
-				continue
-			}
+			// Ping regardless of readiness: after a transient blip the next
+			// successful ping restores readiness, so one failed POST cannot
+			// brick the client for its lifetime.
 			pingCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			if err := t.SendNotification(pingCtx, "ping", nil); err != nil {
 				cancel()
@@ -635,12 +688,12 @@ func (t *HTTPTransport) keepaliveLoop() {
 					t.cfg.Logger.Warn("MCP keepalive ping failed", "err", err)
 					t.ready.Store(false)
 				}
-				return
+				continue
 			}
 			cancel()
-			// A transient blip must not brick the client for its lifetime:
-			// a successful ping restores readiness.
-			t.ready.Store(true)
+			if !t.closed.Load() {
+				t.ready.Store(true)
+			}
 		}
 	}
 }
@@ -725,11 +778,7 @@ func (t *HTTPTransport) eventDispatchLoop() {
 		select {
 		case <-t.closeCh:
 			return
-		case event, ok := <-t.eventCh:
-			if !ok {
-				return
-			}
-
+		case event := <-t.eventCh:
 			if event.Data == "" {
 				continue
 			}
@@ -788,6 +837,8 @@ func dispatchJSONRPCResponse(t *HTTPTransport, rpcResp Response) {
 	}
 }
 
+// SessionEndpoint returns the dynamic POST endpoint negotiated during the
+// SSE handshake, or "" before the handshake completes.
 func (t *HTTPTransport) SessionEndpoint() string {
 	t.mu.Lock()
 	defer t.mu.Unlock()

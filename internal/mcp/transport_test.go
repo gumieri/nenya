@@ -462,8 +462,8 @@ func TestHTTPTransport_SendNotification_NotConnected(t *testing.T) {
 	})
 
 	err := transport.SendNotification(t.Context(), "notifications/initialized", nil)
-	if err != ErrTransportClosed {
-		t.Fatalf("expected ErrTransportClosed, got %v", err)
+	if err != ErrTransportNotReady {
+		t.Fatalf("expected ErrTransportNotReady, got %v", err)
 	}
 }
 
