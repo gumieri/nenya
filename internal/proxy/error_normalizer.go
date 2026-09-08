@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/nenya/internal/infra"
+	"github.com/nenya/internal/stream"
 )
 
 const (
@@ -395,6 +396,91 @@ func capturedStreamHasNetworkErrorFinish(captured []byte) bool {
 		}
 	}
 	return false
+}
+
+// embeddedProviderError reports whether an HTTP-200 completion body is
+// actually an error object — a top-level "error" key carrying a non-empty
+// message, either an Ollama-style string or an OpenAI/Anthropic-style object.
+// Returns the parsed details and true when the body is error-shaped. A
+// missing, null, or empty "error" field is not an error (some providers emit
+// "error": null on success).
+func embeddedProviderError(body map[string]interface{}) (providerErrorDetails, bool) {
+	if body == nil {
+		return providerErrorDetails{}, false
+	}
+	raw, ok := body["error"]
+	if !ok || raw == nil {
+		return providerErrorDetails{}, false
+	}
+	switch errVal := raw.(type) {
+	case string:
+		if strings.TrimSpace(errVal) == "" {
+			return providerErrorDetails{}, false
+		}
+		return providerErrorDetails{Message: errVal}, true
+	case map[string]interface{}:
+		message, _ := errVal["message"].(string)
+		if strings.TrimSpace(message) == "" {
+			// Use the raw JSON value as the message so structural errors
+			// still surface instead of being silently relayed.
+			if len(errVal) == 0 {
+				return providerErrorDetails{}, false
+			}
+			if code, _ := errVal["code"].(string); code != "" {
+				return providerErrorDetails{Message: code, Code: code}, true
+			}
+			return providerErrorDetails{Message: fmt.Sprintf("%v", errVal)}, true
+		}
+		details := providerErrorDetails{Message: message}
+		if code, _ := errVal["code"].(string); code != "" {
+			details.Code = code
+		}
+		return details, true
+	case []interface{}:
+		if len(errVal) == 0 {
+			return providerErrorDetails{}, false
+		}
+		return providerErrorDetails{Message: fmt.Sprintf("%v", errVal)}, true
+	default:
+		// Numbers/booleans/arrays in the error field: non-standard, but
+		// clearly not a completion — surface them rather than relaying.
+		return providerErrorDetails{Message: fmt.Sprintf("%v", raw)}, true
+	}
+}
+
+// capturedStreamEndsWithErrorObject reports whether a captured transformed
+// SSE buffer ENDS on an error frame: the last non-empty line must be a
+// `data:` line carrying a JSON payload classified by
+// stream.IsStreamErrorPayload (top-level "error" key, "type":"error", or a
+// flat "type":"*_error"). A [DONE] terminator means the upstream considers
+// the stream a completion. A mid-stream error object superseded by later
+// completion events does not match — only a stream whose terminal event is
+// the error counts, since that is what the client actually received.
+// Limitation: genuinely multi-line `data:` frames (rare) fragment the
+// terminal-line parse and are not classified.
+func capturedStreamEndsWithErrorObject(captured []byte) bool {
+	trimmed := bytes.TrimSpace(captured)
+	if len(trimmed) == 0 {
+		return false
+	}
+	// Last non-empty line only (no slice allocations).
+	idx := bytes.LastIndexByte(trimmed, '\n')
+	line := bytes.TrimSpace(trimmed[idx+1:])
+	if !bytes.HasPrefix(line, []byte("data:")) {
+		return false
+	}
+	if bytes.Equal(bytes.TrimSpace(line), []byte("data: [DONE]")) {
+		return false
+	}
+	payload := bytes.TrimSpace(bytes.TrimPrefix(line, []byte("data:")))
+	if len(payload) == 0 || payload[0] != '{' {
+		return false
+	}
+	var parsed map[string]any
+	if json.Unmarshal(payload, &parsed) != nil {
+		return false
+	}
+	return stream.IsStreamErrorPayload(parsed)
 }
 
 // writeGatewayError writes an OpenAI-compatible JSON error response to the

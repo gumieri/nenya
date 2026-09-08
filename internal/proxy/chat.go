@@ -978,9 +978,12 @@ func (p *Proxy) handleNonStreamingResponse(gw *gateway.NenyaGateway, w http.Resp
 
 	var responseMap map[string]interface{}
 	if err := json.Unmarshal(respBody, &responseMap); err != nil {
-		gw.Logger.Error("failed to parse non-streaming JSON response", "err", err, "body", string(respBody))
-		writeGatewayError(w, http.StatusBadGateway, ErrorTypeProvider, "Invalid JSON response from upstream")
-		return streamResult{}
+		// An unparseable 200 body is a failed upstream attempt like any
+		// other: record it and fail over instead of terminating the request.
+		gw.AgentState.RecordFailure(target, cooldownDuration)
+		gw.Logger.Warn("failed to parse non-streaming JSON response, trying next target",
+			"model", target.Model, "provider", target.Provider, "error_message", err.Error())
+		return streamResult{empty: true}
 	}
 
 	// A completion that terminated with a network-failure finish_reason is a
@@ -990,6 +993,19 @@ func (p *Proxy) handleNonStreamingResponse(gw *gateway.NenyaGateway, w http.Resp
 		gw.AgentState.RecordFailure(target, cooldownDuration)
 		gw.Logger.Warn("non-streaming completion ended with network-error finish_reason, trying next target",
 			"model", target.Model, "provider", target.Provider, "finish_reason", reason)
+		return streamResult{empty: true}
+	}
+
+	// Some providers return HTTP 200 with an error object in the body
+	// (Ollama-style error strings, OpenAI/Anthropic-style error objects).
+	// Treat those as failed upstream attempts too: record the failure and
+	// fail over instead of relaying the error as if it were a completion. A
+	// body carrying BOTH a populated error object and choices is treated as
+	// a failure envelope — the error wins.
+	if details, isErr := embeddedProviderError(responseMap); isErr {
+		gw.AgentState.RecordFailure(target, cooldownDuration)
+		gw.Logger.Warn("provider error embedded in HTTP-200 body, trying next target",
+			"model", target.Model, "provider", target.Provider, "error_message", details.Message)
 		return streamResult{empty: true}
 	}
 

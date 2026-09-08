@@ -1151,16 +1151,13 @@ func storeStreamCache(gw *gateway.NenyaGateway, cacheKey string, captureBuf *byt
 
 	captured := captureBuf.Bytes()
 
-	// Skip caching for refusal responses and for completions that terminated
-	// with a network-failure finish_reason. The check is a simple substring
-	// match for performance.
-	// False positives are acceptable (conservative cache miss) and extremely unlikely in practice:
-	// - "refusal", "content_filter" and the network-error variants are technical field
-	//   values (finish_reason, stop_reason), not conversational content
-	// - Models don't refuse via text content; they set structured stop_reason fields
-	// - Worst case: cache miss for non-refusal response (conservative)
+	// Skip caching for refusal responses, for completions that terminated
+	// with a network-failure finish_reason, and for streams whose terminal
+	// event is an upstream error object. The check is a cheap terminal-line
+	// parse for performance. Known gap (NENYA-28 follow-up): reader-injected
+	// gateway_error frames end with [DONE] and therefore still cache.
 	if bytes.Contains(captured, []byte("refusal")) || bytes.Contains(captured, []byte("content_filter")) ||
-		capturedStreamHasNetworkErrorFinish(captured) {
+		capturedStreamHasNetworkErrorFinish(captured) || capturedStreamEndsWithErrorObject(captured) {
 		return
 	}
 

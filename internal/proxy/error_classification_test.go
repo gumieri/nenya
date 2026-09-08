@@ -202,6 +202,74 @@ func TestBodyContainsAnyPhrases(t *testing.T) {
 	}
 }
 
+// TestEmbeddedProviderError pins NENYA-28: HTTP-200 bodies carrying a
+// top-level error object (Ollama-style string, OpenAI/Anthropic-style
+// object, or exotic scalars) are detected as failed upstream attempts;
+// null/empty error fields on legitimate completions are not.
+func TestEmbeddedProviderError(t *testing.T) {
+	tests := []struct {
+		name      string
+		body      map[string]interface{}
+		wantFound bool
+		wantMsg   string
+		wantCode  string
+	}{
+		{"ollama-style string", map[string]interface{}{"error": "model 'x' not found, try pulling it first"}, true, "model 'x' not found, try pulling it first", ""},
+		{"openai-style object", map[string]interface{}{"error": map[string]interface{}{"message": "engine stalled", "code": "internal_error"}}, true, "engine stalled", "internal_error"},
+		{"object with code only", map[string]interface{}{"error": map[string]interface{}{"code": "overloaded"}}, true, "overloaded", "overloaded"},
+		{"null error is not an error", map[string]interface{}{"error": nil, "choices": []interface{}{}}, false, "", ""},
+		{"empty string error", map[string]interface{}{"error": ""}, false, "", ""},
+		{"empty object error", map[string]interface{}{"error": map[string]interface{}{}}, false, "", ""},
+		{"empty array error", map[string]interface{}{"error": []interface{}{}}, false, "", ""},
+		{"numeric error surfaced", map[string]interface{}{"error": 500}, true, "500", ""},
+		{"no error key", map[string]interface{}{"choices": []interface{}{}}, false, "", ""},
+		{name: "nil map", body: nil, wantFound: false, wantMsg: ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			details, found := embeddedProviderError(tt.body)
+			if found != tt.wantFound {
+				t.Fatalf("embeddedProviderError() found = %v; want %v", found, tt.wantFound)
+			}
+			if found && details.Message != tt.wantMsg {
+				t.Errorf("embeddedProviderError() message = %q; want %q", details.Message, tt.wantMsg)
+			}
+			if found && details.Code != tt.wantCode {
+				t.Errorf("embeddedProviderError() code = %q; want %q", details.Code, tt.wantCode)
+			}
+		})
+	}
+}
+
+// TestCapturedStreamEndsWithErrorObject pins NENYA-28's SSE rule: only a
+// stream whose TERMINAL data line is an error payload (per
+// stream.IsStreamErrorPayload: top-level "error" key, "type":"error", flat
+// "type":"*_error") counts. Mid-stream error objects superseded by later
+// completion events and [DONE]-terminated streams do not match.
+func TestCapturedStreamEndsWithErrorObject(t *testing.T) {
+	tests := []struct {
+		name     string
+		captured string
+		want     bool
+	}{
+		{"ends with error object frame", "data: {\"choices\":[{\"delta\":{\"content\":\"hi\"}}]}\n\ndata: {\"error\":{\"message\":\"engine crashed\"}}\n\n", true},
+		{"anthropic type error terminal", "data: {\"choices\":[{\"delta\":{}}]}\n\ndata: {\"type\":\"error\",\"error\":{\"type\":\"overloaded_error\"}}\n\n", true},
+		{"flat overloaded_error terminal", "data: {\"type\":\"overloaded_error\"}\n\n", true},
+		{"mid-stream error then completion", "data: {\"error\":{\"message\":\"transient\"}}\n\ndata: {\"choices\":[{\"delta\":{\"content\":\"ok\"}}]}\n\n", false},
+		{"error then DONE", "data: {\"error\":{\"message\":\"boom\"}}\n\ndata: [DONE]\n\n", false},
+		{"clean completion only", "data: {\"choices\":[{\"delta\":{\"content\":\"ok\"}}]}\n\n", false},
+		{"nested error key in terminal chunk is not top-level", "data: {\"choices\":[{\"delta\":{\"content\":\"x\"}}],\"error\":null}\n\n", false},
+		{"empty", "", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := capturedStreamEndsWithErrorObject([]byte(tt.captured)); got != tt.want {
+				t.Errorf("capturedStreamEndsWithErrorObject(%q) = %v; want %v", tt.captured, got, tt.want)
+			}
+		})
+	}
+}
+
 // TestDefaultRetryableStatusCodes pins HTTP 529 (provider overloaded) as a
 // retryable status by default.
 func TestDefaultRetryableStatusCodes(t *testing.T) {

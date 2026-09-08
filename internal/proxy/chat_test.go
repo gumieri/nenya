@@ -283,7 +283,123 @@ func (h *phraseCaptureHandler) Handle(_ context.Context, r slog.Record) error {
 func (h *phraseCaptureHandler) WithAttrs(attrs []slog.Attr) slog.Handler { return h }
 func (h *phraseCaptureHandler) WithGroup(name string) slog.Handler       { return h }
 
-// TestHandleChatCompletions_NonStreamingNetworkErrorFinishReasonFailsOver pins NENYA-12:
+// newMultiTargetChatProxy builds a chat proxy whose agent routes to the same
+// upstream twice, for failover tests.
+func newMultiTargetChatProxy(t *testing.T, upstreamURL, agentName string) *Proxy {
+	t.Helper()
+	cfg := testutil.MinimalConfig()
+	cfg.Server.MaxBodyBytes = 10 << 20
+	cfg.Bouncer.Enabled = config.PtrTo(false)
+	cfg.Providers = map[string]config.ProviderConfig{
+		"test-provider": {URL: upstreamURL + "/v1/chat/completions", AuthStyle: "none"},
+	}
+	cfg.Agents = map[string]config.AgentConfig{
+		agentName: {
+			Strategy: "fallback",
+			Models: []config.AgentModel{
+				{Provider: "test-provider", Model: "test-model"},
+				{Provider: "test-provider", Model: "test-model"},
+			},
+		},
+	}
+	secrets := &config.SecretsConfig{ClientToken: "test-token", ProviderKeys: map[string]string{}}
+	gw := gateway.New(context.Background(), *cfg, secrets, slog.Default())
+	p := &Proxy{}
+	p.StoreGateway(gw)
+	return p
+}
+
+// TestHandleChatCompletions_EmbeddedErrorFailsOver pins NENYA-28: an
+// HTTP-200 body carrying a provider error object (Ollama-style string) is a
+// failed upstream attempt — the retry loop fails over instead of relaying
+// the error as a completion.
+func TestHandleChatCompletions_EmbeddedErrorFailsOver(t *testing.T) {
+	var attempts atomic.Int32
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if attempts.Add(1) == 1 {
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
+				"error": "model 'llama3:8b' is not loaded, try pulling it first",
+			})
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"id":    "chat-good",
+			"model": "test-model",
+			"choices": []interface{}{
+				map[string]interface{}{
+					"index":         0,
+					"message":       map[string]interface{}{"role": "assistant", "content": "hello world"},
+					"finish_reason": "stop",
+				},
+			},
+		})
+	}))
+	defer upstream.Close()
+
+	p := newMultiTargetChatProxy(t, upstream.URL, "embedded-err-agent")
+
+	body := `{"model":"embedded-err-agent","stream":false,"messages":[{"role":"user","content":"hi"}]}`
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(body))
+	req.Header.Set("Authorization", "Bearer test-token")
+	rec := httptest.NewRecorder()
+
+	p.ServeHTTP(rec, req)
+
+	if attempts.Load() != 2 {
+		t.Fatalf("expected embedded-error body to trigger failover (2 upstream hits), got %d attempts", attempts.Load())
+	}
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200 after failover, got %d (body: %s)", rec.Code, rec.Body.String())
+	}
+	var resp map[string]interface{}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("expected JSON response: %v", err)
+	}
+	if resp["id"] != "chat-good" {
+		t.Errorf("expected the healthy completion (chat-good), got %v", resp["id"])
+	}
+}
+
+// TestHandleChatCompletions_NullErrorFieldRelayed guards NENYA-28 against
+// false positives: some providers emit "error": null on success — that body
+// must be relayed as a normal completion.
+func TestHandleChatCompletions_NullErrorFieldRelayed(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"id":    "chat-ok",
+			"model": "test-model",
+			"error": nil,
+			"choices": []interface{}{
+				map[string]interface{}{
+					"index":         0,
+					"message":       map[string]interface{}{"role": "assistant", "content": "fine"},
+					"finish_reason": "stop",
+				},
+			},
+		})
+	}))
+	defer upstream.Close()
+
+	p := newChatProxy(t, upstream.URL)
+	body := `{"model":"test-agent","stream":false,"messages":[{"role":"user","content":"hi"}]}`
+	req := testutil.NewTestRequest(t, http.MethodPost, "/v1/chat/completions", body)
+	rec := httptest.NewRecorder()
+
+	p.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected null-error body to be relayed as success, got %d (body: %s)", rec.Code, rec.Body.String())
+	}
+	var resp map[string]interface{}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("expected JSON completion body: %v", err)
+	}
+	if resp["id"] != "chat-ok" {
+		t.Errorf("expected the original completion (chat-ok) relayed, got %v", resp["id"])
+	}
+}
 
 // TestHandleChatCompletions_NonStreamingNetworkErrorFinishReasonFailsOver pins NENYA-12:
 // a 200 completion whose terminal finish_reason is a network-failure variant
