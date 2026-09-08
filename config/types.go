@@ -134,6 +134,19 @@ func (a *AgentConfig) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
+// RequestScopedErrorRule teaches the gateway that a provider's error shape
+// (status + case-insensitive body substring) is actually the client's fault,
+// even when the status class suggests otherwise (e.g. an invalid-parameter
+// 401). Request-scoped errors never cool down or rotate credentials; the
+// error goes straight back to the client.
+type RequestScopedErrorRule struct {
+	// Status is the HTTP status code the rule applies to (0 = any status).
+	Status int `json:"status"`
+	// MessagePattern is a case-insensitive substring matched against the
+	// error body.
+	MessagePattern string `json:"message_pattern"`
+}
+
 // ProviderConfig defines the wire-level configuration for an upstream LLM
 // provider: the endpoint URL, authentication style, API format, timeouts,
 // retry settings, and per-provider rate limits. User-provided configs override
@@ -158,6 +171,12 @@ type ProviderConfig struct {
 	// failures). Matched in addition to the built-in pattern sets; empty
 	// list means built-in sets only.
 	RetryablePhrases []string `json:"retryable_phrases,omitempty"`
+	// RequestScopedErrors classifies provider error shapes as the client's
+	// fault (NENYA-42): matching errors bypass cooldown/rotation state and
+	// surface directly to the client. Empty uses the default ErrorKind
+	// scope classification. Note: context-length handling (summarization
+	// retry) takes precedence over rules.
+	RequestScopedErrors []RequestScopedErrorRule `json:"request_scoped_errors,omitempty"`
 	// Thinking configures reasoning token behavior for this provider.
 	Thinking *ThinkingConfig `json:"thinking,omitempty"`
 	// APIKey is the authentication key (typically loaded from secrets).
@@ -216,6 +235,7 @@ type Provider struct {
 	RetryableStatusCodes     []int
 	MaxRetryAttempts         int
 	RetryablePhrases         []string
+	RequestScopedErrors      []RequestScopedErrorRule
 	Thinking                 *ThinkingConfig
 	Billing                  *BillingConfig
 	AllowedModels            []string

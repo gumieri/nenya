@@ -325,18 +325,38 @@ func (rl *retryLoop) handleActionError(i int, target routing.UpstreamTarget, act
 	action.body, _ = io.ReadAll(io.LimitReader(action.resp.Body, pipeline.MaxErrorBodyBytes))
 	_ = action.resp.Body.Close()
 
+	// Connection-scoped (client cancel/disconnect, NENYA-42): the client is
+	// gone. Surface nothing, mutate no resilience state, retry nothing.
+	if err := rl.r.Context().Err(); err != nil {
+		action.cancel()
+		rl.ctxLogger.Info("client context canceled during upstream error handling",
+			"model", target.Model, "provider", target.Provider, "error_message", err.Error())
+		return retrySignalDone
+	}
+
 	if util.IsContextLengthError(action.resp.StatusCode, string(action.body)) {
 		return rl.handleContextLimitError(i, target, action)
+	}
+
+	// Request-scoped via provider config (NENYA-42): the client's payload is
+	// at fault. Skip cooldown/rotation state and surface the upstream error
+	// directly to the client instead of sweeping the remaining targets.
+	// Note: context-length handling above wins over rules — an operator rule
+	// cannot disable the summarization retry for ctx-limit-shaped errors.
+	if matched := rl.p.matchRequestScopedError(rl.gw, target.Provider, action.resp.StatusCode, action.body); matched != nil {
+		gwErr := ParseProviderError(target.Provider, action.resp.StatusCode, action.body, nil)
+		rl.ctxLogger.Warn("request-scoped error from provider, failing without rotation",
+			"model", target.Model, "provider", target.Provider, "status", action.resp.StatusCode,
+			"rule_pattern", matched.MessagePattern)
+		action.cancel()
+		rl.writeUpstreamErrorToClient(action.resp.StatusCode, gwErr)
+		return retrySignalDone
 	}
 
 	shouldRetry, retryDelay := rl.handleUpstreamError(i, target, action)
 	if !shouldRetry {
 		gwErr := ParseProviderError(target.Provider, action.resp.StatusCode, action.body, nil)
-		if rl.stream {
-			writeGatewayStreamError(rl.w, action.resp.StatusCode, gwErr.Type, gwErr.Message)
-		} else {
-			writeGatewayError(rl.w, action.resp.StatusCode, gwErr.Type, gwErr.Message)
-		}
+		rl.writeUpstreamErrorToClient(action.resp.StatusCode, gwErr)
 		return retrySignalDone
 	}
 	if rl.opts.MaxRetries > 0 && rl.attempt >= rl.opts.MaxRetries {
@@ -381,11 +401,7 @@ func (rl *retryLoop) handleContextLimitError(i int, target routing.UpstreamTarge
 	}
 
 	gwErr := ParseProviderError(target.Provider, action.resp.StatusCode, action.body, nil)
-	if rl.stream {
-		writeGatewayStreamError(rl.w, action.resp.StatusCode, gwErr.Type, gwErr.Message)
-	} else {
-		writeGatewayError(rl.w, action.resp.StatusCode, gwErr.Type, gwErr.Message)
-	}
+	rl.writeUpstreamErrorToClient(action.resp.StatusCode, gwErr)
 	return retrySignalDone
 }
 
@@ -449,6 +465,16 @@ func (rl *retryLoop) handleUpstreamError(idx int, target routing.UpstreamTarget,
 // Writes an error response to the client. If quota exhaustion was detected during retries,
 // returns error_kind=quota_exhausted; otherwise returns error_kind=provider_error.
 func (rl *retryLoop) Exhausted() {
+	// Connection-scoped (NENYA-42): a canceled client is gone — no metric,
+	// no error-level log, no write attempt.
+	if rl.r != nil && rl.r.Context().Err() != nil {
+		model := ""
+		if len(rl.opts.Targets) > 0 {
+			model = rl.opts.Targets[0].Model
+		}
+		rl.ctxLogger.Info("client gone before exhaustion reporting", "model", model)
+		return
+	}
 	rl.ctxLogger.Error("all upstream targets exhausted", "total", len(rl.opts.Targets), "attempts", rl.attempt)
 	if rl.opts.AgentName != "" {
 		rl.gw.Metrics.RecordExhausted(rl.opts.AgentName)
@@ -1021,6 +1047,44 @@ func parseDigitsToTimestamp(digits string, minTimestamp, maxTimestamp int64) int
 		return 0
 	}
 	return ts
+}
+
+// matchRequestScopedError returns the provider-configured
+// request_scoped_errors rule the upstream error matches (NENYA-42): the
+// client's payload is at fault regardless of the status class. Rules with a
+// nonzero Status apply only to that status; rules with an empty
+// MessagePattern never match. Returns nil when no rule matches.
+func (p *Proxy) matchRequestScopedError(gw *gateway.NenyaGateway, providerName string, statusCode int, body []byte) *config.RequestScopedErrorRule {
+	pr, ok := gw.Providers[providerName]
+	if !ok || len(pr.RequestScopedErrors) == 0 {
+		return nil
+	}
+	lowerBody := strings.ToLower(string(body))
+	for i := range pr.RequestScopedErrors {
+		rule := &pr.RequestScopedErrors[i]
+		if rule.Status != 0 && rule.Status != statusCode {
+			continue
+		}
+		pattern := strings.TrimSpace(rule.MessagePattern)
+		if pattern == "" {
+			continue
+		}
+		if strings.Contains(lowerBody, strings.ToLower(pattern)) {
+			return rule
+		}
+	}
+	return nil
+}
+
+// writeUpstreamErrorToClient relays a parsed upstream error to the client in
+// the wire format the request arrived in (SSE error frame for streams, JSON
+// envelope otherwise).
+func (rl *retryLoop) writeUpstreamErrorToClient(statusCode int, gwErr *GatewayError) {
+	if rl.stream {
+		writeGatewayStreamError(rl.w, statusCode, gwErr.Type, gwErr.Message)
+		return
+	}
+	writeGatewayError(rl.w, statusCode, gwErr.Type, gwErr.Message)
 }
 
 func (p *Proxy) isRetryableStatus(gw *gateway.NenyaGateway, providerName string, statusCode int) bool {

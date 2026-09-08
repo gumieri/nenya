@@ -171,6 +171,7 @@ func resolveEngineRefs(cfg *Config) error {
 			RetryableStatusCodes: pc.RetryableStatusCodes,
 			MaxRetryAttempts:     pc.MaxRetryAttempts,
 			RetryablePhrases:     pc.RetryablePhrases,
+			RequestScopedErrors:  pc.RequestScopedErrors,
 		}
 	}
 

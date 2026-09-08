@@ -34,6 +34,58 @@ type ErrorBody struct {
 	Param   string `json:"param,omitempty"`
 }
 
+// ErrorScope classifies who is at fault for an error. It is the taxonomy
+// that resilience wiring is intended to drive (NENYA-42): request-scoped
+// faults (the client's payload) must never mutate cooldown/rotation state;
+// account-scoped faults (quota, bad credentials, rate limits) are the
+// credential's problem (today enforced at target-level cooldown granularity);
+// connection-scoped faults are transport-lifecycle events (client cancel,
+// network) and must not poison state. Providers invent new request-fault
+// shapes faster than defaults can track — the operator-configurable
+// providers.<name>.request_scoped_errors rules override this taxonomy per
+// provider.
+type ErrorScope string
+
+const (
+	// ScopeRequest marks errors caused by the client's payload.
+	ScopeRequest ErrorScope = "request"
+	// ScopeAccount marks errors tied to the credential/account.
+	ScopeAccount ErrorScope = "account"
+	// ScopeConnection marks transport-lifecycle errors (cancel, network).
+	ScopeConnection ErrorScope = "connection"
+	// ScopeProvider marks upstream-side failures.
+	ScopeProvider ErrorScope = "provider"
+	// ScopeUnknown marks errors that carry no scope signal.
+	ScopeUnknown ErrorScope = ""
+)
+
+// Scope returns the default fault scope for this error kind. Operator
+// configuration (providers.<name>.request_scoped_errors) can override the
+// classification per provider, because providers invent new request-fault
+// shapes faster than the defaults can track.
+func (k ErrorKind) Scope() ErrorScope {
+	switch k {
+	case ErrorKindInvalidRequest,
+		ErrorKindPayloadTooLarge,
+		ErrorKindModelNotFound,
+		ErrorKindContextExceeded:
+		return ScopeRequest
+	case ErrorKindAuthFailed,
+		ErrorKindQuotaExhausted,
+		ErrorKindRateLimited:
+		return ScopeAccount
+	case ErrorKindNetworkError,
+		ErrorKindProviderTimeout:
+		return ScopeConnection
+	case ErrorKindProviderError,
+		ErrorKindBouncerError,
+		ErrorKindInternal:
+		return ScopeProvider
+	default:
+		return ScopeUnknown
+	}
+}
+
 // Retryable returns true if the error is potentially retryable. Quota exhaustion,
 // rate limits, provider timeouts, and network errors are considered retryable.
 func (k ErrorKind) Retryable() bool {

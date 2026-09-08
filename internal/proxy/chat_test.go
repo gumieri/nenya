@@ -401,6 +401,84 @@ func TestHandleChatCompletions_NullErrorFieldRelayed(t *testing.T) {
 	}
 }
 
+// TestHandleChatCompletions_RequestScopedErrorNoRotation pins NENYA-42: a
+// provider-configured request_scoped_errors rule marks the error as the
+// client's fault — the request fails fast (1 upstream hit) with the upstream
+// status surfaced, instead of sweeping the remaining targets. Without the
+// rule, the same error sweeps the fallback chain (2 hits).
+func TestHandleChatCompletions_RequestScopedErrorNoRotation(t *testing.T) {
+	t.Run("with rule: fails fast without rotation", func(t *testing.T) {
+		var hits atomic.Int32
+		upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			hits.Add(1)
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusUnauthorized)
+			_, _ = w.Write([]byte(`{"error":{"message":"invalid parameter: temperature must be a number"}}`))
+		}))
+		defer upstream.Close()
+
+		p := newMultiTargetChatProxy(t, upstream.URL, "scoped-agent")
+		// Add the request-scoped rule post-construction (same pattern as
+		// embeddings_retry_test.go's provider mutations).
+		p.Gateway().Providers["test-provider"].RequestScopedErrors = []config.RequestScopedErrorRule{
+			{Status: 401, MessagePattern: "invalid parameter"},
+		}
+
+		body := `{"model":"scoped-agent","stream":false,"messages":[{"role":"user","content":"hi"}]}`
+		req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(body))
+		req.Header.Set("Authorization", "Bearer test-token")
+		rec := httptest.NewRecorder()
+		p.ServeHTTP(rec, req)
+
+		if hits.Load() != 1 {
+			t.Fatalf("expected request-scoped error to fail fast (1 upstream hit), got %d", hits.Load())
+		}
+		if rec.Code != http.StatusUnauthorized {
+			t.Fatalf("expected upstream 401 surfaced to client, got %d (body: %s)", rec.Code, rec.Body.String())
+		}
+		var resp struct {
+			Error struct {
+				Message string `json:"message"`
+			} `json:"error"`
+		}
+		if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+			t.Fatalf("expected JSON error body: %v", err)
+		}
+		if !strings.Contains(resp.Error.Message, "invalid parameter") {
+			t.Errorf("expected upstream message surfaced, got %q", resp.Error.Message)
+		}
+	})
+
+	t.Run("without rule: sweeps the fallback chain", func(t *testing.T) {
+		var hits atomic.Int32
+		upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			hits.Add(1)
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusUnauthorized)
+			_, _ = w.Write([]byte(`{"error":{"message":"invalid parameter: temperature must be a number"}}`))
+		}))
+		defer upstream.Close()
+
+		p := newMultiTargetChatProxy(t, upstream.URL, "sweep-agent")
+		body := `{"model":"sweep-agent","stream":false,"messages":[{"role":"user","content":"hi"}]}`
+		req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(body))
+		req.Header.Set("Authorization", "Bearer test-token")
+		rec := httptest.NewRecorder()
+		p.ServeHTTP(rec, req)
+
+		// Without the rule the generic non-retryable fallthrough sweeps both
+		// targets, ending in the typed exhaustion error rather than the
+		// relayed 401.
+		if hits.Load() != 2 {
+			t.Fatalf("expected fallback sweep to hit upstream twice, got %d", hits.Load())
+		}
+		if rec.Code != http.StatusServiceUnavailable {
+			t.Fatalf("expected typed 503 exhaustion error, got %d (body: %s)", rec.Code, rec.Body.String())
+		}
+		assertErrorKind(t, rec, "provider_error")
+	})
+}
+
 // TestHandleChatCompletions_NonStreamingNetworkErrorFinishReasonFailsOver pins NENYA-12:
 // a 200 completion whose terminal finish_reason is a network-failure variant
 // is a failed upstream attempt — the retry loop must fail over to the next

@@ -464,16 +464,25 @@ func TestAuthenticateRequest_MessagesAgentScoping(t *testing.T) {
 }
 
 // assertErrorKind checks the error_kind field of a structured error response.
+// Handles both envelope shapes: top-level error_kind (writeStructuredError)
+// and nested error.error_kind (writeGatewayError's OpenAI envelope).
 func assertErrorKind(t *testing.T, rec *httptest.ResponseRecorder, want string) {
 	t.Helper()
 	var body struct {
 		ErrorKind string `json:"error_kind"`
+		Error     struct {
+			ErrorKind string `json:"error_kind"`
+		} `json:"error"`
 	}
 	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
 		t.Fatalf("expected JSON error body, got error: %v, body: %s", err, rec.Body.String())
 	}
-	if body.ErrorKind != want {
-		t.Fatalf("expected error_kind %q, got %q (body: %s)", want, body.ErrorKind, rec.Body.String())
+	kind := body.ErrorKind
+	if kind == "" {
+		kind = body.Error.ErrorKind
+	}
+	if kind != want {
+		t.Fatalf("expected error_kind %q, got %q (body: %s)", want, kind, rec.Body.String())
 	}
 }
 

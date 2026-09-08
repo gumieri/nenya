@@ -58,6 +58,36 @@ func TestErrorKind_ShouldFailover(t *testing.T) {
 	}
 }
 
+// TestErrorKind_Scope pins NENYA-42's default fault-scope taxonomy: the
+// client's payload (request), the credential (account), transport lifecycle
+// (connection), upstream side (provider).
+func TestErrorKind_Scope(t *testing.T) {
+	tests := []struct {
+		kind  ErrorKind
+		scope ErrorScope
+	}{
+		{ErrorKindInvalidRequest, ScopeRequest},
+		{ErrorKindPayloadTooLarge, ScopeRequest},
+		{ErrorKindModelNotFound, ScopeRequest},
+		{ErrorKindContextExceeded, ScopeRequest},
+		{ErrorKindAuthFailed, ScopeAccount},
+		{ErrorKindQuotaExhausted, ScopeAccount},
+		{ErrorKindRateLimited, ScopeAccount},
+		{ErrorKindNetworkError, ScopeConnection},
+		{ErrorKindProviderTimeout, ScopeConnection},
+		{ErrorKindProviderError, ScopeProvider},
+		{ErrorKindBouncerError, ScopeProvider},
+		{ErrorKindInternal, ScopeProvider},
+		{ErrorKindNone, ScopeUnknown},
+	}
+	for _, tt := range tests {
+		got := tt.kind.Scope()
+		if got != tt.scope {
+			t.Errorf("ErrorKind(%q).Scope() = %q, want %q", tt.kind, got, tt.scope)
+		}
+	}
+}
+
 func TestErrorResponse_JSONSerialization(t *testing.T) {
 	resp := ErrorResponse{
 		Error: ErrorBody{

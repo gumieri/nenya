@@ -527,6 +527,22 @@ func (p *Proxy) handleBufferedAction(ctx context.Context, gw *gateway.NenyaGatew
 		attempt++
 		action.body, _ = io.ReadAll(io.LimitReader(action.resp.Body, pipeline.MaxErrorBodyBytes))
 		_ = action.resp.Body.Close()
+		// Connection-scoped (NENYA-42): client gone — no state writes, no
+		// further targets.
+		if ctx.Err() != nil {
+			action.cancel()
+			gw.Logger.Info("MCP buffered: client context canceled during upstream error handling",
+				"model", target.Model, "provider", target.Provider)
+			return nil, false
+		}
+		// Request-scoped via provider config (NENYA-42): the client's payload
+		// is at fault — no cooldown/rotation state, no target sweep.
+		if p.matchRequestScopedError(gw, target.Provider, action.resp.StatusCode, action.body) != nil {
+			action.cancel()
+			gw.Logger.Warn("MCP buffered: request-scoped error from provider, failing without rotation",
+				"model", target.Model, "provider", target.Provider, "status", action.resp.StatusCode)
+			return nil, false
+		}
 		gw.Logger.Debug("MCP buffered: upstream error",
 			"target", idx+1,
 			"status", action.resp.StatusCode,

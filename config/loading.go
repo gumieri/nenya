@@ -742,6 +742,7 @@ func ResolveProviders(cfg *Config, secrets *SecretsConfig) map[string]*Provider 
 			RetryableStatusCodes:     pc.RetryableStatusCodes,
 			MaxRetryAttempts:         pc.MaxRetryAttempts,
 			RetryablePhrases:         pc.RetryablePhrases,
+			RequestScopedErrors:      pc.RequestScopedErrors,
 			Thinking:                 pc.Thinking,
 			Billing:                  pc.Billing,
 			AllowedModels:            pc.AllowedModels,

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -1150,5 +1151,38 @@ func TestLogRequestIfDebug_SkipsLargeBody(t *testing.T) {
 
 	if strings.Contains(logOutput, "body=") {
 		t.Errorf("large body should not be logged, got: %s", logOutput)
+	}
+}
+
+// TestRetryLoop_HandleActionError_ClientCanceled pins NENYA-42: when the
+// client context is already canceled, the error is connection-scoped — the
+// loop stops immediately (retrySignalDone) without further state mutation or
+// retries.
+func TestRetryLoop_HandleActionError_ClientCanceled(t *testing.T) {
+	p, _ := newTestProxy(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	r := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil).WithContext(ctx)
+	w := httptest.NewRecorder()
+	opts := forwardOptions{
+		Targets:   []routing.UpstreamTarget{{Provider: "test-provider", Model: "test-model"}},
+		AgentName: "cancel-agent",
+	}
+	rl, err := newRetryLoop(p, p.Gateway(), w, r, opts)
+	if err != nil {
+		t.Fatalf("newRetryLoop: %v", err)
+	}
+
+	action := upstreamAction{
+		kind:   actionError,
+		resp:   &http.Response{StatusCode: http.StatusInternalServerError, Header: http.Header{}, Body: io.NopCloser(strings.NewReader(`{}`))},
+		cancel: func() {},
+	}
+	signal := rl.handleActionError(0, opts.Targets[0], action)
+	if signal != retrySignalDone {
+		t.Fatalf("expected retrySignalDone on canceled client context, got %v", signal)
+	}
+	if w.Body.Len() != 0 {
+		t.Errorf("expected no body written to the canceled client, got %q", w.Body.String())
 	}
 }
