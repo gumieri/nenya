@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/nenya/config"
@@ -168,6 +169,132 @@ func TestHandleChatCompletions_NonStreamingEmptyResponse(t *testing.T) {
 
 	if rec.Code == http.StatusOK {
 		t.Logf("got %d for empty non-streaming — acceptable without upstream error", rec.Code)
+	}
+}
+
+// TestHandleChatCompletions_NonStreamingNetworkErrorFinishReason pins NENYA-12:
+// a 200 completion whose terminal finish_reason is a network-failure variant
+// is a failed upstream attempt — the retry loop must fail over to the next
+// target instead of relaying the broken completion.
+func TestHandleChatCompletions_NonStreamingNetworkErrorFinishReasonFailsOver(t *testing.T) {
+	var attempts atomic.Int32
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if attempts.Add(1) == 1 {
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
+				"id":    "chat-broken",
+				"model": "test-model",
+				"choices": []interface{}{
+					map[string]interface{}{
+						"index":         0,
+						"message":       map[string]interface{}{"role": "assistant", "content": "partial"},
+						"finish_reason": "network_error",
+					},
+				},
+			})
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"id":    "chat-good",
+			"model": "test-model",
+			"choices": []interface{}{
+				map[string]interface{}{
+					"index":         0,
+					"message":       map[string]interface{}{"role": "assistant", "content": "hello world"},
+					"finish_reason": "stop",
+				},
+			},
+		})
+	}))
+	defer upstream.Close()
+
+	cfg := config.Config{
+		Server: config.ServerConfig{MaxBodyBytes: 10 << 20},
+		Governance: config.GovernanceConfig{
+			RatelimitMaxRPM: config.PtrTo(60),
+			RatelimitMaxTPM: config.PtrTo(100000),
+		},
+		Bouncer: config.BouncerConfig{Enabled: config.PtrTo(false)},
+		Providers: map[string]config.ProviderConfig{
+			"test-provider": {URL: upstream.URL + "/v1/chat/completions", AuthStyle: "none"},
+		},
+		Agents: map[string]config.AgentConfig{
+			"failover-agent": {
+				Models: []config.AgentModel{
+					{Provider: "test-provider", Model: "test-model"},
+					{Provider: "test-provider", Model: "test-model"},
+				},
+			},
+		},
+	}
+	secrets := &config.SecretsConfig{ClientToken: "test-token", ProviderKeys: map[string]string{}}
+	gw := gateway.New(context.Background(), cfg, secrets, slog.Default())
+	p := &Proxy{}
+	p.StoreGateway(gw)
+
+	body := `{"model":"failover-agent","stream":false,"messages":[{"role":"user","content":"hi"}]}`
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(body))
+	req.Header.Set("Authorization", "Bearer test-token")
+	rec := httptest.NewRecorder()
+
+	p.ServeHTTP(rec, req)
+
+	if attempts.Load() != 2 {
+		t.Fatalf("expected failover to hit upstream twice, got %d attempts", attempts.Load())
+	}
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200 after failover, got %d (body: %s)", rec.Code, rec.Body.String())
+	}
+	var resp map[string]interface{}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("expected JSON response: %v", err)
+	}
+	if resp["id"] != "chat-good" {
+		t.Errorf("expected the healthy completion (chat-good), got %v", resp["id"])
+	}
+}
+
+// TestHandleChatCompletions_NonStreamingNetworkErrorFinishReasonExhausted
+// verifies the exhaustion path: when every target returns a network-error
+// terminal, the client receives a typed upstream error instead of the broken
+// completion body.
+func TestHandleChatCompletions_NonStreamingNetworkErrorFinishReasonExhausted(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"id":    "chat-broken",
+			"model": "test-model",
+			"choices": []interface{}{
+				map[string]interface{}{
+					"index":         0,
+					"message":       map[string]interface{}{"role": "assistant", "content": "partial"},
+					"finish_reason": "network-error",
+				},
+			},
+		})
+	}))
+	defer upstream.Close()
+
+	p := newChatProxy(t, upstream.URL)
+	body := `{"model":"test-agent","stream":false,"messages":[{"role":"user","content":"hi"}]}`
+	req := testutil.NewTestRequest(t, http.MethodPost, "/v1/chat/completions", body)
+	rec := httptest.NewRecorder()
+
+	p.ServeHTTP(rec, req)
+
+	if rec.Code == http.StatusOK {
+		t.Fatalf("expected typed error after exhaustion, got 200 relaying the broken completion: %s", rec.Body.String())
+	}
+	var resp struct {
+		Error struct {
+			ErrorKind string `json:"error_kind"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("expected JSON error body: %v", err)
+	}
+	if resp.Error.ErrorKind == "" {
+		t.Errorf("expected structured error_kind in exhaustion response, got body: %s", rec.Body.String())
 	}
 }
 

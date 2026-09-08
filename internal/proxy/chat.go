@@ -983,6 +983,16 @@ func (p *Proxy) handleNonStreamingResponse(gw *gateway.NenyaGateway, w http.Resp
 		return streamResult{}
 	}
 
+	// A completion that terminated with a network-failure finish_reason is a
+	// failed upstream attempt, not a successful response: record the failure
+	// and let the retry loop try the next target instead of relaying it.
+	if reason := terminalNetworkErrorReason(responseMap); reason != "" {
+		gw.AgentState.RecordFailure(target, cooldownDuration)
+		gw.Logger.Warn("non-streaming completion ended with network-error finish_reason, trying next target",
+			"model", target.Model, "provider", target.Provider, "finish_reason", reason)
+		return streamResult{empty: true}
+	}
+
 	if sourceFormat == "anthropic" && target.Format != "anthropic" {
 		a := adapter.GetAnthropicAdapter()
 		responseMap = a.ConvertOpenAIResponseToAnthropicBody(responseMap)

@@ -322,6 +322,81 @@ func jsonScalarString(raw json.RawMessage) string {
 	return number.String()
 }
 
+// networkErrorFinishReasons are the finish_reason spellings upstreams use to
+// signal that a generation terminated because of a network failure rather
+// than completing (observed: "network_error", "network-error", "network
+// error"). Matching is case-insensitive on the trimmed value.
+var networkErrorFinishReasons = []string{
+	"network_error",
+	"network-error",
+	"network error",
+}
+
+// isNetworkErrorFinishReason reports whether reason is a network-failure
+// finish_reason variant.
+func isNetworkErrorFinishReason(reason string) bool {
+	normalized := strings.ToLower(strings.TrimSpace(reason))
+	for _, variant := range networkErrorFinishReasons {
+		if normalized == variant {
+			return true
+		}
+	}
+	return false
+}
+
+// terminalNetworkErrorReason returns the first network-failure finish_reason
+// found in a completion body — OpenAI-shaped (choices[].finish_reason) or
+// Anthropic-shaped (top-level stop_reason) — or "" when the body carries no
+// such terminal. The policy is all-or-nothing: one network-failure choice
+// voids the entire multi-choice completion, which is then treated as a failed
+// upstream attempt instead of being relayed as a successful response.
+func terminalNetworkErrorReason(responseMap map[string]interface{}) string {
+	if reason, ok := responseMap["stop_reason"].(string); ok && isNetworkErrorFinishReason(reason) {
+		return reason
+	}
+	choicesRaw, ok := responseMap["choices"].([]interface{})
+	if !ok {
+		return ""
+	}
+	for _, choiceRaw := range choicesRaw {
+		choice, ok := choiceRaw.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		reason, _ := choice["finish_reason"].(string)
+		if isNetworkErrorFinishReason(reason) {
+			return reason
+		}
+	}
+	return ""
+}
+
+// capturedStreamHasNetworkErrorFinish reports whether a captured transformed
+// SSE buffer contains a network-failure finish_reason or stop_reason. The
+// buffer is lowercased first so case variants cannot defeat the match.
+// Conservative substring matching (same style as the refusal check): false
+// positives (user content echoing the literal JSON) cost only a cache miss.
+func capturedStreamHasNetworkErrorFinish(captured []byte) bool {
+	lower := bytes.ToLower(captured)
+	for _, needle := range []string{
+		`"finish_reason":"network_error"`,
+		`"finish_reason": "network_error"`,
+		`"finish_reason":"network-error"`,
+		`"finish_reason": "network-error"`,
+		`"finish_reason":"network error"`,
+		`"finish_reason": "network error"`,
+		`"stop_reason":"network_error"`,
+		`"stop_reason": "network_error"`,
+		`"stop_reason":"network-error"`,
+		`"stop_reason": "network-error"`,
+	} {
+		if bytes.Contains(lower, []byte(needle)) {
+			return true
+		}
+	}
+	return false
+}
+
 // writeGatewayError writes an OpenAI-compatible JSON error response to the
 // client with the appropriate Content-Type header and the structured
 // error_kind field (§6 contract: all error responses carry error_kind).

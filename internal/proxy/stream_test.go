@@ -913,6 +913,10 @@ func TestStoreStreamCache_SkipsRefusal(t *testing.T) {
 		{name: "refusal not cached", content: `{"choices":[{"finish_reason":"refusal"}]}`, want: false},
 		{name: "content_filter not cached", content: `{"choices":[{"finish_reason":"content_filter"}]}`, want: false},
 		{name: "anthropic refusal not cached", content: `{"type":"message_delta","delta":{"stop_reason":"refusal"}}`, want: false},
+		{name: "network_error finish not cached", content: `{"choices":[{"finish_reason":"network_error"}]}`, want: false},
+		{name: "network-error hyphen not cached", content: `{"choices":[{"finish_reason":"network-error"}]}`, want: false},
+		{name: "network error spaced not cached", content: `{"choices":[{"finish_reason":"network error"}]}`, want: false},
+		{name: "anthropic network stop_reason not cached", content: `{"type":"message_delta","delta":{"stop_reason":"network_error"}}`, want: false},
 	}
 
 	for _, tt := range tests {

@@ -1079,6 +1079,12 @@ var openrouterRetryablePatterns = []string{
 	"free tier rate limit",
 }
 
+var xaiRetryablePatterns = []string{
+	"at capacity",
+	"temporarily unavailable",
+	"service overloaded",
+}
+
 type providerMatcher struct {
 	name     string
 	patterns []string
@@ -1090,6 +1096,10 @@ var providerMatchers = []providerMatcher{
 	{name: "vertex", patterns: geminiRetryablePatterns},
 	{name: "deepseek", patterns: deepseekRetryablePatterns},
 	{name: "openrouter", patterns: openrouterRetryablePatterns},
+	// name matching is the existing substring heuristic shared by all
+	// matchers; "xai" may over-match operator-chosen names (worst case: one
+	// wasted retry of a permanent 400).
+	{name: "xai", patterns: xaiRetryablePatterns},
 }
 
 func matchProviderSpecificPatterns(lowerBody string, provider string) bool {
