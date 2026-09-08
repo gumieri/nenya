@@ -395,6 +395,47 @@ func resolveEffectiveMaxOutput(deps TransformDeps, finalModel string, maxOutput 
 	return effectiveMaxOutput
 }
 
+// resolveEffectiveMaxContext returns the model's context window from the
+// discovery catalog or the static registry; 0 when unknown.
+func resolveEffectiveMaxContext(deps TransformDeps, finalModel string) int {
+	if deps.Catalog != nil {
+		if m, ok := deps.Catalog.Lookup(finalModel); ok && m.MaxContext > 0 {
+			return m.MaxContext
+		}
+	}
+	if entry, ok := config.ModelRegistry[finalModel]; ok && entry.MaxContext > 0 {
+		return entry.MaxContext
+	}
+	return 0
+}
+
+// resolveTransformInputBudget derives the input-conversation budget for the
+// transform-side TrimPayload call: 3/4 of the model's context window
+// (reserving output headroom — same 3/4 policy as the interceptor hard limit
+// computed in proxy/chat.go resolvePipelineContext), clamped to
+// context.hard_limit_tokens when configured. The agent-resolved maxContext
+// takes precedence; catalog/registry values are the fallback. Returns 0 (trim
+// disabled) when the context window is unknown and no hard limit is set, per
+// the documented UNKNOWN_MAXCONTEXT fallback. The budget is deliberately
+// derived from MaxContext, never from MaxOutput: TrimPayload's parameter is an
+// input-conversation budget, and clamping input to the output cap
+// over-trimmed large-context models.
+func resolveTransformInputBudget(deps TransformDeps, finalModel string, maxContext int) int {
+	if hardLimit := deps.Config.Context.HardLimitTokens; hardLimit > 0 {
+		return hardLimit
+	}
+	maxCtx := maxContext
+	if maxCtx <= 0 {
+		maxCtx = resolveEffectiveMaxContext(deps, finalModel)
+	}
+	if maxCtx <= 0 {
+		return 0
+	}
+	// maxCtx/4*3 cannot overflow for any positive int (unlike maxCtx*3/4);
+	// degenerate windows under 4 tokens yield 0, disabling the trim.
+	return maxCtx / 4 * 3
+}
+
 func applyMaxTokens(payload map[string]interface{}, effectiveMaxOutput int) {
 	if effectiveMaxOutput <= 0 {
 		return
@@ -456,7 +497,7 @@ func convertToAnthropicFormat(deps TransformDeps, payload map[string]interface{}
 	return anthropicAdapter.ConvertOpenAIToAnthropicBody(payload, modelName, stream, opts)
 }
 
-func TransformRequestForUpstream(deps TransformDeps, providerName, upstreamURL string, payload map[string]interface{}, model string, maxOutput int, format string, reasoningEffort string) ([]byte, string, error) {
+func TransformRequestForUpstream(deps TransformDeps, providerName, upstreamURL string, payload map[string]interface{}, model string, maxOutput int, maxContext int, format string, reasoningEffort string) ([]byte, string, error) {
 	origModel := payload["model"]
 
 	if model != "" {
@@ -495,11 +536,12 @@ func TransformRequestForUpstream(deps TransformDeps, providerName, upstreamURL s
 	effectiveMaxOutput := resolveEffectiveMaxOutput(deps, finalModel, maxOutput)
 	applyMaxTokens(payload, effectiveMaxOutput)
 
-	if deps.CountTokens != nil && effectiveMaxOutput > 0 {
-		modified, _ := pipeline.TrimPayload(deps.Logger, payload, effectiveMaxOutput, deps.CountTokens, deps.Config.Context)
+	inputBudget := resolveTransformInputBudget(deps, finalModel, maxContext)
+	if deps.CountTokens != nil && inputBudget > 0 {
+		modified, _ := pipeline.TrimPayload(deps.Logger, payload, inputBudget, deps.CountTokens, deps.Config.Context)
 		if modified {
 			deps.Logger.Info("payload trimmed to fit token budget",
-				"effective_max_output", effectiveMaxOutput)
+				"input_budget", inputBudget)
 		}
 	}
 

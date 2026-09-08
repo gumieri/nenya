@@ -79,6 +79,29 @@ To avoid `context_length_exceeded` errors, configure `max_context` for your mode
 }
 ```
 
+## Transform-Side Trim Budget (NENYA-25)
+
+Besides the interceptor-chain limits above, `TransformRequestForUpstream`
+(`internal/routing/transform.go`) runs a final per-target `TrimPayload` before
+dispatch. Its input budget resolves in this order:
+
+1. `context.hard_limit_tokens > 0` → the budget **is** that value. This wins
+   in all cases — including models with an unknown `max_context` (note this
+   diverges from the Bouncer interceptor, which never engages for
+   unknown-context models regardless of `hard_limit_tokens`).
+2. Otherwise `budget = max_context / 4 * 3` — three-quarters of the context
+   window in overflow-safe integer arithmetic (floor division; reserving
+   output headroom, same 3/4 policy as the interceptor hard limit) — resolved
+   agent config first, then discovery catalog, then static registry.
+3. `max_context` unknown and no hard limit ⇒ `budget = 0` ⇒ **trim disabled**:
+   the full payload is sent and the `context_length_exceeded`
+   summarization-retry fallback applies.
+
+The budget is deliberately derived from `max_context`, never from
+`max_output`: the output cap is a *completion-length* setting and clamping the
+input conversation to it silently discarded history on large-context models
+(e.g. a 1M-context model with a 64K output cap had its input clipped to 64K).
+
 ## Behavior Comparison
 
 | Scenario | Before | After |
@@ -113,6 +136,6 @@ If these metrics are high for a particular model, add `max_context` to enable pr
 
 ## References
 
-- Implementation: `internal/proxy/chat.go` (lines 335-368), `internal/gateway/gateway.go` (lines 28-49), `internal/pipeline/trim.go` (line 26)
-- Retry logic: `internal/proxy/retry.go` (lines 312-344)
-- Model catalog: `internal/discovery/discovery.go` (lines 8-17)
+- Implementation: `internal/proxy/chat.go` (`resolvePipelineContext`), `internal/gateway/gateway.go`, `internal/pipeline/trim.go` (`TrimPayload`)
+- Retry logic: `internal/proxy/retry.go` (`handleContextLimitError`)
+- Model catalog: `internal/discovery/discovery.go`

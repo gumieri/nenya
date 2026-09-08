@@ -731,7 +731,9 @@ func (p *Proxy) resolvePipelineContext(r *http.Request, gw *gateway.NenyaGateway
 		primaryTarget := req.Targets[0]
 		if primaryTarget.MaxContext > 0 {
 			softLimit = primaryTarget.MaxContext / 8
-			hardLimit = primaryTarget.MaxContext * 3 / 4
+			// maxCtx/4*3 cannot overflow for any positive int (unlike
+			// maxCtx*3/4); kept identical to the transform-side budget.
+			hardLimit = primaryTarget.MaxContext / 4 * 3
 		} else {
 			gw.Logger.Warn("MaxContext unknown for model, proactive truncation disabled — configure max_context to enable",
 				"model", req.ModelName,
