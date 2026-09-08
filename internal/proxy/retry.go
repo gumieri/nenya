@@ -190,6 +190,10 @@ type retryLoop struct {
 	// echoed to the client after Exhausted(), to avoid leaking internal
 	// network topology.
 	lastStreamErr error
+	// rateLimitedPairs tracks provider+account pairs that returned 429 during
+	// this failover round (NENYA-41): later targets on the same pair are
+	// skipped while a different pair remains eligible.
+	rateLimitedPairs map[string]bool
 }
 
 // trackInFlight increments the in-flight gauge for the first target in
@@ -299,15 +303,42 @@ func newRetryLoop(p *Proxy, gw *gateway.NenyaGateway, w http.ResponseWriter, r *
 	}
 
 	return &retryLoop{
-		p:               p,
-		gw:              gw,
-		w:               w,
-		r:               r,
-		opts:            opts,
-		ctxLogger:       ctxLogger,
-		originalPayload: originalPayload,
-		stream:          opts.Stream,
+		p:                p,
+		gw:               gw,
+		w:                w,
+		r:                r,
+		opts:             opts,
+		ctxLogger:        ctxLogger,
+		originalPayload:  originalPayload,
+		stream:           opts.Stream,
+		rateLimitedPairs: make(map[string]bool),
 	}, nil
+}
+
+// accountPair returns the round-scoped dedup key for a target: provider plus
+// account when multi-account, provider alone otherwise.
+func (rl *retryLoop) accountPair(target routing.UpstreamTarget) string {
+	if target.AccountName != "" {
+		return target.Provider + "/" + target.AccountName
+	}
+	return target.Provider
+}
+
+// markRateLimitedPair records that a target's provider+account pair returned
+// 429 during this failover round.
+func (rl *retryLoop) markRateLimitedPair(target routing.UpstreamTarget) {
+	rl.rateLimitedPairs[rl.accountPair(target)] = true
+}
+
+// hasOtherEligiblePair reports whether any target after index i belongs to a
+// provider+account pair that has not already been rate-limited this round.
+func (rl *retryLoop) hasOtherEligiblePair(i int) bool {
+	for j := i + 1; j < len(rl.opts.Targets); j++ {
+		if pair := rl.accountPair(rl.opts.Targets[j]); !rl.rateLimitedPairs[pair] {
+			return true
+		}
+	}
+	return false
 }
 
 // retrySignal controls the outer loop from action handlers.
@@ -332,6 +363,13 @@ func (rl *retryLoop) handleActionError(i int, target routing.UpstreamTarget, act
 		rl.ctxLogger.Info("client context canceled during upstream error handling",
 			"model", target.Model, "provider", target.Provider, "error_message", err.Error())
 		return retrySignalDone
+	}
+
+	// Attempted-set (NENYA-41): a 429 rate/quota failure benches the target's
+	// provider+account pair for the remainder of this failover round — the
+	// same credential would just 429 again. Other pairs are still eligible.
+	if action.resp.StatusCode == http.StatusTooManyRequests {
+		rl.markRateLimitedPair(target)
 	}
 
 	if util.IsContextLengthError(action.resp.StatusCode, string(action.body)) {
@@ -421,6 +459,17 @@ retryLoop:
 		if rl.opts.MaxRetries > 0 && rl.attempt >= rl.opts.MaxRetries {
 			rl.ctxLogger.Warn("max retries reached", "attempt", rl.attempt, "max", rl.opts.MaxRetries)
 			break retryLoop
+		}
+
+		// Attempted-set (NENYA-41): skip a target whose provider+account pair
+		// already 429'd this round — but only while a different pair remains
+		// later in the chain, so a single-credential chain keeps its
+		// backoff-retry semantics.
+		pair := rl.accountPair(target)
+		if rl.rateLimitedPairs[pair] && rl.hasOtherEligiblePair(i) {
+			rl.ctxLogger.Info("skipping rate-limited account for remaining round",
+				"model", target.Model, "provider", target.Provider, "account", target.AccountName)
+			continue
 		}
 
 		var payloadToUse map[string]interface{}
@@ -758,6 +807,12 @@ func handleRetryableError429(logger *slog.Logger, errorBody []byte, action upstr
 	}
 
 	if action.resp.StatusCode == http.StatusTooManyRequests {
+		// Quota floor (NENYA-41): never let a sub-second provider-supplied
+		// cooldown produce a zero-wait retry storm against the same account.
+		if floor := gw.Config.Governance.EffectiveMinQuotaCooldown(); isQuota && floor > 0 && effectiveCooldown < floor {
+			effectiveCooldown = floor
+			logger.Info("quota cooldown floored", "cooldown_s", effectiveCooldown.Seconds())
+		}
 		gw.AgentState.ActivateCooldown(target, effectiveCooldown)
 		gw.Metrics.RecordCooldown(agentName, target.Provider, target.Model)
 		gw.AgentState.RecordFailureWithStatus(target, action.resp.StatusCode, string(errorBody))

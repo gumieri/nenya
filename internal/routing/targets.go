@@ -32,6 +32,12 @@ const DefaultFailureThreshold = 5
 // required to close a half-open circuit breaker.
 const DefaultSuccessThreshold = 1
 
+// DefaultMinQuotaCooldownSec is the default quota-class cooldown floor
+// (NENYA-41): upstreams sometimes send sub-second Retry-After values on
+// quota errors; honoring them literally produces zero-wait retry storms
+// against the same exhausted account.
+const DefaultMinQuotaCooldownSec = 10
+
 // DefaultHalfOpenMaxRequests is the default maximum number of probe
 // requests allowed while a circuit is in half-open state.
 const DefaultHalfOpenMaxRequests = 3
@@ -137,6 +143,14 @@ func NewAgentStateWithConfig(logger *slog.Logger, metrics *infra.Metrics, govCon
 			time.Duration(DefaultAgentCooldownSec)*time.Second,
 			onChange,
 		),
+	}
+
+	// Quota-class cooldown floor (NENYA-41): built-in default 10s; a negative
+	// governance value disables the floor.
+	if govConfig != nil {
+		as.CB.SetMinQuotaCooldown(govConfig.EffectiveMinQuotaCooldown())
+	} else {
+		as.CB.SetMinQuotaCooldown(time.Duration(DefaultMinQuotaCooldownSec) * time.Second)
 	}
 
 	if metrics != nil {

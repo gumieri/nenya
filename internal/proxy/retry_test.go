@@ -1186,3 +1186,92 @@ func TestRetryLoop_HandleActionError_ClientCanceled(t *testing.T) {
 		t.Errorf("expected no body written to the canceled client, got %q", w.Body.String())
 	}
 }
+
+// TestHandleRetryableError429_QuotaCooldownFloored pins NENYA-41: a
+// sub-second quota cooldown from the upstream (or config) is floored at
+// governance.min_quota_cooldown_seconds before hitting the breaker.
+func TestHandleRetryableError429_QuotaCooldownFloored(t *testing.T) {
+	p, _ := newTestProxy(t)
+	gw := p.Gateway()
+	gw.Config.Governance.MinQuotaCooldownSeconds = 10
+
+	target := routing.UpstreamTarget{Provider: "test-provider", Model: "test-model", CoolKey: "agent:test-provider:test-model"}
+	action := upstreamAction{
+		kind: actionError,
+		resp: &http.Response{
+			StatusCode: http.StatusTooManyRequests,
+			Header:     http.Header{},
+			Body:       io.NopCloser(strings.NewReader(`{"error":{"message":"quota exceeded"}}`)),
+		},
+		cancel: func() {},
+	}
+
+	delay, isQuota := handleRetryableError429(slog.Default(), []byte(`{"error":{"message":"quota exceeded"}}`), action, 150*time.Millisecond, target, "agent", gw)
+	if !isQuota {
+		t.Fatal("expected quota detection")
+	}
+	_ = delay
+
+	snap := gw.AgentState.CB.SnapshotDetailed()
+	circuits, ok := snap["circuits"].(map[string]interface{})
+	if !ok {
+		t.Fatal("expected circuits in detailed snapshot")
+	}
+	circuit, ok := circuits[target.CoolKey].(map[string]interface{})
+	if !ok {
+		t.Fatal("expected circuit entry for cool key after 429")
+	}
+	expiryStr, _ := circuit["expiry"].(string)
+	expiry, err := time.Parse(time.RFC3339, expiryStr)
+	if err != nil {
+		t.Fatalf("expected parsable expiry in snapshot, got %q: %v", expiryStr, err)
+	}
+	if remaining := time.Until(expiry); remaining < 9*time.Second {
+		t.Fatalf("expected quota cooldown floored to ~10s, got %v remaining", remaining)
+	}
+}
+
+// TestRetryLoop_AttemptedPairSkip pins NENYA-41's helper semantics: a 429
+// benches the target's provider+account pair for the round, but only while a
+// different eligible pair remains later in the chain.
+func TestRetryLoop_AttemptedPairSkip(t *testing.T) {
+	p, _ := newTestProxy(t)
+	r := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+	rl, err := newRetryLoop(p, p.Gateway(), httptest.NewRecorder(), r, forwardOptions{
+		Targets: []routing.UpstreamTarget{
+			{Provider: "p1", Model: "m1"},
+			{Provider: "p1", Model: "m2", AccountName: "acct-1"},
+			{Provider: "p2", Model: "m3"},
+		},
+		AgentName: "pair-agent",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if got := rl.accountPair(routing.UpstreamTarget{Provider: "p1"}); got != "p1" {
+		t.Errorf("provider-only pair = %q, want p1", got)
+	}
+	if got := rl.accountPair(routing.UpstreamTarget{Provider: "p1", AccountName: "a"}); got != "p1/a" {
+		t.Errorf("account pair = %q, want p1/a", got)
+	}
+
+	// No 429s yet: nothing skipped.
+	if rl.hasOtherEligiblePair(0) != true {
+		t.Error("expected later pairs eligible before any 429")
+	}
+
+	rl.markRateLimitedPair(routing.UpstreamTarget{Provider: "p1"})
+	if !rl.rateLimitedPairs["p1"] {
+		t.Fatal("expected p1 marked rate-limited")
+	}
+
+	// p1 limited, but p2 remains later → another eligible pair exists.
+	if !rl.hasOtherEligiblePair(0) {
+		t.Error("expected p2 to remain eligible after p1 429")
+	}
+	// From the last index there is nothing later → no other eligible pair.
+	if rl.hasOtherEligiblePair(2) {
+		t.Error("expected no eligible pair after the last target")
+	}
+}

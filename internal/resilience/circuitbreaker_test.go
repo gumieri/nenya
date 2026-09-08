@@ -476,3 +476,80 @@ func TestCircuitBreaker_HalfOpenInflightLeak_GuardsAgainstAbandonedProbe(t *test
 		t.Error("expected Allow to succeed after ReleaseHalfOpen cleaned up abandoned probe")
 	}
 }
+
+// TestCircuitBreaker_ModelLockMonotonic pins NENYA-41: a later, softer
+// failure must never shorten an active model lock — deadlines only extend.
+func TestCircuitBreaker_ModelLockMonotonic(t *testing.T) {
+	cb := NewCircuitBreaker(5, 1, 3, time.Second, nil)
+	key := "agent:p:model"
+
+	long := time.Now().Add(time.Hour)
+	cb.mu.Lock()
+	cb.modelLocks[key] = long
+	cb.mu.Unlock()
+
+	// Unknown-class failure locks for unknownCooldown (30s) — far shorter
+	// than the active 1h lock, which must be preserved.
+	decision := cb.RecordFailureWithStatus(key, 404, `{"error":"not found"}`)
+	if !decision.ShouldLock {
+		t.Fatal("expected unknown-class failure to lock")
+	}
+
+	cb.mu.Lock()
+	got := cb.modelLocks[key]
+	cb.mu.Unlock()
+	if got.Before(long) {
+		t.Fatalf("model lock shortened by softer failure: was ~%v away, now %v", time.Until(long), time.Until(got))
+	}
+}
+
+// TestCircuitBreaker_ForceOpenMonotonic pins NENYA-41: a later ForceOpen
+// with a shorter cooldown never shortens an active one.
+func TestCircuitBreaker_ForceOpenMonotonic(t *testing.T) {
+	cb := NewCircuitBreaker(5, 1, 3, time.Second, nil)
+	key := "agent:p:model"
+
+	cb.ForceOpen(key, time.Hour)
+	cb.mu.Lock()
+	longExpiry := cb.circuits[key].expiry
+	cb.mu.Unlock()
+
+	cb.ForceOpen(key, time.Second)
+
+	cb.mu.Lock()
+	got := cb.circuits[key].expiry
+	cb.mu.Unlock()
+	if got.Before(longExpiry) {
+		t.Fatalf("ForceOpen shortened an active cooldown: %v -> %v", longExpiry, got)
+	}
+}
+
+// TestCircuitBreaker_MinQuotaCooldown pins NENYA-41: quota-class decisions
+// are floored at the configured minimum; other classes are untouched.
+func TestCircuitBreaker_MinQuotaCooldown(t *testing.T) {
+	cb := NewCircuitBreaker(5, 1, 3, time.Second, nil)
+	// 90s makes the floor visible above the 60s quota backoff base.
+	cb.SetMinQuotaCooldown(90 * time.Second)
+
+	decision := cb.RecordFailureWithStatus("k1", 400, `{"error":"quota exceeded"}`)
+	if decision.Class != ErrorClassQuota {
+		t.Fatalf("expected quota class, got %q", decision.Class)
+	}
+	if decision.Cooldown < 90*time.Second {
+		t.Fatalf("expected quota cooldown floored to >=90s, got %v", decision.Cooldown)
+	}
+
+	// Rate class is NOT floored: level-0 rate backoff is ~500ms ±5%.
+	rate := cb.classifier(429, "", 0)
+	if rate.Cooldown >= 90*time.Second {
+		t.Fatalf("rate class unexpectedly floored: %v", rate.Cooldown)
+	}
+
+	// A negative setter value disables the floor.
+	cb2 := NewCircuitBreaker(5, 1, 3, time.Second, nil)
+	cb2.SetMinQuotaCooldown(-1)
+	d := cb2.classifier(400, `{"error":"quota"}`, 0)
+	if d.Cooldown >= 90*time.Second {
+		t.Fatalf("disabled floor still applied: %v", d.Cooldown)
+	}
+}

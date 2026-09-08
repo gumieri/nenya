@@ -84,6 +84,12 @@ type CircuitBreaker struct {
 	modelLocks map[string]time.Time
 	backoff    *BackoffTracker
 	classifier func(status int, body string, level int) CooldownDecision
+
+	// minQuotaCooldown is a floor applied to quota-class cooldowns
+	// (NENYA-41): upstreams sometimes send sub-second Retry-After values on
+	// quota errors, and honoring them literally produces zero-wait retry
+	// storms against the same exhausted account. 0 disables the floor.
+	minQuotaCooldown time.Duration
 }
 
 // NewCircuitBreaker creates a CircuitBreaker with the given thresholds.
@@ -115,9 +121,19 @@ func NewCircuitBreaker(failureThreshold, successThreshold int, halfOpenMaxReques
 	}
 }
 
+// SetMinQuotaCooldown sets the floor applied to quota-class cooldowns
+// (NENYA-41). Zero or negative values disable the floor.
+func (cb *CircuitBreaker) SetMinQuotaCooldown(d time.Duration) {
+	cb.mu.Lock()
+	defer cb.mu.Unlock()
+	if d < 0 {
+		d = 0
+	}
+	cb.minQuotaCooldown = d
+}
+
 // SetBackoffIncrementCallback sets a callback that is invoked when the backoff level increments.
-// The callback receives the circuit key and the new backoff level.
-//
+// The callback receives the circuit key and the new backoff level.//
 // WARNING: The callback is invoked synchronously while holding the circuit breaker's mutex.
 // To avoid deadlocks, the callback MUST be fast and non-blocking. It MUST NOT call back into
 // any CircuitBreaker methods that acquire the mutex (e.g., Allow, RecordFailureWithStatus, etc.).
@@ -279,22 +295,18 @@ func (cb *CircuitBreaker) RecordFailureWithStatus(key string, status int, body s
 
 	decision := cb.classifier(status, body, cb.backoff.GetLevel(key))
 
+	// Quota floor (NENYA-41): upstreams sometimes send sub-second Retry-After
+	// values on quota errors; honoring them literally produces zero-wait
+	// retry storms against the same exhausted account.
+	decision.Cooldown = cb.applyQuotaFloor(decision)
+
 	// Note: GetLevel and Increment acquire backoff.mu separately, so another
 	// goroutine could modify the level between classification and increment.
 	// This benign race is acceptable: at worst, a request uses a slightly stale
 	// backoff level for its cooldown calculation. The final level after Increment
 	// is always correct.
 
-	if decision.ShouldLock {
-		until := now.Add(decision.Cooldown)
-		cb.modelLocks[key] = until
-
-		if decision.IncrementBackoff {
-			if _, callback := cb.backoff.Increment(key); callback != nil {
-				callback()
-			}
-		}
-	}
+	cb.applyModelLock(key, decision, now)
 
 	c.LastErrorClass = decision.Class
 	c.LastErrorBody = truncate(body, 200)
@@ -325,6 +337,33 @@ func (cb *CircuitBreaker) RecordFailureWithStatus(key string, status int, body s
 	}
 
 	return decision
+}
+
+// applyQuotaFloor returns the decision cooldown raised to the configured
+// quota-class floor when applicable (NENYA-41). Caller holds cb.mu.
+func (cb *CircuitBreaker) applyQuotaFloor(decision CooldownDecision) time.Duration {
+	if decision.Class != ErrorClassQuota || cb.minQuotaCooldown <= 0 || decision.Cooldown >= cb.minQuotaCooldown {
+		return decision.Cooldown
+	}
+	return cb.minQuotaCooldown
+}
+
+// applyModelLock extends the key's model lock to cover the decision cooldown
+// and advances the backoff tracker when the decision says so. Monotonic
+// (NENYA-41): a later, softer failure must never shorten an active lock —
+// deadlines only extend. Caller holds cb.mu.
+func (cb *CircuitBreaker) applyModelLock(key string, decision CooldownDecision, now time.Time) {
+	if !decision.ShouldLock {
+		return
+	}
+	if until := now.Add(decision.Cooldown); until.After(cb.modelLocks[key]) {
+		cb.modelLocks[key] = until
+	}
+	if decision.IncrementBackoff {
+		if _, callback := cb.backoff.Increment(key); callback != nil {
+			callback()
+		}
+	}
 }
 
 // truncate shortens s to at most maxLen runes, appending "..." if truncated.
@@ -434,7 +473,8 @@ func (cb *CircuitBreaker) ReleaseHalfOpen(key string) {
 
 // ForceOpen forces the circuit breaker for the given key into the Open state
 // for the specified cooldown duration. Used for manual circuit breaking
-// (e.g., on HTTP 429 rate limit errors).
+// (e.g., on HTTP 429 rate limit errors). Monotonic (NENYA-41): a later call
+// with a shorter cooldown never shortens an active one.
 func (cb *CircuitBreaker) ForceOpen(key string, cooldown time.Duration) {
 	if key == "" || cooldown <= 0 {
 		return
@@ -445,8 +485,17 @@ func (cb *CircuitBreaker) ForceOpen(key string, cooldown time.Duration) {
 
 	c := cb.getOrCreate(key)
 	now := time.Now()
+	// Capture the deadline BEFORE setState: setState(Open) stamps a fresh
+	// default-cooldown expiry as a side effect, which must not participate in
+	// the monotonic comparison — only a genuinely ACTIVE deadline does.
+	prevExpiry := c.expiry
 	cb.setState(c, StateOpen, key)
-	c.expiry = now.Add(cooldown)
+	newExpiry := now.Add(cooldown)
+	if now.Before(prevExpiry) && prevExpiry.After(newExpiry) {
+		// Active longer deadline wins (NENYA-41: deadlines only extend).
+		return
+	}
+	c.expiry = newExpiry
 }
 
 // Peek reports whether a request would be allowed for key without producing any

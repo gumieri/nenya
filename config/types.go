@@ -352,16 +352,22 @@ type GovernanceConfig struct {
 	EmptyStreamAsError       *bool    `json:"empty_stream_as_error,omitempty"`
 	// EarlyStreamErrorFailover fails over to the next target when the first
 	// SSE event of a stream is an upstream error, before headers are committed.
-	EarlyStreamErrorFailover *bool   `json:"early_stream_error_failover,omitempty"`
-	AutoContextSkip          *bool   `json:"auto_context_skip,omitempty"`
-	AutoReorderByLatency     *bool   `json:"auto_reorder_by_latency,omitempty"`
-	HalfOpenMaxRequests      int     `json:"half_open_max_requests,omitempty"`
-	AutoRetryOnContextLimit  *bool   `json:"auto_retry_on_context_limit,omitempty"`
-	CostMode                 string  `json:"cost_mode,omitempty"`
-	BillingEconomyScale      float64 `json:"billing_economy_scale,omitempty"`
-	BillingQualityScale      float64 `json:"billing_quality_scale,omitempty"`
-	MaxTransformedSSEBytes   int     `json:"max_transformed_sse_bytes,omitempty"`
-	UpstreamTimeoutSeconds   *int    `json:"upstream_timeout_seconds,omitempty"`
+	EarlyStreamErrorFailover *bool `json:"early_stream_error_failover,omitempty"`
+	AutoContextSkip          *bool `json:"auto_context_skip,omitempty"`
+	AutoReorderByLatency     *bool `json:"auto_reorder_by_latency,omitempty"`
+	HalfOpenMaxRequests      int   `json:"half_open_max_requests,omitempty"`
+	// MinQuotaCooldownSeconds floors quota-class cooldowns (NENYA-41):
+	// upstreams sometimes send sub-second Retry-After values on quota errors,
+	// and honoring them literally produces zero-wait retry storms against the
+	// same exhausted account. 0 or unset applies the built-in default (10s);
+	// a negative value disables the floor.
+	MinQuotaCooldownSeconds int     `json:"min_quota_cooldown_seconds,omitempty"`
+	AutoRetryOnContextLimit *bool   `json:"auto_retry_on_context_limit,omitempty"`
+	CostMode                string  `json:"cost_mode,omitempty"`
+	BillingEconomyScale     float64 `json:"billing_economy_scale,omitempty"`
+	BillingQualityScale     float64 `json:"billing_quality_scale,omitempty"`
+	MaxTransformedSSEBytes  int     `json:"max_transformed_sse_bytes,omitempty"`
+	UpstreamTimeoutSeconds  *int    `json:"upstream_timeout_seconds,omitempty"`
 	// StreamIdleTimeoutSeconds is the stall detection timeout for SSE streams.
 	StreamIdleTimeoutSeconds *int `json:"stream_idle_timeout_seconds,omitempty"`
 	// ThinkingStreamIdleTimeoutSeconds is the stall detection timeout during
@@ -389,6 +395,21 @@ func (g *GovernanceConfig) EffectiveMaxRetryAttempts() int {
 		return g.MaxRetryAttempts
 	}
 	return 3
+}
+
+// EffectiveMinQuotaCooldown returns the quota-class cooldown floor
+// (NENYA-41): the configured value when positive, the built-in 10s default
+// when zero or unset, and 0 (disabled) when negative.
+func (g *GovernanceConfig) EffectiveMinQuotaCooldown() time.Duration {
+	const defaultMinQuotaCooldown = 10 * time.Second
+	switch {
+	case g.MinQuotaCooldownSeconds < 0:
+		return 0
+	case g.MinQuotaCooldownSeconds == 0:
+		return defaultMinQuotaCooldown
+	default:
+		return time.Duration(g.MinQuotaCooldownSeconds) * time.Second
+	}
 }
 
 func (g *GovernanceConfig) AutoRetryOnContextLimitEnabled() bool {
