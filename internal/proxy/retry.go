@@ -803,18 +803,56 @@ func logRetryableError(ctxLogger *slog.Logger, errorBody []byte, gw *gateway.Nen
 	}
 }
 
-func handleRetryableError429(logger *slog.Logger, errorBody []byte, action upstreamAction, cooldownDuration time.Duration, target routing.UpstreamTarget, agentName string, gw *gateway.NenyaGateway) (time.Duration, bool) {
-	isQuota := false
-	effectiveCooldown := cooldownDuration
-	if action.resp.StatusCode == http.StatusTooManyRequests && len(errorBody) > 0 {
-		if quotaCD := parseQuotaExhaustion(errorBody, logger); quotaCD > 0 {
-			isQuota = true
-			if quotaCD > cooldownDuration {
-				effectiveCooldown = quotaCD
-				logger.Info("quota exhaustion detected, extending cooldown", "cooldown_s", effectiveCooldown.Seconds())
-			}
-		}
+// extendForCooldownSignal returns the longer of the current effective
+// cooldown and a detected signal, logging when the signal wins.
+func extendForCooldownSignal(logger *slog.Logger, effective, signal time.Duration, reason string) time.Duration {
+	if signal <= effective {
+		return effective
 	}
+	logger.Info(reason, "cooldown_s", signal.Seconds())
+	return signal
+}
+
+// mergeBodyQuotaSignals folds body-side quota signals into the effective
+// cooldown. Detection (isQuota) is decoupled from extension: a quota signal
+// below the configured cooldown still flags quota exhaustion for the
+// error-kind contract and the NENYA-41 floor.
+func mergeBodyQuotaSignals(logger *slog.Logger, errorBody []byte, effective time.Duration) (time.Duration, bool) {
+	if len(errorBody) == 0 {
+		return effective, false
+	}
+	isQuota := false
+	if quotaCD := parseQuotaExhaustion(errorBody, logger); quotaCD > 0 {
+		isQuota = true
+		effective = extendForCooldownSignal(logger, effective, quotaCD, "quota exhaustion detected, extending cooldown")
+	}
+	if resetCD := parseQuotaResetFields(errorBody); resetCD > 0 {
+		isQuota = true
+		effective = extendForCooldownSignal(logger, effective, resetCD, "quota reset field detected, extending cooldown")
+	}
+	return effective, isQuota
+}
+
+// derive429Cooldown merges the configured cooldown with upstream-declared
+// windows (NENYA-43), longest wins: body quota patterns, flexible body reset
+// fields, and header windows (Retry-After / Anthropic unified resets /
+// x-ratelimit-reset). Parsing is 429-gated to preserve existing semantics —
+// 5xx errors keep serverCooldown regardless of body wording. Returns the
+// cooldown and whether a quota signal was seen.
+func derive429Cooldown(logger *slog.Logger, errorBody []byte, header http.Header, status int, cooldownDuration time.Duration) (time.Duration, bool) {
+	if status != http.StatusTooManyRequests {
+		return cooldownDuration, false
+	}
+	effective, isQuota := mergeBodyQuotaSignals(logger, errorBody, cooldownDuration)
+	if upstreamCD := deriveUpstreamRateLimitCooldown(header); upstreamCD > effective {
+		effective = upstreamCD
+		logger.Info("upstream rate-limit window cooldown derived", "cooldown_s", effective.Seconds())
+	}
+	return effective, isQuota
+}
+
+func handleRetryableError429(logger *slog.Logger, errorBody []byte, action upstreamAction, cooldownDuration time.Duration, target routing.UpstreamTarget, agentName string, gw *gateway.NenyaGateway) (time.Duration, bool) {
+	effectiveCooldown, isQuota := derive429Cooldown(logger, errorBody, action.resp.Header, action.resp.StatusCode, cooldownDuration)
 
 	if action.resp.StatusCode == http.StatusTooManyRequests {
 		// Quota floor (NENYA-41): never let a sub-second provider-supplied
