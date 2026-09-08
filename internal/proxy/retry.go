@@ -330,6 +330,17 @@ func (rl *retryLoop) markRateLimitedPair(target routing.UpstreamTarget) {
 	rl.rateLimitedPairs[rl.accountPair(target)] = true
 }
 
+// shouldSkipRateLimitedPair decides whether a target is benched for the
+// remainder of the round: its provider+account pair already returned 429 AND
+// a different un-limited pair remains later in the chain (a single-credential
+// chain never skips, preserving backoff-retry semantics).
+func (rl *retryLoop) shouldSkipRateLimitedPair(i int, target routing.UpstreamTarget) bool {
+	if !rl.rateLimitedPairs[rl.accountPair(target)] {
+		return false
+	}
+	return rl.hasOtherEligiblePair(i)
+}
+
 // hasOtherEligiblePair reports whether any target after index i belongs to a
 // provider+account pair that has not already been rate-limited this round.
 func (rl *retryLoop) hasOtherEligiblePair(i int) bool {
@@ -465,8 +476,7 @@ retryLoop:
 		// already 429'd this round — but only while a different pair remains
 		// later in the chain, so a single-credential chain keeps its
 		// backoff-retry semantics.
-		pair := rl.accountPair(target)
-		if rl.rateLimitedPairs[pair] && rl.hasOtherEligiblePair(i) {
+		if rl.shouldSkipRateLimitedPair(i, target) {
 			rl.ctxLogger.Info("skipping rate-limited account for remaining round",
 				"model", target.Model, "provider", target.Provider, "account", target.AccountName)
 			continue

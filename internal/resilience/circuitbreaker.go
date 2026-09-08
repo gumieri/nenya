@@ -133,7 +133,8 @@ func (cb *CircuitBreaker) SetMinQuotaCooldown(d time.Duration) {
 }
 
 // SetBackoffIncrementCallback sets a callback that is invoked when the backoff level increments.
-// The callback receives the circuit key and the new backoff level.//
+// The callback receives the circuit key and the new backoff level.
+//
 // WARNING: The callback is invoked synchronously while holding the circuit breaker's mutex.
 // To avoid deadlocks, the callback MUST be fast and non-blocking. It MUST NOT call back into
 // any CircuitBreaker methods that acquire the mutex (e.g., Allow, RecordFailureWithStatus, etc.).

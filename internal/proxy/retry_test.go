@@ -1188,12 +1188,18 @@ func TestRetryLoop_HandleActionError_ClientCanceled(t *testing.T) {
 }
 
 // TestHandleRetryableError429_QuotaCooldownFloored pins NENYA-41: a
-// sub-second quota cooldown from the upstream (or config) is floored at
-// governance.min_quota_cooldown_seconds before hitting the breaker.
+// sub-second quota cooldown from the upstream (Zai 1308 timestamp ~2s out)
+// is floored at governance.min_quota_cooldown_seconds before hitting the
+// breaker — asserted with BOTH bounds so a deleted floor fails high and a
+// broken detection fails low.
 func TestHandleRetryableError429_QuotaCooldownFloored(t *testing.T) {
 	p, _ := newTestProxy(t)
 	gw := p.Gateway()
 	gw.Config.Governance.MinQuotaCooldownSeconds = 10
+
+	// Zai-style 1308 body: quota reset ~2s out — below the 10s floor.
+	resetMs := time.Now().Add(2 * time.Second).UnixMilli()
+	body := fmt.Sprintf(`{"error":{"code":"1308","message":"%d"}}`, resetMs)
 
 	target := routing.UpstreamTarget{Provider: "test-provider", Model: "test-model", CoolKey: "agent:test-provider:test-model"}
 	action := upstreamAction{
@@ -1201,12 +1207,12 @@ func TestHandleRetryableError429_QuotaCooldownFloored(t *testing.T) {
 		resp: &http.Response{
 			StatusCode: http.StatusTooManyRequests,
 			Header:     http.Header{},
-			Body:       io.NopCloser(strings.NewReader(`{"error":{"message":"quota exceeded"}}`)),
+			Body:       io.NopCloser(strings.NewReader(body)),
 		},
 		cancel: func() {},
 	}
 
-	delay, isQuota := handleRetryableError429(slog.Default(), []byte(`{"error":{"message":"quota exceeded"}}`), action, 150*time.Millisecond, target, "agent", gw)
+	delay, isQuota := handleRetryableError429(slog.Default(), []byte(body), action, 150*time.Millisecond, target, "agent", gw)
 	if !isQuota {
 		t.Fatal("expected quota detection")
 	}
@@ -1226,8 +1232,9 @@ func TestHandleRetryableError429_QuotaCooldownFloored(t *testing.T) {
 	if err != nil {
 		t.Fatalf("expected parsable expiry in snapshot, got %q: %v", expiryStr, err)
 	}
-	if remaining := time.Until(expiry); remaining < 9*time.Second {
-		t.Fatalf("expected quota cooldown floored to ~10s, got %v remaining", remaining)
+	remaining := time.Until(expiry)
+	if remaining < 9*time.Second || remaining > 12*time.Second {
+		t.Fatalf("expected quota cooldown floored to ~10s (9-12s window), got %v remaining", remaining)
 	}
 }
 
@@ -1273,5 +1280,36 @@ func TestRetryLoop_AttemptedPairSkip(t *testing.T) {
 	// From the last index there is nothing later → no other eligible pair.
 	if rl.hasOtherEligiblePair(2) {
 		t.Error("expected no eligible pair after the last target")
+	}
+
+	// Skip decision (the exact predicate the Run loop uses):
+	// [p1(limited), p1, p2] → both p1 targets skipped, p2 not.
+	targets := []routing.UpstreamTarget{
+		{Provider: "p1", Model: "m1"},
+		{Provider: "p1", Model: "m2"},
+		{Provider: "p2", Model: "m3"},
+	}
+	if !rl.shouldSkipRateLimitedPair(0, targets[0]) {
+		t.Error("expected target 0 (limited p1, p2 eligible later) to be skipped")
+	}
+	if !rl.shouldSkipRateLimitedPair(1, targets[1]) {
+		t.Error("expected target 1 (limited p1, p2 eligible later) to be skipped")
+	}
+	if rl.shouldSkipRateLimitedPair(2, targets[2]) {
+		t.Error("expected target 2 (unlimited p2) to run")
+	}
+
+	// A single-credential chain never skips: 429'd p1 with no different pair
+	// later keeps its backoff-retry semantics.
+	rl2, err := newRetryLoop(p, p.Gateway(), httptest.NewRecorder(), r, forwardOptions{
+		Targets:   []routing.UpstreamTarget{{Provider: "p1", Model: "m1"}},
+		AgentName: "solo",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rl2.markRateLimitedPair(targets[0])
+	if rl2.shouldSkipRateLimitedPair(0, targets[0]) {
+		t.Error("expected single-pair chain to keep retrying despite 429")
 	}
 }

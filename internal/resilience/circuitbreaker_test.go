@@ -539,8 +539,12 @@ func TestCircuitBreaker_MinQuotaCooldown(t *testing.T) {
 		t.Fatalf("expected quota cooldown floored to >=90s, got %v", decision.Cooldown)
 	}
 
-	// Rate class is NOT floored: level-0 rate backoff is ~500ms ±5%.
-	rate := cb.classifier(429, "", 0)
+	// Rate class is NOT floored: level-0 rate backoff is ~500ms ±5% — routed
+	// through the public path so a broken class gate fails here.
+	rate := cb.RecordFailureWithStatus("k2", 429, "")
+	if rate.Class != ErrorClassRate {
+		t.Fatalf("expected rate class, got %q", rate.Class)
+	}
 	if rate.Cooldown >= 90*time.Second {
 		t.Fatalf("rate class unexpectedly floored: %v", rate.Cooldown)
 	}
@@ -548,7 +552,7 @@ func TestCircuitBreaker_MinQuotaCooldown(t *testing.T) {
 	// A negative setter value disables the floor.
 	cb2 := NewCircuitBreaker(5, 1, 3, time.Second, nil)
 	cb2.SetMinQuotaCooldown(-1)
-	d := cb2.classifier(400, `{"error":"quota"}`, 0)
+	d := cb2.RecordFailureWithStatus("k3", 400, `{"error":"quota"}`)
 	if d.Cooldown >= 90*time.Second {
 		t.Fatalf("disabled floor still applied: %v", d.Cooldown)
 	}

@@ -399,16 +399,25 @@ func (g *GovernanceConfig) EffectiveMaxRetryAttempts() int {
 
 // EffectiveMinQuotaCooldown returns the quota-class cooldown floor
 // (NENYA-41): the configured value when positive, the built-in 10s default
-// when zero or unset, and 0 (disabled) when negative.
+// when zero or unset, and 0 (disabled) when negative. Capped at 24h like
+// EffectiveUpstreamTimeout to keep operator typos from benching targets
+// permanently (CWE-190: multiplication overflow guarded by the cap).
 func (g *GovernanceConfig) EffectiveMinQuotaCooldown() time.Duration {
-	const defaultMinQuotaCooldown = 10 * time.Second
+	const (
+		defaultMinQuotaCooldown = 10 * time.Second
+		maxMinQuotaCooldown     = 24 * time.Hour
+	)
 	switch {
 	case g.MinQuotaCooldownSeconds < 0:
 		return 0
 	case g.MinQuotaCooldownSeconds == 0:
 		return defaultMinQuotaCooldown
 	default:
-		return time.Duration(g.MinQuotaCooldownSeconds) * time.Second
+		d := time.Duration(g.MinQuotaCooldownSeconds) * time.Second
+		if d < 0 || d > maxMinQuotaCooldown {
+			return maxMinQuotaCooldown
+		}
+		return d
 	}
 }
 
