@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/hmac"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -24,6 +25,10 @@ import (
 
 // MaxModelNameLength is the maximum allowed length for model names.
 const MaxModelNameLength = 256
+
+// fallbackAuthBodyLimit bounds the auth-time body read on chat routes when
+// the server configuration carries no MaxBodyBytes.
+const fallbackAuthBodyLimit = 10 << 20
 
 // Proxy handles HTTP requests and routes them to upstream AI providers.
 type Proxy struct {
@@ -327,22 +332,45 @@ func (p *Proxy) authenticateAndAuthorize(r *http.Request, w http.ResponseWriter)
 		return nil, false
 	}
 
-	// Agent-level authorization for endpoints carrying a model/agent name.
-	// NOTE: Only /v1/chat/completions is checked here. /v1/responses
-	// is handled by its handler (handleResponses) which reads the body for
-	// the model field and performs RBAC checks there.
-	if r.URL.Path == "/v1/chat/completions" {
-		agentName := extractAgentName(r)
-		if agentName != "" && !auth.AuthorizeAgent(apiKey, agentName) {
-			gw.Metrics.IncAuthDenials(apiKey.Name, "agent")
-			p.logAuthDenial(gw, apiKey, "agent "+agentName, r)
-			writeStructuredError(w, http.StatusForbidden, infra.ErrorKindAuthFailed, "Forbidden")
-			return nil, false
-		}
+	// Agent-level authorization for the chat wire routes: both carry a
+	// top-level "model" field, and resolveRoute maps them to the same
+	// handler (see isChatRoute). /v1/responses is handled by its handler
+	// (handleResponses) which reads the body for the model field and
+	// performs RBAC checks there.
+	if isChatRoute(r.URL.Path) && !p.enforceChatAgentScoping(gw, w, r, apiKey) {
+		return nil, false
 	}
 
 	gw.Metrics.RecordAuthSuccess("api_key", apiKey.Name)
 	return apiKey, true
+}
+
+// enforceChatAgentScoping enforces per-key agent scoping on the chat wire
+// routes. The body read fails closed: unreadable, oversized, or unparseable
+// bodies are rejected (413/400) rather than allowed to bypass scoping.
+// Returns ok=false when the request is rejected; the response is written.
+func (p *Proxy) enforceChatAgentScoping(gw *gateway.NenyaGateway, w http.ResponseWriter, r *http.Request, apiKey *config.ApiKey) bool {
+	agentName, err := extractAgentName(r, w, gw.Config.Server.MaxBodyBytes)
+	if err != nil {
+		var maxErr *http.MaxBytesError
+		if errors.As(err, &maxErr) {
+			gw.Metrics.IncAuthDenials(apiKey.Name, "payload_too_large")
+			p.logAuthDenial(gw, apiKey, "body exceeds max_body_bytes on chat route", r)
+			writeStructuredError(w, http.StatusRequestEntityTooLarge, infra.ErrorKindPayloadTooLarge, "Payload Too Large")
+			return false
+		}
+		gw.Metrics.IncAuthDenials(apiKey.Name, "invalid_body")
+		p.logAuthDenial(gw, apiKey, "invalid body on chat route", r)
+		writeStructuredError(w, http.StatusBadRequest, infra.ErrorKindInvalidRequest, "Invalid JSON payload")
+		return false
+	}
+	if agentName != "" && !auth.AuthorizeAgent(apiKey, agentName) {
+		gw.Metrics.IncAuthDenials(apiKey.Name, "agent")
+		p.logAuthDenial(gw, apiKey, "agent "+agentName, r)
+		writeStructuredError(w, http.StatusForbidden, infra.ErrorKindAuthFailed, "Forbidden")
+		return false
+	}
+	return true
 }
 
 // resolveAuthenticatedKey checks the Bearer token against configured credentials.
@@ -376,26 +404,42 @@ func (p *Proxy) resolveAuthenticatedKey(gw *gateway.NenyaGateway, clientToken st
 	return nil, false
 }
 
-// extractAgentName reads the model name from the request body for chat/responses endpoints.
-// The body is restored after reading.
-func extractAgentName(r *http.Request) string {
-	if r.Body == nil {
-		return ""
-	}
-	const maxAuthBody = 1 << 20
-	body, err := io.ReadAll(io.LimitReader(r.Body, int64(maxAuthBody)))
-	if err != nil {
-		return ""
-	}
-	r.Body = io.NopCloser(bytes.NewReader(body))
+// isChatRoute reports whether path is one of the two chat wire routes served
+// by chainChat. Both carry a top-level model field and share agent-level RBAC;
+// resolveRoute and authenticateAndAuthorize must agree on this set.
+func isChatRoute(path string) bool {
+	return path == "/v1/chat/completions" || path == "/v1/messages"
+}
 
+// extractAgentName reads the model name from the request body for the chat
+// wire routes. The body is fully buffered — bounded by maxBodyBytes (falling
+// back to fallbackAuthBodyLimit when the server config carries no limit) —
+// and restored for downstream handlers, so large payloads are not truncated
+// by the auth pass. Returns the model name and a nil error for a parseable
+// JSON body (possibly with an empty model). Returns *http.MaxBytesError when
+// the body exceeds the limit, and a generic error for missing/unparseable
+// bodies: callers must treat every error as a scoping failure and deny the
+// request (fail closed) rather than skip agent scoping.
+func extractAgentName(r *http.Request, w http.ResponseWriter, maxBodyBytes int64) (string, error) {
+	if r.Body == nil {
+		return "", errors.New("request has no body")
+	}
+	if maxBodyBytes <= 0 {
+		maxBodyBytes = fallbackAuthBodyLimit
+	}
+	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxBodyBytes))
+	// Restore whatever was read so downstream handlers can re-read the body.
+	r.Body = io.NopCloser(bytes.NewReader(body))
+	if err != nil {
+		return "", err
+	}
 	var req struct {
 		Model string `json:"model"`
 	}
-	if json.Unmarshal(body, &req) == nil {
-		return req.Model
+	if json.Unmarshal(body, &req) != nil {
+		return "", errors.New("request body is not valid JSON")
 	}
-	return ""
+	return req.Model, nil
 }
 
 func (p *Proxy) logAuthWarning(gw *gateway.NenyaGateway, msg string, r *http.Request) {

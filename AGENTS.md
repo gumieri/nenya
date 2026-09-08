@@ -262,6 +262,8 @@ All outbound HTTP dispatch points vulnerable to transient network errors (TLS ha
 - API keys define `allowed_endpoints` list for fine-grained allowlisting (HTTP method + path: `GET /v1/models`, `POST /v1/chat/completions`)
 - Overrides default role-based permissions when set
 - Empty list uses role-based default permissions
+- The two chat wire routes are one logical endpoint: a `POST /v1/chat/completions` entry also authorizes `POST /v1/messages` (canonical form); an explicit `POST /v1/messages` entry authorizes only `/v1/messages`
+- Agent scoping is enforced on both chat routes (agent name = top-level `model` field); unreadable, oversized, or unparseable bodies fail closed (400/413) rather than bypass scoping
 - Admin keys bypass endpoint restrictions
 
 **Key Configuration Fields:**
@@ -285,7 +287,7 @@ type ApiKey struct {
 - `HasPermission(role Role, perm Permission) bool` — Checks if role grants a specific permission
 
 **Metrics:**
-- `nenya_auth_denials_total` counter with `reason` label: `agent`, `endpoint`, `disabled`, `expired`
+- `nenya_auth_denials_total` counter with `reason` label: `agent`, `endpoint`, `disabled`, `expired`, `payload_too_large`, `invalid_body`
 
 **Integration:**
 - `internal/proxy/handler.go:authenticateAndAuthorize()` — Validates token/primary, checks enabled/expired, enforces RBAC

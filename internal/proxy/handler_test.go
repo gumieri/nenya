@@ -3,6 +3,7 @@ package proxy
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -355,6 +356,124 @@ func TestAuthenticateRequest_ValidToken(t *testing.T) {
 	}
 	if token != "primary" {
 		t.Fatalf("expected token reference 'primary', got %q", token)
+	}
+}
+
+// TestAuthenticateRequest_MessagesAgentScoping pins NENYA-52: per-key agent
+// scoping must be enforced on /v1/messages exactly like on
+// /v1/chat/completions — a key scoped to agent-a cannot reach agent-b by
+// switching wire formats.
+func TestAuthenticateRequest_MessagesAgentScoping(t *testing.T) {
+	secrets := &config.SecretsConfig{
+		ClientToken: "valid-token",
+		ApiKeys: map[string]config.ApiKey{
+			"scoped-a": {Name: "scoped-a", Token: "scoped-token-agent-a", Roles: []string{"user"}, AllowedAgents: []string{"agent-a"}, Enabled: true},
+			"unscoped": {Name: "unscoped", Token: "unscoped-token-1234", Roles: []string{"user"}, Enabled: true},
+			"admin":    {Name: "admin", Token: "admin-token-123456", Roles: []string{"admin"}, AllowedAgents: []string{"agent-a"}, Enabled: true},
+		},
+		ProviderKeys: map[string]string{},
+	}
+	p, _ := newTestProxyWithSecrets(t, secrets)
+
+	newMessagesReq := func(model string) *http.Request {
+		body := fmt.Sprintf(`{"model":%q,"max_tokens":16,"messages":[{"role":"user","content":"hi"}]}`, model)
+		req := httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		return req
+	}
+
+	t.Run("scoped key denied on other agent via /v1/messages", func(t *testing.T) {
+		req := newMessagesReq("agent-b")
+		req.Header.Set("Authorization", "Bearer scoped-token-agent-a")
+		rec := httptest.NewRecorder()
+		_, ok := p.authenticateRequest(req, rec)
+		if ok {
+			t.Fatalf("expected authz rejection for agent-b via /v1/messages, got status %d", rec.Code)
+		}
+		if rec.Code != http.StatusForbidden {
+			t.Fatalf("expected 403, got %d", rec.Code)
+		}
+	})
+
+	t.Run("scoped key allowed on own agent via /v1/messages", func(t *testing.T) {
+		req := newMessagesReq("agent-a")
+		req.Header.Set("Authorization", "Bearer scoped-token-agent-a")
+		rec := httptest.NewRecorder()
+		key, ok := p.authenticateRequest(req, rec)
+		if !ok {
+			t.Fatalf("expected authz pass for agent-a via /v1/messages, got status %d", rec.Code)
+		}
+		if key != "scoped-a" {
+			t.Fatalf("expected authenticated key 'scoped-a', got %q", key)
+		}
+	})
+
+	t.Run("unscoped key allowed on any agent via /v1/messages", func(t *testing.T) {
+		req := newMessagesReq("agent-b")
+		req.Header.Set("Authorization", "Bearer unscoped-token-1234")
+		rec := httptest.NewRecorder()
+		if _, ok := p.authenticateRequest(req, rec); !ok {
+			t.Fatalf("expected authz pass for unscoped key, got status %d", rec.Code)
+		}
+	})
+
+	t.Run("admin key bypasses scoping on /v1/messages", func(t *testing.T) {
+		req := newMessagesReq("agent-b")
+		req.Header.Set("Authorization", "Bearer admin-token-123456")
+		rec := httptest.NewRecorder()
+		if _, ok := p.authenticateRequest(req, rec); !ok {
+			t.Fatalf("expected authz pass for admin key, got status %d", rec.Code)
+		}
+	})
+
+	t.Run("invalid JSON body on chat route fails closed", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader("{invalid"))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Authorization", "Bearer scoped-token-agent-a")
+		rec := httptest.NewRecorder()
+		if _, ok := p.authenticateRequest(req, rec); ok {
+			t.Fatalf("expected rejection for invalid JSON body, got status %d", rec.Code)
+		}
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("expected 400, got %d", rec.Code)
+		}
+		assertErrorKind(t, rec, "invalid_request")
+	})
+
+	t.Run("oversized body on chat route returns 413", func(t *testing.T) {
+		cfg := testutil.MinimalConfig()
+		cfg.Bouncer.Engine = config.EngineRef{Provider: "ollama", Model: "qwen2.5-coder"}
+		cfg.Server.MaxBodyBytes = 64
+		gw := gateway.New(context.Background(), *cfg, secrets, slog.Default())
+		p2 := &Proxy{}
+		p2.StoreGateway(gw)
+
+		oversized := `{"model":"agent-b","messages":[{"role":"user","content":"` + strings.Repeat("x", 200) + `"}]}`
+		req := httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(oversized))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Authorization", "Bearer scoped-token-agent-a")
+		rec := httptest.NewRecorder()
+		if _, ok := p2.authenticateRequest(req, rec); ok {
+			t.Fatalf("expected rejection for oversized body, got status %d", rec.Code)
+		}
+		if rec.Code != http.StatusRequestEntityTooLarge {
+			t.Fatalf("expected 413, got %d", rec.Code)
+		}
+		assertErrorKind(t, rec, "payload_too_large")
+	})
+}
+
+// assertErrorKind checks the error_kind field of a structured error response.
+func assertErrorKind(t *testing.T, rec *httptest.ResponseRecorder, want string) {
+	t.Helper()
+	var body struct {
+		ErrorKind string `json:"error_kind"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("expected JSON error body, got error: %v, body: %s", err, rec.Body.String())
+	}
+	if body.ErrorKind != want {
+		t.Fatalf("expected error_kind %q, got %q (body: %s)", want, body.ErrorKind, rec.Body.String())
 	}
 }
 
