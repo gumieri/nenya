@@ -170,6 +170,7 @@ func resolveEngineRefs(cfg *Config) error {
 			TimeoutSeconds:       pc.TimeoutSeconds,
 			RetryableStatusCodes: pc.RetryableStatusCodes,
 			MaxRetryAttempts:     pc.MaxRetryAttempts,
+			RetryablePhrases:     pc.RetryablePhrases,
 		}
 	}
 

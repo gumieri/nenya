@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 
@@ -172,7 +173,119 @@ func TestHandleChatCompletions_NonStreamingEmptyResponse(t *testing.T) {
 	}
 }
 
-// TestHandleChatCompletions_NonStreamingNetworkErrorFinishReason pins NENYA-12:
+// TestHandleChatCompletions_ProviderRetryablePhrases pins NENYA-26: a
+// provider-configured retryable_phrases entry makes an otherwise
+// non-retryable 4xx body fail over to the next target. The phrase-matched
+// log line is the observable delta over the generic multi-target fallthrough
+// (which also retries non-retryable errors without recording a phrase hit),
+// so the test captures slog records and asserts the distinct warning fired.
+func TestHandleChatCompletions_ProviderRetryablePhrases(t *testing.T) {
+	var attempts atomic.Int32
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if attempts.Add(1) == 1 {
+			w.WriteHeader(http.StatusBadRequest)
+			_, _ = w.Write([]byte(`{"error":{"message":"quota bridge hiccup: my_custom_transient_failure"}}`))
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"id":    "chat-good",
+			"model": "test-model",
+			"choices": []interface{}{
+				map[string]interface{}{
+					"index":         0,
+					"message":       map[string]interface{}{"role": "assistant", "content": "hello world"},
+					"finish_reason": "stop",
+				},
+			},
+		})
+	}))
+	defer upstream.Close()
+
+	var mu sync.Mutex
+	phraseHits := 0
+	// Wrap the default logger to count phrase-match warnings.
+	capturing := slog.New(newPhraseCaptureHandler(&mu, &phraseHits))
+
+	cfg := config.Config{
+		Server: config.ServerConfig{MaxBodyBytes: 10 << 20},
+		Governance: config.GovernanceConfig{
+			RatelimitMaxRPM: config.PtrTo(60),
+			RatelimitMaxTPM: config.PtrTo(100000),
+		},
+		Bouncer: config.BouncerConfig{Enabled: config.PtrTo(false)},
+		Providers: map[string]config.ProviderConfig{
+			"test-provider": {
+				URL:              upstream.URL + "/v1/chat/completions",
+				AuthStyle:        "none",
+				RetryablePhrases: []string{"my_custom_transient_failure"},
+			},
+		},
+		Agents: map[string]config.AgentConfig{
+			"phrase-agent": {
+				Models: []config.AgentModel{
+					{Provider: "test-provider", Model: "test-model"},
+					{Provider: "test-provider", Model: "test-model"},
+				},
+			},
+		},
+	}
+	secrets := &config.SecretsConfig{ClientToken: "test-token", ProviderKeys: map[string]string{}}
+	gw := gateway.New(context.Background(), cfg, secrets, capturing)
+	p := &Proxy{}
+	p.StoreGateway(gw)
+
+	body := `{"model":"phrase-agent","stream":false,"messages":[{"role":"user","content":"hi"}]}`
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(body))
+	req.Header.Set("Authorization", "Bearer test-token")
+	rec := httptest.NewRecorder()
+
+	p.ServeHTTP(rec, req)
+
+	if attempts.Load() != 2 {
+		t.Fatalf("expected configured phrase to trigger failover (2 upstream hits), got %d attempts", attempts.Load())
+	}
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200 after phrase-triggered failover, got %d (body: %s)", rec.Code, rec.Body.String())
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if phraseHits == 0 {
+		t.Fatal("expected the provider-configured retryable phrase path to fire (no phrase-match log captured)")
+	}
+}
+
+// phraseCaptureHandler wraps slog.Handler and counts records carrying the
+// NENYA-26 phrase-match message.
+type phraseCaptureHandler struct {
+	inner slog.Handler
+	mu    *sync.Mutex
+	hits  *int
+}
+
+func newPhraseCaptureHandler(mu *sync.Mutex, hits *int) slog.Handler {
+	return &phraseCaptureHandler{inner: slog.NewTextHandler(io.Discard, nil), mu: mu, hits: hits}
+}
+
+func (h *phraseCaptureHandler) Enabled(_ context.Context, level slog.Level) bool {
+	return level <= slog.LevelWarn
+}
+
+func (h *phraseCaptureHandler) Handle(_ context.Context, r slog.Record) error {
+	if strings.Contains(r.Message, "provider-configured retryable phrase matched") {
+		h.mu.Lock()
+		*h.hits++
+		h.mu.Unlock()
+	}
+	return nil
+}
+
+func (h *phraseCaptureHandler) WithAttrs(attrs []slog.Attr) slog.Handler { return h }
+func (h *phraseCaptureHandler) WithGroup(name string) slog.Handler       { return h }
+
+// TestHandleChatCompletions_NonStreamingNetworkErrorFinishReasonFailsOver pins NENYA-12:
+
+// TestHandleChatCompletions_NonStreamingNetworkErrorFinishReasonFailsOver pins NENYA-12:
 // a 200 completion whose terminal finish_reason is a network-failure variant
 // is a failed upstream attempt — the retry loop must fail over to the next
 // target instead of relaying the broken completion.

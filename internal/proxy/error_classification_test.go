@@ -145,6 +145,63 @@ func TestIsRetryableClientError_XAICapacity(t *testing.T) {
 	}
 }
 
+// TestUpstreamBlamePatterns pins NENYA-26: aggregator-relayed upstream
+// failures wearing 4xx statuses are retryable for every provider, while
+// genuine validation errors are not.
+func TestUpstreamBlamePatterns(t *testing.T) {
+	tests := []struct {
+		name   string
+		status int
+		body   string
+		want   bool
+	}{
+		{"upstream request failed 400", 400, `{"error":{"message":"Upstream request failed"}}`, true},
+		{"upstream error 400", 400, `{"error":{"message":"upstream error: connection refused"}}`, true},
+		{"upstream unavailable 422", 422, `{"error":"upstream unavailable, try later"}`, true},
+		{"upstream is unavailable 400", 400, `{"error":{"message":"upstream is unavailable"}}`, true},
+		{"reach upstream 413", 413, `{"error":"could not reach upstream"}`, true},
+		{"normal validation 400", 400, `{"error":{"message":"messages is required"}}`, false},
+		{"invalid api key 400", 400, `{"error":{"message":"invalid api key"}}`, false},
+		{"blame phrase on 500 not matched here", 500, `{"error":"upstream request failed"}`, false},
+		{"empty body", 400, ``, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := isRetryableClientErrorForProvider(tt.status, []byte(tt.body), ""); got != tt.want {
+				t.Errorf("isRetryableClientErrorForProvider(%d, %q) = %v; want %v", tt.status, tt.body, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestBodyContainsAnyPhrases(t *testing.T) {
+	phrases := []string{"Custom_Transient_Failure", "bridge hiccup", "  "}
+	tests := []struct {
+		name string
+		body string
+		want bool
+	}{
+		{"exact phrase", `{"error":{"message":"custom_transient_failure while relaying"}}`, true},
+		{"case-insensitive", `{"error":"BRIDGE HICCUP detected"}`, true},
+		{"no match", `{"error":"something else"}`, false},
+		{"empty body", ``, false},
+		{"whitespace-only phrase not counted as match", `{"error":"has a space"}`, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := bodyContainsAnyPhrases([]byte(tt.body), phrases); got != tt.want {
+				t.Errorf("bodyContainsAnyPhrases(%q) = %v; want %v", tt.body, got, tt.want)
+			}
+		})
+	}
+	if bodyContainsAnyPhrases([]byte(`{"error":"x"}`), nil) {
+		t.Error("empty phrase list must never match")
+	}
+	if bodyContainsAnyPhrases([]byte(`{"error":"x"}`), []string{""}) {
+		t.Error("empty-string phrase must never match")
+	}
+}
+
 // TestDefaultRetryableStatusCodes pins HTTP 529 (provider overloaded) as a
 // retryable status by default.
 func TestDefaultRetryableStatusCodes(t *testing.T) {

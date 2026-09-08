@@ -130,8 +130,10 @@ All outbound HTTP dispatch points vulnerable to transient network errors (TLS ha
 **Configuration:**
 - `governance.max_retry_attempts` — global default (default 3), applied by `GovernanceConfig.EffectiveMaxRetryAttempts()`
 - `providers.<name>.max_retry_attempts` — per-provider override, takes precedence over global default
+- `providers.<name>.retryable_status_codes` — per-provider retryable HTTP statuses (default: 429, 500, 502, 503, 504, 529)
+- `providers.<name>.retryable_phrases` — case-insensitive error-body substrings that make a 4xx response retryable/failover-able for that provider (e.g. aggregator-relayed upstream failures); empty uses the built-in pattern sets plus the common upstream-blame phrases ("upstream request failed", "upstream error", "upstream unavailable", "reach upstream")
 - The context deadline bounds the total retry time; never exceed the per-request timeout.
-- Network errors and 5xx upstream responses are retried. 4xx responses are NOT retried.
+- Network errors and 5xx upstream responses are retried. 4xx responses are NOT retried — except when classified retryable (context-length semantics, per-provider statuses/phrases, or provider matchers).
 
 ### 9. Code Readability Patterns (Strong Recommendations)
 - **Function Length:** Target ≤80 lines. Functions exceeding 150 lines SHOULD be decomposed into smaller, named helpers. Enforced by `funlen` linter.

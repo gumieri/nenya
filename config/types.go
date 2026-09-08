@@ -153,6 +153,11 @@ type ProviderConfig struct {
 	RetryableStatusCodes []int `json:"retryable_status_codes"`
 	// MaxRetryAttempts is the maximum number of retry attempts for failed requests.
 	MaxRetryAttempts int `json:"max_retry_attempts"`
+	// RetryablePhrases are case-insensitive substrings that make a 4xx error
+	// body retryable for this provider (e.g. aggregator-relayed upstream
+	// failures). Matched in addition to the built-in pattern sets; empty
+	// list means built-in sets only.
+	RetryablePhrases []string `json:"retryable_phrases,omitempty"`
 	// Thinking configures reasoning token behavior for this provider.
 	Thinking *ThinkingConfig `json:"thinking,omitempty"`
 	// APIKey is the authentication key (typically loaded from secrets).
@@ -210,6 +215,7 @@ type Provider struct {
 	StreamIdleTimeoutSeconds int
 	RetryableStatusCodes     []int
 	MaxRetryAttempts         int
+	RetryablePhrases         []string
 	Thinking                 *ThinkingConfig
 	Billing                  *BillingConfig
 	AllowedModels            []string

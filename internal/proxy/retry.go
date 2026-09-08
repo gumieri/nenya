@@ -788,6 +788,18 @@ func (p *Proxy) handleUpstreamError(gw *gateway.NenyaGateway,
 		return true, 0
 	}
 
+	// Provider-configured retryable_phrases: operators can teach the gateway
+	// provider-specific transient-failure wordings (NENYA-26). Gated to 4xx
+	// like the built-in classifier; phrases match raw body substrings
+	// case-insensitively.
+	if pr, ok := gw.Providers[target.Provider]; ok && action.resp.StatusCode >= 400 && action.resp.StatusCode < 500 &&
+		len(pr.RetryablePhrases) > 0 && bodyContainsAnyPhrases(errorBody, pr.RetryablePhrases) && len(targets) > 1 {
+		logBody := redactForLog(string(errorBody), gw)
+		ctxLogger.Warn("provider-configured retryable phrase matched, trying next target", "body", logBody)
+		gw.AgentState.RecordFailureWithStatus(target, action.resp.StatusCode, string(errorBody))
+		return true, 0
+	}
+
 	if retryable, isQuota := handleAdapterRetryableError(ctxLogger, target, action, cooldownDuration, gw); retryable {
 		if isQuota {
 			p.lastQuotaExhausted.Store(true)
@@ -1079,6 +1091,21 @@ var openrouterRetryablePatterns = []string{
 	"free tier rate limit",
 }
 
+// upstreamBlamePatterns are provider-agnostic error-body phrases indicating
+// that a 4xx response actually carries a relayed upstream/transient failure
+// (aggregators and gateways often wear their upstream's error as a client
+// error). Matched case-insensitively in addition to the per-provider sets.
+// Known trade-off: providers that echo prompt snippets in error bodies can
+// false-positive on the generic phrases; bounded by the multi-target sweep
+// and MaxRetries.
+var upstreamBlamePatterns = []string{
+	"upstream request failed",
+	"upstream error",
+	"upstream unavailable",
+	"upstream is unavailable",
+	"reach upstream",
+}
+
 var xaiRetryablePatterns = []string{
 	"at capacity",
 	"temporarily unavailable",
@@ -1125,6 +1152,12 @@ func isRetryableClientErrorForProvider(statusCode int, body []byte, provider str
 	}
 	lower := strings.ToLower(string(body))
 
+	for _, pat := range upstreamBlamePatterns {
+		if strings.Contains(lower, pat) {
+			return true
+		}
+	}
+
 	for _, pat := range commonRetryablePatterns {
 		if strings.Contains(lower, pat) {
 			return true
@@ -1132,6 +1165,25 @@ func isRetryableClientErrorForProvider(statusCode int, body []byte, provider str
 	}
 
 	return matchProviderSpecificPatterns(lower, provider)
+}
+
+// bodyContainsAnyPhrases reports whether body contains any of the given
+// phrases, case-insensitively. Used for provider-configured
+// retryable_phrases.
+func bodyContainsAnyPhrases(body []byte, phrases []string) bool {
+	if len(body) == 0 || len(phrases) == 0 {
+		return false
+	}
+	lower := strings.ToLower(string(body))
+	for _, phrase := range phrases {
+		if strings.TrimSpace(phrase) == "" {
+			continue
+		}
+		if strings.Contains(lower, strings.ToLower(phrase)) {
+			return true
+		}
+	}
+	return false
 }
 
 type rpcDetail struct {
