@@ -30,6 +30,7 @@ func ToProviderAccountsWithTime(p *config.ProviderConfig, now time.Time) []*conf
 
 			accounts[i] = &config.ProviderAccount{
 				ID:             cfg.ID,
+				Weight:         cfg.Weight,
 				CredentialType: credType,
 				Credential:     cfg.Credential,
 				Status:         config.AccountStatusActive,

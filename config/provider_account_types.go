@@ -39,7 +39,12 @@ type ErrorRecord struct {
 // ProviderAccount represents a single credential/account for a provider.
 // It tracks the credential, status, rate limiting state, and usage metadata.
 type ProviderAccount struct {
-	ID               string               `json:"id"`
+	ID string `json:"id"`
+	// Weight is the relative traffic share this account receives from
+	// multi-account rotation (NENYA-40). A weight-2 account receives twice
+	// the traffic of a weight-1 account on average. Values below 1 are
+	// treated as 1; the default (zero value) is 1.
+	Weight           int                  `json:"weight,omitempty"`
 	CredentialType   CredentialType       `json:"credential_type"`
 	Credential       string               `json:"credential"`
 	Status           AccountStatus        `json:"status"`

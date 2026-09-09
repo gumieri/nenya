@@ -2,7 +2,10 @@ package auth
 
 import (
 	"context"
+	"fmt"
+	"math/rand/v2"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -723,5 +726,291 @@ func TestJSONFileStorage_DeleteProvider(t *testing.T) {
 	loaded, _ := storage.LoadAccounts("test")
 	if loaded != nil {
 		t.Error("expected nil after delete")
+	}
+}
+
+// TestSelectAccountExcluding_FairUnderFiltering pins the NENYA-40 fairness
+// property: with random per-pick exclusions (cooldown/tried-set filtering),
+// pick counts across accounts stay nearly equal because selection is
+// min-virtual-clock over account identities, never a position within the
+// filtered candidate slice. CLIProxyAPI's counter%len(filtered) implementation
+// measured a 11331x busiest-to-quietest skew under this workload; the bound
+// here is 1.2x.
+func TestSelectAccountExcluding_FairUnderFiltering(t *testing.T) {
+	const (
+		numAccounts  = 9
+		numPicks     = 900
+		excludeProb  = 0.3
+		maxSkewRatio = 1.2
+	)
+	accounts := make([]*config.ProviderAccount, numAccounts)
+	for i := range accounts {
+		accounts[i] = newTestAccount(fmt.Sprintf("a%d", i), "key")
+	}
+	pool := NewAccountPool("test-provider", accounts)
+	ctx := context.Background()
+	rng := rand.New(rand.NewPCG(42, 7))
+
+	counts := make(map[string]int, numAccounts)
+	for i := 0; i < numPicks; i++ {
+		exclude := make(map[string]bool, numAccounts)
+		for _, acc := range accounts {
+			if rng.Float64() < excludeProb {
+				exclude[acc.ID] = true
+			}
+		}
+		sel, err := pool.SelectAccountExcluding(ctx, "gpt-4", exclude)
+		if err != nil {
+			t.Fatalf("pick %d: unexpected error: %v", i, err)
+		}
+		counts[sel.ID]++
+	}
+
+	busiest, quietest := 0, numPicks
+	for _, c := range counts {
+		if c > busiest {
+			busiest = c
+		}
+		if c < quietest {
+			quietest = c
+		}
+	}
+	if quietest == 0 {
+		t.Fatalf("starved account under random filtering: counts=%v", counts)
+	}
+	if ratio := float64(busiest) / float64(quietest); ratio > maxSkewRatio {
+		t.Fatalf("busiest/quietest skew %.2fx exceeds %.2fx: counts=%v", ratio, maxSkewRatio, counts)
+	}
+}
+
+// TestSelectAccountExcluding_WeightedProportion verifies that configured
+// weights proportion traffic: a weight-3 account receives ~3x the picks of a
+// weight-1 account (weighted fair queuing via clock advance of
+// weightTick/weight). The schedule is deterministic, so the counts land close
+// to the theoretical optimum.
+func TestSelectAccountExcluding_WeightedProportion(t *testing.T) {
+	light := newTestAccount("light", "k1")
+	light.Weight = 1
+	heavy := newTestAccount("heavy", "k2")
+	heavy.Weight = 3
+	pool := NewAccountPool("test-provider", []*config.ProviderAccount{light, heavy})
+	ctx := context.Background()
+
+	const picks = 400
+	counts := make(map[string]int, 2)
+	for i := 0; i < picks; i++ {
+		sel, err := pool.SelectAccount(ctx, "gpt-4")
+		if err != nil {
+			t.Fatalf("pick %d: unexpected error: %v", i, err)
+		}
+		counts[sel.ID]++
+	}
+	if counts["light"] < 90 || counts["light"] > 110 {
+		t.Fatalf("weight-1 account got %d/%d picks, want ~100", counts["light"], picks)
+	}
+	if counts["heavy"] < 270 || counts["heavy"] > 330 {
+		t.Fatalf("weight-3 account got %d/%d picks, want ~300", counts["heavy"], picks)
+	}
+}
+
+// TestSelectAccountExcluding_ZeroWeightDefaultsToOne verifies the documented
+// normalization: accounts without an explicit weight (zero value) receive the
+// default share, matching weight-1 accounts.
+func TestSelectAccountExcluding_ZeroWeightDefaultsToOne(t *testing.T) {
+	unset := newTestAccount("unset", "k1")
+	one := newTestAccount("one", "k2")
+	one.Weight = 1
+	pool := NewAccountPool("test-provider", []*config.ProviderAccount{unset, one})
+	ctx := context.Background()
+
+	for i := 0; i < 20; i++ {
+		if _, err := pool.SelectAccount(ctx, "gpt-4"); err != nil {
+			t.Fatalf("pick %d: %v", i, err)
+		}
+	}
+	if unset.LastUsed.Sub(one.LastUsed) > weightTick || one.LastUsed.Sub(unset.LastUsed) > weightTick {
+		t.Fatalf("zero-weight account advanced differently from weight-1: %v vs %v",
+			unset.LastUsed, one.LastUsed)
+	}
+}
+
+// TestSelectAccountExcluding_ClampsStaleClock verifies that an account whose
+// persisted LastUsed is far in the past (e.g. loaded from storage after a
+// restart) re-enters selection on equal footing within one tick instead of
+// hoarding a backlog of picks proportional to its idle time.
+func TestSelectAccountExcluding_ClampsStaleClock(t *testing.T) {
+	stale := newTestAccount("stale", "k1")
+	stale.LastUsed = time.Now().Add(-72 * time.Hour)
+	fresh := newTestAccount("fresh", "k2")
+	pool := NewAccountPool("test-provider", []*config.ProviderAccount{fresh, stale})
+	ctx := context.Background()
+
+	seen := make(map[string]bool, 2)
+	for i := 0; i < 2; i++ {
+		sel, err := pool.SelectAccount(ctx, "gpt-4")
+		if err != nil {
+			t.Fatalf("pick %d: %v", i, err)
+		}
+		seen[sel.ID] = true
+	}
+	if !seen["stale"] || !seen["fresh"] {
+		t.Fatalf("stale-clock account did not re-enter within one tick: seen=%v", seen)
+	}
+}
+
+// TestSelectAccountByID_DoesNotRewindClock verifies sticky picks move the
+// account's virtual clock forward (max semantics), never backwards: clocks
+// already ahead of wall time — active accounts under sustained traffic — must
+// stay ahead so unpinned rotation is not unfairly re-seated.
+func TestSelectAccountByID_DoesNotRewindClock(t *testing.T) {
+	ahead := newTestAccount("ahead", "k1")
+	ahead.LastUsed = time.Now().Add(time.Hour)
+	lagging := newTestAccount("lagging", "k2")
+	lagging.LastUsed = time.Now().Add(-time.Hour)
+	pool := NewAccountPool("test-provider", []*config.ProviderAccount{ahead, lagging})
+	ctx := context.Background()
+
+	if _, err := pool.SelectAccountByID(ctx, "ahead", "gpt-4"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if ahead.LastUsed.Before(time.Now()) {
+		t.Fatal("sticky pick rewound a clock that was ahead of wall time")
+	}
+
+	if _, err := pool.SelectAccountByID(ctx, "lagging", "gpt-4"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if lagging.LastUsed.Before(time.Now().Add(-weightTick)) {
+		t.Fatal("sticky pick did not advance a lagging clock to ~now")
+	}
+}
+
+// TestAccountPool_ConcurrentSelectionRace exercises concurrent selection and
+// error reporting for the race detector (run with -race): the virtual-clock
+// advance, clamp, and error classification all mutate shared account state
+// under p.mu.
+func TestAccountPool_ConcurrentSelectionRace(t *testing.T) {
+	accounts := make([]*config.ProviderAccount, 6)
+	for i := range accounts {
+		accounts[i] = newTestAccount(fmt.Sprintf("a%d", i), "key")
+	}
+	pool := NewAccountPool("test-provider", accounts)
+	ctx := context.Background()
+
+	var (
+		wg     sync.WaitGroup
+		served atomic.Int64
+	)
+	for g := 0; g < 8; g++ {
+		wg.Add(1)
+		go func(g int) {
+			defer wg.Done()
+			for i := 0; i < 150; i++ {
+				sel, err := pool.SelectAccount(ctx, "gpt-4")
+				if err != nil {
+					continue
+				}
+				served.Add(1)
+				switch (g + i) % 3 {
+				case 0:
+					_ = pool.ApplyError(sel.ID, 429, "rate limited")
+				case 1:
+					_ = pool.ApplyError(sel.ID, 500, "boom")
+				default:
+					_ = pool.ReportSuccess(sel.ID)
+				}
+			}
+		}(g)
+	}
+	wg.Wait()
+
+	// Restore every account, then verify the pool is serviceable and the
+	// recovery path leaves accounts active (§12: no assertion-free tests).
+	for _, acc := range accounts {
+		_ = pool.ReportSuccess(acc.ID)
+	}
+	sel, err := pool.SelectAccount(ctx, "gpt-4")
+	if err != nil {
+		t.Fatalf("pool unserviceable after concurrent load: %v", err)
+	}
+	if served.Load() == 0 {
+		t.Fatal("pool served no selections under concurrent load")
+	}
+	if acc := pool.GetAccount(sel.ID); acc == nil || acc.Status != config.AccountStatusActive {
+		t.Fatalf("selected account not active after recovery (acc=%v)", acc)
+	}
+}
+
+// TestSelectAccountExcluding_ReentryHoardBounded pins the NENYA-40 review fix:
+// sustained pick rates push selection clocks ahead of wall time, and without
+// renormalization an account re-entering after a long exclusion would
+// monopolize picks proportional to uptime (the pack's accumulated lead) until
+// its clock caught up. renormalizeVirtualClocks bounds the hoard to roughly
+// one round-robin pass over the pool.
+func TestSelectAccountExcluding_ReentryHoardBounded(t *testing.T) {
+	const (
+		numAccounts = 4
+		maxHoard    = numAccounts + 1
+	)
+	accounts := make([]*config.ProviderAccount, numAccounts)
+	for i := range accounts {
+		accounts[i] = newTestAccount(fmt.Sprintf("a%d", i), "key")
+	}
+	pool := NewAccountPool("test-provider", accounts)
+	ctx := context.Background()
+
+	for i := 0; i < 500; i++ {
+		if _, err := pool.SelectAccountExcluding(ctx, "gpt-4", map[string]bool{"a0": true}); err != nil {
+			t.Fatalf("warmup pick %d: %v", i, err)
+		}
+	}
+
+	hoarded := 0
+	for i := 0; i < 100; i++ {
+		sel, err := pool.SelectAccount(ctx, "gpt-4")
+		if err != nil {
+			t.Fatalf("re-entry pick %d: %v", i, err)
+		}
+		if sel.ID != "a0" {
+			break
+		}
+		hoarded++
+	}
+	if hoarded > maxHoard {
+		t.Fatalf("re-entering account hoarded %d consecutive picks (max %d) — clock lead unbounded", hoarded, maxHoard)
+	}
+}
+
+// TestAccountConfigWeightFlowsToPoolSelection verifies the full NENYA-40
+// wiring: config accounts[].weight → ToProviderAccounts → AccountPool, with
+// the configured proportion visible in actual pick distribution.
+func TestAccountConfigWeightFlowsToPoolSelection(t *testing.T) {
+	p := &config.ProviderConfig{
+		Accounts: []config.AccountConfig{
+			{ID: "light", Weight: 1, Type: "apikey", Credential: "c1"},
+			{ID: "heavy", Weight: 3, Type: "apikey", Credential: "c2"},
+		},
+	}
+	accounts := ToProviderAccounts(p)
+	if accounts[0].Weight != 1 || accounts[1].Weight != 3 {
+		t.Fatalf("config weight not copied to pool accounts: %d/%d", accounts[0].Weight, accounts[1].Weight)
+	}
+
+	pool := NewAccountPool("test-provider", accounts)
+	ctx := context.Background()
+	const picks = 400
+	counts := make(map[string]int, 2)
+	for i := 0; i < picks; i++ {
+		sel, err := pool.SelectAccount(ctx, "gpt-4")
+		if err != nil {
+			t.Fatalf("pick %d: %v", i, err)
+		}
+		counts[sel.ID]++
+	}
+	if counts["light"] < 90 || counts["light"] > 110 {
+		t.Fatalf("weight-1 account got %d/%d picks, want ~100", counts["light"], picks)
+	}
+	if counts["heavy"] < 270 || counts["heavy"] > 330 {
+		t.Fatalf("weight-3 account got %d/%d picks, want ~300", counts["heavy"], picks)
 	}
 }

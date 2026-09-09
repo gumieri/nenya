@@ -18,23 +18,97 @@ type SelectedAccount struct {
 }
 
 // AccountPool manages multiple provider accounts with mutex-guarded selection.
-// Implements LRU (Least Recently Used) strategy for load distribution.
+// Implements weighted least-recently-used selection (WFQ-style, NENYA-40):
+// each pick advances the chosen account's LastUsed by weightTick/weight, so
+// min-LastUsed selection distributes traffic proportionally to configured
+// weights while remaining fair-by-construction under candidate filtering.
 type AccountPool struct {
 	mu       sync.RWMutex
 	provider string
 	accounts []*config.ProviderAccount
+	// lastPicked is the accounts index of the previous pick (-1 when unset).
+	// It rotates the min-scan start so equal virtual clocks are served in
+	// round-robin succession rather than always favoring the earliest
+	// configured account — re-entering accounts often tie exactly with the
+	// pack at the recency floor, and a fixed tie-break would systematically
+	// bias traffic toward slice-front accounts (NENYA-40 review).
+	lastPicked int
+}
+
+// weightTick is the virtual-clock quantum an account's LastUsed advances per
+// pick at weight 1. With all weights equal, selection is classic LRU; higher
+// weights advance the clock more slowly and therefore win proportionally more
+// picks. The value only sets relative pacing: absolute divergence from wall
+// time is bounded on the lagging side by clampVirtualClock and on the leading
+// side by renormalizeVirtualClocks, so persisted LastUsed values stay
+// wall-recognizable.
+const weightTick = time.Second
+
+// effectiveWeight normalizes the configured weight: values below 1 select
+// the default share of 1.
+func effectiveWeight(account *config.ProviderAccount) int {
+	if account.Weight < 1 {
+		return 1
+	}
+	return account.Weight
+}
+
+// clampVirtualClock bounds how far an account's selection clock may lag
+// behind wall time. Accounts absent from rotation (cooldowns, exclusions,
+// freshly loaded persistence state) re-enter selection on equal footing
+// within one tick instead of hoarding a backlog of picks proportional to
+// their accumulated idle time. Clocks ahead of wall time are handled by
+// renormalizeVirtualClocks. Caller must hold p.mu (write).
+func clampVirtualClock(account *config.ProviderAccount, now time.Time) {
+	if floor := now.Add(-weightTick); account.LastUsed.Before(floor) {
+		account.LastUsed = floor
+	}
+}
+
+// advanceVirtualClock consumes one pick: the account's selection clock
+// advances by weightTick/weight. This is the only selection state in the
+// pool — it lives on the account identity, never on a filtered slice
+// position, so retry exclusions and cooldowns cannot re-seat rotation
+// (the CLIProxyAPI 11331x skew class, NENYA-40). The tick is floored at
+// 1ns so absurdly large weights degrade to a hot account rather than a
+// frozen clock that would capture 100% of picks.
+// Caller must hold p.mu (write).
+func advanceVirtualClock(account *config.ProviderAccount) {
+	tick := weightTick / time.Duration(effectiveWeight(account))
+	if tick <= 0 {
+		tick = time.Nanosecond
+	}
+	account.LastUsed = account.LastUsed.Add(tick)
+}
+
+// renormalizeVirtualClocks translates every account clock by a common offset
+// so the least-recently-used available account sits at the recency floor
+// (now-weightTick). Translation preserves relative order, so selection
+// outcomes are unchanged, while keeping absolute clocks within a bounded
+// window of wall time: without it, sustained pick rates push all clocks
+// ahead of wall time without limit (min clock rises one tick per pick), and
+// an account re-entering after filtering would then monopolize picks
+// proportional to uptime until it caught up. Caller must hold p.mu (write).
+func (p *AccountPool) renormalizeVirtualClocks(minAvailable, now time.Time) {
+	if shift := minAvailable.Sub(now.Add(-weightTick)); shift > 0 {
+		for _, acc := range p.accounts {
+			acc.LastUsed = acc.LastUsed.Add(-shift)
+		}
+	}
 }
 
 // NewAccountPool creates a new account pool for the given provider.
+// Accounts must be non-nil entries; nil entries are not supported.
 func NewAccountPool(provider string, accounts []*config.ProviderAccount) *AccountPool {
 	return &AccountPool{
-		provider: provider,
-		accounts: accounts,
+		provider:   provider,
+		accounts:   accounts,
+		lastPicked: -1,
 	}
 }
 
 // SelectAccount picks the best account for the given model.
-// Uses LRU (least recently used) strategy for load distribution.
+// Uses weighted least-recently-used selection (WFQ-style); see AccountPool.
 // Returns a copy of the selected account's immutable fields; caller
 // must use ReportError/ReportSuccess to mutate pool state.
 func (p *AccountPool) SelectAccount(ctx context.Context, model string) (*SelectedAccount, error) {
@@ -45,17 +119,22 @@ func (p *AccountPool) SelectAccount(ctx context.Context, model string) (*Selecte
 // the given model, skipping accounts in the exclude set (by ID) on top of the
 // standard health gates (active, not rate-limited, not model-locked). Used by
 // callers with out-of-band health knowledge (e.g. billing exhaustion) to
-// retry sibling selection without re-selecting a known-bad account. The ctx
-// parameter is currently unused; it is kept for signature symmetry with
-// SelectAccount and future storage-aware selection.
-func (p *AccountPool) SelectAccountExcluding(ctx context.Context, model string, exclude map[string]bool) (*SelectedAccount, error) {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-
-	now := time.Now()
-
-	var available []*config.ProviderAccount
-	for _, acc := range p.accounts {
+// retry sibling selection without re-selecting a known-bad account.
+//
+// Fairness under filtering (NENYA-40): selection is min-LastUsed over the
+// *identity* of each account, never a position within the filtered slice, so
+// shrinking candidate sets (retries, cooldowns, exclusions) cannot re-seat
+// rotation. Ties break deterministically by configured order.
+//
+// The ctx parameter is currently unused; it is kept for signature symmetry
+// with SelectAccount and future storage-aware selection.
+// availabilityMask computes which accounts pass the health gates for the
+// given model: not excluded, active, not rate-limited, not model-locked.
+// Passing accounts have their selection clocks clamped (caller must hold
+// p.mu, write).
+func (p *AccountPool) availabilityMask(model string, now time.Time, exclude map[string]bool) []bool {
+	available := make([]bool, len(p.accounts))
+	for i, acc := range p.accounts {
 		if exclude[acc.ID] {
 			continue
 		}
@@ -68,20 +147,49 @@ func (p *AccountPool) SelectAccountExcluding(ctx context.Context, model string, 
 		if p.isModelLocked(acc, model, now) {
 			continue
 		}
-		available = append(available, acc)
+		clampVirtualClock(acc, now)
+		available[i] = true
 	}
+	return available
+}
 
-	if len(available) == 0 {
+func (p *AccountPool) SelectAccountExcluding(ctx context.Context, model string, exclude map[string]bool) (*SelectedAccount, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	now := time.Now()
+	available := p.availabilityMask(model, now, exclude)
+
+	// Rotated min-scan: begin after the last pick so ties rotate fairly.
+	start := 0
+	if p.lastPicked >= 0 && p.lastPicked < len(p.accounts) {
+		start = (p.lastPicked + 1) % len(p.accounts)
+	}
+	selIdx := -1
+	for off := 0; off < len(p.accounts); off++ {
+		idx := (start + off) % len(p.accounts)
+		if !available[idx] {
+			continue
+		}
+		if selIdx == -1 || p.accounts[idx].LastUsed.Before(p.accounts[selIdx].LastUsed) {
+			selIdx = idx
+		}
+	}
+	if selIdx == -1 {
 		return nil, &NoAvailableAccountError{Provider: p.provider}
 	}
 
-	selected := available[0]
-	for _, acc := range available[1:] {
-		if acc.LastUsed.Before(selected.LastUsed) {
-			selected = acc
+	selected := p.accounts[selIdx]
+	p.lastPicked = selIdx
+	advanceVirtualClock(selected)
+
+	minClock := selected.LastUsed
+	for i, acc := range p.accounts {
+		if available[i] && acc.LastUsed.Before(minClock) {
+			minClock = acc.LastUsed
 		}
 	}
-	selected.LastUsed = now
+	p.renormalizeVirtualClocks(minClock, now)
 
 	return &SelectedAccount{
 		ID:         selected.ID,
@@ -120,7 +228,13 @@ func (p *AccountPool) SelectAccountByID(ctx context.Context, accountID, model st
 	if p.isModelLocked(acc, model, now) {
 		return nil, &NoAvailableAccountError{Provider: p.provider, Reason: ReasonModelLocked}
 	}
-	acc.LastUsed = now
+	// Sticky picks push the account out of the unpinned rotation by moving
+	// its clock to at least wall-now (max, never backwards): virtual clocks
+	// of active accounts may already run ahead of wall time under sustained
+	// traffic, and rewinding those would unfairly re-seat rotation.
+	if now.After(acc.LastUsed) {
+		acc.LastUsed = now
+	}
 
 	return &SelectedAccount{
 		ID:         acc.ID,

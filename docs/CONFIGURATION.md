@@ -661,7 +661,8 @@ For high-volume providers with multiple API keys or credentials, configure a mul
         {
           "id": "account-2",
           "type": "apikey",
-          "credential": "sk-proj-yyyyy"
+          "credential": "sk-proj-yyyyy",
+          "weight": 3
         }
       ],
       "ratelimit_max_rpm": 500,
@@ -673,7 +674,7 @@ For high-volume providers with multiple API keys or credentials, configure a mul
 
 **AccountPool Behavior:**
 
-- **LRU Selection**: Uses least-recently-used strategy with mutex-protected access
+- **Weighted LRU Selection**: Least-recently-used selection with mutex-protected access; per-account `weight` (default 1) proportions traffic via weighted-fair-queuing clock advance — a weight-3 account receives ~3x the traffic of a weight-1 account. Selection is over account identity, never filtered-slice position, so retries, cooldowns, and exclusions cannot re-seat rotation and skew load (fairness verified by regression harness: ≤1.2x busiest-to-quietest under random filtering)
 - **Error Classification**: 6 error classes (auth, rate_limit, quota, capacity, server, unknown) with semantic cooldowns
 - **Exponential Backoff**: Rate-limited and quota-exceeded accounts receive exponentially increasing backoff (±5% jitter)
 - **Model Locks**: Failed models on an account are locked until cooldown expires (tracked in `model_locks`)

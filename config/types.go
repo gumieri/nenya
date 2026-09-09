@@ -198,7 +198,11 @@ type ProviderConfig struct {
 
 // AccountConfig defines a single credential/account for multi-account providers.
 type AccountConfig struct {
-	ID         string `json:"id"`
+	ID string `json:"id"`
+	// Weight is the relative traffic share for multi-account rotation
+	// (NENYA-40); a weight-2 account receives twice the traffic of a
+	// weight-1 account. Values below 1 are treated as 1.
+	Weight     int    `json:"weight,omitempty"`
 	Type       string `json:"type"`
 	Credential string `json:"credential"`
 }
