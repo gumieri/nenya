@@ -136,6 +136,14 @@ func (p *Proxy) validateChatRequest(w http.ResponseWriter, r *http.Request, gw *
 
 	req.Messages, req.HasMCPTools, req.SoftLimit, req.HardLimit, req.WindowMaxCtx, req.Profile = p.resolvePipelineContext(r, gw, req)
 
+	// Record the client-side (pre-pipeline) token estimate once per request
+	// so Prometheus can derive whole-pipeline savings as client - input.
+	provider := ""
+	if len(req.Targets) > 0 {
+		provider = req.Targets[0].Provider
+	}
+	gw.Metrics.RecordTokens("client", req.ModelName, req.AgentName, provider, req.TokenCount)
+
 	return req, nil
 }
 
@@ -872,6 +880,7 @@ func (p *Proxy) applyContentPipeline(gw *gateway.NenyaGateway, ctx context.Conte
 		gw.Logger.Warn("window compaction failed, proceeding without it", "err", err)
 	} else if windowed {
 		gw.Metrics.RecordWindow(gw.Config.Window.Mode)
+		gw.Metrics.RecordTokensSaved("window", tokenCount-gw.CountRequestTokens(payload))
 	}
 
 	messages = payload["messages"].([]interface{})

@@ -33,6 +33,9 @@ func TestMetrics_RecordAndWritePrometheus(t *testing.T) {
 	m.RecordCacheMissTokens("model-a", "agent-1", "gemini", 100)
 	m.RecordSessionPinChange("new")
 	m.RecordSessionPinChange("failover")
+	m.RecordTokens("client", "model-a", "agent-1", "gemini", 150)
+	m.RecordTokensSaved("trim", 120)
+	m.RecordTokensSaved("window", 80)
 	m.SessionActive = func() int { return 2 }
 
 	var buf bytes.Buffer
@@ -49,6 +52,7 @@ func TestMetrics_RecordAndWritePrometheus(t *testing.T) {
 		"nenya_pipeline_compaction_applied_total",
 		"nenya_pipeline_window_applied_total",
 		"nenya_pipeline_interceptions_total",
+		"nenya_pipeline_tokens_saved_total",
 		"nenya_ratelimit_rejected_total",
 		"nenya_agent_cooldowns_total",
 		"nenya_agent_targets_exhausted_total",
@@ -66,6 +70,16 @@ func TestMetrics_RecordAndWritePrometheus(t *testing.T) {
 	for _, metric := range expectedMetrics {
 		if !strings.Contains(out, metric) {
 			t.Errorf("missing metric %q in output", metric)
+		}
+	}
+
+	for _, want := range []string{
+		`nenya_pipeline_tokens_saved_total{source="trim"} 120`,
+		`nenya_pipeline_tokens_saved_total{source="window"} 80`,
+		`nenya_tokens_estimated_total{agent="agent-1", direction="client", model="model-a", provider="gemini"} 150`,
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("missing counter line %q in output", want)
 		}
 	}
 }
@@ -268,6 +282,7 @@ func TestMetrics_NilSafety(t *testing.T) {
 	m.RecordCBSuccess("k")
 	m.RecordInterceptorDuration("n", time.Second)
 	m.RecordInterceptorApplied("n")
+	m.RecordTokensSaved("trim", 10)
 	m.RecordInterceptorError("n")
 	m.RecordAdapterConversion("a", "s")
 	m.RecordOllamaEnrichment("s")

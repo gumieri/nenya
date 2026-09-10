@@ -1,6 +1,7 @@
 package routing
 
 import (
+	"bytes"
 	"encoding/json"
 	"net/http"
 	"strings"
@@ -817,5 +818,35 @@ func TestTransformRequest_InputBudgetDerivedFromContextWindow(t *testing.T) {
 				t.Fatalf("content token total after transform = %d, want exactly %d", total, tt.wantTotal)
 			}
 		})
+	}
+}
+
+// TestTransformRequest_RecordsTrimSavings verifies the transform-side trim
+// wiring records its token savings in the pipeline savings metric.
+func TestTransformRequest_RecordsTrimSavings(t *testing.T) {
+	deps := testDeps(testProviders())
+	deps.CountTokens = func(s string) int { return len(s) }
+	deps.Config.Context.HardLimitTokens = 100
+	deps.Metrics = infra.NewMetrics()
+
+	payload := map[string]interface{}{
+		"model": "ctx-test-model",
+		"messages": []interface{}{
+			map[string]interface{}{"role": "user", "content": strings.Repeat("a", 500)},
+		},
+	}
+
+	if _, _, err := TransformRequestForUpstream(deps, "deepseek", "http://upstream.test", payload, "ctx-test-model", 16000, 0, "openai", ""); err != nil {
+		t.Fatalf("TransformRequestForUpstream: %v", err)
+	}
+
+	var buf bytes.Buffer
+	deps.Metrics.WritePrometheus(&buf)
+	out := buf.String()
+	if !strings.Contains(out, `nenya_pipeline_tokens_saved_total{source="trim"} `) {
+		t.Fatalf("missing trim savings counter in output:\n%s", out)
+	}
+	if strings.Contains(out, `nenya_pipeline_tokens_saved_total{source="trim"} 0`) {
+		t.Fatalf("trim savings counter recorded zero:\n%s", out)
 	}
 }

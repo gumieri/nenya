@@ -31,6 +31,7 @@ type TransformDeps struct {
 	CountTokens        func(string) int
 	AgentName          string
 	CacheSalt          string
+	Metrics            *infra.Metrics
 }
 
 // Deprecated: Use InjectAPIKeyWithGateway instead. This function accesses
@@ -538,10 +539,12 @@ func TransformRequestForUpstream(deps TransformDeps, providerName, upstreamURL s
 
 	inputBudget := resolveTransformInputBudget(deps, finalModel, maxContext)
 	if deps.CountTokens != nil && inputBudget > 0 {
-		modified, _ := pipeline.TrimPayload(deps.Logger, payload, inputBudget, deps.CountTokens, deps.Config.Context)
+		modified, saved := pipeline.TrimPayload(deps.Logger, payload, inputBudget, deps.CountTokens, deps.Config.Context)
 		if modified {
+			deps.Metrics.RecordTokensSaved("trim", saved)
 			deps.Logger.Info("payload trimmed to fit token budget",
-				"input_budget", inputBudget)
+				"input_budget", inputBudget,
+				"saved_tokens", saved)
 		}
 	}
 

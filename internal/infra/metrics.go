@@ -30,6 +30,7 @@ type Metrics struct {
 	panics        atomic.Uint64
 	windowApplied sync.Map
 	interceptions sync.Map
+	tokensSaved   sync.Map
 
 	rlRejected         sync.Map
 	cooldowns          sync.Map
@@ -226,6 +227,17 @@ func (m *Metrics) RecordTokens(direction, model, agent, provider string, count i
 		"direction": direction, "model": model, "agent": agent, "provider": provider,
 	})
 	e.value.Add(uint64(count))
+}
+
+// RecordTokensSaved records n tokens removed from a request payload by a
+// pipeline stage (e.g. "trim", "window", "bouncer"). Counts of zero or
+// less are ignored. Nil-safe.
+func (m *Metrics) RecordTokensSaved(source string, n int) {
+	if m == nil || n <= 0 {
+		return
+	}
+	e := getOrCreateEntry(&m.tokensSaved, map[string]string{"source": source})
+	e.value.Add(uint64(n))
 }
 
 func (m *Metrics) RecordUpstreamRequest(model, agent, provider string) {
@@ -1015,6 +1027,8 @@ func (m *Metrics) WritePrometheus(w io.Writer) {
 		"Total text compaction passes applied.", m.compactions.Load())
 	m.writeCounterMap(w, "nenya_pipeline_window_applied_total",
 		"Total window compaction passes applied.", &m.windowApplied)
+	m.writeCounterMap(w, "nenya_pipeline_tokens_saved_total",
+		"Tokens removed from request payloads by pipeline stage (trim, window, bouncer).", &m.tokensSaved)
 	m.writeCounterMap(w, "nenya_pipeline_interceptions_total",
 		"Total Ollama interceptions by trigger reason.", &m.interceptions)
 	m.writeCounterMap(w, "nenya_ratelimit_rejected_total",

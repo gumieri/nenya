@@ -659,7 +659,6 @@ func (p *Proxy) prepareAndSend(gw *gateway.NenyaGateway,
 	)
 
 	gw.Stats.RecordRequest(target.Model, tokenCount)
-	gw.Metrics.RecordTokens("input", target.Model, agentName, target.Provider, tokenCount)
 	gw.Metrics.RecordUpstreamRequest(target.Model, agentName, target.Provider)
 
 	if action := p.checkPreDispatchGuards(gw, ctxLogger, target, tokenCount, agentName); action != nil {
@@ -676,12 +675,18 @@ func (p *Proxy) prepareAndSend(gw *gateway.NenyaGateway,
 		CountTokens:        gw.CountTokens,
 		AgentName:          agentName,
 		CacheSalt:          resolveCacheSalt(apiKey, agentName, &gw.Config),
+		Metrics:            gw.Metrics,
 	}
 	transformedBody, _, err := routing.TransformRequestForUpstream(transformDeps, target.Provider, target.URL, payload, target.Model, target.MaxOutput, target.MaxContext, target.Format, target.ReasoningEffort)
 	if err != nil {
 		ctxLogger.Warn("failed to transform request, using original payload", "err", err)
 		transformedBody, _ = json.Marshal(payload)
 	}
+
+	// Record the input estimate AFTER transform so the value reflects the
+	// payload actually dispatched (post trim/window/bouncer), making
+	// direction="client" − direction="input" the whole-pipeline savings.
+	gw.Metrics.RecordTokens("input", target.Model, agentName, target.Provider, gw.CountTokens(string(transformedBody)))
 
 	req, err := p.buildUpstreamRequest(gw, r.Context(), r.Method, target.URL, transformedBody, target.Provider, target.Model, target.Credential, r.Header)
 	if err != nil {

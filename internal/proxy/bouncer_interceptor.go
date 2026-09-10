@@ -66,8 +66,9 @@ func (b *BouncerInterceptor) Process(ctx context.Context, req *pipeline.Intercep
 	if contentTokens > actualHardLimit {
 		b.logger.Warn("payload exceeds hard limit, trimming before engine",
 			"tokens", contentTokens, "hard_limit", actualHardLimit)
-		modified, _ := pipeline.TrimPayload(b.logger, req.Payload, actualHardLimit, b.gw.CountTokens, b.gw.Config.Context)
+		modified, saved := pipeline.TrimPayload(b.logger, req.Payload, actualHardLimit, b.gw.CountTokens, b.gw.Config.Context)
 		if modified {
+			b.gw.Metrics.RecordTokensSaved("trim", saved)
 			lastMsg = req.Messages[len(req.Messages)-1]
 			if rawText, ok2 := lastMsg["content"].(string); ok2 {
 				text = rawText
@@ -82,8 +83,10 @@ func (b *BouncerInterceptor) Process(ctx context.Context, req *pipeline.Intercep
 		return &pipeline.InterceptResult{Payload: req.Payload, Skip: true}, nil
 	}
 
-	lastMsg["content"] = "[Nenya Sanitized via Ollama]:\n" + summarized
+	sanitized := "[Nenya Sanitized via Ollama]:\n" + summarized
+	lastMsg["content"] = sanitized
 	req.Payload["messages"] = req.Messages
+	b.gw.Metrics.RecordTokensSaved("bouncer", b.gw.CountTokens(text)-b.gw.CountTokens(sanitized))
 
 	return &pipeline.InterceptResult{
 		Payload:   req.Payload,
