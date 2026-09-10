@@ -1,0 +1,27 @@
+{
+  "server": {
+    "listen_addr": "127.0.0.1:8080"
+  },
+  "discovery": {
+    "enabled": true
+  },
+  "providers": {
+    "mock": {
+      "url": "http://127.0.0.1:9999/v1/chat/completions",
+      "auth_style": "bearer"
+    }
+  },
+  "agents": {
+    "default": {
+      "strategy": "fallback",
+      "models": [
+        {
+          "provider": "mock",
+          "model": "demo-model",
+          "max_context": 128000,
+          "max_output": 4096
+        }
+      ]
+    }
+  }
+}

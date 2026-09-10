@@ -1,0 +1,10 @@
+{
+  "model": "demo-model",
+  "stream": true,
+  "messages": [
+    {
+      "role": "user",
+      "content": "Deploy checklist:\n- AWS_ACCESS_KEY_ID=AKIAIOSFODNN7EXAMPLE\n- GITHUB_TOKEN=ghp_DEMO00000000000000000000000000000000\n- DB_PASSWORD=\"SuperSecretDemo42!\"\n\nPlease review the deploy config."
+    }
+  ]
+}

@@ -8,6 +8,8 @@ A lightweight, zero-dependency AI API Gateway written in Go. Nenya sits between 
 
 **Compatible with any provider that implements the OpenAI Or Anthropic Chat Completions API.** For 23 providers we ship built-in adapters with specialized handling.
 
+<img alt="Nenya demo: secrets are redacted before reaching the upstream provider" src="docs/demo.gif" width="100%">
+
 ## How Nenya handles the requests
 
 ```mermaid

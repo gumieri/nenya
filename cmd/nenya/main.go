@@ -225,7 +225,7 @@ func buildInterceptorChain(gw *gateway.NenyaGateway, cfg *config.Config, logger 
 	chain := pipeline.NewInterceptorChain(logger)
 
 	if enabled := (cfg.Bouncer.Enabled != nil && *cfg.Bouncer.Enabled); enabled && len(gw.SecretPatterns) > 0 {
-		chain.Register(pipeline.NewRedactInterceptor(enabled, gw.SecretPatterns, cfg.Bouncer.RedactionLabel, logger))
+		chain.Register(pipeline.NewRedactInterceptor(enabled, gw.SecretPatterns, cfg.Bouncer.RedactionLabel, logger, gw.Metrics))
 	}
 
 	if gw.EntropyFilter != nil {
