@@ -4,6 +4,9 @@ import (
 	"context"
 	"log/slog"
 	"regexp"
+	"strings"
+
+	"github.com/nenya/internal/infra"
 )
 
 // RedactInterceptor performs pattern-based secret redaction on messages.
@@ -15,10 +18,12 @@ type RedactInterceptor struct {
 	patterns []*regexp.Regexp
 	label    string
 	logger   *slog.Logger
+	metrics  *infra.Metrics
 }
 
-// NewRedactInterceptor creates a new RedactInterceptor.
-func NewRedactInterceptor(enabled bool, patterns []*regexp.Regexp, label string, logger *slog.Logger) *RedactInterceptor {
+// NewRedactInterceptor creates a new RedactInterceptor. The metrics
+// receiver is nil-safe; redaction counts are recorded through it.
+func NewRedactInterceptor(enabled bool, patterns []*regexp.Regexp, label string, logger *slog.Logger, metrics *infra.Metrics) *RedactInterceptor {
 	return &RedactInterceptor{
 		name:     "redact",
 		priority: 10,
@@ -26,6 +31,7 @@ func NewRedactInterceptor(enabled bool, patterns []*regexp.Regexp, label string,
 		patterns: patterns,
 		label:    label,
 		logger:   logger,
+		metrics:  metrics,
 	}
 }
 
@@ -37,6 +43,7 @@ func (r *RedactInterceptor) CanHandle(_ context.Context, req *InterceptRequest) 
 
 func (r *RedactInterceptor) Process(_ context.Context, req *InterceptRequest) (*InterceptResult, error) {
 	modified := false
+	redactions := 0
 	for _, msg := range req.Messages {
 		content, ok := msg["content"].(string)
 		if !ok {
@@ -44,9 +51,15 @@ func (r *RedactInterceptor) Process(_ context.Context, req *InterceptRequest) (*
 		}
 		redacted := RedactSecrets(content, r.enabled, r.patterns, r.label)
 		if redacted != content {
+			// Count actual substitutions, not pattern hits: patterns may
+			// overlap and double-count a single redacted span.
+			redactions += strings.Count(redacted, r.label) - strings.Count(content, r.label)
 			msg["content"] = redacted
 			modified = true
 		}
+	}
+	if r.metrics != nil && redactions > 0 {
+		r.metrics.RecordRedaction(redactions)
 	}
 	if !modified {
 		return &InterceptResult{Payload: req.Payload, Skip: true}, nil

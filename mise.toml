@@ -41,6 +41,15 @@ CGO_ENABLED=0 GOOS=darwin GOARCH=amd64 go build -o nenya-darwin-amd64 ./cmd/neny
 CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build -o nenya-darwin-arm64 ./cmd/nenya
 """
 
+[tasks.demo]
+description = "Regenerate docs/demo.gif from the demo tape (requires vhs, ttyd, ffmpeg)"
+run = """
+command -v vhs >/dev/null 2>&1 || { echo "vhs not found: go install github.com/charmbracelet/vhs@v0.11.0 (v0.12.0 has a render regression, see charmbracelet/vhs#787)"; exit 1; }
+command -v ttyd >/dev/null 2>&1 || { echo "ttyd not found: https://github.com/tsl0922/ttyd"; exit 1; }
+command -v ffmpeg >/dev/null 2>&1 || { echo "ffmpeg not found"; exit 1; }
+vhs examples/demo/demo.tape
+"""
+
 [tasks.mcp-build]
 description = "Build MCP transport only"
 run = "go build ./internal/mcp/"

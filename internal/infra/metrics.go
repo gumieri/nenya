@@ -261,11 +261,13 @@ func (m *Metrics) RecordHTTPRequest(method, path string, status int, duration ti
 	h.Observe(duration.Seconds())
 }
 
-func (m *Metrics) RecordRedaction() {
+// RecordRedaction records n secret substitutions applied by the Tier-0
+// redaction filter. Nil-safe.
+func (m *Metrics) RecordRedaction(n int) {
 	if m == nil {
 		return
 	}
-	m.redactions.Add(1)
+	m.redactions.Add(uint64(n))
 }
 func (m *Metrics) RecordCompaction() {
 	if m == nil {
