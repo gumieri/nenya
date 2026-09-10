@@ -55,7 +55,23 @@ Type "curl -s --max-time 5 http://127.0.0.1:8080/metrics | GREP_COLORS='ms=01;33
 Enter
 Sleep 2s
 
-Type@1ms "printf '\n\033[1;32m✔ 3 secrets redacted — the upstream never saw them\033[0m\n\n'"
+Hide
+Type "curl -s --max-time 10 -o /dev/null http://127.0.0.1:8080/v1/chat/completions -H @/tmp/nenya-demo/auth -d @request.json"
+Enter
+Sleep 1.5s
+Type "clear"
+Enter
+Sleep 200ms
+Show
+
+Type@1ms "printf '\n\033[1;43m 5 · EFFICIENCY \033[0m  same request again → cache hit; client vs upstream tokens\n'"
+Enter
+Sleep 200ms
+Type "curl -s --max-time 5 http://127.0.0.1:8080/metrics | GREP_COLORS='ms=01;33' grep --color=always -E '^nenya_(tokens_estimated_total|pipeline_tokens_saved_total|cache_hit_total)'"
+Enter
+Sleep 3s
+
+Type@1ms "printf '\n\033[1;32m✔ redacted · trimmed · cached — the upstream saw the minimum\033[0m\n\n'"
 Enter
 Sleep 2s
 

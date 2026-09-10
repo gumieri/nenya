@@ -20,6 +20,7 @@ go build -o "$WORK/nenya" "$REPO_ROOT/cmd/nenya"
 
 printf '{"client_token": "nk-demo-demo-demo-demo"}\n' > "$WORK/secrets/client.json"
 printf '{"provider_keys": {"mock": "sk-demo-mock"}}\n' > "$WORK/secrets/provider_keys.json"
+printf 'Authorization: Bearer nk-demo-demo-demo-demo\n' > "$WORK/auth"
 
 (cd "$WORK" && DEMO_DUMP_DIR="$WORK" setsid ./mock </dev/null >mock.log 2>&1 &)
 
