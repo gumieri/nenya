@@ -4,13 +4,118 @@
 
 ![go-version] ![License][license] ![zero-deps] ![CI][ci] ![CodeQL][codeql] ![Release][release] ![Sponsor][sponsor]
 
-A lightweight, zero-dependency AI API Gateway written in Go. Nenya sits between your AI coding clients and upstream LLM providers, adding secret redaction, context management, agent routing, and MCP tool integration — all with transparent SSE streaming. Security-hardened: non-root execution, mlock for secrets, seccomp + no-new-privileges.
+AI coding clients transmit your source code, prompts, and credentials to cloud LLM providers on every request. Nenya is the gatekeeper in between: a lightweight, zero-dependency API gateway that redacts secrets before they leave your machine, keeps context payloads small, and routes across providers with fallback, caching, and transparent SSE streaming. Security-hardened: non-root execution, mlock for secrets, seccomp + no-new-privileges.
 
 **Compatible with any provider that implements the OpenAI Or Anthropic Chat Completions API.** For 23 providers we ship built-in adapters with specialized handling.
 
 <img alt="Nenya demo: secrets are redacted before reaching the upstream provider" src="docs/demo.gif" width="100%">
 
-## How Nenya handles the requests
+## Quick Start
+
+### Run with Podman
+
+Create minimal config and secrets:
+
+```bash
+mkdir -p config secrets
+cat > config/config.json << 'EOF'
+{
+  "server": { "listen_addr": ":8080" },
+  "agents": {
+    "default": {
+      "strategy": "fallback",
+      "models": ["gemini-2.5-flash"]
+    }
+  }
+}
+EOF
+
+cat > secrets/provider_keys.json << 'EOF'
+{
+  "provider_keys": {
+    "gemini": "AIza..."
+  }
+}
+EOF
+
+cat > secrets/client.json << EOF
+{
+  "client_token": "nk-$(openssl rand -hex 32)"
+}
+EOF
+```
+
+Note: the last heredoc is unquoted on purpose, so `$(openssl rand -hex 32)` expands once while the file is written and your token is unique.
+
+Run the container (the same flags work with `docker run`):
+
+```bash
+podman run -d \
+  --name nenya \
+  -p 8080:8080 \
+  -v ./config:/etc/nenya:ro \
+  -v ./secrets:/run/secrets/nenya:ro \
+  -e NENYA_SECRETS_DIR=/run/secrets/nenya \
+  --cap-drop=ALL \
+  --cap-add=IPC_LOCK \
+  --security-opt=no-new-privileges:true \
+  --read-only \
+  --tmpfs /tmp:rw,noexec,nosuid,size=64M \
+  ghcr.io/gumieri/nenya:latest
+```
+
+Test it — the authenticated smoke test must list your configured model:
+
+```bash
+export NK=$(jq -r '.client_token' secrets/client.json)
+
+curl -s -H "Authorization: Bearer $NK" http://localhost:8080/v1/models | jq -r '.data[].id'
+```
+
+Then send your first completion (streams an SSE response):
+
+```bash
+curl -N -H "Authorization: Bearer $NK" \
+  -d '{"model":"gemini-2.5-flash","messages":[{"role":"user","content":"Say hi in five words"}]}' \
+  http://localhost:8080/v1/chat/completions
+```
+
+No API key yet? The [offline redaction demo](examples/demo/) runs Nenya against a local mock upstream — no external calls, no keys. It generates dummy secrets, sends fake AWS/GitHub credentials through the gateway, and shows what the upstream actually receives. Regenerate the GIF above with `mise run demo`.
+
+### Install via Package Manager
+
+Nenya provides native packages for major Linux distributions and community package managers:
+
+| Distribution | Command |
+|-------------|---------|
+| **Debian/Ubuntu (.deb)** | Download `nenya_<version>_linux_amd64.deb` from the release page and run `sudo dpkg -i` |
+| **Fedora/RHEL (.rpm)** | Download `nenya-<version>.x86_64.rpm` from the release page and run `sudo rpm -i` |
+| **Arch Linux (.pkg.tar.zst)** | Download `nenya-<version>-x86_64.pkg.tar.zst` from the release page and run `sudo pacman -U` |
+| **Arch Linux (AUR)** | `yay -S nenya-bin` (or your preferred AUR helper) |
+| **Nix/NixOS** | Add `gumieri/nur-packages` to your NUR registry and use `nenya` |
+
+All packages install the binary to `/usr/bin/nenya` and include systemd service and socket units. After install, enable and start:
+
+```bash
+sudo systemctl enable --now nenya.socket
+sudo systemctl enable --now nenya.service
+```
+
+### Deployment Guides
+
+- **[Deploy Bare Metal (systemd)](docs/DEPLOY_BAREMETAL.md)** — Direct binary install, socket activation, hot reload
+- **[Deploy Container (Podman/Docker Compose)](docs/DEPLOY_CONTAINER.md)** — compose.yml, image verification, security hardening
+- **[Deploy Kubernetes (Helm)](docs/DEPLOY_KUBERNETES.md)** — Helm chart, ConfigMap/Secret, ingress setup
+
+## Why Nenya
+
+- **Single static binary, zero runtime dependencies** — Go standard library only. No plugins, no interpreters, no sidecars to install or upgrade.
+- **Privacy-first by default** — the Tier-0 regex filter redacts AWS keys, GitHub tokens, passwords, and similar secrets before any payload leaves your machine; optional entropy filtering, TF-IDF pruning, and engine summarization shrink what does get sent.
+- **Transparent compatibility** — drop-in OpenAI- and Anthropic-compatible endpoints. Your clients keep working unchanged; providers are swappable config, not code.
+- **Resilient routing** — fallback chains with circuit breakers, upstream rate-limit awareness, stream-head failover, and sticky sessions that keep provider-side prefix caches warm.
+- **Hardened service** — mlock-sealed secrets, seccomp and no-new-privileges, non-root containers, read-only filesystem, systemd socket activation for zero-downtime restarts.
+
+## How Nenya handles requests
 
 ```mermaid
 flowchart TD
@@ -94,7 +199,6 @@ Flow notes:
 - **Input validation** — strict body limits, JSON sanitization, header filtering
 - **Graceful degradation** — never blocks requests due to engine or pipeline failures
 - **Role-Based Access Control (RBAC)** — per-API key roles (admin, user, read-only) with agent and endpoint restrictions
-- **Secure memory** — mlock-protected token storage, read-only sealing, core dump prevention
 
 ### Hardening (Deployment Security)
 
@@ -125,112 +229,6 @@ Flow notes:
 - **Auto-search** — pre-fetch relevant context from MCP servers before forwarding
 - **Auto-save** — persist assistant responses to MCP memory servers
 
-## Quick Start
-
-### Run with Podman
-
-Create minimal config and secrets:
-
-```bash
-mkdir -p config secrets
-cat > config/config.json << 'EOF'
-{
-  "server": { "listen_addr": ":8080" },
-  "agents": {
-    "default": {
-      "strategy": "fallback",
-      "models": ["gemini-2.5-flash"]
-    }
-  }
-}
-EOF
-
-cat > secrets/provider_keys.json << 'EOF'
-{
-  "provider_keys": {
-    "gemini": "AIza..."
-  }
-}
-EOF
-
-cat > secrets/client.json << 'EOF'
-{
-  "client_token": "nk-$(openssl rand -hex 32)"
-}
-EOF
-```
-
-Run the container:
-
-```bash
-podman run -d \
-  --name nenya \
-  -p 8080:8080 \
-  -v ./config:/etc/nenya:ro \
-  -v ./secrets:/run/secrets/nenya:ro \
-  -e NENYA_SECRETS_DIR=/run/secrets/nenya \
-  --cap-drop=ALL \
-  --cap-add=IPC_LOCK \
-  --security-opt=no-new-privileges:true \
-  --read-only \
-  --tmpfs /tmp:rw,noexec,nosuid,size=64M \
-  ghcr.io/gumieri/nenya:latest
-```
-
-Test it:
-
-```bash
-curl -H "Authorization: Bearer $(jq -r '.client_token' secrets/client.json)" \
-  http://localhost:8080/healthz
-```
-
-### Or Install via Package Manager
-
-Nenya provides native packages for major Linux distributions and community package managers:
-
-| Distribution | Command |
-|-------------|---------|
-| **Debian/Ubuntu (.deb)** | Download `nenya_<version>_linux_amd64.deb` from the release page and run `sudo dpkg -i` |
-| **Fedora/RHEL (.rpm)** | Download `nenya-<version>.x86_64.rpm` from the release page and run `sudo rpm -i` |
-| **Arch Linux (.pkg.tar.zst)** | Download `nenya-<version>-x86_64.pkg.tar.zst` from the release page and run `sudo pacman -U` |
-| **Arch Linux (AUR)** | `yay -S nenya-bin` (or your preferred AUR helper) |
-| **Nix/NixOS** | Add `gumieri/nur-packages` to your NUR registry and use `nenya` |
-
-All packages install the binary to `/usr/bin/nenya` and include systemd service and socket units. After install, enable and start:
-
-```bash
-sudo systemctl enable --now nenya.socket
-sudo systemctl enable --now nenya.service
-```
-
-### Runtime Configuration
-
-Nenya supports standard environment variables for deployment portability:
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `PORT` | `8080` | Listening port (overrides `server.listen_addr`) |
-| `HOST` | — | Optional bind address (e.g. `127.0.0.1`). Only used when combined with `PORT` |
-| `NENYA_CONFIG_DIR` | `/etc/nenya/` | Configuration directory path |
-| `NENYA_CONFIG_FILE` | — | Single config file path (takes precedence over `NENYA_CONFIG_DIR`) |
-| `NENYA_SECRETS_DIR` | — | Secrets directory (overrides `CREDENTIALS_DIRECTORY`) |
-
-Example usage:
-```bash
-PORT=9090 HOST=127.0.0.1 ./nenya --config /path/to/config.json
-```
-
-Or in Docker:
-```bash
-docker run -e PORT=9090 -p 9090:9090 ghcr.io/gumieri/nenya:latest
-```
-
-### Or Choose Your Deployment
-
-- **[Deploy Bare Metal (systemd)](docs/DEPLOY_BAREMETAL.md)** — Direct binary install, socket activation, hot reload
-- **[Deploy Container (Podman/Docker Compose)](docs/DEPLOY_CONTAINER.md)** — compose.yml, image verification, security hardening
-- **[Deploy Kubernetes (Helm)](docs/DEPLOY_KUBERNETES.md)** — Helm chart, ConfigMap/Secret, ingress setup
-
 ## API Endpoints
 
 All `/v1/*` endpoints require `Authorization: Bearer <client_token>` or `Bearer <api_key_token>`.
@@ -259,6 +257,28 @@ API keys support **RBAC enforcement** — agent scoping, endpoint allowlists, ro
 
 See [`docs/PASSTHROUGH_PROXY.md`](docs/PASSTHROUGH_PROXY.md) for detailed passthrough proxy usage.
 
+## Runtime Configuration
+
+Nenya supports standard environment variables for deployment portability:
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `PORT` | `8080` | Listening port (overrides `server.listen_addr`) |
+| `HOST` | — | Optional bind address (e.g. `127.0.0.1`). Only used when combined with `PORT` |
+| `NENYA_CONFIG_DIR` | `/etc/nenya/` | Configuration directory path |
+| `NENYA_CONFIG_FILE` | — | Single config file path (takes precedence over `NENYA_CONFIG_DIR`) |
+| `NENYA_SECRETS_DIR` | — | Secrets directory (overrides `CREDENTIALS_DIRECTORY`) |
+
+Example usage:
+```bash
+PORT=9090 HOST=127.0.0.1 ./nenya --config /path/to/config.json
+```
+
+Or in Docker:
+```bash
+docker run -e PORT=9090 -p 9090:9090 ghcr.io/gumieri/nenya:latest
+```
+
 ## Documentation
 
 | Document | Description |
@@ -274,6 +294,7 @@ See [`docs/PASSTHROUGH_PROXY.md`](docs/PASSTHROUGH_PROXY.md) for detailed passth
 | [Adapters](docs/ADAPTERS.md) | Adapter system internals, auth styles, capability flags |
 | [Secrets Format](docs/SECRETS_FORMAT.md) | Systemd credentials, env var fallback, container/K8s deployment |
 | [Security](docs/SECURITY.md) | Vulnerability reporting policy |
+| [Changelog](CHANGELOG.md) | Release history and notable changes |
 
 ## License
 
