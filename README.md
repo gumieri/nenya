@@ -294,6 +294,7 @@ docker run -e PORT=9090 -p 9090:9090 ghcr.io/gumieri/nenya:latest
 | [Adapters](docs/ADAPTERS.md) | Adapter system internals, auth styles, capability flags |
 | [Secrets Format](docs/SECRETS_FORMAT.md) | Systemd credentials, env var fallback, container/K8s deployment |
 | [Security](docs/SECURITY.md) | Vulnerability reporting policy |
+| [Disclaimer](docs/DISCLAIMER.md) | Best-effort redaction scope and limitations |
 | [Changelog](CHANGELOG.md) | Release history and notable changes |
 
 ## License

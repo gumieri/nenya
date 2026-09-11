@@ -4,6 +4,51 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.13.0] - 2026-09-10
+
+### Added
+- **Offline demo harness** (`examples/demo/`): local mock upstream that dumps every received request, demo config, lifecycle scripts, and a committed [vhs](https://github.com/charmbracelet/vhs) tape rendering `docs/demo.gif`. Uses only documented fake secrets and runs fully offline. New `mise run demo` task regenerates the GIF; banner wording centralized in `examples/demo/banner.sh`
+- **Token-savings telemetry**: `nenya_pipeline_tokens_saved_total{source}` aggregates tokens removed by pipeline stages (trim, window, bouncer summarization) at the sites where deltas are already computed; `nenya_tokens_estimated_total{direction="client"}` records the pre-pipeline estimate at request build, making whole-pipeline savings derivable in Prometheus
+- **CONTRIBUTING.md** with the development gate (build/test/vet/lint), commit conventions, and the zero-dependency policy
+
+### Changed
+- `nenya_tokens_estimated_total{direction="input"}` is now recorded after the request transform, reflecting the payload actually dispatched (was: pre-pipeline count), so `client − input` measures real savings
+- README restructured for launch: quick start moved up, pain-first pitch, new "Why Nenya" section, authenticated smoke test replacing the unauthenticated health check
+
+### Fixed
+- Quick-start `client.json` heredoc was quoted, publishing a predictable literal token (`nk-$(openssl rand …)` never expanded); the token is now genuinely random
+- `nenya_pipeline_redactions_total` was never incremented — `Metrics.RecordRedaction` existed but had no callers; the Tier-0 redaction interceptor now records every substitution
+- Package metadata declared `license: MIT` while the project is Apache-2.0 (deb/rpm/arch/AUR/nix)
+
+## [0.12.0] - 2026-09-09
+
+### Added
+- **Weighted fair-queuing multi-account rotation** (`agent.accounts[].weight`): weighted round-robin across provider accounts with graceful degradation to unweighted behavior
+- **Rate-limit windows drive cooldown derivation** (`resilience.cooldown_from_upstream_limits`): upstream `x-ratelimit-*` headers and quota bodies set cooldown durations instead of fixed backoff
+- **Error-scope axes** (`providers.<name>.request_scoped_errors`): rules marking provider errors as the client's fault even when the status class suggests otherwise; matched errors skip cooldown/rotation state and surface directly, and client cancels are connection-scoped (no retry, no state writes)
+- **HTTP-200 embedded error classification**: provider errors delivered inside 200 bodies (JSON and SSE) are classified and counted like real failures
+- **Per-provider `retryable_phrases`**: case-insensitive error-body substrings that make a 4xx response retryable/failover-able for aggregator-relayed upstreams, in addition to the built-in pattern sets
+
+### Fixed
+- `/v1/messages` now enforces per-key agent scoping (RBAC) like `/v1/chat/completions`; unreadable or oversized bodies fail closed
+- The transform-side trim budget is derived from the model's context window (3/4 headroom; `context.hard_limit_tokens` takes precedence), never from the output-token cap
+
+## [0.11.0] - 2026-09-02
+
+### Added
+- **Sticky account pinning**: agent-pinned provider accounts (target-build preference via `SelectAccountByID`, account-granularity pin promotion on cooldown/exhaustion, LRU fallback) complement session pinning for prefix-cache stability
+- **GLM-5.3 and GLM-5.3-Flash** added to the static model registry
+- README request-flow diagram converted to Mermaid
+
+### Fixed
+- **MCP transport hardening** (24 review rounds): TLS handshake timeout, JSON-RPC handshake host-validation bypass, bounded SSE lines, 4xx no-retry on connect, endpoint renegotiation, stream-death pending-call drain, init-phase leak, connect TOCTOU, owned-stream lifetime, and close/connect race families closed
+- Error-kind class consistency across gateway errors, `/metrics` duplicate families removed, RBAC denial coverage for all pass-through endpoints, sticky-pinning races hardened, bounded multi-exhaustion retry
+
+## [0.10.1] - 2026-08-27
+
+### Fixed
+- docs(adapters): corrected the zai adapter init registration note
+
 ## [0.10.0] - 2026-08-27
 
 ### Added

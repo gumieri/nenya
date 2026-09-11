@@ -70,7 +70,7 @@ nfpms:
       dynamic routing with circuit breakers, agent fallback chains, and MCP tool integration.
       Built with zero external dependencies, seccomp hardening, and IPC_LOCK memory protection.
     homepage: https://github.com/gumieri/nenya
-    license: MIT
+    license: Apache-2.0
     scripts:
       postinstall: packaging/scripts/postinstall.sh
       preremove: packaging/scripts/preremove.sh
@@ -79,7 +79,7 @@ aurs:
   - name: nenya-bin
     description: Nenya is a lightweight, highly secure AI API Gateway/Proxy written in Go. Transparent middleware between AI coding clients and upstream LLM providers.
     homepage: https://github.com/gumieri/nenya
-    license: MIT
+    license: Apache-2.0
     depends:
       - systemd
     provides:
@@ -98,7 +98,7 @@ nix:
   - name: nenya
     description: Nenya is a lightweight, highly secure AI API Gateway/Proxy written in Go.
     homepage: https://github.com/gumieri/nenya
-    license: mit
+    license: apache-2.0
     repository:
       owner: gumieri
       name: nur-packages
