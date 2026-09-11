@@ -79,7 +79,7 @@ aurs:
   - name: nenya-bin
     description: Nenya is a lightweight, highly secure AI API Gateway/Proxy written in Go. Transparent middleware between AI coding clients and upstream LLM providers.
     homepage: https://github.com/gumieri/nenya
-    license: Apache-2.0
+    license: Apache
     depends:
       - systemd
     provides:
@@ -98,7 +98,7 @@ nix:
   - name: nenya
     description: Nenya is a lightweight, highly secure AI API Gateway/Proxy written in Go.
     homepage: https://github.com/gumieri/nenya
-    license: apache-2.0
+    license: asl20
     repository:
       owner: gumieri
       name: nur-packages
