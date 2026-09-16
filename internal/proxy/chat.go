@@ -42,6 +42,18 @@ type chatRequest struct {
 	Messages     []any
 	KeyRef       string
 	SourceFormat string // "openai" or "anthropic" - indicates the original client request format
+	// Agent is the resolved agent config when ModelName names an agent
+	// (zero value for direct model routes). Set once in resolveRouting;
+	// all downstream consumers (sticky routing, MCP flow, session header
+	// synthesis) share this resolution.
+	Agent config.AgentConfig
+
+	// Memoized sticky-session key (see derivedSessionKey). Memoization
+	// sentinel: sessionKeyDone; the fields are only touched on the request
+	// goroutine before upstream dispatch begins, so no lock is needed.
+	sessionKey     string
+	sessionKeyOK   bool
+	sessionKeyDone bool
 }
 
 // httpError pairs an HTTP status code with a user-facing message and an
@@ -150,7 +162,16 @@ func (p *Proxy) validateChatRequest(w http.ResponseWriter, r *http.Request, gw *
 // resolveRouting determines the upstream targets, agent name, cooldown, and
 // max retries for the given model.
 func (p *Proxy) resolveRouting(ctx context.Context, req *chatRequest, gw *gateway.NenyaGateway) ([]routing.UpstreamTarget, string, time.Duration, int, *httpError) {
-	if agent, ok := gw.Config.Agents[req.ModelName]; ok {
+	agent, hasAgent := gw.Config.Agents[req.ModelName]
+	if hasAgent {
+		req.Agent = agent
+	}
+	// Derive the session key eagerly right after agent resolution so every
+	// consumer (sticky pin, session-header synthesis) reads the same
+	// memoized value derived from the resolved agent — no caller can
+	// derive from an unresolved agent.
+	req.derivedSessionKey()
+	if hasAgent {
 		return p.resolveAgentRouting(ctx, req, gw, agent)
 	}
 	return p.resolveModelRouting(ctx, req, gw)
@@ -168,7 +189,7 @@ func (p *Proxy) resolveAgentRouting(ctx context.Context, req *chatRequest, gw *g
 	// read is non-touching (Peek): failed builds must not extend pin TTL.
 	var sticky *stickyPin
 	if strategy == discovery.AgentStrategySticky {
-		sticky = resolveStickyPin(req, gw, agent)
+		sticky = resolveStickyPin(req, gw)
 	}
 
 	built := gw.AgentState.BuildTargetList(ctx, routing.TargetBuildOpts{
@@ -253,12 +274,12 @@ func (s *stickyPin) preference() *routing.AccountPreference {
 // session key and, when present, the currently pinned provider/model/account
 // (read via Peek — no LastSeen refresh, no expiry side effects). Returns nil
 // when sticky routing cannot apply (no session router, or no session key
-// derivable from the request).
-func resolveStickyPin(req *chatRequest, gw *gateway.NenyaGateway, agent config.AgentConfig) *stickyPin {
+// derivable from the request). Reads req.Agent, resolved in resolveRouting.
+func resolveStickyPin(req *chatRequest, gw *gateway.NenyaGateway) *stickyPin {
 	if gw.AgentState == nil || gw.AgentState.SessionRouter == nil {
 		return nil
 	}
-	key, ok := sessionKeyFromRequest(req, agent)
+	key, ok := req.derivedSessionKey()
 	if !ok {
 		return nil
 	}
@@ -351,6 +372,95 @@ func sessionKeyFromRequest(req *chatRequest, agent config.AgentConfig) (string, 
 		return "", false
 	}
 	return routing.SessionKey(req.ModelName, systemPrompt, firstUser), true
+}
+
+// derivedSessionKey returns the memoized stable session key for the
+// request. It is computed eagerly in resolveRouting immediately after
+// agent resolution (both sticky routing and the opencode-session header
+// need the same value; the derivation performs prompt-file I/O and hashes
+// the first user message, so it must not run twice per request). Later
+// callers only read the memo.
+func (req *chatRequest) derivedSessionKey() (string, bool) {
+	if req.sessionKeyDone {
+		return req.sessionKey, req.sessionKeyOK
+	}
+	req.sessionKey, req.sessionKeyOK = sessionKeyFromRequest(req, req.Agent)
+	req.sessionKeyDone = true
+	return req.sessionKey, req.sessionKeyOK
+}
+
+const (
+	// opencodeSessionHeader is the HTTP header carrying a stable
+	// per-conversation session ID. OpenCode Zen/Go requires it on every chat
+	// request for efficient routing and prompt caching.
+	opencodeSessionHeader = "X-Opencode-Session"
+	// opencodeSessionIDLen is the number of hex characters retained from the
+	// 64-char session-key digest when synthesizing a session ID. Guarded at
+	// use: routing.SessionKey currently always returns 64 chars, but a
+	// shorter future digest must degrade to "no header", not panic.
+	opencodeSessionIDLen = 16
+	// maxOpencodeSessionHeaderLen bounds the accepted client-supplied
+	// session ID length.
+	maxOpencodeSessionHeaderLen = 256
+)
+
+// validSessionHeaderValue reports whether s is a usable outbound HTTP
+// header value: printable ASCII plus tab, non-empty, no whitespace-only
+// values, and within the length bound. The http.Transport rejects other
+// byte values at request-write time (mid-retry-loop, with the raw value in
+// the error text); validating here lets Nenya replace an unusable client
+// value with a synthesized one. obs-text bytes (0x80-0xFF, e.g. UTF-8
+// session IDs) are intentionally rejected: Go's transport would forward
+// them, but ASCII-only keeps the synthesized-or-forwarded behavior uniform
+// across upstreams.
+func validSessionHeaderValue(s string) bool {
+	if s == "" || len(s) > maxOpencodeSessionHeaderLen {
+		return false
+	}
+	visible := false
+	for i := 0; i < len(s); i++ {
+		b := s[i]
+		if b != '\t' && (b < 0x20 || b > 0x7E) {
+			return false
+		}
+		if b != ' ' && b != '\t' {
+			visible = true
+		}
+	}
+	return visible
+}
+
+// ensureOpencodeSessionHeader guarantees the chat request carries an
+// x-opencode-session header before upstream dispatch. A client-supplied
+// value is preserved verbatim when it is a valid header value; an absent
+// or unusable client value is replaced with a stable identifier
+// synthesized from the sticky-session key (agent name, system prompt, and
+// first user message taken from the raw client payload), so the value
+// stays constant across the turns of a conversation while remaining
+// distinct per conversation. Requests without a derivable key are
+// dispatched with the client header only when it is a valid header value;
+// an unusable value is dropped so it cannot fail every round trip inside
+// http.Transport. The header is set on the inbound request so every
+// downstream dispatch path (retry loop, stream continuation, MCP buffered
+// loop) inherits it via buildUpstreamRequest's srcHeaders.
+func ensureOpencodeSessionHeader(gw *gateway.NenyaGateway, r *http.Request, req *chatRequest) {
+	existing := r.Header.Get(opencodeSessionHeader)
+	if validSessionHeaderValue(existing) {
+		return
+	}
+	// req.Agent was resolved once in resolveRouting; the key derivation it
+	// feeds is memoized on the request, so sticky and non-sticky agents
+	// each derive at most once per request.
+	key, ok := req.derivedSessionKey()
+	if !ok || len(key) < opencodeSessionIDLen {
+		if existing != "" {
+			r.Header.Del(opencodeSessionHeader)
+		}
+		return
+	}
+	sessionID := "nenya-" + key[:opencodeSessionIDLen]
+	r.Header.Set(opencodeSessionHeader, sessionID)
+	gw.Logger.Debug("synthesized opencode session header", "session_id", sessionID, "model", req.ModelName)
 }
 
 // agentStickyTTL returns the agent's configured sticky session idle TTL,
@@ -729,9 +839,9 @@ func (p *Proxy) resolvePipelineContext(r *http.Request, gw *gateway.NenyaGateway
 	}
 
 	autoSearchCtx, autoSearchCancel := context.WithTimeout(r.Context(), mcpAutoSearchTimeout)
-	p.injectAutoSearch(gw, autoSearchCtx, req.Payload, messages, req.AgentName)
+	p.injectAutoSearch(gw, autoSearchCtx, req.Payload, messages, req)
 	autoSearchCancel()
-	p.injectMCPTools(gw, req.Payload, req.AgentName)
+	p.injectMCPTools(gw, req.Payload, req)
 
 	softLimit := 0
 	hardLimit := 0
@@ -755,7 +865,7 @@ func (p *Proxy) resolvePipelineContext(r *http.Request, gw *gateway.NenyaGateway
 		gw.Logger.Debug("IDE client detected", "client", profile.ClientName)
 	}
 
-	return messages, p.hasMCPTools(gw, req.AgentName), softLimit, hardLimit, windowMaxCtx, profile
+	return messages, hasMCPTools(gw, req.Agent), softLimit, hardLimit, windowMaxCtx, profile
 }
 
 // handleChatCompletions processes chat completion requests with optional content filtering and tool integration.
@@ -775,6 +885,8 @@ func (p *Proxy) handleChatCompletions(gw *gateway.NenyaGateway, w http.ResponseW
 		return
 	}
 
+	ensureOpencodeSessionHeader(gw, r, req)
+
 	if err := p.applyContentPipeline(gw, r.Context(), req.Payload, req.TokenCount, req.WindowMaxCtx, req.Profile, req.SoftLimit, req.HardLimit); err != nil {
 		gw.Logger.Warn("content pipeline failed, proceeding with original payload", "err", err)
 	}
@@ -788,6 +900,7 @@ func (p *Proxy) handleChatCompletions(gw *gateway.NenyaGateway, w http.ResponseW
 			Cooldown:     req.Cooldown,
 			TokenCount:   req.TokenCount,
 			AgentName:    req.AgentName,
+			Agent:        req.Agent,
 			MaxRetries:   req.MaxRetries,
 			CacheKey:     req.CacheKey,
 			KeyRef:       req.KeyRef,
@@ -804,6 +917,7 @@ func (p *Proxy) handleChatCompletions(gw *gateway.NenyaGateway, w http.ResponseW
 		Cooldown:     req.Cooldown,
 		TokenCount:   req.TokenCount,
 		AgentName:    req.AgentName,
+		Agent:        req.Agent,
 		MaxRetries:   req.MaxRetries,
 		CacheKey:     req.CacheKey,
 		KeyRef:       req.KeyRef,
@@ -935,6 +1049,9 @@ func (p *Proxy) buildUpstreamRequest(gw *gateway.NenyaGateway, ctx context.Conte
 	for _, h := range []string{
 		"X-Request-Id", "X-Correlation-Id", "X-Trace-Id",
 		"Traceparent", "Tracestate",
+		// OpenCode Zen/Go requires a stable per-conversation session ID for
+		// routing and prompt caching (see docs/CLIENT_OPENCODE.md).
+		opencodeSessionHeader,
 	} {
 		if v := srcHeaders.Get(h); v != "" {
 			req.Header.Set(h, v)
@@ -946,12 +1063,11 @@ func (p *Proxy) buildUpstreamRequest(gw *gateway.NenyaGateway, ctx context.Conte
 	return req, nil
 }
 
-func (p *Proxy) hasMCPTools(gw *gateway.NenyaGateway, agentName string) bool {
-	if agentName == "" {
-		return false
-	}
-	agent, ok := gw.Config.Agents[agentName]
-	if !ok || agent.MCP == nil || len(agent.MCP.Servers) == 0 {
+// hasMCPTools reports whether the resolved agent has MCP servers with at
+// least one ready client. Direct-model routes pass the zero AgentConfig,
+// which never has MCP servers.
+func hasMCPTools(gw *gateway.NenyaGateway, agent config.AgentConfig) bool {
+	if agent.MCP == nil || len(agent.MCP.Servers) == 0 {
 		return false
 	}
 	for _, serverName := range agent.MCP.Servers {

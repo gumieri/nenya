@@ -92,6 +92,21 @@ Nenya detects OpenCode via any of these headers containing "opencode". When dete
 
 **Note**: When OpenCode uses the standard OpenAI SDK (non-Copilot mode), the `User-Agent` is set by the SDK and does not contain "opencode". In this case, Nenya treats it as a standard client with full pipeline processing. To force IDE detection, set `Editor-Version: OpenCode/1.0` in your provider config or middleware.
 
+## Session Header (`x-opencode-session`)
+
+OpenCode Zen/Go requires a stable per-conversation session ID in the `x-opencode-session` header on chat requests for routing and prompt caching ([OpenCode Go docs](https://opencode.ai/docs/go/#where-can-i-use-it)). Without it, Zen/Go backends reject the request with a `MissingSessionID` error.
+
+Nenya guarantees the header on every chat dispatch (both `/v1/chat/completions` and `/v1/messages`) when a session key is derivable:
+
+| Scenario | Behavior |
+|----------|----------|
+| Client sends a valid `x-opencode-session` | Forwarded verbatim to the upstream provider |
+| Client omits it (or sends an unusable value) | Nenya synthesizes `nenya-<hash16>`, derived from agent (or model) name + system prompt + first user message (the same identity as [sticky routing](ROUTING.md#agent-routing-strategies)) |
+
+The synthesized value is stable across the turns of a conversation and distinct between conversations, preserving provider-side prefix-cache affinity for session-unaware clients. Requests without a derivable key (no message text) are dispatched with the client header only when it is a valid header value; an unusable value is dropped rather than failing mid-dispatch.
+
+Scope: client-supplied values are forwarded on all upstream dispatch paths (chat, embeddings, responses, passthrough); synthesis runs on the two chat routes only, since only they carry a conversation.
+
 ## Pipeline Behavior
 
 When OpenCode is detected as an IDE client:

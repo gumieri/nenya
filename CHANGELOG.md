@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Added
+- **Synthesized `x-opencode-session` for session-unaware clients**: when the client does not send the header, Nenya now generates a stable per-conversation session ID (`nenya-<hash16>`, derived from agent + system prompt + first user message — the same identity as sticky routing) on both chat routes, giving session-unaware clients provider-side routing/prompt-cache affinity and satisfying upstreams that require the header
+
+### Fixed
+- **OpenCode Zen/Go `MissingSessionID` errors**: the client-supplied `x-opencode-session` header is now forwarded to upstreams on all dispatch paths (was: silently dropped by the header allowlist); OpenCode Go rejects chat requests without this header. Unusable client values — whitespace-only, non-printable-ASCII or non-ASCII, or over-long — are replaced with the synthesized session ID, or dropped when no session key is derivable, instead of failing every round trip mid-dispatch. (Tab characters inside values are allowed.)
+
 ## [0.13.0] - 2026-09-10
 
 ### Added

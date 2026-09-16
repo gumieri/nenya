@@ -157,12 +157,15 @@ func (p *Proxy) doUpstreamRoundTrip(ctx context.Context, gw *gateway.NenyaGatewa
 
 // forwardOptions holds the parameters for forwarding a request upstream.
 type forwardOptions struct {
-	Targets      []routing.UpstreamTarget
-	Payload      map[string]any
-	Stream       bool
-	Cooldown     time.Duration
-	TokenCount   int
-	AgentName    string
+	Targets    []routing.UpstreamTarget
+	Payload    map[string]any
+	Stream     bool
+	Cooldown   time.Duration
+	TokenCount int
+	AgentName  string
+	// Agent is the resolved agent config for AgentName (zero value for
+	// direct model routes), resolved once in resolveRouting.
+	Agent        config.AgentConfig
 	MaxRetries   int
 	CacheKey     string
 	KeyRef       string

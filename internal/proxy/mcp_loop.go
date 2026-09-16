@@ -19,14 +19,15 @@ import (
 	"github.com/nenya/internal/util"
 )
 
-func (p *Proxy) injectMCPTools(gw *gateway.NenyaGateway, payload map[string]interface{}, agentName string) {
-	if agentName == "" {
+// injectMCPTools injects discovered MCP tools into the payload for the
+// request's agent. Reads AgentName (logging identity) and Agent (resolved
+// config) from the same chatRequest, so they cannot diverge.
+func (p *Proxy) injectMCPTools(gw *gateway.NenyaGateway, payload map[string]interface{}, req *chatRequest) {
+	agent := req.Agent
+	if agent.MCP == nil || len(agent.MCP.Servers) == 0 {
 		return
 	}
-	agent, ok := gw.Config.Agents[agentName]
-	if !ok || agent.MCP == nil || len(agent.MCP.Servers) == 0 {
-		return
-	}
+	agentName := req.AgentName
 
 	gw.Logger.Info("MCP injection starting",
 		"servers", agent.MCP.Servers, "agent", agentName)
@@ -122,12 +123,14 @@ func (p *Proxy) discoverToolByPrefix(gw *gateway.NenyaGateway, serverName, prefi
 	return ""
 }
 
-func (p *Proxy) injectAutoSearch(gw *gateway.NenyaGateway, ctx context.Context, payload map[string]interface{}, messages []interface{}, agentName string) {
-	if agentName == "" {
-		return
-	}
-	agent, ok := gw.Config.Agents[agentName]
-	if !ok || agent.MCP == nil || !agent.MCP.AutoSearch {
+// injectAutoSearch performs a best-effort auto-search against the request's
+// agent's MCP servers and injects the result as memory context. Reads
+// AgentName (logging/metrics identity) and Agent (resolved config) from the
+// same chatRequest, so they cannot diverge.
+func (p *Proxy) injectAutoSearch(gw *gateway.NenyaGateway, ctx context.Context, payload map[string]interface{}, messages []interface{}, req *chatRequest) {
+	agent := req.Agent
+	agentName := req.AgentName
+	if agent.MCP == nil || !agent.MCP.AutoSearch {
 		return
 	}
 
@@ -277,14 +280,11 @@ func (p *Proxy) forwardToUpstreamWithMCP(gw *gateway.NenyaGateway,
 	w http.ResponseWriter,
 	r *http.Request,
 	opts forwardOptions) {
-	_, hasAgent := gw.Config.Agents[opts.AgentName]
 	maxIter := mcpMaxIterations
-	if hasAgent {
-		if agent := gw.Config.Agents[opts.AgentName]; agent.MCP != nil && agent.MCP.MaxIterations > 0 {
-			maxIter = agent.MCP.MaxIterations
-			if maxIter > mcpMaxIterationsHardCeiling {
-				maxIter = mcpMaxIterationsHardCeiling
-			}
+	if opts.Agent.MCP != nil && opts.Agent.MCP.MaxIterations > 0 {
+		maxIter = opts.Agent.MCP.MaxIterations
+		if maxIter > mcpMaxIterationsHardCeiling {
+			maxIter = mcpMaxIterationsHardCeiling
 		}
 	}
 

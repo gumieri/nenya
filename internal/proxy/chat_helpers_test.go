@@ -816,25 +816,25 @@ func TestReadResponsesBody(t *testing.T) {
 }
 
 func TestHasMCPTools(t *testing.T) {
-	p := &Proxy{}
-
-	t.Run("empty agent name", func(t *testing.T) {
+	t.Run("agent without MCP servers", func(t *testing.T) {
 		gw := &gateway.NenyaGateway{Config: config.Config{Agents: nil}}
-		got := p.hasMCPTools(gw, "")
+		got := hasMCPTools(gw, config.AgentConfig{})
 		if got {
-			t.Errorf("expected false for empty agent name")
+			t.Errorf("expected false for agent without MCP servers")
 		}
 	})
 
-	t.Run("agent not found", func(t *testing.T) {
+	t.Run("agent with MCP servers but no clients", func(t *testing.T) {
 		gw := &gateway.NenyaGateway{
 			Config: config.Config{
 				Agents: map[string]config.AgentConfig{},
 			},
 		}
-		got := p.hasMCPTools(gw, "nonexistent")
+		got := hasMCPTools(gw, config.AgentConfig{
+			MCP: &config.AgentMCPConfig{Servers: []string{"missing"}},
+		})
 		if got {
-			t.Errorf("expected false for unknown agent")
+			t.Errorf("expected false when no MCP client is ready")
 		}
 	})
 }

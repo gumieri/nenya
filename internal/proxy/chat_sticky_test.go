@@ -139,7 +139,7 @@ func TestApplyStickyRouting_NewPin(t *testing.T) {
 		{Provider: "zai", Model: "zai-free", MaxContext: 256000},
 		{Provider: "deepseek", Model: "deepseek-free", MaxContext: 64000},
 	}
-	out := applyStickyRouting(req, gw, agent, targets, resolveStickyPin(req, gw, agent))
+	out := applyStickyRouting(req, gw, agent, targets, resolveStickyPin(req, gw))
 	if out[0].Provider != "zai" {
 		t.Fatalf("expected first target pinned, got %+v", out[0])
 	}
@@ -176,7 +176,7 @@ func TestApplyStickyRouting_EmptyAccountDoesNotWipePin(t *testing.T) {
 	if !ok {
 		t.Fatal("expected pin before apply")
 	}
-	applyStickyRouting(req, gw, agent, targets, resolveStickyPin(req, gw, agent))
+	applyStickyRouting(req, gw, agent, targets, resolveStickyPin(req, gw))
 	after, ok := gw.SessionRouter.Lookup(key)
 	if !ok || after.Account != "acct-a" || !after.Since.Equal(before.Since) {
 		t.Fatalf("expected pin account preserved untouched, got %+v (before Since %v)", after, before.Since)
@@ -200,7 +200,7 @@ func TestApplyStickyRouting_ReusePin(t *testing.T) {
 		{Provider: "zai", Model: "zai-free", CoolKey: "opencode:zai:zai-free"},
 		{Provider: "deepseek", Model: "deepseek-free", CoolKey: "opencode:deepseek:deepseek-free"},
 	}
-	out := applyStickyRouting(req, gw, agent, targets, resolveStickyPin(req, gw, agent))
+	out := applyStickyRouting(req, gw, agent, targets, resolveStickyPin(req, gw))
 	if out[0].Provider != "zai" || out[0].Model != "zai-free" {
 		t.Fatalf("expected pinned target promoted to front, got %+v", out[0])
 	}
@@ -223,7 +223,7 @@ func TestApplyStickyRouting_CoolingPinPromoted(t *testing.T) {
 		{Provider: "deepseek", Model: "deepseek-free", CoolKey: "opencode:deepseek:deepseek-free"},
 		{Provider: "zai", Model: "zai-free", CoolKey: "opencode:zai:zai-free", Cooling: true},
 	}
-	out := applyStickyRouting(req, gw, agent, targets, resolveStickyPin(req, gw, agent))
+	out := applyStickyRouting(req, gw, agent, targets, resolveStickyPin(req, gw))
 	if out[0].Provider != "deepseek" {
 		t.Fatalf("expected first active target at front, got %+v", out[0])
 	}
@@ -251,7 +251,7 @@ func TestApplyStickyRouting_AccountDriftPromotesToSibling(t *testing.T) {
 	targets := []routing.UpstreamTarget{
 		{Provider: "zai", Model: "zai-free", AccountName: "acct-b", CoolKey: "opencode:zai:zai-free"},
 	}
-	out := applyStickyRouting(req, gw, agent, targets, resolveStickyPin(req, gw, agent))
+	out := applyStickyRouting(req, gw, agent, targets, resolveStickyPin(req, gw))
 	if out[0].AccountName != "acct-b" {
 		t.Fatalf("expected sibling-account target at front, got %+v", out[0])
 	}
@@ -284,7 +284,7 @@ func TestApplyStickyRouting_ValidFrontPinNotRePinned(t *testing.T) {
 	if !ok {
 		t.Fatal("expected pin before apply")
 	}
-	applyStickyRouting(req, gw, agent, targets, resolveStickyPin(req, gw, agent))
+	applyStickyRouting(req, gw, agent, targets, resolveStickyPin(req, gw))
 	after, ok := gw.SessionRouter.Lookup(key)
 	if !ok {
 		t.Fatal("expected pin after apply")
