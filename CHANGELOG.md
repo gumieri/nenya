@@ -5,6 +5,7 @@ All notable changes to this project will be documented in this file.
 ## [Unreleased]
 
 ### Added
+- **Per-model concurrency admission control**: providers that rate-limit by concurrent in-flight requests per model (e.g. the Z.AI GLM Coding Plan) can now be capped via `providers.<name>.max_concurrent_requests` and `providers.<name>.model_concurrency` (per-model overrides), with a global `governance.max_concurrent_requests` fallback. Excess requests queue context-aware until a slot frees instead of colliding with the upstream cap; the slot is held for the full SSE stream/response lifetime. ZAI error `1302` (concurrency) is now classified `concurrency_limited` — no provider cooldown, no circuit-breaker failure, short ~200ms retry — while `1303` (frequency) keeps rate-limit semantics. Rate-limit RPM/TPM buckets are now keyed by provider name, fixing `zai`/`zai-coding-plan` silently sharing one `api.z.ai` bucket. Metrics: `nenya_concurrency_inflight{provider,model}`, `nenya_concurrency_wait_seconds`, `nenya_concurrency_rejected_total`, `nenya_concurrency_limited_total`
 - **Synthesized `x-opencode-session` for session-unaware clients**: when the client does not send the header, Nenya now generates a stable per-conversation session ID (`nenya-<hash16>`, derived from agent + system prompt + first user message — the same identity as sticky routing) on both chat routes, giving session-unaware clients provider-side routing/prompt-cache affinity and satisfying upstreams that require the header
 
 ### Changed

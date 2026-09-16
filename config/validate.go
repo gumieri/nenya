@@ -411,6 +411,20 @@ func validateProviderRateLimits(cfg *Config) []string {
 		if p.RatelimitMaxTPM != nil && *p.RatelimitMaxTPM < 0 {
 			errs = append(errs, fmt.Sprintf("providers[%q].ratelimit_max_tpm must be non-negative, got %d", name, *p.RatelimitMaxTPM))
 		}
+		if p.MaxConcurrentRequests < 0 {
+			errs = append(errs, fmt.Sprintf("providers[%q].max_concurrent_requests must be non-negative, got %d", name, p.MaxConcurrentRequests))
+		}
+		for model, limit := range p.ModelConcurrency {
+			if model == "" {
+				errs = append(errs, fmt.Sprintf("providers[%q].model_concurrency contains an empty model key", name))
+			}
+			if limit < 0 {
+				errs = append(errs, fmt.Sprintf("providers[%q].model_concurrency[%q] must be non-negative, got %d", name, model, limit))
+			}
+		}
+	}
+	if cfg.Governance.MaxConcurrentRequests < 0 {
+		errs = append(errs, fmt.Sprintf("governance.max_concurrent_requests must be non-negative, got %d", cfg.Governance.MaxConcurrentRequests))
 	}
 	return errs
 }

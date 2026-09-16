@@ -84,7 +84,11 @@ func (a *ZAIAdapter) NormalizeError(statusCode int, body []byte) ErrorClass {
 		}
 		if json.Unmarshal(body, &errResp) == nil && errResp.Error.Code != "" {
 			switch errResp.Error.Code {
-			case "1302", "1303":
+			case "1302":
+				// Concurrency limit exceeded (in-flight cap), reported on
+				// 429 or carried on 5xx bodies.
+				return ErrorConcurrencyLimited
+			case "1303":
 				return ErrorRateLimited
 			case "1308", "1310":
 				return ErrorQuotaExhausted

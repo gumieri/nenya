@@ -51,7 +51,7 @@ func (p *Proxy) handleExtensionEndpoint(gw *gateway.NenyaGateway, w http.Respons
 		return
 	}
 
-	if !gw.RateLimiter.Check(provider.BaseURL, 0) {
+	if !gw.RateLimiter.Check(provider.Name, provider.BaseURL, 0) {
 		gw.Metrics.RecordRateLimitRejected(endpoint)
 		ctxLogger.Warn("rate limit exceeded", "provider", provider.Name)
 		writeStructuredError(w, http.StatusTooManyRequests, infra.ErrorKindRateLimited, "Rate limit exceeded")

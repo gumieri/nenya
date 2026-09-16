@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/nenya/config"
@@ -42,13 +43,40 @@ const (
 	exponentialBackoffJitter = 750 * time.Millisecond
 )
 
+const (
+	// concurrencyRetryBase is the fixed wait before retrying after an
+	// upstream concurrency-limit rejection (NENYA-69, e.g. ZAI 1302).
+	concurrencyRetryBase = 200 * time.Millisecond
+	// concurrencyRetryJitter is added to concurrencyRetryBase to desynchronize
+	// concurrent waiters.
+	concurrencyRetryJitter = 100 * time.Millisecond
+)
+
+// concurrencyRetryDelay returns the wait applied after an upstream
+// concurrency-limit rejection.
+func concurrencyRetryDelay() time.Duration {
+	return concurrencyRetryBase + time.Duration(rand.Int63n(int64(concurrencyRetryJitter)))
+}
+
 // upstreamAction holds the result of a single upstream HTTP request attempt.
 // The kind field distinguishes between streaming, response, and error outcomes.
+// release frees the per-model concurrency slot held for the round-trip; it is
+// invoked at every terminal handling point and is idempotent.
 type upstreamAction struct {
-	kind   int
-	resp   *http.Response
-	body   []byte
-	cancel context.CancelFunc
+	kind    int
+	resp    *http.Response
+	body    []byte
+	cancel  context.CancelFunc
+	release func()
+}
+
+// releaseSlot frees the concurrency slot held by this action, if any. The
+// release function is Once-wrapped at acquire time, so double invocation is
+// safe.
+func (a upstreamAction) releaseSlot() {
+	if a.release != nil {
+		a.release()
+	}
 }
 
 const (
@@ -231,6 +259,7 @@ func (rl *retryLoop) copyPayload(dest map[string]any, idx int) bool {
 // request is considered handled (success or terminal failure), false when
 // the loop should try the next target.
 func (rl *retryLoop) handleActionResult(i int, target routing.UpstreamTarget, action upstreamAction) bool {
+	defer action.releaseSlot()
 	switch action.kind {
 	case actionContinue:
 		return false
@@ -497,6 +526,10 @@ retryLoop:
 
 		action := rl.prepareAndSend(i, target, payloadToUse)
 		if err := rl.r.Context().Err(); err != nil {
+			if action.cancel != nil {
+				action.cancel()
+			}
+			action.releaseSlot()
 			rl.ctxLogger.Debug("request context canceled during prepareAndSend, stopping failover sweep", "err", err)
 			break retryLoop
 		}
@@ -595,7 +628,7 @@ func logRequestIfDebug(ctx context.Context, logger *slog.Logger, req *http.Reque
 	}
 }
 
-func handleUpstreamResponse(ctxLogger *slog.Logger, resp *http.Response, cancel context.CancelFunc) upstreamAction {
+func handleUpstreamResponse(ctxLogger *slog.Logger, resp *http.Response, cancel context.CancelFunc, release func()) upstreamAction {
 	ct := resp.Header.Get("Content-Type")
 	if strings.Contains(strings.ToLower(ct), "text/html") {
 		ctxLogger.Warn("upstream returned HTML instead of API response, skipping target",
@@ -603,13 +636,13 @@ func handleUpstreamResponse(ctxLogger *slog.Logger, resp *http.Response, cancel 
 		_, _ = io.Copy(io.Discard, resp.Body)
 		_ = resp.Body.Close()
 		cancel()
-		return upstreamAction{kind: actionContinue}
+		return upstreamAction{kind: actionContinue, release: release}
 	}
 	isSSE := strings.Contains(strings.ToLower(ct), "text/event-stream")
 	if isSSE {
-		return upstreamAction{kind: actionStream, resp: resp, cancel: cancel}
+		return upstreamAction{kind: actionStream, resp: resp, cancel: cancel, release: release}
 	}
-	return upstreamAction{kind: actionResponse, resp: resp, cancel: cancel}
+	return upstreamAction{kind: actionResponse, resp: resp, cancel: cancel, release: release}
 }
 
 // upstreamRequestContext builds the context for an outbound upstream call.
@@ -668,6 +701,24 @@ func (p *Proxy) prepareAndSend(gw *gateway.NenyaGateway,
 		return *action
 	}
 
+	// Per-model concurrency admission control (NENYA-69): hold a slot for
+	// the entire upstream round-trip, including SSE stream consumption.
+	// Queue-and-wait: the request blocks here (ctx-aware) until a slot
+	// frees instead of colliding with the upstream concurrency cap.
+	concLimit := gw.EffectiveConcurrencyLimit(target.Provider, target.Model)
+	waitStart := time.Now()
+	release, acqErr := gw.ConcurrencyLimiter.Acquire(r.Context(), target.Provider+"/"+target.Model, concLimit)
+	if acqErr != nil {
+		// Client gone while queued: no circuit-breaker pollution, no write.
+		gw.Metrics.RecordConcurrencyRejected(target.Provider, target.Model)
+		ctxLogger.Info("client canceled while waiting for concurrency slot",
+			"model", target.Model, "provider", target.Provider)
+		return upstreamAction{kind: actionContinue}
+	}
+	gw.Metrics.RecordConcurrencyWait(target.Provider, target.Model, time.Since(waitStart))
+	gw.Metrics.IncConcurrencyInflight(target.Provider, target.Model)
+	release = wrapConcurrencyRelease(release, gw, target.Provider, target.Model)
+
 	transformDeps := routing.TransformDeps{
 		Logger:             gw.Logger,
 		Providers:          gw.Providers,
@@ -694,7 +745,7 @@ func (p *Proxy) prepareAndSend(gw *gateway.NenyaGateway,
 	req, err := p.buildUpstreamRequest(gw, r.Context(), r.Method, target.URL, transformedBody, target.Provider, target.Model, target.Credential, r.Header)
 	if err != nil {
 		ctxLogger.Error("failed to create upstream request", "err", err)
-		return upstreamAction{kind: actionContinue}
+		return upstreamAction{kind: actionContinue, release: release}
 	}
 
 	logRequestIfDebug(r.Context(), ctxLogger, req, target.URL, transformedBody)
@@ -709,7 +760,7 @@ func (p *Proxy) prepareAndSend(gw *gateway.NenyaGateway,
 	if err != nil {
 		upstreamCancel()
 		p.recordNetworkError(ctxLogger, gw, target, err, r, cooldownDuration)
-		return upstreamAction{kind: actionContinue}
+		return upstreamAction{kind: actionContinue, release: release}
 	}
 
 	duration := time.Since(startTime)
@@ -726,10 +777,19 @@ func (p *Proxy) prepareAndSend(gw *gateway.NenyaGateway,
 			gw.CostTracker.RecordError(target.Model)
 		}
 		gw.Metrics.RecordUpstreamError(target.Model, agentName, target.Provider, resp.StatusCode)
-		return upstreamAction{kind: actionError, resp: resp, cancel: upstreamCancel}
+		return upstreamAction{kind: actionError, resp: resp, cancel: upstreamCancel, release: release}
 	}
 
-	return handleUpstreamResponse(ctxLogger, resp, upstreamCancel)
+	return handleUpstreamResponse(ctxLogger, resp, upstreamCancel, release)
+}
+
+// wrapConcurrencyRelease ties the in-flight gauge to the slot release so the
+// occupancy metric mirrors exactly when slots are held.
+func wrapConcurrencyRelease(release func(), gw *gateway.NenyaGateway, provider, model string) func() {
+	return sync.OnceFunc(func() {
+		release()
+		gw.Metrics.DecConcurrencyInflight(provider, model)
+	})
 }
 
 // recordNetworkError records an upstream network error, distinguishing between
@@ -757,7 +817,7 @@ func (p *Proxy) recordNetworkError(ctxLogger *slog.Logger, gw *gateway.NenyaGate
 }
 
 func (p *Proxy) checkPreDispatchGuards(gw *gateway.NenyaGateway, ctxLogger *slog.Logger, target routing.UpstreamTarget, tokenCount int, agentName string) *upstreamAction {
-	if !gw.RateLimiter.Check(target.URL, tokenCount) {
+	if !gw.RateLimiter.Check(target.Provider, target.URL, tokenCount) {
 		gw.Metrics.RecordRateLimitRejected(infra.ExtractHost(target.URL))
 		ctxLogger.Warn("target skipped: rate limit exceeded")
 		return ptrAction(upstreamAction{kind: actionContinue})
@@ -908,6 +968,18 @@ func (p *Proxy) handleUpstreamError(gw *gateway.NenyaGateway,
 		"target_idx", fmt.Sprintf("%d/%d", idx+1, len(targets)),
 		"status", action.resp.StatusCode,
 	)
+
+	errClass := adapter.ForProvider(target.Provider).NormalizeError(action.resp.StatusCode, action.body)
+	// Concurrency-limit rejection (NENYA-69): e.g. ZAI 1302. Hitting a
+	// per-model in-flight cap is saturation, not provider illness — do not
+	// activate a cooldown or count a circuit-breaker failure. A short fixed
+	// wait lets a just-freed slot settle before the failover sweep proceeds.
+	if errClass == adapter.ErrorConcurrencyLimited {
+		gw.Metrics.RecordConcurrencyLimited(target.Provider, target.Model)
+		ctxLogger.Warn("upstream concurrency limit hit, retrying without cooldown",
+			"model", target.Model, "provider", target.Provider)
+		return true, concurrencyRetryDelay()
+	}
 
 	if p.isRetryableStatus(gw, target.Provider, action.resp.StatusCode) {
 		logRetryableError(ctxLogger, errorBody, gw)

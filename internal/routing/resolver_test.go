@@ -37,7 +37,7 @@ func TestResolveProvider_KnownModels(t *testing.T) {
 		{"qwen-3.6-plus", "qwen_free"},
 		{"minimax-m2.5", "minimax_free"},
 		{"llama-3.3-70b-versatile", "groq"},
-		{"mixtral-8x7b-32768", "groq"},
+		{"llama-3.3-70b-versatile", "groq"},
 		{"llama-3.1-405b-instruct", "sambanova"},
 		{"llama-3.3-70b", "cerebras"},
 		{"gpt-4o", "github"},

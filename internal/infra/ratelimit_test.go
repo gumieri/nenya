@@ -30,10 +30,10 @@ func TestCheckRateLimit(t *testing.T) {
 			rl := NewRateLimiter(tt.maxRPM, tt.maxTPM)
 
 			for i := 0; i < tt.requests; i++ {
-				rl.Check("http://example.com/api", tt.tokens)
+				rl.Check("", "http://example.com/api", tt.tokens)
 			}
 
-			lastAllowed := rl.Check("http://example.com/api", tt.tokens)
+			lastAllowed := rl.Check("", "http://example.com/api", tt.tokens)
 			if lastAllowed != tt.wantAllow {
 				t.Errorf("last request: expected allow=%v, got %v", tt.wantAllow, lastAllowed)
 			}
@@ -45,16 +45,16 @@ func TestCheckRateLimitPerHost(t *testing.T) {
 	rl := NewRateLimiter(10, 0)
 
 	for i := 0; i < 10; i++ {
-		if !rl.Check("http://host-a.example.com/api", 0) {
+		if !rl.Check("", "http://host-a.example.com/api", 0) {
 			t.Errorf("request %d to host-a should be allowed", i+1)
 		}
 	}
 	for i := 0; i < 10; i++ {
-		if !rl.Check("http://host-b.example.com/api", 0) {
+		if !rl.Check("", "http://host-b.example.com/api", 0) {
 			t.Errorf("request %d to host-b should be allowed", i+1)
 		}
 	}
-	if rl.Check("http://host-a.example.com/api", 0) {
+	if rl.Check("", "http://host-a.example.com/api", 0) {
 		t.Error("request 11 to host-a should be blocked")
 	}
 }
@@ -63,12 +63,12 @@ func TestCheckRateLimitURLParsing(t *testing.T) {
 	rl := NewRateLimiter(10, 0)
 
 	for i := 0; i < 10; i++ {
-		if !rl.Check("http://example.com:8080/v1/chat/completions", 0) {
+		if !rl.Check("", "http://example.com:8080/v1/chat/completions", 0) {
 			t.Errorf("request %d should be allowed", i+1)
 		}
 	}
-	rl.Check("http://example.com:8080/different/path", 0)
-	if rl.Check("http://example.com:8080/v1/chat/completions", 0) {
+	rl.Check("", "http://example.com:8080/different/path", 0)
+	if rl.Check("", "http://example.com:8080/v1/chat/completions", 0) {
 		t.Error("request after bucket exhausted should be blocked")
 	}
 }
@@ -81,7 +81,7 @@ func TestCheckRateLimitConcurrent(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			rl.Check("http://example.com/api", 0)
+			rl.Check("", "http://example.com/api", 0)
 		}()
 	}
 	wg.Wait()
@@ -90,8 +90,8 @@ func TestCheckRateLimitConcurrent(t *testing.T) {
 func TestCheckRateLimitRefill(t *testing.T) {
 	rl := NewRateLimiter(2, 0)
 
-	rl.Check("http://example.com/api", 0)
-	rl.Check("http://example.com/api", 0)
+	rl.Check("", "http://example.com/api", 0)
+	rl.Check("", "http://example.com/api", 0)
 
 	snapshot := rl.Snapshot()
 	limiter, ok := snapshot["example.com"]
@@ -113,7 +113,7 @@ func TestCheckRateLimitRefill(t *testing.T) {
 	hostLimiter.lastRefill = time.Now().Add(-60 * time.Second)
 	hostLimiter.mu.Unlock()
 
-	if !rl.Check("http://example.com/api", 0) {
+	if !rl.Check("", "http://example.com/api", 0) {
 		t.Error("after 60s refill, request should be allowed")
 	}
 }
@@ -121,13 +121,13 @@ func TestCheckRateLimitRefill(t *testing.T) {
 func TestCheckRateLimitTPMAccumulation(t *testing.T) {
 	rl := NewRateLimiter(0, 100)
 
-	if !rl.Check("http://example.com/api", 60) {
+	if !rl.Check("", "http://example.com/api", 60) {
 		t.Error("first 60 tokens should be allowed")
 	}
-	if !rl.Check("http://example.com/api", 30) {
+	if !rl.Check("", "http://example.com/api", 30) {
 		t.Error("remaining 40 tokens should cover 30")
 	}
-	if rl.Check("http://example.com/api", 20) {
+	if rl.Check("", "http://example.com/api", 20) {
 		t.Error("should be blocked: only ~10 tokens left, need 20")
 	}
 }
@@ -136,7 +136,7 @@ func TestCheckRateLimitHostCapacityEviction(t *testing.T) {
 	rl := NewRateLimiter(10, 0)
 
 	for i := 0; i < maxRateLimitHosts; i++ {
-		if !rl.Check("http://host-"+strconv.Itoa(i)+".example.com/api", 0) {
+		if !rl.Check("", "http://host-"+strconv.Itoa(i)+".example.com/api", 0) {
 			t.Errorf("host %d should be allowed", i)
 		}
 	}
@@ -149,15 +149,15 @@ func TestCheckRateLimitHostCapacityEviction(t *testing.T) {
 	}
 	rl.mu.Unlock()
 
-	if !rl.Check("http://new-host.example.com/api", 0) {
+	if !rl.Check("", "http://new-host.example.com/api", 0) {
 		t.Error("new host should be allowed after stale entries evicted")
 	}
 }
 
 func TestRateLimiterSnapshot(t *testing.T) {
 	rl := NewRateLimiter(10, 100)
-	rl.Check("http://host1.com/api", 50)
-	rl.Check("http://host2.com/api", 30)
+	rl.Check("", "http://host1.com/api", 50)
+	rl.Check("", "http://host2.com/api", 30)
 
 	snapshot := rl.Snapshot()
 	if len(snapshot) != 2 {
@@ -175,13 +175,13 @@ func TestRateLimiterSnapshot(t *testing.T) {
 func TestSetProviderLimits_OverridesBucket(t *testing.T) {
 	rl := NewRateLimiter(10, 1000)
 
-	if !rl.Check("http://fast.example.com/api", 0) {
+	if !rl.Check("", "http://fast.example.com/api", 0) {
 		t.Fatal("first request should be allowed with global limits")
 	}
 
 	rl.SetProviderLimits("fast.example.com", ProviderRateLimits{MaxRPM: 500, MaxTPM: 200000})
 
-	if !rl.Check("http://fast.example.com/api", 0) {
+	if !rl.Check("", "http://fast.example.com/api", 0) {
 		t.Fatal("request should still be allowed after limit upgrade")
 	}
 }
@@ -189,10 +189,10 @@ func TestSetProviderLimits_OverridesBucket(t *testing.T) {
 func TestSetProviderLimits_NewHostUsesGlobalThenUpgraded(t *testing.T) {
 	rl := NewRateLimiter(2, 0)
 
-	rl.Check("http://limited.example.com/api", 0)
-	rl.Check("http://limited.example.com/api", 0)
+	rl.Check("", "http://limited.example.com/api", 0)
+	rl.Check("", "http://limited.example.com/api", 0)
 
-	if rl.Check("http://limited.example.com/api", 0) {
+	if rl.Check("", "http://limited.example.com/api", 0) {
 		t.Fatal("third request should be blocked with global RPM=2")
 	}
 
@@ -207,7 +207,7 @@ func TestSetProviderLimits_NewHostUsesGlobalThenUpgraded(t *testing.T) {
 	bucket.rpmBucket = 0
 	bucket.mu.Unlock()
 
-	if !rl.Check("http://limited.example.com/api", 0) {
+	if !rl.Check("", "http://limited.example.com/api", 0) {
 		t.Fatal("request should be allowed after refill with upgraded RPM=100")
 	}
 }
@@ -217,7 +217,7 @@ func TestSetProviderLimits_ZeroFallsBackToGlobal(t *testing.T) {
 
 	rl.SetProviderLimits("fallback.example.com", ProviderRateLimits{MaxRPM: 0, MaxTPM: 0})
 
-	rl.Check("http://fallback.example.com/api", 0)
+	rl.Check("", "http://fallback.example.com/api", 0)
 
 	rl.mu.Lock()
 	bucket := rl.limits["fallback.example.com"]
@@ -241,7 +241,7 @@ func TestSetProviderLimits_NegativeValues(t *testing.T) {
 
 	rl.SetProviderLimits("fallback.example.com", ProviderRateLimits{MaxRPM: -5, MaxTPM: -100})
 
-	rl.Check("http://fallback.example.com/api", 0)
+	rl.Check("", "http://fallback.example.com/api", 0)
 
 	rl.mu.Lock()
 	bucket := rl.limits["fallback.example.com"]
@@ -266,16 +266,45 @@ func TestPerProviderIsolation(t *testing.T) {
 	rl.SetProviderLimits("provider-a.example.com", ProviderRateLimits{MaxRPM: 2, MaxTPM: 0})
 	rl.SetProviderLimits("provider-b.example.com", ProviderRateLimits{MaxRPM: 100, MaxTPM: 0})
 
-	rl.Check("http://provider-a.example.com/api", 0)
-	rl.Check("http://provider-a.example.com/api", 0)
+	rl.Check("", "http://provider-a.example.com/api", 0)
+	rl.Check("", "http://provider-a.example.com/api", 0)
 
-	if rl.Check("http://provider-a.example.com/api", 0) {
+	if rl.Check("", "http://provider-a.example.com/api", 0) {
 		t.Fatal("provider-a (RPM=2) should be blocked after 2 requests")
 	}
 
 	for i := 0; i < 50; i++ {
-		if !rl.Check("http://provider-b.example.com/api", 0) {
+		if !rl.Check("", "http://provider-b.example.com/api", 0) {
 			t.Fatalf("provider-b (RPM=100) request %d should be allowed", i+1)
 		}
+	}
+}
+
+func TestSetProviderLimits_SameHostProvidersIndependent(t *testing.T) {
+	rl := NewRateLimiter(10, 1000)
+	rl.SetProviderLimits("zai", ProviderRateLimits{MaxRPM: 2, MaxTPM: 1000})
+	rl.SetProviderLimits("zai-coding-plan", ProviderRateLimits{MaxRPM: 60, MaxTPM: 50000})
+
+	same := "https://api.z.ai/v1/chat/completions"
+
+	// "zai" bucket: 2 RPM — third call must be rejected.
+	if !rl.Check("zai", same, 0) {
+		t.Fatal("zai should allow its first RPM")
+	}
+	if !rl.Check("zai", same, 0) {
+		t.Fatal("zai should allow its second RPM")
+	}
+	if rl.Check("zai", same, 0) {
+		t.Fatal("zai should reject the third call in the minute")
+	}
+
+	// "zai-coding-plan" shares the host but must have its own bucket.
+	for range 60 {
+		if !rl.Check("zai-coding-plan", same, 0) {
+			t.Fatal("zai-coding-plan should not be affected by zai's bucket")
+		}
+	}
+	if rl.Check("zai-coding-plan", same, 0) {
+		t.Fatal("zai-coding-plan should eventually exhaust its own 60 RPM")
 	}
 }

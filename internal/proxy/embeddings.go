@@ -61,7 +61,7 @@ func (p *Proxy) handleEmbeddings(gw *gateway.NenyaGateway, w http.ResponseWriter
 		return
 	}
 
-	if !gw.RateLimiter.Check(provider.BaseURL, 0) {
+	if !gw.RateLimiter.Check(provider.Name, provider.BaseURL, 0) {
 		writeStructuredError(w, http.StatusTooManyRequests, infra.ErrorKindRateLimited, "Rate limit exceeded")
 		return
 	}

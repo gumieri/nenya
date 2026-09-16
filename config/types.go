@@ -187,6 +187,15 @@ type ProviderConfig struct {
 	RatelimitMaxRPM *int `json:"ratelimit_max_rpm,omitempty"`
 	// RatelimitMaxTPM is the tokens-per-minute rate limit.
 	RatelimitMaxTPM *int `json:"ratelimit_max_tpm,omitempty"`
+	// MaxConcurrentRequests caps the number of in-flight requests dispatched
+	// to this provider (0 or omitted = unlimited). Providers like the Z.AI
+	// Coding Plan enforce per-model concurrency limits; requests over the
+	// cap queue until a slot frees or the client context is canceled.
+	MaxConcurrentRequests int `json:"max_concurrent_requests,omitempty"`
+	// ModelConcurrency overrides MaxConcurrentRequests per model ID served
+	// by this provider (e.g. {"glm-5.3": 5, "glm-5.3-flash": 50}). Values
+	// must be non-negative; 0 = unlimited for that model.
+	ModelConcurrency map[string]int `json:"model_concurrency,omitempty"`
 	// Billing configures usage-based billing tracking for this provider.
 	Billing *BillingConfig `json:"billing,omitempty"`
 	// AllowedModels is a list of RE2 regex patterns that models from this
@@ -244,6 +253,24 @@ type Provider struct {
 	Billing                  *BillingConfig
 	AllowedModels            []string
 	allowedRE                []*regexp.Regexp
+	// MaxConcurrentRequests caps in-flight requests dispatched to this
+	// provider (0 = unlimited). See ProviderConfig.MaxConcurrentRequests.
+	MaxConcurrentRequests int
+	// ModelConcurrency overrides MaxConcurrentRequests per model ID.
+	ModelConcurrency map[string]int
+}
+
+// ConcurrencyLimit resolves the in-flight request cap for a model served by
+// this provider: per-model override first, then the provider-wide cap.
+// A return value of 0 means unlimited.
+func (p *Provider) ConcurrencyLimit(model string) int {
+	if p == nil {
+		return 0
+	}
+	if limit, ok := p.ModelConcurrency[model]; ok {
+		return limit
+	}
+	return p.MaxConcurrentRequests
 }
 
 // AllowsModel returns true if the provider allows the given model ID.
@@ -347,13 +374,17 @@ type GovernanceConfig struct {
 	BlockedExecutionPatterns []string `json:"blocked_execution_patterns"`
 	RatelimitMaxRPM          *int     `json:"ratelimit_max_rpm,omitempty"`
 	RatelimitMaxTPM          *int     `json:"ratelimit_max_tpm,omitempty"`
-	RetryableStatusCodes     []int    `json:"retryable_status_codes"`
-	MaxRetryAttempts         int      `json:"max_retry_attempts"`
-	RoutingStrategy          string   `json:"routing_strategy"`
-	RoutingLatencyWeight     float64  `json:"routing_latency_weight"`
-	RoutingCostWeight        float64  `json:"routing_cost_weight"`
-	MaxCostPerRequest        float64  `json:"max_cost_per_request"`
-	EmptyStreamAsError       *bool    `json:"empty_stream_as_error,omitempty"`
+	// MaxConcurrentRequests is the global fallback cap on in-flight requests
+	// per provider+model when the provider config does not set its own limit
+	// (0 or omitted = unlimited).
+	MaxConcurrentRequests int     `json:"max_concurrent_requests,omitempty"`
+	RetryableStatusCodes  []int   `json:"retryable_status_codes"`
+	MaxRetryAttempts      int     `json:"max_retry_attempts"`
+	RoutingStrategy       string  `json:"routing_strategy"`
+	RoutingLatencyWeight  float64 `json:"routing_latency_weight"`
+	RoutingCostWeight     float64 `json:"routing_cost_weight"`
+	MaxCostPerRequest     float64 `json:"max_cost_per_request"`
+	EmptyStreamAsError    *bool   `json:"empty_stream_as_error,omitempty"`
 	// EarlyStreamErrorFailover fails over to the next target when the first
 	// SSE event of a stream is an upstream error, before headers are committed.
 	EarlyStreamErrorFailover *bool `json:"early_stream_error_failover,omitempty"`

@@ -171,6 +171,7 @@ Rate limiting, routing weights, and circuit breaker configuration.
 |-------|------|---------|-------------|
 | `ratelimit_max_tpm` | int | `250000` | Max tokens per minute per upstream host (0 = disabled) |
 | `ratelimit_max_rpm` | int | `15` | Max requests per minute per upstream host (0 = disabled) |
+| `max_concurrent_requests` | int | `0` (disabled) | Global fallback cap on in-flight requests per provider+model, applied when the provider config sets no limit of its own. Excess requests queue until a slot frees (bounded by the client context), instead of hitting the upstream's concurrency limit. |
 | `routing_strategy` | string | `""` (latency) | Routing strategy when `auto_reorder_by_latency` is enabled. `""` or `"latency"` = latency-only sorting. `"balanced"` = weighted scoring using latency, cost, capability matching, and per-model score bonus. |
 | `routing_latency_weight` | float64 | `1.0` | Weight for latency normalization in balanced scoring (0.0-10.0). Higher = prioritize faster models. |
 | `routing_cost_weight` | float64 | `0.0` | Weight for cost normalization in balanced scoring (0.0-10.0). Higher = prioritize cheaper models. |
@@ -614,8 +615,10 @@ To add or override a provider:
 | `timeout_seconds` | int | Per-provider timeout in seconds. For the `ollama` provider, sets the HTTP transport's `ResponseHeaderTimeout` (time-to-first-byte). For other providers, applies as a request context timeout on `/v1/embeddings` and `/v1/responses` endpoints. Also used as a fallback for engine calls (`bouncer.engine`, `window.engine`) when the engine's own `timeout_seconds` is not explicitly set. Default: `30` (transport-level). |
 | `stream_idle_timeout_seconds` | int | Per-provider stall detection timeout override (in seconds). When set and greater than 0, overrides the global `governance.stream_idle_timeout_seconds` for this provider only. Useful for reasoning providers that require longer timeouts without affecting all providers. When 0, uses the global default (300s). Capped at `86400` (24h). Applies to both `/v1/chat/completions`/`/v1/messages` (with SSE parser) and `/proxy/` passthrough (byte-level stall detection). |
 | `retryable_status_codes` | []int | Provider-level override for retryable status codes. **Replaces** both global and built-in defaults for this provider. If not set, falls back to `governance.retryable_status_codes`, then built-in defaults `[429, 500, 502, 503, 504]`. |
-| `ratelimit_max_rpm` | int | Per-provider override for max requests per minute. Overrides global `governance.ratelimit_max_rpm` (default 15). |
-| `ratelimit_max_tpm` | int | Per-provider override for max tokens per minute. Overrides global `governance.ratelimit_max_tpm` (default 250000). |
+| `ratelimit_max_rpm` | int | Per-provider override for max requests per minute. Overrides global `governance.ratelimit_max_rpm` (default 15). Buckets are keyed by provider name. |
+| `ratelimit_max_tpm` | int | Per-provider override for max tokens per minute. Overrides global `governance.ratelimit_max_tpm` (default 250000). Buckets are keyed by provider name. |
+| `max_concurrent_requests` | int | Provider-wide cap on in-flight requests. Requests over the cap queue (ctx-aware) until a slot frees instead of colliding with the upstream's concurrency limit. `0`/omitted = unlimited. |
+| `model_concurrency` | map[string]int | Per-model overrides for `max_concurrent_requests`, keyed by model ID (e.g. `{"glm-5.3": 5}`). Resolution: model override → provider cap → `governance.max_concurrent_requests`. An explicit `0` means unlimited for that model. Limits are plan/account-specific — copy them from your provider account's rate-limits page (e.g. Z.AI Coding Plan enforces per-model concurrency, not RPM). |
 | `api_key` | string | Legacy single API key. Deprecated in favor of `accounts` for multi-account support. |
 | `accounts` | []AccountConfig | Multi-account credential pool with LRU selection and error classification. See Multi-Account Per-Provider Keys below. |
 | `thinking` | ThinkingConfig | Per-provider thinking/reasoning mode configuration for reasoning-capable models. See Thinking Configuration below. |

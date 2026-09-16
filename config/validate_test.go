@@ -71,6 +71,43 @@ func testLogger() *slog.Logger {
 	return slog.New(slog.NewTextHandler(io.Discard, &slog.HandlerOptions{Level: slog.LevelDebug}))
 }
 
+func TestValidateProviderConcurrencyLimits(t *testing.T) {
+	ok := &Config{
+		Providers: map[string]ProviderConfig{
+			"zai-coding-plan": {
+				MaxConcurrentRequests: 5,
+				ModelConcurrency:      map[string]int{"glm-5.3": 5, "glm-5.3-flash": 50, "free": 0},
+			},
+		},
+	}
+	if errs := validateProviderRateLimits(ok); len(errs) != 0 {
+		t.Errorf("valid concurrency config got errors: %v", errs)
+	}
+
+	negProvider := &Config{
+		Providers:  map[string]ProviderConfig{"p": {MaxConcurrentRequests: -1}},
+		Governance: GovernanceConfig{MaxConcurrentRequests: -2},
+	}
+	errs := validateProviderRateLimits(negProvider)
+	if len(errs) != 2 {
+		t.Fatalf("negative caps should yield 2 errors, got %v", errs)
+	}
+
+	negModel := &Config{
+		Providers: map[string]ProviderConfig{"p": {ModelConcurrency: map[string]int{"m": -3}}},
+	}
+	if errs := validateProviderRateLimits(negModel); len(errs) != 1 {
+		t.Fatalf("negative model limit should yield 1 error, got %v", errs)
+	}
+
+	emptyKey := &Config{
+		Providers: map[string]ProviderConfig{"p": {ModelConcurrency: map[string]int{"": 5}}},
+	}
+	if errs := validateProviderRateLimits(emptyKey); len(errs) != 1 {
+		t.Fatalf("empty model key should yield 1 error, got %v", errs)
+	}
+}
+
 func TestValidatePatternsToList(t *testing.T) {
 	logger := testLogger()
 	tests := []struct {

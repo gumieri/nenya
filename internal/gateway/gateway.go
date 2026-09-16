@@ -66,6 +66,7 @@ type NenyaGateway struct {
 	Secrets            *config.SecretsConfig
 	Providers          map[string]*config.Provider
 	RateLimiter        *infra.RateLimiter
+	ConcurrencyLimiter *infra.ConcurrencyLimiter
 	SecretPatterns     []*regexp.Regexp
 	BlockedPatterns    []*regexp.Regexp
 	EntropyFilter      *pipeline.EntropyFilter
@@ -346,33 +347,34 @@ func buildGateway(cfg config.Config, secrets *config.SecretsConfig, secureClient
 	}
 
 	gw := &NenyaGateway{
-		Config:            cfg,
-		Client:            secureClient,
-		OllamaClient:      ollamaClient,
-		Secrets:           secrets,
-		Providers:         providers,
-		RateLimiter:       infra.NewRateLimiter(rpm, tpm),
-		SecretPatterns:    secretPatterns,
-		BlockedPatterns:   blockedPatterns,
-		EntropyFilter:     entropyFilter,
-		Stats:             infra.NewUsageTracker(),
-		Metrics:           nil,
-		Logger:            logger,
-		AgentState:        nil,
-		ThoughtSigCache:   infra.NewThoughtSignatureCache(1000, 30*time.Minute),
-		ResponseCache:     newResponseCache(cfg, logger, metrics),
-		Embedder:          nil,
-		MCPClients:        buildMCPClients(cfg, logger),
-		MCPToolIndex:      mcp.NewToolRegistry(),
-		ModelCatalog:      mergedCatalog,
-		HealthRegistry:    healthRegistry,
-		LatencyTracker:    infra.NewLatencyTracker(),
-		CostTracker:       infra.NewCostTracker(),
-		BillingTracker:    billing.NewBillingTracker(logger, metrics),
-		QuotaFetcher:      billing.NewQuotaFetcher(logger),
-		SecureMem:         sm,
-		ClientTokenRef:    clientTokenRef,
-		ProviderKeyTokens: providerKeyTokens,
+		Config:             cfg,
+		Client:             secureClient,
+		OllamaClient:       ollamaClient,
+		Secrets:            secrets,
+		Providers:          providers,
+		RateLimiter:        infra.NewRateLimiter(rpm, tpm),
+		ConcurrencyLimiter: infra.NewConcurrencyLimiter(),
+		SecretPatterns:     secretPatterns,
+		BlockedPatterns:    blockedPatterns,
+		EntropyFilter:      entropyFilter,
+		Stats:              infra.NewUsageTracker(),
+		Metrics:            nil,
+		Logger:             logger,
+		AgentState:         nil,
+		ThoughtSigCache:    infra.NewThoughtSignatureCache(1000, 30*time.Minute),
+		ResponseCache:      newResponseCache(cfg, logger, metrics),
+		Embedder:           nil,
+		MCPClients:         buildMCPClients(cfg, logger),
+		MCPToolIndex:       mcp.NewToolRegistry(),
+		ModelCatalog:       mergedCatalog,
+		HealthRegistry:     healthRegistry,
+		LatencyTracker:     infra.NewLatencyTracker(),
+		CostTracker:        infra.NewCostTracker(),
+		BillingTracker:     billing.NewBillingTracker(logger, metrics),
+		QuotaFetcher:       billing.NewQuotaFetcher(logger),
+		SecureMem:          sm,
+		ClientTokenRef:     clientTokenRef,
+		ProviderKeyTokens:  providerKeyTokens,
 	}
 	gw.AgentState = routing.NewAgentStateWithConfig(logger, metrics, &cfg.Governance)
 	gw.SessionRouter = gw.AgentState.SessionRouter
@@ -393,20 +395,38 @@ func buildGateway(cfg config.Config, secrets *config.SecretsConfig, secureClient
 				providerTPM = *pcfg.RatelimitMaxTPM
 			}
 			if providerRPM > 0 || providerTPM > 0 {
-				host := infra.ExtractHost(p.BaseURL)
-				gw.RateLimiter.SetProviderLimits(host, infra.ProviderRateLimits{
+				gw.RateLimiter.SetProviderLimits(name, infra.ProviderRateLimits{
 					MaxRPM: providerRPM,
 					MaxTPM: providerTPM,
 				})
 				logger.Debug("applied per-provider rate limits",
 					"provider", name,
-					"host", host,
+					"host", infra.ExtractHost(p.BaseURL),
 					"rpm", providerRPM,
 					"tpm", providerTPM)
 			}
 		}
 	}
 	return gw
+}
+
+// EffectiveConcurrencyLimit resolves the in-flight request cap for a
+// provider+model pair: per-model override first, then the provider-wide
+// cap, then the governance global. An explicit model override of 0 means
+// unlimited for that model. A return value of 0 means unlimited.
+func (g *NenyaGateway) EffectiveConcurrencyLimit(providerName, model string) int {
+	if pr, ok := g.Providers[providerName]; ok && pr != nil {
+		if _, hasOverride := pr.ModelConcurrency[model]; hasOverride {
+			return pr.ConcurrencyLimit(model)
+		}
+		if pr.MaxConcurrentRequests > 0 {
+			return pr.MaxConcurrentRequests
+		}
+	}
+	if g.Config.Governance.MaxConcurrentRequests > 0 {
+		return g.Config.Governance.MaxConcurrentRequests
+	}
+	return 0
 }
 
 func initSecureMem(secrets *config.SecretsConfig, logger *slog.Logger, secureMemoryRequired *bool, metrics *infra.Metrics) (*security.SecureMem, security.SecureToken) {

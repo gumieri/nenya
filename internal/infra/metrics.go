@@ -41,6 +41,11 @@ type Metrics struct {
 	streamContinuation sync.Map
 	streamEarlyErrors  sync.Map
 
+	concurrencyWait     sync.Map
+	concurrencyRejected sync.Map
+	concurrencyLimited  sync.Map
+	concurrencyInflight sync.Map
+
 	upstreamLatency sync.Map
 	gatewayProcess  sync.Map
 	ollamaBytes     atomic.Uint64
@@ -316,6 +321,74 @@ func (m *Metrics) RecordRateLimitRejected(host string) {
 	}
 	e := getOrCreateEntry(&m.rlRejected, map[string]string{"host": host})
 	e.value.Add(1)
+}
+
+// RecordConcurrencyWait observes the time a request spent waiting for a
+// per-model concurrency slot.
+func (m *Metrics) RecordConcurrencyWait(provider, model string, d time.Duration) {
+	if m == nil {
+		return
+	}
+	h := getOrCreateHist(&m.concurrencyWait, map[string]string{
+		"provider": provider, "model": model,
+	}, HTTPDurationBuckets)
+	h.Observe(d.Seconds())
+}
+
+// RecordConcurrencyRejected counts requests whose client context was
+// canceled while waiting for a concurrency slot.
+func (m *Metrics) RecordConcurrencyRejected(provider, model string) {
+	if m == nil {
+		return
+	}
+	e := getOrCreateEntry(&m.concurrencyRejected, map[string]string{
+		"provider": provider, "model": model,
+	})
+	e.value.Add(1)
+}
+
+// RecordConcurrencyLimited counts upstream concurrency-limit rejections
+// observed despite admission control (e.g. ZAI error 1302).
+func (m *Metrics) RecordConcurrencyLimited(provider, model string) {
+	if m == nil {
+		return
+	}
+	e := getOrCreateEntry(&m.concurrencyLimited, map[string]string{
+		"provider": provider, "model": model,
+	})
+	e.value.Add(1)
+}
+
+// IncConcurrencyInflight increments the concurrency-slot occupancy gauge for
+// a provider+model pair.
+func (m *Metrics) IncConcurrencyInflight(provider, model string) {
+	if m == nil {
+		return
+	}
+	e := getOrCreateEntry(&m.concurrencyInflight, map[string]string{
+		"provider": provider, "model": model,
+	})
+	e.value.Add(1)
+}
+
+// DecConcurrencyInflight decrements the concurrency-slot occupancy gauge.
+// Never goes below zero.
+func (m *Metrics) DecConcurrencyInflight(provider, model string) {
+	if m == nil {
+		return
+	}
+	e := getOrCreateEntry(&m.concurrencyInflight, map[string]string{
+		"provider": provider, "model": model,
+	})
+	for {
+		old := e.value.Load()
+		if old == 0 {
+			return
+		}
+		if e.value.CompareAndSwap(old, old-1) {
+			return
+		}
+	}
 }
 
 func (m *Metrics) RecordCooldown(agent, provider, model string) {
@@ -1033,6 +1106,10 @@ func (m *Metrics) WritePrometheus(w io.Writer) {
 		"Total Ollama interceptions by trigger reason.", &m.interceptions)
 	m.writeCounterMap(w, "nenya_ratelimit_rejected_total",
 		"Total requests rejected by rate limiter.", &m.rlRejected)
+	m.writeCounterMap(w, "nenya_concurrency_rejected_total",
+		"Total requests canceled while waiting for a concurrency slot.", &m.concurrencyRejected)
+	m.writeCounterMap(w, "nenya_concurrency_limited_total",
+		"Total upstream concurrency-limit rejections observed despite admission control.", &m.concurrencyLimited)
 	m.writeCounterMap(w, "nenya_agent_cooldowns_total",
 		"Total agent model cooldowns activated.", &m.cooldowns)
 	m.writeCounterMap(w, "nenya_agent_targets_exhausted_total",
@@ -1054,6 +1131,10 @@ func (m *Metrics) WritePrometheus(w io.Writer) {
 
 	m.writeHistogramMap(w, "nenya_upstream_request_duration_seconds",
 		"Upstream provider request duration in seconds.", &m.upstreamLatency)
+	m.writeHistogramMap(w, "nenya_concurrency_wait_seconds",
+		"Time requests spent waiting for a per-model concurrency slot.", &m.concurrencyWait)
+	m.writeGaugeMap(w, "nenya_concurrency_inflight",
+		"Currently held concurrency slots per provider and model.", &m.concurrencyInflight)
 	m.writeHistogramMap(w, "nenya_gateway_processing_duration_seconds",
 		"Gateway processing time (before upstream) in seconds.", &m.gatewayProcess)
 	m.writeCounterAtomic(w, "nenya_ollama_summarized_bytes_total",

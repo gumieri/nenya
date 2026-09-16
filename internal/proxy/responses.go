@@ -74,7 +74,7 @@ func (p *Proxy) handleResponses(gw *gateway.NenyaGateway, w http.ResponseWriter,
 	ctx, cancel := p.buildResponsesContext(r, provider)
 	defer cancel()
 
-	if !gw.RateLimiter.Check(provider.BaseURL, 0) {
+	if !gw.RateLimiter.Check(provider.Name, provider.BaseURL, 0) {
 		writeStructuredError(w, http.StatusTooManyRequests, infra.ErrorKindRateLimited, "Rate limit exceeded")
 		return
 	}

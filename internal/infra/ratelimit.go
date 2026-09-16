@@ -6,9 +6,11 @@ import (
 	"time"
 )
 
-// RateLimiter manages per-host rate limiting with provider-specific RPM/TPM limits.
-// When Check is called for a new host, it uses the provided limits if available,
-// otherwise falls back to the global defaults.
+// RateLimiter manages rate limiting with provider-specific RPM/TPM limits.
+// Buckets are keyed by provider name when the caller supplies one, falling
+// back to the upstream host for anonymous calls. Provider keying prevents
+// same-host providers (e.g. "zai" and "zai-coding-plan", both api.z.ai)
+// from silently sharing one bucket.
 type RateLimiter struct {
 	mu             sync.Mutex
 	limits         map[string]*rateLimiter
@@ -53,20 +55,28 @@ func NewRateLimiter(maxRPM, maxTPM int) *RateLimiter {
 }
 
 // Check tests whether a request to the given URL is allowed under rate limits.
-// It uses the per-host bucket and applies either provider-specific limits (if set
-// via SetProviderLimits) or the global defaults.
-func (rl *RateLimiter) Check(upstreamURL string, tokenCount int) bool {
-	host := upstreamURL
-	if u, err := url.Parse(upstreamURL); err == nil && u.Host != "" {
-		host = u.Host
-	}
-
-	limiter := rl.getOrCreateBucket(host)
+// providerName scopes the bucket to the provider (preferred); when empty the
+// bucket falls back to the upstream host. Provider-specific limits (set via
+// SetProviderLimits) apply when set, otherwise the global defaults.
+func (rl *RateLimiter) Check(providerName, upstreamURL string, tokenCount int) bool {
+	limiter := rl.getOrCreateBucket(bucketKey(providerName, upstreamURL))
 	if limiter == nil {
 		return false
 	}
 
 	return limiter.check(tokenCount)
+}
+
+// bucketKey resolves the bucket key: provider name when set, otherwise the
+// upstream URL's host, otherwise the raw URL.
+func bucketKey(providerName, upstreamURL string) string {
+	if providerName != "" {
+		return providerName
+	}
+	if u, err := url.Parse(upstreamURL); err == nil && u.Host != "" {
+		return u.Host
+	}
+	return upstreamURL
 }
 
 // getOrCreateBucket returns the rate limiter for the given host, creating one
@@ -148,14 +158,16 @@ func (l *rateLimiter) check(tokenCount int) bool {
 	return true
 }
 
-// SetProviderLimits updates the rate limits for a specific host.
-// If a bucket already exists for the host, its limits are updated immediately.
-// Zero or negative values fall back to the global defaults. To disable rate
-// limiting for a provider, set the global governance limits to zero instead.
+// SetProviderLimits updates the rate limits for a specific provider. The
+// provider name doubles as the bucket key used by Check when callers pass
+// the same name. If a bucket already exists, its limits are updated
+// immediately. Zero or negative values fall back to the global defaults. To
+// disable rate limiting for a provider, set the global governance limits to
+// zero instead.
 //
 // Lock ordering: rl.mu (global) → limiter.mu (per-bucket). This order must
 // never be inverted elsewhere in the codebase.
-func (rl *RateLimiter) SetProviderLimits(host string, limits ProviderRateLimits) {
+func (rl *RateLimiter) SetProviderLimits(providerName string, limits ProviderRateLimits) {
 	rl.mu.Lock()
 	defer rl.mu.Unlock()
 
@@ -166,9 +178,9 @@ func (rl *RateLimiter) SetProviderLimits(host string, limits ProviderRateLimits)
 		limits.MaxTPM = rl.maxTPM
 	}
 
-	rl.providerLimits[host] = limits
+	rl.providerLimits[providerName] = limits
 
-	if limiter, exists := rl.limits[host]; exists {
+	if limiter, exists := rl.limits[providerName]; exists {
 		limiter.mu.Lock()
 		limiter.maxRPM = limits.MaxRPM
 		limiter.maxTPM = limits.MaxTPM

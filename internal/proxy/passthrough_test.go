@@ -216,7 +216,7 @@ func TestHandlePassthrough(t *testing.T) {
 
 			if tt.name == "rate limit exceeded" {
 				for range 15 {
-					gw.RateLimiter.Check(tt.providerURL, 0)
+					gw.RateLimiter.Check(tt.providerName, tt.providerURL, 0)
 				}
 			}
 

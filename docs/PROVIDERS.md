@@ -165,7 +165,23 @@ Both variants share the same `ZAIAdapter` at runtime, providing identical reques
   - `{"enabled": true}` → force enable for all models
   - `{"enabled": false}` → force disable
 - **Auth**: `bearer`
-- **Error**: Zhipu error codes (1302/1303 → rate-limited, 1308/1310 → quota exhausted, 1312 → retryable, 1311/1313 → permanent) + `model_context_window_exceeded` → retryable
+- **Error**: Zhipu error codes (1302 → concurrency-limited, 1303 → rate-limited, 1308/1310 → quota exhausted, 1312 → retryable, 1311/1313 → permanent) + `model_context_window_exceeded` → retryable
+
+**Concurrency limits (per model):**
+The Coding Plan (and the Z.AI platform generally) enforces rate limits as a **per-model concurrency cap** — the number of in-flight requests — not RPM/TPM (see your account's "Current Rate Limits" page; limits vary by plan tier). Exceeding it yields error `1302`. Configure matching caps so Nenya queues excess requests instead of colliding upstream:
+
+```json
+"zai-coding-plan": {
+  "url": "https://api.z.ai/api/coding/paas/v4/chat/completions",
+  "max_concurrent_requests": 5,
+  "model_concurrency": {
+    "glm-5.3": 5,
+    "glm-5.3-flash": 50
+  }
+}
+```
+
+Resolution order: `model_concurrency[model]` → `max_concurrent_requests` → `governance.max_concurrent_requests` → unlimited. Queued requests wait (bounded by the client context) and the slot is held for the entire stream lifetime. When a `1302` still slips through (e.g. misconfigured limit), Nenya classifies it as `concurrency_limited`: no provider cooldown, no circuit-breaker failure, short ~200ms retry. Values in the example are illustrative — copy real values from your plan's rate-limits page.
 
 **GLM-5.3 family:**
 <!-- Volatile external fact: re-verify glm-5.3/glm-5.3-flash availability on the standard zai API against Z.ai docs. -->

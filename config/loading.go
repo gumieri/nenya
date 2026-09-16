@@ -747,6 +747,8 @@ func ResolveProviders(cfg *Config, secrets *SecretsConfig) map[string]*Provider 
 			Billing:                  pc.Billing,
 			AllowedModels:            pc.AllowedModels,
 			allowedRE:                compiledRE,
+			MaxConcurrentRequests:    pc.MaxConcurrentRequests,
+			ModelConcurrency:         pc.ModelConcurrency,
 		}
 	}
 	return providers

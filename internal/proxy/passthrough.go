@@ -66,7 +66,7 @@ func (p *Proxy) handlePassthrough(gw *gateway.NenyaGateway, w http.ResponseWrite
 	}
 	subPath = cleanPath
 
-	if !gw.RateLimiter.Check(provider.BaseURL, 0) {
+	if !gw.RateLimiter.Check(provider.Name, provider.BaseURL, 0) {
 		gw.Metrics.RecordRateLimitRejected(infra.ExtractHost(provider.BaseURL))
 		ctxLogger.Warn("rate limit exceeded", "provider", providerName)
 		writeStructuredError(w, http.StatusTooManyRequests, infra.ErrorKindRateLimited, "Rate limit exceeded")

@@ -471,6 +471,14 @@ For providers with multiple credential accounts (configured via `accounts[]` in 
 
 The circuit breaker integrates with the `BackoffTracker` for exponential backoff on rate-limit and quota errors. `calculateBackoff` (`internal/proxy/retry.go:50`) implements base 500ms exponential doubling with ±750ms jitter, capped at 8 seconds. Per-provider `RetryableStatusCodes` allow custom retry policies beyond the standard defaults (429, 500, 502, 503, 504).
 
+### Per-Model Concurrency Admission Control
+
+Some providers (notably the Z.AI Coding Plan) rate-limit by **concurrent in-flight requests per model**, not by requests/tokens per minute. Nenya models this with `infra.ConcurrencyLimiter` (`internal/infra/concurrency.go`): lazily-created buffered-channel semaphores keyed `provider/model`. Limits resolve as `model_concurrency[model]` → `max_concurrent_requests` → `governance.max_concurrent_requests` → unlimited (`NenyaGateway.EffectiveConcurrencyLimit`).
+
+In `prepareAndSend` (`internal/proxy/retry.go`) the gateway acquires a slot **before** dispatching and holds it for the **entire SSE stream/response lifetime** (the release is threaded through `upstreamAction` and fired at every terminal path), queueing excess requests with a context-aware wait instead of colliding upstream. Adapter-level classification distinguishes *concurrency* from *rate limits*: ZAI `1302` maps to a dedicated `ErrorConcurrencyLimited` class that retries with a short ~200ms fixed wait and **does not** activate cooldowns or count circuit-breaker failures (saturation is not provider illness); `1303` (RPM/TPM frequency) keeps the rate-limit path. Rate-limit buckets are keyed by provider name, so same-host providers (e.g. `zai` and `zai-coding-plan`) no longer share a bucket.
+
+Metrics: `nenya_concurrency_inflight{provider,model}`, `nenya_concurrency_wait_seconds`, `nenya_concurrency_rejected_total`, `nenya_concurrency_limited_total`.
+
 ## Provider Adapter Pattern
 
 The `internal/adapter` package implements the Adapter Pattern to manage provider-specific wire format differences. See [`ADAPTERS.md`](ADAPTERS.md) for full details.

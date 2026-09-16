@@ -14,7 +14,7 @@ func TestZAIAdapter_NormalizeError(t *testing.T) {
 		body string
 		want ErrorClass
 	}{
-		{"concurrency_1302", 429, `{"error":{"code":"1302"}}`, ErrorRateLimited},
+		{"concurrency_1302", 429, `{"error":{"code":"1302"}}`, ErrorConcurrencyLimited},
 		{"frequency_1303", 429, `{"error":{"code":"1303"}}`, ErrorRateLimited},
 		{"usage_limit_1308", 429, `{"error":{"code":"1308"}}`, ErrorQuotaExhausted},
 		{"weekly_limit_1310", 429, `{"error":{"code":"1310"}}`, ErrorQuotaExhausted},
@@ -27,7 +27,7 @@ func TestZAIAdapter_NormalizeError(t *testing.T) {
 		{"empty_body_429", 429, ``, ErrorRateLimited},
 		{"malformed_json_429", 429, `{invalid`, ErrorRateLimited},
 		{"quota_on_403", 403, `{"error":{"code":"1310"}}`, ErrorQuotaExhausted},
-		{"concurrency_on_500", 500, `{"error":{"code":"1302"}}`, ErrorRateLimited},
+		{"concurrency_on_500", 500, `{"error":{"code":"1302"}}`, ErrorConcurrencyLimited},
 		{"generic_400", 400, `{"error":{"code":"1311"}}`, ErrorPermanent},
 		{"context_window_exceeded", 400, `{"error":{"message":"model_context_window_exceeded"}}`, ErrorRetryable},
 		{"context_window_exceeded_in_message", 400, `{"error":{"message":"request failed: model_context_window_exceeded for model glm-5"}}`, ErrorRetryable},

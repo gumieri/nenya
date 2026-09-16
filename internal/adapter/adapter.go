@@ -21,6 +21,11 @@ const (
 	ErrorRetryable
 	ErrorRateLimited
 	ErrorQuotaExhausted
+	// ErrorConcurrencyLimited marks a per-model in-flight (concurrency)
+	// cap rejection — e.g. ZAI error 1302. Saturation is not provider
+	// illness: callers must neither activate a cooldown nor count a
+	// circuit-breaker failure, and should retry after a short fixed wait.
+	ErrorConcurrencyLimited
 )
 
 func (e ErrorClass) String() string {
@@ -33,6 +38,8 @@ func (e ErrorClass) String() string {
 		return "rate_limited"
 	case ErrorQuotaExhausted:
 		return "quota_exhausted"
+	case ErrorConcurrencyLimited:
+		return "concurrency_limited"
 	default:
 		return "unknown"
 	}
