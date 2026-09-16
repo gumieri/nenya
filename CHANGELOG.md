@@ -7,6 +7,9 @@ All notable changes to this project will be documented in this file.
 ### Added
 - **Synthesized `x-opencode-session` for session-unaware clients**: when the client does not send the header, Nenya now generates a stable per-conversation session ID (`nenya-<hash16>`, derived from agent + system prompt + first user message — the same identity as sticky routing) on both chat routes, giving session-unaware clients provider-side routing/prompt-cache affinity and satisfying upstreams that require the header
 
+### Changed
+- **Static model catalog refresh** (sources: LiteLLM catalog, models.dev, router-for-me snapshot, 2026-09-16): repriced the Gemini 3.x flash line and 3.1-pro, fixed shared 2.5-flash/flash-lite pricing, corrected Anthropic limits (sonnet-4-6 → 1M context, 3-7-sonnet → 200k/64k, 3-5-sonnet → 8k output cap) and opus-4-8 pricing, corrected DeepSeek v4 pro/flash pricing, and raised Groq llama-3.3-70b output to 32k; added gemini-3.1-flash-lite, gemini-3.5-flash-lite, gemini-3.6/3.7/3.8-flash, gemini-flash-latest/flash-lite-latest/pro-latest aliases, claude-opus-5, claude-fable-5-1, claude-mythos-5/5-1, deepseek-v4.1-flash, glm-5-code, grok-4.1-fast/4.5/4.6/composer-2.5-fast, and the current Groq catalog (llama-3.1-8b-instant, llama-4 maverick/scout, kimi-k2-instruct-0905, gpt-oss-120b/20b, qwen3-32b/3.6-27b/3.8-27b); removed the retired mixtral-8x7b-32768 from Groq
+
 ### Fixed
 - **OpenCode Zen/Go `MissingSessionID` errors**: the client-supplied `x-opencode-session` header is now forwarded to upstreams on all dispatch paths (was: silently dropped by the header allowlist); OpenCode Go rejects chat requests without this header. Unusable client values — whitespace-only, non-printable-ASCII or non-ASCII, or over-long — are replaced with the synthesized session ID, or dropped when no session key is derivable, instead of failing every round trip mid-dispatch. (Tab characters inside values are allowed.)
 
