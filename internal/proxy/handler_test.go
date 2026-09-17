@@ -14,6 +14,7 @@ import (
 
 	"github.com/nenya/config"
 	"github.com/nenya/internal/gateway"
+	"github.com/nenya/internal/infra"
 	"github.com/nenya/internal/testutil"
 )
 
@@ -745,4 +746,36 @@ func TestServeHTTP_Models_AgentDescription(t *testing.T) {
 	if desc, ok := agentEntry["description"].(string); !ok || desc != "Test agent with description" {
 		t.Errorf("expected description='Test agent with description', got %v", agentEntry["description"])
 	}
+}
+
+func TestServeHTTP_DrainRejectsNewRequests(t *testing.T) {
+	p := &Proxy{ShutdownCtx: context.Background()}
+	p.Shutdown.Store(true)
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+	rec := httptest.NewRecorder()
+	p.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("expected 503 during drain, got %d", rec.Code)
+	}
+	if ra := rec.Header().Get("Retry-After"); ra == "" {
+		t.Error("expected Retry-After header during drain")
+	}
+	var body struct {
+		Kind string `json:"error_kind"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("body not structured JSON: %v", err)
+	}
+	if body.Kind != string(infra.ErrorKindInternal) {
+		t.Errorf("expected error_kind internal_error, got %q", body.Kind)
+	}
+}
+
+func TestProxy_WaitAutoSave_ReturnsImmediately(t *testing.T) {
+	p := &Proxy{ShutdownCtx: context.Background()}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	p.WaitAutoSave(ctx) // no goroutines tracked: must not block
 }

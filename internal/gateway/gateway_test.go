@@ -2,12 +2,18 @@ package gateway
 
 import (
 	"context"
+	"encoding/json"
+	"io"
 	"log/slog"
+	"net/http"
+	"net/http/httptest"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/nenya/config"
 	"github.com/nenya/internal/infra"
+	"github.com/nenya/internal/local"
 	"github.com/nenya/internal/security"
 	"github.com/nenya/internal/util"
 )
@@ -879,4 +885,61 @@ func TestNew_ProviderRateLimitUserOverride(t *testing.T) {
 	} else if rej.Dimension != "rpm" || rej.Limit != 2 {
 		t.Fatalf("expected rpm limit 2, got %+v", rej)
 	}
+}
+
+// TestShutdown_UnloadsEngineModelsAndStopsFetcher verifies the graceful
+// shutdown sequence: pinned local-engine models are unloaded, the quota
+// fetcher (started on a service-lifetime context) stops via Close, and
+// Shutdown returns within its budget.
+func TestShutdown_UnloadsEngineModelsAndStopsFetcher(t *testing.T) {
+	var mu sync.Mutex
+	var unloadKeepAlives []int
+	engineServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			KeepAlive int `json:"keep_alive"`
+		}
+		if body, err := io.ReadAll(r.Body); err == nil {
+			_ = json.Unmarshal(body, &req)
+		}
+		mu.Lock()
+		unloadKeepAlives = append(unloadKeepAlives, req.KeepAlive)
+		mu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"done": true, "response": ""}`))
+	}))
+	defer engineServer.Close()
+
+	gw := New(context.Background(), testConfig(), testSecrets(), testLogger())
+
+	engine := local.NewEngineManager(&config.LocalEngineConfig{
+		BaseURL:        engineServer.URL,
+		TimeoutSeconds: 5,
+		MaxSessions:    3,
+		StartupModels:  []string{"test-model"},
+	}, testLogger())
+	if err := engine.Startup(context.Background()); err != nil {
+		t.Fatalf("engine startup: %v", err)
+	}
+	gw.LocalEngineManager = engine
+
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if err := gw.Shutdown(shutdownCtx); err != nil {
+		t.Fatalf("Shutdown: %v", err)
+	}
+
+	if engine.IsLoaded("test-model") {
+		t.Error("startup model should be unloaded after Shutdown")
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	// First call is the Startup load (keep_alive=-1, pinned), second is
+	// the Shutdown unload (keep_alive=0, evicted from Ollama).
+	if len(unloadKeepAlives) != 2 || unloadKeepAlives[0] != -1 || unloadKeepAlives[1] != 0 {
+		t.Fatalf("expected [load=-1, unload=0] generate calls, got %v", unloadKeepAlives)
+	}
+
+	// Close (inside Shutdown) already stopped the fetcher; a second Stop
+	// must be a no-op, not a double-close panic.
+	gw.QuotaFetcher.Stop()
 }

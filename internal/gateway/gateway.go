@@ -139,7 +139,12 @@ func New(ctx context.Context, cfg config.Config, secrets *config.SecretsConfig, 
 	gw.Metrics.CBStates = gw.AgentState.CBSnapshot
 	gw.Metrics.SessionActive = gw.AgentState.SessionRouter.Active
 
-	gw.QuotaFetcher.Start(ctx, gw.BillingTracker, cfg.Providers, secrets, gw)
+	// Service-lifetime context: New() often receives a bounded startup
+	// context (main passes a 60s budget), but quota polling must run for
+	// the whole process lifetime. WithoutCancel detaches cancellation
+	// while keeping context values; QuotaFetcher.Stop (via Close during
+	// Shutdown) is the only thing that ends polling.
+	gw.QuotaFetcher.Start(context.WithoutCancel(ctx), gw.BillingTracker, cfg.Providers, secrets, gw)
 
 	if gw.ResponseCache != nil {
 		gw.Embedder = gw.ResponseCache.GetEmbedder()
@@ -743,14 +748,21 @@ func (g *NenyaGateway) Close() {
 }
 
 // Shutdown gracefully shuts down the gateway with a context timeout.
-// It waits for in-flight MCP operations to complete and cleans up resources.
+// It unloads pinned local-engine models, waits for in-flight MCP
+// operations to complete, and cleans up resources.
 func (g *NenyaGateway) Shutdown(ctx context.Context) error {
 	g.Logger.Info("starting graceful shutdown")
 
 	done := make(chan struct{})
 	go func() {
+		defer close(done)
+		if g.LocalEngineManager != nil {
+			// Startup models are pinned with keep_alive=-1; unload them
+			// (keep_alive=0) so they do not stay resident in Ollama after
+			// the process exits. Errors are logged inside, never fatal.
+			g.LocalEngineManager.Shutdown(ctx)
+		}
 		g.Close()
-		close(done)
 	}()
 
 	select {

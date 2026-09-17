@@ -103,6 +103,30 @@ func (em *EngineManager) GetLoadedModels() []string {
 	return em.sessions.GetLoadedModels()
 }
 
+// Shutdown unloads every currently loaded model from the Ollama server.
+// Startup models are loaded with keep_alive=-1 (pinned), so without an
+// explicit unload (keep_alive=0) they stay resident after nenya exits.
+// Unload errors are logged and skipped: one stuck model must not block
+// teardown of the rest. A canceled context stops remaining unloads.
+func (em *EngineManager) Shutdown(ctx context.Context) {
+	models := em.sessions.GetLoadedModels()
+	if len(models) == 0 {
+		return
+	}
+
+	em.logger.Info("unloading local engine models", "count", len(models))
+	for i, modelID := range models {
+		if ctx.Err() != nil {
+			em.logger.Warn("shutdown canceled before unloading all models",
+				"unloaded", i, "remaining", len(models)-i)
+			return
+		}
+		if err := em.UnloadModel(ctx, modelID); err != nil {
+			em.logger.Warn("shutdown unload failed", "model", modelID, "error", err)
+		}
+	}
+}
+
 func evictLRU(sm *SessionManager, logger *slog.Logger) bool {
 	models := sm.GetLoadedModels()
 	if len(models) == 0 {

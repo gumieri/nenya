@@ -10,6 +10,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -36,6 +37,10 @@ type Proxy struct {
 	ShutdownCtx        context.Context
 	Shutdown           atomic.Bool
 	lastQuotaExhausted atomic.Bool
+	// autoSaveWG tracks fire-and-forget MCP auto-save goroutines so the
+	// drain sequence can wait (bounded) for a mid-CallTool save to finish
+	// instead of killing it at process exit.
+	autoSaveWG sync.WaitGroup
 }
 
 // StoreGateway sets the gateway instance for the proxy.
@@ -48,9 +53,34 @@ func (p *Proxy) Gateway() *gateway.NenyaGateway {
 	return p.gw.Load()
 }
 
+// WaitAutoSave blocks until all in-flight MCP auto-save goroutines have
+// finished or the context is done, whichever comes first. Called during
+// drain so shutdown cannot kill an auto-save mid-CallTool.
+func (p *Proxy) WaitAutoSave(ctx context.Context) {
+	done := make(chan struct{})
+	go func() {
+		p.autoSaveWG.Wait()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-ctx.Done():
+	}
+}
+
 // ServeHTTP handles incoming HTTP requests and routes them to appropriate handlers.
 func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	defer p.recoverPanic(w)
+
+	if p.Shutdown.Load() {
+		// Drain window: the signal arrived and the listener is closing,
+		// but in-flight requests are still completing. Reject anything
+		// new instead of accepting work the process cannot finish.
+		w.Header().Set("Retry-After", "5")
+		writeStructuredError(w, http.StatusServiceUnavailable, infra.ErrorKindInternal, "Server is shutting down")
+		return
+	}
 
 	gw := p.Gateway()
 	if gw == nil {

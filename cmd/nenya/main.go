@@ -285,6 +285,9 @@ func eventLoop(logger *slog.Logger, paths configPaths, p *proxy.Proxy, ctx conte
 		select {
 		case err := <-serverErr:
 			logger.Error("server failed", "err", err)
+			// Best-effort cleanup on the failure path too; the exit code
+			// stays 1 regardless.
+			_ = shutdownGateway(p, logger, 10*time.Second)
 			return 1
 		case <-sighup:
 			logger.Info("SIGHUP received, reloading configuration...")
@@ -292,18 +295,49 @@ func eventLoop(logger *slog.Logger, paths configPaths, p *proxy.Proxy, ctx conte
 		case <-ctx.Done():
 			logger.Info("shutting down gracefully...")
 
-			shutdownCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-
+			drainCtx, cancelDrain := context.WithTimeout(context.Background(), 30*time.Second)
 			p.Shutdown.Store(true)
-
-			if err := srv.Shutdown(shutdownCtx); err != nil {
-				logger.Error("HTTP server shutdown failed", "err", err)
+			srvErr := srv.Shutdown(drainCtx)
+			cancelDrain()
+			if srvErr != nil {
+				logger.Error("HTTP server shutdown failed", "err", srvErr)
 			}
-			cancel()
+
+			// MCP auto-saves get a short grace period beyond the drain so
+			// a mid-CallTool save is not killed at exit.
+			saveCtx, cancelSave := context.WithTimeout(context.Background(), 2*time.Second)
+			p.WaitAutoSave(saveCtx)
+			cancelSave()
+
+			gwErr := shutdownGateway(p, logger, 15*time.Second)
+
 			logger.Info("server stopped")
+			// A timed-out drain means in-flight work was abandoned:
+			// surface it in the exit code instead of exiting clean.
+			if srvErr != nil || gwErr != nil {
+				return 1
+			}
 			return 0
 		}
 	}
+}
+
+// shutdownGateway tears down gateway resources — quota fetcher, MCP
+// transports, pinned local-engine models, secure memory — with its own
+// time budget so HTTP drain time cannot starve resource cleanup.
+func shutdownGateway(p *proxy.Proxy, logger *slog.Logger, budget time.Duration) error {
+	gw := p.Gateway()
+	if gw == nil {
+		return nil
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), budget)
+	defer cancel()
+	if err := gw.Shutdown(ctx); err != nil {
+		logger.Error("gateway shutdown failed", "err", err)
+		return err
+	}
+	return nil
 }
 
 func reloadConfig(ctx context.Context, p *proxy.Proxy, paths configPaths, logger *slog.Logger) {

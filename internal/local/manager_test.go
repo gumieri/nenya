@@ -3,6 +3,7 @@ package local
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -186,4 +187,62 @@ func TestEngineManager_LoadModelAutoLoadDisabled(t *testing.T) {
 	if em.IsLoaded("qwen2.5-coder:7b") {
 		t.Error("model should not be loaded initially")
 	}
+}
+
+func TestEngineManager_Shutdown_UnloadsAllModels(t *testing.T) {
+	var mu sync.Mutex
+	var unloadKeepAlives []int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req generateRequest
+		body, err := io.ReadAll(r.Body)
+		if err == nil {
+			_ = json.Unmarshal(body, &req)
+		}
+		mu.Lock()
+		unloadKeepAlives = append(unloadKeepAlives, req.KeepAlive)
+		mu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"done": true, "response": ""}`))
+	}))
+	defer server.Close()
+
+	logger := slog.Default()
+	cfg := &config.LocalEngineConfig{
+		BaseURL:        server.URL,
+		TimeoutSeconds: 10,
+		MaxSessions:    3,
+		StartupModels:  []string{"model1", "model2"},
+	}
+	em := NewEngineManager(cfg, logger)
+	ctx := context.Background()
+
+	if err := em.Startup(ctx); err != nil {
+		t.Fatalf("Startup failed: %v", err)
+	}
+
+	em.Shutdown(ctx)
+
+	if em.IsLoaded("model1") || em.IsLoaded("model2") {
+		t.Error("models should be unloaded after Shutdown")
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	// 2 load requests (keep_alive=-1 by LoadOptions default) + 2 unload
+	// requests; every unload must carry keep_alive=0 so Ollama evicts
+	// the pinned models.
+	if len(unloadKeepAlives) != 4 {
+		t.Fatalf("expected 4 total generate calls (2 load + 2 unload), got %d", len(unloadKeepAlives))
+	}
+	for i, ka := range unloadKeepAlives[2:] {
+		if ka != 0 {
+			t.Errorf("unload request %d: expected keep_alive=0, got %d", i, ka)
+		}
+	}
+}
+
+func TestEngineManager_Shutdown_NoModelsNoop(t *testing.T) {
+	em := NewEngineManager(&config.LocalEngineConfig{
+		BaseURL: "http://127.0.0.1:1", // nothing loaded: no HTTP call expected
+	}, slog.Default())
+	em.Shutdown(context.Background()) // must not panic or block
 }

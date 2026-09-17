@@ -1374,7 +1374,9 @@ func (p *Proxy) asyncMCPAutoSave(gw *gateway.NenyaGateway, agentName string, con
 		return
 	}
 
+	p.autoSaveWG.Add(1)
 	go func() {
+		defer p.autoSaveWG.Done()
 		liveGW := p.Gateway()
 		if liveGW == nil {
 			return
