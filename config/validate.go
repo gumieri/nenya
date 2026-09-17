@@ -141,6 +141,11 @@ func validateAgentStrategies(agents map[string]AgentConfig) []string {
 		if !validAgentStrategies[agent.Strategy] {
 			errs = append(errs, fmt.Sprintf("agents[%q].strategy: invalid value %q, must be one of round-robin, fallback, sticky", name, agent.Strategy))
 		}
+		switch agent.StickyProvider {
+		case "", "off", "lenient", "strict":
+		default:
+			errs = append(errs, fmt.Sprintf("agents[%q].sticky_provider: invalid value %q, must be one of off, lenient, strict", name, agent.StickyProvider))
+		}
 	}
 	return errs
 }

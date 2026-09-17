@@ -600,3 +600,23 @@ func TestValidateStreamIdleTimeoutSeconds(t *testing.T) {
 		})
 	}
 }
+
+func TestValidateStickyProvider(t *testing.T) {
+	valid := map[string]AgentConfig{
+		"a": {Strategy: "fallback", StickyProvider: ""},
+		"b": {Strategy: "fallback", StickyProvider: "off"},
+		"c": {Strategy: "fallback", StickyProvider: "lenient"},
+		"d": {Strategy: "fallback", StickyProvider: "strict"},
+	}
+	if errs := validateAgentStrategies(valid); len(errs) != 0 {
+		t.Fatalf("expected no errors, got %v", errs)
+	}
+
+	invalid := map[string]AgentConfig{
+		"a": {Strategy: "fallback", StickyProvider: "maybe"},
+	}
+	errs := validateAgentStrategies(invalid)
+	if len(errs) != 1 || !strings.Contains(errs[0], "sticky_provider") {
+		t.Fatalf("expected sticky_provider error, got %v", errs)
+	}
+}

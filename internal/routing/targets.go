@@ -202,6 +202,9 @@ type TargetBuildOpts struct {
 
 // BuildTargetList expands the agent's model chain and builds one upstream
 // target per usable entry, active targets first followed by cooling ones.
+// Note: repeated provider+model entries in the chain are intentional —
+// they are the operator-configured failover-within-provider mechanism the
+// forward-only retry sweep relies on, so they must not be deduplicated.
 func (a *AgentState) BuildTargetList(ctx context.Context, opts TargetBuildOpts) []UpstreamTarget {
 	models := a.expandModels(opts.AgentName, opts.Agent, opts.Catalog, opts.Providers, opts.Logger)
 	if len(models) == 0 {

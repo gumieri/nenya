@@ -95,6 +95,13 @@ type AgentConfig struct {
 	BudgetLimitUSD          float64         `json:"budget_limit_usd,omitempty"`
 	CacheSalt               *string         `json:"cache_salt,omitempty"`
 	StickySessionTTLSeconds int             `json:"sticky_session_ttl_seconds,omitempty"`
+	// StickyProvider controls cache-affinity failover for this agent:
+	// "" / "off" (default) fail over freely; "lenient" fails over only
+	// when the failure is a 5xx, the target's circuit was open, or a
+	// context-limit summarization retry is available; "strict" never
+	// fails over to another target (same-target backoff retries and the
+	// summarization retry still run).
+	StickyProvider string `json:"sticky_provider,omitempty"`
 }
 
 func (a *AgentConfig) UnmarshalJSON(data []byte) error {

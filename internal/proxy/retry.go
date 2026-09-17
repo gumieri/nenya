@@ -224,6 +224,9 @@ type retryLoop struct {
 	// rateLimitedPairs tracks provider+account pairs that returned 429 during
 	// this failover round (NENYA-41): later targets on the same pair are
 	// skipped while a different pair remains eligible.
+	// lastFailReason classifies the most recent target failure for the
+	// sticky_provider failover gate (NENYA-18); reset before each dispatch.
+	lastFailReason   failReason
 	rateLimitedPairs map[string]bool
 }
 
@@ -262,8 +265,16 @@ func (rl *retryLoop) handleActionResult(i int, target routing.UpstreamTarget, ac
 	defer action.releaseSlot()
 	switch action.kind {
 	case actionContinue:
+		rl.lastFailReason = failReasonDispatch
 		return false
 	case actionError:
+		// Classify before signal handling: both retrySignalBreak and
+		// retrySignalContinue lead to a failover decision in Run.
+		if action.resp.StatusCode >= http.StatusInternalServerError {
+			rl.lastFailReason = failReason5xx
+		} else {
+			rl.lastFailReason = failReason4xx
+		}
 		switch rl.handleActionError(i, target, action) {
 		case retrySignalDone:
 			return true
@@ -288,6 +299,7 @@ func (rl *retryLoop) handleActionResult(i int, target routing.UpstreamTarget, ac
 			apiKey:       rl.opts.ApiKey,
 		}, action)
 		if result.empty {
+			rl.lastFailReason = failReasonStream
 			rl.ctxLogger.Warn("empty stream from upstream, trying next target",
 				"model", target.Model, "provider", target.Provider)
 			return false
@@ -295,6 +307,7 @@ func (rl *retryLoop) handleActionResult(i int, target routing.UpstreamTarget, ac
 		if result.err != nil {
 			// Transport-level failure before any stream bytes. Fail over to the
 			// next target; on the last target Exhausted() surfaces the error.
+			rl.lastFailReason = failReasonStream
 			rl.lastStreamErr = result.err
 			rl.ctxLogger.Warn("stream read error from upstream, trying next target",
 				"err", result.err, "model", target.Model, "provider", target.Provider)
@@ -474,6 +487,7 @@ func (rl *retryLoop) handleContextLimitError(i int, target routing.UpstreamTarge
 			rl.summarizedPayload = summarizedPayload
 			rl.gw.Metrics.RecordSummarizationRetry(rl.opts.AgentName, target.Provider, target.Model)
 			rl.ctxLogger.Info("context limit summarization succeeded, retrying with summarized payload")
+			rl.lastFailReason = failReasonSummarized
 			return retrySignalContinue
 		}
 		rl.ctxLogger.Warn("context limit summarization failed", "err", sumErr)
@@ -484,6 +498,49 @@ func (rl *retryLoop) handleContextLimitError(i int, target routing.UpstreamTarge
 	gwErr := ParseProviderError(target.Provider, action.resp.StatusCode, action.body, nil)
 	rl.writeUpstreamErrorToClient(action.resp.StatusCode, gwErr)
 	return retrySignalDone
+}
+
+// failReason classifies why the loop is about to move past a target, so
+// the sticky_provider policy can gate failover (NENYA-18).
+type failReason int
+
+const (
+	// failReasonNone is the zero value: no failover decision recorded.
+	failReasonNone failReason = iota
+	// failReasonSummarized: a context-limit summarization retry is
+	// queued; both sticky modes allow the sweep to continue for it.
+	failReasonSummarized
+	// failReason5xx: an explicit server-side (>=500) upstream status.
+	failReason5xx
+	// failReason4xx: an upstream 4xx-class error (retryable by config).
+	failReason4xx
+	// failReasonDispatch: local dispatch/transport failure before any
+	// upstream response.
+	failReasonDispatch
+	// failReasonStream: stream-level failure (empty, stalled, read error).
+	failReasonStream
+)
+
+// stickyAllowsFailover applies the agent's sticky_provider policy to a
+// failover decision (NENYA-18). strict blocks every failover except a
+// queued summarization retry; lenient allows 5xx, targets whose circuit
+// was open when dispatched (Cooling), or summarization.
+func (rl *retryLoop) stickyAllowsFailover(reason failReason, target routing.UpstreamTarget) bool {
+	switch rl.opts.Agent.StickyProvider {
+	case "strict":
+		return reason == failReasonSummarized
+	case "lenient":
+		switch reason {
+		case failReasonSummarized, failReason5xx:
+			return true
+		case failReasonDispatch, failReasonStream:
+			return target.Cooling
+		default:
+			return false
+		}
+	default:
+		return true
+	}
 }
 
 // Run executes the retry loop. It returns true when the request has been fully
@@ -534,6 +591,13 @@ retryLoop:
 			break retryLoop
 		}
 		if !rl.handleActionResult(i, target, action) {
+			if reason := rl.lastFailReason; !rl.stickyAllowsFailover(reason, target) {
+				rl.ctxLogger.Info("sticky_provider blocks failover, stopping sweep",
+					"policy", rl.opts.Agent.StickyProvider,
+					"reason", reason, "model", target.Model, "provider", target.Provider)
+				break retryLoop
+			}
+			rl.lastFailReason = failReasonNone
 			continue
 		}
 		return true

@@ -531,6 +531,7 @@ Static fields always win over regex when both are present on the same key. When 
 |-------|------|---------|-------------|
 | `strategy` | string | `"round-robin"` | Routing across the model chain: `"round-robin"` (rotate per request), `"fallback"` (always start at index 0), or `"sticky"` (pin sessions to a provider/model for prefix-cache warmth). See [Agent Routing Strategies](ROUTING.md#agent-routing-strategies). |
 | `sticky_session_ttl_seconds` | int | `3600` | Idle timeout (max `86400`) for the `sticky` strategy's session pins. Non-positive falls back to the default. |
+| `sticky_provider` | string | `off` | Cache-affinity failover policy for the agent's target sweep: `off` fails over freely; `lenient` fails over only on a 5xx status, a target whose circuit was open, or a context-limit summarization retry; `strict` never fails over to another target (same-target backoff retries and the summarization retry still run). Repeated provider+model entries in `models` remain the manual per-provider retry mechanism in every mode. |
 | `cooldown_seconds` | int | `60` | Seconds to skip a model after a retryable error |
 | `failure_threshold` | int | `5` | Circuit breaker: consecutive failures before tripping to Open state |
 | `failure_window_secs` | int | `0` (disabled) | Circuit breaker: time window in seconds over which failures are counted. 0 = no window (all-time count) |
