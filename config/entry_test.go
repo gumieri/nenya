@@ -697,3 +697,25 @@ func TestModelThinkingConfig_HasThinking(t *testing.T) {
 		})
 	}
 }
+
+func TestProviderEntry_ToProviderConfig_RateLimitDefaults(t *testing.T) {
+	e := ProviderEntry{
+		URL:             "https://example.com",
+		AuthStyle:       "bearer",
+		RatelimitMaxRPM: PtrTo(0),
+		RatelimitMaxTPM: PtrTo(5000),
+	}
+	cfg := e.ToProviderConfig()
+	if cfg.RatelimitMaxRPM == nil || *cfg.RatelimitMaxRPM != 0 {
+		t.Errorf("RatelimitMaxRPM = %v, want 0", cfg.RatelimitMaxRPM)
+	}
+	if cfg.RatelimitMaxTPM == nil || *cfg.RatelimitMaxTPM != 5000 {
+		t.Errorf("RatelimitMaxTPM = %v, want 5000", cfg.RatelimitMaxTPM)
+	}
+
+	nilEntry := ProviderEntry{URL: "https://example.com"}
+	nilCfg := nilEntry.ToProviderConfig()
+	if nilCfg.RatelimitMaxRPM != nil || nilCfg.RatelimitMaxTPM != nil {
+		t.Error("expected nil rate-limit pointers for entry without defaults")
+	}
+}

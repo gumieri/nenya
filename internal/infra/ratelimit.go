@@ -173,26 +173,22 @@ func (rl *RateLimiter) getOrCreateBucket(host string) *rateLimiter {
 }
 
 // effectiveLimits returns the RPM/TPM for a host, using provider-specific
-// limits if set, otherwise the global defaults.
+// limits when set (verbatim: 0 disables the dimension for that provider),
+// otherwise the global defaults.
 func (rl *RateLimiter) effectiveLimits(host string) (int, int) {
-	rpm, tpm := rl.maxRPM, rl.maxTPM
 	if pl, ok := rl.providerLimits[host]; ok {
-		if pl.MaxRPM > 0 {
-			rpm = pl.MaxRPM
-		}
-		if pl.MaxTPM > 0 {
-			tpm = pl.MaxTPM
-		}
+		return max(0, pl.MaxRPM), max(0, pl.MaxTPM)
 	}
-	return rpm, tpm
+	return rl.maxRPM, rl.maxTPM
 }
 
 // SetProviderLimits updates the rate limits for a specific provider. The
 // provider name doubles as the bucket key used by Check when callers pass
 // the same name. If a bucket already exists, its limits are updated
-// immediately. Zero or negative values fall back to the global defaults. To
-// disable rate limiting for a provider, set the global governance limits to
-// zero instead.
+// immediately. Values are applied verbatim: 0 (or negative, clamped to 0)
+// disables that dimension for the provider. Callers that want a dimension
+// to inherit the global governance limit must resolve that themselves and
+// pass the global value explicitly.
 //
 // Lock ordering: rl.mu (global) → limiter.mu (per-bucket). This order must
 // never be inverted elsewhere in the codebase.
@@ -200,12 +196,8 @@ func (rl *RateLimiter) SetProviderLimits(providerName string, limits ProviderRat
 	rl.mu.Lock()
 	defer rl.mu.Unlock()
 
-	if limits.MaxRPM <= 0 {
-		limits.MaxRPM = rl.maxRPM
-	}
-	if limits.MaxTPM <= 0 {
-		limits.MaxTPM = rl.maxTPM
-	}
+	limits.MaxRPM = max(0, limits.MaxRPM)
+	limits.MaxTPM = max(0, limits.MaxTPM)
 
 	rl.providerLimits[providerName] = limits
 

@@ -666,3 +666,37 @@ func TestEffectiveThinkingStreamIdleTimeout(t *testing.T) {
 		})
 	}
 }
+
+func TestApplyBuiltInProviders_ZaiCodingPlanRateLimitsDisabled(t *testing.T) {
+	cfg := Config{Providers: map[string]ProviderConfig{}}
+	applyBuiltInProviders(&cfg)
+
+	pc, ok := cfg.Providers["zai-coding-plan"]
+	if !ok {
+		t.Fatal("zai-coding-plan not found after applyBuiltInProviders")
+	}
+	if pc.RatelimitMaxRPM == nil || *pc.RatelimitMaxRPM != 0 {
+		t.Errorf("expected built-in ratelimit_max_rpm=0 (disabled), got %v", pc.RatelimitMaxRPM)
+	}
+	if pc.RatelimitMaxTPM == nil || *pc.RatelimitMaxTPM != 0 {
+		t.Errorf("expected built-in ratelimit_max_tpm=0 (disabled), got %v", pc.RatelimitMaxTPM)
+	}
+}
+
+func TestApplyBuiltInProviders_RateLimitUserOverride(t *testing.T) {
+	userRPM := 30
+	cfg := Config{Providers: map[string]ProviderConfig{
+		"zai-coding-plan": {RatelimitMaxRPM: &userRPM},
+		"deepseek":        {RatelimitMaxRPM: PtrTo(0)},
+	}}
+	applyBuiltInProviders(&cfg)
+
+	if got := *cfg.Providers["zai-coding-plan"].RatelimitMaxRPM; got != 30 {
+		t.Errorf("user override lost: expected 30, got %d", got)
+	}
+	// Explicit user 0 on a provider without a built-in default stays 0
+	// (disabled), not the governance global.
+	if got := *cfg.Providers["deepseek"].RatelimitMaxRPM; got != 0 {
+		t.Errorf("explicit 0 lost: expected 0, got %d", got)
+	}
+}

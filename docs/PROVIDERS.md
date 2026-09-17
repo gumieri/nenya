@@ -183,6 +183,32 @@ The Coding Plan (and the Z.AI platform generally) enforces rate limits as a **pe
 
 Resolution order: `model_concurrency[model]` → `max_concurrent_requests` → `governance.max_concurrent_requests` → unlimited. Queued requests wait (bounded by the client context) and the slot is held for the entire stream lifetime. When a `1302` still slips through (e.g. misconfigured limit), Nenya classifies it as `concurrency_limited`: no provider cooldown, no circuit-breaker failure, short ~200ms retry. Values in the example are illustrative — copy real values from your plan's rate-limits page.
 
+**Rate limits (RPM/TPM):**
+The two variants face different Z.AI enforcement models, so their built-in defaults differ:
+
+- `zai` (standard, pay-per-token) inherits the global `governance.ratelimit_max_rpm` / `ratelimit_max_tpm` limits.
+- `zai-coding-plan` ships with **both dimensions disabled** (built-in `0`): the Coding Plan enforces per-model concurrency (above) and a monthly quota, not request/token rates, so global RPM/TPM defaults would only cause spurious local skips.
+
+Per-dimension resolution is: explicit provider value → built-in default (if the provider ships one) → global governance limit. An explicit `0` in the provider config always disables that dimension. A typical split config:
+
+```json
+{
+  "zai": {
+    "ratelimit_max_rpm": 60,
+    "ratelimit_max_tpm": 500000
+  },
+  "zai-coding-plan": {
+    "max_concurrent_requests": 5,
+    "model_concurrency": {
+      "glm-5.3": 5,
+      "glm-5.3-flash": 50
+    }
+  }
+}
+```
+
+Operators who still want backstops on the Coding Plan (e.g. to protect the quota from runaway clients) can set explicit values — they override the built-in `0`:
+
 **GLM-5.3 family:**
 <!-- Volatile external fact: re-verify glm-5.3/glm-5.3-flash availability on the standard zai API against Z.ai docs. -->
 - `glm-5.3` and `glm-5.3-flash` are served via the **Coding Plan** endpoint (`zai-coding-plan`) only; they are not yet available on the standard `zai` API.

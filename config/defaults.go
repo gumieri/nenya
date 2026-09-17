@@ -714,6 +714,13 @@ func mergeProviderConfig(user, builtIn ProviderConfig) ProviderConfig {
 	if merged.Thinking == nil && builtIn.Thinking != nil {
 		merged.Thinking = builtIn.Thinking
 	}
+	// Rate-limit defaults are tri-state pointers: nil inherits, 0 disables.
+	if merged.RatelimitMaxRPM == nil {
+		merged.RatelimitMaxRPM = builtIn.RatelimitMaxRPM
+	}
+	if merged.RatelimitMaxTPM == nil {
+		merged.RatelimitMaxTPM = builtIn.RatelimitMaxTPM
+	}
 	return merged
 }
 

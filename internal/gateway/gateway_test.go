@@ -825,3 +825,58 @@ func TestSealSecureMem_Valid(t *testing.T) {
 
 	sealSecureMem(gw.SecureMem, testLogger(), nil)
 }
+
+// TestNew_ZaiCodingPlanRateLimitsDisabled verifies the built-in tri-state
+// defaults: zai-coding-plan ships with RPM/TPM disabled (the Coding Plan
+// enforces per-model concurrency, not request/token rates), so requests to
+// it are never rejected locally even though the governance global (60 RPM)
+// would long have tripped.
+func TestNew_ZaiCodingPlanRateLimitsDisabled(t *testing.T) {
+	gw := New(context.Background(), testConfig(), testSecrets(), testLogger())
+
+	for i := 0; i < 200; i++ {
+		if allowed, rej := gw.RateLimiter.CheckDetailed("zai-coding-plan", "https://api.z.ai/api/coding/paas/v4/chat/completions", 0); !allowed {
+			t.Fatalf("request %d rejected: %+v (global must not leak into zai-coding-plan)", i, rej)
+		}
+	}
+}
+
+// TestNew_ProviderRateLimitInheritsGlobal verifies providers without a
+// built-in default still inherit the governance limits.
+func TestNew_ProviderRateLimitInheritsGlobal(t *testing.T) {
+	gw := New(context.Background(), testConfig(), testSecrets(), testLogger())
+
+	url := "https://api.deepseek.com/chat/completions"
+	for i := 0; i < 60; i++ {
+		if allowed, rej := gw.RateLimiter.CheckDetailed("deepseek", url, 0); !allowed {
+			t.Fatalf("request %d rejected early: %+v", i, rej)
+		}
+	}
+	if allowed, rej := gw.RateLimiter.CheckDetailed("deepseek", url, 0); allowed {
+		t.Fatal("expected global RPM (60) to reject request 61 for deepseek")
+	} else if rej.Dimension != "rpm" {
+		t.Fatalf("expected rpm rejection, got %+v", rej)
+	}
+}
+
+// TestNew_ProviderRateLimitUserOverride verifies an explicit user limit
+// wins over both the built-in default and the governance global.
+func TestNew_ProviderRateLimitUserOverride(t *testing.T) {
+	cfg := testConfig()
+	cfg.Providers = map[string]config.ProviderConfig{
+		"zai-coding-plan": {RatelimitMaxRPM: config.PtrTo(2)},
+	}
+	gw := New(context.Background(), cfg, testSecrets(), testLogger())
+
+	url := "https://api.z.ai/api/coding/paas/v4/chat/completions"
+	for i := 0; i < 2; i++ {
+		if !gw.RateLimiter.Check("zai-coding-plan", url, 0) {
+			t.Fatalf("request %d should pass with rpm=2", i+1)
+		}
+	}
+	if allowed, rej := gw.RateLimiter.CheckDetailed("zai-coding-plan", url, 0); allowed {
+		t.Fatal("third request should be rejected with rpm=2 override")
+	} else if rej.Dimension != "rpm" || rej.Limit != 2 {
+		t.Fatalf("expected rpm limit 2, got %+v", rej)
+	}
+}

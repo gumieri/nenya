@@ -19,6 +19,12 @@ var ProviderRegistry = map[string]ProviderEntry{
 	"zai-coding-plan": {
 		URL:       "https://api.z.ai/api/coding/paas/v4/chat/completions",
 		AuthStyle: "bearer",
+		// The GLM Coding Plan enforces per-model concurrency and a quota,
+		// not RPM/TPM. Built-in 0 disables both governance dimensions for
+		// this provider so mid-size bursts never spurious-skip; users can
+		// still set explicit limits in their config.
+		RatelimitMaxRPM: PtrTo(0),
+		RatelimitMaxTPM: PtrTo(0),
 	},
 	"groq": {
 		URL:       "https://api.groq.com/openai/v1/chat/completions",

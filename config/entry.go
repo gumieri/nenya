@@ -126,13 +126,23 @@ type ProviderEntry struct {
 	ApiFormat  string
 	FormatURLs map[string]string `json:"format_urls,omitempty"`
 	Models     []ModelRef
+	// RatelimitMaxRPM is an optional built-in requests-per-minute default
+	// for this provider. nil = no built-in default (the governance global
+	// applies); 0 = the dimension is disabled for this provider; >0 = the
+	// limit. A user-config value always takes precedence.
+	RatelimitMaxRPM *int `json:"ratelimit_max_rpm,omitempty"`
+	// RatelimitMaxTPM is the tokens-per-minute counterpart of
+	// RatelimitMaxRPM, with identical semantics.
+	RatelimitMaxTPM *int `json:"ratelimit_max_tpm,omitempty"`
 }
 
 func (e ProviderEntry) ToProviderConfig() ProviderConfig {
 	return ProviderConfig{
-		URL:        e.URL,
-		AuthStyle:  e.AuthStyle,
-		ApiFormat:  e.ApiFormat,
-		FormatURLs: e.FormatURLs,
+		URL:             e.URL,
+		AuthStyle:       e.AuthStyle,
+		ApiFormat:       e.ApiFormat,
+		FormatURLs:      e.FormatURLs,
+		RatelimitMaxRPM: e.RatelimitMaxRPM,
+		RatelimitMaxTPM: e.RatelimitMaxTPM,
 	}
 }

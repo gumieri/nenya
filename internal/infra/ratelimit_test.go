@@ -213,15 +213,15 @@ func TestSetProviderLimits_NewHostUsesGlobalThenUpgraded(t *testing.T) {
 	}
 }
 
-func TestSetProviderLimits_ZeroFallsBackToGlobal(t *testing.T) {
+func TestSetProviderLimits_ZeroDisablesDimension(t *testing.T) {
 	rl := NewRateLimiter(15, 5000)
 
-	rl.SetProviderLimits("fallback.example.com", ProviderRateLimits{MaxRPM: 0, MaxTPM: 0})
+	rl.SetProviderLimits("unlimited.example.com", ProviderRateLimits{MaxRPM: 0, MaxTPM: 0})
 
-	rl.Check("", "http://fallback.example.com/api", 0)
+	rl.Check("", "http://unlimited.example.com/api", 0)
 
 	rl.mu.Lock()
-	bucket := rl.limits["fallback.example.com"]
+	bucket := rl.limits["unlimited.example.com"]
 	rl.mu.Unlock()
 
 	bucket.mu.Lock()
@@ -229,23 +229,56 @@ func TestSetProviderLimits_ZeroFallsBackToGlobal(t *testing.T) {
 	gotTPM := bucket.maxTPM
 	bucket.mu.Unlock()
 
-	if gotRPM != 15 {
-		t.Errorf("expected maxRPM to fall back to global 15, got %d", gotRPM)
+	if gotRPM != 0 {
+		t.Errorf("expected maxRPM disabled (0), got %d", gotRPM)
 	}
-	if gotTPM != 5000 {
-		t.Errorf("expected maxTPM to fall back to global 5000, got %d", gotTPM)
+	if gotTPM != 0 {
+		t.Errorf("expected maxTPM disabled (0), got %d", gotTPM)
+	}
+
+	// Both dimensions disabled: requests must never be rejected, no matter
+	// how many are issued or how large their token estimates are.
+	for i := 0; i < 100; i++ {
+		if !rl.Check("", "http://unlimited.example.com/api", 10_000_000) {
+			t.Fatalf("request %d rejected despite disabled dimensions", i)
+		}
+	}
+}
+
+func TestSetProviderLimits_PartialDisableKeepsOtherDimension(t *testing.T) {
+	rl := NewRateLimiter(0, 5000)
+
+	// RPM disabled explicitly, TPM keeps the global default.
+	rl.SetProviderLimits("mixed.example.com", ProviderRateLimits{MaxRPM: 0, MaxTPM: 100})
+
+	rl.Check("", "http://mixed.example.com/api", 0)
+
+	rl.mu.Lock()
+	bucket := rl.limits["mixed.example.com"]
+	rl.mu.Unlock()
+
+	bucket.mu.Lock()
+	gotRPM := bucket.maxRPM
+	gotTPM := bucket.maxTPM
+	bucket.mu.Unlock()
+
+	if gotRPM != 0 {
+		t.Errorf("expected maxRPM disabled (0), got %d", gotRPM)
+	}
+	if gotTPM != 100 {
+		t.Errorf("expected maxTPM 100, got %d", gotTPM)
 	}
 }
 
 func TestSetProviderLimits_NegativeValues(t *testing.T) {
 	rl := NewRateLimiter(15, 5000)
 
-	rl.SetProviderLimits("fallback.example.com", ProviderRateLimits{MaxRPM: -5, MaxTPM: -100})
+	rl.SetProviderLimits("negative.example.com", ProviderRateLimits{MaxRPM: -5, MaxTPM: -100})
 
-	rl.Check("", "http://fallback.example.com/api", 0)
+	rl.Check("", "http://negative.example.com/api", 0)
 
 	rl.mu.Lock()
-	bucket := rl.limits["fallback.example.com"]
+	bucket := rl.limits["negative.example.com"]
 	rl.mu.Unlock()
 
 	bucket.mu.Lock()
@@ -253,11 +286,12 @@ func TestSetProviderLimits_NegativeValues(t *testing.T) {
 	gotTPM := bucket.maxTPM
 	bucket.mu.Unlock()
 
-	if gotRPM != 15 {
-		t.Errorf("expected maxRPM to fall back to global 15, got %d", gotRPM)
+	// Negative values are clamped to 0, which disables the dimension.
+	if gotRPM != 0 {
+		t.Errorf("expected maxRPM clamped to disabled (0), got %d", gotRPM)
 	}
-	if gotTPM != 5000 {
-		t.Errorf("expected maxTPM to fall back to global 5000, got %d", gotTPM)
+	if gotTPM != 0 {
+		t.Errorf("expected maxTPM clamped to disabled (0), got %d", gotTPM)
 	}
 }
 

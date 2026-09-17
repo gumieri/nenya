@@ -387,24 +387,26 @@ func buildGateway(cfg config.Config, secrets *config.SecretsConfig, secureClient
 		}
 
 		if p, ok := providers[name]; ok {
-			var providerRPM, providerTPM int
-			if pcfg.RatelimitMaxRPM != nil && *pcfg.RatelimitMaxRPM > 0 {
-				providerRPM = *pcfg.RatelimitMaxRPM
+			// Per-dimension resolution: an explicit provider value wins
+			// (0 disables the dimension for this provider); nil inherits
+			// the governance global (rpm/tpm resolved above).
+			providerRPM := rpm
+			providerTPM := tpm
+			if pcfg.RatelimitMaxRPM != nil {
+				providerRPM = max(0, *pcfg.RatelimitMaxRPM)
 			}
-			if pcfg.RatelimitMaxTPM != nil && *pcfg.RatelimitMaxTPM > 0 {
-				providerTPM = *pcfg.RatelimitMaxTPM
+			if pcfg.RatelimitMaxTPM != nil {
+				providerTPM = max(0, *pcfg.RatelimitMaxTPM)
 			}
-			if providerRPM > 0 || providerTPM > 0 {
-				gw.RateLimiter.SetProviderLimits(name, infra.ProviderRateLimits{
-					MaxRPM: providerRPM,
-					MaxTPM: providerTPM,
-				})
-				logger.Debug("applied per-provider rate limits",
-					"provider", name,
-					"host", infra.ExtractHost(p.BaseURL),
-					"rpm", providerRPM,
-					"tpm", providerTPM)
-			}
+			gw.RateLimiter.SetProviderLimits(name, infra.ProviderRateLimits{
+				MaxRPM: providerRPM,
+				MaxTPM: providerTPM,
+			})
+			logger.Debug("applied per-provider rate limits",
+				"provider", name,
+				"host", infra.ExtractHost(p.BaseURL),
+				"rpm", providerRPM,
+				"tpm", providerTPM)
 		}
 	}
 	return gw
