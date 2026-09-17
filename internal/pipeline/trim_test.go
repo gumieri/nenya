@@ -142,3 +142,167 @@ func TestTrimPayload_ZeroMessages(t *testing.T) {
 		t.Errorf("expected 0 saved tokens, got %d", saved)
 	}
 }
+
+func assistantWithToolCalls(id string) map[string]interface{} {
+	return map[string]interface{}{
+		"role": "assistant",
+		"tool_calls": []interface{}{
+			map[string]interface{}{"id": id, "type": "function"},
+		},
+	}
+}
+
+func toolResult(id, content string) map[string]interface{} {
+	return map[string]interface{}{
+		"role":         "tool",
+		"tool_call_id": id,
+		"content":      content,
+	}
+}
+
+func roles(msgs []interface{}) []string {
+	out := make([]string, 0, len(msgs))
+	for _, m := range msgs {
+		if mm, ok := m.(map[string]interface{}); ok {
+			r, _ := mm["role"].(string)
+			out = append(out, r)
+		}
+	}
+	return out
+}
+
+func hasOrphanedToolResults(msgs []interface{}) bool {
+	pendingCalls := 0
+	for _, m := range msgs {
+		mm, ok := m.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		switch role, _ := mm["role"].(string); role {
+		case "assistant":
+			calls, _ := mm["tool_calls"].([]interface{})
+			pendingCalls += len(calls)
+		case "tool":
+			if pendingCalls == 0 {
+				return true
+			}
+			pendingCalls--
+		}
+	}
+	return false
+}
+
+// TestTrimPayload_NoOrphanedToolResults drives the budget boundary straight
+// through a tool exchange: the newest tool result would fit alone, but its
+// assistant tool_calls must not be dropped — the whole exchange goes.
+func TestTrimPayload_NoOrphanedToolResults(t *testing.T) {
+	cfg := config.ContextConfig{}
+	count := func(s string) int { return len(s) } // 1 token per char
+
+	payload := map[string]interface{}{
+		"messages": []interface{}{
+			map[string]interface{}{"role": "user", "content": strings.Repeat("a", 100)},
+			assistantWithToolCalls("call-1"),
+			toolResult("call-1", strings.Repeat("t", 50)),
+			map[string]interface{}{"role": "assistant", "content": strings.Repeat("b", 20)},
+		},
+	}
+	// Budget fits [assistant(tool_calls) + tool + last assistant] (70) but
+	// NOT the exchange plus anything more — the boundary lands mid-exchange
+	// walking backward if pairing were ignored.
+	modified, _ := TrimPayload(nil, payload, 70, count, cfg)
+	if !modified {
+		t.Fatal("expected trimming to run")
+	}
+	msgs := payload["messages"].([]interface{})
+	if hasOrphanedToolResults(msgs) {
+		t.Fatalf("orphaned tool result after trim: %v", roles(msgs))
+	}
+}
+
+// TestTrimPayload_ToolExchangeDroppedWhole verifies exchange atomicity when
+// only part of an exchange fits: the result must never contain a tool
+// message without its assistant tool_calls.
+func TestTrimPayload_ToolExchangeDroppedWhole(t *testing.T) {
+	cfg := config.ContextConfig{}
+	count := func(s string) int { return len(s) }
+
+	payload := map[string]interface{}{
+		"messages": []interface{}{
+			map[string]interface{}{"role": "user", "content": strings.Repeat("old", 200)},
+			assistantWithToolCalls("call-1"),
+			toolResult("call-1", strings.Repeat("r", 200)),
+			map[string]interface{}{"role": "assistant", "content": "done"},
+			map[string]interface{}{"role": "user", "content": "thanks"},
+		},
+	}
+	modified, _ := TrimPayload(nil, payload, 15, count, cfg)
+	if !modified {
+		t.Fatal("expected trimming to run")
+	}
+	msgs := payload["messages"].([]interface{})
+	if hasOrphanedToolResults(msgs) {
+		t.Fatalf("orphaned tool result after trim: %v", roles(msgs))
+	}
+	// Recent turns survive whole.
+	got := roles(msgs)
+	if len(got) < 2 || got[len(got)-2] != "assistant" || got[len(got)-1] != "user" {
+		t.Fatalf("recent turns not preserved: %v", got)
+	}
+}
+
+// TestTrimPayload_ToolOutputClamped checks the pre-pass: an oversized tool
+// output is clamped in place while tool_call_id survives.
+func TestTrimPayload_ToolOutputClamped(t *testing.T) {
+	cfg := config.ContextConfig{TruncationKeepFirstPct: 60, TruncationKeepLastPct: 30}
+	count := func(s string) int { return len(s) / 3 }
+
+	big := strings.Repeat("x", 30000)
+	payload := map[string]interface{}{
+		"messages": []interface{}{
+			assistantWithToolCalls("call-1"),
+			toolResult("call-1", big),
+		},
+	}
+	modified, _ := TrimPayload(nil, payload, 1500, count, cfg)
+	if !modified {
+		t.Fatal("expected trimming to run")
+	}
+	msgs := payload["messages"].([]interface{})
+	if len(msgs) != 2 {
+		t.Fatalf("expected exchange kept, got %v", roles(msgs))
+	}
+	tool := msgs[1].(map[string]interface{})
+	if id, _ := tool["tool_call_id"].(string); id != "call-1" {
+		t.Fatalf("tool_call_id lost: %v", tool["tool_call_id"])
+	}
+	content, _ := tool["content"].(string)
+	if len(content) >= len(big) {
+		t.Fatalf("tool output not clamped: %d chars", len(content))
+	}
+}
+
+// TestTrimPayload_TruncationPreservesFields guards the truncate path: any
+// field other than role/content must survive into the trimmed message.
+func TestTrimPayload_TruncationPreservesFields(t *testing.T) {
+	cfg := config.ContextConfig{TruncationKeepFirstPct: 60, TruncationKeepLastPct: 30}
+	count := func(s string) int { return len(s) }
+
+	payload := map[string]interface{}{
+		"messages": []interface{}{
+			map[string]interface{}{
+				"role":    "user",
+				"name":    "opencode",
+				"content": strings.Repeat("u", 5000),
+			},
+		},
+	}
+	modified, _ := TrimPayload(nil, payload, 100, count, cfg)
+	if !modified {
+		t.Fatal("expected trimming to run")
+	}
+	msg := payload["messages"].([]interface{})[0].(map[string]interface{})
+	if name, _ := msg["name"].(string); name != "opencode" {
+		t.Fatalf("custom field lost in truncation: %v", msg["name"])
+	}
+}
