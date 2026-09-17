@@ -106,8 +106,12 @@ type stallReader struct {
 	srcCloser       io.Closer
 	srcErr          error
 	ch              chan readResult
-	remainBuf       []byte
-	remainPos       int
+	// ctx is the request-scoped context the reader was built with. Read
+	// watches its Done so a blocked consumer wakes immediately on client
+	// disconnect instead of parking until the stall deadline.
+	ctx       context.Context
+	remainBuf []byte
+	remainPos int
 	// pendingErr retains a terminal read error (EOF or transport failure) seen
 	// by the background reader so it is returned only after buffered bytes have
 	// been drained, never deadlocking or dropping the stream tail.
@@ -150,6 +154,7 @@ func newStallReader(ctx context.Context, src io.Reader, timeout, thinkingTimeout
 		thinkingTimeout: thinkingTimeout,
 		stallCh:         make(chan struct{}),
 		ch:              make(chan readResult, 1),
+		ctx:             ctx,
 	}
 	sr.timer = time.AfterFunc(sr.activeTimeout(), func() {
 		sr.mu.Lock()
@@ -290,6 +295,11 @@ func (sr *stallReader) Read(p []byte) (int, error) {
 	select {
 	case <-sr.stallCh:
 		return 0, errStreamStalled
+	case <-sr.ctx.Done():
+		// Request teardown (client disconnect, server shutdown) must
+		// interrupt a blocked read immediately: leaving it parked lets
+		// upstream inference (and billing) run on for a dead client.
+		return 0, sr.ctx.Err()
 	case rr := <-sr.ch:
 		return sr.serveResult(p, rr)
 	}
