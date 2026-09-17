@@ -3,7 +3,6 @@ package mcp
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -22,12 +21,19 @@ type Client struct {
 	transport *HTTPTransport
 	name      string
 	logger    *slog.Logger
+	cfg       ClientConfig
+	metrics   *infra.Metrics
 
 	mu          sync.RWMutex
 	tools       []Tool
 	toolsMap    map[string]Tool
 	initialized atomic.Bool
 	serverInfo  ImplementationInfo
+	// recoveryGen counts completed session recoveries; recoverMu makes
+	// recovery single-flight so concurrent broken-session callers trigger
+	// exactly one rebuild and then each replay their call once.
+	recoverMu   sync.Mutex
+	recoveryGen uint64
 }
 
 // ClientConfig holds the parameters for creating a new MCP Client.
@@ -68,12 +74,22 @@ func NewClient(cfg ClientConfig) *Client {
 		transport: transport,
 		name:      name,
 		logger:    logger,
+		cfg:       cfg,
 		toolsMap:  make(map[string]Tool),
 	}
 }
 
+// currentTransport returns the live transport under a read lock, so
+// callers never race the swap performed by session recovery.
+func (c *Client) currentTransport() *HTTPTransport {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.transport
+}
+
 func (c *Client) Initialize(ctx context.Context) error {
-	if err := c.transport.Connect(ctx); err != nil {
+	tr := c.currentTransport()
+	if err := tr.Connect(ctx); err != nil {
 		return fmt.Errorf("connect failed: %w", err)
 	}
 
@@ -86,9 +102,9 @@ func (c *Client) Initialize(ctx context.Context) error {
 		},
 	}
 
-	resp, err := c.transport.SendRequest(ctx, "initialize", params)
+	resp, err := tr.SendRequest(ctx, "initialize", params)
 	if err != nil {
-		_ = c.transport.Close()
+		_ = tr.Close()
 		return fmt.Errorf("initialize failed: %w", err)
 	}
 
@@ -96,13 +112,13 @@ func (c *Client) Initialize(ctx context.Context) error {
 	if err != nil {
 		// A half-initialized client can never recover (single-use transport):
 		// tear the stream down instead of leaking it.
-		_ = c.transport.Close()
+		_ = tr.Close()
 		return fmt.Errorf("marshaling initialize result: %w", err)
 	}
 
 	var initResult InitializeResult
 	if err := json.Unmarshal(resultBytes, &initResult); err != nil {
-		_ = c.transport.Close()
+		_ = tr.Close()
 		return fmt.Errorf("parsing initialize result: %w", err)
 	}
 
@@ -114,7 +130,7 @@ func (c *Client) Initialize(ctx context.Context) error {
 		"version", initResult.ServerInfo.Version,
 		"protocol", initResult.ProtocolVersion)
 
-	if err := c.transport.SendNotification(ctx, "notifications/initialized", nil); err != nil {
+	if err := tr.SendNotification(ctx, "notifications/initialized", nil); err != nil {
 		c.logger.Warn("failed to send initialized notification", "err", err)
 	}
 
@@ -123,7 +139,7 @@ func (c *Client) Initialize(ctx context.Context) error {
 }
 
 func (c *Client) RefreshTools(ctx context.Context) ([]Tool, error) {
-	resp, err := c.transport.SendRequest(ctx, "tools/list", nil)
+	resp, err := c.currentTransport().SendRequest(ctx, "tools/list", nil)
 	if err != nil {
 		return nil, fmt.Errorf("tools/list failed: %w", err)
 	}
@@ -165,7 +181,12 @@ func (c *Client) GetTool(name string) (Tool, bool) {
 
 func (c *Client) CallTool(ctx context.Context, name string, arguments map[string]any) (*CallToolResult, error) {
 	if !c.initialized.Load() {
-		return nil, errors.New("client not initialized")
+		// Not initialized: either never initialized or a concurrent
+		// recovery is mid-flight. Route through Recover — single-flight,
+		// so this joins the in-flight rebuild instead of failing.
+		if err := c.Recover(ctx); err != nil {
+			return nil, fmt.Errorf("client not initialized: %w", err)
+		}
 	}
 
 	c.mu.RLock()
@@ -181,9 +202,18 @@ func (c *Client) CallTool(ctx context.Context, name string, arguments map[string
 		Arguments: arguments,
 	}
 
-	resp, err := c.transport.SendRequest(ctx, "tools/call", params)
+	resp, err := c.currentTransport().SendRequest(ctx, "tools/call", params)
 	if err != nil {
-		return nil, fmt.Errorf("tools/call %s failed: %w", name, err)
+		// Transport-level failure: the server may have restarted or
+		// expired the session. Recover single-flight, then replay the
+		// call exactly once — on the transport current after recovery.
+		if recErr := c.Recover(ctx); recErr != nil {
+			return nil, fmt.Errorf("tools/call %s failed: %w (recovery failed: %v)", name, err, recErr)
+		}
+		resp, err = c.currentTransport().SendRequest(ctx, "tools/call", params)
+		if err != nil {
+			return nil, fmt.Errorf("tools/call %s failed after session recovery: %w", name, err)
+		}
 	}
 
 	if resp.Error != nil {
@@ -204,7 +234,7 @@ func (c *Client) CallTool(ctx context.Context, name string, arguments map[string
 }
 
 func (c *Client) Ping(ctx context.Context) error {
-	_, err := c.transport.SendRequest(ctx, "ping", nil)
+	_, err := c.currentTransport().SendRequest(ctx, "ping", nil)
 	return err
 }
 
@@ -221,17 +251,76 @@ func (c *Client) ServerName() string {
 }
 
 func (c *Client) Ready() bool {
-	return c.initialized.Load() && c.transport.Ready()
+	return c.initialized.Load() && c.currentTransport().Ready()
+}
+
+// Recover rebuilds the transport and re-runs the initialization handshake
+// after a broken or expired server session (server restart, endpoint
+// rotation). Recovery is single-flight: the first caller performs the
+// rebuild while concurrent callers block on the same attempt; once it
+// completes, every waiter replays its in-flight call exactly once
+// (CallTool). Bounded by ctx — including the 5-minute multi-turn loop
+// deadline. A failed recovery leaves the client untouched for a later
+// retry.
+func (c *Client) Recover(ctx context.Context) error {
+	c.mu.Lock()
+	gen := c.recoveryGen
+	c.mu.Unlock()
+
+	c.recoverMu.Lock()
+	defer c.recoverMu.Unlock()
+
+	// Another goroutine already recovered this generation: the replay on
+	// the fresh transport is all this caller needs.
+	c.mu.RLock()
+	done := c.recoveryGen > gen && c.initialized.Load() && c.transport.Ready()
+	c.mu.RUnlock()
+	if done {
+		return nil
+	}
+
+	if err := c.reinitialize(ctx); err != nil {
+		return err
+	}
+
+	c.mu.Lock()
+	c.recoveryGen++
+	c.mu.Unlock()
+	return nil
+}
+
+// reinitialize swaps in a fresh transport and re-runs the handshake. The
+// old transport is closed first; a half-initialized rebuild tears the new
+// stream down via Initialize's error path.
+func (c *Client) reinitialize(ctx context.Context) error {
+	_ = c.transport.Close()
+	c.initialized.Store(false)
+
+	c.transport = NewHTTPTransport(TransportConfig{
+		URL:               c.cfg.URL,
+		Headers:           c.cfg.Headers,
+		ConnectTimeout:    c.cfg.ConnectTimeout,
+		RequestTimeout:    c.cfg.RequestTimeout,
+		IdleTimeout:       c.cfg.IdleTimeout,
+		KeepAliveInterval: c.cfg.KeepAliveInterval,
+		Logger:            c.logger,
+	})
+	if c.metrics != nil {
+		c.transport.SetGatewayMetrics(c.metrics)
+	}
+	return c.Initialize(ctx)
 }
 
 func (c *Client) Close() error {
 	c.initialized.Store(false)
-	return c.transport.Close()
+	return c.currentTransport().Close()
 }
 
 // SetGatewayMetrics sets the metrics instance for tracking MCP transport
 // goroutines. Must be called before Connect/Initialize: afterwards the
-// transport's goroutines read the field concurrently.
+// transport's goroutines read the field concurrently. The instance is
+// retained so session recovery re-attaches it to the rebuilt transport.
 func (c *Client) SetGatewayMetrics(metrics *infra.Metrics) {
+	c.metrics = metrics
 	c.transport.SetGatewayMetrics(metrics)
 }

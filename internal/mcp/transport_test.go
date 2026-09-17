@@ -23,8 +23,30 @@ type mockMCPServer struct {
 	tools   []Tool
 	handles map[string]func(map[string]any) *CallToolResult
 
+	// sseConnects counts SSE stream establishments (initial + recoveries).
+	sseConnects int
+	// brokenSession rejects tools/call POSTs at the HTTP layer until the
+	// next "initialize" handshake completes (session-expiry simulation:
+	// a server restart issues a fresh session).
+	brokenSession bool
+
 	postMux *http.ServeMux
 	server  *httptest.Server
+}
+
+// ConnectCount reports how many SSE sessions the server has served.
+func (ms *mockMCPServer) ConnectCount() int {
+	ms.mu.Lock()
+	defer ms.mu.Unlock()
+	return ms.sseConnects
+}
+
+// BreakToolCalls makes tools/call POSTs fail at the HTTP layer until the
+// next initialize handshake completes, simulating an expired session.
+func (ms *mockMCPServer) BreakToolCalls() {
+	ms.mu.Lock()
+	ms.brokenSession = true
+	ms.mu.Unlock()
 }
 
 func newMockMCPServer(t *testing.T) *mockMCPServer {
@@ -77,6 +99,10 @@ func newMockMCPServer(t *testing.T) *mockMCPServer {
 }
 
 func (ms *mockMCPServer) handleSSE(w http.ResponseWriter, r *http.Request) {
+	ms.mu.Lock()
+	ms.sseConnects++
+	ms.mu.Unlock()
+
 	flusher, ok := w.(http.Flusher)
 	if !ok {
 		// Errorf, not Fatalf: handlers run on non-test goroutines.
@@ -107,6 +133,12 @@ func (ms *mockMCPServer) handleMessage(w http.ResponseWriter, r *http.Request) {
 
 	switch req.Method {
 	case "initialize":
+		// A fresh handshake means the server restarted with a new session:
+		// tool calls work again (clears the expiry simulation).
+		ms.mu.Lock()
+		ms.brokenSession = false
+		ms.mu.Unlock()
+
 		result := InitializeResult{
 			ProtocolVersion: "2025-03-26",
 			Capabilities:    ServerCapabilities{Tools: &ToolsCapability{}},
@@ -128,6 +160,16 @@ func (ms *mockMCPServer) handleMessage(w http.ResponseWriter, r *http.Request) {
 		ms.writeRPCResponse(w, req.ID, ListToolsResult{Tools: tools})
 
 	case "tools/call":
+		ms.mu.Lock()
+		if ms.brokenSession {
+			ms.mu.Unlock()
+			// Session-expiry simulation: reject at the HTTP layer so the
+			// transport treats the session as broken.
+			http.Error(w, "session expired", http.StatusNotFound)
+			return
+		}
+		ms.mu.Unlock()
+
 		var params CallToolParams
 		paramsBytes, _ := json.Marshal(req.Params)
 		if err := json.Unmarshal(paramsBytes, &params); err != nil {
