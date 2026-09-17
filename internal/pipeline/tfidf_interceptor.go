@@ -88,9 +88,20 @@ func (t *TFIDFInterceptor) Process(ctx context.Context, req *InterceptRequest) (
 	lastMsg["content"] = truncated
 	req.Payload["messages"] = req.Messages
 
+	// Estimate the post-prune token count with the same ~3 runes-per-token
+	// heuristic used for the rune budget, so the result reports the new size
+	// instead of 0 (NENYA-70 observability).
+	origRunes := len([]rune(text))
+	truncRunes := len([]rune(truncated))
+	newCount := req.TokenCount - (origRunes-truncRunes)/3
+	if newCount < 0 {
+		newCount = 0
+	}
+
 	return &InterceptResult{
-		Payload:   req.Payload,
-		Truncated: true,
-		Reason:    "tfidf_pruned",
+		Payload:    req.Payload,
+		Truncated:  true,
+		TokenCount: newCount,
+		Reason:     "tfidf_pruned",
 	}, nil
 }

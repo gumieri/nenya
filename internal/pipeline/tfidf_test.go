@@ -434,3 +434,37 @@ func TestSortScoredDesc(t *testing.T) {
 		t.Errorf("not sorted desc: %+v", blocks)
 	}
 }
+
+func TestTFIDFInterceptorReportsTokenCount(t *testing.T) {
+	interceptor := NewTFIDFInterceptor("self", slog.Default())
+
+	// ~3.1k runes ≈ 1k tokens by the 3-runes-per-token heuristic.
+	content := strings.Repeat("alpha beta gamma delta epsilon zeta ", 100)
+	req := &InterceptRequest{
+		Messages: []map[string]any{
+			{"role": "user", "content": "what is this about"},
+			{"role": "user", "content": content},
+		},
+		Payload:    map[string]any{},
+		TokenCount: len(content) / 3,
+		SoftLimit:  100,
+		HardLimit:  0, // rune budget = SoftLimit * 3 = 300
+	}
+	req.Payload["messages"] = req.Messages
+
+	res, err := interceptor.Process(context.Background(), req)
+	if err != nil {
+		t.Fatalf("process: %v", err)
+	}
+	if !res.Truncated {
+		t.Fatal("expected truncated result")
+	}
+	// NENYA-70: the result must report the post-prune estimate instead of 0,
+	// and it must be smaller than the input estimate.
+	if res.TokenCount <= 0 {
+		t.Fatalf("TokenCount = %d, want > 0", res.TokenCount)
+	}
+	if res.TokenCount >= req.TokenCount {
+		t.Fatalf("TokenCount = %d, want < input %d", res.TokenCount, req.TokenCount)
+	}
+}

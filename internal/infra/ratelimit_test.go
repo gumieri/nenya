@@ -19,7 +19,8 @@ func TestCheckRateLimit(t *testing.T) {
 		{"rpm allow", 10, 0, 0, true, 1},
 		{"rpm block", 2, 0, 0, false, 3},
 		{"tpm allow", 0, 1000, 500, true, 1},
-		{"tpm block", 0, 100, 200, false, 1},
+		{"tpm block mid-size", 0, 100, 60, false, 2},
+		{"tpm oversize admitted (NENYA-70)", 0, 100, 200, true, 1},
 		{"both allow", 10, 10000, 500, true, 1},
 		{"rpm blocks before tpm", 1, 10000, 500, false, 2},
 		{"disabled", 0, 0, 100000, true, 100},
@@ -306,5 +307,58 @@ func TestSetProviderLimits_SameHostProvidersIndependent(t *testing.T) {
 	}
 	if rl.Check("zai-coding-plan", same, 0) {
 		t.Fatal("zai-coding-plan should eventually exhaust its own 60 RPM")
+	}
+}
+
+func TestCheck_OversizedRequestAdmittedAndDrains(t *testing.T) {
+	rl := NewRateLimiter(0, 100) // TPM-only: 100 tokens/min
+
+	// A 500-token request exceeds the entire TPM capacity. It must be
+	// admitted (NENYA-70) — the bucket can never refill to 500, so the old
+	// reject-here behavior starved big requests permanently — and drain the
+	// bucket to zero.
+	if !rl.Check("p", "http://example.com/api", 500) {
+		t.Fatal("oversized request should be admitted")
+	}
+
+	// The bucket is drained: a mid-size request now throttles until refill.
+	allowed, rej := rl.CheckDetailed("p", "http://example.com/api", 50)
+	if allowed {
+		t.Fatal("mid-size request should throttle after the bucket was drained")
+	}
+	if rej.Dimension != "tpm" {
+		t.Fatalf("dimension = %q, want tpm", rej.Dimension)
+	}
+}
+
+func TestCheck_MidSizeRejectionUnchanged(t *testing.T) {
+	rl := NewRateLimiter(0, 100)
+	if !rl.Check("p", "http://example.com/api", 60) {
+		t.Fatal("first request should pass")
+	}
+	allowed, rej := rl.CheckDetailed("p", "http://example.com/api", 60)
+	if allowed {
+		t.Fatal("second request should throttle (40 tokens left < 60)")
+	}
+	if rej.Dimension != "tpm" || rej.Limit != 100 || rej.TokenCount != 60 {
+		t.Fatalf("rejection details = %+v", rej)
+	}
+	if rej.BucketLeft < 0 || rej.BucketLeft >= 60 {
+		t.Fatalf("bucket_left = %v, want in [0,60)", rej.BucketLeft)
+	}
+}
+
+func TestCheck_OversizedStillBoundByRPM(t *testing.T) {
+	rl := NewRateLimiter(1, 100) // RPM 1, TPM 100
+
+	if !rl.Check("p", "http://example.com/api", 500) {
+		t.Fatal("first oversized request should be admitted")
+	}
+	allowed, rej := rl.CheckDetailed("p", "http://example.com/api", 500)
+	if allowed {
+		t.Fatal("second request should be RPM-throttled")
+	}
+	if rej.Dimension != "rpm" {
+		t.Fatalf("dimension = %q, want rpm (oversize bypass is TPM-only)", rej.Dimension)
 	}
 }

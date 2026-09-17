@@ -54,17 +54,80 @@ func NewRateLimiter(maxRPM, maxTPM int) *RateLimiter {
 	}
 }
 
+// RateLimitRejection describes why a request was rejected by the rate
+// limiter. Dimension is empty when the request was allowed.
+type RateLimitRejection struct {
+	// Dimension is "rpm" or "tpm"; empty when the request was allowed.
+	Dimension string
+	// Limit is the configured limit of the rejecting dimension.
+	Limit int
+	// BucketLeft is the remaining budget (requests or tokens) at reject time.
+	BucketLeft float64
+	// TokenCount is the request's token estimate that was checked.
+	TokenCount int
+}
+
 // Check tests whether a request to the given URL is allowed under rate limits.
 // providerName scopes the bucket to the provider (preferred); when empty the
 // bucket falls back to the upstream host. Provider-specific limits (set via
 // SetProviderLimits) apply when set, otherwise the global defaults.
+// For rejection details use CheckDetailed.
 func (rl *RateLimiter) Check(providerName, upstreamURL string, tokenCount int) bool {
+	allowed, _ := rl.CheckDetailed(providerName, upstreamURL, tokenCount)
+	return allowed
+}
+
+// CheckDetailed is Check with rejection details: when allowed is false,
+// the returned rejection names the exhausting dimension, its limit, the
+// remaining bucket budget, and the request's token estimate.
+func (rl *RateLimiter) CheckDetailed(providerName, upstreamURL string, tokenCount int) (bool, RateLimitRejection) {
 	limiter := rl.getOrCreateBucket(bucketKey(providerName, upstreamURL))
 	if limiter == nil {
-		return false
+		return false, RateLimitRejection{Dimension: "bucket_capacity", TokenCount: tokenCount}
 	}
 
-	return limiter.check(tokenCount)
+	return limiter.checkDetailed(tokenCount)
+}
+
+// checkDetailed is check with rejection details. It returns the rejection
+// reason (dimension, limit, remaining budget) alongside the boolean verdict.
+func (l *rateLimiter) checkDetailed(tokenCount int) (bool, RateLimitRejection) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	now := time.Now()
+	elapsed := now.Sub(l.lastRefill).Seconds()
+
+	if l.maxRPM > 0 {
+		l.rpmBucket = min(float64(l.maxRPM),
+			l.rpmBucket+elapsed*float64(l.maxRPM)/60.0)
+	}
+	if l.maxTPM > 0 {
+		l.tpmBucket = min(float64(l.maxTPM),
+			l.tpmBucket+elapsed*float64(l.maxTPM)/60.0)
+	}
+
+	if l.maxRPM > 0 && l.rpmBucket < 1.0 {
+		return false, RateLimitRejection{
+			Dimension: "rpm", Limit: l.maxRPM,
+			BucketLeft: l.rpmBucket, TokenCount: tokenCount,
+		}
+	}
+	if l.maxTPM > 0 && l.tpmBucket < float64(tokenCount) && float64(tokenCount) < float64(l.maxTPM) {
+		return false, RateLimitRejection{
+			Dimension: "tpm", Limit: l.maxTPM,
+			BucketLeft: l.tpmBucket, TokenCount: tokenCount,
+		}
+	}
+
+	if l.maxRPM > 0 {
+		l.rpmBucket--
+	}
+	if l.maxTPM > 0 {
+		l.tpmBucket = max(0, l.tpmBucket-float64(tokenCount))
+	}
+	l.lastRefill = now
+	return true, RateLimitRejection{}
 }
 
 // bucketKey resolves the bucket key: provider name when set, otherwise the
@@ -122,40 +185,6 @@ func (rl *RateLimiter) effectiveLimits(host string) (int, int) {
 		}
 	}
 	return rpm, tpm
-}
-
-// check tests whether a single request consuming tokenCount tokens is allowed.
-func (l *rateLimiter) check(tokenCount int) bool {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-
-	now := time.Now()
-	elapsed := now.Sub(l.lastRefill).Seconds()
-
-	if l.maxRPM > 0 {
-		l.rpmBucket = min(float64(l.maxRPM),
-			l.rpmBucket+elapsed*float64(l.maxRPM)/60.0)
-	}
-	if l.maxTPM > 0 {
-		l.tpmBucket = min(float64(l.maxTPM),
-			l.tpmBucket+elapsed*float64(l.maxTPM)/60.0)
-	}
-
-	if l.maxRPM > 0 && l.rpmBucket < 1.0 {
-		return false
-	}
-	if l.maxTPM > 0 && l.tpmBucket < float64(tokenCount) {
-		return false
-	}
-
-	if l.maxRPM > 0 {
-		l.rpmBucket--
-	}
-	if l.maxTPM > 0 {
-		l.tpmBucket -= float64(tokenCount)
-	}
-	l.lastRefill = now
-	return true
 }
 
 // SetProviderLimits updates the rate limits for a specific provider. The

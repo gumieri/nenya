@@ -479,6 +479,8 @@ In `prepareAndSend` (`internal/proxy/retry.go`) the gateway acquires a slot **be
 
 Metrics: `nenya_concurrency_inflight{provider,model}`, `nenya_concurrency_wait_seconds`, `nenya_concurrency_rejected_total`, `nenya_concurrency_limited_total`.
 
+The RPM/TPM limiter itself is a token-bucket per provider (`infra.RateLimiter`). The token estimate it checks is refreshed **after** the interceptor chain/trim (NENYA-70), so guards judge the payload actually dispatched. A request whose estimate meets or exceeds the bucket's entire TPM capacity is **admitted and drains the bucket** rather than rejected: the bucket refills to at most `maxTPM`, so rejecting such a request could never be undone by refilling and would permanently starve big-context sessions (`all upstream targets exhausted` with `attempts: 0`). The oversize bypass is TPM-only — RPM rejection still applies. Rate-limit rejections are logged with the dimension (`rpm`/`tpm`), configured limit, remaining bucket, and the request's token count.
+
 ## Provider Adapter Pattern
 
 The `internal/adapter` package implements the Adapter Pattern to manage provider-specific wire format differences. See [`ADAPTERS.md`](ADAPTERS.md) for full details.

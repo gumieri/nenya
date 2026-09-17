@@ -193,6 +193,53 @@ func TestHandleUpstreamError_ZAI1303_KeepsRateLimitPath(t *testing.T) {
 	}
 }
 
+// TestHandleChatCompletions_OversizedSessionDispatched reproduces the
+// NENYA-70 incident: a session whose token estimate exceeds the provider's
+// entire TPM capacity used to be skipped on every target ("all upstream
+// targets exhausted", attempts: 0) because the TPM bucket can never refill
+// past its limit. The oversize request must be dispatched instead.
+func TestHandleChatCompletions_OversizedSessionDispatched(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = fmt.Fprintf(w, "data: {\"choices\":[{\"delta\":{\"content\":\"hello\"}}]}\n\n")
+		_, _ = fmt.Fprintf(w, "data: [DONE]\n\n")
+	}))
+	defer upstream.Close()
+
+	cfg := testutil.MinimalConfig()
+	cfg.Server.MaxBodyBytes = 10 << 20
+	cfg.Governance.RatelimitMaxRPM = config.PtrTo(60)
+	cfg.Governance.RatelimitMaxTPM = config.PtrTo(100) // tiny on purpose: forces the oversize path
+	cfg.Bouncer.Enabled = config.PtrTo(false)
+	cfg.Providers = map[string]config.ProviderConfig{
+		"test-provider": {URL: upstream.URL + "/v1/chat/completions", AuthStyle: "none"},
+	}
+	cfg.Agents = map[string]config.AgentConfig{
+		"test-agent": {
+			Strategy: "fallback",
+			Models:   []config.AgentModel{{Provider: "test-provider", Model: "test-model"}},
+		},
+	}
+	secrets := &config.SecretsConfig{ClientToken: "test-token"}
+	gw := gateway.New(context.Background(), *cfg, secrets, slog.Default())
+	p := &Proxy{}
+	p.StoreGateway(gw)
+
+	big := strings.Repeat("lorem ipsum dolor sit amet consectetur ", 300) // ~2.5k tokens ≫ 100 TPM
+	body := fmt.Sprintf(`{"model":"test-agent","messages":[{"role":"user","content":%q}]}`, big)
+	req := testutil.NewTestRequest(t, http.MethodPost, "/v1/chat/completions", body)
+	rec := httptest.NewRecorder()
+
+	p.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (oversized session must be dispatched, not exhausted); body: %s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "hello") {
+		t.Fatalf("expected streamed content, got: %s", rec.Body.String())
+	}
+}
+
 // TestConcurrencyRetryDelayRange sanity-checks the fixed delay window.
 func TestConcurrencyRetryDelayRange(t *testing.T) {
 	for range 50 {

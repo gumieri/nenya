@@ -890,6 +890,11 @@ func (p *Proxy) handleChatCompletions(gw *gateway.NenyaGateway, w http.ResponseW
 	if err := p.applyContentPipeline(gw, r.Context(), req.Payload, req.TokenCount, req.WindowMaxCtx, req.Profile, req.SoftLimit, req.HardLimit); err != nil {
 		gw.Logger.Warn("content pipeline failed, proceeding with original payload", "err", err)
 	}
+	// NENYA-70: the interceptor chain/trim may have shrunk the payload after
+	// the estimate was taken at request build. Pre-dispatch guards (TPM, cost)
+	// and token accounting must judge the payload that is actually dispatched,
+	// so refresh the count from the post-pipeline body.
+	req.TokenCount = gw.CountRequestTokens(req.Payload)
 	gw.Metrics.RecordGatewayProcessing(r.Method, infra.NormalizeMetricPath(r.URL.Path), time.Since(gwStart))
 
 	if req.HasMCPTools {

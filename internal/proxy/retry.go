@@ -570,7 +570,7 @@ func (rl *retryLoop) Exhausted() {
 		rl.ctxLogger.Info("client gone before exhaustion reporting", "model", model)
 		return
 	}
-	rl.ctxLogger.Error("all upstream targets exhausted", "total", len(rl.opts.Targets), "attempts", rl.attempt)
+	rl.ctxLogger.Error("all upstream targets exhausted", "total", len(rl.opts.Targets), "attempts", rl.attempt, "token_count", rl.opts.TokenCount)
 	if rl.opts.AgentName != "" {
 		rl.gw.Metrics.RecordExhausted(rl.opts.AgentName)
 	}
@@ -817,9 +817,13 @@ func (p *Proxy) recordNetworkError(ctxLogger *slog.Logger, gw *gateway.NenyaGate
 }
 
 func (p *Proxy) checkPreDispatchGuards(gw *gateway.NenyaGateway, ctxLogger *slog.Logger, target routing.UpstreamTarget, tokenCount int, agentName string) *upstreamAction {
-	if !gw.RateLimiter.Check(target.Provider, target.URL, tokenCount) {
+	if allowed, rej := gw.RateLimiter.CheckDetailed(target.Provider, target.URL, tokenCount); !allowed {
 		gw.Metrics.RecordRateLimitRejected(infra.ExtractHost(target.URL))
-		ctxLogger.Warn("target skipped: rate limit exceeded")
+		ctxLogger.Warn("target skipped: rate limit exceeded",
+			"dimension", rej.Dimension,
+			"limit", rej.Limit,
+			"bucket_left", rej.BucketLeft,
+			"token_count", rej.TokenCount)
 		return ptrAction(upstreamAction{kind: actionContinue})
 	}
 
