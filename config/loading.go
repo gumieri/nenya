@@ -1,13 +1,16 @@
 package config
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/url"
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 )
 
@@ -33,10 +36,43 @@ func Load(path string) (*Config, error) {
 	if err := json.Unmarshal(data, &cfg); err != nil {
 		return nil, fmt.Errorf("failed to parse config file %s: %v", path, err)
 	}
+	warnUnknownFields(data, path)
 	if err := ApplyDefaults(&cfg); err != nil {
 		return nil, fmt.Errorf("failed to apply defaults: %v", err)
 	}
 	return &cfg, nil
+}
+
+// warnUnknownFields performs a strict secondary decode and logs a warning
+// naming the first unknown field it hits. Lenient decoding always wins —
+// unknown fields never fail load or SIGHUP reload (NENYA-19) — but the
+// warning surfaces likely typos that lenient parsing would silently drop.
+func warnUnknownFields(data []byte, path string) {
+	dec := json.NewDecoder(bytes.NewReader(data))
+	dec.DisallowUnknownFields()
+	var probe Config
+	if err := dec.Decode(&probe); err != nil {
+		if name, ok := unknownFieldName(err); ok {
+			slog.Warn("config contains unknown field, ignored (possible typo)",
+				"field", name, "path", path)
+		}
+	}
+}
+
+// unknownFieldName extracts the field name from encoding/json's
+// "json: unknown field \"x\"" error.
+func unknownFieldName(err error) (string, bool) {
+	const marker = "json: unknown field "
+	msg := err.Error()
+	idx := strings.Index(msg, marker)
+	if idx < 0 {
+		return "", false
+	}
+	rest := msg[idx+len(marker):]
+	if name, uerr := strconv.Unquote(rest); uerr == nil {
+		return name, true
+	}
+	return rest, true
 }
 
 // LoadFromDir loads configuration from a directory. It first checks for a
@@ -108,6 +144,7 @@ func loadConfigDirectory(dir string) (*Config, error) {
 		if err := json.Unmarshal(data, &partial); err != nil {
 			return nil, fmt.Errorf("failed to parse config file %s: %v", filePath, err)
 		}
+		warnUnknownFields(data, filePath)
 
 		mergeConfig(merged, &partial)
 	}
