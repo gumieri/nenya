@@ -331,6 +331,10 @@ func geminiSanitize(deps *SanitizeDeps, payload map[string]interface{}) {
 		return
 	}
 
+	if demoteGeminiMidSessionSystem(deps, messages) {
+		payload["messages"] = messages
+	}
+
 	toolCallMap := geminiBuildToolCallMap(deps, messages)
 	orphanedIDs := geminiIdentifyOrphanedIDs(deps, toolCallMap)
 
@@ -473,6 +477,147 @@ func geminiInjectFunctionNames(deps *SanitizeDeps, messages []interface{}, toolC
 		msg["name"] = info.name
 		deps.Logger.Debug("gemini: injected function name on tool message", "tool_call_id", toolCallID, "name", info.name)
 	}
+}
+
+// geminiSystemMarker prefixes demoted mid-session system messages so the
+// model can tell provider-directed notices from genuine user input.
+const geminiSystemMarker = "[system]"
+
+// demoteGeminiMidSessionSystem implements the Gemini token-0 prefix
+// immutability rule (NENYA-44): only the leading system run may act as the
+// cached prefix anchor. Gemini's OpenAI-compat endpoint merges scattered
+// system messages unpredictably, so any system message arriving after the
+// first user/assistant turn is demoted to a user turn carrying a clear
+// role marker.
+//
+// Demotion never splits an open function-call sequence: notices that
+// arrive between an assistant tool_calls message and its tool results are
+// buffered and flushed before the next non-tool turn (or at the end of
+// the conversation), keeping the tool run contiguous for the upstream.
+//
+// Returns true when any message was demoted or reordered.
+func demoteGeminiMidSessionSystem(deps *SanitizeDeps, messages []interface{}) bool {
+	// Locate the end of the leading contiguous system run.
+	head := 0
+	for head < len(messages) {
+		msg, ok := messages[head].(map[string]interface{})
+		if !ok {
+			break
+		}
+		if role, _ := msg["role"].(string); role != "system" {
+			break
+		}
+		head++
+	}
+	if head == len(messages) {
+		return false
+	}
+
+	changed := false
+	var pending []interface{} // demoted notices held during a tool run
+	inToolRun := false        // an assistant tool_calls run awaits its results
+	demoted := func(msg map[string]interface{}) interface{} {
+		demoteMessageToUser(msg)
+		return msg
+	}
+
+	result := make([]interface{}, 0, len(messages))
+	result = append(result, messages[:head]...)
+
+	for i := head; i < len(messages); i++ {
+		msgRaw := messages[i]
+		msg, ok := msgRaw.(map[string]interface{})
+		if !ok {
+			flushGeminiPending(&pending, &inToolRun, &result, demoted)
+			result = append(result, msgRaw)
+			continue
+		}
+		role, _ := msg["role"].(string)
+
+		switch role {
+		case "system":
+			changed = true
+			if inToolRun {
+				pending = append(pending, msg)
+				continue
+			}
+			result = append(result, demoted(msg))
+		case "tool":
+			inToolRun = true
+			result = append(result, msgRaw)
+		case "assistant":
+			if _, hasToolCalls := msg["tool_calls"]; !hasToolCalls {
+				flushGeminiPending(&pending, &inToolRun, &result, demoted)
+			}
+			inToolRun = false
+			result = append(result, msgRaw)
+		default:
+			// user or other role: notices flush before it.
+			flushGeminiPending(&pending, &inToolRun, &result, demoted)
+			inToolRun = false
+			result = append(result, msgRaw)
+		}
+	}
+	flushGeminiPending(&pending, &inToolRun, &result, demoted)
+
+	if changed {
+		copy(messages, result)
+		if tail := len(messages) - len(result); tail > 0 {
+			clear(messages[len(result):]) // nil out drained tail slots
+		}
+		deps.Logger.Debug("demoted mid-session system messages for gemini prefix stability", "count", len(messages)-countGeminiLeadingSystem(result))
+	}
+	return changed
+}
+
+// flushGeminiPending emits buffered demoted notices once the open tool run
+// ends, demoting them as it goes.
+func flushGeminiPending(pending *[]interface{}, inToolRun *bool, result *[]interface{}, demoted func(map[string]interface{}) interface{}) {
+	for _, m := range *pending {
+		msg, _ := m.(map[string]interface{})
+		*result = append(*result, demoted(msg))
+	}
+	*pending = (*pending)[:0]
+	*inToolRun = false
+}
+
+// demoteMessageToUser converts a system message in place to a user turn
+// with a clear role marker: string content gains a "[system] " prefix;
+// block-array content gains a marker text block ahead of the verbatim
+// parts. Any other shape is wrapped as the marker alone.
+func demoteMessageToUser(msg map[string]interface{}) {
+	msg["role"] = "user"
+	switch content := msg["content"].(type) {
+	case string:
+		msg["content"] = geminiSystemMarker + " " + content
+	case []interface{}:
+		blocks := make([]interface{}, 0, len(content)+1)
+		blocks = append(blocks, map[string]interface{}{
+			"type": "text",
+			"text": geminiSystemMarker,
+		})
+		blocks = append(blocks, content...)
+		msg["content"] = blocks
+	default:
+		msg["content"] = geminiSystemMarker
+	}
+}
+
+// countGeminiLeadingSystem counts the contiguous system run at the head of
+// the message slice (used for debug logging only).
+func countGeminiLeadingSystem(messages []interface{}) int {
+	n := 0
+	for _, msgRaw := range messages {
+		msg, ok := msgRaw.(map[string]interface{})
+		if !ok {
+			break
+		}
+		if role, _ := msg["role"].(string); role != "system" {
+			break
+		}
+		n++
+	}
+	return n
 }
 
 func geminiFilterMessages(deps *SanitizeDeps, messages []interface{}, toolCallMap map[string]*toolCallInfo, orphanedIDs map[string]bool) []interface{} {
