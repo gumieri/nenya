@@ -146,7 +146,9 @@ func (a *GeminiAdapter) MutateResponse(body []byte) ([]byte, error) {
 	return out, nil
 }
 
-// transformToolCallsInDelta navigates to the tool_calls array in the delta and enriches them.
+// transformToolCallsInDelta navigates to the tool_calls array — in either the
+// streaming delta shape or the complete-response message shape (NENYA-51) —
+// and enriches the calls.
 func (a *GeminiAdapter) transformToolCallsInDelta(chunk map[string]interface{}) bool {
 	choices, ok := chunk["choices"].([]interface{})
 	if !ok || len(choices) == 0 {
@@ -156,15 +158,20 @@ func (a *GeminiAdapter) transformToolCallsInDelta(chunk map[string]interface{}) 
 	if !ok {
 		return false
 	}
-	delta, ok := choice["delta"].(map[string]interface{})
-	if !ok {
-		return false
+	for _, section := range []string{"delta", "message"} {
+		sectionMap, ok := choice[section].(map[string]interface{})
+		if !ok {
+			continue
+		}
+		toolCalls, ok := sectionMap["tool_calls"].([]interface{})
+		if !ok {
+			continue
+		}
+		if a.enrichToolCalls(toolCalls) {
+			return true
+		}
 	}
-	toolCalls, ok := delta["tool_calls"].([]interface{})
-	if !ok {
-		return false
-	}
-	return a.enrichToolCalls(toolCalls)
+	return false
 }
 
 // enrichToolCalls adds indices and stores extra content for tool calls.

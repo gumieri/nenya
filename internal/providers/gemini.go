@@ -35,6 +35,10 @@ func geminiSpec() ProviderSpec {
 
 type GeminiTransformer struct {
 	OnExtraContent func(toolCallID string, extraContent interface{})
+	// pendingExtra tracks the last tool_call id seen per "choice:tool" index
+	// so a signature arriving in a later delta chunk (after the id chunk) is
+	// still associated with the right call (NENYA-51 split-delta gap).
+	pendingExtra map[string]string
 }
 
 func newGeminiTransformer(cache *infra.ThoughtSignatureCache) stream.ResponseTransformer {
@@ -44,6 +48,7 @@ func newGeminiTransformer(cache *infra.ThoughtSignatureCache) stream.ResponseTra
 				cache.Store(toolCallID, extraContent)
 			}
 		},
+		pendingExtra: make(map[string]string),
 	}
 }
 
@@ -75,45 +80,55 @@ func (t *GeminiTransformer) TransformSSEChunk(ctx context.Context, data []byte) 
 
 func (t *GeminiTransformer) processToolCalls(chunk map[string]interface{}) {
 	choices, ok := chunk["choices"].([]interface{})
-	if !ok || len(choices) == 0 {
-		return
-	}
-
-	choice, ok := choices[0].(map[string]interface{})
 	if !ok {
 		return
 	}
 
-	delta, ok := choice["delta"].(map[string]interface{})
-	if !ok {
-		return
-	}
-
-	toolCalls, ok := delta["tool_calls"].([]interface{})
-	if !ok {
-		return
-	}
-
-	for i, tc := range toolCalls {
-		tcMap, ok := tc.(map[string]interface{})
+	// NENYA-51: iterate ALL choices (n>1 streams previously lost caching
+	// beyond choices[0]).
+	for ci, choiceRaw := range choices {
+		choice, ok := choiceRaw.(map[string]interface{})
 		if !ok {
 			continue
 		}
-
-		if _, exists := tcMap["index"]; !exists {
-			tcMap["index"] = i
+		delta, ok := choice["delta"].(map[string]interface{})
+		if !ok {
+			continue
 		}
-
-		t.handleExtraContent(tcMap)
+		toolCalls, ok := delta["tool_calls"].([]interface{})
+		if !ok {
+			continue
+		}
+		for i, tc := range toolCalls {
+			tcMap, ok := tc.(map[string]interface{})
+			if !ok {
+				continue
+			}
+			if _, exists := tcMap["index"]; !exists {
+				tcMap["index"] = i
+			}
+			t.handleExtraContent(fmt.Sprintf("%d:%d", ci, i), tcMap)
+		}
 	}
 }
 
-func (t *GeminiTransformer) handleExtraContent(tcMap map[string]interface{}) {
+// handleExtraContent stores a tool call's thought signature. The signature
+// may arrive in the same delta as the id or in a later delta chunk split by
+// index; pendingExtra bridges the two shapes.
+func (t *GeminiTransformer) handleExtraContent(pendingKey string, tcMap map[string]interface{}) {
 	if t.OnExtraContent == nil {
 		return
 	}
 
 	tcID, _ := tcMap["id"].(string)
+	if tcID != "" {
+		if t.pendingExtra == nil {
+			t.pendingExtra = make(map[string]string)
+		}
+		t.pendingExtra[pendingKey] = tcID
+	} else {
+		tcID = t.pendingExtra[pendingKey]
+	}
 	if tcID == "" {
 		return
 	}

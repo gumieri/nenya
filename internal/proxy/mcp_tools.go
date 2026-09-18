@@ -41,6 +41,10 @@ type mcpToolCall struct {
 	ID        string
 	Name      string
 	Arguments map[string]any
+	// ExtraContent carries the Gemini thought signature (extra_content) so
+	// synthetic assistant tool_calls keep the model's signatures inline
+	// (NENYA-51). Nil for providers that do not emit signatures.
+	ExtraContent any
 }
 
 // replayBufferedResponse writes a buffered SSE response to the client.
@@ -94,16 +98,22 @@ type sseAccumulator struct {
 	tcArgsAccum map[int]*strings.Builder
 	tcNameAccum map[int]string
 	tcIDAccum   map[int]string
-	totalLines  int
-	dataLines   int
+	// tcExtraAccum carries Gemini thought signatures (extra_content) seen in
+	// tool_call deltas so synthetic assistant messages keep them inline
+	// (NENYA-51); without this the MCP loop's own history lost the model's
+	// signatures and the sanitizer stripped the just-completed tool pairs.
+	tcExtraAccum map[int]any
+	totalLines   int
+	dataLines    int
 }
 
 func newSSEAccumulator(logger *slog.Logger) *sseAccumulator {
 	return &sseAccumulator{
-		tcArgsAccum: make(map[int]*strings.Builder),
-		tcNameAccum: make(map[int]string),
-		tcIDAccum:   make(map[int]string),
-		logger:      logger,
+		tcArgsAccum:  make(map[int]*strings.Builder),
+		tcNameAccum:  make(map[int]string),
+		tcIDAccum:    make(map[int]string),
+		tcExtraAccum: make(map[int]any),
+		logger:       logger,
 	}
 }
 
@@ -217,6 +227,10 @@ func (acc *sseAccumulator) processToolCallChunk(tc map[string]any) {
 		acc.tcIDAccum[idx] = id
 	}
 
+	if extra, ok := tc["extra_content"]; ok {
+		acc.tcExtraAccum[idx] = extra
+	}
+
 	fn, ok := tc["function"].(map[string]any)
 	if !ok {
 		return
@@ -267,7 +281,7 @@ func (acc *sseAccumulator) buildToolCalls() []mcpToolCall {
 				args = make(map[string]any)
 			}
 		}
-		calls = append(calls, mcpToolCall{ID: id, Name: name, Arguments: args})
+		calls = append(calls, mcpToolCall{ID: id, Name: name, Arguments: args, ExtraContent: acc.tcExtraAccum[idx]})
 	}
 	return calls
 }
@@ -344,14 +358,20 @@ func buildOpenAIToolCalls(calls []mcpToolCall) []any {
 	result := make([]any, 0, len(calls))
 	for _, call := range calls {
 		argsBytes, _ := json.Marshal(call.Arguments)
-		result = append(result, map[string]any{
+		tc := map[string]any{
 			"id":   call.ID,
 			"type": "function",
 			"function": map[string]any{
 				"name":      call.Name,
 				"arguments": string(argsBytes),
 			},
-		})
+		}
+		if call.ExtraContent != nil {
+			// NENYA-51: keep the model's thought signature inline so the
+			// Gemini sanitizer sees it and does not strip the tool pair.
+			tc["extra_content"] = call.ExtraContent
+		}
+		result = append(result, tc)
 	}
 	return result
 }

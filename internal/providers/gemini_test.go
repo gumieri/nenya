@@ -453,3 +453,58 @@ func TestGeminiTransformer_OnExtraContent_Nil(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
+
+// TestGeminiTransformer_SplitDelta pins the NENYA-51 split-delta gap: the
+// thought signature arriving in a later delta chunk (no id) must associate
+// with the id seen in the earlier chunk at the same index.
+func TestGeminiTransformer_SplitDelta(t *testing.T) {
+	var calledIDs []string
+	var calledExtras []interface{}
+	transformer := &GeminiTransformer{
+		OnExtraContent: func(id string, extra interface{}) {
+			calledIDs = append(calledIDs, id)
+			calledExtras = append(calledExtras, extra)
+		},
+	}
+
+	chunk1 := []byte(`{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_1","type":"function","function":{"name":"foo","arguments":""}}]}}]}`)
+	if _, err := transformer.TransformSSEChunk(context.Background(), chunk1); err != nil {
+		t.Fatalf("chunk1: %v", err)
+	}
+	chunk2 := []byte(`{"choices":[{"delta":{"tool_calls":[{"index":0,"extra_content":{"thought_signature":"sig-x"}}]}}]}`)
+	if _, err := transformer.TransformSSEChunk(context.Background(), chunk2); err != nil {
+		t.Fatalf("chunk2: %v", err)
+	}
+
+	if len(calledIDs) != 1 || calledIDs[0] != "call_1" {
+		t.Fatalf("expected signature associated with call_1, got %v", calledIDs)
+	}
+	extraJSON, _ := json.Marshal(calledExtras[0])
+	if string(extraJSON) != `{"thought_signature":"sig-x"}` {
+		t.Errorf("extraContent = %s, want {\"thought_signature\":\"sig-x\"}", extraJSON)
+	}
+}
+
+// TestGeminiTransformer_MultiChoice pins the n>1 gap: signatures in
+// choices beyond choices[0] must also be cached.
+func TestGeminiTransformer_MultiChoice(t *testing.T) {
+	cached := map[string]interface{}{}
+	transformer := &GeminiTransformer{
+		OnExtraContent: func(id string, extra interface{}) {
+			cached[id] = extra
+		},
+	}
+
+	data := []byte(`{"choices":[
+		{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_a","extra_content":{"s":"a"}}]}},
+		{"index":1,"delta":{"tool_calls":[{"index":0,"id":"call_b","extra_content":{"s":"b"}}]}}]}`)
+	if _, err := transformer.TransformSSEChunk(context.Background(), data); err != nil {
+		t.Fatalf("TransformSSEChunk: %v", err)
+	}
+	if _, ok := cached["call_a"]; !ok {
+		t.Error("call_a (choices[0]) signature must be cached")
+	}
+	if _, ok := cached["call_b"]; !ok {
+		t.Error("call_b (choices[1]) signature must be cached")
+	}
+}

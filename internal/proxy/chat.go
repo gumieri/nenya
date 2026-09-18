@@ -1139,6 +1139,13 @@ func (p *Proxy) handleNonStreamingResponse(gw *gateway.NenyaGateway, w http.Resp
 		return streamResult{empty: true}
 	}
 
+	// NENYA-51: cache Gemini thought signatures from the OpenAI-format
+	// response before any format conversion drops them. Covers the
+	// non-stream path for OpenAI-format clients and the pre-conversion
+	// window for Anthropic-source clients (handleNonStreamingResponse
+	// bypasses the streaming transformer entirely).
+	cacheExtraContentFromResponse(gw.ThoughtSigCache, responseMap)
+
 	if sourceFormat == "anthropic" && target.Format != "anthropic" {
 		a := adapter.GetAnthropicAdapter()
 		responseMap = a.ConvertOpenAIResponseToAnthropicBody(responseMap)
