@@ -789,6 +789,7 @@ func ResolveProviders(cfg *Config, secrets *SecretsConfig) map[string]*Provider 
 			ModelAliases:               pc.ModelAliases,
 			TokenBudgetDaily:           pc.TokenBudgetDaily,
 			StreamBootstrapBufferBytes: pc.StreamBootstrapBufferBytes,
+			SessionStickyKeys:          pc.SessionStickyKeys,
 		}
 	}
 	return providers

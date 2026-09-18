@@ -220,6 +220,11 @@ type ProviderConfig struct {
 	// the 200 is committed. nil = inherit the governance global; 0 = force
 	// off; >0 = enable with that budget.
 	StreamBootstrapBufferBytes *int `json:"stream_bootstrap_buffer_bytes,omitempty"`
+	// SessionStickyKeys opts out of session-sticky credential pinning
+	// (NENYA-29): sessions deterministically reuse one account so upstream
+	// per-key prompt caches stay warm under multi-account rotation. nil
+	// (default) = enabled; false = this provider always rotates via LRU.
+	SessionStickyKeys *bool `json:"session_sticky_keys,omitempty"`
 	// Billing configures usage-based billing tracking for this provider.
 	Billing *BillingConfig `json:"billing,omitempty"`
 	// AllowedModels is a list of RE2 regex patterns that models from this
@@ -291,6 +296,9 @@ type Provider struct {
 	// StreamBootstrapBufferBytes is the per-provider stream bootstrap
 	// buffering opt-in. See ProviderConfig.StreamBootstrapBufferBytes.
 	StreamBootstrapBufferBytes *int
+	// SessionStickyKeys opts out of session-sticky credential pinning.
+	// See ProviderConfig.SessionStickyKeys.
+	SessionStickyKeys *bool
 }
 
 // ConcurrencyLimit resolves the in-flight request cap for a model served by

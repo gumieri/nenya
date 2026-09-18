@@ -765,9 +765,22 @@ func (a *AgentState) buildTarget(ctx context.Context, opts TargetBuildOpts, m co
 		ReasoningEffort: m.ReasoningEffort,
 	}
 
-	applyAccountCredential(ctx, t, opts.AccountSelector, m, opts.Preferred)
+	applyAccountCredential(ctx, t, opts.AccountSelector, m, resolvePreferredAccount(opts.Preferred, providers, m.Provider))
 
 	return t, true
+}
+
+// resolvePreferredAccount returns the session's account preference for a
+// target, honoring the provider's session_sticky_keys opt-out (NENYA-29):
+// opted-out providers always rotate via LRU instead of the pinned account.
+func resolvePreferredAccount(preferred *AccountPreference, providers map[string]*config.Provider, providerName string) *AccountPreference {
+	if preferred == nil {
+		return nil
+	}
+	if pr := providers[providerName]; pr != nil && pr.SessionStickyKeys != nil && !*pr.SessionStickyKeys {
+		return nil
+	}
+	return preferred
 }
 
 // applyAccountCredential resolves and assigns the account credential for a

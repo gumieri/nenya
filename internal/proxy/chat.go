@@ -187,10 +187,10 @@ func (p *Proxy) resolveAgentRouting(ctx context.Context, req *chatRequest, gw *g
 	// Resolve the sticky session pin before target build so the pinned
 	// account can steer credential selection via the account preference. The
 	// read is non-touching (Peek): failed builds must not extend pin TTL.
-	var sticky *stickyPin
-	if strategy == discovery.AgentStrategySticky {
-		sticky = resolveStickyPin(req, gw)
-	}
+	// Session keys resolve for EVERY strategy (NENYA-29): non-sticky agents
+	// use the pin for credential-only affinity (no reordering), keeping
+	// upstream per-key prompt caches warm under multi-account rotation.
+	sticky := resolveStickyPin(req, gw)
 
 	built := gw.AgentState.BuildTargetList(ctx, routing.TargetBuildOpts{
 		Logger:          gw.Logger,
@@ -228,9 +228,7 @@ func (p *Proxy) resolveAgentRouting(ctx context.Context, req *chatRequest, gw *g
 		targets = reorderTargetsByLatency(req, gw, targets)
 	}
 
-	if strategy == discovery.AgentStrategySticky {
-		targets = applyStickyRouting(req, gw, agent, targets, sticky)
-	}
+	targets = applyStickyRouting(req, gw, agent, targets, sticky, strategy == discovery.AgentStrategySticky)
 
 	gw.Logger.Info("agent routing",
 		"agent", req.ModelName, "strategy", strategy, "models_in_chain", len(targets))
@@ -290,11 +288,27 @@ func resolveStickyPin(req *chatRequest, gw *gateway.NenyaGateway) *stickyPin {
 	return &stickyPin{key: key, state: pin}
 }
 
+// sessionStickyKeysEnabled reports whether a provider opted out of
+// session-sticky credential pinning (NENYA-29). Unset = enabled; an explicit
+// false disables pinning and preference steering for that provider.
+func sessionStickyKeysEnabled(gw *gateway.NenyaGateway, providerName string) bool {
+	if pr, ok := gw.Providers[providerName]; ok && pr.SessionStickyKeys != nil {
+		return *pr.SessionStickyKeys
+	}
+	return true
+}
+
 // applyStickyRouting pins the session to its previously selected provider,
 // model, and account when the pin is still valid (active, present in the
-// built target list). Reorders the target list so the pinned target is first,
-// leaving the remainder as the ordered failover tail. Promotion paths, each
-// recorded as a failover pin-change via SessionRouter.PromoteIfChanged:
+// built target list). When reorder is true (sticky strategy) the pinned
+// target is moved to the front of the list, leaving the remainder as the
+// ordered failover tail. When reorder is false (fallback/round-robin
+// strategies, NENYA-29) the list order is untouched — the pin is used purely
+// for credential affinity: prefer the pinned account when the front target
+// matches the pin, and record the front target's provider/model/account so
+// the session's next request reuses the same upstream credential.
+// Promotion paths, each recorded as a failover pin-change via
+// SessionRouter.PromoteIfChanged:
 //
 //   - Pinned account drift: the pinned provider/model is active at the front
 //     but serves a different, non-empty account — the pinned account was
@@ -310,8 +324,9 @@ func resolveStickyPin(req *chatRequest, gw *gateway.NenyaGateway) *stickyPin {
 //     empty account names.
 //
 // A pin that still matches the served provider/model and account is left
-// untouched: no re-pin, no failover metric, no Since reset.
-func applyStickyRouting(req *chatRequest, gw *gateway.NenyaGateway, agent config.AgentConfig, targets []routing.UpstreamTarget, sticky *stickyPin) []routing.UpstreamTarget {
+// untouched: no re-pin, no failover metric, no Since reset. Providers that
+// opted out via session_sticky_keys=false never pin or promote.
+func applyStickyRouting(req *chatRequest, gw *gateway.NenyaGateway, agent config.AgentConfig, targets []routing.UpstreamTarget, sticky *stickyPin, reorder bool) []routing.UpstreamTarget {
 	if sticky == nil || gw.AgentState == nil || gw.AgentState.SessionRouter == nil {
 		return targets
 	}
@@ -321,42 +336,64 @@ func applyStickyRouting(req *chatRequest, gw *gateway.NenyaGateway, agent config
 	// Refresh LastSeen only now that routing succeeded (targets non-empty).
 	pin, found := gw.AgentState.SessionRouter.Lookup(sticky.key)
 	if !found {
-		if pinTarget, ok := firstActiveTarget(targets); ok {
-			gw.AgentState.SessionRouter.Pin(sticky.key, pinTarget.Provider, pinTarget.Model, pinTarget.AccountName, ttl)
-		}
+		pinSessionTarget(gw, sticky.key, targets, ttl)
 		return targets
 	}
 
 	i := indexOfActiveTarget(targets, pin.Provider, pin.Model)
-	if i > 0 {
+	if reorder && i > 0 {
 		targets = moveToFront(targets, i)
 		i = 0
 	}
 	if i == 0 {
-		// Pinned provider/model is active at the front. Re-pin only when the
-		// serving account drifted from the pin — a sibling account was
-		// selected during build because the pinned account was unavailable.
-		// An empty front account (resolution failed entirely) must NOT wipe
-		// the pin's account: the session may return to the pinned account
-		// once it recovers. PromoteIfChanged also dedupes concurrent
-		// promotions of the same effective target under the router lock.
-		front := targets[0]
-		if front.AccountName != "" && front.AccountName != pin.Account {
-			if gw.AgentState.SessionRouter.PromoteIfChanged(sticky.key, front.Provider, front.Model, front.AccountName, ttl) {
-				gw.Logger.Debug("sticky pin promoted to sibling account",
-					"agent", req.ModelName, "provider", front.Provider, "model", front.Model,
-					"from_account", pin.Account, "to_account", front.AccountName)
-			}
-		}
+		promoteOnFrontDrift(gw, req, sticky.key, pin, targets, ttl)
 		return targets
 	}
-	if pinTarget, ok := firstActiveTarget(targets); ok {
-		if gw.AgentState.SessionRouter.PromoteIfChanged(sticky.key, pinTarget.Provider, pinTarget.Model, pinTarget.AccountName, ttl) {
-			gw.Logger.Debug("sticky pin promoted to alternative active target",
-				"agent", req.ModelName, "from", pin.Provider+"/"+pin.Model, "to", pinTarget.Provider+"/"+pinTarget.Model)
-		}
-	}
+	promoteToFirstActive(gw, req, sticky.key, pin, targets, ttl)
 	return targets
+}
+
+// pinSessionTarget records the first active target as the session's pin when
+// the target's provider participates in session-sticky keys (NENYA-29).
+func pinSessionTarget(gw *gateway.NenyaGateway, key string, targets []routing.UpstreamTarget, ttl time.Duration) {
+	pinTarget, ok := firstActiveTarget(targets)
+	if !ok || !sessionStickyKeysEnabled(gw, pinTarget.Provider) {
+		return
+	}
+	gw.AgentState.SessionRouter.Pin(key, pinTarget.Provider, pinTarget.Model, pinTarget.AccountName, ttl)
+}
+
+// promoteOnFrontDrift handles the front target matching the pinned
+// provider/model: re-pin only when the serving account drifted from the pin —
+// a sibling account was selected during build because the pinned account was
+// unavailable. An empty front account (resolution failed entirely) must NOT
+// wipe the pin's account: the session may return to the pinned account once
+// it recovers. PromoteIfChanged also dedupes concurrent promotions of the
+// same effective target under the router lock.
+func promoteOnFrontDrift(gw *gateway.NenyaGateway, req *chatRequest, key string, pin routing.SessionState, targets []routing.UpstreamTarget, ttl time.Duration) {
+	front := targets[0]
+	if front.AccountName == "" || front.AccountName == pin.Account || !sessionStickyKeysEnabled(gw, front.Provider) {
+		return
+	}
+	if gw.AgentState.SessionRouter.PromoteIfChanged(key, front.Provider, front.Model, front.AccountName, ttl) {
+		gw.Logger.Debug("sticky pin promoted to sibling account",
+			"agent", req.ModelName, "provider", front.Provider, "model", front.Model,
+			"from_account", pin.Account, "to_account", front.AccountName)
+	}
+}
+
+// promoteToFirstActive handles the pinned provider/model being lost (cooling,
+// filtered out, or removed): the pin is promoted to the first active target
+// so the session's credential affinity follows wherever the traffic went.
+func promoteToFirstActive(gw *gateway.NenyaGateway, req *chatRequest, key string, pin routing.SessionState, targets []routing.UpstreamTarget, ttl time.Duration) {
+	pinTarget, ok := firstActiveTarget(targets)
+	if !ok || !sessionStickyKeysEnabled(gw, pinTarget.Provider) {
+		return
+	}
+	if gw.AgentState.SessionRouter.PromoteIfChanged(key, pinTarget.Provider, pinTarget.Model, pinTarget.AccountName, ttl) {
+		gw.Logger.Debug("sticky pin promoted to alternative active target",
+			"agent", req.ModelName, "from", pin.Provider+"/"+pin.Model, "to", pinTarget.Provider+"/"+pinTarget.Model)
+	}
 }
 
 // sessionKeyFromRequest derives a stable session identifier from the agent
