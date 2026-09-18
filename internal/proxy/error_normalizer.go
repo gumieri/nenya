@@ -372,6 +372,74 @@ func terminalNetworkErrorReason(responseMap map[string]interface{}) string {
 	return ""
 }
 
+// forbiddenFinishReasons are terminal outcomes whose streams must never be
+// cached (NENYA-27): refusals, content-filter stops, and network-failure
+// finish/stop reasons. Values are compared decoded-and-trimmed; providers and
+// transformers emit these as lowercase enums.
+var forbiddenFinishReasons = map[string]bool{
+	"refusal":        true,
+	"content_filter": true,
+	"network_error":  true,
+	"network-error":  true,
+	"network error":  true,
+}
+
+// capturedStreamHasRefusalOrFilter decodes the captured transformed SSE data
+// lines and reports refusal/content_filter terminal outcomes, replacing the
+// previous serialized-JSON substring match that false-positived on user
+// content merely containing the words. Checks OpenAI finish_reason, refusal
+// deltas, and Anthropic stop_reason shapes.
+func capturedStreamHasRefusalOrFilter(captured []byte) bool {
+	for _, raw := range bytes.Split(captured, []byte{'\n'}) {
+		line := bytes.TrimSpace(raw)
+		var payload []byte
+		switch {
+		case bytes.HasPrefix(line, []byte("data:")):
+			payload = bytes.TrimSpace(bytes.TrimPrefix(line, []byte("data:")))
+		case len(line) > 0 && line[0] == '{':
+			// Bare JSON line (sseDataLine convention: some upstreams emit
+			// raw JSON bodies under Content-Type: text/event-stream).
+			payload = line
+		default:
+			continue
+		}
+		if len(payload) == 0 || payload[0] != '{' || bytes.Equal(payload, []byte("[DONE]")) {
+			continue
+		}
+		var parsed struct {
+			Choices []struct {
+				FinishReason string `json:"finish_reason"`
+				Delta        struct {
+					Refusal    string `json:"refusal"`
+					StopReason string `json:"stop_reason"`
+				} `json:"delta"`
+			} `json:"choices"`
+			Delta struct {
+				StopReason string `json:"stop_reason"`
+			} `json:"delta"`
+		}
+		if json.Unmarshal(payload, &parsed) != nil {
+			continue
+		}
+		for _, ch := range parsed.Choices {
+			if forbiddenFinishReasons[strings.TrimSpace(strings.ToLower(ch.FinishReason))] {
+				return true
+			}
+			if ch.Delta.Refusal != "" {
+				return true
+			}
+			if forbiddenFinishReasons[strings.TrimSpace(strings.ToLower(ch.Delta.StopReason))] {
+				return true
+			}
+		}
+		if forbiddenFinishReasons[strings.TrimSpace(strings.ToLower(parsed.Delta.StopReason))] {
+			// Anthropic message_delta shape: {"type":"message_delta","delta":{"stop_reason":...}}
+			return true
+		}
+	}
+	return false
+}
+
 // capturedStreamHasNetworkErrorFinish reports whether a captured transformed
 // SSE buffer contains a network-failure finish_reason or stop_reason. The
 // buffer is lowercased first so case variants cannot defeat the match.

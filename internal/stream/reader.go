@@ -97,6 +97,7 @@ type SSETransformingReader struct {
 	sawDone             bool
 	sawContent          bool
 	sawFinishReason     bool
+	injectedError       bool
 	ctx                 context.Context
 	poolBuf             *[]byte
 	logger              *slog.Logger
@@ -225,6 +226,7 @@ func (r *SSETransformingReader) ResetCounters() {
 	r.sawContent = false
 	r.sawFinishReason = false
 	r.sawDone = false
+	r.injectedError = false
 }
 
 // SetSuppressCutError disables the interim gateway_error + [DONE] injection
@@ -323,6 +325,15 @@ func (r *SSETransformingReader) SawFinishReason() bool {
 // gateway_error injection for a genuine mid-generation cut.
 func (r *SSETransformingReader) SuppressCutError() bool {
 	return r.suppressCutError
+}
+
+// InjectedError returns true if the reader replaced the upstream's terminal
+// with a synthesized gateway_error frame (empty stream, mid-generation cut,
+// oversize line, or size-limit discard). Such streams are sanitized
+// truncations: they must never be persisted to the response cache (NENYA-27)
+// because replaying them would serve a dead upstream's partial output.
+func (r *SSETransformingReader) InjectedError() bool {
+	return r.injectedError
 }
 
 // getTransformedLine returns the transformed line, using pooled buffers when possible.
@@ -537,6 +548,7 @@ func (r *SSETransformingReader) injectDoneOnly() {
 // injectErrorBuffer creates a gateway_error SSE event + [DONE] and places it
 // in r.buffer so the client receives the error before EOF.
 func (r *SSETransformingReader) injectErrorBuffer(message string) {
+	r.injectedError = true
 	slog.Warn("injecting gateway_error into stream", "message", message, "sawDone", r.sawDone)
 	errPayload, err := json.Marshal(map[string]any{
 		"error": map[string]any{

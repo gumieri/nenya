@@ -918,10 +918,10 @@ func (p *Proxy) streamResponse(opts streamResponseOpts, action upstreamAction) s
 		// response cache with the partial cut stream.
 		if isStreamCut(cont, transformingReader, copyErr) {
 			gw.Metrics.RecordStreamContinuation(target.Model, target.Provider, "gave_up_exhausted")
-			return p.handleStreamDone(gw, w, target, opts.agentName, action, "", cooldownDuration, payload, buf, copyErr, nil, nil, contentBuilder, stallR, r.Context())
+			return p.handleStreamDone(gw, w, target, opts.agentName, action, "", cooldownDuration, payload, buf, copyErr, nil, nil, contentBuilder, stallR, r.Context(), transformingReader.InjectedError())
 		}
 
-		return p.handleStreamDone(gw, w, target, opts.agentName, action, cacheKey, cooldownDuration, payload, buf, copyErr, captureBuf, tee, contentBuilder, stallR, r.Context())
+		return p.handleStreamDone(gw, w, target, opts.agentName, action, cacheKey, cooldownDuration, payload, buf, copyErr, captureBuf, tee, contentBuilder, stallR, r.Context(), transformingReader.InjectedError())
 	}
 
 	putStreamBuffer(buf)
@@ -1201,7 +1201,7 @@ func (p *Proxy) setupStreamWriter(gw *gateway.NenyaGateway, flushWriter *immedia
 	return dst, captureBuf, tee
 }
 
-func (p *Proxy) handleStreamDone(gw *gateway.NenyaGateway, w http.ResponseWriter, target routing.UpstreamTarget, agentName string, action upstreamAction, cacheKey string, cooldownDuration time.Duration, payload map[string]any, buf *[]byte, copyErr error, captureBuf *bytes.Buffer, tee *sseTeeWriter, contentBuilder *contentBuilder, stallR *stallReader, reqCtx context.Context) streamResult {
+func (p *Proxy) handleStreamDone(gw *gateway.NenyaGateway, w http.ResponseWriter, target routing.UpstreamTarget, agentName string, action upstreamAction, cacheKey string, cooldownDuration time.Duration, payload map[string]any, buf *[]byte, copyErr error, captureBuf *bytes.Buffer, tee *sseTeeWriter, contentBuilder *contentBuilder, stallR *stallReader, reqCtx context.Context, injectedErr bool) streamResult {
 	putStreamBuffer(buf)
 
 	if errors.Is(copyErr, stream.ErrStreamBlocked) {
@@ -1251,6 +1251,19 @@ func (p *Proxy) handleStreamDone(gw *gateway.NenyaGateway, w http.ResponseWriter
 			"timeout", gw.Config.Governance.EffectiveUpstreamTimeout())
 		gw.Metrics.RecordStreamInterrupt(target.Model, target.Provider, "timeout")
 		p.writeTimeoutSSE(gw, w)
+	}
+
+	if injectedErr && copyErr == nil {
+		// NENYA-27: the reader sanitized a truncated/empty upstream stream
+		// with a synthesized gateway_error terminal. The exchange is a
+		// provider failure (cooldown the target) even though the copy loop
+		// saw a clean EOF, and the truncated output must never reach the
+		// response cache or the MCP auto-save below.
+		gw.Logger.Warn("stream truncated, sanitized with injected gateway_error terminal",
+			"model", target.Model, "provider", target.Provider)
+		gw.AgentState.RecordFailure(target, cooldownDuration)
+		gw.Metrics.RecordStreamInterrupt(target.Model, target.Provider, "truncated")
+		return streamResult{}
 	}
 
 	recordStreamResult(gw, target, agentName, cooldownDuration, copyErr)
@@ -1303,13 +1316,13 @@ func storeStreamCache(gw *gateway.NenyaGateway, cacheKey string, captureBuf *byt
 
 	captured := captureBuf.Bytes()
 
-	// Skip caching for refusal responses, for completions that terminated
-	// with a network-failure finish_reason, and for streams whose terminal
-	// event is an upstream error object. The check is a cheap terminal-line
-	// parse for performance. Known gap (NENYA-28 follow-up): reader-injected
-	// gateway_error frames end with [DONE] and therefore still cache.
-	if bytes.Contains(captured, []byte("refusal")) || bytes.Contains(captured, []byte("content_filter")) ||
-		capturedStreamHasNetworkErrorFinish(captured) || capturedStreamEndsWithErrorObject(captured) {
+	// Skip caching for completions that terminated with refusal/content_filter
+	// outcomes (decoded from the terminal events, not substring-matched —
+	// NENYA-27), for network-failure finish_reasons, and for streams whose
+	// terminal event is an upstream error object. Reader-injected truncation
+	// terminals never reach this function (handleStreamDone skips earlier).
+	if capturedStreamHasRefusalOrFilter(captured) || capturedStreamHasNetworkErrorFinish(captured) ||
+		capturedStreamEndsWithErrorObject(captured) {
 		return
 	}
 
