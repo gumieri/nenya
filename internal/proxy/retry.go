@@ -226,7 +226,10 @@ type retryLoop struct {
 	// skipped while a different pair remains eligible.
 	// lastFailReason classifies the most recent target failure for the
 	// sticky_provider failover gate (NENYA-18); reset before each dispatch.
-	lastFailReason   failReason
+	lastFailReason failReason
+	// keyBudgetCharged ensures the per-key daily token budget is charged
+	// once per request, not per failover attempt (NENYA-20).
+	keyBudgetCharged bool
 	rateLimitedPairs map[string]bool
 }
 
@@ -521,6 +524,41 @@ const (
 	failReasonStream
 )
 
+// enforceBudgets charges and checks the per-key daily token budget (once
+// per request) and the per-provider daily budget (per target attempt).
+// Returns denied=true with the denial reason ("key_budget" /
+// "provider_budget"); the caller writes the typed 429 and ends the request.
+func (rl *retryLoop) enforceBudgets(target routing.UpstreamTarget) (bool, string) {
+	if rl.opts.TokenCount <= 0 {
+		return false, ""
+	}
+
+	// Key daily budget: reserved once per request (non-refundable
+	// estimate — failed dispatches consume the reservation).
+	if !rl.keyBudgetCharged {
+		rl.keyBudgetCharged = true
+		if key := rl.opts.ApiKey; key != nil && key.TokenBudgetDaily > 0 {
+			if !rl.gw.KeyUsage.ChargeKeyTokens(key.Name, key.TokenBudgetDaily, rl.opts.TokenCount) {
+				return true, "key_budget"
+			}
+		}
+	}
+
+	// Provider daily budget with per-key priority tier.
+	prov := rl.gw.Providers[target.Provider]
+	if prov == nil || prov.TokenBudgetDaily <= 0 {
+		return false, ""
+	}
+	tier := "always"
+	if key := rl.opts.ApiKey; key != nil && key.BudgetTier != "" {
+		tier = key.BudgetTier
+	}
+	if !rl.gw.KeyUsage.AllowProviderTokens(target.Provider, tier, prov.TokenBudgetDaily, rl.opts.TokenCount) {
+		return true, "provider_budget"
+	}
+	return false, ""
+}
+
 // stickyAllowsFailover applies the agent's sticky_provider policy to a
 // failover decision (NENYA-18). strict blocks every failover except a
 // queued summarization retry; lenient allows 5xx, targets whose circuit
@@ -569,6 +607,20 @@ retryLoop:
 			rl.ctxLogger.Info("skipping rate-limited account for remaining round",
 				"model", target.Model, "provider", target.Provider, "account", target.AccountName)
 			continue
+		}
+
+		// Per-key/per-provider token budgets (NENYA-20): charged once per
+		// request for the key's daily budget, per dispatch attempt for the
+		// provider's daily budget. Denials write a typed 429 and end the
+		// request.
+		if denied, reason := rl.enforceBudgets(target); denied {
+			rl.gw.Metrics.IncAuthDenials(rl.opts.AgentName, reason)
+			rl.ctxLogger.Warn("token budget exhausted, rejecting request",
+				"reason", reason, "model", target.Model, "provider", target.Provider,
+				"token_count", rl.opts.TokenCount)
+			writeStructuredError(rl.w, http.StatusTooManyRequests, infra.ErrorKindRateLimited,
+				"Token budget exhausted ("+reason+")")
+			return true
 		}
 
 		var payloadToUse map[string]interface{}

@@ -787,6 +787,7 @@ func ResolveProviders(cfg *Config, secrets *SecretsConfig) map[string]*Provider 
 			MaxConcurrentRequests:    pc.MaxConcurrentRequests,
 			ModelConcurrency:         pc.ModelConcurrency,
 			ModelAliases:             pc.ModelAliases,
+			TokenBudgetDaily:         pc.TokenBudgetDaily,
 		}
 	}
 	return providers

@@ -205,10 +205,14 @@ type ProviderConfig struct {
 	ModelConcurrency map[string]int `json:"model_concurrency,omitempty"`
 	// ModelAliases rewrites model IDs at dispatch time for this provider:
 	// key = canonical ID (what the client sends / catalog lists), value =
-	// physical ID (what the upstream receives). Exact-match on the
+	// physical ID (what the upstream receives). Exact match on the
 	// canonical ID. Use when a gateway/provider expects a different
 	// spelling (e.g. dotted→dashed slugs) without per-provider code.
 	ModelAliases map[string]string `json:"model_aliases,omitempty"`
+	// TokenBudgetDaily caps the token estimate this provider may serve per
+	// UTC day (0 = unlimited). Keys whose budget_tier is "fill" are
+	// rejected once the budget is exhausted; "always" keys are served.
+	TokenBudgetDaily int `json:"token_budget_daily,omitempty"`
 	// Billing configures usage-based billing tracking for this provider.
 	Billing *BillingConfig `json:"billing,omitempty"`
 	// AllowedModels is a list of RE2 regex patterns that models from this
@@ -274,6 +278,9 @@ type Provider struct {
 	// ModelAliases rewrites model IDs at dispatch time (canonical →
 	// physical). See ProviderConfig.ModelAliases.
 	ModelAliases map[string]string
+	// TokenBudgetDaily caps the token estimate this provider may serve per
+	// UTC day (0 = unlimited). See ProviderConfig.TokenBudgetDaily.
+	TokenBudgetDaily int
 }
 
 // ConcurrencyLimit resolves the in-flight request cap for a model served by
@@ -644,6 +651,17 @@ type ApiKey struct {
 	ExpiresAt        string         `json:"expires_at,omitempty"`
 	Enabled          bool           `json:"enabled"`
 	Permissions      map[string]any `json:"permissions,omitempty"`
+	// RatelimitMaxRPM caps requests per minute for this key (0 =
+	// unlimited). Enforced after authentication, before dispatch.
+	RatelimitMaxRPM int `json:"ratelimit_max_rpm,omitempty"`
+	// TokenBudgetDaily caps the token estimate this key can reserve per
+	// UTC day (0 = unlimited). Estimates are non-refundable reservations.
+	TokenBudgetDaily int `json:"token_budget_daily,omitempty"`
+	// BudgetTier is the key's priority against provider daily budgets:
+	// "always" (default) is served even when a provider's budget is
+	// exhausted; "fill" is rejected while the provider budget has no
+	// headroom. Only meaningful for providers that set token_budget_daily.
+	BudgetTier string `json:"budget_tier,omitempty"`
 }
 
 func (k *ApiKey) Validate() error {

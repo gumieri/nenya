@@ -60,12 +60,15 @@ func warnModelsMissingMaxContext(logger *slog.Logger, providers map[string]*conf
 // configuration, HTTP clients, provider registry, MCP clients, metrics,
 // rate limiter, caches, and the token counter.
 type NenyaGateway struct {
-	Config             config.Config
-	Client             *http.Client
-	OllamaClient       *http.Client
-	Secrets            *config.SecretsConfig
-	Providers          map[string]*config.Provider
-	RateLimiter        *infra.RateLimiter
+	Config       config.Config
+	Client       *http.Client
+	OllamaClient *http.Client
+	Secrets      *config.SecretsConfig
+	Providers    map[string]*config.Provider
+	RateLimiter  *infra.RateLimiter
+	// KeyUsage enforces per-API-key rate limits and token budgets, plus
+	// per-provider daily budget tiers (NENYA-20). In-memory by design.
+	KeyUsage           *auth.KeyUsageTracker
 	ConcurrencyLimiter *infra.ConcurrencyLimiter
 	SecretPatterns     []*regexp.Regexp
 	BlockedPatterns    []*regexp.Regexp
@@ -359,6 +362,7 @@ func buildGateway(cfg config.Config, secrets *config.SecretsConfig, secureClient
 		Providers:          providers,
 		RateLimiter:        infra.NewRateLimiter(rpm, tpm),
 		ConcurrencyLimiter: infra.NewConcurrencyLimiter(),
+		KeyUsage:           auth.NewKeyUsageTracker(nil),
 		SecretPatterns:     secretPatterns,
 		BlockedPatterns:    blockedPatterns,
 		EntropyFilter:      entropyFilter,

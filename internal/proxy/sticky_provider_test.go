@@ -234,3 +234,122 @@ func (b *syncBuffer) String() string {
 	defer b.mu.Unlock()
 	return string(b.buf)
 }
+
+// newBudgetUpstream returns a healthy non-streaming upstream.
+func newBudgetUpstream() *httptest.Server {
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"role":"assistant","content":"hello"},"finish_reason":"stop"}]}`))
+	}))
+}
+
+// TestKeyRateLimit_SecondRequestDenied pins NENYA-20 auth-side enforcement:
+// a key with ratelimit_max_rpm=1 gets a typed 429 on the second request.
+func TestKeyRateLimit_SecondRequestDenied(t *testing.T) {
+	upstream := newBudgetUpstream()
+	defer upstream.Close()
+
+	cfg := config.Config{
+		Server:     config.ServerConfig{MaxBodyBytes: 10 << 20},
+		Governance: config.GovernanceConfig{RatelimitMaxRPM: config.PtrTo(60), RatelimitMaxTPM: config.PtrTo(100000)},
+		Bouncer:    config.BouncerConfig{Enabled: config.PtrTo(false)},
+		Providers: map[string]config.ProviderConfig{
+			"test-provider": {URL: upstream.URL + "/v1/chat/completions", AuthStyle: "none"},
+		},
+		Agents: map[string]config.AgentConfig{
+			"budget-agent": {Models: []config.AgentModel{{Provider: "test-provider", Model: "test-model"}}},
+		},
+	}
+	secrets := &config.SecretsConfig{
+		ClientToken:  "test-token",
+		ProviderKeys: map[string]string{},
+		ApiKeys: map[string]config.ApiKey{
+			"limited": {Name: "limited", Token: "nk-limited-key-123456", Roles: []string{"user"}, Enabled: true, RatelimitMaxRPM: 1},
+		},
+	}
+	gw := newStickyTestGateway(t, cfg, secrets)
+	p := &Proxy{}
+	p.StoreGateway(gw)
+
+	doReq := func() *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions",
+			strings.NewReader(`{"model":"budget-agent","stream":false,"messages":[{"role":"user","content":"hi"}]}`))
+		req.Header.Set("Authorization", "Bearer nk-limited-key-123456")
+		rec := httptest.NewRecorder()
+		p.ServeHTTP(rec, req)
+		return rec
+	}
+
+	if rec := doReq(); rec.Code != http.StatusOK {
+		t.Fatalf("first request should pass, got %d: %s", rec.Code, rec.Body.String())
+	}
+	rec := doReq()
+	if rec.Code != http.StatusTooManyRequests {
+		t.Fatalf("second request should be 429, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "rate limit exceeded") {
+		t.Errorf("expected rate-limit message, got: %s", rec.Body.String())
+	}
+}
+
+// TestKeyAndProviderBudgets pins NENYA-20 dispatch-side enforcement: a
+// provider budget denies "fill"-tier keys while "always" keys keep working.
+func TestKeyAndProviderBudgets(t *testing.T) {
+	newGW := func(providers map[string]config.ProviderConfig) *Proxy {
+		cfg := config.Config{
+			Server:     config.ServerConfig{MaxBodyBytes: 10 << 20},
+			Governance: config.GovernanceConfig{RatelimitMaxRPM: config.PtrTo(600), RatelimitMaxTPM: config.PtrTo(10000000)},
+			Bouncer:    config.BouncerConfig{Enabled: config.PtrTo(false)},
+			Providers:  providers,
+			Agents: map[string]config.AgentConfig{
+				"budget-agent": {Models: []config.AgentModel{{Provider: "test-provider", Model: "test-model"}}},
+			},
+		}
+		secrets := &config.SecretsConfig{
+			ClientToken:  "test-token",
+			ProviderKeys: map[string]string{},
+			ApiKeys: map[string]config.ApiKey{
+				"fill-key":   {Name: "fill-key", Token: "nk-fill-key-123456789", Roles: []string{"user"}, Enabled: true, BudgetTier: "fill"},
+				"always-key": {Name: "always-key", Token: "nk-always-key-12345678", Roles: []string{"user"}, Enabled: true},
+			},
+		}
+		gw := newStickyTestGateway(t, cfg, secrets)
+		p := &Proxy{}
+		p.StoreGateway(gw)
+		return p
+	}
+
+	t.Run("provider budget: fill denied, always served", func(t *testing.T) {
+		upstream := newBudgetUpstream()
+		defer upstream.Close()
+		providers := map[string]config.ProviderConfig{
+			"test-provider": {
+				URL:              upstream.URL + "/v1/chat/completions",
+				AuthStyle:        "none",
+				TokenBudgetDaily: 1, // budget of 1 token; the request's estimate exceeds it
+			},
+		}
+		p := newGW(providers)
+
+		doLong := func(p *Proxy, token string) *httptest.ResponseRecorder {
+			req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions",
+				strings.NewReader(`{"model":"budget-agent","stream":false,"messages":[{"role":"user","content":"please tell me a fairly long story about dragons and castles"}]}`))
+			req.Header.Set("Authorization", "Bearer "+token)
+			rec := httptest.NewRecorder()
+			p.ServeHTTP(rec, req)
+			return rec
+		}
+
+		rec := doLong(p, "nk-fill-key-123456789")
+		if rec.Code != http.StatusTooManyRequests {
+			t.Fatalf("fill key should be 429 on exhausted provider budget, got %d: %s", rec.Code, rec.Body.String())
+		}
+		if !strings.Contains(rec.Body.String(), "provider_budget") {
+			t.Errorf("expected provider_budget reason, got: %s", rec.Body.String())
+		}
+
+		rec = doLong(p, "nk-always-key-12345678")
+		if rec.Code != http.StatusOK {
+			t.Fatalf("always key should be served despite exhaustion, got %d: %s", rec.Code, rec.Body.String())
+		}
+	})
+}

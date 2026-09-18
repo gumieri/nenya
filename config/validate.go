@@ -48,6 +48,7 @@ func ValidateConfigurationWithPing(ctx context.Context, cfg *Config, secrets *Se
 	}
 
 	errors := collectValidationErrors(ctx, cfg, providers, pingProviders, logger)
+	errors = append(errors, validateKeyLimits(cfg, secrets)...)
 	if len(errors) > 0 {
 		return fmt.Errorf("provider validation failed:\n  - %s", strings.Join(errors, "\n  - "))
 	}
@@ -447,6 +448,33 @@ func validateProviderModelAliases(providers map[string]ProviderConfig) []string 
 			if physical == "" {
 				errs = append(errs, fmt.Sprintf("providers[%q].model_aliases[%q] has an empty physical model ID", name, canonical))
 			}
+		}
+	}
+	return errs
+}
+
+// validateKeyLimits checks per-key rate-limit/budget fields and per-provider
+// budget fields (NENYA-20).
+func validateKeyLimits(cfg *Config, secrets *SecretsConfig) []string {
+	var errs []string
+	if secrets != nil {
+		for name, k := range secrets.ApiKeys {
+			if k.RatelimitMaxRPM < 0 {
+				errs = append(errs, fmt.Sprintf("api_keys[%q].ratelimit_max_rpm must be non-negative, got %d", name, k.RatelimitMaxRPM))
+			}
+			if k.TokenBudgetDaily < 0 {
+				errs = append(errs, fmt.Sprintf("api_keys[%q].token_budget_daily must be non-negative, got %d", name, k.TokenBudgetDaily))
+			}
+			switch k.BudgetTier {
+			case "", "always", "fill":
+			default:
+				errs = append(errs, fmt.Sprintf("api_keys[%q].budget_tier: invalid value %q, must be one of always, fill", name, k.BudgetTier))
+			}
+		}
+	}
+	for name, p := range cfg.Providers {
+		if p.TokenBudgetDaily < 0 {
+			errs = append(errs, fmt.Sprintf("providers[%q].token_budget_daily must be non-negative, got %d", name, p.TokenBudgetDaily))
 		}
 	}
 	return errs

@@ -630,6 +630,8 @@ To add or override a provider:
 
 API keys are loaded from the secrets file via `provider_keys` (keyed by provider name). See [`SECRETS_FORMAT.md`](SECRETS_FORMAT.md).
 
+**Per-key rate limits & token budgets (NENYA-20):** entries under `secrets.json` → `api_keys` accept `ratelimit_max_rpm` (requests/minute, fixed window, enforced after auth — denial `429 rate_limited`, metric `nenya_auth_denials_total{reason="rate_limited"}`), `token_budget_daily` (per-key UTC-day token budget; pre-dispatch estimates are non-refundable reservations), and `budget_tier` (`always` default | `fill`). Providers accept `token_budget_daily` (UTC-day provider budget): once exhausted, `fill`-tier keys are rejected (`429`, reason `provider_budget`) while `always` keys are served. Per-key/per-provider usage is exposed additively under `key_usage` in `/statsz`. All counters are in-memory (single-process); externalize behind `auth.KeyUsageTracker` for multi-process deployments.
+
 ### Gemini `auth_style: "bearer+x-goog"`
 
 Gemini requires both `Authorization: Bearer <key>` and `x-goog-api-key: <key>` headers. The `bearer+x-goog` auth style sets both automatically.

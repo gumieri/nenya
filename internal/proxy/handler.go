@@ -371,6 +371,15 @@ func (p *Proxy) authenticateAndAuthorize(r *http.Request, w http.ResponseWriter)
 		return nil, false
 	}
 
+	// Per-key request rate limit (NENYA-20): enforced after authz so
+	// authorization denials take precedence over throttling.
+	if apiKey.RatelimitMaxRPM > 0 && !gw.KeyUsage.AllowRequest(apiKey.Name, apiKey.RatelimitMaxRPM) {
+		gw.Metrics.IncAuthDenials(apiKey.Name, "rate_limited")
+		p.logAuthDenial(gw, apiKey, "key rpm limit exceeded", r)
+		writeStructuredError(w, http.StatusTooManyRequests, infra.ErrorKindRateLimited, "API key rate limit exceeded")
+		return nil, false
+	}
+
 	gw.Metrics.RecordAuthSuccess("api_key", apiKey.Name)
 	return apiKey, true
 }
@@ -662,6 +671,12 @@ func (p *Proxy) handleStats(w http.ResponseWriter) {
 		}
 	}
 	stats["mcp"] = mcpServers
+
+	// Per-key/per-provider budget usage (NENYA-20), additive for backward
+	// compatibility.
+	if gw.KeyUsage != nil {
+		stats["key_usage"] = gw.KeyUsage.Snapshot()
+	}
 
 	if gw.HealthRegistry != nil {
 		stats["provider_health"] = gw.HealthRegistry.Snapshot()
