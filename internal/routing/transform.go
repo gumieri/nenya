@@ -351,16 +351,48 @@ func injectSystemMessage(deps TransformDeps, payload map[string]interface{}, age
 	if !injectSystem {
 		return
 	}
+	insertAt := 0
+	if firstMsg, ok := messages[0].(map[string]interface{}); ok && agent.ForceSystemPrompt && firstMessageCarriesCacheControl(firstMsg) {
+		// Never displace a client system message that carries a
+		// cache_control breakpoint: inserting ahead of it would shift
+		// the provider-cached prefix and re-bill the conversation every
+		// turn. Place the agent prompt immediately after it instead.
+		insertAt = 1
+		deps.Logger.Debug("agent system prompt placed after cached client system message", "agent", agentNameRaw)
+	}
 	systemMsg := map[string]interface{}{
 		"role":    "system",
 		"content": systemPrompt,
 	}
 	capMsg := safeCapPlusOne(len(messages))
 	newMessages := make([]interface{}, 0, capMsg)
+	newMessages = append(newMessages, messages[:insertAt]...)
 	newMessages = append(newMessages, systemMsg)
-	newMessages = append(newMessages, messages...)
+	newMessages = append(newMessages, messages[insertAt:]...)
 	payload["messages"] = newMessages
 	deps.Logger.Info("injected agent system prompt", "agent", agentNameRaw)
+}
+
+// firstMessageCarriesCacheControl reports whether the message carries an
+// Anthropic prompt-cache breakpoint, either at the message level or on
+// any content block. Used to keep injected system prompts from shifting
+// the client's cached prefix.
+func firstMessageCarriesCacheControl(msg map[string]interface{}) bool {
+	if _, ok := msg["cache_control"]; ok {
+		return true
+	}
+	content, ok := msg["content"].([]interface{})
+	if !ok {
+		return false
+	}
+	for _, partRaw := range content {
+		if part, ok := partRaw.(map[string]interface{}); ok {
+			if _, ok := part["cache_control"]; ok {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func resolveAgentSystemPrompt(deps TransformDeps, payload map[string]interface{}, origModel interface{}, providerName string) {
@@ -502,6 +534,13 @@ func convertToAnthropicFormat(deps TransformDeps, payload map[string]interface{}
 	}
 	if pc.CacheMessagesTTL != nil {
 		opts.MessagesTTL = *pc.CacheMessagesTTL
+	}
+	if m, ok := deps.Catalog.Lookup(modelName); ok {
+		// Catalog-merged metadata (config overrides > discovered >
+		// static) is authoritative; only an explicit capability verdict
+		// overrides the adapter's family inference.
+		midConvo := m.HasCapability(discovery.CapMidConversationSystem)
+		opts.MidConversationSystem = &midConvo
 	}
 	return anthropicAdapter.ConvertOpenAIToAnthropicBody(payload, modelName, stream, opts)
 }

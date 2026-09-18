@@ -3,6 +3,8 @@ package discovery
 import (
 	"log/slog"
 	"strings"
+
+	"github.com/nenya/internal/util"
 )
 
 type Capability string
@@ -15,6 +17,12 @@ const (
 	CapStreamOptions  Capability = "stream_options"
 	CapAutoToolChoice Capability = "auto_tool_choice"
 	CapAudio          Capability = "audio"
+	// CapMidConversationSystem marks models that accept role=system
+	// messages positioned after the opening turn (Anthropic 4.8+ /
+	// 5-family). On capable models the Anthropic adapter keeps such
+	// messages in place — preserving client cache_control breakpoints —
+	// instead of hoisting them into the top-level system prompt.
+	CapMidConversationSystem Capability = "mid_conversation_system"
 )
 
 type capabilityRule struct {
@@ -91,6 +99,15 @@ func InferCapabilities(modelID string) *ModelMetadata {
 		"vision", meta.SupportsVision,
 	)
 	return &meta
+}
+
+// SupportsMidConversationSystem reports whether the model family accepts
+// role=system messages positioned after the first conversation turn
+// (Anthropic 4.8+/5-family). Thin wrapper over the shared predicate in
+// internal/util; see CapMidConversationSystem for the metadata-driven
+// path via config capabilities and the discovery catalog.
+func SupportsMidConversationSystem(modelID string) bool {
+	return util.SupportsMidConversationSystem(modelID)
 }
 
 func InferFormat(modelID string) string {

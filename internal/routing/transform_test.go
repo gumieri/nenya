@@ -923,3 +923,71 @@ func TestResolveModelMapping_ConfigAliasWinsOverSpec(t *testing.T) {
 		t.Errorf("payload model not rewritten: %v", payload["model"])
 	}
 }
+
+// TestTransformRequest_ForceSystemPromptDoesNotDisplaceCachedSystem pins the
+// NENYA-30 displacement guard: when the client's leading system message
+// carries a cache_control breakpoint, a forced agent system prompt is
+// inserted AFTER it so the provider-cached prefix is not shifted.
+func TestTransformRequest_ForceSystemPromptDoesNotDisplaceCachedSystem(t *testing.T) {
+	providers := testProviders()
+	deps := testDeps(providers)
+	deps.Config.Agents = map[string]config.AgentConfig{
+		"my-agent": {
+			SystemPrompt:      "You are a helpful agent.",
+			ForceSystemPrompt: true,
+		},
+	}
+
+	payload := map[string]interface{}{
+		"model": "my-agent",
+		"messages": []interface{}{
+			map[string]interface{}{
+				"role": "system",
+				"content": []interface{}{
+					map[string]interface{}{
+						"type":          "text",
+						"text":          "Client system",
+						"cache_control": map[string]interface{}{"type": "ephemeral"},
+					},
+				},
+			},
+			map[string]interface{}{"role": "user", "content": "hello"},
+		},
+	}
+	body, _, err := TransformRequestForUpstream(deps, "deepseek", "http://example.com", payload, "deepseek-v4-flash", 0, 0, "", "")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	var parsed map[string]interface{}
+	if err := json.Unmarshal(body, &parsed); err != nil {
+		t.Fatalf("failed to unmarshal body: %v", err)
+	}
+	msgs, ok := parsed["messages"].([]interface{})
+	if !ok {
+		t.Fatal("messages not an array")
+	}
+	if len(msgs) != 3 {
+		t.Fatalf("expected 3 messages, got %d", len(msgs))
+	}
+
+	first, ok := msgs[0].(map[string]interface{})
+	if !ok {
+		t.Fatal("first message not a map")
+	}
+	blocks, ok := first["content"].([]interface{})
+	if !ok {
+		t.Fatalf("expected client system blocks intact at index 0, got %v", first["content"])
+	}
+	block, _ := blocks[0].(map[string]interface{})
+	if block["text"] != "Client system" {
+		t.Errorf("expected client system message to stay at index 0, got %v", first)
+	}
+	if _, hasCC := block["cache_control"]; !hasCC {
+		t.Error("expected cache_control preserved on client system block")
+	}
+
+	second, ok := msgs[1].(map[string]interface{})
+	if !ok || second["content"] != "You are a helpful agent." {
+		t.Errorf("expected agent system prompt at index 1, got %v", msgs[1])
+	}
+}

@@ -29,6 +29,13 @@ type CacheOpts struct {
 	ToolsTTL    string // TTL for tools breakpoint
 	MessagesTTL string // TTL for messages breakpoint
 	GlobalTTL   string // Fallback TTL for all breakpoints (from CacheControlTTL)
+	// MidConversationSystem overrides the model-capability probe for
+	// keeping role=system messages in the messages array (Anthropic
+	// 4.8+/5-family). nil lets the adapter decide via
+	// discovery.SupportsMidConversationSystem; a non-nil value wins so
+	// catalog/config-driven metadata can steer legacy hoisting either
+	// way.
+	MidConversationSystem *bool
 }
 
 // getSystemTTL returns the effective TTL for the system breakpoint.
@@ -206,10 +213,15 @@ func (a *AnthropicAdapter) convertOpenAIToAnthropic(openai map[string]interface{
 
 	a.copyOpenAIFields(openai, anthropic)
 
+	midConvoSystem := a.resolveMidConversationSystem(model, opts)
 	hasMessages := false
+	systemHoist := 0
 	if msgs, ok := openai["messages"].([]interface{}); ok {
 		hasMessages = ok
-		anthropic["messages"] = a.convertMessages(msgs)
+		if midConvoSystem {
+			systemHoist = a.systemHoistCount(msgs)
+		}
+		anthropic["messages"] = a.convertMessages(msgs, systemHoist, midConvoSystem)
 	}
 
 	if tools, ok := openai["tools"].([]interface{}); ok && len(tools) > 0 {
@@ -230,7 +242,7 @@ func (a *AnthropicAdapter) convertOpenAIToAnthropic(openai map[string]interface{
 	}
 
 	if hasMessages {
-		a.setSystemPrompt(openai, anthropic, opts.System, opts.getSystemTTL())
+		a.setSystemPrompt(openai, anthropic, opts.System, opts.getSystemTTL(), systemHoist, midConvoSystem)
 	}
 
 	if opts.Messages {
@@ -240,10 +252,44 @@ func (a *AnthropicAdapter) convertOpenAIToAnthropic(openai map[string]interface{
 	return anthropic
 }
 
-func (a *AnthropicAdapter) setSystemPrompt(openai, anthropic map[string]interface{}, cacheSystem bool, ttl string) {
+// resolveMidConversationSystem decides whether role=system messages may
+// remain in the messages array. An explicit CacheOpts override wins;
+// otherwise the model family decides via discovery inference.
+func (a *AnthropicAdapter) resolveMidConversationSystem(model string, opts CacheOpts) bool {
+	if opts.MidConversationSystem != nil {
+		return *opts.MidConversationSystem
+	}
+	return util.SupportsMidConversationSystem(model)
+}
+
+// systemHoistCount returns how many leading messages are hoisted into the
+// top-level system prompt. Only meaningful for mid-conversation-capable
+// models, which hoist the contiguous system run at the head and keep
+// later system reminders in place with their cache_control breakpoints
+// intact. Legacy models ignore the count and hoist every system message.
+func (a *AnthropicAdapter) systemHoistCount(msgs []interface{}) int {
+	for i, msgRaw := range msgs {
+		msg, ok := msgRaw.(map[string]interface{})
+		if !ok {
+			return i
+		}
+		if role, _ := msg["role"].(string); role != "system" {
+			return i
+		}
+	}
+	return len(msgs)
+}
+
+func (a *AnthropicAdapter) setSystemPrompt(openai, anthropic map[string]interface{}, cacheSystem bool, ttl string, hoistCount int, midConvoSystem bool) {
 	msgs, ok := openai["messages"].([]interface{})
 	if !ok {
 		return
+	}
+	if midConvoSystem {
+		if hoistCount > len(msgs) {
+			hoistCount = len(msgs)
+		}
+		msgs = msgs[:hoistCount]
 	}
 	systemParts := a.extractSystemMessages(msgs)
 	if len(systemParts) == 0 {
@@ -430,7 +476,7 @@ func (a *AnthropicAdapter) convertToolChoice(tc interface{}, anthropic map[strin
 	}
 }
 
-func (a *AnthropicAdapter) convertMessages(msgs []interface{}) []interface{} {
+func (a *AnthropicAdapter) convertMessages(msgs []interface{}, systemHoist int, midConvoSystem bool) []interface{} {
 	result := make([]interface{}, 0, len(msgs))
 	var lastAssistantToolIDs map[string]bool
 
@@ -443,6 +489,19 @@ func (a *AnthropicAdapter) convertMessages(msgs []interface{}) []interface{} {
 		role, _ := msg["role"].(string)
 
 		if role == "system" {
+			if i < systemHoist || !midConvoSystem {
+				// Hoisted into the top-level system prompt (legacy
+				// models hoist every system message regardless of
+				// position; capable models hoist only the head run).
+				continue
+			}
+			// Mid-conversation system reminder: keep in place with
+			// verbatim content blocks so client cache_control
+			// breakpoints survive the conversion.
+			result = append(result, map[string]interface{}{
+				"role":    "system",
+				"content": a.buildContentBlocks(msg),
+			})
 			continue
 		}
 
@@ -1110,7 +1169,14 @@ func (a *AnthropicAdapter) reverseConvertMessages(anthropic map[string]interface
 
 		oMsg := map[string]interface{}{"role": role}
 		if content, ok := msg["content"]; ok {
-			oMsg["content"] = a.contentBlocksToString(content)
+			if role == "system" {
+				// System reminders move through the OpenAI pipeline and
+				// back on Anthropic-format egress; preserve blocks
+				// verbatim so cache_control breakpoints are not lost.
+				oMsg["content"] = preserveSystemContent(content)
+			} else {
+				oMsg["content"] = a.contentBlocksToString(content)
+			}
 		}
 		result = append(result, oMsg)
 	}
@@ -1498,6 +1564,21 @@ func (a *AnthropicAdapter) reverseConvertToolChoice(tc interface{}, openai map[s
 	}
 	if s, ok := tc.(string); ok {
 		openai["tool_choice"] = s
+	}
+}
+
+// preserveSystemContent keeps system-message content intact when it is
+// already structured: Anthropic-native clients attach cache_control
+// breakpoints to mid-conversation system reminders, and flattening them
+// to a string would drop the breakpoint and freeze provider prompt
+// caching at the static prefix. Strings pass through untouched; any
+// other shape falls back to the lossy text extraction.
+func preserveSystemContent(content interface{}) interface{} {
+	switch content.(type) {
+	case string, []interface{}:
+		return content
+	default:
+		return ""
 	}
 }
 

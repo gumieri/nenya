@@ -27,13 +27,14 @@ type ModelRanking struct {
 // a model, including capabilities, family classification, pricing overrides,
 // and quality rankings from various sources.
 type ModelMetadata struct {
-	SupportsStreamOptions  bool `json:"supports_stream_options,omitempty"`
-	SupportsAutoToolChoice bool `json:"supports_auto_tool_choice,omitempty"`
-	SupportsContentArrays  bool `json:"supports_content_arrays,omitempty"`
-	SupportsToolCalls      bool `json:"supports_tool_calls,omitempty"`
-	SupportsReasoning      bool `json:"supports_reasoning,omitempty"`
-	SupportsVision         bool `json:"supports_vision,omitempty"`
-	SupportsAudio          bool `json:"supports_audio,omitempty"`
+	SupportsStreamOptions         bool `json:"supports_stream_options,omitempty"`
+	SupportsAutoToolChoice        bool `json:"supports_auto_tool_choice,omitempty"`
+	SupportsContentArrays         bool `json:"supports_content_arrays,omitempty"`
+	SupportsToolCalls             bool `json:"supports_tool_calls,omitempty"`
+	SupportsReasoning             bool `json:"supports_reasoning,omitempty"`
+	SupportsVision                bool `json:"supports_vision,omitempty"`
+	SupportsAudio                 bool `json:"supports_audio,omitempty"`
+	SupportsMidConversationSystem bool `json:"supports_mid_conversation_system,omitempty"`
 
 	ScoreBonus float64 `json:"score_bonus,omitempty"`
 
@@ -75,6 +76,8 @@ func (m *ModelMetadata) HasCapability(cap Capability) bool {
 		return m.SupportsAutoToolChoice
 	case CapAudio:
 		return m.SupportsAudio
+	case CapMidConversationSystem:
+		return m.SupportsMidConversationSystem
 	default:
 		return false
 	}
@@ -91,6 +94,7 @@ func AllCapabilities() []Capability {
 		CapStreamOptions,
 		CapAutoToolChoice,
 		CapAudio,
+		CapMidConversationSystem,
 	}
 }
 
@@ -115,6 +119,8 @@ func applyCapabilities(meta *ModelMetadata, caps []Capability) *ModelMetadata {
 			meta.SupportsAutoToolChoice = true
 		case CapAudio:
 			meta.SupportsAudio = true
+		case CapMidConversationSystem:
+			meta.SupportsMidConversationSystem = true
 		default:
 			valid = false
 		}
