@@ -850,3 +850,76 @@ func TestTransformRequest_RecordsTrimSavings(t *testing.T) {
 		t.Fatalf("trim savings counter recorded zero:\n%s", out)
 	}
 }
+
+// TestTransformRequest_ConfigModelAlias pins NENYA-22: a provider-level
+// model_aliases entry rewrites the outbound model ID (canonical → physical)
+// without mutating the caller's payload, and an unaliased model passes
+// through unchanged.
+func TestTransformRequest_ConfigModelAlias(t *testing.T) {
+	providers := testProviders()
+	providers["gemini"].ModelAliases = map[string]string{
+		"claude-haiku-4.5": "claude-haiku-4-5",
+	}
+	deps := testDeps(providers)
+
+	payload := map[string]interface{}{
+		"model":    "claude-haiku-4.5",
+		"messages": []interface{}{},
+	}
+	_, returnedModel, err := TransformRequestForUpstream(deps, "gemini", "http://example.com", payload, "", 0, 0, "", "")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if returnedModel != "claude-haiku-4-5" {
+		t.Errorf("expected aliased model, got %q", returnedModel)
+	}
+	if payload["model"] != "claude-haiku-4.5" {
+		t.Errorf("original payload mutated: %v", payload["model"])
+	}
+
+	// Unaliased model: unchanged.
+	payload2 := map[string]interface{}{
+		"model":    "gemini-2.5-flash",
+		"messages": []interface{}{},
+	}
+	_, model2, err := TransformRequestForUpstream(deps, "gemini", "http://example.com", payload2, "", 0, 0, "", "")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if model2 != "gemini-2.5-flash" {
+		t.Errorf("unaliased model changed: %q", model2)
+	}
+}
+
+// TestResolveModelMapping_ConfigAliasWinsOverSpec verifies precedence:
+// an explicit operator alias overrides a built-in spec ModelMap entry.
+func TestResolveModelMapping_ConfigAliasWinsOverSpec(t *testing.T) {
+	providers := map[string]*config.Provider{
+		"test-provider": {Name: "test-provider"},
+	}
+	deps := TransformDeps{
+		Logger:    testLogger(),
+		Providers: providers,
+		Config:    &config.Config{},
+		ExtractContentText: func(msg map[string]interface{}) string {
+			return ""
+		},
+	}
+
+	payload := map[string]interface{}{"model": "logical-model"}
+	got := resolveModelMapping(deps, payload, "test-provider", "logical-model")
+	if got != "logical-model" {
+		t.Fatalf("expected passthrough without alias, got %q", got)
+	}
+
+	providers["test-provider"].ModelAliases = map[string]string{
+		"logical-model": "physical-model",
+	}
+	got = resolveModelMapping(deps, payload, "test-provider", "logical-model")
+	if got != "physical-model" {
+		t.Fatalf("expected alias applied, got %q", got)
+	}
+	if payload["model"] != "physical-model" {
+		t.Errorf("payload model not rewritten: %v", payload["model"])
+	}
+}

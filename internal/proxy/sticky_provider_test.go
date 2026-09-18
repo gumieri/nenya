@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 
@@ -155,4 +156,81 @@ func TestStickyProvider_LenientAllows5xxBlocks4xx(t *testing.T) {
 	if rec.Code != http.StatusServiceUnavailable {
 		t.Fatalf("expected blocked sweep to exhaust with 503, got %d", rec.Code)
 	}
+}
+
+// TestModelAlias_UpstreamReceivesAliasedID pins NENYA-22 end to end: the
+// client sends the canonical ID, the provider's model_aliases entry rewrites
+// it at dispatch, and the upstream observes the physical ID.
+func TestModelAlias_UpstreamReceivesAliasedID(t *testing.T) {
+	var observed atomic.Value
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Model string `json:"model"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		observed.Store(body.Model)
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"role":"assistant","content":"hello"},"finish_reason":"stop"}]}`))
+	}))
+	defer upstream.Close()
+
+	cfg := config.Config{
+		Server: config.ServerConfig{MaxBodyBytes: 10 << 20},
+		Governance: config.GovernanceConfig{
+			RatelimitMaxRPM: config.PtrTo(60),
+			RatelimitMaxTPM: config.PtrTo(100000),
+		},
+		Bouncer: config.BouncerConfig{Enabled: config.PtrTo(false)},
+		Providers: map[string]config.ProviderConfig{
+			"test-provider": {
+				URL:           upstream.URL + "/v1/chat/completions",
+				AuthStyle:     "none",
+				ModelAliases:  map[string]string{"claude-haiku-4.5": "claude-haiku-4-5"},
+				AllowedModels: []string{"^claude"},
+			},
+		},
+		Agents: map[string]config.AgentConfig{
+			"alias-agent": {
+				Models: []config.AgentModel{
+					{Provider: "test-provider", Model: "claude-haiku-4.5"},
+				},
+			},
+		},
+	}
+	secrets := &config.SecretsConfig{ClientToken: "test-token", ProviderKeys: map[string]string{}}
+	var logBuf syncBuffer
+	logger := slog.New(slog.NewTextHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	gw := gateway.New(context.Background(), cfg, secrets, logger)
+	p := &Proxy{}
+	p.StoreGateway(gw)
+
+	body := `{"model":"alias-agent","stream":false,"messages":[{"role":"user","content":"hi"}]}`
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(body))
+	req.Header.Set("Authorization", "Bearer test-token")
+	rec := httptest.NewRecorder()
+	p.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s (log: %s)", rec.Code, rec.Body.String(), logBuf.String())
+	}
+	if got, _ := observed.Load().(string); got != "claude-haiku-4-5" {
+		t.Fatalf("upstream observed model %q, want aliased claude-haiku-4-5 (log: %s)", got, logBuf.String())
+	}
+}
+
+type syncBuffer struct {
+	mu  sync.Mutex
+	buf []byte
+}
+
+func (b *syncBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.buf = append(b.buf, p...)
+	return len(p), nil
+}
+
+func (b *syncBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return string(b.buf)
 }

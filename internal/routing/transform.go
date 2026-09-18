@@ -124,10 +124,18 @@ func resolveModelMapping(deps TransformDeps, payload map[string]interface{}, pro
 		if mapped, ok := spec.ModelMap[strings.ToLower(modelName)]; ok {
 			finalModel = mapped
 		}
-		payload["model"] = finalModel
-		if finalModel != modelName {
-			deps.Logger.Info("provider model mapping", "provider", providerName, "from", modelName, "to", finalModel)
+	}
+	// Operator-configured aliases win over built-in spec mappings: an
+	// explicit model_aliases entry is deliberate per-deployment intent
+	// (NENYA-22). Exact match on the canonical ID.
+	if p, ok := deps.Providers[providerName]; ok && p != nil && len(p.ModelAliases) > 0 {
+		if aliased, ok := p.ModelAliases[modelName]; ok {
+			finalModel = aliased
 		}
+	}
+	payload["model"] = finalModel
+	if finalModel != modelName && deps.Logger != nil {
+		deps.Logger.Info("provider model mapping", "provider", providerName, "from", modelName, "to", finalModel)
 	}
 	return finalModel
 }
@@ -549,7 +557,9 @@ func TransformRequestForUpstream(deps TransformDeps, providerName, upstreamURL s
 	}
 
 	if format == "anthropic" {
-		payload = convertToAnthropicFormat(deps, payload, modelName)
+		// Convert with the POST-mapping model: the upstream must receive
+		// the aliased ID, not the canonical one the client sent (NENYA-22).
+		payload = convertToAnthropicFormat(deps, payload, finalModel)
 	}
 
 	newBody, err := json.Marshal(payload)

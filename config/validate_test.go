@@ -620,3 +620,17 @@ func TestValidateStickyProvider(t *testing.T) {
 		t.Fatalf("expected sticky_provider error, got %v", errs)
 	}
 }
+
+func TestValidateModelAliases(t *testing.T) {
+	cfg := &Config{
+		Providers: map[string]ProviderConfig{
+			"bad-empty-key":   {ModelAliases: map[string]string{"": "x"}},
+			"bad-empty-value": {ModelAliases: map[string]string{"claude-haiku-4.5": ""}},
+			"good":            {ModelAliases: map[string]string{"claude-haiku-4.5": "claude-haiku-4-5"}},
+		},
+	}
+	errs := validateProviderModelAliases(cfg.Providers)
+	if len(errs) != 2 {
+		t.Fatalf("expected 2 alias errors, got %v", errs)
+	}
+}

@@ -302,3 +302,23 @@ func TestEngineRef_NoDefaultOllama(t *testing.T) {
 		t.Errorf("expected empty model, got %s", ref.Model)
 	}
 }
+
+func TestResolveProviders_ModelAliasesFlow(t *testing.T) {
+	cfg := &Config{
+		Providers: map[string]ProviderConfig{
+			"test-provider": {
+				URL:          "https://example.com/v1",
+				AuthStyle:    "none",
+				ModelAliases: map[string]string{"claude-haiku-4.5": "claude-haiku-4-5"},
+			},
+		},
+	}
+	providers := ResolveProviders(cfg, &SecretsConfig{})
+	p, ok := providers["test-provider"]
+	if !ok {
+		t.Fatal("provider missing")
+	}
+	if p.ModelAliases["claude-haiku-4.5"] != "claude-haiku-4-5" {
+		t.Fatalf("alias not carried to runtime provider: %v", p.ModelAliases)
+	}
+}

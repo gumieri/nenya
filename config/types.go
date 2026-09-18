@@ -203,6 +203,12 @@ type ProviderConfig struct {
 	// by this provider (e.g. {"glm-5.3": 5, "glm-5.3-flash": 50}). Values
 	// must be non-negative; 0 = unlimited for that model.
 	ModelConcurrency map[string]int `json:"model_concurrency,omitempty"`
+	// ModelAliases rewrites model IDs at dispatch time for this provider:
+	// key = canonical ID (what the client sends / catalog lists), value =
+	// physical ID (what the upstream receives). Exact-match on the
+	// canonical ID. Use when a gateway/provider expects a different
+	// spelling (e.g. dotted→dashed slugs) without per-provider code.
+	ModelAliases map[string]string `json:"model_aliases,omitempty"`
 	// Billing configures usage-based billing tracking for this provider.
 	Billing *BillingConfig `json:"billing,omitempty"`
 	// AllowedModels is a list of RE2 regex patterns that models from this
@@ -265,6 +271,9 @@ type Provider struct {
 	MaxConcurrentRequests int
 	// ModelConcurrency overrides MaxConcurrentRequests per model ID.
 	ModelConcurrency map[string]int
+	// ModelAliases rewrites model IDs at dispatch time (canonical →
+	// physical). See ProviderConfig.ModelAliases.
+	ModelAliases map[string]string
 }
 
 // ConcurrencyLimit resolves the in-flight request cap for a model served by

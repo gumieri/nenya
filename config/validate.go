@@ -428,8 +428,26 @@ func validateProviderRateLimits(cfg *Config) []string {
 			}
 		}
 	}
+	errs = append(errs, validateProviderModelAliases(cfg.Providers)...)
 	if cfg.Governance.MaxConcurrentRequests < 0 {
 		errs = append(errs, fmt.Sprintf("governance.max_concurrent_requests must be non-negative, got %d", cfg.Governance.MaxConcurrentRequests))
+	}
+	return errs
+}
+
+// validateProviderModelAliases checks the per-provider model alias maps:
+// canonical keys and physical IDs must be non-empty.
+func validateProviderModelAliases(providers map[string]ProviderConfig) []string {
+	var errs []string
+	for name, p := range providers {
+		for canonical, physical := range p.ModelAliases {
+			if canonical == "" {
+				errs = append(errs, fmt.Sprintf("providers[%q].model_aliases contains an empty canonical key", name))
+			}
+			if physical == "" {
+				errs = append(errs, fmt.Sprintf("providers[%q].model_aliases[%q] has an empty physical model ID", name, canonical))
+			}
+		}
 	}
 	return errs
 }

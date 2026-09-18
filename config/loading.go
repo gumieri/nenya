@@ -786,6 +786,7 @@ func ResolveProviders(cfg *Config, secrets *SecretsConfig) map[string]*Provider 
 			allowedRE:                compiledRE,
 			MaxConcurrentRequests:    pc.MaxConcurrentRequests,
 			ModelConcurrency:         pc.ModelConcurrency,
+			ModelAliases:             pc.ModelAliases,
 		}
 	}
 	return providers
