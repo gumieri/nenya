@@ -110,6 +110,7 @@ func collectValidationErrors(ctx context.Context, cfg *Config, providers map[str
 	errors = append(errors, validateUpstreamTimeoutSeconds(cfg.Governance.UpstreamTimeoutSeconds)...)
 	errors = append(errors, validateStreamIdleTimeoutSeconds(cfg.Governance.StreamIdleTimeoutSeconds)...)
 	errors = append(errors, validateThinkingStreamIdleTimeoutSeconds(cfg.Governance.ThinkingStreamIdleTimeoutSeconds)...)
+	errors = append(errors, validateBootstrapBufferBytes(cfg.Governance.StreamBootstrapBufferBytes)...)
 	errors = append(errors, validateAgentStrategies(cfg.Agents)...)
 	errors = append(errors, validateStickySessionTTL(cfg.Agents)...)
 
@@ -200,6 +201,14 @@ func validateProviders(ctx context.Context, providers map[string]*Provider, logg
 		}
 		if provider.StreamIdleTimeoutSeconds > 86400 {
 			errors = append(errors, fmt.Sprintf("providers[%q].stream_idle_timeout_seconds exceeds maximum allowed value (86400 seconds / 24 hours), got %d", name, provider.StreamIdleTimeoutSeconds))
+		}
+		if b := provider.StreamBootstrapBufferBytes; b != nil {
+			if *b < 0 {
+				errors = append(errors, fmt.Sprintf("providers[%q].stream_bootstrap_buffer_bytes must be non-negative (nil = inherit global, 0 = off), got %d", name, *b))
+			}
+			if *b > MaxBootstrapBufferBytes {
+				errors = append(errors, fmt.Sprintf("providers[%q].stream_bootstrap_buffer_bytes exceeds maximum allowed value (%d bytes), got %d", name, MaxBootstrapBufferBytes, *b))
+			}
 		}
 		if provider.APIKey == "" {
 			logger.Warn("provider has no API key configured", "provider", name)
@@ -560,6 +569,20 @@ func validateThinkingStreamIdleTimeoutSeconds(v *int) []string {
 	}
 	if *v > 86400 {
 		return []string{fmt.Sprintf("governance.thinking_stream_idle_timeout_seconds exceeds maximum allowed value (86400 seconds / 24 hours), got %d", *v)}
+	}
+	return nil
+}
+
+// MaxBootstrapBufferBytes caps the stream bootstrap buffering budget so a
+// misconfigured value cannot pin unbounded memory per streaming request.
+const MaxBootstrapBufferBytes = 1 << 20
+
+func validateBootstrapBufferBytes(v int) []string {
+	if v < 0 {
+		return []string{fmt.Sprintf("governance.stream_bootstrap_buffer_bytes must be non-negative (0 disables bootstrap buffering), got %d", v)}
+	}
+	if v > MaxBootstrapBufferBytes {
+		return []string{fmt.Sprintf("governance.stream_bootstrap_buffer_bytes exceeds maximum allowed value (%d bytes), got %d", MaxBootstrapBufferBytes, v)}
 	}
 	return nil
 }

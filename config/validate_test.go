@@ -3,6 +3,7 @@ package config
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -596,6 +597,33 @@ func TestValidateStreamIdleTimeoutSeconds(t *testing.T) {
 			}
 			if tt.wantErrMsg != "" && (len(errs) != 1 || errs[0] != tt.wantErrMsg) {
 				t.Errorf("validateStreamIdleTimeoutSeconds() = %v, want exact error %q", errs, tt.wantErrMsg)
+			}
+		})
+	}
+}
+
+func TestValidateBootstrapBufferBytes(t *testing.T) {
+	tests := []struct {
+		name       string
+		v          int
+		wantErr    bool
+		wantErrMsg string
+	}{
+		{"zero disables", 0, false, ""},
+		{"256KB passes", 256 * 1024, false, ""},
+		{"1MiB passes", 1 << 20, false, ""},
+		{"negative fails", -1, true, "governance.stream_bootstrap_buffer_bytes must be non-negative (0 disables bootstrap buffering), got -1"},
+		{"exceeds 1MiB fails", (1 << 20) + 1, true, fmt.Sprintf("governance.stream_bootstrap_buffer_bytes exceeds maximum allowed value (%d bytes), got %d", MaxBootstrapBufferBytes, (1<<20)+1)},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			errs := validateBootstrapBufferBytes(tt.v)
+			if hasErr := len(errs) > 0; hasErr != tt.wantErr {
+				t.Errorf("validateBootstrapBufferBytes(%d) = %v, want hasErr=%v", tt.v, errs, tt.wantErr)
+				return
+			}
+			if tt.wantErrMsg != "" && (len(errs) != 1 || errs[0] != tt.wantErrMsg) {
+				t.Errorf("validateBootstrapBufferBytes(%d) = %v, want exact error %q", tt.v, errs, tt.wantErrMsg)
 			}
 		})
 	}

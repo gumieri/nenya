@@ -213,6 +213,13 @@ type ProviderConfig struct {
 	// UTC day (0 = unlimited). Keys whose budget_tier is "fill" are
 	// rejected once the budget is exhausted; "always" keys are served.
 	TokenBudgetDaily int `json:"token_budget_daily,omitempty"`
+	// StreamBootstrapBufferBytes opts this provider into stream bootstrap
+	// buffering (NENYA-45): SSE handshake events are held (up to this many
+	// bytes) until the stream is decidable — a real output event flushes the
+	// buffer, an in-stream rejection fails over to the next target before
+	// the 200 is committed. nil = inherit the governance global; 0 = force
+	// off; >0 = enable with that budget.
+	StreamBootstrapBufferBytes *int `json:"stream_bootstrap_buffer_bytes,omitempty"`
 	// Billing configures usage-based billing tracking for this provider.
 	Billing *BillingConfig `json:"billing,omitempty"`
 	// AllowedModels is a list of RE2 regex patterns that models from this
@@ -281,6 +288,9 @@ type Provider struct {
 	// TokenBudgetDaily caps the token estimate this provider may serve per
 	// UTC day (0 = unlimited). See ProviderConfig.TokenBudgetDaily.
 	TokenBudgetDaily int
+	// StreamBootstrapBufferBytes is the per-provider stream bootstrap
+	// buffering opt-in. See ProviderConfig.StreamBootstrapBufferBytes.
+	StreamBootstrapBufferBytes *int
 }
 
 // ConcurrencyLimit resolves the in-flight request cap for a model served by
@@ -428,6 +438,13 @@ type GovernanceConfig struct {
 	UpstreamTimeoutSeconds  *int    `json:"upstream_timeout_seconds,omitempty"`
 	// StreamIdleTimeoutSeconds is the stall detection timeout for SSE streams.
 	StreamIdleTimeoutSeconds *int `json:"stream_idle_timeout_seconds,omitempty"`
+	// StreamBootstrapBufferBytes is the global stream bootstrap buffering
+	// budget in bytes (NENYA-45): when >0, streaming responses hold
+	// handshake events until a real output event (allow-list) or an
+	// in-stream rejection is seen, keeping failover possible before the
+	// 200 is committed. 0 (default) = off. Providers override via
+	// providers.<name>.stream_bootstrap_buffer_bytes.
+	StreamBootstrapBufferBytes int `json:"stream_bootstrap_buffer_bytes,omitempty"`
 	// ThinkingStreamIdleTimeoutSeconds is the stall detection timeout during
 	// thinking phases. When 0, disables thinking-aware extension.
 	ThinkingStreamIdleTimeoutSeconds *int `json:"thinking_stream_idle_timeout_seconds,omitempty"`

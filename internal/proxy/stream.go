@@ -571,6 +571,22 @@ func classifyStreamReadErr(rerr error) error {
 // head read as well, and the stream phase must keep using the same reader so
 // read-ahead bytes buffered by its goroutine are not lost.
 func (p *Proxy) probeStreamHead(gw *gateway.NenyaGateway, action upstreamAction, target routing.UpstreamTarget, cooldownDuration time.Duration, opts streamResponseOpts, stallR *stallReader) *streamResult {
+	// Bootstrap buffering (NENYA-45) subsumes the first-event probe when
+	// enabled: it holds handshake events until real output vs rejection is
+	// decidable, keeping failover possible against in-stream rejections that
+	// arrive after metadata frames.
+	if budget := resolveBootstrapBuffer(gw, target.Provider); budget > 0 {
+		return p.bootstrapStreamHead(bootstrapProbeParams{
+			gw:            gw,
+			action:        action,
+			target:        target,
+			cooldown:      cooldownDuration,
+			opts:          opts,
+			stallR:        stallR,
+			budget:        budget,
+			emptyFailover: gw.Config.Governance.EmptyStreamAsError != nil && *gw.Config.Governance.EmptyStreamAsError,
+		})
+	}
 	probe := headProbeEnabled(gw.Config.Governance)
 	if !probe.enabled {
 		return nil
@@ -596,7 +612,7 @@ func (p *Proxy) probeStreamHead(gw *gateway.NenyaGateway, action upstreamAction,
 		kind = classifyStreamHead(chunk)
 	}
 	if kind == headError && opts.idx+1 < len(opts.targets) {
-		return p.failoverEarlyHeadError(gw, action, target, cooldownDuration, stallR)
+		return p.failoverEarlyHeadError(gw, action, target, cooldownDuration, stallR, "failover")
 	}
 
 	// Wrap so the probe's first chunk is served before the stall reader
@@ -658,10 +674,120 @@ func (p *Proxy) handleStreamHeadNoData(gw *gateway.NenyaGateway, action upstream
 	return &streamResult{err: readErr}
 }
 
+// bootstrapProbeParams groups the bootstrap buffering probe inputs (AGENTS.md
+// §11 parameter grouping).
+type bootstrapProbeParams struct {
+	gw     *gateway.NenyaGateway
+	action upstreamAction
+	target routing.UpstreamTarget
+	// cooldown is the cooldown applied to the failed target on rejection.
+	cooldown time.Duration
+	// opts carries the retry-loop position (idx/targets) for failover checks.
+	opts streamResponseOpts
+	// stallR, when non-nil, is the stall-bounded reader the stream phase
+	// reuses; bootstrap reads go through it so stream_idle_timeout_seconds
+	// bounds the handshake hold as well.
+	stallR *stallReader
+	// budget is the maximum bytes held before degrading to unbuffered.
+	budget int
+	// emptyFailover mirrors governance.empty_stream_as_error for the
+	// zero-bytes-read case.
+	emptyFailover bool
+}
+
+// bootstrapStreamHead holds the upstream stream's handshake events until the
+// stream is decidable (NENYA-45): an allow-listed output event flushes the
+// buffer and commits the stream unchanged; an in-stream rejection fails over
+// to the next target synchronously, before the 200 is committed; a budget
+// overflow degrades to unbuffered streaming. No client bytes are written
+// until a decision is reached, so a rejection stays failover-able.
+func (p *Proxy) bootstrapStreamHead(pp bootstrapProbeParams) *streamResult {
+	bodyReader := pp.action.resp.Body
+	if pp.stallR != nil {
+		bodyReader = pp.stallR
+	}
+	acc := make([]byte, 0, streamHeadBufferSize)
+	scratch := make([]byte, streamHeadBufferSize)
+	offset := 0
+	start := time.Now()
+	for {
+		n, readErr := bodyReader.Read(scratch)
+		if n > 0 {
+			acc = append(acc, scratch[:n]...)
+			verdict, newOffset := scanBootstrapBuffer(acc, offset)
+			offset = newOffset
+			switch verdict {
+			case bootstrapReject:
+				return p.resolveBootstrapRejection(pp, acc, start)
+			case bootstrapOutput:
+				pp.gw.Metrics.RecordStreamBootstrap(pp.target.Model, pp.target.Provider, "flushed")
+				pp.gw.Metrics.RecordBootstrapHold(pp.target.Model, pp.target.Provider, time.Since(start))
+				return p.flushBootstrapPrefix(pp, acc)
+			}
+			if len(acc) >= pp.budget {
+				// Handshake grew past the budget without deciding: degrade to
+				// unbuffered streaming. Post-commit errors are typed stream
+				// errors (no retry) — first-byte commit is the trade-off.
+				pp.gw.Metrics.RecordStreamBootstrap(pp.target.Model, pp.target.Provider, "overflow")
+				pp.gw.Metrics.RecordBootstrapHold(pp.target.Model, pp.target.Provider, time.Since(start))
+				pp.gw.Logger.Debug("stream bootstrap buffer overflow, degrading to unbuffered",
+					"model", pp.target.Model, "provider", pp.target.Provider, "bytes", len(acc))
+				return p.flushBootstrapPrefix(pp, acc)
+			}
+			if readErr != nil {
+				// Delivered bytes alongside an error: flush what was scanned;
+				// the copy phase surfaces the read error downstream.
+				return p.flushBootstrapPrefix(pp, acc)
+			}
+			continue
+		}
+		if len(acc) > 0 {
+			// Stream ended during the handshake without a decision: deliver
+			// the scanned prefix (the SSE cut machinery handles the ending).
+			return p.flushBootstrapPrefix(pp, acc)
+		}
+		if res := p.handleStreamHeadNoData(pp.gw, pp.action, pp.target, pp.cooldown, pp.emptyFailover, readErr, pp.stallR); res != nil {
+			return res
+		}
+		return nil
+	}
+}
+
+// resolveBootstrapRejection handles an in-stream rejection detected before
+// the 200 is committed: with an alternate target it fails over synchronously
+// (classifying/circuit-breaking like any upstream error); on the last target
+// the buffered error stream is forwarded as today.
+func (p *Proxy) resolveBootstrapRejection(pp bootstrapProbeParams, acc []byte, start time.Time) *streamResult {
+	pp.gw.Metrics.RecordBootstrapHold(pp.target.Model, pp.target.Provider, time.Since(start))
+	if pp.opts.idx+1 < len(pp.opts.targets) {
+		pp.gw.Metrics.RecordStreamBootstrap(pp.target.Model, pp.target.Provider, "rejected_failover")
+		pp.gw.Logger.Warn("in-stream rejection before commit, failing over",
+			"model", pp.target.Model, "provider", pp.target.Provider, "held_bytes", len(acc))
+		return p.failoverEarlyHeadError(pp.gw, pp.action, pp.target, pp.cooldown, pp.stallR, "bootstrap_failover")
+	}
+	pp.gw.Metrics.RecordStreamBootstrap(pp.target.Model, pp.target.Provider, "rejected_forwarded")
+	pp.gw.Metrics.RecordEarlyStreamError(pp.target.Model, pp.target.Provider, "bootstrap_forwarded")
+	pp.gw.Logger.Warn("in-stream rejection before commit, no alternate target; forwarding",
+		"model", pp.target.Model, "provider", pp.target.Provider, "held_bytes", len(acc))
+	return p.flushBootstrapPrefix(pp, acc)
+}
+
+// flushBootstrapPrefix re-arms the response body so the bytes held during the
+// bootstrap probe are served before the (stall-bounded) reader continues.
+func (p *Proxy) flushBootstrapPrefix(pp bootstrapProbeParams, acc []byte) *streamResult {
+	bodyReader := pp.action.resp.Body
+	if pp.stallR != nil {
+		bodyReader = pp.stallR
+	}
+	pp.action.resp.Body = &prefixedReadCloser{prefix: acc, reader: bodyReader}
+	return nil
+}
+
 // failoverEarlyHeadError fails over before any client byte is committed: the
 // upstream body is closed and the retry loop dispatches the next target via
-// streamResult{empty}.
-func (p *Proxy) failoverEarlyHeadError(gw *gateway.NenyaGateway, action upstreamAction, target routing.UpstreamTarget, cooldownDuration time.Duration, stallR *stallReader) *streamResult {
+// streamResult{empty}. outcome is the metric reason ("failover" for the
+// first-event probe, "bootstrap_failover" for the bootstrap buffer).
+func (p *Proxy) failoverEarlyHeadError(gw *gateway.NenyaGateway, action upstreamAction, target routing.UpstreamTarget, cooldownDuration time.Duration, stallR *stallReader, outcome string) *streamResult {
 	if err := action.resp.Body.Close(); err != nil {
 		gw.Logger.Debug("close errored upstream body", "err", err, "provider", target.Provider)
 	}
@@ -671,7 +797,7 @@ func (p *Proxy) failoverEarlyHeadError(gw *gateway.NenyaGateway, action upstream
 	}
 	action.cancel()
 	gw.AgentState.RecordFailure(target, cooldownDuration)
-	gw.Metrics.RecordEarlyStreamError(target.Model, target.Provider, "failover")
+	gw.Metrics.RecordEarlyStreamError(target.Model, target.Provider, outcome)
 	gw.Logger.Warn("upstream error event at stream head, falling back to next target",
 		"model", target.Model, "provider", target.Provider)
 	return &streamResult{empty: true}
@@ -835,6 +961,22 @@ func resolveStreamIdleTimeout(gw *gateway.NenyaGateway, providerName string) tim
 		return providerTimeout
 	}
 	return timeout
+}
+
+// resolveBootstrapBuffer returns the stream bootstrap buffering budget for a
+// provider: the per-provider opt-in when set, else the governance global.
+// 0 means disabled; validation rejects negatives, but stay defensive.
+func resolveBootstrapBuffer(gw *gateway.NenyaGateway, providerName string) int {
+	if pr, ok := gw.Providers[providerName]; ok && pr.StreamBootstrapBufferBytes != nil {
+		if *pr.StreamBootstrapBufferBytes > 0 {
+			return *pr.StreamBootstrapBufferBytes
+		}
+		return 0
+	}
+	if gw.Config.Governance.StreamBootstrapBufferBytes > 0 {
+		return gw.Config.Governance.StreamBootstrapBufferBytes
+	}
+	return 0
 }
 
 // setupTransformingReader creates and configures the SSE transforming reader, content builder, and stall reader.

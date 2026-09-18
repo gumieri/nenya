@@ -40,6 +40,8 @@ type Metrics struct {
 	emptyStreams       sync.Map
 	streamContinuation sync.Map
 	streamEarlyErrors  sync.Map
+	streamBootstrap    sync.Map
+	bootstrapHold      sync.Map
 
 	concurrencyWait     sync.Map
 	concurrencyRejected sync.Map
@@ -452,7 +454,8 @@ func (m *Metrics) RecordEmptyStream(model, provider string) {
 
 // RecordEarlyStreamError increments the counter for error events detected at
 // the head of an upstream SSE stream before any content was delivered.
-// outcome values: "failover", "forwarded_last_target".
+// outcome values: "failover", "forwarded_last_target" (first-event probe),
+// "bootstrap_failover", "bootstrap_forwarded" (bootstrap buffer).
 func (m *Metrics) RecordEarlyStreamError(model, provider, outcome string) {
 	if m == nil {
 		return
@@ -461,6 +464,33 @@ func (m *Metrics) RecordEarlyStreamError(model, provider, outcome string) {
 		"model": model, "provider": provider, "outcome": outcome,
 	})
 	e.value.Add(1)
+}
+
+// RecordStreamBootstrap increments the stream bootstrap buffering counter
+// (NENYA-45). outcome values: "flushed" (real output ended the buffer),
+// "overflow" (budget exhausted, degraded to unbuffered), "rejected_failover"
+// (in-stream rejection failed over pre-commit), "rejected_forwarded"
+// (rejection on the last target, forwarded as a committed stream).
+func (m *Metrics) RecordStreamBootstrap(model, provider, outcome string) {
+	if m == nil {
+		return
+	}
+	e := getOrCreateEntry(&m.streamBootstrap, map[string]string{
+		"model": model, "provider": provider, "outcome": outcome,
+	})
+	e.value.Add(1)
+}
+
+// RecordBootstrapHold observes how long a streaming request held its
+// bootstrap buffer before a decision (flush, overflow, or rejection).
+func (m *Metrics) RecordBootstrapHold(model, provider string, d time.Duration) {
+	if m == nil {
+		return
+	}
+	h := getOrCreateHist(&m.bootstrapHold, map[string]string{
+		"model": model, "provider": provider,
+	}, HTTPDurationBuckets)
+	h.Observe(d.Seconds())
 }
 
 // RecordStreamContinuation increments the stream continuation counter for the
@@ -1126,6 +1156,10 @@ func (m *Metrics) WritePrometheus(w io.Writer) {
 		"Total upstream stream continuations by outcome reason.", &m.streamContinuation)
 	m.writeCounterMap(w, "nenya_stream_early_errors_total",
 		"Total upstream error events at the head of an SSE stream by outcome.", &m.streamEarlyErrors)
+	m.writeCounterMap(w, "nenya_stream_bootstrap_total",
+		"Stream bootstrap buffering outcomes (flushed, overflow, rejected_failover, rejected_forwarded).", &m.streamBootstrap)
+	m.writeHistogramMap(w, "nenya_stream_bootstrap_hold_seconds",
+		"Time streaming requests held their bootstrap buffer before a decision.", &m.bootstrapHold)
 	m.writeCounterMap(w, "nenya_backoff_increments_total",
 		"Total backoff level increments by model.", &m.backoffIncrements)
 
