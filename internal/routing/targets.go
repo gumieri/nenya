@@ -85,9 +85,13 @@ type AgentState struct {
 	Metrics          *infra.Metrics
 	LocalEngineCheck LocalEngineCheck
 	SessionRouter    *SessionRouter
-	mu               sync.Mutex
-	selectorCache    map[string]selectorCacheEntry
-	selectorCacheMu  sync.RWMutex
+	// Affinity detects conversations that share an opening turn but diverge
+	// afterwards (NENYA-39): a bounded flat KV of leading-turn fingerprint
+	// chains consulted when resolving the session identity.
+	Affinity        *AffinityStore
+	mu              sync.Mutex
+	selectorCache   map[string]selectorCacheEntry
+	selectorCacheMu sync.RWMutex
 }
 
 type selectorCacheEntry struct {
@@ -129,6 +133,7 @@ func NewAgentStateWithConfig(logger *slog.Logger, metrics *infra.Metrics, govCon
 		Counters:      make(map[string]uint64),
 		Metrics:       metrics,
 		SessionRouter: NewSessionRouter(DefaultSessionCap, DefaultSessionTTL, metrics, logger),
+		Affinity:      NewAffinityStore(DefaultAffinityCap, DefaultAffinityTTL),
 		selectorCache: make(map[string]selectorCacheEntry),
 		CB: resilience.NewCircuitBreaker(
 			DefaultFailureThreshold,

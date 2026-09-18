@@ -54,6 +54,33 @@ type chatRequest struct {
 	sessionKey     string
 	sessionKeyOK   bool
 	sessionKeyDone bool
+
+	// Memoized affinity-resolved session identity (see sessionIdentity):
+	// the root session key, or a deterministic fork key when the leading
+	// turns collide with a different conversation (NENYA-39). Same
+	// single-goroutine discipline as the raw key fields.
+	affinityKey  string
+	affinityDone bool
+}
+
+// sessionIdentity returns the memoized affinity-resolved session identity:
+// the raw session key when the leading turns continue the remembered
+// conversation, or a deterministic fork key when they collide with a
+// different conversation sharing the same opener (NENYA-39).
+func (req *chatRequest) sessionIdentity(gw *gateway.NenyaGateway) (string, bool) {
+	raw, ok := req.derivedSessionKey()
+	if !ok {
+		return raw, ok
+	}
+	if req.affinityDone {
+		return req.affinityKey, true
+	}
+	req.affinityKey = raw
+	if gw != nil && gw.AgentState != nil && gw.AgentState.Affinity != nil {
+		req.affinityKey = gw.AgentState.Affinity.ResolveIdentity(raw, routing.BuildAffinityChain(req.Payload))
+	}
+	req.affinityDone = true
+	return req.affinityKey, true
 }
 
 // httpError pairs an HTTP status code with a user-facing message and an
@@ -166,11 +193,12 @@ func (p *Proxy) resolveRouting(ctx context.Context, req *chatRequest, gw *gatewa
 	if hasAgent {
 		req.Agent = agent
 	}
-	// Derive the session key eagerly right after agent resolution so every
-	// consumer (sticky pin, session-header synthesis) reads the same
-	// memoized value derived from the resolved agent — no caller can
-	// derive from an unresolved agent.
-	req.derivedSessionKey()
+	// Derive the session identity eagerly right after agent resolution so
+	// every consumer (sticky pin, session-header synthesis) reads the same
+	// memoized value derived from the resolved agent — no caller can derive
+	// from an unresolved agent. The identity includes the NENYA-39 affinity
+	// fork check over the leading turns.
+	req.sessionIdentity(gw)
 	if hasAgent {
 		return p.resolveAgentRouting(ctx, req, gw, agent)
 	}
@@ -277,7 +305,7 @@ func resolveStickyPin(req *chatRequest, gw *gateway.NenyaGateway) *stickyPin {
 	if gw.AgentState == nil || gw.AgentState.SessionRouter == nil {
 		return nil
 	}
-	key, ok := req.derivedSessionKey()
+	key, ok := req.sessionIdentity(gw)
 	if !ok {
 		return nil
 	}
@@ -485,10 +513,10 @@ func ensureOpencodeSessionHeader(gw *gateway.NenyaGateway, r *http.Request, req 
 	if validSessionHeaderValue(existing) {
 		return
 	}
-	// req.Agent was resolved once in resolveRouting; the key derivation it
-	// feeds is memoized on the request, so sticky and non-sticky agents
-	// each derive at most once per request.
-	key, ok := req.derivedSessionKey()
+	// req.Agent was resolved once in resolveRouting; the identity (raw key
+	// plus NENYA-39 affinity fork check) is memoized on the request, so
+	// sticky and non-sticky agents each resolve at most once per request.
+	key, ok := req.sessionIdentity(gw)
 	if !ok || len(key) < opencodeSessionIDLen {
 		if existing != "" {
 			r.Header.Del(opencodeSessionHeader)
