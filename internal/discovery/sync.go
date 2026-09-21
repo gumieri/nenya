@@ -17,6 +17,20 @@ type ProviderDiscoveryResult struct {
 	Error       string            `json:"error,omitempty"`
 }
 
+// PersistentProviderCache is INTENTIONALLY UNWIRED (NENYA-36 audit).
+// Nenya's metadata lifecycle is fetch → merge → in-memory catalog, rebuilt
+// fresh at startup and on SIGHUP — nothing model-related is persisted, so
+// the GoModel #902 stale-catalog resurrection bug (persisted merged
+// metadata clobbering a local deployment's real limits after restart)
+// cannot occur.
+//
+// If you wire this cache in, that invariant is on you:
+//   - persist ONLY provider-reported data captured before MergeCatalog /
+//     applyStaticEntryMetadata enrichment — never merged metadata
+//   - rebuild the full merge fresh at load; never treat cache content as
+//     authoritative over config overrides
+//   - keep the TTL discipline (expired entries are skipped) and prefer
+//     conditional revalidation (ETag) over trusting age
 type PersistentProviderCache struct {
 	mu       sync.RWMutex
 	entries  map[string]ProviderDiscoveryResult
