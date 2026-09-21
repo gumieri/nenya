@@ -343,7 +343,12 @@ func TruncateTFIDFHistory(historyText string, maxRunes int, query string, cfg co
 }
 
 func sortScoredDesc(blocks []scoredBlock) {
+	// NENYA-23 (F2): tie-break equal scores by original block index so
+	// near-identical payloads cannot permute equal-score block selection.
 	sort.Slice(blocks, func(i, j int) bool {
+		if blocks[i].score == blocks[j].score {
+			return blocks[i].index < blocks[j].index
+		}
 		return blocks[i].score > blocks[j].score
 	})
 }

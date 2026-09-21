@@ -1,6 +1,7 @@
 package pipeline
 
 import (
+	"strings"
 	"testing"
 )
 
@@ -290,4 +291,17 @@ func abs(x float64) float64 {
 		return -x
 	}
 	return x
+}
+
+// TestShannonEntropyBitStable pins NENYA-23 F1: the entropy sum must be
+// bit-identical across many invocations despite Go's randomized map
+// iteration order — redaction decisions sit within ~1e-15 of thresholds.
+func TestShannonEntropyBitStable(t *testing.T) {
+	token := strings.Repeat("abcdefghij0123456789", 5)
+	want := ShannonEntropy(token)
+	for i := 0; i < 1000; i++ {
+		if got := ShannonEntropy(token); got != want {
+			t.Fatalf("iteration %d: entropy differs: %v vs %v", i, got, want)
+		}
+	}
 }

@@ -1,6 +1,8 @@
 package pipeline
 
 import (
+	"sort"
+
 	"math"
 	"strings"
 )
@@ -54,8 +56,20 @@ func ShannonEntropy(token string) float64 {
 		return 0.0
 	}
 
-	entropy := 0.0
+	// NENYA-23 (F1): sum the terms in a deterministic order. Iterating the
+	// freq map sums float64s in Go's randomized map order, so the result
+	// can differ by ~1 ulp between runs — enough to flip redaction for a
+	// token sitting within ~1e-15 of the threshold, sending the same
+	// secret raw in one request and redacted in the next. Sorting the
+	// counts makes the sum bit-identical across runs.
+	counts := make([]int, 0, len(freq))
 	for _, count := range freq {
+		counts = append(counts, count)
+	}
+	sort.Ints(counts)
+
+	entropy := 0.0
+	for _, count := range counts {
 		p := float64(count) / float64(total)
 		entropy -= p * math.Log2(p)
 	}

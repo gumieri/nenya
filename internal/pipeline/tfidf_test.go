@@ -468,3 +468,22 @@ func TestTFIDFInterceptorReportsTokenCount(t *testing.T) {
 		t.Fatalf("TokenCount = %d, want < input %d", res.TokenCount, req.TokenCount)
 	}
 }
+
+// TestSortScoredDescIndexTieBreak pins NENYA-23 F2: equal scores keep
+// original-index order, so near-identical payloads cannot permute
+// equal-score block selection.
+func TestSortScoredDescIndexTieBreak(t *testing.T) {
+	blocks := []scoredBlock{
+		{index: 3, score: 0.5},
+		{index: 0, score: 0.5},
+		{index: 7, score: 0.9},
+		{index: 1, score: 0.5},
+	}
+	sortScoredDesc(blocks)
+	want := []int{7, 0, 1, 3}
+	for i, b := range blocks {
+		if b.index != want[i] {
+			t.Fatalf("position %d: got index %d, want %d (order: %v)", i, b.index, want[i], want)
+		}
+	}
+}
