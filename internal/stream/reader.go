@@ -912,6 +912,40 @@ func (r *SSETransformingReader) transformNonSSELine(line []byte) []byte {
 	return transformed
 }
 
+// ReasoningTokenExtractors lists the known provider spellings for the
+// reasoning/thinking token counter inside a usage object (NENYA-33).
+// They are alternative spellings of one counter, so the first non-zero
+// value wins; zero-token placeholders never register.
+var reasoningTokenExtractors = []func(usage map[string]interface{}) int{
+	func(u map[string]interface{}) int { return ToInt(u["reasoning_tokens"]) },
+	func(u map[string]interface{}) int {
+		if d, ok := u["output_tokens_details"].(map[string]interface{}); ok {
+			return ToInt(d["reasoning_tokens"]) // OpenAI current shape
+		}
+		return 0
+	},
+	func(u map[string]interface{}) int {
+		if d, ok := u["completion_tokens_details"].(map[string]interface{}); ok {
+			return ToInt(d["reasoning_tokens"]) // legacy OpenAI shape
+		}
+		return 0
+	},
+	func(u map[string]interface{}) int { return ToInt(u["completion_reasoning_tokens"]) }, // Anthropic raw
+	func(u map[string]interface{}) int { return ToInt(u["thoughtsTokenCount"]) },          // Gemini native
+}
+
+// ExtractReasoningTokens pulls the reasoning/thinking token count from a
+// usage object across every known provider spelling. Returns 0 when no
+// spelling yields a value.
+func ExtractReasoningTokens(usage map[string]interface{}) int {
+	for _, extract := range reasoningTokenExtractors {
+		if n := extract(usage); n > 0 {
+			return n
+		}
+	}
+	return 0
+}
+
 func (r *SSETransformingReader) extractUsageFromMap(chunk map[string]interface{}) {
 	rawUsage, ok := chunk["usage"]
 	if !ok || rawUsage == nil {
@@ -932,7 +966,7 @@ func (r *SSETransformingReader) extractUsageFromMap(chunk map[string]interface{}
 	}
 	cacheMiss := ToInt(usage["prompt_cache_miss_tokens"])
 	cacheCreation := ToInt(usage["cache_creation_tokens"])
-	reasoning := ToInt(usage["reasoning_tokens"])
+	reasoning := ExtractReasoningTokens(usage)
 	cacheReadInput := ToInt(usage["cache_read_input_tokens"])
 	cacheCreationInput := ToInt(usage["cache_creation_input_tokens"])
 	if allUsageFieldsZero(completion, prompt, total, cacheHit, cacheMiss, cacheCreation, reasoning) &&
