@@ -500,6 +500,22 @@ func restoreOriginalModel(payload map[string]interface{}, origModel interface{})
 	}
 }
 
+// applyParamCompatSanitize applies the param-compat table (NENYA-32):
+// config-declared rules first, then the built-in rejections (Gemini 3
+// sampling/candidate_count, reasoning-effort floors, forced tool_choice
+// relaxation). Changes are logged; metrics stay in the proxy layer where
+// agent/provider labels are available.
+func applyParamCompatSanitize(deps TransformDeps, payload map[string]interface{}, modelName string) {
+	if modelName == "" {
+		return
+	}
+	rules := resolveParamCompatRules(&deps.Config.Governance)
+	applied := applyParamCompat(rules, payload, modelName)
+	for _, param := range applied {
+		deps.Logger.Debug("param-compat rule applied", "model", modelName, "param", param)
+	}
+}
+
 // convertToAnthropicFormat converts an OpenAI-format payload to Anthropic format,
 // applying prefix cache configuration from agent config.
 // Returns the converted payload; the caller must use the return value as the
@@ -576,6 +592,7 @@ func TransformRequestForUpstream(deps TransformDeps, providerName, upstreamURL s
 
 	applyProviderSanitize(deps, payload, providerName)
 	SanitizePayload(deps, payload, modelName)
+	applyParamCompatSanitize(deps, payload, modelName)
 	injectPromptCacheKey(deps, payload, providerName, modelName)
 	injectOpenAICacheBreakpoints(deps, payload, providerName, modelName)
 	injectCacheSalt(deps, payload, providerName)

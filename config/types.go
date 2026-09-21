@@ -437,13 +437,23 @@ type GovernanceConfig struct {
 	// and honoring them literally produces zero-wait retry storms against the
 	// same exhausted account. 0 or unset applies the built-in default (10s);
 	// a negative value disables the floor.
-	MinQuotaCooldownSeconds int     `json:"min_quota_cooldown_seconds,omitempty"`
-	AutoRetryOnContextLimit *bool   `json:"auto_retry_on_context_limit,omitempty"`
-	CostMode                string  `json:"cost_mode,omitempty"`
-	BillingEconomyScale     float64 `json:"billing_economy_scale,omitempty"`
-	BillingQualityScale     float64 `json:"billing_quality_scale,omitempty"`
-	MaxTransformedSSEBytes  int     `json:"max_transformed_sse_bytes,omitempty"`
-	UpstreamTimeoutSeconds  *int    `json:"upstream_timeout_seconds,omitempty"`
+	MinQuotaCooldownSeconds int   `json:"min_quota_cooldown_seconds,omitempty"`
+	AutoRetryOnContextLimit *bool `json:"auto_retry_on_context_limit,omitempty"`
+	// ParamCompat declares parameter-compatibility rules for models that
+	// reject parameters their predecessors accepted (NENYA-32). Rules are
+	// matched by model-ID prefix (config rules first, then the built-in
+	// table; first match wins) and may drop parameters, clamp the
+	// reasoning effort floor, or relax forced tool_choice.
+	ParamCompat []ParamCompatRule `json:"param_compat,omitempty"`
+	// AutoRetryOnParamReject enables the safety-net retry: when an
+	// upstream 400 rejects a known parameter by name, the gateway strips
+	// it and retries once (default false).
+	AutoRetryOnParamReject *bool   `json:"auto_retry_on_param_reject,omitempty"`
+	CostMode               string  `json:"cost_mode,omitempty"`
+	BillingEconomyScale    float64 `json:"billing_economy_scale,omitempty"`
+	BillingQualityScale    float64 `json:"billing_quality_scale,omitempty"`
+	MaxTransformedSSEBytes int     `json:"max_transformed_sse_bytes,omitempty"`
+	UpstreamTimeoutSeconds *int    `json:"upstream_timeout_seconds,omitempty"`
 	// StreamIdleTimeoutSeconds is the stall detection timeout for SSE streams.
 	StreamIdleTimeoutSeconds *int `json:"stream_idle_timeout_seconds,omitempty"`
 	// StreamBootstrapBufferBytes is the global stream bootstrap buffering
@@ -506,6 +516,23 @@ func (g *GovernanceConfig) EffectiveMinQuotaCooldown() time.Duration {
 
 func (g *GovernanceConfig) AutoRetryOnContextLimitEnabled() bool {
 	return g.AutoRetryOnContextLimit != nil && *g.AutoRetryOnContextLimit
+}
+
+// ParamCompatRule declares parameter-compatibility sanitization for model
+// IDs matching ModelPrefix (NENYA-32): parameters new model generations
+// reject are dropped, the reasoning effort is clamped to a floor, and
+// forced tool_choice can be relaxed to "auto".
+type ParamCompatRule struct {
+	ModelPrefix           string   `json:"model_prefix"`
+	DropParams            []string `json:"drop_params,omitempty"`
+	MinReasoningEffort    string   `json:"min_reasoning_effort,omitempty"`
+	RelaxForcedToolChoice bool     `json:"relax_forced_tool_choice,omitempty"`
+}
+
+// AutoRetryOnParamRejectEnabled reports whether the strip-and-retry
+// safety net for parameter rejections is enabled (NENYA-32).
+func (g *GovernanceConfig) AutoRetryOnParamRejectEnabled() bool {
+	return g.AutoRetryOnParamReject != nil && *g.AutoRetryOnParamReject
 }
 
 // EffectiveMaxTransformedSSEBytes returns the configured or default SSE

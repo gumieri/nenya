@@ -231,6 +231,9 @@ type retryLoop struct {
 	// once per request, not per failover attempt (NENYA-20).
 	keyBudgetCharged bool
 	rateLimitedPairs map[string]bool
+	// paramRejectRetried ensures the strip-and-retry safety net (NENYA-32)
+	// fires at most once per request.
+	paramRejectRetried bool
 }
 
 // trackInFlight increments the in-flight gauge for the first target in
@@ -435,6 +438,15 @@ func (rl *retryLoop) handleActionError(i int, target routing.UpstreamTarget, act
 		return rl.handleContextLimitError(i, target, action)
 	}
 
+	// Param-reject safety net (NENYA-32): a 400 that names a parameter the
+	// compat table knows how to drop gets one strip-and-retry chance.
+	// Context-length handling above keeps precedence; when the safety net
+	// fires it re-enters the loop immediately (no backoff) with the
+	// stripped payload, bypassing request-scoped rules for that attempt.
+	if action.resp.StatusCode == http.StatusBadRequest && rl.maybeStripAndRetryParamReject(i, target, action) {
+		return retrySignalContinue
+	}
+
 	// Request-scoped via provider config (NENYA-42): the client's payload is
 	// at fault. Skip cooldown/rotation state and surface the upstream error
 	// directly to the client instead of sweeping the remaining targets.
@@ -501,6 +513,94 @@ func (rl *retryLoop) handleContextLimitError(i int, target routing.UpstreamTarge
 	gwErr := ParseProviderError(target.Provider, action.resp.StatusCode, action.body, nil)
 	rl.writeUpstreamErrorToClient(action.resp.StatusCode, gwErr)
 	return retrySignalDone
+}
+
+// maybeStripAndRetryParamReject implements the strip-and-retry safety net
+// for upstream parameter rejections (NENYA-32): when a 400 error body
+// names a well-known chat parameter that is present in the payload, the
+// gateway strips it, records the strip, and queues one retry. The
+// proactive param-compat table already removes table-known parameters
+// pre-dispatch, so the net exists for rejections the table did not
+// anticipate — hence the gate here is payload presence, not table
+// membership. Returns true when the safety net fired (stripped payload
+// queued, re-enter the loop immediately) and false when normal error
+// handling should proceed (retry disabled, safety net already spent, no
+// recognizable parameter in the body, or nothing present to strip).
+func (rl *retryLoop) maybeStripAndRetryParamReject(i int, target routing.UpstreamTarget, action upstreamAction) bool {
+	if rl.paramRejectRetried || !rl.gw.Config.Governance.AutoRetryOnParamRejectEnabled() {
+		return false
+	}
+	params := extractRejectedParamNames(string(action.body))
+	if len(params) == 0 {
+		return false
+	}
+
+	// The retry re-dispatches from the pristine original payload, so the
+	// strip must not compound with prior per-target transforms.
+	var payload map[string]interface{}
+	if rl.summarized && rl.summarizedPayload != nil {
+		cp := make(map[string]interface{}, len(rl.summarizedPayload))
+		for k, v := range rl.summarizedPayload {
+			cp[k] = v
+		}
+		payload = cp
+	} else {
+		cp := make(map[string]interface{}, 16)
+		if !rl.copyPayload(cp, i) {
+			return false
+		}
+		payload = cp
+	}
+
+	// Only strip parameters the payload actually carries; an error body
+	// can mention a parameter the client never sent.
+	var strippable []string
+	for _, p := range params {
+		if _, ok := payload[p]; ok {
+			strippable = append(strippable, p)
+		}
+	}
+	if len(strippable) == 0 {
+		return false
+	}
+	routing.StripParams(payload, strippable)
+
+	for _, param := range strippable {
+		rl.gw.Metrics.RecordParamRejectStrip(rl.opts.AgentName, target.Provider, target.Model, param, "retry")
+	}
+	rl.gw.Metrics.RecordParamRejectRetry(rl.opts.AgentName, target.Provider, target.Model)
+	rl.paramRejectRetried = true
+
+	// Re-enter the loop with the stripped payload in the summarized slot:
+	// both flags matter — the slot holds the corrective payload and the
+	// summarized flag is what the payload-selection gate checks. No
+	// further param retries can occur (paramRejectRetried latches).
+	rl.summarized = true
+	rl.summarizedPayload = payload
+	rl.lastFailReason = failReasonSummarized
+	rl.ctxLogger.Info("upstream rejected known parameter, stripping and retrying once",
+		"provider", target.Provider, "model", target.Model, "params", strings.Join(strippable, ","))
+	return true
+}
+
+// extractRejectedParamNames scans an upstream error body for names of the
+// well-known chat-completion parameters it complains about. Deliberately
+// conservative: it only recognizes the top-level OpenAI parameters the
+// compat table can drop, so arbitrary body text never yields matches.
+func extractRejectedParamNames(body string) []string {
+	lower := strings.ToLower(body)
+	wellKnown := []string{
+		"temperature", "top_p", "top_k", "presence_penalty",
+		"frequency_penalty", "candidate_count", "reasoning_effort",
+		"tool_choice", "stream_options", "logit_bias", "logprobs",
+	}
+	var found []string
+	for _, p := range wellKnown {
+		if strings.Contains(lower, p) {
+			found = append(found, p)
+		}
+	}
+	return found
 }
 
 // failReason classifies why the loop is about to move past a target, so

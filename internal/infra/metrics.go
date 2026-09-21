@@ -104,6 +104,10 @@ type Metrics struct {
 	summarizationRetries  sync.Map
 	summarizationDuration sync.Map
 
+	// Parameter-compat metrics (NENYA-32)
+	paramRejectStrips  sync.Map
+	paramRejectRetries sync.Map
+
 	// Error kind metrics
 	errorKinds sync.Map
 
@@ -808,6 +812,39 @@ func (m *Metrics) RecordSummarizationRetry(agent, provider, model string) {
 	e.value.Add(1)
 }
 
+// RecordParamRejectStrip increments the counter for parameters dropped by
+// the param-compat sanitizer or the reject-retry safety net (NENYA-32).
+// Labels: agent/provider/model plus the parameter name and whether the
+// strip came from the proactive table ("table") or the reactive retry
+// ("retry").
+func (m *Metrics) RecordParamRejectStrip(agent, provider, model, param, source string) {
+	if m == nil {
+		return
+	}
+	e := getOrCreateEntry(&m.paramRejectStrips, map[string]string{
+		"agent":    agent,
+		"provider": provider,
+		"model":    model,
+		"param":    param,
+		"source":   source,
+	})
+	e.value.Add(1)
+}
+
+// RecordParamRejectRetry increments the counter for strip-and-retry
+// attempts after an upstream parameter rejection (NENYA-32).
+func (m *Metrics) RecordParamRejectRetry(agent, provider, model string) {
+	if m == nil {
+		return
+	}
+	e := getOrCreateEntry(&m.paramRejectRetries, map[string]string{
+		"agent":    agent,
+		"provider": provider,
+		"model":    model,
+	})
+	e.value.Add(1)
+}
+
 // RecordSummarizationDuration records the duration of a summarization call.
 func (m *Metrics) RecordSummarizationDuration(agent, provider, model string, duration time.Duration) {
 	if m == nil {
@@ -1213,6 +1250,10 @@ func (m *Metrics) WritePrometheus(w io.Writer) {
 		"Total retry attempts with summarized payload after context-limit errors.", &m.summarizationRetries)
 	m.writeHistogramMap(w, "nenya_summarization_duration_seconds",
 		"Summarization call duration in seconds.", &m.summarizationDuration)
+	m.writeCounterMap(w, "nenya_param_reject_strips_total",
+		"Parameters dropped by param-compat rules or the reject-retry safety net.", &m.paramRejectStrips)
+	m.writeCounterMap(w, "nenya_param_reject_retries_total",
+		"Strip-and-retry attempts after upstream parameter rejections.", &m.paramRejectRetries)
 	m.writeCounterMap(w, "nenya_error_kind_total",
 		"Total structured errors by kind and provider.", &m.errorKinds)
 	m.writeCounterMap(w, "nenya_cb_failures_total",
