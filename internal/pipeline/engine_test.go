@@ -3,6 +3,8 @@ package pipeline
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -107,6 +109,97 @@ func TestCallEngine_Ollama(t *testing.T) {
 	if result != "ollama-summary" {
 		t.Errorf("result = %q, want %q", result, "ollama-summary")
 	}
+}
+
+func TestCallEngineChain_UsesClientResolver(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if err := json.NewEncoder(w).Encode(map[string]interface{}{
+			"choices": []interface{}{
+				map[string]interface{}{
+					"message": map[string]interface{}{
+						"content": "chain-summary",
+					},
+				},
+			},
+		}); err != nil {
+			t.Errorf("encode: %v", err)
+		}
+	}))
+	defer srv.Close()
+
+	targets := []config.EngineTarget{
+		{
+			Engine:   config.EngineConfig{Provider: "bad", Model: "test", TimeoutSeconds: 2},
+			Provider: &config.Provider{Name: "bad", URL: "http://127.0.0.1:1"},
+		},
+		{
+			Engine:   config.EngineConfig{Provider: "good", Model: "test", TimeoutSeconds: 2},
+			Provider: &config.Provider{Name: "good", URL: srv.URL},
+		},
+	}
+
+	clients := map[string]*http.Client{
+		"bad":  {Transport: &failingTransport{}},
+		"good": srv.Client(),
+	}
+	var resolved []string
+	clientFor := func(providerName string) *http.Client {
+		resolved = append(resolved, providerName)
+		return clients[providerName]
+	}
+
+	logger := slog.Default()
+	result, err := CallEngineChain(context.Background(), clientFor, targets, logger, noopInject, "caller", "agent", "sys", "prompt")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result != "chain-summary" {
+		t.Errorf("result = %q, want %q", result, "chain-summary")
+	}
+	if len(resolved) != 2 || resolved[0] != "bad" || resolved[1] != "good" {
+		t.Errorf("resolver consulted with %v, want [bad good]", resolved)
+	}
+}
+
+func TestCallEngineChain_NilResolverUsesDefaultClient(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if err := json.NewEncoder(w).Encode(map[string]interface{}{
+			"choices": []interface{}{
+				map[string]interface{}{
+					"message": map[string]interface{}{
+						"content": "default-client-summary",
+					},
+				},
+			},
+		}); err != nil {
+			t.Errorf("encode: %v", err)
+		}
+	}))
+	defer srv.Close()
+
+	targets := []config.EngineTarget{
+		{
+			Engine:   config.EngineConfig{Provider: "good", Model: "test", TimeoutSeconds: 2},
+			Provider: &config.Provider{Name: "good", URL: srv.URL},
+		},
+	}
+
+	result, err := CallEngineChain(context.Background(), nil, targets, slog.Default(), noopInject, "caller", "agent", "sys", "prompt")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result != "default-client-summary" {
+		t.Errorf("result = %q, want %q", result, "default-client-summary")
+	}
+}
+
+// failingTransport is a test-only http.RoundTripper that always errors.
+type failingTransport struct{}
+
+func (rt *failingTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	return nil, errors.New("connection refused")
 }
 
 func TestCallEngine_Unreachable(t *testing.T) {

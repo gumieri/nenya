@@ -121,7 +121,7 @@ func (p *Proxy) summarizeMessages(ctx context.Context, gw *gateway.NenyaGateway,
 
 	start := time.Now()
 	summary, err := pipeline.CallEngineChain(
-		ctx, gw.Client, gw.OllamaClient,
+		ctx, gw.ClientFor,
 		gw.Config.Bouncer.Engine.ResolvedTargets, gw.Logger,
 		func(providerName string, headers http.Header) error {
 			return routing.InjectAPIKeyWithGateway(providerName, gw, headers)
@@ -168,7 +168,7 @@ func (p *Proxy) doUpstreamRoundTrip(ctx context.Context, gw *gateway.NenyaGatewa
 		if contentType != "" {
 			upstreamReq.Header.Set("Content-Type", contentType)
 		}
-		resp, fetchErr := gw.Client.Do(upstreamReq)
+		resp, fetchErr := gw.ClientFor(providerName).Do(upstreamReq)
 		if fetchErr != nil {
 			if resp != nil {
 				_ = resp.Body.Close()
@@ -972,7 +972,7 @@ func (p *Proxy) prepareAndSend(gw *gateway.NenyaGateway,
 	req = req.WithContext(upstreamCtx)
 
 	startTime := time.Now()
-	resp, err := gw.Client.Do(req)
+	resp, err := gw.ClientFor(target.Provider).Do(req)
 	if err != nil {
 		upstreamCancel()
 		p.recordNetworkError(ctxLogger, gw, target, err, r, cooldownDuration)

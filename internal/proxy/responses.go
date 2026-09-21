@@ -98,7 +98,7 @@ func (p *Proxy) handleResponses(gw *gateway.NenyaGateway, w http.ResponseWriter,
 			req.Header.Set("Content-Type", "application/json")
 		}
 
-		httpResp, fetchErr := gw.Client.Do(req)
+		httpResp, fetchErr := gw.ClientFor(provider.Name).Do(req)
 		if fetchErr != nil {
 			if httpResp != nil {
 				_ = httpResp.Body.Close()

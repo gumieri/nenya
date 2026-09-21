@@ -165,6 +165,13 @@ type ProviderConfig struct {
 	FormatURLs map[string]string `json:"format_urls,omitempty"`
 	// TimeoutSeconds is the total request deadline for this provider.
 	TimeoutSeconds int `json:"timeout_seconds"`
+	// ResponseHeaderTimeoutSeconds is the transport-level time-to-first-byte
+	// bound (HTTP ResponseHeaderTimeout) for dispatches to this provider.
+	// When 0, falls back to TimeoutSeconds; when both are 0, uses
+	// DefaultResponseHeaderTimeoutSeconds (30s). Unlike TimeoutSeconds it
+	// also applies to streaming requests, whose context is otherwise
+	// unbounded. Capped at 86400 (24 hours) by validation.
+	ResponseHeaderTimeoutSeconds int `json:"response_header_timeout_seconds,omitempty"`
 	// StreamIdleTimeoutSeconds is the stall detection timeout for SSE streams.
 	// When 0, uses the global governance default. When > 0, overrides the global
 	// default. Capped at 86400 (24 hours) by validation.
@@ -271,6 +278,11 @@ type Provider struct {
 	ApiFormat      string
 	FormatURLs     map[string]string
 	TimeoutSeconds int
+	// ResponseHeaderTimeoutSeconds is the transport-level time-to-first-byte
+	// bound (HTTP ResponseHeaderTimeout) for dispatches to this provider.
+	// When 0, EffectiveResponseHeaderTimeout falls back to TimeoutSeconds,
+	// then to DefaultResponseHeaderTimeoutSeconds.
+	ResponseHeaderTimeoutSeconds int
 	// StreamIdleTimeoutSeconds is the stall detection timeout for SSE streams.
 	// When 0, uses the global governance default. When > 0, overrides the global default.
 	StreamIdleTimeoutSeconds int
@@ -299,6 +311,28 @@ type Provider struct {
 	// SessionStickyKeys opts out of session-sticky credential pinning.
 	// See ProviderConfig.SessionStickyKeys.
 	SessionStickyKeys *bool
+}
+
+// DefaultResponseHeaderTimeoutSeconds is the default transport-level
+// time-to-first-byte bound for upstream providers when neither
+// response_header_timeout_seconds nor timeout_seconds is configured.
+const DefaultResponseHeaderTimeoutSeconds = 30
+
+// EffectiveResponseHeaderTimeout resolves the transport-level
+// time-to-first-byte bound for dispatches to this provider:
+// response_header_timeout_seconds when positive, else timeout_seconds
+// when positive, else DefaultResponseHeaderTimeoutSeconds.
+func (p *Provider) EffectiveResponseHeaderTimeout() time.Duration {
+	if p == nil {
+		return DefaultResponseHeaderTimeoutSeconds * time.Second
+	}
+	if p.ResponseHeaderTimeoutSeconds > 0 {
+		return time.Duration(p.ResponseHeaderTimeoutSeconds) * time.Second
+	}
+	if p.TimeoutSeconds > 0 {
+		return time.Duration(p.TimeoutSeconds) * time.Second
+	}
+	return DefaultResponseHeaderTimeoutSeconds * time.Second
 }
 
 // ConcurrencyLimit resolves the in-flight request cap for a model served by

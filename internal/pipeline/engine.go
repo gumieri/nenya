@@ -165,7 +165,15 @@ func extractOpenAIOutput(response map[string]interface{}) (string, error) {
 	return "", fmt.Errorf("openai message missing content")
 }
 
-func CallEngineChain(ctx context.Context, httpClient, ollamaClient *http.Client,
+// ClientResolver returns the HTTP client for dispatching engine requests to
+// the named provider (e.g. gateway.NenyaGateway.ClientFor). This lets engine
+// targets honor per-provider response-header timeouts.
+type ClientResolver func(providerName string) *http.Client
+
+// CallEngineChain tries each engine target in order, returning the first
+// successful summarization. Each target gets its own timeout; failures log a
+// warning and fall through to the next target.
+func CallEngineChain(ctx context.Context, clientFor ClientResolver,
 	targets []config.EngineTarget, logger *slog.Logger,
 	injectAPIKey func(providerName string, headers http.Header) error,
 	caller, agentName, systemPrompt, prompt string) (string, error) {
@@ -186,9 +194,11 @@ func CallEngineChain(ctx context.Context, httpClient, ollamaClient *http.Client,
 			"attempt", attempt,
 			"total", total)
 
-		client := httpClient
-		if target.Provider.ApiFormat == "ollama" {
-			client = ollamaClient
+		var client *http.Client
+		if clientFor != nil {
+			client = clientFor(target.Provider.Name)
+		} else {
+			client = http.DefaultClient
 		}
 
 		timeout := target.Engine.TimeoutSeconds

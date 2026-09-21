@@ -13,6 +13,39 @@ import (
 	"time"
 )
 
+func TestValidateProviderResponseHeaderTimeout(t *testing.T) {
+	tests := []struct {
+		name    string
+		seconds int
+		wantErr bool
+		wantMsg string
+	}{
+		{"unset is valid", 0, false, ""},
+		{"positive is valid", 120, false, ""},
+		{"max 24h is valid", MaxTimeoutSeconds, false, ""},
+		{"negative fails", -1, true, `providers["p"].response_header_timeout_seconds must be non-negative (set to 0 to fall back to timeout_seconds or the 30s default), got -1`},
+		{"exceeds 24h fails", MaxTimeoutSeconds + 1, true, fmt.Sprintf(`providers["p"].response_header_timeout_seconds exceeds maximum allowed value (%d seconds / 24 hours), got %d`, MaxTimeoutSeconds, MaxTimeoutSeconds+1)},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			providers := map[string]*Provider{"p": {ResponseHeaderTimeoutSeconds: tt.seconds}}
+			errs := validateProviders(context.Background(), providers, testLogger())
+			if tt.wantErr {
+				if len(errs) != 1 {
+					t.Fatalf("expected 1 error, got %v", errs)
+				}
+				if errs[0] != tt.wantMsg {
+					t.Errorf("error = %q, want %q", errs[0], tt.wantMsg)
+				}
+				return
+			}
+			if len(errs) != 0 {
+				t.Errorf("expected no errors, got %v", errs)
+			}
+		})
+	}
+}
+
 func TestValidateTFIDFQuerySource(t *testing.T) {
 	tests := []struct {
 		source string

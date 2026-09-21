@@ -118,7 +118,7 @@ func (b *BouncerInterceptor) summarize(ctx context.Context, heavyText string, is
 		agentName = "inline"
 	}
 
-	return pipeline.CallEngineChain(ctx, b.gw.Client, b.gw.OllamaClient,
+	return pipeline.CallEngineChain(ctx, b.gw.ClientFor,
 		ref.ResolvedTargets, b.logger,
 		func(providerName string, headers http.Header) error {
 			return routing.InjectAPIKeyWithGateway(providerName, b.gw, headers)

@@ -63,9 +63,13 @@ type NenyaGateway struct {
 	Config       config.Config
 	Client       *http.Client
 	OllamaClient *http.Client
-	Secrets      *config.SecretsConfig
-	Providers    map[string]*config.Provider
-	RateLimiter  *infra.RateLimiter
+	// ProviderClients maps provider name to a dedicated HTTP client with a
+	// non-default response-header timeout (transport-level TTFB bound).
+	// Populated in New; providers absent here share Client via ClientFor.
+	ProviderClients map[string]*http.Client
+	Secrets         *config.SecretsConfig
+	Providers       map[string]*config.Provider
+	RateLimiter     *infra.RateLimiter
 	// KeyUsage enforces per-API-key rate limits and token budgets, plus
 	// per-provider daily budget tiers (NENYA-20). In-memory by design.
 	KeyUsage           *auth.KeyUsageTracker
@@ -103,7 +107,7 @@ type NenyaGateway struct {
 // metrics, MCP clients, and starts dynamic model discovery.
 func New(ctx context.Context, cfg config.Config, secrets *config.SecretsConfig, logger *slog.Logger) *NenyaGateway {
 	cfg = mergeBuiltInProviders(cfg)
-	secureClient, ollamaClient := createHTTPClients(cfg)
+	secureClient, ollamaClient, baseTransport := createHTTPClients(cfg)
 
 	timeout := cfg.Governance.EffectiveUpstreamTimeout()
 	if timeout == 0 {
@@ -135,6 +139,7 @@ func New(ctx context.Context, cfg config.Config, secrets *config.SecretsConfig, 
 
 	gw := buildGateway(cfg, secrets, secureClient, ollamaClient, providers,
 		secretPatterns, blockedPatterns, entropyFilter, mergedCatalog, healthRegistry, logger, sm, clientTokenRef, providerKeyTokens, metrics)
+	gw.ProviderClients = buildProviderClients(baseTransport, providers)
 
 	gw.Metrics = metrics
 	gw.Metrics.RateLimits = gw.RateLimiter.Snapshot
@@ -196,19 +201,11 @@ func mergeBuiltInProviders(cfg config.Config) config.Config {
 	return cfg
 }
 
-func createHTTPClients(cfg config.Config) (*http.Client, *http.Client) {
-	transport := &http.Transport{
-		DialContext: (&net.Dialer{
-			Timeout:   30 * time.Second,
-			KeepAlive: 30 * time.Second,
-		}).DialContext,
-		TLSHandshakeTimeout:   30 * time.Second,
-		ResponseHeaderTimeout: 30 * time.Second,
-		ExpectContinueTimeout: 1 * time.Second,
-		IdleConnTimeout:       90 * time.Second,
-		MaxIdleConns:          100,
-		MaxIdleConnsPerHost:   10,
-	}
+// createHTTPClients returns the shared secure upstream client, the Ollama
+// client, and the base upstream transport (used to derive per-provider
+// transports in buildProviderClients).
+func createHTTPClients(cfg config.Config) (*http.Client, *http.Client, *http.Transport) {
+	transport := newUpstreamTransport(config.DefaultResponseHeaderTimeoutSeconds * time.Second)
 
 	secureClient := &http.Client{
 		Transport: transport,
@@ -238,7 +235,59 @@ func createHTTPClients(cfg config.Config) (*http.Client, *http.Client) {
 		Transport: ollamaTransport,
 	}
 
-	return secureClient, ollamaClient
+	return secureClient, ollamaClient, transport
+}
+
+// newUpstreamTransport builds the shared upstream HTTP transport with the
+// given response-header timeout (time-to-first-byte bound).
+func newUpstreamTransport(responseHeaderTimeout time.Duration) *http.Transport {
+	return &http.Transport{
+		DialContext: (&net.Dialer{
+			Timeout:   30 * time.Second,
+			KeepAlive: 30 * time.Second,
+		}).DialContext,
+		TLSHandshakeTimeout:   30 * time.Second,
+		ResponseHeaderTimeout: responseHeaderTimeout,
+		ExpectContinueTimeout: 1 * time.Second,
+		IdleConnTimeout:       90 * time.Second,
+		MaxIdleConns:          100,
+		MaxIdleConnsPerHost:   10,
+	}
+}
+
+// buildProviderClients clones the base upstream transport for every provider
+// whose effective response-header timeout differs from the default, yielding
+// one dedicated client per provider name. Providers sharing the default
+// timeout reuse the base transport's connection pool via the shared client.
+func buildProviderClients(baseTransport *http.Transport, providers map[string]*config.Provider) map[string]*http.Client {
+	clients := make(map[string]*http.Client)
+	for name, provider := range providers {
+		if provider == nil {
+			continue
+		}
+		timeout := provider.EffectiveResponseHeaderTimeout()
+		if timeout == config.DefaultResponseHeaderTimeoutSeconds*time.Second {
+			continue
+		}
+		transport := baseTransport.Clone()
+		transport.ResponseHeaderTimeout = timeout
+		clients[name] = &http.Client{Transport: transport}
+	}
+	return clients
+}
+
+// ClientFor returns the HTTP client for dispatching requests to the named
+// provider. Ollama-format providers use the dedicated Ollama client;
+// providers with a non-default response-header timeout use their dedicated
+// transport; everything else shares the default secure client. Never nil.
+func (g *NenyaGateway) ClientFor(providerName string) *http.Client {
+	if provider, ok := g.Providers[providerName]; ok && provider != nil && provider.ApiFormat == "ollama" {
+		return g.OllamaClient
+	}
+	if client, ok := g.ProviderClients[providerName]; ok {
+		return client
+	}
+	return g.Client
 }
 
 func performModelDiscovery(ctx context.Context, cfg *config.Config, providers map[string]*config.Provider, metrics *infra.Metrics, logger *slog.Logger, keyProvider func(string) ([]byte, bool)) (*discovery.ModelCatalog, *discovery.HealthRegistry) {

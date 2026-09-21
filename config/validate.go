@@ -196,6 +196,12 @@ func validateEntropyConfig(sf BouncerConfig) []string {
 func validateProviders(ctx context.Context, providers map[string]*Provider, logger *slog.Logger) []string {
 	errors := []string{}
 	for name, provider := range providers {
+		if provider.ResponseHeaderTimeoutSeconds < 0 {
+			errors = append(errors, fmt.Sprintf("providers[%q].response_header_timeout_seconds must be non-negative (set to 0 to fall back to timeout_seconds or the 30s default), got %d", name, provider.ResponseHeaderTimeoutSeconds))
+		}
+		if provider.ResponseHeaderTimeoutSeconds > MaxTimeoutSeconds {
+			errors = append(errors, fmt.Sprintf("providers[%q].response_header_timeout_seconds exceeds maximum allowed value (%d seconds / 24 hours), got %d", name, MaxTimeoutSeconds, provider.ResponseHeaderTimeoutSeconds))
+		}
 		if provider.StreamIdleTimeoutSeconds < 0 {
 			errors = append(errors, fmt.Sprintf("providers[%q].stream_idle_timeout_seconds must be non-negative (set to 0 to use global default), got %d", name, provider.StreamIdleTimeoutSeconds))
 		}

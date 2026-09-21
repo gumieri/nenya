@@ -36,8 +36,7 @@ Keep the summary under %d characters. Output ONLY the summary, no preamble or ex
 
 type WindowDeps struct {
 	Logger       *slog.Logger
-	Client       *http.Client
-	OllamaClient *http.Client
+	ClientFor    ClientResolver
 	Providers    map[string]*config.Provider
 	InjectAPIKey func(providerName string, headers http.Header) error
 	CountTokens  func(text string) int
@@ -192,7 +191,7 @@ func generateEngineSummary(ctx context.Context, deps WindowDeps, windowCfg confi
 	if agentName == "" {
 		agentName = "inline"
 	}
-	s, err := CallEngineChain(ctx, deps.Client, deps.OllamaClient,
+	s, err := CallEngineChain(ctx, deps.ClientFor,
 		ref.ResolvedTargets, deps.Logger, deps.InjectAPIKey,
 		"window", agentName, systemPrompt, historyText)
 	if err != nil {

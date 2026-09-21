@@ -619,6 +619,31 @@ func TestEffectiveUpstreamTimeout(t *testing.T) {
 	}
 }
 
+func TestEffectiveResponseHeaderTimeout(t *testing.T) {
+	tests := []struct {
+		name            string
+		provider        *Provider
+		expectedSeconds int
+	}{
+		{"nil provider defaults to 30s", nil, 30},
+		{"nothing set defaults to 30s", &Provider{}, 30},
+		{"response_header_timeout_seconds takes precedence", &Provider{ResponseHeaderTimeoutSeconds: 120, TimeoutSeconds: 60}, 120},
+		{"falls back to timeout_seconds", &Provider{TimeoutSeconds: 90}, 90},
+		{"negative response_header falls back to timeout_seconds", &Provider{ResponseHeaderTimeoutSeconds: -5, TimeoutSeconds: 45}, 45},
+		{"negative timeout_seconds falls back to default", &Provider{TimeoutSeconds: -1}, 30},
+		{"both negative fall back to default", &Provider{ResponseHeaderTimeoutSeconds: -1, TimeoutSeconds: -1}, 30},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := tt.provider.EffectiveResponseHeaderTimeout()
+			want := time.Duration(tt.expectedSeconds) * time.Second
+			if got != want {
+				t.Errorf("EffectiveResponseHeaderTimeout() = %v, want %v", got, want)
+			}
+		})
+	}
+}
+
 func TestEffectiveStreamIdleTimeout(t *testing.T) {
 	tests := []struct {
 		name            string

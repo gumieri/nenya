@@ -1050,6 +1050,70 @@ func TestPrepareAndSend_NetworkErrorRecordsFailure(t *testing.T) {
 	}
 }
 
+// recordingRoundTripper is a test-only http.RoundTripper that counts calls
+// and always returns the given error.
+type recordingRoundTripper struct {
+	err   error
+	calls int
+}
+
+func (rt *recordingRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
+	rt.calls++
+	return nil, rt.err
+}
+
+func TestPrepareAndSend_UsesProviderDedicatedClient(t *testing.T) {
+	gw := newTestGateway(nil, nil)
+	gw.RateLimiter = infra.NewRateLimiter(0, 0)
+
+	providerRT := &recordingRoundTripper{err: errors.New("provider transport timeout")}
+	defaultRT := &recordingRoundTripper{err: errors.New("default client must not be called")}
+
+	gw.Client = &http.Client{Transport: defaultRT}
+	gw.ProviderClients = map[string]*http.Client{
+		"test-provider": {Transport: providerRT},
+	}
+	gw.Providers["test-provider"] = &config.Provider{
+		Name:                         "test-provider",
+		ResponseHeaderTimeoutSeconds: 120,
+	}
+
+	target := routing.UpstreamTarget{
+		Provider:   "test-provider",
+		Model:      "test-model",
+		CoolKey:    "agent:test-provider:test-model",
+		URL:        "http://test-provider/v1/chat/completions",
+		Credential: "test-token",
+		MaxOutput:  4096,
+	}
+
+	payload := map[string]interface{}{"model": "test", "messages": []interface{}{}}
+	r, err := http.NewRequestWithContext(context.Background(), "POST", "http://test.com", nil)
+	if err != nil {
+		t.Fatalf("NewRequestWithContext failed: %v", err)
+	}
+
+	p := &Proxy{}
+	p.StoreGateway(gw)
+	action := p.prepareAndSend(gw, r, 0, []routing.UpstreamTarget{target}, target, payload, 0, 0, "test-agent", nil, false)
+
+	if action.kind != actionContinue {
+		t.Errorf("expected actionContinue, got %v", action.kind)
+	}
+	if providerRT.calls != 1 {
+		t.Errorf("provider-dedicated client calls = %d, want 1", providerRT.calls)
+	}
+	if defaultRT.calls != 0 {
+		t.Errorf("default client must not be consulted, got %d calls", defaultRT.calls)
+	}
+
+	detailed := gw.AgentState.CB.SnapshotDetailed()
+	failures := getFailureCountFromSnapshot(detailed, target.CoolKey)
+	if failures == 0 {
+		t.Errorf("CB should have failure_count > 0 for provider transport error, got %d", failures)
+	}
+}
+
 func TestPrepareAndSend_ProviderTimeoutRecordsFailure(t *testing.T) {
 	gw := newTestGateway(nil, nil)
 	gw.Client = &http.Client{

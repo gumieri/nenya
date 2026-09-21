@@ -1095,10 +1095,9 @@ func (p *Proxy) applyContentPipeline(gw *gateway.NenyaGateway, ctx context.Conte
 // buildWindowDeps creates a WindowDeps from the gateway state.
 func buildWindowDeps(gw *gateway.NenyaGateway) pipeline.WindowDeps {
 	return pipeline.WindowDeps{
-		Logger:       gw.Logger,
-		Client:       gw.Client,
-		OllamaClient: gw.OllamaClient,
-		Providers:    gw.Providers,
+		Logger:    gw.Logger,
+		ClientFor: gw.ClientFor,
+		Providers: gw.Providers,
 		InjectAPIKey: func(providerName string, headers http.Header) error {
 			return routing.InjectAPIKeyWithGateway(providerName, gw, headers)
 		},
