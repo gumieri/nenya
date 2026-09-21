@@ -98,7 +98,9 @@ func (e *httpError) Error() string { return e.Message }
 // Returns the parsed payload, source format ("openai" or "anthropic"), and an error if parsing fails.
 func (p *Proxy) parseRequestBody(gw *gateway.NenyaGateway, r *http.Request, bodyBytes []byte) (map[string]any, string, *httpError) {
 	sourceFormat := "openai"
-	if _, hasType := routing.ExtractField(bodyBytes, "type"); hasType {
+	// Hot-path peek (NENYA-35): scan for the top-level "type" field without
+	// unmarshaling the whole request into a map.
+	if _, hasType := util.ExtractTopLevelField(bodyBytes, "type"); hasType {
 		converted, err := routing.TransformIncomingAnthropicRequest(r.Context(), bodyBytes)
 		if err != nil {
 			gw.Logger.Warn("failed to convert Anthropic request", "err", err)
