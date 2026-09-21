@@ -232,6 +232,13 @@ type ProviderConfig struct {
 	// per-key prompt caches stay warm under multi-account rotation. nil
 	// (default) = enabled; false = this provider always rotates via LRU.
 	SessionStickyKeys *bool `json:"session_sticky_keys,omitempty"`
+	// ThoughtSignaturePolicy selects the Gemini unsigned-signature policy
+	// (NENYA-50): "strip" (default) removes unsigned tool calls with their
+	// paired responses on Gemini 3+, "placeholder" injectates the
+	// upstream-tolerated skip placeholder instead of stripping,
+	// "passthrough" forwards unsigned history. Pre-3 models keep history
+	// under every policy. Empty means "strip".
+	ThoughtSignaturePolicy *string `json:"thought_signature_policy,omitempty"`
 	// Billing configures usage-based billing tracking for this provider.
 	Billing *BillingConfig `json:"billing,omitempty"`
 	// AllowedModels is a list of RE2 regex patterns that models from this
@@ -308,6 +315,10 @@ type Provider struct {
 	// StreamBootstrapBufferBytes is the per-provider stream bootstrap
 	// buffering opt-in. See ProviderConfig.StreamBootstrapBufferBytes.
 	StreamBootstrapBufferBytes *int
+	// ThoughtSignaturePolicy selects the Gemini unsigned-signature policy
+	// (NENYA-50): strip | placeholder | passthrough. See
+	// ProviderConfig.ThoughtSignaturePolicy.
+	ThoughtSignaturePolicy string
 	// SessionStickyKeys opts out of session-sticky credential pinning.
 	// See ProviderConfig.SessionStickyKeys.
 	SessionStickyKeys *bool

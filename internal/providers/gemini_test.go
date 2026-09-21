@@ -70,6 +70,7 @@ func TestGemini_NormalToolCallsNoStripping(t *testing.T) {
 	}
 
 	payload := map[string]interface{}{
+		"model": "gemini-3-pro",
 		"messages": []interface{}{
 			map[string]interface{}{
 				"role":       "assistant",
@@ -120,6 +121,7 @@ func TestGemini_OrphanedToolCallsStripped(t *testing.T) {
 	}
 
 	payload := map[string]interface{}{
+		"model": "gemini-3-pro",
 		"messages": []interface{}{
 			map[string]interface{}{
 				"role":       "assistant",
@@ -166,6 +168,7 @@ func TestGemini_OrphanedToolResponsesRemoved(t *testing.T) {
 	deps := geminiDeps()
 
 	payload := map[string]interface{}{
+		"model": "gemini-3-pro",
 		"messages": []interface{}{
 			map[string]interface{}{
 				"role":    "assistant",
@@ -283,6 +286,7 @@ func TestGemini_EmptyAssistantAfterStripping(t *testing.T) {
 	deps := geminiDeps()
 
 	payload := map[string]interface{}{
+		"model": "gemini-3-pro",
 		"messages": []interface{}{
 			map[string]interface{}{
 				"role":    "user",

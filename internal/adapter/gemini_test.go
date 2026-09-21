@@ -263,7 +263,7 @@ func TestGeminiAdapter_Sanitize_OrphanedToolCalls(t *testing.T) {
 		Logger:          logger,
 	})
 	body := []byte(`{
-		"model": "gemini-pro",
+		"model": "gemini-3-pro",
 		"messages": [
 			{"role": "user", "content": "hello"},
 			{"role": "assistant", "content": "", "tool_calls": [
@@ -274,7 +274,7 @@ func TestGeminiAdapter_Sanitize_OrphanedToolCalls(t *testing.T) {
 			{"role": "tool", "tool_call_id": "tc2", "content": "12:00"}
 		]
 	}`)
-	out, err := a.MutateRequest(body, "gemini-pro", true)
+	out, err := a.MutateRequest(body, "gemini-3-pro", true)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -301,7 +301,7 @@ func TestGeminiAdapter_Sanitize_WithOrphanedToolCalls(t *testing.T) {
 		Logger:          logger,
 	})
 	body := []byte(`{
-		"model": "gemini-pro",
+		"model": "gemini-3-pro",
 		"messages": [
 			{"role": "user", "content": "hello"},
 			{"role": "assistant", "content": "", "tool_calls": [
@@ -312,7 +312,7 @@ func TestGeminiAdapter_Sanitize_WithOrphanedToolCalls(t *testing.T) {
 			{"role": "tool", "tool_call_id": "tc2", "content": "12:00"}
 		]
 	}`)
-	out, err := a.MutateRequest(body, "gemini-pro", true)
+	out, err := a.MutateRequest(body, "gemini-3-pro", true)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -403,7 +403,7 @@ func TestGeminiAdapter_Sanitize_EmptyAssistantDropped(t *testing.T) {
 		ExtractContent:  extractContentStr,
 	})
 	body := []byte(`{
-		"model": "gemini-pro",
+		"model": "gemini-3-pro",
 		"messages": [
 			{"role": "user", "content": "hello"},
 			{"role": "assistant", "content": "", "tool_calls": [
@@ -412,7 +412,7 @@ func TestGeminiAdapter_Sanitize_EmptyAssistantDropped(t *testing.T) {
 			{"role": "tool", "tool_call_id": "tc1", "content": "sunny"}
 		]
 	}`)
-	out, err := a.MutateRequest(body, "gemini-pro", true)
+	out, err := a.MutateRequest(body, "gemini-3-pro", true)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -433,7 +433,7 @@ func TestGeminiAdapter_Sanitize_AssistantWithContentKept(t *testing.T) {
 		ExtractContent:  extractContentStr,
 	})
 	body := []byte(`{
-		"model": "gemini-pro",
+		"model": "gemini-3-pro",
 		"messages": [
 			{"role": "user", "content": "hello"},
 			{"role": "assistant", "content": "I will help", "tool_calls": [
@@ -442,7 +442,7 @@ func TestGeminiAdapter_Sanitize_AssistantWithContentKept(t *testing.T) {
 			{"role": "tool", "tool_call_id": "tc1", "content": "sunny"}
 		]
 	}`)
-	out, err := a.MutateRequest(body, "gemini-pro", true)
+	out, err := a.MutateRequest(body, "gemini-3-pro", true)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

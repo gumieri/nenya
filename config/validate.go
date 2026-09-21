@@ -196,6 +196,12 @@ func validateEntropyConfig(sf BouncerConfig) []string {
 func validateProviders(ctx context.Context, providers map[string]*Provider, logger *slog.Logger) []string {
 	errors := []string{}
 	for name, provider := range providers {
+		switch provider.ThoughtSignaturePolicy {
+		case "", "strip", "placeholder", "passthrough":
+			// valid (NENYA-50)
+		default:
+			errors = append(errors, fmt.Sprintf("providers[%q].thought_signature_policy must be one of strip, placeholder, passthrough, got %q", name, provider.ThoughtSignaturePolicy))
+		}
 		if provider.ResponseHeaderTimeoutSeconds < 0 {
 			errors = append(errors, fmt.Sprintf("providers[%q].response_header_timeout_seconds must be non-negative (set to 0 to fall back to timeout_seconds or the 30s default), got %d", name, provider.ResponseHeaderTimeoutSeconds))
 		}

@@ -181,6 +181,9 @@ func applyProviderSanitize(deps TransformDeps, payload map[string]interface{}, p
 		return
 	}
 	sanitizeDeps := buildSanitizeDeps(deps)
+	if p, ok := deps.Providers[providerName]; ok && p != nil {
+		sanitizeDeps.ThoughtSignaturePolicy = p.ThoughtSignaturePolicy
+	}
 	spec.SanitizeRequest(sanitizeDeps, payload)
 }
 

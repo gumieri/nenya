@@ -17,6 +17,12 @@ type SanitizeDeps struct {
 	ExtractContentText func(msg map[string]interface{}) string
 	SupportsReasoning  func(model string) bool
 	ProviderThinking   func(name string) (enabled bool, clearThinking bool, ok bool)
+	// ThoughtSignaturePolicy selects the Gemini unsigned-signature policy
+	// (NENYA-50): "strip" (default) removes unsigned calls with their
+	// paired responses, "placeholder" injectates the upstream-tolerated
+	// skip placeholder instead, "passthrough" forwards unsigned history.
+	// Empty means "strip".
+	ThoughtSignaturePolicy string
 }
 
 // ProviderSpec describes a provider's capabilities and optional hooks

@@ -790,6 +790,7 @@ func ResolveProviders(cfg *Config, secrets *SecretsConfig) map[string]*Provider 
 			ModelAliases:                 pc.ModelAliases,
 			TokenBudgetDaily:             pc.TokenBudgetDaily,
 			StreamBootstrapBufferBytes:   pc.StreamBootstrapBufferBytes,
+			ThoughtSignaturePolicy:       derefString(pc.ThoughtSignaturePolicy),
 			SessionStickyKeys:            pc.SessionStickyKeys,
 		}
 	}
@@ -815,4 +816,12 @@ func BuiltInProviders() map[string]ProviderConfig {
 		providers[name] = entry.ToProviderConfig()
 	}
 	return providers
+}
+
+// derefString returns the pointed-to string, or "" for nil.
+func derefString(p *string) string {
+	if p == nil {
+		return ""
+	}
+	return *p
 }

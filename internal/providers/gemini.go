@@ -10,6 +10,7 @@ import (
 
 	"github.com/nenya/internal/infra"
 	"github.com/nenya/internal/stream"
+	"github.com/nenya/internal/util"
 )
 
 var GeminiModelMap = map[string]string{
@@ -319,6 +320,18 @@ func forwardFunctionCallIDs(deps *SanitizeDeps, messages []interface{}) {
 	}
 }
 
+// thoughtSignaturePolicy normalizes the configured policy to one of the
+// three supported modes; empty or unknown values mean "strip" (the
+// historical default, validated at config load).
+func thoughtSignaturePolicy(deps *SanitizeDeps) string {
+	switch deps.ThoughtSignaturePolicy {
+	case "placeholder", "passthrough":
+		return deps.ThoughtSignaturePolicy
+	default:
+		return "strip"
+	}
+}
+
 func geminiSanitize(deps *SanitizeDeps, payload map[string]interface{}) {
 	injectThinkingForGemini(deps, payload)
 	injectTemperatureDefaultsForGemini(payload)
@@ -335,11 +348,27 @@ func geminiSanitize(deps *SanitizeDeps, payload map[string]interface{}) {
 		payload["messages"] = messages
 	}
 
-	toolCallMap := geminiBuildToolCallMap(deps, messages)
-	orphanedIDs := geminiIdentifyOrphanedIDs(deps, toolCallMap)
+	model, _ := payload["model"].(string)
+	// NENYA-50: the unsigned-signature policy only applies to Gemini 3+
+	// (older generations treat signatures as advisory and never reject
+	// unsigned history — stripping it was gratuitous loss). The
+	// placeholder and passthrough modes keep history everywhere; strip
+	// stays the default for Gemini 3+.
+	gemini3 := model != "" && isGemini3OrNewer(model)
+	policy := thoughtSignaturePolicy(deps)
+
+	toolCallMap := geminiBuildToolCallMap(deps, messages, model, policy, gemini3)
+
+	var orphanedIDs map[string]bool
+	if gemini3 && policy == "strip" {
+		orphanedIDs = geminiIdentifyOrphanedIDs(deps, toolCallMap)
+	}
 
 	if len(orphanedIDs) == 0 {
 		geminiInjectFunctionNames(deps, messages, toolCallMap)
+		if gemini3 && isGemini35OrNewer(model) {
+			forwardFunctionCallIDs(deps, messages)
+		}
 		return
 	}
 
@@ -348,8 +377,7 @@ func geminiSanitize(deps *SanitizeDeps, payload map[string]interface{}) {
 		payload["messages"] = filtered
 	}
 
-	model, _ := payload["model"].(string)
-	if model != "" && isGemini35OrNewer(model) {
+	if gemini3 && isGemini35OrNewer(model) {
 		forwardFunctionCallIDs(deps, filtered)
 	}
 }
@@ -360,7 +388,7 @@ type toolCallInfo struct {
 	hasExtra bool
 }
 
-func geminiBuildToolCallMap(deps *SanitizeDeps, messages []interface{}) map[string]*toolCallInfo {
+func geminiBuildToolCallMap(deps *SanitizeDeps, messages []interface{}, model, policy string, gemini3 bool) map[string]*toolCallInfo {
 	toolCallMap := make(map[string]*toolCallInfo)
 
 	for _, msgRaw := range messages {
@@ -393,6 +421,15 @@ func geminiBuildToolCallMap(deps *SanitizeDeps, messages []interface{}) map[stri
 			}
 
 			hasExtra := geminiEnsureExtraContent(deps, tc, tcID)
+			if !hasExtra && gemini3 && policy == "placeholder" {
+				// Fail-open mode (NENYA-50): keep the turn, injectate the
+				// upstream-tolerated skip placeholder so Gemini 3 does not
+				// reject the unsigned call.
+				if util.EnsureThoughtSignaturePlaceholder(tc) {
+					hasExtra = true
+					deps.Logger.Debug("gemini: injected thought-signature placeholder", "tool_call_id", tcID)
+				}
+			}
 			fnName := geminiExtractFunctionName(tc)
 
 			toolCallMap[tcID] = &toolCallInfo{
@@ -407,8 +444,11 @@ func geminiBuildToolCallMap(deps *SanitizeDeps, messages []interface{}) map[stri
 }
 
 func geminiEnsureExtraContent(deps *SanitizeDeps, tc map[string]interface{}, tcID string) bool {
-	_, hasExtra := tc["extra_content"]
-	if hasExtra {
+	// NENYA-50: clients echoing Google's flat spellings carry a real
+	// signature — normalize it into the canonical extra_content form so
+	// the policy never mistakes a signed call for unsigned.
+	util.NormalizeFlatThoughtSignature(tc)
+	if _, hasExtra := tc["extra_content"]; hasExtra {
 		return true
 	}
 

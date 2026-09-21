@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+
+	"github.com/nenya/internal/util"
 )
 
 // GeminiModelMap maps short Gemini model names to their full API names.
@@ -33,6 +35,13 @@ var geminiRetryablePatterns = []string{
 func isGemini35OrNewer(model string) bool {
 	modelLower := strings.ToLower(model)
 	return strings.Contains(modelLower, "gemini-3.5") || strings.Contains(modelLower, "gemini-4")
+}
+
+// isGemini3OrNewer checks if the model ID indicates a Gemini 3.x or newer
+// model. Duplicated from internal/providers/gemini.go to avoid circular
+// dependencies.
+func isGemini3OrNewer(model string) bool {
+	return strings.HasPrefix(strings.ToLower(model), "gemini-3")
 }
 
 // GeminiAdapter handles request/response mutation for Google Gemini API.
@@ -255,8 +264,17 @@ func (a *GeminiAdapter) geminiSanitize(payload map[string]interface{}) bool {
 		return false
 	}
 
+	// NENYA-50: unsigned-signature stripping only applies to Gemini 3+ —
+	// older generations treat signatures as advisory, so pre-3 models keep
+	// their history untouched.
+	model, _ := payload["model"].(string)
+	gemini3 := model != "" && isGemini3OrNewer(model)
+
 	toolCallMap := a.buildToolCallMap(messages)
 	orphanedIDs := a.findOrphanedIDs(toolCallMap)
+	if !gemini3 {
+		orphanedIDs = nil
+	}
 
 	if len(orphanedIDs) == 0 {
 		a.injectToolMessageNames(messages, toolCallMap)
@@ -269,8 +287,7 @@ func (a *GeminiAdapter) geminiSanitize(payload map[string]interface{}) bool {
 	}
 
 	payload["messages"] = filtered
-	model, _ := payload["model"].(string)
-	if model != "" && isGemini35OrNewer(model) {
+	if gemini3 && isGemini35OrNewer(model) {
 		a.forwardFunctionCallIDs(filtered)
 	}
 	return true
@@ -377,6 +394,10 @@ func (a *GeminiAdapter) indexToolCalls(toolCalls []interface{}, toolCallMap map[
 }
 
 func (a *GeminiAdapter) ensureExtraContent(tc map[string]interface{}, tcID string) bool {
+	// NENYA-50: clients echoing Google's flat spellings carry a real
+	// signature — normalize into the canonical extra_content form so the
+	// policy never mistakes a signed call for unsigned.
+	util.NormalizeFlatThoughtSignature(tc)
 	_, hasExtra := tc["extra_content"]
 	if !hasExtra && a.thoughtSigCache != nil {
 		if cached, found := a.thoughtSigCache.Load(tcID); found {
