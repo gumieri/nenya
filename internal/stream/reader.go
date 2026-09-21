@@ -147,6 +147,15 @@ type toolCallState struct {
 	pending     map[int]*pendingToolCall
 }
 
+// pendingToolCallCount returns the number of tool-call entries still
+// buffered waiting for their name chunk. Used for end-of-stream loss
+// telemetry.
+func (r *SSETransformingReader) pendingToolCallCount() int {
+	r.tcState.mu.RLock()
+	defer r.tcState.mu.RUnlock()
+	return len(r.tcState.pending)
+}
+
 func newToolCallState() toolCallState {
 	return toolCallState{
 		seenIndices: make(map[int]bool),
@@ -501,6 +510,17 @@ func (r *SSETransformingReader) transformLine(line []byte) []byte {
 //     interim gateway_error injection (Phase 1 continuation intercepts this
 //     via SawContent/SawFinishReason).
 func (r *SSETransformingReader) handleScannerDone() {
+	// Terminal-state matrix hygiene (NENYA-46): argument chunks buffered
+	// waiting for a name that never arrived are silently dropped by
+	// design (they were never forwarded). Surface the loss — a provider
+	// emitting args-before-name then terminating has lost those tool
+	// calls for the client, and the log is the only trace.
+	if n := r.pendingToolCallCount(); n > 0 {
+		slog.Warn("stream ended with unflushed tool_call argument buffers (name chunk never arrived)",
+			"pending", n,
+			"sawDone", r.sawDone,
+			"sawFinishReason", r.sawFinishReason)
+	}
 	switch r.scanner.Err() {
 	case nil:
 		switch {
@@ -605,6 +625,11 @@ func (r *SSETransformingReader) transformSSEData(line []byte) []byte {
 	}
 	if bytes.Equal(origData, []byte("[DONE]")) {
 		r.sawDone = true
+		if synthLine, ok := r.synthesizeTerminalFinish(); ok {
+			r.notifySSEObserver(synthLine, ParseSSEChunk(synthLine[6:]), "")
+			r.notifySSEObserver(line, nil, "done")
+			return append(append(append([]byte{}, synthLine...), []byte("\n\n")...), line...)
+		}
 		r.notifySSEObserver(line, nil, "done")
 		return line
 	}
@@ -658,6 +683,30 @@ func (r *SSETransformingReader) notifySSEObserver(line []byte, parsed map[string
 		return
 	}
 	r.observer.OnSSEEvent(SSEEvent{Type: eventType, Raw: line, Data: parsed})
+}
+
+// synthesizeTerminalFinish implements the [DONE]-without-finish_reason cell
+// of the terminal-state matrix (NENYA-46): an OpenAI passthrough stream that
+// streamed content but never signaled completion leaves the client message
+// open when [DONE] arrives — clients keying on finish_reason (tool-call
+// reconciliation, turn finalization) hang or reconcile incorrectly. A
+// synthetic finish_reason:"stop" chunk is emitted ahead of [DONE] so the
+// message closes protocol-correctly.
+//
+// Deliberately narrow: only pure passthrough (no format transformer — the
+// client format would be unknown), only when content was actually streamed,
+// never when a finish_reason was seen, and never in discard mode (the early
+// [DONE] passthrough branch bypasses this path entirely).
+func (r *SSETransformingReader) synthesizeTerminalFinish() ([]byte, bool) {
+	if r.transformer != nil || !r.sawContent || r.sawFinishReason {
+		return nil, false
+	}
+	r.sawFinishReason = true
+	synth := []byte(`data: {"choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}`)
+	if r.logger != nil {
+		r.logger.Debug("synthesized finish_reason before [DONE] (stream ended with open message)")
+	}
+	return synth, true
 }
 
 func (r *SSETransformingReader) tryParseJSON(data []byte) map[string]interface{} {
