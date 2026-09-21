@@ -59,6 +59,9 @@ type circuit struct {
 	expiry           time.Time
 	halfOpenInflight uint32
 	lastChange       time.Time
+	// lastUsed tracks the most recent getOrCreate touch for the registry's
+	// idle-TTL eviction (NENYA-31).
+	lastUsed time.Time
 
 	// New fields for error-semantic tracking
 	LastErrorClass  ErrorClass
@@ -71,6 +74,16 @@ type circuit struct {
 //
 // Thread-safety: All methods are safe to call concurrently. Internal state
 // is protected by a sync.Mutex. Each key has an independent circuit.
+//
+// Bounding (NENYA-31): the registry is bounded — keys are agent+provider+
+// model strings where the model name is caller-supplied, so the map would
+// otherwise grow without limit under adversarial or churn-heavy names. When
+// the cap is reached, a lazy sweep evicts circuits that are Closed and
+// idle beyond the TTL (never Open/HalfOpen ones — failing open state would
+// lose an active investigation), then the least-recently-used Closed
+// circuits. modelLocks entries past their expiry are pruned in the same
+// sweep. Memory is therefore bounded by cap + the number of simultaneously
+// non-Closed circuits.
 type CircuitBreaker struct {
 	mu                  sync.Mutex
 	circuits            map[string]*circuit
@@ -90,6 +103,14 @@ type CircuitBreaker struct {
 	// quota errors, and honoring them literally produces zero-wait retry
 	// storms against the same exhausted account. 0 disables the floor.
 	minQuotaCooldown time.Duration
+
+	// Registry bounding (NENYA-31). maxCircuits caps the circuit map
+	// (default 1024); idleTTL is how long a Closed circuit must be
+	// untouched before it becomes eviction-eligible (default 10 min).
+	// evictions counts evicted circuits for observability.
+	maxCircuits int
+	idleTTL     time.Duration
+	evictions   uint64
 }
 
 // NewCircuitBreaker creates a CircuitBreaker with the given thresholds.
@@ -118,7 +139,109 @@ func NewCircuitBreaker(failureThreshold, successThreshold int, halfOpenMaxReques
 		modelLocks:          make(map[string]time.Time),
 		backoff:             NewBackoffTracker(),
 		classifier:          classifyHTTPError,
+		maxCircuits:         DefaultMaxCircuits,
+		idleTTL:             DefaultCircuitIdleTTL,
 	}
+}
+
+// Registry bounding defaults (NENYA-31), mirroring the evidence design:
+// 1024 entries, 10-minute idle TTL for eviction-eligible Closed circuits.
+const (
+	DefaultMaxCircuits    = 1024
+	DefaultCircuitIdleTTL = 10 * time.Minute
+)
+
+// SetRegistryLimits overrides the circuit-registry bounding. Non-positive
+// values keep the current setting.
+func (cb *CircuitBreaker) SetRegistryLimits(maxCircuits int, idleTTL time.Duration) {
+	cb.mu.Lock()
+	defer cb.mu.Unlock()
+	if maxCircuits > 0 {
+		cb.maxCircuits = maxCircuits
+	}
+	if idleTTL > 0 {
+		cb.idleTTL = idleTTL
+	}
+}
+
+// RegistryStats exposes the registry size and cumulative evictions for
+// /statsz and tests.
+func (cb *CircuitBreaker) RegistryStats() (size int, evictions uint64) {
+	cb.mu.Lock()
+	defer cb.mu.Unlock()
+	return len(cb.circuits), cb.evictions
+}
+
+// evictForCapacity makes room for one more circuit when the registry is at
+// cap. Eviction order: Closed circuits idle beyond the TTL first (oldest
+// use first), then the least-recently-used Closed circuits. Open/HalfOpen
+// circuits are never evicted — losing an active breaker would hide an
+// in-progress investigation. Expired modelLocks are pruned in the same
+// pass. Must be called with cb.mu held.
+func (cb *CircuitBreaker) evictForCapacity(now time.Time) {
+	if len(cb.circuits) < cb.maxCircuits {
+		return
+	}
+	cb.pruneExpiredLocksLocked(now)
+
+	// Pass 1: idle Closed circuits (unused past the TTL).
+	var oldestClosedKey string
+	var oldestUse time.Time
+	for key, c := range cb.circuits {
+		if c.state != StateClosed || c.halfOpenInflight != 0 {
+			continue
+		}
+		if now.Sub(c.lastUsed) > cb.idleTTL {
+			delete(cb.circuits, key)
+			cb.evictions++
+			cb.backoff.Reset(key)
+			delete(cb.modelLocks, key)
+			continue
+		}
+		if oldestClosedKey == "" || c.lastUsed.Before(oldestUse) {
+			oldestClosedKey, oldestUse = key, c.lastUsed
+		}
+	}
+	if len(cb.circuits) < cb.maxCircuits {
+		return
+	}
+	// Pass 2: still at cap — shed the least-recently-used Closed circuit.
+	// If every circuit is Open/HalfOpen (pathological), creating anyway is
+	// safer than failing requests; non-Closed circuits cool down and become
+	// evictable, so growth is self-limiting.
+	if oldestClosedKey != "" {
+		delete(cb.circuits, oldestClosedKey)
+		cb.evictions++
+		cb.backoff.Reset(oldestClosedKey)
+	}
+}
+
+// pruneExpiredLocksLocked drops modelLocks entries whose cooldown has
+// passed. Must be called with cb.mu held.
+func (cb *CircuitBreaker) pruneExpiredLocksLocked(now time.Time) {
+	for key, until := range cb.modelLocks {
+		if now.After(until) {
+			delete(cb.modelLocks, key)
+		}
+	}
+}
+
+func (cb *CircuitBreaker) getOrCreate(key string) *circuit {
+	now := time.Now()
+	cb.evictForCapacity(now)
+	c, ok := cb.circuits[key]
+	if !ok {
+		c = &circuit{
+			state:      StateClosed,
+			generation: 1,
+			expiry:     time.Time{},
+			lastUsed:   now,
+		}
+		cb.circuits[key] = c
+	} else {
+		c.lastUsed = now
+	}
+	return c
 }
 
 // SetMinQuotaCooldown sets the floor applied to quota-class cooldowns
@@ -153,19 +276,6 @@ func (cb *CircuitBreaker) SetStateChangeMetricCallback(fn func(key, from, to str
 	cb.mu.Lock()
 	defer cb.mu.Unlock()
 	cb.onStateChangeMetric = fn
-}
-
-func (cb *CircuitBreaker) getOrCreate(key string) *circuit {
-	c, ok := cb.circuits[key]
-	if !ok {
-		c = &circuit{
-			state:      StateClosed,
-			generation: 1,
-			expiry:     time.Time{},
-		}
-		cb.circuits[key] = c
-	}
-	return c
 }
 
 func (cb *CircuitBreaker) setState(c *circuit, newState State, key string) {
@@ -666,6 +776,8 @@ func (cb *CircuitBreaker) SnapshotDetailed() map[string]interface{} {
 	}
 	cb.backoff.mu.Unlock()
 	snap["backoff_levels"] = backoffLevels
+	snap["registry_size"] = len(cb.circuits)
+	snap["registry_evictions"] = cb.evictions
 
 	return snap
 }
