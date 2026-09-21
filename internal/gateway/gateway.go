@@ -82,6 +82,9 @@ type NenyaGateway struct {
 	Logger             *slog.Logger
 	AgentState         *routing.AgentState
 	ThoughtSigCache    *infra.ThoughtSignatureCache
+	// WindowSummaries caches window-compaction engine summaries so the
+	// compacted head stays stable across turns (NENYA-24).
+	WindowSummaries    *pipeline.SummaryCache
 	ResponseCache      *infra.ResponseCache
 	Embedder           infra.EmbeddingProvider
 	MCPClients         map[string]*mcp.Client
@@ -420,6 +423,7 @@ func buildGateway(cfg config.Config, secrets *config.SecretsConfig, secureClient
 		Logger:             logger,
 		AgentState:         nil,
 		ThoughtSigCache:    infra.NewThoughtSignatureCache(1000, 30*time.Minute),
+		WindowSummaries:    pipeline.NewSummaryCache(windowSummaryCacheSize(cfg)),
 		ResponseCache:      newResponseCache(cfg, logger, metrics),
 		Embedder:           nil,
 		MCPClients:         buildMCPClients(cfg, logger),
@@ -1125,4 +1129,13 @@ func (g *NenyaGateway) ExtractQuotaFromResponseHeaders(ctx context.Context, prov
 	if err == nil && info != nil && info.BalanceUSD <= 0 && g.BillingTracker != nil {
 		g.BillingTracker.MarkExhausted(ctx, provider, accountName, "quota exhausted via response headers")
 	}
+}
+
+// windowSummaryCacheSize resolves the summary-cache bound from config,
+// defaulting to 512 lineages when unset or non-positive.
+func windowSummaryCacheSize(cfg config.Config) int {
+	if cfg.Window.SummaryCacheSize != nil && *cfg.Window.SummaryCacheSize > 0 {
+		return *cfg.Window.SummaryCacheSize
+	}
+	return 512
 }

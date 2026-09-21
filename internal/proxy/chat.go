@@ -1101,7 +1101,8 @@ func buildWindowDeps(gw *gateway.NenyaGateway) pipeline.WindowDeps {
 		InjectAPIKey: func(providerName string, headers http.Header) error {
 			return routing.InjectAPIKeyWithGateway(providerName, gw, headers)
 		},
-		CountTokens: gw.CountTokens,
+		CountTokens:  gw.CountTokens,
+		SummaryCache: gw.WindowSummaries,
 	}
 }
 

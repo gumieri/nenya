@@ -997,6 +997,23 @@ type WindowConfig struct {
 	Engine          EngineRef `json:"engine"`
 	KeepFirstPct    float64   `json:"keep_first_pct"`
 	KeepLastPct     float64   `json:"keep_last_pct"`
+	// SummaryRegenRatio is the regeneration hysteresis for summarize-mode
+	// compaction (NENYA-24): a cached summary is reused — with only the
+	// grown delta messages appended verbatim — until history grows by this
+	// ratio since the summary was generated. Default 0.25.
+	SummaryRegenRatio *float64 `json:"summary_regen_ratio,omitempty"`
+	// SummaryCacheSize bounds the per-gateway summary cache (number of
+	// conversation lineages). Default 512.
+	SummaryCacheSize *int `json:"summary_cache_size,omitempty"`
+}
+
+// SummaryRegenRatioOrDefault returns the configured hysteresis ratio, or
+// 0.25 when unset or out of range.
+func (w WindowConfig) SummaryRegenRatioOrDefault() float64 {
+	if w.SummaryRegenRatio != nil && *w.SummaryRegenRatio > 0 && *w.SummaryRegenRatio <= 1 {
+		return *w.SummaryRegenRatio
+	}
+	return 0.25
 }
 
 // MCPServerConfig defines the connection parameters for an external MCP

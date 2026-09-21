@@ -20,6 +20,8 @@ package pipeline
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -40,6 +42,10 @@ type WindowDeps struct {
 	Providers    map[string]*config.Provider
 	InjectAPIKey func(providerName string, headers http.Header) error
 	CountTokens  func(text string) int
+	// SummaryCache makes summarize-mode compaction stable across turns
+	// (NENYA-24). nil disables caching (per-request regeneration, the
+	// pre-NENYA-24 behavior).
+	SummaryCache *SummaryCache
 }
 
 func ApplyWindowCompaction(ctx context.Context, deps WindowDeps, payload map[string]interface{}, messages []interface{}, tokenCount int, windowCfg config.WindowConfig, maxContext int, countRequestTokens func(payload map[string]interface{}) int) (bool, error) {
@@ -58,12 +64,31 @@ func ApplyWindowCompaction(ctx context.Context, deps WindowDeps, payload map[str
 	}
 
 	beforeTokens := tokenCount
-	summary, err := generateWindowSummary(ctx, deps, windowCfg, active, historyText)
-	if err != nil || summary == "" {
-		if err != nil {
-			deps.Logger.Warn("window summarization failed, skipping", "err", err)
+
+	// NENYA-24: in summarize mode, reuse a cached summary when the
+	// history is unchanged (same-input retries) or has grown by less than
+	// the regeneration ratio (per-turn stability). Truncate/tfidf modes
+	// are deterministic per input — caching changes nothing for them.
+	summarize := windowCfg.Mode == "summarize" || windowCfg.Mode == ""
+	var (
+		summary    string
+		deltaStart int // history[:deltaStart] is covered by the summary
+	)
+	if summary == "" && summarize && deps.SummaryCache != nil {
+		lineageKey, historyHash := summaryCacheKeys(leadingSystem, history, historyText)
+		if reuse, hit := deps.SummaryCache.Lookup(lineageKey, historyHash, len(history), windowCfg.SummaryRegenRatioOrDefault()); hit {
+			summary, deltaStart = reuse.Summary, reuse.DeltaStart
 		}
-		return false, nil
+	}
+	if summary == "" {
+		var err error
+		summary, deltaStart, err = generateWindowSummaryTracked(ctx, deps, windowCfg, active, historyText, summarize, deps.SummaryCache, leadingSystem, history)
+		if err != nil || summary == "" {
+			if err != nil {
+				deps.Logger.Warn("window summarization failed, skipping", "err", err)
+			}
+			return false, nil
+		}
 	}
 
 	summary = trimSummaryToMaxRunes(summary, windowCfg.SummaryMaxRunes)
@@ -71,19 +96,44 @@ func ApplyWindowCompaction(ctx context.Context, deps WindowDeps, payload map[str
 		return false, nil
 	}
 
-	newMessages := buildCompactedMessages(leadingSystem, active, summary, len(history), beforeTokens)
+	// Delta history messages not covered by the cached summary are kept
+	// verbatim between the summary and the active window: the compacted
+	// prefix (system + summary) stays byte-identical across turns while
+	// the delta grows at the tail, which is ordinary conversation growth
+	// for the upstream cache.
+	newMessages := buildCompactedMessages(leadingSystem, active, summary, deltaStart, beforeTokens, history[deltaStart:])
 	payload["messages"] = newMessages
 
 	afterTokens := countRequestTokens(payload)
 	deps.Logger.Info("window compaction applied",
 		"mode", windowCfg.Mode,
 		"messages_before", len(history)+len(active),
-		"messages_after", 1+len(active),
+		"messages_after", len(newMessages),
+		"summary_covers", deltaStart,
 		"tokens_before", beforeTokens,
 		"tokens_after", afterTokens,
 		"savings", beforeTokens-afterTokens)
 
 	return true, nil
+}
+
+// summaryCacheKeys derives the lineage key (stable while a conversation
+// grows by appends: leading system + first history message) and the exact
+// history hash from the serialized text.
+func summaryCacheKeys(leadingSystem []interface{}, history []interface{}, historyText string) (lineageKey, historyHash string) {
+	h := sha256.New()
+	if len(leadingSystem) > 0 {
+		sysBytes, _ := json.Marshal(leadingSystem)
+		h.Write(sysBytes)
+	}
+	if len(history) > 0 {
+		firstBytes, _ := json.Marshal(history[0])
+		h.Write(firstBytes)
+	}
+	lineageKey = fmt.Sprintf("%x", h.Sum(nil))
+	sum := sha256.Sum256([]byte(historyText))
+	historyHash = fmt.Sprintf("%x", sum[:])
+	return lineageKey, historyHash
 }
 
 func calculateWindowParams(windowCfg config.WindowConfig, maxContext int, tokenCount int, messages []interface{}) (effectiveMax int, threshold int, splitIdx int, active []interface{}, history []interface{}, leadingSystem []interface{}, ok bool) {
@@ -201,6 +251,20 @@ func generateEngineSummary(ctx context.Context, deps WindowDeps, windowCfg confi
 	return s, nil
 }
 
+// generateWindowSummaryTracked generates a summary and, in summarize mode
+// with a cache, records it against the conversation lineage.
+func generateWindowSummaryTracked(ctx context.Context, deps WindowDeps, windowCfg config.WindowConfig, active []interface{}, historyText string, summarize bool, cache *SummaryCache, leadingSystem []interface{}, history []interface{}) (string, int, error) {
+	generated, err := generateWindowSummary(ctx, deps, windowCfg, active, historyText)
+	if err != nil || generated == "" {
+		return "", 0, err
+	}
+	if summarize && cache != nil {
+		lineageKey, historyHash := summaryCacheKeys(leadingSystem, history, historyText)
+		cache.Store(lineageKey, historyHash, len(history), generated)
+	}
+	return generated, len(history), nil
+}
+
 func trimSummaryToMaxRunes(summary string, maxRunes int) string {
 	if maxRunes <= 0 {
 		return summary
@@ -215,16 +279,22 @@ func trimSummaryToMaxRunes(summary string, maxRunes int) string {
 	return summary
 }
 
-func buildCompactedMessages(leadingSystem []interface{}, active []interface{}, summary string, historyLen int, beforeTokens int) []interface{} {
+// buildCompactedMessages assembles the compacted message list: leading
+// system messages, the summary head (covering history[:historyLen]),
+// any uncovered delta history messages verbatim, and the active window.
+func buildCompactedMessages(leadingSystem []interface{}, active []interface{}, summary string, historyLen int, beforeTokens int, delta []interface{}) []interface{} {
 	summaryMsg := map[string]interface{}{
 		"role": "system",
 		"content": fmt.Sprintf("[Nenya Window Summary (%d messages compacted, was ~%d tokens)]:\n%s",
 			historyLen, beforeTokens, summary),
 	}
 
-	newMessages := make([]interface{}, 0, util.AddCap(util.AddCap(len(leadingSystem), 2), len(active)))
+	cap := util.AddCap(util.AddCap(len(leadingSystem), 2), len(active))
+	cap = util.AddCap(cap, len(delta))
+	newMessages := make([]interface{}, 0, cap)
 	newMessages = append(newMessages, leadingSystem...)
 	newMessages = append(newMessages, summaryMsg)
+	newMessages = append(newMessages, delta...)
 
 	if len(active) > 0 {
 		if firstActive, ok := active[0].(map[string]interface{}); ok {
