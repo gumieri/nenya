@@ -493,12 +493,18 @@ type GovernanceConfig struct {
 	// AutoRetryOnParamReject enables the safety-net retry: when an
 	// upstream 400 rejects a known parameter by name, the gateway strips
 	// it and retries once (default false).
-	AutoRetryOnParamReject *bool   `json:"auto_retry_on_param_reject,omitempty"`
-	CostMode               string  `json:"cost_mode,omitempty"`
-	BillingEconomyScale    float64 `json:"billing_economy_scale,omitempty"`
-	BillingQualityScale    float64 `json:"billing_quality_scale,omitempty"`
-	MaxTransformedSSEBytes int     `json:"max_transformed_sse_bytes,omitempty"`
-	UpstreamTimeoutSeconds *int    `json:"upstream_timeout_seconds,omitempty"`
+	AutoRetryOnParamReject *bool `json:"auto_retry_on_param_reject,omitempty"`
+	// AllowedBrowserOrigins is the DNS-rebinding allowlist (NENYA-34):
+	// requests carrying browser fetch metadata (Origin / Sec-Fetch-*) are
+	// refused on every route — including the no-auth GET surfaces — unless
+	// the request origin matches an entry. Default empty = deny all
+	// browser-context requests; nenya serves non-browser clients.
+	AllowedBrowserOrigins  []string `json:"allowed_browser_origins,omitempty"`
+	CostMode               string   `json:"cost_mode,omitempty"`
+	BillingEconomyScale    float64  `json:"billing_economy_scale,omitempty"`
+	BillingQualityScale    float64  `json:"billing_quality_scale,omitempty"`
+	MaxTransformedSSEBytes int      `json:"max_transformed_sse_bytes,omitempty"`
+	UpstreamTimeoutSeconds *int     `json:"upstream_timeout_seconds,omitempty"`
 	// StreamIdleTimeoutSeconds is the stall detection timeout for SSE streams.
 	StreamIdleTimeoutSeconds *int `json:"stream_idle_timeout_seconds,omitempty"`
 	// StreamBootstrapBufferBytes is the global stream bootstrap buffering

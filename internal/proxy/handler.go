@@ -88,6 +88,13 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// DNS-rebinding hardening (NENYA-34): browser-context requests are
+	// refused unless explicitly allowlisted, on every route including the
+	// no-auth GET surfaces.
+	if p.enforceBrowserGuard(gw, w, r) {
+		return
+	}
+
 	if handler := p.resolveRoute(r.URL.Path); handler != nil {
 		handler(gw, w, r)
 		return
