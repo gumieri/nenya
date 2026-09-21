@@ -775,6 +775,7 @@ func ResolveProviders(cfg *Config, secrets *SecretsConfig) map[string]*Provider 
 			AuthStyle:                    pc.AuthStyle,
 			ApiFormat:                    pc.ApiFormat,
 			TimeoutSeconds:               pc.TimeoutSeconds,
+			IdleConnTimeoutSeconds:       pc.IdleConnTimeoutSeconds,
 			ResponseHeaderTimeoutSeconds: pc.ResponseHeaderTimeoutSeconds,
 			StreamIdleTimeoutSeconds:     pc.StreamIdleTimeoutSeconds,
 			RetryableStatusCodes:         pc.RetryableStatusCodes,

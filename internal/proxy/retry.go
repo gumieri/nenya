@@ -1149,6 +1149,10 @@ func handleRetryableError429(logger *slog.Logger, errorBody []byte, action upstr
 			effectiveCooldown = floor
 			logger.Info("quota cooldown floored", "cooldown_s", effectiveCooldown.Seconds())
 		}
+		// Idle-connection eviction (NENYA-47): an exhausted account's pooled
+		// connections are dead weight — drop them while the account cools
+		// down. Called without gateway locks held.
+		gw.EvictIdleConnections(target.Provider)
 		gw.AgentState.ActivateCooldown(target, effectiveCooldown)
 		gw.Metrics.RecordCooldown(agentName, target.Provider, target.Model)
 		gw.AgentState.RecordFailureWithStatus(target, action.resp.StatusCode, string(errorBody))

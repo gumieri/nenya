@@ -172,6 +172,13 @@ type ProviderConfig struct {
 	// also applies to streaming requests, whose context is otherwise
 	// unbounded. Capped at 86400 (24 hours) by validation.
 	ResponseHeaderTimeoutSeconds int `json:"response_header_timeout_seconds,omitempty"`
+	// IdleConnTimeoutSeconds is the transport-level keep-alive pool idle
+	// timeout for this provider (NENYA-47). Providers RST pooled
+	// connections at their own horizons (Google Frontend ~240s), and
+	// reusing a connection past that horizon fails mid-request. Default
+	// 90s (conservative below all known horizons); for google providers
+	// 210 (30s buffer below the 240s cutoff) is a good explicit choice.
+	IdleConnTimeoutSeconds int `json:"idle_conn_timeout_seconds,omitempty"`
 	// StreamIdleTimeoutSeconds is the stall detection timeout for SSE streams.
 	// When 0, uses the global governance default. When > 0, overrides the global
 	// default. Capped at 86400 (24 hours) by validation.
@@ -293,14 +300,22 @@ type Provider struct {
 	// StreamIdleTimeoutSeconds is the stall detection timeout for SSE streams.
 	// When 0, uses the global governance default. When > 0, overrides the global default.
 	StreamIdleTimeoutSeconds int
-	RetryableStatusCodes     []int
-	MaxRetryAttempts         int
-	RetryablePhrases         []string
-	RequestScopedErrors      []RequestScopedErrorRule
-	Thinking                 *ThinkingConfig
-	Billing                  *BillingConfig
-	AllowedModels            []string
-	allowedRE                []*regexp.Regexp
+	// IdleConnTimeoutSeconds is the transport-level keep-alive pool idle
+	// timeout for this provider (NENYA-47). Providers terminate idle pooled
+	// connections at their own horizons (Google Frontend: ~240s) — reusing a
+	// pooled connection past that horizon gets RST mid-request. When 0,
+	// EffectiveIdleConnTimeout falls back to DefaultIdleConnTimeoutSeconds
+	// (90s, conservative below every known horizon). For google providers a
+	// value of 210 (30s buffer below the 240s cutoff) is recommended.
+	IdleConnTimeoutSeconds int
+	RetryableStatusCodes   []int
+	MaxRetryAttempts       int
+	RetryablePhrases       []string
+	RequestScopedErrors    []RequestScopedErrorRule
+	Thinking               *ThinkingConfig
+	Billing                *BillingConfig
+	AllowedModels          []string
+	allowedRE              []*regexp.Regexp
 	// MaxConcurrentRequests caps in-flight requests dispatched to this
 	// provider (0 = unlimited). See ProviderConfig.MaxConcurrentRequests.
 	MaxConcurrentRequests int
@@ -329,6 +344,12 @@ type Provider struct {
 // response_header_timeout_seconds nor timeout_seconds is configured.
 const DefaultResponseHeaderTimeoutSeconds = 30
 
+// DefaultIdleConnTimeoutSeconds is the default transport-level idle
+// keep-alive pool timeout (NENYA-47). 90s is deliberately conservative:
+// it sits below every known provider horizon (Google Frontend ~240s),
+// so pooled connections are recycled before upstreams can RST them.
+const DefaultIdleConnTimeoutSeconds = 90
+
 // EffectiveResponseHeaderTimeout resolves the transport-level
 // time-to-first-byte bound for dispatches to this provider:
 // response_header_timeout_seconds when positive, else timeout_seconds
@@ -344,6 +365,20 @@ func (p *Provider) EffectiveResponseHeaderTimeout() time.Duration {
 		return time.Duration(p.TimeoutSeconds) * time.Second
 	}
 	return DefaultResponseHeaderTimeoutSeconds * time.Second
+}
+
+// EffectiveIdleConnTimeout resolves the transport-level idle keep-alive
+// pool timeout for this provider (NENYA-47): idle_conn_timeout_seconds
+// when positive, else DefaultIdleConnTimeoutSeconds (90s — conservative
+// below every known provider horizon, Google Frontend ~240s included).
+func (p *Provider) EffectiveIdleConnTimeout() time.Duration {
+	if p == nil {
+		return DefaultIdleConnTimeoutSeconds * time.Second
+	}
+	if p.IdleConnTimeoutSeconds > 0 {
+		return time.Duration(p.IdleConnTimeoutSeconds) * time.Second
+	}
+	return DefaultIdleConnTimeoutSeconds * time.Second
 }
 
 // ConcurrencyLimit resolves the in-flight request cap for a model served by

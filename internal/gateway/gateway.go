@@ -259,24 +259,43 @@ func newUpstreamTransport(responseHeaderTimeout time.Duration) *http.Transport {
 }
 
 // buildProviderClients clones the base upstream transport for every provider
-// whose effective response-header timeout differs from the default, yielding
-// one dedicated client per provider name. Providers sharing the default
-// timeout reuse the base transport's connection pool via the shared client.
+// whose effective response-header timeout or idle-connection timeout differs
+// from the default, yielding one dedicated client per provider name.
+// Providers sharing both defaults reuse the base transport's connection pool
+// via the shared client.
 func buildProviderClients(baseTransport *http.Transport, providers map[string]*config.Provider) map[string]*http.Client {
 	clients := make(map[string]*http.Client)
 	for name, provider := range providers {
 		if provider == nil {
 			continue
 		}
-		timeout := provider.EffectiveResponseHeaderTimeout()
-		if timeout == config.DefaultResponseHeaderTimeoutSeconds*time.Second {
+		headerTimeout := provider.EffectiveResponseHeaderTimeout()
+		idleTimeout := provider.EffectiveIdleConnTimeout()
+		if headerTimeout == config.DefaultResponseHeaderTimeoutSeconds*time.Second &&
+			idleTimeout == config.DefaultIdleConnTimeoutSeconds*time.Second {
 			continue
 		}
 		transport := baseTransport.Clone()
-		transport.ResponseHeaderTimeout = timeout
+		transport.ResponseHeaderTimeout = headerTimeout
+		transport.IdleConnTimeout = idleTimeout
 		clients[name] = &http.Client{Transport: transport}
 	}
 	return clients
+}
+
+// EvictIdleConnections drops the named provider's pooled idle connections.
+// Called on quota exhaustion (429-class failures): an exhausted account's
+// pooled connections are dead weight and providers frequently RST them at
+// their keep-alive horizons anyway (NENYA-47). Safe to call on the shared
+// base client — idle connections are cheap to re-establish. CloseIdleConnections
+// is invoked without the gateway lock held (the caller must not hold locks
+// that the transport's connection cleanup could interact with).
+func (g *NenyaGateway) EvictIdleConnections(providerName string) {
+	client := g.ClientFor(providerName)
+	if client == nil {
+		return
+	}
+	client.CloseIdleConnections()
 }
 
 // ClientFor returns the HTTP client for dispatching requests to the named
