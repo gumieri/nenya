@@ -268,7 +268,7 @@ func (acc *sseAccumulator) buildToolCalls() []mcpToolCall {
 		}
 		id := acc.tcIDAccum[idx]
 		if id == "" {
-			id = fmt.Sprintf("call_%d", idx)
+			id = util.SyntheticToolCallID(idx)
 		}
 		var args map[string]any
 		if argsBuilder := acc.tcArgsAccum[idx]; argsBuilder != nil {

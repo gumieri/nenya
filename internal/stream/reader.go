@@ -13,6 +13,8 @@ import (
 	"reflect"
 	"strconv"
 	"sync"
+
+	"github.com/nenya/internal/util"
 )
 
 // ErrEventConsumed signals that the transformer consumed the SSE event
@@ -145,6 +147,10 @@ type toolCallState struct {
 	mu          sync.RWMutex
 	seenIndices map[int]bool
 	pending     map[int]*pendingToolCall
+	// seenIDs tracks upstream tool-call IDs already claimed by an index in
+	// this stream, so duplicates on other indexes are deconflicted
+	// deterministically (NENYA-48).
+	seenIDs map[string]bool
 }
 
 // pendingToolCallCount returns the number of tool-call entries still
@@ -160,6 +166,7 @@ func newToolCallState() toolCallState {
 	return toolCallState{
 		seenIndices: make(map[int]bool),
 		pending:     make(map[int]*pendingToolCall),
+		seenIDs:     make(map[string]bool),
 	}
 }
 
@@ -1049,23 +1056,36 @@ func normalizeToolCalls(chunk map[string]interface{}, state *toolCallState) bool
 // processToolCallDelta normalizes a single tool_calls delta array. It buffers
 // argument chunks that arrive before the tool name and merges pending data
 // when names arrive. Returns the filtered slice and whether it was mutated.
+//
+// Identity rules (NENYA-48): the call index falls back to the ARRAY POSITION
+// when the upstream omits it (never 0-for-all, which collides across calls
+// in one delta); invalid, empty, or oversized IDs are replaced with the
+// deterministic synthetic ID for that index; and an ID already claimed by a
+// different index in the same stream is deterministically deconflicted the
+// same way — same input, same output, across requests.
 func processToolCallDelta(tcs []interface{}, state *toolCallState) ([]interface{}, bool) {
 	keep := make([]interface{}, 0, len(tcs))
 	mutated := false
 
-	for _, tcRaw := range tcs {
+	for pos, tcRaw := range tcs {
 		tc, ok := tcRaw.(map[string]interface{})
 		if !ok {
 			continue
 		}
-		idx := ToInt(tc["index"])
+		rawIdx, hasIdx := tc["index"]
+		var idx int
+		if hasIdx {
+			idx = util.ParseToolCallIndex(rawIdx, pos)
+		} else {
+			idx = pos
+		}
 
 		if state.seenIndices[idx] {
 			keep = append(keep, tc)
 			continue
 		}
 
-		mutated = normalizeToolCallID(tc) || mutated
+		mutated = normalizeToolCallID(tc, idx, state) || mutated
 
 		fn, hasFn := tc["function"]
 		tcID, _ := tc["id"].(string)
@@ -1086,20 +1106,25 @@ func processToolCallDelta(tcs []interface{}, state *toolCallState) ([]interface{
 	return keep, mutated
 }
 
-func normalizeToolCallID(tc map[string]interface{}) bool {
-	id := tc["id"]
-	switch id.(type) {
-	case string:
-		return false
-	case nil:
-		idx := ToInt(tc["index"])
-		tc["id"] = fmt.Sprintf("call_%d", idx)
-		return true
-	default:
-		idx := ToInt(tc["index"])
-		tc["id"] = fmt.Sprintf("call_%d", idx)
+// normalizeToolCallID enforces deterministic tool-call identity on a new
+// (not-yet-seen) call index: invalid/empty/oversized upstream IDs and IDs
+// already claimed by another index are replaced with the synthetic ID for
+// the call index. Returns whether the chunk was mutated.
+func normalizeToolCallID(tc map[string]interface{}, idx int, state *toolCallState) bool {
+	if !util.ValidToolCallID(tc["id"]) {
+		tc["id"] = util.SyntheticToolCallID(idx)
 		return true
 	}
+	id, _ := tc["id"].(string)
+	if state.seenIDs[id] {
+		// Duplicate upstream ID on a different index: keep the first
+		// claimant, deterministically re-key the later one. Synthesizing
+		// from the index keeps the mapping stable across requests.
+		tc["id"] = util.SyntheticToolCallID(idx)
+		return true
+	}
+	state.seenIDs[id] = true
+	return false
 }
 
 func handleToolCallWithName(tc map[string]interface{}, idx int, tcID string, fnArgsStr string, state *toolCallState, mutated *bool) {
@@ -1115,7 +1140,7 @@ func handleToolCallWithName(tc map[string]interface{}, idx int, tcID string, fnA
 }
 
 func mergePendingToolCall(tc map[string]interface{}, idx int, tcID string, fnArgsStr string, pending *pendingToolCall, mutated *bool) {
-	if (tcID == "" || len(tcID) < 6 || tcID[:5] == "call_") && pending.id != "" {
+	if (tcID == "" || util.IsSyntheticToolCallID(tcID)) && pending.id != "" {
 		tc["id"] = pending.id
 	}
 	fn, ok := tc["function"].(map[string]interface{})

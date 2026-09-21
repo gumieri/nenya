@@ -4,11 +4,11 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"fmt"
 	"strconv"
 
 	"github.com/nenya/internal/infra"
 	"github.com/nenya/internal/stream"
+	"github.com/nenya/internal/util"
 )
 
 func newOllamaTransformer(_ *infra.ThoughtSignatureCache) stream.ResponseTransformer {
@@ -81,7 +81,7 @@ func (t *OllamaTransformer) TransformSSEChunk(ctx context.Context, data []byte) 
 
 	t.idCounter++
 	t.callIdx++
-	tcID := fmt.Sprintf("call_%d", t.callIdx)
+	tcID := util.SyntheticToolCallID(t.callIdx)
 
 	openaiChunk := map[string]any{
 		"id":      "ollama-" + strconv.Itoa(t.idCounter),
