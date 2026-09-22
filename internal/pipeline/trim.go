@@ -2,6 +2,7 @@ package pipeline
 
 import (
 	"log/slog"
+	"unicode/utf8"
 
 	"github.com/nenya/config"
 	"github.com/nenya/internal/util"
@@ -152,7 +153,7 @@ func clampToolOutputs(msgs []interface{}, cfg config.ContextConfig) {
 			continue
 		}
 		content, ok := msg["content"].(string)
-		if !ok || len([]rune(content)) <= toolOutputClampRunes {
+		if !ok || utf8.RuneCountInString(content) <= toolOutputClampRunes {
 			continue
 		}
 		out := make(map[string]interface{}, len(msg))
@@ -216,7 +217,7 @@ func truncateMessageByTokens(msgRaw interface{}, maxTokens int, countTokens func
 	if curTokens <= maxTokens {
 		return msgRaw
 	}
-	truncated := TruncateMiddleOutByTokens(content, maxTokens, countTokens, cfg)
+	truncated := TruncateMiddleOutByTokens(content, maxTokens, curTokens, cfg)
 	// Preserve every other field (tool_call_id, name, ...) so a truncated
 	// message keeps its identity and pairing semantics.
 	out := make(map[string]interface{}, len(msg))

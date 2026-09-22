@@ -285,9 +285,10 @@ func (m *Metrics) RecordHTTPRequest(method, path string, status int, duration ti
 }
 
 // RecordRedaction records n secret substitutions applied by the Tier-0
-// redaction filter. Nil-safe.
+// redaction filter. Nil-safe; non-positive n is ignored (the delta
+// counting used by callers can produce zero or negative deltas).
 func (m *Metrics) RecordRedaction(n int) {
-	if m == nil {
+	if m == nil || n <= 0 {
 		return
 	}
 	m.redactions.Add(uint64(n))
@@ -1062,14 +1063,6 @@ func (m *Metrics) RecordOllamaSummarizedBytes(n int) {
 		return
 	}
 	m.ollamaBytes.Add(uint64(n))
-}
-
-func (m *Metrics) RecordTrimmedRequest(model string, savedTokens int) {
-	if m == nil {
-		return
-	}
-	e := getOrCreateEntry(&m.interceptions, map[string]string{"model": model})
-	e.value.Add(1)
 }
 
 func (m *Metrics) RecordModelDiscovery(provider string, err error) {

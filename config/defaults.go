@@ -3,80 +3,25 @@ package config
 import (
 	"fmt"
 	"log/slog"
-	"os"
-	"syscall"
 )
 
-var configLogLevel slog.LevelVar
-
-func LogLevelFromString(level string) slog.Level {
+// ParseLogLevel maps a log level string to a slog level, reporting whether
+// the value was a recognized level name ("debug", "info", "warn", "error").
+// Single source of truth for level parsing, shared by strict (config
+// validation) and lenient (logger setup) call sites.
+func ParseLogLevel(level string) (slog.Level, bool) {
 	switch level {
 	case "debug":
-		return slog.LevelDebug
+		return slog.LevelDebug, true
 	case "info":
-		return slog.LevelInfo
+		return slog.LevelInfo, true
 	case "warn":
-		return slog.LevelWarn
+		return slog.LevelWarn, true
 	case "error":
-		return slog.LevelError
+		return slog.LevelError, true
 	default:
-		return slog.LevelInfo
+		return slog.LevelInfo, false
 	}
-}
-
-func applyLogLevel(level string) error {
-	if level == "" {
-		return nil
-	}
-	return setConfigLogLevel(level)
-}
-
-func setConfigLogLevel(level string) error {
-	var slogLevel slog.Level
-	switch level {
-	case "debug":
-		slogLevel = slog.LevelDebug
-	case "info":
-		slogLevel = slog.LevelInfo
-	case "warn":
-		slogLevel = slog.LevelWarn
-	case "error":
-		slogLevel = slog.LevelError
-	default:
-		return fmt.Errorf("invalid log level: %s (must be debug, info, warn, or error)", level)
-	}
-	configLogLevel.Set(slogLevel)
-	return nil
-}
-
-// SetupLogger creates a slog.Logger with auto-detected text or JSON
-// output format (text for TTY, JSON for non-TTY such as systemd). The
-// verbosity flag controls debug vs info level.
-func SetupLogger(verbose bool) *slog.Logger {
-	level := slog.LevelInfo
-	if verbose {
-		level = slog.LevelDebug
-	}
-	configLogLevel.Set(level)
-
-	var handler slog.Handler
-	if isatty(os.Stderr.Fd()) {
-		handler = slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: &configLogLevel})
-	} else {
-		handler = slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{Level: &configLogLevel})
-	}
-
-	logger := slog.New(handler)
-	slog.SetDefault(logger)
-	return logger
-}
-
-func isatty(fd uintptr) bool {
-	var st syscall.Stat_t
-	if err := syscall.Fstat(int(fd), &st); err != nil {
-		return false
-	}
-	return st.Mode&syscall.S_IFMT == syscall.S_IFCHR
 }
 
 func applyEngineRefDefaults(e *EngineRef) {
@@ -172,9 +117,9 @@ func applyContextDefaults(cfg *Config) {
 }
 
 func applyGovernanceDefaults(cfg *Config) {
-	if err := applyLogLevel(cfg.Server.LogLevel); err != nil {
-		return
-	}
+	// Note: server.log_level validity is enforced by cmd/nenya via
+	// ParseLogLevel; ApplyDefaults stays level-agnostic so an invalid
+	// level can never skip governance defaults.
 	if !cfg.Governance.TPMSet() && cfg.Governance.RatelimitMaxTPM == nil {
 		cfg.Governance.RatelimitMaxTPM = PtrTo(250000)
 	}
@@ -232,6 +177,40 @@ func applyStreamHeadDefaults(gc *GovernanceConfig) {
 	}
 }
 
+// Financial-identifier regex sources are exported so the pipeline package
+// can attach checksum validators (checksum.go) keyed to exactly these
+// sources — re.String() round-trips the pattern source, so any edit to a
+// constant here must keep the validator mapping in sync. All patterns are
+// anchored at word boundaries: identifiers embedded in adjacent word
+// characters (e.g. "x4111111111111111") are not matched — an accepted
+// Tier-0 regex redaction limitation.
+const (
+	// FinancialCardPattern matches 13-19 digit card-shaped numbers with
+	// optional space/dash separators; gated by Luhn validation.
+	FinancialCardPattern = `\b\d(?:[ -]?\d){12,18}\b`
+	// FinancialIBANPattern matches contiguous and single-space-separated
+	// IBANs (case-insensitive); gated by ISO 13616 mod-97 validation.
+	FinancialIBANPattern = `(?i)\b[A-Z]{2}\d{2}(?: ?[A-Z0-9]{4}){2,7}(?: ?[A-Z0-9]{1,4})?\b`
+	// FinancialCPFPattern matches formatted Brazilian CPF numbers; gated
+	// by check-digit validation.
+	FinancialCPFPattern = `\b\d{3}\.\d{3}\.\d{3}-\d{2}\b`
+	// FinancialCNPJPattern matches formatted Brazilian CNPJ numbers; gated
+	// by check-digit validation.
+	FinancialCNPJPattern = `\b\d{2}\.\d{3}\.\d{3}/\d{4}-\d{2}\b`
+)
+
+// RedactPresetFinancial returns the financial preset source list. It
+// returns a fresh copy so callers cannot mutate the package-level preset
+// backing redactPresets.
+func RedactPresetFinancial() []string {
+	return []string{
+		FinancialIBANPattern,
+		FinancialCardPattern,
+		FinancialCPFPattern,
+		FinancialCNPJPattern,
+	}
+}
+
 var redactPresets = map[string][]string{
 	"credentials": {
 		`(?i)AKIA[0-9A-Z]{16}`,
@@ -243,7 +222,9 @@ var redactPresets = map[string][]string{
 		`(?i)(password|passwd|pwd|secret|token)[\s:=]+['"][^'"]{6,}['"]`,
 		`[a-f0-9]{32}:`,
 		`(?i)SG\.[a-zA-Z0-9\-_]{22}\.[a-zA-Z0-9\-_]{43}`,
+		`eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]*`,
 	},
+	"financial": RedactPresetFinancial(),
 	"pii": {
 		`\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b`,
 		`\b\d{3}-\d{2}-\d{4}\b`,
@@ -256,8 +237,12 @@ func expandRedactPreset(cfg *BouncerConfig) {
 	if cfg.RedactPreset != "" && cfg.RedactPatterns == nil {
 		patterns, ok := redactPresets[cfg.RedactPreset]
 		if ok {
-			cfg.RedactPatterns = patterns
+			// Copy so callers mutating their RedactPatterns cannot corrupt
+			// the package-level preset backing array.
+			cfg.RedactPatterns = append([]string(nil), patterns...)
+			return
 		}
+		slog.Warn("unknown bouncer.redact_preset, falling back to credentials patterns", "preset", cfg.RedactPreset)
 	}
 }
 
@@ -267,7 +252,9 @@ func applyBouncerDefaults(cfg *Config) {
 		if !cfg.Bouncer.EnabledWasSet() {
 			cfg.Bouncer.Enabled = PtrTo(true)
 		}
-		cfg.Bouncer.RedactPatterns = redactPresets["credentials"]
+		// Copy so callers mutating their RedactPatterns cannot corrupt
+		// the package-level preset backing array.
+		cfg.Bouncer.RedactPatterns = append([]string(nil), redactPresets["credentials"]...)
 	} else if !cfg.Bouncer.EnabledWasSet() {
 		cfg.Bouncer.Enabled = PtrTo(true)
 	}
@@ -646,19 +633,19 @@ func applyAgentMCPDefaults(agent *AgentConfig) {
 func applyAgentModelRegexDefaults(cfg *Config, name string, i int, m *AgentModel) error {
 	if m.ProviderRgx == "" && m.ModelRgx == "" {
 		if looksLikeRegex(m.Model) {
-			fmt.Printf("[WARN] agent %q model %d: model %q looks like a regex pattern but uses the 'model' field (literal). Did you mean to use 'model_rgx' for regex matching?\n", name, i, m.Model)
+			slog.Warn("agent model looks like a regex pattern but uses the 'model' field (literal); did you mean to use 'model_rgx' for regex matching?", "agent", name, "model_index", i, "model", m.Model)
 		}
 		return nil
 	}
 
 	if m.Provider != "" && m.ProviderRgx != "" {
-		fmt.Printf("[WARN] agent %q model %d: both provider and provider_rgx set; provider_rgx takes precedence\n", name, i)
+		slog.Warn("agent model has both provider and provider_rgx set; provider_rgx takes precedence", "agent", name, "model_index", i)
 	}
 	if m.Model != "" && m.ModelRgx != "" {
-		fmt.Printf("[WARN] agent %q model %d: both model and model_rgx set; model_rgx takes precedence\n", name, i)
+		slog.Warn("agent model has both model and model_rgx set; model_rgx takes precedence", "agent", name, "model_index", i)
 	}
 	if cfg.Discovery.Enabled == nil || !*cfg.Discovery.Enabled {
-		fmt.Printf("[WARN] agent %q model %d: model_rgx requires discovery to expand into concrete models; only static registry entries will match\n", name, i)
+		slog.Warn("agent model_rgx requires discovery to expand into concrete models; only static registry entries will match", "agent", name, "model_index", i)
 	}
 	if err := m.CompileRegex(); err != nil {
 		return fmt.Errorf("agent %q model %d: %w", name, i, err)
@@ -746,6 +733,9 @@ func applyWindowDefaults(cfg *Config) {
 	}
 	if cfg.Window.SummaryMaxRunes == 0 {
 		cfg.Window.SummaryMaxRunes = 4000
+	}
+	if cfg.Window.MaxContext < 0 {
+		cfg.Window.MaxContext = 0
 	}
 	if cfg.Window.MaxContext == 0 {
 		cfg.Window.MaxContext = 128000

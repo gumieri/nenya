@@ -2,7 +2,8 @@ package pipeline
 
 import (
 	"context"
-	"log/slog"
+
+	"github.com/nenya/internal/infra"
 )
 
 // EntropyInterceptor performs entropy-based high-entropy string redaction.
@@ -12,17 +13,18 @@ type EntropyInterceptor struct {
 	priority int
 	filter   *EntropyFilter
 	label    string
-	logger   *slog.Logger
+	metrics  *infra.Metrics
 }
 
-// NewEntropyInterceptor creates a new EntropyInterceptor.
-func NewEntropyInterceptor(filter *EntropyFilter, label string, logger *slog.Logger) *EntropyInterceptor {
+// NewEntropyInterceptor creates a new EntropyInterceptor. The metrics
+// receiver is nil-safe; redaction counts are recorded through it.
+func NewEntropyInterceptor(filter *EntropyFilter, label string, metrics *infra.Metrics) *EntropyInterceptor {
 	return &EntropyInterceptor{
 		name:     "entropy",
 		priority: 20,
 		filter:   filter,
 		label:    label,
-		logger:   logger,
+		metrics:  metrics,
 	}
 }
 
@@ -34,16 +36,17 @@ func (e *EntropyInterceptor) CanHandle(_ context.Context, req *InterceptRequest)
 
 func (e *EntropyInterceptor) Process(_ context.Context, req *InterceptRequest) (*InterceptResult, error) {
 	modified := false
+	redactions := 0
+	redact := newCountingRedactor(func(content string) string {
+		return e.filter.RedactHighEntropy(content, e.label)
+	}, e.label, &redactions)
 	for _, msg := range req.Messages {
-		content, ok := msg["content"].(string)
-		if !ok {
-			continue
-		}
-		redacted := e.filter.RedactHighEntropy(content, e.label)
-		if redacted != content {
-			msg["content"] = redacted
+		if WalkMessageText(msg, redact) {
 			modified = true
 		}
+	}
+	if redactions > 0 {
+		e.metrics.RecordRedaction(redactions)
 	}
 	if !modified {
 		return &InterceptResult{Payload: req.Payload, Skip: true}, nil

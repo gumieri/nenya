@@ -1,10 +1,10 @@
 package pipeline
 
 import (
+	"math"
 	"regexp"
 	"strings"
 	"testing"
-	"unicode/utf8"
 
 	"github.com/nenya/config"
 )
@@ -81,7 +81,6 @@ func TestTruncateMiddleOut(t *testing.T) {
 		TruncationKeepLastPct:  40,
 	}
 	sep := "\n... [NENYA: MASSIVE PAYLOAD TRUNCATED] ...\n"
-	sepLen := utf8.RuneCountInString(sep)
 
 	tests := []struct {
 		name    string
@@ -105,28 +104,10 @@ func TestTruncateMiddleOut(t *testing.T) {
 			name:    "long text truncated with separator",
 			text:    strings.Repeat("a", 50) + "MIDDLE" + strings.Repeat("b", 50),
 			maxSize: 50,
-			want: func() string {
-				available := 50 - sepLen
-				keepFirst := int(float64(available) * 40 / 100)
-				keepLast := int(float64(available) * 40 / 100)
-				if keepFirst+keepLast > available {
-					total := keepFirst + keepLast
-					keepFirst = keepFirst * available / total
-					keepLast = available - keepFirst
-				}
-				if keepFirst == 0 && keepLast > 0 {
-					keepFirst = 1
-					keepLast = available - 1
-				} else if keepLast == 0 && keepFirst > 0 {
-					keepLast = 1
-					keepFirst = available - 1
-				}
-				runes := []rune(strings.Repeat("a", 50) + "MIDDLE" + strings.Repeat("b", 50))
-				return string(runes[:keepFirst]) + sep + string(runes[len(runes)-keepLast:])
-			}(),
+			want:    "aa" + sep + "bb",
 		},
 		{
-			name:    "zero max size returns truncated separator",
+			name:    "zero max size returns empty",
 			text:    strings.Repeat("x", 1000),
 			maxSize: 0,
 			want:    "",
@@ -224,6 +205,84 @@ func TestTruncateMiddleOutCodeAware(t *testing.T) {
 		got := TruncateMiddleOutCodeAware("", 100, cfg)
 		if got != "" {
 			t.Errorf("got %q, want empty", got)
+		}
+	})
+}
+
+// TestTruncateMiddleOutNegativeMaxSize guards the request-path panic on
+// negative budgets (reachable via negative window.max_context config).
+func TestTruncateMiddleOutNegativeMaxSize(t *testing.T) {
+	cfg := config.ContextConfig{TruncationKeepFirstPct: 15, TruncationKeepLastPct: 25}
+	if got := TruncateMiddleOut("some text", -1, cfg); got != "" {
+		t.Errorf("negative maxSize should return empty, got %q", got)
+	}
+}
+
+// TestTruncateMiddleOutByTokensEdges covers the exported truncation edge
+// cases: negative/zero/huge budgets, tiny budgets below the separator
+// length, and no-op paths.
+func TestTruncateMiddleOutByTokensEdges(t *testing.T) {
+	cfg := config.ContextConfig{TruncationKeepFirstPct: 15, TruncationKeepLastPct: 25}
+
+	t.Run("negative maxTokens returns empty", func(t *testing.T) {
+		if got := TruncateMiddleOutByTokens("text", -1, 1, cfg); got != "" {
+			t.Errorf("expected empty, got %q", got)
+		}
+	})
+
+	t.Run("zero maxTokens returns empty", func(t *testing.T) {
+		if got := TruncateMiddleOutByTokens("text", 0, 1, cfg); got != "" {
+			t.Errorf("expected empty, got %q", got)
+		}
+	})
+
+	t.Run("huge maxTokens does not panic", func(t *testing.T) {
+		long := strings.Repeat("a", 10000)
+		got := TruncateMiddleOutByTokens(long, math.MaxInt, math.MaxInt, cfg)
+		if got != long {
+			t.Errorf("text fitting the rune budget must be returned unchanged (len got=%d want=%d)", len(got), len(long))
+		}
+	})
+
+	t.Run("text fitting rune budget returns unchanged", func(t *testing.T) {
+		if got := TruncateMiddleOutByTokens("short text", 1000, 2000, cfg); got != "short text" {
+			t.Errorf("expected unchanged text, got %q", got)
+		}
+	})
+
+	t.Run("budget below separator length returns separator prefix", func(t *testing.T) {
+		got := TruncateMiddleOutByTokens(strings.Repeat("a", 1000), 2, 3, cfg)
+		if !strings.HasPrefix(got, "\n... [") {
+			t.Errorf("expected separator prefix, got %q", got)
+		}
+	})
+}
+
+// TestTruncationSplits covers the split-budget helper edges: negative
+// percentages clamp, both-zero keeps raise a head rune, and rescale
+// respects the available budget.
+func TestTruncationSplits(t *testing.T) {
+	t.Run("negative percentages clamp and keep one rune", func(t *testing.T) {
+		first, last := truncationSplits(40, -10, -10)
+		if first != 1 || last != 39 {
+			t.Errorf("expected (1, 39), got (%d, %d)", first, last)
+		}
+	})
+
+	t.Run("rescale respects budget", func(t *testing.T) {
+		first, last := truncationSplits(100, 60, 60)
+		if first+last != 100 {
+			t.Errorf("expected sum 100, got (%d, %d)", first, last)
+		}
+		if first < 0 || last < 0 {
+			t.Errorf("expected non-negative splits, got (%d, %d)", first, last)
+		}
+	})
+
+	t.Run("tiny budget", func(t *testing.T) {
+		first, last := truncationSplits(1, 15, 25)
+		if first != 1 || last != 0 {
+			t.Errorf("expected (1, 0), got (%d, %d)", first, last)
 		}
 	})
 }

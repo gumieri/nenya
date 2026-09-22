@@ -4,7 +4,10 @@ import (
 	"encoding/json"
 	"errors"
 	"regexp"
+	"sort"
 	"strings"
+
+	"github.com/nenya/internal/pipeline"
 )
 
 var ErrStreamBlocked = errors.New("stream blocked by execution policy")
@@ -54,22 +57,45 @@ func (f *StreamFilter) FilterContent(content string) (string, FilterAction, stri
 		return content, action, reason
 	}
 
-	prevWindowBytes := len(string(f.window))
 	f.appendToWindow(content)
+	// Capture the window AFTER appending so straddling matches span the
+	// prior window plus this chunk; the chunk's byte offset inside the
+	// window is the difference (clamped: a chunk larger than the window
+	// evicted everything, so the chunk starts at 0).
+	windowStr := string(f.window)
+	prevWindowBytes := len(windowStr) - len(content)
+	if prevWindowBytes < 0 {
+		prevWindowBytes = 0
+	}
 
-	if f.checkWindowBlock() {
+	if f.checkWindowBlock(windowStr) {
 		return content, ActionBlock, f.blockReason
 	}
 
-	if redacted, action := f.checkSecretPatterns(content); action != ActionPass {
-		return redacted, action, ""
-	}
+	return f.processSecrets(content, windowStr, prevWindowBytes)
+}
 
-	if f.checkWindowRedact() {
-		return f.redactFromWindow(content, prevWindowBytes)
+// processSecrets applies boundary-straddling (window) redaction first, on
+// the pristine chunk, then fully in-chunk pattern redaction. Running the
+// window pass first prevents an in-chunk replacement from consuming a
+// straddling match's in-chunk fragment — which would leak the secret once
+// the client concatenates chunks.
+func (f *StreamFilter) processSecrets(content, windowStr string, prevWindowBytes int) (string, FilterAction, string) {
+	action := ActionPass
+	var reason string
+	if f.checkWindowRedact(windowStr) {
+		var a FilterAction
+		content, a, reason = f.redactFromWindow(content, windowStr, prevWindowBytes)
+		if a == ActionRedact {
+			action = a
+		}
 	}
-
-	return content, ActionPass, ""
+	redacted, a := f.checkSecretPatterns(content)
+	if a != ActionPass {
+		content = redacted
+		action = a
+	}
+	return content, action, reason
 }
 
 func (f *StreamFilter) checkBlockPatterns(content string) (FilterAction, string) {
@@ -94,9 +120,10 @@ func (f *StreamFilter) checkSecretPatterns(content string) (string, FilterAction
 	redacted := content
 	wasRedacted := false
 	for _, re := range f.secretPatterns {
-		if re.MatchString(redacted) {
-			redacted = re.ReplaceAllString(redacted, f.redactLabel)
+		next := pipeline.ReplaceValidated(re, redacted, f.redactLabel)
+		if next != redacted {
 			wasRedacted = true
+			redacted = next
 		}
 	}
 
@@ -106,43 +133,86 @@ func (f *StreamFilter) checkSecretPatterns(content string) (string, FilterAction
 	return content, ActionPass
 }
 
-func (f *StreamFilter) redactFromWindow(content string, prevWindowBytes int) (string, FilterAction, string) {
-	redacted := content
-	windowStr := string(f.window)
+// redactFromWindow redacts matches that straddle the window boundary. All
+// match ranges are computed against the pristine chunk and spliced in a
+// single left-to-right pass so progressive mutation cannot corrupt later
+// offsets. A checksum-gated match fully inside the fresh chunk is skipped
+// when validation fails; a straddling match fuses prior-window text with
+// this chunk's text, so validation there is unreliable and the match is
+// redacted ungated — over-redaction is fail-safe, a leaked fragment is not.
+// windowSpan is a redaction range in content coordinates for a secret
+// match straddling the stream window boundary.
+type windowSpan struct{ start, end int }
+
+// collectWindowSpans finds straddling secret matches in content
+// coordinates. Checksum-gated matches fully inside the fresh chunk are
+// skipped when validation fails; straddling matches fall back to ungated
+// replacement. Returns the spans and the first matching pattern source.
+func (f *StreamFilter) collectWindowSpans(windowStr string, prevWindowBytes, contentLen int) (spans []windowSpan, reason string) {
 	for _, re := range f.secretPatterns {
-		locs := re.FindAllStringIndex(windowStr, -1)
-		for _, loc := range locs {
-			chunkStart := loc[0] - prevWindowBytes
-			if chunkStart < 0 {
-				chunkStart = 0
+		validate, hasValidator := pipeline.MatchValidator(re.String())
+		for _, loc := range re.FindAllStringIndex(windowStr, -1) {
+			if hasValidator && !validate(windowStr[loc[0]:loc[1]]) && loc[0] >= prevWindowBytes {
+				continue
 			}
-			chunkEnd := loc[1] - prevWindowBytes
-			if chunkEnd > len(content) {
-				chunkEnd = len(content)
+			start := loc[0] - prevWindowBytes
+			if start < 0 {
+				start = 0
 			}
-			if chunkStart < len(content) && chunkEnd > chunkStart {
-				prefix := content[:chunkStart]
-				suffix := content[chunkEnd:]
-				redacted = prefix + f.redactLabel + suffix
-				content = redacted
+			end := loc[1] - prevWindowBytes
+			if end > contentLen {
+				end = contentLen
+			}
+			if start < end {
+				spans = append(spans, windowSpan{start, end})
+				if reason == "" {
+					// Pattern source, never the matched text — reason
+					// values surface in logs and metrics.
+					reason = re.String()
+				}
 			}
 		}
 	}
-	if strings.Contains(redacted, f.redactLabel) {
-		return redacted, ActionRedact, ""
+	return spans, reason
+}
+
+func (f *StreamFilter) redactFromWindow(content, windowStr string, prevWindowBytes int) (string, FilterAction, string) {
+	spans, reason := f.collectWindowSpans(windowStr, prevWindowBytes, len(content))
+	if len(spans) == 0 {
+		return content, ActionPass, ""
 	}
-	return content, ActionPass, ""
+	sort.SliceStable(spans, func(i, j int) bool { return spans[i].start < spans[j].start })
+	var b strings.Builder
+	last := 0
+	for _, s := range spans {
+		if s.start < last {
+			// Overlapping match: extend the redacted region so a longer
+			// overlapping span cannot leak its tail.
+			if s.end > last {
+				last = s.end
+			}
+			continue
+		}
+		if s.start > last {
+			b.WriteString(content[last:s.start])
+		}
+		b.WriteString(f.redactLabel)
+		last = s.end
+	}
+	if last < len(content) {
+		b.WriteString(content[last:])
+	}
+	return b.String(), ActionRedact, reason
 }
 
 func (f *StreamFilter) appendToWindow(text string) {
 	f.windowLen = AppendRuneWindow(&f.window, &f.windowLen, f.windowSize, text)
 }
 
-func (f *StreamFilter) checkWindowBlock() bool {
+func (f *StreamFilter) checkWindowBlock(windowStr string) bool {
 	if len(f.blockPatterns) == 0 || f.windowLen == 0 {
 		return false
 	}
-	windowStr := string(f.window)
 	for _, re := range f.blockPatterns {
 		if re.MatchString(windowStr) {
 			f.blocked = true
@@ -153,11 +223,10 @@ func (f *StreamFilter) checkWindowBlock() bool {
 	return false
 }
 
-func (f *StreamFilter) checkWindowRedact() bool {
+func (f *StreamFilter) checkWindowRedact(windowStr string) bool {
 	if len(f.secretPatterns) == 0 || f.windowLen == 0 {
 		return false
 	}
-	windowStr := string(f.window)
 	for _, re := range f.secretPatterns {
 		if re.MatchString(windowStr) {
 			return true

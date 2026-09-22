@@ -632,9 +632,6 @@ func (p *Proxy) recordMCPUsage(gw *gateway.NenyaGateway, buf *bufferedSSE, agent
 	recordChatUsage(gw, model, usage)
 }
 
-// applyRedactToContent runs redactFn against every text surface of msgNode's
-// content, preserving multimodal content arrays instead of flattening them to
-// a string. Returns true if any part was changed.
 func detectRequestCapabilities(payload map[string]interface{}) routing.RequestCapabilities {
 	var caps routing.RequestCapabilities
 
@@ -685,46 +682,6 @@ func checkContentArrayForVision(arr []interface{}, caps *routing.RequestCapabili
 			return
 		}
 	}
-}
-
-// applyRedactToContent applies the redact function to the content field of a message node.
-// Supports both string content and content arrays (redacting only text parts).
-// Returns true if any content was modified.
-func applyRedactToContent(msgNode map[string]interface{}, redactFn func(string) string) bool {
-	contentRaw, ok := msgNode["content"]
-	if !ok {
-		return false
-	}
-	changed := false
-	switch c := contentRaw.(type) {
-	case string:
-		if c == "" {
-			return false
-		}
-		if r := redactFn(c); r != c {
-			msgNode["content"] = r
-			changed = true
-		}
-	case []interface{}:
-		for _, partRaw := range c {
-			part, ok := partRaw.(map[string]interface{})
-			if !ok {
-				continue
-			}
-			if part["type"] != "text" {
-				continue
-			}
-			text, ok := part["text"].(string)
-			if !ok || text == "" {
-				continue
-			}
-			if r := redactFn(text); r != text {
-				part["text"] = r
-				changed = true
-			}
-		}
-	}
-	return changed
 }
 
 // handleNonStreamingResponse buffers the full upstream response and returns it as a complete JSON object.

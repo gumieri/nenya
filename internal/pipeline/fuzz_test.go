@@ -2,11 +2,11 @@ package pipeline
 
 import (
 	"encoding/json"
+	"regexp"
+	"testing"
 	"unicode/utf8"
 
 	"github.com/nenya/config"
-
-	"testing"
 )
 
 func FuzzCompactText(f *testing.F) {
@@ -101,6 +101,17 @@ func FuzzShannonEntropy(f *testing.F) {
 }
 
 func FuzzRedactSecrets(f *testing.F) {
+	financial := make([]*regexp.Regexp, 0, len(config.RedactPresetFinancial()))
+	for _, src := range config.RedactPresetFinancial() {
+		financial = append(financial, regexp.MustCompile(src))
+	}
+	f.Add("4111 1111 1111 1111")
+	f.Add("DE89 3704 0044 0532 0130 00")
+	f.Add("de89370400440532013000")
+	f.Add("111.444.777-35")
+	f.Add("11.222.333/0001-81")
+	f.Add("4111111111111112")
+	f.Add("no secrets in this text")
 	f.Fuzz(func(t *testing.T, text string) {
 		if len(text) > 10000 {
 			return
@@ -109,6 +120,9 @@ func FuzzRedactSecrets(f *testing.F) {
 		if result != text {
 			t.Errorf("unexpected change with no patterns: input=%d, output=%d", len(text), len(result))
 		}
+		// Exercise the validator-gated path: must terminate, never panic,
+		// and never crash on malformed checksum candidates.
+		_ = RedactSecrets(text, true, financial, "[REDACTED]")
 	})
 }
 

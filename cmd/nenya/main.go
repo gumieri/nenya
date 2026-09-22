@@ -135,9 +135,9 @@ func setupLoggerFromConfig(cfg *config.Config, verbose bool) *slog.Logger {
 		return infra.SetupLogger(true)
 	}
 
-	level := config.LogLevelFromString(cfg.Server.LogLevel)
-	if err := infra.SetLogLevel(cfg.Server.LogLevel); err != nil {
-		fmt.Fprintf(os.Stderr, "warning: failed to set log level: %v\n", err)
+	level, ok := config.ParseLogLevel(cfg.Server.LogLevel)
+	if !ok && cfg.Server.LogLevel != "" {
+		slog.Warn("invalid server.log_level, defaulting to info", "level", cfg.Server.LogLevel)
 	}
 	return infra.SetupLoggerWithLevel(level)
 }
@@ -225,11 +225,11 @@ func buildInterceptorChain(gw *gateway.NenyaGateway, cfg *config.Config, logger 
 	chain := pipeline.NewInterceptorChain(logger)
 
 	if enabled := (cfg.Bouncer.Enabled != nil && *cfg.Bouncer.Enabled); enabled && len(gw.SecretPatterns) > 0 {
-		chain.Register(pipeline.NewRedactInterceptor(enabled, gw.SecretPatterns, cfg.Bouncer.RedactionLabel, logger, gw.Metrics))
+		chain.Register(pipeline.NewRedactInterceptor(true, gw.SecretPatterns, cfg.Bouncer.RedactionLabel, gw.Metrics))
 	}
 
 	if gw.EntropyFilter != nil {
-		chain.Register(pipeline.NewEntropyInterceptor(gw.EntropyFilter, cfg.Bouncer.RedactionLabel, logger))
+		chain.Register(pipeline.NewEntropyInterceptor(gw.EntropyFilter, cfg.Bouncer.RedactionLabel, gw.Metrics))
 	}
 
 	if cfg.Context.TFIDFQuerySource != "" {
