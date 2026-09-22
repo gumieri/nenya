@@ -30,13 +30,19 @@ type Metrics struct {
 	// injectionDetections counts deterministic prompt-injection detections
 	// by action (sanitize|reject) and pattern category.
 	injectionDetections sync.Map
-	// spotlighted counts untrusted-content envelopes applied by source
-	// (tool-history, mcp:<server>, tool-description).
-	spotlighted   sync.Map
-	panics        atomic.Uint64
-	windowApplied sync.Map
-	interceptions sync.Map
-	tokensSaved   sync.Map
+	// spotlighted counts untrusted-content markings applied by source
+	// (tool-history, mcp:<server>, tool-description, memory:<server>).
+	spotlighted sync.Map
+	// injectionEscalations counts tier-2 injection classifier verdicts
+	// (injection|benign|error).
+	injectionEscalations sync.Map
+	// injectionEscalationDur holds tier-2 classifier call durations by
+	// verdict.
+	injectionEscalationDur sync.Map
+	panics                 atomic.Uint64
+	windowApplied          sync.Map
+	interceptions          sync.Map
+	tokensSaved            sync.Map
 
 	rlRejected         sync.Map
 	cooldowns          sync.Map
@@ -305,6 +311,35 @@ func (m *Metrics) RecordInjectionDetection(action, category string, n int) {
 func (m *Metrics) writeHandlerPanics(w io.Writer) {
 	m.writeCounterAtomic(w, "nenya_panics_total",
 		"Total recovered panics in the request handler.", m.panics.Load())
+}
+
+// writeInjectionMetrics emits the injection detection and tier-2
+// escalation families.
+func (m *Metrics) writeInjectionMetrics(w io.Writer) {
+	m.writeCounterMap(w, "nenya_injection_detections_total",
+		"Deterministic prompt-injection detections by action and pattern category (escalated is a pseudo-category counting tier-2 full-benign clears).", &m.injectionDetections)
+	m.writeInjectionEscalations(w)
+}
+
+// writeInjectionEscalations emits the tier-2 classifier counter and
+// duration families.
+func (m *Metrics) writeInjectionEscalations(w io.Writer) {
+	m.writeCounterMap(w, "nenya_injection_escalations_total",
+		"Tier-2 injection classifier outcomes: injection, benign, error, inconclusive (truncated-excerpt benign).", &m.injectionEscalations)
+	m.writeHistogramMap(w, "nenya_injection_escalation_duration_seconds",
+		"Tier-2 injection classifier call duration in seconds.", &m.injectionEscalationDur)
+}
+
+// RecordInjectionEscalation records a tier-2 classifier outcome
+// (injection, benign, or error) and its call duration. Nil-safe.
+func (m *Metrics) RecordInjectionEscalation(verdict string, d time.Duration) {
+	if m == nil || verdict == "" {
+		return
+	}
+	e := getOrCreateEntry(&m.injectionEscalations, map[string]string{"verdict": verdict})
+	e.value.Add(1)
+	h := getOrCreateHist(&m.injectionEscalationDur, map[string]string{"verdict": verdict}, HTTPDurationBuckets)
+	h.Observe(d.Seconds())
 }
 
 // writeSpotlighted emits the spotlighted counter family.
@@ -1195,8 +1230,7 @@ func (m *Metrics) WritePrometheus(w io.Writer) {
 	m.writeHandlerPanics(w)
 	m.writeCounterAtomic(w, "nenya_pipeline_redactions_total",
 		"Total secret redactions applied by the Tier-0 filter.", m.redactions.Load())
-	m.writeCounterMap(w, "nenya_injection_detections_total",
-		"Deterministic prompt-injection detections by action and pattern category.", &m.injectionDetections)
+	m.writeInjectionMetrics(w)
 	m.writeSpotlighted(w)
 	m.writeCounterAtomic(w, "nenya_pipeline_compaction_applied_total",
 		"Total text compaction passes applied.", m.compactions.Load())

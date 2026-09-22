@@ -162,7 +162,49 @@ type InjectionConfig struct {
 	// IgnorePatterns suppress detections on matching surfaces (allowlist
 	// for prompt-engineering corpora that quotes injection material).
 	IgnorePatterns []string `json:"ignore_patterns,omitempty"`
+	// Escalation optionally routes ambiguous detection scores to an LLM
+	// classifier through the engine chain (advisory second opinion; the
+	// deterministic tier is never weakened by it).
+	Escalation *InjectionEscalationConfig `json:"escalation,omitempty"`
 }
+
+// GetEscalation returns the escalation block when it exists and is
+// enabled, nil otherwise.
+func (c *InjectionConfig) GetEscalation() *InjectionEscalationConfig {
+	if c == nil || c.Escalation == nil {
+		return nil
+	}
+	if c.Escalation.Enabled == nil || !*c.Escalation.Enabled {
+		return nil
+	}
+	return c.Escalation
+}
+
+// InjectionEscalationConfig configures the tier-2 LLM classifier for
+// injection detection (default off).
+type InjectionEscalationConfig struct {
+	// Enabled turns on two-tier escalation. Requires Engine.
+	Enabled *bool `json:"enabled,omitempty"`
+	// Engine is the classifier target (agent reference, provider/model
+	// shorthand, or inline object) resolved through the engine chain.
+	Engine *EngineRef `json:"engine,omitempty"`
+	// MinScore is the inclusive detection count at which a request is
+	// escalated (below it passes untouched).
+	MinScore int `json:"min_score,omitempty"`
+	// MaxScore is the exclusive detection count at which the tier-1
+	// verdict acts immediately without escalation.
+	MaxScore int `json:"max_score,omitempty"`
+	// MaxBytes caps the per-surface content excerpt sent to the
+	// classifier (0 applies DefaultEscalationMaxBytes).
+	MaxBytes int `json:"max_bytes,omitempty"`
+	// PerRequestLimit caps classifier calls per request (surfaces are
+	// escalated in message order until the budget is spent).
+	PerRequestLimit int `json:"per_request_limit,omitempty"`
+}
+
+// DefaultEscalationMaxBytes is the default per-surface excerpt cap for
+// the tier-2 injection classifier (8KiB).
+const DefaultEscalationMaxBytes = 8 * 1024
 
 func (a *AgentConfig) UnmarshalJSON(data []byte) error {
 	type alias AgentConfig

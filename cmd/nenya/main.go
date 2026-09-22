@@ -23,6 +23,7 @@ import (
 	"github.com/nenya/internal/local"
 	"github.com/nenya/internal/pipeline"
 	"github.com/nenya/internal/proxy"
+	"github.com/nenya/internal/routing"
 	"github.com/nenya/internal/version"
 )
 
@@ -247,7 +248,14 @@ func buildInterceptorChain(gw *gateway.NenyaGateway, cfg *config.Config, logger 
 		chain.Register(pipeline.NewEntropyInterceptor(gw.EntropyFilter, cfg.Bouncer.RedactionLabel, gw.Metrics))
 	}
 
-	injection, err := pipeline.NewInjectionInterceptor(cfg.Governance.Injection, cfg.Agents, gw.Metrics)
+	escalationDeps := &pipeline.InjectionEscalationDeps{
+		ClientFor: gw.ClientFor,
+		InjectAPIKey: func(providerName string, headers http.Header) error {
+			return routing.InjectAPIKeyWithGateway(providerName, gw, headers)
+		},
+		Logger: logger,
+	}
+	injection, err := pipeline.NewInjectionInterceptor(cfg.Governance.Injection, cfg.Agents, gw.Metrics, escalationDeps)
 	if err != nil {
 		return nil, fmt.Errorf("injection interceptor: %w", err)
 	}
@@ -394,10 +402,10 @@ func reloadConfig(ctx context.Context, p *proxy.Proxy, paths configPaths, logger
 
 	// Reload closes the old gateway internally, which is irreversible:
 	// prove the new configuration can assemble a complete interceptor
-	// chain (pattern compilation) before swapping, so an abort path never
-	// has to unwind a closed gateway. Validation re-compiles patterns the
-	// config validators already checked — defense in depth for the
-	// fail-closed reload guarantee.
+	// chain before swapping, so an abort path never has to unwind a
+	// closed gateway. Pattern compilation is re-checked here (defense in
+	// depth); escalation construction is pre-checked by
+	// validateInjectionEscalation plus engine resolution in config.Load.
 	if err := pipeline.ValidateInjectionPatterns(newCfg.Governance.Injection); err != nil {
 		logger.Error("configuration reload aborted: injection pattern validation failed", "err", err)
 		return

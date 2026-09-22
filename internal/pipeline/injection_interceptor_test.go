@@ -16,7 +16,7 @@ import (
 
 func newTestInjectionInterceptor(t *testing.T, cfg *config.InjectionConfig, agents map[string]config.AgentConfig, metrics *infra.Metrics) *InjectionInterceptor {
 	t.Helper()
-	interceptor, err := NewInjectionInterceptor(cfg, agents, metrics)
+	interceptor, err := NewInjectionInterceptor(cfg, agents, metrics, nil)
 	if err != nil {
 		t.Fatalf("NewInjectionInterceptor: %v", err)
 	}
@@ -357,7 +357,7 @@ func TestNewInjectionInterceptorInvalidPattern(t *testing.T) {
 	_, err := NewInjectionInterceptor(&config.InjectionConfig{
 		Enabled:       config.PtrTo(true),
 		ExtraPatterns: []string{"[unclosed"},
-	}, nil, nil)
+	}, nil, nil, nil)
 	if err == nil {
 		t.Fatal("expected compile error for invalid extra pattern")
 	}

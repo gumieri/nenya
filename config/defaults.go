@@ -291,6 +291,30 @@ func applyInjectionDefaults(cfg *Config) {
 	if cfg.Governance.Injection.Strict == nil {
 		cfg.Governance.Injection.Strict = PtrTo(false)
 	}
+	applyInjectionEscalationDefaults(cfg.Governance.Injection.Escalation)
+}
+
+// applyInjectionEscalationDefaults sets the tier-2 classifier defaults:
+// band [1,3), 8KiB excerpt cap, one escalation per request.
+func applyInjectionEscalationDefaults(esc *InjectionEscalationConfig) {
+	if esc == nil {
+		return
+	}
+	if esc.Enabled == nil {
+		esc.Enabled = PtrTo(false)
+	}
+	if esc.MinScore == 0 {
+		esc.MinScore = 1
+	}
+	if esc.MaxScore == 0 {
+		esc.MaxScore = 3
+	}
+	if esc.MaxBytes == 0 {
+		esc.MaxBytes = DefaultEscalationMaxBytes
+	}
+	if esc.PerRequestLimit == 0 {
+		esc.PerRequestLimit = 1
+	}
 }
 
 // applySpotlightDefaults sets spotlight tristate defaults: disabled,

@@ -782,3 +782,59 @@ func TestValidateSpotlightConfig(t *testing.T) {
 		}
 	})
 }
+
+func TestValidateInjectionEscalation(t *testing.T) {
+	enabled := true
+	engine := &EngineRef{Provider: "stub", Model: "classifier"}
+	mkCfg := func(esc *InjectionEscalationConfig) *Config {
+		esc.Engine = engine
+		return &Config{Governance: GovernanceConfig{
+			Injection: &InjectionConfig{Enabled: &enabled, Escalation: esc},
+		}}
+	}
+
+	t.Run("enabled requires engine", func(t *testing.T) {
+		cfg := &Config{Governance: GovernanceConfig{
+			Injection: &InjectionConfig{Enabled: &enabled, Escalation: &InjectionEscalationConfig{Enabled: &enabled, MinScore: 1}},
+		}}
+		errs := validateInjectionEscalation(cfg)
+		if len(errs) != 1 || !strings.Contains(errs[0], "requires engine") {
+			t.Errorf("expected engine-required error, got %v", errs)
+		}
+	})
+
+	t.Run("band ordering", func(t *testing.T) {
+		cfg := mkCfg(&InjectionEscalationConfig{Enabled: &enabled, MinScore: 3, MaxScore: 3})
+		errs := validateInjectionEscalation(cfg)
+		if len(errs) != 1 || !strings.Contains(errs[0], "greater than min_score") {
+			t.Errorf("expected band-order error, got %v", errs)
+		}
+	})
+
+	t.Run("negative budgets rejected", func(t *testing.T) {
+		cfg := mkCfg(&InjectionEscalationConfig{Enabled: &enabled, PerRequestLimit: -1, MaxBytes: -1, MinScore: -1})
+		errs := validateInjectionEscalation(cfg)
+		if len(errs) != 3 {
+			t.Errorf("expected 3 errors, got %v", errs)
+		}
+	})
+
+	t.Run("disabled escalation not validated", func(t *testing.T) {
+		cfg := &Config{Governance: GovernanceConfig{
+			Injection: &InjectionConfig{Enabled: &enabled, Escalation: &InjectionEscalationConfig{MinScore: -5}},
+		}}
+		if errs := validateInjectionEscalation(cfg); len(errs) != 0 {
+			t.Errorf("expected no validation while disabled, got %v", errs)
+		}
+	})
+
+	t.Run("per-agent escalation rejected", func(t *testing.T) {
+		cfg := &Config{Agents: map[string]AgentConfig{
+			"test": {Injection: &InjectionConfig{Escalation: &InjectionEscalationConfig{}}},
+		}}
+		errs := validateInjectionConfig(cfg, nil)
+		if len(errs) != 1 || !strings.Contains(errs[0], "escalation is global-only") {
+			t.Errorf("expected global-only error, got %v", errs)
+		}
+	})
+}

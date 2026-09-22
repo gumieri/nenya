@@ -179,6 +179,42 @@ func validateInjectionConfig(cfg *Config, logger *slog.Logger) []string {
 		if len(agent.Injection.IgnorePatterns) > 0 {
 			errs = append(errs, fmt.Sprintf("agents.%s.injection.ignore_patterns is global-only; configure governance.injection.ignore_patterns", name))
 		}
+		if agent.Injection.Escalation != nil {
+			errs = append(errs, fmt.Sprintf("agents.%s.injection.escalation is global-only; configure governance.injection.escalation", name))
+		}
+	}
+	errs = append(errs, validateInjectionEscalation(cfg)...)
+	return errs
+}
+
+// validateInjectionEscalation checks the tier-2 classifier config: band
+// ordering, budget, and the engine reference (presence here; concrete
+// target resolution happens in resolveEngineRefs during ApplyDefaults).
+func validateInjectionEscalation(cfg *Config) []string {
+	esc := cfg.Governance.Injection.GetEscalation()
+	if esc == nil {
+		return nil
+	}
+	var errs []string
+	// GetEscalation guarantees Enabled; an empty engine reference would
+	// silently no-op at runtime, breaking the fail-closed contract.
+	if esc.Engine == nil || (esc.Engine.AgentName == "" && esc.Engine.Provider == "") {
+		errs = append(errs, "governance.injection.escalation.enabled requires engine (agent reference, provider/model shorthand, or inline object)")
+	}
+	if esc.MinScore < 1 {
+		errs = append(errs, "governance.injection.escalation.min_score must be >= 1")
+	}
+	if esc.MaxScore < 0 {
+		errs = append(errs, "governance.injection.escalation.max_score must be >= 0")
+	}
+	if esc.MaxScore > 0 && esc.MaxScore <= esc.MinScore {
+		errs = append(errs, "governance.injection.escalation.max_score must be greater than min_score")
+	}
+	if esc.PerRequestLimit < 0 {
+		errs = append(errs, "governance.injection.escalation.per_request_limit must be >= 0")
+	}
+	if esc.MaxBytes < 0 {
+		errs = append(errs, "governance.injection.escalation.max_bytes must be >= 0")
 	}
 	return errs
 }
