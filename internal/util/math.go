@@ -1,7 +1,6 @@
 package util
 
 import (
-	"fmt"
 	"math"
 	"strings"
 
@@ -39,11 +38,6 @@ func JoinBackticks(names []string) string {
 // ErrNoProvider is the error message returned when no provider can be
 // resolved for a given model name.
 const ErrNoProvider = "No provider configured for this model"
-
-// ErrNoProviderFmt returns ErrNoProvider formatted with the model name.
-func ErrNoProviderFmt(model string) string {
-	return fmt.Sprintf("%s: %s", ErrNoProvider, model)
-}
 
 // ProviderCanServe returns true if the provider is configured with either
 // an API key or auth_style "none" (i.e. can actually make upstream requests).

@@ -34,23 +34,6 @@ type TransformDeps struct {
 	Metrics            *infra.Metrics
 }
 
-// Deprecated: Use InjectAPIKeyWithGateway instead. This function accesses
-// provider API keys directly from the Provider struct, bypassing secure memory.
-func InjectAPIKey(providerName string, providers map[string]*config.Provider, headers http.Header) error {
-	p, ok := providers[providerName]
-	if !ok {
-		return fmt.Errorf("unknown provider: %s", providerName)
-	}
-
-	if p.AuthStyle != config.AuthStyleNone && p.APIKey == "" {
-		return fmt.Errorf("provider %s has no API key configured", providerName)
-	}
-
-	a := adapter.ForProviderWithAuth(providerName, p.AuthStyle)
-	req := &http.Request{Header: headers}
-	return a.InjectAuth(req, p.APIKey)
-}
-
 func InjectAPIKeyWithGateway(providerName string, gw interface {
 	GetProviderAPIKey(providerName string) ([]byte, bool)
 	GetProvidersMap() map[string]*config.Provider

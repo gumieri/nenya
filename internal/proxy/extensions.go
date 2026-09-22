@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"sort"
 	"strings"
 	"time"
 
@@ -103,7 +104,17 @@ func (p *Proxy) selectExtensionProvider(gw *gateway.NenyaGateway, preferredName 
 			return preferred
 		}
 	}
-	for _, pr := range gw.Providers {
+	// NENYA-54: map iteration order is randomized — without sorting, the
+	// fallback resolves to a different provider across restarts when a
+	// model matches multiple providers, wrecking observability. Sorted
+	// names give a deterministic choice.
+	names := make([]string, 0, len(gw.Providers))
+	for name := range gw.Providers {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		pr := gw.Providers[name]
 		if pr.APIKey != "" || pr.AuthStyle == config.AuthStyleNone {
 			return pr
 		}

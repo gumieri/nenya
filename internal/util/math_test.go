@@ -75,14 +75,6 @@ func TestJoinBackticks_Multiple(t *testing.T) {
 	}
 }
 
-func TestErrNoProviderFmt(t *testing.T) {
-	got := ErrNoProviderFmt("claude-3")
-	want := "No provider configured for this model: claude-3"
-	if got != want {
-		t.Errorf("ErrNoProviderFmt = %q, want %q", got, want)
-	}
-}
-
 func TestProviderCanServe_Nil(t *testing.T) {
 	if ProviderCanServe(nil) {
 		t.Error("ProviderCanServe(nil) should return false")
