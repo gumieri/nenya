@@ -304,6 +304,11 @@ func (rl *retryLoop) handleActionResult(i int, target routing.UpstreamTarget, ac
 			tokenCount:   rl.opts.TokenCount,
 			apiKey:       rl.opts.ApiKey,
 		}, action)
+		if result.terminal {
+			// Response fully written (content-policy block): stop, never
+			// append another target's output to the committed bytes.
+			return true
+		}
 		if result.empty {
 			rl.lastFailReason = failReasonStream
 			rl.ctxLogger.Warn("empty stream from upstream, trying next target",
@@ -322,6 +327,10 @@ func (rl *retryLoop) handleActionResult(i int, target routing.UpstreamTarget, ac
 		return true
 	case actionResponse:
 		result := rl.p.handleNonStreamingResponse(rl.gw, rl.w, rl.r, target, rl.opts.AgentName, rl.opts.SourceFormat, action, rl.opts.CacheKey, rl.opts.Cooldown)
+		if result.terminal {
+			// 403 already written (exfil block): stop the loop.
+			return true
+		}
 		if result.empty {
 			rl.ctxLogger.Warn("empty non-streaming response from upstream, trying next target",
 				"model", target.Model, "provider", target.Provider)

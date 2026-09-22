@@ -36,6 +36,9 @@ type bufferedSSE struct {
 	finishReason     string
 	hasContent       bool
 	model            string
+	// exfilBlocked marks a buffer truncated by the egress guard: callers
+	// must not replay it and should emit the structured block payload.
+	exfilBlocked     bool
 	reasoningContent string
 }
 

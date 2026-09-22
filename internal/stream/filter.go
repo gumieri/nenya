@@ -3,6 +3,7 @@ package stream
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"regexp"
 	"sort"
 	"strings"
@@ -11,6 +12,10 @@ import (
 )
 
 var ErrStreamBlocked = errors.New("stream blocked by execution policy")
+
+// ErrExfilBlocked is a stream terminated by the URL egress guard
+// (wraps ErrStreamBlocked so generic block handling still matches).
+var ErrExfilBlocked = fmt.Errorf("stream blocked by data-exfiltration policy: %w", ErrStreamBlocked)
 
 type FilterAction int
 
@@ -60,13 +65,15 @@ func (f *StreamFilter) FilterContent(content string) (string, FilterAction, stri
 	f.appendToWindow(content)
 	// Capture the window AFTER appending so straddling matches span the
 	// prior window plus this chunk; the chunk's byte offset inside the
-	// window is the difference (clamped: a chunk larger than the window
-	// evicted everything, so the chunk starts at 0).
+	// window is the difference (negative when the chunk exceeded the
+	// window: windowStr is then a suffix of the chunk, which is the
+	// correct offset mapping).
 	windowStr := string(f.window)
+	// Negative when the chunk exceeded the window (suffix window): the
+	// value is the true chunk offset of the window start and must not be
+	// clamped — span-prevWindowBytes maps window coordinates into
+	// content coordinates correctly in that case.
 	prevWindowBytes := len(windowStr) - len(content)
-	if prevWindowBytes < 0 {
-		prevWindowBytes = 0
-	}
 
 	if f.checkWindowBlock(windowStr) {
 		return content, ActionBlock, f.blockReason

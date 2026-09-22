@@ -1224,6 +1224,22 @@ func (p *Proxy) handleNonStreamingResponse(gw *gateway.NenyaGateway, w http.Resp
 		responseMap = a.ConvertAnthropicToOpenAIBody(responseMap, false)
 	}
 
+	// ExfilGuard (Phase 050): apply URL egress policy to the buffered
+	// body before headers are committed. Block replaces the reply with a
+	// structured 403; strip rewrites violating surfaces in place.
+	if guard := exfilGuardFor(gw, agentName); guard != nil {
+		hits := inspectResponseTexts(guard, responseMap)
+		if hits.blocked {
+			// Upstream still consumed tokens on a blocked reply — record
+			// them before terminating the client response.
+			if usage, ok := responseMap["usage"].(map[string]interface{}); ok {
+				recordNonStreamingUsage(r.Context(), gw, target, agentName, usage)
+			}
+			p.handleExfilBlock(gw, w, target.Model, hits.reason)
+			return streamResult{terminal: true}
+		}
+	}
+
 	if usage, ok := responseMap["usage"].(map[string]interface{}); ok {
 		recordNonStreamingUsage(r.Context(), gw, target, agentName, usage)
 	}

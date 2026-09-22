@@ -110,7 +110,58 @@ type AgentConfig struct {
 	// enabled/history_enabled flags for this agent (mode and byte cap are
 	// global-only).
 	Spotlight *SpotlightConfig `json:"spotlight,omitempty"`
+	// ExfilGuard overrides the global governance.exfil_guard enabled
+	// flag and action for this agent (host list, query cap, and IP
+	// literal policy are global-only).
+	ExfilGuard *ExfilGuardOverrideConfig `json:"exfil_guard,omitempty"`
 }
+
+// ExfilGuardOverrideConfig is the per-agent override surface for the
+// output egress guard.
+type ExfilGuardOverrideConfig struct {
+	// Enabled turns the guard on/off for this agent.
+	Enabled *bool `json:"enabled,omitempty"`
+	// Action overrides the global action (log|strip|block).
+	Action string `json:"action,omitempty"`
+}
+
+// ExfilGuardConfig configures deterministic output-side egress control:
+// URL policy applied to model-produced markdown links/images and bare
+// URLs on the response path (default off).
+type ExfilGuardConfig struct {
+	// Enabled turns the guard on.
+	Enabled *bool `json:"enabled,omitempty"`
+	// Action selects the response to a violating URL: "log" (default,
+	// metric only), "strip" (remove the link/image, neutral placeholder),
+	// or "block" (terminate the response with error_kind=exfil_blocked).
+	Action string `json:"action,omitempty"`
+	// AllowedHosts restricts link destinations to this list (exact or
+	// subdomain match). Empty allows all public hosts (scheme, IP, and
+	// query checks still apply).
+	AllowedHosts []string `json:"allowed_hosts,omitempty"`
+	// MaxQueryChars is the query-string length threshold above which a
+	// URL is flagged as data smuggling (0 applies
+	// DefaultExfilMaxQueryChars).
+	MaxQueryChars int `json:"max_query_chars,omitempty"`
+	// AllowIPLiterals permits IP-literal hosts (private, loopback, and
+	// link-local ranges remain denied regardless; default false).
+	AllowIPLiterals *bool `json:"allow_ip_literals,omitempty"`
+}
+
+// Exfil guard actions.
+const (
+	// ExfilActionLog records the violation without modifying output.
+	ExfilActionLog = "log"
+	// ExfilActionStrip removes the violating link/image, leaving a
+	// neutral placeholder.
+	ExfilActionStrip = "strip"
+	// ExfilActionBlock terminates the response.
+	ExfilActionBlock = "block"
+)
+
+// DefaultExfilMaxQueryChars is the default query-string length threshold
+// for the egress guard (256 chars).
+const DefaultExfilMaxQueryChars = 256
 
 // Spotlight mode values (shared with internal/pipeline, which imports
 // this package — the canonical constants live here to avoid a cycle).
@@ -601,9 +652,10 @@ type GovernanceConfig struct {
 	// Spotlight configures untrusted-content spotlighting envelopes
 	// (default disabled). Per-agent overrides live on
 	// agents.<name>.spotlight.
-	Spotlight       *SpotlightConfig `json:"spotlight,omitempty"`
-	RatelimitMaxRPM *int             `json:"ratelimit_max_rpm,omitempty"`
-	RatelimitMaxTPM *int             `json:"ratelimit_max_tpm,omitempty"`
+	Spotlight       *SpotlightConfig  `json:"spotlight,omitempty"`
+	ExfilGuard      *ExfilGuardConfig `json:"exfil_guard,omitempty"`
+	RatelimitMaxRPM *int              `json:"ratelimit_max_rpm,omitempty"`
+	RatelimitMaxTPM *int              `json:"ratelimit_max_tpm,omitempty"`
 	// MaxConcurrentRequests is the global fallback cap on in-flight requests
 	// per provider+model when the provider config does not set its own limit
 	// (0 or omitted = unlimited).

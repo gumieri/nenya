@@ -16,6 +16,7 @@ import (
 	"github.com/nenya/internal/mcp"
 	"github.com/nenya/internal/pipeline"
 	"github.com/nenya/internal/routing"
+	"github.com/nenya/internal/stream"
 	"github.com/nenya/internal/util"
 )
 
@@ -376,7 +377,7 @@ loop:
 	if lastBuf != nil {
 		gw.Logger.Warn("MCP loop exhausted, replaying last response",
 			"max_iterations", maxIter, "agent", opts.AgentName)
-		replayBufferedResponse(w, lastBuf, gw.Logger)
+		p.replayGuardedBuffered(gw, w, lastBuf, opts.AgentName)
 		p.recordMCPUsage(gw, lastBuf, opts.AgentName)
 		return
 	}
@@ -403,12 +404,30 @@ type mcpIterInput struct {
 	totalToolCalls  *int
 }
 
+// handleMCPBufferOutcome resolves a buffered upstream outcome that
+// terminates the iteration without further processing: an exfil-blocked
+// buffer (block payload written) or an upstream failure (last response
+// replayed / gateway error written). Returns true when the caller must
+// return immediately.
+func (p *Proxy) handleMCPBufferOutcome(in mcpIterInput, buf *bufferedSSE, err error) bool {
+	if err == nil && buf != nil && buf.exfilBlocked {
+		// The guard truncated this turn's buffer: terminate the whole
+		// loop with the block payload — continuing would execute tool
+		// calls or fold reasoning derived from violating content.
+		in.gw.Logger.Warn("MCP loop: response blocked by exfil guard",
+			"iteration", in.iteration, "agent", in.opts.AgentName)
+		p.writeExfilBlockedSSE(in.gw, in.w)
+		return true
+	}
+	return false
+}
+
 func (p *Proxy) mcpIteration(in mcpIterInput) int {
 	select {
 	case <-in.mcpLoopCtx.Done():
 		in.gw.Logger.Warn("MCP loop deadline exceeded", "agent", in.opts.AgentName, "iterations", *in.actualIter)
 		if *in.lastBuf != nil {
-			replayBufferedResponse(in.w, *in.lastBuf, in.gw.Logger)
+			p.replayGuardedBuffered(in.gw, in.w, *in.lastBuf, in.opts.AgentName)
 		} else {
 			writeSSEError(in.w, http.StatusRequestTimeout, "MCP loop deadline exceeded")
 		}
@@ -430,11 +449,14 @@ func (p *Proxy) mcpIteration(in mcpIterInput) int {
 	}
 
 	buf, err := p.forwardBuffered(in.gw, in.mcpLoopCtx, in.r, in.opts.Targets, working, in.opts.Cooldown, in.opts.TokenCount, in.opts.AgentName, in.opts.MaxRetries, in.opts.ApiKey)
+	if handled := p.handleMCPBufferOutcome(in, buf, err); handled {
+		return mcpIterReturn
+	}
 	if err != nil {
 		in.gw.Logger.Warn("MCP loop: upstream failed, streaming last response",
 			"iteration", in.iteration, "err", err)
 		if *in.lastBuf != nil {
-			replayBufferedResponse(in.w, *in.lastBuf, in.gw.Logger)
+			p.replayGuardedBuffered(in.gw, in.w, *in.lastBuf, in.opts.AgentName)
 			return mcpIterReturn
 		}
 		writeSSEError(in.w, http.StatusBadGateway, "All upstream providers failed")
@@ -447,7 +469,7 @@ func (p *Proxy) mcpIteration(in mcpIterInput) int {
 			"has_content", buf.hasContent,
 			"finish_reason", buf.finishReason,
 			"raw_bytes_len", len(buf.rawBytes))
-		replayBufferedResponse(in.w, buf, in.gw.Logger)
+		p.replayGuardedBuffered(in.gw, in.w, buf, in.opts.AgentName)
 		p.recordMCPUsage(in.gw, buf, in.opts.AgentName)
 		return mcpIterReturn
 	}
@@ -476,7 +498,7 @@ func (p *Proxy) mcpIteration(in mcpIterInput) int {
 		updatedPayload, err := json.Marshal(working)
 		if err != nil {
 			in.gw.Logger.Error("failed to marshal updated payload for MCP loop", "err", err)
-			replayBufferedResponse(in.w, buf, in.gw.Logger)
+			p.replayGuardedBuffered(in.gw, in.w, buf, in.opts.AgentName)
 			return mcpIterReturn
 		}
 		*in.originalPayload = updatedPayload
@@ -486,7 +508,7 @@ func (p *Proxy) mcpIteration(in mcpIterInput) int {
 		in.gw.Logger.Debug("MCP loop: non-MCP tool calls only, replaying",
 			"non_mcp_calls", len(nonMcpCalls),
 			"raw_bytes_len", len(buf.rawBytes))
-		replayBufferedResponse(in.w, buf, in.gw.Logger)
+		p.replayGuardedBuffered(in.gw, in.w, buf, in.opts.AgentName)
 		p.recordMCPUsage(in.gw, buf, in.opts.AgentName)
 		return mcpIterReturn
 	}
@@ -605,7 +627,7 @@ func (p *Proxy) handleBufferedAction(ctx context.Context, gw *gateway.NenyaGatew
 		}
 		return nil, false
 	case actionStream:
-		buf, err := p.handleBufferedStream(ctx, action, target, gw, cooldownDuration)
+		buf, err := p.handleBufferedStream(ctx, action, target, gw, cooldownDuration, agentName)
 		if err != nil {
 			gw.AgentState.RecordFailure(target, cooldownDuration)
 		}
@@ -614,7 +636,7 @@ func (p *Proxy) handleBufferedAction(ctx context.Context, gw *gateway.NenyaGatew
 	return nil, false
 }
 
-func (p *Proxy) handleBufferedStream(ctx context.Context, action upstreamAction, target routing.UpstreamTarget, gw *gateway.NenyaGateway, cooldownDuration time.Duration) (*bufferedSSE, error) {
+func (p *Proxy) handleBufferedStream(ctx context.Context, action upstreamAction, target routing.UpstreamTarget, gw *gateway.NenyaGateway, cooldownDuration time.Duration, agentName string) (*bufferedSSE, error) {
 	defer action.cancel()
 	buf, err := bufferStreamResponse(ctx, action.resp.Body, gw.Logger)
 	_ = action.resp.Body.Close()
@@ -623,7 +645,87 @@ func (p *Proxy) handleBufferedStream(ctx context.Context, action upstreamAction,
 		return nil, fmt.Errorf("buffering response: %w", err)
 	}
 	gw.AgentState.RecordSuccess(target.CoolKey)
+	// ExfilGuard (Phase 050): the MCP loop replays buffered SSE bytes
+	// verbatim, bypassing the streaming filter pipeline — apply the URL
+	// egress policy over the buffered frames before they reach callers.
+	p.applyExfilToBufferedSSE(gw, buf, agentName)
 	return buf, nil
+}
+
+// applyExfilToBufferedSSE runs the egress guard over each model-text
+// frame of a buffered SSE response, rewriting stripped deltas in place.
+// A block verdict truncates the buffer to the frames before the
+// violation; callers detect it via buf.exfilBlocked and terminate with
+// the structured block payload instead of replaying.
+func (p *Proxy) applyExfilToBufferedSSE(gw *gateway.NenyaGateway, buf *bufferedSSE, agentName string) {
+	guard := exfilGuardFor(gw, agentName)
+	if guard == nil || buf == nil || len(buf.rawBytes) == 0 {
+		return
+	}
+	var out []byte
+	blocked := false
+	changed := false
+	for _, line := range strings.Split(string(buf.rawBytes), "\n") {
+		if blocked && !strings.Contains(line, "usage") {
+			// After a block verdict only bookkeeping frames (usage) are
+			// kept; content frames are dropped with the violation.
+			continue
+		}
+		next, lineBlocked, lineChanged := p.guardBufferedLine(guard, line)
+		blocked = blocked || lineBlocked
+		changed = changed || lineChanged
+		out = append(out, next...)
+	}
+	if changed {
+		buf.rawBytes = out
+		buf.exfilBlocked = blocked
+	}
+}
+
+// guardBufferedLine runs the guard over one buffered SSE line, returning
+// the (possibly rewritten) line, whether it triggered a block, and
+// whether it was rewritten.
+func (p *Proxy) guardBufferedLine(guard *stream.ExfilGuard, line string) (string, bool, bool) {
+	trimmed := strings.TrimPrefix(line, "data: ")
+	if line == trimmed || strings.TrimSpace(trimmed) == "" || strings.TrimSpace(trimmed) == "[DONE]" {
+		return line + "\n", false, false
+	}
+	parsed := stream.ParseSSEChunk([]byte(trimmed))
+	if parsed == nil {
+		return line + "\n", false, false
+	}
+	content := stream.ExtractExfilContent(parsed)
+	if content == "" {
+		return line + "\n", false, false
+	}
+	rewritten, action, _ := guard.FilterContent(content)
+	switch action {
+	case stream.ActionBlock:
+		return "", true, true
+	case stream.ActionRedact:
+		_ = stream.SetExfilContent(parsed, rewritten)
+		reencoded, err := json.Marshal(parsed)
+		if err != nil {
+			// Fail-safe: drop the line rather than leak the unredacted
+			// original when re-encoding fails.
+			return "", false, true
+		}
+		return "data: " + string(reencoded) + "\n", false, true
+	default:
+		return line + "\n", false, false
+	}
+}
+
+// replayGuardedBuffered replays a buffered MCP response through the
+// egress-guard verdict: a buffer truncated by the guard gets the
+// structured block payload instead of the violating frames.
+func (p *Proxy) replayGuardedBuffered(gw *gateway.NenyaGateway, w http.ResponseWriter, buf *bufferedSSE, agentName string) {
+	if buf != nil && buf.exfilBlocked {
+		gw.Logger.Warn("MCP loop: response blocked by exfil guard", "agent", agentName)
+		p.writeExfilBlockedSSE(gw, w)
+		return
+	}
+	replayBufferedResponse(w, buf, gw.Logger)
 }
 
 func (p *Proxy) recordMCPUsage(gw *gateway.NenyaGateway, buf *bufferedSSE, agentName string) {

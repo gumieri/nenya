@@ -39,10 +39,13 @@ type Metrics struct {
 	// injectionEscalationDur holds tier-2 classifier call durations by
 	// verdict.
 	injectionEscalationDur sync.Map
-	panics                 atomic.Uint64
-	windowApplied          sync.Map
-	interceptions          sync.Map
-	tokensSaved            sync.Map
+	// exfilDetections counts egress-guard URL violations by reason and
+	// configured action.
+	exfilDetections sync.Map
+	panics          atomic.Uint64
+	windowApplied   sync.Map
+	interceptions   sync.Map
+	tokensSaved     sync.Map
 
 	rlRejected         sync.Map
 	cooldowns          sync.Map
@@ -340,6 +343,24 @@ func (m *Metrics) RecordInjectionEscalation(verdict string, d time.Duration) {
 	e.value.Add(1)
 	h := getOrCreateHist(&m.injectionEscalationDur, map[string]string{"verdict": verdict}, HTTPDurationBuckets)
 	h.Observe(d.Seconds())
+}
+
+// writeExfilDetections emits the egress-guard violation counter.
+func (m *Metrics) writeExfilDetections(w io.Writer) {
+	m.writeCounterMap(w, "nenya_exfil_detections_total",
+		"Egress-guard URL violations by reason and configured action.", &m.exfilDetections)
+}
+
+// RecordExfilDetection records an egress-guard URL violation with its
+// reason (scheme, ip_literal, private_ip, host_not_allowed,
+// query_length, query_entropy) and the configured action
+// (log|strip|block). Nil-safe.
+func (m *Metrics) RecordExfilDetection(reason, action string) {
+	if m == nil || reason == "" {
+		return
+	}
+	e := getOrCreateEntry(&m.exfilDetections, map[string]string{"reason": reason, "action": action})
+	e.value.Add(1)
 }
 
 // writeSpotlighted emits the spotlighted counter family.
@@ -1232,6 +1253,7 @@ func (m *Metrics) WritePrometheus(w io.Writer) {
 		"Total secret redactions applied by the Tier-0 filter.", m.redactions.Load())
 	m.writeInjectionMetrics(w)
 	m.writeSpotlighted(w)
+	m.writeExfilDetections(w)
 	m.writeCounterAtomic(w, "nenya_pipeline_compaction_applied_total",
 		"Total text compaction passes applied.", m.compactions.Load())
 	m.writeCounterMap(w, "nenya_pipeline_window_applied_total",

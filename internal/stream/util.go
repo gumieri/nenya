@@ -18,6 +18,13 @@ func AppendRuneWindow(window *[]rune, windowLen *int, maxSize int, text string) 
 		*window = (*window)[drop:]
 	}
 	*window = append(*window, runes...)
-	*windowLen = maxSize
-	return maxSize
+	// An oversized single chunk can push the slice past maxSize (the
+	// append above only evicts prior content); clamp so the slice and
+	// the length counter stay in sync — otherwise the window grows
+	// without bound on streams of oversized deltas.
+	if len(*window) > maxSize {
+		*window = (*window)[len(*window)-maxSize:]
+	}
+	*windowLen = len(*window)
+	return *windowLen
 }

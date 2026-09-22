@@ -61,6 +61,7 @@ func ApplyDefaults(cfg *Config) error {
 	applyBouncerDefaults(cfg)
 	applyInjectionDefaults(cfg)
 	applySpotlightDefaults(cfg)
+	applyExfilGuardDefaults(cfg)
 	applyEngineRefDefaults(&cfg.Bouncer.Engine)
 	applyEngineRefDefaults(&cfg.Window.Engine)
 	if err := applyPrefixCacheDefaults(cfg); err != nil {
@@ -837,4 +838,26 @@ func looksLikeRegex(s string) bool {
 		}
 	}
 	return false
+}
+
+// applyExfilGuardDefaults sets egress-guard tristate defaults: disabled,
+// log action, 256-char query cap, IP literals denied. Per-agent blocks
+// inherit unset fields at request time.
+func applyExfilGuardDefaults(cfg *Config) {
+	if cfg.Governance.ExfilGuard == nil {
+		return
+	}
+	g := cfg.Governance.ExfilGuard
+	if g.Enabled == nil {
+		g.Enabled = PtrTo(false)
+	}
+	if g.Action == "" {
+		g.Action = ExfilActionLog
+	}
+	if g.MaxQueryChars == 0 {
+		g.MaxQueryChars = DefaultExfilMaxQueryChars
+	}
+	if g.AllowIPLiterals == nil {
+		g.AllowIPLiterals = PtrTo(false)
+	}
 }

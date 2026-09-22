@@ -105,6 +105,7 @@ func collectValidationErrors(ctx context.Context, cfg *Config, providers map[str
 	errors = append(errors, validatePatternsToList("governance.blocked_execution_patterns", cfg.Governance.BlockedExecutionPatterns, logger)...)
 	errors = append(errors, validateInjectionConfig(cfg, logger)...)
 	errors = append(errors, validateSpotlightConfig(cfg)...)
+	errors = append(errors, validateExfilGuardConfig(cfg)...)
 	errors = append(errors, validateModelRegistryErrors(logger)...)
 	errors = append(errors, validateEntropyConfig(cfg.Bouncer)...)
 	errors = append(errors, validateProviderRateLimits(cfg)...)
@@ -769,4 +770,41 @@ func validateQuotaBackoffMaxSeconds(name string, billingCfg *BillingConfig, errs
 	if billingCfg.QuotaBackoffMaxSeconds < 0 {
 		*errs = append(*errs, fmt.Sprintf("providers[%q].billing.quota_backoff_max_seconds must be non-negative, got %d", name, billingCfg.QuotaBackoffMaxSeconds))
 	}
+}
+
+// validateExfilGuardConfig checks the egress-guard action value, budget
+// floor, and per-agent override surface (only enabled/action are
+// per-agent; the host list, query cap, and IP-literal policy are
+// global-only).
+func validateExfilGuardConfig(cfg *Config) []string {
+	var errs []string
+	if g := cfg.Governance.ExfilGuard; g != nil {
+		switch g.Action {
+		case "", ExfilActionLog, ExfilActionStrip, ExfilActionBlock:
+		default:
+			errs = append(errs, fmt.Sprintf("governance.exfil_guard.action: invalid value %q, must be empty, \"log\", \"strip\", or \"block\"", g.Action))
+		}
+		if g.MaxQueryChars < 0 {
+			errs = append(errs, "governance.exfil_guard.max_query_chars must be >= 0")
+		}
+		for i, host := range g.AllowedHosts {
+			if strings.ContainsAny(host, "/ :") {
+				errs = append(errs, fmt.Sprintf("governance.exfil_guard.allowed_hosts[%d]: %q is not a bare hostname (scheme, path, port, or space)", i, host))
+			}
+		}
+	}
+	for name, agent := range cfg.Agents {
+		if agent.ExfilGuard == nil {
+			continue
+		}
+		if cfg.Governance.ExfilGuard == nil {
+			errs = append(errs, fmt.Sprintf("agents.%s.exfil_guard requires governance.exfil_guard to be configured (the per-agent surface is an override)", name))
+		}
+		switch agent.ExfilGuard.Action {
+		case "", ExfilActionLog, ExfilActionStrip, ExfilActionBlock:
+		default:
+			errs = append(errs, fmt.Sprintf("agents.%s.exfil_guard.action: invalid value %q", name, agent.ExfilGuard.Action))
+		}
+	}
+	return errs
 }

@@ -17,6 +17,7 @@ import (
 	"github.com/nenya/config"
 	"github.com/nenya/internal/billing"
 	"github.com/nenya/internal/gateway"
+	"github.com/nenya/internal/infra"
 	providerpkg "github.com/nenya/internal/providers"
 	"github.com/nenya/internal/routing"
 	"github.com/nenya/internal/stream"
@@ -420,7 +421,11 @@ func isClientWriteError(err error) bool {
 // failure before any stream bytes were produced (distinct from empty).
 type streamResult struct {
 	empty bool
-	err   error
+	// terminal marks a response already fully written to the client
+	// (e.g. a content-policy block): the retry loop must stop instead of
+	// failing over and appending another response to the committed one.
+	terminal bool
+	err      error
 }
 
 // prefixedReadCloser wraps an io.Reader with a prefix buffer that is
@@ -1028,6 +1033,9 @@ func (p *Proxy) setupTransformingReader(gw *gateway.NenyaGateway, target routing
 	transformingReader.SetLogger(gw.Logger)
 
 	p.setupStreamFilterIfEnabled(gw, transformingReader)
+	if guard := exfilGuardFor(gw, agentName); guard != nil {
+		transformingReader.SetExfilGuard(guard)
+	}
 	p.setupStreamEntropyFilterIfEnabled(gw, transformingReader)
 	contentBuilder := p.setupContentBuilderIfNeeded(gw, agentName, transformingReader)
 
@@ -1216,6 +1224,18 @@ func (p *Proxy) setupStreamWriter(gw *gateway.NenyaGateway, flushWriter *immedia
 
 func (p *Proxy) handleStreamDone(gw *gateway.NenyaGateway, w http.ResponseWriter, target routing.UpstreamTarget, agentName string, action upstreamAction, cacheKey string, cooldownDuration time.Duration, payload map[string]any, buf *[]byte, copyErr error, captureBuf *bytes.Buffer, tee *sseTeeWriter, contentBuilder *contentBuilder, stallR *stallReader, reqCtx context.Context, injectedErr bool) streamResult {
 	putStreamBuffer(buf)
+
+	if errors.Is(copyErr, stream.ErrExfilBlocked) {
+		action.cancel()
+		_ = action.resp.Body.Close()
+		stallR.Stop()
+		stallR.DrainBuffered()
+		gw.Logger.Warn("stream blocked by exfil guard, upstream killed",
+			"model", target.Model, "provider", target.Provider)
+		gw.Metrics.RecordStreamBlock(target.Model, target.Provider)
+		p.writeExfilBlockedSSE(gw, w)
+		return streamResult{terminal: true}
+	}
 
 	if errors.Is(copyErr, stream.ErrStreamBlocked) {
 		action.cancel()
@@ -1462,19 +1482,44 @@ func (p *Proxy) writeTimeoutSSE(gw *gateway.NenyaGateway, w http.ResponseWriter)
 // writeBlockedSSE sends a blocked response SSE stream to the client.
 // This is used when the execution policy blocks a request.
 func (p *Proxy) writeBlockedSSE(gw *gateway.NenyaGateway, w http.ResponseWriter) {
-	blockPayload := map[string]interface{}{
+	p.writeBlockedSSEPayload(gw, w, map[string]interface{}{
 		"id":     "blocked",
 		"object": "chat.completion.chunk",
 		"choices": []map[string]interface{}{
 			{
-				"index": 0,
-				"delta": map[string]interface{}{
-					"content": "[Response blocked by execution policy]",
-				},
+				"index":         0,
+				"delta":         map[string]interface{}{"content": "[Response blocked by execution policy]"},
 				"finish_reason": "stop",
 			},
 		},
-	}
+	})
+}
+
+// writeExfilBlockedSSE sends the structured egress-block response to the
+// client: an error object carrying error_kind=exfil_blocked plus a
+// human-readable delta, then [DONE].
+func (p *Proxy) writeExfilBlockedSSE(gw *gateway.NenyaGateway, w http.ResponseWriter) {
+	p.writeBlockedSSEPayload(gw, w, map[string]interface{}{
+		"id":         "blocked",
+		"object":     "chat.completion.chunk",
+		"error_kind": string(infra.ErrorKindExfil),
+		"error": map[string]interface{}{
+			"message": "response blocked by data-exfiltration policy",
+			"type":    string(infra.ErrorKindExfil),
+		},
+		"choices": []map[string]interface{}{
+			{
+				"index":         0,
+				"delta":         map[string]interface{}{"content": "[Response blocked: data-exfiltration policy]"},
+				"finish_reason": "stop",
+			},
+		},
+	})
+}
+
+// writeBlockedSSEPayload marshals a blocked-response payload and writes
+// it as one SSE data line plus [DONE].
+func (p *Proxy) writeBlockedSSEPayload(gw *gateway.NenyaGateway, w http.ResponseWriter, blockPayload map[string]interface{}) {
 	blockJSON, err := json.Marshal(blockPayload)
 	if err != nil {
 		gw.Logger.Error("failed to marshal blocked SSE payload", "err", err)
