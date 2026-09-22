@@ -695,3 +695,90 @@ func TestValidateModelAliases(t *testing.T) {
 		t.Fatalf("expected 2 alias errors, got %v", errs)
 	}
 }
+
+// newSpotlightTestConfig returns a minimal config suitable for
+// validateSpotlightConfig: one agent entry and no spotlight block yet.
+func newSpotlightTestConfig() *Config {
+	return &Config{
+		Agents: map[string]AgentConfig{
+			"test": {},
+		},
+	}
+}
+
+func TestValidateSpotlightConfig(t *testing.T) {
+	enabled, disabled, historyOff := true, false, false
+	spot := func(mode string, maxBytes int) *SpotlightConfig {
+		return &SpotlightConfig{Enabled: &enabled, Mode: mode, MaxToolResultBytes: maxBytes}
+	}
+
+	t.Run("valid global", func(t *testing.T) {
+		cfg := newSpotlightTestConfig()
+		cfg.Governance.Spotlight = spot(SpotlightModeDatamarking, 2048)
+		cfg.Governance.Spotlight.HistoryEnabled = &enabled
+		if errs := validateSpotlightConfig(cfg); len(errs) != 0 {
+			t.Errorf("expected no errors, got %v", errs)
+		}
+	})
+
+	t.Run("invalid mode", func(t *testing.T) {
+		cfg := newSpotlightTestConfig()
+		cfg.Governance.Spotlight = spot("bogus", 2048)
+		errs := validateSpotlightConfig(cfg)
+		if len(errs) != 1 || !strings.Contains(errs[0], "governance.spotlight.mode") {
+			t.Errorf("expected mode error, got %v", errs)
+		}
+	})
+
+	t.Run("global-only byte cap rejected on agent", func(t *testing.T) {
+		cfg := newSpotlightTestConfig()
+		cfg.Governance.Spotlight = spot(SpotlightModeDelimiters, 2048)
+		agent := cfg.Agents["test"]
+		agent.Spotlight = &SpotlightConfig{MaxToolResultBytes: 512}
+		cfg.Agents["test"] = agent
+		errs := validateSpotlightConfig(cfg)
+		if len(errs) != 1 || !strings.Contains(errs[0], "max_tool_result_bytes is global-only") {
+			t.Errorf("expected global-only error, got %v", errs)
+		}
+	})
+
+	t.Run("agent override surface", func(t *testing.T) {
+		cfg := newSpotlightTestConfig()
+		cfg.Governance.Spotlight = spot(SpotlightModeDelimiters, 2048)
+		agent := cfg.Agents["test"]
+		agent.Spotlight = &SpotlightConfig{Enabled: &disabled, HistoryEnabled: &historyOff}
+		cfg.Agents["test"] = agent
+		errs := validateSpotlightConfig(cfg)
+		if len(errs) != 0 {
+			t.Errorf("expected agent enabled/history accepted, got %v", errs)
+		}
+		agent = cfg.Agents["test"]
+		agent.Spotlight = &SpotlightConfig{Enabled: &disabled, HistoryEnabled: &enabled}
+		cfg.Agents["test"] = agent
+		errs = validateSpotlightConfig(cfg)
+		if len(errs) != 1 || !strings.Contains(errs[0], "contradictory") {
+			t.Errorf("expected contradictory error, got %v", errs)
+		}
+	})
+
+	t.Run("negative global byte cap rejected", func(t *testing.T) {
+		cfg := newSpotlightTestConfig()
+		cfg.Governance.Spotlight = spot(SpotlightModeDelimiters, -1)
+		errs := validateSpotlightConfig(cfg)
+		if len(errs) != 1 || !strings.Contains(errs[0], "max_tool_result_bytes") {
+			t.Errorf("expected negative-cap error, got %v", errs)
+		}
+	})
+
+	t.Run("agent mode rejected as global-only", func(t *testing.T) {
+		cfg := newSpotlightTestConfig()
+		cfg.Governance.Spotlight = spot(SpotlightModeDelimiters, 2048)
+		agent := cfg.Agents["test"]
+		agent.Spotlight = &SpotlightConfig{Mode: SpotlightModeDatamarking}
+		cfg.Agents["test"] = agent
+		errs := validateSpotlightConfig(cfg)
+		if len(errs) != 1 || !strings.Contains(errs[0], "mode is global-only") {
+			t.Errorf("expected agent mode error, got %v", errs)
+		}
+	})
+}

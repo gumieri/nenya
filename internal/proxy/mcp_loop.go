@@ -48,6 +48,7 @@ func (p *Proxy) injectMCPTools(gw *gateway.NenyaGateway, payload map[string]inte
 			continue
 		}
 		openaiTools := mcp.MCPToolsToOpenAI(serverName, tools)
+		applyToolDescriptionSpotlight(openaiTools, spotlightSettingsFor(&gw.Config, agent), gw.Metrics)
 
 		existing, ok := payload["tools"].([]interface{})
 		if !ok {
@@ -74,14 +75,14 @@ func (p *Proxy) injectMCPTools(gw *gateway.NenyaGateway, payload map[string]inte
 			gw.Logger.Info("MCP tool_choice auto injected",
 				"tools_count", len(toolNames), "agent", agentName)
 		}
-		p.injectMCPSystemPrompt(gw, payload, toolNames)
+		p.injectMCPSystemPrompt(gw, payload, toolNames, spotlightSettingsFor(&gw.Config, agent))
 	} else {
 		gw.Logger.Warn("MCP: no tools injected for agent",
 			"agent", agentName, "servers", agent.MCP.Servers)
 	}
 }
 
-func (p *Proxy) injectMCPSystemPrompt(gw *gateway.NenyaGateway, payload map[string]interface{}, toolNames []string) {
+func (p *Proxy) injectMCPSystemPrompt(gw *gateway.NenyaGateway, payload map[string]interface{}, toolNames []string, settings pipeline.SpotlightSettings) {
 	toolsList := util.JoinBackticks(toolNames)
 
 	prompt := fmt.Sprintf(
@@ -97,9 +98,19 @@ func (p *Proxy) injectMCPSystemPrompt(gw *gateway.NenyaGateway, payload map[stri
 		return
 	}
 
+	preamble := ""
+	if settings.Enabled {
+		// The envelope rule must reach the model whenever envelopes do
+		// (arXiv:2403.14720 efficacy depends on the rule being present).
+		// Tradeoff: mixed setups (Nenya-managed MCP + client-side tool
+		// history) carry the rule twice — the spotlight interceptor adds
+		// its own copy ahead of the first history envelope. Accepted for
+		// placement robustness (see CONFIGURATION.md).
+		preamble = "\n\n" + pipeline.SpotlightPreamble
+	}
 	mcpMsg := map[string]interface{}{
 		"role":    "system",
-		"content": prompt,
+		"content": prompt + preamble,
 	}
 
 	updated := make([]interface{}, 0, util.AddCap(len(messages), 1))
@@ -152,7 +163,15 @@ func (p *Proxy) injectAutoSearch(gw *gateway.NenyaGateway, ctx context.Context, 
 		}
 
 		if result := p.executeAutoSearch(gw, ctx, serverName, toolName, query, agentName); result != nil {
-			p.injectAutoSearchContext(gw, payload, messages, serverName, result, toolName, agentName)
+			p.injectAutoSearchContext(gw, autoSearchContextOpts{
+				payload:    payload,
+				messages:   messages,
+				serverName: serverName,
+				result:     result,
+				toolName:   toolName,
+				agentName:  agentName,
+				settings:   spotlightSettingsFor(&gw.Config, agent),
+			})
 			break
 		}
 	}
@@ -255,25 +274,41 @@ func (p *Proxy) redactSearchResult(gw *gateway.NenyaGateway, resultText string) 
 	return resultText
 }
 
-func (p *Proxy) injectAutoSearchContext(gw *gateway.NenyaGateway, payload map[string]interface{}, messages []interface{}, serverName string, result *autoSearchResult, toolName, agentName string) {
-	contextStr := fmt.Sprintf("[Memory context from %s]\n%s", serverName, result.text)
+// autoSearchContextOpts groups the parameters for injecting auto-search
+// memory context (AGENTS.md §11 parameter grouping).
+type autoSearchContextOpts struct {
+	payload    map[string]interface{}
+	messages   []interface{}
+	serverName string
+	result     *autoSearchResult
+	toolName   string
+	agentName  string
+	settings   pipeline.SpotlightSettings
+}
+
+func (p *Proxy) injectAutoSearchContext(gw *gateway.NenyaGateway, opts autoSearchContextOpts) {
+	contextStr := fmt.Sprintf("[Memory context from %s]\n%s", opts.serverName, opts.result.text)
+	contextStr = opts.settings.ApplyDelimitersOnly(contextStr, pipeline.SpotlightSourceMemory(opts.serverName))
 	memoryMsg := map[string]interface{}{
 		"role":    "system",
 		"content": contextStr,
 	}
 
-	updated := make([]interface{}, 0, util.AddCap(1, len(messages)))
-	updated = append(updated, messages[:len(messages)-1]...)
+	updated := make([]interface{}, 0, util.AddCap(1, len(opts.messages)))
+	updated = append(updated, opts.messages[:len(opts.messages)-1]...)
 	updated = append(updated, memoryMsg)
-	updated = append(updated, messages[len(messages)-1:]...)
-	payload["messages"] = updated
+	updated = append(updated, opts.messages[len(opts.messages)-1:]...)
+	opts.payload["messages"] = updated
 
+	if opts.settings.Enabled {
+		gw.Metrics.RecordSpotlighted("memory:" + opts.serverName)
+	}
 	gw.Logger.Debug("MCP auto-search context injected",
-		"server", serverName, "agent", agentName,
-		"tool", toolName,
-		"duration_ms", result.duration.Milliseconds(),
-		"result_len", len(result.text))
-	gw.Metrics.RecordMCPAutoSearch(serverName, agentName, true, nil)
+		"server", opts.serverName, "agent", opts.agentName,
+		"tool", opts.toolName,
+		"duration_ms", opts.result.duration.Milliseconds(),
+		"result_len", len(opts.result.text))
+	gw.Metrics.RecordMCPAutoSearch(opts.serverName, opts.agentName, true, nil)
 }
 
 func (p *Proxy) forwardToUpstreamWithMCP(gw *gateway.NenyaGateway,
@@ -436,7 +471,7 @@ func (p *Proxy) mcpIteration(in mcpIterInput) int {
 		if buf.reasoningContent != "" {
 			mcpAssistantMsg["reasoning_content"] = buf.reasoningContent
 		}
-		appendMCPResults(working, mcpCalls, results, mcpAssistantMsg)
+		appendMCPResults(working, mcpCalls, results, mcpAssistantMsg, spotlightSettingsFor(&in.gw.Config, in.opts.Agent), in.gw.Metrics)
 
 		updatedPayload, err := json.Marshal(working)
 		if err != nil {

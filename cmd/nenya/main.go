@@ -253,6 +253,10 @@ func buildInterceptorChain(gw *gateway.NenyaGateway, cfg *config.Config, logger 
 	}
 	chain.Register(injection)
 
+	if spotlight := pipeline.NewSpotlightInterceptor(cfg.Governance.Spotlight, cfg.Agents, gw.Metrics); spotlight.RegistrationRequired() {
+		chain.Register(spotlight)
+	}
+
 	if cfg.Context.TFIDFQuerySource != "" {
 		chain.Register(pipeline.NewTFIDFInterceptor(cfg.Context.TFIDFQuerySource, cfg.Context, logger))
 	}

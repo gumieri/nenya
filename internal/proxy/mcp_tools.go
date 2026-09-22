@@ -13,8 +13,11 @@ import (
 	"sync"
 	"time"
 
+	"github.com/nenya/internal/infra"
+
 	"github.com/nenya/internal/gateway"
 	"github.com/nenya/internal/mcp"
+	"github.com/nenya/internal/pipeline"
 	"github.com/nenya/internal/stream"
 	"github.com/nenya/internal/util"
 )
@@ -477,7 +480,7 @@ func executeMCPCalls(ctx context.Context, calls []mcpToolCall, gw *gateway.Nenya
 
 // appendMCPResults appends MCP tool results to the request payload's messages array.
 // The results are formatted as OpenAI tool messages with the corresponding tool call IDs.
-func appendMCPResults(payload map[string]any, calls []mcpToolCall, results []*mcp.CallToolResult, assistantMsg map[string]any) {
+func appendMCPResults(payload map[string]any, calls []mcpToolCall, results []*mcp.CallToolResult, assistantMsg map[string]any, settings pipeline.SpotlightSettings, metrics *infra.Metrics) {
 	if len(calls) == 0 || len(results) == 0 {
 		return
 	}
@@ -501,6 +504,14 @@ func appendMCPResults(payload map[string]any, calls []mcpToolCall, results []*mc
 		content := result.Text()
 		if result.IsError {
 			content = "[MCP Error] " + content
+		}
+		server, tool := "unknown", call.Name
+		if s, t, ok := mcp.ParseMCPCall(call.Name); ok {
+			server, tool = s, t
+		}
+		content = settings.Apply(content, pipeline.SpotlightSourceTool(server, tool))
+		if settings.Enabled {
+			metrics.RecordSpotlighted("mcp:" + server)
 		}
 
 		toolResults = append(toolResults, map[string]any{

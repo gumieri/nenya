@@ -106,6 +106,45 @@ type AgentConfig struct {
 	// this agent (enabled/strict are the per-agent surface; extra and
 	// ignore patterns are global-only).
 	Injection *InjectionConfig `json:"injection,omitempty"`
+	// Spotlight overrides the global governance.spotlight
+	// enabled/history_enabled flags for this agent (mode and byte cap are
+	// global-only).
+	Spotlight *SpotlightConfig `json:"spotlight,omitempty"`
+}
+
+// Spotlight mode values (shared with internal/pipeline, which imports
+// this package — the canonical constants live here to avoid a cycle).
+const (
+	// SpotlightModeDelimiters wraps content in explicit provenance tags
+	// (default; preserves content byte-for-byte).
+	SpotlightModeDelimiters = "delimiters"
+	// SpotlightModeDatamarking applies a character-interleaving transform
+	// that breaks instruction tokenization (Nenya-managed MCP results
+	// only; never applied to history).
+	SpotlightModeDatamarking = "datamarking"
+)
+
+// DefaultMaxToolResultBytes is the default cap for Nenya-managed MCP
+// tool results before enveloping (512KiB).
+const DefaultMaxToolResultBytes = 512 * 1024
+
+// SpotlightConfig configures untrusted-content spotlighting (Microsoft
+// datamarking/delimiting, arXiv:2403.14720). Enabled surfaces envelope
+// Nenya-managed MCP results, memory context, and tool descriptions;
+// history_enabled additionally envelopes incoming role:"tool" messages
+// (the primary surface for client-side MCP setups).
+type SpotlightConfig struct {
+	Enabled *bool `json:"enabled,omitempty"`
+	// Mode selects the envelope style: "delimiters" (default) or
+	// "datamarking" (character-interleaving; Nenya-managed MCP results
+	// only, never applied to history).
+	Mode string `json:"mode,omitempty"`
+	// HistoryEnabled envelopes incoming role:"tool" messages in request
+	// history. Defaults to the Enabled value when unset.
+	HistoryEnabled *bool `json:"history_enabled,omitempty"`
+	// MaxToolResultBytes caps Nenya-managed MCP tool results before
+	// enveloping (0 applies DefaultMaxToolResultBytes).
+	MaxToolResultBytes int `json:"max_tool_result_bytes,omitempty"`
 }
 
 // InjectionConfig configures the deterministic prompt-injection detector.
@@ -516,7 +555,11 @@ type GovernanceConfig struct {
 	BlockedExecutionPatterns []string `json:"blocked_execution_patterns"`
 	// Injection configures the deterministic prompt-injection detector
 	// (default disabled). Per-agent overrides live on agents.<name>.injection.
-	Injection       *InjectionConfig `json:"injection,omitempty"`
+	Injection *InjectionConfig `json:"injection,omitempty"`
+	// Spotlight configures untrusted-content spotlighting envelopes
+	// (default disabled). Per-agent overrides live on
+	// agents.<name>.spotlight.
+	Spotlight       *SpotlightConfig `json:"spotlight,omitempty"`
 	RatelimitMaxRPM *int             `json:"ratelimit_max_rpm,omitempty"`
 	RatelimitMaxTPM *int             `json:"ratelimit_max_tpm,omitempty"`
 	// MaxConcurrentRequests is the global fallback cap on in-flight requests

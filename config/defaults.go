@@ -60,6 +60,7 @@ func ApplyDefaults(cfg *Config) error {
 	applyGovernanceDefaults(cfg)
 	applyBouncerDefaults(cfg)
 	applyInjectionDefaults(cfg)
+	applySpotlightDefaults(cfg)
 	applyEngineRefDefaults(&cfg.Bouncer.Engine)
 	applyEngineRefDefaults(&cfg.Window.Engine)
 	if err := applyPrefixCacheDefaults(cfg); err != nil {
@@ -289,6 +290,27 @@ func applyInjectionDefaults(cfg *Config) {
 	}
 	if cfg.Governance.Injection.Strict == nil {
 		cfg.Governance.Injection.Strict = PtrTo(false)
+	}
+}
+
+// applySpotlightDefaults sets spotlight tristate defaults: disabled,
+// delimiters mode, history following the enabled flag, 512KiB tool-result
+// cap. Per-agent blocks inherit unset fields at request time.
+func applySpotlightDefaults(cfg *Config) {
+	if cfg.Governance.Spotlight == nil {
+		return
+	}
+	if cfg.Governance.Spotlight.Enabled == nil {
+		cfg.Governance.Spotlight.Enabled = PtrTo(false)
+	}
+	if cfg.Governance.Spotlight.Mode == "" {
+		cfg.Governance.Spotlight.Mode = SpotlightModeDelimiters
+	}
+	if cfg.Governance.Spotlight.HistoryEnabled == nil {
+		cfg.Governance.Spotlight.HistoryEnabled = PtrTo(*cfg.Governance.Spotlight.Enabled)
+	}
+	if cfg.Governance.Spotlight.MaxToolResultBytes == 0 {
+		cfg.Governance.Spotlight.MaxToolResultBytes = DefaultMaxToolResultBytes
 	}
 }
 

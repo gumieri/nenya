@@ -151,7 +151,7 @@ MCP integration follows the same best-effort philosophy as the rest of Nenya:
 - MCP servers run on the local network. Ensure they are trusted before connecting.
 - The `headers` field allows passing authentication to MCP proxies that require it.
 - Tool call arguments are passed through to MCP servers as-is. Nenya does not sanitize MCP tool call arguments.
-- MCP server responses (tool results) are injected directly into the LLM conversation as tool messages. The LLM sees them unmodified.
+- MCP server responses (tool results) are injected into the LLM conversation as tool messages. When `governance.spotlight.enabled` is set, results are enveloped in `<untrusted-content>` provenance tags and size-capped (`max_tool_result_bytes`, default 512KiB), and tool descriptions are marked untrusted — see [CONFIGURATION.md](CONFIGURATION.md#governance). Without spotlighting, results are injected unmodified.
 - Timeout values prevent hanging connections to slow MCP servers.
 
 ## MCP Server Examples

@@ -104,6 +104,7 @@ func collectValidationErrors(ctx context.Context, cfg *Config, providers map[str
 	errors = append(errors, validatePatternsToList("bouncer.patterns", cfg.Bouncer.RedactPatterns, logger)...)
 	errors = append(errors, validatePatternsToList("governance.blocked_execution_patterns", cfg.Governance.BlockedExecutionPatterns, logger)...)
 	errors = append(errors, validateInjectionConfig(cfg, logger)...)
+	errors = append(errors, validateSpotlightConfig(cfg)...)
 	errors = append(errors, validateModelRegistryErrors(logger)...)
 	errors = append(errors, validateEntropyConfig(cfg.Bouncer)...)
 	errors = append(errors, validateProviderRateLimits(cfg)...)
@@ -120,6 +121,42 @@ func collectValidationErrors(ctx context.Context, cfg *Config, providers map[str
 	}
 
 	return errors
+}
+
+// validateSpotlightConfig checks the spotlight mode value and rejects
+// per-agent mode/byte-cap fields (only enabled/history-enabled are
+// configurable per agent; history-enabled is validated by ApplyDefaults
+// semantics — unset inherits the global enabled flag). The global
+// enabled=false + history_enabled=true combination is intentionally legal
+// (proxy surfaces off, history on); the per-agent combo is rejected
+// because resolveSettings force-disables history on an explicit per-agent
+// disable, making that combination unreachable.
+func validateSpotlightConfig(cfg *Config) []string {
+	var errs []string
+	if cfg.Governance.Spotlight != nil {
+		mode := cfg.Governance.Spotlight.Mode
+		if mode != SpotlightModeDelimiters && mode != SpotlightModeDatamarking {
+			errs = append(errs, fmt.Sprintf("governance.spotlight.mode %q is not one of: %s, %s", mode, SpotlightModeDelimiters, SpotlightModeDatamarking))
+		}
+		if cfg.Governance.Spotlight.MaxToolResultBytes < 0 {
+			errs = append(errs, "governance.spotlight.max_tool_result_bytes must be >= 0")
+		}
+	}
+	for name, agent := range cfg.Agents {
+		if agent.Spotlight == nil {
+			continue
+		}
+		if agent.Spotlight.Mode != "" {
+			errs = append(errs, fmt.Sprintf("agents.%s.spotlight.mode is global-only; configure governance.spotlight.mode", name))
+		}
+		if agent.Spotlight.MaxToolResultBytes != 0 {
+			errs = append(errs, fmt.Sprintf("agents.%s.spotlight.max_tool_result_bytes is global-only; configure governance.spotlight.max_tool_result_bytes", name))
+		}
+		if agent.Spotlight.Enabled != nil && !*agent.Spotlight.Enabled && agent.Spotlight.HistoryEnabled != nil && *agent.Spotlight.HistoryEnabled {
+			errs = append(errs, fmt.Sprintf("agents.%s.spotlight has contradictory enabled=false with history_enabled=true", name))
+		}
+	}
+	return errs
 }
 
 // validateInjectionConfig compiles the injection detector's extra/ignore

@@ -30,10 +30,13 @@ type Metrics struct {
 	// injectionDetections counts deterministic prompt-injection detections
 	// by action (sanitize|reject) and pattern category.
 	injectionDetections sync.Map
-	panics              atomic.Uint64
-	windowApplied       sync.Map
-	interceptions       sync.Map
-	tokensSaved         sync.Map
+	// spotlighted counts untrusted-content envelopes applied by source
+	// (tool-history, mcp:<server>, tool-description).
+	spotlighted   sync.Map
+	panics        atomic.Uint64
+	windowApplied sync.Map
+	interceptions sync.Map
+	tokensSaved   sync.Map
 
 	rlRejected         sync.Map
 	cooldowns          sync.Map
@@ -296,6 +299,29 @@ func (m *Metrics) RecordInjectionDetection(action, category string, n int) {
 	}
 	e := getOrCreateEntry(&m.injectionDetections, map[string]string{"action": action, "category": category})
 	e.value.Add(uint64(n))
+}
+
+// writeHandlerPanics emits the recovered-panics counter.
+func (m *Metrics) writeHandlerPanics(w io.Writer) {
+	m.writeCounterAtomic(w, "nenya_panics_total",
+		"Total recovered panics in the request handler.", m.panics.Load())
+}
+
+// writeSpotlighted emits the spotlighted counter family.
+func (m *Metrics) writeSpotlighted(w io.Writer) {
+	m.writeCounterMap(w, "nenya_spotlighted_total",
+		"Untrusted-content markings applied by source.", &m.spotlighted)
+}
+
+// RecordSpotlighted records an untrusted-content marking applied for the
+// given source label (tool-history, mcp:<server>, tool-description,
+// memory:<server>). Nil-safe.
+func (m *Metrics) RecordSpotlighted(source string) {
+	if m == nil || source == "" {
+		return
+	}
+	e := getOrCreateEntry(&m.spotlighted, map[string]string{"source": source})
+	e.value.Add(1)
 }
 
 // RecordRedaction records n secret substitutions applied by the Tier-0
@@ -1166,12 +1192,12 @@ func (m *Metrics) WritePrometheus(w io.Writer) {
 	m.writeCounterMap(w, "nenya_http_requests_total",
 		"Total HTTP requests by method, path, and status.", &m.httpTotal)
 
-	m.writeCounterAtomic(w, "nenya_panics_total",
-		"Total recovered panics in the request handler.", m.panics.Load())
+	m.writeHandlerPanics(w)
 	m.writeCounterAtomic(w, "nenya_pipeline_redactions_total",
 		"Total secret redactions applied by the Tier-0 filter.", m.redactions.Load())
 	m.writeCounterMap(w, "nenya_injection_detections_total",
 		"Deterministic prompt-injection detections by action and pattern category.", &m.injectionDetections)
+	m.writeSpotlighted(w)
 	m.writeCounterAtomic(w, "nenya_pipeline_compaction_applied_total",
 		"Total text compaction passes applied.", m.compactions.Load())
 	m.writeCounterMap(w, "nenya_pipeline_window_applied_total",
