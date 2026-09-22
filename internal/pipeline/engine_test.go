@@ -162,8 +162,11 @@ func TestCallEngineChain_UsesClientResolver(t *testing.T) {
 	}
 }
 
-func TestCallEngineChain_NilResolverUsesDefaultClient(t *testing.T) {
+func TestCallEngineChain_NilResolverRefusesDefaultClient(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// The engine must never be reached without an explicit client
+		// resolver (AGENTS.md §4 forbids http.DefaultClient).
+		t.Errorf("upstream reached with nil client resolver")
 		w.Header().Set("Content-Type", "application/json")
 		if err := json.NewEncoder(w).Encode(map[string]interface{}{
 			"choices": []interface{}{
@@ -187,11 +190,8 @@ func TestCallEngineChain_NilResolverUsesDefaultClient(t *testing.T) {
 	}
 
 	result, err := CallEngineChain(context.Background(), nil, targets, slog.Default(), noopInject, "caller", "agent", "sys", "prompt")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if result != "default-client-summary" {
-		t.Errorf("result = %q, want %q", result, "default-client-summary")
+	if err == nil {
+		t.Fatalf("expected error for nil client resolver, got result %q", result)
 	}
 }
 

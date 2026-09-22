@@ -2,6 +2,7 @@ package pipeline
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"sort"
@@ -90,10 +91,11 @@ func NewInterceptorChainWithMetrics(logger *slog.Logger, metrics *infra.Metrics)
 	}
 }
 
-// Register adds an interceptor and re-sorts by priority.
+// Register adds an interceptor and re-sorts by priority (stable: equal
+// priorities keep registration order).
 func (c *InterceptorChain) Register(interceptor Interceptor) {
 	c.interceptors = append(c.interceptors, interceptor)
-	sort.Slice(c.interceptors, func(i, j int) bool {
+	sort.SliceStable(c.interceptors, func(i, j int) bool {
 		return c.interceptors[i].Priority() < c.interceptors[j].Priority()
 	})
 }
@@ -104,10 +106,29 @@ func (c *InterceptorChain) SetStrictMode(strict bool) {
 	c.strict = strict
 }
 
+// RejectError wraps a pipeline policy rejection that must abort the request
+// with a structured client error regardless of chain strict mode. Security
+// interceptors return it for enforcement decisions (e.g. strict injection
+// mode); operational failures use plain errors and follow strict-mode
+// fallback semantics. Kind and Message carry the structured error surface.
+type RejectError struct {
+	Err     error
+	Kind    infra.ErrorKind
+	Message string
+}
+
+func (e *RejectError) Error() string { return e.Err.Error() }
+
+func (e *RejectError) Unwrap() error { return e.Err }
+
 // Execute runs all interceptors in priority order. Each successful interceptor
 // mutates the request's Payload map in-place. On failure, behavior depends on
 // strict mode: fallback to next interceptor (default) or return error (strict).
-// Execute always checks ctx cancellation at each interceptor boundary.
+// A *RejectError always aborts the request — policy rejections are decisions,
+// not operational failures. Execute always checks ctx cancellation at each
+// interceptor boundary. The returned InterceptResult is a final-state
+// snapshot only: per-interceptor Truncated/Reason/TokenCount are not
+// aggregated — consumers must rely on req.Payload mutation and req.TokenCount.
 func (c *InterceptorChain) Execute(ctx context.Context, req *InterceptRequest) (*InterceptResult, error) {
 	for _, interceptor := range c.interceptors {
 		if ctx.Err() != nil {
@@ -128,6 +149,12 @@ func (c *InterceptorChain) Execute(ctx context.Context, req *InterceptRequest) (
 		}
 
 		if err != nil {
+			var reject *RejectError
+			if errors.As(err, &reject) {
+				// Policy rejections are enforcement decisions, not
+				// operational failures: abort without the error metric.
+				return nil, err
+			}
 			if c.metrics != nil {
 				c.metrics.RecordInterceptorError(interceptor.Name())
 			}
@@ -143,6 +170,12 @@ func (c *InterceptorChain) Execute(ctx context.Context, req *InterceptRequest) (
 			continue
 		}
 
+		if result.TokenCount > 0 {
+			// Keep req.TokenCount current so downstream CanHandle checks
+			// (e.g. bouncer soft-limit gating) act on post-prune sizes.
+			req.TokenCount = result.TokenCount
+		}
+
 		if c.metrics != nil {
 			c.metrics.RecordInterceptorApplied(interceptor.Name())
 		}
@@ -156,9 +189,12 @@ func (c *InterceptorChain) Execute(ctx context.Context, req *InterceptRequest) (
 
 		if result.Payload != nil {
 			req.Payload = result.Payload
-			if msgs, ok := result.Payload["messages"].([]map[string]any); ok {
-				req.Messages = msgs
-			}
+			// NOTE: req.Messages is constructed once by the caller.
+			// Interceptors mutate message maps in place; the single
+			// exception is BouncerInterceptor, whose TrimPayload call may
+			// replace payload["messages"] with a new slice — bouncer is
+			// therefore the last-registered interceptor and must re-read
+			// the authoritative message from req.Payload afterwards.
 		}
 	}
 

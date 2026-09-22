@@ -12,10 +12,10 @@ import (
 // (image_url, input_audio, and other modalities) are left untouched;
 // scope is OpenAI wire format — /v1/messages Anthropic requests are
 // transformed before the chain runs, so nested tool_result blocks are
-// covered transitively. An arguments replacement is applied only when
-// the result is still valid JSON (a pattern match spanning string
-// boundaries would otherwise emit malformed JSON upstream and is
-// reverted). Returns true if any surface was modified.
+// covered transitively. An arguments replacement that breaks JSON
+// validity is neutralized wholesale (the arguments object becomes a
+// NENYA marker object) so the original text never survives. Returns
+// true if any surface was modified.
 func WalkMessageText(msg map[string]interface{}, fn func(string) string) bool {
 	changed := walkMessageContent(msg, fn)
 	if walkToolCallArguments(msg, fn) {
@@ -26,9 +26,9 @@ func WalkMessageText(msg map[string]interface{}, fn func(string) string) bool {
 
 // newCountingRedactor wraps fn with label-delta counting, accumulating
 // substitution counts into count. The delta can skew when a match engulfs
-// pre-existing label occurrences or when a tool-call argument replacement
-// is later reverted by the JSON validity check; both residual skews are
-// accepted to keep counting allocation-free.
+// pre-existing label occurrences, and (for tool-call argument surfaces)
+// when the wholesale-neutralization marker replaces fn's output — both
+// residual skews are accepted to keep counting allocation-free.
 func newCountingRedactor(fn func(string) string, label string, count *int) func(string) string {
 	return func(content string) string {
 		redacted := fn(content)
@@ -95,10 +95,18 @@ func walkToolCallArguments(msg map[string]interface{}, fn func(string) string) b
 			continue
 		}
 		r := fn(args)
-		// A pattern match spanning JSON string boundaries would emit
-		// malformed arguments upstream; keep the original instead.
-		if r == args || !json.Valid([]byte(r)) {
+		if r == args {
 			continue
+		}
+		if !json.Valid([]byte(r)) {
+			// A span replacement broke JSON validity: neutralize the
+			// arguments wholesale with an action-neutral marker object
+			// (fires for any interceptor whose rewrite breaks JSON) so
+			// the original text never survives upstream.
+			r = `{"nenya":"content_neutralized"}`
+			if r == args {
+				continue
+			}
 		}
 		function["arguments"] = r
 		changed = true

@@ -25,12 +25,15 @@ type Metrics struct {
 	httpTotal sync.Map
 	httpDur   sync.Map
 
-	redactions    atomic.Uint64
-	compactions   atomic.Uint64
-	panics        atomic.Uint64
-	windowApplied sync.Map
-	interceptions sync.Map
-	tokensSaved   sync.Map
+	redactions  atomic.Uint64
+	compactions atomic.Uint64
+	// injectionDetections counts deterministic prompt-injection detections
+	// by action (sanitize|reject) and pattern category.
+	injectionDetections sync.Map
+	panics              atomic.Uint64
+	windowApplied       sync.Map
+	interceptions       sync.Map
+	tokensSaved         sync.Map
 
 	rlRejected         sync.Map
 	cooldowns          sync.Map
@@ -282,6 +285,17 @@ func (m *Metrics) RecordHTTPRequest(method, path string, status int, duration ti
 
 	h := getOrCreateHist(&m.httpDur, map[string]string{"method": method, "path": path}, HTTPDurationBuckets)
 	h.Observe(duration.Seconds())
+}
+
+// RecordInjectionDetection records n deterministic prompt-injection
+// detections for the given action (sanitize|reject) and pattern category.
+// Nil-safe; non-positive n is ignored.
+func (m *Metrics) RecordInjectionDetection(action, category string, n int) {
+	if m == nil || n <= 0 {
+		return
+	}
+	e := getOrCreateEntry(&m.injectionDetections, map[string]string{"action": action, "category": category})
+	e.value.Add(uint64(n))
 }
 
 // RecordRedaction records n secret substitutions applied by the Tier-0
@@ -1156,6 +1170,8 @@ func (m *Metrics) WritePrometheus(w io.Writer) {
 		"Total recovered panics in the request handler.", m.panics.Load())
 	m.writeCounterAtomic(w, "nenya_pipeline_redactions_total",
 		"Total secret redactions applied by the Tier-0 filter.", m.redactions.Load())
+	m.writeCounterMap(w, "nenya_injection_detections_total",
+		"Deterministic prompt-injection detections by action and pattern category.", &m.injectionDetections)
 	m.writeCounterAtomic(w, "nenya_pipeline_compaction_applied_total",
 		"Total text compaction passes applied.", m.compactions.Load())
 	m.writeCounterMap(w, "nenya_pipeline_window_applied_total",

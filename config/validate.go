@@ -103,6 +103,7 @@ func collectValidationErrors(ctx context.Context, cfg *Config, providers map[str
 	errors = append(errors, validateTFIDFQuerySource(cfg.Context.TFIDFQuerySource)...)
 	errors = append(errors, validatePatternsToList("bouncer.patterns", cfg.Bouncer.RedactPatterns, logger)...)
 	errors = append(errors, validatePatternsToList("governance.blocked_execution_patterns", cfg.Governance.BlockedExecutionPatterns, logger)...)
+	errors = append(errors, validateInjectionConfig(cfg, logger)...)
 	errors = append(errors, validateModelRegistryErrors(logger)...)
 	errors = append(errors, validateEntropyConfig(cfg.Bouncer)...)
 	errors = append(errors, validateProviderRateLimits(cfg)...)
@@ -119,6 +120,30 @@ func collectValidationErrors(ctx context.Context, cfg *Config, providers map[str
 	}
 
 	return errors
+}
+
+// validateInjectionConfig compiles the injection detector's extra/ignore
+// patterns (global) so malformed regexes fail at startup rather than at
+// first request, and rejects per-agent pattern fields (only enabled/strict
+// are configurable per agent).
+func validateInjectionConfig(cfg *Config, logger *slog.Logger) []string {
+	var errs []string
+	if cfg.Governance.Injection != nil {
+		errs = append(errs, validatePatternsToList("governance.injection.extra_patterns", cfg.Governance.Injection.ExtraPatterns, logger)...)
+		errs = append(errs, validatePatternsToList("governance.injection.ignore_patterns", cfg.Governance.Injection.IgnorePatterns, logger)...)
+	}
+	for name, agent := range cfg.Agents {
+		if agent.Injection == nil {
+			continue
+		}
+		if len(agent.Injection.ExtraPatterns) > 0 {
+			errs = append(errs, fmt.Sprintf("agents.%s.injection.extra_patterns is global-only; configure governance.injection.extra_patterns", name))
+		}
+		if len(agent.Injection.IgnorePatterns) > 0 {
+			errs = append(errs, fmt.Sprintf("agents.%s.injection.ignore_patterns is global-only; configure governance.injection.ignore_patterns", name))
+		}
+	}
+	return errs
 }
 
 func validateTFIDFQuerySource(source string) []string {

@@ -16,22 +16,29 @@ type TFIDFInterceptor struct {
 	name        string
 	priority    int
 	querySource string
+	contextCfg  config.ContextConfig
 	logger      *slog.Logger
 }
 
-// NewTFIDFInterceptor creates a new TFIDFInterceptor.
-func NewTFIDFInterceptor(querySource string, logger *slog.Logger) *TFIDFInterceptor {
+// NewTFIDFInterceptor creates a new TFIDFInterceptor. contextCfg carries
+// the operator's truncation keep percentages so TF-IDF fallback truncation
+// honors them instead of collapsing to the separator alone.
+func NewTFIDFInterceptor(querySource string, contextCfg config.ContextConfig, logger *slog.Logger) *TFIDFInterceptor {
 	return &TFIDFInterceptor{
 		name:        "tfidf",
 		priority:    30,
 		querySource: querySource,
+		contextCfg:  contextCfg,
 		logger:      logger,
 	}
 }
 
 func (t *TFIDFInterceptor) Name() string  { return t.name }
 func (t *TFIDFInterceptor) Priority() int { return t.priority }
-func (t *TFIDFInterceptor) CanHandle(_ context.Context, req *InterceptRequest) bool {
+func (t *TFIDFInterceptor) CanHandle(ctx context.Context, req *InterceptRequest) bool {
+	if ctx.Err() != nil {
+		return false
+	}
 	return t.querySource != "" && len(req.Messages) > 1 && req.SoftLimit > 0 && req.TokenCount > req.SoftLimit
 }
 
@@ -95,9 +102,9 @@ func (t *TFIDFInterceptor) Process(ctx context.Context, req *InterceptRequest) (
 
 	var truncated string
 	if req.Profile.IsIDE {
-		truncated = TruncateTFIDFCodeAware(text, hardLimitRunes, query, config.ContextConfig{})
+		truncated = TruncateTFIDFCodeAware(text, hardLimitRunes, query, t.contextCfg)
 	} else {
-		truncated = TruncateTFIDF(text, hardLimitRunes, query, config.ContextConfig{})
+		truncated = TruncateTFIDF(text, hardLimitRunes, query, t.contextCfg)
 	}
 	if truncated == text {
 		// Nothing pruned (last message already within the rune budget):
@@ -106,11 +113,12 @@ func (t *TFIDFInterceptor) Process(ctx context.Context, req *InterceptRequest) (
 	}
 
 	lastMsg["content"] = truncated
-	req.Payload["messages"] = req.Messages
+	// In-place mutation; payload["messages"] keeps its original
+	// []interface{} type for downstream consumers.
 
 	// Estimate the post-prune token count with the same ~3 runes-per-token
-	// heuristic used for the rune budget, so the result reports the new size
-	// instead of 0 (NENYA-70 observability).
+	// heuristic used for the rune budget (NENYA-70 observability; consumed
+	// via the chain's debug logging).
 	origRunes := utf8.RuneCountInString(text)
 	truncRunes := utf8.RuneCountInString(truncated)
 	newCount := req.TokenCount - (origRunes-truncRunes)/3

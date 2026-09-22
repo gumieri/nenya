@@ -59,6 +59,7 @@ func ApplyDefaults(cfg *Config) error {
 	applyContextDefaults(cfg)
 	applyGovernanceDefaults(cfg)
 	applyBouncerDefaults(cfg)
+	applyInjectionDefaults(cfg)
 	applyEngineRefDefaults(&cfg.Bouncer.Engine)
 	applyEngineRefDefaults(&cfg.Window.Engine)
 	if err := applyPrefixCacheDefaults(cfg); err != nil {
@@ -272,6 +273,22 @@ func applyBouncerDefaults(cfg *Config) {
 	}
 	if cfg.Bouncer.EntropyMinToken == 0 {
 		cfg.Bouncer.EntropyMinToken = 20
+	}
+}
+
+// applyInjectionDefaults sets the injection detector's tristate defaults:
+// disabled and warn+sanitize unless explicitly enabled. Per-agent blocks
+// inherit unset fields from the global config at request time, so they
+// need no defaults here.
+func applyInjectionDefaults(cfg *Config) {
+	if cfg.Governance.Injection == nil {
+		return
+	}
+	if cfg.Governance.Injection.Enabled == nil {
+		cfg.Governance.Injection.Enabled = PtrTo(false)
+	}
+	if cfg.Governance.Injection.Strict == nil {
+		cfg.Governance.Injection.Strict = PtrTo(false)
 	}
 }
 

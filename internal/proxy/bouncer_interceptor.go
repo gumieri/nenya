@@ -5,6 +5,7 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"strings"
 
 	"github.com/nenya/config"
 	"github.com/nenya/internal/gateway"
@@ -62,30 +63,30 @@ func (b *BouncerInterceptor) Process(ctx context.Context, req *pipeline.Intercep
 		actualHardLimit = req.HardLimit
 	}
 
-	contentTokens := b.gw.CountTokens(text)
-	if contentTokens > actualHardLimit {
-		b.logger.Warn("payload exceeds hard limit, trimming before engine",
-			"tokens", contentTokens, "hard_limit", actualHardLimit)
-		modified, saved := pipeline.TrimPayload(b.logger, req.Payload, actualHardLimit, b.gw.CountTokens, b.gw.Config.Context)
-		if modified {
-			b.gw.Metrics.RecordTokensSaved("trim", saved)
-			lastMsg = req.Messages[len(req.Messages)-1]
-			if rawText, ok2 := lastMsg["content"].(string); ok2 {
-				text = rawText
-			}
-		}
+	lastMsg, text, skip := b.trimBeforeEngine(req, lastMsg, text, actualHardLimit)
+	if skip {
+		return &pipeline.InterceptResult{Payload: req.Payload, Skip: true}, nil
 	}
 
 	b.gw.Metrics.RecordInterception("engine")
 	summarized, err := b.summarize(ctx, text, req.Profile.IsIDE)
-	if err != nil {
-		b.logger.Warn("engine summarization failed, proceeding with original", "err", err)
-		return &pipeline.InterceptResult{Payload: req.Payload, Skip: true}, nil
+	if err != nil || strings.TrimSpace(summarized) == "" {
+		// Empty engine output would destroy the message content for just
+		// the header — treat it as a summarize failure. The payload keeps
+		// any trim that already happened (Truncated reports it).
+		b.logger.Warn("engine summarization failed", "err", err, "reason", "empty_engine_output")
+		return &pipeline.InterceptResult{
+			Payload:   req.Payload,
+			Truncated: true,
+			Reason:    "trim",
+			Skip:      true,
+		}, nil
 	}
 
 	sanitized := "[Nenya Sanitized via Ollama]:\n" + summarized
 	lastMsg["content"] = sanitized
-	req.Payload["messages"] = req.Messages
+	// In-place mutation; payload["messages"] keeps its original
+	// []interface{} type for downstream consumers.
 	b.gw.Metrics.RecordTokensSaved("bouncer", b.gw.CountTokens(text)-b.gw.CountTokens(sanitized))
 
 	return &pipeline.InterceptResult{
@@ -93,6 +94,57 @@ func (b *BouncerInterceptor) Process(ctx context.Context, req *pipeline.Intercep
 		Truncated: true,
 		Reason:    "engine",
 	}, nil
+}
+
+// trimBeforeEngine trims the payload to the hard limit when the last
+// message exceeds it, re-reading the authoritative last message afterwards
+// (TrimPayload may replace the message map inside the payload slice, while
+// req.Messages holds stale pointers to the pre-trim maps). Returns the
+// possibly-updated last message, its text, and skip=true when the trimmed
+// payload's last message has no string content to summarize.
+func (b *BouncerInterceptor) trimBeforeEngine(req *pipeline.InterceptRequest, lastMsg map[string]any, text string, actualHardLimit int) (map[string]any, string, bool) {
+	contentTokens := b.gw.CountTokens(text)
+	if contentTokens <= actualHardLimit {
+		return lastMsg, text, false
+	}
+	modified, saved := pipeline.TrimPayload(b.logger, req.Payload, actualHardLimit, b.gw.CountTokens, b.gw.Config.Context)
+	if !modified {
+		return lastMsg, text, false
+	}
+	b.gw.Metrics.RecordTokensSaved("trim", saved)
+	m, text, ok := resolvePostTrimMessage(req.Payload)
+	if !ok {
+		return nil, "", true
+	}
+	return m, text, false
+}
+
+// resolvePostTrimMessage reads the authoritative last message from the
+// payload after TrimPayload may have replaced the messages slice. It fails
+// (ok=false) when the new last message has no string content to summarize
+// — e.g. assistant "content": null after an oversized tool exchange was
+// dropped whole.
+func resolvePostTrimMessage(payload map[string]any) (map[string]any, string, bool) {
+	msgs, ok := payload["messages"].([]interface{})
+	if !ok || len(msgs) == 0 {
+		return nil, "", false
+	}
+	m, ok := msgs[len(msgs)-1].(map[string]any)
+	if !ok {
+		return nil, "", false
+	}
+	// Guard: a trailing trim unit can leave a system-role message last
+	// (TrimPayload drops all non-system messages when the newest unit
+	// alone exceeds the budget). Overwriting the system prompt with an
+	// engine summary would corrupt the payload.
+	if role, _ := m["role"].(string); role == "system" {
+		return nil, "", false
+	}
+	rawText, ok := m["content"].(string)
+	if !ok || rawText == "" {
+		return nil, "", false
+	}
+	return m, rawText, true
 }
 
 func (b *BouncerInterceptor) summarize(ctx context.Context, heavyText string, isIDE bool) (string, error) {

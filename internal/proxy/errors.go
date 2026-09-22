@@ -10,6 +10,7 @@ import (
 
 	"github.com/nenya/internal/gateway"
 	"github.com/nenya/internal/infra"
+	"github.com/nenya/internal/pipeline"
 )
 
 // containsAny checks if the string contains any of the substrings.
@@ -172,7 +173,25 @@ func classifyServerError(body []byte) infra.ErrorKind {
 	return infra.ErrorKindProviderError
 }
 
-// writeStructuredError writes a structured error response to the HTTP writer.
+// writePipelineRejection writes the structured 403 for pipeline policy
+// rejections (RejectError) and reports whether err was one. Operational
+// pipeline errors return false so callers keep their fail-open path.
+// Status stays 403 for every rejection: producers must set Kind to a
+// request-scoped kind (empty Kind is passed through as-is).
+func writePipelineRejection(gw *gateway.NenyaGateway, w http.ResponseWriter, err error) bool {
+	var reject *pipeline.RejectError
+	if !errors.As(err, &reject) {
+		return false
+	}
+	gw.Logger.Warn("request rejected by pipeline policy", "err", err)
+	message := reject.Message
+	if message == "" {
+		message = "request rejected by pipeline policy"
+	}
+	writeStructuredError(w, http.StatusForbidden, reject.Kind, message)
+	return true
+}
+
 func writeStructuredError(w http.ResponseWriter, statusCode int, kind infra.ErrorKind, msg string) {
 	if w == nil {
 		return

@@ -502,7 +502,10 @@ func TestBuildInterceptorChain_BouncerGatedOnEnabled(t *testing.T) {
 				cfg.Bouncer.Engine.ResolvedTargets = append(cfg.Bouncer.Engine.ResolvedTargets, config.EngineTarget{})
 			}
 
-			chain := buildInterceptorChain(newGW(cfg), cfg, logger)
+			chain, err := buildInterceptorChain(newGW(cfg), cfg, logger)
+			if err != nil {
+				t.Fatalf("buildInterceptorChain: %v", err)
+			}
 
 			got := false
 			for _, interceptor := range chain.List() {

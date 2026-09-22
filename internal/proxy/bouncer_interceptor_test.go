@@ -52,7 +52,7 @@ func TestBouncerInterceptorCanHandle(t *testing.T) {
 			wantCanHandle: false,
 		},
 		{
-			name:          "does not handle when tokens equal soft_limit",
+			name:          "handles when tokens equal soft_limit",
 			tokenCount:    4000,
 			softLimit:     4000,
 			ctxCanceled:   false,
@@ -105,4 +105,49 @@ func TestBouncerInterceptorCanHandle(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestResolvePostTrimMessage(t *testing.T) {
+	t.Run("string content resolves", func(t *testing.T) {
+		payload := map[string]any{
+			"messages": []interface{}{
+				map[string]any{"role": "user", "content": "trimmed text"},
+			},
+		}
+		m, text, ok := resolvePostTrimMessage(payload)
+		if !ok || text != "trimmed text" || m == nil {
+			t.Fatalf("expected resolution, got ok=%v text=%q", ok, text)
+		}
+	})
+
+	t.Run("null content skips", func(t *testing.T) {
+		payload := map[string]any{
+			"messages": []interface{}{
+				map[string]any{"role": "assistant", "content": nil},
+			},
+		}
+		if _, _, ok := resolvePostTrimMessage(payload); ok {
+			t.Error("expected ok=false for null content")
+		}
+	})
+
+	t.Run("system role skips", func(t *testing.T) {
+		payload := map[string]any{
+			"messages": []interface{}{
+				map[string]any{"role": "system", "content": "the system prompt"},
+			},
+		}
+		if _, _, ok := resolvePostTrimMessage(payload); ok {
+			t.Error("expected ok=false for system-role last message")
+		}
+	})
+
+	t.Run("non-map last message skips", func(t *testing.T) {
+		payload := map[string]any{
+			"messages": []interface{}{"not a map"},
+		}
+		if _, _, ok := resolvePostTrimMessage(payload); ok {
+			t.Error("expected ok=false for non-map message")
+		}
+	})
 }

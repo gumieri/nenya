@@ -56,7 +56,8 @@ func (r *RedactInterceptor) Process(_ context.Context, req *InterceptRequest) (*
 	if !modified {
 		return &InterceptResult{Payload: req.Payload, Skip: true}, nil
 	}
-	req.Payload["messages"] = req.Messages
+	// Mutations are applied in place; payload["messages"] keeps its
+	// original []interface{} type for downstream consumers.
 	return &InterceptResult{
 		Payload:   req.Payload,
 		Truncated: true,

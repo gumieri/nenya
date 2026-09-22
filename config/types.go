@@ -102,6 +102,27 @@ type AgentConfig struct {
 	// fails over to another target (same-target backoff retries and the
 	// summarization retry still run).
 	StickyProvider string `json:"sticky_provider,omitempty"`
+	// Injection overrides the global governance.injection settings for
+	// this agent (enabled/strict are the per-agent surface; extra and
+	// ignore patterns are global-only).
+	Injection *InjectionConfig `json:"injection,omitempty"`
+}
+
+// InjectionConfig configures the deterministic prompt-injection detector.
+// When enabled, message content is scanned for instruction-override
+// phrasing, role forgery, hidden-text carriers, and encoded blobs whose
+// decoding carries imperative intent. Detections are sanitized (matched
+// spans replaced with a neutralization marker) and counted; strict mode
+// rejects the request with 403 error_kind=injection_detected instead.
+type InjectionConfig struct {
+	Enabled *bool `json:"enabled,omitempty"`
+	Strict  *bool `json:"strict,omitempty"`
+	// ExtraPatterns are additional regexes evaluated alongside the
+	// built-in detector set (category "custom").
+	ExtraPatterns []string `json:"extra_patterns,omitempty"`
+	// IgnorePatterns suppress detections on matching surfaces (allowlist
+	// for prompt-engineering corpora that quotes injection material).
+	IgnorePatterns []string `json:"ignore_patterns,omitempty"`
 }
 
 func (a *AgentConfig) UnmarshalJSON(data []byte) error {
@@ -493,8 +514,11 @@ type ContextConfig struct {
 // breaker thresholds, latency- and cost-weighted routing, and auto-tuning flags.
 type GovernanceConfig struct {
 	BlockedExecutionPatterns []string `json:"blocked_execution_patterns"`
-	RatelimitMaxRPM          *int     `json:"ratelimit_max_rpm,omitempty"`
-	RatelimitMaxTPM          *int     `json:"ratelimit_max_tpm,omitempty"`
+	// Injection configures the deterministic prompt-injection detector
+	// (default disabled). Per-agent overrides live on agents.<name>.injection.
+	Injection       *InjectionConfig `json:"injection,omitempty"`
+	RatelimitMaxRPM *int             `json:"ratelimit_max_rpm,omitempty"`
+	RatelimitMaxTPM *int             `json:"ratelimit_max_tpm,omitempty"`
 	// MaxConcurrentRequests is the global fallback cap on in-flight requests
 	// per provider+model when the provider config does not set its own limit
 	// (0 or omitted = unlimited).

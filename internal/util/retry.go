@@ -8,6 +8,7 @@ package util
 
 import (
 	"context"
+	"errors"
 	"math/rand"
 	"net/http"
 	"time"
@@ -51,6 +52,18 @@ func CalculateBackoff(attempt int) time.Duration {
 // - Attempt 3+: 2000-2750ms (capped at 8s)
 //
 // Context cancellation immediately stops retry attempts and returns ctx.Err().
+// PermanentError marks an error that must not be retried. DoWithRetry and
+// DoWithRetryResp return it immediately without backoff, letting call sites
+// classify deterministic failures (e.g. non-retryable HTTP 4xx per
+// AGENTS.md §8) at their own layer.
+type PermanentError struct {
+	Err error
+}
+
+func (e *PermanentError) Error() string { return e.Err.Error() }
+
+func (e *PermanentError) Unwrap() error { return e.Err }
+
 func DoWithRetry(ctx context.Context, maxAttempts int, fn func() error) error {
 	if maxAttempts <= 1 {
 		return fn()
@@ -59,6 +72,10 @@ func DoWithRetry(ctx context.Context, maxAttempts int, fn func() error) error {
 	var lastErr error
 	for attempt := range maxAttempts {
 		if err := fn(); err != nil {
+			var perm *PermanentError
+			if errors.As(err, &perm) {
+				return err
+			}
 			lastErr = err
 			if attempt == maxAttempts-1 {
 				return lastErr
@@ -101,6 +118,10 @@ func DoWithRetryResp(ctx context.Context, maxAttempts int, fn func() (*http.Resp
 		if err != nil {
 			if resp != nil {
 				_ = resp.Body.Close()
+			}
+			var perm *PermanentError
+			if errors.As(err, &perm) {
+				return nil, err
 			}
 			lastErr = err
 			if attempt == maxAttempts-1 {

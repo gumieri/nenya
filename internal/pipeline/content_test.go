@@ -138,7 +138,7 @@ func TestWalkMessageText(t *testing.T) {
 		}
 	})
 
-	t.Run("tool_calls arguments reverted when fn breaks JSON", func(t *testing.T) {
+	t.Run("tool_calls arguments breaking JSON are neutralized wholesale", func(t *testing.T) {
 		args := `{"command":"export KEY=AKIAIOSFODNN7EXAMPLE"}`
 		node := map[string]interface{}{
 			"tool_calls": []interface{}{
@@ -149,11 +149,12 @@ func TestWalkMessageText(t *testing.T) {
 				},
 			},
 		}
-		if WalkMessageText(node, redactAll) {
-			t.Error("expected false when replacement would break JSON validity")
+		if !WalkMessageText(node, redactAll) {
+			t.Fatal("expected wholesale neutralization to apply")
 		}
-		if node["tool_calls"].([]interface{})[0].(map[string]interface{})["function"].(map[string]interface{})["arguments"] != args {
-			t.Error("expected original arguments preserved")
+		fnObj := node["tool_calls"].([]interface{})[0].(map[string]interface{})["function"].(map[string]interface{})
+		if fnObj["arguments"] != `{"nenya":"content_neutralized"}` {
+			t.Errorf("expected marker arguments object, got %v", fnObj["arguments"])
 		}
 	})
 
