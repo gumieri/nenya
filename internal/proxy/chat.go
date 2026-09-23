@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -954,11 +955,25 @@ func (p *Proxy) handleChatCompletions(gw *gateway.NenyaGateway, w http.ResponseW
 
 	ensureOpencodeSessionHeader(gw, r, req)
 
-	if err := p.applyContentPipeline(gw, r.Context(), req.Payload, req.TokenCount, req.WindowMaxCtx, req.Profile, req.SoftLimit, req.HardLimit); err != nil {
+	if err := p.applyContentPipeline(gw, r.Context(), contentPipelineOpts{
+		Payload:      req.Payload,
+		TokenCount:   req.TokenCount,
+		WindowMaxCtx: req.WindowMaxCtx,
+		Profile:      req.Profile,
+		SoftLimit:    req.SoftLimit,
+		HardLimit:    req.HardLimit,
+		AgentName:    req.ModelName,
+		Agent:        agentConfigFor(gw, req.ModelName),
+	}); err != nil {
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			// The client is gone (or the deadline burned): nothing to
+			// dispatch, nothing to render.
+			return
+		}
 		if writePipelineRejection(gw, w, err) {
 			return
 		}
-		gw.Logger.Warn("content pipeline failed, proceeding with original payload", "err", err)
+		gw.Logger.Warn("content pipeline failed, proceeding with interceptor output", "err", err)
 	}
 	// NENYA-70: the interceptor chain/trim may have shrunk the payload after
 	// the estimate was taken at request build. Pre-dispatch guards (TPM, cost)
@@ -1049,7 +1064,38 @@ func (p *Proxy) replayCachedResponse(gw *gateway.NenyaGateway, w http.ResponseWr
 	}
 }
 
-func (p *Proxy) applyContentPipeline(gw *gateway.NenyaGateway, ctx context.Context, payload map[string]interface{}, tokenCount int, windowMaxCtx int, profile pipeline.ClientProfile, softLimit, hardLimit int) error {
+// contentPipelineOpts groups the parameters for applyContentPipeline.
+type contentPipelineOpts struct {
+	Payload      map[string]interface{}
+	TokenCount   int
+	WindowMaxCtx int
+	Profile      pipeline.ClientProfile
+	SoftLimit    int
+	HardLimit    int
+	// AgentName is the canonical agent identity (top-level model field
+	// as resolved by the proxy); Agent is the resolved config when it
+	// names a configured agent (nil otherwise).
+	AgentName string
+	Agent     *config.AgentConfig
+}
+
+// agentConfigFor resolves the agent config for a model name, returning
+// nil when the name is not a configured agent.
+func agentConfigFor(gw *gateway.NenyaGateway, modelName string) *config.AgentConfig {
+	if modelName == "" {
+		return nil
+	}
+	if agent, ok := gw.Config.Agents[modelName]; ok {
+		return &agent
+	}
+	return nil
+}
+
+// applyContentPipeline runs the shared preprocessing stages (prefix
+// cache optimization, compaction, windowing, interceptor chain) over the
+// request payload. Mutations are applied in place.
+func (p *Proxy) applyContentPipeline(gw *gateway.NenyaGateway, ctx context.Context, opts contentPipelineOpts) error {
+	payload := opts.Payload
 	if gw.InterceptorChain == nil {
 		return nil
 	}
@@ -1061,13 +1107,13 @@ func (p *Proxy) applyContentPipeline(gw *gateway.NenyaGateway, ctx context.Conte
 
 	pipeline.ApplyPrefixCacheOptimizations(payload, messages, gw.Config.PrefixCache)
 
-	if !profile.IsIDE {
+	if !opts.Profile.IsIDE {
 		if pipeline.ApplyCompaction(messages, gw.Config.Compaction) {
 			gw.Metrics.RecordCompaction()
 		}
 	}
 
-	if !profile.IsIDE {
+	if !opts.Profile.IsIDE {
 		if pipeline.PruneStaleToolCalls(payload, gw.Config.Compaction) {
 			gw.Metrics.RecordCompaction()
 		}
@@ -1077,11 +1123,11 @@ func (p *Proxy) applyContentPipeline(gw *gateway.NenyaGateway, ctx context.Conte
 	}
 
 	deps := buildWindowDeps(gw)
-	if windowed, err := pipeline.ApplyWindowCompaction(ctx, deps, payload, messages, tokenCount, gw.Config.Window, windowMaxCtx, gw.CountRequestTokens); err != nil {
+	if windowed, err := pipeline.ApplyWindowCompaction(ctx, deps, payload, messages, opts.TokenCount, gw.Config.Window, opts.WindowMaxCtx, gw.CountRequestTokens); err != nil {
 		gw.Logger.Warn("window compaction failed, proceeding without it", "err", err)
 	} else if windowed {
 		gw.Metrics.RecordWindow(gw.Config.Window.Mode)
-		gw.Metrics.RecordTokensSaved("window", tokenCount-gw.CountRequestTokens(payload))
+		gw.Metrics.RecordTokensSaved("window", opts.TokenCount-gw.CountRequestTokens(payload))
 	}
 
 	messages = payload["messages"].([]interface{})
@@ -1099,10 +1145,12 @@ func (p *Proxy) applyContentPipeline(gw *gateway.NenyaGateway, ctx context.Conte
 	req := &pipeline.InterceptRequest{
 		Payload:    payload,
 		Messages:   msgObjs,
-		Profile:    profile,
-		SoftLimit:  softLimit,
-		HardLimit:  hardLimit,
-		TokenCount: tokenCount,
+		AgentName:  opts.AgentName,
+		Agent:      opts.Agent,
+		Profile:    opts.Profile,
+		SoftLimit:  opts.SoftLimit,
+		HardLimit:  opts.HardLimit,
+		TokenCount: opts.TokenCount,
 	}
 
 	_, err := gw.InterceptorChain.Execute(ctx, req)

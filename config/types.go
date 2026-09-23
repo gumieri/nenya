@@ -1108,6 +1108,14 @@ type BouncerConfig struct {
 func (s *BouncerConfig) EnabledWasSet() bool  { return wasSet(s.Enabled) }
 func (s *BouncerConfig) FailOpenWasSet() bool { return wasSet(s.FailOpen) }
 
+// EffectiveFailOpen reports the resolved fail-open semantics: true
+// (default) means engine failures skip summarization and forward the
+// payload; false means the request is rejected — oversized content must
+// not reach upstream unsummarized/unredacted.
+func (s *BouncerConfig) EffectiveFailOpen() bool {
+	return s.FailOpen == nil || *s.FailOpen
+}
+
 func (s *BouncerConfig) UnmarshalJSON(data []byte) error {
 	type alias BouncerConfig
 	aux := &struct {

@@ -234,9 +234,33 @@ func run(logger *slog.Logger, cfg *config.Config, secrets *config.SecretsConfig,
 	return eventLoop(logger, paths, p, ctx, sighup, serverErr, srv)
 }
 
-// buildInterceptorChain assembles the interceptor chain in priority order.
-// A compile failure in a security interceptor's patterns is fatal: the
-// gateway must not start (or reload) without its full enforcement set.
+// registerBouncer attaches the bouncer interceptor per its config:
+// fail-closed mode keeps the interceptor registered even without engine
+// targets (rejections are the point); fail-open mode without an engine
+// is a no-op and skips registration.
+func registerBouncer(chain *pipeline.InterceptorChain, gw *gateway.NenyaGateway, cfg *config.Config, logger *slog.Logger) {
+	if cfg.Bouncer.Enabled != nil && !*cfg.Bouncer.Enabled {
+		return
+	}
+	failOpen := cfg.Bouncer.EffectiveFailOpen()
+	targets := len(cfg.Bouncer.Engine.ResolvedTargets)
+	switch {
+	case !failOpen && targets == 0:
+		// No engine to call, so every oversized request fails
+		// summarization and is rejected — exactly what fail-closed means.
+		logger.Warn("bouncer fail_open=false with no engine configured: every oversized request with summarizable (string) content will be rejected with 403 error_kind=bouncer_error")
+		chain.Register(proxy.NewBouncerInterceptor(gw, logger))
+	case failOpen && targets == 0:
+		logger.Warn("bouncer enabled but no engine resolved; interception is inactive")
+	default:
+		chain.Register(proxy.NewBouncerInterceptor(gw, logger))
+	}
+}
+
+// buildInterceptorChain assembles the interceptor chain in priority
+// order. A compile failure in a security interceptor's patterns is
+// fatal: the gateway must not start (or reload) without its full
+// enforcement set.
 func buildInterceptorChain(gw *gateway.NenyaGateway, cfg *config.Config, logger *slog.Logger) (*pipeline.InterceptorChain, error) {
 	chain := pipeline.NewInterceptorChain(logger)
 
@@ -269,9 +293,7 @@ func buildInterceptorChain(gw *gateway.NenyaGateway, cfg *config.Config, logger 
 		chain.Register(pipeline.NewTFIDFInterceptor(cfg.Context.TFIDFQuerySource, cfg.Context, logger))
 	}
 
-	if enabled := (cfg.Bouncer.Enabled != nil && *cfg.Bouncer.Enabled); enabled && len(cfg.Bouncer.Engine.ResolvedTargets) > 0 {
-		chain.Register(proxy.NewBouncerInterceptor(gw, logger))
-	}
+	registerBouncer(chain, gw, cfg, logger)
 
 	logger.Info("interceptor chain initialized", "count", len(chain.List()))
 	return chain, nil

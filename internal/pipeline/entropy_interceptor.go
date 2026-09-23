@@ -30,6 +30,10 @@ func NewEntropyInterceptor(filter *EntropyFilter, label string, metrics *infra.M
 
 func (e *EntropyInterceptor) Name() string  { return e.name }
 func (e *EntropyInterceptor) Priority() int { return e.priority }
+
+// Strict implements StrictInterceptor: entropy redaction is a security
+// surface — an operational failure must not forward unredacted content.
+func (e *EntropyInterceptor) Strict() bool { return true }
 func (e *EntropyInterceptor) CanHandle(_ context.Context, req *InterceptRequest) bool {
 	return e.filter != nil && len(req.Messages) > 0
 }

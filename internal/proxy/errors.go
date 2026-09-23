@@ -173,12 +173,28 @@ func classifyServerError(body []byte) infra.ErrorKind {
 	return infra.ErrorKindProviderError
 }
 
-// writePipelineRejection writes the structured 403 for pipeline policy
-// rejections (RejectError) and reports whether err was one. Operational
-// pipeline errors return false so callers keep their fail-open path.
-// Status stays 403 for every rejection: producers must set Kind to a
-// request-scoped kind (empty Kind is passed through as-is).
+// writePipelineRejection writes the structured client error for pipeline
+// aborts and reports whether err was one: RejectError (policy rejection)
+// renders 403; StrictError (fail-closed operational failure of a strict
+// interceptor) renders 503. Other operational pipeline errors return
+// false so callers keep their fail-open path. Rejection status stays 403;
+// producers set Kind to a request-scoped kind (an empty Kind is
+// defensively defaulted to internal_error).
 func writePipelineRejection(gw *gateway.NenyaGateway, w http.ResponseWriter, err error) bool {
+	var strict *pipeline.StrictError
+	if errors.As(err, &strict) {
+		gw.Logger.Error("pipeline aborted: strict interceptor failed", "err", err, "interceptor", strict.Interceptor)
+		message := strict.Message
+		if message == "" {
+			message = pipeline.StrictAbortMessage
+		}
+		kind := strict.Kind
+		if kind == "" {
+			kind = infra.ErrorKindInternal
+		}
+		writeStructuredError(w, http.StatusServiceUnavailable, kind, message)
+		return true
+	}
 	var reject *pipeline.RejectError
 	if !errors.As(err, &reject) {
 		return false
@@ -188,7 +204,11 @@ func writePipelineRejection(gw *gateway.NenyaGateway, w http.ResponseWriter, err
 	if message == "" {
 		message = "request rejected by pipeline policy"
 	}
-	writeStructuredError(w, http.StatusForbidden, reject.Kind, message)
+	kind := reject.Kind
+	if kind == "" {
+		kind = infra.ErrorKindInternal
+	}
+	writeStructuredError(w, http.StatusForbidden, kind, message)
 	return true
 }
 

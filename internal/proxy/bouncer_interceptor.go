@@ -3,12 +3,14 @@ package proxy
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"strings"
 
 	"github.com/nenya/config"
 	"github.com/nenya/internal/gateway"
+	"github.com/nenya/internal/infra"
 	"github.com/nenya/internal/pipeline"
 	"github.com/nenya/internal/routing"
 )
@@ -16,20 +18,34 @@ import (
 // BouncerInterceptor sends content to the engine chain for summarization
 // and redaction when the payload exceeds soft/hard token limits.
 // Priority: 50 — runs last, after all other preprocessing.
+//
+// Fail-open semantics: when the engine fails (or returns empty output)
+// the interceptor skips and the payload continues unchanged. With
+// bouncer.fail_open=false the interceptor instead rejects the request —
+// oversized content must not reach upstream unsummarized. The same
+// fail-closed contract rejects oversized payloads whose last message
+// carries only rich (non-string) content, which summarization cannot
+// process.
 type BouncerInterceptor struct {
 	name     string
 	priority int
 	gw       *gateway.NenyaGateway
 	logger   *slog.Logger
+	enabled  bool
+	failOpen bool
 }
 
-// NewBouncerInterceptor creates a new BouncerInterceptor.
+// NewBouncerInterceptor creates a new BouncerInterceptor. The enabled and
+// fail-open flags are snapshotted from the bouncer config (both default
+// true). The chain is rebuilt on config reload, so snapshots stay fresh.
 func NewBouncerInterceptor(gw *gateway.NenyaGateway, logger *slog.Logger) *BouncerInterceptor {
 	return &BouncerInterceptor{
 		name:     "bouncer",
 		priority: 50,
 		gw:       gw,
 		logger:   logger,
+		enabled:  gw.Config.Bouncer.Enabled == nil || *gw.Config.Bouncer.Enabled,
+		failOpen: gw.Config.Bouncer.EffectiveFailOpen(),
 	}
 }
 
@@ -39,7 +55,7 @@ func (b *BouncerInterceptor) CanHandle(ctx context.Context, req *pipeline.Interc
 	if ctx.Err() != nil {
 		return false
 	}
-	if b.gw.Config.Bouncer.Enabled != nil && !*b.gw.Config.Bouncer.Enabled {
+	if !b.enabled {
 		return false
 	}
 	return req.SoftLimit > 0 && req.TokenCount >= req.SoftLimit
@@ -52,7 +68,19 @@ func (b *BouncerInterceptor) Process(ctx context.Context, req *pipeline.Intercep
 
 	lastMsg := req.Messages[len(req.Messages)-1]
 	text, ok := lastMsg["content"].(string)
-	if !ok || text == "" {
+	if !ok {
+		if !b.failOpen && richContent(lastMsg["content"]) {
+			// Rich content (arrays, multipart blocks) bypasses
+			// summarization entirely — under fail-closed that is a hole,
+			// not a skip.
+			return nil, b.rejectRichContent()
+		}
+		// Missing/null content (e.g. tool_calls tail) or rich content
+		// under fail-open: nothing to summarize; the other interceptors
+		// still scanned it.
+		return &pipeline.InterceptResult{Payload: req.Payload, Skip: true}, nil
+	}
+	if text == "" {
 		return &pipeline.InterceptResult{Payload: req.Payload, Skip: true}, nil
 	}
 
@@ -68,13 +96,29 @@ func (b *BouncerInterceptor) Process(ctx context.Context, req *pipeline.Intercep
 		return &pipeline.InterceptResult{Payload: req.Payload, Skip: true}, nil
 	}
 
-	b.gw.Metrics.RecordInterception("engine")
 	summarized, err := b.summarize(ctx, text, req.Profile.IsIDE)
 	if err != nil || strings.TrimSpace(summarized) == "" {
 		// Empty engine output would destroy the message content for just
 		// the header — treat it as a summarize failure. The payload keeps
 		// any trim that already happened (Truncated reports it).
-		b.logger.Warn("engine summarization failed", "err", err, "reason", "empty_engine_output")
+		reason := "engine_error"
+		logErr := err
+		if err == nil {
+			reason = "empty_engine_output"
+			logErr = nil
+			err = errors.New(reason)
+		}
+		if !b.failOpen {
+			// Fail-closed: oversized content must not reach upstream
+			// unsummarized/unredacted. Enforcement decision, not an
+			// operational skip.
+			return nil, &pipeline.RejectError{
+				Err:     fmt.Errorf("bouncer engine failed and fail_open is disabled: %w", err),
+				Kind:    infra.ErrorKindBouncerError,
+				Message: "request rejected: bouncer engine unavailable (fail_open disabled)",
+			}
+		}
+		b.logger.Warn("engine summarization failed", "err", logErr, "reason", reason)
 		return &pipeline.InterceptResult{
 			Payload:   req.Payload,
 			Truncated: true,
@@ -83,6 +127,7 @@ func (b *BouncerInterceptor) Process(ctx context.Context, req *pipeline.Intercep
 		}, nil
 	}
 
+	b.gw.Metrics.RecordInterception("engine")
 	sanitized := "[Nenya Sanitized via Ollama]:\n" + summarized
 	lastMsg["content"] = sanitized
 	// In-place mutation; payload["messages"] keeps its original
@@ -94,6 +139,28 @@ func (b *BouncerInterceptor) Process(ctx context.Context, req *pipeline.Intercep
 		Truncated: true,
 		Reason:    "engine",
 	}, nil
+}
+
+// richContent reports whether the last message's content carries
+// non-string payloads (content arrays, multipart blocks, or any other
+// structured value) that string summarization cannot process.
+func richContent(content any) bool {
+	switch content.(type) {
+	case nil, string:
+		return false
+	default:
+		return true
+	}
+}
+
+// rejectRichContent builds the fail-closed rejection for oversized
+// payloads whose summarizable surface bypassed the engine.
+func (b *BouncerInterceptor) rejectRichContent() error {
+	return &pipeline.RejectError{
+		Err:     errors.New("bouncer fail_open=false: oversized payload has non-string content that cannot be summarized"),
+		Kind:    infra.ErrorKindBouncerError,
+		Message: "request rejected: oversized rich content cannot be summarized (fail_open disabled)",
+	}
 }
 
 // trimBeforeEngine trims the payload to the hard limit when the last

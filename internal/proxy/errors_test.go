@@ -13,6 +13,7 @@ import (
 	"github.com/nenya/config"
 	"github.com/nenya/internal/gateway"
 	"github.com/nenya/internal/infra"
+	"github.com/nenya/internal/pipeline"
 )
 
 func TestClassifyError(t *testing.T) {
@@ -305,3 +306,70 @@ func (m *mockResponseWriter) Write(b []byte) (int, error) {
 	return len(b), nil
 }
 func (m *mockResponseWriter) WriteHeader(code int) { m.statusCode = code }
+
+func TestWritePipelineRejection_StrictError(t *testing.T) {
+	gw := &gateway.NenyaGateway{Logger: testLog(t), Metrics: infra.NewMetrics()}
+	w := httptest.NewRecorder()
+
+	aborted := writePipelineRejection(gw, w, &pipeline.StrictError{
+		Err:         errors.New("boom"),
+		Kind:        infra.ErrorKindInternal,
+		Interceptor: "injection",
+		Message:     "request aborted: security preprocessing failed",
+	})
+	if !aborted {
+		t.Fatal("writePipelineRejection must report StrictError as handled")
+	}
+	if w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("expected 503, got %d body=%q", w.Code, w.Body.String())
+	}
+	var resp infra.ErrorResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("failed to unmarshal response: %v", err)
+	}
+	if resp.Kind != infra.ErrorKindInternal {
+		t.Fatalf("error_kind = %q, want %q", resp.Kind, infra.ErrorKindInternal)
+	}
+}
+
+func TestWritePipelineRejection_OperationalErrorFailsOpen(t *testing.T) {
+	gw := &gateway.NenyaGateway{Logger: testLog(t), Metrics: infra.NewMetrics()}
+	w := httptest.NewRecorder()
+
+	if writePipelineRejection(gw, w, errors.New("plain operational failure")) {
+		t.Fatal("plain errors must not be treated as rejections")
+	}
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected no response written, got %d", w.Code)
+	}
+}
+
+func TestWritePipelineRejection_RejectError(t *testing.T) {
+	gw := &gateway.NenyaGateway{Logger: testLog(t), Metrics: infra.NewMetrics()}
+	w := httptest.NewRecorder()
+
+	aborted := writePipelineRejection(gw, w, &pipeline.RejectError{
+		Err:  errors.New("policy"),
+		Kind: infra.ErrorKindInjection,
+	})
+	if !aborted {
+		t.Fatal("writePipelineRejection must report RejectError as handled")
+	}
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("expected 403, got %d", w.Code)
+	}
+
+	// Empty Kind is defensively defaulted to internal_error.
+	w2 := httptest.NewRecorder()
+	aborted = writePipelineRejection(gw, w2, &pipeline.RejectError{Err: errors.New("policy")})
+	if !aborted || w2.Code != http.StatusForbidden {
+		t.Fatalf("handled=%v code=%d, want true/403", aborted, w2.Code)
+	}
+	var resp infra.ErrorResponse
+	if err := json.Unmarshal(w2.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("failed to unmarshal response: %v", err)
+	}
+	if resp.Kind != infra.ErrorKindInternal {
+		t.Fatalf("error_kind = %q, want default %q", resp.Kind, infra.ErrorKindInternal)
+	}
+}

@@ -212,7 +212,7 @@ Tier-0 regex-based secret redaction runs on every request, before any other pipe
 | `redaction_label` | string | `[REDACTED]` | Replacement string for matched secrets |
 | `redact_output` | bool | `false` | Enable stream output filtering (secret redaction and execution policy blocking on responses) |
 | `redact_output_window` | int | `4096` | Sliding window size (in chars) for cross-chunk pattern matching in output streams |
-| `fail_open` | bool | `true` | When the engine (Ollama/cloud) is unreachable, skip summarization and forward the original payload. If `false`, hard-limit payloads are truncated even when the engine fails. |
+| `fail_open` | bool | `true` | When the engine (Ollama/cloud) is unreachable, skip summarization and forward the original payload (fail-open). If `false`, a failed/empty engine summarization REJECTS the request with 403 `error_kind=bouncer_error` — oversized content must not reach upstream unsummarized. The same fail-closed contract rejects oversized payloads whose last message carries only rich (content-array/multipart) content, which summarization cannot process (missing/null/empty-string content still skips). With `fail_open=false` and no engine configured, the interceptor stays registered and every oversized request with summarizable (string) last-message content is rejected; a warning is logged at startup. |
 | `entropy_enabled` | bool | `false` | Enable Shannon entropy-based secret detection. Catches high-entropy tokens that don't match regex patterns (JWTs, opaque API keys, base64 credentials). |
 | `entropy_threshold` | float64 | `4.5` | Shannon entropy threshold in bits/character. Tokens above this value are redacted. English text: ~3.5, hex secrets: ~4.0, base64 tokens: ~5.5, random API keys: ~4.5-5.5. |
 | `entropy_min_token` | int | `20` | Minimum token length (in characters) to evaluate for entropy. Shorter tokens are skipped to reduce false positives. |
@@ -1158,7 +1158,7 @@ The model catalog endpoint includes capability and pricing metadata when availab
 
 ### Best-Effort Pipeline
 
-The content pipeline (steps 2–9) is **best-effort**: if any step fails (e.g., engine unreachable, Ollama down), the gateway logs a warning and proceeds with the original payload. This ensures the proxy never blocks or returns errors due to pipeline failures — the request always reaches an upstream provider. When `fail_open` is `true` (default), hard-limit payloads that fail engine summarization are forwarded unchanged instead of being truncated.
+The content pipeline (steps 2–9) is best-effort **by default**: if a token-saving step fails (e.g., TF-IDF scoring), the gateway logs a warning and proceeds. Security preprocessing is fail-closed: the redaction/entropy/spotlight/injection interceptors declare `Strict()` — an operational fault in one of them aborts the request with 503 `error_kind=internal_error` rather than forwarding unprocessed content, and enforcement decisions (`RejectError`) always return 403 with their specific `error_kind`. The bouncer engine call follows `bouncer.fail_open`: `true` (default) forwards the original payload when the engine fails; `false` rejects the request with 403 `error_kind=bouncer_error` — oversized content must not reach upstream unsummarized.
 
 ## Configuration Notes
 

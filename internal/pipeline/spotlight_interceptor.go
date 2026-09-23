@@ -59,6 +59,10 @@ func NewSpotlightInterceptor(cfg *config.SpotlightConfig, agents map[string]conf
 func (s *SpotlightInterceptor) Name() string  { return s.name }
 func (s *SpotlightInterceptor) Priority() int { return s.priority }
 
+// Strict implements StrictInterceptor: enveloping is a security surface —
+// an operational failure must not forward unenveloped tool output.
+func (s *SpotlightInterceptor) Strict() bool { return true }
+
 // RegistrationRequired reports whether any surface could apply: the
 // global spotlight is enabled (history follows enabled by default) or any
 // agent overrides enabled/history on.
@@ -83,13 +87,28 @@ func (s *SpotlightInterceptor) RegistrationRequired() bool {
 }
 
 // resolveSettings applies per-agent overrides on top of the global config
-// for the agent named in the payload's model field. History resolution
+// for the canonical agent identity: the proxy-resolved Agent config when
+// present, otherwise the name-keyed snapshot lookup via AgentNameFor.
+// History resolution
 // order: agent history_enabled → agent enabled (an agent opting into
 // spotlight inherits history with it) → global history_enabled (which
 // defaults to global enabled via config defaults).
 func (s *SpotlightInterceptor) resolveSettings(req *InterceptRequest) (historyEnabled bool) {
 	historyEnabled = s.global.HistoryEnabled != nil && *s.global.HistoryEnabled
-	agentName, _ := req.Payload["model"].(string)
+	if req.Agent != nil && req.Agent.Spotlight != nil {
+		ov := req.Agent.Spotlight
+		if ov.HistoryEnabled != nil {
+			historyEnabled = *ov.HistoryEnabled
+		} else if ov.Enabled != nil {
+			historyEnabled = *ov.Enabled
+		}
+		if ov.Enabled != nil && !*ov.Enabled {
+			// Explicit per-agent disable wins over every inheritance path.
+			historyEnabled = false
+		}
+		return historyEnabled
+	}
+	agentName := AgentNameFor(req)
 	if override, ok := s.agentHistory[agentName]; ok && override != nil {
 		historyEnabled = *override
 	} else if override, ok := s.agentEnabled[agentName]; ok && override != nil {

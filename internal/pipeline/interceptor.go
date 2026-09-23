@@ -8,6 +8,7 @@ import (
 	"sort"
 	"time"
 
+	"github.com/nenya/config"
 	"github.com/nenya/internal/infra"
 )
 
@@ -22,12 +23,28 @@ type Interceptor interface {
 	CanHandle(ctx context.Context, req *InterceptRequest) bool
 
 	// Process performs the interception. Returns the processed payload or an error.
-	// On error, the chain falls back to the next interceptor unless StrictMode is enabled.
+	// On error, the chain falls back to the next interceptor unless the
+	// interceptor (or the chain) is strict.
 	// The caller must pass the request context to respect deadlines.
 	Process(ctx context.Context, req *InterceptRequest) (*InterceptResult, error)
 
 	// Priority determines ordering (lower numbers run first).
 	Priority() int
+}
+
+// StrictInterceptor is an optional Interceptor extension: interceptors
+// implementing it declare that an operational Process error must abort
+// the request instead of falling through to the next interceptor.
+// Security interceptors (redaction, spotlighting, injection detection)
+// implement it with Strict() == true so a broken security layer cannot
+// silently pass traffic; token-saving interceptors omit it (fail-open).
+// Enforcement decisions use RejectError, which aborts regardless of
+// strictness — Strict() covers only unexpected operational failures.
+type StrictInterceptor interface {
+	Interceptor
+	// Strict reports whether an operational Process error must abort
+	// the request with a structured error.
+	Strict() bool
 }
 
 // InterceptRequest represents a request being processed by the interceptor chain.
@@ -37,6 +54,15 @@ type InterceptRequest struct {
 
 	// Messages is the parsed messages array from payload["messages"]
 	Messages []map[string]any
+
+	// AgentName is the canonical agent identity for this request (the
+	// top-level model field as resolved by the proxy). Empty for
+	// direct-built requests; interceptors fall back to payload["model"].
+	AgentName string
+
+	// Agent is the resolved agent config when AgentName names a
+	// configured agent; nil otherwise. Consumers must nil-check.
+	Agent *config.AgentConfig
 
 	// Profile describes the client profile (IDE vs non-IDE)
 	Profile ClientProfile
@@ -49,6 +75,17 @@ type InterceptRequest struct {
 
 	// TokenCount is the current total token count of messages
 	TokenCount int
+}
+
+// AgentNameFor returns the canonical agent name for an intercepted
+// request: the proxy-resolved AgentName when set, otherwise the
+// payload's top-level model field (the wire-format agent identity).
+func AgentNameFor(req *InterceptRequest) string {
+	if req.AgentName != "" {
+		return req.AgentName
+	}
+	name, _ := req.Payload["model"].(string)
+	return name
 }
 
 // InterceptResult represents the outcome of an interceptor's processing.
@@ -100,11 +137,18 @@ func (c *InterceptorChain) Register(interceptor Interceptor) {
 	})
 }
 
-// SetStrictMode when true causes interceptor errors to block the request.
-// When false (default), errors fall back to the next interceptor.
+// SetStrictMode when true causes ANY interceptor error to block the
+// request, overriding per-interceptor strictness. Build-time knob: call
+// during chain assembly, before the chain starts serving (the chain is
+// otherwise immutable after build).
 func (c *InterceptorChain) SetStrictMode(strict bool) {
 	c.strict = strict
 }
+
+// StrictAbortMessage is the client-facing text used for strict chain
+// aborts; writePipelineRejection falls back to it when a StrictError
+// carries no message.
+const StrictAbortMessage = "request aborted: preprocessing failed"
 
 // RejectError wraps a pipeline policy rejection that must abort the request
 // with a structured client error regardless of chain strict mode. Security
@@ -121,14 +165,32 @@ func (e *RejectError) Error() string { return e.Err.Error() }
 
 func (e *RejectError) Unwrap() error { return e.Err }
 
+// StrictError signals an operational interceptor failure under strict
+// (fail-closed) semantics: the chain aborted and the caller must render
+// a structured client error instead of proceeding with a payload that a
+// security interceptor could not process. Kind defaults to
+// ErrorKindInternal when zero; Message carries the client-facing text.
+type StrictError struct {
+	Err         error
+	Kind        infra.ErrorKind
+	Interceptor string
+	Message     string
+}
+
+func (e *StrictError) Error() string { return e.Err.Error() }
+
+func (e *StrictError) Unwrap() error { return e.Err }
+
 // Execute runs all interceptors in priority order. Each successful interceptor
 // mutates the request's Payload map in-place. On failure, behavior depends on
-// strict mode: fallback to next interceptor (default) or return error (strict).
-// A *RejectError always aborts the request — policy rejections are decisions,
-// not operational failures. Execute always checks ctx cancellation at each
-// interceptor boundary. The returned InterceptResult is a final-state
-// snapshot only: per-interceptor Truncated/Reason/TokenCount are not
-// aggregated — consumers must rely on req.Payload mutation and req.TokenCount.
+// strictness: an interceptor implementing StrictInterceptor with Strict() true
+// (or the chain-level StrictMode) aborts the request with a *StrictError;
+// non-strict interceptors fall through to the next one. A *RejectError always
+// aborts the request — policy rejections are decisions, not operational
+// failures. Execute always checks ctx cancellation at each interceptor
+// boundary. The returned InterceptResult is a final-state snapshot only:
+// per-interceptor Truncated/Reason/TokenCount are not aggregated — consumers
+// must rely on req.Payload mutation and req.TokenCount.
 func (c *InterceptorChain) Execute(ctx context.Context, req *InterceptRequest) (*InterceptResult, error) {
 	for _, interceptor := range c.interceptors {
 		if ctx.Err() != nil {
@@ -159,8 +221,13 @@ func (c *InterceptorChain) Execute(ctx context.Context, req *InterceptRequest) (
 				c.metrics.RecordInterceptorError(interceptor.Name())
 			}
 			c.logger.WarnContext(ctx, "interceptor failed", "name", interceptor.Name(), "err", err, "duration_ms", duration.Milliseconds())
-			if c.strict {
-				return nil, fmt.Errorf("interceptor %q failed: %w", interceptor.Name(), err)
+			if c.strict || interceptorStrict(interceptor) {
+				return nil, &StrictError{
+					Err:         fmt.Errorf("interceptor %q failed: %w", interceptor.Name(), err),
+					Kind:        infra.ErrorKindInternal,
+					Interceptor: interceptor.Name(),
+					Message:     StrictAbortMessage,
+				}
 			}
 			continue
 		}
@@ -209,4 +276,11 @@ func (c *InterceptorChain) Execute(ctx context.Context, req *InterceptRequest) (
 // List returns all registered interceptors.
 func (c *InterceptorChain) List() []Interceptor {
 	return c.interceptors
+}
+
+// interceptorStrict reports whether the interceptor opted into
+// fail-closed semantics via the optional StrictInterceptor interface.
+func interceptorStrict(interceptor Interceptor) bool {
+	strict, ok := interceptor.(StrictInterceptor)
+	return ok && strict.Strict()
 }

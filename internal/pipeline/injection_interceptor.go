@@ -170,14 +170,31 @@ func ValidateInjectionPatterns(cfg *config.InjectionConfig) error {
 func (i *InjectionInterceptor) Name() string  { return i.name }
 func (i *InjectionInterceptor) Priority() int { return i.priority }
 
+// Strict implements StrictInterceptor: detection is a security surface —
+// an operational failure must not forward unscanned content. (Tier-2
+// escalation failures intentionally fall back to the deterministic
+// tier-1 verdict instead of erroring, so this only fires on unexpected
+// internal faults.)
+func (i *InjectionInterceptor) Strict() bool { return true }
+
 // resolveSettings applies per-agent overrides on top of the global config
-// for the agent named in the payload's model field (agent scoping uses the
-// top-level model field). Missing or non-string model fields resolve to
-// the global settings.
+// for the canonical agent identity: the proxy-resolved Agent config when
+// present (avoids re-deriving the agent from the wire), otherwise the
+// name-keyed snapshot looked up via AgentNameFor. Unknown agents resolve
+// to the global settings.
 func (i *InjectionInterceptor) resolveSettings(req *InterceptRequest) (enabled, strict bool) {
 	enabled = i.global.Enabled != nil && *i.global.Enabled
 	strict = i.global.Strict != nil && *i.global.Strict
-	agentName, _ := req.Payload["model"].(string)
+	if req.Agent != nil && req.Agent.Injection != nil {
+		if req.Agent.Injection.Enabled != nil {
+			enabled = *req.Agent.Injection.Enabled
+		}
+		if req.Agent.Injection.Strict != nil {
+			strict = *req.Agent.Injection.Strict
+		}
+		return enabled, strict
+	}
+	agentName := AgentNameFor(req)
 	if override, ok := i.agentEnabled[agentName]; ok && override != nil {
 		enabled = *override
 	}
@@ -299,7 +316,7 @@ func (i *InjectionInterceptor) Process(ctx context.Context, req *InterceptReques
 // truncated-excerpt benigns (inconclusive), budget exhaustion, and
 // summarized traffic all fall back to tier-1.
 func (i *InjectionInterceptor) processEscalated(ctx context.Context, req *InterceptRequest, strict bool, hitSurfaces []string, categoryHits map[injectionCategory]int) (*InterceptResult, error) {
-	agentName, _ := req.Payload["model"].(string)
+	agentName := AgentNameFor(req)
 	benign := make(map[string]bool, len(hitSurfaces))
 	confirmed := false
 	fallbackReason := ""

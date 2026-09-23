@@ -33,6 +33,10 @@ func NewRedactInterceptor(enabled bool, patterns []*regexp.Regexp, label string,
 
 func (r *RedactInterceptor) Name() string  { return r.name }
 func (r *RedactInterceptor) Priority() int { return r.priority }
+
+// Strict implements StrictInterceptor: redaction is a security surface —
+// an operational failure must not forward unredacted content.
+func (r *RedactInterceptor) Strict() bool { return true }
 func (r *RedactInterceptor) CanHandle(_ context.Context, req *InterceptRequest) bool {
 	return r.enabled && len(r.patterns) > 0 && len(req.Messages) > 0
 }

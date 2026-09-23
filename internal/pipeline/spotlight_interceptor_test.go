@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/nenya/config"
+	"github.com/nenya/internal/infra"
 )
 
 func newTestSpotlightInterceptor(t *testing.T, cfg *config.SpotlightConfig, agents map[string]config.AgentConfig) *SpotlightInterceptor {
@@ -219,4 +220,29 @@ func TestSpotlightRegistrationRequired(t *testing.T) {
 			t.Error("expected true for agent history override")
 		}
 	})
+}
+
+func TestSpotlightAgentConfigDirectPreference(t *testing.T) {
+	enabled := true
+	interceptor := NewSpotlightInterceptor(&config.SpotlightConfig{}, map[string]config.AgentConfig{}, infra.NewMetrics())
+
+	// req.Agent opts the agent in even though the global config is off
+	// and no name-keyed snapshot exists.
+	req := &InterceptRequest{
+		Payload: map[string]any{"model": "any-agent"},
+		Agent: &config.AgentConfig{
+			Spotlight: &config.SpotlightConfig{Enabled: &enabled},
+		},
+		Messages: []map[string]any{{"role": "tool", "content": "untrusted tool output"}},
+	}
+	if !interceptor.CanHandle(context.Background(), req) {
+		t.Fatal("expected CanHandle=true via req.Agent opt-in")
+	}
+	res, err := interceptor.Process(context.Background(), req)
+	if err != nil {
+		t.Fatalf("Process: %v", err)
+	}
+	if res.Skip {
+		t.Fatal("expected enveloping via req.Agent opt-in")
+	}
 }
