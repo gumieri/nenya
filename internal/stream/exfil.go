@@ -1,6 +1,7 @@
 package stream
 
 import (
+	"log/slog"
 	"net"
 	"net/url"
 	"regexp"
@@ -431,4 +432,82 @@ func spliceSpans(content string, spans []windowSpan, placeholder string) string 
 		b.WriteString(content[last:])
 	}
 	return b.String()
+}
+
+// CanaryWatcher is the per-request canary tripwire for the output
+// stream: exact substring scan over the sliding window (chunk-boundary
+// safe via the same rune window the egress guard uses). One watcher per
+// response; not safe for concurrent use.
+type CanaryWatcher struct {
+	canary  string
+	action  string // config.CanaryAction* value
+	channel string // metric channel label for this watcher's surface
+	window  []rune
+	windowN int
+
+	metrics *infra.Metrics
+	logger  *slog.Logger
+
+	// Tripped reports whether the canary was detected on this stream.
+	Tripped bool
+	// logged dedupes the one-time detection log line.
+	logged bool
+}
+
+// NewCanaryWatcher builds a stream watcher for the given canary token.
+// channel labels the metric (stream, buffered); logger receives the
+// one-time detection warning in log mode (nil-safe). An empty token
+// (guard disabled) yields an inert watcher.
+func NewCanaryWatcher(canary, action, channel string, metrics *infra.Metrics, logger *slog.Logger) *CanaryWatcher {
+	return &CanaryWatcher{
+		canary:  canary,
+		action:  action,
+		channel: channel,
+		window:  make([]rune, 0, exfilWindowRunes),
+		metrics: metrics,
+		logger:  logger,
+	}
+}
+
+// FilterContent scans one SSE delta for the canary. In log mode content
+// always passes; in block mode the first detection reports Block so the
+// reader terminates the stream with ErrCanaryDetected.
+func (w *CanaryWatcher) FilterContent(content string) (string, FilterAction, string) {
+	if w.canary == "" || (w.Tripped && w.action == config.CanaryActionLog) {
+		return content, ActionPass, ""
+	}
+	if content == "" {
+		return content, ActionPass, ""
+	}
+	w.windowN = AppendRuneWindow(&w.window, &w.windowN, exfilWindowRunes, content)
+	if w.windowN < len(w.canary) { // rune count vs byte len: canary is ASCII by construction
+		return content, ActionPass, ""
+	}
+	if !pipeline.CanaryTripped(w.canary, string(w.window)) {
+		return content, ActionPass, ""
+	}
+	if w.Tripped {
+		// Defense in depth: current callers stop scanning after a block
+		// or short-circuit log trips, so this branch is not reachable
+		// today; kept so future callers cannot double-report.
+		return content, ActionPass, ""
+	}
+	w.Tripped = true
+	w.metrics.RecordExfilEvent(w.channel)
+	if !w.logged {
+		w.logged = true
+		if w.logger != nil {
+			w.logger.Warn("canary detected in output",
+				"channel", w.channel, "action", w.action)
+		}
+	}
+	if w.action == config.CanaryActionBlock {
+		return content, ActionBlock, "canary detected in output"
+	}
+	return content, ActionPass, ""
+}
+
+// IsBlocked reports whether the watcher terminated the stream.
+func (w *CanaryWatcher) IsBlocked() bool {
+	return w.Tripped && w.action == config.CanaryActionBlock
 }

@@ -125,6 +125,27 @@ type ExfilGuardOverrideConfig struct {
 	Action string `json:"action,omitempty"`
 }
 
+// CanaryConfig configures the egress canary-token tripwire (default
+// off): a per-request random marker is injected into the system context
+// and watched for on every egress channel.
+type CanaryConfig struct {
+	// Enabled turns the tripwire on.
+	Enabled *bool `json:"enabled,omitempty"`
+	// Action selects the response to a detection: "block" (default —
+	// terminate the response with error_kind=exfil_detected / refuse the
+	// tool call) or "log" (metric + log only, output continues).
+	Action string `json:"action,omitempty"`
+}
+
+// Canary tripwire actions.
+const (
+	// CanaryActionLog records the detection without altering output.
+	CanaryActionLog = "log"
+	// CanaryActionBlock terminates the response (or refuses the tool
+	// call) on detection.
+	CanaryActionBlock = "block"
+)
+
 // ExfilGuardConfig configures deterministic output-side egress control:
 // URL policy applied to model-produced markdown links/images and bare
 // URLs on the response path (default off).
@@ -654,6 +675,7 @@ type GovernanceConfig struct {
 	// agents.<name>.spotlight.
 	Spotlight       *SpotlightConfig  `json:"spotlight,omitempty"`
 	ExfilGuard      *ExfilGuardConfig `json:"exfil_guard,omitempty"`
+	Canary          *CanaryConfig     `json:"canary,omitempty"`
 	RatelimitMaxRPM *int              `json:"ratelimit_max_rpm,omitempty"`
 	RatelimitMaxTPM *int              `json:"ratelimit_max_tpm,omitempty"`
 	// MaxConcurrentRequests is the global fallback cap on in-flight requests

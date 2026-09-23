@@ -17,6 +17,10 @@ var ErrStreamBlocked = errors.New("stream blocked by execution policy")
 // (wraps ErrStreamBlocked so generic block handling still matches).
 var ErrExfilBlocked = fmt.Errorf("stream blocked by data-exfiltration policy: %w", ErrStreamBlocked)
 
+// ErrCanaryDetected is a stream terminated by the canary tripwire
+// (wraps ErrStreamBlocked so generic block handling still matches).
+var ErrCanaryDetected = fmt.Errorf("stream blocked: canary token detected in output: %w", ErrStreamBlocked)
+
 type FilterAction int
 
 const (

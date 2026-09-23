@@ -94,6 +94,7 @@ type SSETransformingReader struct {
 	observer            SSEObserver
 	streamFilter        *StreamFilter
 	exfilGuard          *ExfilGuard
+	canaryWatcher       *CanaryWatcher
 	streamEntropyFilter *StreamEntropyFilter
 	buffer              []byte
 	pos                 int
@@ -210,6 +211,11 @@ func (r *SSETransformingReader) SetStreamFilter(sf *StreamFilter) {
 // SetExfilGuard sets the output egress guard for URL policy enforcement.
 func (r *SSETransformingReader) SetExfilGuard(g *ExfilGuard) {
 	r.exfilGuard = g
+}
+
+// SetCanaryWatcher sets the per-request canary tripwire.
+func (r *SSETransformingReader) SetCanaryWatcher(w *CanaryWatcher) {
+	r.canaryWatcher = w
 }
 
 // SetStreamEntropyFilter sets an entropy filter for stream content.
@@ -671,8 +677,7 @@ func (r *SSETransformingReader) transformSSEData(line []byte) []byte {
 	}
 
 	parsed, filtersMutated := r.applyStreamFilters(parsed)
-	if (r.streamFilter != nil && r.streamFilter.IsBlocked()) ||
-		(r.exfilGuard != nil && r.exfilGuard.IsBlocked()) {
+	if r.anyFilterBlocked() {
 		// A filter blocked this exact chunk: suppress the violating
 		// line; the stream terminates with the filter-specific error
 		// next Read. Nil parsed from malformed JSON still falls through
@@ -790,6 +795,13 @@ func (r *SSETransformingReader) applyStreamFilters(parsed map[string]interface{}
 		mutated = mutated || action == ActionRedact
 	}
 
+	if r.canaryWatcher != nil && !r.canaryWatcher.IsBlocked() {
+		parsed = applyCanaryWatcher(parsed, r.canaryWatcher)
+		if r.canaryWatcher.IsBlocked() {
+			return nil, false
+		}
+	}
+
 	if r.streamEntropyFilter != nil {
 		var changed bool
 		parsed, changed = applyEntropyFilter(parsed, r.streamEntropyFilter)
@@ -821,17 +833,34 @@ func applyStreamFilter(parsed map[string]interface{}, filter *StreamFilter) (map
 // the stream.
 func (r *SSETransformingReader) anyFilterBlocked() bool {
 	return (r.streamFilter != nil && r.streamFilter.IsBlocked()) ||
-		(r.exfilGuard != nil && r.exfilGuard.IsBlocked())
+		(r.exfilGuard != nil && r.exfilGuard.IsBlocked()) ||
+		(r.canaryWatcher != nil && r.canaryWatcher.IsBlocked())
 }
 
 // blockedStreamError returns the specific error for whichever filter
-// terminated the stream (exfil guard takes precedence; both wrap as
-// stream-block errors for generic handling).
+// terminated the stream (canary tripwire takes precedence, then the
+// exfil guard; all wrap as stream-block errors for generic handling).
 func (r *SSETransformingReader) blockedStreamError() error {
+	if r.canaryWatcher != nil && r.canaryWatcher.IsBlocked() {
+		return ErrCanaryDetected
+	}
 	if r.exfilGuard != nil && r.exfilGuard.IsBlocked() {
 		return ErrExfilBlocked
 	}
 	return ErrStreamBlocked
+}
+
+// applyCanaryWatcher scans one SSE delta for the request canary. A
+// block verdict nils the chunk so the reader raises ErrCanaryDetected.
+func applyCanaryWatcher(parsed map[string]interface{}, watcher *CanaryWatcher) map[string]interface{} {
+	content := extractExfilContent(parsed)
+	if content == "" {
+		return parsed
+	}
+	if _, action, _ := watcher.FilterContent(content); action == ActionBlock {
+		return nil
+	}
+	return parsed
 }
 
 // applyExfilGuard runs the URL egress policy over one SSE delta in

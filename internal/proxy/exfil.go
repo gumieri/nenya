@@ -1,10 +1,13 @@
 package proxy
 
 import (
+	"strings"
+
 	"net/http"
 
 	"github.com/nenya/internal/gateway"
 	"github.com/nenya/internal/infra"
+	"github.com/nenya/internal/pipeline"
 	"github.com/nenya/internal/stream"
 )
 
@@ -35,6 +38,28 @@ func exfilGuardFor(gw *gateway.NenyaGateway, agentName string) *stream.ExfilGuar
 	effective.Enabled = &enabled
 	effective.Action = action
 	return stream.NewExfilGuard(effective, gw.Metrics)
+}
+
+// canaryScanHits aggregates a buffered canary scan.
+type canaryScanHits struct {
+	hit bool
+}
+
+// inspectCanaryTexts scans every model-produced text surface of a
+// buffered response for the canary token. Block action never needs the
+// surfaces rewritten (the response is discarded); log action strips the
+// canary occurrence from each surface in place.
+func inspectCanaryTexts(responseMap map[string]interface{}, canary string) canaryScanHits {
+	hits := canaryScanHits{}
+	rewrite := func(surface string) string {
+		if pipeline.CanaryTripped(canary, surface) {
+			hits.hit = true
+			return strings.ReplaceAll(surface, canary, "")
+		}
+		return surface
+	}
+	walkResponseText(responseMap, rewrite)
+	return hits
 }
 
 // responseExfilHits is the aggregated outcome of inspecting every text

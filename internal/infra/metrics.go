@@ -42,10 +42,12 @@ type Metrics struct {
 	// exfilDetections counts egress-guard URL violations by reason and
 	// configured action.
 	exfilDetections sync.Map
-	panics          atomic.Uint64
-	windowApplied   sync.Map
-	interceptions   sync.Map
-	tokensSaved     sync.Map
+	// exfilEvents counts canary tripwire detections by egress channel.
+	exfilEvents   sync.Map
+	panics        atomic.Uint64
+	windowApplied sync.Map
+	interceptions sync.Map
+	tokensSaved   sync.Map
 
 	rlRejected         sync.Map
 	cooldowns          sync.Map
@@ -343,6 +345,28 @@ func (m *Metrics) RecordInjectionEscalation(verdict string, d time.Duration) {
 	e.value.Add(1)
 	h := getOrCreateHist(&m.injectionEscalationDur, map[string]string{"verdict": verdict}, HTTPDurationBuckets)
 	h.Observe(d.Seconds())
+}
+
+// writeRedactions emits the Tier-0 redaction counter.
+func (m *Metrics) writeRedactions(w io.Writer) {
+	m.writeCounterAtomic(w, "nenya_pipeline_redactions_total",
+		"Total secret redactions applied by the Tier-0 filter.", m.redactions.Load())
+}
+
+// writeExfilEvents emits the canary tripwire counter.
+func (m *Metrics) writeExfilEvents(w io.Writer) {
+	m.writeCounterMap(w, "nenya_exfil_events_total",
+		"Canary tripwire detections by egress channel.", &m.exfilEvents)
+}
+
+// RecordExfilEvent records a canary tripwire detection on the given
+// egress channel (stream, tool_args, buffered). Nil-safe.
+func (m *Metrics) RecordExfilEvent(channel string) {
+	if m == nil || channel == "" {
+		return
+	}
+	e := getOrCreateEntry(&m.exfilEvents, map[string]string{"channel": channel})
+	e.value.Add(1)
 }
 
 // writeExfilDetections emits the egress-guard violation counter.
@@ -1249,11 +1273,11 @@ func (m *Metrics) WritePrometheus(w io.Writer) {
 		"Total HTTP requests by method, path, and status.", &m.httpTotal)
 
 	m.writeHandlerPanics(w)
-	m.writeCounterAtomic(w, "nenya_pipeline_redactions_total",
-		"Total secret redactions applied by the Tier-0 filter.", m.redactions.Load())
+	m.writeRedactions(w)
 	m.writeInjectionMetrics(w)
 	m.writeSpotlighted(w)
 	m.writeExfilDetections(w)
+	m.writeExfilEvents(w)
 	m.writeCounterAtomic(w, "nenya_pipeline_compaction_applied_total",
 		"Total text compaction passes applied.", m.compactions.Load())
 	m.writeCounterMap(w, "nenya_pipeline_window_applied_total",

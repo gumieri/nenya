@@ -394,3 +394,60 @@ func TestExfilGuardOversizedChunkStrip(t *testing.T) {
 		t.Errorf("tail must survive: %q", got[len(got)-40:])
 	}
 }
+
+func TestCanaryWatcherChunkBoundaryStraddle(t *testing.T) {
+	canary := "NENYA-CANARY-0123456789abcdef0123456789abcdef"
+	watcher := NewCanaryWatcher(canary, config.CanaryActionBlock, "stream", nil, nil)
+	// Canary split across two deltas.
+	if _, action, _ := watcher.FilterContent("dump: NENYA-CANARY-012345"); action != ActionPass {
+		t.Fatalf("partial prefix must pass, got %v", action)
+	}
+	if _, action, _ := watcher.FilterContent("6789abcdef0123456789abcdef end"); action != ActionBlock {
+		t.Fatalf("expected block when canary completes, got %v", action)
+	}
+	if !watcher.IsBlocked() {
+		t.Error("watcher must latch blocked")
+	}
+}
+
+func TestCanaryWatcherNoFalsePositive(t *testing.T) {
+	canary := "NENYA-CANARY-0123456789abcdef0123456789abcdef"
+	watcher := NewCanaryWatcher(canary, config.CanaryActionBlock, "stream", nil, nil)
+	lines := []string{
+		"here is the file content",
+		"func main() { fmt.Println(https://go.dev) }",
+		"NENYA-CANARY-ffffffffffffffffffffffffffffffff (different token)",
+		"[DONE]",
+	}
+	for _, l := range lines {
+		if _, action, _ := watcher.FilterContent(l); action == ActionBlock {
+			t.Fatalf("false positive on %q", l)
+		}
+	}
+	if watcher.Tripped {
+		t.Error("watcher must not trip without the exact token")
+	}
+}
+
+func TestCanaryWatcherLogActionPasses(t *testing.T) {
+	canary := "NENYA-CANARY-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	watcher := NewCanaryWatcher(canary, config.CanaryActionLog, "stream", nil, nil)
+	content := "leak " + canary + " done"
+	got, action, _ := watcher.FilterContent(content)
+	if action != ActionPass {
+		t.Fatalf("log action must pass content, got %v", action)
+	}
+	if got != content {
+		t.Error("log action must not rewrite content")
+	}
+	if watcher.IsBlocked() {
+		t.Error("log action never blocks")
+	}
+}
+
+func TestCanaryWatcherInertWithoutToken(t *testing.T) {
+	watcher := NewCanaryWatcher("", config.CanaryActionBlock, "stream", nil, nil)
+	if _, action, _ := watcher.FilterContent("anything NENYA-CANARY-x"); action != ActionPass {
+		t.Fatal("empty-token watcher must be inert")
+	}
+}

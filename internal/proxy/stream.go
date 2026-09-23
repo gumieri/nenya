@@ -18,6 +18,7 @@ import (
 	"github.com/nenya/internal/billing"
 	"github.com/nenya/internal/gateway"
 	"github.com/nenya/internal/infra"
+	"github.com/nenya/internal/pipeline"
 	providerpkg "github.com/nenya/internal/providers"
 	"github.com/nenya/internal/routing"
 	"github.com/nenya/internal/stream"
@@ -888,7 +889,7 @@ func (p *Proxy) streamResponse(opts streamResponseOpts, action upstreamAction) s
 		if attempt > 0 {
 			attemptStall = nil
 		}
-		transformingReader, contentBuilder, stallR := p.setupTransformingReader(gw, target, opts.agentName, opts.sourceFormat, action, r.Context(), attemptStall)
+		transformingReader, contentBuilder, stallR := p.setupTransformingReader(gw, target, opts.agentName, opts.sourceFormat, action, r.Context(), attemptStall, opts.canary)
 		if transformingReader == nil {
 			putStreamBuffer(buf)
 			return streamResult{}
@@ -1003,7 +1004,7 @@ func resolveBootstrapBuffer(gw *gateway.NenyaGateway, providerName string) int {
 // reuse, when non-nil, is a stall reader already built around this body (by the
 // stream-head probe); it is used as-is so its buffered read-ahead bytes stay in
 // line, and backgroundExhaust is not double-allocated.
-func (p *Proxy) setupTransformingReader(gw *gateway.NenyaGateway, target routing.UpstreamTarget, agentName, sourceFormat string, action upstreamAction, ctx context.Context, reuse *stallReader) (*stream.SSETransformingReader, *contentBuilder, *stallReader) {
+func (p *Proxy) setupTransformingReader(gw *gateway.NenyaGateway, target routing.UpstreamTarget, agentName, sourceFormat string, action upstreamAction, ctx context.Context, reuse *stallReader, canary pipeline.CanarResult) (*stream.SSETransformingReader, *contentBuilder, *stallReader) {
 	transformer := p.resolveTransformer(gw, target, sourceFormat)
 
 	var bodyReader io.Reader = action.resp.Body
@@ -1035,6 +1036,9 @@ func (p *Proxy) setupTransformingReader(gw *gateway.NenyaGateway, target routing
 	p.setupStreamFilterIfEnabled(gw, transformingReader)
 	if guard := exfilGuardFor(gw, agentName); guard != nil {
 		transformingReader.SetExfilGuard(guard)
+	}
+	if canary.Token != "" {
+		transformingReader.SetCanaryWatcher(stream.NewCanaryWatcher(canary.Token, canary.Action, "stream", gw.Metrics, gw.Logger.With("agent", agentName)))
 	}
 	p.setupStreamEntropyFilterIfEnabled(gw, transformingReader)
 	contentBuilder := p.setupContentBuilderIfNeeded(gw, agentName, transformingReader)
@@ -1225,26 +1229,8 @@ func (p *Proxy) setupStreamWriter(gw *gateway.NenyaGateway, flushWriter *immedia
 func (p *Proxy) handleStreamDone(gw *gateway.NenyaGateway, w http.ResponseWriter, target routing.UpstreamTarget, agentName string, action upstreamAction, cacheKey string, cooldownDuration time.Duration, payload map[string]any, buf *[]byte, copyErr error, captureBuf *bytes.Buffer, tee *sseTeeWriter, contentBuilder *contentBuilder, stallR *stallReader, reqCtx context.Context, injectedErr bool) streamResult {
 	putStreamBuffer(buf)
 
-	if errors.Is(copyErr, stream.ErrExfilBlocked) {
-		action.cancel()
-		_ = action.resp.Body.Close()
-		stallR.Stop()
-		stallR.DrainBuffered()
-		gw.Logger.Warn("stream blocked by exfil guard, upstream killed",
-			"model", target.Model, "provider", target.Provider)
-		gw.Metrics.RecordStreamBlock(target.Model, target.Provider)
-		p.writeExfilBlockedSSE(gw, w)
-		return streamResult{terminal: true}
-	}
-
-	if errors.Is(copyErr, stream.ErrStreamBlocked) {
-		action.cancel()
-		_ = action.resp.Body.Close()
-		gw.Logger.Warn("stream blocked by execution policy, upstream killed",
-			"model", target.Model, "provider", target.Provider)
-		gw.Metrics.RecordStreamBlock(target.Model, target.Provider)
-		p.writeBlockedSSE(gw, w)
-		return streamResult{}
+	if handled, result := p.handleBlockedStream(gw, w, target, copyErr, action, stallR); handled {
+		return result
 	}
 
 	// Close upstream body and cancel context before draining to unblock
@@ -1489,6 +1475,66 @@ func (p *Proxy) writeBlockedSSE(gw *gateway.NenyaGateway, w http.ResponseWriter)
 			{
 				"index":         0,
 				"delta":         map[string]interface{}{"content": "[Response blocked by execution policy]"},
+				"finish_reason": "stop",
+			},
+		},
+	})
+}
+
+// handleBlockedStream resolves the three stream-block error kinds
+// (canary tripwire, egress guard, execution policy): it kills the
+// upstream, drains the stall reader, records the block and writes the
+// kind-specific SSE frame. Returns handled=false for other errors.
+func (p *Proxy) handleBlockedStream(gw *gateway.NenyaGateway, w http.ResponseWriter, target routing.UpstreamTarget, copyErr error, action upstreamAction, stallR *stallReader) (bool, streamResult) {
+	var message string
+	var blocked bool
+	var writer func(*gateway.NenyaGateway, http.ResponseWriter)
+	switch {
+	case errors.Is(copyErr, stream.ErrCanaryDetected):
+		message = "stream blocked: canary detected, upstream killed"
+		blocked = true
+		writer = p.writeExfilDetectedSSE
+	case errors.Is(copyErr, stream.ErrExfilBlocked):
+		message = "stream blocked by exfil guard, upstream killed"
+		blocked = true
+		writer = p.writeExfilBlockedSSE
+	case errors.Is(copyErr, stream.ErrStreamBlocked):
+		message = "stream blocked by execution policy, upstream killed"
+		writer = p.writeBlockedSSE
+	default:
+		return false, streamResult{}
+	}
+
+	action.cancel()
+	_ = action.resp.Body.Close()
+	if stallR != nil {
+		stallR.Stop()
+		stallR.DrainBuffered()
+	}
+	gw.Logger.Warn(message, "model", target.Model, "provider", target.Provider)
+	gw.Metrics.RecordStreamBlock(target.Model, target.Provider)
+	writer(gw, w)
+	// The canary and exfil branches fully write the response: the retry
+	// loop must not fail over onto the committed bytes.
+	return true, streamResult{terminal: blocked}
+}
+
+// writeExfilDetectedSSE sends the structured canary-detection response:
+// an error object carrying error_kind=exfil_detected plus a human-
+// readable delta, then [DONE].
+func (p *Proxy) writeExfilDetectedSSE(gw *gateway.NenyaGateway, w http.ResponseWriter) {
+	p.writeBlockedSSEPayload(gw, w, map[string]interface{}{
+		"id":         "blocked",
+		"object":     "chat.completion.chunk",
+		"error_kind": string(infra.ErrorKindExfilDetected),
+		"error": map[string]interface{}{
+			"message": "response blocked: canary token detected in output",
+			"type":    string(infra.ErrorKindExfilDetected),
+		},
+		"choices": []map[string]interface{}{
+			{
+				"index":         0,
+				"delta":         map[string]interface{}{"content": "[Response blocked: canary detected in output]"},
 				"finish_reason": "stop",
 			},
 		},

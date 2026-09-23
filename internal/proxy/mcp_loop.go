@@ -419,6 +419,14 @@ func (p *Proxy) handleMCPBufferOutcome(in mcpIterInput, buf *bufferedSSE, err er
 		p.writeExfilBlockedSSE(in.gw, in.w)
 		return true
 	}
+	if err == nil && buf != nil && buf.canaryBlocked {
+		// Same termination for the canary tripwire, with the
+		// exfil_detected error kind.
+		in.gw.Logger.Warn("MCP loop: response blocked by canary tripwire",
+			"iteration", in.iteration, "agent", in.opts.AgentName)
+		p.writeExfilDetectedSSE(in.gw, in.w)
+		return true
+	}
 	return false
 }
 
@@ -448,7 +456,7 @@ func (p *Proxy) mcpIteration(in mcpIterInput) int {
 		working = in.opts.Payload
 	}
 
-	buf, err := p.forwardBuffered(in.gw, in.mcpLoopCtx, in.r, in.opts.Targets, working, in.opts.Cooldown, in.opts.TokenCount, in.opts.AgentName, in.opts.MaxRetries, in.opts.ApiKey)
+	buf, err := p.forwardBuffered(in.gw, in.mcpLoopCtx, in.r, in.opts.Targets, working, in.opts.Cooldown, in.opts.TokenCount, in.opts.AgentName, in.opts.MaxRetries, in.opts.ApiKey, in.opts.Canary)
 	if handled := p.handleMCPBufferOutcome(in, buf, err); handled {
 		return mcpIterReturn
 	}
@@ -484,7 +492,7 @@ func (p *Proxy) mcpIteration(in mcpIterInput) int {
 			"iteration", in.iteration+1,
 			"agent", in.opts.AgentName)
 
-		results := executeMCPCalls(in.mcpLoopCtx, mcpCalls, in.gw, in.opts.AgentName)
+		results := executeMCPCalls(in.mcpLoopCtx, mcpCalls, in.gw, in.opts.AgentName, in.opts.Canary)
 		mcpAssistantMsg := map[string]any{
 			"role":       "assistant",
 			"content":    nil,
@@ -527,6 +535,7 @@ func (p *Proxy) forwardBuffered(gw *gateway.NenyaGateway,
 	agentName string,
 	maxRetries int,
 	apiKey *config.ApiKey,
+	canary pipeline.CanarResult,
 ) (*bufferedSSE, error) {
 	originalPayload, err := prepareOriginalPayload(gw, payload)
 	if err != nil {
@@ -549,7 +558,7 @@ func (p *Proxy) forwardBuffered(gw *gateway.NenyaGateway,
 		}
 
 		action := p.prepareAndSend(gw, r, i, targets, target, workingPayload, cooldownDuration, tokenCount, agentName, apiKey, false)
-		result, shouldContinue := p.handleBufferedAction(ctx, gw, i, targets, target, cooldownDuration, agentName, action, attempt, maxRetries)
+		result, shouldContinue := p.handleBufferedAction(ctx, gw, i, targets, target, cooldownDuration, agentName, action, attempt, maxRetries, canary)
 		if result != nil {
 			return result, nil
 		}
@@ -576,7 +585,7 @@ func prepareOriginalPayload(gw *gateway.NenyaGateway, payload map[string]interfa
 	return originalPayload, nil
 }
 
-func (p *Proxy) handleBufferedAction(ctx context.Context, gw *gateway.NenyaGateway, idx int, targets []routing.UpstreamTarget, target routing.UpstreamTarget, cooldownDuration time.Duration, agentName string, action upstreamAction, attempt, maxRetries int) (*bufferedSSE, bool) {
+func (p *Proxy) handleBufferedAction(ctx context.Context, gw *gateway.NenyaGateway, idx int, targets []routing.UpstreamTarget, target routing.UpstreamTarget, cooldownDuration time.Duration, agentName string, action upstreamAction, attempt, maxRetries int, canary pipeline.CanarResult) (*bufferedSSE, bool) {
 	switch action.kind {
 	case actionContinue:
 		return nil, true
@@ -627,7 +636,7 @@ func (p *Proxy) handleBufferedAction(ctx context.Context, gw *gateway.NenyaGatew
 		}
 		return nil, false
 	case actionStream:
-		buf, err := p.handleBufferedStream(ctx, action, target, gw, cooldownDuration, agentName)
+		buf, err := p.handleBufferedStream(ctx, action, target, gw, cooldownDuration, agentName, canary)
 		if err != nil {
 			gw.AgentState.RecordFailure(target, cooldownDuration)
 		}
@@ -636,7 +645,7 @@ func (p *Proxy) handleBufferedAction(ctx context.Context, gw *gateway.NenyaGatew
 	return nil, false
 }
 
-func (p *Proxy) handleBufferedStream(ctx context.Context, action upstreamAction, target routing.UpstreamTarget, gw *gateway.NenyaGateway, cooldownDuration time.Duration, agentName string) (*bufferedSSE, error) {
+func (p *Proxy) handleBufferedStream(ctx context.Context, action upstreamAction, target routing.UpstreamTarget, gw *gateway.NenyaGateway, cooldownDuration time.Duration, agentName string, canary pipeline.CanarResult) (*bufferedSSE, error) {
 	defer action.cancel()
 	buf, err := bufferStreamResponse(ctx, action.resp.Body, gw.Logger)
 	_ = action.resp.Body.Close()
@@ -649,6 +658,7 @@ func (p *Proxy) handleBufferedStream(ctx context.Context, action upstreamAction,
 	// verbatim, bypassing the streaming filter pipeline — apply the URL
 	// egress policy over the buffered frames before they reach callers.
 	p.applyExfilToBufferedSSE(gw, buf, agentName)
+	p.applyCanaryToBufferedSSE(gw, buf, agentName, canary)
 	return buf, nil
 }
 
@@ -680,6 +690,80 @@ func (p *Proxy) applyExfilToBufferedSSE(gw *gateway.NenyaGateway, buf *bufferedS
 		buf.rawBytes = out
 		buf.exfilBlocked = blocked
 	}
+}
+
+// applyCanaryToBufferedSSE scans the model-text frames of a buffered
+// response for the request canary through ONE persistent watcher, so a
+// token straddling delta frames is detected at completion (per-frame
+// scans would miss it). Block truncates the buffer at the completing
+// frame (canaryBlocked); log scrubs the marker best-effort per frame
+// (a straddled token is detected but its fragments may remain) and
+// continues.
+func (p *Proxy) applyCanaryToBufferedSSE(gw *gateway.NenyaGateway, buf *bufferedSSE, agentName string, canary pipeline.CanarResult) {
+	if canary.Token == "" || buf == nil || len(buf.rawBytes) == 0 {
+		return
+	}
+	watcher := stream.NewCanaryWatcher(canary.Token, canary.Action, "buffered", gw.Metrics, gw.Logger.With("agent", agentName))
+	var out []byte
+	blocked := false
+	changed := false
+	for _, line := range strings.Split(string(buf.rawBytes), "\n") {
+		if blocked && !strings.Contains(line, "usage") {
+			// After a block verdict only bookkeeping frames (usage) are
+			// kept, mirroring the egress guard; content frames are
+			// dropped with the violation.
+			continue
+		}
+		next, lineBlocked, lineChanged := p.canaryBufferedLine(watcher, canary, line)
+		blocked = blocked || lineBlocked
+		changed = changed || lineChanged
+		out = append(out, next...)
+	}
+	if changed {
+		buf.rawBytes = out
+		buf.canaryBlocked = blocked
+	}
+}
+
+// canaryBufferedLine runs the canary watcher over one buffered SSE
+// line: block verdicts report truncation; log verdicts scrub the marker
+// sentence from frames after the trip.
+func (p *Proxy) canaryBufferedLine(watcher *stream.CanaryWatcher, canary pipeline.CanarResult, line string) (string, bool, bool) {
+	trimmed := strings.TrimPrefix(line, "data: ")
+	if line == trimmed || strings.TrimSpace(trimmed) == "" || strings.TrimSpace(trimmed) == "[DONE]" {
+		return line + "\n", false, false
+	}
+	parsed := stream.ParseSSEChunk([]byte(trimmed))
+	if parsed == nil {
+		return line + "\n", false, false
+	}
+	content := stream.ExtractExfilContent(parsed)
+	if content == "" {
+		return line + "\n", false, false
+	}
+	_, action, _ := watcher.FilterContent(content)
+	if action == stream.ActionBlock {
+		// The watcher emits the one-time detection warning (with agent
+		// context).
+		return "", true, true
+	}
+	if watcher.Tripped && canary.Action == config.CanaryActionLog {
+		// Log mode: scrub the marker sentence (falling back to the bare
+		// token) from frames carrying it.
+		cleaned := strings.ReplaceAll(content, pipeline.CanaryMarker(canary.Token), "")
+		cleaned = strings.ReplaceAll(cleaned, canary.Token, "")
+		if cleaned != content {
+			_ = stream.SetExfilContent(parsed, cleaned)
+			reencoded, err := json.Marshal(parsed)
+			if err != nil {
+				// Log mode is fail-open: pass the original line through
+				// rather than dropping content.
+				return line + "\n", false, false
+			}
+			return "data: " + string(reencoded) + "\n", false, true
+		}
+	}
+	return line + "\n", false, false
 }
 
 // guardBufferedLine runs the guard over one buffered SSE line, returning
@@ -723,6 +807,11 @@ func (p *Proxy) replayGuardedBuffered(gw *gateway.NenyaGateway, w http.ResponseW
 	if buf != nil && buf.exfilBlocked {
 		gw.Logger.Warn("MCP loop: response blocked by exfil guard", "agent", agentName)
 		p.writeExfilBlockedSSE(gw, w)
+		return
+	}
+	if buf != nil && buf.canaryBlocked {
+		gw.Logger.Warn("MCP loop: response blocked by canary tripwire", "agent", agentName)
+		p.writeExfilDetectedSSE(gw, w)
 		return
 	}
 	replayBufferedResponse(w, buf, gw.Logger)

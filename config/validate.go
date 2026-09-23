@@ -106,6 +106,7 @@ func collectValidationErrors(ctx context.Context, cfg *Config, providers map[str
 	errors = append(errors, validateInjectionConfig(cfg, logger)...)
 	errors = append(errors, validateSpotlightConfig(cfg)...)
 	errors = append(errors, validateExfilGuardConfig(cfg)...)
+	errors = append(errors, validateCanaryConfig(cfg)...)
 	errors = append(errors, validateModelRegistryErrors(logger)...)
 	errors = append(errors, validateEntropyConfig(cfg.Bouncer)...)
 	errors = append(errors, validateProviderRateLimits(cfg)...)
@@ -807,4 +808,18 @@ func validateExfilGuardConfig(cfg *Config) []string {
 		}
 	}
 	return errs
+}
+
+// validateCanaryConfig checks the tripwire action value (a typo would
+// silently degrade block to log at runtime).
+func validateCanaryConfig(cfg *Config) []string {
+	if cfg.Governance.Canary == nil {
+		return nil
+	}
+	switch cfg.Governance.Canary.Action {
+	case "", CanaryActionLog, CanaryActionBlock:
+		return nil
+	default:
+		return []string{fmt.Sprintf("governance.canary.action: invalid value %q, must be empty, \"log\", or \"block\"", cfg.Governance.Canary.Action)}
+	}
 }

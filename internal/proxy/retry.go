@@ -199,6 +199,9 @@ type forwardOptions struct {
 	KeyRef       string
 	SourceFormat string
 	ApiKey       *config.ApiKey
+	// Canary carries the per-request tripwire token (empty when the
+	// guard is disabled).
+	Canary pipeline.CanarResult
 }
 
 // retryLoop encapsulates the state and logic for retrying upstream requests.
@@ -303,6 +306,7 @@ func (rl *retryLoop) handleActionResult(i int, target routing.UpstreamTarget, ac
 			idx:          i,
 			tokenCount:   rl.opts.TokenCount,
 			apiKey:       rl.opts.ApiKey,
+			canary:       rl.opts.Canary,
 		}, action)
 		if result.terminal {
 			// Response fully written (content-policy block): stop, never
@@ -326,7 +330,7 @@ func (rl *retryLoop) handleActionResult(i int, target routing.UpstreamTarget, ac
 		}
 		return true
 	case actionResponse:
-		result := rl.p.handleNonStreamingResponse(rl.gw, rl.w, rl.r, target, rl.opts.AgentName, rl.opts.SourceFormat, action, rl.opts.CacheKey, rl.opts.Cooldown)
+		result := rl.p.handleNonStreamingResponse(rl.gw, rl.w, rl.r, target, rl.opts.AgentName, rl.opts.SourceFormat, action, rl.opts.CacheKey, rl.opts.Cooldown, rl.opts.Canary)
 		if result.terminal {
 			// 403 already written (exfil block): stop the loop.
 			return true
@@ -505,7 +509,7 @@ func (rl *retryLoop) handleContextLimitError(i int, target routing.UpstreamTarge
 		rl.ctxLogger.Info("auto_retry_on_context_limit disabled")
 	} else if !rl.summarized {
 		summarizedPayload, sumErr := rl.p.attemptContextLimitSummarization(
-			rl.r.Context(), rl.ctxLogger, rl.gw, rl.originalPayload, action.body, rl.opts.AgentName, target.Provider, target.Model)
+			rl.r.Context(), rl.ctxLogger, rl.gw, rl.originalPayload, action.body, rl.opts.AgentName, target.Provider, target.Model, rl.opts.Canary)
 		if sumErr == nil && summarizedPayload != nil {
 			rl.summarized = true
 			rl.summarizedPayload = summarizedPayload
@@ -1279,7 +1283,7 @@ func logErrorRetryable(ctxLogger *slog.Logger, errorBody []byte, gw *gateway.Nen
 // after a context-length error. It parses the original payload, extracts messages,
 // sends them to the configured summarization engine with the provided context,
 // and returns a summarized payload map on success.
-func (p *Proxy) attemptContextLimitSummarization(ctx context.Context, ctxLogger *slog.Logger, gw *gateway.NenyaGateway, originalPayload []byte, errorBody []byte, agentName, providerName, modelName string) (map[string]interface{}, error) {
+func (p *Proxy) attemptContextLimitSummarization(ctx context.Context, ctxLogger *slog.Logger, gw *gateway.NenyaGateway, originalPayload []byte, errorBody []byte, agentName, providerName, modelName string, canary pipeline.CanarResult) (map[string]interface{}, error) {
 	if len(gw.Config.Bouncer.Engine.ResolvedTargets) == 0 {
 		return nil, fmt.Errorf("engine chain not configured")
 	}
@@ -1300,6 +1304,11 @@ func (p *Proxy) attemptContextLimitSummarization(ctx context.Context, ctxLogger 
 		return nil, fmt.Errorf("messages is not a valid array or is empty")
 	}
 
+	// The canary marker must not reach the summarizer: a faithful
+	// summary would reproduce the token verbatim and trip the wire on
+	// the retried conversation. It is re-appended verbatim below.
+	messages = canarySafeMessages(messages, canary)
+
 	summarized, err := p.summarizeMessages(ctx, gw, messages, agentName, providerName, modelName)
 	if err != nil {
 		return nil, err
@@ -1309,8 +1318,57 @@ func (p *Proxy) attemptContextLimitSummarization(ctx context.Context, ctxLogger 
 	for k, v := range payload {
 		newPayload[k] = v
 	}
+	// The canary marker (a trailing system message) is part of the
+	// original conversation but is not summarizable content: re-append
+	// it verbatim so the tripwire stays armed on the summarized retry.
+	if canary.Token != "" {
+		summarized = append(summarized, map[string]interface{}{
+			"role":    "system",
+			"content": pipeline.CanaryMarker(canary.Token),
+		})
+	}
 	newPayload["messages"] = summarized
 	return newPayload, nil
+}
+
+// canarySafeMessages strips canary material from the summarizer input:
+// the injected marker message is removed entirely and a bare token
+// echoed into other history content (e.g. log-mode-allowed tool output)
+// is scrubbed, so the summary can never reproduce the token.
+func canarySafeMessages(messages []interface{}, canary pipeline.CanarResult) []interface{} {
+	if canary.Token == "" {
+		return messages
+	}
+	filtered := make([]interface{}, 0, len(messages))
+	for _, m := range messages {
+		msg, ok := m.(map[string]interface{})
+		if !ok {
+			filtered = append(filtered, m)
+			continue
+		}
+		if msg["content"] == pipeline.CanaryMarker(canary.Token) {
+			continue
+		}
+		switch text := msg["content"].(type) {
+		case string:
+			if strings.Contains(text, canary.Token) {
+				msg["content"] = strings.ReplaceAll(text, canary.Token, "")
+			}
+		case []interface{}:
+			// Content-array form: scrub bare tokens from text parts.
+			for _, part := range text {
+				pm, ok := part.(map[string]interface{})
+				if !ok || pm["type"] != "text" {
+					continue
+				}
+				if pt, ok := pm["text"].(string); ok && strings.Contains(pt, canary.Token) {
+					pm["text"] = strings.ReplaceAll(pt, canary.Token, "")
+				}
+			}
+		}
+		filtered = append(filtered, m)
+	}
+	return filtered
 }
 
 // redactForLog applies secret redaction and truncation to error body text before

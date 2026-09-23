@@ -838,3 +838,31 @@ func TestValidateInjectionEscalation(t *testing.T) {
 		}
 	})
 }
+
+func TestValidateCanaryConfig(t *testing.T) {
+	enabled := true
+	t.Run("valid actions", func(t *testing.T) {
+		for _, action := range []string{"", CanaryActionLog, CanaryActionBlock} {
+			cfg := &Config{Governance: GovernanceConfig{
+				Canary: &CanaryConfig{Enabled: &enabled, Action: action},
+			}}
+			if errs := validateCanaryConfig(cfg); len(errs) != 0 {
+				t.Errorf("expected %q valid, got %v", action, errs)
+			}
+		}
+	})
+	t.Run("invalid action rejected", func(t *testing.T) {
+		cfg := &Config{Governance: GovernanceConfig{
+			Canary: &CanaryConfig{Enabled: &enabled, Action: "blok"},
+		}}
+		errs := validateCanaryConfig(cfg)
+		if len(errs) != 1 || !strings.Contains(errs[0], "governance.canary.action") {
+			t.Errorf("expected action error, got %v", errs)
+		}
+	})
+	t.Run("nil config valid", func(t *testing.T) {
+		if errs := validateCanaryConfig(&Config{}); len(errs) != 0 {
+			t.Errorf("expected no errors, got %v", errs)
+		}
+	})
+}

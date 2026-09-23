@@ -38,7 +38,10 @@ type bufferedSSE struct {
 	model            string
 	// exfilBlocked marks a buffer truncated by the egress guard: callers
 	// must not replay it and should emit the structured block payload.
-	exfilBlocked     bool
+	exfilBlocked bool
+	// canaryBlocked marks a buffer truncated by the canary tripwire
+	// (routes to error_kind=exfil_detected instead of exfil_blocked).
+	canaryBlocked    bool
 	reasoningContent string
 }
 
@@ -396,8 +399,13 @@ func partitionMCPToolCalls(calls []mcpToolCall, toolIndex *mcp.ToolRegistry) (mc
 }
 
 // executeMCPCalls executes MCP tool calls concurrently using the registered MCP servers.
-// Returns a slice of tool results in the same order as the input calls.
-func executeMCPCalls(ctx context.Context, calls []mcpToolCall, gw *gateway.NenyaGateway, agentName string) []*mcp.CallToolResult {
+// When the canary tripwire is armed, call arguments are scanned first:
+// a canary hit means the model reproduced gateway-injected context into
+// an outbound tool call — the signature of injection-driven exfiltration.
+// Block action refuses the call with an error result; log action allows
+// it after recording. Returns a slice of tool results in the same order
+// as the input calls.
+func executeMCPCalls(ctx context.Context, calls []mcpToolCall, gw *gateway.NenyaGateway, agentName string, canary pipeline.CanarResult) []*mcp.CallToolResult {
 	if len(calls) == 0 {
 		return nil
 	}
@@ -422,6 +430,29 @@ func executeMCPCalls(ctx context.Context, calls []mcpToolCall, gw *gateway.Nenya
 			)
 
 			start := time.Now()
+
+			// Canary tripwire on the tool-args egress channel: scan
+			// BEFORE dispatching the call to the MCP server. Block
+			// action refuses the call (unscannable arguments fail
+			// closed); log action records and allows.
+			tripped, unscannable, refuse := canary.ScanArgs(c.Arguments)
+			if tripped {
+				gw.Metrics.RecordExfilEvent("tool_args")
+				ctxLogger.Warn("canary detected in MCP tool arguments",
+					"tool", c.Name, "channel", "tool_args")
+			}
+			if unscannable {
+				gw.Metrics.RecordExfilEvent("tool_args")
+				ctxLogger.Warn("MCP tool arguments unscannable; skipped by canary scan",
+					"tool", c.Name)
+			}
+			if refuse {
+				results[idx] = &mcp.CallToolResult{
+					Content: []mcp.ContentBlock{{Type: "text", Text: "[blocked by egress policy: canary detected in tool arguments]"}},
+					IsError: true,
+				}
+				return
+			}
 
 			route, ok := gw.MCPToolIndex.Lookup(c.Name)
 			if !ok {

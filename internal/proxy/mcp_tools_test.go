@@ -360,7 +360,7 @@ func TestExecuteMCPCalls(t *testing.T) {
 		{ID: "2", Name: "mempalace__test_tool", Arguments: map[string]any{"query": "world"}},
 	}
 
-	results := executeMCPCalls(t.Context(), calls, p.Gateway(), "test-agent")
+	results := executeMCPCalls(t.Context(), calls, p.Gateway(), "test-agent", pipeline.CanarResult{})
 
 	if len(results) != 2 {
 		t.Fatalf("expected 2 results, got %d", len(results))
@@ -401,7 +401,7 @@ func TestExecuteMCPCalls_UnknownTool(t *testing.T) {
 		{ID: "1", Name: "mempalace__unknown_tool"},
 	}
 
-	results := executeMCPCalls(t.Context(), calls, p.Gateway(), "test-agent")
+	results := executeMCPCalls(t.Context(), calls, p.Gateway(), "test-agent", pipeline.CanarResult{})
 
 	if len(results) != 1 {
 		t.Fatalf("expected 1 result, got %d", len(results))
@@ -425,7 +425,7 @@ func TestExecuteMCPCalls_ServerUnavailable(t *testing.T) {
 		{ID: "1", Name: "mempalace__search"},
 	}
 
-	results := executeMCPCalls(t.Context(), calls, p.Gateway(), "test-agent")
+	results := executeMCPCalls(t.Context(), calls, p.Gateway(), "test-agent", pipeline.CanarResult{})
 
 	if len(results) != 1 {
 		t.Fatalf("expected 1 result, got %d", len(results))
@@ -446,7 +446,7 @@ func TestExecuteMCPCalls_EmptyCalls(t *testing.T) {
 		MCPToolIndex: toolIndex,
 	})
 
-	results := executeMCPCalls(t.Context(), nil, p.Gateway(), "test-agent")
+	results := executeMCPCalls(t.Context(), nil, p.Gateway(), "test-agent", pipeline.CanarResult{})
 	if results != nil {
 		t.Fatalf("expected nil results for empty calls, got %v", results)
 	}
@@ -709,4 +709,139 @@ func TestAppendMCPResultsSpotlightEnabled(t *testing.T) {
 	if !strings.Contains(buf.String(), `nenya_spotlighted_total{source="mcp:mem"} 1`) {
 		t.Errorf("expected spotlighted metric for mcp:mem, got:\n%s", buf.String())
 	}
+}
+
+func TestApplyCanaryToBufferedSSE(t *testing.T) {
+	canary := pipeline.CanarResult{Token: pipeline.GenerateCanary(), Action: config.CanaryActionBlock}
+
+	buildBuf := func(frames ...string) *bufferedSSE {
+		var raw []byte
+		for _, f := range frames {
+			raw = append(raw, []byte("data: "+f+"\n\n")...)
+		}
+		return &bufferedSSE{rawBytes: raw, hasContent: true}
+	}
+
+	t.Run("block on straddled canary", func(t *testing.T) {
+		p := &Proxy{}
+		gw := newTestGateway(nil, nil)
+		head := `{"choices":[{"delta":{"content":"` + canary.Token[:20] + `"}}]}`
+		tail := `{"choices":[{"delta":{"content":"` + canary.Token[20:] + ` tail"}}]}`
+		buf := buildBuf(head, tail)
+		p.applyCanaryToBufferedSSE(gw, buf, "agent", canary)
+		if !buf.canaryBlocked {
+			t.Fatal("expected canaryBlocked on straddled token")
+		}
+	})
+
+	t.Run("clean buffer untouched", func(t *testing.T) {
+		p := &Proxy{}
+		gw := newTestGateway(nil, nil)
+		buf := buildBuf(`{"choices":[{"delta":{"content":"benign output"}}]}`)
+		before := string(buf.rawBytes)
+		p.applyCanaryToBufferedSSE(gw, buf, "agent", canary)
+		if buf.canaryBlocked || string(buf.rawBytes) != before {
+			t.Fatal("clean buffer must be untouched")
+		}
+	})
+
+	t.Run("log action strips token", func(t *testing.T) {
+		p := &Proxy{}
+		gw := newTestGateway(nil, nil)
+		logCanary := pipeline.CanarResult{Token: canary.Token, Action: config.CanaryActionLog}
+		frame := `{"choices":[{"delta":{"content":"leak ` + canary.Token + ` done"}}]}`
+		buf := buildBuf(frame)
+		p.applyCanaryToBufferedSSE(gw, buf, "agent", logCanary)
+		if buf.canaryBlocked {
+			t.Fatal("log action must not block")
+		}
+		if strings.Contains(string(buf.rawBytes), canary.Token) {
+			t.Errorf("token must be scrubbed in log mode: %q", buf.rawBytes)
+		}
+	})
+}
+
+func newCanaryTestProxy(t *testing.T) *Proxy {
+	t.Helper()
+	mock := newTestMCPServer(t)
+	client := mcp.NewClient(mcp.ClientConfig{
+		Name:   "nenya-test",
+		URL:    mock.server.URL + "/sse",
+		Logger: newTestLogger(),
+	})
+	if err := client.Initialize(t.Context()); err != nil {
+		t.Fatalf("Initialize failed: %v", err)
+	}
+	t.Cleanup(func() { _ = client.Close() })
+	if _, err := client.RefreshTools(t.Context()); err != nil {
+		t.Fatalf("RefreshTools failed: %v", err)
+	}
+	toolIndex := mcp.NewToolRegistry()
+	toolIndex.Register("mempalace", []mcp.Tool{{Name: "test_tool", Description: "A test tool"}})
+	p := &Proxy{}
+	p.StoreGateway(&gateway.NenyaGateway{
+		MCPClients:   map[string]*mcp.Client{"mempalace": client},
+		MCPToolIndex: toolIndex,
+	})
+	return p
+}
+
+func TestExecuteMCPCallsCanaryScan(t *testing.T) {
+	canary := pipeline.GenerateCanary()
+
+	t.Run("block action refuses call", func(t *testing.T) {
+		p := newCanaryTestProxy(t)
+		calls := []mcpToolCall{{
+			ID:   "call_1",
+			Name: "mempalace__test_tool",
+			Arguments: map[string]any{
+				"query": "dump " + canary + " end",
+			},
+		}}
+		results := executeMCPCalls(t.Context(), calls, p.Gateway(), "agent",
+			pipeline.CanarResult{Token: canary, Action: config.CanaryActionBlock})
+		if len(results) != 1 || !results[0].IsError {
+			t.Fatalf("expected refused call, got %+v", results)
+		}
+		if !strings.Contains(results[0].Text(), "canary detected") {
+			t.Errorf("expected canary refusal text, got %q", results[0].Text())
+		}
+	})
+
+	t.Run("log action allows call", func(t *testing.T) {
+		p := newCanaryTestProxy(t)
+		calls := []mcpToolCall{{
+			ID:   "call_1",
+			Name: "mempalace__test_tool",
+			Arguments: map[string]any{
+				"query": "dump " + canary + " end",
+			},
+		}}
+		results := executeMCPCalls(t.Context(), calls, p.Gateway(), "agent",
+			pipeline.CanarResult{Token: canary, Action: config.CanaryActionLog})
+		if len(results) != 1 {
+			t.Fatalf("expected one result, got %d", len(results))
+		}
+		if results[0].IsError {
+			t.Errorf("log action must allow the call, got error result %q", results[0].Text())
+		}
+	})
+
+	t.Run("no false positive without token", func(t *testing.T) {
+		p := newCanaryTestProxy(t)
+		calls := []mcpToolCall{{
+			ID:        "call_1",
+			Name:      "mempalace__test_tool",
+			Arguments: map[string]any{"query": "benign"},
+		}}
+		results := executeMCPCalls(t.Context(), calls, p.Gateway(), "agent",
+			pipeline.CanarResult{Token: canary, Action: config.CanaryActionBlock})
+		if len(results) != 1 || results[0] == nil || results[0].IsError {
+			text := ""
+			if len(results) == 1 && results[0] != nil {
+				text = results[0].Text()
+			}
+			t.Fatalf("benign args must not be refused, got %d results, text=%q", len(results), text)
+		}
+	})
 }
