@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -233,9 +234,15 @@ func (p *Proxy) executeAutoSearch(gw *gateway.NenyaGateway, ctx context.Context,
 	duration := time.Since(start)
 
 	if err != nil {
-		gw.Logger.Warn("MCP auto-search failed, proceeding without",
-			"server", serverName, "agent", agentName, "err", err,
-			"duration_ms", duration.Milliseconds())
+		if errors.Is(err, errMCPArgumentPolicy) {
+			// The guard already logged the rejection at Warn.
+			gw.Logger.Debug("MCP auto-search skipped by argument guard",
+				"server", serverName, "agent", agentName)
+		} else {
+			gw.Logger.Warn("MCP auto-search failed, proceeding without",
+				"server", serverName, "agent", agentName, "err", err,
+				"duration_ms", duration.Milliseconds())
+		}
 		gw.Metrics.RecordMCPAutoSearch(serverName, agentName, false, err)
 		return nil
 	}
@@ -261,10 +268,23 @@ func (p *Proxy) mcpClientCallTool(gw *gateway.NenyaGateway, ctx context.Context,
 	if !ok {
 		return nil, fmt.Errorf("MCP client not found")
 	}
-	return client.CallTool(ctx, toolName, map[string]any{
+	args := map[string]any{
 		"query": query,
 		"limit": 5,
-	})
+	}
+	// The argument guard applies to auto-search too: the query carries
+	// untrusted conversation-derived text. A rejection surfaces as an
+	// error so executeAutoSearch records a failed search and injects
+	// nothing into the conversation.
+	if !guardMCPArgs(gw, gw.Logger, mcpGuardDispatch{
+		ServerName: serverName,
+		ToolName:   toolName,
+		Purpose:    "auto_search",
+		Args:       args,
+	}) {
+		return nil, errMCPArgumentPolicy
+	}
+	return client.CallTool(ctx, toolName, args)
 }
 
 func (p *Proxy) redactSearchResult(gw *gateway.NenyaGateway, resultText string) string {

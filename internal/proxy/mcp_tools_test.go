@@ -845,3 +845,214 @@ func TestExecuteMCPCallsCanaryScan(t *testing.T) {
 		}
 	})
 }
+
+func newArgGuardProxy(t *testing.T, guardCfg *config.MCPGuardConfig, allowedHosts []string) *Proxy {
+	t.Helper()
+	mock := newTestMCPServer(t)
+	client := mcp.NewClient(mcp.ClientConfig{
+		Name:   "nenya-test",
+		URL:    mock.server.URL + "/sse",
+		Logger: newTestLogger(),
+	})
+	if err := client.Initialize(t.Context()); err != nil {
+		t.Fatalf("Initialize failed: %v", err)
+	}
+	t.Cleanup(func() { _ = client.Close() })
+	if _, err := client.RefreshTools(t.Context()); err != nil {
+		t.Fatalf("RefreshTools failed: %v", err)
+	}
+	toolIndex := mcp.NewToolRegistry()
+	toolIndex.Register("mempalace", []mcp.Tool{{
+		Name:        "test_tool",
+		Description: "A test tool",
+		InputSchema: mcp.InputSchema{
+			Type: "object",
+			Properties: map[string]any{
+				"query": map[string]any{"type": "string"},
+			},
+			Required: []string{"query"},
+		},
+	}})
+	p := &Proxy{}
+	p.StoreGateway(&gateway.NenyaGateway{
+		Logger:       newTestLogger(),
+		Metrics:      infra.NewMetrics(),
+		MCPClients:   map[string]*mcp.Client{"mempalace": client},
+		MCPToolIndex: toolIndex,
+		Config: config.Config{
+			Governance: config.GovernanceConfig{MCPGuard: guardCfg},
+			MCPServers: map[string]config.MCPServerConfig{
+				"mempalace": {AllowedHosts: allowedHosts},
+			},
+		},
+	})
+	return p
+}
+
+func TestExecuteMCPArgGuard(t *testing.T) {
+	guardEnabled := &config.MCPGuardConfig{}
+	guardOff := &config.MCPGuardConfig{Enabled: config.PtrTo(false)}
+
+	t.Run("schema violation rejects with tool error", func(t *testing.T) {
+		p := newArgGuardProxy(t, guardEnabled, nil)
+		results := executeMCPCalls(t.Context(), []mcpToolCall{{
+			ID:        "call_1",
+			Name:      "mempalace__test_tool",
+			Arguments: map[string]any{"other": "missing required query"},
+		}}, p.Gateway(), "agent", pipeline.CanarResult{})
+		if len(results) != 1 || !results[0].IsError {
+			t.Fatalf("expected error result, got %+v", results)
+		}
+		if !strings.Contains(results[0].Text(), "missing required property query") {
+			t.Errorf("result text missing violation detail: %q", results[0].Text())
+		}
+	})
+
+	t.Run("private URL rejects", func(t *testing.T) {
+		p := newArgGuardProxy(t, guardEnabled, nil)
+		results := executeMCPCalls(t.Context(), []mcpToolCall{{
+			ID:   "call_2",
+			Name: "mempalace__test_tool",
+			Arguments: map[string]any{
+				"query": "fetch",
+				"url":   "http://169.254.169.254/latest/meta-data/",
+			},
+		}}, p.Gateway(), "agent", pipeline.CanarResult{})
+		if len(results) != 1 || !results[0].IsError {
+			t.Fatalf("expected error result, got %+v", results)
+		}
+		if !strings.Contains(results[0].Text(), "argument policy") {
+			t.Errorf("result text missing policy marker: %q", results[0].Text())
+		}
+	})
+
+	t.Run("allowlisted host passes", func(t *testing.T) {
+		p := newArgGuardProxy(t, guardEnabled, []string{"169.254.169.254"})
+		results := executeMCPCalls(t.Context(), []mcpToolCall{{
+			ID:   "call_3",
+			Name: "mempalace__test_tool",
+			Arguments: map[string]any{
+				"query": "fetch",
+				"url":   "http://169.254.169.254/latest/meta-data/",
+			},
+		}}, p.Gateway(), "agent", pipeline.CanarResult{})
+		if len(results) != 1 || results[0].IsError {
+			t.Fatalf("allowlisted call must pass, got %+v", results)
+		}
+	})
+
+	t.Run("happy path passes with guard enabled", func(t *testing.T) {
+		p := newArgGuardProxy(t, guardEnabled, nil)
+		results := executeMCPCalls(t.Context(), []mcpToolCall{{
+			ID:        "call_4",
+			Name:      "mempalace__test_tool",
+			Arguments: map[string]any{"query": "hello"},
+		}}, p.Gateway(), "agent", pipeline.CanarResult{})
+		if len(results) != 1 || results[0].IsError {
+			t.Fatalf("valid call must pass, got %+v", results)
+		}
+		if !strings.Contains(results[0].Text(), "result for: hello") {
+			t.Errorf("unexpected result text: %q", results[0].Text())
+		}
+	})
+
+	t.Run("disabled guard passes private URL", func(t *testing.T) {
+		p := newArgGuardProxy(t, guardOff, nil)
+		results := executeMCPCalls(t.Context(), []mcpToolCall{{
+			ID:   "call_5",
+			Name: "mempalace__test_tool",
+			Arguments: map[string]any{
+				"query": "fetch",
+				"url":   "http://127.0.0.1:9/admin",
+			},
+		}}, p.Gateway(), "agent", pipeline.CanarResult{})
+		if len(results) != 1 || results[0].IsError {
+			t.Fatalf("disabled guard must pass through, got %+v", results)
+		}
+	})
+}
+
+func TestMCPClientCallToolArgumentGuard(t *testing.T) {
+	t.Run("private URL query is rejected as a search failure", func(t *testing.T) {
+		p := newArgGuardProxy(t, &config.MCPGuardConfig{}, nil)
+		result, err := p.mcpClientCallTool(p.Gateway(), t.Context(), "mempalace", "test_tool", "http://169.254.169.254/latest/meta-data/")
+		if err == nil {
+			t.Fatalf("expected guard error, got result %+v", result)
+		}
+		if result != nil {
+			t.Errorf("rejected search must not return a result, got %+v", result)
+		}
+	})
+
+	t.Run("benign query passes", func(t *testing.T) {
+		p := newArgGuardProxy(t, &config.MCPGuardConfig{}, nil)
+		result, err := p.mcpClientCallTool(p.Gateway(), t.Context(), "mempalace", "test_tool", "golang proxy patterns")
+		if err != nil {
+			t.Fatalf("benign search failed: %v", err)
+		}
+		if result == nil || result.Text() == "" {
+			t.Fatalf("expected a result, got %+v", result)
+		}
+	})
+
+	t.Run("disabled guard lets the query through", func(t *testing.T) {
+		p := newArgGuardProxy(t, &config.MCPGuardConfig{Enabled: config.PtrTo(false)}, nil)
+		result, err := p.mcpClientCallTool(p.Gateway(), t.Context(), "mempalace", "test_tool", "http://127.0.0.1/admin")
+		if err != nil {
+			t.Fatalf("disabled guard must pass: %v", err)
+		}
+		if result == nil {
+			t.Fatal("expected a result")
+		}
+	})
+}
+
+func TestAutoSaveTryServerArgumentGuard(t *testing.T) {
+	p := newArgGuardProxy(t, &config.MCPGuardConfig{}, nil)
+	gw := p.Gateway()
+	agent := &config.AgentConfig{MCP: &config.AgentMCPConfig{Servers: []string{"mempalace"}, SaveTool: "test_tool"}}
+
+	t.Run("private URL content is blocked and falls back", func(t *testing.T) {
+		ok := p.autoSaveTryServer(gw, agent, "mempalace", "agent", "http://169.254.169.254/latest/meta-data/")
+		if ok {
+			t.Error("guard-blocked auto-save must return false so the caller may fall back")
+		}
+	})
+
+	t.Run("benign content saves", func(t *testing.T) {
+		ok := p.autoSaveTryServer(gw, agent, "mempalace", "agent", "a normal conversation summary")
+		if !ok {
+			t.Error("benign auto-save must succeed")
+		}
+	})
+}
+
+func TestExecuteMCPArgGuardLogMode(t *testing.T) {
+	logPolicy := &config.MCPGuardConfig{URLPolicy: "log"}
+	p := newArgGuardProxy(t, logPolicy, nil)
+	results := executeMCPCalls(t.Context(), []mcpToolCall{{
+		ID:   "call_log",
+		Name: "mempalace__test_tool",
+		Arguments: map[string]any{
+			"query": "fetch",
+			"url":   "http://169.254.169.254/latest/meta-data/",
+		},
+	}}, p.Gateway(), "agent", pipeline.CanarResult{})
+	if len(results) != 1 || results[0].IsError {
+		t.Fatalf("log policy must allow the call, got %+v", results)
+	}
+}
+
+func TestGuardMCPArgsNilLogger(t *testing.T) {
+	p := newArgGuardProxy(t, &config.MCPGuardConfig{}, nil)
+	// Must not panic when the caller passes a nil logger on the
+	// rejection path.
+	if guardMCPArgs(p.Gateway(), nil, mcpGuardDispatch{
+		ServerName: "mempalace",
+		ToolName:   "test_tool",
+		Purpose:    "test",
+		Args:       map[string]any{"url": "http://127.0.0.1/"},
+	}) {
+		t.Error("private URL must be rejected")
+	}
+}

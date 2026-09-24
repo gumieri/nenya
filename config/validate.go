@@ -6,8 +6,10 @@ import (
 	"io"
 	"log/slog"
 	"math/rand"
+	"net"
 	"net/http"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -107,6 +109,7 @@ func collectValidationErrors(ctx context.Context, cfg *Config, providers map[str
 	errors = append(errors, validateSpotlightConfig(cfg)...)
 	errors = append(errors, validateExfilGuardConfig(cfg)...)
 	errors = append(errors, validateCanaryConfig(cfg)...)
+	errors = append(errors, validateMCPGuardConfig(cfg)...)
 	errors = append(errors, validateModelRegistryErrors(logger)...)
 	errors = append(errors, validateEntropyConfig(cfg.Bouncer)...)
 	errors = append(errors, validateProviderRateLimits(cfg)...)
@@ -810,6 +813,47 @@ func validateExfilGuardConfig(cfg *Config) []string {
 	return errs
 }
 
+// validateMCPGuardConfig checks the tool-argument guard surface: URL
+// policy vocabulary and a positive size cap, plus per-server allowlist
+// entry shapes (hostname or "*.suffix").
+func validateMCPGuardConfig(cfg *Config) []string {
+	var errs []string
+	if g := cfg.Governance.MCPGuard; g != nil {
+		switch g.URLPolicy {
+		case "", "deny_private", "log", "off":
+		default:
+			errs = append(errs, fmt.Sprintf("governance.mcp_guard.url_policy: invalid value %q, must be empty, \"deny_private\", \"log\", or \"off\"", g.URLPolicy))
+		}
+		if g.MaxArgBytes < 0 {
+			errs = append(errs, "governance.mcp_guard.max_arg_bytes: must be >= 0")
+		}
+	}
+	for name, server := range cfg.MCPServers {
+		for _, entry := range server.AllowedHosts {
+			host := strings.ToLower(strings.TrimSpace(entry))
+			if host == "" {
+				errs = append(errs, fmt.Sprintf("mcp_servers.%s.allowed_hosts: empty entry", name))
+				continue
+			}
+			wildcard := strings.HasPrefix(host, "*.")
+			host = strings.TrimPrefix(host, "*.")
+			if host == "" {
+				errs = append(errs, fmt.Sprintf("mcp_servers.%s.allowed_hosts: entry %q has an empty wildcard suffix", name, entry))
+				continue
+			}
+			if strings.Contains(host, "*") || strings.Contains(host, "/") || strings.Contains(host, " ") || strings.Contains(host, ":") {
+				errs = append(errs, fmt.Sprintf("mcp_servers.%s.allowed_hosts: entry %q must be a hostname or \"*.suffix\"", name, entry))
+				continue
+			}
+			if wildcard && (net.ParseIP(host) != nil || isNumericHost(host)) {
+				errs = append(errs, fmt.Sprintf("mcp_servers.%s.allowed_hosts: entry %q must not be an IP or all-numeric suffix", name, entry))
+				continue
+			}
+		}
+	}
+	return errs
+}
+
 // validateCanaryConfig checks the tripwire action value (a typo would
 // silently degrade block to log at runtime).
 func validateCanaryConfig(cfg *Config) []string {
@@ -822,4 +866,43 @@ func validateCanaryConfig(cfg *Config) []string {
 	default:
 		return []string{fmt.Sprintf("governance.canary.action: invalid value %q, must be empty, \"log\", or \"block\"", cfg.Governance.Canary.Action)}
 	}
+}
+
+// isNumericHost reports whether every dot-separated label parses as a
+// number in the inet_aton vocabularies (decimal, 0x-hex, 0-octal).
+func isNumericHost(host string) bool {
+	if host == "" {
+		return false
+	}
+	for _, label := range strings.Split(host, ".") {
+		if !isNumericHostLabel(label) {
+			return false
+		}
+	}
+	return true
+}
+
+// isNumericHostLabel reports whether one label parses as a number:
+// decimal, 0x-hex, or 0-octal. It deliberately rejects MORE broadly
+// than internal/mcp's parseNumericIPv4 (which additionally applies
+// byte-range normalization): config validation only needs "could this
+// suffix spell an IP literal", and over-rejection is the safe
+// direction. A shared helper is not possible without an import cycle
+// (config is a leaf that internal/util already depends on).
+func isNumericHostLabel(label string) bool {
+	if label == "" {
+		return false
+	}
+	base, digits := 10, label
+	switch {
+	case strings.HasPrefix(label, "0x") || strings.HasPrefix(label, "0X"):
+		base, digits = 16, label[2:]
+	case label[0] == '0' && len(label) > 1:
+		base, digits = 8, label[1:]
+	}
+	if digits == "" {
+		return false
+	}
+	_, err := strconv.ParseUint(digits, base, 32)
+	return err == nil
 }

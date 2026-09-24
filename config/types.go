@@ -673,11 +673,14 @@ type GovernanceConfig struct {
 	// Spotlight configures untrusted-content spotlighting envelopes
 	// (default disabled). Per-agent overrides live on
 	// agents.<name>.spotlight.
-	Spotlight       *SpotlightConfig  `json:"spotlight,omitempty"`
-	ExfilGuard      *ExfilGuardConfig `json:"exfil_guard,omitempty"`
-	Canary          *CanaryConfig     `json:"canary,omitempty"`
-	RatelimitMaxRPM *int              `json:"ratelimit_max_rpm,omitempty"`
-	RatelimitMaxTPM *int              `json:"ratelimit_max_tpm,omitempty"`
+	Spotlight  *SpotlightConfig  `json:"spotlight,omitempty"`
+	ExfilGuard *ExfilGuardConfig `json:"exfil_guard,omitempty"`
+	Canary     *CanaryConfig     `json:"canary,omitempty"`
+	// MCPGuard validates Nenya-managed tool-call arguments (schema,
+	// size, URL destinations) before dispatch to MCP servers.
+	MCPGuard        *MCPGuardConfig `json:"mcp_guard,omitempty"`
+	RatelimitMaxRPM *int            `json:"ratelimit_max_rpm,omitempty"`
+	RatelimitMaxTPM *int            `json:"ratelimit_max_tpm,omitempty"`
 	// MaxConcurrentRequests is the global fallback cap on in-flight requests
 	// per provider+model when the provider config does not set its own limit
 	// (0 or omitted = unlimited).
@@ -1249,6 +1252,47 @@ type MCPServerConfig struct {
 	Headers           map[string]string `json:"headers,omitempty"`
 	Timeout           int               `json:"timeout,omitempty"`
 	KeepAliveInterval int               `json:"keep_alive_interval,omitempty"`
+	// AllowedHosts grants tool-argument URL-policy exceptions for this
+	// server: exact hostnames or "*.suffix" wildcard entries. Needed
+	// when a trusted tool legitimately targets private infrastructure
+	// (e.g. an internal API at 10.x.x.x).
+	AllowedHosts []string `json:"allowed_hosts,omitempty"`
+}
+
+// MCPGuardConfig controls the Nenya-managed MCP tool-call argument
+// guard: JSON-schema validation, argument size cap, and the URL
+// destination policy applied before every CallTool dispatch.
+type MCPGuardConfig struct {
+	// Enabled master-switches the guard (default true).
+	Enabled *bool `json:"enabled,omitempty"`
+	// MaxArgBytes caps the marshaled argument size (default 1 MiB).
+	MaxArgBytes int `json:"max_arg_bytes,omitempty"`
+	// URLPolicy controls http(s) URL destinations inside string
+	// arguments: "deny_private" (default), "log", or "off".
+	URLPolicy string `json:"url_policy,omitempty"`
+}
+
+// EffectiveEnabled reports the resolved guard state (nil-safe).
+func (m *MCPGuardConfig) EffectiveEnabled() bool {
+	return m != nil && (m.Enabled == nil || *m.Enabled)
+}
+
+// EffectiveMaxArgBytes reports the configured argument size cap
+// (nil-safe; 0 means "apply the default", negative is rejected by
+// validation).
+func (m *MCPGuardConfig) EffectiveMaxArgBytes() int {
+	if m == nil {
+		return 0
+	}
+	return m.MaxArgBytes
+}
+
+// EffectiveURLPolicy reports the resolved URL policy (nil-safe).
+func (m *MCPGuardConfig) EffectiveURLPolicy() string {
+	if m == nil || m.URLPolicy == "" {
+		return "deny_private"
+	}
+	return m.URLPolicy
 }
 
 // AgentMCPConfig defines the MCP tool integration for an agent, listing

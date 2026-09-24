@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -484,6 +485,30 @@ func executeMCPCalls(ctx context.Context, calls []mcpToolCall, gw *gateway.Nenya
 			toolCtx, cancel := context.WithTimeout(ctx, mcpExecTimeout)
 			defer cancel()
 
+			// Tool-argument guard (NENYA-78): schema validation, size
+			// cap, and URL destination policy — the last line before a
+			// model-controlled argument reaches an MCP server.
+			violations, rejected := mcp.ValidateArgs(c.Arguments, route.Schema, mcp.GuardConfigFromServer(
+				gw.Config.Governance.MCPGuard,
+				gw.Config.MCPServers[route.ServerName].AllowedHosts,
+			))
+			if len(violations) > 0 && !rejected {
+				// log policy: record the flags and let the call proceed.
+				ctxLogger.Warn("MCP tool arguments flagged by policy (log action)",
+					"violations", len(violations), "detail", mcp.SummarizeArgViolations(violations))
+			}
+			if rejected {
+				summary := mcp.SummarizeArgViolations(violations)
+				ctxLogger.Warn("MCP tool call rejected by argument guard",
+					"violations", len(violations), "detail", summary)
+				results[idx] = &mcp.CallToolResult{
+					Content: []mcp.ContentBlock{{Type: "text", Text: "[blocked by argument policy: " + summary + "]"}},
+					IsError: true,
+				}
+				gw.Metrics.RecordMCPToolCall(route.ServerName, route.MCPToolName, agentName, time.Since(start), errMCPArgumentPolicy)
+				return
+			}
+
 			result, err := client.CallTool(toolCtx, route.MCPToolName, c.Arguments)
 			duration := time.Since(start)
 			if err != nil {
@@ -494,6 +519,7 @@ func executeMCPCalls(ctx context.Context, calls []mcpToolCall, gw *gateway.Nenya
 					Content: []mcp.ContentBlock{{Type: "text", Text: fmt.Sprintf("MCP tool call failed: %v", err)}},
 					IsError: true,
 				}
+				gw.Metrics.RecordMCPToolCall(route.ServerName, route.MCPToolName, agentName, duration, err)
 			} else {
 				results[idx] = result
 				gw.Metrics.RecordMCPToolCall(route.ServerName, route.MCPToolName, agentName, duration, err)
@@ -510,6 +536,46 @@ func executeMCPCalls(ctx context.Context, calls []mcpToolCall, gw *gateway.Nenya
 
 	wg.Wait()
 	return results
+}
+
+// errMCPArgumentPolicy is the sentinel returned when the argument
+// guard rejects a dispatch (any MCP path).
+var errMCPArgumentPolicy = errors.New("argument policy")
+
+// mcpGuardDispatch groups the identity and payload of a non-registry
+// MCP dispatch (auto-search, auto-save) for the argument guard.
+type mcpGuardDispatch struct {
+	ServerName string
+	ToolName   string
+	Purpose    string
+	Args       map[string]any
+}
+
+// guardMCPArgs runs the tool-argument guard for dispatches that are not
+// routed through the tool registry (auto-search, auto-save): size cap
+// and URL policy apply; schema validation is skipped (no declared
+// schema at these call sites). Rejections log once; log-policy flags
+// are recorded and allowed. The caller turns rejections into its own
+// failure semantics (auto-search failure, auto-save fallback) and
+// records its own outcome metric.
+func guardMCPArgs(gw *gateway.NenyaGateway, logger *slog.Logger, d mcpGuardDispatch) bool {
+	if logger == nil {
+		logger = slog.New(slog.DiscardHandler)
+	}
+	cfg := mcp.GuardConfigFromServer(gw.Config.Governance.MCPGuard, gw.Config.MCPServers[d.ServerName].AllowedHosts)
+	violations, rejected := mcp.ValidateArgs(d.Args, nil, cfg)
+	if len(violations) > 0 {
+		summary := mcp.SummarizeArgViolations(violations)
+		if rejected {
+			logger.Warn("MCP dispatch rejected by argument guard",
+				"purpose", d.Purpose, "server", d.ServerName, "tool", d.ToolName, "detail", summary)
+			return false
+		}
+		// log policy: flag and allow.
+		logger.Warn("MCP dispatch flagged by argument policy (log action)",
+			"purpose", d.Purpose, "server", d.ServerName, "tool", d.ToolName, "detail", summary)
+	}
+	return true
 }
 
 // appendMCPResults appends MCP tool results to the request payload's messages array.

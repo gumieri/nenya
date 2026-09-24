@@ -88,6 +88,12 @@ type Tool struct {
 	InputSchema InputSchema `json:"inputSchema"`
 }
 
+// InputSchema is the tool's declared argument schema. Note: this typed
+// view carries only the top-level keywords the proxy consumes — nested
+// items/enum subtrees survive via the raw Properties values, but
+// root-level items/enum (and composition keywords such as oneOf,
+// anyOf, $defs, $ref) are dropped by decoding — the argument guard treats
+// such roots as undeclared and validates pass-through.
 type InputSchema struct {
 	Type                 string         `json:"type"`
 	Properties           map[string]any `json:"properties,omitempty"`

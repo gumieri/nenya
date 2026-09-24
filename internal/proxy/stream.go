@@ -1606,13 +1606,29 @@ func (p *Proxy) autoSaveTryServer(liveGW *gateway.NenyaGateway, agent *config.Ag
 	saveCtx, cancel := context.WithTimeout(baseCtx, mcpExecTimeout)
 	defer cancel()
 
-	start := time.Now()
-	_, err := client.CallTool(saveCtx, saveTool, map[string]any{
+	saveArgs := map[string]any{
 		"wing":     agentName,
 		"room":     "conversation",
 		"content":  assistantContent,
 		"added_by": "nenya",
-	})
+	}
+	// The argument guard applies to auto-save too: the content is
+	// model-controlled assistant text (size cap + URL policy).
+	if !guardMCPArgs(liveGW, liveGW.Logger, mcpGuardDispatch{
+		ServerName: serverName,
+		ToolName:   saveTool,
+		Purpose:    "auto_save",
+		Args:       saveArgs,
+	}) {
+		// Return false so the caller may fall back to another server
+		// whose allowed_hosts permits the content; the guard already
+		// logged the rejection.
+		liveGW.Metrics.RecordMCPAutoSave(serverName, agentName, errMCPArgumentPolicy)
+		return false
+	}
+
+	start := time.Now()
+	_, err := client.CallTool(saveCtx, saveTool, saveArgs)
 	duration := time.Since(start)
 	if err != nil {
 		liveGW.Logger.Warn("MCP auto-save failed (best-effort)",

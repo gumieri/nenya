@@ -62,6 +62,7 @@ func ApplyDefaults(cfg *Config) error {
 	applyInjectionDefaults(cfg)
 	applySpotlightDefaults(cfg)
 	applyExfilGuardDefaults(cfg)
+	applyMCPGuardDefaults(cfg)
 	applyEngineRefDefaults(&cfg.Bouncer.Engine)
 	applyEngineRefDefaults(&cfg.Window.Engine)
 	if err := applyPrefixCacheDefaults(cfg); err != nil {
@@ -839,6 +840,33 @@ func looksLikeRegex(s string) bool {
 	}
 	return false
 }
+
+// applyMCPGuardDefaults materializes MCP tool-argument guard defaults:
+// enabled, 1 MiB argument cap, private-destination denial. The section
+// is created whenever MCP servers are configured, so "default enabled"
+// is real rather than dependent on the section being hand-written.
+func applyMCPGuardDefaults(cfg *Config) {
+	if cfg.Governance.MCPGuard == nil {
+		if len(cfg.MCPServers) == 0 {
+			return
+		}
+		cfg.Governance.MCPGuard = &MCPGuardConfig{}
+	}
+	g := cfg.Governance.MCPGuard
+	if g.Enabled == nil {
+		g.Enabled = PtrTo(true)
+	}
+	if g.MaxArgBytes == 0 {
+		g.MaxArgBytes = mcpDefaultMaxArgBytes
+	}
+	if g.URLPolicy == "" {
+		g.URLPolicy = "deny_private"
+	}
+}
+
+// mcpDefaultMaxArgBytes mirrors mcp.DefaultMaxArgBytes without a config
+// dependency on internal/mcp.
+const mcpDefaultMaxArgBytes = 1 << 20
 
 // applyExfilGuardDefaults sets egress-guard tristate defaults: disabled,
 // log action, 256-char query cap, IP literals denied. Per-agent blocks
