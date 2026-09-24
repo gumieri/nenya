@@ -162,7 +162,10 @@ Security vulnerabilities include but are not limited to:
 - Request smuggling or HTTP desync attacks
 - Denial of service (resource exhaustion)
 - Information disclosure (leaked secrets, headers, or internal state)
-- SSRF or injection vulnerabilities
+- SSRF or injection vulnerabilities (the defense stack is documented in
+  [INJECTION_DEFENSE.md](INJECTION_DEFENSE.md): prompt-injection detection,
+  spotlighting, output ExfilGuard, canary tripwires, and MCP tool-call
+  argument guards)
 - Path traversal attacks on config file loading and prompt file resolution
 
 ### File Path Security

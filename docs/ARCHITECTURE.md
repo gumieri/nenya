@@ -51,10 +51,12 @@ Client Request
   │   ├─ MCP tool injection (if agent has MCP servers configured)
   │   │   ├─ Inject MCP tools as OpenAI function tools into request
   │   │   └─ Inject system prompt instructing LLM to use MCP tools for memory retrieval
-  │   ├─ Content pipeline (best-effort — failures logged, never block request):
+  │   ├─ Content pipeline (security interceptors fail closed — see Interceptor Chain):
   │   │   ├─ Prefix cache optimizations
   │   │   ├─ Interceptor chain execution (priority order):
   │   │   │   ├─ RedactInterceptor (Priority 10): Tier-0 regex secret redaction
+  │   │   │   ├─ SpotlightInterceptor (Priority 12): untrusted-content enveloping
+  │   │   │   ├─ InjectionInterceptor (Priority 15): prompt-injection detection
   │   │   │   ├─ EntropyInterceptor (Priority 20): Shannon entropy redaction
   │   │   │   ├─ TFIDFInterceptor (Priority 30): TF-IDF relevance-scored truncation
   │   │   │   └─ BouncerInterceptor (Priority 50): 3-tier engine interception (soft/hard limits)
@@ -229,6 +231,19 @@ EngineManager (internal/local/manager.go:13)
 }
 ```
 
+## Output-Side Defenses (Stream Path)
+
+The upstream SSE stream flows through pluggable egress filters before reaching
+the client: provider response transformations (adapter system), the optional
+**ExfilGuard** URL policy (markdown links/images and bare URLs, sliding-window
+over deltas so a construct straddling chunk boundaries is still evaluated),
+and the **canary tripwire** watcher (exact-substring echo of the per-request
+marker on `stream`, `buffered`, and tool-args channels). Both can terminate
+the response with a structured SSE error frame (`error_kind=exfil_blocked` /
+`exfil_detected`) or rewrite content in place (`strip` / log-mode scrubbing).
+Buffered (non-streaming) bodies run the same policies via a full-body
+inspection. See [INJECTION_DEFENSE.md](INJECTION_DEFENSE.md#response-path-controls).
+
 ## Structured Error Handling
 
 Nenya uses a typed error system for client-facing diagnostics and internal retry decisions (`internal/infra/errors.go`, `internal/proxy/errors.go`, `internal/proxy/error_normalizer.go`).
@@ -248,8 +263,11 @@ The `ErrorKind` type (`internal/infra/errors.go:4`) categorizes errors into sema
 | `network_error` | 502 | Transport-level failure |
 | `payload_too_large` | 413 | Request exceeds size limits |
 | `invalid_request` | 400 | Malformed or invalid request |
-| `bouncer_error` | 502 | Engine interception failure |
-| `internal_error` | 500 | Gateway internal error |
+| `bouncer_error` | 403 | Engine interception failure with `bouncer.fail_open=false`, or oversized rich content under fail-closed |
+| `injection_detected` | 403 | Strict injection policy rejection (`pipeline.RejectError`) |
+| `exfil_blocked` | 403 buffered; SSE frame on the already-committed 200 for streams | ExfilGuard `block` action |
+| `exfil_detected` | 403 buffered; SSE frame on stream; tool-result error (no HTTP status) for refused tool calls | Canary tripwire `block` action |
+| `internal_error` | 503 for strict security-interceptor faults (`pipeline.StrictError`) and service-unavailable paths (shutdown, not initialized, no provider); 500 otherwise | Gateway internal error |
 
 ### GatewayError
 
@@ -274,7 +292,7 @@ For streaming requests, `writeGatewayStreamError` (`internal/proxy/error_normali
 
 ## MCP Multi-Turn Tool Call Flow
 
-When an agent has MCP servers configured, the LLM may respond with `tool_calls` targeting MCP tools. Nenya intercepts these locally:
+When an agent has MCP servers configured, the LLM may respond with `tool_calls` targeting MCP tools. Nenya intercepts these locally. Every dispatch (model-initiated, auto-search, auto-save) passes the **argument guard** first — schema validation, argument size cap, and URL destination policy (`governance.mcp_guard`) — and the canary tripwire scans tool-call arguments before they leave. Loop-appended tool results are covered by spotlighting and the egress defenses, but not re-run through the interceptor chain (see [INJECTION_DEFENSE.md](INJECTION_DEFENSE.md#honest-limitations)):
 
 ```
 Request with MCP tools injected
@@ -653,9 +671,11 @@ See [Agent Routing Strategies](ROUTING.md#agent-routing-strategies) for configur
 
 Nenya is designed to never break the flow between AI coding clients (OpenCode, Aider) and upstream providers. The following mechanisms ensure resilience:
 
-### Best-Effort Content Pipeline
+### Best-Effort vs Fail-Closed Content Pipeline
 
-The entire content pipeline (prefix cache, redaction, compaction, tool call pruning, thought pruning, window, TF-IDF truncation, engine interception) runs as best-effort. Any failure is logged as a warning and the request proceeds with the original payload. No pipeline error results in an HTTP 500 to the client.
+The token-saving stages (prefix cache, compaction, tool-call/thought pruning, window, TF-IDF truncation) and engine interception under `bouncer.fail_open=true` run best-effort: a failure is logged and the request proceeds with the interceptor output.
+
+The **security** stages do not: `RedactInterceptor`, `SpotlightInterceptor`, `InjectionInterceptor`, and `EntropyInterceptor` implement `Strict()` and fail closed on operational faults — the request aborts with `503 error_kind=internal_error` rather than forwarding unprocessed content (see [Interceptor Chain](#interceptor-chain)). Policy decisions always abort too: strict injection rejections and bouncer fail-closed rejections return `403` with their specific `error_kind`.
 
 ### Skip on Engine Failure
 

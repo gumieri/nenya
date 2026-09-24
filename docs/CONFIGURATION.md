@@ -165,7 +165,10 @@ The interceptor implements a 3-tier pipeline for the last user message content, 
 
 ## `governance`
 
-Rate limiting, routing weights, and circuit breaker configuration.
+Rate limiting, routing weights, circuit breaker configuration, and the
+anti-poisoning stack. For the threat model, layer interactions, rollout
+guidance, and limitations, see
+[INJECTION_DEFENSE.md](INJECTION_DEFENSE.md).
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|

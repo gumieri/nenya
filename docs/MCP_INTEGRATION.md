@@ -148,6 +148,10 @@ MCP integration follows the same best-effort philosophy as the rest of Nenya:
 
 ## Security Considerations
 
+The full anti-poisoning stack (input interceptors, argument guard, output
+egress controls, canary tripwires) is documented in
+[INJECTION_DEFENSE.md](INJECTION_DEFENSE.md).
+
 - MCP servers run on the local network. Ensure they are trusted before connecting.
 - The `headers` field allows passing authentication to MCP proxies that require it.
 - Tool call arguments are guarded before dispatch (`governance.mcp_guard`, default enabled): arguments are validated against the tool's declared `inputSchema` (minimal validator: `type`, `enum`, `required`, `properties`, `items`; unknown keywords ignored per JSON Schema spec), size-capped (`max_arg_bytes`, default 1 MiB), and string arguments whose leading token is an http(s) URL are checked against the destination policy (the leading token is what a fetcher would attempt; URLs appearing later inside prose or markdown links are not scanned — an accepted limitation, with the egress ExfilGuard covering model-produced links on the response path; a second whitespace-separated URL in the same value is likewise unchecked; and a string that merely starts with `http://` but has no parseable host is rejected as malformed (fail-closed)) (`url_policy`: `deny_private` rejects private/loopback/link-local hosts, localhost variants, and `.internal`/`.local` suffixes; `log` records only; `off` disables). Per-server `allowed_hosts` entries (exact hostname or `"*.suffix"`) grant exceptions for trusted internal tools. Rejected calls return a structured error result to the model (the loop can correct and retry) — the client response is unaffected. Limitations: the check is string-only — DNS names that resolve to private addresses, and DNS rebinding between the guard check and the MCP server's own fetch, are not detected; the guard applies to Nenya-managed tool dispatches including the auto-search and auto-save paths.
