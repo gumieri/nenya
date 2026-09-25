@@ -74,8 +74,13 @@ func TestPerfGuard_ExtractTopLevelField(t *testing.T) {
 		t.Errorf("alloc ceiling exceeded: %d allocs/op (ceiling 12)", scanner.AllocsPerOp())
 	}
 	// Generous ns/op ceiling (slow CI): 100µs. The scanner is ~2-4µs/op
-	// locally; full unmarshal is ~40µs+ on this body.
-	if scanner.NsPerOp() > 100_000 {
+	// locally; full unmarshal is ~40µs+ on this body. Under -race the
+	// race detector inflates every memory access, so wall-clock numbers
+	// are meaningless there: the timing guard is skipped (the alloc and
+	// differential guards above remain in force).
+	if raceEnabled {
+		t.Logf("ns/op ceiling skipped under -race (measured %d ns/op)", scanner.NsPerOp())
+	} else if scanner.NsPerOp() > 100_000 {
 		t.Errorf("ns/op ceiling exceeded: %d ns/op (ceiling 100000)", scanner.NsPerOp())
 	}
 }
