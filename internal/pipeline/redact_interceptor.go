@@ -2,9 +2,7 @@ package pipeline
 
 import (
 	"context"
-	"log/slog"
 	"regexp"
-	"strings"
 
 	"github.com/nenya/internal/infra"
 )
@@ -17,26 +15,28 @@ type RedactInterceptor struct {
 	enabled  bool
 	patterns []*regexp.Regexp
 	label    string
-	logger   *slog.Logger
 	metrics  *infra.Metrics
 }
 
 // NewRedactInterceptor creates a new RedactInterceptor. The metrics
 // receiver is nil-safe; redaction counts are recorded through it.
-func NewRedactInterceptor(enabled bool, patterns []*regexp.Regexp, label string, logger *slog.Logger, metrics *infra.Metrics) *RedactInterceptor {
+func NewRedactInterceptor(enabled bool, patterns []*regexp.Regexp, label string, metrics *infra.Metrics) *RedactInterceptor {
 	return &RedactInterceptor{
 		name:     "redact",
 		priority: 10,
 		enabled:  enabled,
 		patterns: patterns,
 		label:    label,
-		logger:   logger,
 		metrics:  metrics,
 	}
 }
 
 func (r *RedactInterceptor) Name() string  { return r.name }
 func (r *RedactInterceptor) Priority() int { return r.priority }
+
+// Strict implements StrictInterceptor: redaction is a security surface —
+// an operational failure must not forward unredacted content.
+func (r *RedactInterceptor) Strict() bool { return true }
 func (r *RedactInterceptor) CanHandle(_ context.Context, req *InterceptRequest) bool {
 	return r.enabled && len(r.patterns) > 0 && len(req.Messages) > 0
 }
@@ -44,27 +44,24 @@ func (r *RedactInterceptor) CanHandle(_ context.Context, req *InterceptRequest) 
 func (r *RedactInterceptor) Process(_ context.Context, req *InterceptRequest) (*InterceptResult, error) {
 	modified := false
 	redactions := 0
+	redact := newCountingRedactor(func(content string) string {
+		// Enabled is already gated by CanHandle; passing true keeps the
+		// count closure honest if the field semantics ever change.
+		return RedactSecrets(content, true, r.patterns, r.label)
+	}, r.label, &redactions)
 	for _, msg := range req.Messages {
-		content, ok := msg["content"].(string)
-		if !ok {
-			continue
-		}
-		redacted := RedactSecrets(content, r.enabled, r.patterns, r.label)
-		if redacted != content {
-			// Count actual substitutions, not pattern hits: patterns may
-			// overlap and double-count a single redacted span.
-			redactions += strings.Count(redacted, r.label) - strings.Count(content, r.label)
-			msg["content"] = redacted
+		if WalkMessageText(msg, redact) {
 			modified = true
 		}
 	}
-	if r.metrics != nil && redactions > 0 {
+	if redactions > 0 {
 		r.metrics.RecordRedaction(redactions)
 	}
 	if !modified {
 		return &InterceptResult{Payload: req.Payload, Skip: true}, nil
 	}
-	req.Payload["messages"] = req.Messages
+	// Mutations are applied in place; payload["messages"] keeps its
+	// original []interface{} type for downstream consumers.
 	return &InterceptResult{
 		Payload:   req.Payload,
 		Truncated: true,

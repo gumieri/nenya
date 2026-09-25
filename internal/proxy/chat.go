@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -954,14 +955,41 @@ func (p *Proxy) handleChatCompletions(gw *gateway.NenyaGateway, w http.ResponseW
 
 	ensureOpencodeSessionHeader(gw, r, req)
 
-	if err := p.applyContentPipeline(gw, r.Context(), req.Payload, req.TokenCount, req.WindowMaxCtx, req.Profile, req.SoftLimit, req.HardLimit); err != nil {
-		gw.Logger.Warn("content pipeline failed, proceeding with original payload", "err", err)
+	if err := p.applyContentPipeline(gw, r.Context(), contentPipelineOpts{
+		Payload:      req.Payload,
+		TokenCount:   req.TokenCount,
+		WindowMaxCtx: req.WindowMaxCtx,
+		Profile:      req.Profile,
+		SoftLimit:    req.SoftLimit,
+		HardLimit:    req.HardLimit,
+		AgentName:    req.ModelName,
+		Agent:        agentConfigFor(gw, req.ModelName),
+	}); err != nil {
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			// The client is gone (or the deadline burned): nothing to
+			// dispatch, nothing to render.
+			return
+		}
+		if writePipelineRejection(gw, w, err) {
+			return
+		}
+		gw.Logger.Warn("content pipeline failed, proceeding with interceptor output", "err", err)
 	}
 	// NENYA-70: the interceptor chain/trim may have shrunk the payload after
 	// the estimate was taken at request build. Pre-dispatch guards (TPM, cost)
 	// and token accounting must judge the payload that is actually dispatched,
 	// so refresh the count from the post-pipeline body.
 	req.TokenCount = gw.CountRequestTokens(req.Payload)
+
+	// Canary tripwire (Phase 060): inject AFTER the pipeline so the
+	// marker never participates in redaction/compaction/token accounting
+	// (it must not trigger the bouncer). The token threads to the
+	// response-path watchers.
+	canaryResult := pipeline.InjectCanary(gw.Config.Governance.Canary, req.Payload)
+	if canaryResult.Token != "" {
+		gw.Logger.Debug("canary injected", "agent", req.AgentName)
+	}
+
 	gw.Metrics.RecordGatewayProcessing(r.Method, infra.NormalizeMetricPath(r.URL.Path), time.Since(gwStart))
 
 	if req.HasMCPTools {
@@ -978,6 +1006,7 @@ func (p *Proxy) handleChatCompletions(gw *gateway.NenyaGateway, w http.ResponseW
 			KeyRef:       req.KeyRef,
 			SourceFormat: req.SourceFormat,
 			ApiKey:       apiKey,
+			Canary:       canaryResult,
 		})
 		return
 	}
@@ -995,6 +1024,7 @@ func (p *Proxy) handleChatCompletions(gw *gateway.NenyaGateway, w http.ResponseW
 		KeyRef:       req.KeyRef,
 		SourceFormat: req.SourceFormat,
 		ApiKey:       apiKey,
+		Canary:       canaryResult,
 	})
 }
 
@@ -1034,7 +1064,38 @@ func (p *Proxy) replayCachedResponse(gw *gateway.NenyaGateway, w http.ResponseWr
 	}
 }
 
-func (p *Proxy) applyContentPipeline(gw *gateway.NenyaGateway, ctx context.Context, payload map[string]interface{}, tokenCount int, windowMaxCtx int, profile pipeline.ClientProfile, softLimit, hardLimit int) error {
+// contentPipelineOpts groups the parameters for applyContentPipeline.
+type contentPipelineOpts struct {
+	Payload      map[string]interface{}
+	TokenCount   int
+	WindowMaxCtx int
+	Profile      pipeline.ClientProfile
+	SoftLimit    int
+	HardLimit    int
+	// AgentName is the canonical agent identity (top-level model field
+	// as resolved by the proxy); Agent is the resolved config when it
+	// names a configured agent (nil otherwise).
+	AgentName string
+	Agent     *config.AgentConfig
+}
+
+// agentConfigFor resolves the agent config for a model name, returning
+// nil when the name is not a configured agent.
+func agentConfigFor(gw *gateway.NenyaGateway, modelName string) *config.AgentConfig {
+	if modelName == "" {
+		return nil
+	}
+	if agent, ok := gw.Config.Agents[modelName]; ok {
+		return &agent
+	}
+	return nil
+}
+
+// applyContentPipeline runs the shared preprocessing stages (prefix
+// cache optimization, compaction, windowing, interceptor chain) over the
+// request payload. Mutations are applied in place.
+func (p *Proxy) applyContentPipeline(gw *gateway.NenyaGateway, ctx context.Context, opts contentPipelineOpts) error {
+	payload := opts.Payload
 	if gw.InterceptorChain == nil {
 		return nil
 	}
@@ -1046,13 +1107,13 @@ func (p *Proxy) applyContentPipeline(gw *gateway.NenyaGateway, ctx context.Conte
 
 	pipeline.ApplyPrefixCacheOptimizations(payload, messages, gw.Config.PrefixCache)
 
-	if !profile.IsIDE {
+	if !opts.Profile.IsIDE {
 		if pipeline.ApplyCompaction(messages, gw.Config.Compaction) {
 			gw.Metrics.RecordCompaction()
 		}
 	}
 
-	if !profile.IsIDE {
+	if !opts.Profile.IsIDE {
 		if pipeline.PruneStaleToolCalls(payload, gw.Config.Compaction) {
 			gw.Metrics.RecordCompaction()
 		}
@@ -1062,11 +1123,11 @@ func (p *Proxy) applyContentPipeline(gw *gateway.NenyaGateway, ctx context.Conte
 	}
 
 	deps := buildWindowDeps(gw)
-	if windowed, err := pipeline.ApplyWindowCompaction(ctx, deps, payload, messages, tokenCount, gw.Config.Window, windowMaxCtx, gw.CountRequestTokens); err != nil {
+	if windowed, err := pipeline.ApplyWindowCompaction(ctx, deps, payload, messages, opts.TokenCount, gw.Config.Window, opts.WindowMaxCtx, gw.CountRequestTokens); err != nil {
 		gw.Logger.Warn("window compaction failed, proceeding without it", "err", err)
 	} else if windowed {
 		gw.Metrics.RecordWindow(gw.Config.Window.Mode)
-		gw.Metrics.RecordTokensSaved("window", tokenCount-gw.CountRequestTokens(payload))
+		gw.Metrics.RecordTokensSaved("window", opts.TokenCount-gw.CountRequestTokens(payload))
 	}
 
 	messages = payload["messages"].([]interface{})
@@ -1084,10 +1145,12 @@ func (p *Proxy) applyContentPipeline(gw *gateway.NenyaGateway, ctx context.Conte
 	req := &pipeline.InterceptRequest{
 		Payload:    payload,
 		Messages:   msgObjs,
-		Profile:    profile,
-		SoftLimit:  softLimit,
-		HardLimit:  hardLimit,
-		TokenCount: tokenCount,
+		AgentName:  opts.AgentName,
+		Agent:      opts.Agent,
+		Profile:    opts.Profile,
+		SoftLimit:  opts.SoftLimit,
+		HardLimit:  opts.HardLimit,
+		TokenCount: opts.TokenCount,
 	}
 
 	_, err := gw.InterceptorChain.Execute(ctx, req)
@@ -1106,6 +1169,53 @@ func buildWindowDeps(gw *gateway.NenyaGateway) pipeline.WindowDeps {
 		CountTokens:  gw.CountTokens,
 		SummaryCache: gw.WindowSummaries,
 	}
+}
+
+// applyBufferedEgressPolicies runs the output-side defenses over a
+// buffered response body: the ExfilGuard URL policy and the canary
+// tripwire. Each may terminate the response with a structured error
+// (upstream usage is recorded first); log/strip actions rewrite the
+// body in place and let the response continue.
+func (p *Proxy) applyBufferedEgressPolicies(gw *gateway.NenyaGateway, w http.ResponseWriter, r *http.Request, target routing.UpstreamTarget, agentName string, responseMap map[string]interface{}, canary pipeline.CanarResult) bool {
+	if guard := exfilGuardFor(gw, agentName); guard != nil {
+		hits := inspectResponseTexts(guard, responseMap)
+		if hits.blocked {
+			// Upstream still consumed tokens on a blocked reply — record
+			// them before terminating the client response.
+			if usage, ok := responseMap["usage"].(map[string]interface{}); ok {
+				recordNonStreamingUsage(r.Context(), gw, target, agentName, usage)
+			}
+			p.handleExfilBlock(gw, w, target.Model, hits.reason)
+			return true
+		}
+	}
+	if canary.Token != "" {
+		return p.handleBufferedCanaryHit(gw, w, r, target, agentName, responseMap, canary)
+	}
+	return false
+}
+
+// handleBufferedCanaryHit resolves a canary detection on a buffered
+// response: block action records usage, writes the structured 403 and
+// reports terminal; log action strips the canary occurrence from every
+// surface and lets the response continue.
+func (p *Proxy) handleBufferedCanaryHit(gw *gateway.NenyaGateway, w http.ResponseWriter, r *http.Request, target routing.UpstreamTarget, agentName string, responseMap map[string]interface{}, canary pipeline.CanarResult) bool {
+	hits := inspectCanaryTexts(responseMap, canary.Token)
+	if !hits.hit {
+		return false
+	}
+	gw.Metrics.RecordExfilEvent("buffered")
+	gw.Logger.Warn("canary detected in buffered output",
+		"agent", agentName, "model", target.Model, "channel", "buffered")
+	if canary.Action != config.CanaryActionBlock {
+		return false
+	}
+	if usage, ok := responseMap["usage"].(map[string]interface{}); ok {
+		recordNonStreamingUsage(r.Context(), gw, target, agentName, usage)
+	}
+	writeStructuredError(w, http.StatusForbidden, infra.ErrorKindExfilDetected,
+		"response blocked: canary token detected in output")
+	return true
 }
 
 func (p *Proxy) buildUpstreamRequest(gw *gateway.NenyaGateway, ctx context.Context, method, url string, body []byte, providerName, modelName, preselectedCredential string, srcHeaders http.Header) (*http.Request, error) {
@@ -1150,7 +1260,7 @@ func hasMCPTools(gw *gateway.NenyaGateway, agent config.AgentConfig) bool {
 	return false
 }
 
-func (p *Proxy) handleNonStreamingResponse(gw *gateway.NenyaGateway, w http.ResponseWriter, r *http.Request, target routing.UpstreamTarget, agentName, sourceFormat string, action upstreamAction, cacheKey string, cooldownDuration time.Duration) streamResult {
+func (p *Proxy) handleNonStreamingResponse(gw *gateway.NenyaGateway, w http.ResponseWriter, r *http.Request, target routing.UpstreamTarget, agentName, sourceFormat string, action upstreamAction, cacheKey string, cooldownDuration time.Duration, canary pipeline.CanarResult) streamResult {
 	defer action.cancel()
 
 	const maxNonStreamingResponseBytes = 10 * 1024 * 1024
@@ -1219,6 +1329,13 @@ func (p *Proxy) handleNonStreamingResponse(gw *gateway.NenyaGateway, w http.Resp
 	} else if target.Format == "anthropic" {
 		a := adapter.GetAnthropicAdapter()
 		responseMap = a.ConvertAnthropicToOpenAIBody(responseMap, false)
+	}
+
+	// ExfilGuard + canary tripwire (Phases 050/060): egress policies on
+	// the buffered body before headers are committed. Both may terminate
+	// the response with a structured error (terminal: no failover).
+	if done := p.applyBufferedEgressPolicies(gw, w, r, target, agentName, responseMap, canary); done {
+		return streamResult{terminal: true}
 	}
 
 	if usage, ok := responseMap["usage"].(map[string]interface{}); ok {

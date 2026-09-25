@@ -17,6 +17,9 @@ const (
 	ErrorKindBouncerError    ErrorKind = "bouncer_error"
 	ErrorKindInternal        ErrorKind = "internal_error"
 	ErrorKindQuotaExhausted  ErrorKind = "quota_exhausted"
+	ErrorKindInjection       ErrorKind = "injection_detected"
+	ErrorKindExfil           ErrorKind = "exfil_blocked"
+	ErrorKindExfilDetected   ErrorKind = "exfil_detected"
 )
 
 // ErrorResponse represents a structured API error.
@@ -68,7 +71,10 @@ func (k ErrorKind) Scope() ErrorScope {
 	case ErrorKindInvalidRequest,
 		ErrorKindPayloadTooLarge,
 		ErrorKindModelNotFound,
-		ErrorKindContextExceeded:
+		ErrorKindContextExceeded,
+		ErrorKindInjection,
+		ErrorKindExfil,
+		ErrorKindExfilDetected:
 		return ScopeRequest
 	case ErrorKindAuthFailed,
 		ErrorKindQuotaExhausted,

@@ -9,6 +9,7 @@ import (
 
 	"github.com/nenya/config"
 	"github.com/nenya/internal/gateway"
+	"github.com/nenya/internal/pipeline"
 	"github.com/nenya/internal/routing"
 	"github.com/nenya/internal/stream"
 )
@@ -33,6 +34,10 @@ type streamResponseOpts struct {
 	idx        int
 	tokenCount int
 	apiKey     *config.ApiKey
+
+	// canary carries the per-request tripwire token (empty Token when
+	// the guard is disabled).
+	canary pipeline.CanarResult
 }
 
 // streamContinuation carries the state for transparent stream continuation:

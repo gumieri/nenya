@@ -181,6 +181,11 @@ func resolveEngineRefs(cfg *Config) error {
 	if err := resolveSingleEngineRef(&cfg.Window.Engine, cfg.Agents, providers, "window"); err != nil {
 		return err
 	}
+	if esc := cfg.Governance.Injection.GetEscalation(); esc != nil && esc.Engine != nil {
+		if err := resolveSingleEngineRef(esc.Engine, cfg.Agents, providers, "injection_escalation"); err != nil {
+			return err
+		}
+	}
 
 	return nil
 }

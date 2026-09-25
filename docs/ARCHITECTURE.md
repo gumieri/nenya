@@ -51,10 +51,12 @@ Client Request
   │   ├─ MCP tool injection (if agent has MCP servers configured)
   │   │   ├─ Inject MCP tools as OpenAI function tools into request
   │   │   └─ Inject system prompt instructing LLM to use MCP tools for memory retrieval
-  │   ├─ Content pipeline (best-effort — failures logged, never block request):
+  │   ├─ Content pipeline (security interceptors fail closed — see Interceptor Chain):
   │   │   ├─ Prefix cache optimizations
   │   │   ├─ Interceptor chain execution (priority order):
   │   │   │   ├─ RedactInterceptor (Priority 10): Tier-0 regex secret redaction
+  │   │   │   ├─ SpotlightInterceptor (Priority 12): untrusted-content enveloping
+  │   │   │   ├─ InjectionInterceptor (Priority 15): prompt-injection detection
   │   │   │   ├─ EntropyInterceptor (Priority 20): Shannon entropy redaction
   │   │   │   ├─ TFIDFInterceptor (Priority 30): TF-IDF relevance-scored truncation
   │   │   │   └─ BouncerInterceptor (Priority 50): 3-tier engine interception (soft/hard limits)
@@ -114,7 +116,7 @@ Client Request
 
 ## Interceptor Chain
 
-The interceptor chain (`internal/pipeline/interceptor.go:72`) implements the **Chain of Responsibility** pattern. Execution is deterministic by priority (lower numbers run first). All interceptors run best-effort — failures log warnings and fall through to the next interceptor unless `StrictMode` is enabled.
+The interceptor chain (`internal/pipeline/interceptor.go`) implements the **Chain of Responsibility** pattern. Execution is deterministic by priority (lower numbers run first). Failure semantics are per-interceptor: token-saving interceptors fail open (log + continue), security interceptors fail closed (abort the request with a structured error), and enforcement decisions (`RejectError`) always abort regardless of strictness. The chain-level `SetStrictMode` remains as a global fail-closed override for any interceptor error.
 
 ### Interface
 
@@ -125,24 +127,39 @@ type Interceptor interface {
     Process(ctx context.Context, req *InterceptRequest) (*InterceptResult, error)
     Priority() int
 }
+
+// Optional extension: implement to declare fail-closed semantics.
+type StrictInterceptor interface {
+    Interceptor
+    Strict() bool // true: operational Process errors abort the request
+}
 ```
 
 ### Registered Interceptors
 
-| Priority | Interceptor | File | Purpose |
-|----------|-------------|------|---------|
-| 10 | `RedactInterceptor` | `internal/pipeline/redact_interceptor.go` | Tier-0 regex pattern matching for secrets, tokens, and credentials across the entire payload |
-| 20 | `EntropyInterceptor` | `internal/pipeline/entropy_interceptor.go` | Shannon entropy redaction — identifies and redacts high-entropy strings (potential secrets) |
-| 30 | `TFIDFInterceptor` | `internal/pipeline/tfidf_interceptor.go` | TF-IDF relevance scoring — prunes content blocks by relevance to user query when `governance.tfidf_query_source` is set |
-| 50 | `BouncerInterceptor` | `internal/proxy/bouncer_interceptor.go` | 3-tier engine interception: Tier 1 (soft limit — engine summarization), Tier 2 (hard limit — TF-IDF fallback), Tier 3 (hard limit — engine call with code-aware prompt for IDEs) |
+| Priority | Interceptor | File | Purpose | Error semantics |
+|----------|-------------|------|---------|-----------------|
+| 10 | `RedactInterceptor` | `internal/pipeline/redact_interceptor.go` | Tier-0 regex pattern matching for secrets, tokens, and credentials across the entire payload | **Strict** (fail-closed) — secret redaction must not fail silently |
+| 12 | `SpotlightInterceptor` | `internal/pipeline/spotlight_interceptor.go` | Untrusted-content enveloping (`spotlighting`) of tool-role history | **Strict** (fail-closed) |
+| 15 | `InjectionInterceptor` | `internal/pipeline/injection_interceptor.go` | Deterministic prompt-injection detection: warn+sanitize by default, per-agent strict rejection (`RejectError`, 403 `injection_detected`); tier-2 escalation failures fall back to the deterministic verdict | **Strict** (fail-closed on unexpected faults) |
+| 20 | `EntropyInterceptor` | `internal/pipeline/entropy_interceptor.go` | Shannon entropy redaction — identifies and redacts high-entropy strings (potential secrets) | **Strict** (fail-closed) |
+| 30 | `TFIDFInterceptor` | `internal/pipeline/tfidf_interceptor.go` | TF-IDF relevance scoring — prunes content blocks by relevance to user query when `governance.tfidf_query_source` is set | Fail-open (token-saving) |
+| 50 | `BouncerInterceptor` | `internal/proxy/bouncer_interceptor.go` | Engine interception: summarization + redaction above the soft limit, trim above the hard limit | Governed by `bouncer.fail_open` (default `true` = skip on engine failure; `false` = `RejectError` 403 `bouncer_error` — on engine failure/empty output, or oversized rich/non-string last-message content) |
 
 ### Execution
 
-`InterceptorChain.Execute()` (`internal/pipeline/interceptor.go:111`) walks interceptors in priority order. Each successful interceptor mutates the request's `Payload` map in-place. On failure, behavior depends on `StrictMode`: fallback to next interceptor (default) or return error (strict). Context cancellation is checked at each interceptor boundary.
+`InterceptorChain.Execute()` walks interceptors in priority order. Each successful interceptor mutates the request's `Payload` map in-place. On error: `*RejectError` (policy decision) aborts immediately with 403; an operational error from an interceptor whose `Strict()` is true (or under chain-level `StrictMode`) aborts with `*StrictError`, rendered by the proxy as 503 with `error_kind=internal_error`; other operational errors log a warning and fall through (fail-open). Context cancellation is checked at each interceptor boundary.
+
+### Abort Error Types
+
+- `RejectError` (`{Err, Kind, Message}`) — an enforcement *decision* (e.g. strict injection rejection, bouncer fail-closed). Rendered as 403 with the producer's `error_kind`. Never carries the interceptor error metric (decisions are not faults).
+- `StrictError` (`{Err, Kind, Interceptor, Message}`) — an operational failure under fail-closed semantics. Rendered as 503 `internal_error`; the interceptor error metric IS recorded (faults must be observable).
+
+**Known limitation:** MCP multi-turn loops append tool-result messages to the conversation and re-dispatch WITHOUT re-running the interceptor chain — appended content is covered by spotlighting (applied by the MCP path itself) and the canary/exfil egress defenses, but not by redaction/entropy/injection detection or bouncer fail-closed.
 
 ### InterceptRequest / InterceptResult
 
-`InterceptRequest` (`internal/pipeline/interceptor.go:33`) carries the full payload, parsed messages slice, client profile, soft/hard limits, and current token count. `InterceptResult` (`internal/pipeline/interceptor.go:54`) returns the modified payload, a truncated flag, new token count, reason string, and skip flag.
+`InterceptRequest` carries the full payload, parsed messages slice, canonical agent identity (`AgentName`, falling back to the payload's `model` field), the resolved agent config (`Agent *config.AgentConfig`, nil-safe), client profile, soft/hard limits, and current token count. `InterceptResult` returns the modified payload, a truncated flag, new token count, reason string, and skip flag.
 
 ### Metrics
 
@@ -214,6 +231,19 @@ EngineManager (internal/local/manager.go:13)
 }
 ```
 
+## Output-Side Defenses (Stream Path)
+
+The upstream SSE stream flows through pluggable egress filters before reaching
+the client: provider response transformations (adapter system), the optional
+**ExfilGuard** URL policy (markdown links/images and bare URLs, sliding-window
+over deltas so a construct straddling chunk boundaries is still evaluated),
+and the **canary tripwire** watcher (exact-substring echo of the per-request
+marker on `stream`, `buffered`, and tool-args channels). Both can terminate
+the response with a structured SSE error frame (`error_kind=exfil_blocked` /
+`exfil_detected`) or rewrite content in place (`strip` / log-mode scrubbing).
+Buffered (non-streaming) bodies run the same policies via a full-body
+inspection. See [INJECTION_DEFENSE.md](INJECTION_DEFENSE.md#response-path-controls).
+
 ## Structured Error Handling
 
 Nenya uses a typed error system for client-facing diagnostics and internal retry decisions (`internal/infra/errors.go`, `internal/proxy/errors.go`, `internal/proxy/error_normalizer.go`).
@@ -233,8 +263,11 @@ The `ErrorKind` type (`internal/infra/errors.go:4`) categorizes errors into sema
 | `network_error` | 502 | Transport-level failure |
 | `payload_too_large` | 413 | Request exceeds size limits |
 | `invalid_request` | 400 | Malformed or invalid request |
-| `bouncer_error` | 502 | Engine interception failure |
-| `internal_error` | 500 | Gateway internal error |
+| `bouncer_error` | 403 | Engine interception failure with `bouncer.fail_open=false`, or oversized rich content under fail-closed |
+| `injection_detected` | 403 | Strict injection policy rejection (`pipeline.RejectError`) |
+| `exfil_blocked` | 403 buffered; SSE frame on the already-committed 200 for streams | ExfilGuard `block` action |
+| `exfil_detected` | 403 buffered; SSE frame on stream; tool-result error (no HTTP status) for refused tool calls | Canary tripwire `block` action |
+| `internal_error` | 503 for strict security-interceptor faults (`pipeline.StrictError`) and service-unavailable paths (shutdown, not initialized, no provider); 500 otherwise | Gateway internal error |
 
 ### GatewayError
 
@@ -259,7 +292,7 @@ For streaming requests, `writeGatewayStreamError` (`internal/proxy/error_normali
 
 ## MCP Multi-Turn Tool Call Flow
 
-When an agent has MCP servers configured, the LLM may respond with `tool_calls` targeting MCP tools. Nenya intercepts these locally:
+When an agent has MCP servers configured, the LLM may respond with `tool_calls` targeting MCP tools. Nenya intercepts these locally. Every dispatch (model-initiated, auto-search, auto-save) passes the **argument guard** first — schema validation, argument size cap, and URL destination policy (`governance.mcp_guard`) — and the canary tripwire scans tool-call arguments before they leave. Loop-appended tool results are covered by spotlighting and the egress defenses, but not re-run through the interceptor chain (see [INJECTION_DEFENSE.md](INJECTION_DEFENSE.md#honest-limitations)):
 
 ```
 Request with MCP tools injected
@@ -638,9 +671,11 @@ See [Agent Routing Strategies](ROUTING.md#agent-routing-strategies) for configur
 
 Nenya is designed to never break the flow between AI coding clients (OpenCode, Aider) and upstream providers. The following mechanisms ensure resilience:
 
-### Best-Effort Content Pipeline
+### Best-Effort vs Fail-Closed Content Pipeline
 
-The entire content pipeline (prefix cache, redaction, compaction, tool call pruning, thought pruning, window, TF-IDF truncation, engine interception) runs as best-effort. Any failure is logged as a warning and the request proceeds with the original payload. No pipeline error results in an HTTP 500 to the client.
+The token-saving stages (prefix cache, compaction, tool-call/thought pruning, window, TF-IDF truncation) and engine interception under `bouncer.fail_open=true` run best-effort: a failure is logged and the request proceeds with the interceptor output.
+
+The **security** stages do not: `RedactInterceptor`, `SpotlightInterceptor`, `InjectionInterceptor`, and `EntropyInterceptor` implement `Strict()` and fail closed on operational faults — the request aborts with `503 error_kind=internal_error` rather than forwarding unprocessed content (see [Interceptor Chain](#interceptor-chain)). Policy decisions always abort too: strict injection rejections and bouncer fail-closed rejections return `403` with their specific `error_kind`.
 
 ### Skip on Engine Failure
 

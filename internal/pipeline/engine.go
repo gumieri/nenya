@@ -82,7 +82,13 @@ func CallEngine(ctx context.Context, httpClient *http.Client, provider *config.P
 		if r.StatusCode >= 400 {
 			body, _ := io.ReadAll(io.LimitReader(r.Body, MaxErrorBodyBytes))
 			_ = r.Body.Close()
-			return nil, fmt.Errorf("engine returned status %d: %s", r.StatusCode, string(body))
+			statusErr := fmt.Errorf("engine returned status %d: %s", r.StatusCode, string(body))
+			// AGENTS.md §8: only 429 and 5xx are retryable; deterministic
+			// 4xx (bad model, auth, bad request) fail the target outright.
+			if r.StatusCode != http.StatusTooManyRequests && r.StatusCode < 500 {
+				return nil, &util.PermanentError{Err: statusErr}
+			}
+			return nil, statusErr
 		}
 		return r, nil
 	})
@@ -93,7 +99,7 @@ func CallEngine(ctx context.Context, httpClient *http.Client, provider *config.P
 
 	var response map[string]interface{}
 	if decodeErr := json.NewDecoder(io.LimitReader(resp.Body, MaxOllamaResponseBytes)).Decode(&response); decodeErr != nil {
-		return "", fmt.Errorf("failed to decode engine response: %v", decodeErr)
+		return "", fmt.Errorf("failed to decode engine response (capped at %d bytes): %w", MaxOllamaResponseBytes, decodeErr)
 	}
 
 	output, err := extractEngineOutput(response, apiFormat)
@@ -155,14 +161,14 @@ func extractOpenAIOutput(response map[string]interface{}) (string, error) {
 
 	parts, pok := msg["content"].([]interface{})
 	if !pok {
-		return "", errors.New("openai message missing content")
+		return "", errors.New("openai message content has unsupported type")
 	}
 
 	if text, found := extractTextFromParts(parts); found {
 		return text, nil
 	}
 
-	return "", fmt.Errorf("openai message missing content")
+	return "", errors.New("openai content parts carry no text")
 }
 
 // ClientResolver returns the HTTP client for dispatching engine requests to
@@ -180,6 +186,9 @@ func CallEngineChain(ctx context.Context, clientFor ClientResolver,
 	if len(targets) == 0 {
 		return "", errors.New("engine chain: no targets available")
 	}
+	if clientFor == nil {
+		return "", errors.New("engine chain: no client resolver configured (refusing http.DefaultClient)")
+	}
 
 	var lastErr error
 	for i, target := range targets {
@@ -194,12 +203,7 @@ func CallEngineChain(ctx context.Context, clientFor ClientResolver,
 			"attempt", attempt,
 			"total", total)
 
-		var client *http.Client
-		if clientFor != nil {
-			client = clientFor(target.Provider.Name)
-		} else {
-			client = http.DefaultClient
-		}
+		client := clientFor(target.Provider.Name)
 
 		timeout := target.Engine.TimeoutSeconds
 		if timeout <= 0 {

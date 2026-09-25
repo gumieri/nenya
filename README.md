@@ -129,7 +129,7 @@ flowchart TD
         MCPINJ["MCP auto-search + tool injection"]
     end
 
-    CHAIN["Interceptor chain (best-effort)<br/>redact → entropy → TF-IDF → bouncer"]
+    CHAIN["Interceptor chain<br/>redact → spotlight → injection → entropy → TF-IDF → bouncer<br/><i>security stages fail closed; token-saving fail open</i>"]
     TRIM["Token budget trim (hard limit)"]
 
     subgraph LOOP["Dispatch loop — per target"]
@@ -196,8 +196,10 @@ Flow notes:
 - **Context window compaction** — sliding window summarization with configurable engine
 - **Stale tool call pruning** — compact old assistant+tool response pairs to save tokens
 - **Thought pruning** — strip reasoning blocks from assistant message history
+- **Prompt-injection defense** — deterministic detection/sanitization, untrusted-content spotlighting, and an advisory two-tier classifier (see [docs/INJECTION_DEFENSE.md](docs/INJECTION_DEFENSE.md))
+- **Output egress control** — ExfilGuard URL policy and canary tripwires on every egress channel
 - **Input validation** — strict body limits, JSON sanitization, header filtering
-- **Graceful degradation** — never blocks requests due to engine or pipeline failures
+- **Graceful degradation** — with `bouncer.fail_open=true` (the default), engine and token-saving pipeline failures never block requests; security interceptors fail closed by design (503) so a broken defense cannot silently pass content
 - **Role-Based Access Control (RBAC)** — per-API key roles (admin, user, read-only) with agent and endpoint restrictions
 
 ### Hardening (Deployment Security)
@@ -291,6 +293,7 @@ docker run -e PORT=9090 -p 9090:9090 ghcr.io/gumieri/nenya:latest
 | [Passthrough Proxy](docs/PASSTHROUGH_PROXY.md) | Raw provider endpoint proxying, SSE streaming, auth injection |
 | [Architecture](docs/ARCHITECTURE.md) | Package DAG, request lifecycle, circuit breaker, SSE pipeline |
 | [MCP Integration](docs/MCP_INTEGRATION.md) | MCP server integration, tool discovery, multi-turn execution |
+| [Injection & Exfiltration Defense](docs/INJECTION_DEFENSE.md) | Threat model, defense-in-depth layers, rollout playbook, honest limitations |
 | [Adapters](docs/ADAPTERS.md) | Adapter system internals, auth styles, capability flags |
 | [Secrets Format](docs/SECRETS_FORMAT.md) | Systemd credentials, env var fallback, container/K8s deployment |
 | [Security](docs/SECURITY.md) | Vulnerability reporting policy |

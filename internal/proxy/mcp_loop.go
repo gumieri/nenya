@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -16,6 +17,7 @@ import (
 	"github.com/nenya/internal/mcp"
 	"github.com/nenya/internal/pipeline"
 	"github.com/nenya/internal/routing"
+	"github.com/nenya/internal/stream"
 	"github.com/nenya/internal/util"
 )
 
@@ -48,6 +50,7 @@ func (p *Proxy) injectMCPTools(gw *gateway.NenyaGateway, payload map[string]inte
 			continue
 		}
 		openaiTools := mcp.MCPToolsToOpenAI(serverName, tools)
+		applyToolDescriptionSpotlight(openaiTools, spotlightSettingsFor(&gw.Config, agent), gw.Metrics)
 
 		existing, ok := payload["tools"].([]interface{})
 		if !ok {
@@ -74,14 +77,14 @@ func (p *Proxy) injectMCPTools(gw *gateway.NenyaGateway, payload map[string]inte
 			gw.Logger.Info("MCP tool_choice auto injected",
 				"tools_count", len(toolNames), "agent", agentName)
 		}
-		p.injectMCPSystemPrompt(gw, payload, toolNames)
+		p.injectMCPSystemPrompt(gw, payload, toolNames, spotlightSettingsFor(&gw.Config, agent))
 	} else {
 		gw.Logger.Warn("MCP: no tools injected for agent",
 			"agent", agentName, "servers", agent.MCP.Servers)
 	}
 }
 
-func (p *Proxy) injectMCPSystemPrompt(gw *gateway.NenyaGateway, payload map[string]interface{}, toolNames []string) {
+func (p *Proxy) injectMCPSystemPrompt(gw *gateway.NenyaGateway, payload map[string]interface{}, toolNames []string, settings pipeline.SpotlightSettings) {
 	toolsList := util.JoinBackticks(toolNames)
 
 	prompt := fmt.Sprintf(
@@ -97,9 +100,19 @@ func (p *Proxy) injectMCPSystemPrompt(gw *gateway.NenyaGateway, payload map[stri
 		return
 	}
 
+	preamble := ""
+	if settings.Enabled {
+		// The envelope rule must reach the model whenever envelopes do
+		// (arXiv:2403.14720 efficacy depends on the rule being present).
+		// Tradeoff: mixed setups (Nenya-managed MCP + client-side tool
+		// history) carry the rule twice — the spotlight interceptor adds
+		// its own copy ahead of the first history envelope. Accepted for
+		// placement robustness (see CONFIGURATION.md).
+		preamble = "\n\n" + pipeline.SpotlightPreamble
+	}
 	mcpMsg := map[string]interface{}{
 		"role":    "system",
-		"content": prompt,
+		"content": prompt + preamble,
 	}
 
 	updated := make([]interface{}, 0, util.AddCap(len(messages), 1))
@@ -152,7 +165,15 @@ func (p *Proxy) injectAutoSearch(gw *gateway.NenyaGateway, ctx context.Context, 
 		}
 
 		if result := p.executeAutoSearch(gw, ctx, serverName, toolName, query, agentName); result != nil {
-			p.injectAutoSearchContext(gw, payload, messages, serverName, result, toolName, agentName)
+			p.injectAutoSearchContext(gw, autoSearchContextOpts{
+				payload:    payload,
+				messages:   messages,
+				serverName: serverName,
+				result:     result,
+				toolName:   toolName,
+				agentName:  agentName,
+				settings:   spotlightSettingsFor(&gw.Config, agent),
+			})
 			break
 		}
 	}
@@ -213,9 +234,15 @@ func (p *Proxy) executeAutoSearch(gw *gateway.NenyaGateway, ctx context.Context,
 	duration := time.Since(start)
 
 	if err != nil {
-		gw.Logger.Warn("MCP auto-search failed, proceeding without",
-			"server", serverName, "agent", agentName, "err", err,
-			"duration_ms", duration.Milliseconds())
+		if errors.Is(err, errMCPArgumentPolicy) {
+			// The guard already logged the rejection at Warn.
+			gw.Logger.Debug("MCP auto-search skipped by argument guard",
+				"server", serverName, "agent", agentName)
+		} else {
+			gw.Logger.Warn("MCP auto-search failed, proceeding without",
+				"server", serverName, "agent", agentName, "err", err,
+				"duration_ms", duration.Milliseconds())
+		}
 		gw.Metrics.RecordMCPAutoSearch(serverName, agentName, false, err)
 		return nil
 	}
@@ -241,10 +268,23 @@ func (p *Proxy) mcpClientCallTool(gw *gateway.NenyaGateway, ctx context.Context,
 	if !ok {
 		return nil, fmt.Errorf("MCP client not found")
 	}
-	return client.CallTool(ctx, toolName, map[string]any{
+	args := map[string]any{
 		"query": query,
 		"limit": 5,
-	})
+	}
+	// The argument guard applies to auto-search too: the query carries
+	// untrusted conversation-derived text. A rejection surfaces as an
+	// error so executeAutoSearch records a failed search and injects
+	// nothing into the conversation.
+	if !guardMCPArgs(gw, gw.Logger, mcpGuardDispatch{
+		ServerName: serverName,
+		ToolName:   toolName,
+		Purpose:    "auto_search",
+		Args:       args,
+	}) {
+		return nil, errMCPArgumentPolicy
+	}
+	return client.CallTool(ctx, toolName, args)
 }
 
 func (p *Proxy) redactSearchResult(gw *gateway.NenyaGateway, resultText string) string {
@@ -255,25 +295,41 @@ func (p *Proxy) redactSearchResult(gw *gateway.NenyaGateway, resultText string) 
 	return resultText
 }
 
-func (p *Proxy) injectAutoSearchContext(gw *gateway.NenyaGateway, payload map[string]interface{}, messages []interface{}, serverName string, result *autoSearchResult, toolName, agentName string) {
-	contextStr := fmt.Sprintf("[Memory context from %s]\n%s", serverName, result.text)
+// autoSearchContextOpts groups the parameters for injecting auto-search
+// memory context (AGENTS.md §11 parameter grouping).
+type autoSearchContextOpts struct {
+	payload    map[string]interface{}
+	messages   []interface{}
+	serverName string
+	result     *autoSearchResult
+	toolName   string
+	agentName  string
+	settings   pipeline.SpotlightSettings
+}
+
+func (p *Proxy) injectAutoSearchContext(gw *gateway.NenyaGateway, opts autoSearchContextOpts) {
+	contextStr := fmt.Sprintf("[Memory context from %s]\n%s", opts.serverName, opts.result.text)
+	contextStr = opts.settings.ApplyDelimitersOnly(contextStr, pipeline.SpotlightSourceMemory(opts.serverName))
 	memoryMsg := map[string]interface{}{
 		"role":    "system",
 		"content": contextStr,
 	}
 
-	updated := make([]interface{}, 0, util.AddCap(1, len(messages)))
-	updated = append(updated, messages[:len(messages)-1]...)
+	updated := make([]interface{}, 0, util.AddCap(1, len(opts.messages)))
+	updated = append(updated, opts.messages[:len(opts.messages)-1]...)
 	updated = append(updated, memoryMsg)
-	updated = append(updated, messages[len(messages)-1:]...)
-	payload["messages"] = updated
+	updated = append(updated, opts.messages[len(opts.messages)-1:]...)
+	opts.payload["messages"] = updated
 
+	if opts.settings.Enabled {
+		gw.Metrics.RecordSpotlighted("memory:" + opts.serverName)
+	}
 	gw.Logger.Debug("MCP auto-search context injected",
-		"server", serverName, "agent", agentName,
-		"tool", toolName,
-		"duration_ms", result.duration.Milliseconds(),
-		"result_len", len(result.text))
-	gw.Metrics.RecordMCPAutoSearch(serverName, agentName, true, nil)
+		"server", opts.serverName, "agent", opts.agentName,
+		"tool", opts.toolName,
+		"duration_ms", opts.result.duration.Milliseconds(),
+		"result_len", len(opts.result.text))
+	gw.Metrics.RecordMCPAutoSearch(opts.serverName, opts.agentName, true, nil)
 }
 
 func (p *Proxy) forwardToUpstreamWithMCP(gw *gateway.NenyaGateway,
@@ -341,7 +397,7 @@ loop:
 	if lastBuf != nil {
 		gw.Logger.Warn("MCP loop exhausted, replaying last response",
 			"max_iterations", maxIter, "agent", opts.AgentName)
-		replayBufferedResponse(w, lastBuf, gw.Logger)
+		p.replayGuardedBuffered(gw, w, lastBuf, opts.AgentName)
 		p.recordMCPUsage(gw, lastBuf, opts.AgentName)
 		return
 	}
@@ -368,12 +424,38 @@ type mcpIterInput struct {
 	totalToolCalls  *int
 }
 
+// handleMCPBufferOutcome resolves a buffered upstream outcome that
+// terminates the iteration without further processing: an exfil-blocked
+// buffer (block payload written) or an upstream failure (last response
+// replayed / gateway error written). Returns true when the caller must
+// return immediately.
+func (p *Proxy) handleMCPBufferOutcome(in mcpIterInput, buf *bufferedSSE, err error) bool {
+	if err == nil && buf != nil && buf.exfilBlocked {
+		// The guard truncated this turn's buffer: terminate the whole
+		// loop with the block payload — continuing would execute tool
+		// calls or fold reasoning derived from violating content.
+		in.gw.Logger.Warn("MCP loop: response blocked by exfil guard",
+			"iteration", in.iteration, "agent", in.opts.AgentName)
+		p.writeExfilBlockedSSE(in.gw, in.w)
+		return true
+	}
+	if err == nil && buf != nil && buf.canaryBlocked {
+		// Same termination for the canary tripwire, with the
+		// exfil_detected error kind.
+		in.gw.Logger.Warn("MCP loop: response blocked by canary tripwire",
+			"iteration", in.iteration, "agent", in.opts.AgentName)
+		p.writeExfilDetectedSSE(in.gw, in.w)
+		return true
+	}
+	return false
+}
+
 func (p *Proxy) mcpIteration(in mcpIterInput) int {
 	select {
 	case <-in.mcpLoopCtx.Done():
 		in.gw.Logger.Warn("MCP loop deadline exceeded", "agent", in.opts.AgentName, "iterations", *in.actualIter)
 		if *in.lastBuf != nil {
-			replayBufferedResponse(in.w, *in.lastBuf, in.gw.Logger)
+			p.replayGuardedBuffered(in.gw, in.w, *in.lastBuf, in.opts.AgentName)
 		} else {
 			writeSSEError(in.w, http.StatusRequestTimeout, "MCP loop deadline exceeded")
 		}
@@ -394,12 +476,15 @@ func (p *Proxy) mcpIteration(in mcpIterInput) int {
 		working = in.opts.Payload
 	}
 
-	buf, err := p.forwardBuffered(in.gw, in.mcpLoopCtx, in.r, in.opts.Targets, working, in.opts.Cooldown, in.opts.TokenCount, in.opts.AgentName, in.opts.MaxRetries, in.opts.ApiKey)
+	buf, err := p.forwardBuffered(in.gw, in.mcpLoopCtx, in.r, in.opts.Targets, working, in.opts.Cooldown, in.opts.TokenCount, in.opts.AgentName, in.opts.MaxRetries, in.opts.ApiKey, in.opts.Canary)
+	if handled := p.handleMCPBufferOutcome(in, buf, err); handled {
+		return mcpIterReturn
+	}
 	if err != nil {
 		in.gw.Logger.Warn("MCP loop: upstream failed, streaming last response",
 			"iteration", in.iteration, "err", err)
 		if *in.lastBuf != nil {
-			replayBufferedResponse(in.w, *in.lastBuf, in.gw.Logger)
+			p.replayGuardedBuffered(in.gw, in.w, *in.lastBuf, in.opts.AgentName)
 			return mcpIterReturn
 		}
 		writeSSEError(in.w, http.StatusBadGateway, "All upstream providers failed")
@@ -412,7 +497,7 @@ func (p *Proxy) mcpIteration(in mcpIterInput) int {
 			"has_content", buf.hasContent,
 			"finish_reason", buf.finishReason,
 			"raw_bytes_len", len(buf.rawBytes))
-		replayBufferedResponse(in.w, buf, in.gw.Logger)
+		p.replayGuardedBuffered(in.gw, in.w, buf, in.opts.AgentName)
 		p.recordMCPUsage(in.gw, buf, in.opts.AgentName)
 		return mcpIterReturn
 	}
@@ -427,7 +512,7 @@ func (p *Proxy) mcpIteration(in mcpIterInput) int {
 			"iteration", in.iteration+1,
 			"agent", in.opts.AgentName)
 
-		results := executeMCPCalls(in.mcpLoopCtx, mcpCalls, in.gw, in.opts.AgentName)
+		results := executeMCPCalls(in.mcpLoopCtx, mcpCalls, in.gw, in.opts.AgentName, in.opts.Canary)
 		mcpAssistantMsg := map[string]any{
 			"role":       "assistant",
 			"content":    nil,
@@ -436,12 +521,12 @@ func (p *Proxy) mcpIteration(in mcpIterInput) int {
 		if buf.reasoningContent != "" {
 			mcpAssistantMsg["reasoning_content"] = buf.reasoningContent
 		}
-		appendMCPResults(working, mcpCalls, results, mcpAssistantMsg)
+		appendMCPResults(working, mcpCalls, results, mcpAssistantMsg, spotlightSettingsFor(&in.gw.Config, in.opts.Agent), in.gw.Metrics)
 
 		updatedPayload, err := json.Marshal(working)
 		if err != nil {
 			in.gw.Logger.Error("failed to marshal updated payload for MCP loop", "err", err)
-			replayBufferedResponse(in.w, buf, in.gw.Logger)
+			p.replayGuardedBuffered(in.gw, in.w, buf, in.opts.AgentName)
 			return mcpIterReturn
 		}
 		*in.originalPayload = updatedPayload
@@ -451,7 +536,7 @@ func (p *Proxy) mcpIteration(in mcpIterInput) int {
 		in.gw.Logger.Debug("MCP loop: non-MCP tool calls only, replaying",
 			"non_mcp_calls", len(nonMcpCalls),
 			"raw_bytes_len", len(buf.rawBytes))
-		replayBufferedResponse(in.w, buf, in.gw.Logger)
+		p.replayGuardedBuffered(in.gw, in.w, buf, in.opts.AgentName)
 		p.recordMCPUsage(in.gw, buf, in.opts.AgentName)
 		return mcpIterReturn
 	}
@@ -470,6 +555,7 @@ func (p *Proxy) forwardBuffered(gw *gateway.NenyaGateway,
 	agentName string,
 	maxRetries int,
 	apiKey *config.ApiKey,
+	canary pipeline.CanarResult,
 ) (*bufferedSSE, error) {
 	originalPayload, err := prepareOriginalPayload(gw, payload)
 	if err != nil {
@@ -492,7 +578,7 @@ func (p *Proxy) forwardBuffered(gw *gateway.NenyaGateway,
 		}
 
 		action := p.prepareAndSend(gw, r, i, targets, target, workingPayload, cooldownDuration, tokenCount, agentName, apiKey, false)
-		result, shouldContinue := p.handleBufferedAction(ctx, gw, i, targets, target, cooldownDuration, agentName, action, attempt, maxRetries)
+		result, shouldContinue := p.handleBufferedAction(ctx, gw, i, targets, target, cooldownDuration, agentName, action, attempt, maxRetries, canary)
 		if result != nil {
 			return result, nil
 		}
@@ -519,7 +605,7 @@ func prepareOriginalPayload(gw *gateway.NenyaGateway, payload map[string]interfa
 	return originalPayload, nil
 }
 
-func (p *Proxy) handleBufferedAction(ctx context.Context, gw *gateway.NenyaGateway, idx int, targets []routing.UpstreamTarget, target routing.UpstreamTarget, cooldownDuration time.Duration, agentName string, action upstreamAction, attempt, maxRetries int) (*bufferedSSE, bool) {
+func (p *Proxy) handleBufferedAction(ctx context.Context, gw *gateway.NenyaGateway, idx int, targets []routing.UpstreamTarget, target routing.UpstreamTarget, cooldownDuration time.Duration, agentName string, action upstreamAction, attempt, maxRetries int, canary pipeline.CanarResult) (*bufferedSSE, bool) {
 	switch action.kind {
 	case actionContinue:
 		return nil, true
@@ -570,7 +656,7 @@ func (p *Proxy) handleBufferedAction(ctx context.Context, gw *gateway.NenyaGatew
 		}
 		return nil, false
 	case actionStream:
-		buf, err := p.handleBufferedStream(ctx, action, target, gw, cooldownDuration)
+		buf, err := p.handleBufferedStream(ctx, action, target, gw, cooldownDuration, agentName, canary)
 		if err != nil {
 			gw.AgentState.RecordFailure(target, cooldownDuration)
 		}
@@ -579,7 +665,7 @@ func (p *Proxy) handleBufferedAction(ctx context.Context, gw *gateway.NenyaGatew
 	return nil, false
 }
 
-func (p *Proxy) handleBufferedStream(ctx context.Context, action upstreamAction, target routing.UpstreamTarget, gw *gateway.NenyaGateway, cooldownDuration time.Duration) (*bufferedSSE, error) {
+func (p *Proxy) handleBufferedStream(ctx context.Context, action upstreamAction, target routing.UpstreamTarget, gw *gateway.NenyaGateway, cooldownDuration time.Duration, agentName string, canary pipeline.CanarResult) (*bufferedSSE, error) {
 	defer action.cancel()
 	buf, err := bufferStreamResponse(ctx, action.resp.Body, gw.Logger)
 	_ = action.resp.Body.Close()
@@ -588,7 +674,167 @@ func (p *Proxy) handleBufferedStream(ctx context.Context, action upstreamAction,
 		return nil, fmt.Errorf("buffering response: %w", err)
 	}
 	gw.AgentState.RecordSuccess(target.CoolKey)
+	// ExfilGuard (Phase 050): the MCP loop replays buffered SSE bytes
+	// verbatim, bypassing the streaming filter pipeline — apply the URL
+	// egress policy over the buffered frames before they reach callers.
+	p.applyExfilToBufferedSSE(gw, buf, agentName)
+	p.applyCanaryToBufferedSSE(gw, buf, agentName, canary)
 	return buf, nil
+}
+
+// applyExfilToBufferedSSE runs the egress guard over each model-text
+// frame of a buffered SSE response, rewriting stripped deltas in place.
+// A block verdict truncates the buffer to the frames before the
+// violation; callers detect it via buf.exfilBlocked and terminate with
+// the structured block payload instead of replaying.
+func (p *Proxy) applyExfilToBufferedSSE(gw *gateway.NenyaGateway, buf *bufferedSSE, agentName string) {
+	guard := exfilGuardFor(gw, agentName)
+	if guard == nil || buf == nil || len(buf.rawBytes) == 0 {
+		return
+	}
+	var out []byte
+	blocked := false
+	changed := false
+	for _, line := range strings.Split(string(buf.rawBytes), "\n") {
+		if blocked && !strings.Contains(line, "usage") {
+			// After a block verdict only bookkeeping frames (usage) are
+			// kept; content frames are dropped with the violation.
+			continue
+		}
+		next, lineBlocked, lineChanged := p.guardBufferedLine(guard, line)
+		blocked = blocked || lineBlocked
+		changed = changed || lineChanged
+		out = append(out, next...)
+	}
+	if changed {
+		buf.rawBytes = out
+		buf.exfilBlocked = blocked
+	}
+}
+
+// applyCanaryToBufferedSSE scans the model-text frames of a buffered
+// response for the request canary through ONE persistent watcher, so a
+// token straddling delta frames is detected at completion (per-frame
+// scans would miss it). Block truncates the buffer at the completing
+// frame (canaryBlocked); log scrubs the marker best-effort per frame
+// (a straddled token is detected but its fragments may remain) and
+// continues.
+func (p *Proxy) applyCanaryToBufferedSSE(gw *gateway.NenyaGateway, buf *bufferedSSE, agentName string, canary pipeline.CanarResult) {
+	if canary.Token == "" || buf == nil || len(buf.rawBytes) == 0 {
+		return
+	}
+	watcher := stream.NewCanaryWatcher(canary.Token, canary.Action, "buffered", gw.Metrics, gw.Logger.With("agent", agentName))
+	var out []byte
+	blocked := false
+	changed := false
+	for _, line := range strings.Split(string(buf.rawBytes), "\n") {
+		if blocked && !strings.Contains(line, "usage") {
+			// After a block verdict only bookkeeping frames (usage) are
+			// kept, mirroring the egress guard; content frames are
+			// dropped with the violation.
+			continue
+		}
+		next, lineBlocked, lineChanged := p.canaryBufferedLine(watcher, canary, line)
+		blocked = blocked || lineBlocked
+		changed = changed || lineChanged
+		out = append(out, next...)
+	}
+	if changed {
+		buf.rawBytes = out
+		buf.canaryBlocked = blocked
+	}
+}
+
+// canaryBufferedLine runs the canary watcher over one buffered SSE
+// line: block verdicts report truncation; log verdicts scrub the marker
+// sentence from frames after the trip.
+func (p *Proxy) canaryBufferedLine(watcher *stream.CanaryWatcher, canary pipeline.CanarResult, line string) (string, bool, bool) {
+	trimmed := strings.TrimPrefix(line, "data: ")
+	if line == trimmed || strings.TrimSpace(trimmed) == "" || strings.TrimSpace(trimmed) == "[DONE]" {
+		return line + "\n", false, false
+	}
+	parsed := stream.ParseSSEChunk([]byte(trimmed))
+	if parsed == nil {
+		return line + "\n", false, false
+	}
+	content := stream.ExtractExfilContent(parsed)
+	if content == "" {
+		return line + "\n", false, false
+	}
+	_, action, _ := watcher.FilterContent(content)
+	if action == stream.ActionBlock {
+		// The watcher emits the one-time detection warning (with agent
+		// context).
+		return "", true, true
+	}
+	if watcher.Tripped && canary.Action == config.CanaryActionLog {
+		// Log mode: scrub the marker sentence (falling back to the bare
+		// token) from frames carrying it.
+		cleaned := strings.ReplaceAll(content, pipeline.CanaryMarker(canary.Token), "")
+		cleaned = strings.ReplaceAll(cleaned, canary.Token, "")
+		if cleaned != content {
+			_ = stream.SetExfilContent(parsed, cleaned)
+			reencoded, err := json.Marshal(parsed)
+			if err != nil {
+				// Log mode is fail-open: pass the original line through
+				// rather than dropping content.
+				return line + "\n", false, false
+			}
+			return "data: " + string(reencoded) + "\n", false, true
+		}
+	}
+	return line + "\n", false, false
+}
+
+// guardBufferedLine runs the guard over one buffered SSE line, returning
+// the (possibly rewritten) line, whether it triggered a block, and
+// whether it was rewritten.
+func (p *Proxy) guardBufferedLine(guard *stream.ExfilGuard, line string) (string, bool, bool) {
+	trimmed := strings.TrimPrefix(line, "data: ")
+	if line == trimmed || strings.TrimSpace(trimmed) == "" || strings.TrimSpace(trimmed) == "[DONE]" {
+		return line + "\n", false, false
+	}
+	parsed := stream.ParseSSEChunk([]byte(trimmed))
+	if parsed == nil {
+		return line + "\n", false, false
+	}
+	content := stream.ExtractExfilContent(parsed)
+	if content == "" {
+		return line + "\n", false, false
+	}
+	rewritten, action, _ := guard.FilterContent(content)
+	switch action {
+	case stream.ActionBlock:
+		return "", true, true
+	case stream.ActionRedact:
+		_ = stream.SetExfilContent(parsed, rewritten)
+		reencoded, err := json.Marshal(parsed)
+		if err != nil {
+			// Fail-safe: drop the line rather than leak the unredacted
+			// original when re-encoding fails.
+			return "", false, true
+		}
+		return "data: " + string(reencoded) + "\n", false, true
+	default:
+		return line + "\n", false, false
+	}
+}
+
+// replayGuardedBuffered replays a buffered MCP response through the
+// egress-guard verdict: a buffer truncated by the guard gets the
+// structured block payload instead of the violating frames.
+func (p *Proxy) replayGuardedBuffered(gw *gateway.NenyaGateway, w http.ResponseWriter, buf *bufferedSSE, agentName string) {
+	if buf != nil && buf.exfilBlocked {
+		gw.Logger.Warn("MCP loop: response blocked by exfil guard", "agent", agentName)
+		p.writeExfilBlockedSSE(gw, w)
+		return
+	}
+	if buf != nil && buf.canaryBlocked {
+		gw.Logger.Warn("MCP loop: response blocked by canary tripwire", "agent", agentName)
+		p.writeExfilDetectedSSE(gw, w)
+		return
+	}
+	replayBufferedResponse(w, buf, gw.Logger)
 }
 
 func (p *Proxy) recordMCPUsage(gw *gateway.NenyaGateway, buf *bufferedSSE, agentName string) {
@@ -632,9 +878,6 @@ func (p *Proxy) recordMCPUsage(gw *gateway.NenyaGateway, buf *bufferedSSE, agent
 	recordChatUsage(gw, model, usage)
 }
 
-// applyRedactToContent runs redactFn against every text surface of msgNode's
-// content, preserving multimodal content arrays instead of flattening them to
-// a string. Returns true if any part was changed.
 func detectRequestCapabilities(payload map[string]interface{}) routing.RequestCapabilities {
 	var caps routing.RequestCapabilities
 
@@ -685,46 +928,6 @@ func checkContentArrayForVision(arr []interface{}, caps *routing.RequestCapabili
 			return
 		}
 	}
-}
-
-// applyRedactToContent applies the redact function to the content field of a message node.
-// Supports both string content and content arrays (redacting only text parts).
-// Returns true if any content was modified.
-func applyRedactToContent(msgNode map[string]interface{}, redactFn func(string) string) bool {
-	contentRaw, ok := msgNode["content"]
-	if !ok {
-		return false
-	}
-	changed := false
-	switch c := contentRaw.(type) {
-	case string:
-		if c == "" {
-			return false
-		}
-		if r := redactFn(c); r != c {
-			msgNode["content"] = r
-			changed = true
-		}
-	case []interface{}:
-		for _, partRaw := range c {
-			part, ok := partRaw.(map[string]interface{})
-			if !ok {
-				continue
-			}
-			if part["type"] != "text" {
-				continue
-			}
-			text, ok := part["text"].(string)
-			if !ok || text == "" {
-				continue
-			}
-			if r := redactFn(text); r != text {
-				part["text"] = r
-				changed = true
-			}
-		}
-	}
-	return changed
 }
 
 // handleNonStreamingResponse buffers the full upstream response and returns it as a complete JSON object.

@@ -1,6 +1,10 @@
 package stream
 
-import "testing"
+import (
+	"regexp"
+	"strings"
+	"testing"
+)
 
 func TestExtractThinkingSignal(t *testing.T) {
 	tests := []struct {
@@ -119,5 +123,49 @@ func TestCheckContentBlockStart(t *testing.T) {
 				t.Errorf("checkContentBlockStart() hasSignal = %v, want %v", gotHasSignal, tt.wantHasSignal)
 			}
 		})
+	}
+}
+
+// TestStreamFilterStraddlingSecret is the regression test for the
+// boundary-straddling leak: a secret split across two SSE chunks must be
+// fully redacted once the client concatenates the emitted chunks, and an
+// in-chunk secret must not consume a straddling match's fragment.
+func TestStreamFilterStraddlingSecret(t *testing.T) {
+	secret := "AKIAIOSFODNN7EXAMPLE"
+	patterns := []*regexp.Regexp{regexp.MustCompile(`AKIA[0-9A-Z]{16}`)}
+	f := NewStreamFilter(patterns, nil, "[REDACTED]", 256)
+
+	first := "intro " + secret[:17]
+	out1, action1, _ := f.FilterContent(first)
+	if action1 == ActionBlock {
+		t.Fatalf("unexpected block on first chunk")
+	}
+	second := secret[17:] + " plus " + secret + " end"
+	out2, action2, _ := f.FilterContent(second)
+
+	combined := out1 + out2
+	if strings.Contains(combined, secret) {
+		t.Fatalf("straddling secret leaked across chunks: %q", combined)
+	}
+	if !strings.Contains(combined, "[REDACTED]") {
+		t.Errorf("expected redaction marker in output, got %q", combined)
+	}
+	if action2 != ActionRedact && action1 != ActionRedact {
+		t.Errorf("expected at least one ActionRedact, got %v then %v", action1, action2)
+	}
+}
+
+// TestStreamFilterStraddlingIBANChecksum covers the fail-safe fallback: a
+// genuine IBAN split across chunks must still be redacted even though the
+// fused regex candidate cannot pass checksum validation.
+func TestStreamFilterStraddlingIBANChecksum(t *testing.T) {
+	iban := "DE89370400440532013000"
+	patterns := []*regexp.Regexp{regexp.MustCompile(`(?i)\b[A-Z]{2}\d{2}(?: ?[A-Z0-9]{4}){2,7}(?: ?[A-Z0-9]{1,4})?\b`)}
+	f := NewStreamFilter(patterns, nil, "[REDACTED]", 256)
+
+	out1, _, _ := f.FilterContent("pay to " + iban[:12])
+	out2, _, _ := f.FilterContent(iban[12:] + " today")
+	if strings.Contains(out1+out2, iban) {
+		t.Fatalf("straddling IBAN leaked: %q", out1+out2)
 	}
 }

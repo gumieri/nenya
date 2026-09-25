@@ -15,6 +15,7 @@ import (
 
 	"github.com/nenya/config"
 	"github.com/nenya/internal/gateway"
+	"github.com/nenya/internal/pipeline"
 	"github.com/nenya/internal/proxy"
 	"github.com/nenya/internal/testutil"
 )
@@ -502,7 +503,10 @@ func TestBuildInterceptorChain_BouncerGatedOnEnabled(t *testing.T) {
 				cfg.Bouncer.Engine.ResolvedTargets = append(cfg.Bouncer.Engine.ResolvedTargets, config.EngineTarget{})
 			}
 
-			chain := buildInterceptorChain(newGW(cfg), cfg, logger)
+			chain, err := buildInterceptorChain(newGW(cfg), cfg, logger)
+			if err != nil {
+				t.Fatalf("buildInterceptorChain: %v", err)
+			}
 
 			got := false
 			for _, interceptor := range chain.List() {
@@ -593,5 +597,65 @@ func TestEventLoop_ConcurrentSighup(t *testing.T) {
 	case <-done:
 	case <-time.After(time.Second):
 		t.Fatal("timeout waiting for eventLoop shutdown")
+	}
+}
+
+func TestRegisterBouncerRegistrationMatrix(t *testing.T) {
+	disabled := false
+	enabled := true
+	failOpen := true
+	failClosed := false
+
+	tests := []struct {
+		name         string
+		bouncer      config.BouncerConfig
+		wantRegister bool
+		wantWarn     bool
+	}{
+		{
+			name:         "disabled bouncer never registers",
+			bouncer:      config.BouncerConfig{Enabled: &disabled, FailOpen: &failClosed},
+			wantRegister: false,
+		},
+		{
+			name:         "nil enabled treated as enabled (defaults materialize true)",
+			bouncer:      config.BouncerConfig{Engine: config.EngineRef{ResolvedTargets: []config.EngineTarget{{}}}},
+			wantRegister: true,
+		},
+		{
+			name:         "fail-open with targets registers",
+			bouncer:      config.BouncerConfig{Enabled: &enabled, FailOpen: &failOpen, Engine: config.EngineRef{ResolvedTargets: []config.EngineTarget{{}}}},
+			wantRegister: true,
+		},
+		{
+			name:         "fail-open without targets skips registration",
+			bouncer:      config.BouncerConfig{Enabled: &enabled, FailOpen: &failOpen},
+			wantRegister: false,
+			wantWarn:     true,
+		},
+		{
+			name:         "fail-closed without targets still registers",
+			bouncer:      config.BouncerConfig{Enabled: &enabled, FailOpen: &failClosed},
+			wantRegister: true,
+			wantWarn:     true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := &config.Config{Bouncer: tt.bouncer}
+			gw := &gateway.NenyaGateway{Logger: testutil.NewTestLogger()}
+			chain := pipeline.NewInterceptorChain(testutil.NewTestLogger())
+
+			registerBouncer(chain, gw, cfg, testutil.NewTestLogger())
+
+			got := len(chain.List())
+			if tt.wantRegister && got != 1 {
+				t.Errorf("registered=%d, want 1", got)
+			}
+			if !tt.wantRegister && got != 0 {
+				t.Errorf("registered=%d, want 0", got)
+			}
+		})
 	}
 }

@@ -60,6 +60,56 @@ func TestApplyDefaults_Bouncer_WithRedactPreset(t *testing.T) {
 	}
 }
 
+func TestApplyDefaults_Bouncer_WithFinancialPreset(t *testing.T) {
+	raw := `{"bouncer": {"redact_preset": "financial"}}`
+	var cfg Config
+	if err := json.Unmarshal([]byte(raw), &cfg); err != nil {
+		t.Fatal(err)
+	}
+	if err := ApplyDefaults(&cfg); err != nil {
+		t.Fatal(err)
+	}
+	want := RedactPresetFinancial()
+	if len(cfg.Bouncer.RedactPatterns) != len(want) {
+		t.Fatalf("expected %d financial patterns, got %d", len(want), len(cfg.Bouncer.RedactPatterns))
+	}
+	for i, pattern := range cfg.Bouncer.RedactPatterns {
+		if pattern != want[i] {
+			t.Errorf("pattern %d = %q, want %q", i, pattern, want[i])
+		}
+	}
+}
+
+func TestApplyDefaults_Bouncer_UnknownPresetFallsBack(t *testing.T) {
+	raw := `{"bouncer": {"redact_preset": "nope"}}`
+	var cfg Config
+	if err := json.Unmarshal([]byte(raw), &cfg); err != nil {
+		t.Fatal(err)
+	}
+	if err := ApplyDefaults(&cfg); err != nil {
+		t.Fatal(err)
+	}
+	if len(cfg.Bouncer.RedactPatterns) != len(redactPresets["credentials"]) {
+		t.Fatalf("unknown preset should fall back to credentials patterns, got %d", len(cfg.Bouncer.RedactPatterns))
+	}
+}
+
+func TestApplyDefaults_Bouncer_PresetAssignmentCopies(t *testing.T) {
+	raw := `{"bouncer": {"redact_preset": "financial"}}`
+	var cfg Config
+	if err := json.Unmarshal([]byte(raw), &cfg); err != nil {
+		t.Fatal(err)
+	}
+	if err := ApplyDefaults(&cfg); err != nil {
+		t.Fatal(err)
+	}
+	original := redactPresets["financial"][0]
+	cfg.Bouncer.RedactPatterns[0] = "mutated"
+	if redactPresets["financial"][0] != original {
+		t.Error("mutating RedactPatterns must not corrupt the package-level preset")
+	}
+}
+
 func TestApplyDefaults_Governance(t *testing.T) {
 	cfg := &Config{}
 	if err := ApplyDefaults(cfg); err != nil {

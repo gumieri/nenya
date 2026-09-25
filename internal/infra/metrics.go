@@ -25,8 +25,25 @@ type Metrics struct {
 	httpTotal sync.Map
 	httpDur   sync.Map
 
-	redactions    atomic.Uint64
-	compactions   atomic.Uint64
+	redactions  atomic.Uint64
+	compactions atomic.Uint64
+	// injectionDetections counts deterministic prompt-injection detections
+	// by action (sanitize|reject) and pattern category.
+	injectionDetections sync.Map
+	// spotlighted counts untrusted-content markings applied by source
+	// (tool-history, mcp:<server>, tool-description, memory:<server>).
+	spotlighted sync.Map
+	// injectionEscalations counts tier-2 injection classifier verdicts
+	// (injection|benign|error).
+	injectionEscalations sync.Map
+	// injectionEscalationDur holds tier-2 classifier call durations by
+	// verdict.
+	injectionEscalationDur sync.Map
+	// exfilDetections counts egress-guard URL violations by reason and
+	// configured action.
+	exfilDetections sync.Map
+	// exfilEvents counts canary tripwire detections by egress channel.
+	exfilEvents   sync.Map
 	panics        atomic.Uint64
 	windowApplied sync.Map
 	interceptions sync.Map
@@ -284,10 +301,114 @@ func (m *Metrics) RecordHTTPRequest(method, path string, status int, duration ti
 	h.Observe(duration.Seconds())
 }
 
+// RecordInjectionDetection records n deterministic prompt-injection
+// detections for the given action (sanitize|reject) and pattern category.
+// Nil-safe; non-positive n is ignored.
+func (m *Metrics) RecordInjectionDetection(action, category string, n int) {
+	if m == nil || n <= 0 {
+		return
+	}
+	e := getOrCreateEntry(&m.injectionDetections, map[string]string{"action": action, "category": category})
+	e.value.Add(uint64(n))
+}
+
+// writeHandlerPanics emits the recovered-panics counter.
+func (m *Metrics) writeHandlerPanics(w io.Writer) {
+	m.writeCounterAtomic(w, "nenya_panics_total",
+		"Total recovered panics in the request handler.", m.panics.Load())
+}
+
+// writeInjectionMetrics emits the injection detection and tier-2
+// escalation families.
+func (m *Metrics) writeInjectionMetrics(w io.Writer) {
+	m.writeCounterMap(w, "nenya_injection_detections_total",
+		"Deterministic prompt-injection detections by action and pattern category (escalated is a pseudo-category counting tier-2 full-benign clears).", &m.injectionDetections)
+	m.writeInjectionEscalations(w)
+}
+
+// writeInjectionEscalations emits the tier-2 classifier counter and
+// duration families.
+func (m *Metrics) writeInjectionEscalations(w io.Writer) {
+	m.writeCounterMap(w, "nenya_injection_escalations_total",
+		"Tier-2 injection classifier outcomes: injection, benign, error, inconclusive (truncated-excerpt benign).", &m.injectionEscalations)
+	m.writeHistogramMap(w, "nenya_injection_escalation_duration_seconds",
+		"Tier-2 injection classifier call duration in seconds.", &m.injectionEscalationDur)
+}
+
+// RecordInjectionEscalation records a tier-2 classifier outcome
+// (injection, benign, or error) and its call duration. Nil-safe.
+func (m *Metrics) RecordInjectionEscalation(verdict string, d time.Duration) {
+	if m == nil || verdict == "" {
+		return
+	}
+	e := getOrCreateEntry(&m.injectionEscalations, map[string]string{"verdict": verdict})
+	e.value.Add(1)
+	h := getOrCreateHist(&m.injectionEscalationDur, map[string]string{"verdict": verdict}, HTTPDurationBuckets)
+	h.Observe(d.Seconds())
+}
+
+// writeRedactions emits the Tier-0 redaction counter.
+func (m *Metrics) writeRedactions(w io.Writer) {
+	m.writeCounterAtomic(w, "nenya_pipeline_redactions_total",
+		"Total secret redactions applied by the Tier-0 filter.", m.redactions.Load())
+}
+
+// writeExfilEvents emits the canary tripwire counter.
+func (m *Metrics) writeExfilEvents(w io.Writer) {
+	m.writeCounterMap(w, "nenya_exfil_events_total",
+		"Canary tripwire detections by egress channel.", &m.exfilEvents)
+}
+
+// RecordExfilEvent records a canary tripwire detection on the given
+// egress channel (stream, tool_args, buffered). Nil-safe.
+func (m *Metrics) RecordExfilEvent(channel string) {
+	if m == nil || channel == "" {
+		return
+	}
+	e := getOrCreateEntry(&m.exfilEvents, map[string]string{"channel": channel})
+	e.value.Add(1)
+}
+
+// writeExfilDetections emits the egress-guard violation counter.
+func (m *Metrics) writeExfilDetections(w io.Writer) {
+	m.writeCounterMap(w, "nenya_exfil_detections_total",
+		"Egress-guard URL violations by reason and configured action.", &m.exfilDetections)
+}
+
+// RecordExfilDetection records an egress-guard URL violation with its
+// reason (scheme, ip_literal, private_ip, host_not_allowed,
+// query_length, query_entropy) and the configured action
+// (log|strip|block). Nil-safe.
+func (m *Metrics) RecordExfilDetection(reason, action string) {
+	if m == nil || reason == "" {
+		return
+	}
+	e := getOrCreateEntry(&m.exfilDetections, map[string]string{"reason": reason, "action": action})
+	e.value.Add(1)
+}
+
+// writeSpotlighted emits the spotlighted counter family.
+func (m *Metrics) writeSpotlighted(w io.Writer) {
+	m.writeCounterMap(w, "nenya_spotlighted_total",
+		"Untrusted-content markings applied by source.", &m.spotlighted)
+}
+
+// RecordSpotlighted records an untrusted-content marking applied for the
+// given source label (tool-history, mcp:<server>, tool-description,
+// memory:<server>). Nil-safe.
+func (m *Metrics) RecordSpotlighted(source string) {
+	if m == nil || source == "" {
+		return
+	}
+	e := getOrCreateEntry(&m.spotlighted, map[string]string{"source": source})
+	e.value.Add(1)
+}
+
 // RecordRedaction records n secret substitutions applied by the Tier-0
-// redaction filter. Nil-safe.
+// redaction filter. Nil-safe; non-positive n is ignored (the delta
+// counting used by callers can produce zero or negative deltas).
 func (m *Metrics) RecordRedaction(n int) {
-	if m == nil {
+	if m == nil || n <= 0 {
 		return
 	}
 	m.redactions.Add(uint64(n))
@@ -1064,14 +1185,6 @@ func (m *Metrics) RecordOllamaSummarizedBytes(n int) {
 	m.ollamaBytes.Add(uint64(n))
 }
 
-func (m *Metrics) RecordTrimmedRequest(model string, savedTokens int) {
-	if m == nil {
-		return
-	}
-	e := getOrCreateEntry(&m.interceptions, map[string]string{"model": model})
-	e.value.Add(1)
-}
-
 func (m *Metrics) RecordModelDiscovery(provider string, err error) {
 	if m == nil {
 		return
@@ -1159,10 +1272,12 @@ func (m *Metrics) WritePrometheus(w io.Writer) {
 	m.writeCounterMap(w, "nenya_http_requests_total",
 		"Total HTTP requests by method, path, and status.", &m.httpTotal)
 
-	m.writeCounterAtomic(w, "nenya_panics_total",
-		"Total recovered panics in the request handler.", m.panics.Load())
-	m.writeCounterAtomic(w, "nenya_pipeline_redactions_total",
-		"Total secret redactions applied by the Tier-0 filter.", m.redactions.Load())
+	m.writeHandlerPanics(w)
+	m.writeRedactions(w)
+	m.writeInjectionMetrics(w)
+	m.writeSpotlighted(w)
+	m.writeExfilDetections(w)
+	m.writeExfilEvents(w)
 	m.writeCounterAtomic(w, "nenya_pipeline_compaction_applied_total",
 		"Total text compaction passes applied.", m.compactions.Load())
 	m.writeCounterMap(w, "nenya_pipeline_window_applied_total",

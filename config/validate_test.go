@@ -695,3 +695,310 @@ func TestValidateModelAliases(t *testing.T) {
 		t.Fatalf("expected 2 alias errors, got %v", errs)
 	}
 }
+
+// newSpotlightTestConfig returns a minimal config suitable for
+// validateSpotlightConfig: one agent entry and no spotlight block yet.
+func newSpotlightTestConfig() *Config {
+	return &Config{
+		Agents: map[string]AgentConfig{
+			"test": {},
+		},
+	}
+}
+
+func TestValidateSpotlightConfig(t *testing.T) {
+	enabled, disabled, historyOff := true, false, false
+	spot := func(mode string, maxBytes int) *SpotlightConfig {
+		return &SpotlightConfig{Enabled: &enabled, Mode: mode, MaxToolResultBytes: maxBytes}
+	}
+
+	t.Run("valid global", func(t *testing.T) {
+		cfg := newSpotlightTestConfig()
+		cfg.Governance.Spotlight = spot(SpotlightModeDatamarking, 2048)
+		cfg.Governance.Spotlight.HistoryEnabled = &enabled
+		if errs := validateSpotlightConfig(cfg); len(errs) != 0 {
+			t.Errorf("expected no errors, got %v", errs)
+		}
+	})
+
+	t.Run("invalid mode", func(t *testing.T) {
+		cfg := newSpotlightTestConfig()
+		cfg.Governance.Spotlight = spot("bogus", 2048)
+		errs := validateSpotlightConfig(cfg)
+		if len(errs) != 1 || !strings.Contains(errs[0], "governance.spotlight.mode") {
+			t.Errorf("expected mode error, got %v", errs)
+		}
+	})
+
+	t.Run("global-only byte cap rejected on agent", func(t *testing.T) {
+		cfg := newSpotlightTestConfig()
+		cfg.Governance.Spotlight = spot(SpotlightModeDelimiters, 2048)
+		agent := cfg.Agents["test"]
+		agent.Spotlight = &SpotlightConfig{MaxToolResultBytes: 512}
+		cfg.Agents["test"] = agent
+		errs := validateSpotlightConfig(cfg)
+		if len(errs) != 1 || !strings.Contains(errs[0], "max_tool_result_bytes is global-only") {
+			t.Errorf("expected global-only error, got %v", errs)
+		}
+	})
+
+	t.Run("agent override surface", func(t *testing.T) {
+		cfg := newSpotlightTestConfig()
+		cfg.Governance.Spotlight = spot(SpotlightModeDelimiters, 2048)
+		agent := cfg.Agents["test"]
+		agent.Spotlight = &SpotlightConfig{Enabled: &disabled, HistoryEnabled: &historyOff}
+		cfg.Agents["test"] = agent
+		errs := validateSpotlightConfig(cfg)
+		if len(errs) != 0 {
+			t.Errorf("expected agent enabled/history accepted, got %v", errs)
+		}
+		agent = cfg.Agents["test"]
+		agent.Spotlight = &SpotlightConfig{Enabled: &disabled, HistoryEnabled: &enabled}
+		cfg.Agents["test"] = agent
+		errs = validateSpotlightConfig(cfg)
+		if len(errs) != 1 || !strings.Contains(errs[0], "contradictory") {
+			t.Errorf("expected contradictory error, got %v", errs)
+		}
+	})
+
+	t.Run("negative global byte cap rejected", func(t *testing.T) {
+		cfg := newSpotlightTestConfig()
+		cfg.Governance.Spotlight = spot(SpotlightModeDelimiters, -1)
+		errs := validateSpotlightConfig(cfg)
+		if len(errs) != 1 || !strings.Contains(errs[0], "max_tool_result_bytes") {
+			t.Errorf("expected negative-cap error, got %v", errs)
+		}
+	})
+
+	t.Run("agent mode rejected as global-only", func(t *testing.T) {
+		cfg := newSpotlightTestConfig()
+		cfg.Governance.Spotlight = spot(SpotlightModeDelimiters, 2048)
+		agent := cfg.Agents["test"]
+		agent.Spotlight = &SpotlightConfig{Mode: SpotlightModeDatamarking}
+		cfg.Agents["test"] = agent
+		errs := validateSpotlightConfig(cfg)
+		if len(errs) != 1 || !strings.Contains(errs[0], "mode is global-only") {
+			t.Errorf("expected agent mode error, got %v", errs)
+		}
+	})
+}
+
+func TestValidateInjectionEscalation(t *testing.T) {
+	enabled := true
+	engine := &EngineRef{Provider: "stub", Model: "classifier"}
+	mkCfg := func(esc *InjectionEscalationConfig) *Config {
+		esc.Engine = engine
+		return &Config{Governance: GovernanceConfig{
+			Injection: &InjectionConfig{Enabled: &enabled, Escalation: esc},
+		}}
+	}
+
+	t.Run("enabled requires engine", func(t *testing.T) {
+		cfg := &Config{Governance: GovernanceConfig{
+			Injection: &InjectionConfig{Enabled: &enabled, Escalation: &InjectionEscalationConfig{Enabled: &enabled, MinScore: 1}},
+		}}
+		errs := validateInjectionEscalation(cfg)
+		if len(errs) != 1 || !strings.Contains(errs[0], "requires engine") {
+			t.Errorf("expected engine-required error, got %v", errs)
+		}
+	})
+
+	t.Run("band ordering", func(t *testing.T) {
+		cfg := mkCfg(&InjectionEscalationConfig{Enabled: &enabled, MinScore: 3, MaxScore: 3})
+		errs := validateInjectionEscalation(cfg)
+		if len(errs) != 1 || !strings.Contains(errs[0], "greater than min_score") {
+			t.Errorf("expected band-order error, got %v", errs)
+		}
+	})
+
+	t.Run("negative budgets rejected", func(t *testing.T) {
+		cfg := mkCfg(&InjectionEscalationConfig{Enabled: &enabled, PerRequestLimit: -1, MaxBytes: -1, MinScore: -1})
+		errs := validateInjectionEscalation(cfg)
+		if len(errs) != 3 {
+			t.Errorf("expected 3 errors, got %v", errs)
+		}
+	})
+
+	t.Run("disabled escalation not validated", func(t *testing.T) {
+		cfg := &Config{Governance: GovernanceConfig{
+			Injection: &InjectionConfig{Enabled: &enabled, Escalation: &InjectionEscalationConfig{MinScore: -5}},
+		}}
+		if errs := validateInjectionEscalation(cfg); len(errs) != 0 {
+			t.Errorf("expected no validation while disabled, got %v", errs)
+		}
+	})
+
+	t.Run("per-agent escalation rejected", func(t *testing.T) {
+		cfg := &Config{Agents: map[string]AgentConfig{
+			"test": {Injection: &InjectionConfig{Escalation: &InjectionEscalationConfig{}}},
+		}}
+		errs := validateInjectionConfig(cfg, nil)
+		if len(errs) != 1 || !strings.Contains(errs[0], "escalation is global-only") {
+			t.Errorf("expected global-only error, got %v", errs)
+		}
+	})
+}
+
+func TestValidateCanaryConfig(t *testing.T) {
+	enabled := true
+	t.Run("valid actions", func(t *testing.T) {
+		for _, action := range []string{"", CanaryActionLog, CanaryActionBlock} {
+			cfg := &Config{Governance: GovernanceConfig{
+				Canary: &CanaryConfig{Enabled: &enabled, Action: action},
+			}}
+			if errs := validateCanaryConfig(cfg); len(errs) != 0 {
+				t.Errorf("expected %q valid, got %v", action, errs)
+			}
+		}
+	})
+	t.Run("invalid action rejected", func(t *testing.T) {
+		cfg := &Config{Governance: GovernanceConfig{
+			Canary: &CanaryConfig{Enabled: &enabled, Action: "blok"},
+		}}
+		errs := validateCanaryConfig(cfg)
+		if len(errs) != 1 || !strings.Contains(errs[0], "governance.canary.action") {
+			t.Errorf("expected action error, got %v", errs)
+		}
+	})
+	t.Run("nil config valid", func(t *testing.T) {
+		if errs := validateCanaryConfig(&Config{}); len(errs) != 0 {
+			t.Errorf("expected no errors, got %v", errs)
+		}
+	})
+}
+
+func TestValidateMCPGuardConfig(t *testing.T) {
+	tests := []struct {
+		name    string
+		cfg     *Config
+		wantErr string
+	}{
+		{
+			name: "valid policy",
+			cfg:  &Config{Governance: GovernanceConfig{MCPGuard: &MCPGuardConfig{URLPolicy: "log"}}},
+		},
+		{
+			name:    "invalid policy",
+			cfg:     &Config{Governance: GovernanceConfig{MCPGuard: &MCPGuardConfig{URLPolicy: "deny_all"}}},
+			wantErr: "url_policy",
+		},
+		{
+			name:    "negative cap",
+			cfg:     &Config{Governance: GovernanceConfig{MCPGuard: &MCPGuardConfig{MaxArgBytes: -1}}},
+			wantErr: "max_arg_bytes",
+		},
+		{
+			name: "valid allowlist",
+			cfg: &Config{MCPServers: map[string]MCPServerConfig{
+				"s": {AllowedHosts: []string{"*.internal", "10.0.0.5", "*.example.com"}},
+			}},
+		},
+		{
+			name: "invalid allowlist entry",
+			cfg: &Config{MCPServers: map[string]MCPServerConfig{
+				"s": {AllowedHosts: []string{"*.*.example"}},
+			}},
+			wantErr: "allowed_hosts",
+		},
+		{
+			name: "empty allowlist entry",
+			cfg: &Config{MCPServers: map[string]MCPServerConfig{
+				"s": {AllowedHosts: []string{"  "}},
+			}},
+			wantErr: "empty entry",
+		},
+		{
+			name: "single label numeric wildcard",
+			cfg: &Config{MCPServers: map[string]MCPServerConfig{
+				"s": {AllowedHosts: []string{"*.1"}},
+			}},
+			wantErr: "must not be an IP or all-numeric suffix",
+		},
+		{
+			name: "multi label numeric wildcard covers private ips",
+			cfg: &Config{MCPServers: map[string]MCPServerConfig{
+				"s": {AllowedHosts: []string{"*.0.0.1"}},
+			}},
+			wantErr: "must not be an IP or all-numeric suffix",
+		},
+		{
+			name: "hex numeric wildcard",
+			cfg: &Config{MCPServers: map[string]MCPServerConfig{
+				"s": {AllowedHosts: []string{"*.0x7f"}},
+			}},
+			wantErr: "must not be an IP or all-numeric suffix",
+		},
+		{
+			name: "ipv6 literal wildcard rejected",
+			cfg: &Config{MCPServers: map[string]MCPServerConfig{
+				"s": {AllowedHosts: []string{"*.::1"}},
+			}},
+			wantErr: "allowed_hosts",
+		},
+		{
+			name: "empty wildcard suffix rejected",
+			cfg: &Config{MCPServers: map[string]MCPServerConfig{
+				"s": {AllowedHosts: []string{"*."}},
+			}},
+			wantErr: "empty wildcard suffix",
+		},
+		{
+			name: "hex-looking word hostname allowed",
+			cfg: &Config{MCPServers: map[string]MCPServerConfig{
+				"s": {AllowedHosts: []string{"*.cafe", "*.cab"}},
+			}},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			errs := collectValidationErrors(context.Background(), tt.cfg, map[string]*Provider{}, false, testLogger())
+			if tt.wantErr == "" {
+				if len(errs) != 0 {
+					t.Errorf("unexpected errors: %v", errs)
+				}
+				return
+			}
+			found := false
+			for _, e := range errs {
+				if strings.Contains(e, tt.wantErr) {
+					found = true
+					break
+				}
+			}
+			if !found {
+				t.Errorf("errors %v missing %q", errs, tt.wantErr)
+			}
+		})
+	}
+}
+
+func TestApplyMCPGuardDefaults(t *testing.T) {
+	t.Run("materializes guard when MCP servers configured", func(t *testing.T) {
+		cfg := &Config{MCPServers: map[string]MCPServerConfig{"s": {URL: "http://localhost/sse"}}}
+		if err := ApplyDefaults(cfg); err != nil {
+			t.Fatalf("ApplyDefaults: %v", err)
+		}
+		if cfg.Governance.MCPGuard == nil {
+			t.Fatal("mcp_guard must materialize when MCP servers are configured")
+		}
+		if !cfg.Governance.MCPGuard.EffectiveEnabled() {
+			t.Error("materialized guard must be enabled by default")
+		}
+		if cfg.Governance.MCPGuard.EffectiveMaxArgBytes() != 1<<20 {
+			t.Errorf("max_arg_bytes = %d, want 1 MiB", cfg.Governance.MCPGuard.EffectiveMaxArgBytes())
+		}
+		if cfg.Governance.MCPGuard.EffectiveURLPolicy() != "deny_private" {
+			t.Errorf("url_policy = %q, want deny_private", cfg.Governance.MCPGuard.EffectiveURLPolicy())
+		}
+	})
+
+	t.Run("no MCP servers leaves guard absent", func(t *testing.T) {
+		cfg := &Config{}
+		if err := ApplyDefaults(cfg); err != nil {
+			t.Fatalf("ApplyDefaults: %v", err)
+		}
+		if cfg.Governance.MCPGuard != nil {
+			t.Error("guard must stay absent without MCP servers")
+		}
+	})
+}

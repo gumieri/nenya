@@ -207,7 +207,7 @@ func TestScoreBlocksEmptyQuery(t *testing.T) {
 
 func TestTFIDFInterceptorCanHandle(t *testing.T) {
 	logger := slog.Default()
-	interceptor := NewTFIDFInterceptor("self", logger)
+	interceptor := NewTFIDFInterceptor("self", config.ContextConfig{TruncationKeepFirstPct: 40, TruncationKeepLastPct: 40}, logger)
 
 	tests := []struct {
 		name          string
@@ -436,7 +436,7 @@ func TestSortScoredDesc(t *testing.T) {
 }
 
 func TestTFIDFInterceptorReportsTokenCount(t *testing.T) {
-	interceptor := NewTFIDFInterceptor("self", slog.Default())
+	interceptor := NewTFIDFInterceptor("self", config.ContextConfig{TruncationKeepFirstPct: 40, TruncationKeepLastPct: 40}, slog.Default())
 
 	// ~3.1k runes ≈ 1k tokens by the 3-runes-per-token heuristic.
 	content := strings.Repeat("alpha beta gamma delta epsilon zeta ", 100)
@@ -450,7 +450,15 @@ func TestTFIDFInterceptorReportsTokenCount(t *testing.T) {
 		SoftLimit:  100,
 		HardLimit:  0, // rune budget = SoftLimit * 3 = 300
 	}
-	req.Payload["messages"] = req.Messages
+	// Mirror production: payload carries []interface{}, req.Messages the
+	// []map[string]any view with shared map pointers.
+	req.Payload["messages"] = func() []interface{} {
+		out := make([]interface{}, len(req.Messages))
+		for i, m := range req.Messages {
+			out[i] = m
+		}
+		return out
+	}()
 
 	res, err := interceptor.Process(context.Background(), req)
 	if err != nil {

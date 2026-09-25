@@ -10,6 +10,7 @@ import (
 
 	"github.com/nenya/internal/gateway"
 	"github.com/nenya/internal/infra"
+	"github.com/nenya/internal/pipeline"
 )
 
 // containsAny checks if the string contains any of the substrings.
@@ -172,7 +173,45 @@ func classifyServerError(body []byte) infra.ErrorKind {
 	return infra.ErrorKindProviderError
 }
 
-// writeStructuredError writes a structured error response to the HTTP writer.
+// writePipelineRejection writes the structured client error for pipeline
+// aborts and reports whether err was one: RejectError (policy rejection)
+// renders 403; StrictError (fail-closed operational failure of a strict
+// interceptor) renders 503. Other operational pipeline errors return
+// false so callers keep their fail-open path. Rejection status stays 403;
+// producers set Kind to a request-scoped kind (an empty Kind is
+// defensively defaulted to internal_error).
+func writePipelineRejection(gw *gateway.NenyaGateway, w http.ResponseWriter, err error) bool {
+	var strict *pipeline.StrictError
+	if errors.As(err, &strict) {
+		gw.Logger.Error("pipeline aborted: strict interceptor failed", "err", err, "interceptor", strict.Interceptor)
+		message := strict.Message
+		if message == "" {
+			message = pipeline.StrictAbortMessage
+		}
+		kind := strict.Kind
+		if kind == "" {
+			kind = infra.ErrorKindInternal
+		}
+		writeStructuredError(w, http.StatusServiceUnavailable, kind, message)
+		return true
+	}
+	var reject *pipeline.RejectError
+	if !errors.As(err, &reject) {
+		return false
+	}
+	gw.Logger.Warn("request rejected by pipeline policy", "err", err)
+	message := reject.Message
+	if message == "" {
+		message = "request rejected by pipeline policy"
+	}
+	kind := reject.Kind
+	if kind == "" {
+		kind = infra.ErrorKindInternal
+	}
+	writeStructuredError(w, http.StatusForbidden, kind, message)
+	return true
+}
+
 func writeStructuredError(w http.ResponseWriter, statusCode int, kind infra.ErrorKind, msg string) {
 	if w == nil {
 		return

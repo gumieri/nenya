@@ -60,7 +60,9 @@ type ContentCallback func(content string)
 type ThinkingCallback func(active bool)
 
 // SSEObserver receives notifications about SSE events during streaming.
-// Observers are called after transformation, so they see what the client receives.
+// Observers are called after transformation, so they see what the client receives;
+// the Raw line is the PRE-filter upstream bytes when a filter rewrote the chunk
+// (Data carries the post-filter text).
 type SSEObserver interface {
 	// OnSSEEvent is called for each SSE event (data line, [DONE], error, etc.)
 	OnSSEEvent(event SSEEvent)
@@ -91,6 +93,8 @@ type SSETransformingReader struct {
 	onThinking          ThinkingCallback
 	observer            SSEObserver
 	streamFilter        *StreamFilter
+	exfilGuard          *ExfilGuard
+	canaryWatcher       *CanaryWatcher
 	streamEntropyFilter *StreamEntropyFilter
 	buffer              []byte
 	pos                 int
@@ -202,6 +206,16 @@ func (r *SSETransformingReader) SetOnUsage(cb UsageCallback) {
 // SetStreamFilter sets a stream filter for content filtering.
 func (r *SSETransformingReader) SetStreamFilter(sf *StreamFilter) {
 	r.streamFilter = sf
+}
+
+// SetExfilGuard sets the output egress guard for URL policy enforcement.
+func (r *SSETransformingReader) SetExfilGuard(g *ExfilGuard) {
+	r.exfilGuard = g
+}
+
+// SetCanaryWatcher sets the per-request canary tripwire.
+func (r *SSETransformingReader) SetCanaryWatcher(w *CanaryWatcher) {
+	r.canaryWatcher = w
 }
 
 // SetStreamEntropyFilter sets an entropy filter for stream content.
@@ -422,6 +436,16 @@ func (r *SSETransformingReader) Read(p []byte) (int, error) {
 		transformed := r.getTransformedLine(r.scanner.Bytes())
 
 		if transformed == nil {
+			if r.anyFilterBlocked() {
+				// The last scanned chunk flipped a filter to blocked:
+				// surface the specific error instead of a generic
+				// truncated-stream gateway error.
+				r.err = r.blockedStreamError()
+				buf := r.poolBuf
+				r.poolBuf = nil
+				putStreamBuffer(buf)
+				return 0, r.err
+			}
 			if !r.scanner.Scan() {
 				r.handleScannerDone()
 				return r.drainAfterScanDone(p)
@@ -429,8 +453,8 @@ func (r *SSETransformingReader) Read(p []byte) (int, error) {
 			continue
 		}
 
-		if r.streamFilter != nil && r.streamFilter.IsBlocked() {
-			r.err = ErrStreamBlocked
+		if r.anyFilterBlocked() {
+			r.err = r.blockedStreamError()
 			buf := r.poolBuf
 			r.poolBuf = nil
 			putStreamBuffer(buf)
@@ -652,9 +676,20 @@ func (r *SSETransformingReader) transformSSEData(line []byte) []byte {
 		r.notifySSEObserver(line, parsed, "error")
 	}
 
-	parsed = r.applyStreamFilters(parsed)
-	if r.streamFilter != nil && r.streamFilter.IsBlocked() {
-		return line
+	parsed, filtersMutated := r.applyStreamFilters(parsed)
+	if r.anyFilterBlocked() {
+		// A filter blocked this exact chunk: suppress the violating
+		// line; the stream terminates with the filter-specific error
+		// next Read. Nil parsed from malformed JSON still falls through
+		// to passthrough below.
+		return nil
+	}
+	if filtersMutated {
+		// Filter rewrites live in the parsed map: re-encode so the wire
+		// output (transformer input and passthrough) carries them.
+		if reencoded, err := json.Marshal(parsed); err == nil {
+			data = reencoded
+		}
 	}
 
 	data = r.applyContentFilters(data, parsed)
@@ -732,52 +767,138 @@ func (r *SSETransformingReader) tryParseJSON(data []byte) map[string]interface{}
 	return parsed
 }
 
-func (r *SSETransformingReader) applyStreamFilters(parsed map[string]interface{}) map[string]interface{} {
+// applyStreamFilters runs the stream-side content filters over one
+// parsed chunk, reporting whether any filter rewrote it (callers must
+// re-encode; mutations live only in the map). A nil map means a filter
+// blocked the chunk.
+func (r *SSETransformingReader) applyStreamFilters(parsed map[string]interface{}) (map[string]interface{}, bool) {
 	if parsed == nil {
-		return parsed
+		return parsed, false
 	}
+	mutated := false
 
 	if r.streamFilter != nil && !r.streamFilter.IsBlocked() {
-		parsed = applyStreamFilter(parsed, r.streamFilter)
+		var action FilterAction
+		parsed, action = applyStreamFilter(parsed, r.streamFilter)
 		if r.streamFilter.IsBlocked() {
-			return nil
+			return nil, false
+		}
+		mutated = mutated || action == ActionRedact
+	}
+
+	if r.exfilGuard != nil && !r.exfilGuard.IsBlocked() {
+		var action FilterAction
+		parsed, action = applyExfilGuard(parsed, r.exfilGuard)
+		if r.exfilGuard.IsBlocked() {
+			return nil, false
+		}
+		mutated = mutated || action == ActionRedact
+	}
+
+	if r.canaryWatcher != nil && !r.canaryWatcher.IsBlocked() {
+		parsed = applyCanaryWatcher(parsed, r.canaryWatcher)
+		if r.canaryWatcher.IsBlocked() {
+			return nil, false
 		}
 	}
 
 	if r.streamEntropyFilter != nil {
-		parsed = applyEntropyFilter(parsed, r.streamEntropyFilter)
+		var changed bool
+		parsed, changed = applyEntropyFilter(parsed, r.streamEntropyFilter)
+		mutated = mutated || changed
 	}
 
-	return parsed
+	return parsed, mutated
 }
 
-func applyStreamFilter(parsed map[string]interface{}, filter *StreamFilter) map[string]interface{} {
+// applyStreamFilter runs the secret/policy filter over one SSE delta,
+// reporting the resulting action so callers can detect rewrites.
+func applyStreamFilter(parsed map[string]interface{}, filter *StreamFilter) (map[string]interface{}, FilterAction) {
 	content := ExtractDeltaContentFromMap(parsed)
 	if content == "" {
-		return parsed
+		return parsed, ActionPass
 	}
 	redacted, action, _ := filter.FilterContent(content)
 	if action == ActionBlock {
-		return nil
+		return nil, ActionBlock
 	}
 	if action == ActionRedact && redacted != content {
 		parsed = copyMap(parsed)
 		_ = ReplaceDeltaContentMap(parsed, redacted)
 	}
+	return parsed, action
+}
+
+// anyFilterBlocked reports whether a stream-side filter has terminated
+// the stream.
+func (r *SSETransformingReader) anyFilterBlocked() bool {
+	return (r.streamFilter != nil && r.streamFilter.IsBlocked()) ||
+		(r.exfilGuard != nil && r.exfilGuard.IsBlocked()) ||
+		(r.canaryWatcher != nil && r.canaryWatcher.IsBlocked())
+}
+
+// blockedStreamError returns the specific error for whichever filter
+// terminated the stream (canary tripwire takes precedence, then the
+// exfil guard; all wrap as stream-block errors for generic handling).
+func (r *SSETransformingReader) blockedStreamError() error {
+	if r.canaryWatcher != nil && r.canaryWatcher.IsBlocked() {
+		return ErrCanaryDetected
+	}
+	if r.exfilGuard != nil && r.exfilGuard.IsBlocked() {
+		return ErrExfilBlocked
+	}
+	return ErrStreamBlocked
+}
+
+// applyCanaryWatcher scans one SSE delta for the request canary. A
+// block verdict nils the chunk so the reader raises ErrCanaryDetected.
+func applyCanaryWatcher(parsed map[string]interface{}, watcher *CanaryWatcher) map[string]interface{} {
+	content := extractExfilContent(parsed)
+	if content == "" {
+		return parsed
+	}
+	if _, action, _ := watcher.FilterContent(content); action == ActionBlock {
+		return nil
+	}
 	return parsed
 }
 
-func applyEntropyFilter(parsed map[string]interface{}, filter *StreamEntropyFilter) map[string]interface{} {
+// applyExfilGuard runs the URL egress policy over one SSE delta in
+// either wire format (OpenAI or Anthropic). Stripped content replaces
+// the delta field in place; a block verdict nils the chunk so the
+// reader raises ErrExfilBlocked (the guard itself flips to blocked).
+func applyExfilGuard(parsed map[string]interface{}, guard *ExfilGuard) (map[string]interface{}, FilterAction) {
+	content := extractExfilContent(parsed)
+	if content == "" {
+		return parsed, ActionPass
+	}
+	rewritten, action, _ := guard.FilterContent(content)
+	switch action {
+	case ActionBlock:
+		return nil, ActionBlock
+	case ActionRedact:
+		parsed = copyMap(parsed)
+		if !setExfilContent(parsed, rewritten) {
+			return parsed, ActionPass
+		}
+	}
+	return parsed, action
+}
+
+// applyEntropyFilter runs the entropy redactor over one SSE delta,
+// reporting whether it rewrote the chunk.
+func applyEntropyFilter(parsed map[string]interface{}, filter *StreamEntropyFilter) (map[string]interface{}, bool) {
 	content := ExtractDeltaContentFromMap(parsed)
 	if content == "" {
-		return parsed
+		return parsed, false
 	}
 	redacted, action := filter.FilterContent(content)
 	if action == ActionRedact && redacted != content {
 		parsed = copyMap(parsed)
 		ReplaceDeltaContentMap(parsed, redacted)
+		return parsed, true
 	}
-	return parsed
+	return parsed, false
 }
 
 func copyMap(m map[string]interface{}) map[string]interface{} {

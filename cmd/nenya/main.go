@@ -23,6 +23,7 @@ import (
 	"github.com/nenya/internal/local"
 	"github.com/nenya/internal/pipeline"
 	"github.com/nenya/internal/proxy"
+	"github.com/nenya/internal/routing"
 	"github.com/nenya/internal/version"
 )
 
@@ -135,9 +136,9 @@ func setupLoggerFromConfig(cfg *config.Config, verbose bool) *slog.Logger {
 		return infra.SetupLogger(true)
 	}
 
-	level := config.LogLevelFromString(cfg.Server.LogLevel)
-	if err := infra.SetLogLevel(cfg.Server.LogLevel); err != nil {
-		fmt.Fprintf(os.Stderr, "warning: failed to set log level: %v\n", err)
+	level, ok := config.ParseLogLevel(cfg.Server.LogLevel)
+	if !ok && cfg.Server.LogLevel != "" {
+		slog.Warn("invalid server.log_level, defaulting to info", "level", cfg.Server.LogLevel)
 	}
 	return infra.SetupLoggerWithLevel(level)
 }
@@ -187,11 +188,23 @@ func run(logger *slog.Logger, cfg *config.Config, secrets *config.SecretsConfig,
 			"auto_load", cfg.LocalEngine.AutoLoad)
 
 		if err := engineManager.Startup(startupCtx); err != nil {
-			logger.Warn("failed to load startup models", "error", err)
+			logger.Warn("failed to load startup models", "err", err)
 		}
 	}
 
-	gw.InterceptorChain = buildInterceptorChain(gw, cfg, logger)
+	chain, err := buildInterceptorChain(gw, cfg, logger)
+	if err != nil {
+		logger.Error("gateway startup aborted: interceptor chain build failed", "err", err)
+		// Release what the gateway already acquired (engine preload pins,
+		// quota fetcher, MCP clients) before exiting.
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if shutdownErr := gw.Shutdown(shutdownCtx); shutdownErr != nil {
+			logger.Warn("cleanup after failed startup incomplete", "err", shutdownErr)
+		}
+		return 1
+	}
+	gw.InterceptorChain = chain
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 
@@ -221,27 +234,69 @@ func run(logger *slog.Logger, cfg *config.Config, secrets *config.SecretsConfig,
 	return eventLoop(logger, paths, p, ctx, sighup, serverErr, srv)
 }
 
-func buildInterceptorChain(gw *gateway.NenyaGateway, cfg *config.Config, logger *slog.Logger) *pipeline.InterceptorChain {
+// registerBouncer attaches the bouncer interceptor per its config:
+// fail-closed mode keeps the interceptor registered even without engine
+// targets (rejections are the point); fail-open mode without an engine
+// is a no-op and skips registration.
+func registerBouncer(chain *pipeline.InterceptorChain, gw *gateway.NenyaGateway, cfg *config.Config, logger *slog.Logger) {
+	if cfg.Bouncer.Enabled != nil && !*cfg.Bouncer.Enabled {
+		return
+	}
+	failOpen := cfg.Bouncer.EffectiveFailOpen()
+	targets := len(cfg.Bouncer.Engine.ResolvedTargets)
+	switch {
+	case !failOpen && targets == 0:
+		// No engine to call, so every oversized request fails
+		// summarization and is rejected — exactly what fail-closed means.
+		logger.Warn("bouncer fail_open=false with no engine configured: every oversized request with summarizable (string) content will be rejected with 403 error_kind=bouncer_error")
+		chain.Register(proxy.NewBouncerInterceptor(gw, logger))
+	case failOpen && targets == 0:
+		logger.Warn("bouncer enabled but no engine resolved; interception is inactive")
+	default:
+		chain.Register(proxy.NewBouncerInterceptor(gw, logger))
+	}
+}
+
+// buildInterceptorChain assembles the interceptor chain in priority
+// order. A compile failure in a security interceptor's patterns is
+// fatal: the gateway must not start (or reload) without its full
+// enforcement set.
+func buildInterceptorChain(gw *gateway.NenyaGateway, cfg *config.Config, logger *slog.Logger) (*pipeline.InterceptorChain, error) {
 	chain := pipeline.NewInterceptorChain(logger)
 
 	if enabled := (cfg.Bouncer.Enabled != nil && *cfg.Bouncer.Enabled); enabled && len(gw.SecretPatterns) > 0 {
-		chain.Register(pipeline.NewRedactInterceptor(enabled, gw.SecretPatterns, cfg.Bouncer.RedactionLabel, logger, gw.Metrics))
+		chain.Register(pipeline.NewRedactInterceptor(true, gw.SecretPatterns, cfg.Bouncer.RedactionLabel, gw.Metrics))
 	}
 
 	if gw.EntropyFilter != nil {
-		chain.Register(pipeline.NewEntropyInterceptor(gw.EntropyFilter, cfg.Bouncer.RedactionLabel, logger))
+		chain.Register(pipeline.NewEntropyInterceptor(gw.EntropyFilter, cfg.Bouncer.RedactionLabel, gw.Metrics))
+	}
+
+	escalationDeps := &pipeline.InjectionEscalationDeps{
+		ClientFor: gw.ClientFor,
+		InjectAPIKey: func(providerName string, headers http.Header) error {
+			return routing.InjectAPIKeyWithGateway(providerName, gw, headers)
+		},
+		Logger: logger,
+	}
+	injection, err := pipeline.NewInjectionInterceptor(cfg.Governance.Injection, cfg.Agents, gw.Metrics, escalationDeps)
+	if err != nil {
+		return nil, fmt.Errorf("injection interceptor: %w", err)
+	}
+	chain.Register(injection)
+
+	if spotlight := pipeline.NewSpotlightInterceptor(cfg.Governance.Spotlight, cfg.Agents, gw.Metrics); spotlight.RegistrationRequired() {
+		chain.Register(spotlight)
 	}
 
 	if cfg.Context.TFIDFQuerySource != "" {
-		chain.Register(pipeline.NewTFIDFInterceptor(cfg.Context.TFIDFQuerySource, logger))
+		chain.Register(pipeline.NewTFIDFInterceptor(cfg.Context.TFIDFQuerySource, cfg.Context, logger))
 	}
 
-	if enabled := (cfg.Bouncer.Enabled != nil && *cfg.Bouncer.Enabled); enabled && len(cfg.Bouncer.Engine.ResolvedTargets) > 0 {
-		chain.Register(proxy.NewBouncerInterceptor(gw, logger))
-	}
+	registerBouncer(chain, gw, cfg, logger)
 
 	logger.Info("interceptor chain initialized", "count", len(chain.List()))
-	return chain
+	return chain, nil
 }
 
 func buildServer(p *proxy.Proxy, listenAddr string) *http.Server {
@@ -367,9 +422,33 @@ func reloadConfig(ctx context.Context, p *proxy.Proxy, paths configPaths, logger
 		return
 	}
 
+	// Reload closes the old gateway internally, which is irreversible:
+	// prove the new configuration can assemble a complete interceptor
+	// chain before swapping, so an abort path never has to unwind a
+	// closed gateway. Pattern compilation is re-checked here (defense in
+	// depth); escalation construction is pre-checked by
+	// validateInjectionEscalation plus engine resolution in config.Load.
+	if err := pipeline.ValidateInjectionPatterns(newCfg.Governance.Injection); err != nil {
+		logger.Error("configuration reload aborted: injection pattern validation failed", "err", err)
+		return
+	}
+
 	oldGW := p.Gateway()
 	newGW := oldGW.Reload(ctx, *newCfg, newSecrets)
-	newGW.InterceptorChain = buildInterceptorChain(newGW, newCfg, logger)
+	newChain, chainErr := buildInterceptorChain(newGW, newCfg, logger)
+	if chainErr != nil {
+		// The old gateway is already closed inside Reload, so this process
+		// cannot serve safely: fail fatally and let the supervisor restart
+		// a healthy instance.
+		logger.Error("configuration reload aborted: interceptor chain build failed; terminating", "err", chainErr)
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if shutdownErr := newGW.Shutdown(shutdownCtx); shutdownErr != nil {
+			logger.Warn("orphaned gateway cleanup incomplete", "err", shutdownErr)
+		}
+		os.Exit(1)
+	}
+	newGW.InterceptorChain = newChain
 	p.StoreGateway(newGW)
 
 	logger.Info("configuration reloaded successfully")

@@ -102,7 +102,181 @@ type AgentConfig struct {
 	// fails over to another target (same-target backoff retries and the
 	// summarization retry still run).
 	StickyProvider string `json:"sticky_provider,omitempty"`
+	// Injection overrides the global governance.injection settings for
+	// this agent (enabled/strict are the per-agent surface; extra and
+	// ignore patterns are global-only).
+	Injection *InjectionConfig `json:"injection,omitempty"`
+	// Spotlight overrides the global governance.spotlight
+	// enabled/history_enabled flags for this agent (mode and byte cap are
+	// global-only).
+	Spotlight *SpotlightConfig `json:"spotlight,omitempty"`
+	// ExfilGuard overrides the global governance.exfil_guard enabled
+	// flag and action for this agent (host list, query cap, and IP
+	// literal policy are global-only).
+	ExfilGuard *ExfilGuardOverrideConfig `json:"exfil_guard,omitempty"`
 }
+
+// ExfilGuardOverrideConfig is the per-agent override surface for the
+// output egress guard.
+type ExfilGuardOverrideConfig struct {
+	// Enabled turns the guard on/off for this agent.
+	Enabled *bool `json:"enabled,omitempty"`
+	// Action overrides the global action (log|strip|block).
+	Action string `json:"action,omitempty"`
+}
+
+// CanaryConfig configures the egress canary-token tripwire (default
+// off): a per-request random marker is injected into the system context
+// and watched for on every egress channel.
+type CanaryConfig struct {
+	// Enabled turns the tripwire on.
+	Enabled *bool `json:"enabled,omitempty"`
+	// Action selects the response to a detection: "block" (default —
+	// terminate the response with error_kind=exfil_detected / refuse the
+	// tool call) or "log" (metric + log only, output continues).
+	Action string `json:"action,omitempty"`
+}
+
+// Canary tripwire actions.
+const (
+	// CanaryActionLog records the detection without altering output.
+	CanaryActionLog = "log"
+	// CanaryActionBlock terminates the response (or refuses the tool
+	// call) on detection.
+	CanaryActionBlock = "block"
+)
+
+// ExfilGuardConfig configures deterministic output-side egress control:
+// URL policy applied to model-produced markdown links/images and bare
+// URLs on the response path (default off).
+type ExfilGuardConfig struct {
+	// Enabled turns the guard on.
+	Enabled *bool `json:"enabled,omitempty"`
+	// Action selects the response to a violating URL: "log" (default,
+	// metric only), "strip" (remove the link/image, neutral placeholder),
+	// or "block" (terminate the response with error_kind=exfil_blocked).
+	Action string `json:"action,omitempty"`
+	// AllowedHosts restricts link destinations to this list (exact or
+	// subdomain match). Empty allows all public hosts (scheme, IP, and
+	// query checks still apply).
+	AllowedHosts []string `json:"allowed_hosts,omitempty"`
+	// MaxQueryChars is the query-string length threshold above which a
+	// URL is flagged as data smuggling (0 applies
+	// DefaultExfilMaxQueryChars).
+	MaxQueryChars int `json:"max_query_chars,omitempty"`
+	// AllowIPLiterals permits IP-literal hosts (private, loopback, and
+	// link-local ranges remain denied regardless; default false).
+	AllowIPLiterals *bool `json:"allow_ip_literals,omitempty"`
+}
+
+// Exfil guard actions.
+const (
+	// ExfilActionLog records the violation without modifying output.
+	ExfilActionLog = "log"
+	// ExfilActionStrip removes the violating link/image, leaving a
+	// neutral placeholder.
+	ExfilActionStrip = "strip"
+	// ExfilActionBlock terminates the response.
+	ExfilActionBlock = "block"
+)
+
+// DefaultExfilMaxQueryChars is the default query-string length threshold
+// for the egress guard (256 chars).
+const DefaultExfilMaxQueryChars = 256
+
+// Spotlight mode values (shared with internal/pipeline, which imports
+// this package — the canonical constants live here to avoid a cycle).
+const (
+	// SpotlightModeDelimiters wraps content in explicit provenance tags
+	// (default; preserves content byte-for-byte).
+	SpotlightModeDelimiters = "delimiters"
+	// SpotlightModeDatamarking applies a character-interleaving transform
+	// that breaks instruction tokenization (Nenya-managed MCP results
+	// only; never applied to history).
+	SpotlightModeDatamarking = "datamarking"
+)
+
+// DefaultMaxToolResultBytes is the default cap for Nenya-managed MCP
+// tool results before enveloping (512KiB).
+const DefaultMaxToolResultBytes = 512 * 1024
+
+// SpotlightConfig configures untrusted-content spotlighting (Microsoft
+// datamarking/delimiting, arXiv:2403.14720). Enabled surfaces envelope
+// Nenya-managed MCP results, memory context, and tool descriptions;
+// history_enabled additionally envelopes incoming role:"tool" messages
+// (the primary surface for client-side MCP setups).
+type SpotlightConfig struct {
+	Enabled *bool `json:"enabled,omitempty"`
+	// Mode selects the envelope style: "delimiters" (default) or
+	// "datamarking" (character-interleaving; Nenya-managed MCP results
+	// only, never applied to history).
+	Mode string `json:"mode,omitempty"`
+	// HistoryEnabled envelopes incoming role:"tool" messages in request
+	// history. Defaults to the Enabled value when unset.
+	HistoryEnabled *bool `json:"history_enabled,omitempty"`
+	// MaxToolResultBytes caps Nenya-managed MCP tool results before
+	// enveloping (0 applies DefaultMaxToolResultBytes).
+	MaxToolResultBytes int `json:"max_tool_result_bytes,omitempty"`
+}
+
+// InjectionConfig configures the deterministic prompt-injection detector.
+// When enabled, message content is scanned for instruction-override
+// phrasing, role forgery, hidden-text carriers, and encoded blobs whose
+// decoding carries imperative intent. Detections are sanitized (matched
+// spans replaced with a neutralization marker) and counted; strict mode
+// rejects the request with 403 error_kind=injection_detected instead.
+type InjectionConfig struct {
+	Enabled *bool `json:"enabled,omitempty"`
+	Strict  *bool `json:"strict,omitempty"`
+	// ExtraPatterns are additional regexes evaluated alongside the
+	// built-in detector set (category "custom").
+	ExtraPatterns []string `json:"extra_patterns,omitempty"`
+	// IgnorePatterns suppress detections on matching surfaces (allowlist
+	// for prompt-engineering corpora that quotes injection material).
+	IgnorePatterns []string `json:"ignore_patterns,omitempty"`
+	// Escalation optionally routes ambiguous detection scores to an LLM
+	// classifier through the engine chain (advisory second opinion; the
+	// deterministic tier is never weakened by it).
+	Escalation *InjectionEscalationConfig `json:"escalation,omitempty"`
+}
+
+// GetEscalation returns the escalation block when it exists and is
+// enabled, nil otherwise.
+func (c *InjectionConfig) GetEscalation() *InjectionEscalationConfig {
+	if c == nil || c.Escalation == nil {
+		return nil
+	}
+	if c.Escalation.Enabled == nil || !*c.Escalation.Enabled {
+		return nil
+	}
+	return c.Escalation
+}
+
+// InjectionEscalationConfig configures the tier-2 LLM classifier for
+// injection detection (default off).
+type InjectionEscalationConfig struct {
+	// Enabled turns on two-tier escalation. Requires Engine.
+	Enabled *bool `json:"enabled,omitempty"`
+	// Engine is the classifier target (agent reference, provider/model
+	// shorthand, or inline object) resolved through the engine chain.
+	Engine *EngineRef `json:"engine,omitempty"`
+	// MinScore is the inclusive detection count at which a request is
+	// escalated (below it passes untouched).
+	MinScore int `json:"min_score,omitempty"`
+	// MaxScore is the exclusive detection count at which the tier-1
+	// verdict acts immediately without escalation.
+	MaxScore int `json:"max_score,omitempty"`
+	// MaxBytes caps the per-surface content excerpt sent to the
+	// classifier (0 applies DefaultEscalationMaxBytes).
+	MaxBytes int `json:"max_bytes,omitempty"`
+	// PerRequestLimit caps classifier calls per request (surfaces are
+	// escalated in message order until the budget is spent).
+	PerRequestLimit int `json:"per_request_limit,omitempty"`
+}
+
+// DefaultEscalationMaxBytes is the default per-surface excerpt cap for
+// the tier-2 injection classifier (8KiB).
+const DefaultEscalationMaxBytes = 8 * 1024
 
 func (a *AgentConfig) UnmarshalJSON(data []byte) error {
 	type alias AgentConfig
@@ -493,8 +667,20 @@ type ContextConfig struct {
 // breaker thresholds, latency- and cost-weighted routing, and auto-tuning flags.
 type GovernanceConfig struct {
 	BlockedExecutionPatterns []string `json:"blocked_execution_patterns"`
-	RatelimitMaxRPM          *int     `json:"ratelimit_max_rpm,omitempty"`
-	RatelimitMaxTPM          *int     `json:"ratelimit_max_tpm,omitempty"`
+	// Injection configures the deterministic prompt-injection detector
+	// (default disabled). Per-agent overrides live on agents.<name>.injection.
+	Injection *InjectionConfig `json:"injection,omitempty"`
+	// Spotlight configures untrusted-content spotlighting envelopes
+	// (default disabled). Per-agent overrides live on
+	// agents.<name>.spotlight.
+	Spotlight  *SpotlightConfig  `json:"spotlight,omitempty"`
+	ExfilGuard *ExfilGuardConfig `json:"exfil_guard,omitempty"`
+	Canary     *CanaryConfig     `json:"canary,omitempty"`
+	// MCPGuard validates Nenya-managed tool-call arguments (schema,
+	// size, URL destinations) before dispatch to MCP servers.
+	MCPGuard        *MCPGuardConfig `json:"mcp_guard,omitempty"`
+	RatelimitMaxRPM *int            `json:"ratelimit_max_rpm,omitempty"`
+	RatelimitMaxTPM *int            `json:"ratelimit_max_tpm,omitempty"`
 	// MaxConcurrentRequests is the global fallback cap on in-flight requests
 	// per provider+model when the provider config does not set its own limit
 	// (0 or omitted = unlimited).
@@ -925,6 +1111,14 @@ type BouncerConfig struct {
 func (s *BouncerConfig) EnabledWasSet() bool  { return wasSet(s.Enabled) }
 func (s *BouncerConfig) FailOpenWasSet() bool { return wasSet(s.FailOpen) }
 
+// EffectiveFailOpen reports the resolved fail-open semantics: true
+// (default) means engine failures skip summarization and forward the
+// payload; false means the request is rejected — oversized content must
+// not reach upstream unsummarized/unredacted.
+func (s *BouncerConfig) EffectiveFailOpen() bool {
+	return s.FailOpen == nil || *s.FailOpen
+}
+
 func (s *BouncerConfig) UnmarshalJSON(data []byte) error {
 	type alias BouncerConfig
 	aux := &struct {
@@ -1058,6 +1252,47 @@ type MCPServerConfig struct {
 	Headers           map[string]string `json:"headers,omitempty"`
 	Timeout           int               `json:"timeout,omitempty"`
 	KeepAliveInterval int               `json:"keep_alive_interval,omitempty"`
+	// AllowedHosts grants tool-argument URL-policy exceptions for this
+	// server: exact hostnames or "*.suffix" wildcard entries. Needed
+	// when a trusted tool legitimately targets private infrastructure
+	// (e.g. an internal API at 10.x.x.x).
+	AllowedHosts []string `json:"allowed_hosts,omitempty"`
+}
+
+// MCPGuardConfig controls the Nenya-managed MCP tool-call argument
+// guard: JSON-schema validation, argument size cap, and the URL
+// destination policy applied before every CallTool dispatch.
+type MCPGuardConfig struct {
+	// Enabled master-switches the guard (default true).
+	Enabled *bool `json:"enabled,omitempty"`
+	// MaxArgBytes caps the marshaled argument size (default 1 MiB).
+	MaxArgBytes int `json:"max_arg_bytes,omitempty"`
+	// URLPolicy controls http(s) URL destinations inside string
+	// arguments: "deny_private" (default), "log", or "off".
+	URLPolicy string `json:"url_policy,omitempty"`
+}
+
+// EffectiveEnabled reports the resolved guard state (nil-safe).
+func (m *MCPGuardConfig) EffectiveEnabled() bool {
+	return m != nil && (m.Enabled == nil || *m.Enabled)
+}
+
+// EffectiveMaxArgBytes reports the configured argument size cap
+// (nil-safe; 0 means "apply the default", negative is rejected by
+// validation).
+func (m *MCPGuardConfig) EffectiveMaxArgBytes() int {
+	if m == nil {
+		return 0
+	}
+	return m.MaxArgBytes
+}
+
+// EffectiveURLPolicy reports the resolved URL policy (nil-safe).
+func (m *MCPGuardConfig) EffectiveURLPolicy() string {
+	if m == nil || m.URLPolicy == "" {
+		return "deny_private"
+	}
+	return m.URLPolicy
 }
 
 // AgentMCPConfig defines the MCP tool integration for an agent, listing

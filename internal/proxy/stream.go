@@ -17,6 +17,8 @@ import (
 	"github.com/nenya/config"
 	"github.com/nenya/internal/billing"
 	"github.com/nenya/internal/gateway"
+	"github.com/nenya/internal/infra"
+	"github.com/nenya/internal/pipeline"
 	providerpkg "github.com/nenya/internal/providers"
 	"github.com/nenya/internal/routing"
 	"github.com/nenya/internal/stream"
@@ -420,7 +422,11 @@ func isClientWriteError(err error) bool {
 // failure before any stream bytes were produced (distinct from empty).
 type streamResult struct {
 	empty bool
-	err   error
+	// terminal marks a response already fully written to the client
+	// (e.g. a content-policy block): the retry loop must stop instead of
+	// failing over and appending another response to the committed one.
+	terminal bool
+	err      error
 }
 
 // prefixedReadCloser wraps an io.Reader with a prefix buffer that is
@@ -883,7 +889,7 @@ func (p *Proxy) streamResponse(opts streamResponseOpts, action upstreamAction) s
 		if attempt > 0 {
 			attemptStall = nil
 		}
-		transformingReader, contentBuilder, stallR := p.setupTransformingReader(gw, target, opts.agentName, opts.sourceFormat, action, r.Context(), attemptStall)
+		transformingReader, contentBuilder, stallR := p.setupTransformingReader(gw, target, opts.agentName, opts.sourceFormat, action, r.Context(), attemptStall, opts.canary)
 		if transformingReader == nil {
 			putStreamBuffer(buf)
 			return streamResult{}
@@ -998,7 +1004,7 @@ func resolveBootstrapBuffer(gw *gateway.NenyaGateway, providerName string) int {
 // reuse, when non-nil, is a stall reader already built around this body (by the
 // stream-head probe); it is used as-is so its buffered read-ahead bytes stay in
 // line, and backgroundExhaust is not double-allocated.
-func (p *Proxy) setupTransformingReader(gw *gateway.NenyaGateway, target routing.UpstreamTarget, agentName, sourceFormat string, action upstreamAction, ctx context.Context, reuse *stallReader) (*stream.SSETransformingReader, *contentBuilder, *stallReader) {
+func (p *Proxy) setupTransformingReader(gw *gateway.NenyaGateway, target routing.UpstreamTarget, agentName, sourceFormat string, action upstreamAction, ctx context.Context, reuse *stallReader, canary pipeline.CanarResult) (*stream.SSETransformingReader, *contentBuilder, *stallReader) {
 	transformer := p.resolveTransformer(gw, target, sourceFormat)
 
 	var bodyReader io.Reader = action.resp.Body
@@ -1028,6 +1034,12 @@ func (p *Proxy) setupTransformingReader(gw *gateway.NenyaGateway, target routing
 	transformingReader.SetLogger(gw.Logger)
 
 	p.setupStreamFilterIfEnabled(gw, transformingReader)
+	if guard := exfilGuardFor(gw, agentName); guard != nil {
+		transformingReader.SetExfilGuard(guard)
+	}
+	if canary.Token != "" {
+		transformingReader.SetCanaryWatcher(stream.NewCanaryWatcher(canary.Token, canary.Action, "stream", gw.Metrics, gw.Logger.With("agent", agentName)))
+	}
 	p.setupStreamEntropyFilterIfEnabled(gw, transformingReader)
 	contentBuilder := p.setupContentBuilderIfNeeded(gw, agentName, transformingReader)
 
@@ -1217,14 +1229,8 @@ func (p *Proxy) setupStreamWriter(gw *gateway.NenyaGateway, flushWriter *immedia
 func (p *Proxy) handleStreamDone(gw *gateway.NenyaGateway, w http.ResponseWriter, target routing.UpstreamTarget, agentName string, action upstreamAction, cacheKey string, cooldownDuration time.Duration, payload map[string]any, buf *[]byte, copyErr error, captureBuf *bytes.Buffer, tee *sseTeeWriter, contentBuilder *contentBuilder, stallR *stallReader, reqCtx context.Context, injectedErr bool) streamResult {
 	putStreamBuffer(buf)
 
-	if errors.Is(copyErr, stream.ErrStreamBlocked) {
-		action.cancel()
-		_ = action.resp.Body.Close()
-		gw.Logger.Warn("stream blocked by execution policy, upstream killed",
-			"model", target.Model, "provider", target.Provider)
-		gw.Metrics.RecordStreamBlock(target.Model, target.Provider)
-		p.writeBlockedSSE(gw, w)
-		return streamResult{}
+	if handled, result := p.handleBlockedStream(gw, w, target, copyErr, action, stallR); handled {
+		return result
 	}
 
 	// Close upstream body and cancel context before draining to unblock
@@ -1462,19 +1468,104 @@ func (p *Proxy) writeTimeoutSSE(gw *gateway.NenyaGateway, w http.ResponseWriter)
 // writeBlockedSSE sends a blocked response SSE stream to the client.
 // This is used when the execution policy blocks a request.
 func (p *Proxy) writeBlockedSSE(gw *gateway.NenyaGateway, w http.ResponseWriter) {
-	blockPayload := map[string]interface{}{
+	p.writeBlockedSSEPayload(gw, w, map[string]interface{}{
 		"id":     "blocked",
 		"object": "chat.completion.chunk",
 		"choices": []map[string]interface{}{
 			{
-				"index": 0,
-				"delta": map[string]interface{}{
-					"content": "[Response blocked by execution policy]",
-				},
+				"index":         0,
+				"delta":         map[string]interface{}{"content": "[Response blocked by execution policy]"},
 				"finish_reason": "stop",
 			},
 		},
+	})
+}
+
+// handleBlockedStream resolves the three stream-block error kinds
+// (canary tripwire, egress guard, execution policy): it kills the
+// upstream, drains the stall reader, records the block and writes the
+// kind-specific SSE frame. Returns handled=false for other errors.
+func (p *Proxy) handleBlockedStream(gw *gateway.NenyaGateway, w http.ResponseWriter, target routing.UpstreamTarget, copyErr error, action upstreamAction, stallR *stallReader) (bool, streamResult) {
+	var message string
+	var blocked bool
+	var writer func(*gateway.NenyaGateway, http.ResponseWriter)
+	switch {
+	case errors.Is(copyErr, stream.ErrCanaryDetected):
+		message = "stream blocked: canary detected, upstream killed"
+		blocked = true
+		writer = p.writeExfilDetectedSSE
+	case errors.Is(copyErr, stream.ErrExfilBlocked):
+		message = "stream blocked by exfil guard, upstream killed"
+		blocked = true
+		writer = p.writeExfilBlockedSSE
+	case errors.Is(copyErr, stream.ErrStreamBlocked):
+		message = "stream blocked by execution policy, upstream killed"
+		writer = p.writeBlockedSSE
+	default:
+		return false, streamResult{}
 	}
+
+	action.cancel()
+	_ = action.resp.Body.Close()
+	if stallR != nil {
+		stallR.Stop()
+		stallR.DrainBuffered()
+	}
+	gw.Logger.Warn(message, "model", target.Model, "provider", target.Provider)
+	gw.Metrics.RecordStreamBlock(target.Model, target.Provider)
+	writer(gw, w)
+	// The canary and exfil branches fully write the response: the retry
+	// loop must not fail over onto the committed bytes.
+	return true, streamResult{terminal: blocked}
+}
+
+// writeExfilDetectedSSE sends the structured canary-detection response:
+// an error object carrying error_kind=exfil_detected plus a human-
+// readable delta, then [DONE].
+func (p *Proxy) writeExfilDetectedSSE(gw *gateway.NenyaGateway, w http.ResponseWriter) {
+	p.writeBlockedSSEPayload(gw, w, map[string]interface{}{
+		"id":         "blocked",
+		"object":     "chat.completion.chunk",
+		"error_kind": string(infra.ErrorKindExfilDetected),
+		"error": map[string]interface{}{
+			"message": "response blocked: canary token detected in output",
+			"type":    string(infra.ErrorKindExfilDetected),
+		},
+		"choices": []map[string]interface{}{
+			{
+				"index":         0,
+				"delta":         map[string]interface{}{"content": "[Response blocked: canary detected in output]"},
+				"finish_reason": "stop",
+			},
+		},
+	})
+}
+
+// writeExfilBlockedSSE sends the structured egress-block response to the
+// client: an error object carrying error_kind=exfil_blocked plus a
+// human-readable delta, then [DONE].
+func (p *Proxy) writeExfilBlockedSSE(gw *gateway.NenyaGateway, w http.ResponseWriter) {
+	p.writeBlockedSSEPayload(gw, w, map[string]interface{}{
+		"id":         "blocked",
+		"object":     "chat.completion.chunk",
+		"error_kind": string(infra.ErrorKindExfil),
+		"error": map[string]interface{}{
+			"message": "response blocked by data-exfiltration policy",
+			"type":    string(infra.ErrorKindExfil),
+		},
+		"choices": []map[string]interface{}{
+			{
+				"index":         0,
+				"delta":         map[string]interface{}{"content": "[Response blocked: data-exfiltration policy]"},
+				"finish_reason": "stop",
+			},
+		},
+	})
+}
+
+// writeBlockedSSEPayload marshals a blocked-response payload and writes
+// it as one SSE data line plus [DONE].
+func (p *Proxy) writeBlockedSSEPayload(gw *gateway.NenyaGateway, w http.ResponseWriter, blockPayload map[string]interface{}) {
 	blockJSON, err := json.Marshal(blockPayload)
 	if err != nil {
 		gw.Logger.Error("failed to marshal blocked SSE payload", "err", err)
@@ -1515,13 +1606,29 @@ func (p *Proxy) autoSaveTryServer(liveGW *gateway.NenyaGateway, agent *config.Ag
 	saveCtx, cancel := context.WithTimeout(baseCtx, mcpExecTimeout)
 	defer cancel()
 
-	start := time.Now()
-	_, err := client.CallTool(saveCtx, saveTool, map[string]any{
+	saveArgs := map[string]any{
 		"wing":     agentName,
 		"room":     "conversation",
 		"content":  assistantContent,
 		"added_by": "nenya",
-	})
+	}
+	// The argument guard applies to auto-save too: the content is
+	// model-controlled assistant text (size cap + URL policy).
+	if !guardMCPArgs(liveGW, liveGW.Logger, mcpGuardDispatch{
+		ServerName: serverName,
+		ToolName:   saveTool,
+		Purpose:    "auto_save",
+		Args:       saveArgs,
+	}) {
+		// Return false so the caller may fall back to another server
+		// whose allowed_hosts permits the content; the guard already
+		// logged the rejection.
+		liveGW.Metrics.RecordMCPAutoSave(serverName, agentName, errMCPArgumentPolicy)
+		return false
+	}
+
+	start := time.Now()
+	_, err := client.CallTool(saveCtx, saveTool, saveArgs)
 	duration := time.Since(start)
 	if err != nil {
 		liveGW.Logger.Warn("MCP auto-save failed (best-effort)",

@@ -1,6 +1,7 @@
 package mcp
 
 import (
+	"encoding/json"
 	"strings"
 	"sync"
 )
@@ -9,11 +10,32 @@ type ToolRouting struct {
 	OpenAIToolName string
 	ServerName     string
 	MCPToolName    string
+	// Schema is the tool's declared InputSchema rendered as generic
+	// JSON (nil-safe: tools without a schema validate as pass-through).
+	// Snapshotted at registration; the registry is rebuilt on reload.
+	Schema any
 }
 
 type ToolRegistry struct {
 	mu     sync.RWMutex
 	routes map[string]ToolRouting
+}
+
+// schemaAsAny renders a typed InputSchema as generic decoded JSON so
+// the argument validator can walk nested properties/items uniformly.
+func schemaAsAny(schema InputSchema) any {
+	if schema.Type == "" && len(schema.Properties) == 0 && len(schema.Required) == 0 {
+		return nil
+	}
+	encoded, err := json.Marshal(schema)
+	if err != nil {
+		return nil
+	}
+	var out any
+	if err := json.Unmarshal(encoded, &out); err != nil {
+		return nil
+	}
+	return out
 }
 
 func NewToolRegistry() *ToolRegistry {
@@ -32,6 +54,7 @@ func (r *ToolRegistry) Register(serverName string, tools []Tool) {
 			OpenAIToolName: openaiName,
 			ServerName:     serverName,
 			MCPToolName:    tool.Name,
+			Schema:         schemaAsAny(tool.InputSchema),
 		}
 	}
 }
