@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/nenya/config"
+	"github.com/nenya/internal/util"
 )
 
 // CanaryPrefix marks gateway-generated canary tokens. The full token is
@@ -74,7 +75,10 @@ func InjectCanary(cfg *config.CanaryConfig, payload map[string]interface{}) Cana
 		"role":    "system",
 		"content": CanaryMarker(canary),
 	}
-	updated := make([]interface{}, 0, len(messages)+1)
+	// Overflow-safe capacity hint (AGENTS.md §7/CWE-190): len(messages)
+	// is bounded by the request size in practice, but the allocation
+	// arithmetic must be provably not overflowing.
+	updated := make([]interface{}, 0, util.AddCap(len(messages), 1))
 	updated = append(updated, messages...)
 	updated = append(updated, marker)
 	payload["messages"] = updated
