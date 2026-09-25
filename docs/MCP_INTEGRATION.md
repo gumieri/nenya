@@ -144,6 +144,7 @@ MCP integration follows the same best-effort philosophy as the rest of Nenya:
 - **Server goes down mid-session**: The keepalive ping detects the dead connection and marks the transport as not-ready. Tool calls fail with error results that are returned to the LLM as tool result messages. The LLM can inform the user or try a different approach.
 - **Timeout**: Each MCP tool call has a configurable timeout (default 30s per-server). Timeouts return error results.
 - **Max iterations**: The multi-turn loop has a configurable max iteration count (default 10). When exhausted, the last buffered response is replayed to the client.
+- **Argument policy rejection**: A call whose arguments fail the guard (schema, size cap, URL policy) is returned to the model as an error tool result — the multi-turn loop can correct itself and the client response is unaffected. Auto-search rejections surface as a failed search; auto-save rejections fall back to the next server.
 - **No MCP configured**: Zero overhead — no allocation, no goroutine, no tool injection.
 
 ## Security Considerations

@@ -17,6 +17,8 @@ Large language models are capable of generating obfuscated, aliased, or otherwis
 
 **No automated filter can fully prevent a determined or hallucinating LLM from producing harmful output.** You are solely responsible for validating any command before execution.
 
+The gateway's broader anti-poisoning stack (prompt-injection detection, untrusted-content spotlighting, output ExfilGuard, canary tripwires, MCP argument guards) is likewise **defense in depth, not a guarantee**: each layer has documented blind spots. See [INJECTION_DEFENSE.md](INJECTION_DEFENSE.md) for the threat model, rollout guidance, and the honest limitations section before relying on any of it, and note that security interceptors deliberately fail closed — a fault can abort requests with 503 rather than forwarding unprocessed content.
+
 ## 2. Autonomous Agent Risk — Zero Liability
 
 Granting autonomous AI agents access to a terminal, cloud infrastructure, or production systems is an inherently dangerous operation with real-world consequences.
@@ -51,4 +53,4 @@ Every line of code has been reviewed, tested, and validated by the maintainer. A
 
 ---
 
-*Nenya is licensed under the Apache License 2.0. See the [LICENSE](LICENSE) file for full legal terms.*
+_Nenya is licensed under the Apache License 2.0. See the [LICENSE](LICENSE) file for full legal terms._

@@ -18,14 +18,14 @@ Each layer may only import from layers to its left. This prevents circular depen
 | `config/` | Configuration types, JSON loading, model/provider registries, defaults, validation, engine reference resolution |
 | `internal/infra/` | Structured logging, thought signature cache, Prometheus metrics, rate limiter, usage tracker, latency tracker (sorted-buffer median with incremental insertion), response cache, structured errors (`ErrorKind`, `ErrorResponse`) |
 | `internal/discovery/` | Dynamic model catalog discovery from upstream providers, three-tier merge (config > discovered > static), per-provider response parsers |
-| `internal/stream/` | SSE transforming reader, sliding window stream filter |
-| `internal/pipeline/` | Client classification, code fence detection, interceptor chain (Redact/Entropy/TF-IDF/Bouncer), tier-0 regex secret redaction, Shannon entropy redaction, TF-IDF relevance-scored truncation, middle-out truncation (code-boundary-aware for IDEs), text compaction, stale tool call pruning, thought pruning, context window compaction, engine calls with fallback chains |
+| `internal/stream/` | SSE transforming reader, sliding window stream filter, ExfilGuard output URL policy, egress canary watcher |
+| `internal/pipeline/` | Client classification, code fence detection, interceptor chain (Redact/Spotlight/Injection/Entropy/TF-IDF/Bouncer — security stages fail closed), tier-0 regex secret redaction, prompt-injection detection with optional LLM escalation, untrusted-content spotlighting, Shannon entropy redaction, TF-IDF relevance-scored truncation, middle-out truncation (code-boundary-aware for IDEs), text compaction, stale tool call pruning, thought pruning, context window compaction, engine calls with fallback chains, canary token generation |
+| `internal/mcp/` | MCP client (HTTP+SSE transport, retry, host pinning) plus the tool-call argument guard: minimal JSON-schema validation, argument size cap, URL destination policy with per-server allowlists |
 | `internal/resilience/` | Circuit breaker with Closed/Open/HalfOpen states, exponential backoff |
 | `internal/providers/` | Provider capability specs (stream_options, auto_tool_choice, content_arrays), per-provider sanitization, response transformers |
 | `internal/adapter/` | Provider Adapter pattern: request mutation, auth injection, response mutation, error classification, bidirectional OpenAI↔Anthropic format conversion |
 | `internal/routing/` | Dynamic provider resolution, agent fallback chains, latency-aware reordering with jitter (thundering herd prevention), upstream request transformation, API key injection, format detection |
 | `internal/local/` | Local Ollama model lifecycle management: GPU load/unload, session tracking with LRU eviction, startup preloading |
-| `internal/mcp/` | MCP (Model Context Protocol) client: HTTP+SSE transport, tool discovery, tool call execution, OpenAI schema transformation |
 | `internal/gateway/` | NenyaGateway struct, HTTP client configuration, token counting, MCP client initialization, MCP tool index |
 | `internal/billing/` | Billing-aware routing: quota tracking, spend limits, account selection |
 | `internal/auth/` | Authentication (token validation, RBAC enforcement with agent scoping and endpoint allowlists) |

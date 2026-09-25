@@ -118,6 +118,7 @@ When OpenCode is detected as an IDE client:
 | **Truncation** | Code-boundary aware — cuts at blank-line boundaries. When `tfidf_query_source` is set, uses TF-IDF relevance scoring instead. |
 | **Engine summarization** | Uses code-preserving prompt — only redacts secrets in prose, never restructures code. |
 | **Tool calls** | `tool_calls`, `tool_call_id`, `function_call` pass through unmodified. |
+| **Injection & exfiltration defense** | Applies to all clients: detection, spotlighting, output ExfilGuard, and canary tripwires. See [INJECTION_DEFENSE.md](INJECTION_DEFENSE.md), including the client-composition section on what OpenCode's own MCP path does and does not cover. |
 
 ## Tool Use
 

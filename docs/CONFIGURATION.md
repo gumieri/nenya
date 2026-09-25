@@ -1147,13 +1147,15 @@ The model catalog endpoint includes capability and pricing metadata when availab
 | 3 | **MCP tool injection** | if agent has MCP servers |
 | 4 | **Prefix cache optimizations** | pin system messages, sort tools |
 | 5 | **Agent system prompt injection** | if agent has prompt and no system message exists |
-| 6 | **Tier-0 regex redaction** | secret patterns via `bouncer` |
-| 6b | **Shannon entropy redaction** | if `bouncer.entropy_enabled` (runs after regex) |
+| 6 | **Tier-0 regex redaction** | secret patterns via `bouncer` (interceptor priority 10) |
+| 6a | **Untrusted-content spotlighting** | if `governance.spotlight.enabled` (priority 12) |
+| 6b | **Prompt-injection detection** | if `governance.injection.enabled` (priority 15; sanitize or strict reject, optional tier-2 escalation) |
+| 6c | **Shannon entropy redaction** | if `bouncer.entropy_enabled` (priority 20) |
 | 7 | **Text compaction** | normalize, trim, collapse blanks |
 | 8 | **Stale tool call pruning** | if `prune_stale_tools` enabled |
 | 9 | **Thought pruning** | if `prune_thoughts` enabled |
 | 10 | **Window compaction** | if enabled and threshold exceeded |
-| 11 | **Engine interception** | 3-tier summarization: redact → entropy → TF-IDF relevance → engine summarization (with fallback chain) |
+| 11 | **Engine interception** | 3-tier summarization: redact → entropy → TF-IDF relevance → engine summarization (with fallback chain); priority 50, governed by `bouncer.fail_open` |
 | 12 | **Token budget trimming** | if `hard_limit_tokens` exceeded (drop oldest messages, truncate next with middle-out) |
 | 13 | **Format-aware body conversion** | if model has `format: "anthropic"` |
 | 14 | **JSON minification** | final body compaction |
