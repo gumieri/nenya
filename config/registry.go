@@ -124,12 +124,10 @@ var ProviderRegistry = map[string]ProviderEntry{
 		AuthStyle: "bearer",
 		FormatURLs: map[string]string{
 			"anthropic": "https://opencode.ai/zen/v1/messages",
+			// System One decision endpoint (TypeSafe Jev). Used by
+			// /v1/systemone; non_chat_models keeps these models out of chat.
+			"systemone": "https://opencode.ai/zen/v1/systemone",
 		},
-		// TypeSafe Jev System One decision models are served by Zen at
-		// https://opencode.ai/zen/v1/systemone (a non-chat, non-streaming
-		// endpoint). Classify them so chat routing refuses them and
-		// /v1/models does not advertise them; use /proxy/ or the dedicated
-		// decisions endpoint instead.
 		NonChatModels: []string{`^jev-`},
 	},
 	"ollama": {

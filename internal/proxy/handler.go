@@ -129,6 +129,7 @@ func (p *Proxy) resolveRoute(path string) routeHandler {
 		{false, "/v1/models", p.chainModels},
 		{false, "/v1/chat/completions", p.chainChat},
 		{false, "/v1/messages", p.chainChat},
+		{false, "/v1/systemone", p.chainSystemOne},
 		{false, "/v1/embeddings", p.chainEmbeddings},
 		{true, "/v1/responses", p.chainResponses},
 		{true, "/proxy/", p.chainProxy},
@@ -215,6 +216,12 @@ func (p *Proxy) chainChat(gw *gateway.NenyaGateway, w http.ResponseWriter, r *ht
 func (p *Proxy) chainEmbeddings(gw *gateway.NenyaGateway, w http.ResponseWriter, r *http.Request) {
 	p.chainEndpoint(http.MethodPost, "/v1/embeddings", true, func(gw *gateway.NenyaGateway, w http.ResponseWriter, r *http.Request, apiKey *config.ApiKey) {
 		p.handleEmbeddings(gw, w, r, apiKey)
+	})(gw, w, r)
+}
+
+func (p *Proxy) chainSystemOne(gw *gateway.NenyaGateway, w http.ResponseWriter, r *http.Request) {
+	p.chainEndpoint(http.MethodPost, "/v1/systemone", true, func(gw *gateway.NenyaGateway, w http.ResponseWriter, r *http.Request, apiKey *config.ApiKey) {
+		p.handleSystemOne(gw, w, r, apiKey)
 	})(gw, w, r)
 }
 
