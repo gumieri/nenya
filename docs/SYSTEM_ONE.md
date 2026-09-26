@@ -140,6 +140,13 @@ Requires only `provider_keys.zen` in the secrets file. Limits: bypasses the
 content pipeline, circuit breaker, and per-model token accounting; it is
 RBAC-gated as `/proxy/*`.
 
+**Validated** against a local Nenya build: the request above returns `200`
+with the answers relayed verbatim; a wrong client token returns `403`
+`error_kind=auth_failed` (so the client `Authorization` is replaced by the
+provider key, never forwarded); `/statsz` records `proxy:zen.requests` and
+`proxy:zen.errors`, but `input_tokens`/`output_tokens` stay `0` — the
+passthrough path does not account for decision usage.
+
 ### 2. First-class endpoint (planned)
 
 `POST /v1/systemone` — Nenya authenticates with the client token, resolves the
