@@ -39,7 +39,12 @@ Model IDs served by Zen:
 | Model ID | Access with an OpenCode **Go** key |
 |----------|-----------------------------------|
 | `jev-1.13-free` | ✅ works (limited-time free model) |
-| `jev-1.13` | ❌ `403` `Model access is disabled` |
+| `jev-1.13` | ⚠️ must be enabled for the workspace; billing is required — an unfunded account returns `402 Insufficient account funds` |
+
+Model access is a workspace setting on the Zen side: a rejected entitlement
+surfaces as `403` `Model access is disabled`, an enabled-but-unfunded paid model
+as `402` `Insufficient account funds`. Nenya relays both statuses verbatim (no
+retry — only 5xx are retried), so the client sees the real cause.
 
 The newer Go endpoint (`/zen/go/v1/systemone`) does **not** serve Jev: it
 returns `400 Model is unavailable` even with a session header.
@@ -107,12 +112,14 @@ reports token counts; input tokens are billed (output tokens are free for Jev).
 | missing/invalid key | `401` |
 | malformed question (validation) | `400` with `{"detail": "..."}` |
 | `stream: true` | `400` `{"detail":{"error_type":"api_usage_error","message":"Invalid request."}}` |
-| model not permitted on the plan | `403` `{"error":{"type":"server_error","message":"Upstream request failed: Model access is disabled"}}` |
-| paid model on a Go key | `403` as above |
+| model access disabled for the workspace | `403` `{"error":{"type":"server_error","message":"Upstream request failed: Model access is disabled"}}` |
+| paid model enabled but account unfunded | `402` `{"error":{"type":"server_error","message":"Upstream request failed: Insufficient account funds"}}` |
 | `x-opencode-session` | not required on `/zen/v1/systemone` |
 
 Note: Zen uses `400` for request validation, whereas TypeSafe's own docs
 describe `422`. Treat the status class, not the literal code, as the contract.
+Nenya relays `4xx` verbatim and does not retry it; only `5xx` and transport
+errors are retried.
 
 ## Integration paths
 
