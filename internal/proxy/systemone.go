@@ -68,6 +68,7 @@ func (p *Proxy) handleSystemOne(gw *gateway.NenyaGateway, w http.ResponseWriter,
 	tokenCount := gw.CountTokens(string(bodyBytes))
 	gw.Stats.RecordRequest(modelName, tokenCount)
 	gw.Metrics.RecordUpstreamRequest(modelName, "", provider.Name)
+	gw.Metrics.RecordDecision(modelName, provider.Name)
 	gw.Metrics.RecordTokens("client", modelName, "", provider.Name, tokenCount)
 
 	ctx := r.Context()
