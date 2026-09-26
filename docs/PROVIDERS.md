@@ -225,9 +225,10 @@ Operators who still want backstops on the Coding Plan (e.g. to protect the quota
 - See [Per-Model Wire Format](#per-model-wire-format-format-attribute) for details
 - **System One decision endpoint** — `format_urls.systemone = https://opencode.ai/zen/v1/systemone` serves TypeSafe Jev models (`jev-1.13`,
   `jev-1.13-free`) through `POST /v1/systemone`. These are not chat models: built-in `non_chat_models: ["^jev-"]` keeps them out of
-  `/v1/models` and chat routing. Model access is a Zen workspace setting: a disabled entitlement returns `403 Model access is disabled`, an
-  enabled-but-unfunded paid model returns `402 Insufficient account funds` (Nenya relays both verbatim, no retry). The Go endpoint
-  (`/zen/go/v1/*`) does not serve Jev at all. See [SYSTEM_ONE.md](SYSTEM_ONE.md).
+  `/v1/models` and chat routing. **Jev is Zen-credit-billed, not Go-funded**: the Go subscription covers the `/zen/go/v1/*` model list, which
+  does not include Jev, so a Go plan with no Zen balance can call only `jev-1.13-free`. A disabled entitlement returns `403 Model access is
+  disabled`; an enabled-but-unfunded paid model returns `402 Insufficient account funds` (Nenya relays both verbatim, no retry). See
+  [SYSTEM_ONE.md](SYSTEM_ONE.md).
 
 ### Ollama
 - **Request**: Strips unsupported `tool_choice` field from request body

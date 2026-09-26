@@ -36,14 +36,19 @@ Content-Type: application/json
 
 Model IDs served by Zen:
 
-| Model ID | Access with an OpenCode **Go** key |
-|----------|-----------------------------------|
-| `jev-1.13-free` | ✅ works (limited-time free model) |
-| `jev-1.13` | ⚠️ must be enabled for the workspace; billing is required — an unfunded account returns `402 Insufficient account funds` |
+| Model ID | Billing | Access |
+|----------|---------|--------|
+| `jev-1.13-free` | none (limited-time free model) | ✅ works with any OpenCode key, no Zen balance |
+| `jev-1.13` | Zen credits (pay-as-you-go) | requires a funded Zen balance; an unfunded account returns `402 Insufficient account funds` |
 
-Model access is a workspace setting on the Zen side: a rejected entitlement
-surfaces as `403` `Model access is disabled`, an enabled-but-unfunded paid model
-as `402` `Insufficient account funds`. Nenya relays both statuses verbatim (no
+**Jev is billed against Zen credits, not the OpenCode Go subscription.** The Go
+subscription funds the Go model list (served at `/zen/go/v1/*`); Jev is not in
+that list and `/zen/go/v1/systemone` returns `400 Model is unavailable`. A Go
+plan with no Zen balance can therefore call `jev-1.13-free` but not `jev-1.13`.
+
+Model access is also a workspace setting: a disabled entitlement surfaces as
+`403 Model access is disabled`, an enabled-but-unfunded paid model as
+`402 Insufficient account funds`. Nenya relays both statuses verbatim (no
 retry — only 5xx are retried), so the client sees the real cause.
 
 The newer Go endpoint (`/zen/go/v1/systemone`) does **not** serve Jev: it
