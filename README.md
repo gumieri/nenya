@@ -269,7 +269,7 @@ Nenya supports standard environment variables for deployment portability:
 | `HOST` | — | Optional bind address (e.g. `127.0.0.1`). Only used when combined with `PORT` |
 | `NENYA_CONFIG_DIR` | `/etc/nenya/` | Configuration directory path |
 | `NENYA_CONFIG_FILE` | — | Single config file path (takes precedence over `NENYA_CONFIG_DIR`) |
-| `NENYA_SECRETS_DIR` | — | Secrets directory (overrides `CREDENTIALS_DIRECTORY`) |
+| `NENYA_SECRETS_DIR` | `/run/secrets/nenya` | Secrets directory; used only when `CREDENTIALS_DIRECTORY` does not supply secrets |
 
 Example usage:
 ```bash
@@ -285,6 +285,7 @@ docker run -e PORT=9090 -p 9090:9090 ghcr.io/gumieri/nenya:latest
 
 | Document | Description |
 |----------|-------------|
+| [Consumer Contract](CONTRACT.md) | External interface contract for managers/tooling: CLI surface, on-disk layout and precedence, release artifacts, service units, HTTP surface, versioning |
 | [Providers](docs/PROVIDERS.md) | All 23 providers, capabilities matrix, special behaviors, adding custom providers |
 | [Configuration](docs/CONFIGURATION.md) | Full config reference, directory mode, all sections and fields |
 | [Deploy Bare Metal](docs/DEPLOY_BAREMETAL.md) | Systemd unit, config.d layout, secrets, hot reload |

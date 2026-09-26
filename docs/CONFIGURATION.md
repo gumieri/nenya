@@ -64,7 +64,7 @@ When a **file** is specified, only that file is loaded (single-file mode, unchan
 
 ## Multi-File Configuration (Directory Mode)
 
-When `-config` points to a directory (the default), Nenya loads all `*.json` files in sorted order and deep-merges them:
+When directory mode is selected (`-config-dir`, or the default `/etc/nenya/`), Nenya loads all `*.json` files in `config.d/` in sorted order and merges them. `-config` selects single-file mode and must point at a file:
 
 ```
 /etc/nenya/
