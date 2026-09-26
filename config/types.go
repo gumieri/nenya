@@ -427,6 +427,17 @@ type ProviderConfig struct {
 	// means all models are allowed (default behavior). Patterns are unanchored
 	// MatchString semantics — anchor with ^...$ for exact pinning.
 	AllowedModels []string `json:"allowed_models,omitempty"`
+	// NonChatModels is a list of RE2 regex patterns identifying models
+	// served by this provider that are NOT chat-completions models (e.g.
+	// TypeSafe Jev System One decision models on OpenCode Zen). Matching
+	// models are excluded from the /v1/models catalog and from agent/
+	// direct-model routing, so a chat request naming one fails fast with
+	// a structured 400 instead of a doomed upstream call. The /proxy/
+	// passthrough and any dedicated decision endpoint are unaffected.
+	// Empty or omitted means no model is classified as non-chat. Patterns
+	// use unanchored MatchString semantics — anchor with ^...$ for exact
+	// pinning.
+	NonChatModels []string `json:"non_chat_models,omitempty"`
 }
 
 // AccountConfig defines a single credential/account for multi-account providers.
@@ -490,6 +501,11 @@ type Provider struct {
 	Billing                *BillingConfig
 	AllowedModels          []string
 	allowedRE              []*regexp.Regexp
+	// NonChatModels mirrors ProviderConfig.NonChatModels (RE2 patterns for
+	// models that are not chat-completions models). nonChatRE holds the
+	// compiled patterns; when both are empty no model is non-chat.
+	NonChatModels []string
+	nonChatRE     []*regexp.Regexp
 	// MaxConcurrentRequests caps in-flight requests dispatched to this
 	// provider (0 = unlimited). See ProviderConfig.MaxConcurrentRequests.
 	MaxConcurrentRequests int
@@ -597,6 +613,86 @@ func CompileAllowedModels(patterns []string) ([]*regexp.Regexp, error) {
 		res[i] = re
 	}
 	return res, nil
+}
+
+// CompileNonChatModels compiles non_chat_models patterns. Returns compiled
+// regexes or an error on an invalid pattern.
+func CompileNonChatModels(patterns []string) ([]*regexp.Regexp, error) {
+	if len(patterns) == 0 {
+		return nil, nil
+	}
+	res := make([]*regexp.Regexp, len(patterns))
+	for i, pat := range patterns {
+		re, err := regexp.Compile(pat)
+		if err != nil {
+			return nil, fmt.Errorf("invalid non_chat_models pattern %q: %w", pat, err)
+		}
+		res[i] = re
+	}
+	return res, nil
+}
+
+// IsNonChatModel reports whether the model ID is classified by this
+// provider's non_chat_models patterns as a model that is not served by the
+// chat-completions endpoint (e.g. TypeSafe Jev System One decision models).
+// An empty pattern list means no model is non-chat.
+func (p *Provider) IsNonChatModel(id string) bool {
+	if p == nil {
+		return false
+	}
+	for _, re := range p.nonChatRE {
+		if re.MatchString(id) {
+			return true
+		}
+	}
+	return false
+}
+
+// AnyProviderServesAsChat reports whether any provider that actually serves
+// the model ID does so as a chat model. A provider "serves" the ID when the
+// merged catalog contains an entry for it under that provider. Providers that
+// have no entry for the ID are irrelevant: they have no opinion, so they must
+// not veto the non-chat classification (otherwise one provider's non-chat
+// class could be overridden by 23 unrelated built-ins that never serve it).
+//
+// servable lists the (provider, model) pairs that serve the ID (from the
+// merged catalog). When servable is empty the ID is unknown to the catalog;
+// providers are then consulted directly so a non_chat_models match still
+// refuses chat routing.
+func AnyProviderServesAsChat(providers map[string]*Provider, id string, servable []ServedModel) bool {
+	if len(servable) > 0 {
+		for _, s := range servable {
+			p, ok := providers[s.Provider]
+			if !ok || p == nil {
+				continue
+			}
+			if !p.IsNonChatModel(id) {
+				return true
+			}
+		}
+		return false
+	}
+
+	for _, p := range providers {
+		if p == nil {
+			continue
+		}
+		// Unknown to the catalog: treat a provider that classifies the ID as
+		// non-chat as evidence it is non-chat; a provider with no opinion is
+		// only consulted if it could plausibly serve the ID. Since we cannot
+		// know, defer to the caller's catalog check and only treat an explicit
+		// non-chat classification anywhere as decisive.
+		if p.IsNonChatModel(id) {
+			return false
+		}
+	}
+	return true
+}
+
+// ServedModel identifies a (provider, model) pair that serves a model ID.
+type ServedModel struct {
+	Provider string
+	Model    string
 }
 
 // Config is the top-level configuration for the Nenya gateway. It is

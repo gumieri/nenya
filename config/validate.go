@@ -311,6 +311,9 @@ func validateProviders(ctx context.Context, providers map[string]*Provider, logg
 		if provider.ResponseHeaderTimeoutSeconds > MaxTimeoutSeconds {
 			errors = append(errors, fmt.Sprintf("providers[%q].response_header_timeout_seconds exceeds maximum allowed value (%d seconds / 24 hours), got %d", name, MaxTimeoutSeconds, provider.ResponseHeaderTimeoutSeconds))
 		}
+		if _, err := CompileNonChatModels(provider.NonChatModels); err != nil {
+			errors = append(errors, fmt.Sprintf("providers[%q]: %v", name, err))
+		}
 		if provider.StreamIdleTimeoutSeconds < 0 {
 			errors = append(errors, fmt.Sprintf("providers[%q].stream_idle_timeout_seconds must be non-negative (set to 0 to use global default), got %d", name, provider.StreamIdleTimeoutSeconds))
 		}

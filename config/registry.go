@@ -124,7 +124,11 @@ var ProviderRegistry = map[string]ProviderEntry{
 		AuthStyle: "bearer",
 		FormatURLs: map[string]string{
 			"anthropic": "https://opencode.ai/zen/v1/messages",
+			// System One decision endpoint (TypeSafe Jev). Used by
+			// /v1/systemone; non_chat_models keeps these models out of chat.
+			"systemone": "https://opencode.ai/zen/v1/systemone",
 		},
+		NonChatModels: []string{`^jev-`},
 	},
 	"ollama": {
 		URL:       "http://127.0.0.1:11434/v1/chat/completions",

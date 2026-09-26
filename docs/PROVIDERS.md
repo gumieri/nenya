@@ -223,6 +223,10 @@ Operators who still want backstops on the Coding Plan (e.g. to protect the quota
 - **Multi-format gateway** — Claude models auto-convert to Anthropic wire format
 - Supports both `format: "openai"` and `format: "anthropic"` per model
 - See [Per-Model Wire Format](#per-model-wire-format-format-attribute) for details
+- **System One decision endpoint** — `format_urls.systemone = https://opencode.ai/zen/v1/systemone` serves TypeSafe Jev models (`jev-1.13`,
+  `jev-1.13-free`) through `POST /v1/systemone`. These are not chat models: built-in `non_chat_models: ["^jev-"]` keeps them out of
+  `/v1/models` and chat routing. An OpenCode **Go** key reaches only `jev-1.13-free` (the paid model returns `403 Model access is disabled`),
+  and the `/zen/go/v1/*` endpoint does not serve Jev at all. See [SYSTEM_ONE.md](SYSTEM_ONE.md).
 
 ### Ollama
 - **Request**: Strips unsupported `tool_choice` field from request body

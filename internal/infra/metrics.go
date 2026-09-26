@@ -48,6 +48,8 @@ type Metrics struct {
 	windowApplied sync.Map
 	interceptions sync.Map
 	tokensSaved   sync.Map
+	// decisions counts System One decision requests by model and provider.
+	decisions sync.Map
 
 	rlRejected         sync.Map
 	cooldowns          sync.Map
@@ -274,6 +276,18 @@ func (m *Metrics) RecordUpstreamRequest(model, agent, provider string) {
 	}
 	e := getOrCreateEntry(&m.reqTotal, map[string]string{
 		"model": model, "agent": agent, "provider": provider,
+	})
+	e.value.Add(1)
+}
+
+// RecordDecision records a System One decision request (TypeSafe Jev) by model
+// and provider. Nil-safe.
+func (m *Metrics) RecordDecision(model, provider string) {
+	if m == nil {
+		return
+	}
+	e := getOrCreateEntry(&m.decisions, map[string]string{
+		"model": model, "provider": provider,
 	})
 	e.value.Add(1)
 }
@@ -1241,6 +1255,21 @@ func (m *Metrics) DecInFlight(model, agent, provider string) {
 	}
 }
 
+// writePipelineMetrics emits the content-pipeline and System One decision
+// counters (compaction, window, token savings, interceptions, decisions).
+func (m *Metrics) writePipelineMetrics(w io.Writer) {
+	m.writeCounterAtomic(w, "nenya_pipeline_compaction_applied_total",
+		"Total text compaction passes applied.", m.compactions.Load())
+	m.writeCounterMap(w, "nenya_pipeline_window_applied_total",
+		"Total window compaction passes applied.", &m.windowApplied)
+	m.writeCounterMap(w, "nenya_pipeline_tokens_saved_total",
+		"Tokens removed from request payloads by pipeline stage (trim, window, bouncer).", &m.tokensSaved)
+	m.writeCounterMap(w, "nenya_pipeline_interceptions_total",
+		"Total Ollama interceptions by trigger reason.", &m.interceptions)
+	m.writeCounterMap(w, "nenya_decisions_total",
+		"Total System One decision requests by model and provider.", &m.decisions)
+}
+
 func (m *Metrics) WritePrometheus(w io.Writer) {
 	if m == nil {
 		return
@@ -1278,14 +1307,7 @@ func (m *Metrics) WritePrometheus(w io.Writer) {
 	m.writeSpotlighted(w)
 	m.writeExfilDetections(w)
 	m.writeExfilEvents(w)
-	m.writeCounterAtomic(w, "nenya_pipeline_compaction_applied_total",
-		"Total text compaction passes applied.", m.compactions.Load())
-	m.writeCounterMap(w, "nenya_pipeline_window_applied_total",
-		"Total window compaction passes applied.", &m.windowApplied)
-	m.writeCounterMap(w, "nenya_pipeline_tokens_saved_total",
-		"Tokens removed from request payloads by pipeline stage (trim, window, bouncer).", &m.tokensSaved)
-	m.writeCounterMap(w, "nenya_pipeline_interceptions_total",
-		"Total Ollama interceptions by trigger reason.", &m.interceptions)
+	m.writePipelineMetrics(w)
 	m.writeCounterMap(w, "nenya_ratelimit_rejected_total",
 		"Total requests rejected by rate limiter.", &m.rlRejected)
 	m.writeCounterMap(w, "nenya_concurrency_rejected_total",

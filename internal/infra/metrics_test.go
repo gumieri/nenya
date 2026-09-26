@@ -244,11 +244,28 @@ func TestMetrics_NewMetrics(t *testing.T) {
 	}
 }
 
+func TestMetrics_RecordDecisionPrometheus(t *testing.T) {
+	m := NewMetrics()
+	m.RecordDecision("jev-1.13-free", "zen")
+	m.RecordDecision("jev-1.13-free", "zen")
+
+	var buf bytes.Buffer
+	m.WritePrometheus(&buf)
+	out := buf.String()
+	if !strings.Contains(out, "nenya_decisions_total") {
+		t.Fatalf("missing nenya_decisions_total in:\n%s", out)
+	}
+	if !strings.Contains(out, `model="jev-1.13-free"`) || !strings.Contains(out, `provider="zen"`) {
+		t.Fatalf("decisions metric missing model/provider labels:\n%s", out)
+	}
+}
+
 func TestMetrics_NilSafety(t *testing.T) {
 	var m *Metrics
 
 	m.RecordTokens("input", "m", "a", "p", 100)
 	m.RecordUpstreamRequest("m", "a", "p")
+	m.RecordDecision("m", "p")
 	m.RecordUpstreamError("m", "a", "p", 500)
 	m.RecordHTTPRequest("POST", "/p", 200, time.Second)
 	m.RecordRedaction(1)

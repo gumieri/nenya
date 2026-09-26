@@ -129,6 +129,40 @@ func (c *ModelCatalog) UpdateFetchedAt(t time.Time) {
 	c.fetchedAt = t
 }
 
+// Remove deletes every model entry for which match returns true, keeping the
+// models and providers indexes consistent. Used to drop non-chat models from
+// an externally-built catalog (see ApplyProviderNonChatToCatalog).
+func (c *ModelCatalog) Remove(match func(DiscoveredModel) bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for id, entries := range c.models {
+		kept := entries[:0]
+		for _, m := range entries {
+			if !match(m) {
+				kept = append(kept, m)
+			}
+		}
+		if len(kept) == 0 {
+			delete(c.models, id)
+		} else {
+			c.models[id] = kept
+		}
+	}
+	for provider, ids := range c.providers {
+		kept := ids[:0]
+		for _, id := range ids {
+			if _, ok := c.models[id]; ok {
+				kept = append(kept, id)
+			}
+		}
+		if len(kept) == 0 {
+			delete(c.providers, provider)
+		} else {
+			c.providers[provider] = kept
+		}
+	}
+}
+
 func (c *ModelCatalog) AttachPricing(pricing map[string]PricingEntry) {
 	c.mu.Lock()
 	defer c.mu.Unlock()

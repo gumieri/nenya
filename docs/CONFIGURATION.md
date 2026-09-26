@@ -644,6 +644,7 @@ To add or override a provider:
 | `accounts` | []AccountConfig | Multi-account credential pool with LRU selection and error classification. See Multi-Account Per-Provider Keys below. |
 | `thinking` | ThinkingConfig | Per-provider thinking/reasoning mode configuration for reasoning-capable models. See Thinking Configuration below. |
 | `allowed_models` | []string | RE2 regex patterns for model allowlist filtering on this provider. Models that do not match any pattern are excluded from `/v1/models` discovery and blocked in routing (400 error). Empty/omitted = all models allowed. Use `^…$` anchoring for exact pinning. |
+| `non_chat_models` | []string | RE2 regex patterns classifying models that are **not** served by the chat-completions endpoint (e.g. TypeSafe Jev System One decision models on OpenCode Zen). Matching models are excluded from `/v1/models` and the merged catalog, and chat requests naming one fail fast with `400 error_kind=invalid_request`. The built-in `zen` provider defaults this to `["^jev-"]`. Empty/omitted = no model is classified as non-chat. Use `^…$` anchoring for exact pinning. |
 
 **Note**: The `BaseURL` field is automatically derived from `url` by stripping the path component. This is used by the `/proxy/{provider}/*` passthrough endpoint to construct arbitrary provider URLs. For example, if `url` is `https://api.anthropic.com/v1/messages`, the derived `BaseURL` is `https://api.anthropic.com`, allowing passthrough to `/proxy/anthropic/v1/models`.
 

@@ -11,6 +11,7 @@ import (
 	"testing/iotest"
 
 	"github.com/nenya/config"
+	"github.com/nenya/internal/discovery"
 	"github.com/nenya/internal/gateway"
 	"github.com/nenya/internal/infra"
 	"github.com/nenya/internal/pipeline"
@@ -271,6 +272,38 @@ func TestResolveModelRouting_UnknownModel(t *testing.T) {
 	}
 	if herr.Kind != infra.ErrorKindModelNotFound {
 		t.Fatalf("error_kind = %q, want %q", herr.Kind, infra.ErrorKindModelNotFound)
+	}
+}
+
+func TestResolveModelRouting_NonChatModel(t *testing.T) {
+	providers := config.ResolveProviders(
+		&config.Config{Providers: map[string]config.ProviderConfig{
+			"zen": {
+				URL:           "https://opencode.ai/zen/v1/chat/completions",
+				AuthStyle:     "bearer",
+				NonChatModels: []string{`^jev-`},
+			},
+		}},
+		&config.SecretsConfig{ProviderKeys: map[string]string{"zen": "test-key"}},
+	)
+	gw := &gateway.NenyaGateway{
+		Logger:       testLog(t),
+		Config:       config.Config{},
+		Providers:    providers,
+		ModelCatalog: discovery.NewModelCatalog(),
+	}
+	p := &Proxy{}
+
+	req := &chatRequest{ModelName: "jev-1.13-free"}
+	_, _, _, _, herr := p.resolveModelRouting(context.Background(), req, gw)
+	if herr == nil {
+		t.Fatal("expected httpError for a non-chat model, got nil")
+	}
+	if herr.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d", herr.Code)
+	}
+	if herr.Kind != infra.ErrorKindInvalidRequest {
+		t.Fatalf("error_kind = %q, want %q", herr.Kind, infra.ErrorKindInvalidRequest)
 	}
 }
 

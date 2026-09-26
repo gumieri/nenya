@@ -39,6 +39,12 @@ func JoinBackticks(names []string) string {
 // resolved for a given model name.
 const ErrNoProvider = "No provider configured for this model"
 
+// ErrNonChatModel is the error message returned when a model is configured
+// as a non-chat model (e.g. a TypeSafe Jev System One decision model) and a
+// chat-completions request names it. Such models are reached through the
+// /proxy/ passthrough or a dedicated decision endpoint, not chat routing.
+const ErrNonChatModel = "Model is not a chat model; use the decision endpoint or /proxy/ passthrough"
+
 // ProviderCanServe returns true if the provider is configured with either
 // an API key or auth_style "none" (i.e. can actually make upstream requests).
 func ProviderCanServe(p *config.Provider) bool {

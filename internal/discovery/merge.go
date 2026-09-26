@@ -27,6 +27,7 @@ func MergeCatalog(catalog *ModelCatalog, cfg *config.Config) *ModelCatalog {
 	merged := NewModelCatalog()
 	agentOverrides := buildAgentOverrides(cfg)
 	providerAllows := buildProviderAllows(cfg.Providers)
+	providerNonChat := buildProviderNonChat(cfg.Providers)
 
 	allModelIDs := make(map[string]bool)
 	for id := range config.ModelRegistry {
@@ -37,7 +38,7 @@ func MergeCatalog(catalog *ModelCatalog, cfg *config.Config) *ModelCatalog {
 	}
 
 	for modelID := range allModelIDs {
-		mergeModel(merged, modelID, catalog, agentOverrides, providerAllows)
+		mergeModel(merged, modelID, catalog, agentOverrides, providerAllows, providerNonChat)
 	}
 	return merged
 }
@@ -87,29 +88,93 @@ func isModelAllowed(providerAllows map[string][]*regexp.Regexp, provider, model 
 	return false
 }
 
-func mergeModel(merged *ModelCatalog, modelID string, catalog *ModelCatalog, overrides map[string]agentOverride, providerAllows map[string][]*regexp.Regexp) {
+// buildProviderNonChat compiles non_chat_models patterns per provider.
+// Returns map[providerName][]*regexp.Regexp (nil = no filtering).
+func buildProviderNonChat(providers map[string]config.ProviderConfig) map[string][]*regexp.Regexp {
+	if len(providers) == 0 {
+		return nil
+	}
+	result := make(map[string][]*regexp.Regexp, len(providers))
+	for name, pc := range providers {
+		if len(pc.NonChatModels) == 0 {
+			continue
+		}
+		res := make([]*regexp.Regexp, 0, len(pc.NonChatModels))
+		for _, pat := range pc.NonChatModels {
+			re, err := regexp.Compile(pat)
+			if err != nil {
+				continue
+			}
+			res = append(res, re)
+		}
+		if len(res) > 0 {
+			result[name] = res
+		}
+	}
+	if len(result) == 0 {
+		return nil
+	}
+	return result
+}
+
+// isNonChat reports whether the (provider, model) pair is classified as a
+// non-chat model by providerNonChat patterns.
+func isNonChat(providerNonChat map[string][]*regexp.Regexp, provider, model string) bool {
+	if len(providerNonChat) == 0 {
+		return false
+	}
+	patterns, has := providerNonChat[provider]
+	if !has || len(patterns) == 0 {
+		return false
+	}
+	for _, re := range patterns {
+		if re.MatchString(model) {
+			return true
+		}
+	}
+	return false
+}
+
+// ApplyProviderNonChatToCatalog removes non-chat models from a catalog that
+// was built without the non_chat_models filter, mutating it in place. Used
+// for personalities that consume an externally-built catalog (e.g. the
+// pricing fetcher) where the raw provider config is the source of truth.
+func ApplyProviderNonChatToCatalog(catalog *ModelCatalog, providers map[string]config.ProviderConfig) {
+	if catalog == nil || len(providers) == 0 {
+		return
+	}
+	nonChat := buildProviderNonChat(providers)
+	if len(nonChat) == 0 {
+		return
+	}
+	catalog.Remove(func(m DiscoveredModel) bool {
+		return isNonChat(nonChat, m.Provider, m.ID)
+	})
+}
+
+func mergeModel(merged *ModelCatalog, modelID string, catalog *ModelCatalog, overrides map[string]agentOverride, providerAllows map[string][]*regexp.Regexp, providerNonChat map[string][]*regexp.Regexp) {
 	if override, hasOverride := overrides[modelID]; hasOverride {
-		mergeWithOverride(merged, modelID, catalog, override, providerAllows)
+		mergeWithOverride(merged, modelID, catalog, override, providerAllows, providerNonChat)
 		return
 	}
 
 	static, hasStatic := config.ModelRegistry[modelID]
 	if hasStatic {
-		mergeWithStatic(merged, modelID, catalog, static, providerAllows)
+		mergeWithStatic(merged, modelID, catalog, static, providerAllows, providerNonChat)
 		return
 	}
 
 	entries := catalog.LookupAll(modelID)
 	seenProviders := map[string]bool{}
 	for _, dm := range entries {
-		if !seenProviders[dm.Provider] && isModelAllowed(providerAllows, dm.Provider, modelID) {
+		if !seenProviders[dm.Provider] && isModelAllowed(providerAllows, dm.Provider, modelID) && !isNonChat(providerNonChat, dm.Provider, modelID) {
 			seenProviders[dm.Provider] = true
 			merged.Add(dm)
 		}
 	}
 }
 
-func mergeWithOverride(merged *ModelCatalog, modelID string, catalog *ModelCatalog, override agentOverride, providerAllows map[string][]*regexp.Regexp) {
+func mergeWithOverride(merged *ModelCatalog, modelID string, catalog *ModelCatalog, override agentOverride, providerAllows map[string][]*regexp.Regexp, providerNonChat map[string][]*regexp.Regexp) {
 	static, hasStatic := config.ModelRegistry[modelID]
 	allDiscovered := catalog.LookupAll(modelID)
 
@@ -124,7 +189,7 @@ func mergeWithOverride(merged *ModelCatalog, modelID string, catalog *ModelCatal
 	primaryProvider := firstNonEmpty(override.Provider,
 		pickProvider(hasStatic, static.Provider, hasDiscovered, discovered.Provider))
 
-	if !isModelAllowed(providerAllows, primaryProvider, modelID) {
+	if !isModelAllowed(providerAllows, primaryProvider, modelID) || isNonChat(providerNonChat, primaryProvider, modelID) {
 		return
 	}
 
@@ -145,7 +210,7 @@ func mergeWithOverride(merged *ModelCatalog, modelID string, catalog *ModelCatal
 
 	seenProviders := map[string]bool{primaryProvider: true}
 	for _, dm := range allDiscovered {
-		if dm.Provider != "" && !seenProviders[dm.Provider] && isModelAllowed(providerAllows, dm.Provider, modelID) {
+		if dm.Provider != "" && !seenProviders[dm.Provider] && isModelAllowed(providerAllows, dm.Provider, modelID) && !isNonChat(providerNonChat, dm.Provider, modelID) {
 			seenProviders[dm.Provider] = true
 			merged.Add(DiscoveredModel{
 				ID:       modelID,
@@ -164,7 +229,7 @@ func mergeWithOverride(merged *ModelCatalog, modelID string, catalog *ModelCatal
 	}
 }
 
-func mergeWithStatic(merged *ModelCatalog, modelID string, catalog *ModelCatalog, static config.ModelEntry, providerAllows map[string][]*regexp.Regexp) {
+func mergeWithStatic(merged *ModelCatalog, modelID string, catalog *ModelCatalog, static config.ModelEntry, providerAllows map[string][]*regexp.Regexp, providerNonChat map[string][]*regexp.Regexp) {
 	allDiscovered := catalog.LookupAll(modelID)
 
 	// Use the first discovered entry for metadata and format fallback.
@@ -182,7 +247,7 @@ func mergeWithStatic(merged *ModelCatalog, modelID string, catalog *ModelCatalog
 	primaryProvider := firstNonEmpty(static.Provider,
 		pickProvider(false, "", hasDiscovered, discovered.Provider))
 
-	if !isModelAllowed(providerAllows, primaryProvider, modelID) {
+	if !isModelAllowed(providerAllows, primaryProvider, modelID) || isNonChat(providerNonChat, primaryProvider, modelID) {
 		return
 	}
 
@@ -201,7 +266,7 @@ func mergeWithStatic(merged *ModelCatalog, modelID string, catalog *ModelCatalog
 
 	seenProviders := map[string]bool{primaryProvider: true}
 	for _, dm := range allDiscovered {
-		if dm.Provider != "" && !seenProviders[dm.Provider] && isModelAllowed(providerAllows, dm.Provider, modelID) {
+		if dm.Provider != "" && !seenProviders[dm.Provider] && isModelAllowed(providerAllows, dm.Provider, modelID) && !isNonChat(providerNonChat, dm.Provider, modelID) {
 			seenProviders[dm.Provider] = true
 			merged.Add(DiscoveredModel{
 				ID:       modelID,

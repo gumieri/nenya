@@ -129,6 +129,7 @@ func (p *Proxy) resolveRoute(path string) routeHandler {
 		{false, "/v1/models", p.chainModels},
 		{false, "/v1/chat/completions", p.chainChat},
 		{false, "/v1/messages", p.chainChat},
+		{false, "/v1/systemone", p.chainSystemOne},
 		{false, "/v1/embeddings", p.chainEmbeddings},
 		{true, "/v1/responses", p.chainResponses},
 		{true, "/proxy/", p.chainProxy},
@@ -215,6 +216,12 @@ func (p *Proxy) chainChat(gw *gateway.NenyaGateway, w http.ResponseWriter, r *ht
 func (p *Proxy) chainEmbeddings(gw *gateway.NenyaGateway, w http.ResponseWriter, r *http.Request) {
 	p.chainEndpoint(http.MethodPost, "/v1/embeddings", true, func(gw *gateway.NenyaGateway, w http.ResponseWriter, r *http.Request, apiKey *config.ApiKey) {
 		p.handleEmbeddings(gw, w, r, apiKey)
+	})(gw, w, r)
+}
+
+func (p *Proxy) chainSystemOne(gw *gateway.NenyaGateway, w http.ResponseWriter, r *http.Request) {
+	p.chainEndpoint(http.MethodPost, "/v1/systemone", true, func(gw *gateway.NenyaGateway, w http.ResponseWriter, r *http.Request, apiKey *config.ApiKey) {
+		p.handleSystemOne(gw, w, r, apiKey)
 	})(gw, w, r)
 }
 
@@ -610,6 +617,58 @@ func applyModelFields(entry *modelEntry, maxCtx, maxOut int, meta *discovery.Mod
 	}
 }
 
+// catalogModelEntries converts catalog models into /v1/models entries,
+// skipping providers without credentials, non-chat models, and IDs already
+// seen (from agent pseudo-models). seen is mutated to record emitted IDs.
+func catalogModelEntries(gw *gateway.NenyaGateway, seen map[string]bool) []modelEntry {
+	if gw.ModelCatalog == nil {
+		return nil
+	}
+	var models []modelEntry
+	for _, m := range gw.ModelCatalog.AllModels() {
+		if !catalogModelEligible(gw, m, seen) {
+			continue
+		}
+		seen[m.ID] = true
+		entry := modelEntry{ID: m.ID, Object: "model", OwnedBy: m.OwnedBy}
+		applyModelFields(&entry, m.MaxContext, m.MaxOutput, m.Metadata, m.Pricing)
+		models = append(models, entry)
+	}
+	return models
+}
+
+// isNonChatModel reports whether a model ID is a chat model from the gateway's
+// perspective: at least one provider that actually serves it treats it as a
+// chat model. Providers with no catalog entry for the ID have no opinion and
+// cannot veto the classification.
+func isNonChatModel(gw *gateway.NenyaGateway, model string) bool {
+	if gw.ModelCatalog == nil {
+		return !config.AnyProviderServesAsChat(gw.Providers, model, nil)
+	}
+	var servable []config.ServedModel
+	for _, m := range gw.ModelCatalog.LookupAll(model) {
+		servable = append(servable, config.ServedModel{Provider: m.Provider, Model: m.ID})
+	}
+	return !config.AnyProviderServesAsChat(gw.Providers, model, servable)
+}
+
+// catalogModelEligible reports whether a catalog model should appear in
+// /v1/models: its provider is configured, the model is a chat model, and it
+// has not already been emitted.
+func catalogModelEligible(gw *gateway.NenyaGateway, m discovery.DiscoveredModel, seen map[string]bool) bool {
+	provider, ok := gw.Providers[m.Provider]
+	if !ok {
+		return false
+	}
+	if provider.APIKey == "" && provider.AuthStyle != config.AuthStyleNone {
+		return false
+	}
+	if provider.IsNonChatModel(m.ID) {
+		return false
+	}
+	return !seen[m.ID]
+}
+
 // handleModels returns the list of available models from all configured providers.
 func (p *Proxy) handleModels(w http.ResponseWriter) {
 	gw := p.Gateway()
@@ -622,28 +681,16 @@ func (p *Proxy) handleModels(w http.ResponseWriter) {
 	seen := make(map[string]bool)
 
 	for agentName, agent := range gw.Config.Agents {
+		if len(agent.Models) == 1 && isNonChatModel(gw, agent.Models[0].Model) {
+			// A single-model agent that resolves to a non-chat model (e.g.
+			// jev-1.13-free) is not a chat target; don't advertise it.
+			continue
+		}
 		seen[agentName] = true
 		models = append(models, buildAgentModelEntry(agentName, agent, gw))
 	}
 
-	if gw.ModelCatalog != nil {
-		for _, m := range gw.ModelCatalog.AllModels() {
-			provider, ok := gw.Providers[m.Provider]
-			if !ok {
-				continue
-			}
-			if provider.APIKey == "" && provider.AuthStyle != config.AuthStyleNone {
-				continue
-			}
-			if seen[m.ID] {
-				continue
-			}
-			seen[m.ID] = true
-			entry := modelEntry{ID: m.ID, Object: "model", OwnedBy: m.OwnedBy}
-			applyModelFields(&entry, m.MaxContext, m.MaxOutput, m.Metadata, m.Pricing)
-			models = append(models, entry)
-		}
-	}
+	models = append(models, catalogModelEntries(gw, seen)...)
 
 	resp := map[string]interface{}{
 		"object": "list",
