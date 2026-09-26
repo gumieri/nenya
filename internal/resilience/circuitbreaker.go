@@ -395,6 +395,36 @@ func (cb *CircuitBreaker) RecordFailure(key string, cooldownOverride ...time.Dur
 	}
 }
 
+// RecordOpaqueFailure marks a request failure for the circuit breaker's
+// request counters without counting it toward the failure threshold. It is
+// used by probabilistic/heuristic retry signals (e.g. an opaque 4xx body) that
+// must not bench an otherwise healthy provider: a client repeatedly provoking
+// an ambiguous body would otherwise trip the circuit for all users.
+func (cb *CircuitBreaker) RecordOpaqueFailure(key string) {
+	if key == "" {
+		return
+	}
+	cb.mu.Lock()
+	defer cb.mu.Unlock()
+
+	c := cb.getOrCreate(key)
+	if c.state == StateHalfOpen {
+		// A probe slot was consumed by Allow before the dispatch. An opaque
+		// failure is neither success nor failure, so release the slot without
+		// changing the circuit's state (otherwise repeated opaque failures
+		// permanently wedge the half-open probe budget).
+		if c.halfOpenInflight > 0 {
+			c.halfOpenInflight--
+		}
+		return
+	}
+	if c.state != StateClosed {
+		return
+	}
+	incUint32(&c.counts.Requests)
+	c.lastChange = time.Now()
+}
+
 // RecordFailureWithStatus records a failed request with HTTP status and body,
 // applying error-semantic classification and model locks.
 func (cb *CircuitBreaker) RecordFailureWithStatus(key string, status int, body string) CooldownDecision {

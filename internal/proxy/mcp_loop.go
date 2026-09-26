@@ -563,8 +563,18 @@ func (p *Proxy) forwardBuffered(gw *gateway.NenyaGateway,
 	}
 
 	attempt := 0
-	for i, target := range targets {
-		if maxRetries > 0 && attempt >= maxRetries {
+	sameTargetRetries := 0
+	maxSameTargetRetries := maxRetries
+	if maxSameTargetRetries <= 0 {
+		maxSameTargetRetries = gw.Config.Governance.EffectiveMaxRetryAttempts()
+	}
+sweep:
+	for i := 0; i < len(targets); i++ {
+		target := targets[i]
+		// max_retries bounds the retry budget; the forward sweep continues
+		// while it does not matter, but once the budget is spent the
+		// request ends rather than sweeping further.
+		if maxRetries > 0 && attempt > maxRetries {
 			gw.Logger.Warn("max retries reached in buffered mode",
 				"attempt", attempt, "max", maxRetries, "agent", agentName)
 			break
@@ -578,16 +588,52 @@ func (p *Proxy) forwardBuffered(gw *gateway.NenyaGateway,
 		}
 
 		action := p.prepareAndSend(gw, r, i, targets, target, workingPayload, cooldownDuration, tokenCount, agentName, apiKey, false)
-		result, shouldContinue := p.handleBufferedAction(ctx, gw, i, targets, target, cooldownDuration, agentName, action, attempt, maxRetries, canary)
+		if action.kind == actionError {
+			attempt++
+		}
+		result, outcome := p.handleBufferedAction(ctx, gw, i, targets, target, cooldownDuration, agentName, action, attempt, sameTargetRetries, maxRetries, canary)
 		if result != nil {
 			return result, nil
 		}
-		if !shouldContinue {
-			break
+		switch outcome.step {
+		case bufferedStepStop:
+			break sweep
+		case bufferedStepRetry:
+			// Same-target retry when no later target remains dispatchable and
+			// the same-target budget allows it (mirrors the chat loop: 413 is
+			// failover-only, and backoff applies only before the repeat).
+			if outcome.status == http.StatusRequestEntityTooLarge ||
+				hasLaterDispatchableTarget(gw, targets, i) ||
+				sameTargetRetries >= maxSameTargetRetries {
+				continue
+			}
+			sameTargetRetries++
+			gw.Logger.Info("retrying same target (buffered)",
+				"model", target.Model, "provider", target.Provider,
+				"retry", sameTargetRetries, "max", maxSameTargetRetries)
+			if !outcome.waited {
+				waitWithCancel(ctx, calculateBackoff(sameTargetRetries-1))
+			}
+			i-- // re-attempt this target
 		}
 	}
 
 	return nil, fmt.Errorf("all %d upstream targets exhausted", len(targets))
+}
+
+// hasLaterDispatchableTarget reports whether any target after index i can be
+// dispatched without hitting an open circuit breaker. Used by the MCP buffered
+// sweep (the chat loop also excludes already-rate-limited pairs, which it
+// tracks itself).
+func hasLaterDispatchableTarget(gw *gateway.NenyaGateway, targets []routing.UpstreamTarget, i int) bool {
+	for j := i + 1; j < len(targets); j++ {
+		t := targets[j]
+		if t.CoolKey != "" && gw != nil && !gw.AgentState.CB.Peek(t.CoolKey) {
+			continue
+		}
+		return true
+	}
+	return false
 }
 
 func prepareOriginalPayload(gw *gateway.NenyaGateway, payload map[string]interface{}) ([]byte, error) {
@@ -605,64 +651,101 @@ func prepareOriginalPayload(gw *gateway.NenyaGateway, payload map[string]interfa
 	return originalPayload, nil
 }
 
-func (p *Proxy) handleBufferedAction(ctx context.Context, gw *gateway.NenyaGateway, idx int, targets []routing.UpstreamTarget, target routing.UpstreamTarget, cooldownDuration time.Duration, agentName string, action upstreamAction, attempt, maxRetries int, canary pipeline.CanarResult) (*bufferedSSE, bool) {
+// bufferedStep tells the MCP buffered sweep how to proceed after a target.
+type bufferedStep int
+
+const (
+	// bufferedStepNext advances to the next target.
+	bufferedStepNext bufferedStep = iota
+	// bufferedStepRetry marks a transient failure eligible for a same-target
+	// repeat when no later target remains.
+	bufferedStepRetry
+	// bufferedStepStop ends the sweep (terminal response or unretryable error).
+	bufferedStepStop
+)
+
+// bufferedOutcome carries the buffered sweep's decision plus the metadata the
+// caller needs to mirror the chat loop: the upstream status (for the 413
+// failover-only rule) and whether the handler already slept.
+type bufferedOutcome struct {
+	step   bufferedStep
+	status int
+	waited bool
+}
+
+func (p *Proxy) handleBufferedAction(ctx context.Context, gw *gateway.NenyaGateway, idx int, targets []routing.UpstreamTarget, target routing.UpstreamTarget, cooldownDuration time.Duration, agentName string, action upstreamAction, attempt, localRetries, maxRetries int, canary pipeline.CanarResult) (*bufferedSSE, bufferedOutcome) {
+	// Every path must free the per-model concurrency slot acquired by
+	// prepareAndSend (idempotent release).
+	defer action.releaseSlot()
 	switch action.kind {
 	case actionContinue:
-		return nil, true
+		// A transient local failure (network) is eligible for a same-target
+		// repeat; guard/skip actions are not. No sleep here: the caller backs
+		// off only immediately before a repeat, so failover stays immediate.
+		if action.retryable {
+			return nil, bufferedOutcome{step: bufferedStepRetry}
+		}
+		return nil, bufferedOutcome{step: bufferedStepNext}
 	case actionError:
-		attempt++
+		status := action.resp.StatusCode
 		action.body, _ = io.ReadAll(io.LimitReader(action.resp.Body, pipeline.MaxErrorBodyBytes))
 		_ = action.resp.Body.Close()
 		// Connection-scoped (NENYA-42): client gone — no state writes, no
 		// further targets.
 		if ctx.Err() != nil {
 			action.cancel()
+			// Release the half-open probe slot consumed by the guard.
+			gw.AgentState.CB.ReleaseHalfOpen(target.CoolKey)
 			gw.Logger.Info("MCP buffered: client context canceled during upstream error handling",
 				"model", target.Model, "provider", target.Provider)
-			return nil, false
+			return nil, bufferedOutcome{step: bufferedStepStop, status: status}
 		}
 		// Request-scoped via provider config (NENYA-42): the client's payload
 		// is at fault — no cooldown/rotation state, no target sweep.
-		if p.matchRequestScopedError(gw, target.Provider, action.resp.StatusCode, action.body) != nil {
+		if p.matchRequestScopedError(gw, target.Provider, status, action.body) != nil {
 			action.cancel()
+			// No circuit outcome is recorded for a client-fault error; release
+			// the half-open probe slot consumed by the guard.
+			gw.AgentState.CB.ReleaseHalfOpen(target.CoolKey)
 			gw.Logger.Warn("MCP buffered: request-scoped error from provider, failing without rotation",
-				"model", target.Model, "provider", target.Provider, "status", action.resp.StatusCode)
-			return nil, false
+				"model", target.Model, "provider", target.Provider, "status", status)
+			return nil, bufferedOutcome{step: bufferedStepStop, status: status}
 		}
 		gw.Logger.Debug("MCP buffered: upstream error",
-			"target", idx+1,
-			"status", action.resp.StatusCode,
-			"model", target.Model,
-			"body_len", len(action.body))
-		shouldRetry, retryDelay := p.handleUpstreamError(gw, idx, targets, target, cooldownDuration, agentName, action)
+			"target", idx+1, "status", status, "model", target.Model, "body_len", len(action.body))
+		signal, retryDelay := p.handleUpstreamError(gw, idx, targets, target, cooldownDuration, agentName, action)
 		action.cancel()
-		if shouldRetry {
-			if maxRetries > 0 && attempt >= maxRetries {
-				gw.Logger.Warn("max retries reached in buffered mode after error",
-					"attempt", attempt, "max", maxRetries, "agent", agentName)
-				return nil, false
-			}
-			if retryDelay > 0 {
-				gw.Logger.Info("retrying with parsed delay (buffered)",
-					"model", target.Model, "delay_ms", retryDelay.Milliseconds())
-				waitWithCancel(ctx, retryDelay)
-			} else {
-				backoff := calculateBackoff(attempt - 1)
-				gw.Logger.Info("retrying with exponential backoff (buffered)",
-					"model", target.Model, "attempt", attempt, "delay_ms", backoff.Milliseconds())
-				waitWithCancel(ctx, backoff)
-			}
-			return nil, true
+		if signal == retrySignalDone {
+			return nil, bufferedOutcome{step: bufferedStepStop, status: status}
 		}
-		return nil, false
+		if maxRetries > 0 && attempt > maxRetries {
+			gw.Logger.Warn("max retries reached in buffered mode after error",
+				"attempt", attempt, "max", maxRetries, "agent", agentName)
+			return nil, bufferedOutcome{step: bufferedStepStop, status: status}
+		}
+		if retryDelay > 0 {
+			gw.Logger.Info("retrying with parsed delay (buffered)",
+				"model", target.Model, "delay_ms", retryDelay.Milliseconds())
+			waitWithCancel(ctx, retryDelay)
+		} else {
+			backoff := calculateBackoff(attempt - 1)
+			gw.Logger.Info("retrying with exponential backoff (buffered)",
+				"model", target.Model, "attempt", attempt, "delay_ms", backoff.Milliseconds())
+			waitWithCancel(ctx, backoff)
+		}
+		if signal == retrySignalRetry {
+			return nil, bufferedOutcome{step: bufferedStepRetry, status: status, waited: true}
+		}
+		return nil, bufferedOutcome{step: bufferedStepNext, status: status, waited: true}
 	case actionStream:
 		buf, err := p.handleBufferedStream(ctx, action, target, gw, cooldownDuration, agentName, canary)
 		if err != nil {
 			gw.AgentState.RecordFailure(target, cooldownDuration)
+			return nil, bufferedOutcome{step: bufferedStepStop}
 		}
-		return buf, false
+		return buf, bufferedOutcome{step: bufferedStepStop}
 	}
-	return nil, false
+	return nil, bufferedOutcome{step: bufferedStepStop}
 }
 
 func (p *Proxy) handleBufferedStream(ctx context.Context, action upstreamAction, target routing.UpstreamTarget, gw *gateway.NenyaGateway, cooldownDuration time.Duration, agentName string, canary pipeline.CanarResult) (*bufferedSSE, error) {

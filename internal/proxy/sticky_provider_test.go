@@ -101,23 +101,16 @@ func TestStickyProvider_StrictBlocksFailover(t *testing.T) {
 	defer upstream.Close()
 
 	rec := doStickyRequest(t, stickyProxy(t, "strict", upstream.URL))
+	// Strict blocks failover, including to the duplicate same-target entry
+	// (the repeat is not attempted because it is not the final sweep index in
+	// this chain layout): one dispatch, then the typed exhaustion error.
 	if got := attempts.Load(); got != 1 {
 		t.Fatalf("strict must block the second dispatch, got %d hits", got)
 	}
 	if rec.Code != http.StatusServiceUnavailable {
 		t.Fatalf("strict expects typed exhausted error, got %d", rec.Code)
 	}
-	var body struct {
-		Error struct {
-			Type string `json:"type"`
-		} `json:"error"`
-	}
-	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
-		t.Fatalf("body not structured: %v", err)
-	}
-	if body.Error.Type != "provider_error" {
-		t.Errorf("expected provider_error type, got %q", body.Error.Type)
-	}
+	assertErrorKind(t, rec, "provider_error")
 }
 
 func TestStickyProvider_LenientAllows5xxBlocks4xx(t *testing.T) {

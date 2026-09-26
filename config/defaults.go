@@ -167,6 +167,12 @@ func applyGovernanceDefaults(cfg *Config) {
 	if cfg.Governance.StreamContinuation.SameModelOnly == nil {
 		cfg.Governance.StreamContinuation.SameModelOnly = PtrTo(true)
 	}
+	if cfg.Governance.RetryOpaque4xx == nil {
+		// Same source of truth as Opaque4xxRetryEnabled(): an unset field
+		// means enabled, so a config that never mentions it behaves the
+		// same in tests as it does through ApplyDefaults.
+		cfg.Governance.RetryOpaque4xx = PtrTo(true)
+	}
 }
 
 // applyStreamHeadDefaults ensures the stream-head detection flags used by the

@@ -68,6 +68,10 @@ type upstreamAction struct {
 	body    []byte
 	cancel  context.CancelFunc
 	release func()
+	// retryable marks an actionContinue that carried a transient local
+	// failure (network error) eligible for a same-target retry when no
+	// later target remains. Guard/skip actions leave it false.
+	retryable bool
 }
 
 // releaseSlot frees the concurrency slot held by this action, if any. The
@@ -237,6 +241,32 @@ type retryLoop struct {
 	// paramRejectRetried ensures the strip-and-retry safety net (NENYA-32)
 	// fires at most once per request.
 	paramRejectRetried bool
+	// sameTargetRetries counts re-attempts of the last target performed
+	// because a retryable failure had no later target to fail over to. It
+	// is bounded by maxSameTargetRetries so a persistently retryable
+	// failure (including ones that intentionally skip circuit-breaker
+	// accounting, e.g. concurrency limits) cannot loop forever.
+	sameTargetRetries int
+	// dispatches counts every call to prepareAndSend, including guard skips
+	// that dispatch nothing. It complements `attempt` (error actions only)
+	// in the exhaustion log.
+	dispatches int
+	// waited records that handleActionError already slept (or deliberately
+	// skipped the sleep for an immediate corrective retry) before Run decides
+	// whether to repeat the same target, so the backoff is not applied twice.
+	waited bool
+	// lastRetryable4xx snapshots the most recent retryable 4xx upstream
+	// error so Exhausted can relay the real client-class status instead of
+	// a generic 503 when the retry budget runs out.
+	lastRetryable4xx *upstreamErrorSnapshot
+}
+
+// upstreamErrorSnapshot captures the parts of a retryable upstream error
+// needed to re-render it to the client after the retry budget is exhausted.
+type upstreamErrorSnapshot struct {
+	provider string
+	status   int
+	body     []byte
 }
 
 // trackInFlight increments the in-flight gauge for the first target in
@@ -267,83 +297,130 @@ func (rl *retryLoop) copyPayload(dest map[string]any, idx int) bool {
 	return true
 }
 
-// handleActionResult dispatches on action.kind and returns true when the
-// request is considered handled (success or terminal failure), false when
-// the loop should try the next target.
-func (rl *retryLoop) handleActionResult(i int, target routing.UpstreamTarget, action upstreamAction) bool {
+// actionOutcome classifies how the retry loop should proceed after a
+// dispatched target.
+type actionOutcome struct {
+	// handled marks a terminal outcome: a response (or terminal error) was
+	// written to the client and the loop must stop.
+	handled bool
+	// retryable marks a transient failure that may be re-attempted on the
+	// same target when no later target remains. Run decides whether to
+	// advance (a later target exists) or repeat (last target).
+	retryable bool
+	// status is the upstream HTTP status for error outcomes (0 otherwise),
+	// used to keep 413 failover-only.
+	status int
+}
+
+// handleActionResult dispatches on action.kind and reports whether the
+// request is handled and, when not, whether the failure is retryable.
+func (rl *retryLoop) handleActionResult(i int, target routing.UpstreamTarget, action upstreamAction) actionOutcome {
 	defer action.releaseSlot()
+	// Any outcome other than a classified upstream error invalidates the
+	// retryable-4xx snapshot: the exhaustion relay must reflect the last
+	// failure. handleUpstreamError re-snapshots when this attempt is itself a
+	// retryable 4xx.
+	if action.kind != actionError {
+		rl.lastRetryable4xx = nil
+	}
 	switch action.kind {
 	case actionContinue:
-		rl.lastFailReason = failReasonDispatch
-		return false
+		return rl.handleResumeAction(action)
 	case actionError:
-		// Classify before signal handling: both retrySignalBreak and
-		// retrySignalContinue lead to a failover decision in Run.
-		if action.resp.StatusCode >= http.StatusInternalServerError {
-			rl.lastFailReason = failReason5xx
-		} else {
-			rl.lastFailReason = failReason4xx
-		}
-		switch rl.handleActionError(i, target, action) {
-		case retrySignalDone:
-			return true
-		case retrySignalBreak:
-			return false
-		}
-		return false
+		return rl.handleErrorActionOutcome(i, target, action)
 	case actionStream:
-		result := rl.p.streamResponse(streamResponseOpts{
-			gw:           rl.gw,
-			w:            rl.w,
-			r:            rl.r,
-			target:       target,
-			agentName:    rl.opts.AgentName,
-			sourceFormat: rl.opts.SourceFormat,
-			cacheKey:     rl.opts.CacheKey,
-			cooldown:     rl.opts.Cooldown,
-			payload:      rl.opts.Payload,
-			targets:      rl.opts.Targets,
-			idx:          i,
-			tokenCount:   rl.opts.TokenCount,
-			apiKey:       rl.opts.ApiKey,
-			canary:       rl.opts.Canary,
-		}, action)
-		if result.terminal {
-			// Response fully written (content-policy block): stop, never
-			// append another target's output to the committed bytes.
-			return true
-		}
-		if result.empty {
-			rl.lastFailReason = failReasonStream
-			rl.ctxLogger.Warn("empty stream from upstream, trying next target",
-				"model", target.Model, "provider", target.Provider)
-			return false
-		}
-		if result.err != nil {
-			// Transport-level failure before any stream bytes. Fail over to the
-			// next target; on the last target Exhausted() surfaces the error.
-			rl.lastFailReason = failReasonStream
-			rl.lastStreamErr = result.err
-			rl.ctxLogger.Warn("stream read error from upstream, trying next target",
-				"err", result.err, "model", target.Model, "provider", target.Provider)
-			return false
-		}
-		return true
-	case actionResponse:
-		result := rl.p.handleNonStreamingResponse(rl.gw, rl.w, rl.r, target, rl.opts.AgentName, rl.opts.SourceFormat, action, rl.opts.CacheKey, rl.opts.Cooldown, rl.opts.Canary)
-		if result.terminal {
-			// 403 already written (exfil block): stop the loop.
-			return true
-		}
-		if result.empty {
-			rl.ctxLogger.Warn("empty non-streaming response from upstream, trying next target",
-				"model", target.Model, "provider", target.Provider)
-			return false
-		}
-		return true
+		return rl.handleStreamAction(i, target, action)
 	default:
-		return false
+		return rl.handleNonStreamingActionOutcome(i, target, action)
 	}
+}
+
+// handleErrorActionOutcome classifies an upstream error action.
+// retrySignalRetry is eligible for a same-target repeat; retrySignalContinue
+// only advances.
+func (rl *retryLoop) handleErrorActionOutcome(i int, target routing.UpstreamTarget, action upstreamAction) actionOutcome {
+	if action.resp.StatusCode >= http.StatusInternalServerError {
+		rl.lastFailReason = failReason5xx
+	} else {
+		rl.lastFailReason = failReason4xx
+	}
+	status := action.resp.StatusCode
+	switch rl.handleActionError(i, target, action) {
+	case retrySignalDone:
+		return actionOutcome{handled: true, status: status}
+	case retrySignalRetry:
+		return actionOutcome{retryable: true, status: status}
+	}
+	return actionOutcome{status: status}
+}
+
+// handleResumeAction handles a local dispatch outcome (network failure or
+// guard skip): a network failure is retryable. Backoff is applied by Run
+// immediately before a same-target repeat, so a plain failover to a healthy
+// later target stays immediate.
+func (rl *retryLoop) handleResumeAction(action upstreamAction) actionOutcome {
+	rl.lastFailReason = failReasonDispatch
+	return actionOutcome{retryable: action.retryable}
+}
+
+// handleStreamAction maps a streaming attempt result to a loop outcome.
+func (rl *retryLoop) handleStreamAction(i int, target routing.UpstreamTarget, action upstreamAction) actionOutcome {
+	result := rl.p.streamResponse(streamResponseOpts{
+		gw:           rl.gw,
+		w:            rl.w,
+		r:            rl.r,
+		target:       target,
+		agentName:    rl.opts.AgentName,
+		sourceFormat: rl.opts.SourceFormat,
+		cacheKey:     rl.opts.CacheKey,
+		cooldown:     rl.opts.Cooldown,
+		payload:      rl.opts.Payload,
+		targets:      rl.opts.Targets,
+		idx:          i,
+		tokenCount:   rl.opts.TokenCount,
+		apiKey:       rl.opts.ApiKey,
+		canary:       rl.opts.Canary,
+	}, action)
+	if result.terminal {
+		// Response fully written (content-policy block): stop, never append
+		// another target's output to the committed bytes.
+		return actionOutcome{handled: true}
+	}
+	if result.empty {
+		rl.lastFailReason = failReasonStream
+		rl.ctxLogger.Warn("empty stream from upstream, trying next target",
+			"model", target.Model, "provider", target.Provider)
+		return actionOutcome{retryable: true}
+	}
+	if result.err != nil {
+		// Transport-level failure before any stream bytes: fail over; on the
+		// last target Exhausted() surfaces the error.
+		rl.lastFailReason = failReasonStream
+		rl.lastStreamErr = result.err
+		rl.ctxLogger.Warn("stream read error from upstream, trying next target",
+			"err", result.err, "model", target.Model, "provider", target.Provider)
+		return actionOutcome{retryable: true}
+	}
+	return actionOutcome{handled: true}
+}
+
+// handleNonStreamingActionOutcome maps a non-streaming attempt result to a
+// loop outcome (the actionResponse case plus the defensive default).
+func (rl *retryLoop) handleNonStreamingActionOutcome(i int, target routing.UpstreamTarget, action upstreamAction) actionOutcome {
+	if action.kind != actionResponse {
+		return actionOutcome{}
+	}
+	result := rl.p.handleNonStreamingResponse(rl.gw, rl.w, rl.r, target, rl.opts.AgentName, rl.opts.SourceFormat, action, rl.opts.CacheKey, rl.opts.Cooldown, rl.opts.Canary)
+	if result.terminal {
+		// 403 already written (exfil block): stop the loop.
+		return actionOutcome{handled: true}
+	}
+	if result.empty {
+		rl.ctxLogger.Warn("empty non-streaming response from upstream, trying next target",
+			"model", target.Model, "provider", target.Provider)
+		return actionOutcome{retryable: true}
+	}
+	return actionOutcome{handled: true}
 }
 
 // newRetryLoop creates a retryLoop with the given parameters.
@@ -407,7 +484,12 @@ func (rl *retryLoop) shouldSkipRateLimitedPair(i int, target routing.UpstreamTar
 
 // hasOtherEligiblePair reports whether any target after index i belongs to a
 // provider+account pair that has not already been rate-limited this round.
+// The target at index i itself is excluded from the scan, so a sole
+// single-credential chain reports false (preserving its backoff semantics).
 func (rl *retryLoop) hasOtherEligiblePair(i int) bool {
+	if i < 0 || i >= len(rl.opts.Targets) {
+		return false
+	}
 	for j := i + 1; j < len(rl.opts.Targets); j++ {
 		if pair := rl.accountPair(rl.opts.Targets[j]); !rl.rateLimitedPairs[pair] {
 			return true
@@ -420,7 +502,11 @@ func (rl *retryLoop) hasOtherEligiblePair(i int) bool {
 type retrySignal int
 
 const (
+	// retrySignalContinue advances to the next target (failover).
 	retrySignalContinue retrySignal = iota
+	// retrySignalRetry is a transient failure eligible for a same-target
+	// re-attempt when no later target remains.
+	retrySignalRetry
 	retrySignalBreak
 	retrySignalDone
 )
@@ -428,13 +514,25 @@ const (
 // handleActionError processes an upstream error action, applies backoff, and returns a loop signal.
 func (rl *retryLoop) handleActionError(i int, target routing.UpstreamTarget, action upstreamAction) retrySignal {
 	rl.attempt++
+	// Any previously remembered retryable 4xx is stale the moment a new
+	// upstream error is classified; handleUpstreamError re-snapshots below
+	// when this failure is itself a retryable 4xx.
+	rl.lastRetryable4xx = nil
 	action.body, _ = io.ReadAll(io.LimitReader(action.resp.Body, pipeline.MaxErrorBodyBytes))
 	_ = action.resp.Body.Close()
+	// The upstream response is fully consumed; release its request context on
+	// every path so retries do not abandon in-flight upstream contexts.
+	// CancelFunc is idempotent, so the later cancels are harmless.
+	if action.cancel != nil {
+		action.cancel()
+	}
 
 	// Connection-scoped (client cancel/disconnect, NENYA-42): the client is
 	// gone. Surface nothing, mutate no resilience state, retry nothing.
 	if err := rl.r.Context().Err(); err != nil {
 		action.cancel()
+		// A consumed half-open probe slot would otherwise leak.
+		rl.gw.AgentState.CB.ReleaseHalfOpen(target.CoolKey)
 		rl.ctxLogger.Info("client context canceled during upstream error handling",
 			"model", target.Model, "provider", target.Provider, "error_message", err.Error())
 		return retrySignalDone
@@ -457,7 +555,11 @@ func (rl *retryLoop) handleActionError(i int, target routing.UpstreamTarget, act
 	// fires it re-enters the loop immediately (no backoff) with the
 	// stripped payload, bypassing request-scoped rules for that attempt.
 	if action.resp.StatusCode == http.StatusBadRequest && rl.maybeStripAndRetryParamReject(i, target, action) {
-		return retrySignalContinue
+		rl.waited = true // corrective retry: no backoff, Run must not sleep
+		// The retry re-dispatches and consumes a fresh probe; release this
+		// attempt's probe so the corrective retry does not leak a slot.
+		rl.gw.AgentState.CB.ReleaseHalfOpen(target.CoolKey)
+		return retrySignalRetry
 	}
 
 	// Request-scoped via provider config (NENYA-42): the client's payload is
@@ -471,18 +573,38 @@ func (rl *retryLoop) handleActionError(i int, target routing.UpstreamTarget, act
 			"model", target.Model, "provider", target.Provider, "status", action.resp.StatusCode,
 			"rule_pattern", matched.MessagePattern)
 		action.cancel()
+		// No circuit outcome is recorded for a client-fault error; release the
+		// probe slot consumed by the pre-dispatch guard.
+		rl.gw.AgentState.CB.ReleaseHalfOpen(target.CoolKey)
 		rl.writeUpstreamErrorToClient(action.resp.StatusCode, gwErr)
 		return retrySignalDone
 	}
 
-	shouldRetry, retryDelay := rl.handleUpstreamError(i, target, action)
-	if !shouldRetry {
+	signal, retryDelay := rl.handleUpstreamError(i, target, action)
+	rl.rememberRetryable4xx(target, action, signal)
+	if signal == retrySignalDone {
 		gwErr := ParseProviderError(target.Provider, action.resp.StatusCode, action.body, nil)
 		rl.writeUpstreamErrorToClient(action.resp.StatusCode, gwErr)
 		return retrySignalDone
 	}
-	if rl.opts.MaxRetries > 0 && rl.attempt >= rl.opts.MaxRetries {
+	// max_retries bounds the retry budget. handleActionError increments
+	// attempt only for upstream error actions, and Run's top-of-loop check
+	// (attempt > Max) lets same-target/local repeats consume the remainder;
+	// together, Max permits Max retries beyond the initial attempt.
+	if rl.opts.MaxRetries > 0 && rl.attempt > rl.opts.MaxRetries {
 		return retrySignalBreak
+	}
+	// Concurrency saturation follows its own short fixed pacing: honor the
+	// delay handleUpstreamError derived, then mark the wait so Run does not
+	// add the generic backoff on top.
+	if signal == retrySignalRetry && adapter.ForProvider(target.Provider).NormalizeError(action.resp.StatusCode, action.body) == adapter.ErrorConcurrencyLimited {
+		if retryDelay > 0 {
+			rl.ctxLogger.Info("retrying with concurrency delay",
+				"model", target.Model, "delay_ms", retryDelay.Milliseconds())
+			waitWithCancel(rl.r.Context(), retryDelay)
+		}
+		rl.waited = true
+		return signal
 	}
 	if retryDelay > 0 {
 		rl.ctxLogger.Info("retrying with parsed delay",
@@ -494,7 +616,32 @@ func (rl *retryLoop) handleActionError(i int, target routing.UpstreamTarget, act
 			"model", target.Model, "attempt", rl.attempt, "delay_ms", backoff.Milliseconds())
 		waitWithCancel(rl.r.Context(), backoff)
 	}
-	return retrySignalContinue
+	rl.waited = true
+	return signal
+}
+
+// rememberRetryable4xx snapshots a retryable 4xx so a later exhaustion can
+// relay the real client-class status instead of a generic 503. 429 is excluded
+// (its quota semantics keep the 503 quota_exhausted flow). Any other failure
+// clears a previously remembered snapshot: the exhaustion relay must reflect
+// the *last* failure, not a stale earlier target's 4xx.
+func (rl *retryLoop) rememberRetryable4xx(target routing.UpstreamTarget, action upstreamAction, signal retrySignal) {
+	if signal != retrySignalRetry || action.resp.StatusCode < 400 || action.resp.StatusCode >= 500 ||
+		action.resp.StatusCode == http.StatusTooManyRequests {
+		rl.lastRetryable4xx = nil
+		return
+	}
+	// A 4xx-class quota exhaustion (e.g. ZAI 1308/1310 on 403) is not a
+	// client error: it must keep the 503 quota_exhausted contract.
+	if rl.quotaExhausted {
+		rl.lastRetryable4xx = nil
+		return
+	}
+	rl.lastRetryable4xx = &upstreamErrorSnapshot{
+		provider: target.Provider,
+		status:   action.resp.StatusCode,
+		body:     append([]byte(nil), action.body...),
+	}
 }
 
 // handleContextLimitError processes context-length exceeded errors with optional summarization.
@@ -516,7 +663,9 @@ func (rl *retryLoop) handleContextLimitError(i int, target routing.UpstreamTarge
 			rl.gw.Metrics.RecordSummarizationRetry(rl.opts.AgentName, target.Provider, target.Model)
 			rl.ctxLogger.Info("context limit summarization succeeded, retrying with summarized payload")
 			rl.lastFailReason = failReasonSummarized
-			return retrySignalContinue
+			// The summarized retry re-dispatches and consumes a fresh probe.
+			rl.gw.AgentState.CB.ReleaseHalfOpen(target.CoolKey)
+			return retrySignalRetry
 		}
 		rl.ctxLogger.Warn("context limit summarization failed", "err", sumErr)
 	} else {
@@ -524,6 +673,7 @@ func (rl *retryLoop) handleContextLimitError(i int, target routing.UpstreamTarge
 	}
 
 	gwErr := ParseProviderError(target.Provider, action.resp.StatusCode, action.body, nil)
+	rl.gw.AgentState.CB.ReleaseHalfOpen(target.CoolKey)
 	rl.writeUpstreamErrorToClient(action.resp.StatusCode, gwErr)
 	return retrySignalDone
 }
@@ -698,18 +848,22 @@ func (rl *retryLoop) stickyAllowsFailover(reason failReason, target routing.Upst
 // handled (streaming or non-streaming success, or a terminal HTTP error response
 // written to the client). It returns false when all targets are exhausted
 // without sending a complete response, so the caller should respond with 503.
+//
+// The sweep is forward-only: a failure advances to the next target. When a
+// retryable failure lands on the last target, the same target is re-attempted
+// (bounded by maxSameTargetRetries) instead of exhausting with no retry.
 func (rl *retryLoop) Run() bool {
 	defer rl.trackInFlight()()
 	workingPayload := make(map[string]interface{}, 16)
-retryLoop:
-	for i, target := range rl.opts.Targets {
+	for i := 0; i < len(rl.opts.Targets); i++ {
+		target := rl.opts.Targets[i]
 		if err := rl.r.Context().Err(); err != nil {
 			rl.ctxLogger.Debug("request context canceled, stopping failover sweep", "err", err)
-			break retryLoop
+			break
 		}
-		if rl.opts.MaxRetries > 0 && rl.attempt >= rl.opts.MaxRetries {
+		if rl.opts.MaxRetries > 0 && rl.attempt > rl.opts.MaxRetries {
 			rl.ctxLogger.Warn("max retries reached", "attempt", rl.attempt, "max", rl.opts.MaxRetries)
-			break retryLoop
+			break
 		}
 
 		// Attempted-set (NENYA-41): skip a target whose provider+account pair
@@ -747,27 +901,86 @@ retryLoop:
 		}
 
 		action := rl.prepareAndSend(i, target, payloadToUse)
+		rl.dispatches++
 		if err := rl.r.Context().Err(); err != nil {
 			if action.cancel != nil {
 				action.cancel()
 			}
 			action.releaseSlot()
+			// prepareAndSend releases any probe it consumed on its own exit
+			// paths; this break only stops the sweep.
 			rl.ctxLogger.Debug("request context canceled during prepareAndSend, stopping failover sweep", "err", err)
-			break retryLoop
+			break
 		}
-		if !rl.handleActionResult(i, target, action) {
-			if reason := rl.lastFailReason; !rl.stickyAllowsFailover(reason, target) {
-				rl.ctxLogger.Info("sticky_provider blocks failover, stopping sweep",
-					"policy", rl.opts.Agent.StickyProvider,
-					"reason", reason, "model", target.Model, "provider", target.Provider)
-				break retryLoop
-			}
-			rl.lastFailReason = failReasonNone
+		outcome := rl.handleActionResult(i, target, action)
+		if outcome.handled {
+			return true
+		}
+		// Same-target retry: a retryable failure with no later dispatchable
+		// target (or one the sticky_provider policy would refuse) has no
+		// failover slot, so re-attempt it. Retrying the same target is not
+		// failover, so the sticky gate does not apply to it.
+		if rl.consumeSameTargetRetry(i, outcome.status, outcome.retryable) {
+			rl.retrySameTarget(target)
+			i-- // re-attempt this target
 			continue
 		}
-		return true
+		rl.waited = false
+		if reason := rl.lastFailReason; !rl.stickyAllowsFailover(reason, target) {
+			rl.ctxLogger.Info("sticky_provider blocks failover, stopping sweep",
+				"policy", rl.opts.Agent.StickyProvider,
+				"reason", reason, "model", target.Model, "provider", target.Provider)
+			break
+		}
+		rl.lastFailReason = failReasonNone
 	}
 	return false
+}
+
+// retrySameTarget logs and prepares the same-target repeat, applying the
+// backoff unless handleActionError already slept for this failure.
+func (rl *retryLoop) retrySameTarget(target routing.UpstreamTarget) {
+	rl.ctxLogger.Info("retrying same target",
+		"model", target.Model, "provider", target.Provider,
+		"retry", rl.sameTargetRetries, "max", rl.maxSameTargetRetries())
+	// handleActionError already slept for an upstream error action; only local
+	// (network/stream) outcomes still need the backoff, escalated by the
+	// local-retry index since `attempt` tracks error actions only.
+	if !rl.waited {
+		waitWithCancel(rl.r.Context(), calculateBackoff(rl.sameTargetRetries-1))
+	}
+	rl.waited = false
+	rl.lastFailReason = failReasonNone
+}
+
+// consumeSameTargetRetry reports whether a retryable failure at index i should
+// be re-attempted on the same target, consuming one same-target retry slot.
+// It only qualifies at the final index of the sweep: while any later target
+// remains (dispatchable, or merely still to be attempted and possibly skipped),
+// the forward sweep proceeds and any same-target repeat belongs to that later
+// attempt. This keeps the retry budget from being spent early — e.g. a 429 that
+// benches the current pair while duplicate same-pair entries remain later.
+// A 413 is excluded: re-sending the same oversized payload can only fail again,
+// so it is failover-only.
+// Named "consume" because a true result spends a slot, not a pure predicate.
+func (rl *retryLoop) consumeSameTargetRetry(i int, status int, retryable bool) bool {
+	if !retryable || status == http.StatusRequestEntityTooLarge ||
+		i != len(rl.opts.Targets)-1 || rl.sameTargetRetries >= rl.maxSameTargetRetries() {
+		return false
+	}
+	rl.sameTargetRetries++
+	return true
+}
+
+// maxSameTargetRetries returns the same-target retry budget for this request.
+// The agent's max_retries wins when positive; otherwise the governance default
+// (governance.max_retry_attempts, default 3) applies so a persistently
+// retryable failure on a single-target chain cannot loop forever.
+func (rl *retryLoop) maxSameTargetRetries() int {
+	if rl.opts.MaxRetries > 0 {
+		return rl.opts.MaxRetries
+	}
+	return rl.gw.Config.Governance.EffectiveMaxRetryAttempts()
 }
 
 // prepareAndSend wraps the proxy's prepareAndSend method.
@@ -776,13 +989,13 @@ func (rl *retryLoop) prepareAndSend(idx int, target routing.UpstreamTarget, payl
 }
 
 // handleUpstreamError wraps the proxy's handleUpstreamError method.
-func (rl *retryLoop) handleUpstreamError(idx int, target routing.UpstreamTarget, action upstreamAction) (bool, time.Duration) {
-	shouldRetry, delay := rl.p.handleUpstreamError(rl.gw, idx, rl.opts.Targets, target, rl.opts.Cooldown, rl.opts.AgentName, action)
+func (rl *retryLoop) handleUpstreamError(idx int, target routing.UpstreamTarget, action upstreamAction) (retrySignal, time.Duration) {
+	signal, delay := rl.p.handleUpstreamError(rl.gw, idx, rl.opts.Targets, target, rl.opts.Cooldown, rl.opts.AgentName, action)
 	if rl.p.lastQuotaExhausted.Load() {
 		rl.quotaExhausted = true
 		rl.p.lastQuotaExhausted.Store(false)
 	}
-	return shouldRetry, delay
+	return signal, delay
 }
 
 // Exhausted is called when all upstream targets have been exhausted without success.
@@ -799,7 +1012,21 @@ func (rl *retryLoop) Exhausted() {
 		rl.ctxLogger.Info("client gone before exhaustion reporting", "model", model)
 		return
 	}
-	rl.ctxLogger.Error("all upstream targets exhausted", "total", len(rl.opts.Targets), "attempts", rl.attempt, "token_count", rl.opts.TokenCount)
+	// A retryable 4xx that consumed its retry budget is more useful to the
+	// client relayed verbatim than as a generic 503: the status is the
+	// upstream's own client-class verdict.
+	if snap := rl.lastRetryable4xx; snap != nil {
+		if rl.opts.AgentName != "" {
+			rl.gw.Metrics.RecordExhausted(rl.opts.AgentName)
+		}
+		gwErr := ParseProviderError(snap.provider, snap.status, snap.body, nil)
+		rl.ctxLogger.Warn("retry budget exhausted, relaying last upstream client error",
+			"provider", snap.provider, "status", snap.status)
+		rl.writeUpstreamErrorToClient(snap.status, gwErr)
+		return
+	}
+	rl.ctxLogger.Error("all upstream targets exhausted",
+		"total", len(rl.opts.Targets), "attempts", rl.attempt, "dispatches", rl.dispatches, "token_count", rl.opts.TokenCount)
 	if rl.opts.AgentName != "" {
 		rl.gw.Metrics.RecordExhausted(rl.opts.AgentName)
 	}
@@ -939,9 +1166,12 @@ func (p *Proxy) prepareAndSend(gw *gateway.NenyaGateway,
 	release, acqErr := gw.ConcurrencyLimiter.Acquire(r.Context(), target.Provider+"/"+target.Model, concLimit)
 	if acqErr != nil {
 		// Client gone while queued: no circuit-breaker pollution, no write.
+		// Release the half-open probe slot consumed by the pre-dispatch guard
+		// so an abandoned probe cannot wedge the circuit.
 		gw.Metrics.RecordConcurrencyRejected(target.Provider, target.Model)
 		ctxLogger.Info("client canceled while waiting for concurrency slot",
 			"model", target.Model, "provider", target.Provider)
+		gw.AgentState.CB.ReleaseHalfOpen(target.CoolKey)
 		return upstreamAction{kind: actionContinue}
 	}
 	gw.Metrics.RecordConcurrencyWait(target.Provider, target.Model, time.Since(waitStart))
@@ -974,6 +1204,9 @@ func (p *Proxy) prepareAndSend(gw *gateway.NenyaGateway,
 	req, err := p.buildUpstreamRequest(gw, r.Context(), r.Method, target.URL, transformedBody, target.Provider, target.Model, target.Credential, r.Header)
 	if err != nil {
 		ctxLogger.Error("failed to create upstream request", "err", err)
+		// No dispatch happened: release the probe slot consumed by the guard
+		// so an abandoned half-open probe cannot wedge the circuit.
+		gw.AgentState.CB.ReleaseHalfOpen(target.CoolKey)
 		return upstreamAction{kind: actionContinue, release: release}
 	}
 
@@ -989,7 +1222,9 @@ func (p *Proxy) prepareAndSend(gw *gateway.NenyaGateway,
 	if err != nil {
 		upstreamCancel()
 		p.recordNetworkError(ctxLogger, gw, target, err, r, cooldownDuration)
-		return upstreamAction{kind: actionContinue, release: release}
+		// Network failures are transient: retryable for a same-target repeat
+		// when no later target remains (bounded by the attempt cap).
+		return upstreamAction{kind: actionContinue, release: release, retryable: true}
 	}
 
 	duration := time.Since(startTime)
@@ -1187,6 +1422,12 @@ func handleAdapterRetryableError(ctxLogger *slog.Logger, target routing.Upstream
 	return false, false
 }
 
+// handleUpstreamError classifies an upstream error action and returns the
+// loop signal plus any upstream-declared retry delay. retrySignalRetry marks
+// a transient/retryable failure (same-target eligible when no later target
+// remains); retrySignalContinue marks a permanent client error with a later
+// target to fail over to; retrySignalDone means the caller must surface the
+// error to the client.
 func (p *Proxy) handleUpstreamError(gw *gateway.NenyaGateway,
 	idx int,
 	targets []routing.UpstreamTarget,
@@ -1194,7 +1435,7 @@ func (p *Proxy) handleUpstreamError(gw *gateway.NenyaGateway,
 	cooldownDuration time.Duration,
 	agentName string,
 	action upstreamAction,
-) (bool, time.Duration) {
+) (retrySignal, time.Duration) {
 	errorBody := action.body
 
 	ctxLogger := gw.Logger.With(
@@ -1210,12 +1451,16 @@ func (p *Proxy) handleUpstreamError(gw *gateway.NenyaGateway,
 	// Concurrency-limit rejection (NENYA-69): e.g. ZAI 1302. Hitting a
 	// per-model in-flight cap is saturation, not provider illness — do not
 	// activate a cooldown or count a circuit-breaker failure. A short fixed
-	// wait lets a just-freed slot settle before the failover sweep proceeds.
+	// wait lets a just-freed slot settle before the sweep proceeds.
 	if errClass == adapter.ErrorConcurrencyLimited {
 		gw.Metrics.RecordConcurrencyLimited(target.Provider, target.Model)
 		ctxLogger.Warn("upstream concurrency limit hit, retrying without cooldown",
 			"model", target.Model, "provider", target.Provider)
-		return true, concurrencyRetryDelay()
+		// Saturation is not a circuit outcome: release the half-open probe
+		// slot consumed by the pre-dispatch guard so repeated retries cannot
+		// exhaust the probe budget and wedge the circuit.
+		gw.AgentState.CB.ReleaseHalfOpen(target.CoolKey)
+		return retrySignalRetry, concurrencyRetryDelay()
 	}
 
 	if p.isRetryableStatus(gw, target.Provider, action.resp.StatusCode) {
@@ -1224,43 +1469,63 @@ func (p *Proxy) handleUpstreamError(gw *gateway.NenyaGateway,
 		if isQuota {
 			p.lastQuotaExhausted.Store(true)
 		}
-		return true, delay
+		return retrySignalRetry, delay
 	}
 
-	if isRetryableClientErrorForProvider(action.resp.StatusCode, errorBody, target.Provider) && len(targets) > 1 {
-		logBody := redactForLog(string(errorBody), gw)
-		ctxLogger.Warn("retryable client error from upstream, trying next target", "body", logBody)
-		gw.AgentState.RecordFailureWithStatus(target, action.resp.StatusCode, string(errorBody))
-		return true, 0
-	}
-
-	// Provider-configured retryable_phrases: operators can teach the gateway
-	// provider-specific transient-failure wordings (NENYA-26). Gated to 4xx
-	// like the built-in classifier; phrases match raw body substrings
-	// case-insensitively.
-	if pr, ok := gw.Providers[target.Provider]; ok && action.resp.StatusCode >= 400 && action.resp.StatusCode < 500 &&
-		len(pr.RetryablePhrases) > 0 && bodyContainsAnyPhrases(errorBody, pr.RetryablePhrases) && len(targets) > 1 {
-		logBody := redactForLog(string(errorBody), gw)
-		ctxLogger.Warn("provider-configured retryable phrase matched, trying next target", "body", logBody)
-		gw.AgentState.RecordFailureWithStatus(target, action.resp.StatusCode, string(errorBody))
-		return true, 0
+	// Retryable 4xx: built-in body patterns, provider-configured phrases, and
+	// — when governance.retry_opaque_4xx is enabled — opaque JSON bodies a
+	// gateway relayed without an error envelope. Classified retryable
+	// regardless of how many targets remain: Run advances when a later
+	// target exists and re-attempts this one when it is the last.
+	if p.recordRetryable4xx(gw, ctxLogger, target, action, errorBody) {
+		return retrySignalRetry, 0
 	}
 
 	if retryable, isQuota := handleAdapterRetryableError(ctxLogger, target, action, cooldownDuration, gw); retryable {
 		if isQuota {
 			p.lastQuotaExhausted.Store(true)
 		}
-		return true, 0
+		return retrySignalRetry, 0
 	}
 
 	defer action.cancel()
-	if len(targets) > 1 {
+	// A permanent client-class error records no circuit outcome; release the
+	// half-open probe slot consumed by the pre-dispatch guard so repeated
+	// client errors cannot exhaust the probe budget.
+	gw.AgentState.CB.ReleaseHalfOpen(target.CoolKey)
+	if idx+1 < len(targets) {
 		logWarnRetryable(ctxLogger, errorBody, gw, "non-retryable upstream error, trying next target")
-		return true, 0
+		return retrySignalContinue, 0
 	}
 
 	logErrorRetryable(ctxLogger, errorBody, gw, "non-retryable upstream error, no more targets")
-	return false, 0
+	return retrySignalDone, 0
+}
+
+// recordRetryable4xx classifies a 4xx body and, when retryable, logs the
+// reason and records the appropriate circuit-breaker signal. Returns true when
+// the caller should treat the error as retryable.
+func (p *Proxy) recordRetryable4xx(gw *gateway.NenyaGateway, ctxLogger *slog.Logger, target routing.UpstreamTarget, action upstreamAction, errorBody []byte) bool {
+	reason := retryable4xxReasonFor(gw, action.resp.StatusCode, errorBody, target.Provider)
+	if reason == retryable4xxNone {
+		return false
+	}
+	logBody := redactForLog(string(errorBody), gw)
+	if reason == retryable4xxPhrase {
+		ctxLogger.Warn("provider-configured retryable phrase matched", "reason", string(reason), "body", logBody)
+	} else {
+		ctxLogger.Warn("retryable client error from upstream", "reason", string(reason), "body", logBody)
+	}
+	// An opaque body is a heuristic: count the request without contributing
+	// to the failure threshold, so a client provoking an ambiguous body
+	// cannot bench a healthy provider. Pattern and phrase matches are
+	// deliberate signals and record normally.
+	if reason == retryable4xxOpaque {
+		gw.AgentState.CB.RecordOpaqueFailure(target.CoolKey)
+	} else {
+		gw.AgentState.RecordFailureWithStatus(target, action.resp.StatusCode, string(errorBody))
+	}
+	return true
 }
 
 func logWarnRetryable(ctxLogger *slog.Logger, errorBody []byte, gw *gateway.NenyaGateway, msg string) {
@@ -1703,6 +1968,74 @@ func isRetryableClientErrorForProvider(statusCode int, body []byte, provider str
 	}
 
 	return matchProviderSpecificPatterns(lower, provider)
+}
+
+// errorEnvelopeKeys are the JSON object keys that identify a provider error
+// envelope. A 4xx body carrying any of them is a deliberate, structured
+// client error; a JSON object with none of them is treated as an opaque
+// relayed failure (see opaque4xxBody).
+var errorEnvelopeKeys = []string{
+	"error", "errors", "detail", "details", "message", "type", "code", "title", "reason", "status",
+}
+
+// opaque4xxBody reports whether a 400/422 response body is a non-empty JSON
+// object carrying none of the recognized error-envelope keys — the shape
+// aggregators and gateways produce when they relay an upstream failure without
+// wrapping it (e.g. `{"model":"..."}`). Empty, empty-object, non-JSON,
+// non-object, and enveloped bodies all return false, so genuine client errors
+// stay non-retryable.
+//
+// 413 (Request Entity Too Large) is deliberately excluded: the payload is an
+// immutable part of an identical retry, so both a same-target repeat and a
+// failover would re-send the same oversized body (possibly leaking it to
+// another provider) and fail again.
+func opaque4xxBody(statusCode int, body []byte) bool {
+	switch statusCode {
+	case http.StatusBadRequest, http.StatusUnprocessableEntity:
+	default:
+		return false
+	}
+	var obj map[string]json.RawMessage
+	if err := json.Unmarshal(body, &obj); err != nil || len(obj) == 0 {
+		return false
+	}
+	for _, key := range errorEnvelopeKeys {
+		if _, ok := obj[key]; ok {
+			return false
+		}
+	}
+	return true
+}
+
+// retryable4xxReason classifies why a 4xx body is retryable (empty = not).
+type retryable4xxReason string
+
+const (
+	retryable4xxNone    retryable4xxReason = ""
+	retryable4xxPattern retryable4xxReason = "pattern"
+	retryable4xxPhrase  retryable4xxReason = "phrase"
+	retryable4xxOpaque  retryable4xxReason = "opaque"
+)
+
+// retryable4xxReason reports the classifier verdict for a 4xx body, along with
+// whether the failure is safe to re-send unchanged to the *same* target. A 413
+// whose body matches a context/max_tokens pattern is retryable (another target
+// may accept the payload), but repeating it in place can only fail again, so
+// callers must fail over rather than same-target retry.
+func retryable4xxReasonFor(gw *gateway.NenyaGateway, statusCode int, body []byte, provider string) retryable4xxReason {
+	if isRetryableClientErrorForProvider(statusCode, body, provider) {
+		return retryable4xxPattern
+	}
+	if provider != "" && gw != nil {
+		if pr, ok := gw.Providers[provider]; ok && pr != nil && statusCode >= 400 && statusCode < 500 &&
+			len(pr.RetryablePhrases) > 0 && bodyContainsAnyPhrases(body, pr.RetryablePhrases) {
+			return retryable4xxPhrase
+		}
+	}
+	if gw != nil && gw.Config.Governance.Opaque4xxRetryEnabled() && opaque4xxBody(statusCode, body) {
+		return retryable4xxOpaque
+	}
+	return retryable4xxNone
 }
 
 // bodyContainsAnyPhrases reports whether body contains any of the given

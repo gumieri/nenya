@@ -1252,7 +1252,9 @@ func (p *Proxy) handleStreamDone(gw *gateway.NenyaGateway, w http.ResponseWriter
 			"idle_timeout", gw.Config.Governance.EffectiveStreamIdleTimeout())
 		gw.Metrics.RecordStreamStall(target.Model, target.Provider)
 		p.writeStallSSE(gw, w)
-		return streamResult{empty: true}
+		// Headers and partial SSE are already committed: terminal, never
+		// fail over and append a second stream to the client's bytes.
+		return streamResult{terminal: true}
 	}
 
 	if isClientWriteError(copyErr) {

@@ -492,7 +492,7 @@ Model locks are checked during `BuildTargetList` — locked models are skipped b
 |-------|----------|---------|-------------|
 | `failure_threshold` | `failure_threshold` | `5` | Consecutive failures before circuit trips |
 | `success_threshold` | `success_threshold` | `1` | Consecutive successes in HalfOpen to recover |
-| `max_retries` | `max_retries` | `0` | Cap on retry attempts per request (0 = unlimited) |
+| `max_retries` | `max_retries` | `0` | Retry budget per request (0 = governance `max_retry_attempts`, default `3`); `N` permits `N` retries beyond the initial attempt, for both error retries and same-target repeats |
 | `cooldown_seconds` | `cooldown_seconds` | `60` | Duration to wait before transitioning Open → HalfOpen |
 | `half_open_max_requests` | `half_open_max_requests` | `3` | Max probe requests in HalfOpen state |
 
@@ -502,7 +502,13 @@ For providers with multiple credential accounts (configured via `accounts[]` in 
 
 ### Backoff and Threshold Enhancements
 
-The circuit breaker integrates with the `BackoffTracker` for exponential backoff on rate-limit and quota errors. `calculateBackoff` (`internal/proxy/retry.go:50`) implements base 500ms exponential doubling with ±750ms jitter, capped at 8 seconds. Per-provider `RetryableStatusCodes` allow custom retry policies beyond the standard defaults (429, 500, 502, 503, 504).
+The circuit breaker integrates with the `BackoffTracker` for exponential backoff on rate-limit and quota errors. `calculateBackoff` (`internal/proxy/retry.go`) implements base 500ms exponential doubling with ±750ms jitter, capped at 8 seconds. Per-provider `RetryableStatusCodes` allow custom retry policies beyond the standard defaults (429, 500, 502, 503, 504).
+
+### Retry Sweep and Same-Target Retry
+
+Chat dispatch retries by sweeping the agent's target list forward (`retryLoop.Run`, `internal/proxy/retry.go`): a failure advances to the next target, and repeated provider+model entries remain the operator-configured per-provider retry mechanism. When a **retryable** failure at the **final** sweep index (retryable status, adapter-classified retryable, retryable 4xx, network error, a genuinely empty stream, or a corrective retry such as context-limit summarization or param-strip) would otherwise end the request, the loop re-attempts that same target instead of exhausting. In-stream early errors (an error event at the head of a committed stream) are not retried in place — they follow the existing early-error failover path. The budget is the agent's `max_retries` (`N` = `N` retries beyond the initial attempt), or `governance.max_retry_attempts` (default 3) when unset. Retrying the same target is not failover, so the `sticky_provider` gate (which governs advancing to a *different* target) does not block the repeat; on a `strict` agent a duplicate same-target entry still lives at a non-final index, so strict continues to refuse it. A retryable 4xx that exhausts the budget is relayed with its real status rather than a generic 503.
+
+The built-in 4xx classifier (`isRetryableClientErrorForProvider`, `retryable4xxReasonFor`) treats three body shapes as retryable: built-in transient patterns, provider-configured `retryable_phrases`, and — when `governance.retry_opaque_4xx` is enabled (default) — opaque JSON objects with no error-envelope key (aggregator-relayed failures such as `{"model":"..."}`). The opaque rule only considers `400`/`422`; it excludes `413` because the payload is immutable across an identical retry (the pattern-based classifier still treats a 413 whose body carries a context-length/max_tokens message as retryable). Because an opaque body is only a *heuristic* signal, a failover re-sends the request to another provider — **this can move a misclassified client-error payload across providers**; set `retry_opaque_4xx: false` to disable it. Opaque failures are recorded on the circuit breaker's request counters but never count toward its failure threshold, so a client provoking an ambiguous body cannot bench a healthy provider. The MCP buffered path (`forwardBuffered`) applies the same retry classification and same-target repeat; its retry budget is `max_retries` (or the governance default) and it does not apply the `sticky_provider` policy, which is a chat-sweep concern.
 
 ### Per-Model Concurrency Admission Control
 

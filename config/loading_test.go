@@ -171,6 +171,27 @@ func TestMergeGovernance_EarlyStreamErrorFailover(t *testing.T) {
 	}
 }
 
+// RetryOpaque4xx must be honored as a bool overlay: a config.d fragment that
+// sets it false has to win over a base file.
+func TestMergeGovernance_RetryOpaque4xx(t *testing.T) {
+	base := &Config{}
+	base.Governance.RetryOpaque4xx = PtrTo(true)
+
+	overlay := &Config{}
+	overlay.Governance.RetryOpaque4xx = PtrTo(false)
+	mergeGovernanceBools(base, overlay)
+	if base.Governance.RetryOpaque4xx == nil || *base.Governance.RetryOpaque4xx {
+		t.Errorf("expected overlay false to override, got %v", base.Governance.RetryOpaque4xx)
+	}
+
+	// Unset overlay leaves base untouched.
+	overlay.Governance.RetryOpaque4xx = nil
+	mergeGovernanceBools(base, overlay)
+	if base.Governance.RetryOpaque4xx == nil || *base.Governance.RetryOpaque4xx {
+		t.Errorf("expected base value preserved, got %v", base.Governance.RetryOpaque4xx)
+	}
+}
+
 func TestStripComments(t *testing.T) {
 	tests := []struct {
 		name  string

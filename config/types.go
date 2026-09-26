@@ -684,14 +684,23 @@ type GovernanceConfig struct {
 	// MaxConcurrentRequests is the global fallback cap on in-flight requests
 	// per provider+model when the provider config does not set its own limit
 	// (0 or omitted = unlimited).
-	MaxConcurrentRequests int     `json:"max_concurrent_requests,omitempty"`
-	RetryableStatusCodes  []int   `json:"retryable_status_codes"`
-	MaxRetryAttempts      int     `json:"max_retry_attempts"`
-	RoutingStrategy       string  `json:"routing_strategy"`
-	RoutingLatencyWeight  float64 `json:"routing_latency_weight"`
-	RoutingCostWeight     float64 `json:"routing_cost_weight"`
-	MaxCostPerRequest     float64 `json:"max_cost_per_request"`
-	EmptyStreamAsError    *bool   `json:"empty_stream_as_error,omitempty"`
+	MaxConcurrentRequests int   `json:"max_concurrent_requests,omitempty"`
+	RetryableStatusCodes  []int `json:"retryable_status_codes"`
+	MaxRetryAttempts      int   `json:"max_retry_attempts"`
+	// RetryOpaque4xx treats a 4xx response whose body is a JSON object
+	// without a recognized error envelope (error/errors/detail/details/
+	// message/type/code/title/reason/status) as retryable. Aggregators and
+	// gateways relay upstream failures in this opaque shape (e.g.
+	// `{"model":"..."}`); retrying or failing over is cheaper than
+	// surfacing a misclassified client error. Only 400/422 are affected
+	// (413 is excluded: an immutable oversized payload would fail again).
+	// Defaults to true; set false to opt out.
+	RetryOpaque4xx       *bool   `json:"retry_opaque_4xx,omitempty"`
+	RoutingStrategy      string  `json:"routing_strategy"`
+	RoutingLatencyWeight float64 `json:"routing_latency_weight"`
+	RoutingCostWeight    float64 `json:"routing_cost_weight"`
+	MaxCostPerRequest    float64 `json:"max_cost_per_request"`
+	EmptyStreamAsError   *bool   `json:"empty_stream_as_error,omitempty"`
 	// EarlyStreamErrorFailover fails over to the next target when the first
 	// SSE event of a stream is an upstream error, before headers are committed.
 	EarlyStreamErrorFailover *bool `json:"early_stream_error_failover,omitempty"`
@@ -760,6 +769,19 @@ func (g *GovernanceConfig) EffectiveMaxRetryAttempts() int {
 		return g.MaxRetryAttempts
 	}
 	return 3
+}
+
+// RetryOpaque4xxSet reports whether retry_opaque_4xx was present in a config
+// overlay. Callers must use it before applyGovernanceDefaults runs (which sets
+// the field), so partial config.d overlays can distinguish "unset" from
+// "explicitly false".
+func (g *GovernanceConfig) RetryOpaque4xxSet() bool { return wasSet(g.RetryOpaque4xx) }
+
+// Opaque4xxRetryEnabled reports whether opaque 4xx bodies (JSON objects
+// without a recognized error envelope) are treated as retryable. Defaults to
+// true when unset.
+func (g *GovernanceConfig) Opaque4xxRetryEnabled() bool {
+	return g.RetryOpaque4xx == nil || *g.RetryOpaque4xx
 }
 
 // EffectiveMinQuotaCooldown returns the quota-class cooldown floor

@@ -420,6 +420,37 @@ func TestCircuitBreaker_ReleaseHalfOpen_DecrementsInflight(t *testing.T) {
 	}
 }
 
+// RecordOpaqueFailure must not contribute to the failure threshold (a client
+// provoking an ambiguous body cannot bench a healthy provider), and in
+// HalfOpen it must release the probe slot consumed by Allow so the circuit is
+// not wedged.
+func TestCircuitBreaker_RecordOpaqueFailure(t *testing.T) {
+	cb := NewCircuitBreaker(2, 1, 1, 10*time.Millisecond, nil)
+	key := "test"
+
+	// Closed state: repeated opaque failures must not trip the breaker.
+	for i := 0; i < 10; i++ {
+		cb.RecordOpaqueFailure(key)
+	}
+	if cb.State(key) != StateClosed {
+		t.Fatalf("opaque failures must not trip the breaker, got state %v", cb.State(key))
+	}
+
+	// Trip it, wait, then consume the single half-open probe.
+	cb.RecordFailure(key)
+	cb.RecordFailure(key)
+	time.Sleep(15 * time.Millisecond)
+	if !cb.Allow(key) {
+		t.Fatal("expected Allow to succeed in HalfOpen")
+	}
+
+	// The opaque failure releases the probe slot without resolving the state.
+	cb.RecordOpaqueFailure(key)
+	if !cb.Allow(key) {
+		t.Error("expected the half-open probe slot to be released by RecordOpaqueFailure")
+	}
+}
+
 func TestCircuitBreaker_ReleaseHalfOpen_NoopOnClosedState(t *testing.T) {
 	cb := NewCircuitBreaker(2, 1, 1, time.Second, nil)
 	key := "test"

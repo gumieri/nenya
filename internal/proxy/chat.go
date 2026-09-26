@@ -1267,8 +1267,10 @@ func (p *Proxy) handleNonStreamingResponse(gw *gateway.NenyaGateway, w http.Resp
 	respBody, err := io.ReadAll(io.LimitReader(action.resp.Body, maxNonStreamingResponseBytes))
 	if err != nil {
 		gw.Logger.Error("failed to read non-streaming response body", "err", err)
+		_ = action.resp.Body.Close()
 		writeGatewayError(w, http.StatusBadGateway, ErrorTypeProvider, "Failed to read upstream response")
-		return streamResult{empty: true}
+		// Response already written: terminal, never fail over and append.
+		return streamResult{terminal: true}
 	}
 	_ = action.resp.Body.Close()
 
@@ -1280,7 +1282,8 @@ func (p *Proxy) handleNonStreamingResponse(gw *gateway.NenyaGateway, w http.Resp
 	if len(respBody) >= maxNonStreamingResponseBytes {
 		gw.Logger.Error("non-streaming response exceeded size limit", "model", target.Model)
 		writeGatewayError(w, http.StatusBadGateway, ErrorTypeProvider, "Upstream response too large")
-		return streamResult{empty: true}
+		// Response already written: terminal, never fail over and append.
+		return streamResult{terminal: true}
 	}
 
 	var responseMap map[string]interface{}

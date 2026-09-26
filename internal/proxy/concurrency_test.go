@@ -150,9 +150,9 @@ func TestHandleUpstreamError_ZAI1302_NoCooldownNoCB(t *testing.T) {
 	}
 	action.body, _ = io.ReadAll(action.resp.Body)
 
-	shouldRetry, delay := p.handleUpstreamError(gw, 0, targets, target, 5*time.Second, "agent", action)
+	signal, delay := p.handleUpstreamError(gw, 0, targets, target, 5*time.Second, "agent", action)
 
-	if !shouldRetry {
+	if signal != retrySignalRetry {
 		t.Fatal("1302 must be retried")
 	}
 	if delay < concurrencyRetryBase || delay > concurrencyRetryBase+concurrencyRetryJitter {
@@ -183,9 +183,9 @@ func TestHandleUpstreamError_ZAI1303_KeepsRateLimitPath(t *testing.T) {
 	}
 	action.body, _ = io.ReadAll(action.resp.Body)
 
-	shouldRetry, delay := p.handleUpstreamError(gw, 0, targets, target, 5*time.Second, "agent", action)
+	signal, delay := p.handleUpstreamError(gw, 0, targets, target, 5*time.Second, "agent", action)
 
-	if !shouldRetry {
+	if signal != retrySignalRetry {
 		t.Fatal("1303 must be retried")
 	}
 	if delay != 0 {

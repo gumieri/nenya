@@ -269,6 +269,9 @@ func mergeGovernanceBools(base, overlay *Config) {
 	if og.AutoReorderByLatencySet() {
 		bg.AutoReorderByLatency = og.AutoReorderByLatency
 	}
+	if og.RetryOpaque4xxSet() {
+		bg.RetryOpaque4xx = og.RetryOpaque4xx
+	}
 }
 
 func mergeBouncerConfig(base, overlay *Config) {

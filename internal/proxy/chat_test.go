@@ -467,15 +467,14 @@ func TestHandleChatCompletions_RequestScopedErrorNoRotation(t *testing.T) {
 		p.ServeHTTP(rec, req)
 
 		// Without the rule the generic non-retryable fallthrough sweeps both
-		// targets, ending in the typed exhaustion error rather than the
-		// relayed 401.
+		// targets. The last 401 that consumed no retry budget is relayed with
+		// its real status (a truthful client-class error), not masked as 503.
 		if hits.Load() != 2 {
 			t.Fatalf("expected fallback sweep to hit upstream twice, got %d", hits.Load())
 		}
-		if rec.Code != http.StatusServiceUnavailable {
-			t.Fatalf("expected typed 503 exhaustion error, got %d (body: %s)", rec.Code, rec.Body.String())
+		if rec.Code != http.StatusUnauthorized {
+			t.Fatalf("expected the swept 401 relayed to the client, got %d (body: %s)", rec.Code, rec.Body.String())
 		}
-		assertErrorKind(t, rec, "provider_error")
 	})
 }
 
