@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"io"
@@ -37,6 +38,15 @@ const (
 )
 
 func main() {
+	handled, handleErr := handleVersion(os.Stdout, os.Args[1:])
+	if handleErr != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", handleErr)
+		os.Exit(1)
+	}
+	if handled {
+		return
+	}
+
 	paths, verbose, validateOnly, printSchema := parseFlags()
 
 	if printSchema {
@@ -75,6 +85,51 @@ func main() {
 
 func parseFlags() (configPaths, bool, bool, bool) {
 	return parseArgs(os.Args[1:])
+}
+
+// versionJSON is the machine-readable version surface (CONTRACT.md §4.1).
+type versionJSON struct {
+	Version         string `json:"version"`
+	Commit          string `json:"commit"`
+	BuildTime       string `json:"build_time"`
+	ContractVersion int    `json:"contract_version"`
+}
+
+// handleVersion implements the version surface: the `version` subcommand and
+// the conventional `--version` flag. It runs before flag parsing so an
+// explicit version request never falls through to server startup (unknown
+// flags are otherwise ignored). It writes the result to w and reports whether
+// it handled the invocation.
+func handleVersion(w io.Writer, args []string) (bool, error) {
+	jsonOut := false
+	switch {
+	case len(args) == 1 && (args[0] == "--version" || args[0] == "-version"):
+	case len(args) > 0 && args[0] == "version":
+		for _, arg := range args[1:] {
+			if arg == "--json" {
+				jsonOut = true
+			}
+		}
+	default:
+		return false, nil
+	}
+
+	if !jsonOut {
+		_, err := fmt.Fprintln(w, version.Version)
+		return true, err
+	}
+
+	encoded, err := json.Marshal(versionJSON{
+		Version:         version.Version,
+		Commit:          version.Commit,
+		BuildTime:       version.BuildTime,
+		ContractVersion: version.ContractVersion,
+	})
+	if err != nil {
+		return true, fmt.Errorf("encode version: %w", err)
+	}
+	_, err = fmt.Fprintln(w, string(encoded))
+	return true, err
 }
 
 func parseArgs(args []string) (configPaths, bool, bool, bool) {

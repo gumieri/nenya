@@ -148,12 +148,13 @@ is written to **stdout**. Diagnostics and errors are written to **stderr**.
 These commands are normative in contract v1. Consumers MUST feature-detect
 (e.g. by attempting the command and checking exit status) until they ship.
 
-### 4.1 `nenya version --json` — status: target
+### 4.1 `nenya version --json` — status: stable
 
-Exits `0` and prints a single JSON object (Appendix A.1). Also accepts the
-conventional `--version` flag with the same output. **This replaces the current
-absence of any CLI version surface**, which is a known defect: `nenya --version`
-today falls through to server startup because unknown flags are ignored.
+`nenya version --json` exits `0` and prints a single JSON object (Appendix A.1).
+`nenya version` and the conventional `nenya --version` print the bare version
+string (e.g. `0.15.0`) and exit `0`, so scripts (including `install.sh`) can
+parse it directly. This closes the prior defect where `nenya --version` fell
+through to server startup because unknown flags were ignored.
 
 ### 4.2 `nenya paths --json` — status: target
 
@@ -532,7 +533,7 @@ guaranteed here.
 | Checksums + cosign bundle (§7.2) | stable |
 | Signals + reload semantics (§8.3) | stable |
 | `/healthz`, auth rules (§9) | stable |
-| `version --json` / `--version` (§4.1) | **target** |
+| `version --json` / `--version` (§4.1) | stable |
 | `paths --json` (§4.2) | **target** |
 | `describe --json` (§4.3) | **target** |
 | `example-config` (§4.4) | **target** |

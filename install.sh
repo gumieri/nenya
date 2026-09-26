@@ -148,6 +148,10 @@ install_config() {
 	fi
 
 	local src="$1"
+	if [ ! -f "$src" ]; then
+		info "Release archive ships no example config — see docs/CONFIGURATION.md for the config format."
+		return 0
+	fi
 	local dest="$CONFIG_DIR/config.json.example"
 	sudo install -Dm0644 "$src" "$dest"
 	info "Installed example config to ${dest}."
@@ -268,7 +272,7 @@ INSTALL_DIR="/usr/bin"
 	trap cleanup EXIT
 
 	BASE_URL="https://github.com/${GITHUB_REPO}/releases/download/${VERSION}"
-	ARCHIVE="nenya-${VERSION#v}-${OS}-${ARCH}.tar.gz"
+	ARCHIVE="nenya_${VERSION#v}_${OS}_${ARCH}.tar.gz"
 	CHECKSUMS="checksums.txt"
 
 	info "Installing ${BIN_NAME} ${VERSION} (${OS}/${ARCH})"
@@ -276,10 +280,10 @@ INSTALL_DIR="/usr/bin"
 	cd "$TMPDIR"
 
 	info "Downloading checksums..."
-	curl -sfLO "${BASE_URL}/${CHECKSUMS}" -o "$CHECKSUMS" || error "Failed to download checksums.txt."
+	curl -sfL -o "$CHECKSUMS" "${BASE_URL}/${CHECKSUMS}" || error "Failed to download checksums.txt."
 
 	info "Downloading ${ARCHIVE}..."
-	curl -sfLO "${BASE_URL}/${ARCHIVE}" -o "$ARCHIVE" || error "Failed to download ${ARCHIVE}."
+	curl -sfL -o "$ARCHIVE" "${BASE_URL}/${ARCHIVE}" || error "Failed to download ${ARCHIVE}."
 
 	verify_download "$CHECKSUMS" "$ARCHIVE"
 
@@ -296,7 +300,14 @@ INSTALL_DIR="/usr/bin"
 		exit 0
 	fi
 
-	tar -xzf "$ARCHIVE" nenya "$SERVICE_FILE" "$SOCKET_FILE" config.json.example 2>/dev/null || true
+	# Release archives store unit files under deploy/ and ship no config
+	# example; extract only the members that exist, and treat the example as
+	# best-effort in install_config.
+	if [ "$OS" = "linux" ]; then
+		tar -xzf "$ARCHIVE" nenya deploy/nenya.service deploy/nenya.socket 2>/dev/null || true
+	else
+		tar -xzf "$ARCHIVE" nenya 2>/dev/null || true
+	fi
 	rm -f "$ARCHIVE" "$CHECKSUMS"
 
 	install_binary "nenya"
@@ -308,8 +319,8 @@ INSTALL_DIR="/usr/bin"
 	fi
 
 	install_config "config.json.example"
-	install_service "nenya.service"
-	install_socket "nenya.socket"
+	install_service "deploy/nenya.service"
+	install_socket "deploy/nenya.socket"
 
 	echo ""
 	info "Installation complete. Next steps:"

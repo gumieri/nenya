@@ -1,7 +1,9 @@
 package main
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"net"
@@ -9,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strings"
 	"syscall"
 	"testing"
 	"time"
@@ -18,7 +21,67 @@ import (
 	"github.com/nenya/internal/pipeline"
 	"github.com/nenya/internal/proxy"
 	"github.com/nenya/internal/testutil"
+	"github.com/nenya/internal/version"
 )
+
+func TestHandleVersion_JSON(t *testing.T) {
+	var buf bytes.Buffer
+	handled, err := handleVersion(&buf, []string{"version", "--json"})
+	if err != nil {
+		t.Fatalf("handleVersion error: %v", err)
+	}
+	if !handled {
+		t.Fatal("expected handleVersion to handle `version --json`")
+	}
+	var got versionJSON
+	if err := json.Unmarshal(buf.Bytes(), &got); err != nil {
+		t.Fatalf("output is not valid JSON: %v (%q)", err, buf.String())
+	}
+	if got.Version != version.Version {
+		t.Errorf("version = %q, want %q", got.Version, version.Version)
+	}
+	if got.Commit != version.Commit {
+		t.Errorf("commit = %q, want %q", got.Commit, version.Commit)
+	}
+	if got.BuildTime != version.BuildTime {
+		t.Errorf("build_time = %q, want %q", got.BuildTime, version.BuildTime)
+	}
+	if got.ContractVersion != version.ContractVersion {
+		t.Errorf("contract_version = %d, want %d", got.ContractVersion, version.ContractVersion)
+	}
+}
+
+func TestHandleVersion_BareFlag(t *testing.T) {
+	for _, args := range [][]string{{"--version"}, {"-version"}, {"version"}} {
+		var buf bytes.Buffer
+		handled, err := handleVersion(&buf, args)
+		if err != nil {
+			t.Fatalf("args %v: handleVersion error: %v", args, err)
+		}
+		if !handled {
+			t.Fatalf("expected handleVersion to handle %v", args)
+		}
+		if strings.TrimSpace(buf.String()) != version.Version {
+			t.Errorf("args %v: output = %q, want %q", args, buf.String(), version.Version)
+		}
+	}
+}
+
+func TestHandleVersion_NotVersion(t *testing.T) {
+	for _, args := range [][]string{{}, {"-verbose"}, {"version1"}, {"--config", "x"}} {
+		var buf bytes.Buffer
+		handled, err := handleVersion(&buf, args)
+		if err != nil {
+			t.Errorf("args %v: unexpected error: %v", args, err)
+		}
+		if handled {
+			t.Errorf("args %v: expected handleVersion to pass through", args)
+		}
+		if buf.Len() != 0 {
+			t.Errorf("args %v: expected no output, got %q", args, buf.String())
+		}
+	}
+}
 
 func TestParseFlags_Defaults(t *testing.T) {
 	paths, verbose, validateOnly, printSchema := parseFlags()
