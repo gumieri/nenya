@@ -257,6 +257,9 @@ func (df *DiscoveryFetcher) fetchProviderModels(ctx context.Context, providerNam
 	}
 
 	models = filterDiscoveredModels(models, provider, logger)
+	// Drop non-chat models (e.g. TypeSafe Jev System One decision models on
+	// OpenCode Zen) as early as possible so they never enter the catalog.
+	models = filterNonChatModels(models, provider)
 	models = backfillStaticModels(models, providerName, provider, logger)
 
 	if strings.EqualFold(providerName, "ollama") {
@@ -278,6 +281,25 @@ func filterDiscoveredModels(models []DiscoveredModel, provider *config.Provider,
 	for _, m := range models {
 		if !provider.AllowsModel(m.ID) {
 			logger.Debug("discovery filtered model by allowed_models", "provider", provider.Name, "model", m.ID)
+			continue
+		}
+		filtered = append(filtered, m)
+	}
+	return filtered
+}
+
+// filterNonChatModels drops models classified by the provider's
+// non_chat_models patterns. Those models are served by non-chat endpoints
+// (e.g. TypeSafe Jev System One decision models on OpenCode Zen) and must not
+// appear in the chat model catalog. Returns the input slice unchanged when
+// the provider declares no non-chat models.
+func filterNonChatModels(models []DiscoveredModel, provider *config.Provider) []DiscoveredModel {
+	if provider == nil || len(provider.NonChatModels) == 0 {
+		return models
+	}
+	filtered := models[:0]
+	for _, m := range models {
+		if provider.IsNonChatModel(m.ID) {
 			continue
 		}
 		filtered = append(filtered, m)

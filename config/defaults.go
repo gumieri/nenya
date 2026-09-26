@@ -726,10 +726,13 @@ func applyAgentModelRegexDefaults(cfg *Config, name string, i int, m *AgentModel
 
 func applyProviderModelsDefaults(cfg *Config) error {
 	for name, pc := range cfg.Providers {
-		if len(pc.AllowedModels) == 0 {
+		if len(pc.AllowedModels) == 0 && len(pc.NonChatModels) == 0 {
 			continue
 		}
 		if _, err := CompileAllowedModels(pc.AllowedModels); err != nil {
+			return fmt.Errorf("provider %q: %w", name, err)
+		}
+		if _, err := CompileNonChatModels(pc.NonChatModels); err != nil {
 			return fmt.Errorf("provider %q: %w", name, err)
 		}
 	}
@@ -751,18 +754,17 @@ func applyBuiltInProviders(cfg *Config) {
 // MUST only be called once during initialization.
 func mergeProviderConfig(user, builtIn ProviderConfig) ProviderConfig {
 	merged := user
+	mergeProviderIdentity(&merged, builtIn)
+	mergeProviderTransport(&merged, builtIn)
+	mergeProviderRouting(&merged, builtIn)
+	return merged
+}
+
+// mergeProviderIdentity fills identity/format fields from builtIn.
+func mergeProviderIdentity(merged *ProviderConfig, builtIn ProviderConfig) {
 	mergeString(&merged.URL, builtIn.URL)
 	mergeString(&merged.AuthStyle, builtIn.AuthStyle)
 	mergeString(&merged.ApiFormat, builtIn.ApiFormat)
-	if merged.TimeoutSeconds == 0 && builtIn.TimeoutSeconds != 0 {
-		merged.TimeoutSeconds = builtIn.TimeoutSeconds
-	}
-	if merged.MaxRetryAttempts == 0 && builtIn.MaxRetryAttempts != 0 {
-		merged.MaxRetryAttempts = builtIn.MaxRetryAttempts
-	}
-	if len(merged.RetryableStatusCodes) == 0 && len(builtIn.RetryableStatusCodes) > 0 {
-		merged.RetryableStatusCodes = builtIn.RetryableStatusCodes
-	}
 	if merged.FormatURLs == nil && builtIn.FormatURLs != nil {
 		merged.FormatURLs = make(map[string]string)
 		for k, v := range builtIn.FormatURLs {
@@ -772,14 +774,33 @@ func mergeProviderConfig(user, builtIn ProviderConfig) ProviderConfig {
 	if merged.Thinking == nil && builtIn.Thinking != nil {
 		merged.Thinking = builtIn.Thinking
 	}
-	// Rate-limit defaults are tri-state pointers: nil inherits, 0 disables.
+}
+
+// mergeProviderTransport fills transport/retry fields from builtIn.
+func mergeProviderTransport(merged *ProviderConfig, builtIn ProviderConfig) {
+	if merged.TimeoutSeconds == 0 && builtIn.TimeoutSeconds != 0 {
+		merged.TimeoutSeconds = builtIn.TimeoutSeconds
+	}
+	if merged.MaxRetryAttempts == 0 && builtIn.MaxRetryAttempts != 0 {
+		merged.MaxRetryAttempts = builtIn.MaxRetryAttempts
+	}
+	if len(merged.RetryableStatusCodes) == 0 && len(builtIn.RetryableStatusCodes) > 0 {
+		merged.RetryableStatusCodes = builtIn.RetryableStatusCodes
+	}
+}
+
+// mergeProviderRouting fills model-classification and rate-limit fields from
+// builtIn. Rate-limit defaults are tri-state pointers: nil inherits, 0 disables.
+func mergeProviderRouting(merged *ProviderConfig, builtIn ProviderConfig) {
+	if len(merged.NonChatModels) == 0 && len(builtIn.NonChatModels) > 0 {
+		merged.NonChatModels = append([]string(nil), builtIn.NonChatModels...)
+	}
 	if merged.RatelimitMaxRPM == nil {
 		merged.RatelimitMaxRPM = builtIn.RatelimitMaxRPM
 	}
 	if merged.RatelimitMaxTPM == nil {
 		merged.RatelimitMaxTPM = builtIn.RatelimitMaxTPM
 	}
-	return merged
 }
 
 // mergeString sets *dst to src if dst is non-nil and empty, and src is non-empty.

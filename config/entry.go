@@ -134,6 +134,10 @@ type ProviderEntry struct {
 	// RatelimitMaxTPM is the tokens-per-minute counterpart of
 	// RatelimitMaxRPM, with identical semantics.
 	RatelimitMaxTPM *int `json:"ratelimit_max_tpm,omitempty"`
+	// NonChatModels classifies provider models that are not served by the
+	// chat-completions endpoint (e.g. TypeSafe Jev System One decision
+	// models on OpenCode Zen). See ProviderConfig.NonChatModels.
+	NonChatModels []string `json:"non_chat_models,omitempty"`
 }
 
 func (e ProviderEntry) ToProviderConfig() ProviderConfig {
@@ -144,5 +148,6 @@ func (e ProviderEntry) ToProviderConfig() ProviderConfig {
 		FormatURLs:      e.FormatURLs,
 		RatelimitMaxRPM: e.RatelimitMaxRPM,
 		RatelimitMaxTPM: e.RatelimitMaxTPM,
+		NonChatModels:   e.NonChatModels,
 	}
 }

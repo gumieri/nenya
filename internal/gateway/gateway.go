@@ -317,7 +317,9 @@ func performModelDiscovery(ctx context.Context, cfg *config.Config, providers ma
 	var healthRegistry *discovery.HealthRegistry
 
 	if cfg.Discovery.Enabled == nil || !*cfg.Discovery.Enabled {
-		mergedCatalog = discovery.MergeCatalog(discovery.NewModelCatalog(), cfg)
+		base := discovery.NewModelCatalog()
+		discovery.ApplyProviderNonChatToCatalog(base, cfg.Providers)
+		mergedCatalog = discovery.MergeCatalog(base, cfg)
 		return mergedCatalog, nil
 	}
 
@@ -325,6 +327,10 @@ func performModelDiscovery(ctx context.Context, cfg *config.Config, providers ma
 		WithMetrics(metrics).
 		WithKeyProvider(keyProvider)
 	catalog := fetcher.FetchAll(ctx, providers, logger)
+	// The pricing fetcher builds its own catalog from OpenRouter's model
+	// list; apply the non-chat filter there too so non_chat_models is
+	// honored on that path (MergeCatalog already filters the main catalog).
+	discovery.ApplyProviderNonChatToCatalog(catalog, cfg.Providers)
 	mergedCatalog = discovery.MergeCatalog(catalog, cfg)
 
 	if _, hasOR := providers["openrouter"]; hasOR {

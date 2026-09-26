@@ -769,6 +769,11 @@ func ResolveProviders(cfg *Config, secrets *SecretsConfig) map[string]*Provider 
 			fmt.Printf("[ERROR] failed to compile allowed_models for provider %q: %v (skipping provider)\n", name, err)
 			continue
 		}
+		compiledNonChat, err := CompileNonChatModels(pc.NonChatModels)
+		if err != nil {
+			fmt.Printf("[ERROR] failed to compile non_chat_models for provider %q: %v (skipping provider)\n", name, err)
+			continue
+		}
 		providers[name] = &Provider{
 			Name:                         name,
 			URL:                          pc.URL,
@@ -789,6 +794,8 @@ func ResolveProviders(cfg *Config, secrets *SecretsConfig) map[string]*Provider 
 			Billing:                      pc.Billing,
 			AllowedModels:                pc.AllowedModels,
 			allowedRE:                    compiledRE,
+			NonChatModels:                pc.NonChatModels,
+			nonChatRE:                    compiledNonChat,
 			MaxConcurrentRequests:        pc.MaxConcurrentRequests,
 			ModelConcurrency:             pc.ModelConcurrency,
 			ModelAliases:                 pc.ModelAliases,

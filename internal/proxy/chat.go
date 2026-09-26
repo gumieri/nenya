@@ -749,6 +749,15 @@ func requiresCredentials(providers map[string]*config.Provider, name string) boo
 }
 
 func (p *Proxy) resolveModelRouting(ctx context.Context, req *chatRequest, gw *gateway.NenyaGateway) ([]routing.UpstreamTarget, string, time.Duration, int, *httpError) {
+	if isNonChatModel(gw, req.ModelName) {
+		gw.Logger.Warn("model is not a chat model; refusing chat routing", "model", req.ModelName)
+		return nil, "", 0, 0, &httpError{
+			Code:    http.StatusBadRequest,
+			Message: util.ErrNonChatModel,
+			Kind:    infra.ErrorKindInvalidRequest,
+		}
+	}
+
 	matches := routing.ResolveProviders(req.ModelName, gw.Providers, gw.ModelCatalog)
 	if len(matches) == 0 {
 		gw.Logger.Warn("no provider found for model", "model", req.ModelName)
