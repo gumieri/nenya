@@ -115,6 +115,44 @@ func TestBrowserGuard_GETSurfacesCovered(t *testing.T) {
 	}
 }
 
+// TestBrowserGuard_OriginlessOptIn checks the "*" sentinel allows
+// Origin-less metadata-only requests (e.g. Node/undici's automatic
+// Sec-Fetch-Mode) while a rebound page's cross-origin fetch — which always
+// carries Origin — is still decided by the allowlist, not the sentinel.
+func TestBrowserGuard_OriginlessOptIn(t *testing.T) {
+	p := newBrowserGuardProxy(t, []string{"*"})
+
+	rec := guardRequest(p, http.MethodPost, "/v1/chat/completions", map[string]string{
+		"Sec-Fetch-Mode": "cors",
+	})
+	if rec.Code == http.StatusForbidden {
+		t.Fatalf("origin-less metadata with '*' opt-in must not be blocked, got 403: %s", rec.Body.String())
+	}
+
+	// The sentinel must NOT grant a rebound origin: Origin is present, so
+	// the allowlist (which has no matching entry) still denies.
+	rebound := guardRequest(p, http.MethodPost, "/v1/chat/completions", map[string]string{
+		"Origin":         "http://127.0.0.1:4010",
+		"Host":           "127.0.0.1:4010",
+		"Sec-Fetch-Mode": "cors",
+	})
+	if rebound.Code != http.StatusForbidden {
+		t.Fatalf("'*' must not allow a rebound Origin, got %d: %s", rebound.Code, rebound.Body.String())
+	}
+}
+
+// TestBrowserGuard_OriginlessOptOutByDefault pins that without the sentinel,
+// an Origin-less metadata request is still denied.
+func TestBrowserGuard_OriginlessOptOutByDefault(t *testing.T) {
+	p := newBrowserGuardProxy(t, []string{"https://studio.example.com"})
+	rec := guardRequest(p, http.MethodPost, "/v1/chat/completions", map[string]string{
+		"Sec-Fetch-Mode": "cors",
+	})
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("origin-less metadata without '*' must be denied, got %d", rec.Code)
+	}
+}
+
 // TestCanonicalOrigin pins the normalization rules: lowercased scheme/host,
 // default ports stripped, non-URL entries lowercased literally.
 func TestCanonicalOrigin(t *testing.T) {

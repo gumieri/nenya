@@ -824,7 +824,10 @@ type GovernanceConfig struct {
 	// requests carrying browser fetch metadata (Origin / Sec-Fetch-*) are
 	// refused on every route — including the no-auth GET surfaces — unless
 	// the request origin matches an entry. Default empty = deny all
-	// browser-context requests; nenya serves non-browser clients.
+	// browser-context requests; nenya serves non-browser clients. The
+	// sentinel entry "*" opts in to Origin-less metadata-only requests
+	// (e.g. Node/undici's automatic Sec-Fetch-Mode), which a rebound page
+	// cannot exploit because its cross-origin fetch always sends Origin.
 	AllowedBrowserOrigins  []string `json:"allowed_browser_origins,omitempty"`
 	CostMode               string   `json:"cost_mode,omitempty"`
 	BillingEconomyScale    float64  `json:"billing_economy_scale,omitempty"`
