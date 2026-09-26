@@ -107,6 +107,7 @@ Client Request
    │           └─ Async MCP auto-save (if agent has mcp.auto_save)
    │           └─ POST to MCP server with assistant content (best-effort, tool name configurable)
    ├─ GET /v1/models
+  ├─ POST /v1/systemone (System One decision models — non-streaming JSON relay)
   ├─ POST /v1/embeddings
   ├─ POST /v1/responses (transparent passthrough, no content pipeline)
   ├─ /proxy/{provider}/* (arbitrary endpoint passthrough, auth injection, SSE auto-detect)

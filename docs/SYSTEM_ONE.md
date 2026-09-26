@@ -1,10 +1,10 @@
 # System One Decision Models (Jev)
 
-> Status: **recon / spec-first**. This document captures the validated wire
-> contract for TypeSafe's System One decision models (Jev 1.13) as reachable
-> through OpenCode Zen, and the Nenya integration paths. The first-class
-> endpoint described under [Integration paths](#integration-paths) is planned
-> (Plane module *System One Decision Models Adoption*).
+> Status: **shipped**. Nenya supports TypeSafe System One decision models
+> (Jev 1.13) through a first-class `POST /v1/systemone` endpoint, with
+> discovery/routing guards and usage metrics. This document captures the
+> validated wire contract as reachable through OpenCode Zen and the Nenya
+> integration paths.
 
 ## What Jev is
 
@@ -147,30 +147,71 @@ provider key, never forwarded); `/statsz` records `proxy:zen.requests` and
 `proxy:zen.errors`, but `input_tokens`/`output_tokens` stay `0` — the
 passthrough path does not account for decision usage.
 
-### 2. First-class endpoint (planned)
+### 2. First-class endpoint (shipped)
 
 `POST /v1/systemone` — Nenya authenticates with the client token, resolves the
 provider's System One URL, injects the provider key, relays the non-streaming
-JSON response, and records usage. See the Plane module for phases.
+JSON response, and records usage.
+
+```bash
+curl -sS http://127.0.0.1:8080/v1/systemone \
+  -H "Authorization: Bearer $NENYA_CLIENT_TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{"model":"jev-1.13-free","state":"...","questions":{...}}'
+```
+
+Behavior:
+
+- **Auth/RBAC:** the Nenya client token gates the route like any other
+  `/v1/*` endpoint; `user` and `admin` keys are allowed (POST). A missing token
+  returns `401`, an unauthorized key `403`.
+- **Resolution:** System One models are absent from the chat catalog
+  (`non_chat_models`), so the handler resolves to the provider that classifies
+  the model as non-chat and declares a `format_urls.systemone` endpoint. A
+  provider without one fails closed (`400` `error_kind=model_not_found`).
+- **Provider key:** injected upstream; the client token is never forwarded.
+- **Body:** `http.MaxBytesReader` cap, `state` and `questions` forwarded
+  verbatim (the body is not an OpenAI chat shape).
+- **Errors:** upstream 4xx is relayed with its status; 5xx and transport errors
+  are retried (`util.DoWithRetryResp`) and surface as `502`
+  `error_kind=network_error` on exhaustion.
+- **Usage:** input/output tokens are recorded from the response `usage` object
+  (`/statsz` per-model counters, `nenya_tokens_estimated_total{direction}`), and
+  the request is counted in `nenya_decisions_total{model,provider}`.
 
 Consumers that speak the System One contract can point at either path. For
 example, `@jkudish/jev-mcp` in compatible mode:
 
 ```
 JEV_PROVIDER=compatible
-JEV_API_BASE_URL=http://127.0.0.1:8080/proxy/zen/zen/v1/systemone
+JEV_API_BASE_URL=http://127.0.0.1:8080/v1/systemone
 JEV_API_KEY=<nenya client token>
 JEV_MCP_MODEL=jev-1.13-free
 ```
 
-### 3. Discovery/routing guard (planned)
+### 3. Discovery/routing guard (shipped)
 
 Zen's `/v1/models` lists `jev-1.13` and `jev-1.13-free` alongside chat models
-and carries no modality field, so dynamic discovery currently advertises them
-as chat models. A config-driven non-chat model marker will exclude them from
-`/v1/models` and make chat requests fail fast with a structured
-`error_kind=invalid_request` instead of a doomed upstream call. The marker must
-not affect the `/proxy/` or `/v1/systemone` paths.
+and carries no modality field, so a config-driven marker classifies them:
+`providers.zen.non_chat_models = ["^jev-"]` (built-in default for `zen`). Non-chat
+models are excluded from the merged catalog and `/v1/models`, and chat requests
+naming one fail fast with `400 error_kind=invalid_request`. The marker never
+affects `/proxy/` or `/v1/systemone`.
+
+```json
+{
+  "providers": {
+    "zen": {
+      "url": "https://opencode.ai/zen/v1/chat/completions",
+      "non_chat_models": ["^jev-"]
+    }
+  }
+}
+```
+
+See [`docs/CONFIGURATION.md`](CONFIGURATION.md#providers) for the field
+reference and [`docs/PROVIDERS.md`](PROVIDERS.md#opencode-zen) for the Zen
+decision endpoint.
 
 ## Limitations
 

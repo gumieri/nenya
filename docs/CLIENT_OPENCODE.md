@@ -77,6 +77,13 @@ curl -s http://localhost:8080/v1/chat/completions \
 | `GET /v1/models` | Supported | OpenCode doesn't call this (hardcoded models), but available |
 | `POST /v1/responses` | Passthrough | Available if needed |
 | `POST /v1/embeddings` | Passthrough | Available if needed |
+| `POST /v1/systemone` | Supported | TypeSafe Jev decision models via an MCP tool such as `@jkudish/jev-mcp` in compatible mode — see [SYSTEM_ONE.md](SYSTEM_ONE.md) |
+
+> **Decision-model judgments in a coding agent.** Jev is not a chat model, so it
+> is not selectable as an OpenCode model. Reach it as an MCP judgment tool
+> (`jev_gate`, `jev_verify`, `jev_screen`, …) pointed at Nenya's
+> `/v1/systemone`; the Nenya client token stays in the tool environment and the
+> provider key never leaves the gateway.
 
 ## Client Detection
 

@@ -198,6 +198,7 @@ Flow notes:
 - **Thought pruning** — strip reasoning blocks from assistant message history
 - **Prompt-injection defense** — deterministic detection/sanitization, untrusted-content spotlighting, and an advisory two-tier classifier (see [docs/INJECTION_DEFENSE.md](docs/INJECTION_DEFENSE.md))
 - **Output egress control** — ExfilGuard URL policy and canary tripwires on every egress channel
+- **System One decision models** — `POST /v1/systemone` proxies TypeSafe Jev typed-decision requests (noul/choice/score) through Nenya, with a non-chat model guard keeping them out of chat routing (see [docs/SYSTEM_ONE.md](docs/SYSTEM_ONE.md))
 - **Input validation** — strict body limits, JSON sanitization, header filtering
 - **Graceful degradation** — with `bouncer.fail_open=true` (the default), engine and token-saving pipeline failures never block requests; security interceptors fail closed by design (503) so a broken defense cannot silently pass content
 - **Role-Based Access Control (RBAC)** — per-API key roles (admin, user, read-only) with agent and endpoint restrictions
@@ -296,6 +297,7 @@ docker run -e PORT=9090 -p 9090:9090 ghcr.io/gumieri/nenya:latest
 | [MCP Integration](docs/MCP_INTEGRATION.md) | MCP server integration, tool discovery, multi-turn execution |
 | [Injection & Exfiltration Defense](docs/INJECTION_DEFENSE.md) | Threat model, defense-in-depth layers, rollout playbook, honest limitations |
 | [Adapters](docs/ADAPTERS.md) | Adapter system internals, auth styles, capability flags |
+| [System One Decision Models](docs/SYSTEM_ONE.md) | TypeSafe Jev integration: `/v1/systemone`, non-chat model guard, usage metrics |
 | [Secrets Format](docs/SECRETS_FORMAT.md) | Systemd credentials, env var fallback, container/K8s deployment |
 | [Security](docs/SECURITY.md) | Vulnerability reporting policy |
 | [Disclaimer](docs/DISCLAIMER.md) | Best-effort redaction scope and limitations |
