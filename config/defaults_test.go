@@ -402,7 +402,7 @@ func TestPrefixCache_MergeTTLFields(t *testing.T) {
 		CacheMessagesTTL: &oneHour,
 	}}
 
-	mergePrefixCacheConfig(base, overlay)
+	mergeConfig(base, overlay)
 
 	if base.PrefixCache.CacheSystemTTL == nil || *base.PrefixCache.CacheSystemTTL != "1h" {
 		t.Errorf("CacheSystemTTL not merged: got %v", base.PrefixCache.CacheSystemTTL)
@@ -502,7 +502,7 @@ func TestPrefixCache_MergeCacheMode(t *testing.T) {
 			CacheMode: &automatic,
 		},
 	}
-	mergePrefixCacheConfig(base, overlay)
+	mergeConfig(base, overlay)
 	if base.PrefixCache.CacheMode == nil || *base.PrefixCache.CacheMode != CacheModeAutomatic {
 		t.Errorf("CacheMode not merged: got %v", base.PrefixCache.CacheMode)
 	}
@@ -558,7 +558,7 @@ func TestPrefixCache_MergeOpenAIFields(t *testing.T) {
 			OpenAIMode:       &explicit,
 		},
 	}
-	mergePrefixCacheConfig(base, overlay)
+	mergeConfig(base, overlay)
 	if base.PrefixCache.OpenAIBreakpoint == nil || !*base.PrefixCache.OpenAIBreakpoint {
 		t.Errorf("OpenAIBreakpoint not merged: got %v", base.PrefixCache.OpenAIBreakpoint)
 	}

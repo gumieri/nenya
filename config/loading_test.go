@@ -158,14 +158,14 @@ func TestMergeGovernance_EarlyStreamErrorFailover(t *testing.T) {
 
 	overlay := &Config{}
 	overlay.Governance.EarlyStreamErrorFailover = PtrTo(false)
-	mergeGovernanceBools(base, overlay)
+	mergeConfig(base, overlay)
 	if base.Governance.EarlyStreamErrorFailover == nil || *base.Governance.EarlyStreamErrorFailover {
 		t.Errorf("expected overlay false to override, got %v", *base.Governance.EarlyStreamErrorFailover)
 	}
 
 	// Unset overlay leaves base untouched.
 	overlay.Governance.EarlyStreamErrorFailover = nil
-	mergeGovernanceBools(base, overlay)
+	mergeConfig(base, overlay)
 	if base.Governance.EarlyStreamErrorFailover == nil || *base.Governance.EarlyStreamErrorFailover {
 		t.Errorf("expected base value preserved, got %v", *base.Governance.EarlyStreamErrorFailover)
 	}
@@ -179,14 +179,14 @@ func TestMergeGovernance_RetryOpaque4xx(t *testing.T) {
 
 	overlay := &Config{}
 	overlay.Governance.RetryOpaque4xx = PtrTo(false)
-	mergeGovernanceBools(base, overlay)
+	mergeConfig(base, overlay)
 	if base.Governance.RetryOpaque4xx == nil || *base.Governance.RetryOpaque4xx {
 		t.Errorf("expected overlay false to override, got %v", base.Governance.RetryOpaque4xx)
 	}
 
 	// Unset overlay leaves base untouched.
 	overlay.Governance.RetryOpaque4xx = nil
-	mergeGovernanceBools(base, overlay)
+	mergeConfig(base, overlay)
 	if base.Governance.RetryOpaque4xx == nil || *base.Governance.RetryOpaque4xx {
 		t.Errorf("expected base value preserved, got %v", base.Governance.RetryOpaque4xx)
 	}

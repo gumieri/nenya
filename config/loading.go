@@ -9,9 +9,11 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // Load reads and parses a single JSON config file from path. Returns
@@ -160,302 +162,87 @@ func configDropInFiles(dir string) ([]string, error) {
 	return files, nil
 }
 
+// mergeConfig applies overlay onto base with the directory-mode merge rules:
+// exported struct fields recurse; pointers to structs deep-merge; pointers to
+// scalars, non-empty slices, and non-nil maps are applied (maps merge per key);
+// plain scalars apply when non-zero. The rules cover every field of Config
+// structurally, so a newly added field merges without touching this function.
+// The previous hand-written per-section mergers silently dropped any field they
+// did not enumerate (for example governance.injection/canary/exfil_guard).
 func mergeConfig(base, overlay *Config) {
-	mergeServerConfig(base, overlay)
-	mergeContextConfig(base, overlay)
-	mergeGovernanceConfig(base, overlay)
-	mergeBouncerConfig(base, overlay)
-	mergePrefixCacheConfig(base, overlay)
-	mergeCompactionConfig(base, overlay)
-	mergeWindowConfig(base, overlay)
-	mergeResponseCacheConfig(base, overlay)
-	mergeDiscoveryConfig(base, overlay)
-	mergeMap(base, overlay, &base.Agents, &overlay.Agents)
-	mergeMap(base, overlay, &base.Providers, &overlay.Providers)
-	mergeMap(base, overlay, &base.MCPServers, &overlay.MCPServers)
+	mergeValue(reflect.ValueOf(base).Elem(), reflect.ValueOf(overlay).Elem())
 }
 
-func mergeServerConfig(base, overlay *Config) {
-	if overlay.Server.ListenAddr != "" {
-		base.Server.ListenAddr = overlay.Server.ListenAddr
-	}
-	if overlay.Server.MaxBodyBytes != 0 {
-		base.Server.MaxBodyBytes = overlay.Server.MaxBodyBytes
-	}
-	if overlay.Server.UserAgent != "" {
-		base.Server.UserAgent = overlay.Server.UserAgent
-	}
-	if overlay.Server.LogLevel != "" {
-		base.Server.LogLevel = overlay.Server.LogLevel
-	}
-	if overlay.Server.SecureMemoryRequiredWasSet() {
-		base.Server.SecureMemoryRequired = overlay.Server.SecureMemoryRequired
-	}
-}
+var timeType = reflect.TypeOf(time.Time{})
 
-func mergeGovernanceConfig(base, overlay *Config) {
-	mergeGovernanceScalars(base, overlay)
-	mergeGovernanceBools(base, overlay)
-}
-
-func mergeContextConfig(base, overlay *Config) {
-	oc := &overlay.Context
-	bc := &base.Context
-	if oc.TruncationStrategy != "" {
-		bc.TruncationStrategy = oc.TruncationStrategy
-	}
-	if oc.TruncationKeepFirstPct != 0 {
-		bc.TruncationKeepFirstPct = oc.TruncationKeepFirstPct
-	}
-	if oc.TruncationKeepLastPct != 0 {
-		bc.TruncationKeepLastPct = oc.TruncationKeepLastPct
-	}
-	if oc.TFIDFQuerySource != "" {
-		bc.TFIDFQuerySource = oc.TFIDFQuerySource
+// mergeValue merges src into dst in place following the rules documented on
+// mergeConfig. Unexported fields are skipped.
+func mergeValue(dst, src reflect.Value) {
+	switch src.Kind() {
+	case reflect.Pointer:
+		mergePointer(dst, src)
+	case reflect.Struct:
+		mergeStruct(dst, src)
+	case reflect.Map:
+		mergeMapValue(dst, src)
+	case reflect.Slice:
+		if src.Len() > 0 {
+			dst.Set(src)
+		}
+	case reflect.Bool:
+		if src.Bool() {
+			dst.SetBool(true)
+		}
+	default:
+		if !src.IsZero() {
+			dst.Set(src)
+		}
 	}
 }
 
-func mergeGovernanceScalars(base, overlay *Config) {
-	og := &overlay.Governance
-	bg := &base.Governance
-	if len(og.BlockedExecutionPatterns) > 0 {
-		bg.BlockedExecutionPatterns = og.BlockedExecutionPatterns
-	}
-	if len(og.RetryableStatusCodes) > 0 {
-		bg.RetryableStatusCodes = og.RetryableStatusCodes
-	}
-	if og.RPMSet() {
-		bg.RatelimitMaxRPM = og.RatelimitMaxRPM
-	}
-	if og.TPMSet() {
-		bg.RatelimitMaxTPM = og.RatelimitMaxTPM
-	}
-	if og.MaxRetryAttempts != 0 {
-		bg.MaxRetryAttempts = og.MaxRetryAttempts
-	}
-	if og.RoutingStrategy != "" {
-		bg.RoutingStrategy = og.RoutingStrategy
-	}
-	if og.RoutingLatencyWeight != 0 {
-		bg.RoutingLatencyWeight = og.RoutingLatencyWeight
-	}
-	if og.RoutingCostWeight != 0 {
-		bg.RoutingCostWeight = og.RoutingCostWeight
-	}
-	if og.MaxCostPerRequest != 0 {
-		bg.MaxCostPerRequest = og.MaxCostPerRequest
-	}
-	if og.CostMode != "" {
-		bg.CostMode = og.CostMode
-	}
-	if og.BillingEconomyScale != 0 {
-		bg.BillingEconomyScale = og.BillingEconomyScale
-	}
-	if og.BillingQualityScale != 0 {
-		bg.BillingQualityScale = og.BillingQualityScale
-	}
-	if og.MaxTransformedSSEBytes != 0 {
-		bg.MaxTransformedSSEBytes = og.MaxTransformedSSEBytes
-	}
-}
-
-func mergeGovernanceBools(base, overlay *Config) {
-	og := &overlay.Governance
-	bg := &base.Governance
-	if og.EmptyStreamAsErrorSet() {
-		bg.EmptyStreamAsError = og.EmptyStreamAsError
-	}
-	if og.EarlyStreamErrorFailoverSet() {
-		bg.EarlyStreamErrorFailover = og.EarlyStreamErrorFailover
-	}
-	if og.AutoContextSkipSet() {
-		bg.AutoContextSkip = og.AutoContextSkip
-	}
-	if og.AutoReorderByLatencySet() {
-		bg.AutoReorderByLatency = og.AutoReorderByLatency
-	}
-	if og.RetryOpaque4xxSet() {
-		bg.RetryOpaque4xx = og.RetryOpaque4xx
-	}
-}
-
-func mergeBouncerConfig(base, overlay *Config) {
-	if overlay.Bouncer.EnabledWasSet() {
-		base.Bouncer.Enabled = overlay.Bouncer.Enabled
-	}
-	if overlay.Bouncer.RedactionLabel != "" {
-		base.Bouncer.RedactionLabel = overlay.Bouncer.RedactionLabel
-	}
-	if len(overlay.Bouncer.RedactPatterns) > 0 {
-		base.Bouncer.RedactPatterns = overlay.Bouncer.RedactPatterns
-	}
-	if overlay.Bouncer.FailOpenWasSet() {
-		base.Bouncer.FailOpen = overlay.Bouncer.FailOpen
-	}
-	if overlay.Bouncer.RedactOutput {
-		base.Bouncer.RedactOutput = true
-	}
-	if overlay.Bouncer.RedactOutputWindow != 0 {
-		base.Bouncer.RedactOutputWindow = overlay.Bouncer.RedactOutputWindow
-	}
-	if overlay.Bouncer.Engine.AgentName != "" || overlay.Bouncer.Engine.Provider != "" {
-		base.Bouncer.Engine = overlay.Bouncer.Engine
-	}
-	if overlay.Bouncer.EntropyEnabled {
-		base.Bouncer.EntropyEnabled = true
-	}
-	if overlay.Bouncer.EntropyThreshold != 0 {
-		base.Bouncer.EntropyThreshold = overlay.Bouncer.EntropyThreshold
-	}
-	if overlay.Bouncer.EntropyMinToken != 0 {
-		base.Bouncer.EntropyMinToken = overlay.Bouncer.EntropyMinToken
-	}
-}
-
-func mergePrefixCacheConfig(base, overlay *Config) {
-	if overlay.PrefixCache.CacheModeWasSet() {
-		base.PrefixCache.CacheMode = overlay.PrefixCache.CacheMode
-	}
-	if overlay.PrefixCache.PinWasSet() {
-		base.PrefixCache.PinSystemFirst = overlay.PrefixCache.PinSystemFirst
-	}
-	if overlay.PrefixCache.StableWasSet() {
-		base.PrefixCache.StableTools = overlay.PrefixCache.StableTools
-	}
-	if overlay.PrefixCache.SkipRedactionWasSet() {
-		base.PrefixCache.SkipRedactionOnSystem = overlay.PrefixCache.SkipRedactionOnSystem
-	}
-	if overlay.PrefixCache.CacheSystemWasSet() {
-		base.PrefixCache.CacheSystem = overlay.PrefixCache.CacheSystem
-	}
-	if overlay.PrefixCache.CacheToolsWasSet() {
-		base.PrefixCache.CacheTools = overlay.PrefixCache.CacheTools
-	}
-	if overlay.PrefixCache.CacheMessagesWasSet() {
-		base.PrefixCache.CacheMessages = overlay.PrefixCache.CacheMessages
-	}
-	if overlay.PrefixCache.CacheControlTTL != "" {
-		base.PrefixCache.CacheControlTTL = overlay.PrefixCache.CacheControlTTL
-	}
-	if overlay.PrefixCache.CacheSystemTTLWasSet() {
-		base.PrefixCache.CacheSystemTTL = overlay.PrefixCache.CacheSystemTTL
-	}
-	if overlay.PrefixCache.CacheToolsTTLWasSet() {
-		base.PrefixCache.CacheToolsTTL = overlay.PrefixCache.CacheToolsTTL
-	}
-	if overlay.PrefixCache.CacheMessagesTTLWasSet() {
-		base.PrefixCache.CacheMessagesTTL = overlay.PrefixCache.CacheMessagesTTL
-	}
-	if overlay.PrefixCache.OpenAIBreakpointWasSet() {
-		base.PrefixCache.OpenAIBreakpoint = overlay.PrefixCache.OpenAIBreakpoint
-	}
-	if overlay.PrefixCache.OpenAIModeWasSet() {
-		base.PrefixCache.OpenAIMode = overlay.PrefixCache.OpenAIMode
-	}
-}
-
-func mergeCompactionConfig(base, overlay *Config) {
-	if overlay.Compaction.Preset != "" {
-		base.Compaction.Preset = overlay.Compaction.Preset
-	}
-	if overlay.Compaction.EnabledWasSet() {
-		base.Compaction.Enabled = overlay.Compaction.Enabled
-	}
-	if overlay.Compaction.MinifyWasSet() {
-		base.Compaction.JSONMinify = overlay.Compaction.JSONMinify
-	}
-	if overlay.Compaction.CollapseWasSet() {
-		base.Compaction.CollapseBlankLines = overlay.Compaction.CollapseBlankLines
-	}
-	if overlay.Compaction.TrimWasSet() {
-		base.Compaction.TrimTrailingWhitespace = overlay.Compaction.TrimTrailingWhitespace
-	}
-	if overlay.Compaction.NormWasSet() {
-		base.Compaction.NormalizeLineEndings = overlay.Compaction.NormalizeLineEndings
-	}
-	if overlay.Compaction.PruneWasSet() {
-		base.Compaction.PruneStaleTools = overlay.Compaction.PruneStaleTools
-	}
-	if overlay.Compaction.ToolProtectionWindow != 0 {
-		base.Compaction.ToolProtectionWindow = overlay.Compaction.ToolProtectionWindow
-	}
-	if overlay.Compaction.PruneThoughtsWasSet() {
-		base.Compaction.PruneThoughts = overlay.Compaction.PruneThoughts
-	}
-}
-
-func mergeWindowConfig(base, overlay *Config) {
-	if overlay.Window.Enabled {
-		base.Window.Enabled = true
-	}
-	if overlay.Window.Mode != "" {
-		base.Window.Mode = overlay.Window.Mode
-	}
-	if overlay.Window.ActiveMessages != 0 {
-		base.Window.ActiveMessages = overlay.Window.ActiveMessages
-	}
-	if overlay.Window.TriggerRatio != 0 {
-		base.Window.TriggerRatio = overlay.Window.TriggerRatio
-	}
-	if overlay.Window.SummaryMaxRunes != 0 {
-		base.Window.SummaryMaxRunes = overlay.Window.SummaryMaxRunes
-	}
-	if overlay.Window.MaxContext != 0 {
-		base.Window.MaxContext = overlay.Window.MaxContext
-	}
-	if overlay.Window.Engine.AgentName != "" || overlay.Window.Engine.Provider != "" {
-		base.Window.Engine = overlay.Window.Engine
-	}
-	if overlay.Window.KeepFirstPct != 0 {
-		base.Window.KeepFirstPct = overlay.Window.KeepFirstPct
-	}
-	if overlay.Window.KeepLastPct != 0 {
-		base.Window.KeepLastPct = overlay.Window.KeepLastPct
-	}
-}
-
-func mergeResponseCacheConfig(base, overlay *Config) {
-	if overlay.ResponseCache.EnabledWasSet() {
-		base.ResponseCache.Enabled = overlay.ResponseCache.Enabled
-	}
-	if overlay.ResponseCache.MaxEntries != 0 {
-		base.ResponseCache.MaxEntries = overlay.ResponseCache.MaxEntries
-	}
-	if overlay.ResponseCache.MaxEntryBytes != 0 {
-		base.ResponseCache.MaxEntryBytes = overlay.ResponseCache.MaxEntryBytes
-	}
-	if overlay.ResponseCache.TTLSeconds != 0 {
-		base.ResponseCache.TTLSeconds = overlay.ResponseCache.TTLSeconds
-	}
-	if overlay.ResponseCache.EvictEverySeconds != 0 {
-		base.ResponseCache.EvictEverySeconds = overlay.ResponseCache.EvictEverySeconds
-	}
-	if overlay.ResponseCache.ForceRefreshHeader != "" {
-		base.ResponseCache.ForceRefreshHeader = overlay.ResponseCache.ForceRefreshHeader
-	}
-}
-
-func mergeDiscoveryConfig(base, overlay *Config) {
-	if overlay.Discovery.EnabledWasSet() {
-		base.Discovery.Enabled = overlay.Discovery.Enabled
-	}
-	if overlay.Discovery.AutoAgentsWasSet() {
-		base.Discovery.AutoAgents = overlay.Discovery.AutoAgents
-	}
-	if overlay.Discovery.AutoAgentsConfig != nil {
-		base.Discovery.AutoAgentsConfig = overlay.Discovery.AutoAgentsConfig
-	}
-}
-
-func mergeMap[T any](base, overlay *Config, baseField *map[string]T, overlayField *map[string]T) {
-	if len(*overlayField) == 0 {
+// mergePointer keeps whole-pointer semantics for scalars (so an explicit
+// false/0 override survives) and deep-merges pointers to structs.
+func mergePointer(dst, src reflect.Value) {
+	if src.IsNil() {
 		return
 	}
-	if *baseField == nil {
-		*baseField = make(map[string]T, len(*overlayField))
+	if src.Elem().Kind() != reflect.Struct || src.Elem().Type() == timeType {
+		dst.Set(src)
+		return
 	}
-	for k, v := range *overlayField {
-		(*baseField)[k] = v
+	if dst.IsNil() {
+		dst.Set(reflect.New(src.Elem().Type()))
+	}
+	mergeValue(dst.Elem(), src.Elem())
+}
+
+// mergeStruct merges each exported field; unexported fields are left as-is.
+func mergeStruct(dst, src reflect.Value) {
+	if src.Type() == timeType {
+		if !src.IsZero() {
+			dst.Set(src)
+		}
+		return
+	}
+	for i := 0; i < src.NumField(); i++ {
+		if src.Type().Field(i).PkgPath != "" {
+			continue // unexported
+		}
+		mergeValue(dst.Field(i), src.Field(i))
+	}
+}
+
+// mergeMapValue merges maps per key (replacing each present key's value).
+func mergeMapValue(dst, src reflect.Value) {
+	if src.Len() == 0 {
+		return
+	}
+	if dst.IsNil() {
+		dst.Set(reflect.MakeMap(src.Type()))
+	}
+	iter := src.MapRange()
+	for iter.Next() {
+		dst.SetMapIndex(iter.Key(), iter.Value())
 	}
 }
 

@@ -537,3 +537,53 @@ func TestLoadFromDir_DropInLayersOverBase(t *testing.T) {
 		t.Errorf("expected the later drop-in to win (error), got %q", cfg.Server.LogLevel)
 	}
 }
+
+// A directory overlay must reach every governance field. The previous
+// hand-written mergers dropped governance sub-structs (injection/canary/...),
+// and pointer-to-struct fields must deep-merge so a base field survives an
+// overlay that sets a sibling field.
+func TestLoadFromDir_GovernanceOverlayFields(t *testing.T) {
+	dir := t.TempDir()
+	base := `{"server": {"listen_addr": ":9090"}, "governance": {"injection": {"strict": true}}}`
+	if err := os.WriteFile(filepath.Join(dir, "config.json"), []byte(base), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	configDir := filepath.Join(dir, "config.d")
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	overlay := `{
+		"governance": {
+			"injection": {"enabled": true},
+			"canary": {"enabled": true, "action": "log"},
+			"auto_retry_on_context_limit": true,
+			"min_quota_cooldown_seconds": 7
+		}
+	}`
+	if err := os.WriteFile(filepath.Join(configDir, "10-gov.json"), []byte(overlay), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := LoadFromDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Governance.Injection == nil || cfg.Governance.Injection.Enabled == nil || !*cfg.Governance.Injection.Enabled {
+		t.Fatalf("governance.injection.enabled not merged: %+v", cfg.Governance.Injection)
+	}
+	if cfg.Governance.Injection.Strict == nil || !*cfg.Governance.Injection.Strict {
+		t.Errorf("governance.injection.strict from the base was dropped (deep merge failed)")
+	}
+	if cfg.Governance.Canary == nil || cfg.Governance.Canary.Enabled == nil || !*cfg.Governance.Canary.Enabled {
+		t.Errorf("governance.canary not merged: %+v", cfg.Governance.Canary)
+	}
+	if cfg.Governance.Canary != nil && cfg.Governance.Canary.Action != "log" {
+		t.Errorf("governance.canary.action = %q, want log", cfg.Governance.Canary.Action)
+	}
+	if cfg.Governance.AutoRetryOnContextLimit == nil || !*cfg.Governance.AutoRetryOnContextLimit {
+		t.Errorf("governance.auto_retry_on_context_limit not merged")
+	}
+	if cfg.Governance.MinQuotaCooldownSeconds != 7 {
+		t.Errorf("governance.min_quota_cooldown_seconds = %d, want 7", cfg.Governance.MinQuotaCooldownSeconds)
+	}
+}

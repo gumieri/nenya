@@ -246,22 +246,17 @@ used. A drop-in augments the base — it never discards it.
 
 Merge semantics across `config.d/*.json`:
 
-- Map fields (`agents`, `providers`, `mcp_servers`) merge per key.
-- Every other field is **field-level last-wins**: for plain scalar fields a
-  zero/empty value does not clear an earlier value (last-non-zero), while
-  fields backed by an explicit `*WasSet` marker (e.g.
-  `server.secure_memory_required`, the governance bools,
+- Map fields (`agents`, `providers`, `mcp_servers`) merge per key; a present
+  key's value is replaced wholesale.
+- Struct fields merge field by field, and pointers to structs deep-merge. Every
+  other field follows last-wins: a non-zero scalar, a non-empty slice, or a
+  non-nil map overrides the base, while fields backed by an explicit `*WasSet`
+  marker (for example `server.secure_memory_required`, the governance bools,
   `bouncer.enabled`/`bouncer.fail_open`) treat an explicit `false`/`0` as
   last-file-wins.
+- The merge is structural over the whole config type, so newly added fields
+  participate automatically.
 - `secrets.json` inside `config.d/` is ignored.
-
-> ⚠️ **Known gap (tracked).** The directory merge does not yet cover every
-> nested field: some `governance.*` sub-sections (e.g. `injection`, `spotlight`,
-> `exfil_guard`, `canary`, `param_compat`) set only in `config.d/` are silently
-> dropped. Until this is fixed, governance security settings SHOULD live in a
-> single file — either `-config <file>` (file mode) or a config root that
-> contains only `config.json` and no `config.d/`. Consumers must treat
-> `nenya describe` as the authority on what is actually in effect.
 
 ### 5.2 File mode
 
