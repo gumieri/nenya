@@ -27,6 +27,19 @@ func Load(path string) (*Config, error) {
 		return nil, fmt.Errorf("config path %s is a directory, use LoadFromDir() instead", path)
 	}
 
+	cfg, err := decodeConfigFile(path)
+	if err != nil {
+		return nil, err
+	}
+	if err := ApplyDefaults(cfg); err != nil {
+		return nil, fmt.Errorf("failed to apply defaults: %v", err)
+	}
+	return cfg, nil
+}
+
+// decodeConfigFile reads, comment-strips, and decodes a single config file
+// without applying defaults. Callers apply defaults once after merging.
+func decodeConfigFile(path string) (*Config, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read config file %s: %v", path, err)
@@ -37,9 +50,6 @@ func Load(path string) (*Config, error) {
 		return nil, fmt.Errorf("failed to parse config file %s: %v", path, err)
 	}
 	warnUnknownFields(data, path)
-	if err := ApplyDefaults(&cfg); err != nil {
-		return nil, fmt.Errorf("failed to apply defaults: %v", err)
-	}
 	return &cfg, nil
 }
 
@@ -75,84 +85,79 @@ func unknownFieldName(err error) (string, bool) {
 	return rest, true
 }
 
-// LoadFromDir loads configuration from a directory. It first checks for a
-// config.d/ subdirectory (merging all *.json files in sorted order, skipping
-// secrets.json), then falls back to a single config.json file. Returns the
-// parsed Config with defaults applied, or an error if no config is found.
+// LoadFromDir loads configuration from a directory. `config.json`, when
+// present, is the base; `config.d/*.json` (excluding `secrets.json`) are then
+// merged over it in ascending filename order. With no `config.d/` the result is
+// just `config.json`. Returns an error if neither source exists.
+//
+// This is the conf.d model: a drop-in augments the base instead of replacing
+// it. Previously a non-empty `config.d/` caused `config.json` to be ignored
+// entirely, which silently discarded the base when a consumer wrote a single
+// drop-in.
 func LoadFromDir(dir string) (*Config, error) {
-	configDirPath := dir + "/config.d"
-	if info, err := os.Stat(configDirPath); err == nil && info.IsDir() {
-		dirCfg, dirErr := loadConfigDirectory(configDirPath)
-		if dirErr != nil {
-			return nil, dirErr
-		}
-		if dirCfg != nil {
-			return dirCfg, nil
-		}
-	}
+	configFilePath := filepath.Join(dir, "config.json")
+	configDirPath := filepath.Join(dir, "config.d")
 
-	configFilePath := dir + "/config.json"
-	if info, err := os.Stat(configFilePath); err == nil && !info.IsDir() {
-		fileCfg, fileErr := Load(configFilePath)
-		if fileErr != nil {
-			return nil, fileErr
-		}
-		if fileCfg != nil {
-			return fileCfg, nil
-		}
-	}
-
-	return nil, fmt.Errorf("no config found in %s (tried %s/config.d/*.json and %s/config.json)", dir, dir, dir)
-}
-
-func loadConfigDirectory(dir string) (*Config, error) {
-	entries, err := os.ReadDir(dir)
+	dropIns, err := configDropInFiles(configDirPath)
 	if err != nil {
-		return nil, fmt.Errorf("failed to read config directory %s: %v", dir, err)
-	}
-
-	var jsonFiles []string
-	for _, e := range entries {
-		if e.IsDir() {
-			continue
-		}
-		name := e.Name()
-		if !strings.HasSuffix(name, ".json") {
-			continue
-		}
-		if name == "secrets.json" {
-			continue
-		}
-		jsonFiles = append(jsonFiles, name)
-	}
-	slices.Sort(jsonFiles)
-
-	if len(jsonFiles) == 0 {
-		return nil, nil
+		return nil, err
 	}
 
 	merged := &Config{}
-	for _, name := range jsonFiles {
-		filePath := filepath.Join(dir, name)
-		data, err := os.ReadFile(filePath)
-		if err != nil {
-			return nil, fmt.Errorf("failed to read config file %s: %v", filePath, err)
-		}
-		data = StripComments(data)
+	found := false
 
-		var partial Config
-		if err := json.Unmarshal(data, &partial); err != nil {
-			return nil, fmt.Errorf("failed to parse config file %s: %v", filePath, err)
+	if info, statErr := os.Stat(configFilePath); statErr == nil && !info.IsDir() {
+		base, loadErr := decodeConfigFile(configFilePath)
+		if loadErr != nil {
+			return nil, loadErr
 		}
-		warnUnknownFields(data, filePath)
+		merged = base
+		found = true
+	}
 
-		mergeConfig(merged, &partial)
+	for _, filePath := range dropIns {
+		partial, loadErr := decodeConfigFile(filePath)
+		if loadErr != nil {
+			return nil, loadErr
+		}
+		mergeConfig(merged, partial)
+		found = true
+	}
+
+	if !found {
+		return nil, fmt.Errorf("no config found in %s (tried %s and %s/*.json)", dir, configFilePath, configDirPath)
 	}
 
 	if err := ApplyDefaults(merged); err != nil {
 		return nil, fmt.Errorf("failed to apply defaults: %v", err)
 	}
 	return merged, nil
+}
+
+// configDropInFiles returns the sorted `*.json` files in dir, excluding
+// `secrets.json`. A missing directory yields an empty slice.
+func configDropInFiles(dir string) ([]string, error) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("failed to read config directory %s: %v", dir, err)
+	}
+
+	var files []string
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		name := e.Name()
+		if !strings.HasSuffix(name, ".json") || name == "secrets.json" {
+			continue
+		}
+		files = append(files, filepath.Join(dir, name))
+	}
+	slices.Sort(files)
+	return files, nil
 }
 
 func mergeConfig(base, overlay *Config) {

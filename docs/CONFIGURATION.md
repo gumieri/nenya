@@ -39,7 +39,7 @@ All `/v1/*` and `/proxy/*` routes require `Authorization: Bearer <client_token>`
 
 When a **directory** is specified, all `*.json` files (excluding `secrets.json`) are loaded in alphabetical order and deep-merged. Map fields (`agents`, `providers`, `mcp_servers`) merge per-key; struct fields use last-file-wins. Defaults are applied once after the merge.
 
-**`config.json` vs `config.d/`:** Under the config root directory, if `config.d/` exists and contains at least one `*.json` file, those files are merged and **`config.json` in the parent directory is not read**. If `config.d/` exists but has no JSON files, the loader falls back to `config.json` at the parent level (see `internal/config/loading.go`).
+**`config.json` vs `config.d/`:** Under the config root directory, `config.json` (when present) is the **base**, and `config.d/*.json` files are merged over it in ascending filename order (later files win). With no `config.d/`, `config.json` alone is used. A drop-in augments the base — it never discards it. (See `config/loading.go`.)
 
 When a **file** is specified, only that file is loaded (single-file mode, unchanged behavior).
 

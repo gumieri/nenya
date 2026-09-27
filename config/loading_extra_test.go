@@ -484,14 +484,16 @@ func TestLoadFromDir_NoConfig(t *testing.T) {
 func TestLoadFromDir_BothConfigAndConfigD(t *testing.T) {
 	dir := t.TempDir()
 	configPath := filepath.Join(dir, "config.json")
-	if err := os.WriteFile(configPath, []byte(`{"server": {"listen_addr": ":9090"}}`), 0o644); err != nil {
+	if err := os.WriteFile(configPath, []byte(`{"server": {"listen_addr": ":9090", "log_level": "warn"}}`), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	configDir := filepath.Join(dir, "config.d")
 	if err := os.MkdirAll(configDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(configDir, "01-server.json"), []byte(`{"server": {"listen_addr": ":9090", "log_level": "debug"}}`), 0o644); err != nil {
+	// A drop-in augments the base: it overrides log_level and must not
+	// discard the base's listen_addr.
+	if err := os.WriteFile(filepath.Join(configDir, "01-server.json"), []byte(`{"server": {"log_level": "debug"}}`), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -500,9 +502,38 @@ func TestLoadFromDir_BothConfigAndConfigD(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if cfg.Server.ListenAddr != ":9090" {
-		t.Errorf("expected :9090 from config.d, got %s", cfg.Server.ListenAddr)
+		t.Errorf("expected :9090 from config.json base (not discarded), got %s", cfg.Server.ListenAddr)
 	}
 	if cfg.Server.LogLevel != "debug" {
-		t.Errorf("expected debug from config.d, got %s", cfg.Server.LogLevel)
+		t.Errorf("expected debug from config.d overlay, got %s", cfg.Server.LogLevel)
+	}
+}
+
+func TestLoadFromDir_DropInLayersOverBase(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "config.json"), []byte(`{"server": {"listen_addr": ":9090"}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	configDir := filepath.Join(dir, "config.d")
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// Drop-ins apply in ascending name order; the later file wins.
+	if err := os.WriteFile(filepath.Join(configDir, "10-a.json"), []byte(`{"server": {"log_level": "debug"}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(configDir, "20-b.json"), []byte(`{"server": {"log_level": "error"}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := LoadFromDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Server.ListenAddr != ":9090" {
+		t.Errorf("base listen_addr discarded: got %q", cfg.Server.ListenAddr)
+	}
+	if cfg.Server.LogLevel != "error" {
+		t.Errorf("expected the later drop-in to win (error), got %q", cfg.Server.LogLevel)
 	}
 }

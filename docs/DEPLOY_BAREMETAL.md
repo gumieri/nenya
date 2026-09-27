@@ -66,7 +66,7 @@ When using directory mode, `config.d/*.json` files are loaded in alphabetical or
 | `mcp_servers` (map) | Per-key merge |
 | `server`, `governance`, `bouncer`, etc. (struct) | Last file wins — if multiple files set the same field, the last one in alphabetical order takes precedence |
 
-**Note:** `config.d/` and `config.json` are mutually exclusive — if `config.d/` exists and is non-empty, `config.json` is ignored.
+**Note:** `config.json` is the base and `config.d/*.json` are overlays applied in ascending filename order (a drop-in augments the base; it does not replace it).
 
 ### Example Config Files
 

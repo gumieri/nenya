@@ -234,16 +234,15 @@ Files are created with mode `0600`; existing unrelated keys are preserved.
     └── …
 ```
 
-**Precedence — CURRENT (`stable`):** if `<config-root>/config.d/` exists and
-contains **at least one** `*.json` file (excluding `secrets.json`), those files
-are merged in ascending name order and **`config.json` is NOT read at all**.
-Otherwise `config.json` is read.
+**Precedence (`stable`):** `config.json`, when present, is the **base**;
+`config.d/*.json` (excluding `secrets.json`) are merged over it in ascending
+filename order (later files win). With no `config.d/`, `config.json` alone is
+used. A drop-in augments the base — it never discards it.
 
-> ⚠️ This mutual exclusivity is a known footgun: writing a single drop-in
-> silently discards a populated `config.json`. The `config.d`/`config.json`
-> XOR is scheduled to be removed under the *Config & Secrets Correctness*
-> workstream. **When it changes, `contract_version` semantics for §5 are
-> re-stated here in the same release.**
+> This replaces the previous `config.d`/`config.json` XOR, under which a
+> non-empty `config.d/` caused `config.json` to be ignored entirely and a
+> single drop-in silently discarded the base. The rule is re-stated here as
+> part of contract version 1 (spec-first, unreleased).
 
 Merge semantics across `config.d/*.json`:
 
@@ -529,7 +528,7 @@ guaranteed here.
 |---------|--------|
 | `-config`, `-config-dir`, `-verbose`, `-validate`, `-print-config-schema` | stable |
 | Environment variables (§3.3) | stable |
-| Directory/file mode precedence (§5.1) | stable (XOR being revised) |
+| Directory/file mode precedence (§5.1) | stable (base + drop-in layering) |
 | Secrets source order (§6.1) | stable |
 | Release archive members (§7.1) | stable |
 | Checksums + cosign bundle (§7.2) | stable |
