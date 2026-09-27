@@ -16,6 +16,12 @@ import (
 	"time"
 )
 
+// ErrConfigNotFound marks a load that failed because no config source exists.
+// It is non-fatal for diagnostic surfaces such as `nenya describe`
+// (CONTRACT.md §4.3), which report it as a config_not_found diagnostic and
+// fall back to defaults; callers that require a config treat it as fatal.
+var ErrConfigNotFound = errors.New("config not found")
+
 // Load reads and parses a single JSON config file from path. Returns
 // the parsed Config with defaults applied, or an error if the file
 // cannot be read, contains invalid JSON, or defaults cannot be applied.
@@ -29,6 +35,9 @@ func Load(path string) (*Config, error) {
 func LoadWithDiagnostics(path string) (*Config, []Diagnostic, error) {
 	info, err := os.Stat(path)
 	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, nil, fmt.Errorf("%w: config file %s does not exist", ErrConfigNotFound, path)
+		}
 		return nil, nil, fmt.Errorf("failed to access config path %s: %v", path, err)
 	}
 
@@ -156,7 +165,7 @@ func LoadFromDirWithDiagnostics(dir string) (*Config, []Diagnostic, error) {
 	}
 
 	if !found {
-		return nil, nil, fmt.Errorf("no config found in %s (tried %s and %s/*.json)", dir, configFilePath, configDirPath)
+		return nil, nil, fmt.Errorf("%w: no config found in %s (tried %s and %s/*.json)", ErrConfigNotFound, dir, configFilePath, configDirPath)
 	}
 
 	if err := ApplyDefaults(merged); err != nil {

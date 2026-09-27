@@ -177,8 +177,10 @@ searched and the one that won, provider/model catalog, diagnostics, and
 `describe` is the **single source of truth** for "what config is actually in
 effect". A consumer MUST NOT reproduce the merge logic itself. The catalog is
 the static registry merged with config (no network discovery), so the output is
-deterministic and offline. `describe` does not fail when secrets are missing or
-invalid: it reports a `secrets_not_found`/`secrets_invalid` diagnostic instead.
+deterministic and offline. `describe` is a diagnostic surface and does not fail
+when state is absent: a missing config is reported as a `config_not_found`
+diagnostic and the effective `config` falls back to defaults, while missing or
+invalid secrets are reported as `secrets_not_found`/`secrets_invalid`.
 
 ### 4.4 `nenya example-config` — status: stable
 

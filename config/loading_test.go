@@ -2,6 +2,7 @@ package config
 
 import (
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -283,6 +284,9 @@ func TestLoadFromDir_MissingConfig(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error for missing config")
 	}
+	if !errors.Is(err, ErrConfigNotFound) {
+		t.Errorf("error = %v, want it to wrap ErrConfigNotFound", err)
+	}
 }
 
 func TestLoad_InvalidJSON(t *testing.T) {
@@ -301,6 +305,9 @@ func TestLoad_MissingFile(t *testing.T) {
 	_, err := Load("/nonexistent/config.json")
 	if err == nil {
 		t.Fatal("expected error for missing file")
+	}
+	if !errors.Is(err, ErrConfigNotFound) {
+		t.Errorf("error = %v, want it to wrap ErrConfigNotFound", err)
 	}
 }
 

@@ -197,14 +197,48 @@ func TestHandleDescribe_Passthrough(t *testing.T) {
 	}
 }
 
-func TestHandleDescribe_MissingConfigErrors(t *testing.T) {
-	t.Setenv("NENYA_CONFIG_DIR", t.TempDir())
+func TestHandleDescribe_MissingConfigReportsDiagnostic(t *testing.T) {
+	configDir := t.TempDir()
+	t.Setenv("NENYA_CONFIG_DIR", configDir)
 	t.Setenv("NENYA_CONFIG_FILE", "")
-	handled, err := handleDescribe(io.Discard, io.Discard, []string{"describe", "--json"})
-	if !handled {
-		t.Fatal("expected describe to handle the invocation")
+	t.Setenv("NENYA_SECRETS_DIR", t.TempDir())
+	t.Setenv("CREDENTIALS_DIRECTORY", "")
+
+	got := runDescribeJSON(t)
+
+	if got.Config == nil {
+		t.Fatal("config is nil; want defaults when no config file exists")
 	}
-	if err == nil {
-		t.Fatal("expected an error when no config exists")
+	d, found := findDiagnostic(got.Diagnostics, "config_not_found")
+	if !found {
+		t.Fatalf("expected a config_not_found diagnostic, got %+v", got.Diagnostics)
+	}
+	if d.Level != "warn" {
+		t.Errorf("config_not_found level = %q, want warn", d.Level)
+	}
+	if d.Source != configDir {
+		t.Errorf("config_not_found source = %q, want %q", d.Source, configDir)
+	}
+}
+
+func TestHandleDescribe_MissingConfigFileReportsDiagnostic(t *testing.T) {
+	configDir := t.TempDir()
+	configFile := filepath.Join(configDir, "config.json")
+	t.Setenv("NENYA_CONFIG_DIR", "")
+	t.Setenv("NENYA_CONFIG_FILE", configFile)
+	t.Setenv("NENYA_SECRETS_DIR", t.TempDir())
+	t.Setenv("CREDENTIALS_DIRECTORY", "")
+
+	got := runDescribeJSON(t)
+
+	if got.Config == nil {
+		t.Fatal("config is nil; want defaults when the config file is missing")
+	}
+	d, found := findDiagnostic(got.Diagnostics, "config_not_found")
+	if !found {
+		t.Fatalf("expected a config_not_found diagnostic, got %+v", got.Diagnostics)
+	}
+	if d.Source != configFile {
+		t.Errorf("config_not_found source = %q, want %q", d.Source, configFile)
 	}
 }

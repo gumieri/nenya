@@ -114,7 +114,24 @@ func buildDescription(paths configPaths) (describeJSON, error) {
 	} else {
 		cfg, diags, err = config.LoadFromDirWithDiagnostics(paths.dir)
 	}
-	if err != nil {
+	switch {
+	case err == nil:
+	case errors.Is(err, config.ErrConfigNotFound):
+		// `describe` is a diagnostic surface (CONTRACT.md §4.3): a missing
+		// config is reported as a diagnostic and the effective config falls
+		// back to defaults, so consumers can probe before bootstrap instead of
+		// having to distinguish "command absent" from "no config yet".
+		cfg = &config.Config{}
+		if defaultErr := config.ApplyDefaults(cfg); defaultErr != nil {
+			return describeJSON{}, fmt.Errorf("apply defaults: %w", defaultErr)
+		}
+		diags = append(diags, config.Diagnostic{
+			Level:   "warn",
+			Code:    "config_not_found",
+			Message: "no config found; showing defaults",
+			Source:  configSource(paths),
+		})
+	default:
 		return describeJSON{}, fmt.Errorf("load config: %w", err)
 	}
 
@@ -153,6 +170,16 @@ func buildDescription(paths configPaths) (describeJSON, error) {
 		},
 		Diagnostics: diagnostics,
 	}, nil
+}
+
+// configSource names the config location a load was attempted from, for the
+// config_not_found diagnostic: the selected single file in file mode, else the
+// config root directory.
+func configSource(paths configPaths) string {
+	if paths.file != "" {
+		return paths.file
+	}
+	return paths.dir
 }
 
 // configuredProviders returns the sorted names of providers that can serve
