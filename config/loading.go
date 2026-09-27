@@ -658,7 +658,7 @@ func loadSecretsFromPath(path string) (*SecretsConfig, error) {
 }
 
 func loadSecretsFromDir(dir string) (*SecretsConfig, error) {
-	if err := validateSecretsPath(dir); err != nil {
+	if err := checkSecretsPath(dir); err != nil {
 		return nil, err
 	}
 
@@ -691,7 +691,7 @@ func loadSecretsFromDir(dir string) (*SecretsConfig, error) {
 }
 
 func loadSecretsSingleFile(path string) (*SecretsConfig, error) {
-	if err := validateSecretsPath(path); err != nil {
+	if err := checkSecretsPath(path); err != nil {
 		return nil, err
 	}
 
@@ -736,6 +736,10 @@ func mergeSecrets(a, b *SecretsConfig) *SecretsConfig {
 			a.ApiKeys = make(map[string]ApiKey)
 		}
 		for k, v := range b.ApiKeys {
+			// CONTRACT.md §6.2: api_keys entries are replaced per key, but a
+			// later entry overrides an earlier one only when it is enabled:true
+			// — so a disabled entry is deliberately skipped rather than
+			// replacing (and thereby weakening) an enabled one.
 			if v.Enabled {
 				a.ApiKeys[k] = v
 			}
@@ -745,7 +749,11 @@ func mergeSecrets(a, b *SecretsConfig) *SecretsConfig {
 	return a
 }
 
-func validateSecretsPath(path string) error {
+// checkSecretsPath reports whether path can be resolved to an absolute path. It
+// is not an allowlist or traversal check — secrets may legitimately live
+// anywhere (a systemd credential dir, /run, a bind mount) — so it only rejects a
+// path the OS cannot absolutize.
+func checkSecretsPath(path string) error {
 	_, err := filepath.Abs(path)
 	if err != nil {
 		return fmt.Errorf("invalid secrets path: %w", err)
@@ -765,12 +773,12 @@ func ResolveProviders(cfg *Config, secrets *SecretsConfig) map[string]*Provider 
 		}
 		compiledRE, err := CompileAllowedModels(pc.AllowedModels)
 		if err != nil {
-			fmt.Printf("[ERROR] failed to compile allowed_models for provider %q: %v (skipping provider)\n", name, err)
+			slog.Error("failed to compile allowed_models for provider, skipping provider", "provider", name, "err", err)
 			continue
 		}
 		compiledNonChat, err := CompileNonChatModels(pc.NonChatModels)
 		if err != nil {
-			fmt.Printf("[ERROR] failed to compile non_chat_models for provider %q: %v (skipping provider)\n", name, err)
+			slog.Error("failed to compile non_chat_models for provider, skipping provider", "provider", name, "err", err)
 			continue
 		}
 		providers[name] = &Provider{

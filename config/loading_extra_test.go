@@ -333,7 +333,7 @@ func TestMergeSecrets_DisabledKeysNotMerged(t *testing.T) {
 	}
 }
 
-func TestValidateSecretsPath_Valid(t *testing.T) {
+func TestCheckSecretsPath_Valid(t *testing.T) {
 	tests := []string{
 		"/tmp/config",
 		"./config",
@@ -341,7 +341,7 @@ func TestValidateSecretsPath_Valid(t *testing.T) {
 	}
 	for _, path := range tests {
 		t.Run(path, func(t *testing.T) {
-			err := validateSecretsPath(path)
+			err := checkSecretsPath(path)
 			if err != nil {
 				t.Errorf("unexpected error for %s: %v", path, err)
 			}
