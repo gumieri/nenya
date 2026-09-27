@@ -280,7 +280,7 @@ Nenya supports standard environment variables for deployment portability:
 | `HOST` | — | Optional bind address (e.g. `127.0.0.1`). Only used when combined with `PORT` |
 | `NENYA_CONFIG_DIR` | `/etc/nenya/` | Configuration directory path |
 | `NENYA_CONFIG_FILE` | — | Single config file path (takes precedence over `NENYA_CONFIG_DIR`) |
-| `NENYA_SECRETS_DIR` | `/run/secrets/nenya` | Secrets directory; used only when `CREDENTIALS_DIRECTORY` does not supply secrets |
+| `NENYA_SECRETS_DIR` | `/run/secrets/nenya` | Secrets merge directory; replaces the `/run/secrets/nenya` default. Used only when `CREDENTIALS_DIRECTORY` does not supply secrets. In directory mode, `<config-root>/secrets.json` is also searched as a final fallback (CONTRACT.md §6.1 source 5) |
 
 Example usage:
 ```bash

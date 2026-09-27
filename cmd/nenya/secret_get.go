@@ -1,7 +1,6 @@
 package main
 
 import (
-	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -27,9 +26,9 @@ func handleSecretGet(w, errW io.Writer, args []string) (bool, error) {
 	clientToken := fs.Bool("client-token", false, "Read the client token")
 	configDir, configFile := addConfigRootFlags(fs)
 	if err := parseCommandFlags(fs, args[2:]); err != nil {
-		if errors.Is(err, errUsage) {
-			_, _ = fmt.Fprintln(errW, secretGetUsage)
-		}
+		// The flag package's output is discarded, so print usage for both a
+		// usage error and -h/--help (CONTRACT.md §3.4).
+		_, _ = fmt.Fprintln(errW, secretGetUsage)
 		return true, err
 	}
 	if fs.NArg() > 0 {

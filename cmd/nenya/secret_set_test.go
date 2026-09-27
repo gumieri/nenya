@@ -149,6 +149,41 @@ func TestSecretTargetPath_ConfigRootIsDefaultDirNotShadowed(t *testing.T) {
 	}
 }
 
+func TestSecretTargetPath_SecretsDirAsFileWritesItDirectly(t *testing.T) {
+	base := t.TempDir()
+	file := filepath.Join(base, "vault.json")
+	if err := os.WriteFile(file, []byte("{}"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("NENYA_SECRETS_DIR", file)
+	t.Setenv("CREDENTIALS_DIRECTORY", "")
+
+	got, err := secretTargetPath(configPaths{})
+	if err != nil {
+		t.Fatalf("secretTargetPath: %v", err)
+	}
+	if got != file {
+		t.Errorf("target = %q, want the file target %q", got, file)
+	}
+}
+
+func TestSecretSet_FlagErrorDoesNotEchoValue(t *testing.T) {
+	t.Setenv("NENYA_SECRETS_DIR", t.TempDir())
+	t.Setenv("CREDENTIALS_DIRECTORY", "")
+
+	var out, errBuf bytes.Buffer
+	handled, err := handleSecret(&out, &errBuf, []string{"secret", "set", "--client-token=SUPERSECRETVALUE"})
+	if !handled || !errors.Is(err, errUsage) {
+		t.Fatalf("handled=%v err=%v, want errUsage", handled, err)
+	}
+	if strings.Contains(errBuf.String(), "SUPERSECRETVALUE") {
+		t.Errorf("stderr echoed the flag value: %q", errBuf.String())
+	}
+	if !strings.Contains(errBuf.String(), "nenya secret set") {
+		t.Errorf("expected usage on stderr, got %q", errBuf.String())
+	}
+}
+
 func TestSecretSet_ClientTokenGeneratedAndPreserves(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("NENYA_SECRETS_DIR", dir)

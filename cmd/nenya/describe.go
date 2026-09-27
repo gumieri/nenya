@@ -108,10 +108,11 @@ func buildDescription(paths configPaths) (describeJSON, error) {
 	} else {
 		cfg, diags, err = config.LoadFromDirWithDiagnostics(paths.dir)
 	}
-	if err != nil && !errors.Is(err, config.ErrConfigNotFound) {
+	notFound := errors.Is(err, config.ErrConfigNotFound)
+	if err != nil && !notFound {
 		return describeJSON{}, fmt.Errorf("load config: %w", err)
 	}
-	if errors.Is(err, config.ErrConfigNotFound) {
+	if notFound {
 		// `describe` is a diagnostic surface (CONTRACT.md §4.3): a missing
 		// config is reported as a diagnostic and the effective config falls
 		// back to defaults, so consumers can probe before bootstrap instead of
@@ -120,10 +121,12 @@ func buildDescription(paths configPaths) (describeJSON, error) {
 		if defaultErr := config.ApplyDefaults(cfg); defaultErr != nil {
 			return describeJSON{}, fmt.Errorf("apply defaults: %w", defaultErr)
 		}
+		// The loader's message already names the paths tried; use it directly
+		// rather than nesting it in another prefix.
 		diags = append(diags, config.Diagnostic{
 			Level:   "warn",
 			Code:    "config_not_found",
-			Message: "no config found; showing defaults (" + strings.TrimPrefix(err.Error(), config.ErrConfigNotFound.Error()+": ") + ")",
+			Message: strings.TrimPrefix(err.Error(), config.ErrConfigNotFound.Error()+": "),
 			Source:  configSource(paths),
 		})
 	}
@@ -133,12 +136,12 @@ func buildDescription(paths configPaths) (describeJSON, error) {
 	diagnostics = append(diagnostics, diags...)
 	switch {
 	case secretsErr != nil:
-		// ActiveSource is only set once a source yields a document; when a
-		// read/validation failure happens first, name the last candidate
-		// considered so the diagnostic still points somewhere.
-		source := res.ActiveSource
-		if source == "" && len(res.Searched) > 0 {
-			source = res.Searched[len(res.Searched)-1]
+		// Name the candidate whose read/validation failed when the resolver
+		// reported one; fall back to the winning source (a validation failure
+		// after a source was read).
+		source := res.FailedSource
+		if source == "" {
+			source = res.ActiveSource
 		}
 		diagnostics = append(diagnostics, config.Diagnostic{
 			Level:   "error",

@@ -192,9 +192,26 @@ func TestSecretGet_UnexpectedArgumentFailsClosed(t *testing.T) {
 	}
 }
 
-func TestSecretGet_Help(t *testing.T) {
-	handled, err := handleSecret(io.Discard, io.Discard, []string{"secret", "get", "-h"})
+func TestSecretGet_FileModeSkipsConfigRootSecrets(t *testing.T) {
+	dir := t.TempDir()
+	writeSecrets(t, dir, `{"client_token":"sibling-token-123456"}`)
+	t.Setenv("NENYA_SECRETS_DIR", "")
+	t.Setenv("NENYA_CONFIG_DIR", "")
+	t.Setenv("NENYA_CONFIG_FILE", filepath.Join(dir, "custom.json"))
+	t.Setenv("CREDENTIALS_DIRECTORY", "")
+
+	if _, err := runSecretGet(t, "--client-token"); err == nil {
+		t.Fatal("file mode must not read <config-dir>/secrets.json (source 5 is directory mode only)")
+	}
+}
+
+func TestSecretGet_HelpPrintsUsage(t *testing.T) {
+	var errBuf bytes.Buffer
+	handled, err := handleSecret(io.Discard, &errBuf, []string{"secret", "get", "-h"})
 	if !handled || !errors.Is(err, flag.ErrHelp) {
 		t.Fatalf("expected flag.ErrHelp, got handled=%v err=%v", handled, err)
+	}
+	if !strings.Contains(errBuf.String(), "nenya secret get") {
+		t.Errorf("expected usage on stderr, got %q", errBuf.String())
 	}
 }

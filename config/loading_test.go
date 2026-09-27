@@ -365,6 +365,79 @@ func TestResolveSecrets_EmptyConfigRootSkipsFallback(t *testing.T) {
 	}
 }
 
+func TestResolveSecrets_DirSkipsConfigJSON(t *testing.T) {
+	secretsDir := t.TempDir()
+	// config.json is JSONC (comments allowed) and is not a secrets document.
+	if err := os.WriteFile(filepath.Join(secretsDir, "config.json"), []byte("{\n// comment\n}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(secretsDir, "secrets.json"), []byte(`{"client_token":"dir-token-1234567890"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("NENYA_SECRETS_DIR", secretsDir)
+	t.Setenv("CREDENTIALS_DIRECTORY", "")
+
+	res, err := ResolveSecrets("")
+	if err != nil {
+		t.Fatalf("ResolveSecrets: %v", err)
+	}
+	if res.Secrets == nil || res.Secrets.ClientToken != "dir-token-1234567890" {
+		t.Errorf("secrets = %+v, want the dir's client_token (config.json skipped)", res.Secrets)
+	}
+}
+
+func TestResolveSecrets_ConfigRootFileIsDirectorySkipped(t *testing.T) {
+	configDir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(configDir, "secrets.json"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("NENYA_SECRETS_DIR", t.TempDir())
+	t.Setenv("CREDENTIALS_DIRECTORY", "")
+
+	res, err := ResolveSecrets(configDir)
+	if err != nil {
+		t.Fatalf("ResolveSecrets: %v", err)
+	}
+	if res.Secrets != nil {
+		t.Errorf("secrets = %+v, want nil (a directory at source 5 is skipped)", res.Secrets)
+	}
+}
+
+func TestLoadFromDir_StatErrorIsNotConfigNotFound(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, "config.d"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// A self-referential symlink makes os.Stat fail with ELOOP (not ENOENT).
+	if err := os.Symlink("config.json", filepath.Join(dir, "config.json")); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := LoadFromDir(dir)
+	if err == nil {
+		t.Fatal("expected an error for an unstat-able config.json")
+	}
+	if errors.Is(err, ErrConfigNotFound) {
+		t.Errorf("stat error misreported as ErrConfigNotFound: %v", err)
+	}
+}
+
+func TestLoad_StatErrorIsNotConfigNotFound(t *testing.T) {
+	base := t.TempDir()
+	blocker := filepath.Join(base, "blocker")
+	if err := os.WriteFile(blocker, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := Load(filepath.Join(blocker, "config.json"))
+	if err == nil {
+		t.Fatal("expected an error for a path under a regular file")
+	}
+	if errors.Is(err, ErrConfigNotFound) {
+		t.Errorf("stat error misreported as ErrConfigNotFound: %v", err)
+	}
+}
+
 func TestLoad_MissingFile(t *testing.T) {
 	_, err := Load("/nonexistent/config.json")
 	if err == nil {

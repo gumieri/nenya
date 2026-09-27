@@ -10,6 +10,8 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+
+	"github.com/nenya/config"
 )
 
 // handleSecret dispatches the `nenya secret` subcommands (CONTRACT.md §4.7):
@@ -32,11 +34,14 @@ func handleSecret(w, errW io.Writer, args []string) (bool, error) {
 // handleSecretSet implements `nenya secret set`: the secrets single writer.
 func handleSecretSet(w, errW io.Writer, args []string) (bool, error) {
 	fs := flag.NewFlagSet("secret set", flag.ContinueOnError)
-	fs.SetOutput(errW)
+	// A parse error can echo a flag value, and this command handles secrets, so
+	// the flag package's output is discarded and usage is printed explicitly.
+	fs.SetOutput(io.Discard)
 	provider := fs.String("provider", "", "Provider name whose key is set")
 	clientToken := fs.Bool("client-token", false, "Set (or generate) the client token")
 	configDir, configFile := addConfigRootFlags(fs)
 	if err := parseCommandFlags(fs, args[2:]); err != nil {
+		_, _ = fmt.Fprintln(errW, secretSetUsage)
 		return true, err
 	}
 
@@ -137,26 +142,35 @@ func secretTargetPath(paths configPaths) (string, error) {
 	}
 
 	if dir := os.Getenv("NENYA_SECRETS_DIR"); dir != "" {
-		return filepath.Join(absOrSelf(dir), "secrets.json"), nil
+		dir = absOrSelf(dir)
+		// The loader accepts NENYA_SECRETS_DIR as a file or a directory; write
+		// to a file target directly instead of creating a bogus directory.
+		if info, err := os.Stat(dir); err == nil && !info.IsDir() {
+			return dir, nil
+		}
+		return filepath.Join(dir, "secrets.json"), nil
 	}
 	if paths.file == "" {
 		target := filepath.Join(absOrSelf(paths.dir), "secrets.json")
-		if filepath.Dir(target) != "/run/secrets/nenya" && defaultSecretsDirPopulated() {
-			return "", fmt.Errorf("active secrets source is /run/secrets/nenya (source 4); writing %s would be shadowed — remove /run/secrets/nenya/*.json or set NENYA_SECRETS_DIR to write a file instead", target)
+		if filepath.Dir(target) != config.DefaultSecretsDir && defaultSecretsDirPopulated() {
+			return "", fmt.Errorf("active secrets source is %s (source 4); writing %s would be shadowed — remove %s/*.json or set NENYA_SECRETS_DIR to write a file instead", config.DefaultSecretsDir, target, config.DefaultSecretsDir)
 		}
 		return target, nil
 	}
-	return "/run/secrets/nenya/secrets.json", nil
+	return filepath.Join(config.DefaultSecretsDir, "secrets.json"), nil
 }
 
 // defaultSecretsDirPopulated reports whether the default merge directory
-// (/run/secrets/nenya) contains any *.json. When it does, it is an active
-// source (CONTRACT.md §6.1 source 4) that would shadow a lower-priority
+// (CONTRACT.md §6.1 source 4, config.DefaultSecretsDir) contains any *.json.
+// When it does, it is an active source that would shadow a lower-priority
 // config-root write (source 5), so `secret set` must not write a file the
-// loader will ignore. It is a var so tests can exercise the shadow path without
-// control of /run/secrets.
+// loader will ignore.
+//
+// It is a package-level test seam: production never reassigns it; tests swap it
+// to exercise the shadow path without control of /run/secrets (restoring it in
+// t.Cleanup).
 var defaultSecretsDirPopulated = func() bool {
-	entries, err := os.ReadDir("/run/secrets/nenya")
+	entries, err := os.ReadDir(config.DefaultSecretsDir)
 	if err != nil {
 		return false
 	}

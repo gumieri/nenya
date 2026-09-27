@@ -8,6 +8,8 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+
+	"github.com/nenya/config"
 )
 
 // pathsJSON is the machine-readable filesystem contract (CONTRACT.md §4.2,
@@ -89,14 +91,16 @@ func resolvePaths(paths configPaths) pathsJSON {
 	return res
 }
 
-// secretsFile returns the single secrets file the deployment uses, or nil when
-// there is none to name (file mode). It is <NENYA_SECRETS_DIR>/secrets.json
-// when that env var is set, else <config-root>/secrets.json in directory mode —
-// the file the shipped unit wires via LoadCredential (CONTRACT.md §4.7/§6.1),
-// which the loader searches last and `secret set` writes by default.
+// secretsFile returns the preferred single secrets file — the nominal default
+// target of `secret set` (CONTRACT.md §4.7): <NENYA_SECRETS_DIR>/secrets.json
+// when that env var is set, else <config-root>/secrets.json in directory mode,
+// else null in file mode. In directory mode it is also the file the shipped
+// unit wires via LoadCredential (CONTRACT.md §6.1 source 5); `secret set` fails
+// closed when a higher-priority source would shadow it, so this is a nominal
+// target, not proof of which source the loader will pick.
 func secretsFile(paths configPaths) *string {
-	if dir := os.Getenv("NENYA_SECRETS_DIR"); dir != "" {
-		f := filepath.Join(absOrSelf(dir), "secrets.json")
+	if dir := secretsEnvDir(); dir != "" {
+		f := filepath.Join(dir, "secrets.json")
 		return &f
 	}
 	if paths.file == "" {
@@ -106,13 +110,21 @@ func secretsFile(paths configPaths) *string {
 	return nil
 }
 
-// secretsDir returns the configured secrets directory (NENYA_SECRETS_DIR when
-// set, otherwise the default /run/secrets/nenya) per CONTRACT.md §6.1.
-func secretsDir() string {
+// secretsEnvDir returns NENYA_SECRETS_DIR as an absolute path, or "" when unset.
+func secretsEnvDir() string {
 	if dir := os.Getenv("NENYA_SECRETS_DIR"); dir != "" {
 		return absOrSelf(dir)
 	}
-	return "/run/secrets/nenya"
+	return ""
+}
+
+// secretsDir returns the configured secrets merge directory (NENYA_SECRETS_DIR
+// when set, otherwise the default) per CONTRACT.md §6.1.
+func secretsDir() string {
+	if dir := secretsEnvDir(); dir != "" {
+		return dir
+	}
+	return config.DefaultSecretsDir
 }
 
 // absOrSelf returns p as an absolute, cleaned path, or p unchanged when it

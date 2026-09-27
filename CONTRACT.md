@@ -164,10 +164,12 @@ Prints the resolved filesystem contract (Appendix A.2): config dir/file,
 `config.d`, secrets dir/file, and socket path. Resolution MUST match what the
 server actually uses for the same flags/environment. `secrets_dir` is the
 secrets merge directory (`NENYA_SECRETS_DIR` or `/run/secrets/nenya`);
-`secrets_file` is the single secrets file the deployment uses
-(`<NENYA_SECRETS_DIR>/secrets.json`, else `<config-root>/secrets.json` in
-directory mode, else `null`), which is what the shipped unit wires via
-`LoadCredential` and what `secret set` writes by default. `mode` is `file` when
+`secrets_file` is the **preferred** single secrets file — the nominal default
+target of `secret set` (`<NENYA_SECRETS_DIR>/secrets.json`, else
+`<config-root>/secrets.json` in directory mode, else `null`) and the file the
+shipped unit wires via `LoadCredential`. It names the conventional target, not
+proof of which source the loader picks: `secret set` fails closed when a
+higher-priority source would shadow it (§4.7). `mode` is `file` when
 `-config`/`NENYA_CONFIG_FILE` selects a single file (only `config_file` is read)
 and `directory` otherwise; `paths` never loads config or secrets, so it is safe
 to run before either exists.
@@ -272,9 +274,11 @@ Nenya instead of reimplementing the §6.1 search order or the §6.2 merge.
 
 Exactly one selector is required. The command resolves the same sources and
 precedence the server uses; `--config-dir`/`--config` select the config root
-that §6.1 source 5 and `secret set` (§4.7) use. It prints only the requested
-value to stdout, exits `1` when no source resolves or the provider key is
-absent, and never logs the value.
+that §6.1 source 5 and `secret set` (§4.7) use. The selected document must pass
+the same validation as the server (in particular `client_token` is required),
+so an invalid document fails the read even when the requested provider key is
+itself present. It prints only the requested value to stdout, exits `1` when no
+source resolves or the provider key is absent, and never logs the value.
 
 ---
 
@@ -348,15 +352,17 @@ the installing tool (and `nenya secret set`, §4.7).
 |----------|--------|
 | 1 | `$CREDENTIALS_DIRECTORY/secrets` (single file) |
 | 2 | `$CREDENTIALS_DIRECTORY/secrets.d/*.json` (merged by name) |
-| 3 | `$NENYA_SECRETS_DIR/*.json` (merged by name) |
-| 4 | `/run/secrets/nenya/*.json` (merged by name) |
+| 3 | `$NENYA_SECRETS_DIR/*.json` or, when that is unset, `/run/secrets/nenya/*.json` (merged by name) |
+| 4 | `/run/secrets/nenya/*.json` (source 3's default; not searched again when `NENYA_SECRETS_DIR` is set) |
 | 5 | `<config-root>/secrets.json` (single file, directory mode only) |
 
-Source 5 is the deployment's conventional secrets file: the shipped systemd
-unit wires it via `LoadCredential` (which then wins as source 1), and it is
-`secret set`'s default target in directory mode (§4.7). Searching it last makes
-an interactive `nenya -config-dir <root>` resolve the same secrets the unit
-would load, without changing precedence for sources 1–4.
+Sources 3 and 4 are the same probe: `NENYA_SECRETS_DIR` replaces the
+`/run/secrets/nenya` default rather than adding a second directory. Source 5 is
+the deployment's conventional secrets file: the shipped systemd unit wires it
+via `LoadCredential` (which then wins as source 1), and it is `secret set`'s
+default target in directory mode (§4.7). Searching it last makes an interactive
+`nenya -config-dir <root>` resolve the same secrets the unit would load, without
+changing precedence for sources 1–4.
 
 A missing candidate falls through to the next source. A read error on the
 single `$CREDENTIALS_DIRECTORY/secrets` file is also treated as absent; a

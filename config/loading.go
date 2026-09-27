@@ -397,11 +397,17 @@ func validatePromptPath(filePath string) error {
 	return nil
 }
 
+// DefaultSecretsDir is the default directory secrets are merged from when
+// NENYA_SECRETS_DIR is unset (CONTRACT.md §6.1 source 4).
+const DefaultSecretsDir = "/run/secrets/nenya"
+
 // SecretsResolution reports where secrets were looked for and which source won
 // (CONTRACT.md §6.1). Secrets is nil when none was found or when validation
-// failed; ActiveSource is set as soon as a source yields a document.
+// failed; ActiveSource is set as soon as a source yields a document;
+// FailedSource names the candidate whose read/validation failed, when one did.
 type SecretsResolution struct {
 	ActiveSource string
+	FailedSource string
 	Searched     []string
 	Secrets      *SecretsConfig
 }
@@ -427,13 +433,14 @@ func ResolveSecrets(configRoot string) (SecretsResolution, error) {
 	credDir := os.Getenv("CREDENTIALS_DIRECTORY")
 	secretsDir := os.Getenv("NENYA_SECRETS_DIR")
 	if secretsDir == "" {
-		secretsDir = "/run/secrets/nenya"
+		secretsDir = DefaultSecretsDir
 	}
 	secretsDir = cleanAbs(secretsDir)
 
 	res := SecretsResolution{}
 	if credDir != "" {
-		res.Searched = append(res.Searched, credDir+"/secrets", credDir+"/secrets.d")
+		credDir = cleanAbs(credDir)
+		res.Searched = append(res.Searched, filepath.Join(credDir, "secrets"), filepath.Join(credDir, "secrets.d"))
 	} else {
 		res.Searched = append(res.Searched, "<CREDENTIALS_DIRECTORY>/secrets", "<CREDENTIALS_DIRECTORY>/secrets.d")
 	}
@@ -484,6 +491,7 @@ func resolveSecretsFile(res *SecretsResolution, path string) (bool, error) {
 		if errors.Is(err, os.ErrNotExist) {
 			return false, nil
 		}
+		res.FailedSource = path
 		return false, fmt.Errorf("failed to stat secrets path %q: %w", path, err)
 	}
 	if info.IsDir() {
@@ -491,7 +499,8 @@ func resolveSecretsFile(res *SecretsResolution, path string) (bool, error) {
 	}
 	secrets, err := loadSecretsSingleFile(path)
 	if err != nil {
-		return false, err
+		res.FailedSource = path
+		return false, fmt.Errorf("failed to load secrets file %q: %w", path, err)
 	}
 	if secrets == nil {
 		return false, nil
@@ -508,25 +517,28 @@ func resolveCredentialDirectory(res *SecretsResolution, credDir string) (bool, e
 	}
 	secrets, err := tryLoadCredFile()
 	if err != nil {
+		res.FailedSource = filepath.Join(credDir, "secrets")
 		return false, err
 	}
 	if secrets != nil {
-		return recordSecrets(res, credDir+"/secrets", secrets)
+		return recordSecrets(res, filepath.Join(credDir, "secrets"), secrets)
 	}
-	secrets, err = loadSecretsFromPath(credDir + "/secrets.d")
+	secrets, err = loadSecretsFromPath(filepath.Join(credDir, "secrets.d"))
 	if err != nil {
+		res.FailedSource = filepath.Join(credDir, "secrets.d")
 		return false, err
 	}
 	if secrets == nil {
 		return false, nil
 	}
-	return recordSecrets(res, credDir+"/secrets.d", secrets)
+	return recordSecrets(res, filepath.Join(credDir, "secrets.d"), secrets)
 }
 
 // resolveSecretsPath tries a single secrets path and records the winner.
 func resolveSecretsPath(res *SecretsResolution, path string) (bool, error) {
 	secrets, err := loadSecretsFromPath(path)
 	if err != nil {
+		res.FailedSource = path
 		return false, err
 	}
 	if secrets == nil {
@@ -635,6 +647,12 @@ func loadSecretsFromDir(dir string) (*SecretsConfig, error) {
 	var result *SecretsConfig
 	for _, entry := range entries {
 		if entry.IsDir() || filepath.Ext(entry.Name()) != ".json" {
+			continue
+		}
+		// A secrets directory pointed at a config root (the launchd unit sets
+		// NENYA_SECRETS_DIR=/etc/nenya) contains config.json, which is JSONC
+		// and not a secrets document; skip it rather than fail the load.
+		if entry.Name() == "config.json" {
 			continue
 		}
 		secrets, err := loadSecretsSingleFile(filepath.Join(dir, entry.Name()))
