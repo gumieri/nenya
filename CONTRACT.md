@@ -166,8 +166,9 @@ server actually uses for the same flags/environment. `secrets_dir` is the
 secrets merge directory (`NENYA_SECRETS_DIR` or `/run/secrets/nenya`);
 `secrets_file` (additive in contract v1; consumers SHOULD feature-detect it) is
 the **preferred** single secrets file — the nominal default
-target of `secret set` (`<NENYA_SECRETS_DIR>/secrets.json`, else
-`<config-root>/secrets.json` in directory mode, else `null`) and the file the
+target of `secret set` (`NENYA_SECRETS_DIR` itself when it names an existing
+file, else `<NENYA_SECRETS_DIR>/secrets.json`, else `<config-root>/secrets.json`
+in directory mode, else `null` when the env var is unset) and the file the
 shipped unit wires via `LoadCredential`. It names the conventional target, not
 proof of which source the loader picks: `secret set` fails closed when a
 higher-priority source would shadow it (§4.7). `mode` is `file` when
@@ -250,7 +251,8 @@ Files are created with mode `0600`; existing unrelated keys are preserved.
 
 The write target is, in order:
 
-1. `<NENYA_SECRETS_DIR>/secrets.json` when `NENYA_SECRETS_DIR` is set;
+1. `NENYA_SECRETS_DIR` itself when it names an existing file, else
+   `<NENYA_SECRETS_DIR>/secrets.json`, when `NENYA_SECRETS_DIR` is set;
 2. otherwise, in **directory mode**, `<config-root>/secrets.json` — the single
    file the shipped unit wires via `LoadCredential` and the loader searches
    (§6.1 source 5), so the written value is the one actually loaded;
@@ -372,8 +374,9 @@ changing precedence for sources 1–4.
 A missing candidate falls through to the next source. A read error on the
 single `$CREDENTIALS_DIRECTORY/secrets` file is also treated as absent; a
 stat/read failure on a directory source (including a permission error) is
-**fatal**. Once a source is selected, a parse or validation failure is fatal —
-Nenya does not fall through to the next source.
+**fatal**. A stat/read failure on the source-5 single file (other than
+not-exist) is likewise **fatal**. Once a source is selected, a parse or
+validation failure is fatal — Nenya does not fall through to the next source.
 
 ### 6.2 Shape
 

@@ -386,6 +386,27 @@ func TestResolveSecrets_DirSkipsConfigJSON(t *testing.T) {
 	}
 }
 
+func TestResolveSecrets_SecretsDirNamesFile(t *testing.T) {
+	base := t.TempDir()
+	file := filepath.Join(base, "vault.json")
+	if err := os.WriteFile(file, []byte(`{"client_token":"vault-token-1234567890"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("NENYA_SECRETS_DIR", file)
+	t.Setenv("CREDENTIALS_DIRECTORY", "")
+
+	res, err := ResolveSecrets("")
+	if err != nil {
+		t.Fatalf("ResolveSecrets: %v", err)
+	}
+	if res.Secrets == nil || res.Secrets.ClientToken != "vault-token-1234567890" {
+		t.Errorf("secrets = %+v, want the file's client_token", res.Secrets)
+	}
+	if res.ActiveSource != file {
+		t.Errorf("active_source = %q, want %q", res.ActiveSource, file)
+	}
+}
+
 func TestResolveSecrets_ConfigRootFileIsDirectorySkipped(t *testing.T) {
 	configDir := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(configDir, "secrets.json"), 0o755); err != nil {

@@ -97,7 +97,7 @@ func TestValidatePromptPath_ValidRelativePath(t *testing.T) {
 
 func TestTryLoadCredFile_NoEnv(t *testing.T) {
 	t.Setenv("CREDENTIALS_DIRECTORY", "")
-	secrets, err := tryLoadCredFile()
+	secrets, err := tryLoadCredFile(os.Getenv("CREDENTIALS_DIRECTORY"))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -110,7 +110,7 @@ func TestTryLoadCredFile_NotFound(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("CREDENTIALS_DIRECTORY", dir)
 
-	secrets, err := tryLoadCredFile()
+	secrets, err := tryLoadCredFile(os.Getenv("CREDENTIALS_DIRECTORY"))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -126,7 +126,7 @@ func TestTryLoadCredFile_InvalidJSON(t *testing.T) {
 	}
 	t.Setenv("CREDENTIALS_DIRECTORY", dir)
 
-	_, err := tryLoadCredFile()
+	_, err := tryLoadCredFile(os.Getenv("CREDENTIALS_DIRECTORY"))
 	if err == nil {
 		t.Error("expected error for invalid JSON")
 	}
@@ -140,7 +140,7 @@ func TestTryLoadCredFile_Valid(t *testing.T) {
 	}
 	t.Setenv("CREDENTIALS_DIRECTORY", dir)
 
-	secrets, err := tryLoadCredFile()
+	secrets, err := tryLoadCredFile(os.Getenv("CREDENTIALS_DIRECTORY"))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

@@ -121,12 +121,17 @@ func buildDescription(paths configPaths) (describeJSON, error) {
 		if defaultErr := config.ApplyDefaults(cfg); defaultErr != nil {
 			return describeJSON{}, fmt.Errorf("apply defaults: %w", defaultErr)
 		}
-		// The loader's message already names the paths tried; use it directly
-		// rather than nesting it in another prefix.
+		// The typed error carries the tried paths; use its detail directly
+		// rather than parsing the sentinel's message.
+		detail := "no config found; showing defaults"
+		var notFoundErr *config.ConfigNotFoundError
+		if errors.As(err, &notFoundErr) {
+			detail = notFoundErr.Detail
+		}
 		diags = append(diags, config.Diagnostic{
 			Level:   "warn",
 			Code:    "config_not_found",
-			Message: strings.TrimPrefix(err.Error(), config.ErrConfigNotFound.Error()+": "),
+			Message: detail,
 			Source:  configSource(paths),
 		})
 	}

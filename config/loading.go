@@ -20,7 +20,21 @@ import (
 // It is non-fatal for diagnostic surfaces such as `nenya describe`
 // (CONTRACT.md §4.3), which report it as a config_not_found diagnostic and
 // fall back to defaults; callers that require a config treat it as fatal.
+// Detect it with errors.Is; use ConfigNotFoundError for the human detail.
 var ErrConfigNotFound = errors.New("config not found")
+
+// ConfigNotFoundError is the error Load/LoadFromDir return when no config
+// source exists. It matches ErrConfigNotFound under errors.Is and carries the
+// human-readable detail (paths tried) in Detail, so callers do not have to
+// parse the message.
+type ConfigNotFoundError struct {
+	Detail string
+}
+
+func (e *ConfigNotFoundError) Error() string { return "config not found: " + e.Detail }
+
+// Is reports ConfigNotFoundError as ErrConfigNotFound.
+func (e *ConfigNotFoundError) Is(target error) bool { return target == ErrConfigNotFound }
 
 // Load reads and parses a single JSON config file from path. Returns
 // the parsed Config with defaults applied, or an error if the file
@@ -36,7 +50,7 @@ func LoadWithDiagnostics(path string) (*Config, []Diagnostic, error) {
 	info, err := os.Stat(path)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			return nil, nil, fmt.Errorf("%w: config file %s does not exist", ErrConfigNotFound, path)
+			return nil, nil, &ConfigNotFoundError{Detail: fmt.Sprintf("config file %s does not exist", path)}
 		}
 		return nil, nil, fmt.Errorf("failed to access config path %s: %w", path, err)
 	}
@@ -171,7 +185,7 @@ func LoadFromDirWithDiagnostics(dir string) (*Config, []Diagnostic, error) {
 	}
 
 	if !found {
-		return nil, nil, fmt.Errorf("%w: no config found in %s (tried %s and %s/*.json)", ErrConfigNotFound, dir, configFilePath, configDirPath)
+		return nil, nil, &ConfigNotFoundError{Detail: fmt.Sprintf("no config found in %s (tried %s and %s/*.json)", dir, configFilePath, configDirPath)}
 	}
 
 	if err := ApplyDefaults(merged); err != nil {
@@ -417,8 +431,9 @@ type SecretsResolution struct {
 // in order (CONTRACT.md §6.1):
 //  1. $CREDENTIALS_DIRECTORY/secrets
 //  2. $CREDENTIALS_DIRECTORY/secrets.d/ (directory)
-//  3. $NENYA_SECRETS_DIR/ (dir; falls back to source 4)
-//  4. /run/secrets/nenya/ (directory)
+//     3/4. $NENYA_SECRETS_DIR (a file or a merged directory) or, when unset, the
+//     /run/secrets/nenya directory — one probe, the env var replacing the
+//     default
 //  5. <configRoot>/secrets.json (single file, directory mode only)
 //
 // Source 5 is the deployment's conventional secrets file: the shipped systemd
@@ -515,7 +530,7 @@ func resolveCredentialDirectory(res *SecretsResolution, credDir string) (bool, e
 	if credDir == "" {
 		return false, nil
 	}
-	secrets, err := tryLoadCredFile()
+	secrets, err := tryLoadCredFile(credDir)
 	if err != nil {
 		res.FailedSource = filepath.Join(credDir, "secrets")
 		return false, err
@@ -592,8 +607,7 @@ func validateSecrets(secrets *SecretsConfig) error {
 	return nil
 }
 
-func tryLoadCredFile() (*SecretsConfig, error) {
-	credDir := os.Getenv("CREDENTIALS_DIRECTORY")
+func tryLoadCredFile(credDir string) (*SecretsConfig, error) {
 	if credDir == "" {
 		return nil, nil
 	}

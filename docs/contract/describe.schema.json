@@ -3,6 +3,7 @@
   "$id": "https://github.com/gumieri/nenya/docs/contract/describe.schema.json",
   "title": "nenya describe --json",
   "description": "Effective state for managers (CONTRACT.md 4.3, Appendix A.3). status: stable.",
+  "$comment": "paths.secrets_file is additive in contract v1: always emitted, but consumers SHOULD feature-detect it, so it is not listed in required.",
   "type": "object",
   "additionalProperties": false,
   "required": ["contract_version", "version", "paths", "secrets", "config", "providers", "diagnostics"],

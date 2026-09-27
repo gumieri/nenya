@@ -6,6 +6,7 @@ import (
 	"errors"
 	"flag"
 	"io"
+	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -132,6 +133,23 @@ func TestHandlePaths_FileModeWithSecretsDirEnv(t *testing.T) {
 	}
 	if got.SecretsFile == nil || *got.SecretsFile != filepath.Join(secrets, "secrets.json") {
 		t.Errorf("secrets_file = %v, want %q", got.SecretsFile, filepath.Join(secrets, "secrets.json"))
+	}
+}
+
+func TestHandlePaths_SecretsDirEnvAsFile(t *testing.T) {
+	base := t.TempDir()
+	file := filepath.Join(base, "vault.json")
+	if err := os.WriteFile(file, []byte("{}"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("NENYA_CONFIG_DIR", t.TempDir())
+	t.Setenv("NENYA_CONFIG_FILE", "")
+	t.Setenv("NENYA_SECRETS_DIR", file)
+
+	got := runPathsJSON(t)
+
+	if got.SecretsFile == nil || *got.SecretsFile != file {
+		t.Errorf("secrets_file = %v, want the file path %q", got.SecretsFile, file)
 	}
 }
 

@@ -125,21 +125,40 @@ func applyProviderKey(target, provider string, rest []string) error {
 	return setSecretValue(target, "provider", provider, rest[0])
 }
 
-// secretTargetPath returns the secrets file `secret set` writes. The systemd
-// credential sources have higher priority than the file sources (CONTRACT.md
-// §6.1); writing elsewhere while they are active would be shadowed, so the
-// command fails closed and asks the operator to manage credentials via systemd.
-//
-// Precedence for the write target:
-//  1. NENYA_SECRETS_DIR, when set — <dir>/secrets.json (unchanged).
-//  2. Directory mode — <config-root>/secrets.json, the file the shipped unit
-//     wires via LoadCredential and the loader also searches (CONTRACT.md §6.1
-//     source 5), instead of the /run/secrets/nenya default the unit shadows.
-//  3. File mode — /run/secrets/nenya/secrets.json (no config root to prefer).
-//
-// Every branch fails closed rather than writing a file a higher-priority source
-// would shadow: systemd credentials (§6.1 sources 1-2), and the default merge
-// directory /run/secrets/nenya (§6.1 source 4) when it is populated.
+// secretsFileTarget is a resolved single-file secrets target: the file to write
+// and, when it lives in a merge directory, that directory (whose other *.json
+// files can override keys by sort order, CONTRACT.md §6.2).
+type secretsFileTarget struct {
+	path     string
+	mergeDir string
+}
+
+// nominalSecretsFileTarget returns the preferred single-file secrets target for
+// the deployment, before any fail-closed checks (CONTRACT.md §4.7):
+//   - an existing regular file named by NENYA_SECRETS_DIR is the target itself;
+//   - else <NENYA_SECRETS_DIR>/secrets.json when the env var is set;
+//   - else <config-root>/secrets.json in directory mode (CONTRACT.md §6.1
+//     source 5 — a single file, not a merge directory);
+//   - else /run/secrets/nenya/secrets.json in file mode (a merge directory).
+func nominalSecretsFileTarget(paths configPaths) secretsFileTarget {
+	if dir := secretsEnvDir(); dir != "" {
+		if info, err := os.Stat(dir); err == nil && !info.IsDir() {
+			return secretsFileTarget{path: dir}
+		}
+		return secretsFileTarget{path: filepath.Join(dir, "secrets.json"), mergeDir: dir}
+	}
+	if paths.file == "" {
+		return secretsFileTarget{path: filepath.Join(config.CleanAbs(paths.dir), "secrets.json")}
+	}
+	return secretsFileTarget{path: filepath.Join(config.DefaultSecretsDir, "secrets.json"), mergeDir: config.DefaultSecretsDir}
+}
+
+// secretTargetPath returns the secrets file `secret set` writes. Because a
+// higher-priority source would shadow the write (CONTRACT.md §6.1), every
+// branch fails closed rather than writing a file the loader will not read:
+// systemd credentials (sources 1-2), a source-3/4 merge directory whose other
+// files would override the target (§6.2 last-wins), and a populated default
+// merge directory shadowing a config-root write (source 5).
 func secretTargetPath(paths configPaths) (string, error) {
 	return secretTargetPathWith(paths, defaultSecretsDirPopulated)
 }
@@ -148,55 +167,98 @@ func secretTargetPath(paths configPaths) (string, error) {
 // injected, so tests can exercise the shadow path without mutating a global or
 // controlling /run/secrets.
 func secretTargetPathWith(paths configPaths, defaultDirPopulated func() bool) (string, error) {
-	if credDir := os.Getenv("CREDENTIALS_DIRECTORY"); credDir != "" {
-		if _, err := os.Stat(filepath.Join(credDir, "secrets")); err == nil {
-			return "", fmt.Errorf("active secrets source is the systemd credential %s/secrets; manage it via systemd (or set NENYA_SECRETS_DIR to write a file instead)", credDir)
-		}
-		if dirHasSecrets(filepath.Join(credDir, "secrets.d")) {
-			return "", fmt.Errorf("active secrets source is the systemd credential directory %s/secrets.d; manage it via systemd (or set NENYA_SECRETS_DIR to write a file instead)", credDir)
-		}
+	if err := activeCredentialSource(); err != nil {
+		return "", err
 	}
 
-	if dir := os.Getenv("NENYA_SECRETS_DIR"); dir != "" {
-		dir = config.CleanAbs(dir)
-		// The loader also accepts NENYA_SECRETS_DIR as a single file; write to
-		// an existing file target directly rather than creating a directory. A
-		// not-yet-existing path is treated as a directory (the documented form).
-		if info, err := os.Stat(dir); err == nil && !info.IsDir() {
-			return dir, nil
+	target := nominalSecretsFileTarget(paths)
+	if target.mergeDir != "" {
+		shadowed, err := laterSiblingShadows(target.mergeDir, filepath.Base(target.path))
+		if err != nil {
+			return "", err
 		}
-		return filepath.Join(dir, "secrets.json"), nil
-	}
-	if paths.file == "" {
-		target := filepath.Join(config.CleanAbs(paths.dir), "secrets.json")
-		if !sameDir(filepath.Dir(target), config.DefaultSecretsDir) && defaultDirPopulated() {
-			return "", fmt.Errorf("active secrets source is %s (source 4); writing %s would be shadowed — remove %s/*.json or set NENYA_SECRETS_DIR to write a file instead", config.DefaultSecretsDir, target, config.DefaultSecretsDir)
+		if shadowed {
+			return "", fmt.Errorf("another *.json in %s sorts after %s and may shadow the written value; remove it or set NENYA_SECRETS_DIR to a dedicated directory", target.mergeDir, filepath.Base(target.path))
 		}
-		return target, nil
 	}
-	return filepath.Join(config.DefaultSecretsDir, "secrets.json"), nil
+	// Source 5 is a single file, so only a populated default merge directory
+	// can shadow it.
+	if secretsEnvDir() == "" && paths.file == "" && !sameDir(filepath.Dir(target.path), config.DefaultSecretsDir) && defaultDirPopulated() {
+		return "", fmt.Errorf("active secrets source is %s (source 4) and may shadow %s; remove %s/*.json or set NENYA_SECRETS_DIR to a dedicated directory", config.DefaultSecretsDir, target.path, config.DefaultSecretsDir)
+	}
+	return target.path, nil
+}
+
+// activeCredentialSource returns a fail-closed error when a systemd credential
+// source (CONTRACT.md §6.1 sources 1-2) is active. The single-file credential
+// is active only when it is a regular file the loader could read; a directory
+// at that path is treated as absent by the loader and so is not active here.
+func activeCredentialSource() error {
+	credDir := os.Getenv("CREDENTIALS_DIRECTORY")
+	if credDir == "" {
+		return nil
+	}
+	if info, err := os.Stat(filepath.Join(credDir, "secrets")); err == nil && !info.IsDir() {
+		return fmt.Errorf("active secrets source is the systemd credential %s/secrets; manage it via systemd instead of writing a file", credDir)
+	}
+	has, err := dirHasSecrets(filepath.Join(credDir, "secrets.d"))
+	if err != nil {
+		return err
+	}
+	if has {
+		return fmt.Errorf("active secrets source is the systemd credential directory %s/secrets.d; manage it via systemd instead of writing a file", credDir)
+	}
+	return nil
 }
 
 // dirHasSecrets reports whether dir holds at least one secrets document: a
 // non-directory *.json other than config.json, which loadSecretsFromDir skips.
-func dirHasSecrets(dir string) bool {
+// A missing directory is not an error; any other read failure is, so an
+// unreadable directory cannot silently disable a fail-closed guard.
+func dirHasSecrets(dir string) (bool, error) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
-		return false
+		if errors.Is(err, os.ErrNotExist) {
+			return false, nil
+		}
+		return false, fmt.Errorf("read secrets directory %s: %w", dir, err)
 	}
 	for _, e := range entries {
 		if !e.IsDir() && filepath.Ext(e.Name()) == ".json" && e.Name() != "config.json" {
-			return true
+			return true, nil
 		}
 	}
-	return false
+	return false, nil
+}
+
+// laterSiblingShadows reports whether dir holds a *.json (other than
+// config.json) whose name sorts after name, so the §6.2 last-wins merge would
+// let it override the target's keys.
+func laterSiblingShadows(dir, name string) (bool, error) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return false, nil
+		}
+		return false, fmt.Errorf("read secrets directory %s: %w", dir, err)
+	}
+	for _, e := range entries {
+		if e.IsDir() || filepath.Ext(e.Name()) != ".json" || e.Name() == "config.json" {
+			continue
+		}
+		if e.Name() > name {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 // defaultSecretsDirPopulated reports whether the default merge directory
-// (CONTRACT.md §6.1 source 4) holds a secrets document. When it does, it would
+// (CONTRACT.md §6.1 source 4) holds a secrets document. When it does, it may
 // shadow a lower-priority config-root write (source 5).
 func defaultSecretsDirPopulated() bool {
-	return dirHasSecrets(config.DefaultSecretsDir)
+	has, err := dirHasSecrets(config.DefaultSecretsDir)
+	return err == nil && has
 }
 
 // sameDir reports whether a and b name the same directory, tolerating symlinks
@@ -222,6 +284,11 @@ func generateClientToken() (string, error) {
 // setSecretValue reads the target secrets file (empty when absent), sets the
 // value (provider_keys[name] for kind "provider", client_token otherwise), and
 // writes it back atomically with mode 0600. Unrelated keys are preserved.
+//
+// This is the single writer CONTRACT.md §4.7 describes: callers must serialize
+// concurrent invocations against the same file. The read-modify-write is not
+// locked, so two simultaneous `secret set` calls for different keys can lose
+// one update; the atomic rename only makes each individual write torn-free.
 func setSecretValue(path, kind, name, value string) error {
 	doc := map[string]any{}
 	if data, err := os.ReadFile(path); err == nil {
@@ -229,7 +296,7 @@ func setSecretValue(path, kind, name, value string) error {
 			return fmt.Errorf("parse %s: %w", path, decodeErr)
 		}
 	} else if !errors.Is(err, os.ErrNotExist) {
-		return err
+		return fmt.Errorf("read %s: %w", path, err)
 	}
 
 	if kind == "provider" {

@@ -50,6 +50,10 @@ func handleSecretGet(w, errW io.Writer, args []string) (bool, error) {
 	paths := effectiveConfigPaths(*configDir, *configFile)
 	res, err := config.ResolveSecrets(secretsConfigRoot(paths))
 	if err != nil {
+		// Name the failing source so the operator need not rerun describe.
+		if source := res.FailedSource; source != "" {
+			return true, fmt.Errorf("read secrets from %s: %w", source, err)
+		}
 		return true, fmt.Errorf("read secrets: %w", err)
 	}
 	if res.Secrets == nil {

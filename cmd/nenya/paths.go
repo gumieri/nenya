@@ -92,27 +92,21 @@ func resolvePaths(paths configPaths) pathsJSON {
 }
 
 // secretsFile returns the preferred single secrets file — the nominal default
-// target of `secret set` (CONTRACT.md §4.7): <NENYA_SECRETS_DIR>/secrets.json
-// when that env var is set, else <config-root>/secrets.json in directory mode,
-// else null in file mode. In directory mode it is also the file the shipped
-// unit wires via LoadCredential (CONTRACT.md §6.1 source 5); `secret set` fails
-// closed when a higher-priority source would shadow it, so this is a nominal
-// target, not proof of which source the loader will pick.
+// target of `secret set` (CONTRACT.md §4.7): an existing file named by
+// NENYA_SECRETS_DIR, else <NENYA_SECRETS_DIR>/secrets.json when set, else
+// <config-root>/secrets.json in directory mode, else null (file mode with the
+// env var unset). In directory mode it is also the file the shipped unit wires
+// via LoadCredential (CONTRACT.md §6.1 source 5); `secret set` fails closed
+// when a higher-priority source would shadow it, so this is a nominal target,
+// not proof of which source the loader will pick.
 func secretsFile(paths configPaths) *string {
-	if dir := secretsEnvDir(); dir != "" {
-		// Mirror secret set: an existing regular-file NENYA_SECRETS_DIR is the
-		// target itself, otherwise it is a directory holding secrets.json.
-		if info, err := os.Stat(dir); err == nil && !info.IsDir() {
-			return &dir
-		}
-		f := filepath.Join(dir, "secrets.json")
-		return &f
+	// File mode has no config-root target; report null unless NENYA_SECRETS_DIR
+	// names one.
+	if secretsEnvDir() == "" && paths.file != "" {
+		return nil
 	}
-	if paths.file == "" {
-		f := filepath.Join(config.CleanAbs(paths.dir), "secrets.json")
-		return &f
-	}
-	return nil
+	f := nominalSecretsFileTarget(paths).path
+	return &f
 }
 
 // secretsEnvDir returns NENYA_SECRETS_DIR as an absolute path, or "" when unset.

@@ -186,7 +186,7 @@ spec:
 
 ```bash
 openssl rand -hex 32
-# Output: nk-abc123def456... (prefix + 48 hex chars)
+# Output: nk-abc123def456... (prefix + 64 hex chars)
 ```
 
 ### API keys (for client RBAC)

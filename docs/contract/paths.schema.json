@@ -3,6 +3,7 @@
   "$id": "https://github.com/gumieri/nenya/docs/contract/paths.schema.json",
   "title": "nenya paths --json",
   "description": "Resolved filesystem contract (CONTRACT.md 4.2, Appendix A.2). status: stable.",
+  "$comment": "secrets_file is additive in contract v1: it is always emitted by Nenya but consumers SHOULD feature-detect it, so it is not listed in required.",
   "type": "object",
   "additionalProperties": false,
   "required": ["mode", "config_dir", "config_file", "config_d", "secrets_dir", "socket_path", "platform"],
