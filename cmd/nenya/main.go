@@ -108,6 +108,12 @@ func runInspectionCommands(args []string) (int, bool) {
 	if handled, err := handlePaths(os.Stdout, os.Stderr, args); handled {
 		return inspectionExitCode(err), true
 	}
+	if handled, err := handleExampleConfig(os.Stdout, os.Stderr, args); handled {
+		return inspectionExitCode(err), true
+	}
+	if handled, err := handleServiceUnit(os.Stdout, os.Stderr, args); handled {
+		return inspectionExitCode(err), true
+	}
 	return 0, false
 }
 

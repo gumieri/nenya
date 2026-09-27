@@ -177,13 +177,14 @@ searched and the one that won, provider/model catalog, diagnostics, and
 `describe` is the **single source of truth** for "what config is actually in
 effect". A consumer MUST NOT reproduce the merge logic itself.
 
-### 4.4 `nenya example-config` — status: target
+### 4.4 `nenya example-config` — status: stable
 
 Prints the canonical example config (JSONC) to stdout. Consumers MUST use this
 instead of embedding a copy. The example MUST load successfully under the
-current schema.
+current schema; it is the packaged `examples/example.config.json`, and a test
+enforces that it parses (no unknown fields) and loads.
 
-### 4.5 `nenya service-unit` — status: target
+### 4.5 `nenya service-unit` — status: stable
 
 Prints a service unit to stdout so consumers never parse unit files out of a
 release archive.
@@ -196,7 +197,11 @@ release archive.
 | `--secrets-file` | `/etc/nenya/secrets.json` | Credential source wired into the unit |
 
 The emitted unit MUST be valid for the requested init system and MUST reference
-the supplied paths.
+the supplied paths. With the default flags the output is byte-identical to the
+shipped `deploy/nenya.service` / `deploy/nenya.plist`; a non-default
+`--config-dir` adds an explicit `--config-dir` argument to the systemd
+`ExecStart`, and the launchd unit wires config/secrets through
+`NENYA_CONFIG_DIR`/`NENYA_SECRETS_DIR`.
 
 ### 4.6 `nenya config set <dotted.key> <value>` — status: target
 
@@ -547,8 +552,8 @@ guaranteed here.
 | `version --json` / `--version` (§4.1) | stable |
 | `paths --json` (§4.2) | stable |
 | `describe --json` (§4.3) | **target** |
-| `example-config` (§4.4) | **target** |
-| `service-unit` (§4.5) | **target** |
+| `example-config` (§4.4) | stable |
+| `service-unit` (§4.5) | stable |
 | `config set` (§4.6) | **target** |
 | `secret set` (§4.7) | **target** |
 | `--contract-version` (§2) | **target** |

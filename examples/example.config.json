@@ -20,7 +20,7 @@
 
   "governance": {
     "ratelimit_max_tpm": 250000,
-    "ratelimit_max_rpm": 15,
+    "ratelimit_max_rpm": 15
 
     // Retryable upstream HTTP status codes. WARNING: setting this field REPLACES the built-in
     // defaults entirely. You must include all codes you want retryable. Built-in defaults:
