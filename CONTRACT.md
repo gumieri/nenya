@@ -167,7 +167,7 @@ actually uses for the same flags/environment. `mode` is `file` when
 and `directory` otherwise; `paths` never loads config or secrets, so it is safe
 to run before either exists.
 
-### 4.3 `nenya describe --json` — status: target
+### 4.3 `nenya describe --json` — status: stable
 
 Prints the effective state a manager needs to render UI and take decisions
 (Appendix A.3): resolved paths, effective merged config, secrets sources
@@ -175,7 +175,10 @@ searched and the one that won, provider/model catalog, diagnostics, and
 `contract_version`.
 
 `describe` is the **single source of truth** for "what config is actually in
-effect". A consumer MUST NOT reproduce the merge logic itself.
+effect". A consumer MUST NOT reproduce the merge logic itself. The catalog is
+the static registry merged with config (no network discovery), so the output is
+deterministic and offline. `describe` does not fail when secrets are missing or
+invalid: it reports a `secrets_not_found`/`secrets_invalid` diagnostic instead.
 
 ### 4.4 `nenya example-config` — status: stable
 
@@ -551,7 +554,7 @@ guaranteed here.
 | `/healthz`, auth rules (§9) | stable |
 | `version --json` / `--version` (§4.1) | stable |
 | `paths --json` (§4.2) | stable |
-| `describe --json` (§4.3) | **target** |
+| `describe --json` (§4.3) | stable |
 | `example-config` (§4.4) | stable |
 | `service-unit` (§4.5) | stable |
 | `config set` (§4.6) | **target** |

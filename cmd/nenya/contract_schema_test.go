@@ -72,6 +72,27 @@ func TestPathsOutputMatchesContractSchema(t *testing.T) {
 	}
 }
 
+// TestDescribeOutputMatchesContractSchema asserts that the live `describe
+// --json` output conforms to the published schema.
+func TestDescribeOutputMatchesContractSchema(t *testing.T) {
+	setupDescribeEnv(t, "{}")
+
+	var buf, errBuf bytes.Buffer
+	handled, err := handleDescribe(&buf, &errBuf, []string{"describe", "--json"})
+	if err != nil {
+		t.Fatalf("handleDescribe: %v", err)
+	}
+	if !handled {
+		t.Fatal("expected describe --json to be handled")
+	}
+
+	schema := loadJSON(t, filepath.Join(contractSchemaDir, "describe.schema.json"))
+	doc := decodeJSON(t, buf.Bytes())
+	for _, err := range schemaErrors(schema, doc, "describe") {
+		t.Error(err)
+	}
+}
+
 // TestContractSchemaValidatorRejectsDrift proves the validator is not vacuous:
 // a document missing a required field, carrying a wrong type, or adding an
 // unexpected property must be rejected. Without this, a broken validator would

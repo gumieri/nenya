@@ -1,0 +1,16 @@
+package config
+
+// Diagnostic is a non-fatal issue found while resolving configuration or
+// secrets, reported by `nenya describe --json` (CONTRACT.md §4.3). It never
+// prevents startup.
+type Diagnostic struct {
+	// Level is "info", "warn", or "error".
+	Level string `json:"level"`
+	// Code is a stable machine identifier (for example "unknown_field",
+	// "secrets_not_found", "secrets_invalid").
+	Code string `json:"code"`
+	// Message is a human-readable description.
+	Message string `json:"message"`
+	// Source names the file or path the issue concerns, when known.
+	Source string `json:"source,omitempty"`
+}

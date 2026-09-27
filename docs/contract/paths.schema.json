@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/gumieri/nenya/docs/contract/paths.schema.json",
   "title": "nenya paths --json",
-  "description": "Resolved filesystem contract (CONTRACT.md 4.2, Appendix A.2). status: target.",
+  "description": "Resolved filesystem contract (CONTRACT.md 4.2, Appendix A.2). status: stable.",
   "type": "object",
   "additionalProperties": false,
   "required": ["mode", "config_dir", "config_file", "config_d", "secrets_dir", "socket_path", "platform"],

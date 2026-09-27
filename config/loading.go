@@ -20,46 +20,58 @@ import (
 // the parsed Config with defaults applied, or an error if the file
 // cannot be read, contains invalid JSON, or defaults cannot be applied.
 func Load(path string) (*Config, error) {
+	cfg, _, err := LoadWithDiagnostics(path)
+	return cfg, err
+}
+
+// LoadWithDiagnostics is Load plus the non-fatal diagnostics gathered while
+// decoding (currently unknown-field warnings), for `nenya describe`.
+func LoadWithDiagnostics(path string) (*Config, []Diagnostic, error) {
 	info, err := os.Stat(path)
 	if err != nil {
-		return nil, fmt.Errorf("failed to access config path %s: %v", path, err)
+		return nil, nil, fmt.Errorf("failed to access config path %s: %v", path, err)
 	}
 
 	if info.IsDir() {
-		return nil, fmt.Errorf("config path %s is a directory, use LoadFromDir() instead", path)
+		return nil, nil, fmt.Errorf("config path %s is a directory, use LoadFromDir() instead", path)
 	}
 
-	cfg, err := decodeConfigFile(path)
+	cfg, diags, err := decodeConfigFileWithDiagnostics(path)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if err := ApplyDefaults(cfg); err != nil {
-		return nil, fmt.Errorf("failed to apply defaults: %v", err)
+		return nil, nil, fmt.Errorf("failed to apply defaults: %v", err)
 	}
-	return cfg, nil
+	return cfg, diags, nil
 }
 
-// decodeConfigFile reads, comment-strips, and decodes a single config file
-// without applying defaults. Callers apply defaults once after merging.
-func decodeConfigFile(path string) (*Config, error) {
+// decodeConfigFileWithDiagnostics reads, comment-strips, and decodes a single
+// config file without applying defaults, returning the diagnostics gathered
+// while decoding. Callers apply defaults once after merging.
+func decodeConfigFileWithDiagnostics(path string) (*Config, []Diagnostic, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return nil, fmt.Errorf("failed to read config file %s: %v", path, err)
+		return nil, nil, fmt.Errorf("failed to read config file %s: %v", path, err)
 	}
 	data = StripComments(data)
 	var cfg Config
 	if err := json.Unmarshal(data, &cfg); err != nil {
-		return nil, fmt.Errorf("failed to parse config file %s: %v", path, err)
+		return nil, nil, fmt.Errorf("failed to parse config file %s: %v", path, err)
 	}
-	warnUnknownFields(data, path)
-	return &cfg, nil
+	var diags []Diagnostic
+	if d := unknownFieldDiagnostic(data, path); d != nil {
+		diags = append(diags, *d)
+	}
+	return &cfg, diags, nil
 }
 
-// warnUnknownFields performs a strict secondary decode and logs a warning
-// naming the first unknown field it hits. Lenient decoding always wins —
-// unknown fields never fail load or SIGHUP reload (NENYA-19) — but the
-// warning surfaces likely typos that lenient parsing would silently drop.
-func warnUnknownFields(data []byte, path string) {
+// unknownFieldDiagnostic performs a strict secondary decode and, when it hits
+// an unknown field, logs a warning naming it and returns the diagnostic.
+// Lenient decoding always wins — unknown fields never fail load or SIGHUP
+// reload (NENYA-19) — but the warning surfaces likely typos that lenient
+// parsing would silently drop.
+func unknownFieldDiagnostic(data []byte, path string) *Diagnostic {
 	dec := json.NewDecoder(bytes.NewReader(data))
 	dec.DisallowUnknownFields()
 	var probe Config
@@ -67,8 +79,15 @@ func warnUnknownFields(data []byte, path string) {
 		if name, ok := unknownFieldName(err); ok {
 			slog.Warn("config contains unknown field, ignored (possible typo)",
 				"field", name, "path", path)
+			return &Diagnostic{
+				Level:   "warn",
+				Code:    "unknown_field",
+				Message: fmt.Sprintf("unknown field %q ignored", name),
+				Source:  path,
+			}
 		}
 	}
+	return nil
 }
 
 // unknownFieldName extracts the field name from encoding/json's
@@ -97,43 +116,53 @@ func unknownFieldName(err error) (string, bool) {
 // entirely, which silently discarded the base when a consumer wrote a single
 // drop-in.
 func LoadFromDir(dir string) (*Config, error) {
+	cfg, _, err := LoadFromDirWithDiagnostics(dir)
+	return cfg, err
+}
+
+// LoadFromDirWithDiagnostics is LoadFromDir plus the non-fatal diagnostics
+// gathered while decoding each merged file, for `nenya describe`.
+func LoadFromDirWithDiagnostics(dir string) (*Config, []Diagnostic, error) {
 	configFilePath := filepath.Join(dir, "config.json")
 	configDirPath := filepath.Join(dir, "config.d")
 
 	dropIns, err := configDropInFiles(configDirPath)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	merged := &Config{}
+	var diags []Diagnostic
 	found := false
 
 	if info, statErr := os.Stat(configFilePath); statErr == nil && !info.IsDir() {
-		base, loadErr := decodeConfigFile(configFilePath)
+		base, baseDiags, loadErr := decodeConfigFileWithDiagnostics(configFilePath)
 		if loadErr != nil {
-			return nil, loadErr
+			return nil, nil, loadErr
 		}
 		merged = base
+		diags = append(diags, baseDiags...)
 		found = true
 	}
 
 	for _, filePath := range dropIns {
-		partial, loadErr := decodeConfigFile(filePath)
+		partial, partialDiags, loadErr := decodeConfigFileWithDiagnostics(filePath)
 		if loadErr != nil {
-			return nil, loadErr
+			return nil, nil, loadErr
 		}
+		diags = append(diags, partialDiags...)
 		mergeConfig(merged, partial)
 		found = true
 	}
 
 	if !found {
-		return nil, fmt.Errorf("no config found in %s (tried %s and %s/*.json)", dir, configFilePath, configDirPath)
+		return nil, nil, fmt.Errorf("no config found in %s (tried %s and %s/*.json)", dir, configFilePath, configDirPath)
 	}
 
 	if err := ApplyDefaults(merged); err != nil {
-		return nil, fmt.Errorf("failed to apply defaults: %v", err)
+		return nil, nil, fmt.Errorf("failed to apply defaults: %v", err)
 	}
-	return merged, nil
+	return merged, diags, nil
 }
 
 // configDropInFiles returns the sorted `*.json` files in dir, excluding
@@ -353,49 +382,109 @@ func validatePromptPath(filePath string) error {
 	return nil
 }
 
-// LoadSecrets loads the secrets configuration from systemd credential
-// files or standard secrets paths. It checks in order:
+// SecretsResolution reports where secrets were looked for and which source won
+// (CONTRACT.md §6.1). Secrets is nil when none was found or when validation
+// failed; ActiveSource is set as soon as a source yields a document.
+type SecretsResolution struct {
+	ActiveSource string
+	Searched     []string
+	Secrets      *SecretsConfig
+}
+
+// ResolveSecrets locates and validates secrets without failing when none is
+// found, so managers can inspect the search order (`nenya describe`). It checks
+// in order:
 //  1. $CREDENTIALS_DIRECTORY/secrets
 //  2. $CREDENTIALS_DIRECTORY/secrets.d/ (directory)
 //  3. $NENYA_SECRETS_DIR/ (or /run/secrets/nenya/ as default)
 //
-// Returns an error if no secrets are found or validation fails.
-func LoadSecrets() (*SecretsConfig, error) {
+// A non-nil error reports a read or validation failure; LoadSecrets treats a
+// missing document as fatal.
+func ResolveSecrets() (SecretsResolution, error) {
 	credDir := os.Getenv("CREDENTIALS_DIRECTORY")
 	secretsDir := os.Getenv("NENYA_SECRETS_DIR")
-
-	secrets, err := tryLoadCredFile()
-	if err != nil {
-		return nil, err
-	}
-	if secrets != nil {
-		return validateSecretsResult(secrets)
-	}
-
-	if credDir != "" {
-		secrets, err = loadSecretsFromPath(credDir + "/secrets.d")
-		if err != nil {
-			return nil, err
-		}
-		if secrets != nil {
-			return validateSecretsResult(secrets)
-		}
-	}
-
 	if secretsDir == "" {
 		secretsDir = "/run/secrets/nenya"
 	}
-	secrets, err = loadSecretsFromPath(secretsDir)
+
+	res := SecretsResolution{}
+	if credDir != "" {
+		res.Searched = append(res.Searched, credDir+"/secrets", credDir+"/secrets.d")
+	} else {
+		res.Searched = append(res.Searched, "<CREDENTIALS_DIRECTORY>/secrets", "<CREDENTIALS_DIRECTORY>/secrets.d")
+	}
+	res.Searched = append(res.Searched, secretsDir)
+
+	if found, err := resolveCredentialDirectory(&res, credDir); err != nil {
+		return res, err
+	} else if found {
+		return res, nil
+	}
+	if _, err := resolveSecretsPath(&res, secretsDir); err != nil {
+		return res, err
+	}
+	return res, nil
+}
+
+// resolveCredentialDirectory tries the systemd credential sources
+// ($CREDENTIALS_DIRECTORY/secrets then $CREDENTIALS_DIRECTORY/secrets.d) and
+// records the winner. It reports whether a valid document was found.
+func resolveCredentialDirectory(res *SecretsResolution, credDir string) (bool, error) {
+	if credDir == "" {
+		return false, nil
+	}
+	secrets, err := tryLoadCredFile()
+	if err != nil {
+		return false, err
+	}
+	if secrets != nil {
+		return recordSecrets(res, credDir+"/secrets", secrets)
+	}
+	secrets, err = loadSecretsFromPath(credDir + "/secrets.d")
+	if err != nil {
+		return false, err
+	}
+	if secrets == nil {
+		return false, nil
+	}
+	return recordSecrets(res, credDir+"/secrets.d", secrets)
+}
+
+// resolveSecretsPath tries a single secrets path and records the winner.
+func resolveSecretsPath(res *SecretsResolution, path string) (bool, error) {
+	secrets, err := loadSecretsFromPath(path)
+	if err != nil {
+		return false, err
+	}
+	if secrets == nil {
+		return false, nil
+	}
+	return recordSecrets(res, path, secrets)
+}
+
+// recordSecrets validates secrets and records the source that produced them.
+func recordSecrets(res *SecretsResolution, source string, secrets *SecretsConfig) (bool, error) {
+	res.ActiveSource = source
+	validated, vErr := validateSecretsResult(secrets)
+	if vErr != nil {
+		return false, vErr
+	}
+	res.Secrets = validated
+	return true, nil
+}
+
+// LoadSecrets loads and validates the secrets configuration (see
+// ResolveSecrets for the search order). Returns an error if no secrets are
+// found or validation fails.
+func LoadSecrets() (*SecretsConfig, error) {
+	res, err := ResolveSecrets()
 	if err != nil {
 		return nil, err
 	}
-	if secrets != nil {
-		return validateSecretsResult(secrets)
+	if res.Secrets == nil {
+		return nil, errors.New("secrets not found: checked " + strings.Join(res.Searched, ", "))
 	}
-
-	return nil, errors.New("secrets not found: checked " +
-		"$CREDENTIALS_DIRECTORY/secrets, $CREDENTIALS_DIRECTORY/secrets.d/, " +
-		"$NENYA_SECRETS_DIR/, /run/secrets/nenya/")
+	return res.Secrets, nil
 }
 
 func validateSecretsResult(secrets *SecretsConfig) (*SecretsConfig, error) {

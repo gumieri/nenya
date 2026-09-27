@@ -114,6 +114,9 @@ func runInspectionCommands(args []string) (int, bool) {
 	if handled, err := handleServiceUnit(os.Stdout, os.Stderr, args); handled {
 		return inspectionExitCode(err), true
 	}
+	if handled, err := handleDescribe(os.Stdout, os.Stderr, args); handled {
+		return inspectionExitCode(err), true
+	}
 	return 0, false
 }
 
