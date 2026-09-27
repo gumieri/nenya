@@ -1,0 +1,158 @@
+package main
+
+import (
+	"bytes"
+	"errors"
+	"flag"
+	"io"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"github.com/nenya/config"
+)
+
+// runSecretSet runs `secret set` and returns the path it printed.
+func runSecretSet(t *testing.T, args ...string) string {
+	t.Helper()
+	var buf, errBuf bytes.Buffer
+	handled, err := handleSecret(&buf, &errBuf, append([]string{"secret", "set"}, args...))
+	if err != nil {
+		t.Fatalf("handleSecret error: %v (stderr: %s)", err, errBuf.String())
+	}
+	if !handled {
+		t.Fatal("expected secret set to be handled")
+	}
+	return strings.TrimSpace(buf.String())
+}
+
+func TestSecretSet_ProviderKey(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("NENYA_SECRETS_DIR", dir)
+	t.Setenv("CREDENTIALS_DIRECTORY", "")
+
+	path := runSecretSet(t, "--provider", "gemini", "AIza-test")
+
+	want := filepath.Join(dir, "secrets.json")
+	if path != want {
+		t.Fatalf("printed path = %q, want %q", path, want)
+	}
+	fi, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("stat: %v", err)
+	}
+	if fi.Mode().Perm() != 0o600 {
+		t.Errorf("secrets file mode = %o, want 0600", fi.Mode().Perm())
+	}
+	doc := readJSONFile(t, path)
+	keys, _ := doc["provider_keys"].(map[string]any)
+	if keys == nil || keys["gemini"] != "AIza-test" {
+		t.Errorf("provider_keys = %v, want gemini=AIza-test", doc["provider_keys"])
+	}
+}
+
+func TestSecretSet_ClientTokenGeneratedAndPreserves(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("NENYA_SECRETS_DIR", dir)
+	t.Setenv("CREDENTIALS_DIRECTORY", "")
+
+	runSecretSet(t, "--provider", "gemini", "AIza-test")
+	path := runSecretSet(t, "--client-token")
+
+	doc := readJSONFile(t, path)
+	token, _ := doc["client_token"].(string)
+	if !strings.HasPrefix(token, "nk-") || len(token) <= len("nk-") {
+		t.Errorf("generated client_token = %q, want a non-empty nk- token", token)
+	}
+	keys, _ := doc["provider_keys"].(map[string]any)
+	if keys == nil || keys["gemini"] != "AIza-test" {
+		t.Errorf("provider_keys not preserved: %v", doc["provider_keys"])
+	}
+
+	// An explicit token replaces the generated one and keeps other keys.
+	runSecretSet(t, "--client-token", "explicit-token-1234567890")
+	doc = readJSONFile(t, path)
+	if doc["client_token"] != "explicit-token-1234567890" {
+		t.Errorf("client_token = %v, want the explicit value", doc["client_token"])
+	}
+	if keys, _ := doc["provider_keys"].(map[string]any); keys == nil || keys["gemini"] != "AIza-test" {
+		t.Errorf("provider_keys not preserved after client-token set: %v", doc["provider_keys"])
+	}
+}
+
+func TestSecretSet_RefusesSystemdCredentialSource(t *testing.T) {
+	credDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(credDir, "secrets"), []byte(`{"client_token":"x-1234567890"}`), 0o600); err != nil {
+		t.Fatalf("write credential: %v", err)
+	}
+	t.Setenv("CREDENTIALS_DIRECTORY", credDir)
+	t.Setenv("NENYA_SECRETS_DIR", t.TempDir())
+
+	handled, err := handleSecret(io.Discard, io.Discard, []string{"secret", "set", "--client-token"})
+	if !handled {
+		t.Fatal("expected secret set to handle the invocation")
+	}
+	if err == nil {
+		t.Fatal("expected an error when the systemd credential source is active")
+	}
+	if !strings.Contains(err.Error(), "systemd credential") {
+		t.Errorf("error = %q, want it to mention the systemd credential source", err)
+	}
+}
+
+func TestSecretSet_UsageErrors(t *testing.T) {
+	cases := map[string][]string{
+		"missing_set":       {"secret"},
+		"no_flags":          {"secret", "set"},
+		"both_flags":        {"secret", "set", "--provider", "gemini", "--client-token"},
+		"provider_no_value": {"secret", "set", "--provider", "gemini"},
+		"unknown_flag":      {"secret", "set", "--nope"},
+	}
+	for name, args := range cases {
+		t.Run(name, func(t *testing.T) {
+			handled, err := handleSecret(io.Discard, io.Discard, args)
+			if !handled || !errors.Is(err, errUsage) {
+				t.Fatalf("expected errUsage, got handled=%v err=%v", handled, err)
+			}
+		})
+	}
+}
+
+func TestSecretSet_Help(t *testing.T) {
+	handled, err := handleSecret(io.Discard, io.Discard, []string{"secret", "set", "-h"})
+	if !handled || !errors.Is(err, flag.ErrHelp) {
+		t.Fatalf("expected flag.ErrHelp, got handled=%v err=%v", handled, err)
+	}
+}
+
+func TestSecretSet_Passthrough(t *testing.T) {
+	handled, err := handleSecret(io.Discard, io.Discard, []string{"serve"})
+	if handled || err != nil {
+		t.Errorf("expected passthrough, got handled=%v err=%v", handled, err)
+	}
+}
+
+// TestSecretSet_ResultLoads proves the written file is a valid secrets document.
+func TestSecretSet_ResultLoads(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("NENYA_SECRETS_DIR", dir)
+	t.Setenv("CREDENTIALS_DIRECTORY", "")
+
+	runSecretSet(t, "--provider", "gemini", "AIza-test")
+	runSecretSet(t, "--client-token", "explicit-token-1234567890")
+
+	res, err := config.ResolveSecrets()
+	if err != nil {
+		t.Fatalf("ResolveSecrets: %v", err)
+	}
+	if res.Secrets == nil {
+		t.Fatal("expected the written secrets to resolve")
+	}
+	if res.Secrets.ProviderKeys["gemini"] != "AIza-test" {
+		t.Errorf("provider key = %q, want AIza-test", res.Secrets.ProviderKeys["gemini"])
+	}
+	if res.Secrets.ClientToken != "explicit-token-1234567890" {
+		t.Errorf("client token = %q, want the explicit value", res.Secrets.ClientToken)
+	}
+}

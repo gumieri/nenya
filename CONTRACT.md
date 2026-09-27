@@ -206,12 +206,20 @@ shipped `deploy/nenya.service` / `deploy/nenya.plist`; a non-default
 `ExecStart`, and the launchd unit wires config/secrets through
 `NENYA_CONFIG_DIR`/`NENYA_SECRETS_DIR`.
 
-### 4.6 `nenya config set <dotted.key> <value>` — status: target
+### 4.6 `nenya config set <dotted.key> <value>` — status: stable
 
 Sets a config value using Nenya's own precedence, writing to the canonical
 location (§5). `<value>` is parsed as JSON when valid, otherwise as a string.
 Writes are atomic; the command prints the path it modified. This is a **single
 writer**: consumers MUST call it rather than editing config files directly.
+
+The write target is: the selected single file in file mode (`-config` /
+`NENYA_CONFIG_FILE`), otherwise the managed drop-in
+`<config-root>/config.d/99-nenya.json`. The `99-` prefix sorts after the
+conventional `00-`/`20-` drop-ins, so a written value takes effect; a drop-in
+sorting after it still wins, so consumers SHOULD verify the result with
+`nenya describe`. The drop-in is created (with `config.d/`) when absent and
+unrelated keys already present in the target file are preserved.
 
 Examples:
 ```
@@ -219,7 +227,7 @@ nenya config set server.listen_addr '":9090"'
 nenya config set discovery.auto_agents true
 ```
 
-### 4.7 `nenya secret set …` — status: target
+### 4.7 `nenya secret set …` — status: stable
 
 The secrets single writer.
 
@@ -229,6 +237,13 @@ The secrets single writer.
 | `nenya secret set --client-token [<token>]` | Sets (or generates) `client_token` |
 
 Files are created with mode `0600`; existing unrelated keys are preserved.
+
+The write target is `<NENYA_SECRETS_DIR>/secrets.json` (default
+`/run/secrets/nenya/secrets.json`). The systemd credential sources have higher
+priority (§6.1), so when `$CREDENTIALS_DIRECTORY/secrets` (or `secrets.d/`) is
+the active source the command **fails closed** rather than writing a shadowed
+file — manage those sources via systemd instead. A generated `client_token` is
+`nk-` followed by 32 random bytes (hex).
 
 ---
 
@@ -557,6 +572,6 @@ guaranteed here.
 | `describe --json` (§4.3) | stable |
 | `example-config` (§4.4) | stable |
 | `service-unit` (§4.5) | stable |
-| `config set` (§4.6) | **target** |
-| `secret set` (§4.7) | **target** |
+| `config set` (§4.6) | stable |
+| `secret set` (§4.7) | stable |
 | `--contract-version` (§2) | **target** |

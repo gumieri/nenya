@@ -47,7 +47,7 @@ const (
 )
 
 func main() {
-	if code, handled := runInspectionCommands(os.Args[1:]); handled {
+	if code, handled := runSubcommands(os.Args[1:]); handled {
 		os.Exit(code)
 	}
 
@@ -98,10 +98,11 @@ func main() {
 // (CONTRACT.md §3.4).
 var errUsage = errors.New("usage error")
 
-// runInspectionCommands dispatches the subcommands that inspect the runtime
-// environment and exit without starting the server (CONTRACT.md §4). It returns
-// the process exit code and whether it handled the invocation.
-func runInspectionCommands(args []string) (int, bool) {
+// runSubcommands dispatches the subcommands that run and exit without starting
+// the server (CONTRACT.md §4): version, paths, example-config, service-unit,
+// describe, and the config/secret single writers. It returns the process exit
+// code and whether it handled the invocation.
+func runSubcommands(args []string) (int, bool) {
 	if handled, err := handleVersion(os.Stdout, args); handled {
 		return inspectionExitCode(err), true
 	}
@@ -115,6 +116,12 @@ func runInspectionCommands(args []string) (int, bool) {
 		return inspectionExitCode(err), true
 	}
 	if handled, err := handleDescribe(os.Stdout, os.Stderr, args); handled {
+		return inspectionExitCode(err), true
+	}
+	if handled, err := handleConfig(os.Stdout, os.Stderr, args); handled {
+		return inspectionExitCode(err), true
+	}
+	if handled, err := handleSecret(os.Stdout, os.Stderr, args); handled {
 		return inspectionExitCode(err), true
 	}
 	return 0, false
