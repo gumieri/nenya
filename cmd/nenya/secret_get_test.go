@@ -69,7 +69,9 @@ func TestSecretGet_ProviderKey(t *testing.T) {
 func TestSecretGet_ConfigRootFallback(t *testing.T) {
 	configDir := t.TempDir()
 	writeSecrets(t, configDir, `{"client_token":"config-root-token-1234"}`)
-	t.Setenv("NENYA_SECRETS_DIR", "")
+	// An empty NENYA_SECRETS_DIR keeps resolution off the host's default dir so
+	// the config-root source (5) is what wins.
+	t.Setenv("NENYA_SECRETS_DIR", t.TempDir())
 	t.Setenv("NENYA_CONFIG_DIR", configDir)
 	t.Setenv("NENYA_CONFIG_FILE", "")
 	t.Setenv("CREDENTIALS_DIRECTORY", "")
@@ -195,7 +197,9 @@ func TestSecretGet_UnexpectedArgumentFailsClosed(t *testing.T) {
 func TestSecretGet_FileModeSkipsConfigRootSecrets(t *testing.T) {
 	dir := t.TempDir()
 	writeSecrets(t, dir, `{"client_token":"sibling-token-123456"}`)
-	t.Setenv("NENYA_SECRETS_DIR", "")
+	// Empty NENYA_SECRETS_DIR keeps the host default out of the picture; file
+	// mode must still skip the sibling config-root secrets.json (source 5).
+	t.Setenv("NENYA_SECRETS_DIR", t.TempDir())
 	t.Setenv("NENYA_CONFIG_DIR", "")
 	t.Setenv("NENYA_CONFIG_FILE", filepath.Join(dir, "custom.json"))
 	t.Setenv("CREDENTIALS_DIRECTORY", "")

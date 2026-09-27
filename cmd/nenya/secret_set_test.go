@@ -53,7 +53,11 @@ func TestSecretSet_ProviderKey(t *testing.T) {
 }
 
 func TestSecretSet_DirectoryModeDefaultsToConfigRoot(t *testing.T) {
-	stubDefaultSecretsDirPopulated(t, false)
+	// The shadow guard reads the real default dir; skip if the host supplies
+	// secrets there, which would (correctly) fail the write closed.
+	if _, err := os.Stat("/run/secrets/nenya"); err == nil {
+		t.Skip("host has /run/secrets/nenya; covered deterministically by TestSecretTargetPath_*")
+	}
 	dir := t.TempDir()
 	t.Setenv("NENYA_SECRETS_DIR", "")
 	t.Setenv("NENYA_CONFIG_DIR", dir)
@@ -86,24 +90,14 @@ func TestSecretTargetPath_FileModeFallsBackToRunSecrets(t *testing.T) {
 	}
 }
 
-// stubDefaultSecretsDirPopulated overrides the /run/secrets/nenya probe for the
-// duration of a test, so the shadow path is exercised without host control.
-func stubDefaultSecretsDirPopulated(t *testing.T, populated bool) {
-	t.Helper()
-	saved := defaultSecretsDirPopulated
-	defaultSecretsDirPopulated = func() bool { return populated }
-	t.Cleanup(func() { defaultSecretsDirPopulated = saved })
-}
-
 func TestSecretTargetPath_DirectoryModeDefaultsToConfigRoot(t *testing.T) {
-	stubDefaultSecretsDirPopulated(t, false)
 	t.Setenv("NENYA_SECRETS_DIR", "")
 	t.Setenv("CREDENTIALS_DIRECTORY", "")
 	dir := t.TempDir()
 
-	got, err := secretTargetPath(configPaths{dir: dir})
+	got, err := secretTargetPathWith(configPaths{dir: dir}, func() bool { return false })
 	if err != nil {
-		t.Fatalf("secretTargetPath: %v", err)
+		t.Fatalf("secretTargetPathWith: %v", err)
 	}
 	if want := filepath.Join(dir, "secrets.json"); got != want {
 		t.Errorf("target = %q, want %q", got, want)
@@ -111,38 +105,51 @@ func TestSecretTargetPath_DirectoryModeDefaultsToConfigRoot(t *testing.T) {
 }
 
 func TestSecretTargetPath_ShadowedByDefaultDirFailsClosed(t *testing.T) {
-	stubDefaultSecretsDirPopulated(t, true)
 	t.Setenv("NENYA_SECRETS_DIR", "")
 	t.Setenv("CREDENTIALS_DIRECTORY", "")
 
-	if _, err := secretTargetPath(configPaths{dir: t.TempDir()}); err == nil {
+	if _, err := secretTargetPathWith(configPaths{dir: t.TempDir()}, func() bool { return true }); err == nil {
 		t.Fatal("expected fail-closed when /run/secrets/nenya holds secrets that would shadow the write")
 	}
 }
 
 func TestSecretTargetPath_CredentialsDirWithoutFilesDoesNotFailClosed(t *testing.T) {
-	stubDefaultSecretsDirPopulated(t, false)
 	t.Setenv("NENYA_SECRETS_DIR", "")
 	t.Setenv("CREDENTIALS_DIRECTORY", t.TempDir()) // empty: no credential files
 	dir := t.TempDir()
 
-	got, err := secretTargetPath(configPaths{dir: dir})
+	got, err := secretTargetPathWith(configPaths{dir: dir}, func() bool { return false })
 	if err != nil {
-		t.Fatalf("secretTargetPath: %v", err)
+		t.Fatalf("secretTargetPathWith: %v", err)
 	}
 	if want := filepath.Join(dir, "secrets.json"); got != want {
 		t.Errorf("target = %q, want %q", got, want)
 	}
 }
 
+func TestSecretTargetPath_CredentialsDirWithSecretsFailsClosed(t *testing.T) {
+	credDir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(credDir, "secrets.d"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(credDir, "secrets.d", "01.json"), []byte(`{"client_token":"x"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("NENYA_SECRETS_DIR", "")
+	t.Setenv("CREDENTIALS_DIRECTORY", credDir)
+
+	if _, err := secretTargetPathWith(configPaths{dir: t.TempDir()}, func() bool { return false }); err == nil {
+		t.Fatal("expected fail-closed when a systemd credential directory supplies secrets")
+	}
+}
+
 func TestSecretTargetPath_ConfigRootIsDefaultDirNotShadowed(t *testing.T) {
-	stubDefaultSecretsDirPopulated(t, true)
 	t.Setenv("NENYA_SECRETS_DIR", "")
 	t.Setenv("CREDENTIALS_DIRECTORY", "")
 
-	got, err := secretTargetPath(configPaths{dir: "/run/secrets/nenya"})
+	got, err := secretTargetPathWith(configPaths{dir: "/run/secrets/nenya"}, func() bool { return true })
 	if err != nil {
-		t.Fatalf("secretTargetPath: %v", err)
+		t.Fatalf("secretTargetPathWith: %v", err)
 	}
 	if want := "/run/secrets/nenya/secrets.json"; got != want {
 		t.Errorf("target = %q, want %q", got, want)

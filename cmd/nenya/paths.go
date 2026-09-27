@@ -78,11 +78,11 @@ func resolvePaths(paths configPaths) pathsJSON {
 	res := pathsJSON{Platform: runtime.GOOS}
 	if paths.file != "" {
 		res.Mode = "file"
-		res.ConfigFile = absOrSelf(paths.file)
+		res.ConfigFile = config.CleanAbs(paths.file)
 		res.ConfigDir = filepath.Dir(res.ConfigFile)
 	} else {
 		res.Mode = "directory"
-		res.ConfigDir = absOrSelf(paths.dir)
+		res.ConfigDir = config.CleanAbs(paths.dir)
 		res.ConfigFile = filepath.Join(res.ConfigDir, "config.json")
 	}
 	res.ConfigD = filepath.Join(res.ConfigDir, "config.d")
@@ -100,11 +100,16 @@ func resolvePaths(paths configPaths) pathsJSON {
 // target, not proof of which source the loader will pick.
 func secretsFile(paths configPaths) *string {
 	if dir := secretsEnvDir(); dir != "" {
+		// Mirror secret set: an existing regular-file NENYA_SECRETS_DIR is the
+		// target itself, otherwise it is a directory holding secrets.json.
+		if info, err := os.Stat(dir); err == nil && !info.IsDir() {
+			return &dir
+		}
 		f := filepath.Join(dir, "secrets.json")
 		return &f
 	}
 	if paths.file == "" {
-		f := filepath.Join(absOrSelf(paths.dir), "secrets.json")
+		f := filepath.Join(config.CleanAbs(paths.dir), "secrets.json")
 		return &f
 	}
 	return nil
@@ -113,7 +118,7 @@ func secretsFile(paths configPaths) *string {
 // secretsEnvDir returns NENYA_SECRETS_DIR as an absolute path, or "" when unset.
 func secretsEnvDir() string {
 	if dir := os.Getenv("NENYA_SECRETS_DIR"); dir != "" {
-		return absOrSelf(dir)
+		return config.CleanAbs(dir)
 	}
 	return ""
 }
@@ -125,15 +130,6 @@ func secretsDir() string {
 		return dir
 	}
 	return config.DefaultSecretsDir
-}
-
-// absOrSelf returns p as an absolute, cleaned path, or p unchanged when it
-// cannot be resolved.
-func absOrSelf(p string) string {
-	if abs, err := filepath.Abs(p); err == nil {
-		return abs
-	}
-	return p
 }
 
 // nullableString renders a nullable path for human-readable output.

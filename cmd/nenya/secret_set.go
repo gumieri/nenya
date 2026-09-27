@@ -86,8 +86,14 @@ const secretSetUsage = "usage: nenya secret set [--config-dir <dir> | --config <
 // subcommand.
 const secretUsage = secretSetUsage + "\n       " + secretGetUsage
 
+// minClientTokenLen is the minimum length accepted for an explicit client
+// token, matching ApiKey.Validate's floor for API keys. The generated token is
+// far longer ("nk-" + 32 bytes hex).
+const minClientTokenLen = 16
+
 // applyClientToken sets client_token from rest[0], or generates one when no
-// value is given. A malformed invocation returns errUsage.
+// value is given. A malformed invocation returns errUsage; an explicit token
+// shorter than minClientTokenLen is rejected.
 func applyClientToken(target string, rest []string) error {
 	if len(rest) > 1 {
 		return errUsage
@@ -104,6 +110,9 @@ func applyClientToken(target string, rest []string) error {
 	}
 	if token == "" {
 		return errUsage
+	}
+	if len(token) < minClientTokenLen {
+		return fmt.Errorf("client token must be at least %d characters", minClientTokenLen)
 	}
 	return setSecretValue(target, "client_token", "", token)
 }
@@ -132,27 +141,35 @@ func applyProviderKey(target, provider string, rest []string) error {
 // would shadow: systemd credentials (§6.1 sources 1-2), and the default merge
 // directory /run/secrets/nenya (§6.1 source 4) when it is populated.
 func secretTargetPath(paths configPaths) (string, error) {
+	return secretTargetPathWith(paths, defaultSecretsDirPopulated)
+}
+
+// secretTargetPathWith is secretTargetPath with the default-directory probe
+// injected, so tests can exercise the shadow path without mutating a global or
+// controlling /run/secrets.
+func secretTargetPathWith(paths configPaths, defaultDirPopulated func() bool) (string, error) {
 	if credDir := os.Getenv("CREDENTIALS_DIRECTORY"); credDir != "" {
 		if _, err := os.Stat(filepath.Join(credDir, "secrets")); err == nil {
 			return "", fmt.Errorf("active secrets source is the systemd credential %s/secrets; manage it via systemd (or set NENYA_SECRETS_DIR to write a file instead)", credDir)
 		}
-		if entries, err := os.ReadDir(filepath.Join(credDir, "secrets.d")); err == nil && len(entries) > 0 {
+		if dirHasSecrets(filepath.Join(credDir, "secrets.d")) {
 			return "", fmt.Errorf("active secrets source is the systemd credential directory %s/secrets.d; manage it via systemd (or set NENYA_SECRETS_DIR to write a file instead)", credDir)
 		}
 	}
 
 	if dir := os.Getenv("NENYA_SECRETS_DIR"); dir != "" {
-		dir = absOrSelf(dir)
-		// The loader accepts NENYA_SECRETS_DIR as a file or a directory; write
-		// to a file target directly instead of creating a bogus directory.
+		dir = config.CleanAbs(dir)
+		// The loader also accepts NENYA_SECRETS_DIR as a single file; write to
+		// an existing file target directly rather than creating a directory. A
+		// not-yet-existing path is treated as a directory (the documented form).
 		if info, err := os.Stat(dir); err == nil && !info.IsDir() {
 			return dir, nil
 		}
 		return filepath.Join(dir, "secrets.json"), nil
 	}
 	if paths.file == "" {
-		target := filepath.Join(absOrSelf(paths.dir), "secrets.json")
-		if filepath.Dir(target) != config.DefaultSecretsDir && defaultSecretsDirPopulated() {
+		target := filepath.Join(config.CleanAbs(paths.dir), "secrets.json")
+		if !sameDir(filepath.Dir(target), config.DefaultSecretsDir) && defaultDirPopulated() {
 			return "", fmt.Errorf("active secrets source is %s (source 4); writing %s would be shadowed — remove %s/*.json or set NENYA_SECRETS_DIR to write a file instead", config.DefaultSecretsDir, target, config.DefaultSecretsDir)
 		}
 		return target, nil
@@ -160,26 +177,37 @@ func secretTargetPath(paths configPaths) (string, error) {
 	return filepath.Join(config.DefaultSecretsDir, "secrets.json"), nil
 }
 
-// defaultSecretsDirPopulated reports whether the default merge directory
-// (CONTRACT.md §6.1 source 4, config.DefaultSecretsDir) contains any *.json.
-// When it does, it is an active source that would shadow a lower-priority
-// config-root write (source 5), so `secret set` must not write a file the
-// loader will ignore.
-//
-// It is a package-level test seam: production never reassigns it; tests swap it
-// to exercise the shadow path without control of /run/secrets (restoring it in
-// t.Cleanup).
-var defaultSecretsDirPopulated = func() bool {
-	entries, err := os.ReadDir(config.DefaultSecretsDir)
+// dirHasSecrets reports whether dir holds at least one secrets document: a
+// non-directory *.json other than config.json, which loadSecretsFromDir skips.
+func dirHasSecrets(dir string) bool {
+	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return false
 	}
 	for _, e := range entries {
-		if !e.IsDir() && filepath.Ext(e.Name()) == ".json" {
+		if !e.IsDir() && filepath.Ext(e.Name()) == ".json" && e.Name() != "config.json" {
 			return true
 		}
 	}
 	return false
+}
+
+// defaultSecretsDirPopulated reports whether the default merge directory
+// (CONTRACT.md §6.1 source 4) holds a secrets document. When it does, it would
+// shadow a lower-priority config-root write (source 5).
+func defaultSecretsDirPopulated() bool {
+	return dirHasSecrets(config.DefaultSecretsDir)
+}
+
+// sameDir reports whether a and b name the same directory, tolerating symlinks
+// and path syntax when both exist.
+func sameDir(a, b string) bool {
+	ai, aerr := os.Stat(a)
+	bi, berr := os.Stat(b)
+	if aerr == nil && berr == nil {
+		return os.SameFile(ai, bi)
+	}
+	return filepath.Clean(a) == filepath.Clean(b)
 }
 
 // generateClientToken returns a fresh random client token.

@@ -164,7 +164,8 @@ Prints the resolved filesystem contract (Appendix A.2): config dir/file,
 `config.d`, secrets dir/file, and socket path. Resolution MUST match what the
 server actually uses for the same flags/environment. `secrets_dir` is the
 secrets merge directory (`NENYA_SECRETS_DIR` or `/run/secrets/nenya`);
-`secrets_file` is the **preferred** single secrets file — the nominal default
+`secrets_file` (additive in contract v1; consumers SHOULD feature-detect it) is
+the **preferred** single secrets file — the nominal default
 target of `secret set` (`<NENYA_SECRETS_DIR>/secrets.json`, else
 `<config-root>/secrets.json` in directory mode, else `null`) and the file the
 shipped unit wires via `LoadCredential`. It names the conventional target, not
@@ -274,7 +275,8 @@ Nenya instead of reimplementing the §6.1 search order or the §6.2 merge.
 
 Exactly one selector is required. The command resolves the same sources and
 precedence the server uses; `--config-dir`/`--config` select the config root
-that §6.1 source 5 and `secret set` (§4.7) use. The selected document must pass
+used for §6.1 source 5 and the `secret set` config-root write target (§4.7) —
+both directory-mode only. The selected document must pass
 the same validation as the server (in particular `client_token` is required),
 so an invalid document fails the read even when the requested provider key is
 itself present. It prints only the requested value to stdout, exits `1` when no
@@ -357,7 +359,10 @@ the installing tool (and `nenya secret set`, §4.7).
 | 5 | `<config-root>/secrets.json` (single file, directory mode only) |
 
 Sources 3 and 4 are the same probe: `NENYA_SECRETS_DIR` replaces the
-`/run/secrets/nenya` default rather than adding a second directory. Source 5 is
+`/run/secrets/nenya` default rather than adding a second directory.
+`NENYA_SECRETS_DIR` may name a single JSON file instead of a directory; a
+`config.json` found inside a secrets directory is skipped (it is configuration,
+not secrets). Source 5 is
 the deployment's conventional secrets file: the shipped systemd unit wires it
 via `LoadCredential` (which then wins as source 1), and it is `secret set`'s
 default target in directory mode (§4.7). Searching it last makes an interactive
@@ -577,7 +582,8 @@ rather than a path.
     "searched": [
       "<CREDENTIALS_DIRECTORY>/secrets",
       "<CREDENTIALS_DIRECTORY>/secrets.d",
-      "<NENYA_SECRETS_DIR or /run/secrets/nenya>"
+      "<NENYA_SECRETS_DIR or /run/secrets/nenya>",
+      "<config-root>/secrets.json"
     ]
   },
   "config": { /* effective merged config, per -print-config-schema */ },

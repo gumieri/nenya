@@ -57,9 +57,9 @@ func handleConfig(w, errW io.Writer, args []string) (bool, error) {
 // file in file mode, otherwise the managed drop-in under the config directory.
 func configTargetPath(paths configPaths) string {
 	if paths.file != "" {
-		return absOrSelf(paths.file)
+		return config.CleanAbs(paths.file)
 	}
-	return filepath.Join(absOrSelf(paths.dir), "config.d", managedConfigDropIn)
+	return filepath.Join(config.CleanAbs(paths.dir), "config.d", managedConfigDropIn)
 }
 
 // parseConfigValue parses raw as JSON when it is valid JSON, otherwise treats
@@ -158,6 +158,15 @@ func writeFileAtomic(path string, data []byte, mode os.FileMode) error {
 	}
 	if err := os.Rename(tmpName, path); err != nil {
 		return fmt.Errorf("rename %s: %w", path, err)
+	}
+	// fsync the directory so the rename is durable across a crash.
+	dirFile, dirErr := os.Open(dir)
+	if dirErr != nil {
+		return fmt.Errorf("open directory %s: %w", dir, dirErr)
+	}
+	defer func() { _ = dirFile.Close() }()
+	if syncErr := dirFile.Sync(); syncErr != nil {
+		return fmt.Errorf("sync directory %s: %w", dir, syncErr)
 	}
 	return nil
 }

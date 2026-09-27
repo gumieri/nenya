@@ -20,7 +20,8 @@
     "searched": [
       "<CREDENTIALS_DIRECTORY>/secrets",
       "<CREDENTIALS_DIRECTORY>/secrets.d",
-      "/run/secrets/nenya"
+      "/run/secrets/nenya",
+      "/etc/nenya/secrets.json"
     ]
   },
   "config": {

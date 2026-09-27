@@ -38,7 +38,7 @@ func LoadWithDiagnostics(path string) (*Config, []Diagnostic, error) {
 		if errors.Is(err, os.ErrNotExist) {
 			return nil, nil, fmt.Errorf("%w: config file %s does not exist", ErrConfigNotFound, path)
 		}
-		return nil, nil, fmt.Errorf("failed to access config path %s: %v", path, err)
+		return nil, nil, fmt.Errorf("failed to access config path %s: %w", path, err)
 	}
 
 	if info.IsDir() {
@@ -435,11 +435,11 @@ func ResolveSecrets(configRoot string) (SecretsResolution, error) {
 	if secretsDir == "" {
 		secretsDir = DefaultSecretsDir
 	}
-	secretsDir = cleanAbs(secretsDir)
+	secretsDir = CleanAbs(secretsDir)
 
 	res := SecretsResolution{}
 	if credDir != "" {
-		credDir = cleanAbs(credDir)
+		credDir = CleanAbs(credDir)
 		res.Searched = append(res.Searched, filepath.Join(credDir, "secrets"), filepath.Join(credDir, "secrets.d"))
 	} else {
 		res.Searched = append(res.Searched, "<CREDENTIALS_DIRECTORY>/secrets", "<CREDENTIALS_DIRECTORY>/secrets.d")
@@ -448,7 +448,7 @@ func ResolveSecrets(configRoot string) (SecretsResolution, error) {
 
 	configSecrets := ""
 	if configRoot != "" {
-		configSecrets = filepath.Join(cleanAbs(configRoot), "secrets.json")
+		configSecrets = filepath.Join(CleanAbs(configRoot), "secrets.json")
 		res.Searched = append(res.Searched, configSecrets)
 	}
 
@@ -472,10 +472,10 @@ func ResolveSecrets(configRoot string) (SecretsResolution, error) {
 	return res, nil
 }
 
-// cleanAbs returns p as an absolute, cleaned path, or p unchanged when it cannot
-// be resolved, so sources recorded in SecretsResolution match the paths other
-// surfaces (paths --json, secret set) report.
-func cleanAbs(p string) string {
+// CleanAbs returns p as an absolute, cleaned path, or p unchanged when it
+// cannot be resolved, so sources recorded in SecretsResolution match the paths
+// other surfaces (paths --json, secret set) report.
+func CleanAbs(p string) string {
 	if abs, err := filepath.Abs(p); err == nil {
 		return abs
 	}

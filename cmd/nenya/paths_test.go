@@ -180,13 +180,14 @@ func TestHandlePaths_UnexpectedArgument(t *testing.T) {
 func TestHandlePaths_HumanReadable(t *testing.T) {
 	t.Setenv("NENYA_CONFIG_DIR", "/etc/nenya/")
 	t.Setenv("NENYA_CONFIG_FILE", "")
+	t.Setenv("NENYA_SECRETS_DIR", "")
 
 	var buf bytes.Buffer
 	handled, err := handlePaths(&buf, io.Discard, []string{"paths"})
 	if !handled || err != nil {
 		t.Fatalf("handlePaths: handled=%v err=%v", handled, err)
 	}
-	for _, want := range []string{"mode=directory", "config_dir=/etc/nenya", "socket_path=null", "platform=" + runtime.GOOS} {
+	for _, want := range []string{"mode=directory", "config_dir=/etc/nenya", "secrets_file=/etc/nenya/secrets.json", "socket_path=null", "platform=" + runtime.GOOS} {
 		if !strings.Contains(buf.String(), want) {
 			t.Errorf("human output missing %q:\n%s", want, buf.String())
 		}

@@ -38,7 +38,11 @@ func handleSecretGet(w, errW io.Writer, args []string) (bool, error) {
 		return true, errUsage
 	}
 	// Exactly one selector is required.
-	if *clientToken == (*provider != "") {
+	if *clientToken && *provider != "" {
+		_, _ = fmt.Fprintln(errW, "usage: --provider and --client-token are mutually exclusive")
+		return true, errUsage
+	}
+	if !*clientToken && *provider == "" {
 		_, _ = fmt.Fprintln(errW, secretGetUsage)
 		return true, errUsage
 	}

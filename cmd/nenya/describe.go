@@ -180,9 +180,9 @@ func buildDescription(paths configPaths) (describeJSON, error) {
 // config root directory.
 func configSource(paths configPaths) string {
 	if paths.file != "" {
-		return absOrSelf(paths.file)
+		return config.CleanAbs(paths.file)
 	}
-	return absOrSelf(paths.dir)
+	return config.CleanAbs(paths.dir)
 }
 
 // configuredProviders returns the sorted names of providers that can serve
