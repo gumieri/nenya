@@ -12,17 +12,25 @@ import (
 	"path/filepath"
 )
 
-// handleSecret implements `nenya secret set` (CONTRACT.md §4.7): the secrets
-// single writer. It reports whether it handled the invocation.
+// handleSecret dispatches the `nenya secret` subcommands (CONTRACT.md §4.7):
+// the secrets single writer (`set`) and reader (`get`). It reports whether it
+// handled the invocation.
 func handleSecret(w, errW io.Writer, args []string) (bool, error) {
 	if len(args) == 0 || args[0] != "secret" {
 		return false, nil
 	}
-	if len(args) < 2 || args[1] != "set" {
-		_, _ = fmt.Fprintln(errW, secretUsage)
-		return true, errUsage
+	if len(args) >= 2 && args[1] == "set" {
+		return handleSecretSet(w, errW, args)
 	}
+	if len(args) >= 2 && args[1] == "get" {
+		return handleSecretGet(w, errW, args)
+	}
+	_, _ = fmt.Fprintln(errW, secretUsage)
+	return true, errUsage
+}
 
+// handleSecretSet implements `nenya secret set`: the secrets single writer.
+func handleSecretSet(w, errW io.Writer, args []string) (bool, error) {
 	fs := flag.NewFlagSet("secret set", flag.ContinueOnError)
 	fs.SetOutput(errW)
 	provider := fs.String("provider", "", "Provider name whose key is set")
@@ -71,8 +79,8 @@ func applySecretSet(target string, clientToken bool, provider string, rest []str
 	}
 }
 
-// secretUsage is the `secret set` usage line.
-const secretUsage = "usage: nenya secret set --provider <name> <api-key> | --client-token [<token>]"
+// secretUsage is the `secret` usage line.
+const secretUsage = "usage: nenya secret set --provider <name> <api-key> | --client-token [<token>]\n       nenya secret get --client-token | --provider <name>"
 
 // applyClientToken sets client_token from rest[0], or generates one when no
 // value is given. A malformed invocation returns errUsage.

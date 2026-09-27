@@ -260,6 +260,22 @@ higher priority (§6.1), so when `$CREDENTIALS_DIRECTORY/secrets` (or
 writing a shadowed file — manage those sources via systemd instead. A generated
 `client_token` is `nk-` followed by 32 random bytes (hex).
 
+### 4.8 `nenya secret get …` — status: stable
+
+The secrets single reader, so consumers resolve the effective secrets through
+Nenya instead of reimplementing the §6.1 search order or the §6.2 merge.
+
+| Form | Effect |
+|------|--------|
+| `nenya secret get --client-token` | Prints the effective `client_token` |
+| `nenya secret get --provider <name>` | Prints `provider_keys[name]` |
+
+Exactly one selector is required. The command resolves the same sources and
+precedence the server uses; `--config-dir`/`--config` select the config root
+that §6.1 source 5 and `secret set` (§4.7) use. It prints only the requested
+value to stdout, exits `1` when no source resolves or the provider key is
+absent, and never logs the value.
+
 ---
 
 ## 5. On-disk layout and precedence
@@ -597,4 +613,5 @@ guaranteed here.
 | `service-unit` (§4.5) | stable |
 | `config set` (§4.6) | stable |
 | `secret set` (§4.7) | stable |
+| `secret get` (§4.8) | stable |
 | `--contract-version` (§2) | **target** |
