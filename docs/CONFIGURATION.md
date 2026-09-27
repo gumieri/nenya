@@ -29,7 +29,7 @@ Nenya reads its configuration from a JSON file or directory (default: `/etc/neny
 | `HOST` | Optional bind address (e.g. `127.0.0.1`). Only used when combined with `PORT`. |
 | `NENYA_CONFIG_DIR` | Config root directory (`config.d/` or `config.json` inside it). Same idea as `-config-dir`. Default `/etc/nenya/` when no file mode is selected. |
 | `NENYA_CONFIG_FILE` | Single JSON config file. Same idea as `-config`. **If set, directory mode is not used** — this takes precedence over `NENYA_CONFIG_DIR`. |
-| `NENYA_SECRETS_DIR` | Secrets directory (merged `*.json` files). Used by containers; see [`SECRETS_FORMAT.md`](SECRETS_FORMAT.md). |
+| `NENYA_SECRETS_DIR` | Secrets merge directory (`*.json` files) or a single JSON file; replaces the `/run/secrets/nenya` default (CONTRACT.md §6.1 sources 3/4). In directory mode `<config-root>/secrets.json` is searched last (source 5). See [`SECRETS_FORMAT.md`](SECRETS_FORMAT.md). |
 
 After flags are parsed, `NENYA_CONFIG_DIR` and `NENYA_CONFIG_FILE` **override** `-config-dir` and `-config` if set. If both env vars are set, `NENYA_CONFIG_FILE` still wins at load time (single-file mode).
 

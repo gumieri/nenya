@@ -122,10 +122,23 @@ sudo chmod 600 /etc/nenya/secrets.json
 ```
 
 **Alternative:** Use a directory with multiple files (auto-merged). A
-`secrets.d` directory is only read when `NENYA_SECRETS_DIR` points at it
-(CONTRACT.md §6.1); the shipped unit wires a single file instead, so add a unit
-drop-in with `Environment=NENYA_SECRETS_DIR=/etc/nenya/secrets.d` (and drop the
-`LoadCredential` line) when using this form:
+`secrets.d` directory is read as CONTRACT.md §6.1 source 2 when delivered as a
+systemd *directory* credential, or as source 3 when `NENYA_SECRETS_DIR` points
+at it. The shipped unit wires a single file, and because it runs with
+`DynamicUser=yes` it cannot read root-owned `0600` files unless systemd
+delivers them, so prefer a directory credential. Reset the main unit's
+single-file credential and add the directory (source 2 wins only when the
+single-file `secrets` credential is absent):
+
+```ini
+# /etc/systemd/system/nenya.service.d/secrets.conf
+[Service]
+LoadCredential=
+LoadCredential=secrets.d:/etc/nenya/secrets.d
+```
+
+Leave `/etc/nenya/secrets.d` root-owned (`0600`) as shown below; systemd copies
+it into the service's private credential directory at startup.
 
 ```bash
 sudo mkdir -p /etc/nenya/secrets.d

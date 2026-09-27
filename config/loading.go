@@ -193,7 +193,9 @@ func LoadFromDirWithDiagnostics(dir string) (*Config, []Diagnostic, error) {
 	}
 
 	if !found {
-		return nil, nil, &ConfigNotFoundError{Detail: fmt.Sprintf("no config found in %s (tried %s and %s/*.json)", dir, configFilePath, configDirPath)}
+		// Return the diagnostics gathered so far: a directory at config.json or a
+		// drop-in issue should not be lost just because no base config exists.
+		return nil, diags, &ConfigNotFoundError{Detail: fmt.Sprintf("no config found in %s (tried %s and %s/*.json)", dir, configFilePath, configDirPath)}
 	}
 
 	if err := ApplyDefaults(merged); err != nil {
@@ -631,7 +633,7 @@ func tryLoadCredFile(credDir string) (*SecretsConfig, error) {
 
 	var secrets SecretsConfig
 	if err := json.Unmarshal(data, &secrets); err != nil {
-		return nil, fmt.Errorf("failed to parse secrets: %v", err)
+		return nil, fmt.Errorf("failed to parse secrets: %w", err)
 	}
 	if secrets.ProviderKeys == nil {
 		secrets.ProviderKeys = make(map[string]string)

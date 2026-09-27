@@ -55,8 +55,20 @@ func handleSecretSet(w, errW io.Writer, args []string) (bool, error) {
 		return true, err
 	}
 
+	// Validate the selector and argument count before resolving the target, so a
+	// malformed invocation is a usage error (exit 2, CONTRACT.md §3.4) even when
+	// a credential source would otherwise make the target fail closed.
 	if *clientToken && *provider != "" {
 		_, _ = fmt.Fprintln(errW, "usage: --provider and --client-token are mutually exclusive")
+		return true, errUsage
+	}
+	if !*clientToken && *provider == "" {
+		_, _ = fmt.Fprintln(errW, secretSetUsage)
+		return true, errUsage
+	}
+	rest := fs.Args()
+	if (*provider != "" && len(rest) != 1) || (*clientToken && len(rest) > 1) {
+		_, _ = fmt.Fprintln(errW, secretSetUsage)
 		return true, errUsage
 	}
 
@@ -65,7 +77,7 @@ func handleSecretSet(w, errW io.Writer, args []string) (bool, error) {
 		return true, targetErr
 	}
 
-	if setErr := applySecretSet(errW, target, *clientToken, *provider, fs.Args()); setErr != nil {
+	if setErr := applySecretSet(errW, target, *clientToken, *provider, rest); setErr != nil {
 		if errors.Is(setErr, errUsage) {
 			_, _ = fmt.Fprintln(errW, secretSetUsage)
 		}
