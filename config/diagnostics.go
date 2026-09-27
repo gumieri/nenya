@@ -4,7 +4,8 @@ package config
 // secrets, reported by `nenya describe --json` (CONTRACT.md §4.3). It never
 // prevents startup.
 type Diagnostic struct {
-	// Level is "info", "warn", or "error".
+	// Level is "warn" or "error" today; "info" is reserved for future
+	// informational diagnostics.
 	Level string `json:"level"`
 	// Code is a stable machine identifier (for example "unknown_field",
 	// "config_not_found", "secrets_not_found", "secrets_invalid").

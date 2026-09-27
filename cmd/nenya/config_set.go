@@ -82,7 +82,7 @@ func setConfigKey(path, dottedKey string, value any) error {
 			return fmt.Errorf("parse %s: %w", path, decodeErr)
 		}
 	} else if !errors.Is(err, os.ErrNotExist) {
-		return err
+		return fmt.Errorf("read %s: %w", path, err)
 	}
 
 	if err := setDottedKey(doc, dottedKey, value); err != nil {

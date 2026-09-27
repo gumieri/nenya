@@ -95,7 +95,7 @@ func TestSecretTargetPath_DirectoryModeDefaultsToConfigRoot(t *testing.T) {
 	t.Setenv("CREDENTIALS_DIRECTORY", "")
 	dir := t.TempDir()
 
-	got, err := secretTargetPathWith(configPaths{dir: dir}, func() bool { return false })
+	got, err := secretTargetPathWith(configPaths{dir: dir}, func() (bool, error) { return false, nil })
 	if err != nil {
 		t.Fatalf("secretTargetPathWith: %v", err)
 	}
@@ -108,7 +108,7 @@ func TestSecretTargetPath_ShadowedByDefaultDirFailsClosed(t *testing.T) {
 	t.Setenv("NENYA_SECRETS_DIR", "")
 	t.Setenv("CREDENTIALS_DIRECTORY", "")
 
-	if _, err := secretTargetPathWith(configPaths{dir: t.TempDir()}, func() bool { return true }); err == nil {
+	if _, err := secretTargetPathWith(configPaths{dir: t.TempDir()}, func() (bool, error) { return true, nil }); err == nil {
 		t.Fatal("expected fail-closed when /run/secrets/nenya holds secrets that would shadow the write")
 	}
 }
@@ -118,7 +118,7 @@ func TestSecretTargetPath_CredentialsDirWithoutFilesDoesNotFailClosed(t *testing
 	t.Setenv("CREDENTIALS_DIRECTORY", t.TempDir()) // empty: no credential files
 	dir := t.TempDir()
 
-	got, err := secretTargetPathWith(configPaths{dir: dir}, func() bool { return false })
+	got, err := secretTargetPathWith(configPaths{dir: dir}, func() (bool, error) { return false, nil })
 	if err != nil {
 		t.Fatalf("secretTargetPathWith: %v", err)
 	}
@@ -138,7 +138,7 @@ func TestSecretTargetPath_CredentialsDirWithSecretsFailsClosed(t *testing.T) {
 	t.Setenv("NENYA_SECRETS_DIR", "")
 	t.Setenv("CREDENTIALS_DIRECTORY", credDir)
 
-	if _, err := secretTargetPathWith(configPaths{dir: t.TempDir()}, func() bool { return false }); err == nil {
+	if _, err := secretTargetPathWith(configPaths{dir: t.TempDir()}, func() (bool, error) { return false, nil }); err == nil {
 		t.Fatal("expected fail-closed when a systemd credential directory supplies secrets")
 	}
 }
@@ -147,7 +147,7 @@ func TestSecretTargetPath_ConfigRootIsDefaultDirNotShadowed(t *testing.T) {
 	t.Setenv("NENYA_SECRETS_DIR", "")
 	t.Setenv("CREDENTIALS_DIRECTORY", "")
 
-	got, err := secretTargetPathWith(configPaths{dir: "/run/secrets/nenya"}, func() bool { return true })
+	got, err := secretTargetPathWith(configPaths{dir: "/run/secrets/nenya"}, func() (bool, error) { return true, nil })
 	if err != nil {
 		t.Fatalf("secretTargetPathWith: %v", err)
 	}
@@ -171,6 +171,35 @@ func TestSecretTargetPath_SecretsDirAsFileWritesItDirectly(t *testing.T) {
 	}
 	if got != file {
 		t.Errorf("target = %q, want the file target %q", got, file)
+	}
+}
+
+func TestSecretTargetPath_MergeDirLaterSiblingFailsClosed(t *testing.T) {
+	dir := t.TempDir()
+	for _, name := range []string{"secrets.json", "zz-later.json"} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte("{}"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Setenv("NENYA_SECRETS_DIR", dir)
+	t.Setenv("CREDENTIALS_DIRECTORY", "")
+
+	if _, err := secretTargetPathWith(configPaths{}, func() (bool, error) { return false, nil }); err == nil {
+		t.Fatal("expected fail-closed when a later-sorting sibling shadows the target")
+	}
+}
+
+func TestSecretSet_ShortExplicitTokenRejected(t *testing.T) {
+	t.Setenv("NENYA_SECRETS_DIR", t.TempDir())
+	t.Setenv("CREDENTIALS_DIRECTORY", "")
+
+	var out, errBuf bytes.Buffer
+	handled, err := handleSecret(&out, &errBuf, []string{"secret", "set", "--client-token", "short"})
+	if !handled || err == nil {
+		t.Fatalf("handled=%v err=%v, want a minimum-length rejection", handled, err)
+	}
+	if !strings.Contains(err.Error(), "at least") {
+		t.Errorf("error = %v, want a minimum-length message", err)
 	}
 }
 

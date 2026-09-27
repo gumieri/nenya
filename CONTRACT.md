@@ -165,11 +165,13 @@ Prints the resolved filesystem contract (Appendix A.2): config dir/file,
 server actually uses for the same flags/environment. `secrets_dir` is the
 secrets merge directory (`NENYA_SECRETS_DIR` or `/run/secrets/nenya`);
 `secrets_file` (additive in contract v1; consumers SHOULD feature-detect it) is
-the **preferred** single secrets file — the nominal default
-target of `secret set` (`NENYA_SECRETS_DIR` itself when it names an existing
-file, else `<NENYA_SECRETS_DIR>/secrets.json`, else `<config-root>/secrets.json`
-in directory mode, else `null` when the env var is unset) and the file the
-shipped unit wires via `LoadCredential`. It names the conventional target, not
+the **preferred** single secrets file (`NENYA_SECRETS_DIR`
+itself when it names an existing file, else `<NENYA_SECRETS_DIR>/secrets.json`,
+else `<config-root>/secrets.json` in directory mode, else `null` when no
+preferred target exists — file mode with the env var unset, where `secret set`
+falls back to `/run/secrets/nenya/secrets.json`, §4.7). In directory mode it is
+the file the shipped unit wires via `LoadCredential`. It names the conventional
+target, not
 proof of which source the loader picks: `secret set` fails closed when a
 higher-priority source would shadow it (§4.7). `mode` is `file` when
 `-config`/`NENYA_CONFIG_FILE` selects a single file (only `config_file` is read)
@@ -375,7 +377,8 @@ A missing candidate falls through to the next source. A read error on the
 single `$CREDENTIALS_DIRECTORY/secrets` file is also treated as absent; a
 stat/read failure on a directory source (including a permission error) is
 **fatal**. A stat/read failure on the source-5 single file (other than
-not-exist) is likewise **fatal**. Once a source is selected, a parse or
+not-exist) is likewise **fatal**; a *directory* at the source-5 path is skipped
+as not-a-file (source 5 is a single file). Once a source is selected, a parse or
 validation failure is fatal — Nenya does not fall through to the next source.
 
 ### 6.2 Shape

@@ -164,6 +164,14 @@ func LoadFromDirWithDiagnostics(dir string) (*Config, []Diagnostic, error) {
 		// instead of silently reporting config_not_found.
 		return nil, nil, fmt.Errorf("failed to access config %s: %w", configFilePath, statErr)
 	}
+	if statErr == nil && info.IsDir() {
+		diags = append(diags, Diagnostic{
+			Level:   "warn",
+			Code:    "config_path_is_directory",
+			Message: fmt.Sprintf("%s is a directory; ignoring it as a config file (use config.d/ for drop-ins)", configFilePath),
+			Source:  configFilePath,
+		})
+	}
 	if statErr == nil && !info.IsDir() {
 		base, baseDiags, loadErr := decodeConfigFileWithDiagnostics(configFilePath)
 		if loadErr != nil {
@@ -431,9 +439,10 @@ type SecretsResolution struct {
 // in order (CONTRACT.md §6.1):
 //  1. $CREDENTIALS_DIRECTORY/secrets
 //  2. $CREDENTIALS_DIRECTORY/secrets.d/ (directory)
-//     3/4. $NENYA_SECRETS_DIR (a file or a merged directory) or, when unset, the
-//     /run/secrets/nenya directory — one probe, the env var replacing the
+//  3. $NENYA_SECRETS_DIR (a file or a merged directory) or, when that is unset,
+//     the source-4 directory below — one probe, the env var replacing the
 //     default
+//  4. /run/secrets/nenya (only when NENYA_SECRETS_DIR is unset)
 //  5. <configRoot>/secrets.json (single file, directory mode only)
 //
 // Source 5 is the deployment's conventional secrets file: the shipped systemd
@@ -563,10 +572,13 @@ func resolveSecretsPath(res *SecretsResolution, path string) (bool, error) {
 }
 
 // recordSecrets validates secrets and records the source that produced them.
+// A validation failure leaves ActiveSource pointing at the document and records
+// it in FailedSource, so diagnostics can name the offending file.
 func recordSecrets(res *SecretsResolution, source string, secrets *SecretsConfig) (bool, error) {
 	res.ActiveSource = source
 	validated, vErr := validateSecretsResult(secrets)
 	if vErr != nil {
+		res.FailedSource = source
 		return false, vErr
 	}
 	res.Secrets = validated
@@ -612,7 +624,7 @@ func tryLoadCredFile(credDir string) (*SecretsConfig, error) {
 		return nil, nil
 	}
 
-	data, err := os.ReadFile(credDir + "/secrets")
+	data, err := os.ReadFile(filepath.Join(credDir, "secrets"))
 	if err != nil {
 		return nil, nil
 	}
@@ -633,7 +645,7 @@ func tryLoadCredFile(credDir string) (*SecretsConfig, error) {
 func loadSecretsFromPath(path string) (*SecretsConfig, error) {
 	fi, err := os.Stat(path)
 	if err != nil {
-		if os.IsNotExist(err) {
+		if errors.Is(err, os.ErrNotExist) {
 			return nil, nil
 		}
 		return nil, fmt.Errorf("failed to stat secrets path %q: %w", path, err)
@@ -652,7 +664,7 @@ func loadSecretsFromDir(dir string) (*SecretsConfig, error) {
 
 	entries, err := os.ReadDir(dir)
 	if err != nil {
-		if os.IsNotExist(err) {
+		if errors.Is(err, os.ErrNotExist) {
 			return nil, nil
 		}
 		return nil, fmt.Errorf("failed to read secrets directory: %w", err)
@@ -685,7 +697,7 @@ func loadSecretsSingleFile(path string) (*SecretsConfig, error) {
 
 	data, err := os.ReadFile(path)
 	if err != nil {
-		if os.IsNotExist(err) {
+		if errors.Is(err, os.ErrNotExist) {
 			return nil, nil
 		}
 		return nil, fmt.Errorf("failed to read secrets file: %w", err)

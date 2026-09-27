@@ -20,6 +20,7 @@
     },
     "paths": {
       "type": "object",
+      "additionalProperties": false,
       "required": ["mode", "config_dir", "config_file", "config_d", "secrets_dir", "socket_path", "platform"],
       "properties": {
         "mode": { "type": "string", "enum": ["file", "directory"] },

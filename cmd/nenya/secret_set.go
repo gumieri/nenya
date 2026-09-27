@@ -166,25 +166,38 @@ func secretTargetPath(paths configPaths) (string, error) {
 // secretTargetPathWith is secretTargetPath with the default-directory probe
 // injected, so tests can exercise the shadow path without mutating a global or
 // controlling /run/secrets.
-func secretTargetPathWith(paths configPaths, defaultDirPopulated func() bool) (string, error) {
+func secretTargetPathWith(paths configPaths, defaultDirPopulated func() (bool, error)) (string, error) {
 	if err := activeCredentialSource(); err != nil {
 		return "", err
 	}
 
 	target := nominalSecretsFileTarget(paths)
-	if target.mergeDir != "" {
-		shadowed, err := laterSiblingShadows(target.mergeDir, filepath.Base(target.path))
+	// A target in a merge directory — a source-3 env directory, file mode's
+	// source-4 default, or a config root that *is* the default merge dir — is
+	// subject to §6.2 last-wins, so a later-sorting sibling may override it.
+	mergeDir := target.mergeDir
+	if mergeDir == "" && sameDir(filepath.Dir(target.path), config.DefaultSecretsDir) {
+		mergeDir = config.DefaultSecretsDir
+	}
+	if mergeDir != "" {
+		shadowed, err := laterSiblingShadows(mergeDir, filepath.Base(target.path))
 		if err != nil {
 			return "", err
 		}
 		if shadowed {
-			return "", fmt.Errorf("another *.json in %s sorts after %s and may shadow the written value; remove it or set NENYA_SECRETS_DIR to a dedicated directory", target.mergeDir, filepath.Base(target.path))
+			return "", fmt.Errorf("another *.json in %s sorts after %s and may shadow the written value; remove it or set NENYA_SECRETS_DIR to a dedicated directory", mergeDir, filepath.Base(target.path))
 		}
 	}
 	// Source 5 is a single file, so only a populated default merge directory
 	// can shadow it.
-	if secretsEnvDir() == "" && paths.file == "" && !sameDir(filepath.Dir(target.path), config.DefaultSecretsDir) && defaultDirPopulated() {
-		return "", fmt.Errorf("active secrets source is %s (source 4) and may shadow %s; remove %s/*.json or set NENYA_SECRETS_DIR to a dedicated directory", config.DefaultSecretsDir, target.path, config.DefaultSecretsDir)
+	if secretsEnvDir() == "" && paths.file == "" && !sameDir(filepath.Dir(target.path), config.DefaultSecretsDir) {
+		populated, err := defaultDirPopulated()
+		if err != nil {
+			return "", err
+		}
+		if populated {
+			return "", fmt.Errorf("active secrets source is %s (source 4) and may shadow %s; remove %s/*.json or set NENYA_SECRETS_DIR to a dedicated directory", config.DefaultSecretsDir, target.path, config.DefaultSecretsDir)
+		}
 	}
 	return target.path, nil
 }
@@ -255,10 +268,10 @@ func laterSiblingShadows(dir, name string) (bool, error) {
 
 // defaultSecretsDirPopulated reports whether the default merge directory
 // (CONTRACT.md §6.1 source 4) holds a secrets document. When it does, it may
-// shadow a lower-priority config-root write (source 5).
-func defaultSecretsDirPopulated() bool {
-	has, err := dirHasSecrets(config.DefaultSecretsDir)
-	return err == nil && has
+// shadow a lower-priority config-root write (source 5). An unreadable directory
+// is an error, not "empty", so a fail-closed guard is never silently disabled.
+func defaultSecretsDirPopulated() (bool, error) {
+	return dirHasSecrets(config.DefaultSecretsDir)
 }
 
 // sameDir reports whether a and b name the same directory, tolerating symlinks
