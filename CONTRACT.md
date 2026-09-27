@@ -161,8 +161,13 @@ through to server startup because unknown flags were ignored.
 ### 4.2 `nenya paths --json` — status: stable
 
 Prints the resolved filesystem contract (Appendix A.2): config dir/file,
-`config.d`, secrets dir, and socket path. Resolution MUST match what the server
-actually uses for the same flags/environment. `mode` is `file` when
+`config.d`, secrets dir/file, and socket path. Resolution MUST match what the
+server actually uses for the same flags/environment. `secrets_dir` is the
+secrets merge directory (`NENYA_SECRETS_DIR` or `/run/secrets/nenya`);
+`secrets_file` is the single secrets file the deployment uses
+(`<NENYA_SECRETS_DIR>/secrets.json`, else `<config-root>/secrets.json` in
+directory mode, else `null`), which is what the shipped unit wires via
+`LoadCredential` and what `secret set` writes by default. `mode` is `file` when
 `-config`/`NENYA_CONFIG_FILE` selects a single file (only `config_file` is read)
 and `directory` otherwise; `paths` never loads config or secrets, so it is safe
 to run before either exists.
@@ -240,12 +245,20 @@ The secrets single writer.
 
 Files are created with mode `0600`; existing unrelated keys are preserved.
 
-The write target is `<NENYA_SECRETS_DIR>/secrets.json` (default
-`/run/secrets/nenya/secrets.json`). The systemd credential sources have higher
-priority (§6.1), so when `$CREDENTIALS_DIRECTORY/secrets` (or `secrets.d/`) is
-the active source the command **fails closed** rather than writing a shadowed
-file — manage those sources via systemd instead. A generated `client_token` is
-`nk-` followed by 32 random bytes (hex).
+The write target is, in order:
+
+1. `<NENYA_SECRETS_DIR>/secrets.json` when `NENYA_SECRETS_DIR` is set;
+2. otherwise, in **directory mode**, `<config-root>/secrets.json` — the single
+   file the shipped unit wires via `LoadCredential` and the loader searches
+   (§6.1 source 4), so the written value is the one actually loaded;
+3. otherwise, in **file mode**, `/run/secrets/nenya/secrets.json`.
+
+`--config-dir`/`--config` select the config root that rule 2 uses (the same
+flags and environment as the server, §3.3). The systemd credential sources have
+higher priority (§6.1), so when `$CREDENTIALS_DIRECTORY/secrets` (or
+`secrets.d/`) is the active source the command **fails closed** rather than
+writing a shadowed file — manage those sources via systemd instead. A generated
+`client_token` is `nk-` followed by 32 random bytes (hex).
 
 ---
 
@@ -321,6 +334,13 @@ the installing tool (and `nenya secret set`, §4.7).
 | 2 | `$CREDENTIALS_DIRECTORY/secrets.d/*.json` (merged by name) |
 | 3 | `$NENYA_SECRETS_DIR/*.json` (merged by name) |
 | 4 | `/run/secrets/nenya/*.json` (merged by name) |
+| 5 | `<config-root>/secrets.json` (single file, directory mode only) |
+
+Source 5 is the deployment's conventional secrets file: the shipped systemd
+unit wires it via `LoadCredential` (which then wins as source 1), and it is
+`secret set`'s default target in directory mode (§4.7). Searching it last makes
+an interactive `nenya -config-dir <root>` resolve the same secrets the unit
+would load, without changing precedence for sources 1–4.
 
 A missing candidate falls through to the next source. A read error on the
 single `$CREDENTIALS_DIRECTORY/secrets` file is also treated as absent; a
@@ -512,6 +532,7 @@ command it documents.
   "config_file": "/etc/nenya/config.json",
   "config_d": "/etc/nenya/config.d",
   "secrets_dir": "/run/secrets/nenya",
+  "secrets_file": "/etc/nenya/secrets.json",
   "socket_path": null,
   "platform": "linux"
 }

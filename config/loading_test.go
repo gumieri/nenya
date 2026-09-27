@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -298,6 +299,69 @@ func TestLoad_InvalidJSON(t *testing.T) {
 	_, err := Load(configPath)
 	if err == nil {
 		t.Fatal("expected error for invalid JSON")
+	}
+}
+
+func TestResolveSecrets_ConfigRootFallback(t *testing.T) {
+	configDir := t.TempDir()
+	secretsDir := t.TempDir()
+	t.Setenv("NENYA_SECRETS_DIR", secretsDir)
+	t.Setenv("CREDENTIALS_DIRECTORY", "")
+	if err := os.WriteFile(filepath.Join(configDir, "secrets.json"), []byte(`{"client_token":"config-root-token-123456"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	res, err := ResolveSecrets(configDir)
+	if err != nil {
+		t.Fatalf("ResolveSecrets: %v", err)
+	}
+	want := filepath.Join(configDir, "secrets.json")
+	if res.ActiveSource != want {
+		t.Errorf("active_source = %q, want the config-root file %q", res.ActiveSource, want)
+	}
+	if res.Secrets == nil || res.Secrets.ClientToken != "config-root-token-123456" {
+		t.Errorf("secrets = %+v, want the config-root token", res.Secrets)
+	}
+}
+
+func TestResolveSecrets_SecretsDirBeatsConfigRoot(t *testing.T) {
+	configDir := t.TempDir()
+	secretsDir := t.TempDir()
+	t.Setenv("NENYA_SECRETS_DIR", secretsDir)
+	t.Setenv("CREDENTIALS_DIRECTORY", "")
+	for dir, token := range map[string]string{
+		configDir:  "config-root-token-123456",
+		secretsDir: "secrets-dir-token-1234567",
+	} {
+		if err := os.WriteFile(filepath.Join(dir, "secrets.json"), []byte(`{"client_token":"`+token+`"}`), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	res, err := ResolveSecrets(configDir)
+	if err != nil {
+		t.Fatalf("ResolveSecrets: %v", err)
+	}
+	if res.ActiveSource != secretsDir {
+		t.Errorf("active_source = %q, want the NENYA_SECRETS_DIR source %q", res.ActiveSource, secretsDir)
+	}
+}
+
+func TestResolveSecrets_EmptyConfigRootSkipsFallback(t *testing.T) {
+	t.Setenv("NENYA_SECRETS_DIR", t.TempDir())
+	t.Setenv("CREDENTIALS_DIRECTORY", "")
+
+	res, err := ResolveSecrets("")
+	if err != nil {
+		t.Fatalf("ResolveSecrets: %v", err)
+	}
+	if res.Secrets != nil {
+		t.Errorf("secrets = %+v, want nil when only the config-root source could provide them", res.Secrets)
+	}
+	for _, s := range res.Searched {
+		if strings.HasSuffix(s, "secrets.json") {
+			t.Errorf("searched unexpectedly includes a single file: %v", res.Searched)
+		}
 	}
 }
 

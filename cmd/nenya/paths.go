@@ -14,13 +14,16 @@ import (
 // pathsJSON is the machine-readable filesystem contract (CONTRACT.md §4.2,
 // Appendix A.2).
 type pathsJSON struct {
-	Mode       string  `json:"mode"`
-	ConfigDir  string  `json:"config_dir"`
-	ConfigFile string  `json:"config_file"`
-	ConfigD    string  `json:"config_d"`
-	SecretsDir string  `json:"secrets_dir"`
-	SocketPath *string `json:"socket_path"`
-	Platform   string  `json:"platform"`
+	Mode       string `json:"mode"`
+	ConfigDir  string `json:"config_dir"`
+	ConfigFile string `json:"config_file"`
+	ConfigD    string `json:"config_d"`
+	SecretsDir string `json:"secrets_dir"`
+	// SecretsFile is the single secrets file the deployment uses, or null when
+	// there is none to name (file mode).
+	SecretsFile *string `json:"secrets_file"`
+	SocketPath  *string `json:"socket_path"`
+	Platform    string  `json:"platform"`
 }
 
 // handlePaths implements `nenya paths [--json]` (CONTRACT.md §4.2). It resolves
@@ -64,9 +67,9 @@ func handlePaths(w, errW io.Writer, args []string) (bool, error) {
 		return true, err
 	}
 
-	_, err := fmt.Fprintf(w, "mode=%s\nconfig_dir=%s\nconfig_file=%s\nconfig_d=%s\nsecrets_dir=%s\nsocket_path=%s\nplatform=%s\n",
+	_, err := fmt.Fprintf(w, "mode=%s\nconfig_dir=%s\nconfig_file=%s\nconfig_d=%s\nsecrets_dir=%s\nsecrets_file=%s\nsocket_path=%s\nplatform=%s\n",
 		resolved.Mode, resolved.ConfigDir, resolved.ConfigFile, resolved.ConfigD,
-		resolved.SecretsDir, socketPathString(resolved.SocketPath), resolved.Platform)
+		resolved.SecretsDir, nullableString(resolved.SecretsFile), nullableString(resolved.SocketPath), resolved.Platform)
 	return true, err
 }
 
@@ -90,7 +93,25 @@ func resolvePaths(paths configPaths) pathsJSON {
 	}
 	res.ConfigD = filepath.Join(res.ConfigDir, "config.d")
 	res.SecretsDir = secretsDir()
+	res.SecretsFile = secretsFile(paths)
 	return res
+}
+
+// secretsFile returns the single secrets file the deployment uses, or nil when
+// there is none to name (file mode). It is <NENYA_SECRETS_DIR>/secrets.json
+// when that env var is set, else <config-root>/secrets.json in directory mode —
+// the file the shipped unit wires via LoadCredential (CONTRACT.md §4.7/§6.1),
+// which the loader searches last and `secret set` writes by default.
+func secretsFile(paths configPaths) *string {
+	if dir := os.Getenv("NENYA_SECRETS_DIR"); dir != "" {
+		f := filepath.Join(absOrSelf(dir), "secrets.json")
+		return &f
+	}
+	if paths.file == "" {
+		f := filepath.Join(absOrSelf(paths.dir), "secrets.json")
+		return &f
+	}
+	return nil
 }
 
 // secretsDir returns the configured secrets directory (NENYA_SECRETS_DIR when
@@ -111,8 +132,8 @@ func absOrSelf(p string) string {
 	return p
 }
 
-// socketPathString renders a nullable socket path for human-readable output.
-func socketPathString(p *string) string {
+// nullableString renders a nullable path for human-readable output.
+func nullableString(p *string) string {
 	if p == nil {
 		return "null"
 	}

@@ -135,7 +135,7 @@ func buildDescription(paths configPaths) (describeJSON, error) {
 		return describeJSON{}, fmt.Errorf("load config: %w", err)
 	}
 
-	res, secretsErr := config.ResolveSecrets()
+	res, secretsErr := config.ResolveSecrets(secretsConfigRoot(paths))
 	diagnostics := make([]config.Diagnostic, 0, len(diags)+1)
 	diagnostics = append(diagnostics, diags...)
 	switch {

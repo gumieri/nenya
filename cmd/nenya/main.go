@@ -249,11 +249,21 @@ func loadConfig(paths configPaths) (*config.Config, *config.SecretsConfig, error
 		return nil, nil, err
 	}
 
-	secrets, err := config.LoadSecrets()
+	secrets, err := config.LoadSecrets(secretsConfigRoot(paths))
 	if err != nil {
 		return nil, nil, err
 	}
 	return cfg, secrets, nil
+}
+
+// secretsConfigRoot returns the config root whose secrets.json the loader also
+// searches (CONTRACT.md §6.1 source 4): the directory in directory mode, empty
+// in file mode, which loads exactly one file and no config.d.
+func secretsConfigRoot(paths configPaths) string {
+	if paths.file != "" {
+		return ""
+	}
+	return paths.dir
 }
 
 func setupLoggerFromConfig(cfg *config.Config, verbose bool) *slog.Logger {
@@ -536,7 +546,7 @@ func reloadConfig(ctx context.Context, p *proxy.Proxy, paths configPaths, logger
 		return
 	}
 
-	newSecrets, err := config.LoadSecrets()
+	newSecrets, err := config.LoadSecrets(secretsConfigRoot(paths))
 	if err != nil {
 		logger.Error("reload failed: could not load secrets", "err", err)
 		return

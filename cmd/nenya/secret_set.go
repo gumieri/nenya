@@ -27,6 +27,9 @@ func handleSecret(w, errW io.Writer, args []string) (bool, error) {
 	fs.SetOutput(errW)
 	provider := fs.String("provider", "", "Provider name whose key is set")
 	clientToken := fs.Bool("client-token", false, "Set (or generate) the client token")
+	var configDir, configFile string
+	fs.StringVar(&configDir, "config-dir", "", "Configuration directory whose secrets.json is written by default")
+	fs.StringVar(&configFile, "config", "", "Single configuration file (file mode)")
 	if err := fs.Parse(args[2:]); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return true, flag.ErrHelp
@@ -39,7 +42,7 @@ func handleSecret(w, errW io.Writer, args []string) (bool, error) {
 		return true, errUsage
 	}
 
-	target, targetErr := secretTargetPath()
+	target, targetErr := secretTargetPath(effectiveConfigPaths(configDir, configFile))
 	if targetErr != nil {
 		return true, targetErr
 	}
@@ -105,7 +108,14 @@ func applyProviderKey(target, provider string, rest []string) error {
 // credential sources have higher priority than the file sources (CONTRACT.md
 // §6.1); writing elsewhere while they are active would be shadowed, so the
 // command fails closed and asks the operator to manage credentials via systemd.
-func secretTargetPath() (string, error) {
+//
+// Precedence for the write target:
+//  1. NENYA_SECRETS_DIR, when set — <dir>/secrets.json (unchanged).
+//  2. Directory mode — <config-root>/secrets.json, the file the shipped unit
+//     wires via LoadCredential and the loader also searches (source 4), instead
+//     of the /run/secrets/nenya default the unit shadows.
+//  3. File mode — /run/secrets/nenya/secrets.json (no config root to prefer).
+func secretTargetPath(paths configPaths) (string, error) {
 	if credDir := os.Getenv("CREDENTIALS_DIRECTORY"); credDir != "" {
 		if _, err := os.Stat(filepath.Join(credDir, "secrets")); err == nil {
 			return "", fmt.Errorf("active secrets source is the systemd credential %s/secrets; manage it via systemd (or set NENYA_SECRETS_DIR to write a file instead)", credDir)
@@ -115,11 +125,13 @@ func secretTargetPath() (string, error) {
 		}
 	}
 
-	dir := os.Getenv("NENYA_SECRETS_DIR")
-	if dir == "" {
-		dir = "/run/secrets/nenya"
+	if dir := os.Getenv("NENYA_SECRETS_DIR"); dir != "" {
+		return filepath.Join(absOrSelf(dir), "secrets.json"), nil
 	}
-	return filepath.Join(absOrSelf(dir), "secrets.json"), nil
+	if paths.file == "" {
+		return filepath.Join(absOrSelf(paths.dir), "secrets.json"), nil
+	}
+	return "/run/secrets/nenya/secrets.json", nil
 }
 
 // generateClientToken returns a fresh random client token.

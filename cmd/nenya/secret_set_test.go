@@ -52,6 +52,39 @@ func TestSecretSet_ProviderKey(t *testing.T) {
 	}
 }
 
+func TestSecretSet_DirectoryModeDefaultsToConfigRoot(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("NENYA_SECRETS_DIR", "")
+	t.Setenv("NENYA_CONFIG_DIR", dir)
+	t.Setenv("NENYA_CONFIG_FILE", "")
+	t.Setenv("CREDENTIALS_DIRECTORY", "")
+
+	path := runSecretSet(t, "--provider", "gemini", "AIza-test")
+
+	want := filepath.Join(dir, "secrets.json")
+	if path != want {
+		t.Fatalf("printed path = %q, want the config-root file %q", path, want)
+	}
+	doc := readJSONFile(t, path)
+	keys, _ := doc["provider_keys"].(map[string]any)
+	if keys == nil || keys["gemini"] != "AIza-test" {
+		t.Errorf("provider_keys = %v, want gemini=AIza-test", doc["provider_keys"])
+	}
+}
+
+func TestSecretTargetPath_FileModeFallsBackToRunSecrets(t *testing.T) {
+	t.Setenv("NENYA_SECRETS_DIR", "")
+	t.Setenv("CREDENTIALS_DIRECTORY", "")
+
+	got, err := secretTargetPath(configPaths{file: "/etc/nenya/custom.json"})
+	if err != nil {
+		t.Fatalf("secretTargetPath: %v", err)
+	}
+	if want := "/run/secrets/nenya/secrets.json"; got != want {
+		t.Errorf("target = %q, want %q", got, want)
+	}
+}
+
 func TestSecretSet_ClientTokenGeneratedAndPreserves(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("NENYA_SECRETS_DIR", dir)
@@ -142,7 +175,7 @@ func TestSecretSet_ResultLoads(t *testing.T) {
 	runSecretSet(t, "--provider", "gemini", "AIza-test")
 	runSecretSet(t, "--client-token", "explicit-token-1234567890")
 
-	res, err := config.ResolveSecrets()
+	res, err := config.ResolveSecrets("")
 	if err != nil {
 		t.Fatalf("ResolveSecrets: %v", err)
 	}

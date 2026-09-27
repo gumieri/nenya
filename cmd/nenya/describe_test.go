@@ -84,8 +84,11 @@ func TestHandleDescribe_JSON(t *testing.T) {
 	if got.Secrets.ActiveSource != secretsDir {
 		t.Errorf("secrets.active_source = %q, want %q", got.Secrets.ActiveSource, secretsDir)
 	}
-	if len(got.Secrets.Searched) != 3 {
-		t.Errorf("secrets.searched = %v, want 3 entries", got.Secrets.Searched)
+	if len(got.Secrets.Searched) != 4 {
+		t.Errorf("secrets.searched = %v, want 4 entries", got.Secrets.Searched)
+	}
+	if want := filepath.Join(configDir, "secrets.json"); got.Secrets.Searched[len(got.Secrets.Searched)-1] != want {
+		t.Errorf("secrets.searched last = %q, want the config-root file %q", got.Secrets.Searched[len(got.Secrets.Searched)-1], want)
 	}
 	if !slices.Contains(got.Providers.Configured, "gemini") {
 		t.Errorf("providers.configured = %v, want it to include gemini", got.Providers.Configured)

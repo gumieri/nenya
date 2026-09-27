@@ -53,6 +53,9 @@ func TestHandlePaths_DirectoryMode(t *testing.T) {
 	if got.SecretsDir != "/run/secrets/nenya" {
 		t.Errorf("secrets_dir = %q, want /run/secrets/nenya", got.SecretsDir)
 	}
+	if got.SecretsFile == nil || *got.SecretsFile != filepath.Join(dir, "secrets.json") {
+		t.Errorf("secrets_file = %v, want %q", got.SecretsFile, filepath.Join(dir, "secrets.json"))
+	}
 	if got.SocketPath != nil {
 		t.Errorf("socket_path = %v, want null", *got.SocketPath)
 	}
@@ -81,6 +84,9 @@ func TestHandlePaths_FileMode(t *testing.T) {
 	if want := filepath.Join(dir, "config.d"); got.ConfigD != want {
 		t.Errorf("config_d = %q, want %q", got.ConfigD, want)
 	}
+	if got.SecretsFile != nil {
+		t.Errorf("secrets_file = %v, want null in file mode", *got.SecretsFile)
+	}
 }
 
 // NENYA_CONFIG_DIR overrides -config-dir (CONTRACT.md §3.3).
@@ -107,6 +113,9 @@ func TestHandlePaths_SecretsDirFromEnv(t *testing.T) {
 
 	if got.SecretsDir != secrets {
 		t.Errorf("secrets_dir = %q, want %q", got.SecretsDir, secrets)
+	}
+	if got.SecretsFile == nil || *got.SecretsFile != filepath.Join(secrets, "secrets.json") {
+		t.Errorf("secrets_file = %v, want %q", got.SecretsFile, filepath.Join(secrets, "secrets.json"))
 	}
 }
 

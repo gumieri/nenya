@@ -406,10 +406,18 @@ type SecretsResolution struct {
 //  1. $CREDENTIALS_DIRECTORY/secrets
 //  2. $CREDENTIALS_DIRECTORY/secrets.d/ (directory)
 //  3. $NENYA_SECRETS_DIR/ (or /run/secrets/nenya/ as default)
+//  4. <configRoot>/secrets.json (directory mode only; configRoot is empty in
+//     file mode)
+//
+// Source 4 is the deployment's conventional secrets file: the shipped systemd
+// unit wires it via LoadCredential (which wins as source 1 under the unit), and
+// it is `secret set`'s default target. Searching it last lets an interactive
+// `nenya -config-dir <root>` resolve the same secrets the unit would load,
+// without changing precedence for the existing directory sources.
 //
 // A non-nil error reports a read or validation failure; LoadSecrets treats a
 // missing document as fatal.
-func ResolveSecrets() (SecretsResolution, error) {
+func ResolveSecrets(configRoot string) (SecretsResolution, error) {
 	credDir := os.Getenv("CREDENTIALS_DIRECTORY")
 	secretsDir := os.Getenv("NENYA_SECRETS_DIR")
 	if secretsDir == "" {
@@ -424,13 +432,26 @@ func ResolveSecrets() (SecretsResolution, error) {
 	}
 	res.Searched = append(res.Searched, secretsDir)
 
+	configSecrets := ""
+	if configRoot != "" {
+		configSecrets = filepath.Join(configRoot, "secrets.json")
+		res.Searched = append(res.Searched, configSecrets)
+	}
+
 	if found, err := resolveCredentialDirectory(&res, credDir); err != nil {
 		return res, err
 	} else if found {
 		return res, nil
 	}
-	if _, err := resolveSecretsPath(&res, secretsDir); err != nil {
+	if found, err := resolveSecretsPath(&res, secretsDir); err != nil {
 		return res, err
+	} else if found {
+		return res, nil
+	}
+	if configSecrets != "" {
+		if _, err := resolveSecretsPath(&res, configSecrets); err != nil {
+			return res, err
+		}
 	}
 	return res, nil
 }
@@ -483,10 +504,11 @@ func recordSecrets(res *SecretsResolution, source string, secrets *SecretsConfig
 }
 
 // LoadSecrets loads and validates the secrets configuration (see
-// ResolveSecrets for the search order). Returns an error if no secrets are
-// found or validation fails.
-func LoadSecrets() (*SecretsConfig, error) {
-	res, err := ResolveSecrets()
+// ResolveSecrets for the search order; configRoot is the directory-mode config
+// root, empty in file mode). Returns an error if no secrets are found or
+// validation fails.
+func LoadSecrets(configRoot string) (*SecretsConfig, error) {
+	res, err := ResolveSecrets(configRoot)
 	if err != nil {
 		return nil, err
 	}
