@@ -412,6 +412,12 @@ per top-level key: `provider_keys` merges per provider, the last non-empty
 `client_token` wins, and `api_keys` entries are replaced per key — a later entry
 overrides an earlier one only when it is `enabled: true`.
 
+Files in a secrets directory merge in ascending filename order (byte-wise, the
+`os.ReadDir` order) and the later file wins for every key it defines. That order
+is normative: §4.7's sibling-shadow guard refuses a write whose target a
+later-sorting file would override, so consumers reimplementing the merge must
+sort the same way.
+
 ### 6.3 Not contract
 
 Whether a given deployment stores secrets on disk, via systemd credentials, or
