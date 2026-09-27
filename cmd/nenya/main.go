@@ -47,13 +47,8 @@ const (
 )
 
 func main() {
-	handled, handleErr := handleVersion(os.Stdout, os.Args[1:])
-	if handleErr != nil {
-		fmt.Fprintf(os.Stderr, "error: %v\n", handleErr)
-		os.Exit(1)
-	}
-	if handled {
-		return
+	if code, handled := runInspectionCommands(os.Args[1:]); handled {
+		os.Exit(code)
 	}
 
 	opts, err := parseFlags()
@@ -97,6 +92,37 @@ func main() {
 	}
 
 	os.Exit(run(logger, cfg, secrets, opts.paths))
+}
+
+// errUsage marks a command-line usage error; main maps it to exit code 2
+// (CONTRACT.md §3.4).
+var errUsage = errors.New("usage error")
+
+// runInspectionCommands dispatches the subcommands that inspect the runtime
+// environment and exit without starting the server (CONTRACT.md §4). It returns
+// the process exit code and whether it handled the invocation.
+func runInspectionCommands(args []string) (int, bool) {
+	if handled, err := handleVersion(os.Stdout, args); handled {
+		return inspectionExitCode(err), true
+	}
+	if handled, err := handlePaths(os.Stdout, os.Stderr, args); handled {
+		return inspectionExitCode(err), true
+	}
+	return 0, false
+}
+
+// inspectionExitCode maps an inspection-command error to a process exit code
+// following CONTRACT.md §3.4.
+func inspectionExitCode(err error) int {
+	switch {
+	case err == nil, errors.Is(err, flag.ErrHelp):
+		return 0
+	case errors.Is(err, errUsage):
+		return 2
+	default:
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		return 1
+	}
 }
 
 func parseFlags() (cliOptions, error) {

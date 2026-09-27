@@ -49,6 +49,29 @@ func TestVersionOutputMatchesContractSchema(t *testing.T) {
 	}
 }
 
+// TestPathsOutputMatchesContractSchema asserts that the live `paths --json`
+// output conforms to the published schema.
+func TestPathsOutputMatchesContractSchema(t *testing.T) {
+	t.Setenv("NENYA_CONFIG_DIR", t.TempDir())
+	t.Setenv("NENYA_CONFIG_FILE", "")
+	t.Setenv("NENYA_SECRETS_DIR", "")
+
+	var buf, errBuf bytes.Buffer
+	handled, err := handlePaths(&buf, &errBuf, []string{"paths", "--json"})
+	if err != nil {
+		t.Fatalf("handlePaths: %v", err)
+	}
+	if !handled {
+		t.Fatal("expected paths --json to be handled")
+	}
+
+	schema := loadJSON(t, filepath.Join(contractSchemaDir, "paths.schema.json"))
+	doc := decodeJSON(t, buf.Bytes())
+	for _, err := range schemaErrors(schema, doc, "paths") {
+		t.Error(err)
+	}
+}
+
 // TestContractSchemaValidatorRejectsDrift proves the validator is not vacuous:
 // a document missing a required field, carrying a wrong type, or adding an
 // unexpected property must be rejected. Without this, a broken validator would

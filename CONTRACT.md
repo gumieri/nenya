@@ -158,11 +158,14 @@ string (e.g. `0.15.0`) and exit `0`, so scripts (including `install.sh`) can
 parse it directly. This closes the prior defect where `nenya --version` fell
 through to server startup because unknown flags were ignored.
 
-### 4.2 `nenya paths --json` — status: target
+### 4.2 `nenya paths --json` — status: stable
 
 Prints the resolved filesystem contract (Appendix A.2): config dir/file,
 `config.d`, secrets dir, and socket path. Resolution MUST match what the server
-actually uses for the same flags/environment.
+actually uses for the same flags/environment. `mode` is `file` when
+`-config`/`NENYA_CONFIG_FILE` selects a single file (only `config_file` is read)
+and `directory` otherwise; `paths` never loads config or secrets, so it is safe
+to run before either exists.
 
 ### 4.3 `nenya describe --json` — status: target
 
@@ -542,7 +545,7 @@ guaranteed here.
 | Signals + reload semantics (§8.3) | stable |
 | `/healthz`, auth rules (§9) | stable |
 | `version --json` / `--version` (§4.1) | stable |
-| `paths --json` (§4.2) | **target** |
+| `paths --json` (§4.2) | stable |
 | `describe --json` (§4.3) | **target** |
 | `example-config` (§4.4) | **target** |
 | `service-unit` (§4.5) | **target** |
