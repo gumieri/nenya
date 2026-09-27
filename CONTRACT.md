@@ -362,6 +362,12 @@ A consumer that downloads and installs a Nenya binary **MUST**:
 
 Installing an unverified binary is a contract violation.
 
+The reference `install.sh` always verifies the archive's SHA-256 against
+`checksums.txt` and, when `cosign` is available, verifies the bundle against the
+release workflow identity before extracting; it warns and continues when cosign
+or the bundle is absent. Manager tooling (`nenyactl`) SHOULD require cosign and
+fail closed instead.
+
 ### 7.3 Packages and images
 
 | Channel | Identifier |

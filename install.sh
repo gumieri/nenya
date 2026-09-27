@@ -99,6 +99,32 @@ Download it manually from:
 	fi
 }
 
+# verify_signature checks the cosign sigstore bundle for checksums.txt
+# (CONTRACT.md §7.2). Keyless releases are signed from the release workflow, so
+# the expected identity is scoped to this repository. cosign is optional: when
+# it is unavailable the SHA-256 check in verify_download still applies and a
+# warning is emitted.
+verify_signature() {
+	if ! command -v cosign >/dev/null 2>&1; then
+		warn "cosign not found — skipping sigstore bundle verification (SHA-256 verified)."
+		return 0
+	fi
+
+	if ! curl -sfL -o "$BUNDLE" "${BASE_URL}/${BUNDLE}"; then
+		warn "Sigstore bundle unavailable — skipping signature verification (SHA-256 verified)."
+		return 0
+	fi
+
+	if ! cosign verify-blob \
+		--bundle "$BUNDLE" \
+		--certificate-identity-regexp "https://github.com/${GITHUB_REPO}/.*" \
+		--certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
+		"$CHECKSUMS" >/dev/null 2>&1; then
+		error "Sigstore signature verification failed for ${CHECKSUMS}."
+	fi
+	success "Sigstore signature verified."
+}
+
 install_binary() {
 	local src="$1"
 	local dest="$INSTALL_DIR/$BIN_NAME"
@@ -274,6 +300,7 @@ INSTALL_DIR="/usr/bin"
 	BASE_URL="https://github.com/${GITHUB_REPO}/releases/download/${VERSION}"
 	ARCHIVE="nenya_${VERSION#v}_${OS}_${ARCH}.tar.gz"
 	CHECKSUMS="checksums.txt"
+	BUNDLE="checksums.txt.sigstore.json"
 
 	info "Installing ${BIN_NAME} ${VERSION} (${OS}/${ARCH})"
 
@@ -286,6 +313,7 @@ INSTALL_DIR="/usr/bin"
 	curl -sfL -o "$ARCHIVE" "${BASE_URL}/${ARCHIVE}" || error "Failed to download ${ARCHIVE}."
 
 	verify_download "$CHECKSUMS" "$ARCHIVE"
+	verify_signature
 
 	if [ "$DRY_RUN" = true ]; then
 		echo ""
@@ -308,7 +336,7 @@ INSTALL_DIR="/usr/bin"
 	else
 		tar -xzf "$ARCHIVE" nenya 2>/dev/null || true
 	fi
-	rm -f "$ARCHIVE" "$CHECKSUMS"
+	rm -f "$ARCHIVE" "$CHECKSUMS" "$BUNDLE"
 
 	install_binary "nenya"
 

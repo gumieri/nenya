@@ -82,6 +82,11 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           AUR_KEY: ${{ secrets.AUR_KEY }}
 
+      - name: Verify release artifact contract
+        run: go test ./internal/releasecontract/ -run TestDistArtifacts -count=1 -v
+        env:
+          NENYA_DIST_DIR: dist
+
       - name: Generate SBOM for archives
         uses: anchore/sbom-action@v0
         with:
