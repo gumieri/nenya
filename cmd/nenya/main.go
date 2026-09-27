@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -33,6 +34,14 @@ type configPaths struct {
 	file string
 }
 
+// cliOptions holds the parsed command-line options.
+type cliOptions struct {
+	paths        configPaths
+	verbose      bool
+	validateOnly bool
+	printSchema  bool
+}
+
 const (
 	sdListenFdsStart = 3
 )
@@ -47,28 +56,35 @@ func main() {
 		return
 	}
 
-	paths, verbose, validateOnly, printSchema := parseFlags()
+	opts, err := parseFlags()
+	if err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			os.Exit(0)
+		}
+		// Usage was written to stderr by parseArgs.
+		os.Exit(2)
+	}
 
-	if printSchema {
-		schema, err := config.PrintSchema()
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "error generating schema: %v\n", err)
+	if opts.printSchema {
+		schema, schemaErr := config.PrintSchema()
+		if schemaErr != nil {
+			fmt.Fprintf(os.Stderr, "error generating schema: %v\n", schemaErr)
 			os.Exit(1)
 		}
 		fmt.Println(schema)
 		return
 	}
 
-	cfg, secrets, err := loadConfig(paths)
+	cfg, secrets, err := loadConfig(opts.paths)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "failed to load config: %v\n", err)
 		os.Exit(1)
 	}
 
-	logger := setupLoggerFromConfig(cfg, verbose)
+	logger := setupLoggerFromConfig(cfg, opts.verbose)
 	logger.Info("starting nenya", "version", version.Version, "commit", version.Commit, "build_time", version.BuildTime)
 
-	if validateOnly {
+	if opts.validateOnly {
 		validateCtx, validateCancel := context.WithTimeout(context.Background(), 60*time.Second)
 		if err := config.ValidateConfiguration(validateCtx, cfg, secrets, logger); err != nil {
 			validateCancel()
@@ -80,11 +96,11 @@ func main() {
 		return
 	}
 
-	os.Exit(run(logger, cfg, secrets, paths))
+	os.Exit(run(logger, cfg, secrets, opts.paths))
 }
 
-func parseFlags() (configPaths, bool, bool, bool) {
-	return parseArgs(os.Args[1:])
+func parseFlags() (cliOptions, error) {
+	return parseArgs(os.Stderr, os.Args[1:])
 }
 
 // versionJSON is the machine-readable version surface (CONTRACT.md §4.1).
@@ -132,21 +148,33 @@ func handleVersion(w io.Writer, args []string) (bool, error) {
 	return true, err
 }
 
-func parseArgs(args []string) (configPaths, bool, bool, bool) {
+// parseArgs parses command-line arguments. Unknown flags and malformed values
+// are rejected: the error and usage are written to w and returned so the caller
+// fails closed instead of starting the server against unintended defaults.
+// flag.ErrHelp is returned after usage is printed.
+func parseArgs(w io.Writer, args []string) (cliOptions, error) {
 	fs := flag.NewFlagSet("nenya", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
+	var opts cliOptions
 	var configDir, configFile string
-	var verbose, validateOnly, printSchema bool
 
 	fs.StringVar(&configDir, "config-dir", "", "Configuration directory (contains config.d/ or config.json)")
 	fs.StringVar(&configFile, "config", "", "Single configuration file")
-	fs.BoolVar(&verbose, "verbose", false, "Enable debug-level request/response logging")
-	fs.BoolVar(&validateOnly, "validate", false, "Validate configuration and exit")
-	fs.BoolVar(&printSchema, "print-config-schema", false, "Print JSON Schema of config and exit")
-	_ = fs.Parse(args)
+	fs.BoolVar(&opts.verbose, "verbose", false, "Enable debug-level request/response logging")
+	fs.BoolVar(&opts.validateOnly, "validate", false, "Validate configuration and exit")
+	fs.BoolVar(&opts.printSchema, "print-config-schema", false, "Print JSON Schema of config and exit")
 
-	paths := effectiveConfigPaths(configDir, configFile)
-	return paths, verbose, validateOnly, printSchema
+	if err := fs.Parse(args); err != nil {
+		fs.SetOutput(w)
+		if !errors.Is(err, flag.ErrHelp) {
+			_, _ = fmt.Fprintf(w, "%v\n", err)
+		}
+		fs.Usage()
+		return opts, err
+	}
+
+	opts.paths = effectiveConfigPaths(configDir, configFile)
+	return opts, nil
 }
 
 func effectiveConfigPaths(configDir, configFile string) configPaths {

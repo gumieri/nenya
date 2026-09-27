@@ -113,9 +113,10 @@ effective fallback when neither a directory nor a file is selected.
 **Mode selection:** file mode if `-config`/`NENYA_CONFIG_FILE` is set;
 otherwise directory mode. `-config` pointing at a directory is an error.
 
-**Target:** unknown flags MUST fail closed (non-zero exit + usage on stderr).
-Today unknown flags are silently ignored because the parse error is discarded,
-which lets a typo start the server against the default config.
+**Unknown flags fail closed:** the parser rejects unknown flags and malformed
+values, writes usage to stderr, and exits `2`. This prevents a typo (for
+example in `-config-dir`) from silently starting the server against the default
+config.
 
 ### 3.3 Environment variables
 
@@ -137,6 +138,7 @@ which lets a typo start the server against the default config.
 |------|---------|
 | `0` | Clean exit: validation passed, or the server shut down gracefully. |
 | `1` | Any failure: config/secrets load error, validation failure, listener error, server error, or a timed-out drain/shutdown. |
+| `2` | Command-line usage error: unknown flag or malformed value. `-h`/`-help` prints usage and exits `0`. |
 
 Machine-readable output (JSON from `-print-config-schema`, and all §4 commands)
 is written to **stdout**. Diagnostics and errors are written to **stderr**.

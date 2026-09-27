@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
+	"flag"
 	"fmt"
 	"log/slog"
 	"net"
@@ -83,49 +85,89 @@ func TestHandleVersion_NotVersion(t *testing.T) {
 	}
 }
 
-func TestParseFlags_Defaults(t *testing.T) {
-	paths, verbose, validateOnly, printSchema := parseFlags()
-	if paths.dir != "/etc/nenya/" {
-		t.Errorf("expected /etc/nenya/, got %s", paths.dir)
+func TestParseArgs_Defaults(t *testing.T) {
+	opts, err := parseArgs(&bytes.Buffer{}, nil)
+	if err != nil {
+		t.Fatalf("parseArgs: %v", err)
 	}
-	if paths.file != "" {
-		t.Errorf("expected empty config file, got %s", paths.file)
+	if opts.paths.dir != "/etc/nenya/" {
+		t.Errorf("expected /etc/nenya/, got %s", opts.paths.dir)
 	}
-	if verbose {
-		t.Error("expected verbose=false")
+	if opts.paths.file != "" {
+		t.Errorf("expected empty config file, got %s", opts.paths.file)
 	}
-	if validateOnly {
-		t.Error("expected validateOnly=false")
-	}
-	if printSchema {
-		t.Error("expected printSchema=false")
+	if opts.verbose || opts.validateOnly || opts.printSchema {
+		t.Errorf("expected all bool flags false, got %+v", opts)
 	}
 }
 
-func TestParseFlags_EnvConfigDir(t *testing.T) {
+func TestParseArgs_EnvConfigDir(t *testing.T) {
 	t.Setenv("NENYA_CONFIG_DIR", "/custom/config")
-	paths, _, _, _ := parseFlags()
-	if paths.dir != "/custom/config" {
-		t.Errorf("expected /custom/config, got %s", paths.dir)
+	opts, err := parseArgs(&bytes.Buffer{}, nil)
+	if err != nil {
+		t.Fatalf("parseArgs: %v", err)
 	}
-	if paths.file != "" {
-		t.Errorf("expected empty config file, got %s", paths.file)
+	if opts.paths.dir != "/custom/config" {
+		t.Errorf("expected /custom/config, got %s", opts.paths.dir)
+	}
+	if opts.paths.file != "" {
+		t.Errorf("expected empty config file, got %s", opts.paths.file)
 	}
 }
 
-func TestParseFlags_EnvConfigFile(t *testing.T) {
+func TestParseArgs_EnvConfigFile(t *testing.T) {
 	t.Setenv("NENYA_CONFIG_FILE", "/custom/config.json")
-	paths, _, _, _ := parseFlags()
-	if paths.file != "/custom/config.json" {
-		t.Errorf("expected /custom/config.json, got %s", paths.file)
+	opts, err := parseArgs(&bytes.Buffer{}, nil)
+	if err != nil {
+		t.Fatalf("parseArgs: %v", err)
+	}
+	if opts.paths.file != "/custom/config.json" {
+		t.Errorf("expected /custom/config.json, got %s", opts.paths.file)
 	}
 }
 
-func TestParseFlags_ConfigDirTakesPrecedence(t *testing.T) {
+func TestParseArgs_EnvOverridesFlagDir(t *testing.T) {
 	t.Setenv("NENYA_CONFIG_DIR", "/env/config")
-	paths, _, _, _ := parseFlags()
-	if paths.dir != "/env/config" {
-		t.Errorf("expected /env/config, got %s", paths.dir)
+	opts, err := parseArgs(&bytes.Buffer{}, []string{"-config-dir", "/flag/config"})
+	if err != nil {
+		t.Fatalf("parseArgs: %v", err)
+	}
+	if opts.paths.dir != "/env/config" {
+		t.Errorf("env should win over the flag per documented precedence, got %s", opts.paths.dir)
+	}
+}
+
+func TestParseArgs_KnownFlags(t *testing.T) {
+	opts, err := parseArgs(&bytes.Buffer{}, []string{"-config", "/tmp/nenya.json", "-verbose", "-validate", "-print-config-schema"})
+	if err != nil {
+		t.Fatalf("parseArgs: %v", err)
+	}
+	if opts.paths.file != "/tmp/nenya.json" {
+		t.Errorf("expected /tmp/nenya.json, got %s", opts.paths.file)
+	}
+	if !opts.verbose || !opts.validateOnly || !opts.printSchema {
+		t.Errorf("expected bool flags set, got %+v", opts)
+	}
+}
+
+func TestParseArgs_RejectsUnknownFlag(t *testing.T) {
+	var buf bytes.Buffer
+	if _, err := parseArgs(&buf, []string{"-nope"}); err == nil {
+		t.Fatal("expected an error for an unknown flag")
+	}
+	if !strings.Contains(buf.String(), "Usage of nenya") {
+		t.Errorf("expected usage text, got %q", buf.String())
+	}
+}
+
+func TestParseArgs_HelpReturnsErrHelp(t *testing.T) {
+	var buf bytes.Buffer
+	_, err := parseArgs(&buf, []string{"-h"})
+	if !errors.Is(err, flag.ErrHelp) {
+		t.Fatalf("expected flag.ErrHelp, got %v", err)
+	}
+	if !strings.Contains(buf.String(), "Usage of nenya") {
+		t.Errorf("expected usage text, got %q", buf.String())
 	}
 }
 
