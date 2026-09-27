@@ -4,7 +4,7 @@
 
 ![go-version] ![License][license] ![zero-deps] ![CI][ci] ![CodeQL][codeql] ![Release][release] ![Sponsor][sponsor]
 
-AI coding clients transmit your source code, prompts, and credentials to cloud LLM providers on every request. Nenya is the gatekeeper in between: a lightweight, zero-dependency API gateway that redacts secrets before they leave your machine, keeps context payloads small, and routes across providers with fallback, caching, and transparent SSE streaming. Security-hardened: non-root execution, mlock for secrets, seccomp + no-new-privileges.
+AI coding clients transmit your source code, prompts, and credentials to cloud LLM providers on every request. Nenya is the gatekeeper in between: a lightweight, zero-dependency API gateway that redacts secrets before they leave your machine, keeps context payloads small, and routes across providers with fallback, caching, and transparent SSE streaming, plus an opt-in anti-poisoning stack that detects prompt injection and controls egress. Security-hardened: non-root execution, mlock for secrets, seccomp + no-new-privileges.
 
 **Compatible with any provider that implements the OpenAI Or Anthropic Chat Completions API.** For 23 providers we ship built-in adapters with specialized handling.
 
@@ -111,6 +111,7 @@ sudo systemctl enable --now nenya.service
 
 - **Single static binary, zero runtime dependencies** — Go standard library only. No plugins, no interpreters, no sidecars to install or upgrade.
 - **Privacy-first by default** — the Tier-0 regex filter redacts AWS keys, GitHub tokens, passwords, and similar secrets before any payload leaves your machine; optional entropy filtering, TF-IDF pruning, and engine summarization shrink what does get sent.
+- **Anti-poisoning stack** — opt-in, defense-in-depth controls for the lethal trifecta: deterministic prompt-injection detection, untrusted-content spotlighting, output egress control (ExfilGuard + canary tripwire), and an MCP tool-call argument guard before any gateway-managed dispatch.
 - **Transparent compatibility** — drop-in OpenAI- and Anthropic-compatible endpoints. Your clients keep working unchanged; providers are swappable config, not code.
 - **Resilient routing** — fallback chains with circuit breakers, upstream rate-limit awareness, stream-head failover, and sticky sessions that keep provider-side prefix caches warm.
 - **Hardened service** — mlock-sealed secrets, seccomp and no-new-privileges, non-root containers, read-only filesystem, systemd socket activation for zero-downtime restarts.
@@ -144,6 +145,7 @@ flowchart TD
         direction TB
         PROBE["Stream-head probe (pre-header)<br/>empty / early-error failover"]
         XFORM["Adapter transforms · format conversion"]
+        EGRESS["ExfilGuard · canary tripwire<br/><i>opt-in output egress control</i>"]
         WATCH["Stall watchdog · stream continuation"]
         ACCT["Usage accounting · cache capture · MCP auto-save"]
     end
@@ -153,7 +155,7 @@ flowchart TD
     CLIENT --> AUTH --> RESOLVE --> CACHE
     CACHE -- "HIT → replay" --> OUT
     CACHE -- "miss" --> MCPINJ --> CHAIN --> TRIM --> GUARDS --> MODES --> UPSTREAM
-    UPSTREAM --> PROBE --> XFORM --> WATCH --> ACCT --> OUT
+    UPSTREAM --> PROBE --> XFORM --> EGRESS --> WATCH --> ACCT --> OUT
     PROBE -. "failover → next target" .-> GUARDS
 
     classDef io fill:#e8ebf0,stroke:#57606a,color:#1f2328
@@ -191,13 +193,19 @@ Flow notes:
 
 ### Security & Privacy
 
+The anti-poisoning stack is defense-in-depth: the deterministic floor below is always on, while the injection and egress layers are opt-in and fail closed when enabled. See [docs/INJECTION_DEFENSE.md](docs/INJECTION_DEFENSE.md) for the threat model, rollout order, and documented blind spots.
+
 - **Tier-0 regex secret filter** — always-on redaction of AWS keys, GitHub tokens, passwords, etc.
 - **3-Tier content pipeline** — pluggable interceptor chain: regex redaction, entropy filtering, TF-IDF relevance scoring, engine summarization
 - **Context window compaction** — sliding window summarization with configurable engine
 - **Stale tool call pruning** — compact old assistant+tool response pairs to save tokens
 - **Thought pruning** — strip reasoning blocks from assistant message history
-- **Prompt-injection defense** — deterministic detection/sanitization, untrusted-content spotlighting, and an advisory two-tier classifier (see [docs/INJECTION_DEFENSE.md](docs/INJECTION_DEFENSE.md))
-- **Output egress control** — ExfilGuard URL policy and canary tripwires on every egress channel
+- **Prompt-injection defense** (opt-in, `governance.injection`) — deterministic detection and sanitization of instruction-override phrasing, role/format forgery, hidden-text carriers, and encoded blobs; per-agent `strict` mode rejects with `403 error_kind=injection_detected`
+- **Untrusted-content spotlighting** (opt-in, `governance.spotlight`) — envelopes MCP/memory tool results and incoming tool-role history so the model treats them as data, never instructions
+- **Two-tier classifier** (opt-in, `governance.injection.escalation`) — an advisory LLM verdict for ambiguous detections; it can clear false positives but never weakens the deterministic verdict
+- **Output egress control** (opt-in, `governance.exfil_guard`) — URL policy on model-produced markdown links/images and bare URLs, with `log`, `strip`, or `block` actions
+- **Canary tripwire** (opt-in, `governance.canary`) — a per-request marker watched on the response stream, buffered bodies, and tool-call arguments; a hit is the signature of injection-driven exfiltration
+- **MCP argument guard** (on by default when MCP servers are configured, `governance.mcp_guard`) — validates tool-call arguments against the tool schema, caps them at 1 MiB, and rejects private/loopback destinations before any gateway-managed dispatch
 - **System One decision models** — `POST /v1/systemone` proxies TypeSafe Jev typed-decision requests (noul/choice/score) through Nenya, with a non-chat model guard keeping them out of chat routing (see [docs/SYSTEM_ONE.md](docs/SYSTEM_ONE.md))
 - **Input validation** — strict body limits, JSON sanitization, header filtering
 - **Graceful degradation** — with `bouncer.fail_open=true` (the default), engine and token-saving pipeline failures never block requests; security interceptors fail closed by design (503) so a broken defense cannot silently pass content
@@ -229,6 +237,8 @@ Flow notes:
 
 - **Tool discovery** — connect to MCP servers for automatic tool injection
 - **Multi-turn execution** — intercept tool calls, execute against MCP servers, forward results
+- **Argument guard** — every gateway-managed tool call is schema-validated, size-capped, and URL-checked (`governance.mcp_guard`) before dispatch
+- **Untrusted by default** — tool results and auto-search memory context are spotlighted as `<untrusted-content>` before they re-enter the model
 - **Auto-search** — pre-fetch relevant context from MCP servers before forwarding
 - **Auto-save** — persist assistant responses to MCP memory servers
 
