@@ -1,0 +1,48 @@
+{
+  "contract_version": 1,
+  "version": {
+    "version": "0.15.0",
+    "commit": "a80e0cf8ce05176fc1159d03d0fc5685c934ebaa",
+    "build_time": "2026-09-26T03:08:44Z"
+  },
+  "paths": {
+    "mode": "directory",
+    "config_dir": "/etc/nenya",
+    "config_file": "/etc/nenya/config.json",
+    "config_d": "/etc/nenya/config.d",
+    "secrets_dir": "/run/secrets/nenya",
+    "socket_path": null,
+    "platform": "linux"
+  },
+  "secrets": {
+    "active_source": "/run/secrets/nenya",
+    "searched": [
+      "<CREDENTIALS_DIRECTORY>/secrets",
+      "<CREDENTIALS_DIRECTORY>/secrets.d",
+      "/run/secrets/nenya"
+    ]
+  },
+  "config": {
+    "server": { "listen_addr": ":8080" },
+    "governance": { "injection": { "enabled": true } }
+  },
+  "providers": {
+    "configured": ["gemini", "deepseek"],
+    "catalog": [
+      {
+        "provider": "gemini",
+        "model": "gemini-2.5-flash",
+        "context_window": 128000,
+        "max_output": 8192
+      }
+    ]
+  },
+  "diagnostics": [
+    {
+      "level": "warn",
+      "code": "unknown_field",
+      "message": "unknown field \"foo\" ignored",
+      "source": "config.d/20-agents.json"
+    }
+  ]
+}

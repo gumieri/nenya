@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/gumieri/nenya/docs/contract/version.schema.json",
+  "title": "nenya version --json",
+  "description": "Machine-readable version surface (CONTRACT.md 4.1, Appendix A.1).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["version", "commit", "build_time", "contract_version"],
+  "properties": {
+    "version": { "type": "string" },
+    "commit": { "type": "string" },
+    "build_time": { "type": "string" },
+    "contract_version": { "type": "integer", "minimum": 1 }
+  }
+}

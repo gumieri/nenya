@@ -1,0 +1,80 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/gumieri/nenya/docs/contract/describe.schema.json",
+  "title": "nenya describe --json",
+  "description": "Effective state for managers (CONTRACT.md 4.3, Appendix A.3). status: target.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["contract_version", "version", "paths", "secrets", "config", "providers", "diagnostics"],
+  "properties": {
+    "contract_version": { "type": "integer", "minimum": 1 },
+    "version": {
+      "type": "object",
+      "required": ["version", "commit", "build_time"],
+      "properties": {
+        "version": { "type": "string" },
+        "commit": { "type": "string" },
+        "build_time": { "type": "string" }
+      }
+    },
+    "paths": {
+      "type": "object",
+      "required": ["mode", "config_dir", "config_file", "config_d", "secrets_dir", "socket_path", "platform"],
+      "properties": {
+        "mode": { "type": "string", "enum": ["file", "directory"] },
+        "config_dir": { "type": "string" },
+        "config_file": { "type": "string" },
+        "config_d": { "type": "string" },
+        "secrets_dir": { "type": "string" },
+        "socket_path": { "type": ["string", "null"] },
+        "platform": { "type": "string" }
+      }
+    },
+    "secrets": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["active_source", "searched"],
+      "properties": {
+        "active_source": { "type": "string" },
+        "searched": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "config": { "type": "object" },
+    "providers": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["configured", "catalog"],
+      "properties": {
+        "configured": { "type": "array", "items": { "type": "string" } },
+        "catalog": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["provider", "model", "context_window", "max_output"],
+            "properties": {
+              "provider": { "type": "string" },
+              "model": { "type": "string" },
+              "context_window": { "type": "integer" },
+              "max_output": { "type": "integer" }
+            }
+          }
+        }
+      }
+    },
+    "diagnostics": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["level", "code", "message"],
+        "properties": {
+          "level": { "type": "string" },
+          "code": { "type": "string" },
+          "message": { "type": "string" },
+          "source": { "type": "string" }
+        }
+      }
+    }
+  }
+}

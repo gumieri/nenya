@@ -450,7 +450,13 @@ Primary consumer endpoint: `GET /v1/models` (model catalog) and
 
 ## Appendix A — JSON shapes
 
-Field names below are normative once the command is `stable`.
+Field names below are normative once the command is `stable`. Machine-readable
+JSON Schemas live in [`docs/contract/`](docs/contract/) (`version.schema.json`,
+`paths.schema.json`, `describe.schema.json`) with example fixtures under
+`docs/contract/examples/`. The `cmd/nenya` conformance tests
+(`contract_schema_test.go`) validate both the fixtures and the live
+`version --json` output against these schemas, so a schema cannot drift from the
+command it documents.
 
 ### A.1 `nenya version --json`
 

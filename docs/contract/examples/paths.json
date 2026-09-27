@@ -1,0 +1,9 @@
+{
+  "mode": "directory",
+  "config_dir": "/etc/nenya",
+  "config_file": "/etc/nenya/config.json",
+  "config_d": "/etc/nenya/config.d",
+  "secrets_dir": "/run/secrets/nenya",
+  "socket_path": null,
+  "platform": "linux"
+}
