@@ -250,7 +250,7 @@ The write target is, in order:
 1. `<NENYA_SECRETS_DIR>/secrets.json` when `NENYA_SECRETS_DIR` is set;
 2. otherwise, in **directory mode**, `<config-root>/secrets.json` — the single
    file the shipped unit wires via `LoadCredential` and the loader searches
-   (§6.1 source 4), so the written value is the one actually loaded;
+   (§6.1 source 5), so the written value is the one actually loaded;
 3. otherwise, in **file mode**, `/run/secrets/nenya/secrets.json`.
 
 `--config-dir`/`--config` select the config root that rule 2 uses (the same
@@ -585,7 +585,9 @@ rather than a path.
 }
 ```
 
-The `searched` list mirrors §6.1 in priority order; `CREDENTIALS_DIRECTORY` is
+The `searched` list names the candidate sources considered, in §6.1 priority
+order (it is the search order, not a log of which were probed);
+`CREDENTIALS_DIRECTORY` is
 platform-provided. `config` is the effective configuration after merge and
 defaults, and is the authoritative answer to "what is in effect". Its shape is
 defined by the schema from `nenya -print-config-schema`; only

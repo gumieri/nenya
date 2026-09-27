@@ -119,6 +119,22 @@ func TestHandlePaths_SecretsDirFromEnv(t *testing.T) {
 	}
 }
 
+func TestHandlePaths_FileModeWithSecretsDirEnv(t *testing.T) {
+	secrets := t.TempDir()
+	t.Setenv("NENYA_CONFIG_FILE", filepath.Join(t.TempDir(), "custom.json"))
+	t.Setenv("NENYA_CONFIG_DIR", "")
+	t.Setenv("NENYA_SECRETS_DIR", secrets)
+
+	got := runPathsJSON(t)
+
+	if got.Mode != "file" {
+		t.Errorf("mode = %q, want file", got.Mode)
+	}
+	if got.SecretsFile == nil || *got.SecretsFile != filepath.Join(secrets, "secrets.json") {
+		t.Errorf("secrets_file = %v, want %q", got.SecretsFile, filepath.Join(secrets, "secrets.json"))
+	}
+}
+
 func TestHandlePaths_Passthrough(t *testing.T) {
 	handled, err := handlePaths(io.Discard, io.Discard, []string{"serve"})
 	if handled || err != nil {

@@ -144,7 +144,13 @@ func LoadFromDirWithDiagnostics(dir string) (*Config, []Diagnostic, error) {
 	var diags []Diagnostic
 	found := false
 
-	if info, statErr := os.Stat(configFilePath); statErr == nil && !info.IsDir() {
+	info, statErr := os.Stat(configFilePath)
+	if statErr != nil && !errors.Is(statErr, os.ErrNotExist) {
+		// A stat failure (for example EACCES) is not "no config": surface it
+		// instead of silently reporting config_not_found.
+		return nil, nil, fmt.Errorf("failed to access config %s: %w", configFilePath, statErr)
+	}
+	if statErr == nil && !info.IsDir() {
 		base, baseDiags, loadErr := decodeConfigFileWithDiagnostics(configFilePath)
 		if loadErr != nil {
 			return nil, nil, loadErr
@@ -402,18 +408,18 @@ type SecretsResolution struct {
 
 // ResolveSecrets locates and validates secrets without failing when none is
 // found, so managers can inspect the search order (`nenya describe`). It checks
-// in order:
+// in order (CONTRACT.md §6.1):
 //  1. $CREDENTIALS_DIRECTORY/secrets
 //  2. $CREDENTIALS_DIRECTORY/secrets.d/ (directory)
-//  3. $NENYA_SECRETS_DIR/ (or /run/secrets/nenya/ as default)
-//  4. <configRoot>/secrets.json (directory mode only; configRoot is empty in
-//     file mode)
+//  3. $NENYA_SECRETS_DIR/ (dir; falls back to source 4)
+//  4. /run/secrets/nenya/ (directory)
+//  5. <configRoot>/secrets.json (single file, directory mode only)
 //
-// Source 4 is the deployment's conventional secrets file: the shipped systemd
+// Source 5 is the deployment's conventional secrets file: the shipped systemd
 // unit wires it via LoadCredential (which wins as source 1 under the unit), and
 // it is `secret set`'s default target. Searching it last lets an interactive
 // `nenya -config-dir <root>` resolve the same secrets the unit would load,
-// without changing precedence for the existing directory sources.
+// without changing precedence for sources 1-4.
 //
 // A non-nil error reports a read or validation failure; LoadSecrets treats a
 // missing document as fatal.
@@ -423,6 +429,7 @@ func ResolveSecrets(configRoot string) (SecretsResolution, error) {
 	if secretsDir == "" {
 		secretsDir = "/run/secrets/nenya"
 	}
+	secretsDir = cleanAbs(secretsDir)
 
 	res := SecretsResolution{}
 	if credDir != "" {
@@ -434,7 +441,7 @@ func ResolveSecrets(configRoot string) (SecretsResolution, error) {
 
 	configSecrets := ""
 	if configRoot != "" {
-		configSecrets = filepath.Join(configRoot, "secrets.json")
+		configSecrets = filepath.Join(cleanAbs(configRoot), "secrets.json")
 		res.Searched = append(res.Searched, configSecrets)
 	}
 
@@ -449,11 +456,47 @@ func ResolveSecrets(configRoot string) (SecretsResolution, error) {
 		return res, nil
 	}
 	if configSecrets != "" {
-		if _, err := resolveSecretsPath(&res, configSecrets); err != nil {
+		if found, err := resolveSecretsFile(&res, configSecrets); err != nil {
 			return res, err
+		} else if found {
+			return res, nil
 		}
 	}
 	return res, nil
+}
+
+// cleanAbs returns p as an absolute, cleaned path, or p unchanged when it cannot
+// be resolved, so sources recorded in SecretsResolution match the paths other
+// surfaces (paths --json, secret set) report.
+func cleanAbs(p string) string {
+	if abs, err := filepath.Abs(p); err == nil {
+		return abs
+	}
+	return p
+}
+
+// resolveSecretsFile tries a single-file secrets source (CONTRACT.md §6.1
+// source 5). A missing path yields false; a directory at path is not this
+// source and is skipped rather than merged. It records the winner.
+func resolveSecretsFile(res *SecretsResolution, path string) (bool, error) {
+	info, err := os.Stat(path)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return false, nil
+		}
+		return false, fmt.Errorf("failed to stat secrets path %q: %w", path, err)
+	}
+	if info.IsDir() {
+		return false, nil
+	}
+	secrets, err := loadSecretsSingleFile(path)
+	if err != nil {
+		return false, err
+	}
+	if secrets == nil {
+		return false, nil
+	}
+	return recordSecrets(res, path, secrets)
 }
 
 // resolveCredentialDirectory tries the systemd credential sources

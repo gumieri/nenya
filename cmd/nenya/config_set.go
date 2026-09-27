@@ -34,14 +34,9 @@ func handleConfig(w, errW io.Writer, args []string) (bool, error) {
 
 	fs := flag.NewFlagSet("config set", flag.ContinueOnError)
 	fs.SetOutput(errW)
-	var configDir, configFile string
-	fs.StringVar(&configDir, "config-dir", "", "Configuration directory (contains config.d/ or config.json)")
-	fs.StringVar(&configFile, "config", "", "Single configuration file")
-	if err := fs.Parse(args[2:]); err != nil {
-		if errors.Is(err, flag.ErrHelp) {
-			return true, flag.ErrHelp
-		}
-		return true, errUsage
+	configDir, configFile := addConfigRootFlags(fs)
+	if err := parseCommandFlags(fs, args[2:]); err != nil {
+		return true, err
 	}
 
 	rest := fs.Args()
@@ -50,7 +45,7 @@ func handleConfig(w, errW io.Writer, args []string) (bool, error) {
 		return true, errUsage
 	}
 
-	target := configTargetPath(effectiveConfigPaths(configDir, configFile))
+	target := configTargetPath(effectiveConfigPaths(*configDir, *configFile))
 	if err := setConfigKey(target, rest[0], parseConfigValue(rest[1])); err != nil {
 		return true, err
 	}

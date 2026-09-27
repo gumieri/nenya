@@ -66,29 +66,23 @@ func handleDescribe(w, errW io.Writer, args []string) (bool, error) {
 
 	fs := flag.NewFlagSet("describe", flag.ContinueOnError)
 	fs.SetOutput(errW)
-	var configDir, configFile string
-	jsonOut := false
-	fs.StringVar(&configDir, "config-dir", "", "Configuration directory (contains config.d/ or config.json)")
-	fs.StringVar(&configFile, "config", "", "Single configuration file")
-	fs.BoolVar(&jsonOut, "json", false, "Emit JSON")
+	configDir, configFile := addConfigRootFlags(fs)
+	jsonOut := fs.Bool("json", false, "Emit JSON")
 
-	if err := fs.Parse(args[1:]); err != nil {
-		if errors.Is(err, flag.ErrHelp) {
-			return true, flag.ErrHelp
-		}
-		return true, errUsage
+	if err := parseCommandFlags(fs, args[1:]); err != nil {
+		return true, err
 	}
 	if fs.NArg() > 0 {
 		_, _ = fmt.Fprintf(errW, "unexpected argument: %s\n", fs.Arg(0))
 		return true, errUsage
 	}
 
-	desc, err := buildDescription(effectiveConfigPaths(configDir, configFile))
+	desc, err := buildDescription(effectiveConfigPaths(*configDir, *configFile))
 	if err != nil {
 		return true, err
 	}
 
-	if !jsonOut {
+	if !*jsonOut {
 		printDescription(w, desc)
 		return true, nil
 	}
@@ -114,9 +108,10 @@ func buildDescription(paths configPaths) (describeJSON, error) {
 	} else {
 		cfg, diags, err = config.LoadFromDirWithDiagnostics(paths.dir)
 	}
-	switch {
-	case err == nil:
-	case errors.Is(err, config.ErrConfigNotFound):
+	if err != nil && !errors.Is(err, config.ErrConfigNotFound) {
+		return describeJSON{}, fmt.Errorf("load config: %w", err)
+	}
+	if errors.Is(err, config.ErrConfigNotFound) {
 		// `describe` is a diagnostic surface (CONTRACT.md §4.3): a missing
 		// config is reported as a diagnostic and the effective config falls
 		// back to defaults, so consumers can probe before bootstrap instead of
@@ -128,11 +123,9 @@ func buildDescription(paths configPaths) (describeJSON, error) {
 		diags = append(diags, config.Diagnostic{
 			Level:   "warn",
 			Code:    "config_not_found",
-			Message: "no config found; showing defaults",
+			Message: "no config found; showing defaults (" + strings.TrimPrefix(err.Error(), config.ErrConfigNotFound.Error()+": ") + ")",
 			Source:  configSource(paths),
 		})
-	default:
-		return describeJSON{}, fmt.Errorf("load config: %w", err)
 	}
 
 	res, secretsErr := config.ResolveSecrets(secretsConfigRoot(paths))
@@ -140,11 +133,18 @@ func buildDescription(paths configPaths) (describeJSON, error) {
 	diagnostics = append(diagnostics, diags...)
 	switch {
 	case secretsErr != nil:
+		// ActiveSource is only set once a source yields a document; when a
+		// read/validation failure happens first, name the last candidate
+		// considered so the diagnostic still points somewhere.
+		source := res.ActiveSource
+		if source == "" && len(res.Searched) > 0 {
+			source = res.Searched[len(res.Searched)-1]
+		}
 		diagnostics = append(diagnostics, config.Diagnostic{
 			Level:   "error",
 			Code:    "secrets_invalid",
 			Message: secretsErr.Error(),
-			Source:  res.ActiveSource,
+			Source:  source,
 		})
 	case res.Secrets == nil:
 		diagnostics = append(diagnostics, config.Diagnostic{
@@ -177,9 +177,9 @@ func buildDescription(paths configPaths) (describeJSON, error) {
 // config root directory.
 func configSource(paths configPaths) string {
 	if paths.file != "" {
-		return paths.file
+		return absOrSelf(paths.file)
 	}
-	return paths.dir
+	return absOrSelf(paths.dir)
 }
 
 // configuredProviders returns the sorted names of providers that can serve

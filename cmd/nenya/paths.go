@@ -2,7 +2,6 @@ package main
 
 import (
 	"encoding/json"
-	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -38,27 +37,20 @@ func handlePaths(w, errW io.Writer, args []string) (bool, error) {
 
 	fs := flag.NewFlagSet("paths", flag.ContinueOnError)
 	fs.SetOutput(errW)
-	var configDir, configFile string
-	jsonOut := false
-	fs.StringVar(&configDir, "config-dir", "", "Configuration directory (contains config.d/ or config.json)")
-	fs.StringVar(&configFile, "config", "", "Single configuration file")
-	fs.BoolVar(&jsonOut, "json", false, "Emit JSON")
+	configDir, configFile := addConfigRootFlags(fs)
+	jsonOut := fs.Bool("json", false, "Emit JSON")
 
-	if err := fs.Parse(args[1:]); err != nil {
-		if errors.Is(err, flag.ErrHelp) {
-			return true, flag.ErrHelp
-		}
-		// flag.ContinueOnError already wrote the error and usage to errW.
-		return true, errUsage
+	if err := parseCommandFlags(fs, args[1:]); err != nil {
+		return true, err
 	}
 	if fs.NArg() > 0 {
 		_, _ = fmt.Fprintf(errW, "unexpected argument: %s\n", fs.Arg(0))
 		return true, errUsage
 	}
 
-	resolved := resolvePaths(effectiveConfigPaths(configDir, configFile))
+	resolved := resolvePaths(effectiveConfigPaths(*configDir, *configFile))
 
-	if jsonOut {
+	if *jsonOut {
 		encoded, err := json.Marshal(resolved)
 		if err != nil {
 			return true, fmt.Errorf("encode paths: %w", err)

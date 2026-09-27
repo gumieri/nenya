@@ -19,13 +19,14 @@
     },
     "paths": {
       "type": "object",
-      "required": ["mode", "config_dir", "config_file", "config_d", "secrets_dir", "socket_path", "platform"],
+      "required": ["mode", "config_dir", "config_file", "config_d", "secrets_dir", "secrets_file", "socket_path", "platform"],
       "properties": {
         "mode": { "type": "string", "enum": ["file", "directory"] },
         "config_dir": { "type": "string" },
         "config_file": { "type": "string" },
         "config_d": { "type": "string" },
         "secrets_dir": { "type": "string" },
+        "secrets_file": { "type": ["string", "null"] },
         "socket_path": { "type": ["string", "null"] },
         "platform": { "type": "string" }
       }

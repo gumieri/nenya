@@ -10,6 +10,7 @@ Nenya loads secrets from JSON files. Multiple secret sources are supported with 
 | 2 | `$CREDENTIALS_DIRECTORY/secrets.d/*.json` | systemd directory with merged JSON files |
 | 3 | `$NENYA_SECRETS_DIR/*.json` | configurable path (env var) |
 | 4 | `/run/secrets/nenya/*.json` | K8s/Docker standard path (fallback) |
+| 5 | `<config-root>/secrets.json` | single file, directory mode only — the file the shipped unit wires via `LoadCredential` and `nenya secret set` writes by default (CONTRACT.md §6.1 source 5) |
 
 The first path that exists is used. If multiple JSON files exist in a directory, they are merged alphabetically (last-wins for duplicate keys).
 

@@ -11,6 +11,7 @@
     "config_file": "/etc/nenya/config.json",
     "config_d": "/etc/nenya/config.d",
     "secrets_dir": "/run/secrets/nenya",
+    "secrets_file": "/etc/nenya/secrets.json",
     "socket_path": null,
     "platform": "linux"
   },

@@ -53,6 +53,7 @@ func TestSecretSet_ProviderKey(t *testing.T) {
 }
 
 func TestSecretSet_DirectoryModeDefaultsToConfigRoot(t *testing.T) {
+	stubDefaultSecretsDirPopulated(t, false)
 	dir := t.TempDir()
 	t.Setenv("NENYA_SECRETS_DIR", "")
 	t.Setenv("NENYA_CONFIG_DIR", dir)
@@ -77,6 +78,69 @@ func TestSecretTargetPath_FileModeFallsBackToRunSecrets(t *testing.T) {
 	t.Setenv("CREDENTIALS_DIRECTORY", "")
 
 	got, err := secretTargetPath(configPaths{file: "/etc/nenya/custom.json"})
+	if err != nil {
+		t.Fatalf("secretTargetPath: %v", err)
+	}
+	if want := "/run/secrets/nenya/secrets.json"; got != want {
+		t.Errorf("target = %q, want %q", got, want)
+	}
+}
+
+// stubDefaultSecretsDirPopulated overrides the /run/secrets/nenya probe for the
+// duration of a test, so the shadow path is exercised without host control.
+func stubDefaultSecretsDirPopulated(t *testing.T, populated bool) {
+	t.Helper()
+	saved := defaultSecretsDirPopulated
+	defaultSecretsDirPopulated = func() bool { return populated }
+	t.Cleanup(func() { defaultSecretsDirPopulated = saved })
+}
+
+func TestSecretTargetPath_DirectoryModeDefaultsToConfigRoot(t *testing.T) {
+	stubDefaultSecretsDirPopulated(t, false)
+	t.Setenv("NENYA_SECRETS_DIR", "")
+	t.Setenv("CREDENTIALS_DIRECTORY", "")
+	dir := t.TempDir()
+
+	got, err := secretTargetPath(configPaths{dir: dir})
+	if err != nil {
+		t.Fatalf("secretTargetPath: %v", err)
+	}
+	if want := filepath.Join(dir, "secrets.json"); got != want {
+		t.Errorf("target = %q, want %q", got, want)
+	}
+}
+
+func TestSecretTargetPath_ShadowedByDefaultDirFailsClosed(t *testing.T) {
+	stubDefaultSecretsDirPopulated(t, true)
+	t.Setenv("NENYA_SECRETS_DIR", "")
+	t.Setenv("CREDENTIALS_DIRECTORY", "")
+
+	if _, err := secretTargetPath(configPaths{dir: t.TempDir()}); err == nil {
+		t.Fatal("expected fail-closed when /run/secrets/nenya holds secrets that would shadow the write")
+	}
+}
+
+func TestSecretTargetPath_CredentialsDirWithoutFilesDoesNotFailClosed(t *testing.T) {
+	stubDefaultSecretsDirPopulated(t, false)
+	t.Setenv("NENYA_SECRETS_DIR", "")
+	t.Setenv("CREDENTIALS_DIRECTORY", t.TempDir()) // empty: no credential files
+	dir := t.TempDir()
+
+	got, err := secretTargetPath(configPaths{dir: dir})
+	if err != nil {
+		t.Fatalf("secretTargetPath: %v", err)
+	}
+	if want := filepath.Join(dir, "secrets.json"); got != want {
+		t.Errorf("target = %q, want %q", got, want)
+	}
+}
+
+func TestSecretTargetPath_ConfigRootIsDefaultDirNotShadowed(t *testing.T) {
+	stubDefaultSecretsDirPopulated(t, true)
+	t.Setenv("NENYA_SECRETS_DIR", "")
+	t.Setenv("CREDENTIALS_DIRECTORY", "")
+
+	got, err := secretTargetPath(configPaths{dir: "/run/secrets/nenya"})
 	if err != nil {
 		t.Fatalf("secretTargetPath: %v", err)
 	}

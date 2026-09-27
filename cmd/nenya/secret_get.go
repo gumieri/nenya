@@ -11,29 +11,31 @@ import (
 )
 
 // secretGetUsage is the `secret get` usage line.
-const secretGetUsage = "usage: nenya secret get --client-token | --provider <name>"
+const secretGetUsage = "usage: nenya secret get [--config-dir <dir> | --config <file>] --client-token | --provider <name>"
 
-// handleSecretGet implements `nenya secret get` (CONTRACT.md §4.7): the secrets
+// handleSecretGet implements `nenya secret get` (CONTRACT.md §4.8): the secrets
 // single reader. It resolves the effective secrets source (same precedence as
 // the server) and writes the requested value to w. The value is never logged,
 // and a value is only ever written to stdout, so consumers never reimplement
 // the §6.1 search order or the §6.2 merge.
 func handleSecretGet(w, errW io.Writer, args []string) (bool, error) {
 	fs := flag.NewFlagSet("secret get", flag.ContinueOnError)
-	fs.SetOutput(errW)
+	// A parse error can echo a flag value, and this command handles secrets, so
+	// the flag package's output is discarded and usage is printed explicitly.
+	fs.SetOutput(io.Discard)
 	provider := fs.String("provider", "", "Provider name whose key is read")
 	clientToken := fs.Bool("client-token", false, "Read the client token")
-	var configDir, configFile string
-	fs.StringVar(&configDir, "config-dir", "", "Configuration directory (directory mode)")
-	fs.StringVar(&configFile, "config", "", "Single configuration file (file mode)")
-	if err := fs.Parse(args[2:]); err != nil {
-		if errors.Is(err, flag.ErrHelp) {
-			return true, flag.ErrHelp
+	configDir, configFile := addConfigRootFlags(fs)
+	if err := parseCommandFlags(fs, args[2:]); err != nil {
+		if errors.Is(err, errUsage) {
+			_, _ = fmt.Fprintln(errW, secretGetUsage)
 		}
-		return true, errUsage
+		return true, err
 	}
 	if fs.NArg() > 0 {
-		_, _ = fmt.Fprintf(errW, "unexpected argument: %s\n", fs.Arg(0))
+		// Do not echo the argument: `secret get --client-token <value>` is a
+		// plausible mistake and would leak the value to stderr.
+		_, _ = fmt.Fprintln(errW, secretGetUsage)
 		return true, errUsage
 	}
 	// Exactly one selector is required.
@@ -42,13 +44,13 @@ func handleSecretGet(w, errW io.Writer, args []string) (bool, error) {
 		return true, errUsage
 	}
 
-	paths := effectiveConfigPaths(configDir, configFile)
+	paths := effectiveConfigPaths(*configDir, *configFile)
 	res, err := config.ResolveSecrets(secretsConfigRoot(paths))
 	if err != nil {
 		return true, fmt.Errorf("read secrets: %w", err)
 	}
 	if res.Secrets == nil {
-		return true, fmt.Errorf("no secrets found (checked %s)", strings.Join(res.Searched, ", "))
+		return true, fmt.Errorf("no secrets found (considered %s)", strings.Join(res.Searched, ", "))
 	}
 
 	if *clientToken {

@@ -257,7 +257,7 @@ func loadConfig(paths configPaths) (*config.Config, *config.SecretsConfig, error
 }
 
 // secretsConfigRoot returns the config root whose secrets.json the loader also
-// searches (CONTRACT.md §6.1 source 4): the directory in directory mode, empty
+// searches (CONTRACT.md §6.1 source 5): the directory in directory mode, empty
 // in file mode, which loads exactly one file and no config.d.
 func secretsConfigRoot(paths configPaths) string {
 	if paths.file != "" {

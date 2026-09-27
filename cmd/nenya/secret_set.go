@@ -35,14 +35,9 @@ func handleSecretSet(w, errW io.Writer, args []string) (bool, error) {
 	fs.SetOutput(errW)
 	provider := fs.String("provider", "", "Provider name whose key is set")
 	clientToken := fs.Bool("client-token", false, "Set (or generate) the client token")
-	var configDir, configFile string
-	fs.StringVar(&configDir, "config-dir", "", "Configuration directory whose secrets.json is written by default")
-	fs.StringVar(&configFile, "config", "", "Single configuration file (file mode)")
-	if err := fs.Parse(args[2:]); err != nil {
-		if errors.Is(err, flag.ErrHelp) {
-			return true, flag.ErrHelp
-		}
-		return true, errUsage
+	configDir, configFile := addConfigRootFlags(fs)
+	if err := parseCommandFlags(fs, args[2:]); err != nil {
+		return true, err
 	}
 
 	if *clientToken && *provider != "" {
@@ -50,14 +45,14 @@ func handleSecretSet(w, errW io.Writer, args []string) (bool, error) {
 		return true, errUsage
 	}
 
-	target, targetErr := secretTargetPath(effectiveConfigPaths(configDir, configFile))
+	target, targetErr := secretTargetPath(effectiveConfigPaths(*configDir, *configFile))
 	if targetErr != nil {
 		return true, targetErr
 	}
 
 	if setErr := applySecretSet(target, *clientToken, *provider, fs.Args()); setErr != nil {
 		if errors.Is(setErr, errUsage) {
-			_, _ = fmt.Fprintln(errW, secretUsage)
+			_, _ = fmt.Fprintln(errW, secretSetUsage)
 		}
 		return true, setErr
 	}
@@ -79,8 +74,12 @@ func applySecretSet(target string, clientToken bool, provider string, rest []str
 	}
 }
 
-// secretUsage is the `secret` usage line.
-const secretUsage = "usage: nenya secret set --provider <name> <api-key> | --client-token [<token>]\n       nenya secret get --client-token | --provider <name>"
+// secretSetUsage is the `secret set` usage line.
+const secretSetUsage = "usage: nenya secret set [--config-dir <dir> | --config <file>] --provider <name> <api-key> | --client-token [<token>]"
+
+// secretUsage is the `secret` subtree usage line, printed for an unknown
+// subcommand.
+const secretUsage = secretSetUsage + "\n       " + secretGetUsage
 
 // applyClientToken sets client_token from rest[0], or generates one when no
 // value is given. A malformed invocation returns errUsage.
@@ -120,9 +119,13 @@ func applyProviderKey(target, provider string, rest []string) error {
 // Precedence for the write target:
 //  1. NENYA_SECRETS_DIR, when set — <dir>/secrets.json (unchanged).
 //  2. Directory mode — <config-root>/secrets.json, the file the shipped unit
-//     wires via LoadCredential and the loader also searches (source 4), instead
-//     of the /run/secrets/nenya default the unit shadows.
+//     wires via LoadCredential and the loader also searches (CONTRACT.md §6.1
+//     source 5), instead of the /run/secrets/nenya default the unit shadows.
 //  3. File mode — /run/secrets/nenya/secrets.json (no config root to prefer).
+//
+// Every branch fails closed rather than writing a file a higher-priority source
+// would shadow: systemd credentials (§6.1 sources 1-2), and the default merge
+// directory /run/secrets/nenya (§6.1 source 4) when it is populated.
 func secretTargetPath(paths configPaths) (string, error) {
 	if credDir := os.Getenv("CREDENTIALS_DIRECTORY"); credDir != "" {
 		if _, err := os.Stat(filepath.Join(credDir, "secrets")); err == nil {
@@ -137,9 +140,32 @@ func secretTargetPath(paths configPaths) (string, error) {
 		return filepath.Join(absOrSelf(dir), "secrets.json"), nil
 	}
 	if paths.file == "" {
-		return filepath.Join(absOrSelf(paths.dir), "secrets.json"), nil
+		target := filepath.Join(absOrSelf(paths.dir), "secrets.json")
+		if filepath.Dir(target) != "/run/secrets/nenya" && defaultSecretsDirPopulated() {
+			return "", fmt.Errorf("active secrets source is /run/secrets/nenya (source 4); writing %s would be shadowed — remove /run/secrets/nenya/*.json or set NENYA_SECRETS_DIR to write a file instead", target)
+		}
+		return target, nil
 	}
 	return "/run/secrets/nenya/secrets.json", nil
+}
+
+// defaultSecretsDirPopulated reports whether the default merge directory
+// (/run/secrets/nenya) contains any *.json. When it does, it is an active
+// source (CONTRACT.md §6.1 source 4) that would shadow a lower-priority
+// config-root write (source 5), so `secret set` must not write a file the
+// loader will ignore. It is a var so tests can exercise the shadow path without
+// control of /run/secrets.
+var defaultSecretsDirPopulated = func() bool {
+	entries, err := os.ReadDir("/run/secrets/nenya")
+	if err != nil {
+		return false
+	}
+	for _, e := range entries {
+		if !e.IsDir() && filepath.Ext(e.Name()) == ".json" {
+			return true
+		}
+	}
+	return false
 }
 
 // generateClientToken returns a fresh random client token.

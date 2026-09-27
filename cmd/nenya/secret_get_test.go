@@ -83,6 +83,72 @@ func TestSecretGet_ConfigRootFallback(t *testing.T) {
 	}
 }
 
+func TestSecretGet_ConfigDirFlagResolves(t *testing.T) {
+	dir := t.TempDir()
+	writeSecrets(t, dir, `{"client_token":"flag-token-1234567890"}`)
+	t.Setenv("NENYA_SECRETS_DIR", "")
+	t.Setenv("NENYA_CONFIG_DIR", "")
+	t.Setenv("NENYA_CONFIG_FILE", "")
+	t.Setenv("CREDENTIALS_DIRECTORY", "")
+
+	got, err := runSecretGet(t, "--client-token", "--config-dir", dir)
+	if err != nil {
+		t.Fatalf("secret get: %v", err)
+	}
+	if got != "flag-token-1234567890" {
+		t.Errorf("token = %q, want the --config-dir value", got)
+	}
+}
+
+func TestSecretGet_InvalidSecretsErrors(t *testing.T) {
+	dir := t.TempDir()
+	// Missing client_token makes validation fail.
+	writeSecrets(t, dir, `{"provider_keys":{"gemini":"AIza-x"}}`)
+	t.Setenv("NENYA_SECRETS_DIR", dir)
+	t.Setenv("NENYA_CONFIG_DIR", "")
+	t.Setenv("NENYA_CONFIG_FILE", "")
+	t.Setenv("CREDENTIALS_DIRECTORY", "")
+
+	if _, err := runSecretGet(t, "--provider", "gemini"); err == nil {
+		t.Fatal("expected an error for invalid secrets")
+	}
+}
+
+func TestSecretGet_ValueOnlyOnStdout(t *testing.T) {
+	dir := t.TempDir()
+	writeSecrets(t, dir, `{"client_token":"secret-token-abcdef1234"}`)
+	t.Setenv("NENYA_SECRETS_DIR", dir)
+	t.Setenv("NENYA_CONFIG_DIR", "")
+	t.Setenv("NENYA_CONFIG_FILE", "")
+	t.Setenv("CREDENTIALS_DIRECTORY", "")
+
+	var out, errBuf bytes.Buffer
+	handled, err := handleSecret(&out, &errBuf, []string{"secret", "get", "--client-token"})
+	if !handled || err != nil {
+		t.Fatalf("handleSecret: handled=%v err=%v", handled, err)
+	}
+	if !strings.Contains(out.String(), "secret-token-abcdef1234") {
+		t.Errorf("stdout = %q, want the token", out.String())
+	}
+	if strings.Contains(errBuf.String(), "secret-token-abcdef1234") {
+		t.Errorf("stderr leaked the token: %q", errBuf.String())
+	}
+}
+
+func TestSecretGet_UnexpectedArgumentDoesNotEchoValue(t *testing.T) {
+	t.Setenv("NENYA_SECRETS_DIR", t.TempDir())
+	t.Setenv("CREDENTIALS_DIRECTORY", "")
+
+	var out, errBuf bytes.Buffer
+	handled, err := handleSecret(&out, &errBuf, []string{"secret", "get", "--client-token", "supersecret-token-value"})
+	if !handled || !errors.Is(err, errUsage) {
+		t.Fatalf("handled=%v err=%v, want errUsage", handled, err)
+	}
+	if strings.Contains(errBuf.String(), "supersecret-token-value") {
+		t.Errorf("stderr echoed the argument value: %q", errBuf.String())
+	}
+}
+
 func TestSecretGet_MissingProviderErrors(t *testing.T) {
 	dir := t.TempDir()
 	writeSecrets(t, dir, `{"client_token":"token-123456789012"}`)
