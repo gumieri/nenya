@@ -27,8 +27,18 @@ func handleSecret(w, errW io.Writer, args []string) (bool, error) {
 	if len(args) >= 2 && args[1] == "get" {
 		return handleSecretGet(w, errW, args)
 	}
+	if len(args) >= 2 && isHelpArg(args[1]) {
+		_, _ = fmt.Fprintln(errW, secretUsage)
+		return true, flag.ErrHelp
+	}
 	_, _ = fmt.Fprintln(errW, secretUsage)
 	return true, errUsage
+}
+
+// isHelpArg reports whether arg is one of the conventional help flags
+// (CONTRACT.md §3.4: -h/--help prints usage and exits 0).
+func isHelpArg(arg string) bool {
+	return arg == "-h" || arg == "-help" || arg == "--help"
 }
 
 // handleSecretSet implements `nenya secret set`: the secrets single writer.
@@ -55,7 +65,7 @@ func handleSecretSet(w, errW io.Writer, args []string) (bool, error) {
 		return true, targetErr
 	}
 
-	if setErr := applySecretSet(target, *clientToken, *provider, fs.Args()); setErr != nil {
+	if setErr := applySecretSet(errW, target, *clientToken, *provider, fs.Args()); setErr != nil {
 		if errors.Is(setErr, errUsage) {
 			_, _ = fmt.Fprintln(errW, secretSetUsage)
 		}
@@ -68,10 +78,10 @@ func handleSecretSet(w, errW io.Writer, args []string) (bool, error) {
 
 // applySecretSet routes a parsed `secret set` invocation to the matching
 // writer.
-func applySecretSet(target string, clientToken bool, provider string, rest []string) error {
+func applySecretSet(errW io.Writer, target string, clientToken bool, provider string, rest []string) error {
 	switch {
 	case clientToken:
-		return applyClientToken(target, rest)
+		return applyClientToken(errW, target, rest)
 	case provider != "":
 		return applyProviderKey(target, provider, rest)
 	default:
@@ -93,8 +103,9 @@ const minClientTokenLen = 16
 
 // applyClientToken sets client_token from rest[0], or generates one when no
 // value is given. A malformed invocation returns errUsage; an explicit token
-// shorter than minClientTokenLen is rejected.
-func applyClientToken(target string, rest []string) error {
+// shorter than minClientTokenLen is reported and returns errUsage, so main maps
+// the malformed value to exit 2 (CONTRACT.md §3.4).
+func applyClientToken(errW io.Writer, target string, rest []string) error {
 	if len(rest) > 1 {
 		return errUsage
 	}
@@ -112,7 +123,8 @@ func applyClientToken(target string, rest []string) error {
 		return errUsage
 	}
 	if len(token) < minClientTokenLen {
-		return fmt.Errorf("client token must be at least %d characters", minClientTokenLen)
+		_, _ = fmt.Fprintf(errW, "client token must be at least %d characters\n", minClientTokenLen)
+		return errUsage
 	}
 	return setSecretValue(target, "client_token", "", token)
 }
@@ -131,6 +143,10 @@ func applyProviderKey(target, provider string, rest []string) error {
 type secretsFileTarget struct {
 	path     string
 	mergeDir string
+	// configRoot is true when path comes from the directory-mode config-root
+	// branch (source 5), which is a single file unless the config root itself
+	// is the default merge directory.
+	configRoot bool
 }
 
 // nominalSecretsFileTarget returns the preferred single-file secrets target for
@@ -148,7 +164,7 @@ func nominalSecretsFileTarget(paths configPaths) secretsFileTarget {
 		return secretsFileTarget{path: filepath.Join(dir, "secrets.json"), mergeDir: dir}
 	}
 	if paths.file == "" {
-		return secretsFileTarget{path: filepath.Join(config.CleanAbs(paths.dir), "secrets.json")}
+		return secretsFileTarget{path: filepath.Join(config.CleanAbs(paths.dir), "secrets.json"), configRoot: true}
 	}
 	return secretsFileTarget{path: filepath.Join(config.DefaultSecretsDir, "secrets.json"), mergeDir: config.DefaultSecretsDir}
 }
@@ -176,7 +192,11 @@ func secretTargetPathWith(paths configPaths, defaultDirPopulated func() (bool, e
 	// source-4 default, or a config root that *is* the default merge dir — is
 	// subject to §6.2 last-wins, so a later-sorting sibling may override it.
 	mergeDir := target.mergeDir
-	if mergeDir == "" && sameDir(filepath.Dir(target.path), config.DefaultSecretsDir) {
+	// A source-5 target is a single file, but when the config root *is* the
+	// default merge directory, the loader's source-4 directory merge applies,
+	// so siblings there can still shadow it. An env-named single file is never
+	// promoted: the loader reads it directly regardless of siblings.
+	if mergeDir == "" && target.configRoot && sameDir(filepath.Dir(target.path), config.DefaultSecretsDir) {
 		mergeDir = config.DefaultSecretsDir
 	}
 	if mergeDir != "" {
@@ -285,6 +305,21 @@ func sameDir(a, b string) bool {
 	return filepath.Clean(a) == filepath.Clean(b)
 }
 
+// ensureClientToken sets a generated client_token on doc when it has none.
+// client_token is required (CONTRACT.md §6.2), so a provider-key write to a
+// document without one would make the whole secrets source unloadable.
+func ensureClientToken(doc map[string]any) error {
+	if tok, _ := doc["client_token"].(string); tok != "" {
+		return nil
+	}
+	generated, err := generateClientToken()
+	if err != nil {
+		return fmt.Errorf("generate client token: %w", err)
+	}
+	doc["client_token"] = generated
+	return nil
+}
+
 // generateClientToken returns a fresh random client token.
 func generateClientToken() (string, error) {
 	buf := make([]byte, 32)
@@ -319,6 +354,9 @@ func setSecretValue(path, kind, name, value string) error {
 		}
 		keys[name] = value
 		doc["provider_keys"] = keys
+		if err := ensureClientToken(doc); err != nil {
+			return err
+		}
 	} else {
 		doc["client_token"] = value
 	}

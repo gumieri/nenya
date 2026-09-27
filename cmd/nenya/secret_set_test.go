@@ -53,10 +53,10 @@ func TestSecretSet_ProviderKey(t *testing.T) {
 }
 
 func TestSecretSet_DirectoryModeDefaultsToConfigRoot(t *testing.T) {
-	// The shadow guard reads the real default dir; skip if the host supplies
-	// secrets there, which would (correctly) fail the write closed.
-	if _, err := os.Stat("/run/secrets/nenya"); err == nil {
-		t.Skip("host has /run/secrets/nenya; covered deterministically by TestSecretTargetPath_*")
+	// The shadow guard reads the real default dir; skip only if the host
+	// supplies secrets there, which would (correctly) fail the write closed.
+	if populated, err := defaultSecretsDirPopulated(); err == nil && populated {
+		t.Skip("host has secrets in /run/secrets/nenya; covered deterministically by TestSecretTargetPath_*")
 	}
 	dir := t.TempDir()
 	t.Setenv("NENYA_SECRETS_DIR", "")
@@ -195,11 +195,11 @@ func TestSecretSet_ShortExplicitTokenRejected(t *testing.T) {
 
 	var out, errBuf bytes.Buffer
 	handled, err := handleSecret(&out, &errBuf, []string{"secret", "set", "--client-token", "short"})
-	if !handled || err == nil {
-		t.Fatalf("handled=%v err=%v, want a minimum-length rejection", handled, err)
+	if !handled || !errors.Is(err, errUsage) {
+		t.Fatalf("handled=%v err=%v, want errUsage (exit 2) for a malformed token", handled, err)
 	}
-	if !strings.Contains(err.Error(), "at least") {
-		t.Errorf("error = %v, want a minimum-length message", err)
+	if !strings.Contains(errBuf.String(), "at least") {
+		t.Errorf("stderr = %q, want a minimum-length message", errBuf.String())
 	}
 }
 

@@ -20,6 +20,9 @@ import (
 // verified with `nenya describe`.
 const managedConfigDropIn = "99-nenya.json"
 
+// configSetUsage is the `config set` usage line.
+const configSetUsage = "usage: nenya config set [--config <file> | --config-dir <dir>] <dotted.key> <value>"
+
 // handleConfig implements `nenya config set <dotted.key> <value>`
 // (CONTRACT.md §4.6): the config single writer. It reports whether it handled
 // the invocation.
@@ -27,8 +30,12 @@ func handleConfig(w, errW io.Writer, args []string) (bool, error) {
 	if len(args) == 0 || args[0] != "config" {
 		return false, nil
 	}
+	if len(args) >= 2 && isHelpArg(args[1]) {
+		_, _ = fmt.Fprintln(errW, configSetUsage)
+		return true, flag.ErrHelp
+	}
 	if len(args) < 2 || args[1] != "set" {
-		_, _ = fmt.Fprintln(errW, "usage: nenya config set [--config <file> | --config-dir <dir>] <dotted.key> <value>")
+		_, _ = fmt.Fprintln(errW, configSetUsage)
 		return true, errUsage
 	}
 
@@ -159,14 +166,12 @@ func writeFileAtomic(path string, data []byte, mode os.FileMode) error {
 	if err := os.Rename(tmpName, path); err != nil {
 		return fmt.Errorf("rename %s: %w", path, err)
 	}
-	// fsync the directory so the rename is durable across a crash.
-	dirFile, dirErr := os.Open(dir)
-	if dirErr != nil {
-		return fmt.Errorf("open directory %s: %w", dir, dirErr)
-	}
-	defer func() { _ = dirFile.Close() }()
-	if syncErr := dirFile.Sync(); syncErr != nil {
-		return fmt.Errorf("sync directory %s: %w", dir, syncErr)
+	// Best-effort fsync of the directory so the rename is durable across a
+	// crash. The rename has already committed the value, so a filesystem that
+	// cannot sync a directory (or an open failure) must not fail the write.
+	if dirFile, dirErr := os.Open(dir); dirErr == nil {
+		_ = dirFile.Sync()
+		_ = dirFile.Close()
 	}
 	return nil
 }

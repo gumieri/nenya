@@ -8,7 +8,8 @@ type Diagnostic struct {
 	// informational diagnostics.
 	Level string `json:"level"`
 	// Code is a stable machine identifier (for example "unknown_field",
-	// "config_not_found", "secrets_not_found", "secrets_invalid").
+	// "config_not_found", "config_path_is_directory", "secrets_not_found",
+	// "secrets_invalid").
 	Code string `json:"code"`
 	// Message is a human-readable description.
 	Message string `json:"message"`

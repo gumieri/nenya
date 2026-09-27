@@ -261,11 +261,21 @@ The write target is, in order:
 3. otherwise, in **file mode**, `/run/secrets/nenya/secrets.json`.
 
 `--config-dir`/`--config` select the config root that rule 2 uses (the same
-flags and environment as the server, §3.3). The systemd credential sources have
-higher priority (§6.1), so when `$CREDENTIALS_DIRECTORY/secrets` (or
-`secrets.d/`) is the active source the command **fails closed** rather than
-writing a shadowed file — manage those sources via systemd instead. A generated
-`client_token` is `nk-` followed by 32 random bytes (hex).
+flags and environment as the server, §3.3).
+
+The command **fails closed** (exit `1`) rather than write a file the loader
+would not read, when:
+
+- a systemd credential source is active (§6.1 sources 1–2) — manage it via
+  systemd instead;
+- the target is inside a merge directory and another `*.json` sorts after
+  `secrets.json`, so the §6.2 last-wins merge would override the written keys;
+- a populated `/run/secrets/nenya` (source 4) would shadow a config-root write
+  (source 5).
+
+A generated `client_token` is `nk-` followed by 32 random bytes (hex). A
+`secret set --provider` write to a document that has no `client_token`
+generates one, so the result is always a valid secrets document (§6.2).
 
 ### 4.8 `nenya secret get …` — status: stable
 

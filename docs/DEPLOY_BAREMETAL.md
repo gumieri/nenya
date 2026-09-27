@@ -121,7 +121,11 @@ EOF
 sudo chmod 600 /etc/nenya/secrets.json
 ```
 
-**Alternative:** Use a directory with multiple files (auto-merged):
+**Alternative:** Use a directory with multiple files (auto-merged). A
+`secrets.d` directory is only read when `NENYA_SECRETS_DIR` points at it
+(CONTRACT.md §6.1); the shipped unit wires a single file instead, so add a unit
+drop-in with `Environment=NENYA_SECRETS_DIR=/etc/nenya/secrets.d` (and drop the
+`LoadCredential` line) when using this form:
 
 ```bash
 sudo mkdir -p /etc/nenya/secrets.d

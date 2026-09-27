@@ -424,6 +424,33 @@ func TestResolveSecrets_ConfigRootFileIsDirectorySkipped(t *testing.T) {
 	}
 }
 
+func TestLoadFromDir_ConfigFileIsDirectoryDiagnostic(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, "config.json"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(dir, "config.d"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "config.d", "20-a.json"), []byte("{}"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	_, diags, err := LoadFromDirWithDiagnostics(dir)
+	if err != nil {
+		t.Fatalf("LoadFromDirWithDiagnostics: %v", err)
+	}
+	found := false
+	for _, d := range diags {
+		if d.Code == "config_path_is_directory" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("diags = %+v, want a config_path_is_directory diagnostic", diags)
+	}
+}
+
 func TestLoadFromDir_StatErrorIsNotConfigNotFound(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(dir, "config.d"), 0o755); err != nil {

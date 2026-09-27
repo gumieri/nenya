@@ -31,7 +31,7 @@ type ConfigNotFoundError struct {
 	Detail string
 }
 
-func (e *ConfigNotFoundError) Error() string { return "config not found: " + e.Detail }
+func (e *ConfigNotFoundError) Error() string { return e.Detail }
 
 // Is reports ConfigNotFoundError as ErrConfigNotFound.
 func (e *ConfigNotFoundError) Is(target error) bool { return target == ErrConfigNotFound }
@@ -64,7 +64,7 @@ func LoadWithDiagnostics(path string) (*Config, []Diagnostic, error) {
 		return nil, nil, err
 	}
 	if err := ApplyDefaults(cfg); err != nil {
-		return nil, nil, fmt.Errorf("failed to apply defaults: %v", err)
+		return nil, nil, fmt.Errorf("failed to apply defaults: %w", err)
 	}
 	return cfg, diags, nil
 }
@@ -75,12 +75,12 @@ func LoadWithDiagnostics(path string) (*Config, []Diagnostic, error) {
 func decodeConfigFileWithDiagnostics(path string) (*Config, []Diagnostic, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return nil, nil, fmt.Errorf("failed to read config file %s: %v", path, err)
+		return nil, nil, fmt.Errorf("failed to read config file %s: %w", path, err)
 	}
 	data = StripComments(data)
 	var cfg Config
 	if err := json.Unmarshal(data, &cfg); err != nil {
-		return nil, nil, fmt.Errorf("failed to parse config file %s: %v", path, err)
+		return nil, nil, fmt.Errorf("failed to parse config file %s: %w", path, err)
 	}
 	var diags []Diagnostic
 	if d := unknownFieldDiagnostic(data, path); d != nil {
@@ -197,7 +197,7 @@ func LoadFromDirWithDiagnostics(dir string) (*Config, []Diagnostic, error) {
 	}
 
 	if err := ApplyDefaults(merged); err != nil {
-		return nil, nil, fmt.Errorf("failed to apply defaults: %v", err)
+		return nil, nil, fmt.Errorf("failed to apply defaults: %w", err)
 	}
 	return merged, diags, nil
 }

@@ -71,7 +71,7 @@ When directory mode is selected (`-config-dir`, or the default `/etc/nenya/`), N
  ├── 00-server.json          # server, governance, bouncer, compaction
 ├── 10-providers.json       # provider URL or auth overrides
 ├── 20-agents.json          # agent definitions
-└── secrets.json            # EXCLUDED (loaded via systemd credential)
+└── secrets.json            # ignored by the config merge; secrets load via CONTRACT §6.1 (incl. <config-root>/secrets.json, source 5)
 ```
 
 **Merge rules:**
