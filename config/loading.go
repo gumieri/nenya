@@ -210,7 +210,7 @@ func configDropInFiles(dir string) ([]string, error) {
 		if errors.Is(err, os.ErrNotExist) {
 			return nil, nil
 		}
-		return nil, fmt.Errorf("failed to read config directory %s: %v", dir, err)
+		return nil, fmt.Errorf("failed to read config directory %s: %w", dir, err)
 	}
 
 	var files []string

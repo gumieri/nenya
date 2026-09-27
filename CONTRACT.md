@@ -223,8 +223,12 @@ shipped `deploy/nenya.service` / `deploy/nenya.plist`; a non-default
 
 Sets a config value using Nenya's own precedence, writing to the canonical
 location (§5). `<value>` is parsed as JSON when valid, otherwise as a string.
-Writes are atomic; the command prints the path it modified. This is a **single
-writer**: consumers MUST call it rather than editing config files directly.
+Writes are atomic; the command prints the path it modified. Because the write
+is an atomic rename, a symlinked target is replaced by a regular file rather
+than followed — point the command at the real path when the target is a link
+into a managed store. This is a **single writer**: consumers MUST call it rather
+than editing config files directly, and MUST serialize concurrent invocations
+against the same target.
 
 The write target is: the selected single file in file mode (`-config` /
 `NENYA_CONFIG_FILE`), otherwise the managed drop-in
@@ -249,7 +253,9 @@ The secrets single writer.
 | `nenya secret set --provider <name> <api-key>` | Sets `provider_keys[name]` |
 | `nenya secret set --client-token [<token>]` | Sets (or generates) `client_token` |
 
-Files are created with mode `0600`; existing unrelated keys are preserved.
+Files are created with mode `0600` (the parent directory is created `0755`);
+existing unrelated keys are preserved. As with `config set`, the atomic rename
+replaces a symlinked target with a regular file rather than following it.
 
 The write target is, in order:
 

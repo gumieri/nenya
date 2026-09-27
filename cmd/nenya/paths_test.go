@@ -70,6 +70,7 @@ func TestHandlePaths_FileMode(t *testing.T) {
 	file := filepath.Join(dir, "custom.json")
 	t.Setenv("NENYA_CONFIG_FILE", file)
 	t.Setenv("NENYA_CONFIG_DIR", "")
+	t.Setenv("NENYA_SECRETS_DIR", "")
 
 	got := runPathsJSON(t)
 

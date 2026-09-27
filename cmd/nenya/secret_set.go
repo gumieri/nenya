@@ -367,7 +367,10 @@ func setSecretValue(path, kind, name, value string) error {
 	}
 	encoded = append(encoded, '\n')
 
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+	// 0755 for the parent: in directory mode the target's parent is the config
+	// root (CONTRACT.md §5.4 conventions), so it must not be narrowed to 0700.
+	// The secrets file itself is 0600, which is the security-relevant mode.
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return fmt.Errorf("create secrets directory: %w", err)
 	}
 	return writeFileAtomic(path, encoded, 0o600)
