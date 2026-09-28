@@ -164,6 +164,32 @@ func TestVerifyChecksumsRequiresBundle(t *testing.T) {
 	}
 }
 
+// resolveDistDir makes NENYA_DIST_DIR robust to `go test`'s working directory:
+// the test binary runs with its working directory set to this package's
+// directory, so a relative value (e.g. "dist") would otherwise resolve to
+// internal/releasecontract/dist. An absolute value is returned unchanged; a
+// relative one is resolved against the module root (the nearest ancestor of the
+// working directory containing go.mod).
+func resolveDistDir(dir string) string {
+	if dir == "" || filepath.IsAbs(dir) {
+		return dir
+	}
+	wd, err := os.Getwd()
+	if err != nil {
+		return dir
+	}
+	for p := wd; ; {
+		if _, err := os.Stat(filepath.Join(p, "go.mod")); err == nil {
+			return filepath.Join(p, dir)
+		}
+		parent := filepath.Dir(p)
+		if parent == p {
+			return dir
+		}
+		p = parent
+	}
+}
+
 // TestDistArtifacts verifies real release artifacts when NENYA_DIST_DIR points
 // at a goreleaser dist/ directory (release pipeline or a local snapshot). It is
 // skipped when the variable is unset so ordinary unit runs need no artifacts.
@@ -172,6 +198,7 @@ func TestDistArtifacts(t *testing.T) {
 	if dir == "" {
 		t.Skip("set NENYA_DIST_DIR to a goreleaser dist/ directory to verify built artifacts")
 	}
+	dir = resolveDistDir(dir)
 	archives, err := filepath.Glob(filepath.Join(dir, "*.tar.gz"))
 	if err != nil {
 		t.Fatalf("glob archives: %v", err)
@@ -191,6 +218,24 @@ func TestDistArtifacts(t *testing.T) {
 	}
 	if err := VerifyChecksums(dir); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// TestResolveDistDir pins the module-root resolution that keeps a relative
+// NENYA_DIST_DIR correct despite `go test` running in the package directory.
+func TestResolveDistDir(t *testing.T) {
+	if got := resolveDistDir("/tmp/dist"); got != "/tmp/dist" {
+		t.Errorf("absolute = %q, want unchanged", got)
+	}
+	if got := resolveDistDir(""); got != "" {
+		t.Errorf("empty = %q, want empty", got)
+	}
+	root := resolveDistDir(".")
+	if _, err := os.Stat(filepath.Join(root, "go.mod")); err != nil {
+		t.Fatalf("module root %q has no go.mod: %v", root, err)
+	}
+	if got, want := resolveDistDir("dist"), filepath.Join(root, "dist"); got != want {
+		t.Errorf("relative = %q, want %q", got, want)
 	}
 }
 

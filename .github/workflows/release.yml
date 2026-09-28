@@ -85,7 +85,9 @@ jobs:
       - name: Verify release artifact contract
         run: go test ./internal/releasecontract/ -run TestDistArtifacts -count=1 -v
         env:
-          NENYA_DIST_DIR: dist
+          # Absolute: `go test` runs the test binary in the package directory,
+          # so a relative "dist" would not resolve to the repo-root dist/.
+          NENYA_DIST_DIR: ${{ github.workspace }}/dist
 
       - name: Generate SBOM for archives
         uses: anchore/sbom-action@v0
