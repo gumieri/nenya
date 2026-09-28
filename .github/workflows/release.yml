@@ -73,6 +73,14 @@ jobs:
       - name: Install Cosign
         uses: sigstore/cosign-installer@v4.1.2
 
+      - name: Delete any pre-existing release for this tag
+        # Keeps re-runs and re-tagged releases idempotent: goreleaser's scm
+        # publisher fails with "already_exists" when the tag's release still
+        # holds assets. goreleaser recreates it below.
+        run: gh release delete "${{ github.ref_name }}" --repo "${{ github.repository }}" --yes --cleanup-tag=false || true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
       - uses: goreleaser/goreleaser-action@v6
         with:
           distribution: goreleaser
