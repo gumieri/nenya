@@ -412,7 +412,8 @@ func buildInterceptorChain(gw *gateway.NenyaGateway, cfg *config.Config, logger 
 		InjectAPIKey: func(providerName string, headers http.Header) error {
 			return routing.InjectAPIKeyWithGateway(providerName, gw, headers)
 		},
-		Logger: logger,
+		Logger:  logger,
+		Metrics: gw.Metrics,
 	}
 	injection, err := pipeline.NewInjectionInterceptor(cfg.Governance.Injection, cfg.Agents, gw.Metrics, escalationDeps)
 	if err != nil {

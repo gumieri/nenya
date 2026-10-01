@@ -37,6 +37,15 @@ type JudgmentContract struct {
 	// TimeoutSeconds bounds the total adjudication across the engine
 	// chain; <=0 uses each target's own timeout.
 	TimeoutSeconds int
+	// Source overrides the spotlight envelope provenance label for the
+	// adjudicated content. Empty applies the "judgment:<name>" default.
+	// Set it to preserve an established envelope byte-format when an
+	// existing caller migrates onto the primitive.
+	Source string
+	// Caller overrides the engine-chain caller label used in engine
+	// call logs (and any caller-keyed dashboards). Empty applies the
+	// "judgment_<name>" default.
+	Caller string
 }
 
 // WithBudget returns a copy of the contract with budgets applied from
@@ -75,6 +84,13 @@ type Judgment struct {
 	Engine string
 	// OK reports whether a contract-valid verdict was produced.
 	OK bool
+	// Err is the underlying operational error when OK is false
+	// (engine-chain failure or contract-parse failure); nil otherwise.
+	Err error
+	// OutputBytes is the byte length of the engine output received
+	// (0 when the chain failed before producing output). Parse-failure
+	// forensics.
+	OutputBytes int
 }
 
 // JudgeDeps groups the engine-chain dependencies shared by all judges.
@@ -97,10 +113,10 @@ type JudgeDeps struct {
 //
 // The Judge primitive shares its fail-closed parsing, rune-safe
 // truncation, and dependency struct with the escalation path
-// (InjectionEscalator); its Judge-based consumers are the
-// judgment-layer sites (summary fidelity, egress screen, TF-IDF
-// rerank, spotlight tiering) wired by the follow-up phases of the
-// judgment-layer module — it intentionally ships ahead of them.
+// (InjectionEscalator, its first consumer, via contract "injection");
+// further Judge-based consumers are the judgment-layer sites (summary
+// fidelity, egress screen, TF-IDF rerank, spotlight tiering) wired by
+// the follow-up phases of the judgment-layer module.
 type Judge struct {
 	contract JudgmentContract
 	targets  []config.EngineTarget
@@ -182,11 +198,19 @@ func (j *Judge) Adjudicate(ctx context.Context, agentName, content string) Judgm
 	// the last observed provider is also the answering one whenever the
 	// call succeeds.
 	var lastEngine string
+	source := j.contract.Source
+	if source == "" {
+		source = JudgmentSourcePrefix + j.contract.Name
+	}
+	caller := j.contract.Caller
+	if caller == "" {
+		caller = "judgment_" + j.contract.Name
+	}
 	call := EngineChainCall{
-		Caller:    "judgment_" + j.contract.Name,
+		Caller:    caller,
 		AgentName: agentName,
 		System:    j.contract.System,
-		Prompt:    SpotlightDelimiters(excerpt, JudgmentSourcePrefix+j.contract.Name),
+		Prompt:    SpotlightDelimiters(excerpt, source),
 		Observer: func(_, _ int, provider string, _ error, _ time.Duration) {
 			lastEngine = provider
 		},
@@ -198,6 +222,7 @@ func (j *Judge) Adjudicate(ctx context.Context, agentName, content string) Judgm
 	res.Duration = time.Since(start)
 	res.Engine = lastEngine
 	if err == nil {
+		res.OutputBytes = len(output)
 		var verdict string
 		verdict, err = ParseVerdict(output, j.contract.Verdicts)
 		if err == nil {
@@ -205,6 +230,7 @@ func (j *Judge) Adjudicate(ctx context.Context, agentName, content string) Judgm
 			res.OK = true
 		}
 	}
+	res.Err = err
 
 	if !res.OK {
 		j.deps.Logger.Warn("judgment: adjudication failed; caller must apply its deterministic decision",

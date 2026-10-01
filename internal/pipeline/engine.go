@@ -186,8 +186,9 @@ type EngineCallObserver func(attempt, total int, provider string, err error, dur
 // EngineChainCall groups the parameters of an engine-chain invocation
 // (AGENTS.md §11 parameter grouping).
 type EngineChainCall struct {
-	// Caller labels the invocation site in logs (e.g. "window",
-	// "injection_escalation", "judgment_<name>").
+	// Caller labels the invocation site in logs: "judgment_<name>" is
+	// the default form; contracts may pin a legacy label via
+	// JudgmentContract.Caller (e.g. "injection_escalation").
 	Caller string
 	// AgentName is the agent whose request triggered the call.
 	AgentName string

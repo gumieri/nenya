@@ -213,6 +213,26 @@ func TestJudgeAdjudicateOperationalFailure(t *testing.T) {
 	if res.Verdict != "" {
 		t.Errorf("verdict = %q, want empty on failure", res.Verdict)
 	}
+	// Parse-failure forensics: output arrived and failed the contract.
+	if res.Err == nil {
+		t.Error("expected Err set on parse failure")
+	}
+	if res.OutputBytes != len("not json at all") {
+		t.Errorf("OutputBytes = %d, want %d", res.OutputBytes, len("not json at all"))
+	}
+
+	// Engine failure: no output, Err still set, OutputBytes zero.
+	judge = newJudgeStub(t, `{"verdict":"benign"}`, http.StatusServiceUnavailable)
+	res = judge.Adjudicate(context.Background(), "demo-agent", "content")
+	if res.OK {
+		t.Fatal("expected operational failure on engine outage")
+	}
+	if res.Err == nil {
+		t.Error("expected Err set on engine failure")
+	}
+	if res.OutputBytes != 0 {
+		t.Errorf("OutputBytes = %d, want 0 on engine failure", res.OutputBytes)
+	}
 }
 
 func TestJudgeAdjudicateTruncation(t *testing.T) {
