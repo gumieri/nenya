@@ -1234,6 +1234,15 @@ type JudgmentConfig struct {
 	// TimeoutSeconds bounds the total adjudication across the chain; 0
 	// uses each target's own timeout.
 	TimeoutSeconds int `json:"timeout_seconds,omitempty"`
+	// Enabled opts a judgment site in (default false: the site is off
+	// even when the entry is present). Only consumers that read this
+	// flag honor it.
+	Enabled *bool `json:"enabled,omitempty"`
+	// Action selects the fallback behavior for gates with reject
+	// semantics: "log" (default; keep the artifact, record the
+	// verdict) or "strict" (apply the deterministic fallback).
+	// Meaningful only for sites that define a strict path.
+	Action string `json:"action,omitempty"`
 }
 
 // BouncerConfig controls the payload interception (bouncer) mechanism.

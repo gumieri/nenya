@@ -327,7 +327,7 @@ func run(logger *slog.Logger, cfg *config.Config, secrets *config.SecretsConfig,
 		}
 	}
 
-	chain, err := buildInterceptorChain(gw, cfg, logger)
+	chain, fidelityGate, err := buildInterceptorChain(gw, cfg, logger)
 	if err != nil {
 		logger.Error("gateway startup aborted: interceptor chain build failed", "err", err)
 		// Release what the gateway already acquired (engine preload pins,
@@ -340,6 +340,7 @@ func run(logger *slog.Logger, cfg *config.Config, secrets *config.SecretsConfig,
 		return 1
 	}
 	gw.InterceptorChain = chain
+	gw.WindowFidelityGate = fidelityGate
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 
@@ -393,10 +394,12 @@ func registerBouncer(chain *pipeline.InterceptorChain, gw *gateway.NenyaGateway,
 }
 
 // buildInterceptorChain assembles the interceptor chain in priority
-// order. A compile failure in a security interceptor's patterns is
-// fatal: the gateway must not start (or reload) without its full
-// enforcement set.
-func buildInterceptorChain(gw *gateway.NenyaGateway, cfg *config.Config, logger *slog.Logger) (*pipeline.InterceptorChain, error) {
+// order and the window-summary fidelity gate. A compile failure in a
+// security interceptor's patterns is fatal: the gateway must not start
+// (or reload) without its full enforcement set. The fidelity gate may
+// be nil (disabled) without error. The gate is returned, not stored:
+// callers assign it next to the chain.
+func buildInterceptorChain(gw *gateway.NenyaGateway, cfg *config.Config, logger *slog.Logger) (*pipeline.InterceptorChain, *pipeline.Judge, error) {
 	chain := pipeline.NewInterceptorChain(logger)
 
 	if enabled := (cfg.Bouncer.Enabled != nil && *cfg.Bouncer.Enabled); enabled && len(gw.SecretPatterns) > 0 {
@@ -417,7 +420,7 @@ func buildInterceptorChain(gw *gateway.NenyaGateway, cfg *config.Config, logger 
 	}
 	injection, err := pipeline.NewInjectionInterceptor(cfg.Governance.Injection, cfg.Agents, gw.Metrics, escalationDeps)
 	if err != nil {
-		return nil, fmt.Errorf("injection interceptor: %w", err)
+		return nil, nil, fmt.Errorf("injection interceptor: %w", err)
 	}
 	chain.Register(injection)
 
@@ -432,7 +435,38 @@ func buildInterceptorChain(gw *gateway.NenyaGateway, cfg *config.Config, logger 
 	registerBouncer(chain, gw, cfg, logger)
 
 	logger.Info("interceptor chain initialized", "count", len(chain.List()))
-	return chain, nil
+	return chain, buildSummaryFidelityGate(cfg, gw, logger), nil
+}
+
+// buildSummaryFidelityGate constructs the window-summary fidelity
+// gate when governance.judgments.summary_fidelity is enabled with
+// resolved engine targets; otherwise it returns nil (gate disabled).
+// Construction failures degrade to a logged disable — the gate is an
+// optimization guard, not a security surface.
+func buildSummaryFidelityGate(cfg *config.Config, gw *gateway.NenyaGateway, logger *slog.Logger) *pipeline.Judge {
+	jc := cfg.Governance.Judgments["summary_fidelity"]
+	if jc == nil || jc.Enabled == nil || !*jc.Enabled {
+		return nil
+	}
+	if jc.Engine == nil || len(jc.Engine.ResolvedTargets) == 0 {
+		logger.Warn("summary_fidelity gate enabled but engine missing or unresolved; gate disabled")
+		return nil
+	}
+	judge, err := pipeline.NewJudge(
+		pipeline.SummaryFidelityContract(0).WithBudget(jc.MaxBytes, jc.TimeoutSeconds),
+		jc.Engine, pipeline.JudgeDeps{
+			ClientFor: gw.ClientFor,
+			InjectAPIKey: func(providerName string, headers http.Header) error {
+				return routing.InjectAPIKeyWithGateway(providerName, gw, headers)
+			},
+			Logger:  logger,
+			Metrics: gw.Metrics,
+		})
+	if err != nil {
+		logger.Warn("summary_fidelity gate disabled", "err", err)
+		return nil
+	}
+	return judge
 }
 
 func buildServer(p *proxy.Proxy, listenAddr string) *http.Server {
@@ -571,7 +605,7 @@ func reloadConfig(ctx context.Context, p *proxy.Proxy, paths configPaths, logger
 
 	oldGW := p.Gateway()
 	newGW := oldGW.Reload(ctx, *newCfg, newSecrets)
-	newChain, chainErr := buildInterceptorChain(newGW, newCfg, logger)
+	newChain, fidelityGate, chainErr := buildInterceptorChain(newGW, newCfg, logger)
 	if chainErr != nil {
 		// The old gateway is already closed inside Reload, so this process
 		// cannot serve safely: fail fatally and let the supervisor restart
@@ -585,6 +619,7 @@ func reloadConfig(ctx context.Context, p *proxy.Proxy, paths configPaths, logger
 		os.Exit(1)
 	}
 	newGW.InterceptorChain = newChain
+	newGW.WindowFidelityGate = fidelityGate
 	p.StoreGateway(newGW)
 
 	logger.Info("configuration reloaded successfully")

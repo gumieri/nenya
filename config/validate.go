@@ -254,25 +254,46 @@ func validateSelfLoopGuard(cfg *Config) []string {
 func validateJudgmentsConfig(cfg *Config) []string {
 	var errs []string
 	for name, judgment := range cfg.Governance.Judgments {
-		if judgment == nil {
-			errs = append(errs, fmt.Sprintf("governance.judgments.%s: entry must not be null", name))
-			continue
-		}
-		if !judgmentNameRe.MatchString(name) {
-			errs = append(errs, fmt.Sprintf("governance.judgments.%s: name must match %s", name, judgmentNameRe.String()))
-		}
-		if judgment.MaxBytes < 0 {
-			errs = append(errs, fmt.Sprintf("governance.judgments.%s.max_bytes must be >= 0", name))
-		}
-		if judgment.TimeoutSeconds < 0 {
-			errs = append(errs, fmt.Sprintf("governance.judgments.%s.timeout_seconds must be >= 0", name))
-		}
-		// An explicitly empty engine object ("engine": {}) would
-		// otherwise skip inheritance and resolution silently and fail
-		// only at first judgment construction — reject it at load.
-		if judgment.Engine != nil && judgment.Engine.AgentName == "" && judgment.Engine.Provider == "" {
-			errs = append(errs, fmt.Sprintf("governance.judgments.%s.engine: empty engine reference (omit the key to inherit, or set provider/model or agent)", name))
-		}
+		errs = append(errs, validateJudgmentEntry(name, judgment)...)
+	}
+	return errs
+}
+
+// validateJudgmentEntry checks one advisory judgment entry. Contracts
+// are code-owned, so only the user-visible surface (name, engine
+// presence, budgets) is validated here; engine references resolve
+// during ApplyDefaults.
+func validateJudgmentEntry(name string, judgment *JudgmentConfig) []string {
+	var errs []string
+	if judgment == nil {
+		errs = append(errs, fmt.Sprintf("governance.judgments.%s: entry must not be null", name))
+		return errs
+	}
+	if !judgmentNameRe.MatchString(name) {
+		errs = append(errs, fmt.Sprintf("governance.judgments.%s: name must match %s", name, judgmentNameRe.String()))
+	}
+	if judgment.MaxBytes < 0 {
+		errs = append(errs, fmt.Sprintf("governance.judgments.%s.max_bytes must be >= 0", name))
+	}
+	if judgment.MaxBytes > 0 && judgment.MaxBytes < 64 {
+		errs = append(errs, fmt.Sprintf("governance.judgments.%s.max_bytes must be >= 64 when set (smaller budgets cannot fit the judgment framing)", name))
+	}
+	if judgment.TimeoutSeconds < 0 {
+		errs = append(errs, fmt.Sprintf("governance.judgments.%s.timeout_seconds must be >= 0", name))
+	}
+	switch judgment.Action {
+	case "", "log", "strict":
+	default:
+		errs = append(errs, fmt.Sprintf("governance.judgments.%s.action: invalid value %q, must be empty, \"log\", or \"strict\"", name, judgment.Action))
+	}
+	// An explicitly empty engine object ("engine": {}) would otherwise
+	// skip inheritance and resolution silently and fail only at first
+	// judgment construction — reject it at load. Same for an enabled
+	// site whose engine resolved to nothing.
+	if judgment.Engine != nil && judgment.Engine.AgentName == "" && judgment.Engine.Provider == "" {
+		errs = append(errs, fmt.Sprintf("governance.judgments.%s.engine: empty engine reference (omit the key to inherit, or set provider/model or agent)", name))
+	} else if judgment.Enabled != nil && *judgment.Enabled && judgment.Engine != nil && len(judgment.Engine.ResolvedTargets) == 0 {
+		errs = append(errs, fmt.Sprintf("governance.judgments.%s: enabled but engine missing or unresolved", name))
 	}
 	return errs
 }

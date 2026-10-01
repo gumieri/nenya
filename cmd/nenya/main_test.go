@@ -608,7 +608,7 @@ func TestBuildInterceptorChain_BouncerGatedOnEnabled(t *testing.T) {
 				cfg.Bouncer.Engine.ResolvedTargets = append(cfg.Bouncer.Engine.ResolvedTargets, config.EngineTarget{})
 			}
 
-			chain, err := buildInterceptorChain(newGW(cfg), cfg, logger)
+			chain, _, err := buildInterceptorChain(newGW(cfg), cfg, logger)
 			if err != nil {
 				t.Fatalf("buildInterceptorChain: %v", err)
 			}

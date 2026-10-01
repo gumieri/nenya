@@ -177,6 +177,11 @@ func NewJudge(contract JudgmentContract, engine *config.EngineRef, deps JudgeDep
 // Name returns the contract name.
 func (j *Judge) Name() string { return j.contract.Name }
 
+// MaxBytes returns the contract's excerpt budget, for callers that
+// compose multi-part judgment inputs and must apportion the budget
+// themselves (the Judge caps the total again in Adjudicate).
+func (j *Judge) MaxBytes() int { return j.contract.MaxBytes }
+
 // Adjudicate sends one excerpt to the engine chain and parses the
 // verdict under the contract. Any engine or parse failure returns
 // OK=false: the caller applies its deterministic decision. The content

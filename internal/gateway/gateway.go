@@ -84,7 +84,12 @@ type NenyaGateway struct {
 	ThoughtSigCache    *infra.ThoughtSignatureCache
 	// WindowSummaries caches window-compaction engine summaries so the
 	// compacted head stays stable across turns (NENYA-24).
-	WindowSummaries    *pipeline.SummaryCache
+	WindowSummaries *pipeline.SummaryCache
+	// WindowFidelityGate optionally judges freshly generated window
+	// summaries (governance.judgments.summary_fidelity.enabled); built
+	// at chain-build time, nil disables the gate. Consumed by
+	// buildWindowDeps in the proxy layer.
+	WindowFidelityGate *pipeline.Judge
 	ResponseCache      *infra.ResponseCache
 	Embedder           infra.EmbeddingProvider
 	MCPClients         map[string]*mcp.Client

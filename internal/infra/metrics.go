@@ -44,6 +44,10 @@ type Metrics struct {
 	judgmentsTotal sync.Map
 	// judgmentDur holds advisory judgment call durations by judgment name.
 	judgmentDur sync.Map
+	// summaryGateFallbacks counts summary-fidelity gate fallbacks by
+	// action (log|strict|error: strict = summary replaced by truncation,
+	// log/error = summary kept fail-open).
+	summaryGateFallbacks sync.Map
 	// exfilDetections counts egress-guard URL violations by reason and
 	// configured action.
 	exfilDetections sync.Map
@@ -384,13 +388,27 @@ func (m *Metrics) RecordJudgment(judgment, verdict, engine string, d time.Durati
 	h.Observe(d.Seconds())
 }
 
-// writeJudgments emits the advisory typed-judgment counter and duration
-// families.
+// writeJudgments emits the advisory typed-judgment counter, duration,
+// and summary-gate fallback families.
 func (m *Metrics) writeJudgments(w io.Writer) {
 	m.writeCounterMap(w, "nenya_judgments_total",
 		"Advisory typed-judgment outcomes by judgment, verdict, and engine provider (error = operational failure; the caller applied its deterministic verdict).", &m.judgmentsTotal)
 	m.writeHistogramMap(w, "nenya_judgment_duration_seconds",
 		"Advisory judgment engine-chain call duration in seconds.", &m.judgmentDur)
+	m.writeCounterMap(w, "nenya_summary_gate_fallbacks_total",
+		"Summary-fidelity gate fallbacks by action (strict = summary replaced by truncation; log/error = summary kept fail-open).", &m.summaryGateFallbacks)
+}
+
+// RecordSummaryGateFallback records a summary-fidelity gate outcome
+// that did not accept the summary as-is: strict (replaced by
+// truncation), log (kept with warning), or error (operational
+// failure, kept). Nil-safe.
+func (m *Metrics) RecordSummaryGateFallback(action string) {
+	if m == nil || action == "" {
+		return
+	}
+	e := getOrCreateEntry(&m.summaryGateFallbacks, map[string]string{"action": action})
+	e.value.Add(1)
 }
 
 // writeRedactions emits the Tier-0 redaction counter.

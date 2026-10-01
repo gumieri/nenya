@@ -1168,6 +1168,7 @@ func (p *Proxy) applyContentPipeline(gw *gateway.NenyaGateway, ctx context.Conte
 
 // buildWindowDeps creates a WindowDeps from the gateway state.
 func buildWindowDeps(gw *gateway.NenyaGateway) pipeline.WindowDeps {
+	jc := gw.Config.Governance.Judgments["summary_fidelity"]
 	return pipeline.WindowDeps{
 		Logger:    gw.Logger,
 		ClientFor: gw.ClientFor,
@@ -1175,8 +1176,11 @@ func buildWindowDeps(gw *gateway.NenyaGateway) pipeline.WindowDeps {
 		InjectAPIKey: func(providerName string, headers http.Header) error {
 			return routing.InjectAPIKeyWithGateway(providerName, gw, headers)
 		},
-		CountTokens:  gw.CountTokens,
-		SummaryCache: gw.WindowSummaries,
+		CountTokens:        gw.CountTokens,
+		SummaryCache:       gw.WindowSummaries,
+		FidelityGate:       gw.WindowFidelityGate,
+		FidelityGateStrict: jc != nil && jc.Action == "strict",
+		Metrics:            gw.Metrics,
 	}
 }
 

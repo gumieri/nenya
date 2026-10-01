@@ -24,6 +24,27 @@ func TestValidateJudgmentsConfig(t *testing.T) {
 		}
 	})
 
+	t.Run("valid action accepted", func(t *testing.T) {
+		cfg := &Config{}
+		cfg.Governance.Judgments = map[string]*JudgmentConfig{
+			"probe": {Action: "strict"},
+		}
+		if errs := validateJudgmentsConfig(cfg); len(errs) != 0 {
+			t.Errorf("unexpected errors: %v", errs)
+		}
+	})
+
+	t.Run("invalid action rejected", func(t *testing.T) {
+		cfg := &Config{}
+		cfg.Governance.Judgments = map[string]*JudgmentConfig{
+			"probe": {Action: "nuke"},
+		}
+		errs := validateJudgmentsConfig(cfg)
+		if len(errs) != 1 || !strings.Contains(errs[0], "invalid value") {
+			t.Errorf("errs = %v, want invalid-action error", errs)
+		}
+	})
+
 	t.Run("nil entry rejected", func(t *testing.T) {
 		cfg := &Config{}
 		cfg.Governance.Judgments = map[string]*JudgmentConfig{"probe": nil}
