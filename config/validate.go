@@ -8,6 +8,7 @@ import (
 	"math/rand"
 	"net"
 	"net/http"
+	"net/url"
 	"regexp"
 	"strconv"
 	"strings"
@@ -108,6 +109,7 @@ func collectValidationErrors(ctx context.Context, cfg *Config, providers map[str
 	errors = append(errors, validateInjectionConfig(cfg, logger)...)
 	errors = append(errors, validateSpotlightConfig(cfg)...)
 	errors = append(errors, validateJudgmentsConfig(cfg)...)
+	errors = append(errors, validateSelfLoopGuard(cfg)...)
 	errors = append(errors, validateExfilGuardConfig(cfg)...)
 	errors = append(errors, validateCanaryConfig(cfg)...)
 	errors = append(errors, validateMCPGuardConfig(cfg)...)
@@ -132,6 +134,118 @@ func collectValidationErrors(ctx context.Context, cfg *Config, providers map[str
 // judgmentNameRe constrains judgment names: they flow into metric
 // labels and resolution error labels.
 var judgmentNameRe = regexp.MustCompile(`^[a-z0-9_]+$`)
+
+// selfLoopSurfaces lists every resolved engine target set with its
+// config-surface label for the self-loop guard.
+func selfLoopSurfaces(cfg *Config) []struct {
+	label   string
+	targets []EngineTarget
+} {
+	surfaces := []struct {
+		label   string
+		targets []EngineTarget
+	}{
+		{"bouncer_engine", cfg.Bouncer.Engine.ResolvedTargets},
+		{"window_engine", cfg.Window.Engine.ResolvedTargets},
+	}
+	if cfg.Governance.Injection != nil {
+		if esc := cfg.Governance.Injection.GetEscalation(); esc != nil && esc.Engine != nil {
+			surfaces = append(surfaces, struct {
+				label   string
+				targets []EngineTarget
+			}{"injection_escalation_engine", esc.Engine.ResolvedTargets})
+		}
+	}
+	for name, judgment := range cfg.Governance.Judgments {
+		if judgment == nil || judgment.Engine == nil {
+			continue
+		}
+		surfaces = append(surfaces, struct {
+			label   string
+			targets []EngineTarget
+		}{"judgment_" + name, judgment.Engine.ResolvedTargets})
+	}
+	return surfaces
+}
+
+// splitListenAddr splits a configured listen address into host and
+// port. Returns ok=false for empty or unparseable addresses — the HTTP
+// server will reject those at startup, so the guard stays silent.
+func splitListenAddr(addr string) (host, port string, ok bool) {
+	addr = strings.TrimSpace(addr)
+	if addr == "" {
+		return "", "", false
+	}
+	h, p, err := net.SplitHostPort(addr)
+	if err != nil {
+		return "", "", false
+	}
+	return h, p, true
+}
+
+// listenHostMatchesSelfHost reports whether a target URL host can be
+// the gateway itself given the configured listen host. Wildcard binds
+// ("", "0.0.0.0", "::") match any loopback target host; a concrete
+// listen host matches itself. Documented limitation: with a wildcard
+// bind, non-loopback local interface addresses are not enumerated.
+func listenHostMatchesSelfHost(targetHost, listenHost string) bool {
+	norm := func(h string) string {
+		h = strings.ToLower(strings.TrimSpace(h))
+		switch h {
+		case "localhost", "127.0.0.1", "::1":
+			return "loopback"
+		}
+		return h
+	}
+	t, l := norm(targetHost), norm(listenHost)
+	switch l {
+	case "", "0.0.0.0", "::", "*":
+		return t == "loopback"
+	}
+	return t == l
+}
+
+// isGatewayPath reports whether a URL path hits the gateway's own
+// proxying endpoints (/v1/* or /proxy/*): routing an engine or
+// judgment call through them would make the gateway proxy to itself.
+func isGatewayPath(p string) bool {
+	return p == "/v1" || p == "/proxy" ||
+		strings.HasPrefix(p, "/v1/") || strings.HasPrefix(p, "/proxy/")
+}
+
+// validateSelfLoopGuard rejects engine and judgment targets whose URL
+// points at the gateway's own /v1/* or /proxy/ endpoints on the
+// configured listen address: such a target makes the gateway proxy to
+// itself, deadlocking under load. Same host on a different port,
+// non-gateway paths, and third-party hosts remain allowed. Must run
+// after ApplyDefaults so engine references are resolved.
+func validateSelfLoopGuard(cfg *Config) []string {
+	listenHost, listenPort, ok := splitListenAddr(cfg.Server.ListenAddr)
+	if !ok {
+		return nil
+	}
+	var errs []string
+	for _, surface := range selfLoopSurfaces(cfg) {
+		for _, target := range surface.targets {
+			if target.Provider == nil {
+				continue
+			}
+			u, err := url.Parse(target.Provider.URL)
+			if err != nil || u.Port() != listenPort {
+				continue
+			}
+			if !listenHostMatchesSelfHost(u.Hostname(), listenHost) {
+				continue
+			}
+			if isGatewayPath(u.EscapedPath()) {
+				errs = append(errs, fmt.Sprintf(
+					"%s: engine target for provider %q (%s) points at the gateway's own endpoint — engines and judgment targets must not route through the gateway itself (self-proxying deadlock)",
+					surface.label, target.Provider.Name, target.Provider.URL))
+			}
+		}
+	}
+	return errs
+}
 
 // validateJudgmentsConfig checks the shape and budget fields of every
 // advisory judgment entry. Contracts are code-owned, so only the
