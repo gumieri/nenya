@@ -176,6 +176,30 @@ func extractOpenAIOutput(response map[string]interface{}) (string, error) {
 // targets honor per-provider response-header timeouts.
 type ClientResolver func(providerName string) *http.Client
 
+// EngineCallObserver observes one engine-chain attempt. provider is
+// the target's provider name; err is nil for a successful attempt.
+// Observers run synchronously on the calling goroutine after each
+// attempt completes; a resolver failure (nil client) also emits an
+// event, with a zero duration since no HTTP attempt was made.
+type EngineCallObserver func(attempt, total int, provider string, err error, duration time.Duration)
+
+// EngineChainCall groups the parameters of an engine-chain invocation
+// (AGENTS.md §11 parameter grouping).
+type EngineChainCall struct {
+	// Caller labels the invocation site in logs (e.g. "window",
+	// "injection_escalation", "judgment_<name>").
+	Caller string
+	// AgentName is the agent whose request triggered the call.
+	AgentName string
+	// System is the system prompt for the engine.
+	System string
+	// Prompt is the user prompt for the engine.
+	Prompt string
+	// Observer optionally receives one event per attempt; nil disables
+	// observation.
+	Observer EngineCallObserver
+}
+
 // CallEngineChain tries each engine target in order, returning the first
 // successful summarization. Each target gets its own timeout; failures log a
 // warning and fall through to the next target.
@@ -183,6 +207,20 @@ func CallEngineChain(ctx context.Context, clientFor ClientResolver,
 	targets []config.EngineTarget, logger *slog.Logger,
 	injectAPIKey func(providerName string, headers http.Header) error,
 	caller, agentName, systemPrompt, prompt string) (string, error) {
+	return CallEngineChainObserved(ctx, clientFor, targets, logger, injectAPIKey, EngineChainCall{
+		Caller:    caller,
+		AgentName: agentName,
+		System:    systemPrompt,
+		Prompt:    prompt,
+	})
+}
+
+// CallEngineChainObserved is CallEngineChain with an optional observer
+// receiving one event per attempt (see EngineChainCall.Observer).
+func CallEngineChainObserved(ctx context.Context, clientFor ClientResolver,
+	targets []config.EngineTarget, logger *slog.Logger,
+	injectAPIKey func(providerName string, headers http.Header) error,
+	call EngineChainCall) (string, error) {
 	if len(targets) == 0 {
 		return "", errors.New("engine chain: no targets available")
 	}
@@ -196,28 +234,50 @@ func CallEngineChain(ctx context.Context, clientFor ClientResolver,
 		total := len(targets)
 
 		logger.Info("engine call attempt",
-			"caller", caller,
-			"agent", agentName,
+			"caller", call.Caller,
+			"agent", call.AgentName,
 			"provider", target.Provider.Name,
 			"model", target.Engine.Model,
 			"attempt", attempt,
 			"total", total)
 
 		client := clientFor(target.Provider.Name)
+		if client == nil {
+			err := fmt.Errorf("engine chain: client resolver returned nil client for provider %q", target.Provider.Name)
+			if call.Observer != nil {
+				call.Observer(attempt, total, target.Provider.Name, err, 0)
+			}
+			lastErr = err
+			logger.Warn("engine call failed",
+				"caller", call.Caller,
+				"agent", call.AgentName,
+				"provider", target.Provider.Name,
+				"model", target.Engine.Model,
+				"attempt", attempt,
+				"total", total,
+				"err", err)
+			continue
+		}
 
 		timeout := target.Engine.TimeoutSeconds
 		if timeout <= 0 {
 			timeout = 60
 		}
 		engineCtx, cancel := context.WithTimeout(ctx, time.Duration(timeout)*time.Second)
-		result, err := CallEngine(engineCtx, client, target.Provider, target.Engine, injectAPIKey, systemPrompt, prompt)
+		start := time.Now()
+		result, err := CallEngine(engineCtx, client, target.Provider, target.Engine, injectAPIKey, call.System, call.Prompt)
+		duration := time.Since(start)
 		cancel()
+
+		if call.Observer != nil {
+			call.Observer(attempt, total, target.Provider.Name, err, duration)
+		}
 
 		if err != nil {
 			lastErr = err
 			logger.Warn("engine call failed",
-				"caller", caller,
-				"agent", agentName,
+				"caller", call.Caller,
+				"agent", call.AgentName,
 				"provider", target.Provider.Name,
 				"model", target.Engine.Model,
 				"attempt", attempt,
@@ -227,8 +287,8 @@ func CallEngineChain(ctx context.Context, clientFor ClientResolver,
 		}
 
 		logger.Info("engine call success",
-			"caller", caller,
-			"agent", agentName,
+			"caller", call.Caller,
+			"agent", call.AgentName,
 			"provider", target.Provider.Name,
 			"model", target.Engine.Model,
 			"attempt", attempt,

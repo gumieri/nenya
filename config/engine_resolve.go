@@ -186,6 +186,14 @@ func resolveEngineRefs(cfg *Config) error {
 			return err
 		}
 	}
+	for name, judgment := range cfg.Governance.Judgments {
+		if judgment == nil || judgment.Engine == nil {
+			continue
+		}
+		if err := resolveSingleEngineRef(judgment.Engine, cfg.Agents, providers, "judgment_"+name); err != nil {
+			return err
+		}
+	}
 
 	return nil
 }

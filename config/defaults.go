@@ -52,6 +52,29 @@ func applyResolvedEngineDefaults(targets []EngineTarget) {
 	}
 }
 
+// applyJudgmentDefaults gives judgment entries without an engine the
+// injection-escalation engine when configured, else the bouncer engine.
+// The pointer is shared so one resolution serves every inheriting entry.
+func applyJudgmentDefaults(cfg *Config) {
+	if len(cfg.Governance.Judgments) == 0 {
+		return
+	}
+	var fallback *EngineRef
+	if cfg.Governance.Injection != nil {
+		if esc := cfg.Governance.Injection.GetEscalation(); esc != nil {
+			fallback = esc.Engine
+		}
+	}
+	if fallback == nil {
+		fallback = &cfg.Bouncer.Engine
+	}
+	for _, judgment := range cfg.Governance.Judgments {
+		if judgment != nil && judgment.Engine == nil {
+			judgment.Engine = fallback
+		}
+	}
+}
+
 // ApplyDefaults populates all unset configuration fields with sensible
 // defaults, resolves engine references, and applies built-in providers.
 func ApplyDefaults(cfg *Config) error {
@@ -80,6 +103,7 @@ func ApplyDefaults(cfg *Config) error {
 	}
 	applyBuiltInProviders(cfg)
 	applyWindowDefaults(cfg)
+	applyJudgmentDefaults(cfg)
 	if err := resolveEngineRefs(cfg); err != nil {
 		return err
 	}

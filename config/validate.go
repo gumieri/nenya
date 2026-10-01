@@ -107,6 +107,7 @@ func collectValidationErrors(ctx context.Context, cfg *Config, providers map[str
 	errors = append(errors, validatePatternsToList("governance.blocked_execution_patterns", cfg.Governance.BlockedExecutionPatterns, logger)...)
 	errors = append(errors, validateInjectionConfig(cfg, logger)...)
 	errors = append(errors, validateSpotlightConfig(cfg)...)
+	errors = append(errors, validateJudgmentsConfig(cfg)...)
 	errors = append(errors, validateExfilGuardConfig(cfg)...)
 	errors = append(errors, validateCanaryConfig(cfg)...)
 	errors = append(errors, validateMCPGuardConfig(cfg)...)
@@ -126,6 +127,40 @@ func collectValidationErrors(ctx context.Context, cfg *Config, providers map[str
 	}
 
 	return errors
+}
+
+// judgmentNameRe constrains judgment names: they flow into metric
+// labels and resolution error labels.
+var judgmentNameRe = regexp.MustCompile(`^[a-z0-9_]+$`)
+
+// validateJudgmentsConfig checks the shape and budget fields of every
+// advisory judgment entry. Contracts are code-owned, so only the
+// user-visible surface (name, engine presence, budgets) is validated
+// here; engine references resolve during ApplyDefaults.
+func validateJudgmentsConfig(cfg *Config) []string {
+	var errs []string
+	for name, judgment := range cfg.Governance.Judgments {
+		if judgment == nil {
+			errs = append(errs, fmt.Sprintf("governance.judgments.%s: entry must not be null", name))
+			continue
+		}
+		if !judgmentNameRe.MatchString(name) {
+			errs = append(errs, fmt.Sprintf("governance.judgments.%s: name must match %s", name, judgmentNameRe.String()))
+		}
+		if judgment.MaxBytes < 0 {
+			errs = append(errs, fmt.Sprintf("governance.judgments.%s.max_bytes must be >= 0", name))
+		}
+		if judgment.TimeoutSeconds < 0 {
+			errs = append(errs, fmt.Sprintf("governance.judgments.%s.timeout_seconds must be >= 0", name))
+		}
+		// An explicitly empty engine object ("engine": {}) would
+		// otherwise skip inheritance and resolution silently and fail
+		// only at first judgment construction — reject it at load.
+		if judgment.Engine != nil && judgment.Engine.AgentName == "" && judgment.Engine.Provider == "" {
+			errs = append(errs, fmt.Sprintf("governance.judgments.%s.engine: empty engine reference (omit the key to inherit, or set provider/model or agent)", name))
+		}
+	}
+	return errs
 }
 
 // validateSpotlightConfig checks the spotlight mode value and rejects

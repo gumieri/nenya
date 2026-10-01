@@ -772,6 +772,13 @@ type GovernanceConfig struct {
 	Spotlight  *SpotlightConfig  `json:"spotlight,omitempty"`
 	ExfilGuard *ExfilGuardConfig `json:"exfil_guard,omitempty"`
 	Canary     *CanaryConfig     `json:"canary,omitempty"`
+	// Judgments configures advisory typed-judgment sites. Contracts
+	// (system prompt, verdict enum) are code-owned; each entry selects
+	// the engine and tunes budgets. Entries without consumers are
+	// inert; an entry without an engine inherits the engine of an
+	// enabled injection escalation when present, else the bouncer
+	// engine.
+	Judgments map[string]*JudgmentConfig `json:"judgments,omitempty"`
 	// MCPGuard validates Nenya-managed tool-call arguments (schema,
 	// size, URL destinations) before dispatch to MCP servers.
 	MCPGuard        *MCPGuardConfig `json:"mcp_guard,omitempty"`
@@ -1210,6 +1217,23 @@ func (e *EngineRef) UnmarshalJSON(data []byte) error {
 type EngineTarget struct {
 	Engine   EngineConfig
 	Provider *Provider
+}
+
+// JudgmentConfig configures one named advisory judgment site: the
+// engine chain that adjudicates and the byte/time budgets. The
+// judgment contract itself (system prompt, verdict enum) is code-owned;
+// configuration never alters contract semantics.
+type JudgmentConfig struct {
+	// Engine references the adjudicating engine chain (agent alias,
+	// provider/model shorthand, or inline object). Empty inherits the
+	// engine of an enabled injection escalation when present, else the
+	// bouncer engine.
+	Engine *EngineRef `json:"engine,omitempty"`
+	// MaxBytes caps the adjudicated excerpt; 0 applies the code default.
+	MaxBytes int `json:"max_bytes,omitempty"`
+	// TimeoutSeconds bounds the total adjudication across the chain; 0
+	// uses each target's own timeout.
+	TimeoutSeconds int `json:"timeout_seconds,omitempty"`
 }
 
 // BouncerConfig controls the payload interception (bouncer) mechanism.

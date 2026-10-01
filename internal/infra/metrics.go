@@ -39,6 +39,11 @@ type Metrics struct {
 	// injectionEscalationDur holds tier-2 classifier call durations by
 	// verdict.
 	injectionEscalationDur sync.Map
+	// judgmentsTotal counts advisory typed-judgment outcomes by judgment
+	// name, verdict, and engine provider.
+	judgmentsTotal sync.Map
+	// judgmentDur holds advisory judgment call durations by judgment name.
+	judgmentDur sync.Map
 	// exfilDetections counts egress-guard URL violations by reason and
 	// configured action.
 	exfilDetections sync.Map
@@ -359,6 +364,33 @@ func (m *Metrics) RecordInjectionEscalation(verdict string, d time.Duration) {
 	e.value.Add(1)
 	h := getOrCreateHist(&m.injectionEscalationDur, map[string]string{"verdict": verdict}, HTTPDurationBuckets)
 	h.Observe(d.Seconds())
+}
+
+// RecordJudgment records an advisory typed-judgment outcome and its
+// call duration. verdict "error" marks an operational failure (the
+// caller fell back to its deterministic decision). Nil-safe.
+func (m *Metrics) RecordJudgment(judgment, verdict, engine string, d time.Duration) {
+	if m == nil || judgment == "" {
+		return
+	}
+	if verdict == "" {
+		verdict = "error"
+	}
+	e := getOrCreateEntry(&m.judgmentsTotal, map[string]string{
+		"judgment": judgment, "verdict": verdict, "engine": engine,
+	})
+	e.value.Add(1)
+	h := getOrCreateHist(&m.judgmentDur, map[string]string{"judgment": judgment}, HTTPDurationBuckets)
+	h.Observe(d.Seconds())
+}
+
+// writeJudgments emits the advisory typed-judgment counter and duration
+// families.
+func (m *Metrics) writeJudgments(w io.Writer) {
+	m.writeCounterMap(w, "nenya_judgments_total",
+		"Advisory typed-judgment outcomes by judgment, verdict, and engine provider (error = operational failure; the caller applied its deterministic verdict).", &m.judgmentsTotal)
+	m.writeHistogramMap(w, "nenya_judgment_duration_seconds",
+		"Advisory judgment engine-chain call duration in seconds.", &m.judgmentDur)
 }
 
 // writeRedactions emits the Tier-0 redaction counter.
@@ -1304,6 +1336,7 @@ func (m *Metrics) WritePrometheus(w io.Writer) {
 	m.writeHandlerPanics(w)
 	m.writeRedactions(w)
 	m.writeInjectionMetrics(w)
+	m.writeJudgments(w)
 	m.writeSpotlighted(w)
 	m.writeExfilDetections(w)
 	m.writeExfilEvents(w)
