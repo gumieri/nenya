@@ -360,7 +360,7 @@ func TestExecuteMCPCalls(t *testing.T) {
 		{ID: "2", Name: "mempalace__test_tool", Arguments: map[string]any{"query": "world"}},
 	}
 
-	results := executeMCPCalls(t.Context(), calls, p.Gateway(), "test-agent", pipeline.CanarResult{})
+	results := executeMCPCalls(t.Context(), calls, p.Gateway(), "test-agent", pipeline.CanarResult{}, nil)
 
 	if len(results) != 2 {
 		t.Fatalf("expected 2 results, got %d", len(results))
@@ -401,7 +401,7 @@ func TestExecuteMCPCalls_UnknownTool(t *testing.T) {
 		{ID: "1", Name: "mempalace__unknown_tool"},
 	}
 
-	results := executeMCPCalls(t.Context(), calls, p.Gateway(), "test-agent", pipeline.CanarResult{})
+	results := executeMCPCalls(t.Context(), calls, p.Gateway(), "test-agent", pipeline.CanarResult{}, nil)
 
 	if len(results) != 1 {
 		t.Fatalf("expected 1 result, got %d", len(results))
@@ -425,7 +425,7 @@ func TestExecuteMCPCalls_ServerUnavailable(t *testing.T) {
 		{ID: "1", Name: "mempalace__search"},
 	}
 
-	results := executeMCPCalls(t.Context(), calls, p.Gateway(), "test-agent", pipeline.CanarResult{})
+	results := executeMCPCalls(t.Context(), calls, p.Gateway(), "test-agent", pipeline.CanarResult{}, nil)
 
 	if len(results) != 1 {
 		t.Fatalf("expected 1 result, got %d", len(results))
@@ -446,7 +446,7 @@ func TestExecuteMCPCalls_EmptyCalls(t *testing.T) {
 		MCPToolIndex: toolIndex,
 	})
 
-	results := executeMCPCalls(t.Context(), nil, p.Gateway(), "test-agent", pipeline.CanarResult{})
+	results := executeMCPCalls(t.Context(), nil, p.Gateway(), "test-agent", pipeline.CanarResult{}, nil)
 	if results != nil {
 		t.Fatalf("expected nil results for empty calls, got %v", results)
 	}
@@ -799,7 +799,7 @@ func TestExecuteMCPCallsCanaryScan(t *testing.T) {
 			},
 		}}
 		results := executeMCPCalls(t.Context(), calls, p.Gateway(), "agent",
-			pipeline.CanarResult{Token: canary, Action: config.CanaryActionBlock})
+			pipeline.CanarResult{Token: canary, Action: config.CanaryActionBlock}, nil)
 		if len(results) != 1 || !results[0].IsError {
 			t.Fatalf("expected refused call, got %+v", results)
 		}
@@ -818,7 +818,7 @@ func TestExecuteMCPCallsCanaryScan(t *testing.T) {
 			},
 		}}
 		results := executeMCPCalls(t.Context(), calls, p.Gateway(), "agent",
-			pipeline.CanarResult{Token: canary, Action: config.CanaryActionLog})
+			pipeline.CanarResult{Token: canary, Action: config.CanaryActionLog}, nil)
 		if len(results) != 1 {
 			t.Fatalf("expected one result, got %d", len(results))
 		}
@@ -835,7 +835,7 @@ func TestExecuteMCPCallsCanaryScan(t *testing.T) {
 			Arguments: map[string]any{"query": "benign"},
 		}}
 		results := executeMCPCalls(t.Context(), calls, p.Gateway(), "agent",
-			pipeline.CanarResult{Token: canary, Action: config.CanaryActionBlock})
+			pipeline.CanarResult{Token: canary, Action: config.CanaryActionBlock}, nil)
 		if len(results) != 1 || results[0] == nil || results[0].IsError {
 			text := ""
 			if len(results) == 1 && results[0] != nil {
@@ -899,7 +899,7 @@ func TestExecuteMCPArgGuard(t *testing.T) {
 			ID:        "call_1",
 			Name:      "mempalace__test_tool",
 			Arguments: map[string]any{"other": "missing required query"},
-		}}, p.Gateway(), "agent", pipeline.CanarResult{})
+		}}, p.Gateway(), "agent", pipeline.CanarResult{}, nil)
 		if len(results) != 1 || !results[0].IsError {
 			t.Fatalf("expected error result, got %+v", results)
 		}
@@ -917,7 +917,7 @@ func TestExecuteMCPArgGuard(t *testing.T) {
 				"query": "fetch",
 				"url":   "http://169.254.169.254/latest/meta-data/",
 			},
-		}}, p.Gateway(), "agent", pipeline.CanarResult{})
+		}}, p.Gateway(), "agent", pipeline.CanarResult{}, nil)
 		if len(results) != 1 || !results[0].IsError {
 			t.Fatalf("expected error result, got %+v", results)
 		}
@@ -935,7 +935,7 @@ func TestExecuteMCPArgGuard(t *testing.T) {
 				"query": "fetch",
 				"url":   "http://169.254.169.254/latest/meta-data/",
 			},
-		}}, p.Gateway(), "agent", pipeline.CanarResult{})
+		}}, p.Gateway(), "agent", pipeline.CanarResult{}, nil)
 		if len(results) != 1 || results[0].IsError {
 			t.Fatalf("allowlisted call must pass, got %+v", results)
 		}
@@ -947,7 +947,7 @@ func TestExecuteMCPArgGuard(t *testing.T) {
 			ID:        "call_4",
 			Name:      "mempalace__test_tool",
 			Arguments: map[string]any{"query": "hello"},
-		}}, p.Gateway(), "agent", pipeline.CanarResult{})
+		}}, p.Gateway(), "agent", pipeline.CanarResult{}, nil)
 		if len(results) != 1 || results[0].IsError {
 			t.Fatalf("valid call must pass, got %+v", results)
 		}
@@ -965,7 +965,7 @@ func TestExecuteMCPArgGuard(t *testing.T) {
 				"query": "fetch",
 				"url":   "http://127.0.0.1:9/admin",
 			},
-		}}, p.Gateway(), "agent", pipeline.CanarResult{})
+		}}, p.Gateway(), "agent", pipeline.CanarResult{}, nil)
 		if len(results) != 1 || results[0].IsError {
 			t.Fatalf("disabled guard must pass through, got %+v", results)
 		}
@@ -1037,7 +1037,7 @@ func TestExecuteMCPArgGuardLogMode(t *testing.T) {
 			"query": "fetch",
 			"url":   "http://169.254.169.254/latest/meta-data/",
 		},
-	}}, p.Gateway(), "agent", pipeline.CanarResult{})
+	}}, p.Gateway(), "agent", pipeline.CanarResult{}, nil)
 	if len(results) != 1 || results[0].IsError {
 		t.Fatalf("log policy must allow the call, got %+v", results)
 	}

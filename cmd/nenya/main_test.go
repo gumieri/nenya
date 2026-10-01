@@ -7,6 +7,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"log/slog"
 	"net"
 	"net/http"
@@ -608,7 +609,7 @@ func TestBuildInterceptorChain_BouncerGatedOnEnabled(t *testing.T) {
 				cfg.Bouncer.Engine.ResolvedTargets = append(cfg.Bouncer.Engine.ResolvedTargets, config.EngineTarget{})
 			}
 
-			chain, _, err := buildInterceptorChain(newGW(cfg), cfg, logger)
+			chain, _, _, err := buildInterceptorChain(newGW(cfg), cfg, logger)
 			if err != nil {
 				t.Fatalf("buildInterceptorChain: %v", err)
 			}
@@ -763,4 +764,46 @@ func TestRegisterBouncerRegistrationMatrix(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestBuildJudgmentGate(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	mkCfg := func(jc *config.JudgmentConfig) *config.Config {
+		cfg := testutil.MinimalConfig()
+		cfg.Governance.Judgments = map[string]*config.JudgmentConfig{
+			pipeline.EgressScreenJudgmentName: jc,
+		}
+		return cfg
+	}
+	gw := &gateway.NenyaGateway{Logger: logger}
+
+	t.Run("disabled returns nil", func(t *testing.T) {
+		cfg := mkCfg(&config.JudgmentConfig{Enabled: config.PtrTo(false)})
+		if got := buildJudgmentGate(cfg, gw, logger, pipeline.EgressScreenJudgmentName, pipeline.EgressScreenContract()); got != nil {
+			t.Fatalf("expected nil gate for disabled entry, got %+v", got)
+		}
+	})
+
+	t.Run("enabled without engine returns nil", func(t *testing.T) {
+		cfg := mkCfg(&config.JudgmentConfig{Enabled: config.PtrTo(true)})
+		if got := buildJudgmentGate(cfg, gw, logger, pipeline.EgressScreenJudgmentName, pipeline.EgressScreenContract()); got != nil {
+			t.Fatalf("expected nil gate without resolved engine, got %+v", got)
+		}
+	})
+
+	t.Run("enabled with resolved engine builds judge", func(t *testing.T) {
+		engine := &config.EngineRef{Provider: "stub", Model: "judge"}
+		engine.ResolvedTargets = []config.EngineTarget{{
+			Provider: &config.Provider{Name: "stub", URL: "http://127.0.0.1:1", ApiFormat: "openai"},
+			Engine:   config.EngineConfig{Provider: "stub", Model: "judge", TimeoutSeconds: 1},
+		}}
+		cfg := mkCfg(&config.JudgmentConfig{Enabled: config.PtrTo(true), Engine: engine})
+		got := buildJudgmentGate(cfg, gw, logger, pipeline.EgressScreenJudgmentName, pipeline.EgressScreenContract())
+		if got == nil {
+			t.Fatal("expected non-nil gate for enabled entry with resolved engine")
+		}
+		if got.Name() != pipeline.EgressScreenJudgmentName {
+			t.Errorf("gate name = %q, want %q", got.Name(), pipeline.EgressScreenJudgmentName)
+		}
+	})
 }

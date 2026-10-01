@@ -319,14 +319,13 @@ const summaryFidelitySystemPrompt = "You are a summary fidelity judge. " +
 	"{\"verdict\":\"insufficient\"} when it drops or distorts them, or {\"verdict\":\"inconclusive\"} when the excerpt is not enough to decide. No other text."
 
 // SummaryFidelityContract returns the summary-fidelity judgment
-// contract with the configured excerpt budget (<=0 applies the
-// judgment default).
-func SummaryFidelityContract(maxBytes int) JudgmentContract {
+// contract with the code-default budget (config applies its budgets
+// via WithBudget).
+func SummaryFidelityContract() JudgmentContract {
 	return JudgmentContract{
 		Name:     "summary_fidelity",
 		System:   summaryFidelitySystemPrompt,
 		Verdicts: []string{"faithful", "insufficient", "inconclusive"},
-		MaxBytes: maxBytes,
 	}
 }
 

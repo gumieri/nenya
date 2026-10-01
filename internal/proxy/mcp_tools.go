@@ -404,9 +404,13 @@ func partitionMCPToolCalls(calls []mcpToolCall, toolIndex *mcp.ToolRegistry) (mc
 // a canary hit means the model reproduced gateway-injected context into
 // an outbound tool call — the signature of injection-driven exfiltration.
 // Block action refuses the call with an error result; log action allows
-// it after recording. Returns a slice of tool results in the same order
+// it after recording. When the egress screen is enabled, tool arguments
+// flagged by a deterministic signal (canary hit, unscannable arguments,
+// or argument-guard violations) get one advisory adjudication per
+// request (shared budget); an exfil verdict under strict action refuses
+// the call. Returns a slice of tool results in the same order
 // as the input calls.
-func executeMCPCalls(ctx context.Context, calls []mcpToolCall, gw *gateway.NenyaGateway, agentName string, canary pipeline.CanarResult) []*mcp.CallToolResult {
+func executeMCPCalls(ctx context.Context, calls []mcpToolCall, gw *gateway.NenyaGateway, agentName string, canary pipeline.CanarResult, screen *egressScreenRuntime) []*mcp.CallToolResult {
 	if len(calls) == 0 {
 		return nil
 	}
@@ -436,22 +440,13 @@ func executeMCPCalls(ctx context.Context, calls []mcpToolCall, gw *gateway.Nenya
 			// BEFORE dispatching the call to the MCP server. Block
 			// action refuses the call (unscannable arguments fail
 			// closed); log action records and allows.
-			tripped, unscannable, refuse := canary.ScanArgs(c.Arguments)
-			if tripped {
-				gw.Metrics.RecordExfilEvent("tool_args")
-				ctxLogger.Warn("canary detected in MCP tool arguments",
-					"tool", c.Name, "channel", "tool_args")
-			}
-			if unscannable {
-				gw.Metrics.RecordExfilEvent("tool_args")
-				ctxLogger.Warn("MCP tool arguments unscannable; skipped by canary scan",
-					"tool", c.Name)
-			}
+			tripped, refuse := scanToolArgsCanary(canary, c.Arguments, gw.Metrics, ctxLogger, c.Name)
 			if refuse {
 				results[idx] = &mcp.CallToolResult{
 					Content: []mcp.ContentBlock{{Type: "text", Text: "[blocked by egress policy: canary detected in tool arguments]"}},
 					IsError: true,
 				}
+				gw.Metrics.RecordMCPToolCall("unknown", c.Name, agentName, time.Since(start), errMCPCanaryBlock)
 				return
 			}
 
@@ -509,6 +504,21 @@ func executeMCPCalls(ctx context.Context, calls []mcpToolCall, gw *gateway.Nenya
 				return
 			}
 
+			// Egress screen on the tool-args channel: advisory second
+			// opinion when a deterministic signal fired (canary hit or
+			// argument-guard flags; unscannable arguments are already
+			// refused or unadjudicable). One judgment per request;
+			// strict action refuses the call.
+			screenTriggered := tripped || len(violations) > 0
+			if screen.screenToolArgs(ctx, gw, agentName, c.Arguments, screenTriggered) {
+				results[idx] = &mcp.CallToolResult{
+					Content: []mcp.ContentBlock{{Type: "text", Text: "[blocked by egress policy: data exfiltration detected in tool arguments]"}},
+					IsError: true,
+				}
+				gw.Metrics.RecordMCPToolCall(route.ServerName, route.MCPToolName, agentName, time.Since(start), errMCPEgressScreen)
+				return
+			}
+
 			result, err := client.CallTool(toolCtx, route.MCPToolName, c.Arguments)
 			duration := time.Since(start)
 			if err != nil {
@@ -541,6 +551,13 @@ func executeMCPCalls(ctx context.Context, calls []mcpToolCall, gw *gateway.Nenya
 // errMCPArgumentPolicy is the sentinel returned when the argument
 // guard rejects a dispatch (any MCP path).
 var errMCPArgumentPolicy = errors.New("argument policy")
+
+// errMCPCanaryBlock marks a tool call refused by the canary tripwire.
+var errMCPCanaryBlock = errors.New("canary block")
+
+// errMCPEgressScreen marks a tool call refused by the advisory egress
+// screen (distinct from the deterministic argument guard).
+var errMCPEgressScreen = errors.New("egress screen")
 
 // mcpGuardDispatch groups the identity and payload of a non-registry
 // MCP dispatch (auto-search, auto-save) for the argument guard.

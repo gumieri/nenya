@@ -42,7 +42,7 @@ func newFidelityHarness(t *testing.T, fidelityBody string, status int, strict bo
 		Engine:   config.EngineConfig{Provider: "fidelity", Model: "judge", TimeoutSeconds: 2},
 	}}
 	metrics := infra.NewMetrics()
-	judge, err := NewJudge(SummaryFidelityContract(0), engine, JudgeDeps{
+	judge, err := NewJudge(SummaryFidelityContract(), engine, JudgeDeps{
 		ClientFor:    func(string) *http.Client { return gate.Client() },
 		InjectAPIKey: func(string, http.Header) error { return nil },
 		Logger:       slog.New(slog.NewTextHandler(io.Discard, nil)),

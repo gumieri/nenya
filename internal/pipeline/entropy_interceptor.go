@@ -51,6 +51,9 @@ func (e *EntropyInterceptor) Process(_ context.Context, req *InterceptRequest) (
 	}
 	if redactions > 0 {
 		e.metrics.RecordRedaction(redactions)
+		// In-place signal for the egress screen (deterministic
+		// trigger): high-entropy spans left this request redacted.
+		req.EntropyRedacted = true
 	}
 	if !modified {
 		return &InterceptResult{Payload: req.Payload, Skip: true}, nil

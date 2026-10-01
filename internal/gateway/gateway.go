@@ -90,6 +90,11 @@ type NenyaGateway struct {
 	// at chain-build time, nil disables the gate. Consumed by
 	// buildWindowDeps in the proxy layer.
 	WindowFidelityGate *pipeline.Judge
+	// EgressScreenJudge optionally adjudicates flagged egress content
+	// (governance.judgments.egress_screen.enabled); built at chain-build
+	// time, nil disables the screen. Consumed by egressScreenFor in the
+	// proxy layer.
+	EgressScreenJudge  *pipeline.Judge
 	ResponseCache      *infra.ResponseCache
 	Embedder           infra.EmbeddingProvider
 	MCPClients         map[string]*mcp.Client

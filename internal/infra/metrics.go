@@ -436,12 +436,13 @@ func (m *Metrics) RecordExfilEvent(channel string) {
 // writeExfilDetections emits the egress-guard violation counter.
 func (m *Metrics) writeExfilDetections(w io.Writer) {
 	m.writeCounterMap(w, "nenya_exfil_detections_total",
-		"Egress-guard URL violations by reason and configured action.", &m.exfilDetections)
+		"Egress violations by reason (deterministic URL-policy reasons or llm_screen) and applied action.", &m.exfilDetections)
 }
 
-// RecordExfilDetection records an egress-guard URL violation with its
-// reason (scheme, ip_literal, private_ip, host_not_allowed,
-// query_length, query_entropy) and the configured action
+// RecordExfilDetection records an egress violation with its reason —
+// the deterministic URL-policy reasons (scheme, ip_literal, private_ip,
+// host_not_allowed, query_length, query_entropy) or llm_screen (the
+// advisory egress screen) — and the applied action
 // (log|strip|block). Nil-safe.
 func (m *Metrics) RecordExfilDetection(reason, action string) {
 	if m == nil || reason == "" {

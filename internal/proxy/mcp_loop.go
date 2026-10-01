@@ -512,7 +512,7 @@ func (p *Proxy) mcpIteration(in mcpIterInput) int {
 			"iteration", in.iteration+1,
 			"agent", in.opts.AgentName)
 
-		results := executeMCPCalls(in.mcpLoopCtx, mcpCalls, in.gw, in.opts.AgentName, in.opts.Canary)
+		results := executeMCPCalls(in.mcpLoopCtx, mcpCalls, in.gw, in.opts.AgentName, in.opts.Canary, in.opts.Screen)
 		mcpAssistantMsg := map[string]any{
 			"role":       "assistant",
 			"content":    nil,
