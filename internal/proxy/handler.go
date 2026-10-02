@@ -552,8 +552,14 @@ type modelEntry struct {
 	SupportsReasoning bool    `json:"supports_reasoning,omitempty"`
 	InputCostPer1M    float64 `json:"input_cost_per_1m,omitempty"`
 	OutputCostPer1M   float64 `json:"output_cost_per_1m,omitempty"`
-	RoutingStrategy   string  `json:"routing_strategy,omitempty"`
-	Description       string  `json:"description,omitempty"`
+	// Peak rates (time-of-day providers) and the discounted cache-read
+	// input rate; omitted when zero (zero = no peak window / no cached
+	// rate; agent pseudo-models expose the chain average).
+	PeakInputCostPer1M   float64 `json:"peak_input_cost_per_1m,omitempty"`
+	PeakOutputCostPer1M  float64 `json:"peak_output_cost_per_1m,omitempty"`
+	CachedInputCostPer1M float64 `json:"cached_input_cost_per_1m,omitempty"`
+	RoutingStrategy      string  `json:"routing_strategy,omitempty"`
+	Description          string  `json:"description,omitempty"`
 }
 
 // buildAgentModelEntry creates a modelEntry for an agent pseudo-model,
@@ -585,6 +591,9 @@ func buildAgentModelEntry(agentName string, agent config.AgentConfig, gw *gatewa
 	if pricing := routing.ResolveAgentPricing(agentName, gw.Config.Agents, gw.ModelCatalog); pricing.HasPricing {
 		entry.InputCostPer1M = pricing.InputCostPer1M
 		entry.OutputCostPer1M = pricing.OutputCostPer1M
+		entry.PeakInputCostPer1M = pricing.PeakInputCostPer1M
+		entry.PeakOutputCostPer1M = pricing.PeakOutputCostPer1M
+		entry.CachedInputCostPer1M = pricing.CachedInputCostPer1M
 	}
 
 	if agent.Strategy != "" {
@@ -614,6 +623,9 @@ func applyModelFields(entry *modelEntry, maxCtx, maxOut int, meta *discovery.Mod
 	if pricing != nil && !pricing.IsZero() {
 		entry.InputCostPer1M = pricing.InputCostPer1M
 		entry.OutputCostPer1M = pricing.OutputCostPer1M
+		entry.PeakInputCostPer1M = pricing.PeakInputCostPer1M
+		entry.PeakOutputCostPer1M = pricing.PeakOutputCostPer1M
+		entry.CachedInputCostPer1M = pricing.CachedInputCostPer1M
 	}
 }
 

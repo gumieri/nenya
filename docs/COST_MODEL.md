@@ -107,11 +107,23 @@ Providers without a window are never peak.
   baseline** so routing does not oscillate with the clock; peak is exposed
   for display only.
 - **The guard is conservative.** `max_cost_per_request` estimates on the
-  **peak** rate (worst case) so it can never under-estimate a request's
-  ceiling; peak-less entries fall back to the standard pair inside
-  `CalculateCost`. (Whether this becomes configurable is decided in Phase 006.)
+  **peak** rate (worst case, `Peak: true` with no clock) so it can never
+  under-estimate a request's ceiling; peak-less entries fall back to the
+  standard pair inside `CalculateCost`. Decision (Phase 006): the guard is
+  **not** configurable.
 - **No pricing ⇒ no cost.** A catalog lookup miss keeps the current
   fast path (no cost recorded).
+
+## Display (`/v1/models`)
+
+`/v1/models` exposes the cost model as optional, user-visible fields:
+`peak_input_cost_per_1m`, `peak_output_cost_per_1m`, and
+`cached_input_cost_per_1m` (omitted when zero — the same "zero = absent" rule
+as the config). Agent pseudo-models expose the **chain average**: every
+dimension averages over the models that declare a standard rate, so peak-less
+priced models contribute 0 to the peak averages. Baseline fields win from
+discovered pricing; static peak/cached dimensions are overlaid where a
+discovered entry lacks them.
 
 ## Supersession
 
