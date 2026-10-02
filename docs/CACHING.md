@@ -25,7 +25,7 @@ Exact-match caching is always enabled when `response_cache.enabled` is true. The
 
 This means identical requests (same model, messages, parameters, and auth token) will hit the cache.
 
-**Note on token-budget trimming:** When the `bouncer` or context window management trims messages via `TrimPayload` (respecting `hard_limit_tokens`), truncated messages produce different SHA-256 hashes. This means cache entries are keyed to the *trimmed* payload — identical full requests may miss the cache if one was trimmed and another was not. Cache key computation occurs *after* all payload transformations (trimming, summarization).
+**Note on token-budget trimming:** When the `bouncer` or context window management trims messages via `TrimPayload` (respecting `hard_limit_tokens`), truncated messages produce different SHA-256 hashes. This means cache entries are keyed to the _trimmed_ payload — identical full requests may miss the cache if one was trimmed and another was not. Cache key computation occurs _after_ all payload transformations (trimming, summarization).
 
 **Error responses:** Structured error responses (those containing `error_kind` fields) are never cached. Only successful HTTP 200 responses with valid completion data are eligible for caching.
 
@@ -40,12 +40,14 @@ Semantic caching provides a second-level fallback when exact-match misses but th
 ### How It Works
 
 1. **Embedding Generation**: When `response_cache.enable_semantic` is true, on a cache miss the gateway:
+
    - Extracts user messages from the request payload
    - Concatenates their content into a single text string
    - Sends this text to the embedding provider (Ollama by default)
    - Stores the embedding vector with the cache entry
 
 2. **Similarity Search**: The in-memory `EmbedIndex` maintains a vector index of all cached entries. On lookup:
+
    - Computes cosine similarity between the query embedding and all cached embeddings
    - Returns the most similar entry if similarity exceeds `response_cache.similarity_threshold`
 
@@ -67,12 +69,12 @@ Semantic caching provides a second-level fallback when exact-match misses but th
 }
 ```
 
-| Field | Default | Description |
-|-------|----------|-------------|
-| `enable_semantic` | `false` | Enable semantic caching (opt-in) |
-| `similarity_threshold` | `0.9` | Minimum cosine similarity (0-1) for semantic match |
-| `embedding_model` | `mxbai-embed-large` | Ollama model for embeddings (1024-dim vectors) |
-| `embedding_url` | `http://localhost:11434` | Ollama endpoint for embeddings |
+| Field                  | Default                  | Description                                        |
+| ---------------------- | ------------------------ | -------------------------------------------------- |
+| `enable_semantic`      | `false`                  | Enable semantic caching (opt-in)                   |
+| `similarity_threshold` | `0.9`                    | Minimum cosine similarity (0-1) for semantic match |
+| `embedding_model`      | `mxbai-embed-large`      | Ollama model for embeddings (1024-dim vectors)     |
+| `embedding_url`        | `http://localhost:11434` | Ollama endpoint for embeddings                     |
 
 ### Embedding Provider
 
@@ -95,6 +97,7 @@ The Ollama embedder:
 **Memory Usage**: Each cached entry stores an additional 1024 × 4 = 4096 bytes for the embedding vector. With default `max_entries=512`, this is ~2 MB additional memory.
 
 **Tuning**: Adjust `similarity_threshold` based on your workload:
+
 - Higher threshold (0.95+) → fewer false positives, lower hit rate
 - Lower threshold (0.85-) → higher hit rate, risk of irrelevant responses
 
@@ -159,6 +162,7 @@ nenya_cache_miss_total{type="semantic", model="gpt-4"} 23
 ```
 
 Monitor these metrics to:
+
 - Determine optimal `similarity_threshold` (balance hit rate vs relevance)
 - Identify which models benefit most from semantic caching
 - Track degradation if embedder fails (semantic misses only)
@@ -183,10 +187,67 @@ nenya_cache_miss_tokens_total{agent="opencode", model="claude-3-5-sonnet", provi
 ```
 
 These token counters are distinct from the `nenya_cache_hit_total` /
-`nenya_cache_miss_total` event counters above: the former count *tokens* for
-upstream prompt caching, while the latter count *response events* for Nenya's
+`nenya_cache_miss_total` event counters above: the former count _tokens_ for
+upstream prompt caching, while the latter count _response events_ for Nenya's
 own response cache. Both streaming and non-streaming requests are accounted,
 including Anthropic's native `cache_creation_input_tokens` field.
+
+### `/statsz` cache hit ratio
+
+`/statsz` also derives `cache_hit_ratio` per model from the same counters:
+`hit / (hit + miss + creation)` over all accounted prompt-cache tokens. It is
+`0` for a model with no prompt-cache traffic. Creation tokens count as non-hits
+because they were written rather than served, so the first request that writes a
+cacheable prefix reports `0` for that request — this is a **served-tokens hit
+rate**, not the conventional read-hit rate that ignores writes.
+
+The ratio reflects only the normalized fields the upstream path populates, so
+its meaning varies by provider:
+
+- **DeepSeek** reports `prompt_cache_hit_tokens` and `prompt_cache_miss_tokens`
+  covering the whole prompt, so `hit / (hit + miss)` is the true hit rate.
+- **Anthropic** (normalized) sets `prompt_cache_hit_tokens` to the cache-read
+  tokens and `prompt_cache_miss_tokens` to the uncached input remainder, with
+  `cache_creation_tokens` for new writes; the three sum to the prompt, so the
+  ratio is the true hit rate.
+- **OpenAI streaming** supplies only `prompt_tokens_details.cached_tokens` as a
+  hit, with no miss or creation count, so the ratio reads `1.0` for any cached
+  traffic rather than a full hit rate.
+- **OpenAI non-streaming** reads the same `prompt_tokens_details.cached_tokens`
+  field (fallback in `internal/proxy/usage.go`), so it behaves like the
+  streaming path: `1.0` for any cached traffic, `0` only when the upstream
+  reports neither hit nor miss. Native `cache_read_input_tokens` is also folded
+  in when present.
+- **Gemini** native cached-content tokens (`cachedContentTokenCount`) are not
+  mapped onto these counters, so a Gemini model's ratio stays `0` regardless of
+  provider-side caching.
+
+Only the normalized `prompt_cache_hit_tokens`, `prompt_cache_miss_tokens`, and
+`cache_creation_tokens` feed the ratio; the native `cache_read_input_tokens`
+duplicate is present in the parsed usage but is not what the tracker consumes.
+The field reports `0` both for "no prompt-cache traffic" and for a genuine 0% hit
+rate — the two are not distinguished. Above roughly 2^53 accumulated tokens the
+value becomes approximate (numerator and denominator round independently), so do
+not use it for billing.
+
+Excerpt of the `/statsz` body (model name illustrative):
+
+```json
+{
+  "models": {
+    "example-model": {
+      "cache_hit_tokens": 3000,
+      "cache_miss_tokens": 9000,
+      "cache_creation_tokens": 0,
+      "cache_hit_ratio": 0.25
+    }
+  }
+}
+```
+
+Use this field as the baseline when changing anything that can disturb
+prompt-prefix stability (context trimming, summarization, TF-IDF pruning,
+message rewrites).
 
 ## Response Headers
 
