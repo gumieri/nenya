@@ -327,7 +327,7 @@ func run(logger *slog.Logger, cfg *config.Config, secrets *config.SecretsConfig,
 		}
 	}
 
-	chain, fidelityGate, egressScreen, err := buildInterceptorChain(gw, cfg, logger)
+	chain, gates, err := buildInterceptorChain(gw, cfg, logger)
 	if err != nil {
 		logger.Error("gateway startup aborted: interceptor chain build failed", "err", err)
 		// Release what the gateway already acquired (engine preload pins,
@@ -340,8 +340,8 @@ func run(logger *slog.Logger, cfg *config.Config, secrets *config.SecretsConfig,
 		return 1
 	}
 	gw.InterceptorChain = chain
-	gw.WindowFidelityGate = fidelityGate
-	gw.EgressScreenJudge = egressScreen
+	gw.WindowFidelityGate = gates.windowFidelity
+	gw.EgressScreenJudge = gates.egressScreen
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 
@@ -394,13 +394,26 @@ func registerBouncer(chain *pipeline.InterceptorChain, gw *gateway.NenyaGateway,
 	}
 }
 
+// judgmentGates bundles the advisory judgment gates built alongside the
+// interceptor chain (AGENTS.md §11 grouping). All fields may be nil —
+// a disabled site is a valid outcome, never an error.
+type judgmentGates struct {
+	windowFidelity *pipeline.Judge
+	egressScreen   *pipeline.Judge
+	tfidfRerank    *pipeline.Judge
+}
+
 // buildInterceptorChain assembles the interceptor chain in priority
 // order plus the advisory judgment gates (window fidelity, egress
-// screen). A compile failure in a security interceptor's patterns is
-// fatal: the gateway must not start (or reload) without its full
-// enforcement set. The gates may be nil (disabled) without error and
-// are returned, not stored: callers assign them next to the chain.
-func buildInterceptorChain(gw *gateway.NenyaGateway, cfg *config.Config, logger *slog.Logger) (*pipeline.InterceptorChain, *pipeline.Judge, *pipeline.Judge, error) {
+// screen, TF-IDF rerank). A compile failure in a security interceptor's
+// patterns is fatal: the gateway must not start (or reload) without its
+// full enforcement set. The gates may be nil (disabled) without error
+// and are returned, not stored: callers assign them next to the chain.
+func buildInterceptorChain(gw *gateway.NenyaGateway, cfg *config.Config, logger *slog.Logger) (*pipeline.InterceptorChain, judgmentGates, error) {
+	gates := judgmentGates{
+		windowFidelity: buildJudgmentGate(cfg, gw, logger, "summary_fidelity", pipeline.SummaryFidelityContract()),
+		egressScreen:   buildJudgmentGate(cfg, gw, logger, pipeline.EgressScreenJudgmentName, pipeline.EgressScreenContract()),
+	}
 	chain := pipeline.NewInterceptorChain(logger)
 
 	if enabled := (cfg.Bouncer.Enabled != nil && *cfg.Bouncer.Enabled); enabled && len(gw.SecretPatterns) > 0 {
@@ -421,7 +434,7 @@ func buildInterceptorChain(gw *gateway.NenyaGateway, cfg *config.Config, logger 
 	}
 	injection, err := pipeline.NewInjectionInterceptor(cfg.Governance.Injection, cfg.Agents, gw.Metrics, escalationDeps)
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("injection interceptor: %w", err)
+		return nil, judgmentGates{}, fmt.Errorf("injection interceptor: %w", err)
 	}
 	chain.Register(injection)
 
@@ -429,17 +442,48 @@ func buildInterceptorChain(gw *gateway.NenyaGateway, cfg *config.Config, logger 
 		chain.Register(spotlight)
 	}
 
+	gates.tfidfRerank = nil
 	if cfg.Context.TFIDFQuerySource != "" {
-		chain.Register(pipeline.NewTFIDFInterceptor(cfg.Context.TFIDFQuerySource, cfg.Context, logger))
+		gates.tfidfRerank = buildTfidfRerankGate(cfg, gw, logger)
+		chain.Register(pipeline.NewTFIDFInterceptor(cfg.Context.TFIDFQuerySource, cfg.Context, logger, cfg.Governance.TfidfRerank, gates.tfidfRerank, gw.Metrics))
 	}
 
 	registerBouncer(chain, gw, cfg, logger)
 
 	logger.Info("interceptor chain initialized", "count", len(chain.List()))
-	return chain,
-		buildJudgmentGate(cfg, gw, logger, "summary_fidelity", pipeline.SummaryFidelityContract()),
-		buildJudgmentGate(cfg, gw, logger, pipeline.EgressScreenJudgmentName, pipeline.EgressScreenContract()),
-		nil
+	return chain, gates, nil
+}
+
+// buildTfidfRerankGate constructs the TF-IDF rerank judge from the
+// governance.tfidf_rerank section (the rerank tunes the deterministic
+// pruning pass, so it is a sibling of the judgments map). Enabled
+// toggles the site; budgets and engine come from the section with the
+// standard engine inheritance applied at load. Any misconfiguration
+// degrades to a logged nil — the rerank only rescues, never drops.
+func buildTfidfRerankGate(cfg *config.Config, gw *gateway.NenyaGateway, logger *slog.Logger) *pipeline.Judge {
+	r := cfg.Governance.TfidfRerank
+	if r == nil || r.Enabled == nil || !*r.Enabled {
+		return nil
+	}
+	if r.Engine == nil || len(r.Engine.ResolvedTargets) == 0 {
+		logger.Warn("tfidf_rerank enabled but engine missing or unresolved; rerank disabled")
+		return nil
+	}
+	judge, err := pipeline.NewJudge(
+		pipeline.TfidfRerankContract().WithBudget(r.MaxBytes, r.TimeoutSeconds),
+		r.Engine, pipeline.JudgeDeps{
+			ClientFor: gw.ClientFor,
+			InjectAPIKey: func(providerName string, headers http.Header) error {
+				return routing.InjectAPIKeyWithGateway(providerName, gw, headers)
+			},
+			Logger:  logger,
+			Metrics: gw.Metrics,
+		})
+	if err != nil {
+		logger.Warn("tfidf_rerank disabled", "err", err)
+		return nil
+	}
+	return judge
 }
 
 // buildJudgmentGate constructs the advisory judgment gate for one named
@@ -609,7 +653,7 @@ func reloadConfig(ctx context.Context, p *proxy.Proxy, paths configPaths, logger
 
 	oldGW := p.Gateway()
 	newGW := oldGW.Reload(ctx, *newCfg, newSecrets)
-	newChain, fidelityGate, egressScreen, chainErr := buildInterceptorChain(newGW, newCfg, logger)
+	newChain, gates, chainErr := buildInterceptorChain(newGW, newCfg, logger)
 	if chainErr != nil {
 		// The old gateway is already closed inside Reload, so this process
 		// cannot serve safely: fail fatally and let the supervisor restart
@@ -623,8 +667,8 @@ func reloadConfig(ctx context.Context, p *proxy.Proxy, paths configPaths, logger
 		os.Exit(1)
 	}
 	newGW.InterceptorChain = newChain
-	newGW.WindowFidelityGate = fidelityGate
-	newGW.EgressScreenJudge = egressScreen
+	newGW.WindowFidelityGate = gates.windowFidelity
+	newGW.EgressScreenJudge = gates.egressScreen
 	p.StoreGateway(newGW)
 
 	logger.Info("configuration reloaded successfully")

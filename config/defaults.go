@@ -59,20 +59,43 @@ func applyJudgmentDefaults(cfg *Config) {
 	if len(cfg.Governance.Judgments) == 0 {
 		return
 	}
-	var fallback *EngineRef
-	if cfg.Governance.Injection != nil {
-		if esc := cfg.Governance.Injection.GetEscalation(); esc != nil {
-			fallback = esc.Engine
-		}
-	}
-	if fallback == nil {
-		fallback = &cfg.Bouncer.Engine
-	}
+	fallback := judgmentEngineFallback(cfg)
 	for _, judgment := range cfg.Governance.Judgments {
 		if judgment != nil && judgment.Engine == nil {
 			judgment.Engine = fallback
 		}
 	}
+}
+
+// applyTfidfRerankDefaults applies the advisory TF-IDF rerank defaults:
+// band, block cap, and engine inheritance (same fallback as the
+// judgments map entries).
+func applyTfidfRerankDefaults(cfg *Config) {
+	r := cfg.Governance.TfidfRerank
+	if r == nil {
+		return
+	}
+	if r.Band <= 0 {
+		r.Band = DefaultTfidfRerankBand
+	}
+	if r.MaxBlocks <= 0 {
+		r.MaxBlocks = DefaultTfidfRerankMaxBlocks
+	}
+	if r.Engine == nil {
+		r.Engine = judgmentEngineFallback(cfg)
+	}
+}
+
+// judgmentEngineFallback returns the shared judgment engine fallback:
+// the enabled injection-escalation engine when present, else the
+// bouncer engine.
+func judgmentEngineFallback(cfg *Config) *EngineRef {
+	if cfg.Governance.Injection != nil {
+		if esc := cfg.Governance.Injection.GetEscalation(); esc != nil && esc.Engine != nil {
+			return esc.Engine
+		}
+	}
+	return &cfg.Bouncer.Engine
 }
 
 // ApplyDefaults populates all unset configuration fields with sensible
@@ -104,6 +127,7 @@ func ApplyDefaults(cfg *Config) error {
 	applyBuiltInProviders(cfg)
 	applyWindowDefaults(cfg)
 	applyJudgmentDefaults(cfg)
+	applyTfidfRerankDefaults(cfg)
 	if err := resolveEngineRefs(cfg); err != nil {
 		return err
 	}

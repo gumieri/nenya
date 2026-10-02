@@ -27,6 +27,9 @@ type Metrics struct {
 
 	redactions  atomic.Uint64
 	compactions atomic.Uint64
+	// tfidfRescues counts content blocks rescued by the advisory TF-IDF
+	// rerank judgment (strengthen-only keeps).
+	tfidfRescues atomic.Uint64
 	// injectionDetections counts deterministic prompt-injection detections
 	// by action (sanitize|reject) and pattern category.
 	injectionDetections sync.Map
@@ -484,6 +487,16 @@ func (m *Metrics) RecordCompaction() {
 	}
 	m.compactions.Add(1)
 }
+
+// RecordTfidfRescues records n content blocks rescued by the advisory
+// TF-IDF rerank judgment. Nil-safe.
+func (m *Metrics) RecordTfidfRescues(n int) {
+	if m == nil || n <= 0 {
+		return
+	}
+	m.tfidfRescues.Add(uint64(n))
+}
+
 func (m *Metrics) RecordPanic() {
 	if m == nil {
 		return
@@ -1311,6 +1324,8 @@ func (m *Metrics) DecInFlight(model, agent, provider string) {
 func (m *Metrics) writePipelineMetrics(w io.Writer) {
 	m.writeCounterAtomic(w, "nenya_pipeline_compaction_applied_total",
 		"Total text compaction passes applied.", m.compactions.Load())
+	m.writeCounterAtomic(w, "nenya_tfidf_rescues_total",
+		"Content blocks rescued into the keep set by the advisory TF-IDF rerank judgment (assembly may still elide near-budget blocks).", m.tfidfRescues.Load())
 	m.writeCounterMap(w, "nenya_pipeline_window_applied_total",
 		"Total window compaction passes applied.", &m.windowApplied)
 	m.writeCounterMap(w, "nenya_pipeline_tokens_saved_total",

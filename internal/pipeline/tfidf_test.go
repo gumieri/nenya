@@ -207,7 +207,7 @@ func TestScoreBlocksEmptyQuery(t *testing.T) {
 
 func TestTFIDFInterceptorCanHandle(t *testing.T) {
 	logger := slog.Default()
-	interceptor := NewTFIDFInterceptor("self", config.ContextConfig{TruncationKeepFirstPct: 40, TruncationKeepLastPct: 40}, logger)
+	interceptor := NewTFIDFInterceptor("self", config.ContextConfig{TruncationKeepFirstPct: 40, TruncationKeepLastPct: 40}, logger, nil, nil, nil)
 
 	tests := []struct {
 		name          string
@@ -436,7 +436,7 @@ func TestSortScoredDesc(t *testing.T) {
 }
 
 func TestTFIDFInterceptorReportsTokenCount(t *testing.T) {
-	interceptor := NewTFIDFInterceptor("self", config.ContextConfig{TruncationKeepFirstPct: 40, TruncationKeepLastPct: 40}, slog.Default())
+	interceptor := NewTFIDFInterceptor("self", config.ContextConfig{TruncationKeepFirstPct: 40, TruncationKeepLastPct: 40}, slog.Default(), nil, nil, nil)
 
 	// ~3.1k runes ≈ 1k tokens by the 3-runes-per-token heuristic.
 	content := strings.Repeat("alpha beta gamma delta epsilon zeta ", 100)

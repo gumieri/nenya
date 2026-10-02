@@ -278,6 +278,16 @@ type InjectionEscalationConfig struct {
 // the tier-2 injection classifier (8KiB).
 const DefaultEscalationMaxBytes = 8 * 1024
 
+// Defaults for the advisory TF-IDF rerank judgment.
+const (
+	// DefaultTfidfRerankBand is the default ambiguous half-width below
+	// the deterministic cutoff score.
+	DefaultTfidfRerankBand = 0.10
+	// DefaultTfidfRerankMaxBlocks is the default cap on borderline
+	// blocks offered per rescue pass.
+	DefaultTfidfRerankMaxBlocks = 8
+)
+
 func (a *AgentConfig) UnmarshalJSON(data []byte) error {
 	type alias AgentConfig
 	aux := struct {
@@ -779,6 +789,10 @@ type GovernanceConfig struct {
 	// enabled injection escalation when present, else the bouncer
 	// engine.
 	Judgments map[string]*JudgmentConfig `json:"judgments,omitempty"`
+	// TfidfRerank configures the advisory TF-IDF rerank judgment (a
+	// sibling of the judgments map because it tunes the deterministic
+	// pruning pass rather than a code-owned site). Disabled by default.
+	TfidfRerank *TfidfRerankConfig `json:"tfidf_rerank,omitempty"`
 	// MCPGuard validates Nenya-managed tool-call arguments (schema,
 	// size, URL destinations) before dispatch to MCP servers.
 	MCPGuard        *MCPGuardConfig `json:"mcp_guard,omitempty"`
@@ -1243,6 +1257,34 @@ type JudgmentConfig struct {
 	// verdict) or "strict" (apply the deterministic fallback).
 	// Meaningful only for sites that define a strict path.
 	Action string `json:"action,omitempty"`
+}
+
+// TfidfRerankConfig configures the advisory TF-IDF rerank judgment
+// (default off): borderline dropped blocks get one rescue judgment per
+// pruning pass. TF-IDF remains tier-1 and authoritative — the judgment
+// can only rescue, never drop more.
+type TfidfRerankConfig struct {
+	// Enabled turns the rerank on.
+	Enabled *bool `json:"enabled,omitempty"`
+	// Band is the ambiguous half-width below the deterministic cutoff
+	// score: dropped middle blocks scoring within [cutoff-band,
+	// cutoff) are borderline and offered to the judgment (0 applies
+	// DefaultTfidfRerankBand).
+	Band float64 `json:"band,omitempty"`
+	// MaxBlocks caps how many borderline blocks are offered per pass
+	// (0 applies DefaultTfidfRerankMaxBlocks).
+	MaxBlocks int `json:"max_blocks,omitempty"`
+	// MaxBytes caps the total borderline excerpt bytes offered (0
+	// applies the judgment default; >=64 when set).
+	MaxBytes int `json:"max_bytes,omitempty"`
+	// TimeoutSeconds bounds the total adjudication across the chain; 0
+	// uses each target's own timeout.
+	TimeoutSeconds int `json:"timeout_seconds,omitempty"`
+	// Engine references the adjudicating engine chain (agent alias,
+	// provider/model shorthand, or inline object). Empty inherits the
+	// engine of an enabled injection escalation when present, else the
+	// bouncer engine.
+	Engine *EngineRef `json:"engine,omitempty"`
 }
 
 // BouncerConfig controls the payload interception (bouncer) mechanism.

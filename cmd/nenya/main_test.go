@@ -609,7 +609,7 @@ func TestBuildInterceptorChain_BouncerGatedOnEnabled(t *testing.T) {
 				cfg.Bouncer.Engine.ResolvedTargets = append(cfg.Bouncer.Engine.ResolvedTargets, config.EngineTarget{})
 			}
 
-			chain, _, _, err := buildInterceptorChain(newGW(cfg), cfg, logger)
+			chain, _, err := buildInterceptorChain(newGW(cfg), cfg, logger)
 			if err != nil {
 				t.Fatalf("buildInterceptorChain: %v", err)
 			}
@@ -806,4 +806,45 @@ func TestBuildJudgmentGate(t *testing.T) {
 			t.Errorf("gate name = %q, want %q", got.Name(), pipeline.EgressScreenJudgmentName)
 		}
 	})
+}
+
+func TestBuildInterceptorChain_TfidfRerankGate(t *testing.T) {
+	// The governance.tfidf_rerank section (not a judgments-map entry)
+	// arms the rerank gate: enabled + inherited engine → non-nil judge.
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	newGW := func(cfg *config.Config) *gateway.NenyaGateway {
+		gw := gateway.New(context.Background(), *cfg, &config.SecretsConfig{ClientToken: "test-token-1234567890"}, logger)
+		gw.SecretPatterns = []*regexp.Regexp{regexp.MustCompile(`AKIA[0-9A-Z]{16}`)}
+		return gw
+	}
+	cfg := testutil.MinimalConfig()
+	cfg.Context.TFIDFQuerySource = "self"
+	cfg.Governance.TfidfRerank = &config.TfidfRerankConfig{Enabled: config.PtrTo(true)}
+	if err := config.ApplyDefaults(cfg); err != nil {
+		t.Fatalf("ApplyDefaults: %v", err)
+	}
+	gw := newGW(cfg)
+	_, gates, err := buildInterceptorChain(gw, cfg, logger)
+	if err != nil {
+		t.Fatalf("buildInterceptorChain: %v", err)
+	}
+	if gates.tfidfRerank == nil {
+		t.Fatal("tfidf_rerank enabled with inherited engine must build a non-nil gate")
+	}
+	if gates.tfidfRerank.Name() != pipeline.TfidfRerankJudgmentName {
+		t.Errorf("gate name = %q", gates.tfidfRerank.Name())
+	}
+
+	// Disabled by default: a config without the section builds nil.
+	plain := testutil.MinimalConfig()
+	if derr := config.ApplyDefaults(plain); derr != nil {
+		t.Fatalf("ApplyDefaults (plain): %v", derr)
+	}
+	_, gates2, chainErr := buildInterceptorChain(newGW(plain), plain, logger)
+	if chainErr != nil {
+		t.Fatalf("buildInterceptorChain (plain): %v", chainErr)
+	}
+	if gates2.tfidfRerank != nil {
+		t.Fatal("tfidf_rerank must be nil when the section is absent")
+	}
 }

@@ -109,6 +109,7 @@ func collectValidationErrors(ctx context.Context, cfg *Config, providers map[str
 	errors = append(errors, validateInjectionConfig(cfg, logger)...)
 	errors = append(errors, validateSpotlightConfig(cfg)...)
 	errors = append(errors, validateJudgmentsConfig(cfg)...)
+	errors = append(errors, validateTfidfRerankConfig(cfg)...)
 	errors = append(errors, validateSelfLoopGuard(cfg)...)
 	errors = append(errors, validateExfilGuardConfig(cfg)...)
 	errors = append(errors, validateCanaryConfig(cfg)...)
@@ -134,6 +135,34 @@ func collectValidationErrors(ctx context.Context, cfg *Config, providers map[str
 // judgmentNameRe constrains judgment names: they flow into metric
 // labels and resolution error labels.
 var judgmentNameRe = regexp.MustCompile(`^[a-z0-9_]+$`)
+
+// validateTfidfRerankConfig checks the advisory TF-IDF rerank surface.
+// Must run after ApplyDefaults so the engine inheritance has applied.
+func validateTfidfRerankConfig(cfg *Config) []string {
+	r := cfg.Governance.TfidfRerank
+	if r == nil {
+		return nil
+	}
+	var errs []string
+	// Band and MaxBlocks are coerced to defaults for <= 0 in
+	// applyTfidfRerankDefaults, so only byte/timeout bounds are checked.
+	if r.MaxBytes < 0 {
+		errs = append(errs, "governance.tfidf_rerank.max_bytes must be >= 0")
+	}
+	if r.MaxBytes > 0 && r.MaxBytes < 64 {
+		errs = append(errs, "governance.tfidf_rerank.max_bytes must be >= 64 when set (smaller budgets cannot fit the judgment framing)")
+	}
+	if r.Engine != nil && r.Engine.AgentName == "" && r.Engine.Provider == "" {
+		errs = append(errs, "governance.tfidf_rerank.engine: empty engine reference (omit the key to inherit, or set provider/model or agent)")
+	}
+	if r.TimeoutSeconds < 0 {
+		errs = append(errs, "governance.tfidf_rerank.timeout_seconds must be >= 0")
+	}
+	if r.Enabled != nil && *r.Enabled && (r.Engine == nil || len(r.Engine.ResolvedTargets) == 0) {
+		errs = append(errs, "governance.tfidf_rerank: enabled but engine missing or unresolved")
+	}
+	return errs
+}
 
 // selfLoopSurfaces lists every resolved engine target set with its
 // config-surface label for the self-loop guard.
@@ -164,6 +193,12 @@ func selfLoopSurfaces(cfg *Config) []struct {
 			label   string
 			targets []EngineTarget
 		}{"judgment_" + name, judgment.Engine.ResolvedTargets})
+	}
+	if cfg.Governance.TfidfRerank != nil && cfg.Governance.TfidfRerank.Engine != nil {
+		surfaces = append(surfaces, struct {
+			label   string
+			targets []EngineTarget
+		}{"tfidf_rerank_engine", cfg.Governance.TfidfRerank.Engine.ResolvedTargets})
 	}
 	return surfaces
 }

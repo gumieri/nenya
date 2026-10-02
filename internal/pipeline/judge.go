@@ -182,27 +182,18 @@ func (j *Judge) Name() string { return j.contract.Name }
 // themselves (the Judge caps the total again in Adjudicate).
 func (j *Judge) MaxBytes() int { return j.contract.MaxBytes }
 
-// Adjudicate sends one excerpt to the engine chain and parses the
-// verdict under the contract. Any engine or parse failure returns
-// OK=false: the caller applies its deterministic decision. The content
-// is enveloped in spotlight delimiters so it cannot impersonate the
-// adjudication request itself.
-func (j *Judge) Adjudicate(ctx context.Context, agentName, content string) Judgment {
+// adjudicateChain runs the engine chain over one enveloped excerpt:
+// shared transport core for Adjudicate and AdjudicateMap. Returns the
+// raw output, the answering engine, the call duration, whether the
+// excerpt was capped, and the chain error.
+func (j *Judge) adjudicateChain(ctx context.Context, agentName, content string) (output, engine string, duration time.Duration, truncated bool, err error) {
 	if j.contract.TimeoutSeconds > 0 {
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeout(ctx, time.Duration(j.contract.TimeoutSeconds)*time.Second)
 		defer cancel()
 	}
 
-	res := Judgment{Contract: j.contract.Name}
 	excerpt, truncated := truncateJudgmentExcerpt(content, j.contract.MaxBytes)
-	res.Truncated = truncated
-
-	// The chain loop is sequential, so plain closure variables are
-	// race-free: the chain returns on the first successful attempt, so
-	// the last observed provider is also the answering one whenever the
-	// call succeeds.
-	var lastEngine string
 	source := j.contract.Source
 	if source == "" {
 		source = JudgmentSourcePrefix + j.contract.Name
@@ -211,6 +202,10 @@ func (j *Judge) Adjudicate(ctx context.Context, agentName, content string) Judgm
 	if caller == "" {
 		caller = "judgment_" + j.contract.Name
 	}
+	// The chain loop is sequential, so the closure variable is
+	// race-free: the last observed provider is the answering one on
+	// success.
+	var lastEngine string
 	call := EngineChainCall{
 		Caller:    caller,
 		AgentName: agentName,
@@ -222,10 +217,20 @@ func (j *Judge) Adjudicate(ctx context.Context, agentName, content string) Judgm
 	}
 
 	start := time.Now()
-	output, err := CallEngineChainObserved(ctx, j.deps.ClientFor, j.targets, j.deps.Logger,
+	output, err = CallEngineChainObserved(ctx, j.deps.ClientFor, j.targets, j.deps.Logger,
 		j.deps.InjectAPIKey, call)
-	res.Duration = time.Since(start)
-	res.Engine = lastEngine
+	return output, lastEngine, time.Since(start), truncated, err
+}
+
+// Adjudicate sends one excerpt to the engine chain and parses the
+// verdict under the contract. Any engine or parse failure returns
+// OK=false: the caller applies its deterministic decision. The content
+// is enveloped in spotlight delimiters so it cannot impersonate the
+// adjudication request itself.
+func (j *Judge) Adjudicate(ctx context.Context, agentName, content string) Judgment {
+	output, engine, duration, truncated, err := j.adjudicateChain(ctx, agentName, content)
+
+	res := Judgment{Contract: j.contract.Name, Truncated: truncated, Duration: duration, Engine: engine}
 	if err == nil {
 		res.OutputBytes = len(output)
 		var verdict string
@@ -240,11 +245,54 @@ func (j *Judge) Adjudicate(ctx context.Context, agentName, content string) Judgm
 	if !res.OK {
 		j.deps.Logger.Warn("judgment: adjudication failed; caller must apply its deterministic decision",
 			"judgment", j.contract.Name, "agent", agentName,
-			"err", err, "duration_ms", res.Duration.Milliseconds())
+			"err", err, "duration_ms", res.Duration.Milliseconds(), "truncated", truncated)
 	}
 	// RecordJudgment normalizes an empty verdict to "error".
 	j.deps.Metrics.RecordJudgment(j.contract.Name, res.Verdict, res.Engine, res.Duration)
 	return res
+}
+
+// AdjudicateMap runs the engine chain over one excerpt and parses a
+// per-key verdict map with a contract-specific fail-closed parser (for
+// contracts whose verdict is a JSON map, e.g. per-block relevance; the
+// parser owns key semantics and returns its own key space). Same
+// envelope, timeout, and failure semantics as Adjudicate: any engine or
+// parse failure returns (nil, judgment-with-OK=false) and the caller
+// applies its deterministic decision. Judgment metrics are recorded
+// here with verdict positive when at least one key is true, "clear"
+// otherwise, and "error" on failure.
+func (j *Judge) AdjudicateMap(ctx context.Context, agentName, content string, parse func(output string) (map[int]bool, error), positive string) (map[int]bool, Judgment) {
+	output, engine, duration, truncated, chainErr := j.adjudicateChain(ctx, agentName, content)
+
+	res := Judgment{Contract: j.contract.Name, Truncated: truncated, Duration: duration, Engine: engine}
+	var verdicts map[int]bool
+	var err error
+	if chainErr == nil {
+		res.OutputBytes = len(output)
+		verdicts, err = parse(output)
+	} else {
+		err = chainErr
+	}
+	res.Err = err
+
+	if err != nil {
+		j.deps.Logger.Warn("judgment: adjudication failed; caller must apply its deterministic decision",
+			"judgment", j.contract.Name, "agent", agentName,
+			"err", err, "duration_ms", duration.Milliseconds(), "truncated", truncated)
+		j.deps.Metrics.RecordJudgment(j.contract.Name, "", engine, duration)
+		return nil, res
+	}
+	verdict := "clear"
+	for _, truthy := range verdicts {
+		if truthy {
+			verdict = positive
+			break
+		}
+	}
+	res.OK = true
+	res.Verdict = verdict
+	j.deps.Metrics.RecordJudgment(j.contract.Name, verdict, engine, duration)
+	return verdicts, res
 }
 
 // ParseVerdict extracts a contract verdict from engine output. Leading

@@ -171,7 +171,45 @@ func scoreBlocks(query string, blocks []Block) []scoredBlock {
 	return result
 }
 
+// TfidfRescueParams carries the advisory rerank hooks for one pruning
+// pass (nil TfidfRescueParams = deterministic pruning only). The
+// rescorer may rescue dropped borderline blocks within the leftover
+// budget; it can never displace deterministically kept blocks.
+type TfidfRescueParams struct {
+	// Band is the ambiguous half-width below the deterministic cutoff
+	// score: dropped blocks scoring within [cutoff-band, cutoff) are
+	// borderline and offered to the rescorer.
+	Band float64
+	// MaxBlocks caps how many borderline blocks are offered per pass.
+	MaxBlocks int
+	// MaxBytes caps the total borderline excerpt bytes offered (runes
+	// treated as ~bytes for this cap).
+	MaxBytes int
+	// Rescorer adjudicates the borderline set and returns the slice
+	// indexes to rescue (fail-open implementations return nil/empty).
+	Rescorer BlockRescorer
+	// Admitted is an output field: selectKeptBlocks reports how many
+	// rescued blocks actually re-entered within the budget (judge
+	// verdicts can be overturned by the budget check).
+	Admitted int
+}
+
+// BlockRescorer adjudicates borderline dropped blocks: it receives the
+// query and the borderline excerpts (band-capped) and returns the
+// indexes within the borderline slice to rescue.
+type BlockRescorer func(query string, borderline []Block) map[int]bool
+
 func TruncateTFIDF(text string, maxSize int, query string, cfg config.ContextConfig) string {
+	return truncateTFIDF(text, maxSize, query, cfg, nil)
+}
+
+// TruncateTFIDFWithRescue is TruncateTFIDF with the advisory rescue
+// hook: borderline dropped blocks may re-enter within leftover budget.
+func TruncateTFIDFWithRescue(text string, maxSize int, query string, cfg config.ContextConfig, rescue *TfidfRescueParams) string {
+	return truncateTFIDF(text, maxSize, query, cfg, rescue)
+}
+
+func truncateTFIDF(text string, maxSize int, query string, cfg config.ContextConfig, rescue *TfidfRescueParams) string {
 	runes := []rune(text)
 	if len(runes) <= maxSize {
 		return text
@@ -213,7 +251,7 @@ func TruncateTFIDF(text string, maxSize int, query string, cfg config.ContextCon
 	}
 	sortScoredDesc(scored)
 
-	keptMiddle := selectKeptBlocks(scored, middleBlockRunes, middleBudget)
+	keptMiddle := selectKeptBlocks(scored, middleBlockRunes, middleBudget, query, rescue)
 
 	result := assembleResult(blocks, blockRunes, pinFirst, middleStart, middleEnd, n, keptMiddle, separator, available, reservedForPinned)
 	if utf8.RuneCountInString(result) > maxSize {
@@ -256,17 +294,99 @@ func calculateBudget(n int, blockRunes []int, cfg config.ContextConfig, availabl
 	return
 }
 
-func selectKeptBlocks(scored []scoredBlock, runes []int, budget int) map[int]bool {
+// selectKeptBlocks greedily keeps highest-scoring blocks within the
+// middle budget, then offers borderline dropped blocks (scoring within
+// band below the kept cutoff) to the advisory rescorer. With the rerank
+// armed, the greedy pass reserves headroom (a quarter of the budget,
+// capped by the excerpt budget) so rescued blocks have room to re-enter
+// within the budget invariant; with the rerank disabled the selection
+// is byte-identical to the historical deterministic pass. Rescued
+// blocks only consume leftover budget, so the keep set can grow but
+// never shrink.
+func selectKeptBlocks(scored []scoredBlock, runes []int, budget int, query string, rescue *TfidfRescueParams) map[int]bool {
 	kept := make(map[int]bool, len(scored))
 	currentRunes := 0
+	// cutoff tracks the lowest kept score (the keep/drop threshold).
+	// sortScoredDesc guarantees non-increasing score order, so the last
+	// keep carries the minimum; the len(kept)==0 early return below
+	// guarantees cutoff is initialized whenever collectBorderline runs.
+	cutoff := 0.0
+	greedyBudget := greedyBudgetFor(budget, rescue)
 	for _, sb := range scored {
-		if currentRunes+runes[sb.index] > budget {
+		if currentRunes+runes[sb.index] > greedyBudget {
 			continue
 		}
 		kept[sb.index] = true
 		currentRunes += runes[sb.index]
+		if cutoff == 0.0 || sb.score < cutoff {
+			cutoff = sb.score
+		}
+	}
+	if rescue == nil || rescue.Rescorer == nil || len(kept) == 0 || len(kept) == len(scored) {
+		return kept
+	}
+	borderline := collectBorderline(scored, runes, kept, cutoff, rescue)
+	if len(borderline) == 0 {
+		return kept
+	}
+
+	blocks := make([]Block, len(borderline))
+	for i, sb := range borderline {
+		blocks[i] = sb.block
+	}
+	rescued := rescue.Rescorer(query, blocks)
+	for i, sb := range borderline {
+		if !rescued[i] || currentRunes+runes[sb.index] > budget {
+			continue
+		}
+		kept[sb.index] = true
+		currentRunes += runes[sb.index]
+		rescue.Admitted++
 	}
 	return kept
+}
+
+// greedyBudgetFor computes the deterministic greedy budget: with the
+// rerank armed, a quarter of the budget (capped by a third of the
+// excerpt byte budget — bytes are ~3 runes, the same heuristic the
+// interceptor uses for token budgets) is reserved as headroom so
+// rescued blocks have room to re-enter; with the rerank disabled the
+// full budget applies.
+func greedyBudgetFor(budget int, rescue *TfidfRescueParams) int {
+	if rescue == nil || rescue.Rescorer == nil {
+		return budget
+	}
+	reserve := budget / 4
+	if capBytes := rescue.MaxBytes / 3; capBytes < reserve {
+		reserve = capBytes
+	}
+	if reserve <= 0 {
+		return budget
+	}
+	return budget - reserve
+}
+
+// collectBorderline gathers dropped blocks scoring within the rescue
+// band below the kept cutoff (cutoff-band <= score < cutoff — the
+// ambiguous band around the keep/drop threshold), in score order,
+// capped by the rescue block/byte limits.
+func collectBorderline(scored []scoredBlock, runes []int, kept map[int]bool, cutoff float64, rescue *TfidfRescueParams) []scoredBlock {
+	var borderline []scoredBlock
+	borderlineRunes := 0
+	for _, sb := range scored {
+		if kept[sb.index] || len(borderline) >= rescue.MaxBlocks {
+			continue
+		}
+		if sb.score >= cutoff || sb.score < cutoff-rescue.Band {
+			continue
+		}
+		if borderlineRunes+runes[sb.index] > rescue.MaxBytes {
+			continue
+		}
+		borderline = append(borderline, sb)
+		borderlineRunes += runes[sb.index]
+	}
+	return borderline
 }
 
 func assembleResult(blocks []Block, blockRunes []int, pinFirst, middleStart, middleEnd, n int, keptMiddle map[int]bool, separator string, available, reservedForPinned int) string {
@@ -313,7 +433,13 @@ func assembleResult(blocks []Block, blockRunes []int, pinFirst, middleStart, mid
 }
 
 func TruncateTFIDFCodeAware(text string, maxSize int, query string, cfg config.ContextConfig) string {
-	result := TruncateTFIDF(text, maxSize, query, cfg)
+	return TruncateTFIDFCodeAwareWithRescue(text, maxSize, query, cfg, nil)
+}
+
+// TruncateTFIDFCodeAwareWithRescue is TruncateTFIDFCodeAware with the
+// advisory rescue hook.
+func TruncateTFIDFCodeAwareWithRescue(text string, maxSize int, query string, cfg config.ContextConfig, rescue *TfidfRescueParams) string {
+	result := truncateTFIDF(text, maxSize, query, cfg, rescue)
 
 	sepMarker := "\n... [NENYA: TF-IDF PRUNED] ...\n"
 	sepIdx := strings.Index(result, sepMarker)

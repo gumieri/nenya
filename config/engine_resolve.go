@@ -194,6 +194,11 @@ func resolveEngineRefs(cfg *Config) error {
 			return err
 		}
 	}
+	if cfg.Governance.TfidfRerank != nil && cfg.Governance.TfidfRerank.Engine != nil {
+		if err := resolveSingleEngineRef(cfg.Governance.TfidfRerank.Engine, cfg.Agents, providers, "tfidf_rerank"); err != nil {
+			return err
+		}
+	}
 
 	return nil
 }
