@@ -75,6 +75,11 @@ type InterceptRequest struct {
 
 	// TokenCount is the current total token count of messages
 	TokenCount int
+
+	// EntropyRedacted is set in place by the entropy interceptor when
+	// it redacted high-entropy spans from this request; consumed by the
+	// egress screen as a deterministic trigger signal.
+	EntropyRedacted bool
 }
 
 // AgentNameFor returns the canonical agent name for an intercepted

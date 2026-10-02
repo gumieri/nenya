@@ -95,7 +95,7 @@ func getProviderURL(providerName string, modelURL string, providers map[string]*
 		return modelURL
 	}
 	if p, ok := providers[providerName]; ok {
-		return p.URL
+		return providerEndpoint(p)
 	}
 	return ""
 }
@@ -129,13 +129,23 @@ func getInlineProviderConfig(ref EngineRef, providers map[string]*Provider) (str
 		return "", 0
 	}
 	if p, ok := providers[ref.Provider]; ok {
-		return p.URL, p.TimeoutSeconds
+		return providerEndpoint(p), p.TimeoutSeconds
 	}
 	return "", 0
 }
 
+// providerEndpoint returns the provider's primary URL, falling back to
+// its System One format URL: a System One-only provider may declare
+// only format_urls.systemone.
+func providerEndpoint(p *Provider) string {
+	if p.URL != "" {
+		return p.URL
+	}
+	return p.FormatURLs[FormatKeySystemOne]
+}
+
 func buildProvider(providerName string, url string, timeout int, providers map[string]*Provider) *Provider {
-	return &Provider{
+	p := &Provider{
 		Name:           providerName,
 		URL:            url,
 		APIKey:         "",
@@ -143,6 +153,28 @@ func buildProvider(providerName string, url string, timeout int, providers map[s
 		AuthStyle:      getProviderAuthStyle(providerName, providers),
 		ApiFormat:      getProviderApiFormat(providerName, providers),
 	}
+	// Carry the per-provider endpoint overrides (engine targets honor
+	// format_urls in the System One transport) and MaxRetryAttempts
+	// (used by the engine call helpers). The remaining retry-policy
+	// fields are proxy-only today and are intentionally not duplicated
+	// onto engine targets.
+	if src, ok := providers[providerName]; ok {
+		p.FormatURLs = cloneURLMap(src.FormatURLs)
+		p.MaxRetryAttempts = src.MaxRetryAttempts
+	}
+	return p
+}
+
+// cloneURLMap returns a copy of a format-URL map (nil-safe).
+func cloneURLMap(in map[string]string) map[string]string {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(in))
+	for k, v := range in {
+		out[k] = v
+	}
+	return out
 }
 
 func getProviderAuthStyle(providerName string, providers map[string]*Provider) string {
@@ -172,6 +204,7 @@ func resolveEngineRefs(cfg *Config) error {
 			MaxRetryAttempts:     pc.MaxRetryAttempts,
 			RetryablePhrases:     pc.RetryablePhrases,
 			RequestScopedErrors:  pc.RequestScopedErrors,
+			FormatURLs:           cloneURLMap(pc.FormatURLs),
 		}
 	}
 
@@ -183,6 +216,31 @@ func resolveEngineRefs(cfg *Config) error {
 	}
 	if esc := cfg.Governance.Injection.GetEscalation(); esc != nil && esc.Engine != nil {
 		if err := resolveSingleEngineRef(esc.Engine, cfg.Agents, providers, "injection_escalation"); err != nil {
+			return err
+		}
+	}
+	for name, judgment := range cfg.Governance.Judgments {
+		if judgment == nil || judgment.Engine == nil {
+			continue
+		}
+		if err := resolveSingleEngineRef(judgment.Engine, cfg.Agents, providers, "judgment_"+name); err != nil {
+			return err
+		}
+	}
+	// Advisory judgment sections (each optional; inheritance has
+	// applied, so inherited refs are shared pointers and idempotent to
+	// re-resolve).
+	for _, gate := range []struct {
+		ref  *EngineRef
+		name string
+	}{
+		{cfg.Governance.TfidfRerankEngine(), "tfidf_rerank"},
+		{cfg.Governance.SpotlightTierEngine(), "spotlight_tier"},
+	} {
+		if gate.ref == nil {
+			continue
+		}
+		if err := resolveSingleEngineRef(gate.ref, cfg.Agents, providers, gate.name); err != nil {
 			return err
 		}
 	}

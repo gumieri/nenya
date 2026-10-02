@@ -19,7 +19,7 @@ import (
 // decision endpoint (TypeSafe Jev). Providers that serve System One models
 // declare it under FormatURLs; when absent, the client-supplied model name is
 // resolved through the catalog to a provider that does.
-const systemOneURLCacheKey = "systemone"
+const systemOneURLCacheKey = config.FormatKeySystemOne
 
 // handleSystemOne proxies System One decision requests (TypeSafe Jev) to the
 // provider's decision endpoint. The body is forwarded verbatim (it is not an

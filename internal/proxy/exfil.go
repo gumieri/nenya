@@ -66,7 +66,11 @@ func inspectCanaryTexts(responseMap map[string]interface{}, canary string) canar
 // surface of a non-streaming response.
 type responseExfilHits struct {
 	blocked bool
-	reason  string
+	// fired reports whether the guard flagged anything, including
+	// log-action violations that pass through untouched (reason set on
+	// a Pass action). Used as an egress-screen trigger.
+	fired  bool
+	reason string
 }
 
 // inspectResponseTexts runs the guard over every text surface of a
@@ -80,12 +84,19 @@ func inspectResponseTexts(guard *stream.ExfilGuard, responseMap map[string]inter
 		switch action {
 		case stream.ActionBlock:
 			hits.blocked = true
+			hits.fired = true
 			if hits.reason == "" {
 				hits.reason = reason
 			}
 		case stream.ActionRedact:
+			hits.fired = true
 			if hits.reason == "" {
 				hits.reason = reason
+			}
+		default:
+			// Log action: the violation reason is reported on a Pass.
+			if reason != "" {
+				hits.fired = true
 			}
 		}
 		return cleaned
@@ -93,6 +104,23 @@ func inspectResponseTexts(guard *stream.ExfilGuard, responseMap map[string]inter
 
 	walkResponseText(responseMap, rewrite)
 	return hits
+}
+
+// collectResponseTexts concatenates the model-produced text surfaces of
+// a response body (post deterministic rewrites) for the egress screen,
+// skipping surfaces once maxBytes have been collected (the walk may
+// overshoot by at most one surface; the Judge caps the excerpt again).
+func collectResponseTexts(responseMap map[string]interface{}, maxBytes int) string {
+	var b strings.Builder
+	walkResponseText(responseMap, func(surface string) string {
+		if b.Len() > maxBytes {
+			return surface
+		}
+		b.WriteString(surface)
+		b.WriteByte('\n')
+		return surface
+	})
+	return b.String()
 }
 
 // walkResponseText visits every model-produced text surface in a

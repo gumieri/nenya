@@ -327,7 +327,7 @@ func run(logger *slog.Logger, cfg *config.Config, secrets *config.SecretsConfig,
 		}
 	}
 
-	chain, err := buildInterceptorChain(gw, cfg, logger)
+	chain, gates, err := buildInterceptorChain(gw, cfg, logger)
 	if err != nil {
 		logger.Error("gateway startup aborted: interceptor chain build failed", "err", err)
 		// Release what the gateway already acquired (engine preload pins,
@@ -340,6 +340,8 @@ func run(logger *slog.Logger, cfg *config.Config, secrets *config.SecretsConfig,
 		return 1
 	}
 	gw.InterceptorChain = chain
+	gw.WindowFidelityGate = gates.windowFidelity
+	gw.EgressScreenJudge = gates.egressScreen
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 
@@ -392,11 +394,26 @@ func registerBouncer(chain *pipeline.InterceptorChain, gw *gateway.NenyaGateway,
 	}
 }
 
+// judgmentGates bundles the advisory judgment gates built alongside the
+// interceptor chain (AGENTS.md §11 grouping). All fields may be nil —
+// a disabled site is a valid outcome, never an error.
+type judgmentGates struct {
+	windowFidelity *pipeline.Judge
+	egressScreen   *pipeline.Judge
+	tfidfRerank    *pipeline.Judge
+}
+
 // buildInterceptorChain assembles the interceptor chain in priority
-// order. A compile failure in a security interceptor's patterns is
-// fatal: the gateway must not start (or reload) without its full
-// enforcement set.
-func buildInterceptorChain(gw *gateway.NenyaGateway, cfg *config.Config, logger *slog.Logger) (*pipeline.InterceptorChain, error) {
+// order plus the advisory judgment gates (window fidelity, egress
+// screen, TF-IDF rerank). A compile failure in a security interceptor's
+// patterns is fatal: the gateway must not start (or reload) without its
+// full enforcement set. The gates may be nil (disabled) without error
+// and are returned, not stored: callers assign them next to the chain.
+func buildInterceptorChain(gw *gateway.NenyaGateway, cfg *config.Config, logger *slog.Logger) (*pipeline.InterceptorChain, judgmentGates, error) {
+	gates := judgmentGates{
+		windowFidelity: buildJudgmentGate(cfg, gw, logger, "summary_fidelity", pipeline.SummaryFidelityContract()),
+		egressScreen:   buildJudgmentGate(cfg, gw, logger, pipeline.EgressScreenJudgmentName, pipeline.EgressScreenContract()),
+	}
 	chain := pipeline.NewInterceptorChain(logger)
 
 	if enabled := (cfg.Bouncer.Enabled != nil && *cfg.Bouncer.Enabled); enabled && len(gw.SecretPatterns) > 0 {
@@ -408,30 +425,131 @@ func buildInterceptorChain(gw *gateway.NenyaGateway, cfg *config.Config, logger 
 	}
 
 	escalationDeps := &pipeline.InjectionEscalationDeps{
-		ClientFor: gw.ClientFor,
-		InjectAPIKey: func(providerName string, headers http.Header) error {
-			return routing.InjectAPIKeyWithGateway(providerName, gw, headers)
-		},
-		Logger: logger,
+		ClientFor:    gw.ClientFor,
+		InjectAPIKey: gatewayAPIKeyInjector(gw),
+		Logger:       logger,
+		Metrics:      gw.Metrics,
 	}
 	injection, err := pipeline.NewInjectionInterceptor(cfg.Governance.Injection, cfg.Agents, gw.Metrics, escalationDeps)
 	if err != nil {
-		return nil, fmt.Errorf("injection interceptor: %w", err)
+		return nil, judgmentGates{}, fmt.Errorf("injection interceptor: %w", err)
 	}
 	chain.Register(injection)
 
-	if spotlight := pipeline.NewSpotlightInterceptor(cfg.Governance.Spotlight, cfg.Agents, gw.Metrics); spotlight.RegistrationRequired() {
+	if spotlight := pipeline.NewSpotlightInterceptor(cfg.Governance.Spotlight, cfg.Agents, gw.Metrics, logger); spotlight.RegistrationRequired() {
+		spotlight.SetTierJudge(buildSpotlightTierGate(cfg, gw, logger))
 		chain.Register(spotlight)
 	}
 
+	gates.tfidfRerank = nil
 	if cfg.Context.TFIDFQuerySource != "" {
-		chain.Register(pipeline.NewTFIDFInterceptor(cfg.Context.TFIDFQuerySource, cfg.Context, logger))
+		gates.tfidfRerank = buildTfidfRerankGate(cfg, gw, logger)
+		chain.Register(pipeline.NewTFIDFInterceptor(cfg.Context.TFIDFQuerySource, cfg.Context, logger, cfg.Governance.TfidfRerank, gates.tfidfRerank, gw.Metrics))
 	}
 
 	registerBouncer(chain, gw, cfg, logger)
 
 	logger.Info("interceptor chain initialized", "count", len(chain.List()))
-	return chain, nil
+	return chain, gates, nil
+}
+
+// gatewayAPIKeyInjector returns the standard per-provider API key
+// injection closure bound to the gateway (shared by every judgment-gate
+// builder; AGENTS.md §11 — extracted at the 4th duplicate).
+func gatewayAPIKeyInjector(gw *gateway.NenyaGateway) func(string, http.Header) error {
+	return func(providerName string, headers http.Header) error {
+		return routing.InjectAPIKeyWithGateway(providerName, gw, headers)
+	}
+}
+
+// buildTfidfRerankGate constructs the TF-IDF rerank judge from the
+// governance.tfidf_rerank section (the rerank tunes the deterministic
+// pruning pass, so it is a sibling of the judgments map). Enabled
+// toggles the site; budgets and engine come from the section with the
+// standard engine inheritance applied at load. Any misconfiguration
+// degrades to a logged nil — the rerank only rescues, never drops.
+func buildTfidfRerankGate(cfg *config.Config, gw *gateway.NenyaGateway, logger *slog.Logger) *pipeline.Judge {
+	r := cfg.Governance.TfidfRerank
+	if r == nil || r.Enabled == nil || !*r.Enabled {
+		return nil
+	}
+	if r.Engine == nil || len(r.Engine.ResolvedTargets) == 0 {
+		logger.Warn("tfidf_rerank enabled but engine missing or unresolved; rerank disabled")
+		return nil
+	}
+	judge, err := pipeline.NewJudge(
+		pipeline.TfidfRerankContract().WithBudget(r.MaxBytes, r.TimeoutSeconds),
+		r.Engine, pipeline.JudgeDeps{
+			ClientFor:    gw.ClientFor,
+			InjectAPIKey: gatewayAPIKeyInjector(gw),
+			Logger:       logger,
+			Metrics:      gw.Metrics,
+		})
+	if err != nil {
+		logger.Warn("tfidf_rerank disabled", "err", err)
+		return nil
+	}
+	return judge
+}
+
+// buildJudgmentGate constructs the advisory judgment gate for one named
+// governance.judgments entry: enabled toggles the site, and the entry's
+// engine (with inheritance applied at load) adjudicates the code-owned
+// contract under the entry's budgets. Any misconfiguration degrades to
+// a logged nil — the gates only strengthen deterministic verdicts.
+func buildJudgmentGate(cfg *config.Config, gw *gateway.NenyaGateway, logger *slog.Logger, name string, contract pipeline.JudgmentContract) *pipeline.Judge {
+	jc := cfg.Governance.Judgments[name]
+	if jc == nil || jc.Enabled == nil || !*jc.Enabled {
+		return nil
+	}
+	if jc.Engine == nil || len(jc.Engine.ResolvedTargets) == 0 {
+		logger.Warn("judgment gate enabled but engine missing or unresolved; gate disabled", "judgment", name)
+		return nil
+	}
+	judge, err := pipeline.NewJudge(
+		contract.WithBudget(jc.MaxBytes, jc.TimeoutSeconds).WithEscalateBelowConfidence(jc.EscalateBelowConfidence),
+		jc.Engine, pipeline.JudgeDeps{
+			ClientFor:    gw.ClientFor,
+			InjectAPIKey: gatewayAPIKeyInjector(gw),
+			Logger:       logger,
+			Metrics:      gw.Metrics,
+		})
+	if err != nil {
+		logger.Warn("judgment gate disabled", "judgment", name, "err", err)
+		return nil
+	}
+	return judge
+}
+
+// buildSpotlightTierGate constructs the spotlight-tier judge from the
+// governance.spotlight.risk_tiers section (the tiering tunes the
+// spotlight surface, so it lives beside it rather than in the judgments
+// map). Enabled toggles the site; budgets and engine come from the
+// section with the standard engine inheritance applied at load. Any
+// misconfiguration degrades to a logged nil — ambiguous bands then fail
+// closed to the high tier deterministically.
+func buildSpotlightTierGate(cfg *config.Config, gw *gateway.NenyaGateway, logger *slog.Logger) *pipeline.Judge {
+	rt := cfg.Governance.SpotlightRiskTiers()
+	if rt == nil || rt.Enabled == nil || !*rt.Enabled {
+		return nil
+	}
+	if rt.Engine == nil || len(rt.Engine.ResolvedTargets) == 0 {
+		logger.Warn("spotlight risk_tiers enabled but engine missing or unresolved; ambiguous bands fail closed to high")
+		return nil
+	}
+	judge, err := pipeline.NewJudge(
+		pipeline.SpotlightTierContract().WithBudget(rt.MaxBytes, rt.TimeoutSeconds).WithEscalateBelowConfidence(rt.EscalateBelowConfidence),
+		rt.Engine, pipeline.JudgeDeps{
+			ClientFor:    gw.ClientFor,
+			InjectAPIKey: gatewayAPIKeyInjector(gw),
+			Logger:       logger,
+			Metrics:      gw.Metrics,
+		})
+	if err != nil {
+		logger.Warn("spotlight risk_tiers judgment disabled", "err", err)
+		return nil
+	}
+	return judge
 }
 
 func buildServer(p *proxy.Proxy, listenAddr string) *http.Server {
@@ -570,7 +688,7 @@ func reloadConfig(ctx context.Context, p *proxy.Proxy, paths configPaths, logger
 
 	oldGW := p.Gateway()
 	newGW := oldGW.Reload(ctx, *newCfg, newSecrets)
-	newChain, chainErr := buildInterceptorChain(newGW, newCfg, logger)
+	newChain, gates, chainErr := buildInterceptorChain(newGW, newCfg, logger)
 	if chainErr != nil {
 		// The old gateway is already closed inside Reload, so this process
 		// cannot serve safely: fail fatally and let the supervisor restart
@@ -584,6 +702,8 @@ func reloadConfig(ctx context.Context, p *proxy.Proxy, paths configPaths, logger
 		os.Exit(1)
 	}
 	newGW.InterceptorChain = newChain
+	newGW.WindowFidelityGate = gates.windowFidelity
+	newGW.EgressScreenJudge = gates.egressScreen
 	p.StoreGateway(newGW)
 
 	logger.Info("configuration reloaded successfully")

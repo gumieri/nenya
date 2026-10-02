@@ -200,6 +200,10 @@ const (
 // tool results before enveloping (512KiB).
 const DefaultMaxToolResultBytes = 512 * 1024
 
+// DefaultSpotlightTierSizeBytes is the default tool-message size above
+// which the risk-tier heuristics treat the content as ambiguous.
+const DefaultSpotlightTierSizeBytes = 32 * 1024
+
 // SpotlightConfig configures untrusted-content spotlighting (Microsoft
 // datamarking/delimiting, arXiv:2403.14720). Enabled surfaces envelope
 // Nenya-managed MCP results, memory context, and tool descriptions;
@@ -217,6 +221,36 @@ type SpotlightConfig struct {
 	// MaxToolResultBytes caps Nenya-managed MCP tool results before
 	// enveloping (0 applies DefaultMaxToolResultBytes).
 	MaxToolResultBytes int `json:"max_tool_result_bytes,omitempty"`
+	// RiskTiers optionally replaces blanket enveloping of history tool
+	// messages with risk-tiered marking (low = delimiters as today,
+	// high = datamarking; ambiguous bands resolved by the advisory
+	// judgment, failing closed to high). Disabled by default = blanket.
+	RiskTiers *SpotlightRiskTiersConfig `json:"risk_tiers,omitempty"`
+}
+
+// SpotlightRiskTiersConfig configures risk-tiered untrusted-content
+// marking for history tool messages (default off = blanket delimiters).
+type SpotlightRiskTiersConfig struct {
+	// Enabled turns tiering on (default false = blanket delimiters).
+	Enabled *bool `json:"enabled,omitempty"`
+	// SizeThresholdBytes marks tool messages larger than this as
+	// ambiguous (0 applies DefaultSpotlightTierSizeBytes).
+	SizeThresholdBytes int `json:"size_threshold_bytes,omitempty"`
+	// MaxBytes caps the excerpt offered to the tier judgment (0
+	// applies the judgment default; >=64 when set).
+	MaxBytes int `json:"max_bytes,omitempty"`
+	// TimeoutSeconds bounds the total adjudication across the chain; 0
+	// uses each target's own timeout.
+	TimeoutSeconds int `json:"timeout_seconds,omitempty"`
+	// Engine references the adjudicating engine chain (agent alias,
+	// provider/model shorthand, or inline object). Empty inherits the
+	// engine of an enabled injection escalation when present, else the
+	// bouncer engine.
+	Engine *EngineRef `json:"engine,omitempty"`
+	// EscalateBelowConfidence (System One targets only; 0 = off):
+	// typed answers with confidence below this cascade the chain to
+	// the next target. Must be in (0, 1] when set.
+	EscalateBelowConfidence float64 `json:"escalate_below_confidence,omitempty"`
 }
 
 // InjectionConfig configures the deterministic prompt-injection detector.
@@ -238,6 +272,34 @@ type InjectionConfig struct {
 	// classifier through the engine chain (advisory second opinion; the
 	// deterministic tier is never weakened by it).
 	Escalation *InjectionEscalationConfig `json:"escalation,omitempty"`
+}
+
+// SpotlightRiskTiers returns the configured risk-tier section, nil when
+// absent (blanket enveloping).
+func (g *GovernanceConfig) SpotlightRiskTiers() *SpotlightRiskTiersConfig {
+	if g == nil || g.Spotlight == nil {
+		return nil
+	}
+	return g.Spotlight.RiskTiers
+}
+
+// TfidfRerankEngine returns the rerank section's engine reference, nil
+// when the section is absent.
+func (g *GovernanceConfig) TfidfRerankEngine() *EngineRef {
+	if g == nil || g.TfidfRerank == nil {
+		return nil
+	}
+	return g.TfidfRerank.Engine
+}
+
+// SpotlightTierEngine returns the risk-tier section's engine reference,
+// nil when the section is absent.
+func (g *GovernanceConfig) SpotlightTierEngine() *EngineRef {
+	rt := g.SpotlightRiskTiers()
+	if rt == nil {
+		return nil
+	}
+	return rt.Engine
 }
 
 // GetEscalation returns the escalation block when it exists and is
@@ -277,6 +339,16 @@ type InjectionEscalationConfig struct {
 // DefaultEscalationMaxBytes is the default per-surface excerpt cap for
 // the tier-2 injection classifier (8KiB).
 const DefaultEscalationMaxBytes = 8 * 1024
+
+// Defaults for the advisory TF-IDF rerank judgment.
+const (
+	// DefaultTfidfRerankBand is the default ambiguous half-width below
+	// the deterministic cutoff score.
+	DefaultTfidfRerankBand = 0.10
+	// DefaultTfidfRerankMaxBlocks is the default cap on borderline
+	// blocks offered per rescue pass.
+	DefaultTfidfRerankMaxBlocks = 8
+)
 
 func (a *AgentConfig) UnmarshalJSON(data []byte) error {
 	type alias AgentConfig
@@ -327,6 +399,11 @@ type RequestScopedErrorRule struct {
 	// error body.
 	MessagePattern string `json:"message_pattern"`
 }
+
+// FormatKeySystemOne is the FormatURLs key selecting a provider's System
+// One decision endpoint (shared by the proxy endpoint and the judgment
+// transport).
+const FormatKeySystemOne = "systemone"
 
 // ProviderConfig defines the wire-level configuration for an upstream LLM
 // provider: the endpoint URL, authentication style, API format, timeouts,
@@ -772,6 +849,17 @@ type GovernanceConfig struct {
 	Spotlight  *SpotlightConfig  `json:"spotlight,omitempty"`
 	ExfilGuard *ExfilGuardConfig `json:"exfil_guard,omitempty"`
 	Canary     *CanaryConfig     `json:"canary,omitempty"`
+	// Judgments configures advisory typed-judgment sites. Contracts
+	// (system prompt, verdict enum) are code-owned; each entry selects
+	// the engine and tunes budgets. Entries without consumers are
+	// inert; an entry without an engine inherits the engine of an
+	// enabled injection escalation when present, else the bouncer
+	// engine.
+	Judgments map[string]*JudgmentConfig `json:"judgments,omitempty"`
+	// TfidfRerank configures the advisory TF-IDF rerank judgment (a
+	// sibling of the judgments map because it tunes the deterministic
+	// pruning pass rather than a code-owned site). Disabled by default.
+	TfidfRerank *TfidfRerankConfig `json:"tfidf_rerank,omitempty"`
 	// MCPGuard validates Nenya-managed tool-call arguments (schema,
 	// size, URL destinations) before dispatch to MCP servers.
 	MCPGuard        *MCPGuardConfig `json:"mcp_guard,omitempty"`
@@ -1210,6 +1298,66 @@ func (e *EngineRef) UnmarshalJSON(data []byte) error {
 type EngineTarget struct {
 	Engine   EngineConfig
 	Provider *Provider
+}
+
+// JudgmentConfig configures one named advisory judgment site: the
+// engine chain that adjudicates and the byte/time budgets. The
+// judgment contract itself (system prompt, verdict enum) is code-owned;
+// configuration never alters contract semantics.
+type JudgmentConfig struct {
+	// Engine references the adjudicating engine chain (agent alias,
+	// provider/model shorthand, or inline object). Empty inherits the
+	// engine of an enabled injection escalation when present, else the
+	// bouncer engine.
+	Engine *EngineRef `json:"engine,omitempty"`
+	// MaxBytes caps the adjudicated excerpt; 0 applies the code default.
+	MaxBytes int `json:"max_bytes,omitempty"`
+	// TimeoutSeconds bounds the total adjudication across the chain; 0
+	// uses each target's own timeout.
+	TimeoutSeconds int `json:"timeout_seconds,omitempty"`
+	// EscalateBelowConfidence (System One targets only; 0 = off):
+	// typed answers with confidence below this cascade the chain to
+	// the next target. Must be in (0, 1] when set.
+	EscalateBelowConfidence float64 `json:"escalate_below_confidence,omitempty"`
+	// Enabled opts a judgment site in (default false: the site is off
+	// even when the entry is present). Only consumers that read this
+	// flag honor it.
+	Enabled *bool `json:"enabled,omitempty"`
+	// Action selects the fallback behavior for gates with reject
+	// semantics: "log" (default; keep the artifact, record the
+	// verdict) or "strict" (apply the deterministic fallback).
+	// Meaningful only for sites that define a strict path.
+	Action string `json:"action,omitempty"`
+}
+
+// TfidfRerankConfig configures the advisory TF-IDF rerank judgment
+// (default off): borderline dropped blocks get one rescue judgment per
+// pruning pass. TF-IDF remains tier-1 and authoritative — the judgment
+// can only rescue, never drop more.
+type TfidfRerankConfig struct {
+	// Enabled turns the rerank on.
+	Enabled *bool `json:"enabled,omitempty"`
+	// Band is the ambiguous half-width below the deterministic cutoff
+	// score: dropped middle blocks scoring within [cutoff-band,
+	// cutoff) are borderline and offered to the judgment (0 applies
+	// DefaultTfidfRerankBand).
+	Band float64 `json:"band,omitempty"`
+	// MaxBlocks caps how many borderline blocks are offered per pass
+	// (0 applies DefaultTfidfRerankMaxBlocks).
+	MaxBlocks int `json:"max_blocks,omitempty"`
+	// MaxBytes caps the total borderline excerpt bytes offered (0
+	// applies the judgment default; >=64 when set).
+	MaxBytes int `json:"max_bytes,omitempty"`
+	// TimeoutSeconds bounds the total adjudication across the chain; 0
+	// uses each target's own timeout.
+	TimeoutSeconds int `json:"timeout_seconds,omitempty"`
+	// Engine references the adjudicating engine chain (agent alias,
+	// provider/model shorthand, or inline object). Empty inherits the
+	// engine of an enabled injection escalation when present, else the
+	// bouncer engine. Map contracts (this one) do not support System
+	// One targets: they are rejected at runtime and the deterministic
+	// pruning stands.
+	Engine *EngineRef `json:"engine,omitempty"`
 }
 
 // BouncerConfig controls the payload interception (bouncer) mechanism.

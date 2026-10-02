@@ -206,6 +206,23 @@ type forwardOptions struct {
 	// Canary carries the per-request tripwire token (empty when the
 	// guard is disabled).
 	Canary pipeline.CanarResult
+	// Screen carries the per-request egress screen runtime (nil when
+	// the judgment site is disabled); its budget is shared across all
+	// checkpoints of the request.
+	Screen *egressScreenRuntime
+	// EntropyRedacted reports whether the entropy interceptor redacted
+	// high-entropy spans from this request. Consumed only by the
+	// buffered-response checkpoint (the tool-args checkpoint triggers
+	// off its own canary/guard signals).
+	EntropyRedacted bool
+}
+
+// bufferedEgressOpts groups the egress-policy inputs of the buffered
+// response checkpoint (AGENTS.md §11 parameter grouping).
+type bufferedEgressOpts struct {
+	Canary          pipeline.CanarResult
+	Screen          *egressScreenRuntime
+	EntropyRedacted bool
 }
 
 // retryLoop encapsulates the state and logic for retrying upstream requests.
@@ -410,7 +427,11 @@ func (rl *retryLoop) handleNonStreamingActionOutcome(i int, target routing.Upstr
 	if action.kind != actionResponse {
 		return actionOutcome{}
 	}
-	result := rl.p.handleNonStreamingResponse(rl.gw, rl.w, rl.r, target, rl.opts.AgentName, rl.opts.SourceFormat, action, rl.opts.CacheKey, rl.opts.Cooldown, rl.opts.Canary)
+	result := rl.p.handleNonStreamingResponse(rl.gw, rl.w, rl.r, target, rl.opts.AgentName, rl.opts.SourceFormat, action, rl.opts.CacheKey, rl.opts.Cooldown, bufferedEgressOpts{
+		Canary:          rl.opts.Canary,
+		Screen:          rl.opts.Screen,
+		EntropyRedacted: rl.opts.EntropyRedacted,
+	})
 	if result.terminal {
 		// 403 already written (exfil block): stop the loop.
 		return actionOutcome{handled: true}

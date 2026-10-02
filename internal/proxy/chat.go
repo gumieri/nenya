@@ -964,7 +964,7 @@ func (p *Proxy) handleChatCompletions(gw *gateway.NenyaGateway, w http.ResponseW
 
 	ensureOpencodeSessionHeader(gw, r, req)
 
-	if err := p.applyContentPipeline(gw, r.Context(), contentPipelineOpts{
+	entropyRedacted, err := p.applyContentPipeline(gw, r.Context(), contentPipelineOpts{
 		Payload:      req.Payload,
 		TokenCount:   req.TokenCount,
 		WindowMaxCtx: req.WindowMaxCtx,
@@ -973,7 +973,8 @@ func (p *Proxy) handleChatCompletions(gw *gateway.NenyaGateway, w http.ResponseW
 		HardLimit:    req.HardLimit,
 		AgentName:    req.ModelName,
 		Agent:        agentConfigFor(gw, req.ModelName),
-	}); err != nil {
+	})
+	if err != nil {
 		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 			// The client is gone (or the deadline burned): nothing to
 			// dispatch, nothing to render.
@@ -995,6 +996,7 @@ func (p *Proxy) handleChatCompletions(gw *gateway.NenyaGateway, w http.ResponseW
 	// (it must not trigger the bouncer). The token threads to the
 	// response-path watchers.
 	canaryResult := pipeline.InjectCanary(gw.Config.Governance.Canary, req.Payload)
+	screen := egressScreenFor(gw)
 	if canaryResult.Token != "" {
 		gw.Logger.Debug("canary injected", "agent", req.AgentName)
 	}
@@ -1003,37 +1005,41 @@ func (p *Proxy) handleChatCompletions(gw *gateway.NenyaGateway, w http.ResponseW
 
 	if req.HasMCPTools {
 		p.forwardToUpstreamWithMCP(gw, w, r, forwardOptions{
-			Targets:      req.Targets,
-			Payload:      req.Payload,
-			Stream:       req.Stream,
-			Cooldown:     req.Cooldown,
-			TokenCount:   req.TokenCount,
-			AgentName:    req.AgentName,
-			Agent:        req.Agent,
-			MaxRetries:   req.MaxRetries,
-			CacheKey:     req.CacheKey,
-			KeyRef:       req.KeyRef,
-			SourceFormat: req.SourceFormat,
-			ApiKey:       apiKey,
-			Canary:       canaryResult,
+			Targets:         req.Targets,
+			Payload:         req.Payload,
+			Stream:          req.Stream,
+			Cooldown:        req.Cooldown,
+			TokenCount:      req.TokenCount,
+			AgentName:       req.AgentName,
+			Agent:           req.Agent,
+			MaxRetries:      req.MaxRetries,
+			CacheKey:        req.CacheKey,
+			KeyRef:          req.KeyRef,
+			SourceFormat:    req.SourceFormat,
+			ApiKey:          apiKey,
+			Canary:          canaryResult,
+			Screen:          screen,
+			EntropyRedacted: entropyRedacted,
 		})
 		return
 	}
 
 	p.forwardToUpstream(gw, w, r, forwardOptions{
-		Targets:      req.Targets,
-		Payload:      req.Payload,
-		Stream:       req.Stream,
-		Cooldown:     req.Cooldown,
-		TokenCount:   req.TokenCount,
-		AgentName:    req.AgentName,
-		Agent:        req.Agent,
-		MaxRetries:   req.MaxRetries,
-		CacheKey:     req.CacheKey,
-		KeyRef:       req.KeyRef,
-		SourceFormat: req.SourceFormat,
-		ApiKey:       apiKey,
-		Canary:       canaryResult,
+		Targets:         req.Targets,
+		Payload:         req.Payload,
+		Stream:          req.Stream,
+		Cooldown:        req.Cooldown,
+		TokenCount:      req.TokenCount,
+		AgentName:       req.AgentName,
+		Agent:           req.Agent,
+		MaxRetries:      req.MaxRetries,
+		CacheKey:        req.CacheKey,
+		KeyRef:          req.KeyRef,
+		SourceFormat:    req.SourceFormat,
+		ApiKey:          apiKey,
+		Canary:          canaryResult,
+		Screen:          screen,
+		EntropyRedacted: entropyRedacted,
 	})
 }
 
@@ -1102,16 +1108,18 @@ func agentConfigFor(gw *gateway.NenyaGateway, modelName string) *config.AgentCon
 
 // applyContentPipeline runs the shared preprocessing stages (prefix
 // cache optimization, compaction, windowing, interceptor chain) over the
-// request payload. Mutations are applied in place.
-func (p *Proxy) applyContentPipeline(gw *gateway.NenyaGateway, ctx context.Context, opts contentPipelineOpts) error {
+// request payload. Mutations are applied in place. The first return
+// reports whether the entropy interceptor redacted high-entropy spans
+// from this request (an egress-screen trigger).
+func (p *Proxy) applyContentPipeline(gw *gateway.NenyaGateway, ctx context.Context, opts contentPipelineOpts) (bool, error) {
 	payload := opts.Payload
 	if gw.InterceptorChain == nil {
-		return nil
+		return false, nil
 	}
 
 	messages, ok := payload["messages"].([]interface{})
 	if !ok || len(messages) == 0 {
-		return nil
+		return false, nil
 	}
 
 	pipeline.ApplyPrefixCacheOptimizations(payload, messages, gw.Config.PrefixCache)
@@ -1141,7 +1149,7 @@ func (p *Proxy) applyContentPipeline(gw *gateway.NenyaGateway, ctx context.Conte
 
 	messages = payload["messages"].([]interface{})
 	if len(messages) == 0 {
-		return nil
+		return false, nil
 	}
 
 	msgObjs := make([]map[string]any, len(messages))
@@ -1162,12 +1170,15 @@ func (p *Proxy) applyContentPipeline(gw *gateway.NenyaGateway, ctx context.Conte
 		TokenCount: opts.TokenCount,
 	}
 
-	_, err := gw.InterceptorChain.Execute(ctx, req)
-	return err
+	if _, err := gw.InterceptorChain.Execute(ctx, req); err != nil {
+		return req.EntropyRedacted, err
+	}
+	return req.EntropyRedacted, nil
 }
 
 // buildWindowDeps creates a WindowDeps from the gateway state.
 func buildWindowDeps(gw *gateway.NenyaGateway) pipeline.WindowDeps {
+	jc := gw.Config.Governance.Judgments["summary_fidelity"]
 	return pipeline.WindowDeps{
 		Logger:    gw.Logger,
 		ClientFor: gw.ClientFor,
@@ -1175,55 +1186,96 @@ func buildWindowDeps(gw *gateway.NenyaGateway) pipeline.WindowDeps {
 		InjectAPIKey: func(providerName string, headers http.Header) error {
 			return routing.InjectAPIKeyWithGateway(providerName, gw, headers)
 		},
-		CountTokens:  gw.CountTokens,
-		SummaryCache: gw.WindowSummaries,
+		CountTokens:        gw.CountTokens,
+		SummaryCache:       gw.WindowSummaries,
+		FidelityGate:       gw.WindowFidelityGate,
+		FidelityGateStrict: jc != nil && jc.Action == "strict",
+		Metrics:            gw.Metrics,
 	}
 }
 
 // applyBufferedEgressPolicies runs the output-side defenses over a
-// buffered response body: the ExfilGuard URL policy and the canary
-// tripwire. Each may terminate the response with a structured error
-// (upstream usage is recorded first); log/strip actions rewrite the
-// body in place and let the response continue.
-func (p *Proxy) applyBufferedEgressPolicies(gw *gateway.NenyaGateway, w http.ResponseWriter, r *http.Request, target routing.UpstreamTarget, agentName string, responseMap map[string]interface{}, canary pipeline.CanarResult) bool {
+// buffered response body: the ExfilGuard URL policy, the canary
+// tripwire, and the advisory egress screen. Deterministic defenses may
+// terminate the response with a structured error (upstream usage is
+// recorded first); log/strip actions rewrite the body in place and let
+// the response continue. The screen runs only when a deterministic
+// signal fired (guard flagged, canary hit, or inbound entropy
+// redaction): a screen-exfil verdict strengthens the outcome — to a
+// structured block under strict action, a recorded detection otherwise
+// — and never weakens a deterministic verdict.
+func (p *Proxy) applyBufferedEgressPolicies(gw *gateway.NenyaGateway, w http.ResponseWriter, r *http.Request, target routing.UpstreamTarget, agentName string, responseMap map[string]interface{}, egress bufferedEgressOpts) bool {
+	guardFired := false
 	if guard := exfilGuardFor(gw, agentName); guard != nil {
 		hits := inspectResponseTexts(guard, responseMap)
+		guardFired = hits.fired
 		if hits.blocked {
 			// Upstream still consumed tokens on a blocked reply — record
-			// them before terminating the client response.
-			if usage, ok := responseMap["usage"].(map[string]interface{}); ok {
-				recordNonStreamingUsage(r.Context(), gw, target, agentName, usage)
-			}
+			// them before terminating the client response. Deterministic
+			// block stands; the screen is not consulted.
+			p.recordAndBlockBuffered(gw, w, r, target, agentName, responseMap)
 			p.handleExfilBlock(gw, w, target.Model, hits.reason)
 			return true
 		}
 	}
-	if canary.Token != "" {
-		return p.handleBufferedCanaryHit(gw, w, r, target, agentName, responseMap, canary)
+	canaryHit, terminal := p.bufferedCanaryScan(gw, w, r, target, agentName, responseMap, egress.Canary)
+	if terminal {
+		return true
 	}
-	return false
+	return p.bufferedEgressScreen(gw, w, r, target, agentName, responseMap, egress.Screen,
+		egress.EntropyRedacted || guardFired || canaryHit)
 }
 
-// handleBufferedCanaryHit resolves a canary detection on a buffered
-// response: block action records usage, writes the structured 403 and
-// reports terminal; log action strips the canary occurrence from every
-// surface and lets the response continue.
-func (p *Proxy) handleBufferedCanaryHit(gw *gateway.NenyaGateway, w http.ResponseWriter, r *http.Request, target routing.UpstreamTarget, agentName string, responseMap map[string]interface{}, canary pipeline.CanarResult) bool {
+// recordAndBlockBuffered records upstream usage on a reply that is
+// about to be terminated by an egress defense.
+func (p *Proxy) recordAndBlockBuffered(gw *gateway.NenyaGateway, w http.ResponseWriter, r *http.Request, target routing.UpstreamTarget, agentName string, responseMap map[string]interface{}) {
+	if usage, ok := responseMap["usage"].(map[string]interface{}); ok {
+		recordNonStreamingUsage(r.Context(), gw, target, agentName, usage)
+	}
+}
+
+// bufferedCanaryScan scans the response for the canary token and
+// applies canary policy. Returns hit (a deterministic egress-screen
+// trigger even under log action) and terminal (the response was
+// blocked and written).
+func (p *Proxy) bufferedCanaryScan(gw *gateway.NenyaGateway, w http.ResponseWriter, r *http.Request, target routing.UpstreamTarget, agentName string, responseMap map[string]interface{}, canary pipeline.CanarResult) (hit, terminal bool) {
+	if canary.Token == "" {
+		return false, false
+	}
 	hits := inspectCanaryTexts(responseMap, canary.Token)
 	if !hits.hit {
-		return false
+		return false, false
 	}
 	gw.Metrics.RecordExfilEvent("buffered")
 	gw.Logger.Warn("canary detected in buffered output",
 		"agent", agentName, "model", target.Model, "channel", "buffered")
 	if canary.Action != config.CanaryActionBlock {
-		return false
+		return true, false
 	}
-	if usage, ok := responseMap["usage"].(map[string]interface{}); ok {
-		recordNonStreamingUsage(r.Context(), gw, target, agentName, usage)
-	}
+	p.recordAndBlockBuffered(gw, w, r, target, agentName, responseMap)
 	writeStructuredError(w, http.StatusForbidden, infra.ErrorKindExfilDetected,
 		"response blocked: canary token detected in output")
+	return true, true
+}
+
+// bufferedEgressScreen runs the advisory egress screen over the
+// response when triggered. Returns true when the strict screen
+// terminated the response with a structured block.
+func (p *Proxy) bufferedEgressScreen(gw *gateway.NenyaGateway, w http.ResponseWriter, r *http.Request, target routing.UpstreamTarget, agentName string, responseMap map[string]interface{}, screen *egressScreenRuntime, triggered bool) bool {
+	if screen == nil || !triggered {
+		return false
+	}
+	if !screen.screenOnce(r.Context(), agentName, collectResponseTexts(responseMap, screen.judge.MaxBytes())) {
+		return false
+	}
+	screen.recordDetection(gw.Metrics)
+	screen.logScreenHit(gw.Logger, agentName, "buffered")
+	if !screen.strict {
+		return false
+	}
+	p.recordAndBlockBuffered(gw, w, r, target, agentName, responseMap)
+	writeStructuredError(w, http.StatusForbidden, infra.ErrorKindExfilDetected,
+		"response blocked: egress screen detected data exfiltration")
 	return true
 }
 
@@ -1269,7 +1321,7 @@ func hasMCPTools(gw *gateway.NenyaGateway, agent config.AgentConfig) bool {
 	return false
 }
 
-func (p *Proxy) handleNonStreamingResponse(gw *gateway.NenyaGateway, w http.ResponseWriter, r *http.Request, target routing.UpstreamTarget, agentName, sourceFormat string, action upstreamAction, cacheKey string, cooldownDuration time.Duration, canary pipeline.CanarResult) streamResult {
+func (p *Proxy) handleNonStreamingResponse(gw *gateway.NenyaGateway, w http.ResponseWriter, r *http.Request, target routing.UpstreamTarget, agentName, sourceFormat string, action upstreamAction, cacheKey string, cooldownDuration time.Duration, egress bufferedEgressOpts) streamResult {
 	defer action.cancel()
 
 	const maxNonStreamingResponseBytes = 10 * 1024 * 1024
@@ -1346,7 +1398,7 @@ func (p *Proxy) handleNonStreamingResponse(gw *gateway.NenyaGateway, w http.Resp
 	// ExfilGuard + canary tripwire (Phases 050/060): egress policies on
 	// the buffered body before headers are committed. Both may terminate
 	// the response with a structured error (terminal: no failover).
-	if done := p.applyBufferedEgressPolicies(gw, w, r, target, agentName, responseMap, canary); done {
+	if done := p.applyBufferedEgressPolicies(gw, w, r, target, agentName, responseMap, egress); done {
 		return streamResult{terminal: true}
 	}
 

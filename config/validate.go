@@ -8,7 +8,9 @@ import (
 	"math/rand"
 	"net"
 	"net/http"
+	"net/url"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -107,6 +109,10 @@ func collectValidationErrors(ctx context.Context, cfg *Config, providers map[str
 	errors = append(errors, validatePatternsToList("governance.blocked_execution_patterns", cfg.Governance.BlockedExecutionPatterns, logger)...)
 	errors = append(errors, validateInjectionConfig(cfg, logger)...)
 	errors = append(errors, validateSpotlightConfig(cfg)...)
+	errors = append(errors, validateJudgmentsConfig(cfg)...)
+	errors = append(errors, validateTfidfRerankConfig(cfg)...)
+	errors = append(errors, validateSpotlightRiskTiersConfig(cfg)...)
+	errors = append(errors, validateSelfLoopGuard(cfg)...)
 	errors = append(errors, validateExfilGuardConfig(cfg)...)
 	errors = append(errors, validateCanaryConfig(cfg)...)
 	errors = append(errors, validateMCPGuardConfig(cfg)...)
@@ -126,6 +132,273 @@ func collectValidationErrors(ctx context.Context, cfg *Config, providers map[str
 	}
 
 	return errors
+}
+
+// judgmentNameRe constrains judgment names: they flow into metric
+// labels and resolution error labels.
+var judgmentNameRe = regexp.MustCompile(`^[a-z0-9_]+$`)
+
+// validateSpotlightRiskTiersConfig checks the advisory spotlight
+// risk-tier surface. Must run after ApplyDefaults so inheritance has
+// applied.
+func validateSpotlightRiskTiersConfig(cfg *Config) []string {
+	rt := cfg.Governance.SpotlightRiskTiers()
+	if rt == nil {
+		return nil
+	}
+	var errs []string
+	if rt.MaxBytes < 0 {
+		errs = append(errs, "governance.spotlight.risk_tiers.max_bytes must be >= 0")
+	}
+	if rt.MaxBytes > 0 && rt.MaxBytes < 64 {
+		errs = append(errs, "governance.spotlight.risk_tiers.max_bytes must be >= 64 when set (smaller budgets cannot fit the judgment framing)")
+	}
+	if rt.TimeoutSeconds < 0 {
+		errs = append(errs, "governance.spotlight.risk_tiers.timeout_seconds must be >= 0")
+	}
+	if v := rt.EscalateBelowConfidence; v < 0 || v > 1 {
+		errs = append(errs, "governance.spotlight.risk_tiers.escalate_below_confidence must be in (0, 1] when set (0 disables the cascade)")
+	}
+	if rt.Engine != nil && rt.Engine.AgentName == "" && rt.Engine.Provider == "" {
+		errs = append(errs, "governance.spotlight.risk_tiers.engine: empty engine reference (omit the key to inherit, or set provider/model or agent)")
+	}
+	if rt.Enabled != nil && *rt.Enabled && (rt.Engine == nil || len(rt.Engine.ResolvedTargets) == 0) {
+		errs = append(errs, "governance.spotlight.risk_tiers: enabled but engine missing or unresolved")
+	}
+	return errs
+}
+
+// validateTfidfRerankConfig checks the advisory TF-IDF rerank surface.
+// Must run after ApplyDefaults so the engine inheritance has applied.
+func validateTfidfRerankConfig(cfg *Config) []string {
+	r := cfg.Governance.TfidfRerank
+	if r == nil {
+		return nil
+	}
+	var errs []string
+	// Band and MaxBlocks are coerced to defaults for <= 0 in
+	// applyTfidfRerankDefaults, so only byte/timeout bounds are checked.
+	if r.MaxBytes < 0 {
+		errs = append(errs, "governance.tfidf_rerank.max_bytes must be >= 0")
+	}
+	if r.MaxBytes > 0 && r.MaxBytes < 64 {
+		errs = append(errs, "governance.tfidf_rerank.max_bytes must be >= 64 when set (smaller budgets cannot fit the judgment framing)")
+	}
+	if r.Engine != nil && r.Engine.AgentName == "" && r.Engine.Provider == "" {
+		errs = append(errs, "governance.tfidf_rerank.engine: empty engine reference (omit the key to inherit, or set provider/model or agent)")
+	}
+	if r.TimeoutSeconds < 0 {
+		errs = append(errs, "governance.tfidf_rerank.timeout_seconds must be >= 0")
+	}
+	if r.Enabled != nil && *r.Enabled && (r.Engine == nil || len(r.Engine.ResolvedTargets) == 0) {
+		errs = append(errs, "governance.tfidf_rerank: enabled but engine missing or unresolved")
+	}
+	return errs
+}
+
+// selfLoopSurfaces lists every resolved engine target set with its
+// config-surface label for the self-loop guard.
+func selfLoopSurfaces(cfg *Config) []struct {
+	label   string
+	targets []EngineTarget
+} {
+	surfaces := []struct {
+		label   string
+		targets []EngineTarget
+	}{
+		{"bouncer_engine", cfg.Bouncer.Engine.ResolvedTargets},
+		{"window_engine", cfg.Window.Engine.ResolvedTargets},
+	}
+	if cfg.Governance.Injection != nil {
+		if esc := cfg.Governance.Injection.GetEscalation(); esc != nil && esc.Engine != nil {
+			surfaces = append(surfaces, struct {
+				label   string
+				targets []EngineTarget
+			}{"injection_escalation_engine", esc.Engine.ResolvedTargets})
+		}
+	}
+	for name, judgment := range cfg.Governance.Judgments {
+		if judgment == nil || judgment.Engine == nil {
+			continue
+		}
+		surfaces = append(surfaces, struct {
+			label   string
+			targets []EngineTarget
+		}{"judgment_" + name, judgment.Engine.ResolvedTargets})
+	}
+	if cfg.Governance.TfidfRerank != nil && cfg.Governance.TfidfRerank.Engine != nil {
+		surfaces = append(surfaces, struct {
+			label   string
+			targets []EngineTarget
+		}{"tfidf_rerank_engine", cfg.Governance.TfidfRerank.Engine.ResolvedTargets})
+	}
+	if rt := cfg.Governance.SpotlightRiskTiers(); rt != nil && rt.Engine != nil {
+		surfaces = append(surfaces, struct {
+			label   string
+			targets []EngineTarget
+		}{"spotlight_tier_engine", rt.Engine.ResolvedTargets})
+	}
+	return surfaces
+}
+
+// splitListenAddr splits a configured listen address into host and
+// port. Returns ok=false for empty or unparseable addresses — the HTTP
+// server will reject those at startup, so the guard stays silent.
+func splitListenAddr(addr string) (host, port string, ok bool) {
+	addr = strings.TrimSpace(addr)
+	if addr == "" {
+		return "", "", false
+	}
+	h, p, err := net.SplitHostPort(addr)
+	if err != nil {
+		return "", "", false
+	}
+	return h, p, true
+}
+
+// listenHostMatchesSelfHost reports whether a target URL host can be
+// the gateway itself given the configured listen host. Wildcard binds
+// ("", "0.0.0.0", "::") match any loopback target host; a concrete
+// listen host matches itself. Documented limitation: with a wildcard
+// bind, non-loopback local interface addresses are not enumerated.
+func listenHostMatchesSelfHost(targetHost, listenHost string) bool {
+	norm := func(h string) string {
+		h = strings.ToLower(strings.TrimSpace(h))
+		switch h {
+		case "localhost", "127.0.0.1", "::1":
+			return "loopback"
+		}
+		return h
+	}
+	t, l := norm(targetHost), norm(listenHost)
+	switch l {
+	case "", "0.0.0.0", "::", "*":
+		return t == "loopback"
+	}
+	return t == l
+}
+
+// isGatewayPath reports whether a URL path hits the gateway's own
+// proxying endpoints (/v1/* or /proxy/*): routing an engine or
+// judgment call through them would make the gateway proxy to itself.
+func isGatewayPath(p string) bool {
+	return p == "/v1" || p == "/proxy" ||
+		strings.HasPrefix(p, "/v1/") || strings.HasPrefix(p, "/proxy/")
+}
+
+// validateSelfLoopGuard rejects engine and judgment targets whose URL
+// points at the gateway's own /v1/* or /proxy/ endpoints on the
+// configured listen address: such a target makes the gateway proxy to
+// itself, deadlocking under load. Same host on a different port,
+// non-gateway paths, and third-party hosts remain allowed. Must run
+// after ApplyDefaults so engine references are resolved.
+func validateSelfLoopGuard(cfg *Config) []string {
+	listenHost, listenPort, ok := splitListenAddr(cfg.Server.ListenAddr)
+	if !ok {
+		return nil
+	}
+	var errs []string
+	for _, surface := range selfLoopSurfaces(cfg) {
+		for _, target := range surface.targets {
+			if target.Provider == nil {
+				continue
+			}
+			// Check the primary URL and every format-specific override
+			// (e.g. format_urls.systemone): any of them can be the
+			// actual dispatch target.
+			urls := append([]string{target.Provider.URL}, formatURLValues(target.Provider.FormatURLs)...)
+			for _, raw := range urls {
+				u, err := url.Parse(raw)
+				if err != nil || u.Port() != listenPort {
+					continue
+				}
+				if !listenHostMatchesSelfHost(u.Hostname(), listenHost) {
+					continue
+				}
+				if isGatewayPath(u.EscapedPath()) {
+					errs = append(errs, fmt.Sprintf(
+						"%s: engine target for provider %q (%s) points at the gateway's own endpoint — engines and judgment targets must not route through the gateway itself (self-proxying deadlock)",
+						surface.label, target.Provider.Name, raw))
+				}
+			}
+		}
+	}
+	return errs
+}
+
+// formatURLValues returns the values of a format-URL map sorted for
+// deterministic error ordering.
+func formatURLValues(m map[string]string) []string {
+	if len(m) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(m))
+	for _, v := range m {
+		out = append(out, v)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// validateJudgmentsConfig checks the shape and budget fields of every
+// advisory judgment entry. Contracts are code-owned, so only the
+// user-visible surface (name, engine presence, budgets) is validated
+// here; engine references resolve during ApplyDefaults.
+func validateJudgmentsConfig(cfg *Config) []string {
+	var errs []string
+	for name, judgment := range cfg.Governance.Judgments {
+		errs = append(errs, validateJudgmentEntry(name, judgment)...)
+	}
+	return errs
+}
+
+// validateJudgmentEntry checks one advisory judgment entry. Contracts
+// are code-owned, so only the user-visible surface (name, engine
+// presence, budgets) is validated here; engine references resolve
+// during ApplyDefaults.
+func validateJudgmentEntry(name string, judgment *JudgmentConfig) []string {
+	var errs []string
+	if judgment == nil {
+		errs = append(errs, fmt.Sprintf("governance.judgments.%s: entry must not be null", name))
+		return errs
+	}
+	if !judgmentNameRe.MatchString(name) {
+		errs = append(errs, fmt.Sprintf("governance.judgments.%s: name must match %s", name, judgmentNameRe.String()))
+	}
+	if judgment.MaxBytes < 0 {
+		errs = append(errs, fmt.Sprintf("governance.judgments.%s.max_bytes must be >= 0", name))
+	}
+	if judgment.MaxBytes > 0 && judgment.MaxBytes < 64 {
+		errs = append(errs, fmt.Sprintf("governance.judgments.%s.max_bytes must be >= 64 when set (smaller budgets cannot fit the judgment framing)", name))
+	}
+	if judgment.TimeoutSeconds < 0 {
+		errs = append(errs, fmt.Sprintf("governance.judgments.%s.timeout_seconds must be >= 0", name))
+	}
+	if v := judgment.EscalateBelowConfidence; v < 0 || v > 1 {
+		errs = append(errs, fmt.Sprintf("governance.judgments.%s.escalate_below_confidence must be in (0, 1] when set (0 disables the cascade)", name))
+	}
+	switch judgment.Action {
+	case "", "log", "strict":
+	default:
+		errs = append(errs, fmt.Sprintf("governance.judgments.%s.action: invalid value %q, must be empty, \"log\", or \"strict\"", name, judgment.Action))
+	}
+	return append(errs, validateJudgmentEngineRef(name, judgment)...)
+}
+
+// validateJudgmentEngineRef checks the engine reference surface of one
+// advisory judgment entry (AGENTS.md §11 decomposition).
+func validateJudgmentEngineRef(name string, judgment *JudgmentConfig) []string {
+	// An explicitly empty engine object ("engine": {}) would otherwise
+	// skip inheritance and resolution silently and fail only at first
+	// judgment construction — reject it at load. Same for an enabled
+	// site whose engine resolved to nothing.
+	if judgment.Engine != nil && judgment.Engine.AgentName == "" && judgment.Engine.Provider == "" {
+		return []string{fmt.Sprintf("governance.judgments.%s.engine: empty engine reference (omit the key to inherit, or set provider/model or agent)", name)}
+	}
+	if judgment.Enabled != nil && *judgment.Enabled && judgment.Engine != nil && len(judgment.Engine.ResolvedTargets) == 0 {
+		return []string{fmt.Sprintf("governance.judgments.%s: enabled but engine missing or unresolved", name)}
+	}
+	return nil
 }
 
 // validateSpotlightConfig checks the spotlight mode value and rejects

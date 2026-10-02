@@ -27,6 +27,16 @@ type Metrics struct {
 
 	redactions  atomic.Uint64
 	compactions atomic.Uint64
+	// tfidfRescues counts content blocks rescued by the advisory TF-IDF
+	// rerank judgment (strengthen-only keeps).
+	tfidfRescues atomic.Uint64
+	// spotlightTiers counts history tool messages per resolved envelope
+	// tier and source kind (risk-tiered mode only).
+	spotlightTiers sync.Map
+	// judgmentCascades counts System One low-confidence cascade events
+	// (answer below escalate_below_confidence -> next chain target) by
+	// judgment name.
+	judgmentCascades sync.Map
 	// injectionDetections counts deterministic prompt-injection detections
 	// by action (sanitize|reject) and pattern category.
 	injectionDetections sync.Map
@@ -39,6 +49,15 @@ type Metrics struct {
 	// injectionEscalationDur holds tier-2 classifier call durations by
 	// verdict.
 	injectionEscalationDur sync.Map
+	// judgmentsTotal counts advisory typed-judgment outcomes by judgment
+	// name, verdict, and engine provider.
+	judgmentsTotal sync.Map
+	// judgmentDur holds advisory judgment call durations by judgment name.
+	judgmentDur sync.Map
+	// summaryGateFallbacks counts summary-fidelity gate fallbacks by
+	// action (log|strict|error: strict = summary replaced by truncation,
+	// log/error = summary kept fail-open).
+	summaryGateFallbacks sync.Map
 	// exfilDetections counts egress-guard URL violations by reason and
 	// configured action.
 	exfilDetections sync.Map
@@ -361,6 +380,47 @@ func (m *Metrics) RecordInjectionEscalation(verdict string, d time.Duration) {
 	h.Observe(d.Seconds())
 }
 
+// RecordJudgment records an advisory typed-judgment outcome and its
+// call duration. verdict "error" marks an operational failure (the
+// caller fell back to its deterministic decision). Nil-safe.
+func (m *Metrics) RecordJudgment(judgment, verdict, engine string, d time.Duration) {
+	if m == nil || judgment == "" {
+		return
+	}
+	if verdict == "" {
+		verdict = "error"
+	}
+	e := getOrCreateEntry(&m.judgmentsTotal, map[string]string{
+		"judgment": judgment, "verdict": verdict, "engine": engine,
+	})
+	e.value.Add(1)
+	h := getOrCreateHist(&m.judgmentDur, map[string]string{"judgment": judgment}, HTTPDurationBuckets)
+	h.Observe(d.Seconds())
+}
+
+// writeJudgments emits the advisory typed-judgment counter, duration,
+// and summary-gate fallback families.
+func (m *Metrics) writeJudgments(w io.Writer) {
+	m.writeCounterMap(w, "nenya_judgments_total",
+		"Advisory typed-judgment outcomes by judgment, verdict, and engine provider (error = operational failure; the caller applied its deterministic verdict).", &m.judgmentsTotal)
+	m.writeHistogramMap(w, "nenya_judgment_duration_seconds",
+		"Advisory judgment engine-chain call duration in seconds.", &m.judgmentDur)
+	m.writeCounterMap(w, "nenya_summary_gate_fallbacks_total",
+		"Summary-fidelity gate fallbacks by action (strict = summary replaced by truncation; log/error = summary kept fail-open).", &m.summaryGateFallbacks)
+}
+
+// RecordSummaryGateFallback records a summary-fidelity gate outcome
+// that did not accept the summary as-is: strict (replaced by
+// truncation), log (kept with warning), or error (operational
+// failure, kept). Nil-safe.
+func (m *Metrics) RecordSummaryGateFallback(action string) {
+	if m == nil || action == "" {
+		return
+	}
+	e := getOrCreateEntry(&m.summaryGateFallbacks, map[string]string{"action": action})
+	e.value.Add(1)
+}
+
 // writeRedactions emits the Tier-0 redaction counter.
 func (m *Metrics) writeRedactions(w io.Writer) {
 	m.writeCounterAtomic(w, "nenya_pipeline_redactions_total",
@@ -386,12 +446,13 @@ func (m *Metrics) RecordExfilEvent(channel string) {
 // writeExfilDetections emits the egress-guard violation counter.
 func (m *Metrics) writeExfilDetections(w io.Writer) {
 	m.writeCounterMap(w, "nenya_exfil_detections_total",
-		"Egress-guard URL violations by reason and configured action.", &m.exfilDetections)
+		"Egress violations by reason (deterministic URL-policy reasons or llm_screen) and applied action.", &m.exfilDetections)
 }
 
-// RecordExfilDetection records an egress-guard URL violation with its
-// reason (scheme, ip_literal, private_ip, host_not_allowed,
-// query_length, query_entropy) and the configured action
+// RecordExfilDetection records an egress violation with its reason —
+// the deterministic URL-policy reasons (scheme, ip_literal, private_ip,
+// host_not_allowed, query_length, query_entropy) or llm_screen (the
+// advisory egress screen) — and the applied action
 // (log|strip|block). Nil-safe.
 func (m *Metrics) RecordExfilDetection(reason, action string) {
 	if m == nil || reason == "" {
@@ -433,6 +494,38 @@ func (m *Metrics) RecordCompaction() {
 	}
 	m.compactions.Add(1)
 }
+
+// RecordTfidfRescues records n content blocks rescued by the advisory
+// TF-IDF rerank judgment. Nil-safe.
+func (m *Metrics) RecordTfidfRescues(n int) {
+	if m == nil || n <= 0 {
+		return
+	}
+	m.tfidfRescues.Add(uint64(n))
+}
+
+// RecordSpotlightTier records one history tool message's resolved
+// envelope tier (low|high) and source kind (local|web) in risk-tiered
+// mode. Nil-safe.
+func (m *Metrics) RecordSpotlightTier(tier, source string) {
+	if m == nil || tier == "" || source == "" {
+		return
+	}
+	e := getOrCreateEntry(&m.spotlightTiers, map[string]string{"tier": tier, "source": source})
+	e.value.Add(1)
+}
+
+// RecordJudgmentCascade records a System One low-confidence cascade
+// (typed answer below escalate_below_confidence -> next chain target)
+// for a judgment. Nil-safe.
+func (m *Metrics) RecordJudgmentCascade(name string) {
+	if m == nil || name == "" {
+		return
+	}
+	e := getOrCreateEntry(&m.judgmentCascades, map[string]string{"judgment": name})
+	e.value.Add(1)
+}
+
 func (m *Metrics) RecordPanic() {
 	if m == nil {
 		return
@@ -1260,6 +1353,12 @@ func (m *Metrics) DecInFlight(model, agent, provider string) {
 func (m *Metrics) writePipelineMetrics(w io.Writer) {
 	m.writeCounterAtomic(w, "nenya_pipeline_compaction_applied_total",
 		"Total text compaction passes applied.", m.compactions.Load())
+	m.writeCounterAtomic(w, "nenya_tfidf_rescues_total",
+		"Content blocks rescued into the keep set by the advisory TF-IDF rerank judgment (assembly may still elide near-budget blocks).", m.tfidfRescues.Load())
+	m.writeCounterMap(w, "nenya_spotlight_tiers_total",
+		"History tool messages per resolved envelope tier and source kind (risk-tiered spotlight mode).", &m.spotlightTiers)
+	m.writeCounterMap(w, "nenya_judgment_cascades_total",
+		"System One low-confidence cascade events by judgment name.", &m.judgmentCascades)
 	m.writeCounterMap(w, "nenya_pipeline_window_applied_total",
 		"Total window compaction passes applied.", &m.windowApplied)
 	m.writeCounterMap(w, "nenya_pipeline_tokens_saved_total",
@@ -1304,6 +1403,7 @@ func (m *Metrics) WritePrometheus(w io.Writer) {
 	m.writeHandlerPanics(w)
 	m.writeRedactions(w)
 	m.writeInjectionMetrics(w)
+	m.writeJudgments(w)
 	m.writeSpotlighted(w)
 	m.writeExfilDetections(w)
 	m.writeExfilEvents(w)

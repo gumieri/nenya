@@ -2,10 +2,10 @@
 
 ## Supported Versions
 
-| Version | Supported |
-|---------|-----------|
-| Latest on `main` | Yes |
-| Older releases | No |
+| Version          | Supported |
+| ---------------- | --------- |
+| Latest on `main` | Yes       |
+| Older releases   | No        |
 
 ## Reporting a Vulnerability
 
@@ -59,33 +59,70 @@ Provider API keys are stored in the same mlock-protected memory as the client to
 
 The gateway exposes Prometheus counters for authentication events:
 
-| Metric | Labels | Description |
-|--------|--------|-------------|
-| `nenya_auth_success_total` | `type` (client_token, api_key), `key` (name) | Successful authentications |
-| `nenya_auth_failure_total` | `type` (missing_header, client_token_mismatch, api_key_mismatch) | Failed authentication attempts |
-| `nenya_auth_denials_total` | `reason` (agent_not_allowed, endpoint_not_allowed, key_disabled, key_expired) | RBAC authorization denials |
+| Metric                     | Labels                                                                        | Description                    |
+| -------------------------- | ----------------------------------------------------------------------------- | ------------------------------ |
+| `nenya_auth_success_total` | `type` (client_token, api_key), `key` (name)                                  | Successful authentications     |
+| `nenya_auth_failure_total` | `type` (missing_header, client_token_mismatch, api_key_mismatch)              | Failed authentication attempts |
+| `nenya_auth_denials_total` | `reason` (agent_not_allowed, endpoint_not_allowed, key_disabled, key_expired) | RBAC authorization denials     |
+
+### Advisory Judgment Layer and Egress Screen
+
+Nenya's deterministic output controls (ExfilGuard URL policy, canary tripwire,
+inbound entropy redaction) are exact and cheap, but a model can exfiltrate
+through **encoded or paraphrased** content that no deterministic rule catches.
+The advisory judgment layer adds a bounded LLM adjudication for output that has
+**already tripped a deterministic egress signal** — it never scans the general
+response, only the flagged surface:
+
+- **Threat model.** Deterministic signals are high-recall/low-precision: a
+  flagged markdown link, a canary echo, a redaction event, or suspicious MCP
+  tool arguments may be benign or a real exfil attempt. The `egress_screen`
+  judgment adjudicates the flagged content at the **buffered-response** and
+  **MCP tool-args** checkpoints only; streaming deltas and the MCP buffered
+  replay are not screened (placement rule).
+- **Strengthen-only semantics.** A judgment verdict can only **strengthen** the
+  outcome: under `action: "strict"` an `exfil` verdict raises a structured
+  `exfil_detected` block (the request is refused); under the default `log`
+  action it is recorded as `nenya_exfil_detections_total{reason="llm_screen"}`
+  alongside the deterministic detection. A non-verdict (engine failure, timeout,
+  budget exhaustion, malformed reply, truncated excerpt) leaves the
+  deterministic decision unchanged. The advisory layer can never clear a
+  deterministic block or weaken a tier-1 verdict.
+- **Budget caps.** Each adjudication is bounded by `max_bytes` (excerpt cap),
+  `timeout_seconds` (total chain bound), and a **per-request budget** so a
+  request with many flagged surfaces produces at most one judgment call. The
+  judgment traffic is an egress event in its own right, so the excerpt is
+  size-capped before it leaves the gateway.
+
+All of this rests on the same engine-agnostic contract design as the rest of
+the layer (see [ARCHITECTURE.md](ARCHITECTURE.md#advisory-judgment-layer) and
+[CONFIGURATION.md](CONFIGURATION.md#governance)).
 
 ### Role-Based Access Control (RBAC)
 
 Nenya enforces per-API key access controls via RBAC. API keys defined in `secrets.json` under `api_keys` support:
 
 **Roles:**
+
 - `admin` — Unrestricted access to all agents and endpoints (bypasses RBAC checks)
 - `user` — Access to configured agents and all non-admin endpoints
 - `read-only` — Read-only access: GET requests only (e.g., `/v1/models`, `/healthz`, `/statsz`, `/metrics`)
 
 **Agent Scoping:**
+
 - `allowed_agents` list restricts which agents the key can access
 - Empty list grants access to all agents (backward compatible)
 - Admin keys bypass agent restrictions
 
 **Endpoint Restrictions:**
+
 - `allowed_endpoints` list allows fine-grained HTTP method + path allowlisting (e.g., `GET /v1/models`, `POST /v1/chat/completions`)
 - Overrides default role-based permissions when set
 - Empty list uses role-based default permissions
 - Admin keys bypass endpoint restrictions
 
 **Example API key configuration:**
+
 ```json
 {
   "api_keys": {
@@ -128,6 +165,7 @@ See `deploy/nenya.service` for a complete hardened unit file.
 On macOS, the default `RLIMIT_MEMLOCK` soft limit is 512KB per process for non-root users. If your token storage needs exceed this, you have two options:
 
 1. **Increase the limit** (recommended for development):
+
    ```bash
    ulimit -l unlimited  # or a higher value like 8192 (8MB)
    ```
@@ -145,10 +183,10 @@ On Linux with systemd, `LimitMEMLOCK=infinity` in the service unit automatically
 
 **Platform-Specific Behavior with `secure_memory_required=true`**
 
-| Platform | mlock unavailable | Gateway behavior |
-|----------|------------------|------------------|
-| Linux | Missing `CAP_IPC_LOCK` or `LimitMEMLOCK` | **Fails to start** with error, log points to `docs/SECURITY.md` |
-| macOS | Default 512KB limit exceeded | **Fails to start** with error, log points to `docs/SECURITY.md` and suggests `ulimit -l unlimited` |
+| Platform | mlock unavailable                        | Gateway behavior                                                                                   |
+| -------- | ---------------------------------------- | -------------------------------------------------------------------------------------------------- |
+| Linux    | Missing `CAP_IPC_LOCK` or `LimitMEMLOCK` | **Fails to start** with error, log points to `docs/SECURITY.md`                                    |
+| macOS    | Default 512KB limit exceeded             | **Fails to start** with error, log points to `docs/SECURITY.md` and suggests `ulimit -l unlimited` |
 
 ### Rate Limiting
 
@@ -171,6 +209,7 @@ Security vulnerabilities include but are not limited to:
 ### File Path Security
 
 Config file loading functions (`LoadConfig`, `LoadSecrets`, `LoadPromptFile`) are hardened against path traversal attacks:
+
 - All user-supplied paths are resolved via `filepath.Abs` and checked against the config directory prefix
 - Paths containing `..` segments are rejected
 - Absolute paths pointing outside the config root are rejected

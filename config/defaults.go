@@ -52,6 +52,68 @@ func applyResolvedEngineDefaults(targets []EngineTarget) {
 	}
 }
 
+// applyJudgmentDefaults gives judgment entries without an engine the
+// injection-escalation engine when configured, else the bouncer engine.
+// The pointer is shared so one resolution serves every inheriting entry.
+func applyJudgmentDefaults(cfg *Config) {
+	if len(cfg.Governance.Judgments) == 0 {
+		return
+	}
+	fallback := judgmentEngineFallback(cfg)
+	for _, judgment := range cfg.Governance.Judgments {
+		if judgment != nil && judgment.Engine == nil {
+			judgment.Engine = fallback
+		}
+	}
+}
+
+// applyTfidfRerankDefaults applies the advisory TF-IDF rerank defaults:
+// band, block cap, and engine inheritance (same fallback as the
+// judgments map entries).
+func applyTfidfRerankDefaults(cfg *Config) {
+	r := cfg.Governance.TfidfRerank
+	if r == nil {
+		return
+	}
+	if r.Band <= 0 {
+		r.Band = DefaultTfidfRerankBand
+	}
+	if r.MaxBlocks <= 0 {
+		r.MaxBlocks = DefaultTfidfRerankMaxBlocks
+	}
+	if r.Engine == nil {
+		r.Engine = judgmentEngineFallback(cfg)
+	}
+}
+
+// judgmentEngineFallback returns the shared judgment engine fallback:
+// the enabled injection-escalation engine when present, else the
+// bouncer engine.
+func judgmentEngineFallback(cfg *Config) *EngineRef {
+	if cfg.Governance.Injection != nil {
+		if esc := cfg.Governance.Injection.GetEscalation(); esc != nil && esc.Engine != nil {
+			return esc.Engine
+		}
+	}
+	return &cfg.Bouncer.Engine
+}
+
+// applySpotlightRiskTierDefaults applies the advisory spotlight risk-tier
+// defaults: the size threshold and engine inheritance (same fallback as
+// the judgments map entries).
+func applySpotlightRiskTierDefaults(cfg *Config) {
+	rt := cfg.Governance.SpotlightRiskTiers()
+	if rt == nil {
+		return
+	}
+	if rt.SizeThresholdBytes <= 0 {
+		rt.SizeThresholdBytes = DefaultSpotlightTierSizeBytes
+	}
+	if rt.Engine == nil {
+		rt.Engine = judgmentEngineFallback(cfg)
+	}
+}
+
 // ApplyDefaults populates all unset configuration fields with sensible
 // defaults, resolves engine references, and applies built-in providers.
 func ApplyDefaults(cfg *Config) error {
@@ -80,6 +142,9 @@ func ApplyDefaults(cfg *Config) error {
 	}
 	applyBuiltInProviders(cfg)
 	applyWindowDefaults(cfg)
+	applyJudgmentDefaults(cfg)
+	applyTfidfRerankDefaults(cfg)
+	applySpotlightRiskTierDefaults(cfg)
 	if err := resolveEngineRefs(cfg); err != nil {
 		return err
 	}
