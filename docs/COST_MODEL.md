@@ -79,11 +79,17 @@ rejects malformed windows at load; an absent window is legal and is the
 "never peak" case). Today there is no opt-out for a built-in window: a user
 `peak_window` replaces it, and omitting it inherits the built-in.
 
-The built-in default is the DeepSeek window. DeepSeek publishes the
-**off-peak** interval (16:30–00:30 UTC, discounted); the config therefore
-stores the complement as the peak interval (00:30–16:30 UTC). The exact
-boundary and published rates are confirmed against the live rate card in
-Phase 008 — this document fixes the _convention_, not the number.
+The built-in default is DeepSeek, verified against the official rate card
+(2026-09): peak hours are **01:00–04:00 and 06:00–10:00 UTC, Monday–Friday**
+(Beijing 09:00–12:00 / 14:00–18:00); every other hour — weekends included —
+bills at the off-peak rate. A provider may declare any number of windows;
+weekend exclusion is expressed per window via `weekdays_only` (the window
+belongs to the calendar day its start falls in).
+
+Known approximation: the cached-input rate is a single figure (the off-peak
+hit price). DeepSeek's hit rate also doubles at peak ($0.003 → $0.006); a
+peak-hour cache hit therefore under-bills by the cached-rate delta — at
+DeepSeek's card, $0.003/1M tokens, negligible against the miss rates.
 
 Providers without a window are never peak.
 
@@ -139,9 +145,10 @@ discovered entry lacks them.
 ## Supersession
 
 Commit `ea95032` stamped DeepSeek V4.1-Flash with _peak_ rates in the flat
-fields and its comment asserts peak as the plain rate. Phase 008 replaces
-those values with the standard/peak/cached split and rewrites the comment and
-CHANGELOG wording.
+fields and its comment asserts peak as the plain rate. Phase 008 replaced
+those values with the verified standard/peak/cached split (standard is the
+off-peak rate; peak is the declared surcharge; cache hits ride the cached
+rate) and rewrote the comment and CHANGELOG wording.
 
 ## Related
 

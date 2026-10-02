@@ -83,18 +83,21 @@ func TestBuiltinDeepSeekPeakWindow(t *testing.T) {
 		t.Fatal("deepseek missing from ProviderRegistry")
 	}
 	p := entry.ToProviderConfig()
-	if p.PeakWindow == nil {
-		t.Fatal("deepseek built-in must declare a peak window")
+	if len(p.PeakWindows) == 0 {
+		t.Fatal("deepseek built-in must declare peak windows")
 	}
-	if err := p.PeakWindow.Validate(); err != nil {
-		t.Fatalf("invalid built-in window: %v", err)
+	for _, w := range p.PeakWindows {
+		if err := w.Validate(); err != nil {
+			t.Fatalf("invalid built-in window: %v", err)
+		}
 	}
 	utc := time.UTC
-	if !p.IsPeakAt(time.Date(2026, 10, 2, 8, 0, 0, 0, utc)) {
-		t.Error("08:00 UTC must be peak")
+	// 2026-10-07 is a Wednesday: 02:00 UTC inside the 01:00-04:00 block.
+	if !p.IsPeakAt(time.Date(2026, 10, 7, 2, 0, 0, 0, utc)) {
+		t.Error("Wednesday 02:00 UTC must be peak")
 	}
-	if p.IsPeakAt(time.Date(2026, 10, 2, 20, 0, 0, 0, utc)) {
-		t.Error("20:00 UTC must be off-peak")
+	if p.IsPeakAt(time.Date(2026, 10, 7, 20, 0, 0, 0, utc)) {
+		t.Error("Wednesday 20:00 UTC must be off-peak")
 	}
 }
 
@@ -137,14 +140,16 @@ func TestParseClockMinutes(t *testing.T) {
 // peak window.
 func TestMergeProviderConfig_PreservesBuiltinPeakWindow(t *testing.T) {
 	builtIn := ProviderRegistry["deepseek"].ToProviderConfig()
-	if builtIn.PeakWindow == nil {
-		t.Fatal("built-in deepseek must carry a peak window")
+	if len(builtIn.PeakWindows) == 0 {
+		t.Fatal("built-in deepseek must carry peak windows")
 	}
 	merged := mergeProviderConfig(ProviderConfig{URL: "https://example.internal/v1"}, builtIn)
-	if merged.PeakWindow == nil {
-		t.Fatal("user override must not drop the built-in peak window")
+	if len(merged.PeakWindows) != len(builtIn.PeakWindows) {
+		t.Fatalf("windows = %+v, want %+v", merged.PeakWindows, builtIn.PeakWindows)
 	}
-	if merged.PeakWindow.Start != builtIn.PeakWindow.Start || merged.PeakWindow.End != builtIn.PeakWindow.End {
-		t.Errorf("window = %+v, want %+v", merged.PeakWindow, builtIn.PeakWindow)
+	for i, w := range merged.PeakWindows {
+		if w != builtIn.PeakWindows[i] {
+			t.Errorf("window[%d] = %+v, want %+v", i, w, builtIn.PeakWindows[i])
+		}
 	}
 }

@@ -7,13 +7,17 @@ import (
 	"time"
 )
 
-// PeakWindow declares a provider's peak pricing interval in UTC (see
+// PeakWindow declares one peak pricing interval in UTC (see
 // docs/COST_MODEL.md). Start/End are "HH:MM" 24-hour times; the interval is
-// half-open [Start, End) and Start > End wraps midnight. An absent, empty, or
-// malformed window means the provider is never peak.
+// half-open [Start, End) and Start > End wraps midnight. WeekdaysOnly
+// restricts the window to Monday–Friday (the start-side day decides for
+// wrap-around windows). A malformed interval is never peak.
 type PeakWindow struct {
 	Start string `json:"start"`
 	End   string `json:"end"`
+	// WeekdaysOnly restricts the window to Monday through Friday in the
+	// window-start day's calendar (weekends are off-peak).
+	WeekdaysOnly bool `json:"weekdays_only,omitempty"`
 }
 
 // Contains reports whether instant t (converted to UTC) falls inside the
@@ -30,11 +34,28 @@ func (w *PeakWindow) Contains(t time.Time) bool {
 	}
 	u := t.UTC()
 	minutes := u.Hour()*60 + u.Minute()
+	var inInterval bool
 	if start < end {
-		return minutes >= start && minutes < end
+		inInterval = minutes >= start && minutes < end
+	} else {
+		// Wrap-around: the window crosses midnight.
+		inInterval = minutes >= start || minutes < end
 	}
-	// Wrap-around: the window crosses midnight.
-	return minutes >= start || minutes < end
+	if !inInterval {
+		return false
+	}
+	if w.WeekdaysOnly {
+		// The window belongs to the calendar day its START falls in: for a
+		// wrap window, instants after midnight belong to the previous day.
+		day := u
+		if start > end && minutes < end {
+			day = u.AddDate(0, 0, -1)
+		}
+		if wd := day.Weekday(); wd == time.Saturday || wd == time.Sunday {
+			return false
+		}
+	}
+	return true
 }
 
 // Validate checks that both bounds are well-formed "HH:MM" times. Start == End
@@ -259,11 +280,11 @@ type ProviderEntry struct {
 	// chat-completions endpoint (e.g. TypeSafe Jev System One decision
 	// models on OpenCode Zen). See ProviderConfig.NonChatModels.
 	NonChatModels []string `json:"non_chat_models,omitempty"`
-	// PeakWindow is the built-in peak pricing interval (UTC) for providers
-	// with time-of-day rate cards. See ProviderConfig.PeakWindow. The
-	// pointer aliases the package-level ProviderRegistry global — treat it
-	// as shared-immutable.
-	PeakWindow *PeakWindow `json:"peak_window,omitempty"`
+	// PeakWindows are the built-in peak pricing intervals (UTC) for
+	// providers with time-of-day rate cards. See
+	// ProviderConfig.PeakWindows. The slice aliases the package-level
+	// ProviderRegistry global — treat it as shared-immutable.
+	PeakWindows []PeakWindow `json:"peak_windows,omitempty"`
 }
 
 func (e ProviderEntry) ToProviderConfig() ProviderConfig {
@@ -275,6 +296,6 @@ func (e ProviderEntry) ToProviderConfig() ProviderConfig {
 		RatelimitMaxRPM: e.RatelimitMaxRPM,
 		RatelimitMaxTPM: e.RatelimitMaxTPM,
 		NonChatModels:   e.NonChatModels,
-		PeakWindow:      e.PeakWindow,
+		PeakWindows:     e.PeakWindows,
 	}
 }

@@ -405,24 +405,34 @@ type RequestScopedErrorRule struct {
 // transport).
 const FormatKeySystemOne = "systemone"
 
-// IsPeakAt reports whether instant t falls inside the provider's peak pricing
-// window (t is converted to UTC; DST is irrelevant). A provider without a
-// window is never peak. Nil-safe.
+// IsPeakAt reports whether instant t falls inside any of the provider's peak
+// pricing windows (t is converted to UTC; DST is irrelevant). A provider
+// without windows is never peak. Nil-safe.
 func (p *ProviderConfig) IsPeakAt(t time.Time) bool {
 	if p == nil {
 		return false
 	}
-	return p.PeakWindow.Contains(t)
+	return peakWindowsContain(p.PeakWindows, t)
 }
 
-// IsPeakAt reports whether instant t falls inside the provider's peak pricing
-// window (t is converted to UTC; DST is irrelevant). A provider without a
-// window is never peak. Nil-safe.
+// IsPeakAt reports whether instant t falls inside any of the provider's peak
+// pricing windows (t is converted to UTC; DST is irrelevant). A provider
+// without windows is never peak. Nil-safe.
 func (p *Provider) IsPeakAt(t time.Time) bool {
 	if p == nil {
 		return false
 	}
-	return p.PeakWindow.Contains(t)
+	return peakWindowsContain(p.PeakWindows, t)
+}
+
+// peakWindowsContain reports whether t falls inside any of the windows.
+func peakWindowsContain(windows []PeakWindow, t time.Time) bool {
+	for i := range windows {
+		if windows[i].Contains(t) {
+			return true
+		}
+	}
+	return false
 }
 
 // ProviderConfig defines the wire-level configuration for an upstream LLM
@@ -434,10 +444,10 @@ type ProviderConfig struct {
 	AuthStyle  string            `json:"auth_style"`
 	ApiFormat  string            `json:"api_format"`
 	FormatURLs map[string]string `json:"format_urls,omitempty"`
-	// PeakWindow declares the provider's peak pricing interval in UTC for
-	// time-of-day rate cards (nil = never peak). Absent peak rates on a
+	// PeakWindows declare the provider's peak pricing intervals in UTC for
+	// time-of-day rate cards (empty = never peak). Absent peak rates on a
 	// model are unaffected. See docs/COST_MODEL.md.
-	PeakWindow *PeakWindow `json:"peak_window,omitempty"`
+	PeakWindows []PeakWindow `json:"peak_windows,omitempty"`
 	// TimeoutSeconds is the total request deadline for this provider.
 	TimeoutSeconds int `json:"timeout_seconds"`
 	// ResponseHeaderTimeoutSeconds is the transport-level time-to-first-byte
@@ -607,9 +617,9 @@ type Provider struct {
 	// compiled patterns; when both are empty no model is non-chat.
 	NonChatModels []string
 	nonChatRE     []*regexp.Regexp
-	// PeakWindow mirrors ProviderConfig.PeakWindow: the provider's peak
-	// pricing interval in UTC (nil = never peak). See docs/COST_MODEL.md.
-	PeakWindow *PeakWindow
+	// PeakWindows mirror ProviderConfig.PeakWindows: the provider's peak
+	// pricing intervals in UTC (empty = never peak). See docs/COST_MODEL.md.
+	PeakWindows []PeakWindow
 	// MaxConcurrentRequests caps in-flight requests dispatched to this
 	// provider (0 = unlimited). See ProviderConfig.MaxConcurrentRequests.
 	MaxConcurrentRequests int

@@ -17,8 +17,8 @@ import (
 // provider is never peak.
 func TestPricingUsagePeakWindow(t *testing.T) {
 	provider := &config.Provider{
-		Name:       "deepseek",
-		PeakWindow: &config.PeakWindow{Start: "00:30", End: "16:30"},
+		Name:        "deepseek",
+		PeakWindows: []config.PeakWindow{{Start: "01:00", End: "04:00", WeekdaysOnly: true}, {Start: "06:00", End: "10:00", WeekdaysOnly: true}},
 	}
 	gw := &gateway.NenyaGateway{Providers: map[string]*config.Provider{"deepseek": provider}}
 	target := routing.UpstreamTarget{Provider: "deepseek", Model: "deepseek-flash"}
@@ -55,11 +55,11 @@ func TestRecordCostAndBilling_PeakAndCached(t *testing.T) {
 		PeakOutputCostPer1M:  1.20,
 		CachedInputCostPer1M: 0.05,
 	}
-	newGW := func(window *config.PeakWindow) *gateway.NenyaGateway {
+	newGW := func(window []config.PeakWindow) *gateway.NenyaGateway {
 		catalog := discovery.NewModelCatalog()
 		catalog.Add(discovery.DiscoveredModel{ID: "deepseek-flash", Provider: "deepseek", Pricing: deepseekPricing})
 		return &gateway.NenyaGateway{
-			Providers:    map[string]*config.Provider{"deepseek": {Name: "deepseek", PeakWindow: window}},
+			Providers:    map[string]*config.Provider{"deepseek": {Name: "deepseek", PeakWindows: window}},
 			ModelCatalog: catalog,
 			CostTracker:  infra.NewCostTracker(),
 		}
@@ -68,7 +68,7 @@ func TestRecordCostAndBilling_PeakAndCached(t *testing.T) {
 	ctx := context.Background()
 
 	// Peak: 1M input (no cache) at the peak input rate.
-	gwPeak := newGW(&config.PeakWindow{Start: "00:00", End: "23:59"})
+	gwPeak := newGW([]config.PeakWindow{{Start: "00:00", End: "23:59"}})
 	recordCostAndBilling(ctx, gwPeak, target, 1_000_000, 0, 0)
 	if got := gwPeak.CostTracker.GetCostMicroUSD("deepseek-flash"); got != 300_000 {
 		t.Errorf("peak cost = %d microUSD, want 300000", got)

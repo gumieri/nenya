@@ -819,14 +819,18 @@ For the current catalog, query the `/v1/models` endpoint or enable [dynamic disc
 
 `—` in the price columns means no pricing is configured for that model in the static registry.
 
+DeepSeek rows quote the standard (off-peak) rate; peak hours (01:00–04:00 and 06:00–10:00 UTC Mon–Fri) bill at exactly 2×, and cache-hit input bills at the model's `cached_input_cost_per_1m` ($0.003 for V4.1-Flash, $0.022 for V4-Pro). See [COST_MODEL.md](COST_MODEL.md).
+
 | Model ID                        | Provider        | Max Context (tokens) | Max Output (tokens) | Input Price | Output Price |
 | ------------------------------- | --------------- | -------------------: | ------------------: | ----------: | -----------: |
 | `gemini-3.1-flash-lite-preview` | gemini          |            1,048,576 |              65,536 |    $0.075/M |      $0.30/M |
 | `gemini-3-flash-preview`        | gemini          |            1,048,576 |              65,536 |    $0.075/M |      $0.30/M |
 | `gemini-2.5-flash-lite`         | gemini          |            1,048,576 |              65,536 |    $0.075/M |      $0.30/M |
 | `gemini-2.5-flash`              | gemini          |            1,048,576 |              65,536 |    $0.075/M |      $0.30/M |
-| `deepseek-v4-pro`               | deepseek        |            1,000,000 |             384,000 |     $2.00/M |      $8.00/M |
-| `deepseek-v4-flash`             | deepseek        |            1,000,000 |             384,000 |     $0.10/M |      $0.10/M |
+| `deepseek-v4-pro`               | deepseek        |            1,000,000 |             384,000 |     $0.66/M |      $1.98/M |
+| `deepseek-v4-flash`             | deepseek        |            1,000,000 |             384,000 |     $0.15/M |      $0.60/M |
+| `deepseek-v4.1-flash`           | deepseek        |            1,000,000 |             384,000 |     $0.15/M |      $0.60/M |
+| `deepseek-flash`                | deepseek        |            1,000,000 |             384,000 |     $0.15/M |      $0.60/M |
 | `glm-5.1`                       | zai             |              200,000 |             128,000 |     $1.40/M |      $4.40/M |
 | `glm-5.2`                       | zai             |            1,000,000 |             128,000 |     $1.40/M |      $4.40/M |
 | `glm-5.3`                       | zai-coding-plan |            1,000,000 |             128,000 |     $1.40/M |      $4.40/M |
