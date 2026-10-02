@@ -131,6 +131,14 @@ func pricingUsage(gw *gateway.NenyaGateway, target routing.UpstreamTarget, input
 	return u
 }
 
+// windowLabel maps a resolved window to its metric label.
+func windowLabel(peak bool) string {
+	if peak {
+		return "peak"
+	}
+	return "offpeak"
+}
+
 func recordCostAndBilling(ctx context.Context, gw *gateway.NenyaGateway, target routing.UpstreamTarget, inputTokens, cachedInputTokens, outputTokens int) {
 	if gw.CostTracker == nil || (inputTokens <= 0 && outputTokens <= 0) {
 		return
@@ -139,7 +147,12 @@ func recordCostAndBilling(ctx context.Context, gw *gateway.NenyaGateway, target 
 	if !ok || dm.Pricing == nil || !dm.Pricing.HasStandardRate() {
 		return
 	}
-	cost := dm.Pricing.CalculateCost(pricingUsage(gw, target, inputTokens, cachedInputTokens, outputTokens, time.Now()))
+	u := pricingUsage(gw, target, inputTokens, cachedInputTokens, outputTokens, time.Now())
+	cost := dm.Pricing.CalculateCost(u)
+	gw.Metrics.RecordCostWindow(target.Model, windowLabel(u.Peak), cost)
+	if cachedInputTokens > 0 {
+		gw.Metrics.RecordCachedInputTokens(target.Model, windowLabel(u.Peak), cachedInputTokens)
+	}
 	gw.CostTracker.RecordUsage(target.Model, cost)
 	if gw.BillingTracker != nil {
 		gw.BillingTracker.RecordSpend(ctx, billing.SpendEntry{

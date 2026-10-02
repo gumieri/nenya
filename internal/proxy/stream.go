@@ -1127,6 +1127,7 @@ func (o *upstreamErrorObserver) OnStreamClose(err error) {}
 func (p *Proxy) makeUsageCallback(ctx context.Context, gw *gateway.NenyaGateway, target routing.UpstreamTarget, agentName string) func(stream.UsageData) {
 	var accInput, accCached, accCompletion int64
 	var lastCost float64
+	var lastCached int64
 	return func(u stream.UsageData) {
 		completion, prompt := u.CompletionTokens, u.PromptTokens
 		cacheHit, cacheMiss := u.CacheHitTokens, u.CacheMissTokens
@@ -1158,7 +1159,7 @@ func (p *Proxy) makeUsageCallback(ctx context.Context, gw *gateway.NenyaGateway,
 				accInput += int64(prompt)
 				accCached += int64(cacheHit)
 				accCompletion += int64(completion)
-				recordStreamCost(ctx, gw, target, dm.Pricing, accInput, accCached, accCompletion, &lastCost, prompt, completion)
+				recordStreamCost(ctx, gw, target, dm.Pricing, accInput, accCached, accCompletion, &lastCost, &lastCached, prompt, completion)
 			}
 		}
 	}
@@ -1169,14 +1170,21 @@ func (p *Proxy) makeUsageCallback(ctx context.Context, gw *gateway.NenyaGateway,
 // cached/uncached split. The pricing window is sampled at the recording
 // instant (docs/COST_MODEL.md, billing approximation).
 func recordStreamCost(ctx context.Context, gw *gateway.NenyaGateway, target routing.UpstreamTarget,
-	pricing *discovery.PricingEntry, accInput, accCached, accCompletion int64, lastCost *float64, prompt, completion int) {
+	pricing *discovery.PricingEntry, accInput, accCached, accCompletion int64, lastCost *float64, lastCached *int64, prompt, completion int) {
 	now := time.Now()
-	total := pricing.CalculateCost(pricingUsage(gw, target, int(accInput), int(accCached), int(accCompletion), now))
+	u := pricingUsage(gw, target, int(accInput), int(accCached), int(accCompletion), now)
+	total := pricing.CalculateCost(u)
 	cost := total - *lastCost
 	*lastCost = total
 	if cost == 0 {
 		return
 	}
+	label := windowLabel(u.Peak)
+	gw.Metrics.RecordCostWindow(target.Model, label, cost)
+	if cachedDelta := accCached - *lastCached; cachedDelta > 0 {
+		gw.Metrics.RecordCachedInputTokens(target.Model, label, int(cachedDelta))
+	}
+	*lastCached = accCached
 	gw.CostTracker.RecordUsage(target.Model, cost)
 	if gw.BillingTracker != nil {
 		gw.BillingTracker.RecordSpend(ctx, billing.SpendEntry{

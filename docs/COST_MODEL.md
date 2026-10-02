@@ -150,6 +150,19 @@ those values with the verified standard/peak/cached split (standard is the
 off-peak rate; peak is the declared surcharge; cache hits ride the cached
 rate) and rewrote the comment and CHANGELOG wording.
 
+## Operator surface
+
+A cost total is explainable without reading code:
+
+- `nenya_cost_micro_usd_total{model,window="peak|offpeak"}` — per-model cost
+  split by the window it was billed at.
+- `nenya_cached_input_tokens_total{model,window}` — cache-hit input volume
+  under the same split.
+- `/statsz` → `cost_model` — each provider's declared peak windows
+  (`{start, end, weekdays_only}`) and each catalog model's rate card
+  (`input_cost_per_1m`, `output_cost_per_1m`, `peak_*`,
+  `cached_input_cost_per_1m`, `currency`).
+
 ## Related
 
 - `docs/CONFIGURATION.md` → Cost Tracking (field reference; extended in

@@ -121,3 +121,37 @@ func TestRecordNonStreamingUsage_CacheReadThreading(t *testing.T) {
 		t.Errorf("cost = %d microUSD, want 910000", got)
 	}
 }
+
+// TestCostModelStats verifies /statsz explains a cost total: provider peak
+// windows and per-model rate cards.
+func TestCostModelStats(t *testing.T) {
+	catalog := discovery.NewModelCatalog()
+	catalog.Add(discovery.DiscoveredModel{ID: "deepseek-flash", Provider: "deepseek", Pricing: &discovery.PricingEntry{
+		InputCostPer1M: 0.15, OutputCostPer1M: 0.60,
+		PeakInputCostPer1M: 0.30, PeakOutputCostPer1M: 1.20, CachedInputCostPer1M: 0.003, Currency: "USD",
+	}})
+	gw := &gateway.NenyaGateway{
+		Providers: map[string]*config.Provider{"deepseek": {
+			Name:        "deepseek",
+			PeakWindows: []config.PeakWindow{{Start: "01:00", End: "04:00", WeekdaysOnly: true}},
+		}},
+		ModelCatalog: catalog,
+	}
+	out := costModelStats(gw)
+	windows, _ := out["peak_windows"].(map[string]interface{})
+	if _, ok := windows["deepseek"]; !ok {
+		t.Errorf("peak windows missing: %+v", out)
+	}
+	models, _ := out["models"].(map[string]interface{})
+	m, ok := models["deepseek-flash"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("model rate card missing: %+v", models)
+	}
+	if m["cached_input_cost_per_1m"] != 0.003 {
+		t.Errorf("cached rate = %v", m["cached_input_cost_per_1m"])
+	}
+	// Nil-safe on a gateway without a catalog.
+	if got := costModelStats(&gateway.NenyaGateway{}); got == nil {
+		t.Error("expected non-nil stats")
+	}
+}
