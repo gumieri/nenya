@@ -753,3 +753,23 @@ func TestApplyContextDefaults_TokenLimitClamps(t *testing.T) {
 		})
 	}
 }
+
+func TestApplyCompactionDefaults_MutationWindow(t *testing.T) {
+	t.Run("non-positive selects the default", func(t *testing.T) {
+		for _, in := range []int{0, -7} {
+			cfg := Config{Compaction: CompactionConfig{MutationWindow: in}}
+			applyCompactionDefaults(&cfg)
+			if cfg.Compaction.MutationWindow != DefaultMutationWindow {
+				t.Errorf("MutationWindow(%d) = %d, want default %d", in, cfg.Compaction.MutationWindow, DefaultMutationWindow)
+			}
+		}
+	})
+
+	t.Run("positive is preserved", func(t *testing.T) {
+		cfg := Config{Compaction: CompactionConfig{MutationWindow: 12}}
+		applyCompactionDefaults(&cfg)
+		if cfg.Compaction.MutationWindow != 12 {
+			t.Errorf("MutationWindow = %d, want 12", cfg.Compaction.MutationWindow)
+		}
+	})
+}

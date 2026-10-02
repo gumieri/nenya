@@ -334,23 +334,24 @@ Optimizations to improve upstream provider prefix cache hit rates by stabilizing
 
 Text compaction applied to all message content (both string and multi-part content arrays).
 
-| Field                      | Type   | Default       | Description                                                                                                                                                     |
-| -------------------------- | ------ | ------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `enabled`                  | bool   | `true` (auto) | Master toggle. Auto-enabled when any sub-field is explicitly set to `true`.                                                                                     |
-| `normalize_line_endings`   | bool   | `true`        | Convert CRLF to LF                                                                                                                                              |
-| `trim_trailing_whitespace` | bool   | `true`        | Remove trailing spaces/tabs from each line                                                                                                                      |
-| `collapse_blank_lines`     | bool   | `true`        | Collapse runs of 3+ blank lines to max 2                                                                                                                        |
-| `compaction_preset`        | string | `""`          | Compaction preset: `"aggressive"` (all features), `"balanced"` (whitespace + JSON minify), or `"minimal"` (disabled). Individual fields override preset values. |
-| `json_minify`              | bool   | `true`        | Minify the final JSON body with `json.Compact`                                                                                                                  |
-| `prune_stale_tools`        | bool   | `false`       | Compact old assistant+tool response pairs into summary placeholders                                                                                             |
-| `tool_protection_window`   | int    | `4`           | Number of most recent messages to protect from tool call pruning                                                                                                |
-| `prune_thoughts`           | bool   | `false`       | Strip reasoning blocks from assistant messages to save context tokens                                                                                           |
+| Field                      | Type   | Default       | Description                                                                                                                                                                                 |
+| -------------------------- | ------ | ------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `enabled`                  | bool   | `true` (auto) | Master toggle. Auto-enabled when any sub-field is explicitly set to `true`.                                                                                                                 |
+| `normalize_line_endings`   | bool   | `true`        | Convert CRLF to LF                                                                                                                                                                          |
+| `trim_trailing_whitespace` | bool   | `true`        | Remove trailing spaces/tabs from each line                                                                                                                                                  |
+| `collapse_blank_lines`     | bool   | `true`        | Collapse runs of 3+ blank lines to max 2                                                                                                                                                    |
+| `compaction_preset`        | string | `""`          | Compaction preset: `"aggressive"` (all features), `"balanced"` (whitespace + JSON minify), or `"minimal"` (disabled). Individual fields override preset values.                             |
+| `json_minify`              | bool   | `true`        | Minify the final JSON body with `json.Compact`                                                                                                                                              |
+| `prune_stale_tools`        | bool   | `false`       | Compact old assistant+tool response pairs into summary placeholders                                                                                                                         |
+| `tool_protection_window`   | int    | `4`           | Number of most recent messages to protect from tool call pruning                                                                                                                            |
+| `mutation_window`          | int    | `64`          | Number of most recent messages eligible for history mutations (tool and thought pruning). Older messages are left byte-identical so the upstream prompt-cache prefix survives across turns. |
+| `prune_thoughts`           | bool   | `false`       | Strip reasoning blocks from assistant messages to save context tokens                                                                                                                       |
 
 Compaction runs after redaction, before engine interception. JSON minify runs at the very end of the pipeline.
 
 ### Stale Tool Call Pruning
 
-When `prune_stale_tools` is enabled, the gateway scans the messages array backwards (from oldest to newest) for completed tool execution pairs: an `assistant` message containing `tool_calls`, immediately followed by one or more `tool` messages with the results. When such a pair is found outside the protection window, both the assistant message and its tool responses are replaced with a single summary message:
+When `prune_stale_tools` is enabled, the gateway scans the messages array backwards (from newest to oldest) for completed tool execution pairs: an `assistant` message containing `tool_calls`, immediately followed by one or more `tool` messages with the results. When such a pair is found outside the protection window, both the assistant message and its tool responses are replaced with a single summary message:
 
 ```
 [System] Tool 'tool_name' was executed previously. Result compacted to save context window.
@@ -360,11 +361,13 @@ The tool name is extracted from the first tool call's `function.name` field. If 
 
 **Protection window**: The last `tool_protection_window` messages (default: 4) are never modified, preserving the LLM's immediate reasoning context including the most recent tool calls.
 
+**Mutation window**: Pruning only considers the last `mutation_window` messages (default: 64), excluding the newest `tool_protection_window` protected messages. Tool exchanges older than that are left byte-identical, so the stable prefix — and the upstream prompt-cache prefix — survives as the conversation grows. A `mutation_window` no larger than `tool_protection_window` guarantees no pruning; in general pruning is data-dependent, because a pair only compacts when the pair and all of its tool results fit inside the eligible window `[n - mutation_window, n - tool_protection_window)`.
+
 **Safety**: Orphaned tool calls (assistant with `tool_calls` but missing corresponding `tool` response, e.g., due to stream interruption) are left untouched. The pruning is skipped entirely for IDE clients.
 
 ### Thought Pruning
 
-When `prune_thoughts` is enabled, the gateway strips reasoning blocks from all `assistant` messages in the conversation history. This targets `<think.../think>` tags used by reasoning models (DeepSeek, OpenRouter, Groq, Gemini):
+When `prune_thoughts` is enabled, the gateway strips reasoning blocks from `assistant` messages within the last `mutation_window` messages (default: 64). Older assistant messages are left byte-identical so the prompt-cache prefix survives. This targets `<think.../think>` tags used by reasoning models (DeepSeek, OpenRouter, Groq, Gemini):
 
 **Text tag pruning:** Inside the `content` string, the gateway looks for the `<think` opening tag and `</think` closing tag. When found:
 

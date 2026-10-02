@@ -1510,6 +1510,10 @@ type CompactionConfig struct {
 	PruneStaleTools        *bool            `json:"prune_stale_tools,omitempty"`
 	ToolProtectionWindow   int              `json:"tool_protection_window"`
 	PruneThoughts          *bool            `json:"prune_thoughts,omitempty"`
+	// MutationWindow bounds both tool and thought pruning to the most recent
+	// messages; older messages are left byte-identical. A non-positive value
+	// always selects DefaultMutationWindow — there is no "unbounded" sentinel.
+	MutationWindow int `json:"mutation_window"`
 }
 
 func (c *CompactionConfig) EnabledWasSet() bool       { return wasSet(c.Enabled) }

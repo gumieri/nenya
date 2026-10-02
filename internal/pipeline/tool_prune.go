@@ -8,9 +8,31 @@ import (
 
 const defaultToolProtectionWindow = 4
 
+// pruneWindowStart returns the first message index eligible for history
+// mutation: the tail cfg.MutationWindow messages (default
+// config.DefaultMutationWindow). Messages before the returned index are left
+// byte-identical. Returns 0 when the window covers the whole conversation.
+func pruneWindowStart(n int, cfg config.CompactionConfig) int {
+	mutationWindow := cfg.MutationWindow
+	if mutationWindow <= 0 {
+		mutationWindow = config.DefaultMutationWindow
+	}
+	if mutationWindow < n {
+		return n - mutationWindow
+	}
+	return 0
+}
+
 // PruneStaleToolCalls removes old tool_call/tool_result message pairs
 // from the conversation history, keeping only the most recent ones within
 // the configured protection window.
+//
+// Mutations are confined to the last cfg.MutationWindow messages (default
+// config.DefaultMutationWindow): tool exchanges older than that are left
+// byte-identical, so the stable prefix survives across turns and the provider
+// prompt-cache prefix is not invalidated as the conversation grows. A mutation
+// window no larger than tool_protection_window is a guaranteed no-op; a larger
+// window prunes only when an eligible pair (and all its results) fits inside it.
 func PruneStaleToolCalls(payload map[string]interface{}, cfg config.CompactionConfig) bool {
 	if cfg.PruneStaleTools == nil || !*cfg.PruneStaleTools {
 		return false
@@ -31,10 +53,20 @@ func PruneStaleToolCalls(payload map[string]interface{}, cfg config.CompactionCo
 		return false
 	}
 
+	// Confine mutations to the tail: only the most recent MutationWindow
+	// messages are eligible, so older messages stay byte-identical and the
+	// provider prompt-cache prefix survives as the conversation grows.
+	// windowStart is intentionally fixed against the original length: removals
+	// only ever occur at indices >= windowStart, so the boundary never needs to
+	// move and the stable prefix is never touched. After removals shrink n the
+	// mutable tail can exceed mutationWindow, which is conservative (a larger
+	// stable prefix) and is deliberate.
+	windowStart := pruneWindowStart(n, cfg)
+
 	mutated := false
 	pruneEnd := n - protectionWindow
 
-	for i := pruneEnd - 1; i >= 0; {
+	for i := pruneEnd - 1; i >= windowStart; {
 		msg, ok := messages[i].(map[string]interface{})
 		if !ok || shouldSkipMessage(msg) {
 			i--
