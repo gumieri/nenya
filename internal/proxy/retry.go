@@ -1314,7 +1314,7 @@ func (p *Proxy) checkPreDispatchGuards(gw *gateway.NenyaGateway, ctxLogger *slog
 
 	if gw.Config.Governance.MaxCostPerRequest > 0 {
 		dm, ok := gw.ModelCatalog.Lookup(target.Model)
-		if ok && dm.Pricing != nil && !dm.Pricing.IsZero() {
+		if ok && dm.Pricing != nil && dm.Pricing.HasStandardRate() {
 			estCost := dm.Pricing.CalculateCost(int64(tokenCount), int64(target.MaxOutput))
 			if estCost > gw.Config.Governance.MaxCostPerRequest {
 				gw.Metrics.RecordCostLimitRejected(target.Model)

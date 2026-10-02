@@ -7,21 +7,58 @@ import (
 
 // PricingOverride allows overriding a model's default per-token pricing.
 // Zero values mean "use the built-in pricing".
+//
+// InputCostPer1M/OutputCostPer1M are the standard (off-peak) baseline rates.
+// PeakInputCostPer1M/PeakOutputCostPer1M are the peak-window rates; zero means
+// the provider/model has no peak window. CachedInputCostPer1M is the discounted
+// cache-read input rate; zero means cache reads bill at the window input rate.
+// See docs/COST_MODEL.md for the evaluation contract.
 type PricingOverride struct {
-	InputCostPer1M  float64 `json:"input_cost_per_1m"`
-	OutputCostPer1M float64 `json:"output_cost_per_1m"`
+	InputCostPer1M       float64 `json:"input_cost_per_1m"`
+	OutputCostPer1M      float64 `json:"output_cost_per_1m"`
+	PeakInputCostPer1M   float64 `json:"peak_input_cost_per_1m,omitempty"`
+	PeakOutputCostPer1M  float64 `json:"peak_output_cost_per_1m,omitempty"`
+	CachedInputCostPer1M float64 `json:"cached_input_cost_per_1m,omitempty"`
 }
 
+// IsZero reports whether no rate is configured. A peak-only or cached-only
+// entry is not zero (the model is priced, just not on the baseline fields).
 func (p PricingOverride) IsZero() bool {
-	return p.InputCostPer1M == 0 && p.OutputCostPer1M == 0
+	return p.InputCostPer1M == 0 && p.OutputCostPer1M == 0 &&
+		p.PeakInputCostPer1M == 0 && p.PeakOutputCostPer1M == 0 &&
+		p.CachedInputCostPer1M == 0
 }
 
+// HasPeak reports whether the entry declares a peak-window rate.
+func (p PricingOverride) HasPeak() bool {
+	return p.PeakInputCostPer1M != 0 || p.PeakOutputCostPer1M != 0
+}
+
+// HasStandardRate reports whether a usable standard (off-peak) baseline rate is
+// set. Callers that price tokens with the flat-only CalculateCost (before the
+// window-aware model lands) must gate on this, not on IsZero: a peak-only
+// entry is non-zero but has no standard rate and would otherwise price at $0.
+func (p PricingOverride) HasStandardRate() bool {
+	return p.InputCostPer1M != 0 || p.OutputCostPer1M != 0
+}
+
+// Validate checks that every configured rate is non-negative. Zero is valid
+// (absent); negatives are rejected.
 func (p PricingOverride) Validate() error {
 	if p.InputCostPer1M < 0 {
 		return fmt.Errorf("PricingOverride.InputCostPer1M must be non-negative, got %f", p.InputCostPer1M)
 	}
 	if p.OutputCostPer1M < 0 {
 		return fmt.Errorf("PricingOverride.OutputCostPer1M must be non-negative, got %f", p.OutputCostPer1M)
+	}
+	if p.PeakInputCostPer1M < 0 {
+		return fmt.Errorf("PricingOverride.PeakInputCostPer1M must be non-negative, got %f", p.PeakInputCostPer1M)
+	}
+	if p.PeakOutputCostPer1M < 0 {
+		return fmt.Errorf("PricingOverride.PeakOutputCostPer1M must be non-negative, got %f", p.PeakOutputCostPer1M)
+	}
+	if p.CachedInputCostPer1M < 0 {
+		return fmt.Errorf("PricingOverride.CachedInputCostPer1M must be non-negative, got %f", p.CachedInputCostPer1M)
 	}
 	return nil
 }

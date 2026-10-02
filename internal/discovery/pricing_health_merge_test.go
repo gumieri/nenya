@@ -2,6 +2,7 @@ package discovery
 
 import (
 	"context"
+	"encoding/json"
 	"math"
 	"testing"
 	"time"
@@ -20,12 +21,34 @@ func TestPricingEntry_IsZero(t *testing.T) {
 		{"input cost set", PricingEntry{InputCostPer1M: 1.0}, false},
 		{"output cost set", PricingEntry{OutputCostPer1M: 1.0}, false},
 		{"both set", PricingEntry{InputCostPer1M: 1.0, OutputCostPer1M: 0.5}, false},
+		{"peak-only is not zero", PricingEntry{PeakInputCostPer1M: 0.3, PeakOutputCostPer1M: 1.2}, false},
+		{"cached-only is not zero", PricingEntry{CachedInputCostPer1M: 0.05}, false},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			if got := tt.p.IsZero(); got != tt.zero {
 				t.Errorf("IsZero() = %v, want %v", got, tt.zero)
+			}
+		})
+	}
+}
+
+func TestPricingEntry_HasPeak(t *testing.T) {
+	tests := []struct {
+		name string
+		p    PricingEntry
+		want bool
+	}{
+		{"flat", PricingEntry{InputCostPer1M: 1}, false},
+		{"peak input", PricingEntry{PeakInputCostPer1M: 1}, true},
+		{"peak output", PricingEntry{PeakOutputCostPer1M: 1}, true},
+		{"cached only", PricingEntry{CachedInputCostPer1M: 1}, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := tt.p.HasPeak(); got != tt.want {
+				t.Errorf("HasPeak() = %v, want %v", got, tt.want)
 			}
 		})
 	}
@@ -174,6 +197,26 @@ func TestMergePricing(t *testing.T) {
 		}
 		if merged["model-a"].InputCostPer1M != 2.0 {
 			t.Errorf("expected static pricing 2.0, got %f", merged["model-a"].InputCostPer1M)
+		}
+	})
+
+	t.Run("discovered peak-only is not zero and shadows static flat", func(t *testing.T) {
+		disc := map[string]PricingEntry{
+			"model-a": {PeakInputCostPer1M: 0.3, PeakOutputCostPer1M: 1.2},
+		}
+		static := map[string]PricingEntry{
+			"model-a": {InputCostPer1M: 2.0, OutputCostPer1M: 4.0},
+		}
+		merged := MergePricing(disc, static)
+		got := merged["model-a"]
+		if got.IsZero() {
+			t.Error("peak-only discovered entry must not be zero")
+		}
+		if got.HasStandardRate() {
+			t.Error("peak-only discovered entry must not report a standard rate (static flat was shadowed)")
+		}
+		if got.PeakInputCostPer1M != 0.3 {
+			t.Errorf("peak input = %f, want 0.3", got.PeakInputCostPer1M)
 		}
 	})
 }
@@ -704,4 +747,47 @@ func TestPickInt(t *testing.T) {
 			t.Errorf("expected 0, got %d", got)
 		}
 	})
+}
+
+func TestPricingEntry_HasStandardRate(t *testing.T) {
+	tests := []struct {
+		name string
+		p    PricingEntry
+		want bool
+	}{
+		{"flat input", PricingEntry{InputCostPer1M: 1}, true},
+		{"flat output", PricingEntry{OutputCostPer1M: 1}, true},
+		{"peak only", PricingEntry{PeakInputCostPer1M: 1}, false},
+		{"cached only", PricingEntry{CachedInputCostPer1M: 1}, false},
+		{"empty", PricingEntry{}, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := tt.p.HasStandardRate(); got != tt.want {
+				t.Errorf("HasStandardRate() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestPricingEntry_JSONRoundTrip(t *testing.T) {
+	in := PricingEntry{
+		InputCostPer1M:       0.15,
+		OutputCostPer1M:      0.60,
+		PeakInputCostPer1M:   0.30,
+		PeakOutputCostPer1M:  1.20,
+		CachedInputCostPer1M: 0.05,
+		Currency:             "USD",
+	}
+	b, err := json.Marshal(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out PricingEntry
+	if err := json.Unmarshal(b, &out); err != nil {
+		t.Fatal(err)
+	}
+	if out != in {
+		t.Errorf("round trip = %+v, want %+v", out, in)
+	}
 }

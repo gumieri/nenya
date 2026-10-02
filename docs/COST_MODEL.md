@@ -37,6 +37,12 @@ A model is "peak-priced" iff `peak_input_cost_per_1m != 0` or
 `peak_output_cost_per_1m != 0`. `IsZero()` must stay `false` for a
 peak-only/cached-only entry (a model with any rate is not priceless).
 
+`HasStandardRate()` (`InputCostPer1M != 0 || OutputCostPer1M != 0`) is the
+predicate for "has a usable flat rate". Until the window-aware cost API lands,
+every caller that prices via the flat-only `CalculateCost` MUST gate on
+`HasStandardRate()`, **not** on `!IsZero()` — otherwise a peak-only entry
+(non-zero, no standard rate) would silently price at `$0`.
+
 ## Evaluation order
 
 For a request at instant `t` with `input`, `cachedInput`, and `output` tokens:
@@ -52,10 +58,11 @@ For a request at instant `t` with `input`, `cachedInput`, and `output` tokens:
    `cachedInput*cachedRate + (input - cachedInput)*inRate + output*outRate`,
    all divided by `1,000,000`. `cachedInput` is clamped to `[0, input]`.
 
-API shape: `CalculateCost` takes an options struct
+API shape (later phase): `CalculateCost` takes an options struct
 (`PricingUsage{Input, CachedInput, Output int64; Peak bool}`) rather than two
 scalars, so every caller must state the window and cached-token count
-explicitly (AGENTS.md §11).
+explicitly (AGENTS.md §11). The currently shipped `CalculateCost(int64, int64)`
+is flat-only and is replaced by that signature in Phase 003.
 
 ## Peak windows
 
@@ -84,6 +91,10 @@ Providers without a window are never peak.
 - **The guard is conservative.** `max_cost_per_request` estimates on the
   **peak** rate (worst case) so it can never under-estimate a request's
   ceiling. (Whether this becomes configurable is decided in Phase 006.)
+  _Interim:_ until the window-aware cost API lands, the guard still estimates
+  on the standard baseline and skips peak-only entries (it gates on
+  `HasStandardRate`), which is no worse than the pre-module behavior; Phase 006
+  makes it peak-aware.
 - **No pricing ⇒ no cost.** A catalog lookup miss keeps the current
   fast path (no cost recorded).
 

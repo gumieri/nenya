@@ -10,16 +10,46 @@ import (
 	"time"
 )
 
+// PricingEntry is the effective pricing for a model in the discovery catalog.
+//
+// InputCostPer1M/OutputCostPer1M are the standard (off-peak) baseline rates.
+// PeakInputCostPer1M/PeakOutputCostPer1M are the peak-window rates; zero means
+// no peak window. CachedInputCostPer1M is the discounted cache-read input rate;
+// zero means cache reads bill at the window input rate. See docs/COST_MODEL.md.
 type PricingEntry struct {
-	InputCostPer1M  float64 `json:"input_cost_per_1m"`
-	OutputCostPer1M float64 `json:"output_cost_per_1m"`
-	Currency        string  `json:"currency"`
+	InputCostPer1M       float64 `json:"input_cost_per_1m"`
+	OutputCostPer1M      float64 `json:"output_cost_per_1m"`
+	PeakInputCostPer1M   float64 `json:"peak_input_cost_per_1m,omitempty"`
+	PeakOutputCostPer1M  float64 `json:"peak_output_cost_per_1m,omitempty"`
+	CachedInputCostPer1M float64 `json:"cached_input_cost_per_1m,omitempty"`
+	Currency             string  `json:"currency"`
 }
 
+// IsZero reports whether no rate is set (a peak-only/cached-only entry is not
+// zero).
 func (p PricingEntry) IsZero() bool {
-	return p.InputCostPer1M == 0 && p.OutputCostPer1M == 0
+	return p.InputCostPer1M == 0 && p.OutputCostPer1M == 0 &&
+		p.PeakInputCostPer1M == 0 && p.PeakOutputCostPer1M == 0 &&
+		p.CachedInputCostPer1M == 0
 }
 
+// HasPeak reports whether the entry declares a peak-window rate.
+func (p PricingEntry) HasPeak() bool {
+	return p.PeakInputCostPer1M != 0 || p.PeakOutputCostPer1M != 0
+}
+
+// HasStandardRate reports whether a usable standard (off-peak) baseline rate is
+// set. Callers pricing with the flat-only CalculateCost (before the
+// window-aware model lands) gate on this, not on IsZero: a peak-only entry is
+// non-zero but would price at $0.
+func (p PricingEntry) HasStandardRate() bool {
+	return p.InputCostPer1M != 0 || p.OutputCostPer1M != 0
+}
+
+// CalculateCost estimates the USD cost of inputTokens + outputTokens using the
+// standard (off-peak) baseline rates. It intentionally ignores the peak and
+// cached-input fields today; the window-aware evaluation lands in a later phase
+// (see docs/COST_MODEL.md).
 func (p PricingEntry) CalculateCost(inputTokens, outputTokens int64) float64 {
 	inputCost := (float64(inputTokens) / 1_000_000) * p.InputCostPer1M
 	outputCost := (float64(outputTokens) / 1_000_000) * p.OutputCostPer1M
@@ -174,6 +204,13 @@ func (pf *PricingFetcher) FetchOpenRouterPricing(ctx context.Context) (map[strin
 	return pricing, nil
 }
 
+// MergePricing overlays discovered pricing onto the static map: a static entry
+// is used only when the model is absent from the discovered set or the
+// discovered entry is entirely zero. IsZero covers peak/cached fields, so a
+// discovered entry carrying only those still wins over the static baseline.
+//
+// Reserved for a future pricing chain (see PricingSource); not wired into the
+// discovery flow today.
 func MergePricing(discovered map[string]PricingEntry, static map[string]PricingEntry) map[string]PricingEntry {
 	merged := make(map[string]PricingEntry, len(discovered)+len(static))
 	for k, v := range discovered {

@@ -1145,7 +1145,7 @@ func (p *Proxy) makeUsageCallback(ctx context.Context, gw *gateway.NenyaGateway,
 		// Note: Stats cache methods don't track agent/provider; Metrics methods do.
 		// This pattern (if count > 0 { Stats.*; Metrics.* }) is intentional.
 		if gw.CostTracker != nil && (prompt > 0 || completion > 0) {
-			if dm, ok := gw.ModelCatalog.Lookup(target.Model); ok && dm.Pricing != nil && !dm.Pricing.IsZero() {
+			if dm, ok := gw.ModelCatalog.Lookup(target.Model); ok && dm.Pricing != nil && dm.Pricing.HasStandardRate() {
 				cost := dm.Pricing.CalculateCost(int64(prompt), int64(completion))
 				gw.CostTracker.RecordUsage(target.Model, cost)
 				if gw.BillingTracker != nil {

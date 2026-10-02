@@ -98,7 +98,7 @@ func recordCostAndBilling(ctx context.Context, gw *gateway.NenyaGateway, target 
 		return
 	}
 	dm, ok := gw.ModelCatalog.Lookup(target.Model)
-	if !ok || dm.Pricing == nil || dm.Pricing.IsZero() {
+	if !ok || dm.Pricing == nil || !dm.Pricing.HasStandardRate() {
 		return
 	}
 	cost := dm.Pricing.CalculateCost(int64(inputTokens), int64(outputTokens))

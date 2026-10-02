@@ -203,7 +203,7 @@ func isModelFreeInProvider(model, provider string, opts SortOptions, catalog *di
 	}
 
 	if catalog != nil {
-		if dm, ok := catalog.Lookup(model); ok && dm.Pricing != nil && !dm.Pricing.IsZero() {
+		if dm, ok := catalog.Lookup(model); ok && dm.Pricing != nil && dm.Pricing.HasStandardRate() {
 			if dm.Pricing.InputCostPer1M <= DefaultFreeOnlyInputPriceThreshold &&
 				dm.Pricing.OutputCostPer1M <= DefaultFreeOnlyInputPriceThreshold {
 				return true

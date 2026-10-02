@@ -154,6 +154,12 @@ func logDiscoveredModels(ctx context.Context, logger *slog.Logger, catalog *Mode
 		pricing := "false"
 		if m.Pricing != nil {
 			pricing = fmt.Sprintf("%.2f/%.2f", m.Pricing.InputCostPer1M, m.Pricing.OutputCostPer1M)
+			if m.Pricing.HasPeak() {
+				pricing += fmt.Sprintf(" peak=%.2f/%.2f", m.Pricing.PeakInputCostPer1M, m.Pricing.PeakOutputCostPer1M)
+			}
+			if m.Pricing.CachedInputCostPer1M != 0 {
+				pricing += fmt.Sprintf(" cached_in=%.2f", m.Pricing.CachedInputCostPer1M)
+			}
 		}
 		allModels = append(allModels, fmt.Sprintf("%s/%s ctx=%d out=%d caps=%s pricing=%s",
 			m.Provider, m.ID, m.MaxContext, m.MaxOutput, meta, pricing))

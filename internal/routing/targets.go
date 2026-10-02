@@ -281,7 +281,7 @@ func isPaidModelOnFreeOnlyProvider(m config.AgentModel, freeOnlyProviders map[st
 	if !ok {
 		return true
 	}
-	if dm.Pricing == nil || dm.Pricing.IsZero() {
+	if dm.Pricing == nil || !dm.Pricing.HasStandardRate() {
 		return false
 	}
 	if dm.Pricing.InputCostPer1M > DefaultFreeOnlyInputPriceThreshold {
@@ -1055,16 +1055,19 @@ func ResolveAgentPricing(agentName string, agents map[string]config.AgentConfig,
 // catalog first, then the static registry. Returns nil if no pricing is available.
 func resolveModelPricing(m config.AgentModel, catalog *discovery.ModelCatalog) *discovery.PricingEntry {
 	if catalog != nil {
-		if dm, ok := catalog.Lookup(m.Model); ok && dm.Pricing != nil && !dm.Pricing.IsZero() {
+		if dm, ok := catalog.Lookup(m.Model); ok && dm.Pricing != nil && dm.Pricing.HasStandardRate() {
 			p := *dm.Pricing
 			return &p
 		}
 	}
-	if entry, ok := config.ModelRegistry[m.Model]; ok && !entry.Pricing.IsZero() {
+	if entry, ok := config.ModelRegistry[m.Model]; ok && entry.Pricing.HasStandardRate() {
 		return &discovery.PricingEntry{
-			InputCostPer1M:  entry.Pricing.InputCostPer1M,
-			OutputCostPer1M: entry.Pricing.OutputCostPer1M,
-			Currency:        "USD",
+			InputCostPer1M:       entry.Pricing.InputCostPer1M,
+			OutputCostPer1M:      entry.Pricing.OutputCostPer1M,
+			PeakInputCostPer1M:   entry.Pricing.PeakInputCostPer1M,
+			PeakOutputCostPer1M:  entry.Pricing.PeakOutputCostPer1M,
+			CachedInputCostPer1M: entry.Pricing.CachedInputCostPer1M,
+			Currency:             "USD",
 		}
 	}
 	return nil
