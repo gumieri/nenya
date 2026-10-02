@@ -169,9 +169,32 @@ func (c *ModelCatalog) AttachPricing(pricing map[string]PricingEntry) {
 	for id, p := range pricing {
 		if entries, ok := c.models[id]; ok {
 			for i := range entries {
-				entries[i].Pricing = &p
+				mergeAttachedPeak(&p, entries[i].Pricing)
+				// Per-entry copy: variants must not share one pricing
+				// pointer (a future in-place mutation would leak across
+				// providers of the same model ID).
+				pe := p
+				entries[i].Pricing = &pe
 			}
 			c.models[id] = entries
 		}
+	}
+}
+
+// mergeAttachedPeak preserves peak/cached dimensions an attached baseline-only
+// feed does not carry (docs/COST_MODEL.md Display/overlay rule). dst's
+// baseline always wins.
+func mergeAttachedPeak(dst *PricingEntry, existing *PricingEntry) {
+	if existing == nil {
+		return
+	}
+	if dst.PeakInputCostPer1M == 0 {
+		dst.PeakInputCostPer1M = existing.PeakInputCostPer1M
+	}
+	if dst.PeakOutputCostPer1M == 0 {
+		dst.PeakOutputCostPer1M = existing.PeakOutputCostPer1M
+	}
+	if dst.CachedInputCostPer1M == 0 {
+		dst.CachedInputCostPer1M = existing.CachedInputCostPer1M
 	}
 }

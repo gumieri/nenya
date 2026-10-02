@@ -354,6 +354,7 @@ func backfillStaticModels(models []DiscoveredModel, providerName string, provide
 			MaxOutput:  entry.MaxOutput,
 			OwnedBy:    "nenya",
 			Metadata:   metadata,
+			Pricing:    pricingEntryFromOverride(entry.Pricing),
 		})
 	}
 	return models

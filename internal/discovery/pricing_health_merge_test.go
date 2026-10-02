@@ -811,3 +811,114 @@ func TestPricingEntry_JSONRoundTrip(t *testing.T) {
 		t.Errorf("round trip = %+v, want %+v", out, in)
 	}
 }
+
+// TestMergeCatalog_StaticPricingBecomesCatalogPricing pins the Phase 007
+// bridge: static registry pricing (incl. peak/cached) must surface as
+// DiscoveredModel.Pricing so billing and the cost guard see it without an
+// attached external feed.
+func TestMergeCatalog_StaticPricingBecomesCatalogPricing(t *testing.T) {
+	const id = "cost-model-test-merge-static"
+	config.ModelRegistry[id] = config.ModelEntry{
+		Provider: "deepseek",
+		Pricing: config.PricingOverride{
+			InputCostPer1M:       0.15,
+			OutputCostPer1M:      0.60,
+			PeakInputCostPer1M:   0.30,
+			PeakOutputCostPer1M:  1.20,
+			CachedInputCostPer1M: 0.05,
+		},
+	}
+	t.Cleanup(func() { delete(config.ModelRegistry, id) })
+
+	merged := MergeCatalog(NewModelCatalog(), &config.Config{
+		Providers: map[string]config.ProviderConfig{},
+		Agents:    map[string]config.AgentConfig{},
+	})
+	dm, ok := merged.Lookup(id)
+	if !ok {
+		t.Fatal("merged catalog missing model")
+	}
+	if dm.Pricing == nil {
+		t.Fatal("static pricing must surface as catalog pricing")
+	}
+	if !dm.Pricing.HasPeak() || dm.Pricing.PeakInputCostPer1M != 0.30 || dm.Pricing.PeakOutputCostPer1M != 1.20 {
+		t.Errorf("peak fields lost: %+v", dm.Pricing)
+	}
+	if dm.Pricing.CachedInputCostPer1M != 0.05 || !dm.Pricing.HasStandardRate() {
+		t.Errorf("standard/cached fields lost: %+v", dm.Pricing)
+	}
+}
+
+// TestAttachPricing_PreservesStaticPeak pins that an attached baseline-only
+// feed (OpenRouter) never wipes the static peak/cached dimensions.
+func TestAttachPricing_PreservesStaticPeak(t *testing.T) {
+	const id = "cost-model-test-attach-peak"
+	config.ModelRegistry[id] = config.ModelEntry{
+		Provider: "p",
+		Pricing: config.PricingOverride{
+			InputCostPer1M:       0.15,
+			OutputCostPer1M:      0.60,
+			PeakInputCostPer1M:   0.30,
+			PeakOutputCostPer1M:  1.20,
+			CachedInputCostPer1M: 0.05,
+		},
+	}
+	t.Cleanup(func() { delete(config.ModelRegistry, id) })
+
+	merged := MergeCatalog(NewModelCatalog(), &config.Config{
+		Providers: map[string]config.ProviderConfig{},
+		Agents:    map[string]config.AgentConfig{},
+	})
+	merged.AttachPricing(map[string]PricingEntry{
+		id: {InputCostPer1M: 0.99, OutputCostPer1M: 1.99, Currency: "USD"},
+	})
+	dm, ok := merged.Lookup(id)
+	if !ok || dm.Pricing == nil {
+		t.Fatal("model missing after attach")
+	}
+	if dm.Pricing.InputCostPer1M != 0.99 {
+		t.Errorf("attached baseline must win: %+v", dm.Pricing)
+	}
+	if dm.Pricing.PeakInputCostPer1M != 0.30 || dm.Pricing.PeakOutputCostPer1M != 1.20 || dm.Pricing.CachedInputCostPer1M != 0.05 {
+		t.Errorf("static peak/cached wiped by attached feed: %+v", dm.Pricing)
+	}
+}
+
+// TestMergeCatalog_AgentOverrideCarriesStaticPricing pins the agent-override
+// merge path (max_context/max_output overrides) carrying static pricing —
+// a regression here silently unpriced billing for overridden models.
+func TestMergeCatalog_AgentOverrideCarriesStaticPricing(t *testing.T) {
+	const id = "cost-model-test-override-pricing"
+	config.ModelRegistry[id] = config.ModelEntry{
+		Provider: "deepseek",
+		Pricing: config.PricingOverride{
+			InputCostPer1M:      0.15,
+			OutputCostPer1M:     0.60,
+			PeakInputCostPer1M:  0.30,
+			PeakOutputCostPer1M: 1.20,
+		},
+	}
+	t.Cleanup(func() { delete(config.ModelRegistry, id) })
+
+	agent := config.AgentConfig{}
+	agent.Models = []config.AgentModel{{
+		Model:      id,
+		Provider:   "deepseek",
+		MaxContext: 123456,
+		MaxOutput:  4096,
+	}}
+	cfg := &config.Config{
+		Providers: map[string]config.ProviderConfig{},
+		Agents:    map[string]config.AgentConfig{"agent": agent},
+	}
+	merged := MergeCatalog(NewModelCatalog(), cfg)
+	found := false
+	for _, m := range merged.AllModels() {
+		if m.ID == id && m.Pricing != nil && m.Pricing.HasPeak() {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("agent-override merge path lost the static pricing")
+	}
+}

@@ -114,6 +114,17 @@ Providers without a window are never peak.
 - **No pricing ⇒ no cost.** A catalog lookup miss keeps the current
   fast path (no cost recorded).
 
+## Discovery & merge
+
+Static registry pricing surfaces as catalog `Pricing` at merge time (all
+paths: static-only, agent-overridden, and provider backfill), so billing and
+the cost guard see it without an attached external feed. An attached external
+feed (OpenRouter) overrides the **baseline** but never wipes the static
+peak/cached dimensions (`mergeAttachedPeak`: attached baseline wins, static
+surcharge preserved). Consequence: statically-priced targets are now subject
+to the `max_cost_per_request` guard (they were previously unpriced and
+unguarded).
+
 ## Display (`/v1/models`)
 
 `/v1/models` exposes the cost model as optional, user-visible fields:
