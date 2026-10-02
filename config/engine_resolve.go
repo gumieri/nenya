@@ -194,8 +194,20 @@ func resolveEngineRefs(cfg *Config) error {
 			return err
 		}
 	}
-	if cfg.Governance.TfidfRerank != nil && cfg.Governance.TfidfRerank.Engine != nil {
-		if err := resolveSingleEngineRef(cfg.Governance.TfidfRerank.Engine, cfg.Agents, providers, "tfidf_rerank"); err != nil {
+	// Advisory judgment sections (each optional; inheritance has
+	// applied, so inherited refs are shared pointers and idempotent to
+	// re-resolve).
+	for _, gate := range []struct {
+		ref  *EngineRef
+		name string
+	}{
+		{cfg.Governance.TfidfRerankEngine(), "tfidf_rerank"},
+		{cfg.Governance.SpotlightTierEngine(), "spotlight_tier"},
+	} {
+		if gate.ref == nil {
+			continue
+		}
+		if err := resolveSingleEngineRef(gate.ref, cfg.Agents, providers, gate.name); err != nil {
 			return err
 		}
 	}

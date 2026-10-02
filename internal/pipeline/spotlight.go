@@ -151,6 +151,9 @@ func (s SpotlightSettings) ApplyDelimitersOnly(content, source string) string {
 // (mode-independent: datamarking would corrupt code the model must
 // quote and edit). The byte cap is not applied here — history content
 // is the client's own conversation data, not a live tool result.
+// Risk-tiered marking (governance.spotlight.risk_tiers.enabled) is the
+// one exception: tier-high messages ARE datamarked by the interceptor,
+// a deliberate carve-out when the content looks instruction-bearing.
 func ApplyHistory(content string) string {
 	return SpotlightDelimiters(content, "tool-history")
 }

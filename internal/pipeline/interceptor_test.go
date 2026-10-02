@@ -201,7 +201,7 @@ func TestSecurityInterceptorsAreStrict(t *testing.T) {
 	}{
 		{"redact", NewRedactInterceptor(true, nil, "label", metrics)},
 		{"injection", mustInjectionInterceptor(t, metrics)},
-		{"spotlight", NewSpotlightInterceptor(nil, nil, metrics)},
+		{"spotlight", NewSpotlightInterceptor(nil, nil, metrics, nil)},
 		{"entropy", NewEntropyInterceptor(nil, "label", metrics)},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

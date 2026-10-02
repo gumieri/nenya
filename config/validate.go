@@ -110,6 +110,7 @@ func collectValidationErrors(ctx context.Context, cfg *Config, providers map[str
 	errors = append(errors, validateSpotlightConfig(cfg)...)
 	errors = append(errors, validateJudgmentsConfig(cfg)...)
 	errors = append(errors, validateTfidfRerankConfig(cfg)...)
+	errors = append(errors, validateSpotlightRiskTiersConfig(cfg)...)
 	errors = append(errors, validateSelfLoopGuard(cfg)...)
 	errors = append(errors, validateExfilGuardConfig(cfg)...)
 	errors = append(errors, validateCanaryConfig(cfg)...)
@@ -135,6 +136,33 @@ func collectValidationErrors(ctx context.Context, cfg *Config, providers map[str
 // judgmentNameRe constrains judgment names: they flow into metric
 // labels and resolution error labels.
 var judgmentNameRe = regexp.MustCompile(`^[a-z0-9_]+$`)
+
+// validateSpotlightRiskTiersConfig checks the advisory spotlight
+// risk-tier surface. Must run after ApplyDefaults so inheritance has
+// applied.
+func validateSpotlightRiskTiersConfig(cfg *Config) []string {
+	rt := cfg.Governance.SpotlightRiskTiers()
+	if rt == nil {
+		return nil
+	}
+	var errs []string
+	if rt.MaxBytes < 0 {
+		errs = append(errs, "governance.spotlight.risk_tiers.max_bytes must be >= 0")
+	}
+	if rt.MaxBytes > 0 && rt.MaxBytes < 64 {
+		errs = append(errs, "governance.spotlight.risk_tiers.max_bytes must be >= 64 when set (smaller budgets cannot fit the judgment framing)")
+	}
+	if rt.TimeoutSeconds < 0 {
+		errs = append(errs, "governance.spotlight.risk_tiers.timeout_seconds must be >= 0")
+	}
+	if rt.Engine != nil && rt.Engine.AgentName == "" && rt.Engine.Provider == "" {
+		errs = append(errs, "governance.spotlight.risk_tiers.engine: empty engine reference (omit the key to inherit, or set provider/model or agent)")
+	}
+	if rt.Enabled != nil && *rt.Enabled && (rt.Engine == nil || len(rt.Engine.ResolvedTargets) == 0) {
+		errs = append(errs, "governance.spotlight.risk_tiers: enabled but engine missing or unresolved")
+	}
+	return errs
+}
 
 // validateTfidfRerankConfig checks the advisory TF-IDF rerank surface.
 // Must run after ApplyDefaults so the engine inheritance has applied.
@@ -199,6 +227,12 @@ func selfLoopSurfaces(cfg *Config) []struct {
 			label   string
 			targets []EngineTarget
 		}{"tfidf_rerank_engine", cfg.Governance.TfidfRerank.Engine.ResolvedTargets})
+	}
+	if rt := cfg.Governance.SpotlightRiskTiers(); rt != nil && rt.Engine != nil {
+		surfaces = append(surfaces, struct {
+			label   string
+			targets []EngineTarget
+		}{"spotlight_tier_engine", rt.Engine.ResolvedTargets})
 	}
 	return surfaces
 }

@@ -11,7 +11,7 @@ import (
 
 func newTestSpotlightInterceptor(t *testing.T, cfg *config.SpotlightConfig, agents map[string]config.AgentConfig) *SpotlightInterceptor {
 	t.Helper()
-	return NewSpotlightInterceptor(cfg, agents, nil)
+	return NewSpotlightInterceptor(cfg, agents, nil, nil)
 }
 
 func spotReq(model string, msgs ...map[string]any) *InterceptRequest {
@@ -207,7 +207,7 @@ func TestSpotlightRegistrationRequired(t *testing.T) {
 		}
 	})
 	t.Run("global enabled", func(t *testing.T) {
-		i := NewSpotlightInterceptor(&config.SpotlightConfig{Enabled: config.PtrTo(true)}, nil, nil)
+		i := NewSpotlightInterceptor(&config.SpotlightConfig{Enabled: config.PtrTo(true)}, nil, nil, nil)
 		if !i.RegistrationRequired() {
 			t.Error("expected true for global enabled")
 		}
@@ -215,7 +215,7 @@ func TestSpotlightRegistrationRequired(t *testing.T) {
 	t.Run("agent enabled", func(t *testing.T) {
 		i := NewSpotlightInterceptor(&config.SpotlightConfig{}, map[string]config.AgentConfig{
 			"a": {Spotlight: &config.SpotlightConfig{HistoryEnabled: config.PtrTo(true)}},
-		}, nil)
+		}, nil, nil)
 		if !i.RegistrationRequired() {
 			t.Error("expected true for agent history override")
 		}
@@ -224,7 +224,7 @@ func TestSpotlightRegistrationRequired(t *testing.T) {
 
 func TestSpotlightAgentConfigDirectPreference(t *testing.T) {
 	enabled := true
-	interceptor := NewSpotlightInterceptor(&config.SpotlightConfig{}, map[string]config.AgentConfig{}, infra.NewMetrics())
+	interceptor := NewSpotlightInterceptor(&config.SpotlightConfig{}, map[string]config.AgentConfig{}, infra.NewMetrics(), nil)
 
 	// req.Agent opts the agent in even though the global config is off
 	// and no name-keyed snapshot exists.

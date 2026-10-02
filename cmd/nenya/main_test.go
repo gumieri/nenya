@@ -848,3 +848,40 @@ func TestBuildInterceptorChain_TfidfRerankGate(t *testing.T) {
 		t.Fatal("tfidf_rerank must be nil when the section is absent")
 	}
 }
+
+func TestBuildSpotlightTierGate(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	newGW := func(cfg *config.Config) *gateway.NenyaGateway {
+		gw := gateway.New(context.Background(), *cfg, &config.SecretsConfig{ClientToken: "test-token-1234567890"}, logger)
+		return gw
+	}
+
+	t.Run("disabled or absent returns nil", func(t *testing.T) {
+		cfg := testutil.MinimalConfig()
+		if err := config.ApplyDefaults(cfg); err != nil {
+			t.Fatal(err)
+		}
+		if got := buildSpotlightTierGate(cfg, newGW(cfg), logger); got != nil {
+			t.Fatal("gate must be nil without the risk_tiers section")
+		}
+	})
+
+	t.Run("enabled with inherited engine builds judge", func(t *testing.T) {
+		cfg := testutil.MinimalConfig()
+		cfg.Governance.Spotlight = &config.SpotlightConfig{
+			Enabled:        config.PtrTo(true),
+			HistoryEnabled: config.PtrTo(true),
+			RiskTiers:      &config.SpotlightRiskTiersConfig{Enabled: config.PtrTo(true)},
+		}
+		if err := config.ApplyDefaults(cfg); err != nil {
+			t.Fatal(err)
+		}
+		got := buildSpotlightTierGate(cfg, newGW(cfg), logger)
+		if got == nil {
+			t.Fatal("enabled risk_tiers with inherited engine must build a non-nil gate")
+		}
+		if got.Name() != pipeline.SpotlightTierJudgmentName {
+			t.Errorf("gate name = %q", got.Name())
+		}
+	})
+}

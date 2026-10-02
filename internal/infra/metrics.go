@@ -30,6 +30,9 @@ type Metrics struct {
 	// tfidfRescues counts content blocks rescued by the advisory TF-IDF
 	// rerank judgment (strengthen-only keeps).
 	tfidfRescues atomic.Uint64
+	// spotlightTiers counts history tool messages per resolved envelope
+	// tier and source kind (risk-tiered mode only).
+	spotlightTiers sync.Map
 	// injectionDetections counts deterministic prompt-injection detections
 	// by action (sanitize|reject) and pattern category.
 	injectionDetections sync.Map
@@ -495,6 +498,17 @@ func (m *Metrics) RecordTfidfRescues(n int) {
 		return
 	}
 	m.tfidfRescues.Add(uint64(n))
+}
+
+// RecordSpotlightTier records one history tool message's resolved
+// envelope tier (low|high) and source kind (local|web) in risk-tiered
+// mode. Nil-safe.
+func (m *Metrics) RecordSpotlightTier(tier, source string) {
+	if m == nil || tier == "" || source == "" {
+		return
+	}
+	e := getOrCreateEntry(&m.spotlightTiers, map[string]string{"tier": tier, "source": source})
+	e.value.Add(1)
 }
 
 func (m *Metrics) RecordPanic() {
@@ -1326,6 +1340,8 @@ func (m *Metrics) writePipelineMetrics(w io.Writer) {
 		"Total text compaction passes applied.", m.compactions.Load())
 	m.writeCounterAtomic(w, "nenya_tfidf_rescues_total",
 		"Content blocks rescued into the keep set by the advisory TF-IDF rerank judgment (assembly may still elide near-budget blocks).", m.tfidfRescues.Load())
+	m.writeCounterMap(w, "nenya_spotlight_tiers_total",
+		"History tool messages per resolved envelope tier and source kind (risk-tiered spotlight mode).", &m.spotlightTiers)
 	m.writeCounterMap(w, "nenya_pipeline_window_applied_total",
 		"Total window compaction passes applied.", &m.windowApplied)
 	m.writeCounterMap(w, "nenya_pipeline_tokens_saved_total",

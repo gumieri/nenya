@@ -425,12 +425,10 @@ func buildInterceptorChain(gw *gateway.NenyaGateway, cfg *config.Config, logger 
 	}
 
 	escalationDeps := &pipeline.InjectionEscalationDeps{
-		ClientFor: gw.ClientFor,
-		InjectAPIKey: func(providerName string, headers http.Header) error {
-			return routing.InjectAPIKeyWithGateway(providerName, gw, headers)
-		},
-		Logger:  logger,
-		Metrics: gw.Metrics,
+		ClientFor:    gw.ClientFor,
+		InjectAPIKey: gatewayAPIKeyInjector(gw),
+		Logger:       logger,
+		Metrics:      gw.Metrics,
 	}
 	injection, err := pipeline.NewInjectionInterceptor(cfg.Governance.Injection, cfg.Agents, gw.Metrics, escalationDeps)
 	if err != nil {
@@ -438,7 +436,8 @@ func buildInterceptorChain(gw *gateway.NenyaGateway, cfg *config.Config, logger 
 	}
 	chain.Register(injection)
 
-	if spotlight := pipeline.NewSpotlightInterceptor(cfg.Governance.Spotlight, cfg.Agents, gw.Metrics); spotlight.RegistrationRequired() {
+	if spotlight := pipeline.NewSpotlightInterceptor(cfg.Governance.Spotlight, cfg.Agents, gw.Metrics, logger); spotlight.RegistrationRequired() {
+		spotlight.SetTierJudge(buildSpotlightTierGate(cfg, gw, logger))
 		chain.Register(spotlight)
 	}
 
@@ -452,6 +451,15 @@ func buildInterceptorChain(gw *gateway.NenyaGateway, cfg *config.Config, logger 
 
 	logger.Info("interceptor chain initialized", "count", len(chain.List()))
 	return chain, gates, nil
+}
+
+// gatewayAPIKeyInjector returns the standard per-provider API key
+// injection closure bound to the gateway (shared by every judgment-gate
+// builder; AGENTS.md §11 — extracted at the 4th duplicate).
+func gatewayAPIKeyInjector(gw *gateway.NenyaGateway) func(string, http.Header) error {
+	return func(providerName string, headers http.Header) error {
+		return routing.InjectAPIKeyWithGateway(providerName, gw, headers)
+	}
 }
 
 // buildTfidfRerankGate constructs the TF-IDF rerank judge from the
@@ -472,12 +480,10 @@ func buildTfidfRerankGate(cfg *config.Config, gw *gateway.NenyaGateway, logger *
 	judge, err := pipeline.NewJudge(
 		pipeline.TfidfRerankContract().WithBudget(r.MaxBytes, r.TimeoutSeconds),
 		r.Engine, pipeline.JudgeDeps{
-			ClientFor: gw.ClientFor,
-			InjectAPIKey: func(providerName string, headers http.Header) error {
-				return routing.InjectAPIKeyWithGateway(providerName, gw, headers)
-			},
-			Logger:  logger,
-			Metrics: gw.Metrics,
+			ClientFor:    gw.ClientFor,
+			InjectAPIKey: gatewayAPIKeyInjector(gw),
+			Logger:       logger,
+			Metrics:      gw.Metrics,
 		})
 	if err != nil {
 		logger.Warn("tfidf_rerank disabled", "err", err)
@@ -503,15 +509,44 @@ func buildJudgmentGate(cfg *config.Config, gw *gateway.NenyaGateway, logger *slo
 	judge, err := pipeline.NewJudge(
 		contract.WithBudget(jc.MaxBytes, jc.TimeoutSeconds),
 		jc.Engine, pipeline.JudgeDeps{
-			ClientFor: gw.ClientFor,
-			InjectAPIKey: func(providerName string, headers http.Header) error {
-				return routing.InjectAPIKeyWithGateway(providerName, gw, headers)
-			},
-			Logger:  logger,
-			Metrics: gw.Metrics,
+			ClientFor:    gw.ClientFor,
+			InjectAPIKey: gatewayAPIKeyInjector(gw),
+			Logger:       logger,
+			Metrics:      gw.Metrics,
 		})
 	if err != nil {
 		logger.Warn("judgment gate disabled", "judgment", name, "err", err)
+		return nil
+	}
+	return judge
+}
+
+// buildSpotlightTierGate constructs the spotlight-tier judge from the
+// governance.spotlight.risk_tiers section (the tiering tunes the
+// spotlight surface, so it lives beside it rather than in the judgments
+// map). Enabled toggles the site; budgets and engine come from the
+// section with the standard engine inheritance applied at load. Any
+// misconfiguration degrades to a logged nil — ambiguous bands then fail
+// closed to the high tier deterministically.
+func buildSpotlightTierGate(cfg *config.Config, gw *gateway.NenyaGateway, logger *slog.Logger) *pipeline.Judge {
+	rt := cfg.Governance.SpotlightRiskTiers()
+	if rt == nil || rt.Enabled == nil || !*rt.Enabled {
+		return nil
+	}
+	if rt.Engine == nil || len(rt.Engine.ResolvedTargets) == 0 {
+		logger.Warn("spotlight risk_tiers enabled but engine missing or unresolved; ambiguous bands fail closed to high")
+		return nil
+	}
+	judge, err := pipeline.NewJudge(
+		pipeline.SpotlightTierContract().WithBudget(rt.MaxBytes, rt.TimeoutSeconds),
+		rt.Engine, pipeline.JudgeDeps{
+			ClientFor:    gw.ClientFor,
+			InjectAPIKey: gatewayAPIKeyInjector(gw),
+			Logger:       logger,
+			Metrics:      gw.Metrics,
+		})
+	if err != nil {
+		logger.Warn("spotlight risk_tiers judgment disabled", "err", err)
 		return nil
 	}
 	return judge

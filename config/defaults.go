@@ -98,6 +98,22 @@ func judgmentEngineFallback(cfg *Config) *EngineRef {
 	return &cfg.Bouncer.Engine
 }
 
+// applySpotlightRiskTierDefaults applies the advisory spotlight risk-tier
+// defaults: the size threshold and engine inheritance (same fallback as
+// the judgments map entries).
+func applySpotlightRiskTierDefaults(cfg *Config) {
+	rt := cfg.Governance.SpotlightRiskTiers()
+	if rt == nil {
+		return
+	}
+	if rt.SizeThresholdBytes <= 0 {
+		rt.SizeThresholdBytes = DefaultSpotlightTierSizeBytes
+	}
+	if rt.Engine == nil {
+		rt.Engine = judgmentEngineFallback(cfg)
+	}
+}
+
 // ApplyDefaults populates all unset configuration fields with sensible
 // defaults, resolves engine references, and applies built-in providers.
 func ApplyDefaults(cfg *Config) error {
@@ -128,6 +144,7 @@ func ApplyDefaults(cfg *Config) error {
 	applyWindowDefaults(cfg)
 	applyJudgmentDefaults(cfg)
 	applyTfidfRerankDefaults(cfg)
+	applySpotlightRiskTierDefaults(cfg)
 	if err := resolveEngineRefs(cfg); err != nil {
 		return err
 	}
