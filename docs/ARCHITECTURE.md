@@ -314,6 +314,38 @@ the response with a structured SSE error frame (`error_kind=exfil_blocked` /
 Buffered (non-streaming) bodies run the same policies via a full-body
 inspection. See [INJECTION_DEFENSE.md](INJECTION_DEFENSE.md#response-path-controls).
 
+## Cost Model (Peak/Off-Peak & Cached Input)
+
+Cost is a first-class, privacy-neutral signal: per-model rate cards
+(`config.PricingOverride` → `discovery.PricingEntry`) carry a standard
+(off-peak) input/output baseline, an optional peak pair, and an optional
+cache-read input rate. Providers may declare peak windows in UTC
+(`provider.peak_windows`, half-open, `weekdays_only` supported; DeepSeek
+declares two weekday blocks). `CalculateCost(PricingUsage{Input, CachedInput,
+Output, Peak})` prices cache hits at the cached rate, the remaining input and
+output at the window rate, with per-dimension peak fallback and clamps
+(tokens non-negative, cached ≤ input, rates ≥ 0).
+
+Where it is used:
+
+- **Billing** (`internal/proxy/usage.go`, `stream.go`): buffered and streaming
+  paths resolve the window at the recording instant and record the split; the
+  streaming path prices cumulative usage and records only the delta so chunk
+  boundaries cannot misattribute the cached/uncached split.
+- **Guard** (`internal/proxy/retry.go`): `max_cost_per_request` estimates at
+  the peak rate (worst case, non-configurable).
+- **Routing** (`internal/routing/targets.go`): the cost-weight signal uses the
+  standard baseline so routing is time-invariant; peak/cached are display-only
+  averages in `/v1/models`.
+- **Discovery** (`internal/discovery/merge.go`): static registry pricing
+  surfaces as catalog pricing on every merge path; an attached external feed
+  (OpenRouter) overrides the baseline but never wipes static peak/cached.
+- **Operator surface**: `nenya_cost_micro_usd_total{model,window}`,
+  `nenya_cached_input_tokens_total{model,window}`, and the `/statsz`
+  `cost_model` section.
+
+See [COST_MODEL.md](COST_MODEL.md) for the contract and approximations.
+
 ## Structured Error Handling
 
 Nenya uses a typed error system for client-facing diagnostics and internal retry decisions (`internal/infra/errors.go`, `internal/proxy/errors.go`, `internal/proxy/error_normalizer.go`).
