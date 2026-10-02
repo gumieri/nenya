@@ -866,6 +866,12 @@ func mergeProviderRouting(merged *ProviderConfig, builtIn ProviderConfig) {
 	if merged.RatelimitMaxTPM == nil {
 		merged.RatelimitMaxTPM = builtIn.RatelimitMaxTPM
 	}
+	// Peak pricing window inherits from the built-in when the user does not
+	// declare one, so overriding e.g. the URL never silently disables
+	// time-of-day cost modeling.
+	if merged.PeakWindow == nil {
+		merged.PeakWindow = builtIn.PeakWindow
+	}
 }
 
 // mergeString sets *dst to src if dst is non-nil and empty, and src is non-empty.

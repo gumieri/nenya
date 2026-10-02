@@ -72,8 +72,12 @@ explicitly (AGENTS.md §11).
 
 Peak windows are **per-provider, expressed in UTC**, and live in config (not
 hardcoded), resolved by a pure `IsPeakAt(provider, t)` with an injectable clock
-for tests. The window is the **peak interval**; the off-peak interval is its
-complement. Wrap-around (start > end) is supported.
+for tests. The window is the **peak interval**, half-open — `start` inclusive,
+`end` exclusive. Wrap-around (start > end) is supported. A nil, empty, or
+malformed window means the provider is **never peak** at runtime (validation
+rejects malformed windows at load; an absent window is legal and is the
+"never peak" case). Today there is no opt-out for a built-in window: a user
+`peak_window` replaces it, and omitting it inherits the built-in.
 
 The built-in default is the DeepSeek window. DeepSeek publishes the
 **off-peak** interval (16:30–00:30 UTC, discounted); the config therefore

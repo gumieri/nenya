@@ -876,6 +876,9 @@ func validateKeyLimits(cfg *Config, secrets *SecretsConfig) []string {
 		if p.TokenBudgetDaily < 0 {
 			errs = append(errs, fmt.Sprintf("providers[%q].token_budget_daily must be non-negative, got %d", name, p.TokenBudgetDaily))
 		}
+		if err := p.PeakWindow.Validate(); err != nil {
+			errs = append(errs, fmt.Sprintf("providers[%q].peak_window: %v", name, err))
+		}
 	}
 	return errs
 }

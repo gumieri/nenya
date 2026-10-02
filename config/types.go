@@ -405,6 +405,16 @@ type RequestScopedErrorRule struct {
 // transport).
 const FormatKeySystemOne = "systemone"
 
+// IsPeakAt reports whether instant t falls inside the provider's peak pricing
+// window (t is converted to UTC; DST is irrelevant). A provider without a
+// window is never peak. Nil-safe.
+func (p *ProviderConfig) IsPeakAt(t time.Time) bool {
+	if p == nil {
+		return false
+	}
+	return p.PeakWindow.Contains(t)
+}
+
 // ProviderConfig defines the wire-level configuration for an upstream LLM
 // provider: the endpoint URL, authentication style, API format, timeouts,
 // retry settings, and per-provider rate limits. User-provided configs override
@@ -414,6 +424,10 @@ type ProviderConfig struct {
 	AuthStyle  string            `json:"auth_style"`
 	ApiFormat  string            `json:"api_format"`
 	FormatURLs map[string]string `json:"format_urls,omitempty"`
+	// PeakWindow declares the provider's peak pricing interval in UTC for
+	// time-of-day rate cards (nil = never peak). Absent peak rates on a
+	// model are unaffected. See docs/COST_MODEL.md.
+	PeakWindow *PeakWindow `json:"peak_window,omitempty"`
 	// TimeoutSeconds is the total request deadline for this provider.
 	TimeoutSeconds int `json:"timeout_seconds"`
 	// ResponseHeaderTimeoutSeconds is the transport-level time-to-first-byte

@@ -11,6 +11,11 @@ var ProviderRegistry = map[string]ProviderEntry{
 	"deepseek": {
 		URL:       "https://api.deepseek.com/chat/completions",
 		AuthStyle: "bearer",
+		// DeepSeek bills peak rates 00:30–16:30 UTC (their published
+		// off-peak discount window is the complement, 16:30–00:30 UTC).
+		// Applied to time-of-day cost modeling; see docs/COST_MODEL.md.
+		// Phase 008 re-verifies the boundary against the live rate card.
+		PeakWindow: &PeakWindow{Start: "00:30", End: "16:30"},
 	},
 	"zai": {
 		URL:       "https://api.z.ai/api/paas/v4/chat/completions",

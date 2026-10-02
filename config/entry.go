@@ -3,7 +3,91 @@ package config
 import (
 	"errors"
 	"fmt"
+	"strings"
+	"time"
 )
+
+// PeakWindow declares a provider's peak pricing interval in UTC (see
+// docs/COST_MODEL.md). Start/End are "HH:MM" 24-hour times; the interval is
+// half-open [Start, End) and Start > End wraps midnight. An absent, empty, or
+// malformed window means the provider is never peak.
+type PeakWindow struct {
+	Start string `json:"start"`
+	End   string `json:"end"`
+}
+
+// Contains reports whether instant t (converted to UTC) falls inside the
+// half-open [Start, End) window. A nil, empty, or malformed window is never
+// peak.
+func (w *PeakWindow) Contains(t time.Time) bool {
+	if w == nil {
+		return false
+	}
+	start, okStart := parseClockMinutes(w.Start)
+	end, okEnd := parseClockMinutes(w.End)
+	if !okStart || !okEnd || start == end {
+		return false
+	}
+	u := t.UTC()
+	minutes := u.Hour()*60 + u.Minute()
+	if start < end {
+		return minutes >= start && minutes < end
+	}
+	// Wrap-around: the window crosses midnight.
+	return minutes >= start || minutes < end
+}
+
+// Validate checks that both bounds are well-formed "HH:MM" times. Start == End
+// is rejected as ambiguous (an empty window should simply be absent).
+func (w *PeakWindow) Validate() error {
+	if w == nil {
+		return nil
+	}
+	if _, ok := parseClockMinutes(w.Start); !ok {
+		return fmt.Errorf("PeakWindow.Start must be HH:MM (24h), got %q", w.Start)
+	}
+	if _, ok := parseClockMinutes(w.End); !ok {
+		return fmt.Errorf("PeakWindow.End must be HH:MM (24h), got %q", w.End)
+	}
+	if w.Start == w.End {
+		return errors.New("PeakWindow.Start must differ from End (an empty window should be absent)")
+	}
+	return nil
+}
+
+// parseClockMinutes parses "HH:MM" (24h) into minutes since midnight. Each
+// component must be 1–2 ASCII digits with no sign prefix ("9:05" and "09:05"
+// are both accepted; only the numeric range is enforced beyond that).
+func parseClockMinutes(s string) (int, bool) {
+	parts := strings.Split(s, ":")
+	if len(parts) != 2 {
+		return 0, false
+	}
+	h, okH := parseClockComponent(parts[0])
+	m, okM := parseClockComponent(parts[1])
+	if !okH || !okM {
+		return 0, false
+	}
+	if h > 23 || m > 59 {
+		return 0, false
+	}
+	return h*60 + m, true
+}
+
+// parseClockComponent parses one 1–2 digit clock component.
+func parseClockComponent(s string) (int, bool) {
+	if len(s) == 0 || len(s) > 2 {
+		return 0, false
+	}
+	n := 0
+	for i := 0; i < len(s); i++ {
+		if s[i] < '0' || s[i] > '9' {
+			return 0, false
+		}
+		n = n*10 + int(s[i]-'0')
+	}
+	return n, true
+}
 
 // PricingOverride allows overriding a model's default per-token pricing.
 // Zero values mean "use the built-in pricing".
@@ -35,9 +119,9 @@ func (p PricingOverride) HasPeak() bool {
 }
 
 // HasStandardRate reports whether a usable standard (off-peak) baseline rate is
-// set. Callers that price tokens with the flat-only CalculateCost (before the
-// window-aware model lands) must gate on this, not on IsZero: a peak-only
-// entry is non-zero but has no standard rate and would otherwise price at $0.
+// set. Peak-only entries are non-zero but have no standard rate, so callers
+// that price with the standard pair (Peak unset) must gate on this — otherwise
+// a peak-only entry would silently price at $0.
 func (p PricingOverride) HasStandardRate() bool {
 	return p.InputCostPer1M != 0 || p.OutputCostPer1M != 0
 }
@@ -175,6 +259,11 @@ type ProviderEntry struct {
 	// chat-completions endpoint (e.g. TypeSafe Jev System One decision
 	// models on OpenCode Zen). See ProviderConfig.NonChatModels.
 	NonChatModels []string `json:"non_chat_models,omitempty"`
+	// PeakWindow is the built-in peak pricing interval (UTC) for providers
+	// with time-of-day rate cards. See ProviderConfig.PeakWindow. The
+	// pointer aliases the package-level ProviderRegistry global — treat it
+	// as shared-immutable.
+	PeakWindow *PeakWindow `json:"peak_window,omitempty"`
 }
 
 func (e ProviderEntry) ToProviderConfig() ProviderConfig {
@@ -186,5 +275,6 @@ func (e ProviderEntry) ToProviderConfig() ProviderConfig {
 		RatelimitMaxRPM: e.RatelimitMaxRPM,
 		RatelimitMaxTPM: e.RatelimitMaxTPM,
 		NonChatModels:   e.NonChatModels,
+		PeakWindow:      e.PeakWindow,
 	}
 }
