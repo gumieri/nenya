@@ -10,28 +10,28 @@ Each layer may only import from layers to its left. This prevents circular depen
 
 ## Package Overview
 
-| Package | Responsibility |
-|---------|---------------|
-| `cmd/nenya/` | Entry point, server bootstrap with graceful shutdown |
-| `internal/util/` | Shared utilities: overflow-safe integer arithmetic, ID generation, string formatting, error helpers, retry primitive (`DoWithRetry`) |
-| `internal/tiktoken/` | cl100k_base BPE token counter for prompt token estimation (zero external dependencies) |
-| `config/` | Configuration types, JSON loading, model/provider registries, defaults, validation, engine reference resolution |
-| `internal/infra/` | Structured logging, thought signature cache, Prometheus metrics, rate limiter, usage tracker, latency tracker (sorted-buffer median with incremental insertion), response cache, structured errors (`ErrorKind`, `ErrorResponse`) |
-| `internal/discovery/` | Dynamic model catalog discovery from upstream providers, three-tier merge (config > discovered > static), per-provider response parsers |
-| `internal/stream/` | SSE transforming reader, sliding window stream filter, ExfilGuard output URL policy, egress canary watcher |
-| `internal/pipeline/` | Client classification, code fence detection, interceptor chain (Redact/Spotlight/Injection/Entropy/TF-IDF/Bouncer — security stages fail closed), tier-0 regex secret redaction, prompt-injection detection with optional LLM escalation, untrusted-content spotlighting, Shannon entropy redaction, TF-IDF relevance-scored truncation, middle-out truncation (code-boundary-aware for IDEs), text compaction, stale tool call pruning, thought pruning, context window compaction, engine calls with fallback chains, canary token generation |
-| `internal/mcp/` | MCP client (HTTP+SSE transport, retry, host pinning) plus the tool-call argument guard: minimal JSON-schema validation, argument size cap, URL destination policy with per-server allowlists |
-| `internal/resilience/` | Circuit breaker with Closed/Open/HalfOpen states, exponential backoff |
-| `internal/providers/` | Provider capability specs (stream_options, auto_tool_choice, content_arrays), per-provider sanitization, response transformers |
-| `internal/adapter/` | Provider Adapter pattern: request mutation, auth injection, response mutation, error classification, bidirectional OpenAI↔Anthropic format conversion |
-| `internal/routing/` | Dynamic provider resolution, agent fallback chains, latency-aware reordering with jitter (thundering herd prevention), upstream request transformation, API key injection, format detection |
-| `internal/local/` | Local Ollama model lifecycle management: GPU load/unload, session tracking with LRU eviction, startup preloading |
-| `internal/gateway/` | NenyaGateway struct, HTTP client configuration, token counting, MCP client initialization, MCP tool index |
-| `internal/billing/` | Billing-aware routing: quota tracking, spend limits, account selection |
-| `internal/auth/` | Authentication (token validation, RBAC enforcement with agent scoping and endpoint allowlists) |
-| `internal/security/` | Secure memory: mlock-protected token storage, read-only sealing, core dump prevention |
-| `internal/version/` | Build metadata injection: version, commit, build time |
-| `internal/proxy/` | HTTP handlers, content pipeline orchestration, upstream forwarding with retry, transparent SSE streaming, MCP multi-turn tool call loop, buffered SSE response, empty-stream detection with SSE error payload, structured error normalization |
+| Package                | Responsibility                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| ---------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `cmd/nenya/`           | Entry point, server bootstrap with graceful shutdown                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| `internal/util/`       | Shared utilities: overflow-safe integer arithmetic, ID generation, string formatting, error helpers, retry primitive (`DoWithRetry`)                                                                                                                                                                                                                                                                                                                                                                                                            |
+| `internal/tiktoken/`   | cl100k_base BPE token counter for prompt token estimation (zero external dependencies)                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| `config/`              | Configuration types, JSON loading, model/provider registries, defaults, validation, engine reference resolution                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| `internal/infra/`      | Structured logging, thought signature cache, Prometheus metrics, rate limiter, usage tracker, latency tracker (sorted-buffer median with incremental insertion), response cache, structured errors (`ErrorKind`, `ErrorResponse`)                                                                                                                                                                                                                                                                                                               |
+| `internal/discovery/`  | Dynamic model catalog discovery from upstream providers, three-tier merge (config > discovered > static), per-provider response parsers                                                                                                                                                                                                                                                                                                                                                                                                         |
+| `internal/stream/`     | SSE transforming reader, sliding window stream filter, ExfilGuard output URL policy, egress canary watcher                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| `internal/pipeline/`   | Client classification, code fence detection, interceptor chain (Redact/Spotlight/Injection/Entropy/TF-IDF/Bouncer — security stages fail closed), tier-0 regex secret redaction, prompt-injection detection with optional LLM escalation, untrusted-content spotlighting, Shannon entropy redaction, TF-IDF relevance-scored truncation, middle-out truncation (code-boundary-aware for IDEs), text compaction, stale tool call pruning, thought pruning, context window compaction, engine calls with fallback chains, canary token generation |
+| `internal/mcp/`        | MCP client (HTTP+SSE transport, retry, host pinning) plus the tool-call argument guard: minimal JSON-schema validation, argument size cap, URL destination policy with per-server allowlists                                                                                                                                                                                                                                                                                                                                                    |
+| `internal/resilience/` | Circuit breaker with Closed/Open/HalfOpen states, exponential backoff                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| `internal/providers/`  | Provider capability specs (stream_options, auto_tool_choice, content_arrays), per-provider sanitization, response transformers                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| `internal/adapter/`    | Provider Adapter pattern: request mutation, auth injection, response mutation, error classification, bidirectional OpenAI↔Anthropic format conversion                                                                                                                                                                                                                                                                                                                                                                                          |
+| `internal/routing/`    | Dynamic provider resolution, agent fallback chains, latency-aware reordering with jitter (thundering herd prevention), upstream request transformation, API key injection, format detection                                                                                                                                                                                                                                                                                                                                                     |
+| `internal/local/`      | Local Ollama model lifecycle management: GPU load/unload, session tracking with LRU eviction, startup preloading                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| `internal/gateway/`    | NenyaGateway struct, HTTP client configuration, token counting, MCP client initialization, MCP tool index                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| `internal/billing/`    | Billing-aware routing: quota tracking, spend limits, account selection                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| `internal/auth/`       | Authentication (token validation, RBAC enforcement with agent scoping and endpoint allowlists)                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| `internal/security/`   | Secure memory: mlock-protected token storage, read-only sealing, core dump prevention                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| `internal/version/`    | Build metadata injection: version, commit, build time                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| `internal/proxy/`      | HTTP handlers, content pipeline orchestration, upstream forwarding with retry, transparent SSE streaming, MCP multi-turn tool call loop, buffered SSE response, empty-stream detection with SSE error payload, structured error normalization                                                                                                                                                                                                                                                                                                   |
 
 ## Request Lifecycle
 
@@ -138,14 +138,14 @@ type StrictInterceptor interface {
 
 ### Registered Interceptors
 
-| Priority | Interceptor | File | Purpose | Error semantics |
-|----------|-------------|------|---------|-----------------|
-| 10 | `RedactInterceptor` | `internal/pipeline/redact_interceptor.go` | Tier-0 regex pattern matching for secrets, tokens, and credentials across the entire payload | **Strict** (fail-closed) — secret redaction must not fail silently |
-| 12 | `SpotlightInterceptor` | `internal/pipeline/spotlight_interceptor.go` | Untrusted-content enveloping (`spotlighting`) of tool-role history | **Strict** (fail-closed) |
-| 15 | `InjectionInterceptor` | `internal/pipeline/injection_interceptor.go` | Deterministic prompt-injection detection: warn+sanitize by default, per-agent strict rejection (`RejectError`, 403 `injection_detected`); tier-2 escalation failures fall back to the deterministic verdict | **Strict** (fail-closed on unexpected faults) |
-| 20 | `EntropyInterceptor` | `internal/pipeline/entropy_interceptor.go` | Shannon entropy redaction — identifies and redacts high-entropy strings (potential secrets) | **Strict** (fail-closed) |
-| 30 | `TFIDFInterceptor` | `internal/pipeline/tfidf_interceptor.go` | TF-IDF relevance scoring — prunes content blocks by relevance to user query when `governance.tfidf_query_source` is set | Fail-open (token-saving) |
-| 50 | `BouncerInterceptor` | `internal/proxy/bouncer_interceptor.go` | Engine interception: summarization + redaction above the soft limit, trim above the hard limit | Governed by `bouncer.fail_open` (default `true` = skip on engine failure; `false` = `RejectError` 403 `bouncer_error` — on engine failure/empty output, or oversized rich/non-string last-message content) |
+| Priority | Interceptor            | File                                         | Purpose                                                                                                                                                                                                     | Error semantics                                                                                                                                                                                            |
+| -------- | ---------------------- | -------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 10       | `RedactInterceptor`    | `internal/pipeline/redact_interceptor.go`    | Tier-0 regex pattern matching for secrets, tokens, and credentials across the entire payload                                                                                                                | **Strict** (fail-closed) — secret redaction must not fail silently                                                                                                                                         |
+| 12       | `SpotlightInterceptor` | `internal/pipeline/spotlight_interceptor.go` | Untrusted-content enveloping (`spotlighting`) of tool-role history                                                                                                                                          | **Strict** (fail-closed)                                                                                                                                                                                   |
+| 15       | `InjectionInterceptor` | `internal/pipeline/injection_interceptor.go` | Deterministic prompt-injection detection: warn+sanitize by default, per-agent strict rejection (`RejectError`, 403 `injection_detected`); tier-2 escalation failures fall back to the deterministic verdict | **Strict** (fail-closed on unexpected faults)                                                                                                                                                              |
+| 20       | `EntropyInterceptor`   | `internal/pipeline/entropy_interceptor.go`   | Shannon entropy redaction — identifies and redacts high-entropy strings (potential secrets)                                                                                                                 | **Strict** (fail-closed)                                                                                                                                                                                   |
+| 30       | `TFIDFInterceptor`     | `internal/pipeline/tfidf_interceptor.go`     | TF-IDF relevance scoring — prunes content blocks by relevance to user query when `governance.tfidf_query_source` is set                                                                                     | Fail-open (token-saving)                                                                                                                                                                                   |
+| 50       | `BouncerInterceptor`   | `internal/proxy/bouncer_interceptor.go`      | Engine interception: summarization + redaction above the soft limit, trim above the hard limit                                                                                                              | Governed by `bouncer.fail_open` (default `true` = skip on engine failure; `false` = `RejectError` 403 `bouncer_error` — on engine failure/empty output, or oversized rich/non-string last-message content) |
 
 ### Execution
 
@@ -153,7 +153,7 @@ type StrictInterceptor interface {
 
 ### Abort Error Types
 
-- `RejectError` (`{Err, Kind, Message}`) — an enforcement *decision* (e.g. strict injection rejection, bouncer fail-closed). Rendered as 403 with the producer's `error_kind`. Never carries the interceptor error metric (decisions are not faults).
+- `RejectError` (`{Err, Kind, Message}`) — an enforcement _decision_ (e.g. strict injection rejection, bouncer fail-closed). Rendered as 403 with the producer's `error_kind`. Never carries the interceptor error metric (decisions are not faults).
 - `StrictError` (`{Err, Kind, Interceptor, Message}`) — an operational failure under fail-closed semantics. Rendered as 503 `internal_error`; the interceptor error metric IS recorded (faults must be observable).
 
 **Known limitation:** MCP multi-turn loops append tool-result messages to the conversation and re-dispatch WITHOUT re-running the interceptor chain — appended content is covered by spotlighting (applied by the MCP path itself) and the canary/exfil egress defenses, but not by redaction/entropy/injection detection or bouncer fail-closed.
@@ -166,6 +166,74 @@ type StrictInterceptor interface {
 
 Each interceptor reports duration, error count, and applied count via Prometheus metrics (`nenya_interceptor_duration_seconds`, `nenya_interceptor_errors_total`, `nenya_interceptor_applied_total`).
 
+## Advisory Judgment Layer
+
+The content pipeline is deterministic by default. On top of it, Nenya exposes a
+**typed advisory-judgment layer** (`internal/pipeline/judge.go`): bounded,
+fail-closed LLM adjudications at specific ambiguous bands and buffered
+checkpoints. The layer never replaces the deterministic tier — it can only
+strengthen its verdict.
+
+### Design rules
+
+- **Code-owned, engine-agnostic contracts.** A `JudgmentContract` fixes the
+  versioned system prompt and the closed verdict enum; configuration selects
+  only the engine and budgets (`governance.judgments.*`, `governance.tfidf_rerank`,
+  `governance.spotlight.risk_tiers`). The advisory model is never assumed to
+  emit provider-native structured output — the reply is parsed to the contract
+  enum (or read structurally on the System One transport) and any parse failure
+  is an operational failure.
+- **Strengthen-only.** A judgment verdict may tighten (reject, block, datamark,
+  keep) a deterministic decision, never loosen it. `OK == false` (engine
+  failure, timeout, budget exhaustion, contract violation, truncated excerpt)
+  always falls back to the deterministic tier-1 verdict.
+- **Placement rule.** Judgments run only at ambiguous bands and buffered
+  checkpoints — never per SSE delta. Streaming paths that cannot buffer (the
+  raw streaming response, the MCP buffered replay) are deliberately out of
+  scope.
+- **Fail-closed parsing.** The verdict must be a member of the contract enum;
+  a nonzero `Truncated` flag makes a favorable verdict inconclusive (the tail
+  was never examined).
+
+### Sites
+
+| Site               | Tier-1 basis                                                     | Judgment role                                                                    |
+| ------------------ | ---------------------------------------------------------------- | -------------------------------------------------------------------------------- |
+| `summary_fidelity` | window summarization                                             | `insufficient` under `strict` replaces the summary with deterministic truncation |
+| `egress_screen`    | ExfilGuard flag, canary hit, entropy redaction, flagged MCP args | `exfil` blocks (strict) or is recorded (log)                                     |
+| `tfidf_rerank`     | TF-IDF keep/drop cutoff                                          | `relevant` rescues a borderline dropped block                                    |
+| `spotlight_tier`   | marker/plain heuristics                                          | resolves the ambiguous band; fails closed to datamarking                         |
+| `injection`        | deterministic detector score band                                | classifier can clear surfaces; never weakens tier-1                              |
+
+### Transports
+
+The Judge drives `CallEngineChainObserved`, so a site can chain multiple
+engines (agent alias, `provider/model`, inline). A target whose provider
+declares `api_format: "systemone"` receives the contract as a typed `choice`
+question (TypeSafe Jev, or a local Laya sidecar) and its typed answer is read
+structurally; chat targets in the same chain keep the chat transport. Typed
+answers below `escalate_below_confidence` cascade to the next target —
+**confidence routes, never decides policy**. The typed state is capped at 2048
+bytes and only marks `Truncated` when the System One target answers. See
+[SYSTEM_ONE.md](SYSTEM_ONE.md#4-advisory-judgment-transport-shipped).
+
+### Self-loop guard
+
+Because every engine target is an outbound HTTP call, configuration validation
+rejects any engine/judgment target — primary URL or any `format_urls` value —
+that points at the gateway's own listen address and a `/v1/*` or `/proxy/*`
+path (`config.validateSelfLoopGuard`): such a target would make the gateway
+proxy to itself and deadlock under load.
+
+### Metrics
+
+`nenya_judgments_total{judgment,verdict,engine}` and
+`nenya_judgment_duration_seconds{judgment}` cover all sites; site-specific
+outcomes add `nenya_summary_gate_fallbacks_total{action}`,
+`nenya_exfil_detections_total{reason,action}`, `nenya_tfidf_rescues_total`,
+`nenya_spotlight_tiers_total{tier,source}`, and
+`nenya_judgment_cascades_total{judgment}`.
+
 ## Context-Limit Retry
 
 When an upstream provider returns an HTTP 400 with a `context_length` or `max_tokens` error, Nenya can automatically retry with a summarized payload (`internal/proxy/retry.go:318`).
@@ -173,6 +241,7 @@ When an upstream provider returns an HTTP 400 with a `context_length` or `max_to
 ### Trigger
 
 The error classification in `handleContextLimitError` (`internal/proxy/retry.go:318`) checks:
+
 1. `util.IsContextLengthError(statusCode, body)` — inspects status code and body for context limit patterns
 2. `governance.auto_retry_on_context_limit` — must be enabled (default: true in config)
 
@@ -253,22 +322,22 @@ Nenya uses a typed error system for client-facing diagnostics and internal retry
 
 The `ErrorKind` type (`internal/infra/errors.go:4`) categorizes errors into semantic classes:
 
-| Kind | HTTP Mapping | Description |
-|------|-------------|-------------|
-| `context_exceeded` | 400 | Upstream context-length exceeded |
-| `rate_limited` | 429 | Rate limit hit |
-| `auth_failed` | 401/403 | Authentication failure |
-| `model_not_found` | 404 | Model unavailable |
-| `provider_timeout` | 504 | Upstream timeout |
-| `provider_error` | 502 | Generic upstream failure |
-| `network_error` | 502 | Transport-level failure |
-| `payload_too_large` | 413 | Request exceeds size limits |
-| `invalid_request` | 400 | Malformed or invalid request |
-| `bouncer_error` | 403 | Engine interception failure with `bouncer.fail_open=false`, or oversized rich content under fail-closed |
-| `injection_detected` | 403 | Strict injection policy rejection (`pipeline.RejectError`) |
-| `exfil_blocked` | 403 buffered; SSE frame on the already-committed 200 for streams | ExfilGuard `block` action |
-| `exfil_detected` | 403 buffered; SSE frame on stream; tool-result error (no HTTP status) for refused tool calls | Canary tripwire `block` action |
-| `internal_error` | 503 for strict security-interceptor faults (`pipeline.StrictError`) and service-unavailable paths (shutdown, not initialized, no provider); 500 otherwise | Gateway internal error |
+| Kind                 | HTTP Mapping                                                                                                                                              | Description                                                                                             |
+| -------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------- |
+| `context_exceeded`   | 400                                                                                                                                                       | Upstream context-length exceeded                                                                        |
+| `rate_limited`       | 429                                                                                                                                                       | Rate limit hit                                                                                          |
+| `auth_failed`        | 401/403                                                                                                                                                   | Authentication failure                                                                                  |
+| `model_not_found`    | 404                                                                                                                                                       | Model unavailable                                                                                       |
+| `provider_timeout`   | 504                                                                                                                                                       | Upstream timeout                                                                                        |
+| `provider_error`     | 502                                                                                                                                                       | Generic upstream failure                                                                                |
+| `network_error`      | 502                                                                                                                                                       | Transport-level failure                                                                                 |
+| `payload_too_large`  | 413                                                                                                                                                       | Request exceeds size limits                                                                             |
+| `invalid_request`    | 400                                                                                                                                                       | Malformed or invalid request                                                                            |
+| `bouncer_error`      | 403                                                                                                                                                       | Engine interception failure with `bouncer.fail_open=false`, or oversized rich content under fail-closed |
+| `injection_detected` | 403                                                                                                                                                       | Strict injection policy rejection (`pipeline.RejectError`)                                              |
+| `exfil_blocked`      | 403 buffered; SSE frame on the already-committed 200 for streams                                                                                          | ExfilGuard `block` action                                                                               |
+| `exfil_detected`     | 403 buffered; SSE frame on stream; tool-result error (no HTTP status) for refused tool calls                                                              | Canary tripwire `block` action                                                                          |
+| `internal_error`     | 503 for strict security-interceptor faults (`pipeline.StrictError`) and service-unavailable paths (shutdown, not initialized, no provider); 500 otherwise | Gateway internal error                                                                                  |
 
 ### GatewayError
 
@@ -282,6 +351,7 @@ The structured `GatewayError` (`internal/proxy/error_normalizer.go:37`) wraps pr
 ### Normalization
 
 `ParseProviderError` (`internal/proxy/error_normalizer.go:189`) converts raw HTTP responses from upstream providers into `GatewayError` instances. It handles:
+
 - Body parsing with 64KB limit (`maxErrorBodySize`)
 - OpenRouter wrapper error unwrapping (metadata.raw extraction)
 - Provider-specific error details (param, code fields)
@@ -319,10 +389,10 @@ Request with MCP tools injected
 
 Both `bouncer.engine` and `window.engine` use the `EngineRef` type which supports two JSON forms:
 
-| Form | Syntax | Resolution |
-|------|--------|------------|
-| Agent reference | `"engine": "agent-name"` | Looks up `agents["agent-name"]`, builds one `EngineTarget` per model in the agent's model list |
-| Inline object | `"engine": {"provider": "...", "model": "..."}` | Single `EngineTarget` using the specified provider/model |
+| Form            | Syntax                                          | Resolution                                                                                     |
+| --------------- | ----------------------------------------------- | ---------------------------------------------------------------------------------------------- |
+| Agent reference | `"engine": "agent-name"`                        | Looks up `agents["agent-name"]`, builds one `EngineTarget` per model in the agent's model list |
+| Inline object   | `"engine": {"provider": "...", "model": "..."}` | Single `EngineTarget` using the specified provider/model                                       |
 
 Resolution happens once at config load time (`resolveEngineRefs` in `internal/config/engine_resolve.go`). The resolved `[]EngineTarget` slices are cached on the `EngineRef` struct — zero per-request overhead.
 
@@ -350,6 +420,7 @@ When resolving a model (for routing, `/v1/models` catalog, or `max_tokens` injec
 3. **Static registry** — Built-in ModelRegistry fallback for known models
 
 This allows:
+
 - Custom local models (Ollama) to be discovered automatically
 - Provider-specific overrides without code changes
 - Graceful fallback when discovery fails (static registry still works)
@@ -417,6 +488,7 @@ Models are filtered to only show those with valid API keys configured. Agent nam
 ### Graceful Degradation
 
 If discovery fails for any provider:
+
 - The provider is skipped with a warning log
 - Static registry models for that provider still work
 - Other providers' discovered models are still used
@@ -430,12 +502,12 @@ Each agent+provider+model combination is tracked independently by a circuit brea
 
 ### States
 
-| State | Behavior |
-|-------|----------|
-| **Closed** | Normal operation. Tracks consecutive failures with semantic error classification. Trips to Open after `failure_threshold` failures (or immediately for auth errors). |
-| **Open** | All requests skipped. After `cooldown_seconds`, transitions to HalfOpen. |
-| **HalfOpen** | Allows up to `halfOpenMaxRequests` (3) probe requests. All succeed → Closed. Any fail → Open. |
-| **ForceOpen** | Immediately opened (used for HTTP 429 rate limits). Extends cooldown for quota exhaustion patterns. |
+| State         | Behavior                                                                                                                                                             |
+| ------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Closed**    | Normal operation. Tracks consecutive failures with semantic error classification. Trips to Open after `failure_threshold` failures (or immediately for auth errors). |
+| **Open**      | All requests skipped. After `cooldown_seconds`, transitions to HalfOpen.                                                                                             |
+| **HalfOpen**  | Allows up to `halfOpenMaxRequests` (3) probe requests. All succeed → Closed. Any fail → Open.                                                                        |
+| **ForceOpen** | Immediately opened (used for HTTP 429 rate limits). Extends cooldown for quota exhaustion patterns.                                                                  |
 
 The circuit breaker is checked twice per target: once during target list construction (`BuildTargetList`) and again immediately before sending the request (`prepareAndSend`). This prevents sending requests to providers that tripped while queued behind other targets.
 
@@ -443,14 +515,14 @@ The circuit breaker is checked twice per target: once during target list constru
 
 Failures are classified into 6 error classes for appropriate circuit breaker and backoff decisions:
 
-| Error Class | HTTP Status | Backoff | Lock Behavior |
-|-------------|-------------|---------|---------------|
-| `auth` | 401, 403 | 5 min cooldown | Immediate trip to Open |
-| `rate_limit` | 429 | Exponential (500ms base, ±10% jitter) | Model-level lock with cooldown |
-| `quota` | 400 (quota messages) | Exponential (60s base) | Long cooldown, tracked separately |
-| `capacity` | 503 (capacity/overload) | Exponential (30s base) | Model-level lock |
-| `server` | 500, 502, 504 | 5s cooldown | Transient, short backoff |
-| `unknown` | Other 4xx/5xx | No backoff | No lock |
+| Error Class  | HTTP Status             | Backoff                               | Lock Behavior                     |
+| ------------ | ----------------------- | ------------------------------------- | --------------------------------- |
+| `auth`       | 401, 403                | 5 min cooldown                        | Immediate trip to Open            |
+| `rate_limit` | 429                     | Exponential (500ms base, ±10% jitter) | Model-level lock with cooldown    |
+| `quota`      | 400 (quota messages)    | Exponential (60s base)                | Long cooldown, tracked separately |
+| `capacity`   | 503 (capacity/overload) | Exponential (30s base)                | Model-level lock                  |
+| `server`     | 500, 502, 504           | 5s cooldown                           | Transient, short backoff          |
+| `unknown`    | Other 4xx/5xx           | No backoff                            | No lock                           |
 
 `classifyHTTPError(status, body, backoffLevel)` parses provider-specific error messages for quota/capacity keywords and returns `CooldownDecision` with the appropriate class.
 
@@ -469,12 +541,12 @@ The `BackoffTracker` manages per-model backoff levels with capped exponential gr
 
 Individual model+provider combinations can be locked (skipped) without tripping the circuit breaker:
 
-| Method | Purpose |
-|--------|---------|
-| `IsModelLocked(model)` | Check if model is in cooldown |
-| `GetModelLockUntil(model)` | Get remaining cooldown duration |
-| `UnlockModel(model)` | Manually clear a model lock |
-| `GetBackoffLevel(model)` | Query current backoff level for a model |
+| Method                     | Purpose                                 |
+| -------------------------- | --------------------------------------- |
+| `IsModelLocked(model)`     | Check if model is in cooldown           |
+| `GetModelLockUntil(model)` | Get remaining cooldown duration         |
+| `UnlockModel(model)`       | Manually clear a model lock             |
+| `GetBackoffLevel(model)`   | Query current backoff level for a model |
 
 Model locks are checked during `BuildTargetList` — locked models are skipped before dispatch. Locks are automatically cleared when `RecordSuccessWithModel` is called.
 
@@ -489,13 +561,13 @@ Model locks are checked during `BuildTargetList` — locked models are skipped b
 
 ### Configuration
 
-| Field | JSON Key | Default | Description |
-|-------|----------|---------|-------------|
-| `failure_threshold` | `failure_threshold` | `5` | Consecutive failures before circuit trips |
-| `success_threshold` | `success_threshold` | `1` | Consecutive successes in HalfOpen to recover |
-| `max_retries` | `max_retries` | `0` | Retry budget per request (0 = governance `max_retry_attempts`, default `3`); `N` permits `N` retries beyond the initial attempt, for both error retries and same-target repeats |
-| `cooldown_seconds` | `cooldown_seconds` | `60` | Duration to wait before transitioning Open → HalfOpen |
-| `half_open_max_requests` | `half_open_max_requests` | `3` | Max probe requests in HalfOpen state |
+| Field                    | JSON Key                 | Default | Description                                                                                                                                                                     |
+| ------------------------ | ------------------------ | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `failure_threshold`      | `failure_threshold`      | `5`     | Consecutive failures before circuit trips                                                                                                                                       |
+| `success_threshold`      | `success_threshold`      | `1`     | Consecutive successes in HalfOpen to recover                                                                                                                                    |
+| `max_retries`            | `max_retries`            | `0`     | Retry budget per request (0 = governance `max_retry_attempts`, default `3`); `N` permits `N` retries beyond the initial attempt, for both error retries and same-target repeats |
+| `cooldown_seconds`       | `cooldown_seconds`       | `60`    | Duration to wait before transitioning Open → HalfOpen                                                                                                                           |
+| `half_open_max_requests` | `half_open_max_requests` | `3`     | Max probe requests in HalfOpen state                                                                                                                                            |
 
 ### Per-Provider Multi-Account Handling
 
@@ -507,15 +579,15 @@ The circuit breaker integrates with the `BackoffTracker` for exponential backoff
 
 ### Retry Sweep and Same-Target Retry
 
-Chat dispatch retries by sweeping the agent's target list forward (`retryLoop.Run`, `internal/proxy/retry.go`): a failure advances to the next target, and repeated provider+model entries remain the operator-configured per-provider retry mechanism. When a **retryable** failure at the **final** sweep index (retryable status, adapter-classified retryable, retryable 4xx, network error, a genuinely empty stream, or a corrective retry such as context-limit summarization or param-strip) would otherwise end the request, the loop re-attempts that same target instead of exhausting. In-stream early errors (an error event at the head of a committed stream) are not retried in place — they follow the existing early-error failover path. The budget is the agent's `max_retries` (`N` = `N` retries beyond the initial attempt), or `governance.max_retry_attempts` (default 3) when unset. Retrying the same target is not failover, so the `sticky_provider` gate (which governs advancing to a *different* target) does not block the repeat; on a `strict` agent a duplicate same-target entry still lives at a non-final index, so strict continues to refuse it. A retryable 4xx that exhausts the budget is relayed with its real status rather than a generic 503.
+Chat dispatch retries by sweeping the agent's target list forward (`retryLoop.Run`, `internal/proxy/retry.go`): a failure advances to the next target, and repeated provider+model entries remain the operator-configured per-provider retry mechanism. When a **retryable** failure at the **final** sweep index (retryable status, adapter-classified retryable, retryable 4xx, network error, a genuinely empty stream, or a corrective retry such as context-limit summarization or param-strip) would otherwise end the request, the loop re-attempts that same target instead of exhausting. In-stream early errors (an error event at the head of a committed stream) are not retried in place — they follow the existing early-error failover path. The budget is the agent's `max_retries` (`N` = `N` retries beyond the initial attempt), or `governance.max_retry_attempts` (default 3) when unset. Retrying the same target is not failover, so the `sticky_provider` gate (which governs advancing to a _different_ target) does not block the repeat; on a `strict` agent a duplicate same-target entry still lives at a non-final index, so strict continues to refuse it. A retryable 4xx that exhausts the budget is relayed with its real status rather than a generic 503.
 
-The built-in 4xx classifier (`isRetryableClientErrorForProvider`, `retryable4xxReasonFor`) treats three body shapes as retryable: built-in transient patterns, provider-configured `retryable_phrases`, and — when `governance.retry_opaque_4xx` is enabled (default) — opaque JSON objects with no error-envelope key (aggregator-relayed failures such as `{"model":"..."}`). The opaque rule only considers `400`/`422`; it excludes `413` because the payload is immutable across an identical retry (the pattern-based classifier still treats a 413 whose body carries a context-length/max_tokens message as retryable). Because an opaque body is only a *heuristic* signal, a failover re-sends the request to another provider — **this can move a misclassified client-error payload across providers**; set `retry_opaque_4xx: false` to disable it. Opaque failures are recorded on the circuit breaker's request counters but never count toward its failure threshold, so a client provoking an ambiguous body cannot bench a healthy provider. The MCP buffered path (`forwardBuffered`) applies the same retry classification and same-target repeat; its retry budget is `max_retries` (or the governance default) and it does not apply the `sticky_provider` policy, which is a chat-sweep concern.
+The built-in 4xx classifier (`isRetryableClientErrorForProvider`, `retryable4xxReasonFor`) treats three body shapes as retryable: built-in transient patterns, provider-configured `retryable_phrases`, and — when `governance.retry_opaque_4xx` is enabled (default) — opaque JSON objects with no error-envelope key (aggregator-relayed failures such as `{"model":"..."}`). The opaque rule only considers `400`/`422`; it excludes `413` because the payload is immutable across an identical retry (the pattern-based classifier still treats a 413 whose body carries a context-length/max*tokens message as retryable). Because an opaque body is only a \_heuristic* signal, a failover re-sends the request to another provider — **this can move a misclassified client-error payload across providers**; set `retry_opaque_4xx: false` to disable it. Opaque failures are recorded on the circuit breaker's request counters but never count toward its failure threshold, so a client provoking an ambiguous body cannot bench a healthy provider. The MCP buffered path (`forwardBuffered`) applies the same retry classification and same-target repeat; its retry budget is `max_retries` (or the governance default) and it does not apply the `sticky_provider` policy, which is a chat-sweep concern.
 
 ### Per-Model Concurrency Admission Control
 
 Some providers (notably the Z.AI Coding Plan) rate-limit by **concurrent in-flight requests per model**, not by requests/tokens per minute. Nenya models this with `infra.ConcurrencyLimiter` (`internal/infra/concurrency.go`): lazily-created buffered-channel semaphores keyed `provider/model`. Limits resolve as `model_concurrency[model]` → `max_concurrent_requests` → `governance.max_concurrent_requests` → unlimited (`NenyaGateway.EffectiveConcurrencyLimit`).
 
-In `prepareAndSend` (`internal/proxy/retry.go`) the gateway acquires a slot **before** dispatching and holds it for the **entire SSE stream/response lifetime** (the release is threaded through `upstreamAction` and fired at every terminal path), queueing excess requests with a context-aware wait instead of colliding upstream. Adapter-level classification distinguishes *concurrency* from *rate limits*: ZAI `1302` maps to a dedicated `ErrorConcurrencyLimited` class that retries with a short ~200ms fixed wait and **does not** activate cooldowns or count circuit-breaker failures (saturation is not provider illness); `1303` (RPM/TPM frequency) keeps the rate-limit path. Rate-limit buckets are keyed by provider name, so same-host providers (e.g. `zai` and `zai-coding-plan`) no longer share a bucket.
+In `prepareAndSend` (`internal/proxy/retry.go`) the gateway acquires a slot **before** dispatching and holds it for the **entire SSE stream/response lifetime** (the release is threaded through `upstreamAction` and fired at every terminal path), queueing excess requests with a context-aware wait instead of colliding upstream. Adapter-level classification distinguishes _concurrency_ from _rate limits_: ZAI `1302` maps to a dedicated `ErrorConcurrencyLimited` class that retries with a short ~200ms fixed wait and **does not** activate cooldowns or count circuit-breaker failures (saturation is not provider illness); `1303` (RPM/TPM frequency) keeps the rate-limit path. Rate-limit buckets are keyed by provider name, so same-host providers (e.g. `zai` and `zai-coding-plan`) no longer share a bucket.
 
 Metrics: `nenya_concurrency_inflight{provider,model}`, `nenya_concurrency_wait_seconds`, `nenya_concurrency_rejected_total`, `nenya_concurrency_limited_total`.
 
@@ -529,14 +601,14 @@ The `internal/adapter` package implements the Adapter Pattern to manage provider
 
 The streaming pipeline is built from composable `io.Reader` and `io.Writer` wrappers:
 
-| Component | Direction | Purpose |
-|-----------|-----------|---------|
-| `stallReader` | Read from upstream | Aborts after 300s of no data (stall detection), extends to 600s during thinking/reasoning phases when SSETransformingReader detects thinking events (OpenAI `reasoning_content` deltas, Anthropic `content_block_start` with type `thinking` or `content_block_delta` with type `thinking_delta`). Per-provider override available via `providers.<name>.stream_idle_timeout_seconds`. |
-| `SSETransformingReader` | Read from upstream | Parses SSE frames, calls `adapter.MutateResponse()` per chunk, extracts usage, fires `OnContent` and `OnThinking` callbacks. Handles bidirectional format conversion (OpenAI ↔ Anthropic) when `SourceFormat` is `"anthropic"` via `AnthropicAdapter.ConvertAnthropicToOpenAI()`. Thinking detection via `ExtractThinkingSignal()` prevents false stall positives during extended silent reasoning phases. |
-| `StreamFilter` | Read | Kills stream if blocked execution patterns detected |
-| `immediateFlushWriter` | Write to client | Wraps `http.ResponseWriter`, calls `Flush()` after every `Write()` |
-| `sseTeeWriter` | Write to client + buffer | Captures response bytes for response cache storage |
-| `emptyStreamSSE` | Write to client | Emits SSE error payload when upstream returns 200 with empty body (when `empty_stream_as_error` is enabled) |
+| Component               | Direction                | Purpose                                                                                                                                                                                                                                                                                                                                                                                                     |
+| ----------------------- | ------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `stallReader`           | Read from upstream       | Aborts after 300s of no data (stall detection), extends to 600s during thinking/reasoning phases when SSETransformingReader detects thinking events (OpenAI `reasoning_content` deltas, Anthropic `content_block_start` with type `thinking` or `content_block_delta` with type `thinking_delta`). Per-provider override available via `providers.<name>.stream_idle_timeout_seconds`.                      |
+| `SSETransformingReader` | Read from upstream       | Parses SSE frames, calls `adapter.MutateResponse()` per chunk, extracts usage, fires `OnContent` and `OnThinking` callbacks. Handles bidirectional format conversion (OpenAI ↔ Anthropic) when `SourceFormat` is `"anthropic"` via `AnthropicAdapter.ConvertAnthropicToOpenAI()`. Thinking detection via `ExtractThinkingSignal()` prevents false stall positives during extended silent reasoning phases. |
+| `StreamFilter`          | Read                     | Kills stream if blocked execution patterns detected                                                                                                                                                                                                                                                                                                                                                         |
+| `immediateFlushWriter`  | Write to client          | Wraps `http.ResponseWriter`, calls `Flush()` after every `Write()`                                                                                                                                                                                                                                                                                                                                          |
+| `sseTeeWriter`          | Write to client + buffer | Captures response bytes for response cache storage                                                                                                                                                                                                                                                                                                                                                          |
+| `emptyStreamSSE`        | Write to client          | Emits SSE error payload when upstream returns 200 with empty body (when `empty_stream_as_error` is enabled)                                                                                                                                                                                                                                                                                                 |
 
 Buffer pooling via `sync.Pool` (32KB buffers) reduces GC pressure under high concurrency.
 
@@ -563,16 +635,16 @@ The gateway supports graceful shutdown with a configurable context deadline:
 
 When `debug.pprof_enabled` is `true` (default: `false`), Nenya exposes Go's `net/http/pprof` endpoints:
 
-| Endpoint | Description |
-|----------|-------------|
-| `GET /debug/pprof/` | Profiling index |
-| `GET /debug/pprof/goroutine` | Goroutine stack traces |
-| `GET /debug/pprof/heap` | Heap allocation profile |
-| `GET /debug/pprof/threadcreate` | Thread creation profile |
-| `GET /debug/pprof/block` | Goroutine blocking profile |
-| `GET /debug/pprof/mutex` | Mutex contention profile |
-| `GET /debug/pprof/allocs` | Allocation profile |
-| `GET /debug/pprof/profile?seconds=30` | CPU profile (30s capture) |
+| Endpoint                              | Description                |
+| ------------------------------------- | -------------------------- |
+| `GET /debug/pprof/`                   | Profiling index            |
+| `GET /debug/pprof/goroutine`          | Goroutine stack traces     |
+| `GET /debug/pprof/heap`               | Heap allocation profile    |
+| `GET /debug/pprof/threadcreate`       | Thread creation profile    |
+| `GET /debug/pprof/block`              | Goroutine blocking profile |
+| `GET /debug/pprof/mutex`              | Mutex contention profile   |
+| `GET /debug/pprof/allocs`             | Allocation profile         |
+| `GET /debug/pprof/profile?seconds=30` | CPU profile (30s capture)  |
 
 **Security**: All `/debug/pprof/*` endpoints require `Authorization: Bearer <client_token>` or valid API key (same as `/v1/*`).
 
@@ -642,7 +714,7 @@ Providers sometimes truncate an SSE stream mid-generation: the client has receiv
 
 1. **Detection** — When an upstream stream ends with content already streamed but no terminal event, the recovery layer (`internal/proxy/stream_recovery.go`) classifies the ending. A tool call in flight disables continuation entirely (partial tool-call payloads cannot be safely resumed).
 2. **Re-dispatch** — The gateway re-sends the request to the **same target** with the partial assistant message appended to the `messages` array (including partial `reasoning_content` when `stream_continuation.include_reasoning` is set, default `false`). The model continues from where it stopped.
-3. **Attempt budget** — `stream_continuation.max_attempts` (default `2`, capped at `5`) bounds the total attempts *including* the original request, so amplification is bounded.
+3. **Attempt budget** — `stream_continuation.max_attempts` (default `2`, capped at `5`) bounds the total attempts _including_ the original request, so amplification is bounded.
 4. **Transparency** — Continuation chunks are appended to the same SSE stream; the client sees one seamless response.
 
 Metrics: `nenya_stream_interrupts_total{model,provider,reason}` counts interrupted upstream streams (`reason="timeout"`), and `nenya_stream_continuations_total{model,provider,reason}` counts continuations by outcome: `recovered`, `gave_up_no_content`, `gave_up_tool_call`, `gave_up_redispatch`, or `gave_up_exhausted`.
@@ -687,6 +759,7 @@ The **security** stages do not: `RedactInterceptor`, `SpotlightInterceptor`, `In
 ### Skip on Engine Failure
 
 When `bouncer.fail_open` is `true` (default):
+
 - **Soft limit** (Tier 2): Engine summarization fails → original payload forwarded unchanged
 - **Hard limit** (Tier 3): Engine summarization fails → original payload forwarded unchanged (not truncated). When `tfidf_query_source` is set and TF-IDF reduces the payload below `soft_limit`, the engine call is skipped entirely.
 
@@ -718,13 +791,16 @@ MCP integration follows the same best-effort philosophy:
 Nenya follows Go context best practices for request-scoped values, cancellation, and timeouts:
 
 ### Context Propagation
+
 - **Incoming requests**: `r.Context()` from `http.Request` is the root context for each client request
 - **Request lifecycle**: Context is threaded through the entire call stack: `handleChatCompletions` → routing → validation → upstream calls
 - **Gateway initialization**: Startup/shutdown contexts are created in `main.go` and passed to `gateway.New()` and `Reload()`
 - **Validation**: Config/health check validation functions accept `context.Context` to allow cancellation during startup
 
 ### Timeout Enforcement
+
 Each outbound call path applies appropriate timeouts:
+
 - **Chat completions**: Uses `provider.TimeoutSeconds` from config (falls back to transport-level timeouts)
 - **Embeddings/Responses**: Uses `provider.TimeoutSeconds` from config
 - **Passthrough**: Uses `provider.TimeoutSeconds` from config
@@ -735,7 +811,9 @@ Each outbound call path applies appropriate timeouts:
 - **Health checks**: 5-second timeout for provider availability checks
 
 ### Goroutine Lifecycle
+
 All goroutines respect context cancellation or use detached contexts:
+
 - **Stream copying goroutines**: Use request context via `copyStream(ctx, ...)`
 - **Discovery goroutines**: Use parent context with per-provider timeout via `context.WithTimeout`
 - **Response cache evictor**: Uses `sync.WaitGroup` for clean shutdown on gateway stop
@@ -743,7 +821,9 @@ All goroutines respect context cancellation or use detached contexts:
 - **Background loops**: Use dedicated cancellation channels (`closeCh`, `stopCh`)
 
 ### Loop Cancellation
+
 Long-running loops regularly check for cancellation:
+
 - `pipeSSE` → `select { case <-ctx.Done(): }`
 - `copyStream` → `if ctx.Err() != nil`
 - MCP multi-turn loop → `select { case <-mcpLoopCtx.Done(): }`
@@ -762,23 +842,24 @@ Nenya detects IDE clients (Cursor, OpenCode) via `User-Agent` header inspection 
 
 ### IDE-Aware Pipeline Behavior
 
-| Stage | Non-IDE Clients | IDE Clients |
-|-------|----------------|-------------|
-| **Secret redaction** | Regex on entire text | Same — redacts unconditionally including inside code fences |
-| **Text compaction** | Collapse blank lines, trim whitespace | **Skipped entirely** — preserves whitespace and line references |
-| **Tool call pruning** | Compact old assistant+tool pairs | **Skipped entirely** — preserves full tool context for IDE agents |
-| **Thought pruning** | Strip `<think.../think>` reasoning blocks | Same — reasoning tokens stripped from assistant history. The `reasoning_content` field is preserved in the shared pipeline and stripped per-target for non-reasoning providers. |
-| **Truncation** | Character-boundary middle-out | `TruncateMiddleOutCodeAware` — snaps cuts to blank-line boundaries |
-| **TF-IDF Truncation** | Same as IDE — when `tfidf_query_source` is set | Same — splits into blocks, scores by relevance, keeps highest-scoring. Pure Go, zero network calls. |
-| **Engine summarization** | Generic privacy filter prompt | Code-preserving prompt — only redacts secrets, never restructures code |
+| Stage                    | Non-IDE Clients                                | IDE Clients                                                                                                                                                                     |
+| ------------------------ | ---------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Secret redaction**     | Regex on entire text                           | Same — redacts unconditionally including inside code fences                                                                                                                     |
+| **Text compaction**      | Collapse blank lines, trim whitespace          | **Skipped entirely** — preserves whitespace and line references                                                                                                                 |
+| **Tool call pruning**    | Compact old assistant+tool pairs               | **Skipped entirely** — preserves full tool context for IDE agents                                                                                                               |
+| **Thought pruning**      | Strip `<think.../think>` reasoning blocks      | Same — reasoning tokens stripped from assistant history. The `reasoning_content` field is preserved in the shared pipeline and stripped per-target for non-reasoning providers. |
+| **Truncation**           | Character-boundary middle-out                  | `TruncateMiddleOutCodeAware` — snaps cuts to blank-line boundaries                                                                                                              |
+| **TF-IDF Truncation**    | Same as IDE — when `tfidf_query_source` is set | Same — splits into blocks, scores by relevance, keeps highest-scoring. Pure Go, zero network calls.                                                                             |
+| **Engine summarization** | Generic privacy filter prompt                  | Code-preserving prompt — only redacts secrets, never restructures code                                                                                                          |
 
 ### Code Fence Detection (`internal/pipeline/code_detect.go`)
 
-`DetectCodeFences(text)` returns `[]CodeSpan{Start, End, Language}` for markdown fenced code blocks (`` ``` ``). Used by code-boundary-aware truncation and summarization to avoid cutting inside code blocks.
+`DetectCodeFences(text)` returns `[]CodeSpan{Start, End, Language}` for markdown fenced code blocks (` ``` `). Used by code-boundary-aware truncation and summarization to avoid cutting inside code blocks.
 
 ### Structured Content Handling (`internal/gateway/gateway.go`)
 
 `ExtractContentText` handles the full OpenAI content array spec:
+
 - `{type: "text"}` — concatenated as before
 - `{type: "image_url"}` — replaced with `[image]` placeholder for token counting
 - `{type: "input_json"}` — serialized to JSON for token counting

@@ -1,36 +1,43 @@
 # Nenya - AI Agent Instructions
 
 ## Project Overview
-Nenya is a lightweight, highly secure AI API Gateway/Proxy written in Go. It acts as a transparent middleware between local AI coding clients (like OpenCode/Aider) and upstream LLM providers (Anthropic, Google Gemini, DeepSeek, Mistral, xAI, OpenRouter, and many more). 
+
+Nenya is a lightweight, highly secure AI API Gateway/Proxy written in Go. It acts as a transparent middleware between local AI coding clients (like OpenCode/Aider) and upstream LLM providers (Anthropic, Google Gemini, DeepSeek, Mistral, xAI, OpenRouter, and many more).
 
 Its primary superpower is the **"Bouncer" mechanism**: intercepting massive HTTP payloads, routing them to a local Ollama instance (`qwen2.5-coder`) for summarization and PII/credential redaction, and forwarding the sanitized, much smaller payload to the upstream cloud AI using Server-Sent Events (SSE) streaming.
 
 ## Agent Role & Persona
+
 You are acting as a **Senior Go Security Engineer and Network Architect**. Your code must be production-ready, highly performant, and paranoid about security and memory leaks.
 
 ## Strict Engineering Guidelines
 
 ### 1. Language & Communication
+
 - **English Only:** All code, variables, functions, comments, commit messages, and documentation MUST be written in English.
 - **No Yapping:** When generating code, output only the requested changes or files. Keep explanations brief and technical.
 
 ### 2. Go Architecture & OOP Patterns
+
 - Follow Object-Oriented patterns via Go structs and receiver methods.
 - **No Global Variables:** Encapsulate state inside structs (e.g., `NenyaGateway` holding the `Config` and `http.Client`).
 - Use Dependency Injection where appropriate.
 - Keep the `main.go` clean; delegate business logic to receiver methods.
 
 ### 3. Dependency Policy & Tech Stack
+
 - The project relies exclusively on the Go Standard Library (`net/http`, `encoding/json`, `io`, `bytes`, `regexp`, `sort`).
 - **Zero external dependencies.** DO NOT import any third-party packages without explicit human authorization.
 
 ### 4. Hardcore Security Rules (CRITICAL)
+
 - **Timeouts:** NEVER use the default `http.Client` or `http.ListenAndServe`. Always explicitly define `ReadTimeout`, `WriteTimeout`, `IdleTimeout`, and Client `Timeout` to prevent resource exhaustion and hanging connections.
 - **Body Limits:** Always wrap incoming requests with `http.MaxBytesReader` to prevent memory exhaustion attacks (DoS) from massive payloads.
 - **Header Sanitization:** When proxying requests, strip hop-by-hop headers (like `Connection`, `Content-Length`) to prevent HTTP desync attacks. Pass only necessary headers (e.g., `Authorization`).
 - **Error Handling:** Never expose internal stack traces to the HTTP response. Log errors internally and return standard HTTP status codes.
 
 ### 5. Context Package Standards (CRITICAL)
+
 - **Request Context:** Always use `r.Context()` from `http.Request` as the root context for request-scoped operations. Thread it through the entire call stack.
 - **Timeout Enforcement:** Apply appropriate timeouts to all outbound calls:
   - Upstream requests: Use `provider.TimeoutSeconds` from config
@@ -55,6 +62,7 @@ You are acting as a **Senior Go Security Engineer and Network Architect**. Your 
   - Ignoring `ctx.Done()` — always respect cancellation signals
 
 ### 6. Core Workflows to Maintain
+
 - **Provider Registry:** Upstream providers are config-driven via `"providers"` JSON sections merged with built-in defaults (`builtInProviders()` in `config.go`, sourced from `ProviderRegistry` in `registry.go`). Adding a new provider (e.g., OpenAI) requires zero Go code changes — only JSON config and a secrets key. Model resolution uses `ResolveProviders()` which checks the dynamic discovery catalog first (returning ALL providers offering that model), then falls back to the static `ModelRegistry`. Unknown models return a 400 error — there is no default provider fallback.
 - **Dynamic Model Discovery:** At startup and on SIGHUP reload, Nenya fetches `/v1/models` from each configured provider (concurrently, concurrency-limited to 5 by default via `HealthCheckConfig.MaxConcurrent`, 10s timeout each). Responses are parsed by provider-specific parsers (`internal/discovery/parse.go`) and merged with the static ModelRegistry using three-tier priority: config overrides > discovered models > static registry. The merged catalog (`ModelCatalog` in `internal/discovery/discovery.go`) is used for model resolution in routing, `/v1/models` endpoint, and `max_tokens` injection. Discovery failures degrade gracefully — providers that fail are skipped and the static registry is used as fallback.
 - **Dynamic Routing:** The proxy must inspect the JSON body, read the `"model"` string, and dynamically route to the correct provider via `resolveProvider()`. Agents with fallback chains are resolved via `buildTargetList()`. Agent model lists support string shorthand (looked up from `ModelRegistry`), full object notation (explicit provider/model/format), or regex-based patterns (`provider_rgx`/`model_rgx` inline on any model entry) that dynamically match against the discovery catalog at runtime.
@@ -71,6 +79,7 @@ You are acting as a **Senior Go Security Engineer and Network Architect**. Your 
 - **Provider-Specific Thinking Activation:** `ProviderSpec.SanitizeRequest` hooks receive `SanitizeDeps` with `SupportsReasoning` and `ProviderThinking` closure functions (avoiding import cycles with `config`). Zai's `zaiSanitize` injects `thinking: {type: "enabled", clear_thinking: false}` for reasoning-capable models, configurable per-provider via `thinking.enabled` in the config file. Temperature defaults are applied model-specifically (GLM-4.6/4.7 → 1.0). See `internal/providers/zai.go`.
 - **DeepSeek v4 Reasoning Injection:** `internal/routing/sanitize.go:ensureDeepSeekReasoningContent` injects `reasoning_content: ""` on all assistant messages for DeepSeek. Required because DeepSeek v4 returns 400 if any assistant message lacks `reasoning_content` in multi-turn conversations where tool calls occurred.
 - **Two-tier Injection Escalation:** With `governance.injection.escalation.enabled`, ambiguous detection-score bands (`[min_score, max_score)`) are routed to an LLM classifier through the shared judgment primitive (`internal/pipeline/injection_escalation.go` building on `Judge.Adjudicate` → `CallEngineChainObserved`, contract `"injection"` with pinned envelope/caller labels) before the tier-1 verdict applies. The classifier verdict is advisory: benign clears surfaces, but malformed output, engine failure, timeout, budget exhaustion, and summarized traffic always fall back to the deterministic tier-1 verdict (the LLM layer can never weaken it). Metrics: `nenya_injection_escalations_total{verdict}`, `nenya_injection_escalation_duration_seconds{verdict}`, plus the judgment-family `nenya_judgments_total{judgment="injection",verdict,engine}`.
+- **Typed Advisory Judgment Layer:** `internal/pipeline/judge.go` provides the shared, engine-agnostic, fail-closed adjudication primitive: code-owned `JudgmentContract`s (versioned prompt + closed verdict enum) driven through the engine chain, with configuration selecting only the engine and budgets. Judgment sites (`summary_fidelity`, `egress_screen`, `tfidf_rerank`, `spotlight_tier`, `injection`) run only at ambiguous bands and buffered checkpoints — never per SSE delta — and can only **strengthen** a deterministic tier-1 verdict; any operational failure, contract violation, or truncated excerpt falls back to the deterministic decision (strengthen-only invariant). Contracts are never assumed to produce provider-native structured output. See docs/ARCHITECTURE.md (Advisory Judgment Layer) and docs/CONFIGURATION.md (`judgments`/`tfidf_rerank`/`spotlight.risk_tiers`).
 - **Advisory Judgment Transport (System One):** Judgment contracts can be adjudicated by System One decision models (TypeSafe Jev, or a local Laya sidecar) instead of chat LLMs: a chain target whose provider declares `api_format: "systemone"` receives the contract as a typed `choice` question (instructions = contract prompt, criteria = verdict enum, state = excerpt capped at 512 tokens ≈ 2048 bytes) and returns a typed answer read structurally — no prose parsing. Typed answers below the per-judgment `escalate_below_confidence` (0 = off) cascade to the next chain target (confidence routes, never decides policy; counted in `nenya_judgment_cascades_total{judgment}`). The deterministic tier-1 verdict still stands whenever every target fails, is inconclusive, or is truncated; strengthen-only semantics are unchanged. See `internal/pipeline/engine_systemone.go` and docs/SYSTEM_ONE.md §4.
 - **ExfilGuard (Output Egress Control):** Deterministic URL policy on the response path (`internal/stream/exfil.go`, wired via `internal/proxy/exfil.go`): model-produced markdown images/links and bare http(s) URLs are checked against scheme/IP-literal/host-allowlist/query-length/query-entropy rules on both streaming (sliding-window over SSE deltas, same mechanism as StreamFilter) and buffered paths. Actions: log (default), strip (placeholder), block (`error_kind=exfil_blocked`). Config: `governance.exfil_guard` with per-agent `enabled`/`action` overrides; metrics `nenya_exfil_detections_total{reason,action}`.
 - **Egress Canary Tripwire:** With `governance.canary.enabled`, a per-request random token (`NENYA-CANARY-{32 hex}`, crypto/rand) is injected as a system-context marker after the content pipeline and watched on every egress channel (`internal/pipeline/canary.go`, stream watcher in `internal/stream/exfil.go`, tool-args scan in `internal/proxy/mcp_tools.go`). Detection = the model reproduced injected context into output (injection-driven exfil signature): block terminates with `error_kind=exfil_detected` / refuses the tool call; log records only. Metrics: `nenya_exfil_events_total{channel}`. Exact-substring tripwire — encoded dumps evade (see docs/CONFIGURATION.md).
@@ -83,6 +92,7 @@ You are acting as a **Senior Go Security Engineer and Network Architect**. Your 
 - **Structured Error Handling:** All error responses include an `error_kind` field (`internal/infra/errors.go`) for programmatic diagnostics. Categories: `context_exceeded`, `rate_limited`, `auth_failed`, `model_not_found`, `provider_timeout`, `provider_error`, `network_error`, `payload_too_large`, `invalid_request`, `bouncer_error`, `injection_detected`, `internal_error`. Each `ErrorKind` has `Retryable()` and `ShouldFailover()` methods. All error writing uses `writeStructuredError()` instead of bare `http.Error()`.
 
 ### 7. Integer Overflow Prevention (CWE-190)
+
 - **Vulnerable Patterns:** Arithmetic on length values before slice allocation can cause integer overflow:
   ```go
   // VULNERABLE - n+1 can overflow
@@ -120,10 +130,12 @@ You are acting as a **Senior Go Security Engineer and Network Architect**. Your 
 All outbound HTTP dispatch points vulnerable to transient network errors (TLS handshake timeout, connection refused, DNS failure, 5xx responses) MUST use the standard `util.DoWithRetry` primitive.
 
 **Standard retry helper:**
+
 - `util.DoWithRetry(ctx, maxAttempts, fn)` — calls `fn` up to `maxAttempts` times with exponential backoff and jitter. Respects `ctx` cancellation. Only succeeds when `fn` returns `nil`.
 - `util.CalculateBackoff(attempt int) time.Duration` — reused by the chat-completion proxy retry loop.
 
 **Retry is required for these request types:**
+
 - Model discovery fetches (`internal/discovery/fetch.go:fetchProviderModels`)
 - Embeddings passthrough (`internal/proxy/embeddings.go:handleEmbeddings`)
 - Responses passthrough (`internal/proxy/responses.go:handleResponses`)
@@ -132,6 +144,7 @@ All outbound HTTP dispatch points vulnerable to transient network errors (TLS ha
 - Provider validation at startup (`internal/config/validate.go:validateWithMinimalRequest`)
 
 **Configuration:**
+
 - `governance.max_retry_attempts` — global default (default 3), applied by `GovernanceConfig.EffectiveMaxRetryAttempts()`
 - `providers.<name>.max_retry_attempts` — per-provider override, takes precedence over global default
 - `providers.<name>.retryable_status_codes` — per-provider retryable HTTP statuses (default: 429, 500, 502, 503, 504, 529)
@@ -141,6 +154,7 @@ All outbound HTTP dispatch points vulnerable to transient network errors (TLS ha
 - Network errors and 5xx upstream responses are retried. 4xx responses are NOT retried — except when classified retryable (context-length semantics, per-provider statuses/phrases, or provider matchers).
 
 ### 9. Code Readability Patterns (Strong Recommendations)
+
 - **Function Length:** Target ≤80 lines. Functions exceeding 150 lines SHOULD be decomposed into smaller, named helpers. Enforced by `funlen` linter.
 - **Cyclomatic Complexity:** Keep under 10. Functions with high branch count (many if/else, switch cases) SHOULD extract branches into named methods. Enforced by `gocyclo` linter (threshold: 15 for existing code).
 - **Nesting Depth:** Maximum 3 levels. Deeper nesting MUST use guard clauses (early return) or extraction into a named function. Enforced by `nestif` linter.
@@ -190,6 +204,7 @@ All outbound HTTP dispatch points vulnerable to transient network errors (TLS ha
 - **Scope:** These recommendations apply to production code (`internal/*`, `cmd/*`). Test code follows separate standards (see §12).
 
 ### 10. Error Handling & Reliability (CRITICAL)
+
 - **GoDoc for Exported Symbols:** Every exported type, function, method, constant, and variable MUST have a GoDoc comment. The comment must start with the symbol name:
   ```go
   // CountTokens estimates the number of tokens in the given text using
@@ -200,9 +215,11 @@ All outbound HTTP dispatch points vulnerable to transient network errors (TLS ha
 - **No Stale Comments:** Comments must accurately reflect the code. If code changes, update or remove affected comments.
 
 ### 11. Code Organization & DRY (Don't Repeat Yourself)
+
 - **Shared Helpers:** Common utility functions MUST live in `internal/util/` (e.g., `AddCap` for overflow-safe integer addition, `JoinBackticks` for formatting name lists, `ErrNoProvider` for shared error strings).
 - **No Copy-Paste:** If you find the same pattern in 3+ places, extract it into a shared helper. Check `internal/util/` before writing new utility code.
 - **Parameter Grouping:** Functions with more than 5 parameters MUST use an options struct or config struct to group related arguments. Example:
+
   ```go
   // BAD: 10+ parameters
   func forward(gw, w, r, targets, payload, cooldown, tokens, agent, retries, cache)
@@ -218,9 +235,11 @@ All outbound HTTP dispatch points vulnerable to transient network errors (TLS ha
       CacheKey   string
   }
   ```
+
 - **Single Responsibility:** Each file should have a clear, focused purpose. If a file exceeds ~500 lines, consider splitting related functionality into separate files.
 
 ### 12. Testing Standards
+
 - **Test Coverage:** Every non-trivial exported function MUST have at least one test case covering the happy path. Error paths MUST be tested where they represent recoverable conditions.
 - **Table-Driven Tests:** Prefer table-driven tests for functions with multiple input/output combinations. Use `t.Run` for sub-test names.
 - **Test Helpers:** Shared test utilities live in `internal/testutil/`. Reuse existing helpers (e.g., `testutil.NewTestLogger`, `testutil.NewTestConfig`) instead of duplicating setup code.
@@ -229,16 +248,19 @@ All outbound HTTP dispatch points vulnerable to transient network errors (TLS ha
 - **Fuzz Tests:** For security-critical parsing functions (e.g., JSON body parsing, SSE parsing), add fuzz tests using `testing.F`.
 
 ### 13. File Path Security
+
 - **Prompt File Validation:** `LoadPromptFile` and any function reading files from user-configurable paths MUST validate that the resolved path does not escape the expected directory (e.g., the config directory). Use `filepath.Abs` and check the prefix. Reject paths containing `..` or absolute paths that point outside the config root.
 - **No Path Traversal:** Never concatenate user-supplied path components without sanitization. Use `filepath.Join` and validate the result.
 
 ### 14. Concurrency Safety
+
 - **Shared State:** All mutable shared state MUST be protected by `sync.Mutex`, `sync.RWMutex`, or `atomic` operations. Document the locking strategy in GoDoc.
 - **Goroutine Lifecycle:** Every goroutine MUST have a clear termination condition (context cancellation, channel close, or explicit stop signal). Document the lifecycle in comments.
 - **No Goroutine Leaks:** Use `defer cancel()` for all contexts used to spawn goroutines. Ensure background goroutines are stopped on gateway shutdown.
 - **Context Propagation:** Never use `context.Background()` in request-scoped code. The request context (`r.Context()`) must flow through the entire call chain. The only exception is fire-and-forget operations that must outlive the request (e.g., metrics recording with explicit timeout).
 
 ### 15. Code Quality & Linting (CRITICAL)
+
 - **Mandatory Linting:** After completing any code changes, you MUST run `golangci-lint run` to verify code quality. This is configured in `.golangci.yml` and includes:
   - `gocyclo` (cyclomatic complexity threshold: 15)
   - `funlen` (max 150 lines, 80 statements)
@@ -256,16 +278,19 @@ All outbound HTTP dispatch points vulnerable to transient network errors (TLS ha
 **Implementation:** `internal/auth/rbac.go` provides role-based authorization on top of authentication.
 
 **Roles:**
+
 - `admin` — Unrestricted access to all agents and endpoints (bypasses RBAC checks)
 - `user` — Access to configured agents and all non-admin endpoints (`/v1/chat/completions`, `/v1/embeddings`, `/v1/responses`, `/v1/images/generations`, `/v1/audio/transcriptions`, `/v1/audio/speech`, `/v1/moderations`, `/v1/rerank`, `/v1/a2a`, `/v1/files`, `/v1/batches`, `/proxy/*`)
 - `read-only` — Read-only access: GET requests only (`/v1/models`, `/healthz`, `/statsz`, `/metrics`)
 
 **Agent Scoping:**
+
 - API keys define `allowed_agents` list to restrict which agents they can access
 - Empty list grants access to all agents (backward compatible)
 - Admin keys bypass agent restrictions
 
 **Endpoint Restrictions:**
+
 - API keys define `allowed_endpoints` list for fine-grained allowlisting (HTTP method + path: `GET /v1/models`, `POST /v1/chat/completions`)
 - Overrides default role-based permissions when set
 - Empty list uses role-based default permissions
@@ -274,6 +299,7 @@ All outbound HTTP dispatch points vulnerable to transient network errors (TLS ha
 - Admin keys bypass endpoint restrictions
 
 **Key Configuration Fields:**
+
 ```go
 type ApiKey struct {
     Name             string         `json:"name"`
@@ -289,19 +315,23 @@ type ApiKey struct {
 ```
 
 **Authorization Functions:**
+
 - `AuthorizeAgent(apiKey *config.ApiKey, agentName string) bool` — Returns true if key can access the agent
 - `AuthorizeEndpoint(apiKey *config.ApiKey, method, path string) bool` — Returns true if key can call the endpoint
 - `HasPermission(role Role, perm Permission) bool` — Checks if role grants a specific permission
 
 **Metrics:**
+
 - `nenya_auth_denials_total` counter with `reason` label: `agent`, `endpoint`, `disabled`, `expired`, `payload_too_large`, `invalid_body`
 
 **Integration:**
+
 - `internal/proxy/handler.go:authenticateAndAuthorize()` — Validates token/primary, checks enabled/expired, enforces RBAC
 - All `/v1/*` handlers receive `*config.ApiKey` instead of raw token string
 - Primary token returns synthetic `&config.ApiKey{Name: "primary", Roles: []string{"admin"}, Enabled: true}` for metrics/logging
 
 **Security Notes:**
+
 - Nil-safe functions (return false on `nil` key)
 - Admin role bypasses all restrictions (intentional security design)
 - Empty lists grant full access (backward compatible)
