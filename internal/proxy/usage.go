@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/nenya/internal/billing"
+	"github.com/nenya/internal/discovery"
 	"github.com/nenya/internal/gateway"
 	"github.com/nenya/internal/routing"
 	"github.com/nenya/internal/stream"
@@ -101,7 +102,7 @@ func recordCostAndBilling(ctx context.Context, gw *gateway.NenyaGateway, target 
 	if !ok || dm.Pricing == nil || !dm.Pricing.HasStandardRate() {
 		return
 	}
-	cost := dm.Pricing.CalculateCost(int64(inputTokens), int64(outputTokens))
+	cost := dm.Pricing.CalculateCost(discovery.PricingUsage{Input: int64(inputTokens), Output: int64(outputTokens)})
 	gw.CostTracker.RecordUsage(target.Model, cost)
 	if gw.BillingTracker != nil {
 		gw.BillingTracker.RecordSpend(ctx, billing.SpendEntry{

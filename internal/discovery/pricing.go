@@ -39,21 +39,74 @@ func (p PricingEntry) HasPeak() bool {
 }
 
 // HasStandardRate reports whether a usable standard (off-peak) baseline rate is
-// set. Callers pricing with the flat-only CalculateCost (before the
-// window-aware model lands) gate on this, not on IsZero: a peak-only entry is
-// non-zero but would price at $0.
+// set. Peak-only entries are non-zero but have no standard rate, so callers
+// that price with the standard pair (Peak unset) must gate on this —
+// otherwise a peak-only entry would silently price at $0.
 func (p PricingEntry) HasStandardRate() bool {
 	return p.InputCostPer1M != 0 || p.OutputCostPer1M != 0
 }
 
-// CalculateCost estimates the USD cost of inputTokens + outputTokens using the
-// standard (off-peak) baseline rates. It intentionally ignores the peak and
-// cached-input fields today; the window-aware evaluation lands in a later phase
-// (see docs/COST_MODEL.md).
-func (p PricingEntry) CalculateCost(inputTokens, outputTokens int64) float64 {
-	inputCost := (float64(inputTokens) / 1_000_000) * p.InputCostPer1M
-	outputCost := (float64(outputTokens) / 1_000_000) * p.OutputCostPer1M
-	return inputCost + outputCost
+// PricingUsage describes the token counts and rate window for one cost
+// computation. Peak selects the peak pair when the entry declares one;
+// CachedInput is the subset of Input billed at the cached-input rate.
+type PricingUsage struct {
+	Input       int64
+	CachedInput int64
+	Output      int64
+	Peak        bool
+}
+
+// CalculateCost estimates the USD cost of a request. The window (usage.Peak)
+// selects the peak pair when the entry declares one — per dimension, so a
+// half-declared peak pair prices the missing side at the standard rate rather
+// than $0. CachedInput is billed at CachedInputCostPer1M when set, else at the
+// window input rate; the remaining Input is billed at the window input rate;
+// Output at the window output rate. Token counts are clamped non-negative and
+// CachedInput is clamped to Input; rates are clamped non-negative (a NaN rate
+// from an unvalidated feed contributes nothing). See docs/COST_MODEL.md.
+func (p PricingEntry) CalculateCost(usage PricingUsage) float64 {
+	inRate, outRate := p.InputCostPer1M, p.OutputCostPer1M
+	if usage.Peak && p.HasPeak() {
+		if p.PeakInputCostPer1M > 0 {
+			inRate = p.PeakInputCostPer1M
+		}
+		if p.PeakOutputCostPer1M > 0 {
+			outRate = p.PeakOutputCostPer1M
+		}
+	}
+	cachedRate := p.CachedInputCostPer1M
+	if cachedRate == 0 {
+		cachedRate = inRate
+	}
+	// Non-positive → 0 (NaN fails the > test, so it clamps too).
+	if !(inRate > 0) {
+		inRate = 0
+	}
+	if !(outRate > 0) {
+		outRate = 0
+	}
+	if !(cachedRate > 0) {
+		cachedRate = 0
+	}
+	input := usage.Input
+	if input < 0 {
+		input = 0
+	}
+	cached := usage.CachedInput
+	if cached < 0 {
+		cached = 0
+	}
+	if cached > input {
+		cached = input
+	}
+	output := usage.Output
+	if output < 0 {
+		output = 0
+	}
+	uncached := input - cached
+	return (float64(cached)*cachedRate +
+		float64(uncached)*inRate +
+		float64(output)*outRate) / 1_000_000
 }
 
 // PricingSource is an interface for pricing data sources. It is reserved for future

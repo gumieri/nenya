@@ -16,6 +16,7 @@ import (
 
 	"github.com/nenya/config"
 	"github.com/nenya/internal/billing"
+	"github.com/nenya/internal/discovery"
 	"github.com/nenya/internal/gateway"
 	"github.com/nenya/internal/infra"
 	"github.com/nenya/internal/pipeline"
@@ -1146,7 +1147,7 @@ func (p *Proxy) makeUsageCallback(ctx context.Context, gw *gateway.NenyaGateway,
 		// This pattern (if count > 0 { Stats.*; Metrics.* }) is intentional.
 		if gw.CostTracker != nil && (prompt > 0 || completion > 0) {
 			if dm, ok := gw.ModelCatalog.Lookup(target.Model); ok && dm.Pricing != nil && dm.Pricing.HasStandardRate() {
-				cost := dm.Pricing.CalculateCost(int64(prompt), int64(completion))
+				cost := dm.Pricing.CalculateCost(discovery.PricingUsage{Input: int64(prompt), Output: int64(completion)})
 				gw.CostTracker.RecordUsage(target.Model, cost)
 				if gw.BillingTracker != nil {
 					gw.BillingTracker.RecordSpend(ctx, billing.SpendEntry{

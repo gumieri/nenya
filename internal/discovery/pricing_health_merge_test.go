@@ -55,25 +55,45 @@ func TestPricingEntry_HasPeak(t *testing.T) {
 }
 
 func TestPricingEntry_CalculateCost(t *testing.T) {
+	flat := PricingEntry{InputCostPer1M: 1.0, OutputCostPer1M: 2.0}
+	peaked := PricingEntry{
+		InputCostPer1M:       0.15,
+		OutputCostPer1M:      0.60,
+		PeakInputCostPer1M:   0.30,
+		PeakOutputCostPer1M:  1.20,
+		CachedInputCostPer1M: 0.05,
+	}
 	tests := []struct {
-		name         string
-		p            PricingEntry
-		inputTokens  int64
-		outputTokens int64
-		want         float64
+		name string
+		p    PricingEntry
+		u    PricingUsage
+		want float64
 	}{
-		{"zero tokens", PricingEntry{InputCostPer1M: 1.0, OutputCostPer1M: 2.0}, 0, 0, 0},
-		{"only input", PricingEntry{InputCostPer1M: 1.0, OutputCostPer1M: 0}, 1_000_000, 0, 1.0},
-		{"only output", PricingEntry{InputCostPer1M: 0, OutputCostPer1M: 2.0}, 0, 500_000, 1.0},
-		{"both", PricingEntry{InputCostPer1M: 1.0, OutputCostPer1M: 2.0}, 1_000_000, 500_000, 2.0},
-		{"fractional tokens", PricingEntry{InputCostPer1M: 3.0}, 500_000, 0, 1.5},
+		{"zero tokens", flat, PricingUsage{}, 0},
+		{"only input", flat, PricingUsage{Input: 1_000_000}, 1.0},
+		{"only output", flat, PricingUsage{Output: 500_000}, 1.0},
+		{"both", flat, PricingUsage{Input: 1_000_000, Output: 500_000}, 2.0},
+		{"fractional tokens", flat, PricingUsage{Input: 500_000}, 0.5},
+		{"peak window", peaked, PricingUsage{Input: 1_000_000, Peak: true}, 0.30},
+		{"peak off (standard pair)", peaked, PricingUsage{Input: 1_000_000}, 0.15},
+		{"peak window no peak configured falls back to standard", flat, PricingUsage{Input: 1_000_000, Peak: true}, 1.0},
+		{"partial peak pair falls back per dimension", PricingEntry{InputCostPer1M: 0.15, OutputCostPer1M: 0.60, PeakInputCostPer1M: 0.30}, PricingUsage{Input: 1_000_000, Output: 1_000_000, Peak: true}, 0.90},
+		{"cached input uses cached rate", peaked, PricingUsage{Input: 1_000_000, CachedInput: 1_000_000}, 0.05},
+		{"cached subset", peaked, PricingUsage{Input: 1_000_000, CachedInput: 400_000}, 0.4*0.05 + 0.6*0.15},
+		{"cached clamps to input", peaked, PricingUsage{Input: 100_000, CachedInput: 500_000}, 0.005},
+		{"negative cached clamps to zero", flat, PricingUsage{Input: 1_000_000, CachedInput: -100}, 1.0},
+		{"negative clamps", flat, PricingUsage{Input: -5, Output: -5}, 0},
+		{"cached without cached rate uses window input", flat, PricingUsage{Input: 1_000_000, CachedInput: 1_000_000}, 1.0},
+		{"peak with cached", peaked, PricingUsage{Input: 1_000_000, CachedInput: 1_000_000, Peak: true}, 0.05},
+		{"cached fallback under peak uses peak input", PricingEntry{InputCostPer1M: 0.15, OutputCostPer1M: 0.60, PeakInputCostPer1M: 0.30, PeakOutputCostPer1M: 1.20}, PricingUsage{Input: 1_000_000, CachedInput: 1_000_000, Peak: true}, 0.30},
+		{"degenerate zero input rate with cached", PricingEntry{OutputCostPer1M: 2.0}, PricingUsage{Input: 1_000_000, CachedInput: 1_000_000}, 0},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := tt.p.CalculateCost(tt.inputTokens, tt.outputTokens)
+			got := tt.p.CalculateCost(tt.u)
 			if math.Abs(got-tt.want) > 1e-9 {
-				t.Errorf("CalculateCost() = %f, want %f", got, tt.want)
+				t.Errorf("CalculateCost(%+v) = %f, want %f", tt.u, got, tt.want)
 			}
 		})
 	}

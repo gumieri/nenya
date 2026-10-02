@@ -50,19 +50,23 @@ For a request at instant `t` with `input`, `cachedInput`, and `output` tokens:
 1. **Window.** `peak := IsPeakAt(provider, t)` — peak only if the provider
    declares a window _and_ the model declares peak rates; otherwise always
    standard.
-2. **Window rates.** `inRate`, `outRate` = peak pair if `peak`, else the
-   standard pair.
+2. **Window rates.** `inRate`, `outRate` = the peak pair when `peak`, else the
+   standard pair. Per dimension: a peak side left at `0` falls back to the
+   standard side (a half-declared peak pair never bills at $0).
 3. **Cached rate.** `cachedRate = cached_input_cost_per_1m` when set, else
    `inRate`.
 4. **Cost.**
    `cachedInput*cachedRate + (input - cachedInput)*inRate + output*outRate`,
-   all divided by `1,000,000`. `cachedInput` is clamped to `[0, input]`.
+   all divided by `1,000,000`. `cachedInput` is clamped to `[0, input]`; token
+   counts are clamped non-negative; rates are clamped non-negative (a `NaN`
+   rate from an unvalidated feed contributes nothing). The implementation sums
+   the three products and divides once — equivalent to the legacy per-term
+   form up to one ulp.
 
-API shape (later phase): `CalculateCost` takes an options struct
+API shape (as of Phase 003): `CalculateCost` takes an options struct
 (`PricingUsage{Input, CachedInput, Output int64; Peak bool}`) rather than two
 scalars, so every caller must state the window and cached-token count
-explicitly (AGENTS.md §11). The currently shipped `CalculateCost(int64, int64)`
-is flat-only and is replaced by that signature in Phase 003.
+explicitly (AGENTS.md §11).
 
 ## Peak windows
 
@@ -90,11 +94,8 @@ Providers without a window are never peak.
   for display only.
 - **The guard is conservative.** `max_cost_per_request` estimates on the
   **peak** rate (worst case) so it can never under-estimate a request's
-  ceiling. (Whether this becomes configurable is decided in Phase 006.)
-  _Interim:_ until the window-aware cost API lands, the guard still estimates
-  on the standard baseline and skips peak-only entries (it gates on
-  `HasStandardRate`), which is no worse than the pre-module behavior; Phase 006
-  makes it peak-aware.
+  ceiling; peak-less entries fall back to the standard pair inside
+  `CalculateCost`. (Whether this becomes configurable is decided in Phase 006.)
 - **No pricing ⇒ no cost.** A catalog lookup miss keeps the current
   fast path (no cost recorded).
 
