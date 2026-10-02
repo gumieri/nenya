@@ -108,3 +108,60 @@ func TestProviderCanServe_BothConditions(t *testing.T) {
 		t.Error("ProviderCanServe with both API key and auth_style 'none' should return true")
 	}
 }
+
+func TestDeriveInputTokenBudget(t *testing.T) {
+	tests := []struct {
+		name       string
+		maxContext int
+		maxOutput  int
+		want       int
+	}{
+		{"unknown output uses three quarters", 1_000_000, 0, 750_000},
+		{"output reservation wins", 1_000_000, 384_000, 616_000},
+		{"three quarters wins", 1_000_000, 100_000, 750_000},
+		{"output equals context falls back", 128_000, 128_000, 96_000},
+		{"output exceeds context falls back", 128_000, 200_000, 96_000},
+		{"tiny window", 3, 0, 0},
+		{"tiny window with output", 10, 8, 2},
+		{"tiny window output larger", 4, 3, 1},
+		{"zero context disables", 0, 1000, 0},
+		{"negative context disables", -5, 1000, 0},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := DeriveInputTokenBudget(tt.maxContext, tt.maxOutput); got != tt.want {
+				t.Errorf("DeriveInputTokenBudget(%d, %d) = %d, want %d", tt.maxContext, tt.maxOutput, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestEffectiveOutputTokens(t *testing.T) {
+	tests := []struct {
+		name     string
+		payload  map[string]interface{}
+		declared int
+		want     int
+	}{
+		{"no max_tokens returns declared", map[string]interface{}{}, 384_000, 384_000},
+		{"smaller requested wins", map[string]interface{}{"max_tokens": float64(8192)}, 384_000, 8192},
+		{"larger requested uses declared", map[string]interface{}{"max_tokens": float64(900_000)}, 384_000, 384_000},
+		{"equal requested uses declared", map[string]interface{}{"max_tokens": float64(384_000)}, 384_000, 384_000},
+		{"int requested", map[string]interface{}{"max_tokens": 100}, 384_000, 100},
+		{"int64 requested", map[string]interface{}{"max_tokens": int64(200)}, 384_000, 200},
+		{"negative requested returns declared", map[string]interface{}{"max_tokens": float64(-1)}, 384_000, 384_000},
+		{"overflowing float64 returns declared", map[string]interface{}{"max_tokens": float64(math.MaxInt)}, 384_000, 384_000},
+		{"NaN returns declared", map[string]interface{}{"max_tokens": math.NaN()}, 384_000, 384_000},
+		{"positive infinity returns declared", map[string]interface{}{"max_tokens": math.Inf(1)}, 384_000, 384_000},
+		{"non-numeric returns declared", map[string]interface{}{"max_tokens": "big"}, 384_000, 384_000},
+		{"requested with unknown declared", map[string]interface{}{"max_tokens": float64(8192)}, 0, 8192},
+		{"zero requested with unknown declared", map[string]interface{}{"max_tokens": float64(0)}, 0, 0},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := EffectiveOutputTokens(tt.payload, tt.declared); got != tt.want {
+				t.Errorf("EffectiveOutputTokens(%v, %d) = %d, want %d", tt.payload, tt.declared, got, tt.want)
+			}
+		})
+	}
+}

@@ -17,6 +17,7 @@ import (
 	"github.com/nenya/internal/infra"
 	"github.com/nenya/internal/pipeline"
 	providerpkg "github.com/nenya/internal/providers"
+	"github.com/nenya/internal/util"
 )
 
 // TransformDeps provides the dependencies needed for request payload
@@ -437,17 +438,19 @@ func resolveEffectiveMaxContext(deps TransformDeps, finalModel string) int {
 }
 
 // resolveTransformInputBudget derives the input-conversation budget for the
-// transform-side TrimPayload call: 3/4 of the model's context window
-// (reserving output headroom — same 3/4 policy as the interceptor hard limit
-// computed in proxy/chat.go resolvePipelineContext), clamped to
-// context.hard_limit_tokens when configured. The agent-resolved maxContext
-// takes precedence; catalog/registry values are the fallback. Returns 0 (trim
-// disabled) when the context window is unknown and no hard limit is set, per
-// the documented UNKNOWN_MAXCONTEXT fallback. The budget is deliberately
-// derived from MaxContext, never from MaxOutput: TrimPayload's parameter is an
-// input-conversation budget, and clamping input to the output cap
-// over-trimmed large-context models.
-func resolveTransformInputBudget(deps TransformDeps, finalModel string, maxContext int) int {
+// transform-side TrimPayload call: util.DeriveInputTokenBudget(maxContext,
+// maxOutput), i.e. 3/4 of the model's context window further clamped to the
+// input room left after reserving the effective output cap. Reserving output
+// room keeps input + output within the window (the interceptor hard limit in
+// proxy/chat.go resolvePipelineContext uses the same helper on the primary
+// target; this per-target call is the failover-safe guard). The budget is never
+// the output cap alone: clamping input to the output cap would over-trim
+// large-context models. context.hard_limit_tokens, when configured, replaces the
+// budget outright. The agent-resolved maxContext takes precedence;
+// catalog/registry values are the fallback. Returns 0 (trim disabled) when the
+// context window is unknown and no hard limit is set, per the documented
+// UNKNOWN_MAXCONTEXT fallback.
+func resolveTransformInputBudget(deps TransformDeps, finalModel string, maxContext, maxOutput int) int {
 	if hardLimit := deps.Config.Context.HardLimitTokens; hardLimit > 0 {
 		return hardLimit
 	}
@@ -455,12 +458,7 @@ func resolveTransformInputBudget(deps TransformDeps, finalModel string, maxConte
 	if maxCtx <= 0 {
 		maxCtx = resolveEffectiveMaxContext(deps, finalModel)
 	}
-	if maxCtx <= 0 {
-		return 0
-	}
-	// maxCtx/4*3 cannot overflow for any positive int (unlike maxCtx*3/4);
-	// degenerate windows under 4 tokens yield 0, disabling the trim.
-	return maxCtx / 4 * 3
+	return util.DeriveInputTokenBudget(maxCtx, maxOutput)
 }
 
 func applyMaxTokens(payload map[string]interface{}, effectiveMaxOutput int) {
@@ -587,7 +585,7 @@ func TransformRequestForUpstream(deps TransformDeps, providerName, upstreamURL s
 	effectiveMaxOutput := resolveEffectiveMaxOutput(deps, finalModel, maxOutput)
 	applyMaxTokens(payload, effectiveMaxOutput)
 
-	inputBudget := resolveTransformInputBudget(deps, finalModel, maxContext)
+	inputBudget := resolveTransformInputBudget(deps, finalModel, maxContext, util.EffectiveOutputTokens(payload, effectiveMaxOutput))
 	if deps.CountTokens != nil && inputBudget > 0 {
 		modified, saved := pipeline.TrimPayload(deps.Logger, payload, inputBudget, deps.CountTokens, deps.Config.Context)
 		if modified {

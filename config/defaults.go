@@ -178,10 +178,18 @@ func applyContextDefaults(cfg *Config) {
 	if cfg.Context.TruncationKeepLastPct == 0 {
 		cfg.Context.TruncationKeepLastPct = 25.0
 	}
-	// HardLimitTokens defaults to 0 (backward-compat softLimit*2)
-	// If 0, interceptContent uses softLimit * 2 as hard limit.
+	// HardLimitTokens defaults to 0 (auto): the hard limit is derived per
+	// model from the context window and the request's effective output room
+	// (see util.DeriveInputTokenBudget). A negative value is clamped to 0.
 	if cfg.Context.HardLimitTokens < 0 {
 		cfg.Context.HardLimitTokens = 0
+	}
+	// SoftLimitTokens defaults to 0 (derived from MaxContext/8). If 0 or
+	// unset, the bouncer threshold is derived per model; a positive value is
+	// an absolute override, clamped to the hard limit at derivation time so
+	// soft never exceeds hard. A negative value is clamped to 0.
+	if cfg.Context.SoftLimitTokens < 0 {
+		cfg.Context.SoftLimitTokens = 0
 	}
 }
 

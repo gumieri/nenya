@@ -898,8 +898,20 @@ func (p *Proxy) extractUserMessagesForEmbedding(gw *gateway.NenyaGateway, messag
 // filtering pipeline.
 // Returns messages, MCP tools flag, soft/hard limits, window max context, and client profile.
 // Proactive truncation thresholds:
-//   - SoftLimit: triggers Ollama summarization (1/8 of MaxContext)
-//   - HardLimit: absolute truncation limit (3/4 of MaxContext, leaves room for response)
+//   - SoftLimit: triggers Ollama summarization. Defaults to 1/8 of MaxContext;
+//     context.soft_limit_tokens overrides it when > 0, clamped to the hard
+//     limit so the bouncer always engages before truncation.
+//   - HardLimit: absolute truncation limit. Defaults to
+//     util.DeriveInputTokenBudget(MaxContext, effectiveOutput), i.e.
+//     min(MaxContext/4*3, MaxContext - output), where output is the request's
+//     effective output room (the smaller of the client max_tokens and the
+//     model's declared MaxOutput). Without the reservation a
+//     1M-context/384K-output model would allow 750K input + 384K output,
+//     overshooting the window. context.hard_limit_tokens overrides it.
+//
+// The limits are derived from the primary target (req.Targets[0]); the
+// per-target TrimPayload guard for failover targets lives in
+// routing.resolveTransformInputBudget.
 //
 // If MaxContext is unknown (<=0), truncation is disabled (limits=0) and the full payload
 // is sent upstream. The upstream provider may return context_length_exceeded, which triggers
@@ -920,21 +932,7 @@ func (p *Proxy) resolvePipelineContext(r *http.Request, gw *gateway.NenyaGateway
 	autoSearchCancel()
 	p.injectMCPTools(gw, req.Payload, req)
 
-	softLimit := 0
-	hardLimit := 0
-	if len(req.Targets) > 0 {
-		primaryTarget := req.Targets[0]
-		if primaryTarget.MaxContext > 0 {
-			softLimit = primaryTarget.MaxContext / 8
-			// maxCtx/4*3 cannot overflow for any positive int (unlike
-			// maxCtx*3/4); kept identical to the transform-side budget.
-			hardLimit = primaryTarget.MaxContext / 4 * 3
-		} else {
-			gw.Logger.Warn("MaxContext unknown for model, proactive truncation disabled — configure max_context to enable",
-				"model", req.ModelName,
-				"provider", primaryTarget.Provider)
-		}
-	}
+	softLimit, hardLimit := p.resolveTargetLimits(gw, req)
 
 	windowMaxCtx := routing.ResolveWindowMaxContext(req.ModelName, gw.Config.Agents, gw.ModelCatalog)
 	profile := pipeline.ClassifyClient(r.Header)
@@ -943,6 +941,49 @@ func (p *Proxy) resolvePipelineContext(r *http.Request, gw *gateway.NenyaGateway
 	}
 
 	return messages, hasMCPTools(gw, req.Agent), softLimit, hardLimit, windowMaxCtx, profile
+}
+
+// resolveTargetLimits derives the proactive soft (summarization trigger) and
+// hard (truncation) token limits from the primary target. It returns 0,0 when
+// there is no target or the context window is unknown, disabling proactive
+// truncation. See resolvePipelineContext for the semantics.
+func (p *Proxy) resolveTargetLimits(gw *gateway.NenyaGateway, req *chatRequest) (softLimit, hardLimit int) {
+	if len(req.Targets) == 0 {
+		return 0, 0
+	}
+	primaryTarget := req.Targets[0]
+	if primaryTarget.MaxContext <= 0 {
+		gw.Logger.Warn("MaxContext unknown for model, proactive truncation disabled — configure max_context to enable",
+			"model", req.ModelName,
+			"provider", primaryTarget.Provider)
+		return 0, 0
+	}
+	effectiveOut := util.EffectiveOutputTokens(req.Payload, primaryTarget.MaxOutput)
+	hardLimit = util.DeriveInputTokenBudget(primaryTarget.MaxContext, effectiveOut)
+	if hl := gw.Config.Context.HardLimitTokens; hl > 0 {
+		hardLimit = hl
+	}
+	softLimit = deriveSoftLimit(gw.Config.Context.SoftLimitTokens, primaryTarget.MaxContext, hardLimit)
+	return softLimit, hardLimit
+}
+
+// deriveSoftLimit returns the summarization trigger token count for a model:
+// the absolute context.soft_limit_tokens override when it is positive, clamped
+// to the hard limit (and thus to maxContext), else maxContext/8. Clamping keeps
+// soft <= hard so the bouncer always engages before the trim budget is reached.
+// maxContext is known to be positive at the call site.
+func deriveSoftLimit(softLimitTokens, maxContext, hardLimit int) int {
+	if softLimitTokens <= 0 {
+		return maxContext / 8
+	}
+	limit := maxContext
+	if hardLimit > 0 && hardLimit < limit {
+		limit = hardLimit
+	}
+	if softLimitTokens > limit {
+		return limit
+	}
+	return softLimitTokens
 }
 
 // handleChatCompletions processes chat completion requests with optional content filtering and tool integration.

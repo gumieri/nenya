@@ -725,3 +725,31 @@ func TestApplyBuiltInProviders_RateLimitUserOverride(t *testing.T) {
 		t.Errorf("explicit 0 lost: expected 0, got %d", got)
 	}
 }
+
+func TestApplyContextDefaults_TokenLimitClamps(t *testing.T) {
+	tests := []struct {
+		name     string
+		hard     int
+		soft     int
+		wantHard int
+		wantSoft int
+	}{
+		{"zero values stay zero (auto)", 0, 0, 0, 0},
+		{"positive overrides preserved", 500_000, 5_000, 500_000, 5_000},
+		{"negative hard clamped to zero", -1, 0, 0, 0},
+		{"negative soft clamped to zero", 0, -1, 0, 0},
+		{"both negative clamped", -100, -100, 0, 0},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := Config{Context: ContextConfig{HardLimitTokens: tt.hard, SoftLimitTokens: tt.soft}}
+			applyContextDefaults(&cfg)
+			if cfg.Context.HardLimitTokens != tt.wantHard {
+				t.Errorf("HardLimitTokens = %d, want %d", cfg.Context.HardLimitTokens, tt.wantHard)
+			}
+			if cfg.Context.SoftLimitTokens != tt.wantSoft {
+				t.Errorf("SoftLimitTokens = %d, want %d", cfg.Context.SoftLimitTokens, tt.wantSoft)
+			}
+		})
+	}
+}

@@ -870,6 +870,7 @@ type ContextConfig struct {
 	TruncationKeepLastPct  float64 `json:"truncation_keep_last_pct"`
 	TFIDFQuerySource       string  `json:"tfidf_query_source"`
 	HardLimitTokens        int     `json:"hard_limit_tokens,omitempty"`
+	SoftLimitTokens        int     `json:"soft_limit_tokens,omitempty"`
 }
 
 // GovernanceConfig defines security, rate-limiting, and routing policies

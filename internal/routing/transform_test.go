@@ -656,9 +656,10 @@ func TestTransformRequest_ZAIWithTools_KeepsStreamOptions(t *testing.T) {
 
 // TestTransformRequest_InputBudgetDerivedFromContextWindow pins NENYA-25: the
 // transform-side TrimPayload budget must derive from the model's context
-// window (3/4 headroom; agent-resolved maxContext wins over catalog/registry),
-// never from the output-token cap. A known MaxOutput with unknown MaxContext
-// must NOT trim (documented UNKNOWN_MAXCONTEXT fallback);
+// window (3/4 headroom, further reduced by the declared output cap so input +
+// output fit the window; agent-resolved maxContext wins over catalog/registry),
+// never from the output-token cap alone. A known MaxOutput with unknown
+// MaxContext must NOT trim (documented UNKNOWN_MAXCONTEXT fallback);
 // context.hard_limit_tokens replaces the budget (same precedence as the
 // Bouncer interceptor), including when no model metadata exists.
 //
@@ -748,6 +749,114 @@ func TestTransformRequest_InputBudgetDerivedFromContextWindow(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestResolveTransformInputBudget_ReservesOutputRoom pins Phase 012 on the
+// transform side: the input budget reserves the effective output cap so input +
+// output stay within the context window, falling back to 3/4 when the cap is
+// unknown or degenerate, and letting context.hard_limit_tokens win outright.
+func TestResolveTransformInputBudget_ReservesOutputRoom(t *testing.T) {
+	deps := testDeps(testProviders())
+
+	tests := []struct {
+		name       string
+		maxContext int
+		maxOutput  int
+		want       int
+	}{
+		{"output unknown uses three quarters", 1_000_000, 0, 750_000},
+		{"negative output uses three quarters", 1_000_000, -5, 750_000},
+		{"output reservation wins", 1_000_000, 384_000, 616_000},
+		{"three quarters wins when larger", 1_000_000, 100_000, 750_000},
+		{"output equals context falls back", 1_000_000, 1_000_000, 750_000},
+		{"output exceeds context falls back", 1_000_000, 2_000_000, 750_000},
+		{"tiny window with output", 10, 8, 2},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := resolveTransformInputBudget(deps, "phase012-no-such-model", tt.maxContext, tt.maxOutput); got != tt.want {
+				t.Errorf("resolveTransformInputBudget(%d, %d) = %d, want %d", tt.maxContext, tt.maxOutput, got, tt.want)
+			}
+		})
+	}
+
+	t.Run("hard_limit_tokens wins over reservation", func(t *testing.T) {
+		deps.Config.Context.HardLimitTokens = 100
+		defer func() { deps.Config.Context.HardLimitTokens = 0 }()
+		if got := resolveTransformInputBudget(deps, "phase012-no-such-model", 1_000_000, 384_000); got != 100 {
+			t.Errorf("resolveTransformInputBudget with hard limit = %d, want 100", got)
+		}
+	})
+}
+
+// TestTransformRequest_ClientMaxTokensAvoidsOverTrim verifies the transform-side
+// budget uses the effective output room: a client max_tokens well below the
+// model cap must not trigger the worst-case declared-cap reservation. 1M ctx /
+// 384K out gives a declared-cap budget of 616000 and a small-output budget of
+// 750000; the payload (newest message exactly fills 616000) sits between them.
+func TestTransformRequest_ClientMaxTokensAvoidsOverTrim(t *testing.T) {
+	newDeps := func() TransformDeps {
+		deps := testDeps(testProviders())
+		deps.CountTokens = func(s string) int { return len(s) }
+		cat := discovery.NewModelCatalog()
+		cat.Add(discovery.DiscoveredModel{
+			ID:         "ctx-test-model",
+			Provider:   "deepseek",
+			MaxContext: 1_000_000,
+			MaxOutput:  384_000,
+		})
+		deps.Catalog = cat
+		return deps
+	}
+	// system "sys" (3) + oldest 50000 + newest exactly 616000 = 666003.
+	payload := func() map[string]interface{} {
+		return map[string]interface{}{
+			"model": "ctx-test-model",
+			"messages": []interface{}{
+				map[string]interface{}{"role": "system", "content": "sys"},
+				map[string]interface{}{"role": "user", "content": strings.Repeat("a", 50_000)},
+				map[string]interface{}{"role": "user", "content": strings.Repeat("b", 616_000)},
+			},
+		}
+	}
+	contentTotal := func(t *testing.T, body []byte) int {
+		t.Helper()
+		var out struct {
+			Messages []struct {
+				Content string `json:"content"`
+			} `json:"messages"`
+		}
+		if err := json.Unmarshal(body, &out); err != nil {
+			t.Fatalf("unmarshal body: %v", err)
+		}
+		total := 0
+		for _, m := range out.Messages {
+			total += len(m.Content)
+		}
+		return total
+	}
+
+	t.Run("declared cap drops the oldest message", func(t *testing.T) {
+		body, _, err := TransformRequestForUpstream(newDeps(), "deepseek", "http://upstream.test", payload(), "ctx-test-model", 384_000, 1_000_000, "openai", "")
+		if err != nil {
+			t.Fatalf("TransformRequestForUpstream: %v", err)
+		}
+		if got := contentTotal(t, body); got != 616_003 {
+			t.Errorf("content total = %d, want 616003 (oldest dropped to the 616K budget)", got)
+		}
+	})
+
+	t.Run("small max_tokens keeps the payload", func(t *testing.T) {
+		p := payload()
+		p["max_tokens"] = float64(8192)
+		body, _, err := TransformRequestForUpstream(newDeps(), "deepseek", "http://upstream.test", p, "ctx-test-model", 384_000, 1_000_000, "openai", "")
+		if err != nil {
+			t.Fatalf("TransformRequestForUpstream: %v", err)
+		}
+		if got := contentTotal(t, body); got != 666_003 {
+			t.Errorf("content total = %d, want 666003 (no trim at the 750K budget)", got)
+		}
+	})
 }
 
 // TestTransformRequest_RecordsTrimSavings verifies the transform-side trim

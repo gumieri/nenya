@@ -20,6 +20,65 @@ func AddCap(a, b int) int {
 	return a + b
 }
 
+// DeriveInputTokenBudget returns the input-conversation token budget for a
+// model whose context window is maxContext, reserving room for up to maxOutput
+// generated tokens. It is min(maxContext/4*3, maxContext-maxOutput) when
+// maxOutput is positive and smaller than maxContext, and maxContext/4*3
+// otherwise (unknown, non-positive, or misconfigured output cap). maxContext/4*3
+// cannot overflow for any positive int because the division precedes the
+// multiply; the subtraction is guarded by maxOutput < maxContext so the result
+// is never negative. Degenerate windows under 4 tokens yield 0, disabling the
+// trim. Returns 0 when maxContext is not positive.
+func DeriveInputTokenBudget(maxContext, maxOutput int) int {
+	if maxContext <= 0 {
+		return 0
+	}
+	budget := maxContext / 4 * 3
+	if maxOutput > 0 && maxOutput < maxContext {
+		if reserved := maxContext - maxOutput; reserved < budget {
+			budget = reserved
+		}
+	}
+	return budget
+}
+
+// EffectiveOutputTokens returns the output-token reservation to use for a
+// request: the smaller of the client-supplied max_tokens and the model's
+// declared output cap, so a client that asks for little output does not make
+// the input budget over-reserve. declared is the model/output cap (0 when
+// unknown). The declared cap is returned when the payload carries no usable
+// max_tokens.
+func EffectiveOutputTokens(payload map[string]interface{}, declared int) int {
+	raw, ok := payload["max_tokens"]
+	if !ok {
+		return declared
+	}
+	var requested int
+	switch v := raw.(type) {
+	case float64:
+		if math.IsNaN(v) || v < 0 || v >= float64(math.MaxInt) {
+			return declared
+		}
+		requested = int(v)
+	case int:
+		requested = v
+	case int64:
+		if v > int64(math.MaxInt) {
+			return declared
+		}
+		requested = int(v)
+	default:
+		return declared
+	}
+	if requested < 0 {
+		return declared
+	}
+	if declared > 0 && declared < requested {
+		return declared
+	}
+	return requested
+}
+
 // JoinBackticks formats a slice of names as a comma-separated list
 // wrapped in backticks. For example, ["foo", "bar"] becomes "`foo`, `bar`".
 func JoinBackticks(names []string) string {
