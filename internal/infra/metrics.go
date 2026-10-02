@@ -33,6 +33,10 @@ type Metrics struct {
 	// spotlightTiers counts history tool messages per resolved envelope
 	// tier and source kind (risk-tiered mode only).
 	spotlightTiers sync.Map
+	// judgmentCascades counts System One low-confidence cascade events
+	// (answer below escalate_below_confidence -> next chain target) by
+	// judgment name.
+	judgmentCascades sync.Map
 	// injectionDetections counts deterministic prompt-injection detections
 	// by action (sanitize|reject) and pattern category.
 	injectionDetections sync.Map
@@ -508,6 +512,17 @@ func (m *Metrics) RecordSpotlightTier(tier, source string) {
 		return
 	}
 	e := getOrCreateEntry(&m.spotlightTiers, map[string]string{"tier": tier, "source": source})
+	e.value.Add(1)
+}
+
+// RecordJudgmentCascade records a System One low-confidence cascade
+// (typed answer below escalate_below_confidence -> next chain target)
+// for a judgment. Nil-safe.
+func (m *Metrics) RecordJudgmentCascade(name string) {
+	if m == nil || name == "" {
+		return
+	}
+	e := getOrCreateEntry(&m.judgmentCascades, map[string]string{"judgment": name})
 	e.value.Add(1)
 }
 
@@ -1342,6 +1357,8 @@ func (m *Metrics) writePipelineMetrics(w io.Writer) {
 		"Content blocks rescued into the keep set by the advisory TF-IDF rerank judgment (assembly may still elide near-budget blocks).", m.tfidfRescues.Load())
 	m.writeCounterMap(w, "nenya_spotlight_tiers_total",
 		"History tool messages per resolved envelope tier and source kind (risk-tiered spotlight mode).", &m.spotlightTiers)
+	m.writeCounterMap(w, "nenya_judgment_cascades_total",
+		"System One low-confidence cascade events by judgment name.", &m.judgmentCascades)
 	m.writeCounterMap(w, "nenya_pipeline_window_applied_total",
 		"Total window compaction passes applied.", &m.windowApplied)
 	m.writeCounterMap(w, "nenya_pipeline_tokens_saved_total",

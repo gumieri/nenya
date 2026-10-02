@@ -507,7 +507,7 @@ func buildJudgmentGate(cfg *config.Config, gw *gateway.NenyaGateway, logger *slo
 		return nil
 	}
 	judge, err := pipeline.NewJudge(
-		contract.WithBudget(jc.MaxBytes, jc.TimeoutSeconds),
+		contract.WithBudget(jc.MaxBytes, jc.TimeoutSeconds).WithEscalateBelowConfidence(jc.EscalateBelowConfidence),
 		jc.Engine, pipeline.JudgeDeps{
 			ClientFor:    gw.ClientFor,
 			InjectAPIKey: gatewayAPIKeyInjector(gw),
@@ -538,7 +538,7 @@ func buildSpotlightTierGate(cfg *config.Config, gw *gateway.NenyaGateway, logger
 		return nil
 	}
 	judge, err := pipeline.NewJudge(
-		pipeline.SpotlightTierContract().WithBudget(rt.MaxBytes, rt.TimeoutSeconds),
+		pipeline.SpotlightTierContract().WithBudget(rt.MaxBytes, rt.TimeoutSeconds).WithEscalateBelowConfidence(rt.EscalateBelowConfidence),
 		rt.Engine, pipeline.JudgeDeps{
 			ClientFor:    gw.ClientFor,
 			InjectAPIKey: gatewayAPIKeyInjector(gw),

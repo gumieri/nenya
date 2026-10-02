@@ -247,6 +247,10 @@ type SpotlightRiskTiersConfig struct {
 	// engine of an enabled injection escalation when present, else the
 	// bouncer engine.
 	Engine *EngineRef `json:"engine,omitempty"`
+	// EscalateBelowConfidence (System One targets only; 0 = off):
+	// typed answers with confidence below this cascade the chain to
+	// the next target. Must be in (0, 1] when set.
+	EscalateBelowConfidence float64 `json:"escalate_below_confidence,omitempty"`
 }
 
 // InjectionConfig configures the deterministic prompt-injection detector.
@@ -395,6 +399,11 @@ type RequestScopedErrorRule struct {
 	// error body.
 	MessagePattern string `json:"message_pattern"`
 }
+
+// FormatKeySystemOne is the FormatURLs key selecting a provider's System
+// One decision endpoint (shared by the proxy endpoint and the judgment
+// transport).
+const FormatKeySystemOne = "systemone"
 
 // ProviderConfig defines the wire-level configuration for an upstream LLM
 // provider: the endpoint URL, authentication style, API format, timeouts,
@@ -1306,6 +1315,10 @@ type JudgmentConfig struct {
 	// TimeoutSeconds bounds the total adjudication across the chain; 0
 	// uses each target's own timeout.
 	TimeoutSeconds int `json:"timeout_seconds,omitempty"`
+	// EscalateBelowConfidence (System One targets only; 0 = off):
+	// typed answers with confidence below this cascade the chain to
+	// the next target. Must be in (0, 1] when set.
+	EscalateBelowConfidence float64 `json:"escalate_below_confidence,omitempty"`
 	// Enabled opts a judgment site in (default false: the site is off
 	// even when the entry is present). Only consumers that read this
 	// flag honor it.
@@ -1341,7 +1354,9 @@ type TfidfRerankConfig struct {
 	// Engine references the adjudicating engine chain (agent alias,
 	// provider/model shorthand, or inline object). Empty inherits the
 	// engine of an enabled injection escalation when present, else the
-	// bouncer engine.
+	// bouncer engine. Map contracts (this one) do not support System
+	// One targets: they are rejected at runtime and the deterministic
+	// pruning stands.
 	Engine *EngineRef `json:"engine,omitempty"`
 }
 

@@ -46,6 +46,10 @@ type JudgmentContract struct {
 	// call logs (and any caller-keyed dashboards). Empty applies the
 	// "judgment_<name>" default.
 	Caller string
+	// EscalateBelowConfidence (0 = off) applies to System One targets:
+	// typed answers with confidence below it cascade the chain to the
+	// next target. Confidence routes, never decides policy.
+	EscalateBelowConfidence float64
 }
 
 // WithBudget returns a copy of the contract with budgets applied from
@@ -59,6 +63,15 @@ func (c JudgmentContract) WithBudget(maxBytes, timeoutSeconds int) JudgmentContr
 	}
 	if timeoutSeconds > 0 {
 		c.TimeoutSeconds = timeoutSeconds
+	}
+	return c
+}
+
+// WithEscalateBelowConfidence returns a copy of the contract with the
+// System One cascade threshold applied (0 = off).
+func (c JudgmentContract) WithEscalateBelowConfidence(v float64) JudgmentContract {
+	if v > 0 {
+		c.EscalateBelowConfidence = v
 	}
 	return c
 }
@@ -186,7 +199,7 @@ func (j *Judge) MaxBytes() int { return j.contract.MaxBytes }
 // shared transport core for Adjudicate and AdjudicateMap. Returns the
 // raw output, the answering engine, the call duration, whether the
 // excerpt was capped, and the chain error.
-func (j *Judge) adjudicateChain(ctx context.Context, agentName, content string) (output, engine string, duration time.Duration, truncated bool, err error) {
+func (j *Judge) adjudicateChain(ctx context.Context, agentName, content string, typedVerdict bool) (output, engine string, duration time.Duration, truncated bool, err error) {
 	if j.contract.TimeoutSeconds > 0 {
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeout(ctx, time.Duration(j.contract.TimeoutSeconds)*time.Second)
@@ -206,19 +219,61 @@ func (j *Judge) adjudicateChain(ctx context.Context, agentName, content string) 
 	// race-free: the last observed provider is the answering one on
 	// success.
 	var lastEngine string
+	// System One targets in the chain route through the typed
+	// transport with the contract-derived question. The question is
+	// built once from the contract (ID "verdict" → "verdict", prompt,
+	// verdict enum, confidence threshold) and intentionally only from
+	// the first System One target: all targets share the same
+	// contract, so a second System One target reuses it verbatim.
+	// Only single-verdict contracts can be expressed as one typed
+	// choice question; map contracts (e.g. tfidf_rerank) leave
+	// systemOne nil and the chain loop rejects those targets. The
+	// state carries the bare excerpt (spotlight delimiters are
+	// intentionally omitted on the typed transport); the transport's
+	// tighter state cap only marks the judgment truncated when the
+	// System One target is the one that answers.
+	var systemOne *systemOneQuestion
+	var systemOneProvider string
+	stateCapped := false
+	for i := range j.targets {
+		if j.targets[i].Provider != nil && j.targets[i].Provider.ApiFormat == SystemOneAPIFormat {
+			systemOneProvider = j.targets[i].Provider.Name
+			if typedVerdict {
+				systemOne = &systemOneQuestion{
+					ID:              "verdict",
+					Prompt:          j.contract.System,
+					Choices:         j.contract.Verdicts,
+					ConfidenceBelow: j.contract.EscalateBelowConfidence,
+					state:           excerpt,
+				}
+				stateCapped = len(capSystemOneState(excerpt)) < len(excerpt)
+			}
+			break
+		}
+	}
 	call := EngineChainCall{
 		Caller:    caller,
 		AgentName: agentName,
 		System:    j.contract.System,
 		Prompt:    SpotlightDelimiters(excerpt, source),
-		Observer: func(_, _ int, provider string, _ error, _ time.Duration) {
+		Observer: func(_, _ int, provider string, oerr error, _ time.Duration) {
 			lastEngine = provider
+			if oerr != nil && errors.Is(oerr, ErrSystemOneLowConfidence) {
+				j.deps.Metrics.RecordJudgmentCascade(j.contract.Name)
+			}
 		},
+		systemOne: systemOne,
 	}
 
 	start := time.Now()
 	output, err = CallEngineChainObserved(ctx, j.deps.ClientFor, j.targets, j.deps.Logger,
 		j.deps.InjectAPIKey, call)
+	// The typed state cap only makes a favorable verdict inconclusive
+	// when the System One target is the one that answered; a chat
+	// fallback examines the full excerpt and is not truncated by it.
+	if err == nil && stateCapped && systemOneProvider != "" && lastEngine == systemOneProvider {
+		truncated = true
+	}
 	return output, lastEngine, time.Since(start), truncated, err
 }
 
@@ -228,7 +283,7 @@ func (j *Judge) adjudicateChain(ctx context.Context, agentName, content string) 
 // is enveloped in spotlight delimiters so it cannot impersonate the
 // adjudication request itself.
 func (j *Judge) Adjudicate(ctx context.Context, agentName, content string) Judgment {
-	output, engine, duration, truncated, err := j.adjudicateChain(ctx, agentName, content)
+	output, engine, duration, truncated, err := j.adjudicateChain(ctx, agentName, content, true)
 
 	res := Judgment{Contract: j.contract.Name, Truncated: truncated, Duration: duration, Engine: engine}
 	if err == nil {
@@ -262,7 +317,7 @@ func (j *Judge) Adjudicate(ctx context.Context, agentName, content string) Judgm
 // here with verdict positive when at least one key is true, "clear"
 // otherwise, and "error" on failure.
 func (j *Judge) AdjudicateMap(ctx context.Context, agentName, content string, parse func(output string) (map[int]bool, error), positive string) (map[int]bool, Judgment) {
-	output, engine, duration, truncated, chainErr := j.adjudicateChain(ctx, agentName, content)
+	output, engine, duration, truncated, chainErr := j.adjudicateChain(ctx, agentName, content, false)
 
 	res := Judgment{Contract: j.contract.Name, Truncated: truncated, Duration: duration, Engine: engine}
 	var verdicts map[int]bool

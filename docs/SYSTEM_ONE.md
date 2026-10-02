@@ -225,6 +225,56 @@ See [`docs/CONFIGURATION.md`](CONFIGURATION.md#providers) for the field
 reference and [`docs/PROVIDERS.md`](PROVIDERS.md#opencode-zen) for the Zen
 decision endpoint.
 
+### 4. Advisory judgment transport (shipped)
+
+The judgment layer can route its advisory adjudications through System One
+models instead of chat LLMs: when a judgment's engine chain contains a target
+whose provider declares `"api_format": "systemone"`, that target receives the
+contract as a typed `choice` question rather than a chat completion. The
+contract's versioned prompt becomes the question's `instructions`, its closed
+verdict enum becomes the `criteria` map, and the adjudicated excerpt becomes
+the `state`. Nenya caps the typed-judgment state at 2048 bytes (≈512 tokens —
+the conservative local-sidecar window, *not* Jev's documented 32k state
+allowance) and marks the judgment truncated when it cuts, so a favorable
+verdict over an unexamined tail is inconclusive. The answer is read
+structurally — the typed `choice` is validated against the enum, then
+re-enveloped as the contract-shaped verdict object — so
+no model prose is ever parsed on this transport. Typed answers below
+`escalate_below_confidence` (per-judgment config; 0 = off) cascade to the next
+chain target, which may be a chat LLM: **confidence routes, never decides
+policy**.
+
+Chain targets mix formats freely, so a deployment can chain a cheap local
+System One sidecar (Laya, Apache-2.0) into a hosted chat model as the second
+tier — the deterministic tier-1 verdict still stands whenever every target
+fails, is inconclusive, or is truncated. Low-confidence cascades are counted in
+`nenya_judgment_cascades_total{judgment}`.
+
+> Research note (2026-10): Laya trails Jev on guardrail-class tasks (laya-jev-lab
+> n=40: 57% vs 78%; sysone-bench: Jev leads moderation/triage). Position a local
+> System One tier as a cheap mid-tier, never the only tier.
+
+```json
+{
+  "providers": {
+    "laya": {
+      "url": "http://127.0.0.1:11435/v1/systemone",
+      "api_format": "systemone",
+      "format_urls": { "systemone": "http://127.0.0.1:11435/v1/systemone" }
+    }
+  },
+  "governance": {
+    "judgments": {
+      "summary_fidelity": {
+        "enabled": true,
+        "engine": { "provider": "laya", "model": "laya-decide" },
+        "escalate_below_confidence": 0.6
+      }
+    }
+  }
+}
+```
+
 ## Limitations
 
 - Jev cannot generate text, code, summaries, or explanations — it is not a

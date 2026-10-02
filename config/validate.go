@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/url"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -155,6 +156,9 @@ func validateSpotlightRiskTiersConfig(cfg *Config) []string {
 	if rt.TimeoutSeconds < 0 {
 		errs = append(errs, "governance.spotlight.risk_tiers.timeout_seconds must be >= 0")
 	}
+	if v := rt.EscalateBelowConfidence; v < 0 || v > 1 {
+		errs = append(errs, "governance.spotlight.risk_tiers.escalate_below_confidence must be in (0, 1] when set (0 disables the cascade)")
+	}
 	if rt.Engine != nil && rt.Engine.AgentName == "" && rt.Engine.Provider == "" {
 		errs = append(errs, "governance.spotlight.risk_tiers.engine: empty engine reference (omit the key to inherit, or set provider/model or agent)")
 	}
@@ -299,21 +303,41 @@ func validateSelfLoopGuard(cfg *Config) []string {
 			if target.Provider == nil {
 				continue
 			}
-			u, err := url.Parse(target.Provider.URL)
-			if err != nil || u.Port() != listenPort {
-				continue
-			}
-			if !listenHostMatchesSelfHost(u.Hostname(), listenHost) {
-				continue
-			}
-			if isGatewayPath(u.EscapedPath()) {
-				errs = append(errs, fmt.Sprintf(
-					"%s: engine target for provider %q (%s) points at the gateway's own endpoint — engines and judgment targets must not route through the gateway itself (self-proxying deadlock)",
-					surface.label, target.Provider.Name, target.Provider.URL))
+			// Check the primary URL and every format-specific override
+			// (e.g. format_urls.systemone): any of them can be the
+			// actual dispatch target.
+			urls := append([]string{target.Provider.URL}, formatURLValues(target.Provider.FormatURLs)...)
+			for _, raw := range urls {
+				u, err := url.Parse(raw)
+				if err != nil || u.Port() != listenPort {
+					continue
+				}
+				if !listenHostMatchesSelfHost(u.Hostname(), listenHost) {
+					continue
+				}
+				if isGatewayPath(u.EscapedPath()) {
+					errs = append(errs, fmt.Sprintf(
+						"%s: engine target for provider %q (%s) points at the gateway's own endpoint — engines and judgment targets must not route through the gateway itself (self-proxying deadlock)",
+						surface.label, target.Provider.Name, raw))
+				}
 			}
 		}
 	}
 	return errs
+}
+
+// formatURLValues returns the values of a format-URL map sorted for
+// deterministic error ordering.
+func formatURLValues(m map[string]string) []string {
+	if len(m) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(m))
+	for _, v := range m {
+		out = append(out, v)
+	}
+	sort.Strings(out)
+	return out
 }
 
 // validateJudgmentsConfig checks the shape and budget fields of every
@@ -350,21 +374,31 @@ func validateJudgmentEntry(name string, judgment *JudgmentConfig) []string {
 	if judgment.TimeoutSeconds < 0 {
 		errs = append(errs, fmt.Sprintf("governance.judgments.%s.timeout_seconds must be >= 0", name))
 	}
+	if v := judgment.EscalateBelowConfidence; v < 0 || v > 1 {
+		errs = append(errs, fmt.Sprintf("governance.judgments.%s.escalate_below_confidence must be in (0, 1] when set (0 disables the cascade)", name))
+	}
 	switch judgment.Action {
 	case "", "log", "strict":
 	default:
 		errs = append(errs, fmt.Sprintf("governance.judgments.%s.action: invalid value %q, must be empty, \"log\", or \"strict\"", name, judgment.Action))
 	}
+	return append(errs, validateJudgmentEngineRef(name, judgment)...)
+}
+
+// validateJudgmentEngineRef checks the engine reference surface of one
+// advisory judgment entry (AGENTS.md §11 decomposition).
+func validateJudgmentEngineRef(name string, judgment *JudgmentConfig) []string {
 	// An explicitly empty engine object ("engine": {}) would otherwise
 	// skip inheritance and resolution silently and fail only at first
 	// judgment construction — reject it at load. Same for an enabled
 	// site whose engine resolved to nothing.
 	if judgment.Engine != nil && judgment.Engine.AgentName == "" && judgment.Engine.Provider == "" {
-		errs = append(errs, fmt.Sprintf("governance.judgments.%s.engine: empty engine reference (omit the key to inherit, or set provider/model or agent)", name))
-	} else if judgment.Enabled != nil && *judgment.Enabled && judgment.Engine != nil && len(judgment.Engine.ResolvedTargets) == 0 {
-		errs = append(errs, fmt.Sprintf("governance.judgments.%s: enabled but engine missing or unresolved", name))
+		return []string{fmt.Sprintf("governance.judgments.%s.engine: empty engine reference (omit the key to inherit, or set provider/model or agent)", name)}
 	}
-	return errs
+	if judgment.Enabled != nil && *judgment.Enabled && judgment.Engine != nil && len(judgment.Engine.ResolvedTargets) == 0 {
+		return []string{fmt.Sprintf("governance.judgments.%s: enabled but engine missing or unresolved", name)}
+	}
+	return nil
 }
 
 // validateSpotlightConfig checks the spotlight mode value and rejects

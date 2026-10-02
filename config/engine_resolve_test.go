@@ -331,3 +331,53 @@ func TestResolveSingleEngineRef_WithProvider(t *testing.T) {
 		t.Errorf("expected 1 resolved target, got %d", len(ref.ResolvedTargets))
 	}
 }
+
+func TestResolveEngineRef_CarriesFormatURLsAndRetry(t *testing.T) {
+	providers := map[string]*Provider{
+		"zen": {
+			Name:             "zen",
+			URL:              "https://opencode.ai/zen/v1/chat/completions",
+			ApiFormat:        "openai",
+			MaxRetryAttempts: 4,
+			RetryablePhrases: []string{"upstream request failed"},
+			FormatURLs:       map[string]string{FormatKeySystemOne: "https://opencode.ai/zen/v1/systemone"},
+		},
+	}
+	targets, err := ResolveEngineRef(EngineRef{Provider: "zen", Model: "jev-1.13"}, nil, providers)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := targets[0].Provider.FormatURLs[FormatKeySystemOne]; got != "https://opencode.ai/zen/v1/systemone" {
+		t.Errorf("FormatURLs not carried: %q", got)
+	}
+	if targets[0].Provider.MaxRetryAttempts != 4 {
+		t.Errorf("MaxRetryAttempts not carried: %d", targets[0].Provider.MaxRetryAttempts)
+	}
+	if len(targets[0].Provider.RetryablePhrases) != 0 {
+		t.Errorf("proxy-only retry fields must not be carried: %v", targets[0].Provider.RetryablePhrases)
+	}
+	// Independence: mutating the source must not affect the target.
+	providers["zen"].FormatURLs[FormatKeySystemOne] = "https://evil.example/systemone"
+	if got := targets[0].Provider.FormatURLs[FormatKeySystemOne]; got != "https://opencode.ai/zen/v1/systemone" {
+		t.Errorf("FormatURLs aliased the source: %q", got)
+	}
+}
+
+func TestResolveEngineRef_SystemOneOnlyProvider(t *testing.T) {
+	// A provider with no primary URL but a format_urls.systemone entry
+	// must still resolve (the System One transport uses that endpoint).
+	providers := map[string]*Provider{
+		"laya": {
+			Name:       "laya",
+			ApiFormat:  "systemone",
+			FormatURLs: map[string]string{FormatKeySystemOne: "http://127.0.0.1:11435/v1/systemone"},
+		},
+	}
+	targets, err := ResolveEngineRef(EngineRef{Provider: "laya", Model: "laya-decide"}, nil, providers)
+	if err != nil {
+		t.Fatalf("system-one-only provider must resolve: %v", err)
+	}
+	if got := targets[0].Provider.URL; got != "http://127.0.0.1:11435/v1/systemone" {
+		t.Errorf("resolved URL = %q", got)
+	}
+}

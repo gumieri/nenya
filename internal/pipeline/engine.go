@@ -23,6 +23,43 @@ const MaxOllamaResponseBytes = 512 * 1024
 // error response bodies for logging/classification.
 const MaxErrorBodyBytes = 8 * 1024
 
+// System One transport constants. The state (adjudicated excerpt) is
+// capped at 512 tokens ≈ 2048 bytes (the typed-decision models' state
+// window; Laya/Jev documented limit), and answers ride a typed JSON
+// envelope — no prose parsing on this transport.
+const (
+	// SystemOneStateCapBytes caps the state field of a System One
+	// decision request (512-token state window, ~4 bytes/token).
+	SystemOneStateCapBytes = 2048
+	// SystemOneAPIFormat is the provider ApiFormat value selecting the
+	// System One transport for judgment targets.
+	SystemOneAPIFormat = "systemone"
+)
+
+// ErrSystemOneLowConfidence is returned by the System One transport
+// when the typed answer's confidence is below the question's
+// escalate_below_confidence threshold: the chain falls through to the
+// next target (confidence routes, never decides policy).
+var ErrSystemOneLowConfidence = errors.New("system one: answer confidence below escalate threshold")
+
+// systemOneQuestion is the contract-derived decision question sent to
+// System One targets (choice type covers the 2..~20 verdict enums;
+// binary enums may alternatively be served as noul by the sidecar).
+type systemOneQuestion struct {
+	// ID is the question/answer correlation key.
+	ID string
+	// Prompt carries the contract's system prompt (the decision
+	// criteria).
+	Prompt string
+	// Choices is the contract's closed verdict enum.
+	Choices []string
+	// ConfidenceBelow (0 = off) makes the transport refuse answers
+	// with confidence below it, cascading to the next chain target.
+	ConfidenceBelow float64
+	// state carries the adjudicated excerpt (capped in transport).
+	state string
+}
+
 // CallEngine sends a prompt to the local engine (e.g. Ollama) for
 // summarization or redaction. It handles both OpenAI and Ollama API formats.
 func CallEngine(ctx context.Context, httpClient *http.Client, provider *config.Provider, engine config.EngineConfig, injectAPIKey func(providerName string, headers http.Header) error, systemPrompt, prompt string) (string, error) {
@@ -199,6 +236,11 @@ type EngineChainCall struct {
 	// Observer optionally receives one event per attempt; nil disables
 	// observation.
 	Observer EngineCallObserver
+	// systemOne, when non-nil, routes targets whose provider ApiFormat
+	// is "systemone" through the typed System One transport instead of
+	// the chat formats (chat targets in the same chain keep the chat
+	// transport — the cascade path).
+	systemOne *systemOneQuestion
 }
 
 // CallEngineChain tries each engine target in order, returning the first
@@ -266,7 +308,17 @@ func CallEngineChainObserved(ctx context.Context, clientFor ClientResolver,
 		}
 		engineCtx, cancel := context.WithTimeout(ctx, time.Duration(timeout)*time.Second)
 		start := time.Now()
-		result, err := CallEngine(engineCtx, client, target.Provider, target.Engine, injectAPIKey, call.System, call.Prompt)
+		var result string
+		var err error
+		if target.Provider.ApiFormat == SystemOneAPIFormat {
+			if call.systemOne == nil {
+				err = errors.New("system one target unsupported for this judgment contract")
+			} else {
+				result, err = callEngineSystemOne(engineCtx, client, target.Provider, target.Engine, injectAPIKey, call.systemOne)
+			}
+		} else {
+			result, err = CallEngine(engineCtx, client, target.Provider, target.Engine, injectAPIKey, call.System, call.Prompt)
+		}
 		duration := time.Since(start)
 		cancel()
 
