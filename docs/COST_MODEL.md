@@ -93,6 +93,16 @@ Providers without a window are never peak.
   price changes meaning; absent peak/cached fields behave exactly as today.
 - **Billing is time-correct.** Recorded cost uses the window in effect at
   request time and the cached-token count from the response usage.
+  _Approximation:_ the window is sampled at the usage-recording instant
+  (completion), so a request spanning a window boundary is priced entirely at
+  the completion-side window.
+- **Cache writes are out of scope.** Anthropic cache _creation_ tokens (billed
+  at a premium) are counted and displayed but priced at the standard input
+  rate; only cache _reads_ get the discounted `cached_input_cost_per_1m`.
+  Making writes a distinct dimension is a possible follow-up.
+- **Peak-only entries are not billed today.** Billing gates on
+  `HasStandardRate`; a model declaring only peak rates records no cost until a
+  standard baseline is added (Phase 008 ships baseline + peak together).
 - **Routing is time-invariant.** The cost-weight signal uses the **standard
   baseline** so routing does not oscillate with the clock; peak is exposed
   for display only.

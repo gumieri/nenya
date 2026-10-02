@@ -805,6 +805,7 @@ func ResolveProviders(cfg *Config, secrets *SecretsConfig) map[string]*Provider 
 			allowedRE:                    compiledRE,
 			NonChatModels:                pc.NonChatModels,
 			nonChatRE:                    compiledNonChat,
+			PeakWindow:                   pc.PeakWindow,
 			MaxConcurrentRequests:        pc.MaxConcurrentRequests,
 			ModelConcurrency:             pc.ModelConcurrency,
 			ModelAliases:                 pc.ModelAliases,

@@ -1118,7 +1118,15 @@ func (o *upstreamErrorObserver) OnStreamClose(err error) {}
 // makeUsageCallback returns a callback function that records token usage statistics.
 // The callback is invoked by the SSE transformer when usage metadata is received.
 // The ctx parameter is reserved for future timeout/cancellation logic in cost tracking.
+//
+// Usage chunks carry per-chunk DELTAS of the upstream cumulative counters, and
+// the cached/uncached split of a delta need not respect cached ⊆ prompt (the
+// split can lag across chunks). Cost is therefore computed on the per-request
+// CUMULATIVE totals and only the cost delta is recorded, keeping the recorded
+// series exact regardless of chunk boundaries.
 func (p *Proxy) makeUsageCallback(ctx context.Context, gw *gateway.NenyaGateway, target routing.UpstreamTarget, agentName string) func(stream.UsageData) {
+	var accInput, accCached, accCompletion int64
+	var lastCost float64
 	return func(u stream.UsageData) {
 		completion, prompt := u.CompletionTokens, u.PromptTokens
 		cacheHit, cacheMiss := u.CacheHitTokens, u.CacheMissTokens
@@ -1147,21 +1155,39 @@ func (p *Proxy) makeUsageCallback(ctx context.Context, gw *gateway.NenyaGateway,
 		// This pattern (if count > 0 { Stats.*; Metrics.* }) is intentional.
 		if gw.CostTracker != nil && (prompt > 0 || completion > 0) {
 			if dm, ok := gw.ModelCatalog.Lookup(target.Model); ok && dm.Pricing != nil && dm.Pricing.HasStandardRate() {
-				cost := dm.Pricing.CalculateCost(discovery.PricingUsage{Input: int64(prompt), Output: int64(completion)})
-				gw.CostTracker.RecordUsage(target.Model, cost)
-				if gw.BillingTracker != nil {
-					gw.BillingTracker.RecordSpend(ctx, billing.SpendEntry{
-						ProviderName: target.Provider,
-						AccountName:  target.AccountName,
-						RequestID:    "",
-						InputTokens:  prompt,
-						OutputTokens: completion,
-						CostUSD:      cost,
-						Timestamp:    time.Now(),
-					})
-				}
+				accInput += int64(prompt)
+				accCached += int64(cacheHit)
+				accCompletion += int64(completion)
+				recordStreamCost(ctx, gw, target, dm.Pricing, accInput, accCached, accCompletion, &lastCost, prompt, completion)
 			}
 		}
+	}
+}
+
+// recordStreamCost prices the per-request cumulative usage and records only
+// the delta since the last chunk, so chunk boundaries cannot misattribute the
+// cached/uncached split. The pricing window is sampled at the recording
+// instant (docs/COST_MODEL.md, billing approximation).
+func recordStreamCost(ctx context.Context, gw *gateway.NenyaGateway, target routing.UpstreamTarget,
+	pricing *discovery.PricingEntry, accInput, accCached, accCompletion int64, lastCost *float64, prompt, completion int) {
+	now := time.Now()
+	total := pricing.CalculateCost(pricingUsage(gw, target, int(accInput), int(accCached), int(accCompletion), now))
+	cost := total - *lastCost
+	*lastCost = total
+	if cost == 0 {
+		return
+	}
+	gw.CostTracker.RecordUsage(target.Model, cost)
+	if gw.BillingTracker != nil {
+		gw.BillingTracker.RecordSpend(ctx, billing.SpendEntry{
+			ProviderName: target.Provider,
+			AccountName:  target.AccountName,
+			RequestID:    "",
+			InputTokens:  prompt,
+			OutputTokens: completion,
+			CostUSD:      cost,
+			Timestamp:    now,
+		})
 	}
 }
 

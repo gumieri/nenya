@@ -415,6 +415,16 @@ func (p *ProviderConfig) IsPeakAt(t time.Time) bool {
 	return p.PeakWindow.Contains(t)
 }
 
+// IsPeakAt reports whether instant t falls inside the provider's peak pricing
+// window (t is converted to UTC; DST is irrelevant). A provider without a
+// window is never peak. Nil-safe.
+func (p *Provider) IsPeakAt(t time.Time) bool {
+	if p == nil {
+		return false
+	}
+	return p.PeakWindow.Contains(t)
+}
+
 // ProviderConfig defines the wire-level configuration for an upstream LLM
 // provider: the endpoint URL, authentication style, API format, timeouts,
 // retry settings, and per-provider rate limits. User-provided configs override
@@ -597,6 +607,9 @@ type Provider struct {
 	// compiled patterns; when both are empty no model is non-chat.
 	NonChatModels []string
 	nonChatRE     []*regexp.Regexp
+	// PeakWindow mirrors ProviderConfig.PeakWindow: the provider's peak
+	// pricing interval in UTC (nil = never peak). See docs/COST_MODEL.md.
+	PeakWindow *PeakWindow
 	// MaxConcurrentRequests caps in-flight requests dispatched to this
 	// provider (0 = unlimited). See ProviderConfig.MaxConcurrentRequests.
 	MaxConcurrentRequests int
