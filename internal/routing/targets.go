@@ -281,7 +281,7 @@ func isPaidModelOnFreeOnlyProvider(m config.AgentModel, freeOnlyProviders map[st
 	if !ok {
 		return true
 	}
-	if dm.Pricing == nil || dm.Pricing.IsZero() {
+	if dm.Pricing == nil || !dm.Pricing.HasStandardRate() {
 		return false
 	}
 	if dm.Pricing.InputCostPer1M > DefaultFreeOnlyInputPriceThreshold {
@@ -1017,11 +1017,22 @@ func resolveModelMetadata(m config.AgentModel, catalog *discovery.ModelCatalog) 
 type AgentPricing struct {
 	InputCostPer1M  float64
 	OutputCostPer1M float64
-	HasPricing      bool
+	// Peak/cached averages are display-only (time-of-day surcharges and
+	// cache-read discounts averaged across the chain); routing decisions
+	// use the standard baseline so they never oscillate with the clock.
+	// Denominator: all dimensions average over the models that declare a
+	// standard rate (HasStandardRate) — peak-less priced models contribute
+	// 0 to the peak/cached averages, and peak-only models are excluded
+	// entirely (no billing/display path prices them today).
+	PeakInputCostPer1M   float64
+	PeakOutputCostPer1M  float64
+	CachedInputCostPer1M float64
+	HasPricing           bool
 }
 
 // ResolveAgentPricing computes the average pricing across all models in an
-// agent's chain. Models without pricing data are excluded from the average.
+// agent's chain. Models without pricing data are excluded from the average;
+// peak/cached dimensions average over the same denominator (see AgentPricing).
 // Returns HasPricing=false if the agent is not found or no models have pricing.
 // Note: Only inspects statically configured models. Dynamic/regex-based model
 // entries that expand at request time are not resolved here.
@@ -1030,7 +1041,7 @@ func ResolveAgentPricing(agentName string, agents map[string]config.AgentConfig,
 	if !ok {
 		return AgentPricing{}
 	}
-	var totalIn, totalOut float64
+	var totalIn, totalOut, totalPeakIn, totalPeakOut, totalCachedIn float64
 	count := 0
 	for _, m := range agent.Models {
 		p := resolveModelPricing(m, catalog)
@@ -1039,35 +1050,72 @@ func ResolveAgentPricing(agentName string, agents map[string]config.AgentConfig,
 		}
 		totalIn += p.InputCostPer1M
 		totalOut += p.OutputCostPer1M
+		totalPeakIn += p.PeakInputCostPer1M
+		totalPeakOut += p.PeakOutputCostPer1M
+		totalCachedIn += p.CachedInputCostPer1M
 		count++
 	}
 	if count == 0 {
 		return AgentPricing{}
 	}
+	n := float64(count)
 	return AgentPricing{
-		InputCostPer1M:  totalIn / float64(count),
-		OutputCostPer1M: totalOut / float64(count),
-		HasPricing:      true,
+		InputCostPer1M:       totalIn / n,
+		OutputCostPer1M:      totalOut / n,
+		PeakInputCostPer1M:   totalPeakIn / n,
+		PeakOutputCostPer1M:  totalPeakOut / n,
+		CachedInputCostPer1M: totalCachedIn / n,
+		HasPricing:           true,
 	}
 }
 
 // resolveModelPricing returns the pricing for a model, checking the discovery
-// catalog first, then the static registry. Returns nil if no pricing is available.
+// catalog first (with static peak/cached dimensions overlaid where the
+// discovered entry lacks them), then the static registry. Returns nil if no
+// pricing is available.
 func resolveModelPricing(m config.AgentModel, catalog *discovery.ModelCatalog) *discovery.PricingEntry {
 	if catalog != nil {
-		if dm, ok := catalog.Lookup(m.Model); ok && dm.Pricing != nil && !dm.Pricing.IsZero() {
-			p := *dm.Pricing
-			return &p
+		if p := catalogPricingWithStaticOverlay(m, catalog); p != nil {
+			return p
 		}
 	}
-	if entry, ok := config.ModelRegistry[m.Model]; ok && !entry.Pricing.IsZero() {
+	if entry, ok := config.ModelRegistry[m.Model]; ok && entry.Pricing.HasStandardRate() {
 		return &discovery.PricingEntry{
-			InputCostPer1M:  entry.Pricing.InputCostPer1M,
-			OutputCostPer1M: entry.Pricing.OutputCostPer1M,
-			Currency:        "USD",
+			InputCostPer1M:       entry.Pricing.InputCostPer1M,
+			OutputCostPer1M:      entry.Pricing.OutputCostPer1M,
+			PeakInputCostPer1M:   entry.Pricing.PeakInputCostPer1M,
+			PeakOutputCostPer1M:  entry.Pricing.PeakOutputCostPer1M,
+			CachedInputCostPer1M: entry.Pricing.CachedInputCostPer1M,
+			Currency:             "USD",
 		}
 	}
 	return nil
+}
+
+// catalogPricingWithStaticOverlay returns the discovered pricing for a model
+// with the static registry's peak/cached dimensions overlaid where the
+// discovered entry lacks them (discovered pricing, e.g. OpenRouter, is
+// baseline-only). Returns nil when the catalog has no priced entry.
+func catalogPricingWithStaticOverlay(m config.AgentModel, catalog *discovery.ModelCatalog) *discovery.PricingEntry {
+	dm, ok := catalog.Lookup(m.Model)
+	if !ok || dm.Pricing == nil || !dm.Pricing.HasStandardRate() {
+		return nil
+	}
+	p := *dm.Pricing
+	entry, ok := config.ModelRegistry[m.Model]
+	if !ok {
+		return &p
+	}
+	if p.PeakInputCostPer1M == 0 {
+		p.PeakInputCostPer1M = entry.Pricing.PeakInputCostPer1M
+	}
+	if p.PeakOutputCostPer1M == 0 {
+		p.PeakOutputCostPer1M = entry.Pricing.PeakOutputCostPer1M
+	}
+	if p.CachedInputCostPer1M == 0 {
+		p.CachedInputCostPer1M = entry.Pricing.CachedInputCostPer1M
+	}
+	return &p
 }
 
 // SortTargetsByLatency orders targets by median latency using the provided

@@ -37,6 +37,13 @@ type Metrics struct {
 	// (answer below escalate_below_confidence -> next chain target) by
 	// judgment name.
 	judgmentCascades sync.Map
+	// costByWindow records per-model request cost in microUSD split by
+	// pricing window (peak|offpeak) — the operator-side explainability for
+	// time-of-day rate cards.
+	costByWindow sync.Map
+	// cachedInputTokens records cache-hit input tokens by model and
+	// pricing window.
+	cachedInputByWindow sync.Map
 	// injectionDetections counts deterministic prompt-injection detections
 	// by action (sanitize|reject) and pattern category.
 	injectionDetections sync.Map
@@ -524,6 +531,35 @@ func (m *Metrics) RecordJudgmentCascade(name string) {
 	}
 	e := getOrCreateEntry(&m.judgmentCascades, map[string]string{"judgment": name})
 	e.value.Add(1)
+}
+
+// RecordCostWindow records one request's cost in microUSD under the pricing
+// window it was billed at (peak|offpeak). Nil-safe.
+func (m *Metrics) RecordCostWindow(model, window string, costUSD float64) {
+	if m == nil || model == "" || window == "" {
+		return
+	}
+	micro := int64(costUSD * 1e6)
+	if micro == 0 && costUSD != 0 {
+		micro = 1
+	}
+	if micro < 0 {
+		// Cumulative cost series are monotonic (rates are clamped
+		// non-negative); a negative delta is float noise — skip it.
+		return
+	}
+	e := getOrCreateEntry(&m.costByWindow, map[string]string{"model": model, "window": window})
+	e.value.Add(uint64(micro))
+}
+
+// RecordCachedInputTokens records cache-hit input tokens under the pricing
+// window in effect. Nil-safe.
+func (m *Metrics) RecordCachedInputTokens(model, window string, tokens int) {
+	if m == nil || model == "" || window == "" || tokens <= 0 {
+		return
+	}
+	e := getOrCreateEntry(&m.cachedInputByWindow, map[string]string{"model": model, "window": window})
+	e.value.Add(uint64(tokens))
 }
 
 func (m *Metrics) RecordPanic() {
@@ -1359,6 +1395,10 @@ func (m *Metrics) writePipelineMetrics(w io.Writer) {
 		"History tool messages per resolved envelope tier and source kind (risk-tiered spotlight mode).", &m.spotlightTiers)
 	m.writeCounterMap(w, "nenya_judgment_cascades_total",
 		"System One low-confidence cascade events by judgment name.", &m.judgmentCascades)
+	m.writeCounterMap(w, "nenya_cost_micro_usd_total",
+		"Per-model request cost in microUSD by pricing window (peak|offpeak).", &m.costByWindow)
+	m.writeCounterMap(w, "nenya_cached_input_tokens_total",
+		"Cache-hit input tokens by model and pricing window.", &m.cachedInputByWindow)
 	m.writeCounterMap(w, "nenya_pipeline_window_applied_total",
 		"Total window compaction passes applied.", &m.windowApplied)
 	m.writeCounterMap(w, "nenya_pipeline_tokens_saved_total",

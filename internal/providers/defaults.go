@@ -35,7 +35,8 @@ func openaiSpec() ProviderSpec {
 			ServiceKindImage,
 			ServiceKindImageToText,
 		},
-		ValidationEndpoint: openaiValidationEndpoint,
+		ValidationEndpoint:   openaiValidationEndpoint,
+		AutomaticPrefixCache: true,
 	}
 }
 
@@ -158,8 +159,9 @@ func ollamaValidationEndpoint(providerURL string) string {
 
 func anthropicSpec() ProviderSpec {
 	return ProviderSpec{
-		ServiceKinds:       []ServiceKind{ServiceKindLLM},
-		ValidationEndpoint: anthropicValidationEndpoint,
+		ServiceKinds:         []ServiceKind{ServiceKindLLM},
+		ValidationEndpoint:   anthropicValidationEndpoint,
+		AutomaticPrefixCache: true,
 	}
 }
 

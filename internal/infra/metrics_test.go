@@ -391,3 +391,27 @@ func TestMetrics_PrefixCacheTokenMetrics(t *testing.T) {
 		}
 	}
 }
+
+func TestMetrics_CostWindowMetrics(t *testing.T) {
+	m := NewMetrics()
+	m.RecordCostWindow("deepseek-flash", "peak", 0.30)
+	m.RecordCostWindow("deepseek-flash", "peak", 0.15)
+	m.RecordCostWindow("deepseek-flash", "offpeak", 0.15)
+	m.RecordCachedInputTokens("deepseek-flash", "offpeak", 500_000)
+
+	var buf bytes.Buffer
+	m.WritePrometheus(&buf)
+	out := buf.String()
+	for _, want := range []string{
+		`nenya_cost_micro_usd_total{model="deepseek-flash", window="peak"} 450000`,
+		`nenya_cost_micro_usd_total{model="deepseek-flash", window="offpeak"} 150000`,
+		`nenya_cached_input_tokens_total{model="deepseek-flash", window="offpeak"} 500000`,
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("metrics output missing %q", want)
+		}
+	}
+	// Nil-safe.
+	m.RecordCostWindow("", "peak", 1)
+	m.RecordCachedInputTokens("", "", 1)
+}

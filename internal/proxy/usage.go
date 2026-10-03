@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/nenya/internal/billing"
+	"github.com/nenya/internal/discovery"
 	"github.com/nenya/internal/gateway"
 	"github.com/nenya/internal/routing"
 	"github.com/nenya/internal/stream"
@@ -67,6 +68,27 @@ func recordNonStreamingUsage(ctx context.Context, gw *gateway.NenyaGateway, targ
 	if raw, ok := usage["prompt_cache_hit_tokens"].(float64); ok {
 		cacheHitTokens = int(raw)
 	}
+	if cacheHitTokens == 0 {
+		// OpenAI-style detail fallback: some providers report cached tokens
+		// only under prompt_tokens_details (the streaming reader has the
+		// same fallback — keep the two paths consistent).
+		if details, ok := usage["prompt_tokens_details"].(map[string]interface{}); ok {
+			if raw, ok := details["cached_tokens"].(float64); ok {
+				cacheHitTokens = int(raw)
+			}
+		}
+	}
+	if cacheHitTokens == 0 {
+		// Anthropic-style buffered responses (converted by the adapter to
+		// OpenAI shape with prompt_tokens = input_tokens, which EXCLUDES
+		// cache reads) report reads natively. Only apply when no
+		// OpenAI-style decomposition exists, or cache reads would be
+		// double-counted into input.
+		if raw, ok := usage["cache_read_input_tokens"].(float64); ok && raw > 0 {
+			cacheHitTokens = int(raw)
+			inputTokens += cacheHitTokens
+		}
+	}
 	cacheMissTokens := 0
 	if raw, ok := usage["prompt_cache_miss_tokens"].(float64); ok {
 		cacheMissTokens = int(raw)
@@ -90,18 +112,47 @@ func recordNonStreamingUsage(ctx context.Context, gw *gateway.NenyaGateway, targ
 
 	recordNonStreamingStats(gw, target.Model, outputTokens, cacheHitTokens, cacheMissTokens, cacheCreationTokens, reasoningTokens)
 	recordNonStreamingMetrics(gw, target, agentName, outputTokens, cacheHitTokens, cacheMissTokens, cacheCreationTokens, reasoningTokens)
-	recordCostAndBilling(ctx, gw, target, inputTokens, outputTokens)
+	recordCostAndBilling(ctx, gw, target, inputTokens, cacheHitTokens, outputTokens)
 }
 
-func recordCostAndBilling(ctx context.Context, gw *gateway.NenyaGateway, target routing.UpstreamTarget, inputTokens, outputTokens int) {
+// pricingUsage builds the cost-model usage for a completed request. The
+// normalized usage follows the OpenAI-style invariant (prompt tokens INCLUDE
+// cached reads; the cache-hit counter is the cached subset — the Anthropic
+// streaming transformer normalizes to it, and recordNonStreamingUsage maps
+// native Anthropic cache reads into it), and the peak flag comes from the
+// provider's peak window at the recording instant.
+func pricingUsage(gw *gateway.NenyaGateway, target routing.UpstreamTarget, inputTokens, cachedInputTokens, outputTokens int, at time.Time) discovery.PricingUsage {
+	u := discovery.PricingUsage{
+		Input:       int64(inputTokens),
+		CachedInput: int64(cachedInputTokens),
+		Output:      int64(outputTokens),
+	}
+	u.Peak = gw.Providers[target.Provider].IsPeakAt(at)
+	return u
+}
+
+// windowLabel maps a resolved window to its metric label.
+func windowLabel(peak bool) string {
+	if peak {
+		return "peak"
+	}
+	return "offpeak"
+}
+
+func recordCostAndBilling(ctx context.Context, gw *gateway.NenyaGateway, target routing.UpstreamTarget, inputTokens, cachedInputTokens, outputTokens int) {
 	if gw.CostTracker == nil || (inputTokens <= 0 && outputTokens <= 0) {
 		return
 	}
 	dm, ok := gw.ModelCatalog.Lookup(target.Model)
-	if !ok || dm.Pricing == nil || dm.Pricing.IsZero() {
+	if !ok || dm.Pricing == nil || !dm.Pricing.HasStandardRate() {
 		return
 	}
-	cost := dm.Pricing.CalculateCost(int64(inputTokens), int64(outputTokens))
+	u := pricingUsage(gw, target, inputTokens, cachedInputTokens, outputTokens, time.Now())
+	cost := dm.Pricing.CalculateCost(u)
+	gw.Metrics.RecordCostWindow(target.Model, windowLabel(u.Peak), cost)
+	if cachedInputTokens > 0 {
+		gw.Metrics.RecordCachedInputTokens(target.Model, windowLabel(u.Peak), cachedInputTokens)
+	}
 	gw.CostTracker.RecordUsage(target.Model, cost)
 	if gw.BillingTracker != nil {
 		gw.BillingTracker.RecordSpend(ctx, billing.SpendEntry{

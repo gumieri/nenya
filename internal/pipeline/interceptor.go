@@ -80,6 +80,13 @@ type InterceptRequest struct {
 	// it redacted high-entropy spans from this request; consumed by the
 	// egress screen as a deterministic trigger signal.
 	EntropyRedacted bool
+
+	// SkipTFIDFPrune is set by the proxy when the per-agent cache_aware policy
+	// is active for a cache-rich provider and the payload fits the hard limit:
+	// the TF-IDF tail prune is skipped so the provider prefix cache can do the
+	// work. The history-wide window compaction is bypassed separately in the
+	// proxy (applyWindowStage). Security interceptors always run.
+	SkipTFIDFPrune bool
 }
 
 // AgentNameFor returns the canonical agent name for an intercepted

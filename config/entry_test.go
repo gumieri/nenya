@@ -1,6 +1,8 @@
 package config
 
 import (
+	"encoding/json"
+	"strings"
 	"testing"
 )
 
@@ -28,6 +30,16 @@ func TestPricingOverride_IsZero(t *testing.T) {
 		{
 			name: "both set",
 			p:    PricingOverride{InputCostPer1M: 1.0, OutputCostPer1M: 0.5},
+			zero: false,
+		},
+		{
+			name: "peak-only is not zero",
+			p:    PricingOverride{PeakInputCostPer1M: 0.3, PeakOutputCostPer1M: 1.2},
+			zero: false,
+		},
+		{
+			name: "cached-only is not zero",
+			p:    PricingOverride{CachedInputCostPer1M: 0.1},
 			zero: false,
 		},
 	}
@@ -67,6 +79,21 @@ func TestPricingOverride_Validate(t *testing.T) {
 			p:       PricingOverride{OutputCostPer1M: -1.0},
 			wantErr: true,
 		},
+		{
+			name:    "negative peak input",
+			p:       PricingOverride{PeakInputCostPer1M: -0.1},
+			wantErr: true,
+		},
+		{
+			name:    "negative peak output",
+			p:       PricingOverride{PeakOutputCostPer1M: -0.1},
+			wantErr: true,
+		},
+		{
+			name:    "negative cached input",
+			p:       PricingOverride{CachedInputCostPer1M: -0.1},
+			wantErr: true,
+		},
 	}
 
 	for _, tt := range tests {
@@ -74,6 +101,26 @@ func TestPricingOverride_Validate(t *testing.T) {
 			err := tt.p.Validate()
 			if (err != nil) != tt.wantErr {
 				t.Errorf("Validate() error = %v, wantErr %v", err, tt.wantErr)
+			}
+		})
+	}
+}
+
+func TestPricingOverride_HasPeak(t *testing.T) {
+	tests := []struct {
+		name string
+		p    PricingOverride
+		want bool
+	}{
+		{"flat", PricingOverride{InputCostPer1M: 1}, false},
+		{"peak input", PricingOverride{PeakInputCostPer1M: 1}, true},
+		{"peak output", PricingOverride{PeakOutputCostPer1M: 1}, true},
+		{"cached only", PricingOverride{CachedInputCostPer1M: 1}, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := tt.p.HasPeak(); got != tt.want {
+				t.Errorf("HasPeak() = %v, want %v", got, tt.want)
 			}
 		})
 	}
@@ -717,5 +764,63 @@ func TestProviderEntry_ToProviderConfig_RateLimitDefaults(t *testing.T) {
 	nilCfg := nilEntry.ToProviderConfig()
 	if nilCfg.RatelimitMaxRPM != nil || nilCfg.RatelimitMaxTPM != nil {
 		t.Error("expected nil rate-limit pointers for entry without defaults")
+	}
+}
+
+func TestPricingOverride_JSONRoundTrip(t *testing.T) {
+	in := PricingOverride{
+		InputCostPer1M:       0.15,
+		OutputCostPer1M:      0.60,
+		PeakInputCostPer1M:   0.30,
+		PeakOutputCostPer1M:  1.20,
+		CachedInputCostPer1M: 0.05,
+	}
+	b, err := json.Marshal(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range []string{"peak_input_cost_per_1m", "peak_output_cost_per_1m", "cached_input_cost_per_1m"} {
+		if !strings.Contains(string(b), key) {
+			t.Errorf("JSON missing %q: %s", key, b)
+		}
+	}
+	var out PricingOverride
+	if err := json.Unmarshal(b, &out); err != nil {
+		t.Fatal(err)
+	}
+	if out != in {
+		t.Errorf("round trip = %+v, want %+v", out, in)
+	}
+
+	// Zero-valued optional fields must be omitted.
+	b0, _ := json.Marshal(PricingOverride{InputCostPer1M: 1})
+	for _, key := range []string{"peak_input_cost_per_1m", "peak_output_cost_per_1m", "cached_input_cost_per_1m"} {
+		if strings.Contains(string(b0), key) {
+			t.Errorf("zero optional field %q should be omitted: %s", key, b0)
+		}
+	}
+	if !strings.Contains(string(b0), "input_cost_per_1m") {
+		t.Errorf("baseline fields must always be emitted: %s", b0)
+	}
+}
+
+func TestPricingOverride_HasStandardRate(t *testing.T) {
+	tests := []struct {
+		name string
+		p    PricingOverride
+		want bool
+	}{
+		{"flat input", PricingOverride{InputCostPer1M: 1}, true},
+		{"flat output", PricingOverride{OutputCostPer1M: 1}, true},
+		{"peak only", PricingOverride{PeakInputCostPer1M: 1}, false},
+		{"cached only", PricingOverride{CachedInputCostPer1M: 1}, false},
+		{"empty", PricingOverride{}, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := tt.p.HasStandardRate(); got != tt.want {
+				t.Errorf("HasStandardRate() = %v, want %v", got, tt.want)
+			}
+		})
 	}
 }

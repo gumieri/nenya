@@ -11,6 +11,13 @@ var ProviderRegistry = map[string]ProviderEntry{
 	"deepseek": {
 		URL:       "https://api.deepseek.com/chat/completions",
 		AuthStyle: "bearer",
+		// DeepSeek peak hours (verified against the official rate card,
+		// 2026-09): 01:00–04:00 and 06:00–10:00 UTC Monday–Friday; every
+		// other hour, including weekends, bills at the off-peak rate.
+		PeakWindows: []PeakWindow{
+			{Start: "01:00", End: "04:00", WeekdaysOnly: true},
+			{Start: "06:00", End: "10:00", WeekdaysOnly: true},
+		},
 	},
 	"zai": {
 		URL:       "https://api.z.ai/api/paas/v4/chat/completions",
@@ -163,9 +170,34 @@ var ModelRegistry = map[string]ModelEntry{
 	"gemini-flash-lite-latest":       {Provider: "gemini", MaxContext: 1048576, MaxOutput: 65536, Thinking: ModelThinkingConfig{Min: 128, Max: 32768, DynamicAllowed: true, Levels: []string{"minimal", "low", "medium", "high"}}, Pricing: PricingOverride{InputCostPer1M: 0.1, OutputCostPer1M: 0.4}},
 	"gemini-pro-latest":              {Provider: "gemini", MaxContext: 1048576, MaxOutput: 65536, Thinking: ModelThinkingConfig{Min: 128, Max: 32768, DynamicAllowed: true}, Pricing: PricingOverride{InputCostPer1M: 1.25, OutputCostPer1M: 10.0}},
 
-	"deepseek-v4-pro":     {Provider: "deepseek", MaxContext: 1000000, MaxOutput: 384000, Pricing: PricingOverride{InputCostPer1M: 1.32, OutputCostPer1M: 3.96}},
-	"deepseek-v4-flash":   {Provider: "deepseek", MaxContext: 1000000, MaxOutput: 384000, Pricing: PricingOverride{InputCostPer1M: 0.3, OutputCostPer1M: 1.2}},
-	"deepseek-v4.1-flash": {Provider: "deepseek", MaxContext: 1000000, MaxOutput: 384000},
+	// DeepSeek catalog notes (V4.1-Flash release, 2026-09-10):
+	//   - deepseek-flash is the canonical API model ID for DeepSeek-V4.1-Flash;
+	//     the legacy deepseek-v4-flash and deepseek-v4.1-flash IDs are still
+	//     registered with the same rate card, while deepseek-v4-flash-vision-exp
+	//     is retired upstream and not registered (it would need discovery or an
+	//     explicit entry to resolve).
+	//   - deepseek-v4.1-flash pricing below is the off-peak rate (peak is 2x).
+	//   - Since 2026-09-14 DeepSeek serves every deepseek-v4-pro request with
+	//     V4.1-Flash at Flash rates until V4.1-Pro launches, so the
+	//     deepseek-v4-pro rate card overstates current spend.
+	// DeepSeek rate card (official pricing page, verified 2026-09):
+	// V4.1-Flash (canonical ID deepseek-flash; legacy deepseek-v4-flash /
+	// deepseek-v4.1-flash are registered with the same card,
+	// deepseek-v4-flash-vision-exp is not): off-peak $0.15/$0.60
+	// (cache-miss input/output), peak exactly 2x ($0.30/$1.20), cache-hit
+	// input $0.003 off-peak / $0.006 peak. deepseek-v4-pro: off-peak
+	// $0.66/$1.98, peak $1.32/$3.96, cache-hit $0.022/$0.044. Since
+	// 2026-09-14 DeepSeek serves deepseek-v4-pro requests with
+	// V4.1-Flash at Flash rates until V4.1-Pro launches, so the pro rate
+	// card overstates current spend.
+	//
+	// Note: the cached-input rate is stored at its off-peak figure and is
+	// window-independent in the current cost model (a peak-hour cache hit
+	// under-bills by half the cached rate — docs/COST_MODEL.md).
+	"deepseek-v4-pro":     {Provider: "deepseek", MaxContext: 1000000, MaxOutput: 384000, Pricing: PricingOverride{InputCostPer1M: 0.66, OutputCostPer1M: 1.98, PeakInputCostPer1M: 1.32, PeakOutputCostPer1M: 3.96, CachedInputCostPer1M: 0.022}},
+	"deepseek-v4-flash":   {Provider: "deepseek", MaxContext: 1000000, MaxOutput: 384000, Pricing: PricingOverride{InputCostPer1M: 0.15, OutputCostPer1M: 0.6, PeakInputCostPer1M: 0.3, PeakOutputCostPer1M: 1.2, CachedInputCostPer1M: 0.003}},
+	"deepseek-v4.1-flash": {Provider: "deepseek", MaxContext: 1000000, MaxOutput: 384000, Pricing: PricingOverride{InputCostPer1M: 0.15, OutputCostPer1M: 0.6, PeakInputCostPer1M: 0.3, PeakOutputCostPer1M: 1.2, CachedInputCostPer1M: 0.003}},
+	"deepseek-flash":      {Provider: "deepseek", MaxContext: 1000000, MaxOutput: 384000, Pricing: PricingOverride{InputCostPer1M: 0.15, OutputCostPer1M: 0.6, PeakInputCostPer1M: 0.3, PeakOutputCostPer1M: 1.2, CachedInputCostPer1M: 0.003}},
 
 	"glm-5.1":             {Provider: "zai", MaxContext: 200000, MaxOutput: 128000, Thinking: ModelThinkingConfig{Min: 1024, Max: 128000}, Pricing: PricingOverride{InputCostPer1M: 1.4, OutputCostPer1M: 4.4}},
 	"glm-5.2":             {Provider: "zai", MaxContext: 1000000, MaxOutput: 128000, Thinking: ModelThinkingConfig{Min: 1024, Max: 128000}, Pricing: PricingOverride{InputCostPer1M: 1.4, OutputCostPer1M: 4.4}},

@@ -17,6 +17,7 @@ import (
 
 	"github.com/nenya/config"
 	"github.com/nenya/internal/adapter"
+	"github.com/nenya/internal/discovery"
 	"github.com/nenya/internal/gateway"
 	"github.com/nenya/internal/infra"
 	"github.com/nenya/internal/pipeline"
@@ -1314,8 +1315,10 @@ func (p *Proxy) checkPreDispatchGuards(gw *gateway.NenyaGateway, ctxLogger *slog
 
 	if gw.Config.Governance.MaxCostPerRequest > 0 {
 		dm, ok := gw.ModelCatalog.Lookup(target.Model)
-		if ok && dm.Pricing != nil && !dm.Pricing.IsZero() {
-			estCost := dm.Pricing.CalculateCost(int64(tokenCount), int64(target.MaxOutput))
+		if ok && dm.Pricing != nil && dm.Pricing.HasStandardRate() {
+			// Conservative: estimate at the peak rate (worst case). Peak-less
+			// entries fall back to the standard pair inside CalculateCost.
+			estCost := dm.Pricing.CalculateCost(discovery.PricingUsage{Input: int64(tokenCount), Output: int64(target.MaxOutput), Peak: true})
 			if estCost > gw.Config.Governance.MaxCostPerRequest {
 				gw.Metrics.RecordCostLimitRejected(target.Model)
 				ctxLogger.Warn("target skipped: estimated cost exceeds max_cost_per_request",

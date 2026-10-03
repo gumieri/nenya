@@ -178,10 +178,18 @@ func applyContextDefaults(cfg *Config) {
 	if cfg.Context.TruncationKeepLastPct == 0 {
 		cfg.Context.TruncationKeepLastPct = 25.0
 	}
-	// HardLimitTokens defaults to 0 (backward-compat softLimit*2)
-	// If 0, interceptContent uses softLimit * 2 as hard limit.
+	// HardLimitTokens defaults to 0 (auto): the hard limit is derived per
+	// model from the context window and the request's effective output room
+	// (see util.DeriveInputTokenBudget). A negative value is clamped to 0.
 	if cfg.Context.HardLimitTokens < 0 {
 		cfg.Context.HardLimitTokens = 0
+	}
+	// SoftLimitTokens defaults to 0 (derived from MaxContext/8). If 0 or
+	// unset, the bouncer threshold is derived per model; a positive value is
+	// an absolute override, clamped to the hard limit at derivation time so
+	// soft never exceeds hard. A negative value is clamped to 0.
+	if cfg.Context.SoftLimitTokens < 0 {
+		cfg.Context.SoftLimitTokens = 0
 	}
 }
 
@@ -615,6 +623,7 @@ func applyCompactionDefaults(cfg *Config) {
 	applyNormalizeDefaults(cfg)
 	applyPruneToolsDefaults(cfg)
 	applyPruneThoughtsDefaults(cfg)
+	applyMutationWindowDefaults(cfg)
 	applyCompactionEnabledDefaults(cfg)
 }
 
@@ -678,12 +687,28 @@ func applyNormalizeDefaults(cfg *Config) {
 	}
 }
 
+// DefaultMutationWindow is the default number of trailing messages eligible
+// for history mutations (stale-tool pruning and thought pruning). Messages
+// older than the window are left byte-identical so the provider prompt-cache
+// prefix survives as the conversation grows. A non-positive configured
+// mutation_window selects this value.
+const DefaultMutationWindow = 64
+
 func applyPruneToolsDefaults(cfg *Config) {
 	if (cfg.Compaction.PruneStaleTools == nil || !*cfg.Compaction.PruneStaleTools) && !cfg.Compaction.PruneWasSet() {
 		cfg.Compaction.PruneStaleTools = PtrTo(false)
 	}
 	if cfg.Compaction.ToolProtectionWindow == 0 {
 		cfg.Compaction.ToolProtectionWindow = 4
+	}
+}
+
+// applyMutationWindowDefaults bounds the history mutations (tool and thought
+// pruning) to the most recent messages so the stable prefix survives across
+// turns. A non-positive value selects DefaultMutationWindow.
+func applyMutationWindowDefaults(cfg *Config) {
+	if cfg.Compaction.MutationWindow <= 0 {
+		cfg.Compaction.MutationWindow = DefaultMutationWindow
 	}
 }
 
@@ -865,6 +890,12 @@ func mergeProviderRouting(merged *ProviderConfig, builtIn ProviderConfig) {
 	}
 	if merged.RatelimitMaxTPM == nil {
 		merged.RatelimitMaxTPM = builtIn.RatelimitMaxTPM
+	}
+	// Peak pricing windows inherit from the built-in when the user does
+	// not declare any, so overriding e.g. the URL never silently disables
+	// time-of-day cost modeling.
+	if len(merged.PeakWindows) == 0 {
+		merged.PeakWindows = builtIn.PeakWindows
 	}
 }
 

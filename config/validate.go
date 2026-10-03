@@ -524,6 +524,11 @@ func validateAgentStrategies(agents map[string]AgentConfig) []string {
 		default:
 			errs = append(errs, fmt.Sprintf("agents[%q].sticky_provider: invalid value %q, must be one of off, lenient, strict", name, agent.StickyProvider))
 		}
+		switch agent.CacheAware {
+		case "", CacheAwareOff, CacheAwareAuto, CacheAwareForce:
+		default:
+			errs = append(errs, fmt.Sprintf("agents[%q].cache_aware: invalid value %q, must be one of off, auto, force", name, agent.CacheAware))
+		}
 	}
 	return errs
 }
@@ -875,6 +880,11 @@ func validateKeyLimits(cfg *Config, secrets *SecretsConfig) []string {
 	for name, p := range cfg.Providers {
 		if p.TokenBudgetDaily < 0 {
 			errs = append(errs, fmt.Sprintf("providers[%q].token_budget_daily must be non-negative, got %d", name, p.TokenBudgetDaily))
+		}
+		for _, w := range p.PeakWindows {
+			if err := w.Validate(); err != nil {
+				errs = append(errs, fmt.Sprintf("providers[%q].peak_windows: %v", name, err))
+			}
 		}
 	}
 	return errs

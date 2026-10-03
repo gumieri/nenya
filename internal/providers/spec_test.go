@@ -69,3 +69,29 @@ func TestCohereHasRerank(t *testing.T) {
 		t.Error("expected cohere to support ServiceKindRerank")
 	}
 }
+
+// TestSupportsAutomaticPrefixCache pins the data-driven provider capability
+// used by the per-agent cache_aware "auto" mode.
+func TestSupportsAutomaticPrefixCache(t *testing.T) {
+	tests := []struct {
+		provider string
+		want     bool
+	}{
+		{"deepseek", true},
+		{"anthropic", true},
+		{"openai", true},
+		{"DeepSeek", true},   // case-insensitive
+		{" deepseek ", true}, // trimmed
+		{"openrouter", false},
+		{"zen", false},
+		{"", false},
+		{"unknown", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.provider, func(t *testing.T) {
+			if got := SupportsAutomaticPrefixCache(tt.provider); got != tt.want {
+				t.Errorf("SupportsAutomaticPrefixCache(%q) = %v, want %v", tt.provider, got, tt.want)
+			}
+		})
+	}
+}

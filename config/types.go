@@ -102,6 +102,13 @@ type AgentConfig struct {
 	// fails over to another target (same-target backoff retries and the
 	// summarization retry still run).
 	StickyProvider string `json:"sticky_provider,omitempty"`
+	// CacheAware opts this agent into prefix-preserving dispatch: "off" (and
+	// the empty default) runs the full content pipeline; "auto" skips the
+	// history-wide window compaction and the tail TF-IDF prune while the payload fits the
+	// hard limit and the resolved provider caches prompt prefixes
+	// automatically; "force" skips them regardless of provider capability.
+	// Security interceptors (redact/spotlight/injection/entropy) always run.
+	CacheAware string `json:"cache_aware,omitempty"`
 	// Injection overrides the global governance.injection settings for
 	// this agent (enabled/strict are the per-agent surface; extra and
 	// ignore patterns are global-only).
@@ -115,6 +122,19 @@ type AgentConfig struct {
 	// literal policy are global-only).
 	ExfilGuard *ExfilGuardOverrideConfig `json:"exfil_guard,omitempty"`
 }
+
+// CacheAware modes for AgentConfig.CacheAware.
+const (
+	// CacheAwareOff runs the full content pipeline.
+	CacheAwareOff = "off"
+	// CacheAwareAuto skips the history-wide window compaction and the tail
+	// TF-IDF prune when the resolved provider caches prompt prefixes
+	// automatically and the payload fits the hard limit.
+	CacheAwareAuto = "auto"
+	// CacheAwareForce skips the history-wide window compaction and the tail
+	// TF-IDF prune regardless of provider capability.
+	CacheAwareForce = "force"
+)
 
 // ExfilGuardOverrideConfig is the per-agent override surface for the
 // output egress guard.
@@ -405,6 +425,36 @@ type RequestScopedErrorRule struct {
 // transport).
 const FormatKeySystemOne = "systemone"
 
+// IsPeakAt reports whether instant t falls inside any of the provider's peak
+// pricing windows (t is converted to UTC; DST is irrelevant). A provider
+// without windows is never peak. Nil-safe.
+func (p *ProviderConfig) IsPeakAt(t time.Time) bool {
+	if p == nil {
+		return false
+	}
+	return peakWindowsContain(p.PeakWindows, t)
+}
+
+// IsPeakAt reports whether instant t falls inside any of the provider's peak
+// pricing windows (t is converted to UTC; DST is irrelevant). A provider
+// without windows is never peak. Nil-safe.
+func (p *Provider) IsPeakAt(t time.Time) bool {
+	if p == nil {
+		return false
+	}
+	return peakWindowsContain(p.PeakWindows, t)
+}
+
+// peakWindowsContain reports whether t falls inside any of the windows.
+func peakWindowsContain(windows []PeakWindow, t time.Time) bool {
+	for i := range windows {
+		if windows[i].Contains(t) {
+			return true
+		}
+	}
+	return false
+}
+
 // ProviderConfig defines the wire-level configuration for an upstream LLM
 // provider: the endpoint URL, authentication style, API format, timeouts,
 // retry settings, and per-provider rate limits. User-provided configs override
@@ -414,6 +464,10 @@ type ProviderConfig struct {
 	AuthStyle  string            `json:"auth_style"`
 	ApiFormat  string            `json:"api_format"`
 	FormatURLs map[string]string `json:"format_urls,omitempty"`
+	// PeakWindows declare the provider's peak pricing intervals in UTC for
+	// time-of-day rate cards (empty = never peak). Absent peak rates on a
+	// model are unaffected. See docs/COST_MODEL.md.
+	PeakWindows []PeakWindow `json:"peak_windows,omitempty"`
 	// TimeoutSeconds is the total request deadline for this provider.
 	TimeoutSeconds int `json:"timeout_seconds"`
 	// ResponseHeaderTimeoutSeconds is the transport-level time-to-first-byte
@@ -583,6 +637,9 @@ type Provider struct {
 	// compiled patterns; when both are empty no model is non-chat.
 	NonChatModels []string
 	nonChatRE     []*regexp.Regexp
+	// PeakWindows mirror ProviderConfig.PeakWindows: the provider's peak
+	// pricing intervals in UTC (empty = never peak). See docs/COST_MODEL.md.
+	PeakWindows []PeakWindow
 	// MaxConcurrentRequests caps in-flight requests dispatched to this
 	// provider (0 = unlimited). See ProviderConfig.MaxConcurrentRequests.
 	MaxConcurrentRequests int
@@ -833,6 +890,7 @@ type ContextConfig struct {
 	TruncationKeepLastPct  float64 `json:"truncation_keep_last_pct"`
 	TFIDFQuerySource       string  `json:"tfidf_query_source"`
 	HardLimitTokens        int     `json:"hard_limit_tokens,omitempty"`
+	SoftLimitTokens        int     `json:"soft_limit_tokens,omitempty"`
 }
 
 // GovernanceConfig defines security, rate-limiting, and routing policies
@@ -1472,6 +1530,10 @@ type CompactionConfig struct {
 	PruneStaleTools        *bool            `json:"prune_stale_tools,omitempty"`
 	ToolProtectionWindow   int              `json:"tool_protection_window"`
 	PruneThoughts          *bool            `json:"prune_thoughts,omitempty"`
+	// MutationWindow bounds both tool and thought pruning to the most recent
+	// messages; older messages are left byte-identical. A non-positive value
+	// always selects DefaultMutationWindow — there is no "unbounded" sentinel.
+	MutationWindow int `json:"mutation_window"`
 }
 
 func (c *CompactionConfig) EnabledWasSet() bool       { return wasSet(c.Enabled) }

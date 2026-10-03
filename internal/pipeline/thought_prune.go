@@ -16,6 +16,13 @@ const (
 // assistant message content to reduce token usage while preserving the final
 // model output.
 //
+// Mutations are confined to the last cfg.MutationWindow messages (default
+// config.DefaultMutationWindow): assistant messages older than that are left
+// byte-identical, so the stable prefix survives across turns and the provider
+// prompt-cache prefix is not invalidated as the conversation grows. The window
+// is measured against the message slice this function receives (it may already
+// have been shortened by stale-tool pruning), independently of that pass.
+//
 // It does NOT remove the structured reasoning_content field from assistant
 // messages — that is provider-specific data handled by
 // routing.SanitizePayload per-target so that providers requiring it
@@ -36,7 +43,12 @@ func PruneThoughts(payload map[string]interface{}, cfg config.CompactionConfig) 
 
 	mutated := false
 
-	for _, msgRaw := range messages {
+	// Confine mutations to the tail: only the most recent MutationWindow
+	// messages are eligible, so older assistant messages stay byte-identical
+	// and the provider prompt-cache prefix survives as the conversation grows.
+	start := pruneWindowStart(len(messages), cfg)
+
+	for _, msgRaw := range messages[start:] {
 		msg, ok := msgRaw.(map[string]interface{})
 		if !ok {
 			continue

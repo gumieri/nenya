@@ -1,14 +1,140 @@
 package pipeline
 
 import (
+	"container/list"
+	"crypto/sha256"
+	"encoding/hex"
+	"fmt"
 	"math"
 	"sort"
 	"strings"
+	"sync"
 	"unicode/utf8"
 
 	"github.com/nenya/config"
 	"github.com/nenya/internal/util"
 )
+
+// DefaultTfidfSelectionCacheSize bounds the TF-IDF selection memo by entry
+// count. The memo freezes a piece of content's keep/drop decision on first
+// scoring so later turns reuse it even as the prior-messages query evolves.
+const DefaultTfidfSelectionCacheSize = 256
+
+// TfidfSelectionCache is a bounded LRU of TF-IDF block selections keyed by the
+// selection scope plus the input content (and the size/config that affect the
+// selection, never the query). Freezing the decision makes prior_messages-mode
+// TF-IDF output stable across turns, so the provider prompt-cache prefix
+// survives. Safe for concurrent use; a nil cache disables memoization.
+//
+// Each entry stores only the set of kept middle-block indexes, not the output
+// text, so memory is bounded by entry count times the per-entry block count.
+// Concurrent first-time misses on the same key each compute independently (and
+// each may call the rescue judge); the first stored decision wins. The key
+// covers the rescue band/limits but not the judge engine identity, so a reload
+// that swaps the TF-IDF rerank engine reuses frozen verdicts for content
+// already scored until those entries age out.
+type TfidfSelectionCache struct {
+	mu         sync.Mutex
+	order      *list.List
+	entries    map[string]*list.Element
+	maxEntries int
+}
+
+type tfidfSelectionEntry struct {
+	key  string
+	kept map[int]bool
+}
+
+// NewTfidfSelectionCache returns a cache bounded to maxEntries (default
+// DefaultTfidfSelectionCacheSize when non-positive).
+func NewTfidfSelectionCache(maxEntries int) *TfidfSelectionCache {
+	if maxEntries <= 0 {
+		maxEntries = DefaultTfidfSelectionCacheSize
+	}
+	return &TfidfSelectionCache{
+		order:      list.New(),
+		entries:    make(map[string]*list.Element),
+		maxEntries: maxEntries,
+	}
+}
+
+// tfidfSelectionKey hashes the selection scope (e.g. the agent name, so a
+// judge-rescued selection is never replayed to a different agent), the input
+// content, and the parameters that change the block selection (size, keep
+// percentages, and an armed rescue's band/limits). The query and its source
+// (self vs prior_messages) are deliberately excluded: the first decision for a
+// piece of content is frozen regardless of later queries or mode. Floats are
+// hashed by their exact bit pattern so near-equal percentages never conflate
+// two classes. A nil rescue and a rescue with no Rescorer behave identically
+// and share a key; only an armed rescue hashes distinctly.
+func tfidfSelectionKey(scope, text string, maxSize int, cfg config.ContextConfig, rescue *TfidfRescueParams) string {
+	h := sha256.New()
+	_, _ = h.Write([]byte(scope))
+	_, _ = h.Write([]byte{0})
+	_, _ = h.Write([]byte(text))
+	_, _ = h.Write([]byte{0})
+	_, _ = fmt.Fprintf(h, "|m=%d|kf=%x|kl=%x", maxSize,
+		math.Float64bits(cfg.TruncationKeepFirstPct), math.Float64bits(cfg.TruncationKeepLastPct))
+	if rescue != nil && rescue.Rescorer != nil {
+		_, _ = fmt.Fprintf(h, "|rb=%x|rmb=%d|rmx=%d|rr=1",
+			math.Float64bits(rescue.Band), rescue.MaxBlocks, rescue.MaxBytes)
+	} else {
+		_, _ = h.Write([]byte("|rr=0"))
+	}
+	return hex.EncodeToString(h.Sum(nil))
+}
+
+// get returns the memoized selection for key and marks it recently used. The
+// returned map is owned by the cache and MUST be treated as read-only by the
+// caller (it is shared with concurrent readers; mutating it would race).
+func (c *TfidfSelectionCache) get(key string) (map[int]bool, bool) {
+	if c == nil {
+		return nil, false
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	el, ok := c.entries[key]
+	if !ok {
+		return nil, false
+	}
+	c.order.MoveToFront(el)
+	return el.Value.(*tfidfSelectionEntry).kept, true
+}
+
+// put records a selection. An existing key is left untouched so the first
+// decision wins even under a concurrent miss.
+func (c *TfidfSelectionCache) put(key string, kept map[int]bool) {
+	if c == nil {
+		return
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if el, ok := c.entries[key]; ok {
+		c.order.MoveToFront(el)
+		return
+	}
+	el := c.order.PushFront(&tfidfSelectionEntry{key: key, kept: kept})
+	c.entries[key] = el
+	for c.order.Len() > c.maxEntries {
+		back := c.order.Back()
+		if back == nil {
+			break
+		}
+		c.order.Remove(back)
+		delete(c.entries, back.Value.(*tfidfSelectionEntry).key)
+	}
+}
+
+// size returns the current entry count. Test-only helper (production does not
+// need to observe the bound).
+func (c *TfidfSelectionCache) size() int {
+	if c == nil {
+		return 0
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.order.Len()
+}
 
 // Block represents a contiguous text segment, tagged as code or prose.
 type Block struct {
@@ -192,6 +318,11 @@ type TfidfRescueParams struct {
 	// rescued blocks actually re-entered within the budget (judge
 	// verdicts can be overturned by the budget check).
 	Admitted int
+	// Failed is an output field: set by the rescorer when the judgement
+	// failed operationally or the excerpt was truncated. A failed rescue is
+	// never memoized, so the next turn re-judges instead of freezing the
+	// fallback (no-rescue) selection.
+	Failed bool
 }
 
 // BlockRescorer adjudicates borderline dropped blocks: it receives the
@@ -200,16 +331,25 @@ type TfidfRescueParams struct {
 type BlockRescorer func(query string, borderline []Block) map[int]bool
 
 func TruncateTFIDF(text string, maxSize int, query string, cfg config.ContextConfig) string {
-	return truncateTFIDF(text, maxSize, query, cfg, nil)
+	return truncateTFIDF(text, maxSize, query, cfg, nil, "", nil)
 }
 
 // TruncateTFIDFWithRescue is TruncateTFIDF with the advisory rescue
 // hook: borderline dropped blocks may re-enter within leftover budget.
 func TruncateTFIDFWithRescue(text string, maxSize int, query string, cfg config.ContextConfig, rescue *TfidfRescueParams) string {
-	return truncateTFIDF(text, maxSize, query, cfg, rescue)
+	return truncateTFIDF(text, maxSize, query, cfg, rescue, "", nil)
 }
 
-func truncateTFIDF(text string, maxSize int, query string, cfg config.ContextConfig, rescue *TfidfRescueParams) string {
+// TruncateTFIDFWithRescueMemo is TruncateTFIDFWithRescue with the selection
+// memo: the first keep/drop decision for a piece of content is frozen and
+// reused on later calls, regardless of the query (prompt-cache stability).
+// scope isolates memo entries (pass the agent name when a rescue judge is
+// armed so one agent's verdict is never replayed to another).
+func TruncateTFIDFWithRescueMemo(text string, maxSize int, query string, cfg config.ContextConfig, rescue *TfidfRescueParams, scope string, memo *TfidfSelectionCache) string {
+	return truncateTFIDF(text, maxSize, query, cfg, rescue, scope, memo)
+}
+
+func truncateTFIDF(text string, maxSize int, query string, cfg config.ContextConfig, rescue *TfidfRescueParams, scope string, memo *TfidfSelectionCache) string {
 	runes := []rune(text)
 	if len(runes) <= maxSize {
 		return text
@@ -245,6 +385,19 @@ func truncateTFIDF(text string, maxSize int, query string, cfg config.ContextCon
 	middleBlocks := blocks[middleStart:middleEnd]
 	middleBlockRunes := blockRunes[middleStart:middleEnd]
 
+	// Frozen selection: reuse the keep/drop decision recorded the first time
+	// this content was scored so the output does not drift with the evolving
+	// prior-messages query. On a hit the rescore hook is not called and
+	// rescue.Admitted stays 0, so nenya_tfidf_rescues_total counts only fresh
+	// rescues (a frozen rescue is not re-counted each turn).
+	key := ""
+	if memo != nil {
+		key = tfidfSelectionKey(scope, text, maxSize, cfg, rescue)
+		if kept, ok := memo.get(key); ok {
+			return tfidfAssemble(blocks, blockRunes, pinFirst, middleStart, middleEnd, n, kept, separator, available, reservedForPinned, maxSize, cfg)
+		}
+	}
+
 	scored := scoreBlocks(query, middleBlocks)
 	for i := range scored {
 		scored[i].index = i
@@ -252,7 +405,18 @@ func truncateTFIDF(text string, maxSize int, query string, cfg config.ContextCon
 	sortScoredDesc(scored)
 
 	keptMiddle := selectKeptBlocks(scored, middleBlockRunes, middleBudget, query, rescue)
+	// Freeze the decision unless an armed rescorer failed this pass: a
+	// transient judge failure must not become a permanent no-rescue selection.
+	if memo != nil && (rescue == nil || !rescue.Failed) {
+		memo.put(key, keptMiddle)
+	}
 
+	return tfidfAssemble(blocks, blockRunes, pinFirst, middleStart, middleEnd, n, keptMiddle, separator, available, reservedForPinned, maxSize, cfg)
+}
+
+// tfidfAssemble joins the selected blocks and applies the same over-budget
+// middle-out fallback the deterministic pass uses.
+func tfidfAssemble(blocks []Block, blockRunes []int, pinFirst, middleStart, middleEnd, n int, keptMiddle map[int]bool, separator string, available, reservedForPinned, maxSize int, cfg config.ContextConfig) string {
 	result := assembleResult(blocks, blockRunes, pinFirst, middleStart, middleEnd, n, keptMiddle, separator, available, reservedForPinned)
 	if utf8.RuneCountInString(result) > maxSize {
 		return TruncateMiddleOut(result, maxSize, cfg)
@@ -304,6 +468,12 @@ func calculateBudget(n int, blockRunes []int, cfg config.ContextConfig, availabl
 // blocks only consume leftover budget, so the keep set can grow but
 // never shrink.
 func selectKeptBlocks(scored []scoredBlock, runes []int, budget int, query string, rescue *TfidfRescueParams) map[int]bool {
+	if rescue != nil {
+		// Reset the output fields so a params struct reused across passes does
+		// not accumulate a stale admitted count or stay marked failed.
+		rescue.Failed = false
+		rescue.Admitted = 0
+	}
 	kept := make(map[int]bool, len(scored))
 	currentRunes := 0
 	// cutoff tracks the lowest kept score (the keep/drop threshold).
@@ -439,8 +609,19 @@ func TruncateTFIDFCodeAware(text string, maxSize int, query string, cfg config.C
 // TruncateTFIDFCodeAwareWithRescue is TruncateTFIDFCodeAware with the
 // advisory rescue hook.
 func TruncateTFIDFCodeAwareWithRescue(text string, maxSize int, query string, cfg config.ContextConfig, rescue *TfidfRescueParams) string {
-	result := truncateTFIDF(text, maxSize, query, cfg, rescue)
+	return codeAwareAdjust(truncateTFIDF(text, maxSize, query, cfg, rescue, "", nil))
+}
 
+// TruncateTFIDFCodeAwareWithRescueMemo is TruncateTFIDFCodeAwareWithRescue
+// with the selection memo (see TfidfSelectionCache). scope isolates entries
+// (agent name when a rescue judge is armed).
+func TruncateTFIDFCodeAwareWithRescueMemo(text string, maxSize int, query string, cfg config.ContextConfig, rescue *TfidfRescueParams, scope string, memo *TfidfSelectionCache) string {
+	return codeAwareAdjust(truncateTFIDF(text, maxSize, query, cfg, rescue, scope, memo))
+}
+
+// codeAwareAdjust trims partial prose adjacent to the pruning separator so
+// the kept spans land on paragraph boundaries.
+func codeAwareAdjust(result string) string {
 	sepMarker := "\n... [NENYA: TF-IDF PRUNED] ...\n"
 	sepIdx := strings.Index(result, sepMarker)
 	if sepIdx < 0 {

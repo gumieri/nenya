@@ -552,8 +552,14 @@ type modelEntry struct {
 	SupportsReasoning bool    `json:"supports_reasoning,omitempty"`
 	InputCostPer1M    float64 `json:"input_cost_per_1m,omitempty"`
 	OutputCostPer1M   float64 `json:"output_cost_per_1m,omitempty"`
-	RoutingStrategy   string  `json:"routing_strategy,omitempty"`
-	Description       string  `json:"description,omitempty"`
+	// Peak rates (time-of-day providers) and the discounted cache-read
+	// input rate; omitted when zero (zero = no peak window / no cached
+	// rate; agent pseudo-models expose the chain average).
+	PeakInputCostPer1M   float64 `json:"peak_input_cost_per_1m,omitempty"`
+	PeakOutputCostPer1M  float64 `json:"peak_output_cost_per_1m,omitempty"`
+	CachedInputCostPer1M float64 `json:"cached_input_cost_per_1m,omitempty"`
+	RoutingStrategy      string  `json:"routing_strategy,omitempty"`
+	Description          string  `json:"description,omitempty"`
 }
 
 // buildAgentModelEntry creates a modelEntry for an agent pseudo-model,
@@ -585,6 +591,9 @@ func buildAgentModelEntry(agentName string, agent config.AgentConfig, gw *gatewa
 	if pricing := routing.ResolveAgentPricing(agentName, gw.Config.Agents, gw.ModelCatalog); pricing.HasPricing {
 		entry.InputCostPer1M = pricing.InputCostPer1M
 		entry.OutputCostPer1M = pricing.OutputCostPer1M
+		entry.PeakInputCostPer1M = pricing.PeakInputCostPer1M
+		entry.PeakOutputCostPer1M = pricing.PeakOutputCostPer1M
+		entry.CachedInputCostPer1M = pricing.CachedInputCostPer1M
 	}
 
 	if agent.Strategy != "" {
@@ -614,6 +623,9 @@ func applyModelFields(entry *modelEntry, maxCtx, maxOut int, meta *discovery.Mod
 	if pricing != nil && !pricing.IsZero() {
 		entry.InputCostPer1M = pricing.InputCostPer1M
 		entry.OutputCostPer1M = pricing.OutputCostPer1M
+		entry.PeakInputCostPer1M = pricing.PeakInputCostPer1M
+		entry.PeakOutputCostPer1M = pricing.PeakOutputCostPer1M
+		entry.CachedInputCostPer1M = pricing.CachedInputCostPer1M
 	}
 }
 
@@ -744,9 +756,51 @@ func (p *Proxy) handleStats(w http.ResponseWriter) {
 
 	p.addBillingStats(stats, gw)
 
+	stats["cost_model"] = costModelStats(gw)
+
 	if err := json.NewEncoder(w).Encode(stats); err != nil {
 		gw.Logger.Error("failed to encode stats response", "err", err)
 	}
+}
+
+// costModelStats explains how a cost total was computed: each provider's peak
+// windows and each catalog model's rate card (standard/peak/cached), so a
+// peak-vs-off-peak difference in nenya_cost_micro_usd_total is traceable to a
+// declared window and rate set.
+func costModelStats(gw *gateway.NenyaGateway) map[string]interface{} {
+	out := map[string]interface{}{
+		"peak_windows": map[string]interface{}{},
+		"models":       map[string]interface{}{},
+	}
+	windows, _ := out["peak_windows"].(map[string]interface{})
+	for name, p := range gw.Providers {
+		if p == nil || len(p.PeakWindows) == 0 {
+			continue
+		}
+		ws := make([]map[string]interface{}, 0, len(p.PeakWindows))
+		for _, w := range p.PeakWindows {
+			ws = append(ws, map[string]interface{}{"start": w.Start, "end": w.End, "weekdays_only": w.WeekdaysOnly})
+		}
+		windows[name] = ws
+	}
+	if gw.ModelCatalog == nil {
+		return out
+	}
+	models, _ := out["models"].(map[string]interface{})
+	for _, m := range gw.ModelCatalog.AllModels() {
+		if m.Pricing == nil || m.Pricing.IsZero() {
+			continue
+		}
+		models[m.ID] = map[string]interface{}{
+			"input_cost_per_1m":        m.Pricing.InputCostPer1M,
+			"output_cost_per_1m":       m.Pricing.OutputCostPer1M,
+			"peak_input_cost_per_1m":   m.Pricing.PeakInputCostPer1M,
+			"peak_output_cost_per_1m":  m.Pricing.PeakOutputCostPer1M,
+			"cached_input_cost_per_1m": m.Pricing.CachedInputCostPer1M,
+			"currency":                 m.Pricing.Currency,
+		}
+	}
+	return out
 }
 
 // handleHealthz provides health status including engine readiness.

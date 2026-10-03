@@ -7,6 +7,7 @@ When a model's `max_context` (context window size) is not known to Nenya (value 
 ## Problem Solved
 
 Previously, when `MaxContext` was unknown (common for Ollama models and other local providers that don't report this field), Nenya would default to aggressive truncation thresholds:
+
 - `softLimit = 4000` tokens (triggers Ollama summarization)
 - `hardLimit = 24000` tokens (absolute truncation limit)
 
@@ -17,6 +18,7 @@ This caused silent context loss: the conversation history was truncated before s
 ### 1. Proactive Truncation Disabled
 
 When `MaxContext` is unknown, the gateway sets `softLimit = 0` and `hardLimit = 0`, which means:
+
 - **No proactive truncation**: The full payload is sent to the upstream provider as-is
 - **Interceptors skip**: The BouncerInterceptor and other token-budget interceptors are disabled (their `CanHandle` guards check `TokenCount >= SoftLimit`)
 
@@ -34,12 +36,14 @@ If the upstream provider cannot handle the payload size (e.g., Ollama returns `c
 The gateway logs warnings at two levels:
 
 **Startup warning** (once per provider after discovery completes):
+
 ```
 WARN provider has models without max_context configured — proactive truncation disabled; upstream may return context_length_exceeded (retries with summarization will be attempted)
   provider=ollama models=`qwen3:14b`, `llama2` count=2
 ```
 
 **Per-request warning** (when a request hits a model without MaxContext):
+
 ```
 WARN MaxContext unknown for model, proactive truncation disabled — configure max_context to enable
   model=qwen3:14b provider=ollama
@@ -50,6 +54,7 @@ WARN MaxContext unknown for model, proactive truncation disabled — configure m
 To avoid `context_length_exceeded` errors, configure `max_context` for your models:
 
 **In agent config** (`agents.json`):
+
 ```json
 {
   "agent-name": {
@@ -65,6 +70,7 @@ To avoid `context_length_exceeded` errors, configure `max_context` for your mode
 ```
 
 **In provider config** (if the provider supports it):
+
 ```json
 {
   "providers": {
@@ -79,7 +85,7 @@ To avoid `context_length_exceeded` errors, configure `max_context` for your mode
 }
 ```
 
-## Transform-Side Trim Budget (NENYA-25)
+## Transform-Side Trim Budget (NENYA-25, Phase 012)
 
 Besides the interceptor-chain limits above, `TransformRequestForUpstream`
 (`internal/routing/transform.go`) runs a final per-target `TrimPayload` before
@@ -89,27 +95,34 @@ dispatch. Its input budget resolves in this order:
    in all cases — including models with an unknown `max_context` (note this
    diverges from the Bouncer interceptor, which never engages for
    unknown-context models regardless of `hard_limit_tokens`).
-2. Otherwise `budget = max_context / 4 * 3` — three-quarters of the context
-   window in overflow-safe integer arithmetic (floor division; reserving
-   output headroom, same 3/4 policy as the interceptor hard limit) — resolved
-   agent config first, then discovery catalog, then static registry.
+2. Otherwise `budget = min(max_context / 4 * 3, max_context - max_output)` when
+   `max_output` is positive and smaller than `max_context` (else just
+   `max_context / 4 * 3`), in overflow-safe integer arithmetic. Reserving the
+   effective output room keeps input + output within the window; `max_output`
+   here is the request's effective output — the smaller of any client
+   `max_tokens` and the model cap. Resolved agent config first, then discovery
+   catalog, then static registry.
 3. `max_context` unknown and no hard limit ⇒ `budget = 0` ⇒ **trim disabled**:
    the full payload is sent and the `context_length_exceeded`
    summarization-retry fallback applies.
 
-The budget is deliberately derived from `max_context`, never from
-`max_output`: the output cap is a *completion-length* setting and clamping the
-input conversation to it silently discarded history on large-context models
-(e.g. a 1M-context model with a 64K output cap had its input clipped to 64K).
+The budget is derived from `max_context`, never from `max_output` alone: the
+output cap is a _completion-length_ setting and clamping the input conversation
+to it silently discarded history on large-context models (e.g. a 1M-context
+model with a 64K output cap had its input clipped to 64K). Subtracting the
+effective output from the context window is different — it reserves only the
+room the request can actually consume, so `1M - 384K = 616K` input plus 384K
+output fits exactly, while a request asking for only 8K output keeps the full
+750K input budget.
 
 ## Behavior Comparison
 
-| Scenario | Before | After |
-|----------|--------|-------|
-| Ollama model, MaxContext=0, payload=50K tokens | Silent truncation to 24K → hallucination | Full payload sent → `context_length_exceeded` → summarization retry |
-| Ollama model, MaxContext=0, payload=2K tokens | No truncation (under limits) | No truncation (unchanged) |
-| Cloud provider, MaxContext=128K, payload=50K tokens | No truncation (under limits) | No truncation (unchanged) |
-| Cloud provider, MaxContext=128K, payload=200K tokens | Proactive truncation to 96K | Proactive truncation to 96K (unchanged) |
+| Scenario                                             | Before                                   | After                                                               |
+| ---------------------------------------------------- | ---------------------------------------- | ------------------------------------------------------------------- |
+| Ollama model, MaxContext=0, payload=50K tokens       | Silent truncation to 24K → hallucination | Full payload sent → `context_length_exceeded` → summarization retry |
+| Ollama model, MaxContext=0, payload=2K tokens        | No truncation (under limits)             | No truncation (unchanged)                                           |
+| Cloud provider, MaxContext=128K, payload=50K tokens  | No truncation (under limits)             | No truncation (unchanged)                                           |
+| Cloud provider, MaxContext=128K, payload=200K tokens | Proactive truncation to 96K              | Proactive truncation to 96K (unchanged)                             |
 
 ## Trade-offs
 

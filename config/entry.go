@@ -3,25 +3,167 @@ package config
 import (
 	"errors"
 	"fmt"
+	"strings"
+	"time"
 )
+
+// PeakWindow declares one peak pricing interval in UTC (see
+// docs/COST_MODEL.md). Start/End are "HH:MM" 24-hour times; the interval is
+// half-open [Start, End) and Start > End wraps midnight. WeekdaysOnly
+// restricts the window to Monday–Friday (the start-side day decides for
+// wrap-around windows). A malformed interval is never peak.
+type PeakWindow struct {
+	Start string `json:"start"`
+	End   string `json:"end"`
+	// WeekdaysOnly restricts the window to Monday through Friday in the
+	// window-start day's calendar (weekends are off-peak).
+	WeekdaysOnly bool `json:"weekdays_only,omitempty"`
+}
+
+// Contains reports whether instant t (converted to UTC) falls inside the
+// half-open [Start, End) window. A nil, empty, or malformed window is never
+// peak.
+func (w *PeakWindow) Contains(t time.Time) bool {
+	if w == nil {
+		return false
+	}
+	start, okStart := parseClockMinutes(w.Start)
+	end, okEnd := parseClockMinutes(w.End)
+	if !okStart || !okEnd || start == end {
+		return false
+	}
+	u := t.UTC()
+	minutes := u.Hour()*60 + u.Minute()
+	var inInterval bool
+	if start < end {
+		inInterval = minutes >= start && minutes < end
+	} else {
+		// Wrap-around: the window crosses midnight.
+		inInterval = minutes >= start || minutes < end
+	}
+	if !inInterval {
+		return false
+	}
+	if w.WeekdaysOnly {
+		// The window belongs to the calendar day its START falls in: for a
+		// wrap window, instants after midnight belong to the previous day.
+		day := u
+		if start > end && minutes < end {
+			day = u.AddDate(0, 0, -1)
+		}
+		if wd := day.Weekday(); wd == time.Saturday || wd == time.Sunday {
+			return false
+		}
+	}
+	return true
+}
+
+// Validate checks that both bounds are well-formed "HH:MM" times. Start == End
+// is rejected as ambiguous (an empty window should simply be absent).
+func (w *PeakWindow) Validate() error {
+	if w == nil {
+		return nil
+	}
+	if _, ok := parseClockMinutes(w.Start); !ok {
+		return fmt.Errorf("PeakWindow.Start must be HH:MM (24h), got %q", w.Start)
+	}
+	if _, ok := parseClockMinutes(w.End); !ok {
+		return fmt.Errorf("PeakWindow.End must be HH:MM (24h), got %q", w.End)
+	}
+	if w.Start == w.End {
+		return errors.New("PeakWindow.Start must differ from End (an empty window should be absent)")
+	}
+	return nil
+}
+
+// parseClockMinutes parses "HH:MM" (24h) into minutes since midnight. Each
+// component must be 1–2 ASCII digits with no sign prefix ("9:05" and "09:05"
+// are both accepted; only the numeric range is enforced beyond that).
+func parseClockMinutes(s string) (int, bool) {
+	parts := strings.Split(s, ":")
+	if len(parts) != 2 {
+		return 0, false
+	}
+	h, okH := parseClockComponent(parts[0])
+	m, okM := parseClockComponent(parts[1])
+	if !okH || !okM {
+		return 0, false
+	}
+	if h > 23 || m > 59 {
+		return 0, false
+	}
+	return h*60 + m, true
+}
+
+// parseClockComponent parses one 1–2 digit clock component.
+func parseClockComponent(s string) (int, bool) {
+	if len(s) == 0 || len(s) > 2 {
+		return 0, false
+	}
+	n := 0
+	for i := 0; i < len(s); i++ {
+		if s[i] < '0' || s[i] > '9' {
+			return 0, false
+		}
+		n = n*10 + int(s[i]-'0')
+	}
+	return n, true
+}
 
 // PricingOverride allows overriding a model's default per-token pricing.
 // Zero values mean "use the built-in pricing".
+//
+// InputCostPer1M/OutputCostPer1M are the standard (off-peak) baseline rates.
+// PeakInputCostPer1M/PeakOutputCostPer1M are the peak-window rates; zero means
+// the provider/model has no peak window. CachedInputCostPer1M is the discounted
+// cache-read input rate; zero means cache reads bill at the window input rate.
+// See docs/COST_MODEL.md for the evaluation contract.
 type PricingOverride struct {
-	InputCostPer1M  float64 `json:"input_cost_per_1m"`
-	OutputCostPer1M float64 `json:"output_cost_per_1m"`
+	InputCostPer1M       float64 `json:"input_cost_per_1m"`
+	OutputCostPer1M      float64 `json:"output_cost_per_1m"`
+	PeakInputCostPer1M   float64 `json:"peak_input_cost_per_1m,omitempty"`
+	PeakOutputCostPer1M  float64 `json:"peak_output_cost_per_1m,omitempty"`
+	CachedInputCostPer1M float64 `json:"cached_input_cost_per_1m,omitempty"`
 }
 
+// IsZero reports whether no rate is configured. A peak-only or cached-only
+// entry is not zero (the model is priced, just not on the baseline fields).
 func (p PricingOverride) IsZero() bool {
-	return p.InputCostPer1M == 0 && p.OutputCostPer1M == 0
+	return p.InputCostPer1M == 0 && p.OutputCostPer1M == 0 &&
+		p.PeakInputCostPer1M == 0 && p.PeakOutputCostPer1M == 0 &&
+		p.CachedInputCostPer1M == 0
 }
 
+// HasPeak reports whether the entry declares a peak-window rate.
+func (p PricingOverride) HasPeak() bool {
+	return p.PeakInputCostPer1M != 0 || p.PeakOutputCostPer1M != 0
+}
+
+// HasStandardRate reports whether a usable standard (off-peak) baseline rate is
+// set. Peak-only entries are non-zero but have no standard rate, so callers
+// that price with the standard pair (Peak unset) must gate on this — otherwise
+// a peak-only entry would silently price at $0.
+func (p PricingOverride) HasStandardRate() bool {
+	return p.InputCostPer1M != 0 || p.OutputCostPer1M != 0
+}
+
+// Validate checks that every configured rate is non-negative. Zero is valid
+// (absent); negatives are rejected.
 func (p PricingOverride) Validate() error {
 	if p.InputCostPer1M < 0 {
 		return fmt.Errorf("PricingOverride.InputCostPer1M must be non-negative, got %f", p.InputCostPer1M)
 	}
 	if p.OutputCostPer1M < 0 {
 		return fmt.Errorf("PricingOverride.OutputCostPer1M must be non-negative, got %f", p.OutputCostPer1M)
+	}
+	if p.PeakInputCostPer1M < 0 {
+		return fmt.Errorf("PricingOverride.PeakInputCostPer1M must be non-negative, got %f", p.PeakInputCostPer1M)
+	}
+	if p.PeakOutputCostPer1M < 0 {
+		return fmt.Errorf("PricingOverride.PeakOutputCostPer1M must be non-negative, got %f", p.PeakOutputCostPer1M)
+	}
+	if p.CachedInputCostPer1M < 0 {
+		return fmt.Errorf("PricingOverride.CachedInputCostPer1M must be non-negative, got %f", p.CachedInputCostPer1M)
 	}
 	return nil
 }
@@ -138,6 +280,11 @@ type ProviderEntry struct {
 	// chat-completions endpoint (e.g. TypeSafe Jev System One decision
 	// models on OpenCode Zen). See ProviderConfig.NonChatModels.
 	NonChatModels []string `json:"non_chat_models,omitempty"`
+	// PeakWindows are the built-in peak pricing intervals (UTC) for
+	// providers with time-of-day rate cards. See
+	// ProviderConfig.PeakWindows. The slice aliases the package-level
+	// ProviderRegistry global — treat it as shared-immutable.
+	PeakWindows []PeakWindow `json:"peak_windows,omitempty"`
 }
 
 func (e ProviderEntry) ToProviderConfig() ProviderConfig {
@@ -149,5 +296,6 @@ func (e ProviderEntry) ToProviderConfig() ProviderConfig {
 		RatelimitMaxRPM: e.RatelimitMaxRPM,
 		RatelimitMaxTPM: e.RatelimitMaxTPM,
 		NonChatModels:   e.NonChatModels,
+		PeakWindows:     e.PeakWindows,
 	}
 }

@@ -1,0 +1,29 @@
+{
+  // OPT-IN example (Phase 016): Xiaomi MiMo is OpenAI-compatible (Anthropic
+  // compatibility is upstream-only — verify before relying on it). Xiaomi
+  // reports cache-hit input at ~1/120 of the miss rate; Nenya models that only
+  // via a PricingOverride.CachedInputCostPer1M entry in config/registry.go. Add
+  // the provider key to secrets.json under providers.mimo, verify the model ID
+  // and limits upstream, then use it. Because MiMo is not a built-in cache-rich
+  // provider name, cache_aware is set to "force" rather than "auto".
+  "providers": {
+    "mimo": {
+      "url": "https://api.xiaomimimo.com/v1/chat/completions",
+      "auth_style": "bearer"
+    }
+  },
+  "agents": {
+    "mimo": {
+      "strategy": "fallback",
+      "cache_aware": "force",
+      "models": [
+        {
+          "provider": "mimo",
+          "model": "mimo-v2",
+          "max_context": 256000,
+          "max_output": 128000
+        }
+      ]
+    }
+  }
+}

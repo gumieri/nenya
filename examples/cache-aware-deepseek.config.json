@@ -1,0 +1,30 @@
+{
+  // Cache-aware 1M-context scenario (Phase 016). DeepSeek Flash caches prompt
+  // prefixes automatically (cache-hit input ~1/50 of the miss rate), so this
+  // agent avoids history-wide rewrites and lets the provider cache do the work.
+  // See docs/CONFIGURATION.md#context-management-decision-guide.
+  "context": {
+    "hard_limit_tokens": 600000,
+    "tfidf_query_source": "self"
+  },
+  "compaction": {
+    "compaction_preset": "balanced"
+  },
+  "window": {
+    "enabled": false
+  },
+  "prefix_cache": {
+    "enabled": true,
+    "pin_system_first": true,
+    "stable_tools": true,
+    "skip_redaction_on_system": true
+  },
+  "agents": {
+    "deepseek-1m": {
+      "strategy": "fallback",
+      "sticky_provider": "lenient",
+      "cache_aware": "auto",
+      "models": ["deepseek-flash"]
+    }
+  }
+}

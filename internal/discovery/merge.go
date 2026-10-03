@@ -206,6 +206,7 @@ func mergeWithOverride(merged *ModelCatalog, modelID string, catalog *ModelCatal
 			pickInt(hasStatic, static.MaxOutput)),
 		OwnedBy:  firstNonEmpty(discovered.OwnedBy, "nenya"),
 		Metadata: metadata,
+		Pricing:  pricingEntryFromOverride(static.Pricing),
 	})
 
 	seenProviders := map[string]bool{primaryProvider: true}
@@ -224,6 +225,7 @@ func mergeWithOverride(merged *ModelCatalog, modelID string, catalog *ModelCatal
 					pickInt(hasStatic, static.MaxOutput)),
 				OwnedBy:  firstNonEmpty(dm.OwnedBy, "nenya"),
 				Metadata: metadata,
+				Pricing:  pricingEntryFromOverride(static.Pricing),
 			})
 		}
 	}
@@ -262,12 +264,23 @@ func mergeWithStatic(merged *ModelCatalog, modelID string, catalog *ModelCatalog
 			pickInt(hasDiscovered, discovered.MaxOutput)),
 		OwnedBy:  firstNonEmpty(discovered.OwnedBy, "nenya"),
 		Metadata: metadata,
+		// Static registry pricing becomes the catalog pricing entry so
+		// billing and the cost guard see it (docs/COST_MODEL.md); an
+		// attached external pricing feed may later override the baseline.
+		Pricing: pricingEntryFromOverride(static.Pricing),
 	})
 
 	seenProviders := map[string]bool{primaryProvider: true}
 	for _, dm := range allDiscovered {
 		if dm.Provider != "" && !seenProviders[dm.Provider] && isModelAllowed(providerAllows, dm.Provider, modelID) && !isNonChat(providerNonChat, dm.Provider, modelID) {
 			seenProviders[dm.Provider] = true
+			// A provider-supplied pricing entry (rare today) wins over the
+			// static baseline; static peak/cached still apply via the
+			// AttachPricing overlay when a feed lacks them.
+			variantPricing := dm.Pricing
+			if variantPricing == nil {
+				variantPricing = pricingEntryFromOverride(static.Pricing)
+			}
 			merged.Add(DiscoveredModel{
 				ID:       modelID,
 				Provider: dm.Provider,
@@ -280,6 +293,7 @@ func mergeWithStatic(merged *ModelCatalog, modelID string, catalog *ModelCatalog
 					static.MaxOutput),
 				OwnedBy:  firstNonEmpty(dm.OwnedBy, "nenya"),
 				Metadata: metadata,
+				Pricing:  variantPricing,
 			})
 		}
 	}
@@ -324,6 +338,24 @@ func applyStaticEntryMetadata(meta *ModelMetadata, entry config.ModelEntry) *Mod
 		meta.Pricing = &p
 	}
 	return meta
+}
+
+// pricingEntryFromOverride converts a static registry pricing override into
+// the catalog's PricingEntry (USD), so billing and the cost guard see static
+// pricing without an attached external feed. Returns nil for an IsZero
+// override (the model has no static pricing).
+func pricingEntryFromOverride(p config.PricingOverride) *PricingEntry {
+	if p.IsZero() {
+		return nil
+	}
+	return &PricingEntry{
+		InputCostPer1M:       p.InputCostPer1M,
+		OutputCostPer1M:      p.OutputCostPer1M,
+		PeakInputCostPer1M:   p.PeakInputCostPer1M,
+		PeakOutputCostPer1M:  p.PeakOutputCostPer1M,
+		CachedInputCostPer1M: p.CachedInputCostPer1M,
+		Currency:             "USD",
+	}
 }
 
 type agentOverride struct {

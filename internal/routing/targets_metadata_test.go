@@ -121,8 +121,8 @@ func TestResolveAgentPricing_Average(t *testing.T) {
 				},
 			},
 			wantHasPricing: true,
-			wantInputAvg:   0.3,
-			wantOutputAvg:  1.85,
+			wantInputAvg:   0.225,
+			wantOutputAvg:  1.55,
 		},
 		{
 			name:      "one model with pricing, one without",
@@ -136,8 +136,8 @@ func TestResolveAgentPricing_Average(t *testing.T) {
 				},
 			},
 			wantHasPricing: true,
-			wantInputAvg:   0.2,
-			wantOutputAvg:  0.65,
+			wantInputAvg:   0.125,
+			wantOutputAvg:  0.35,
 		},
 		{
 			name:      "no models with pricing",
