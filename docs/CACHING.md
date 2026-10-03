@@ -116,6 +116,10 @@ Nenya also supports **provider-side prompt prefix caching** (`prefix_cache`), wh
 - **Prompt cache key** (`prompt_cache_key`) — for xAI/OpenAI, a deterministic `SHA256(agent:model)[:16]` key is injected to keep the cached block stable across requests. A client-supplied key is preserved. OpenAI breakpoint injection skips if the key is missing.
 - **Cache salt** (`cache_salt`) — for vLLM/OpenAI-compatible providers, a tenant salt is injected to isolate cached KV blocks between tenants (per-API-key `cache_salt` overrides agent `cache_salt`). Never injected for Anthropic (server-side workspace isolation).
 
+### Per-agent `cache_aware` dispatch
+
+Some providers (DeepSeek, Anthropic, OpenAI) cache prompt prefixes automatically without any client marker. For agents routed to them, `agents.<name>.cache_aware: auto` skips the history-wide window compaction and the tail TF-IDF prune while the payload fits the hard limit, so the gateway sends a stable prefix and lets the provider cache do the work instead of local token surgery. `force` applies the same skip to any provider; `off` (default) keeps the full pipeline. Security interceptors and all other stages still run. This keys on the resolved primary provider name, so renamed/custom cache-rich providers should use `force`. See [`CONFIGURATION.md`](CONFIGURATION.md#agents).
+
 ### Token accounting
 
 Usage is parsed and surfaced as deltas via the stream `UsageData`:

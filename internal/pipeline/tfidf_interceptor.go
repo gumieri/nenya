@@ -68,6 +68,11 @@ func (t *TFIDFInterceptor) CanHandle(ctx context.Context, req *InterceptRequest)
 	if ctx.Err() != nil {
 		return false
 	}
+	if req.SkipTFIDFPrune {
+		// cache_aware: let the provider prefix cache do the work instead of
+		// pruning the tail.
+		return false
+	}
 	return t.querySource != "" && len(req.Messages) > 1 && req.SoftLimit > 0 && req.TokenCount > req.SoftLimit
 }
 

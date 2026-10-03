@@ -524,6 +524,11 @@ func validateAgentStrategies(agents map[string]AgentConfig) []string {
 		default:
 			errs = append(errs, fmt.Sprintf("agents[%q].sticky_provider: invalid value %q, must be one of off, lenient, strict", name, agent.StickyProvider))
 		}
+		switch agent.CacheAware {
+		case "", CacheAwareOff, CacheAwareAuto, CacheAwareForce:
+		default:
+			errs = append(errs, fmt.Sprintf("agents[%q].cache_aware: invalid value %q, must be one of off, auto, force", name, agent.CacheAware))
+		}
 	}
 	return errs
 }

@@ -21,8 +21,9 @@ import (
 //   - reasoning_content from non-tool-call turns is optional (API ignores it)
 func deepseekSpec() ProviderSpec {
 	return ProviderSpec{
-		ServiceKinds:       []ServiceKind{ServiceKindLLM},
-		ValidationEndpoint: deepseekValidationEndpoint,
+		ServiceKinds:         []ServiceKind{ServiceKindLLM},
+		ValidationEndpoint:   deepseekValidationEndpoint,
+		AutomaticPrefixCache: true,
 	}
 }
 

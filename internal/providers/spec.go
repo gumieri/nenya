@@ -33,6 +33,10 @@ type ProviderSpec struct {
 	SanitizeRequest        func(deps *SanitizeDeps, payload map[string]interface{})
 	NewResponseTransformer func(cache *infra.ThoughtSignatureCache) stream.ResponseTransformer
 	ValidationEndpoint     func(providerURL string) string
+	// AutomaticPrefixCache marks providers that cache prompt prefixes
+	// server-side without client cache_control directives. Consumed by the
+	// per-agent cache_aware policy.
+	AutomaticPrefixCache bool
 }
 
 // Registry maps provider format names to their ProviderSpec definitions.
@@ -70,6 +74,17 @@ func init() {
 func Get(name string) (ProviderSpec, bool) {
 	spec, ok := Registry[strings.ToLower(name)]
 	return spec, ok
+}
+
+// SupportsAutomaticPrefixCache reports whether the named provider caches prompt
+// prefixes automatically (the built-in deepseek, anthropic, and openai
+// providers). It keys on the provider name, not the wire format: an
+// OpenAI-compatible backend is not assumed to cache. Unknown/renamed providers
+// and aggregators return false; an agent can still opt in with
+// cache_aware: force.
+func SupportsAutomaticPrefixCache(name string) bool {
+	spec, ok := Get(strings.TrimSpace(name))
+	return ok && spec.AutomaticPrefixCache
 }
 
 func defaultValidationEndpoint(host string, path string) string {

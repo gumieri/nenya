@@ -102,6 +102,13 @@ type AgentConfig struct {
 	// fails over to another target (same-target backoff retries and the
 	// summarization retry still run).
 	StickyProvider string `json:"sticky_provider,omitempty"`
+	// CacheAware opts this agent into prefix-preserving dispatch: "off" (and
+	// the empty default) runs the full content pipeline; "auto" skips the
+	// history-wide window compaction and the tail TF-IDF prune while the payload fits the
+	// hard limit and the resolved provider caches prompt prefixes
+	// automatically; "force" skips them regardless of provider capability.
+	// Security interceptors (redact/spotlight/injection/entropy) always run.
+	CacheAware string `json:"cache_aware,omitempty"`
 	// Injection overrides the global governance.injection settings for
 	// this agent (enabled/strict are the per-agent surface; extra and
 	// ignore patterns are global-only).
@@ -115,6 +122,19 @@ type AgentConfig struct {
 	// literal policy are global-only).
 	ExfilGuard *ExfilGuardOverrideConfig `json:"exfil_guard,omitempty"`
 }
+
+// CacheAware modes for AgentConfig.CacheAware.
+const (
+	// CacheAwareOff runs the full content pipeline.
+	CacheAwareOff = "off"
+	// CacheAwareAuto skips the history-wide window compaction and the tail
+	// TF-IDF prune when the resolved provider caches prompt prefixes
+	// automatically and the payload fits the hard limit.
+	CacheAwareAuto = "auto"
+	// CacheAwareForce skips the history-wide window compaction and the tail
+	// TF-IDF prune regardless of provider capability.
+	CacheAwareForce = "force"
+)
 
 // ExfilGuardOverrideConfig is the per-agent override surface for the
 // output egress guard.

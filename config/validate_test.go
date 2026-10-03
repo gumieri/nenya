@@ -682,6 +682,26 @@ func TestValidateStickyProvider(t *testing.T) {
 	}
 }
 
+func TestValidateCacheAware(t *testing.T) {
+	valid := map[string]AgentConfig{
+		"a": {Strategy: "fallback", CacheAware: ""},
+		"b": {Strategy: "fallback", CacheAware: "off"},
+		"c": {Strategy: "fallback", CacheAware: "auto"},
+		"d": {Strategy: "fallback", CacheAware: "force"},
+	}
+	if errs := validateAgentStrategies(valid); len(errs) != 0 {
+		t.Fatalf("expected no errors, got %v", errs)
+	}
+
+	invalid := map[string]AgentConfig{
+		"a": {Strategy: "fallback", CacheAware: "sometimes"},
+	}
+	errs := validateAgentStrategies(invalid)
+	if len(errs) != 1 || !strings.Contains(errs[0], "cache_aware") {
+		t.Fatalf("expected cache_aware error, got %v", errs)
+	}
+}
+
 func TestValidateModelAliases(t *testing.T) {
 	cfg := &Config{
 		Providers: map[string]ProviderConfig{
