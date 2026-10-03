@@ -85,6 +85,10 @@ type NenyaGateway struct {
 	// WindowSummaries caches window-compaction engine summaries so the
 	// compacted head stays stable across turns (NENYA-24).
 	WindowSummaries *pipeline.SummaryCache
+	// TfidfSelections freezes the TF-IDF interceptor's block selections so a
+	// message's keep/drop decision is stable across turns even as the
+	// prior-messages query evolves.
+	TfidfSelections *pipeline.TfidfSelectionCache
 	// WindowFidelityGate optionally judges freshly generated window
 	// summaries (governance.judgments.summary_fidelity.enabled); built
 	// at chain-build time, nil disables the gate. Consumed by
@@ -459,6 +463,7 @@ func buildGateway(cfg config.Config, secrets *config.SecretsConfig, secureClient
 		AgentState:         nil,
 		ThoughtSigCache:    infra.NewThoughtSignatureCache(1000, 30*time.Minute),
 		WindowSummaries:    pipeline.NewSummaryCache(windowSummaryCacheSize(cfg)),
+		TfidfSelections:    pipeline.NewTfidfSelectionCache(pipeline.DefaultTfidfSelectionCacheSize),
 		ResponseCache:      newResponseCache(cfg, logger, metrics),
 		Embedder:           nil,
 		MCPClients:         buildMCPClients(cfg, logger),
@@ -873,6 +878,13 @@ func (g *NenyaGateway) Reload(ctx context.Context, cfg config.Config, secrets *c
 	newGW.Stats = g.Stats
 	newGW.Metrics = g.Metrics
 	newGW.ThoughtSigCache = g.ThoughtSigCache
+	// Carry the TF-IDF selection memo across reloads: frozen selections are
+	// keyed by content + selection parameters (not the judge engine identity),
+	// so those unaffected by the new config keep the prompt-cache prefix stable
+	// instead of re-freezing after a SIGHUP. (WindowSummaries is intentionally
+	// rebuilt: engine summaries depend on the summary model, which a reload may
+	// have changed.)
+	newGW.TfidfSelections = g.TfidfSelections
 	newGW.BillingTracker = g.BillingTracker
 	newGW.SessionRouter = g.SessionRouter
 	newGW.AgentState.SessionRouter = g.SessionRouter

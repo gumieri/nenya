@@ -257,7 +257,13 @@ func TestTfidfRescueNilParamsDeterministic(t *testing.T) {
 
 func rerankInterceptor(t *testing.T, judge *Judge, rerank *config.TfidfRerankConfig) *TFIDFInterceptor {
 	t.Helper()
-	return NewTFIDFInterceptor("self", config.ContextConfig{}, slog.New(slog.NewTextHandler(io.Discard, nil)), rerank, judge, infra.NewMetrics())
+	return NewTFIDFInterceptor(TFIDFInterceptorOpts{
+		QuerySource: "self",
+		Logger:      slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Rerank:      rerank,
+		RerankJudge: judge,
+		Metrics:     infra.NewMetrics(),
+	})
 }
 
 func rerankRequest(text string) *InterceptRequest {

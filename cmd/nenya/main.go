@@ -444,7 +444,15 @@ func buildInterceptorChain(gw *gateway.NenyaGateway, cfg *config.Config, logger 
 	gates.tfidfRerank = nil
 	if cfg.Context.TFIDFQuerySource != "" {
 		gates.tfidfRerank = buildTfidfRerankGate(cfg, gw, logger)
-		chain.Register(pipeline.NewTFIDFInterceptor(cfg.Context.TFIDFQuerySource, cfg.Context, logger, cfg.Governance.TfidfRerank, gates.tfidfRerank, gw.Metrics))
+		chain.Register(pipeline.NewTFIDFInterceptor(pipeline.TFIDFInterceptorOpts{
+			QuerySource:    cfg.Context.TFIDFQuerySource,
+			ContextCfg:     cfg.Context,
+			Logger:         logger,
+			Rerank:         cfg.Governance.TfidfRerank,
+			RerankJudge:    gates.tfidfRerank,
+			Metrics:        gw.Metrics,
+			SelectionCache: gw.TfidfSelections,
+		}))
 	}
 
 	registerBouncer(chain, gw, cfg, logger)
