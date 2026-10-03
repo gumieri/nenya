@@ -1557,13 +1557,15 @@ type WindowConfig struct {
 	Engine          EngineRef `json:"engine"`
 	KeepFirstPct    float64   `json:"keep_first_pct"`
 	KeepLastPct     float64   `json:"keep_last_pct"`
-	// SummaryRegenRatio is the regeneration hysteresis for summarize-mode
-	// compaction (NENYA-24): a cached summary is reused — with only the
-	// grown delta messages appended verbatim — until history grows by this
-	// ratio since the summary was generated. Default 0.25.
+	// SummaryRegenRatio is the regeneration hysteresis for window
+	// compaction (NENYA-24): a cached summarize summary — or the cached
+	// deterministic "tfidf" head — is reused, with only the grown delta
+	// messages appended verbatim, until history grows by this ratio since
+	// it was generated. Default 0.25.
 	SummaryRegenRatio *float64 `json:"summary_regen_ratio,omitempty"`
-	// SummaryCacheSize bounds the per-gateway summary cache (number of
-	// conversation lineages). Default 512.
+	// SummaryCacheSize bounds each per-gateway window cache (summaries and
+	// tfidf heads) to this many conversation lineages; the two are bounded
+	// independently, so the effective total is up to 2×. Default 512.
 	SummaryCacheSize *int `json:"summary_cache_size,omitempty"`
 }
 

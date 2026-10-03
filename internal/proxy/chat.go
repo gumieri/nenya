@@ -1299,6 +1299,7 @@ func buildWindowDeps(gw *gateway.NenyaGateway) pipeline.WindowDeps {
 		},
 		CountTokens:        gw.CountTokens,
 		SummaryCache:       gw.WindowSummaries,
+		HeadCache:          gw.WindowHeads,
 		FidelityGate:       gw.WindowFidelityGate,
 		FidelityGateStrict: jc != nil && jc.Action == "strict",
 		Metrics:            gw.Metrics,

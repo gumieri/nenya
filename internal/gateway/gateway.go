@@ -85,6 +85,10 @@ type NenyaGateway struct {
 	// WindowSummaries caches window-compaction engine summaries so the
 	// compacted head stays stable across turns (NENYA-24).
 	WindowSummaries *pipeline.SummaryCache
+	// WindowHeads caches the deterministic window "tfidf" head by
+	// conversation lineage so the compacted prefix stays byte-identical
+	// across appended turns.
+	WindowHeads *pipeline.WindowHeadCache
 	// TfidfSelections freezes the TF-IDF interceptor's block selections so a
 	// message's keep/drop decision is stable across turns even as the
 	// prior-messages query evolves.
@@ -463,6 +467,7 @@ func buildGateway(cfg config.Config, secrets *config.SecretsConfig, secureClient
 		AgentState:         nil,
 		ThoughtSigCache:    infra.NewThoughtSignatureCache(1000, 30*time.Minute),
 		WindowSummaries:    pipeline.NewSummaryCache(windowSummaryCacheSize(cfg)),
+		WindowHeads:        pipeline.NewWindowHeadCache(windowSummaryCacheSize(cfg)),
 		TfidfSelections:    pipeline.NewTfidfSelectionCache(pipeline.DefaultTfidfSelectionCacheSize),
 		ResponseCache:      newResponseCache(cfg, logger, metrics),
 		Embedder:           nil,
@@ -885,6 +890,10 @@ func (g *NenyaGateway) Reload(ctx context.Context, cfg config.Config, secrets *c
 	// rebuilt: engine summaries depend on the summary model, which a reload may
 	// have changed.)
 	newGW.TfidfSelections = g.TfidfSelections
+	// WindowHeads is deterministic (lineage + covered-region keyed), so it is
+	// safe to carry across reloads too: unaffected conversations keep their
+	// frozen head rather than re-freezing once.
+	newGW.WindowHeads = g.WindowHeads
 	newGW.BillingTracker = g.BillingTracker
 	newGW.SessionRouter = g.SessionRouter
 	newGW.AgentState.SessionRouter = g.SessionRouter

@@ -204,7 +204,7 @@ func TestWindowSummaryCache_LRUBound(t *testing.T) {
 	c := NewSummaryCache(4)
 	for i := 0; i < 50; i++ {
 		key := string(rune('a'+i%26)) + string(rune('a'+i/26))
-		c.Store(key, key+"-hash", 10, "s")
+		c.Store(key, key+"-hash", 10, 0, "s")
 	}
 	c.mu.Lock()
 	size := len(c.entries)

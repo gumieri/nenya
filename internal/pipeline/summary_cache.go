@@ -37,10 +37,11 @@ type SummaryCache struct {
 }
 
 type summaryCacheEntry struct {
-	lineageKey string
-	lastHash   string
-	summary    string
-	historyLen int
+	lineageKey    string
+	lastHash      string
+	summary       string
+	historyLen    int
+	coveredTokens int
 }
 
 // NewSummaryCache creates a bounded summary cache. Non-positive caps fall
@@ -65,6 +66,9 @@ type Reuse struct {
 	// history length on an exact hit.
 	DeltaStart int
 	Exact      bool
+	// CoveredTokens is the covered region's token estimate, cached at
+	// generation time so reuse does not re-tokenize the region.
+	CoveredTokens int
 }
 
 // Lookup finds a reusable summary for the given lineage. historyHash is
@@ -83,18 +87,22 @@ func (c *SummaryCache) Lookup(lineageKey, historyHash string, historyLen int, re
 
 	if entry.lastHash == historyHash {
 		c.ExactHits++
-		return Reuse{Summary: entry.summary, DeltaStart: historyLen, Exact: true}, true
+		return Reuse{Summary: entry.summary, DeltaStart: historyLen, Exact: true, CoveredTokens: entry.coveredTokens}, true
 	}
 	if historyLen > entry.historyLen && entry.historyLen > 0 &&
 		float64(historyLen-entry.historyLen)/float64(entry.historyLen) < regenRatio {
 		c.HystHits++
-		return Reuse{Summary: entry.summary, DeltaStart: entry.historyLen}, true
+		return Reuse{Summary: entry.summary, DeltaStart: entry.historyLen, CoveredTokens: entry.coveredTokens}, true
 	}
+	// Miss beyond the hysteresis ratio (or a shrunk/edited history): the
+	// entry is deliberately retained (unlike WindowHeadCache, which drops on
+	// a covered-region change). Summaries carry no covered-region hash, and
+	// the caller regenerates and overwrites this entry anyway.
 	return Reuse{}, false
 }
 
 // Store records a freshly generated summary for the lineage.
-func (c *SummaryCache) Store(lineageKey, historyHash string, historyLen int, summary string) {
+func (c *SummaryCache) Store(lineageKey, historyHash string, historyLen, coveredTokens int, summary string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.Regens++
@@ -104,10 +112,11 @@ func (c *SummaryCache) Store(lineageKey, historyHash string, historyLen int, sum
 		entry.lastHash = historyHash
 		entry.summary = summary
 		entry.historyLen = historyLen
+		entry.coveredTokens = coveredTokens
 		c.order.MoveToFront(el)
 		return
 	}
-	entry := &summaryCacheEntry{lineageKey: lineageKey, lastHash: historyHash, summary: summary, historyLen: historyLen}
+	entry := &summaryCacheEntry{lineageKey: lineageKey, lastHash: historyHash, summary: summary, historyLen: historyLen, coveredTokens: coveredTokens}
 	el := c.order.PushFront(entry)
 	c.entries[lineageKey] = el
 	for c.order.Len() > c.cap {
