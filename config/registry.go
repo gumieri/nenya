@@ -172,15 +172,18 @@ var ModelRegistry = map[string]ModelEntry{
 
 	// DeepSeek catalog notes (V4.1-Flash release, 2026-09-10):
 	//   - deepseek-flash is the canonical API model ID for DeepSeek-V4.1-Flash;
-	//     the legacy deepseek-v4-flash / deepseek-v4-flash-vision-exp IDs are
-	//     retired upstream and route to it.
-	//   - deepseek-v4.1-flash pricing below is the peak rate (off-peak is 50%).
+	//     the legacy deepseek-v4-flash and deepseek-v4.1-flash IDs are still
+	//     registered with the same rate card, while deepseek-v4-flash-vision-exp
+	//     is retired upstream and not registered (it would need discovery or an
+	//     explicit entry to resolve).
+	//   - deepseek-v4.1-flash pricing below is the off-peak rate (peak is 2x).
 	//   - Since 2026-09-14 DeepSeek serves every deepseek-v4-pro request with
 	//     V4.1-Flash at Flash rates until V4.1-Pro launches, so the
 	//     deepseek-v4-pro rate card overstates current spend.
 	// DeepSeek rate card (official pricing page, verified 2026-09):
 	// V4.1-Flash (canonical ID deepseek-flash; legacy deepseek-v4-flash /
-	// deepseek-v4-flash-vision-exp route to it): off-peak $0.15/$0.60
+	// deepseek-v4.1-flash are registered with the same card,
+	// deepseek-v4-flash-vision-exp is not): off-peak $0.15/$0.60
 	// (cache-miss input/output), peak exactly 2x ($0.30/$1.20), cache-hit
 	// input $0.003 off-peak / $0.006 peak. deepseek-v4-pro: off-peak
 	// $0.66/$1.98, peak $1.32/$3.96, cache-hit $0.022/$0.044. Since

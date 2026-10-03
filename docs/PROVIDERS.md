@@ -90,16 +90,20 @@ Providers can declare multiple format endpoints via `FormatURLs` in their regist
 
 ## Special Behaviors
 
-### DeepSeek v4 (deepseek-v4-flash, deepseek-v4-pro)
+### DeepSeek v4 (`deepseek-flash`, `deepseek-v4-pro`)
+
+**Model IDs.** `deepseek-flash` is the canonical API ID for DeepSeek-V4.1-Flash (released 2026-09-10); prefer it in new configs. For compatibility DeepSeek still resolves the legacy `deepseek-v4-flash` and `deepseek-v4.1-flash` IDs (both registered with the same rate card) as V4.1-Flash, and `deepseek-v4-flash-vision-exp` is retired upstream and not registered. `deepseek-chat` and `deepseek-reasoner` are DeepSeek's generic API aliases — not Nenya aliases of `deepseek-flash`. Neither is in the static registry, so reference them with the object form (`{"provider": "deepseek", "model": "deepseek-reasoner"}`) rather than the string shorthand, which requires a static-registry entry. `deepseek-v4-pro` remains a valid ID.
+
+**V4-Pro serving (since 2026-09-14).** DeepSeek serves every `deepseek-v4-pro` request with V4.1-Flash at Flash rates until V4.1-Pro launches, so the `deepseek-v4-pro` rate card overstates current spend. See [COST_MODEL.md](COST_MODEL.md).
 
 DeepSeek v4 models support a **thinking mode** controlled by the `thinking` parameter and return structured `reasoning_content` in assistant messages.
 
 - **`deepseek-v4-pro`**: Thinking mode is **on by default**.
-- **`deepseek-v4-flash`**: Thinking mode is **on by default**. To disable, send `thinking: {"type": "disabled"}`.
+- **`deepseek-flash`**: Thinking mode is **on by default**. To disable, send `thinking: {"type": "disabled"}`.
 - **Reasoning effort**: `reasoning_effort: "high"` (default) or `"max"`. For complex agent requests (Claude Code, OpenCode), DeepSeek auto-escalates to `max`.
 - **Multi-turn**: `reasoning_content` from assistant messages is passed back verbatim. When tool calls were performed, this field is **mandatory** — the API returns 400 if missing. The gateway preserves it for reasoning providers and strips it for others.
 - **Ignored params**: In thinking mode, `temperature`, `top_p`, `presence_penalty`, `frequency_penalty` are silently ignored. The gateway strips these for DeepSeek when thinking is enabled.
-- **Prefix caching**: DeepSeek uses automatic disk-based KV caching with exact prefix matching. Enable `prefix_cache` in the gateway config to optimize cache hits — the gateway pins system messages first and sorts tools deterministically.
+- **Prefix caching**: DeepSeek uses automatic disk-based KV caching with exact prefix matching; cache-hit input bills far below the miss rate (Flash: $0.003 vs $0.15 per 1M input ≈ 1/50). The gateway marks DeepSeek as a cache-rich provider for the per-agent [`cache_aware`](CONFIGURATION.md#agents) policy, and `prefix_cache` pins system messages first and sorts tools deterministically. Prefer `cache_aware: auto` and `sticky_provider: lenient` for DeepSeek agents; see the [context-management decision guide](CONFIGURATION.md#context-management-decision-guide).
 - **Limits**: 1M context, 384K max output.
 
 ### Anthropic
