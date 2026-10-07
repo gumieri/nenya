@@ -184,15 +184,27 @@ func (p *Proxy) chainHealthz(gw *gateway.NenyaGateway, w http.ResponseWriter, r 
 }
 
 func (p *Proxy) chainStats(gw *gateway.NenyaGateway, w http.ResponseWriter, r *http.Request) {
-	p.chainEndpoint(http.MethodGet, "/statsz", false, func(gw *gateway.NenyaGateway, w http.ResponseWriter, r *http.Request, apiKey *config.ApiKey) {
-		infra.ObserveHTTP(gw.Metrics, p.handleStats)(w, r)
+	unauth := telemetryUnauthenticated(gw)
+	p.chainEndpoint(http.MethodGet, "/statsz", !unauth, func(gw *gateway.NenyaGateway, w http.ResponseWriter, r *http.Request, apiKey *config.ApiKey) {
+		infra.ObserveHTTP(gw.Metrics, func(w http.ResponseWriter) {
+			p.handleStats(w, unauth)
+		})(w, r)
 	})(gw, w, r)
 }
 
 func (p *Proxy) chainMetrics(gw *gateway.NenyaGateway, w http.ResponseWriter, r *http.Request) {
-	p.chainEndpoint(http.MethodGet, "/metrics", false, func(gw *gateway.NenyaGateway, w http.ResponseWriter, r *http.Request, apiKey *config.ApiKey) {
+	unauth := telemetryUnauthenticated(gw)
+	p.chainEndpoint(http.MethodGet, "/metrics", !unauth, func(gw *gateway.NenyaGateway, w http.ResponseWriter, r *http.Request, apiKey *config.ApiKey) {
 		p.handleMetrics(w, r)
 	})(gw, w, r)
+}
+
+// telemetryUnauthenticated reports whether the operator restored the legacy
+// no-auth telemetry behavior (server.telemetry_unauthenticated, NENYA-131).
+// The flag is intended for loopback-only listeners; the default keeps
+// /statsz and /metrics behind authentication (the read-only role suffices).
+func telemetryUnauthenticated(gw *gateway.NenyaGateway) bool {
+	return gw != nil && gw.Config.Server.TelemetryUnauthenticated
 }
 
 func (p *Proxy) chainAuthPprof(gw *gateway.NenyaGateway, w http.ResponseWriter, r *http.Request) {
@@ -716,7 +728,9 @@ func (p *Proxy) handleModels(w http.ResponseWriter) {
 }
 
 // handleStats provides runtime statistics including usage, circuit breaker state, and MCP status.
-func (p *Proxy) handleStats(w http.ResponseWriter) {
+// When redactKeys is set (unauthenticated telemetry mode), per-key usage is
+// omitted — key names never leave the process.
+func (p *Proxy) handleStats(w http.ResponseWriter, redactKeys bool) {
 	gw := p.Gateway()
 	if gw == nil {
 		writeStructuredError(w, http.StatusServiceUnavailable, infra.ErrorKindInternal, "Gateway not initialized")
@@ -739,9 +753,21 @@ func (p *Proxy) handleStats(w http.ResponseWriter) {
 	stats["mcp"] = mcpServers
 
 	// Per-key/per-provider budget usage (NENYA-20), additive for backward
-	// compatibility.
+	// compatibility. Two shapes, mode-dependent (NENYA-131):
+	//   authenticated:  {"keys": {<name>: {...}}, "providers": {...}}
+	//   unauthenticated: {"providers": {...}, "keys_redacted": true}
+	// Unauthenticated telemetry drops the keys section entirely: it is
+	// keyed by human-readable key names.
 	if gw.KeyUsage != nil {
-		stats["key_usage"] = gw.KeyUsage.Snapshot()
+		snapshot := gw.KeyUsage.Snapshot()
+		if redactKeys {
+			stats["key_usage"] = map[string]interface{}{
+				"providers":     snapshot["providers"],
+				"keys_redacted": true,
+			}
+		} else {
+			stats["key_usage"] = snapshot
+		}
 	}
 
 	if gw.HealthRegistry != nil {

@@ -116,6 +116,15 @@ type Metrics struct {
 	authSuccess sync.Map
 	authFailure sync.Map
 	authDenials sync.Map
+	// authMu guards the auth label maps against the redaction toggle:
+	// record paths hold RLock across label-resolution + entry creation so
+	// a concurrent SetAuthLabelRedaction wipe can never leave a real
+	// key-name entry behind (NENYA-131 review).
+	authMu sync.RWMutex
+	// redactAuthLabels drops API key names from auth metric label values
+	// (replaced by a constant "redacted") so an unauthenticated /metrics
+	// scrape cannot enumerate key names (NENYA-131). Off by default.
+	redactAuthLabels atomic.Bool
 
 	// Backoff metrics
 	backoffIncrements sync.Map
@@ -851,12 +860,50 @@ func (m *Metrics) SetMCPServerReady(server string, ready bool) {
 	e.value.Store(val)
 }
 
+// RedactedAuthLabel is the constant key_name label value used when auth
+// label redaction is enabled (SetAuthLabelRedaction): individual keys are
+// deliberately not distinguishable in that mode.
+const RedactedAuthLabel = "redacted"
+
+// SetAuthLabelRedaction toggles key-name redaction on auth metrics
+// (nenya_auth_success_total, nenya_auth_denials_total). Enabled together
+// with server.telemetry_unauthenticated so an unauthenticated /metrics
+// scrape cannot enumerate API key names. Toggling wipes the auth counters
+// under the same lock the record paths hold: entries created under the
+// previous mode would otherwise keep exposing real key names until process
+// restart.
+func (m *Metrics) SetAuthLabelRedaction(redact bool) {
+	if m == nil {
+		return
+	}
+	m.authMu.Lock()
+	defer m.authMu.Unlock()
+	if !m.redactAuthLabels.CompareAndSwap(!redact, redact) {
+		return
+	}
+	for _, counters := range []*sync.Map{&m.authSuccess, &m.authDenials} {
+		counters.Range(func(key, _ any) bool {
+			counters.Delete(key)
+			return true
+		})
+	}
+}
+
+func (m *Metrics) authLabel(keyName string) string {
+	if m.redactAuthLabels.Load() {
+		return RedactedAuthLabel
+	}
+	return keyName
+}
+
 func (m *Metrics) RecordAuthSuccess(authType, keyName string) {
 	if m == nil {
 		return
 	}
+	m.authMu.RLock()
+	defer m.authMu.RUnlock()
 	e := getOrCreateEntry(&m.authSuccess, map[string]string{
-		"type": authType, "key_name": keyName,
+		"type": authType, "key_name": m.authLabel(keyName),
 	})
 	e.value.Add(1)
 }
@@ -875,8 +922,10 @@ func (m *Metrics) IncAuthDenials(keyName, reason string) {
 	if m == nil {
 		return
 	}
+	m.authMu.RLock()
+	defer m.authMu.RUnlock()
 	e := getOrCreateEntry(&m.authDenials, map[string]string{
-		"key_name": keyName, "reason": reason,
+		"key_name": m.authLabel(keyName), "reason": reason,
 	})
 	e.value.Add(1)
 }

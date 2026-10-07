@@ -212,8 +212,8 @@ func TestHandleDescribe_MissingConfigReportsDiagnostic(t *testing.T) {
 	if got.Config == nil {
 		t.Fatal("config is nil; want defaults when no config file exists")
 	}
-	if got.Config.Server.ListenAddr != ":8080" {
-		t.Errorf("default listen_addr = %q, want :8080 (defaults applied)", got.Config.Server.ListenAddr)
+	if got.Config.Server.ListenAddr != "127.0.0.1:8080" {
+		t.Errorf("default listen_addr = %q, want 127.0.0.1:8080 (defaults applied)", got.Config.Server.ListenAddr)
 	}
 	d, found := findDiagnostic(got.Diagnostics, "config_not_found")
 	if !found {

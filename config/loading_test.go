@@ -146,8 +146,8 @@ func TestApplyDefaults_Server(t *testing.T) {
 	if err := ApplyDefaults(cfg); err != nil {
 		t.Fatal(err)
 	}
-	if cfg.Server.ListenAddr != ":8080" {
-		t.Errorf("expected :8080, got %s", cfg.Server.ListenAddr)
+	if cfg.Server.ListenAddr != "127.0.0.1:8080" {
+		t.Errorf("expected 127.0.0.1:8080, got %s", cfg.Server.ListenAddr)
 	}
 	if cfg.Server.UserAgent == "" {
 		t.Error("user agent should have a default")

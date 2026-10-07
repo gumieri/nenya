@@ -155,7 +155,10 @@ func ApplyDefaults(cfg *Config) error {
 
 func applyServerDefaults(cfg *Config) {
 	if cfg.Server.ListenAddr == "" {
-		cfg.Server.ListenAddr = ":8080"
+		// Loopback by default (NENYA-131): the unauthenticated /healthz
+		// surface and (opt-out) telemetry endpoints must not be reachable
+		// from the network unless the operator explicitly binds wider.
+		cfg.Server.ListenAddr = "127.0.0.1:8080"
 	}
 	if cfg.Server.MaxBodyBytes == 0 {
 		cfg.Server.MaxBodyBytes = 10 << 20

@@ -282,7 +282,7 @@ All outbound HTTP dispatch points vulnerable to transient network errors (TLS ha
 
 - `admin` — Unrestricted access to all agents and endpoints (bypasses RBAC checks)
 - `user` — Access to configured agents and all non-admin endpoints (`/v1/chat/completions`, `/v1/embeddings`, `/v1/responses`, `/v1/images/generations`, `/v1/audio/transcriptions`, `/v1/audio/speech`, `/v1/moderations`, `/v1/rerank`, `/v1/a2a`, `/v1/files`, `/v1/batches`, `/proxy/*`)
-- `read-only` — Read-only access: GET requests only (`/v1/models`, `/healthz`, `/statsz`, `/metrics`)
+- `read-only` — Monitoring role: GET requests on `/v1/models`, `/healthz`, `/statsz`, `/metrics` only (path-scoped since NENYA-131; other GET surfaces such as `/proxy/*` and `/debug/pprof` require `user` or `admin`)
 
 **Agent Scoping:**
 

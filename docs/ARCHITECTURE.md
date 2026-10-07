@@ -3,10 +3,10 @@
 ## Package Dependency DAG
 
 ```
-util, tiktoken -> config -> infra -> discovery -> stream -> pipeline -> resilience -> providers -> adapter -> routing -> local -> gateway -> proxy -> mcp
+config -> tiktoken, security, version, util -> infra -> auth -> pipeline -> stream -> resilience -> billing -> mcp -> adapter -> discovery -> providers -> routing -> local -> gateway -> proxy
 ```
 
-Each layer may only import from layers to its left. This prevents circular dependencies and keeps the codebase testable in isolation. Leaf dependencies (`util`, `tiktoken`) contain shared utilities. The `local` package manages Ollama model lifecycles.
+Each layer may only import from layers to its left — enforced by `TestDocsDAGMatchesImportOrder` against the runtime import graph (`internal/releasecontract/docs_dag_test.go`), so this map cannot drift silently. `util` imports root `config`, so it sits right of it. Leaf dependencies (`tiktoken`, `security`, `version`) are stdlib-only. The `local` package manages Ollama model lifecycles; `auth` (RBAC, account pools, key usage) sits right of `infra`; `billing` builds on `resilience` backoff/retry state. Packages outside the runtime DAG by design: `releasecontract` (stdlib-only release-contract drift guards) and `testutil` (test-only helpers).
 
 ## Package Overview
 

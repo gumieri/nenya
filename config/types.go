@@ -868,11 +868,21 @@ type LocalEngineConfig struct {
 // ServerConfig defines the HTTP server settings: listen address, body
 // size limits, user agent string, log level, and secure memory policy.
 type ServerConfig struct {
-	ListenAddr           string `json:"listen_addr"`
-	MaxBodyBytes         int64  `json:"max_body_bytes"`
-	UserAgent            string `json:"user_agent"`
-	LogLevel             string `json:"log_level"`
-	SecureMemoryRequired *bool  `json:"secure_memory_required"`
+	ListenAddr   string `json:"listen_addr"`
+	MaxBodyBytes int64  `json:"max_body_bytes"`
+	UserAgent    string `json:"user_agent"`
+	LogLevel     string `json:"log_level"`
+	// SecureMemoryRequired defaults to true; mlock-unavailable startup
+	// fails unless explicitly opted out.
+	SecureMemoryRequired *bool `json:"secure_memory_required"`
+	// TelemetryUnauthenticated restores the pre-NENYA-131 no-auth behavior
+	// for /statsz and /metrics. When true, both endpoints skip
+	// authentication, /statsz omits per-key usage, and auth metrics drop
+	// API key names from their labels (nenya_auth_*_total{key_name}).
+	// Intended only for loopback-only listeners — the default listen
+	// address is loopback for exactly this reason. /healthz is always
+	// unauthenticated.
+	TelemetryUnauthenticated bool `json:"telemetry_unauthenticated"`
 }
 
 // wasSet returns true if v is non-nil (field was explicitly set by user).

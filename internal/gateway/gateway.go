@@ -145,6 +145,9 @@ func New(ctx context.Context, cfg config.Config, secrets *config.SecretsConfig, 
 	providers := config.ResolveProviders(&cfg, secrets)
 
 	metrics := infra.NewMetrics()
+	// NENYA-131: with telemetry_unauthenticated the /metrics scrape is
+	// unauthenticated too, so auth metrics must not carry API key names.
+	metrics.SetAuthLabelRedaction(cfg.Server.TelemetryUnauthenticated)
 
 	sm, clientTokenRef := initSecureMem(secrets, logger, cfg.Server.SecureMemoryRequired, metrics)
 	providerKeyTokens := initProviderKeyTokens(sm, secrets, logger, metrics)
@@ -882,6 +885,9 @@ func (g *NenyaGateway) Reload(ctx context.Context, cfg config.Config, secrets *c
 
 	newGW.Stats = g.Stats
 	newGW.Metrics = g.Metrics
+	// The carried-over Metrics instance predates this reload's config, so
+	// re-apply the auth-label redaction decision (NENYA-131).
+	newGW.Metrics.SetAuthLabelRedaction(cfg.Server.TelemetryUnauthenticated)
 	newGW.ThoughtSigCache = g.ThoughtSigCache
 	// Carry the TF-IDF selection memo across reloads: frozen selections are
 	// keyed by content + selection parameters (not the judge engine identity),
