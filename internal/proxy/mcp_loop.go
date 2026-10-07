@@ -477,6 +477,13 @@ func (p *Proxy) mcpIteration(in mcpIterInput) int {
 	}
 
 	buf, err := p.forwardBuffered(in.gw, in.mcpLoopCtx, in.r, in.opts.Targets, working, in.opts.Cooldown, in.opts.TokenCount, in.opts.AgentName, in.opts.MaxRetries, in.opts.ApiKey, in.opts.Canary)
+	// NENYA-135: each loop iteration dispatched one upstream request whose
+	// cl100k estimate was recorded at dispatch — record this iteration's
+	// real usage here (nil-buf safe; before the handled check, so
+	// exfil/canary-blocked buffers with a valid usage payload still pair)
+	// so K estimates pair with K actuals instead of biasing the ratio
+	// toward ~1/K (the terminal paths only add Stats).
+	recordCalibrationFromBuffer(in.gw, mcpCalibrationModel(in.opts.Targets, buf), buf)
 	if handled := p.handleMCPBufferOutcome(in, buf, err); handled {
 		return mcpIterReturn
 	}
@@ -842,7 +849,7 @@ func (p *Proxy) handleBufferedAction(ctx context.Context, gw *gateway.NenyaGatew
 
 func (p *Proxy) handleBufferedStream(ctx context.Context, action upstreamAction, target routing.UpstreamTarget, gw *gateway.NenyaGateway, cooldownDuration time.Duration, agentName string, canary pipeline.CanarResult) (*bufferedSSE, error) {
 	defer action.cancel()
-	buf, err := bufferStreamResponse(ctx, action.resp.Body, gw.Logger)
+	buf, err := bufferStreamResponse(ctx, action.resp.Body, gw.Logger, target.Model)
 	_ = action.resp.Body.Close()
 	if err != nil {
 		gw.AgentState.RecordFailure(target, cooldownDuration)
@@ -1012,35 +1019,67 @@ func (p *Proxy) replayGuardedBuffered(gw *gateway.NenyaGateway, w http.ResponseW
 	replayBufferedResponse(w, buf, gw.Logger)
 }
 
+// mcpCalibrationModel returns the model key for the calibration tracker:
+// the response-reported model when it matches one of the chain's targets
+// (the key the serving dispatch estimate was recorded under — failover
+// chains may serve a different target than [0]), else the primary target's
+// model, else the raw response string. A mismatched key would split each
+// estimate/actual pair across two models and silently pin the ratio at 1.0.
+func mcpCalibrationModel(targets []routing.UpstreamTarget, buf *bufferedSSE) string {
+	if buf != nil && buf.calibrationModel != "" {
+		// Exact key: the serving target the dispatch estimate was
+		// recorded under (failover chains may serve any target).
+		return buf.calibrationModel
+	}
+	responseModel := ""
+	if buf != nil {
+		responseModel = buf.model
+	}
+	if responseModel != "" {
+		for _, t := range targets {
+			if t.Model == responseModel {
+				return responseModel
+			}
+		}
+	}
+	if len(targets) > 0 && targets[0].Model != "" {
+		return targets[0].Model
+	}
+	return responseModel
+}
+
+// recordCalibrationFromBuffer feeds the NENYA-135 tracker from a buffered
+// response without touching Stats (per-iteration pairing; terminal paths
+// own the Stats side via recordMCPUsage).
+func recordCalibrationFromBuffer(gw *gateway.NenyaGateway, model string, buf *bufferedSSE) {
+	if gw == nil || buf == nil || model == "" {
+		return
+	}
+	chunk := buf.usageChunk()
+	if chunk == nil {
+		return
+	}
+	if usage, ok := chunk["usage"].(map[string]interface{}); ok {
+		inputTokens, _, _ := extractTokenCounts(usage)
+		gw.Calibration.RecordActual(model, inputTokens)
+	}
+}
+
 func (p *Proxy) recordMCPUsage(gw *gateway.NenyaGateway, buf *bufferedSSE, agentName string) {
 	if buf == nil || gw == nil || agentName == "" {
 		return
 	}
-	var lastData map[string]interface{}
-	for _, line := range strings.Split(string(buf.rawBytes), "\n") {
-		line = strings.TrimPrefix(line, "data: ")
-		line = strings.TrimSpace(line)
-		if line == "" || line == "[DONE]" {
-			continue
-		}
-		var chunk map[string]interface{}
-		if err := json.Unmarshal([]byte(line), &chunk); err != nil {
-			continue
-		}
-		if _, hasUsage := chunk["usage"]; hasUsage {
-			lastData = chunk
-		}
-	}
-	if lastData == nil {
+	chunk := buf.usageChunk()
+	if chunk == nil {
 		return
 	}
-	usage, ok := lastData["usage"].(map[string]interface{})
+	usage, ok := chunk["usage"].(map[string]interface{})
 	if !ok {
 		return
 	}
 	model := buf.model
 	if model == "" {
-		if m, ok := lastData["model"].(string); ok {
+		if m, ok := chunk["model"].(string); ok {
 			model = m
 		}
 	}

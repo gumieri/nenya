@@ -784,6 +784,13 @@ func (p *Proxy) handleStats(w http.ResponseWriter, redactKeys bool) {
 
 	stats["cost_model"] = costModelStats(gw)
 
+	// NENYA-135: per-model cl100k drift ratios learned from real usage.
+	// Omitted when the loop is disabled or nothing is observed yet, so
+	// scrapers do not see a permanently empty section.
+	if calibration := gw.Calibration.Snapshot(); len(calibration) > 0 {
+		stats["token_calibration"] = calibration
+	}
+
 	if err := json.NewEncoder(w).Encode(stats); err != nil {
 		gw.Logger.Error("failed to encode stats response", "err", err)
 	}

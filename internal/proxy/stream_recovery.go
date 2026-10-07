@@ -161,7 +161,7 @@ func (p *Proxy) buildContinuationMessage(ctx context.Context, gw *gateway.NenyaG
 		return nil, "gave_up_no_content"
 	}
 
-	buffered, err := bufferStreamResponse(ctx, bytes.NewReader(cont.capture.buf.Bytes()), gw.Logger)
+	buffered, err := bufferStreamResponse(ctx, bytes.NewReader(cont.capture.buf.Bytes()), gw.Logger, "")
 	if err != nil {
 		gw.Logger.Warn("stream continuation: failed to parse captured output",
 			"err", err)

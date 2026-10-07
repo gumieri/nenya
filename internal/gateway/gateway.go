@@ -78,10 +78,14 @@ type NenyaGateway struct {
 	BlockedPatterns    []*regexp.Regexp
 	EntropyFilter      *pipeline.EntropyFilter
 	Stats              *infra.UsageTracker
-	Metrics            *infra.Metrics
-	Logger             *slog.Logger
-	AgentState         *routing.AgentState
-	ThoughtSigCache    *infra.ThoughtSignatureCache
+	// Calibration learns per-model cl100k drift ratios from real upstream
+	// usage (NENYA-135); nil means the loop is disabled and estimates are
+	// raw cl100k. Nil-safe methods everywhere.
+	Calibration     *infra.CalibrationTracker
+	Metrics         *infra.Metrics
+	Logger          *slog.Logger
+	AgentState      *routing.AgentState
+	ThoughtSigCache *infra.ThoughtSignatureCache
 	// WindowSummaries caches window-compaction engine summaries so the
 	// compacted head stays stable across turns (NENYA-24).
 	WindowSummaries *pipeline.SummaryCache
@@ -534,6 +538,7 @@ func buildGateway(cfg config.Config, secrets *config.SecretsConfig, secureClient
 		HealthRegistry:     healthRegistry,
 		LatencyTracker:     infra.NewLatencyTracker(),
 		CostTracker:        infra.NewCostTracker(),
+		Calibration:        newCalibrationTracker(&cfg),
 		BillingTracker:     billing.NewBillingTracker(logger, metrics),
 		QuotaFetcher:       billing.NewQuotaFetcher(logger, secureClient),
 		SecureMem:          sm,
@@ -769,6 +774,58 @@ func (g *NenyaGateway) CountTokens(text string) int {
 	return n
 }
 
+// CalibratedCountTokens estimates tokens like CountTokens, then applies the
+// model's learned cl100k drift ratio (NENYA-135): actual prompt tokens
+// observed from the upstream usage payload divided by dispatched cl100k
+// estimates, clamped and gated on a warm-up observation floor. Use this at
+// budget-critical sites that know the target model (context-window
+// trimming, per-target input budgets); raw CountTokens stays for
+// model-agnostic call sites. Unobserved models calibrate to exactly 1.0.
+func (g *NenyaGateway) CalibratedCountTokens(text string, model string) int {
+	n := g.CountTokens(text)
+	if n == 0 {
+		return 0
+	}
+	ratio := g.Calibration.Ratio(model)
+	if ratio == 1.0 || math.IsNaN(ratio) || math.IsInf(ratio, 0) {
+		// Non-finite ratios (programmatically-built configs bypassing
+		// validation) must not poison the conversion below (§7).
+		return n
+	}
+	// math.Round (half away from zero) keeps the calibrated estimate from
+	// silently shrinking on fractional ratios.
+	calibrated := int(math.Round(float64(n) * ratio))
+	if calibrated <= 0 {
+		return n
+	}
+	return calibrated
+}
+
+// newCalibrationTracker builds the calibration tracker from governance
+// config; a disabled loop yields nil (nil-safe everywhere).
+func newCalibrationTracker(cfg *config.Config) *infra.CalibrationTracker {
+	if params := newCalibrationParams(cfg); params != nil {
+		return infra.NewCalibrationTracker(*params)
+	}
+	return nil
+}
+
+// newCalibrationParams resolves the governance knobs into tracker params;
+// nil when the loop is disabled.
+func newCalibrationParams(cfg *config.Config) *infra.CalibrationParams {
+	enabled, minObs, decay, clampMin, clampMax := cfg.Governance.EffectiveTokenCalibrationParams()
+	if !enabled {
+		return nil
+	}
+	return &infra.CalibrationParams{
+		Enabled:         true,
+		MinObservations: minObs,
+		Decay:           decay,
+		ClampMin:        clampMin,
+		ClampMax:        clampMax,
+	}
+}
+
 func (g *NenyaGateway) CountRequestTokens(payload map[string]interface{}) int {
 	msgs, ok := payload["messages"].([]interface{})
 	if !ok {
@@ -962,6 +1019,16 @@ func (g *NenyaGateway) Reload(ctx context.Context, cfg config.Config, secrets *c
 	// frozen head rather than re-freezing once.
 	newGW.WindowHeads = g.WindowHeads
 	newGW.BillingTracker = g.BillingTracker
+	// Calibration is per-process learned state (NENYA-135): carry the
+	// learned sums across SIGHUP like Stats, but honor config — a disabled
+	// loop drops the tracker, changed knobs re-parameterize it
+	// (Reconfigured carries the sums under the new decay/clamps).
+	if newParams := newCalibrationParams(&cfg); newParams != nil {
+		newGW.Calibration = g.Calibration.Reconfigured(*newParams)
+		if newGW.Calibration == nil {
+			newGW.Calibration = infra.NewCalibrationTracker(*newParams)
+		}
+	}
 	newGW.SessionRouter = g.SessionRouter
 	newGW.AgentState.SessionRouter = g.SessionRouter
 	newGW.AgentState.CountersMerge(g.AgentState.CountersCopy())

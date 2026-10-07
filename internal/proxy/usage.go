@@ -33,6 +33,9 @@ func recordChatUsage(gw *gateway.NenyaGateway, model string, usage map[string]in
 	if totalTokens <= 0 {
 		return
 	}
+	// Calibration actuals for the MCP loop are recorded per iteration in
+	// mcpIteration (recordCalibrationFromBuffer) — pairing K dispatch
+	// estimates with K actuals; this helper stays Stats-only.
 	if gw.Stats != nil {
 		gw.Stats.RecordOutput(model, outputTokens)
 	}
@@ -110,6 +113,8 @@ func recordNonStreamingUsage(ctx context.Context, gw *gateway.NenyaGateway, targ
 	// Gemini thoughtsTokenCount, flat reasoning_tokens.
 	reasoningTokens := stream.ExtractReasoningTokens(usage)
 
+	// prompt_tokens is the calibration loop's ground truth (NENYA-135).
+	gw.Calibration.RecordActual(target.Model, inputTokens)
 	recordNonStreamingStats(gw, target.Model, outputTokens, cacheHitTokens, cacheMissTokens, cacheCreationTokens, reasoningTokens)
 	recordNonStreamingMetrics(gw, target, agentName, outputTokens, cacheHitTokens, cacheMissTokens, cacheCreationTokens, reasoningTokens)
 	recordCostAndBilling(ctx, gw, target, inputTokens, cacheHitTokens, outputTokens)

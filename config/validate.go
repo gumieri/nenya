@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"math"
 	"math/rand"
 	"net"
 	"net/http"
@@ -134,6 +135,7 @@ func collectValidationErrors(ctx context.Context, cfg *Config, providers map[str
 	errors = append(errors, validateBootstrapBufferBytes(cfg.Governance.StreamBootstrapBufferBytes)...)
 	errors = append(errors, validateAgentStrategies(cfg.Agents)...)
 	errors = append(errors, validateStickySessionTTL(cfg.Agents)...)
+	errors = append(errors, validateTokenCalibration(cfg.Governance.TokenCalibration)...)
 
 	if pingProviders {
 		errors = append(errors, validateProviders(ctx, providers, cfg.Network, logger)...)
@@ -626,6 +628,34 @@ func validateAgentStrategies(agents map[string]AgentConfig) []string {
 		default:
 			errs = append(errs, fmt.Sprintf("agents[%q].cache_aware: invalid value %q, must be one of off, auto, force", name, agent.CacheAware))
 		}
+	}
+	return errs
+}
+
+// validateTokenCalibration validates the NENYA-135 cl100k drift-correction
+// knobs: the decay must be a strict per-record retain factor in (0, 1) and
+// the clamps must stay ordered and non-negative.
+func validateTokenCalibration(cfg *TokenCalibrationConfig) []string {
+	if cfg == nil {
+		return nil
+	}
+	var errs []string
+	if cfg.MinObservations < 0 {
+		errs = append(errs, fmt.Sprintf("governance.token_calibration.min_observations must be non-negative (0 uses the default), got %d", cfg.MinObservations))
+	}
+	if cfg.Decay != 0 && (math.IsNaN(cfg.Decay) || cfg.Decay <= 0 || cfg.Decay >= 1) {
+		errs = append(errs, fmt.Sprintf("governance.token_calibration.decay must be in (0, 1), got %v", cfg.Decay))
+	}
+	if cfg.RatioClampMin < 0 {
+		errs = append(errs, fmt.Sprintf("governance.token_calibration.ratio_clamp_min must be non-negative, got %v", cfg.RatioClampMin))
+	}
+	if math.IsNaN(cfg.RatioClampMax) || (cfg.RatioClampMax != 0 && cfg.RatioClampMax < cfg.RatioClampMin) {
+		errs = append(errs, fmt.Sprintf("governance.token_calibration.ratio_clamp_max (%v) must be >= ratio_clamp_min (%v)", cfg.RatioClampMax, cfg.RatioClampMin))
+	}
+	// A max below the default min with min unset would be silently dropped
+	// by resolution (clamped to defaults) — reject it explicitly.
+	if cfg.RatioClampMax > 0 && cfg.RatioClampMin == 0 && cfg.RatioClampMax < DefaultTokenCalibrationClampMin {
+		errs = append(errs, fmt.Sprintf("governance.token_calibration.ratio_clamp_max (%v) is below the default ratio_clamp_min (%v); set ratio_clamp_min too", cfg.RatioClampMax, DefaultTokenCalibrationClampMin))
 	}
 	return errs
 }

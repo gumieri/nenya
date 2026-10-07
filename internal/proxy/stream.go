@@ -1132,6 +1132,12 @@ func (p *Proxy) makeUsageCallback(ctx context.Context, gw *gateway.NenyaGateway,
 		completion, prompt := u.CompletionTokens, u.PromptTokens
 		cacheHit, cacheMiss := u.CacheHitTokens, u.CacheMissTokens
 		cacheCreation, reasoning := u.CacheCreationTokens, u.ReasoningTokens
+		// UsageData.PromptTokens is already the per-event delta (the
+		// stream reader clamps against its own last-value tracker), so it
+		// feeds the calibration tracker directly (NENYA-135); deltas sum
+		// to the request's real prompt tokens, matching the aggregate-sum
+		// pairing of the tracker.
+		gw.Calibration.RecordActual(target.Model, prompt)
 		if completion > 0 {
 			gw.Stats.RecordOutput(target.Model, completion)
 			gw.Metrics.RecordTokens("output", target.Model, agentName, target.Provider, completion)

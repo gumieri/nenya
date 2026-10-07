@@ -150,6 +150,26 @@ those values with the verified standard/peak/cached split (standard is the
 off-peak rate; peak is the declared surcharge; cache hits ride the cached
 rate) and rewrote the comment and CHANGELOG wording.
 
+## Estimation drift (NENYA-135)
+
+Cost and budget math both start from token estimates, and the embedded
+cl100k_base vocabulary drifts against non-OpenAI tokenizers — Gemini and
+CJK-heavy DeepSeek/Mistral payloads can differ 20–100% from cl100k. The
+gateway therefore calibrates: post-transform cl100k estimates recorded at
+dispatch and real `prompt_tokens` from upstream usage feed a per-model
+decaying ratio (`governance.token_calibration`), which the dispatch path
+applies to budget-critical estimates (context-window trim, input budget).
+Billed tokens are always the upstream-reported ones; the calibration only
+sharpens the dispatch-path estimates (fewer surprise context-limit
+errors, fewer wrong trims). The `max_cost_per_request` guard and the
+rate limiter still consume the raw pre-pipeline client estimate. Known
+bias: dispatches that fail before a usage payload arrives (network
+errors, non-retryable 4xx) leave estimates unpaired, deflating ratios
+for failure-prone models — inherent to the aggregate-pairing design (the
+context-limit retry path additionally records a second, smaller estimate
+for its summarized re-dispatch). Observed ratios: `/statsz` →
+`token_calibration`.
+
 ## Operator surface
 
 A cost total is explainable without reading code:

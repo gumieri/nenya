@@ -1207,10 +1207,16 @@ func (p *Proxy) prepareAndSend(gw *gateway.NenyaGateway,
 		ThoughtSigCache:    gw.ThoughtSigCache,
 		ExtractContentText: gateway.ExtractContentText,
 		Catalog:            gw.ModelCatalog,
-		CountTokens:        gw.CountTokens,
-		AgentName:          agentName,
-		CacheSalt:          resolveCacheSalt(apiKey, agentName, &gw.Config),
-		Metrics:            gw.Metrics,
+		// Budget-critical estimates (context-window trim, input budget)
+		// apply the model's learned cl100k drift ratio (NENYA-135) — the
+		// ratio learned from PAST traffic, since this request's own actual
+		// is unknown until the upstream answers.
+		CountTokens: func(text string) int {
+			return gw.CalibratedCountTokens(text, target.Model)
+		},
+		AgentName: agentName,
+		CacheSalt: resolveCacheSalt(apiKey, agentName, &gw.Config),
+		Metrics:   gw.Metrics,
 	}
 	transformedBody, _, err := routing.TransformRequestForUpstream(transformDeps, target.Provider, target.URL, payload, target.Model, target.MaxOutput, target.MaxContext, target.Format, target.ReasoningEffort)
 	if err != nil {
@@ -1221,7 +1227,12 @@ func (p *Proxy) prepareAndSend(gw *gateway.NenyaGateway,
 	// Record the input estimate AFTER transform so the value reflects the
 	// payload actually dispatched (post trim/window/bouncer), making
 	// direction="client" − direction="input" the whole-pipeline savings.
-	gw.Metrics.RecordTokens("input", target.Model, agentName, target.Provider, gw.CountTokens(string(transformedBody)))
+	// The RAW cl100k count feeds the calibration loop (NENYA-135) — the
+	// calibrated value would compound the ratio — and the metric keeps the
+	// raw semantics too.
+	inputEstimate := gw.CountTokens(string(transformedBody))
+	gw.Calibration.RecordEstimate(target.Model, inputEstimate)
+	gw.Metrics.RecordTokens("input", target.Model, agentName, target.Provider, inputEstimate)
 
 	req, err := p.buildUpstreamRequest(gw, r.Context(), r.Method, target.URL, transformedBody, target.Provider, target.Model, target.Credential, r.Header)
 	if err != nil {

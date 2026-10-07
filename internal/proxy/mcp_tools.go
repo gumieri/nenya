@@ -44,6 +44,19 @@ type bufferedSSE struct {
 	// (routes to error_kind=exfil_detected instead of exfil_blocked).
 	canaryBlocked    bool
 	reasoningContent string
+	// calibrationModel is the serving target's model (set at construction
+	// by handleBufferedStream): the exact key the dispatch estimate for
+	// this buffer was recorded under (NENYA-135).
+	calibrationModel string
+	// lastUsageChunk caches the final SSE data line carrying a usage
+	// object so the calibration and Stats parsers parse rawBytes once
+	// (NENYA-135; multi-MB buffers must not be re-parsed per consumer).
+	// Contract: usageChunk() must not be called before the egress/canary
+	// guards finish mutating rawBytes; rawBytes is treated as immutable
+	// once parsed (current ordering — guards inside forwardBuffered, both
+	// keeping usage frames — satisfies this).
+	lastUsageChunk map[string]interface{}
+	usageParsed    bool
 }
 
 // mcpToolCall represents a tool call extracted from an upstream LLM response.
@@ -55,6 +68,32 @@ type mcpToolCall struct {
 	// synthetic assistant tool_calls keep the model's signatures inline
 	// (NENYA-51). Nil for providers that do not emit signatures.
 	ExtraContent any
+}
+
+// usageChunk returns the final SSE data line carrying a usage object,
+// parsing rawBytes once and caching the result (nil = no usage present).
+func (b *bufferedSSE) usageChunk() map[string]interface{} {
+	if b.usageParsed {
+		return b.lastUsageChunk
+	}
+	b.usageParsed = true
+	for _, line := range strings.Split(string(b.rawBytes), "\n") {
+		line = strings.TrimPrefix(line, "data: ")
+		line = strings.TrimSpace(line)
+		if line == "" || line == "[DONE]" || !strings.Contains(line, "\"usage\"") {
+			// Prefilter: content deltas are the bulk of a large buffer;
+			// only lines mentioning usage are worth unmarshaling.
+			continue
+		}
+		var chunk map[string]interface{}
+		if err := json.Unmarshal([]byte(line), &chunk); err != nil {
+			continue
+		}
+		if _, hasUsage := chunk["usage"]; hasUsage {
+			b.lastUsageChunk = chunk
+		}
+	}
+	return b.lastUsageChunk
 }
 
 // replayBufferedResponse writes a buffered SSE response to the client.
@@ -339,7 +378,7 @@ func (acc *sseAccumulator) result() *bufferedSSE {
 	}
 }
 
-func bufferStreamResponse(ctx context.Context, r io.Reader, logger *slog.Logger) (*bufferedSSE, error) {
+func bufferStreamResponse(ctx context.Context, r io.Reader, logger *slog.Logger, servingModel string) (*bufferedSSE, error) {
 	acc := newSSEAccumulator(logger)
 	scanner := bufio.NewScanner(r)
 	scanner.Buffer(make([]byte, stream.SSEScannerInitialBuf), stream.SSEScannerMaxBuf)
@@ -360,7 +399,9 @@ func bufferStreamResponse(ctx context.Context, r io.Reader, logger *slog.Logger)
 		}
 		return nil, fmt.Errorf("reading SSE stream: %w", err)
 	}
-	return acc.result(), nil
+	out := acc.result()
+	out.calibrationModel = servingModel
+	return out, nil
 }
 
 // buildOpenAIToolCalls converts internal mcpToolCall structs to OpenAI function call format.

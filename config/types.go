@@ -1036,6 +1036,14 @@ type GovernanceConfig struct {
 	// a negative value disables the floor.
 	MinQuotaCooldownSeconds int   `json:"min_quota_cooldown_seconds,omitempty"`
 	AutoRetryOnContextLimit *bool `json:"auto_retry_on_context_limit,omitempty"`
+	// TokenCalibration configures the cl100k drift-correction loop
+	// (NENYA-135): the gateway learns a per-model actual/estimated token
+	// ratio from real upstream usage payloads and applies it to
+	// budget-critical estimates (context-window trimming, per-target
+	// input budgets). cl100k_base drifts against non-OpenAI tokenizers
+	// (Gemini, CJK-heavy DeepSeek/Mistral payloads), which previously
+	// made trim decisions and cost estimates systematically off.
+	TokenCalibration *TokenCalibrationConfig `json:"token_calibration,omitempty"`
 	// ParamCompat declares parameter-compatibility rules for models that
 	// reject parameters their predecessors accepted (NENYA-32). Rules are
 	// matched by model-ID prefix (config rules first, then the built-in
@@ -1094,6 +1102,68 @@ func (g *GovernanceConfig) EffectiveMaxRetryAttempts() int {
 		return g.MaxRetryAttempts
 	}
 	return 3
+}
+
+// DefaultTokenCalibration* mirror infra.CalibrationDefaults without an
+// import (config sits left of infra in the DAG). Keep in sync.
+const (
+	DefaultTokenCalibrationMinObservations = 50
+	DefaultTokenCalibrationDecay           = 0.99
+	DefaultTokenCalibrationClampMin        = 0.5
+	DefaultTokenCalibrationClampMax        = 4.0
+)
+
+// TokenCalibrationConfig tunes the cl100k drift-correction loop
+// (NENYA-135). The loop is per-process state (each replica calibrates from
+// its own traffic; see docs/HA_STATE_DESIGN.md Class B).
+type TokenCalibrationConfig struct {
+	// Enabled gates the loop (default true). When disabled, estimates are
+	// raw cl100k everywhere and no calibration state is kept.
+	Enabled *bool `json:"enabled,omitempty"`
+	// MinObservations is the decaying estimate mass (in cl100k tokens)
+	// a model must accumulate before its ratio is applied. Below it the
+	// ratio is 1.0. Default 50.
+	MinObservations int `json:"min_observations,omitempty"`
+	// Decay is the per-record exponential decay factor for the token
+	// sums; the effective window is ~1/(1-decay) records. Must be in
+	// (0, 1). Default 0.99 (~100-record window).
+	Decay float64 `json:"decay,omitempty"`
+	// RatioClampMin/Max bound the applied multiplier so a pathological
+	// window cannot blow up budgets or starve context. Defaults 0.5/4.0.
+	RatioClampMin float64 `json:"ratio_clamp_min,omitempty"`
+	RatioClampMax float64 `json:"ratio_clamp_max,omitempty"`
+}
+
+// EffectiveTokenCalibrationParams resolves the calibration knobs with
+// defaults, mirroring infra.CalibrationParams (kept struct-shape-identical;
+// the gateway converts).
+func (g *GovernanceConfig) EffectiveTokenCalibrationParams() (enabled bool, minObs int, decay, clampMin, clampMax float64) {
+	cfg := g.TokenCalibration
+	enabled = cfg == nil || cfg.Enabled == nil || *cfg.Enabled
+	minObs = DefaultTokenCalibrationMinObservations
+	decay = DefaultTokenCalibrationDecay
+	clampMin = DefaultTokenCalibrationClampMin
+	clampMax = DefaultTokenCalibrationClampMax
+	if cfg == nil {
+		return
+	}
+	if cfg.MinObservations > 0 {
+		minObs = cfg.MinObservations
+	}
+	if cfg.Decay > 0 && cfg.Decay < 1 {
+		decay = cfg.Decay
+	}
+	if cfg.RatioClampMin > 0 {
+		clampMin = cfg.RatioClampMin
+	}
+	if cfg.RatioClampMax >= clampMin {
+		clampMax = cfg.RatioClampMax
+	} else if cfg.RatioClampMax == 0 && clampMin > clampMax {
+		// Max unset but min above the default max: floor the max at the
+		// min so the resolved interval is never inverted.
+		clampMax = clampMin
+	}
+	return
 }
 
 // RetryOpaque4xxSet reports whether retry_opaque_4xx was present in a config

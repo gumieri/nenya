@@ -29,7 +29,7 @@ data: {"id":"1","choices":[{"delta":{},"finish_reason":"stop"}],"usage":{"prompt
 data: [DONE]
 `
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	buf, err := bufferStreamResponse(context.Background(), strings.NewReader(sse), logger)
+	buf, err := bufferStreamResponse(context.Background(), strings.NewReader(sse), logger, "")
 	if err != nil {
 		t.Fatalf("bufferStreamResponse failed: %v", err)
 	}
@@ -65,7 +65,7 @@ data: {"id":"1","choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}]}
 data: [DONE]
 `
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	buf, err := bufferStreamResponse(context.Background(), strings.NewReader(sse), logger)
+	buf, err := bufferStreamResponse(context.Background(), strings.NewReader(sse), logger, "")
 	if err != nil {
 		t.Fatalf("bufferStreamResponse failed: %v", err)
 	}
@@ -94,7 +94,7 @@ data: [DONE]
 
 func TestBufferStreamResponse_Empty(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	buf, err := bufferStreamResponse(context.Background(), strings.NewReader(""), logger)
+	buf, err := bufferStreamResponse(context.Background(), strings.NewReader(""), logger, "")
 	if err != nil {
 		t.Fatalf("bufferStreamResponse failed: %v", err)
 	}
@@ -113,7 +113,7 @@ func TestBufferStreamResponse_ContextCancelled(t *testing.T) {
 
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	sse := "data: {\"choices\":[{\"delta\":{\"content\":\"Hello\"}}]}\n\n"
-	_, err := bufferStreamResponse(ctx, strings.NewReader(sse), logger)
+	_, err := bufferStreamResponse(ctx, strings.NewReader(sse), logger, "")
 	if err == nil {
 		t.Fatal("expected error for canceled context")
 	}
@@ -466,7 +466,7 @@ data: {"id":"1","choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}]}
 data: [DONE]
 `
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	buf, err := bufferStreamResponse(context.Background(), strings.NewReader(sse), logger)
+	buf, err := bufferStreamResponse(context.Background(), strings.NewReader(sse), logger, "")
 	if err != nil {
 		t.Fatalf("bufferStreamResponse failed: %v", err)
 	}
@@ -501,7 +501,7 @@ data: {"id":"1","choices":[{"delta":{},"finish_reason":"tool_calls"}]}
 data: [DONE]
 `
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	buf, err := bufferStreamResponse(context.Background(), strings.NewReader(sse), logger)
+	buf, err := bufferStreamResponse(context.Background(), strings.NewReader(sse), logger, "")
 	if err != nil {
 		t.Fatalf("bufferStreamResponse failed: %v", err)
 	}
@@ -609,7 +609,7 @@ func TestBufferStreamResponse_LargeSSELine(t *testing.T) {
 
 	ctx := context.Background()
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	result, err := bufferStreamResponse(ctx, strings.NewReader(input), logger)
+	result, err := bufferStreamResponse(ctx, strings.NewReader(input), logger, "")
 
 	if err != nil {
 		t.Fatalf("expected no error for 100KB SSE line, got %v", err)
@@ -635,7 +635,7 @@ data: [DONE]
 
 	ctx := context.Background()
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	result, err := bufferStreamResponse(ctx, strings.NewReader(input), logger)
+	result, err := bufferStreamResponse(ctx, strings.NewReader(input), logger, "")
 
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -663,7 +663,7 @@ func TestBufferStreamResponse_OverLimitLine(t *testing.T) {
 
 	ctx := context.Background()
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	_, err := bufferStreamResponse(ctx, strings.NewReader(input), logger)
+	_, err := bufferStreamResponse(ctx, strings.NewReader(input), logger, "")
 
 	if err == nil {
 		t.Fatal("expected error for line exceeding SSEScannerMaxBuf")
