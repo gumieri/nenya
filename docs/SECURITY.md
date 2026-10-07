@@ -13,16 +13,18 @@ If you believe you have found a security vulnerability in Nenya, please report i
 
 **Do not** open a public GitHub issue for security vulnerabilities.
 
-Instead, please email the maintainer directly:
-
-- **Email**: `rgumieri@gmail.com` with the subject line `[Nenya Security] <brief description>`
-
-Include as much information as possible:
+**Preferred: GitHub Private Vulnerability Reporting.** Use
+[Report a vulnerability](https://github.com/gumieri/nenya/security/advisories/new)
+on this repository — reports stay private, integrate with CodeQL, and feed
+the coordinated-disclosure advisory/CVE workflow directly. Please include:
 
 - Description of the vulnerability
 - Steps to reproduce
 - Potential impact
 - Any suggested fix (optional)
+
+**Alternative: email** the maintainer at `rgumieri@gmail.com` with the
+subject `[Nenya Security] <brief description>` if you cannot use GitHub.
 
 ## What to Expect
 
