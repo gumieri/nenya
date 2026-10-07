@@ -177,6 +177,10 @@ func (i *InjectionInterceptor) Priority() int { return i.priority }
 // internal faults.)
 func (i *InjectionInterceptor) Strict() bool { return true }
 
+// deterministicSecurity marks tier-1 injection detection for the MCP loop's
+// rescan subset (which runs it with InterceptRequest.DisableEscalation).
+func (i *InjectionInterceptor) deterministicSecurity() {}
+
 // resolveSettings applies per-agent overrides on top of the global config
 // for the canonical agent identity: the proxy-resolved Agent config when
 // present (avoids re-deriving the agent from the wire), otherwise the
@@ -210,6 +214,31 @@ func (i *InjectionInterceptor) CanHandle(ctx context.Context, req *InterceptRequ
 	}
 	enabled, _ := i.resolveSettings(req)
 	return enabled && len(req.Messages) > 0
+}
+
+// bandDecision resolves the two-tier banding for a detection count: act
+// immediately at/above maxScore, skip (pass untouched) below minScore, and
+// escalate in the ambiguous band between them. When the request disables
+// escalation (e.g. the MCP loop's deterministic-only rescan), only the
+// escalation hop is suppressed — the ambiguous band falls back to the
+// deterministic act verdict, while the below-min pass band still passes.
+// skip=true short-circuits Process.
+func (i *InjectionInterceptor) bandDecision(req *InterceptRequest, detections int) (act, skip bool) {
+	if i.escalator == nil {
+		return true, false
+	}
+	switch {
+	case detections >= i.maxScore:
+		return true, false
+	case detections < i.minScore:
+		return false, true
+	case req.DisableEscalation:
+		// Ambiguous band with the classifier suppressed: deterministic
+		// tier-1 act verdict.
+		return true, false
+	default:
+		return false, false
+	}
 }
 
 // Process runs detection in two phases: a read-only pass decides sanitize
@@ -257,18 +286,12 @@ func (i *InjectionInterceptor) Process(ctx context.Context, req *InterceptReques
 		return &InterceptResult{Payload: req.Payload, Skip: true}, nil
 	}
 
-	// Band decision. Legacy single-tier mode (escalator nil): any
-	// detection acts.
-	bandAct := true
-	if i.escalator != nil {
-		switch {
-		case detections >= i.maxScore:
-			bandAct = true
-		case detections < i.minScore:
-			return &InterceptResult{Payload: req.Payload, Skip: true}, nil
-		default:
-			bandAct = false
-		}
+	// Band decision. Nil escalator (escalation disabled in config): legacy
+	// act-on-any bands. DisableEscalation (MCP rescan) collapses only the
+	// ambiguous band to act — below-min still passes (see bandDecision).
+	bandAct, skip := i.bandDecision(req, detections)
+	if skip {
+		return &InterceptResult{Payload: req.Payload, Skip: true}, nil
 	}
 
 	if !bandAct {

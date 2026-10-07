@@ -277,9 +277,12 @@ over-trust is worse than one you understand.
 - **Spotlighting reduces, not eliminates.** Envelopes + preamble lower
   indirect-injection success rates substantially; a sufficiently persuasive
   payload can still influence a model that treats the envelope as content.
-- **MCP multi-turn loops bypass the interceptor chain.** Tool results appended
-  during the loop are not re-scanned by redaction/entropy/injection or the
-  bouncer; spotlighting and the canary/exfil egress defenses do cover them.
+- **MCP multi-turn loop re-scans are deterministic-tier only.** Tool results
+  appended during the loop are re-scanned by the deterministic security
+  subset (redaction, entropy, tier-1 injection — NENYA-136) but not by the
+  token-economy stages or the tier-2 injection escalator; the bouncer never
+  re-runs mid-conversation. Spotlighting and the canary/exfil egress
+  defenses also cover appended content.
 - **Secret redaction is best-effort.** Regex presets and entropy heuristics
   miss novel formats; treat them as friction, not a guarantee.
 - **Fail-closed means downtime.** When a strict security interceptor faults,

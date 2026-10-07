@@ -597,19 +597,27 @@ func guardMCPArgs(gw *gateway.NenyaGateway, logger *slog.Logger, d mcpGuardDispa
 
 // appendMCPResults appends MCP tool results to the request payload's messages array.
 // The results are formatted as OpenAI tool messages with the corresponding tool call IDs.
-func appendMCPResults(payload map[string]any, calls []mcpToolCall, results []*mcp.CallToolResult, assistantMsg map[string]any, settings pipeline.SpotlightSettings, metrics *infra.Metrics) {
+// appendMCPResults appends the assistant tool-call message and one tool
+// result message per call to the payload's conversation, applying
+// spotlight enveloping to result content. It returns the appended message
+// maps (the same maps now referenced by the payload) so the MCP loop can
+// re-scan them through the deterministic security interceptors (NENYA-136).
+func appendMCPResults(payload map[string]any, calls []mcpToolCall, results []*mcp.CallToolResult, assistantMsg map[string]any, settings pipeline.SpotlightSettings, metrics *infra.Metrics) []map[string]any {
 	if len(calls) == 0 || len(results) == 0 {
-		return
+		return nil
 	}
 
 	messages, ok := payload["messages"].([]any)
 	if !ok {
-		return
+		return nil
 	}
+
+	var appended []map[string]any
 
 	// Inject assistant message if provided
 	if assistantMsg != nil {
 		messages = append(messages, assistantMsg)
+		appended = append(appended, assistantMsg)
 	}
 
 	var toolResults []any
@@ -631,11 +639,13 @@ func appendMCPResults(payload map[string]any, calls []mcpToolCall, results []*mc
 			metrics.RecordSpotlighted("mcp:" + server)
 		}
 
-		toolResults = append(toolResults, map[string]any{
+		toolResult := map[string]any{
 			"role":         "tool",
 			"tool_call_id": call.ID,
 			"content":      content,
-		})
+		}
+		toolResults = append(toolResults, toolResult)
+		appended = append(appended, toolResult)
 	}
 
 	newMessages := make([]any, 0, util.AddCap(len(messages), len(toolResults)))
@@ -643,4 +653,5 @@ func appendMCPResults(payload map[string]any, calls []mcpToolCall, results []*mc
 	newMessages = append(newMessages, toolResults...)
 
 	payload["messages"] = newMessages
+	return appended
 }

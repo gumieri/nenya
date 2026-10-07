@@ -467,13 +467,13 @@ func (p *Proxy) mcpIteration(in mcpIterInput) int {
 	(*in.actualIter)++
 
 	working := make(map[string]interface{})
-	if err := json.Unmarshal(*in.originalPayload, &working); err != nil {
+	if in.iteration == 0 {
+		// Iteration 0 re-dispatches the already-pipelined request payload
+		// verbatim; unmarshaling the original bytes first would be wasted.
+		working = in.opts.Payload
+	} else if err := json.Unmarshal(*in.originalPayload, &working); err != nil {
 		in.gw.Logger.Error("failed to unmarshal payload for MCP iteration", "err", err)
 		return mcpIterStop
-	}
-
-	if in.iteration == 0 {
-		working = in.opts.Payload
 	}
 
 	buf, err := p.forwardBuffered(in.gw, in.mcpLoopCtx, in.r, in.opts.Targets, working, in.opts.Cooldown, in.opts.TokenCount, in.opts.AgentName, in.opts.MaxRetries, in.opts.ApiKey, in.opts.Canary)
@@ -512,20 +512,14 @@ func (p *Proxy) mcpIteration(in mcpIterInput) int {
 			"iteration", in.iteration+1,
 			"agent", in.opts.AgentName)
 
-		results := executeMCPCalls(in.mcpLoopCtx, mcpCalls, in.gw, in.opts.AgentName, in.opts.Canary, in.opts.Screen)
-		mcpAssistantMsg := map[string]any{
-			"role":       "assistant",
-			"content":    nil,
-			"tool_calls": buildOpenAIToolCalls(mcpCalls),
+		if !p.executeAndAppendMCPResults(in, working, mcpCalls, buf) {
+			return mcpIterReturn
 		}
-		if buf.reasoningContent != "" {
-			mcpAssistantMsg["reasoning_content"] = buf.reasoningContent
-		}
-		appendMCPResults(working, mcpCalls, results, mcpAssistantMsg, spotlightSettingsFor(&in.gw.Config, in.opts.Agent), in.gw.Metrics)
 
 		updatedPayload, err := json.Marshal(working)
 		if err != nil {
 			in.gw.Logger.Error("failed to marshal updated payload for MCP loop", "err", err)
+			p.recordMCPUsage(in.gw, buf, in.opts.AgentName)
 			p.replayGuardedBuffered(in.gw, in.w, buf, in.opts.AgentName)
 			return mcpIterReturn
 		}
@@ -543,6 +537,104 @@ func (p *Proxy) mcpIteration(in mcpIterInput) int {
 
 	*in.lastBuf = buf
 	return mcpIterContinue
+}
+
+// executeAndAppendMCPResults executes the intercepted MCP tool calls,
+// appends their results (assistant tool_calls message + per-call tool
+// messages) to the working conversation, and re-scans the appended content
+// through the deterministic security interceptors (NENYA-136). Returns
+// false when the loop must stop: the rescan was rejected or failed, and the
+// structured client error (or deadline replay) has already been written.
+// The iteration's buffered usage is recorded on that abort path so /statsz
+// does not undercount.
+func (p *Proxy) executeAndAppendMCPResults(in mcpIterInput, working map[string]any, mcpCalls []mcpToolCall, buf *bufferedSSE) bool {
+	results := executeMCPCalls(in.mcpLoopCtx, mcpCalls, in.gw, in.opts.AgentName, in.opts.Canary, in.opts.Screen)
+	mcpAssistantMsg := map[string]any{
+		"role":       "assistant",
+		"content":    nil,
+		"tool_calls": buildOpenAIToolCalls(mcpCalls),
+	}
+	if buf.reasoningContent != "" {
+		mcpAssistantMsg["reasoning_content"] = buf.reasoningContent
+	}
+	appended := appendMCPResults(working, mcpCalls, results, mcpAssistantMsg, spotlightSettingsFor(&in.gw.Config, in.opts.Agent), in.gw.Metrics)
+	if appended == nil {
+		// appendMCPResults only returns nil without appending when
+		// payload["messages"] lost its []any shape — the tool results
+		// (and the assistant tool_calls) were dropped entirely.
+		in.gw.Logger.Warn("MCP loop: payload messages lost []any shape; tool results dropped before re-dispatch",
+			"iteration", in.iteration, "agent", in.opts.AgentName, "mcp_calls", len(mcpCalls))
+	}
+	if rescanErr := p.rescanAppendedMessages(in, working, appended); rescanErr != nil {
+		// The iteration's upstream response was successfully buffered but
+		// never reaches the client from this path — still count its usage.
+		p.recordMCPUsage(in.gw, buf, in.opts.AgentName)
+		return false
+	}
+	return true
+}
+
+// rescanAppendedMessages runs the deterministic security subset of the
+// interceptor chain (redact, entropy, tier-1 injection — NENYA-136) over the
+// tool-result messages the MCP loop just appended, which never pass through
+// the request-time chain. Interceptors mutate the appended maps in place, so
+// the next marshaled payload carries the scrubbed content; the conversation
+// prefix is untouched, keeping the upstream prompt-cache prefix stable. The
+// injection interceptor runs with DisableEscalation: the ambiguous detection
+// band falls back to the deterministic act verdict and never opens an LLM
+// classifier hop mid-loop (the below-min pass band still passes). One
+// request-path signal is intentionally dropped: entropy redaction's
+// EntropyRedacted egress-screen trigger is recorded on the throwaway
+// InterceptRequest and does not reach the response-path screen — the content
+// itself is still scrubbed.
+//
+// Failure semantics mirror the request-path chain: a policy rejection
+// (strict injection) or a strict operational failure is rendered to the
+// client by writePipelineRejection and returned so the caller aborts the
+// loop. handleRescanFailure renders the failure: a bare context error
+// (client gone / loop deadline) replays the last good response or writes a
+// timeout; real pipeline errors render via writePipelineRejection. A nil
+// chain (gateway built without one) fails open — the pre-NENYA-136 behavior.
+func (p *Proxy) rescanAppendedMessages(in mcpIterInput, working map[string]any, appended []map[string]any) error {
+	chain := in.gw.MCPSecurityChain
+	if chain == nil || len(appended) == 0 {
+		return nil
+	}
+	// Agent: opts.Agent is a value with the documented zero-value-for-direct-
+	// routes convention (forwardOptions). The injection interceptor treats a
+	// zero Agent identically to nil (its overrides are all nil), so pointing
+	// at the value is safe here.
+	req := &pipeline.InterceptRequest{
+		Payload:           working,
+		Messages:          appended,
+		AgentName:         in.opts.AgentName,
+		Agent:             &in.opts.Agent,
+		DisableEscalation: true,
+	}
+	if _, err := chain.Execute(in.mcpLoopCtx, req); err != nil {
+		p.handleRescanFailure(in, err)
+		return err
+	}
+	return nil
+}
+
+// handleRescanFailure renders a rescan failure to the client. A context
+// cancellation/deadline is checked first — Execute wraps interceptor
+// ctx.Err() in a StrictError, but it must not render as a 503; it mirrors
+// the loop's own deadline path (replay the last good response or write a
+// timeout) so the client never gets a silent empty response. Real pipeline
+// rejections (strict injection) and strict operational faults render via
+// writePipelineRejection.
+func (p *Proxy) handleRescanFailure(in mcpIterInput, err error) {
+	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+		if in.lastBuf != nil && *in.lastBuf != nil {
+			p.replayGuardedBuffered(in.gw, in.w, *in.lastBuf, in.opts.AgentName)
+			return
+		}
+		writeSSEError(in.w, http.StatusRequestTimeout, "MCP loop deadline exceeded")
+		return
+	}
+	writePipelineRejection(in.gw, in.w, err)
 }
 
 func (p *Proxy) forwardBuffered(gw *gateway.NenyaGateway,

@@ -20,6 +20,9 @@ Client Request (model: "build")
   │   ├─ No tool_calls → replay to client, done
   │   ├─ Client tool_calls only → replay to client, done
   │   ├─ MCP tool_calls → execute via MCP client, append results, re-send
+  │   │   ├─ appended tool results are re-scanned through the deterministic
+  │   │   │  security interceptors before each re-dispatch (redact / entropy
+  │   │   │  / tier-1 injection — NENYA-136)
   │   │   └─ Loop (up to max_iterations)
   │   └─ Max iterations → replay last response
   ├─ Stream response to client

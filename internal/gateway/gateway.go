@@ -119,8 +119,14 @@ type NenyaGateway struct {
 	ProviderKeyTokens  map[string]security.SecureToken
 	LocalEngineManager *local.EngineManager
 	InterceptorChain   *pipeline.InterceptorChain
-	SessionRouter      *routing.SessionRouter
-	tokMu              sync.RWMutex
+	// MCPSecurityChain is the deterministic security subset of
+	// InterceptorChain (redact/entropy/injection tier-1): re-run by the MCP
+	// multi-turn loop on tool results appended mid-conversation, which never
+	// pass through the request-time chain (NENYA-136). Nil when the main
+	// chain was never built.
+	MCPSecurityChain *pipeline.InterceptorChain
+	SessionRouter    *routing.SessionRouter
+	tokMu            sync.RWMutex
 }
 
 // New creates a new NenyaGateway with the given configuration, secrets,

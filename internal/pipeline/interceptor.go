@@ -87,6 +87,15 @@ type InterceptRequest struct {
 	// work. The history-wide window compaction is bypassed separately in the
 	// proxy (applyWindowStage). Security interceptors always run.
 	SkipTFIDFPrune bool
+
+	// DisableEscalation suppresses the injection interceptor's tier-2 LLM
+	// escalation for this request: the ambiguous detection band falls back
+	// to the deterministic act verdict instead of opening a classifier hop,
+	// while the below-min pass band still passes. Set by surfaces that
+	// rescan appended content mid-conversation (the MCP loop's tool-result
+	// re-scan): the escalator is a request-time budget surface and must not
+	// open LLM classifier hops inside the tool loop.
+	DisableEscalation bool
 }
 
 // AgentNameFor returns the canonical agent name for an intercepted
@@ -288,6 +297,47 @@ func (c *InterceptorChain) Execute(ctx context.Context, req *InterceptRequest) (
 // List returns all registered interceptors.
 func (c *InterceptorChain) List() []Interceptor {
 	return c.interceptors
+}
+
+// deterministicSecurityInterceptor marks the fail-closed deterministic
+// security interceptors that make up the MCP loop's rescan subset
+// (redaction, entropy, tier-1 injection). Membership is opt-in by
+// construction: a new security stage only joins the rescan by implementing
+// the marker — review every new strict security interceptor for marker
+// membership (spotlighting is a deliberate non-member: the MCP path
+// spotlights results itself before the rescan runs).
+type deterministicSecurityInterceptor interface {
+	Interceptor
+	deterministicSecurity()
+}
+
+// DeterministicSecuritySubset returns a new chain containing only the
+// fail-closed deterministic security interceptors — redaction, entropy
+// redaction, and tier-1 injection detection — preserving their relative
+// order, logger, metrics, and strict mode. It exists for surfaces that
+// append content to an already-intercepted conversation without re-running
+// the full chain (the MCP multi-turn loop's tool-result re-scan): token
+// economy stages (TF-IDF, bouncer) must not re-run, but appended content
+// still gets the same deterministic scrubbing as client-supplied history.
+// The injection interceptor runs in deterministic-only mode there: callers
+// set InterceptRequest.DisableEscalation so no LLM classifier hop opens
+// mid-loop. The returned chain shares interceptor instances with the parent
+// — including its metrics, so rescan invocations count under the same
+// nenya_interceptor_* series as request-path invocations (accepted: labels
+// stay per-interceptor, not per-source). Safe for concurrent Execute calls
+// exactly like the parent; nil-safe (returns an empty chain).
+func (c *InterceptorChain) DeterministicSecuritySubset() *InterceptorChain {
+	if c == nil {
+		return NewInterceptorChainWithMetrics(nil, nil)
+	}
+	sub := NewInterceptorChainWithMetrics(c.logger, c.metrics)
+	sub.strict = c.strict
+	for _, interceptor := range c.interceptors {
+		if _, ok := interceptor.(deterministicSecurityInterceptor); ok {
+			sub.interceptors = append(sub.interceptors, interceptor)
+		}
+	}
+	return sub
 }
 
 // interceptorStrict reports whether the interceptor opted into

@@ -347,6 +347,7 @@ func run(logger *slog.Logger, cfg *config.Config, secrets *config.SecretsConfig,
 		return 1
 	}
 	gw.InterceptorChain = chain
+	gw.MCPSecurityChain = chain.DeterministicSecuritySubset()
 	gw.WindowFidelityGate = gates.windowFidelity
 	gw.EgressScreenJudge = gates.egressScreen
 
@@ -423,6 +424,9 @@ func buildInterceptorChain(gw *gateway.NenyaGateway, cfg *config.Config, logger 
 	}
 	chain := pipeline.NewInterceptorChain(logger)
 
+	// Redact registration is gated on bouncer.enabled (pre-existing): with
+	// the bouncer disabled, MCPSecurityChain (NENYA-136) carries no redact
+	// stage and MCP tool-result rescans run entropy/injection only.
 	if enabled := (cfg.Bouncer.Enabled != nil && *cfg.Bouncer.Enabled); enabled && len(gw.SecretPatterns) > 0 {
 		chain.Register(pipeline.NewRedactInterceptor(true, gw.SecretPatterns, cfg.Bouncer.RedactionLabel, gw.Metrics))
 	}
@@ -717,6 +721,7 @@ func reloadConfig(ctx context.Context, p *proxy.Proxy, paths configPaths, logger
 		os.Exit(1)
 	}
 	newGW.InterceptorChain = newChain
+	newGW.MCPSecurityChain = newChain.DeterministicSecuritySubset()
 	newGW.WindowFidelityGate = gates.windowFidelity
 	newGW.EgressScreenJudge = gates.egressScreen
 	p.StoreGateway(newGW)

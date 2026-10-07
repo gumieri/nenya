@@ -156,7 +156,7 @@ type StrictInterceptor interface {
 - `RejectError` (`{Err, Kind, Message}`) — an enforcement _decision_ (e.g. strict injection rejection, bouncer fail-closed). Rendered as 403 with the producer's `error_kind`. Never carries the interceptor error metric (decisions are not faults).
 - `StrictError` (`{Err, Kind, Interceptor, Message}`) — an operational failure under fail-closed semantics. Rendered as 503 `internal_error`; the interceptor error metric IS recorded (faults must be observable).
 
-**Known limitation:** MCP multi-turn loops append tool-result messages to the conversation and re-dispatch WITHOUT re-running the interceptor chain — appended content is covered by spotlighting (applied by the MCP path itself) and the canary/exfil egress defenses, but not by redaction/entropy/injection detection or bouncer fail-closed.
+**Known limitation (closed by NENYA-136):** MCP multi-turn loops append tool-result messages to the conversation and re-dispatch. Those appended messages never pass through the request-time interceptor chain, so the loop re-scans them through the deterministic security subset (`gw.MCPSecurityChain`: redact, entropy, tier-1 injection) before every re-dispatch — `rescanAppendedMessages` in `internal/proxy/mcp_loop.go`. Spotlighting (applied by the MCP path itself) and the canary/exfil egress defenses cover the same surface; token-economy stages (TF-IDF, bouncer) deliberately do not re-run. Strict-mode injection rejections and strict operational failures abort the loop with a structured client error, matching the request-path fail-closed semantics.
 
 ### InterceptRequest / InterceptResult
 
@@ -395,7 +395,7 @@ For streaming requests, `writeGatewayStreamError` (`internal/proxy/error_normali
 
 ## MCP Multi-Turn Tool Call Flow
 
-When an agent has MCP servers configured, the LLM may respond with `tool_calls` targeting MCP tools. Nenya intercepts these locally. Every dispatch (model-initiated, auto-search, auto-save) passes the **argument guard** first — schema validation, argument size cap, and URL destination policy (`governance.mcp_guard`) — and the canary tripwire scans tool-call arguments before they leave. Loop-appended tool results are covered by spotlighting and the egress defenses, but not re-run through the interceptor chain (see [INJECTION_DEFENSE.md](INJECTION_DEFENSE.md#honest-limitations)):
+When an agent has MCP servers configured, the LLM may respond with `tool_calls` targeting MCP tools. Nenya intercepts these locally. Every dispatch (model-initiated, auto-search, auto-save) passes the **argument guard** first — schema validation, argument size cap, and URL destination policy (`governance.mcp_guard`) — and the canary tripwire scans tool-call arguments before they leave. Loop-appended tool results are covered by spotlighting and the egress defenses, and are re-scanned through the deterministic security interceptors (redact/entropy/tier-1 injection) before each re-dispatch (see [INJECTION_DEFENSE.md](INJECTION_DEFENSE.md#honest-limitations)):
 
 ```
 Request with MCP tools injected
