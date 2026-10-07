@@ -278,25 +278,25 @@ func setupLoggerFromConfig(cfg *config.Config, verbose bool) *slog.Logger {
 	return infra.SetupLoggerWithLevel(level)
 }
 
-func applyListenAddrFromEnv(cfg *config.Config, logger *slog.Logger) {
+func applyListenAddrFromEnv(cfg *config.Config, logger *slog.Logger) bool {
 	port := strings.TrimSpace(os.Getenv("PORT"))
 	host := strings.TrimSpace(os.Getenv("HOST"))
 
 	if port == "" && host == "" {
-		return
+		return false
 	}
 
 	if port == "" {
 		if host != "" {
 			logger.Debug("HOST set but PORT unset, ignoring HOST", "HOST", host)
 		}
-		return
+		return false
 	}
 
 	p, err := net.LookupPort("tcp", port)
 	if err != nil || p < 0 || p > 65535 {
 		logger.Warn("invalid PORT value, ignoring", "PORT", port, "err", err)
-		return
+		return false
 	}
 
 	addr := ":" + port
@@ -304,13 +304,20 @@ func applyListenAddrFromEnv(cfg *config.Config, logger *slog.Logger) {
 		addr = net.JoinHostPort(host, port)
 	}
 	cfg.Server.ListenAddr = addr
+	return true
 }
 
 func run(logger *slog.Logger, cfg *config.Config, secrets *config.SecretsConfig, paths configPaths) int {
 	startupCtx, startupCancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer startupCancel()
 
-	applyListenAddrFromEnv(cfg, logger)
+	if prevAddr := cfg.Server.ListenAddr; applyListenAddrFromEnv(cfg, logger) && cfg.Server.ListenAddr != prevAddr {
+		// HOST/PORT override server.listen_addr after config validation, so
+		// the NENYA-131 telemetry-exposure warning must be re-evaluated
+		// against the effective address. Skipped when the override matches
+		// the config-file value (validation already covered it).
+		config.WarnTelemetryExposure(cfg, logger)
+	}
 
 	gw := gateway.New(startupCtx, *cfg, secrets, logger)
 

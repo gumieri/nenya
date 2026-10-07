@@ -170,7 +170,7 @@ flowchart TD
 ```
 
 Flow notes:
-- `/v1/*` endpoints require client bearer auth; `/healthz`, `/statsz`, `/metrics` do not.
+- `/v1/*` endpoints require client bearer auth; `/statsz` and `/metrics` require any key (read-only suffices) unless `server.telemetry_unauthenticated` is set; `/healthz` does not.
 - Pipeline failures degrade gracefully and forward the request instead of returning a 500.
 - MCP-enabled agents can run local/remote tools without exposing MCP complexity to the client.
 - Sticky strategy pins a session (agent + system prompt + first user message) to one provider/model, keeping provider-side prefix caches warm across turns.
@@ -264,9 +264,9 @@ API keys support **RBAC enforcement** — agent scoping, endpoint allowlists, ro
 | `POST/GET /v1/batches` | Bearer + RBAC | Batch API operations |
 | `POST /proxy/{provider}/*` | Bearer + RBAC | Arbitrary provider endpoint passthrough (all HTTP methods, SSE streaming) |
 | `GET /healthz` | None | Engine health probe |
-| `GET /statsz` | None | Token usage, circuit breaker state, MCP server status |
-| `GET /metrics` | None | Prometheus-compatible metrics |
-| `GET /debug/pprof/*` | Bearer | Go profiling endpoints (disabled by default, see `debug.pprof_enabled`) |
+| `GET /statsz` | Bearer (read-only+) | Token usage, circuit breaker state, MCP server status (`None` only with `telemetry_unauthenticated`) |
+| `GET /metrics` | Bearer (read-only+) | Prometheus-compatible metrics (`None` only with `telemetry_unauthenticated`) |
+| `GET /debug/pprof/*` | Bearer (user+) | Go profiling endpoints (disabled by default, see `debug.pprof_enabled`) |
 
 See [`docs/PASSTHROUGH_PROXY.md`](docs/PASSTHROUGH_PROXY.md) for detailed passthrough proxy usage.
 

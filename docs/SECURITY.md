@@ -61,9 +61,26 @@ The gateway exposes Prometheus counters for authentication events:
 
 | Metric                     | Labels                                                                        | Description                    |
 | -------------------------- | ----------------------------------------------------------------------------- | ------------------------------ |
-| `nenya_auth_success_total` | `type` (client_token, api_key), `key` (name)                                  | Successful authentications     |
+| `nenya_auth_success_total` | `type` (client_token, api_key), `key_name` (key name, or `redacted`)          | Successful authentications     |
 | `nenya_auth_failure_total` | `type` (missing_header, client_token_mismatch, api_key_mismatch)              | Failed authentication attempts |
-| `nenya_auth_denials_total` | `reason` (agent_not_allowed, endpoint_not_allowed, key_disabled, key_expired) | RBAC authorization denials     |
+| `nenya_auth_denials_total` | `key_name` (key name, or `redacted`; budget denials carry the agent name), `reason` (agent, endpoint, disabled, expired, rate_limited, key_budget, provider_budget, payload_too_large, invalid_body) | RBAC authorization denials     |
+
+With `server.telemetry_unauthenticated` set, `key_name` labels are replaced
+by the constant `redacted` so an unauthenticated `/metrics` scrape cannot
+enumerate API key names (NENYA-131).
+
+### Telemetry Endpoints
+
+`/statsz` and `/metrics` require authentication (any role — `read-only`
+suffices for monitoring scrapers) and `/statsz` reports per-key usage keyed by
+key name, so they must not be exposed unauthenticated (NENYA-131). The default
+listen address is loopback (`127.0.0.1:8080`) for the same reason. Operators
+who need the legacy behavior (e.g. a scraping daemon on a loopback-only
+listener) can set `server.telemetry_unauthenticated: true` — in that mode
+`/statsz` omits the per-key section entirely and auth metrics replace
+`key_name` label values with `redacted`, so key names never leave the process
+(a startup warning fires if the flag is combined with a non-loopback
+listener). `/healthz` is always unauthenticated by design.
 
 ### Advisory Judgment Layer and Egress Screen
 
@@ -106,7 +123,7 @@ Nenya enforces per-API key access controls via RBAC. API keys defined in `secret
 
 - `admin` — Unrestricted access to all agents and endpoints (bypasses RBAC checks)
 - `user` — Access to configured agents and all non-admin endpoints
-- `read-only` — Read-only access: GET requests only (e.g., `/v1/models`, `/healthz`, `/statsz`, `/metrics`)
+- `read-only` — Monitoring role: GET requests on `/v1/models`, `/healthz`, `/statsz`, `/metrics` only (path-scoped since NENYA-131 — other GET surfaces such as `/proxy/*` and `/debug/pprof` require `user` or `admin`). When combined with other roles on one key, the read-only scoping wins (deny-wins)
 
 **Agent Scoping:**
 

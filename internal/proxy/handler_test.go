@@ -57,8 +57,12 @@ func TestServeHTTP_Healthz_NoAuth(t *testing.T) {
 	}
 }
 
-func TestServeHTTP_Statsz_PublicAccess(t *testing.T) {
-	p, _ := newTestProxy(t)
+func TestServeHTTP_Statsz_TelemetryUnauthenticated(t *testing.T) {
+	// NENYA-131: unauthenticated access now requires the explicit
+	// server.telemetry_unauthenticated opt-out (loopback-only listeners).
+	// Header note: NewTestRequest pre-sets the primary token; the explicit
+	// empty Set clears it, so this exercises the truly unauthenticated path.
+	p := newTelemetryProxy(t, true)
 	req := testutil.NewTestRequest(t, http.MethodGet, "/statsz", nil)
 	req.Header.Set("Authorization", "")
 	rec := httptest.NewRecorder()
@@ -186,6 +190,9 @@ func TestServeHTTP_Models_WrongMethod(t *testing.T) {
 func TestServeHTTP_Metrics_ValidAuth(t *testing.T) {
 	p, _ := newTestProxy(t)
 	req := testutil.NewTestRequest(t, http.MethodGet, "/metrics", nil)
+	// /metrics requires authentication by default (NENYA-131); the primary
+	// client token authorizes as the synthetic admin key.
+	req.Header.Set("Authorization", "Bearer test-token")
 	rec := httptest.NewRecorder()
 	p.ServeHTTP(rec, req)
 

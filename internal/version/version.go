@@ -11,5 +11,7 @@ var BuildTime = "unknown"
 
 // ContractVersion is the version of the external consumer contract documented
 // in CONTRACT.md. It is bumped only on breaking changes to the contract
-// surface; see CONTRACT.md §2.
-const ContractVersion = 1
+// surface; see CONTRACT.md §2. Version 2: /statsz and /metrics require
+// authentication (NENYA-131); /healthz — the surface consumers MUST poll —
+// is unchanged.
+const ContractVersion = 2

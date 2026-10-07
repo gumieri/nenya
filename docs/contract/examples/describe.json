@@ -1,5 +1,5 @@
 {
-  "contract_version": 1,
+  "contract_version": 2,
   "version": {
     "version": "0.15.0",
     "commit": "a80e0cf8ce05176fc1159d03d0fc5685c934ebaa",
@@ -25,7 +25,7 @@
     ]
   },
   "config": {
-    "server": { "listen_addr": ":8080" },
+    "server": { "listen_addr": "127.0.0.1:8080" },
     "governance": { "injection": { "enabled": true } }
   },
   "providers": {

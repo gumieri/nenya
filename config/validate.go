@@ -113,6 +113,7 @@ func collectValidationErrors(ctx context.Context, cfg *Config, providers map[str
 	errors = append(errors, validateTfidfRerankConfig(cfg)...)
 	errors = append(errors, validateSpotlightRiskTiersConfig(cfg)...)
 	errors = append(errors, validateSelfLoopGuard(cfg)...)
+	errors = append(errors, validateTelemetryExposure(cfg, logger)...)
 	errors = append(errors, validateExfilGuardConfig(cfg)...)
 	errors = append(errors, validateCanaryConfig(cfg)...)
 	errors = append(errors, validateMCPGuardConfig(cfg)...)
@@ -284,6 +285,56 @@ func listenHostMatchesSelfHost(targetHost, listenHost string) bool {
 func isGatewayPath(p string) bool {
 	return p == "/v1" || p == "/proxy" ||
 		strings.HasPrefix(p, "/v1/") || strings.HasPrefix(p, "/proxy/")
+}
+
+// WarnTelemetryExposure re-checks the NENYA-131 telemetry exposure warning
+// against the effective listen address. HOST/PORT override server.listen_addr
+// after config validation runs, so callers that apply the override must call
+// this afterwards.
+//
+// Limitation: on SIGHUP reload the check evaluates the reloaded config's
+// listen_addr, not the address bound at startup — an env override
+// (HOST/PORT) is not visible to the reload path. Operators overriding the
+// listener via env should keep the config file consistent, or rely on the
+// startup warning.
+func WarnTelemetryExposure(cfg *Config, logger *slog.Logger) {
+	validateTelemetryExposure(cfg, logger)
+}
+
+// validateTelemetryExposure warns (never errors) when
+// server.telemetry_unauthenticated is combined with a non-loopback listener
+// (NENYA-131): the unauthenticated /statsz and /metrics surfaces would be
+// reachable from the network. A warning, not an error, because the operator
+// may legitimately front the port with a firewall or network policy.
+func validateTelemetryExposure(cfg *Config, logger *slog.Logger) []string {
+	if !cfg.Server.TelemetryUnauthenticated {
+		return nil
+	}
+	host, port, ok := splitListenAddr(cfg.Server.ListenAddr)
+	if !ok {
+		return nil
+	}
+	// Malformed ports are rejected at startup; stay silent like the
+	// self-loop guard does for unparseable addresses.
+	if _, err := strconv.Atoi(port); err != nil {
+		return nil
+	}
+	loopback := false
+	switch strings.ToLower(host) {
+	case "localhost":
+		loopback = true
+	default:
+		if ip := net.ParseIP(host); ip != nil {
+			loopback = ip.IsLoopback()
+		}
+	}
+	if loopback {
+		return nil
+	}
+	logger.Warn("telemetry_unauthenticated exposes /statsz and /metrics without authentication on a non-loopback listener",
+		"listen_addr", cfg.Server.ListenAddr,
+		"hint", "bind 127.0.0.1 or rely on an external network policy")
+	return nil
 }
 
 // validateSelfLoopGuard rejects engine and judgment targets whose URL

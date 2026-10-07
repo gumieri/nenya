@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"net/http"
 	"slices"
 
 	"github.com/nenya/config"
@@ -128,8 +129,18 @@ func AuthorizeEndpoint(apiKey *config.ApiKey, method, path string) bool {
 	}
 
 	for _, roleStr := range apiKey.Roles {
-		if Role(roleStr) == RoleReadOnly && method != "GET" {
-			return false
+		if Role(roleStr) == RoleReadOnly {
+			// Read-only is a monitoring role scoped to the documented GET
+			// surfaces (NENYA-131): unrestricted GET access would also
+			// authorize /proxy/* passthrough reads and /debug/pprof.
+			if method != http.MethodGet {
+				return false
+			}
+			switch path {
+			case "/healthz", "/statsz", "/metrics", "/v1/models":
+			default:
+				return false
+			}
 		}
 	}
 	return true

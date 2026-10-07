@@ -74,7 +74,7 @@ release without a contract bump:
 
 ## 2. Contract versioning
 
-- The contract is identified by an integer `contract_version`, currently **`1`**.
+- The contract is identified by an integer `contract_version`, currently **`2`**.
 - It is surfaced by `nenya version --json` and `nenya describe --json`
   (`contract_version` field), and **target** as `nenya --contract-version`.
 - Additive changes (new fields, new commands) keep the same version.
@@ -519,18 +519,26 @@ restart for config edits.
 
 ## 9. HTTP surface for consumers
 
-Default listen address `:8080` (override via `server.listen_addr`, `PORT`, or
-`HOST`+`PORT`).
+Default listen address `127.0.0.1:8080` (override via `server.listen_addr`,
+`PORT`, or `HOST`+`PORT`).
 
 ### 9.1 Unauthenticated
 
 | Path | Purpose |
 |------|---------|
 | `GET /healthz` | Health probe. **Consumers MUST poll `/healthz`** (not `/health`), no auth. |
-| `GET /statsz` | Operator view (not contract shape). |
-| `GET /metrics` | Prometheus exposition. |
 
 ### 9.2 Authenticated
+
+`GET /statsz` (operator view, not contract shape) and `GET /metrics`
+(Prometheus exposition) require authentication — any role; `read-only`
+suffices. Since contract version 2 (NENYA-131) these endpoints are no longer
+unauthenticated. Operators MAY restore the legacy unauthenticated behavior
+with `server.telemetry_unauthenticated: true` — intended only for
+loopback-only listeners; in that mode `/statsz` omits per-key usage
+(`key_usage` becomes `{"providers": {...}, "keys_redacted": true}` instead of
+`{"keys": {...}, "providers": {...}}`) and auth metrics drop API key names
+from their `key_name` labels.
 
 All `/v1/*` and `/proxy/*` routes require
 `Authorization: Bearer <client_token|api_key_token>`. API keys additionally
