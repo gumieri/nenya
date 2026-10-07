@@ -77,7 +77,7 @@ type PreferredAccountSelector interface {
 	SelectCredentialForPreferredAccount(ctx context.Context, provider, model, preferredAccountID string) (credential, accountID string, ok bool)
 }
 
-// AgentState tracks per-model request counters, circuit breaker state,
+// AgentState tracks per-agent request counters, circuit breaker state,
 // and cached selector resolution results.
 type AgentState struct {
 	Counters         map[string]uint64
