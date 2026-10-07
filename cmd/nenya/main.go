@@ -308,6 +308,16 @@ func applyListenAddrFromEnv(cfg *config.Config, logger *slog.Logger) bool {
 }
 
 func run(logger *slog.Logger, cfg *config.Config, secrets *config.SecretsConfig, paths configPaths) int {
+	// NENYA-137: the full validation suite only runs under -validate; the
+	// network policy is cheap and ping-free, so it gates every start — an
+	// invalid CA bundle or proxy URL must fail startup, not degrade egress.
+	if policyErrs := config.ValidateNetworkPolicy(cfg); len(policyErrs) > 0 {
+		for _, policyErr := range policyErrs {
+			logger.Error("network policy invalid", "err", policyErr)
+		}
+		return 1
+	}
+
 	startupCtx, startupCancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer startupCancel()
 
@@ -322,7 +332,7 @@ func run(logger *slog.Logger, cfg *config.Config, secrets *config.SecretsConfig,
 	gw := gateway.New(startupCtx, *cfg, secrets, logger)
 
 	if cfg.LocalEngine != nil {
-		engineManager := local.NewEngineManager(cfg.LocalEngine, logger)
+		engineManager := local.NewEngineManager(cfg.LocalEngine, cfg.Network, logger)
 		gw.LocalEngineManager = engineManager
 		gw.AgentState.LocalEngineCheck = engineManager
 		logger.Info("local engine manager initialized",

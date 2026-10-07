@@ -17,7 +17,9 @@ type EngineManager struct {
 	logger   *slog.Logger
 }
 
-func NewEngineManager(cfg *config.LocalEngineConfig, logger *slog.Logger) *EngineManager {
+// NewEngineManager creates the engine manager. network carries the
+// fleet-wide CA bundle path (NENYA-137) applied to the session transport.
+func NewEngineManager(cfg *config.LocalEngineConfig, network *config.NetworkConfig, logger *slog.Logger) *EngineManager {
 	if cfg.MaxSessions <= 0 {
 		cfg.MaxSessions = 3
 	}
@@ -28,7 +30,7 @@ func NewEngineManager(cfg *config.LocalEngineConfig, logger *slog.Logger) *Engin
 	}
 
 	return &EngineManager{
-		sessions: NewSessionManager(cfg.BaseURL, timeout),
+		sessions: NewSessionManager(cfg.BaseURL, timeout, network.GetCABundle()),
 		config:   cfg,
 		logger:   logger,
 	}

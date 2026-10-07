@@ -8,6 +8,8 @@ import (
 	"log/slog"
 	"net/http"
 	"time"
+
+	"github.com/nenya/internal/netutil"
 )
 
 // PricingEntry is the effective pricing for a model in the discovery catalog.
@@ -179,10 +181,19 @@ type PricingFetcher struct {
 	logger  *slog.Logger
 }
 
-func NewPricingFetcher(logger *slog.Logger) *PricingFetcher {
+// NewPricingFetcher creates the OpenRouter pricing fetcher. client is the
+// gateway's fleet-policy HTTP client (NENYA-137); nil falls back to a
+// TLS-floored client with environment proxying.
+func NewPricingFetcher(logger *slog.Logger, client *http.Client) *PricingFetcher {
+	if client == nil || client.Transport == nil {
+		transport := &http.Transport{Proxy: http.ProxyFromEnvironment}
+		netutil.ApplyTransportSecurity(transport)
+		client = &http.Client{Timeout: 15 * time.Second, Transport: transport}
+	}
 	return &PricingFetcher{
 		client: &http.Client{
-			Timeout: 15 * time.Second,
+			Timeout:   15 * time.Second,
+			Transport: client.Transport,
 		},
 		baseURL: "https://openrouter.ai/api/v1",
 		logger:  logger,

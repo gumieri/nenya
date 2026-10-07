@@ -503,6 +503,18 @@ type ProviderConfig struct {
 	// scope classification. Note: context-length handling (summarization
 	// retry) takes precedence over rules.
 	RequestScopedErrors []RequestScopedErrorRule `json:"request_scoped_errors,omitempty"`
+	// CABundle is the path to a PEM-encoded certificate bundle trusted for
+	// TLS connections to this provider (NENYA-137). The bundle is appended
+	// to the system roots — a private CA grants trust without disabling
+	// system trust. Empty inherits the network.ca_bundle global. Path is
+	// validated at startup (readable + parseable PEM).
+	CABundle string `json:"ca_bundle,omitempty"`
+	// ProxyURL is the egress proxy for dispatches to this provider
+	// (NENYA-137): http, https, socks5, or socks5h scheme. Empty inherits the
+	// network.proxy_url global; when neither is set, the standard
+	// HTTPS_PROXY/NO_PROXY environment variables apply. Validated at
+	// startup.
+	ProxyURL string `json:"proxy_url,omitempty"`
 	// Thinking configures reasoning token behavior for this provider.
 	Thinking *ThinkingConfig `json:"thinking,omitempty"`
 	// APIKey is the authentication key (typically loaded from secrets).
@@ -628,10 +640,18 @@ type Provider struct {
 	MaxRetryAttempts       int
 	RetryablePhrases       []string
 	RequestScopedErrors    []RequestScopedErrorRule
-	Thinking               *ThinkingConfig
-	Billing                *BillingConfig
-	AllowedModels          []string
-	allowedRE              []*regexp.Regexp
+	// CABundle is the path to a PEM bundle appended to the system roots for
+	// this provider's TLS connections (NENYA-137). Resolved from
+	// ProviderConfig.CABundle with the network-level global as fallback.
+	CABundle string
+	// ProxyURL is the egress proxy for this provider (http/https/socks5/socks5h).
+	// Resolved from ProviderConfig.ProxyURL with the network-level global as
+	// fallback; empty means the HTTPS_PROXY/NO_PROXY environment applies.
+	ProxyURL      string
+	Thinking      *ThinkingConfig
+	Billing       *BillingConfig
+	AllowedModels []string
+	allowedRE     []*regexp.Regexp
 	// NonChatModels mirrors ProviderConfig.NonChatModels (RE2 patterns for
 	// models that are not chat-completions models). nonChatRE holds the
 	// compiled patterns; when both are empty no model is non-chat.
@@ -703,6 +723,32 @@ func (p *Provider) EffectiveIdleConnTimeout() time.Duration {
 		return time.Duration(p.IdleConnTimeoutSeconds) * time.Second
 	}
 	return DefaultIdleConnTimeoutSeconds * time.Second
+}
+
+// EffectiveCABundle resolves the provider's CA bundle path (NENYA-137): the
+// per-provider override when set, else the network-level global. Empty means
+// system roots only.
+func (p *Provider) EffectiveCABundle(network *NetworkConfig) string {
+	if p != nil && p.CABundle != "" {
+		return p.CABundle
+	}
+	if network != nil {
+		return network.CABundle
+	}
+	return ""
+}
+
+// EffectiveProxyURL resolves the provider's egress proxy (NENYA-137): the
+// per-provider override when set, else the network-level global. Empty means
+// the HTTPS_PROXY/NO_PROXY environment variables apply.
+func (p *Provider) EffectiveProxyURL(network *NetworkConfig) string {
+	if p != nil && p.ProxyURL != "" {
+		return p.ProxyURL
+	}
+	if network != nil {
+		return network.ProxyURL
+	}
+	return ""
 }
 
 // ConcurrencyLimit resolves the in-flight request cap for a model served by
@@ -846,7 +892,31 @@ type Config struct {
 	MCPServers    map[string]MCPServerConfig `json:"mcp_servers,omitempty"`
 	Agents        map[string]AgentConfig     `json:"agents,omitempty"`
 	Providers     map[string]ProviderConfig  `json:"providers,omitempty"`
+	Network       *NetworkConfig             `json:"network,omitempty"`
 	LocalEngine   *LocalEngineConfig         `json:"local_engine,omitempty"`
+}
+
+// NetworkConfig defines fleet-wide outbound network defaults (NENYA-137):
+// a private CA bundle and an egress proxy applied to every provider that
+// does not override them per-provider. Empty fields inherit the standard
+// Go behavior (system roots; HTTPS_PROXY/NO_PROXY environment).
+type NetworkConfig struct {
+	// CABundle is the path to a PEM-encoded certificate bundle appended to
+	// the system roots for all provider TLS connections. Validated at
+	// startup (readable + parseable PEM).
+	CABundle string `json:"ca_bundle,omitempty"`
+	// ProxyURL is the egress proxy for all provider dispatches (http,
+	// https, socks5, or socks5h scheme). When empty, the standard
+	// HTTPS_PROXY/NO_PROXY environment variables apply.
+	ProxyURL string `json:"proxy_url,omitempty"`
+}
+
+// GetCABundle returns the fleet-wide CA bundle path (empty when unset).
+func (n *NetworkConfig) GetCABundle() string {
+	if n == nil {
+		return ""
+	}
+	return n.CABundle
 }
 
 // DebugConfig controls debug and profiling features.

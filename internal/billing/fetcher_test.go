@@ -95,7 +95,7 @@ func TestQuotaFetcher_Lifecycle(t *testing.T) {
 	}
 
 	tracker := NewBillingTracker(logger, nil)
-	fetcher := NewQuotaFetcher(logger)
+	fetcher := NewQuotaFetcher(logger, nil)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
@@ -118,7 +118,7 @@ func TestQuotaFetcher_Lifecycle(t *testing.T) {
 func TestQuotaFetcher_InitialFetch(t *testing.T) {
 	logger := testutil.NewTestLogger()
 	_ = NewBillingTracker(logger, nil)
-	fetcher := NewQuotaFetcher(logger)
+	fetcher := NewQuotaFetcher(logger, nil)
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -163,7 +163,7 @@ func TestFetchAndUpdate_AccountName(t *testing.T) {
 		Timestamp:    time.Now(),
 	})
 
-	qf := NewQuotaFetcher(logger)
+	qf := NewQuotaFetcher(logger, nil)
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -228,7 +228,7 @@ func TestStart_MultipleAccounts(t *testing.T) {
 	}
 
 	tracker := NewBillingTracker(logger, nil)
-	fetcher := NewQuotaFetcher(logger)
+	fetcher := NewQuotaFetcher(logger, nil)
 	lister := &mockAccountLister{
 		accounts: map[string][]string{
 			"provider1": {"account-1", "account-2"},
@@ -256,7 +256,7 @@ func TestStart_MultipleAccounts(t *testing.T) {
 func TestQuotaFetcher_HTTPError(t *testing.T) {
 	logger := testutil.NewTestLogger()
 	_ = NewBillingTracker(logger, nil)
-	fetcher := NewQuotaFetcher(logger)
+	fetcher := NewQuotaFetcher(logger, nil)
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)
@@ -283,7 +283,7 @@ func TestQuotaFetcher_HTTPError(t *testing.T) {
 func TestQuotaFetcher_ParseError(t *testing.T) {
 	logger := testutil.NewTestLogger()
 	_ = NewBillingTracker(logger, nil)
-	fetcher := NewQuotaFetcher(logger)
+	fetcher := NewQuotaFetcher(logger, nil)
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -312,7 +312,7 @@ func TestQuotaFetcher_ParseError(t *testing.T) {
 func TestQuotaFetcher_UnsupportedMode(t *testing.T) {
 	logger := testutil.NewTestLogger()
 	_ = NewBillingTracker(logger, nil)
-	fetcher := NewQuotaFetcher(logger)
+	fetcher := NewQuotaFetcher(logger, nil)
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -341,7 +341,7 @@ func TestQuotaFetcher_UnsupportedMode(t *testing.T) {
 
 func TestQuotaFetcher_ErrorWrapping(t *testing.T) {
 	logger := testutil.NewTestLogger()
-	fetcher := NewQuotaFetcher(logger)
+	fetcher := NewQuotaFetcher(logger, nil)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
@@ -362,7 +362,7 @@ func TestQuotaFetcher_ErrorWrapping(t *testing.T) {
 func TestQuotaFetcher_RetryAfterHeader(t *testing.T) {
 	logger := testutil.NewTestLogger()
 	_ = NewBillingTracker(logger, nil)
-	fetcher := NewQuotaFetcher(logger)
+	fetcher := NewQuotaFetcher(logger, nil)
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Retry-After", "30")

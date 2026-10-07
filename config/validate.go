@@ -2,6 +2,7 @@ package config
 
 import (
 	"context"
+	"crypto/tls"
 	"fmt"
 	"io"
 	"log/slog"
@@ -14,6 +15,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/nenya/internal/netutil"
 )
 
 func closeBody(resp *http.Response) {
@@ -73,12 +76,15 @@ func validateOllamaEngine(ctx context.Context, cfg *Config, providers map[string
 	}
 
 	p, ok := providers[cfg.Bouncer.Engine.Provider]
-	if !ok || p.URL == "" {
+	if !ok || p == nil || p.URL == "" {
 		return nil
 	}
 
 	logger.Info("checking Ollama engine health", "provider", cfg.Bouncer.Engine.Provider, "url", p.URL)
-	if !validateOllamaHealth(ctx, p.URL) {
+	// The runtime ollama policy inherits the fleet CA bundle (extra root
+	// trust on loopback is harmless) but never the fleet proxy — mirror
+	// that split here so the probe matches runtime reachability.
+	if !validateOllamaHealth(ctx, p.URL, p.EffectiveCABundle(cfg.Network), p.ProxyURL) {
 		return fmt.Errorf("ollama engine provider %q at %s is not reachable", cfg.Bouncer.Engine.Provider, p.URL)
 	}
 	logger.Info("Ollama engine health check passed")
@@ -94,7 +100,7 @@ func validateLocalEngine(ctx context.Context, cfg *Config, pingProviders bool, l
 	}
 
 	logger.Info("checking local engine health", "url", cfg.LocalEngine.BaseURL)
-	if !validateOllamaHealth(ctx, cfg.LocalEngine.BaseURL) {
+	if !validateOllamaHealth(ctx, cfg.LocalEngine.BaseURL, cfg.Network.GetCABundle(), "") {
 		return fmt.Errorf("local engine at %s is not reachable", cfg.LocalEngine.BaseURL)
 	}
 	logger.Info("local engine health check passed")
@@ -114,6 +120,7 @@ func collectValidationErrors(ctx context.Context, cfg *Config, providers map[str
 	errors = append(errors, validateSpotlightRiskTiersConfig(cfg)...)
 	errors = append(errors, validateSelfLoopGuard(cfg)...)
 	errors = append(errors, validateTelemetryExposure(cfg, logger)...)
+	errors = append(errors, validateNetworkPolicy(cfg)...)
 	errors = append(errors, validateExfilGuardConfig(cfg)...)
 	errors = append(errors, validateCanaryConfig(cfg)...)
 	errors = append(errors, validateMCPGuardConfig(cfg)...)
@@ -129,7 +136,7 @@ func collectValidationErrors(ctx context.Context, cfg *Config, providers map[str
 	errors = append(errors, validateStickySessionTTL(cfg.Agents)...)
 
 	if pingProviders {
-		errors = append(errors, validateProviders(ctx, providers, logger)...)
+		errors = append(errors, validateProviders(ctx, providers, cfg.Network, logger)...)
 	}
 
 	return errors
@@ -299,6 +306,45 @@ func isGatewayPath(p string) bool {
 // startup warning.
 func WarnTelemetryExposure(cfg *Config, logger *slog.Logger) {
 	validateTelemetryExposure(cfg, logger)
+}
+
+// validateNetworkPolicy validates the NENYA-137 outbound network settings:
+// CA bundles must be readable PEM files and proxy URLs must use a supported
+// scheme — checked for the network section and for every provider override,
+// so a bad path or scheme fails at startup instead of at first dispatch.
+func validateNetworkPolicy(cfg *Config) []string {
+	var errs []string
+	check := func(what, caBundle, proxyURL string) {
+		if caBundle != "" {
+			// Read per start (also read again by the transport builders): the
+			// duplicate open is startup-only cost, kept for locality.
+			if _, err := netutil.LoadCABundle(caBundle); err != nil {
+				errs = append(errs, fmt.Sprintf("%s.ca_bundle: %v", what, err))
+			}
+		}
+		if proxyURL != "" {
+			if err := netutil.ValidateProxyURL(proxyURL); err != nil {
+				errs = append(errs, fmt.Sprintf("%s.proxy_url: %v", what, err))
+			}
+		}
+	}
+
+	if cfg.Network != nil {
+		check("network", cfg.Network.CABundle, cfg.Network.ProxyURL)
+	}
+	for name, p := range cfg.Providers {
+		check(fmt.Sprintf("providers[%q]", name), p.CABundle, p.ProxyURL)
+	}
+	return errs
+}
+
+// ValidateNetworkPolicy validates the NENYA-137 outbound network settings
+// (CA bundle paths readable PEM, proxy URLs with a supported scheme) across
+// the network section and every provider override. Exported for the startup
+// path, where the ping-free validation subset runs before the gateway is
+// constructed — an invalid policy must fail startup, not degrade silently.
+func ValidateNetworkPolicy(cfg *Config) []string {
+	return validateNetworkPolicy(cfg)
 }
 
 // validateTelemetryExposure warns (never errors) when
@@ -625,7 +671,7 @@ func validateEntropyConfig(sf BouncerConfig) []string {
 	return errors
 }
 
-func validateProviders(ctx context.Context, providers map[string]*Provider, logger *slog.Logger) []string {
+func validateProviders(ctx context.Context, providers map[string]*Provider, network *NetworkConfig, logger *slog.Logger) []string {
 	errors := []string{}
 	for name, provider := range providers {
 		switch provider.ThoughtSignaturePolicy {
@@ -663,7 +709,7 @@ func validateProviders(ctx context.Context, providers map[string]*Provider, logg
 		}
 
 		logger.Info("validating provider", "provider", name, "url", provider.URL)
-		if err := validateProvider(ctx, name, provider, logger); err != nil {
+		if err := validateProvider(ctx, name, provider, network, logger); err != nil {
 			errors = append(errors, fmt.Sprintf("%s: %v", name, err))
 			logger.Error("provider validation failed", "provider", name, "err", err)
 		} else {
@@ -673,29 +719,71 @@ func validateProviders(ctx context.Context, providers map[string]*Provider, logg
 	return errors
 }
 
-var validationClient = &http.Client{Timeout: 30 * time.Second}
+// validationClientFor builds an HTTP client honoring a provider's effective
+// CA bundle and egress proxy (NENYA-137): validation pings must traverse the
+// same network path as runtime dispatches. The Ollama engine probe passes
+// the provider's explicit overrides; the local-engine probe passes empty
+// (environment default; loopback is never proxied). The transport carries
+// the explicit TLS floor.
+func validationClientFor(caBundle, proxyURL string) (*http.Client, error) {
+	transport := &http.Transport{Proxy: http.ProxyFromEnvironment}
+	if proxy, proxyErr := netutil.ProxyOrDefault(proxyURL); proxyErr == nil {
+		transport.Proxy = proxy
+	} // invalid explicit proxy: env default (startup validation rejects it first)
+	if caBundle != "" {
+		pool, err := netutil.LoadCABundle(caBundle)
+		if err != nil {
+			return nil, err
+		}
+		transport.TLSClientConfig = &tls.Config{MinVersion: netutil.MinTLSVersion, RootCAs: pool}
+	}
+	netutil.ApplyTransportSecurity(transport)
+	return &http.Client{Timeout: 30 * time.Second, Transport: transport}, nil
+}
 
-func validateProvider(ctx context.Context, name string, provider *Provider, logger *slog.Logger) error {
+func validateProvider(ctx context.Context, name string, provider *Provider, network *NetworkConfig, logger *slog.Logger) error {
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 
-	return validateWithMinimalRequest(provider, ctx, logger)
+	return validateWithMinimalRequest(ctx, provider, network, logger)
 }
 
-func validateWithMinimalRequest(provider *Provider, ctx context.Context, logger *slog.Logger) error {
-	payload := `{"model":"test","messages":[{"role":"user","content":"hello"}],"stream":false,"max_tokens":1}`
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, provider.URL, strings.NewReader(payload))
-	if err != nil {
-		return fmt.Errorf("failed to create request: %v", err)
+func validateWithMinimalRequest(ctx context.Context, provider *Provider, network *NetworkConfig, logger *slog.Logger) error {
+	// Mirror the runtime proxy split: ollama-format providers are
+	// explicit-only on the proxy (loopback-safe), everything else inherits
+	// the fleet proxy; the fleet CA is inherited by both.
+	proxyURL := provider.EffectiveProxyURL(network)
+	if strings.EqualFold(provider.ApiFormat, "ollama") || strings.EqualFold(provider.Name, "ollama") {
+		proxyURL = provider.ProxyURL
 	}
-	req.Header.Set("Content-Type", "application/json")
+	client, err := validationClientFor(provider.EffectiveCABundle(network), proxyURL)
+	if err != nil {
+		return fmt.Errorf("build validation client: %w", err)
+	}
+	defer client.CloseIdleConnections()
 
-	if authErr := applyAuthHeader(req, provider); authErr != nil {
-		return fmt.Errorf("failed to apply authentication: %w", authErr)
+	buildRequest := func() (*http.Request, error) {
+		// A fresh request per attempt: retries after a body-consuming
+		// failure would otherwise send a 0-byte body against the original
+		// ContentLength.
+		payload := `{"model":"test","messages":[{"role":"user","content":"hello"}],"stream":false,"max_tokens":1}`
+		req, reqErr := http.NewRequestWithContext(ctx, http.MethodPost, provider.URL, strings.NewReader(payload))
+		if reqErr != nil {
+			return nil, fmt.Errorf("failed to create request: %v", reqErr)
+		}
+		req.Header.Set("Content-Type", "application/json")
+		if authErr := applyAuthHeader(req, provider); authErr != nil {
+			return nil, fmt.Errorf("failed to apply authentication: %w", authErr)
+		}
+		return req, nil
 	}
 
 	resp, err := doWithRetryResp(ctx, 3, func() (*http.Response, error) {
-		r, doErr := validationClient.Do(req)
+		req, reqErr := buildRequest()
+		if reqErr != nil {
+			return nil, reqErr
+		}
+		r, doErr := client.Do(req)
 		if doErr != nil {
 			if r != nil {
 				_ = r.Body.Close()
@@ -775,13 +863,18 @@ func OllamaHealthURL(engineURL string) string {
 	return engineURL
 }
 
-func validateOllamaHealth(ctx context.Context, ollamaURL string) bool {
+func validateOllamaHealth(ctx context.Context, ollamaURL, caBundle, proxyURL string) bool {
 	healthURL := OllamaHealthURL(ollamaURL)
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, healthURL, http.NoBody)
 	if err != nil {
 		return false
 	}
-	resp, err := validationClient.Do(req)
+	validationHTTPClient, clientErr := validationClientFor(caBundle, proxyURL)
+	if clientErr != nil {
+		return false
+	}
+	defer validationHTTPClient.CloseIdleConnections()
+	resp, err := validationHTTPClient.Do(req)
 	if err != nil {
 		return false
 	}

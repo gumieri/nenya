@@ -32,7 +32,7 @@ func TestEngineManager_Startup(t *testing.T) {
 		MaxSessions:    3,
 		StartupModels:  []string{"model1", "model2"},
 	}
-	em := NewEngineManager(cfg, logger)
+	em := NewEngineManager(cfg, nil, logger)
 	ctx := context.Background()
 
 	if err := em.Startup(ctx); err != nil {
@@ -68,7 +68,7 @@ func TestEngineManager_StartupPartialFailure(t *testing.T) {
 		MaxSessions:    3,
 		StartupModels:  []string{"success", "fail"},
 	}
-	em := NewEngineManager(cfg, logger)
+	em := NewEngineManager(cfg, nil, logger)
 	ctx := context.Background()
 
 	if err := em.Startup(ctx); err != nil {
@@ -104,7 +104,7 @@ func TestEngineManager_EvictLRU(t *testing.T) {
 		TimeoutSeconds: 10,
 		MaxSessions:    2,
 	}
-	em := NewEngineManager(cfg, logger)
+	em := NewEngineManager(cfg, nil, logger)
 	ctx := context.Background()
 
 	if err := em.LoadModel(ctx, "model1", LoadOptions{}); err != nil {
@@ -159,7 +159,7 @@ func TestEngineManager_EvictLRUFails(t *testing.T) {
 		TimeoutSeconds: 1,
 		MaxSessions:    2,
 	}
-	em := NewEngineManager(cfg, logger)
+	em := NewEngineManager(cfg, nil, logger)
 	ctx := context.Background()
 
 	if err := em.LoadModel(ctx, "model1", LoadOptions{}); err != nil {
@@ -182,7 +182,7 @@ func TestEngineManager_LoadModelAutoLoadDisabled(t *testing.T) {
 		MaxSessions:    3,
 		AutoLoad:       false,
 	}
-	em := NewEngineManager(cfg, logger)
+	em := NewEngineManager(cfg, nil, logger)
 
 	if em.IsLoaded("qwen2.5-coder:7b") {
 		t.Error("model should not be loaded initially")
@@ -213,7 +213,7 @@ func TestEngineManager_Shutdown_UnloadsAllModels(t *testing.T) {
 		MaxSessions:    3,
 		StartupModels:  []string{"model1", "model2"},
 	}
-	em := NewEngineManager(cfg, logger)
+	em := NewEngineManager(cfg, nil, logger)
 	ctx := context.Background()
 
 	if err := em.Startup(ctx); err != nil {
@@ -243,6 +243,6 @@ func TestEngineManager_Shutdown_UnloadsAllModels(t *testing.T) {
 func TestEngineManager_Shutdown_NoModelsNoop(t *testing.T) {
 	em := NewEngineManager(&config.LocalEngineConfig{
 		BaseURL: "http://127.0.0.1:1", // nothing loaded: no HTTP call expected
-	}, slog.Default())
+	}, nil, slog.Default())
 	em.Shutdown(context.Background()) // must not panic or block
 }

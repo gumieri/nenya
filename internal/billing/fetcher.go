@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/nenya/config"
+	"github.com/nenya/internal/netutil"
 	"github.com/nenya/internal/resilience"
 )
 
@@ -65,19 +66,27 @@ type QuotaFetchResult struct {
 }
 
 // NewQuotaFetcher creates a new QuotaFetcher with a shared HTTP client.
-// The client has no global timeout (Timeout=0) to allow per-provider
-// timeout control via context.WithTimeout in the polling goroutines.
-// Per-provider timeouts are read from BillingConfig.QuotaTimeoutSeconds
-// during Start() (default: 10s).
-func NewQuotaFetcher(logger *slog.Logger) *QuotaFetcher {
+// policyClient is the gateway's global-policy HTTP client (NENYA-137: CA
+// bundle / egress proxy / TLS floor) — quota endpoints hit the same
+// provider APIs as dispatches, so they traverse the same network path.
+// The fleet client carries governance.upstream_timeout_seconds as its
+// client-level timeout, which therefore also caps quota fetches (per-call
+// control comes from BillingConfig.QuotaTimeoutSeconds via context in the
+// polling goroutines — keep it at or below the upstream timeout). nil
+// falls back to a TLS-floored, environment-proxied client with no global
+// timeout.
+func NewQuotaFetcher(logger *slog.Logger, policyClient *http.Client) *QuotaFetcher {
+	if policyClient == nil || policyClient.Transport == nil {
+		transport := &http.Transport{
+			MaxIdleConns:    10,
+			IdleConnTimeout: 30 * time.Second,
+			Proxy:           http.ProxyFromEnvironment,
+		}
+		netutil.ApplyTransportSecurity(transport)
+		policyClient = &http.Client{Transport: transport}
+	}
 	qf := &QuotaFetcher{
-		client: &http.Client{
-			Timeout: 0, // per-provider timeout via context.WithTimeout in fetchAndUpdate
-			Transport: &http.Transport{
-				MaxIdleConns:    10,
-				IdleConnTimeout: 30 * time.Second,
-			},
-		},
+		client:    policyClient,
 		logger:    logger,
 		providers: make(map[string]*quotaProviderConfig),
 		stopCh:    make(chan struct{}),

@@ -134,7 +134,14 @@ type NenyaGateway struct {
 // metrics, MCP clients, and starts dynamic model discovery.
 func New(ctx context.Context, cfg config.Config, secrets *config.SecretsConfig, logger *slog.Logger) *NenyaGateway {
 	cfg = mergeBuiltInProviders(cfg)
-	secureClient, ollamaClient, baseTransport := createHTTPClients(cfg)
+	// The fleet network policy is resolved (and its CA bundle read) once
+	// per start and threaded to every transport construction site.
+	global, policyErr := globalNetworkPolicy(cfg.Network)
+	if policyErr != nil {
+		logger.Error("fleet network policy invalid — transports fall back to fleet defaults (per-provider overrides still honored)", "err", policyErr)
+		global = networkPolicy{}
+	}
+	secureClient, ollamaClient, baseTransport := createHTTPClients(cfg, global, logger)
 
 	timeout := cfg.Governance.EffectiveUpstreamTimeout()
 	if timeout == 0 {
@@ -162,14 +169,34 @@ func New(ctx context.Context, cfg config.Config, secrets *config.SecretsConfig, 
 
 	keyProvider := buildKeyProvider(sm, providerKeyTokens, providers)
 
-	mergedCatalog, healthRegistry := performModelDiscovery(ctx, &cfg, providers, metrics, logger, keyProvider)
+	// Discovery fetches keep the fetcher's tight timeouts (5s dial/TLS,
+	// 10s response header) instead of the dispatch defaults: a stalled
+	// provider endpoint must not hang its discovery goroutine for the full
+	// dispatch window. The fleet policy (CA/proxy/TLS floor) is preserved
+	// by cloning the policy-applied base transport.
+	discoveryTransport := baseTransport.Clone()
+	discoveryTransport.DialContext = (&net.Dialer{
+		Timeout:   5 * time.Second,
+		KeepAlive: 5 * time.Second,
+	}).DialContext
+	discoveryTransport.TLSHandshakeTimeout = 5 * time.Second
+	discoveryTransport.ResponseHeaderTimeout = 10 * time.Second
+	discoveryTransport.IdleConnTimeout = 10 * time.Second
+	discoveryClient := &http.Client{Transport: discoveryTransport}
+	mergedCatalog, healthRegistry := performModelDiscovery(ctx, &cfg, providers, discoveryDeps{
+		discoveryClient: discoveryClient,
+		ollamaClient:    ollamaClient,
+		metrics:         metrics,
+		keyProvider:     keyProvider,
+		logger:          logger,
+	})
 
 	secretPatterns, blockedPatterns := compilePatterns(cfg, logger)
 	entropyFilter := createEntropyFilter(cfg, logger)
 
 	gw := buildGateway(cfg, secrets, secureClient, ollamaClient, providers,
 		secretPatterns, blockedPatterns, entropyFilter, mergedCatalog, healthRegistry, logger, sm, clientTokenRef, providerKeyTokens, metrics)
-	gw.ProviderClients = buildProviderClients(baseTransport, providers)
+	gw.ProviderClients = buildProviderClients(baseTransport, providers, global, cfg.Network, logger)
 
 	gw.Metrics = metrics
 	gw.Metrics.RateLimits = gw.RateLimiter.Snapshot
@@ -233,9 +260,15 @@ func mergeBuiltInProviders(cfg config.Config) config.Config {
 
 // createHTTPClients returns the shared secure upstream client, the Ollama
 // client, and the base upstream transport (used to derive per-provider
-// transports in buildProviderClients).
-func createHTTPClients(cfg config.Config) (*http.Client, *http.Client, *http.Transport) {
+// transports in buildProviderClients). The base and Ollama transports carry
+// the fleet-wide network policy (NENYA-137): explicit TLS floor, the global
+// CA bundle, and the egress proxy (explicit or environment). An invalid
+// policy is a startup-contract violation caught by config validation before
+// this runs — New logs and degrades to system defaults + proxy environment
+// rather than aborting a direct-built construction.
+func createHTTPClients(cfg config.Config, global networkPolicy, logger *slog.Logger) (*http.Client, *http.Client, *http.Transport) {
 	transport := newUpstreamTransport(config.DefaultResponseHeaderTimeoutSeconds * time.Second)
+	global.apply(transport)
 
 	secureClient := &http.Client{
 		Transport: transport,
@@ -245,8 +278,12 @@ func createHTTPClients(cfg config.Config) (*http.Client, *http.Client, *http.Tra
 	}
 
 	ollamaResponseHeaderTimeout := 30 * time.Second
-	if ollamaCfg, ok := cfg.Providers["ollama"]; ok && ollamaCfg.TimeoutSeconds > 0 {
-		ollamaResponseHeaderTimeout = time.Duration(ollamaCfg.TimeoutSeconds) * time.Second
+	var ollamaProviderConfig *config.ProviderConfig
+	if ollamaCfg, ok := cfg.Providers["ollama"]; ok {
+		ollamaProviderConfig = &ollamaCfg
+		if ollamaCfg.TimeoutSeconds > 0 {
+			ollamaResponseHeaderTimeout = time.Duration(ollamaCfg.TimeoutSeconds) * time.Second
+		}
 	}
 
 	ollamaTransport := &http.Transport{
@@ -261,6 +298,23 @@ func createHTTPClients(cfg config.Config) (*http.Client, *http.Client, *http.Tra
 		MaxIdleConns:          10,
 		MaxIdleConnsPerHost:   2,
 	}
+	// Ollama is typically loopback: the fleet-wide proxy is NOT inherited
+	// (it would route local engines through the corporate egress). Explicit
+	// providers.ollama.ca_bundle/proxy_url overrides still apply, and the
+	// TLS floor always does. The ollama CA bundle is loaded here (the
+	// fleet-level pool was loaded for the global policy).
+	ollamaPolicy := networkPolicy{}
+	if ollamaProviderConfig != nil {
+		ollamaPolicy = networkPolicy{caBundlePath: ollamaProviderConfig.CABundle, proxyURL: ollamaProviderConfig.ProxyURL}
+		if ollamaPolicy.caBundlePath == "" {
+			// Fleet-wide CA inheritance is loopback-safe (extra root trust);
+			// only the proxy is explicit-only for ollama.
+			ollamaPolicy.caBundlePath = global.caBundlePath
+			ollamaPolicy.pool = global.pool
+		}
+	}
+	ollamaPolicy = ollamaPolicy.loadPool(logger)
+	ollamaPolicy.apply(ollamaTransport)
 	ollamaClient := &http.Client{
 		Transport: ollamaTransport,
 	}
@@ -285,31 +339,6 @@ func newUpstreamTransport(responseHeaderTimeout time.Duration) *http.Transport {
 	}
 }
 
-// buildProviderClients clones the base upstream transport for every provider
-// whose effective response-header timeout or idle-connection timeout differs
-// from the default, yielding one dedicated client per provider name.
-// Providers sharing both defaults reuse the base transport's connection pool
-// via the shared client.
-func buildProviderClients(baseTransport *http.Transport, providers map[string]*config.Provider) map[string]*http.Client {
-	clients := make(map[string]*http.Client)
-	for name, provider := range providers {
-		if provider == nil {
-			continue
-		}
-		headerTimeout := provider.EffectiveResponseHeaderTimeout()
-		idleTimeout := provider.EffectiveIdleConnTimeout()
-		if headerTimeout == config.DefaultResponseHeaderTimeoutSeconds*time.Second &&
-			idleTimeout == config.DefaultIdleConnTimeoutSeconds*time.Second {
-			continue
-		}
-		transport := baseTransport.Clone()
-		transport.ResponseHeaderTimeout = headerTimeout
-		transport.IdleConnTimeout = idleTimeout
-		clients[name] = &http.Client{Transport: transport}
-	}
-	return clients
-}
-
 // EvictIdleConnections drops the named provider's pooled idle connections.
 // Called on quota exhaustion (429-class failures): an exhausted account's
 // pooled connections are dead weight and providers frequently RST them at
@@ -326,20 +355,38 @@ func (g *NenyaGateway) EvictIdleConnections(providerName string) {
 }
 
 // ClientFor returns the HTTP client for dispatching requests to the named
-// provider. Ollama-format providers use the dedicated Ollama client;
-// providers with a non-default response-header timeout use their dedicated
-// transport; everything else shares the default secure client. Never nil.
+// provider: a dedicated per-provider client (built when the provider's
+// effective response-header timeout, idle-connection timeout, or network
+// policy differs from the fleet defaults, or it declares explicit
+// ca_bundle/proxy_url) takes precedence; ollama-format providers without a
+// dedicated client fall back to the shared OllamaClient; everything else
+// shares the fleet client. Never nil.
 func (g *NenyaGateway) ClientFor(providerName string) *http.Client {
-	if provider, ok := g.Providers[providerName]; ok && provider != nil && provider.ApiFormat == "ollama" {
-		return g.OllamaClient
-	}
+	// Dedicated per-provider clients (timeout or network-policy overrides,
+	// NENYA-137) take precedence — including for ollama-format providers,
+	// whose dedicated client carries their explicit-only CA/proxy policy.
 	if client, ok := g.ProviderClients[providerName]; ok {
 		return client
+	}
+	if provider, ok := g.Providers[providerName]; ok && isOllamaProvider(providerName, provider) {
+		return g.OllamaClient
 	}
 	return g.Client
 }
 
-func performModelDiscovery(ctx context.Context, cfg *config.Config, providers map[string]*config.Provider, metrics *infra.Metrics, logger *slog.Logger, keyProvider func(string) ([]byte, bool)) (*discovery.ModelCatalog, *discovery.HealthRegistry) {
+// discoveryDeps groups the collaborators performModelDiscovery needs for
+// its outbound fetches (NENYA-137): the fleet-policy client and the
+// ollama-specific client (explicit-only policy, loopback-safe) so every
+// discovery fetch traverses the same network path as runtime dispatches.
+type discoveryDeps struct {
+	discoveryClient *http.Client
+	ollamaClient    *http.Client
+	metrics         *infra.Metrics
+	keyProvider     func(string) ([]byte, bool)
+	logger          *slog.Logger
+}
+
+func performModelDiscovery(ctx context.Context, cfg *config.Config, providers map[string]*config.Provider, deps discoveryDeps) (*discovery.ModelCatalog, *discovery.HealthRegistry) {
 	var mergedCatalog *discovery.ModelCatalog
 	var healthRegistry *discovery.HealthRegistry
 
@@ -350,10 +397,11 @@ func performModelDiscovery(ctx context.Context, cfg *config.Config, providers ma
 		return mergedCatalog, nil
 	}
 
-	fetcher := discovery.NewDiscoveryFetcher(cfg.Governance.EffectiveMaxRetryAttempts()).
-		WithMetrics(metrics).
-		WithKeyProvider(keyProvider)
-	catalog := fetcher.FetchAll(ctx, providers, logger)
+	fetcher := discovery.NewDiscoveryFetcher(cfg.Governance.EffectiveMaxRetryAttempts(), deps.discoveryClient).
+		WithMetrics(deps.metrics).
+		WithKeyProvider(deps.keyProvider).
+		WithOllamaClient(deps.ollamaClient)
+	catalog := fetcher.FetchAll(ctx, providers, deps.logger)
 	// The pricing fetcher builds its own catalog from OpenRouter's model
 	// list; apply the non-chat filter there too so non_chat_models is
 	// honored on that path (MergeCatalog already filters the main catalog).
@@ -361,25 +409,25 @@ func performModelDiscovery(ctx context.Context, cfg *config.Config, providers ma
 	mergedCatalog = discovery.MergeCatalog(catalog, cfg)
 
 	if _, hasOR := providers["openrouter"]; hasOR {
-		fetchOpenRouterPricing(ctx, providers, mergedCatalog, logger)
+		fetchOpenRouterPricing(ctx, providers, mergedCatalog, deps.logger, deps.discoveryClient)
 	}
 
-	logger.Info("model discovery completed", "total_models", len(mergedCatalog.AllModels()), "fetched_at", catalog.FetchedAt().Format(time.RFC3339))
+	deps.logger.Info("model discovery completed", "total_models", len(mergedCatalog.AllModels()), "fetched_at", catalog.FetchedAt().Format(time.RFC3339))
 
-	warnModelsMissingMaxContext(logger, providers, mergedCatalog)
+	warnModelsMissingMaxContext(deps.logger, providers, mergedCatalog)
 
-	healthRegistry = discovery.ValidateAllProviders(providers, mergedCatalog, logger)
+	healthRegistry = discovery.ValidateAllProviders(providers, mergedCatalog, deps.logger)
 
-	generateAutoAgents(cfg, mergedCatalog, providers, logger)
+	generateAutoAgents(cfg, mergedCatalog, providers, deps.logger)
 
 	return mergedCatalog, healthRegistry
 }
 
-func fetchOpenRouterPricing(ctx context.Context, providers map[string]*config.Provider, catalog *discovery.ModelCatalog, logger *slog.Logger) {
+func fetchOpenRouterPricing(ctx context.Context, providers map[string]*config.Provider, catalog *discovery.ModelCatalog, logger *slog.Logger, discoveryClient *http.Client) {
 	pfCtx, pfCancel := context.WithTimeout(ctx, 20*time.Second)
 	defer pfCancel()
 
-	pf := discovery.NewPricingFetcher(logger)
+	pf := discovery.NewPricingFetcher(logger, discoveryClient)
 	if orPricing, err := pf.FetchOpenRouterPricing(pfCtx); err != nil {
 		logger.Warn("failed to fetch openrouter pricing, skipping", "err", err)
 	} else {
@@ -478,7 +526,7 @@ func buildGateway(cfg config.Config, secrets *config.SecretsConfig, secureClient
 		WindowSummaries:    pipeline.NewSummaryCache(windowSummaryCacheSize(cfg)),
 		WindowHeads:        pipeline.NewWindowHeadCache(windowSummaryCacheSize(cfg)),
 		TfidfSelections:    pipeline.NewTfidfSelectionCache(pipeline.DefaultTfidfSelectionCacheSize),
-		ResponseCache:      newResponseCache(cfg, logger, metrics),
+		ResponseCache:      newResponseCache(cfg, logger, metrics, ollamaClient),
 		Embedder:           nil,
 		MCPClients:         buildMCPClients(cfg, logger),
 		MCPToolIndex:       mcp.NewToolRegistry(),
@@ -487,7 +535,7 @@ func buildGateway(cfg config.Config, secrets *config.SecretsConfig, secureClient
 		LatencyTracker:     infra.NewLatencyTracker(),
 		CostTracker:        infra.NewCostTracker(),
 		BillingTracker:     billing.NewBillingTracker(logger, metrics),
-		QuotaFetcher:       billing.NewQuotaFetcher(logger),
+		QuotaFetcher:       billing.NewQuotaFetcher(logger, secureClient),
 		SecureMem:          sm,
 		ClientTokenRef:     clientTokenRef,
 		ProviderKeyTokens:  providerKeyTokens,
@@ -799,7 +847,7 @@ func extractInputJSONFromPart(part map[string]interface{}) string {
 	return ""
 }
 
-func newResponseCache(cfg config.Config, logger *slog.Logger, metrics *infra.Metrics) *infra.ResponseCache {
+func newResponseCache(cfg config.Config, logger *slog.Logger, metrics *infra.Metrics, ollamaClient *http.Client) *infra.ResponseCache {
 	if cfg.ResponseCache.Enabled == nil || !*cfg.ResponseCache.Enabled {
 		return nil
 	}
@@ -807,9 +855,16 @@ func newResponseCache(cfg config.Config, logger *slog.Logger, metrics *infra.Met
 
 	var embedder infra.EmbeddingProvider
 	if rc.EnableSemantic {
-		// Create an HTTP client with a reasonable timeout for embedding requests.
+		// Embedding requests go to the (usually local) Ollama endpoint —
+		// reuse the gateway's Ollama transport so the TLS floor and proxy
+		// policy match every other transport, with a client-level timeout
+		// for the synchronous embed call (NENYA-137). Known limitation: the
+		// ollama transport never inherits the fleet proxy, so a remote
+		// rc.EmbeddingURL behind a corporate egress proxy needs an explicit
+		// providers.ollama.proxy_url.
 		embedder = infra.NewOllamaEmbedder(&http.Client{
-			Timeout: 10 * time.Second,
+			Timeout:   10 * time.Second,
+			Transport: ollamaClient.Transport,
 		}, rc.EmbeddingModel, rc.EmbeddingURL)
 	}
 

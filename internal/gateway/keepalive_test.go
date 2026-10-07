@@ -1,6 +1,8 @@
 package gateway
 
 import (
+	"log/slog"
+
 	"net/http"
 	"testing"
 	"time"
@@ -34,7 +36,7 @@ func TestBuildProviderClients_IdleTimeoutClone(t *testing.T) {
 		"google-provider":  {URL: "http://b", IdleConnTimeoutSeconds: 210},
 	}
 
-	clients := buildProviderClients(base, providers)
+	clients := buildProviderClients(base, providers, networkPolicy{}, nil, slog.Default())
 
 	if _, ok := clients["default-provider"]; ok {
 		t.Error("default provider must share the base transport")

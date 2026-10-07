@@ -17,6 +17,7 @@ import (
 	"github.com/nenya/config"
 	"github.com/nenya/internal/adapter"
 	"github.com/nenya/internal/infra"
+	"github.com/nenya/internal/netutil"
 	"github.com/nenya/internal/util"
 )
 
@@ -28,10 +29,15 @@ const (
 )
 
 type DiscoveryFetcher struct {
-	client      *http.Client
-	metrics     *infra.Metrics
-	maxAttempts int
-	keyProvider ProviderKeyProvider
+	// ollamaClient, when set, is used for the ollama provider's discovery
+	// fetches: its policy is explicit-only (loopback-safe), unlike the
+	// fleet-default client which may carry a corporate egress proxy
+	// (NENYA-137).
+	ollamaClient *http.Client
+	client       *http.Client
+	metrics      *infra.Metrics
+	maxAttempts  int
+	keyProvider  ProviderKeyProvider
 }
 
 // ProviderKeyProvider is a callback to retrieve provider API keys.
@@ -41,24 +47,39 @@ type ProviderKeyProvider func(providerName string) ([]byte, bool)
 
 // NewDiscoveryFetcher creates a DiscoveryFetcher that fetches model catalogs
 // from upstream providers. maxAttempts must be >= 1 (use EffectiveMaxRetryAttempts
-// from GovernanceConfig to ensure a minimum fallback of 3).
-func NewDiscoveryFetcher(maxAttempts int) *DiscoveryFetcher {
+// from GovernanceConfig to ensure a minimum fallback of 3). client is the
+// HTTP client used for catalog fetches — pass the gateway's global-policy
+// client so discovery traverses the same CA bundle / egress proxy as chat
+// dispatches (NENYA-137); nil falls back to a plain TLS-floored client.
+func NewDiscoveryFetcher(maxAttempts int, client *http.Client) *DiscoveryFetcher {
+	if client == nil {
+		transport := &http.Transport{
+			DialContext: (&net.Dialer{
+				Timeout:   5 * time.Second,
+				KeepAlive: 5 * time.Second,
+			}).DialContext,
+			TLSHandshakeTimeout:   5 * time.Second,
+			ResponseHeaderTimeout: fetchTimeout,
+			IdleConnTimeout:       10 * time.Second,
+			MaxIdleConns:          maxIdleConns,
+			MaxIdleConnsPerHost:   2,
+			Proxy:                 http.ProxyFromEnvironment,
+		}
+		netutil.ApplyTransportSecurity(transport)
+		client = &http.Client{Transport: transport}
+	}
 	return &DiscoveryFetcher{
 		maxAttempts: maxAttempts,
-		client: &http.Client{
-			Transport: &http.Transport{
-				DialContext: (&net.Dialer{
-					Timeout:   5 * time.Second,
-					KeepAlive: 5 * time.Second,
-				}).DialContext,
-				TLSHandshakeTimeout:   5 * time.Second,
-				ResponseHeaderTimeout: fetchTimeout,
-				IdleConnTimeout:       10 * time.Second,
-				MaxIdleConns:          maxIdleConns,
-				MaxIdleConnsPerHost:   2,
-			},
-		},
+		client:      client,
 	}
+}
+
+// WithOllamaClient sets the client used for the ollama provider's
+// discovery fetches: its network policy is explicit-only (loopback-safe),
+// unlike the fleet-default client which may carry a corporate egress proxy.
+func (df *DiscoveryFetcher) WithOllamaClient(client *http.Client) *DiscoveryFetcher {
+	df.ollamaClient = client
+	return df
 }
 
 func (df *DiscoveryFetcher) WithMetrics(m *infra.Metrics) *DiscoveryFetcher {
@@ -69,6 +90,17 @@ func (df *DiscoveryFetcher) WithMetrics(m *infra.Metrics) *DiscoveryFetcher {
 func (df *DiscoveryFetcher) WithKeyProvider(kp ProviderKeyProvider) *DiscoveryFetcher {
 	df.keyProvider = kp
 	return df
+}
+
+// clientFor selects the HTTP client for a provider's discovery fetch: the
+// ollama client (explicit-only policy, loopback-safe) for Ollama engines —
+// matched by registry name or api_format like the runtime transport policy —
+// and the fleet-policy client for everything else.
+func (df *DiscoveryFetcher) clientFor(providerName string, provider *config.Provider) *http.Client {
+	if df.ollamaClient != nil && (strings.EqualFold(providerName, "ollama") || strings.EqualFold(provider.ApiFormat, "ollama")) {
+		return df.ollamaClient
+	}
+	return df.client
 }
 
 func (df *DiscoveryFetcher) FetchAll(ctx context.Context, providers map[string]*config.Provider, logger *slog.Logger) *ModelCatalog {
@@ -84,6 +116,9 @@ func (df *DiscoveryFetcher) FetchAll(ctx context.Context, providers map[string]*
 
 	var wg sync.WaitGroup
 	for name, p := range providers {
+		if p == nil {
+			continue
+		}
 		hasKey := false
 		if df.keyProvider != nil {
 			if keyBytes, ok := df.keyProvider(name); ok {
@@ -95,20 +130,20 @@ func (df *DiscoveryFetcher) FetchAll(ctx context.Context, providers map[string]*
 			continue
 		}
 		wg.Add(1)
-		go func(providerName string, provider *config.Provider) {
+		go func(providerName string, provider *config.Provider, client *http.Client) {
 			defer wg.Done()
 			defer func() {
 				if r := recover(); r != nil {
 					logger.Error("panic in model discovery goroutine", "provider", providerName, "err", r)
 				}
 			}()
-			models, err := df.fetchProviderModels(ctx, providerName, provider, logger)
+			models, err := df.fetchProviderModels(ctx, providerName, provider, client, logger)
 			results <- fetchResult{
 				provider: providerName,
 				models:   models,
 				err:      err,
 			}
-		}(name, p)
+		}(name, p, df.clientFor(name, p))
 	}
 
 	go func() {
@@ -199,9 +234,9 @@ func buildCapabilityMetadata(meta *ModelMetadata) string {
 	return strings.Join(caps, ",")
 }
 
-func (df *DiscoveryFetcher) enrichOllama(ctx context.Context, baseURL string, models []DiscoveredModel, logger *slog.Logger) []DiscoveredModel {
+func (df *DiscoveryFetcher) enrichOllama(ctx context.Context, baseURL string, models []DiscoveredModel, client *http.Client, logger *slog.Logger) []DiscoveredModel {
 	start := time.Now()
-	enriched, err := enrichOllamaModels(ctx, baseURL, models, df.client, logger)
+	enriched, err := enrichOllamaModels(ctx, baseURL, models, client, logger)
 	if err != nil {
 		if df.metrics != nil {
 			df.metrics.RecordOllamaEnrichment("failed")
@@ -216,7 +251,10 @@ func (df *DiscoveryFetcher) enrichOllama(ctx context.Context, baseURL string, mo
 	return enriched
 }
 
-func (df *DiscoveryFetcher) fetchProviderModels(ctx context.Context, providerName string, provider *config.Provider, logger *slog.Logger) ([]DiscoveredModel, error) {
+func (df *DiscoveryFetcher) fetchProviderModels(ctx context.Context, providerName string, provider *config.Provider, client *http.Client, logger *slog.Logger) ([]DiscoveredModel, error) {
+	if client == nil {
+		client = df.client
+	}
 	endpoint := GetModelsEndpoint(provider.URL, providerName)
 	if endpoint == "" {
 		logger.Debug("no models endpoint for provider", "provider", providerName)
@@ -235,7 +273,7 @@ func (df *DiscoveryFetcher) fetchProviderModels(ctx context.Context, providerNam
 		return nil, fmt.Errorf("discovery auth: %w", err)
 	}
 
-	resp, err := df.fetchWithRetry(req, provider, providerCtx)
+	resp, err := df.fetchWithRetry(providerCtx, client, req, provider)
 	if err != nil {
 		return nil, fmt.Errorf("discovery fetch: %w", err)
 	}
@@ -268,8 +306,8 @@ func (df *DiscoveryFetcher) fetchProviderModels(ctx context.Context, providerNam
 	models = filterNonChatModels(models, provider)
 	models = backfillStaticModels(models, providerName, provider, logger)
 
-	if strings.EqualFold(providerName, "ollama") {
-		models = df.enrichOllama(ctx, provider.URL, models, logger)
+	if strings.EqualFold(providerName, "ollama") || strings.EqualFold(provider.ApiFormat, "ollama") {
+		models = df.enrichOllama(ctx, provider.URL, models, client, logger)
 	}
 
 	if len(models) > maxModelsPerSrc {
@@ -361,7 +399,7 @@ func backfillStaticModels(models []DiscoveredModel, providerName string, provide
 }
 
 // fetchWithRetry executes the HTTP request with retries and records retry metrics.
-func (df *DiscoveryFetcher) fetchWithRetry(req *http.Request, provider *config.Provider, ctx context.Context) (*http.Response, error) {
+func (df *DiscoveryFetcher) fetchWithRetry(ctx context.Context, client *http.Client, req *http.Request, provider *config.Provider) (*http.Response, error) {
 	maxAttempts := df.maxAttempts
 	if provider.MaxRetryAttempts > 0 {
 		maxAttempts = provider.MaxRetryAttempts
@@ -371,7 +409,7 @@ func (df *DiscoveryFetcher) fetchWithRetry(req *http.Request, provider *config.P
 	attempt := 0
 	return util.DoWithRetryResp(ctx, maxAttempts, func() (*http.Response, error) {
 		attempt++
-		resp, fetchErr := df.client.Do(req)
+		resp, fetchErr := client.Do(req)
 		if fetchErr != nil {
 			if resp != nil {
 				_ = resp.Body.Close()

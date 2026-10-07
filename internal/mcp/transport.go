@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/nenya/internal/infra"
+	"github.com/nenya/internal/netutil"
 	"github.com/nenya/internal/util"
 )
 
@@ -119,19 +120,22 @@ func NewHTTPTransport(cfg TransportConfig) *HTTPTransport {
 	}
 	t.streamCtx, t.streamCancel = context.WithCancel(context.Background())
 
+	transport := &http.Transport{
+		DialContext: (&net.Dialer{
+			Timeout:   30 * time.Second,
+			KeepAlive: 30 * time.Second,
+		}).DialContext,
+		ResponseHeaderTimeout: cfg.RequestTimeout,
+		TLSHandshakeTimeout:   10 * time.Second,
+		IdleConnTimeout:       cfg.IdleTimeout,
+		MaxIdleConns:          2,
+		MaxIdleConnsPerHost:   2,
+		Proxy:                 http.ProxyFromEnvironment,
+	}
+	netutil.ApplyTransportSecurity(transport)
 	t.httpClient = &http.Client{
-		Timeout: cfg.RequestTimeout + 5*time.Second,
-		Transport: &http.Transport{
-			DialContext: (&net.Dialer{
-				Timeout:   30 * time.Second,
-				KeepAlive: 30 * time.Second,
-			}).DialContext,
-			ResponseHeaderTimeout: cfg.RequestTimeout,
-			TLSHandshakeTimeout:   10 * time.Second,
-			IdleConnTimeout:       cfg.IdleTimeout,
-			MaxIdleConns:          2,
-			MaxIdleConnsPerHost:   2,
-		},
+		Timeout:   cfg.RequestTimeout + 5*time.Second,
+		Transport: transport,
 	}
 
 	return t

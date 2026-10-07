@@ -686,7 +686,7 @@ func TestBuildMCPClients_MultipleServers(t *testing.T) {
 func TestNewResponseCache_Disabled(t *testing.T) {
 	cfg := testConfig()
 	cfg.ResponseCache.Enabled = config.PtrTo(false)
-	cache := newResponseCache(cfg, testLogger(), &infra.Metrics{})
+	cache := newResponseCache(cfg, testLogger(), &infra.Metrics{}, &http.Client{Timeout: 10 * time.Second})
 
 	if cache != nil {
 		t.Error("expected nil cache when disabled")
@@ -702,7 +702,7 @@ func TestNewResponseCache_Enabled(t *testing.T) {
 		TTLSeconds:        300,
 		EvictEverySeconds: 60,
 	}
-	cache := newResponseCache(cfg, testLogger(), &infra.Metrics{})
+	cache := newResponseCache(cfg, testLogger(), &infra.Metrics{}, &http.Client{Timeout: 10 * time.Second})
 
 	if cache == nil {
 		t.Fatal("expected non-nil cache when enabled")
@@ -916,7 +916,7 @@ func TestShutdown_UnloadsEngineModelsAndStopsFetcher(t *testing.T) {
 		TimeoutSeconds: 5,
 		MaxSessions:    3,
 		StartupModels:  []string{"test-model"},
-	}, testLogger())
+	}, nil, testLogger())
 	if err := engine.Startup(context.Background()); err != nil {
 		t.Fatalf("engine startup: %v", err)
 	}

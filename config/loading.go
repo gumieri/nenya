@@ -799,6 +799,8 @@ func ResolveProviders(cfg *Config, secrets *SecretsConfig) map[string]*Provider 
 			MaxRetryAttempts:             pc.MaxRetryAttempts,
 			RetryablePhrases:             pc.RetryablePhrases,
 			RequestScopedErrors:          pc.RequestScopedErrors,
+			CABundle:                     pc.CABundle,
+			ProxyURL:                     pc.ProxyURL,
 			Thinking:                     pc.Thinking,
 			Billing:                      pc.Billing,
 			AllowedModels:                pc.AllowedModels,

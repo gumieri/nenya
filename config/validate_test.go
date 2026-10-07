@@ -29,7 +29,7 @@ func TestValidateProviderResponseHeaderTimeout(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			providers := map[string]*Provider{"p": {ResponseHeaderTimeoutSeconds: tt.seconds}}
-			errs := validateProviders(context.Background(), providers, testLogger())
+			errs := validateProviders(context.Background(), providers, nil, testLogger())
 			if tt.wantErr {
 				if len(errs) != 1 {
 					t.Fatalf("expected 1 error, got %v", errs)
@@ -272,14 +272,14 @@ func TestValidateOllamaHealth(t *testing.T) {
 	}))
 	defer server.Close()
 
-	ok := validateOllamaHealth(context.Background(), server.URL)
+	ok := validateOllamaHealth(context.Background(), server.URL, "", "")
 	if !ok {
 		t.Error("expected health check to pass")
 	}
 }
 
 func TestValidateOllamaHealth_Failure(t *testing.T) {
-	ok := validateOllamaHealth(context.Background(), "http://127.0.0.1:1/nonexistent")
+	ok := validateOllamaHealth(context.Background(), "http://127.0.0.1:1/nonexistent", "", "")
 	if ok {
 		t.Error("expected health check to fail")
 	}
@@ -519,7 +519,7 @@ func TestValidateWithMinimalRequest(t *testing.T) {
 		AuthStyle: "bearer",
 	}
 
-	err := validateWithMinimalRequest(provider, context.Background(), logger)
+	err := validateWithMinimalRequest(context.Background(), provider, nil, logger)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -538,7 +538,7 @@ func TestValidateWithMinimalRequest_Unauthorized(t *testing.T) {
 		AuthStyle: "bearer",
 	}
 
-	err := validateWithMinimalRequest(provider, context.Background(), logger)
+	err := validateWithMinimalRequest(context.Background(), provider, nil, logger)
 	if err == nil || !strings.Contains(err.Error(), "API key rejected") {
 		t.Errorf("expected 'API key rejected' error, got: %v", err)
 	}
@@ -557,7 +557,7 @@ func TestValidateWithMinimalRequest_UnexpectedStatus(t *testing.T) {
 		AuthStyle: "bearer",
 	}
 
-	err := validateWithMinimalRequest(provider, context.Background(), logger)
+	err := validateWithMinimalRequest(context.Background(), provider, nil, logger)
 	if err == nil {
 		t.Error("expected error for 404")
 	}

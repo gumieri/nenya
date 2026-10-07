@@ -14,7 +14,7 @@ import (
 )
 
 func TestNewSessionManager(t *testing.T) {
-	sm := NewSessionManager("http://localhost:11434", 30*time.Second)
+	sm := NewSessionManager("http://localhost:11434", 30*time.Second, "")
 	if sm == nil {
 		t.Fatal("NewSessionManager returned nil")
 	}
@@ -39,7 +39,7 @@ func TestLoadModel_HappyPath(t *testing.T) {
 	}))
 	defer server.Close()
 
-	sm := NewSessionManager(server.URL, 10*time.Second)
+	sm := NewSessionManager(server.URL, 10*time.Second, "")
 	ctx := context.Background()
 
 	session, err := sm.LoadModel(ctx, "qwen2.5-coder:7b", LoadOptions{})
@@ -67,7 +67,7 @@ func TestLoadModel_ReuseExisting(t *testing.T) {
 	}))
 	defer server.Close()
 
-	sm := NewSessionManager(server.URL, 10*time.Second)
+	sm := NewSessionManager(server.URL, 10*time.Second, "")
 	ctx := context.Background()
 
 	_, err := sm.LoadModel(ctx, "qwen2.5-coder:7b", LoadOptions{})
@@ -94,7 +94,7 @@ func TestUnloadModel_HappyPath(t *testing.T) {
 	}))
 	defer server.Close()
 
-	sm := NewSessionManager(server.URL, 10*time.Second)
+	sm := NewSessionManager(server.URL, 10*time.Second, "")
 	ctx := context.Background()
 
 	_, err := sm.LoadModel(ctx, "qwen2.5-coder:7b", LoadOptions{})
@@ -112,7 +112,7 @@ func TestUnloadModel_HappyPath(t *testing.T) {
 }
 
 func TestUnloadModel_NotLoaded(t *testing.T) {
-	sm := NewSessionManager("http://localhost:11434", 10*time.Second)
+	sm := NewSessionManager("http://localhost:11434", 10*time.Second, "")
 	ctx := context.Background()
 
 	if err := sm.UnloadModel(ctx, "qwen2.5-coder:7b"); err != nil {
@@ -127,7 +127,7 @@ func TestIsLoaded(t *testing.T) {
 	}))
 	defer server.Close()
 
-	sm := NewSessionManager(server.URL, 10*time.Second)
+	sm := NewSessionManager(server.URL, 10*time.Second, "")
 	ctx := context.Background()
 
 	if sm.IsLoaded("qwen2.5-coder:7b") {
@@ -151,7 +151,7 @@ func TestGetLoadedModels(t *testing.T) {
 	}))
 	defer server.Close()
 
-	sm := NewSessionManager(server.URL, 10*time.Second)
+	sm := NewSessionManager(server.URL, 10*time.Second, "")
 	ctx := context.Background()
 
 	models := sm.GetLoadedModels()
@@ -182,7 +182,7 @@ func TestListInstalledModels(t *testing.T) {
 	}))
 	defer server.Close()
 
-	sm := NewSessionManager(server.URL, 10*time.Second)
+	sm := NewSessionManager(server.URL, 10*time.Second, "")
 	ctx := context.Background()
 
 	models, err := sm.ListInstalledModels(ctx)
@@ -204,7 +204,7 @@ func TestConcurrentLoad(t *testing.T) {
 	}))
 	defer server.Close()
 
-	sm := NewSessionManager(server.URL, 10*time.Second)
+	sm := NewSessionManager(server.URL, 10*time.Second, "")
 	ctx := context.Background()
 
 	var wg sync.WaitGroup
@@ -252,7 +252,7 @@ func TestLoadModel_WithOptions(t *testing.T) {
 	}))
 	defer server.Close()
 
-	sm := NewSessionManager(server.URL, 10*time.Second)
+	sm := NewSessionManager(server.URL, 10*time.Second, "")
 	ctx := context.Background()
 
 	_, err := sm.LoadModel(ctx, "qwen2.5-coder:7b", LoadOptions{
@@ -272,7 +272,7 @@ func TestNewEngineManager(t *testing.T) {
 		MaxSessions:    3,
 	}
 
-	em := NewEngineManager(cfg, logger)
+	em := NewEngineManager(cfg, nil, logger)
 	if em == nil {
 		t.Fatal("NewEngineManager returned nil")
 	}
@@ -288,7 +288,7 @@ func TestNewEngineManager_DefaultMaxSessions(t *testing.T) {
 		TimeoutSeconds: 120,
 	}
 
-	em := NewEngineManager(cfg, logger)
+	em := NewEngineManager(cfg, nil, logger)
 	if em.config.MaxSessions != 3 {
 		t.Errorf("MaxSessions = %d, want 3 (default)", em.config.MaxSessions)
 	}
@@ -307,7 +307,7 @@ func TestEngineManager_LoadModel(t *testing.T) {
 		TimeoutSeconds: 10,
 		MaxSessions:    3,
 	}
-	em := NewEngineManager(cfg, logger)
+	em := NewEngineManager(cfg, nil, logger)
 	ctx := context.Background()
 
 	if err := em.LoadModel(ctx, "qwen2.5-coder:7b", LoadOptions{}); err != nil {
@@ -332,7 +332,7 @@ func TestEngineManager_UnloadModel(t *testing.T) {
 		TimeoutSeconds: 10,
 		MaxSessions:    3,
 	}
-	em := NewEngineManager(cfg, logger)
+	em := NewEngineManager(cfg, nil, logger)
 	ctx := context.Background()
 
 	_ = em.LoadModel(ctx, "qwen2.5-coder:7b", LoadOptions{})

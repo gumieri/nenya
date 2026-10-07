@@ -1,6 +1,8 @@
 package gateway
 
 import (
+	"log/slog"
+
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -17,7 +19,7 @@ func TestBuildProviderClients(t *testing.T) {
 		"fallback": {Name: "fallback", TimeoutSeconds: 90},
 	}
 
-	clients := buildProviderClients(base, providers)
+	clients := buildProviderClients(base, providers, networkPolicy{}, nil, slog.Default())
 
 	if len(clients) != 2 {
 		t.Fatalf("expected 2 dedicated clients, got %d: %v", len(clients), clients)

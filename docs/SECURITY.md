@@ -71,6 +71,19 @@ With `server.telemetry_unauthenticated` set, `key_name` labels are replaced
 by the constant `redacted` so an unauthenticated `/metrics` scrape cannot
 enumerate API key names (NENYA-131).
 
+### Outbound Transport Policy (NENYA-137)
+
+Every outbound HTTP transport (provider dispatches, model discovery,
+billing quota fetches, MCP connections, local Ollama) carries an explicit
+TLS 1.2 floor. `providers.<name>.ca_bundle` / `network.ca_bundle` append a
+private CA to the system roots — private CAs grant trust without disabling
+system trust. `providers.<name>.proxy_url` / `network.proxy_url` route
+dispatches through an http/https/socks5/socks5h egress proxy; when unset, the
+standard `HTTPS_PROXY`/`NO_PROXY` environment variables apply. CA paths and
+proxy schemes are validated at startup and the startup gate fails on an
+invalid policy; only direct-built constructions (tests) degrade to system
+defaults with an error log rather than skipping validation silently.
+
 ### Telemetry Endpoints
 
 `/statsz` and `/metrics` require authentication (any role — `read-only`

@@ -36,12 +36,12 @@ func TestFetchProviderModels_RetryOnNetworkError(t *testing.T) {
 		TimeoutSeconds: 30,
 	}
 
-	df := NewDiscoveryFetcher(3)
+	df := NewDiscoveryFetcher(3, nil)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
 	logger := slog.Default()
-	models, err := df.fetchProviderModels(ctx, "test-provider", provider, logger)
+	models, err := df.fetchProviderModels(ctx, "test-provider", provider, nil, logger)
 	if err != nil {
 		t.Fatalf("expected success, got error: %v", err)
 	}
@@ -54,6 +54,76 @@ func TestFetchProviderModels_RetryOnNetworkError(t *testing.T) {
 	if attempts.Load() != 3 {
 		t.Errorf("expected 3 attempts, got %d", attempts.Load())
 	}
+}
+
+// TestClientForSelection pins the NENYA-137 client selection: the ollama
+// client is used for Ollama engines (by name or api_format), the
+// fleet-policy client for everything else.
+func TestClientForSelection(t *testing.T) {
+	fleet := &http.Client{}
+	ollama := &http.Client{}
+	df := NewDiscoveryFetcher(3, fleet).WithOllamaClient(ollama)
+
+	cases := []struct {
+		name     string
+		provider *config.Provider
+		want     *http.Client
+	}{
+		{name: "ollama by name", provider: &config.Provider{Name: "ollama"}, want: ollama},
+		{name: "ollama by api_format", provider: &config.Provider{Name: "local-llama", ApiFormat: "ollama"}, want: ollama},
+		{name: "fleet default", provider: &config.Provider{Name: "openai"}, want: fleet},
+		{name: "case-insensitive name", provider: &config.Provider{Name: "Ollama"}, want: ollama},
+	}
+	for _, tc := range cases {
+		if got := df.clientFor(tc.provider.Name, tc.provider); got != tc.want {
+			t.Errorf("%s: wrong client selected", tc.name)
+		}
+	}
+}
+
+// TestFetchProviderModels_UsesInjectedClient verifies the per-provider
+// client is actually exercised (NENYA-137 iteration-3 finding: the param
+// was previously dead wiring) — a recording transport proves the injected
+// client, not the fetcher default, serves the request.
+func TestFetchProviderModels_UsesInjectedClient(t *testing.T) {
+	var injectedHits, defaultHits atomic.Bool
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"object": "list",
+			"data":   []interface{}{map[string]string{"id": "test-model"}},
+		})
+	}))
+	defer server.Close()
+
+	provider := &config.Provider{
+		Name:      "test-provider",
+		URL:       server.URL + "/chat/completions",
+		AuthStyle: "none",
+	}
+
+	injected := &http.Client{Transport: &hitRecordingTransport{hit: &injectedHits, base: http.DefaultTransport}}
+	df := NewDiscoveryFetcher(1, &http.Client{Transport: &hitRecordingTransport{hit: &defaultHits, base: http.DefaultTransport}})
+
+	if _, err := df.fetchProviderModels(context.Background(), "test-provider", provider, injected, slog.Default()); err != nil {
+		t.Fatalf("expected success via the injected client, got error: %v", err)
+	}
+	if !injectedHits.Load() {
+		t.Fatal("the injected client was not used for the fetch")
+	}
+	if defaultHits.Load() {
+		t.Fatal("the fetcher default client must not be used when a per-provider client is passed")
+	}
+}
+
+// hitRecordingTransport flags any request routed through it.
+type hitRecordingTransport struct {
+	hit  *atomic.Bool
+	base http.RoundTripper
+}
+
+func (h *hitRecordingTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	h.hit.Store(true)
+	return h.base.RoundTrip(req)
 }
 
 func TestFetchProviderModels_NoRetryOnContextTimeout(t *testing.T) {
@@ -77,12 +147,12 @@ func TestFetchProviderModels_NoRetryOnContextTimeout(t *testing.T) {
 		TimeoutSeconds: 30,
 	}
 
-	df := NewDiscoveryFetcher(10)
+	df := NewDiscoveryFetcher(10, nil)
 	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
 	defer cancel()
 
 	logger := slog.Default()
-	_, err := df.fetchProviderModels(ctx, "test-provider", provider, logger)
+	_, err := df.fetchProviderModels(ctx, "test-provider", provider, nil, logger)
 	if err == nil {
 		t.Fatal("expected timeout error, got nil")
 	}
@@ -110,11 +180,11 @@ func TestFetchProviderModels_FirstAttemptSucceeds(t *testing.T) {
 		TimeoutSeconds: 30,
 	}
 
-	df := NewDiscoveryFetcher(5)
+	df := NewDiscoveryFetcher(5, nil)
 	ctx := context.Background()
 	logger := slog.Default()
 
-	models, err := df.fetchProviderModels(ctx, "test-provider", provider, logger)
+	models, err := df.fetchProviderModels(ctx, "test-provider", provider, nil, logger)
 	if err != nil {
 		t.Fatalf("expected success, got error: %v", err)
 	}
@@ -150,11 +220,11 @@ func TestFetchProviderModels_ProviderOverride(t *testing.T) {
 		MaxRetryAttempts: 2,
 	}
 
-	df := NewDiscoveryFetcher(5)
+	df := NewDiscoveryFetcher(5, nil)
 	ctx := context.Background()
 	logger := slog.Default()
 
-	models, err := df.fetchProviderModels(ctx, "test-provider", provider, logger)
+	models, err := df.fetchProviderModels(ctx, "test-provider", provider, nil, logger)
 	if err != nil {
 		t.Fatalf("expected success, got error: %v", err)
 	}
@@ -184,11 +254,11 @@ func TestFetchProviderModels_NoBackfillWithoutProviderAllows(t *testing.T) {
 		AllowedModels:  []string{},
 	}
 
-	df := NewDiscoveryFetcher(5)
+	df := NewDiscoveryFetcher(5, nil)
 	ctx := context.Background()
 	logger := slog.Default()
 
-	models, err := df.fetchProviderModels(ctx, "test-provider", provider, logger)
+	models, err := df.fetchProviderModels(ctx, "test-provider", provider, nil, logger)
 	if err != nil {
 		t.Fatalf("expected success, got error: %v", err)
 	}
@@ -219,11 +289,11 @@ func TestFetchProviderModels_BackfillRespectsProviderAllows(t *testing.T) {
 		AllowedModels:  []string{"^gpt-4$"},
 	}
 
-	df := NewDiscoveryFetcher(5)
+	df := NewDiscoveryFetcher(5, nil)
 	ctx := context.Background()
 	logger := slog.Default()
 
-	models, err := df.fetchProviderModels(ctx, "test-provider", provider, logger)
+	models, err := df.fetchProviderModels(ctx, "test-provider", provider, nil, logger)
 	if err != nil {
 		t.Fatalf("expected success, got error: %v", err)
 	}

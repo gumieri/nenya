@@ -61,7 +61,8 @@ When a **file** is specified, only that file is loaded (single-file mode, unchan
 | Response Cache | `response_cache` | Response caching with LRU eviction                       |
 | Agents         | `agents`         | Model lists, strategies, circuit breakers, MCP config    |
 | Discovery      | `discovery`      | Dynamic model discovery, auto-agents                     |
-| Providers      | `providers`      | Upstream API endpoints                                   |
+| Providers      | `providers`      | Upstream API endpoints, per-provider network overrides   |
+| Network        | `network`        | Fleet-wide CA bundle and egress proxy defaults (NENYA-137) |
 
 ## Multi-File Configuration (Directory Mode)
 
@@ -647,7 +648,21 @@ Each model entry (object form):
 
 ## `providers`
 
-Upstream LLM provider registry. Built-in providers are automatically loaded from the internal Provider Registry:
+Upstream LLM provider registry. Built-in providers are automatically loaded from the internal Provider Registry.
+
+### Per-provider network settings (NENYA-137)
+
+Every provider accepts two outbound transport overrides for corporate
+TLS-intercepting proxies and egress proxies:
+
+| Field             | Default                     | Description                                                                                                                                                                                                                          |
+| ----------------- | --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `ca_bundle`       | `network.ca_bundle` (empty) | Path to a PEM certificate bundle appended to the system roots for this provider's TLS connections — a private CA grants trust without disabling system trust. Validated at startup (readable + parseable PEM).                          |
+| `proxy_url`       | `network.proxy_url` (empty) | Egress proxy for dispatches to this provider (`http`, `https`, `socks5`, or `socks5h`). Validated at startup.                                                                                                                                     |
+
+Fleet-wide defaults live in the `network` section: `{"network": {"ca_bundle": "/etc/nenya/corp-ca.pem", "proxy_url": "http://egress:3128"}}`. When neither the provider nor the network section sets a proxy, the standard `HTTPS_PROXY`/`NO_PROXY` environment variables apply (loopback is always direct under the environment default). An explicit `proxy_url` routes ALL hosts including loopback — the ollama provider is special-cased to never inherit the fleet proxy, so local engines stay direct unless explicitly overridden. Model discovery traverses the same fleet policy; Ollama engines (by name or `api_format`) are discovered through the ollama-specific client, which never inherits the fleet proxy. Known limitation: per-provider `ca_bundle`/`proxy_url` overrides apply to dispatches and validation pings, but non-ollama discovery fetches use the fleet-default client.
+
+### Built-in providers
 
 | Name           | URL                                                                        | Auth Style      |
 | -------------- | -------------------------------------------------------------------------- | --------------- |

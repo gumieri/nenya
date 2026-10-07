@@ -24,11 +24,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net"
 	"net/http"
 	"sync"
 	"time"
 
+	"github.com/nenya/internal/netutil"
 	"github.com/nenya/internal/util"
 )
 
@@ -81,12 +83,16 @@ type tagsResponse struct {
 	} `json:"models"`
 }
 
-func NewSessionManager(baseURL string, timeout time.Duration) *SessionManager {
+// NewSessionManager creates the session manager for the local engine.
+// caBundlePath is the fleet-wide CA bundle (network.ca_bundle, NENYA-137):
+// a remote local_engine.base_url behind the private CA verifies TLS exactly
+// like gateway dispatches to the same endpoint; empty means system roots.
+// Proxying stays on the environment default, which never routes loopback.
+func NewSessionManager(baseURL string, timeout time.Duration, caBundlePath string) *SessionManager {
 	return &SessionManager{
 		sessions: make(map[string]*Session),
-		client: &http.Client{
-			Timeout: timeout,
-			Transport: &http.Transport{
+		client: func() *http.Client {
+			transport := &http.Transport{
 				DialContext: (&net.Dialer{
 					Timeout:   30 * time.Second,
 					KeepAlive: 30 * time.Second,
@@ -97,8 +103,22 @@ func NewSessionManager(baseURL string, timeout time.Duration) *SessionManager {
 				IdleConnTimeout:       90 * time.Second,
 				MaxIdleConns:          10,
 				MaxIdleConnsPerHost:   2,
-			},
-		},
+				// Environment default never proxies loopback, so local
+				// engines stay direct while a remote Ollama honors
+				// HTTPS_PROXY for parity with the gateway transports.
+				Proxy: http.ProxyFromEnvironment,
+			}
+			netutil.ApplyTransportSecurity(transport)
+			if caBundlePath != "" {
+				// ApplyTransportSecurity guarantees TLSClientConfig non-nil.
+				if pool, err := netutil.LoadCABundle(caBundlePath); err != nil {
+					slog.Warn("local engine ca_bundle invalid — using system roots", "err", err)
+				} else {
+					transport.TLSClientConfig.RootCAs = pool
+				}
+			}
+			return &http.Client{Timeout: timeout, Transport: transport}
+		}(),
 		baseURL: baseURL,
 		timeout: timeout,
 	}
