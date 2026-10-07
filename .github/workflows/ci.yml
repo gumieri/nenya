@@ -19,17 +19,59 @@ jobs:
           fetch-depth: 1
 
       - uses: actions/setup-go@v7
+        id: setup-go
         with:
           go-version-file: go.mod
+          # Zero-dependency module: go.sum is empty, so key the built-in
+          # build-cache on go.mod instead.
+          cache-dependency-path: go.mod
 
-      - uses: actions/cache@v5
-        with:
-          path: ~/go/pkg/mod
-          key: go-mod-${{ hashFiles('go.sum') }}
+      - name: Test (race + coverage)
+        run: go test ./... -race -coverprofile=coverage.out -timeout 5m
 
-      - run: go test ./... -race -timeout 5m
-      - run: go vet ./...
+      - name: Vet
+        run: go vet ./...
+
+      - name: Coverage gates
+        run: |
+          set -eu
+          # Floors start just below the measured baseline (2026-10-07:
+          # total 75.4%, function-average per package) and ratchet up over
+          # time — raise them, never lower them.
+          #
+          # Semantics: the total is statement coverage over packages WITH
+          # tests — packages without any test files (deploy, examples,
+          # internal/version) are invisible to this gate. Per-package checks
+          # are function averages; a future subpackage (internal/pipeline/x)
+          # folds into its parent's average.
+          total_floor=74
+          pipeline_floor=80
+          auth_floor=77
+          security_floor=85
+          stream_floor=73
+
+          go tool cover -func=coverage.out > cover-func.txt
+          total=$(awk '/^total:/ {gsub(/%/,"",$3); print $3}' cover-func.txt)
+          echo "total coverage: ${total}% (floor ${total_floor}%)"
+          fail=0
+          check() { # check <label> <measured> <floor>
+            echo "  $1: $2% (floor $3%)"
+            awk -v c="$2" -v f="$3" 'BEGIN {exit !(c+0 >= f+0)}' || fail=1
+          }
+          pkg_avg() { # function-average coverage for a package prefix
+            awk -v pkg="github.com/nenya/$1/" \
+              '{if (index($1, pkg) == 1) {gsub(/%/,"",$3); s+=$3; n++}} END {if (n) printf "%.1f", s/n; else print "0"}' \
+              cover-func.txt
+          }
+          check total "$total" "$total_floor"
+          check internal/pipeline "$(pkg_avg internal/pipeline)" "$pipeline_floor"
+          check internal/auth "$(pkg_avg internal/auth)" "$auth_floor"
+          check internal/security "$(pkg_avg internal/security)" "$security_floor"
+          check internal/stream "$(pkg_avg internal/stream)" "$stream_floor"
+          exit "$fail"
 
       - uses: golangci/golangci-lint-action@v9
         with:
-          version: latest
+          # Pin: v2 schema required by .golangci.yml; "latest" lets an
+          # unrelated release break CI.
+          version: v2.11
