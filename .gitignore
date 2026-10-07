@@ -13,12 +13,16 @@ secrets*.json
 bin/
 pkg/
 vendor/
+dist/
 
 # Coverage and test outputs
 coverage.txt
 coverage.out
 *.coverprofile
 *.test
+
+# Python tooling caches (stray local artifacts)
+.ruff_cache/
 
 # IDE files
 .vscode/
@@ -34,6 +38,5 @@ coverage.out
 .Trashes
 ehthumbs.db
 Thumbs.db
-dist/
 
 .opencode/
