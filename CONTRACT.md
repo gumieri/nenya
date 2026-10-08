@@ -563,6 +563,48 @@ Primary consumer endpoint: `GET /v1/models` (model catalog) and
 5. Consumers that discover an unsupported `contract_version` MUST fail with a
    message naming the installed and supported versions.
 
+## 10a. Go package surface: `config/` (stable)
+
+Root package `config` is a declared **public API surface** for Go consumers
+(nenyactl and future tooling import it as `github.com/nenya/config` to
+read, validate, and construct Nenya configuration programmatically — the
+same facts §5/§6 expose on disk, at the type level).
+
+Guarantees:
+
+1. **JSON shape stability.** The `json` tags of exported fields on the
+   types below are contract: renaming or removing a tag is a breaking
+   change (contract version bump); adding a field with an `omitempty` tag
+   is additive.
+2. **Type preservation.** Exported fields keep their Go types; type changes
+   are breaking.
+3. **Constructor/validation API.** The exported loading and validation
+   entry points keep their names and roles: the `*Provider`/
+   `*GovernanceConfig`/`*NetworkConfig` resolver methods named below are
+   pinned by the releasecontract guard; `Load*`/`Validate*` helpers and
+   `PtrTo` are guaranteed by name.
+4. **Defaults drift guard.** Default constants move only with a CHANGELOG
+   note; the resolver methods always return a valid value for zero-value
+   configs.
+5. **Declared opt-outs.** An exported field tagged `json:"-"` is
+   internal-grade runtime state (e.g. resolved targets) — exempt from the
+   JSON guarantee by declaration.
+6. **Everything else in the package is `internal`-grade**: unexported
+   fields, helper structs, and non-listed types may change without notice.
+
+Contract types (non-exhaustive enumeration of the guaranteed roots):
+`Config` (+ every section type it references: `ServerConfig`,
+`GovernanceConfig`, `ContextConfig`, `BouncerConfig`, `TracingConfig`,
+`TokenCalibrationConfig`, `NetworkConfig`, `AgentConfig`, `ProviderConfig`,
+`Provider`, `LocalEngineConfig`, `DiscoveryConfig`, …), `SecretsConfig`,
+`ApiKey`, `SecretsConfig.ProviderKeys`.
+
+Enforcement: `internal/releasecontract` carries
+`TestConfigPublicSurfaceJSONTags` (every exported field of the contract
+roots must carry a non-empty `json` tag) and
+`TestConfigPublicSurfaceMethods` (the guaranteed resolver methods exist
+with expected names) so the surface cannot erode silently.
+
 ---
 
 ## Appendix A — JSON shapes
