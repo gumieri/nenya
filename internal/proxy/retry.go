@@ -22,6 +22,7 @@ import (
 	"github.com/nenya/internal/infra"
 	"github.com/nenya/internal/pipeline"
 	"github.com/nenya/internal/routing"
+	"github.com/nenya/internal/tracing"
 	"github.com/nenya/internal/util"
 )
 
@@ -1079,6 +1080,12 @@ func (rl *retryLoop) Exhausted() {
 // Creates a retryLoop, tracks in-flight metrics, and runs the retry loop. If retry loop
 // creation fails, returns 500 Internal Server Error.
 func (p *Proxy) forwardToUpstream(gw *gateway.NenyaGateway, w http.ResponseWriter, r *http.Request, opts forwardOptions) {
+	// NENYA-140: the dispatch loop is a traced stage.
+	ctx, span := tracing.StartSpan(r.Context(), gw.Logger, "upstream.dispatch")
+	defer span.End()
+	tracing.RecordStage(ctx, "upstream.dispatch")
+	r = r.WithContext(ctx)
+
 	rl, err := newRetryLoop(p, gw, w, r, opts)
 	if err != nil {
 		writeGatewayError(w, http.StatusInternalServerError, ErrorTypeProvider, "Internal Server Error")

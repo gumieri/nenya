@@ -18,6 +18,7 @@ import (
 	"github.com/nenya/internal/pipeline"
 	"github.com/nenya/internal/routing"
 	"github.com/nenya/internal/stream"
+	"github.com/nenya/internal/tracing"
 	"github.com/nenya/internal/util"
 )
 
@@ -356,7 +357,13 @@ func (p *Proxy) forwardToUpstreamWithMCP(gw *gateway.NenyaGateway,
 	totalToolCalls := 0
 	actualIter := 0
 
-	mcpLoopCtx, mcpLoopCancel := context.WithTimeout(r.Context(), mcpLoopMaxDuration)
+	// NENYA-140: the whole tool loop is one traced stage; thread the loop
+	// span back into r so re-dispatches parent to it, not the root.
+	loopCtx, loopSpan := tracing.StartSpan(r.Context(), gw.Logger, "upstream.mcp_loop")
+	defer loopSpan.End()
+	tracing.RecordStage(loopCtx, "upstream.mcp_loop")
+	r = r.WithContext(loopCtx)
+	mcpLoopCtx, mcpLoopCancel := context.WithTimeout(loopCtx, mcpLoopMaxDuration)
 	defer mcpLoopCancel()
 
 	defer func() {

@@ -10,6 +10,7 @@ import (
 
 	"github.com/nenya/config"
 	"github.com/nenya/internal/infra"
+	"github.com/nenya/internal/tracing"
 )
 
 // Interceptor defines a preprocessing step that can inspect and modify
@@ -134,6 +135,10 @@ type InterceptorChain struct {
 	strict       bool
 	logger       *slog.Logger
 	metrics      *infra.Metrics
+	// stageName labels the chain in OTel-lite traces (NENYA-140); empty
+	// uses the default "pipeline.interceptors". Sub-chains with distinct
+	// semantics (e.g. the MCP loop's security re-scan) set their own.
+	stageName string
 }
 
 // NewInterceptorChain creates a new interceptor chain.
@@ -213,6 +218,17 @@ func (e *StrictError) Unwrap() error { return e.Err }
 // per-interceptor Truncated/Reason/TokenCount are not aggregated — consumers
 // must rely on req.Payload mutation and req.TokenCount.
 func (c *InterceptorChain) Execute(ctx context.Context, req *InterceptRequest) (*InterceptResult, error) {
+	// NENYA-140: the interceptor chain is a traced stage — one span for
+	// the whole chain (per-interceptor detail stays in the existing debug
+	// logs), recorded into the request summary when a trace is active.
+	stage := c.stageName
+	if stage == "" {
+		stage = "pipeline.interceptors"
+	}
+	ctx, span := tracing.StartSpan(ctx, c.logger, stage)
+	defer span.End()
+	tracing.RecordStage(ctx, stage)
+
 	for _, interceptor := range c.interceptors {
 		if ctx.Err() != nil {
 			return nil, ctx.Err()
@@ -332,6 +348,7 @@ func (c *InterceptorChain) DeterministicSecuritySubset() *InterceptorChain {
 	}
 	sub := NewInterceptorChainWithMetrics(c.logger, c.metrics)
 	sub.strict = c.strict
+	sub.stageName = "pipeline.mcp_rescan"
 	for _, interceptor := range c.interceptors {
 		if _, ok := interceptor.(deterministicSecurityInterceptor); ok {
 			sub.interceptors = append(sub.interceptors, interceptor)

@@ -3,10 +3,10 @@
 ## Package Dependency DAG
 
 ```
-netutil, config -> tiktoken, security, version, util -> infra -> auth -> pipeline -> stream -> resilience -> billing -> mcp -> adapter -> discovery -> providers -> routing -> local -> gateway -> proxy
+netutil, tracing, config -> tiktoken, security, version, util -> infra -> auth -> pipeline -> stream -> resilience -> billing -> mcp -> adapter -> discovery -> providers -> routing -> local -> gateway -> proxy
 ```
 
-Each layer may only import from layers to its left — enforced by `TestDocsDAGMatchesImportOrder` against the runtime import graph (`internal/releasecontract/docs_dag_test.go`), so this map cannot drift silently. `netutil` (outbound transport policy helpers) and root `config` are the shared foundations; `util` imports root `config`, so it sits right of it. Leaf dependencies (`netutil`, `tiktoken`, `security`, `version`) are stdlib-only. The `local` package manages Ollama model lifecycles; `auth` (RBAC, account pools, key usage) sits right of `infra`; `billing` builds on `resilience` backoff/retry state. Packages outside the runtime DAG by design: `releasecontract` (stdlib-only release-contract drift guards) and `testutil` (test-only helpers).
+Each layer may only import from layers to its left — enforced by `TestDocsDAGMatchesImportOrder` against the runtime import graph (`internal/releasecontract/docs_dag_test.go`), so this map cannot drift silently. `netutil` (outbound transport policy helpers) and root `config` are the shared foundations; `util` imports root `config`, so it sits right of it. Leaf dependencies (`netutil`, `tracing`, `tiktoken`, `security`, `version`) are stdlib-only. `tracing` provides OTel-lite request tracing (W3C traceparent propagation + stage spans exported as slog records). The `local` package manages Ollama model lifecycles; `auth` (RBAC, account pools, key usage) sits right of `infra`; `billing` builds on `resilience` backoff/retry state. Packages outside the runtime DAG by design: `releasecontract` (stdlib-only release-contract drift guards) and `testutil` (test-only helpers).
 
 ## Package Overview
 

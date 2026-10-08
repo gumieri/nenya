@@ -21,6 +21,7 @@ import (
 	"github.com/nenya/internal/pipeline"
 	providerpkg "github.com/nenya/internal/providers"
 	"github.com/nenya/internal/routing"
+	"github.com/nenya/internal/tracing"
 	"github.com/nenya/internal/util"
 )
 
@@ -990,6 +991,25 @@ func (p *Proxy) handleChatCompletions(gw *gateway.NenyaGateway, w http.ResponseW
 	if apiKey != nil {
 		keyRef = apiKey.Name
 	}
+	// NENYA-140: OTel-lite request trace — continue an inbound W3C
+	// traceparent when present, else root a fresh trace; echo the active
+	// traceparent back so clients can correlate. The traced context flows
+	// to every stage via r (WithContext). Disabled: fully inert (no
+	// derivation, no spans, no header, no rand reads).
+	if !gw.Config.Governance.TracingEnabled() {
+		r = r.WithContext(tracing.Disable(r.Context()))
+	} else {
+		traceName := strings.TrimPrefix(r.URL.Path, "/v1/")
+		ctx, requestTrace := tracing.StartRequest(r.Context(), gw.Logger, r.Header.Get("Traceparent"), traceName)
+		r = r.WithContext(ctx)
+		if tp := tracing.OutgoingTraceparent(r.Context()); tp != "" {
+			w.Header().Set("Traceparent", tp)
+		}
+		// The summary covers dispatch-bearing requests only: registered
+		// after validateChatRequest so body-read failures and the cache-hit
+		// sentinel (nothing dispatched) do not emit a misleading summary.
+		defer requestTrace.Finish()
+	}
 	req, herr := p.validateChatRequest(w, r, gw, keyRef)
 	if herr != nil {
 		if herr.Code == http.StatusNoContent {
@@ -1410,6 +1430,20 @@ func (p *Proxy) buildUpstreamRequest(gw *gateway.NenyaGateway, ctx context.Conte
 	} {
 		if v := srcHeaders.Get(h); v != "" {
 			req.Header.Set(h, v)
+		}
+	}
+	// NENYA-140: propagate the CURRENT trace context upstream (same trace,
+	// this hop as parent) rather than the client's original header — the
+	// gateway is a span on the trace, not a passthrough hop. When the
+	// gateway rooted a FRESH trace (invalid/absent inbound traceparent),
+	// the client's tracestate correlates with the discarded trace and is
+	// dropped (W3C §4.2).
+	if gw.Config.Governance.TracingEnabled() {
+		if tp := tracing.OutgoingTraceparent(ctx); tp != "" {
+			req.Header.Set("Traceparent", tp)
+			if !tracing.ContinuedInbound(ctx) {
+				req.Header.Del("Tracestate")
+			}
 		}
 	}
 	req.Header.Set("Content-Type", "application/json")

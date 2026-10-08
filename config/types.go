@@ -1044,6 +1044,12 @@ type GovernanceConfig struct {
 	// (Gemini, CJK-heavy DeepSeek/Mistral payloads), which previously
 	// made trim decisions and cost estimates systematically off.
 	TokenCalibration *TokenCalibrationConfig `json:"token_calibration,omitempty"`
+	// Tracing configures OTel-lite request tracing (NENYA-140): W3C
+	// traceparent propagation (inbound parse + upstream propagation) and
+	// stage spans exported as structured slog records with an Info-level
+	// request summary. Stdlib-only; no collector required.
+	Tracing *TracingConfig `json:"tracing,omitempty"`
+
 	// ParamCompat declares parameter-compatibility rules for models that
 	// reject parameters their predecessors accepted (NENYA-32). Rules are
 	// matched by model-ID prefix (config rules first, then the built-in
@@ -1132,6 +1138,20 @@ type TokenCalibrationConfig struct {
 	// window cannot blow up budgets or starve context. Defaults 0.5/4.0.
 	RatioClampMin float64 `json:"ratio_clamp_min,omitempty"`
 	RatioClampMax float64 `json:"ratio_clamp_max,omitempty"`
+}
+
+// TracingConfig gates OTel-lite request tracing (NENYA-140). Default on:
+// the cost is one parse, a handful of Debug records, and one Info summary
+// per request.
+type TracingConfig struct {
+	// Enabled gates trace derivation, upstream traceparent propagation,
+	// and span/summary emission (default true).
+	Enabled *bool `json:"enabled,omitempty"`
+}
+
+// TracingEnabled resolves the tracing gate (default true).
+func (g *GovernanceConfig) TracingEnabled() bool {
+	return g.Tracing == nil || g.Tracing.Enabled == nil || *g.Tracing.Enabled
 }
 
 // EffectiveTokenCalibrationParams resolves the calibration knobs with
