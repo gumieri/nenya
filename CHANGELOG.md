@@ -4,6 +4,10 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Changed
+
+- **HA externalization withdrawn beyond Phase 1 (NENYA-134 decision)**: the dependency policy is now absolute — Nenya will not use any external code or dependency. The Redis driver (`go-redis/v9`) and all phases of `docs/HA_STATE_DESIGN.md` that depend on it (2–5) are rejected; Phase 1 (consumer-side store interfaces with in-process memory implementations as the only implementations) is the terminal state. Single-replica is the supported topology for coordinated state
+
 ## [v0.17.0] - 2026-10-08
 
 ### Added

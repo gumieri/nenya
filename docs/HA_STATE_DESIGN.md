@@ -1,10 +1,26 @@
 # HA / Multi-Replica State Externalization — Design (NENYA-134)
 
-Status: design, not yet implemented. This document inventories Nenya's
+Status: Phase 1 shipped; **Phases 2–5 WITHDRAWN (2026-10-10 decision,
+see below)**. This document inventories Nenya's
 in-process coordination state, classifies it by consistency requirement,
-and defines the phased plan for externalizing it so multiple replicas can
+and defined the phased plan for externalizing it so multiple replicas can
 serve traffic behind one endpoint without redundant limits, split-brain
 cooldowns, or lost affinity.
+
+> **DECISION (2026-10-10) — no external code, ever.** Nenya will not use
+> any external code or dependency, without exception. The Phase 2 Redis
+> driver (`go-redis/v9`) and every phase that depends on it (§7 phases
+> 2–5) are **rejected**. Phase 1 — consumer-side store interfaces with
+> in-process memory implementations as the *only* implementations —
+> remains shipped and is the terminal state of this design.
+> Single-replica is the supported topology for coordinated state;
+> operators running multiple replicas accept the per-replica semantics of
+> §1 or front Nenya with something that needs no shared gateway state. If
+> multi-replica coordination is ever revisited, it must be built from
+> stdlib-only mechanisms owned by this repository — and §4's
+> "coordinator-free" row already notes gossip defeats Class A — so such a
+> design starts from a smaller ambition, not from a store. Do not re-open
+> Phase 2 without an explicit policy change from the maintainer.
 
 ## 1. Problem
 
@@ -103,13 +119,18 @@ cold local cache.
 | Postgres | A, B | Transactional but higher per-request latency for hot paths (rate limit check is on every dispatch) |
 | Coordinator-free (gossip) | B | No new infra, but split-brain semantics defeat Class A entirely |
 
-**Recommendation: Redis 7+**, accessed per class through distinct key
+**Recommendation: Redis 7+** *(WITHDRAWN by the 2026-10-10 dependency
+decision — see the notice at the top of this document; no external
+dependency will be introduced)*, accessed per class through distinct key
 prefixes, exclusively via small store interfaces so the in-memory
 implementation remains the default and tests never require Redis.
 **Dependency note**: this is the project's first third-party dependency
 (`go.mod` has zero requires, and the dependency policy mandates explicit
 human authorization). The Phase 2 driver uses `github.com/redis/go-redis/v9`;
 implementation must not start without that authorization on record.
+**(2026-10-10: authorization denied — the dependency policy is now
+absolute; this driver will never be built. Phases 2–5 below are
+withdrawn.)**
 
 ## 5. Interface design
 
@@ -220,6 +241,10 @@ state change and exported as `nenya_state_backend_up` (gauge) +
 `nenya_state_backend_failures_total`.
 
 ## 7. Phased plan
+
+> **WITHDRAWN as of 2026-10-10**: only Phase 1 shipped. Phases 2–5 depend
+> on the Redis driver rejected by the dependency decision at the top of
+> this document and will not be built. Kept for the historical record.
 
 Each phase is independently shippable and reverts to memory on config
 rollback.
