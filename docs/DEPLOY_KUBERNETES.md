@@ -152,6 +152,8 @@ service:
 
 ### High availability
 
+> **Per-replica state caveat**: Nenya coordinates provider rate limits, per-key budgets, billing exhaustion, circuit breakers, cooldowns, response caching, and session affinity **in process memory**. Scaling to `replicaCount > 1` does not share this state: provider-side limits multiply across replicas (the upstream enforces the real limit), exhausted accounts keep receiving traffic from other replicas, and breakers/cooldowns trip per-replica. **Single-replica is the supported topology for coordinated enforcement.** Multi-replica deployments are supported for horizontal throughput, but review the trade-offs above (and pin any `local_engine` to a single replica).
+
 ```yaml
 # values.yaml
 replicaCount: 3

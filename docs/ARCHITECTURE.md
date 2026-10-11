@@ -413,7 +413,7 @@ Request with MCP tools injected
 
 **Buffered mode**: When MCP tools are present, responses are buffered in memory rather than streamed to the client. This allows inspection for tool calls before the client sees anything. The final response (with no tool calls) is replayed as a complete SSE stream. Buffer size is bounded by `MaxBodyBytes`.
 
-**Tool name namespacing**: MCP tools are injected with the pattern `server__tool` (e.g., `mempalace__mempalace_search`). Non-MCP tool calls (from the client like `file_edit`) pass through unmodified.
+**Tool name namespacing**: MCP tools are injected with the pattern `server__tool` (e.g., `memory__memory_search`). Non-MCP tool calls (from the client like `file_edit`) pass through unmodified.
 
 **Mixed tool calls**: If the LLM calls both MCP and client tools in the same response, MCP tools are resolved first and the entire response is re-sent. The LLM may re-request client-only tools in the next iteration.
 

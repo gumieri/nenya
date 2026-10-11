@@ -43,7 +43,7 @@ Client Request (model: "build")
 
 1. Nenya checks if the resolved agent has an `mcp` configuration
 2. For each referenced server, transforms MCP tools into OpenAI function tool format
-3. Tools are namespaced as `server__tool_name` (e.g., `mempalace__mempalace_search`)
+3. Tools are namespaced as `server__tool_name` (e.g., `memory__memory_search`)
 4. Tools are appended to the request's existing `tools[]` array
 5. A system prompt is injected instructing the LLM to use the MCP tools for memory/knowledge retrieval
 6. The `prefix_cache.stable_tools` optimization sorts all tools (including MCP) for deterministic ordering
@@ -74,7 +74,7 @@ MCP servers are configured at the top level:
 ```json
 {
   "mcp_servers": {
-    "mempalace": {
+    "memory": {
       "url": "http://localhost:6060",
       "timeout": 30
     }
@@ -99,7 +99,7 @@ MCP integration is enabled per-agent:
     "build": {
       "strategy": "fallback",
       "mcp": {
-        "servers": ["mempalace"],
+        "servers": ["memory"],
         "max_iterations": 10,
         "auto_search": true,
         "auto_save": true
@@ -133,8 +133,8 @@ MCP tools are injected with the pattern `server__tool_name` to avoid collisions 
 
 | MCP Server | MCP Tool | Injected Name |
 |-------------|----------|--------------|
-| `mempalace` | `mempalace_search` | `mempalace__mempalace_search` |
-| `mempalace` | `add_drawer` | `mempalace__add_drawer` |
+| `memory` | `memory_search` | `memory__memory_search` |
+| `memory` | `add_entry` | `memory__add_entry` |
 | `files` | `read_file` | `files__read_file` |
 
 Non-MCP tool calls (from the client like `file_edit`, `bash`) pass through unmodified.
@@ -165,27 +165,25 @@ egress controls, canary tripwires) is documented in
 
 ## MCP Server Examples
 
-### MemPalace
+### Memory Server (example)
 
-[MemPalace](https://github.com/nenya/mempalace) provides semantic memory via drawers and wings. Run it via `mcp proxy`:
+Any MCP server exposing a search/save tool pair works. Example with a generic memory server proxied over HTTP:
 
 ```bash
-cd /path/to/mempalace
-pip install -e .
-mcp proxy --port 6060
+mcp-proxy --port 6060 -- memory-server
 ```
 
 ```json
 {
   "mcp_servers": {
-    "mempalace": {
+    "memory": {
       "url": "http://localhost:6060"
     }
   },
   "agents": {
     "build": {
       "mcp": {
-        "servers": ["mempalace"],
+        "servers": ["memory"],
         "auto_search": true,
         "auto_save": true
       }
@@ -194,7 +192,7 @@ mcp proxy --port 6060
 }
 ```
 
-MemPalace exposes tools like `mempalace_search` and `add_drawer`. Nenya auto-discovers them by scanning tool names for `search` and `add`/`save` substrings.
+The example server exposes tools like `memory_search` and `add_entry`. Nenya auto-discovers them by scanning tool names for `search` and `add`/`save` substrings.
 
 ### mem0
 
@@ -218,7 +216,7 @@ mcp-proxy --port 8081 -- mem0-mcp-server
 }
 ```
 
-Set `search_tool` and `save_tool` explicitly when using non-MemPalace servers:
+Set `search_tool` and `save_tool` explicitly when your server's tool names do not match the auto-discovery substrings:
 
 ```json
 {
@@ -274,13 +272,13 @@ Agents can reference multiple MCP servers. Tools from all servers are injected s
 ```json
 {
   "mcp_servers": {
-    "mempalace": { "url": "http://localhost:6060" },
+    "memory": { "url": "http://localhost:6060" },
     "github": { "url": "http://localhost:3001", "headers": { "Authorization": "Bearer ghp_..." } }
   },
   "agents": {
     "build": {
       "mcp": {
-        "servers": ["mempalace", "github"],
+        "servers": ["memory", "github"],
         "auto_search": true,
         "auto_save": true
       }
@@ -300,7 +298,7 @@ The `auto_search` and `auto_save` features use configurable tool names with auto
 
 - If not set, Nenya scans the server's tool list for names containing the prefix substring.
 - For **multi-server agents**, `auto_search` uses the first server that returns a non-empty result. `auto_save` uses the first server with a matching tool.
-- The `save_tool` arguments follow MemPalace's drawer API convention. Set `save_tool` explicitly for non-MemPalace servers with different schemas.
+- The default `save_tool` payload uses a drawer-style schema (`wing`/`room`/`content`/`added_by` keys). Servers with different schemas should accept these keys or expose a tool that maps them.
 
 ## Transport Details
 

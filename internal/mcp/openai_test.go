@@ -10,7 +10,7 @@ func TestBuildOpenAIToolName(t *testing.T) {
 		tool     string
 		expected string
 	}{
-		{"mempalace", "mempalace_search", "mempalace__mempalace_search"},
+		{"memory", "memory_search", "memory__memory_search"},
 		{"mcp1", "tool_a", "mcp1__tool_a"},
 		{"my-server", "my_tool", "my-server__my_tool"},
 	}
@@ -46,7 +46,7 @@ func TestMCPToolsToOpenAI(t *testing.T) {
 		},
 	}
 
-	openaiTools := MCPToolsToOpenAI("mempalace", tools)
+	openaiTools := MCPToolsToOpenAI("memory", tools)
 
 	if len(openaiTools) != 2 {
 		t.Fatalf("expected 2 tools, got %d", len(openaiTools))
@@ -58,8 +58,8 @@ func TestMCPToolsToOpenAI(t *testing.T) {
 	}
 
 	fn0 := tool0["function"].(map[string]any)
-	if fn0["name"] != "mempalace__search" {
-		t.Fatalf("function name = %q, want %q", fn0["name"], "mempalace__search")
+	if fn0["name"] != "memory__search" {
+		t.Fatalf("function name = %q, want %q", fn0["name"], "memory__search")
 	}
 	if fn0["description"] != "Search the palace" {
 		t.Fatalf("description = %q, want %q", fn0["description"], "Search the palace")
@@ -78,8 +78,8 @@ func TestMCPToolsToOpenAI(t *testing.T) {
 
 	tool1 := openaiTools[1]
 	fn1 := tool1["function"].(map[string]any)
-	if fn1["name"] != "mempalace__status" {
-		t.Fatalf("function name = %q, want %q", fn1["name"], "mempalace__status")
+	if fn1["name"] != "memory__status" {
+		t.Fatalf("function name = %q, want %q", fn1["name"], "memory__status")
 	}
 }
 
@@ -102,7 +102,7 @@ func TestParseMCPCall(t *testing.T) {
 		wantTool   string
 		wantOK     bool
 	}{
-		{"mempalace__mempalace_search", "mempalace", "mempalace_search", true},
+		{"memory__memory_search", "memory", "memory_search", true},
 		{"mcp1__tool_a", "mcp1", "tool_a", true},
 		{"my-server__my_tool", "my-server", "my_tool", true},
 		{"no_separator", "", "", false},
@@ -128,22 +128,22 @@ func TestToolRegistry_Register(t *testing.T) {
 		{Name: "status", Description: "Status"},
 	}
 
-	reg.Register("mempalace", tools)
+	reg.Register("memory", tools)
 
-	route, ok := reg.Lookup("mempalace__search")
+	route, ok := reg.Lookup("memory__search")
 	if !ok {
-		t.Fatal("expected mempalace__search to be registered")
+		t.Fatal("expected memory__search to be registered")
 	}
-	if route.ServerName != "mempalace" {
-		t.Fatalf("ServerName = %q, want mempalace", route.ServerName)
+	if route.ServerName != "memory" {
+		t.Fatalf("ServerName = %q, want memory", route.ServerName)
 	}
 	if route.MCPToolName != "search" {
 		t.Fatalf("MCPToolName = %q, want search", route.MCPToolName)
 	}
 
-	route, ok = reg.Lookup("mempalace__status")
+	route, ok = reg.Lookup("memory__status")
 	if !ok {
-		t.Fatal("expected mempalace__status to be registered")
+		t.Fatal("expected memory__status to be registered")
 	}
 
 	_, ok = reg.Lookup("other__search")
@@ -155,18 +155,18 @@ func TestToolRegistry_Register(t *testing.T) {
 func TestToolRegistry_MultipleServers(t *testing.T) {
 	reg := NewToolRegistry()
 
-	reg.Register("mempalace", []Tool{
+	reg.Register("memory", []Tool{
 		{Name: "search", Description: "Search palace"},
 	})
 	reg.Register("files", []Tool{
 		{Name: "read", Description: "Read file"},
 	})
 
-	route1, ok := reg.Lookup("mempalace__search")
+	route1, ok := reg.Lookup("memory__search")
 	if !ok {
-		t.Fatal("expected mempalace__search")
+		t.Fatal("expected memory__search")
 	}
-	if route1.ServerName != "mempalace" {
+	if route1.ServerName != "memory" {
 		t.Fatalf("ServerName = %q", route1.ServerName)
 	}
 
@@ -181,22 +181,22 @@ func TestToolRegistry_MultipleServers(t *testing.T) {
 
 func TestToolRegistry_IsMCPTool(t *testing.T) {
 	reg := NewToolRegistry()
-	reg.Register("mempalace", []Tool{{Name: "search"}})
+	reg.Register("memory", []Tool{{Name: "search"}})
 
-	if !reg.IsMCPTool("mempalace__search") {
-		t.Fatal("expected IsMCPTool true for mempalace__search")
+	if !reg.IsMCPTool("memory__search") {
+		t.Fatal("expected IsMCPTool true for memory__search")
 	}
 	if reg.IsMCPTool("code_edit") {
 		t.Fatal("expected IsMCPTool false for code_edit")
 	}
-	if reg.IsMCPTool("mempalace__nonexistent") {
+	if reg.IsMCPTool("memory__nonexistent") {
 		t.Fatal("expected IsMCPTool false for unregistered tool")
 	}
 }
 
 func TestToolRegistry_AllRoutes(t *testing.T) {
 	reg := NewToolRegistry()
-	reg.Register("mempalace", []Tool{
+	reg.Register("memory", []Tool{
 		{Name: "search"},
 		{Name: "status"},
 	})
@@ -209,11 +209,11 @@ func TestToolRegistry_AllRoutes(t *testing.T) {
 
 func TestToolRegistry_Clear(t *testing.T) {
 	reg := NewToolRegistry()
-	reg.Register("mempalace", []Tool{{Name: "search"}})
+	reg.Register("memory", []Tool{{Name: "search"}})
 
 	reg.Clear()
 
-	_, ok := reg.Lookup("mempalace__search")
+	_, ok := reg.Lookup("memory__search")
 	if ok {
 		t.Fatal("expected tool to be cleared")
 	}

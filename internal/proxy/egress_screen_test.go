@@ -246,7 +246,7 @@ func TestEgressScreenToolArgsStrictRefuses(t *testing.T) {
 		// the strict screen strengthens it to a refusal.
 		results := executeMCPCalls(context.Background(), []mcpToolCall{{
 			ID:        "call_1",
-			Name:      "mempalace__test_tool",
+			Name:      "memory__test_tool",
 			Arguments: map[string]any{"query": "tok"},
 		}}, gw, "agent", pipeline.CanarResult{Token: "tok", Action: config.CanaryActionLog}, rt)
 		if len(results) != 1 || !results[0].IsError {
@@ -272,7 +272,7 @@ func TestEgressScreenToolArgsStrictRefuses(t *testing.T) {
 
 		results := executeMCPCalls(context.Background(), []mcpToolCall{{
 			ID:        "call_1",
-			Name:      "mempalace__test_tool",
+			Name:      "memory__test_tool",
 			Arguments: map[string]any{"query": "tok"},
 		}}, gw, "agent", pipeline.CanarResult{Token: "tok", Action: config.CanaryActionLog}, rt)
 		if len(results) != 1 || results[0].IsError {
@@ -291,7 +291,7 @@ func TestEgressScreenToolArgsStrictRefuses(t *testing.T) {
 		rt := &egressScreenRuntime{judge: judge, strict: true}
 		canary := pipeline.CanarResult{Token: "tok", Action: config.CanaryActionLog}
 		mk := func(id string) []mcpToolCall {
-			return []mcpToolCall{{ID: id, Name: "mempalace__test_tool", Arguments: map[string]any{"query": "tok"}}}
+			return []mcpToolCall{{ID: id, Name: "memory__test_tool", Arguments: map[string]any{"query": "tok"}}}
 		}
 		first := executeMCPCalls(context.Background(), mk("c1"), gw, "agent", canary, rt)
 		if len(first) != 1 || !first[0].IsError {

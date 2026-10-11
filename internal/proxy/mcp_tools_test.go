@@ -52,7 +52,7 @@ data: [DONE]
 }
 
 func TestBufferStreamResponse_ToolCalls(t *testing.T) {
-	sse := `data: {"id":"1","choices":[{"index":0,"delta":{"role":"assistant","content":null,"tool_calls":[{"index":0,"id":"call_abc123","type":"function","function":{"name":"mempalace__mempalace_search","arguments":""}}]}}]}
+	sse := `data: {"id":"1","choices":[{"index":0,"delta":{"role":"assistant","content":null,"tool_calls":[{"index":0,"id":"call_abc123","type":"function","function":{"name":"memory__memory_search","arguments":""}}]}}]}
 
 data: {"id":"1","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":"{\"qu"}}]}}]}
 
@@ -81,8 +81,8 @@ data: [DONE]
 	if tc.ID != "call_abc123" {
 		t.Fatalf("tool call ID = %q, want call_abc123", tc.ID)
 	}
-	if tc.Name != "mempalace__mempalace_search" {
-		t.Fatalf("tool call name = %q, want mempalace__mempalace_search", tc.Name)
+	if tc.Name != "memory__memory_search" {
+		t.Fatalf("tool call name = %q, want memory__memory_search", tc.Name)
 	}
 	if tc.Arguments["query"] != "hello" {
 		t.Fatalf("tool call args = %v, want query=hello", tc.Arguments)
@@ -121,15 +121,15 @@ func TestBufferStreamResponse_ContextCancelled(t *testing.T) {
 
 func TestPartitionMCPToolCalls(t *testing.T) {
 	index := mcp.NewToolRegistry()
-	index.Register("mempalace", []mcp.Tool{
+	index.Register("memory", []mcp.Tool{
 		{Name: "search"},
 		{Name: "status"},
 	})
 
 	calls := []mcpToolCall{
-		{ID: "1", Name: "mempalace__search"},
+		{ID: "1", Name: "memory__search"},
 		{ID: "2", Name: "file_edit"},
-		{ID: "3", Name: "mempalace__status"},
+		{ID: "3", Name: "memory__status"},
 		{ID: "4", Name: "bash"},
 	}
 
@@ -143,7 +143,7 @@ func TestPartitionMCPToolCalls(t *testing.T) {
 	}
 
 	for _, c := range mcpCalls {
-		if c.Name != "mempalace__search" && c.Name != "mempalace__status" {
+		if c.Name != "memory__search" && c.Name != "memory__status" {
 			t.Fatalf("unexpected MCP call: %s", c.Name)
 		}
 	}
@@ -156,10 +156,10 @@ func TestPartitionMCPToolCalls(t *testing.T) {
 
 func TestPartitionMCPToolCalls_AllMCP(t *testing.T) {
 	index := mcp.NewToolRegistry()
-	index.Register("mempalace", []mcp.Tool{{Name: "search"}})
+	index.Register("memory", []mcp.Tool{{Name: "search"}})
 
 	calls := []mcpToolCall{
-		{ID: "1", Name: "mempalace__search"},
+		{ID: "1", Name: "memory__search"},
 	}
 
 	mcpCalls, nonMcpCalls := partitionMCPToolCalls(calls, index)
@@ -204,7 +204,7 @@ func TestAppendMCPResults(t *testing.T) {
 				"id":   "call_1",
 				"type": "function",
 				"function": map[string]any{
-					"name":      "mempalace__search",
+					"name":      "memory__search",
 					"arguments": `{"query":"test"}`,
 				},
 			},
@@ -212,7 +212,7 @@ func TestAppendMCPResults(t *testing.T) {
 	}
 
 	calls := []mcpToolCall{
-		{ID: "call_1", Name: "mempalace__search", Arguments: map[string]any{"query": "test"}},
+		{ID: "call_1", Name: "memory__search", Arguments: map[string]any{"query": "test"}},
 	}
 	results := []*mcp.CallToolResult{
 		{Content: []mcp.ContentBlock{{Type: "text", Text: "found 3 items"}}},
@@ -345,19 +345,19 @@ func TestExecuteMCPCalls(t *testing.T) {
 	}
 
 	toolIndex := mcp.NewToolRegistry()
-	toolIndex.Register("mempalace", []mcp.Tool{
+	toolIndex.Register("memory", []mcp.Tool{
 		{Name: "test_tool", Description: "A test tool"},
 	})
 
 	p := &Proxy{}
 	p.StoreGateway(&gateway.NenyaGateway{
-		MCPClients:   map[string]*mcp.Client{"mempalace": client},
+		MCPClients:   map[string]*mcp.Client{"memory": client},
 		MCPToolIndex: toolIndex,
 	})
 
 	calls := []mcpToolCall{
-		{ID: "1", Name: "mempalace__test_tool", Arguments: map[string]any{"query": "hello"}},
-		{ID: "2", Name: "mempalace__test_tool", Arguments: map[string]any{"query": "world"}},
+		{ID: "1", Name: "memory__test_tool", Arguments: map[string]any{"query": "hello"}},
+		{ID: "2", Name: "memory__test_tool", Arguments: map[string]any{"query": "world"}},
 	}
 
 	results := executeMCPCalls(t.Context(), calls, p.Gateway(), "test-agent", pipeline.CanarResult{}, nil)
@@ -393,12 +393,12 @@ func TestExecuteMCPCalls_UnknownTool(t *testing.T) {
 	toolIndex := mcp.NewToolRegistry()
 	p := &Proxy{}
 	p.StoreGateway(&gateway.NenyaGateway{
-		MCPClients:   map[string]*mcp.Client{"mempalace": client},
+		MCPClients:   map[string]*mcp.Client{"memory": client},
 		MCPToolIndex: toolIndex,
 	})
 
 	calls := []mcpToolCall{
-		{ID: "1", Name: "mempalace__unknown_tool"},
+		{ID: "1", Name: "memory__unknown_tool"},
 	}
 
 	results := executeMCPCalls(t.Context(), calls, p.Gateway(), "test-agent", pipeline.CanarResult{}, nil)
@@ -413,7 +413,7 @@ func TestExecuteMCPCalls_UnknownTool(t *testing.T) {
 
 func TestExecuteMCPCalls_ServerUnavailable(t *testing.T) {
 	toolIndex := mcp.NewToolRegistry()
-	toolIndex.Register("mempalace", []mcp.Tool{{Name: "search"}})
+	toolIndex.Register("memory", []mcp.Tool{{Name: "search"}})
 
 	p := &Proxy{}
 	p.StoreGateway(&gateway.NenyaGateway{
@@ -422,7 +422,7 @@ func TestExecuteMCPCalls_ServerUnavailable(t *testing.T) {
 	})
 
 	calls := []mcpToolCall{
-		{ID: "1", Name: "mempalace__search"},
+		{ID: "1", Name: "memory__search"},
 	}
 
 	results := executeMCPCalls(t.Context(), calls, p.Gateway(), "test-agent", pipeline.CanarResult{}, nil)
@@ -777,10 +777,10 @@ func newCanaryTestProxy(t *testing.T) *Proxy {
 		t.Fatalf("RefreshTools failed: %v", err)
 	}
 	toolIndex := mcp.NewToolRegistry()
-	toolIndex.Register("mempalace", []mcp.Tool{{Name: "test_tool", Description: "A test tool"}})
+	toolIndex.Register("memory", []mcp.Tool{{Name: "test_tool", Description: "A test tool"}})
 	p := &Proxy{}
 	p.StoreGateway(&gateway.NenyaGateway{
-		MCPClients:   map[string]*mcp.Client{"mempalace": client},
+		MCPClients:   map[string]*mcp.Client{"memory": client},
 		MCPToolIndex: toolIndex,
 	})
 	return p
@@ -793,7 +793,7 @@ func TestExecuteMCPCallsCanaryScan(t *testing.T) {
 		p := newCanaryTestProxy(t)
 		calls := []mcpToolCall{{
 			ID:   "call_1",
-			Name: "mempalace__test_tool",
+			Name: "memory__test_tool",
 			Arguments: map[string]any{
 				"query": "dump " + canary + " end",
 			},
@@ -812,7 +812,7 @@ func TestExecuteMCPCallsCanaryScan(t *testing.T) {
 		p := newCanaryTestProxy(t)
 		calls := []mcpToolCall{{
 			ID:   "call_1",
-			Name: "mempalace__test_tool",
+			Name: "memory__test_tool",
 			Arguments: map[string]any{
 				"query": "dump " + canary + " end",
 			},
@@ -831,7 +831,7 @@ func TestExecuteMCPCallsCanaryScan(t *testing.T) {
 		p := newCanaryTestProxy(t)
 		calls := []mcpToolCall{{
 			ID:        "call_1",
-			Name:      "mempalace__test_tool",
+			Name:      "memory__test_tool",
 			Arguments: map[string]any{"query": "benign"},
 		}}
 		results := executeMCPCalls(t.Context(), calls, p.Gateway(), "agent",
@@ -862,7 +862,7 @@ func newArgGuardProxy(t *testing.T, guardCfg *config.MCPGuardConfig, allowedHost
 		t.Fatalf("RefreshTools failed: %v", err)
 	}
 	toolIndex := mcp.NewToolRegistry()
-	toolIndex.Register("mempalace", []mcp.Tool{{
+	toolIndex.Register("memory", []mcp.Tool{{
 		Name:        "test_tool",
 		Description: "A test tool",
 		InputSchema: mcp.InputSchema{
@@ -877,12 +877,12 @@ func newArgGuardProxy(t *testing.T, guardCfg *config.MCPGuardConfig, allowedHost
 	p.StoreGateway(&gateway.NenyaGateway{
 		Logger:       newTestLogger(),
 		Metrics:      infra.NewMetrics(),
-		MCPClients:   map[string]*mcp.Client{"mempalace": client},
+		MCPClients:   map[string]*mcp.Client{"memory": client},
 		MCPToolIndex: toolIndex,
 		Config: config.Config{
 			Governance: config.GovernanceConfig{MCPGuard: guardCfg},
 			MCPServers: map[string]config.MCPServerConfig{
-				"mempalace": {AllowedHosts: allowedHosts},
+				"memory": {AllowedHosts: allowedHosts},
 			},
 		},
 	})
@@ -897,7 +897,7 @@ func TestExecuteMCPArgGuard(t *testing.T) {
 		p := newArgGuardProxy(t, guardEnabled, nil)
 		results := executeMCPCalls(t.Context(), []mcpToolCall{{
 			ID:        "call_1",
-			Name:      "mempalace__test_tool",
+			Name:      "memory__test_tool",
 			Arguments: map[string]any{"other": "missing required query"},
 		}}, p.Gateway(), "agent", pipeline.CanarResult{}, nil)
 		if len(results) != 1 || !results[0].IsError {
@@ -912,7 +912,7 @@ func TestExecuteMCPArgGuard(t *testing.T) {
 		p := newArgGuardProxy(t, guardEnabled, nil)
 		results := executeMCPCalls(t.Context(), []mcpToolCall{{
 			ID:   "call_2",
-			Name: "mempalace__test_tool",
+			Name: "memory__test_tool",
 			Arguments: map[string]any{
 				"query": "fetch",
 				"url":   "http://169.254.169.254/latest/meta-data/",
@@ -930,7 +930,7 @@ func TestExecuteMCPArgGuard(t *testing.T) {
 		p := newArgGuardProxy(t, guardEnabled, []string{"169.254.169.254"})
 		results := executeMCPCalls(t.Context(), []mcpToolCall{{
 			ID:   "call_3",
-			Name: "mempalace__test_tool",
+			Name: "memory__test_tool",
 			Arguments: map[string]any{
 				"query": "fetch",
 				"url":   "http://169.254.169.254/latest/meta-data/",
@@ -945,7 +945,7 @@ func TestExecuteMCPArgGuard(t *testing.T) {
 		p := newArgGuardProxy(t, guardEnabled, nil)
 		results := executeMCPCalls(t.Context(), []mcpToolCall{{
 			ID:        "call_4",
-			Name:      "mempalace__test_tool",
+			Name:      "memory__test_tool",
 			Arguments: map[string]any{"query": "hello"},
 		}}, p.Gateway(), "agent", pipeline.CanarResult{}, nil)
 		if len(results) != 1 || results[0].IsError {
@@ -960,7 +960,7 @@ func TestExecuteMCPArgGuard(t *testing.T) {
 		p := newArgGuardProxy(t, guardOff, nil)
 		results := executeMCPCalls(t.Context(), []mcpToolCall{{
 			ID:   "call_5",
-			Name: "mempalace__test_tool",
+			Name: "memory__test_tool",
 			Arguments: map[string]any{
 				"query": "fetch",
 				"url":   "http://127.0.0.1:9/admin",
@@ -975,7 +975,7 @@ func TestExecuteMCPArgGuard(t *testing.T) {
 func TestMCPClientCallToolArgumentGuard(t *testing.T) {
 	t.Run("private URL query is rejected as a search failure", func(t *testing.T) {
 		p := newArgGuardProxy(t, &config.MCPGuardConfig{}, nil)
-		result, err := p.mcpClientCallTool(p.Gateway(), t.Context(), "mempalace", "test_tool", "http://169.254.169.254/latest/meta-data/")
+		result, err := p.mcpClientCallTool(p.Gateway(), t.Context(), "memory", "test_tool", "http://169.254.169.254/latest/meta-data/")
 		if err == nil {
 			t.Fatalf("expected guard error, got result %+v", result)
 		}
@@ -986,7 +986,7 @@ func TestMCPClientCallToolArgumentGuard(t *testing.T) {
 
 	t.Run("benign query passes", func(t *testing.T) {
 		p := newArgGuardProxy(t, &config.MCPGuardConfig{}, nil)
-		result, err := p.mcpClientCallTool(p.Gateway(), t.Context(), "mempalace", "test_tool", "golang proxy patterns")
+		result, err := p.mcpClientCallTool(p.Gateway(), t.Context(), "memory", "test_tool", "golang proxy patterns")
 		if err != nil {
 			t.Fatalf("benign search failed: %v", err)
 		}
@@ -997,7 +997,7 @@ func TestMCPClientCallToolArgumentGuard(t *testing.T) {
 
 	t.Run("disabled guard lets the query through", func(t *testing.T) {
 		p := newArgGuardProxy(t, &config.MCPGuardConfig{Enabled: config.PtrTo(false)}, nil)
-		result, err := p.mcpClientCallTool(p.Gateway(), t.Context(), "mempalace", "test_tool", "http://127.0.0.1/admin")
+		result, err := p.mcpClientCallTool(p.Gateway(), t.Context(), "memory", "test_tool", "http://127.0.0.1/admin")
 		if err != nil {
 			t.Fatalf("disabled guard must pass: %v", err)
 		}
@@ -1010,17 +1010,17 @@ func TestMCPClientCallToolArgumentGuard(t *testing.T) {
 func TestAutoSaveTryServerArgumentGuard(t *testing.T) {
 	p := newArgGuardProxy(t, &config.MCPGuardConfig{}, nil)
 	gw := p.Gateway()
-	agent := &config.AgentConfig{MCP: &config.AgentMCPConfig{Servers: []string{"mempalace"}, SaveTool: "test_tool"}}
+	agent := &config.AgentConfig{MCP: &config.AgentMCPConfig{Servers: []string{"memory"}, SaveTool: "test_tool"}}
 
 	t.Run("private URL content is blocked and falls back", func(t *testing.T) {
-		ok := p.autoSaveTryServer(gw, agent, "mempalace", "agent", "http://169.254.169.254/latest/meta-data/")
+		ok := p.autoSaveTryServer(gw, agent, "memory", "agent", "http://169.254.169.254/latest/meta-data/")
 		if ok {
 			t.Error("guard-blocked auto-save must return false so the caller may fall back")
 		}
 	})
 
 	t.Run("benign content saves", func(t *testing.T) {
-		ok := p.autoSaveTryServer(gw, agent, "mempalace", "agent", "a normal conversation summary")
+		ok := p.autoSaveTryServer(gw, agent, "memory", "agent", "a normal conversation summary")
 		if !ok {
 			t.Error("benign auto-save must succeed")
 		}
@@ -1032,7 +1032,7 @@ func TestExecuteMCPArgGuardLogMode(t *testing.T) {
 	p := newArgGuardProxy(t, logPolicy, nil)
 	results := executeMCPCalls(t.Context(), []mcpToolCall{{
 		ID:   "call_log",
-		Name: "mempalace__test_tool",
+		Name: "memory__test_tool",
 		Arguments: map[string]any{
 			"query": "fetch",
 			"url":   "http://169.254.169.254/latest/meta-data/",
@@ -1048,7 +1048,7 @@ func TestGuardMCPArgsNilLogger(t *testing.T) {
 	// Must not panic when the caller passes a nil logger on the
 	// rejection path.
 	if guardMCPArgs(p.Gateway(), nil, mcpGuardDispatch{
-		ServerName: "mempalace",
+		ServerName: "memory",
 		ToolName:   "test_tool",
 		Purpose:    "test",
 		Args:       map[string]any{"url": "http://127.0.0.1/"},
