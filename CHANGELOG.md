@@ -4,6 +4,8 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [v0.17.0] - 2026-10-08
+
 ### Added
 
 - **System One decision models (TypeSafe Jev)**: first-class `POST /v1/systemone` endpoint that proxies typed-decision requests (noul/choice/score) to a provider's System One endpoint — Nenya client auth/RBAC, provider-key injection, non-streaming JSON relay, `http.MaxBytesReader` body cap, provider-timeout context, retry, and usage recording from the response `usage` object (`/statsz` counters + `nenya_tokens_estimated_total`) plus a new `nenya_decisions_total{model,provider}` counter. New per-provider `non_chat_models` RE2 patterns classify models that are not served by chat completions: they are dropped from discovery/`/v1/models` and chat requests naming one fail fast with `400 error_kind=invalid_request` (built-in `zen` defaults to `["^jev-"]`; resolution is catalog-aware so unrelated providers cannot veto the class). `/proxy/` passthrough is unaffected. OpenCode Zen serves `jev-1.13-free` (and the paid `jev-1.13`, gated by plan) at `https://opencode.ai/zen/v1/systemone`, declared as `zen.format_urls.systemone`. See [docs/SYSTEM_ONE.md](docs/SYSTEM_ONE.md)
