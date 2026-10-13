@@ -30,7 +30,7 @@ func setupDescribeEnv(t *testing.T, configJSON string) (configDir, secretsDir st
 	}
 
 	secretsDir = t.TempDir()
-	secrets := `{"client_token":"client-token-1234567890","provider_keys":{"gemini":"provider-key"}}`
+	secrets := `{"client_token":"client-token-1234567890","provider_keys":{"gemini":"provider-key-0123456789abcdef"}}`
 	if err := os.WriteFile(filepath.Join(secretsDir, "secrets.json"), []byte(secrets), 0o600); err != nil {
 		t.Fatalf("write secrets: %v", err)
 	}
@@ -135,7 +135,7 @@ func TestHandleDescribe_InvalidSecrets(t *testing.T) {
 	}
 	secretsDir := t.TempDir()
 	// Missing client_token makes validation fail.
-	if err := os.WriteFile(filepath.Join(secretsDir, "secrets.json"), []byte(`{"provider_keys":{"gemini":"x"}}`), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(secretsDir, "secrets.json"), []byte(`{"provider_keys":{"gemini":"synthetic-key-0123456789abcdef"}}`), 0o600); err != nil {
 		t.Fatalf("write secrets: %v", err)
 	}
 	t.Setenv("NENYA_CONFIG_DIR", configDir)

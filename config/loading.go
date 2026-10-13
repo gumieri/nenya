@@ -578,7 +578,7 @@ func resolveSecretsPath(res *SecretsResolution, path string) (bool, error) {
 // it in FailedSource, so diagnostics can name the offending file.
 func recordSecrets(res *SecretsResolution, source string, secrets *SecretsConfig) (bool, error) {
 	res.ActiveSource = source
-	validated, vErr := validateSecretsResult(secrets)
+	validated, vErr := validateSecretsResult(secrets, source)
 	if vErr != nil {
 		res.FailedSource = source
 		return false, vErr
@@ -602,7 +602,14 @@ func LoadSecrets(configRoot string) (*SecretsConfig, error) {
 	return res.Secrets, nil
 }
 
-func validateSecretsResult(secrets *SecretsConfig) (*SecretsConfig, error) {
+func validateSecretsResult(secrets *SecretsConfig, source string) (*SecretsConfig, error) {
+	// Strength first: weak/empty credentials get the fail-closed message that
+	// names the credential, the source, and the remediation. Structural
+	// validation (roles, expiry format, non-empty client_token) still runs —
+	// NENYA_ALLOW_WEAK_SECRETS waives only the strength pass.
+	if err := validateSecretsStrength(secrets, source); err != nil {
+		return nil, err
+	}
 	if err := validateSecrets(secrets); err != nil {
 		return nil, err
 	}
@@ -614,6 +621,12 @@ func validateSecrets(secrets *SecretsConfig) error {
 		return errors.New("client_token is required")
 	}
 	for name, key := range secrets.ApiKeys {
+		// Disabled entries are skipped: mergeSecrets never lets them serve
+		// traffic, so their shape cannot affect the running gateway
+		// (NENYA-192 — the strength pass skips them for the same reason).
+		if !key.Enabled {
+			continue
+		}
 		if err := key.Validate(); err != nil {
 			return fmt.Errorf("invalid api_key %q: %w", name, err)
 		}

@@ -1429,8 +1429,8 @@ func (k *ApiKey) Validate() error {
 	if k.Token == "" {
 		return errors.New("token cannot be empty")
 	}
-	if len(k.Token) < 16 {
-		return errors.New("token too short (minimum 16 characters)")
+	if len(k.Token) < MinSecretLength {
+		return fmt.Errorf("token too short (minimum %d characters)", MinSecretLength)
 	}
 	if len(k.Token) > 512 {
 		return errors.New("token too long (maximum 512 characters)")

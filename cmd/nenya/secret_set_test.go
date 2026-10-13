@@ -32,7 +32,7 @@ func TestSecretSet_ProviderKey(t *testing.T) {
 	t.Setenv("NENYA_SECRETS_DIR", dir)
 	t.Setenv("CREDENTIALS_DIRECTORY", "")
 
-	path := runSecretSet(t, "--provider", "gemini", "AIza-test")
+	path := runSecretSet(t, "--provider", "gemini", "AIzaSy-synthetic-key-0123456789abcdef")
 
 	want := filepath.Join(dir, "secrets.json")
 	if path != want {
@@ -47,8 +47,8 @@ func TestSecretSet_ProviderKey(t *testing.T) {
 	}
 	doc := readJSONFile(t, path)
 	keys, _ := doc["provider_keys"].(map[string]any)
-	if keys == nil || keys["gemini"] != "AIza-test" {
-		t.Errorf("provider_keys = %v, want gemini=AIza-test", doc["provider_keys"])
+	if keys == nil || keys["gemini"] != "AIzaSy-synthetic-key-0123456789abcdef" {
+		t.Errorf("provider_keys = %v, want gemini=the synthetic key", doc["provider_keys"])
 	}
 }
 
@@ -64,7 +64,7 @@ func TestSecretSet_DirectoryModeDefaultsToConfigRoot(t *testing.T) {
 	t.Setenv("NENYA_CONFIG_FILE", "")
 	t.Setenv("CREDENTIALS_DIRECTORY", "")
 
-	path := runSecretSet(t, "--provider", "gemini", "AIza-test")
+	path := runSecretSet(t, "--provider", "gemini", "AIzaSy-synthetic-key-0123456789abcdef")
 
 	want := filepath.Join(dir, "secrets.json")
 	if path != want {
@@ -72,8 +72,8 @@ func TestSecretSet_DirectoryModeDefaultsToConfigRoot(t *testing.T) {
 	}
 	doc := readJSONFile(t, path)
 	keys, _ := doc["provider_keys"].(map[string]any)
-	if keys == nil || keys["gemini"] != "AIza-test" {
-		t.Errorf("provider_keys = %v, want gemini=AIza-test", doc["provider_keys"])
+	if keys == nil || keys["gemini"] != "AIzaSy-synthetic-key-0123456789abcdef" {
+		t.Errorf("provider_keys = %v, want gemini=the synthetic key", doc["provider_keys"])
 	}
 }
 
@@ -190,6 +190,9 @@ func TestSecretTargetPath_MergeDirLaterSiblingFailsClosed(t *testing.T) {
 }
 
 func TestSecretSet_ShortExplicitTokenRejected(t *testing.T) {
+	// Hermetic: the demo/mise docs tell developers to export this hatch, and
+	// the writer honors it — the refusal under test must not be waived.
+	t.Setenv(config.AllowWeakSecretsEnv, "")
 	t.Setenv("NENYA_SECRETS_DIR", t.TempDir())
 	t.Setenv("CREDENTIALS_DIRECTORY", "")
 
@@ -198,7 +201,7 @@ func TestSecretSet_ShortExplicitTokenRejected(t *testing.T) {
 	if !handled || !errors.Is(err, errUsage) {
 		t.Fatalf("handled=%v err=%v, want errUsage (exit 2) for a malformed token", handled, err)
 	}
-	if !strings.Contains(errBuf.String(), "at least") {
+	if !strings.Contains(errBuf.String(), "too short") {
 		t.Errorf("stderr = %q, want a minimum-length message", errBuf.String())
 	}
 }
@@ -225,7 +228,7 @@ func TestSecretSet_ClientTokenGeneratedAndPreserves(t *testing.T) {
 	t.Setenv("NENYA_SECRETS_DIR", dir)
 	t.Setenv("CREDENTIALS_DIRECTORY", "")
 
-	runSecretSet(t, "--provider", "gemini", "AIza-test")
+	runSecretSet(t, "--provider", "gemini", "AIzaSy-synthetic-key-0123456789abcdef")
 	path := runSecretSet(t, "--client-token")
 
 	doc := readJSONFile(t, path)
@@ -234,7 +237,7 @@ func TestSecretSet_ClientTokenGeneratedAndPreserves(t *testing.T) {
 		t.Errorf("generated client_token = %q, want a non-empty nk- token", token)
 	}
 	keys, _ := doc["provider_keys"].(map[string]any)
-	if keys == nil || keys["gemini"] != "AIza-test" {
+	if keys == nil || keys["gemini"] != "AIzaSy-synthetic-key-0123456789abcdef" {
 		t.Errorf("provider_keys not preserved: %v", doc["provider_keys"])
 	}
 
@@ -244,7 +247,7 @@ func TestSecretSet_ClientTokenGeneratedAndPreserves(t *testing.T) {
 	if doc["client_token"] != "explicit-token-1234567890" {
 		t.Errorf("client_token = %v, want the explicit value", doc["client_token"])
 	}
-	if keys, _ := doc["provider_keys"].(map[string]any); keys == nil || keys["gemini"] != "AIza-test" {
+	if keys, _ := doc["provider_keys"].(map[string]any); keys == nil || keys["gemini"] != "AIzaSy-synthetic-key-0123456789abcdef" {
 		t.Errorf("provider_keys not preserved after client-token set: %v", doc["provider_keys"])
 	}
 }
@@ -307,7 +310,7 @@ func TestSecretSet_ResultLoads(t *testing.T) {
 	t.Setenv("NENYA_SECRETS_DIR", dir)
 	t.Setenv("CREDENTIALS_DIRECTORY", "")
 
-	runSecretSet(t, "--provider", "gemini", "AIza-test")
+	runSecretSet(t, "--provider", "gemini", "AIzaSy-synthetic-key-0123456789abcdef")
 	runSecretSet(t, "--client-token", "explicit-token-1234567890")
 
 	res, err := config.ResolveSecrets("")
@@ -317,8 +320,8 @@ func TestSecretSet_ResultLoads(t *testing.T) {
 	if res.Secrets == nil {
 		t.Fatal("expected the written secrets to resolve")
 	}
-	if res.Secrets.ProviderKeys["gemini"] != "AIza-test" {
-		t.Errorf("provider key = %q, want AIza-test", res.Secrets.ProviderKeys["gemini"])
+	if res.Secrets.ProviderKeys["gemini"] != "AIzaSy-synthetic-key-0123456789abcdef" {
+		t.Errorf("provider key = %q, want the synthetic key", res.Secrets.ProviderKeys["gemini"])
 	}
 	if res.Secrets.ClientToken != "explicit-token-1234567890" {
 		t.Errorf("client token = %q, want the explicit value", res.Secrets.ClientToken)

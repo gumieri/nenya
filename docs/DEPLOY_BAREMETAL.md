@@ -108,12 +108,15 @@ Create a JSON file with your secrets:
 
 ```bash
 sudo mkdir -p /etc/nenya
-sudo tee /etc/nenya/secrets.json << 'EOF'
+# The token is generated outside the heredoc: quoted heredocs do not
+# expand $(...), and a pasted command string would be refused at boot.
+NENYA_TOKEN="nk-$(openssl rand -hex 32)"
+sudo tee /etc/nenya/secrets.json << EOF
 {
-  "client_token": "nk-$(openssl rand -hex 32)",
+  "client_token": "$NENYA_TOKEN",
   "provider_keys": {
-    "gemini": "AIza...",
-    "deepseek": "sk-..."
+    "gemini": "AIza<your-real-key>",
+    "deepseek": "sk-<your-real-key>"
   }
 }
 EOF
@@ -143,12 +146,13 @@ it into the service's private credential directory at startup.
 ```bash
 sudo mkdir -p /etc/nenya/secrets.d
 
-sudo tee /etc/nenya/secrets.d/01-client.json << 'EOF'
-{"client_token": "nk-$(openssl rand -hex 32)"}
+NENYA_TOKEN="nk-$(openssl rand -hex 32)"
+sudo tee /etc/nenya/secrets.d/01-client.json << EOF
+{"client_token": "$NENYA_TOKEN"}
 EOF
 
 sudo tee /etc/nenya/secrets.d/02-providers.json << 'EOF'
-{"provider_keys": {"gemini": "AIza...", "deepseek": "sk-..."}}
+{"provider_keys": {"gemini": "AIza<your-real-key>", "deepseek": "sk-<your-real-key>"}}
 EOF
 
 sudo chmod 600 /etc/nenya/secrets.d/*.json

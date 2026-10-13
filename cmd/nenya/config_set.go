@@ -53,7 +53,26 @@ func handleConfig(w, errW io.Writer, args []string) (bool, error) {
 	}
 
 	target := configTargetPath(effectiveConfigPaths(*configDir, *configFile))
-	if err := setConfigKey(target, rest[0], parseConfigValue(rest[1])); err != nil {
+	value := parseConfigValue(rest[1])
+	// Credential-typed config values get the same boot-time strength check
+	// the secrets writer applies, so `config set` cannot produce a config the
+	// gateway refuses to start with (NENYA-192; the checks are the
+	// placeholder/template/repeated-character/empty classes — no length
+	// floor, matching ValidateConfigCredentialsStrength). The key is matched
+	// case-insensitively (JSON decoding is) and only under the providers
+	// subtree — other api_key-named leaves (e.g. mcp_servers headers) are not
+	// credentials the strength pass covers.
+	lowerKey := strings.ToLower(rest[0])
+	if strings.HasPrefix(lowerKey, "providers.") &&
+		(strings.HasSuffix(lowerKey, ".api_key") || strings.HasSuffix(lowerKey, ".credential")) {
+		if s, isStr := value.(string); isStr {
+			if err := config.ValidateProviderKeyStrength(s); err != nil {
+				_, _ = fmt.Fprintf(errW, "%s rejected: %v\n", rest[0], err)
+				return true, errUsage
+			}
+		}
+	}
+	if err := setConfigKey(target, rest[0], value); err != nil {
 		return true, err
 	}
 	_, err := fmt.Fprintln(w, target)

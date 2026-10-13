@@ -222,7 +222,7 @@ func TestLoadConfig_FromFile(t *testing.T) {
 	if err := os.MkdirAll(secretsDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(secretsDir, "secrets.json"), []byte(`{"client_token": "test-token-12345"}`), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(secretsDir, "secrets.json"), []byte(`{"client_token": "nk-loadtest-0123456789abc"}`), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("NENYA_SECRETS_DIR", secretsDir)
@@ -235,8 +235,8 @@ func TestLoadConfig_FromFile(t *testing.T) {
 	if cfg.Server.ListenAddr != ":9090" {
 		t.Errorf("expected :9090, got %s", cfg.Server.ListenAddr)
 	}
-	if secrets == nil || secrets.ClientToken != "test-token-12345" {
-		t.Errorf("expected client_token test-token-12345, got %v", secrets)
+	if secrets == nil || secrets.ClientToken != "nk-loadtest-0123456789abc" {
+		t.Errorf("expected client_token nk-loadtest-0123456789abc, got %v", secrets)
 	}
 }
 
@@ -253,7 +253,7 @@ func TestLoadConfig_FromDir(t *testing.T) {
 	if err := os.MkdirAll(secretsDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(secretsDir, "secrets.json"), []byte(`{"client_token": "test-token-12345"}`), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(secretsDir, "secrets.json"), []byte(`{"client_token": "nk-loadtest-0123456789abc"}`), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("NENYA_SECRETS_DIR", secretsDir)
@@ -266,8 +266,8 @@ func TestLoadConfig_FromDir(t *testing.T) {
 	if cfg.Server.ListenAddr != ":7070" {
 		t.Errorf("expected :7070, got %s", cfg.Server.ListenAddr)
 	}
-	if secrets == nil || secrets.ClientToken != "test-token-12345" {
-		t.Errorf("expected client_token test-token-12345, got %v", secrets)
+	if secrets == nil || secrets.ClientToken != "nk-loadtest-0123456789abc" {
+		t.Errorf("expected client_token nk-loadtest-0123456789abc, got %v", secrets)
 	}
 }
 
@@ -495,7 +495,7 @@ func TestServeHTTP_NilListener(t *testing.T) {
 func TestEventLoop_Shutdown(t *testing.T) {
 	logger := testutil.NewTestLogger()
 	cfg := testutil.MinimalConfig()
-	gw := gateway.New(context.Background(), *cfg, &config.SecretsConfig{ClientToken: "test-token-1234567890"}, logger)
+	gw := gateway.New(context.Background(), *cfg, &config.SecretsConfig{ClientToken: "nk-loadtest-0123456789abc67890"}, logger)
 	p := &proxy.Proxy{}
 	p.StoreGateway(gw)
 
@@ -529,7 +529,7 @@ func TestEventLoop_Shutdown(t *testing.T) {
 func TestReloadConfig_Success(t *testing.T) {
 	logger := testutil.NewTestLogger()
 	cfg := testutil.MinimalConfig()
-	gw := gateway.New(context.Background(), *cfg, &config.SecretsConfig{ClientToken: "test-token-1234567890"}, logger)
+	gw := gateway.New(context.Background(), *cfg, &config.SecretsConfig{ClientToken: "nk-loadtest-0123456789abc67890"}, logger)
 
 	dir := t.TempDir()
 	configPath := filepath.Join(dir, "config.json")
@@ -540,7 +540,7 @@ func TestReloadConfig_Success(t *testing.T) {
 	if err := os.MkdirAll(secretsDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(secretsDir, "secrets.json"), []byte(`{"client_token": "test-token-1234567890"}`), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(secretsDir, "secrets.json"), []byte(`{"client_token": "nk-loadtest-0123456789abc67890"}`), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("NENYA_SECRETS_DIR", secretsDir)
@@ -564,7 +564,7 @@ func TestBuildInterceptorChain_BouncerGatedOnEnabled(t *testing.T) {
 	logger := testutil.NewTestLogger()
 
 	newGW := func(cfg *config.Config) *gateway.NenyaGateway {
-		gw := gateway.New(context.Background(), *cfg, &config.SecretsConfig{ClientToken: "test-token-1234567890"}, logger)
+		gw := gateway.New(context.Background(), *cfg, &config.SecretsConfig{ClientToken: "nk-loadtest-0123456789abc67890"}, logger)
 		gw.SecretPatterns = []*regexp.Regexp{regexp.MustCompile(`AKIA[0-9A-Z]{16}`)}
 		return gw
 	}
@@ -631,7 +631,7 @@ func TestBuildInterceptorChain_BouncerGatedOnEnabled(t *testing.T) {
 func TestReloadConfig_ConfigFail(t *testing.T) {
 	logger := testutil.NewTestLogger()
 	cfg := testutil.MinimalConfig()
-	gw := gateway.New(context.Background(), *cfg, &config.SecretsConfig{ClientToken: "test-token-1234567890"}, logger)
+	gw := gateway.New(context.Background(), *cfg, &config.SecretsConfig{ClientToken: "nk-loadtest-0123456789abc67890"}, logger)
 
 	p := &proxy.Proxy{}
 	p.StoreGateway(gw)
@@ -813,7 +813,7 @@ func TestBuildInterceptorChain_TfidfRerankGate(t *testing.T) {
 	// arms the rerank gate: enabled + inherited engine → non-nil judge.
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	newGW := func(cfg *config.Config) *gateway.NenyaGateway {
-		gw := gateway.New(context.Background(), *cfg, &config.SecretsConfig{ClientToken: "test-token-1234567890"}, logger)
+		gw := gateway.New(context.Background(), *cfg, &config.SecretsConfig{ClientToken: "nk-loadtest-0123456789abc67890"}, logger)
 		gw.SecretPatterns = []*regexp.Regexp{regexp.MustCompile(`AKIA[0-9A-Z]{16}`)}
 		return gw
 	}
@@ -852,7 +852,7 @@ func TestBuildInterceptorChain_TfidfRerankGate(t *testing.T) {
 func TestBuildSpotlightTierGate(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	newGW := func(cfg *config.Config) *gateway.NenyaGateway {
-		gw := gateway.New(context.Background(), *cfg, &config.SecretsConfig{ClientToken: "test-token-1234567890"}, logger)
+		gw := gateway.New(context.Background(), *cfg, &config.SecretsConfig{ClientToken: "nk-loadtest-0123456789abc67890"}, logger)
 		return gw
 	}
 

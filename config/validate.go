@@ -111,6 +111,7 @@ func validateLocalEngine(ctx context.Context, cfg *Config, pingProviders bool, l
 func collectValidationErrors(ctx context.Context, cfg *Config, providers map[string]*Provider, pingProviders bool, logger *slog.Logger) []string {
 	errors := []string{}
 
+	errors = append(errors, ValidateConfigCredentialsStrength(cfg)...)
 	errors = append(errors, validateTFIDFQuerySource(cfg.Context.TFIDFQuerySource)...)
 	errors = append(errors, validatePatternsToList("bouncer.patterns", cfg.Bouncer.RedactPatterns, logger)...)
 	errors = append(errors, validatePatternsToList("governance.blocked_execution_patterns", cfg.Governance.BlockedExecutionPatterns, logger)...)

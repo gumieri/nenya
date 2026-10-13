@@ -34,7 +34,7 @@ func writeSecrets(t *testing.T, dir, content string) {
 
 func TestSecretGet_ClientToken(t *testing.T) {
 	dir := t.TempDir()
-	writeSecrets(t, dir, `{"client_token":"token-from-dir-123456","provider_keys":{"gemini":"AIza-x"}}`)
+	writeSecrets(t, dir, `{"client_token":"token-from-dir-123456","provider_keys":{"gemini":"AIzaSy-synthetic-key-0123456789abcdef"}}`)
 	t.Setenv("NENYA_SECRETS_DIR", dir)
 	t.Setenv("NENYA_CONFIG_DIR", "")
 	t.Setenv("NENYA_CONFIG_FILE", "")
@@ -51,7 +51,7 @@ func TestSecretGet_ClientToken(t *testing.T) {
 
 func TestSecretGet_ProviderKey(t *testing.T) {
 	dir := t.TempDir()
-	writeSecrets(t, dir, `{"client_token":"token-123456789012","provider_keys":{"gemini":"AIza-x"}}`)
+	writeSecrets(t, dir, `{"client_token":"token-123456789012","provider_keys":{"gemini":"AIzaSy-synthetic-key-0123456789abcdef"}}`)
 	t.Setenv("NENYA_SECRETS_DIR", dir)
 	t.Setenv("NENYA_CONFIG_DIR", "")
 	t.Setenv("NENYA_CONFIG_FILE", "")
@@ -61,8 +61,8 @@ func TestSecretGet_ProviderKey(t *testing.T) {
 	if err != nil {
 		t.Fatalf("secret get: %v", err)
 	}
-	if got != "AIza-x" {
-		t.Errorf("provider key = %q, want AIza-x", got)
+	if got != "AIzaSy-synthetic-key-0123456789abcdef" {
+		t.Errorf("provider key = %q, want the synthetic key", got)
 	}
 }
 
@@ -105,7 +105,7 @@ func TestSecretGet_ConfigDirFlagResolves(t *testing.T) {
 func TestSecretGet_InvalidSecretsErrors(t *testing.T) {
 	dir := t.TempDir()
 	// Missing client_token makes validation fail.
-	writeSecrets(t, dir, `{"provider_keys":{"gemini":"AIza-x"}}`)
+	writeSecrets(t, dir, `{"provider_keys":{"gemini":"AIzaSy-synthetic-key-0123456789abcdef"}}`)
 	t.Setenv("NENYA_SECRETS_DIR", dir)
 	t.Setenv("NENYA_CONFIG_DIR", "")
 	t.Setenv("NENYA_CONFIG_FILE", "")

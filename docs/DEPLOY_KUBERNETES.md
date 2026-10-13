@@ -44,10 +44,11 @@ kubectl create secret generic nenya-secrets \
   --from-file=client.json=secrets/client.json \
   -n nenya
 
-# Or create from literal values
+# Or create from literal values (replace the placeholders before first use —
+# boot refuses publicly known placeholder credentials)
 kubectl create secret generic nenya-secrets \
-  --from-literal=provider_keys.json='{"provider_keys":{"gemini":"AIza..."}}' \
-  --from-literal=client.json='{"client_token":"nk-..."}' \
+  --from-literal=provider_keys.json='{"provider_keys":{"gemini":"<your-real-gemini-key>"}}' \
+  --from-literal=client.json='{"client_token":"<nk-prefixed random hex: openssl rand -hex 32>"}' \
   -n nenya
 ```
 

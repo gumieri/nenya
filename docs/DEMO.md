@@ -64,8 +64,11 @@ EOF
 
 ### 4. Run locally (without systemd)
 
+The demo secrets from §3 are intentionally public placeholders, so export the
+dev-only escape hatch alongside them (production must never set this):
+
 ```bash
-CREDENTIALS_DIRECTORY=$(pwd)/creds ./nenya -config config.json
+CREDENTIALS_DIRECTORY=$(pwd)/creds NENYA_ALLOW_WEAK_SECRETS=1 ./nenya -config config.json
 ```
 
 Or use the mise task (creates dummy secrets automatically):

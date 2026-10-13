@@ -95,7 +95,7 @@ func applySecretSet(errW io.Writer, target string, clientToken bool, provider st
 	case clientToken:
 		return applyClientToken(errW, target, rest)
 	case provider != "":
-		return applyProviderKey(target, provider, rest)
+		return applyProviderKey(errW, target, provider, rest)
 	default:
 		return errUsage
 	}
@@ -108,15 +108,11 @@ const secretSetUsage = "usage: nenya secret set [--config-dir <dir> | --config <
 // subcommand.
 const secretUsage = secretSetUsage + "\n       " + secretGetUsage
 
-// minClientTokenLen is the minimum length accepted for an explicit client
-// token, matching ApiKey.Validate's floor for API keys. The generated token is
-// far longer ("nk-" + 32 bytes hex).
-const minClientTokenLen = 16
-
 // applyClientToken sets client_token from rest[0], or generates one when no
 // value is given. A malformed invocation returns errUsage; an explicit token
-// shorter than minClientTokenLen is reported and returns errUsage, so main maps
-// the malformed value to exit 2 (CONTRACT.md §3.4).
+// shorter than config.MinSecretLength, or one the boot-time strength
+// classifier refuses, is reported and returns errUsage, so main maps the
+// malformed value to exit 2 (CONTRACT.md §3.4).
 func applyClientToken(errW io.Writer, target string, rest []string) error {
 	if len(rest) > 1 {
 		return errUsage
@@ -134,19 +130,28 @@ func applyClientToken(errW io.Writer, target string, rest []string) error {
 	if token == "" {
 		return errUsage
 	}
-	if len(token) < minClientTokenLen {
-		_, _ = fmt.Fprintf(errW, "client token must be at least %d characters\n", minClientTokenLen)
+	// The strength classifier owns the floor and the placeholder classes, so
+	// the writer and the loader enforce one rule set.
+	if err := config.ValidateClientTokenStrength(token); err != nil {
+		_, _ = fmt.Fprintf(errW, "client token rejected: %v\n", err)
 		return errUsage
 	}
-	return setSecretValue(target, "client_token", "", token)
+	return setSecretValue(errW, target, "client_token", "", token)
 }
 
-// applyProviderKey sets provider_keys[provider] from rest[0].
-func applyProviderKey(target, provider string, rest []string) error {
+// applyProviderKey sets provider_keys[provider] from rest[0]. The value is
+// checked against the boot-time strength classifier so the writer never
+// produces a document the gateway rejects. Rejections print to errW and
+// return errUsage (exit 2), matching the client-token path.
+func applyProviderKey(errW io.Writer, target, provider string, rest []string) error {
 	if len(rest) != 1 {
 		return errUsage
 	}
-	return setSecretValue(target, "provider", provider, rest[0])
+	if err := config.ValidateProviderKeyStrength(rest[0]); err != nil {
+		_, _ = fmt.Fprintf(errW, "provider key rejected: %v\n", err)
+		return errUsage
+	}
+	return setSecretValue(errW, target, "provider", provider, rest[0])
 }
 
 // secretsFileTarget is a resolved single-file secrets target: the file to write
@@ -319,9 +324,17 @@ func sameDir(a, b string) bool {
 
 // ensureClientToken sets a generated client_token on doc when it has none.
 // client_token is required (CONTRACT.md §6.2), so a provider-key write to a
-// document without one would make the whole secrets source unloadable.
-func ensureClientToken(doc map[string]any) error {
-	if tok, _ := doc["client_token"].(string); tok != "" {
+// document without one would make the whole secrets source unloadable. An
+// existing token that the boot-time strength classifier would refuse is
+// warned about (the requested write still succeeds — secret set is the
+// documented recovery path — but the operator learns the document will not
+// load until the token is replaced).
+func ensureClientToken(errW io.Writer, doc map[string]any) error {
+	tok, _ := doc["client_token"].(string)
+	if tok != "" {
+		if err := config.ValidateClientTokenStrength(tok); err != nil {
+			_, _ = fmt.Fprintf(errW, "WARNING: existing client_token will be refused at boot (%v); replace it with `nenya secret set --client-token`\n", err)
+		}
 		return nil
 	}
 	generated, err := generateClientToken()
@@ -349,7 +362,7 @@ func generateClientToken() (string, error) {
 // concurrent invocations against the same file. The read-modify-write is not
 // locked, so two simultaneous `secret set` calls for different keys can lose
 // one update; the atomic rename only makes each individual write torn-free.
-func setSecretValue(path, kind, name, value string) error {
+func setSecretValue(errW io.Writer, path, kind, name, value string) error {
 	doc := map[string]any{}
 	if data, err := os.ReadFile(path); err == nil {
 		if decodeErr := json.Unmarshal(data, &doc); decodeErr != nil {
@@ -366,7 +379,7 @@ func setSecretValue(path, kind, name, value string) error {
 		}
 		keys[name] = value
 		doc["provider_keys"] = keys
-		if err := ensureClientToken(doc); err != nil {
+		if err := ensureClientToken(errW, doc); err != nil {
 			return err
 		}
 	} else {

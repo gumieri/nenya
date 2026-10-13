@@ -160,7 +160,7 @@ Nenya enforces per-API key access controls via RBAC. API keys defined in `secret
   "api_keys": {
     "dev-user": {
       "name": "dev-user",
-      "token": "nk-...",
+      "token": "nk-<openssl rand -hex 32>",
       "roles": ["user"],
       "allowed_agents": ["build", "plan"],
       "allowed_endpoints": ["GET /v1/models", "POST /v1/chat/completions"],

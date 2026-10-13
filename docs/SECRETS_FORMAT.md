@@ -20,16 +20,16 @@ All JSON files support the same structure. Fields can be split across multiple f
 
 ```json
 {
-  "client_token": "nk-...",
+  "client_token": "nk-$(openssl rand -hex 32)",
   "provider_keys": {
-    "gemini": "AIza...",
-    "deepseek": "sk-...",
-    "openai": "sk-proj-..."
+    "gemini": "AIza<your-real-key>",
+    "deepseek": "sk-<your-real-key>",
+    "openai": "sk-proj-<your-real-key>"
   },
   "api_keys": {
     "dev-user": {
       "name": "dev-user",
-      "token": "nk-...",
+      "token": "nk-$(openssl rand -hex 32)",
       "roles": ["user"],
       "allowed_agents": ["build", "plan"],
       "enabled": true
@@ -51,13 +51,16 @@ All JSON files support the same structure. Fields can be split across multiple f
 ### Single file
 
 ```bash
-# Create secrets file
-cat > /etc/nenya/secrets.json << 'EOF'
+# Create secrets file — the token is generated outside the heredoc because
+# quoted heredocs do not expand $(...); pasting the command literally would
+# ship a guessable token (and is refused at boot).
+CLIENT_TOKEN="nk-$(openssl rand -hex 32)"
+cat > /etc/nenya/secrets.json << EOF
 {
-  "client_token": "nk-$(openssl rand -hex 32)",
+  "client_token": "$CLIENT_TOKEN",
   "provider_keys": {
-    "deepseek": "sk-...",
-    "gemini": "AIza..."
+    "deepseek": "sk-<your-real-key>",
+    "gemini": "AIza<your-real-key>"
   }
 }
 EOF
@@ -77,13 +80,16 @@ The gateway reads from `$CREDENTIALS_DIRECTORY/secrets`.
 # Create secrets directory
 mkdir -p /etc/nenya/secrets.d
 
-# Split into multiple files
-cat > /etc/nenya/secrets.d/01-client.json << 'EOF'
-{"client_token": "nk-..."}
+# Split into multiple files — the token is generated outside the quoted
+# heredoc (quoted heredocs do not expand $(...); pasting the command literally
+# would be refused at boot).
+CLIENT_TOKEN="nk-$(openssl rand -hex 32)"
+cat > /etc/nenya/secrets.d/01-client.json << EOF
+{"client_token": "$CLIENT_TOKEN"}
 EOF
 
 cat > /etc/nenya/secrets.d/02-providers.json << 'EOF'
-{"provider_keys": {"deepseek": "sk-...", "gemini": "AIza..."}}
+{"provider_keys": {"deepseek": "sk-<your-real-key>", "gemini": "AIza<your-real-key>"}}
 EOF
 
 cat > /etc/nenya/secrets.d/03-api-keys.json << 'EOF'
@@ -117,8 +123,8 @@ Example secrets directory:
 
 ```bash
 secrets/
-├── 01-client.json     → {"client_token": "nk-..."}
-├── 02-providers.json  → {"provider_keys": {"deepseek": "sk-..."}}
+├── 01-client.json     → {"client_token": "nk-$(openssl rand -hex 32)"}
+├── 02-providers.json  → {"provider_keys": {"deepseek": "sk-<your-real-key>"}}
 └── 03-keys.json       → {"api_keys": {...}}
 ```
 
@@ -134,9 +140,9 @@ metadata:
 type: Opaque
 stringData:
   01-client.json: |
-    {"client_token": "nk-..."}
+    {"client_token": "nk-<generate with: openssl rand -hex 32, prefixed nk->"}
   02-providers.json: |
-    {"provider_keys": {"deepseek": "sk-...", "gemini": "AIza..."}}
+    {"provider_keys": {"deepseek": "sk-<your-real-key>", "gemini": "AIza<your-real-key>"}}
   03-keys.json: |
     {"api_keys": {"dev-user": {...}}}
 ---
@@ -194,8 +200,9 @@ openssl rand -hex 32
 Use the provided utility or manually create `ApiKey` entries in JSON:
 
 ```bash
-# Generate key with roles (alias: a2a)
-go run ./cmd/nenya keygen --name "dev-user" --roles user,read-only --agents build,plan
+# Generate a strong token value (nk- + 32 bytes hex), then add the api_keys
+# entry below with that token
+openssl rand -hex 32
 ```
 
 **Manual configuration:**
@@ -204,7 +211,7 @@ go run ./cmd/nenya keygen --name "dev-user" --roles user,read-only --agents buil
   "api_keys": {
     "dev-user": {
       "name": "dev-user",
-      "token": "nk-...",
+      "token": "nk-$(openssl rand -hex 32)",
       "roles": ["user"],
       "allowed_agents": ["build", "plan"],
       "allowed_endpoints": ["GET /v1/models", "POST /v1/chat/completions"],
@@ -290,7 +297,7 @@ Or manually create an `ApiKey` entry in JSON:
   "api_keys": {
     "dev-user": {
       "name": "dev-user",
-      "token": "nk-...",
+      "token": "nk-$(openssl rand -hex 32)",
       "roles": ["user"],
       "allowed_agents": ["build", "plan"],
       "enabled": true
@@ -301,7 +308,7 @@ Or manually create an `ApiKey` entry in JSON:
 
 ## Provider Keys
 
-The `provider_keys` object maps provider names to their API keys. See [`PROVIDERS.md`](PROVIDERS.md) for the full list of built-in providers.
+The `provider_keys` object maps provider names to their API keys. See [`PROVIDERS.md`](PROVIDERS.md) for the full list of built-in providers. Abbreviated doc forms (`sk-…`, `AIza…`) illustrate structure only — paste real keys before booting; placeholder credentials are refused at startup (see "Weak-Credential Refusal" below).
 
 **Legacy single-key format:**
 
@@ -367,6 +374,59 @@ At least one provider key must be present for the corresponding provider to work
 - Rotate tokens periodically
 - Path traversal (`..`) is rejected for all secret paths
 
+### Weak-Credential Refusal (Fail-Closed Boot)
+
+At startup Nenya refuses to serve traffic when a credential from the secrets
+document fails its strength class. The primary `client_token` and enabled
+`api_keys` entry tokens get the full rule set: empty, publicly known
+placeholders (`changeme`, `test-client-token`, `your-api-key-here`; exact or
+as an unambiguous phrase), unexpanded templates or shell variables
+(`<your-token>`, `$CLIENT_TOKEN`, `$(openssl ...)` pasted literally), trivial
+word+digit values (`password123`), repeated single characters, or shorter
+than 16 characters. Provider keys are checked for the placeholder, template,
+and repeated-character classes only — no length floor, because local and
+proxy upstreams legitimately use short shared secrets, and an empty value
+means "no credential for this upstream" (as does an empty legacy
+`api_key`/`credential` in the config file). The same placeholder/template/
+repeated-character classes apply to credentials carried by the config file
+itself (`providers.<name>.api_key`, `providers.<name>.accounts[].credential`).
+
+The refusal error names the credential, the secrets source (a single file, or
+the merged `secrets.d/` directory), and the remediation:
+
+```
+refusing to start: client_token is a publicly known placeholder value (source:
+/etc/nenya/secrets.json); generate a strong value with `nenya secret set
+--client-token` (or set NENYA_ALLOW_WEAK_SECRETS=1 to override, dev only)
+```
+
+(Abridged: provider keys suggest `nenya secret set --provider <name>`,
+api_keys tokens are fixed by editing the token in the secrets document.)
+
+`NENYA_ALLOW_WEAK_SECRETS=1` waives the strength pass — structural validation
+(a required non-empty `client_token` and well-formed `api_keys` entries)
+still applies, and a warning is printed once per process while it is set. It
+exists for throwaway local experiments and the demo; never set it in
+production. `nenya -validate` surfaces config-file credential refusals
+without starting the gateway. Scope note: credentials in `mcp_servers.<name>.headers` are not
+covered by these checks (they are plain config strings); keep real tokens in
+secrets documents or the secret store instead.
+
+#### Upgrading from earlier versions
+
+Installs whose credentials are placeholders or old quick-start literals will
+now fail to load — `secret get` surfaces the refusal; `describe` reports a
+`secrets_invalid` diagnostic (exit 0); only `secret set` remains usable for
+recovery. Generate replacements in place:
+
+```bash
+nenya secret set --client-token                      # generates nk-… + 32 bytes
+nenya secret set --provider deepseek sk-<your-real-key>
+```
+
+or, for a throwaway environment only, export `NENYA_ALLOW_WEAK_SECRETS=1`
+before starting.
+
 ### Secure Memory (mlock)
 
 Nenya uses `mlock` to keep authentication tokens in RAM, preventing them from being swapped to disk. This requires systemd to be configured with:
@@ -397,10 +457,10 @@ export NENYA_PROVIDER_KEY_GEMINI="AIza..."
 **After:**
 ```json
 // 01-client.json
-{"client_token": "nk-..."}
+{"client_token": "nk-$(openssl rand -hex 32)"}
 
 // 02-providers.json
-{"provider_keys": {"deepseek": "sk-...", "gemini": "AIza..."}}
+{"provider_keys": {"deepseek": "sk-<your-real-key>", "gemini": "AIza<your-real-key>"}}
 ```
 
 Environment variables are no longer supported. Use JSON files only.

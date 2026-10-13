@@ -192,3 +192,42 @@ func TestConfigSet_Passthrough(t *testing.T) {
 		t.Errorf("expected passthrough, got handled=%v err=%v", handled, err)
 	}
 }
+
+func TestConfigSet_CredentialKeyStrengthGuard(t *testing.T) {
+	// NENYA-192: credential-typed config keys are strength-checked at write
+	// time so `config set` cannot produce a boot-refused document.
+	dir := t.TempDir()
+	configDir := filepath.Join(dir, "config")
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("NENYA_CONFIG_DIR", configDir)
+	t.Setenv("NENYA_CONFIG_FILE", "")
+
+	var out, errBuf bytes.Buffer
+	// Placeholder under providers.*.api_key is rejected with exit 2.
+	handled, err := handleConfig(&out, &errBuf, []string{"config", "set", "providers.openai.api_key", "your-api-key-here"})
+	if !handled || !errors.Is(err, errUsage) {
+		t.Fatalf("placeholder api_key: handled=%v err=%v, want errUsage", handled, err)
+	}
+	if !strings.Contains(errBuf.String(), "rejected") {
+		t.Errorf("stderr = %q, want a rejection message", errBuf.String())
+	}
+
+	// Case-insensitive key match is also guarded.
+	errBuf.Reset()
+	handled, err = handleConfig(&out, &errBuf, []string{"config", "set", "providers.openai.API_KEY", "changeme-0000000000"})
+	if !handled || !errors.Is(err, errUsage) {
+		t.Fatalf("uppercase API_KEY: handled=%v err=%v, want errUsage", handled, err)
+	}
+
+	// A strong value writes fine.
+	if _, err := handleConfig(&out, &errBuf, []string{"config", "set", "providers.openai.api_key", "sk-real-key-0123456789abcdef"}); err != nil {
+		t.Fatalf("strong api_key rejected: %v", err)
+	}
+
+	// Non-credential leaves are untouched.
+	if _, err := handleConfig(&out, &errBuf, []string{"config", "set", "mcp_servers.local.headers.api_key", "changeme-0000000000"}); err != nil {
+		t.Fatalf("mcp header value must not be strength-checked: %v", err)
+	}
+}

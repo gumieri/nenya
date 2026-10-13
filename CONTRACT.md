@@ -407,7 +407,16 @@ validation failure is fatal — Nenya does not fall through to the next source.
 }
 ```
 
-`client_token` is required (`contract_version` 1). Multiple files merge
+`client_token` is required (`contract_version` 1). At boot, credentials are
+additionally strength-checked (fail-closed): the `client_token` and
+`api_keys` entry tokens are refused when empty, publicly known placeholders,
+unexpanded templates/variables, trivial word+digit values, repeated single
+characters, or below 16 characters; provider keys are checked for the
+placeholder/template/empty-as-placeholder classes only (an empty provider key
+means "no credential for this upstream"); config-file credentials
+(`providers.<name>.api_key`, `accounts[].credential`) are checked for the
+placeholder/template/empty classes only. See
+docs/SECRETS_FORMAT.md "Weak-Credential Refusal". Multiple files merge
 per top-level key: `provider_keys` merges per provider, the last non-empty
 `client_token` wins, and `api_keys` entries are replaced per key — a later entry
 overrides an earlier one only when it is `enabled: true`.

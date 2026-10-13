@@ -37,7 +37,7 @@ cat > secrets/provider_keys.json << 'EOF'
 }
 EOF
 
-cat > secrets/client.json << 'EOF'
+cat > secrets/client.json << EOF
 {
   "client_token": "nk-$(openssl rand -hex 32)"
 }

@@ -318,6 +318,15 @@ func run(logger *slog.Logger, cfg *config.Config, secrets *config.SecretsConfig,
 		return 1
 	}
 
+	// NENYA-192: placeholder credentials carried by the config file refuse
+	// startup the same way weak secrets documents do.
+	if credErrs := config.ValidateConfigCredentialsStrength(cfg); len(credErrs) > 0 {
+		for _, credErr := range credErrs {
+			logger.Error("config credential refused", "err", credErr)
+		}
+		return 1
+	}
+
 	startupCtx, startupCancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer startupCancel()
 
