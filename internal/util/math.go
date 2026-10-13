@@ -7,6 +7,28 @@ import (
 	"github.com/nenya/config"
 )
 
+// SafeMicroUSD converts a USD amount to signed micro-USD, reporting ok=false
+// for NaN, Inf, or magnitudes that would overflow the int64 micro-USD range
+// (|usd| beyond MaxInt64/1e6). Use at every cost-recording boundary so a
+// hostile or buggy upstream usage payload cannot saturate the conversion.
+func SafeMicroUSD(usd float64) (micro int64, ok bool) {
+	if math.IsNaN(usd) || math.IsInf(usd, 0) || usd >= math.MaxInt64/1e6 || usd <= -math.MaxInt64/1e6 {
+		return 0, false
+	}
+	return int64(math.Round(usd * 1e6)), true
+}
+
+// SafeUSDCents converts a USD amount to integer cents, reporting ok=false for
+// NaN, Inf, or magnitudes that would overflow the int64 cents range
+// (|usd| beyond MaxInt64/100). Same contract as SafeMicroUSD at cent
+// resolution.
+func SafeUSDCents(usd float64) (cents int64, ok bool) {
+	if math.IsNaN(usd) || math.IsInf(usd, 0) || usd >= math.MaxInt64/100 || usd <= -math.MaxInt64/100 {
+		return 0, false
+	}
+	return int64(math.Round(usd * 100)), true
+}
+
 // AddCap returns a+b, clamped to math.MaxInt on overflow.
 // Use this for slice capacity calculations where a+b could exceed
 // maximum int value. Panics on negative inputs (invalid capacity).

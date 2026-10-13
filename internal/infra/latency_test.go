@@ -134,3 +134,32 @@ func TestSortByLatency_OnlySomeHaveLatency(t *testing.T) {
 		t.Errorf("expected unknown (index 1) second, got index %d", indices[1])
 	}
 }
+
+// TestLatencyTracker_RecordConcurrentWithReaders exercises Record against
+// concurrent Get/Snapshot readers under -race, guarding the lock discipline
+// of all three paths. Published values are the immutable entries stored at
+// insertion (Record never mutates an entry in place); Get/Snapshot hand out
+// that shared read-only entry, so callers must not mutate what they receive.
+func TestLatencyTracker_RecordConcurrentWithReaders(t *testing.T) {
+	l := NewLatencyTracker()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for i := 0; i < 500; i++ {
+			l.Record("model", "provider", time.Duration(i+1)*time.Millisecond)
+		}
+	}()
+	for i := 0; i < 500; i++ {
+		if ml, ok := l.Get("model", "provider"); ok {
+			_ = ml.MedianMs + float64(ml.SampleSize) + float64(ml.LastUpdate.UnixNano())
+		}
+		snap := l.Snapshot()
+		for _, ml := range snap {
+			_ = ml.MedianMs + float64(ml.SampleSize) + float64(ml.LastUpdate.UnixNano())
+		}
+	}
+	<-done
+	if len(l.Snapshot()) != 1 {
+		t.Fatalf("snapshot entries = %d, want 1", len(l.Snapshot()))
+	}
+}

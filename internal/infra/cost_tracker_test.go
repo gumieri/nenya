@@ -177,3 +177,58 @@ func TestCostTracker_NegativeCost_Allowed(t *testing.T) {
 		t.Errorf("negative costs are allowed (for refunds), got %d, want -10000", cost)
 	}
 }
+
+func TestCostTracker_NilReceiver(t *testing.T) {
+	var ct *CostTracker
+	ct.RecordUsage("model", 1.0)
+	ct.RecordError("model")
+	if got := ct.GetCostMicroUSD("model"); got != 0 {
+		t.Errorf("nil tracker GetCostMicroUSD = %d, want 0", got)
+	}
+	if got := ct.GetCostUSD("model"); got != 0 {
+		t.Errorf("nil tracker GetCostUSD = %f, want 0", got)
+	}
+	if got := ct.GetErrorCount("model"); got != 0 {
+		t.Errorf("nil tracker GetErrorCount = %d, want 0", got)
+	}
+	if m := ct.GetAllCostsMicroUSD(); len(m) != 0 {
+		t.Errorf("nil tracker GetAllCostsMicroUSD len = %d, want 0", len(m))
+	}
+	if m := ct.GetAllErrors(); len(m) != 0 {
+		t.Errorf("nil tracker GetAllErrors len = %d, want 0", len(m))
+	}
+	snap := ct.Snapshot()
+	if snap.TotalCostMicroUSD != 0 || len(snap.ModelCosts) != 0 || len(snap.ModelErrors) != 0 {
+		t.Errorf("nil tracker Snapshot = %+v, want zero-value snapshot", snap)
+	}
+}
+
+func TestCostTracker_SignPreservingDustFloor(t *testing.T) {
+	ct := NewCostTracker()
+	ct.RecordUsage("refund", -1e-9)
+	ct.RecordUsage("charge", 1e-9)
+	if got := ct.GetCostMicroUSD("refund"); got != -1 {
+		t.Errorf("refund dust = %d micro-USD, want -1", got)
+	}
+	if got := ct.GetCostMicroUSD("charge"); got != 1 {
+		t.Errorf("charge dust = %d micro-USD, want 1", got)
+	}
+}
+
+func TestCostTracker_SnapshotConsistency(t *testing.T) {
+	ct := NewCostTracker()
+	ct.RecordUsage("model-a", 1.5)
+	ct.RecordError("model-a")
+	snap := ct.Snapshot()
+	if snap.TotalCostMicroUSD != 1_500_000 {
+		t.Errorf("total = %d, want 1500000", snap.TotalCostMicroUSD)
+	}
+	if snap.ModelCosts["model-a"] != 1_500_000 || snap.ModelErrors["model-a"] != 1 {
+		t.Errorf("snapshot = %+v, want model-a costs/errors present", snap)
+	}
+	// Snapshot must not alias internal maps.
+	snap.ModelCosts["model-a"] = 0
+	if ct.GetCostMicroUSD("model-a") != 1_500_000 {
+		t.Error("Snapshot leaked the internal cost map")
+	}
+}

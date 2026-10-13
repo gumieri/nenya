@@ -14,8 +14,8 @@ func TestNewBillingTracker(t *testing.T) {
 	if bt.TotalRequests.Load() != 0 {
 		t.Errorf("Initial requests count should be 0, got %d", bt.TotalRequests.Load())
 	}
-	if bt.TotalSpendUSD.Load() != 0 {
-		t.Errorf("Initial spend should be 0, got %d", bt.TotalSpendUSD.Load())
+	if bt.TotalSpendCents.Load() != 0 {
+		t.Errorf("Initial spend should be 0, got %d", bt.TotalSpendCents.Load())
 	}
 }
 
@@ -40,8 +40,8 @@ func TestRecordSpend(t *testing.T) {
 	}
 
 	// 0.01 USD = 1 cent in the internal representation
-	if bt.TotalSpendUSD.Load() != 1 {
-		t.Errorf("Expected spend 1 cent, got %d", bt.TotalSpendUSD.Load())
+	if bt.TotalSpendCents.Load() != 1 {
+		t.Errorf("Expected spend 1 cent, got %d", bt.TotalSpendCents.Load())
 	}
 
 	spend := bt.GetTotalSpend("openai", "account1")
@@ -272,8 +272,8 @@ func TestResetSpend_ConcurrentSafety(t *testing.T) {
 		<-done
 	}
 
-	total := bt.TotalSpendUSD.Load()
+	total := bt.TotalSpendCents.Load()
 	if total < 0 {
-		t.Errorf("TotalSpendUSD went negative: %d (underflow detected)", total)
+		t.Errorf("TotalSpendCents went negative: %d (underflow detected)", total)
 	}
 }

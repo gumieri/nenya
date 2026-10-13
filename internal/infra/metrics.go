@@ -11,6 +11,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/nenya/internal/util"
 	"github.com/nenya/internal/version"
 )
 
@@ -206,6 +207,8 @@ type RateLimitSnapshot struct {
 	TPM float64
 }
 
+// HTTPDurationBuckets is the shared latency histogram bucket set (in
+// seconds) used by all duration histograms in this package.
 var HTTPDurationBuckets = []float64{0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30, 60, 120}
 
 type labeledEntry struct {
@@ -227,22 +230,52 @@ func NewMetrics() *Metrics {
 	}
 }
 
+// cloneLabels returns a deep copy of labels with freshly allocated keys and
+// values. Metric label maps are retained for the process lifetime, and label
+// values (model/agent/provider names) often originate from parsed request
+// bodies whose backing arrays can alias large payload buffers; storing them
+// verbatim pins those payloads in memory (buffer-pinning leak class,
+// NENYA-198). All metric-label retention paths in this package — metric
+// entries, histograms, and the usage/cost/latency/calibration maps — MUST
+// route through this helper (or strings.Clone). Other caches in this package
+// (response cache, embed index, thought-signature cache, concurrency slots)
+// also retain caller-supplied key strings without cloning — never feed them
+// raw request-buffer strings. Returns
+// nil when labels is empty (matching the nil-labels histogram call sites).
+func cloneLabels(labels map[string]string) map[string]string {
+	if len(labels) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(labels))
+	for k, v := range labels {
+		out[strings.Clone(k)] = strings.Clone(v)
+	}
+	return out
+}
+
+// getOrCreateEntry returns the counter entry for labels, creating it (with
+// cloned labels) on first use. The happy path is a plain Load: the labelKey
+// concatenation is unavoidable per record under the current design, but the
+// cloneLabels copy is insert-only, so the hot path stops allocating label
+// clones once metric cardinality has warmed.
 func getOrCreateEntry(mmap *sync.Map, labels map[string]string) *labeledEntry {
 	key := labelKey(labels)
-	if v, ok := mmap.LoadOrStore(key, &labeledEntry{labels: labels}); ok {
+	if v, ok := mmap.Load(key); ok {
 		return v.(*labeledEntry)
 	}
-	v, _ := mmap.Load(key)
+	v, _ := mmap.LoadOrStore(key, &labeledEntry{labels: cloneLabels(labels)})
 	return v.(*labeledEntry)
 }
 
+// getOrCreateHist returns the histogram for labels, creating it (with cloned
+// labels) on first use; see getOrCreateEntry for the fast-path rationale.
 func getOrCreateHist(mmap *sync.Map, labels map[string]string, buckets []float64) *histogram {
 	key := labelKey(labels)
-	h := &histogram{labels: labels, buckets: buckets, counts: make([]atomic.Uint64, len(buckets))}
-	if v, ok := mmap.LoadOrStore(key, h); ok {
+	if v, ok := mmap.Load(key); ok {
 		return v.(*histogram)
 	}
-	v, _ := mmap.Load(key)
+	h := &histogram{labels: cloneLabels(labels), buckets: buckets, counts: make([]atomic.Uint64, len(buckets))}
+	v, _ := mmap.LoadOrStore(key, h)
 	return v.(*histogram)
 }
 
@@ -259,6 +292,14 @@ func (h *histogram) Observe(seconds float64) {
 // labelKey converts a map of labels to a comma-separated string
 // sorted by key for consistent hashing.
 // Example: map[string]string{"a":"1", "b":"2"} -> "a=1,b=2"
+//
+// The encoding is ambiguous: a value containing ",k=v" can collide with a
+// different label set (e.g. {"a":"1,b=2"} and {"a":"1","b":"2"} produce the
+// same key). This is kept safe by construction: label keys are code-owned,
+// and a collision further requires a value long enough to embed a full
+// ",k=v"-shaped pair, which the bounded values in this package — config- or
+// resolution-validated model/agent/provider names, plus normalized URL paths
+// — do not reach. Never use free-form strings as label keys.
 func labelKey(labels map[string]string) string {
 	pairs := make([]string, 0, len(labels))
 	for k, v := range labels {
@@ -284,8 +325,11 @@ func labelStr(labels map[string]string) string {
 	return "{" + strings.Join(pairs, ", ") + "}"
 }
 
+// RecordTokens adds count tokens to the per-direction/per-model counter.
+// Non-positive counts are ignored (mirrors RecordTokensSaved). Label values
+// are cloned before retention (NENYA-198). Nil-safe.
 func (m *Metrics) RecordTokens(direction, model, agent, provider string, count int) {
-	if m == nil {
+	if m == nil || count <= 0 {
 		return
 	}
 	e := getOrCreateEntry(&m.tokens, map[string]string{
@@ -542,14 +586,20 @@ func (m *Metrics) RecordJudgmentCascade(name string) {
 	e.value.Add(1)
 }
 
-// RecordCostWindow records one request's cost in microUSD under the pricing
-// window it was billed at (peak|offpeak). Nil-safe.
+// RecordCostWindow records one request's cost in micro-USD under the pricing
+// window it was billed at (peak|offpeak). The cost is rounded
+// half-away-from-zero with a 1 micro-USD floor for positive costs that round
+// to zero; NaN, Inf, out-of-range magnitudes, and negative deltas
+// (cumulative cost series are monotonic) are skipped. Nil-safe.
 func (m *Metrics) RecordCostWindow(model, window string, costUSD float64) {
 	if m == nil || model == "" || window == "" {
 		return
 	}
-	micro := int64(costUSD * 1e6)
-	if micro == 0 && costUSD != 0 {
+	micro, ok := util.SafeMicroUSD(costUSD)
+	if !ok || micro < 0 {
+		return
+	}
+	if micro == 0 {
 		micro = 1
 	}
 	if micro < 0 {
@@ -1280,7 +1330,9 @@ func (m *Metrics) AccountSelectionCount(provider, status string) uint64 {
 }
 
 func (m *Metrics) RecordBillingSpend(provider, account string, spendCents int64) {
-	if m == nil {
+	// Cumulative spend series are monotonic; non-positive deltas are skipped
+	// rather than wrapping the uint64 counter.
+	if m == nil || spendCents <= 0 {
 		return
 	}
 	e := getOrCreateEntry(&m.billingSpend, map[string]string{
@@ -1463,8 +1515,8 @@ func (m *Metrics) WritePrometheus(w io.Writer) {
 		return
 	}
 
-	m.writeCounterMap(w, "nenya_billing_spend_usd",
-		"Total spend by provider and account in USD.", &m.billingSpend)
+	m.writeCounterMap(w, "nenya_billing_spend_cents_total",
+		"Total spend by provider and account in cents. Cumulative since process start; ResetSpend does not rewind this series.", &m.billingSpend)
 	m.writeCounterMap(w, "nenya_billing_exhausted",
 		"Total times billing accounts were marked exhausted.", &m.billingExhausted)
 	m.writeGaugeMap(w, "nenya_billing_utilization_ratio",

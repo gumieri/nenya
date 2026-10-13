@@ -303,7 +303,7 @@ Billing metrics are emitted via Prometheus:
 
 | Metric | Labels | Description |
 |--------|--------|-------------|
-| `nenya_billing_spend_usd` | `provider`, `account` | Total spend in cents |
+| `nenya_billing_spend_cents_total` | `provider`, `account` | Total spend in cents (cumulative since process start; `ResetSpend` does not rewind this series) |
 | `nenya_billing_exhausted` | `provider`, `account` | Number of times account was marked exhausted |
 | `nenya_budget_limit_rejected` | `model` | Number of targets rejected due to agent budget limit |
 

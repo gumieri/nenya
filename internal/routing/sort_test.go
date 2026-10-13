@@ -249,3 +249,33 @@ func TestCapabilityBoost(t *testing.T) {
 		})
 	}
 }
+
+func TestSortTargetsByBalanced_LatencyMissDoesNotPanic(t *testing.T) {
+	tracker := infra.NewLatencyTracker()
+	tracker.Record("tracked-model", "p1", 100*time.Millisecond)
+
+	targets := []UpstreamTarget{
+		{Model: "untracked-model", Provider: "p1", URL: "http://untracked"},
+		{Model: "tracked-model", Provider: "p1", URL: "http://tracked"},
+	}
+
+	// Regression: a Get miss (target without recorded latency) under
+	// LatencyWeight > 0 previously dereferenced a nil *ModelLatency in the
+	// latency range collection and panicked (auto_reorder_by_latency +
+	// balanced strategy). Both targets must survive the sort; the untracked
+	// target ranks neutral, so only presence and determinism are asserted.
+	sorted := SortTargetsByBalanced(targets, tracker, nil, nil, SortOptions{
+		LatencyWeight: 1.0,
+		CostWeight:    0.0,
+	})
+	if len(sorted) != 2 {
+		t.Fatalf("expected 2 targets, got %d", len(sorted))
+	}
+	got := map[string]bool{}
+	for _, t := range sorted {
+		got[t.Model] = true
+	}
+	if !got["tracked-model"] || !got["untracked-model"] {
+		t.Errorf("expected both targets in result, got %v", sorted)
+	}
+}

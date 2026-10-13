@@ -2,6 +2,7 @@ package infra
 
 import (
 	"math"
+	"strings"
 	"sync"
 )
 
@@ -53,7 +54,10 @@ type calibrationSample struct {
 // All methods are nil-safe: a nil tracker is a disabled tracker (Ratio
 // returns 1.0), so call sites never branch on configuration.
 //
-// Locking: mu guards params and models; reads take RLock, writes Lock.
+// Locking: mu guards models; reads take RLock, writes Lock. params is
+// immutable after construction (NewCalibrationTracker resolves defaults, and
+// reconfiguration builds a new tracker), so the Enabled check in record is
+// safe without the lock.
 type CalibrationTracker struct {
 	mu     sync.RWMutex
 	params CalibrationParams
@@ -116,7 +120,10 @@ func (t *CalibrationTracker) record(model string, estimate, actual float64) {
 	s, ok := t.models[model]
 	if !ok {
 		s = &calibrationSample{}
-		t.models[model] = s
+		// Clone the model name before using it as a map key: samples live for
+		// the process lifetime and the caller's string may alias a request
+		// buffer (see cloneLabels in metrics.go, NENYA-198).
+		t.models[strings.Clone(model)] = s
 	}
 	s.recordClock++
 	d := t.params.Decay

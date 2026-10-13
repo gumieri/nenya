@@ -3,6 +3,7 @@ package infra
 import (
 	"math/rand"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 )
@@ -11,8 +12,15 @@ const (
 	latencyMaxSamples   = 100
 	latencyMaxKeys      = 500
 	latencyStaleTimeout = 1 * time.Hour
+	// latencyEvictInterval throttles the stale-key sweep so Record stays O(1)
+	// on the hot path: eviction runs at most once per interval instead of
+	// scanning every key on every record.
+	latencyEvictInterval = latencyStaleTimeout / 12
 )
 
+// ModelLatency is a per-(model, provider) latency record: the median of the
+// retained sample buffer, its size, and the last update time. Entries are
+// immutable once published by the tracker.
 type ModelLatency struct {
 	Model      string
 	Provider   string
@@ -21,10 +29,25 @@ type ModelLatency struct {
 	LastUpdate time.Time
 }
 
+// LatencyTracker maintains per-(model, provider) latency sample buffers with
+// incremental sorted insertion and median computation, used for latency-based
+// target reordering. Entries are immutable once published: Record never
+// mutates an entry in place, so values returned by Get and Snapshot are
+// stable for reading without holding the tracker lock. All methods are
+// nil-safe (a nil tracker records nothing, Get reports a miss, Snapshot is
+// empty, and SortByLatency returns identity order). Construct with
+// NewLatencyTracker; the zero value is not usable.
+//
+// Keys are the ":"-joined model and provider; provider names are
+// config-owned and must not contain ":" so the join is unambiguous. When a
+// sample buffer exceeds latencyMaxSamples, the fastest sample is dropped, so
+// the retained window skews toward slower observations and the median is
+// conservatively biased for reordering.
 type LatencyTracker struct {
-	mu      sync.RWMutex
-	latency map[string]*ModelLatency
-	sorted  map[string][]time.Duration
+	mu        sync.RWMutex
+	latency   map[string]*ModelLatency
+	sorted    map[string][]time.Duration
+	lastEvict time.Time
 }
 
 // LatencyKey is a model+provider pair used for latency lookups.
@@ -40,13 +63,26 @@ func NewLatencyTracker() *LatencyTracker {
 	}
 }
 
+// Record adds duration to the per-(model, provider) sample buffer and
+// recomputes the median. Buffers are capped at latencyMaxSamples per key and
+// keys evicted after latencyStaleTimeout. Caller-supplied model/provider
+// strings are cloned on entry creation only (see cloneLabels in metrics.go,
+// NENYA-198); updates reuse the existing entry.
 func (l *LatencyTracker) Record(model, provider string, duration time.Duration) {
+	if l == nil {
+		return
+	}
 	key := model + ":" + provider
 
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
-	l.evictStaleLocked()
+	// Throttled stale-key sweep: at most once per latencyEvictInterval, so
+	// the hot path does not scan all keys on every record.
+	if now := time.Now(); now.Sub(l.lastEvict) >= latencyEvictInterval {
+		l.evictStaleLocked()
+		l.lastEvict = now
+	}
 	if len(l.sorted) >= latencyMaxKeys {
 		if _, exists := l.sorted[key]; !exists {
 			return
@@ -67,13 +103,24 @@ func (l *LatencyTracker) Record(model, provider string, duration time.Duration) 
 	}
 
 	l.sorted[key] = buf
-	l.latency[key] = &ModelLatency{
-		Model:      model,
-		Provider:   provider,
-		MedianMs:   float64(buf[len(buf)/2].Milliseconds()),
-		SampleSize: len(buf),
-		LastUpdate: time.Now(),
+	// Clone caller-supplied strings only on entry creation (NENYA-198) and
+	// publish a fresh ModelLatency per record: entries handed out by
+	// Get/Snapshot must never be mutated in place, or concurrent readers of a
+	// previously returned snapshot observe torn field sets (data race).
+	ml, ok := l.latency[key]
+	if !ok {
+		ml = &ModelLatency{
+			Model:    strings.Clone(model),
+			Provider: strings.Clone(provider),
+		}
+	} else {
+		prev := *ml
+		ml = &prev
 	}
+	ml.MedianMs = float64(buf[len(buf)/2].Milliseconds())
+	ml.SampleSize = len(buf)
+	ml.LastUpdate = time.Now()
+	l.latency[key] = ml
 }
 
 // insertSorted inserts a duration into a sorted slice using binary search.
@@ -106,7 +153,14 @@ func (l *LatencyTracker) evictStaleLocked() {
 	}
 }
 
+// Get returns the latency record for the (model, provider) pair; ok is false
+// when the pair is unobserved. Published entries are immutable (see
+// LatencyTracker), so the returned value is stable for reading without the
+// lock; callers must not mutate it.
 func (l *LatencyTracker) Get(model, provider string) (*ModelLatency, bool) {
+	if l == nil {
+		return nil, false
+	}
 	key := model + ":" + provider
 
 	l.mu.RLock()
@@ -116,7 +170,12 @@ func (l *LatencyTracker) Get(model, provider string) (*ModelLatency, bool) {
 	return latency, ok
 }
 
+// Snapshot returns all latency records keyed by "model:provider". Published
+// entries are immutable (see LatencyTracker); callers must not mutate them.
 func (l *LatencyTracker) Snapshot() map[string]*ModelLatency {
+	if l == nil {
+		return map[string]*ModelLatency{}
+	}
 	l.mu.RLock()
 	defer l.mu.RUnlock()
 

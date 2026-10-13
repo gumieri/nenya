@@ -1,6 +1,7 @@
 package infra
 
 import (
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -68,7 +69,10 @@ func (u *UsageTracker) getOrCreate(model string) *modelStats {
 	s, ok = u.models[model]
 	if !ok {
 		s = &modelStats{}
-		u.models[model] = s
+		// Clone the model name before using it as a map key: records live for
+		// the process lifetime and the caller's string may alias a request
+		// buffer (see cloneLabels in metrics.go, NENYA-198).
+		u.models[strings.Clone(model)] = s
 	}
 	return s
 }

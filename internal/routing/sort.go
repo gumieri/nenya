@@ -45,11 +45,15 @@ type RequestCapabilities struct {
 	HasContentArr bool
 }
 
-func collectMinMax(targets []UpstreamTarget, fn func(t UpstreamTarget) (float64, bool)) (min, max float64) {
+// collectMinMax returns the min and max over the observed values; ok is true
+// only when at least two distinct values were observed, i.e. a real
+// normalization range exists (a degenerate or empty observation set keeps the
+// caller at the neutral score instead of normalizing against a sentinel).
+func collectMinMax(targets []UpstreamTarget, fn func(t UpstreamTarget) (float64, bool)) (min, max float64, ok bool) {
 	min, max = -1, -1
 	for _, t := range targets {
-		v, ok := fn(t)
-		if !ok {
+		v, valid := fn(t)
+		if !valid {
 			continue
 		}
 		if min < 0 || v < min {
@@ -59,26 +63,27 @@ func collectMinMax(targets []UpstreamTarget, fn func(t UpstreamTarget) (float64,
 			max = v
 		}
 	}
-	if min < 0 {
-		return 0, 1
-	}
-	if min == max {
-		return 0, 1
-	}
-	return min, max
+	return min, max, min >= 0 && max > min
 }
 
-func getLatencyRange(targets []UpstreamTarget, latencyTracker *infra.LatencyTracker) (min, max float64) {
+// getLatencyRange returns the min/max median latency across targets with
+// recorded data; ok is false when no real normalization range exists.
+func getLatencyRange(targets []UpstreamTarget, latencyTracker *infra.LatencyTracker) (min, max float64, ok bool) {
 	return collectMinMax(targets, func(t UpstreamTarget) (float64, bool) {
 		if latencyTracker == nil {
 			return 0, false
 		}
-		lat, ok := latencyTracker.Get(t.Model, t.Provider)
-		return lat.MedianMs, ok
+		lat, found := latencyTracker.Get(t.Model, t.Provider)
+		if !found {
+			return 0, false
+		}
+		return lat.MedianMs, true
 	})
 }
 
-func getCostRange(targets []UpstreamTarget, costTracker *infra.CostTracker) (min, max float64) {
+// getCostRange returns the min/max micro-USD cost across targets with
+// recorded data; ok is false when no real normalization range exists.
+func getCostRange(targets []UpstreamTarget, costTracker *infra.CostTracker) (min, max float64, ok bool) {
 	return collectMinMax(targets, func(t UpstreamTarget) (float64, bool) {
 		if costTracker == nil {
 			return 0, false
@@ -114,12 +119,25 @@ func SortTargetsByBalanced(targets []UpstreamTarget, latencyTracker *infra.Laten
 	sorted := make([]UpstreamTarget, len(targets))
 	copy(sorted, targets)
 
-	minLat, maxLat := getLatencyRange(sorted, latencyTracker)
-	minCost, maxCost := getCostRange(sorted, costTracker)
+	minLat, maxLat, latRangeOK := getLatencyRange(sorted, latencyTracker)
+	minCost, maxCost, costRangeOK := getCostRange(sorted, costTracker)
+
+	in := scoreInput{
+		latencyTracker: latencyTracker,
+		costTracker:    costTracker,
+		catalog:        catalog,
+		minLat:         minLat,
+		maxLat:         maxLat,
+		latRangeOK:     latRangeOK,
+		minCost:        minCost,
+		maxCost:        maxCost,
+		costRangeOK:    costRangeOK,
+		opts:           opts,
+	}
 
 	sort.SliceStable(sorted, func(i, j int) bool {
-		scoreI := calculateScore(sorted[i], latencyTracker, costTracker, catalog, minLat, maxLat, minCost, maxCost, opts)
-		scoreJ := calculateScore(sorted[j], latencyTracker, costTracker, catalog, minLat, maxLat, minCost, maxCost, opts)
+		scoreI := calculateScore(sorted[i], in)
+		scoreJ := calculateScore(sorted[j], in)
 
 		if scoreI != scoreJ {
 			return scoreI > scoreJ
@@ -134,31 +152,43 @@ func SortTargetsByBalanced(targets []UpstreamTarget, latencyTracker *infra.Laten
 	return sorted
 }
 
-func calculateScore(target UpstreamTarget, latencyTracker *infra.LatencyTracker, costTracker *infra.CostTracker, catalog *discovery.ModelCatalog, minLat, maxLat, minCost, maxCost float64, opts SortOptions) float64 {
+// scoreInput groups the trackers, catalog, precomputed normalization ranges,
+// and options shared by every calculateScore call within one sort.
+type scoreInput struct {
+	latencyTracker   *infra.LatencyTracker
+	costTracker      *infra.CostTracker
+	catalog          *discovery.ModelCatalog
+	minLat, maxLat   float64
+	latRangeOK       bool
+	minCost, maxCost float64
+	costRangeOK      bool
+	opts             SortOptions
+}
+
+// calculateScore computes the balanced ranking score for one target: weighted
+// normalized latency (lower median is better) minus weighted normalized cost
+// and billing penalty, plus capability/score bonuses. Dimensions without data
+// — or with a degenerate single-value range — contribute the neutral 0.5.
+func calculateScore(target UpstreamTarget, in scoreInput) float64 {
 	latencyNorm := 0.5
-	if latencyTracker != nil && opts.LatencyWeight > 0 {
-		if lat, ok := latencyTracker.Get(target.Model, target.Provider); ok {
-			if maxLat > minLat {
-				latencyNorm = (maxLat - lat.MedianMs) / (maxLat - minLat)
-			}
+	if in.latRangeOK && in.latencyTracker != nil && in.opts.LatencyWeight > 0 {
+		if lat, ok := in.latencyTracker.Get(target.Model, target.Provider); ok {
+			latencyNorm = (in.maxLat - lat.MedianMs) / (in.maxLat - in.minLat)
 		}
 	}
 
 	costNorm := 0.5
-	if costTracker != nil && opts.CostWeight > 0 {
-		if c := costTracker.GetCostMicroUSD(target.Model); c > 0 {
-			fc := float64(c)
-			if maxCost > minCost {
-				costNorm = (fc - minCost) / (maxCost - minCost)
-			}
+	if in.costRangeOK && in.costTracker != nil && in.opts.CostWeight > 0 {
+		if c := in.costTracker.GetCostMicroUSD(target.Model); c > 0 {
+			costNorm = (float64(c) - in.minCost) / (in.maxCost - in.minCost)
 		}
 	}
 
-	billingWeight := getBillingWeight(opts, target.Provider)
+	billingWeight := getBillingWeight(in.opts, target.Provider)
 
-	scoreBonus := computeScoreBonus(target, opts, catalog)
+	scoreBonus := computeScoreBonus(target, in.opts, in.catalog)
 
-	score := (latencyNorm * opts.LatencyWeight) - (costNorm * opts.CostWeight) - (costNorm * billingWeight) + scoreBonus
+	score := (latencyNorm * in.opts.LatencyWeight) - (costNorm * in.opts.CostWeight) - (costNorm * billingWeight) + scoreBonus
 	if math.IsNaN(score) || math.IsInf(score, 0) {
 		return 0
 	}
