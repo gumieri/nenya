@@ -3,6 +3,7 @@ package stream
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"testing"
 )
 
@@ -193,4 +194,165 @@ func splitSSEEvents(data []byte) [][]byte {
 		}
 	}
 	return events
+}
+
+// usageFromEvents returns the usage object of the last message_delta event in a
+// batch of transformed events.
+func usageFromEvents(t *testing.T, out []byte) map[string]interface{} {
+	t.Helper()
+	var usage map[string]interface{}
+	for _, line := range splitSSEEvents(out) {
+		var evt map[string]interface{}
+		if err := json.Unmarshal(line, &evt); err != nil {
+			continue
+		}
+		if evt["type"] != "message_delta" {
+			continue
+		}
+		if u, ok := evt["usage"].(map[string]interface{}); ok {
+			usage = u
+		}
+	}
+	return usage
+}
+
+// TestOpenAIToAnthropicTransformer_UsageBeforeFinish pins the case the
+// capture fixes (NENYA-167): a provider that reports cumulative usage on the
+// content chunks (Gemini-over-OpenAI-compat and several gateways do) has its
+// real counts published on the final message_delta instead of the
+// character-count estimate.
+func TestOpenAIToAnthropicTransformer_UsageBeforeFinish(t *testing.T) {
+	tr := NewOpenAIToAnthropicTransformer()
+	ctx := context.Background()
+
+	content, _ := json.Marshal(map[string]interface{}{
+		"id": "chatcmpl-1", "model": "gpt-4",
+		"choices": []interface{}{map[string]interface{}{
+			"index": 0, "delta": map[string]interface{}{"content": "hello there"}, "finish_reason": nil,
+		}},
+		"usage": map[string]interface{}{
+			"prompt_tokens": 100.0, "completion_tokens": 42.0,
+			"prompt_tokens_details": map[string]interface{}{"cached_tokens": 60.0},
+			"cache_creation_tokens": 10.0,
+		},
+	})
+	if _, err := tr.TransformSSEChunk(ctx, content); err != nil {
+		t.Fatalf("content chunk: %v", err)
+	}
+	// message_start is emitted before the usage is read from the same chunk,
+	// so the real counts land on the closing message_delta below.
+	finish, _ := json.Marshal(map[string]interface{}{
+		"id": "chatcmpl-1", "model": "gpt-4",
+		"choices": []interface{}{map[string]interface{}{
+			"index": 0, "delta": map[string]interface{}{}, "finish_reason": "stop",
+		}},
+	})
+	finishOut, err := tr.TransformSSEChunk(ctx, finish)
+	if err != nil {
+		t.Fatalf("finish chunk: %v", err)
+	}
+	usage := usageFromEvents(t, finishOut)
+	if usage == nil {
+		t.Fatal("expected a message_delta with usage")
+	}
+	if usage["output_tokens"] != float64(42) {
+		t.Errorf("output_tokens = %v, want the upstream-reported 42", usage["output_tokens"])
+	}
+	if usage["input_tokens"] != float64(30) {
+		t.Errorf("input_tokens = %v, want 30 (100 prompt - 60 cached - 10 written)", usage["input_tokens"])
+	}
+	if usage["cache_read_input_tokens"] != float64(60) {
+		t.Errorf("cache_read_input_tokens = %v, want 60", usage["cache_read_input_tokens"])
+	}
+	if usage["cache_creation_input_tokens"] != float64(10) {
+		t.Errorf("cache_creation_input_tokens = %v, want 10", usage["cache_creation_input_tokens"])
+	}
+}
+
+// TestOpenAIToAnthropicTransformer_UsageAfterFinish pins the documented
+// limitation of the standard `stream_options.include_usage` ordering: the
+// usage-only chunk follows the finish_reason chunk, and the closing
+// message_delta has already been emitted by then, so the client-facing usage
+// keeps the character-count estimate. (Nenya's own accounting is unaffected —
+// the reader records the real usage before the transformer runs.) NENYA-167
+// records this as a known limitation rather than deferring the terminal events.
+func TestOpenAIToAnthropicTransformer_UsageAfterFinish(t *testing.T) {
+	tr := NewOpenAIToAnthropicTransformer()
+	ctx := context.Background()
+
+	content, _ := json.Marshal(map[string]interface{}{
+		"id": "chatcmpl-1", "model": "gpt-4",
+		"choices": []interface{}{map[string]interface{}{
+			"index": 0, "delta": map[string]interface{}{"content": "hello there"}, "finish_reason": nil,
+		}},
+	})
+	if _, err := tr.TransformSSEChunk(ctx, content); err != nil {
+		t.Fatalf("content chunk: %v", err)
+	}
+	finish, _ := json.Marshal(map[string]interface{}{
+		"id": "chatcmpl-1", "model": "gpt-4",
+		"choices": []interface{}{map[string]interface{}{
+			"index": 0, "delta": map[string]interface{}{}, "finish_reason": "stop",
+		}},
+	})
+	finishOut, err := tr.TransformSSEChunk(ctx, finish)
+	if err != nil {
+		t.Fatalf("finish chunk: %v", err)
+	}
+	usage := usageFromEvents(t, finishOut)
+	if usage == nil {
+		t.Fatal("expected a message_delta with usage")
+	}
+	if usage["output_tokens"] != float64(len("hello there")/4) {
+		t.Errorf("output_tokens = %v, want the estimate (the usage chunk has not arrived yet)", usage["output_tokens"])
+	}
+
+	// The later usage-only chunk is captured for the record and consumed
+	// without emitting an event (the OpenAI-shaped frame must not be forwarded
+	// to an Anthropic client after message_stop), but the estimate already
+	// sent is what the client sees.
+	usageChunk, _ := json.Marshal(map[string]interface{}{
+		"id": "chatcmpl-1", "model": "gpt-4", "choices": []interface{}{},
+		"usage": map[string]interface{}{"prompt_tokens": 100.0, "completion_tokens": 42.0, "total_tokens": 142.0},
+	})
+	out, err := tr.TransformSSEChunk(ctx, usageChunk)
+	if !errors.Is(err, ErrEventConsumed) {
+		t.Fatalf("usage chunk: err = %v, want ErrEventConsumed (the OpenAI-shaped frame must not reach an Anthropic client)", err)
+	}
+	if len(out) != 0 {
+		t.Errorf("a usage-only chunk after the stream is done must emit no events, got %q", out)
+	}
+	if tr.outputTokens != 42 {
+		t.Errorf("captured outputTokens = %d, want 42", tr.outputTokens)
+	}
+	if done, err := tr.TransformSSEChunk(ctx, []byte("[DONE]")); err != nil || string(done) != "[DONE]" {
+		t.Fatalf("[DONE] = %q, %v", done, err)
+	}
+}
+
+// TestOpenAIToAnthropicTransformer_UsageEstimateFallback pins that the
+// character-count estimate is used only when the stream carried no usage.
+func TestOpenAIToAnthropicTransformer_UsageEstimateFallback(t *testing.T) {
+	tr := NewOpenAIToAnthropicTransformer()
+	ctx := context.Background()
+	content, _ := json.Marshal(map[string]interface{}{
+		"id": "chatcmpl-1", "model": "gpt-4",
+		"choices": []interface{}{map[string]interface{}{
+			"index": 0, "delta": map[string]interface{}{"content": "hello there"}, "finish_reason": "stop",
+		}},
+	})
+	out, err := tr.TransformSSEChunk(ctx, content)
+	if err != nil {
+		t.Fatalf("chunk: %v", err)
+	}
+	usage := usageFromEvents(t, out)
+	if usage == nil {
+		t.Fatal("expected a message_delta with usage")
+	}
+	if usage["output_tokens"] != float64(len("hello there")/4) {
+		t.Errorf("output_tokens = %v, want the chars/4 estimate", usage["output_tokens"])
+	}
+	if usage["input_tokens"] != float64(0) {
+		t.Errorf("input_tokens = %v, want 0 when the stream carried no usage", usage["input_tokens"])
+	}
 }

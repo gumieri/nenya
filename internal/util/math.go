@@ -157,17 +157,3 @@ func FindRegistryModels(pattern config.AgentModel, providers map[string]*config.
 	}
 	return models
 }
-
-// AddFloat64 adds two float64 values, safely handling type conversions.
-// Returns 0 if either value cannot be converted to float64.
-func AddFloat64(a, b interface{}) float64 {
-	af, okA := a.(float64)
-	if !okA {
-		return 0
-	}
-	bf, okB := b.(float64)
-	if !okB {
-		return 0
-	}
-	return af + bf
-}

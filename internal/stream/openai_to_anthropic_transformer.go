@@ -32,6 +32,15 @@ type OpenAIToAnthropicTransformer struct {
 	toolCalls    []*openaiToolCall
 	textEmitted  bool
 	hasEmitted   bool
+
+	// Upstream usage captured from the stream (NENYA-167). OpenAI-format
+	// upstreams report usage in a final chunk that often carries no choices,
+	// so it must be captured before the no-choices early return. When the
+	// upstream reported nothing, the output count falls back to an estimate.
+	outputTokens        int
+	cacheReadTokens     int
+	cacheCreationTokens int
+	usageSeen           bool
 }
 
 // NewOpenAIToAnthropicTransformer creates a transformer that converts OpenAI SSE
@@ -69,8 +78,17 @@ func (t *OpenAIToAnthropicTransformer) TransformSSEChunk(ctx context.Context, da
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
+	// Usage is captured before the streamDone guard: with the standard
+	// `stream_options.include_usage` ordering the final usage-only chunk
+	// follows the finish_reason chunk, which sets streamDone (NENYA-167).
+	t.captureUsage(chunk)
+
 	if t.streamDone {
-		return nil, nil
+		// The stream is closed: a trailing usage-only chunk (the standard
+		// stream_options.include_usage ordering) is OpenAI-shaped and must not
+		// be forwarded to an Anthropic client after message_stop. It was
+		// captured above; consume it without emitting an event.
+		return nil, ErrEventConsumed
 	}
 
 	var events []byte
@@ -97,6 +115,31 @@ func (t *OpenAIToAnthropicTransformer) TransformSSEChunk(ctx context.Context, da
 	return events, nil
 }
 
+// captureUsage records the upstream usage totals reported by any chunk, in any
+// placement (the standard final usage chunk, a usage-only chunk with no
+// choices, or a provider-specific placement). The values are normalized by
+// NormalizeUsageTotals, so the synthesized Anthropic usage reports the real
+// counts instead of a character-count estimate (NENYA-167).
+func (t *OpenAIToAnthropicTransformer) captureUsage(chunk map[string]interface{}) {
+	usage, ok := UsageMapFromChunk(chunk)
+	if !ok {
+		return
+	}
+	totals := NormalizeUsageTotals(usage)
+	if totals.Prompt == 0 && totals.Completion == 0 {
+		return
+	}
+	// Upstream usage is cumulative for the request, and a provider may report
+	// the input side in one chunk and the output side in another (or a smaller
+	// value after a partial one): keep the high-water mark per dimension so no
+	// count is lost or doubled.
+	t.promptTokens = max(t.promptTokens, totals.Prompt)
+	t.outputTokens = max(t.outputTokens, totals.Completion)
+	t.cacheReadTokens = max(t.cacheReadTokens, totals.CacheHit)
+	t.cacheCreationTokens = max(t.cacheCreationTokens, totals.CacheCreation)
+	t.usageSeen = true
+}
+
 func (t *OpenAIToAnthropicTransformer) buildMessageStart(chunk map[string]interface{}) []byte {
 	t.messageID = "msg_" + util.GenerateID()
 	if id, ok := chunk["id"].(string); ok && id != "" {
@@ -118,6 +161,10 @@ func (t *OpenAIToAnthropicTransformer) buildMessageStart(chunk map[string]interf
 			"content":       []interface{}{},
 			"stop_reason":   nil,
 			"stop_sequence": nil,
+			// message_start is emitted before the upstream reports usage (an
+			// OpenAI-format stream carries it in a final chunk), so
+			// input_tokens is 0 here and the real counts are published on the
+			// final message_delta (NENYA-167; see docs/COST_MODEL.md).
 			"usage": map[string]interface{}{
 				"input_tokens":  t.promptTokens,
 				"output_tokens": 0,
@@ -236,9 +283,26 @@ func (t *OpenAIToAnthropicTransformer) buildStreamEnd(finishReason string) []byt
 
 	stopReason := mapFinishReasonReverse(finishReason)
 
-	outputTokens := 0
-	if t.textBuffer.Len() > 0 {
-		outputTokens = t.textBuffer.Len() / 4
+	// Prefer the upstream-reported output total; fall back to a character
+	// estimate only when the stream carried no usage at all (NENYA-167).
+	outputTokens := t.outputTokens
+	if !t.usageSeen {
+		outputTokens = 0
+		if t.textBuffer.Len() > 0 {
+			outputTokens = t.textBuffer.Len() / 4
+		}
+	}
+	// Anthropic's input_tokens excludes the cache dimensions, which are
+	// reported as their own fields (NENYA-167).
+	usage := map[string]interface{}{
+		"input_tokens":  max(0, t.promptTokens-t.cacheReadTokens-t.cacheCreationTokens),
+		"output_tokens": outputTokens,
+	}
+	if t.cacheReadTokens > 0 {
+		usage["cache_read_input_tokens"] = t.cacheReadTokens
+	}
+	if t.cacheCreationTokens > 0 {
+		usage["cache_creation_input_tokens"] = t.cacheCreationTokens
 	}
 
 	msgDelta := map[string]interface{}{
@@ -247,9 +311,7 @@ func (t *OpenAIToAnthropicTransformer) buildStreamEnd(finishReason string) []byt
 			"stop_reason":   stopReason,
 			"stop_sequence": nil,
 		},
-		"usage": map[string]interface{}{
-			"output_tokens": outputTokens,
-		},
+		"usage": usage,
 	}
 
 	b, err := json.Marshal(msgDelta)
@@ -342,4 +404,8 @@ func (t *OpenAIToAnthropicTransformer) Reset() {
 	t.toolCalls = nil
 	t.textEmitted = false
 	t.hasEmitted = false
+	t.outputTokens = 0
+	t.cacheReadTokens = 0
+	t.cacheCreationTokens = 0
+	t.usageSeen = false
 }

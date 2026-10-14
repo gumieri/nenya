@@ -93,6 +93,70 @@ DeepSeek's card, $0.003/1M tokens, negligible against the miss rates.
 
 Providers without a window are never peak.
 
+## Usage normalization invariants (NENYA-167)
+
+Every upstream usage object is reduced to one canonical shape by
+`stream.NormalizeUsageTotals` — the same helper the streaming reader and the
+buffered recorder use, so both paths agree on what a dimension means:
+
+- **Prompt is the total input, including the cache dimensions.** A provider
+  that reports its input total with the cache counters as subsets (the OpenAI
+  shape: `prompt_tokens` with `prompt_cache_hit_tokens` /
+  `prompt_tokens_details.cached_tokens`) is used as-is. A provider whose input
+  field EXCLUDES the cache dimensions (Anthropic native: `input_tokens` with
+  `cache_read_input_tokens` / `cache_creation_input_tokens`) has them folded
+  into the total, which is what keeps a cache-write token from being counted
+  twice (once inside the prompt total, once as its own dimension). The same
+  fold applies when the Anthropic input semantics arrive under the OpenAI key
+  names (a gateway in front of Anthropic) and no OpenAI-style cache
+  decomposition is present.
+- **Completion is the total output, including reasoning tokens.** Providers
+  that report reasoning/thinking as a subset (`completion_tokens` +
+  `completion_tokens_details.reasoning_tokens`) keep it that way; Gemini's
+  native shape reports the thought count *outside* the candidate count
+  (`candidatesTokenCount` + `thoughtsTokenCount`), so the thoughts are added to
+  the completion total. Reasoning is additionally recorded as its own counter
+  for observability, never on top of the output total.
+- **Every placement is read.** The OpenAI-compatible top-level `usage`
+  (including a usage-only final chunk with no `choices`, the Together-class
+  shape), the Anthropic streaming shape (`message_start.message.usage` for the
+  input side, top-level `usage` for `message_delta`), and Gemini's native
+  `usageMetadata`.
+- **Usage is committed at the first extraction point.** Buffered: usage is
+  recorded from the upstream's own wire shape before format conversion and
+  before any egress policy can terminate the response, so a downstream failure
+  cannot lose tokens the upstream already billed (an exfil/canary/screen-blocked
+  reply still records its usage). Streaming: the reader records usage before the
+  response transformer runs, but a provider reports usage in a trailing chunk,
+  so a mid-stream termination (an egress block or a stream cut) still loses that
+  trailing chunk — the recorded totals then cover only what was reported before
+  the cut.
+- **Ambiguous cache semantics are visible.** When a usage object carries an
+  OpenAI-style input total together with the Anthropic-native cache field names
+  and no cache decomposition, the input semantics are inferred (the Anthropic
+  reading is chosen: the cache dimensions are folded into the total) and the
+  buffered recorder logs a warning naming the provider and model. A provider
+  that reports an inclusive total under those field names would be
+  over-counted, so treat the warning as a signal to add an explicit cache
+  decomposition to that provider's usage.
+- **Client-facing conversion limits.** The OpenAI→Anthropic streaming
+  transformer publishes the real counts on the final `message_delta` usage when
+  the upstream reports usage before the finish chunk. With the standard
+  `stream_options.include_usage` ordering (the usage-only chunk follows the
+  finish chunk) the closing `message_delta` has already been emitted, so the
+  character-count estimate stands for those providers, and `message_start`
+  always carries `input_tokens: 0` (an OpenAI-format upstream reports usage only
+  in its last chunk). The late usage-only chunk is captured for the record and
+  consumed without emitting an event, so an OpenAI-shaped frame never reaches an
+  Anthropic client after `message_stop`. Nenya's accounting does not depend on
+  any of this: the reader records the real usage before the transformer runs.
+- **Format conversion preserves the dimensions.** The Anthropic→OpenAI
+  conversion publishes the cache dimensions as subsets of the prompt total; the
+  OpenAI→Anthropic conversion splits `input_tokens` back out (Anthropic's
+  input excludes the cache dimensions) and reports the cache counters
+  separately, so a consumer summing `input_tokens + cache_read_input_tokens +
+  cache_creation_input_tokens` gets the total exactly once.
+
 ## Invariants
 
 - **Zero-value compatibility.** No existing registry entry or discovered

@@ -44,15 +44,18 @@ type ResponseTransformer interface {
 type UsageCallback func(UsageData)
 
 type UsageData struct {
-	CompletionTokens         int
-	PromptTokens             int
-	TotalTokens              int
-	CacheHitTokens           int
-	CacheMissTokens          int
-	CacheCreationTokens      int
-	ReasoningTokens          int
-	CacheReadInputTokens     int
-	CacheCreationInputTokens int
+	CompletionTokens    int
+	PromptTokens        int
+	TotalTokens         int
+	CacheHitTokens      int
+	CacheMissTokens     int
+	CacheCreationTokens int
+	ReasoningTokens     int
+	// AmbiguousCacheSemantics reports that the source usage object carried an
+	// OpenAI-style input total together with the Anthropic-native cache field
+	// names and no cache decomposition, so the cache semantics were inferred
+	// (NENYA-167). Observability only: it does not change the deltas.
+	AmbiguousCacheSemantics bool
 }
 
 type ContentCallback func(content string)
@@ -1067,63 +1070,57 @@ func ExtractReasoningTokens(usage map[string]interface{}) int {
 	return 0
 }
 
+// extractUsageFromMap reads the usage object from an upstream chunk (in any of
+// the placements UsageMapFromChunk accepts) and emits the per-chunk deltas of
+// every dimension. The object is normalized by NormalizeUsageTotals first, so
+// the callback sees one canonical shape: Prompt is the total input including
+// the cache dimensions and Completion is the total output including reasoning
+// (NENYA-167).
 func (r *SSETransformingReader) extractUsageFromMap(chunk map[string]interface{}) {
-	rawUsage, ok := chunk["usage"]
-	if !ok || rawUsage == nil {
+	usage, ok := UsageMapFromChunk(chunk)
+	if !ok {
 		return
 	}
-	usage, ok := rawUsage.(map[string]interface{})
-	if !ok || usage == nil {
+	totals := NormalizeUsageTotals(usage)
+	completion, prompt, total := totals.Completion, totals.Prompt, totals.Total
+	cacheHit, cacheMiss, cacheCreation := totals.CacheHit, totals.CacheMiss, totals.CacheCreation
+	reasoning := totals.Reasoning
+	if allUsageFieldsZero(completion, prompt, total, cacheHit, cacheMiss, cacheCreation, reasoning) {
 		return
 	}
-	completion := ToInt(usage["completion_tokens"])
-	prompt := ToInt(usage["prompt_tokens"])
-	total := ToInt(usage["total_tokens"])
-	cacheHit := ToInt(usage["prompt_cache_hit_tokens"])
-	if cacheHit == 0 {
-		if promptTokensDetails, ok := usage["prompt_tokens_details"].(map[string]interface{}); ok {
-			cacheHit = ToInt(promptTokensDetails["cached_tokens"])
-		}
+	dCompletion, lastCompletion := advanceHighWater(completion, r.lastCompletionTokens)
+	dPrompt, lastPrompt := advanceHighWater(prompt, r.lastPromptTokens)
+	dCacheHit, lastCacheHit := advanceHighWater(cacheHit, r.lastCacheHitTokens)
+	dCacheMiss, lastCacheMiss := advanceHighWater(cacheMiss, r.lastCacheMissTokens)
+	dCacheCreation, lastCacheCreation := advanceHighWater(cacheCreation, r.lastCacheCreationTokens)
+	dReasoning, lastReasoning := advanceHighWater(reasoning, r.lastReasoningTokens)
+	// A provider-reported total is used as-is; a shape whose total Nenya
+	// derives (Anthropic/Gemini native) reports its output on a later chunk, so
+	// the total delta must follow the parts rather than the derived per-chunk
+	// sum, which would under-report the request.
+	dTotal, lastTotal := advanceHighWater(total, r.lastTotalTokens)
+	if !totals.TotalReported {
+		dTotal = dPrompt + dCompletion
+		lastTotal = r.lastTotalTokens
 	}
-	cacheMiss := ToInt(usage["prompt_cache_miss_tokens"])
-	cacheCreation := ToInt(usage["cache_creation_tokens"])
-	reasoning := ExtractReasoningTokens(usage)
-	cacheReadInput := ToInt(usage["cache_read_input_tokens"])
-	cacheCreationInput := ToInt(usage["cache_creation_input_tokens"])
-	if allUsageFieldsZero(completion, prompt, total, cacheHit, cacheMiss, cacheCreation, reasoning) &&
-		cacheReadInput == 0 && cacheCreationInput == 0 {
+	if allDeltasZero(dCompletion, dPrompt, dTotal, dCacheHit, dCacheMiss, dCacheCreation, dReasoning) {
 		return
 	}
-	dCompletion := clampDelta(completion, r.lastCompletionTokens)
-	dPrompt := clampDelta(prompt, r.lastPromptTokens)
-	dTotal := clampDelta(total, r.lastTotalTokens)
-	dCacheHit := clampDelta(cacheHit, r.lastCacheHitTokens)
-	dCacheMiss := clampDelta(cacheMiss, r.lastCacheMissTokens)
-	dCacheCreation := clampDelta(cacheCreation, r.lastCacheCreationTokens)
-	dReasoning := clampDelta(reasoning, r.lastReasoningTokens)
-	dCacheReadInput := clampDelta(cacheReadInput, 0)
-	dCacheCreationInput := clampDelta(cacheCreationInput, 0)
-	if allDeltasZero(dCompletion, dPrompt, dTotal, dCacheHit, dCacheMiss, dCacheCreation, dReasoning) &&
-		dCacheReadInput == 0 && dCacheCreationInput == 0 {
-		return
-	}
-	r.lastCompletionTokens = completion
-	r.lastPromptTokens = prompt
-	r.lastTotalTokens = total
-	r.lastCacheHitTokens = cacheHit
-	r.lastCacheMissTokens = cacheMiss
-	r.lastCacheCreationTokens = cacheCreation
-	r.lastReasoningTokens = reasoning
+	r.lastCompletionTokens = lastCompletion
+	r.lastPromptTokens = lastPrompt
+	r.lastTotalTokens = lastTotal
+	r.lastCacheHitTokens = lastCacheHit
+	r.lastCacheMissTokens = lastCacheMiss
+	r.lastCacheCreationTokens = lastCacheCreation
+	r.lastReasoningTokens = lastReasoning
 	r.onUsage(UsageData{
-		CompletionTokens:         dCompletion,
-		PromptTokens:             dPrompt,
-		TotalTokens:              dTotal,
-		CacheHitTokens:           dCacheHit,
-		CacheMissTokens:          dCacheMiss,
-		CacheCreationTokens:      dCacheCreation,
-		ReasoningTokens:          dReasoning,
-		CacheReadInputTokens:     dCacheReadInput,
-		CacheCreationInputTokens: dCacheCreationInput,
+		CompletionTokens:    dCompletion,
+		PromptTokens:        dPrompt,
+		TotalTokens:         dTotal,
+		CacheHitTokens:      dCacheHit,
+		CacheMissTokens:     dCacheMiss,
+		CacheCreationTokens: dCacheCreation,
+		ReasoningTokens:     dReasoning,
 	})
 }
 
@@ -1135,14 +1132,17 @@ func allDeltasZero(dCompletion, dPrompt, dTotal, dCacheHit, dCacheMiss, dCacheCr
 	return dCompletion == 0 && dPrompt == 0 && dTotal == 0 && dCacheHit == 0 && dCacheMiss == 0 && dCacheCreation == 0 && dReasoning == 0
 }
 
-// clampDelta computes a non-negative delta between current and last value.
-// Returns 0 when current < last (e.g. counter reset), preventing underflow.
-func clampDelta(current, last int) int {
-	d := current - last
-	if d < 0 {
-		return 0
+// advanceHighWater returns the per-chunk delta of a cumulative usage counter
+// and the new high-water mark. A value that does not exceed the mark yields no
+// delta and keeps the mark, so a provider that omits a field in some chunks
+// (Anthropic's message_delta carries only the output side) or reports a
+// smaller value after a partial one can never have the same tokens counted
+// twice (NENYA-167).
+func advanceHighWater(current, last int) (delta, mark int) {
+	if current <= last {
+		return 0, last
 	}
-	return d
+	return current - last, current
 }
 
 // ToInt converts an interface{} value to int, handling float64, string, and int types.

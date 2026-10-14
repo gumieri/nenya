@@ -11,18 +11,17 @@ import (
 	"github.com/nenya/internal/stream"
 )
 
-// extractTokenCounts extracts input, output, and total token counts from a usage map.
+// extractTokenCounts extracts input, output, and total token counts from a
+// usage object in any accepted placement or wire shape (NENYA-167), so an
+// int-typed or native-shaped map is read the same way as a JSON-decoded
+// OpenAI-shaped one.
 func extractTokenCounts(usage map[string]interface{}) (inputTokens, outputTokens, totalTokens int) {
-	if raw, ok := usage["total_tokens"].(float64); ok {
-		totalTokens = int(raw)
-	}
-	if raw, ok := usage["prompt_tokens"].(float64); ok {
-		inputTokens = int(raw)
-	}
-	if raw, ok := usage["completion_tokens"].(float64); ok {
-		outputTokens = int(raw)
-	}
-	if totalTokens > 0 && outputTokens == 0 {
+	totals := stream.NormalizeUsageTotals(usage)
+	inputTokens, outputTokens, totalTokens = totals.Prompt, totals.Completion, totals.Total
+	// A provider that reports only a grand total (or total + prompt) still has
+	// a derivable output count; keep the derivation the pre-NENYA-167 code
+	// performed.
+	if outputTokens == 0 && totalTokens > inputTokens {
 		outputTokens = totalTokens - inputTokens
 	}
 	return
@@ -41,8 +40,21 @@ func recordChatUsage(gw *gateway.NenyaGateway, model string, usage map[string]in
 	}
 }
 
+// recordChatUsageTotals records the Stats side of a buffered response from its
+// normalized usage. The MCP loop records its calibration actuals per iteration
+// (recordCalibrationFromBuffer), so this stays Stats-only, as recordChatUsage
+// does.
+func recordChatUsageTotals(gw *gateway.NenyaGateway, model string, totals stream.UsageTotals) {
+	if totals.Total <= 0 {
+		return
+	}
+	if gw.Stats != nil {
+		gw.Stats.RecordOutput(model, totals.Completion)
+	}
+}
+
 func recordUsageFromMap(gw *gateway.NenyaGateway, responseMap map[string]interface{}, model, providerName string) {
-	usage, ok := responseMap["usage"].(map[string]interface{})
+	usage, ok := stream.UsageMapFromChunk(responseMap)
 	if !ok {
 		return
 	}
@@ -58,60 +70,28 @@ func recordUsageFromMap(gw *gateway.NenyaGateway, responseMap map[string]interfa
 	}
 }
 
+// recordNonStreamingUsage records a completed (non-streaming) upstream usage
+// object. The object is normalized by stream.NormalizeUsageTotals, the same
+// helper the streaming reader uses, so both paths agree on what each dimension
+// means (NENYA-167): prompt_tokens/input_tokens is the TOTAL input including
+// the cache dimensions, and reasoning tokens are a subset of the output total.
 func recordNonStreamingUsage(ctx context.Context, gw *gateway.NenyaGateway, target routing.UpstreamTarget, agentName string, usage map[string]interface{}) {
-	outputTokens := 0
-	if raw, ok := usage["completion_tokens"].(float64); ok {
-		outputTokens = int(raw)
+	totals := stream.NormalizeUsageTotals(usage)
+	if totals.AmbiguousCacheSemantics && gw.Logger != nil {
+		// The provider reported an input total together with the
+		// Anthropic-native cache field names and no cache decomposition: the
+		// cache dimensions were folded into the total (the Anthropic reading).
+		// A provider that reports an inclusive total under those field names
+		// would be over-counted here, so make the assumption visible.
+		gw.Logger.Warn("ambiguous usage cache semantics: folding the native cache dimensions into the input total",
+			"provider", target.Provider, "model", target.Model)
 	}
-	inputTokens := 0
-	if raw, ok := usage["prompt_tokens"].(float64); ok {
-		inputTokens = int(raw)
-	}
-	cacheHitTokens := 0
-	if raw, ok := usage["prompt_cache_hit_tokens"].(float64); ok {
-		cacheHitTokens = int(raw)
-	}
-	if cacheHitTokens == 0 {
-		// OpenAI-style detail fallback: some providers report cached tokens
-		// only under prompt_tokens_details (the streaming reader has the
-		// same fallback — keep the two paths consistent).
-		if details, ok := usage["prompt_tokens_details"].(map[string]interface{}); ok {
-			if raw, ok := details["cached_tokens"].(float64); ok {
-				cacheHitTokens = int(raw)
-			}
-		}
-	}
-	if cacheHitTokens == 0 {
-		// Anthropic-style buffered responses (converted by the adapter to
-		// OpenAI shape with prompt_tokens = input_tokens, which EXCLUDES
-		// cache reads) report reads natively. Only apply when no
-		// OpenAI-style decomposition exists, or cache reads would be
-		// double-counted into input.
-		if raw, ok := usage["cache_read_input_tokens"].(float64); ok && raw > 0 {
-			cacheHitTokens = int(raw)
-			inputTokens += cacheHitTokens
-		}
-	}
-	cacheMissTokens := 0
-	if raw, ok := usage["prompt_cache_miss_tokens"].(float64); ok {
-		cacheMissTokens = int(raw)
-	}
-	cacheCreationTokens := 0
-	if raw, ok := usage["cache_creation_tokens"].(float64); ok {
-		cacheCreationTokens = int(raw)
-	}
-	if raw, ok := usage["cache_creation_input_tokens"].(float64); ok && cacheCreationTokens == 0 {
-		cacheCreationTokens = int(raw)
-	}
-	// Anthropic non-streaming responses return cache_creation_input_tokens natively
-	// (not normalized by the transformer), so we check it as a fallback for providers
-	// that use that field name.
-
-	// Reasoning/thinking tokens across every provider spelling (NENYA-33):
-	// OpenAI output_tokens_details.reasoning_tokens, legacy
-	// completion_tokens_details, Anthropic completion_reasoning_tokens,
-	// Gemini thoughtsTokenCount, flat reasoning_tokens.
-	reasoningTokens := stream.ExtractReasoningTokens(usage)
+	inputTokens := totals.Prompt
+	outputTokens := totals.Completion
+	cacheHitTokens := totals.CacheHit
+	cacheMissTokens := totals.CacheMiss
+	cacheCreationTokens := totals.CacheCreation
+	reasoningTokens := totals.Reasoning
 
 	// prompt_tokens is the calibration loop's ground truth (NENYA-135).
 	gw.Calibration.RecordActual(target.Model, inputTokens)

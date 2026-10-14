@@ -307,31 +307,48 @@ func TestBuildProviderTargets(t *testing.T) {
 }
 
 func TestRecordChatUsage(t *testing.T) {
-	t.Run("records usage from total_tokens", func(t *testing.T) {
+	outputFor := func(t *testing.T, usage map[string]interface{}) uint64 {
+		t.Helper()
 		gw := &gateway.NenyaGateway{Stats: infra.NewUsageTracker()}
-		recordChatUsage(gw, "test-model", map[string]interface{}{
-			"total_tokens":  100.0,
-			"prompt_tokens": 40.0,
-		})
+		recordChatUsage(gw, "test-model", usage)
+		models, _ := gw.Stats.Snapshot()["models"].(map[string]interface{})
+		model, ok := models["test-model"].(map[string]interface{})
+		if !ok {
+			return 0
+		}
+		out, _ := model["output_tokens"].(uint64)
+		return out
+	}
+
+	t.Run("derives output from total_tokens minus prompt", func(t *testing.T) {
+		// A provider reporting only a grand total (or total + prompt) has a
+		// derivable output count (NENYA-167 keeps the pre-existing fallback).
+		if got := outputFor(t, map[string]interface{}{"total_tokens": 100.0, "prompt_tokens": 40.0}); got != 60 {
+			t.Errorf("output_tokens = %d, want 60", got)
+		}
 	})
 
-	t.Run("no total_tokens", func(t *testing.T) {
-		gw := &gateway.NenyaGateway{Stats: infra.NewUsageTracker()}
-		recordChatUsage(gw, "test-model", map[string]interface{}{
-			"prompt_tokens": 40.0,
-		})
+	t.Run("uses the reported completion when present", func(t *testing.T) {
+		if got := outputFor(t, map[string]interface{}{"total_tokens": 100.0, "prompt_tokens": 40.0, "completion_tokens": 55.0}); got != 55 {
+			t.Errorf("output_tokens = %d, want the reported 55", got)
+		}
 	})
 
-	t.Run("empty usage map", func(t *testing.T) {
-		gw := &gateway.NenyaGateway{Stats: infra.NewUsageTracker()}
-		recordChatUsage(gw, "test-model", map[string]interface{}{})
+	t.Run("no total_tokens records nothing", func(t *testing.T) {
+		if got := outputFor(t, map[string]interface{}{"prompt_tokens": 40.0}); got != 0 {
+			t.Errorf("output_tokens = %d, want 0", got)
+		}
+	})
+
+	t.Run("anthropic-native shape", func(t *testing.T) {
+		if got := outputFor(t, map[string]interface{}{"input_tokens": 40.0, "output_tokens": 7.0}); got != 7 {
+			t.Errorf("output_tokens = %d, want 7", got)
+		}
 	})
 
 	t.Run("nil stats - no panic", func(t *testing.T) {
 		gw := &gateway.NenyaGateway{Stats: nil}
-		recordChatUsage(gw, "test-model", map[string]interface{}{
-			"total_tokens": 100.0,
-		})
+		recordChatUsage(gw, "test-model", map[string]interface{}{"total_tokens": 100.0})
 	})
 }
 

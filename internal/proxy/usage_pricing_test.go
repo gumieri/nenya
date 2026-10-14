@@ -94,9 +94,12 @@ func TestRecordCostAndBilling_PeakAndCached(t *testing.T) {
 	}
 }
 
-// TestRecordNonStreamingUsage_CacheReadThreading pins the Anthropic-style
-// buffered mapping: native cache_read_input_tokens is added into input (the
-// adapter's prompt_tokens excludes cache reads) and becomes the cached subset.
+// TestRecordNonStreamingUsage_CacheReadThreading pins the third-party-gateway
+// shape: an input total under the OpenAI key name together with the native
+// cache field names and no cache decomposition is read with Anthropic input
+// semantics, so the cache read is folded into the input total and becomes the
+// cached subset. (The adapter's own conversion emits the OpenAI decomposition,
+// which is not folded.)
 func TestRecordNonStreamingUsage_CacheReadThreading(t *testing.T) {
 	catalog := discovery.NewModelCatalog()
 	catalog.Add(discovery.DiscoveredModel{ID: "m", Provider: "p", Pricing: &discovery.PricingEntry{

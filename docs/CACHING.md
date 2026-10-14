@@ -235,13 +235,20 @@ its meaning varies by provider:
   streaming path: `1.0` for any cached traffic, `0` only when the upstream
   reports neither hit nor miss. Native `cache_read_input_tokens` is also folded
   in when present.
-- **Gemini** native cached-content tokens (`cachedContentTokenCount`) are not
-  mapped onto these counters, so a Gemini model's ratio stays `0` regardless of
-  provider-side caching.
+- **Gemini** native cached-content tokens (`cachedContentTokenCount`) are mapped
+  onto `prompt_cache_hit_tokens`, with the uncached remainder
+  (`promptTokenCount - cachedContentTokenCount`) as the miss, so the ratio is
+  the true hit rate for Gemini-native usage (NENYA-167).
 
 Only the normalized `prompt_cache_hit_tokens`, `prompt_cache_miss_tokens`, and
-`cache_creation_tokens` feed the ratio; the native `cache_read_input_tokens`
-duplicate is present in the parsed usage but is not what the tracker consumes.
+`cache_creation_tokens` feed the ratio. Since NENYA-167 the normalization folds
+the Anthropic-native `cache_read_input_tokens`/`cache_creation_input_tokens`
+into these counters and derives the miss as the uncached remainder, so every
+shape whose input field *excludes* the cache dimensions (Anthropic-native, and
+Gemini-native via `cachedContentTokenCount`) satisfies `hit + miss + creation =
+prompt`. A shape whose input field *includes* them and reports no miss (the
+OpenAI decomposition, and the Anthropic-semantics-under-OpenAI-keys case) has no
+derived miss, so its ratio keeps the caveat above.
 The field reports `0` both for "no prompt-cache traffic" and for a genuine 0% hit
 rate — the two are not distinguished. Above roughly 2^53 accumulated tokens the
 value becomes approximate (numerator and denominator round independently), so do

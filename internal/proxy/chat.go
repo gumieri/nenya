@@ -20,6 +20,7 @@ import (
 	"github.com/nenya/internal/infra"
 	"github.com/nenya/internal/pipeline"
 	"github.com/nenya/internal/routing"
+	"github.com/nenya/internal/stream"
 	"github.com/nenya/internal/tracing"
 	"github.com/nenya/internal/util"
 )
@@ -1226,8 +1227,10 @@ func primaryTargetProvider(targets []routing.UpstreamTarget) string {
 // applyBufferedEgressPolicies runs the output-side defenses over a
 // buffered response body: the ExfilGuard URL policy, the canary
 // tripwire, and the advisory egress screen. Deterministic defenses may
-// terminate the response with a structured error (upstream usage is
-// recorded first); log/strip actions rewrite the body in place and let
+// terminate the response with a structured error; the caller records the
+// upstream usage before invoking this function (handleNonStreamingResponse,
+// NENYA-167), so a terminated response still bills the tokens the upstream
+// already consumed. Log/strip actions rewrite the body in place and let
 // the response continue. The screen runs only when a deterministic
 // signal fired (guard flagged, canary hit, or inbound entropy
 // redaction): a screen-exfil verdict strengthens the outcome — to a
@@ -1239,10 +1242,10 @@ func (p *Proxy) applyBufferedEgressPolicies(gw *gateway.NenyaGateway, w http.Res
 		hits := inspectResponseTexts(guard, responseMap)
 		guardFired = hits.fired
 		if hits.blocked {
-			// Upstream still consumed tokens on a blocked reply — record
-			// them before terminating the client response. Deterministic
-			// block stands; the screen is not consulted.
-			p.recordAndBlockBuffered(gw, w, r, target, agentName, responseMap)
+			// Upstream still consumed tokens on a blocked reply: they were
+			// recorded by the caller's first extraction point
+			// (handleNonStreamingResponse). Deterministic block stands; the
+			// screen is not consulted.
 			p.handleExfilBlock(gw, w, target.Model, hits.reason)
 			return true
 		}
@@ -1253,14 +1256,6 @@ func (p *Proxy) applyBufferedEgressPolicies(gw *gateway.NenyaGateway, w http.Res
 	}
 	return p.bufferedEgressScreen(gw, w, r, target, agentName, responseMap, egress.Screen,
 		egress.EntropyRedacted || guardFired || canaryHit)
-}
-
-// recordAndBlockBuffered records upstream usage on a reply that is
-// about to be terminated by an egress defense.
-func (p *Proxy) recordAndBlockBuffered(gw *gateway.NenyaGateway, w http.ResponseWriter, r *http.Request, target routing.UpstreamTarget, agentName string, responseMap map[string]interface{}) {
-	if usage, ok := responseMap["usage"].(map[string]interface{}); ok {
-		recordNonStreamingUsage(r.Context(), gw, target, agentName, usage)
-	}
 }
 
 // bufferedCanaryScan scans the response for the canary token and
@@ -1281,7 +1276,6 @@ func (p *Proxy) bufferedCanaryScan(gw *gateway.NenyaGateway, w http.ResponseWrit
 	if canary.Action != config.CanaryActionBlock {
 		return true, false
 	}
-	p.recordAndBlockBuffered(gw, w, r, target, agentName, responseMap)
 	writeStructuredError(w, http.StatusForbidden, infra.ErrorKindExfilDetected,
 		"response blocked: canary token detected in output")
 	return true, true
@@ -1302,7 +1296,6 @@ func (p *Proxy) bufferedEgressScreen(gw *gateway.NenyaGateway, w http.ResponseWr
 	if !screen.strict {
 		return false
 	}
-	p.recordAndBlockBuffered(gw, w, r, target, agentName, responseMap)
 	writeStructuredError(w, http.StatusForbidden, infra.ErrorKindExfilDetected,
 		"response blocked: egress screen detected data exfiltration")
 	return true
@@ -1418,6 +1411,15 @@ func (p *Proxy) handleNonStreamingResponse(gw *gateway.NenyaGateway, w http.Resp
 	// ids cached for one key must not be addressable by another key.
 	cacheExtraContentFromResponse(egress.SigCache, responseMap)
 
+	// NENYA-167: usage is committed at the first extraction point, before any
+	// downstream step that can fail (format conversion, egress policies, the
+	// client write). The upstream billed us for this reply, so a later failure
+	// must not lose it. The map is still in the upstream's own wire shape here,
+	// which is what recordNonStreamingUsage normalizes.
+	if usage, ok := stream.UsageMapFromChunk(responseMap); ok {
+		recordNonStreamingUsage(r.Context(), gw, target, agentName, usage)
+	}
+
 	if sourceFormat == "anthropic" && target.Format != "anthropic" {
 		a := adapter.GetAnthropicAdapter()
 		responseMap = a.ConvertOpenAIResponseToAnthropicBody(responseMap)
@@ -1431,10 +1433,6 @@ func (p *Proxy) handleNonStreamingResponse(gw *gateway.NenyaGateway, w http.Resp
 	// the response with a structured error (terminal: no failover).
 	if done := p.applyBufferedEgressPolicies(gw, w, r, target, agentName, responseMap, egress); done {
 		return streamResult{terminal: true}
-	}
-
-	if usage, ok := responseMap["usage"].(map[string]interface{}); ok {
-		recordNonStreamingUsage(r.Context(), gw, target, agentName, usage)
 	}
 
 	gw.ExtractQuotaFromResponseHeaders(r.Context(), target.Provider, target.AccountName, action.resp.Header)

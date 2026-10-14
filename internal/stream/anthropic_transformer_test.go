@@ -22,12 +22,6 @@ func joinStrings(parts []string) string {
 	return sb.String()
 }
 
-func addFloat64(a, b interface{}) float64 {
-	af, _ := a.(float64)
-	bf, _ := b.(float64)
-	return af + bf
-}
-
 func generateID() string {
 	// Simple deterministic ID for testing (must be 24 chars)
 	return "test12345678901234567890"
@@ -544,26 +538,6 @@ func TestJoinStrings(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			if got := joinStrings(tt.parts); got != tt.want {
 				t.Errorf("joinStrings() = %q, want %q", got, tt.want)
-			}
-		})
-	}
-}
-
-func TestAddFloat64(t *testing.T) {
-	tests := []struct {
-		name string
-		a, b interface{}
-		want float64
-	}{
-		{"both float64", float64(10), float64(20), float64(30)},
-		{"nil a", nil, float64(5), float64(5)},
-		{"both nil", nil, nil, float64(0)},
-		{"non-float", "10", float64(5), float64(5)},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if got := addFloat64(tt.a, tt.b); got != tt.want {
-				t.Errorf("addFloat64() = %v, want %v", got, tt.want)
 			}
 		})
 	}

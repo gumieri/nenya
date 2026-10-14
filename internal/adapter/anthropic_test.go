@@ -2485,3 +2485,102 @@ func TestAnthropicAdapter_AutomaticCachingMode(t *testing.T) {
 		}
 	})
 }
+
+// TestAnthropicAdapter_UsageCacheDimensionsCountedOnce pins NENYA-167: the
+// Anthropic→OpenAI conversion folds the cache dimensions into the prompt total
+// and re-publishes them as subsets, instead of dropping them (the previous
+// behavior) or adding them on top of a prompt total that already includes them.
+func TestAnthropicAdapter_UsageCacheDimensionsCountedOnce(t *testing.T) {
+	a := NewAnthropicAdapter()
+	body := []byte(`{"id":"msg_1","type":"message","role":"assistant","content":[{"type":"text","text":"hi"}],"model":"claude-3","stop_reason":"end_turn","usage":{"input_tokens":30,"output_tokens":10,"cache_read_input_tokens":60,"cache_creation_input_tokens":10}}`)
+	out, err := a.MutateResponse(body)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	var m map[string]interface{}
+	if err := json.Unmarshal(out, &m); err != nil {
+		t.Fatalf("failed to parse output: %v", err)
+	}
+	usage, ok := m["usage"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("expected a usage object, got %v", m["usage"])
+	}
+	if got := usage["prompt_tokens"]; got != float64(100) {
+		t.Errorf("prompt_tokens = %v, want 100 (input 30 + cache read 60 + cache write 10)", got)
+	}
+	if got := usage["completion_tokens"]; got != float64(10) {
+		t.Errorf("completion_tokens = %v, want 10", got)
+	}
+	if got := usage["total_tokens"]; got != float64(110) {
+		t.Errorf("total_tokens = %v, want 110", got)
+	}
+	if got := usage["prompt_cache_hit_tokens"]; got != float64(60) {
+		t.Errorf("prompt_cache_hit_tokens = %v, want 60", got)
+	}
+	if got := usage["cache_creation_tokens"]; got != float64(10) {
+		t.Errorf("cache_creation_tokens = %v, want 10", got)
+	}
+}
+
+// TestAnthropicAdapter_ConvertOpenAIResponseUsageSplitsCacheDimensions pins the
+// reverse conversion: Anthropic's input_tokens excludes the cache dimensions,
+// so a consumer that sums input + cache_read + cache_creation gets the OpenAI
+// prompt total exactly once.
+func TestAnthropicAdapter_ConvertOpenAIResponseUsageSplitsCacheDimensions(t *testing.T) {
+	a := NewAnthropicAdapter()
+	openai := map[string]interface{}{
+		"id": "chatcmpl-1",
+		"choices": []interface{}{map[string]interface{}{
+			"index":         0,
+			"delta":         map[string]interface{}{"content": "hi"},
+			"finish_reason": "stop",
+		}},
+		"usage": map[string]interface{}{
+			"prompt_tokens": 100, "completion_tokens": 20, "total_tokens": 120,
+			"prompt_tokens_details": map[string]interface{}{"cached_tokens": 60},
+			"cache_creation_tokens": 10,
+		},
+	}
+
+	anthropic := a.ConvertOpenAIResponseToAnthropicBody(openai)
+	usage, ok := anthropic["usage"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("expected a usage object, got %v", anthropic["usage"])
+	}
+	if got := usage["input_tokens"]; got != float64(30) {
+		t.Errorf("input_tokens = %v, want 30 (100 prompt - 60 cached - 10 written)", got)
+	}
+	if got := usage["output_tokens"]; got != float64(20) {
+		t.Errorf("output_tokens = %v, want 20", got)
+	}
+	if got := usage["cache_read_input_tokens"]; got != float64(60) {
+		t.Errorf("cache_read_input_tokens = %v, want 60", got)
+	}
+	if got := usage["cache_creation_input_tokens"]; got != float64(10) {
+		t.Errorf("cache_creation_input_tokens = %v, want 10", got)
+	}
+}
+
+// TestAnthropicAdapter_ConvertOpenAIResponseUsageNoCacheKeepsInputTotal pins
+// that a response without cache dimensions keeps input_tokens == prompt_tokens
+// (no behavior change for the common case).
+func TestAnthropicAdapter_ConvertOpenAIResponseUsageNoCacheKeepsInputTotal(t *testing.T) {
+	a := NewAnthropicAdapter()
+	openai := map[string]interface{}{
+		"id": "chatcmpl-2",
+		"choices": []interface{}{map[string]interface{}{
+			"index":         0,
+			"delta":         map[string]interface{}{"content": "hi"},
+			"finish_reason": "stop",
+		}},
+		"usage": map[string]interface{}{"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
+	}
+	anthropic := a.ConvertOpenAIResponseToAnthropicBody(openai)
+	usage := anthropic["usage"].(map[string]interface{})
+	if usage["input_tokens"] != float64(10) || usage["output_tokens"] != float64(5) {
+		t.Fatalf("usage = %v, want input 10 / output 5", usage)
+	}
+	if _, has := usage["cache_read_input_tokens"]; has {
+		t.Errorf("no cache dimension must be invented: %v", usage)
+	}
+}

@@ -10,6 +10,7 @@ import (
 	"sync"
 
 	"github.com/nenya/config"
+	"github.com/nenya/internal/stream"
 	"github.com/nenya/internal/util"
 )
 
@@ -1076,17 +1077,36 @@ func (a *AnthropicAdapter) processStopReason(anthropic, choice map[string]interf
 	}
 }
 
+// processUsage converts an Anthropic usage object into the OpenAI shape
+// (NENYA-167). Anthropic reports input_tokens EXCLUDING the cache dimensions,
+// while the OpenAI shape's prompt_tokens INCLUDES them with the cache counters
+// as subsets; the conversion therefore folds the cache dimensions into the
+// prompt total and re-publishes them as subsets, so a client sees each
+// dimension exactly once instead of losing the cache counts.
 func (a *AnthropicAdapter) processUsage(anthropic, openai map[string]interface{}) {
 	usage, ok := anthropic["usage"].(map[string]interface{})
 	if !ok {
 		return
 	}
 
-	openai["usage"] = map[string]interface{}{
-		"prompt_tokens":     usage["input_tokens"],
-		"completion_tokens": usage["output_tokens"],
-		"total_tokens":      util.AddFloat64(usage["input_tokens"], usage["output_tokens"]),
+	totals := stream.NormalizeUsageTotals(usage)
+	// float64 values keep the converted map type-identical to a JSON-decoded
+	// upstream usage object (NENYA-167).
+	converted := map[string]interface{}{
+		"prompt_tokens":     float64(totals.Prompt),
+		"completion_tokens": float64(totals.Completion),
+		"total_tokens":      float64(totals.Total),
 	}
+	if totals.CacheHit > 0 {
+		converted["prompt_cache_hit_tokens"] = float64(totals.CacheHit)
+	}
+	if totals.CacheMiss > 0 {
+		converted["prompt_cache_miss_tokens"] = float64(totals.CacheMiss)
+	}
+	if totals.CacheCreation > 0 {
+		converted["cache_creation_tokens"] = float64(totals.CacheCreation)
+	}
+	openai["usage"] = converted
 }
 
 func (a *AnthropicAdapter) convertAnthropicToOpenAIRequest(anthropic map[string]interface{}) map[string]interface{} {
@@ -1638,11 +1658,23 @@ func (a *AnthropicAdapter) convertOpenAIToAnthropicResponse(openai map[string]in
 		anthropic["stop_reason"] = stopReason
 	}
 
+	// Anthropic's input_tokens excludes the cache dimensions, which are
+	// reported separately (NENYA-167): the OpenAI prompt total is split so a
+	// consumer that sums input + cache_read + cache_creation gets the total
+	// exactly once.
 	if usage, ok := openai["usage"].(map[string]interface{}); ok {
-		anthropic["usage"] = map[string]interface{}{
-			"input_tokens":  usage["prompt_tokens"],
-			"output_tokens": usage["completion_tokens"],
+		totals := stream.NormalizeUsageTotals(usage)
+		converted := map[string]interface{}{
+			"input_tokens":  float64(max(0, totals.Prompt-totals.CacheHit-totals.CacheCreation)),
+			"output_tokens": float64(totals.Completion),
 		}
+		if totals.CacheHit > 0 {
+			converted["cache_read_input_tokens"] = float64(totals.CacheHit)
+		}
+		if totals.CacheCreation > 0 {
+			converted["cache_creation_input_tokens"] = float64(totals.CacheCreation)
+		}
+		anthropic["usage"] = converted
 	}
 
 	return anthropic

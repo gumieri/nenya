@@ -33,6 +33,14 @@ func (p *Proxy) makeUsageCallback(ctx context.Context, gw *gateway.NenyaGateway,
 		// feeds the calibration tracker directly (NENYA-135); deltas sum
 		// to the request's real prompt tokens, matching the aggregate-sum
 		// pairing of the tracker.
+		if u.AmbiguousCacheSemantics && gw.Logger != nil {
+			// The provider reported an input total with the Anthropic-native
+			// cache field names and no cache decomposition, so the cache
+			// dimensions were folded into the total (NENYA-167). Debug level:
+			// this fires per chunk.
+			gw.Logger.Debug("ambiguous usage cache semantics: folding the native cache dimensions into the input total",
+				"provider", target.Provider, "model", target.Model)
+		}
 		gw.Calibration.RecordActual(target.Model, prompt)
 		if completion > 0 {
 			gw.Stats.RecordOutput(target.Model, completion)

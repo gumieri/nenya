@@ -1,8 +1,12 @@
 package proxy
 
 import (
+	"encoding/json"
+	"strings"
+
 	"github.com/nenya/internal/gateway"
 	"github.com/nenya/internal/routing"
+	"github.com/nenya/internal/stream"
 )
 
 // mcpCalibrationModel returns the model key for the calibration tracker:
@@ -34,6 +38,53 @@ func mcpCalibrationModel(targets []routing.UpstreamTarget, buf *bufferedSSE) str
 	return responseModel
 }
 
+// usageTotals returns the per-dimension high-water merge of every usage object
+// in the buffer (NENYA-167). An Anthropic-native stream reports the input side
+// on message_start and the output side on message_delta, so taking the last
+// usage-bearing chunk alone would lose the input (and the calibration actual);
+// for the OpenAI shape, whose usage object is cumulative, the merge is a no-op.
+func (b *bufferedSSE) usageTotals() (stream.UsageTotals, bool) {
+	if b.usageMergedParsed {
+		return b.usageMerged, b.usageMergedSeen
+	}
+	b.usageMergedParsed = true
+	for _, line := range strings.Split(string(b.rawBytes), "\n") {
+		line = strings.TrimPrefix(line, "data: ")
+		line = strings.TrimSpace(line)
+		if line == "" || line == "[DONE]" || !strings.Contains(line, "usage") {
+			continue
+		}
+		var chunk map[string]interface{}
+		if err := json.Unmarshal([]byte(line), &chunk); err != nil {
+			continue
+		}
+		usage, ok := stream.UsageMapFromChunk(chunk)
+		if !ok {
+			continue
+		}
+		b.usageMerged = mergeUsageTotals(b.usageMerged, stream.NormalizeUsageTotals(usage))
+		b.usageMergedSeen = true
+	}
+	return b.usageMerged, b.usageMergedSeen
+}
+
+// mergeUsageTotals keeps the per-dimension high-water mark, mirroring the
+// streaming reader's cumulative accounting so no dimension is counted twice.
+func mergeUsageTotals(acc, next stream.UsageTotals) stream.UsageTotals {
+	acc.Prompt = max(acc.Prompt, next.Prompt)
+	acc.Completion = max(acc.Completion, next.Completion)
+	acc.CacheHit = max(acc.CacheHit, next.CacheHit)
+	acc.CacheMiss = max(acc.CacheMiss, next.CacheMiss)
+	acc.CacheCreation = max(acc.CacheCreation, next.CacheCreation)
+	acc.Reasoning = max(acc.Reasoning, next.Reasoning)
+	acc.Total = max(acc.Total, next.Total)
+	acc.TotalReported = acc.TotalReported || next.TotalReported
+	if !acc.TotalReported {
+		acc.Total = acc.Prompt + acc.Completion
+	}
+	return acc
+}
+
 // recordCalibrationFromBuffer feeds the NENYA-135 tracker from a buffered
 // response without touching Stats (per-iteration pairing; terminal paths
 // own the Stats side via recordMCPUsage).
@@ -41,14 +92,11 @@ func recordCalibrationFromBuffer(gw *gateway.NenyaGateway, model string, buf *bu
 	if gw == nil || buf == nil || model == "" {
 		return
 	}
-	chunk := buf.usageChunk()
-	if chunk == nil {
+	totals, ok := buf.usageTotals()
+	if !ok {
 		return
 	}
-	if usage, ok := chunk["usage"].(map[string]interface{}); ok {
-		inputTokens, _, _ := extractTokenCounts(usage)
-		gw.Calibration.RecordActual(model, inputTokens)
-	}
+	gw.Calibration.RecordActual(model, totals.Prompt)
 }
 
 func (p *Proxy) recordMCPUsage(gw *gateway.NenyaGateway, buf *bufferedSSE, agentName string) {
@@ -59,7 +107,7 @@ func (p *Proxy) recordMCPUsage(gw *gateway.NenyaGateway, buf *bufferedSSE, agent
 	if chunk == nil {
 		return
 	}
-	usage, ok := chunk["usage"].(map[string]interface{})
+	totals, ok := buf.usageTotals()
 	if !ok {
 		return
 	}
@@ -74,6 +122,6 @@ func (p *Proxy) recordMCPUsage(gw *gateway.NenyaGateway, buf *bufferedSSE, agent
 	}
 	gw.Logger.Debug("MCP loop usage recorded",
 		"agent", agentName, "model", model,
-		"usage", usage)
-	recordChatUsage(gw, model, usage)
+		"usage", totals)
+	recordChatUsageTotals(gw, model, totals)
 }

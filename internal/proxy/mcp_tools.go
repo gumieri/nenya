@@ -59,6 +59,11 @@ type bufferedSSE struct {
 	// keeping usage frames — satisfies this).
 	lastUsageChunk map[string]interface{}
 	usageParsed    bool
+	// usageMerged caches the per-dimension high-water merge of every usage
+	// object in the buffer (NENYA-167).
+	usageMerged       stream.UsageTotals
+	usageMergedSeen   bool
+	usageMergedParsed bool
 }
 
 // mcpToolCall represents a tool call extracted from an upstream LLM response.
@@ -82,16 +87,19 @@ func (b *bufferedSSE) usageChunk() map[string]interface{} {
 	for _, line := range strings.Split(string(b.rawBytes), "\n") {
 		line = strings.TrimPrefix(line, "data: ")
 		line = strings.TrimSpace(line)
-		if line == "" || line == "[DONE]" || !strings.Contains(line, "\"usage\"") {
-			// Prefilter: content deltas are the bulk of a large buffer;
-			// only lines mentioning usage are worth unmarshaling.
+		if line == "" || line == "[DONE]" || !strings.Contains(line, "usage") {
+			// Prefilter: content deltas are the bulk of a large buffer; only
+			// lines mentioning usage in any spelling (usage, usageMetadata) are
+			// worth unmarshaling.
 			continue
 		}
 		var chunk map[string]interface{}
 		if err := json.Unmarshal([]byte(line), &chunk); err != nil {
 			continue
 		}
-		if _, hasUsage := chunk["usage"]; hasUsage {
+		// Any accepted placement counts: the OpenAI top-level "usage", the
+		// Anthropic "message.usage" and Gemini's "usageMetadata" (NENYA-167).
+		if _, hasUsage := stream.UsageMapFromChunk(chunk); hasUsage {
 			b.lastUsageChunk = chunk
 		}
 	}
