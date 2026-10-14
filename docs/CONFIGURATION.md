@@ -464,7 +464,7 @@ A history rewrite invalidates the provider cache from the mutation point to the 
 
 ## `response_cache`
 
-In-memory LRU cache for deterministic response caching. Responses are cached by SHA-256 fingerprint of the request payload. On cache hit, the stored SSE stream is replayed to the client with `X-Nenya-Cache-Status: HIT` header.
+In-memory LRU cache for deterministic response caching. Responses are cached by fingerprint of the Bearer token plus a SHA-256 of the request payload (per-key isolation, NENYA-189 — see [CACHING.md](CACHING.md)). On cache hit, the stored SSE stream is replayed to the client with `X-Nenya-Cache-Status: HIT` header.
 
 | Field                  | Type   | Default                         | Description                                       |
 | ---------------------- | ------ | ------------------------------- | ------------------------------------------------- |
@@ -475,7 +475,7 @@ In-memory LRU cache for deterministic response caching. Responses are cached by 
 | `evict_every_seconds`  | int    | `300` (5 minutes)               | Background eviction sweep interval                |
 | `force_refresh_header` | string | `"x-nenya-cache-force-refresh"` | HTTP header name that bypasses cache when present |
 
-**Cache key**: Deterministic SHA-256 computed from `model`, `messages`, `temperature`, `top_p`, `max_tokens`, `tools`, `tool_choice`, `response_format`, `stop`, `stream`.
+**Cache key**: `"auth:" + hex(sha256(bearer token)) + ":" + hex(sha256(canonical fields))` (or `"p:" + hex(sha256(canonical fields))` without auth) computed from `model`, `messages`, `temperature`, `top_p`, `max_tokens`, `tools`, `tool_choice`, `response_format`, `stop`, `stream`. The semantic index is partitioned per bearer token and per model — cross-key semantic hits are misses by design.
 
 **Bypass**: Send any non-empty value for the configured `force_refresh_header` to force a cache miss.
 

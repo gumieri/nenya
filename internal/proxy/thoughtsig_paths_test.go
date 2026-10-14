@@ -13,6 +13,7 @@ import (
 	"github.com/nenya/config"
 	"github.com/nenya/internal/gateway"
 	"github.com/nenya/internal/infra"
+	"github.com/nenya/internal/routing"
 	"github.com/nenya/internal/testutil"
 )
 
@@ -197,8 +198,13 @@ func TestNonStreamThoughtSigRoundTrip(t *testing.T) {
 	if rec1.Code != http.StatusOK {
 		t.Fatalf("turn 1: got %d: %s", rec1.Code, rec1.Body.String())
 	}
-	if _, ok := gw.ThoughtSigCache.Load("call_n1"); !ok {
-		t.Fatal("signature must be cached after the non-stream response")
+	// The signature lives under the caller's namespace (NENYA-189): the test
+	// authenticates with the primary client token, whose synthetic key has an
+	// empty token value — that is the namespace the buffered store path used.
+	primaryScope, _ := thoughtSigScope(&config.ApiKey{})
+	scoped := gw.ThoughtSigCache.Scoped(primaryScope)
+	if _, ok := scoped.Load("call_n1"); !ok {
+		t.Fatal("signature must be cached under the caller's namespace after the non-stream response")
 	}
 
 	// Turn 2: history WITHOUT extra_content — sanitizer must re-inject.
@@ -224,3 +230,83 @@ type atomicstring struct {
 
 func (a *atomicstring) Store(v string) { a.mu.Lock(); a.val = v; a.mu.Unlock() }
 func (a *atomicstring) Load() string   { a.mu.Lock(); defer a.mu.Unlock(); return a.val }
+
+// TestResolveTransformerStreamsIntoCallerNamespace pins the streaming Store
+// side of the NENYA-189 scoping: the SSE transformer built by
+// resolveTransformer must land signatures in the caller's namespace (same one
+// the sanitize/Load side uses), and another key presenting the same id must
+// miss.
+func TestResolveTransformerStreamsIntoCallerNamespace(t *testing.T) {
+	p := &Proxy{}
+	gw := &gateway.NenyaGateway{
+		ThoughtSigCache: infra.NewThoughtSignatureCache(0, 0),
+		Logger:          testutil.NewTestLogger(),
+	}
+
+	sigA, _ := thoughtSigScope(&config.ApiKey{Token: "token-a", Name: "a"})
+	transformer := p.resolveTransformer(gw, routing.UpstreamTarget{Provider: "gemini", Format: "openai", Model: "gemini-3-pro"}, "openai", gw.ThoughtSigCache.Scoped(sigA))
+	if transformer == nil {
+		t.Fatal("expected a gemini provider transformer for an OpenAI-client/Gemini-upstream request")
+	}
+
+	chunk := []byte(`{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_s","type":"function","extra_content":{"thought_signature":"sig-s"}}]}}]}`)
+	if _, err := transformer.TransformSSEChunk(context.Background(), chunk); err != nil {
+		t.Fatalf("TransformSSEChunk: %v", err)
+	}
+
+	if _, ok := gw.ThoughtSigCache.Scoped(sigA).Load("call_s"); !ok {
+		t.Fatal("streaming store must land in the owning key's namespace")
+	}
+	sigB, _ := thoughtSigScope(&config.ApiKey{Token: "token-b", Name: "b"})
+	if _, ok := gw.ThoughtSigCache.Scoped(sigB).Load("call_s"); ok {
+		t.Fatal("cross-key id reuse read the streaming-stored signature")
+	}
+}
+
+// TestThoughtSigCrossKeyIsolation pins the NENYA-189 IDOR fix at the proxy
+// layer: a tool-call id issued while serving API key A must not resolve when
+// the same id is presented under API key B, while the owning key's scoped
+// view (the same surface the sanitizer's Load uses) still finds the entry.
+func TestThoughtSigCrossKeyIsolation(t *testing.T) {
+	cache := infra.NewThoughtSignatureCache(0, 0)
+
+	keyA, _ := thoughtSigScope(&config.ApiKey{Token: "token-a", Name: "a"})
+	keyB, _ := thoughtSigScope(&config.ApiKey{Token: "token-b", Name: "b"})
+	if keyA == keyB {
+		t.Fatal("distinct API keys must derive distinct scopes")
+	}
+	if keyA == "" {
+		t.Fatal("an authenticated key must derive a non-empty scope")
+	}
+
+	resp := map[string]interface{}{
+		"choices": []interface{}{
+			map[string]interface{}{
+				"message": map[string]interface{}{
+					"role": "assistant",
+					"tool_calls": []interface{}{
+						map[string]interface{}{
+							"id":            "call_shared",
+							"extra_content": map[string]interface{}{"thought_signature": "sig-from-a"},
+						},
+					},
+				},
+			},
+		},
+	}
+	cacheExtraContentFromResponse(cache.Scoped(keyA), resp)
+
+	// Key B presents the same upstream-issued id: miss.
+	if _, ok := cache.Scoped(keyB).Load("call_shared"); ok {
+		t.Fatal("cross-key id reuse read key A's cached thought signature")
+	}
+	// Key A still gets its signature back.
+	got, ok := cache.Scoped(keyA).Load("call_shared")
+	if !ok {
+		t.Fatal("owning key lost the cached signature")
+	}
+	extra, ok := got.(map[string]interface{})
+	if !ok || extra["thought_signature"] != "sig-from-a" {
+		t.Fatalf("owning key read = %v, want the stored signature", got)
+	}
+}

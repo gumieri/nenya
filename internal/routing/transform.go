@@ -26,7 +26,7 @@ type TransformDeps struct {
 	Logger             *slog.Logger
 	Providers          map[string]*config.Provider
 	Config             *config.Config
-	ThoughtSigCache    *infra.ThoughtSignatureCache
+	ThoughtSigCache    infra.ThoughtSignatureKV
 	ExtractContentText func(msg map[string]interface{}) string
 	Catalog            *discovery.ModelCatalog
 	CountTokens        func(string) int

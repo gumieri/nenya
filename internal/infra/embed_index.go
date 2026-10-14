@@ -56,6 +56,18 @@ func CosineSimilarity(a, b []float32) float64 {
 	return float64(dotProduct) / (math.Sqrt(float64(normA)) * math.Sqrt(float64(normB)))
 }
 
+// Has reports whether key has an indexed vector.
+func (idx *EmbedIndex) Has(key string) bool {
+	idx.mu.RLock()
+	defer idx.mu.RUnlock()
+	for i := range idx.entries {
+		if idx.entries[i].key == key {
+			return true
+		}
+	}
+	return false
+}
+
 // Search finds the most similar entry to vec with similarity >= threshold.
 // Returns the cache key as bytes, similarity score, and true if found.
 // Returns nil, 0.0, false if no entry meets the threshold.
@@ -85,12 +97,14 @@ func (idx *EmbedIndex) Search(vec []float32, threshold float64) ([]byte, float64
 	return []byte(bestKey), bestScore, true
 }
 
-// Insert adds a new key-vector pair to the index.
-// If the index is at capacity, the oldest entry is removed.
-// Silently ignores empty keys, empty vectors, or vectors exceeding 8192 dimensions.
-func (idx *EmbedIndex) Insert(key string, vec []float32) {
+// Insert adds a new key-vector pair to the index. It reports whether the
+// vector was stored and whether storing it evicted the oldest entry at
+// capacity (callers maintaining entry accounting must drop the evicted key).
+// Silently ignores empty keys, empty vectors, or vectors exceeding 8192
+// dimensions (stored=false).
+func (idx *EmbedIndex) Insert(key string, vec []float32) (stored, evicted bool) {
 	if key == "" || len(vec) == 0 {
-		return
+		return false, false
 	}
 
 	// Safety limit: Reject malformed or adversarial vectors to prevent DoS
@@ -98,7 +112,7 @@ func (idx *EmbedIndex) Insert(key string, vec []float32) {
 	// Allow 8x buffer = 32KB per entry as reasonable upper bound
 	// This prevents OOM attacks from sending vectors with millions of dimensions
 	if len(vec) > 8192 {
-		return
+		return false, false
 	}
 
 	idx.mu.Lock()
@@ -109,12 +123,14 @@ func (idx *EmbedIndex) Insert(key string, vec []float32) {
 	// If maxEntries > 1000, consider using circular buffer for O(1) eviction
 	if len(idx.entries) >= idx.maxEntries {
 		idx.entries = idx.entries[1:]
+		evicted = true
 	}
 
 	idx.entries = append(idx.entries, embedIndexEntry{
 		key:       key,
 		embedding: vec,
 	})
+	return true, evicted
 }
 
 // Remove deletes a key from the index by shifting the slice.

@@ -823,7 +823,7 @@ func (p *Proxy) resolveCache(w http.ResponseWriter, r *http.Request, gw *gateway
 	if r.Header.Get(gw.Config.ResponseCache.ForceRefreshHeader) == "" {
 		embedFunc := p.buildEmbedFunc(gw, r, req.Payload)
 		model := req.ModelName
-		if data, ok, cacheType := gw.ResponseCache.Lookup(cacheKey, model, embedFunc); ok {
+		if data, ok, cacheType := gw.ResponseCache.Lookup(cacheKey, model, req.Stream, embedFunc); ok {
 			p.replayCachedResponse(gw, w, r, data, cacheType, req.Stream)
 			return "", &httpError{Code: http.StatusNoContent, Message: "cache hit"}
 		}
@@ -1380,8 +1380,10 @@ func (p *Proxy) handleNonStreamingResponse(gw *gateway.NenyaGateway, w http.Resp
 	// response before any format conversion drops them. Covers the
 	// non-stream path for OpenAI-format clients and the pre-conversion
 	// window for Anthropic-source clients (handleNonStreamingResponse
-	// bypasses the streaming transformer entirely).
-	cacheExtraContentFromResponse(gw.ThoughtSigCache, responseMap)
+	// bypasses the streaming transformer entirely). The view is scoped to
+	// the caller's API-key identity (NENYA-189): upstream-issued tool-call
+	// ids cached for one key must not be addressable by another key.
+	cacheExtraContentFromResponse(egress.SigCache, responseMap)
 
 	if sourceFormat == "anthropic" && target.Format != "anthropic" {
 		a := adapter.GetAnthropicAdapter()

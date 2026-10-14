@@ -373,7 +373,19 @@ func (p *Proxy) streamResponse(opts streamResponseOpts, action upstreamAction) s
 		if attempt > 0 {
 			attemptStall = nil
 		}
-		transformingReader, contentBuilder, stallR := p.setupTransformingReader(gw, target, opts.agentName, opts.sourceFormat, action, r.Context(), attemptStall, opts.canary)
+		// NENYA-189: scope the thought-signature view to the caller's API
+		// key; a nil key fails closed (nil view = no cached signature state).
+		sigCache := scopedThoughtSigCache(gw, opts.apiKey)
+		transformingReader, contentBuilder, stallR := p.setupTransformingReader(gw, transformReaderOpts{
+			target:       target,
+			agentName:    opts.agentName,
+			sourceFormat: opts.sourceFormat,
+			action:       action,
+			ctx:          r.Context(),
+			reuse:        attemptStall,
+			canary:       opts.canary,
+			sigCache:     sigCache,
+		})
 		if transformingReader == nil {
 			putStreamBuffer(buf)
 			return streamResult{}
@@ -419,7 +431,7 @@ func (p *Proxy) streamResponse(opts streamResponseOpts, action upstreamAction) s
 }
 
 // resolveTransformer selects the appropriate SSE transformer based on source format and target format.
-func (p *Proxy) resolveTransformer(gw *gateway.NenyaGateway, target routing.UpstreamTarget, sourceFormat string) stream.ResponseTransformer {
+func (p *Proxy) resolveTransformer(gw *gateway.NenyaGateway, target routing.UpstreamTarget, sourceFormat string, sigCache infra.ThoughtSignatureKV) stream.ResponseTransformer {
 	if sourceFormat == "anthropic" && target.Format != "anthropic" {
 		// NENYA-51: run the provider transformer FIRST (it caches Gemini
 		// thought signatures on the upstream's native OpenAI format), then
@@ -428,7 +440,7 @@ func (p *Proxy) resolveTransformer(gw *gateway.NenyaGateway, target routing.Upst
 		// clients on Gemini upstreams.
 		reverse := stream.NewOpenAIToAnthropicTransformer()
 		if spec, ok := providerpkg.Get(target.Provider); ok && spec.NewResponseTransformer != nil {
-			if provider := spec.NewResponseTransformer(gw.ThoughtSigCache); provider != nil {
+			if provider := spec.NewResponseTransformer(sigCache); provider != nil {
 				gw.Logger.Debug("SSE composite transformer active (provider cache + reverse conversion)",
 					"provider", target.Provider)
 				return &compositeTransformer{providerFirst: provider, clientSecond: reverse}
@@ -444,7 +456,7 @@ func (p *Proxy) resolveTransformer(gw *gateway.NenyaGateway, target routing.Upst
 	}
 
 	if spec, ok := providerpkg.Get(target.Provider); ok && spec.NewResponseTransformer != nil {
-		transformer := spec.NewResponseTransformer(gw.ThoughtSigCache)
+		transformer := spec.NewResponseTransformer(sigCache)
 		if transformer != nil {
 			gw.Logger.Debug("SSE transformer active", "provider", target.Provider)
 		}
@@ -482,28 +494,43 @@ func resolveBootstrapBuffer(gw *gateway.NenyaGateway, providerName string) int {
 	return 0
 }
 
-// setupTransformingReader creates and configures the SSE transforming reader, content builder, and stall reader.
-// Returns the transforming reader for streaming, the content builder for post-processing, and the stall reader for cleanup.
-// When stream idle timeout is 0 (disabled), stallR is nil and the body is passed directly to the transforming reader.
-// reuse, when non-nil, is a stall reader already built around this body (by the
-// stream-head probe); it is used as-is so its buffered read-ahead bytes stay in
-// line, and backgroundExhaust is not double-allocated.
-func (p *Proxy) setupTransformingReader(gw *gateway.NenyaGateway, target routing.UpstreamTarget, agentName, sourceFormat string, action upstreamAction, ctx context.Context, reuse *stallReader, canary pipeline.CanarResult) (*stream.SSETransformingReader, *contentBuilder, *stallReader) {
-	transformer := p.resolveTransformer(gw, target, sourceFormat)
+// transformReaderOpts groups the per-request inputs for
+// setupTransformingReader.
+type transformReaderOpts struct {
+	target       routing.UpstreamTarget
+	agentName    string
+	sourceFormat string
+	action       upstreamAction
+	ctx          context.Context
+	reuse        *stallReader
+	canary       pipeline.CanarResult
+	sigCache     infra.ThoughtSignatureKV
+}
 
-	var bodyReader io.Reader = action.resp.Body
-	var stallR = reuse
+// setupTransformingReader creates and configures the SSE transforming reader,
+// content builder, and stall reader. It returns the transforming reader for
+// streaming, the content builder for post-processing, and the stall reader for
+// cleanup. When the stream idle timeout is disabled, stallR is nil and the
+// body passes straight to the transforming reader. o.reuse, when non-nil, is
+// a stall reader already built around this body (by the stream-head probe);
+// it is used as-is so its buffered read-ahead bytes stay in line and
+// backgroundExhaust is not double-allocated.
+func (p *Proxy) setupTransformingReader(gw *gateway.NenyaGateway, o transformReaderOpts) (*stream.SSETransformingReader, *contentBuilder, *stallReader) {
+	transformer := p.resolveTransformer(gw, o.target, o.sourceFormat, o.sigCache)
+
+	var bodyReader io.Reader = o.action.resp.Body
+	var stallR = o.reuse
 	if stallR == nil {
-		timeout := resolveStreamIdleTimeout(gw, target.Provider)
+		timeout := resolveStreamIdleTimeout(gw, o.target.Provider)
 		if timeout > 0 {
 			thinkingTimeout := gw.Config.Governance.EffectiveThinkingStreamIdleTimeout()
-			stallR = newStallReader(ctx, action.resp.Body, timeout, thinkingTimeout)
+			stallR = newStallReader(o.ctx, o.action.resp.Body, timeout, thinkingTimeout)
 			bodyReader = stallR
 		}
-	} else if _, wrapped := action.resp.Body.(*prefixedReadCloser); wrapped {
+	} else if _, wrapped := o.action.resp.Body.(*prefixedReadCloser); wrapped {
 		// The stream-head probe wrapped the body (prefix over the reused stall
 		// reader): keep reading through the wrapper so byte order is preserved.
-		bodyReader = action.resp.Body
+		bodyReader = o.action.resp.Body
 	} else {
 		// Probe disabled: the reused stall reader's goroutine is the sole
 		// consumer of the raw body. Reading the raw body directly here would
@@ -511,21 +538,21 @@ func (p *Proxy) setupTransformingReader(gw *gateway.NenyaGateway, target routing
 		bodyReader = stallR
 	}
 
-	transformingReader := stream.NewSSETransformingReader(bodyReader, transformer, ctx)
+	transformingReader := stream.NewSSETransformingReader(bodyReader, transformer, o.ctx)
 	transformingReader.SetMaxTransformedBytes(gw.Config.Governance.EffectiveMaxTransformedSSEBytes())
-	transformingReader.SetOnUsage(p.makeUsageCallback(ctx, gw, target, agentName))
-	transformingReader.SetObserver(newUpstreamErrorObserver(gw, target))
+	transformingReader.SetOnUsage(p.makeUsageCallback(o.ctx, gw, o.target, o.agentName))
+	transformingReader.SetObserver(newUpstreamErrorObserver(gw, o.target))
 	transformingReader.SetLogger(gw.Logger)
 
 	p.setupStreamFilterIfEnabled(gw, transformingReader)
-	if guard := exfilGuardFor(gw, agentName); guard != nil {
+	if guard := exfilGuardFor(gw, o.agentName); guard != nil {
 		transformingReader.SetExfilGuard(guard)
 	}
-	if canary.Token != "" {
-		transformingReader.SetCanaryWatcher(stream.NewCanaryWatcher(canary.Token, canary.Action, "stream", gw.Metrics, gw.Logger.With("agent", agentName)))
+	if o.canary.Token != "" {
+		transformingReader.SetCanaryWatcher(stream.NewCanaryWatcher(o.canary.Token, o.canary.Action, "stream", gw.Metrics, gw.Logger.With("agent", o.agentName)))
 	}
 	p.setupStreamEntropyFilterIfEnabled(gw, transformingReader)
-	contentBuilder := p.setupContentBuilderIfNeeded(gw, agentName, transformingReader)
+	contentBuilder := p.setupContentBuilderIfNeeded(gw, o.agentName, transformingReader)
 
 	if stallR != nil {
 		transformingReader.SetOnThinking(func(active bool) {
@@ -786,7 +813,13 @@ func storeStreamCache(gw *gateway.NenyaGateway, cacheKey string, captureBuf *byt
 		embedding = computeEmbedding(gw, payload, reqCtx)
 	}
 
-	gw.ResponseCache.Store(cacheKey, captured, embedding)
+	// NENYA-189: the semantic namespace's model segment must be the
+	// client-requested identifier (payload["model"] — the same value mixed
+	// into the cache fingerprint and used by Lookup), NOT target.Model: for
+	// agent routes the alias and the resolved upstream model differ, and a
+	// mismatch would silently disable semantic hits.
+	modelName, _ := payload["model"].(string)
+	gw.ResponseCache.Store(cacheKey, modelName, true, captured, embedding)
 	gw.Logger.Debug("response cache stored", "size", len(captured), "has_embedding", embedding != nil)
 }
 

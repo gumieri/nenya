@@ -42,7 +42,7 @@ type GeminiTransformer struct {
 	pendingExtra map[string]string
 }
 
-func newGeminiTransformer(cache *infra.ThoughtSignatureCache) stream.ResponseTransformer {
+func newGeminiTransformer(cache infra.ThoughtSignatureKV) stream.ResponseTransformer {
 	return &GeminiTransformer{
 		OnExtraContent: func(toolCallID string, extraContent interface{}) {
 			if cache != nil {

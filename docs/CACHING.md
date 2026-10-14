@@ -2,8 +2,8 @@
 
 Nenya provides two levels of caching for `/v1/chat/completions` responses:
 
-1. **Exact-match caching** - fast lookup by SHA-256 fingerprint of request payload
-2. **Semantic caching** (opt-in) - embedding-based similarity search for near-duplicate prompts
+1. **Exact-match caching** - fast lookup by fingerprint of the request payload (auth token + canonical fields)
+2. **Semantic caching** (opt-in) - embedding-based similarity search for near-duplicate prompts, partitioned per API key
 
 Both cache types use an in-memory LRU cache with TTL-based eviction.
 
@@ -21,11 +21,10 @@ Exact-match caching is always enabled when `response_cache.enabled` is true. The
 - `response_format`
 - `stop`
 - `stream`
-- Authorization token (Bearer token, if present)
 
-This means identical requests (same model, messages, parameters, and auth token) will hit the cache.
+When a Bearer token is present, the fingerprint is `"auth:" + hex(sha256(token)) + ":" + hex(sha256(canonical fields))`; without one, `"p:" + hex(sha256(canonical fields))`. The auth-hash segment partitions the semantic index per API key (see below), and identical requests (same model, messages, parameters, and auth token) hit the cache.
 
-**Note on token-budget trimming:** When the `bouncer` or context window management trims messages via `TrimPayload` (respecting `hard_limit_tokens`), truncated messages produce different SHA-256 hashes. This means cache entries are keyed to the _trimmed_ payload — identical full requests may miss the cache if one was trimmed and another was not. Cache key computation occurs _after_ all payload transformations (trimming, summarization).
+**Note on the content pipeline:** The cache key is computed from the request payload as received, before the content pipeline runs (redaction, bouncer summarization, context trimming). Two requests with identical client payloads therefore share a key even when the pipeline would transform them differently; the stored response is the one produced by whichever execution stored it first.
 
 **Error responses:** Structured error responses (those containing `error_kind` fields) are never cached. Only successful HTTP 200 responses with valid completion data are eligible for caching.
 
@@ -46,10 +45,12 @@ Semantic caching provides a second-level fallback when exact-match misses but th
    - Sends this text to the embedding provider (Ollama by default)
    - Stores the embedding vector with the cache entry
 
-2. **Similarity Search**: The in-memory `EmbedIndex` maintains a vector index of all cached entries. On lookup:
+2. **Similarity Search**: Each (API key, model) pair has its own in-memory `EmbedIndex` — the index is partitioned per auth identity and per model (NENYA-189), so a semantic lookup can never serve one key another key's cached response, nor a different model's (different system prompt/tools) under the same key. On lookup:
 
-   - Computes cosine similarity between the query embedding and all cached embeddings
+   - Computes cosine similarity between the query embedding and the embeddings in the caller's namespace
    - Returns the most similar entry if similarity exceeds `response_cache.similarity_threshold`
+
+   **Multi-key deployments:** semantic hits are per API key AND per model — two keys (or two models of the same key, e.g. distinct agent aliases) each populate their own namespace and do not share entries (by design; use a single key and model to share).
 
 3. **Hit Detection**: If a semantic match is found:
    - The response from the cached key is returned to the client

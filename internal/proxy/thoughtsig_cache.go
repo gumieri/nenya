@@ -16,7 +16,7 @@ import (
 //
 // Handles both response shapes: streaming accumulation artifacts under
 // choices[].delta and complete responses under choices[].message.
-func cacheExtraContentFromResponse(cache *infra.ThoughtSignatureCache, responseMap map[string]interface{}) {
+func cacheExtraContentFromResponse(cache infra.ThoughtSignatureKV, responseMap map[string]interface{}) {
 	if cache == nil || responseMap == nil {
 		return
 	}

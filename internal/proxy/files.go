@@ -14,10 +14,17 @@ import (
 	"github.com/nenya/internal/infra"
 )
 
+// handleFiles proxies /v1/files. NENYA-189: pure passthrough — file ids are
+// upstream-issued and upstream-enforced; Nenya keeps no state addressable by
+// them, so no id authorization or obfuscation happens here (see
+// handleResponses for the full inventory decision).
 func (p *Proxy) handleFiles(gw *gateway.NenyaGateway, w http.ResponseWriter, r *http.Request, keyRef string) {
 	p.handleFilesOrBatches(gw, w, r, "files", keyRef)
 }
 
+// handleBatches proxies /v1/batches. NENYA-189: pure passthrough — batch ids
+// are upstream-issued and upstream-enforced; Nenya keeps no state addressable
+// by them (see handleResponses for the full inventory decision).
 func (p *Proxy) handleBatches(gw *gateway.NenyaGateway, w http.ResponseWriter, r *http.Request, keyRef string) {
 	p.handleFilesOrBatches(gw, w, r, "batches", keyRef)
 }

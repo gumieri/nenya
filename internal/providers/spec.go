@@ -13,7 +13,7 @@ import (
 // request sanitization functions.
 type SanitizeDeps struct {
 	Logger             *slog.Logger
-	ThoughtSigCache    *infra.ThoughtSignatureCache
+	ThoughtSigCache    infra.ThoughtSignatureKV
 	ExtractContentText func(msg map[string]interface{}) string
 	SupportsReasoning  func(model string) bool
 	ProviderThinking   func(name string) (enabled bool, clearThinking bool, ok bool)
@@ -31,7 +31,7 @@ type ProviderSpec struct {
 	ServiceKinds           []ServiceKind
 	ModelMap               map[string]string
 	SanitizeRequest        func(deps *SanitizeDeps, payload map[string]interface{})
-	NewResponseTransformer func(cache *infra.ThoughtSignatureCache) stream.ResponseTransformer
+	NewResponseTransformer func(cache infra.ThoughtSignatureKV) stream.ResponseTransformer
 	ValidationEndpoint     func(providerURL string) string
 	// AutomaticPrefixCache marks providers that cache prompt prefixes
 	// server-side without client cache_control directives. Consumed by the

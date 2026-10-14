@@ -179,6 +179,9 @@ type bufferedEgressOpts struct {
 	Canary          pipeline.CanarResult
 	Screen          *egressScreenRuntime
 	EntropyRedacted bool
+	// SigCache is the caller-namespaced thought-signature view (NENYA-189).
+	// A nil view fails closed: the buffered path records no signature state.
+	SigCache infra.ThoughtSignatureKV
 }
 
 // retryLoop encapsulates the state and logic for retrying upstream requests.
@@ -383,11 +386,13 @@ func (rl *retryLoop) handleNonStreamingActionOutcome(i int, target routing.Upstr
 	if action.kind != actionResponse {
 		return actionOutcome{}
 	}
-	result := rl.p.handleNonStreamingResponse(rl.gw, rl.w, rl.r, target, rl.opts.AgentName, rl.opts.SourceFormat, action, rl.opts.CacheKey, rl.opts.Cooldown, bufferedEgressOpts{
+	egress := bufferedEgressOpts{
 		Canary:          rl.opts.Canary,
 		Screen:          rl.opts.Screen,
 		EntropyRedacted: rl.opts.EntropyRedacted,
-	})
+		SigCache:        scopedThoughtSigCache(rl.gw, rl.opts.ApiKey),
+	}
+	result := rl.p.handleNonStreamingResponse(rl.gw, rl.w, rl.r, target, rl.opts.AgentName, rl.opts.SourceFormat, action, rl.opts.CacheKey, rl.opts.Cooldown, egress)
 	if result.terminal {
 		// 403 already written (exfil block): stop the loop.
 		return actionOutcome{handled: true}
@@ -1127,11 +1132,14 @@ func (p *Proxy) prepareAndSend(gw *gateway.NenyaGateway,
 	gw.Metrics.IncConcurrencyInflight(target.Provider, target.Model)
 	release = wrapConcurrencyRelease(release, gw, target.Provider, target.Model)
 
+	// NENYA-189: the thought-signature view is scoped to the caller's API
+	// key; a nil key fails closed (no cached signature state at all).
+	sigCache := scopedThoughtSigCache(gw, apiKey)
 	transformDeps := routing.TransformDeps{
 		Logger:             gw.Logger,
 		Providers:          gw.Providers,
 		Config:             &gw.Config,
-		ThoughtSigCache:    gw.ThoughtSigCache,
+		ThoughtSigCache:    sigCache,
 		ExtractContentText: gateway.ExtractContentText,
 		Catalog:            gw.ModelCatalog,
 		// Budget-critical estimates (context-window trim, input budget)

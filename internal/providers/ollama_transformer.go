@@ -11,7 +11,7 @@ import (
 	"github.com/nenya/internal/util"
 )
 
-func newOllamaTransformer(_ *infra.ThoughtSignatureCache) stream.ResponseTransformer {
+func newOllamaTransformer(_ infra.ThoughtSignatureKV) stream.ResponseTransformer {
 	return &OllamaTransformer{}
 }
 

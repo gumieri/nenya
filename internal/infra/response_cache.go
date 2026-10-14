@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"log/slog"
+	"strings"
 	"sync"
 	"time"
 )
@@ -17,10 +18,18 @@ var cacheableFields = []string{
 	"stream",
 }
 
+// FingerprintPayload returns the cache fingerprint for payload without auth
+// scoping (tests and tooling): "p:" + hex(sha256(canonical payload)).
 func FingerprintPayload(payload map[string]interface{}) string {
 	return FingerprintPayloadWithAuth(payload, "")
 }
 
+// FingerprintPayloadWithAuth returns the cache fingerprint over the
+// cacheable fields. Auth-scoped fingerprints are
+// "auth:" + hex(sha256(authToken)) + ":" + hex(sha256(canonical payload)) —
+// the first segment names the per-auth namespace that partitions the semantic
+// index (NENYA-189), and the exact key still changes whenever either the
+// token or the payload changes. Without a token: "p:" + hex(sha256(...)).
 func FingerprintPayloadWithAuth(payload map[string]interface{}, authToken string) string {
 	canonical := make(map[string]interface{}, len(cacheableFields))
 	for _, field := range cacheableFields {
@@ -33,12 +42,13 @@ func FingerprintPayloadWithAuth(payload map[string]interface{}, authToken string
 		return ""
 	}
 	h := sha256.New()
-	if authToken != "" {
-		authHash := sha256.Sum256([]byte(authToken))
-		h.Write(authHash[:])
-	}
 	h.Write(data)
-	return hex.EncodeToString(h.Sum(nil))
+	payloadHash := hex.EncodeToString(h.Sum(nil))
+	if authToken == "" {
+		return "p:" + payloadHash
+	}
+	authHash := sha256.Sum256([]byte(authToken))
+	return "auth:" + hex.EncodeToString(authHash[:]) + ":" + payloadHash
 }
 
 type responseCacheEntry struct {
@@ -46,6 +56,15 @@ type responseCacheEntry struct {
 	expireAt  time.Time
 	element   *list.Element
 	embedding []float32
+	// model is the semantic namespace's model segment, remembered so
+	// eviction can find the right namespaced index without re-deriving it
+	// from the payload (NENYA-189).
+	model string
+	// stream records the response shape the entry was stored from: the
+	// semantic path only ever stores SSE streams, and a semantic hit may
+	// only serve a request with the same shape (a non-streaming request
+	// must not be handed an SSE body under a JSON content type).
+	stream bool
 }
 
 type ResponseCache struct {
@@ -61,12 +80,31 @@ type ResponseCache struct {
 	semanticEnabled     bool
 	similarityThreshold float64
 	embedder            EmbeddingProvider
-	idx                 *EmbedIndex
-	evictionWg          sync.WaitGroup
-	evictionMu          sync.Mutex
-	evictionStarted     bool
+	// semIdx partitions the semantic similarity index by caller identity and
+	// model (NENYA-189): an auth-scoped fingerprint ("auth:<authhash>:<payloadhash>")
+	// namespaces on the auth hash plus the client-requested model, so a
+	// semantic hit can never serve one API key another key's cached response
+	// (or a different model's). Unscoped no-auth fingerprints carry the model
+	// segment only.
+	semIdx map[string]*EmbedIndex
+	// semanticEntries tracks the total indexed vectors incrementally so the
+	// metrics gauge does not need an O(namespaces) scan (guarded by mu).
+	semanticEntries int
+	evictionWg      sync.WaitGroup
+	evictionMu      sync.Mutex
+	evictionStarted bool
 }
 
+// semanticIndexMaxEntries is the per-namespace capacity of the semantic
+// similarity index.
+const semanticIndexMaxEntries = 256
+
+// NewResponseCache returns an LRU+TTL response cache. When semanticEnabled
+// is set with an embedder, near-identical prompts replay cached responses
+// through per-auth-namespace similarity indexes (NENYA-189): a semantic hit
+// never crosses API keys. Zero/negative sizes and durations fall back to
+// defaults (512 entries, 1 MiB per entry, 1h TTL, 5m evict interval,
+// 0.9 similarity).
 func NewResponseCache(maxSize int, maxBytes int64, ttl, evictInterval time.Duration, metrics *Metrics, logger *slog.Logger, semanticEnabled bool, similarityThreshold float64, embedder EmbeddingProvider) *ResponseCache {
 	if maxSize <= 0 {
 		maxSize = 512
@@ -84,11 +122,6 @@ func NewResponseCache(maxSize int, maxBytes int64, ttl, evictInterval time.Durat
 		similarityThreshold = 0.9
 	}
 
-	var idx *EmbedIndex
-	if semanticEnabled && embedder != nil {
-		idx = NewEmbedIndex(256)
-	}
-
 	c := &ResponseCache{
 		items:               make(map[string]*responseCacheEntry),
 		order:               list.New(),
@@ -101,10 +134,75 @@ func NewResponseCache(maxSize int, maxBytes int64, ttl, evictInterval time.Durat
 		semanticEnabled:     semanticEnabled,
 		similarityThreshold: similarityThreshold,
 		embedder:            embedder,
-		idx:                 idx,
+		semIdx:              make(map[string]*EmbedIndex),
 	}
 	c.startEvicter(evictInterval)
 	return c
+}
+
+// semanticNamespace partitions the semantic index by caller identity AND
+// model (NENYA-189): auth-scoped fingerprints ("auth:<authhash>:<payloadhash>")
+// namespace on the auth hash, plus the model so a semantic hit can never
+// serve a response cached for a different model (different system prompt /
+// tools under the same key). Legacy unscoped fingerprints ("p:<hash>", tests
+// and tooling) carry the model too, so no-auth deployments keep model
+// isolation. Unknown shapes namespace on the model alone — the prefix marker
+// keeps a future fingerprint format change from silently conflating
+// namespaces.
+func semanticNamespace(key, model string) string {
+	rest, found := strings.CutPrefix(key, "auth:")
+	if !found {
+		return "p\x1f" + model
+	}
+	authHash, _, ok := strings.Cut(rest, ":")
+	if !ok || authHash == "" {
+		return "\x1f" + model
+	}
+	return authHash + "\x1f" + model
+}
+
+// semanticIndexIfPresent returns the namespace's index without creating it —
+// a lookup miss on an unseen namespace must not grow the map (NENYA-189:
+// rotated tokens would otherwise leak an index each). Callers must NOT hold
+// c.mu.
+func (c *ResponseCache) semanticIndexIfPresent(namespace string) *EmbedIndex {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.semIdx[namespace]
+}
+
+// semanticIndexForLocked returns the namespace's index, creating it on first
+// use. Callers must hold c.mu for writing (the Store insert path).
+func (c *ResponseCache) semanticIndexForLocked(namespace string) *EmbedIndex {
+	idx, ok := c.semIdx[namespace]
+	if !ok {
+		idx = NewEmbedIndex(semanticIndexMaxEntries)
+		c.semIdx[namespace] = idx
+	}
+	return idx
+}
+
+// dropSemanticKeyLocked removes key from its namespace index (if the index
+// exists — never creates) and prunes the namespace when it drains. Callers
+// must hold c.mu for writing (eviction and embedding-less refreshes).
+func (c *ResponseCache) dropSemanticKeyLocked(key, namespace string) {
+	idx, ok := c.semIdx[namespace]
+	if !ok {
+		return
+	}
+	if idx.Has(key) {
+		idx.Remove(key)
+		c.semanticEntries--
+	}
+	if idx.Len() == 0 {
+		delete(c.semIdx, namespace)
+	}
+}
+
+// semanticEntryCountLocked returns the incrementally tracked indexed-vector
+// total. Caller must hold c.mu (used by the eviction sweep's gauge update).
+func (c *ResponseCache) semanticEntryCountLocked() int {
+	return c.semanticEntries
 }
 
 func (c *ResponseCache) handleExactHit(entry *responseCacheEntry, model string) ([]byte, bool, string) {
@@ -120,7 +218,12 @@ func (c *ResponseCache) handleExactHit(entry *responseCacheEntry, model string) 
 	return data, true, "exact"
 }
 
-func (c *ResponseCache) Lookup(key, model string, embed func() ([]float32, error)) ([]byte, bool, string) {
+// Lookup returns the cached response for key: an exact match first, then —
+// when semantic mode is on — the most similar entry within the key's
+// auth+model namespace (never across namespaces, NENYA-189) and with the
+// same response shape (stream). embed is only called when the semantic
+// fallback runs; a nil embed disables the fallback.
+func (c *ResponseCache) Lookup(key, model string, stream bool, embed func() ([]float32, error)) ([]byte, bool, string) {
 	if key == "" {
 		return nil, false, ""
 	}
@@ -132,8 +235,8 @@ func (c *ResponseCache) Lookup(key, model string, embed func() ([]float32, error
 	}
 	c.mu.RUnlock()
 
-	if c.semanticEnabled && c.embedder != nil && c.idx != nil {
-		if data, ok := c.lookupSemantic(key, embed, model); ok {
+	if c.semanticEnabled && c.embedder != nil {
+		if data, ok := c.lookupSemantic(key, model, stream, embed); ok {
 			return data, true, "semantic"
 		}
 	}
@@ -148,7 +251,13 @@ func (c *ResponseCache) Lookup(key, model string, embed func() ([]float32, error
 	return nil, false, ""
 }
 
-func (c *ResponseCache) lookupSemantic(key string, embed func() ([]float32, error), model string) ([]byte, bool) {
+func (c *ResponseCache) lookupSemantic(key, model string, stream bool, embed func() ([]float32, error)) ([]byte, bool) {
+	if embed == nil {
+		// No embedder wired for this request: the semantic fallback cannot
+		// run (treated as a miss, never a panic).
+		c.recordMiss("semantic", model)
+		return nil, false
+	}
 	vec, err := embed()
 	if err != nil {
 		c.recordMiss("semantic", model)
@@ -158,7 +267,12 @@ func (c *ResponseCache) lookupSemantic(key string, embed func() ([]float32, erro
 		return nil, false
 	}
 
-	cachedKeyBytes, similarity, ok := c.idx.Search(vec, c.similarityThreshold)
+	idx := c.semanticIndexIfPresent(semanticNamespace(key, model))
+	if idx == nil {
+		c.recordMiss("semantic", model)
+		return nil, false
+	}
+	cachedKeyBytes, similarity, ok := idx.Search(vec, c.similarityThreshold)
 	if !ok {
 		c.recordMiss("semantic", model)
 		if c.logger != nil && c.logger.Enabled(context.Background(), slog.LevelDebug) {
@@ -169,7 +283,12 @@ func (c *ResponseCache) lookupSemantic(key string, embed func() ([]float32, erro
 
 	c.mu.RLock()
 	semEntry, semOk := c.items[string(cachedKeyBytes)]
-	if semOk && !time.Now().After(semEntry.expireAt) {
+	// Defense in depth: the namespace already encodes the model, but verify
+	// the entry itself matches so any index/namespace drift degrades to a
+	// miss instead of a cross-model response (NENYA-189). The response shape
+	// must match too: only SSE streams are stored, and serving one to a
+	// non-streaming request would write SSE bytes under a JSON content type.
+	if semOk && semEntry.model == model && semEntry.stream == stream && !time.Now().After(semEntry.expireAt) {
 		data := semEntry.data
 		c.mu.RUnlock()
 		c.recordSemanticHit(model, similarity)
@@ -208,7 +327,11 @@ func (c *ResponseCache) recordMiss(cacheType, model string) {
 	}
 }
 
-func (c *ResponseCache) Store(key string, data []byte, embedding []float32) {
+// Store inserts or refreshes the cached response under key and indexes the
+// embedding in the key's auth+model semantic namespace when one is present.
+// stream records the response shape (semantic hits only serve same-shape
+// requests).
+func (c *ResponseCache) Store(key, model string, stream bool, data []byte, embedding []float32) {
 	if key == "" || len(data) == 0 {
 		return
 	}
@@ -220,30 +343,74 @@ func (c *ResponseCache) Store(key string, data []byte, embedding []float32) {
 	defer c.mu.Unlock()
 
 	if existing, ok := c.items[key]; ok {
+		prevModel := existing.model
 		existing.data = data
 		existing.expireAt = time.Now().Add(c.ttl)
 		existing.embedding = embedding
+		existing.model = model
+		existing.stream = stream
 		c.order.MoveToFront(existing.element)
+		// A re-store under a different model (failover, model mapping) must
+		// not leave an orphan vector in the previous namespace: it could
+		// never be pruned and a lookup there could serve this entry's
+		// current other-model response (NENYA-189).
+		if c.semanticEnabled && prevModel != model {
+			c.dropSemanticKeyLocked(key, semanticNamespace(key, prevModel))
+		}
+	} else {
+		if len(c.items) >= c.maxSize {
+			c.evictLocked()
+		}
+
+		elem := c.order.PushFront(key)
+		c.items[key] = &responseCacheEntry{
+			data:      data,
+			expireAt:  time.Now().Add(c.ttl),
+			element:   elem,
+			embedding: embedding,
+			model:     model,
+			stream:    stream,
+		}
+	}
+
+	// NENYA-189: keep the semantic index in sync with the entry — inserting
+	// on first/refreshed embeddings, dropping stale vectors on
+	// embedding-less refreshes.
+	if c.semanticEnabled {
+		c.syncSemanticIndexLocked(key, model, embedding)
+	}
+}
+
+// syncSemanticIndexLocked maintains the namespace index for one Store:
+// upsert the key's vector when an embedding is present, otherwise drop any
+// stale vector so a dead key cannot shadow live siblings. Caller must hold
+// c.mu for writing.
+func (c *ResponseCache) syncSemanticIndexLocked(key, model string, embedding []float32) {
+	ns := semanticNamespace(key, model)
+	if len(embedding) == 0 {
+		c.dropSemanticKeyLocked(key, ns)
+		if c.metrics != nil {
+			c.metrics.SetSemanticCacheEntries(int64(c.semanticEntries))
+		}
 		return
 	}
-
-	if len(c.items) >= c.maxSize {
-		c.evictLocked()
+	idx := c.semanticIndexForLocked(ns)
+	// Insert is append-only: drop any previous vector for this key so a
+	// refreshed entry never leaves a stale vector in the index.
+	if idx.Has(key) {
+		idx.Remove(key)
+		c.semanticEntries--
 	}
-
-	elem := c.order.PushFront(key)
-	c.items[key] = &responseCacheEntry{
-		data:      data,
-		expireAt:  time.Now().Add(c.ttl),
-		element:   elem,
-		embedding: embedding,
-	}
-
-	if c.semanticEnabled && c.idx != nil && len(embedding) > 0 {
-		c.idx.Insert(key, embedding)
-		if c.metrics != nil {
-			c.metrics.SetSemanticCacheEntries(int64(c.idx.Len()))
+	stored, evicted := idx.Insert(key, embedding)
+	if stored {
+		c.semanticEntries++
+		if evicted {
+			// Capacity dropped another key's vector: no longer indexed.
+			c.semanticEntries--
 		}
+	}
+	if c.metrics != nil {
+		c.metrics.SetSemanticCacheEntries(int64(c.semanticEntries))
 	}
 }
 
@@ -253,8 +420,8 @@ func (c *ResponseCache) evictExpiredLocked(now time.Time) int {
 		next := e.Prev()
 		key := e.Value.(string)
 		if entry, ok := c.items[key]; ok && now.After(entry.expireAt) {
-			if c.idx != nil && entry.embedding != nil {
-				c.idx.Remove(key)
+			if entry.embedding != nil {
+				c.dropSemanticKeyLocked(key, semanticNamespace(key, entry.model))
 			}
 			c.order.Remove(e)
 			delete(c.items, key)
@@ -274,8 +441,8 @@ func (c *ResponseCache) evictOverflowLocked() int {
 		}
 		key := e.Value.(string)
 		if entry, ok := c.items[key]; ok {
-			if c.idx != nil && entry.embedding != nil {
-				c.idx.Remove(key)
+			if entry.embedding != nil {
+				c.dropSemanticKeyLocked(key, semanticNamespace(key, entry.model))
 			}
 		}
 		c.order.Remove(e)
@@ -290,8 +457,8 @@ func (c *ResponseCache) evictLocked() {
 	evictedCount := c.evictExpiredLocked(now)
 	evictedCount += c.evictOverflowLocked()
 
-	if c.semanticEnabled && c.idx != nil && c.metrics != nil {
-		c.metrics.SetSemanticCacheEntries(int64(c.idx.Len()))
+	if c.semanticEnabled && c.metrics != nil {
+		c.metrics.SetSemanticCacheEntries(int64(c.semanticEntryCountLocked()))
 	}
 	if evictedCount > 0 && c.logger != nil && c.logger.Enabled(context.Background(), slog.LevelDebug) {
 		c.logger.Debug("cache eviction", "evicted", evictedCount)

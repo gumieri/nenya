@@ -37,6 +37,27 @@ func (p *Proxy) authorizeResponsesAgent(gw *gateway.NenyaGateway, r *http.Reques
 	return modelName, nil
 }
 
+// handleResponses proxies the /v1/responses endpoint. NENYA-189 inventory
+// decision: this is pure passthrough — the upstream provider issues and
+// enforces ownership of every response id (previous_response_id, object ids),
+// and Nenya keeps no state addressable by those ids. Response ids surfaced to
+// clients are therefore NOT obfuscated: they never authorize anything on the
+// Nenya side, so obfuscation would only break client-side correlation. The
+// ids that DO index Nenya state (tool-call ids in the thought-signature
+// cache, chat fingerprints in the response cache) are scope-partitioned by
+// API-key identity — see thoughtSigScope and ResponseCache semantic
+// namespaces. Known exception: the adapter registry's global Gemini adapter
+// (adapter.InitWithDeps installs the live cache into a process-global
+// singleton whose MutateRequest/MutateResponse Load/Store raw tool-call ids).
+// No production caller invokes those methods (the MutateResponse shim wires a
+// nil-cache path pre-init and the singleton post-init is only reached through
+// tests); treat that surface as deprecated — do not add callers, and prefer
+// the per-request scoped views above.
+// NENYA-189 inventory note (known limitation): the MCP buffered loop replays
+// raw upstream SSE and does not run this provider transformer, so Gemini
+// thought signatures issued inside an MCP tool loop are not cached (they
+// degrade to the NENYA-50 placeholder policy on the next turn) — a behavior
+// gap to close separately, not an IDOR (nothing cross-key is readable).
 func (p *Proxy) handleResponses(gw *gateway.NenyaGateway, w http.ResponseWriter, r *http.Request, apiKey *config.ApiKey) {
 	keyRef := ""
 	if apiKey != nil {
