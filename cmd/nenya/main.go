@@ -327,6 +327,17 @@ func run(logger *slog.Logger, cfg *config.Config, secrets *config.SecretsConfig,
 		return 1
 	}
 
+	// NENYA-196: identity-referencing configuration (API-key agent scopes,
+	// agent MCP server references, session-affinity ranges) must name sources
+	// that exist before the gateway serves traffic — the same checks gate
+	// -validate and the SIGHUP reload.
+	if refErrs := config.ValidateConfigReferences(cfg, secrets, logger); len(refErrs) > 0 {
+		for _, refErr := range refErrs {
+			logger.Error("config reference invalid", "err", refErr)
+		}
+		return 1
+	}
+
 	startupCtx, startupCancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer startupCancel()
 

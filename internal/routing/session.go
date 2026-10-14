@@ -63,19 +63,37 @@ func NewSessionRouter(cap int, ttl time.Duration, metrics *infra.Metrics, logger
 	}
 }
 
-// SessionKey derives a stable session identifier from the agent name, the
-// system prompt, and the first user message. The system prompt and first
-// user message are taken from the raw client payload (before nenya's
-// content pipeline runs), so gateway-side compaction does not destabilize
-// the key within a session.
-func SessionKey(agent, systemPrompt, firstUserMessage string) string {
+// SessionKeyForSubject derives a session identifier bound to the
+// authenticated caller: subject is an opaque caller scope (the proxy passes
+// the digest of the API key's token — see proxy.sessionSubjectScope). Two API
+// keys that present the same conversation opener therefore derive different
+// session keys, so a sticky pin, an affinity fork, or an account preference
+// created while serving one key can never be inherited by another (NENYA-196).
+// The system prompt and first user message are taken from the raw client
+// payload (before nenya's content pipeline runs), so gateway-side compaction
+// does not destabilize the key within a session. An empty subject preserves
+// the unbound derivation for callers without an authenticated identity.
+func SessionKeyForSubject(subject, agent, systemPrompt, firstUserMessage string) string {
 	h := sha256.New()
+	h.Write([]byte(subject))
+	h.Write([]byte{0})
 	h.Write([]byte(agent))
 	h.Write([]byte{0})
 	h.Write([]byte(systemPrompt))
 	h.Write([]byte{0})
 	h.Write([]byte(firstUserMessage))
 	return hex.EncodeToString(h.Sum(nil))
+}
+
+// shortSessionKey truncates a session key for logging: the key folds the
+// caller's token digest into the digest, and a low-entropy token could be
+// offline-verified by anyone who knows the conversation opener (NENYA-196).
+func shortSessionKey(key string) string {
+	const keep = 16
+	if len(key) <= keep {
+		return key
+	}
+	return key[:keep]
 }
 
 // Pin records the pinned target for a BRAND-NEW session key with the given
@@ -120,7 +138,7 @@ func (r *SessionRouter) Pin(key, provider, model, account string, ttl time.Durat
 		r.record("new")
 	}
 	if r.logger != nil {
-		r.logger.Debug("session pin created", "key", key, "provider", provider, "model", model, "account", account, "ttl", ttl)
+		r.logger.Debug("session pin created", "key", shortSessionKey(key), "provider", provider, "model", model, "account", account, "ttl", ttl)
 	}
 }
 
@@ -220,7 +238,7 @@ func (r *SessionRouter) PromoteIfChanged(key, provider, model, account string, t
 
 	r.record("failover")
 	if r.logger != nil {
-		r.logger.Info("session pin promoted after failover", "key", key, "provider", provider, "model", model, "account", account, "ttl", ttl)
+		r.logger.Info("session pin promoted after failover", "key", shortSessionKey(key), "provider", provider, "model", model, "account", account, "ttl", ttl)
 	}
 	return true
 }

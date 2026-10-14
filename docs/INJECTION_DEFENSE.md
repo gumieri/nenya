@@ -191,7 +191,7 @@ summaries cannot self-trip it.
 | `nenya_exfil_events_total{channel}`                 | Canary echoes (`stream`, `buffered`, `tool_args`)                                                                             | **Page-worthy**: non-zero means injected context reached an egress channel                               |
 | `nenya_stream_blocked_total`                        | Streams terminated by a policy                                                                                                | Correlate with the exfil/canary metrics above                                                            |
 | `nenya_mcp_tool_calls_total{status}`                | Tool dispatches incl. guard rejections                                                                                        | Rejection spikes may be an injection campaign or a too-strict schema                                     |
-| `nenya_auth_denials_total{reason}`                  | RBAC/endpoint denials                                                                                                         | Alert on `payload_too_large`/`invalid_body` (fail-closed paths)                                          |
+| `nenya_auth_denials_total{reason}`                  | RBAC/endpoint denials                                                                                                         | Alert on `payload_too_large`/`invalid_body`/`missing_model`/`invalid_expiry` (fail-closed paths; `missing_model` is split out of `invalid_body` so a request that omits the model — and would otherwise skip agent scoping — is visible on its own)                                          |
 
 **Rollout guidance (least disruptive → strictest):**
 

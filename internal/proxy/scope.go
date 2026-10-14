@@ -20,6 +20,15 @@ import (
 // authenticated, so callers treat that as fail-closed (no cached state at
 // all) rather than falling back to a shared namespace.
 func thoughtSigScope(apiKey *config.ApiKey) (scope string, ok bool) {
+	return callerTokenDigest(apiKey)
+}
+
+// callerTokenDigest derives the per-caller namespace from the API key's token:
+// the full 32-byte SHA-256 digest, hex-encoded (never stored or logged raw),
+// with ok=false for a nil key. The single derivation keeps the
+// thought-signature namespace (NENYA-189) and the session subject (NENYA-196)
+// in lockstep: both must partition by exactly the same caller identity.
+func callerTokenDigest(apiKey *config.ApiKey) (string, bool) {
 	if apiKey == nil {
 		return "", false
 	}
@@ -38,4 +47,34 @@ func scopedThoughtSigCache(gw *gateway.NenyaGateway, apiKey *config.ApiKey) infr
 		return nil
 	}
 	return gw.ThoughtSigCache.Scoped(scope)
+}
+
+// sessionSubjectScope returns the caller scope mixed into session-derived
+// state (NENYA-196): sticky pins, affinity forks, and the synthesized
+// opencode session header all derive from routing.SessionKeyForSubject, so a
+// request from key B presenting key A's conversation opener can never inherit
+// A's pinned provider/model/account. The key's token is hashed — never stored
+// or logged raw; the digest is the full 32 bytes so namespaces cannot collide
+// by truncation.
+//
+// A nil key (defensive: request paths are always authenticated) yields the
+// empty, unbound scope. The synthetic primary-token key carries an empty
+// Token, so primary-token traffic hashes the empty string into its own
+// namespace — a single caller class (one operator), distinct from both the
+// unbound scope and every real key.
+func sessionSubjectScope(apiKey *config.ApiKey) string {
+	scope, ok := callerTokenDigest(apiKey)
+	if !ok {
+		return ""
+	}
+	return scope
+}
+
+// apiKeyName returns the key's configured name for logging and metric
+// labels, or "" for a nil key.
+func apiKeyName(apiKey *config.ApiKey) string {
+	if apiKey == nil {
+		return ""
+	}
+	return apiKey.Name
 }

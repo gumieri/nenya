@@ -108,9 +108,9 @@ Nenya guarantees the header on every chat dispatch (both `/v1/chat/completions` 
 | Scenario | Behavior |
 |----------|----------|
 | Client sends a valid `x-opencode-session` | Forwarded verbatim to the upstream provider |
-| Client omits it (or sends an unusable value) | Nenya synthesizes `nenya-<hash16>`, derived from agent (or model) name + system prompt + first user message (the same identity as [sticky routing](ROUTING.md#agent-routing-strategies)) |
+| Client omits it (or sends an unusable value) | Nenya synthesizes `nenya-<hash16>`, derived from the authenticated API key + agent (or model) name + system prompt + first user message (the same identity as [sticky routing](ROUTING.md#agent-routing-strategies); two keys derive different ids for the same conversation) |
 
-The synthesized value is stable across the turns of a conversation and distinct between conversations, preserving provider-side prefix-cache affinity for session-unaware clients. Requests without a derivable key (no message text) are dispatched with the client header only when it is a valid header value; an unusable value is dropped rather than failing mid-dispatch.
+The synthesized value is stable across the turns of a conversation, distinct between conversations, and distinct per API key, preserving provider-side prefix-cache affinity for session-unaware clients. Requests without a derivable key (no message text) are dispatched with the client header only when it is a valid header value; an unusable value is dropped rather than failing mid-dispatch.
 
 Scope: client-supplied values are forwarded on all upstream dispatch paths (chat, embeddings, responses, passthrough); synthesis runs on the two chat routes only, since only they carry a conversation.
 

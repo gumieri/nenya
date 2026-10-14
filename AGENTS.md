@@ -323,7 +323,7 @@ type ApiKey struct {
 
 **Metrics:**
 
-- `nenya_auth_denials_total` counter with `reason` label: `agent`, `endpoint`, `disabled`, `expired`, `payload_too_large`, `invalid_body`
+- `nenya_auth_denials_total` counter with `reason` label: `agent`, `endpoint`, `disabled`, `expired`, `invalid_expiry`, `missing_model`, `invalid_key`, `rate_limited`, `key_budget`, `provider_budget`, `payload_too_large`, `invalid_body`
 
 **Integration:**
 

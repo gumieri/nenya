@@ -57,6 +57,14 @@ type chatRequest struct {
 	sessionKeyOK   bool
 	sessionKeyDone bool
 
+	// SessionSubject binds all session-derived state (sticky pins, affinity
+	// forks, synthesized session headers) to the authenticated caller
+	// (NENYA-196): the digest of the API key's token, set once in
+	// validateChatRequest. Empty for a nil key (defensive/test path); the
+	// synthetic primary-token key hashes its empty token, giving primary
+	// traffic its own single-operator namespace.
+	SessionSubject string
+
 	// Memoized affinity-resolved session identity (see sessionIdentity):
 	// the root session key, or a deterministic fork key when the leading
 	// turns collide with a different conversation (NENYA-39). Same
@@ -123,8 +131,10 @@ func (p *Proxy) parseRequestBody(gw *gateway.NenyaGateway, r *http.Request, body
 }
 
 // validateChatRequest reads and validates the incoming request body,
-// returning a populated chatRequest or an httpError.
-func (p *Proxy) validateChatRequest(w http.ResponseWriter, r *http.Request, gw *gateway.NenyaGateway, keyRef string) (*chatRequest, *httpError) {
+// returning a populated chatRequest or an httpError. The authenticated key
+// supplies the request's key reference (logging) and session subject
+// (NENYA-196 session binding).
+func (p *Proxy) validateChatRequest(w http.ResponseWriter, r *http.Request, gw *gateway.NenyaGateway, apiKey *config.ApiKey) (*chatRequest, *httpError) {
 	r.Body = http.MaxBytesReader(w, r.Body, gw.Config.Server.MaxBodyBytes)
 	defer func() { _ = r.Body.Close() }()
 
@@ -154,12 +164,13 @@ func (p *Proxy) validateChatRequest(w http.ResponseWriter, r *http.Request, gw *
 	}
 
 	req := &chatRequest{
-		Payload:      payload,
-		ModelName:    modelName,
-		TokenCount:   gw.CountRequestTokens(payload),
-		Stream:       false,
-		KeyRef:       keyRef,
-		SourceFormat: sourceFormat,
+		Payload:        payload,
+		ModelName:      modelName,
+		TokenCount:     gw.CountRequestTokens(payload),
+		Stream:         false,
+		KeyRef:         apiKeyName(apiKey),
+		SessionSubject: sessionSubjectScope(apiKey),
+		SourceFormat:   sourceFormat,
 	}
 	if streamRaw, ok := payload["stream"]; ok {
 		if s, ok := streamRaw.(bool); ok {
@@ -424,9 +435,9 @@ func promoteToFirstActive(gw *gateway.NenyaGateway, req *chatRequest, key string
 	}
 }
 
-// sessionKeyFromRequest derives a stable session identifier from the agent
-// name, the resolved system prompt, and the first user message in the raw
-// client payload.
+// sessionKeyFromRequest derives a stable session identifier from the caller's
+// subject scope (NENYA-196), the agent name, the resolved system prompt, and
+// the first user message in the raw client payload.
 func sessionKeyFromRequest(req *chatRequest, agent config.AgentConfig) (string, bool) {
 	systemPrompt, err := config.LoadPromptFile(agent.SystemPromptFile, agent.SystemPrompt, "")
 	if err != nil || systemPrompt == "" {
@@ -436,7 +447,7 @@ func sessionKeyFromRequest(req *chatRequest, agent config.AgentConfig) (string, 
 	if !ok {
 		return "", false
 	}
-	return routing.SessionKey(req.ModelName, systemPrompt, firstUser), true
+	return routing.SessionKeyForSubject(req.SessionSubject, req.ModelName, systemPrompt, firstUser), true
 }
 
 // derivedSessionKey returns the memoized stable session key for the
@@ -534,7 +545,14 @@ func agentStickyTTL(agent config.AgentConfig) time.Duration {
 	if agent.StickySessionTTLSeconds <= 0 {
 		return routing.DefaultSessionTTL
 	}
-	return time.Duration(agent.StickySessionTTLSeconds) * time.Second
+	// Load validation caps the configured value at 24h; clamp here too so a
+	// non-validating construction path (test-built gateway, future loader)
+	// cannot pin a session for an arbitrary duration (NENYA-196).
+	seconds := agent.StickySessionTTLSeconds
+	if seconds > config.MaxStickySessionTTLSeconds {
+		seconds = config.MaxStickySessionTTLSeconds
+	}
+	return time.Duration(seconds) * time.Second
 }
 
 // firstUserMessage extracts the content of the first message with role
@@ -1003,10 +1021,6 @@ func deriveSoftLimit(softLimitTokens, maxContext, hardLimit int) int {
 // handleChatCompletions processes chat completion requests with optional content filtering and tool integration.
 func (p *Proxy) handleChatCompletions(gw *gateway.NenyaGateway, w http.ResponseWriter, r *http.Request, apiKey *config.ApiKey) {
 	gwStart := time.Now()
-	keyRef := ""
-	if apiKey != nil {
-		keyRef = apiKey.Name
-	}
 	// NENYA-140: OTel-lite request trace — continue an inbound W3C
 	// traceparent when present, else root a fresh trace; echo the active
 	// traceparent back so clients can correlate. The traced context flows
@@ -1026,7 +1040,7 @@ func (p *Proxy) handleChatCompletions(gw *gateway.NenyaGateway, w http.ResponseW
 		// sentinel (nothing dispatched) do not emit a misleading summary.
 		defer requestTrace.Finish()
 	}
-	req, herr := p.validateChatRequest(w, r, gw, keyRef)
+	req, herr := p.validateChatRequest(w, r, gw, apiKey)
 	if herr != nil {
 		if herr.Code == http.StatusNoContent {
 			// Cache-hit sentinel: nothing to render.

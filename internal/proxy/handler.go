@@ -372,9 +372,17 @@ func (p *Proxy) authenticateAndAuthorize(r *http.Request, w http.ResponseWriter)
 	}
 
 	if apiKey.ExpiresAt != "" {
-		if t, err := time.Parse(time.RFC3339, apiKey.ExpiresAt); err == nil && time.Now().After(t) {
-			gw.Metrics.IncAuthDenials(apiKey.Name, "expired")
-			p.logAuthDenial(gw, apiKey, "expired key", r)
+		expiresAt, err := time.Parse(time.RFC3339, apiKey.ExpiresAt)
+		// Fail closed on an unparseable expiry (NENYA-196): load validation
+		// rejects it, so reaching here means the key bypassed validation —
+		// treat it as unusable rather than as never expiring.
+		if err != nil || time.Now().After(expiresAt) {
+			reason := "expired"
+			if err != nil {
+				reason = "invalid_expiry"
+			}
+			gw.Metrics.IncAuthDenials(apiKey.Name, reason)
+			p.logAuthDenial(gw, apiKey, reason+" key", r)
 			writeStructuredError(w, http.StatusForbidden, infra.ErrorKindAuthFailed, "Forbidden")
 			return nil, false
 		}
@@ -412,8 +420,9 @@ func (p *Proxy) authenticateAndAuthorize(r *http.Request, w http.ResponseWriter)
 
 // enforceChatAgentScoping enforces per-key agent scoping on the chat wire
 // routes. The body read fails closed: unreadable, oversized, or unparseable
-// bodies are rejected (413/400) rather than allowed to bypass scoping.
-// Returns ok=false when the request is rejected; the response is written.
+// bodies are rejected (413/400), and a request that names no model is
+// rejected (400) rather than allowed to skip scoping. Returns ok=false when
+// the request is rejected; the response is written.
 func (p *Proxy) enforceChatAgentScoping(gw *gateway.NenyaGateway, w http.ResponseWriter, r *http.Request, apiKey *config.ApiKey) bool {
 	agentName, err := extractAgentName(r, w, gw.Config.Server.MaxBodyBytes)
 	if err != nil {
@@ -429,7 +438,19 @@ func (p *Proxy) enforceChatAgentScoping(gw *gateway.NenyaGateway, w http.Respons
 		writeStructuredError(w, http.StatusBadRequest, infra.ErrorKindInvalidRequest, "Invalid JSON payload")
 		return false
 	}
-	if agentName != "" && !auth.AuthorizeAgent(apiKey, agentName) {
+	// A chat request must name a model: without one, per-key agent scoping
+	// cannot be evaluated, so the request is rejected here rather than
+	// allowed to proceed unscoped (NENYA-196, fail closed). The message
+	// matches the handler's own missing-model rejection; the denial reason is
+	// distinct so malformed clients do not pollute the invalid_body alerting
+	// signal.
+	if agentName == "" {
+		gw.Metrics.IncAuthDenials(apiKey.Name, "missing_model")
+		p.logAuthDenial(gw, apiKey, "missing model on chat route", r)
+		writeStructuredError(w, http.StatusBadRequest, infra.ErrorKindInvalidRequest, `Missing or empty "model" field in request body`)
+		return false
+	}
+	if !auth.AuthorizeAgent(apiKey, agentName) {
 		gw.Metrics.IncAuthDenials(apiKey.Name, "agent")
 		p.logAuthDenial(gw, apiKey, "agent "+agentName, r)
 		writeStructuredError(w, http.StatusForbidden, infra.ErrorKindAuthFailed, "Forbidden")

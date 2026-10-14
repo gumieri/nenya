@@ -8,12 +8,12 @@ import (
 )
 
 func TestSessionKeyDeterministic(t *testing.T) {
-	k1 := SessionKey("agent", "sys", "hello")
-	k2 := SessionKey("agent", "sys", "hello")
+	k1 := SessionKeyForSubject("", "agent", "sys", "hello")
+	k2 := SessionKeyForSubject("", "agent", "sys", "hello")
 	if k1 != k2 {
 		t.Fatalf("session key not deterministic")
 	}
-	k3 := SessionKey("agent", "sys", "goodbye")
+	k3 := SessionKeyForSubject("", "agent", "sys", "goodbye")
 	if k1 == k3 {
 		t.Fatalf("different inputs produced same key")
 	}
@@ -245,5 +245,26 @@ func TestSessionRouterConcurrentEviction(t *testing.T) {
 	wg.Wait()
 	if active := sr.Active(); active > sr.cap {
 		t.Fatalf("active count %d exceeds cap %d", active, sr.cap)
+	}
+}
+
+// TestSessionKeyForSubject pins the NENYA-196 subject binding: the subject
+// participates in the digest, so two callers with the same conversation opener
+// derive different session keys, and the legacy subject-free derivation is
+// preserved for callers without an authenticated identity.
+func TestSessionKeyForSubject(t *testing.T) {
+	a := SessionKeyForSubject("subject-a", "agent", "sys", "hello")
+	b := SessionKeyForSubject("subject-b", "agent", "sys", "hello")
+	if a == "" || a == b {
+		t.Fatalf("subjects must produce distinct keys, got %q and %q", a, b)
+	}
+	if again := SessionKeyForSubject("subject-a", "agent", "sys", "hello"); again != a {
+		t.Fatal("subject-bound derivation must be deterministic")
+	}
+	if unbound := SessionKeyForSubject("", "agent", "sys", "hello"); unbound == a || unbound == b {
+		t.Fatal("the unbound derivation must not collide with a bound one")
+	}
+	if SessionKeyForSubject("subject-a", "agent", "sys", "hello") == SessionKeyForSubject("subject-a", "agent", "sys", "other") {
+		t.Fatal("content must still change the key")
 	}
 }

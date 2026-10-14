@@ -57,6 +57,10 @@ func ValidateConfigurationWithPing(ctx context.Context, cfg *Config, secrets *Se
 
 	errors := collectValidationErrors(ctx, cfg, providers, pingProviders, logger)
 	errors = append(errors, validateKeyLimits(cfg, secrets)...)
+	// NENYA-196: identity-referencing configuration is checked here so that
+	// -validate and the SIGHUP reload reject an unsafe document; boot runs the
+	// same checks via ValidateConfigReferences.
+	errors = append(errors, ValidateConfigReferences(cfg, secrets, logger)...)
 	if len(errors) > 0 {
 		return fmt.Errorf("provider validation failed:\n  - %s", strings.Join(errors, "\n  - "))
 	}
@@ -135,7 +139,6 @@ func collectValidationErrors(ctx context.Context, cfg *Config, providers map[str
 	errors = append(errors, validateThinkingStreamIdleTimeoutSeconds(cfg.Governance.ThinkingStreamIdleTimeoutSeconds)...)
 	errors = append(errors, validateBootstrapBufferBytes(cfg.Governance.StreamBootstrapBufferBytes)...)
 	errors = append(errors, validateAgentStrategies(cfg.Agents)...)
-	errors = append(errors, validateStickySessionTTL(cfg.Agents)...)
 	errors = append(errors, validateTokenCalibration(cfg.Governance.TokenCalibration)...)
 
 	if pingProviders {
@@ -661,19 +664,155 @@ func validateTokenCalibration(cfg *TokenCalibrationConfig) []string {
 	return errs
 }
 
+// MaxStickySessionTTLSeconds caps agents[].sticky_session_ttl_seconds (24
+// hours). Exported so the proxy's runtime clamp uses the same value.
+const MaxStickySessionTTLSeconds = 86400
+
 func validateStickySessionTTL(agents map[string]AgentConfig) []string {
 	var errs []string
 	for name, agent := range agents {
-		if agent.Strategy != "sticky" {
-			continue
-		}
+		// Pins and affinity resolve for EVERY strategy (NENYA-29): non-sticky
+		// agents still use the pin for credential-only affinity, so the TTL is
+		// validated regardless of strategy (NENYA-196).
 		if agent.StickySessionTTLSeconds < 0 {
 			errs = append(errs, fmt.Sprintf("agents[%q].sticky_session_ttl_seconds must be non-negative, got %d", name, agent.StickySessionTTLSeconds))
 		}
-		if agent.StickySessionTTLSeconds > 86400 {
-			errs = append(errs, fmt.Sprintf("agents[%q].sticky_session_ttl_seconds exceeds maximum allowed value (86400 seconds / 24 hours), got %d", name, agent.StickySessionTTLSeconds))
+		if agent.StickySessionTTLSeconds > MaxStickySessionTTLSeconds {
+			errs = append(errs, fmt.Sprintf("agents[%q].sticky_session_ttl_seconds exceeds maximum allowed value (%d seconds / 24 hours), got %d", name, MaxStickySessionTTLSeconds, agent.StickySessionTTLSeconds))
 		}
 	}
+	return errs
+}
+
+// validateAgentMCPReferences rejects agents that reference MCP servers which
+// do not exist (NENYA-196): a dangling name disables the agent's tools at
+// request time (the client lookup misses, with only a per-request warning),
+// which is exactly the kind of unsafe state that must be unrepresentable at
+// load.
+func validateAgentMCPReferences(cfg *Config) []string {
+	var errs []string
+	for name, agent := range cfg.Agents {
+		if agent.MCP == nil {
+			continue
+		}
+		for i, server := range agent.MCP.Servers {
+			if server == "" {
+				errs = append(errs, fmt.Sprintf("agents[%q].mcp.servers[%d]: empty server name", name, i))
+				continue
+			}
+			if _, ok := cfg.MCPServers[server]; !ok {
+				errs = append(errs, fmt.Sprintf("agents[%q].mcp.servers[%d]: unknown mcp_servers[%q]", name, i, server))
+			}
+		}
+	}
+	// Deliberately not validated: a model entry may set provider_rgx, which
+	// supersedes provider, so a reference check on provider would reject valid
+	// configurations; a genuinely unknown provider is reported at target-build
+	// time.
+	return errs
+}
+
+// validateSecretAgentScopes rejects API keys whose allowed_agents list
+// references an agent that does not exist (NENYA-196): the key would be
+// denied that agent at request time, and a typo is indistinguishable from an
+// intentional restriction. Admin keys are exempt (AuthorizeAgent returns true
+// for admin before consulting the list, so the field is inert for them).
+// Auto-generated agents (discovery enabled with auto_agents) are created after
+// validation, so the reference check is skipped in that mode; an empty list is
+// the documented backward-compatible "all agents" grant and only warrants a
+// warning for keys that can reach the chat routes.
+func validateSecretAgentScopes(cfg *Config, secrets *SecretsConfig, logger *slog.Logger) []string {
+	if secrets == nil {
+		return nil
+	}
+	autoAgents := cfg.Discovery.Enabled != nil && *cfg.Discovery.Enabled &&
+		cfg.Discovery.AutoAgents != nil && *cfg.Discovery.AutoAgents
+	var errs []string
+	for name, key := range secrets.ApiKeys {
+		if !key.Enabled || authKeyIsAdmin(key) {
+			continue
+		}
+		if len(key.AllowedAgents) == 0 {
+			if authKeyCanChat(key) && logger != nil {
+				logger.Warn("api key grants access to every agent wherever agent scoping applies (empty allowed_agents)",
+					"key", name,
+					"note", "set allowed_agents to restrict the chat routes; admin keys are unaffected")
+			}
+			continue
+		}
+		if autoAgents {
+			continue
+		}
+		for _, allowed := range key.AllowedAgents {
+			if allowed == "" {
+				errs = append(errs, fmt.Sprintf("api_keys[%q].allowed_agents: empty agent name", name))
+				continue
+			}
+			if _, ok := cfg.Agents[allowed]; !ok {
+				errs = append(errs, fmt.Sprintf("api_keys[%q].allowed_agents: unknown agent %q", name, allowed))
+			}
+		}
+	}
+	return errs
+}
+
+// authKeyIsAdmin reports whether the key carries the admin role.
+func authKeyIsAdmin(key ApiKey) bool {
+	for _, role := range key.Roles {
+		if role == RoleAdmin {
+			return true
+		}
+	}
+	return false
+}
+
+// authKeyCanChat reports whether the key can reach the agent-scoped chat
+// routes: a user role can (unless an endpoint allowlist excludes them), and
+// read-only keys cannot. An endpoint allowlist overrides role defaults, so a
+// read-only key explicitly allowed onto the chat routes is treated as
+// chat-capable too. Admin keys never reach this helper (they are exempt from
+// the scope check).
+func authKeyCanChat(key ApiKey) bool {
+	// An endpoint allowlist overrides role defaults, so it decides on its own:
+	// chat-capable only when it names one of the chat routes.
+	if len(key.AllowedEndpoints) > 0 {
+		for _, endpoint := range key.AllowedEndpoints {
+			if endpoint == "POST /v1/chat/completions" || endpoint == "POST /v1/messages" {
+				return true
+			}
+		}
+		return false
+	}
+	// Read-only narrows the key to GET monitoring surfaces (AuthorizeEndpoint),
+	// so a read-only role denies the POST chat routes regardless of any other
+	// role on the key.
+	for _, role := range key.Roles {
+		if role == RoleReadOnly {
+			return false
+		}
+	}
+	for _, role := range key.Roles {
+		if role == RoleUser {
+			return true
+		}
+	}
+	return false
+}
+
+// ValidateConfigReferences runs the reference/identity cross-checks that must
+// hold at boot, on -validate, and on SIGHUP reload (NENYA-196): identity-
+// referencing configuration (API-key agent scopes, agent MCP server
+// references) must name sources that exist, and session-affinity settings must
+// be in range. It takes both documents because the API-key scopes live in
+// secrets while the referenced agents live in the config.
+func ValidateConfigReferences(cfg *Config, secrets *SecretsConfig, logger *slog.Logger) []string {
+	if cfg == nil {
+		return nil
+	}
+	var errs []string
+	errs = append(errs, validateStickySessionTTL(cfg.Agents)...)
+	errs = append(errs, validateAgentMCPReferences(cfg)...)
+	errs = append(errs, validateSecretAgentScopes(cfg, secrets, logger)...)
 	return errs
 }
 

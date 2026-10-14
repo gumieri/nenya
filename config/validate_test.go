@@ -95,9 +95,15 @@ func TestValidateStickySessionTTL(t *testing.T) {
 	if errs := validateStickySessionTTL(exceed); len(errs) == 0 {
 		t.Error("TTL above 24h should be invalid")
 	}
+	// NENYA-196: pins and affinity resolve for every strategy, so the TTL is
+	// validated for non-sticky agents too.
 	nonSticky := map[string]AgentConfig{"a": {Strategy: "round-robin", StickySessionTTLSeconds: -5}}
-	if errs := validateStickySessionTTL(nonSticky); len(errs) != 0 {
-		t.Errorf("TTL validation must only apply to sticky agents, got %v", errs)
+	if errs := validateStickySessionTTL(nonSticky); len(errs) == 0 {
+		t.Error("TTL validation must apply to non-sticky agents as well")
+	}
+	nonStickyOK := map[string]AgentConfig{"a": {Strategy: "round-robin", StickySessionTTLSeconds: 3600}}
+	if errs := validateStickySessionTTL(nonStickyOK); len(errs) != 0 {
+		t.Errorf("valid non-sticky TTL got errors: %v", errs)
 	}
 }
 
@@ -1021,4 +1027,164 @@ func TestApplyMCPGuardDefaults(t *testing.T) {
 			t.Error("guard must stay absent without MCP servers")
 		}
 	})
+}
+
+// TestValidateSecretsRejectsDuplicateTokens pins the NENYA-196 identity
+// invariant: two enabled keys may not share a token (which key name is
+// attributed, and which per-key limits apply, would be nondeterministic).
+func TestValidateSecretsRejectsDuplicateTokens(t *testing.T) {
+	secrets := &SecretsConfig{
+		ClientToken: "primary-token-1234567890",
+		ApiKeys: map[string]ApiKey{
+			"a": {Name: "a", Token: "shared-token-1234567890", Roles: []string{"user"}, Enabled: true},
+			"b": {Name: "b", Token: "shared-token-1234567890", Roles: []string{"user"}, Enabled: true},
+		},
+	}
+	err := validateSecrets(secrets)
+	if err == nil || !strings.Contains(err.Error(), "share the same token") {
+		t.Fatalf("expected a duplicate-token error, got %v", err)
+	}
+
+	// Disabled duplicates are inert (they never serve traffic).
+	disabled := &SecretsConfig{
+		ClientToken: "primary-token-1234567890",
+		ApiKeys: map[string]ApiKey{
+			"a": {Name: "a", Token: "shared-token-1234567890", Roles: []string{"user"}, Enabled: true},
+			"b": {Name: "b", Token: "shared-token-1234567890", Roles: []string{"user"}, Enabled: false},
+		},
+	}
+	if err := validateSecrets(disabled); err != nil {
+		t.Fatalf("disabled duplicate must be skipped, got %v", err)
+	}
+}
+
+// TestValidateSecretsRejectsDuplicateNames pins the NENYA-196 identity rule
+// for the field that actually drives per-key limits and attribution.
+func TestValidateSecretsRejectsDuplicateNames(t *testing.T) {
+	secrets := &SecretsConfig{
+		ClientToken: "primary-token-1234567890",
+		ApiKeys: map[string]ApiKey{
+			"a": {Name: "shared-name", Token: "token-a-1234567890", Roles: []string{"user"}, Enabled: true},
+			"b": {Name: "shared-name", Token: "token-b-1234567890", Roles: []string{"user"}, Enabled: true},
+		},
+	}
+	err := validateSecrets(secrets)
+	if err == nil || !strings.Contains(err.Error(), "share the same name") {
+		t.Fatalf("expected a duplicate-name error, got %v", err)
+	}
+
+	// A missing name is refused too (it is the metric/log identity).
+	nameless := &SecretsConfig{
+		ClientToken: "primary-token-1234567890",
+		ApiKeys: map[string]ApiKey{
+			"a": {Token: "token-a-1234567890", Roles: []string{"user"}, Enabled: true},
+		},
+	}
+	if err := validateSecrets(nameless); err == nil || !strings.Contains(err.Error(), "name is required") {
+		t.Fatalf("expected a missing-name error, got %v", err)
+	}
+	// A key may not claim the synthetic primary-token name.
+	primaryName := &SecretsConfig{
+		ClientToken: "primary-token-1234567890",
+		ApiKeys: map[string]ApiKey{
+			"a": {Name: "primary", Token: "token-a-1234567890", Roles: []string{"user"}, Enabled: true},
+		},
+	}
+	if err := validateSecrets(primaryName); err == nil || !strings.Contains(err.Error(), "is reserved for the primary-token identity") {
+		t.Fatalf("expected a reserved-name error, got %v", err)
+	}
+
+	// A key token equal to the primary client_token is refused: the primary is
+	// checked first, so the entry would be unreachable and the caller would
+	// silently authenticate as the admin-class primary.
+	primaryClash := &SecretsConfig{
+		ClientToken: "primary-token-1234567890",
+		ApiKeys: map[string]ApiKey{
+			"a": {Name: "a", Token: "primary-token-1234567890", Roles: []string{"user"}, Enabled: true},
+		},
+	}
+	if err := validateSecrets(primaryClash); err == nil || !strings.Contains(err.Error(), "collides with client_token") {
+		t.Fatalf("expected a client_token collision error, got %v", err)
+	}
+}
+
+// TestValidateAgentMCPReferences pins the NENYA-196 load check: an agent
+// referencing an unknown (or empty) MCP server name refuses the load instead
+// of silently running without tools.
+func TestValidateAgentMCPReferences(t *testing.T) {
+	cfg := &Config{
+		MCPServers: map[string]MCPServerConfig{"known": {URL: "http://localhost:9000"}},
+		Agents: map[string]AgentConfig{
+			"ok":      {MCP: &AgentMCPConfig{Servers: []string{"known"}}},
+			"unknown": {MCP: &AgentMCPConfig{Servers: []string{"missing"}}},
+			"empty":   {MCP: &AgentMCPConfig{Servers: []string{""}}},
+			"no-mcp":  {},
+		},
+	}
+	errs := validateAgentMCPReferences(cfg)
+	if len(errs) != 2 {
+		t.Fatalf("expected 2 errors (unknown + empty), got %v", errs)
+	}
+	joined := strings.Join(errs, "\n")
+	if !strings.Contains(joined, "unknown mcp_servers[\"missing\"]") || !strings.Contains(joined, "empty server name") {
+		t.Fatalf("unexpected errors: %v", errs)
+	}
+}
+
+// TestValidateSecretAgentScopes pins the NENYA-196 cross-document check: an
+// API key scoping itself to a non-existent agent refuses the load, while the
+// documented empty-list "all agents" grant stays allowed (with a warning).
+func TestValidateSecretAgentScopes(t *testing.T) {
+	cfg := &Config{Agents: map[string]AgentConfig{"alpha": {}, "beta": {}}}
+	logger := testLogger()
+
+	ok := &SecretsConfig{ClientToken: "tok", ApiKeys: map[string]ApiKey{
+		"scoped": {Name: "scoped", Enabled: true, Roles: []string{"user"}, AllowedAgents: []string{"alpha", "beta"}},
+		"all":    {Name: "all", Enabled: true, Roles: []string{"user"}},
+	}}
+	if errs := validateSecretAgentScopes(cfg, ok, logger); len(errs) != 0 {
+		t.Fatalf("valid scopes rejected: %v", errs)
+	}
+
+	bad := &SecretsConfig{ClientToken: "tok", ApiKeys: map[string]ApiKey{
+		"scoped": {Name: "scoped", Enabled: true, Roles: []string{"user"}, AllowedAgents: []string{"ghost"}},
+	}}
+	errs := validateSecretAgentScopes(cfg, bad, logger)
+	if len(errs) != 1 || !strings.Contains(errs[0], "unknown agent \"ghost\"") {
+		t.Fatalf("expected an unknown-agent error, got %v", errs)
+	}
+
+	empty := &SecretsConfig{ClientToken: "tok", ApiKeys: map[string]ApiKey{
+		"scoped": {Name: "scoped", Enabled: true, Roles: []string{"user"}, AllowedAgents: []string{""}},
+	}}
+	if errs := validateSecretAgentScopes(cfg, empty, logger); len(errs) != 1 || !strings.Contains(errs[0], "empty agent name") {
+		t.Fatalf("expected an empty-name error, got %v", errs)
+	}
+
+	// Disabled keys are skipped entirely (they can never serve traffic).
+	disabled := &SecretsConfig{ClientToken: "tok", ApiKeys: map[string]ApiKey{
+		"off": {Name: "off", Enabled: false, AllowedAgents: []string{"ghost"}},
+	}}
+	if errs := validateSecretAgentScopes(cfg, disabled, logger); len(errs) != 0 {
+		t.Fatalf("disabled keys must be skipped, got %v", errs)
+	}
+
+	// Admin keys are exempt: AuthorizeAgent returns true for admin before
+	// consulting allowed_agents, so a stale list is inert for them.
+	admin := &SecretsConfig{ClientToken: "tok", ApiKeys: map[string]ApiKey{
+		"root": {Name: "root", Enabled: true, Roles: []string{"admin"}, AllowedAgents: []string{"ghost"}},
+	}}
+	if errs := validateSecretAgentScopes(cfg, admin, logger); len(errs) != 0 {
+		t.Fatalf("admin keys must be exempt from the reference check, got %v", errs)
+	}
+
+	// Auto-generated agents are created after validation, so the reference
+	// check is skipped when discovery.auto_agents is enabled.
+	auto := &Config{
+		Agents:    cfg.Agents,
+		Discovery: DiscoveryConfig{Enabled: PtrTo(true), AutoAgents: PtrTo(true)},
+	}
+	if errs := validateSecretAgentScopes(auto, bad, logger); len(errs) != 0 {
+		t.Fatalf("auto-agents must skip the reference check, got %v", errs)
+	}
 }

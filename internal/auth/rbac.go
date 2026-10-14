@@ -48,12 +48,30 @@ func HasPermission(role Role, perm Permission) bool {
 	return false
 }
 
+// rolesRecognized reports whether every role on the key is a known role and
+// at least one is present. Load validation rejects unknown/absent roles; this
+// runtime check keeps a key that bypassed validation from falling through to
+// the permissive branches of AuthorizeAgent/AuthorizeEndpoint (NENYA-196,
+// fail closed).
+func rolesRecognized(apiKey *config.ApiKey) bool {
+	if apiKey == nil || len(apiKey.Roles) == 0 {
+		return false
+	}
+	for _, roleStr := range apiKey.Roles {
+		if _, ok := RolePermissions[Role(roleStr)]; !ok {
+			return false
+		}
+	}
+	return true
+}
+
 // AuthorizeAgent checks if the key is allowed to access the given agent.
 // Admin keys have unrestricted access to all agents.
 // An empty AllowedAgents list grants access to all agents.
-// Returns false if the key is nil or the agent is not in the allowed list.
+// Returns false if the key is nil, carries an unrecognized role, or the
+// agent is not in the allowed list.
 func AuthorizeAgent(apiKey *config.ApiKey, agentName string) bool {
-	if apiKey == nil {
+	if apiKey == nil || !rolesRecognized(apiKey) {
 		return false
 	}
 	for _, roleStr := range apiKey.Roles {
@@ -113,9 +131,10 @@ func matchesAllowedEndpoints(allowed []string, method, path string) bool {
 // "POST /v1/chat/completions" entry also authorizes /v1/messages (an explicit
 // "POST /v1/messages" entry authorizes only /v1/messages).
 // read-only role restricts access to GET requests only.
-// Returns false if the key is nil or the endpoint is not authorized.
+// Returns false if the key is nil, carries an unrecognized role, or the
+// endpoint is not authorized.
 func AuthorizeEndpoint(apiKey *config.ApiKey, method, path string) bool {
-	if apiKey == nil {
+	if apiKey == nil || !rolesRecognized(apiKey) {
 		return false
 	}
 	for _, roleStr := range apiKey.Roles {

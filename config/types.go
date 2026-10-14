@@ -1426,6 +1426,9 @@ type ApiKey struct {
 }
 
 func (k *ApiKey) Validate() error {
+	if k.Name == "" {
+		return errors.New("name is required")
+	}
 	if k.Token == "" {
 		return errors.New("token cannot be empty")
 	}

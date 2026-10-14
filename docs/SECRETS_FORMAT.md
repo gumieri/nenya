@@ -225,10 +225,10 @@ openssl rand -hex 32
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| `name` | string | Yes | Human-readable key identifier (for logging/metrics) |
-| `token` | string | Yes | API key token (minimum 16 characters, prefix `nk-` recommended) |
+| `name` | string | Yes | Human-readable key identifier (for logging, metrics, and per-key rate limits/budgets). Must be non-empty, unique among enabled keys, and must not be `primary` (the synthetic primary-token identity). |
+| `token` | string | Yes | API key token (minimum 16 characters, prefix `nk-` recommended). Must be unique among enabled keys and must not equal the primary `client_token` (a collision would make the authenticated identity ambiguous). |
 | `roles` | []string | Yes | List of roles (one or more): `"admin"`, `"user"`, `"read-only"` |
-| `allowed_agents` | []string | No | Agent names this key can access (empty = all agents) |
+| `allowed_agents` | []string | No | Agent names this key can access (empty = all agents). Validated against `agents` at boot/`-validate`/reload (admin keys exempt; skipped when discovery runs with `auto_agents`). On `/v1/responses` the list is matched against the request's `model`, so a key scoped to agent names is denied a plain upstream model id. |
 | `allowed_endpoints` | []string | No | HTTP method + path allowlist (empty = role-based defaults) |
 | `created_at` | string | No | ISO 8601 timestamp for audit trail |
 | `expires_at` | string | No | ISO 8601 timestamp for key expiration |

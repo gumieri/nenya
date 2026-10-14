@@ -52,7 +52,7 @@ func TestApplyStickyRouting_NonStickyPinsWithoutReorder(t *testing.T) {
 	if out[0].Provider != "prov-a" || out[1].Provider != "prov-b" {
 		t.Fatalf("non-sticky routing must not reorder, got %+v", out)
 	}
-	key := routing.SessionKey("opencode", "", "first turn")
+	key := routing.SessionKeyForSubject("", "opencode", "", "first turn")
 	state, ok := gw.SessionRouter.Lookup(key)
 	if !ok || state.Provider != "prov-a" || state.Account != "acct-1" {
 		t.Fatalf("expected front target pinned, got %+v ok=%v", state, ok)
@@ -66,7 +66,7 @@ func TestApplyStickyRouting_NonStickyPrefersPinnedAccount(t *testing.T) {
 	gw := newAffinityTestGateway(t, nil)
 	agent := config.AgentConfig{Strategy: "round-robin"}
 	req := affinityRequest("opencode", "first turn")
-	key := routing.SessionKey("opencode", "", "first turn")
+	key := routing.SessionKeyForSubject("", "opencode", "", "first turn")
 
 	// Session already pinned to prov-a/acct-1 (from a previous request).
 	gw.SessionRouter.Pin(key, "prov-a", "model-a", "acct-1", 0)
@@ -101,7 +101,7 @@ func TestApplyStickyRouting_SessionStickyKeysOptOut(t *testing.T) {
 
 	_ = applyStickyRouting(req, gw, agent, targets, resolveStickyPin(req, gw), false)
 
-	key := routing.SessionKey("opencode", "", "first turn")
+	key := routing.SessionKeyForSubject("", "opencode", "", "first turn")
 	if _, ok := gw.SessionRouter.Lookup(key); ok {
 		t.Fatal("opted-out provider must not create a session pin")
 	}
@@ -131,7 +131,7 @@ func TestApplyStickyRouting_SessionStickyKeysExplicitTrue(t *testing.T) {
 
 	_ = applyStickyRouting(req, gw, agent, targets, resolveStickyPin(req, gw), false)
 
-	key := routing.SessionKey("opencode", "", "first turn")
+	key := routing.SessionKeyForSubject("", "opencode", "", "first turn")
 	if state, ok := gw.SessionRouter.Lookup(key); !ok || state.Account != "acct-1" {
 		t.Fatalf("explicit opt-in must pin, got %+v ok=%v", state, ok)
 	}

@@ -203,7 +203,7 @@ func TestValidateChatRequest_ClientCanceled(t *testing.T) {
 	cancel()
 
 	w := httptest.NewRecorder()
-	_, herr := p.validateChatRequest(w, r, gw, "")
+	_, herr := p.validateChatRequest(w, r, gw, nil)
 	if herr == nil {
 		t.Fatal("expected httpError, got nil")
 	}

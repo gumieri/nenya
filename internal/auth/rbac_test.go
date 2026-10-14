@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"net/http"
 	"testing"
 
 	"github.com/nenya/config"
@@ -267,5 +268,40 @@ func TestAuthError(t *testing.T) {
 	}
 	if ErrKeyExpired.Status != 403 {
 		t.Errorf("ErrKeyExpired.Status = %d; want 403", ErrKeyExpired.Status)
+	}
+}
+
+// TestAuthorizeUnknownRoleDenies pins the NENYA-196 fail-closed role check:
+// a key carrying an unrecognized role (or no role at all) must not fall
+// through to the permissive branches. Load validation rejects such keys, so
+// this is the runtime defense-in-depth layer.
+func TestAuthorizeUnknownRoleDenies(t *testing.T) {
+	unknown := &config.ApiKey{Name: "unknown-role", Roles: []string{"superuser"}, Enabled: true}
+	if AuthorizeAgent(unknown, "any-agent") {
+		t.Error("unknown role must not authorize an agent")
+	}
+	if AuthorizeEndpoint(unknown, http.MethodGet, "/v1/models") {
+		t.Error("unknown role must not authorize an endpoint")
+	}
+	if AuthorizeEndpoint(unknown, http.MethodPost, "/v1/chat/completions") {
+		t.Error("unknown role must not authorize the chat endpoint")
+	}
+
+	roleless := &config.ApiKey{Name: "roleless", Enabled: true}
+	if AuthorizeAgent(roleless, "any-agent") || AuthorizeEndpoint(roleless, http.MethodGet, "/v1/models") {
+		t.Error("a key with no roles must be denied")
+	}
+
+	mixed := &config.ApiKey{Name: "mixed", Roles: []string{"user", "bogus"}, Enabled: true}
+	if AuthorizeAgent(mixed, "any-agent") {
+		t.Error("a key mixing a known and an unknown role must be denied")
+	}
+
+	known := &config.ApiKey{Name: "known", Roles: []string{"user"}, Enabled: true}
+	if !AuthorizeAgent(known, "any-agent") {
+		t.Error("a recognized role must still authorize")
+	}
+	if !AuthorizeEndpoint(known, http.MethodPost, "/v1/chat/completions") {
+		t.Error("a recognized role must still authorize the chat endpoint")
 	}
 }

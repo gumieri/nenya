@@ -620,7 +620,24 @@ func validateSecrets(secrets *SecretsConfig) error {
 	if secrets.ClientToken == "" {
 		return errors.New("client_token is required")
 	}
-	for name, key := range secrets.ApiKeys {
+	// Enabled keys must not share a token (NENYA-196): the token is the
+	// authentication identity, so a duplicate makes which key name is
+	// attributed in metrics/logs (and which per-key limits apply)
+	// nondeterministic. The primary client_token is seeded first because
+	// authentication checks it before the api_keys map: a colliding entry
+	// would be unreachable, and the operator would silently get the
+	// admin-class primary key instead of the scoped key they configured.
+	seenTokens := map[string]string{secrets.ClientToken: "client_token"}
+	// The synthetic primary-token identity is labeled "primary" at runtime, so
+	// an enabled key may not claim that name.
+	seenNames := map[string]string{"primary": "primary-token identity"}
+	names := make([]string, 0, len(secrets.ApiKeys))
+	for name := range secrets.ApiKeys {
+		names = append(names, name)
+	}
+	slices.Sort(names)
+	for _, name := range names {
+		key := secrets.ApiKeys[name]
 		// Disabled entries are skipped: mergeSecrets never lets them serve
 		// traffic, so their shape cannot affect the running gateway
 		// (NENYA-192 — the strength pass skips them for the same reason).
@@ -630,6 +647,23 @@ func validateSecrets(secrets *SecretsConfig) error {
 		if err := key.Validate(); err != nil {
 			return fmt.Errorf("invalid api_key %q: %w", name, err)
 		}
+		if prev, dup := seenTokens[key.Token]; dup {
+			if prev == "client_token" {
+				return fmt.Errorf("invalid api_key %q: token collides with client_token", name)
+			}
+			return fmt.Errorf("api_keys %q and %q share the same token", prev, name)
+		}
+		seenTokens[key.Token] = name
+		// Name is the runtime identity for per-key rate limits, budgets, and
+		// metric/log attribution: two entries sharing it would share one RPM
+		// window and one daily budget.
+		if prev, dup := seenNames[key.Name]; dup {
+			if prev == "primary-token identity" {
+				return fmt.Errorf("invalid api_key %q: name %q is reserved for the primary-token identity", name, key.Name)
+			}
+			return fmt.Errorf("api_keys %q and %q share the same name %q", prev, name, key.Name)
+		}
+		seenNames[key.Name] = name
 	}
 	return nil
 }

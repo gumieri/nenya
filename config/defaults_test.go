@@ -581,6 +581,7 @@ func TestApiKey_CacheSaltLengthValidation(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			apiKey := &ApiKey{
+				Name:  "test-key",
 				Token: strings.Repeat("x", 16),
 				Roles: []string{RoleUser},
 			}

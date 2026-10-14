@@ -212,11 +212,13 @@ curl -X POST -H "Authorization: Bearer $TOKEN" \
 All `/v1/*` endpoints enforce role-based access control (RBAC) when using API keys:
 
 - **Roles**: `admin` (unrestricted access), `user` (all endpoints except admin-only), `read-only` (GET requests only)
-- **Agent Scoping**: API keys can be restricted to specific agents via `allowed_agents` list
+- **Agent Scoping**: API keys can be restricted to specific agents via `allowed_agents` list (empty = all agents; the names are validated against `agents` at load, and on `/v1/responses` the list is matched against the request's `model`). A chat request that omits `model` is rejected with `400` rather than skipping scoping.
 - **Endpoint Allowlists**: API keys can define `allowed_endpoints` for fine-grained access control (HTTP method + path)
 - **Key Validation**: Keys must be enabled and not expired
 - **Primary Token**: The primary token (`NENYA_PRIMARY_TOKEN`) bypasses RBAC restrictions
 
+
+`/v1/responses` notes: the create endpoint (`POST /v1/responses`) requires a model that can be read as a non-empty string, and request paths are canonicalized (percent-decoding to a fixed point, then cleaning; trailing slashes on sub-paths are normalized) before both the safety check and the upstream URL. When the model is absent or does not resolve to a configured provider, the request falls back to a deterministic default provider (the first of `deepseek`, `openai`, `anthropic`, `openrouter` with a key, else the alphabetically first keyed provider) — there is no rotation on that fallback path.
 See the main documentation for RBAC configuration details.
 
 ## Provider Selection

@@ -143,7 +143,7 @@ func TestApplyStickyRouting_NewPin(t *testing.T) {
 	if out[0].Provider != "zai" {
 		t.Fatalf("expected first target pinned, got %+v", out[0])
 	}
-	key := routing.SessionKey("opencode", "", "first turn")
+	key := routing.SessionKeyForSubject("", "opencode", "", "first turn")
 	state, ok := gw.SessionRouter.Lookup(key)
 	if !ok || state.Provider != "zai" || state.Model != "zai-free" {
 		t.Fatalf("expected new pin under the real session key, got %+v, %v", state, ok)
@@ -163,7 +163,7 @@ func TestApplyStickyRouting_EmptyAccountDoesNotWipePin(t *testing.T) {
 	req := &chatRequest{ModelName: "opencode", Payload: map[string]any{
 		"messages": []any{map[string]any{"role": "user", "content": "first turn"}},
 	}}
-	key := routing.SessionKey("opencode", "", "first turn")
+	key := routing.SessionKeyForSubject("", "opencode", "", "first turn")
 	gw.SessionRouter.Pin(key, "zai", "zai-free", "acct-a", 0)
 
 	// Pinned account unavailable AND LRU fallback failed entirely: the front
@@ -194,7 +194,7 @@ func TestApplyStickyRouting_ReusePin(t *testing.T) {
 		"messages": []any{map[string]any{"role": "user", "content": "first turn"}},
 	}}
 	gw.SessionRouter.Pin("k", "deepseek", "deepseek-free", "acct", 0)
-	gw.SessionRouter.Pin(routing.SessionKey("opencode", "", "first turn"), "zai", "zai-free", "acct", 0)
+	gw.SessionRouter.Pin(routing.SessionKeyForSubject("", "opencode", "", "first turn"), "zai", "zai-free", "acct", 0)
 
 	targets := []routing.UpstreamTarget{
 		{Provider: "zai", Model: "zai-free", CoolKey: "opencode:zai:zai-free"},
@@ -216,7 +216,7 @@ func TestApplyStickyRouting_CoolingPinPromoted(t *testing.T) {
 	req := &chatRequest{ModelName: "opencode", Payload: map[string]any{
 		"messages": []any{map[string]any{"role": "user", "content": "first turn"}},
 	}}
-	key := routing.SessionKey("opencode", "", "first turn")
+	key := routing.SessionKeyForSubject("", "opencode", "", "first turn")
 	gw.SessionRouter.Pin(key, "zai", "zai-free", "acct", 0)
 
 	targets := []routing.UpstreamTarget{
@@ -243,7 +243,7 @@ func TestApplyStickyRouting_AccountDriftPromotesToSibling(t *testing.T) {
 	req := &chatRequest{ModelName: "opencode", Payload: map[string]any{
 		"messages": []any{map[string]any{"role": "user", "content": "first turn"}},
 	}}
-	key := routing.SessionKey("opencode", "", "first turn")
+	key := routing.SessionKeyForSubject("", "opencode", "", "first turn")
 	gw.SessionRouter.Pin(key, "zai", "zai-free", "acct-a", 0)
 
 	// Pinned account was cooling/exhausted at build time; the LRU fallback
@@ -274,7 +274,7 @@ func TestApplyStickyRouting_ValidFrontPinNotRePinned(t *testing.T) {
 	req := &chatRequest{ModelName: "opencode", Payload: map[string]any{
 		"messages": []any{map[string]any{"role": "user", "content": "first turn"}},
 	}}
-	key := routing.SessionKey("opencode", "", "first turn")
+	key := routing.SessionKeyForSubject("", "opencode", "", "first turn")
 	gw.SessionRouter.Pin(key, "zai", "zai-free", "acct-a", 0)
 
 	targets := []routing.UpstreamTarget{
