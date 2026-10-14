@@ -2,11 +2,13 @@ package mcp
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -820,5 +822,92 @@ func TestHTTPTransport_ProxyMode_Ping(t *testing.T) {
 	}
 	if status, _ := resultMap["status"].(string); status != "ok" {
 		t.Fatalf("status = %q, want %q", status, "ok")
+	}
+}
+
+// TestHTTPTransport_Connect_AuthRejected pins the NENYA-183 classification: a
+// server refusing the configured credential (401/403) is reported as
+// ErrAuthRejected so the gateway can fail closed instead of silently serving
+// without the server's tools.
+func TestHTTPTransport_Connect_AuthRejected(t *testing.T) {
+	for _, status := range []int{http.StatusUnauthorized, http.StatusForbidden} {
+		t.Run(http.StatusText(status), func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(status)
+			}))
+			defer server.Close()
+
+			transport := NewHTTPTransport(TransportConfig{
+				URL:            server.URL + "/sse",
+				ConnectTimeout: 2 * time.Second,
+				Logger:         newTestLogger(),
+			})
+			err := transport.Connect(t.Context())
+			if err == nil {
+				t.Fatal("expected an error for a refused credential")
+			}
+			if !errors.Is(err, ErrAuthRejected) {
+				t.Fatalf("expected ErrAuthRejected, got %v", err)
+			}
+		})
+	}
+}
+
+// TestHTTPTransport_Connect_RefusesCrossOriginRedirect pins the redirect
+// policy: the configured credential is re-sent on every hop, so a redirect to
+// a different origin must be refused rather than followed (NENYA-183). The
+// refusal surfaces as a failed connect (the client retries the refused hop
+// until the connect timeout), so the assertion is that the redirect TARGET
+// never received the credential.
+func TestHTTPTransport_Connect_RefusesCrossOriginRedirect(t *testing.T) {
+	var targetHits atomic.Int32
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		targetHits.Add(1)
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer target.Close()
+
+	redirector := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, target.URL+"/sse", http.StatusFound)
+	}))
+	defer redirector.Close()
+
+	transport := NewHTTPTransport(TransportConfig{
+		URL:            redirector.URL + "/sse",
+		ConnectTimeout: 500 * time.Millisecond,
+		Logger:         newTestLogger(),
+	})
+	if err := transport.Connect(t.Context()); err == nil {
+		t.Fatal("expected the cross-origin redirect to be refused")
+	}
+	if hits := targetHits.Load(); hits != 0 {
+		t.Fatalf("the redirect target received %d requests; the credential must never leave the configured origin", hits)
+	}
+}
+
+// TestHTTPTransport_Connect_RefusesRedirectChainCap pins the hop cap: a server
+// that keeps redirecting to itself is refused rather than followed
+// indefinitely (NENYA-183).
+func TestHTTPTransport_Connect_RefusesRedirectChainCap(t *testing.T) {
+	var hits atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits.Add(1)
+		http.Redirect(w, r, r.URL.Path, http.StatusFound)
+	}))
+	defer server.Close()
+
+	transport := NewHTTPTransport(TransportConfig{
+		URL:            server.URL + "/sse",
+		ConnectTimeout: 500 * time.Millisecond,
+		Logger:         newTestLogger(),
+	})
+	if err := transport.Connect(t.Context()); err == nil {
+		t.Fatal("expected the redirect chain to be refused")
+	}
+	// Each attempt may follow at most maxMCPRedirects hops; allow one extra
+	// request for the hop that trips the cap.
+	if got := hits.Load(); got > maxMCPRedirects+1 {
+		t.Fatalf("redirect chain followed %d times; the policy caps the hops at %d", got, maxMCPRedirects)
 	}
 }

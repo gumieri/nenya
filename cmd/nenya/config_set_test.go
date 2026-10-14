@@ -79,6 +79,40 @@ func TestConfigSet_DirectoryModeRoundTrip(t *testing.T) {
 	if cfg.Server.ListenAddr != ":9090" {
 		t.Errorf("loaded ListenAddr = %q, want :9090", cfg.Server.ListenAddr)
 	}
+
+	// NENYA-183: the rewrite preserves the file's existing permissions (the
+	// shipped systemd unit runs a dynamic user, so forcing 0600 would make a
+	// root-owned drop-in unreadable to the service).
+	fi, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("stat: %v", err)
+	}
+	if fi.Mode().Perm() != 0o644 {
+		t.Errorf("config file mode = %o, want the seeded 644 preserved", fi.Mode().Perm())
+	}
+}
+
+// TestConfigSet_PreservesPrivateMode pins the other half: an operator who
+// makes a credential-bearing config file private keeps that mode across
+// rewrites.
+func TestConfigSet_PreservesPrivateMode(t *testing.T) {
+	dir := t.TempDir()
+	file := filepath.Join(dir, "private.json")
+	if err := os.WriteFile(file, []byte(`{"server":{"listen_addr":":8080"}}`), 0o600); err != nil {
+		t.Fatalf("seed config: %v", err)
+	}
+	t.Setenv("NENYA_CONFIG_FILE", file)
+	t.Setenv("NENYA_CONFIG_DIR", "")
+
+	runConfigSet(t, "server.listen_addr", `":9090"`)
+
+	fi, err := os.Stat(file)
+	if err != nil {
+		t.Fatalf("stat: %v", err)
+	}
+	if fi.Mode().Perm() != 0o600 {
+		t.Errorf("config file mode = %o, want the seeded 600 preserved", fi.Mode().Perm())
+	}
 }
 
 func TestConfigSet_ValueParsing(t *testing.T) {

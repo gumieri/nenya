@@ -228,6 +228,7 @@ openssl rand -hex 32
 | `name` | string | Yes | Human-readable key identifier (for logging, metrics, and per-key rate limits/budgets). Must be non-empty, unique among enabled keys, and must not be `primary` (the synthetic primary-token identity). |
 | `token` | string | Yes | API key token (minimum 16 characters, prefix `nk-` recommended). Must be unique among enabled keys and must not equal the primary `client_token` (a collision would make the authenticated identity ambiguous). |
 | `roles` | []string | Yes | List of roles (one or more): `"admin"`, `"user"`, `"read-only"` |
+| `allowed_tools` | []string | No | MCP tools this key may invoke (empty = every tool the agent's MCP configuration exposes). Entries match the namespaced tool name exactly (`server__tool`), a server wildcard (`server__*`), or the bare tool name on any server (`tool`). Enforced at injection and at dispatch, including the auto-search/auto-save dispatches; a namespaced entry must name a configured `mcp_servers` key (NENYA-183). A bare entry is not agent-scoped: it matches that tool name on every server the key's agents may reach, so prefer the namespaced form when servers share tool names. An agent whose MCP server is unusable for a credential reason fails the request closed with `503 error_kind=mcp_unavailable` unless the key's grant cannot reach that server (a key granted only other servers is unaffected by it). |
 | `allowed_agents` | []string | No | Agent names this key can access (empty = all agents). Validated against `agents` at boot/`-validate`/reload (admin keys exempt; skipped when discovery runs with `auto_agents`). On `/v1/responses` the list is matched against the request's `model`, so a key scoped to agent names is denied a plain upstream model id. |
 | `allowed_endpoints` | []string | No | HTTP method + path allowlist (empty = role-based defaults) |
 | `created_at` | string | No | ISO 8601 timestamp for audit trail |
@@ -408,9 +409,21 @@ api_keys tokens are fixed by editing the token in the secrets document.)
 still applies, and a warning is printed once per process while it is set. It
 exists for throwaway local experiments and the demo; never set it in
 production. `nenya -validate` surfaces config-file credential refusals
-without starting the gateway. Scope note: credentials in `mcp_servers.<name>.headers` are not
-covered by these checks (they are plain config strings); keep real tokens in
-secrets documents or the secret store instead.
+without starting the gateway. Scope note (NENYA-183): credentials in `mcp_servers.<name>.headers` are plain
+config strings and are **not** covered by the secrets strength checks or by
+secure memory — there is no MCP section in secrets documents. Nenya mitigates
+the consequences rather than moving the storage: header values are redacted
+from `nenya describe --json`, `nenya config set` preserves a config file's
+existing permissions (defaulting a new file to `0644`; `chmod 600` it if it
+carries a token), a server may declare `required_headers` so a missing
+token fails the request closed (`503 error_kind=mcp_unavailable`) instead of
+degrading to an unauthenticated call, and a server that refuses the configured
+credential (401/403) is recorded as unavailable for the same reason. At-rest
+encryption of MCP headers is deliberately **not** implemented: the config file
+is operator-managed and outside the secret store; treat it as a secret file
+(restrict its permissions and never commit it), or front the MCP server with a
+local authenticating proxy. `api_keys[].allowed_tools` (see below) caps which
+tools a key may invoke regardless of the server's own credentials.
 
 #### Upgrading from earlier versions
 

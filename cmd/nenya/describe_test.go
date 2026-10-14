@@ -248,3 +248,97 @@ func TestHandleDescribe_MissingConfigFileReportsDiagnostic(t *testing.T) {
 		t.Errorf("config_not_found source = %q, want %q", d.Source, configFile)
 	}
 }
+
+// TestRedactURLUserinfo pins the URL credential redaction, including the
+// defensive forms whose userinfo does not parse as userinfo.
+func TestRedactURLUserinfo(t *testing.T) {
+	tests := []struct {
+		name string
+		raw  string
+		want string
+	}{
+		{"empty", "", ""},
+		{"no userinfo", "http://proxy.invalid:3128", "http://proxy.invalid:3128"},
+		{"userinfo", "http://user:secret@proxy.invalid:3128", "http://[REDACTED]@proxy.invalid:3128"},
+		{"user only", "socks5://user@proxy.invalid:1080", "socks5://[REDACTED]@proxy.invalid:1080"},
+		{"opaque credential", "proxy:MARKER@host", "[REDACTED]@host"},
+		{"path with at", "http://proxy.invalid/some@path", "http://proxy.invalid/some@path"},
+		{"query with at", "http://proxy.invalid/?a=b@c", "http://proxy.invalid/?a=b@c"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := redactURLUserinfo(tc.raw)
+			if got != tc.want {
+				t.Fatalf("redactURLUserinfo(%q) = %q, want %q", tc.raw, got, tc.want)
+			}
+			if strings.Contains(got, "secret") || strings.Contains(got, "MARKER") {
+				t.Errorf("redaction left credential material in %q", got)
+			}
+		})
+	}
+}
+
+// TestHandleDescribe_RedactsCredentials pins the NENYA-183 hygiene rule:
+// `describe --json` is the surface operators paste into issues, so provider
+// api_key values and MCP server header values must never be printed, while the
+// field and header NAMES stay visible.
+func TestHandleDescribe_RedactsCredentials(t *testing.T) {
+	setupDescribeEnv(t, `{
+		"providers": {
+			"gemini": {
+				"url": "https://example.invalid",
+				"api_key": "provider-secret-0123456789",
+				"proxy_url": "http://proxyuser:proxypass@proxy.invalid:3128",
+				"accounts": [{"id": "a1", "type": "apikey", "credential": "account-secret-abcdef"}]
+			}
+		},
+		"network": {"proxy_url": "http://netuser:netpass@netproxy.invalid:3128"},
+		"mcp_servers": {"memory": {"url": "https://mcp.example.com/sse", "headers": {"Authorization": "Bearer mcp-secret", "X-Tenant": "acme"}}}
+	}`)
+
+	got := runDescribeJSON(t)
+
+	if got.Config == nil {
+		t.Fatal("expected a config section")
+	}
+	if key := got.Config.Providers["gemini"].APIKey; key != redactedSentinel {
+		t.Errorf("provider api_key = %q, want %q", key, redactedSentinel)
+	}
+	if cred := got.Config.Providers["gemini"].Accounts[0].Credential; cred != redactedSentinel {
+		t.Errorf("provider account credential = %q, want %q", cred, redactedSentinel)
+	}
+	if proxy := got.Config.Providers["gemini"].ProxyURL; !strings.Contains(proxy, redactedSentinel) || strings.Contains(proxy, "proxypass") {
+		t.Errorf("provider proxy_url = %q, want the userinfo replaced by %q", proxy, redactedSentinel)
+	}
+	if got.Config.Network == nil {
+		t.Fatal("expected the network section to survive redaction")
+	}
+	if proxy := got.Config.Network.ProxyURL; !strings.Contains(proxy, redactedSentinel) || strings.Contains(proxy, "netpass") {
+		t.Errorf("network proxy_url = %q, want the userinfo replaced by %q", proxy, redactedSentinel)
+	}
+	headers := got.Config.MCPServers["memory"].Headers
+	if _, ok := headers["Authorization"]; !ok {
+		t.Error("header names must stay visible")
+	}
+	// Every MCP header value is treated as a credential surface: a header is
+	// the only place an MCP server token can live.
+	for name, value := range headers {
+		if value != redactedSentinel {
+			t.Errorf("MCP header %q value = %q, want %q", name, value, redactedSentinel)
+		}
+	}
+
+	// The raw output must not contain any credential material.
+	var buf, errBuf bytes.Buffer
+	if _, err := handleDescribe(&buf, &errBuf, []string{"describe", "--json"}); err != nil {
+		t.Fatalf("handleDescribe error: %v", err)
+	}
+	for _, secret := range []string{
+		"provider-secret-0123456789", "mcp-secret",
+		"account-secret-abcdef", "proxypass", "netpass",
+	} {
+		if strings.Contains(buf.String(), secret) {
+			t.Errorf("describe output leaked %q", secret)
+		}
+	}
+}

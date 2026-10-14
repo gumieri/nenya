@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"net/url"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -799,6 +800,133 @@ func authKeyCanChat(key ApiKey) bool {
 	return false
 }
 
+// validateMCPServerConfigs validates each configured MCP server (NENYA-183):
+// the URL must be an absolute http(s) URL with a host and no embedded
+// credentials, plaintext http is refused for non-local hosts, required
+// header names must be well-formed, and the timeouts must be non-negative.
+func validateMCPServerConfigs(cfg *Config) []string {
+	var errs []string
+	names := make([]string, 0, len(cfg.MCPServers))
+	for name := range cfg.MCPServers {
+		names = append(names, name)
+	}
+	slices.Sort(names)
+	for _, name := range names {
+		server := cfg.MCPServers[name]
+		if server.URL == "" {
+			errs = append(errs, fmt.Sprintf("mcp_servers[%q].url is required", name))
+		} else {
+			errs = append(errs, validateMCPServerURL(name, server.URL)...)
+		}
+		if server.Timeout < 0 {
+			errs = append(errs, fmt.Sprintf("mcp_servers[%q].timeout must be non-negative, got %d", name, server.Timeout))
+		}
+		if server.KeepAliveInterval < 0 {
+			errs = append(errs, fmt.Sprintf("mcp_servers[%q].keep_alive_interval must be non-negative, got %d", name, server.KeepAliveInterval))
+		}
+		for i, header := range server.RequiredHeaders {
+			if strings.TrimSpace(header) == "" {
+				errs = append(errs, fmt.Sprintf("mcp_servers[%q].required_headers[%d]: empty header name", name, i))
+			}
+		}
+	}
+	return errs
+}
+
+// validateMCPServerURL enforces the MCP server origin policy: absolute
+// http(s), a host, no userinfo (credentials must live in headers, never in a
+// URL that diagnostics may print), and no plaintext http for a non-local host
+// — a remote tool server reached over cleartext exposes both the credential
+// and the tool traffic.
+func validateMCPServerURL(name, raw string) []string {
+	parsed, err := url.Parse(raw)
+	if err != nil {
+		return []string{fmt.Sprintf("mcp_servers[%q].url is not a valid URL: %v", name, err)}
+	}
+	var errs []string
+	switch parsed.Scheme {
+	case "http", "https":
+	default:
+		errs = append(errs, fmt.Sprintf("mcp_servers[%q].url: unsupported scheme %q (must be http or https)", name, parsed.Scheme))
+	}
+	if parsed.Hostname() == "" {
+		errs = append(errs, fmt.Sprintf("mcp_servers[%q].url: missing host", name))
+	}
+	if parsed.User != nil {
+		errs = append(errs, fmt.Sprintf("mcp_servers[%q].url must not embed credentials; put them in headers", name))
+	}
+	if parsed.Scheme == "http" && parsed.Hostname() != "" && !isLocalMCPHost(parsed.Hostname()) {
+		errs = append(errs, fmt.Sprintf("mcp_servers[%q].url: plaintext http is only allowed for local hosts (loopback/private); use https for %q", name, parsed.Hostname()))
+	}
+	return errs
+}
+
+// isLocalMCPHost reports whether a host is loopback, private, or a local
+// name, i.e. a host for which plaintext http does not leave the machine or
+// the private network.
+func isLocalMCPHost(host string) bool {
+	lower := strings.ToLower(strings.TrimSuffix(host, "."))
+	if lower == "localhost" || strings.HasSuffix(lower, ".localhost") {
+		return true
+	}
+	ip := net.ParseIP(lower)
+	if ip == nil {
+		return false
+	}
+	if ip.IsLoopback() || ip.IsPrivate() || ip.IsUnspecified() {
+		// IsUnspecified covers 0.0.0.0/::, the conventional "bind every local
+		// interface" address, which dials as loopback on Linux.
+		return true
+	}
+	// Link-local unicast (169.254.0.0/16, fe80::/10) is NOT treated as local:
+	// the cloud metadata endpoint lives there and the tool-argument guard
+	// denies it explicitly, so blessing it here would contradict that policy.
+	return false
+}
+
+// validateAPIKeyToolGrants validates api_keys[].allowed_tools syntax and
+// server references (NENYA-183): entries must be non-empty, and a namespaced
+// entry ("server__tool" / "server__*") must name a configured MCP server, so a
+// typo cannot silently produce a key that can invoke nothing (or, worse, a
+// grant the operator believes is narrower than it is).
+func validateAPIKeyToolGrants(cfg *Config, secrets *SecretsConfig) []string {
+	if secrets == nil {
+		return nil
+	}
+	names := make([]string, 0, len(secrets.ApiKeys))
+	for name := range secrets.ApiKeys {
+		names = append(names, name)
+	}
+	slices.Sort(names)
+	var errs []string
+	for _, name := range names {
+		key := secrets.ApiKeys[name]
+		if !key.Enabled {
+			continue
+		}
+		for i, tool := range key.AllowedTools {
+			if strings.TrimSpace(tool) == "" {
+				errs = append(errs, fmt.Sprintf("api_keys[%q].allowed_tools[%d]: empty tool name", name, i))
+				continue
+			}
+			server, _, found := strings.Cut(tool, "__")
+			if !found {
+				// Bare tool name: matched against the tool's own name on any
+				// server, so there is no server reference to validate.
+				continue
+			}
+			if server == "" {
+				errs = append(errs, fmt.Sprintf("api_keys[%q].allowed_tools[%d]: missing server prefix in %q", name, i, tool))
+				continue
+			}
+			if _, ok := cfg.MCPServers[server]; !ok {
+				errs = append(errs, fmt.Sprintf("api_keys[%q].allowed_tools[%d]: unknown mcp_servers[%q]", name, i, server))
+			}
+		}
+	}
+	return errs
+}
+
 // ValidateConfigReferences runs the reference/identity cross-checks that must
 // hold at boot, on -validate, and on SIGHUP reload (NENYA-196): identity-
 // referencing configuration (API-key agent scopes, agent MCP server
@@ -813,6 +941,8 @@ func ValidateConfigReferences(cfg *Config, secrets *SecretsConfig, logger *slog.
 	errs = append(errs, validateStickySessionTTL(cfg.Agents)...)
 	errs = append(errs, validateAgentMCPReferences(cfg)...)
 	errs = append(errs, validateSecretAgentScopes(cfg, secrets, logger)...)
+	errs = append(errs, validateMCPServerConfigs(cfg)...)
+	errs = append(errs, validateAPIKeyToolGrants(cfg, secrets)...)
 	return errs
 }
 

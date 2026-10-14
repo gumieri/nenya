@@ -1188,3 +1188,81 @@ func TestValidateSecretAgentScopes(t *testing.T) {
 		t.Fatalf("auto-agents must skip the reference check, got %v", errs)
 	}
 }
+
+// TestValidateMCPServerConfigs pins the NENYA-183 MCP origin policy: absolute
+// http(s) with a host, no embedded credentials, and no plaintext http to a
+// remote host.
+func TestValidateMCPServerConfigs(t *testing.T) {
+	tests := []struct {
+		name   string
+		server MCPServerConfig
+		want   string // expected substring, "" = must be valid
+	}{
+		{"https remote", MCPServerConfig{URL: "https://mcp.example.com/sse"}, ""},
+		{"http loopback", MCPServerConfig{URL: "http://127.0.0.1:8080/sse"}, ""},
+		{"http localhost name", MCPServerConfig{URL: "http://localhost:8080/sse"}, ""},
+		{"http private", MCPServerConfig{URL: "http://10.1.2.3:8080/sse"}, ""},
+		{"http unspecified v4", MCPServerConfig{URL: "http://0.0.0.0:8080/sse"}, ""},
+		{"http unspecified v6", MCPServerConfig{URL: "http://[::]:8080/sse"}, ""},
+		{"http remote", MCPServerConfig{URL: "http://mcp.example.com/sse"}, "plaintext http is only allowed for local hosts"},
+		{"http link-local metadata", MCPServerConfig{URL: "http://169.254.169.254/sse"}, "plaintext http is only allowed for local hosts"},
+		{"bad scheme", MCPServerConfig{URL: "ftp://mcp.example.com/sse"}, "unsupported scheme"},
+		{"missing host", MCPServerConfig{URL: "https:///sse"}, "missing host"},
+		{"port without host", MCPServerConfig{URL: "http://:8443/sse"}, "missing host"},
+		{"embedded credentials", MCPServerConfig{URL: "https://user:pass@mcp.example.com/sse"}, "must not embed credentials"},
+		{"empty url", MCPServerConfig{}, "url is required"},
+		{"negative timeout", MCPServerConfig{URL: "https://mcp.example.com/sse", Timeout: -1}, "timeout must be non-negative"},
+		{"empty required header", MCPServerConfig{URL: "https://mcp.example.com/sse", RequiredHeaders: []string{" "}}, "empty header name"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := &Config{MCPServers: map[string]MCPServerConfig{"s": tc.server}}
+			errs := validateMCPServerConfigs(cfg)
+			if tc.want == "" {
+				if len(errs) != 0 {
+					t.Fatalf("valid server rejected: %v", errs)
+				}
+				return
+			}
+			if len(errs) == 0 {
+				t.Fatalf("invalid server accepted (want %q)", tc.want)
+			}
+			joined := strings.Join(errs, "\n")
+			if !strings.Contains(joined, tc.want) {
+				t.Fatalf("errors %v do not mention %q", errs, tc.want)
+			}
+		})
+	}
+}
+
+// TestValidateAPIKeyToolGrants pins the NENYA-183 grant syntax check: a
+// namespaced entry must name a configured server, and entries must be
+// non-empty.
+func TestValidateAPIKeyToolGrants(t *testing.T) {
+	cfg := &Config{MCPServers: map[string]MCPServerConfig{"memory": {URL: "https://mcp.example.com/sse"}}}
+	key := func(tools []string) *SecretsConfig {
+		return &SecretsConfig{ClientToken: "tok", ApiKeys: map[string]ApiKey{
+			"k": {Name: "k", Enabled: true, Roles: []string{"user"}, AllowedTools: tools},
+		}}
+	}
+
+	if errs := validateAPIKeyToolGrants(cfg, key([]string{"memory__search", "memory__*", "search"})); len(errs) != 0 {
+		t.Fatalf("valid grants rejected: %v", errs)
+	}
+	if errs := validateAPIKeyToolGrants(cfg, key([]string{"ghost__search"})); len(errs) != 1 || !strings.Contains(errs[0], "unknown mcp_servers[\"ghost\"]") {
+		t.Fatalf("expected an unknown-server error, got %v", errs)
+	}
+	if errs := validateAPIKeyToolGrants(cfg, key([]string{" "})); len(errs) != 1 || !strings.Contains(errs[0], "empty tool name") {
+		t.Fatalf("expected an empty-name error, got %v", errs)
+	}
+	if errs := validateAPIKeyToolGrants(cfg, key([]string{"__search"})); len(errs) != 1 || !strings.Contains(errs[0], "missing server prefix") {
+		t.Fatalf("expected a missing-prefix error, got %v", errs)
+	}
+	// Disabled keys are inert.
+	disabled := &SecretsConfig{ClientToken: "tok", ApiKeys: map[string]ApiKey{
+		"k": {Name: "k", Enabled: false, AllowedTools: []string{"ghost__x"}},
+	}}
+	if errs := validateAPIKeyToolGrants(cfg, disabled); len(errs) != 0 {
+		t.Fatalf("disabled keys must be skipped, got %v", errs)
+	}
+}

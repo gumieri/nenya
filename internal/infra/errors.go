@@ -16,10 +16,15 @@ const (
 	ErrorKindInvalidRequest  ErrorKind = "invalid_request"
 	ErrorKindBouncerError    ErrorKind = "bouncer_error"
 	ErrorKindInternal        ErrorKind = "internal_error"
-	ErrorKindQuotaExhausted  ErrorKind = "quota_exhausted"
-	ErrorKindInjection       ErrorKind = "injection_detected"
-	ErrorKindExfil           ErrorKind = "exfil_blocked"
-	ErrorKindExfilDetected   ErrorKind = "exfil_detected"
+	// ErrorKindMCPUnavailable marks a request that needs an MCP server which
+	// is unusable for a credential reason (missing declared header or a
+	// refused credential). The request fails closed rather than silently
+	// running without the server's tools (NENYA-183).
+	ErrorKindMCPUnavailable ErrorKind = "mcp_unavailable"
+	ErrorKindQuotaExhausted ErrorKind = "quota_exhausted"
+	ErrorKindInjection      ErrorKind = "injection_detected"
+	ErrorKindExfil          ErrorKind = "exfil_blocked"
+	ErrorKindExfilDetected  ErrorKind = "exfil_detected"
 )
 
 // ErrorResponse represents a structured API error.
@@ -80,6 +85,11 @@ func (k ErrorKind) Scope() ErrorScope {
 		ErrorKindQuotaExhausted,
 		ErrorKindRateLimited:
 		return ScopeAccount
+	case ErrorKindMCPUnavailable:
+		// The request cannot be served because a dependency (the MCP tool
+		// server) is misconfigured or refused the gateway's credential: an
+		// upstream-side fault, not the client's and not this key's credential.
+		return ScopeProvider
 	case ErrorKindNetworkError,
 		ErrorKindProviderTimeout:
 		return ScopeConnection

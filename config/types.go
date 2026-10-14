@@ -1402,16 +1402,28 @@ type SecretsConfig struct {
 // ApiKey defines an API key entry for client authentication, with
 // associated roles, expiration, and fine-grained permissions.
 type ApiKey struct {
-	Name             string         `json:"name"`
-	Token            string         `json:"token"`
-	Roles            []string       `json:"roles"`
-	AllowedAgents    []string       `json:"allowed_agents"`
-	AllowedEndpoints []string       `json:"allowed_endpoints,omitempty"`
-	CacheSalt        *string        `json:"cache_salt,omitempty"`
-	CreatedAt        string         `json:"created_at,omitempty"`
-	ExpiresAt        string         `json:"expires_at,omitempty"`
-	Enabled          bool           `json:"enabled"`
-	Permissions      map[string]any `json:"permissions,omitempty"`
+	Name             string   `json:"name"`
+	Token            string   `json:"token"`
+	Roles            []string `json:"roles"`
+	AllowedAgents    []string `json:"allowed_agents"`
+	AllowedEndpoints []string `json:"allowed_endpoints,omitempty"`
+	// AllowedTools optionally caps the MCP tools this key may invoke
+	// (NENYA-183). The effective grant is the intersection of this list with
+	// the agent's own MCP servers; it is enforced both when tools are injected
+	// into the upstream request and when a tool call is dispatched (including
+	// the auto-search/auto-save dispatches), so a model cannot reach a tool
+	// outside the grant. Empty grants every tool the agent exposes.
+	// Entries match the namespaced tool name exactly ("server__tool"), a
+	// server wildcard ("server__*"), or the bare tool name on any server
+	// ("tool"). Two caveats: a bare entry is not agent-scoped (it matches that
+	// tool name on every server the agent may reach), and a tool whose own name
+	// contains "__" can only be granted by its namespaced form.
+	AllowedTools []string       `json:"allowed_tools,omitempty"`
+	CacheSalt    *string        `json:"cache_salt,omitempty"`
+	CreatedAt    string         `json:"created_at,omitempty"`
+	ExpiresAt    string         `json:"expires_at,omitempty"`
+	Enabled      bool           `json:"enabled"`
+	Permissions  map[string]any `json:"permissions,omitempty"`
 	// RatelimitMaxRPM caps requests per minute for this key (0 =
 	// unlimited). Enforced after authentication, before dispatch.
 	RatelimitMaxRPM int `json:"ratelimit_max_rpm,omitempty"`
@@ -1761,8 +1773,17 @@ type MCPServerConfig struct {
 	// AllowedHosts grants tool-argument URL-policy exceptions for this
 	// server: exact hostnames or "*.suffix" wildcard entries. Needed
 	// when a trusted tool legitimately targets private infrastructure
-	// (e.g. an internal API at 10.x.x.x).
+	// (e.g. an internal API at 10.x.x.x). It does NOT relax the MCP
+	// server's own URL policy (see RequiredHeaders and the load-time
+	// origin checks).
 	AllowedHosts []string `json:"allowed_hosts,omitempty"`
+	// RequiredHeaders names headers that must carry a non-empty value
+	// for this server to be usable (NENYA-183). A server missing one is
+	// never connected, and a request that selects it fails closed with a
+	// structured error instead of silently running without its tools.
+	// Use it for credentialed servers so a missing token cannot degrade
+	// into an unauthenticated (or tool-less) request.
+	RequiredHeaders []string `json:"required_headers,omitempty"`
 }
 
 // MCPGuardConfig controls the Nenya-managed MCP tool-call argument

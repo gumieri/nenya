@@ -24,6 +24,11 @@ import (
 
 // Sentinel errors returned by HTTPTransport methods.
 var (
+	// ErrAuthRejected marks an MCP server that refused the configured
+	// credential (HTTP 401/403 on the SSE handshake or a POST). Callers fail
+	// closed on it: a server the operator declared credentialed must not
+	// silently degrade into a tool-less request (NENYA-183).
+	ErrAuthRejected = errors.New("MCP server rejected the configured credential")
 	// ErrTransportClosed is returned when the transport has been closed.
 	ErrTransportClosed = errors.New("mcp transport: closed")
 	// ErrTransportNotReady is returned when no live SSE stream is available.
@@ -106,6 +111,16 @@ type sseEvent struct {
 	Data  string
 }
 
+// classifyConnectStatus maps a non-200 SSE handshake status to its error.
+// A 401/403 is reported as ErrAuthRejected so the gateway can fail closed
+// instead of silently serving without the server's tools (NENYA-183).
+func classifyConnectStatus(status int) error {
+	if status == http.StatusUnauthorized || status == http.StatusForbidden {
+		return fmt.Errorf("%w: status %d", ErrAuthRejected, status)
+	}
+	return fmt.Errorf("SSE connection returned status %d", status)
+}
+
 // NewHTTPTransport creates a transport for the given config. Call Connect to
 // establish the SSE stream; Close tears it down.
 func NewHTTPTransport(cfg TransportConfig) *HTTPTransport {
@@ -134,11 +149,48 @@ func NewHTTPTransport(cfg TransportConfig) *HTTPTransport {
 	}
 	netutil.ApplyTransportSecurity(transport)
 	t.httpClient = &http.Client{
-		Timeout:   cfg.RequestTimeout + 5*time.Second,
-		Transport: transport,
+		Timeout:       cfg.RequestTimeout + 5*time.Second,
+		Transport:     transport,
+		CheckRedirect: t.redirectPolicy(),
 	}
 
 	return t
+}
+
+// maxMCPRedirects caps how many hops a redirect chain may take before the
+// transport refuses it.
+const maxMCPRedirects = 5
+
+// redirectPolicy refuses redirects that leave the configured MCP origin or
+// downgrade to plaintext http (NENYA-183). net/http forwards custom headers
+// (including a configured credential header) to the redirect target, and the
+// SSE endpoint-event binding only covers the negotiated POST endpoint, so a
+// cross-origin redirect would hand the credential to another host. A
+// transport whose configured URL has no parseable origin refuses every
+// redirect rather than falling back to net/http's permissive default.
+func (t *HTTPTransport) redirectPolicy() func(req *http.Request, via []*http.Request) error {
+	base, err := url.Parse(t.cfg.URL)
+	if err != nil || base.Host == "" {
+		// No parseable origin: refuse every redirect rather than fall back to
+		// net/http's default, which re-sends custom credential headers.
+		return func(req *http.Request, via []*http.Request) error {
+			return errors.New("redirect refused: the MCP origin is not parseable")
+		}
+	}
+	baseHost := base.Host
+	secureOrigin := base.Scheme == "https"
+	return func(req *http.Request, via []*http.Request) error {
+		if len(via) >= maxMCPRedirects {
+			return fmt.Errorf("stopped after %d redirects", maxMCPRedirects)
+		}
+		if !strings.EqualFold(req.URL.Host, baseHost) {
+			return fmt.Errorf("redirect to a different origin (%s) refused", req.URL.Host)
+		}
+		if secureOrigin && req.URL.Scheme != "https" {
+			return fmt.Errorf("redirect to plaintext %s refused", req.URL.Scheme)
+		}
+		return nil
+	}
 }
 
 // SetGatewayMetrics sets the metrics instance for tracking MCP goroutines.
@@ -279,7 +331,7 @@ func (t *HTTPTransport) Connect(ctx context.Context) error {
 	// forcibly kill it mid-session. The connect-scoped transport bounds the
 	// dial/header wait by ConnectTimeout — ResponseHeaderTimeout stops
 	// time-to-headers only, so the established stream is not affected.
-	connectClient := &http.Client{Transport: t.connectTransport()}
+	connectClient := &http.Client{Transport: t.connectTransport(), CheckRedirect: t.redirectPolicy()}
 
 	// Body intentionally kept open for SSE reading; closed via t.sseBody in sseReadLoop/Close().
 	resp, err := util.DoWithRetryResp(connectCtx, 3, func() (*http.Response, error) { //nolint:bodyclose // SSE body lifecycle spans goroutines
@@ -310,10 +362,11 @@ func (t *HTTPTransport) Connect(ctx context.Context) error {
 	}
 	if resp.StatusCode != http.StatusOK {
 		// Terminal non-200 (e.g. 401/403): not retried, fail once.
+		status := resp.StatusCode
 		_ = resp.Body.Close()
 		sseCancel()
 		connectFailed()
-		return fmt.Errorf("SSE connection returned status %d", resp.StatusCode)
+		return classifyConnectStatus(status)
 	}
 
 	t.mu.Lock()
@@ -488,14 +541,19 @@ func readSSEInitialEndpoint(ctx context.Context, reader *bufio.Reader, baseURL *
 		}
 
 		epURL, err := url.Parse(endpointURL)
-		if err != nil || epURL.Host != baseURL.Host {
-			gotHost := ""
+		// The scheme must match too: an https origin answering with a
+		// plaintext http endpoint would send the configured credential in
+		// cleartext (NENYA-183 review).
+		if err != nil || epURL.Host != baseURL.Host || epURL.Scheme != baseURL.Scheme {
+			gotHost, gotScheme := "", ""
 			if err == nil {
-				gotHost = epURL.Host
+				gotHost, gotScheme = epURL.Host, epURL.Scheme
 			}
-			logger.Warn("MCP server sent endpoint with unexpected host, rejecting",
-				"expected_host", baseURL.Host, "got_host", gotHost, "endpoint", endpointURL)
-			return "", fmt.Errorf("MCP session endpoint host mismatch: expected %s, got %s", baseURL.Host, gotHost)
+			logger.Warn("MCP server sent endpoint with unexpected origin, rejecting",
+				"expected_origin", baseURL.Scheme+"://"+baseURL.Host,
+				"got_origin", gotScheme+"://"+gotHost, "endpoint", endpointURL)
+			return "", fmt.Errorf("MCP session endpoint origin mismatch: expected %s://%s, got %s://%s",
+				baseURL.Scheme, baseURL.Host, gotScheme, gotHost)
 		}
 
 		return endpointURL, nil
@@ -521,6 +579,15 @@ func (t *HTTPTransport) sendHTTPPost(ctx context.Context, endpoint string, reqBy
 		if resp.StatusCode >= 500 {
 			_ = resp.Body.Close()
 			return nil, fmt.Errorf("upstream error: %d", resp.StatusCode)
+		}
+		if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
+			// NENYA-183: a refused credential on the POST path (e.g. a token
+			// that expired mid-session) is classified so the gateway can mark
+			// the server unavailable and fail closed on later requests. It is
+			// wrapped as permanent so the retry helper does not re-send the
+			// refused credential (§8: 4xx is never retried).
+			_ = resp.Body.Close()
+			return nil, &util.PermanentError{Err: classifyConnectStatus(resp.StatusCode)}
 		}
 		return resp, nil
 	})
@@ -1028,22 +1095,22 @@ func (t *HTTPTransport) parseAndValidateEndpoint(data string) (string, bool) {
 	t.mu.Lock()
 	baseHost := t.baseHost
 	t.mu.Unlock()
+	scheme := "http"
+	if u, parseErr := url.Parse(t.cfg.URL); parseErr == nil && u.Scheme != "" {
+		scheme = u.Scheme
+	}
 	endpointURL := parsed.Endpoint
 	if !strings.HasPrefix(endpointURL, "http") {
-		scheme := "http"
-		if u, parseErr := url.Parse(t.cfg.URL); parseErr == nil && u.Scheme != "" {
-			scheme = u.Scheme
-		}
 		endpointURL = scheme + "://" + baseHost + endpointURL
 	}
 	epURL, err := url.Parse(endpointURL)
 	if err != nil {
 		return "", false
 	}
-	if epURL.Host != baseHost {
-		gotHost := epURL.Host
-		t.cfg.Logger.Warn("MCP server sent dynamic endpoint with unexpected host, rejecting",
-			"expected_host", baseHost, "got_host", gotHost, "endpoint", parsed.Endpoint)
+	if epURL.Host != baseHost || epURL.Scheme != scheme {
+		t.cfg.Logger.Warn("MCP server sent dynamic endpoint with unexpected origin, rejecting",
+			"expected_origin", scheme+"://"+baseHost,
+			"got_origin", epURL.Scheme+"://"+epURL.Host, "endpoint", parsed.Endpoint)
 		return "", false
 	}
 	return endpointURL, true

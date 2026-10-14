@@ -236,7 +236,13 @@ The write target is: the selected single file in file mode (`-config` /
 conventional `00-`/`20-` drop-ins, so a written value takes effect; a drop-in
 sorting after it still wins, so consumers SHOULD verify the result with
 `nenya describe`. The drop-in is created (with `config.d/`) when absent and
-unrelated keys already present in the target file are preserved.
+unrelated keys already present in the target file are preserved. The rewrite
+preserves the target file's existing permissions, and a newly created file uses
+the conventional `0644` (§5.4): the shipped systemd unit runs a dynamic user, so
+forcing `0600` on a root-owned drop-in would make it unreadable to the service.
+A config file that carries MCP header values (the only credential surface the
+config accepts) can therefore be made private by the operator once (`chmod 600`)
+and the mode is kept.
 
 Examples:
 ```
@@ -361,7 +367,10 @@ consulted.
 | secrets files | `0600` |
 
 These are install-time conventions; **the loader does not set or enforce them**.
-Only the secrets modes are security-relevant, and they are the responsibility of
+`nenya config set` (§4.6) preserves the mode of the file it rewrites. The secrets
+modes are always security-relevant; a config file mode is security-relevant when
+the file carries MCP header values (the only credential surface the config
+accepts — see `docs/SECRETS_FORMAT.md`), and it is the responsibility of
 the installing tool (and `nenya secret set`, §4.7).
 
 ---
@@ -691,7 +700,11 @@ platform-provided. `config` is the effective configuration after merge and
 defaults, and is the authoritative answer to "what is in effect". Its shape is
 defined by the schema from `nenya -print-config-schema`; only
 `contract_version`, `paths`, `secrets`, and `diagnostics` are individually
-guaranteed here.
+guaranteed here. Credential-bearing values are redacted: `providers.<name>.api_key`,
+`providers.<name>.accounts[].credential`, the userinfo of `network.proxy_url`
+and `providers.<name>.proxy_url`, and every `mcp_servers.<name>.headers.<name>`
+value are reported as `"[REDACTED]"` (field and header names remain visible),
+so the document is safe to share (NENYA-183).
 
 ---
 

@@ -6,6 +6,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"net/url"
 	"sort"
 	"strings"
 
@@ -53,6 +54,95 @@ type describeJSON struct {
 	Config          *config.Config      `json:"config"`
 	Providers       describeProviders   `json:"providers"`
 	Diagnostics     []config.Diagnostic `json:"diagnostics"`
+}
+
+// redactedSentinel replaces credential-bearing values in diagnostic output.
+const redactedSentinel = "[REDACTED]"
+
+// redactConfigForDescribe returns a copy of cfg with credential-bearing
+// fields replaced by a sentinel: provider api_key values and MCP server header
+// values (NENYA-183). `nenya describe` is the diagnostic surface operators
+// paste into issues, so it must not print stored credentials; header and field
+// NAMES stay visible so the operator can still see what is configured. The
+// returned copy shares every other field with cfg.
+func redactConfigForDescribe(cfg *config.Config) *config.Config {
+	if cfg == nil {
+		return nil
+	}
+	out := *cfg
+	if len(cfg.Providers) > 0 {
+		providers := make(map[string]config.ProviderConfig, len(cfg.Providers))
+		for name, provider := range cfg.Providers {
+			providers[name] = redactProviderForDescribe(provider)
+		}
+		out.Providers = providers
+	}
+	if cfg.Network != nil {
+		network := *cfg.Network
+		network.ProxyURL = redactURLUserinfo(network.ProxyURL)
+		out.Network = &network
+	}
+	if len(cfg.MCPServers) > 0 {
+		servers := make(map[string]config.MCPServerConfig, len(cfg.MCPServers))
+		for name, server := range cfg.MCPServers {
+			if len(server.Headers) > 0 {
+				headers := make(map[string]string, len(server.Headers))
+				for header := range server.Headers {
+					headers[header] = redactedSentinel
+				}
+				server.Headers = headers
+			}
+			servers[name] = server
+		}
+		out.MCPServers = servers
+	}
+	return &out
+}
+
+// redactProviderForDescribe redacts one provider's credential-bearing fields:
+// the api key, the proxy userinfo, and every configured account credential.
+func redactProviderForDescribe(provider config.ProviderConfig) config.ProviderConfig {
+	if provider.APIKey != "" {
+		provider.APIKey = redactedSentinel
+	}
+	provider.ProxyURL = redactURLUserinfo(provider.ProxyURL)
+	if len(provider.Accounts) == 0 {
+		return provider
+	}
+	accounts := make([]config.AccountConfig, len(provider.Accounts))
+	copy(accounts, provider.Accounts)
+	for i := range accounts {
+		if accounts[i].Credential != "" {
+			accounts[i].Credential = redactedSentinel
+		}
+	}
+	provider.Accounts = accounts
+	return provider
+}
+
+// redactURLUserinfo replaces the userinfo of a URL (proxy credentials are
+// accepted in userinfo form by design) with the sentinel, leaving the rest of
+// the URL visible. Unparseable or credential-free URLs are returned unchanged.
+func redactURLUserinfo(raw string) string {
+	if raw == "" {
+		return raw
+	}
+	if _, err := url.Parse(raw); err != nil {
+		return raw
+	}
+	prefix, rest := "", raw
+	if sep := strings.Index(raw, "://"); sep >= 0 {
+		prefix, rest = raw[:sep+3], raw[sep+3:]
+	}
+	// Only a credential-looking userinfo is redacted: an "@" in a path or a
+	// query is not one. Everything before the "@" is replaced (over-redaction
+	// is safe for a diagnostic), and the sentinel is inserted literally rather
+	// than through url.User, which would percent-encode its brackets.
+	at := strings.IndexByte(rest, '@')
+	if at < 0 || strings.ContainsAny(rest[:at], "/?#") {
+		return raw
+	}
+	return prefix + redactedSentinel + "@" + rest[at+1:]
 }
 
 // handleDescribe implements `nenya describe [--json]` (CONTRACT.md §4.3): the
@@ -171,7 +261,7 @@ func buildDescription(paths configPaths) (describeJSON, error) {
 		},
 		Paths:   resolvePaths(paths),
 		Secrets: describeSecrets{ActiveSource: res.ActiveSource, Searched: res.Searched},
-		Config:  cfg,
+		Config:  redactConfigForDescribe(cfg),
 		Providers: describeProviders{
 			Configured: configuredProviders(cfg, res.Secrets),
 			Catalog:    describeCatalog(cfg),

@@ -771,6 +771,27 @@ func (p *Proxy) handleStats(w http.ResponseWriter, redactKeys bool) {
 			"version": serverInfo.Version,
 		}
 	}
+	// NENYA-183: servers that are unusable for a credential reason never get a
+	// client, so they would otherwise be invisible here while every request
+	// that selects them fails closed.
+	for name, reason := range gw.MCPUnavailableSnapshot() {
+		entry, exists := mcpServers[name].(map[string]interface{})
+		if !exists {
+			// No client at all (a build-time refusal): report the server
+			// explicitly, since it would otherwise be invisible while every
+			// request that selects it fails closed.
+			mcpServers[name] = map[string]interface{}{
+				"ready":    false,
+				"tools":    0,
+				"version":  "",
+				"unusable": reason,
+			}
+			continue
+		}
+		// A client exists (a runtime rejection on a live session): keep its
+		// readiness/tool counts and attach the reason.
+		entry["unusable"] = reason
+	}
 	stats["mcp"] = mcpServers
 
 	// Per-key/per-provider budget usage (NENYA-20), additive for backward

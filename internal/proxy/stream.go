@@ -420,10 +420,10 @@ func (p *Proxy) streamResponse(opts streamResponseOpts, action upstreamAction) s
 		// response cache with the partial cut stream.
 		if isStreamCut(cont, transformingReader, copyErr) {
 			gw.Metrics.RecordStreamContinuation(target.Model, target.Provider, "gave_up_exhausted")
-			return p.handleStreamDone(gw, w, target, opts.agentName, action, "", cooldownDuration, payload, buf, copyErr, nil, nil, contentBuilder, stallR, r.Context(), transformingReader.InjectedError())
+			return p.handleStreamDone(gw, w, target, opts.agentName, action, "", cooldownDuration, payload, buf, copyErr, nil, nil, contentBuilder, stallR, r.Context(), transformingReader.InjectedError(), opts.apiKey)
 		}
 
-		return p.handleStreamDone(gw, w, target, opts.agentName, action, cacheKey, cooldownDuration, payload, buf, copyErr, captureBuf, tee, contentBuilder, stallR, r.Context(), transformingReader.InjectedError())
+		return p.handleStreamDone(gw, w, target, opts.agentName, action, cacheKey, cooldownDuration, payload, buf, copyErr, captureBuf, tee, contentBuilder, stallR, r.Context(), transformingReader.InjectedError(), opts.apiKey)
 	}
 
 	putStreamBuffer(buf)
@@ -687,7 +687,7 @@ func (p *Proxy) setupStreamWriter(gw *gateway.NenyaGateway, flushWriter *immedia
 	return dst, captureBuf, tee
 }
 
-func (p *Proxy) handleStreamDone(gw *gateway.NenyaGateway, w http.ResponseWriter, target routing.UpstreamTarget, agentName string, action upstreamAction, cacheKey string, cooldownDuration time.Duration, payload map[string]any, buf *[]byte, copyErr error, captureBuf *bytes.Buffer, tee *sseTeeWriter, contentBuilder *contentBuilder, stallR *stallReader, reqCtx context.Context, injectedErr bool) streamResult {
+func (p *Proxy) handleStreamDone(gw *gateway.NenyaGateway, w http.ResponseWriter, target routing.UpstreamTarget, agentName string, action upstreamAction, cacheKey string, cooldownDuration time.Duration, payload map[string]any, buf *[]byte, copyErr error, captureBuf *bytes.Buffer, tee *sseTeeWriter, contentBuilder *contentBuilder, stallR *stallReader, reqCtx context.Context, injectedErr bool, apiKey *config.ApiKey) streamResult {
 	putStreamBuffer(buf)
 
 	if handled, result := p.handleBlockedStream(gw, w, target, copyErr, action, stallR); handled {
@@ -752,7 +752,7 @@ func (p *Proxy) handleStreamDone(gw *gateway.NenyaGateway, w http.ResponseWriter
 
 	if copyErr == nil {
 		storeStreamCache(gw, cacheKey, captureBuf, tee, payload, reqCtx)
-		p.asyncMCPAutoSave(gw, agentName, contentBuilder)
+		p.asyncMCPAutoSave(gw, agentName, contentBuilder, apiKey)
 		return streamResult{}
 	}
 	if errors.Is(copyErr, context.Canceled) || errors.Is(copyErr, context.DeadlineExceeded) {
@@ -1054,7 +1054,7 @@ func (p *Proxy) writeBlockedSSEPayload(gw *gateway.NenyaGateway, w http.Response
 
 // autoSaveTryServer runs MCP auto-save on one server. It returns true if the save
 // succeeded; false means the caller may try another server.
-func (p *Proxy) autoSaveTryServer(liveGW *gateway.NenyaGateway, agent *config.AgentConfig, serverName, agentName, assistantContent string) bool {
+func (p *Proxy) autoSaveTryServer(liveGW *gateway.NenyaGateway, agent *config.AgentConfig, serverName, agentName, assistantContent string, apiKey *config.ApiKey) bool {
 	client, ok := liveGW.MCPClients[serverName]
 	if !ok || !client.Ready() {
 		return false
@@ -1088,16 +1088,17 @@ func (p *Proxy) autoSaveTryServer(liveGW *gateway.NenyaGateway, agent *config.Ag
 	}
 	// The argument guard applies to auto-save too: the content is
 	// model-controlled assistant text (size cap + URL policy).
-	if !guardMCPArgs(liveGW, liveGW.Logger, mcpGuardDispatch{
+	if guardErr := guardMCPArgs(liveGW, liveGW.Logger, mcpGuardDispatch{
 		ServerName: serverName,
 		ToolName:   saveTool,
 		Purpose:    "auto_save",
 		Args:       saveArgs,
-	}) {
+		ApiKey:     apiKey,
+	}); guardErr != nil {
 		// Return false so the caller may fall back to another server
 		// whose allowed_hosts permits the content; the guard already
 		// logged the rejection.
-		liveGW.Metrics.RecordMCPAutoSave(serverName, agentName, errMCPArgumentPolicy)
+		liveGW.Metrics.RecordMCPAutoSave(serverName, agentName, guardErr)
 		return false
 	}
 
@@ -1119,7 +1120,7 @@ func (p *Proxy) autoSaveTryServer(liveGW *gateway.NenyaGateway, agent *config.Ag
 	return true
 }
 
-func (p *Proxy) asyncMCPAutoSave(gw *gateway.NenyaGateway, agentName string, contentBuilder *contentBuilder) {
+func (p *Proxy) asyncMCPAutoSave(gw *gateway.NenyaGateway, agentName string, contentBuilder *contentBuilder, apiKey *config.ApiKey) {
 	if agentName == "" || contentBuilder == nil {
 		return
 	}
@@ -1146,7 +1147,7 @@ func (p *Proxy) asyncMCPAutoSave(gw *gateway.NenyaGateway, agentName string, con
 		}
 
 		for _, serverName := range agent.MCP.Servers {
-			if p.autoSaveTryServer(liveGW, &agent, serverName, agentName, assistantContent) {
+			if p.autoSaveTryServer(liveGW, &agent, serverName, agentName, assistantContent, apiKey) {
 				return
 			}
 		}

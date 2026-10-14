@@ -305,3 +305,64 @@ func TestAuthorizeUnknownRoleDenies(t *testing.T) {
 		t.Error("a recognized role must still authorize the chat endpoint")
 	}
 }
+
+// TestAuthorizeMCPTool pins the NENYA-183 per-key tool grant: the grant caps
+// what the agent's MCP configuration exposes, and an ungranted or unscopable
+// caller is denied.
+func TestAuthorizeMCPTool(t *testing.T) {
+	base := func(tools []string) *config.ApiKey {
+		return &config.ApiKey{Name: "k", Roles: []string{"user"}, Enabled: true, AllowedTools: tools}
+	}
+
+	tests := []struct {
+		name  string
+		key   *config.ApiKey
+		allow bool
+	}{
+		{"nil key denies", nil, false},
+		{"empty grant allows everything", base(nil), true},
+		{"exact namespaced entry", base([]string{"memory__search"}), true},
+		{"server wildcard", base([]string{"memory__*"}), true},
+		{"bare tool name", base([]string{"search"}), true},
+		{"different server denies", base([]string{"files__search"}), false},
+		{"different tool on same server denies", base([]string{"memory__save"}), false},
+		{"wildcard of another server denies", base([]string{"files__*"}), false},
+		{"unrecognized role denies", &config.ApiKey{Name: "bad", Roles: []string{"superuser"}, Enabled: true}, false},
+		{"roleless key denies", &config.ApiKey{Name: "none", Enabled: true}, false},
+		{"admin bypasses the cap", &config.ApiKey{Name: "root", Roles: []string{"admin"}, Enabled: true, AllowedTools: []string{"other__x"}}, true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := AuthorizeMCPTool(tc.key, "memory", "search"); got != tc.allow {
+				t.Fatalf("AuthorizeMCPTool = %v, want %v", got, tc.allow)
+			}
+		})
+	}
+}
+
+// TestMCPGrantTouchesServer pins the conservative reachability test used to
+// decide whether a server's credential health matters to a key (NENYA-183).
+func TestMCPGrantTouchesServer(t *testing.T) {
+	tests := []struct {
+		name   string
+		key    *config.ApiKey
+		server string
+		want   bool
+	}{
+		{"nil key", nil, "memory", false},
+		{"empty grant reaches every server", &config.ApiKey{Name: "k", Roles: []string{"user"}, Enabled: true}, "memory", true},
+		{"namespaced entry reaches its server", &config.ApiKey{Name: "k", Roles: []string{"user"}, Enabled: true, AllowedTools: []string{"memory__search"}}, "memory", true},
+		{"wildcard reaches its server", &config.ApiKey{Name: "k", Roles: []string{"user"}, Enabled: true, AllowedTools: []string{"memory__*"}}, "memory", true},
+		{"other server does not", &config.ApiKey{Name: "k", Roles: []string{"user"}, Enabled: true, AllowedTools: []string{"files__*"}}, "memory", false},
+		{"bare entry could reach any server", &config.ApiKey{Name: "k", Roles: []string{"user"}, Enabled: true, AllowedTools: []string{"search"}}, "memory", true},
+		{"admin reaches every server", &config.ApiKey{Name: "k", Roles: []string{"admin"}, Enabled: true, AllowedTools: []string{"files__*"}}, "memory", true},
+		{"unrecognized role", &config.ApiKey{Name: "k", Roles: []string{"superuser"}, Enabled: true}, "memory", false},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := MCPGrantTouchesServer(tc.key, tc.server); got != tc.want {
+				t.Fatalf("MCPGrantTouchesServer = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}

@@ -42,7 +42,10 @@
         "searched": { "type": "array", "items": { "type": "string" } }
       }
     },
-    "config": { "type": "object" },
+    "config": {
+      "type": "object",
+      "$comment": "Credential-bearing values are sentinel-redacted (\"[REDACTED]\"): providers[].api_key, providers[].accounts[].credential, the userinfo of network.proxy_url and providers[].proxy_url, and every mcp_servers[].headers value (NENYA-183)."
+    },
     "providers": {
       "type": "object",
       "additionalProperties": false,

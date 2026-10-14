@@ -10,6 +10,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/nenya/config"
 	"github.com/nenya/internal/mcp"
 )
 
@@ -25,6 +26,13 @@ type mcpToolDef struct {
 	Name        string
 	Description string
 	InputSchema mcp.InputSchema
+}
+
+// fullAccessTestKey is a non-admin key with no MCP tool grant: it allows every
+// tool the agent exposes (the backward-compatible grant), which is what most
+// dispatch tests want.
+func fullAccessTestKey() *config.ApiKey {
+	return &config.ApiKey{Name: "test-key", Token: "test-token-1234567890", Roles: []string{"user"}, Enabled: true}
 }
 
 func newTestMCPServer(t testing.TB) *testMCPServer {

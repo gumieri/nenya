@@ -105,13 +105,15 @@ type Metrics struct {
 	streamInterrupts sync.Map
 
 	// MCP metrics
-	mcpToolCallsTotal   sync.Map
-	mcpToolCallDuration sync.Map
-	mcpAutoSearchTotal  sync.Map
-	mcpAutoSaveTotal    sync.Map
-	mcpLoopIterations   sync.Map
-	mcpLoopDuration     sync.Map
-	mcpServerReady      sync.Map
+	mcpToolCallsTotal       sync.Map
+	mcpUnavailableTotal     sync.Map
+	mcpCredentialRejections sync.Map
+	mcpToolCallDuration     sync.Map
+	mcpAutoSearchTotal      sync.Map
+	mcpAutoSaveTotal        sync.Map
+	mcpLoopIterations       sync.Map
+	mcpLoopDuration         sync.Map
+	mcpServerReady          sync.Map
 
 	// Auth metrics
 	authSuccess sync.Map
@@ -745,6 +747,28 @@ func (m *Metrics) RecordStreamBlock(model, provider string) {
 	e := getOrCreateEntry(&m.streamBlocked, map[string]string{
 		"model": model, "provider": provider,
 	})
+	e.value.Add(1)
+}
+
+// IncMCPUnavailable counts requests refused because an MCP server is unusable
+// for a credential reason (missing declared header or a refused credential),
+// by server (NENYA-183).
+func (m *Metrics) IncMCPUnavailable(server string) {
+	if m == nil {
+		return
+	}
+	e := getOrCreateEntry(&m.mcpUnavailableTotal, map[string]string{"server": server})
+	e.value.Add(1)
+}
+
+// IncMCPCredentialRejection counts runtime credential rejections by server
+// (a 401/403 on a dispatched tool call), which take the server out of service
+// for a cooldown (NENYA-183).
+func (m *Metrics) IncMCPCredentialRejection(server string) {
+	if m == nil {
+		return
+	}
+	e := getOrCreateEntry(&m.mcpCredentialRejections, map[string]string{"server": server})
 	e.value.Add(1)
 }
 
@@ -1783,6 +1807,10 @@ func (m *Metrics) writeSessionMetrics(w io.Writer) {
 func (m *Metrics) writeServiceMetrics(w io.Writer) {
 	m.writeCounterMap(w, "nenya_mcp_tool_calls_total",
 		"Total MCP tool call executions.", &m.mcpToolCallsTotal)
+	m.writeCounterMap(w, "nenya_mcp_unavailable_total",
+		"Requests refused because an MCP server is unusable for a credential reason.", &m.mcpUnavailableTotal)
+	m.writeCounterMap(w, "nenya_mcp_credential_rejections_total",
+		"Runtime MCP credential rejections (401/403) that took a server out of service.", &m.mcpCredentialRejections)
 	m.writeHistogramMap(w, "nenya_mcp_tool_call_duration_seconds",
 		"MCP tool call duration in seconds.", &m.mcpToolCallDuration)
 	m.writeCounterMap(w, "nenya_mcp_auto_search_total",

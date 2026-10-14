@@ -1307,9 +1307,12 @@ MCP server connections for tool integration. Each key defines a named MCP server
 
 | Field                 | Type   | Default  | Description                        |
 | --------------------- | ------ | -------- | ---------------------------------- |
-| `url`                 | string | required | MCP server HTTP+SSE endpoint       |
+| `url`                 | string | required | MCP server HTTP+SSE endpoint. Validated at boot/`-validate`/reload (NENYA-183): must be absolute `http`/`https` with a host and no embedded credentials, and plaintext `http` is refused for non-local hosts (loopback, private, `localhost`, and the unspecified `0.0.0.0`/`::` bind addresses are allowed; link-local/metadata ranges are not "local"). Redirects are followed only within the configured origin and scheme, and the negotiated SSE endpoint must match the configured origin and scheme. |
+| `headers`             | object | —        | Static headers sent on every MCP request (the credential surface). Values are redacted from `nenya describe --json`; `config set` preserves a file's existing permissions (new files default to `0644`), so `chmod 600` the config file if it carries a token. |
+| `required_headers`    | array  | —        | Header names that must carry a non-blank value for this server to be usable (NENYA-183). A server missing one is never connected, and a request whose agent selects it fails closed with `503 error_kind=mcp_unavailable` instead of silently running without its tools (a key whose `allowed_tools` grant cannot reach the server is unaffected). A credential the server refuses at runtime (401/403) marks it unusable for a 60-second cooldown; `/statsz` lists the unusable servers and the reason. |
 | `timeout`             | int    | `30`     | Request timeout in seconds         |
 | `keep_alive_interval` | int    | `30`     | SSE keep-alive interval in seconds |
+| `allowed_hosts`       | array  | —        | Tool-argument URL-policy exceptions (`mcp_guard`); it does not relax the server's own origin policy. |
 
 ## Migration Guide
 

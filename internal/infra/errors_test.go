@@ -23,6 +23,7 @@ func TestErrorKind_Retryable(t *testing.T) {
 		{ErrorKindBouncerError, false},
 		{ErrorKindInternal, false},
 		{ErrorKindQuotaExhausted, true},
+		{ErrorKindMCPUnavailable, false},
 	}
 	for _, tt := range tests {
 		got := tt.kind.Retryable()
@@ -49,6 +50,7 @@ func TestErrorKind_ShouldFailover(t *testing.T) {
 		{ErrorKindInvalidRequest, false},
 		{ErrorKindBouncerError, false},
 		{ErrorKindInternal, false},
+		{ErrorKindMCPUnavailable, false},
 	}
 	for _, tt := range tests {
 		got := tt.kind.ShouldFailover()
@@ -78,6 +80,7 @@ func TestErrorKind_Scope(t *testing.T) {
 		{ErrorKindProviderError, ScopeProvider},
 		{ErrorKindBouncerError, ScopeProvider},
 		{ErrorKindInternal, ScopeProvider},
+		{ErrorKindMCPUnavailable, ScopeProvider},
 		{ErrorKindNone, ScopeUnknown},
 	}
 	for _, tt := range tests {

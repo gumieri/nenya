@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/nenya/config"
+	"github.com/nenya/internal/auth"
 	"github.com/nenya/internal/gateway"
 	"github.com/nenya/internal/infra"
 	"github.com/nenya/internal/mcp"
@@ -22,13 +23,18 @@ import (
 	"github.com/nenya/internal/util"
 )
 
-// injectMCPTools injects discovered MCP tools into the payload for the
-// request's agent. Reads AgentName (logging identity) and Agent (resolved
-// config) from the same chatRequest, so they cannot diverge.
-func (p *Proxy) injectMCPTools(gw *gateway.NenyaGateway, payload map[string]interface{}, req *chatRequest) {
+// injectMCPTools injects the agent's MCP tools into the upstream request,
+// capped by the caller's per-key tool grant (NENYA-183): a key only ever sees
+// (and therefore can only invoke) tools inside the intersection of its
+// allowed_tools and the agent's configured servers. Servers unusable for a
+// credential reason are rejected earlier, in checkMCPAvailability. It reads
+// AgentName (logging identity) and Agent (resolved config) from the same
+// chatRequest, so they cannot diverge, and reports whether any MCP tool was
+// injected — which selects the buffered tool loop.
+func (p *Proxy) injectMCPTools(gw *gateway.NenyaGateway, payload map[string]interface{}, req *chatRequest) bool {
 	agent := req.Agent
 	if agent.MCP == nil || len(agent.MCP.Servers) == 0 {
-		return
+		return false
 	}
 	agentName := req.AgentName
 
@@ -50,7 +56,13 @@ func (p *Proxy) injectMCPTools(gw *gateway.NenyaGateway, payload map[string]inte
 				"server", serverName, "agent", agentName)
 			continue
 		}
-		openaiTools := mcp.MCPToolsToOpenAI(serverName, tools)
+		granted := grantedToolsForServer(gw, req.apiKey, serverName, agentName, tools)
+		if len(granted) == 0 {
+			gw.Logger.Warn("MCP server exposes no tools inside the key's grant",
+				"server", serverName, "agent", agentName)
+			continue
+		}
+		openaiTools := mcp.MCPToolsToOpenAI(serverName, granted)
 		applyToolDescriptionSpotlight(openaiTools, spotlightSettingsFor(&gw.Config, agent), gw.Metrics)
 
 		existing, ok := payload["tools"].([]interface{})
@@ -69,7 +81,7 @@ func (p *Proxy) injectMCPTools(gw *gateway.NenyaGateway, payload map[string]inte
 
 		payload["tools"] = existing
 		gw.Logger.Debug("MCP tools injected",
-			"server", serverName, "tools", len(tools), "agent", agentName)
+			"server", serverName, "tools", len(granted), "agent", agentName)
 	}
 
 	if len(toolNames) > 0 {
@@ -79,10 +91,61 @@ func (p *Proxy) injectMCPTools(gw *gateway.NenyaGateway, payload map[string]inte
 				"tools_count", len(toolNames), "agent", agentName)
 		}
 		p.injectMCPSystemPrompt(gw, payload, toolNames, spotlightSettingsFor(&gw.Config, agent))
-	} else {
-		gw.Logger.Warn("MCP: no tools injected for agent",
-			"agent", agentName, "servers", agent.MCP.Servers)
+		return true
 	}
+	gw.Logger.Warn("MCP: no tools injected for agent",
+		"agent", agentName, "servers", agent.MCP.Servers)
+	return false
+}
+
+// grantedToolsForServer returns the server's tools that the key's grant covers
+// (NENYA-183). An empty grant returns every tool, so the filter is a no-op for
+// keys that do not cap their tools.
+func grantedToolsForServer(gw *gateway.NenyaGateway, key *config.ApiKey, serverName, agentName string, tools []mcp.Tool) []mcp.Tool {
+	granted := make([]mcp.Tool, 0, len(tools))
+	for _, tool := range tools {
+		if !auth.AuthorizeMCPTool(key, serverName, tool.Name) {
+			gw.Logger.Debug("MCP tool outside the key's grant, not injected",
+				"server", serverName, "tool", tool.Name, "agent", agentName)
+			continue
+		}
+		granted = append(granted, tool)
+	}
+	return granted
+}
+
+// checkMCPAvailability fails the request closed (NENYA-183) when the agent
+// selects an MCP server that cannot be used for a credential reason: a missing
+// declared required header, or a server that refused the configured credential
+// (401/403). Silently dropping such a server's tools would turn a
+// misconfiguration into an unauthenticated or tool-less request.
+func (p *Proxy) checkMCPAvailability(gw *gateway.NenyaGateway, req *chatRequest) *httpError {
+	if req.Agent.MCP == nil {
+		return nil
+	}
+	for _, serverName := range req.Agent.MCP.Servers {
+		// A key whose grant cannot reach the server is unaffected by it: it
+		// could not call its tools even if the server were healthy.
+		if !auth.MCPGrantTouchesServer(req.apiKey, serverName) {
+			continue
+		}
+		reason, unavailable := gw.MCPUnavailableReason(serverName)
+		if !unavailable {
+			continue
+		}
+		// The reason stays in the log and in /statsz: the client gets a
+		// generic message so an authenticated caller cannot enumerate
+		// configured servers or missing headers.
+		gw.Logger.Error("MCP server unusable for a credential reason, failing request closed",
+			"server", serverName, "agent", req.AgentName, "reason", reason)
+		gw.Metrics.IncMCPUnavailable(serverName)
+		return &httpError{
+			Code:    http.StatusServiceUnavailable,
+			Message: "MCP tool server unavailable",
+			Kind:    infra.ErrorKindMCPUnavailable,
+		}
+	}
+	return nil
 }
 
 func (p *Proxy) injectMCPSystemPrompt(gw *gateway.NenyaGateway, payload map[string]interface{}, toolNames []string, settings pipeline.SpotlightSettings) {
@@ -165,7 +228,7 @@ func (p *Proxy) injectAutoSearch(gw *gateway.NenyaGateway, ctx context.Context, 
 			continue
 		}
 
-		if result := p.executeAutoSearch(gw, ctx, serverName, toolName, query, agentName); result != nil {
+		if result := p.executeAutoSearch(gw, ctx, serverName, toolName, query, agentName, req.apiKey); result != nil {
 			p.injectAutoSearchContext(gw, autoSearchContextOpts{
 				payload:    payload,
 				messages:   messages,
@@ -229,9 +292,9 @@ type autoSearchResult struct {
 	agentName string
 }
 
-func (p *Proxy) executeAutoSearch(gw *gateway.NenyaGateway, ctx context.Context, serverName, toolName, query, agentName string) *autoSearchResult {
+func (p *Proxy) executeAutoSearch(gw *gateway.NenyaGateway, ctx context.Context, serverName, toolName, query, agentName string, apiKey *config.ApiKey) *autoSearchResult {
 	start := time.Now()
-	result, err := p.mcpClientCallTool(gw, ctx, serverName, toolName, query)
+	result, err := p.mcpClientCallTool(gw, ctx, serverName, toolName, query, apiKey)
 	duration := time.Since(start)
 
 	if err != nil {
@@ -264,7 +327,7 @@ func (p *Proxy) executeAutoSearch(gw *gateway.NenyaGateway, ctx context.Context,
 	}
 }
 
-func (p *Proxy) mcpClientCallTool(gw *gateway.NenyaGateway, ctx context.Context, serverName, toolName, query string) (*mcp.CallToolResult, error) {
+func (p *Proxy) mcpClientCallTool(gw *gateway.NenyaGateway, ctx context.Context, serverName, toolName, query string, apiKey *config.ApiKey) (*mcp.CallToolResult, error) {
 	client, ok := gw.MCPClients[serverName]
 	if !ok {
 		return nil, fmt.Errorf("MCP client not found")
@@ -277,13 +340,14 @@ func (p *Proxy) mcpClientCallTool(gw *gateway.NenyaGateway, ctx context.Context,
 	// untrusted conversation-derived text. A rejection surfaces as an
 	// error so executeAutoSearch records a failed search and injects
 	// nothing into the conversation.
-	if !guardMCPArgs(gw, gw.Logger, mcpGuardDispatch{
+	if guardErr := guardMCPArgs(gw, gw.Logger, mcpGuardDispatch{
+		ApiKey:     apiKey,
 		ServerName: serverName,
 		ToolName:   toolName,
 		Purpose:    "auto_search",
 		Args:       args,
-	}) {
-		return nil, errMCPArgumentPolicy
+	}); guardErr != nil {
+		return nil, guardErr
 	}
 	return client.CallTool(ctx, toolName, args)
 }
@@ -562,7 +626,7 @@ func (p *Proxy) mcpIteration(in mcpIterInput) int {
 // The iteration's buffered usage is recorded on that abort path so /statsz
 // does not undercount.
 func (p *Proxy) executeAndAppendMCPResults(in mcpIterInput, working map[string]any, mcpCalls []mcpToolCall, buf *bufferedSSE) bool {
-	results := executeMCPCalls(in.mcpLoopCtx, mcpCalls, in.gw, in.opts.AgentName, in.opts.Canary, in.opts.Screen)
+	results := executeMCPCalls(in.mcpLoopCtx, mcpCalls, in.gw, in.opts.AgentName, in.opts.Canary, in.opts.Screen, in.opts.ApiKey)
 	mcpAssistantMsg := map[string]any{
 		"role":       "assistant",
 		"content":    nil,

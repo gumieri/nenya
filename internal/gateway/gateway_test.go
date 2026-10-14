@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -641,7 +642,7 @@ func TestContextWithTimeout(t *testing.T) {
 func TestBuildMCPClients_EmptyConfig(t *testing.T) {
 	cfg := testConfig()
 	cfg.MCPServers = map[string]config.MCPServerConfig{}
-	clients := buildMCPClients(cfg, testLogger())
+	clients, _ := buildMCPClients(cfg, testLogger())
 
 	if clients == nil {
 		t.Fatal("expected non-nil clients map")
@@ -657,7 +658,7 @@ func TestBuildMCPClients_SkipsEmptyURL(t *testing.T) {
 		"empty-url": {URL: ""},
 		"valid-url": {URL: "http://localhost:3000/sse"},
 	}
-	clients := buildMCPClients(cfg, testLogger())
+	clients, _ := buildMCPClients(cfg, testLogger())
 
 	if len(clients) != 1 {
 		t.Errorf("expected 1 client (empty URL skipped), got %d", len(clients))
@@ -676,7 +677,7 @@ func TestBuildMCPClients_MultipleServers(t *testing.T) {
 		"server-a": {URL: "http://localhost:3000/sse"},
 		"server-b": {URL: "http://localhost:3001/sse", Timeout: 30, KeepAliveInterval: 60},
 	}
-	clients := buildMCPClients(cfg, testLogger())
+	clients, _ := buildMCPClients(cfg, testLogger())
 
 	if len(clients) != 2 {
 		t.Errorf("expected 2 clients, got %d", len(clients))
@@ -942,4 +943,106 @@ func TestShutdown_UnloadsEngineModelsAndStopsFetcher(t *testing.T) {
 	// Close (inside Shutdown) already stopped the fetcher; a second Stop
 	// must be a no-op, not a double-close panic.
 	gw.QuotaFetcher.Stop()
+}
+
+// TestBuildMCPClientsRequiresDeclaredHeaders pins the NENYA-183 credential
+// rule: a server missing a declared required header is not connected and is
+// recorded as unavailable (with the reason), so requests that select it can
+// fail closed.
+func TestBuildMCPClientsRequiresDeclaredHeaders(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	cfg := config.Config{
+		MCPServers: map[string]config.MCPServerConfig{
+			"ok": {
+				URL:             "https://mcp.example.com/sse",
+				Headers:         map[string]string{"Authorization": "Bearer token"},
+				RequiredHeaders: []string{"Authorization"},
+			},
+			"missing": {
+				URL:             "https://mcp.example.com/sse",
+				RequiredHeaders: []string{"Authorization"},
+			},
+			"empty-value": {
+				URL:             "https://mcp.example.com/sse",
+				Headers:         map[string]string{"Authorization": "  "},
+				RequiredHeaders: []string{"Authorization"},
+			},
+		},
+	}
+
+	clients, unavailable := buildMCPClients(cfg, logger)
+	if _, ok := clients["ok"]; !ok {
+		t.Error("server with its required header must be connected")
+	}
+	if _, ok := clients["missing"]; ok {
+		t.Error("server missing a required header must not be connected")
+	}
+	if reason := unavailable["missing"]; reason == "" || !strings.Contains(reason, "Authorization") {
+		t.Errorf("unavailable reason = %q, want it to name the header", reason)
+	}
+	if _, ok := clients["empty-value"]; ok {
+		t.Error("a whitespace-only required header value must count as missing")
+	}
+	if reason := unavailable["empty-value"]; !strings.Contains(reason, "Authorization") {
+		t.Errorf("blank-value reason = %q, want it to name the header", reason)
+	}
+	if _, ok := unavailable["ok"]; ok {
+		t.Error("a healthy server must not be recorded as unavailable")
+	}
+}
+
+// TestMCPUnavailableMarkSemantics pins the NENYA-183 mark lifecycle: a
+// build-time refusal is permanent until reload, a runtime credential rejection
+// is transient (so a restored credential is re-probed), and a successful call
+// clears either.
+func TestMCPUnavailableMarkSemantics(t *testing.T) {
+	original := mcpCredentialRejectionCooldown
+	t.Cleanup(func() { mcpCredentialRejectionCooldown = original })
+
+	gw := &NenyaGateway{}
+
+	// Nothing recorded: available, and Clear is a no-op.
+	if _, ok := gw.MCPUnavailableReason("memory"); ok {
+		t.Fatal("a fresh gateway must report every server available")
+	}
+	gw.ClearMCPUnavailable("memory")
+
+	// Permanent mark survives the cooldown.
+	gw.MarkMCPUnavailable("memory", "missing required header Authorization")
+	mcpCredentialRejectionCooldown = 0
+	if reason, ok := gw.MCPUnavailableReason("memory"); !ok || !strings.Contains(reason, "Authorization") {
+		t.Fatalf("permanent mark = %q (ok=%v), want it to survive the cooldown", reason, ok)
+	}
+
+	// Transient mark expires, which is what lets the credential be re-probed.
+	gw.ClearMCPUnavailable("memory")
+	gw.MarkMCPCredentialRejected("memory", "credential rejected")
+	mcpCredentialRejectionCooldown = time.Hour
+	if _, ok := gw.MCPUnavailableReason("memory"); !ok {
+		t.Fatal("a fresh transient mark must keep the server out of service")
+	}
+	mcpCredentialRejectionCooldown = 0
+	if reason, ok := gw.MCPUnavailableReason("memory"); ok {
+		t.Fatalf("an expired transient mark must report the server available, got %q", reason)
+	}
+	// The expired entry is pruned, not merely hidden.
+	if snap := gw.MCPUnavailableSnapshot(); len(snap) != 0 {
+		t.Fatalf("snapshot after expiry = %v, want empty", snap)
+	}
+
+	// A runtime rejection must not downgrade a permanent misconfiguration
+	// into a self-healing mark.
+	gw.MarkMCPUnavailable("memory", "missing required header Authorization")
+	gw.MarkMCPCredentialRejected("memory", "credential rejected")
+	mcpCredentialRejectionCooldown = 0
+	if reason, ok := gw.MCPUnavailableReason("memory"); !ok || !strings.Contains(reason, "Authorization") {
+		t.Fatalf("transient mark downgraded a permanent one: %q (ok=%v)", reason, ok)
+	}
+
+	// A success clears a permanent mark too (immediate recovery).
+	gw.MarkMCPUnavailable("memory", "missing required header Authorization")
+	gw.ClearMCPUnavailable("memory")
+	if _, ok := gw.MCPUnavailableReason("memory"); ok {
+		t.Fatal("ClearMCPUnavailable must re-enable the server")
+	}
 }

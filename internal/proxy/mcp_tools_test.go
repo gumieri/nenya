@@ -3,6 +3,7 @@ package proxy
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -353,6 +354,12 @@ func TestExecuteMCPCalls(t *testing.T) {
 	p.StoreGateway(&gateway.NenyaGateway{
 		MCPClients:   map[string]*mcp.Client{"memory": client},
 		MCPToolIndex: toolIndex,
+		Config: config.Config{
+			Agents: map[string]config.AgentConfig{
+				"agent":      {MCP: &config.AgentMCPConfig{Servers: []string{"memory"}}},
+				"test-agent": {MCP: &config.AgentMCPConfig{Servers: []string{"memory"}}},
+			},
+		},
 	})
 
 	calls := []mcpToolCall{
@@ -360,7 +367,7 @@ func TestExecuteMCPCalls(t *testing.T) {
 		{ID: "2", Name: "memory__test_tool", Arguments: map[string]any{"query": "world"}},
 	}
 
-	results := executeMCPCalls(t.Context(), calls, p.Gateway(), "test-agent", pipeline.CanarResult{}, nil)
+	results := executeMCPCalls(t.Context(), calls, p.Gateway(), "test-agent", pipeline.CanarResult{}, nil, fullAccessTestKey())
 
 	if len(results) != 2 {
 		t.Fatalf("expected 2 results, got %d", len(results))
@@ -395,13 +402,19 @@ func TestExecuteMCPCalls_UnknownTool(t *testing.T) {
 	p.StoreGateway(&gateway.NenyaGateway{
 		MCPClients:   map[string]*mcp.Client{"memory": client},
 		MCPToolIndex: toolIndex,
+		Config: config.Config{
+			Agents: map[string]config.AgentConfig{
+				"agent":      {MCP: &config.AgentMCPConfig{Servers: []string{"memory"}}},
+				"test-agent": {MCP: &config.AgentMCPConfig{Servers: []string{"memory"}}},
+			},
+		},
 	})
 
 	calls := []mcpToolCall{
 		{ID: "1", Name: "memory__unknown_tool"},
 	}
 
-	results := executeMCPCalls(t.Context(), calls, p.Gateway(), "test-agent", pipeline.CanarResult{}, nil)
+	results := executeMCPCalls(t.Context(), calls, p.Gateway(), "test-agent", pipeline.CanarResult{}, nil, fullAccessTestKey())
 
 	if len(results) != 1 {
 		t.Fatalf("expected 1 result, got %d", len(results))
@@ -419,13 +432,19 @@ func TestExecuteMCPCalls_ServerUnavailable(t *testing.T) {
 	p.StoreGateway(&gateway.NenyaGateway{
 		MCPClients:   map[string]*mcp.Client{},
 		MCPToolIndex: toolIndex,
+		Config: config.Config{
+			Agents: map[string]config.AgentConfig{
+				"agent":      {MCP: &config.AgentMCPConfig{Servers: []string{"memory"}}},
+				"test-agent": {MCP: &config.AgentMCPConfig{Servers: []string{"memory"}}},
+			},
+		},
 	})
 
 	calls := []mcpToolCall{
 		{ID: "1", Name: "memory__search"},
 	}
 
-	results := executeMCPCalls(t.Context(), calls, p.Gateway(), "test-agent", pipeline.CanarResult{}, nil)
+	results := executeMCPCalls(t.Context(), calls, p.Gateway(), "test-agent", pipeline.CanarResult{}, nil, fullAccessTestKey())
 
 	if len(results) != 1 {
 		t.Fatalf("expected 1 result, got %d", len(results))
@@ -433,8 +452,8 @@ func TestExecuteMCPCalls_ServerUnavailable(t *testing.T) {
 	if !results[0].IsError {
 		t.Fatal("expected error for unavailable server")
 	}
-	if !strings.Contains(results[0].Text(), "MCP server not available") {
-		t.Fatalf("error text = %q, want server not available", results[0].Text())
+	if !strings.Contains(results[0].Text(), "server unavailable") {
+		t.Fatalf("error text = %q, want the server to be reported unavailable", results[0].Text())
 	}
 }
 
@@ -444,9 +463,15 @@ func TestExecuteMCPCalls_EmptyCalls(t *testing.T) {
 	p.StoreGateway(&gateway.NenyaGateway{
 		MCPClients:   map[string]*mcp.Client{},
 		MCPToolIndex: toolIndex,
+		Config: config.Config{
+			Agents: map[string]config.AgentConfig{
+				"agent":      {MCP: &config.AgentMCPConfig{Servers: []string{"memory"}}},
+				"test-agent": {MCP: &config.AgentMCPConfig{Servers: []string{"memory"}}},
+			},
+		},
 	})
 
-	results := executeMCPCalls(t.Context(), nil, p.Gateway(), "test-agent", pipeline.CanarResult{}, nil)
+	results := executeMCPCalls(t.Context(), nil, p.Gateway(), "test-agent", pipeline.CanarResult{}, nil, fullAccessTestKey())
 	if results != nil {
 		t.Fatalf("expected nil results for empty calls, got %v", results)
 	}
@@ -782,6 +807,12 @@ func newCanaryTestProxy(t *testing.T) *Proxy {
 	p.StoreGateway(&gateway.NenyaGateway{
 		MCPClients:   map[string]*mcp.Client{"memory": client},
 		MCPToolIndex: toolIndex,
+		Config: config.Config{
+			Agents: map[string]config.AgentConfig{
+				"agent":      {MCP: &config.AgentMCPConfig{Servers: []string{"memory"}}},
+				"test-agent": {MCP: &config.AgentMCPConfig{Servers: []string{"memory"}}},
+			},
+		},
 	})
 	return p
 }
@@ -799,7 +830,7 @@ func TestExecuteMCPCallsCanaryScan(t *testing.T) {
 			},
 		}}
 		results := executeMCPCalls(t.Context(), calls, p.Gateway(), "agent",
-			pipeline.CanarResult{Token: canary, Action: config.CanaryActionBlock}, nil)
+			pipeline.CanarResult{Token: canary, Action: config.CanaryActionBlock}, nil, fullAccessTestKey())
 		if len(results) != 1 || !results[0].IsError {
 			t.Fatalf("expected refused call, got %+v", results)
 		}
@@ -818,7 +849,7 @@ func TestExecuteMCPCallsCanaryScan(t *testing.T) {
 			},
 		}}
 		results := executeMCPCalls(t.Context(), calls, p.Gateway(), "agent",
-			pipeline.CanarResult{Token: canary, Action: config.CanaryActionLog}, nil)
+			pipeline.CanarResult{Token: canary, Action: config.CanaryActionLog}, nil, fullAccessTestKey())
 		if len(results) != 1 {
 			t.Fatalf("expected one result, got %d", len(results))
 		}
@@ -835,7 +866,7 @@ func TestExecuteMCPCallsCanaryScan(t *testing.T) {
 			Arguments: map[string]any{"query": "benign"},
 		}}
 		results := executeMCPCalls(t.Context(), calls, p.Gateway(), "agent",
-			pipeline.CanarResult{Token: canary, Action: config.CanaryActionBlock}, nil)
+			pipeline.CanarResult{Token: canary, Action: config.CanaryActionBlock}, nil, fullAccessTestKey())
 		if len(results) != 1 || results[0] == nil || results[0].IsError {
 			text := ""
 			if len(results) == 1 && results[0] != nil {
@@ -884,6 +915,10 @@ func newArgGuardProxy(t *testing.T, guardCfg *config.MCPGuardConfig, allowedHost
 			MCPServers: map[string]config.MCPServerConfig{
 				"memory": {AllowedHosts: allowedHosts},
 			},
+			Agents: map[string]config.AgentConfig{
+				"agent":      {MCP: &config.AgentMCPConfig{Servers: []string{"memory"}}},
+				"test-agent": {MCP: &config.AgentMCPConfig{Servers: []string{"memory"}}},
+			},
 		},
 	})
 	return p
@@ -899,7 +934,7 @@ func TestExecuteMCPArgGuard(t *testing.T) {
 			ID:        "call_1",
 			Name:      "memory__test_tool",
 			Arguments: map[string]any{"other": "missing required query"},
-		}}, p.Gateway(), "agent", pipeline.CanarResult{}, nil)
+		}}, p.Gateway(), "agent", pipeline.CanarResult{}, nil, fullAccessTestKey())
 		if len(results) != 1 || !results[0].IsError {
 			t.Fatalf("expected error result, got %+v", results)
 		}
@@ -917,7 +952,7 @@ func TestExecuteMCPArgGuard(t *testing.T) {
 				"query": "fetch",
 				"url":   "http://169.254.169.254/latest/meta-data/",
 			},
-		}}, p.Gateway(), "agent", pipeline.CanarResult{}, nil)
+		}}, p.Gateway(), "agent", pipeline.CanarResult{}, nil, fullAccessTestKey())
 		if len(results) != 1 || !results[0].IsError {
 			t.Fatalf("expected error result, got %+v", results)
 		}
@@ -935,7 +970,7 @@ func TestExecuteMCPArgGuard(t *testing.T) {
 				"query": "fetch",
 				"url":   "http://169.254.169.254/latest/meta-data/",
 			},
-		}}, p.Gateway(), "agent", pipeline.CanarResult{}, nil)
+		}}, p.Gateway(), "agent", pipeline.CanarResult{}, nil, fullAccessTestKey())
 		if len(results) != 1 || results[0].IsError {
 			t.Fatalf("allowlisted call must pass, got %+v", results)
 		}
@@ -947,7 +982,7 @@ func TestExecuteMCPArgGuard(t *testing.T) {
 			ID:        "call_4",
 			Name:      "memory__test_tool",
 			Arguments: map[string]any{"query": "hello"},
-		}}, p.Gateway(), "agent", pipeline.CanarResult{}, nil)
+		}}, p.Gateway(), "agent", pipeline.CanarResult{}, nil, fullAccessTestKey())
 		if len(results) != 1 || results[0].IsError {
 			t.Fatalf("valid call must pass, got %+v", results)
 		}
@@ -965,7 +1000,7 @@ func TestExecuteMCPArgGuard(t *testing.T) {
 				"query": "fetch",
 				"url":   "http://127.0.0.1:9/admin",
 			},
-		}}, p.Gateway(), "agent", pipeline.CanarResult{}, nil)
+		}}, p.Gateway(), "agent", pipeline.CanarResult{}, nil, fullAccessTestKey())
 		if len(results) != 1 || results[0].IsError {
 			t.Fatalf("disabled guard must pass through, got %+v", results)
 		}
@@ -975,7 +1010,7 @@ func TestExecuteMCPArgGuard(t *testing.T) {
 func TestMCPClientCallToolArgumentGuard(t *testing.T) {
 	t.Run("private URL query is rejected as a search failure", func(t *testing.T) {
 		p := newArgGuardProxy(t, &config.MCPGuardConfig{}, nil)
-		result, err := p.mcpClientCallTool(p.Gateway(), t.Context(), "memory", "test_tool", "http://169.254.169.254/latest/meta-data/")
+		result, err := p.mcpClientCallTool(p.Gateway(), t.Context(), "memory", "test_tool", "http://169.254.169.254/latest/meta-data/", fullAccessTestKey())
 		if err == nil {
 			t.Fatalf("expected guard error, got result %+v", result)
 		}
@@ -986,7 +1021,7 @@ func TestMCPClientCallToolArgumentGuard(t *testing.T) {
 
 	t.Run("benign query passes", func(t *testing.T) {
 		p := newArgGuardProxy(t, &config.MCPGuardConfig{}, nil)
-		result, err := p.mcpClientCallTool(p.Gateway(), t.Context(), "memory", "test_tool", "golang proxy patterns")
+		result, err := p.mcpClientCallTool(p.Gateway(), t.Context(), "memory", "test_tool", "golang proxy patterns", fullAccessTestKey())
 		if err != nil {
 			t.Fatalf("benign search failed: %v", err)
 		}
@@ -997,7 +1032,7 @@ func TestMCPClientCallToolArgumentGuard(t *testing.T) {
 
 	t.Run("disabled guard lets the query through", func(t *testing.T) {
 		p := newArgGuardProxy(t, &config.MCPGuardConfig{Enabled: config.PtrTo(false)}, nil)
-		result, err := p.mcpClientCallTool(p.Gateway(), t.Context(), "memory", "test_tool", "http://127.0.0.1/admin")
+		result, err := p.mcpClientCallTool(p.Gateway(), t.Context(), "memory", "test_tool", "http://127.0.0.1/admin", fullAccessTestKey())
 		if err != nil {
 			t.Fatalf("disabled guard must pass: %v", err)
 		}
@@ -1013,14 +1048,14 @@ func TestAutoSaveTryServerArgumentGuard(t *testing.T) {
 	agent := &config.AgentConfig{MCP: &config.AgentMCPConfig{Servers: []string{"memory"}, SaveTool: "test_tool"}}
 
 	t.Run("private URL content is blocked and falls back", func(t *testing.T) {
-		ok := p.autoSaveTryServer(gw, agent, "memory", "agent", "http://169.254.169.254/latest/meta-data/")
+		ok := p.autoSaveTryServer(gw, agent, "memory", "agent", "http://169.254.169.254/latest/meta-data/", fullAccessTestKey())
 		if ok {
 			t.Error("guard-blocked auto-save must return false so the caller may fall back")
 		}
 	})
 
 	t.Run("benign content saves", func(t *testing.T) {
-		ok := p.autoSaveTryServer(gw, agent, "memory", "agent", "a normal conversation summary")
+		ok := p.autoSaveTryServer(gw, agent, "memory", "agent", "a normal conversation summary", fullAccessTestKey())
 		if !ok {
 			t.Error("benign auto-save must succeed")
 		}
@@ -1037,7 +1072,7 @@ func TestExecuteMCPArgGuardLogMode(t *testing.T) {
 			"query": "fetch",
 			"url":   "http://169.254.169.254/latest/meta-data/",
 		},
-	}}, p.Gateway(), "agent", pipeline.CanarResult{}, nil)
+	}}, p.Gateway(), "agent", pipeline.CanarResult{}, nil, fullAccessTestKey())
 	if len(results) != 1 || results[0].IsError {
 		t.Fatalf("log policy must allow the call, got %+v", results)
 	}
@@ -1047,12 +1082,13 @@ func TestGuardMCPArgsNilLogger(t *testing.T) {
 	p := newArgGuardProxy(t, &config.MCPGuardConfig{}, nil)
 	// Must not panic when the caller passes a nil logger on the
 	// rejection path.
-	if guardMCPArgs(p.Gateway(), nil, mcpGuardDispatch{
+	if err := guardMCPArgs(p.Gateway(), nil, mcpGuardDispatch{
 		ServerName: "memory",
 		ToolName:   "test_tool",
 		Purpose:    "test",
 		Args:       map[string]any{"url": "http://127.0.0.1/"},
-	}) {
-		t.Error("private URL must be rejected")
+		ApiKey:     fullAccessTestKey(),
+	}); !errors.Is(err, errMCPArgumentPolicy) {
+		t.Fatalf("private URL must be rejected by the argument policy, got %v", err)
 	}
 }

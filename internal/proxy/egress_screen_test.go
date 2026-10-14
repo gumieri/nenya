@@ -248,7 +248,7 @@ func TestEgressScreenToolArgsStrictRefuses(t *testing.T) {
 			ID:        "call_1",
 			Name:      "memory__test_tool",
 			Arguments: map[string]any{"query": "tok"},
-		}}, gw, "agent", pipeline.CanarResult{Token: "tok", Action: config.CanaryActionLog}, rt)
+		}}, gw, "agent", pipeline.CanarResult{Token: "tok", Action: config.CanaryActionLog}, rt, fullAccessTestKey())
 		if len(results) != 1 || !results[0].IsError {
 			t.Fatalf("expected refused call, got %+v", results)
 		}
@@ -274,7 +274,7 @@ func TestEgressScreenToolArgsStrictRefuses(t *testing.T) {
 			ID:        "call_1",
 			Name:      "memory__test_tool",
 			Arguments: map[string]any{"query": "tok"},
-		}}, gw, "agent", pipeline.CanarResult{Token: "tok", Action: config.CanaryActionLog}, rt)
+		}}, gw, "agent", pipeline.CanarResult{Token: "tok", Action: config.CanaryActionLog}, rt, fullAccessTestKey())
 		if len(results) != 1 || results[0].IsError {
 			t.Fatalf("log action must let the call proceed, got %+v", results)
 		}
@@ -293,11 +293,11 @@ func TestEgressScreenToolArgsStrictRefuses(t *testing.T) {
 		mk := func(id string) []mcpToolCall {
 			return []mcpToolCall{{ID: id, Name: "memory__test_tool", Arguments: map[string]any{"query": "tok"}}}
 		}
-		first := executeMCPCalls(context.Background(), mk("c1"), gw, "agent", canary, rt)
+		first := executeMCPCalls(context.Background(), mk("c1"), gw, "agent", canary, rt, fullAccessTestKey())
 		if len(first) != 1 || !first[0].IsError {
 			t.Fatalf("first call must be refused, got %+v", first)
 		}
-		second := executeMCPCalls(context.Background(), mk("c2"), gw, "agent", canary, rt)
+		second := executeMCPCalls(context.Background(), mk("c2"), gw, "agent", canary, rt, fullAccessTestKey())
 		if len(second) != 1 || second[0].IsError {
 			t.Fatalf("budget spent: second call must proceed deterministically, got %+v", second)
 		}

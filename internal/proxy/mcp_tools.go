@@ -14,6 +14,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/nenya/config"
+	"github.com/nenya/internal/auth"
 	"github.com/nenya/internal/infra"
 
 	"github.com/nenya/internal/gateway"
@@ -451,7 +453,7 @@ func partitionMCPToolCalls(calls []mcpToolCall, toolIndex *mcp.ToolRegistry) (mc
 // request (shared budget); an exfil verdict under strict action refuses
 // the call. Returns a slice of tool results in the same order
 // as the input calls.
-func executeMCPCalls(ctx context.Context, calls []mcpToolCall, gw *gateway.NenyaGateway, agentName string, canary pipeline.CanarResult, screen *egressScreenRuntime) []*mcp.CallToolResult {
+func executeMCPCalls(ctx context.Context, calls []mcpToolCall, gw *gateway.NenyaGateway, agentName string, canary pipeline.CanarResult, screen *egressScreenRuntime, apiKey *config.ApiKey) []*mcp.CallToolResult {
 	if len(calls) == 0 {
 		return nil
 	}
@@ -507,11 +509,23 @@ func executeMCPCalls(ctx context.Context, calls []mcpToolCall, gw *gateway.Nenya
 				"mcp_tool", route.MCPToolName,
 			)
 
+			// NENYA-183: dispatch is bounded by the agent's own server list,
+			// the caller's tool grant, and the server's credential health.
+			if refusal, reason, refusalKind := mcpDispatchRefusal(gw, agentName, route.ServerName, route.MCPToolName, apiKey); refusal != "" {
+				ctxLogger.Warn("MCP tool call refused", "reason", reason)
+				results[idx] = &mcp.CallToolResult{
+					Content: []mcp.ContentBlock{{Type: "text", Text: refusal}},
+					IsError: true,
+				}
+				gw.Metrics.RecordMCPToolCall(route.ServerName, c.Name, agentName, time.Since(start), refusalKind)
+				return
+			}
+
 			client := gw.MCPClients[route.ServerName]
 			if client == nil {
 				ctxLogger.Warn("MCP tool call failed: server not available")
 				results[idx] = &mcp.CallToolResult{
-					Content: []mcp.ContentBlock{{Type: "text", Text: "MCP server not available: " + route.ServerName}},
+					Content: []mcp.ContentBlock{{Type: "text", Text: "MCP tool call refused: server unavailable"}},
 					IsError: true,
 				}
 				gw.Metrics.RecordMCPToolCall(route.ServerName, c.Name, agentName, time.Since(start), fmt.Errorf("server not available"))
@@ -562,32 +576,84 @@ func executeMCPCalls(ctx context.Context, calls []mcpToolCall, gw *gateway.Nenya
 
 			result, err := client.CallTool(toolCtx, route.MCPToolName, c.Arguments)
 			duration := time.Since(start)
-			if err != nil {
-				ctxLogger.Warn("MCP tool call failed",
-					"err", err,
-					"duration_ms", duration.Milliseconds())
-				results[idx] = &mcp.CallToolResult{
-					Content: []mcp.ContentBlock{{Type: "text", Text: fmt.Sprintf("MCP tool call failed: %v", err)}},
-					IsError: true,
-				}
-				gw.Metrics.RecordMCPToolCall(route.ServerName, route.MCPToolName, agentName, duration, err)
-			} else {
-				results[idx] = result
-				gw.Metrics.RecordMCPToolCall(route.ServerName, route.MCPToolName, agentName, duration, err)
-				textLen := 0
-				if result != nil {
-					textLen = len(result.Text())
-				}
-				ctxLogger.Debug("MCP tool call completed",
-					"duration_ms", duration.Milliseconds(),
-					"result_bytes", textLen)
-			}
+			results[idx] = recordMCPCallOutcome(gw, ctxLogger, route, result, err, agentName, duration)
 		}(i, call)
 	}
 
 	wg.Wait()
 	return results
 }
+
+// recordMCPCallOutcome turns one dispatched tool call into its result and
+// records the outcome: a refused credential marks the server unavailable so
+// later requests fail closed instead of degrading to per-call errors, and a
+// successful call re-proves the credential (NENYA-183).
+func recordMCPCallOutcome(gw *gateway.NenyaGateway, ctxLogger *slog.Logger, route mcp.ToolRouting, result *mcp.CallToolResult, err error, agentName string, duration time.Duration) *mcp.CallToolResult {
+	if err != nil {
+		if errors.Is(err, mcp.ErrAuthRejected) {
+			// A refused credential (a token that expired or was revoked
+			// mid-session) takes the server out of service so later requests
+			// fail closed instead of degrading to per-call errors. The mark is
+			// transient: it expires so a restored credential is re-probed
+			// (NENYA-183). A 403 may be a single tool's ACL, which the
+			// cooldown bounds.
+			if _, alreadyMarked := gw.MCPUnavailableReason(route.ServerName); !alreadyMarked {
+				ctxLogger.Warn("MCP server refused the configured credential, marking it unusable",
+					"server", route.ServerName, "cooldown", gateway.MCPCredentialRejectionCooldown().String())
+				gw.Metrics.IncMCPCredentialRejection(route.ServerName)
+			}
+			gw.MarkMCPCredentialRejected(route.ServerName, "credential rejected")
+		}
+		ctxLogger.Warn("MCP tool call failed",
+			"err", err,
+			"duration_ms", duration.Milliseconds())
+		gw.Metrics.RecordMCPToolCall(route.ServerName, route.MCPToolName, agentName, duration, err)
+		return &mcp.CallToolResult{
+			Content: []mcp.ContentBlock{{Type: "text", Text: fmt.Sprintf("MCP tool call failed: %v", err)}},
+			IsError: true,
+		}
+	}
+	gw.ClearMCPUnavailable(route.ServerName)
+	gw.Metrics.RecordMCPToolCall(route.ServerName, route.MCPToolName, agentName, duration, err)
+	textLen := 0
+	if result != nil {
+		textLen = len(result.Text())
+	}
+	ctxLogger.Debug("MCP tool call completed",
+		"duration_ms", duration.Milliseconds(),
+		"result_bytes", textLen)
+	return result
+}
+
+// mcpDispatchRefusal returns the model-facing refusal text and the operator
+// reason for a tool dispatch that is not allowed, or ("", "") when the call
+// may proceed (NENYA-183): the server must be in the agent's own MCP
+// configuration (the registry is global), the caller's tool grant must cover
+// the tool, and the server must not be marked unusable for a credential
+// reason. The texts share one shape and name no server or header, so a model
+// cannot echo configured server names to the client.
+func mcpDispatchRefusal(gw *gateway.NenyaGateway, agentName, serverName, toolName string, apiKey *config.ApiKey) (string, string, error) {
+	if !gw.AgentHasMCPServer(agentName, serverName) {
+		return "MCP tool call refused: server not configured for this agent",
+			"server not configured for this agent", errMCPNotGranted
+	}
+	if !auth.AuthorizeMCPTool(apiKey, serverName, toolName) {
+		return "MCP tool call refused: not permitted for this API key",
+			"outside the key's tool grant", errMCPNotGranted
+	}
+	if reason, unavailable := gw.MCPUnavailableReason(serverName); unavailable {
+		return "MCP tool call refused: server unusable", reason, errMCPServerUnavailable
+	}
+	return "", "", nil
+}
+
+// errMCPNotGranted is the sentinel recorded when a model asks for an MCP tool
+// outside the authenticated key's grant (NENYA-183).
+var errMCPNotGranted = errors.New("tool outside the key's grant")
+
+// errMCPServerUnavailable marks a dispatch refused because the server is
+// recorded as unusable for a credential reason (NENYA-183).
+var errMCPServerUnavailable = errors.New("MCP server unusable")
 
 // errMCPArgumentPolicy is the sentinel returned when the argument
 // guard rejects a dispatch (any MCP path).
@@ -607,6 +673,10 @@ type mcpGuardDispatch struct {
 	ToolName   string
 	Purpose    string
 	Args       map[string]any
+	// ApiKey is the authenticated key whose tool grant must cover the
+	// dispatch (NENYA-183). Nil denies (fail closed): auto-search and
+	// auto-save always run on behalf of an authenticated request.
+	ApiKey *config.ApiKey
 }
 
 // guardMCPArgs runs the tool-argument guard for dispatches that are not
@@ -616,9 +686,24 @@ type mcpGuardDispatch struct {
 // are recorded and allowed. The caller turns rejections into its own
 // failure semantics (auto-search failure, auto-save fallback) and
 // records its own outcome metric.
-func guardMCPArgs(gw *gateway.NenyaGateway, logger *slog.Logger, d mcpGuardDispatch) bool {
+// guardMCPArgs returns nil when the dispatch is allowed, or the sentinel that
+// names why it was refused (errMCPNotGranted, errMCPArgumentPolicy) so callers
+// can record the right outcome.
+func guardMCPArgs(gw *gateway.NenyaGateway, logger *slog.Logger, d mcpGuardDispatch) error {
 	if logger == nil {
 		logger = slog.New(slog.DiscardHandler)
+	}
+	// NENYA-183: auto-search and auto-save are tool dispatches too, so the
+	// caller's grant caps them as well.
+	if !auth.AuthorizeMCPTool(d.ApiKey, d.ServerName, d.ToolName) {
+		logger.Warn("MCP dispatch refused: outside the key's grant",
+			"purpose", d.Purpose, "server", d.ServerName, "tool", d.ToolName)
+		return errMCPNotGranted
+	}
+	if reason, unavailable := gw.MCPUnavailableReason(d.ServerName); unavailable {
+		logger.Warn("MCP dispatch refused: server unusable",
+			"purpose", d.Purpose, "server", d.ServerName, "tool", d.ToolName, "reason", reason)
+		return errMCPServerUnavailable
 	}
 	cfg := mcp.GuardConfigFromServer(gw.Config.Governance.MCPGuard, gw.Config.MCPServers[d.ServerName].AllowedHosts)
 	violations, rejected := mcp.ValidateArgs(d.Args, nil, cfg)
@@ -627,13 +712,13 @@ func guardMCPArgs(gw *gateway.NenyaGateway, logger *slog.Logger, d mcpGuardDispa
 		if rejected {
 			logger.Warn("MCP dispatch rejected by argument guard",
 				"purpose", d.Purpose, "server", d.ServerName, "tool", d.ToolName, "detail", summary)
-			return false
+			return errMCPArgumentPolicy
 		}
 		// log policy: flag and allow.
 		logger.Warn("MCP dispatch flagged by argument policy (log action)",
 			"purpose", d.Purpose, "server", d.ServerName, "tool", d.ToolName, "detail", summary)
 	}
-	return true
+	return nil
 }
 
 // appendMCPResults appends MCP tool results to the request payload's messages array.

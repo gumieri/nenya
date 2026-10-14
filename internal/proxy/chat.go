@@ -57,6 +57,11 @@ type chatRequest struct {
 	sessionKeyOK   bool
 	sessionKeyDone bool
 
+	// apiKey is the authenticated key for this request, set once in
+	// validateChatRequest. It carries the per-key MCP tool grant (NENYA-183)
+	// and is never nil on a served request path.
+	apiKey *config.ApiKey
+
 	// SessionSubject binds all session-derived state (sticky pins, affinity
 	// forks, synthesized session headers) to the authenticated caller
 	// (NENYA-196): the digest of the API key's token, set once in
@@ -169,6 +174,7 @@ func (p *Proxy) validateChatRequest(w http.ResponseWriter, r *http.Request, gw *
 		TokenCount:     gw.CountRequestTokens(payload),
 		Stream:         false,
 		KeyRef:         apiKeyName(apiKey),
+		apiKey:         apiKey,
 		SessionSubject: sessionSubjectScope(apiKey),
 		SourceFormat:   sourceFormat,
 	}
@@ -180,6 +186,13 @@ func (p *Proxy) validateChatRequest(w http.ResponseWriter, r *http.Request, gw *
 
 	req.Targets, req.AgentName, req.Cooldown, req.MaxRetries, herr = p.resolveRouting(r.Context(), req, gw)
 	if herr != nil {
+		return nil, herr
+	}
+
+	// NENYA-183: an agent whose MCP server cannot be used for a credential
+	// reason fails the request closed — before the cache lookup, so the same
+	// request cannot be 503 on a miss and 200 on a cached hit.
+	if herr = p.checkMCPAvailability(gw, req); herr != nil {
 		return nil, herr
 	}
 
@@ -962,7 +975,10 @@ func (p *Proxy) resolvePipelineContext(r *http.Request, gw *gateway.NenyaGateway
 	autoSearchCtx, autoSearchCancel := context.WithTimeout(r.Context(), mcpAutoSearchTimeout)
 	p.injectAutoSearch(gw, autoSearchCtx, req.Payload, messages, req)
 	autoSearchCancel()
-	p.injectMCPTools(gw, req.Payload, req)
+	// NENYA-183: HasMCPTools follows what was actually injected, not what the
+	// agent configures — a key whose grant covers no tool must not take the
+	// buffered MCP tool loop (which withholds the response until the loop ends).
+	injectedMCPTools := p.injectMCPTools(gw, req.Payload, req)
 
 	softLimit, hardLimit := p.resolveTargetLimits(gw, req)
 
@@ -972,7 +988,7 @@ func (p *Proxy) resolvePipelineContext(r *http.Request, gw *gateway.NenyaGateway
 		gw.Logger.Debug("IDE client detected", "client", profile.ClientName)
 	}
 
-	return messages, hasMCPTools(gw, req.Agent), softLimit, hardLimit, windowMaxCtx, profile
+	return messages, injectedMCPTools, softLimit, hardLimit, windowMaxCtx, profile
 }
 
 // resolveTargetLimits derives the proactive soft (summarization trigger) and
@@ -1331,21 +1347,6 @@ func (p *Proxy) buildUpstreamRequest(gw *gateway.NenyaGateway, ctx context.Conte
 	req.Header.Set("Accept-Encoding", "identity")
 	req.Header.Set("User-Agent", gw.Config.Server.UserAgent)
 	return req, nil
-}
-
-// hasMCPTools reports whether the resolved agent has MCP servers with at
-// least one ready client. Direct-model routes pass the zero AgentConfig,
-// which never has MCP servers.
-func hasMCPTools(gw *gateway.NenyaGateway, agent config.AgentConfig) bool {
-	if agent.MCP == nil || len(agent.MCP.Servers) == 0 {
-		return false
-	}
-	for _, serverName := range agent.MCP.Servers {
-		if client, ok := gw.MCPClients[serverName]; ok && client.Ready() {
-			return true
-		}
-	}
-	return false
 }
 
 // handleNonStreamingResponse buffers the full upstream response and returns it as a complete JSON object.

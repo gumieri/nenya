@@ -3,12 +3,14 @@ package gateway
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"math"
 	"net"
 	"net/http"
 	"regexp"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -106,11 +108,21 @@ type NenyaGateway struct {
 	// (governance.judgments.egress_screen.enabled); built at chain-build
 	// time, nil disables the screen. Consumed by egressScreenFor in the
 	// proxy layer.
-	EgressScreenJudge  *pipeline.Judge
-	ResponseCache      *infra.ResponseCache
-	Embedder           infra.EmbeddingProvider
-	MCPClients         map[string]*mcp.Client
-	MCPToolIndex       *mcp.ToolRegistry
+	EgressScreenJudge *pipeline.Judge
+	ResponseCache     *infra.ResponseCache
+	Embedder          infra.EmbeddingProvider
+	MCPClients        map[string]*mcp.Client
+	MCPToolIndex      *mcp.ToolRegistry
+	// mcpUnavailable records configured MCP servers that are NOT usable,
+	// keyed by server name, with the reason (NENYA-183): a server missing a
+	// declared required header (recorded at construction) or one that refused
+	// the configured credential (401/403, recorded at construction or at
+	// runtime when a call is rejected). A request whose agent selects such a
+	// server fails closed instead of silently running without its tools. A
+	// successful call clears the entry, so a recovered credential re-enables
+	// the server without a reload.
+	mcpUnavailableMu   sync.RWMutex
+	mcpUnavailable     map[string]mcpUnavailableEntry
 	ModelCatalog       *discovery.ModelCatalog
 	HealthRegistry     *discovery.HealthRegistry
 	LatencyTracker     *infra.LatencyTracker
@@ -510,6 +522,18 @@ func buildGateway(cfg config.Config, secrets *config.SecretsConfig, secureClient
 		tpm = *cfg.Governance.RatelimitMaxTPM
 	}
 
+	// NENYA-183: build the MCP clients and record the servers that cannot be
+	// used for a credential reason (missing declared required header), so a
+	// request selecting one fails closed instead of silently dropping the
+	// server's tools.
+	mcpClients, unavailableReasons := buildMCPClients(cfg, logger)
+	mcpUnavailable := make(map[string]mcpUnavailableEntry, len(unavailableReasons))
+	for name, reason := range unavailableReasons {
+		// A build-time refusal is an operator misconfiguration: it lasts
+		// until the next reload rather than being re-probed.
+		mcpUnavailable[name] = mcpUnavailableEntry{reason: reason, markedAt: time.Now(), permanent: true}
+	}
+
 	gw := &NenyaGateway{
 		Config:             cfg,
 		Client:             secureClient,
@@ -532,8 +556,9 @@ func buildGateway(cfg config.Config, secrets *config.SecretsConfig, secureClient
 		TfidfSelections:    pipeline.NewTfidfSelectionCache(pipeline.DefaultTfidfSelectionCacheSize),
 		ResponseCache:      newResponseCache(cfg, logger, metrics, ollamaClient),
 		Embedder:           nil,
-		MCPClients:         buildMCPClients(cfg, logger),
+		MCPClients:         mcpClients,
 		MCPToolIndex:       mcp.NewToolRegistry(),
+		mcpUnavailable:     mcpUnavailable,
 		ModelCatalog:       mergedCatalog,
 		HealthRegistry:     healthRegistry,
 		LatencyTracker:     infra.NewLatencyTracker(),
@@ -1042,11 +1067,19 @@ func (g *NenyaGateway) Reload(ctx context.Context, cfg config.Config, secrets *c
 	return newGW
 }
 
-func buildMCPClients(cfg config.Config, logger *slog.Logger) map[string]*mcp.Client {
+func buildMCPClients(cfg config.Config, logger *slog.Logger) (map[string]*mcp.Client, map[string]string) {
 	clients := make(map[string]*mcp.Client)
+	unavailable := make(map[string]string)
 	for name, serverCfg := range cfg.MCPServers {
 		if serverCfg.URL == "" {
 			logger.Warn("MCP server has empty URL, skipping", "server", name)
+			unavailable[name] = "no url configured"
+			continue
+		}
+		if missing := missingRequiredHeader(serverCfg); missing != "" {
+			logger.Error("MCP server missing a required credential header, refusing to connect",
+				"server", name, "header", missing)
+			unavailable[name] = "missing required header " + missing
 			continue
 		}
 		client := mcp.NewClient(mcp.ClientConfig{
@@ -1059,7 +1092,144 @@ func buildMCPClients(cfg config.Config, logger *slog.Logger) map[string]*mcp.Cli
 		})
 		clients[name] = client
 	}
-	return clients
+	return clients, unavailable
+}
+
+// mcpUnavailableEntry is one unusable-server record. A permanent entry (an
+// operator misconfiguration detected at build time) lasts until the next
+// reload; a transient entry (a credential the server refused) expires after
+// mcpCredentialRejectionCooldown so the server is re-probed instead of being
+// latched out for the life of the process (NENYA-183).
+type mcpUnavailableEntry struct {
+	reason    string
+	markedAt  time.Time
+	permanent bool
+}
+
+// mcpCredentialRejectionCooldown bounds how long a runtime credential
+// rejection keeps a server out of service before it is probed again. During
+// the window requests that need the server fail closed. A var so tests can
+// shorten the window.
+var mcpCredentialRejectionCooldown = 60 * time.Second
+
+// MarkMCPUnavailable records a permanent reason a server is unusable, so
+// requests selecting it fail closed until the next reload (NENYA-183). It is
+// used for conditions detected at construction (a declared required header
+// that is missing, or a credential the server refused during the handshake):
+// nothing re-probes a client that never became ready, so making those
+// self-healing would admit requests that then run without the server's tools.
+func (g *NenyaGateway) MarkMCPUnavailable(server, reason string) {
+	g.markMCPUnavailable(server, reason, true)
+}
+
+// MCPCredentialRejectionCooldown reports how long a runtime credential
+// rejection keeps a server out of service.
+func MCPCredentialRejectionCooldown() time.Duration {
+	return mcpCredentialRejectionCooldown
+}
+
+// MarkMCPCredentialRejected records that the server refused the configured
+// credential at runtime. The mark expires after mcpCredentialRejectionCooldown
+// so a rotated/restored credential recovers without a reload; a successful
+// call clears it immediately.
+func (g *NenyaGateway) MarkMCPCredentialRejected(server, reason string) {
+	g.markMCPUnavailable(server, reason, false)
+}
+
+func (g *NenyaGateway) markMCPUnavailable(server, reason string, permanent bool) {
+	if g == nil {
+		return
+	}
+	g.mcpUnavailableMu.Lock()
+	defer g.mcpUnavailableMu.Unlock()
+	if g.mcpUnavailable == nil {
+		g.mcpUnavailable = make(map[string]mcpUnavailableEntry)
+	}
+	if existing, ok := g.mcpUnavailable[server]; ok && existing.permanent && !permanent {
+		// A runtime rejection must not downgrade an operator misconfiguration
+		// into a self-healing mark.
+		return
+	}
+	g.mcpUnavailable[server] = mcpUnavailableEntry{reason: reason, markedAt: time.Now(), permanent: permanent}
+}
+
+// ClearMCPUnavailable drops the record for a server: a successful call proves
+// the credential works again, so the server is re-enabled without a reload.
+func (g *NenyaGateway) ClearMCPUnavailable(server string) {
+	if g == nil {
+		return
+	}
+	g.mcpUnavailableMu.RLock()
+	observed, recorded := g.mcpUnavailable[server]
+	g.mcpUnavailableMu.RUnlock()
+	if !recorded {
+		// The common case: nothing to clear, so skip the write lock.
+		return
+	}
+	g.mcpUnavailableMu.Lock()
+	defer g.mcpUnavailableMu.Unlock()
+	// Delete only the entry that was observed: a mark recorded between the
+	// read and the lock (a fresh rejection) must survive, otherwise a success
+	// on one call would silently re-enable a server another call just found
+	// refusing the credential.
+	if current, ok := g.mcpUnavailable[server]; ok && current.markedAt.Equal(observed.markedAt) {
+		delete(g.mcpUnavailable, server)
+	}
+}
+
+// MCPUnavailableReason returns the effective reason a server is unusable.
+// Expired transient entries read as available (no write happens on this read
+// path), which is what lets a recovered credential be re-probed; the stale
+// entry is dropped by the next mark or clear.
+func (g *NenyaGateway) MCPUnavailableReason(server string) (string, bool) {
+	if g == nil {
+		return "", false
+	}
+	g.mcpUnavailableMu.RLock()
+	entry, ok := g.mcpUnavailable[server]
+	g.mcpUnavailableMu.RUnlock()
+	if !ok {
+		return "", false
+	}
+	if !entry.permanent && time.Since(entry.markedAt) >= mcpCredentialRejectionCooldown {
+		return "", false
+	}
+	return entry.reason, true
+}
+
+// MCPUnavailableSnapshot returns a copy of the effective unusable-server
+// registry (expired transient entries excluded).
+func (g *NenyaGateway) MCPUnavailableSnapshot() map[string]string {
+	if g == nil {
+		return nil
+	}
+	g.mcpUnavailableMu.RLock()
+	names := make([]string, 0, len(g.mcpUnavailable))
+	for name := range g.mcpUnavailable {
+		names = append(names, name)
+	}
+	g.mcpUnavailableMu.RUnlock()
+	var out map[string]string
+	for _, name := range names {
+		if reason, ok := g.MCPUnavailableReason(name); ok {
+			if out == nil {
+				out = make(map[string]string)
+			}
+			out[name] = reason
+		}
+	}
+	return out
+}
+
+// missingRequiredHeader returns the name of the first declared required header
+// that is absent or empty, or "" when all are present (NENYA-183).
+func missingRequiredHeader(serverCfg config.MCPServerConfig) string {
+	for _, header := range serverCfg.RequiredHeaders {
+		if strings.TrimSpace(serverCfg.Headers[header]) == "" {
+			return header
+		}
+	}
+	return ""
 }
 
 func (g *NenyaGateway) buildMCPToolIndex(ctx context.Context, logger *slog.Logger) {
@@ -1072,6 +1242,15 @@ func (g *NenyaGateway) buildMCPToolIndex(ctx context.Context, logger *slog.Logge
 		err := client.Initialize(initCtx)
 		cancel()
 		if err != nil {
+			if errors.Is(err, mcp.ErrAuthRejected) {
+				// A declared/expected credential was refused: record it so a
+				// request selecting this server fails closed (NENYA-183)
+				// rather than running without the server's tools.
+				logger.Error("MCP server rejected the configured credential",
+					"server", name, "err", err)
+				g.MarkMCPUnavailable(name, "credential rejected")
+				continue
+			}
 			logger.Warn("MCP client initialization failed, skipping",
 				"server", name, "err", err)
 			continue
@@ -1095,12 +1274,12 @@ func (g *NenyaGateway) buildMCPToolIndex(ctx context.Context, logger *slog.Logge
 }
 
 func (g *NenyaGateway) GetMCPClientsForAgent(agentName string) map[string]*mcp.Client {
-	agent, ok := g.Config.Agents[agentName]
-	if !ok || agent.MCP == nil || len(agent.MCP.Servers) == 0 {
+	servers := g.AgentMCPServers(agentName)
+	if len(servers) == 0 {
 		return nil
 	}
-	clients := make(map[string]*mcp.Client, len(agent.MCP.Servers))
-	for _, serverName := range agent.MCP.Servers {
+	clients := make(map[string]*mcp.Client, len(servers))
+	for _, serverName := range servers {
 		if client, ok := g.MCPClients[serverName]; ok {
 			clients[serverName] = client
 		}
@@ -1109,6 +1288,27 @@ func (g *NenyaGateway) GetMCPClientsForAgent(agentName string) map[string]*mcp.C
 		return nil
 	}
 	return clients
+}
+
+// AgentMCPServers returns the MCP server names an agent's configuration lists
+// (nil for an unknown agent or an agent without MCP). It is the outer bound
+// for tool injection and dispatch (NENYA-183).
+func (g *NenyaGateway) AgentMCPServers(agentName string) []string {
+	if g == nil {
+		return nil
+	}
+	agent, ok := g.Config.Agents[agentName]
+	if !ok || agent.MCP == nil {
+		return nil
+	}
+	return agent.MCP.Servers
+}
+
+// AgentHasMCPServer reports whether an agent's MCP configuration lists a
+// server. An unknown agent (or one without MCP) has none, so callers that gate
+// dispatch on it fail closed.
+func (g *NenyaGateway) AgentHasMCPServer(agentName, serverName string) bool {
+	return slices.Contains(g.AgentMCPServers(agentName), serverName)
 }
 
 func (g *NenyaGateway) GetProviderAPIKey(providerName string) ([]byte, bool) {

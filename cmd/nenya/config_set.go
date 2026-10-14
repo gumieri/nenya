@@ -124,7 +124,12 @@ func setConfigKey(path, dottedKey string, value any) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return fmt.Errorf("create config directory: %w", err)
 	}
-	return writeFileAtomic(path, encoded, 0o644)
+	// Preserve an existing file's permissions and default new files to 0644:
+	// the shipped systemd unit runs a dynamic user, so forcing 0600 would make
+	// a root-owned drop-in unreadable to the service (NENYA-183 review). An
+	// operator who wants the file private (it may carry MCP header values)
+	// chmods it once and the mode is kept.
+	return writeFileAtomic(path, encoded, configFileMode(path))
 }
 
 // setDottedKey sets value at the dotted key path, creating intermediate
@@ -154,6 +159,16 @@ func setDottedKey(doc map[string]any, dottedKey string, value any) error {
 		cur = child
 	}
 	return nil
+}
+
+// configFileMode returns the mode to use when rewriting a config file: the
+// file's current mode when it exists, else 0644.
+func configFileMode(path string) os.FileMode {
+	info, err := os.Stat(path)
+	if err != nil {
+		return 0o644
+	}
+	return info.Mode().Perm()
 }
 
 // writeFileAtomic writes data to path via a temporary file in the same
