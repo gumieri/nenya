@@ -2,8 +2,8 @@
 
 Nenya provides two levels of caching for `/v1/chat/completions` responses:
 
-1. **Exact-match caching** - fast lookup by fingerprint of the request payload (auth token + canonical fields)
-2. **Semantic caching** (opt-in) - embedding-based similarity search for near-duplicate prompts, partitioned per API key
+1. **Exact-match caching** - fast lookup by fingerprint of the request payload (auth token + effective content-policy scope + canonical fields)
+2. **Semantic caching** (opt-in) - embedding-based similarity search for near-duplicate prompts, partitioned per API key, per model, and per policy scope
 
 Both cache types use an in-memory LRU cache with TTL-based eviction.
 
@@ -22,11 +22,23 @@ Exact-match caching is always enabled when `response_cache.enabled` is true. The
 - `stop`
 - `stream`
 
-When a Bearer token is present, the fingerprint is `"auth:" + hex(sha256(token)) + ":" + hex(sha256(canonical fields))`; without one, `"p:" + hex(sha256(canonical fields))`. The auth-hash segment partitions the semantic index per API key (see below), and identical requests (same model, messages, parameters, and auth token) hit the cache.
+When a Bearer token is present, the fingerprint is `"auth:" + hex(sha256(sha256(token) ‖ sha256(policy scope))) + ":" + hex(sha256(canonical fields))` (the two digests are hashed as separate fixed-width values, so no token/scope pair can collide by delimiter placement); without one, `"p:" + hex(sha256(canonical fields))` (the unscoped form carries no identity and exists for tests/tooling only — every request path is authenticated, and a policy scope supplied without a token yields no cache key at all). The `auth:` segment partitions the semantic index, and identical requests (same model, messages, parameters, auth token, and policy scope) share entries.
 
-**Note on the content pipeline:** The cache key is computed from the request payload as received, before the content pipeline runs (redaction, bouncer summarization, context trimming). Two requests with identical client payloads therefore share a key even when the pipeline would transform them differently; the stored response is the one produced by whichever execution stored it first.
+**Policy scope (NENYA-154):** the namespace segment hashes the caller's token together with the request's *effective content-policy identity*:
 
-**Error responses:** Structured error responses (those containing `error_kind` fields) are never cached. Only successful HTTP 200 responses with valid completion data are eligible for caching.
+- the resolved **agent** (for agent routes; direct-model routes carry none), including the agent's system prompt identity (`system_prompt`, `system_prompt_file`, `force_system_prompt`), `cache_aware`, and `cache_salt`,
+- the client **wire format** the cached bytes are rendered in (`openai` / `anthropic`). The value is the format the gateway *detected* for the request (an Anthropic body is detected by its top-level `type` field) and it is the same value that selects the SSE transformer, so a replayed body always matches the format it was rendered in.
+- the security-relevant **guardrail configuration**: output redaction (bouncer `redact_output`/window), the redaction pattern set, preset and label, entropy redaction thresholds, `bouncer.fail_open`, the blocked-execution (response stream filter) pattern set, the prefix-cache redaction skip (`skip_redaction_on_system`), the injection detector (global section plus the agent's override), spotlighting, the egress guard (hosts, query cap, action), the canary tripwire, and the advisory judgment sites (`judgments`, `tfidf_rerank`) including the identity of their engine chains.
+
+A cached body is therefore only replayable for the caller, agent, format, and guardrail set that produced it: tightening a policy (or switching an agent from the global defaults to stricter overrides) starts a fresh namespace instead of serving a body cached before the guardrail existed — the class behind GoModel #971. **Operator-visible hit-rate change:** editing any of the knobs above invalidates entries stored under the previous policy (they simply never match again); agents that rely on per-agent policy overrides no longer share entries with agents using the global defaults.
+
+A config reload (SIGHUP) already constructs a fresh response cache, so reloaded policy never sees stale entries; the scope additionally covers in-process changes (per-agent overrides are part of the key from the first request) and the cross-agent / cross-format dimensions above. Restarts are unaffected (in-memory state).
+
+One known limitation inside the agent identity: `system_prompt_file` is keyed by path, not content — the file is re-read per request, so editing it in place takes effect for new requests while cached bodies keep replaying until they expire or the cache is restarted.
+
+**Note on the content pipeline:** The cache key is computed from the request payload as received, before the content pipeline runs (redaction, bouncer summarization, context trimming). Two requests with identical client payloads therefore share a key even when the pipeline would transform them differently; the stored response is the one produced by whichever execution stored it first. The *guardrail* inputs are keyed (see above); the remaining request-shaping inputs that only change the tokens sent upstream — `context.*` trim limits, `window.*`/`compaction.*`, token calibration, routing, and Nenya-managed MCP tool results injected by the multi-turn loop (absent from the client payload and able to change without a reload) — are accepted pre-pipeline-key staleness: they can change the upstream answer for an unchanged key.
+
+**Error responses:** Structured error responses (those containing `error_kind` fields) are never cached. Only successful HTTP 200 responses with valid completion data are eligible for caching. Streaming responses terminated by a guardrail — the egress guard (`exfil_blocked`), the canary tripwire (`exfil_detected`), the execution-policy filter, or an idle stall — and streams sanitized with an injected `gateway_error` terminal are never cached; tests assert an empty cache after each of those terminals as a regression guard.
 
 ## Semantic Caching
 
@@ -45,12 +57,12 @@ Semantic caching provides a second-level fallback when exact-match misses but th
    - Sends this text to the embedding provider (Ollama by default)
    - Stores the embedding vector with the cache entry
 
-2. **Similarity Search**: Each (API key, model) pair has its own in-memory `EmbedIndex` — the index is partitioned per auth identity and per model (NENYA-189), so a semantic lookup can never serve one key another key's cached response, nor a different model's (different system prompt/tools) under the same key. On lookup:
+2. **Similarity Search**: Each (API key, policy scope, model) triple has its own in-memory `EmbedIndex` — the index is partitioned per auth+policy namespace and per model (NENYA-189, NENYA-154), so a semantic lookup can never serve one key another key's cached response, a body cached under a different guardrail policy, nor a different model's (different system prompt/tools) under the same key. On lookup:
 
    - Computes cosine similarity between the query embedding and the embeddings in the caller's namespace
    - Returns the most similar entry if similarity exceeds `response_cache.similarity_threshold`
 
-   **Multi-key deployments:** semantic hits are per API key AND per model — two keys (or two models of the same key, e.g. distinct agent aliases) each populate their own namespace and do not share entries (by design; use a single key and model to share).
+   **Multi-key deployments:** semantic hits are per API key, per policy scope, AND per model — two keys (or two models of the same key, e.g. distinct agent aliases, or an agent whose guardrail overrides differ from the global defaults) each populate their own namespace and do not share entries (by design; use a single key and model to share).
 
 3. **Hit Detection**: If a semantic match is found:
    - The response from the cached key is returned to the client
@@ -115,7 +127,7 @@ Nenya also supports **provider-side prompt prefix caching** (`prefix_cache`), wh
   - Per-breakpoint TTLs default to `cache_control_ttl` (`"ephemeral"` = 5m, `"1h"` supported). TTL order must be non-increasing (longer TTLs before shorter).
 - **OpenAI GPT-5.6+ breakpoints** (`prompt_cache_breakpoint` / `prompt_cache_options`) — for models with the `gpt-5.6`/`gpt-5.7` prefix, a breakpoint is injected on the second-to-last message block. `openai_mode: "explicit"` additionally sets `prompt_cache_options`; `openai_mode: "implicit"` (default) only sets the block breakpoint.
 - **Prompt cache key** (`prompt_cache_key`) — for xAI/OpenAI, a deterministic `SHA256(agent:model)[:16]` key is injected to keep the cached block stable across requests. A client-supplied key is preserved. OpenAI breakpoint injection skips if the key is missing.
-- **Cache salt** (`cache_salt`) — for vLLM/OpenAI-compatible providers, a tenant salt is injected to isolate cached KV blocks between tenants (per-API-key `cache_salt` overrides agent `cache_salt`). Never injected for Anthropic (server-side workspace isolation).
+- **Cache salt** (`cache_salt`) — for vLLM/OpenAI-compatible providers, a tenant salt is injected to isolate cached KV blocks between tenants (per-API-key `cache_salt` overrides agent `cache_salt`). Never injected for Anthropic (server-side workspace isolation). The agent-level salt is part of the response-cache policy scope because it is injected into the payload sent upstream; the per-key salt is constant within that key's namespace and affects only upstream prompt-cache affinity.
 
 ### Per-agent `cache_aware` dispatch
 
@@ -148,7 +160,7 @@ Prefix cache relies on stable request prefixes (system prompt, tools, pinned mes
 
 ### Refusal and error cache exclusion
 
-Response caching also skips responses whose payload contains `refusal` or `content_filter` (structured `stop_reason`/`finish_reason` fields) so stale refusal responses are never served from cache.
+Response caching also skips responses whose payload contains `refusal` or `content_filter` (structured `stop_reason`/`finish_reason` fields) so stale refusal responses are never served from cache, and skips streams that terminate on a guardrail (egress guard block, canary tripwire, execution-policy block), on an idle stall, or that carry a gateway-injected `gateway_error` terminal (truncated/empty upstream).
 
 ## Metrics
 
@@ -262,6 +274,8 @@ On a cache hit (exact or semantic), Nenya adds:
 X-Nenya-Cache-Status: HIT         # Exact match
 X-Nenya-Cache-Status: SEMI-HIT    # Semantic match
 ```
+
+The replayed body is always framed as `text/event-stream`: only streaming responses are ever cached (the upstream content type, not the client's `stream` flag, selects the streaming path).
 
 These headers help clients understand cache behavior without changing the SSE protocol.
 

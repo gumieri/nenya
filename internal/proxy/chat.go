@@ -819,12 +819,29 @@ func (p *Proxy) resolveCache(w http.ResponseWriter, r *http.Request, gw *gateway
 	}
 
 	authToken := strings.TrimSpace(strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer "))
-	cacheKey := infra.FingerprintPayloadWithAuth(req.Payload, authToken)
+	// NENYA-154: the fingerprint mixes the caller's auth identity with the
+	// effective content-policy identity (resolved agent, client wire format,
+	// and the redaction/entropy/injection/spotlight/egress/canary knobs), so a
+	// response cached under different guardrails can never be replayed — the
+	// GoModel incident (#971) where a pre-redaction body was served on a cache
+	// HIT. See resolveCachePolicyScope for the composition.
+	//
+	// The auth identity is the presented bearer credential (the value the auth
+	// layer validated), matching the NENYA-189 namespace derivation; the key is
+	// also the store key on force-refresh, so it is computed before the
+	// lookup is skipped.
+	scope := resolveCachePolicyScope(req.AgentName, req.Agent, req.SourceFormat, &gw.Config)
+	if scope == "" {
+		// The policy identity could not be serialized: skip the response cache
+		// entirely rather than keying on a policy-free fingerprint.
+		return "", nil
+	}
+	cacheKey := infra.FingerprintPayloadScoped(req.Payload, authToken, scope)
 	if r.Header.Get(gw.Config.ResponseCache.ForceRefreshHeader) == "" {
 		embedFunc := p.buildEmbedFunc(gw, r, req.Payload)
 		model := req.ModelName
 		if data, ok, cacheType := gw.ResponseCache.Lookup(cacheKey, model, req.Stream, embedFunc); ok {
-			p.replayCachedResponse(gw, w, r, data, cacheType, req.Stream)
+			p.replayCachedResponse(gw, w, r, data, cacheType)
 			return "", &httpError{Code: http.StatusNoContent, Message: "cache hit"}
 		}
 	}
@@ -1101,9 +1118,14 @@ func (p *Proxy) handleChatCompletions(gw *gateway.NenyaGateway, w http.ResponseW
 	})
 }
 
-// replayCachedResponse serves a previously cached response, setting Content-Type
-// based on whether the original request was streaming (SSE) or non-streaming (JSON).
-func (p *Proxy) replayCachedResponse(gw *gateway.NenyaGateway, w http.ResponseWriter, r *http.Request, data []byte, cacheType string, stream bool) {
+// replayCachedResponse serves a previously cached response. Every cached entry
+// is an SSE stream (storeStreamCache is the only writer and always records
+// stream=true), and the streaming path is selected by the upstream
+// Content-Type rather than the client's `stream` flag — so the replay is
+// always framed as SSE instead of trusting the request flag, which would
+// serve SSE bytes under `Content-Type: application/json` for a client that
+// omitted `stream: true` (NENYA-154 review).
+func (p *Proxy) replayCachedResponse(gw *gateway.NenyaGateway, w http.ResponseWriter, r *http.Request, data []byte, cacheType string) {
 	var cacheStatus string
 	switch cacheType {
 	case "exact":
@@ -1115,11 +1137,7 @@ func (p *Proxy) replayCachedResponse(gw *gateway.NenyaGateway, w http.ResponseWr
 	}
 
 	gw.Logger.Info("response cache hit", "type", cacheType)
-	if stream {
-		w.Header().Set("Content-Type", "text/event-stream")
-	} else {
-		w.Header().Set("Content-Type", "application/json")
-	}
+	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("X-Nenya-Cache-Status", cacheStatus)
 	w.WriteHeader(http.StatusOK)

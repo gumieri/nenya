@@ -953,19 +953,17 @@ func (p *Proxy) writeBlockedSSE(gw *gateway.NenyaGateway, w http.ResponseWriter)
 // handleBlockedStream resolves the three stream-block error kinds
 // (canary tripwire, egress guard, execution policy): it kills the
 // upstream, drains the stall reader, records the block and writes the
-// kind-specific SSE frame. Returns handled=false for other errors.
+// kind-specific SSE frame. Every handled block is terminal — the frame is
+// the whole response. Returns handled=false for other errors.
 func (p *Proxy) handleBlockedStream(gw *gateway.NenyaGateway, w http.ResponseWriter, target routing.UpstreamTarget, copyErr error, action upstreamAction, stallR *stallReader) (bool, streamResult) {
 	var message string
-	var blocked bool
 	var writer func(*gateway.NenyaGateway, http.ResponseWriter)
 	switch {
 	case errors.Is(copyErr, stream.ErrCanaryDetected):
 		message = "stream blocked: canary detected, upstream killed"
-		blocked = true
 		writer = p.writeExfilDetectedSSE
 	case errors.Is(copyErr, stream.ErrExfilBlocked):
 		message = "stream blocked by exfil guard, upstream killed"
-		blocked = true
 		writer = p.writeExfilBlockedSSE
 	case errors.Is(copyErr, stream.ErrStreamBlocked):
 		message = "stream blocked by execution policy, upstream killed"
@@ -980,12 +978,19 @@ func (p *Proxy) handleBlockedStream(gw *gateway.NenyaGateway, w http.ResponseWri
 		stallR.Stop()
 		stallR.DrainBuffered()
 	}
+	// A policy block is not a provider failure, so the target is deliberately
+	// not cooled down (recordStreamResult is never reached). The half-open
+	// probe slot consumed by the pre-dispatch guard must still be released:
+	// without an outcome or an explicit release, a block on a half-open probe
+	// would leak the slot and wedge the circuit permanently.
+	gw.AgentState.CB.ReleaseHalfOpen(target.CoolKey)
 	gw.Logger.Warn(message, "model", target.Model, "provider", target.Provider)
 	gw.Metrics.RecordStreamBlock(target.Model, target.Provider)
 	writer(gw, w)
-	// The canary and exfil branches fully write the response: the retry
-	// loop must not fail over onto the committed bytes.
-	return true, streamResult{terminal: blocked}
+	// Every branch fully writes the response (a structured block frame):
+	// the retry loop must not fail over onto the committed bytes, so all
+	// three terminations are terminal.
+	return true, streamResult{terminal: true}
 }
 
 // writeExfilDetectedSSE sends the structured canary-detection response:

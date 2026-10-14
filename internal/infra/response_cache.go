@@ -21,16 +21,38 @@ var cacheableFields = []string{
 // FingerprintPayload returns the cache fingerprint for payload without auth
 // scoping (tests and tooling): "p:" + hex(sha256(canonical payload)).
 func FingerprintPayload(payload map[string]interface{}) string {
-	return FingerprintPayloadWithAuth(payload, "")
+	return FingerprintPayloadScoped(payload, "", "")
 }
 
-// FingerprintPayloadWithAuth returns the cache fingerprint over the
-// cacheable fields. Auth-scoped fingerprints are
-// "auth:" + hex(sha256(authToken)) + ":" + hex(sha256(canonical payload)) —
-// the first segment names the per-auth namespace that partitions the semantic
-// index (NENYA-189), and the exact key still changes whenever either the
-// token or the payload changes. Without a token: "p:" + hex(sha256(...)).
+// FingerprintPayloadWithAuth returns the fingerprint for an authenticated
+// caller with no additional scope: FingerprintPayloadScoped(payload,
+// authToken, "").
+//
+// Deprecated: test/tooling helper. Production callers must scope with
+// FingerprintPayloadScoped so the key covers the effective content policy.
 func FingerprintPayloadWithAuth(payload map[string]interface{}, authToken string) string {
+	return FingerprintPayloadScoped(payload, authToken, "")
+}
+
+// FingerprintPayloadScoped returns the cache fingerprint over the payload's
+// cacheable fields, scoped by the caller's auth identity and by the request's
+// effective content-policy identity (NENYA-154).
+//
+// The scoped form is
+// "auth:" + hex(sha256(sha256(authToken) ‖ sha256(policyScope))) + ":" + hex(sha256(canonical payload)).
+// Folding the policy scope into the namespace segment means both the exact key
+// AND the semantic-index namespace change when the policy changes, so a
+// response cached under a different guardrail set can never be replayed
+// (exact hit) or reached as a near-duplicate (semantic hit). The two digests
+// are concatenated as fixed-width values so no token/policy pair can collide
+// by delimiter placement.
+//
+// Without a token the fingerprint is "p:" + hex(sha256(canonical payload)) and
+// a non-empty policyScope is rejected with "" (no cacheable key): an unscoped
+// fingerprint cannot be partitioned by policy, so failing closed is the only
+// safe answer. The unscoped form exists for tests and tooling only — every
+// request path is authenticated.
+func FingerprintPayloadScoped(payload map[string]interface{}, authToken, policyScope string) string {
 	canonical := make(map[string]interface{}, len(cacheableFields))
 	for _, field := range cacheableFields {
 		if v, ok := payload[field]; ok {
@@ -41,14 +63,21 @@ func FingerprintPayloadWithAuth(payload map[string]interface{}, authToken string
 	if err != nil {
 		return ""
 	}
-	h := sha256.New()
-	h.Write(data)
-	payloadHash := hex.EncodeToString(h.Sum(nil))
+	payloadHash := sha256.Sum256(data)
 	if authToken == "" {
-		return "p:" + payloadHash
+		if policyScope != "" {
+			// Scoped without a caller identity cannot be partitioned.
+			return ""
+		}
+		return "p:" + hex.EncodeToString(payloadHash[:])
 	}
 	authHash := sha256.Sum256([]byte(authToken))
-	return "auth:" + hex.EncodeToString(authHash[:]) + ":" + payloadHash
+	scopeHash := sha256.Sum256([]byte(policyScope))
+	var namespaceInput [sha256.Size * 2]byte
+	copy(namespaceInput[:sha256.Size], authHash[:])
+	copy(namespaceInput[sha256.Size:], scopeHash[:])
+	namespace := sha256.Sum256(namespaceInput[:])
+	return "auth:" + hex.EncodeToString(namespace[:]) + ":" + hex.EncodeToString(payloadHash[:])
 }
 
 type responseCacheEntry struct {
@@ -60,10 +89,10 @@ type responseCacheEntry struct {
 	// eviction can find the right namespaced index without re-deriving it
 	// from the payload (NENYA-189).
 	model string
-	// stream records the response shape the entry was stored from: the
-	// semantic path only ever stores SSE streams, and a semantic hit may
-	// only serve a request with the same shape (a non-streaming request
-	// must not be handed an SSE body under a JSON content type).
+	// stream records the response shape the entry was stored from. Only SSE
+	// streams are ever stored, so replay always frames SSE; the semantic path
+	// still verifies the flag because its namespace excludes the payload's
+	// stream field (the exact key includes it — see Lookup).
 	stream bool
 }
 
@@ -81,11 +110,14 @@ type ResponseCache struct {
 	similarityThreshold float64
 	embedder            EmbeddingProvider
 	// semIdx partitions the semantic similarity index by caller identity and
-	// model (NENYA-189): an auth-scoped fingerprint ("auth:<authhash>:<payloadhash>")
-	// namespaces on the auth hash plus the client-requested model, so a
+	// model (NENYA-189): an auth-scoped fingerprint ("auth:<namespacesegment>:<payloadhash>")
+	// namespaces on the namespace segment plus the client-requested model, so a
 	// semantic hit can never serve one API key another key's cached response
-	// (or a different model's). Unscoped no-auth fingerprints carry the model
-	// segment only.
+	// (or a different model's). The namespace segment also folds in the
+	// effective content-policy identity (NENYA-154) — see
+	// FingerprintPayloadScoped — so a policy change yields a fresh namespace
+	// instead of reaching entries cached under the previous guardrails.
+	// Unscoped no-auth fingerprints carry the model segment only.
 	semIdx map[string]*EmbedIndex
 	// semanticEntries tracks the total indexed vectors incrementally so the
 	// metrics gauge does not need an O(namespaces) scan (guarded by mu).
@@ -141,24 +173,26 @@ func NewResponseCache(maxSize int, maxBytes int64, ttl, evictInterval time.Durat
 }
 
 // semanticNamespace partitions the semantic index by caller identity AND
-// model (NENYA-189): auth-scoped fingerprints ("auth:<authhash>:<payloadhash>")
-// namespace on the auth hash, plus the model so a semantic hit can never
-// serve a response cached for a different model (different system prompt /
-// tools under the same key). Legacy unscoped fingerprints ("p:<hash>", tests
-// and tooling) carry the model too, so no-auth deployments keep model
-// isolation. Unknown shapes namespace on the model alone — the prefix marker
-// keeps a future fingerprint format change from silently conflating
-// namespaces.
+// model (NENYA-189): auth-scoped fingerprints ("auth:<namespacesegment>:<payloadhash>")
+// namespace on the namespace segment, plus the model so a semantic hit can
+// never serve a response cached for a different model (different system
+// prompt / tools under the same key). The namespace segment is produced by
+// FingerprintPayloadScoped and already folds in the effective content-policy
+// identity (NENYA-154), so a policy change also yields a fresh namespace.
+// Legacy unscoped fingerprints ("p:<hash>", tests and tooling) carry the model
+// too, so no-auth deployments keep model isolation. Unknown shapes namespace
+// on the model alone — the prefix marker keeps a future fingerprint format
+// change from silently conflating namespaces.
 func semanticNamespace(key, model string) string {
 	rest, found := strings.CutPrefix(key, "auth:")
 	if !found {
 		return "p\x1f" + model
 	}
-	authHash, _, ok := strings.Cut(rest, ":")
-	if !ok || authHash == "" {
+	namespaceSegment, _, ok := strings.Cut(rest, ":")
+	if !ok || namespaceSegment == "" {
 		return "\x1f" + model
 	}
-	return authHash + "\x1f" + model
+	return namespaceSegment + "\x1f" + model
 }
 
 // semanticIndexIfPresent returns the namespace's index without creating it —
@@ -221,8 +255,9 @@ func (c *ResponseCache) handleExactHit(entry *responseCacheEntry, model string) 
 // Lookup returns the cached response for key: an exact match first, then —
 // when semantic mode is on — the most similar entry within the key's
 // auth+model namespace (never across namespaces, NENYA-189) and with the
-// same response shape (stream). embed is only called when the semantic
-// fallback runs; a nil embed disables the fallback.
+// same response shape (stream; enforced on the semantic fallback, whose
+// namespace excludes the payload's stream field). embed is only called when
+// the semantic fallback runs; a nil embed disables the fallback.
 func (c *ResponseCache) Lookup(key, model string, stream bool, embed func() ([]float32, error)) ([]byte, bool, string) {
 	if key == "" {
 		return nil, false, ""
@@ -230,6 +265,13 @@ func (c *ResponseCache) Lookup(key, model string, stream bool, embed func() ([]f
 
 	c.mu.RLock()
 	entry, ok := c.items[key]
+	// No response-shape guard on the exact path: the entry's stream flag is the
+	// RESPONSE shape (storeStreamCache always records true) and
+	// replayCachedResponse frames every hit as SSE accordingly, so there is
+	// nothing to compare the request flag against. (The semantic fallback does
+	// refuse a cross-shape hit, because its namespace excludes the payload's
+	// stream field; the exact key includes it, so the two paths are
+	// deliberately asymmetric.)
 	if ok && !time.Now().After(entry.expireAt) {
 		return c.handleExactHit(entry, model)
 	}

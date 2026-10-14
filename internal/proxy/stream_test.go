@@ -726,6 +726,25 @@ func TestCopyStream_UpstreamReadError(t *testing.T) {
 	}
 }
 
+// TestCopyStream_PreservesReadCause pins that classifying a read error keeps
+// the original cause reachable. handleStreamDone distinguishes an idle stall
+// (errStreamStalled) and content-policy blocks (stream.ErrExfilBlocked and
+// friends) by errors.Is; wrapping with a single %w on the sentinel would
+// erase those chains and make every stream error a generic interruption.
+func TestCopyStream_PreservesReadCause(t *testing.T) {
+	cause := stream.ErrExfilBlocked
+	src := &testutil.ErrorReader{Err: cause}
+	dst := testutil.NewBytesCapture()
+
+	_, err := copyStream(context.Background(), dst, src, make([]byte, 1024))
+	if !errors.Is(err, errUpstreamReadSide) {
+		t.Fatalf("expected upstream read sentinel, got: %v", err)
+	}
+	if !errors.Is(err, cause) {
+		t.Fatalf("specific read cause must survive classification, got: %v", err)
+	}
+}
+
 func TestCopyStream_ClientWriteError(t *testing.T) {
 	writeErr := fmt.Errorf("broken pipe")
 	src := strings.NewReader("some data that should fail")

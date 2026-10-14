@@ -517,6 +517,13 @@ func writeStreamChunk(ctx context.Context, dst io.Writer, chunk []byte, written 
 // classifyStreamReadErr maps an upstream stream read error to its sentinel,
 // translating io.EOF into a clean (nil) termination and preserving context
 // cancellation as-is.
+//
+// The original error is preserved alongside the sentinel (multi-error
+// wrapping) so callers can still classify the specific cause: handleStreamDone
+// distinguishes an idle stall (errStreamStalled) from a content-policy block
+// (stream.ErrExfilBlocked/ErrCanaryDetected/ErrStreamBlocked) by errors.Is, and
+// those blocks must terminate the exchange instead of failing over onto bytes
+// already written to the client.
 func classifyStreamReadErr(rerr error) error {
 	if rerr == io.EOF {
 		return nil
@@ -524,5 +531,5 @@ func classifyStreamReadErr(rerr error) error {
 	if errors.Is(rerr, context.Canceled) || errors.Is(rerr, context.DeadlineExceeded) {
 		return rerr
 	}
-	return fmt.Errorf("%w: %v", errUpstreamReadSide, rerr)
+	return fmt.Errorf("%w: %w", errUpstreamReadSide, rerr)
 }
