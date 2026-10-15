@@ -786,3 +786,111 @@ func TestProxy_WaitAutoSave_ReturnsImmediately(t *testing.T) {
 	defer cancel()
 	p.WaitAutoSave(ctx) // no goroutines tracked: must not block
 }
+
+// TestServeHTTP_EndpointRBAC_QueryStringDoesNotChangeIdentity pins the
+// NENYA-161 invariant end to end: endpoint authorization classifies a request
+// by method + PATH only (handler.go passes r.URL.Path, which excludes the
+// query), so a query string cannot create a distinguishable endpoint identity,
+// slip past a per-key endpoint allowlist, or defeat the NENYA-131 read-only
+// path scoping. The adjacent path-shape behaviors the invariant depends on are
+// pinned too: the path is used decoded (a percent-encoded spelling of an
+// allowlisted path authorizes, while %2F decodes into a different path), and
+// matching is exact (a trailing slash is not normalized — the router answers
+// 404 for it, so the request fails closed before RBAC is even consulted).
+func TestServeHTTP_EndpointRBAC_QueryStringDoesNotChangeIdentity(t *testing.T) {
+	secrets := &config.SecretsConfig{
+		ClientToken: "test-token",
+		ApiKeys: map[string]config.ApiKey{
+			"restricted": {
+				Name:             "restricted",
+				Token:            "nk-restricted-token-012345678",
+				Roles:            []string{"user"},
+				AllowedEndpoints: []string{"GET /v1/models"},
+				Enabled:          true,
+			},
+			"writer": {
+				Name:             "writer",
+				Token:            "nk-writer-token-0123456789ab",
+				Roles:            []string{"user"},
+				AllowedEndpoints: []string{"POST /v1/chat/completions"},
+				Enabled:          true,
+			},
+			"monitoring": {
+				Name:    "monitoring",
+				Token:   "nk-monitoring-token-0123456789",
+				Roles:   []string{"read-only"},
+				Enabled: true,
+			},
+		},
+	}
+	p, _ := newTestProxyWithSecrets(t, secrets)
+
+	const (
+		restrictedToken = "Bearer nk-restricted-token-012345678"
+		writerToken     = "Bearer nk-writer-token-0123456789ab"
+		monitoringToken = "Bearer nk-monitoring-token-0123456789"
+	)
+
+	cases := []struct {
+		name   string
+		auth   string
+		method string
+		path   string
+		body   string
+		want   int
+	}{
+		// The allowlist entry is "GET /v1/models": the query-free path and
+		// every query-bearing spelling of it classify identically. A regression
+		// to r.URL.RequestURI()/RequestURI would flip these to 403.
+		{name: "allowlisted path", auth: restrictedToken, method: http.MethodGet, path: "/v1/models", want: http.StatusOK},
+		{name: "single-parameter query", auth: restrictedToken, method: http.MethodGet, path: "/v1/models?foo=1", want: http.StatusOK},
+		{name: "multi-parameter query", auth: restrictedToken, method: http.MethodGet, path: "/v1/models?a=b&c=d", want: http.StatusOK},
+		{name: "empty query", auth: restrictedToken, method: http.MethodGet, path: "/v1/models?", want: http.StatusOK},
+		// r.URL.Path is decoded, so the encoded spelling reaches the matcher
+		// as the allowlisted path.
+		{name: "percent-encoded spelling of the allowlisted path", auth: restrictedToken, method: http.MethodGet, path: "/v1/%6dodels", want: http.StatusOK},
+		// A query cannot make a non-allowlisted endpoint matchable.
+		{name: "non-allowlisted path", auth: restrictedToken, method: http.MethodPost, path: "/v1/chat/completions", want: http.StatusForbidden},
+		{name: "non-allowlisted path with a query", auth: restrictedToken, method: http.MethodPost, path: "/v1/chat/completions?foo=1", want: http.StatusForbidden},
+		// The write path: the key DOES allow the canonical chat entry, so
+		// authorization passes and the observable is the body validation (400),
+		// proving the query did not change the classification.
+		{name: "allowlisted write path with a query", auth: writerToken, method: http.MethodPost, path: "/v1/chat/completions?foo=1", body: `{}`, want: http.StatusBadRequest},
+		{name: "allowlisted canonical messages route with a query", auth: writerToken, method: http.MethodPost, path: "/v1/messages?foo=1", body: `{}`, want: http.StatusBadRequest},
+		// An admin key is unrestricted; the query changes nothing.
+		{name: "admin key with a query", auth: "Bearer test-token", method: http.MethodGet, path: "/v1/models?foo=1", want: http.StatusOK},
+		// An unknown credential is still rejected with a query present.
+		{name: "unknown token with a query", auth: "Bearer nope", method: http.MethodGet, path: "/v1/models?foo=1", want: http.StatusForbidden},
+		// Matching is exact: a trailing slash is not the allowlisted path, and
+		// the router does not serve it either (fail closed before RBAC).
+		{name: "trailing slash (router-level fail-closed)", auth: restrictedToken, method: http.MethodGet, path: "/v1/models/", want: http.StatusNotFound},
+		{name: "encoded slash decodes into a different path", auth: restrictedToken, method: http.MethodGet, path: "/v1/models%2Ffoo", want: http.StatusNotFound},
+
+		// NENYA-131 read-only path scoping is unaffected by the query. The
+		// no-token row proves the telemetry endpoints are auth-gated, so the
+		// read-only 200s below are real authorizations rather than
+		// unauthenticated paths (and stay meaningful if the
+		// telemetry_unauthenticated default ever flips).
+		{name: "statsz without a token is rejected", method: http.MethodGet, path: "/statsz?foo=1", want: http.StatusUnauthorized},
+		{name: "read-only models with a query", auth: monitoringToken, method: http.MethodGet, path: "/v1/models?foo=1", want: http.StatusOK},
+		{name: "read-only statsz with a query", auth: monitoringToken, method: http.MethodGet, path: "/statsz?foo=1", want: http.StatusOK},
+		{name: "read-only metrics with a query", auth: monitoringToken, method: http.MethodGet, path: "/metrics?foo=1", want: http.StatusOK},
+		{name: "read-only proxy passthrough with a query", auth: monitoringToken, method: http.MethodGet, path: "/proxy/openai/v1/models?foo=1", want: http.StatusForbidden},
+		{name: "read-only pprof with a query", auth: monitoringToken, method: http.MethodGet, path: "/debug/pprof/?foo=1", want: http.StatusForbidden},
+		{name: "read-only files with a query", auth: monitoringToken, method: http.MethodGet, path: "/v1/files?foo=1", want: http.StatusForbidden},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			req := httptest.NewRequest(tc.method, tc.path, strings.NewReader(tc.body))
+			if tc.auth != "" {
+				req.Header.Set("Authorization", tc.auth)
+			}
+			rec := httptest.NewRecorder()
+			p.ServeHTTP(rec, req)
+			if rec.Code != tc.want {
+				t.Fatalf("%s %s: got %d, want %d (body: %s)", tc.method, tc.path, rec.Code, tc.want, rec.Body.String())
+			}
+		})
+	}
+}

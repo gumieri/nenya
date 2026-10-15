@@ -229,6 +229,154 @@ func TestAuthorizeEndpoint(t *testing.T) {
 	}
 }
 
+// TestAuthorizeEndpointPathOnlyIdentity pins the endpoint-classification
+// contract behind NENYA-161 (GoModel #1038): an endpoint's identity is
+// method + PATH only, and the caller must supply the query-free path
+// (production passes r.URL.Path, which excludes the query). The query-free
+// rows are the invariant; the query-bearing rows document the caller contract —
+// the matcher is a literal method+path comparison, so a query-bearing identity
+// would silently break every allowlist entry. If the matcher ever gains its own
+// query normalization, these caller-contract rows should flip to true (the
+// end-to-end assertions in internal/proxy/handler_test.go would then still
+// hold). The test also pins the adjacent path-shape rules the invariant
+// depends on (exact matching, no trailing-slash normalization, no
+// percent-decoding inside the matcher) and the query interaction with the
+// canonical chat-route mapping (NENYA-52) and the NENYA-131 read-only scoping.
+func TestAuthorizeEndpointPathOnlyIdentity(t *testing.T) {
+	restricted := &config.ApiKey{Name: "restricted", Roles: []string{"user"}, AllowedEndpoints: []string{"GET /v1/models"}}
+	writer := &config.ApiKey{Name: "writer", Roles: []string{"user"}, AllowedEndpoints: []string{"POST /v1/chat/completions"}}
+	monitoring := &config.ApiKey{Name: "monitoring", Roles: []string{"read-only"}}
+
+	tests := []struct {
+		name     string
+		key      *config.ApiKey
+		method   string
+		path     string
+		expected bool
+	}{
+		{
+			name:     "allowlist entry matches its query-free path",
+			key:      restricted,
+			method:   "GET",
+			path:     "/v1/models",
+			expected: true,
+		},
+		{
+			// Caller contract: production passes r.URL.Path, so this shape never
+			// reaches the matcher there.
+			name:     "caller contract: a query-bearing path is not an endpoint identity",
+			key:      restricted,
+			method:   "GET",
+			path:     "/v1/models?foo=1",
+			expected: false,
+		},
+		{
+			name:     "caller contract: a multi-parameter query is not an endpoint identity",
+			key:      restricted,
+			method:   "GET",
+			path:     "/v1/models?a=b&c=d",
+			expected: false,
+		},
+		{
+			name:     "caller contract: a query cannot smuggle a non-allowlisted path",
+			key:      restricted,
+			method:   "GET",
+			path:     "/v1/chat/completions?foo=1",
+			expected: false,
+		},
+		{
+			// Trailing slashes are distinct paths: matching is exact and
+			// therefore fail-closed (a slash-suffixed request is denied).
+			name:     "a trailing slash does not match an allowlist entry",
+			key:      restricted,
+			method:   "GET",
+			path:     "/v1/models/",
+			expected: false,
+		},
+		{
+			// The matcher does no decoding of its own; the caller supplies the
+			// decoded r.URL.Path (which is what makes /v1/%6dodels authorize).
+			name:     "the matcher does not decode percent-encoding",
+			key:      restricted,
+			method:   "GET",
+			path:     "/v1/%6dodels",
+			expected: false,
+		},
+		{
+			// Same caller-contract shape for %2F: the raw encoded string is not
+			// an allowlist identity (in production %2F decodes into a path
+			// separator, so the decoded form is a different path; that decoding
+			// is pinned end to end in internal/proxy/handler_test.go).
+			name:     "caller contract: a raw encoded slash is not an allowlist identity",
+			key:      restricted,
+			method:   "GET",
+			path:     "/v1/models%2Ffoo",
+			expected: false,
+		},
+		{
+			// The canonical chat-route mapping (NENYA-52) also switches on the
+			// exact path, so it is query-sensitive in the same way.
+			name:     "canonical chat entry matches its query-free path",
+			key:      writer,
+			method:   "POST",
+			path:     "/v1/chat/completions",
+			expected: true,
+		},
+		{
+			name:     "canonical chat entry grants the query-free messages route",
+			key:      writer,
+			method:   "POST",
+			path:     "/v1/messages",
+			expected: true,
+		},
+		{
+			name:     "caller contract: the canonical chat mapping is query-sensitive",
+			key:      writer,
+			method:   "POST",
+			path:     "/v1/chat/completions?foo=1",
+			expected: false,
+		},
+		{
+			name:     "caller contract: the messages mapping is query-sensitive",
+			key:      writer,
+			method:   "POST",
+			path:     "/v1/messages?foo=1",
+			expected: false,
+		},
+		{
+			// NENYA-131 read-only scoping, re-confirmed for the query shape
+			// (the query-free cases live in TestAuthorizeEndpoint).
+			name:     "read-only query-bearing path denied (NENYA-131 path scoping)",
+			key:      monitoring,
+			method:   "GET",
+			path:     "/v1/models?foo=1",
+			expected: false,
+		},
+		{
+			name:     "read-only trailing slash denied (NENYA-131 path scoping)",
+			key:      monitoring,
+			method:   "GET",
+			path:     "/v1/models/",
+			expected: false,
+		},
+		{
+			name:     "read-only proxy passthrough with a query denied (NENYA-131 path scoping)",
+			key:      monitoring,
+			method:   "GET",
+			path:     "/proxy/openai/v1/models?foo=1",
+			expected: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := AuthorizeEndpoint(tt.key, tt.method, tt.path); got != tt.expected {
+				t.Errorf("AuthorizeEndpoint(%q, %q, %q) = %v; want %v", tt.key.Name, tt.method, tt.path, got, tt.expected)
+			}
+		})
+	}
+}
+
 func TestHasPermission(t *testing.T) {
 	tests := []struct {
 		name     string
