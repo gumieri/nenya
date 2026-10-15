@@ -34,6 +34,10 @@ const (
 	DefaultMaxTransformedEventBytes = 50 * 1024 * 1024
 )
 
+// ResponseTransformer transforms one SSE data payload. TransformSSEChunk
+// receives the JSON payload of a data: line (without the field prefix) and must
+// return a SINGLE-LINE payload: the reader re-prefixes exactly one data: line
+// per call, so a payload containing a raw newline would corrupt the frame.
 type ResponseTransformer interface {
 	TransformSSEChunk(ctx context.Context, data []byte) ([]byte, error)
 }
@@ -143,6 +147,30 @@ type SSETransformingReader struct {
 	// resume the stream instead of terminating it. When suppressed, the reader
 	// ends with a plain EOF; the proxy decides whether to continue or terminate.
 	suppressCutError bool
+
+	// Frame-framing state (NENYA-169). emittedAny records whether any line has
+	// been forwarded to the client; lastLineBlank records whether the most
+	// recently emitted line was an SSE event terminator (a blank line). SSE
+	// frames are separated by a blank line, so a frame the gateway synthesizes
+	// or injects must be preceded by one when the previous line did not end an
+	// event — otherwise its data: line is appended to the previous event's data
+	// buffer and the client sees one corrupted event. The same state terminates
+	// the final event at EOF, without which a spec-compliant client discards a
+	// pending event (losing e.g. the [DONE] marker).
+	//
+	// Like the last* fields above, these are read and written only from the
+	// single goroutine calling Read(); no mutex is needed.
+	emittedAny    bool
+	lastLineBlank bool
+
+	// lineBuf is the pooled scratch buffer backing the most recently fetched
+	// line. The transformed result may alias it (transformLine passes the input
+	// through for passthrough lines) and the emission is delivered across
+	// several Read calls, so the buffer is retained here until the next line is
+	// fetched or the stream ends — returning it to the process-wide pool
+	// earlier would let another reader overwrite bytes this stream has not
+	// delivered yet.
+	lineBuf *[]byte
 }
 
 type pendingToolCall struct {
@@ -248,10 +276,15 @@ func (r *SSETransformingReader) SetLogger(logger *slog.Logger) {
 	r.logger = logger
 }
 
-// ResetCounters resets the transformed byte counter and discarding state.
-// Used when a transformer is reused across multiple requests to prevent
-// state leakage between streams. Currently readers are created per-request,
-// so this is reserved for future reader-pooling implementations.
+// ResetCounters resets the transformed byte counter, discarding state, and the
+// SSE framing state (NENYA-169). Used when a reader is reused across multiple
+// requests to prevent state leakage between streams. Currently readers are
+// created per-request, so this is reserved for future reader-pooling
+// implementations.
+//
+// Precondition: the reader must be drained (no pending buffered bytes). The
+// retained line-copy buffer is released only in that state, because it may back
+// output that has not been delivered yet.
 func (r *SSETransformingReader) ResetCounters() {
 	r.transformedBytes = 0
 	r.discarding = false
@@ -260,6 +293,11 @@ func (r *SSETransformingReader) ResetCounters() {
 	r.sawFinishReason = false
 	r.sawDone = false
 	r.injectedError = false
+	r.emittedAny = false
+	r.lastLineBlank = false
+	if r.pos >= len(r.buffer) {
+		r.releaseLineBuffer()
+	}
 }
 
 // SetSuppressCutError disables the interim gateway_error + [DONE] injection
@@ -371,17 +409,43 @@ func (r *SSETransformingReader) InjectedError() bool {
 
 // getTransformedLine returns the transformed line, using pooled buffers when possible.
 func (r *SSETransformingReader) getTransformedLine(line []byte) []byte {
-	if len(line) <= maxPooledBufSize {
-		buf := GetLineCopyBuffer()
-		*buf = (*buf)[:len(line)]
-		copy(*buf, line)
-		transformed := r.transformLine(*buf)
-		PutLineCopyBuffer(buf)
-		return transformed
+	// Release the previous line's buffer first: by the time a new line is
+	// fetched, the previous emission has been fully delivered (Read only scans
+	// again once its buffer is drained).
+	r.releaseLineBuffer()
+	if len(line) > maxPooledBufSize {
+		lineCopy := make([]byte, len(line))
+		copy(lineCopy, line)
+		return r.transformLine(lineCopy)
 	}
-	lineCopy := make([]byte, len(line))
-	copy(lineCopy, line)
-	return r.transformLine(lineCopy)
+	buf := GetLineCopyBuffer()
+	*buf = (*buf)[:len(line)]
+	copy(*buf, line)
+	r.lineBuf = buf
+	return r.transformLine(*buf)
+}
+
+// releaseLineBuffer returns the retained line-copy buffer to the pool. It must
+// only be called once the bytes derived from it have been fully delivered (or
+// the stream has ended).
+func (r *SSETransformingReader) releaseLineBuffer() {
+	if r.lineBuf == nil {
+		return
+	}
+	PutLineCopyBuffer(r.lineBuf)
+	r.lineBuf = nil
+}
+
+// finishWithError releases the reader's pooled scratch buffers and returns err.
+// Every terminal exit funnels through here so a retained line buffer can never
+// outlive the stream (the pool is process-wide; keeping a buffer alive past the
+// stream would waste it, and recycling it early would corrupt live output).
+func (r *SSETransformingReader) finishWithError(err error) (int, error) {
+	r.releaseLineBuffer()
+	buf := r.poolBuf
+	r.poolBuf = nil
+	putStreamBuffer(buf)
+	return 0, err
 }
 
 // safePercentage calculates percentage with overflow protection.
@@ -396,17 +460,10 @@ func safePercentage(part, total uint64) uint64 {
 }
 
 func (r *SSETransformingReader) Read(p []byte) (int, error) {
-	if r.ctx != nil {
-		select {
-		case <-r.ctx.Done():
-			buf := r.poolBuf
-			r.poolBuf = nil
-			putStreamBuffer(buf)
-			return 0, r.ctx.Err()
-		default:
-		}
-	}
-
+	// Deliver buffered bytes before honoring cancellation or a terminal error:
+	// the buffer may hold the frame terminator that keeps the client's last
+	// event dispatchable, and a partially served line must never be truncated
+	// by a separator (NENYA-169).
 	if r.pos < len(r.buffer) {
 		n := copy(p, r.buffer[r.pos:])
 		r.pos += n
@@ -417,11 +474,16 @@ func (r *SSETransformingReader) Read(p []byte) (int, error) {
 		return n, nil
 	}
 
+	if r.ctx != nil {
+		select {
+		case <-r.ctx.Done():
+			return r.finishOnContextDone(p)
+		default:
+		}
+	}
+
 	if r.err != nil {
-		buf := r.poolBuf
-		r.poolBuf = nil
-		putStreamBuffer(buf)
-		return 0, r.err
+		return r.finishWithError(r.err)
 	}
 
 	if r.discarding && !errors.Is(r.err, ErrTransformedSizeExceeded) {
@@ -440,14 +502,14 @@ func (r *SSETransformingReader) Read(p []byte) (int, error) {
 
 		if transformed == nil {
 			if r.anyFilterBlocked() {
-				// The last scanned chunk flipped a filter to blocked:
-				// surface the specific error instead of a generic
-				// truncated-stream gateway error.
+				// The last scanned chunk flipped a filter to blocked: close the
+				// pending event and surface the specific error instead of a
+				// generic truncated-stream gateway error. The terminator is
+				// delivered first (the caller writes its own policy-block frame
+				// onto the committed stream next).
 				r.err = r.blockedStreamError()
-				buf := r.poolBuf
-				r.poolBuf = nil
-				putStreamBuffer(buf)
-				return 0, r.err
+				r.closePendingEvent()
+				return r.Read(p)
 			}
 			if !r.scanner.Scan() {
 				r.handleScannerDone()
@@ -458,15 +520,14 @@ func (r *SSETransformingReader) Read(p []byte) (int, error) {
 
 		if r.anyFilterBlocked() {
 			r.err = r.blockedStreamError()
-			buf := r.poolBuf
-			r.poolBuf = nil
-			putStreamBuffer(buf)
-			return 0, r.err
+			r.closePendingEvent()
+			return r.Read(p)
 		}
 
 		if !bytes.HasSuffix(transformed, []byte("\n")) {
 			transformed = append(transformed, '\n')
 		}
+		r.noteEmittedLine(transformed)
 
 		r.trackTransformedSize(transformed)
 		r.trackStreamProgress(transformed)
@@ -476,6 +537,72 @@ func (r *SSETransformingReader) Read(p []byte) (int, error) {
 
 		return r.Read(p)
 	}
+}
+
+// finishOnContextDone ends the stream when the request context is done.
+// NENYA-169: the final event is closed first — the proxy may still write its own
+// terminal frame (e.g. the timeout terminator) onto an already-committed stream,
+// and an unterminated last line would glue that frame onto the previous event's
+// data. Read serves buffered bytes before this path, so the separator can never
+// truncate a partially delivered line. The cancellation is then surfaced on the
+// following call.
+func (r *SSETransformingReader) finishOnContextDone(p []byte) (int, error) {
+	if sep := r.eventSeparator(); len(sep) > 0 && len(p) > 0 {
+		n := copy(p, sep)
+		r.lastLineBlank = true
+		return n, nil
+	}
+	return r.finishWithError(r.ctx.Err())
+}
+
+// closePendingEvent buffers the blank line that terminates the final forwarded
+// event when it was left unterminated, so a frame the caller writes afterwards
+// (the proxy's policy-block, stall, timeout or interruption frame, or a resumed
+// stream) starts a new SSE event instead of joining the previous event's data.
+// It is a no-op when nothing was forwarded, when the last line already
+// terminated its event, or when a buffer is already pending.
+//
+// Deliberately unconditional: the terminator is added even when the final line
+// looks like a frame truncated mid-JSON. Withholding it cannot hide that line
+// (it has already been forwarded), and it would corrupt whatever the caller
+// writes next — the gateway's error frame would be absorbed into the truncated
+// event and never reach the client. The injected gateway_error/[DONE] (or the
+// proxy's own terminal frame) that follows is what tells the client the stream
+// was cut.
+func (r *SSETransformingReader) closePendingEvent() {
+	if len(r.buffer) > 0 || !r.emittedAny || r.lastLineBlank {
+		return
+	}
+	r.buffer = []byte("\n")
+	r.pos = 0
+	r.lastLineBlank = true
+}
+
+// noteEmittedLine records the framing state of an emission (one or more lines)
+// about to be forwarded. Read guarantees each emitted line ends with '\n', so an
+// emission terminates an SSE event exactly when it ends with a blank line. The
+// state is recorded when the bytes are buffered, not when they are delivered;
+// Read serves the buffer before any path that consumes this state.
+func (r *SSETransformingReader) noteEmittedLine(emitted []byte) {
+	r.emittedAny = true
+	body := emitted
+	if len(body) > 0 && body[len(body)-1] == '\n' {
+		body = body[:len(body)-1]
+	}
+	r.lastLineBlank = len(body) == 0 || body[len(body)-1] == '\n'
+}
+
+// eventSeparator returns the bytes that must precede a frame the gateway
+// synthesizes or injects so that frame starts a NEW SSE event. Frames are
+// separated by a blank line: without it the injected data: line joins the
+// previous event's data buffer and the client sees one corrupted event whose
+// payload is the concatenation. It returns nil when the previous line already
+// terminated its event, which keeps a well-formed passthrough byte-identical.
+func (r *SSETransformingReader) eventSeparator() []byte {
+	if r.emittedAny && !r.lastLineBlank {
+		return []byte("\n")
+	}
+	return nil
 }
 
 // trackTransformedSize accumulates the transformed output size and sets the
@@ -589,14 +716,23 @@ func (r *SSETransformingReader) handleScannerDone() {
 		slog.Warn("SSE scanner error", "err", r.scanner.Err())
 		r.err = r.scanner.Err()
 	}
+	// NENYA-169: terminate the final event. A spec-compliant SSE client
+	// discards a pending event at EOF unless a blank line closed it, so an
+	// upstream that omitted the trailing blank line — or a stream that ended on
+	// a forwarded frame — would silently lose its last event, including the
+	// [DONE] marker. Only when no injected terminal already closed the stream:
+	// injectDoneOnly and injectErrorBuffer emit their own terminator (preceded
+	// by eventSeparator when the previous line was unterminated).
+	r.closePendingEvent()
 }
 
 // injectDoneOnly buffers a bare [DONE] event without a gateway_error. Used for
 // benign stream endings where the model signaled completion but the upstream
 // omitted the [DONE] marker.
 func (r *SSETransformingReader) injectDoneOnly() {
-	r.buffer = []byte("data: [DONE]\n\n")
+	r.buffer = append(r.eventSeparator(), []byte("data: [DONE]\n\n")...)
 	r.pos = 0
+	r.lastLineBlank = true
 }
 
 // injectErrorBuffer creates a gateway_error SSE event + [DONE] and places it
@@ -614,8 +750,9 @@ func (r *SSETransformingReader) injectErrorBuffer(message string) {
 		slog.Error("failed to marshal error payload", "error", err, "message", message)
 		errPayload = []byte(`{"error":{"message":"internal error","type":"gateway_error"}}`)
 	}
-	r.buffer = append(append([]byte("data: "), errPayload...), []byte("\n\ndata: [DONE]\n\n")...)
+	r.buffer = append(append(append(r.eventSeparator(), []byte("data: ")...), errPayload...), []byte("\n\ndata: [DONE]\n\n")...)
 	r.pos = 0
+	r.lastLineBlank = true
 	if r.observer != nil {
 		var errMap map[string]any
 		if err := json.Unmarshal(errPayload, &errMap); err != nil {
@@ -644,10 +781,7 @@ func (r *SSETransformingReader) drainAfterScanDone(p []byte) (int, error) {
 		r.closed = true
 		r.observer.OnStreamClose(r.err)
 	}
-	buf := r.poolBuf
-	r.poolBuf = nil
-	putStreamBuffer(buf)
-	return 0, r.err
+	return r.finishWithError(r.err)
 }
 
 func (r *SSETransformingReader) transformSSEData(line []byte) []byte {
@@ -662,7 +796,7 @@ func (r *SSETransformingReader) transformSSEData(line []byte) []byte {
 		if synthLine, ok := r.synthesizeTerminalFinish(); ok {
 			r.notifySSEObserver(synthLine, ParseSSEChunk(synthLine[6:]), "")
 			r.notifySSEObserver(line, nil, "done")
-			return append(append(append([]byte{}, synthLine...), []byte("\n\n")...), line...)
+			return append(append(append(r.eventSeparator(), synthLine...), []byte("\n\n")...), line...)
 		}
 		r.notifySSEObserver(line, nil, "done")
 		return line
