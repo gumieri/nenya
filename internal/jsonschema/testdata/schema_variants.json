@@ -1,0 +1,169 @@
+{
+  "_comment": "NENYA-172 adversarial schema corpus for internal/jsonschema.Sanitize. Each case is a tool schema (raw JSON) plus the properties the sanitized output must have: `absent` lists keywords that must not appear anywhere in the output, `absent_text` substrings that must not survive, `present` top-level keys with their expected JSON values, and `type` the expected top-level type. The classes mirror the upstream CLIProxyAPI schema-sanitization fixes (dialect keywords, Unicode property escapes and patternProperties inspection, identifier keywords, boolean subschemas, type inference, constraint preservation, octal/NUL escapes, $ref, parameterless fallback).",
+  "cases": [
+    {
+      "name": "dialect and identifier keywords stripped",
+      "schema": {"$schema": "https://json-schema.org/draft/2020-12/schema", "$id": "https://example.com/x", "$anchor": "a", "$comment": "note", "$vocabulary": {"x": true}, "type": "object", "properties": {"a": {"type": "string"}}},
+      "absent": ["$schema", "$id", "$anchor", "$comment", "$vocabulary"],
+      "type": "object"
+    },
+    {
+      "name": "type inference from properties",
+      "schema": {"properties": {"a": {"type": "string"}}},
+      "type": "object",
+      "present": {"type": "object"}
+    },
+    {
+      "name": "root is always an object schema",
+      "schema": {"type": "array", "items": {"type": "string"}},
+      "type": "object",
+      "note": "tool arguments are a JSON object and providers require input_schema.type == object"
+    },
+    {
+      "name": "uppercase type normalized",
+      "schema": {"type": "OBJECT", "properties": {"a": {"type": "STRING"}}},
+      "present": {"type": "object"}
+    },
+    {
+      "name": "type array members normalized",
+      "schema": {"properties": {"a": {"type": ["STRING", "NULL"]}}},
+      "present": {"properties": {"a": {"type": ["string", "null"]}}}
+    },
+    {
+      "name": "control-only type name dropped",
+      "schema": {"properties": {"a": {"type": "\u007f"}}},
+      "present": {"properties": {"a": {}}}
+    },
+    {
+      "name": "whitespace-only type name dropped",
+      "schema": {"properties": {"a": {"type": " "}}},
+      "present": {"properties": {"a": {}}}
+    },
+    {
+      "name": "empty type name dropped",
+      "schema": {"properties": {"a": {"type": ""}}},
+      "present": {"properties": {"a": {}}}
+    },
+    {
+      "name": "unknown type name dropped",
+      "schema": {"properties": {"a": {"type": "foo"}}},
+      "present": {"properties": {"a": {}}}
+    },
+    {
+      "name": "padded type name normalized",
+      "schema": {"properties": {"a": {"type": " OBJECT "}}},
+      "present": {"properties": {"a": {"type": "object"}}}
+    },
+    {
+      "name": "nested array type inferred",
+      "schema": {"properties": {"a": {"items": {"type": "STRING"}}}},
+      "present": {"properties": {"a": {"type": "array", "items": {"type": "string"}}}}
+    },
+    {
+      "name": "required naming a dropped property pruned",
+      "schema": {"type": "object", "properties": {"a": {"type": "string"}}, "required": ["a", "ghost"]},
+      "present": {"required": ["a"]}
+    },
+    {
+      "name": "boolean subschema widened",
+      "schema": {"type": "object", "properties": {"a": true, "b": false}},
+      "present": {"properties": {"a": {}, "b": {}}},
+      "note": "true/false subschemas become the empty schema, which providers accept"
+    },
+    {
+      "name": "additionalProperties boolean preserved",
+      "schema": {"type": "object", "additionalProperties": false, "properties": {"a": {"type": "string"}}},
+      "present": {"additionalProperties": false}
+    },
+    {
+      "name": "additionalProperties object sanitized",
+      "schema": {"type": "object", "additionalProperties": {"$schema": "x", "type": "STRING"}},
+      "present": {"additionalProperties": {"type": "string"}}
+    },
+    {
+      "name": "constraints preserved",
+      "schema": {"type": "object", "properties": {"a": {"type": "string", "minLength": 2, "maxLength": 8, "pattern": "^[a-z]+$", "format": "hostname", "default": "x", "description": "a field", "enum": ["x", "y"]}}},
+      "present": {"properties": {"a": {"type": "string", "minLength": 2, "maxLength": 8, "pattern": "^[a-z]+$", "format": "hostname", "default": "x", "description": "a field", "enum": ["x", "y"]}}}
+    },
+    {
+      "name": "unicode property escape pattern dropped",
+      "schema": {"type": "object", "properties": {"a": {"type": "string", "pattern": "^\\p{L}+$"}}},
+      "absent": ["pattern"]
+    },
+    {
+      "name": "invalid regex pattern dropped",
+      "schema": {"type": "object", "properties": {"a": {"type": "string", "pattern": "^([a-z$"}}},
+      "absent": ["pattern"]
+    },
+    {
+      "name": "valid regex pattern kept",
+      "schema": {"type": "object", "properties": {"a": {"type": "string", "pattern": "^[a-z]{1,4}$"}}},
+      "present": {"properties": {"a": {"type": "string", "pattern": "^[a-z]{1,4}$"}}}
+    },
+    {
+      "name": "patternProperties inspected and unicode entry dropped",
+      "schema": {"type": "object", "patternProperties": {"^x-": {"$schema": "y", "type": "STRING"}, "^\\p{L}+$": {"type": "string"}}},
+      "present": {"patternProperties": {"^x-": {"type": "string"}}}
+    },
+    {
+      "name": "nul and control escapes stripped",
+      "schema": {"type": "object", "properties": {"a": {"type": "string", "description": "before\u0000after\u0007", "enum": ["x\u0000"]}}},
+      "absent_text": ["\u0000", "\u0007"]
+    },
+    {
+      "name": "local ref resolved and defs dropped",
+      "schema": {"type": "object", "properties": {"a": {"$ref": "#/$defs/Name"}}, "$defs": {"Name": {"$schema": "z", "type": "STRING", "minLength": 1}}},
+      "absent": ["$ref", "$defs"],
+      "present": {"properties": {"a": {"type": "string", "minLength": 1}}}
+    },
+    {
+      "name": "definitions ref resolved",
+      "schema": {"type": "object", "properties": {"a": {"$ref": "#/definitions/Name"}}, "definitions": {"Name": {"type": "integer"}}},
+      "absent": ["$ref", "definitions"],
+      "present": {"properties": {"a": {"type": "integer"}}}
+    },
+    {
+      "name": "unresolvable ref becomes empty schema",
+      "schema": {"type": "object", "properties": {"a": {"$ref": "https://example.com/x.json"}}},
+      "absent": ["$ref"],
+      "present": {"properties": {"a": {}}}
+    },
+    {
+      "name": "cyclic ref does not hang",
+      "schema": {"type": "object", "properties": {"a": {"$ref": "#/$defs/Loop"}}, "$defs": {"Loop": {"type": "object", "properties": {"self": {"$ref": "#/$defs/Loop"}}}}},
+      "absent": ["$ref", "$defs"]
+    },
+    {
+      "name": "composition keywords walked",
+      "schema": {"type": "object", "oneOf": [{"$schema": "x", "type": "STRING"}], "allOf": [{"type": "NUMBER"}], "anyOf": [{"type": "BOOLEAN"}], "not": {"$comment": "y", "type": "NULL"}},
+      "absent": ["$schema", "$comment"],
+      "present": {"oneOf": [{"type": "string"}], "allOf": [{"type": "number"}], "anyOf": [{"type": "boolean"}], "not": {"type": "null"}}
+    },
+    {
+      "name": "items tuple form normalized",
+      "schema": {"type": "array", "items": [{"type": "STRING"}, {"$schema": "x", "type": "INTEGER"}]},
+      "absent": ["$schema"]
+    },
+    {
+      "name": "dependentSchemas and propertyNames walked",
+      "schema": {"type": "object", "dependentSchemas": {"a": {"$schema": "x", "type": "OBJECT"}}, "propertyNames": {"$comment": "y", "pattern": "^[a-z]+$"}},
+      "absent": ["$schema", "$comment"],
+      "present": {"dependentSchemas": {"a": {"type": "object"}}}
+    },
+    {
+      "name": "parameterless tool gets the minimal object schema",
+      "schema": {},
+      "present": {"type": "object", "properties": {}}
+    },
+    {
+      "name": "boolean root widened",
+      "schema": true,
+      "present": {"type": "object", "properties": {}}
+    },
+    {
+      "name": "non-object root widened",
+      "schema": "not-a-schema",
+      "present": {"type": "object", "properties": {}}
+    }
+  ]
+}

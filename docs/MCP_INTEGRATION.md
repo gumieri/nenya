@@ -158,6 +158,48 @@ egress controls, canary tripwires) is documented in
 
 - MCP servers run on the local network. Ensure they are trusted before connecting.
 - The `headers` field allows passing authentication to MCP proxies that require it.
+- Tool schemas are sanitized for cross-provider transport (NENYA-172): a
+  discovered tool's `inputSchema` is decoded without loss (composition keywords,
+  `items`, `patternProperties`, an object-valued `additionalProperties`, and
+  every constraint survive) and normalized before it is injected — dialect/meta
+  keywords (`$schema`, `$id`, `$anchor`, `$comment`, ...) and the `$defs`/
+  `definitions` table are dropped, local `$ref` pointers are inlined (with a
+  cycle cap; an unresolvable pointer becomes the empty schema), bare boolean
+  subschemas are widened to `{}` (a boolean `additionalProperties` is preserved,
+  since `false` is a real constraint), the declared `type` is lowercased and
+  inferred from `properties`/`items` when absent, regexes in `pattern`/
+  `patternProperties` that do not compile or that use a Unicode property escape
+  are dropped, and NUL/C0 control characters are stripped from every string. A
+  parameterless tool gets the minimal `{"type":"object","properties":{}}` schema
+  instead of `{"type":""}`. The walker visits every subschema position it knows
+  (there is no fast path) — properties, patternProperties, additionalProperties,
+  items/prefixItems/additionalItems, contains, propertyNames, not/if/then/else,
+  allOf/anyOf/oneOf, dependentSchemas, unevaluated*, contentSchema — with depth,
+  node, and property caps, so a hostile schema cannot turn into a sanitizer-caused
+  400, an unbounded request body, or a CPU blowup (`$ref` expansion is memoized
+  with a hop cap and a total-node budget). The sanitizer is total (a nil, boolean,
+  non-object, or string-encoded schema becomes the minimal object schema) and its
+  root is always `{"type":"object", ...}`: tool arguments are a JSON object, and
+  providers require `input_schema.type == "object"`. A declared type outside the
+  JSON Schema set (an unknown, empty, whitespace-only, or control-only name) is
+  dropped rather than forwarded as `"type": ""`/`"foo"`, and a `required` name
+  with no matching declared property is pruned (except when the `properties`
+  table is absent or empty — a required list is legal on its own, and pruning it
+  there would make the sanitizer non-idempotent). Out of scope: a regex that RE2
+  accepts but a provider's flavor rejects (forwarded, so the provider answers with
+  its own 400), a nested `$ref` pointing into a definition table that is not in
+  scope (resolved against the nearest enclosing table; otherwise the node becomes
+  `{}`), and the draft-07 tuple form of `items` (kept as an array).
+- The argument guard still enforces only its documented subset
+  (type/enum/required/properties/items) and fails closed when a declaration nests
+  deeper than its own cap (16): a schema that cannot be validated in full is
+  rejected rather than partially checked.
+- MCP tool names are hygienic (NENYA-172): the `server__tool` namespacing is
+  charset-sanitized to the provider function-name set, capped at the strictest
+  provider limit (64 characters) with a deterministic digest suffix so two long
+  names cannot collide after truncation, and a name already claimed by a
+  different server/tool pair gets a deterministic disambiguating suffix. A reload
+  of the same server keeps its names, so the request prefix does not churn.
 - Tool call arguments are guarded before dispatch (`governance.mcp_guard`, default enabled): arguments are validated against the tool's declared `inputSchema` (minimal validator: `type`, `enum`, `required`, `properties`, `items`; unknown keywords ignored per JSON Schema spec), size-capped (`max_arg_bytes`, default 1 MiB), and string arguments are checked against the destination policy (NENYA-147: every whitespace-separated token is a candidate, not just the first, so a URL embedded in a command line or a flag assignment is seen; any `scheme://` and the scheme-relative `//host` form are accepted, and a URL embedded in a larger token — a markdown link, a quoted string — is extracted and judged; a token that *starts* with a scheme but has no parseable host is rejected as malformed, fail-closed, while an unparseable *embedded* URL falls back to the scheme-less judgement so templates and format strings are not rejected) (`url_policy`: `deny_private` rejects private/loopback/link-local/CGNAT/NAT64 hosts in every spelling — including the legacy integer IPv4 forms and IPv6 zone identifiers — plus localhost variants and `.internal`/`.local` suffixes; a scheme-less token is judged when it is the whole value or destination-shaped (an IP literal anywhere, or a special-use name with an explicit port or path), so prose that merely mentions `printer.local` or a public host is not rejected; `log` records only; `off` disables). Per-server `allowed_hosts` entries (exact hostname or `"*.suffix"`) grant exceptions for trusted internal tools. Rejected calls return a structured error result to the model (the loop can correct and retry) — the client response is unaffected. Limitations: the check is string-only — DNS names that resolve to private addresses, and DNS rebinding between the guard check and the MCP server's own fetch, are not detected; the guard applies to Nenya-managed tool dispatches including the auto-search and auto-save paths.
 - This guard applies to Nenya-managed MCP servers only. Client-side MCP setups (opencode/crush) talk to their servers directly; their tool results transit the gateway as message history and are covered by spotlighting/injection detection (Phases 020/030).
 - MCP server responses (tool results) are injected into the LLM conversation as tool messages. When `governance.spotlight.enabled` is set, results are enveloped in `<untrusted-content>` provenance tags and size-capped (`max_tool_result_bytes`, default 512KiB), and tool descriptions are marked untrusted — see [CONFIGURATION.md](CONFIGURATION.md#governance). Without spotlighting, results are injected unmodified.

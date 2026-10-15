@@ -1,9 +1,13 @@
 package mcp
 
 import (
-	"encoding/json"
+	"crypto/sha256"
+	"encoding/hex"
+	"fmt"
 	"strings"
 	"sync"
+
+	"github.com/nenya/internal/jsonschema"
 )
 
 type ToolRouting struct {
@@ -19,28 +23,24 @@ type ToolRouting struct {
 type ToolRegistry struct {
 	mu     sync.RWMutex
 	routes map[string]ToolRouting
+	// byPair maps a (server, tool) pair to its registry key, so the advertised
+	// function name and the dispatch key are always the same string.
+	byPair map[string]string
 }
 
-// schemaAsAny renders a typed InputSchema as generic decoded JSON so
-// the argument validator can walk nested properties/items uniformly.
+// schemaAsAny renders a typed InputSchema as generic decoded JSON so the
+// argument validator can walk nested properties/items uniformly. Every keyword
+// is preserved (NENYA-172), so the declaration reaches the validator intact;
+// the validator itself still enforces only its documented subset
+// (type/enum/required/properties/items) and ignores the rest.
 func schemaAsAny(schema InputSchema) any {
-	if schema.Type == "" && len(schema.Properties) == 0 && len(schema.Required) == 0 {
-		return nil
-	}
-	encoded, err := json.Marshal(schema)
-	if err != nil {
-		return nil
-	}
-	var out any
-	if err := json.Unmarshal(encoded, &out); err != nil {
-		return nil
-	}
-	return out
+	return schema.AsMap()
 }
 
 func NewToolRegistry() *ToolRegistry {
 	return &ToolRegistry{
 		routes: make(map[string]ToolRouting),
+		byPair: make(map[string]string),
 	}
 }
 
@@ -49,12 +49,71 @@ func (r *ToolRegistry) Register(serverName string, tools []Tool) {
 	defer r.mu.Unlock()
 
 	for _, tool := range tools {
-		openaiName := buildOpenAIToolName(serverName, tool.Name)
+		openaiName := r.uniqueToolName(serverName, tool.Name)
 		r.routes[openaiName] = ToolRouting{
 			OpenAIToolName: openaiName,
 			ServerName:     serverName,
 			MCPToolName:    tool.Name,
 			Schema:         schemaAsAny(tool.InputSchema),
+		}
+		r.byPair[pairKey(serverName, tool.Name)] = openaiName
+	}
+}
+
+// OpenAITools builds the OpenAI-shaped declarations for one server from the
+// registry's routes, so the name advertised to the model is exactly the name the
+// registry dispatches on: a namespacing collision can no longer make two servers
+// advertise the same function name (NENYA-172).
+func (r *ToolRegistry) OpenAITools(serverName string, tools []Tool) []map[string]any {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	result := make([]map[string]any, 0, len(tools))
+	for _, tool := range tools {
+		name, ok := r.byPair[pairKey(serverName, tool.Name)]
+		if !ok {
+			name = buildOpenAIToolName(serverName, tool.Name)
+		}
+		result = append(result, map[string]any{
+			"type": "function",
+			"function": map[string]any{
+				"name":        name,
+				"description": tool.Description,
+				"parameters":  jsonschema.Sanitize(tool.InputSchema.AsMap()),
+			},
+		})
+	}
+	return result
+}
+
+// pairKey identifies a (server, tool) pair in the byPair index.
+func pairKey(serverName, toolName string) string {
+	return serverName + "\x00" + toolName
+}
+
+// uniqueToolName returns a registry key for one (server, tool) pair that is
+// stable across reloads and unique across servers: the namespaced name is
+// charset-sanitized and length-capped, and a name already claimed by a DIFFERENT
+// pair gets a deterministic digest suffix (NENYA-172). Re-registering the same
+// pair keeps its name, so a reload never churns the request prefix.
+func (r *ToolRegistry) uniqueToolName(serverName, toolName string) string {
+	base := buildOpenAIToolName(serverName, toolName)
+	existing, taken := r.routes[base]
+	if !taken || (existing.ServerName == serverName && existing.MCPToolName == toolName) {
+		return base
+	}
+	// Deterministic disambiguation, with a counter so an (astronomically
+	// unlikely) digest collision still terminates in a free name.
+	sum := sha256.Sum256([]byte(pairKey(serverName, toolName)))
+	digest := hex.EncodeToString(sum[:])[:8]
+	for attempt := 0; ; attempt++ {
+		candidate := jsonschema.CapToolName(base + "-" + digest)
+		if attempt > 0 {
+			candidate = jsonschema.CapToolName(fmt.Sprintf("%s-%s%d", base, digest, attempt))
+		}
+		claimed, ok := r.routes[candidate]
+		if !ok || (claimed.ServerName == serverName && claimed.MCPToolName == toolName) {
+			return candidate
 		}
 	}
 }
@@ -87,28 +146,21 @@ func (r *ToolRegistry) Clear() {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.routes = make(map[string]ToolRouting)
+	r.byPair = make(map[string]string)
 }
 
+// buildOpenAIToolName namespaces a tool by its server. Both parts are sanitized
+// to the provider function-name charset and the result is length-capped with a
+// deterministic digest suffix, so a hostile or oversized MCP tool name cannot
+// produce a provider 400 (NENYA-172).
 func buildOpenAIToolName(serverName, toolName string) string {
-	return serverName + "__" + toolName
+	return jsonschema.CapToolName(jsonschema.SanitizeToolName(serverName) + "__" + jsonschema.SanitizeToolName(toolName))
 }
 
-func MCPToolsToOpenAI(serverName string, tools []Tool) []map[string]any {
-	result := make([]map[string]any, 0, len(tools))
-	for _, tool := range tools {
-		openaiTool := map[string]any{
-			"type": "function",
-			"function": map[string]any{
-				"name":        buildOpenAIToolName(serverName, tool.Name),
-				"description": tool.Description,
-				"parameters":  tool.InputSchema,
-			},
-		}
-		result = append(result, openaiTool)
-	}
-	return result
-}
-
+// ParseMCPCall splits a namespaced tool name on the FIRST "__" separator. It is
+// a convenience for callers that only have the name string; the registry is the
+// source of truth for dispatch (a sanitized or disambiguated name need not
+// split back into the original pair).
 func ParseMCPCall(openaiToolName string) (serverName string, mcpToolName string, ok bool) {
 	idx := strings.Index(openaiToolName, "__")
 	if idx <= 0 || idx+2 >= len(openaiToolName) {

@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/nenya/internal/discovery"
+	"github.com/nenya/internal/jsonschema"
 	"github.com/nenya/internal/pipeline"
 )
 
@@ -165,8 +166,36 @@ func SanitizePayload(deps TransformDeps, payload map[string]interface{}, modelNa
 	stripStreamOptions(deps, payload, modelName)
 	stripToolChoice(deps, payload, modelName)
 	stripBareReasoningField(deps, payload, modelName)
+	sanitizeToolSchemas(payload)
 	processMessages(deps, payload, modelName)
 	applyDeepSeekFixes(deps, payload, modelName)
+}
+
+// sanitizeToolSchemas normalizes every tool declaration in the payload
+// (NENYA-172). It runs on the single request path, so it covers every provider
+// (the adapter-level sanitization only covered Anthropic): dialect keywords,
+// boolean subschemas, unresolved $refs, unsupported regexes, NUL escapes, and a
+// missing root type never reach an upstream 400.
+func sanitizeToolSchemas(payload map[string]interface{}) {
+	tools, ok := payload["tools"].([]interface{})
+	if !ok || len(tools) == 0 {
+		return
+	}
+	for _, rawTool := range tools {
+		tool, ok := rawTool.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		if fn, ok := tool["function"].(map[string]interface{}); ok {
+			fn["parameters"] = jsonschema.Sanitize(fn["parameters"])
+			continue
+		}
+		// An Anthropic-shaped declaration (a client that already speaks the
+		// Messages API) carries the schema at input_schema.
+		if _, ok := tool["input_schema"]; ok {
+			tool["input_schema"] = jsonschema.Sanitize(tool["input_schema"])
+		}
+	}
 }
 
 // ensureDeepSeekReasoningContent injects an empty reasoning_content field

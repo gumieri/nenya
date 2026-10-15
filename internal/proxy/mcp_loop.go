@@ -62,7 +62,9 @@ func (p *Proxy) injectMCPTools(gw *gateway.NenyaGateway, payload map[string]inte
 				"server", serverName, "agent", agentName)
 			continue
 		}
-		openaiTools := mcp.MCPToolsToOpenAI(serverName, granted)
+		// Build from the registry so the advertised function name and the
+		// dispatch key are the same string (NENYA-172).
+		openaiTools := gw.MCPToolIndex.OpenAITools(serverName, granted)
 		applyToolDescriptionSpotlight(openaiTools, spotlightSettingsFor(&gw.Config, agent), gw.Metrics)
 
 		existing, ok := payload["tools"].([]interface{})
@@ -660,7 +662,7 @@ func (p *Proxy) executeAndAppendMCPResults(in mcpIterInput, working map[string]a
 	if buf.reasoningContent != "" {
 		mcpAssistantMsg["reasoning_content"] = buf.reasoningContent
 	}
-	appended := appendMCPResults(working, mcpCalls, results, mcpAssistantMsg, spotlightSettingsFor(&in.gw.Config, in.opts.Agent), in.gw.Metrics)
+	appended := appendMCPResults(working, mcpCalls, results, mcpAssistantMsg, spotlightSettingsFor(&in.gw.Config, in.opts.Agent), in.gw.Metrics, in.gw.MCPToolIndex)
 	if appended == nil {
 		// appendMCPResults only returns nil without appending when
 		// payload["messages"] lost its []any shape — the tool results

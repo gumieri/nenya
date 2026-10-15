@@ -1,5 +1,7 @@
 package mcp
 
+import "encoding/json"
+
 // JSONRPCVersion represents a JSON-RPC protocol version string.
 type JSONRPCVersion string
 
@@ -88,17 +90,90 @@ type Tool struct {
 	InputSchema InputSchema `json:"inputSchema"`
 }
 
-// InputSchema is the tool's declared argument schema. Note: this typed
-// view carries only the top-level keywords the proxy consumes — nested
-// items/enum subtrees survive via the raw Properties values, but
-// root-level items/enum (and composition keywords such as oneOf,
-// anyOf, $defs, $ref) are dropped by decoding — the argument guard treats
-// such roots as undeclared and validates pass-through.
+// InputSchema is the tool's declared argument schema. The typed fields are the
+// keywords the proxy consumes directly; every other keyword ($ref, $defs,
+// items, oneOf, patternProperties, constraints, ...) is preserved verbatim in
+// the decoded raw map, so a schema survives the tools/list decode intact
+// (NENYA-172) and the sanitizer/argument guard see the whole declaration.
 type InputSchema struct {
 	Type                 string         `json:"type"`
 	Properties           map[string]any `json:"properties,omitempty"`
 	Required             []string       `json:"required,omitempty"`
-	AdditionalProperties bool           `json:"additionalProperties,omitempty"`
+	AdditionalProperties any            `json:"additionalProperties,omitempty"`
+
+	// raw is the decoded schema object with every keyword. Unexported so it
+	// never round-trips into a request body on its own.
+	raw map[string]any
+}
+
+// UnmarshalJSON decodes a tool schema into both the typed fields and the raw
+// keyword map, so decoding is no longer lossy.
+func (s *InputSchema) UnmarshalJSON(data []byte) error {
+	var raw map[string]any
+	if err := json.Unmarshal(data, &raw); err != nil {
+		// Not an object: a malformed schema must not fail the whole tools/list
+		// decode (that would drop the server's tools), so it decodes as empty.
+		*s = InputSchema{}
+		return nil
+	}
+	// The typed fields are a convenience view; a shape mismatch (a string
+	// required list, an array properties map, a numeric type) is ignored rather
+	// than failing the decode. The raw map is the authoritative declaration.
+	var typed struct {
+		Type                 string         `json:"type"`
+		Properties           map[string]any `json:"properties,omitempty"`
+		Required             []string       `json:"required,omitempty"`
+		AdditionalProperties any            `json:"additionalProperties,omitempty"`
+	}
+	_ = json.Unmarshal(data, &typed)
+	*s = InputSchema{
+		Type:                 typed.Type,
+		Properties:           typed.Properties,
+		Required:             typed.Required,
+		AdditionalProperties: typed.AdditionalProperties,
+		raw:                  raw,
+	}
+	return nil
+}
+
+// MarshalJSON emits the preserved keyword map, so a decode/encode round-trip is
+// lossless (a schema built in code falls back to its typed fields).
+func (s InputSchema) MarshalJSON() ([]byte, error) {
+	if s.raw != nil {
+		return json.Marshal(s.raw)
+	}
+	return json.Marshal(struct {
+		Type                 string         `json:"type,omitempty"`
+		Properties           map[string]any `json:"properties,omitempty"`
+		Required             []string       `json:"required,omitempty"`
+		AdditionalProperties any            `json:"additionalProperties,omitempty"`
+	}{s.Type, s.Properties, s.Required, s.AdditionalProperties})
+}
+
+// AsMap renders the schema as generic JSON, preserving every keyword. It returns
+// nil for a schema that declares nothing at all.
+func (s InputSchema) AsMap() map[string]any {
+	if s.raw != nil {
+		return s.raw
+	}
+	// A schema built in code (not decoded) falls back to its typed fields.
+	if s.Type == "" && len(s.Properties) == 0 && len(s.Required) == 0 && s.AdditionalProperties == nil {
+		return nil
+	}
+	encoded, err := json.Marshal(struct {
+		Type                 string         `json:"type,omitempty"`
+		Properties           map[string]any `json:"properties,omitempty"`
+		Required             []string       `json:"required,omitempty"`
+		AdditionalProperties any            `json:"additionalProperties,omitempty"`
+	}{s.Type, s.Properties, s.Required, s.AdditionalProperties})
+	if err != nil {
+		return nil
+	}
+	var out map[string]any
+	if err := json.Unmarshal(encoded, &out); err != nil {
+		return nil
+	}
+	return out
 }
 
 type CallToolParams struct {

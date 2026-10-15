@@ -46,7 +46,7 @@ func TestMCPToolsToOpenAI(t *testing.T) {
 		},
 	}
 
-	openaiTools := MCPToolsToOpenAI("memory", tools)
+	openaiTools := openAIToolsForTest(t, "memory", tools)
 
 	if len(openaiTools) != 2 {
 		t.Fatalf("expected 2 tools, got %d", len(openaiTools))
@@ -65,15 +65,16 @@ func TestMCPToolsToOpenAI(t *testing.T) {
 		t.Fatalf("description = %q, want %q", fn0["description"], "Search the palace")
 	}
 
-	params, ok := fn0["parameters"].(InputSchema)
+	params, ok := fn0["parameters"].(map[string]any)
 	if !ok {
-		t.Fatal("parameters is not InputSchema")
+		t.Fatalf("parameters type = %T, want the sanitized schema map", fn0["parameters"])
 	}
-	if params.Type != "object" {
-		t.Fatalf("parameters.type = %q, want object", params.Type)
+	if params["type"] != "object" {
+		t.Fatalf("parameters.type = %v, want object", params["type"])
 	}
-	if len(params.Required) != 1 || params.Required[0] != "query" {
-		t.Fatalf("parameters.required = %v, want [query]", params.Required)
+	required, _ := params["required"].([]any)
+	if len(required) != 1 || required[0] != "query" {
+		t.Fatalf("parameters.required = %v, want [query]", params["required"])
 	}
 
 	tool1 := openaiTools[1]
@@ -84,12 +85,12 @@ func TestMCPToolsToOpenAI(t *testing.T) {
 }
 
 func TestMCPToolsToOpenAI_Empty(t *testing.T) {
-	tools := MCPToolsToOpenAI("server", nil)
+	tools := openAIToolsForTest(t, "server", nil)
 	if len(tools) != 0 {
 		t.Fatalf("expected 0 tools, got %d", len(tools))
 	}
 
-	tools = MCPToolsToOpenAI("server", []Tool{})
+	tools = openAIToolsForTest(t, "server", []Tool{})
 	if len(tools) != 0 {
 		t.Fatalf("expected 0 tools, got %d", len(tools))
 	}
@@ -284,17 +285,27 @@ func TestMCPToolsToOpenAI_SchemaPreserved(t *testing.T) {
 		},
 	}
 
-	openaiTools := MCPToolsToOpenAI("test", tools)
+	openaiTools := openAIToolsForTest(t, "test", tools)
 	fn := openaiTools[0]["function"].(map[string]any)
-	params := fn["parameters"].(InputSchema)
+	params, ok := fn["parameters"].(map[string]any)
+	if !ok {
+		t.Fatalf("parameters type = %T, want a sanitized schema map", fn["parameters"])
+	}
 
-	if params.AdditionalProperties {
-		t.Fatal("AdditionalProperties should be preserved as false")
+	// NENYA-172: the injected schema is the sanitized generic map, so
+	// additionalProperties survives as the decoded value and every constraint
+	// is preserved.
+	if got, ok := params["additionalProperties"].(bool); !ok || got {
+		t.Fatalf("additionalProperties = %v, want the preserved false", params["additionalProperties"])
 	}
-	if len(params.Properties) != 4 {
-		t.Fatalf("expected 4 properties, got %d", len(params.Properties))
+	props, _ := params["properties"].(map[string]any)
+	if len(props) != 4 {
+		t.Fatalf("expected 4 properties, got %d", len(props))
 	}
-	if _, ok := params.Properties["tags"]; !ok {
+	if _, ok := props["tags"]; !ok {
 		t.Fatal("expected tags property")
+	}
+	if params["type"] != "object" {
+		t.Fatalf("type = %v, want object", params["type"])
 	}
 }

@@ -1233,7 +1233,16 @@ func missingRequiredHeader(serverCfg config.MCPServerConfig) string {
 }
 
 func (g *NenyaGateway) buildMCPToolIndex(ctx context.Context, logger *slog.Logger) {
-	for name, client := range g.MCPClients {
+	// Register in a deterministic order: the first server to claim a namespaced
+	// tool name keeps it, and map iteration would otherwise vary between starts
+	// (NENYA-172).
+	serverNames := make([]string, 0, len(g.MCPClients))
+	for name := range g.MCPClients {
+		serverNames = append(serverNames, name)
+	}
+	slices.Sort(serverNames)
+	for _, name := range serverNames {
+		client := g.MCPClients[name]
 		if g.Metrics != nil {
 			client.SetGatewayMetrics(g.Metrics)
 		}

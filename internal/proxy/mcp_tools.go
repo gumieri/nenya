@@ -748,7 +748,7 @@ func guardMCPArgs(gw *gateway.NenyaGateway, logger *slog.Logger, d mcpGuardDispa
 // spotlight enveloping to result content. It returns the appended message
 // maps (the same maps now referenced by the payload) so the MCP loop can
 // re-scan them through the deterministic security interceptors (NENYA-136).
-func appendMCPResults(payload map[string]any, calls []mcpToolCall, results []*mcp.CallToolResult, assistantMsg map[string]any, settings pipeline.SpotlightSettings, metrics *infra.Metrics) []map[string]any {
+func appendMCPResults(payload map[string]any, calls []mcpToolCall, results []*mcp.CallToolResult, assistantMsg map[string]any, settings pipeline.SpotlightSettings, metrics *infra.Metrics, toolIndex *mcp.ToolRegistry) []map[string]any {
 	if len(calls) == 0 || len(results) == 0 {
 		return nil
 	}
@@ -777,8 +777,18 @@ func appendMCPResults(payload map[string]any, calls []mcpToolCall, results []*mc
 			content = "[MCP Error] " + content
 		}
 		server, tool := "unknown", call.Name
-		if s, t, ok := mcp.ParseMCPCall(call.Name); ok {
-			server, tool = s, t
+		// The registry is the source of truth for the (server, tool) pair: the
+		// advertised name is sanitized and may be disambiguated, so re-splitting
+		// it would mislabel the spotlight source (NENYA-172).
+		if toolIndex != nil {
+			if route, ok := toolIndex.Lookup(call.Name); ok {
+				server, tool = route.ServerName, route.MCPToolName
+			}
+		}
+		if server == "unknown" {
+			if s, t, ok := mcp.ParseMCPCall(call.Name); ok {
+				server, tool = s, t
+			}
 		}
 		content = settings.Apply(content, pipeline.SpotlightSourceTool(server, tool))
 		if settings.Enabled {

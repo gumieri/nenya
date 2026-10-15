@@ -119,6 +119,11 @@ func ValidateArgs(args map[string]any, schema any, cfg ArgGuardConfig) ([]ArgVio
 // Everything else is ignored (JSON Schema spec behavior).
 func validateSchema(value any, schema any, path string, depth int) []ArgViolation {
 	if depth > maxSchemaDepth {
+		// Fail closed: a declaration deeper than the cap cannot be validated in
+		// full, so the call is rejected rather than partially checked. The
+		// preserved (lossless) decode makes this reachable for a schema the
+		// typed decode used to truncate (NENYA-172), and the sanitizer caps the
+		// INJECTED depth independently.
 		return []ArgViolation{{Path: path, Reason: fmt.Sprintf("schema nesting exceeds the %d level cap", maxSchemaDepth)}}
 	}
 	schemaMap, ok := schema.(map[string]any)

@@ -10,6 +10,7 @@ import (
 	"sync"
 
 	"github.com/nenya/config"
+	"github.com/nenya/internal/jsonschema"
 	"github.com/nenya/internal/stream"
 	"github.com/nenya/internal/util"
 )
@@ -928,17 +929,15 @@ func (a *AnthropicAdapter) convertTools(tools []interface{}, cacheTools bool, tt
 
 		name, _ := fn["name"].(string)
 		desc, _ := fn["description"].(string)
-		params := fn["parameters"]
 
 		anthTool := map[string]interface{}{
 			"name":        name,
 			"description": desc,
-		}
-
-		if params != nil {
-			anthTool["input_schema"] = params
-		} else {
-			anthTool["input_schema"] = map[string]interface{}{"type": "object", "properties": map[string]interface{}{}}
+			// Sanitized for cross-provider transport (NENYA-172): a
+			// parameterless tool gets the minimal object schema and dialect
+			// keywords, boolean subschemas, unresolved $refs, unsupported
+			// regexes, and NUL escapes are removed.
+			"input_schema": jsonschema.Sanitize(fn["parameters"]),
 		}
 
 		result = append(result, anthTool)
@@ -1545,19 +1544,13 @@ func (a *AnthropicAdapter) reverseConvertTools(tools []interface{}) []interface{
 		name, _ := tool["name"].(string)
 		desc, _ := tool["description"].(string)
 
-		var params interface{}
-		if schema, ok := tool["input_schema"]; ok {
-			params = schema
-		} else {
-			params = map[string]interface{}{"type": "object", "properties": map[string]interface{}{}}
-		}
-
 		result = append(result, map[string]interface{}{
 			"type": "function",
 			"function": map[string]interface{}{
 				"name":        name,
 				"description": desc,
-				"parameters":  params,
+				// Sanitized both ways (NENYA-172).
+				"parameters": jsonschema.Sanitize(tool["input_schema"]),
 			},
 		})
 	}
