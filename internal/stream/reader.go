@@ -34,6 +34,78 @@ const (
 	DefaultMaxTransformedEventBytes = 50 * 1024 * 1024
 )
 
+// SplitSSELines is the split function for every SSE scanner in Nenya (the
+// transforming reader, the buffered MCP path, the stream-head probe): it splits
+// on LF, CRLF and a lone CR — all three are legal SSE line terminators (WHATWG)
+// — and returns the line without its terminator. bufio.ScanLines only splits on
+// LF, so a CR-only stream would otherwise be read as one glued line and a
+// [DONE] inside it would never be recognized (NENYA-197).
+//
+// A CR at the end of the buffered data is held back until the next read, so a
+// CRLF split across read-chunk boundaries is never mistaken for a lone CR (the
+// line is therefore not delivered until the next byte or EOF — the same
+// requirement ScanLines has for LF). A raw CR inside a payload is a line
+// terminator by the same rule; the payload bytes are re-emitted inside the same
+// event with LF in place of CR.
+func SplitSSELines(data []byte, atEOF bool) (advance int, token []byte, err error) {
+	// The searches are bounded by the line, never by the whole buffer: the
+	// scanner re-invokes the split function on the remaining buffer for every
+	// line, so scanning past the current line would make a pure-LF stream
+	// quadratic in lines per buffer.
+	if nl := bytes.IndexByte(data, '\n'); nl >= 0 {
+		if cr := bytes.IndexByte(data[:nl], '\r'); cr >= 0 {
+			if cr == nl-1 {
+				return nl + 1, data[:cr], nil // CRLF
+			}
+			return cr + 1, data[:cr], nil // lone CR before the LF
+		}
+		return nl + 1, data[:nl], nil
+	}
+	// No LF in the buffer: the CR scan is bounded by the line itself.
+	cr := bytes.IndexByte(data, '\r')
+	switch {
+	case cr < 0:
+	case cr+1 < len(data), atEOF:
+		return cr + 1, data[:cr], nil
+	default:
+		// A CR at the buffer edge: wait for the next read to learn whether it
+		// is a CRLF.
+		return 0, nil, nil
+	}
+	if atEOF && len(data) > 0 {
+		return len(data), data, nil
+	}
+	return 0, nil, nil
+}
+
+// SSEDataField reports whether line is a data field and returns its value, with
+// the single optional leading space the SSE grammar allows removed (WHATWG
+// strips at most one U+0020; a tab after the colon is part of the value).
+// Tolerance (NENYA-197): a missing space ("data:{\"x\":1}") is accepted,
+// because real providers emit it and a strict parser silently drops the whole
+// field — the client then receives a stream with no content and the stream
+// filters never see the payload. Field names are case-sensitive, so "DATA:" is
+// not a data field. Frames the reader re-serializes or injects use the canonical
+// "data: " form; a passthrough line keeps its original spelling.
+func SSEDataField(line []byte) ([]byte, bool) {
+	if !bytes.HasPrefix(line, sseDataPrefix) {
+		return nil, false
+	}
+	value := line[len(sseDataPrefix):]
+	if len(value) > 0 && value[0] == ' ' {
+		value = value[1:]
+	}
+	return value, true
+}
+
+// sseDataPrefix is hoisted so the hot path does not convert the constant on
+// every SSE line.
+var sseDataPrefix = []byte("data:")
+
+// canonicalDoneFrame is the canonical [DONE] frame the reader forwards. It is a
+// constant so no caller can mutate the shared bytes.
+const canonicalDoneFrame = "data: [DONE]"
+
 // ResponseTransformer transforms one SSE data payload. TransformSSEChunk
 // receives the JSON payload of a data: line (without the field prefix) and must
 // return a SINGLE-LINE payload: the reader re-prefixes exactly one data: line
@@ -222,6 +294,7 @@ func NewSSETransformingReader(src io.Reader, transformer ResponseTransformer, ct
 		maxTransformedBytes: DefaultMaxTransformedEventBytes,
 		warnedAtThreshold:   false,
 	}
+	reader.scanner.Split(SplitSSELines)
 	reader.scanner.Buffer(*poolBuf, SSEScannerMaxBuf)
 	return reader
 }
@@ -317,8 +390,12 @@ func (r *SSETransformingReader) trackStreamProgress(transformed []byte) {
 		return
 	}
 	data := bytes.TrimSpace(transformed)
-	if bytes.HasPrefix(data, []byte("data: ")) {
-		data = bytes.TrimSpace(data[6:])
+	if value, isData := SSEDataField(data); isData {
+		// Tolerant field recognition (NENYA-197): a no-space data line must
+		// still register content/finish_reason, or the terminal-state matrix
+		// misclassifies a stream that completed (spurious gateway_error, no
+		// synthetic finish_reason, continuation disabled, caching blocked).
+		data = bytes.TrimSpace(value)
 	}
 	if len(data) == 0 || data[0] != '{' {
 		return
@@ -635,10 +712,13 @@ func (r *SSETransformingReader) trackTransformedSize(transformed []byte) {
 
 func (r *SSETransformingReader) transformLine(line []byte) []byte {
 	if r.discarding {
-		// Allow [DONE] to pass through so the stream can end cleanly
-		if bytes.HasPrefix(line, []byte("data: ")) && bytes.Equal(bytes.TrimSpace(line[6:]), []byte("[DONE]")) {
+		// Allow [DONE] to pass through so the stream can end cleanly. This is
+		// defensive: trackTransformedSize flips discarding mid-stream and the
+		// next Read injects the size error before scanning resumes, so the
+		// branch is normally unreachable.
+		if value, isData := SSEDataField(line); isData && bytes.Equal(bytes.TrimSpace(value), []byte("[DONE]")) {
 			r.sawDone = true
-			return line
+			return []byte(canonicalDoneFrame)
 		}
 		return nil
 	}
@@ -647,7 +727,7 @@ func (r *SSETransformingReader) transformLine(line []byte) []byte {
 		return line
 	}
 
-	if !bytes.HasPrefix(line, []byte("data: ")) {
+	if _, isData := SSEDataField(line); !isData {
 		result := r.transformNonSSELine(line)
 		if result == nil {
 			return nil
@@ -785,20 +865,29 @@ func (r *SSETransformingReader) drainAfterScanDone(p []byte) (int, error) {
 }
 
 func (r *SSETransformingReader) transformSSEData(line []byte) []byte {
-	origData := bytes.TrimPrefix(line, []byte("data: "))
+	origData, _ := SSEDataField(line)
 
 	if len(origData) == 0 {
 		r.notifySSEObserver(line, nil, "keepalive")
 		return line
 	}
-	if bytes.Equal(origData, []byte("[DONE]")) {
+	if bytes.Equal(bytes.TrimSpace(origData), []byte("[DONE]")) {
 		r.sawDone = true
+		// upstreamLine keeps the SSEObserver contract (Raw is the pre-filter
+		// upstream bytes) while the emitted frame is canonicalized.
+		upstreamLine := line
+		if string(line) != canonicalDoneFrame {
+			// Forward the canonical spelling: a client with a strict parser
+			// must see the sentinel (the tolerance premise is that strict
+			// parsers exist in the wild).
+			line = []byte(canonicalDoneFrame)
+		}
 		if synthLine, ok := r.synthesizeTerminalFinish(); ok {
 			r.notifySSEObserver(synthLine, ParseSSEChunk(synthLine[6:]), "")
-			r.notifySSEObserver(line, nil, "done")
+			r.notifySSEObserver(upstreamLine, nil, "done")
 			return append(append(append(r.eventSeparator(), synthLine...), []byte("\n\n")...), line...)
 		}
-		r.notifySSEObserver(line, nil, "done")
+		r.notifySSEObserver(upstreamLine, nil, "done")
 		return line
 	}
 
@@ -1107,8 +1196,8 @@ func (r *SSETransformingReader) handleWithTransformer(parsed map[string]interfac
 
 	if bytes.Equal(transformed, []byte("[DONE]")) {
 		r.sawDone = true
-		r.notifySSEObserver([]byte("data: [DONE]"), nil, "done")
-		return []byte("data: [DONE]")
+		r.notifySSEObserver([]byte(canonicalDoneFrame), nil, "done")
+		return []byte(canonicalDoneFrame)
 	}
 
 	if bytes.Equal(transformed, origData) && bytes.Equal(data, origData) {

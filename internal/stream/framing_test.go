@@ -273,9 +273,9 @@ func TestSSETransformingReader_CanonicalPassthroughIsByteIdentical(t *testing.T)
 }
 
 // TestSSETransformingReader_ChunkSplitInvariance pins the audit finding for the
-// CRLF class: a CRLF (or LF) split across read-chunk boundaries must not change
-// the output. The reader scans through bufio.Scanner, whose ScanLines drops a
-// CR only once the LF is visible, so every split offset must agree.
+// CRLF class: a CRLF (or LF, or lone CR) split across read-chunk boundaries must
+// not change the output. The splitter holds a CR at the buffer edge until the
+// next read, so every split offset must agree.
 func TestSSETransformingReader_ChunkSplitInvariance(t *testing.T) {
 	inputs := map[string]string{
 		"lf":                   "data: {\"a\":1}\n\ndata: {\"b\":2}\n\ndata: [DONE]\n\n",
@@ -296,11 +296,10 @@ func TestSSETransformingReader_ChunkSplitInvariance(t *testing.T) {
 	}
 }
 
-// TestSSETransformingReader_StrayCRHandling pins how lone carriage returns are
-// treated, as exact fixtures: bufio.Scanner's ScanLines drops ONE CR before the
-// LF (or at EOF), so a doubled CR leaves a CR inside the line — which must not
-// break event framing, and which a JSON payload tolerates as trailing
-// whitespace.
+// TestSSETransformingReader_StrayCRHandling pins how carriage returns are
+// treated, as exact fixtures. A lone CR is a line terminator (NENYA-197), so a
+// doubled CR is a terminator followed by an empty line, and a CR at EOF closes
+// the last line.
 func TestSSETransformingReader_StrayCRHandling(t *testing.T) {
 	tests := []struct {
 		name string
@@ -313,9 +312,13 @@ func TestSSETransformingReader_StrayCRHandling(t *testing.T) {
 			want: "data: {\"a\":1}\n\ndata: [DONE]\n\n",
 		},
 		{
-			name: "doubled cr leaves one cr in the line",
+			// A lone CR is a line terminator (NENYA-197), so a doubled CR is a
+			// line terminator followed by an empty line: the reader emits the
+			// blank line it represents. An empty event dispatches nothing, so
+			// this is harmless as well as spec-correct.
+			name: "doubled cr is a terminator plus a blank line",
 			in:   "data: {\"a\":1}\r\r\n\r\ndata: [DONE]\n\n",
-			want: "data: {\"a\":1}\r\n\ndata: [DONE]\n\n",
+			want: "data: {\"a\":1}\n\n\ndata: [DONE]\n\n",
 		},
 		{
 			name: "escaped cr inside the payload is untouched",
@@ -430,10 +433,20 @@ func FuzzSSETransformingReaderFraming(f *testing.F) {
 		if _, unterminated := parseSSEEvents(t, base); unterminated {
 			t.Fatalf("input %q produced an unterminated final event: %q", input, base)
 		}
+		// The transform path must be panic-free and framing-clean for the same
+		// arbitrary upstream bytes (NENYA-197).
+		transformed := framingReader(t, input, 0, reencodeTransformer{})
+		if _, unterminated := parseSSEEvents(t, transformed); unterminated {
+			t.Fatalf("input %q left the transformed stream pending: %q", input, transformed)
+		}
 		for size := 1; size <= len(input); size++ {
 			got := framingReader(t, input, size, nil)
 			if got != base {
 				t.Fatalf("chunk size %d changed the output for input %q:\nbase=%q\n got=%q", size, input, base, got)
+			}
+			gotTransformed := framingReader(t, input, size, reencodeTransformer{})
+			if gotTransformed != transformed {
+				t.Fatalf("chunk size %d changed the transformed output for input %q:\nbase=%q\n got=%q", size, input, transformed, gotTransformed)
 			}
 		}
 	})
@@ -645,26 +658,23 @@ func TestSSETransformingReader_RetainedLineBufferNotRecycled(t *testing.T) {
 	}
 }
 
-// TestSSETransformingReader_CROnlyLineEndings_DocumentedLimitation pins a
-// non-canonical framing shape that is NOT handled yet: bufio.Scanner's
-// ScanLines splits on LF only, so a CR-only stream is read as one long line —
-// [DONE] is not recognized and the reader injects a spurious gateway_error.
-// WHATWG-legal CR-only framing is in scope for NENYA-197 (parser tolerance for
-// non-canonical framing); this fixture makes any change to that behavior
-// visible rather than silent.
-func TestSSETransformingReader_CROnlyLineEndings_DocumentedLimitation(t *testing.T) {
-	input := "data: {\"a\":1}\r\rdata: [DONE]\r\r"
-	out := framingReader(t, input, 0, nil)
-
-	// The exact current output: one glued line, a spurious injected
-	// gateway_error, and an extra [DONE]. Any change (including a real fix in
-	// NENYA-197) must update this fixture deliberately.
-	want := "data: {\"a\":1}\r\rdata: [DONE]\r\n\n" +
-		"data: {\"error\":{\"message\":\"upstream stream ended without [DONE]\",\"type\":\"gateway_error\"}}\n\n" +
-		"data: [DONE]\n\n"
+// TestSSETransformingReader_CROnlyLineEndings pins CR-only framing, which is
+// legal SSE (WHATWG: LF, CR, or CRLF may terminate a line). bufio.ScanLines
+// splits on LF only, so this shape used to be read as one glued line — [DONE]
+// was never recognized and a spurious gateway_error was injected (pinned by a
+// documented-limitation fixture before NENYA-197). The reader now uses a split
+// function that recognizes all three terminators and normalizes the output to
+// LF.
+func TestSSETransformingReader_CROnlyLineEndings(t *testing.T) {
+	out := framingReader(t, "data: {\"a\":1}\r\rdata: [DONE]\r\r", 0, nil)
+	want := "data: {\"a\":1}\n\ndata: [DONE]\n\n"
 	if out != want {
-		t.Fatalf("CR-only behavior changed — update this fixture and NENYA-197:\n got=%q\nwant=%q", out, want)
+		t.Fatalf("out = %q, want %q", out, want)
 	}
+	if strings.Contains(out, "gateway_error") {
+		t.Fatalf("CR-only framing must not inject a terminal: %q", out)
+	}
+	assertWellFormedEvents(t, out, 2)
 }
 
 // TestSSETransformingReader_MultiLineTransformerPayload_DocumentedContract pins

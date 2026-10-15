@@ -8,9 +8,6 @@ import (
 	"github.com/nenya/internal/stream"
 )
 
-// dataPrefixLen is the length of the "data:" SSE field prefix.
-const dataPrefixLen = len("data:")
-
 // jsonMapPool recycles the map[string]any used for probing SSE payloads; the
 // probe runs once per streaming request but avoids per-line allocations.
 var jsonMapPool = sync.Pool{
@@ -33,6 +30,30 @@ const (
 	headError
 )
 
+// forEachSSELine walks the SSE lines of buf starting at offset, calling fn with
+// each line (terminator removed). fn returns false to stop the walk. It returns
+// the offset just past the last line consumed. With atEOF false a trailing
+// incomplete line — or a CR at the buffer edge — is left unscanned for the next
+// read (the incremental bootstrap buffer); with atEOF true the trailing segment
+// is treated as a complete line, because a one-shot probe has no next read (an
+// upstream error frame that arrived without a terminator must still be
+// classified, or NENYA-45 early failover is lost).
+// The splitter is the shared one (LF, CRLF or lone CR), so the probe agrees with
+// the transforming reader on non-canonical framing (NENYA-197).
+func forEachSSELine(buf []byte, offset int, atEOF bool, fn func(line []byte) bool) int {
+	for offset < len(buf) {
+		advance, token, _ := stream.SplitSSELines(buf[offset:], atEOF)
+		if advance == 0 {
+			break
+		}
+		offset += advance
+		if !fn(token) {
+			break
+		}
+	}
+	return offset
+}
+
 // classifyStreamHead inspects the first chunk of an upstream SSE stream and
 // reports whether it opened with an upstream error event. Only complete,
 // recognized event lines are considered: JSON payloads are matched against
@@ -40,20 +61,22 @@ const (
 // unknown data are treated as headNormal/headUndetermined so a stream that may
 // carry content is never misclassified.
 func classifyStreamHead(chunk []byte) streamHeadKind {
-	for _, raw := range bytes.Split(chunk, []byte{'\n'}) {
+	verdict := headUndetermined
+	forEachSSELine(chunk, 0, true, func(raw []byte) bool {
 		line := bytes.TrimSpace(raw)
 		if len(line) == 0 || line[0] == ':' {
-			continue
+			return true
 		}
 		if sseFieldLine(line) {
-			continue
+			return true
 		}
 		data, isData := sseDataLine(line)
 		if !isData || len(data) == 0 {
-			continue
+			return true
 		}
 		if bytes.Equal(data, []byte("[DONE]")) {
-			return headNormal
+			verdict = headNormal
+			return false
 		}
 		parsed := jsonMapPool.Get().(map[string]any)
 		// json.Unmarshal only overwrites keys present in the new payload, so a
@@ -65,20 +88,23 @@ func classifyStreamHead(chunk []byte) streamHeadKind {
 			clear(parsed)
 			jsonMapPool.Put(parsed)
 			// Incomplete/partial JSON: cannot decide, leave undetermined.
-			return headUndetermined
+			verdict = headUndetermined
+			return false
 		}
 		isErr := stream.IsStreamErrorPayload(parsed)
 		clear(parsed)
 		jsonMapPool.Put(parsed)
 		if isErr {
-			return headError
+			verdict = headError
+			return false
 		}
 		// The first complete, meaningful payload is not an upstream error:
 		// treat the head as content-bearing so we never fail over past client
 		// bytes.
-		return headNormal
-	}
-	return headUndetermined
+		verdict = headNormal
+		return false
+	})
+	return verdict
 }
 
 // sseFieldLine reports whether line is an SSE field line (event:/id:/retry:)
@@ -95,8 +121,8 @@ func sseFieldLine(line []byte) bool {
 // sseDataLine extracts the payload of a data: line, or a bare JSON line (some
 // upstreams emit raw JSON bodies under Content-Type: text/event-stream).
 func sseDataLine(line []byte) ([]byte, bool) {
-	if bytes.HasPrefix(line, []byte("data:")) {
-		return bytes.TrimSpace(line[dataPrefixLen:]), true
+	if value, isData := stream.SSEDataField(line); isData {
+		return bytes.TrimSpace(value), true
 	}
 	if line[0] == '{' {
 		return line, true
@@ -229,23 +255,21 @@ func bootstrapHasContent(m map[string]any) bool {
 // past the last complete line scanned. The trailing incomplete line (no
 // terminating '\n' yet) is left unscanned for the next read.
 func scanBootstrapBuffer(acc []byte, offset int) (bootstrapVerdict, int) {
-	for offset < len(acc) {
-		idx := bytes.IndexByte(acc[offset:], '\n')
-		if idx < 0 {
-			break
-		}
-		line := bytes.TrimSpace(acc[offset : offset+idx])
-		offset += idx + 1
+	verdict := bootstrapUndetermined
+	offset = forEachSSELine(acc, offset, false, func(raw []byte) bool {
+		line := bytes.TrimSpace(raw)
 		if len(line) == 0 || line[0] == ':' || sseFieldLine(line) {
-			continue
+			return true
 		}
 		data, isData := sseDataLine(line)
 		if !isData || len(data) == 0 {
-			continue
+			return true
 		}
 		if v := classifyBootstrapLine(data); v != bootstrapUndetermined {
-			return v, offset
+			verdict = v
+			return false
 		}
-	}
-	return bootstrapUndetermined, offset
+		return true
+	})
+	return verdict, offset
 }

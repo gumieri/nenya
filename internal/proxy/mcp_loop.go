@@ -1029,8 +1029,14 @@ func (p *Proxy) applyCanaryToBufferedSSE(gw *gateway.NenyaGateway, buf *buffered
 // line: block verdicts report truncation; log verdicts scrub the marker
 // sentence from frames after the trip.
 func (p *Proxy) canaryBufferedLine(watcher *stream.CanaryWatcher, canary pipeline.CanarResult, line string) (string, bool, bool) {
-	trimmed := strings.TrimPrefix(line, "data: ")
-	if line == trimmed || strings.TrimSpace(trimmed) == "" || strings.TrimSpace(trimmed) == "[DONE]" {
+	// Tolerant field recognition (NENYA-197): a no-space data line must be
+	// scanned, or the tripwire silently skips the payload it exists to catch.
+	value, isData := stream.SSEDataField([]byte(line))
+	if !isData {
+		return line + "\n", false, false
+	}
+	trimmed := strings.TrimSpace(string(value))
+	if trimmed == "" || trimmed == "[DONE]" {
 		return line + "\n", false, false
 	}
 	parsed := stream.ParseSSEChunk([]byte(trimmed))
@@ -1070,8 +1076,13 @@ func (p *Proxy) canaryBufferedLine(watcher *stream.CanaryWatcher, canary pipelin
 // the (possibly rewritten) line, whether it triggered a block, and
 // whether it was rewritten.
 func (p *Proxy) guardBufferedLine(guard *stream.ExfilGuard, line string) (string, bool, bool) {
-	trimmed := strings.TrimPrefix(line, "data: ")
-	if line == trimmed || strings.TrimSpace(trimmed) == "" || strings.TrimSpace(trimmed) == "[DONE]" {
+	// Tolerant field recognition (NENYA-197): see canaryBufferedLine.
+	value, isData := stream.SSEDataField([]byte(line))
+	if !isData {
+		return line + "\n", false, false
+	}
+	trimmed := strings.TrimSpace(string(value))
+	if trimmed == "" || trimmed == "[DONE]" {
 		return line + "\n", false, false
 	}
 	parsed := stream.ParseSSEChunk([]byte(trimmed))

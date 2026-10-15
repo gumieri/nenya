@@ -96,7 +96,9 @@ func (b *bufferedSSE) usageChunk() map[string]interface{} {
 	}
 	b.usageParsed = true
 	for _, line := range strings.Split(string(b.rawBytes), "\n") {
-		line = strings.TrimPrefix(line, "data: ")
+		if value, isData := stream.SSEDataField([]byte(line)); isData {
+			line = string(value)
+		}
 		line = strings.TrimSpace(line)
 		if line == "" || line == "[DONE]" || !strings.Contains(line, "usage") {
 			// Prefilter: content deltas are the bulk of a large buffer; only
@@ -194,13 +196,15 @@ func (acc *sseAccumulator) processLine(line string) bool {
 	}
 	acc.totalLines++
 
-	if !strings.HasPrefix(line, "data: ") {
+	value, isData := stream.SSEDataField([]byte(line))
+	if !isData {
 		return false
 	}
 	acc.dataLines++
 
-	data := strings.TrimPrefix(line, "data: ")
-	data = strings.TrimSpace(data)
+	// Tolerant field recognition (NENYA-197): a provider emitting
+	// "data:{json}" must not be read as an empty response.
+	data := strings.TrimSpace(string(value))
 	if data == "" {
 		return false
 	}
@@ -402,6 +406,9 @@ func (acc *sseAccumulator) result() *bufferedSSE {
 func bufferStreamResponse(ctx context.Context, r io.Reader, logger *slog.Logger, servingModel string, servingTarget routing.UpstreamTarget) (*bufferedSSE, error) {
 	acc := newSSEAccumulator(logger)
 	scanner := bufio.NewScanner(r)
+	// The shared SSE splitter (LF, CRLF or lone CR) so non-canonical framing is
+	// parsed per line instead of as one glued line (NENYA-197).
+	scanner.Split(stream.SplitSSELines)
 	scanner.Buffer(make([]byte, stream.SSEScannerInitialBuf), stream.SSEScannerMaxBuf)
 	for scanner.Scan() {
 		select {

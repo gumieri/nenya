@@ -50,7 +50,9 @@ func (b *bufferedSSE) usageTotals() (stream.UsageTotals, bool) {
 	}
 	b.usageMergedParsed = true
 	for _, line := range strings.Split(string(b.rawBytes), "\n") {
-		line = strings.TrimPrefix(line, "data: ")
+		if value, isData := stream.SSEDataField([]byte(line)); isData {
+			line = string(value)
+		}
 		line = strings.TrimSpace(line)
 		if line == "" || line == "[DONE]" || !strings.Contains(line, "usage") {
 			continue
