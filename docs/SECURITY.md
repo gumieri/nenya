@@ -65,7 +65,7 @@ The gateway exposes Prometheus counters for authentication events:
 | -------------------------- | ----------------------------------------------------------------------------- | ------------------------------ |
 | `nenya_auth_success_total` | `type` (client_token, api_key), `key_name` (key name, or `redacted`)          | Successful authentications     |
 | `nenya_auth_failure_total` | `type` (missing_header, client_token_mismatch, api_key_mismatch)              | Failed authentication attempts |
-| `nenya_auth_denials_total` | `key_name` (key name, or `redacted`; budget denials carry the agent name), `reason` (agent, endpoint, disabled, expired, invalid_expiry, missing_model, invalid_key, rate_limited, key_budget, provider_budget, payload_too_large, invalid_body) | RBAC authorization denials     |
+| `nenya_auth_denials_total` | `key_name` (the authenticated key's name, or `redacted`), `reason` (agent, endpoint, disabled, expired, invalid_expiry, missing_model, invalid_key, rate_limited, key_budget, provider_budget, payload_too_large, invalid_body) | RBAC authorization denials     |
 
 With `server.telemetry_unauthenticated` set, `key_name` labels are replaced
 by the constant `redacted` so an unauthenticated `/metrics` scrape cannot

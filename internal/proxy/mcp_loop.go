@@ -416,6 +416,22 @@ func (p *Proxy) forwardToUpstreamWithMCP(gw *gateway.NenyaGateway,
 		return
 	}
 
+	// NENYA-188: the MCP loop dispatches one upstream call per iteration and
+	// bypasses the chat retry loop, so the caller's daily key budget is
+	// reserved here — once per logical request, non-refundable (NENYA-20). The
+	// provider daily budget is checked per dispatch by checkPreDispatchGuards,
+	// which the loop's dispatches go through.
+	if reason, denied := reserveKeyBudget(gw, opts.ApiKey, opts.TokenCount); denied {
+		gw.Metrics.IncAuthDenials(apiKeyName(opts.ApiKey), reason)
+		gw.Logger.Warn("MCP loop rejected: token budget exhausted",
+			"agent", opts.AgentName, "reason", reason, "token_count", opts.TokenCount)
+		// The MCP loop always replays SSE (even for stream:false), so the
+		// denial matches that shape with the same error_kind as the chat paths
+		// (NENYA-188).
+		writeGatewayStreamError(w, http.StatusTooManyRequests, ErrorTypeRateLimit, "Token budget exhausted ("+reason+")")
+		return
+	}
+
 	var lastBuf *bufferedSSE
 	loopStart := time.Now()
 	totalToolCalls := 0

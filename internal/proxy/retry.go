@@ -73,6 +73,15 @@ type upstreamAction struct {
 	// failure (network error) eligible for a same-target retry when no
 	// later target remains. Guard/skip actions leave it false.
 	retryable bool
+	// skipReason names why a guard skipped the target ("provider_budget",
+	// "rate_limit", …), so the loop can report the reason that mattered when
+	// every target was skipped (NENYA-188).
+	skipReason string
+	// upstreamAttempted marks an action that performed an HTTP round-trip
+	// (any outcome of a successful Do: stream, response, upstream error, HTML
+	// rejection, network failure). The retry loop uses it to avoid reporting a
+	// budget exhaustion when a target actually reached a provider (NENYA-188).
+	upstreamAttempted bool
 }
 
 // releaseSlot frees the concurrency slot held by this action, if any. The
@@ -213,7 +222,14 @@ type retryLoop struct {
 	// keyBudgetCharged ensures the per-key daily token budget is charged
 	// once per request, not per failover attempt (NENYA-20).
 	keyBudgetCharged bool
-	rateLimitedPairs map[string]bool
+	// providerBudgetSkipped records that at least one target was skipped
+	// because its provider's daily budget was exhausted, and upstreamReached
+	// records that at least one target actually attempted an upstream call
+	// (a real dispatch or a retryable local failure) rather than being skipped
+	// by a guard (NENYA-188).
+	providerBudgetSkipped bool
+	upstreamReached       bool
+	rateLimitedPairs      map[string]bool
 	// paramRejectRetried ensures the strip-and-retry safety net (NENYA-32)
 	// fires at most once per request.
 	paramRejectRetried bool
@@ -296,6 +312,13 @@ func (rl *retryLoop) handleActionResult(i int, target routing.UpstreamTarget, ac
 	// retryable-4xx snapshot: the exhaustion relay must reflect the last
 	// failure. handleUpstreamError re-snapshots when this attempt is itself a
 	// retryable 4xx.
+	// A guard skip never attempted an upstream call; every other outcome did
+	// (a real response, a classified upstream error, an HTML rejection, or a
+	// retryable local failure). This is what keeps the budget-exhaustion report
+	// from masking a later target's real failure (NENYA-188).
+	if action.upstreamAttempted || action.kind != actionContinue || action.retryable {
+		rl.upstreamReached = true
+	}
 	if action.kind != actionError {
 		rl.lastRetryable4xx = nil
 	}
@@ -336,6 +359,9 @@ func (rl *retryLoop) handleErrorActionOutcome(i int, target routing.UpstreamTarg
 // later target stays immediate.
 func (rl *retryLoop) handleResumeAction(action upstreamAction) actionOutcome {
 	rl.lastFailReason = failReasonDispatch
+	if action.skipReason == "provider_budget" {
+		rl.providerBudgetSkipped = true
+	}
 	return actionOutcome{retryable: action.retryable}
 }
 
@@ -735,39 +761,52 @@ const (
 	failReasonStream
 )
 
-// enforceBudgets charges and checks the per-key daily token budget (once
-// per request) and the per-provider daily budget (per target attempt).
-// Returns denied=true with the denial reason ("key_budget" /
-// "provider_budget"); the caller writes the typed 429 and ends the request.
-func (rl *retryLoop) enforceBudgets(target routing.UpstreamTarget) (bool, string) {
+// reserveKeyBudget charges a request's token estimate against the
+// authenticated key's daily budget. It is charged once per logical request (the
+// caller latches it) and is non-refundable, so a failed dispatch still consumes
+// the reservation (NENYA-20). Returns the denial reason when the charge is
+// refused.
+func reserveKeyBudget(gw *gateway.NenyaGateway, key *config.ApiKey, tokenCount int) (string, bool) {
+	if tokenCount <= 0 || key == nil || key.TokenBudgetDaily <= 0 {
+		return "", false
+	}
+	if !gw.KeyUsage.ChargeKeyTokens(key.Name, key.TokenBudgetDaily, tokenCount) {
+		return "key_budget", true
+	}
+	return "", false
+}
+
+// enforceBudgets charges the per-key daily token budget once per logical
+// request, latching the charge so a failover sweep cannot reserve twice. It
+// returns denied=true with the reason ("key_budget"); the caller writes the
+// typed 429 and ends the request. The per-provider daily budget is checked per
+// dispatch by checkPreDispatchGuards (after the other guards, so a skipped
+// target does not consume provider budget) — that also covers the MCP buffered
+// sweep and the stream continuation (NENYA-188).
+func (rl *retryLoop) enforceBudgets() (bool, string) {
 	if rl.opts.TokenCount <= 0 {
 		return false, ""
 	}
-
-	// Key daily budget: reserved once per request (non-refundable
-	// estimate — failed dispatches consume the reservation).
 	if !rl.keyBudgetCharged {
 		rl.keyBudgetCharged = true
-		if key := rl.opts.ApiKey; key != nil && key.TokenBudgetDaily > 0 {
-			if !rl.gw.KeyUsage.ChargeKeyTokens(key.Name, key.TokenBudgetDaily, rl.opts.TokenCount) {
-				return true, "key_budget"
-			}
+		if reason, denied := reserveKeyBudget(rl.gw, rl.opts.ApiKey, rl.opts.TokenCount); denied {
+			return true, reason
 		}
 	}
-
-	// Provider daily budget with per-key priority tier.
-	prov := rl.gw.Providers[target.Provider]
-	if prov == nil || prov.TokenBudgetDaily <= 0 {
-		return false, ""
-	}
-	tier := "always"
-	if key := rl.opts.ApiKey; key != nil && key.BudgetTier != "" {
-		tier = key.BudgetTier
-	}
-	if !rl.gw.KeyUsage.AllowProviderTokens(target.Provider, tier, prov.TokenBudgetDaily, rl.opts.TokenCount) {
-		return true, "provider_budget"
-	}
 	return false, ""
+}
+
+// writeBudgetDenial answers a budget denial in the client's wire format: an SSE
+// error for a streaming request, structured JSON otherwise (NENYA-188).
+func (rl *retryLoop) writeBudgetDenial(reason string) {
+	message := "Token budget exhausted (" + reason + ")"
+	if rl.stream {
+		// ErrorTypeRateLimit maps to error_kind=rate_limited, matching the JSON
+		// path (and the pre-NENYA-188 streaming kind).
+		writeGatewayStreamError(rl.w, http.StatusTooManyRequests, ErrorTypeRateLimit, message)
+		return
+	}
+	writeStructuredError(rl.w, http.StatusTooManyRequests, infra.ErrorKindRateLimited, message)
 }
 
 // stickyAllowsFailover applies the agent's sticky_provider policy to a
@@ -824,17 +863,16 @@ func (rl *retryLoop) Run() bool {
 			continue
 		}
 
-		// Per-key/per-provider token budgets (NENYA-20): charged once per
-		// request for the key's daily budget, per dispatch attempt for the
-		// provider's daily budget. Denials write a typed 429 and end the
-		// request.
-		if denied, reason := rl.enforceBudgets(target); denied {
-			rl.gw.Metrics.IncAuthDenials(rl.opts.AgentName, reason)
+		// Per-key token budget (NENYA-20): charged once per request for the
+		// key's daily budget. The per-provider budget is checked per dispatch
+		// inside checkPreDispatchGuards. A denial writes a typed 429 and ends
+		// the request.
+		if denied, reason := rl.enforceBudgets(); denied {
+			rl.gw.Metrics.IncAuthDenials(apiKeyName(rl.opts.ApiKey), reason)
 			rl.ctxLogger.Warn("token budget exhausted, rejecting request",
 				"reason", reason, "model", target.Model, "provider", target.Provider,
 				"token_count", rl.opts.TokenCount)
-			writeStructuredError(rl.w, http.StatusTooManyRequests, infra.ErrorKindRateLimited,
-				"Token budget exhausted ("+reason+")")
+			rl.writeBudgetDenial(reason)
 			return true
 		}
 
@@ -958,6 +996,19 @@ func (rl *retryLoop) Exhausted() {
 			model = rl.opts.Targets[0].Model
 		}
 		rl.ctxLogger.Info("client gone before exhaustion reporting", "model", model)
+		return
+	}
+	// Every target was skipped because its provider's daily budget is
+	// exhausted: report the budget reason rather than a generic exhaustion
+	// (NENYA-188).
+	if rl.providerBudgetSkipped && !rl.upstreamReached {
+		rl.ctxLogger.Warn("all upstream targets skipped: provider token budget exhausted",
+			"total", len(rl.opts.Targets), "token_count", rl.opts.TokenCount)
+		if rl.opts.AgentName != "" {
+			rl.gw.Metrics.RecordExhausted(rl.opts.AgentName)
+		}
+		rl.gw.Metrics.IncAuthDenials(apiKeyName(rl.opts.ApiKey), "provider_budget")
+		rl.writeBudgetDenial("provider_budget")
 		return
 	}
 	// A retryable 4xx that consumed its retry budget is more useful to the
@@ -1104,12 +1155,14 @@ func (p *Proxy) prepareAndSend(gw *gateway.NenyaGateway,
 		"target_idx", fmt.Sprintf("%d/%d", idx+1, len(targets)),
 	)
 
-	gw.Stats.RecordRequest(target.Model, tokenCount)
-	gw.Metrics.RecordUpstreamRequest(target.Model, agentName, target.Provider)
-
-	if action := p.checkPreDispatchGuards(gw, ctxLogger, target, tokenCount, agentName); action != nil {
+	if action := p.checkPreDispatchGuards(gw, ctxLogger, target, tokenCount, agentName, apiKey); action != nil {
+		// A skipped target never became an upstream request, so it is not
+		// counted as one (NENYA-188).
 		return *action
 	}
+
+	gw.Stats.RecordRequest(target.Model, tokenCount)
+	gw.Metrics.RecordUpstreamRequest(target.Model, agentName, target.Provider)
 
 	// Per-model concurrency admission control (NENYA-69): hold a slot for
 	// the entire upstream round-trip, including SSE stream consumption.
@@ -1192,7 +1245,7 @@ func (p *Proxy) prepareAndSend(gw *gateway.NenyaGateway,
 		p.recordNetworkError(ctxLogger, gw, target, err, r, cooldownDuration)
 		// Network failures are transient: retryable for a same-target repeat
 		// when no later target remains (bounded by the attempt cap).
-		return upstreamAction{kind: actionContinue, release: release, retryable: true}
+		return upstreamAction{kind: actionContinue, release: release, retryable: true, upstreamAttempted: true}
 	}
 
 	duration := time.Since(startTime)
@@ -1209,10 +1262,12 @@ func (p *Proxy) prepareAndSend(gw *gateway.NenyaGateway,
 			gw.CostTracker.RecordError(target.Model)
 		}
 		gw.Metrics.RecordUpstreamError(target.Model, agentName, target.Provider, resp.StatusCode)
-		return upstreamAction{kind: actionError, resp: resp, cancel: upstreamCancel, release: release}
+		return upstreamAction{kind: actionError, resp: resp, cancel: upstreamCancel, release: release, upstreamAttempted: true}
 	}
 
-	return handleUpstreamResponse(ctxLogger, resp, upstreamCancel, release)
+	action := handleUpstreamResponse(ctxLogger, resp, upstreamCancel, release)
+	action.upstreamAttempted = true
+	return action
 }
 
 // wrapConcurrencyRelease ties the in-flight gauge to the slot release so the
@@ -1248,7 +1303,29 @@ func (p *Proxy) recordNetworkError(ctxLogger *slog.Logger, gw *gateway.NenyaGate
 	gw.AgentState.RecordFailure(target, cooldownDuration)
 }
 
-func (p *Proxy) checkPreDispatchGuards(gw *gateway.NenyaGateway, ctxLogger *slog.Logger, target routing.UpstreamTarget, tokenCount int, agentName string) *upstreamAction {
+// checkProviderBudget skips a target whose provider daily token budget is
+// exhausted for the caller's priority tier (NENYA-188): the sweep then reaches a
+// later target with headroom, and the request only fails when no target is left.
+// It runs per dispatch, after the other guards, so a target skipped for another
+// reason does not consume provider budget.
+func checkProviderBudget(gw *gateway.NenyaGateway, ctxLogger *slog.Logger, target routing.UpstreamTarget, tokenCount int, apiKey *config.ApiKey) *upstreamAction {
+	prov := gw.Providers[target.Provider]
+	if prov == nil || prov.TokenBudgetDaily <= 0 {
+		return nil
+	}
+	tier := "always"
+	if apiKey != nil && apiKey.BudgetTier != "" {
+		tier = apiKey.BudgetTier
+	}
+	if gw.KeyUsage.AllowProviderTokens(target.Provider, tier, prov.TokenBudgetDaily, tokenCount) {
+		return nil
+	}
+	ctxLogger.Warn("target skipped: provider token budget exhausted",
+		"tier", tier, "provider_budget_daily", prov.TokenBudgetDaily, "token_count", tokenCount)
+	return ptrAction(upstreamAction{kind: actionContinue, skipReason: "provider_budget"})
+}
+
+func (p *Proxy) checkPreDispatchGuards(gw *gateway.NenyaGateway, ctxLogger *slog.Logger, target routing.UpstreamTarget, tokenCount int, agentName string, apiKey *config.ApiKey) *upstreamAction {
 	if allowed, rej := gw.RateLimiter.CheckDetailed(target.Provider, target.URL, tokenCount); !allowed {
 		gw.Metrics.RecordRateLimitRejected(infra.ExtractHost(target.URL))
 		ctxLogger.Warn("target skipped: rate limit exceeded",
@@ -1256,7 +1333,7 @@ func (p *Proxy) checkPreDispatchGuards(gw *gateway.NenyaGateway, ctxLogger *slog
 			"limit", rej.Limit,
 			"bucket_left", rej.BucketLeft,
 			"token_count", rej.TokenCount)
-		return ptrAction(upstreamAction{kind: actionContinue})
+		return ptrAction(upstreamAction{kind: actionContinue, skipReason: "rate_limit"})
 	}
 
 	if gw.Config.Governance.MaxCostPerRequest > 0 {
@@ -1290,6 +1367,18 @@ func (p *Proxy) checkPreDispatchGuards(gw *gateway.NenyaGateway, ctxLogger *slog
 		return ptrAction(upstreamAction{kind: actionContinue})
 	}
 
+	// Provider daily budget with the caller's priority tier (NENYA-188), last so
+	// that a target skipped for any other reason never consumes provider budget.
+	if action := checkProviderBudget(gw, ctxLogger, target, tokenCount, apiKey); action != nil {
+		// The circuit-breaker guard above may have consumed a half-open probe
+		// (CB.Allow increments the inflight count); this skip will not dispatch,
+		// so return the probe rather than wedging the circuit (ReleaseHalfOpen
+		// is a no-op outside HalfOpen).
+		if target.CoolKey != "" {
+			gw.AgentState.CB.ReleaseHalfOpen(target.CoolKey)
+		}
+		return action
+	}
 	return nil
 }
 
