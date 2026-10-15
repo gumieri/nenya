@@ -39,6 +39,7 @@ import (
 const WindowSystemPrompt = `You are a conversation summarizer. Summarize the following conversation history into a concise summary.
 Preserve: file names, key decisions, error patterns, current task, constraints mentioned.
 Omit: verbatim code snippets, verbose outputs, redundant back-and-forth.
+Output ONLY descriptive prose. Describe the current task neutrally (for example "the task is X") and never phrase it as an instruction, action item, next step, to-do list, or imperative sentence — describe what happened, never what to do.
 Keep the summary under %d characters. Output ONLY the summary, no preamble or explanation.`
 
 type WindowDeps struct {
@@ -109,11 +110,14 @@ func ApplyWindowCompaction(ctx context.Context, deps WindowDeps, payload map[str
 	}
 
 	summary, deltaStart, coveredTokens := lookupCachedWindowHead(deps, windowCfg, summarize, stableHead, key, historyHash, historyText, len(history))
+	// A cache hit in summarize mode is a stored summary; a deterministic head
+	// (truncate/tfidf) is the client's own history and is never enveloped.
+	engineGenerated := summarize
 	if summary == "" {
 		// No cache hit: generate. coveredTokens is the covered region's
 		// token estimate, computed (and cached) at generation time.
 		var err error
-		summary, deltaStart, coveredTokens, err = generateWindowSummaryTracked(ctx, deps, windowCfg, active, historyText, summarize, deps.SummaryCache, key, historyHash, len(history))
+		summary, deltaStart, coveredTokens, engineGenerated, err = generateWindowSummaryTracked(ctx, deps, windowCfg, active, historyText, summarize, deps.SummaryCache, key, historyHash, len(history))
 		if err != nil || summary == "" {
 			if err != nil {
 				deps.Logger.Warn("window summarization failed, skipping", "err", err)
@@ -122,7 +126,7 @@ func ApplyWindowCompaction(ctx context.Context, deps WindowDeps, payload map[str
 		}
 	}
 
-	summary = trimSummaryToMaxRunes(summary, windowCfg.SummaryMaxRunes)
+	summary = trimSummaryToMaxRunes(summary, headRuneBudget(windowCfg, summarize, engineGenerated))
 	if summary == "" {
 		return false, nil
 	}
@@ -142,10 +146,11 @@ func ApplyWindowCompaction(ctx context.Context, deps WindowDeps, payload map[str
 	// the delta grows at the tail, which is ordinary conversation growth
 	// for the upstream cache.
 	newMessages := buildCompactedMessages(leadingSystem, active, compactedHead{
-		summary:       summary,
-		coveredLen:    deltaStart,
-		coveredTokens: coveredTokens,
-		delta:         history[deltaStart:],
+		summary:         summary,
+		engineGenerated: engineGenerated,
+		coveredLen:      deltaStart,
+		coveredTokens:   coveredTokens,
+		delta:           history[deltaStart:],
 	})
 	payload["messages"] = newMessages
 
@@ -327,11 +332,12 @@ func generateEngineSummary(ctx context.Context, deps WindowDeps, windowCfg confi
 // judged before storing: an "insufficient" verdict under strict action
 // discards the summary for deterministic truncation (nothing is cached). key
 // is the precomputed lineage key (empty when no cache is active).
-func generateWindowSummaryTracked(ctx context.Context, deps WindowDeps, windowCfg config.WindowConfig, active []interface{}, historyText string, summarize bool, cache *SummaryCache, key, historyHash string, historyLen int) (string, int, int, error) {
+func generateWindowSummaryTracked(ctx context.Context, deps WindowDeps, windowCfg config.WindowConfig, active []interface{}, historyText string, summarize bool, cache *SummaryCache, key, historyHash string, historyLen int) (string, int, int, bool, error) {
 	generated, deterministic, err := generateWindowSummary(ctx, deps, windowCfg, active, historyText)
 	if err != nil || generated == "" {
-		return "", 0, 0, err
+		return "", 0, 0, false, err
 	}
+	engineGenerated := !deterministic
 	// The gate judges engine output only: deterministic truncation
 	// fallback output is what the strict fallback would produce anyway.
 	// Trim before judging and caching so the judged artifact is the
@@ -342,7 +348,7 @@ func generateWindowSummaryTracked(ctx context.Context, deps WindowDeps, windowCf
 		if generated == "" {
 			// Strict fallback: deterministic truncation covers the whole
 			// history; the rejected summary is not cached.
-			return TruncateHistory(historyText, windowCfg.SummaryMaxRunes), historyLen, countCoveredTokens(deps, historyText), nil
+			return TruncateHistory(historyText, windowCfg.SummaryMaxRunes), historyLen, countCoveredTokens(deps, historyText), false, nil
 		}
 	}
 	coveredTokens := countCoveredTokens(deps, historyText)
@@ -353,7 +359,7 @@ func generateWindowSummaryTracked(ctx context.Context, deps WindowDeps, windowCf
 		// stays byte-identical across appended turns (SummaryCache analog).
 		deps.HeadCache.Store(key, historyText, historyLen, coveredTokens, generated)
 	}
-	return generated, historyLen, coveredTokens, nil
+	return generated, historyLen, coveredTokens, engineGenerated, nil
 }
 
 // countCoveredTokens estimates the token count of the covered region text,
@@ -483,6 +489,21 @@ func applyFidelityGate(ctx context.Context, deps WindowDeps, agentName, summary,
 	}
 }
 
+// headRuneBudget returns the rune budget for the stored head, reserving room for
+// the untrusted-content envelope when the head is a model-generated summary (a
+// deterministic head is inserted verbatim and gets the full budget), so the
+// SHIPPED head (envelope included) stays within summary_max_runes (NENYA-148).
+func headRuneBudget(windowCfg config.WindowConfig, summarize, engineGenerated bool) int {
+	budget := windowCfg.SummaryMaxRunes
+	if !summarize || !engineGenerated || budget <= 0 {
+		return budget
+	}
+	if reserved := SummaryEnvelopeOverheadRunes(SummarySourceWindow); budget > reserved {
+		return budget - reserved
+	}
+	return 1
+}
+
 func trimSummaryToMaxRunes(summary string, maxRunes int) string {
 	if maxRunes <= 0 {
 		return summary
@@ -499,20 +520,36 @@ func trimSummaryToMaxRunes(summary string, maxRunes int) string {
 
 // compactedHead groups the head that replaces the covered history region.
 type compactedHead struct {
-	summary       string
-	coveredLen    int // messages the head covers
-	coveredTokens int // token estimate of the covered region (header)
-	delta         []interface{}
+	summary string
+	// engineGenerated reports whether summary is model-generated (a real
+	// summarizer output) rather than verbatim history from a deterministic mode
+	// or the truncation fallback. Only engine output is enveloped and stripped
+	// (NENYA-148); deterministic heads carry the client's own text and are
+	// inserted verbatim.
+	engineGenerated bool
+	coveredLen      int // messages the head covers
+	coveredTokens   int // token estimate of the covered region (header)
+	delta           []interface{}
 }
 
 // buildCompactedMessages assembles the compacted message list: leading
 // system messages, the head (covering history[:head.coveredLen]), any
 // uncovered delta history messages verbatim, and the active window.
 func buildCompactedMessages(leadingSystem []interface{}, active []interface{}, head compactedHead) []interface{} {
+	// NENYA-148: a model-generated summary is locally produced text derived from
+	// untrusted conversation content, so it is stripped of any action plan and
+	// enveloped as inert data (a system-role context marker, never a user turn).
+	// A deterministic head (truncate/tfidf mode, or the truncation fallback) is
+	// the client's own history and is inserted verbatim: enveloping it would
+	// mislabel it and stripping it would delete the caller's content.
+	summaryText := head.summary
+	if head.engineGenerated {
+		summaryText = EnvelopeSummary(StripImperativeSections(head.summary), SummarySourceWindow)
+	}
 	summaryMsg := map[string]interface{}{
 		"role": "system",
 		"content": fmt.Sprintf("[Nenya Window Summary (%d messages compacted, was ~%d tokens)]:\n%s",
-			head.coveredLen, head.coveredTokens, head.summary),
+			head.coveredLen, head.coveredTokens, summaryText),
 	}
 
 	capacity := util.AddCap(util.AddCap(len(leadingSystem), 2), len(active))
@@ -525,9 +562,13 @@ func buildCompactedMessages(leadingSystem []interface{}, active []interface{}, h
 	if len(active) > 0 {
 		if firstActive, ok := active[0].(map[string]interface{}); ok {
 			if role, _ := firstActive["role"].(string); role == "assistant" {
+				// A descriptive marker (not an instruction): it exists only to
+				// keep the active window from starting with an assistant turn
+				// (provider prefill ambiguity), and NENYA-148 keeps every
+				// locally generated cue non-imperative.
 				newMessages = append(newMessages, map[string]interface{}{
 					"role":    "user",
-					"content": "[Continuing from compacted conversation. Please proceed with the current task.]",
+					"content": "[Resumed context: the conversation above was compacted; the messages below are the active window.]",
 				})
 			}
 		}

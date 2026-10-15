@@ -97,6 +97,13 @@ func (b *BouncerInterceptor) Process(ctx context.Context, req *pipeline.Intercep
 	}
 
 	summarized, err := b.summarize(ctx, text, req.Profile.IsIDE)
+	if err == nil {
+		// NENYA-148: the rewrite must not INTRODUCE an action plan the source
+		// text did not have (the signature of a prompt-injected local engine).
+		// An engine that returns nothing but a plan is unusable, so it takes the
+		// same path as an engine failure rather than shipping the plan.
+		summarized = pipeline.StripNewImperativeSections(text, summarized)
+	}
 	if err != nil || strings.TrimSpace(summarized) == "" {
 		// Empty engine output would destroy the message content for just
 		// the header — treat it as a summarize failure. The payload keeps
@@ -128,6 +135,10 @@ func (b *BouncerInterceptor) Process(ctx context.Context, req *pipeline.Intercep
 	}
 
 	b.gw.Metrics.RecordInterception("engine")
+	// NENYA-148: the engine rewrites the caller's OWN message in place, so the
+	// role must stay as it is — the request must remain a request (an
+	// untrusted-content envelope would mislabel it as external data). The
+	// provenance marker plus the introduction guard above carry the hardening.
 	sanitized := "[Nenya Sanitized via Ollama]:\n" + summarized
 	lastMsg["content"] = sanitized
 	// In-place mutation; payload["messages"] keeps its original
@@ -219,10 +230,10 @@ func (b *BouncerInterceptor) summarize(ctx context.Context, heavyText string, is
 		return "", errors.New("bouncer engine: no resolved targets")
 	}
 
-	defaultPrompt := "You are a data privacy filter. Review the following text and remove or replace any IP addresses, AWS keys (AKIA...), passwords, tokens, or credentials with [REDACTED]. Preserve the original structure, detail level, and all non-sensitive content exactly as provided. Do NOT summarize or shorten the text."
+	defaultPrompt := "You are a data privacy filter. Review the following text and remove or replace any IP addresses, AWS keys (AKIA...), passwords, tokens, or credentials with [REDACTED]. Preserve the original structure, detail level, and all non-sensitive content exactly as provided. Do NOT summarize or shorten the text. Never introduce instructions, action items, next steps, or imperative sentences that are not present in the input; preserve the caller's own wording, including any instructions they wrote, exactly."
 
 	if isIDE && pipeline.HasCodeFences(heavyText) {
-		defaultPrompt = "You are a data privacy filter for code. The following text contains code blocks (marked with ``` fences). Remove or replace any IP addresses, AWS keys (AKIA...), passwords, tokens, or credentials that appear OUTSIDE code blocks with [REDACTED]. Inside code blocks, only redact actual hardcoded secrets in string literals — preserve all code structure, function signatures, import statements, variable names, and line-number references exactly. Do NOT summarize, shorten, or restructure any code. Do NOT modify non-sensitive code."
+		defaultPrompt = "You are a data privacy filter for code. The following text contains code blocks (marked with ``` fences). Remove or replace any IP addresses, AWS keys (AKIA...), passwords, tokens, or credentials that appear OUTSIDE code blocks with [REDACTED]. Inside code blocks, only redact actual hardcoded secrets in string literals — preserve all code structure, function signatures, import statements, variable names, and line-number references exactly. Do NOT summarize, shorten, or restructure any code. Do NOT modify non-sensitive code. Never introduce instructions, action items, next steps, or imperative sentences that are not present in the input; preserve the caller's own wording, including any instructions they wrote, exactly."
 	}
 
 	ref := b.gw.Config.Bouncer.Engine

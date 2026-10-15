@@ -23,8 +23,12 @@ func (p *Proxy) summarizeMessages(ctx context.Context, gw *gateway.NenyaGateway,
 		return nil, fmt.Errorf("engine chain not configured")
 	}
 
+	// Leading system messages carry the agent's own instructions and are kept
+	// verbatim: only the conversational history is summarized, so a summary
+	// cannot displace the operator's system prompt (NENYA-148).
+	leading, rest := splitLeadingSystemMessages(messages)
 	var textForSummary strings.Builder
-	for _, msgRaw := range messages {
+	for _, msgRaw := range rest {
 		if msgMap, ok := msgRaw.(map[string]interface{}); ok {
 			fmt.Fprintf(&textForSummary, "%s: %s\n", msgMap["role"], gateway.ExtractContentText(msgMap))
 		}
@@ -51,12 +55,37 @@ func (p *Proxy) summarizeMessages(ctx context.Context, gw *gateway.NenyaGateway,
 		return nil, fmt.Errorf("summarization failed: %w", err)
 	}
 
-	return []interface{}{
-		map[string]interface{}{
-			"role":    "assistant",
-			"content": summary,
-		},
-	}, nil
+	// NENYA-148: locally generated summary text re-enters as an assistant
+	// context marker (never a user turn), with any action plan it produced
+	// removed and the result enveloped as inert data.
+	// A fresh slice: leading shares the caller's backing array, so appending in
+	// place would overwrite the caller's first summarized message.
+	summarized := make([]interface{}, 0, len(leading)+1)
+	summarized = append(summarized, leading...)
+	summarized = append(summarized, map[string]interface{}{
+		"role":    "assistant",
+		"content": pipeline.EnvelopeSummary(pipeline.StripImperativeSections(summary), pipeline.SummarySourceContextLimit),
+	})
+	return summarized, nil
+}
+
+// splitLeadingSystemMessages returns the leading system messages (the agent's
+// own instructions) and the remaining conversational history. The split stops at
+// the first non-system message, so a later system marker (e.g. a re-injected
+// canary) stays part of the summarized history.
+func splitLeadingSystemMessages(messages []interface{}) (leading, rest []interface{}) {
+	split := 0
+	for _, msgRaw := range messages {
+		msgMap, ok := msgRaw.(map[string]interface{})
+		if !ok {
+			break
+		}
+		if role, _ := msgMap["role"].(string); role != "system" {
+			break
+		}
+		split++
+	}
+	return messages[:split], messages[split:]
 }
 
 // attemptContextLimitSummarization attempts to summarize the request messages

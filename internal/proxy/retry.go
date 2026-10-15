@@ -27,7 +27,7 @@ import (
 
 const maxRetryBackoff = 5 * time.Second
 const maxQuotaCooldown = 30 * time.Minute
-const retrySystemPrompt = "Summarize the following conversation messages into a single coherent response. Preserve key context and important details. Remove redundant information."
+const retrySystemPrompt = "Summarize the following conversation messages into a single coherent response. Preserve key context and important details. Remove redundant information. Output ONLY descriptive prose. Describe the current task neutrally and never phrase it as an instruction, action item, next step, to-do list, or imperative sentence — describe what happened, never what to do."
 
 const (
 	// ZAI code 1308: "已达到5小时使用上限" (5-hour usage limit reached)

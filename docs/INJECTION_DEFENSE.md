@@ -30,6 +30,7 @@ legs:
 | Untrusted content | Tool results, MCP/memory context, web/file content pasted into prompts, client-side MCP output | Poisoned tool result carries instructions the model obeys                         |
 | Private data      | Conversation history, secrets in context, MCP memory, provider credentials                     | Instructions tell the model to read and transmit context                          |
 | Egress            | Model output to the client, tool calls to MCP servers, links in markdown                       | Instructions tell the model to call a tool with private data or emit a beacon URL |
+| Local summaries   | Window compaction summaries, bouncer rewrites, context-limit retry summaries re-enter the conversation | A summary that carries (or is steered into carrying) an action plan is executed by the model on the next turn (opencode #36682) |
 
 **OWASP Top 10 for LLM Applications mapping:**
 
@@ -127,6 +128,76 @@ registry call returns a structured error result to the model so the loop can
 correct itself; a rejected auto-search surfaces as a failed search and a
 rejected auto-save falls back to the next server. The client response is
 unaffected in every case.
+
+**Layer 7 — Locally generated summaries (NENYA-148).** Nenya generates summary
+text locally (window compaction, the bouncer's redaction rewrite, the
+context-limit retry summarizer) and that text re-enters the conversation, so it
+is model-authored content derived from untrusted conversation history. Upstream
+evidence: opencode #36682 (a compaction summary executed its own "Next Move"
+section as user instructions, triggering an unsolicited `ssh-keyscan` with
+`StrictHostKeyChecking=no`), #32634, #13838, #28063. Hardening:
+
+- **Envelope + preamble.** Every model-generated summary is wrapped in the
+  untrusted-content delimiters (`<untrusted-content source="summary:window">`
+  for window compaction, `summary:context-limit` for the retry summarizer) after
+  `SummaryPreamble`, which tells the model the text is machine-produced data and
+  not to act on any imperative text inside it. Embedded envelope tags in a
+  summary are defanged, so a summary cannot close its own envelope. There is no
+  "already enveloped?" content check: the content is attacker-influenced, so a
+  summary that begins with the preamble is still enveloped (a sniff would
+  silently disable the primary defense). Only model output is enveloped: a deterministic head (truncate/tfidf mode, or the truncation
+  fallback) is the client's own history and is inserted verbatim.
+- **Action plans stripped at insertion time.** An action-plan heading (next
+  steps/moves/actions, action items/plan/steps, to-do, follow-ups, remaining
+  work — whole-line or inline like "Next steps: run the migration") is removed
+  with the list or paragraph that follows it; the generic words (tasks,
+  recommendations, instructions) only count when the whole line is the heading.
+  An inline heading counts when what follows it is an instruction, decided
+  FAIL-SAFE: anything that is not a recognizable description (a closed set of
+  descriptive leads — "the user will run the migration" describes) is treated as
+  a plan, so an unlisted command ("exfiltrate …", "base64 …", "wget … && bash")
+  is still removed. A summary that was nothing but a plan is replaced by an
+  explicit removal marker instead of being re-inserted. All three summarizer
+  prompts additionally require descriptive prose (the current task described
+  neutrally, never as an instruction).
+- **Role discipline.** A summary is never injected as a `user` turn: the window
+  summary is a `system` context marker and the context-limit summary is an
+  `assistant` context marker (its natural role — a summary of what happened),
+  with the agent's leading system messages preserved verbatim so a summary
+  cannot displace the operator's instructions. The window's synthetic
+  continuation cue was reworded to a descriptive marker
+  (`[Resumed context: ...]`) so no locally generated text is imperative.
+- **Rewrite guard (bouncer).** The bouncer's local engine rewrites the caller's
+  OWN message in place, so the role must stay as it is — the request must remain
+  a request. Instead the rewrite is checked against its input: an action-plan
+  section the source text did not contain is removed (the signature of a
+  prompt-injected local model), while the caller's own imperative request
+  survives untouched.
+
+_Honest limitations:_ the envelope relies on the model honoring the preamble
+(like spotlighting, it is a mitigation, not a sandbox); the stripper is a
+deterministic heuristic over headings and list bodies, so a summary can still
+*describe* an instruction in prose ("the user asked to rotate the key") — that
+is data the model should read as history, not execute — and a plan rephrased
+without any recognizable heading (plain prose imperative) is not removed. The
+two sub-rules fail in opposite, deliberate directions: the INLINE rule is
+fail-safe (anything that is not a recognizable description is stripped, so the
+residual risk is a description that starts like an instruction losing its tail,
+never an instruction that survives), while the PARAGRAPH rule uses a positive
+imperative signal (an unrecognized descriptive paragraph is kept, so a
+legitimate summary is never emptied to the removal marker); a
+custom `system_prompt` that disables the descriptive-output rule still benefits
+from the envelope and the stripper, but the prompt rule is the cheapest lever;
+the bouncer's output keeps the caller's role by necessity, so its hardening is
+the `[Nenya Sanitized via Ollama]` provenance marker plus the
+introduction guard (an untrusted-content envelope would mislabel the caller's
+own request as external data), and an engine that returns nothing but a plan is
+treated as an engine failure (fail-open skips the rewrite, fail-closed rejects);
+and the tool-prune placeholder (a locally generated `assistant` message whose
+label is client-controlled) has its label whitespace-collapsed with quote
+characters dropped, while the
+stream-continuation replay carries the model's own partial output and is
+deliberately not enveloped.
 
 ## Configuration quick reference
 

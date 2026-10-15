@@ -2,6 +2,7 @@ package pipeline
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/nenya/config"
 )
@@ -167,6 +168,15 @@ func areToolResultsPaired(messages []interface{}, i int, tcSlice []interface{}, 
 	return true
 }
 
+// sanitizePlaceholderLabel collapses whitespace runs in a client-controlled
+// label (a tool name or call id) and drops quote characters, so it cannot inject
+// extra lines or restructure the sentence of a locally generated placeholder
+// message.
+func sanitizePlaceholderLabel(label string) string {
+	label = strings.NewReplacer("'", "", "\"", "", "`", "").Replace(label)
+	return strings.Join(strings.Fields(label), " ")
+}
+
 // createToolCallReplacement builds a compact placeholder message that replaces
 // a pruned tool call and its results. Preserves reasoning_content if present.
 func createToolCallReplacement(msg map[string]interface{}, toolName, toolCallID string) map[string]interface{} {
@@ -178,9 +188,12 @@ func createToolCallReplacement(msg map[string]interface{}, toolName, toolCallID 
 		displayName = "unknown"
 	}
 
+	// NENYA-148: the placeholder is locally generated text that re-enters the
+	// conversation, and the tool name/ID is client-controlled: collapse
+	// whitespace so a name cannot inject a newline-delimited instruction line.
 	summary := fmt.Sprintf(
 		"[System] Tool '%s' was executed previously. Result compacted to save context window.",
-		displayName,
+		sanitizePlaceholderLabel(displayName),
 	)
 
 	replacement := map[string]interface{}{
