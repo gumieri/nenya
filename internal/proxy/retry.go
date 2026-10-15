@@ -1483,6 +1483,23 @@ func (p *Proxy) handleUpstreamError(gw *gateway.NenyaGateway,
 	}
 
 	defer action.cancel()
+	// A model-not-found from the upstream is a target fault, not a malformed
+	// client request (NENYA-168): the model may simply be absent from this
+	// provider while a later target serves it. Cool the target down (and lock
+	// the model on it) and fail over; with no later target the error stays the
+	// client-facing one it always was — which also means a single-target agent
+	// never benches its only provider for a model it does not have.
+	//
+	// sticky_provider: the continue signal maps to the 4xx fail reason, which
+	// BOTH "lenient" and "strict" treat as sweep-stopping — so on a sticky
+	// agent the 404 surfaces to the client instead of failing over, even though
+	// the model is genuinely unavailable on this target. Loosening that is a
+	// sticky-semantics change, not part of NENYA-168.
+	if idx+1 < len(targets) && isModelNotFoundError(action.resp.StatusCode, errorBody) {
+		gw.AgentState.RecordFailureWithStatus(target, action.resp.StatusCode, string(errorBody))
+		logWarnRetryable(ctxLogger, errorBody, gw, "model not found on this target, trying next target")
+		return retrySignalContinue, 0
+	}
 	// A permanent client-class error records no circuit outcome; release the
 	// half-open probe slot consumed by the pre-dispatch guard so repeated
 	// client errors cannot exhaust the probe budget.
@@ -1576,6 +1593,15 @@ var defaultRetryableStatusCodes = []int{
 	http.StatusServiceUnavailable,
 	http.StatusGatewayTimeout,
 	529, // Provider Overloaded (non-standard, used by xAI and some LLM gateways)
+	// Cloudflare's origin-failure family (NENYA-168): 520 unknown origin
+	// error, 521 origin down, 522 connect timeout, 523 unreachable origin, 524
+	// origin timeout, 525/526 TLS handshake failure. All of them mean the
+	// request never reached a healthy origin, so a retry or another target can
+	// succeed, and a provider behind Cloudflare returns them for a live,
+	// degraded edge. 525/526 are usually persistent origin TLS
+	// misconfigurations, so the value here is mostly failover; a same-target
+	// retry deterministically re-fails and spends one attempt of the budget.
+	520, 521, 522, 523, 524, 525, 526,
 }
 
 var commonRetryablePatterns = []string{

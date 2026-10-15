@@ -552,16 +552,20 @@ The circuit breaker is checked twice per target: once during target list constru
 
 ### Semantic Error Classification
 
-Failures are classified into 6 error classes for appropriate circuit breaker and backoff decisions:
+`model_not_found` (NENYA-168) is checked before the generic 4xx classes: an upstream that does not serve the requested model is a **target** fault, not a malformed client request, so the target is cooled down and locked for that model and the sweep moves on to a provider that has it (the client sees the error when no target remains, or immediately on a `sticky_provider` agent (both lenient and strict stop the sweep on a 4xx-classified failure)). The capacity/overload phrase list is shared with the NENYA-45 bootstrap rejection test (`util.IsOverloadMessage`), so a rejection the breaker treats as overload also releases the bootstrap buffer for failover.
+
+Failures are classified into 7 error classes for appropriate circuit breaker and backoff decisions:
 
 | Error Class  | HTTP Status             | Backoff                               | Lock Behavior                     |
 | ------------ | ----------------------- | ------------------------------------- | --------------------------------- |
-| `auth`       | 401, 403                | 5 min cooldown                        | Immediate trip to Open            |
-| `rate_limit` | 429                     | Exponential (500ms base, ±10% jitter) | Model-level lock with cooldown    |
-| `quota`      | 400 (quota messages)    | Exponential (60s base)                | Long cooldown, tracked separately |
-| `capacity`   | 503 (capacity/overload) | Exponential (30s base)                | Model-level lock                  |
-| `server`     | 500, 502, 504           | 5s cooldown                           | Transient, short backoff          |
-| `unknown`    | Other 4xx/5xx           | No backoff                            | No lock                           |
+| `auth`       | 401, 403                | 2 min cooldown                       | Trip to Open                      |
+| `rate_limit` | 429                     | Exponential (500ms base, ±5% jitter) | Model-level lock with cooldown    |
+| `quota`      | 400/402 (quota messages) | Exponential (60s base)              | Long cooldown, tracked separately |
+| `capacity`   | 5xx (capacity/overload) | Exponential (30s base)               | Model-level lock                  |
+| `model_not_found` | 404, or a 4xx naming a missing model (NENYA-168) | 60s cooldown | Model-level lock         |
+| `server`     | 500, 502, 504           | 1s cooldown                          | Transient, short backoff          |
+| `context_limit` | 400/413/422 (overflow patterns) | none                      | No lock (a summarization retry handles it) |
+| `unknown`    | any other status        | No backoff                            | unmatched 400/413/422: 5s, no lock; otherwise 30s + lock |
 
 `classifyHTTPError(status, body, backoffLevel)` parses provider-specific error messages for quota/capacity keywords and returns `CooldownDecision` with the appropriate class.
 
@@ -571,7 +575,7 @@ The `BackoffTracker` manages per-model backoff levels with capped exponential gr
 
 - **Backoff Levels**: 0–15 (capped at max)
 - **Base Delays**: rate_limit=500ms, quota=60s, capacity=30s
-- **Jitter**: ±10% per level to prevent thundering herd
+- **Jitter**: a jitter range of 10% of the base delay (±5%) to prevent thundering herd
 - **Increment**: `RecordFailureWithStatus` calls `cb.Increment(model)` which increments the backoff level
 - **Reset**: `RecordSuccessWithModel` calls `cb.Reset(model)` which clears the backoff state
 - **Callback**: `SetBackoffIncrementCallback(onIncrement func(key string, level int))` for metrics emission (`nenya_backoff_increments_total`)
@@ -614,7 +618,7 @@ For providers with multiple credential accounts (configured via `accounts[]` in 
 
 ### Backoff and Threshold Enhancements
 
-The circuit breaker integrates with the `BackoffTracker` for exponential backoff on rate-limit and quota errors. `calculateBackoff` (`internal/proxy/retry.go`) implements base 500ms exponential doubling with ±750ms jitter, capped at 8 seconds. Per-provider `RetryableStatusCodes` allow custom retry policies beyond the standard defaults (429, 500, 502, 503, 504).
+The circuit breaker integrates with the `BackoffTracker` for exponential backoff on rate-limit and quota errors. `calculateBackoff` (`internal/proxy/retry.go`) implements base 500ms exponential doubling with ±750ms jitter, capped at 8 seconds. Per-provider `RetryableStatusCodes` allow custom retry policies beyond the built-in defaults (429, 500, 502, 503, 504, 529, and the Cloudflare origin-failure family 520–526, NENYA-168).
 
 ### Retry Sweep and Same-Target Retry
 

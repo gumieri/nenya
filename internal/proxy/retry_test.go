@@ -12,6 +12,7 @@ import (
 	"net/http/httptest"
 	"regexp"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -20,6 +21,7 @@ import (
 	"github.com/nenya/internal/infra"
 	"github.com/nenya/internal/resilience"
 	"github.com/nenya/internal/routing"
+	"github.com/nenya/internal/testutil"
 )
 
 func TestParseRetryDelay_NoHeaderNoBody(t *testing.T) {
@@ -1375,5 +1377,109 @@ func TestRetryLoop_AttemptedPairSkip(t *testing.T) {
 	rl2.markRateLimitedPair(targets[0])
 	if rl2.shouldSkipRateLimitedPair(0, targets[0]) {
 		t.Error("expected single-pair chain to keep retrying despite 429")
+	}
+}
+
+// TestIsRetryableStatus_CloudflareOriginFamily pins NENYA-168: Cloudflare's
+// origin-failure statuses are transient by default, and a per-provider list
+// still wins over the default.
+func TestIsRetryableStatus_CloudflareOriginFamily(t *testing.T) {
+	p := &Proxy{}
+	p.StoreGateway(newTestGateway(nil, nil))
+	for code := 520; code <= 526; code++ {
+		if !p.isRetryableStatus(p.Gateway(), "unknown_provider", code) {
+			t.Fatalf("expected Cloudflare %d to be retryable by default", code)
+		}
+	}
+	// 527/530 are Cloudflare statuses that are NOT transient origin faults.
+	for _, code := range []int{519, 527, 530} {
+		if p.isRetryableStatus(p.Gateway(), "unknown_provider", code) {
+			t.Fatalf("expected %d to NOT be retryable by default", code)
+		}
+	}
+
+	// A per-provider list still overrides the default (including the new range).
+	providers := map[string]*config.Provider{
+		"custom": {Name: "custom", RetryableStatusCodes: []int{500}},
+	}
+	p2 := &Proxy{}
+	p2.StoreGateway(newTestGateway(nil, providers))
+	if p2.isRetryableStatus(p2.Gateway(), "custom", 522) {
+		t.Fatal("a per-provider list must override the default Cloudflare range")
+	}
+	if !p2.isRetryableStatus(p2.Gateway(), "custom", 500) {
+		t.Fatal("the per-provider list itself must still apply")
+	}
+}
+
+// TestIsModelNotFoundError pins the NENYA-168 predicate: a 404 from an upstream
+// model endpoint is model-not-found, other statuses need a body marker.
+func TestIsModelNotFoundError(t *testing.T) {
+	tests := []struct {
+		name   string
+		status int
+		body   string
+		want   bool
+	}{
+		{name: "404 is always model-not-found", status: 404, body: `{}`, want: true},
+		{name: "404 with a plain body", status: 404, body: `<html>not found</html>`, want: true},
+		{name: "400 naming an unknown model", status: 400, body: `{"error":{"message":"unknown model: gpt-9"}}`, want: true},
+		{name: "403 is a permission fault, not model-not-found", status: 403, body: `{"error":{"message":"model not available"}}`, want: false},
+		{name: "422 naming a deprecated model", status: 422, body: `{"error":{"message":"deprecated model"}}`, want: true},
+		{name: "400 with an unrelated parameter error", status: 400, body: `{"error":{"message":"invalid parameter"}}`, want: false},
+		{name: "401 is auth, not model-not-found", status: 401, body: `{"error":{"message":"invalid api key"}}`, want: false},
+		{name: "429 is not model-not-found", status: 429, body: `{"error":{"message":"rate limited"}}`, want: false},
+		{name: "500 is not model-not-found", status: 500, body: `{"error":{"message":"unknown model"}}`, want: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := isModelNotFoundError(tt.status, []byte(tt.body)); got != tt.want {
+				t.Fatalf("isModelNotFoundError(%d, %s) = %v, want %v", tt.status, tt.body, got, tt.want)
+			}
+		})
+	}
+}
+
+// TestModelNotFoundFailsOverToAnotherTarget pins NENYA-168 end to end: an
+// upstream that answers 404 (the model is absent from that provider) must not
+// surface as a hard client error while another target can serve the request.
+func TestModelNotFoundFailsOverToAnotherTarget(t *testing.T) {
+	var firstCalls, secondCalls atomic.Int32
+	missing := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		firstCalls.Add(1)
+		_, _ = io.ReadAll(r.Body)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = fmt.Fprint(w, `{"error":{"message":"model not found: test-model","type":"not_found_error"}}`)
+	}))
+	defer missing.Close()
+	serving := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		secondCalls.Add(1)
+		_, _ = io.ReadAll(r.Body)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = fmt.Fprint(w, `{"choices":[{"message":{"role":"assistant","content":"served"},"finish_reason":"stop"}]}`)
+	}))
+	defer serving.Close()
+
+	p := newBootstrapProxy(t, []string{missing.URL, serving.URL}, 0)
+	rec := runRequest(t, p)
+
+	testutil.AssertResponseStatusCode(t, rec, http.StatusOK)
+	if !strings.Contains(rec.Body.String(), "served") {
+		t.Fatalf("expected the second target's answer, got: %s", rec.Body.String())
+	}
+	if got := firstCalls.Load(); got != 1 {
+		t.Fatalf("expected 1 call to the model-less target, got %d", got)
+	}
+	if got := secondCalls.Load(); got != 1 {
+		t.Fatalf("expected 1 call to the serving target, got %d", got)
+	}
+	// The model-less target was charged (a target fault, so it cools down and
+	// is not re-picked), not relayed as a client error. The pre-dispatch guard
+	// creates the circuit entry, so the failure count is the discriminating
+	// signal, not the entry's presence.
+	key := "test-agent:test-provider-0:test-model"
+	if got := getFailureCountFromSnapshot(p.Gateway().AgentState.CBDetailedSnapshot(), key); got == 0 {
+		t.Fatalf("expected the model-less target to be charged a failure, got %v", p.Gateway().AgentState.CBDetailedSnapshot())
 	}
 }

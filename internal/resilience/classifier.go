@@ -23,6 +23,11 @@ const (
 	ErrorClassServer ErrorClass = "server"
 	// ErrorClassContextLimit indicates context length exceeded errors.
 	ErrorClassContextLimit ErrorClass = "context_limit"
+	// ErrorClassModelNotFound indicates the requested model is not available on
+	// this provider (NENYA-168). It is a *target* fault, not a malformed client
+	// request: the model may simply be absent from this provider while a later
+	// target serves it, so the target is cooled down and the caller fails over.
+	ErrorClassModelNotFound ErrorClass = "model_not_found"
 	// ErrorClassUnknown indicates unclassified errors.
 	ErrorClassUnknown ErrorClass = "unknown"
 )
@@ -55,6 +60,18 @@ func classifyHTTPError(status int, body string, backoffLevel int) CooldownDecisi
 	lower := strings.ToLower(body)
 
 	switch {
+	case util.IsModelNotFoundStatus(status, body):
+		// Model-not-found from an upstream (NENYA-168) is checked first: the
+		// marker is more specific than the generic 400/401/403/422 classes, and
+		// it is a *target* fault — cool the target down (and lock the model on
+		// it) so the sweep moves to a provider that has the model, instead of
+		// relaying a client-class error.
+		return CooldownDecision{
+			Class:      ErrorClassModelNotFound,
+			ShouldLock: true,
+			Cooldown:   modelNotFoundCooldown,
+		}
+
 	case status == 401 || status == 403:
 		return CooldownDecision{
 			Class:      ErrorClassAuth,
@@ -109,7 +126,7 @@ func classifyHTTPError(status int, body string, backoffLevel int) CooldownDecisi
 		}
 
 	case status >= 500:
-		if strings.Contains(lower, "capacity") || strings.Contains(lower, "overload") {
+		if util.IsOverloadMessage(lower) {
 			cooldown := computeExponentialBackoffWithJitter(backoffLevel, capacityBaseMs)
 			return CooldownDecision{
 				Class:            ErrorClassCapacity,

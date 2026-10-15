@@ -11,6 +11,10 @@ const (
 	authCooldown    = 2 * time.Minute
 	serverCooldown  = 1 * time.Second
 	unknownCooldown = 30 * time.Second
+	// modelNotFoundCooldown benches a target whose provider does not serve the
+	// requested model (NENYA-168). Long enough to stop hammering it, short
+	// enough that a provider deploying the model is picked up again soon.
+	modelNotFoundCooldown = 60 * time.Second
 
 	rateLimitBaseMs = 500
 	quotaBaseMs     = 60000
@@ -19,7 +23,7 @@ const (
 
 	// backoffJitterRange is the fraction of the base duration to apply as jitter.
 	// A value of 0.10 means ±5% jitter (total range of 10%).
-	backoffJitterRange = 0.10 // ±5% jitter to prevent thundering herd
+	backoffJitterRange = 0.10 // total range is 10% of the base delay, i.e. ±5%
 )
 
 // computeExponentialBackoffWithJitter calculates cooldown with exponential backoff

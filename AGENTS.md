@@ -148,7 +148,7 @@ All outbound HTTP dispatch points vulnerable to transient network errors (TLS ha
 
 - `governance.max_retry_attempts` — global default (default 3), applied by `GovernanceConfig.EffectiveMaxRetryAttempts()`
 - `providers.<name>.max_retry_attempts` — per-provider override, takes precedence over global default
-- `providers.<name>.retryable_status_codes` — per-provider retryable HTTP statuses (default: 429, 500, 502, 503, 504, 529)
+- `providers.<name>.retryable_status_codes` — per-provider retryable HTTP statuses (default: 429, 500, 502, 503, 504, 529, and the Cloudflare origin-failure family 520–526)
 - `providers.<name>.retryable_phrases` — case-insensitive error-body substrings that make a 4xx response retryable/failover-able for that provider (e.g. aggregator-relayed upstream failures); empty uses the built-in pattern sets plus the common upstream-blame phrases ("upstream request failed", "upstream error", "upstream unavailable", "reach upstream")
 - `providers.<name>.request_scoped_errors` — rules (`status` + case-insensitive `message_pattern`) marking provider errors as the client's fault even when the status class suggests otherwise (e.g. invalid-parameter 401s): matched errors skip cooldown/rotation state and surface directly to the client (both the chat retry loop and the MCP buffered path); context-length handling (summarization retry) takes precedence over rules; client-cancel during error handling or exhaustion reporting is connection-scoped — no retry, no state writes, no client write (NENYA-42)
 - The context deadline bounds the total retry time; never exceed the per-request timeout.

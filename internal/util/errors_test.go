@@ -108,3 +108,67 @@ func TestIsContextLengthError(t *testing.T) {
 		})
 	}
 }
+
+// TestIsModelNotFoundMessage pins the NENYA-168 model-not-found phrase set.
+func TestIsModelNotFoundMessage(t *testing.T) {
+	tests := []struct {
+		name string
+		body string
+		want bool
+	}{
+		{name: "model_not_found code", body: `{"error":{"code":"model_not_found"}}`, want: true},
+		{name: "model not found", body: `{"error":{"message":"model not found: foo"}}`, want: true},
+		{name: "unknown model", body: `unknown model: bar`, want: true},
+		{name: "model does not exist", body: `{"message":"the model does not exist"}`, want: true},
+		{name: "deprecated model", body: `{"message":"this model has been deprecated"}`, want: true},
+		{name: "uppercase wording", body: `{"message":"MODEL NOT FOUND"}`, want: true},
+		{name: "invalid parameter", body: `{"error":{"message":"invalid parameter: temperature"}}`, want: false},
+		{name: "invalid api key", body: `{"error":{"message":"invalid api key"}}`, want: false},
+		// Quota and context-length wording veto the classification: they are
+		// different failure classes with different handling.
+		{name: "quota wording vetoes", body: `{"error":{"message":"quota exceeded for model not found"}}`, want: false},
+		{name: "insufficient wording vetoes", body: `{"error":{"message":"insufficient credits for model x"}}`, want: false},
+		{name: "context-length wording vetoes", body: `{"error":{"message":"prompt is too long for model x; model not found in registry"}}`, want: false},
+		{name: "empty", body: ``, want: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := IsModelNotFoundMessage(tt.body); got != tt.want {
+				t.Fatalf("IsModelNotFoundMessage(%q) = %v, want %v", tt.body, got, tt.want)
+			}
+		})
+	}
+}
+
+// TestIsOverloadMessage pins the shared capacity/overload phrase set used by the
+// breaker's capacity class and the bootstrap rejection test (NENYA-168). The
+// phrases are anchored: a bare "capacity" substring (a model id, a stray field)
+// must not classify as an overload rejection.
+func TestIsOverloadMessage(t *testing.T) {
+	for _, want := range []string{
+		"server is overloaded",
+		"MODEL IS AT CAPACITY",
+		"capacity is full",
+		"capacity exceeded",
+		"overloaded_error",
+		"overload_error",
+		"the queue is at capacity",
+	} {
+		if !IsOverloadMessage(want) {
+			t.Fatalf("IsOverloadMessage(%q) = false, want true", want)
+		}
+	}
+	for _, notWant := range []string{
+		"",
+		"invalid parameter",
+		"rate limit exceeded",
+		"capacity",       // bare substring: an anchored phrase is required
+		"overload",       // ditto
+		"capacity-3b",    // a model id
+		"capacity: 4096", // a stray field
+	} {
+		if IsOverloadMessage(notWant) {
+			t.Fatalf("IsOverloadMessage(%q) = true, want false", notWant)
+		}
+	}
+}

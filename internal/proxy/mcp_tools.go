@@ -239,9 +239,10 @@ func (acc *sseAccumulator) processChunk(data string) {
 	// smuggled after the handshake). Flag it here, where the map is already
 	// parsed, so the breaker outcome can charge a failure instead of a success.
 	// The predicate matches the bootstrap head probe's rejection set
-	// (classifyBootstrapLine): an error payload or the OpenAI Responses
-	// "response.failed" event.
-	if stream.IsStreamErrorPayload(chunk) || stream.IsResponseFailedEvent(chunk) {
+	// (classifyBootstrapLine): an error payload, the OpenAI Responses
+	// "response.failed" event, or (NENYA-168) a capacity/overload rejection that
+	// is not shaped as an error envelope.
+	if stream.IsStreamErrorPayload(chunk) || stream.IsResponseFailedEvent(chunk) || stream.IsCapacityRejection(chunk) {
 		acc.streamError = true
 	}
 

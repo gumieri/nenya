@@ -102,6 +102,38 @@ func TestDeriveUpstreamRateLimitCooldown(t *testing.T) {
 // status gate (5xx keep the configured cooldown, isQuota=false), detection
 // decoupled from extension (a sub-config quota signal still flags isQuota),
 // and header/body windows merging longest-wins.
+// TestDerive429Cooldown_OverageOnlyRejectsWindows pins the NENYA-168
+// integration point: an overage-only rejection ignores every upstream-declared
+// window (Retry-After and the unified resets) and reports quota, so the NENYA-41
+// floor and the quota error kind still apply. See TestDerive429Cooldown for the
+// non-overage longest-wins behavior and its 429 status gate.
+func TestDerive429Cooldown_OverageOnlyRejectsWindows(t *testing.T) {
+	now := time.Now()
+	in7d := now.Add(7 * 24 * time.Hour).UTC().Format(time.RFC3339)
+
+	header := http.Header{}
+	header.Set("Retry-After", "3600")
+	header.Set(headerUnifiedOverageStatus, "rejected")
+	header.Set("Anthropic-Ratelimit-Unified-5h-Reset", in7d)
+	header.Set("Anthropic-Ratelimit-Unified-7d-Reset", in7d)
+
+	// An empty body: the only quota signal is the overage verdict itself.
+	got, isQuota := derive429Cooldown(slog.Default(), nil, header, http.StatusTooManyRequests, 45*time.Second)
+	if isQuota != true {
+		t.Fatalf("isQuota = %v, want true (the NENYA-41 floor must apply)", isQuota)
+	}
+	if got != 45*time.Second {
+		t.Fatalf("cooldown = %v, want the configured 45s (no upstream window)", got)
+	}
+
+	// A body quota signal must still extend the cooldown on top of the verdict.
+	body := []byte(`{"error":{"message":"quota exceeded"}}`)
+	got, isQuota = derive429Cooldown(slog.Default(), body, header, http.StatusTooManyRequests, 45*time.Second)
+	if !isQuota || got < 45*time.Second {
+		t.Fatalf("cooldown = %v isQuota = %v, want >= 45s/true", got, isQuota)
+	}
+}
+
 func TestDerive429Cooldown(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	in7d := time.Now().Add(7 * 24 * time.Hour).UTC().Format(time.RFC3339)
@@ -216,4 +248,77 @@ func TestParseQuotaResetFields(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestOverageRejectionsAreNotCooldowns pins NENYA-168: Anthropic's overage
+// (pay-as-you-go billing) signals are billing-cycle boundaries, not retry
+// horizons. An overage-only rejection must not schedule a cooldown from
+// Retry-After or from an overage reset field, while a standard-window rejection
+// keeps its full cooldown.
+func TestOverageRejectionsAreNotCooldowns(t *testing.T) {
+	now := time.Now()
+	in7d := now.Add(7 * 24 * time.Hour).UTC().Format(time.RFC3339)
+
+	t.Run("overage reset header alone derives nothing", func(t *testing.T) {
+		// The invariant the subtest pins: the overage reset must never join the
+		// window list, or this subtest silently starts deriving 7-day cooldowns.
+		for _, name := range anthropicUnifiedResetHeaders {
+			if name == headerUnifiedOverageReset {
+				t.Fatalf("%s must never be a cooldown source (NENYA-168)", name)
+			}
+		}
+		h := http.Header{}
+		h.Set(headerUnifiedOverageReset, in7d)
+		if got := deriveUpstreamRateLimitCooldown(h); got != 0 {
+			t.Fatalf("cooldown = %v, want 0 (an overage reset is not a retry horizon)", got)
+		}
+	})
+
+	t.Run("retry-after is skipped on an overage-only rejection", func(t *testing.T) {
+		h := http.Header{}
+		h.Set("Retry-After", "3600")
+		h.Set(headerUnifiedOverageStatus, "rejected")
+		h.Set(headerUnifiedStatus, "allowed")
+		if got := deriveUpstreamRateLimitCooldown(h); got != 0 {
+			t.Fatalf("cooldown = %v, want 0 (the overage claim is the only rejection)", got)
+		}
+	})
+
+	t.Run("representative claim naming overage skips retry-after", func(t *testing.T) {
+		h := http.Header{}
+		h.Set("Retry-After", "3600")
+		h.Set(headerUnifiedClaim, "overage")
+		if got := deriveUpstreamRateLimitCooldown(h); got != 0 {
+			t.Fatalf("cooldown = %v, want 0 (representative claim is overage)", got)
+		}
+	})
+
+	t.Run("a standard window rejection keeps retry-after", func(t *testing.T) {
+		h := http.Header{}
+		h.Set("Retry-After", "3600")
+		h.Set(headerUnifiedOverageStatus, "rejected")
+		h.Set(headerUnified5hStatus, "rejected")
+		got := deriveUpstreamRateLimitCooldown(h)
+		if got < time.Hour-time.Minute {
+			t.Fatalf("cooldown = %v, want ~1h (the 5h window is rejected too)", got)
+		}
+	})
+
+	t.Run("body overage reset fields are ignored", func(t *testing.T) {
+		body := `{"error":{"overage_reset":"` + in7d + `","overage_resets_at":"` + in7d + `"}}`
+		if got := parseQuotaResetFields([]byte(body)); got != 0 {
+			t.Fatalf("cooldown = %v, want 0 (overage reset fields are billing boundaries)", got)
+		}
+	})
+
+	t.Run("a standard reset field beside an overage field still counts", func(t *testing.T) {
+		// Discriminating: dropping the overage veto must not change this result,
+		// while reintroducing the overage field as a cooldown source would
+		// change TestOverageRejectionsAreNotCooldowns' body case above.
+		body := `{"error":{"overage_reset":"` + in7d + `","reset_at":"` + now.Add(time.Hour).UTC().Format(time.RFC3339) + `"}}`
+		got := parseQuotaResetFields([]byte(body))
+		if got < time.Hour-time.Minute || got > time.Hour+time.Minute {
+			t.Fatalf("cooldown = %v, want ~1h", got)
+		}
+	})
 }

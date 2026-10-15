@@ -20,6 +20,51 @@ var anthropicUnifiedResetHeaders = []string{
 	"X-Ratelimit-Reset",
 }
 
+// Anthropic unified rate-limit headers naming the overage (pay-as-you-go
+// billing) claim (NENYA-168). Deliberately NOT part of
+// anthropicUnifiedResetHeaders: an overage reset marks a billing-cycle
+// boundary, not the point at which the upstream would serve again, so deriving
+// a cooldown from it benches the target long past its real recovery.
+const (
+	headerUnifiedOverageReset  = "Anthropic-Ratelimit-Unified-Overage-Reset"
+	headerUnifiedOverageStatus = "Anthropic-Ratelimit-Unified-Overage-Status"
+	headerUnifiedClaim         = "Anthropic-Ratelimit-Unified-Representative-Claim"
+	headerUnifiedStatus        = "Anthropic-Ratelimit-Unified-Status"
+	headerUnified5hStatus      = "Anthropic-Ratelimit-Unified-5h-Status"
+	headerUnified7dStatus      = "Anthropic-Ratelimit-Unified-7d-Status"
+)
+
+// isRejectedClaimStatus reports whether a unified rate-limit status header marks
+// its claim as rejected (the vocabulary is allowed / allowed_warning /
+// rejected).
+func isRejectedClaimStatus(v string) bool {
+	return strings.EqualFold(strings.TrimSpace(v), "rejected")
+}
+
+// isOverageOnlyRejection reports whether a rejected request is driven by
+// overage billing rather than a standard usage window (NENYA-168): the
+// representative claim names overage, or the overage claim is rejected while
+// every standard window is not. On such a rejection Retry-After describes the
+// billing reset, so honoring it benches the target far past the point it would
+// serve again — the caller falls back to its configured cooldown.
+func isOverageOnlyRejection(header http.Header) bool {
+	if header == nil {
+		return false
+	}
+	if strings.EqualFold(strings.TrimSpace(header.Get(headerUnifiedClaim)), "overage") {
+		return true
+	}
+	if !isRejectedClaimStatus(header.Get(headerUnifiedOverageStatus)) {
+		return false
+	}
+	for _, name := range []string{headerUnifiedStatus, headerUnified5hStatus, headerUnified7dStatus} {
+		if isRejectedClaimStatus(header.Get(name)) {
+			return false
+		}
+	}
+	return true
+}
+
 // epochOrDelaySeconds coerces a bare numeric reset/delay value (NENYA-43):
 // values ≥1e11 are unix milliseconds, values >1e9 are unix epoch seconds,
 // and smaller values are plain seconds-from-now (delay semantics). Past
@@ -130,7 +175,15 @@ func deriveUpstreamRateLimitCooldown(header http.Header) time.Duration {
 	if header == nil {
 		return 0
 	}
-	longest := parseRetryAfterCooldown(header)
+	// An overage-only rejection carries the billing reset in Retry-After
+	// (NENYA-168): ignoring it leaves the caller's configured cooldown (and the
+	// quota floor) in charge, instead of benching the target for days. The
+	// overage reset header is deliberately absent from
+	// anthropicUnifiedResetHeaders for the same reason.
+	longest := time.Duration(0)
+	if !isOverageOnlyRejection(header) {
+		longest = parseRetryAfterCooldown(header)
+	}
 	for _, name := range anthropicUnifiedResetHeaders {
 		if d := parseHeaderResetDuration(header.Get(name)); d > longest {
 			longest = d
@@ -145,8 +198,10 @@ func deriveUpstreamRateLimitCooldown(header http.Header) time.Duration {
 // parseQuotaResetFields scans a quota error body for reset-timestamp fields —
 // top-level, nested under "error", or "error"."metadata" — with keys matched
 // case-insensitively containing "reset" (Codex/OpenRouter-style usage-limit
-// shapes, NENYA-43). Values may be unix milliseconds, unix seconds, RFC3339
-// strings, or plain durations. Returns the longest future reset, or 0.
+// shapes, NENYA-43), skipping overage-named fields (NENYA-168): an overage
+// reset is a billing-cycle boundary, not a retry horizon. Values may be unix
+// milliseconds, unix seconds, RFC3339 strings, or plain durations. Returns the
+// longest future reset, or 0.
 // Known limitations (accepted, cap-bounded): deeper nesting (e.g.
 // error.rate_limit.reset_at) and error ARRAYS are not descended, and any
 // numeric field whose key merely contains "reset" (e.g. resets_remaining)
@@ -161,7 +216,14 @@ func parseQuotaResetFields(body []byte) time.Duration {
 	var walk func(m map[string]interface{})
 	walk = func(m map[string]interface{}) {
 		for k, v := range m {
-			if strings.Contains(strings.ToLower(k), "reset") {
+			lower := strings.ToLower(k)
+			// Overage resets are billing-cycle boundaries, not retry horizons
+			// (NENYA-168): a body carrying one must not bench the target for
+			// the rest of the billing period.
+			if strings.Contains(lower, "overage") {
+				continue
+			}
+			if strings.Contains(lower, "reset") {
 				if d := parseResetValue(v); d > longest {
 					longest = d
 				}

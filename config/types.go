@@ -494,7 +494,10 @@ type ProviderConfig struct {
 	// When 0, uses the global governance default. When > 0, overrides the global
 	// default. Capped at 86400 (24 hours) by validation.
 	StreamIdleTimeoutSeconds int `json:"stream_idle_timeout_seconds,omitempty"`
-	// RetryableStatusCodes defines which HTTP status codes trigger automatic retry.
+	// RetryableStatusCodes are the HTTP statuses that make an upstream response
+	// from this provider retryable/failover-able. Setting it replaces both the
+	// global set and the built-in defaults entirely (429, 500, 502, 503, 504,
+	// 529, and the Cloudflare origin-failure family 520-526).
 	RetryableStatusCodes []int `json:"retryable_status_codes"`
 	// MaxRetryAttempts is the maximum number of retry attempts for failed requests.
 	MaxRetryAttempts int `json:"max_retry_attempts"`
@@ -1012,9 +1015,13 @@ type GovernanceConfig struct {
 	// MaxConcurrentRequests is the global fallback cap on in-flight requests
 	// per provider+model when the provider config does not set its own limit
 	// (0 or omitted = unlimited).
-	MaxConcurrentRequests int   `json:"max_concurrent_requests,omitempty"`
-	RetryableStatusCodes  []int `json:"retryable_status_codes"`
-	MaxRetryAttempts      int   `json:"max_retry_attempts"`
+	MaxConcurrentRequests int `json:"max_concurrent_requests,omitempty"`
+	// RetryableStatusCodes is the global retryable status set, used when the
+	// provider does not set its own. Setting it replaces the built-in defaults
+	// entirely (429, 500, 502, 503, 504, 529, and the Cloudflare
+	// origin-failure family 520-526).
+	RetryableStatusCodes []int `json:"retryable_status_codes"`
+	MaxRetryAttempts     int   `json:"max_retry_attempts"`
 	// RetryOpaque4xx treats a 4xx response whose body is a JSON object
 	// without a recognized error envelope (error/errors/detail/details/
 	// message/type/code/title/reason/status) as retryable. Aggregators and

@@ -145,8 +145,9 @@ const (
 )
 
 // classifyBootstrapLine classifies one complete SSE data payload for the
-// bootstrap buffer. Rejections use stream.IsStreamErrorPayload plus the
-// OpenAI Responses "response.failed" event. Output detection is a
+// bootstrap buffer. Rejections use stream.IsStreamErrorPayload, the OpenAI
+// Responses "response.failed" event, and (NENYA-168) a capacity/overload
+// rejection that is not shaped as an error envelope. Output detection is a
 // content-based effective-output test (stream.HasEffectiveOutput, NENYA-178) —
 // NOT a frame count — because providers emit rate-limit/metadata frames before
 // the response starts: only frames that provably carry generation output release
@@ -165,10 +166,7 @@ func classifyBootstrapLine(data []byte) bootstrapVerdict {
 		// Partial or non-JSON payload: cannot decide — keep buffering.
 		return bootstrapUndetermined
 	}
-	if stream.IsStreamErrorPayload(parsed) || stream.IsResponseFailedEvent(parsed) {
-		return bootstrapReject
-	}
-	if stream.IsResponseFailedEvent(parsed) {
+	if stream.IsStreamErrorPayload(parsed) || stream.IsResponseFailedEvent(parsed) || stream.IsCapacityRejection(parsed) {
 		return bootstrapReject
 	}
 	return classifyBootstrapOutput(parsed)

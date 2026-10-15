@@ -20,6 +20,103 @@ var rateLimitIndicators = []string{
 	"requests per minute",
 }
 
+// modelNotFoundIndicators are error-body phrases that identify a
+// model-not-found failure (NENYA-168): the requested model is not available on
+// that provider, so the caller can fail over to a target that serves it. A bare
+// 404 from an upstream on a model endpoint is treated as model-not-found by the
+// callers; these phrases cover the 400/422 wordings.
+var modelNotFoundIndicators = []string{
+	"model_not_found",
+	"not_found_error",
+	"unknown_model",
+	"unavailable_model",
+	"model not found",
+	"model does not exist",
+	"model doesn't exist",
+	"unknown model:",
+	"no such model",
+	"model is not available",
+	"model not available",
+	"model has been deprecated",
+	"deprecated model",
+}
+
+// quotaWording vetoes model-not-found classification: a 4xx that says the
+// account is out of quota is a billing failure, not a missing model.
+var quotaWording = []string{"quota", "insufficient"}
+
+// IsModelNotFoundStatus reports whether a status/body pair means "this model is
+// not available on this provider" (NENYA-168): a 404 from an upstream model
+// endpoint (a wrong path or an absent model), or a 400/422 whose body names a
+// missing model. The circuit-breaker classifier and the proxy's failover
+// decision share this predicate so the two taxonomies cannot drift.
+func IsModelNotFoundStatus(status int, body string) bool {
+	if status == 404 {
+		return true
+	}
+	switch status {
+	case 400, 422:
+		return IsModelNotFoundMessage(body)
+	}
+	return false
+}
+
+// IsModelNotFoundMessage reports whether a bounded error body carries a
+// model-not-found phrase (NENYA-168). Quota and context-length wording veto the
+// classification: those are different failure classes with different handling,
+// and a body can mention a model id while reporting either.
+func IsModelNotFoundMessage(body string) bool {
+	if body == "" {
+		return false
+	}
+	lower := strings.ToLower(body)
+	for _, p := range quotaWording {
+		if strings.Contains(lower, p) {
+			return false
+		}
+	}
+	if IsContextLengthError(400, lower) {
+		return false
+	}
+	for _, p := range modelNotFoundIndicators {
+		if strings.Contains(lower, p) {
+			return true
+		}
+	}
+	return false
+}
+
+// overloadIndicators are the capacity/overload phrases an upstream uses when it
+// is temporarily unable to serve a model (NENYA-168). They drive both the
+// circuit breaker's capacity class and the stream-bootstrap rejection test, so
+// one list keeps the two taxonomies aligned.
+var overloadIndicators = []string{
+	"at capacity",
+	"capacity exceeded",
+	"capacity is full",
+	"overloaded",
+	"overloaded_error",
+	"overload_error",
+}
+
+// IsOverloadMessage reports whether a bounded error text carries a capacity or
+// overload phrase (NENYA-168). The phrases are anchored ("at capacity",
+// "overloaded") rather than bare substrings, so a model id like
+// "capacity-3b" or a stray "capacity: 4096" field does not classify as an
+// overload rejection.
+func IsOverloadMessage(text string) bool {
+	if text == "" {
+		return false
+	}
+	lower := strings.ToLower(text)
+	for _, p := range overloadIndicators {
+		if strings.Contains(lower, p) {
+			return true
+		}
+	}
+	return false
+}
+
 // IsContextLengthError detects context-length exceeded errors from upstream providers.
 // It checks the status code (400, 413, 422) and parses the response body for known
 // error patterns indicating the prompt exceeds the model's context window.

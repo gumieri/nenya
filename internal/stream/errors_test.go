@@ -69,3 +69,41 @@ func TestIsStreamErrorPayload(t *testing.T) {
 		})
 	}
 }
+
+// TestIsCapacityRejection pins NENYA-168: a capacity/overload rejection is
+// recognized from the failure-reporting fields only, never from content — a
+// model that quotes "the server is overloaded" in its answer is not a
+// rejection, and a rejection that is not shaped as an error envelope still
+// releases the NENYA-45 bootstrap buffer for failover.
+func TestIsCapacityRejection(t *testing.T) {
+	tests := []struct {
+		name    string
+		payload string
+		want    bool
+	}{
+		{name: "top-level capacity message", payload: `{"message":"model is at capacity"}`, want: true},
+		{name: "overload type without the _error suffix", payload: `{"type":"overload","message":"server overloaded"}`, want: true},
+		{name: "nested error message", payload: `{"error":{"message":"model is at capacity"}}`, want: true},
+		{name: "nested error code", payload: `{"error":{"code":"overloaded"}}`, want: true},
+		{name: "fastapi detail field", payload: `{"detail":"model is at capacity"}`, want: true},
+		{name: "content quoting the word is not a rejection", payload: `{"choices":[{"delta":{"content":"the server is overloaded"}}]}`, want: false},
+		{name: "anthropic text delta quoting the word is not a rejection", payload: `{"type":"content_block_delta","delta":{"type":"text_delta","text":"overloaded"}}`, want: false},
+		{name: "gemini part quoting the word is not a rejection", payload: `{"candidates":[{"content":{"parts":[{"text":"capacity"}]}}]}`, want: false},
+		{name: "unrelated message", payload: `{"message":"invalid parameter"}`, want: false},
+		{name: "empty payload", payload: `{}`, want: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			parsed := ParseSSEChunk([]byte(tt.payload))
+			if parsed == nil {
+				t.Fatalf("payload did not parse: %s", tt.payload)
+			}
+			if got := IsCapacityRejection(parsed); got != tt.want {
+				t.Fatalf("IsCapacityRejection(%s) = %v, want %v", tt.payload, got, tt.want)
+			}
+		})
+	}
+	if IsCapacityRejection(nil) {
+		t.Error("a nil payload is not a capacity rejection")
+	}
+}

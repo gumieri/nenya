@@ -568,6 +568,13 @@ func TestBufferedStreamOutcomes(t *testing.T) {
 			sse:         "data: {\"type\":\"error\",\"code\":\"server_is_overloaded\"}\n\ndata: [DONE]\n\n",
 			wantFailure: 1,
 		},
+		{
+			// NENYA-168: a capacity rejection that is not shaped as an error
+			// envelope is a failed attempt too.
+			name:        "non-envelope capacity rejection records a failure",
+			sse:         "data: {\"message\":\"model is at capacity\"}\n\ndata: [DONE]\n\n",
+			wantFailure: 1,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

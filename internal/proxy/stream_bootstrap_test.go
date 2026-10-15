@@ -53,6 +53,13 @@ func TestClassifyBootstrapLine(t *testing.T) {
 		{"nested error object", `{"error":{"message":"server_is_overloaded"}}`, bootstrapReject},
 		{"flat string error", `{"error":"overloaded"}`, bootstrapReject},
 		{"typed error event", `{"type":"error","code":"server_is_overloaded"}`, bootstrapReject},
+		// NENYA-168: a capacity/overload rejection that is not shaped as an
+		// error envelope still releases the buffer for failover.
+		{"capacity message without an error envelope", `{"message":"model is at capacity"}`, bootstrapReject},
+		{"overload type without the _error suffix", `{"type":"overload","message":"server overloaded"}`, bootstrapReject},
+		// Content that merely quotes the word is not a rejection (it is output,
+		// so the buffer releases as output rather than as a rejection).
+		{"content mentioning overload is not a rejection", `{"choices":[{"delta":{"content":"the server is overloaded"}}]}`, bootstrapOutput},
 		{"server_error suffix", `{"message":"upstream down","type":"server_error"}`, bootstrapReject},
 		{"response.failed", `{"type":"response.failed"}`, bootstrapReject},
 		// Non-decisive.

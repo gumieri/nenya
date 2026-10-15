@@ -11,6 +11,7 @@ import (
 	"github.com/nenya/config"
 	"github.com/nenya/internal/gateway"
 	"github.com/nenya/internal/routing"
+	"github.com/nenya/internal/util"
 )
 
 // derive429Cooldown merges the configured cooldown with upstream-declared
@@ -24,6 +25,13 @@ func derive429Cooldown(logger *slog.Logger, errorBody []byte, header http.Header
 		return cooldownDuration, false
 	}
 	effective, isQuota := mergeBodyQuotaSignals(logger, errorBody, cooldownDuration)
+	// An overage-only rejection (NENYA-168) carries a billing reset, not a
+	// retry horizon: ignore every upstream-declared window (Retry-After and the
+	// unified reset headers) and let the configured cooldown — and the NENYA-41
+	// quota floor, via the quota flag — stay in charge.
+	if isOverageOnlyRejection(header) {
+		return effective, true
+	}
 	if upstreamCD := deriveUpstreamRateLimitCooldown(header); upstreamCD > effective {
 		effective = upstreamCD
 		logger.Info("upstream rate-limit window cooldown derived", "cooldown_s", effective.Seconds())
@@ -327,6 +335,14 @@ func opaque4xxBody(statusCode int, body []byte) bool {
 		}
 	}
 	return true
+}
+
+// isModelNotFoundError reports whether an upstream response means "this model is
+// not available here" (NENYA-168) — a target fault the caller can fail over, not
+// a malformed client request. A 403 is deliberately excluded: it is a
+// permission/credential fault that failing over cannot fix.
+func isModelNotFoundError(statusCode int, body []byte) bool {
+	return util.IsModelNotFoundStatus(statusCode, string(body))
 }
 
 // retryable4xxReason classifies why a 4xx body is retryable (empty = not).
