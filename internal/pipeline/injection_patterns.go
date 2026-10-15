@@ -75,7 +75,13 @@ const (
 func builtInInjectionPatterns() ([]injectionPattern, error) {
 	return compileInjectionPatterns([]patternSource{
 		{categoryOverride, `(?i)\bignore\s+(?:all\s+|any\s+)?(?:previous|prior|preceding|above|earlier)\s+(?:instructions?|prompts?|messages?|directions?|rules?)\b`},
-		{categoryOverride, `(?i)\bdisregard\s+(?:all\s+|any\s+|your|the)\s+(?:previous|prior|instructions?|prompts?|rules?|guidelines?|directives?)\b`},
+		// NENYA-147: the original shape required a second whitespace run after
+		// "all "/"any ", so the natural single-space "disregard all instructions"
+		// never matched. The pattern now requires a determiner/possessive or an
+		// override adjective (and drops the generic nouns "rules"/"guidelines"),
+		// so benign prose ("disregard the rules of the game", "disregard
+		// instructions in the README") no longer matches.
+		{categoryOverride, `(?i)\bdisregard\s+(?:(?:all|any|these|those|your|the|my|of|previous|prior|preceding|above|earlier|original|initial|system|hidden|true|following|next)\s+)+(?:instructions?|prompts?|directives?)\b`},
 		{categoryOverride, `(?i)\b(?:reveal|print|show|output|repeat|display|leak|expose)\s+(?:me\s+)?(?:your|the|any)\s+(?:system\s+prompt|initial\s+instructions?|hidden\s+instructions?|true\s+instructions?|original\s+(?:instructions?|prompt))\b`},
 		{categoryOverride, `(?i)\bdo\s+not\s+follow\s+(?:your|the|any)\s+(?:instructions?|rules?|guidelines?)\b`},
 		{categoryOverride, `(?i)\byou\s+are\s+now\s+(?:a|an|the)\s+(?:unrestricted|uncensored|unfiltered|jailbroken|dan)\b`},
@@ -127,6 +133,86 @@ func compileInjectionPatterns(sources []patternSource) ([]injectionPattern, erro
 // stripInvisible removes zero-width and invisible format characters.
 func stripInvisible(content string) string {
 	return invisibleChars.ReplaceAllString(content, "")
+}
+
+// ansiEscape matches ANSI/CSI escape sequences (colors, cursor moves, and the
+// two-character escapes): an escape sequence spliced into a keyword
+// ("ig\x1b[0mnore previous instructions") otherwise hides it from the
+// patterns (NENYA-147).
+var ansiEscape = regexp.MustCompile(`\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b[@-_]`)
+
+// extendedInvisibles matches the invisible/ignorable code points beyond
+// invisibleChars: soft hyphen, ZWNJ/ZWJ, the Mongolian vowel separator, Hangul
+// fillers, the Hangul choseong/jungseong fillers, variation selectors, and the
+// Unicode tag block (U+E0000-U+E007F, used for tag-character smuggling). These
+// are removed only when they appear in a *flagged* surface's normalized copy;
+// stripInvisible (the sanitize path) keeps its deliberately narrower set so
+// legitimate Persian/Indic and emoji text is not mangled.
+var extendedInvisibles = regexp.MustCompile(`[\x{00AD}\x{180E}\x{200C}\x{200D}\x{3164}\x{FFA0}\x{115F}\x{1160}\x{FE00}-\x{FE0F}\x{E0000}-\x{E007F}]`)
+
+// controlChars matches the C0 control characters (including a lone ESC that is
+// not part of an escape sequence, and DEL): a keyword split by a bare ESC or
+// any other control character otherwise evades every pattern, and the removal
+// also makes normalizeForMatching idempotent (no ESC survives to form a new
+// sequence at a seam).
+var controlChars = regexp.MustCompile(`[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]`)
+
+// unicodeSpaces matches the non-ASCII space separators that Go's ASCII-only
+// \s and \b do not treat as whitespace, so "ignore<NBSP>previous instructions"
+// otherwise evades every pattern. ASCII whitespace (space, tab, newline) is
+// deliberately left intact so a sanitized message keeps its structure.
+var unicodeSpaces = regexp.MustCompile(`[\x{0085}\x{00A0}\x{1680}\x{2000}-\x{200A}\x{2028}\x{2029}\x{202F}\x{205F}\x{3000}]+`)
+
+// foldFullwidth folds the fullwidth forms block (U+FF01-U+FF5E) and the
+// ideographic space onto their ASCII equivalents, so a fullwidth homoglyph
+// cannot evade a keyword pattern. The fold is rune-count preserving, and other
+// confusable blocks (mathematical alphanumerics, script/fraktur lookalikes) are
+// documented as outside the tier-1 threat model.
+func foldFullwidth(content string) string {
+	if !strings.ContainsFunc(content, func(r rune) bool {
+		return (r >= 0xFF01 && r <= 0xFF5E) || r == 0x3000
+	}) {
+		return content
+	}
+	return strings.Map(func(r rune) rune {
+		switch {
+		case r >= 0xFF01 && r <= 0xFF5E:
+			return r - 0xFEE0
+		case r == 0x3000:
+			return ' '
+		}
+		return r
+	}, content)
+}
+
+// normalizeForMatching applies the tier-1 pre-match normalization (NENYA-147)
+// and returns two candidate copies, because an invisible/format character can
+// hide either a missing separator ("ignore<ZWSP>previous") or a split word
+// ("ig<ZWSP>nore"):
+//
+//   - joined: the format characters are removed, so a split word rejoins;
+//   - spaced: the format characters become a space, so a hidden separator
+//     reappears.
+//
+// Both copies drop ANSI escape sequences, fold fullwidth homoglyphs, and
+// collapse the non-ASCII space separators to a plain space; ASCII whitespace is
+// preserved so a sanitized message keeps its structure.
+func normalizeForMatching(content string) (joined, spaced string) {
+	joined = stripForMatching(content, "")
+	spaced = stripForMatching(content, " ")
+	return joined, spaced
+}
+
+// stripForMatching removes the escape, control, invisible, and tag characters
+// that hide a keyword, replacing each with replacement ("" joins a split word,
+// " " restores a hidden separator), then folds fullwidth homoglyphs and
+// collapses the non-ASCII space separators.
+func stripForMatching(content, replacement string) string {
+	cleaned := ansiEscape.ReplaceAllString(content, replacement)
+	cleaned = controlChars.ReplaceAllString(cleaned, replacement)
+	cleaned = extendedInvisibles.ReplaceAllString(cleaned, replacement)
+	cleaned = invisibleChars.ReplaceAllString(cleaned, replacement)
+	return unicodeSpaces.ReplaceAllString(foldFullwidth(cleaned), " ")
 }
 
 // sampleCandidates takes up to cap matches per format, keeping the first

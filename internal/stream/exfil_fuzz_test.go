@@ -125,3 +125,49 @@ func checkUTF8Preserved(t *testing.T, path, in, out string) {
 		t.Errorf("%s filter produced invalid UTF-8 from valid input", path)
 	}
 }
+
+// FuzzExfilURLVariantScan exercises the URL policy's variant handling over
+// arbitrary text (NENYA-147): every candidate URL in the input is evaluated
+// with the ip-literal check both enabled and disabled, and the guard must
+// terminate without panicking, preserve UTF-8 validity in strip mode, and never
+// rewrite a construct without reporting a reason.
+func FuzzExfilURLVariantScan(f *testing.F) {
+	for _, seed := range []string{
+		"http://2130706433/",
+		"http://0x7f000001/",
+		"http://0177.0.0.1/",
+		"http://127.1/",
+		"http://[fe80::1%25eth0]/",
+		"http://[64:ff9b::7f00:1]/",
+		"http://100.64.0.7/",
+		"http://[::ffff:10.0.0.1]/",
+		"http://localhost../",
+		"http://%31%32%37.0.0.1/",
+		"[x](//169.254.169.254/x)",
+		"[x](hxxp://127.0.0.1/x)",
+		"https://example.com/ok",
+		"",
+	} {
+		f.Add(seed)
+	}
+
+	f.Fuzz(func(t *testing.T, content string) {
+		for _, allowIP := range []bool{false, true} {
+			guard := NewExfilGuard(config.ExfilGuardConfig{
+				Action:          config.ExfilActionStrip,
+				AllowIPLiterals: config.PtrTo(allowIP),
+			}, nil)
+			cleaned, _, reason := guard.InspectFull(content)
+			// Production input is JSON-decoded UTF-8; for already-invalid input
+			// the guard passes it through unchanged, so only assert the
+			// invariant for valid input (as the sibling target does).
+			if utf8.ValidString(content) && !utf8.ValidString(cleaned) {
+				t.Fatalf("strip produced invalid UTF-8 from %q", content)
+			}
+			// A stripped construct must carry a reason; a clean pass must not.
+			if cleaned != content && reason == "" {
+				t.Fatalf("content was rewritten (%q -> %q) without a reason", content, cleaned)
+			}
+		}
+	})
+}

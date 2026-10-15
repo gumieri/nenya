@@ -163,7 +163,19 @@ with their strict/fail-open semantics in
 streaming SSE deltas through a sliding window (chunk-boundary safe) and
 buffered bodies via full inspection. It flags markdown images/links and bare
 `http(s)` URLs whose scheme, host (IP literals, allowlist), query length, or
-query entropy violate policy. Actions are `log`, `strip`, or `block`.
+query entropy violate policy. The host is normalized before matching
+(lowercased, every trailing dot removed, IPv6 zone cut) and IP literals are
+recognized in every spelling an OS resolver accepts, including the legacy
+integer forms (`2130706433`, `0x7f000001`, `0177.0.0.1`, `127.1`); the
+private/link-local/CGNAT/NAT64 deny set is shared with the MCP argument policy
+(`internal/netutil`), and a special-use hostname (`localhost`, `.local`,
+`.internal`) is reported as `private_host` instead of passing as an ordinary
+hostname. Actions are `log`, `strip`, or `block`. The MCP tool-argument policy
+(NENYA-147) applies the same deny set to every whitespace-separated token of a
+string argument — not just the first — and accepts any `scheme://` and the
+scheme-relative `//host` form, plus a destination-shaped bare token
+(an IP literal anywhere, or a special-use name with an explicit port or path —
+a special-use name in plain prose is not a destination).
 
 **Canary tripwire (Phase 060)** injects a per-request random marker
 (`NENYA-CANARY-` + 32 hex chars) as a system-context message _after_ the
@@ -187,7 +199,7 @@ summaries cannot self-trip it.
 | `nenya_judgments_total{judgment,verdict,engine}`    | Judgment-layer outcomes; the injection classifier also appears here as `judgment="injection"` (truncated benigns as `benign`) | Same degradation signal as the escalation family; `engine` label shows which adjudicating model answered |
 | `nenya_interceptor_errors_total{name}`              | Interceptor operational faults (security interceptors then render 503)                                                        | Alert: a broken security layer is failing traffic closed                                                 |
 | `nenya_spotlighted_total{source}`                   | Enveloped surfaces                                                                                                            | Watch `source="tool-history"` growth (client-side MCP traffic)                                           |
-| `nenya_exfil_detections_total{reason,action}`       | Output URL-policy hits (`reason` ∈ `scheme`, `ip_literal`, `private_ip`, `host_not_allowed`, `query_length`, `query_entropy`) | `query_entropy`/`query_length` spikes may indicate beacon exfil or noisy legitimate URLs                 |
+| `nenya_exfil_detections_total{reason,action}`       | Output URL-policy hits (`reason` ∈ `scheme`, `ip_literal`, `private_ip`, `private_host`, `host_not_allowed`, `query_length`, `query_entropy`, `llm_screen`) | `query_entropy`/`query_length` spikes may indicate beacon exfil or noisy legitimate URLs; a `private_host` shift is NENYA-147 moving localhost/`.internal`/`.local` out of `host_not_allowed` |
 | `nenya_exfil_events_total{channel}`                 | Canary echoes (`stream`, `buffered`, `tool_args`)                                                                             | **Page-worthy**: non-zero means injected context reached an egress channel                               |
 | `nenya_stream_blocked_total`                        | Streams terminated by a policy                                                                                                | Correlate with the exfil/canary metrics above                                                            |
 | `nenya_mcp_tool_calls_total{status}`                | Tool dispatches incl. guard rejections                                                                                        | Rejection spikes may be an injection campaign or a too-strict schema                                     |
@@ -269,11 +281,62 @@ over-trust is worse than one you understand.
   are not detected. MCP argument URL checks are string-only: DNS names that
   resolve to private addresses and DNS rebinding between check and fetch are
   not caught.
+  _Closed by the NENYA-147 variant audit:_ the destination is now normalized
+  before matching (lowercased, every trailing dot removed, IPv6 zone cut) and
+  the legacy integer IPv4 spellings (`2130706433`, `0x7f000001`, `0177.0.0.1`,
+  `127.1`) are recognized as addresses in both the ExfilGuard and the MCP
+  argument policy, through one shared helper (`internal/netutil`); the deny set
+  now also covers CGNAT `100.64/10`, multicast/broadcast, and the NAT64
+  `64:ff9b::/96` embedding when IP literals are permitted. The MCP argument
+  policy additionally checks every whitespace-separated token (not just the
+  first, so a URL embedded in a command line is seen), any scheme (not only
+  http/https), the scheme-relative `//host` form, and a value that is itself a
+  denied bare host.
+  _Policy note:_ a scheme-less token that merely *contains* `://` is not
+  treated as a URL: a scheme-prefixed URL anywhere in the token (a flag
+  assignment, a markdown link, a quoted string) is extracted and judged, and a
+  URL-shaped-but-host-less form (e.g. `file:///etc/passwd`) fails closed as
+  `malformed`. A standalone numeric value needs a complete dotted IPv4 (four labels) or an
+  explicit `0x` prefix to count as an address, so ordinary
+  `8080`/`2025`/`0644`/`10.0`/`10.0.0` arguments are not rejected (URL hosts keep
+  the browser-style interpretation, so `http://2130706433/` is still an
+  address), and a bare single-label `localhost` counts as a
+  destination only when it is the whole value or carries a port/path (prose
+  that mentions the word is not rejected; a prose token that *is* an IP literal,
+  or a special-use name with an explicit port or path, is rejected).
+  _Still out of scope (neither closed nor a live bypass):_ the RFC 2765
+  IPv4-translated `::ffff:0:0/96` form, 6to4 `2002::/16`, Teredo `2001::/32`,
+  allowlist wildcards other than `*.` prefixes in the ExfilGuard (the MCP policy
+  supports them), a non-URL-shaped destination (a bare public hostname), and the
+  residual string shapes `https:/10.0.0.5/x` / `http:\10.0.0.5\x` (curl and
+  fetch treat them as a path, not an authority) and a ZWSP-split host (a
+  resolver will not resolve the ZWSP-bearing name — consistent with the
+  string-only limitation).
 - **Injection detection is surface-local.** A payload split across adjacent
   content-array parts is not reassembled. The sanitize marker is a spoofable
   literal — detection counters, not the marker, are the source of truth.
   ZWNJ/ZWJ (U+200C/U+200D) are exempt from hidden-text detection because they
   are legitimate typography.
+  _Closed by the NENYA-147 variant audit:_ before matching, the surface is
+  normalized — ANSI/CSI escape sequences, C0 control characters (including a
+  lone ESC and DEL), the extended invisible/tag characters (soft hyphen,
+  ZWNJ/ZWJ, Hangul fillers, variation selectors, the Unicode tag block
+  U+E0000-U+E007F), and the hidden-text set (ZWSP, LRM/RLM, bidi overrides, BOM)
+  are each removed **and** replaced by a space — two candidates, because such a
+  character can hide either a missing separator or a split word — then fullwidth
+  forms (U+FF01-U+FF5E) are folded to ASCII and the non-ASCII space separators
+  (NBSP, U+2028/U+2029, U+3000, …) collapse to a plain space. When the
+  invisible-character strip changed the surface, the pre-strip form is
+  normalized too (a separator hidden by a stripped character is only restored
+  from the original). A candidate is adopted only when it reveals a new pattern
+  or re-neutralizes a span of an already-counted one, so benign content is never
+  rewritten by normalization alone, and the legacy hidden-text strip keeps its
+  deliberately narrow set.
+  _Still out of scope:_ full NFKC, homoglyphs outside the fullwidth block
+  (mathematical alphanumerics, dotted capital I, script/fraktur lookalikes),
+  UTF-16 payloads, and literal `\uXXXX` escape text — all pinned as
+  `detected: false` cases in the committed corpus
+  (`internal/pipeline/testdata/injection_variants.json`).
 - **Spotlighting reduces, not eliminates.** Envelopes + preamble lower
   indirect-injection success rates substantially; a sufficiently persuasive
   payload can still influence a model that treats the envelope as content.
@@ -288,6 +351,25 @@ over-trust is worse than one you understand.
 - **Fail-closed means downtime.** When a strict security interceptor faults,
   requests fail with 503 rather than proceeding degraded. Alert on
   `nenya_interceptor_errors_total` and fix the underlying fault.
+
+## Adversarial variant corpus (NENYA-147)
+
+The tier-1 gates are audited against the upstream bypass taxonomy with committed
+corpora, so every shape has a test rather than a claim:
+
+| Surface | Corpus | Test |
+|---|---|---|
+| ExfilGuard URL policy | `internal/stream/testdata/exfil_url_variants.json` | `TestExfilGuardVariantTaxonomy` |
+| Tier-1 injection patterns | `internal/pipeline/testdata/injection_variants.json` | `TestInjectionVariantTaxonomy` |
+| MCP argument URL policy | `internal/mcp/testdata/tool_arg_url_variants.json` | `TestToolArgURLVariantTaxonomy` |
+| Destination deny set (shared) | `internal/netutil/ipdeny_test.go` (policy boundary) | `TestParseStandaloneIPv4`, `TestParseNumericIPv4URLHost`, `TestDenyHostNormalization` |
+| Canary tripwire | prose only (CONFIGURATION.md) | no fixture: the marker is per-request random, so a fixture could only pin the documented non-detections (encoded dumps, streaming tool-arg deltas) |
+
+A case whose evasion is a documented limitation is committed with the
+non-detecting expectation, so a future change that closes it must update the
+corpus (and cannot silently claim coverage it does not have). Each gate also has
+a variant fuzz target: `FuzzExfilURLVariantScan`, `FuzzNormalizeForMatching`,
+and `FuzzDenyURLHost`.
 
 ## Research and references
 

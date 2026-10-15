@@ -175,7 +175,15 @@ func TestValidateArgsURLPolicy(t *testing.T) {
 		{name: "percent-encoded host", url: "http://%31%32%37.0.0.1/", rejected: true, flagged: true},
 		{name: "public ok", url: "https://example.com/search", flagged: false},
 		{name: "non-url string ok", url: "just a search query", flagged: false},
-		{name: "ftp scheme ignored", url: "ftp://127.0.0.1/file", flagged: false},
+		// NENYA-147: a non-http scheme with a denied host is still denied
+		// (the old http(s)-only gate was a bypass shape).
+		{name: "ftp scheme denied host", url: "ftp://127.0.0.1/file", rejected: true, flagged: true},
+		{name: "ftp scheme public host ignored", url: "ftp://example.com/file", flagged: false},
+		{name: "scheme-relative denied host", url: "//169.254.169.254/latest/meta-data/", rejected: true, flagged: true},
+		{name: "bare denied host value", url: "169.254.169.254", rejected: true, flagged: true},
+		{name: "bare localhost value", url: "localhost", rejected: true, flagged: true},
+		{name: "url embedded in a command line", url: "curl -sS http://169.254.169.254/latest/meta-data/", rejected: true, flagged: true},
+		{name: "prose mentioning localhost is not a destination", url: "the localhost docs are at example.com", flagged: false},
 		{
 			name:     "allowlist exact",
 			url:      "http://10.0.0.5:8080/api",

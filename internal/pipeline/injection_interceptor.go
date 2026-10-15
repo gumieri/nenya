@@ -465,30 +465,129 @@ func (i *InjectionInterceptor) scan(content string) (string, int, map[injectionC
 
 	// Invisible formatting characters are stripped outright: they exist to
 	// hide instructions, and removing them preserves surrounding prose.
+	original := content
 	if stripped := stripInvisible(content); stripped != content {
 		addHit(categoryHiddenText)
 		content = stripped
 	}
 
-	for _, pattern := range i.patterns {
-		if pattern.re.MatchString(content) {
-			addHit(pattern.category)
-			content = pattern.re.ReplaceAllString(content, sanitizeMarker)
-		}
-	}
+	raw := i.applyPatterns(content, nil, nil)
+	content = raw.content
+	hits += len(raw.matched) + raw.encoded
+	categories = mergeCategories(categories, raw.categories)
 
-	if encodedHits, tokens := scanEncodedTokens(content); encodedHits > 0 {
-		hits += encodedHits
-		if categories == nil {
-			categories = make(map[injectionCategory]int)
+	// NENYA-147: variant shapes (ANSI escapes, C0 controls, extended
+	// invisible/tag characters, fullwidth homoglyphs, non-ASCII space
+	// separators) can split a keyword so the raw pass misses it. Run the pass
+	// over the normalized candidates as well and union the hits — the pass is
+	// not gated on the raw result, because any hit on the same surface (hidden
+	// text, an encoded blob, or a plain decoy phrase) would otherwise suppress
+	// it and let an obfuscated instruction through in sanitize mode. Adoption is
+	// still conditioned on the candidate revealing a *new* pattern, so benign
+	// content is never rewritten by normalization alone, and a pattern the raw
+	// pass already counted is never double-counted.
+	joined, spaced := normalizeForMatching(content)
+	candidates := []string{joined, spaced}
+	if original != content {
+		// The invisible-character strip ran: a separator hidden by one of
+		// those characters is only restored by normalizing the original
+		// surface (the strip removed it without leaving a separator).
+		_, originalSpaced := normalizeForMatching(original)
+		candidates = append(candidates, originalSpaced)
+	}
+	for _, candidate := range candidates {
+		if candidate == content {
+			continue
 		}
-		categories[categoryEncoded] += encodedHits
-		for _, token := range tokens {
-			content = strings.ReplaceAll(content, token, sanitizeMarker)
+		variant := i.applyPatterns(candidate, raw.matched, raw.encodedTokens)
+		if len(variant.matched) == 0 && variant.content == candidate {
+			// Nothing matched in the candidate at all: leave the surface as it
+			// is (normalization alone never rewrites content).
+			continue
 		}
+		content = variant.content
+		hits += len(variant.matched) + variant.encoded
+		categories = mergeCategories(categories, variant.categories)
+		break
 	}
 
 	return content, hits, categories
+}
+
+// patternPass is the outcome of one pattern/encoded pass over a surface copy:
+// the sanitized copy, the pattern indices counted by this pass, the encoded
+// hits, and their categories.
+type patternPass struct {
+	content       string
+	matched       map[int]bool
+	encoded       int
+	encodedTokens map[string]bool
+	categories    map[injectionCategory]int
+}
+
+// applyPatterns runs the pattern pass and the encoded-blob scan over one surface
+// copy. A pattern whose index is in seen still has its spans neutralized but is
+// not counted again, so a variant pass over a normalized copy cannot
+// double-count a match the raw pass already recorded (NENYA-147).
+func (i *InjectionInterceptor) applyPatterns(content string, seen map[int]bool, seenEncoded map[string]bool) patternPass {
+	pass := patternPass{content: content}
+	for idx, pattern := range i.patterns {
+		// Match against the progressively rewritten copy (a pattern whose span
+		// an earlier pattern already neutralized must not count twice).
+		if !pattern.re.MatchString(pass.content) {
+			continue
+		}
+		pass.content = pattern.re.ReplaceAllString(pass.content, sanitizeMarker)
+		if seen[idx] {
+			continue
+		}
+		if pass.matched == nil {
+			pass.matched = make(map[int]bool)
+		}
+		pass.matched[idx] = true
+		pass.addCategory(pattern.category, 1)
+	}
+	found, tokens := scanEncodedTokens(pass.content)
+	if found == 0 {
+		return pass
+	}
+	for _, token := range tokens {
+		pass.content = strings.ReplaceAll(pass.content, token, sanitizeMarker)
+		if seenEncoded[token] {
+			continue
+		}
+		if pass.encodedTokens == nil {
+			pass.encodedTokens = make(map[string]bool)
+		}
+		pass.encodedTokens[token] = true
+		pass.encoded++
+	}
+	if pass.encoded > 0 {
+		pass.addCategory(categoryEncoded, pass.encoded)
+	}
+	return pass
+}
+
+// addCategory records n hits of one category on the pass.
+func (p *patternPass) addCategory(category injectionCategory, n int) {
+	if p.categories == nil {
+		p.categories = make(map[injectionCategory]int)
+	}
+	p.categories[category] += n
+}
+
+// mergeCategories folds a second category tally into the first.
+func mergeCategories(into, from map[injectionCategory]int) map[injectionCategory]int {
+	if len(from) == 0 {
+		return into
+	}
+	if into == nil {
+		into = make(map[injectionCategory]int, len(from))
+	}
+	for category, count := range from {
+		into[category] += count
+	}
+	return into
 }
 
 // recordMetrics emits one detection counter per category.

@@ -2,7 +2,6 @@ package stream
 
 import (
 	"log/slog"
-	"net"
 	"net/url"
 	"regexp"
 	"sort"
@@ -10,6 +9,7 @@ import (
 
 	"github.com/nenya/config"
 	"github.com/nenya/internal/infra"
+	"github.com/nenya/internal/netutil"
 	"github.com/nenya/internal/pipeline"
 )
 
@@ -39,6 +39,7 @@ const exfilWindowRunes = 4096
 const (
 	exfilReasonScheme         = "scheme"
 	exfilReasonIPLiteral      = "ip_literal"
+	exfilReasonPrivateHost    = "private_host"
 	exfilReasonPrivateIP      = "private_ip"
 	exfilReasonHostNotAllowed = "host_not_allowed"
 	exfilReasonQueryLength    = "query_length"
@@ -99,7 +100,9 @@ func NewExfilGuard(cfg config.ExfilGuardConfig, metrics *infra.Metrics) *ExfilGu
 	allowIPLiterals := cfg.AllowIPLiterals != nil && *cfg.AllowIPLiterals
 	hosts := make([]string, 0, len(cfg.AllowedHosts))
 	for _, h := range cfg.AllowedHosts {
-		hosts = append(hosts, strings.ToLower(strings.TrimSuffix(h, ".")))
+		// The same normalization the URL host gets (lowercase, every trailing
+		// dot, IPv6 zone), so an entry cannot fail to match by spelling.
+		hosts = append(hosts, netutil.NormalizeHost(h))
 	}
 	return &ExfilGuard{
 		action:          action,
@@ -372,18 +375,33 @@ func (g *ExfilGuard) evaluate(rawURL string) string {
 		return exfilReasonScheme
 	}
 
-	host := strings.ToLower(strings.TrimSuffix(u.Hostname(), "."))
-	if ip := net.ParseIP(host); ip != nil {
+	// Normalize before matching (NENYA-147): lowercase, strip every trailing
+	// dot (not just one), cut an IPv6 zone, and recognize the legacy integer
+	// IPv4 spellings (2130706433, 0x7f000001, 0177.0.0.1, 127.1) that OS
+	// resolvers still accept — otherwise a private destination spelled that way
+	// reads as an ordinary hostname and passes with no allowlist configured.
+	host := netutil.NormalizeHost(u.Hostname())
+	if ip, isLiteral := netutil.IsIPLiteral(host); isLiteral {
 		if !g.allowIPLiterals {
 			return exfilReasonIPLiteral
 		}
-		if ip.IsPrivate() || ip.IsLoopback() || ip.IsLinkLocalUnicast() || ip.IsUnspecified() {
+		if netutil.DenyIP(ip) {
 			return exfilReasonPrivateIP
 		}
-	} else if len(g.allowedHosts) > 0 && !hostAllowed(host, g.allowedHosts) {
-		return exfilReasonHostNotAllowed
+		return g.evaluateQuery(u.RawQuery)
 	}
-
+	// An explicitly allowed host wins over the built-in deny set.
+	if !hostAllowed(host, g.allowedHosts) {
+		// A special-use name or localhost variant (NENYA-147): the same
+		// definition the MCP argument policy uses, so "http://db.internal/"
+		// cannot pass as an ordinary hostname.
+		if netutil.DenyHost(host) {
+			return exfilReasonPrivateHost
+		}
+		if len(g.allowedHosts) > 0 {
+			return exfilReasonHostNotAllowed
+		}
+	}
 	return g.evaluateQuery(u.RawQuery)
 }
 
