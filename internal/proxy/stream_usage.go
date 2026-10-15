@@ -2,6 +2,7 @@ package proxy
 
 import (
 	"context"
+	"math"
 	"time"
 
 	"github.com/nenya/internal/billing"
@@ -24,10 +25,14 @@ func (p *Proxy) makeUsageCallback(ctx context.Context, gw *gateway.NenyaGateway,
 	var accInput, accCached, accCompletion int64
 	var lastCost float64
 	var lastCached int64
+	// spendClaimed makes the billing request count one per dispatch: the first
+	// non-zero cost delta claims the request, later usage chunks only add spend
+	// (NENYA-193).
+	spendClaimed := false
 	return func(u stream.UsageData) {
 		completion, prompt := u.CompletionTokens, u.PromptTokens
 		cacheHit, cacheMiss := u.CacheHitTokens, u.CacheMissTokens
-		cacheCreation, reasoning := u.CacheCreationTokens, u.ReasoningTokens
+		cacheCreation := u.CacheCreationTokens
 		// UsageData.PromptTokens is already the per-event delta (the
 		// stream reader clamps against its own last-value tracker), so it
 		// feeds the calibration tracker directly (NENYA-135); deltas sum
@@ -42,52 +47,70 @@ func (p *Proxy) makeUsageCallback(ctx context.Context, gw *gateway.NenyaGateway,
 				"provider", target.Provider, "model", target.Model)
 		}
 		gw.Calibration.RecordActual(target.Model, prompt)
-		if completion > 0 {
-			gw.Stats.RecordOutput(target.Model, completion)
-			gw.Metrics.RecordTokens("output", target.Model, agentName, target.Provider, completion)
+		recordStreamUsageDimensions(gw, target, agentName, u)
+		// Any reported dimension counts as usage for the claim (a chunk can
+		// carry only cache dimensions or only a total); the accumulators are
+		// advanced independently so a cache-only delta is still priced.
+		usageSeen := prompt > 0 || completion > 0 || cacheHit > 0 || cacheCreation > 0 || cacheMiss > 0
+		if usageSeen {
+			accInput += int64(prompt)
+			accCached += int64(cacheHit)
+			accCompletion += int64(completion)
 		}
-		if reasoning > 0 {
-			gw.Stats.RecordReasoning(target.Model, reasoning)
-			gw.Metrics.RecordTokens(TokenDirectionReasoning, target.Model, agentName, target.Provider, reasoning)
-		}
-		if cacheHit > 0 {
-			gw.Stats.RecordCacheHit(target.Model, cacheHit)
-			gw.Metrics.RecordCacheReadTokens(target.Model, agentName, target.Provider, cacheHit)
-		}
-		if cacheMiss > 0 {
-			gw.Stats.RecordCacheMiss(target.Model, cacheMiss)
-			gw.Metrics.RecordCacheMissTokens(target.Model, agentName, target.Provider, cacheMiss)
-		}
-		if cacheCreation > 0 {
-			gw.Stats.RecordCacheCreation(target.Model, cacheCreation)
-			gw.Metrics.RecordCacheCreationTokens(target.Model, agentName, target.Provider, cacheCreation)
-		}
-		// Note: Stats cache methods don't track agent/provider; Metrics methods do.
-		// This pattern (if count > 0 { Stats.*; Metrics.* }) is intentional.
-		if gw.CostTracker != nil && (prompt > 0 || completion > 0) {
+		cost := 0.0
+		if usageSeen && gw.CostTracker != nil {
 			if dm, ok := gw.ModelCatalog.Lookup(target.Model); ok && dm.Pricing != nil && dm.Pricing.HasStandardRate() {
-				accInput += int64(prompt)
-				accCached += int64(cacheHit)
-				accCompletion += int64(completion)
-				recordStreamCost(ctx, gw, target, dm.Pricing, accInput, accCached, accCompletion, &lastCost, &lastCached, prompt, completion)
+				cost = recordStreamCost(gw, target, dm.Pricing, accInput, accCached, accCompletion, &lastCost, &lastCached)
 			}
 		}
+		// The billing claim happens on usage presence, not on a priced cost:
+		// an unpriced model's dispatch is still one billable upstream request
+		// (NENYA-193).
+		recordStreamSpend(ctx, gw, target, cost, accInput, accCompletion, &spendClaimed, usageSeen)
+	}
+}
+
+// recordStreamUsageDimensions records the Stats counters and Prometheus series
+// for one usage delta. Note: the Stats cache methods don't track agent/provider,
+// the Metrics methods do — the (if count > 0 { Stats.*; Metrics.* }) pattern is
+// intentional.
+func recordStreamUsageDimensions(gw *gateway.NenyaGateway, target routing.UpstreamTarget, agentName string, u stream.UsageData) {
+	if u.CompletionTokens > 0 {
+		gw.Stats.RecordOutput(target.Model, u.CompletionTokens)
+		gw.Metrics.RecordTokens("output", target.Model, agentName, target.Provider, u.CompletionTokens)
+	}
+	if u.ReasoningTokens > 0 {
+		gw.Stats.RecordReasoning(target.Model, u.ReasoningTokens)
+		gw.Metrics.RecordTokens(TokenDirectionReasoning, target.Model, agentName, target.Provider, u.ReasoningTokens)
+	}
+	if u.CacheHitTokens > 0 {
+		gw.Stats.RecordCacheHit(target.Model, u.CacheHitTokens)
+		gw.Metrics.RecordCacheReadTokens(target.Model, agentName, target.Provider, u.CacheHitTokens)
+	}
+	if u.CacheMissTokens > 0 {
+		gw.Stats.RecordCacheMiss(target.Model, u.CacheMissTokens)
+		gw.Metrics.RecordCacheMissTokens(target.Model, agentName, target.Provider, u.CacheMissTokens)
+	}
+	if u.CacheCreationTokens > 0 {
+		gw.Stats.RecordCacheCreation(target.Model, u.CacheCreationTokens)
+		gw.Metrics.RecordCacheCreationTokens(target.Model, agentName, target.Provider, u.CacheCreationTokens)
 	}
 }
 
 // recordStreamCost prices the per-request cumulative usage and records only
 // the delta since the last chunk, so chunk boundaries cannot misattribute the
 // cached/uncached split. The pricing window is sampled at the recording
-// instant (docs/COST_MODEL.md, billing approximation).
-func recordStreamCost(ctx context.Context, gw *gateway.NenyaGateway, target routing.UpstreamTarget,
-	pricing *discovery.PricingEntry, accInput, accCached, accCompletion int64, lastCost *float64, lastCached *int64, prompt, completion int) {
+// instant (docs/COST_MODEL.md, billing approximation). It returns the cost
+// delta for the billing side, which claims one request per dispatch (NENYA-193).
+func recordStreamCost(gw *gateway.NenyaGateway, target routing.UpstreamTarget,
+	pricing *discovery.PricingEntry, accInput, accCached, accCompletion int64, lastCost *float64, lastCached *int64) float64 {
 	now := time.Now()
 	u := pricingUsage(gw, target, int(accInput), int(accCached), int(accCompletion), now)
 	total := pricing.CalculateCost(u)
 	cost := total - *lastCost
 	*lastCost = total
 	if cost == 0 {
-		return
+		return 0
 	}
 	label := windowLabel(u.Peak)
 	gw.Metrics.RecordCostWindow(target.Model, label, cost)
@@ -96,15 +119,58 @@ func recordStreamCost(ctx context.Context, gw *gateway.NenyaGateway, target rout
 	}
 	*lastCached = accCached
 	gw.CostTracker.RecordUsage(target.Model, cost)
-	if gw.BillingTracker != nil {
-		gw.BillingTracker.RecordSpend(ctx, billing.SpendEntry{
-			ProviderName: target.Provider,
-			AccountName:  target.AccountName,
-			RequestID:    "",
-			InputTokens:  prompt,
-			OutputTokens: completion,
-			CostUSD:      cost,
-			Timestamp:    now,
-		})
+	return cost
+}
+
+// recordStreamSpend claims one billing request per dispatch: the first chunk
+// that reports usage is recorded with the full entry (which increments the
+// request count, whether or not pricing is configured for the model), and every
+// later cost delta for the same dispatch only adds spend. Without the claim, a
+// provider reporting usage in several chunks would count one request per chunk
+// and emit one spend event per chunk for a single dispatch (NENYA-193).
+//
+// A negative cost delta (a peak-to-off-peak window flip mid-stream lowers the
+// recomputed cumulative total) is recorded exactly by the cost tracker, while
+// the cents-based billing side ignores it: SafeUSDCents clamps negatives to
+// zero, so the billing total can only round up, never down.
+func recordStreamSpend(ctx context.Context, gw *gateway.NenyaGateway, target routing.UpstreamTarget,
+	cost float64, accInput, accCompletion int64, claimed *bool, usageSeen bool) {
+	if gw.BillingTracker == nil {
+		return
 	}
+	if *claimed {
+		if cost > 0 {
+			gw.BillingTracker.AddSpend(ctx, target.Provider, target.AccountName, cost, clampInt64ToInt(accInput), clampInt64ToInt(accCompletion))
+		}
+		return
+	}
+	if !usageSeen {
+		return
+	}
+	*claimed = true
+	claimCost := cost
+	if claimCost < 0 {
+		claimCost = 0
+	}
+	gw.BillingTracker.RecordSpend(ctx, billing.SpendEntry{
+		ProviderName: target.Provider,
+		AccountName:  target.AccountName,
+		RequestID:    "",
+		InputTokens:  clampInt64ToInt(accInput),
+		OutputTokens: clampInt64ToInt(accCompletion),
+		CostUSD:      claimCost,
+		Timestamp:    time.Now(),
+	})
+}
+
+// clampInt64ToInt narrows an int64 counter to int without the CWE-190 overflow
+// wrap (AGENTS.md §7).
+func clampInt64ToInt(v int64) int {
+	if v > math.MaxInt {
+		return math.MaxInt
+	}
+	if v < 0 {
+		return 0
+	}
+	return int(v)
 }

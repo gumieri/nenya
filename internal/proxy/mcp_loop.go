@@ -526,6 +526,10 @@ func (p *Proxy) mcpIteration(in mcpIterInput) int {
 	case <-in.mcpLoopCtx.Done():
 		in.gw.Logger.Warn("MCP loop deadline exceeded", "agent", in.opts.AgentName, "iterations", *in.actualIter)
 		if *in.lastBuf != nil {
+			// The replayed buffer is a dispatch that reached the provider; its
+			// usage was claimed by recordMCPIterationUsage at its own
+			// iteration, so this call is an idempotent no-op (NENYA-193).
+			p.recordMCPUsage(in.gw, *in.lastBuf, in.opts.AgentName)
 			p.replayGuardedBuffered(in.gw, in.w, *in.lastBuf, in.opts.AgentName)
 		} else {
 			writeSSEError(in.w, http.StatusRequestTimeout, "MCP loop deadline exceeded")
@@ -555,6 +559,11 @@ func (p *Proxy) mcpIteration(in mcpIterInput) int {
 	// so K estimates pair with K actuals instead of biasing the ratio
 	// toward ~1/K (the terminal paths only add Stats).
 	recordCalibrationFromBuffer(in.gw, mcpCalibrationModel(in.opts.Targets, buf), buf)
+	// NENYA-193: this iteration is one upstream dispatch that reached a
+	// provider, so it claims its usage (Stats, metrics, cost, one billing
+	// request) exactly once. The terminal paths below are idempotent no-ops
+	// for a buffer claimed here.
+	p.recordMCPIterationUsage(in.mcpLoopCtx, in.gw, buf, in.opts.Targets, in.opts.AgentName)
 	if handled := p.handleMCPBufferOutcome(in, buf, err); handled {
 		return mcpIterReturn
 	}
@@ -920,7 +929,7 @@ func (p *Proxy) handleBufferedAction(ctx context.Context, gw *gateway.NenyaGatew
 
 func (p *Proxy) handleBufferedStream(ctx context.Context, action upstreamAction, target routing.UpstreamTarget, gw *gateway.NenyaGateway, cooldownDuration time.Duration, agentName string, canary pipeline.CanarResult) (*bufferedSSE, error) {
 	defer action.cancel()
-	buf, err := bufferStreamResponse(ctx, action.resp.Body, gw.Logger, target.Model)
+	buf, err := bufferStreamResponse(ctx, action.resp.Body, gw.Logger, target.Model, target)
 	_ = action.resp.Body.Close()
 	if err != nil {
 		gw.AgentState.RecordFailure(target, cooldownDuration)

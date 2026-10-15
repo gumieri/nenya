@@ -31,6 +31,7 @@ func usageFixtureGW() *gateway.NenyaGateway {
 		ModelCatalog: catalog,
 		CostTracker:  infra.NewCostTracker(),
 		Stats:        infra.NewUsageTracker(),
+		Logger:       slog.New(slog.NewTextHandler(io.Discard, nil)),
 	}
 }
 

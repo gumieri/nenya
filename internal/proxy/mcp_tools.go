@@ -17,6 +17,7 @@ import (
 	"github.com/nenya/config"
 	"github.com/nenya/internal/auth"
 	"github.com/nenya/internal/infra"
+	"github.com/nenya/internal/routing"
 
 	"github.com/nenya/internal/gateway"
 	"github.com/nenya/internal/mcp"
@@ -50,6 +51,11 @@ type bufferedSSE struct {
 	// by handleBufferedStream): the exact key the dispatch estimate for
 	// this buffer was recorded under (NENYA-135).
 	calibrationModel string
+	// servingTarget is the target this buffer was dispatched to (NENYA-193):
+	// cost and spend are attributed to its provider/account, which the model
+	// string alone cannot identify when a chain lists one model under several
+	// providers.
+	servingTarget routing.UpstreamTarget
 	// lastUsageChunk caches the final SSE data line carrying a usage
 	// object so the calibration and Stats parsers parse rawBytes once
 	// (NENYA-135; multi-MB buffers must not be re-parsed per consumer).
@@ -64,6 +70,11 @@ type bufferedSSE struct {
 	usageMerged       stream.UsageTotals
 	usageMergedSeen   bool
 	usageMergedParsed bool
+	// usageClaimed records that this buffer's usage was claimed by
+	// recordMCPIterationUsage (one claim per dispatch); the MCP terminal paths
+	// check it and are therefore idempotent no-ops for a claimed buffer
+	// (NENYA-193).
+	usageClaimed bool
 }
 
 // mcpToolCall represents a tool call extracted from an upstream LLM response.
@@ -388,7 +399,7 @@ func (acc *sseAccumulator) result() *bufferedSSE {
 	}
 }
 
-func bufferStreamResponse(ctx context.Context, r io.Reader, logger *slog.Logger, servingModel string) (*bufferedSSE, error) {
+func bufferStreamResponse(ctx context.Context, r io.Reader, logger *slog.Logger, servingModel string, servingTarget routing.UpstreamTarget) (*bufferedSSE, error) {
 	acc := newSSEAccumulator(logger)
 	scanner := bufio.NewScanner(r)
 	scanner.Buffer(make([]byte, stream.SSEScannerInitialBuf), stream.SSEScannerMaxBuf)
@@ -411,6 +422,7 @@ func bufferStreamResponse(ctx context.Context, r io.Reader, logger *slog.Logger,
 	}
 	out := acc.result()
 	out.calibrationModel = servingModel
+	out.servingTarget = servingTarget
 	return out, nil
 }
 

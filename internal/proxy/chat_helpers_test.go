@@ -306,11 +306,11 @@ func TestBuildProviderTargets(t *testing.T) {
 	})
 }
 
-func TestRecordChatUsage(t *testing.T) {
+func TestRecordUsageOutputCounts(t *testing.T) {
 	outputFor := func(t *testing.T, usage map[string]interface{}) uint64 {
 		t.Helper()
 		gw := &gateway.NenyaGateway{Stats: infra.NewUsageTracker()}
-		recordChatUsage(gw, "test-model", usage)
+		recordUsageFromMap(gw, map[string]interface{}{"usage": usage}, "test-model", "test-provider")
 		models, _ := gw.Stats.Snapshot()["models"].(map[string]interface{})
 		model, ok := models["test-model"].(map[string]interface{})
 		if !ok {
@@ -348,7 +348,7 @@ func TestRecordChatUsage(t *testing.T) {
 
 	t.Run("nil stats - no panic", func(t *testing.T) {
 		gw := &gateway.NenyaGateway{Stats: nil}
-		recordChatUsage(gw, "test-model", map[string]interface{}{"total_tokens": 100.0})
+		recordUsageFromMap(gw, map[string]interface{}{"usage": map[string]interface{}{"total_tokens": 100.0}}, "test-model", "test-provider")
 	})
 }
 

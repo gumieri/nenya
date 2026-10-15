@@ -277,3 +277,38 @@ func TestResetSpend_ConcurrentSafety(t *testing.T) {
 		t.Errorf("TotalSpendCents went negative: %d (underflow detected)", total)
 	}
 }
+
+// TestAddSpendDoesNotClaimRequest pins the NENYA-193 single-claim contract: a
+// dispatch claims its billing request once (RecordSpend) and later usage deltas
+// only add spend (AddSpend), so a provider reporting usage in several chunks
+// still counts one request while the cost stays exact.
+func TestAddSpendDoesNotClaimRequest(t *testing.T) {
+	bt := NewBillingTracker(nil, nil)
+	ctx := context.Background()
+
+	bt.RecordSpend(ctx, SpendEntry{ProviderName: "p", AccountName: "a", CostUSD: 0.05})
+	if got := bt.TotalRequests.Load(); got != 1 {
+		t.Fatalf("requests = %d, want 1", got)
+	}
+	bt.AddSpend(ctx, "p", "a", 0.05, 0, 0)
+	bt.AddSpend(ctx, "p", "a", 0.10, 0, 0)
+
+	if got := bt.TotalRequests.Load(); got != 1 {
+		t.Errorf("requests after AddSpend = %d, want 1 (no extra claim)", got)
+	}
+	if got := bt.TotalSpendCents.Load(); got != 20 {
+		t.Errorf("spend cents = %d, want 20 (5 + 5 + 10)", got)
+	}
+	// Nil-safe: writes are no-ops and reads return zero values.
+	var nilTracker *BillingTracker
+	nilTracker.AddSpend(ctx, "p", "a", 1, 0, 0)
+	nilTracker.RecordSpend(ctx, SpendEntry{ProviderName: "p", AccountName: "a", CostUSD: 1})
+	nilTracker.MarkExhausted(ctx, "p", "a", "test")
+	nilTracker.ResetSpend(ctx, "p", "a")
+	if nilTracker.GetTotalSpend("p", "a") != 0 || nilTracker.IsExhausted("p", "a") || nilTracker.GetAllAccounts() != nil {
+		t.Error("nil-receiver reads must return zero values")
+	}
+	if nilTracker.GetUtilizationRatio("p", "a", 10) != 0 {
+		t.Error("nil-receiver utilization ratio must be 0")
+	}
+}

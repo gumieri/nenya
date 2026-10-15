@@ -1,6 +1,7 @@
 package proxy
 
 import (
+	"context"
 	"encoding/json"
 	"strings"
 
@@ -99,8 +100,62 @@ func recordCalibrationFromBuffer(gw *gateway.NenyaGateway, model string, buf *bu
 	gw.Calibration.RecordActual(model, totals.Prompt)
 }
 
+// recordMCPIterationUsage claims one buffered MCP dispatch: every loop
+// iteration is one upstream call that reached a provider, so it claims its
+// Stats counters, metrics, cost and one billing request exactly once
+// (NENYA-193). The per-buffer claim flag makes the terminal paths
+// (recordMCPUsage) idempotent no-ops for a buffer already claimed here.
+func (p *Proxy) recordMCPIterationUsage(ctx context.Context, gw *gateway.NenyaGateway, buf *bufferedSSE, targets []routing.UpstreamTarget, agentName string) {
+	if gw == nil || buf == nil || agentName == "" || buf.usageClaimed {
+		return
+	}
+	totals, ok := buf.usageTotals()
+	if !ok || totals.Total <= 0 {
+		return
+	}
+	buf.usageClaimed = true
+
+	model := mcpCalibrationModel(targets, buf)
+	// The serving target recorded at dispatch time is authoritative: a chain
+	// can list one model under several providers/accounts, and the model string
+	// alone would attribute the spend to the wrong account.
+	target := buf.servingTarget
+	if target.Model == "" {
+		target = mcpServingTarget(targets, model)
+	}
+	if gw.Logger != nil {
+		gw.Logger.Debug("MCP loop usage claimed",
+			"agent", agentName, "model", model, "provider", target.Provider,
+			"usage", totals)
+	}
+	recordNonStreamingStats(gw, model, totals.Completion, totals.CacheHit, totals.CacheMiss, totals.CacheCreation, totals.Reasoning)
+	recordNonStreamingMetrics(gw, target, agentName, totals.Completion, totals.CacheHit, totals.CacheMiss, totals.CacheCreation, totals.Reasoning)
+	recordCostAndBilling(ctx, gw, target, totals.Prompt, totals.CacheHit, totals.Completion)
+}
+
+// mcpServingTarget resolves the target a buffered MCP dispatch was served by
+// (matched on the buffer's serving model), falling back to the primary target.
+func mcpServingTarget(targets []routing.UpstreamTarget, model string) routing.UpstreamTarget {
+	for _, t := range targets {
+		if t.Model == model {
+			return t
+		}
+	}
+	if len(targets) > 0 {
+		return targets[0]
+	}
+	return routing.UpstreamTarget{Model: model}
+}
+
+// recordMCPUsage records the Stats side of a buffered MCP response exactly
+// once per dispatch: the claim flag (set by recordMCPIterationUsage, or here
+// for a buffer no iteration claimed) makes the terminal paths idempotent, so
+// two terminal paths observing the same buffer cannot double-count (NENYA-193).
 func (p *Proxy) recordMCPUsage(gw *gateway.NenyaGateway, buf *bufferedSSE, agentName string) {
 	if buf == nil || gw == nil || agentName == "" {
+		return
+	}
+	if buf.usageClaimed {
 		return
 	}
 	chunk := buf.usageChunk()
@@ -120,8 +175,11 @@ func (p *Proxy) recordMCPUsage(gw *gateway.NenyaGateway, buf *bufferedSSE, agent
 	if model == "" {
 		return
 	}
-	gw.Logger.Debug("MCP loop usage recorded",
-		"agent", agentName, "model", model,
-		"usage", totals)
+	buf.usageClaimed = true
+	if gw.Logger != nil {
+		gw.Logger.Debug("MCP loop usage recorded",
+			"agent", agentName, "model", model,
+			"usage", totals)
+	}
 	recordChatUsageTotals(gw, model, totals)
 }

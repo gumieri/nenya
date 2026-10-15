@@ -223,9 +223,42 @@ The routing pipeline uses **four stages** for billing-aware decisions:
 
 ## Exhaustion & Spend Tracking
 
+### Single-claim semantics (NENYA-193)
+
+A **dispatch** is one upstream call that reached a provider: the initial attempt,
+a failover to another target, a same-target retry, a context-limit or
+parameter-reject retry, and a stream continuation are each their own dispatch
+and each bills its own spend. Within one dispatch the request is claimed
+**exactly once**:
+
+- Buffered responses record once, at the first extraction point (before format
+  conversion and egress policies), via `recordNonStreamingUsage()`, which prices
+  and claims the request in `recordCostAndBilling()`.
+- Streaming responses price the per-chunk cost deltas (`recordStreamCost`) but
+  claim the billing request on the first chunk that reports usage; every later
+  usage chunk adds spend with `BillingTracker.AddSpend` instead of
+  `BillingTracker.RecordSpend`. A provider reporting usage in several chunks
+  therefore counts one request, and the cost is the request's cumulative cost.
+- The MCP buffered loop claims one record per **iteration** (one upstream
+  dispatch) via `recordMCPIterationUsage()`: Stats counters, cache/reasoning
+  metrics, cost and one billing request. A buffer already claimed is not
+  recorded again by the terminal paths (`usageClaimed`), so the loop-deadline
+  replay and the loop-exhausted path cannot double count.
+- A dispatch is claimed whenever it reported usage, even for a model with no
+  pricing entry (cost 0): the claim counts dispatches, not priced dispatches.
+
+`total_requests` therefore counts dispatches, not client requests: a retried
+client request contributes one per upstream call that reached a provider
+(operator-visible change: it previously counted one per usage chunk on the
+streaming path). `nenya_billing_spend_cents_total` is a cumulative **cents**
+counter and still observes one add per non-zero cost delta (its sum is exact).
+
 ### Recording Spend
 
-Spend is recorded after every successful request via `recordCostAndBilling()`:
+Spend is recorded after every successful dispatch: buffered and MCP paths call
+`recordCostAndBilling()` (one claim per dispatch, priced from the model catalog),
+the streaming path calls `recordStreamCost()`/`recordStreamSpend()` per usage
+chunk with a single claim per dispatch. The buffered form:
 
 ```go
 gw.BillingTracker.RecordSpend(ctx, billing.SpendEntry{
@@ -257,7 +290,7 @@ This:
 - Sets per-account spend to 0
 - Clears `IsExhausted` flag and `ExhaustedAt` timestamp
 - Sets `LastResetAt` to current time
-- Recomputes global `TotalSpendUSD` from all per-account spends (concurrent-safe)
+- Recomputes global `TotalSpendCents` from all per-account spends (concurrent-safe)
 
 ### /statsz Endpoint
 

@@ -1416,6 +1416,12 @@ func (p *Proxy) handleNonStreamingResponse(gw *gateway.NenyaGateway, w http.Resp
 	// client write). The upstream billed us for this reply, so a later failure
 	// must not lose it. The map is still in the upstream's own wire shape here,
 	// which is what recordNonStreamingUsage normalizes.
+	//
+	// Accepted gap (NENYA-193): the attempt-rejection branches above (an
+	// unparseable 200 body, a network-error finish_reason, an embedded provider
+	// error) return before this point, so a dispatch that reported usage but is
+	// treated as a failed attempt records nothing here — it is re-dispatched,
+	// and the retry's own dispatch is what gets recorded.
 	if usage, ok := stream.UsageMapFromChunk(responseMap); ok {
 		recordNonStreamingUsage(r.Context(), gw, target, agentName, usage)
 	}

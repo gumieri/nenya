@@ -27,23 +27,9 @@ func extractTokenCounts(usage map[string]interface{}) (inputTokens, outputTokens
 	return
 }
 
-func recordChatUsage(gw *gateway.NenyaGateway, model string, usage map[string]interface{}) {
-	_, outputTokens, totalTokens := extractTokenCounts(usage)
-	if totalTokens <= 0 {
-		return
-	}
-	// Calibration actuals for the MCP loop are recorded per iteration in
-	// mcpIteration (recordCalibrationFromBuffer) — pairing K dispatch
-	// estimates with K actuals; this helper stays Stats-only.
-	if gw.Stats != nil {
-		gw.Stats.RecordOutput(model, outputTokens)
-	}
-}
-
 // recordChatUsageTotals records the Stats side of a buffered response from its
 // normalized usage. The MCP loop records its calibration actuals per iteration
-// (recordCalibrationFromBuffer), so this stays Stats-only, as recordChatUsage
-// does.
+// (recordCalibrationFromBuffer), so this stays Stats-only.
 func recordChatUsageTotals(gw *gateway.NenyaGateway, model string, totals stream.UsageTotals) {
 	if totals.Total <= 0 {
 		return
@@ -124,21 +110,28 @@ func windowLabel(peak bool) string {
 	return "offpeak"
 }
 
+// recordCostAndBilling prices one buffered dispatch and claims its billing
+// request. The claim happens whenever the dispatch reported usage, even for a
+// model with no pricing entry (cost 0): one dispatch that reached a provider is
+// one billable upstream request (NENYA-193).
 func recordCostAndBilling(ctx context.Context, gw *gateway.NenyaGateway, target routing.UpstreamTarget, inputTokens, cachedInputTokens, outputTokens int) {
-	if gw.CostTracker == nil || (inputTokens <= 0 && outputTokens <= 0) {
+	if inputTokens <= 0 && outputTokens <= 0 && cachedInputTokens <= 0 {
 		return
 	}
-	dm, ok := gw.ModelCatalog.Lookup(target.Model)
-	if !ok || dm.Pricing == nil || !dm.Pricing.HasStandardRate() {
-		return
+	cost := 0.0
+	dm, priced := discovery.DiscoveredModel{}, false
+	if gw.ModelCatalog != nil {
+		dm, priced = gw.ModelCatalog.Lookup(target.Model)
 	}
-	u := pricingUsage(gw, target, inputTokens, cachedInputTokens, outputTokens, time.Now())
-	cost := dm.Pricing.CalculateCost(u)
-	gw.Metrics.RecordCostWindow(target.Model, windowLabel(u.Peak), cost)
-	if cachedInputTokens > 0 {
-		gw.Metrics.RecordCachedInputTokens(target.Model, windowLabel(u.Peak), cachedInputTokens)
+	if priced && dm.Pricing != nil && dm.Pricing.HasStandardRate() && gw.CostTracker != nil {
+		u := pricingUsage(gw, target, inputTokens, cachedInputTokens, outputTokens, time.Now())
+		cost = dm.Pricing.CalculateCost(u)
+		gw.Metrics.RecordCostWindow(target.Model, windowLabel(u.Peak), cost)
+		if cachedInputTokens > 0 {
+			gw.Metrics.RecordCachedInputTokens(target.Model, windowLabel(u.Peak), cachedInputTokens)
+		}
+		gw.CostTracker.RecordUsage(target.Model, cost)
 	}
-	gw.CostTracker.RecordUsage(target.Model, cost)
 	if gw.BillingTracker != nil {
 		gw.BillingTracker.RecordSpend(ctx, billing.SpendEntry{
 			ProviderName: target.Provider,

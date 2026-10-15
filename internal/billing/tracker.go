@@ -69,11 +69,36 @@ func NewBillingTracker(logger *slog.Logger, metrics MetricRecorder) *BillingTrac
 	}
 }
 
-// RecordSpend accumulates one request's cost against its provider account.
-// The cost is converted to cents with util.SafeUSDCents: NaN, Inf, and
-// out-of-range magnitudes are dropped (a hostile usage payload must not
-// poison the totals), negatives clamp to zero. Nil-safe.
+// RecordSpend accumulates one request's cost against its provider account and
+// claims one request. The cost is converted to cents with util.SafeUSDCents:
+// NaN, Inf, and out-of-range magnitudes are dropped (a hostile usage payload
+// must not poison the totals), negatives clamp to zero. Nil-safe.
+//
+// Call it once per dispatch: the streaming path records the first non-zero cost
+// delta with RecordSpend and every later delta with AddSpend, so a provider
+// reporting usage in several chunks still counts one request (NENYA-193).
 func (bt *BillingTracker) RecordSpend(ctx context.Context, entry SpendEntry) {
+	bt.addSpend(ctx, entry, true)
+}
+
+// AddSpend accumulates additional cost for a dispatch already claimed by
+// RecordSpend, without incrementing the request count. The token counts are
+// carried for the debug line (they are not used for accounting). Nil-safe.
+func (bt *BillingTracker) AddSpend(ctx context.Context, provider, account string, costUSD float64, inputTokens, outputTokens int) {
+	bt.addSpend(ctx, SpendEntry{
+		ProviderName: provider,
+		AccountName:  account,
+		InputTokens:  inputTokens,
+		OutputTokens: outputTokens,
+		CostUSD:      costUSD,
+		Timestamp:    time.Now(),
+	}, false)
+}
+
+func (bt *BillingTracker) addSpend(ctx context.Context, entry SpendEntry, claimRequest bool) {
+	if bt == nil {
+		return
+	}
 	key := entry.ProviderName + ":" + entry.AccountName
 
 	bt.mu.RLock()
@@ -100,7 +125,9 @@ func (bt *BillingTracker) RecordSpend(ctx context.Context, entry SpendEntry) {
 	}
 	account.TotalSpend.Add(costInCents)
 	bt.TotalSpendCents.Add(costInCents)
-	bt.TotalRequests.Add(1)
+	if claimRequest {
+		bt.TotalRequests.Add(1)
+	}
 
 	if bt.metrics != nil {
 		bt.metrics.RecordBillingSpend(entry.ProviderName, entry.AccountName, costInCents)
@@ -122,6 +149,9 @@ func (bt *BillingTracker) RecordSpend(ctx context.Context, entry SpendEntry) {
 // spent) and records the exhaustion metric. Creates the account state if
 // absent. Nil-safe.
 func (bt *BillingTracker) MarkExhausted(ctx context.Context, provider, account string, reason string) {
+	if bt == nil {
+		return
+	}
 	key := provider + ":" + account
 
 	bt.mu.Lock()
@@ -160,6 +190,9 @@ func (bt *BillingTracker) MarkExhausted(ctx context.Context, provider, account s
 // IsExhausted reports whether the provider account is currently marked
 // exhausted. Unknown accounts report false. Nil-safe.
 func (bt *BillingTracker) IsExhausted(provider, account string) bool {
+	if bt == nil {
+		return false
+	}
 	key := provider + ":" + account
 
 	bt.mu.RLock()
@@ -175,6 +208,9 @@ func (bt *BillingTracker) IsExhausted(provider, account string) bool {
 // GetTotalSpend returns the account's cumulative spend in USD (converted
 // from the stored cents). Unknown accounts report 0. Nil-safe.
 func (bt *BillingTracker) GetTotalSpend(provider, account string) float64 {
+	if bt == nil {
+		return 0
+	}
 	key := provider + ":" + account
 
 	bt.mu.RLock()
@@ -190,6 +226,9 @@ func (bt *BillingTracker) GetTotalSpend(provider, account string) float64 {
 // GetUtilizationRatio returns the account spend divided by limitUSD; 0 when
 // limitUSD is not positive. Nil-safe.
 func (bt *BillingTracker) GetUtilizationRatio(provider, account string, limitUSD float64) float64 {
+	if bt == nil {
+		return 0
+	}
 	if limitUSD <= 0 {
 		return 0
 	}
@@ -202,6 +241,9 @@ func (bt *BillingTracker) GetUtilizationRatio(provider, account string, limitUSD
 // nenya_billing_spend_cents_total metric is not rewound (see its HELP).
 // Nil-safe.
 func (bt *BillingTracker) ResetSpend(ctx context.Context, provider, account string) {
+	if bt == nil {
+		return
+	}
 	key := provider + ":" + account
 
 	bt.mu.Lock()
@@ -238,6 +280,9 @@ func (bt *BillingTracker) ResetSpend(ctx context.Context, provider, account stri
 // and IsExhausted pointers reference the live atomics — read-only use only.
 // Nil-safe.
 func (bt *BillingTracker) GetAllAccounts() []AccountStatus {
+	if bt == nil {
+		return nil
+	}
 	bt.mu.RLock()
 	defer bt.mu.RUnlock()
 
