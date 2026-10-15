@@ -27,3 +27,15 @@ func IsStreamErrorPayload(parsed map[string]any) bool {
 	}
 	return false
 }
+
+// IsResponseFailedEvent reports whether a parsed payload is the OpenAI Responses
+// API's terminal failure event. Shared by the bootstrap head probe and the
+// buffered MCP replay path (NENYA-153), so both treat the same frame as a
+// rejection.
+func IsResponseFailedEvent(parsed map[string]any) bool {
+	if parsed == nil {
+		return false
+	}
+	t, _ := parsed["type"].(string)
+	return t == "response.failed"
+}

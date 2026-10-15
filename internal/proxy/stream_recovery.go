@@ -253,6 +253,7 @@ func (p *Proxy) tryContinueStream(gw *gateway.NenyaGateway, w http.ResponseWrite
 	newAction := p.prepareAndSend(gw, r, opts.idx, opts.targets, target, payload, cooldownDuration, opts.tokenCount, opts.agentName, opts.apiKey, true)
 	if newAction.kind != actionStream {
 		gw.Metrics.RecordStreamContinuation(target.Model, target.Provider, "gave_up_redispatch")
+		resolveRedispatchOutcome(gw, target, cooldownDuration, newAction)
 		if newAction.cancel != nil {
 			newAction.cancel()
 		}
@@ -264,4 +265,21 @@ func (p *Proxy) tryContinueStream(gw *gateway.NenyaGateway, w http.ResponseWrite
 		return streamContinueGaveUp, action
 	}
 	return streamContinueOK, newAction
+}
+
+// resolveRedispatchOutcome resolves the half-open probe slot a continuation
+// re-dispatch consumed (NENYA-153), where its outcome is known. Only an action
+// that actually performed a round-trip (upstreamAttempted) held a slot: an
+// upstream error is charged with the standard status classification, any other
+// attempted-but-not-streaming outcome releases the slot, and a guard skip that
+// never dispatched is a no-op.
+func resolveRedispatchOutcome(gw *gateway.NenyaGateway, target routing.UpstreamTarget, cooldownDuration time.Duration, action upstreamAction) {
+	if !action.upstreamAttempted {
+		return
+	}
+	if action.kind == actionError && action.resp != nil {
+		gw.AgentState.RecordFailureWithStatus(target, action.resp.StatusCode, "")
+		return
+	}
+	gw.AgentState.CB.ReleaseHalfOpen(target.CoolKey)
 }

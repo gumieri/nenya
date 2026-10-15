@@ -937,7 +937,14 @@ func (p *Proxy) handleBufferedAction(ctx context.Context, gw *gateway.NenyaGatew
 	case actionStream:
 		buf, err := p.handleBufferedStream(ctx, action, target, gw, cooldownDuration, agentName, canary)
 		if err != nil {
-			gw.AgentState.RecordFailure(target, cooldownDuration)
+			// A buffering failure caused by the client going away is
+			// connection-scoped (NENYA-42): release the probe slot instead of
+			// charging the provider.
+			if ctx.Err() != nil {
+				gw.AgentState.CB.ReleaseHalfOpen(target.CoolKey)
+			} else {
+				gw.AgentState.RecordFailure(target, cooldownDuration)
+			}
 			return nil, bufferedOutcome{step: bufferedStepStop}
 		}
 		return buf, bufferedOutcome{step: bufferedStepStop}
@@ -949,16 +956,36 @@ func (p *Proxy) handleBufferedStream(ctx context.Context, action upstreamAction,
 	defer action.cancel()
 	buf, err := bufferStreamResponse(ctx, action.resp.Body, gw.Logger, target.Model, target)
 	_ = action.resp.Body.Close()
+	bodyReadAt := time.Now()
 	if err != nil {
-		gw.AgentState.RecordFailure(target, cooldownDuration)
+		// The caller records the failure for this attempt; recording it here
+		// too would charge one dispatch twice.
 		return nil, fmt.Errorf("buffering response: %w", err)
 	}
-	gw.AgentState.RecordSuccess(target.CoolKey)
 	// ExfilGuard (Phase 050): the MCP loop replays buffered SSE bytes
 	// verbatim, bypassing the streaming filter pipeline — apply the URL
 	// egress policy over the buffered frames before they reach callers.
 	p.applyExfilToBufferedSSE(gw, buf, agentName)
 	p.applyCanaryToBufferedSSE(gw, buf, agentName, canary)
+	if buf.exfilBlocked || buf.canaryBlocked {
+		// A policy block is not a provider failure: record no outcome (a
+		// success would clear the failure streak and close a half-open
+		// circuit on a response the gateway rejected), and release the probe
+		// slot the dispatch consumed.
+		gw.AgentState.CB.ReleaseHalfOpen(target.CoolKey)
+		return buf, nil
+	}
+	if buf.streamError {
+		// An in-stream error frame is a failed upstream attempt even though the
+		// HTTP status was 200: charge the failure rather than a success
+		// (NENYA-153).
+		gw.AgentState.RecordFailure(target, cooldownDuration)
+		return buf, nil
+	}
+	// NENYA-153: a served slow call counts as a breaker failure instead of a
+	// success, so a provider that answers-but-takes-minutes stops pooling
+	// traffic. Only a response the gateway actually serves records an outcome.
+	recordBufferedOutcome(gw, target, agentName, action.dispatchAt, bodyReadAt, cooldownDuration)
 	return buf, nil
 }
 

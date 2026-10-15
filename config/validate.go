@@ -139,6 +139,7 @@ func collectValidationErrors(ctx context.Context, cfg *Config, providers map[str
 	errors = append(errors, validateStreamIdleTimeoutSeconds(cfg.Governance.StreamIdleTimeoutSeconds)...)
 	errors = append(errors, validateThinkingStreamIdleTimeoutSeconds(cfg.Governance.ThinkingStreamIdleTimeoutSeconds)...)
 	errors = append(errors, validateBootstrapBufferBytes(cfg.Governance.StreamBootstrapBufferBytes)...)
+	errors = append(errors, validateSlowCallThresholdSeconds(cfg.Governance.SlowCallThresholdSeconds, "governance.slow_call_threshold_seconds")...)
 	errors = append(errors, validateAgentStrategies(cfg.Agents)...)
 	errors = append(errors, validateTokenCalibration(cfg.Governance.TokenCalibration)...)
 
@@ -665,6 +666,11 @@ func validateTokenCalibration(cfg *TokenCalibrationConfig) []string {
 	return errs
 }
 
+// MaxSlowCallThresholdSeconds caps governance/agents slow_call_threshold_seconds
+// (24 hours). A longer threshold would make the slow-call breaker unreachable by
+// design, which is what "disabled" is for.
+const MaxSlowCallThresholdSeconds = 86400
+
 // MaxStickySessionTTLSeconds caps agents[].sticky_session_ttl_seconds (24
 // hours). Exported so the proxy's runtime clamp uses the same value.
 const MaxStickySessionTTLSeconds = 86400
@@ -939,6 +945,7 @@ func ValidateConfigReferences(cfg *Config, secrets *SecretsConfig, logger *slog.
 	}
 	var errs []string
 	errs = append(errs, validateStickySessionTTL(cfg.Agents)...)
+	errs = append(errs, validateAgentSlowCallThresholds(cfg.Agents)...)
 	errs = append(errs, validateAgentMCPReferences(cfg)...)
 	errs = append(errs, validateSecretAgentScopes(cfg, secrets, logger)...)
 	errs = append(errs, validateMCPServerConfigs(cfg)...)
@@ -1390,6 +1397,36 @@ func validateUpstreamTimeoutSeconds(v *int) []string {
 		return []string{fmt.Sprintf("governance.upstream_timeout_seconds must be non-negative (set to 0 for unlimited), got %d", *v)}
 	}
 	return nil
+}
+
+// validateSlowCallThresholdSeconds rejects a negative or over-long slow-call
+// threshold (NENYA-153) instead of silently reinterpreting it: 0 disables the
+// feature, so a negative value is a configuration mistake, and an unbounded
+// threshold would make the breaker unreachable by design.
+func validateSlowCallThresholdSeconds(v *int, field string) []string {
+	if v == nil {
+		return nil
+	}
+	if *v < 0 {
+		return []string{fmt.Sprintf("%s must be non-negative (set to 0 to disable slow-call breaking), got %d", field, *v)}
+	}
+	if *v > MaxSlowCallThresholdSeconds {
+		return []string{fmt.Sprintf("%s exceeds maximum allowed value (%d seconds / 24 hours), got %d", field, MaxSlowCallThresholdSeconds, *v)}
+	}
+	return nil
+}
+
+// validateAgentSlowCallThresholds applies the slow-call threshold rules to every
+// agent override (NENYA-153).
+func validateAgentSlowCallThresholds(agents map[string]AgentConfig) []string {
+	var errs []string
+	for name, agent := range agents {
+		errs = append(errs, validateSlowCallThresholdSeconds(
+			agent.SlowCallThresholdSeconds,
+			fmt.Sprintf("agents[%q].slow_call_threshold_seconds", name),
+		)...)
+	}
+	return errs
 }
 
 func validateStreamIdleTimeoutSeconds(v *int) []string {

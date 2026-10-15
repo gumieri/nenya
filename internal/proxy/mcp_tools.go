@@ -45,7 +45,11 @@ type bufferedSSE struct {
 	exfilBlocked bool
 	// canaryBlocked marks a buffer truncated by the canary tripwire
 	// (routes to error_kind=exfil_detected instead of exfil_blocked).
-	canaryBlocked    bool
+	canaryBlocked bool
+	// streamError marks a buffer carrying an in-stream error frame (NENYA-153):
+	// the client is replayed the error, so the attempt must not be charged as a
+	// breaker success.
+	streamError      bool
 	reasoningContent string
 	// calibrationModel is the serving target's model (set at construction
 	// by handleBufferedStream): the exact key the dispatch estimate for
@@ -177,6 +181,8 @@ type sseAccumulator struct {
 	tcExtraAccum map[int]any
 	totalLines   int
 	dataLines    int
+	// streamError marks an in-stream error frame (NENYA-153).
+	streamError bool
 }
 
 func newSSEAccumulator(logger *slog.Logger) *sseAccumulator {
@@ -227,6 +233,16 @@ func (acc *sseAccumulator) processChunk(data string) {
 	var chunk map[string]any
 	if err := json.Unmarshal([]byte(data), &chunk); err != nil {
 		return
+	}
+
+	// NENYA-153: a 200 stream can carry an error frame (a capacity rejection
+	// smuggled after the handshake). Flag it here, where the map is already
+	// parsed, so the breaker outcome can charge a failure instead of a success.
+	// The predicate matches the bootstrap head probe's rejection set
+	// (classifyBootstrapLine): an error payload or the OpenAI Responses
+	// "response.failed" event.
+	if stream.IsStreamErrorPayload(chunk) || stream.IsResponseFailedEvent(chunk) {
+		acc.streamError = true
 	}
 
 	if m, ok := chunk["model"].(string); ok && m != "" {
@@ -400,6 +416,7 @@ func (acc *sseAccumulator) result() *bufferedSSE {
 		hasContent:       acc.hasContent,
 		model:            acc.model,
 		reasoningContent: reasoningStr,
+		streamError:      acc.streamError,
 	}
 }
 

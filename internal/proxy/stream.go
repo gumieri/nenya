@@ -361,6 +361,13 @@ func (p *Proxy) streamResponse(opts streamResponseOpts, action upstreamAction) s
 		maxAttempts = cont.maxAttempts
 	}
 
+	// One slow-call signal per logical request (NENYA-153): only the first
+	// attempt measures the first token, and the terminal outcome is recorded
+	// once, after the last attempt. The upstream-error verdict is shared the
+	// same way.
+	slowCall := newSlowCallSignal(slowCallThresholdFor(gw, opts.agentName))
+	upstreamErr := &upstreamErrorState{}
+
 	for attempt := 0; attempt < maxAttempts; attempt++ {
 		if cont != nil {
 			cont.capture.reset()
@@ -386,8 +393,14 @@ func (p *Proxy) streamResponse(opts streamResponseOpts, action upstreamAction) s
 			canary:       opts.canary,
 			sigCache:     sigCache,
 			dispatchAt:   ttftDispatchAtFor(attempt, opts.dispatchAt),
+			slowCall:     slowCall,
+			upstreamErr:  upstreamErr,
 		})
 		if transformingReader == nil {
+			// Defensive: setupTransformingReader does not return nil today. If
+			// it ever did, the dispatch consumed a half-open probe slot and no
+			// outcome is recorded, so release it.
+			gw.AgentState.CB.ReleaseHalfOpen(target.CoolKey)
 			putStreamBuffer(buf)
 			return streamResult{}
 		}
@@ -404,6 +417,10 @@ func (p *Proxy) streamResponse(opts streamResponseOpts, action upstreamAction) s
 		if isStreamCut(cont, transformingReader, copyErr) && attempt+1 < maxAttempts {
 			status, newAction := p.tryContinueStream(gw, w, r, opts, target, payload, cooldownDuration, action, cont, stallR, buf)
 			if status == streamContinueOK {
+				// The abandoned attempt's dispatch consumed a half-open probe
+				// slot and no outcome is recorded for it: release it, or a
+				// continuation leaks one slot per resume (NENYA-153).
+				gw.AgentState.CB.ReleaseHalfOpen(target.CoolKey)
 				action = newAction
 				// The action swap happened for this attempt; the new action's
 				// http response carries the continuation's StatusCode, which is
@@ -413,6 +430,10 @@ func (p *Proxy) streamResponse(opts streamResponseOpts, action upstreamAction) s
 				defer action.cancel()
 				continue
 			}
+			// The re-dispatch's slot is resolved by resolveRedispatchOutcome
+			// inside tryContinueStream; the original attempt recorded no outcome,
+			// so release its slot here.
+			gw.AgentState.CB.ReleaseHalfOpen(target.CoolKey)
 			return streamResult{}
 		}
 
@@ -421,10 +442,10 @@ func (p *Proxy) streamResponse(opts streamResponseOpts, action upstreamAction) s
 		// response cache with the partial cut stream.
 		if isStreamCut(cont, transformingReader, copyErr) {
 			gw.Metrics.RecordStreamContinuation(target.Model, target.Provider, "gave_up_exhausted")
-			return p.handleStreamDone(gw, w, target, opts.agentName, action, "", cooldownDuration, payload, buf, copyErr, nil, nil, contentBuilder, stallR, r.Context(), transformingReader.InjectedError(), opts.apiKey)
+			return p.handleStreamDone(gw, w, target, opts.agentName, action, "", cooldownDuration, payload, buf, copyErr, nil, nil, contentBuilder, stallR, r.Context(), terminalSignals{injectedErr: transformingReader.InjectedError(), slowCall: slowCall, upstreamErr: upstreamErr}, opts.apiKey)
 		}
 
-		return p.handleStreamDone(gw, w, target, opts.agentName, action, cacheKey, cooldownDuration, payload, buf, copyErr, captureBuf, tee, contentBuilder, stallR, r.Context(), transformingReader.InjectedError(), opts.apiKey)
+		return p.handleStreamDone(gw, w, target, opts.agentName, action, cacheKey, cooldownDuration, payload, buf, copyErr, captureBuf, tee, contentBuilder, stallR, r.Context(), terminalSignals{injectedErr: transformingReader.InjectedError(), slowCall: slowCall, upstreamErr: upstreamErr}, opts.apiKey)
 	}
 
 	putStreamBuffer(buf)
@@ -508,6 +529,13 @@ type transformReaderOpts struct {
 	sigCache     infra.ThoughtSignatureKV
 	// dispatchAt starts the TTFT clock (NENYA-178).
 	dispatchAt time.Time
+	// slowCall receives the measured first-token latency of the logical request
+	// so an over-threshold one can be charged to the breaker (NENYA-153). Nil
+	// when the threshold is off.
+	slowCall *slowCallSignal
+	// upstreamErr receives the in-stream error verdict (NENYA-153) so the
+	// terminal outcome cannot clear a failure the observer already charged.
+	upstreamErr *upstreamErrorState
 }
 
 // setupTransformingReader creates and configures the SSE transforming reader,
@@ -544,7 +572,9 @@ func (p *Proxy) setupTransformingReader(gw *gateway.NenyaGateway, o transformRea
 	transformingReader := stream.NewSSETransformingReader(bodyReader, transformer, o.ctx)
 	transformingReader.SetMaxTransformedBytes(gw.Config.Governance.EffectiveMaxTransformedSSEBytes())
 	transformingReader.SetOnUsage(p.makeUsageCallback(o.ctx, gw, o.target, o.agentName))
-	transformingReader.SetObserver(newUpstreamErrorObserver(gw, o.target))
+	observer := newUpstreamErrorObserver(gw, o.target)
+	observer.state = o.upstreamErr
+	transformingReader.SetObserver(observer)
 	transformingReader.SetLogger(gw.Logger)
 
 	p.setupStreamFilterIfEnabled(gw, transformingReader)
@@ -592,10 +622,13 @@ func ttftDispatchAtFor(attempt int, dispatchAt time.Time) time.Time {
 // output-bearing frame (defined by stream.HasEffectiveOutput — never a keepalive,
 // an empty delta, a block close or a role-only handshake; reasoning frames only
 // when the operator opts in), and the elapsed time since the dispatch is recorded
-// per (model, provider) for /statsz and as nenya_ttft_seconds. A nil tracker or a
-// zero dispatch instant (see ttftDispatchAtFor) makes it a no-op.
+// per (model, provider) for /statsz and as nenya_ttft_seconds. A zero dispatch
+// instant (see ttftDispatchAtFor) makes it a no-op; a nil tracker still observes
+// the signal when a slow-call threshold is configured.
 func setupTTFTRecorder(gw *gateway.NenyaGateway, o transformReaderOpts, r *stream.SSETransformingReader) {
-	if gw == nil || gw.LatencyTracker == nil {
+	if gw == nil || (gw.LatencyTracker == nil && o.slowCall == nil) {
+		// Nothing to observe: no tracker to record into and no slow-call
+		// threshold to judge against.
 		return
 	}
 	if o.dispatchAt.IsZero() {
@@ -609,10 +642,16 @@ func setupTTFTRecorder(gw *gateway.NenyaGateway, o transformReaderOpts, r *strea
 		}
 		return
 	}
-	tracker, target, start := gw.LatencyTracker, o.target, o.dispatchAt
+	target, start := o.target, o.dispatchAt
 	includeReasoning := gw.Config.Governance.TTFTIncludeReasoningFrames()
+	signal := o.slowCall
+	tracker := gw.LatencyTracker
 	r.SetOnFirstEffectiveOutput(func() {
 		elapsed := time.Since(start)
+		signal.observe(elapsed)
+		if tracker == nil {
+			return
+		}
 		tracker.RecordTTFT(target.Model, target.Provider, elapsed)
 		gw.Metrics.RecordTTFT(target.Model, o.agentName, target.Provider, elapsed)
 		if gw.Logger != nil {
@@ -622,11 +661,18 @@ func setupTTFTRecorder(gw *gateway.NenyaGateway, o transformReaderOpts, r *strea
 	}, includeReasoning)
 }
 
+// upstreamErrorState records that a stream carried an upstream error event
+// (NENYA-153): the observer charges that failure while the frame is parsed, and
+// the terminal outcome reads this flag so it does not clear the charge with a
+// success. Written and read on the goroutine that drains the stream.
+type upstreamErrorState struct{ seen bool }
+
 // upstreamErrorObserver is an SSE observer that detects error events within
 // a 200 OK stream and records them as circuit breaker failures.
 type upstreamErrorObserver struct {
 	gw     *gateway.NenyaGateway
 	target routing.UpstreamTarget
+	state  *upstreamErrorState
 }
 
 // newUpstreamErrorObserver creates an SSE observer that detects error events
@@ -646,6 +692,9 @@ func (o *upstreamErrorObserver) OnSSEEvent(event stream.SSEEvent) {
 		o.gw.Logger.Debug("ignoring gateway-injected error event for circuit breaker",
 			"model", o.target.Model, "provider", o.target.Provider)
 		return
+	}
+	if o.state != nil {
+		o.state.seen = true
 	}
 	errData := event.Data["error"]
 	if errData == nil {
@@ -746,7 +795,21 @@ func (p *Proxy) setupStreamWriter(gw *gateway.NenyaGateway, flushWriter *immedia
 	return dst, captureBuf, tee
 }
 
-func (p *Proxy) handleStreamDone(gw *gateway.NenyaGateway, w http.ResponseWriter, target routing.UpstreamTarget, agentName string, action upstreamAction, cacheKey string, cooldownDuration time.Duration, payload map[string]any, buf *[]byte, copyErr error, captureBuf *bytes.Buffer, tee *sseTeeWriter, contentBuilder *contentBuilder, stallR *stallReader, reqCtx context.Context, injectedErr bool, apiKey *config.ApiKey) streamResult {
+// terminalSignals groups the one-off terminal flags of a streamed attempt, so
+// handleStreamDone's positional list does not grow one bool per policy.
+type terminalSignals struct {
+	// injectedErr marks a stream the reader terminated with a synthesized
+	// gateway_error.
+	injectedErr bool
+	// slowCall carries the logical request's first-token measurement
+	// (NENYA-153); nil when the slow-call threshold is off.
+	slowCall *slowCallSignal
+	// upstreamErr carries the in-stream error verdict (NENYA-153): the observer
+	// already charged that failure, so the terminal outcome must not clear it.
+	upstreamErr *upstreamErrorState
+}
+
+func (p *Proxy) handleStreamDone(gw *gateway.NenyaGateway, w http.ResponseWriter, target routing.UpstreamTarget, agentName string, action upstreamAction, cacheKey string, cooldownDuration time.Duration, payload map[string]any, buf *[]byte, copyErr error, captureBuf *bytes.Buffer, tee *sseTeeWriter, contentBuilder *contentBuilder, stallR *stallReader, reqCtx context.Context, terminal terminalSignals, apiKey *config.ApiKey) streamResult {
 	putStreamBuffer(buf)
 
 	if handled, result := p.handleBlockedStream(gw, w, target, copyErr, action, stallR); handled {
@@ -780,6 +843,9 @@ func (p *Proxy) handleStreamDone(gw *gateway.NenyaGateway, w http.ResponseWriter
 	if isClientWriteError(copyErr) {
 		gw.Logger.Info("client disconnected mid-write, aborting upstream stream",
 			"model", target.Model, "provider", target.Provider)
+		// Connection-scoped (NENYA-42): no breaker outcome, but the dispatch
+		// consumed a half-open probe slot, and a release is not a state write.
+		gw.AgentState.CB.ReleaseHalfOpen(target.CoolKey)
 		return streamResult{}
 	}
 
@@ -794,7 +860,7 @@ func (p *Proxy) handleStreamDone(gw *gateway.NenyaGateway, w http.ResponseWriter
 		p.writeTimeoutSSE(gw, w)
 	}
 
-	if injectedErr && copyErr == nil {
+	if terminal.injectedErr && copyErr == nil {
 		// NENYA-27: the reader sanitized a truncated/empty upstream stream
 		// with a synthesized gateway_error terminal. The exchange is a
 		// provider failure (cooldown the target) even though the copy loop
@@ -807,7 +873,14 @@ func (p *Proxy) handleStreamDone(gw *gateway.NenyaGateway, w http.ResponseWriter
 		return streamResult{}
 	}
 
-	recordStreamResult(gw, target, agentName, cooldownDuration, copyErr)
+	recordStreamResult(gw, streamOutcome{
+		target:           target,
+		agentName:        agentName,
+		cooldownDuration: cooldownDuration,
+		copyErr:          copyErr,
+		slowCall:         terminal.slowCall,
+		upstreamErr:      terminal.upstreamErr,
+	})
 
 	if copyErr == nil {
 		storeStreamCache(gw, cacheKey, captureBuf, tee, payload, reqCtx)
@@ -834,20 +907,59 @@ func streamErrorReason(err error) string {
 	return "unknown"
 }
 
-// recordStreamResult records the outcome of a streaming request to the agent state and metrics.
-func recordStreamResult(gw *gateway.NenyaGateway, target routing.UpstreamTarget, agentName string, cooldownDuration time.Duration, copyErr error) {
-	if copyErr == nil {
-		gw.AgentState.RecordSuccess(target.CoolKey)
+// streamOutcome carries the terminal signals that classify a streamed attempt.
+type streamOutcome struct {
+	target           routing.UpstreamTarget
+	agentName        string
+	cooldownDuration time.Duration
+	copyErr          error
+	// slowCall carries the logical request's first-token measurement (NENYA-153);
+	// nil when the slow-call threshold is off.
+	slowCall *slowCallSignal
+	// upstreamErr reports that the stream carried an upstream error event: the
+	// observer already charged that failure, so the terminal outcome must not
+	// clear it with a success.
+	upstreamErr *upstreamErrorState
+}
+
+// recordStreamResult records the outcome of a streaming request to the agent
+// state and metrics. A served stream whose first effective output exceeded the
+// agent's slow-call threshold is charged as a breaker failure instead of a
+// success (NENYA-153): the client keeps its response, the breaker sees the
+// degradation.
+func recordStreamResult(gw *gateway.NenyaGateway, o streamOutcome) {
+	if o.target.CoolKey == "" {
 		return
 	}
-	if errors.Is(copyErr, context.Canceled) || errors.Is(copyErr, context.DeadlineExceeded) {
-		gw.Logger.Debug("stream ended", "model", target.Model, "provider", target.Provider, "reason", streamErrorReason(copyErr))
-		gw.AgentState.RecordSuccess(target.CoolKey)
+	if o.copyErr == nil {
+		// An in-stream error event was already charged by the observer while the
+		// frame was parsed; recording a success here would clear it (and close a
+		// half-open circuit on a stream the client saw fail).
+		if o.upstreamErr != nil && o.upstreamErr.seen {
+			return
+		}
+		if o.slowCall.slow() {
+			// Never fall through to a success once the first token was slow:
+			// the success would clear the failure streak (and close a half-open
+			// circuit) that this measurement exists to charge.
+			recordSlowCallAt(gw, o.target, o.agentName, o.slowCall.threshold, o.slowCall.elapsed, o.cooldownDuration)
+			return
+		}
+		gw.AgentState.RecordSuccess(o.target.CoolKey)
+		return
+	}
+	// A client-side cancel or a request deadline is connection-scoped
+	// (NENYA-42): no state write, matching every sibling cancel path — the
+	// client never received the completion, so it must not count as a provider
+	// success (which would also close a half-open circuit).
+	if errors.Is(o.copyErr, context.Canceled) || errors.Is(o.copyErr, context.DeadlineExceeded) {
+		gw.Logger.Debug("stream ended", "model", o.target.Model, "provider", o.target.Provider, "reason", streamErrorReason(o.copyErr))
+		gw.AgentState.CB.ReleaseHalfOpen(o.target.CoolKey)
 		return
 	}
 	gw.Logger.Warn("stream copy error (upstream)",
-		"model", target.Model, "provider", target.Provider, "err", copyErr)
-	gw.AgentState.RecordFailure(target, cooldownDuration)
+		"model", o.target.Model, "provider", o.target.Provider, "err", o.copyErr)
+	gw.AgentState.RecordFailure(o.target, o.cooldownDuration)
 }
 
 func storeStreamCache(gw *gateway.NenyaGateway, cacheKey string, captureBuf *bytes.Buffer, tee *sseTeeWriter, payload map[string]any, reqCtx context.Context) {

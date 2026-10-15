@@ -95,6 +95,12 @@ type AgentConfig struct {
 	BudgetLimitUSD          float64         `json:"budget_limit_usd,omitempty"`
 	CacheSalt               *string         `json:"cache_salt,omitempty"`
 	StickySessionTTLSeconds int             `json:"sticky_session_ttl_seconds,omitempty"`
+	// SlowCallThresholdSeconds overrides
+	// governance.slow_call_threshold_seconds for this agent (NENYA-153).
+	// Absent inherits the global value; 0 disables slow-call breaking for this
+	// agent regardless of the global setting. Rejected above 86400 (24h) at
+	// boot.
+	SlowCallThresholdSeconds *int `json:"slow_call_threshold_seconds,omitempty"`
 	// StickyProvider controls cache-affinity failover for this agent:
 	// "" / "off" (default) fail over freely; "lenient" fails over only
 	// when the failure is a 5xx, the target's circuit was open, or a
@@ -1089,6 +1095,16 @@ type GovernanceConfig struct {
 	// StreamContinuation controls transparent continuation of upstream SSE
 	// streams that end mid-generation without a [DONE] marker.
 	StreamContinuation *StreamContinuationConfig `json:"stream_continuation,omitempty"`
+	// SlowCallThresholdSeconds (NENYA-153) is the global slow-call threshold:
+	// a call whose clock exceeds it counts as a circuit-breaker failure even
+	// though the answer reaches its caller, so a provider that answers but
+	// takes minutes stops pooling traffic on a degraded target. The streaming
+	// clock is the time-to-first-effective-output (NENYA-178), so a
+	// slow-thinking model is not punished; buffered calls use the whole call.
+	// 0 or absent disables. Agents override via
+	// agents.<name>.slow_call_threshold_seconds. Rejected above 86400 (24h) at
+	// boot; the accessor defensively clamps a code-built config.
+	SlowCallThresholdSeconds *int `json:"slow_call_threshold_seconds,omitempty"`
 	// TTFTIncludeReasoning includes reasoning/thinking-only frames in the
 	// time-to-first-effective-output measurement (NENYA-178). Default false:
 	// a reasoning-only frame is not "effective output", so a slow-thinking
@@ -1288,6 +1304,44 @@ func (g *GovernanceConfig) EffectiveUpstreamTimeout() time.Duration {
 	}
 	if v > 86400 {
 		v = 86400
+	}
+	return time.Duration(v) * time.Second
+}
+
+// EffectiveSlowCallThreshold returns the global slow-call threshold (NENYA-153):
+// a call slower than this counts as a circuit-breaker failure. 0 means off
+// (disabled), which is also the default; a negative value is rejected at boot
+// and defensively resolves to off here. Values are clamped to
+// MaxSlowCallThresholdSeconds.
+func (g *GovernanceConfig) EffectiveSlowCallThreshold() time.Duration {
+	if g == nil || g.SlowCallThresholdSeconds == nil {
+		return 0
+	}
+	v := *g.SlowCallThresholdSeconds
+	if v <= 0 {
+		return 0
+	}
+	if v > MaxSlowCallThresholdSeconds {
+		v = MaxSlowCallThresholdSeconds
+	}
+	return time.Duration(v) * time.Second
+}
+
+// EffectiveSlowCallThreshold resolves the slow-call threshold for this agent
+// (NENYA-153): an explicit per-agent value wins (0 disables it for the agent, a
+// negative value is rejected at boot and defensively resolves to off), otherwise
+// the global threshold applies. Values are clamped to
+// MaxSlowCallThresholdSeconds.
+func (a *AgentConfig) EffectiveSlowCallThreshold(global time.Duration) time.Duration {
+	if a == nil || a.SlowCallThresholdSeconds == nil {
+		return global
+	}
+	v := *a.SlowCallThresholdSeconds
+	if v <= 0 {
+		return 0
+	}
+	if v > MaxSlowCallThresholdSeconds {
+		v = MaxSlowCallThresholdSeconds
 	}
 	return time.Duration(v) * time.Second
 }

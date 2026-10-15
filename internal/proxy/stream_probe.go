@@ -165,10 +165,10 @@ func classifyBootstrapLine(data []byte) bootstrapVerdict {
 		// Partial or non-JSON payload: cannot decide — keep buffering.
 		return bootstrapUndetermined
 	}
-	if stream.IsStreamErrorPayload(parsed) {
+	if stream.IsStreamErrorPayload(parsed) || stream.IsResponseFailedEvent(parsed) {
 		return bootstrapReject
 	}
-	if t, _ := parsed["type"].(string); t == "response.failed" {
+	if stream.IsResponseFailedEvent(parsed) {
 		return bootstrapReject
 	}
 	return classifyBootstrapOutput(parsed)

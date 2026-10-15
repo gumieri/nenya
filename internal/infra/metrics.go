@@ -96,6 +96,7 @@ type Metrics struct {
 
 	upstreamLatency sync.Map
 	ttft            sync.Map
+	slowCalls       sync.Map
 	gatewayProcess  sync.Map
 	ollamaBytes     atomic.Uint64
 	modelDiscovery  sync.Map
@@ -1435,6 +1436,20 @@ func (m *Metrics) RecordBudgetLimitRejected(model string) {
 	e.value.Add(1)
 }
 
+// RecordSlowCall counts a call that exceeded the agent's slow-call threshold
+// (NENYA-153) and was therefore charged to the circuit breaker as a failure even
+// though the client was served. The threshold is per-agent, so the agent is a
+// label alongside the model and provider.
+func (m *Metrics) RecordSlowCall(model, agent, provider string) {
+	if m == nil {
+		return
+	}
+	e := getOrCreateEntry(&m.slowCalls, map[string]string{
+		"model": model, "agent": agent, "provider": provider,
+	})
+	e.value.Add(1)
+}
+
 // RecordTTFT observes the time to the first effective output frame for a
 // streaming target (NENYA-178). Reasoning-only frames are excluded unless the
 // operator opts in, so a slow-thinking model does not look slow-to-first-token.
@@ -1642,6 +1657,8 @@ func (m *Metrics) WritePrometheus(w io.Writer) {
 
 	m.writeHistogramMap(w, "nenya_upstream_request_duration_seconds",
 		"Upstream provider request duration in seconds.", &m.upstreamLatency)
+	m.writeCounterMap(w, "nenya_slow_calls_total",
+		"Total calls counted as circuit-breaker failures for exceeding the slow-call threshold (NENYA-153).", &m.slowCalls)
 	m.writeHistogramMap(w, "nenya_ttft_seconds",
 		"Time to the first effective output frame on streaming requests (NENYA-178).", &m.ttft)
 	m.writeHistogramMap(w, "nenya_concurrency_wait_seconds",

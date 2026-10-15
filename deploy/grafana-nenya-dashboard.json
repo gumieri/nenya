@@ -1540,6 +1540,35 @@
     },
 
     {
+      "id": 53,
+      "type": "timeseries",
+      "title": "Slow Calls Charged to the Breaker",
+      "description": "Calls slower than the agent's slow_call_threshold_seconds, counted as circuit-breaker failures while the client was still served (NENYA-153).",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 173 },
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "expr": "sum by (model) (rate(nenya_slow_calls_total{job=~\"$job\", instance=~\"$instance\"}[$__rate_interval]))",
+          "legendFormat": "{{model}}",
+          "refId": "A"
+        }
+      ],
+      "options": {
+        "tooltip": { "mode": "multi", "sort": "none" },
+        "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps",
+          "custom": { "lineWidth": 2, "fillOpacity": 10, "spanNulls": false, "showPoints": "never" },
+          "color": { "mode": "palette-classic" }
+        },
+        "overrides": []
+      }
+    },
+
+    {
       "id": 42,
       "type": "timeseries",
       "title": "Gateway Processing Duration P50/P95",

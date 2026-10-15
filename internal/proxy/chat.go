@@ -1352,10 +1352,21 @@ func (p *Proxy) handleNonStreamingResponse(gw *gateway.NenyaGateway, w http.Resp
 		gw.Logger.Error("failed to read non-streaming response body", "err", err)
 		_ = action.resp.Body.Close()
 		writeGatewayError(w, http.StatusBadGateway, ErrorTypeProvider, "Failed to read upstream response")
-		// Response already written: terminal, never fail over and append.
+		// A body read error is a provider fault — unless the read failed
+		// because the client went away (NENYA-42: connection-scoped, no state
+		// writes). Either way the dispatch consumed a half-open probe slot, so
+		// the cancel case releases it instead of charging a failure.
+		if r.Context().Err() == nil {
+			gw.AgentState.RecordFailure(target, cooldownDuration)
+		} else {
+			gw.AgentState.CB.ReleaseHalfOpen(target.CoolKey)
+		}
 		return streamResult{terminal: true}
 	}
 	_ = action.resp.Body.Close()
+	// NENYA-153: the slow-call clock stops here, at the body read, so egress
+	// screening, JSON encoding and the client write cannot inflate it.
+	bodyReadAt := time.Now()
 
 	if len(respBody) == 0 {
 		gw.AgentState.RecordFailure(target, cooldownDuration)
@@ -1365,6 +1376,9 @@ func (p *Proxy) handleNonStreamingResponse(gw *gateway.NenyaGateway, w http.Resp
 	if len(respBody) >= maxNonStreamingResponseBytes {
 		gw.Logger.Error("non-streaming response exceeded size limit", "model", target.Model)
 		writeGatewayError(w, http.StatusBadGateway, ErrorTypeProvider, "Upstream response too large")
+		// No breaker outcome for a size limit (not a provider fault), but the
+		// dispatch consumed a half-open probe slot: release it.
+		gw.AgentState.CB.ReleaseHalfOpen(target.CoolKey)
 		// Response already written: terminal, never fail over and append.
 		return streamResult{terminal: true}
 	}
@@ -1438,6 +1452,9 @@ func (p *Proxy) handleNonStreamingResponse(gw *gateway.NenyaGateway, w http.Resp
 	// the buffered body before headers are committed. Both may terminate
 	// the response with a structured error (terminal: no failover).
 	if done := p.applyBufferedEgressPolicies(gw, w, r, target, agentName, responseMap, egress); done {
+		// A policy block is not a provider failure: record no outcome, but
+		// release the probe slot the dispatch consumed.
+		gw.AgentState.CB.ReleaseHalfOpen(target.CoolKey)
 		return streamResult{terminal: true}
 	}
 
@@ -1446,7 +1463,19 @@ func (p *Proxy) handleNonStreamingResponse(gw *gateway.NenyaGateway, w http.Resp
 	routing.CopyHeaders(action.resp.Header, w.Header())
 	w.WriteHeader(action.resp.StatusCode)
 	if err := json.NewEncoder(w).Encode(responseMap); err != nil {
+		// The client never received the body: no breaker outcome, and release
+		// the probe slot the dispatch consumed (the streaming path treats a
+		// client write failure the same way).
 		gw.Logger.Debug("non-streaming response write failed", "err", err)
+		gw.AgentState.CB.ReleaseHalfOpen(target.CoolKey)
+		return streamResult{}
 	}
+
+	// NENYA-153: the served call reports its breaker outcome — a slow one is
+	// charged as a failure, a fast one as a success. The success is not
+	// cosmetic: without it a half-open circuit would burn its probe slots on
+	// buffered requests and never close, since for some callers every request
+	// is buffered.
+	recordBufferedOutcome(gw, target, agentName, action.dispatchAt, bodyReadAt, cooldownDuration)
 	return streamResult{}
 }
