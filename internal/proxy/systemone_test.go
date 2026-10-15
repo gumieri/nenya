@@ -134,3 +134,53 @@ func TestSystemOneTokenCounts(t *testing.T) {
 		t.Fatal("expected ok=false for malformed body")
 	}
 }
+
+// TestSystemOneProviderFor_DeterministicOwner pins the NENYA-180 owner
+// selection: when two providers classify the model and declare a System One
+// endpoint (two Jev resellers), the owner is the lexicographically first by
+// provider name on every call, so a decision payload cannot flip between vendors
+// across restarts or reloads (a Go map iteration order would decide otherwise).
+func TestSystemOneProviderFor_DeterministicOwner(t *testing.T) {
+	provs := config.ResolveProviders(
+		&config.Config{Providers: map[string]config.ProviderConfig{
+			"vendor-b": {
+				URL:           "https://b.example/v1/chat/completions",
+				AuthStyle:     "bearer",
+				NonChatModels: []string{`^jev-`},
+				FormatURLs:    map[string]string{"systemone": "https://b.example/v1/systemone"},
+			},
+			"vendor-a": {
+				URL:           "https://a.example/v1/chat/completions",
+				AuthStyle:     "bearer",
+				NonChatModels: []string{`^jev-`},
+				FormatURLs:    map[string]string{"systemone": "https://a.example/v1/systemone"},
+			},
+		}},
+		&config.SecretsConfig{ProviderKeys: map[string]string{"vendor-a": "ka", "vendor-b": "kb"}},
+	)
+	gw := &gateway.NenyaGateway{Logger: testLog(t), Providers: provs}
+
+	owner, owners := systemOneProviderFor(gw, "jev-1.13-free")
+	if len(owners) != 2 {
+		t.Fatalf("owners = %d, want 2", len(owners))
+	}
+	if owner != "vendor-a" {
+		t.Fatalf("owner = %q, want the lexicographically first vendor-a", owner)
+	}
+	// The name and the dispatched provider must stay paired: the caller logs the
+	// name and dispatches with owners[0].
+	if owners[0].Name != owner {
+		t.Fatalf("owners[0].Name = %q, owner = %q (they must agree)", owners[0].Name, owner)
+	}
+	for i := 0; i < 25; i++ {
+		got, _ := systemOneProviderFor(gw, "jev-1.13-free")
+		if got != owner {
+			t.Fatalf("owner flipped to %q on call %d (map iteration must not decide)", got, i)
+		}
+	}
+
+	// A model no provider classifies has no owner.
+	if owner, owners := systemOneProviderFor(gw, "chat-model-1"); owner != "" || owners != nil {
+		t.Fatalf("owner = %q, owners = %v, want none", owner, owners)
+	}
+}

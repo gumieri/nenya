@@ -16,18 +16,40 @@ package discovery
 
 import (
 	"regexp"
+	"sort"
 
 	"github.com/nenya/config"
 )
+
+// NonChatDrops reports the models a catalog operation dropped because a
+// provider's non_chat_models classified them as decision-only: provider name ->
+// model IDs (de-duplicated, sorted). The gateway logs them and turns them into
+// the nenya_non_chat_models_dropped_total counter (NENYA-180), so the
+// classification is observable instead of silent. A nil report means nothing was
+// dropped.
+//
+// Scope: the merge reports what it filters out of the registry/catalog input it
+// was given, so an agent-only model ID (which the merge never sees) is not
+// reported; the fetch-time filter reports its own drops separately.
+type NonChatDrops map[string][]string
 
 // MergeCatalog rebuilds the merged model catalog from scratch on every call.
 // This is intentional: the catalog is rebuilt only at startup and on SIGHUP reload,
 // so the cost is negligible and correctness is simpler than incremental merging.
 func MergeCatalog(catalog *ModelCatalog, cfg *config.Config) *ModelCatalog {
+	merged, _ := MergeCatalogWithDrops(catalog, cfg)
+	return merged
+}
+
+// MergeCatalogWithDrops is MergeCatalog plus the non_chat_models drop report.
+// The report is returned separately so the common call site keeps its
+// single-value shape.
+func MergeCatalogWithDrops(catalog *ModelCatalog, cfg *config.Config) (*ModelCatalog, NonChatDrops) {
 	merged := NewModelCatalog()
+	drops := NonChatDrops{}
 	agentOverrides := buildAgentOverrides(cfg)
 	providerAllows := buildProviderAllows(cfg.Providers)
-	providerNonChat := buildProviderNonChat(cfg.Providers)
+	nonChat := newNonChatFilter(cfg.Providers, drops)
 
 	allModelIDs := make(map[string]bool)
 	for id := range config.ModelRegistry {
@@ -38,9 +60,12 @@ func MergeCatalog(catalog *ModelCatalog, cfg *config.Config) *ModelCatalog {
 	}
 
 	for modelID := range allModelIDs {
-		mergeModel(merged, modelID, catalog, agentOverrides, providerAllows, providerNonChat)
+		mergeModel(merged, modelID, catalog, agentOverrides, providerAllows, &nonChat)
 	}
-	return merged
+	if len(drops) == 0 {
+		return merged, nil
+	}
+	return merged, drops
 }
 
 // buildProviderAllows compiles provider allowed_models patterns for catalog merge.
@@ -117,6 +142,48 @@ func buildProviderNonChat(providers map[string]config.ProviderConfig) map[string
 	return result
 }
 
+// nonChatFilter carries the compiled per-provider non_chat_models patterns plus
+// an optional drop recorder, so one predicate both filters and reports what it
+// dropped (NENYA-180). A nil recorder makes it a pure predicate.
+type nonChatFilter struct {
+	patterns map[string][]*regexp.Regexp
+	drops    NonChatDrops
+}
+
+// newNonChatFilter compiles the per-provider patterns and attaches a recorder.
+func newNonChatFilter(providers map[string]config.ProviderConfig, drops NonChatDrops) nonChatFilter {
+	return nonChatFilter{patterns: buildProviderNonChat(providers), drops: drops}
+}
+
+// matches reports whether the (provider, model) pair is classified non-chat,
+// recording the drop when a recorder is attached. It is a predicate with a
+// side effect on purpose: every call site is a filter decision, and the
+// short-circuit order means a pair dropped by allowed_models is never recorded
+// as a non-chat drop.
+func (f *nonChatFilter) matches(provider, model string) bool {
+	if !isNonChat(f.patterns, provider, model) {
+		return false
+	}
+	f.record(provider, model)
+	return true
+}
+
+// record adds one (provider, model) drop to the report, de-duplicated and kept
+// sorted so the report (and the log line built from it) is deterministic.
+func (f *nonChatFilter) record(provider, model string) {
+	if f.drops == nil {
+		return
+	}
+	for _, existing := range f.drops[provider] {
+		if existing == model {
+			return
+		}
+	}
+	models := append(f.drops[provider], model)
+	sort.Strings(models)
+	f.drops[provider] = models
+}
+
 // isNonChat reports whether the (provider, model) pair is classified as a
 // non-chat model by providerNonChat patterns.
 func isNonChat(providerNonChat map[string][]*regexp.Regexp, provider, model string) bool {
@@ -139,42 +206,47 @@ func isNonChat(providerNonChat map[string][]*regexp.Regexp, provider, model stri
 // was built without the non_chat_models filter, mutating it in place. Used
 // for personalities that consume an externally-built catalog (e.g. the
 // pricing fetcher) where the raw provider config is the source of truth.
-func ApplyProviderNonChatToCatalog(catalog *ModelCatalog, providers map[string]config.ProviderConfig) {
+func ApplyProviderNonChatToCatalog(catalog *ModelCatalog, providers map[string]config.ProviderConfig) NonChatDrops {
 	if catalog == nil || len(providers) == 0 {
-		return
+		return nil
 	}
-	nonChat := buildProviderNonChat(providers)
-	if len(nonChat) == 0 {
-		return
+	drops := NonChatDrops{}
+	nonChat := newNonChatFilter(providers, drops)
+	if len(nonChat.patterns) == 0 {
+		return nil
 	}
 	catalog.Remove(func(m DiscoveredModel) bool {
-		return isNonChat(nonChat, m.Provider, m.ID)
+		return nonChat.matches(m.Provider, m.ID)
 	})
+	if len(drops) == 0 {
+		return nil
+	}
+	return drops
 }
 
-func mergeModel(merged *ModelCatalog, modelID string, catalog *ModelCatalog, overrides map[string]agentOverride, providerAllows map[string][]*regexp.Regexp, providerNonChat map[string][]*regexp.Regexp) {
+func mergeModel(merged *ModelCatalog, modelID string, catalog *ModelCatalog, overrides map[string]agentOverride, providerAllows map[string][]*regexp.Regexp, nonChat *nonChatFilter) {
 	if override, hasOverride := overrides[modelID]; hasOverride {
-		mergeWithOverride(merged, modelID, catalog, override, providerAllows, providerNonChat)
+		mergeWithOverride(merged, modelID, catalog, override, providerAllows, nonChat)
 		return
 	}
 
 	static, hasStatic := config.ModelRegistry[modelID]
 	if hasStatic {
-		mergeWithStatic(merged, modelID, catalog, static, providerAllows, providerNonChat)
+		mergeWithStatic(merged, modelID, catalog, static, providerAllows, nonChat)
 		return
 	}
 
 	entries := catalog.LookupAll(modelID)
 	seenProviders := map[string]bool{}
 	for _, dm := range entries {
-		if !seenProviders[dm.Provider] && isModelAllowed(providerAllows, dm.Provider, modelID) && !isNonChat(providerNonChat, dm.Provider, modelID) {
+		if !seenProviders[dm.Provider] && isModelAllowed(providerAllows, dm.Provider, modelID) && !nonChat.matches(dm.Provider, modelID) {
 			seenProviders[dm.Provider] = true
 			merged.Add(dm)
 		}
 	}
 }
 
-func mergeWithOverride(merged *ModelCatalog, modelID string, catalog *ModelCatalog, override agentOverride, providerAllows map[string][]*regexp.Regexp, providerNonChat map[string][]*regexp.Regexp) {
+func mergeWithOverride(merged *ModelCatalog, modelID string, catalog *ModelCatalog, override agentOverride, providerAllows map[string][]*regexp.Regexp, nonChat *nonChatFilter) {
 	static, hasStatic := config.ModelRegistry[modelID]
 	allDiscovered := catalog.LookupAll(modelID)
 
@@ -189,7 +261,7 @@ func mergeWithOverride(merged *ModelCatalog, modelID string, catalog *ModelCatal
 	primaryProvider := firstNonEmpty(override.Provider,
 		pickProvider(hasStatic, static.Provider, hasDiscovered, discovered.Provider))
 
-	if !isModelAllowed(providerAllows, primaryProvider, modelID) || isNonChat(providerNonChat, primaryProvider, modelID) {
+	if !isModelAllowed(providerAllows, primaryProvider, modelID) || nonChat.matches(primaryProvider, modelID) {
 		return
 	}
 
@@ -211,7 +283,7 @@ func mergeWithOverride(merged *ModelCatalog, modelID string, catalog *ModelCatal
 
 	seenProviders := map[string]bool{primaryProvider: true}
 	for _, dm := range allDiscovered {
-		if dm.Provider != "" && !seenProviders[dm.Provider] && isModelAllowed(providerAllows, dm.Provider, modelID) && !isNonChat(providerNonChat, dm.Provider, modelID) {
+		if dm.Provider != "" && !seenProviders[dm.Provider] && isModelAllowed(providerAllows, dm.Provider, modelID) && !nonChat.matches(dm.Provider, modelID) {
 			seenProviders[dm.Provider] = true
 			merged.Add(DiscoveredModel{
 				ID:       modelID,
@@ -231,7 +303,7 @@ func mergeWithOverride(merged *ModelCatalog, modelID string, catalog *ModelCatal
 	}
 }
 
-func mergeWithStatic(merged *ModelCatalog, modelID string, catalog *ModelCatalog, static config.ModelEntry, providerAllows map[string][]*regexp.Regexp, providerNonChat map[string][]*regexp.Regexp) {
+func mergeWithStatic(merged *ModelCatalog, modelID string, catalog *ModelCatalog, static config.ModelEntry, providerAllows map[string][]*regexp.Regexp, nonChat *nonChatFilter) {
 	allDiscovered := catalog.LookupAll(modelID)
 
 	// Use the first discovered entry for metadata and format fallback.
@@ -249,7 +321,7 @@ func mergeWithStatic(merged *ModelCatalog, modelID string, catalog *ModelCatalog
 	primaryProvider := firstNonEmpty(static.Provider,
 		pickProvider(false, "", hasDiscovered, discovered.Provider))
 
-	if !isModelAllowed(providerAllows, primaryProvider, modelID) || isNonChat(providerNonChat, primaryProvider, modelID) {
+	if !isModelAllowed(providerAllows, primaryProvider, modelID) || nonChat.matches(primaryProvider, modelID) {
 		return
 	}
 
@@ -272,7 +344,7 @@ func mergeWithStatic(merged *ModelCatalog, modelID string, catalog *ModelCatalog
 
 	seenProviders := map[string]bool{primaryProvider: true}
 	for _, dm := range allDiscovered {
-		if dm.Provider != "" && !seenProviders[dm.Provider] && isModelAllowed(providerAllows, dm.Provider, modelID) && !isNonChat(providerNonChat, dm.Provider, modelID) {
+		if dm.Provider != "" && !seenProviders[dm.Provider] && isModelAllowed(providerAllows, dm.Provider, modelID) && !nonChat.matches(dm.Provider, modelID) {
 			seenProviders[dm.Provider] = true
 			// A provider-supplied pricing entry (rare today) wins over the
 			// static baseline; static peak/cached still apply via the

@@ -301,9 +301,10 @@ func (df *DiscoveryFetcher) fetchProviderModels(ctx context.Context, providerNam
 	}
 
 	models = filterDiscoveredModels(models, provider, logger)
-	// Drop non-chat models (e.g. TypeSafe Jev System One decision models on
-	// OpenCode Zen) as early as possible so they never enter the catalog.
-	models = filterNonChatModels(models, provider)
+	// Drop non-chat models (e.g. TypeSafe Jev System One decision models) as
+	// early as possible so they never enter the catalog, counting each drop so
+	// the classification is observable (NENYA-180).
+	models = filterNonChatModels(models, provider, logger, df.metrics)
 	models = backfillStaticModels(models, providerName, provider, logger)
 
 	if strings.EqualFold(providerName, "ollama") || strings.EqualFold(provider.ApiFormat, "ollama") {
@@ -334,19 +335,27 @@ func filterDiscoveredModels(models []DiscoveredModel, provider *config.Provider,
 
 // filterNonChatModels drops models classified by the provider's
 // non_chat_models patterns. Those models are served by non-chat endpoints
-// (e.g. TypeSafe Jev System One decision models on OpenCode Zen) and must not
-// appear in the chat model catalog. Returns the input slice unchanged when
-// the provider declares no non-chat models.
-func filterNonChatModels(models []DiscoveredModel, provider *config.Provider) []DiscoveredModel {
+// (e.g. TypeSafe Jev System One decision models) and must not appear in the
+// chat model catalog. Each drop is logged (Debug) and counted, so an operator
+// can see the classification working — or see a decision-only model that
+// reached the catalog because no provider classified it (NENYA-180). Returns
+// the input slice unchanged when the provider declares no non-chat models.
+func filterNonChatModels(models []DiscoveredModel, provider *config.Provider, logger *slog.Logger, metrics *infra.Metrics) []DiscoveredModel {
 	if provider == nil || len(provider.NonChatModels) == 0 {
 		return models
 	}
 	filtered := models[:0]
+	dropped := 0
 	for _, m := range models {
 		if provider.IsNonChatModel(m.ID) {
+			logger.Debug("discovery dropped a non-chat model", "provider", provider.Name, "model", m.ID)
+			dropped++
 			continue
 		}
 		filtered = append(filtered, m)
+	}
+	if metrics != nil {
+		metrics.RecordNonChatModelsDropped(provider.Name, dropped)
 	}
 	return filtered
 }
@@ -373,6 +382,13 @@ func backfillStaticModels(models []DiscoveredModel, providerName string, provide
 			continue
 		}
 		if !provider.AllowsModel(modelID) {
+			continue
+		}
+		if provider.IsNonChatModel(modelID) {
+			// A static entry the classification marks decision-only must not
+			// re-enter the catalog through the backfill: it would be dropped
+			// again by the catalog merge and counted twice (NENYA-180).
+			logger.Debug("discovery skipped a static non-chat model", "provider", providerName, "model", modelID)
 			continue
 		}
 		logger.Debug("discovery backfilled static model", "provider", providerName, "model", modelID)

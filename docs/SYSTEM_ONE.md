@@ -205,10 +205,25 @@ JEV_MCP_MODEL=jev-1.13-free
 
 Zen's `/v1/models` lists `jev-1.13` and `jev-1.13-free` alongside chat models
 and carries no modality field, so a config-driven marker classifies them:
-`providers.zen.non_chat_models = ["^jev-"]` (built-in default for `zen`). Non-chat
-models are excluded from the merged catalog and `/v1/models`, and chat requests
-naming one fail fast with `400 error_kind=invalid_request`. The marker never
-affects `/proxy/` or `/v1/systemone`.
+`non_chat_models`. Since NENYA-180 the marker is **provider-agnostic**: a
+provider whose own `non_chat_models` is omitted inherits the built-in defaults
+`["^jev-"]`, so a decision-only model discovered on ANY provider (OpenRouter,
+TypeSafe direct, another Jev reseller) is classified too — not only on the
+built-in `zen` entry. A provider-level list replaces the defaults (an explicit
+list, including `[]`, opts a provider out; in a layered `config.d/` setup declare
+it in the last file that mentions the provider, since a later entry replaces the
+whole provider entry). Non-chat models are excluded from the merged catalog and
+`/v1/models`, and chat requests naming one fail fast with
+`400 error_kind=invalid_request` instead of a doomed upstream call. Presence
+matters for the field: omitted inherits the defaults, while each drop is
+counted in `nenya_non_chat_models_dropped_total{provider}` (classification
+events, cumulative) and logged at debug, so an operator can see the
+classification working — or see it missing when a decision-only model still
+reaches the chat catalog. The marker never affects `/proxy/`. `/v1/systemone` is
+unaffected in the sense that the System One handler resolves its provider
+*positively* through the same classification: a provider that opts out of the
+classification (and whose model is therefore absent from the chat catalog) can no
+longer be resolved as a System One owner — opting out removes both routings.
 
 ```json
 {

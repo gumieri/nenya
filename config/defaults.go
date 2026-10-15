@@ -141,6 +141,7 @@ func ApplyDefaults(cfg *Config) error {
 		return err
 	}
 	applyBuiltInProviders(cfg)
+	ApplyNonChatDefaults(cfg)
 	applyWindowDefaults(cfg)
 	applyJudgmentDefaults(cfg)
 	applyTfidfRerankDefaults(cfg)
@@ -817,6 +818,54 @@ func applyAgentModelRegexDefaults(cfg *Config, name string, i int, m *AgentModel
 	return nil
 }
 
+// defaultNonChatModels are the provider-agnostic non_chat_models patterns: the
+// well-known typed-decision model families (TypeSafe Jev / System One) that are
+// served by a dedicated decision endpoint rather than chat-completions. They
+// apply to EVERY provider whose own non_chat_models is unset, so a provider that
+// starts advertising a decision-only model (OpenRouter, TypeSafe direct, another
+// Jev reseller) never exposes it as chat-routable without operator action
+// (NENYA-180): the model is kept out of the merged catalog and out of
+// /v1/models, and a chat request naming it fails fast with a structured 400
+// instead of a doomed upstream call. Coverage is the Jev/System One family
+// ("^jev-"); another typed-decision family needs an explicit provider pattern.
+//
+// Presence semantics (JSON distinguishes these): OMITTED inherits the defaults,
+// while an EXPLICIT list — including an empty one — replaces them. So
+// `"non_chat_models": []` means "this provider classifies nothing" (the opt-out),
+// and a provider that serves a legitimate chat model named `jev-…` sets its own
+// list (or the empty one) to keep it chat-routable.
+var defaultNonChatModels = []string{`^jev-`}
+
+// DefaultNonChatModels returns a copy of the provider-agnostic non_chat_models
+// defaults, so a caller cannot mutate the classification for every provider.
+func DefaultNonChatModels() []string {
+	return append([]string(nil), defaultNonChatModels...)
+}
+
+// ApplyNonChatDefaults fills every provider's UNSET non_chat_models with the
+// provider-agnostic defaults. It is idempotent and runs after the built-in
+// providers are merged, so a built-in provider's own (more specific) patterns
+// win, and it covers operator-defined providers that are not in the built-in
+// registry at all. ApplyDefaults calls it; gateway.New calls it too, so a Config
+// built in code (not loaded from a file) gets the same classification.
+//
+// Ordering: it runs after applyProviderModelsDefaults, so the injected patterns
+// are not re-validated on the load path — they are a package constant covered by
+// TestDefaultNonChatModelsCompile, and ResolveProviders compiles them at
+// resolve time (skipping a provider whose patterns are invalid).
+func ApplyNonChatDefaults(cfg *Config) {
+	if len(defaultNonChatModels) == 0 {
+		return
+	}
+	for name, pc := range cfg.Providers {
+		if pc.NonChatModels != nil {
+			continue
+		}
+		pc.NonChatModels = DefaultNonChatModels()
+		cfg.Providers[name] = pc
+	}
+}
+
 func applyProviderModelsDefaults(cfg *Config) error {
 	for name, pc := range cfg.Providers {
 		if len(pc.AllowedModels) == 0 && len(pc.NonChatModels) == 0 {
@@ -885,7 +934,9 @@ func mergeProviderTransport(merged *ProviderConfig, builtIn ProviderConfig) {
 // mergeProviderRouting fills model-classification and rate-limit fields from
 // builtIn. Rate-limit defaults are tri-state pointers: nil inherits, 0 disables.
 func mergeProviderRouting(merged *ProviderConfig, builtIn ProviderConfig) {
-	if len(merged.NonChatModels) == 0 && len(builtIn.NonChatModels) > 0 {
+	// An UNSET list inherits the built-in's; an explicit list (including an
+	// empty one) is the operator's intent and is never overridden.
+	if merged.NonChatModels == nil && len(builtIn.NonChatModels) > 0 {
 		merged.NonChatModels = append([]string(nil), builtIn.NonChatModels...)
 	}
 	if merged.RatelimitMaxRPM == nil {

@@ -228,8 +228,10 @@ Operators who still want backstops on the Coding Plan (e.g. to protect the quota
 - Supports both `format: "openai"` and `format: "anthropic"` per model
 - See [Per-Model Wire Format](#per-model-wire-format-format-attribute) for details
 - **System One decision endpoint** — `format_urls.systemone = https://opencode.ai/zen/v1/systemone` serves TypeSafe Jev models (`jev-1.13`,
-  `jev-1.13-free`) through `POST /v1/systemone`. These are not chat models: built-in `non_chat_models: ["^jev-"]` keeps them out of
-  `/v1/models` and chat routing. **Jev is Zen-credit-billed, not Go-funded**: the Go subscription covers the `/zen/go/v1/*` model list, which
+  `jev-1.13-free`) through `POST /v1/systemone`. These are not chat models: `non_chat_models` keeps them out of `/v1/models` and chat routing. The built-in default is
+  `["^jev-"]` and, since NENYA-180, it is **provider-agnostic** — every provider whose `non_chat_models` is omitted inherits it,
+  so the same decision-only family is classified on any provider (OpenRouter, TypeSafe direct). An explicit list replaces the
+  defaults (`[]` opts a provider out; in a layered `config.d/` setup, declare it in the last file that mentions the provider). **Jev is Zen-credit-billed, not Go-funded**: the Go subscription covers the `/zen/go/v1/*` model list, which
   does not include Jev, so a Go plan with no Zen balance can call only `jev-1.13-free`. A disabled entitlement returns `403 Model access is
   disabled`; an enabled-but-unfunded paid model returns `402 Insufficient account funds` (Nenya relays both verbatim, no retry). See
   [SYSTEM_ONE.md](SYSTEM_ONE.md).

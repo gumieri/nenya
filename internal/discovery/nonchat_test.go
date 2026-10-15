@@ -1,11 +1,25 @@
 package discovery
 
 import (
+	"log/slog"
+	"net/http"
+	"net/http/httptest"
 	"regexp"
+	"strings"
 	"testing"
 
 	"github.com/nenya/config"
+	"github.com/nenya/internal/infra"
 )
+
+// renderMetrics renders a metrics registry in the Prometheus text format so a
+// test can assert a counter value.
+func renderMetrics(t *testing.T, metrics *infra.Metrics) string {
+	t.Helper()
+	rec := httptest.NewRecorder()
+	infra.HandleMetrics(metrics, rec, httptest.NewRequest(http.MethodGet, "/metrics", nil))
+	return rec.Body.String()
+}
 
 func TestBuildProviderNonChat(t *testing.T) {
 	tests := []struct {
@@ -200,4 +214,108 @@ func TestApplyProviderNonChatToCatalog(t *testing.T) {
 
 	// nil catalog and empty providers must be no-ops.
 	ApplyProviderNonChatToCatalog(nil, nil)
+}
+
+// TestMergeCatalog_ProviderAgnosticDefault pins the NENYA-180 gap closure at the
+// catalog level: once config.ApplyDefaults has run (the production load path),
+// the provider-agnostic non_chat_models defaults reach EVERY provider, so a
+// decision-only model discovered on a provider that declares nothing itself is
+// still excluded from the chat catalog.
+func TestMergeCatalog_ProviderAgnosticDefault(t *testing.T) {
+	cfg := &config.Config{Providers: map[string]config.ProviderConfig{
+		"mygateway": {URL: "https://gw.example/v1/chat/completions", AuthStyle: "bearer"},
+	}}
+	if err := config.ApplyDefaults(cfg); err != nil {
+		t.Fatalf("ApplyDefaults: %v", err)
+	}
+
+	catalog := NewModelCatalog()
+	catalog.Add(DiscoveredModel{ID: "jev-1.13-free", Provider: "mygateway", MaxContext: 64000})
+	catalog.Add(DiscoveredModel{ID: "chat-model-1", Provider: "mygateway", MaxContext: 128000})
+
+	merged, drops := MergeCatalogWithDrops(catalog, cfg)
+
+	if len(merged.LookupAll("jev-1.13-free")) != 0 {
+		t.Errorf("a decision-only model discovered on a provider with no explicit config must not be chat-routable")
+	}
+	if len(merged.LookupAll("chat-model-1")) == 0 {
+		t.Errorf("an ordinary model must survive the provider-agnostic default")
+	}
+	if got := drops["mygateway"]; len(got) != 1 || got[0] != "jev-1.13-free" {
+		t.Errorf("drops = %v, want mygateway -> [jev-1.13-free]", drops)
+	}
+}
+
+// TestMergeCatalogWithDrops_NoDropsIsEmpty pins that the report is empty (not a
+// spurious entry) when nothing is classified non-chat, so the gateway's counter
+// cannot drift.
+func TestMergeCatalogWithDrops_NoDropsIsEmpty(t *testing.T) {
+	catalog := NewModelCatalog()
+	catalog.Add(DiscoveredModel{ID: "chat-model-1", Provider: "mygateway"})
+
+	_, drops := MergeCatalogWithDrops(catalog, &config.Config{Providers: map[string]config.ProviderConfig{
+		"mygateway": {URL: "https://gw.example/v1/chat/completions"},
+	}})
+	if len(drops) != 0 {
+		t.Fatalf("drops = %v, want none", drops)
+	}
+}
+
+// TestApplyProviderNonChatToCatalog_ReportsDrops pins the report from the
+// pre-catalog path (discovery disabled, and the pricing-fetcher catalog).
+func TestApplyProviderNonChatToCatalog_ReportsDrops(t *testing.T) {
+	catalog := NewModelCatalog()
+	catalog.Add(DiscoveredModel{ID: "jev-1.13-free", Provider: "zen"})
+	catalog.Add(DiscoveredModel{ID: "jev-2", Provider: "zen"})
+	catalog.Add(DiscoveredModel{ID: "kimi-k3", Provider: "zen"})
+
+	drops := ApplyProviderNonChatToCatalog(catalog, map[string]config.ProviderConfig{
+		"zen": {NonChatModels: []string{`^jev-`}},
+	})
+	if len(drops["zen"]) != 2 {
+		t.Fatalf("drops[zen] = %v, want the two jev models", drops["zen"])
+	}
+	if len(catalog.LookupAll("kimi-k3")) == 0 {
+		t.Error("the chat model must survive")
+	}
+	if len(catalog.LookupAll("jev-2")) != 0 {
+		t.Error("the decision-only model must be removed")
+	}
+
+	// No classification configured: no report, nothing removed.
+	clean := NewModelCatalog()
+	clean.Add(DiscoveredModel{ID: "kimi-k3", Provider: "zen"})
+	if drops := ApplyProviderNonChatToCatalog(clean, map[string]config.ProviderConfig{"zen": {URL: "x"}}); drops != nil {
+		t.Fatalf("drops = %v, want nil when nothing is classified", drops)
+	}
+}
+
+// TestFilterNonChatModels_CountsDrops pins the fetch-time filter: the drop is
+// removed, logged, and counted under the provider label so the classification is
+// observable in nenya_non_chat_models_dropped_total.
+func TestFilterNonChatModels_CountsDrops(t *testing.T) {
+	providers := config.ResolveProviders(
+		&config.Config{Providers: map[string]config.ProviderConfig{
+			"mygateway": {URL: "https://gw.example/v1/chat/completions", AuthStyle: "bearer", NonChatModels: []string{`^jev-`}},
+		}},
+		&config.SecretsConfig{ProviderKeys: map[string]string{"mygateway": "k"}},
+	)
+	provider := providers["mygateway"]
+	if provider == nil {
+		t.Fatal("mygateway did not resolve")
+	}
+	metrics := infra.NewMetrics()
+	models := []DiscoveredModel{
+		{ID: "jev-1.13-free", Provider: "mygateway"},
+		{ID: "jev-2", Provider: "mygateway"},
+		{ID: "chat-model-1", Provider: "mygateway"},
+	}
+	kept := filterNonChatModels(models, provider, slog.New(slog.DiscardHandler), metrics)
+	if len(kept) != 1 || kept[0].ID != "chat-model-1" {
+		t.Fatalf("kept = %v, want only chat-model-1", kept)
+	}
+	rendered := renderMetrics(t, metrics)
+	if !strings.Contains(rendered, `nenya_non_chat_models_dropped_total{provider="mygateway"} 2`) {
+		t.Fatalf("the drop counter is missing or wrong:\n%s", rendered)
+	}
 }

@@ -271,6 +271,11 @@ func mergeBuiltInProviders(cfg config.Config) config.Config {
 			cfg.Providers[name] = builtIn
 		}
 	}
+	// The provider-agnostic non_chat_models defaults are a semantic default,
+	// not a file-loading detail: apply them here too so a Config built in code
+	// (not passed through config.ApplyDefaults) still classifies decision-only
+	// models as non-chat (NENYA-180). Idempotent.
+	config.ApplyNonChatDefaults(&cfg)
 	return cfg
 }
 
@@ -402,14 +407,28 @@ type discoveryDeps struct {
 	logger          *slog.Logger
 }
 
+// recordNonChatDrops logs a discovery drop report and turns it into the
+// nenya_non_chat_models_dropped_total counter (NENYA-180). The metric method is
+// nil-safe, so a metrics-less gateway is fine.
+func recordNonChatDrops(logger *slog.Logger, metrics *infra.Metrics, drops discovery.NonChatDrops) {
+	for provider, models := range drops {
+		if logger != nil {
+			logger.Debug("non_chat_models excluded models from the chat catalog", "provider", provider, "models", models)
+		}
+		metrics.RecordNonChatModelsDropped(provider, len(models))
+	}
+}
+
 func performModelDiscovery(ctx context.Context, cfg *config.Config, providers map[string]*config.Provider, deps discoveryDeps) (*discovery.ModelCatalog, *discovery.HealthRegistry) {
 	var mergedCatalog *discovery.ModelCatalog
 	var healthRegistry *discovery.HealthRegistry
 
 	if cfg.Discovery.Enabled == nil || !*cfg.Discovery.Enabled {
 		base := discovery.NewModelCatalog()
-		discovery.ApplyProviderNonChatToCatalog(base, cfg.Providers)
-		mergedCatalog = discovery.MergeCatalog(base, cfg)
+		recordNonChatDrops(deps.logger, deps.metrics, discovery.ApplyProviderNonChatToCatalog(base, cfg.Providers))
+		var drops discovery.NonChatDrops
+		mergedCatalog, drops = discovery.MergeCatalogWithDrops(base, cfg)
+		recordNonChatDrops(deps.logger, deps.metrics, drops)
 		return mergedCatalog, nil
 	}
 
@@ -418,11 +437,15 @@ func performModelDiscovery(ctx context.Context, cfg *config.Config, providers ma
 		WithKeyProvider(deps.keyProvider).
 		WithOllamaClient(deps.ollamaClient)
 	catalog := fetcher.FetchAll(ctx, providers, deps.logger)
-	// The pricing fetcher builds its own catalog from OpenRouter's model
-	// list; apply the non-chat filter there too so non_chat_models is
-	// honored on that path (MergeCatalog already filters the main catalog).
-	discovery.ApplyProviderNonChatToCatalog(catalog, cfg.Providers)
-	mergedCatalog = discovery.MergeCatalog(catalog, cfg)
+	// Belt and braces: the fetch filter above already dropped the classified
+	// models, and the merge below would drop the same entries, but this
+	// pre-filter keeps a catalog assembled by another component (the
+	// pricing/describe personalities) consistent and gives the diagnostic a
+	// place to count what it removes (NENYA-180).
+	recordNonChatDrops(deps.logger, deps.metrics, discovery.ApplyProviderNonChatToCatalog(catalog, cfg.Providers))
+	var drops discovery.NonChatDrops
+	mergedCatalog, drops = discovery.MergeCatalogWithDrops(catalog, cfg)
+	recordNonChatDrops(deps.logger, deps.metrics, drops)
 
 	if _, hasOR := providers["openrouter"]; hasOR {
 		fetchOpenRouterPricing(ctx, providers, mergedCatalog, deps.logger, deps.discoveryClient)

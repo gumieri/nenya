@@ -302,7 +302,8 @@ func configuredProviders(cfg *config.Config, secrets *config.SecretsConfig) []st
 // and works offline.
 func describeCatalog(cfg *config.Config) []describeModel {
 	base := discovery.NewModelCatalog()
-	discovery.ApplyProviderNonChatToCatalog(base, cfg.Providers)
+	// MergeCatalog applies the non_chat_models classification itself; the
+	// pre-catalog helper would be a no-op on a fresh empty catalog.
 	merged := discovery.MergeCatalog(base, cfg)
 
 	models := merged.AllModels()

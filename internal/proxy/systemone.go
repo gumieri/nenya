@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"sort"
 	"time"
 
 	"github.com/nenya/config"
@@ -128,9 +129,12 @@ func resolveSystemOneProvider(gw *gateway.NenyaGateway, modelName string) (*conf
 	case 1:
 		return owners[0], nil
 	default:
-		// Ambiguous: prefer one whose declared pattern is the most specific,
-		// which for the built-in zen is the only realistic case today.
-		gw.Logger.Warn("multiple providers serve system one model; using first", "model", modelName, "provider", owner)
+		// Ambiguous: more than one provider classifies the model and declares a
+		// System One endpoint (e.g. two Jev resellers). Select the
+		// lexicographically first so the owner is deterministic across restarts
+		// and reloads (a Go map iteration order would otherwise send the same
+		// decision payload to a different vendor each time).
+		gw.Logger.Warn("multiple providers serve system one model; using the first by name", "model", modelName, "provider", owner)
 		return owners[0], nil
 	}
 }
@@ -139,7 +143,6 @@ func resolveSystemOneProvider(gw *gateway.NenyaGateway, modelName string) (*conf
 // as non-chat and declare a System One endpoint.
 func systemOneProviderFor(gw *gateway.NenyaGateway, modelName string) (string, []*config.Provider) {
 	var names []string
-	var owners []*config.Provider
 	for name, p := range gw.Providers {
 		if p == nil || !p.IsNonChatModel(modelName) {
 			continue
@@ -148,10 +151,16 @@ func systemOneProviderFor(gw *gateway.NenyaGateway, modelName string) (string, [
 			continue
 		}
 		names = append(names, name)
-		owners = append(owners, p)
 	}
 	if len(names) == 0 {
 		return "", nil
+	}
+	// Deterministic order: the caller picks the first, so a Go map iteration
+	// must not decide which vendor receives the decision payload.
+	sort.Strings(names)
+	owners := make([]*config.Provider, 0, len(names))
+	for _, name := range names {
+		owners = append(owners, gw.Providers[name])
 	}
 	return names[0], owners
 }

@@ -98,8 +98,11 @@ type Metrics struct {
 	gatewayProcess  sync.Map
 	ollamaBytes     atomic.Uint64
 	modelDiscovery  sync.Map
-	retryTotal      sync.Map
-	inflightReqs    sync.Map
+	// nonChatDropped counts models excluded from the chat catalog by the
+	// non_chat_models classification (nenya_non_chat_models_dropped_total).
+	nonChatDropped sync.Map
+	retryTotal     sync.Map
+	inflightReqs   sync.Map
 
 	// Stream interruption metrics
 	streamInterrupts sync.Map
@@ -1467,6 +1470,21 @@ func (m *Metrics) RecordModelDiscovery(provider string, err error) {
 	e.value.Add(1)
 }
 
+// RecordNonChatModelsDropped counts n models excluded from the chat catalog
+// because a provider's non_chat_models classified them as decision-only
+// (NENYA-180). The provider label identifies where the classification fired, so
+// an operator can see the built-in default working — and see it missing when a
+// decision-only model still reaches the chat catalog. The value counts
+// classification events across discovery runs (it is cumulative, like every
+// other counter), not distinct model IDs.
+func (m *Metrics) RecordNonChatModelsDropped(provider string, n int) {
+	if m == nil || n <= 0 {
+		return
+	}
+	e := getOrCreateEntry(&m.nonChatDropped, map[string]string{"provider": provider})
+	e.value.Add(uint64(n))
+}
+
 func (m *Metrics) RecordRetry(operation, provider string, err error) {
 	if m == nil {
 		return
@@ -1618,6 +1636,8 @@ func (m *Metrics) WritePrometheus(w io.Writer) {
 		"Total secure memory seal (mprotect) failures.", m.secureMemSealFailures.Load())
 	m.writeCounterMap(w, "nenya_model_discovery_total",
 		"Total model discovery fetch attempts by provider.", &m.modelDiscovery)
+	m.writeCounterMap(w, "nenya_non_chat_models_dropped_total",
+		"Total model classifications that excluded a model from the chat catalog (non_chat_models), by provider (cumulative across discovery runs).", &m.nonChatDropped)
 	m.writeCounterMap(w, "nenya_retries_total",
 		"Total retry attempts by operation and provider.", &m.retryTotal)
 	m.writeGaugeMap(w, "nenya_inflight_requests",
