@@ -33,9 +33,12 @@ func IsStreamErrorPayload(parsed map[string]any) bool {
 }
 
 // rejectionText concatenates the fields an upstream uses to report a failure —
-// message, type and code, at the top level or nested under "error". Content
-// fields (choices, candidates, delta, text) are never inspected: a model that
-// quotes "the server is overloaded" in its answer is not a rejection.
+// message, type, code and detail, at the top level or nested under "error".
+// Content fields (choices, candidates, delta, text) are never inspected: a
+// model that quotes "the server is overloaded" in its answer is not a
+// rejection. Known gap (accepted): an OpenAI Responses "response.failed"
+// event carries its failure under "response".*, which is not read here, so a
+// policy-worded one is charged as a regular rejection (conservative).
 func rejectionText(parsed map[string]any) string {
 	var b strings.Builder
 	appendFields := func(m map[string]any) {

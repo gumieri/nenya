@@ -23,6 +23,14 @@ func TestClassifyBootstrapLine(t *testing.T) {
 		{"role-only handshake", `{"choices":[{"delta":{"role":"assistant"}}]}`, bootstrapUndetermined},
 		{"empty delta", `{"choices":[{"delta":{}}]}`, bootstrapUndetermined},
 		{"finish-only chunk", `{"choices":[{"delta":{},"finish_reason":"stop"}]}`, bootstrapUndetermined},
+		// NENYA-191: a refusal/safeguard terminal before any output is a
+		// failover candidate; a terminal beside content stays output.
+		{"refusal finish before content", `{"choices":[{"delta":{},"finish_reason":"content_filter"}]}`, bootstrapRefusal},
+		{"openai refusal finish", `{"choices":[{"delta":{},"finish_reason":"refusal"}]}`, bootstrapRefusal},
+		{"anthropic message_delta refusal", `{"type":"message_delta","delta":{"stop_reason":"refusal"}}`, bootstrapRefusal},
+		{"gemini SAFETY finishReason", `{"candidates":[{"finishReason":"SAFETY"}]}`, bootstrapRefusal},
+		{"second-choice refusal does not decide", `{"choices":[{"delta":{"role":"assistant"}},{"delta":{},"finish_reason":"content_filter"}]}`, bootstrapUndetermined},
+		{"refusal terminal beside content is output", `{"choices":[{"delta":{"content":"partial"},"finish_reason":"content_filter"}]}`, bootstrapOutput},
 		// Anthropic events.
 		// A bare block opening carries no renderable content, so it is not
 		// output; a start that carries text (or opens a tool block) is. The

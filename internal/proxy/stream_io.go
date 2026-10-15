@@ -389,6 +389,22 @@ func isClientWriteError(err error) bool {
 // streamResult carries the outcome of streamResponse back to the retry loop.
 // empty signals a zero-byte upstream stream; err signals a transport-level read
 // failure before any stream bytes were produced (distinct from empty).
+// streamFailoverReason distinguishes why a stream attempt handed the dispatch
+// back to the retry loop, so the loop can pick the right failReason (and with
+// it the sticky_provider behavior) and log the real diagnosis.
+type streamFailoverReason int
+
+const (
+	// The unnamed zero value: no failover context. A zero streamResult reads
+	// as "no failover story" without a sentinel bool; the loop only switches
+	// on the named reasons below.
+	_ streamFailoverReason = iota
+	// streamFailoverPolicyRefusal: a policy refusal/safeguard terminal
+	// (NENYA-191) — not a provider fault, so the target was not charged and
+	// the sticky lenient policy allows the failover.
+	streamFailoverPolicyRefusal
+)
+
 type streamResult struct {
 	empty bool
 	// terminal marks a response already fully written to the client
@@ -396,6 +412,9 @@ type streamResult struct {
 	// failing over and appending another response to the committed one.
 	terminal bool
 	err      error
+	// failoverReason, when non-zero, explains an empty result's cause so the
+	// retry loop records the matching failReason (sticky policy + logging).
+	failoverReason streamFailoverReason
 }
 
 // prefixedReadCloser wraps an io.Reader with a prefix buffer that is

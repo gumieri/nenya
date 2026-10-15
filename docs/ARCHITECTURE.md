@@ -656,6 +656,16 @@ The streaming pipeline is built from composable `io.Reader` and `io.Writer` wrap
 
 Buffer pooling via `sync.Pool` (32KB buffers) reduces GC pressure under high concurrency.
 
+### Policy Refusal Failover (NENYA-191)
+
+A provider can decline generated content without failing: an error payload worded as a content-policy/safeguard rejection, or a stream that terminates cleanly with a refusal-class stop/finish reason (`refusal`, `content_filter`, `safeguard`, `safety`; Gemini `SAFETY`/`PROHIBITED_CONTENT`/`BLOCKLIST`/`SPII`/`IMAGE_SAFETY`/`RECITATION`). Neither is a provider fault, so the phase decides the outcome:
+
+- **Pre-content** (no client-visible output delivered): the NENYA-45 bootstrap scan classifies the refusal terminal (`bootstrapRefusal`) or a policy-worded rejection payload and fails over to the next target synchronously — WITHOUT charging cooldown/breaker (the half-open probe slot is released, never a state write; `nenya_stream_bootstrap_total{outcome="refusal_failover"}`). The /v1/messages route shares the taxonomy (same retry loop). A relayed upstream 4xx body worded as a content-policy rejection (`ParseProviderError`) carries `error_kind=policy_refusal` (request-scoped, failover-eligible, `ShouldFailover` true).
+- **Post-content**: once renderable output was delivered (the shared `stream.HasEffectiveOutput` test — an OpenAI `refusal` delta *is* output, so a streamed refusal message is delivered content), the refusal terminal is the outcome: the stream is terminal, never re-dispatched, and (NENYA-27) never cached.
+- **Last target**: a pre-content refusal is forwarded so the client sees the refusal, still without a provider-fault charge.
+
+On a `sticky_provider` agent a policy refusal is its own fail reason (`failReasonPolicy`), not a stream-class one: the default policy allows it, `lenient` allows it without requiring the target to be benched (it deliberately is not — the refusal is not a fault), and `strict` still stops the sweep (its contract is summarized-retries only).
+
 ## Graceful Shutdown
 
 The gateway supports graceful shutdown with a configurable context deadline:

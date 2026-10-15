@@ -11,6 +11,7 @@ import (
 	"github.com/nenya/internal/gateway"
 	"github.com/nenya/internal/infra"
 	"github.com/nenya/internal/pipeline"
+	"github.com/nenya/internal/stream"
 )
 
 // containsAny checks if the string contains any of the substrings.
@@ -145,11 +146,20 @@ func inferErrorKind(body []byte) infra.ErrorKind {
 	var parsed struct {
 		Error struct {
 			Message string `json:"message"`
+			Type    string `json:"type"`
+			Code    string `json:"code"`
 		} `json:"error"`
 	}
 	if err := json.Unmarshal(body, &parsed); err != nil {
 		return infra.ErrorKindInvalidRequest
 	}
+	// Classify each error field separately (message, type, code) so the two
+	// taxonomies cannot diverge on a body like
+	// {"error":{"type":"safeguard_error"}} with an empty message, and a
+	// marker can never match across a field boundary.
+	isPolicy := stream.IsPolicyRefusalText(parsed.Error.Message) ||
+		stream.IsPolicyRefusalText(parsed.Error.Type) ||
+		stream.IsPolicyRefusalText(parsed.Error.Code)
 	msg := strings.ToLower(parsed.Error.Message)
 	switch {
 	case containsAny(msg, "context_length", "context length", "max_tokens", "too many tokens",
@@ -160,6 +170,10 @@ func inferErrorKind(body []byte) infra.ErrorKind {
 		return infra.ErrorKindRateLimited
 	case containsAny(msg, "timeout", "timed out", "deadline exceeded"):
 		return infra.ErrorKindProviderTimeout
+	case isPolicy:
+		// A content-policy / safeguard rejection (NENYA-191): request-scoped,
+		// never a provider fault, failover-eligible.
+		return infra.ErrorKindPolicyRefusal
 	default:
 		return infra.ErrorKindInvalidRequest
 	}

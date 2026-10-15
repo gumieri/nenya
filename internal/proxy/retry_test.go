@@ -383,6 +383,31 @@ func TestIsRetryableClientError_EmptyBody(t *testing.T) {
 	}
 }
 
+// TestStickyAllowsPolicyFailover pins NENYA-191's sticky interaction: a
+// policy refusal is not a provider fault (the target is deliberately not
+// benched), so a lenient sticky_provider allows the failover to a sibling
+// target; strict still stops (its contract is summarized-retries only).
+func TestStickyAllowsPolicyFailover(t *testing.T) {
+	rl := &retryLoop{opts: forwardOptions{Agent: config.AgentConfig{}}}
+	target := routing.UpstreamTarget{CoolKey: "a:p:m"} // not Cooling
+	tests := []struct {
+		sticky string
+		want   bool
+	}{
+		{sticky: "", want: true},
+		{sticky: "lenient", want: true},
+		{sticky: "strict", want: false},
+	}
+	for _, tt := range tests {
+		t.Run("sticky="+tt.sticky, func(t *testing.T) {
+			rl.opts.Agent.StickyProvider = tt.sticky
+			if got := rl.stickyAllowsFailover(failReasonPolicy, target); got != tt.want {
+				t.Fatalf("stickyAllowsFailover(failReasonPolicy, sticky=%q, not cooling) = %v, want %v", tt.sticky, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestIsRetryableStatus_DefaultCodes(t *testing.T) {
 	p := &Proxy{}
 	p.StoreGateway(newTestGateway(nil, nil))

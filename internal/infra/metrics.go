@@ -816,7 +816,8 @@ func (m *Metrics) RecordEmptyStream(model, provider string) {
 // RecordEarlyStreamError increments the counter for error events detected at
 // the head of an upstream SSE stream before any content was delivered.
 // outcome values: "failover", "forwarded_last_target" (first-event probe),
-// "bootstrap_failover", "bootstrap_forwarded" (bootstrap buffer).
+// "bootstrap_failover", "bootstrap_forwarded" (bootstrap buffer), and
+// "refusal_failover", "refusal_forwarded" (policy refusal, NENYA-191).
 func (m *Metrics) RecordEarlyStreamError(model, provider, outcome string) {
 	if m == nil {
 		return
@@ -831,7 +832,10 @@ func (m *Metrics) RecordEarlyStreamError(model, provider, outcome string) {
 // (NENYA-45). outcome values: "flushed" (real output ended the buffer),
 // "overflow" (budget exhausted, degraded to unbuffered), "rejected_failover"
 // (in-stream rejection failed over pre-commit), "rejected_forwarded"
-// (rejection on the last target, forwarded as a committed stream).
+// (rejection on the last target, forwarded as a committed stream),
+// "refusal_failover" (policy refusal failed over pre-commit, uncharged),
+// "refusal_forwarded" (policy refusal on the last target, forwarded —
+// NENYA-191).
 func (m *Metrics) RecordStreamBootstrap(model, provider, outcome string) {
 	if m == nil {
 		return

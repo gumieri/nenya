@@ -130,6 +130,41 @@ func sseDataLine(line []byte) ([]byte, bool) {
 	return nil, false
 }
 
+// bufferedHasPolicyRefusal reports whether the buffered bootstrap prefix
+// carries a policy-worded rejection payload (NENYA-191): a safeguard /
+// content-policy error is a policy outcome, not a provider fault, so the
+// failover it triggers must not charge cooldown/breaker. Callers pass only
+// the scanned prefix (bytes up to the decisive verdict line), so a policy
+// frame after a genuine provider-fault frame cannot downgrade the charge.
+// Complete lines only; partial JSON stays undetermined (never policy).
+func bufferedHasPolicyRefusal(acc []byte) bool {
+	found := false
+	forEachSSELine(acc, 0, true, func(raw []byte) bool {
+		line := bytes.TrimSpace(raw)
+		if len(line) == 0 || line[0] == ':' || sseFieldLine(line) {
+			return true
+		}
+		data, isData := sseDataLine(line)
+		if !isData || len(data) == 0 || data[0] != '{' {
+			return true
+		}
+		parsed := jsonMapPool.Get().(map[string]any)
+		// json.Unmarshal only overwrites keys present in the new payload, so a
+		// reused map can otherwise carry stale keys — clear first.
+		clear(parsed)
+		err := json.Unmarshal(data, &parsed)
+		isPolicy := err == nil && stream.IsPolicyRefusalPayload(parsed)
+		clear(parsed)
+		jsonMapPool.Put(parsed)
+		if isPolicy {
+			found = true
+			return false
+		}
+		return true
+	})
+	return found
+}
+
 // bootstrapVerdict is the decision a scanned bootstrap event reached:
 // undetermined events keep the buffer open, an output event flushes it, and a
 // rejection fails the target over before the 200 is committed (NENYA-45).
@@ -142,6 +177,9 @@ const (
 	bootstrapOutput
 	// bootstrapReject: an in-stream rejection payload — failover candidate.
 	bootstrapReject
+	// bootstrapRefusal: a policy refusal/safeguard terminal before any output
+	// — failover candidate WITHOUT a provider-fault charge (NENYA-191).
+	bootstrapRefusal
 )
 
 // classifyBootstrapLine classifies one complete SSE data payload for the
@@ -151,17 +189,30 @@ const (
 // content-based effective-output test (stream.HasEffectiveOutput, NENYA-178) —
 // NOT a frame count — because providers emit rate-limit/metadata frames before
 // the response starts: only frames that provably carry generation output release
-// the buffer. Everything else (handshakes, pings, usage frames, partial JSON,
-// unknown shapes) is undetermined and keeps the buffer open; the byte budget
-// bounds how long that can last.
+// the buffer. A refusal/safeguard terminal (NENYA-191) is checked AFTER output:
+// a frame that already delivered content makes the outcome terminal, while a
+// bare refusal terminal before any output is a failover candidate. Everything
+// else (handshakes, pings, usage frames, partial JSON, unknown shapes) is
+// undetermined and keeps the buffer open; the byte budget bounds how long that
+// can last.
 func classifyBootstrapLine(data []byte) bootstrapVerdict {
 	if bytes.Equal(data, []byte("[DONE]")) {
 		return bootstrapUndetermined
 	}
 	parsed := jsonMapPool.Get().(map[string]any)
 	clear(parsed)
-	defer clear(parsed)
-	defer jsonMapPool.Put(parsed)
+	// Clear-and-return inline (not defers): defers run LIFO, so a Put'd map
+	// would be cleared only after re-entering the pool — a cross-processor
+	// Get could then observe a dirty map.
+	verdict := classifyBootstrapParsed(parsed, data)
+	clear(parsed)
+	jsonMapPool.Put(parsed)
+	return verdict
+}
+
+// classifyBootstrapParsed applies the verdict rules to an already-parsed
+// payload. Kept separate so the pooled map's lifecycle stays exact.
+func classifyBootstrapParsed(parsed map[string]any, data []byte) bootstrapVerdict {
 	if err := json.Unmarshal(data, &parsed); err != nil {
 		// Partial or non-JSON payload: cannot decide — keep buffering.
 		return bootstrapUndetermined
@@ -169,7 +220,13 @@ func classifyBootstrapLine(data []byte) bootstrapVerdict {
 	if stream.IsStreamErrorPayload(parsed) || stream.IsResponseFailedEvent(parsed) || stream.IsCapacityRejection(parsed) {
 		return bootstrapReject
 	}
-	return classifyBootstrapOutput(parsed)
+	if v := classifyBootstrapOutput(parsed); v == bootstrapOutput {
+		return v
+	}
+	if stream.IsRefusalTerminal(parsed) {
+		return bootstrapRefusal
+	}
+	return bootstrapUndetermined
 }
 
 // classifyBootstrapOutput applies the real-output test to a parsed SSE payload.

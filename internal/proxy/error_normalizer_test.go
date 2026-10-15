@@ -317,6 +317,7 @@ func TestMapErrorKind(t *testing.T) {
 		{"provider maps to provider_error", ErrorTypeProvider, "provider_error"},
 		{"not_found maps to model_not_found", ErrorTypeNotFound, "model_not_found"},
 		{"invalid_request maps to invalid_request", ErrorTypeInvalidRequest, "invalid_request"},
+		{"policy_refusal maps to policy_refusal", ErrorTypePolicyRefusal, "policy_refusal"},
 		{"gateway maps to network_error", ErrorTypeGateway, "network_error"},
 		{"bouncer maps to bouncer_error", ErrorTypeBouncer, "bouncer_error"},
 		{"unknown maps to internal_error", ErrorType("unknown"), "internal_error"},

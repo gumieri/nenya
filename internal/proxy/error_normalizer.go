@@ -33,8 +33,12 @@ const (
 	ErrorTypeAuthentication ErrorType = "authentication_error"
 	// ErrorTypeNotFound indicates a not found error (404)
 	ErrorTypeNotFound ErrorType = "not_found_error"
-	ErrorTypeGateway  ErrorType = "gateway_error"
-	ErrorTypeBouncer  ErrorType = "bouncer_error"
+	// ErrorTypePolicyRefusal indicates a content-policy/safeguard rejection
+	// (NENYA-191): the upstream declined the content. Request-scoped — never
+	// a provider fault — and failover-eligible.
+	ErrorTypePolicyRefusal ErrorType = "policy_refusal_error"
+	ErrorTypeGateway       ErrorType = "gateway_error"
+	ErrorTypeBouncer       ErrorType = "bouncer_error"
 )
 
 // GatewayError represents an error that occurred in the gateway, with structured
@@ -88,7 +92,7 @@ func (e *GatewayError) HTTPStatusCode() int {
 	switch e.Type {
 	case ErrorTypeRateLimit:
 		return http.StatusTooManyRequests
-	case ErrorTypeInvalidRequest:
+	case ErrorTypeInvalidRequest, ErrorTypePolicyRefusal:
 		return http.StatusBadRequest
 	case ErrorTypeAuthentication:
 		return http.StatusUnauthorized
@@ -219,8 +223,7 @@ func ParseProviderError(provider string, statusCode int, body []byte, originalEr
 		gatewayErr.Provider = provider
 		gatewayErr.Err = originalErr
 	case statusCode >= 400 && statusCode < 500:
-		gatewayErr = NewInvalidRequestErrorWithStatus(statusCode, message, originalErr)
-		gatewayErr.Provider = provider
+		gatewayErr = newClientClassError(provider, statusCode, message, errorResponse, originalErr)
 	case statusCode >= 500:
 		gatewayErr = NewProviderError(provider, statusCode, message, originalErr)
 	default:
@@ -236,11 +239,35 @@ func ParseProviderError(provider string, statusCode int, body []byte, originalEr
 	return gatewayErr
 }
 
+// newClientClassError builds the GatewayError for a non-auth, non-429,
+// non-404 4xx: a content-policy/safeguard rejection (NENYA-191) surfaces as
+// policy_refusal — request-scoped, never a provider fault, failover-eligible —
+// and everything else as invalid_request.
+func newClientClassError(provider string, statusCode int, message string, details providerErrorDetails, originalErr error) *GatewayError {
+	isPolicy := stream.IsPolicyRefusalText(details.Code) ||
+		stream.IsPolicyRefusalText(details.Type) ||
+		stream.IsPolicyRefusalText(details.Message) ||
+		stream.IsPolicyRefusalText(message)
+	if !isPolicy {
+		gatewayErr := NewInvalidRequestErrorWithStatus(statusCode, message, originalErr)
+		gatewayErr.Provider = provider
+		return gatewayErr
+	}
+	return &GatewayError{
+		Type:       ErrorTypePolicyRefusal,
+		Message:    message,
+		StatusCode: statusCode,
+		Provider:   provider,
+		Err:        originalErr,
+	}
+}
+
 // providerErrorDetails holds parsed error fields
 type providerErrorDetails struct {
 	Message string
 	Param   string
 	Code    string
+	Type    string
 }
 
 // parseProviderErrorBody extracts error details from a provider response body
@@ -262,6 +289,7 @@ func parseProviderErrorBody(body []byte) providerErrorDetails {
 		Message: jsonString(errorFields["message"]),
 		Param:   jsonString(errorFields["param"]),
 		Code:    jsonScalarString(errorFields["code"]),
+		Type:    jsonString(errorFields["type"]),
 	}
 	if raw := providerErrorMetadataRaw(errorFields["metadata"]); shouldPreferProviderRaw(details.Message, raw) {
 		details.Message = raw
@@ -373,15 +401,22 @@ func terminalNetworkErrorReason(responseMap map[string]interface{}) string {
 }
 
 // forbiddenFinishReasons are terminal outcomes whose streams must never be
-// cached (NENYA-27): refusals, content-filter stops, and network-failure
-// finish/stop reasons. Values are compared decoded-and-trimmed; providers and
+// cached (NENYA-27): network-failure finish/stop reasons, plus every policy
+// refusal class from stream.IsRefusalStopReasonName (NENYA-191) — the two
+// gates share one reason list so a refusal that fails over or terminates can
+// never be cached. Values are compared decoded-and-trimmed; providers and
 // transformers emit these as lowercase enums.
 var forbiddenFinishReasons = map[string]bool{
-	"refusal":        true,
-	"content_filter": true,
-	"network_error":  true,
-	"network-error":  true,
-	"network error":  true,
+	"network_error": true,
+	"network-error": true,
+	"network error": true,
+}
+
+// forbiddenFinishReason reports whether a decoded finish/stop reason must
+// block the cache write.
+func forbiddenFinishReason(reason string) bool {
+	reason = strings.TrimSpace(strings.ToLower(reason))
+	return forbiddenFinishReasons[reason] || stream.IsRefusalStopReasonName(reason)
 }
 
 // capturedStreamHasRefusalOrFilter decodes the captured transformed SSE data
@@ -422,17 +457,17 @@ func capturedStreamHasRefusalOrFilter(captured []byte) bool {
 			continue
 		}
 		for _, ch := range parsed.Choices {
-			if forbiddenFinishReasons[strings.TrimSpace(strings.ToLower(ch.FinishReason))] {
+			if forbiddenFinishReason(ch.FinishReason) {
 				return true
 			}
 			if ch.Delta.Refusal != "" {
 				return true
 			}
-			if forbiddenFinishReasons[strings.TrimSpace(strings.ToLower(ch.Delta.StopReason))] {
+			if forbiddenFinishReason(ch.Delta.StopReason) {
 				return true
 			}
 		}
-		if forbiddenFinishReasons[strings.TrimSpace(strings.ToLower(parsed.Delta.StopReason))] {
+		if forbiddenFinishReason(parsed.Delta.StopReason) {
 			// Anthropic message_delta shape: {"type":"message_delta","delta":{"stop_reason":...}}
 			return true
 		}
@@ -585,6 +620,8 @@ func mapErrorKind(errType ErrorType) infra.ErrorKind {
 		return infra.ErrorKindModelNotFound
 	case ErrorTypeInvalidRequest:
 		return infra.ErrorKindInvalidRequest
+	case ErrorTypePolicyRefusal:
+		return infra.ErrorKindPolicyRefusal
 	default:
 		return infra.ErrorKindInternal
 	}

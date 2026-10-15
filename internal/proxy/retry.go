@@ -393,6 +393,12 @@ func (rl *retryLoop) handleStreamAction(i int, target routing.UpstreamTarget, ac
 		return actionOutcome{handled: true}
 	}
 	if result.empty {
+		if result.failoverReason == streamFailoverPolicyRefusal {
+			rl.lastFailReason = failReasonPolicy
+			rl.ctxLogger.Warn("policy refusal before any output, failing over without breaker charge",
+				"model", target.Model, "provider", target.Provider)
+			return actionOutcome{retryable: true}
+		}
 		rl.lastFailReason = failReasonStream
 		rl.ctxLogger.Warn("empty stream from upstream, trying next target",
 			"model", target.Model, "provider", target.Provider)
@@ -763,6 +769,11 @@ const (
 	failReasonDispatch
 	// failReasonStream: stream-level failure (empty, stalled, read error).
 	failReasonStream
+	// failReasonPolicy: a policy refusal/safeguard outcome (NENYA-191). The
+	// model declining the content is not a provider fault, so a lenient
+	// sticky_provider allows the failover to a sibling target (strict still
+	// stops: its contract is summarized-retries only).
+	failReasonPolicy
 )
 
 // reserveKeyBudget charges a request's token estimate against the
@@ -814,16 +825,19 @@ func (rl *retryLoop) writeBudgetDenial(reason string) {
 }
 
 // stickyAllowsFailover applies the agent's sticky_provider policy to a
-// failover decision (NENYA-18). strict blocks every failover except a
-// queued summarization retry; lenient allows 5xx, targets whose circuit
-// was open when dispatched (Cooling), or summarization.
+// fail reason. Lenient allows 5xx, policy refusals (NENYA-191, without
+// requiring a bench), Cooling targets, and summarization retries; strict
+// allows summarization retries only.
 func (rl *retryLoop) stickyAllowsFailover(reason failReason, target routing.UpstreamTarget) bool {
 	switch rl.opts.Agent.StickyProvider {
 	case "strict":
 		return reason == failReasonSummarized
 	case "lenient":
 		switch reason {
-		case failReasonSummarized, failReason5xx:
+		case failReasonSummarized, failReason5xx, failReasonPolicy:
+			// failReasonPolicy (NENYA-191): the refusing target is NOT
+			// benched — Cooling is false by design — and a sibling target
+			// may serve the same request, so the sticky gate allows it.
 			return true
 		case failReasonDispatch, failReasonStream:
 			return target.Cooling

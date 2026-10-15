@@ -241,8 +241,11 @@ func (acc *sseAccumulator) processChunk(data string) {
 	// The predicate matches the bootstrap head probe's rejection set
 	// (classifyBootstrapLine): an error payload, the OpenAI Responses
 	// "response.failed" event, or (NENYA-168) a capacity/overload rejection that
-	// is not shaped as an error envelope.
-	if stream.IsStreamErrorPayload(chunk) || stream.IsResponseFailedEvent(chunk) || stream.IsCapacityRejection(chunk) {
+	// is not shaped as an error envelope — with the NENYA-191 exemption: a
+	// policy-worded rejection is the model declining the content, not a
+	// provider fault, so it is not charged here either.
+	policy := stream.IsPolicyRefusalPayload(chunk)
+	if !policy && (stream.IsStreamErrorPayload(chunk) || stream.IsResponseFailedEvent(chunk) || stream.IsCapacityRejection(chunk)) {
 		acc.streamError = true
 	}
 

@@ -22,9 +22,15 @@ const (
 	// running without the server's tools (NENYA-183).
 	ErrorKindMCPUnavailable ErrorKind = "mcp_unavailable"
 	ErrorKindQuotaExhausted ErrorKind = "quota_exhausted"
-	ErrorKindInjection      ErrorKind = "injection_detected"
-	ErrorKindExfil          ErrorKind = "exfil_blocked"
-	ErrorKindExfilDetected  ErrorKind = "exfil_detected"
+	// ErrorKindPolicyRefusal marks an upstream policy refusal/content-filter
+	// termination (NENYA-191): the model or its safety layer declined the
+	// content. It is request-scoped — never a provider fault — so failover on
+	// it must not charge cooldown/breaker state, and a post-content refusal is
+	// terminal (the content was delivered; the request is never re-dispatched).
+	ErrorKindPolicyRefusal ErrorKind = "policy_refusal"
+	ErrorKindInjection     ErrorKind = "injection_detected"
+	ErrorKindExfil         ErrorKind = "exfil_blocked"
+	ErrorKindExfilDetected ErrorKind = "exfil_detected"
 )
 
 // ErrorResponse represents a structured API error.
@@ -76,6 +82,7 @@ func (k ErrorKind) Scope() ErrorScope {
 	case ErrorKindInvalidRequest,
 		ErrorKindPayloadTooLarge,
 		ErrorKindModelNotFound,
+		ErrorKindPolicyRefusal,
 		ErrorKindContextExceeded,
 		ErrorKindInjection,
 		ErrorKindExfil,
@@ -117,13 +124,15 @@ func (k ErrorKind) Retryable() bool {
 }
 
 // ShouldFailover returns true if this error should trigger provider failover.
-// Provider timeouts, provider errors, and network errors trigger failover.
+// Provider timeouts, provider errors, network errors, and policy refusals
+// (NENYA-191: a sibling model may serve the same request) trigger failover.
 // Quota exhaustion and rate limits do NOT trigger failover (all targets quota-limited).
 func (k ErrorKind) ShouldFailover() bool {
 	switch k {
 	case ErrorKindProviderTimeout,
 		ErrorKindProviderError,
-		ErrorKindNetworkError:
+		ErrorKindNetworkError,
+		ErrorKindPolicyRefusal:
 		return true
 	default:
 		return false

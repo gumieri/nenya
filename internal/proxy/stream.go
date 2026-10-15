@@ -208,7 +208,9 @@ func (p *Proxy) bootstrapStreamHead(pp bootstrapProbeParams) *streamResult {
 			offset = newOffset
 			switch verdict {
 			case bootstrapReject:
-				return p.resolveBootstrapRejection(pp, acc, start)
+				return p.resolveBootstrapRejection(pp, acc, offset, start)
+			case bootstrapRefusal:
+				return p.resolveBootstrapRefusal(pp, acc, start)
 			case bootstrapOutput:
 				pp.gw.Metrics.RecordStreamBootstrap(pp.target.Model, pp.target.Provider, "flushed")
 				pp.gw.Metrics.RecordBootstrapHold(pp.target.Model, pp.target.Provider, time.Since(start))
@@ -246,9 +248,29 @@ func (p *Proxy) bootstrapStreamHead(pp bootstrapProbeParams) *streamResult {
 // resolveBootstrapRejection handles an in-stream rejection detected before
 // the 200 is committed: with an alternate target it fails over synchronously
 // (classifying/circuit-breaking like any upstream error); on the last target
-// the buffered error stream is forwarded as today.
-func (p *Proxy) resolveBootstrapRejection(pp bootstrapProbeParams, acc []byte, start time.Time) *streamResult {
+// the buffered error stream is forwarded as today. scanEnd bounds the
+// policy-wording scan to the classified prefix (bytes up to the decisive
+// line), so a policy frame after a genuine provider-fault frame cannot
+// downgrade the charge — while the forward still flushes the FULL buffer. A
+// policy-worded rejection (safeguard / content-policy, NENYA-191) fails over
+// WITHOUT the charge: the model declining the content is not a provider
+// fault; on the last target it is forwarded, equally uncharged.
+func (p *Proxy) resolveBootstrapRejection(pp bootstrapProbeParams, acc []byte, scanEnd int, start time.Time) *streamResult {
 	pp.gw.Metrics.RecordBootstrapHold(pp.target.Model, pp.target.Provider, time.Since(start))
+	if bufferedHasPolicyRefusal(acc[:scanEnd]) {
+		if pp.opts.idx+1 < len(pp.opts.targets) {
+			pp.gw.Metrics.RecordStreamBootstrap(pp.target.Model, pp.target.Provider, "refusal_failover")
+			pp.gw.Metrics.RecordEarlyStreamError(pp.target.Model, pp.target.Provider, "refusal_failover")
+			pp.gw.Logger.Warn("policy rejection before commit, failing over without breaker charge",
+				"model", pp.target.Model, "provider", pp.target.Provider, "held_bytes", len(acc))
+			return p.failoverHeadPolicy(pp, streamFailoverPolicyRefusal)
+		}
+		pp.gw.Metrics.RecordStreamBootstrap(pp.target.Model, pp.target.Provider, "refusal_forwarded")
+		pp.gw.Metrics.RecordEarlyStreamError(pp.target.Model, pp.target.Provider, "refusal_forwarded")
+		pp.gw.Logger.Warn("policy rejection before commit, no alternate target; forwarding without breaker charge",
+			"model", pp.target.Model, "provider", pp.target.Provider, "held_bytes", len(acc))
+		return p.flushBootstrapPrefix(pp, acc)
+	}
 	if pp.opts.idx+1 < len(pp.opts.targets) {
 		pp.gw.Metrics.RecordStreamBootstrap(pp.target.Model, pp.target.Provider, "rejected_failover")
 		pp.gw.Logger.Warn("in-stream rejection before commit, failing over",
@@ -260,6 +282,50 @@ func (p *Proxy) resolveBootstrapRejection(pp bootstrapProbeParams, acc []byte, s
 	pp.gw.Logger.Warn("in-stream rejection before commit, no alternate target; forwarding",
 		"model", pp.target.Model, "provider", pp.target.Provider, "held_bytes", len(acc))
 	return p.flushBootstrapPrefix(pp, acc)
+}
+
+// resolveBootstrapRefusal handles a refusal/safeguard terminal detected in the
+// buffered head before any client-visible output (NENYA-191): a policy
+// outcome, not a provider fault. With an alternate target it fails over
+// WITHOUT charging cooldown/breaker — the next target may serve the content.
+// On the last target the refusal stream is forwarded: the client must see the
+// refusal, and a post-content refusal would already have flushed as output.
+func (p *Proxy) resolveBootstrapRefusal(pp bootstrapProbeParams, acc []byte, start time.Time) *streamResult {
+	pp.gw.Metrics.RecordBootstrapHold(pp.target.Model, pp.target.Provider, time.Since(start))
+	if pp.opts.idx+1 < len(pp.opts.targets) {
+		pp.gw.Metrics.RecordStreamBootstrap(pp.target.Model, pp.target.Provider, "refusal_failover")
+		pp.gw.Metrics.RecordEarlyStreamError(pp.target.Model, pp.target.Provider, "refusal_failover")
+		pp.gw.Logger.Warn("policy refusal at stream head, failing over without breaker charge",
+			"model", pp.target.Model, "provider", pp.target.Provider, "held_bytes", len(acc))
+		return p.failoverHeadPolicy(pp, streamFailoverPolicyRefusal)
+	}
+	pp.gw.Metrics.RecordStreamBootstrap(pp.target.Model, pp.target.Provider, "refusal_forwarded")
+	pp.gw.Metrics.RecordEarlyStreamError(pp.target.Model, pp.target.Provider, "refusal_forwarded")
+	pp.gw.Logger.Warn("policy refusal at stream head, no alternate target; forwarding",
+		"model", pp.target.Model, "provider", pp.target.Provider, "held_bytes", len(acc))
+	return p.flushBootstrapPrefix(pp, acc)
+}
+
+// failoverHeadPolicy closes the upstream attempt and re-arms the retry loop
+// for the next target WITHOUT a breaker/cooldown charge (NENYA-191): a policy
+// refusal is the model declining the content, so it must never be
+// misattributed to provider health. The half-open probe slot consumed by the
+// pre-dispatch guard is released explicitly — with no circuit outcome
+// recorded, only a release prevents the probe budget from wedging. The
+// failover reason is carried so the loop can fail over under a lenient
+// sticky_provider (a policy outcome is not a stream fault) and log the
+// diagnosis correctly.
+func (p *Proxy) failoverHeadPolicy(pp bootstrapProbeParams, reason streamFailoverReason) *streamResult {
+	if err := pp.action.resp.Body.Close(); err != nil {
+		pp.gw.Logger.Debug("close errored upstream body", "err", err, "provider", pp.target.Provider)
+	}
+	if pp.stallR != nil {
+		pp.stallR.Stop()
+		pp.stallR.DrainBuffered()
+	}
+	pp.action.cancel()
+	pp.gw.AgentState.CB.ReleaseHalfOpen(pp.target.CoolKey)
+	return &streamResult{empty: true, failoverReason: reason}
 }
 
 // flushBootstrapPrefix re-arms the response body so the bytes held during the
@@ -683,6 +749,14 @@ func newUpstreamErrorObserver(gw *gateway.NenyaGateway, target routing.UpstreamT
 
 func (o *upstreamErrorObserver) OnSSEEvent(event stream.SSEEvent) {
 	if event.Type != "error" || o.gw == nil {
+		return
+	}
+	if stream.IsPolicyRefusalPayload(event.Data) {
+		// A content-policy/safeguard rejection (NENYA-191) is the model
+		// declining the content, not a provider fault: no breaker charge, and
+		// the terminal outcome may still record the provider's success.
+		o.gw.Logger.Warn("policy rejection event in stream, not charged to the breaker",
+			"model", o.target.Model, "provider", o.target.Provider)
 		return
 	}
 	if event.GatewayInjected {
