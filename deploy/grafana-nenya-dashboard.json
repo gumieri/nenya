@@ -1257,7 +1257,7 @@
       "id": 36,
       "type": "timeseries",
       "title": "Model Discovery Attempts",
-      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 120 },
+      "gridPos": { "h": 4, "w": 12, "x": 0, "y": 120 },
       "datasource": { "type": "prometheus", "uid": "${datasource}" },
       "targets": [
         {
@@ -1479,6 +1479,49 @@
           "datasource": { "type": "prometheus", "uid": "${datasource}" },
           "expr": "histogram_quantile(0.50, sum(rate(nenya_upstream_request_duration_seconds_bucket{job=~\"$job\", instance=~\"$instance\"}[$__rate_interval])) by (le))",
           "legendFormat": "P50",
+          "refId": "B"
+        }
+      ],
+      "options": {
+        "tooltip": { "mode": "multi", "sort": "none" },
+        "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "custom": { "lineWidth": 2, "fillOpacity": 0, "spanNulls": false, "showPoints": "never" },
+          "color": { "mode": "palette-classic" }
+        },
+        "overrides": []
+      }
+    },
+
+    {
+      "id": 112,
+      "type": "row",
+      "title": "Streaming First-Token Latency",
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 172 }
+    },
+
+    {
+      "id": 52,
+      "type": "timeseries",
+      "title": "Time to First Effective Output P50/P95",
+      "description": "Time from dispatch to the first frame a client would render, per streaming request (reasoning-only frames excluded unless governance.ttft_include_reasoning is set).",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 173 },
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "expr": "histogram_quantile(0.95, sum(rate(nenya_ttft_seconds_bucket{job=~\"$job\", instance=~\"$instance\"}[$__rate_interval])) by (le, model))",
+          "legendFormat": "P95 {{model}}",
+          "refId": "A"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "expr": "histogram_quantile(0.50, sum(rate(nenya_ttft_seconds_bucket{job=~\"$job\", instance=~\"$instance\"}[$__rate_interval])) by (le, model))",
+          "legendFormat": "P50 {{model}}",
           "refId": "B"
         }
       ],

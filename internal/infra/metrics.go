@@ -95,6 +95,7 @@ type Metrics struct {
 	concurrencyInflight sync.Map
 
 	upstreamLatency sync.Map
+	ttft            sync.Map
 	gatewayProcess  sync.Map
 	ollamaBytes     atomic.Uint64
 	modelDiscovery  sync.Map
@@ -215,6 +216,11 @@ type RateLimitSnapshot struct {
 // HTTPDurationBuckets is the shared latency histogram bucket set (in
 // seconds) used by all duration histograms in this package.
 var HTTPDurationBuckets = []float64{0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30, 60, 120}
+
+// TTFTDurationBuckets resolves the first-token range (NENYA-178): a first token
+// arrives in tens to hundreds of milliseconds, well below the 50ms floor of
+// HTTPDurationBuckets, so the shared set cannot show a fast target's improvement.
+var TTFTDurationBuckets = []float64{0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30}
 
 type labeledEntry struct {
 	labels map[string]string
@@ -1429,6 +1435,20 @@ func (m *Metrics) RecordBudgetLimitRejected(model string) {
 	e.value.Add(1)
 }
 
+// RecordTTFT observes the time to the first effective output frame for a
+// streaming target (NENYA-178). Reasoning-only frames are excluded unless the
+// operator opts in, so a slow-thinking model does not look slow-to-first-token.
+// The labels mirror nenya_upstream_request_duration_seconds.
+func (m *Metrics) RecordTTFT(model, agent, provider string, duration time.Duration) {
+	if m == nil {
+		return
+	}
+	h := getOrCreateHist(&m.ttft, map[string]string{
+		"model": model, "agent": agent, "provider": provider,
+	}, TTFTDurationBuckets)
+	h.Observe(duration.Seconds())
+}
+
 func (m *Metrics) RecordUpstreamLatency(model, agent, provider string, duration time.Duration) {
 	if m == nil {
 		return
@@ -1622,6 +1642,8 @@ func (m *Metrics) WritePrometheus(w io.Writer) {
 
 	m.writeHistogramMap(w, "nenya_upstream_request_duration_seconds",
 		"Upstream provider request duration in seconds.", &m.upstreamLatency)
+	m.writeHistogramMap(w, "nenya_ttft_seconds",
+		"Time to the first effective output frame on streaming requests (NENYA-178).", &m.ttft)
 	m.writeHistogramMap(w, "nenya_concurrency_wait_seconds",
 		"Time requests spent waiting for a per-model concurrency slot.", &m.concurrencyWait)
 	m.writeGaugeMap(w, "nenya_concurrency_inflight",

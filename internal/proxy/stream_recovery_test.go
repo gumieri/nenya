@@ -12,6 +12,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/nenya/config"
 	"github.com/nenya/internal/gateway"
@@ -374,6 +375,32 @@ func TestStreamResponse_ContinuationResumesCutStream(t *testing.T) {
 	gw.Metrics.WritePrometheus(&buf)
 	if !strings.Contains(buf.String(), `nenya_stream_continuations_total{model="test-model", provider="test-provider", reason="recovered"} 1`) {
 		t.Errorf("expected recovered metric, got: %s", buf.String())
+	}
+
+	// NENYA-178: the logical request's time-to-first-token is measured once.
+	// Both attempts produced content, so a regression that re-measured the
+	// continuation (inflated by the whole cut stream) would record 2 samples.
+	ml, ok := gw.LatencyTracker.Get("test-model", "test-provider")
+	if !ok {
+		t.Fatal("no latency record after a continued stream")
+	}
+	if ml.TTFTSampleSize != 1 {
+		t.Fatalf("TTFT samples = %d, want 1 (only the first attempt is measured)", ml.TTFTSampleSize)
+	}
+}
+
+// TestTTFTDispatchAtFor pins the clock's start per streaming attempt
+// (NENYA-178): the first attempt uses the dispatch instant, every continuation
+// attempt returns the zero time so the recorder skips it.
+func TestTTFTDispatchAtFor(t *testing.T) {
+	dispatch := time.Now()
+	if got := ttftDispatchAtFor(0, dispatch); !got.Equal(dispatch) {
+		t.Errorf("attempt 0 = %v, want the dispatch instant %v", got, dispatch)
+	}
+	for attempt := 1; attempt <= 3; attempt++ {
+		if got := ttftDispatchAtFor(attempt, dispatch); !got.IsZero() {
+			t.Errorf("attempt %d = %v, want the zero time (no measurement)", attempt, got)
+		}
 	}
 }
 

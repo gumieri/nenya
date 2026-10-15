@@ -1077,10 +1077,10 @@ type GovernanceConfig struct {
 	// StreamIdleTimeoutSeconds is the stall detection timeout for SSE streams.
 	StreamIdleTimeoutSeconds *int `json:"stream_idle_timeout_seconds,omitempty"`
 	// StreamBootstrapBufferBytes is the global stream bootstrap buffering
-	// budget in bytes (NENYA-45): when >0, streaming responses hold
-	// handshake events until a real output event (allow-list) or an
-	// in-stream rejection is seen, keeping failover possible before the
-	// 200 is committed. 0 (default) = off. Providers override via
+	// budget in bytes (NENYA-45): when >0, streaming responses hold handshake
+	// events until a frame carrying effective output (the shared
+	// stream.HasEffectiveOutput test, NENYA-178) or an in-stream rejection is
+	// seen, keeping failover possible before the 200 is committed. 0 (default) = off. Providers override via
 	// providers.<name>.stream_bootstrap_buffer_bytes.
 	StreamBootstrapBufferBytes int `json:"stream_bootstrap_buffer_bytes,omitempty"`
 	// ThinkingStreamIdleTimeoutSeconds is the stall detection timeout during
@@ -1089,6 +1089,14 @@ type GovernanceConfig struct {
 	// StreamContinuation controls transparent continuation of upstream SSE
 	// streams that end mid-generation without a [DONE] marker.
 	StreamContinuation *StreamContinuationConfig `json:"stream_continuation,omitempty"`
+	// TTFTIncludeReasoning includes reasoning/thinking-only frames in the
+	// time-to-first-effective-output measurement (NENYA-178). Default false:
+	// a reasoning-only frame is not "effective output", so a slow-thinking
+	// model is not measured as slow-to-first-token (which would de-prioritize
+	// it in latency-aware routing and, once NENYA-153 lands, trip its
+	// slow-call breaker). Set true to measure the true first byte of any
+	// generation.
+	TTFTIncludeReasoning bool `json:"ttft_include_reasoning,omitempty"`
 }
 
 func (g *GovernanceConfig) RPMSet() bool                { return wasSet(g.RatelimitMaxRPM) }
@@ -1282,6 +1290,13 @@ func (g *GovernanceConfig) EffectiveUpstreamTimeout() time.Duration {
 		v = 86400
 	}
 	return time.Duration(v) * time.Second
+}
+
+// TTFTIncludeReasoningFrames reports whether reasoning-only frames count as
+// effective output for the time-to-first-token measurement (NENYA-178).
+// Default false (see the field doc).
+func (g *GovernanceConfig) TTFTIncludeReasoningFrames() bool {
+	return g != nil && g.TTFTIncludeReasoning
 }
 
 // EffectiveStreamIdleTimeout returns the stall detection timeout for upstream

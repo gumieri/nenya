@@ -38,6 +38,10 @@ type streamResponseOpts struct {
 	// canary carries the per-request tripwire token (empty Token when
 	// the guard is disabled).
 	canary pipeline.CanarResult
+
+	// dispatchAt is when the upstream request was sent (NENYA-178): the start
+	// of the TTFT clock recorded for this target on streaming paths.
+	dispatchAt time.Time
 }
 
 // streamContinuation carries the state for transparent stream continuation:

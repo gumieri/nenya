@@ -77,6 +77,9 @@ type upstreamAction struct {
 	// "rate_limit", …), so the loop can report the reason that mattered when
 	// every target was skipped (NENYA-188).
 	skipReason string
+	// dispatchAt is when the upstream request was sent (NENYA-178): the start
+	// of the time-to-first-effective-output clock the streaming path records.
+	dispatchAt time.Time
 	// upstreamAttempted marks an action that performed an HTTP round-trip
 	// (any outcome of a successful Do: stream, response, upstream error, HTML
 	// rejection, network failure). The retry loop uses it to avoid reporting a
@@ -382,6 +385,7 @@ func (rl *retryLoop) handleStreamAction(i int, target routing.UpstreamTarget, ac
 		tokenCount:   rl.opts.TokenCount,
 		apiKey:       rl.opts.ApiKey,
 		canary:       rl.opts.Canary,
+		dispatchAt:   action.dispatchAt,
 	}, action)
 	if result.terminal {
 		// Response fully written (content-policy block): stop, never append
@@ -1267,6 +1271,9 @@ func (p *Proxy) prepareAndSend(gw *gateway.NenyaGateway,
 
 	action := handleUpstreamResponse(ctxLogger, resp, upstreamCancel, release)
 	action.upstreamAttempted = true
+	// The dispatch instant starts the TTFT clock (NENYA-178); the streaming
+	// path records the elapsed time at the first effective output frame.
+	action.dispatchAt = startTime
 	return action
 }
 

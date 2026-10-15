@@ -18,25 +18,40 @@ const (
 	latencyEvictInterval = latencyStaleTimeout / 12
 )
 
-// ModelLatency is a per-(model, provider) latency record: the median of the
-// retained sample buffer, its size, and the last update time. Entries are
-// immutable once published by the tracker.
+// ModelLatency is a per-(model, provider) latency record with two dimensions:
+// the upstream response-header latency (MedianMs/SampleSize) and the
+// time-to-first-effective-output of streaming requests
+// (MedianTTFT/TTFTSampleSize, NENYA-178). Entries are immutable once published
+// by the tracker.
 type ModelLatency struct {
 	Model      string
 	Provider   string
 	MedianMs   float64
 	SampleSize int
 	LastUpdate time.Time
+
+	// MedianTTFT (NENYA-178) is the exact median time-to-first-effective-output
+	// and TTFTSampleSize its sample count, recorded only on streaming paths.
+	// Zero when the pair has no streaming sample yet. It is kept as a
+	// time.Duration (not a millisecond float) so the TTFT lookup is lossless for
+	// sub-millisecond medians; the /statsz rendering converts to milliseconds.
+	// This is the clock the slow-call circuit breaker consumes (NENYA-153): a
+	// slow first token is a degraded target even when the full request
+	// eventually succeeds.
+	MedianTTFT     time.Duration
+	TTFTSampleSize int
 }
 
-// LatencyTracker maintains per-(model, provider) latency sample buffers with
-// incremental sorted insertion and median computation, used for latency-based
-// target reordering. Entries are immutable once published: Record never
-// mutates an entry in place, so values returned by Get and Snapshot are
-// stable for reading without holding the tracker lock. All methods are
-// nil-safe (a nil tracker records nothing, Get reports a miss, Snapshot is
-// empty, and SortByLatency returns identity order). Construct with
-// NewLatencyTracker; the zero value is not usable.
+// LatencyTracker maintains two per-(model, provider) sample buffers with
+// incremental sorted insertion and median computation: the upstream
+// response-header latency (Record) and the time-to-first-effective-output of
+// streaming requests (RecordTTFT, NENYA-178), used for latency-based target
+// reordering and for the slow-call circuit breaker. Entries are immutable once
+// published: neither Record nor RecordTTFT mutates an entry in place, so values
+// returned by Get and Snapshot are stable for reading without holding the
+// tracker lock. All methods are nil-safe (a nil tracker records nothing, Get
+// reports a miss, Snapshot is empty, and SortByLatency returns identity order).
+// Construct with NewLatencyTracker; the zero value is not usable.
 //
 // Keys are the ":"-joined model and provider; provider names are
 // config-owned and must not contain ":" so the join is unambiguous. When a
@@ -47,6 +62,7 @@ type LatencyTracker struct {
 	mu        sync.RWMutex
 	latency   map[string]*ModelLatency
 	sorted    map[string][]time.Duration
+	ttft      map[string][]time.Duration
 	lastEvict time.Time
 }
 
@@ -60,6 +76,7 @@ func NewLatencyTracker() *LatencyTracker {
 	return &LatencyTracker{
 		latency: make(map[string]*ModelLatency),
 		sorted:  make(map[string][]time.Duration),
+		ttft:    make(map[string][]time.Duration),
 	}
 }
 
@@ -77,36 +94,120 @@ func (l *LatencyTracker) Record(model, provider string, duration time.Duration) 
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
+	if !l.admitLocked(key) {
+		return
+	}
+
+	buf := sampleLocked(l.sorted, key, duration)
+	l.sorted[key] = buf
+
+	ml := l.publishLocked(key, model, provider)
+	ml.MedianMs = float64(buf[len(buf)/2].Milliseconds())
+	ml.SampleSize = len(buf)
+	l.latency[key] = ml
+}
+
+// RecordTTFT adds a time-to-first-effective-output observation (NENYA-178) for
+// the (model, provider) pair and recomputes its median. It shares the sample
+// buffer bounds, the stale-key sweep and the key cap with Record, and updates
+// the same published entry (the full-request median and the TTFT median are two
+// dimensions of one pair). A non-positive duration is ignored: it carries no
+// signal and would drag the median toward zero.
+//
+// Callers on the request path record the header latency (Record) before the
+// first output arrives, so a published entry normally carries both dimensions;
+// if RecordTTFT were the only writer, MedianMs/SampleSize would stay zero and
+// SortByLatency would read the pair as the fastest target. /statsz omits an
+// unobserved dimension rather than reporting a zero.
+func (l *LatencyTracker) RecordTTFT(model, provider string, duration time.Duration) {
+	if l == nil || duration <= 0 {
+		return
+	}
+	key := model + ":" + provider
+
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	if !l.admitLocked(key) {
+		return
+	}
+
+	buf := sampleLocked(l.ttft, key, duration)
+	l.ttft[key] = buf
+
+	ml := l.publishLocked(key, model, provider)
+	ml.MedianTTFT = buf[len(buf)/2]
+	ml.TTFTSampleSize = len(buf)
+	l.latency[key] = ml
+}
+
+// TTFT returns the median time-to-first-effective-output for the pair; ok is
+// false when no streaming sample has been recorded.
+//
+// This is the feed for the slow-call circuit breaker and first-token-aware
+// routing (NENYA-153), which consumes it when it lands; today the value is
+// recorded, exposed through Get/Snapshot (/statsz) and exported as the
+// nenya_ttft_seconds histogram. The buffered MCP replay path does not record
+// (it never streams upstream), so a model reached only through it has no TTFT
+// sample.
+func (l *LatencyTracker) TTFT(model, provider string) (time.Duration, bool) {
+	if l == nil {
+		return 0, false
+	}
+	key := model + ":" + provider
+
+	l.mu.RLock()
+	defer l.mu.RUnlock()
+
+	ml, ok := l.latency[key]
+	if !ok || ml.TTFTSampleSize == 0 {
+		return 0, false
+	}
+	return ml.MedianTTFT, true
+}
+
+// admitLocked runs the throttled stale-key sweep and enforces the key cap,
+// reporting whether the key may be recorded.
+func (l *LatencyTracker) admitLocked(key string) bool {
 	// Throttled stale-key sweep: at most once per latencyEvictInterval, so
 	// the hot path does not scan all keys on every record.
 	if now := time.Now(); now.Sub(l.lastEvict) >= latencyEvictInterval {
 		l.evictStaleLocked()
 		l.lastEvict = now
 	}
-	if len(l.sorted) >= latencyMaxKeys {
-		if _, exists := l.sorted[key]; !exists {
-			return
+	// l.latency is the authoritative map: both sample buffers are written
+	// together with it, so its length is the key count.
+	if len(l.latency) >= latencyMaxKeys {
+		if _, exists := l.latency[key]; !exists {
+			return false
 		}
 	}
+	return true
+}
 
-	buf, ok := l.sorted[key]
+// sampleLocked inserts duration into the per-key buffer of bufs, keeping it
+// sorted and capped at latencyMaxSamples (the fastest sample is dropped, so the
+// retained window skews toward slower observations). Callers hold l.mu.
+func sampleLocked(bufs map[string][]time.Duration, key string, duration time.Duration) []time.Duration {
+	buf, ok := bufs[key]
 	if !ok {
 		buf = make([]time.Duration, 0, latencyMaxSamples)
 	}
-
 	buf = insertSorted(buf, duration)
-
 	if len(buf) > latencyMaxSamples {
 		trimmed := make([]time.Duration, latencyMaxSamples)
 		copy(trimmed, buf[1:])
 		buf = trimmed
 	}
+	return buf
+}
 
-	l.sorted[key] = buf
-	// Clone caller-supplied strings only on entry creation (NENYA-198) and
-	// publish a fresh ModelLatency per record: entries handed out by
-	// Get/Snapshot must never be mutated in place, or concurrent readers of a
-	// previously returned snapshot observe torn field sets (data race).
+// publishLocked returns the entry to mutate for key: a fresh copy of the
+// existing entry, or a new one with cloned labels. Clone caller-supplied
+// strings only on entry creation (NENYA-198) and never mutate a published entry
+// in place, or concurrent readers of a previously returned snapshot observe
+// torn field sets (data race).
+func (l *LatencyTracker) publishLocked(key, model, provider string) *ModelLatency {
 	ml, ok := l.latency[key]
 	if !ok {
 		ml = &ModelLatency{
@@ -117,10 +218,8 @@ func (l *LatencyTracker) Record(model, provider string, duration time.Duration) 
 		prev := *ml
 		ml = &prev
 	}
-	ml.MedianMs = float64(buf[len(buf)/2].Milliseconds())
-	ml.SampleSize = len(buf)
 	ml.LastUpdate = time.Now()
-	l.latency[key] = ml
+	return ml
 }
 
 // insertSorted inserts a duration into a sorted slice using binary search.
@@ -149,6 +248,7 @@ func (l *LatencyTracker) evictStaleLocked() {
 		if ml.LastUpdate.Before(cutoff) {
 			delete(l.latency, key)
 			delete(l.sorted, key)
+			delete(l.ttft, key)
 		}
 	}
 }

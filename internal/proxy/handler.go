@@ -822,6 +822,35 @@ func (p *Proxy) handleStats(w http.ResponseWriter, redactKeys bool) {
 		"misses": streamPool["misses"],
 	}
 
+	// NENYA-178: per-(model, provider) latency medians, including the
+	// time-to-first-effective-output recorded on streaming paths (the clock the
+	// slow-call breaker consumes once NENYA-153 lands). Omitted when nothing has
+	// been observed, so scrapers do not see a permanently empty section.
+	if latency := gw.LatencyTracker.Snapshot(); len(latency) > 0 {
+		out := make(map[string]interface{}, len(latency))
+		for key, ml := range latency {
+			// Entries are keyed by "model:provider" and repeat the model and
+			// provider inside the entry so consumers do not have to split on
+			// ":" (a model id may itself contain ":").
+			entry := map[string]interface{}{
+				"model":    ml.Model,
+				"provider": ml.Provider,
+			}
+			if ml.SampleSize > 0 {
+				entry["median_ms"] = ml.MedianMs
+				entry["sample_size"] = ml.SampleSize
+			}
+			if ml.TTFTSampleSize > 0 {
+				// Seconds*1000 keeps sub-millisecond medians distinguishable
+				// from the zero default.
+				entry["median_ttft_ms"] = ml.MedianTTFT.Seconds() * 1000
+				entry["ttft_sample_size"] = ml.TTFTSampleSize
+			}
+			out[key] = entry
+		}
+		stats["latency"] = out
+	}
+
 	p.addBillingStats(stats, gw)
 
 	stats["cost_model"] = costModelStats(gw)

@@ -186,6 +186,7 @@ func TestMetrics_NewMetrics(t *testing.T) {
 	m.IncInFlight("model-b", "agent-2", "openai")
 	m.DecInFlight("model-a", "agent-1", "gemini")
 	m.RecordSessionPinChange("new")
+	m.RecordTTFT("model-a", "agent-1", "gemini", 250*time.Millisecond)
 	m.SessionActive = func() int { return 1 }
 
 	var buf bytes.Buffer
@@ -210,6 +211,7 @@ func TestMetrics_NewMetrics(t *testing.T) {
 		"nenya_stream_early_errors_total",
 		"nenya_http_request_duration_seconds",
 		"nenya_upstream_request_duration_seconds",
+		"nenya_ttft_seconds",
 		"nenya_gateway_processing_duration_seconds",
 		"nenya_ollama_summarized_bytes_total",
 		"nenya_model_discovery_total",

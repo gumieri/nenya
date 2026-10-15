@@ -385,6 +385,7 @@ func (p *Proxy) streamResponse(opts streamResponseOpts, action upstreamAction) s
 			reuse:        attemptStall,
 			canary:       opts.canary,
 			sigCache:     sigCache,
+			dispatchAt:   ttftDispatchAtFor(attempt, opts.dispatchAt),
 		})
 		if transformingReader == nil {
 			putStreamBuffer(buf)
@@ -505,6 +506,8 @@ type transformReaderOpts struct {
 	reuse        *stallReader
 	canary       pipeline.CanarResult
 	sigCache     infra.ThoughtSignatureKV
+	// dispatchAt starts the TTFT clock (NENYA-178).
+	dispatchAt time.Time
 }
 
 // setupTransformingReader creates and configures the SSE transforming reader,
@@ -560,7 +563,63 @@ func (p *Proxy) setupTransformingReader(gw *gateway.NenyaGateway, o transformRea
 		})
 	}
 
+	setupTTFTRecorder(gw, o, transformingReader)
+
 	return transformingReader, contentBuilder, stallR
+}
+
+// ttftDispatchAtFor returns the TTFT clock start for one streaming attempt
+// (NENYA-178): the dispatch instant on the first attempt, and the zero time
+// afterwards. A continuation re-dispatches mid-generation, so measuring its
+// first output would double-count the logical request's time-to-first-token
+// (inflated by the whole cut stream) and skew the slow-call breaker. A retried
+// or failed-over target gets its own streamResponse call and its own
+// measurement, which is what per-target TTFT should mean.
+//
+// Consequence: a first attempt cut after reasoning-only frames records no
+// sample at all (the cut is recognized from reasoning content, but the default
+// clock does not stop on reasoning). That is a deliberate no-sample outcome —
+// the alternative is an inflated measurement.
+func ttftDispatchAtFor(attempt int, dispatchAt time.Time) time.Time {
+	if attempt > 0 {
+		return time.Time{}
+	}
+	return dispatchAt
+}
+
+// setupTTFTRecorder wires the time-to-first-effective-output clock (NENYA-178)
+// for one streaming attempt: the reader fires a one-shot callback at the first
+// output-bearing frame (defined by stream.HasEffectiveOutput — never a keepalive,
+// an empty delta, a block close or a role-only handshake; reasoning frames only
+// when the operator opts in), and the elapsed time since the dispatch is recorded
+// per (model, provider) for /statsz and as nenya_ttft_seconds. A nil tracker or a
+// zero dispatch instant (see ttftDispatchAtFor) makes it a no-op.
+func setupTTFTRecorder(gw *gateway.NenyaGateway, o transformReaderOpts, r *stream.SSETransformingReader) {
+	if gw == nil || gw.LatencyTracker == nil {
+		return
+	}
+	if o.dispatchAt.IsZero() {
+		// A zero instant means "do not measure this attempt" (a continuation
+		// re-dispatch, see ttftDispatchAtFor). Log it so a future caller that
+		// forgets to plumb the dispatch instant loses the signal loudly rather
+		// than silently.
+		if gw.Logger != nil {
+			gw.Logger.Debug("skipping TTFT measurement: no dispatch instant",
+				"model", o.target.Model, "provider", o.target.Provider)
+		}
+		return
+	}
+	tracker, target, start := gw.LatencyTracker, o.target, o.dispatchAt
+	includeReasoning := gw.Config.Governance.TTFTIncludeReasoningFrames()
+	r.SetOnFirstEffectiveOutput(func() {
+		elapsed := time.Since(start)
+		tracker.RecordTTFT(target.Model, target.Provider, elapsed)
+		gw.Metrics.RecordTTFT(target.Model, o.agentName, target.Provider, elapsed)
+		if gw.Logger != nil {
+			gw.Logger.Debug("recorded time to first effective output",
+				"model", target.Model, "provider", target.Provider, "ttft_ms", elapsed.Milliseconds())
+		}
+	}, includeReasoning)
 }
 
 // upstreamErrorObserver is an SSE observer that detects error events within

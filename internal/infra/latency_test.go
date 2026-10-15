@@ -163,3 +163,70 @@ func TestLatencyTracker_RecordConcurrentWithReaders(t *testing.T) {
 		t.Fatalf("snapshot entries = %d, want 1", len(l.Snapshot()))
 	}
 }
+
+// TestLatencyTracker_TTFT pins the time-to-first-effective-output dimension
+// (NENYA-178): it is recorded independently of the full-request median, shares
+// the sample bounds, is ignored for non-positive observations, and is exposed
+// through Get/Snapshot (the feed for latency-aware decisions and the slow-call
+// breaker, NENYA-153).
+func TestLatencyTracker_TTFT(t *testing.T) {
+	tr := NewLatencyTracker()
+	tr.Record("m", "p", 5*time.Second)
+	for _, d := range []time.Duration{100 * time.Millisecond, 300 * time.Millisecond, 200 * time.Millisecond} {
+		tr.RecordTTFT("m", "p", d)
+	}
+
+	ml, ok := tr.Get("m", "p")
+	if !ok {
+		t.Fatal("no entry for (m, p)")
+	}
+	if ml.MedianTTFT != 200*time.Millisecond {
+		t.Errorf("MedianTTFT = %v, want 200ms (median of 100/200/300)", ml.MedianTTFT)
+	}
+	if ml.TTFTSampleSize != 3 {
+		t.Errorf("TTFTSampleSize = %d, want 3", ml.TTFTSampleSize)
+	}
+	// The full-request dimension is untouched by TTFT records.
+	if ml.MedianMs != 5000 || ml.SampleSize != 1 {
+		t.Errorf("full-request record changed: median=%v samples=%d", ml.MedianMs, ml.SampleSize)
+	}
+
+	if got, ok := tr.TTFT("m", "p"); !ok || got != 200*time.Millisecond {
+		t.Errorf("TTFT(m, p) = %v, %v; want 200ms, true", got, ok)
+	}
+	if _, ok := tr.TTFT("m", "other"); ok {
+		t.Error("TTFT for an unobserved provider must report a miss")
+	}
+
+	// Non-positive observations carry no signal.
+	tr.RecordTTFT("m", "p", 0)
+	tr.RecordTTFT("m", "p", -time.Second)
+	if after, _ := tr.Get("m", "p"); after.TTFTSampleSize != 3 {
+		t.Errorf("non-positive TTFT was recorded: samples=%d", after.TTFTSampleSize)
+	}
+
+	// The sample buffer is capped like the full-request one.
+	for i := 0; i < latencyMaxSamples+10; i++ {
+		tr.RecordTTFT("m", "p", time.Duration(i+1)*time.Millisecond)
+	}
+	ml, _ = tr.Get("m", "p")
+	if ml.TTFTSampleSize != latencyMaxSamples {
+		t.Errorf("TTFTSampleSize = %d, want the cap %d", ml.TTFTSampleSize, latencyMaxSamples)
+	}
+
+	// Snapshot carries both dimensions.
+	snap := tr.Snapshot()
+	if entry, ok := snap["m:p"]; !ok || entry.TTFTSampleSize == 0 {
+		t.Errorf("snapshot lost the TTFT dimension: %+v", snap)
+	}
+}
+
+// TestLatencyTracker_TTFTRemainsNilSafe pins the documented nil contract for the
+// new methods.
+func TestLatencyTracker_TTFTRemainsNilSafe(t *testing.T) {
+	var tr *LatencyTracker
+	tr.RecordTTFT("m", "p", time.Second)
+	if _, ok := tr.TTFT("m", "p"); ok {
+		t.Error("a nil tracker must report a TTFT miss")
+	}
+}

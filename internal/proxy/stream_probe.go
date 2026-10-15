@@ -138,7 +138,7 @@ type bootstrapVerdict int
 const (
 	// bootstrapUndetermined: handshake/metadata/unknown event — keep buffering.
 	bootstrapUndetermined bootstrapVerdict = iota
-	// bootstrapOutput: an allow-listed real-output event — commit and flush.
+	// bootstrapOutput: a frame carrying effective output — commit and flush.
 	bootstrapOutput
 	// bootstrapReject: an in-stream rejection payload — failover candidate.
 	bootstrapReject
@@ -146,13 +146,13 @@ const (
 
 // classifyBootstrapLine classifies one complete SSE data payload for the
 // bootstrap buffer. Rejections use stream.IsStreamErrorPayload plus the
-// OpenAI Responses "response.failed" event. Output detection is an
-// event-type allow-list — NOT a frame count — because providers emit
-// rate-limit/metadata frames before the response starts: only events that
-// provably carry generation output release the buffer. Everything else
-// (handshakes, pings, usage frames, partial JSON, unknown shapes) is
-// undetermined and keeps the buffer open; the byte budget bounds how long
-// that can last.
+// OpenAI Responses "response.failed" event. Output detection is a
+// content-based effective-output test (stream.HasEffectiveOutput, NENYA-178) —
+// NOT a frame count — because providers emit rate-limit/metadata frames before
+// the response starts: only frames that provably carry generation output release
+// the buffer. Everything else (handshakes, pings, usage frames, partial JSON,
+// unknown shapes) is undetermined and keeps the buffer open; the byte budget
+// bounds how long that can last.
 func classifyBootstrapLine(data []byte) bootstrapVerdict {
 	if bytes.Equal(data, []byte("[DONE]")) {
 		return bootstrapUndetermined
@@ -174,80 +174,17 @@ func classifyBootstrapLine(data []byte) bootstrapVerdict {
 	return classifyBootstrapOutput(parsed)
 }
 
-// classifyBootstrapOutput applies the real-output allow-list to a parsed SSE
-// payload: OpenAI chat chunks with content/tool_calls deltas, Anthropic
-// content-block events, and Gemini candidates carrying parts.
+// classifyBootstrapOutput applies the real-output test to a parsed SSE payload.
+// The rules live in stream.HasEffectiveOutput (NENYA-178) so the bootstrap and
+// the TTFT clock cannot drift apart; see its doc for the exact per-format
+// classification. The bootstrap opts reasoning frames IN — a reasoning-only
+// frame means the provider is generating, not rejecting, so the handshake
+// buffer is not held for the whole thinking phase.
 func classifyBootstrapOutput(parsed map[string]any) bootstrapVerdict {
-	// Anthropic: message_start/ping/message_delta/message_stop are metadata;
-	// content_block_* events carry generation output.
-	switch t, _ := parsed["type"].(string); t {
-	case "content_block_start", "content_block_delta", "content_block_stop":
-		return bootstrapOutput
-	}
-	// OpenAI chat-completions chunks (delta) and non-streaming shapes (message).
-	if choices, ok := parsed["choices"].([]any); ok {
-		return openAIChoiceHasOutput(choices)
-	}
-	// Gemini SSE candidates: content.parts carrying text/functionCall.
-	if cands, ok := parsed["candidates"].([]any); ok {
-		return geminiCandidateHasOutput(cands)
-	}
-	return bootstrapUndetermined
-}
-
-// openAIChoiceHasOutput reports whether the first OpenAI-style choice carries
-// generation output in its delta or message object.
-func openAIChoiceHasOutput(choices []any) bootstrapVerdict {
-	if len(choices) == 0 {
-		return bootstrapUndetermined
-	}
-	c, ok := choices[0].(map[string]any)
-	if !ok {
-		return bootstrapUndetermined
-	}
-	if delta, ok := c["delta"].(map[string]any); ok && bootstrapHasContent(delta) {
-		return bootstrapOutput
-	}
-	if msg, ok := c["message"].(map[string]any); ok && bootstrapHasContent(msg) {
+	if stream.HasEffectiveOutput(parsed, true) {
 		return bootstrapOutput
 	}
 	return bootstrapUndetermined
-}
-
-// geminiCandidateHasOutput reports whether the first Gemini candidate carries
-// content parts.
-func geminiCandidateHasOutput(cands []any) bootstrapVerdict {
-	if len(cands) == 0 {
-		return bootstrapUndetermined
-	}
-	c, ok := cands[0].(map[string]any)
-	if !ok {
-		return bootstrapUndetermined
-	}
-	content, ok := c["content"].(map[string]any)
-	if !ok {
-		return bootstrapUndetermined
-	}
-	if parts, ok := content["parts"].([]any); ok && len(parts) > 0 {
-		return bootstrapOutput
-	}
-	return bootstrapUndetermined
-}
-
-// bootstrapHasContent reports whether an OpenAI-style delta/message object
-// carries actual generation output (text, tool calls, or reasoning text).
-// A role-only first chunk is a handshake, not output.
-func bootstrapHasContent(m map[string]any) bool {
-	if s, ok := m["content"].(string); ok && s != "" {
-		return true
-	}
-	if tc, ok := m["tool_calls"].([]any); ok && len(tc) > 0 {
-		return true
-	}
-	if rc, ok := m["reasoning_content"].(string); ok && rc != "" {
-		return true
-	}
-	return false
 }
 
 // scanBootstrapBuffer walks the complete lines of acc starting at offset and

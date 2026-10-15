@@ -24,14 +24,31 @@ func TestClassifyBootstrapLine(t *testing.T) {
 		{"empty delta", `{"choices":[{"delta":{}}]}`, bootstrapUndetermined},
 		{"finish-only chunk", `{"choices":[{"delta":{},"finish_reason":"stop"}]}`, bootstrapUndetermined},
 		// Anthropic events.
-		{"anthropic block start", `{"type":"content_block_start"}`, bootstrapOutput},
+		// A bare block opening carries no renderable content, so it is not
+		// output; a start that carries text (or opens a tool block) is. The
+		// shared classifier (NENYA-178) decides this, so the bootstrap and the
+		// TTFT clock cannot drift apart.
+		{"anthropic bare block start", `{"type":"content_block_start"}`, bootstrapUndetermined},
+		{"anthropic text block start", `{"type":"content_block_start","content_block":{"type":"text","text":"ok"}}`, bootstrapOutput},
+		{"anthropic tool block start", `{"type":"content_block_start","content_block":{"type":"tool_use","id":"t1","name":"f"}}`, bootstrapOutput},
+		{"anthropic server tool block start", `{"type":"content_block_start","content_block":{"type":"server_tool_use","id":"s1"}}`, bootstrapOutput},
+		{"gemini executable code part", `{"candidates":[{"content":{"parts":[{"executableCode":{"language":"PYTHON"}}]}}]}`, bootstrapOutput},
+		{"gemini code execution result part", `{"candidates":[{"content":{"parts":[{"codeExecutionResult":{"outcome":"OK"}}]}}]}`, bootstrapOutput},
+		{"gemini file data part", `{"candidates":[{"content":{"parts":[{"fileData":{"mimeType":"image/png"}}]}}]}`, bootstrapOutput},
+		{"anthropic thinking block start", `{"type":"content_block_start","content_block":{"type":"thinking"}}`, bootstrapOutput},
 		{"anthropic block delta", `{"type":"content_block_delta","delta":{"text":"ok"}}`, bootstrapOutput},
+		{"anthropic empty text block start", `{"type":"content_block_start","content_block":{"type":"text"}}`, bootstrapUndetermined},
+		{"anthropic block stop", `{"type":"content_block_stop","index":0}`, bootstrapUndetermined},
+		{"anthropic empty text delta", `{"type":"content_block_delta","delta":{"type":"text_delta","text":""}}`, bootstrapUndetermined},
+		{"anthropic signature delta", `{"type":"content_block_delta","delta":{"type":"signature_delta","signature":"s"}}`, bootstrapUndetermined},
 		{"anthropic message_start", `{"type":"message_start","message":{}}`, bootstrapUndetermined},
 		{"anthropic ping", `{"type":"ping"}`, bootstrapUndetermined},
 		{"anthropic message_delta usage", `{"type":"message_delta","usage":{"output_tokens":3}}`, bootstrapUndetermined},
 		// Gemini SSE candidates.
 		{"gemini text part", `{"candidates":[{"content":{"parts":[{"text":"ok"}]}}]}`, bootstrapOutput},
 		{"gemini empty candidates", `{"candidates":[]}`, bootstrapUndetermined},
+		{"gemini signature-only part", `{"candidates":[{"content":{"parts":[{"thoughtSignature":"s"}]}}]}`, bootstrapUndetermined},
+		{"gemini empty text part", `{"candidates":[{"content":{"parts":[{"text":""}]}}]}`, bootstrapUndetermined},
 		// Rejections.
 		{"nested error object", `{"error":{"message":"server_is_overloaded"}}`, bootstrapReject},
 		{"flat string error", `{"error":"overloaded"}`, bootstrapReject},

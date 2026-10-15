@@ -138,6 +138,10 @@ type ContentCallback func(content string)
 
 type ThinkingCallback func(active bool)
 
+// FirstOutputCallback is the one-shot notification fired at the first
+// output-bearing frame of a stream (NENYA-178). See SetOnFirstEffectiveOutput.
+type FirstOutputCallback func()
+
 // SSEObserver receives notifications about SSE events during streaming.
 // Observers are called after transformation, so they see what the client receives;
 // the Raw line is the PRE-filter upstream bytes when a filter rewrote the chunk
@@ -164,28 +168,34 @@ type SSEEvent struct {
 
 // SSETransformingReader reads from an SSE source and transforms SSE data lines.
 type SSETransformingReader struct {
-	src                 io.Reader
-	scanner             *bufio.Scanner
-	transformer         ResponseTransformer
-	onUsage             UsageCallback
-	onContent           ContentCallback
-	onThinking          ThinkingCallback
-	observer            SSEObserver
-	streamFilter        *StreamFilter
-	exfilGuard          *ExfilGuard
-	canaryWatcher       *CanaryWatcher
-	streamEntropyFilter *StreamEntropyFilter
-	buffer              []byte
-	pos                 int
-	err                 error
-	closed              bool
-	sawDone             bool
-	sawContent          bool
-	sawFinishReason     bool
-	injectedError       bool
-	ctx                 context.Context
-	poolBuf             *[]byte
-	logger              *slog.Logger
+	src         io.Reader
+	scanner     *bufio.Scanner
+	transformer ResponseTransformer
+	onUsage     UsageCallback
+	onContent   ContentCallback
+	onThinking  ThinkingCallback
+	// onFirstOutput fires once, at the first output-bearing frame (NENYA-178):
+	// the TTFT clock's stop signal. See SetOnFirstEffectiveOutput.
+	onFirstOutput        FirstOutputCallback
+	ttftIncludeReasoning bool
+	observer             SSEObserver
+	streamFilter         *StreamFilter
+	exfilGuard           *ExfilGuard
+	canaryWatcher        *CanaryWatcher
+	streamEntropyFilter  *StreamEntropyFilter
+	buffer               []byte
+	pos                  int
+	err                  error
+	closed               bool
+	sawDone              bool
+	// sawContent is the terminal-state notion of content (see
+	// trackStreamProgress), deliberately narrower than HasEffectiveOutput.
+	sawContent      bool
+	sawFinishReason bool
+	injectedError   bool
+	ctx             context.Context
+	poolBuf         *[]byte
+	logger          *slog.Logger
 
 	// last* fields track token usage between consecutive usage chunks.
 	// They are accessed only from the single goroutine calling Read().
@@ -332,6 +342,26 @@ func (r *SSETransformingReader) SetOnContent(cb ContentCallback) {
 	r.onContent = cb
 }
 
+// SetOnFirstEffectiveOutput registers a one-shot callback fired at the first
+// output-bearing frame of the stream (NENYA-178). "Effective output" is defined
+// by HasEffectiveOutput, which is the single source of truth for the per-format
+// rules: an OpenAI content/tool-call/refusal/audio delta, an Anthropic
+// content_block_delta carrying text or tool input (or a tool block opening), a
+// Gemini part bearing text/functionCall/inlineData/executableCode/
+// codeExecutionResult/fileData — never a keepalive, an empty
+// delta, a block close, a role-only handshake, or a usage/metadata frame. With
+// includeReasoning the first reasoning delta fires it too (a reasoning-only
+// stream still produced a first token); the default excludes reasoning frames so
+// slow-thinking models are not measured as slow-to-first-token.
+// The callback fires at most once per stream (the hook is cleared when it
+// fires, and by ResetCounters). A nil callback is a no-op. Configuration is
+// per-reader: callers that reuse a reader must re-register after ResetCounters
+// if they still need the signal.
+func (r *SSETransformingReader) SetOnFirstEffectiveOutput(cb FirstOutputCallback, includeReasoning bool) {
+	r.onFirstOutput = cb
+	r.ttftIncludeReasoning = includeReasoning
+}
+
 // SetOnThinking sets a callback that receives thinking state changes.
 // The callback is invoked when a stream starts or ends emitting reasoning/thinking tokens.
 func (r *SSETransformingReader) SetOnThinking(cb ThinkingCallback) {
@@ -368,6 +398,11 @@ func (r *SSETransformingReader) ResetCounters() {
 	r.injectedError = false
 	r.emittedAny = false
 	r.lastLineBlank = false
+	// Clear the one-shot first-output hook (NENYA-178): a caller that reuses
+	// this reader must re-register it to measure a further stream. The
+	// reasoning-inclusion flag is configuration, not stream state, so it
+	// survives the reset.
+	r.onFirstOutput = nil
 	if r.pos >= len(r.buffer) {
 		r.releaseLineBuffer()
 	}
@@ -385,6 +420,20 @@ func (r *SSETransformingReader) SetSuppressCutError(v bool) {
 // signal has been observed in the stream. Used together with SawDone to
 // classify no-[DONE] endings: finish_reason without DONE is benign truncation;
 // content without finish_reason is a genuine cut.
+// trackStreamProgress records the terminal-state signals used to classify a
+// stream ending (SawContent/SawFinishReason) and to gate continuation and the
+// synthetic finish_reason.
+//
+// Deliberate divergence from HasEffectiveOutput (NENYA-178): this uses the
+// narrower ExtractDeltaContentFromMap (OpenAI delta.content) plus a reasoning
+// fallback, so a tool-call-only, array-content, or Gemini-native stream registers
+// no content here. The two notions are NOT interchangeable: sawContent also
+// drives isStreamCut and the continuation path, and the continuation capture is
+// parsed by the OpenAI-shaped bufferStreamResponse. Broadening sawContent would
+// therefore turn a Gemini-native cut into a "resumable" stream that immediately
+// gives up (gave_up_no_content) and writes a gateway_error instead of ending
+// cleanly. Unifying the notions needs its own item with continuation-format
+// coverage.
 func (r *SSETransformingReader) trackStreamProgress(transformed []byte) {
 	if r.sawContent && r.sawFinishReason {
 		return
@@ -1157,6 +1206,24 @@ func (r *SSETransformingReader) callUsageAndContentCallbacks(parsed map[string]i
 			r.onThinking(active)
 		}
 	}
+	// The TTFT clock stops at the first effective output frame, whatever the
+	// wire format (NENYA-178); reasoning-only frames count only when the
+	// operator opted in.
+	if r.onFirstOutput != nil && HasEffectiveOutput(parsed, r.ttftIncludeReasoning) {
+		r.fireFirstOutput()
+	}
+}
+
+// fireFirstOutput fires the one-shot first-output callback (NENYA-178).
+// Precondition: a hook is registered (the caller checks, so the per-frame cost
+// of the classifier is paid only while a clock is running).
+func (r *SSETransformingReader) fireFirstOutput() {
+	cb := r.onFirstOutput
+	r.onFirstOutput = nil
+	if cb == nil {
+		return
+	}
+	cb()
 }
 
 func (r *SSETransformingReader) handleNoTransformer(parsed map[string]interface{}, data []byte, origData []byte, line []byte) []byte {
