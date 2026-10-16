@@ -2,6 +2,7 @@ package routing
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"net/http"
 	"strings"
@@ -1027,5 +1028,57 @@ func TestTransformRequest_ForceSystemPromptDoesNotDisplaceCachedSystem(t *testin
 	second, ok := msgs[1].(map[string]interface{})
 	if !ok || second["content"] != "You are a helpful agent." {
 		t.Errorf("expected agent system prompt at index 1, got %v", msgs[1])
+	}
+}
+
+// TestTransformIncomingAnthropicNativeBodyWithoutType pins NENYA-171: a
+// real native Messages body carries no top-level "type" (a response
+// field), so it must be recognized by landmark (the top-level "system")
+// and converted WITHOUT losing the system prompt.
+func TestTransformIncomingAnthropicNativeBodyWithoutType(t *testing.T) {
+	body := []byte(`{
+		"model": "claude-sonnet-4",
+		"max_tokens": 64,
+		"system": [{"type":"text","text":"Be terse.","cache_control":{"type":"ephemeral","ttl":"1h"}}],
+		"messages": [{"role":"user","content":"hi"}]
+	}`)
+
+	converted, err := TransformIncomingAnthropicRequest(context.Background(), body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(converted) == string(body) {
+		t.Fatal("a native body must be converted, not passed through")
+	}
+	var openai map[string]interface{}
+	if unmarshalErr := json.Unmarshal(converted, &openai); unmarshalErr != nil {
+		t.Fatal(unmarshalErr)
+	}
+	msgs, ok := openai["messages"].([]interface{})
+	if !ok || len(msgs) == 0 {
+		t.Fatalf("converted body lost its messages: %s", converted)
+	}
+	found := false
+	for _, raw := range msgs {
+		msg, ok := raw.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		if msg["role"] == "system" && strings.Contains(msg["content"].(string), "Be terse.") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("the native system prompt was dropped in conversion: %s", converted)
+	}
+
+	// An OpenAI-only landmark bails out (no conversion).
+	openaiBody := []byte(`{"model":"gpt-4","max_completion_tokens":64,"system":"x","messages":[]}`)
+	kept, err := TransformIncomingAnthropicRequest(context.Background(), openaiBody)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(kept) != string(openaiBody) {
+		t.Fatalf("an OpenAI body with a system field must not be converted: %s", kept)
 	}
 }

@@ -520,11 +520,14 @@ func convertToAnthropicFormat(deps TransformDeps, payload map[string]interface{}
 		ttl = "ephemeral"
 	}
 	opts := adapter.CacheOpts{
-		System:    cacheSystem,
-		Tools:     cacheTools,
-		Messages:  cacheMessages,
-		Automatic: cacheAutomatic,
-		GlobalTTL: ttl,
+		// The egress canary marker varies every request: keep it out of
+		// the cache-marked system block (NENYA-171).
+		TrailingContextMarkers: []string{pipeline.CanaryPrefix},
+		System:                 cacheSystem,
+		Tools:                  cacheTools,
+		Messages:               cacheMessages,
+		Automatic:              cacheAutomatic,
+		GlobalTTL:              ttl,
 	}
 	if pc.CacheSystemTTL != nil {
 		opts.SystemTTL = *pc.CacheSystemTTL
@@ -535,13 +538,7 @@ func convertToAnthropicFormat(deps TransformDeps, payload map[string]interface{}
 	if pc.CacheMessagesTTL != nil {
 		opts.MessagesTTL = *pc.CacheMessagesTTL
 	}
-	if m, ok := deps.Catalog.Lookup(modelName); ok {
-		// Catalog-merged metadata (config overrides > discovered >
-		// static) is authoritative; only an explicit capability verdict
-		// overrides the adapter's family inference.
-		midConvo := m.HasCapability(discovery.CapMidConversationSystem)
-		opts.MidConversationSystem = &midConvo
-	}
+	applyMidConversationVerdict(deps, modelName, &opts)
 	return anthropicAdapter.ConvertOpenAIToAnthropicBody(payload, modelName, stream, opts)
 }
 
@@ -612,6 +609,22 @@ func TransformRequestForUpstream(deps TransformDeps, providerName, upstreamURL s
 	return newBody, finalModel, nil
 }
 
+// applyMidConversationVerdict sets the mid-conversation-system override
+// only when the catalog carries an EXPLICIT positive verdict (NENYA-171):
+// metadata without a verdict must not force the legacy hoisting path over
+// the adapter's family inference.
+func applyMidConversationVerdict(deps TransformDeps, modelName string, opts *adapter.CacheOpts) {
+	if deps.Catalog == nil {
+		return
+	}
+	m, ok := deps.Catalog.Lookup(modelName)
+	if !ok || !m.HasCapability(discovery.CapMidConversationSystem) {
+		return
+	}
+	midConvo := true
+	opts.MidConversationSystem = &midConvo
+}
+
 // CopyHeaders copies non-hop-by-hop headers from src to dst, filtering
 // out connection-specific headers (Connection, Content-Length, Transfer-Encoding, etc.).
 func CopyHeaders(src, dst http.Header) {
@@ -657,9 +670,19 @@ func TransformIncomingAnthropicRequest(ctx context.Context, body []byte) ([]byte
 		return nil, fmt.Errorf("failed to unmarshal request: %w", err)
 	}
 
+	// Native detection (NENYA-171): a top-level "type" is a RESPONSE field
+	// the Messages request schema does not define, so a real native body
+	// (model + max_tokens + messages + optional native system blocks) must
+	// also be recognized by landmark — otherwise it is treated as OpenAI
+	// and reverse-converted, silently dropping its system prompt.
 	_, hasType := anthropic["type"]
 	_, hasMessages := anthropic["messages"]
-	if !hasType || !hasMessages {
+	_, hasSystem := anthropic["system"]
+	nativeLandmarks := hasType || hasSystem
+	if !nativeLandmarks || !hasMessages {
+		return body, nil
+	}
+	if _, looksOpenAI := anthropic["max_completion_tokens"]; looksOpenAI {
 		return body, nil
 	}
 

@@ -181,3 +181,51 @@ func TestBuildUpstreamRequestForwardsSessionHeaderSet(t *testing.T) {
 		t.Errorf("unrelated header leaked upstream: %q", got)
 	}
 }
+
+// TestBuildUpstreamRequestForwardsAnthropicBeta pins the NENYA-171 1h-TTL
+// class: a client's Anthropic-Beta flags (extended cache TTL and friends)
+// are request options the upstream honors per flag, so dropping the header
+// would silently downgrade explicit cache options.
+func TestBuildUpstreamRequestForwardsAnthropicBeta(t *testing.T) {
+	providers := map[string]*config.Provider{
+		"anthropic": {
+			Name:      "anthropic",
+			URL:       "https://api.anthropic.com/v1/messages",
+			BaseURL:   "https://api.anthropic.com",
+			ApiFormat: "anthropic",
+			AuthStyle: "none",
+		},
+	}
+	gw := &gateway.NenyaGateway{
+		Config:    config.Config{},
+		Secrets:   &config.SecretsConfig{ClientToken: "client-token"},
+		Providers: providers,
+		Logger:    infra.SetupLogger(false),
+	}
+
+	src := http.Header{}
+	src.Set("Anthropic-Beta", "extended-cache-ttl-2025-04-11")
+
+	prx := &Proxy{}
+	upstreamReq, err := prx.buildUpstreamRequest(gw, context.Background(), "POST",
+		"https://api.anthropic.com/v1/messages", []byte(`{}`), "anthropic", "", "", src)
+	if err != nil {
+		t.Fatalf("failed to build upstream request: %v", err)
+	}
+	if got := upstreamReq.Header.Get("Anthropic-Beta"); got != "extended-cache-ttl-2025-04-11" {
+		t.Fatalf("Anthropic-Beta must be forwarded for explicit cache options: %q", got)
+	}
+
+	// Non-Anthropic targets must not receive the Anthropic-only header.
+	providers["openaiish"] = &config.Provider{
+		Name: "openaiish", URL: "https://api.openai.com/v1/chat/completions", AuthStyle: "none",
+	}
+	other, err := prx.buildUpstreamRequest(gw, context.Background(), "POST",
+		"https://api.openai.com/v1/chat/completions", []byte(`{}`), "openaiish", "", "", src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := other.Header.Get("Anthropic-Beta"); got != "" {
+		t.Fatalf("Anthropic-Beta must not leak to non-Anthropic targets: %q", got)
+	}
+}

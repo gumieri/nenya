@@ -114,9 +114,17 @@ func (e *httpError) Error() string { return e.Message }
 // Returns the parsed payload, source format ("openai" or "anthropic"), and an error if parsing fails.
 func (p *Proxy) parseRequestBody(gw *gateway.NenyaGateway, r *http.Request, bodyBytes []byte) (map[string]any, string, *httpError) {
 	sourceFormat := "openai"
-	// Hot-path peek (NENYA-35): scan for the top-level "type" field without
-	// unmarshaling the whole request into a map.
-	if _, hasType := util.ExtractTopLevelField(bodyBytes, "type"); hasType {
+	// Hot-path peek (NENYA-35): scan for the native request landmarks
+	// without unmarshaling the whole request into a map. "type" is a
+	// RESPONSE field the Messages request schema does not define, so a
+	// native body is also recognized by its top-level "system" (NENYA-171:
+	// without the landmark such a body was treated as OpenAI and its system
+	// prompt silently dropped). OpenAI-only fields rule the native shape
+	// out.
+	_, hasType := util.ExtractTopLevelField(bodyBytes, "type")
+	_, hasSystem := util.ExtractTopLevelField(bodyBytes, "system")
+	_, openAIOnly := util.ExtractTopLevelField(bodyBytes, "max_completion_tokens")
+	if (hasType || hasSystem) && !openAIOnly {
 		converted, err := routing.TransformIncomingAnthropicRequest(r.Context(), bodyBytes)
 		if err != nil {
 			gw.Logger.Warn("failed to convert Anthropic request", "err", err)
@@ -1392,6 +1400,19 @@ func (p *Proxy) bufferedEgressScreen(gw *gateway.NenyaGateway, w http.ResponseWr
 	return true
 }
 
+// anthropicFormatTarget reports whether a provider speaks the Anthropic
+// wire format, so Anthropic-only request-option headers are only forwarded
+// there (NENYA-171).
+func anthropicFormatTarget(gw *gateway.NenyaGateway, providerName string) bool {
+	if gw == nil || providerName == "" {
+		return false
+	}
+	if p, ok := gw.Providers[providerName]; ok && p != nil {
+		return p.ApiFormat == "anthropic"
+	}
+	return false
+}
+
 func (p *Proxy) buildUpstreamRequest(gw *gateway.NenyaGateway, ctx context.Context, method, url string, body []byte, providerName, modelName, preselectedCredential string, srcHeaders http.Header) (*http.Request, error) {
 	req, err := http.NewRequestWithContext(ctx, method, url, bytes.NewBuffer(body))
 	if err != nil {
@@ -1399,6 +1420,16 @@ func (p *Proxy) buildUpstreamRequest(gw *gateway.NenyaGateway, ctx context.Conte
 	}
 	if err := routing.InjectAPIKeyWithGatewayCtx(ctx, providerName, modelName, gw, req.Header, preselectedCredential); err != nil {
 		return nil, fmt.Errorf("API key injection failed: %w", err)
+	}
+	// Anthropic beta flags (the extended-cache-TTL class among others) are
+	// request options the upstream honors per flag: forward them only on
+	// Anthropic-format dispatches (an OpenAI-compatible endpoint would not
+	// know the header), so an explicit client cache option is not silently
+	// downgraded (NENYA-171).
+	if anthropicFormatTarget(gw, providerName) {
+		if beta := srcHeaders.Get("Anthropic-Beta"); beta != "" {
+			req.Header.Set("Anthropic-Beta", beta)
+		}
 	}
 	// Every dispatch path shares this allowlist, so the session-header
 	// sanitation runs here too (NENYA-143): an unusable value would make

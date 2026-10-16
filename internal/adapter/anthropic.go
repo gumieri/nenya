@@ -38,6 +38,13 @@ type CacheOpts struct {
 	// catalog/config-driven metadata can steer legacy hoisting either
 	// way.
 	MidConversationSystem *bool
+	// TrailingContextMarkers lists content substrings identifying
+	// gateway-injected, REQUEST-VARYING trailer messages (the egress
+	// canary marker): they are never hoisted into the cache-marked system
+	// block (that would change the cached prefix every request and miss
+	// every breakpoint) and stay at the tail, unmarked, so the tripwire
+	// still reaches the upstream (NENYA-171).
+	TrailingContextMarkers []string
 }
 
 // getSystemTTL returns the effective TTL for the system breakpoint.
@@ -92,8 +99,9 @@ func GetAnthropicAdapter() *AnthropicAdapter {
 }
 
 // ConvertOpenAIToAnthropicBody converts an OpenAI-format request body
-// (as a parsed map) to the Anthropic Messages API format.
-// CacheOpts controls cache_control marker injection and per-breakpoint TTLs.
+// (as a parsed map) to the Anthropic Messages API format. CacheOpts
+// controls cache_control marker injection, per-breakpoint TTLs, and the
+// request-varying trailer exclusions.
 func (a *AnthropicAdapter) ConvertOpenAIToAnthropicBody(openai map[string]interface{}, model string, stream bool, opts CacheOpts) map[string]interface{} {
 	return a.convertOpenAIToAnthropic(openai, model, stream, opts)
 }
@@ -223,7 +231,7 @@ func (a *AnthropicAdapter) convertOpenAIToAnthropic(openai map[string]interface{
 		if midConvoSystem {
 			systemHoist = a.systemHoistCount(msgs)
 		}
-		anthropic["messages"] = a.convertMessages(msgs, systemHoist, midConvoSystem)
+		anthropic["messages"] = a.convertMessages(msgs, systemHoist, midConvoSystem, opts.TrailingContextMarkers)
 	}
 
 	if tools, ok := openai["tools"].([]interface{}); ok && len(tools) > 0 {
@@ -238,18 +246,25 @@ func (a *AnthropicAdapter) convertOpenAIToAnthropic(openai map[string]interface{
 
 	if opts.Automatic {
 		// Automatic caching lets Anthropic place and advance a single
-		// breakpoint; no block-level markers are injected.
+		// breakpoint; no block-level markers are injected. The system
+		// prompt must still be hoisted: returning before setSystemPrompt
+		// silently dropped it (NENYA-171).
+		if hasMessages {
+			a.setSystemPrompt(openai, anthropic, false, opts.getSystemTTL(), systemHoist, midConvoSystem, opts.TrailingContextMarkers)
+		}
 		anthropic["cache_control"] = buildCacheControl(opts.getSystemTTL())
 		return anthropic
 	}
 
 	if hasMessages {
-		a.setSystemPrompt(openai, anthropic, opts.System, opts.getSystemTTL(), systemHoist, midConvoSystem)
+		a.setSystemPrompt(openai, anthropic, opts.System, opts.getSystemTTL(), systemHoist, midConvoSystem, opts.TrailingContextMarkers)
 	}
 
+	var claimedMarker map[string]interface{}
 	if opts.Messages {
-		a.injectMessageCache(anthropic, opts.getMessagesTTL())
+		claimedMarker = a.injectMessageCache(anthropic, opts.getMessagesTTL())
 	}
+	capCacheMarkers(anthropic, claimedMarker)
 
 	return anthropic
 }
@@ -282,7 +297,7 @@ func (a *AnthropicAdapter) systemHoistCount(msgs []interface{}) int {
 	return len(msgs)
 }
 
-func (a *AnthropicAdapter) setSystemPrompt(openai, anthropic map[string]interface{}, cacheSystem bool, ttl string, hoistCount int, midConvoSystem bool) {
+func (a *AnthropicAdapter) setSystemPrompt(openai, anthropic map[string]interface{}, cacheSystem bool, ttl string, hoistCount int, midConvoSystem bool, markers []string) {
 	msgs, ok := openai["messages"].([]interface{})
 	if !ok {
 		return
@@ -293,7 +308,7 @@ func (a *AnthropicAdapter) setSystemPrompt(openai, anthropic map[string]interfac
 		}
 		msgs = msgs[:hoistCount]
 	}
-	systemParts := a.extractSystemMessages(msgs)
+	systemParts := a.extractSystemMessages(msgs, markers)
 	if len(systemParts) == 0 {
 		return
 	}
@@ -375,26 +390,122 @@ func (a *AnthropicAdapter) budgetForEffort(effort string, min, max int) int {
 	return budget
 }
 
-func (a *AnthropicAdapter) injectMessageCache(anthropic map[string]interface{}, ttl string) {
+// injectMessageCache claims the gateway's message-level breakpoint and
+// returns the block it claimed (nil when it left the position alone — a
+// client marker is the client's). The claimed block is a COPY: the
+// converted body may alias the caller's payload (reused across failover
+// targets), and an Anthropic-only marker must not leak into later
+// OpenAI-format bodies (NENYA-171).
+func (a *AnthropicAdapter) injectMessageCache(anthropic map[string]interface{}, ttl string) map[string]interface{} {
 	msgs, ok := anthropic["messages"].([]interface{})
 	if !ok || len(msgs) < 2 {
-		return
+		return nil
 	}
 
 	targetMsg, ok := msgs[len(msgs)-2].(map[string]interface{})
 	if !ok {
-		return
+		return nil
 	}
 
 	content, ok := targetMsg["content"].([]interface{})
 	if !ok || len(content) == 0 {
-		return
+		return nil
 	}
 
 	lastBlock, ok := content[len(content)-1].(map[string]interface{})
-	if ok {
-		lastBlock["cache_control"] = buildCacheControl(ttl)
+	if !ok {
+		return nil
 	}
+	if _, clientMarked := lastBlock["cache_control"]; clientMarked {
+		// The client stated its own breakpoint (possibly 1h): keep it
+		// instead of downgrading to the configured default.
+		return nil
+	}
+	claimed := make(map[string]interface{}, len(lastBlock)+1)
+	for k, v := range lastBlock {
+		claimed[k] = v
+	}
+	claimed["cache_control"] = buildCacheControl(ttl)
+	content[len(content)-1] = claimed
+	return claimed
+}
+
+// capCacheMarkers enforces Anthropic's four-breakpoint limit: when
+// passthrough client markers plus the gateway's own exceed the budget, the
+// gateway's markers are dropped first (message, then tools, then system) —
+// a client's explicit placement wins over the gateway's default, so the
+// API never sees a request it would reject with 400 (NENYA-171).
+// claimedMarker is the exact block injectMessageCache claimed (nil when the
+// position holds a client marker, which is never touched).
+func capCacheMarkers(anthropic map[string]interface{}, claimedMarker map[string]interface{}) {
+	if countCacheMarkers(anthropic) <= maxAnthropicCacheMarkers {
+		return
+	}
+	if claimedMarker != nil {
+		delete(claimedMarker, "cache_control")
+	}
+	if countCacheMarkers(anthropic) <= maxAnthropicCacheMarkers {
+		return
+	}
+	if tools, ok := anthropic["tools"].([]interface{}); ok && len(tools) > 0 {
+		if last, ok := tools[len(tools)-1].(map[string]interface{}); ok {
+			delete(last, "cache_control")
+		}
+	}
+	if countCacheMarkers(anthropic) <= maxAnthropicCacheMarkers {
+		return
+	}
+	if system, ok := anthropic["system"].([]interface{}); ok && len(system) > 0 {
+		if last, ok := system[len(system)-1].(map[string]interface{}); ok {
+			delete(last, "cache_control")
+		}
+	}
+}
+
+// maxAnthropicCacheMarkers is the API's per-request breakpoint limit.
+const maxAnthropicCacheMarkers = 4
+
+// countCacheMarkers counts cache_control markers at the positions the
+// Anthropic API accepts (system blocks, the last tool block, message
+// content blocks) — a tool input_schema property or a tool_use argument
+// that happens to be named cache_control is not a breakpoint (NENYA-171).
+func countCacheMarkers(anthropic map[string]interface{}) int {
+	n := 0
+	if system, ok := anthropic["system"].([]interface{}); ok {
+		n += countBlockMarkers(system)
+	}
+	if tools, ok := anthropic["tools"].([]interface{}); ok && len(tools) > 0 {
+		if last, ok := tools[len(tools)-1].(map[string]interface{}); ok {
+			if _, marked := last["cache_control"]; marked {
+				n++
+			}
+		}
+	}
+	if msgs, ok := anthropic["messages"].([]interface{}); ok {
+		for _, raw := range msgs {
+			msg, ok := raw.(map[string]interface{})
+			if !ok {
+				continue
+			}
+			if content, ok := msg["content"].([]interface{}); ok {
+				n += countBlockMarkers(content)
+			}
+		}
+	}
+	return n
+}
+
+// countBlockMarkers counts cache_control keys among content blocks.
+func countBlockMarkers(blocks []interface{}) int {
+	n := 0
+	for _, raw := range blocks {
+		if block, ok := raw.(map[string]interface{}); ok {
+			if _, marked := block["cache_control"]; marked {
+				n++
+			}
+		}
+	}
+	return n
 }
 
 func (a *AnthropicAdapter) copyOpenAIFields(openai, anthropic map[string]interface{}) {
@@ -423,11 +534,14 @@ func (a *AnthropicAdapter) copyOpenAIFields(openai, anthropic map[string]interfa
 	}
 }
 
-func (a *AnthropicAdapter) extractSystemMessages(msgs []interface{}) []string {
+func (a *AnthropicAdapter) extractSystemMessages(msgs []interface{}, markers []string) []string {
 	var systemParts []string
 	for _, msgRaw := range msgs {
 		msg, ok := msgRaw.(map[string]interface{})
 		if !ok {
+			continue
+		}
+		if isTrailingContextMarker(msg, markers) {
 			continue
 		}
 		if role, _ := msg["role"].(string); role == "system" {
@@ -435,6 +549,28 @@ func (a *AnthropicAdapter) extractSystemMessages(msgs []interface{}) []string {
 		}
 	}
 	return systemParts
+}
+
+// isTrailingContextMarker reports whether a message carries a
+// request-varying gateway trailer (the egress canary marker): those are
+// excluded from the cached system block and kept at the tail (NENYA-171).
+func isTrailingContextMarker(msg map[string]interface{}, markers []string) bool {
+	if len(markers) == 0 {
+		return false
+	}
+	text, ok := msg["content"].(string)
+	if !ok {
+		return false
+	}
+	for _, marker := range markers {
+		// Match the gateway's marker SHAPE (prefix plus the internal-ref
+		// frame), not a bare substring a client might merely mention
+		// (NENYA-171).
+		if marker != "" && strings.Contains(text, "[internal-ref] "+marker) {
+			return true
+		}
+	}
+	return false
 }
 
 func (a *AnthropicAdapter) extractSystemContent(content interface{}) []string {
@@ -478,7 +614,7 @@ func (a *AnthropicAdapter) convertToolChoice(tc interface{}, anthropic map[strin
 	}
 }
 
-func (a *AnthropicAdapter) convertMessages(msgs []interface{}, systemHoist int, midConvoSystem bool) []interface{} {
+func (a *AnthropicAdapter) convertMessages(msgs []interface{}, systemHoist int, midConvoSystem bool, markers []string) []interface{} {
 	result := make([]interface{}, 0, len(msgs))
 	var lastAssistantToolIDs map[string]bool
 
@@ -491,10 +627,27 @@ func (a *AnthropicAdapter) convertMessages(msgs []interface{}, systemHoist int, 
 		role, _ := msg["role"].(string)
 
 		if role == "system" {
-			if i < systemHoist || !midConvoSystem {
+			if (i < systemHoist || !midConvoSystem) && !isTrailingContextMarker(msg, markers) {
 				// Hoisted into the top-level system prompt (legacy
 				// models hoist every system message regardless of
-				// position; capable models hoist only the head run).
+				// position; capable models hoist only the head run). A
+				// request-varying gateway trailer is never hoisted: it
+				// stays at the tail, unmarked (NENYA-171).
+				continue
+			}
+			if isTrailingContextMarker(msg, markers) && !midConvoSystem {
+				// Legacy hoisting models do not accept a system role
+				// inside messages; the request-varying trailer is emitted
+				// as a trailing USER message with flat text so the
+				// tripwire still reaches the upstream (NENYA-171).
+				text := strings.Join(a.extractSystemContent(msg["content"]), "\n\n")
+				result = append(result, map[string]interface{}{
+					"role": "user",
+					"content": []interface{}{map[string]interface{}{
+						"type": "text",
+						"text": text,
+					}},
+				})
 				continue
 			}
 			// Mid-conversation system reminder: keep in place with
