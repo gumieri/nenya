@@ -814,3 +814,32 @@ type lruOnlySelector struct {
 func (s *lruOnlySelector) SelectCredentialForModel(ctx context.Context, provider, model string) (string, string, bool) {
 	return s.cred, s.account, true
 }
+
+// TestAgentStatePerAgentThresholds pins NENYA-204 end to end: the
+// agents config's failure_threshold drives the shared breaker per
+// circuit key — two agents with different thresholds trip at different
+// failure counts, and an agent omitting the field inherits the default.
+func TestAgentStatePerAgentThresholds(t *testing.T) {
+	as := NewAgentStateWithConfig(testLogger(), nil, nil, map[string]config.AgentConfig{
+		"fast": {FailureThreshold: 2},
+		"slow": {},
+	})
+
+	for i := 0; i < 2; i++ {
+		as.CB.RecordFailure("fast:prov:model")
+	}
+	if as.CB.Allow("fast:prov:model") {
+		t.Fatal("fast did not trip at its configured failure_threshold of 2")
+	}
+
+	for i := 0; i < 4; i++ {
+		as.CB.RecordFailure("slow:prov:model")
+	}
+	if !as.CB.Allow("slow:prov:model") {
+		t.Fatal("slow tripped before the default failure threshold")
+	}
+	as.CB.RecordFailure("slow:prov:model")
+	if as.CB.Allow("slow:prov:model") {
+		t.Fatal("slow did not trip at the default failure threshold")
+	}
+}

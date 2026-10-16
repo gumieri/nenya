@@ -85,10 +85,15 @@ type circuit struct {
 // sweep. Memory is therefore bounded by cap + the number of simultaneously
 // non-Closed circuits.
 type CircuitBreaker struct {
-	mu                  sync.Mutex
-	circuits            map[string]*circuit
-	failureThreshold    uint32
-	successThreshold    uint32
+	mu               sync.Mutex
+	circuits         map[string]*circuit
+	failureThreshold uint32
+	successThreshold uint32
+	// thresholdLookup resolves per-key thresholds (NENYA-204): the
+	// per-agent failure/success thresholds by circuit key. Nil or a
+	// zero field inherits the global values above. Installed by
+	// AgentState from the agents config.
+	thresholdLookup     func(key string) (failure, success int)
 	halfOpenMaxRequests uint32
 	cooldown            time.Duration
 	onStateChange       func(key string, from, to State)
@@ -113,6 +118,49 @@ type CircuitBreaker struct {
 	evictions   uint64
 }
 
+// SetThresholdLookup installs a per-key threshold resolver: for a
+// circuit key (agent:provider:model) it returns the failure/success
+// thresholds to apply, with 0 meaning "inherit the global value"
+// (NENYA-204 — per-agent thresholds in the agents config). Nil (the
+// default) uses the global values for every key.
+//
+// Concurrency: guarded by cb.mu like the sibling setters; intended to be
+// installed at construction, before traffic (the gateway installs it
+// while building AgentState).
+func (cb *CircuitBreaker) SetThresholdLookup(fn func(key string) (failure, success int)) {
+	cb.mu.Lock()
+	defer cb.mu.Unlock()
+	cb.thresholdLookup = fn
+}
+
+// thresholdsFor resolves the effective thresholds for a key.
+func (cb *CircuitBreaker) thresholdsFor(key string) (failure, success uint32) {
+	if cb.thresholdLookup != nil {
+		f, s := cb.thresholdLookup(key)
+		failure, success = cb.failureThreshold, cb.successThreshold
+		// Clamp before the conversion: a hand-built lookup (config
+		// validation rejects these at boot) must not wrap the uint32.
+		if f > 0 {
+			failure = clampThreshold(f)
+		}
+		if s > 0 {
+			success = clampThreshold(s)
+		}
+		return failure, success
+	}
+	return cb.failureThreshold, cb.successThreshold
+}
+
+// clampThreshold bounds a resolved threshold at math.MaxUint32 so the
+// conversion cannot wrap (CWE-190 guard; config validation rejects
+// out-of-range values at boot).
+func clampThreshold(v int) uint32 {
+	if v >= int(^uint32(0)) {
+		return ^uint32(0)
+	}
+	return uint32(v)
+}
+
 // NewCircuitBreaker creates a CircuitBreaker with the given thresholds.
 // Zero or negative values are replaced with sensible defaults.
 func NewCircuitBreaker(failureThreshold, successThreshold int, halfOpenMaxRequests uint32, cooldown time.Duration, onStateChange func(string, State, State)) *CircuitBreaker {
@@ -133,6 +181,7 @@ func NewCircuitBreaker(failureThreshold, successThreshold int, halfOpenMaxReques
 		circuits:            make(map[string]*circuit),
 		failureThreshold:    uint32(failureThreshold),
 		successThreshold:    uint32(successThreshold),
+		thresholdLookup:     nil, // installed per gateway config (NENYA-204)
 		halfOpenMaxRequests: halfOpenMaxRequests,
 		cooldown:            cooldown,
 		onStateChange:       onStateChange,
@@ -377,7 +426,7 @@ func (cb *CircuitBreaker) RecordFailure(key string, cooldownOverride ...time.Dur
 		c.counts.ConsecutiveSuccesses = 0
 		c.lastChange = now
 
-		if c.counts.ConsecutiveFailures >= cb.failureThreshold {
+		if failureThreshold, _ := cb.thresholdsFor(key); c.counts.ConsecutiveFailures >= failureThreshold {
 			cb.setState(c, StateOpen, key)
 			c.expiry = now.Add(cd)
 		}
@@ -461,7 +510,7 @@ func (cb *CircuitBreaker) RecordFailureWithStatus(key string, status int, body s
 		c.counts.ConsecutiveSuccesses = 0
 		c.lastChange = now
 
-		if c.counts.ConsecutiveFailures >= cb.failureThreshold {
+		if failureThreshold, _ := cb.thresholdsFor(key); c.counts.ConsecutiveFailures >= failureThreshold {
 			cb.setState(c, StateOpen, key)
 		}
 
@@ -549,7 +598,7 @@ func (cb *CircuitBreaker) RecordSuccess(key string) {
 			c.halfOpenInflight--
 		}
 
-		if c.counts.ConsecutiveSuccesses >= cb.successThreshold {
+		if _, successThreshold := cb.thresholdsFor(key); c.counts.ConsecutiveSuccesses >= successThreshold {
 			cb.setState(c, StateClosed, key)
 			cb.backoff.Reset(key)
 			delete(cb.modelLocks, key)
@@ -586,7 +635,7 @@ func (cb *CircuitBreaker) RecordSuccessWithModel(key, model string) {
 			c.halfOpenInflight--
 		}
 
-		if c.counts.ConsecutiveSuccesses >= cb.successThreshold {
+		if _, successThreshold := cb.thresholdsFor(key); c.counts.ConsecutiveSuccesses >= successThreshold {
 			cb.setState(c, StateClosed, key)
 			cb.backoff.Reset(model)
 			delete(cb.modelLocks, model)

@@ -946,6 +946,7 @@ func ValidateConfigReferences(cfg *Config, secrets *SecretsConfig, logger *slog.
 	}
 	var errs []string
 	errs = append(errs, validateStickySessionTTL(cfg.Agents)...)
+	errs = append(errs, validateAgentBreakerThresholds(cfg.Agents)...)
 	errs = append(errs, validateAgentSlowCallThresholds(cfg.Agents)...)
 	errs = append(errs, validateAgentMCPReferences(cfg)...)
 	errs = append(errs, validateSecretAgentScopes(cfg, secrets, logger)...)
@@ -1415,6 +1416,33 @@ func validateSlowCallThresholdSeconds(v *int, field string) []string {
 		return []string{fmt.Sprintf("%s exceeds maximum allowed value (%d seconds / 24 hours), got %d", field, MaxSlowCallThresholdSeconds, *v)}
 	}
 	return nil
+}
+
+// MaxBreakerThreshold caps agents.<name>.failure_threshold/success_threshold:
+// beyond uint32 range the breaker's counter arithmetic would wrap (CWE-190),
+// and anything near it is a configuration mistake rather than an intent.
+const MaxBreakerThreshold = 1 << 30
+
+// validateAgentBreakerThresholds rejects negative or over-range per-agent
+// breaker thresholds (NENYA-204) instead of silently reinterpreting them:
+// 0/omitted inherits the defaults, so a negative value is a configuration
+// mistake, and an out-of-range value would wrap the uint32 conversion.
+func validateAgentBreakerThresholds(agents map[string]AgentConfig) []string {
+	var errs []string
+	for name, agent := range agents {
+		for field, value := range map[string]int{
+			"failure_threshold": agent.FailureThreshold,
+			"success_threshold": agent.SuccessThreshold,
+		} {
+			if value < 0 {
+				errs = append(errs, fmt.Sprintf("agents[%q].%s must be non-negative (0 inherits the default), got %d", name, field, value))
+			}
+			if value > MaxBreakerThreshold {
+				errs = append(errs, fmt.Sprintf("agents[%q].%s exceeds the maximum allowed value (%d), got %d", name, field, MaxBreakerThreshold, value))
+			}
+		}
+	}
+	return errs
 }
 
 // validateAgentSlowCallThresholds applies the slow-call threshold rules to every

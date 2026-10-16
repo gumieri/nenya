@@ -103,12 +103,15 @@ type selectorCacheEntry struct {
 // NewAgentState creates an AgentState with a circuit breaker and
 // optional state-change logging.
 func NewAgentState(logger *slog.Logger, metrics *infra.Metrics) *AgentState {
-	return NewAgentStateWithConfig(logger, metrics, nil)
+	return NewAgentStateWithConfig(logger, metrics, nil, nil)
 }
 
 // NewAgentStateWithConfig creates an AgentState with a circuit breaker using
-// governance configuration for halfOpenMaxRequests.
-func NewAgentStateWithConfig(logger *slog.Logger, metrics *infra.Metrics, govConfig *config.GovernanceConfig) *AgentState {
+// governance configuration for halfOpenMaxRequests and the agents config
+// for per-agent breaker thresholds (NENYA-204): agents.<name>.failure_threshold
+// and success_threshold resolve per circuit key (agent:provider:model);
+// 0/omitted inherits the defaults.
+func NewAgentStateWithConfig(logger *slog.Logger, metrics *infra.Metrics, govConfig *config.GovernanceConfig, agents map[string]config.AgentConfig) *AgentState {
 	onChange := func(key string, from, to resilience.State) {
 		switch to {
 		case resilience.StateOpen:
@@ -142,6 +145,23 @@ func NewAgentStateWithConfig(logger *slog.Logger, metrics *infra.Metrics, govCon
 			time.Duration(DefaultAgentCooldownSec)*time.Second,
 			onChange,
 		),
+	}
+
+	// Per-agent breaker thresholds (NENYA-204): the agent is the first
+	// colon-separated field of the circuit key.
+	if len(agents) > 0 {
+		as.CB.SetThresholdLookup(func(key string) (int, int) {
+			// The agent is the first colon-separated field of the key;
+			// IndexByte avoids a per-request allocation on the hot path.
+			agentName := key
+			if idx := strings.IndexByte(key, ':'); idx >= 0 {
+				agentName = key[:idx]
+			}
+			if agent, ok := agents[agentName]; ok {
+				return agent.FailureThreshold, agent.SuccessThreshold
+			}
+			return 0, 0
+		})
 	}
 
 	// Quota-class cooldown floor (NENYA-41): built-in default 10s (matches

@@ -1295,3 +1295,26 @@ func TestValidateStreamStallTimeoutSeconds(t *testing.T) {
 		})
 	}
 }
+
+// TestValidateAgentBreakerThresholds pins the NENYA-204 boot validation:
+// negative breaker thresholds are rejected (0 inherits the default) and
+// over-range values are rejected before the breaker's uint32 conversion
+// could wrap.
+func TestValidateAgentBreakerThresholds(t *testing.T) {
+	errs := validateAgentBreakerThresholds(map[string]AgentConfig{
+		"ok":       {FailureThreshold: 2, SuccessThreshold: 3},
+		"inherit":  {},
+		"negative": {FailureThreshold: -1},
+		"negSucc":  {SuccessThreshold: -2},
+		"huge":     {FailureThreshold: 1 << 31},
+	})
+	joined := strings.Join(errs, "; ")
+	if len(errs) != 3 {
+		t.Fatalf("expected 3 errors, got %d: %s", len(errs), joined)
+	}
+	for _, want := range []string{`agents["negative"]`, `agents["negSucc"]`, `agents["huge"]`} {
+		if !strings.Contains(joined, want) {
+			t.Fatalf("missing %s in: %s", want, joined)
+		}
+	}
+}

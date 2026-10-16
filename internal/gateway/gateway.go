@@ -593,7 +593,7 @@ func buildGateway(cfg config.Config, secrets *config.SecretsConfig, secureClient
 		ClientTokenRef:     clientTokenRef,
 		ProviderKeyTokens:  providerKeyTokens,
 	}
-	gw.AgentState = routing.NewAgentStateWithConfig(logger, metrics, &cfg.Governance)
+	gw.AgentState = routing.NewAgentStateWithConfig(logger, metrics, &cfg.Governance, cfg.Agents)
 	gw.SessionRouter = gw.AgentState.SessionRouter
 	gw.AccountManager = auth.NewAccountManager(nil)
 	for name, pcfg := range cfg.Providers {
