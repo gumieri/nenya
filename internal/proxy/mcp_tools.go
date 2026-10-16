@@ -267,7 +267,7 @@ func (acc *sseAccumulator) processChunk(data string) {
 		acc.streamError = true
 	}
 
-	if m, ok := chunk["model"].(string); ok && m != "" {
+	if m := stream.ResponseModelOf(chunk); m != "" {
 		acc.model = m
 	}
 

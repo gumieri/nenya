@@ -238,10 +238,11 @@ for its summarized re-dispatch). Observed ratios: `/statsz` →
 
 A cost total is explainable without reading code:
 
-- `nenya_cost_micro_usd_total{model,window="peak|offpeak"}` — per-model cost
-  split by the window it was billed at.
-- `nenya_cached_input_tokens_total{model,window}` — cache-hit input volume
-  under the same split.
+- `nenya_cost_micro_usd_total{model,window="peak|offpeak"}` — per-model cost split by the window it was billed at. The `model` label is the SERVED model when the upstream reported a different one that has a rate card (see Silent substitution below).
+- `nenya_cached_input_tokens_total{model,window}` — cache-hit input volume under the same split and the same served-model attribution.
+- `nenya_model_substitutions_total{requested,served}` — upstream responses that reported a different model than the one routed; the `served` label is catalog-bounded (a non-catalog model folds into `unknown`).
+
+  **Silent substitution (NENYA-173):** aggregators sometimes return a different model than the one routed. When the upstream reports a model (streaming usage chunks, Anthropic `message_start.message.model`, buffered response bodies), a mismatch is warned once per dispatch and counted; cost is attributed to the SERVED model's rate card when one exists (the requested card otherwise, flagged in the debug log), so per-model rate cards and budgets stay honest. A mid-stream attribution switch books each model's own cumulative (never a negative delta), so cost already recorded under the routed card before the switch stays there. Token counters (`nenya_tokens_estimated_total`, the `/statsz` per-model counters) and the calibration loop deliberately stay on the ROUTED model — they measure the request's configured model, while cost follows what was actually served. A provider that always reports a versioned id (`gpt-4o-2024-11-20` for a routed `gpt-4o`) warns on every request; use the exact model id in the config or a discovery-mapped id to avoid the noise.
 - `/statsz` → `cost_model` — each provider's declared peak windows
   (`{start, end, weekdays_only}`) and each catalog model's rate card
   (`input_cost_per_1m`, `output_cost_per_1m`, `peak_*`,

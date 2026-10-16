@@ -146,7 +146,7 @@ func TestUsageRecordedForEveryProviderShape(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			gw := usageFixtureGW()
-			recordNonStreamingUsage(context.Background(), gw, fixtureTarget(), "agent", tc.usage)
+			recordNonStreamingUsage(context.Background(), gw, fixtureTarget(), "agent", "", tc.usage)
 
 			model := fixtureStats(t, gw)
 			if got := statValue(t, model, "output_tokens"); got != tc.wantOutput {
@@ -174,13 +174,13 @@ func TestUsageRecordedForEveryProviderShape(t *testing.T) {
 // added twice when an OpenAI-style decomposition is present.
 func TestUsageCacheDimensionsCountedOnceInCost(t *testing.T) {
 	baseline := usageFixtureGW()
-	recordNonStreamingUsage(context.Background(), baseline, fixtureTarget(), "agent",
+	recordNonStreamingUsage(context.Background(), baseline, fixtureTarget(), "agent", "",
 		map[string]interface{}{"prompt_tokens": 100.0, "completion_tokens": 20.0})
 	baseCost := baseline.CostTracker.GetCostMicroUSD("fixture-model")
 
 	t.Run("cache-write is not extra input", func(t *testing.T) {
 		gw := usageFixtureGW()
-		recordNonStreamingUsage(context.Background(), gw, fixtureTarget(), "agent",
+		recordNonStreamingUsage(context.Background(), gw, fixtureTarget(), "agent", "",
 			map[string]interface{}{
 				"prompt_tokens": 100.0, "completion_tokens": 20.0,
 				"cache_creation_tokens": 10.0, "prompt_cache_hit_tokens": 60.0,
@@ -203,13 +203,13 @@ func TestUsageCacheDimensionsCountedOnceInCost(t *testing.T) {
 		// equivalent explicit OpenAI total (input 160 = 90 + 60 read + 10
 		// written, 60 of it cached).
 		ambiguous := usageFixtureGW()
-		recordNonStreamingUsage(context.Background(), ambiguous, fixtureTarget(), "agent",
+		recordNonStreamingUsage(context.Background(), ambiguous, fixtureTarget(), "agent", "",
 			map[string]interface{}{
 				"prompt_tokens": 90.0, "completion_tokens": 20.0,
 				"cache_read_input_tokens": 60.0, "cache_creation_input_tokens": 10.0,
 			})
 		explicit := usageFixtureGW()
-		recordNonStreamingUsage(context.Background(), explicit, fixtureTarget(), "agent",
+		recordNonStreamingUsage(context.Background(), explicit, fixtureTarget(), "agent", "",
 			map[string]interface{}{
 				"prompt_tokens": 160.0, "completion_tokens": 20.0,
 				"prompt_cache_hit_tokens": 60.0, "cache_creation_tokens": 10.0,
@@ -228,13 +228,13 @@ func TestUsageCacheDimensionsCountedOnceInCost(t *testing.T) {
 		// folded total must still price the same input volume as an explicit
 		// OpenAI total of input+read+write.
 		native := usageFixtureGW()
-		recordNonStreamingUsage(context.Background(), native, fixtureTarget(), "agent",
+		recordNonStreamingUsage(context.Background(), native, fixtureTarget(), "agent", "",
 			map[string]interface{}{
 				"input_tokens": 30.0, "output_tokens": 20.0,
 				"cache_read_input_tokens": 60.0, "cache_creation_input_tokens": 10.0,
 			})
 		openaiShape := usageFixtureGW()
-		recordNonStreamingUsage(context.Background(), openaiShape, fixtureTarget(), "agent",
+		recordNonStreamingUsage(context.Background(), openaiShape, fixtureTarget(), "agent", "",
 			map[string]interface{}{
 				"prompt_tokens": 100.0, "completion_tokens": 20.0,
 				"prompt_cache_hit_tokens": 60.0, "cache_creation_tokens": 10.0,
@@ -251,13 +251,13 @@ func TestUsageCacheDimensionsCountedOnceInCost(t *testing.T) {
 // INTO the completion total, so the cost matches the equivalent OpenAI shape.
 func TestReasoningTokensAreInsideOutputTotal(t *testing.T) {
 	withReasoning := usageFixtureGW()
-	recordNonStreamingUsage(context.Background(), withReasoning, fixtureTarget(), "agent",
+	recordNonStreamingUsage(context.Background(), withReasoning, fixtureTarget(), "agent", "",
 		map[string]interface{}{
 			"prompt_tokens": 10.0, "completion_tokens": 20.0,
 			"completion_tokens_details": map[string]interface{}{"reasoning_tokens": 12.0},
 		})
 	withoutReasoning := usageFixtureGW()
-	recordNonStreamingUsage(context.Background(), withoutReasoning, fixtureTarget(), "agent",
+	recordNonStreamingUsage(context.Background(), withoutReasoning, fixtureTarget(), "agent", "",
 		map[string]interface{}{"prompt_tokens": 10.0, "completion_tokens": 20.0})
 	if a, b := withReasoning.CostTracker.GetCostMicroUSD("fixture-model"), withoutReasoning.CostTracker.GetCostMicroUSD("fixture-model"); a != b {
 		t.Errorf("reasoning changed the cost (%d vs %d): it must be a subset of the output total", a, b)
@@ -266,12 +266,12 @@ func TestReasoningTokensAreInsideOutputTotal(t *testing.T) {
 	// Gemini native: candidates exclude the thoughts, so 40 + 15 must price
 	// like an OpenAI completion total of 55.
 	gemini := usageFixtureGW()
-	recordNonStreamingUsage(context.Background(), gemini, fixtureTarget(), "agent",
+	recordNonStreamingUsage(context.Background(), gemini, fixtureTarget(), "agent", "",
 		map[string]interface{}{
 			"promptTokenCount": 25.0, "candidatesTokenCount": 40.0, "thoughtsTokenCount": 15.0,
 		})
 	equivalent := usageFixtureGW()
-	recordNonStreamingUsage(context.Background(), equivalent, fixtureTarget(), "agent",
+	recordNonStreamingUsage(context.Background(), equivalent, fixtureTarget(), "agent", "",
 		map[string]interface{}{"prompt_tokens": 25.0, "completion_tokens": 55.0})
 	if a, b := gemini.CostTracker.GetCostMicroUSD("fixture-model"), equivalent.CostTracker.GetCostMicroUSD("fixture-model"); a != b {
 		t.Errorf("gemini cost = %d, equivalent openai cost = %d; thought tokens must be inside the completion total", a, b)

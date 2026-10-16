@@ -22,14 +22,34 @@ import (
 // CUMULATIVE totals and only the cost delta is recorded, keeping the recorded
 // series exact regardless of chunk boundaries.
 func (p *Proxy) makeUsageCallback(ctx context.Context, gw *gateway.NenyaGateway, target routing.UpstreamTarget, agentName string) func(stream.UsageData) {
-	var accInput, accCached, accCompletion int64
-	var lastCost float64
-	var lastCached int64
+	acc := &streamCostAccumulator{}
+	// Silent-substitution detection (NENYA-173): usage Data carries the
+	// served model (the reader remembers the last one any chunk reported);
+	// a mismatch is warned and counted once per dispatch, and the served
+	// model's rate card prices the stream when one exists. The attribution
+	// is re-resolved whenever the served model changes, so a model that
+	// only appears on a later chunk still prices the cost correctly.
+	var servedModel string
+	substitutionReported := false
+	attr := &streamAttribution{}
+	// reportOnce surfaces the first mismatch exactly once per dispatch, on
+	// OBSERVATION (a dispatch with no CostTracker or no usage chunk must
+	// still report).
+	reportOnce := func() {
+		if !substitutionReported && servedModel != "" && servedModel != target.Model {
+			substitutionReported = true
+			reportModelSubstitution(gw, target, servedModel)
+		}
+	}
 	// spendClaimed makes the billing request count one per dispatch: the first
 	// non-zero cost delta claims the request, later usage chunks only add spend
 	// (NENYA-193).
 	spendClaimed := false
 	return func(u stream.UsageData) {
+		if u.Model != "" {
+			servedModel = u.Model
+			reportOnce()
+		}
 		completion, prompt := u.CompletionTokens, u.PromptTokens
 		cacheHit, cacheMiss := u.CacheHitTokens, u.CacheMissTokens
 		cacheCreation := u.CacheCreationTokens
@@ -53,20 +73,20 @@ func (p *Proxy) makeUsageCallback(ctx context.Context, gw *gateway.NenyaGateway,
 		// advanced independently so a cache-only delta is still priced.
 		usageSeen := prompt > 0 || completion > 0 || cacheHit > 0 || cacheCreation > 0 || cacheMiss > 0
 		if usageSeen {
-			accInput += int64(prompt)
-			accCached += int64(cacheHit)
-			accCompletion += int64(completion)
+			acc.Input += int64(prompt)
+			acc.Cached += int64(cacheHit)
+			acc.Completion += int64(completion)
 		}
 		cost := 0.0
 		if usageSeen && gw.CostTracker != nil {
-			if dm, ok := gw.ModelCatalog.Lookup(target.Model); ok && dm.Pricing != nil && dm.Pricing.HasStandardRate() {
-				cost = recordStreamCost(gw, target, dm.Pricing, accInput, accCached, accCompletion, &lastCost, &lastCached)
+			if a := attr.resolve(gw, target, servedModel); a.pricing != nil {
+				cost = recordStreamCost(gw, target, a.model, a.pricing, acc)
 			}
 		}
 		// The billing claim happens on usage presence, not on a priced cost:
 		// an unpriced model's dispatch is still one billable upstream request
 		// (NENYA-193).
-		recordStreamSpend(ctx, gw, target, cost, accInput, accCompletion, &spendClaimed, usageSeen)
+		recordStreamSpend(ctx, gw, target, cost, acc.Input, acc.Completion, &spendClaimed, usageSeen)
 	}
 }
 
@@ -98,27 +118,72 @@ func recordStreamUsageDimensions(gw *gateway.NenyaGateway, target routing.Upstre
 }
 
 // recordStreamCost prices the per-request cumulative usage and records only
-// the delta since the last chunk, so chunk boundaries cannot misattribute the
-// cached/uncached split. The pricing window is sampled at the recording
+// the delta since the last chunk for the attributed model, so chunk
+// boundaries cannot misattribute the cached/uncached split. The pricing window is sampled at the recording
 // instant (docs/COST_MODEL.md, billing approximation). It returns the cost
 // delta for the billing side, which claims one request per dispatch (NENYA-193).
-func recordStreamCost(gw *gateway.NenyaGateway, target routing.UpstreamTarget,
-	pricing *discovery.PricingEntry, accInput, accCached, accCompletion int64, lastCost *float64, lastCached *int64) float64 {
+// streamAttribution tracks the resolved cost attribution for a streaming
+// dispatch, re-resolving whenever the served model changes (NENYA-173): a
+// model revealed on a later chunk must re-price the remaining usage.
+type streamAttribution struct {
+	resolved bool
+	served   string
+	attr     costAttribution
+}
+
+// resolve returns the attribution for the current served model, resolving
+// it only when the model changed since the last call.
+func (a *streamAttribution) resolve(gw *gateway.NenyaGateway, target routing.UpstreamTarget, servedModel string) costAttribution {
+	if !a.resolved || a.served != servedModel {
+		model, pricing := attributeModel(gw, target, servedModel)
+		a.attr = costAttribution{model: model, pricing: pricing}
+		a.served = servedModel
+		a.resolved = true
+	}
+	return a.attr
+}
+
+// streamCostAccumulator carries the per-dispatch cumulative usage so only
+// deltas are billed, plus the last-recorded cumulative cost and cached
+// input PER ATTRIBUTED MODEL: a mid-stream model switch re-prices the
+// cumulative under the new card, and booking that against the old model's
+// recorded total would produce a negative delta (a silent budget credit
+// whenever the served model is cheaper).
+type streamCostAccumulator struct {
+	Input      int64
+	Cached     int64
+	Completion int64
+	LastCost   map[string]float64
+	LastCached map[string]int64
+}
+
+// recordStreamCost prices the per-request cumulative usage under costModel
+// and records only the delta since that MODEL's last recorded cumulative
+// (NENYA-173: a mid-stream attribution switch books the served model's
+// full cumulative, never a negative delta against the previous model).
+func recordStreamCost(gw *gateway.NenyaGateway, target routing.UpstreamTarget, costModel string,
+	pricing *discovery.PricingEntry, acc *streamCostAccumulator) float64 {
+	if acc.LastCost == nil {
+		acc.LastCost = make(map[string]float64)
+	}
+	if acc.LastCached == nil {
+		acc.LastCached = make(map[string]int64)
+	}
 	now := time.Now()
-	u := pricingUsage(gw, target, int(accInput), int(accCached), int(accCompletion), now)
+	u := pricingUsage(gw, target, int(acc.Input), int(acc.Cached), int(acc.Completion), now)
 	total := pricing.CalculateCost(u)
-	cost := total - *lastCost
-	*lastCost = total
+	cost := total - acc.LastCost[costModel]
+	acc.LastCost[costModel] = total
 	if cost == 0 {
 		return 0
 	}
 	label := windowLabel(u.Peak)
-	gw.Metrics.RecordCostWindow(target.Model, label, cost)
-	if cachedDelta := accCached - *lastCached; cachedDelta > 0 {
-		gw.Metrics.RecordCachedInputTokens(target.Model, label, int(cachedDelta))
+	gw.Metrics.RecordCostWindow(costModel, label, cost)
+	if cachedDelta := acc.Cached - acc.LastCached[costModel]; cachedDelta > 0 {
+		gw.Metrics.RecordCachedInputTokens(costModel, label, int(cachedDelta))
 	}
-	*lastCached = accCached
-	gw.CostTracker.RecordUsage(target.Model, cost)
+	acc.LastCached[costModel] = acc.Cached
+	gw.CostTracker.RecordUsage(costModel, cost)
 	return cost
 }
 

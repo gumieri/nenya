@@ -1536,7 +1536,7 @@ func (p *Proxy) handleNonStreamingResponse(gw *gateway.NenyaGateway, w http.Resp
 	// treated as a failed attempt records nothing here — it is re-dispatched,
 	// and the retry's own dispatch is what gets recorded.
 	if usage, ok := stream.UsageMapFromChunk(responseMap); ok {
-		recordNonStreamingUsage(r.Context(), gw, target, agentName, usage)
+		recordNonStreamingUsage(r.Context(), gw, target, agentName, stream.ResponseModelOf(responseMap), usage)
 	}
 
 	if sourceFormat == "anthropic" && target.Format != "anthropic" {

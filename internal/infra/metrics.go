@@ -42,6 +42,9 @@ type Metrics struct {
 	// pricing window (peak|offpeak) — the operator-side explainability for
 	// time-of-day rate cards.
 	costByWindow sync.Map
+	// modelSubstitutions counts upstream responses whose reported model
+	// differs from the routed model (NENYA-173).
+	modelSubstitutions sync.Map
 	// cachedInputTokens records cache-hit input tokens by model and
 	// pricing window.
 	cachedInputByWindow sync.Map
@@ -615,13 +618,22 @@ func (m *Metrics) RecordCostWindow(model, window string, costUSD float64) {
 	if micro == 0 {
 		micro = 1
 	}
-	if micro < 0 {
-		// Cumulative cost series are monotonic (rates are clamped
-		// non-negative); a negative delta is float noise — skip it.
-		return
-	}
 	e := getOrCreateEntry(&m.costByWindow, map[string]string{"model": model, "window": window})
 	e.value.Add(uint64(micro))
+}
+
+// RecordModelSubstitution counts an upstream response whose reported model
+// differs from the requested/routed model (NENYA-173): aggregators
+// substitute silently, which corrupts per-model rate cards, budgets, and
+// calibration if unrecorded. The caller bounds the served label to
+// catalog-known models plus the literal "unknown" (the raw upstream string
+// never becomes a series). Nil-safe.
+func (m *Metrics) RecordModelSubstitution(requested, served string) {
+	if m == nil || requested == "" || served == "" || requested == served {
+		return
+	}
+	e := getOrCreateEntry(&m.modelSubstitutions, map[string]string{"requested": requested, "served": served})
+	e.value.Add(1)
 }
 
 // RecordCachedInputTokens records cache-hit input tokens under the pricing
@@ -1593,6 +1605,8 @@ func (m *Metrics) writePipelineMetrics(w io.Writer) {
 		"System One low-confidence cascade events by judgment name.", &m.judgmentCascades)
 	m.writeCounterMap(w, "nenya_cost_micro_usd_total",
 		"Per-model request cost in microUSD by pricing window (peak|offpeak).", &m.costByWindow)
+	m.writeCounterMap(w, "nenya_model_substitutions_total",
+		"Upstream responses whose reported model differs from the routed model (silent substitution).", &m.modelSubstitutions)
 	m.writeCounterMap(w, "nenya_cached_input_tokens_total",
 		"Cache-hit input tokens by model and pricing window.", &m.cachedInputByWindow)
 	m.writeCounterMap(w, "nenya_pipeline_window_applied_total",

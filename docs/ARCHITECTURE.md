@@ -341,7 +341,7 @@ Where it is used:
 - **Discovery** (`internal/discovery/merge.go`): static registry pricing
   surfaces as catalog pricing on every merge path; an attached external feed
   (OpenRouter) overrides the baseline but never wipes static peak/cached.
-- **Operator surface**: `nenya_cost_micro_usd_total{model,window}`,
+- **Operator surface**: `nenya_cost_micro_usd_total{model,window}` (the label is the SERVED model when the upstream substituted and a rate card exists), `nenya_model_substitutions_total{requested,served}`,
   `nenya_cached_input_tokens_total{model,window}`, and the `/statsz`
   `cost_model` section.
 

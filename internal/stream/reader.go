@@ -132,6 +132,10 @@ type UsageData struct {
 	// names and no cache decomposition, so the cache semantics were inferred
 	// (NENYA-167). Observability only: it does not change the deltas.
 	AmbiguousCacheSemantics bool
+	// Model is the model string the upstream reported on the usage-bearing
+	// chunk (empty when the provider reports none). Silent-substitution
+	// detection compares it with the routed model (NENYA-173).
+	Model string
 }
 
 type ContentCallback func(content string)
@@ -192,6 +196,11 @@ type SSETransformingReader struct {
 	err         error
 	closed      bool
 	sawDone     bool
+	// lastResponseModel is the last model an upstream chunk reported (any
+	// chunk, not only usage-bearing ones — aggregators often omit it on
+	// the final usage-only chunk). Fed to the usage callback for
+	// silent-substitution detection (NENYA-173).
+	lastResponseModel string
 	// sawContent is the terminal-state notion of content (see
 	// trackStreamProgress), deliberately narrower than HasEffectiveOutput.
 	sawContent      bool
@@ -1272,6 +1281,11 @@ func (r *SSETransformingReader) applyContentFilters(data []byte, parsed map[stri
 }
 
 func (r *SSETransformingReader) callUsageAndContentCallbacks(parsed map[string]interface{}) {
+	// Seed the response-model memory on EVERY parsed chunk (NENYA-173):
+	// aggregators often report the model on content chunks only, so
+	// reading it at the usage-emit point alone would miss the
+	// substitution.
+	_ = r.responseModel(parsed)
 	if parsed == nil {
 		return
 	}
@@ -1442,6 +1456,35 @@ func ExtractReasoningTokens(usage map[string]interface{}) int {
 	return 0
 }
 
+// ResponseModelOf returns the model an upstream response reports, across
+// wire shapes (NENYA-173): OpenAI/Gemini put it at the top level, an
+// Anthropic message_start nests it under "message" (and reports
+// "modelVersion" on some native shapes). Empty when the chunk carries
+// none. Exported so the buffered replay path reads the same surface.
+func ResponseModelOf(chunk map[string]interface{}) string {
+	if m, ok := chunk["model"].(string); ok && m != "" {
+		return m
+	}
+	if m, ok := chunk["modelVersion"].(string); ok && m != "" {
+		return m
+	}
+	if msg, ok := chunk["message"].(map[string]interface{}); ok {
+		if m, ok := msg["model"].(string); ok && m != "" {
+			return m
+		}
+	}
+	return ""
+}
+
+// responseModel returns the model for this chunk: the model it reports
+// when present, else the last model seen on the stream (NENYA-173).
+func (r *SSETransformingReader) responseModel(chunk map[string]interface{}) string {
+	if m := ResponseModelOf(chunk); m != "" {
+		r.lastResponseModel = m
+	}
+	return r.lastResponseModel
+}
+
 // extractUsageFromMap reads the usage object from an upstream chunk (in any of
 // the placements UsageMapFromChunk accepts) and emits the per-chunk deltas of
 // every dimension. The object is normalized by NormalizeUsageTotals first, so
@@ -1493,6 +1536,7 @@ func (r *SSETransformingReader) extractUsageFromMap(chunk map[string]interface{}
 		CacheMissTokens:     dCacheMiss,
 		CacheCreationTokens: dCacheCreation,
 		ReasoningTokens:     dReasoning,
+		Model:               r.responseModel(chunk),
 	})
 }
 

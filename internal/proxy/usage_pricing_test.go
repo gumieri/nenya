@@ -69,26 +69,26 @@ func TestRecordCostAndBilling_PeakAndCached(t *testing.T) {
 
 	// Peak: 1M input (no cache) at the peak input rate.
 	gwPeak := newGW([]config.PeakWindow{{Start: "00:00", End: "23:59"}})
-	recordCostAndBilling(ctx, gwPeak, target, 1_000_000, 0, 0)
+	recordCostAndBilling(ctx, gwPeak, target, "", 1_000_000, 0, 0)
 	if got := gwPeak.CostTracker.GetCostMicroUSD("deepseek-flash"); got != 300_000 {
 		t.Errorf("peak cost = %d microUSD, want 300000", got)
 	}
 
 	// Off-peak (window-less provider): same load at the standard rate — 2x cheaper.
 	gwOff := newGW(nil)
-	recordCostAndBilling(ctx, gwOff, target, 1_000_000, 0, 0)
+	recordCostAndBilling(ctx, gwOff, target, "", 1_000_000, 0, 0)
 	if got := gwOff.CostTracker.GetCostMicroUSD("deepseek-flash"); got != 150_000 {
 		t.Errorf("off-peak cost = %d microUSD, want 150000", got)
 	}
 
 	// Cached half the input off-peak: cheaper than the same uncached load.
 	gwCached := newGW(nil)
-	recordCostAndBilling(ctx, gwCached, target, 1_000_000, 500_000, 1_000_000)
+	recordCostAndBilling(ctx, gwCached, target, "", 1_000_000, 500_000, 1_000_000)
 	if got := gwCached.CostTracker.GetCostMicroUSD("deepseek-flash"); got != 700_000 {
 		t.Errorf("cached cost = %d microUSD, want 700000", got)
 	}
 	gwUncached := newGW(nil)
-	recordCostAndBilling(ctx, gwUncached, target, 1_000_000, 0, 1_000_000)
+	recordCostAndBilling(ctx, gwUncached, target, "", 1_000_000, 0, 1_000_000)
 	if got := gwUncached.CostTracker.GetCostMicroUSD("deepseek-flash"); got != 750_000 {
 		t.Errorf("uncached cost = %d microUSD, want 750000", got)
 	}
@@ -118,7 +118,7 @@ func TestRecordNonStreamingUsage_CacheReadThreading(t *testing.T) {
 		"total_tokens":            900_000.0,
 		"cache_read_input_tokens": 100_000.0,
 	}
-	recordNonStreamingUsage(context.Background(), gw, target, "agent", usage)
+	recordNonStreamingUsage(context.Background(), gw, target, "agent", "", usage)
 	// billed input = 1_000_000: 100k cached at 0.10 (0.01) + 900k at 1.0 (0.90) = 0.91
 	if got := gw.CostTracker.GetCostMicroUSD("m"); got != 910_000 {
 		t.Errorf("cost = %d microUSD, want 910000", got)

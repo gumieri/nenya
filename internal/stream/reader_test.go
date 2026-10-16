@@ -628,3 +628,34 @@ func TestSSETransformingReader_SetMaxTransformedBytes(t *testing.T) {
 		t.Errorf("expected reset to default %d on zero input, got %d", DefaultMaxTransformedEventBytes, reader.maxTransformedBytes)
 	}
 }
+
+// TestReaderResponseModelSeedsOnAnyChunk pins the NENYA-173 reader wiring:
+// the response model is remembered from ANY chunk that reports it (an
+// aggregator often puts it on a content chunk and omits it on the
+// usage-only final chunk), and the usage callback still receives it.
+func TestReaderResponseModelSeedsOnAnyChunk(t *testing.T) {
+	frames := []string{
+		`data: {"id":"1","model":"served-x","choices":[{"delta":{"content":"hi"}}]}`,
+		`data: {"id":"1","choices":[{"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":5,"completion_tokens":2,"total_tokens":7}}`,
+		"data: [DONE]",
+	}
+	src := strings.NewReader(strings.Join(frames, "\n\n") + "\n\n")
+	reader := NewSSETransformingReader(src, nil, context.Background())
+	var got []UsageData
+	reader.SetOnUsage(func(u UsageData) { got = append(got, u) })
+	buf := make([]byte, 4096)
+	for {
+		n, err := reader.Read(buf)
+		_ = n
+		if err != nil {
+			break
+		}
+	}
+	if len(got) == 0 {
+		t.Fatal("no usage callback fired")
+	}
+	last := got[len(got)-1]
+	if last.Model != "served-x" {
+		t.Fatalf("the model from an earlier non-usage chunk must be remembered: %q", last.Model)
+	}
+}
