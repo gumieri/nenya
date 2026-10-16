@@ -52,8 +52,12 @@ type ProviderAccount struct {
 	LastError        *ErrorRecord         `json:"last_error,omitempty"`
 	LastUsed         time.Time            `json:"last_used"`
 	ModelLocks       map[string]time.Time `json:"model_locks"`
-	BackoffLevel     int                  `json:"backoff_level"`
-	CreatedAt        time.Time            `json:"created_at"`
+	// ModelBackoffLevels mirrors BackoffLevel per model for model-scoped
+	// cooldowns (NENYA-170): repeated model-scoped 429s escalate the
+	// scoped lock duration without charging the account-level backoff.
+	ModelBackoffLevels map[string]int `json:"model_backoff_levels,omitempty"`
+	BackoffLevel       int            `json:"backoff_level"`
+	CreatedAt          time.Time      `json:"created_at"`
 }
 
 // String returns a safe string representation with the credential redacted.

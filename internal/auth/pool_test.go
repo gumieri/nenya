@@ -2,6 +2,7 @@ package auth
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math/rand/v2"
 	"sync"
@@ -1012,5 +1013,90 @@ func TestAccountConfigWeightFlowsToPoolSelection(t *testing.T) {
 	}
 	if counts["heavy"] < 270 || counts["heavy"] > 330 {
 		t.Fatalf("weight-3 account got %d/%d picks, want ~300", counts["heavy"], picks)
+	}
+}
+
+// TestApplyErrorForModelScopesCooldown pins NENYA-170: a model-scoped 429
+// locks only that model — the account's sibling models stay servable and
+// the account itself is not benched — while an account-scoped quota
+// signal benches the whole credential as before.
+func TestApplyErrorForModelScopesCooldown(t *testing.T) {
+	p := NewAccountPool("gateway", []*config.ProviderAccount{
+		newTestAccount("acc-1", "cred-1"),
+	})
+
+	// Model-scoped 429: the message names the model with a per-model quota.
+	msg := "Rate limit exceeded for model gemini-2.5-pro: GenerateRequestsPerDayPerProjectPerModel"
+	if err := p.ApplyErrorForModel("acc-1", "gemini-2.5-pro", 429, msg); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := p.SelectAccountExcluding(context.Background(), "gemini-2.5-flash", nil); err != nil {
+		t.Fatalf("sibling model must stay servable after a model-scoped 429: %v", err)
+	}
+	if _, err := p.SelectAccountByID(context.Background(), "acc-1", "gemini-2.5-flash"); err != nil {
+		t.Fatalf("the sibling model must be fully servable after a model-scoped 429: %v", err)
+	}
+	if _, err := p.SelectAccountByID(context.Background(), "acc-1", "gemini-2.5-pro"); err == nil {
+		t.Fatal("the scoped model must be locked")
+	} else {
+		var noAvail *NoAvailableAccountError
+		if !errors.As(err, &noAvail) || noAvail.Reason != ReasonModelLocked {
+			t.Fatalf("expected model-locked reason, got: %v", err)
+		}
+	}
+	acc := p.GetAccount("acc-1")
+	if acc.Status != config.AccountStatusActive {
+		t.Fatalf("model-scoped 429 must not error the account: %v", acc.Status)
+	}
+	if !acc.RateLimitedUntil.IsZero() {
+		t.Fatalf("model-scoped 429 must not bench the account: %v", acc.RateLimitedUntil)
+	}
+
+	// Account-scoped quota signal benches the whole credential.
+	if err := p.ApplyErrorForModel("acc-1", "gemini-2.5-pro", 429, "insufficient_quota: you have exceeded your quota"); err != nil {
+		t.Fatal(err)
+	}
+	acc = p.GetAccount("acc-1")
+	if acc.RateLimitedUntil.IsZero() {
+		t.Fatal("account-scoped quota signal must bench the account")
+	}
+	// The account-scoped signal also errors the account status, so the
+	// sibling model is refused outright (inactive precedes cooling).
+	if _, err := p.SelectAccountByID(context.Background(), "acc-1", "gemini-2.5-flash"); err == nil {
+		t.Fatal("sibling model must be refused after an account-scoped signal")
+	}
+
+	// The scoped signal itself: table-driven over the tight spellings.
+	cases := []struct {
+		name    string
+		message string
+		model   string
+		want    bool
+	}{
+		{"per-model", "GenerateRequestsPerDayPerProjectPerModel exceeded", "m", true},
+		{"permodel", "quotaId: PerModelDailyRequests", "m", true},
+		{"model_name field", `model_name "m" is over its limit`, "m", true},
+		{"json model field", `{"model": "m", "limit": "10 req"}`, "m", true},
+		{"model id + rate context", "rate limit exceeded for model m1", "m1", true},
+		{"model id without rate context", "payload for model m1 accepted", "m1", false},
+		{"json model field without rate context", `{"model": "m"}`, "m", false},
+		{"empty model", "rate limit for model x", "", false},
+		{"unrecognized body", "too many requests", "m", false},
+	}
+	for _, tc := range cases {
+		if got := isModelScopedQuotaSignal(tc.message, tc.model); got != tc.want {
+			t.Errorf("%s: isModelScopedQuotaSignal = %v, want %v", tc.name, got, tc.want)
+		}
+	}
+
+	// Unrecognized 429 bodies fail safe to the account scope.
+	p2 := NewAccountPool("gateway", []*config.ProviderAccount{
+		newTestAccount("acc-2", "cred-2"),
+	})
+	if err := p2.ApplyErrorForModel("acc-2", "some-model", 429, "too many requests"); err != nil {
+		t.Fatal(err)
+	}
+	if acc2 := p2.GetAccount("acc-2"); acc2.RateLimitedUntil.IsZero() {
+		t.Fatal("an unrecognized 429 body must fail safe to the account scope")
 	}
 }

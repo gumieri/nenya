@@ -65,6 +65,36 @@ type ErrorDecision struct {
 	NewBackoffLevel int
 }
 
+// isModelScopedQuotaSignal reports whether an upstream error body scopes
+// its quota/rate limit to a specific MODEL rather than the credential
+// (NENYA-170): such a signal must bench only that model, not the
+// account's other models. Deliberately tight — per-model quota field
+// spellings: "per-model"/"permodel" (Gemini's
+// GenerateRequestsPerDayPerProjectPerModel family), "model_name", a
+// `"model":` JSON field, or the model id itself — the latter two only
+// alongside a rate/quota context word, since aggregators echo the model
+// as request metadata for ACCOUNT-scoped limits. An unrecognized body
+// fails safe to the account scope. The signal is only as trustworthy as
+// the provider: a crafted body can keep a dead credential un-benched.
+func isModelScopedQuotaSignal(message, model string) bool {
+	msg := strings.ToLower(message)
+	if strings.Contains(msg, "per-model") || strings.Contains(msg, "permodel") {
+		return true
+	}
+	if strings.Contains(msg, "model_name") {
+		return true
+	}
+	rateContext := strings.Contains(msg, "quota") || strings.Contains(msg, "limit") ||
+		strings.Contains(msg, "rate") || strings.Contains(msg, "requests")
+	if !rateContext {
+		return false
+	}
+	if strings.Contains(msg, `"model":`) {
+		return true
+	}
+	return model != "" && strings.Contains(msg, "model") && strings.Contains(msg, strings.ToLower(model))
+}
+
 // ClassifyError returns an ErrorDecision based on the HTTP status code and message.
 // The message is inspected for provider-specific patterns (quota exhaustion,
 // context length, etc.) to fine-tune the cooldown.

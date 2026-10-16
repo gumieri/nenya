@@ -793,14 +793,14 @@ For high-volume providers with multiple API keys or credentials, configure a mul
 **AccountPool Behavior:**
 
 - **Weighted LRU Selection**: Least-recently-used selection with mutex-protected access; per-account `weight` (default 1) proportions traffic via weighted-fair-queuing clock advance — a weight-3 account receives ~3x the traffic of a weight-1 account. Selection is over account identity, never filtered-slice position, so retries, cooldowns, and exclusions cannot re-seat rotation and skew load (fairness verified by regression harness: ≤1.2x busiest-to-quietest under random filtering)
-- **Error Classification**: 6 error classes (auth, rate_limit, quota, capacity, server, unknown) with semantic cooldowns
+- **Error Classification**: classifier branches on auth (401/403), rate_limit (429), server (5xx), and unknown status classes with semantic cooldowns. **Cooldown scope follows the upstream signal (NENYA-170)**: a 429 whose body scopes the limit to a specific model (per-model quota fields, the model named in the message) locks only that model on the account (`model_locks`), leaving sibling models servable; any unrecognized signal fails safe to the account scope and benches the whole credential. Repeated model-scoped 429s escalate through a per-model backoff level (`model_backoff_levels`), lengthening the scoped lock without charging the account-level backoff
 - **Exponential Backoff**: Rate-limited and quota-exceeded accounts receive exponentially increasing backoff (±5% jitter)
 - **Model Locks**: Failed models on an account are locked until cooldown expires (tracked in `model_locks`)
 - **Graceful Degradation**: If multi-account is unavailable, falls back to legacy single-key path
 
 **Account Status Management:**
 
-Account state is persisted in `<provider>.accounts.json` files in the config directory:
+Account state is persisted in `<provider>.accounts.json` files in the config directory (deadlines serialize as RFC3339 wall time — Go's monotonic clock reading never survives the round-trip, and an expired-on-load deadline reconciles to servable):
 
 ```json
 [

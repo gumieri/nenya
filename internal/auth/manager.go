@@ -158,7 +158,36 @@ func (m *AccountManager) ReportError(provider, accountID string, status int, mes
 	}
 
 	if m.storage != nil {
-		account := pool.GetAccount(accountID)
+		account := pool.AccountSnapshot(accountID)
+		if account != nil {
+			return m.storage.SaveAccount(provider, account)
+		}
+	}
+
+	return nil
+}
+
+// ReportErrorForModel reports an error observed on a specific model
+// (NENYA-170): model-scoped signals lock only that model on the account,
+// leaving the account's other models servable; account-scoped signals
+// bench the credential as before. This is the entry point for
+// model-aware callers — the routing layer continues to bench per CoolKey
+// independently. Persists the account when storage is configured.
+func (m *AccountManager) ReportErrorForModel(provider, accountID, model string, status int, message string) error {
+	m.mu.RLock()
+	pool, ok := m.pools[provider]
+	m.mu.RUnlock()
+
+	if !ok {
+		return nil
+	}
+
+	if err := pool.ApplyErrorForModel(accountID, model, status, message); err != nil {
+		return err
+	}
+
+	if m.storage != nil {
+		account := pool.AccountSnapshot(accountID)
 		if account != nil {
 			return m.storage.SaveAccount(provider, account)
 		}

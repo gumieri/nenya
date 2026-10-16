@@ -3,6 +3,7 @@ package auth
 import (
 	"context"
 	"errors"
+	"net/http"
 	"sync"
 	"time"
 
@@ -252,9 +253,25 @@ func (p *AccountPool) isModelLocked(account *config.ProviderAccount, model strin
 	return now.Before(until)
 }
 
-// ApplyError applies an error state to the account.
-// Updates LastError, RateLimitedUntil, BackoffLevel, and Status based on error classification.
+// ApplyError applies an error state to the account: it delegates to
+// ApplyErrorForModel with an empty model, which is exactly the legacy
+// account-scope behavior. Updates LastError, RateLimitedUntil,
+// BackoffLevel, and Status based on error classification.
 func (p *AccountPool) ApplyError(accountID string, status int, message string) error {
+	return p.ApplyErrorForModel(accountID, "", status, message)
+}
+
+// ApplyErrorForModel applies an error observed on a specific model
+// (NENYA-170): when the upstream signal is MODEL-scoped — a 429 whose
+// body scopes the quota/rate limit to the model — only that model is
+// locked for the cooldown and the account's other models stay servable;
+// the account-level backoff and status are untouched. Repeated scoped
+// 429s escalate through the per-model backoff level
+// (ModelBackoffLevels). Any unrecognized signal fails safe to the
+// account scope: the whole credential benches as before. An empty model
+// always takes the account scope. Updates LastError and the scoped or
+// account-level cooldown/backoff state.
+func (p *AccountPool) ApplyErrorForModel(accountID, model string, status int, message string) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
@@ -269,18 +286,46 @@ func (p *AccountPool) ApplyError(accountID string, status int, message string) e
 		Timestamp: time.Now(),
 	}
 
-	// Classify error and set cooldown/backoff
-	decision := ClassifyError(status, message, account.BackoffLevel)
-
-	if decision.ShouldFallback {
-		account.BackoffLevel = decision.NewBackoffLevel
-		if decision.CooldownMs > 0 {
-			account.RateLimitedUntil = time.Now().Add(time.Duration(decision.CooldownMs) * time.Millisecond)
-		}
-		account.Status = config.AccountStatusError
+	// Classify error and set cooldown/backoff. The model-scoped path
+	// escalates through its OWN backoff level (ModelBackoffLevels,
+	// NENYA-170): repeated scoped 429s lengthen the model lock without
+	// charging the account-level backoff, and the scoped duration never
+	// inherits unrelated account history.
+	scoped := model != "" && status == http.StatusTooManyRequests && isModelScopedQuotaSignal(message, model)
+	backoffLevel := account.BackoffLevel
+	if scoped {
+		backoffLevel = account.ModelBackoffLevels[model]
 	}
+	decision := ClassifyError(status, message, backoffLevel)
+
+	if !decision.ShouldFallback {
+		return nil
+	}
+	if scoped {
+		applyModelScope(account, model, decision)
+		return nil
+	}
+	account.BackoffLevel = decision.NewBackoffLevel
+	if decision.CooldownMs > 0 {
+		account.RateLimitedUntil = time.Now().Add(time.Duration(decision.CooldownMs) * time.Millisecond)
+	}
+	account.Status = config.AccountStatusError
 
 	return nil
+}
+
+// applyModelScope locks the offending model for the classified cooldown
+// and records the escalated per-model backoff level (NENYA-170); the
+// account-level state is untouched.
+func applyModelScope(account *config.ProviderAccount, model string, decision ErrorDecision) {
+	if account.ModelLocks == nil {
+		account.ModelLocks = make(map[string]time.Time)
+	}
+	account.ModelLocks[model] = time.Now().Add(time.Duration(decision.CooldownMs) * time.Millisecond)
+	if account.ModelBackoffLevels == nil {
+		account.ModelBackoffLevels = make(map[string]int)
+	}
+	account.ModelBackoffLevels[model] = decision.NewBackoffLevel
 }
 
 // findAccount finds an account by ID under the lock.
@@ -308,6 +353,35 @@ func (p *AccountPool) ReportSuccess(accountID string) error {
 	account.RateLimitedUntil = time.Time{}
 	if account.Status == config.AccountStatusError {
 		account.Status = config.AccountStatusActive
+	}
+	return nil
+}
+
+// AccountSnapshot returns a deep copy of the account by ID, safe to
+// marshal (e.g. persistence) while the pool keeps mutating the live
+// state: json.Marshal of a ProviderAccount iterates the ModelLocks and
+// ModelBackoffLevels maps, which would race a concurrent ApplyError.
+func (p *AccountPool) AccountSnapshot(accountID string) *config.ProviderAccount {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+
+	for _, acc := range p.accounts {
+		if acc.ID == accountID {
+			snapshot := *acc
+			if acc.ModelLocks != nil {
+				snapshot.ModelLocks = make(map[string]time.Time, len(acc.ModelLocks))
+				for k, v := range acc.ModelLocks {
+					snapshot.ModelLocks[k] = v
+				}
+			}
+			if acc.ModelBackoffLevels != nil {
+				snapshot.ModelBackoffLevels = make(map[string]int, len(acc.ModelBackoffLevels))
+				for k, v := range acc.ModelBackoffLevels {
+					snapshot.ModelBackoffLevels[k] = v
+				}
+			}
+			return &snapshot
+		}
 	}
 	return nil
 }
@@ -367,6 +441,7 @@ func (p *AccountPool) ExpiredLocks() int {
 		for model, until := range acc.ModelLocks {
 			if now.After(until) {
 				delete(acc.ModelLocks, model)
+				delete(acc.ModelBackoffLevels, model)
 				count++
 			}
 		}
