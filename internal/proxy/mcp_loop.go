@@ -1002,16 +1002,29 @@ func (p *Proxy) applyExfilToBufferedSSE(gw *gateway.NenyaGateway, buf *bufferedS
 	var out []byte
 	blocked := false
 	changed := false
+	var lastContent map[string]interface{}
 	for _, line := range strings.Split(string(buf.rawBytes), "\n") {
 		if blocked && !strings.Contains(line, "usage") {
 			// After a block verdict only bookkeeping frames (usage) are
 			// kept; content frames are dropped with the violation.
 			continue
 		}
-		next, lineBlocked, lineChanged := p.guardBufferedLine(guard, line)
+		next, lineBlocked, lineChanged, lineContent := p.guardBufferedLine(guard, line)
 		blocked = blocked || lineBlocked
 		changed = changed || lineChanged
+		if lineContent != nil {
+			lastContent = lineContent
+		}
 		out = append(out, next...)
+	}
+	if !blocked {
+		// Stream end: the guard's held tail is final — drain it as a
+		// synthetic frame in the last content frame's shape (NENYA-205),
+		// so a held tail is withheld from the replay neither partially
+		// nor entirely.
+		var flushed bool
+		out, flushed = appendExfilFlushFrame(out, guard, lastContent)
+		changed = changed || flushed
 	}
 	if changed {
 		buf.rawBytes = out
@@ -1099,42 +1112,78 @@ func (p *Proxy) canaryBufferedLine(watcher *stream.CanaryWatcher, canary pipelin
 	return line + "\n", false, false
 }
 
+// appendExfilFlushFrame drains the guard's held tail at stream end and
+// inserts the synthetic frame ahead of the terminal [DONE] (no content
+// frame may follow the sentinel). Returns the buffer and whether it
+// changed.
+func appendExfilFlushFrame(out []byte, guard *stream.ExfilGuard, lastContent map[string]interface{}) ([]byte, bool) {
+	frame := stream.FlushExfilHeldFrame(guard, lastContent)
+	if frame == nil {
+		return out, false
+	}
+	// The frame ends with one newline; close the event with a second so
+	// it cannot merge with the [DONE] line into a single SSE event (a
+	// strict parser would then never see the sentinel).
+	frame = append(frame, '\n')
+	if idx := bytes.LastIndex(out, []byte("\ndata: [DONE]")); idx >= 0 {
+		// Anchor one line back: an occurrence of the sentinel literal
+		// inside a content frame must not redirect the insertion.
+		idx++
+		return append(out[:idx], append(frame, out[idx:]...)...), true
+	}
+	return append(out, frame...), true
+}
+
 // guardBufferedLine runs the guard over one buffered SSE line, returning
-// the (possibly rewritten) line, whether it triggered a block, and
-// whether it was rewritten.
-func (p *Proxy) guardBufferedLine(guard *stream.ExfilGuard, line string) (string, bool, bool) {
+// the (possibly rewritten) line, whether it triggered a block, whether
+// it was rewritten, and the parsed chunk when it carried model text
+// (the terminal flush mimics its shape).
+func (p *Proxy) guardBufferedLine(guard *stream.ExfilGuard, line string) (string, bool, bool, map[string]interface{}) {
 	// Tolerant field recognition (NENYA-197): see canaryBufferedLine.
 	value, isData := stream.SSEDataField([]byte(line))
 	if !isData {
-		return line + "\n", false, false
+		return line + "\n", false, false, nil
 	}
 	trimmed := strings.TrimSpace(string(value))
 	if trimmed == "" || trimmed == "[DONE]" {
-		return line + "\n", false, false
+		return line + "\n", false, false, nil
 	}
 	parsed := stream.ParseSSEChunk([]byte(trimmed))
 	if parsed == nil {
-		return line + "\n", false, false
+		return line + "\n", false, false, nil
 	}
 	content := stream.ExtractExfilContent(parsed)
 	if content == "" {
-		return line + "\n", false, false
+		return line + "\n", false, false, nil
 	}
 	rewritten, action, _ := guard.FilterContent(content)
 	switch action {
 	case stream.ActionBlock:
-		return "", true, true
+		return "", true, true, nil
 	case stream.ActionRedact:
 		_ = stream.SetExfilContent(parsed, rewritten)
 		reencoded, err := json.Marshal(parsed)
 		if err != nil {
 			// Fail-safe: drop the line rather than leak the unredacted
 			// original when re-encoding fails.
-			return "", false, true
+			return "", false, true, nil
 		}
-		return "data: " + string(reencoded) + "\n", false, true
+		return "data: " + string(reencoded) + "\n", false, true, parsed
 	default:
-		return line + "\n", false, false
+		// Pass with a (possibly) shortened emit: the guard withheld a
+		// whitespace-free tail (NENYA-205); its return is the
+		// client-visible content for this frame and the held remainder
+		// is appended by the Flush drain after the loop.
+		if rewritten != content {
+			_ = stream.SetExfilContent(parsed, rewritten)
+			reencoded, err := json.Marshal(parsed)
+			if err != nil {
+				// Fail-safe: drop the frame rather than leak the held tail.
+				return "", false, true, nil
+			}
+			return "data: " + string(reencoded) + "\n", false, true, parsed
+		}
+		return line + "\n", false, false, parsed
 	}
 }
 

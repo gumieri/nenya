@@ -183,11 +183,15 @@ type SSETransformingReader struct {
 	exfilGuard           *ExfilGuard
 	canaryWatcher        *CanaryWatcher
 	streamEntropyFilter  *StreamEntropyFilter
-	buffer               []byte
-	pos                  int
-	err                  error
-	closed               bool
-	sawDone              bool
+	// lastSurface is the wire shape of the last content-bearing chunk,
+	// recorded so the exfil guard's terminal flush (NENYA-205) can
+	// synthesize the held tail format-identically to the stream.
+	lastSurface exfilSurface
+	buffer      []byte
+	pos         int
+	err         error
+	closed      bool
+	sawDone     bool
 	// sawContent is the terminal-state notion of content (see
 	// trackStreamProgress), deliberately narrower than HasEffectiveOutput.
 	sawContent      bool
@@ -859,7 +863,14 @@ func (r *SSETransformingReader) handleScannerDone() {
 // benign stream endings where the model signaled completion but the upstream
 // omitted the [DONE] marker.
 func (r *SSETransformingReader) injectDoneOnly() {
-	r.buffer = append(r.eventSeparator(), []byte("data: [DONE]\n\n")...)
+	held, heldOK := r.synthesizeHeldFlush()
+	buf := append(r.eventSeparator(), []byte("data: [DONE]\n\n")...)
+	if heldOK {
+		pre := append(r.eventSeparator(), held...)
+		pre = append(pre, '\n', '\n')
+		buf = append(pre, buf...)
+	}
+	r.buffer = buf
 	r.pos = 0
 	r.lastLineBlank = true
 }
@@ -879,7 +890,13 @@ func (r *SSETransformingReader) injectErrorBuffer(message string) {
 		slog.Error("failed to marshal error payload", "error", err, "message", message)
 		errPayload = []byte(`{"error":{"message":"internal error","type":"gateway_error"}}`)
 	}
+	held, heldOK := r.synthesizeHeldFlush()
 	r.buffer = append(append(append(r.eventSeparator(), []byte("data: ")...), errPayload...), []byte("\n\ndata: [DONE]\n\n")...)
+	if heldOK {
+		pre := append(r.eventSeparator(), held...)
+		pre = append(pre, '\n', '\n')
+		r.buffer = append(pre, r.buffer...)
+	}
 	r.pos = 0
 	r.lastLineBlank = true
 	if r.observer != nil {
@@ -931,13 +948,7 @@ func (r *SSETransformingReader) transformSSEData(line []byte) []byte {
 			// parsers exist in the wild).
 			line = []byte(canonicalDoneFrame)
 		}
-		if synthLine, ok := r.synthesizeTerminalFinish(); ok {
-			r.notifySSEObserver(synthLine, ParseSSEChunk(synthLine[6:]), "")
-			r.notifySSEObserver(upstreamLine, nil, "done")
-			return append(append(append(r.eventSeparator(), synthLine...), []byte("\n\n")...), line...)
-		}
-		r.notifySSEObserver(upstreamLine, nil, "done")
-		return line
+		return r.finishStreamFrames(upstreamLine, line)
 	}
 
 	data := origData
@@ -1002,6 +1013,58 @@ func (r *SSETransformingReader) notifySSEObserver(line []byte, parsed map[string
 	r.observer.OnSSEEvent(SSEEvent{Type: eventType, Raw: line, Data: parsed})
 }
 
+// finishStreamFrames composes the clean-terminal frame sequence at
+// [DONE]: the exfil guard's held tail first (NENYA-205 — the response's
+// last fragment must not be withheld), then the synthetic finish_reason
+// chunk when one is due, then the canonical [DONE]. Each synthesized
+// frame is a complete blank-line-separated event (NENYA-169 convention).
+// With nothing synthesized the upstream line passes through unchanged.
+func (r *SSETransformingReader) finishStreamFrames(upstreamLine, line []byte) []byte {
+	heldLine, heldOK := r.synthesizeHeldFlush()
+	synthLine, synthOK := r.synthesizeTerminalFinish()
+	r.notifySSEObserver(upstreamLine, nil, "done")
+	if !heldOK && !synthOK {
+		return line
+	}
+	separator := r.eventSeparator()
+	out := []byte{}
+	for _, part := range [][]byte{heldLine, synthLine, line} {
+		if len(part) == 0 {
+			continue
+		}
+		out = append(out, separator...)
+		out = append(out, part...)
+		out = append(out, '\n', '\n')
+	}
+	return out
+}
+
+// synthesizeHeldFlush drains the exfil guard's held tail (NENYA-205)
+// into a synthetic content chunk routed through the full pipeline: the
+// format transformer converts it exactly like the upstream chunks that
+// preceded it, and the content callbacks and observer see it. The guard
+// is drained first, so the re-entrant pass cannot re-hold its own
+// output. Returns the fully transformed wire frame (no trailing event
+// separator — finishStreamFrames supplies it).
+func (r *SSETransformingReader) synthesizeHeldFlush() ([]byte, bool) {
+	if r.discarding || r.exfilGuard == nil || r.exfilGuard.IsBlocked() {
+		return nil, false
+	}
+	held, action := r.exfilGuard.Flush()
+	if held == "" || action == ActionBlock {
+		return nil, false
+	}
+	encoded := buildExfilFlushChunk(r.lastSurface, held)
+	if encoded == nil {
+		return nil, false
+	}
+	out := r.transformSSEData(append([]byte("data: "), encoded...))
+	if len(out) == 0 {
+		return nil, false
+	}
+	return out, true
+}
+
 // synthesizeTerminalFinish implements the [DONE]-without-finish_reason cell
 // of the terminal-state matrix (NENYA-46): an OpenAI passthrough stream that
 // streamed content but never signaled completion leaves the client message
@@ -1062,12 +1125,12 @@ func (r *SSETransformingReader) applyStreamFilters(parsed map[string]interface{}
 	}
 
 	if r.exfilGuard != nil && !r.exfilGuard.IsBlocked() {
-		var action FilterAction
-		parsed, action = applyExfilGuard(parsed, r.exfilGuard)
-		if r.exfilGuard.IsBlocked() {
+		out, changed, blocked := r.applyExfilStage(parsed)
+		if blocked {
 			return nil, false
 		}
-		mutated = mutated || action == ActionRedact
+		parsed = out
+		mutated = mutated || changed
 	}
 
 	if r.canaryWatcher != nil && !r.canaryWatcher.IsBlocked() {
@@ -1138,26 +1201,45 @@ func applyCanaryWatcher(parsed map[string]interface{}, watcher *CanaryWatcher) m
 	return parsed
 }
 
+// applyExfilStage runs the URL egress policy over one parsed chunk: it
+// records the wire shape being evaluated (the terminal flush mimics it,
+// NENYA-205), applies the guard's client-visible return, and reports
+// whether the guard blocked this chunk.
+func (r *SSETransformingReader) applyExfilStage(parsed map[string]interface{}) (out map[string]interface{}, mutated, blocked bool) {
+	if content := extractExfilContent(parsed); content != "" {
+		r.lastSurface = exfilSurfaceOf(parsed)
+	}
+	out, _, mutated = applyExfilGuard(parsed, r.exfilGuard)
+	blocked = r.exfilGuard.IsBlocked()
+	return out, mutated, blocked
+}
+
 // applyExfilGuard runs the URL egress policy over one SSE delta in
-// either wire format (OpenAI or Anthropic). Stripped content replaces
-// the delta field in place; a block verdict nils the chunk so the
-// reader raises ErrExfilBlocked (the guard itself flips to blocked).
-func applyExfilGuard(parsed map[string]interface{}, guard *ExfilGuard) (map[string]interface{}, FilterAction) {
+// either wire format (OpenAI or Anthropic). The guard's return is the
+// client-visible content for this delta and is applied on EVERY action:
+// stripped spans replace the delta field, and a shortened emit (the
+// guard withheld a whitespace-free tail, NENYA-205) must not stream the
+// original — the withheld remainder is delivered at the terminal flush.
+// A block verdict nils the chunk so the reader raises ErrExfilBlocked
+// (the guard itself flips to blocked). The bool reports whether the
+// chunk was rewritten (callers re-encode).
+func applyExfilGuard(parsed map[string]interface{}, guard *ExfilGuard) (map[string]interface{}, FilterAction, bool) {
 	content := extractExfilContent(parsed)
 	if content == "" {
-		return parsed, ActionPass
+		return parsed, ActionPass, false
 	}
 	rewritten, action, _ := guard.FilterContent(content)
-	switch action {
-	case ActionBlock:
-		return nil, ActionBlock
-	case ActionRedact:
+	if action == ActionBlock {
+		return nil, ActionBlock, true
+	}
+	if rewritten != content {
 		parsed = copyMap(parsed)
 		if !setExfilContent(parsed, rewritten) {
-			return parsed, ActionPass
+			return parsed, ActionPass, false
 		}
+		return parsed, action, true
 	}
-	return parsed, action
+	return parsed, action, false
 }
 
 // applyEntropyFilter runs the entropy redactor over one SSE delta,

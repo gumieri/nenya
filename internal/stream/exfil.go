@@ -1,11 +1,13 @@
 package stream
 
 import (
+	"encoding/json"
 	"log/slog"
 	"net/url"
 	"regexp"
 	"sort"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/nenya/config"
 	"github.com/nenya/internal/infra"
@@ -61,9 +63,11 @@ var (
 // leg of the lethal trifecta that neither client covers. It keeps a
 // rune window over the stream (same mechanism as StreamFilter) so
 // constructs split across SSE delta chunks are evaluated once complete;
-// only the current chunk's bytes are rewritten on strip — a construct
-// whose head streamed earlier is left as inert partial text. Instances
-// are per-response and not safe for concurrent use.
+// the whitespace-free tail that could still grow into a construct is
+// withheld (NENYA-205) and re-evaluated prepended to the next delta, so
+// a construct split across any chunking is spliced whole; Flush emits
+// the held tail at stream end. Instances are per-response and not safe
+// for concurrent use.
 type ExfilGuard struct {
 	action          string // config.ExfilAction* value
 	allowedHosts    []string
@@ -79,6 +83,14 @@ type ExfilGuard struct {
 	memo map[string]string
 
 	metrics *infra.Metrics
+
+	// pending holds the withheld whitespace-free tail (NENYA-205): text
+	// that could still grow into a URL construct. Always a suffix of the
+	// window and bounded by the window size (holdCut's force floor).
+	pending []rune
+	// drained is set by Flush: the stream is ending, FilterContent must
+	// not re-hold (the synthetic flush chunk re-enters it).
+	drained bool
 
 	blocked       bool
 	blockedReason string
@@ -117,11 +129,24 @@ func NewExfilGuard(cfg config.ExfilGuardConfig, metrics *infra.Metrics) *ExfilGu
 }
 
 // FilterContent evaluates one SSE delta against the policy. It returns
-// the (possibly rewritten) chunk content, the resulting filter action
-// (Pass, Redact for strip, Block), and the violation reason. In log
-// mode content always passes; in block mode the first violation flips
-// the guard permanently (subsequent calls keep returning Block).
+// the client-visible content for this delta, the resulting filter action
+// (Pass, Redact for strip, Block), and the violation reason. The return
+// can be SHORTER than the input on every action: the whitespace-free
+// tail that could still grow into a URL construct is withheld (NENYA-205)
+// and re-evaluated prepended to the next delta, so a construct split
+// across any chunking is spliced whole instead of streaming its head.
+// Callers must apply the return even on Pass. In log mode content passes
+// modulo the hold; in block mode the first violation flips the guard
+// permanently (subsequent calls keep returning Block; on Block the INPUT
+// is returned and callers suppress the frame entirely — the return must
+// not be delivered). Flush emits the held tail at stream end.
 func (g *ExfilGuard) FilterContent(content string) (string, FilterAction, string) {
+	if g.drained {
+		// Flush already ran: the stream is ending and nothing more is
+		// evaluated. The terminal flush re-enters this path with its own
+		// synthetic chunk, which must pass through unmodified.
+		return content, ActionPass, ""
+	}
 	if g.blocked {
 		return content, ActionBlock, g.blockedReason
 	}
@@ -129,24 +154,251 @@ func (g *ExfilGuard) FilterContent(content string) (string, FilterAction, string
 		return content, ActionPass, ""
 	}
 
+	fresh := string(g.pending) + content
+	g.pending = nil
+
+	// Only the NEW bytes join the window: the held tail was absorbed on
+	// arrival (it is a suffix of the window — holdCut bounds it by the
+	// window size), so appending fresh would duplicate it.
 	g.windowLen = AppendRuneWindow(&g.window, &g.windowLen, g.windowSize, content)
 	windowStr := string(g.window)
-	// Negative when the chunk exceeded the window (windowStr is a strict
-	// suffix of content): the value is the true chunk offset of the
-	// window start, and span-prevWindowBytes maps window coordinates
-	// into content coordinates correctly. Do NOT clamp to zero.
-	prevWindowBytes := len(windowStr) - len(content)
+	// Byte offset of fresh's start inside windowStr: the window head
+	// before fresh is already-emitted text. Negative when the chunk
+	// exceeded the window (windowStr is a strict suffix of fresh): the
+	// value is the true offset of the window start, and
+	// span-prevWindowBytes maps window coordinates into fresh coordinates
+	// correctly. Do NOT clamp to zero.
+	prevWindowBytes := len(windowStr) - len(fresh)
 
-	spans, reason := g.scanWindow(windowStr, prevWindowBytes, len(content))
+	spans, reason := g.scanWindow(windowStr, prevWindowBytes, len(fresh))
 	if g.blocked {
 		return content, ActionBlock, reason
 	}
+
+	cut := holdCut(fresh, spans, g.windowSize)
+	g.pending = []rune(fresh[cut:])
+	emit := fresh[:cut]
 	if len(spans) == 0 {
-		// Log mode (or nothing strippable): content passes untouched,
-		// the reason carries the violation for observability.
-		return content, ActionPass, reason
+		// Log mode (or nothing strippable): the proven-complete prefix
+		// passes untouched, the reason carries the violation for
+		// observability.
+		return emit, ActionPass, reason
 	}
-	return spliceSpans(content, spans, exfilStripPlaceholder), ActionRedact, reason
+	return spliceSpans(emit, clipSpansWithin(spans, cut), exfilStripPlaceholder), ActionRedact, reason
+}
+
+// Flush emits the guard's withheld tail at stream end (NENYA-205): the
+// hold can no longer grow, so the tail is final. A bare URL running to
+// the very end of the stream has no in-band terminator; it is evaluated
+// with EOF standing in for one (the padding byte never joins the
+// output). After Flush the guard is drained: FilterContent passes
+// content through untouched. A blocked guard returns the tail with
+// ActionBlock — callers suppress blocked content, so nothing held can
+// outlive a block.
+func (g *ExfilGuard) Flush() (string, FilterAction) {
+	if g.drained {
+		return "", ActionPass
+	}
+	g.drained = true
+	out := string(g.pending)
+	g.pending = nil
+	if out == "" {
+		return "", ActionPass
+	}
+	if g.blocked {
+		return out, ActionBlock
+	}
+	spans, _ := g.scanWindow(out+" ", 1, len(out))
+	if g.blocked {
+		// The EOF-terminated evaluation flipped the guard: the tail is
+		// the violating construct — never deliver it.
+		return "", ActionBlock
+	}
+	if len(spans) == 0 {
+		return out, ActionPass
+	}
+	return spliceSpans(out, spans, exfilStripPlaceholder), ActionRedact
+}
+
+// holdCut returns the byte offset in fresh up to which content is
+// client-visible this round. Base rule: the last whitespace boundary —
+// a URL construct contains no whitespace, so everything before it is
+// proven complete (whitespace bytes never occur inside a multi-byte
+// rune, so the byte scan is rune-safe; a whitespace-free stream holds
+// everything, bounded below). Refinements, in order:
+//
+//   - a detected span CROSSING the cut pulls it to the span's start (a
+//     markdown construct's alt text may contain whitespace — the
+//     construct is only emitted complete);
+//   - a span starting exactly at the cut extends it to the span's end
+//     (every span scanWindow returns is a COMPLETE construct — its
+//     replacement is final and streams immediately instead of delaying
+//     to the next chunk or Flush);
+//   - the force floor keeps at most the last windowSize runes held:
+//     pending stays a suffix of the window (the window sees everything
+//     still withheld) and memory stays bounded on whitespace-free
+//     streams (minified JSON). A span crossing the floor splices a
+//     partial placeholder; the remainder re-splices next round or at
+//     Flush — a duplicate placeholder, never a leaked head.
+func holdCut(fresh string, spans []windowSpan, windowSize int) int {
+	cut := 0
+	for i := len(fresh) - 1; i >= 0; i-- {
+		if c := fresh[i]; c == ' ' || c == '\t' || c == '\n' || c == '\r' {
+			cut = i + 1
+			break
+		}
+	}
+	for _, s := range spans {
+		if s.start < cut && s.end > cut {
+			cut = s.start
+			break
+		}
+	}
+	cut = extendCompletedSpans(fresh, spans, cut)
+	if floor := len(fresh) - windowSize; floor > cut {
+		// windowSize counts RUNES; walk back to the nearest rune start so
+		// cut never splits a multi-byte rune (a split would corrupt the
+		// emit and break pending's suffix-of-the-window invariant).
+		for floor > 0 && !utf8.RuneStart(fresh[floor]) {
+			floor--
+		}
+		if floor > cut {
+			cut = floor
+		}
+	}
+	return cut
+}
+
+// extendCompletedSpans grows the cut across spans starting exactly at it:
+// every span is a COMPLETE construct, so its replacement is final and
+// streams immediately instead of delaying to the next chunk or Flush.
+// Adjacent constructs ("...(u1)[x](u2)...") chain.
+func extendCompletedSpans(fresh string, spans []windowSpan, cut int) int {
+	for {
+		extended := false
+		for _, s := range spans {
+			if s.start == cut && s.end > cut && s.end <= len(fresh) {
+				cut = s.end
+				extended = true
+				break
+			}
+		}
+		if !extended {
+			return cut
+		}
+	}
+}
+
+// clipSpansWithin drops spans entirely beyond cut and truncates spans
+// crossing it (the crossing remainder is held and re-spliced next round
+// or at Flush).
+func clipSpansWithin(spans []windowSpan, cut int) []windowSpan {
+	var out []windowSpan
+	for _, s := range spans {
+		if s.start >= cut {
+			break
+		}
+		end := s.end
+		if end > cut {
+			end = cut
+		}
+		out = append(out, windowSpan{s.start, end})
+	}
+	return out
+}
+
+// exfilSurface records the wire shape of the last content-bearing chunk
+// so the terminal flush (NENYA-205) can synthesize the held tail as a
+// chunk format-identical to the stream that carried it.
+type exfilSurface struct {
+	anthropic bool   // content_block_delta (top-level delta) vs OpenAI chunk
+	key       string // the model-text field the content was read from
+	index     int    // Anthropic content-block index
+	hasIndex  bool
+}
+
+// exfilSurfaceOf inspects a parsed chunk for the surface
+// extractExfilContent reads from.
+func exfilSurfaceOf(parsed map[string]interface{}) exfilSurface {
+	if delta, ok := parsed["delta"].(map[string]interface{}); ok {
+		s := exfilSurface{anthropic: true, key: exfilKeyOf(delta)}
+		if idx, ok := parsed["index"].(float64); ok {
+			s.index, s.hasIndex = int(idx), true
+		}
+		return s
+	}
+	if choices, ok := parsed["choices"].([]interface{}); ok && len(choices) > 0 {
+		if choice, ok := choices[0].(map[string]interface{}); ok {
+			if delta, ok := choice["delta"].(map[string]interface{}); ok {
+				return exfilSurface{key: exfilKeyOf(delta)}
+			}
+		}
+	}
+	return exfilSurface{}
+}
+
+// exfilKeyOf returns the first model-text field carrying a non-empty
+// string, defaulting to the OpenAI text surface.
+func exfilKeyOf(delta map[string]interface{}) string {
+	for _, key := range exfilContentKeys {
+		if text, ok := delta[key].(string); ok && text != "" {
+			return key
+		}
+	}
+	return "content"
+}
+
+// buildExfilFlushChunk encodes held text as a synthetic content chunk in
+// the recorded surface's wire shape, falling back to the OpenAI text
+// surface when nothing was recorded (unreachable in practice: the hold
+// requires prior content).
+func buildExfilFlushChunk(s exfilSurface, text string) []byte {
+	payload := map[string]interface{}{}
+	switch {
+	case s.anthropic && s.key == "thinking":
+		payload["type"] = "content_block_delta"
+		if s.hasIndex {
+			payload["index"] = s.index
+		}
+		payload["delta"] = map[string]interface{}{"type": "thinking_delta", "thinking": text}
+	case s.anthropic:
+		payload["type"] = "content_block_delta"
+		if s.hasIndex {
+			payload["index"] = s.index
+		}
+		payload["delta"] = map[string]interface{}{"type": "text_delta", "text": text}
+	case s.key == "reasoning_content":
+		payload["choices"] = []interface{}{map[string]interface{}{
+			"index": 0, "delta": map[string]interface{}{"reasoning_content": text}}}
+	default:
+		payload["choices"] = []interface{}{map[string]interface{}{
+			"index": 0, "delta": map[string]interface{}{"content": text}}}
+	}
+	encoded, err := json.Marshal(payload)
+	if err != nil {
+		return nil
+	}
+	return encoded
+}
+
+// FlushExfilHeldFrame drains a guard's held tail at stream end and
+// encodes it as a synthetic SSE data frame in the shape of lastParsed
+// (the last content-bearing chunk of the stream). Returns nil when
+// nothing is held or the guard blocked. Exported for the buffered MCP
+// replay path, which applies the guard outside the streaming reader.
+func FlushExfilHeldFrame(guard *ExfilGuard, lastParsed map[string]interface{}) []byte {
+	if guard == nil {
+		return nil
+	}
+	held, action := guard.Flush()
+	if held == "" || action == ActionBlock {
+		return nil
+	}
+	encoded := buildExfilFlushChunk(exfilSurfaceOf(lastParsed), held)
+	if encoded == nil {
+		return nil
+	}
+	return append(append([]byte("data: "), encoded...), '\n')
 }
 
 // InspectFull evaluates complete output (non-streaming responses). It
