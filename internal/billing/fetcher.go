@@ -19,6 +19,10 @@ const (
 	// quota fetch retries after consecutive failures.
 	defaultQuotaBackoffMax = 5 * time.Minute
 	maxQuotaResponseBytes  = 10 << 20
+	// quotaStopWaitTimeout bounds Stop's wait for in-flight polls
+	// (NENYA-194). Deliberately small: gateway shutdown composes several
+	// writer bounds inside a 5-15s outer budget.
+	quotaStopWaitTimeout = 2 * time.Second
 )
 
 // AccountLister returns all account IDs for a provider.
@@ -35,6 +39,11 @@ type QuotaFetcher struct {
 	wg        sync.WaitGroup
 	started   bool
 	mu        sync.Mutex
+	// stopWait bounds Stop's wait for in-flight polls (NENYA-194): a
+	// fetch that cannot finish is abandoned with an explicit warning
+	// instead of holding shutdown hostage. Defaults to
+	// quotaStopWaitTimeout; tests shorten it.
+	stopWait time.Duration
 }
 
 // quotaProviderConfig holds per-provider quota polling configuration,
@@ -90,6 +99,7 @@ func NewQuotaFetcher(logger *slog.Logger, policyClient *http.Client) *QuotaFetch
 		logger:    logger,
 		providers: make(map[string]*quotaProviderConfig),
 		stopCh:    make(chan struct{}),
+		stopWait:  quotaStopWaitTimeout,
 	}
 	return qf
 }
@@ -278,6 +288,13 @@ func (qf *QuotaFetcher) getProviderKey(providerName string, secrets *config.Secr
 	return secrets.ProviderKeys[providerName]
 }
 
+// Stop signals the poll loops and waits, bounded, for in-flight polls to
+// finish. A poll that cannot finish within the bound is ABANDONED with
+// an explicit warning (NENYA-194: aborted accounting — shutdown neither
+// silently drops the work's outcome nor hangs on it; the abandoned poll
+// keeps running up to its own fetch bound and may still write
+// tracker/backoff state — thread-safe, and on SIGHUP the replacement
+// fetcher picks the refresh up).
 func (qf *QuotaFetcher) Stop() {
 	qf.mu.Lock()
 	if !qf.started {
@@ -286,10 +303,23 @@ func (qf *QuotaFetcher) Stop() {
 	}
 	close(qf.stopCh)
 	qf.started = false
+	stopWait := qf.stopWait
+	if stopWait <= 0 {
+		stopWait = quotaStopWaitTimeout
+	}
 	qf.mu.Unlock()
-
-	qf.wg.Wait()
-	qf.logger.Info("quota fetcher stopped")
+	done := make(chan struct{})
+	go func() {
+		qf.wg.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+		qf.logger.Info("quota fetcher stopped")
+	case <-time.After(stopWait):
+		qf.logger.Warn("quota fetcher did not stop in time; abandoning in-flight poll(s)",
+			"wait", stopWait)
+	}
 }
 
 func (qf *QuotaFetcher) pollLoop(ctx context.Context, cfg *quotaProviderConfig, accountName string) {
