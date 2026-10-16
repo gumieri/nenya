@@ -89,6 +89,11 @@ func InjectCanary(cfg *config.CanaryConfig, payload map[string]interface{}) Cana
 // returns whether the canary was seen, whether the arguments were
 // unscannable (marshal failure), and whether the call must be refused
 // (block action only; unscannable arguments fail closed in block mode).
+//
+// Read-only invariant (NENYA-164): the scan marshals the arguments to a
+// private buffer and never mutates them — a canary hit refuses the CALL,
+// it never rewrites the argument stream. There is no partial-JSON
+// re-emission path to get wrong because no rewrite exists.
 func (r CanarResult) ScanArgs(args interface{}) (tripped, unscannable, refuse bool) {
 	if r.Token == "" {
 		return false, false, false

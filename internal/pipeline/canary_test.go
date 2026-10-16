@@ -1,6 +1,7 @@
 package pipeline
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 
@@ -134,3 +135,39 @@ func TestCanarResultScanArgs(t *testing.T) {
 }
 
 func boolPtr(b bool) *bool { return &b }
+
+// TestScanArgsReadOnly pins the NENYA-164 invariant: the canary tool-args
+// scan is read-only — it reports a hit but never rewrites the arguments
+// (there is no partial-JSON re-emission to corrupt tool calls in flight).
+func TestScanArgsReadOnly(t *testing.T) {
+	before := map[string]interface{}{
+		"path":    "/etc/secret",
+		"note":    "NENYA-CANARY-deadbeef summary",
+		"nested":  map[string]interface{}{"q": "NENYA-CANARY-deadbeef"},
+		"numbers": []interface{}{float64(1), float64(2)},
+	}
+	snapshot, err := json.Marshal(before)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := CanarResult{Token: "NENYA-CANARY-deadbeef", Action: config.CanaryActionBlock}
+
+	tripped, unscannable, refuse := r.ScanArgs(before)
+	if !tripped || unscannable || !refuse {
+		t.Fatalf("tripped=%v unscannable=%v refuse=%v, want true/false/true", tripped, unscannable, refuse)
+	}
+
+	after, err := json.Marshal(before)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(snapshot) != string(after) {
+		t.Fatalf("ScanArgs mutated the arguments:\nbefore %s\nafter  %s", snapshot, after)
+	}
+
+	// A clean set of arguments never trips.
+	clean := map[string]interface{}{"path": "/tmp/ok"}
+	if tripped, _, refuse := r.ScanArgs(clean); tripped || refuse {
+		t.Fatalf("clean args tripped: tripped=%v refuse=%v", tripped, refuse)
+	}
+}
