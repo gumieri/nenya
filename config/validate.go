@@ -10,6 +10,7 @@ import (
 	"math/rand"
 	"net"
 	"net/http"
+	"net/textproto"
 	"net/url"
 	"regexp"
 	"slices"
@@ -980,6 +981,33 @@ func validateEntropyConfig(sf BouncerConfig) []string {
 	return errors
 }
 
+// validateHeaderFilters rejects empty header names, non-canonical header
+// names, and empty filter patterns in providers.<name>.header_filters
+// (NENYA-201): an empty pattern would match every value (never what the
+// operator meant), and a non-canonical name would never match a dispatch
+// header (the rejection also rules out case-variant duplicates, since only
+// one spelling per header is canonical).
+func validateHeaderFilters(provider string, filters map[string]HeaderFilter) []string {
+	errors := []string{}
+	for header, filter := range filters {
+		if header == "" {
+			errors = append(errors, fmt.Sprintf("providers[%q].header_filters: header name must not be empty", provider))
+			continue
+		}
+		if canonical := textproto.CanonicalMIMEHeaderKey(header); canonical != header {
+			errors = append(errors, fmt.Sprintf("providers[%q].header_filters[%q]: use the canonical header name %q", provider, header, canonical))
+		}
+		for _, patterns := range [][]string{filter.Allow, filter.Deny} {
+			for _, p := range patterns {
+				if p == "" {
+					errors = append(errors, fmt.Sprintf("providers[%q].header_filters[%q]: patterns must not be empty", provider, header))
+				}
+			}
+		}
+	}
+	return errors
+}
+
 func validateProviders(ctx context.Context, providers map[string]*Provider, network *NetworkConfig, logger *slog.Logger) []string {
 	errors := []string{}
 	for name, provider := range providers {
@@ -998,6 +1026,7 @@ func validateProviders(ctx context.Context, providers map[string]*Provider, netw
 		if _, err := CompileNonChatModels(provider.NonChatModels); err != nil {
 			errors = append(errors, fmt.Sprintf("providers[%q]: %v", name, err))
 		}
+		errors = append(errors, validateHeaderFilters(name, provider.HeaderFilters)...)
 		if provider.StreamIdleTimeoutSeconds < 0 {
 			errors = append(errors, fmt.Sprintf("providers[%q].stream_idle_timeout_seconds must be non-negative (set to 0 to use global default), got %d", name, provider.StreamIdleTimeoutSeconds))
 		}

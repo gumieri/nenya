@@ -1,6 +1,7 @@
 package config
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -585,5 +586,40 @@ func TestLoadFromDir_GovernanceOverlayFields(t *testing.T) {
 	}
 	if cfg.Governance.MinQuotaCooldownSeconds != 7 {
 		t.Errorf("governance.min_quota_cooldown_seconds = %d, want 7", cfg.Governance.MinQuotaCooldownSeconds)
+	}
+}
+
+// TestResolveProvidersHeaderFilters pins the NENYA-201 config wiring: the
+// header_filters section parses from JSON, rides through ResolveProviders
+// into the runtime Provider, and a drop-in config.d file can override it.
+func TestResolveProvidersHeaderFilters(t *testing.T) {
+	raw := []byte(`{
+		"providers": {
+			"anthropic": {
+				"url": "https://api.anthropic.com/v1/messages",
+				"auth_style": "bearer",
+				"api_format": "anthropic",
+				"timeout_seconds": 60,
+				"header_filters": {
+					"anthropic-beta": {"deny": ["context-management"]}
+				}
+			}
+		}
+	}`)
+	var cfg Config
+	if err := json.Unmarshal(raw, &cfg); err != nil {
+		t.Fatal(err)
+	}
+	providers := ResolveProviders(&cfg, &SecretsConfig{ProviderKeys: map[string]string{"anthropic": "sk-ant-key"}})
+	p, ok := providers["anthropic"]
+	if !ok {
+		t.Fatal("expected anthropic provider")
+	}
+	filter, ok := p.HeaderFilters["anthropic-beta"]
+	if !ok {
+		t.Fatalf("header_filters not carried to the runtime provider: %#v", p.HeaderFilters)
+	}
+	if len(filter.Deny) != 1 || filter.Deny[0] != "context-management" {
+		t.Fatalf("unexpected filter: %#v", filter)
 	}
 }

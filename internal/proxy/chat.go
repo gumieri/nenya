@@ -9,6 +9,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"net/textproto"
 	"strings"
 	"time"
 
@@ -1400,6 +1401,105 @@ func (p *Proxy) bufferedEgressScreen(gw *gateway.NenyaGateway, w http.ResponseWr
 	return true
 }
 
+// applyProviderHeaderFilters enforces providers.<name>.header_filters at
+// dispatch (NENYA-201): for each configured header, every value (a header
+// may repeat, and one value may be comma-joined) is checked against the
+// filter — Allow first (only matching values survive), then Deny.
+// Case-insensitive substring patterns, matching how versioned beta flags
+// are spelled (a deny of "context-management" strips
+// "context-management-2025-06-27" alone). A header with no surviving value
+// is removed entirely; every stripped value is counted per provider and
+// header.
+func applyProviderHeaderFilters(gw *gateway.NenyaGateway, providerName string, h http.Header) {
+	if gw == nil || providerName == "" || len(h) == 0 {
+		return
+	}
+	p, ok := gw.Providers[providerName]
+	if !ok || p == nil || len(p.HeaderFilters) == 0 {
+		return
+	}
+	for name, raw := range p.HeaderFilters {
+		filter := lowerFilter(raw)
+		canonical := textproto.CanonicalMIMEHeaderKey(name)
+		raw := h.Values(canonical) //nolint:staticcheck // canonical form is exactly what Set/Del/Values use
+		if len(raw) == 0 {
+			continue
+		}
+		kept := make([]string, 0, len(raw))
+		stripped := 0
+		for _, v := range raw {
+			for _, piece := range strings.Split(v, ",") {
+				piece = strings.TrimSpace(piece)
+				if piece == "" {
+					continue
+				}
+				if headerValueMatches(piece, filter) {
+					kept = append(kept, piece)
+				} else {
+					stripped++
+					gw.Metrics.RecordHeaderValueFiltered(providerName, canonical)
+				}
+			}
+		}
+		if stripped == 0 {
+			continue
+		}
+		// Rewrite rule: once any value is stripped the survivors are
+		// re-serialized as trimmed ", "-joined values (a value that was
+		// one comma-joined string becomes individual values); an
+		// unstripped header keeps its original bytes.
+		if len(kept) == 0 {
+			h.Del(canonical)
+		} else {
+			h.Set(canonical, strings.Join(kept, ", "))
+		}
+	}
+}
+
+// loweredFilter is a HeaderFilter with its patterns pre-lowercased, so the
+// per-value match does not re-lower patterns on every request.
+type loweredFilter struct {
+	allow []string
+	deny  []string
+}
+
+func lowerFilter(f config.HeaderFilter) loweredFilter {
+	lower := func(patterns []string) []string {
+		out := make([]string, len(patterns))
+		for i, p := range patterns {
+			out[i] = strings.ToLower(p)
+		}
+		return out
+	}
+	return loweredFilter{allow: lower(f.Allow), deny: lower(f.Deny)}
+}
+
+// headerValueMatches applies one lowered filter to one value: a non-empty
+// Allow is an allowlist (the value must match a pattern), then Deny removes
+// matches. When a value matches BOTH lists, deny wins. Patterns are
+// case-insensitive substrings.
+func headerValueMatches(value string, filter loweredFilter) bool {
+	lower := strings.ToLower(value)
+	if len(filter.allow) > 0 {
+		matched := false
+		for _, a := range filter.allow {
+			if a != "" && strings.Contains(lower, a) {
+				matched = true
+				break
+			}
+		}
+		if !matched {
+			return false
+		}
+	}
+	for _, d := range filter.deny {
+		if d != "" && strings.Contains(lower, d) {
+			return false
+		}
+	}
+	return true
+}
+
 // anthropicFormatTarget reports whether a provider speaks the Anthropic
 // wire format, so Anthropic-only request-option headers are only forwarded
 // there (NENYA-171).
@@ -1431,6 +1531,7 @@ func (p *Proxy) buildUpstreamRequest(gw *gateway.NenyaGateway, ctx context.Conte
 			req.Header.Set("Anthropic-Beta", beta)
 		}
 	}
+
 	// Every dispatch path shares this allowlist, so the session-header
 	// sanitation runs here too (NENYA-143): an unusable value would make
 	// http.Transport reject the request mid-retry-loop.
@@ -1469,6 +1570,11 @@ func (p *Proxy) buildUpstreamRequest(gw *gateway.NenyaGateway, ctx context.Conte
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept-Encoding", "identity")
 	req.Header.Set("User-Agent", gw.Config.Server.UserAgent)
+	// Per-target header-value filtering (NENYA-201): runs last, on the
+	// COMPLETE outbound set (client passthrough, session identity, beta
+	// flags, tracing, and the injected auth), so a configured filter can
+	// reach every header it names.
+	applyProviderHeaderFilters(gw, providerName, req.Header)
 	return req, nil
 }
 

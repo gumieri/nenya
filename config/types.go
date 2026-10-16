@@ -461,6 +461,21 @@ func peakWindowsContain(windows []PeakWindow, t time.Time) bool {
 	return false
 }
 
+// HeaderFilter selects which values of a multi-value request header
+// survive dispatch to a provider (NENYA-201). Patterns are
+// case-insensitive substrings matched against each comma-separated value:
+// a non-empty Allow keeps only matching values; Deny then removes matching
+// ones (a value matching both lists is denied). Both empty means the
+// filter is inert.
+type HeaderFilter struct {
+	// Allow, when non-empty, is an allowlist: a value must match at least
+	// one pattern to survive.
+	Allow []string `json:"allow,omitempty"`
+	// Deny removes any value matching one of its patterns (applied after
+	// Allow).
+	Deny []string `json:"deny,omitempty"`
+}
+
 // ProviderConfig defines the wire-level configuration for an upstream LLM
 // provider: the endpoint URL, authentication style, API format, timeouts,
 // retry settings, and per-provider rate limits. User-provided configs override
@@ -524,6 +539,14 @@ type ProviderConfig struct {
 	// HTTPS_PROXY/NO_PROXY environment variables apply. Validated at
 	// startup.
 	ProxyURL string `json:"proxy_url,omitempty"`
+	// HeaderFilters filters individual values out of multi-value request
+	// headers at dispatch to THIS provider (NENYA-201): key = header name
+	// (case-insensitive), value = allow/deny substring patterns. A version
+	// one backend rejects can be stripped for that backend while kept for
+	// others (e.g. an anthropic-beta flag an aggregator has not adopted).
+	// Allow applies first (only matching values survive), then deny. A
+	// header left with no values is removed entirely.
+	HeaderFilters map[string]HeaderFilter `json:"header_filters,omitempty"`
 	// Thinking configures reasoning token behavior for this provider.
 	Thinking *ThinkingConfig `json:"thinking,omitempty"`
 	// APIKey is the authentication key (typically loaded from secrets).
@@ -657,6 +680,7 @@ type Provider struct {
 	// Resolved from ProviderConfig.ProxyURL with the network-level global as
 	// fallback; empty means the HTTPS_PROXY/NO_PROXY environment applies.
 	ProxyURL      string
+	HeaderFilters map[string]HeaderFilter
 	Thinking      *ThinkingConfig
 	Billing       *BillingConfig
 	AllowedModels []string

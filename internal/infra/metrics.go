@@ -45,6 +45,9 @@ type Metrics struct {
 	// modelSubstitutions counts upstream responses whose reported model
 	// differs from the routed model (NENYA-173).
 	modelSubstitutions sync.Map
+	// headerValuesFiltered counts header values stripped by per-provider
+	// header_filters at dispatch (NENYA-201).
+	headerValuesFiltered sync.Map
 	// cachedInputTokens records cache-hit input tokens by model and
 	// pricing window.
 	cachedInputByWindow sync.Map
@@ -620,6 +623,17 @@ func (m *Metrics) RecordCostWindow(model, window string, costUSD float64) {
 	}
 	e := getOrCreateEntry(&m.costByWindow, map[string]string{"model": model, "window": window})
 	e.value.Add(uint64(micro))
+}
+
+// RecordHeaderValueFiltered counts one header value stripped from an
+// upstream dispatch by the provider's configured header_filters
+// (NENYA-201). Nil-safe.
+func (m *Metrics) RecordHeaderValueFiltered(provider, header string) {
+	if m == nil || provider == "" || header == "" {
+		return
+	}
+	e := getOrCreateEntry(&m.headerValuesFiltered, map[string]string{"provider": provider, "header": header})
+	e.value.Add(1)
 }
 
 // RecordModelSubstitution counts an upstream response whose reported model
@@ -1607,6 +1621,8 @@ func (m *Metrics) writePipelineMetrics(w io.Writer) {
 		"Per-model request cost in microUSD by pricing window (peak|offpeak).", &m.costByWindow)
 	m.writeCounterMap(w, "nenya_model_substitutions_total",
 		"Upstream responses whose reported model differs from the routed model (silent substitution).", &m.modelSubstitutions)
+	m.writeCounterMap(w, "nenya_header_values_filtered_total",
+		"Header values stripped at dispatch by per-provider header_filters, by provider and header.", &m.headerValuesFiltered)
 	m.writeCounterMap(w, "nenya_cached_input_tokens_total",
 		"Cache-hit input tokens by model and pricing window.", &m.cachedInputByWindow)
 	m.writeCounterMap(w, "nenya_pipeline_window_applied_total",
