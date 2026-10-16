@@ -2,6 +2,7 @@ package proxy
 
 import (
 	"context"
+	"errors"
 	"io"
 	"log/slog"
 	"net/http"
@@ -111,7 +112,15 @@ func (p *Proxy) handlePassthrough(gw *gateway.NenyaGateway, w http.ResponseWrite
 	contentType := resp.Header.Get("Content-Type")
 	if strings.Contains(contentType, "text/event-stream") {
 		timeout := resolveStreamIdleTimeout(gw, providerName)
-		p.pipeSSE(ctx, ctxLogger, resp.Body, w, timeout)
+		p.pipeSSE(pipeSSEOpts{
+			Ctx:          ctx,
+			Gw:           gw,
+			Logger:       ctxLogger,
+			Src:          resp.Body,
+			Dst:          w,
+			ProviderName: providerName,
+			StallTimeout: timeout,
+		})
 	} else {
 		writeUpstreamResponse(ctx, w, resp, ctxLogger)
 	}
@@ -153,13 +162,29 @@ func buildPassthroughContextAndCancel(ctx context.Context, provider *config.Prov
 
 // pipeSSE streams SSE data from src to dst with stall detection.
 // When stallTimeout is 0, stall detection is disabled and data is copied directly.
-func (p *Proxy) pipeSSE(ctx context.Context, ctxLogger *slog.Logger, src io.Reader, dst http.ResponseWriter, stallTimeout time.Duration) {
-	if stallTimeout <= 0 {
-		p.pipeSSERaw(ctx, ctxLogger, src, dst)
+// pipeSSEOpts groups the passthrough SSE copier's inputs (AGENTS.md §11).
+type pipeSSEOpts struct {
+	Ctx          context.Context
+	Gw           *gateway.NenyaGateway
+	Logger       *slog.Logger
+	Src          io.Reader
+	Dst          http.ResponseWriter
+	ProviderName string
+	StallTimeout time.Duration
+}
+
+// pipeSSE copies SSE data from src to dst with stall detection. Known caveat
+// (accepted): the copier does not parse frames, so an upstream that sends
+// [DONE] and then holds the connection open trips the idle timer after
+// logical completion and appends a second terminal — spec-compliant clients
+// stop at [DONE], but the stall counter can over-count.
+func (p *Proxy) pipeSSE(o pipeSSEOpts) {
+	if o.StallTimeout <= 0 {
+		p.pipeSSERaw(o.Ctx, o.Logger, o.Src, o.Dst)
 		return
 	}
 
-	stallR := newStallReader(ctx, src, stallTimeout, 0)
+	stallR := newStallReader(o.Ctx, o.Src, o.StallTimeout, 0)
 	buf := make([]byte, 4096)
 	defer func() {
 		stallR.Stop()
@@ -169,27 +194,28 @@ func (p *Proxy) pipeSSE(ctx context.Context, ctxLogger *slog.Logger, src io.Read
 	for {
 		n, err := stallR.Read(buf)
 		if n > 0 {
-			if _, writeErr := dst.Write(buf[:n]); writeErr != nil {
-				ctxLogger.Debug("SSE write error", "err", writeErr)
+			if _, writeErr := o.Dst.Write(buf[:n]); writeErr != nil {
+				o.Logger.Debug("SSE write error", "err", writeErr)
 				return
 			}
-			if flusher, ok := dst.(http.Flusher); ok {
-				flusher.Flush()
-			}
+			flushPassthrough(o.Dst)
 		}
 		if err != nil {
-			if err == errStreamStalled {
-				ctxLogger.Warn("passthrough SSE stream stalled, aborting")
-			} else if err != io.EOF {
-				ctxLogger.Debug("passthrough SSE read error", "err", err)
-			}
+			p.handlePassthroughReadError(o.Gw, o.Logger, o.Dst, o.ProviderName, err)
 			return
 		}
 
-		if ctx.Err() != nil {
-			ctxLogger.Debug("passthrough SSE stream canceled by context")
+		if o.Ctx.Err() != nil {
+			o.Logger.Debug("passthrough SSE stream canceled by context")
 			return
 		}
+	}
+}
+
+// flushPassthrough flushes when the response writer supports it.
+func flushPassthrough(dst http.ResponseWriter) {
+	if flusher, ok := dst.(http.Flusher); ok {
+		flusher.Flush()
 	}
 }
 
@@ -203,9 +229,7 @@ func (p *Proxy) pipeSSERaw(ctx context.Context, ctxLogger *slog.Logger, src io.R
 				ctxLogger.Debug("SSE write error", "err", writeErr)
 				return
 			}
-			if flusher, ok := dst.(http.Flusher); ok {
-				flusher.Flush()
-			}
+			flushPassthrough(dst)
 		}
 		if err != nil {
 			if err != io.EOF {
@@ -217,5 +241,30 @@ func (p *Proxy) pipeSSERaw(ctx context.Context, ctxLogger *slog.Logger, src io.R
 			ctxLogger.Debug("passthrough SSE stream canceled by context")
 			return
 		}
+	}
+}
+
+// handlePassthroughReadError resolves a stalled-reader error on the passthrough
+// SSE path: a stall must not abort silently — the client gets the same
+// structured gateway_error terminal (error_kind=provider_timeout, NENYA-156)
+// as the chat path, plus stall telemetry. The copier is a raw byte copier, so
+// the terminal is ALWAYS separated by an event boundary first (a blank line is
+// a spec no-op at a true boundary): gluing it onto a truncated final event is
+// the NENYA-169 defect class. Other errors are logged only.
+func (p *Proxy) handlePassthroughReadError(gw *gateway.NenyaGateway, ctxLogger *slog.Logger, dst http.ResponseWriter, providerName string, err error) {
+	if !errors.Is(err, errStreamStalled) {
+		if err != io.EOF {
+			ctxLogger.Debug("passthrough SSE read error", "err", err)
+		}
+		return
+	}
+	ctxLogger.Warn("passthrough SSE stream stalled, emitting stall terminal",
+		"provider", providerName)
+	// A blank line at a true boundary is a no-op for SSE parsers.
+	_, _ = dst.Write([]byte("\n\n"))
+	_, _ = dst.Write(stallSSEFrames())
+	flushPassthrough(dst)
+	if gw != nil {
+		gw.Metrics.RecordStreamStall("", providerName)
 	}
 }

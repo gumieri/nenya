@@ -904,7 +904,7 @@ func (p *Proxy) handleStreamDone(gw *gateway.NenyaGateway, w http.ResponseWriter
 
 	if errors.Is(copyErr, errStreamStalled) {
 		gw.AgentState.RecordFailure(target, cooldownDuration)
-		gw.Logger.Warn("stream stalled, terminating SSE before fallback",
+		gw.Logger.Warn("stream stalled, terminating SSE (terminal)",
 			"agent", agentName, "model", target.Model, "provider", target.Provider,
 			"idle_timeout", gw.Config.Governance.EffectiveStreamIdleTimeout())
 		gw.Metrics.RecordStreamStall(target.Model, target.Provider)
@@ -1146,24 +1146,31 @@ func extractUserTextForEmbedding(payload map[string]any) string {
 // idle timeout). The error event lets the client distinguish a stall from a
 // normal completion.
 func (p *Proxy) writeStallSSE(gw *gateway.NenyaGateway, w http.ResponseWriter) {
+	_, _ = w.Write(stallSSEFrames())
+	flushPassthrough(w)
+}
+
+// stallSSEFrames renders the structured stall terminal: a gateway_error event
+// carrying error_kind=provider_timeout (NENYA-156 — Retryable+ShouldFailover,
+// matching the cooldown the breaker just took) followed by [DONE]. Shared by
+// the chat path and the passthrough copier so the framing cannot drift.
+func stallSSEFrames() []byte {
 	errPayload, err := json.Marshal(map[string]any{
+		"error_kind": string(infra.ErrorKindProviderTimeout),
 		"error": map[string]any{
 			"message": "upstream stream stalled: no data received within idle timeout",
 			"type":    "gateway_error",
 		},
 	})
 	if err != nil {
-		gw.Logger.Error("failed to marshal stall error payload", "err", err)
-		errPayload = []byte(`{"error":{"message":"upstream stream stalled","type":"gateway_error"}}`)
+		errPayload = []byte(`{"error_kind":"provider_timeout","error":{"message":"upstream stream stalled","type":"gateway_error"}}`)
 	}
-	_, _ = fmt.Fprintf(w, "data: %s\n\ndata: [DONE]\n\n", errPayload)
-	if flusher, ok := w.(http.Flusher); ok {
-		flusher.Flush()
-	}
+	return []byte(fmt.Sprintf("data: %s\n\ndata: [DONE]\n\n", errPayload))
 }
 
 func (p *Proxy) writeTimeoutSSE(gw *gateway.NenyaGateway, w http.ResponseWriter) {
 	errPayload, err := json.Marshal(map[string]any{
+		"error_kind": string(infra.ErrorKindProviderTimeout),
 		"error": map[string]any{
 			"message": "upstream timeout reached",
 			"type":    "gateway_error",
@@ -1171,7 +1178,7 @@ func (p *Proxy) writeTimeoutSSE(gw *gateway.NenyaGateway, w http.ResponseWriter)
 	})
 	if err != nil {
 		gw.Logger.Error("failed to marshal timeout error payload", "err", err)
-		errPayload = []byte(`{"error":{"message":"upstream timeout reached","type":"gateway_error"}}`)
+		errPayload = []byte(`{"error_kind":"provider_timeout","error":{"message":"upstream timeout reached","type":"gateway_error"}}`)
 	}
 	_, _ = fmt.Fprintf(w, "data: %s\n\ndata: [DONE]\n\n", errPayload)
 	if flusher, ok := w.(http.Flusher); ok {

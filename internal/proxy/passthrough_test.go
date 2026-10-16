@@ -291,7 +291,7 @@ func TestPipeSSE(t *testing.T) {
 			src := strings.NewReader(tt.input)
 			w := httptest.NewRecorder()
 
-			proxy.pipeSSE(context.Background(), logger, src, w, 120*time.Second)
+			proxy.pipeSSE(pipeSSEOpts{Ctx: context.Background(), Logger: logger, Src: src, Dst: w, ProviderName: "test-provider", StallTimeout: 120 * time.Second})
 
 			resp := w.Result()
 			defer func() { _ = resp.Body.Close() }()
@@ -312,7 +312,7 @@ func TestPipeSSE_StallTimeoutZero(t *testing.T) {
 	src := strings.NewReader(input)
 	w := httptest.NewRecorder()
 
-	proxy.pipeSSE(context.Background(), logger, src, w, 0)
+	proxy.pipeSSE(pipeSSEOpts{Ctx: context.Background(), Logger: logger, Src: src, Dst: w, ProviderName: "test-provider", StallTimeout: 0})
 
 	resp := w.Result()
 	defer func() { _ = resp.Body.Close() }()
