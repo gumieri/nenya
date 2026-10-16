@@ -35,6 +35,11 @@ func (rw *responseWatcher) Flush() {
 	}
 }
 
+// Unwrap lets http.ResponseController reach through the wrapper for deadline
+// and flush control (NENYA-155): the per-write client-stall deadline is armed
+// on the wrapped writer, and ResponseController only unwraps via this method.
+func (rw *responseWatcher) Unwrap() http.ResponseWriter { return rw.ResponseWriter }
+
 func ObserveHTTP(m *Metrics, h func(http.ResponseWriter)) http.HandlerFunc {
 	return ObserveHTTPFunc(m, func(w http.ResponseWriter, r *http.Request) { h(w) })
 }

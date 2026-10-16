@@ -203,8 +203,8 @@ func appendAssistantMessage(payload map[string]any, msg map[string]any) {
 // OpenAI-compatible gateway_error event followed by [DONE]. Used when the cut
 // error injection was suppressed because a continuation attempt was possible
 // but ultimately given up.
-func writeStreamCutSSE(w http.ResponseWriter) {
-	writeSSEError(w, http.StatusOK, "upstream stream ended without [DONE]")
+func writeStreamCutSSE(gw *gateway.NenyaGateway, w http.ResponseWriter) {
+	writeSSEError(gw, w, http.StatusOK, "upstream stream ended without [DONE]")
 }
 
 // streamContinueStatus describes the result of a continuation attempt.
@@ -240,7 +240,7 @@ func (p *Proxy) tryContinueStream(gw *gateway.NenyaGateway, w http.ResponseWrite
 	if giveUpReason != "" {
 		gw.Metrics.RecordStreamContinuation(target.Model, target.Provider, giveUpReason)
 		p.finishStreamAttempt(gw, action, stallR)
-		writeStreamCutSSE(w)
+		writeStreamCutSSE(gw, w)
 		putStreamBuffer(buf)
 		return streamContinueGaveUp, action
 	}
@@ -260,7 +260,7 @@ func (p *Proxy) tryContinueStream(gw *gateway.NenyaGateway, w http.ResponseWrite
 		if newAction.resp != nil {
 			_ = newAction.resp.Body.Close()
 		}
-		writeStreamCutSSE(w)
+		writeStreamCutSSE(gw, w)
 		putStreamBuffer(buf)
 		return streamContinueGaveUp, action
 	}

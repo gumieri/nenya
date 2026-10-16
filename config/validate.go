@@ -136,6 +136,7 @@ func collectValidationErrors(ctx context.Context, cfg *Config, providers map[str
 	errors = append(errors, validateProviderRateLimits(cfg)...)
 	errors = append(errors, validateBillingConfig(cfg)...)
 	errors = append(errors, validateUpstreamTimeoutSeconds(cfg.Governance.UpstreamTimeoutSeconds)...)
+	errors = append(errors, validateStreamStallTimeoutSeconds(cfg.Server.StreamStallTimeoutSeconds)...)
 	errors = append(errors, validateStreamIdleTimeoutSeconds(cfg.Governance.StreamIdleTimeoutSeconds)...)
 	errors = append(errors, validateThinkingStreamIdleTimeoutSeconds(cfg.Governance.ThinkingStreamIdleTimeoutSeconds)...)
 	errors = append(errors, validateBootstrapBufferBytes(cfg.Governance.StreamBootstrapBufferBytes)...)
@@ -1427,6 +1428,22 @@ func validateAgentSlowCallThresholds(agents map[string]AgentConfig) []string {
 		)...)
 	}
 	return errs
+}
+
+// validateStreamStallTimeoutSeconds pins the NENYA-155 knob: nil = the 60s
+// default, an explicit 0 disables (the server-wide WriteTimeout stays 0),
+// 86400 (24h) is the cap.
+func validateStreamStallTimeoutSeconds(v *int) []string {
+	if v == nil {
+		return nil
+	}
+	if *v < 0 {
+		return []string{fmt.Sprintf("server.stream_stall_timeout_seconds must be non-negative (set to 0 to disable the per-write deadline), got %d", *v)}
+	}
+	if *v > 86400 {
+		return []string{fmt.Sprintf("server.stream_stall_timeout_seconds exceeds maximum allowed value (86400 seconds / 24 hours), got %d", *v)}
+	}
+	return nil
 }
 
 func validateStreamIdleTimeoutSeconds(v *int) []string {

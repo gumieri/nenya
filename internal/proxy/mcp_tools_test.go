@@ -314,7 +314,7 @@ func TestReplayBufferedResponse(t *testing.T) {
 		rawBytes: []byte("data: {\"choices\":[{}]}\n\ndata: [DONE]\n\n"),
 	}
 
-	replayBufferedResponse(w, buf, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	replayBufferedResponse(w, buf, nil, "test-provider", slog.New(slog.NewTextHandler(io.Discard, nil)))
 
 	if w.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200", w.Code)

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"strings"
 	"sync"
@@ -382,8 +383,26 @@ var (
 	errUpstreamReadSide = errors.New("upstream read")
 )
 
+// errClientStalled marks a client write that failed on the NENYA-155 per-write
+// deadline: the peer stopped reading. It wraps errClientWriteSide, so every
+// existing client-side classification (no provider charge, upstream cancel)
+// applies unchanged.
+var errClientStalled = fmt.Errorf("%w: write deadline exceeded (client_stalled)", errClientWriteSide)
+
 func isClientWriteError(err error) bool {
 	return errors.Is(err, errClientWriteSide)
+}
+
+// isClientStalled reports whether a client-side write failure was the NENYA-155
+// per-write deadline (a stuck reader) rather than an abrupt disconnect.
+func isClientStalled(err error) bool {
+	return errors.Is(err, errClientStalled)
+}
+
+// isWriteTimeout reports whether an error is a deadline/timeout from a write.
+func isWriteTimeout(err error) bool {
+	var ne net.Error
+	return errors.As(err, &ne) && ne.Timeout()
 }
 
 // streamResult carries the outcome of streamResponse back to the retry loop.
@@ -444,19 +463,37 @@ func (p *prefixedReadCloser) Close() error {
 type immediateFlushWriter struct {
 	dst     http.ResponseWriter
 	flusher http.Flusher
+	// stallTimeout bounds a single client write (NENYA-155): re-armed before
+	// every write/flush via the ResponseController, so only a write that
+	// cannot complete within the window — a client that stopped reading —
+	// trips it. A slow provider with nothing to send never arms a pending
+	// write, so idle gaps never fire the stale deadline. 0 disables.
+	stallTimeout time.Duration
 }
 
 // newImmediateFlushWriter creates an immediateFlushWriter if the response writer
 // supports http.Flusher. The boolean indicates whether Flusher was available.
-func newImmediateFlushWriter(w http.ResponseWriter) (*immediateFlushWriter, bool) {
+// stallTimeout is the per-write client-stall deadline (0 disables).
+func newImmediateFlushWriter(w http.ResponseWriter, stallTimeout time.Duration) (*immediateFlushWriter, bool) {
 	flusher, ok := w.(http.Flusher)
 	if !ok {
-		return &immediateFlushWriter{dst: w}, false
+		return &immediateFlushWriter{dst: w, stallTimeout: stallTimeout}, false
 	}
-	return &immediateFlushWriter{dst: w, flusher: flusher}, true
+	return &immediateFlushWriter{dst: w, flusher: flusher, stallTimeout: stallTimeout}, true
+}
+
+// armClientWriteDeadline re-arms the per-write client-stall deadline
+// (NENYA-155). Best effort: writers that cannot set deadlines (httptest
+// recorders, custom wrappers) return an error that is deliberately ignored.
+func armClientWriteDeadline(w http.ResponseWriter, timeout time.Duration) {
+	if timeout <= 0 || w == nil {
+		return
+	}
+	_ = http.NewResponseController(w).SetWriteDeadline(time.Now().Add(timeout))
 }
 
 func (fw *immediateFlushWriter) Write(p []byte) (int, error) {
+	armClientWriteDeadline(fw.dst, fw.stallTimeout)
 	n, err := fw.dst.Write(p)
 	if err == nil && fw.flusher != nil {
 		fw.flusher.Flush()
@@ -525,10 +562,15 @@ func writeStreamChunk(ctx context.Context, dst io.Writer, chunk []byte, written 
 		if ctx.Err() != nil {
 			return written, ctx.Err()
 		}
-		return written, fmt.Errorf("%w: %v", errClientWriteSide, werr)
+		if isWriteTimeout(werr) {
+			return written, fmt.Errorf("%w: %w", errClientStalled, werr)
+		}
+		return written, fmt.Errorf("%w: %w", errClientWriteSide, werr)
 	}
 	if len(chunk) != nw {
-		return written, io.ErrShortWrite
+		// A short write from a client-facing writer is a client-side fault,
+		// not a provider one — keep it out of the breaker.
+		return written, fmt.Errorf("%w: %w", errClientWriteSide, io.ErrShortWrite)
 	}
 	return written + int64(nw), nil
 }

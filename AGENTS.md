@@ -31,7 +31,7 @@ You are acting as a **Senior Go Security Engineer and Network Architect**. Your 
 
 ### 4. Hardcore Security Rules (CRITICAL)
 
-- **Timeouts:** NEVER use the default `http.Client` or `http.ListenAndServe`. Always explicitly define `ReadTimeout`, `WriteTimeout`, `IdleTimeout`, and Client `Timeout` to prevent resource exhaustion and hanging connections.
+- **Timeouts:** NEVER use the default `http.Client` or `http.ListenAndServe`. Always explicitly define `ReadTimeout`, `WriteTimeout`, `IdleTimeout`, and Client `Timeout` to prevent resource exhaustion and hanging connections. The listener's `WriteTimeout` stays 0 for streaming; the per-write `server.stream_stall_timeout_seconds` deadline (NENYA-155, re-armed via `http.ResponseController` before every write/flush) bounds stuck readers instead — a breach is classified `client_stalled` and never charged to provider health.
 - **Body Limits:** Always wrap incoming requests with `http.MaxBytesReader` to prevent memory exhaustion attacks (DoS) from massive payloads.
 - **Header Sanitization:** When proxying requests, strip hop-by-hop headers (like `Connection`, `Content-Length`) to prevent HTTP desync attacks. Pass only necessary headers (e.g., `Authorization`).
 - **Error Handling:** Never expose internal stack traces to the HTTP response. Log errors internally and return standard HTTP status codes.

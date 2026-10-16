@@ -85,6 +85,7 @@ type Metrics struct {
 	streamStalled      sync.Map
 	emptyStreams       sync.Map
 	streamContinuation sync.Map
+	clientStalled      sync.Map
 	streamEarlyErrors  sync.Map
 	streamBootstrap    sync.Map
 	bootstrapHold      sync.Map
@@ -779,6 +780,19 @@ func (m *Metrics) IncMCPCredentialRejection(server string) {
 		return
 	}
 	e := getOrCreateEntry(&m.mcpCredentialRejections, map[string]string{"server": server})
+	e.value.Add(1)
+}
+
+// RecordClientStalled increments the counter for streaming clients that
+// stopped reading (NENYA-155): a per-write deadline fired on the response
+// path. Never charged to provider health.
+func (m *Metrics) RecordClientStalled(model, provider string) {
+	if m == nil {
+		return
+	}
+	e := getOrCreateEntry(&m.clientStalled, map[string]string{
+		"model": model, "provider": provider,
+	})
 	e.value.Add(1)
 }
 
@@ -1596,10 +1610,8 @@ func (m *Metrics) WritePrometheus(w io.Writer) {
 		return
 	}
 
-	m.writeCounterMap(w, "nenya_billing_spend_cents_total",
-		"Total spend by provider and account in cents. Cumulative since process start; ResetSpend does not rewind this series.", &m.billingSpend)
-	m.writeCounterMap(w, "nenya_billing_exhausted",
-		"Total times billing accounts were marked exhausted.", &m.billingExhausted)
+	m.writeCounterMap(w, "nenya_billing_spend_cents_total", "Total spend by provider and account in cents. Cumulative since process start; ResetSpend does not rewind this series.", &m.billingSpend)
+	m.writeCounterMap(w, "nenya_billing_exhausted", "Total times billing accounts were marked exhausted.", &m.billingExhausted)
 	m.writeGaugeMap(w, "nenya_billing_utilization_ratio",
 		"Billing utilization ratio (0-100) by provider.", &m.billingUtilization)
 	m.writeCounterMap(w, "nenya_billing_quota_fetch_total",
@@ -1642,6 +1654,8 @@ func (m *Metrics) WritePrometheus(w io.Writer) {
 		"Total times all agent targets were exhausted.", &m.exhausted)
 	m.writeCounterMap(w, "nenya_stream_blocked_total",
 		"Total upstream streams killed by execution policy.", &m.streamBlocked)
+	m.writeCounterMap(w, "nenya_client_stalled_total",
+		"Total streaming clients evicted by the per-write stall deadline (stopped reading; NENYA-155).", &m.clientStalled)
 	m.writeCounterMap(w, "nenya_stream_stalled_total",
 		"Total upstream streams killed by idle timeout.", &m.streamStalled)
 	m.writeCounterMap(w, "nenya_stream_interrupts_total",

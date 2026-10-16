@@ -1266,3 +1266,32 @@ func TestValidateAPIKeyToolGrants(t *testing.T) {
 		t.Fatalf("disabled keys must be skipped, got %v", errs)
 	}
 }
+
+// TestValidateStreamStallTimeoutSeconds pins the NENYA-155 knob: nil = the
+// 60s default, an explicit 0 disables, 86400 (24h) is the cap.
+func TestValidateStreamStallTimeoutSeconds(t *testing.T) {
+	tests := []struct {
+		name       string
+		v          *int
+		wantErr    bool
+		wantErrMsg string
+	}{
+		{"nil means the default", nil, false, ""},
+		{"explicit zero disables", PtrTo(0), false, ""},
+		{"the 60s default is valid", PtrTo(60), false, ""},
+		{"the 24h cap is valid", PtrTo(86400), false, ""},
+		{"negative is invalid", PtrTo(-1), true, "must be non-negative"},
+		{"past the cap is invalid", PtrTo(86401), true, "exceeds maximum allowed value"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			errs := validateStreamStallTimeoutSeconds(tt.v)
+			if (len(errs) > 0) != tt.wantErr {
+				t.Fatalf("validateStreamStallTimeoutSeconds(%v) errors = %v, wantErr %v", tt.v, errs, tt.wantErr)
+			}
+			if tt.wantErr && !strings.Contains(errs[0], tt.wantErrMsg) {
+				t.Fatalf("error %q does not contain %q", errs[0], tt.wantErrMsg)
+			}
+		})
+	}
+}

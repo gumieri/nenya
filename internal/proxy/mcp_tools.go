@@ -40,6 +40,9 @@ type bufferedSSE struct {
 	finishReason     string
 	hasContent       bool
 	model            string
+	// providerName is the target that produced the buffer (NENYA-155): the
+	// replay write's client-stall telemetry is labeled with it.
+	providerName string
 	// exfilBlocked marks a buffer truncated by the egress guard: callers
 	// must not replay it and should emit the structured block payload.
 	exfilBlocked bool
@@ -126,10 +129,10 @@ func (b *bufferedSSE) usageChunk() map[string]interface{} {
 // replayBufferedResponse writes a buffered SSE response to the client.
 // This is used during MCP tool call loops to replay the assistant message
 // and tool calls before sending tool results.
-func replayBufferedResponse(w http.ResponseWriter, buf *bufferedSSE, logger *slog.Logger) {
+func replayBufferedResponse(w http.ResponseWriter, buf *bufferedSSE, gw *gateway.NenyaGateway, providerName string, logger *slog.Logger) {
 	if len(buf.rawBytes) == 0 {
 		logger.Warn("MCP loop: empty buffered response, sending error")
-		writeSSEError(w, http.StatusInternalServerError, "MCP loop: empty response from upstream")
+		writeSSEError(gw, w, http.StatusInternalServerError, "MCP loop: empty response from upstream")
 		return
 	}
 
@@ -142,10 +145,8 @@ func replayBufferedResponse(w http.ResponseWriter, buf *bufferedSSE, logger *slo
 	w.Header().Set("Cache-Control", "no-cache")
 	w.WriteHeader(http.StatusOK)
 
-	if fw, ok := newImmediateFlushWriter(w); ok {
-		if _, err := fw.Write(buf.rawBytes); err != nil {
-			return
-		}
+	if fw, ok := newImmediateFlushWriter(w, resolveStreamStallTimeout(gw)); ok {
+		replayViaFlushWriter(gw, fw, buf, providerName)
 	} else {
 		if _, err := w.Write(buf.rawBytes); err != nil {
 			return
@@ -153,9 +154,26 @@ func replayBufferedResponse(w http.ResponseWriter, buf *bufferedSSE, logger *slo
 	}
 }
 
+// replayViaFlushWriter writes one replay chunk through the flushing writer and
+// classifies a failure: a per-write deadline timeout is client_stalled
+// (NENYA-155) — telemetry only, never a provider fault.
+func replayViaFlushWriter(gw *gateway.NenyaGateway, fw *immediateFlushWriter, buf *bufferedSSE, providerName string) {
+	if _, err := fw.Write(buf.rawBytes); err == nil {
+		return
+	} else if isWriteTimeout(err) {
+		if gw != nil {
+			gw.Metrics.RecordClientStalled("", providerName)
+		}
+	}
+}
+
 // writeSSEError sends an SSE error event to the client with the given status code and message.
 // The error is formatted as an OpenAI-compatible error object and followed by [DONE].
-func writeSSEError(w http.ResponseWriter, statusCode int, message string) {
+func writeSSEError(gw *gateway.NenyaGateway, w http.ResponseWriter, statusCode int, message string) {
+	// NENYA-155: re-arm the client-stall deadline — a terminal written long
+	// after the last streamed chunk must not be silently dropped by the stale
+	// deadline, and must stay bounded against a stuck peer.
+	armClientWriteDeadline(w, resolveStreamStallTimeout(gw))
 	writeGatewayStreamError(w, statusCode, ErrorTypeGateway, message)
 }
 
@@ -419,6 +437,7 @@ func (acc *sseAccumulator) result() *bufferedSSE {
 		finishReason:     acc.finishReason,
 		hasContent:       acc.hasContent,
 		model:            acc.model,
+		providerName:     "",
 		reasoningContent: reasoningStr,
 		streamError:      acc.streamError,
 	}
@@ -451,6 +470,9 @@ func bufferStreamResponse(ctx context.Context, r io.Reader, logger *slog.Logger,
 	out := acc.result()
 	out.calibrationModel = servingModel
 	out.servingTarget = servingTarget
+	// NENYA-155: the replay write's client-stall telemetry is labeled with
+	// the producing provider.
+	out.providerName = servingTarget.Provider
 	return out, nil
 }
 

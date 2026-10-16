@@ -615,7 +615,7 @@ func TestStreamingBufPool_ConcurrentSafe(t *testing.T) {
 
 func TestImmediateFlushWriter_FlushesOnEveryWrite(t *testing.T) {
 	rec := httptest.NewRecorder()
-	fw, _ := newImmediateFlushWriter(rec)
+	fw, _ := newImmediateFlushWriter(rec, 0)
 
 	_, err := fw.Write([]byte("chunk1"))
 	if err != nil {
@@ -637,7 +637,7 @@ func TestImmediateFlushWriter_FlushesOnEveryWrite(t *testing.T) {
 
 func TestImmediateFlushWriter_PropagatesHeader(t *testing.T) {
 	rec := httptest.NewRecorder()
-	fw, _ := newImmediateFlushWriter(rec)
+	fw, _ := newImmediateFlushWriter(rec, 0)
 
 	fw.Header().Set("X-Custom", "test")
 	if rec.Header().Get("X-Custom") != "test" {
@@ -647,7 +647,7 @@ func TestImmediateFlushWriter_PropagatesHeader(t *testing.T) {
 
 func TestImmediateFlushWriter_WriteHeader(t *testing.T) {
 	rec := httptest.NewRecorder()
-	fw, _ := newImmediateFlushWriter(rec)
+	fw, _ := newImmediateFlushWriter(rec, 0)
 
 	fw.WriteHeader(http.StatusCreated)
 	if rec.Code != http.StatusCreated {
@@ -657,7 +657,7 @@ func TestImmediateFlushWriter_WriteHeader(t *testing.T) {
 
 func TestImmediateFlushWriter_WriteErrorNoFlush(t *testing.T) {
 	broken := &brokenWriter{err: io.ErrClosedPipe}
-	fw, _ := newImmediateFlushWriter(broken)
+	fw, _ := newImmediateFlushWriter(broken, 0)
 
 	_, err := fw.Write([]byte("data"))
 	if !errors.Is(err, io.ErrClosedPipe) {
@@ -811,7 +811,7 @@ func TestCopyStream_WithFlushWriter_Integration(t *testing.T) {
 	sseData := "data: {\"chunk\":1}\n\ndata: {\"chunk\":2}\n\ndata: [DONE]\n\n"
 	src := strings.NewReader(sseData)
 	rec := httptest.NewRecorder()
-	fw, _ := newImmediateFlushWriter(rec)
+	fw, _ := newImmediateFlushWriter(rec, 0)
 
 	written, err := copyStream(context.Background(), fw, src, make([]byte, 8))
 	if err != nil {

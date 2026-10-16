@@ -962,6 +962,16 @@ type ServerConfig struct {
 	// address is loopback for exactly this reason. /healthz is always
 	// unauthenticated.
 	TelemetryUnauthenticated bool `json:"telemetry_unauthenticated"`
+	// StreamStallTimeoutSeconds bounds a single client write on the
+	// streaming routes (NENYA-155): the deadline is re-armed before every
+	// write/flush, so only a write that cannot complete within the window —
+	// a client that stopped reading while the provider keeps producing —
+	// trips it; a slow provider with nothing to send never does. On a
+	// breach the upstream dispatch is canceled through the existing
+	// client-disconnect path: no provider cooldown or breaker charge.
+	// nil = the 60s default; an explicit 0 disables (the server-wide
+	// WriteTimeout stays 0). Capped at 86400.
+	StreamStallTimeoutSeconds *int `json:"stream_stall_timeout_seconds"`
 }
 
 // wasSet returns true if v is non-nil (field was explicitly set by user).

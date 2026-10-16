@@ -409,7 +409,7 @@ func (p *Proxy) streamResponse(opts streamResponseOpts, action upstreamAction) s
 	gw.ExtractQuotaFromResponseHeaders(r.Context(), target.Provider, target.AccountName, action.resp.Header)
 
 	buf := getStreamBuffer()
-	flushWriter, canFlush := newImmediateFlushWriter(w)
+	flushWriter, canFlush := newImmediateFlushWriter(w, resolveStreamStallTimeout(gw))
 	dst, captureBuf, tee := p.setupStreamWriter(gw, flushWriter, canFlush, w, cacheKey)
 
 	// Transparent stream continuation: when the upstream stream is cut
@@ -552,6 +552,21 @@ func (p *Proxy) resolveTransformer(gw *gateway.NenyaGateway, target routing.Upst
 	}
 
 	return nil
+}
+
+// resolveStreamStallTimeout returns the per-write client-stall deadline
+// (NENYA-155): an explicit 0 disables, anything positive is seconds. A nil
+// field or nil gateway also disables — ApplyDefaults forces the 60s default
+// at load/reload, so this path is reachable only from programmatically built
+// configs (tests).
+func resolveStreamStallTimeout(gw *gateway.NenyaGateway) time.Duration {
+	if gw == nil {
+		return 0
+	}
+	if v := gw.Config.Server.StreamStallTimeoutSeconds; v != nil && *v > 0 {
+		return time.Duration(*v) * time.Second
+	}
+	return 0
 }
 
 func resolveStreamIdleTimeout(gw *gateway.NenyaGateway, providerName string) time.Duration {
@@ -915,8 +930,16 @@ func (p *Proxy) handleStreamDone(gw *gateway.NenyaGateway, w http.ResponseWriter
 	}
 
 	if isClientWriteError(copyErr) {
+		stalled := isClientStalled(copyErr)
+		if stalled {
+			// NENYA-155: the peer stopped reading — the per-write deadline
+			// fired. Classified client_stalled: no provider cooldown or
+			// breaker charge, only telemetry.
+			gw.Metrics.RecordClientStalled(target.Model, target.Provider)
+		}
 		gw.Logger.Info("client disconnected mid-write, aborting upstream stream",
-			"model", target.Model, "provider", target.Provider)
+			"model", target.Model, "provider", target.Provider,
+			"client_stalled", stalled)
 		// Connection-scoped (NENYA-42): no breaker outcome, but the dispatch
 		// consumed a half-open probe slot, and a release is not a state write.
 		gw.AgentState.CB.ReleaseHalfOpen(target.CoolKey)
@@ -964,7 +987,7 @@ func (p *Proxy) handleStreamDone(gw *gateway.NenyaGateway, w http.ResponseWriter
 	if errors.Is(copyErr, context.Canceled) || errors.Is(copyErr, context.DeadlineExceeded) {
 		return streamResult{}
 	}
-	writeSSEError(w, http.StatusOK, "upstream stream interrupted")
+	writeSSEError(gw, w, http.StatusOK, "upstream stream interrupted")
 	return streamResult{}
 }
 
@@ -1146,6 +1169,7 @@ func extractUserTextForEmbedding(payload map[string]any) string {
 // idle timeout). The error event lets the client distinguish a stall from a
 // normal completion.
 func (p *Proxy) writeStallSSE(gw *gateway.NenyaGateway, w http.ResponseWriter) {
+	armClientWriteDeadline(w, resolveStreamStallTimeout(gw))
 	_, _ = w.Write(stallSSEFrames())
 	flushPassthrough(w)
 }
@@ -1169,6 +1193,7 @@ func stallSSEFrames() []byte {
 }
 
 func (p *Proxy) writeTimeoutSSE(gw *gateway.NenyaGateway, w http.ResponseWriter) {
+	armClientWriteDeadline(w, resolveStreamStallTimeout(gw))
 	errPayload, err := json.Marshal(map[string]any{
 		"error_kind": string(infra.ErrorKindProviderTimeout),
 		"error": map[string]any{
@@ -1292,6 +1317,7 @@ func (p *Proxy) writeExfilBlockedSSE(gw *gateway.NenyaGateway, w http.ResponseWr
 // writeBlockedSSEPayload marshals a blocked-response payload and writes
 // it as one SSE data line plus [DONE].
 func (p *Proxy) writeBlockedSSEPayload(gw *gateway.NenyaGateway, w http.ResponseWriter, blockPayload map[string]interface{}) {
+	armClientWriteDeadline(w, resolveStreamStallTimeout(gw))
 	blockJSON, err := json.Marshal(blockPayload)
 	if err != nil {
 		gw.Logger.Error("failed to marshal blocked SSE payload", "err", err)

@@ -113,13 +113,14 @@ func (p *Proxy) handlePassthrough(gw *gateway.NenyaGateway, w http.ResponseWrite
 	if strings.Contains(contentType, "text/event-stream") {
 		timeout := resolveStreamIdleTimeout(gw, providerName)
 		p.pipeSSE(pipeSSEOpts{
-			Ctx:          ctx,
-			Gw:           gw,
-			Logger:       ctxLogger,
-			Src:          resp.Body,
-			Dst:          w,
-			ProviderName: providerName,
-			StallTimeout: timeout,
+			Ctx:                ctx,
+			Gw:                 gw,
+			Logger:             ctxLogger,
+			Src:                resp.Body,
+			Dst:                w,
+			ProviderName:       providerName,
+			StallTimeout:       timeout,
+			ClientStallTimeout: resolveStreamStallTimeout(gw),
 		})
 	} else {
 		writeUpstreamResponse(ctx, w, resp, ctxLogger)
@@ -171,6 +172,9 @@ type pipeSSEOpts struct {
 	Dst          http.ResponseWriter
 	ProviderName string
 	StallTimeout time.Duration
+	// ClientStallTimeout is the per-write client-stall deadline (NENYA-155);
+	// 0 disables.
+	ClientStallTimeout time.Duration
 }
 
 // pipeSSE copies SSE data from src to dst with stall detection. Known caveat
@@ -180,7 +184,7 @@ type pipeSSEOpts struct {
 // stop at [DONE], but the stall counter can over-count.
 func (p *Proxy) pipeSSE(o pipeSSEOpts) {
 	if o.StallTimeout <= 0 {
-		p.pipeSSERaw(o.Ctx, o.Logger, o.Src, o.Dst)
+		p.pipeSSERaw(o)
 		return
 	}
 
@@ -194,8 +198,9 @@ func (p *Proxy) pipeSSE(o pipeSSEOpts) {
 	for {
 		n, err := stallR.Read(buf)
 		if n > 0 {
+			armClientWriteDeadline(o.Dst, o.ClientStallTimeout)
 			if _, writeErr := o.Dst.Write(buf[:n]); writeErr != nil {
-				o.Logger.Debug("SSE write error", "err", writeErr)
+				p.handlePassthroughWriteError(o.Gw, o.Logger, o.ProviderName, writeErr)
 				return
 			}
 			flushPassthrough(o.Dst)
@@ -220,28 +225,46 @@ func flushPassthrough(dst http.ResponseWriter) {
 }
 
 // pipeSSERaw copies SSE data from src to dst without stall detection.
-func (p *Proxy) pipeSSERaw(ctx context.Context, ctxLogger *slog.Logger, src io.Reader, dst http.ResponseWriter) {
+func (p *Proxy) pipeSSERaw(o pipeSSEOpts) {
 	buf := make([]byte, 4096)
 	for {
-		n, err := src.Read(buf)
+		n, err := o.Src.Read(buf)
 		if n > 0 {
-			if _, writeErr := dst.Write(buf[:n]); writeErr != nil {
-				ctxLogger.Debug("SSE write error", "err", writeErr)
+			armClientWriteDeadline(o.Dst, o.ClientStallTimeout)
+			if _, writeErr := o.Dst.Write(buf[:n]); writeErr != nil {
+				p.handlePassthroughWriteError(o.Gw, o.Logger, o.ProviderName, writeErr)
 				return
 			}
-			flushPassthrough(dst)
+			flushPassthrough(o.Dst)
 		}
 		if err != nil {
 			if err != io.EOF {
-				ctxLogger.Debug("passthrough SSE read error", "err", err)
+				o.Logger.Debug("passthrough SSE read error", "err", err)
 			}
 			return
 		}
-		if ctx.Err() != nil {
-			ctxLogger.Debug("passthrough SSE stream canceled by context")
+		if o.Ctx.Err() != nil {
+			o.Logger.Debug("passthrough SSE stream canceled by context")
 			return
 		}
 	}
+}
+
+// handlePassthroughWriteError resolves a client write error on the passthrough
+// SSE path (NENYA-155): a per-write deadline timeout is classified
+// client_stalled — the peer stopped reading — and recorded, never charged to
+// provider health. There is no fallback chain here, and no terminal can be
+// delivered to a socket that is not draining.
+func (p *Proxy) handlePassthroughWriteError(gw *gateway.NenyaGateway, ctxLogger *slog.Logger, providerName string, err error) {
+	if isWriteTimeout(err) {
+		ctxLogger.Info("passthrough SSE client stalled, aborting upstream copy",
+			"provider", providerName)
+		if gw != nil {
+			gw.Metrics.RecordClientStalled("", providerName)
+		}
+		return
+	}
+	ctxLogger.Debug("SSE write error", "err", err)
 }
 
 // handlePassthroughReadError resolves a stalled-reader error on the passthrough
@@ -261,6 +284,7 @@ func (p *Proxy) handlePassthroughReadError(gw *gateway.NenyaGateway, ctxLogger *
 	ctxLogger.Warn("passthrough SSE stream stalled, emitting stall terminal",
 		"provider", providerName)
 	// A blank line at a true boundary is a no-op for SSE parsers.
+	armClientWriteDeadline(dst, resolveStreamStallTimeout(gw))
 	_, _ = dst.Write([]byte("\n\n"))
 	_, _ = dst.Write(stallSSEFrames())
 	flushPassthrough(dst)

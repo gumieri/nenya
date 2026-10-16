@@ -82,7 +82,7 @@ func TestStreamingErrorWriters_WellFormedFrames(t *testing.T) {
 		"blocked":        func(w http.ResponseWriter) { p.writeBlockedSSE(gw, w) },
 		"exfil detected": func(w http.ResponseWriter) { p.writeExfilDetectedSSE(gw, w) },
 		"exfil blocked":  func(w http.ResponseWriter) { p.writeExfilBlockedSSE(gw, w) },
-		"interrupted":    func(w http.ResponseWriter) { writeSSEError(w, http.StatusOK, "upstream stream interrupted") },
+		"interrupted":    func(w http.ResponseWriter) { writeSSEError(nil, w, http.StatusOK, "upstream stream interrupted") },
 	}
 	for name, write := range writers {
 		t.Run(name, func(t *testing.T) {
@@ -144,7 +144,7 @@ func TestStreamingErrorFrameAfterUnterminatedReaderOutput(t *testing.T) {
 
 	rec := httptest.NewRecorder()
 	_, _ = rec.Write(committed.Bytes())
-	writeSSEError(rec, http.StatusOK, "upstream stream interrupted")
+	writeSSEError(nil, rec, http.StatusOK, "upstream stream interrupted")
 
 	payloads := assertSSEEventsWellFormed(t, rec.Body.String())
 	// content, synthesized finish_reason, [DONE], terminal gateway_error,

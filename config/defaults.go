@@ -164,6 +164,12 @@ func applyServerDefaults(cfg *Config) {
 	if cfg.Server.MaxBodyBytes == 0 {
 		cfg.Server.MaxBodyBytes = 10 << 20
 	}
+	if cfg.Server.StreamStallTimeoutSeconds == nil {
+		// GoModel parity (#921): a stuck reader must not pin the handler
+		// goroutine and the upstream connection forever. An explicit 0
+		// disables; wasSet distinguishes the two.
+		cfg.Server.StreamStallTimeoutSeconds = PtrTo(60)
+	}
 	if cfg.Server.UserAgent == "" {
 		cfg.Server.UserAgent = "github.com/nenya/1.0"
 	}

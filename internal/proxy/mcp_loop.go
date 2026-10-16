@@ -414,7 +414,7 @@ func (p *Proxy) forwardToUpstreamWithMCP(gw *gateway.NenyaGateway,
 	originalPayload, err := json.Marshal(opts.Payload)
 	if err != nil {
 		gw.Logger.Error("failed to marshal payload for MCP loop", "err", err)
-		writeSSEError(w, http.StatusInternalServerError, "Internal Server Error")
+		writeSSEError(gw, w, http.StatusInternalServerError, "Internal Server Error")
 		return
 	}
 
@@ -486,7 +486,7 @@ loop:
 	if lastBuf != nil {
 		gw.Logger.Warn("MCP loop exhausted, replaying last response",
 			"max_iterations", maxIter, "agent", opts.AgentName)
-		p.replayGuardedBuffered(gw, w, lastBuf, opts.AgentName)
+		p.replayGuardedBufferedWithProvider(gw, w, lastBuf, lastBufProviderName(lastBuf), opts.AgentName)
 		p.recordMCPUsage(gw, lastBuf, opts.AgentName)
 		return
 	}
@@ -548,9 +548,9 @@ func (p *Proxy) mcpIteration(in mcpIterInput) int {
 			// usage was claimed by recordMCPIterationUsage at its own
 			// iteration, so this call is an idempotent no-op (NENYA-193).
 			p.recordMCPUsage(in.gw, *in.lastBuf, in.opts.AgentName)
-			p.replayGuardedBuffered(in.gw, in.w, *in.lastBuf, in.opts.AgentName)
+			p.replayGuardedBufferedWithProvider(in.gw, in.w, *in.lastBuf, lastBufProviderName(*in.lastBuf), in.opts.AgentName)
 		} else {
-			writeSSEError(in.w, http.StatusRequestTimeout, "MCP loop deadline exceeded")
+			writeSSEError(in.gw, in.w, http.StatusRequestTimeout, "MCP loop deadline exceeded")
 		}
 		return mcpIterReturn
 	default:
@@ -589,10 +589,10 @@ func (p *Proxy) mcpIteration(in mcpIterInput) int {
 		in.gw.Logger.Warn("MCP loop: upstream failed, streaming last response",
 			"iteration", in.iteration, "err", err)
 		if *in.lastBuf != nil {
-			p.replayGuardedBuffered(in.gw, in.w, *in.lastBuf, in.opts.AgentName)
+			p.replayGuardedBufferedWithProvider(in.gw, in.w, *in.lastBuf, lastBufProviderName(*in.lastBuf), in.opts.AgentName)
 			return mcpIterReturn
 		}
-		writeSSEError(in.w, http.StatusBadGateway, "All upstream providers failed")
+		writeSSEError(in.gw, in.w, http.StatusBadGateway, "All upstream providers failed")
 		return mcpIterReturn
 	}
 
@@ -602,7 +602,7 @@ func (p *Proxy) mcpIteration(in mcpIterInput) int {
 			"has_content", buf.hasContent,
 			"finish_reason", buf.finishReason,
 			"raw_bytes_len", len(buf.rawBytes))
-		p.replayGuardedBuffered(in.gw, in.w, buf, in.opts.AgentName)
+		p.replayGuardedBufferedWithProvider(in.gw, in.w, buf, lastBufProviderName(buf), in.opts.AgentName)
 		p.recordMCPUsage(in.gw, buf, in.opts.AgentName)
 		return mcpIterReturn
 	}
@@ -625,7 +625,7 @@ func (p *Proxy) mcpIteration(in mcpIterInput) int {
 		if err != nil {
 			in.gw.Logger.Error("failed to marshal updated payload for MCP loop", "err", err)
 			p.recordMCPUsage(in.gw, buf, in.opts.AgentName)
-			p.replayGuardedBuffered(in.gw, in.w, buf, in.opts.AgentName)
+			p.replayGuardedBufferedWithProvider(in.gw, in.w, buf, lastBufProviderName(buf), in.opts.AgentName)
 			return mcpIterReturn
 		}
 		*in.originalPayload = updatedPayload
@@ -635,7 +635,7 @@ func (p *Proxy) mcpIteration(in mcpIterInput) int {
 		in.gw.Logger.Debug("MCP loop: non-MCP tool calls only, replaying",
 			"non_mcp_calls", len(nonMcpCalls),
 			"raw_bytes_len", len(buf.rawBytes))
-		p.replayGuardedBuffered(in.gw, in.w, buf, in.opts.AgentName)
+		p.replayGuardedBufferedWithProvider(in.gw, in.w, buf, lastBufProviderName(buf), in.opts.AgentName)
 		p.recordMCPUsage(in.gw, buf, in.opts.AgentName)
 		return mcpIterReturn
 	}
@@ -733,10 +733,10 @@ func (p *Proxy) rescanAppendedMessages(in mcpIterInput, working map[string]any, 
 func (p *Proxy) handleRescanFailure(in mcpIterInput, err error) {
 	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
 		if in.lastBuf != nil && *in.lastBuf != nil {
-			p.replayGuardedBuffered(in.gw, in.w, *in.lastBuf, in.opts.AgentName)
+			p.replayGuardedBufferedWithProvider(in.gw, in.w, *in.lastBuf, (*in.lastBuf).providerName, in.opts.AgentName)
 			return
 		}
-		writeSSEError(in.w, http.StatusRequestTimeout, "MCP loop deadline exceeded")
+		writeSSEError(in.gw, in.w, http.StatusRequestTimeout, "MCP loop deadline exceeded")
 		return
 	}
 	writePipelineRejection(in.gw, in.w, err)
@@ -1141,7 +1141,19 @@ func (p *Proxy) guardBufferedLine(guard *stream.ExfilGuard, line string) (string
 // replayGuardedBuffered replays a buffered MCP response through the
 // egress-guard verdict: a buffer truncated by the guard gets the
 // structured block payload instead of the violating frames.
-func (p *Proxy) replayGuardedBuffered(gw *gateway.NenyaGateway, w http.ResponseWriter, buf *bufferedSSE, agentName string) {
+// lastBufProviderName extracts the producing provider from a buffered
+// response, nil-safe (NENYA-155 replay telemetry).
+func lastBufProviderName(buf *bufferedSSE) string {
+	if buf == nil {
+		return ""
+	}
+	return buf.providerName
+}
+
+// replayGuardedBufferedWithProvider threads the target's provider name so a
+// client stall on the replay write is telemetered with the real label
+// (NENYA-155); the provider-less wrapper keeps the older call sites honest.
+func (p *Proxy) replayGuardedBufferedWithProvider(gw *gateway.NenyaGateway, w http.ResponseWriter, buf *bufferedSSE, providerName string, agentName string) {
 	if buf != nil && buf.exfilBlocked {
 		gw.Logger.Warn("MCP loop: response blocked by exfil guard", "agent", agentName)
 		p.writeExfilBlockedSSE(gw, w)
@@ -1152,7 +1164,7 @@ func (p *Proxy) replayGuardedBuffered(gw *gateway.NenyaGateway, w http.ResponseW
 		p.writeExfilDetectedSSE(gw, w)
 		return
 	}
-	replayBufferedResponse(w, buf, gw.Logger)
+	replayBufferedResponse(w, buf, gw, providerName, gw.Logger)
 }
 
 func detectRequestCapabilities(payload map[string]interface{}) routing.RequestCapabilities {

@@ -630,6 +630,10 @@ func mapErrorKind(errType ErrorType) infra.ErrorKind {
 // writeGatewayStreamError writes an OpenAI-compatible error as an SSE event
 // followed by [DONE]. Use this for streaming requests that fail before headers
 // are written, so the client receives a properly terminated SSE stream.
+// Contract (NENYA-155): call sites must run before any client-visible bytes —
+// a mid-stream terminal must instead go through a writer that re-arms the
+// client-stall deadline (writeSSEError/writeStallSSE/writeBlockedSSEPayload),
+// otherwise the deadline left armed by the last streamed chunk drops it.
 func writeGatewayStreamError(w http.ResponseWriter, statusCode int, errType ErrorType, message string) {
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
