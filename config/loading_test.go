@@ -585,3 +585,145 @@ func TestResolveProviders_ModelAliasesFlow(t *testing.T) {
 		t.Fatalf("alias not carried to runtime provider: %v", p.ModelAliases)
 	}
 }
+
+// TestConfigDropInPatchesProviderField pins NENYA-203: a drop-in that
+// patches ONE field of a base provider entry keeps the base's other
+// fields — the whole-entry replacement silently discarded urls,
+// allowlists, and model classifications.
+func TestConfigDropInPatchesProviderField(t *testing.T) {
+	base := &Config{
+		Providers: map[string]ProviderConfig{
+			"mygateway": {
+				URL:           "https://gw.example.com/v1",
+				NonChatModels: []string{"^legacy-"},
+			},
+		},
+	}
+	dropIn := &Config{
+		Providers: map[string]ProviderConfig{
+			"mygateway": {TimeoutSeconds: 30},
+		},
+	}
+	mergeConfig(base, dropIn)
+
+	p := base.Providers["mygateway"]
+	if p.URL != "https://gw.example.com/v1" {
+		t.Fatalf("base url discarded by the patching drop-in: %q", p.URL)
+	}
+	if len(p.NonChatModels) != 1 || p.NonChatModels[0] != "^legacy-" {
+		t.Fatalf("base non_chat_models discarded by the patching drop-in: %v", p.NonChatModels)
+	}
+	if p.TimeoutSeconds != 30 {
+		t.Fatalf("drop-in field not applied: %d", p.TimeoutSeconds)
+	}
+
+	// An override of a field the base set wins (last file wins).
+	override := &Config{
+		Providers: map[string]ProviderConfig{
+			"mygateway": {URL: "https://gw2.example.com/v1"},
+		},
+	}
+	mergeConfig(base, override)
+	if base.Providers["mygateway"].URL != "https://gw2.example.com/v1" {
+		t.Fatalf("drop-in override did not win: %q", base.Providers["mygateway"].URL)
+	}
+	if len(base.Providers["mygateway"].NonChatModels) != 1 {
+		t.Fatalf("override dropped the base list: %v", base.Providers["mygateway"].NonChatModels)
+	}
+
+	// A drop-in adding a NEW provider works.
+	addition := &Config{
+		Providers: map[string]ProviderConfig{
+			"extra": {URL: "https://extra.example.com"},
+		},
+	}
+	mergeConfig(base, addition)
+	if base.Providers["extra"].URL != "https://extra.example.com" {
+		t.Fatalf("new provider not added: %v", base.Providers["extra"])
+	}
+}
+
+// TestConfigDropInPatchesAgentField pins the same field-wise merge for
+// the agents map: a drop-in tweaking one agent field keeps the agent's
+// model list, and untouched agents pass through untouched.
+func TestConfigDropInPatchesAgentField(t *testing.T) {
+	base := &Config{
+		Agents: map[string]AgentConfig{
+			"coder": {
+				Strategy:         "fallback",
+				CooldownSeconds:  60,
+				FailureThreshold: 5,
+				Models:           []AgentModel{{Model: "primary-model"}, {Model: "backup-model"}},
+			},
+			"other": {Strategy: "round-robin"},
+		},
+	}
+	dropIn := &Config{
+		Agents: map[string]AgentConfig{
+			"coder": {FailureThreshold: 2},
+		},
+	}
+	mergeConfig(base, dropIn)
+
+	coder := base.Agents["coder"]
+	if coder.Strategy != "fallback" || coder.CooldownSeconds != 60 {
+		t.Fatalf("base agent fields discarded: %+v", coder)
+	}
+	if coder.FailureThreshold != 2 {
+		t.Fatalf("drop-in threshold not applied: %d", coder.FailureThreshold)
+	}
+	if len(coder.Models) != 2 || coder.Models[1].Model != "backup-model" {
+		t.Fatalf("base model list discarded: %+v", coder.Models)
+	}
+	if base.Agents["other"].Strategy != "round-robin" {
+		t.Fatalf("untouched agent modified: %+v", base.Agents["other"])
+	}
+}
+
+// TestConfigDropInPatchesMCPServerAndJudgment pins the remaining
+// struct-elem maps: mcp_servers merges field-wise, and a
+// governance.judgments pointer entry merges into a copy of the base
+// pointee — a null pointer field ("site": null) is a no-op that keeps
+// the base entry.
+func TestConfigDropInPatchesMCPServerAndJudgment(t *testing.T) {
+	base := &Config{
+		MCPServers: map[string]MCPServerConfig{
+			"tools": {URL: "https://mcp.example.com/sse"},
+		},
+		Governance: GovernanceConfig{
+			Judgments: map[string]*JudgmentConfig{
+				"injection": {MaxBytes: 1024, Engine: &EngineRef{Provider: "qwen"}},
+			},
+		},
+	}
+	dropIn := &Config{
+		MCPServers: map[string]MCPServerConfig{
+			"tools": {Timeout: 42},
+		},
+		Governance: GovernanceConfig{
+			Judgments: map[string]*JudgmentConfig{
+				"injection": {MaxBytes: 2048},
+			},
+		},
+	}
+	mergeConfig(base, dropIn)
+
+	srv := base.MCPServers["tools"]
+	if srv.URL != "https://mcp.example.com/sse" {
+		t.Fatalf("base mcp server fields discarded: %+v", srv)
+	}
+	if srv.Timeout != 42 {
+		t.Fatalf("drop-in mcp field not applied: %d", srv.Timeout)
+	}
+
+	j := base.Governance.Judgments["injection"]
+	if j == nil {
+		t.Fatal("judgment entry lost")
+	}
+	if j.MaxBytes != 2048 {
+		t.Fatalf("judgment override not applied: %d", j.MaxBytes)
+	}
+	if j.Engine == nil || j.Engine.Provider != "qwen" {
+		t.Fatalf("base judgment field discarded: %+v", j.Engine)
+	}
+}

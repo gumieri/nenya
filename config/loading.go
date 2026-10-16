@@ -232,8 +232,9 @@ func configDropInFiles(dir string) ([]string, error) {
 
 // mergeConfig applies overlay onto base with the directory-mode merge rules:
 // exported struct fields recurse; pointers to structs deep-merge; pointers to
-// scalars, non-empty slices, and non-nil maps are applied (maps merge per key);
-// plain scalars apply when non-zero. The rules cover every field of Config
+// scalars, non-empty slices, and non-nil maps are applied (maps merge per key;
+// struct-valued entries deep-merge per FIELD — NENYA-203); plain scalars apply
+// when non-zero. The rules cover every field of Config
 // structurally, so a newly added field merges without touching this function.
 // The previous hand-written per-section mergers silently dropped any field they
 // did not enumerate (for example governance.injection/canary/exfil_guard).
@@ -300,7 +301,17 @@ func mergeStruct(dst, src reflect.Value) {
 	}
 }
 
-// mergeMapValue merges maps per key (replacing each present key's value).
+// mergeMapValue merges maps per key. When the element type is a struct
+// (or pointer to struct) — providers, agents, mcp_servers — and the base
+// already has that key, the entry is deep-merged FIELD-WISE (NENYA-203):
+// a drop-in patching one field of an existing entry must not discard the
+// others. Every other element shape (scalars, slices, pointers to
+// scalars) is last-file-wins. Inside struct entries the mergeConfig
+// value rules apply: zero scalars/empty slices/nil pointers leave the
+// base field, so clearing a base value from a drop-in is not possible.
+// Map values are not addressable, so struct entries are merged into a
+// copy and stored back (pointer entries into a fresh pointee — the
+// base's pointee is never mutated in place).
 func mergeMapValue(dst, src reflect.Value) {
 	if src.Len() == 0 {
 		return
@@ -308,8 +319,30 @@ func mergeMapValue(dst, src reflect.Value) {
 	if dst.IsNil() {
 		dst.Set(reflect.MakeMap(src.Type()))
 	}
+	elem := src.Type().Elem()
+	mergeable := elem.Kind() == reflect.Struct ||
+		(elem.Kind() == reflect.Pointer && elem.Elem().Kind() == reflect.Struct)
 	iter := src.MapRange()
 	for iter.Next() {
+		existing := dst.MapIndex(iter.Key())
+		if mergeable && existing.IsValid() {
+			merged := reflect.New(elem).Elem()
+			switch elem.Kind() {
+			case reflect.Pointer:
+				if !existing.IsNil() {
+					// Copy the pointee: never mutate the base's entry
+					// in place (copy-on-write symmetry with the struct
+					// path).
+					merged.Set(reflect.New(elem.Elem()))
+					merged.Elem().Set(existing.Elem())
+				}
+			default:
+				merged.Set(existing)
+			}
+			mergeValue(merged, iter.Value())
+			dst.SetMapIndex(iter.Key(), merged)
+			continue
+		}
 		dst.SetMapIndex(iter.Key(), iter.Value())
 	}
 }
