@@ -1202,6 +1202,16 @@ func (p *Proxy) prepareAndSend(gw *gateway.NenyaGateway,
 	gw.Metrics.RecordConcurrencyWait(target.Provider, target.Model, time.Since(waitStart))
 	gw.Metrics.IncConcurrencyInflight(target.Provider, target.Model)
 	release = wrapConcurrencyRelease(release, gw, target.Provider, target.Model)
+	// A panic between the acquire and the action's return escapes to the
+	// handler's recover with the slot and the inflight gauge leaked
+	// (NENYA-184). Release on the panic path; Once makes this idempotent
+	// with the action's own releaseSlot on every normal path.
+	defer func() {
+		if r := recover(); r != nil {
+			release()
+			panic(r)
+		}
+	}()
 
 	// NENYA-189: the thought-signature view is scoped to the caller's API
 	// key; a nil key fails closed (no cached signature state at all).

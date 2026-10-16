@@ -2,6 +2,7 @@ package infra
 
 import (
 	"context"
+	"math"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -56,10 +57,26 @@ func (c *ConcurrencyLimiter) Acquire(ctx context.Context, key string, limit int)
 
 	slot := c.getOrCreateSlot(key, limit)
 
-	select {
-	case slot.sem <- struct{}{}:
-	case <-ctx.Done():
-		return nil, ctx.Err()
+	for {
+		select {
+		case slot.sem <- struct{}{}:
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+
+		// The granted token must live in the REGISTERED slot: a cap
+		// eviction may have replaced it between getOrCreateSlot and the
+		// grant (a TOCTOU on the emptiness check — NENYA-184 review),
+		// orphaning the token and silently bypassing the limit. Drain
+		// the orphan and retry against the registered slot.
+		c.mu.RLock()
+		registered := c.slots[key] == slot
+		c.mu.RUnlock()
+		if registered {
+			break
+		}
+		<-slot.sem
+		slot = c.getOrCreateSlot(key, limit)
 	}
 
 	slot.markUsed()
@@ -87,7 +104,7 @@ func (c *ConcurrencyLimiter) getOrCreateSlot(key string, limit int) *concSlot {
 		return s
 	}
 	if len(c.slots) >= maxConcurrencyKeys {
-		evictIdleConcurrencySlotsLocked(c)
+		evictConcurrencySlotsLocked(c)
 	}
 	s := &concSlot{sem: make(chan struct{}, limit)}
 	s.lastUsed.Store(time.Now().UnixNano())
@@ -99,14 +116,39 @@ func (c *ConcurrencyLimiter) getOrCreateSlot(key string, limit int) *concSlot {
 // matching maxRateLimitHosts.
 const maxConcurrencyKeys = 100
 
-// evictIdleConcurrencySlotsLocked removes keys that have been idle past the
-// threshold. Caller must hold c.mu.
-func evictIdleConcurrencySlotsLocked(c *ConcurrencyLimiter) {
+// evictConcurrencySlotsLocked bounds the registry when the cap is
+// hit: first it removes keys idle past the threshold; if the registry is
+// still at cap (all keys recently active — the high-cardinality case),
+// it drops the single least-recently-used EMPTY slot. In-flight slots are
+// never evicted: dropping one orphans its granted tokens, so releases
+// would decrement an orphaned channel while new acquires created a fresh
+// semaphore — silently bypassing the limit. Caller must hold c.mu.
+func evictConcurrencySlotsLocked(c *ConcurrencyLimiter) {
 	now := time.Now()
 	for k, s := range c.slots {
 		if len(s.sem) == 0 && now.Sub(time.Unix(0, s.lastUsed.Load())) > concurrencyIdleThreshold {
 			delete(c.slots, k)
 		}
+	}
+	// Soft cap: more than maxConcurrencyKeys SIMULTANEOUSLY in-flight
+	// keys may transiently exceed the registry (all-empty scan finds
+	// nothing to evict); the bound holds for every empty slot.
+	if len(c.slots) < maxConcurrencyKeys {
+		return
+	}
+	var oldestKey string
+	found := false
+	var oldestUsed int64 = math.MaxInt64
+	for k, s := range c.slots {
+		if len(s.sem) > 0 {
+			continue
+		}
+		if lu := s.lastUsed.Load(); lu < oldestUsed {
+			oldestUsed, oldestKey, found = lu, k, true
+		}
+	}
+	if found {
+		delete(c.slots, oldestKey)
 	}
 }
 

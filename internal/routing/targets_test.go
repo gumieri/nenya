@@ -843,3 +843,26 @@ func TestAgentStatePerAgentThresholds(t *testing.T) {
 		t.Fatal("slow did not trip at the default failure threshold")
 	}
 }
+
+// TestSelectorCacheSoakBounded is the NENYA-184 memory-soak fixture for
+// the shared selector cache: repeated dynamic expansions (fresh catalog
+// timestamps each round) must keep exactly one entry per agent — the
+// cache is keyed by agent name, never by request, so nothing
+// request-scoped survives into shared state.
+func TestSelectorCacheSoakBounded(t *testing.T) {
+	as := NewAgentState(testLogger(), nil)
+	models := []config.AgentModel{{Model: "m", Provider: "prov", ProviderRgx: "prov"}}
+	catalog := discovery.NewModelCatalog()
+	providers := map[string]*config.Provider{"prov": {Name: "prov"}}
+
+	for i := 0; i < 500; i++ {
+		catalog.UpdateFetchedAt(time.Now().Add(time.Duration(i) * time.Second))
+		as.expandDynamicWithCache("agent", models, catalog, providers, testLogger())
+	}
+	as.selectorCacheMu.RLock()
+	n := len(as.selectorCache)
+	as.selectorCacheMu.RUnlock()
+	if n != 1 {
+		t.Fatalf("selector cache accumulated %d entries for one agent", n)
+	}
+}
