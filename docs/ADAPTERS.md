@@ -239,3 +239,33 @@ a := adapter.ForProvider("my-provider")
 ```
 
 Unknown providers get the default `OpenAIAdapter`. Providers defined in JSON config (but not registered) get their adapter resolved by `AuthStyle` via `AdapterForAuthStyle()`.
+
+## Field-Preservation Invariant (NENYA-151)
+
+Every request-mutating stage may only ADD defaults for absent fields, MAP a
+field to its documented target-equivalent, or STRIP exactly what its contract
+names. An explicit client value is never silently rewritten by a DEFAULT —
+the one exception is operator policy (zai `thinking` force-enabled), which
+overrides the mode by design. The stages and their contracts:
+
+| Stage | May add (only when absent) | May map | May strip (contract) |
+|-------|----------------------------|---------|----------------------|
+| OpenAI→Anthropic conversion (`copyOpenAIFields`) | — | `stop`→`stop_sequences`, `user`→`metadata.user_id` | fields with no Anthropic equivalent (`service_tier`, `reasoning_effort` after mapping) |
+| `injectReasoningEffort` (Anthropic) | `thinking` budget from `reasoning_effort` (registered models only) | — | — (skipped entirely when the client set `thinking`) |
+| Anthropic-native request path | — | — | nothing: client `cache_control` breakpoints and `thinking` are preserved verbatim |
+| Shared sanitize stage, any provider (`stripBareReasoningField`) | — | — | bare `reasoning` when redundant with `reasoning_effort` or unsupported |
+| DeepSeek sanitize (`applyDeepSeekFixes`) | `reasoning_content: ""` on assistant history messages | — | sampling params ONLY while `thinking.type == "enabled"` |
+| Zai sanitize | `thinking` (auto), temperature 1.0 for GLM-4.6/4.7 | — | — |
+| Zai `thinking` force-enabled (operator config) | — | — | overrides the client's `type` only; `clear_thinking` and other client fields are preserved |
+| Gemini sanitize | temperature 1.0 for Gemini 3+ | `reasoning_effort`→`extra_body.google.thinking_config` | `reasoning_effort` after the mapping |
+| Shared sanitize stage, any provider (`stripStreamOptions`) | — | — | `stream_options` |
+| XAI sanitize | `reasoning_effort: medium` for reasoning Grok | — | — |
+| Anthropic→OpenAI conversion (`copyAnthropicFields`, /v1/messages route) | — | `stop_sequences`→`stop` | `thinking` is deliberately dropped (budget_tokens has no reasoning_effort equivalent yet — documented gap, not a silent rewrite) |
+| OpenAI→Anthropic `thinking` carry | — | — | non-Anthropic-shaped maps (no `type`, or `enabled` without `budget_tokens` — e.g. the zai-dialect map in the shared failover payload) are dropped rather than carried into a guaranteed-400 body; no capability gate or max_tokens clamp on carried maps — an invalid client value fails loud at the upstream, which is the client's contract |
+| Provider param_compat strips (`StripParams`) | — | — | the named parameters only |
+
+Pin tests: `internal/providers/field_preservation_test.go`,
+`internal/routing/field_preservation_test.go`,
+`internal/adapter/field_preservation_test.go`. When adding a stage, extend the
+table and the tests: a default must never overwrite, and a strip must never
+exceed its contract.

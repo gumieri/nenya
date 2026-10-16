@@ -287,7 +287,8 @@ var zaiThinkingProviders = []string{"zai-coding-plan", "zai"}
 // injectThinkingForZai enables thinking mode for Zai models that support reasoning.
 // Three modes are supported:
 //   - Auto (nil config): enabled when model's capabilities indicate reasoning support
-//   - Force enabled (config.Thinking.Enabled=true): always injects thinking
+//   - Force enabled (config.Thinking.Enabled=true): merges force-enabled
+//     mode over the client's map (type overridden, other fields kept)
 //   - Force disabled (config.Thinking.Enabled=false): skips injection
 //
 // Provider thinking config is checked in order: zai-coding-plan first, then zai.
@@ -300,18 +301,13 @@ func injectThinkingForZai(deps *SanitizeDeps, payload map[string]interface{}) {
 	}
 
 	if deps.ProviderThinking != nil {
-		for _, providerName := range zaiThinkingProviders {
-			if enabled, clearThinking, ok := deps.ProviderThinking(providerName); ok {
-				if !enabled {
-					return
-				}
-				payload["thinking"] = map[string]interface{}{
-					"type":           "enabled",
-					"clear_thinking": clearThinking,
-				}
-				logThinkingEnabled(deps.Logger, model, "force-enabled")
+		if enabled, clearThinking, ok := providerThinkingVerdict(deps); ok {
+			if !enabled {
 				return
 			}
+			forceEnabledThinking(payload, clearThinking)
+			logThinkingEnabled(deps.Logger, model, "force-enabled")
+			return
 		}
 	}
 
@@ -330,6 +326,38 @@ func injectThinkingForZai(deps *SanitizeDeps, payload map[string]interface{}) {
 		"clear_thinking": false,
 	}
 	logThinkingEnabled(deps.Logger, model, "auto-enabled")
+}
+
+// providerThinkingVerdict returns the first explicit provider thinking
+// config verdict (zai-coding-plan before zai).
+func providerThinkingVerdict(deps *SanitizeDeps) (enabled, clearThinking, ok bool) {
+	for _, providerName := range zaiThinkingProviders {
+		if enabled, clearThinking, ok := deps.ProviderThinking(providerName); ok {
+			return enabled, clearThinking, ok
+		}
+	}
+	return false, false, false
+}
+
+// forceEnabledThinking merges the operator's force-enabled mode into the
+// payload: the client's thinking map is copied whole (unknown fields
+// included) and only `type` is overridden; `clear_thinking` is filled from
+// config when the client left it unset (NENYA-151).
+func forceEnabledThinking(payload map[string]interface{}, clearThinking bool) {
+	var merged map[string]interface{}
+	if existing, has := payload["thinking"].(map[string]interface{}); has {
+		merged = make(map[string]interface{}, len(existing)+1)
+		for k, v := range existing {
+			merged[k] = v
+		}
+	} else {
+		merged = make(map[string]interface{}, 2)
+	}
+	if _, has := merged["clear_thinking"]; !has {
+		merged["clear_thinking"] = clearThinking
+	}
+	merged["type"] = "enabled"
+	payload["thinking"] = merged
 }
 
 func logThinkingEnabled(logger interface{ Debug(string, ...interface{}) }, model, mode string) {

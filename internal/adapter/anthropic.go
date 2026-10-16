@@ -532,6 +532,39 @@ func (a *AnthropicAdapter) copyOpenAIFields(openai, anthropic map[string]interfa
 	if v, ok := openai["stream"].(bool); ok {
 		anthropic["stream"] = v
 	}
+	// A client-set thinking config is a request knob (NENYA-151): carry it
+	// when it is Anthropic-shaped. Copied, not aliased: the payload is
+	// reused across failover targets and must not gain Anthropic-only
+	// fields.
+	if v, ok := openai["thinking"].(map[string]interface{}); ok {
+		if shaped := anthropicShapedThinking(v); shaped != nil {
+			anthropic["thinking"] = shaped
+		}
+	}
+}
+
+// anthropicShapedThinking validates a client thinking map against the
+// Anthropic schema (type required; budget_tokens required when enabled) and
+// returns a copy holding only Anthropic-known keys. A map from another
+// dialect — e.g. the zai-shaped {type, clear_thinking} the sanitize hooks
+// inject into the shared failover payload — returns nil, restoring the
+// drop: carrying it verbatim would produce a guaranteed-400 body on
+// Anthropic-format targets (NENYA-151).
+func anthropicShapedThinking(v map[string]interface{}) map[string]interface{} {
+	typ, has := v["type"].(string)
+	if !has || typ == "" {
+		return nil
+	}
+	copied := map[string]interface{}{"type": typ}
+	if typ != "enabled" {
+		return copied
+	}
+	budget, has := v["budget_tokens"]
+	if !has {
+		return nil
+	}
+	copied["budget_tokens"] = budget
+	return copied
 }
 
 func (a *AnthropicAdapter) extractSystemMessages(msgs []interface{}, markers []string) []string {
