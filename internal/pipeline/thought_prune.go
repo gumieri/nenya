@@ -14,7 +14,9 @@ const (
 
 // PruneThoughts removes <think ...>...</think > reasoning blocks from
 // assistant message content to reduce token usage while preserving the final
-// model output.
+// model output. A block whose close tag is missing (a stream-interrupted
+// reasoning) is left INTACT (NENYA-150): its boundary cannot be verified, and
+// dropping to end-of-string could swallow the answer that follows it.
 //
 // Mutations are confined to the last cfg.MutationWindow messages (default
 // config.DefaultMutationWindow): assistant messages older than that are left
@@ -137,7 +139,7 @@ func pruneThoughtTags(msg map[string]interface{}) bool {
 }
 
 func stripThoughtBlocks(s string) string {
-	if !strings.Contains(s, thoughtOpenTag) {
+	if !hasPrunableThoughtBlock(s) {
 		return s
 	}
 
@@ -155,9 +157,8 @@ func stripThoughtBlocks(s string) string {
 		}
 
 		if !isThinkTagBoundary(rest, idx+len(thoughtOpenTag)) {
-			if b.Len() == 0 {
-				return s
-			}
+			// False prefix (e.g. "<thinking!"): copy through it and keep
+			// scanning — a real block may still follow (NENYA-150).
 			b.WriteString(rest[:idx+len(thoughtOpenTag)])
 			rest = rest[idx+len(thoughtOpenTag):]
 			continue
@@ -174,19 +175,19 @@ func stripThoughtBlocks(s string) string {
 		closeIdx := findCloseTag(afterOpen)
 
 		if closeIdx < 0 {
-			b.WriteString(thoughtMarker)
+			// Unterminated block: the boundary cannot be verified, so the
+			// remainder is kept INTACT (NENYA-150) — dropping to end-of-string
+			// would swallow whatever follows the reasoning (possibly the
+			// answer). Reasoning blocks are dropped only whole.
+			b.WriteString(rest[idx:])
 			break
 		}
 
 		b.WriteString(thoughtMarker)
-		rest = afterOpen[closeIdx+len(thoughtCloseTag):]
+		rest = afterOpen[closeIdx+closeTagLen(afterOpen[closeIdx:]):]
 	}
 
-	result := b.String()
-	if result == "" {
-		return thoughtMarker
-	}
-	return result
+	return b.String()
 }
 
 func isThinkTagBoundary(s string, pos int) bool {
@@ -195,6 +196,34 @@ func isThinkTagBoundary(s string, pos int) bool {
 	}
 	ch := s[pos]
 	return ch == '>' || ch == '\n' || ch == '\r' || ch == ' ' || ch == '\t'
+}
+
+// hasPrunableThoughtBlock cheaply pre-filters content with no
+// boundary-valid block opener, so prose that merely mentions "<thinking"
+// does not pay for a full rebuild (NENYA-150).
+func hasPrunableThoughtBlock(s string) bool {
+	for _, opener := range []string{thoughtOpenTag + ">", thoughtOpenTag + " ", thoughtOpenTag + "\t", thoughtOpenTag + "\n", thoughtOpenTag + "\r"} {
+		if strings.Contains(s, opener) {
+			return true
+		}
+	}
+	return false
+}
+
+// closeTagLen returns the full length of the close tag at the start of s,
+// including the terminating '>'. Whitespace between the tag and the '>' is
+// part of the tag ("</think >"); whitespace AFTER the tag belongs to the
+// following content and is never consumed (NENYA-150).
+func closeTagLen(s string) int {
+	n := len(thoughtCloseTag)
+	j := n
+	for j < len(s) && (s[j] == ' ' || s[j] == '\t' || s[j] == '\n' || s[j] == '\r') {
+		j++
+	}
+	if j < len(s) && s[j] == '>' {
+		return j + 1
+	}
+	return n
 }
 
 func findCloseTag(s string) int {

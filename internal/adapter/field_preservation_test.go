@@ -59,5 +59,73 @@ func TestFieldPreservationAdapterConversions(t *testing.T) {
 	if openai["thinking"].(map[string]interface{})["budget_tokens"] != 2048 {
 		t.Fatal("the conversion aliased the caller's thinking map")
 	}
-	_ = strings.TrimSpace
+}
+
+// TestReasoningBlocksSurviveConversionAtomically pins the NENYA-150
+// conversion guarantee on mixed tool+reasoning turns: Anthropic thinking
+// blocks are dropped WHOLE (never split, never leaked as text), tool calls
+// and text keep their content, and an OpenAI assistant reasoning_content
+// field is deliberately dropped (foreign dialect) without disturbing the
+// rest of the message.
+func TestReasoningBlocksSurviveConversionAtomically(t *testing.T) {
+	a := NewAnthropicAdapter()
+
+	// Anthropic-native history → OpenAI: thinking blocks vanish whole.
+	anthropic := map[string]interface{}{
+		"model":      "claude-sonnet-4",
+		"max_tokens": 1024,
+		"messages": []interface{}{
+			map[string]interface{}{
+				"role": "assistant",
+				"content": []interface{}{
+					map[string]interface{}{"type": "thinking", "thinking": "secret reasoning", "signature": "sig"},
+					map[string]interface{}{"type": "redacted_thinking", "data": "redacted"},
+					map[string]interface{}{"type": "text", "text": "visible answer"},
+					map[string]interface{}{"type": "tool_use", "id": "tu_1", "name": "lookup", "input": map[string]interface{}{"q": "x"}},
+				},
+			},
+			map[string]interface{}{
+				"role": "user",
+				"content": []interface{}{
+					map[string]interface{}{"type": "tool_result", "tool_use_id": "tu_1", "content": "result"},
+				},
+			},
+		},
+	}
+	openai := a.ConvertAnthropicRequestToOpenAIBody(anthropic)
+	msgs := openai["messages"].([]interface{})
+	assistant := msgs[0].(map[string]interface{})
+	text, _ := assistant["content"].(string)
+	if !strings.Contains(text, "visible answer") {
+		t.Fatalf("text must survive: %q", text)
+	}
+	if strings.Contains(text, "secret reasoning") || strings.Contains(text, "redacted") {
+		t.Fatalf("thinking content must not leak as text: %q", text)
+	}
+	if _, has := assistant["tool_calls"]; !has {
+		t.Fatalf("tool calls must survive: %#v", assistant)
+	}
+
+	// OpenAI history with reasoning_content → Anthropic: the foreign-dialect
+	// field is dropped (deliberately, per the invariant table) and the rest
+	// of the message converts intact.
+	openaiHistory := map[string]interface{}{
+		"model": "claude-sonnet-4",
+		"messages": []interface{}{
+			map[string]interface{}{
+				"role":              "assistant",
+				"content":           "answer with reasoning",
+				"reasoning_content": "deepseek-style reasoning",
+			},
+		},
+	}
+	converted := a.ConvertOpenAIToAnthropicBody(openaiHistory, "claude-sonnet-4", false, CacheOpts{})
+	cmsgs := converted["messages"].([]interface{})
+	cassistant := cmsgs[0].(map[string]interface{})
+	if _, has := cassistant["reasoning_content"]; has {
+		t.Fatalf("reasoning_content must not cross into the Anthropic body: %#v", cassistant)
+	}
+	if cassistant["role"] != "assistant" {
+		t.Fatalf("message role lost: %#v", cassistant)
+	}
 }

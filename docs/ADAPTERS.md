@@ -261,6 +261,7 @@ overrides the mode by design. The stages and their contracts:
 | Shared sanitize stage, any provider (`stripStreamOptions`) | — | — | `stream_options` |
 | XAI sanitize | `reasoning_effort: medium` for reasoning Grok | — | — |
 | Anthropic→OpenAI conversion (`copyAnthropicFields`, /v1/messages route) | — | `stop_sequences`→`stop` | `thinking` is deliberately dropped (budget_tokens has no reasoning_effort equivalent yet — documented gap, not a silent rewrite) |
+| Thought prune (`PruneThoughts`) | — | — | `<think>...</think>` blocks WHOLE only: an unterminated block is left intact (an unverifiable boundary must not swallow what follows), block arrays pass untouched. Note: the TF-IDF tail prune and trim middle-out truncate the LAST message's text and may split a `<think>` block there; the resulting unterminated block then ships intact on later turns (leak-not-loss, bounded by the hard limit) |
 | OpenAI→Anthropic `thinking` carry | — | — | non-Anthropic-shaped maps (no `type`, or `enabled` without `budget_tokens` — e.g. the zai-dialect map in the shared failover payload) are dropped rather than carried into a guaranteed-400 body; no capability gate or max_tokens clamp on carried maps — an invalid client value fails loud at the upstream, which is the client's contract |
 | Provider param_compat strips (`StripParams`) | — | — | the named parameters only |
 

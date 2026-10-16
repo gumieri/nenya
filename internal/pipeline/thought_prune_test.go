@@ -175,17 +175,18 @@ func TestPruneThoughts_UnclosedThoughtTag(t *testing.T) {
 		},
 	}
 
-	if mutated := PruneThoughts(payload, cfg); !mutated {
-		t.Fatalf("expected true, got false")
+	// NENYA-150: an unterminated block has no verifiable boundary, so the
+	// content is left intact (dropping to end-of-string could swallow the
+	// answer that follows an interrupted reasoning block).
+	if mutated := PruneThoughts(payload, cfg); mutated {
+		t.Fatalf("an unterminated block must not be mutated, got mutation")
 	}
 
 	messages := payload["messages"].([]interface{})
 	msg := messages[0].(map[string]interface{})
 	content := msg["content"].(string)
-
-	// Everything from the opening tag onward should be replaced with the marker
-	if content != "[Reasoning pruned by gateway]" {
-		t.Fatalf("expected '[Reasoning pruned by gateway]', got %q", content)
+	if content != "<think reasoning that never ends due to stream interruption" {
+		t.Fatalf("the unterminated block and its remainder must survive, got %q", content)
 	}
 }
 
@@ -222,17 +223,17 @@ func TestPruneThoughts_OnlyOpenTag(t *testing.T) {
 		},
 	}
 
-	if mutated := PruneThoughts(payload, cfg); !mutated {
-		t.Fatalf("expected true, got false")
+	// NENYA-150: a bare open tag is an unterminated block — the boundary
+	// cannot be verified, so the content stays intact.
+	if mutated := PruneThoughts(payload, cfg); mutated {
+		t.Fatalf("a bare open tag must not be mutated, got mutation")
 	}
 
 	messages := payload["messages"].([]interface{})
 	msg := messages[0].(map[string]interface{})
 	content := msg["content"].(string)
-
-	// The open tag and everything after should be replaced with marker
-	if content != "Starting reasoning [Reasoning pruned by gateway]" {
-		t.Fatalf("expected 'Starting reasoning [Reasoning pruned by gateway]', got %q", content)
+	if content != "Starting reasoning <think" {
+		t.Fatalf("the bare open tag must survive, got %q", content)
 	}
 }
 
@@ -414,8 +415,8 @@ func TestPruneThoughts_ThinkTagWithClosingBracket(t *testing.T) {
 	}
 	messages := payload["messages"].([]interface{})
 	content := messages[0].(map[string]interface{})["content"].(string)
-	if content != "[Reasoning pruned by gateway] >answer" {
-		t.Fatalf("expected space-closing tags to be pruned, got %q", content)
+	if content != "[Reasoning pruned by gateway]answer" {
+		t.Fatalf("expected space-closing tags to be pruned whole, got %q", content)
 	}
 }
 
