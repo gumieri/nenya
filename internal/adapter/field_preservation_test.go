@@ -129,3 +129,36 @@ func TestReasoningBlocksSurviveConversionAtomically(t *testing.T) {
 		t.Fatalf("message role lost: %#v", cassistant)
 	}
 }
+
+// TestGeminiMutateRequestOpaqueModelIDs pins the NENYA-146 adapter half:
+// an opaque model ID (ARN, slashed, dotted) is never rewritten by the
+// case-normalized built-in model map, while a plain case-variant still maps.
+func TestGeminiMutateRequestOpaqueModelIDs(t *testing.T) {
+	a := NewGeminiAdapter(GeminiAdapterDeps{})
+
+	// Plain case-variant: the convenience mapping applies.
+	body := []byte(`{"model":"GEMINI-PRO","messages":[]}`)
+	out, err := a.MutateRequest(body, "GEMINI-PRO", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(out), "gemini-2.5-pro") {
+		t.Fatalf("plain case-variant must map, got %s", out)
+	}
+
+	// Opaque IDs pass through verbatim.
+	for _, opaque := range []string{
+		"arn:aws:bedrock:us-east-1::foundation-model/deepseek-r1",
+		"bedrock/GEMINI-PRO",
+		"gemini-3.5-flash.Custom",
+	} {
+		body := []byte(`{"model":"` + opaque + `","messages":[]}`)
+		out, err := a.MutateRequest(body, opaque, false)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(string(out), `"`+opaque+`"`) {
+			t.Fatalf("opaque ID must pass through verbatim: %s", out)
+		}
+	}
+}

@@ -105,9 +105,7 @@ func resolveCredential(ctx context.Context, providerName, modelName string, gw A
 func resolveModelMapping(deps TransformDeps, payload map[string]interface{}, providerName, modelName string) string {
 	finalModel := modelName
 	if spec, ok := providerpkg.Get(providerName); ok && spec.ModelMap != nil {
-		if mapped, ok := spec.ModelMap[strings.ToLower(modelName)]; ok {
-			finalModel = mapped
-		}
+		finalModel = util.ApplyModelMap(spec.ModelMap, modelName)
 	}
 	// Operator-configured aliases win over built-in spec mappings: an
 	// explicit model_aliases entry is deliberate per-deployment intent

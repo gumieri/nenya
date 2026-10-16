@@ -62,3 +62,30 @@ func claudeVersion(seg string) (major, minor int, ok bool) {
 	}
 	return 0, 0, false
 }
+
+// OpaqueModelID reports whether a model ID must be treated as an opaque
+// string (NENYA-146): IDs containing '/', ':' or '.' — Bedrock ARNs (the
+// ':' covers the arn: scheme), slashed gateway IDs, dotted spellings —
+// carry provider-specific meaning that case normalization or path-style
+// rewriting destroys. Opaque IDs skip case-insensitive lookups and are
+// matched exactly everywhere.
+func OpaqueModelID(id string) bool {
+	return strings.ContainsAny(id, "/:.")
+}
+
+// ApplyModelMap resolves a model through a provider's built-in model map:
+// exact match first; the case-insensitive convenience match is for plain
+// IDs only (NENYA-146) — opaque IDs (ARNs, slashed, dotted) are never
+// rewritten by normalization.
+func ApplyModelMap(modelMap map[string]string, modelName string) string {
+	if mapped, ok := modelMap[modelName]; ok {
+		return mapped
+	}
+	if OpaqueModelID(modelName) {
+		return modelName
+	}
+	if mapped, ok := modelMap[strings.ToLower(modelName)]; ok {
+		return mapped
+	}
+	return modelName
+}

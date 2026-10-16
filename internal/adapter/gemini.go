@@ -100,7 +100,7 @@ func (a *GeminiAdapter) MutateRequest(body []byte, model string, stream bool) ([
 	changed := false
 
 	if model != "" && a.modelMap != nil {
-		if mapped, ok := a.modelMap[strings.ToLower(model)]; ok {
+		if mapped := util.ApplyModelMap(a.modelMap, model); mapped != model {
 			payload["model"] = mapped
 			changed = true
 		}

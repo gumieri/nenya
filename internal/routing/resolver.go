@@ -6,6 +6,7 @@ import (
 
 	"github.com/nenya/config"
 	"github.com/nenya/internal/discovery"
+	"github.com/nenya/internal/util"
 )
 
 // UpstreamTarget represents a concrete routing target with all necessary
@@ -98,7 +99,14 @@ func resolveFromCatalog(modelName string, providers map[string]*config.Provider,
 }
 
 func resolveFromRegistry(modelName string, providers map[string]*config.Provider) []ProviderMatch {
-	entry, ok := config.ModelRegistry[strings.ToLower(modelName)]
+	// Opaque IDs resolve exactly (NENYA-146): a case-folded registry hit
+	// would dispatch a differently-spelled ID verbatim into a likely-400
+	// instead of failing resolution.
+	registryKey := modelName
+	if !util.OpaqueModelID(modelName) {
+		registryKey = strings.ToLower(modelName)
+	}
+	entry, ok := config.ModelRegistry[registryKey]
 	if !ok {
 		return nil
 	}
