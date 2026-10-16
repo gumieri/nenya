@@ -484,6 +484,23 @@ const (
 	// per-conversation session ID. OpenCode Zen/Go requires it on every chat
 	// request for efficient routing and prompt caching.
 	opencodeSessionHeader = "X-Opencode-Session"
+	// opencodeSessionIDHeader is the NAMESPACED session identity OpenCode
+	// v1.18.34+ sends (PR #52370). It names the same logical identity as
+	// the legacy header and wins when both are present; both are emitted
+	// (and forwarded) with one value so provider-side affinity cannot see
+	// two identities for one conversation (NENYA-143).
+	opencodeSessionIDHeader = "X-Opencode-Session-Id"
+	// opencodeParentSessionHeader names the parent conversation for
+	// sub-agent sessions (namespaced, v1.18.34+). It states a client-side
+	// relationship and is never synthesized.
+	opencodeParentSessionHeader = "X-Opencode-Parent-Session-Id"
+	// legacy session-identity aliases, treated as one logical identity
+	// behind the namespaced header.
+	legacySessionIDHeader       = "X-Session-Id"
+	legacySessionAffinityHeader = "X-Session-Affinity"
+	// legacyParentSessionHeader is the legacy spelling of the parent
+	// relationship.
+	legacyParentSessionHeader = "X-Parent-Session-Id"
 	// opencodeSessionIDLen is the number of hex characters retained from the
 	// 64-char session-key digest when synthesizing a session ID. Guarded at
 	// use: routing.SessionKey currently always returns 64 chars, but a
@@ -520,37 +537,111 @@ func validSessionHeaderValue(s string) bool {
 	return visible
 }
 
-// ensureOpencodeSessionHeader guarantees the chat request carries an
-// x-opencode-session header before upstream dispatch. A client-supplied
-// value is preserved verbatim when it is a valid header value; an absent
-// or unusable client value is replaced with a stable identifier
-// synthesized from the sticky-session key (agent name, system prompt, and
-// first user message taken from the raw client payload), so the value
-// stays constant across the turns of a conversation while remaining
-// distinct per conversation. Requests without a derivable key are
-// dispatched with the client header only when it is a valid header value;
-// an unusable value is dropped so it cannot fail every round trip inside
-// http.Transport. The header is set on the inbound request so every
-// downstream dispatch path (retry loop, stream continuation, MCP buffered
-// loop) inherits it via buildUpstreamRequest's srcHeaders.
-func ensureOpencodeSessionHeader(gw *gateway.NenyaGateway, r *http.Request, req *chatRequest) {
-	existing := r.Header.Get(opencodeSessionHeader)
-	if validSessionHeaderValue(existing) {
-		return
-	}
-	// req.Agent was resolved once in resolveRouting; the identity (raw key
-	// plus NENYA-39 affinity fork check) is memoized on the request, so
-	// sticky and non-sticky agents each resolve at most once per request.
-	key, ok := req.sessionIdentity(gw)
-	if !ok || len(key) < opencodeSessionIDLen {
-		if existing != "" {
-			r.Header.Del(opencodeSessionHeader)
+// sessionIdentityHeaderNames lists the client session-identity header
+// names in precedence order (namespaced > legacy) — the whole set is one
+// logical identity (NENYA-143). OpenCode sends one branch, not all: the
+// Zen/Go branch carries the canonical name, other providers carry the
+// legacy aliases.
+var sessionIdentityHeaderNames = [...]string{
+	opencodeSessionIDHeader,
+	opencodeSessionHeader,
+	legacySessionIDHeader,
+	legacySessionAffinityHeader,
+}
+
+// sessionParentHeaderNames lists the parent-relationship header names.
+var sessionParentHeaderNames = [...]string{
+	opencodeParentSessionHeader,
+	legacyParentSessionHeader,
+}
+
+// clientSessionIdentity returns the client-supplied session identity: the
+// first USABLE present header in precedence order (namespaced wins), so an
+// unusable higher-precedence value falls through to a usable lower one
+// instead of discarding the client's real conversation id. clientSupplied
+// is false when no usable identity was present (the caller synthesizes).
+func clientSessionIdentity(r *http.Request) (id string, clientSupplied bool) {
+	for _, h := range sessionIdentityHeaderNames {
+		if v := r.Header.Get(h); v != "" && validSessionHeaderValue(v) {
+			return v, true
 		}
-		return
 	}
-	sessionID := "nenya-" + key[:opencodeSessionIDLen]
-	r.Header.Set(opencodeSessionHeader, sessionID)
-	gw.Logger.Debug("synthesized opencode session header", "session_id", sessionID, "model", req.ModelName)
+	return "", false
+}
+
+// sanitizeSessionHeaders drops unusable session-header values before the
+// shared upstream allowlist copies them (NENYA-143): http.Transport
+// rejects control bytes at request-write time (mid-retry-loop, 502 for
+// the request), and every dispatch path shares buildUpstreamRequest's
+// allowlist while the value sanitation used to run on the chat routes
+// only.
+func sanitizeSessionHeaders(h http.Header) {
+	for _, name := range sessionIdentityHeaderNames {
+		if v := h.Get(name); v != "" && !validSessionHeaderValue(v) {
+			h.Del(name)
+		}
+	}
+	for _, name := range sessionParentHeaderNames {
+		if v := h.Get(name); v != "" && !validSessionHeaderValue(v) {
+			h.Del(name)
+		}
+	}
+}
+
+// ensureOpencodeSessionHeader guarantees the chat request carries one
+// coherent session identity across the canonical and namespaced header
+// names before upstream dispatch (NENYA-143). The client's value is
+// preserved verbatim when usable — the namespaced header wins when both
+// are present, and both names are then emitted with that one value so
+// provider-side affinity cannot see two identities. An absent or unusable
+// client value is replaced with a stable identifier synthesized from the
+// sticky-session key (agent name, system prompt, and first user message
+// taken from the raw client payload), so the value stays constant across
+// the turns of a conversation while remaining distinct per conversation.
+// Requests without a derivable key are dispatched with the client header
+// only when it is a valid header value; an unusable value is dropped so it
+// cannot fail every round trip inside http.Transport. Parent-relationship
+// headers are forwarded when usable and dropped otherwise (never
+// synthesized: they state a client-side relationship). The headers are set
+// on the inbound request so every downstream dispatch path (retry loop,
+// stream continuation, MCP buffered loop) inherits them via
+// buildUpstreamRequest's srcHeaders.
+func ensureOpencodeSessionHeader(gw *gateway.NenyaGateway, r *http.Request, req *chatRequest) {
+	id, clientSupplied := clientSessionIdentity(r)
+	if !clientSupplied {
+		// req.Agent was resolved once in resolveRouting; the identity (raw
+		// key plus NENYA-39 affinity fork check) is memoized on the
+		// request, so sticky and non-sticky agents each resolve at most
+		// once per request.
+		if key, ok := req.sessionIdentity(gw); ok && len(key) >= opencodeSessionIDLen {
+			id = "nenya-" + key[:opencodeSessionIDLen]
+		}
+	}
+	// Drop only values that are themselves unusable (a usable
+	// lower-precedence value was adopted above, or is preserved when no
+	// identity is available): an unusable value would fail every round
+	// trip inside http.Transport.
+	sanitizeSessionHeaders(r.Header)
+	if id != "" {
+		r.Header.Set(opencodeSessionHeader, id)
+		r.Header.Set(opencodeSessionIDHeader, id)
+		if !clientSupplied && gw.Logger != nil && gw.Logger.Enabled(context.Background(), slog.LevelDebug) {
+			gw.Logger.Debug("synthesized opencode session header", "session_id", id, "model", req.ModelName)
+		}
+	}
+	// Parents state a client-side relationship: adopt a usable value onto
+	// the namespaced name so it reaches upstream, drop unusable values,
+	// never synthesize.
+	parent := ""
+	for _, h := range sessionParentHeaderNames {
+		if v := r.Header.Get(h); v != "" && validSessionHeaderValue(v) {
+			parent = v
+			break
+		}
+	}
+	if parent != "" {
+		r.Header.Set(opencodeParentSessionHeader, parent)
+	}
 }
 
 // agentStickyTTL returns the agent's configured sticky session idle TTL,
@@ -1309,14 +1400,22 @@ func (p *Proxy) buildUpstreamRequest(gw *gateway.NenyaGateway, ctx context.Conte
 	if err := routing.InjectAPIKeyWithGatewayCtx(ctx, providerName, modelName, gw, req.Header, preselectedCredential); err != nil {
 		return nil, fmt.Errorf("API key injection failed: %w", err)
 	}
+	// Every dispatch path shares this allowlist, so the session-header
+	// sanitation runs here too (NENYA-143): an unusable value would make
+	// http.Transport reject the request mid-retry-loop.
+	sanitizeSessionHeaders(srcHeaders)
 	// Forward only safe passthrough headers; never let client-supplied
 	// headers leak internal routing tokens or override upstream auth.
 	for _, h := range []string{
 		"X-Request-Id", "X-Correlation-Id", "X-Trace-Id",
 		"Traceparent", "Tracestate",
 		// OpenCode Zen/Go requires a stable per-conversation session ID for
-		// routing and prompt caching (see docs/CLIENT_OPENCODE.md).
-		opencodeSessionHeader,
+		// routing and prompt caching (see docs/CLIENT_OPENCODE.md). The
+		// namespaced names (NENYA-143) and the parent relationship ride
+		// along: ensureOpencodeSessionHeader put one coherent identity on
+		// every name.
+		opencodeSessionHeader, opencodeSessionIDHeader,
+		opencodeParentSessionHeader,
 	} {
 		if v := srcHeaders.Get(h); v != "" {
 			req.Header.Set(h, v)

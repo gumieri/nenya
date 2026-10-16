@@ -99,20 +99,35 @@ Nenya detects OpenCode via any of these headers containing "opencode". When dete
 
 **Note**: When OpenCode uses the standard OpenAI SDK (non-Copilot mode), the `User-Agent` is set by the SDK and does not contain "opencode". In this case, Nenya treats it as a standard client with full pipeline processing. To force IDE detection, set `Editor-Version: OpenCode/1.0` in your provider config or middleware.
 
-## Session Header (`x-opencode-session`)
+## Session Headers (namespaced + legacy set)
 
-OpenCode Zen/Go requires a stable per-conversation session ID in the `x-opencode-session` header on chat requests for routing and prompt caching ([OpenCode Go docs](https://opencode.ai/docs/go/#where-can-i-use-it)). Without it, Zen/Go backends reject the request with a `MissingSessionID` error.
+OpenCode Zen/Go requires a stable per-conversation session ID on chat requests for routing and prompt caching ([OpenCode Go docs](https://opencode.ai/docs/go/#where-can-i-use-it)). Without it, Zen/Go backends reject the request with a `MissingSessionID` error.
 
-Nenya guarantees the header on every chat dispatch (both `/v1/chat/completions` and `/v1/messages`) when a session key is derivable:
+Nenya treats the whole session-header set as ONE logical identity (NENYA-143). Namespaced headers (OpenCode v1.18.34+, PR #52370) take precedence over the legacy names, and the identity is emitted on every current name so provider-side affinity cannot see two identities for one conversation:
+
+| Header | Role | Precedence |
+|--------|------|------------|
+| `x-opencode-session-id` | Namespaced session identity | 1 (wins) |
+| `x-opencode-session` | Provider-scoped canonical identity (OpenCode sends it on the Zen/Go branch) | 2 |
+| `X-Session-Id` | Identity name used on the non-Zen branch | 3 |
+| `X-Session-Affinity` | Identity name used on the non-Zen branch | 4 |
+| `x-opencode-parent-session-id` | Namespaced parent conversation (sub-agent sessions) | relationship, never synthesized |
+| `X-Parent-Session-Id` | Legacy parent conversation | relationship, never synthesized |
+
+A given client sends one branch, not all six. Note that `X-Session-Id` and `X-Session-Affinity` are generic names: a client (or intercepting middleware) that sets them for an unrelated purpose will have that value treated as the conversation identity — a per-request value there defeats provider-side affinity for that client. The opencode-specific names are the safe ones.
+
+Nenya guarantees the identity on every chat dispatch (both `/v1/chat/completions` and `/v1/messages`) when a session key is derivable:
 
 | Scenario | Behavior |
 |----------|----------|
-| Client sends a valid `x-opencode-session` | Forwarded verbatim to the upstream provider |
-| Client omits it (or sends an unusable value) | Nenya synthesizes `nenya-<hash16>`, derived from the authenticated API key + agent (or model) name + system prompt + first user message (the same identity as [sticky routing](ROUTING.md#agent-routing-strategies); two keys derive different ids for the same conversation) |
+| Client sends any usable identity header | The chosen value (first usable in precedence order — namespaced wins) is mirrored onto both `x-opencode-session` and `x-opencode-session-id` and forwarded there; the alias names themselves are not forwarded. An unusable higher-precedence value falls through to a usable lower-precedence one rather than discarding the client's real id |
+| Client omits all of them (or sends an unusable value) | Nenya synthesizes `nenya-<hash16>` on both names, derived from the authenticated API key + agent (or model) name + system prompt + first user message (the same identity as [sticky routing](ROUTING.md#agent-routing-strategies); two keys derive different ids for the same conversation) |
+| Client sends a usable parent header | Adopted onto `x-opencode-parent-session-id` and forwarded (a legacy-only parent still reaches upstream) |
+| Client sends an unusable parent header | Dropped (never synthesized — the parent states a client-side relationship) |
 
 The synthesized value is stable across the turns of a conversation, distinct between conversations, and distinct per API key, preserving provider-side prefix-cache affinity for session-unaware clients. Requests without a derivable key (no message text) are dispatched with the client header only when it is a valid header value; an unusable value is dropped rather than failing mid-dispatch.
 
-Scope: client-supplied values are forwarded on all upstream dispatch paths (chat, embeddings, responses, passthrough); synthesis runs on the two chat routes only, since only they carry a conversation.
+Scope: client-supplied values are forwarded on all upstream dispatch paths (chat, embeddings, responses, passthrough), where unusable values are dropped before the allowlist copies them; synthesis runs on the two chat routes only, since only they carry a conversation.
 
 ## Pipeline Behavior
 
