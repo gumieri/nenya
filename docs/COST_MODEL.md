@@ -1,5 +1,7 @@
 # Cost Model (Peak/Off-Peak & Cached Input)
 
+Cache-write tokens (`cache_creation_input_tokens`) are priced at the card's `cache_write_cost_per_1m` when declared, distinct from reads and the input base (NENYA-163); writes and reads are disjoint subsets of the total input, and a payload claiming more of both than arrived clamps to what remains.
+
 Status: **design contract** (Phase 001 of the Time-of-Day & Cached-Input Cost
 Model module). This document fixes the representation and evaluation rules
 before any value or code change lands; later phases implement it.
@@ -32,6 +34,7 @@ registry entry and OpenRouter-discovered price keeps its current meaning.
 | `peak_input_cost_per_1m`                                    | Peak input rate                  | `0` = provider has no peak window                 |
 | `peak_output_cost_per_1m`                                   | Peak output rate                 | `0` = provider has no peak window                 |
 | `cached_input_cost_per_1m`                                  | Discounted cache-read input rate | `0` = cache reads billed at the window input rate |
+| `cache_write_cost_per_1m`                                  | Premium cache-write rate (Anthropic ≈1.25× base input for the 5m TTL, 2× for 1h; DeepSeek bills writes at the miss price) | `0` = cache writes billed at the window input rate (the documented fallback, NENYA-163) |
 
 A model is "peak-priced" iff `peak_input_cost_per_1m != 0` or
 `peak_output_cost_per_1m != 0`. `IsZero()` must stay `false` for a

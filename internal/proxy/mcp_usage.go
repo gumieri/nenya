@@ -132,7 +132,7 @@ func (p *Proxy) recordMCPIterationUsage(ctx context.Context, gw *gateway.NenyaGa
 	}
 	recordNonStreamingStats(gw, model, totals.Completion, totals.CacheHit, totals.CacheMiss, totals.CacheCreation, totals.Reasoning)
 	recordNonStreamingMetrics(gw, target, agentName, totals.Completion, totals.CacheHit, totals.CacheMiss, totals.CacheCreation, totals.Reasoning)
-	recordCostAndBilling(ctx, gw, target, buf.model, totals.Prompt, totals.CacheHit, totals.Completion)
+	recordCostAndBilling(ctx, gw, target, buf.model, totals.Prompt, totals.CacheHit, totals.CacheCreation, totals.Completion)
 }
 
 // mcpServingTarget resolves the target a buffered MCP dispatch was served by

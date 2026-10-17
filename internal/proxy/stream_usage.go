@@ -75,6 +75,7 @@ func (p *Proxy) makeUsageCallback(ctx context.Context, gw *gateway.NenyaGateway,
 		if usageSeen {
 			acc.Input += int64(prompt)
 			acc.Cached += int64(cacheHit)
+			acc.CacheWrite += int64(cacheCreation)
 			acc.Completion += int64(completion)
 		}
 		cost := 0.0
@@ -152,6 +153,7 @@ func (a *streamAttribution) resolve(gw *gateway.NenyaGateway, target routing.Ups
 type streamCostAccumulator struct {
 	Input      int64
 	Cached     int64
+	CacheWrite int64
 	Completion int64
 	LastCost   map[string]float64
 	LastCached map[string]int64
@@ -170,7 +172,7 @@ func recordStreamCost(gw *gateway.NenyaGateway, target routing.UpstreamTarget, c
 		acc.LastCached = make(map[string]int64)
 	}
 	now := time.Now()
-	u := pricingUsage(gw, target, int(acc.Input), int(acc.Cached), int(acc.Completion), now)
+	u := pricingUsage(gw, target, int(acc.Input), int(acc.Cached), int(acc.CacheWrite), int(acc.Completion), now)
 	total := pricing.CalculateCost(u)
 	cost := total - acc.LastCost[costModel]
 	acc.LastCost[costModel] = total

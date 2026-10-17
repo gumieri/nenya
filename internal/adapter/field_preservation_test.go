@@ -1,6 +1,7 @@
 package adapter
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 )
@@ -160,5 +161,69 @@ func TestGeminiMutateRequestOpaqueModelIDs(t *testing.T) {
 		if !strings.Contains(string(out), `"`+opaque+`"`) {
 			t.Fatalf("opaque ID must pass through verbatim: %s", out)
 		}
+	}
+}
+
+// TestConversionPreservesCacheFields pins the NENYA-163 conversion-emission
+// audit: each format path forwards the cache fields it receives — the
+// OpenAI→Anthropic conversion keeps client cache_control markers (TTL
+// included) on blocks, and the Anthropic→OpenAI response conversion carries
+// the cache-creation/cache-read usage through the usage extraction.
+func TestConversionPreservesCacheFields(t *testing.T) {
+	a := NewAnthropicAdapter()
+
+	// Request direction: a client's block-level cache_control (1h TTL)
+	// survives the OpenAI→Anthropic conversion verbatim.
+	openai := map[string]interface{}{
+		"model": "claude-sonnet-4",
+		"messages": []interface{}{
+			map[string]interface{}{
+				"role": "user",
+				"content": []interface{}{
+					map[string]interface{}{
+						"type":          "text",
+						"text":          "long stable prefix",
+						"cache_control": map[string]interface{}{"type": "ephemeral", "ttl": "1h"},
+					},
+				},
+			},
+		},
+	}
+	converted := a.ConvertOpenAIToAnthropicBody(openai, "claude-sonnet-4", false, CacheOpts{})
+	msgs := converted["messages"].([]interface{})
+	content := msgs[0].(map[string]interface{})["content"].([]interface{})
+	block := content[0].(map[string]interface{})
+	cc, ok := block["cache_control"].(map[string]interface{})
+	if !ok || cc["ttl"] != "1h" {
+		t.Fatalf("the client's cache_control marker was not forwarded: %#v", block)
+	}
+
+	// Response direction: cache_creation/cache_read usage crosses the
+	// Anthropic→OpenAI body conversion into the OpenAI usage shape.
+	anthropicResp := map[string]interface{}{
+		"id": "msg_1", "type": "message", "role": "assistant", "model": "claude-sonnet-4",
+		"content":     []interface{}{map[string]interface{}{"type": "text", "text": "ok"}},
+		"stop_reason": "end_turn",
+		"usage": map[string]interface{}{
+			"input_tokens":                float64(100),
+			"output_tokens":               float64(20),
+			"cache_creation_input_tokens": float64(50),
+			"cache_read_input_tokens":     float64(30),
+		},
+	}
+	openaiResp := a.ConvertAnthropicToOpenAIBody(anthropicResp, false)
+	usage, ok := openaiResp["usage"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("usage missing from the converted body: %#v", openaiResp)
+	}
+	// The conversion emits the OpenAI-style usage detail fields; the reader's
+	// extraction (NENYA-167) consumes either spelling. Assert the write
+	// dimension survives in SOME documented spelling.
+	b, _ := json.Marshal(usage)
+	text := string(b)
+	hasWrite := strings.Contains(text, "50") &&
+		(strings.Contains(text, "cache_creation") || strings.Contains(text, "cached_tokens") || strings.Contains(text, "cache_creation_input_tokens"))
+	if !hasWrite {
+		t.Fatalf("the cache-write usage must survive the conversion: %s", text)
 	}
 }

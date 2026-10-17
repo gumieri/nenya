@@ -44,7 +44,7 @@ func TestModelSubstitutionBufferedAttributesServed(t *testing.T) {
 	gw := substitutionGW(t, &logBuf)
 	target := routing.UpstreamTarget{Provider: "agg", Model: "requested-model"}
 
-	recordCostAndBilling(context.Background(), gw, target, "served-model", 1_000_000, 0, 0)
+	recordCostAndBilling(context.Background(), gw, target, "served-model", 1_000_000, 0, 0, 0)
 
 	if got := gw.CostTracker.GetCostMicroUSD("served-model"); got != 10_000_000 {
 		t.Fatalf("cost must be attributed to the served model: %d microUSD", got)
@@ -70,7 +70,7 @@ func TestModelSubstitutionUnpricedServedFallsBack(t *testing.T) {
 	gw := substitutionGW(t, &logBuf)
 	target := routing.UpstreamTarget{Provider: "agg", Model: "requested-model"}
 
-	recordCostAndBilling(context.Background(), gw, target, "unknown-model", 1_000_000, 0, 0)
+	recordCostAndBilling(context.Background(), gw, target, "unknown-model", 1_000_000, 0, 0, 0)
 
 	if got := gw.CostTracker.GetCostMicroUSD("requested-model"); got != 1_000_000 {
 		t.Fatalf("unpriced served model must fall back to the requested rate: %d microUSD", got)
@@ -87,8 +87,8 @@ func TestNoSubstitutionNoWarning(t *testing.T) {
 	gw := substitutionGW(t, &logBuf)
 	target := routing.UpstreamTarget{Provider: "agg", Model: "requested-model"}
 
-	recordCostAndBilling(context.Background(), gw, target, "requested-model", 1_000_000, 0, 0)
-	recordCostAndBilling(context.Background(), gw, target, "", 1_000_000, 0, 0)
+	recordCostAndBilling(context.Background(), gw, target, "requested-model", 1_000_000, 0, 0, 0)
+	recordCostAndBilling(context.Background(), gw, target, "", 1_000_000, 0, 0, 0)
 
 	if strings.Contains(logBuf.String(), "silent substitution") {
 		t.Fatalf("no substitution must warn: %s", logBuf.String())

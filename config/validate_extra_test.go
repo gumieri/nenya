@@ -74,3 +74,24 @@ func TestBootstrapMaxHoldSecondsValidation(t *testing.T) {
 		t.Fatalf("an over-range ceiling must be rejected, got %v", errs)
 	}
 }
+
+// TestRegistryAnthropicCacheWriteRates pins the NENYA-163 built-in cards:
+// every priced Anthropic model declares the 1.25x cache-write premium (the
+// 5m TTL default; the 1h split is a per-request refinement the single rate
+// approximates).
+func TestRegistryAnthropicCacheWriteRates(t *testing.T) {
+	for name, entry := range ModelRegistry {
+		if entry.Pricing.IsZero() || entry.Provider != "anthropic" {
+			continue
+		}
+		if entry.Pricing.CacheWriteCostPer1M == 0 {
+			t.Errorf("anthropic card %q must declare a cache-write rate", name)
+			continue
+		}
+		want := entry.Pricing.InputCostPer1M * 1.25
+		got := entry.Pricing.CacheWriteCostPer1M
+		if diff := got - want; diff > 1e-9 || diff < -1e-9 {
+			t.Errorf("anthropic card %q cache-write = %v, want 1.25x input (%v)", name, got, want)
+		}
+	}
+}

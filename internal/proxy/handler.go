@@ -953,6 +953,7 @@ func costModelStats(gw *gateway.NenyaGateway) map[string]interface{} {
 			"peak_input_cost_per_1m":   m.Pricing.PeakInputCostPer1M,
 			"peak_output_cost_per_1m":  m.Pricing.PeakOutputCostPer1M,
 			"cached_input_cost_per_1m": m.Pricing.CachedInputCostPer1M,
+			"cache_write_cost_per_1m":  m.Pricing.CacheWriteCostPer1M,
 			"currency":                 m.Pricing.Currency,
 		}
 	}

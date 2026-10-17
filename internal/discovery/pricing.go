@@ -24,7 +24,13 @@ type PricingEntry struct {
 	PeakInputCostPer1M   float64 `json:"peak_input_cost_per_1m,omitempty"`
 	PeakOutputCostPer1M  float64 `json:"peak_output_cost_per_1m,omitempty"`
 	CachedInputCostPer1M float64 `json:"cached_input_cost_per_1m,omitempty"`
-	Currency             string  `json:"currency"`
+	// CacheWriteCostPer1M is the premium rate for tokens WRITTEN to the
+	// provider cache (Anthropic cache_creation: ~1.25x base input for the
+	// 5m TTL, 2x for 1h; DeepSeek bills writes at the miss price). When 0
+	// (unset), writes bill at the standard input rate — the documented
+	// fallback (NENYA-163).
+	CacheWriteCostPer1M float64 `json:"cache_write_cost_per_1m,omitempty"`
+	Currency            string  `json:"currency"`
 }
 
 // IsZero reports whether no rate is set (a peak-only/cached-only entry is not
@@ -32,7 +38,7 @@ type PricingEntry struct {
 func (p PricingEntry) IsZero() bool {
 	return p.InputCostPer1M == 0 && p.OutputCostPer1M == 0 &&
 		p.PeakInputCostPer1M == 0 && p.PeakOutputCostPer1M == 0 &&
-		p.CachedInputCostPer1M == 0
+		p.CachedInputCostPer1M == 0 && p.CacheWriteCostPer1M == 0
 }
 
 // HasPeak reports whether the entry declares a peak-window rate.
@@ -54,8 +60,13 @@ func (p PricingEntry) HasStandardRate() bool {
 type PricingUsage struct {
 	Input       int64
 	CachedInput int64
-	Output      int64
-	Peak        bool
+	// CacheWriteInput counts tokens written to the provider cache this
+	// request (a subset of Input, disjoint from CachedInput reads). Priced
+	// at CacheWriteCostPer1M when the card declares one, else the input
+	// rate (NENYA-163).
+	CacheWriteInput int64
+	Output          int64
+	Peak            bool
 }
 
 // CalculateCost estimates the USD cost of a request. The window (usage.Peak)
@@ -67,8 +78,30 @@ type PricingUsage struct {
 // CachedInput is clamped to Input; rates are clamped non-negative (a NaN rate
 // from an unvalidated feed contributes nothing). See docs/COST_MODEL.md.
 func (p PricingEntry) CalculateCost(usage PricingUsage) float64 {
+	rates := p.resolveRates(usage.Peak)
+	tokens := normalizePricingTokens(usage)
+	return (float64(tokens.cached)*rates.cached +
+		float64(tokens.written)*rates.write +
+		float64(tokens.uncached)*rates.input +
+		float64(tokens.output)*rates.output) / 1_000_000
+}
+
+// pricingRates is the rate set for one cost computation: every dimension
+// resolved (peak applied, fallbacks filled, non-positive clamped to 0).
+type pricingRates struct {
+	input  float64
+	output float64
+	cached float64
+	write  float64
+}
+
+// resolveRates applies the peak-window selection and the documented
+// fallbacks: reads without a card rate bill at input; writes without a card
+// rate bill at input too (NENYA-163). Non-positive rates clamp to 0 (NaN
+// fails the > test, so it clamps too).
+func (p PricingEntry) resolveRates(peak bool) pricingRates {
 	inRate, outRate := p.InputCostPer1M, p.OutputCostPer1M
-	if usage.Peak && p.HasPeak() {
+	if peak && p.HasPeak() {
 		if p.PeakInputCostPer1M > 0 {
 			inRate = p.PeakInputCostPer1M
 		}
@@ -80,7 +113,12 @@ func (p PricingEntry) CalculateCost(usage PricingUsage) float64 {
 	if cachedRate == 0 {
 		cachedRate = inRate
 	}
-	// Non-positive → 0 (NaN fails the > test, so it clamps too).
+	writeRate := p.CacheWriteCostPer1M
+	if writeRate == 0 {
+		// Documented fallback (NENYA-163): a card without a cache-write
+		// rate bills writes at the standard input rate.
+		writeRate = inRate
+	}
 	if !(inRate > 0) {
 		inRate = 0
 	}
@@ -90,25 +128,50 @@ func (p PricingEntry) CalculateCost(usage PricingUsage) float64 {
 	if !(cachedRate > 0) {
 		cachedRate = 0
 	}
-	input := usage.Input
-	if input < 0 {
-		input = 0
+	if !(writeRate > 0) {
+		writeRate = 0
 	}
-	cached := usage.CachedInput
-	if cached < 0 {
-		cached = 0
+	return pricingRates{input: inRate, output: outRate, cached: cachedRate, write: writeRate}
+}
+
+// pricingTokens is the non-negative, disjoint token split one cost
+// computation bills: reads, writes, and the remainder of the input.
+type pricingTokens struct {
+	cached   int64
+	written  int64
+	uncached int64
+	output   int64
+}
+
+// normalizePricingTokens clamps the usage to non-negative disjoint subsets:
+// reads cap at the input, writes cap at what the reads left (writes and
+// reads are disjoint subsets of the same total input, NENYA-163).
+func normalizePricingTokens(usage PricingUsage) pricingTokens {
+	input := max64(usage.Input, 0)
+	cached := min64(usage.CachedInput, input)
+	cached = max64(cached, 0)
+	written := min64(usage.CacheWriteInput, input-cached)
+	written = max64(written, 0)
+	return pricingTokens{
+		cached:   cached,
+		written:  written,
+		uncached: input - cached - written,
+		output:   max64(usage.Output, 0),
 	}
-	if cached > input {
-		cached = input
+}
+
+func max64(a, b int64) int64 {
+	if a > b {
+		return a
 	}
-	output := usage.Output
-	if output < 0 {
-		output = 0
+	return b
+}
+
+func min64(a, b int64) int64 {
+	if a < b {
+		return a
 	}
-	uncached := input - cached
-	return (float64(cached)*cachedRate +
-		float64(uncached)*inRate +
-		float64(output)*outRate) / 1_000_000
+	return b
 }
 
 // PricingSource is an interface for pricing data sources. It is reserved for future

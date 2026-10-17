@@ -87,7 +87,7 @@ func recordNonStreamingUsage(ctx context.Context, gw *gateway.NenyaGateway, targ
 	gw.Calibration.RecordActual(target.Model, inputTokens)
 	recordNonStreamingStats(gw, target.Model, outputTokens, cacheHitTokens, cacheMissTokens, cacheCreationTokens, reasoningTokens)
 	recordNonStreamingMetrics(gw, target, agentName, outputTokens, cacheHitTokens, cacheMissTokens, cacheCreationTokens, reasoningTokens)
-	recordCostAndBilling(ctx, gw, target, servedModel, inputTokens, cacheHitTokens, outputTokens)
+	recordCostAndBilling(ctx, gw, target, servedModel, inputTokens, cacheHitTokens, cacheCreationTokens, outputTokens)
 }
 
 // pricingUsage builds the cost-model usage for a completed request. The
@@ -96,11 +96,12 @@ func recordNonStreamingUsage(ctx context.Context, gw *gateway.NenyaGateway, targ
 // streaming transformer normalizes to it, and recordNonStreamingUsage maps
 // native Anthropic cache reads into it), and the peak flag comes from the
 // provider's peak window at the recording instant.
-func pricingUsage(gw *gateway.NenyaGateway, target routing.UpstreamTarget, inputTokens, cachedInputTokens, outputTokens int, at time.Time) discovery.PricingUsage {
+func pricingUsage(gw *gateway.NenyaGateway, target routing.UpstreamTarget, inputTokens, cachedInputTokens, cacheWriteTokens, outputTokens int, at time.Time) discovery.PricingUsage {
 	u := discovery.PricingUsage{
-		Input:       int64(inputTokens),
-		CachedInput: int64(cachedInputTokens),
-		Output:      int64(outputTokens),
+		Input:           int64(inputTokens),
+		CachedInput:     int64(cachedInputTokens),
+		CacheWriteInput: int64(cacheWriteTokens),
+		Output:          int64(outputTokens),
 	}
 	u.Peak = gw.Providers[target.Provider].IsPeakAt(at)
 	return u
@@ -193,11 +194,11 @@ func lookupPricing(gw *gateway.NenyaGateway, model string) *discovery.PricingEnt
 // one billable upstream request (NENYA-193). servedModel is the model the
 // upstream response reported ("" when unknown): a different value attributes
 // cost to the served model and reports the substitution (NENYA-173).
-func recordCostAndBilling(ctx context.Context, gw *gateway.NenyaGateway, target routing.UpstreamTarget, servedModel string, inputTokens, cachedInputTokens, outputTokens int) {
+func recordCostAndBilling(ctx context.Context, gw *gateway.NenyaGateway, target routing.UpstreamTarget, servedModel string, inputTokens, cachedInputTokens, cacheWriteTokens, outputTokens int) {
 	// Report the substitution even when the usage object is empty: the
 	// response model is a property of the dispatch, not of its usage.
 	reportModelSubstitution(gw, target, servedModel)
-	if inputTokens <= 0 && outputTokens <= 0 && cachedInputTokens <= 0 {
+	if inputTokens <= 0 && outputTokens <= 0 && cachedInputTokens <= 0 && cacheWriteTokens <= 0 {
 		return
 	}
 	cost := 0.0
@@ -207,7 +208,7 @@ func recordCostAndBilling(ctx context.Context, gw *gateway.NenyaGateway, target 
 		costModel, pricing = attributeModel(gw, target, servedModel)
 	}
 	if pricing != nil && gw.CostTracker != nil {
-		u := pricingUsage(gw, target, inputTokens, cachedInputTokens, outputTokens, time.Now())
+		u := pricingUsage(gw, target, inputTokens, cachedInputTokens, cacheWriteTokens, outputTokens, time.Now())
 		cost = pricing.CalculateCost(u)
 		gw.Metrics.RecordCostWindow(costModel, windowLabel(u.Peak), cost)
 		if cachedInputTokens > 0 {

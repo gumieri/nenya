@@ -124,6 +124,11 @@ type PricingOverride struct {
 	PeakInputCostPer1M   float64 `json:"peak_input_cost_per_1m,omitempty"`
 	PeakOutputCostPer1M  float64 `json:"peak_output_cost_per_1m,omitempty"`
 	CachedInputCostPer1M float64 `json:"cached_input_cost_per_1m,omitempty"`
+	// CacheWriteCostPer1M prices tokens WRITTEN to the provider cache
+	// (NENYA-163): Anthropic ~1.25x base input (5m TTL) / 2x (1h);
+	// DeepSeek bills writes at the miss price. 0 = the standard input
+	// rate (the documented fallback).
+	CacheWriteCostPer1M float64 `json:"cache_write_cost_per_1m,omitempty"`
 }
 
 // IsZero reports whether no rate is configured. A peak-only or cached-only
@@ -131,7 +136,7 @@ type PricingOverride struct {
 func (p PricingOverride) IsZero() bool {
 	return p.InputCostPer1M == 0 && p.OutputCostPer1M == 0 &&
 		p.PeakInputCostPer1M == 0 && p.PeakOutputCostPer1M == 0 &&
-		p.CachedInputCostPer1M == 0
+		p.CachedInputCostPer1M == 0 && p.CacheWriteCostPer1M == 0
 }
 
 // HasPeak reports whether the entry declares a peak-window rate.

@@ -426,6 +426,7 @@ func pricingEntryFromOverride(p config.PricingOverride) *PricingEntry {
 		PeakInputCostPer1M:   p.PeakInputCostPer1M,
 		PeakOutputCostPer1M:  p.PeakOutputCostPer1M,
 		CachedInputCostPer1M: p.CachedInputCostPer1M,
+		CacheWriteCostPer1M:  p.CacheWriteCostPer1M,
 		Currency:             "USD",
 	}
 }

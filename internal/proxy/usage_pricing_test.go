@@ -26,20 +26,20 @@ func TestPricingUsagePeakWindow(t *testing.T) {
 	peakTime := time.Date(2026, 10, 2, 8, 0, 0, 0, time.UTC)
 	offPeakTime := time.Date(2026, 10, 2, 20, 0, 0, 0, time.UTC)
 
-	if u := pricingUsage(gw, target, 1000, 400, 200, peakTime); !u.Peak {
+	if u := pricingUsage(gw, target, 1000, 400, 0, 200, peakTime); !u.Peak {
 		t.Error("08:00 UTC must resolve peak")
 	}
-	if u := pricingUsage(gw, target, 1000, 400, 200, offPeakTime); u.Peak {
+	if u := pricingUsage(gw, target, 1000, 400, 0, 200, offPeakTime); u.Peak {
 		t.Error("20:00 UTC must be off-peak")
 	}
-	u := pricingUsage(gw, target, 1000, 400, 200, peakTime)
+	u := pricingUsage(gw, target, 1000, 400, 0, 200, peakTime)
 	if u.Input != 1000 || u.CachedInput != 400 || u.Output != 200 {
 		t.Errorf("usage fields = %+v", u)
 	}
 
 	// Missing provider entry: never peak, usage still carried.
 	missing := routing.UpstreamTarget{Provider: "unknown", Model: "m"}
-	if u := pricingUsage(gw, missing, 10, 0, 5, peakTime); u.Peak {
+	if u := pricingUsage(gw, missing, 10, 0, 0, 5, peakTime); u.Peak {
 		t.Error("missing provider must never be peak")
 	}
 }
@@ -69,26 +69,26 @@ func TestRecordCostAndBilling_PeakAndCached(t *testing.T) {
 
 	// Peak: 1M input (no cache) at the peak input rate.
 	gwPeak := newGW([]config.PeakWindow{{Start: "00:00", End: "23:59"}})
-	recordCostAndBilling(ctx, gwPeak, target, "", 1_000_000, 0, 0)
+	recordCostAndBilling(ctx, gwPeak, target, "", 1_000_000, 0, 0, 0)
 	if got := gwPeak.CostTracker.GetCostMicroUSD("deepseek-flash"); got != 300_000 {
 		t.Errorf("peak cost = %d microUSD, want 300000", got)
 	}
 
 	// Off-peak (window-less provider): same load at the standard rate — 2x cheaper.
 	gwOff := newGW(nil)
-	recordCostAndBilling(ctx, gwOff, target, "", 1_000_000, 0, 0)
+	recordCostAndBilling(ctx, gwOff, target, "", 1_000_000, 0, 0, 0)
 	if got := gwOff.CostTracker.GetCostMicroUSD("deepseek-flash"); got != 150_000 {
 		t.Errorf("off-peak cost = %d microUSD, want 150000", got)
 	}
 
 	// Cached half the input off-peak: cheaper than the same uncached load.
 	gwCached := newGW(nil)
-	recordCostAndBilling(ctx, gwCached, target, "", 1_000_000, 500_000, 1_000_000)
+	recordCostAndBilling(ctx, gwCached, target, "", 1_000_000, 500_000, 0, 1_000_000)
 	if got := gwCached.CostTracker.GetCostMicroUSD("deepseek-flash"); got != 700_000 {
 		t.Errorf("cached cost = %d microUSD, want 700000", got)
 	}
 	gwUncached := newGW(nil)
-	recordCostAndBilling(ctx, gwUncached, target, "", 1_000_000, 0, 1_000_000)
+	recordCostAndBilling(ctx, gwUncached, target, "", 1_000_000, 0, 0, 1_000_000)
 	if got := gwUncached.CostTracker.GetCostMicroUSD("deepseek-flash"); got != 750_000 {
 		t.Errorf("uncached cost = %d microUSD, want 750000", got)
 	}

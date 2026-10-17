@@ -197,4 +197,7 @@ func mergeAttachedPeak(dst *PricingEntry, existing *PricingEntry) {
 	if dst.CachedInputCostPer1M == 0 {
 		dst.CachedInputCostPer1M = existing.CachedInputCostPer1M
 	}
+	if dst.CacheWriteCostPer1M == 0 {
+		dst.CacheWriteCostPer1M = existing.CacheWriteCostPer1M
+	}
 }
