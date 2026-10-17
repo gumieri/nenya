@@ -264,7 +264,7 @@ xAI (Grok models) supports reasoning effort configuration:
 ### OpenAI
 
 OpenAI supports prompt caching on request bodies with stable prefixes:
-- **Prompt cache key**: For OpenAI, Nenya injects a deterministic `prompt_cache_key` (SHA256 of agent:model, first 16 hex chars) to keep the cached block stable. Client-supplied keys are preserved.
+- **Prompt cache key**: For OpenAI and xAI, Nenya injects a deterministic `prompt_cache_key` — SHA256 of the per-conversation session identity (the same identity as sticky routing and the synthesized session headers), first 16 hex chars — so a warm turn shares turn 1's key (NENYA-158). Conversations with identical openers (api-key subject + agent + system prompt + first user message) share one key until the affinity fork disambiguates — the same semantics as sticky routing, and benign: providers cache key+prefix, so only prefix-identical content can hit. Client-supplied keys are preserved; without a session identity the legacy SHA256(agent:model) fallback applies. Providers whose convention is a header instead of the body field set `providers.<name>.cache_affinity: header` (Codex-class upstreams route their prompt cache on the session id): the identity rides the session header (`Session-Id` plus the underscore spelling, best-effort) with the same sanitation as the session machinery; header injection follows `prefix_cache.enabled`.
 - **GPT-5.6+ breakpoints**: see GPT-5.6 section above.
 
 ### Anthropic (Streaming)

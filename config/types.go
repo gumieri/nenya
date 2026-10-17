@@ -539,6 +539,13 @@ type ProviderConfig struct {
 	// HTTPS_PROXY/NO_PROXY environment variables apply. Validated at
 	// startup.
 	ProxyURL string `json:"proxy_url,omitempty"`
+	// CacheAffinity selects where this provider's prompt-cache affinity key
+	// rides (NENYA-158): "body" (default for xai/openai) injects the
+	// `prompt_cache_key` body field; "header" maps the per-conversation
+	// session identity onto the `Session-Id` request header (Codex-class
+	// upstreams route their prompt cache on the session id and ignore the
+	// body field). Empty inherits the body convention.
+	CacheAffinity string `json:"cache_affinity,omitempty"`
 	// ModelsHidden lists RE2 patterns identifying canonical model IDs that
 	// are excluded from /v1/models (NENYA-200) while remaining fully
 	// routable — internal spellings, retired IDs kept for compatibility,
@@ -690,6 +697,9 @@ type Provider struct {
 	Thinking      *ThinkingConfig
 	Billing       *BillingConfig
 	AllowedModels []string
+	// CacheAffinity is the resolved affinity convention ("body" | "header",
+	// NENYA-158). See ProviderConfig.CacheAffinity.
+	CacheAffinity string
 	allowedRE     []*regexp.Regexp
 	ModelsHidden  []string
 	hiddenRE      []*regexp.Regexp

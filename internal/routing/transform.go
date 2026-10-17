@@ -32,7 +32,17 @@ type TransformDeps struct {
 	CountTokens        func(string) int
 	AgentName          string
 	CacheSalt          string
-	Metrics            *infra.Metrics
+	// SessionIdentity is the coherent per-conversation session identity
+	// (synthesized or client-supplied, NENYA-143/158). When set, the
+	// prompt-cache key derives from IT — per conversation — instead of the
+	// per-agent fallback.
+	SessionIdentity string
+	// CacheAffinity is the target provider's affinity convention ("body" |
+	// "header", NENYA-158): "header" suppresses the body-field injection
+	// (the identity rides the Session-Id header instead).
+	CacheAffinity string
+
+	Metrics *infra.Metrics
 }
 
 func InjectAPIKeyWithGateway(providerName string, gw interface {
@@ -170,20 +180,30 @@ func applyProviderSanitize(deps TransformDeps, payload map[string]interface{}, p
 }
 
 // injectPromptCacheKey injects a stable cache key into the request body for
-// providers that support prompt caching (xAI, OpenAI). The key is derived from
-// the agent name and model, giving providers a per-session cache key to improve
-// prompt-cache hit rates. Controlled by prefix_cache.enabled in config.
+// providers that support prompt caching (xAI, OpenAI). Controlled by
+// prefix_cache.enabled in config; a client-supplied prompt_cache_key always
+// wins.
 //
-// The key is SHA-256(agentName:model) truncated to 16 hex chars (64 bits),
-// providing sufficient entropy for per-session cache routing with low collision
-// risk across typical agent+model counts (< 1M combinations).
+// The key is SHA-256 truncated to 16 hex chars (64 bits) — sufficient
+// entropy for cache routing with low collision risk. The identity is
+// PER-CONVERSATION when the caller supplies the session identity (NENYA-158:
+// every conversation of an agent sharing one key defeated per-session cache
+// routing); the SHA-256(agent:model) fallback covers callers without one.
+// The input is non-secret (already transmitted upstream), so fast
+// deterministic hashing is correct; Argon2/scrypt/bcrypt would be
+// inappropriate.
 func injectPromptCacheKey(deps TransformDeps, payload map[string]interface{}, providerName, modelName string) {
 	if deps.Config == nil || !deps.Config.PrefixCache.Enabled {
 		return
 	}
 
+	if deps.CacheAffinity == "header" {
+		// Header convention (NENYA-158): the identity rides the
+		// Session-Id header at dispatch; the body field stays clean.
+		return
+	}
 	lower := strings.ToLower(providerName)
-	if lower != "xai" && lower != "openai" {
+	if lower != "xai" && lower != "openai" && deps.CacheAffinity != "body" {
 		return
 	}
 
@@ -191,20 +211,18 @@ func injectPromptCacheKey(deps TransformDeps, payload map[string]interface{}, pr
 		return
 	}
 
-	if deps.AgentName == "" {
-		if deps.Logger != nil {
-			deps.Logger.Debug("skipped prompt_cache_key injection: empty agent name",
-				"provider", providerName, "model", modelName)
+	identity := deps.SessionIdentity
+	if identity == "" {
+		if deps.AgentName == "" {
+			if deps.Logger != nil {
+				deps.Logger.Debug("skipped prompt_cache_key injection: no session identity or agent name",
+					"provider", providerName, "model", modelName)
+			}
+			return
 		}
-		return
+		identity = deps.AgentName + ":" + modelName
 	}
-
-	// SHA-256 is used to derive a stable cache key from public identifiers
-	// (agent name, model name). This is not password hashing — the input
-	// data is non-secret (it's already transmitted to the upstream provider).
-	// We need fast, deterministic hashing for cache key stability; Argon2/
-	// scrypt/bcrypt would be inappropriate (too slow, unnecessary salt).
-	h := sha256.Sum256([]byte(deps.AgentName + ":" + modelName))
+	h := sha256.Sum256([]byte(identity))
 	payload["prompt_cache_key"] = hex.EncodeToString(h[:])[:16]
 }
 

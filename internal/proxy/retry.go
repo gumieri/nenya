@@ -1232,7 +1232,17 @@ func (p *Proxy) prepareAndSend(gw *gateway.NenyaGateway,
 		},
 		AgentName: agentName,
 		CacheSalt: resolveCacheSalt(apiKey, agentName, &gw.Config),
-		Metrics:   gw.Metrics,
+		// Per-conversation cache affinity (NENYA-158): the same coherent
+		// session identity the sticky/synthesized-session machinery
+		// produced — ensureOpencodeSessionHeader ran before dispatch.
+		SessionIdentity: sessionIdentityOrEmpty(r),
+		CacheAffinity: func() string {
+			if p, ok := gw.Providers[target.Provider]; ok && p != nil {
+				return p.CacheAffinity
+			}
+			return ""
+		}(),
+		Metrics: gw.Metrics,
 	}
 	transformedBody, _, err := routing.TransformRequestForUpstream(transformDeps, target.Provider, target.URL, payload, target.Model, target.MaxOutput, target.MaxContext, target.Format, target.ReasoningEffort)
 	if err != nil {

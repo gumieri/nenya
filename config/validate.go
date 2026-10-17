@@ -1029,6 +1029,12 @@ func validateHeaderFilters(provider string, filters map[string]HeaderFilter) []s
 func validateProviders(ctx context.Context, providers map[string]*Provider, network *NetworkConfig, logger *slog.Logger) []string {
 	errors := []string{}
 	for name, provider := range providers {
+		switch provider.CacheAffinity {
+		case "", "body", "header":
+			// valid (NENYA-158)
+		default:
+			errors = append(errors, fmt.Sprintf("providers[%q].cache_affinity must be body or header, got %q", name, provider.CacheAffinity))
+		}
 		switch provider.ThoughtSignaturePolicy {
 		case "", "strip", "placeholder", "passthrough":
 			// valid (NENYA-50)

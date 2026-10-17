@@ -570,12 +570,26 @@ var sessionParentHeaderNames = [...]string{
 // instead of discarding the client's real conversation id. clientSupplied
 // is false when no usable identity was present (the caller synthesizes).
 func clientSessionIdentity(r *http.Request) (id string, clientSupplied bool) {
-	for _, h := range sessionIdentityHeaderNames {
-		if v := r.Header.Get(h); v != "" && validSessionHeaderValue(v) {
+	return sessionIdentityFromHeaders(r.Header)
+}
+
+// sessionIdentityFromHeaders is clientSessionIdentity over an arbitrary
+// header set (the dispatch path consults the same identity the chat routes
+// synthesized, NENYA-158).
+func sessionIdentityFromHeaders(h http.Header) (id string, clientSupplied bool) {
+	for _, name := range sessionIdentityHeaderNames {
+		if v := h.Get(name); v != "" && validSessionHeaderValue(v) {
 			return v, true
 		}
 	}
 	return "", false
+}
+
+// sessionIdentityOrEmpty returns the request's coherent session identity,
+// or "" when none is usable (NENYA-158).
+func sessionIdentityOrEmpty(r *http.Request) string {
+	id, _ := clientSessionIdentity(r)
+	return id
 }
 
 // sanitizeSessionHeaders drops unusable session-header values before the
@@ -1570,6 +1584,22 @@ func (p *Proxy) buildUpstreamRequest(gw *gateway.NenyaGateway, ctx context.Conte
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept-Encoding", "identity")
 	req.Header.Set("User-Agent", gw.Config.Server.UserAgent)
+	// Cache-affinity header convention (NENYA-158): a provider configured
+	// with cache_affinity=header routes its prompt cache on the session id,
+	// so the per-conversation identity rides the session header — the same
+	// coherent identity the body convention injects into prompt_cache_key
+	// (sessionIdentityFromHeaders already returned only usable values; the
+	// prefix_cache gate matches the body channel). Both spellings are set —
+	// "Session-Id" and the underscore form Codex traffic has been seen
+	// using — as best-effort coverage of the convention.
+	if gw.Config.PrefixCache.Enabled {
+		if p, ok := gw.Providers[providerName]; ok && p != nil && p.CacheAffinity == "header" {
+			if id, usable := sessionIdentityFromHeaders(srcHeaders); usable {
+				req.Header.Set("Session-Id", id)
+				req.Header.Set("Session_Id", id)
+			}
+		}
+	}
 	// Per-target header-value filtering (NENYA-201): runs last, on the
 	// COMPLETE outbound set (client passthrough, session identity, beta
 	// flags, tracing, and the injected auth), so a configured filter can
