@@ -304,7 +304,8 @@ func (t *HTTPTransport) Connect(ctx context.Context) error {
 	t.baseHost = baseURL.Host
 	t.mu.Unlock()
 
-	t.cfg.Logger.Debug("connecting to MCP SSE endpoint", "url", sseURLStr)
+	// NENYA-145: redact userinfo before echoing a configured URL.
+	t.cfg.Logger.Debug("connecting to MCP SSE endpoint", "url", netutil.RedactURLUserinfo(sseURLStr))
 
 	// The SSE stream lifetime is owned by the transport (streamCtx, canceled
 	// only by Close) so a short-lived caller context (e.g. Initialize's)

@@ -511,8 +511,9 @@ func enrichSingleOllamaModel(ctx context.Context, modelName, showEndpoint string
 func enrichOllamaModels(ctx context.Context, baseURL string, models []DiscoveredModel, client *http.Client, logger *slog.Logger) ([]DiscoveredModel, error) {
 	showEndpoint := GetOllamaShowEndpoint(baseURL)
 	if showEndpoint == "" {
-		logger.Debug("cannot build /api/show endpoint", "url", baseURL)
-		return nil, fmt.Errorf("no /api/show endpoint for Ollama URL: %s", baseURL)
+		// NENYA-145: redact userinfo before echoing a configured URL.
+		logger.Debug("cannot build /api/show endpoint", "url", netutil.RedactURLUserinfo(baseURL))
+		return nil, fmt.Errorf("no /api/show endpoint for Ollama URL: %s", netutil.RedactURLUserinfo(baseURL))
 	}
 
 	type job struct {

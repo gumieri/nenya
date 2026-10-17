@@ -14,6 +14,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/nenya/internal/netutil"
+
 	"github.com/nenya/config"
 	"github.com/nenya/internal/adapter"
 	"github.com/nenya/internal/discovery"
@@ -1101,7 +1103,9 @@ func logRequestIfDebug(ctx context.Context, logger *slog.Logger, req *http.Reque
 	if !logger.Enabled(ctx, slog.LevelDebug) {
 		return
 	}
-	logger.Debug("forwarding to upstream", "url", targetURL, "header_count", len(req.Header))
+	// NENYA-145: the URL is redacted before logging — a provider URL may
+	// carry userinfo credentials (same class as proxy URLs).
+	logger.Debug("forwarding to upstream", "url", netutil.RedactURLUserinfo(targetURL), "header_count", len(req.Header))
 	if len(body) > 0 && len(body) < 1000 {
 		logger.Debug("request body", "body", string(body))
 	}

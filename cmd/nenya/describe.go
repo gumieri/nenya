@@ -6,9 +6,10 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"net/url"
 	"sort"
 	"strings"
+
+	"github.com/nenya/internal/netutil"
 
 	"github.com/nenya/config"
 	"github.com/nenya/internal/discovery"
@@ -56,8 +57,9 @@ type describeJSON struct {
 	Diagnostics     []config.Diagnostic `json:"diagnostics"`
 }
 
-// redactedSentinel replaces credential-bearing values in diagnostic output.
-const redactedSentinel = "[REDACTED]"
+// redactedSentinel replaces credential-bearing values in diagnostic output
+// (the same marker the shared URL redactor uses).
+const redactedSentinel = netutil.RedactedUserinfoSentinel
 
 // redactConfigForDescribe returns a copy of cfg with credential-bearing
 // fields replaced by a sentinel: provider api_key values and MCP server header
@@ -79,7 +81,7 @@ func redactConfigForDescribe(cfg *config.Config) *config.Config {
 	}
 	if cfg.Network != nil {
 		network := *cfg.Network
-		network.ProxyURL = redactURLUserinfo(network.ProxyURL)
+		network.ProxyURL = netutil.RedactURLUserinfo(network.ProxyURL)
 		out.Network = &network
 	}
 	if len(cfg.MCPServers) > 0 {
@@ -105,7 +107,7 @@ func redactProviderForDescribe(provider config.ProviderConfig) config.ProviderCo
 	if provider.APIKey != "" {
 		provider.APIKey = redactedSentinel
 	}
-	provider.ProxyURL = redactURLUserinfo(provider.ProxyURL)
+	provider.ProxyURL = netutil.RedactURLUserinfo(provider.ProxyURL)
 	if len(provider.Accounts) == 0 {
 		return provider
 	}
@@ -118,31 +120,6 @@ func redactProviderForDescribe(provider config.ProviderConfig) config.ProviderCo
 	}
 	provider.Accounts = accounts
 	return provider
-}
-
-// redactURLUserinfo replaces the userinfo of a URL (proxy credentials are
-// accepted in userinfo form by design) with the sentinel, leaving the rest of
-// the URL visible. Unparseable or credential-free URLs are returned unchanged.
-func redactURLUserinfo(raw string) string {
-	if raw == "" {
-		return raw
-	}
-	if _, err := url.Parse(raw); err != nil {
-		return raw
-	}
-	prefix, rest := "", raw
-	if sep := strings.Index(raw, "://"); sep >= 0 {
-		prefix, rest = raw[:sep+3], raw[sep+3:]
-	}
-	// Only a credential-looking userinfo is redacted: an "@" in a path or a
-	// query is not one. Everything before the "@" is replaced (over-redaction
-	// is safe for a diagnostic), and the sentinel is inserted literally rather
-	// than through url.User, which would percent-encode its brackets.
-	at := strings.IndexByte(rest, '@')
-	if at < 0 || strings.ContainsAny(rest[:at], "/?#") {
-		return raw
-	}
-	return prefix + redactedSentinel + "@" + rest[at+1:]
 }
 
 // handleDescribe implements `nenya describe [--json]` (CONTRACT.md §4.3): the

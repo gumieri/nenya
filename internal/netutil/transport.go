@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"strings"
 )
 
 // MinTLSVersion is the explicit client-side TLS floor applied to every
@@ -78,6 +79,38 @@ func parseProxy(raw string) (*url.URL, error) {
 		return nil, fmt.Errorf("unsupported proxy scheme %q (want http, https, socks5, or socks5h)", u.Scheme)
 	}
 	return u, nil
+}
+
+// RedactedUserinfoSentinel replaces credential-bearing userinfo in
+// redacted URL output.
+const RedactedUserinfoSentinel = "[REDACTED]"
+
+// RedactURLUserinfo replaces the userinfo of a URL (proxy credentials are
+// accepted in userinfo form by design) with a sentinel, leaving the rest of
+// the URL visible. The strip is best-effort: it does not require the URL to
+// parse, so a malformed string cannot smuggle a credential past it, and only
+// an "@" that precedes the authority terminator (/ ? #) is treated as
+// userinfo, so an "@" in a path or query is left alone. Credential-free
+// inputs are returned unchanged. Shared by the diagnostic CLI surface and the
+// request logger (NENYA-145): a first-party output channel must never echo a
+// credential.
+func RedactURLUserinfo(raw string) string {
+	if raw == "" {
+		return raw
+	}
+	prefix, rest := "", raw
+	if sep := strings.Index(raw, "://"); sep >= 0 {
+		prefix, rest = raw[:sep+3], raw[sep+3:]
+	}
+	// Only a credential-looking userinfo is redacted: an "@" in a path or a
+	// query is not one. Everything before the "@" is replaced (over-redaction
+	// is safe for a diagnostic), and the sentinel is inserted literally rather
+	// than through url.User, which would percent-encode its brackets.
+	at := strings.IndexByte(rest, '@')
+	if at < 0 || strings.ContainsAny(rest[:at], "/?#") {
+		return raw
+	}
+	return prefix + RedactedUserinfoSentinel + "@" + rest[at+1:]
 }
 
 // ValidateProxyURL checks a configured egress proxy URL, rejecting an
