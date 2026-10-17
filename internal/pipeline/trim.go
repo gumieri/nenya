@@ -180,7 +180,12 @@ func tokenForMessage(msgRaw interface{}, countTokens func(string) int) int {
 	}
 	content, ok := msg["content"].(string)
 	if !ok {
-		return 0
+		// Array content (vision blocks, converted Anthropic blocks) was
+		// counted as zero, so TrimPayload could never trim for a message that
+		// carried one (NENYA-157). The text parts are flattened here; image
+		// blocks stay unpriced on this path (its counter is text-only by
+		// construction).
+		return countTokens(ExtractContentText(msg))
 	}
 	return countTokens(content)
 }

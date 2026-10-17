@@ -83,11 +83,14 @@ type NenyaGateway struct {
 	// Calibration learns per-model cl100k drift ratios from real upstream
 	// usage (NENYA-135); nil means the loop is disabled and estimates are
 	// raw cl100k. Nil-safe methods everywhere.
-	Calibration     *infra.CalibrationTracker
-	Metrics         *infra.Metrics
-	Logger          *slog.Logger
-	AgentState      *routing.AgentState
-	ThoughtSigCache *infra.ThoughtSignatureCache
+	Calibration *infra.CalibrationTracker
+	Metrics     *infra.Metrics
+	Logger      *slog.Logger
+	// tokenFallbackWarn gates the single warning emitted when the embedded
+	// BPE vocabulary cannot be loaded (NENYA-157).
+	tokenFallbackWarn sync.Once
+	AgentState        *routing.AgentState
+	ThoughtSigCache   *infra.ThoughtSignatureCache
 	// WindowSummaries caches window-compaction engine summaries so the
 	// compacted head stays stable across turns (NENYA-24).
 	WindowSummaries *pipeline.SummaryCache
@@ -811,13 +814,19 @@ func lookupStringModelInCatalog(m config.AgentModel, catalog *discovery.ModelCat
 }
 
 // CountTokens estimates the number of tokens in the given text using the
-// cl100k_base BPE encoding. Returns 0 and logs a warning if tokenization
-// fails (graceful degradation).
+// cl100k_base BPE encoding. If the embedded vocabulary cannot be loaded the
+// class-weighted fallback (tiktoken.EstimateByClass) answers instead and the
+// failure is logged: a zero estimate would silently unbound every budget
+// derived from it (NENYA-157).
 func (g *NenyaGateway) CountTokens(text string) int {
 	n, err := tiktoken.CountTokens(text)
 	if err != nil {
-		g.Logger.Warn("tokenization failed, returning 0", "err", err)
-		return 0
+		// One warning per gateway: a broken vocabulary would otherwise log
+		// once per counted declaration, per request.
+		g.tokenFallbackWarn.Do(func() {
+			g.Logger.Warn("tokenization failed, using the class-weighted fallback", "err", err)
+		})
+		return tiktoken.EstimateByClass(text)
 	}
 	return n
 }
@@ -874,10 +883,32 @@ func newCalibrationParams(cfg *config.Config) *infra.CalibrationParams {
 	}
 }
 
+// Framing overhead the message text does not carry: the role/delimiter tokens
+// a provider wraps every message in. Providers document 3-4 tokens per message
+// (OpenAI's chat framing), so the estimate adds one constant per message
+// instead of under-counting a long conversation by a few tokens per turn
+// (NENYA-157).
+const perMessageOverheadTokens = 4
+
+// perDeclarationOverheadTokens is the framing of one declaration — a tool or a
+// structured-output schema (the name/description/JSON skeleton the provider
+// renders around it), on top of its text.
+const perDeclarationOverheadTokens = 8
+
+// CountRequestTokens estimates the tokens a chat request costs its target: the
+// message text (cl100k BPE), the message framing overhead, any image blocks
+// (priced by pixel area, see tiktoken.ImageTokens), and the tool/structured-
+// output declarations — all of which were previously invisible to the estimate
+// (NENYA-157). It is the seed for budget-critical decisions (per-target input
+// budgets, trimming, the pipeline's savings accounting), so an under-count
+// there is what lets an oversized payload reach an upstream 400.
 func (g *NenyaGateway) CountRequestTokens(payload map[string]interface{}) int {
 	msgs, ok := payload["messages"].([]interface{})
 	if !ok {
-		return 0
+		// No messages to price, but the declarations and any image they
+		// carry are still forwarded upstream: returning zero here would
+		// resurrect the zero-estimate hole this change closes (NENYA-157).
+		return g.declarationTokens(payload)
 	}
 	var sb strings.Builder
 	n := len(msgs)
@@ -885,14 +916,171 @@ func (g *NenyaGateway) CountRequestTokens(payload map[string]interface{}) int {
 		n = math.MaxInt / 500
 	}
 	sb.Grow(n * 500)
+	images := 0
+	framed := 0
 	for _, msgRaw := range msgs {
 		msg, ok := msgRaw.(map[string]interface{})
 		if !ok {
 			continue
 		}
-		sb.WriteString(ExtractContentText(msg))
+		framed++
+		sb.WriteString(textForCount(msg))
+		appendToolCallText(&sb, msg)
+		images += imageTokensInMessage(msg)
 	}
-	return g.CountTokens(sb.String())
+	tokens := g.CountTokens(sb.String())
+	tokens += images
+	tokens += framed * perMessageOverheadTokens
+	tokens += g.declarationTokens(payload)
+	return tokens
+}
+
+// textForCount is ExtractContentText without the "[image]" placeholder: an
+// image is priced by pixel area, so counting its placeholder text as well would
+// double-count it (the placeholder stays in ExtractContentText, where it is a
+// useful marker for the TF-IDF and windowing consumers).
+func textForCount(msg map[string]interface{}) string {
+	contentRaw, ok := msg["content"]
+	if !ok {
+		return ""
+	}
+	switch content := contentRaw.(type) {
+	case string:
+		return content
+	case []interface{}:
+		var sb strings.Builder
+		for _, partRaw := range content {
+			part, ok := partRaw.(map[string]interface{})
+			if !ok {
+				continue
+			}
+			switch typ, _ := part["type"].(string); typ {
+			case "text":
+				sb.WriteString(extractTextFromContentPart(part))
+			case "input_json":
+				sb.WriteString(extractInputJSONFromPart(part))
+			}
+		}
+		return sb.String()
+	default:
+		return ""
+	}
+}
+
+// appendToolCallText adds an assistant message's tool calls (name plus
+// arguments) to the counted text: an assistant turn that called a tool carries
+// a nil or empty content, so without this the MCP loop's re-dispatches — the
+// exact shape the gateway itself builds — estimated as framing alone
+// (NENYA-157).
+func appendToolCallText(sb *strings.Builder, msg map[string]interface{}) {
+	calls, ok := msg["tool_calls"].([]interface{})
+	if !ok {
+		return
+	}
+	for _, callRaw := range calls {
+		call, ok := callRaw.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		fn, ok := call["function"].(map[string]interface{})
+		if !ok {
+			continue
+		}
+		if name, ok := fn["name"].(string); ok {
+			sb.WriteString(name)
+		}
+		if args, ok := fn["arguments"].(string); ok {
+			sb.WriteString(args)
+		}
+	}
+}
+
+// imageTokensInMessage prices the image blocks of one message, in either wire
+// shape: OpenAI's `image_url` (a data URL or a remote URL) and Anthropic's
+// `image` block with an inlined base64 source.
+func imageTokensInMessage(msg map[string]interface{}) int {
+	content, ok := msg["content"].([]interface{})
+	if !ok {
+		return 0
+	}
+	total := 0
+	for _, partRaw := range content {
+		part, ok := partRaw.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		typ, _ := part["type"].(string)
+		switch typ {
+		case "image_url":
+			// The data URL carries its own media type; a remote URL has none.
+			total += tiktoken.ImageTokens("", imageURLPayload(part["image_url"]))
+		case "image":
+			total += anthropicImageTokens(part)
+		}
+	}
+	return total
+}
+
+// imageURLPayload extracts the URL string from an OpenAI image_url field, which
+// may be a string or an object with a `url`.
+func imageURLPayload(raw interface{}) string {
+	switch value := raw.(type) {
+	case string:
+		return value
+	case map[string]interface{}:
+		url, _ := value["url"].(string)
+		return url
+	default:
+		return ""
+	}
+}
+
+// anthropicImageTokens prices an Anthropic `image` block
+// (`{"source":{"type":"base64","media_type":...,"data":...}}`).
+func anthropicImageTokens(part map[string]interface{}) int {
+	source, ok := part["source"].(map[string]interface{})
+	if !ok {
+		return tiktoken.DefaultImageTokens
+	}
+	sourceType, _ := source["type"].(string)
+	mediaType, _ := source["media_type"].(string)
+	data, _ := source["data"].(string)
+	switch sourceType {
+	case "base64":
+		return tiktoken.ImageTokens(mediaType, data)
+	case "url":
+		url, _ := source["url"].(string)
+		return tiktoken.ImageTokens(mediaType, url)
+	default:
+		return tiktoken.DefaultImageTokens
+	}
+}
+
+// declarationTokens prices the request's tool declarations and structured-output
+// schema, which the message text does not cover. The serialized declaration is
+// what the provider renders, so it is counted verbatim plus a framing constant;
+// a declaration that cannot be marshaled still costs the framing.
+func (g *NenyaGateway) declarationTokens(payload map[string]interface{}) int {
+	total := 0
+	if tools, ok := payload["tools"].([]interface{}); ok {
+		for _, tool := range tools {
+			total += perDeclarationOverheadTokens + g.CountTokens(marshalForCount(tool))
+		}
+	}
+	if format, ok := payload["response_format"].(map[string]interface{}); ok {
+		total += perDeclarationOverheadTokens + g.CountTokens(marshalForCount(format))
+	}
+	return total
+}
+
+// marshalForCount renders a declaration for counting. An unmarshalable value
+// contributes no text (it is rejected elsewhere), never a panic.
+func marshalForCount(value interface{}) string {
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		return ""
+	}
+	return string(encoded)
 }
 
 func ExtractContentText(msg map[string]interface{}) string {

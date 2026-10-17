@@ -168,8 +168,9 @@ func TestCountRequestTokens_NormalMessages(t *testing.T) {
 	}
 
 	tokens := gw.CountRequestTokens(payload)
-	if tokens != 2 {
-		t.Errorf("expected 2 tokens for 'helloworld' (10 chars / 4.0), got %d", tokens)
+	// Two content tokens plus the per-message framing overhead (NENYA-157).
+	if want := 2 + 2*perMessageOverheadTokens; tokens != want {
+		t.Errorf("expected %d tokens (2 content + 2 messages of framing), got %d", want, tokens)
 	}
 }
 
@@ -210,8 +211,8 @@ func TestCountRequestTokens_ArrayContent(t *testing.T) {
 	}
 
 	tokens := gw.CountRequestTokens(payload)
-	if tokens != 2 {
-		t.Errorf("expected 2 tokens for 'hello world' (11 chars / 4.0), got %d", tokens)
+	if want := 2 + perMessageOverheadTokens; tokens != want {
+		t.Errorf("expected %d tokens (2 content + one message of framing), got %d", want, tokens)
 	}
 }
 
@@ -227,8 +228,8 @@ func TestCountRequestTokens_NonMapMessagesSkipped(t *testing.T) {
 	}
 
 	tokens := gw.CountRequestTokens(payload)
-	if tokens != 1 {
-		t.Errorf("expected 1 token for 'hello' (5 chars / 4.0), got %d", tokens)
+	if want := 1 + perMessageOverheadTokens; tokens != want {
+		t.Errorf("expected %d tokens (1 content + framing for the one readable message), got %d", want, tokens)
 	}
 }
 

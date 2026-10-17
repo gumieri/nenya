@@ -1257,10 +1257,15 @@ func (p *Proxy) prepareAndSend(gw *gateway.NenyaGateway,
 	// Record the input estimate AFTER transform so the value reflects the
 	// payload actually dispatched (post trim/window/bouncer), making
 	// direction="client" − direction="input" the whole-pipeline savings.
-	// The RAW cl100k count feeds the calibration loop (NENYA-135) — the
-	// calibrated value would compound the ratio — and the metric keeps the
-	// raw semantics too.
-	inputEstimate := gw.CountTokens(string(transformedBody))
+	// The UNCALIBRATED count feeds the calibration loop (NENYA-135) — the
+	// calibrated value would compound the ratio — and it is the same composed
+	// measure the budget seed uses (NENYA-157): counting the serialized body
+	// instead would price an inlined base64 image as text (~0.74 tokens per
+	// character of base64) and drive the learned ratio to its clamp on image
+	// traffic. It is taken from the pre-format-conversion payload, so a
+	// conversion that drops declarations folds its overhead into the learned
+	// ratio (the safe direction: the ratio then corrects the next estimate).
+	inputEstimate := gw.CountRequestTokens(payload)
 	gw.Calibration.RecordEstimate(target.Model, inputEstimate)
 	gw.Metrics.RecordTokens("input", target.Model, agentName, target.Provider, inputEstimate)
 

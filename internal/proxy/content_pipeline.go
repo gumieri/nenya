@@ -75,6 +75,10 @@ func (p *Proxy) applyContentPipeline(gw *gateway.NenyaGateway, ctx context.Conte
 	// captured), or a payload that actually exceeds the hard limit could be
 	// treated as fitting.
 	gateTokens := gw.CountRequestTokens(payload)
+	// Every soft/hard-limit comparison inside the chain (bouncer, TF-IDF,
+	// injection band) must see the same count as the gate: opts.TokenCount was
+	// captured before the MCP declarations and system prompt were injected.
+	opts.TokenCount = gateTokens
 	cacheAware := cacheAwareActive(opts.Agent, opts.TargetProvider, gateTokens, opts.HardLimit, opts.WindowMaxCtx)
 
 	if !opts.Profile.IsIDE {
