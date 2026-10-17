@@ -215,7 +215,7 @@ func (p *Proxy) chainAuthPprof(gw *gateway.NenyaGateway, w http.ResponseWriter, 
 
 func (p *Proxy) chainModels(gw *gateway.NenyaGateway, w http.ResponseWriter, r *http.Request) {
 	p.chainEndpoint(http.MethodGet, "/v1/models", true, func(gw *gateway.NenyaGateway, w http.ResponseWriter, r *http.Request, apiKey *config.ApiKey) {
-		infra.ObserveHTTP(gw.Metrics, p.handleModels)(w, r)
+		infra.ObserveHTTPFunc(gw.Metrics, p.handleModelsShim(gw))(w, r)
 	})(gw, w, r)
 }
 
@@ -711,12 +711,26 @@ func catalogModelEligible(gw *gateway.NenyaGateway, m discovery.DiscoveredModel,
 	if provider.IsNonChatModel(m.ID) {
 		return false
 	}
+	if provider.IsModelHidden(m.ID) {
+		// models_hidden (NENYA-200): routable, not listed.
+		return false
+	}
 	return !seen[m.ID]
 }
 
 // handleModels returns the list of available models from all configured providers.
-func (p *Proxy) handleModels(w http.ResponseWriter) {
-	gw := p.Gateway()
+// handleModelsShim adapts the gateway-bound models handler to the single
+// writer signature the observation wrapper expects.
+func (p *Proxy) handleModelsShim(gw *gateway.NenyaGateway) func(http.ResponseWriter, *http.Request) {
+	return func(w http.ResponseWriter, r *http.Request) {
+		p.handleModels(gw, w, r)
+	}
+}
+
+// handleModels returns the model catalog in the client's dialect: the
+// default OpenAI shape, or the Anthropic shape for `?dialect=anthropic`
+// (NENYA-200) — the same visibility rules either way.
+func (p *Proxy) handleModels(gw *gateway.NenyaGateway, w http.ResponseWriter, r *http.Request) {
 	if gw == nil {
 		writeStructuredError(w, http.StatusServiceUnavailable, infra.ErrorKindInternal, "Gateway not initialized")
 		return
@@ -737,16 +751,54 @@ func (p *Proxy) handleModels(w http.ResponseWriter) {
 
 	models = append(models, catalogModelEntries(gw, seen)...)
 
+	w.Header().Set("Content-Type", "application/json")
+	if strings.EqualFold(r.URL.Query().Get("dialect"), "anthropic") {
+		// Anthropic-shape listing (NENYA-200): the same visibility rules,
+		// rendered the way Anthropic-native clients expect.
+		resp := map[string]interface{}{
+			"data":     anthropicModelEntries(models),
+			"has_more": false,
+			"first_id": nil,
+			"last_id":  nil,
+		}
+		if len(models) > 0 {
+			resp["first_id"] = models[0].ID
+			resp["last_id"] = models[len(models)-1].ID
+		}
+		if err := json.NewEncoder(w).Encode(resp); err != nil {
+			gw.Logger.Error("failed to encode models response", "err", err)
+		}
+		return
+	}
+
 	resp := map[string]interface{}{
 		"object": "list",
 		"data":   models,
 	}
-
-	w.Header().Set("Content-Type", "application/json")
 	if err := json.NewEncoder(w).Encode(resp); err != nil {
 		gw.Logger.Error("failed to encode models response", "err", err)
 	}
 }
+
+// anthropicModelEntries renders model entries in the Anthropic /v1/models
+// shape (NENYA-200): {type: "model", id, display_name, created_at}.
+func anthropicModelEntries(models []modelEntry) []map[string]interface{} {
+	out := make([]map[string]interface{}, 0, len(models))
+	for _, m := range models {
+		out = append(out, map[string]interface{}{
+			"type":         "model",
+			"id":           m.ID,
+			"display_name": m.ID,
+			"created_at":   anthropicModelsEpoch,
+		})
+	}
+	return out
+}
+
+// anthropicModelsEpoch is the stable creation timestamp served for catalog
+// entries: nenya does not track per-model creation time, and a fabricated
+// per-model date would imply history that does not exist.
+const anthropicModelsEpoch = "1970-01-01T00:00:00Z"
 
 // handleStats provides runtime statistics including usage, circuit breaker state, and MCP status.
 // When redactKeys is set (unauthenticated telemetry mode), per-key usage is

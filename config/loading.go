@@ -863,6 +863,11 @@ func ResolveProviders(cfg *Config, secrets *SecretsConfig) map[string]*Provider 
 			slog.Error("failed to compile non_chat_models for provider, skipping provider", "provider", name, "err", err)
 			continue
 		}
+		compiledHidden, err := CompileModelsHidden(pc.ModelsHidden)
+		if err != nil {
+			slog.Error("failed to compile models_hidden for provider, skipping provider", "provider", name, "err", err)
+			continue
+		}
 		providers[name] = &Provider{
 			Name:                         name,
 			URL:                          pc.URL,
@@ -887,7 +892,9 @@ func ResolveProviders(cfg *Config, secrets *SecretsConfig) map[string]*Provider 
 			AllowedModels:                pc.AllowedModels,
 			allowedRE:                    compiledRE,
 			NonChatModels:                pc.NonChatModels,
+			ModelsHidden:                 pc.ModelsHidden,
 			nonChatRE:                    compiledNonChat,
+			hiddenRE:                     compiledHidden,
 			PeakWindows:                  pc.PeakWindows,
 			MaxConcurrentRequests:        pc.MaxConcurrentRequests,
 			ModelConcurrency:             pc.ModelConcurrency,

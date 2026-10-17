@@ -539,6 +539,12 @@ type ProviderConfig struct {
 	// HTTPS_PROXY/NO_PROXY environment variables apply. Validated at
 	// startup.
 	ProxyURL string `json:"proxy_url,omitempty"`
+	// ModelsHidden lists RE2 patterns identifying canonical model IDs that
+	// are excluded from /v1/models (NENYA-200) while remaining fully
+	// routable — internal spellings, retired IDs kept for compatibility,
+	// model_aliases keys the operator does not want advertised. Matching is
+	// the same style as allowed_models/non_chat_models.
+	ModelsHidden []string `json:"models_hidden,omitempty"`
 	// HeaderFilters filters individual values out of multi-value request
 	// headers at dispatch to THIS provider (NENYA-201): key = header name
 	// (case-insensitive), value = allow/deny substring patterns. A version
@@ -685,6 +691,8 @@ type Provider struct {
 	Billing       *BillingConfig
 	AllowedModels []string
 	allowedRE     []*regexp.Regexp
+	ModelsHidden  []string
+	hiddenRE      []*regexp.Regexp
 	// NonChatModels mirrors ProviderConfig.NonChatModels (RE2 patterns for
 	// models that are not chat-completions models). nonChatRE holds the
 	// compiled patterns; when both are empty no model is non-chat.
@@ -828,6 +836,23 @@ func CompileAllowedModels(patterns []string) ([]*regexp.Regexp, error) {
 	return res, nil
 }
 
+// CompileModelsHidden compiles models_hidden patterns (NENYA-200), with
+// error text naming its own config key.
+func CompileModelsHidden(patterns []string) ([]*regexp.Regexp, error) {
+	if len(patterns) == 0 {
+		return nil, nil
+	}
+	res := make([]*regexp.Regexp, len(patterns))
+	for i, pat := range patterns {
+		re, err := regexp.Compile(pat)
+		if err != nil {
+			return nil, fmt.Errorf("invalid models_hidden pattern %q: %w", pat, err)
+		}
+		res[i] = re
+	}
+	return res, nil
+}
+
 // CompileNonChatModels compiles non_chat_models patterns. Returns compiled
 // regexes or an error on an invalid pattern.
 func CompileNonChatModels(patterns []string) ([]*regexp.Regexp, error) {
@@ -843,6 +868,21 @@ func CompileNonChatModels(patterns []string) ([]*regexp.Regexp, error) {
 		res[i] = re
 	}
 	return res, nil
+}
+
+// IsModelHidden reports whether the model ID is classified by this
+// provider's models_hidden patterns: excluded from /v1/models, still
+// routable (NENYA-200). An empty pattern list hides nothing.
+func (p *Provider) IsModelHidden(id string) bool {
+	if p == nil {
+		return false
+	}
+	for _, re := range p.hiddenRE {
+		if re.MatchString(id) {
+			return true
+		}
+	}
+	return false
 }
 
 // IsNonChatModel reports whether the model ID is classified by this

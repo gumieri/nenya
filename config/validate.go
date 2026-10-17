@@ -134,6 +134,7 @@ func collectValidationErrors(ctx context.Context, cfg *Config, providers map[str
 	errors = append(errors, validateMCPGuardConfig(cfg)...)
 	errors = append(errors, validateModelRegistryErrors(logger)...)
 	errors = append(errors, validateEntropyConfig(cfg.Bouncer)...)
+	errors = append(errors, validateModelsHiddenConfig(cfg)...)
 	errors = append(errors, validateProviderRateLimits(cfg)...)
 	errors = append(errors, validateBillingConfig(cfg)...)
 	errors = append(errors, validateUpstreamTimeoutSeconds(cfg.Governance.UpstreamTimeoutSeconds)...)
@@ -981,6 +982,20 @@ func validateEntropyConfig(sf BouncerConfig) []string {
 	return errors
 }
 
+// validateModelsHiddenConfig rejects invalid models_hidden patterns at the
+// RAW config level (NENYA-200): ResolveProviders skips a provider whose
+// patterns fail to compile, so the resolved-map check never sees it — the
+// raw pass is the real gate.
+func validateModelsHiddenConfig(cfg *Config) []string {
+	errors := []string{}
+	for name, pc := range cfg.Providers {
+		if _, err := CompileModelsHidden(pc.ModelsHidden); err != nil {
+			errors = append(errors, fmt.Sprintf("providers[%q]: %v", name, err))
+		}
+	}
+	return errors
+}
+
 // validateHeaderFilters rejects empty header names, non-canonical header
 // names, and empty filter patterns in providers.<name>.header_filters
 // (NENYA-201): an empty pattern would match every value (never what the
@@ -1026,6 +1041,7 @@ func validateProviders(ctx context.Context, providers map[string]*Provider, netw
 		if _, err := CompileNonChatModels(provider.NonChatModels); err != nil {
 			errors = append(errors, fmt.Sprintf("providers[%q]: %v", name, err))
 		}
+
 		errors = append(errors, validateHeaderFilters(name, provider.HeaderFilters)...)
 		if provider.StreamIdleTimeoutSeconds < 0 {
 			errors = append(errors, fmt.Sprintf("providers[%q].stream_idle_timeout_seconds must be non-negative (set to 0 to use global default), got %d", name, provider.StreamIdleTimeoutSeconds))
