@@ -264,6 +264,25 @@ func TestMetrics_RecordDecisionPrometheus(t *testing.T) {
 	}
 }
 
+// TestMetrics_SchemaBudgetRejections pins NENYA-199's rejection counter: the
+// dimension label is the fixed budget dimension, and the series is exported.
+func TestMetrics_SchemaBudgetRejections(t *testing.T) {
+	m := NewMetrics()
+	m.RecordSchemaBudgetRejection("depth")
+	m.RecordSchemaBudgetRejection("depth")
+	m.RecordSchemaBudgetRejection("bytes")
+
+	var buf bytes.Buffer
+	m.WritePrometheus(&buf)
+	out := buf.String()
+	if !strings.Contains(out, `nenya_schema_budget_rejections_total{dimension="depth"} 2`) {
+		t.Fatalf("missing the depth series with its count:\n%s", out)
+	}
+	if !strings.Contains(out, `nenya_schema_budget_rejections_total{dimension="bytes"} 1`) {
+		t.Fatalf("missing the bytes series with its count:\n%s", out)
+	}
+}
+
 func TestMetrics_NilSafety(t *testing.T) {
 	var m *Metrics
 
@@ -278,6 +297,7 @@ func TestMetrics_NilSafety(t *testing.T) {
 	m.RecordWindow("w")
 	m.RecordInterception("r")
 	m.RecordRateLimitRejected("h")
+	m.RecordSchemaBudgetRejection("nodes")
 	m.RecordCooldown("a", "p", "m")
 	m.RecordExhausted("a")
 	m.RecordStreamBlock("m", "p")

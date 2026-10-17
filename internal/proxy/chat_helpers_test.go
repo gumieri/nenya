@@ -84,11 +84,13 @@ func TestHandleEmptyAgentTargets(t *testing.T) {
 		if herr == nil {
 			t.Fatal("expected httpError, got nil")
 		}
-		if herr.Code != http.StatusInternalServerError {
-			t.Errorf("expected 500, got %d", herr.Code)
+		// NENYA-199: a client-named agent with no usable models is an
+		// unsupported combination (422), not a gateway 500.
+		if herr.Code != http.StatusUnprocessableEntity {
+			t.Errorf("expected 422, got %d", herr.Code)
 		}
-		if herr.Kind != infra.ErrorKindInternal {
-			t.Errorf("expected error_kind=internal_error, got %q", herr.Kind)
+		if herr.Kind != infra.ErrorKindUnsupported {
+			t.Errorf("expected error_kind=unsupported_combination, got %q", herr.Kind)
 		}
 	})
 }

@@ -100,6 +100,10 @@ type Metrics struct {
 	concurrencyRejected sync.Map
 	concurrencyLimited  sync.Map
 	concurrencyInflight sync.Map
+	// schemaBudgetRejections counts client-supplied schemas refused by the
+	// untrusted-schema input budget, by exceeded dimension
+	// (nenya_schema_budget_rejections_total).
+	schemaBudgetRejections sync.Map
 
 	upstreamLatency sync.Map
 	ttft            sync.Map
@@ -701,6 +705,18 @@ func (m *Metrics) RecordConcurrencyWait(provider, model string, d time.Duration)
 		"provider": provider, "model": model,
 	}, HTTPDurationBuckets)
 	h.Observe(d.Seconds())
+}
+
+// RecordSchemaBudgetRejection counts a client-supplied schema refused by the
+// untrusted-schema input budget (NENYA-199). The dimension label is the
+// exceeded budget ("nodes", "payload_nodes", "depth", "bytes") — a fixed set,
+// never client text.
+func (m *Metrics) RecordSchemaBudgetRejection(dimension string) {
+	if m == nil {
+		return
+	}
+	e := getOrCreateEntry(&m.schemaBudgetRejections, map[string]string{"dimension": dimension})
+	e.value.Add(1)
 }
 
 // RecordConcurrencyRejected counts requests whose client context was
@@ -1627,6 +1643,8 @@ func (m *Metrics) writePipelineMetrics(w io.Writer) {
 		"Cache-hit input tokens by model and pricing window.", &m.cachedInputByWindow)
 	m.writeCounterMap(w, "nenya_pipeline_window_applied_total",
 		"Total window compaction passes applied.", &m.windowApplied)
+	m.writeCounterMap(w, "nenya_schema_budget_rejections_total",
+		"Total client-supplied schemas refused by the untrusted-schema input budget (NENYA-199).", &m.schemaBudgetRejections)
 	m.writeCounterMap(w, "nenya_pipeline_tokens_saved_total",
 		"Tokens removed from request payloads by pipeline stage (trim, window, bouncer).", &m.tokensSaved)
 	m.writeCounterMap(w, "nenya_pipeline_interceptions_total",

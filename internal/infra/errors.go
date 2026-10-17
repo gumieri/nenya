@@ -1,5 +1,7 @@
 package infra
 
+import "net/http"
+
 // ErrorKind categorizes errors for client diagnostics and retry decisions.
 type ErrorKind string
 
@@ -31,6 +33,15 @@ const (
 	ErrorKindInjection     ErrorKind = "injection_detected"
 	ErrorKindExfil         ErrorKind = "exfil_blocked"
 	ErrorKindExfilDetected ErrorKind = "exfil_detected"
+	// ErrorKindUnsupported marks a request the gateway understands but cannot
+	// serve as asked: the requested endpoint/model combination has no usable
+	// target (e.g. an agent with no configured models). It is request-scoped
+	// and maps to 422: the payload is well-formed, the combination is not
+	// supported. It is NOT the kind for an input that exceeds a size or
+	// resource budget (a tool schema over the input budget is
+	// ErrorKindInvalidRequest), and NOT for a deployment gap (no provider
+	// configured for a service kind), which stays service-unavailable.
+	ErrorKindUnsupported ErrorKind = "unsupported_combination"
 )
 
 // ErrorResponse represents a structured API error.
@@ -86,7 +97,8 @@ func (k ErrorKind) Scope() ErrorScope {
 		ErrorKindContextExceeded,
 		ErrorKindInjection,
 		ErrorKindExfil,
-		ErrorKindExfilDetected:
+		ErrorKindExfilDetected,
+		ErrorKindUnsupported:
 		return ScopeRequest
 	case ErrorKindAuthFailed,
 		ErrorKindQuotaExhausted,
@@ -136,5 +148,53 @@ func (k ErrorKind) ShouldFailover() bool {
 		return true
 	default:
 		return false
+	}
+}
+
+// HTTPStatus returns the canonical HTTP status for this error kind. It exists
+// so that the classification of one condition is not re-decided per call site
+// (NENYA-199: an unsupported request shape must surface as a client error, not
+// a 500 decided by whichever branch handled it). It is the status for NEW call
+// sites, not a description of every existing one: several predate it and
+// differ deliberately — model_not_found is written as 400 on the utility
+// routes (embeddings, responses, systemone, passthrough) and 404 on the model
+// routes, auth_failed appears as 403 in the responses/browserguard handlers,
+// and a service-unavailable deployment gap writes 503 for internal_error. The
+// GatewayError table in internal/proxy/error_normalizer.go is a separate,
+// provider-error-oriented mapping. Call sites may also pass a different status
+// when the transport context demands it (a stream whose headers are already
+// written, a tool-call error with no HTTP status).
+func (k ErrorKind) HTTPStatus() int {
+	switch k {
+	case ErrorKindInvalidRequest, ErrorKindContextExceeded:
+		return http.StatusBadRequest
+	case ErrorKindUnsupported:
+		return http.StatusUnprocessableEntity
+	case ErrorKindAuthFailed:
+		return http.StatusUnauthorized
+	case ErrorKindPolicyRefusal, ErrorKindInjection,
+		ErrorKindExfil, ErrorKindExfilDetected, ErrorKindBouncerError:
+		return http.StatusForbidden
+	case ErrorKindModelNotFound:
+		return http.StatusNotFound
+	case ErrorKindPayloadTooLarge:
+		return http.StatusRequestEntityTooLarge
+	case ErrorKindRateLimited:
+		return http.StatusTooManyRequests
+	case ErrorKindProviderError, ErrorKindNetworkError:
+		return http.StatusBadGateway
+	case ErrorKindProviderTimeout:
+		return http.StatusGatewayTimeout
+	case ErrorKindQuotaExhausted, ErrorKindMCPUnavailable:
+		// A dependency (the credential pool, an MCP server) is unavailable:
+		// the client may succeed later, so these are service-unavailable.
+		return http.StatusServiceUnavailable
+	default:
+		// ErrorKindInternal, ErrorKindNone, and any future kind: an
+		// unclassified failure is a server-side fault. The
+		// service-unavailable paths (shutdown, not initialized, strict
+		// interceptor fault) pass 503 explicitly at their call sites, which
+		// docs/ARCHITECTURE.md records.
+		return http.StatusInternalServerError
 	}
 }

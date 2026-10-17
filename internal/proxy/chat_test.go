@@ -698,8 +698,10 @@ func TestHandleChatCompletions_AgentNoModels(t *testing.T) {
 
 	p.ServeHTTP(rec, req)
 
-	if rec.Code != http.StatusInternalServerError {
-		t.Fatalf("expected 500, got %d", rec.Code)
+	// NENYA-199: an agent with no models is an unsupported combination the
+	// client can see (422), not a gateway 500.
+	if rec.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("expected 422, got %d", rec.Code)
 	}
 }
 

@@ -19,6 +19,7 @@ import (
 	"github.com/nenya/internal/discovery"
 	"github.com/nenya/internal/gateway"
 	"github.com/nenya/internal/infra"
+	"github.com/nenya/internal/jsonschema"
 	"github.com/nenya/internal/pipeline"
 	"github.com/nenya/internal/routing"
 	"github.com/nenya/internal/stream"
@@ -145,6 +146,69 @@ func (p *Proxy) parseRequestBody(gw *gateway.NenyaGateway, r *http.Request, body
 	return payload, sourceFormat, nil
 }
 
+// checkSchemaBudget rejects a request whose client-supplied schemas exceed the
+// untrusted-schema input budget (NENYA-199): the tool declarations and the
+// structured-output schema. It reads the fields from the RAW body, before any
+// format conversion or schema sanitization — a native Anthropic body is
+// otherwise converted (and its schemas sanitized down to the sanitizer's own
+// caps) before a decoded-payload check could see it. Two consequences are
+// accepted deliberately: the tools subtree is decoded once more than the
+// payload decode (paid only when the field is present, and bounded by
+// server.max_body_bytes), and a declaration the conversion would have dropped
+// (response_format on a native Anthropic body, a tool whose schema sits
+// outside the shapes the converter reads) is still budgeted, because the
+// gateway must not walk unbounded untrusted input on any path. The guard runs
+// before routing, so an adversarial declaration costs one bounded walk instead
+// of a sanitize, a re-serialize and an upstream dispatch, and the client gets
+// a clear invalid_request instead of a provider 400 or a gateway 500.
+func checkSchemaBudget(gw *gateway.NenyaGateway, bodyBytes []byte) *httpError {
+	if raw, ok := util.ExtractTopLevelField(bodyBytes, "tools"); ok {
+		var tools []any
+		// A tools field that is not a list is left to the decoder and the
+		// provider error path; the budget only judges what it understands.
+		if err := json.Unmarshal(raw, &tools); err == nil {
+			if herr := schemaBudgetRejection(gw, jsonschema.CheckToolListBudget(tools)); herr != nil {
+				return herr
+			}
+		}
+	}
+	if raw, ok := util.ExtractTopLevelField(bodyBytes, "response_format"); ok {
+		var responseFormat map[string]any
+		if err := json.Unmarshal(raw, &responseFormat); err == nil {
+			if herr := schemaBudgetRejection(gw, jsonschema.CheckResponseFormatBudget(responseFormat)); herr != nil {
+				return herr
+			}
+		}
+	}
+	return nil
+}
+
+// schemaBudgetRejection maps a budget error to the client-visible httpError: a
+// budget violation is the client's payload (400 invalid_request), while any
+// other error from the walk is unexpected and stays a server-side fault.
+func schemaBudgetRejection(gw *gateway.NenyaGateway, err error) *httpError {
+	if err == nil {
+		return nil
+	}
+	var budget *jsonschema.BudgetError
+	if !errors.As(err, &budget) {
+		gw.Logger.Error("schema budget check failed unexpectedly", "err", err)
+		return &httpError{
+			Code:    http.StatusInternalServerError,
+			Message: "Internal Server Error",
+			Kind:    infra.ErrorKindInternal,
+		}
+	}
+	gw.Metrics.RecordSchemaBudgetRejection(budget.Dimension)
+	gw.Logger.Warn("rejected request: schema exceeds the input budget",
+		"dimension", budget.Dimension, "limit", budget.Limit, "observed", budget.Observed)
+	return &httpError{
+		Code:    http.StatusBadRequest,
+		Message: budget.Error(),
+		Kind:    infra.ErrorKindInvalidRequest,
+	}
+}
+
 // validateChatRequest reads and validates the incoming request body,
 // returning a populated chatRequest or an httpError. The authenticated key
 // supplies the request's key reference (logging) and session subject
@@ -161,6 +225,10 @@ func (p *Proxy) validateChatRequest(w http.ResponseWriter, r *http.Request, gw *
 	if r.Context().Err() != nil {
 		// The client is gone; there is no response worth rendering.
 		return nil, errClientClosed
+	}
+
+	if herr = checkSchemaBudget(gw, bodyBytes); herr != nil {
+		return nil, herr
 	}
 
 	payload, sourceFormat, herr := p.parseRequestBody(gw, r, bodyBytes)
@@ -792,10 +860,14 @@ func handleEmptyAgentTargets(req *chatRequest, gw *gateway.NenyaGateway, agent c
 		}
 	}
 	gw.Logger.Error("agent has no models configured", "agent", req.ModelName)
+	// NENYA-199: the client named an agent that cannot serve any request.
+	// The condition is request-scoped and deterministic (unlike a deployment
+	// gap, which stays 503/internal), so it is a 422 unsupported_combination
+	// rather than a 500.
 	return nil, "", 0, 0, &httpError{
-		Code:    http.StatusInternalServerError,
+		Code:    infra.ErrorKindUnsupported.HTTPStatus(),
 		Message: "Agent has no models configured",
-		Kind:    infra.ErrorKindInternal,
+		Kind:    infra.ErrorKindUnsupported,
 	}
 }
 
