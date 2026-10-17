@@ -136,6 +136,7 @@ func collectValidationErrors(ctx context.Context, cfg *Config, providers map[str
 	errors = append(errors, validateEntropyConfig(cfg.Bouncer)...)
 	errors = append(errors, validateModelsHiddenConfig(cfg)...)
 	errors = append(errors, validateProviderRateLimits(cfg)...)
+	errors = append(errors, validateProviderOptions(cfg)...)
 	errors = append(errors, validateBillingConfig(cfg)...)
 	errors = append(errors, validateUpstreamTimeoutSeconds(cfg.Governance.UpstreamTimeoutSeconds)...)
 	errors = append(errors, validateStreamStallTimeoutSeconds(cfg.Server.StreamStallTimeoutSeconds)...)
@@ -1026,21 +1027,108 @@ func validateHeaderFilters(provider string, filters map[string]HeaderFilter) []s
 	return errors
 }
 
+// headerTokenExtra are the non-alphanumeric characters an HTTP header field
+// name may contain (RFC 9110 tchar).
+const headerTokenExtra = "!#$%&'*+-.^_`|~"
+
+// isValidHeaderToken reports whether name is a syntactically valid HTTP
+// header field name (RFC 9110 token): the provider's idempotency_header is
+// written straight onto an outbound request, so a malformed value must be
+// rejected at startup rather than making every dispatch fail (NENYA-165).
+func isValidHeaderToken(name string) bool {
+	if name == "" {
+		return false
+	}
+	for i := 0; i < len(name); i++ {
+		c := name[i]
+		isAlnum := c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9'
+		if !isAlnum && !strings.ContainsRune(headerTokenExtra, rune(c)) {
+			return false
+		}
+	}
+	return true
+}
+
+// reservedProviderHeaders are the outbound headers the gateway populates
+// itself at dispatch. A provider declaring one of these as its idempotency
+// header would have the key overwrite the gateway's own value (NENYA-165), so
+// they are rejected at load. KEEP IN SYNC with the dispatch sets: the auth
+// injectors (internal/adapter/*.InjectAuth — Authorization, x-api-key, api-key,
+// x-goog-api-key, anthropic-version, HTTP-Referer/X-Title on OpenRouter),
+// buildUpstreamRequest's transport/tracing/session-identity headers, its
+// client passthrough allowlist, and this repository's own binding header.
+// config cannot import internal/adapter, so the list is a mirror: a name
+// missing here would clobber the gateway's value on every dispatch.
+var reservedProviderHeaders = map[string]bool{
+	"authorization":                true,
+	"x-api-key":                    true,
+	"api-key":                      true,
+	"x-goog-api-key":               true,
+	"anthropic-version":            true,
+	"http-referer":                 true,
+	"x-title":                      true,
+	"content-type":                 true,
+	"content-length":               true,
+	"host":                         true,
+	"user-agent":                   true,
+	"accept-encoding":              true,
+	"connection":                   true,
+	"traceparent":                  true,
+	"tracestate":                   true,
+	"session-id":                   true,
+	"session_id":                   true,
+	"anthropic-beta":               true,
+	"x-opencode-session":           true,
+	"x-opencode-session-id":        true,
+	"x-opencode-parent-session-id": true,
+	"x-request-id":                 true,
+	"x-correlation-id":             true,
+	"x-trace-id":                   true,
+	"x-nenya-idempotency-body":     true,
+}
+
+// validateProviderOptions validates the per-provider enum- and name-valued
+// option fields on the RAW config, so it also runs for the paths that do not
+// resolve providers (a `-validate` without ping, and the SIGHUP reload).
+func validateProviderOptions(cfg *Config) []string {
+	errors := []string{}
+	for name, provider := range cfg.Providers {
+		errors = append(errors, validateProviderOptionFields(name, &provider)...)
+	}
+	return errors
+}
+
+// validateProviderOptionFields validates one provider's option fields.
+func validateProviderOptionFields(name string, provider *ProviderConfig) []string {
+	var errors []string
+	switch provider.CacheAffinity {
+	case "", "body", "header":
+		// valid (NENYA-158)
+	default:
+		errors = append(errors, fmt.Sprintf("providers[%q].cache_affinity must be body or header, got %q", name, provider.CacheAffinity))
+	}
+	if header := derefString(provider.IdempotencyHeader); header != "" {
+		switch {
+		case !isValidHeaderToken(header):
+			errors = append(errors, fmt.Sprintf("providers[%q].idempotency_header %q is not a valid HTTP header name", name, header))
+		case textproto.CanonicalMIMEHeaderKey(header) != header:
+			errors = append(errors, fmt.Sprintf("providers[%q].idempotency_header %q: use the canonical header name %q", name, header, textproto.CanonicalMIMEHeaderKey(header)))
+		case reservedProviderHeaders[strings.ToLower(header)]:
+			errors = append(errors, fmt.Sprintf("providers[%q].idempotency_header %q is a header the gateway sets itself; the idempotency key would overwrite it", name, header))
+		}
+	}
+	switch policy := derefString(provider.ThoughtSignaturePolicy); policy {
+	case "", "strip", "placeholder", "passthrough":
+		// valid (NENYA-50)
+	default:
+		errors = append(errors, fmt.Sprintf("providers[%q].thought_signature_policy must be one of strip, placeholder, passthrough, got %q", name, policy))
+	}
+	return errors
+}
+
 func validateProviders(ctx context.Context, providers map[string]*Provider, network *NetworkConfig, logger *slog.Logger) []string {
 	errors := []string{}
 	for name, provider := range providers {
-		switch provider.CacheAffinity {
-		case "", "body", "header":
-			// valid (NENYA-158)
-		default:
-			errors = append(errors, fmt.Sprintf("providers[%q].cache_affinity must be body or header, got %q", name, provider.CacheAffinity))
-		}
-		switch provider.ThoughtSignaturePolicy {
-		case "", "strip", "placeholder", "passthrough":
-			// valid (NENYA-50)
-		default:
-			errors = append(errors, fmt.Sprintf("providers[%q].thought_signature_policy must be one of strip, placeholder, passthrough, got %q", name, provider.ThoughtSignaturePolicy))
-		}
 		if provider.ResponseHeaderTimeoutSeconds < 0 {
 			errors = append(errors, fmt.Sprintf("providers[%q].response_header_timeout_seconds must be non-negative (set to 0 to fall back to timeout_seconds or the 30s default), got %d", name, provider.ResponseHeaderTimeoutSeconds))
 		}

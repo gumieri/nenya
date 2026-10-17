@@ -281,6 +281,11 @@ type ProviderEntry struct {
 	// RatelimitMaxTPM is the tokens-per-minute counterpart of
 	// RatelimitMaxRPM, with identical semantics.
 	RatelimitMaxTPM *int `json:"ratelimit_max_tpm,omitempty"`
+	// IdempotencyHeader is the built-in idempotency header name for
+	// providers whose API dedups on a client-supplied key (NENYA-165, e.g.
+	// the Anthropic Messages API's Idempotency-Key). nil = the provider
+	// accepts none. See ProviderConfig.IdempotencyHeader.
+	IdempotencyHeader *string `json:"idempotency_header,omitempty"`
 	// NonChatModels classifies provider models that are not served by the
 	// chat-completions endpoint (e.g. TypeSafe Jev System One decision
 	// models on OpenCode Zen). See ProviderConfig.NonChatModels.
@@ -294,13 +299,14 @@ type ProviderEntry struct {
 
 func (e ProviderEntry) ToProviderConfig() ProviderConfig {
 	return ProviderConfig{
-		URL:             e.URL,
-		AuthStyle:       e.AuthStyle,
-		ApiFormat:       e.ApiFormat,
-		FormatURLs:      e.FormatURLs,
-		RatelimitMaxRPM: e.RatelimitMaxRPM,
-		RatelimitMaxTPM: e.RatelimitMaxTPM,
-		NonChatModels:   e.NonChatModels,
-		PeakWindows:     e.PeakWindows,
+		URL:               e.URL,
+		AuthStyle:         e.AuthStyle,
+		ApiFormat:         e.ApiFormat,
+		FormatURLs:        e.FormatURLs,
+		RatelimitMaxRPM:   e.RatelimitMaxRPM,
+		RatelimitMaxTPM:   e.RatelimitMaxTPM,
+		NonChatModels:     e.NonChatModels,
+		IdempotencyHeader: e.IdempotencyHeader,
+		PeakWindows:       e.PeakWindows,
 	}
 }

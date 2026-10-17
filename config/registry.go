@@ -44,6 +44,11 @@ var ProviderRegistry = map[string]ProviderEntry{
 	"anthropic": {
 		URL:       "https://api.anthropic.com/v1/messages",
 		AuthStyle: "anthropic",
+		// The Messages API accepts an Idempotency-Key and replays the
+		// original response for a repeated key (NENYA-165): a
+		// gateway-initiated retry can be exactly-once instead of billed
+		// twice.
+		IdempotencyHeader: PtrTo("Idempotency-Key"),
 	},
 	"mistral": {
 		URL:       "https://api.mistral.ai/v1/chat/completions",

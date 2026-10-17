@@ -539,6 +539,12 @@ type ProviderConfig struct {
 	// HTTPS_PROXY/NO_PROXY environment variables apply. Validated at
 	// startup.
 	ProxyURL string `json:"proxy_url,omitempty"`
+	// IdempotencyHeader names the request header this provider accepts an
+	// idempotency key on (NENYA-165), e.g. "Idempotency-Key" for the
+	// Anthropic Messages API. nil inherits the built-in default, "" declares
+	// the provider supports none (the header is then never forwarded), and
+	// any other value is the header name to set. See docs/CONFIGURATION.md.
+	IdempotencyHeader *string `json:"idempotency_header,omitempty"`
 	// CacheAffinity selects where this provider's prompt-cache affinity key
 	// rides (NENYA-158): "body" (default for xai/openai) injects the
 	// `prompt_cache_key` body field; "header" maps the per-conversation
@@ -700,9 +706,13 @@ type Provider struct {
 	// CacheAffinity is the resolved affinity convention ("body" | "header",
 	// NENYA-158). See ProviderConfig.CacheAffinity.
 	CacheAffinity string
-	allowedRE     []*regexp.Regexp
-	ModelsHidden  []string
-	hiddenRE      []*regexp.Regexp
+	// IdempotencyHeader is the resolved idempotency header name ("" = the
+	// provider accepts none, NENYA-165). See
+	// ProviderConfig.IdempotencyHeader.
+	IdempotencyHeader string
+	allowedRE         []*regexp.Regexp
+	ModelsHidden      []string
+	hiddenRE          []*regexp.Regexp
 	// NonChatModels mirrors ProviderConfig.NonChatModels (RE2 patterns for
 	// models that are not chat-completions models). nonChatRE holds the
 	// compiled patterns; when both are empty no model is non-chat.

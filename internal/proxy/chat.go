@@ -231,6 +231,11 @@ func (p *Proxy) validateChatRequest(w http.ResponseWriter, r *http.Request, gw *
 		return nil, herr
 	}
 
+	// NENYA-165: drop any client-supplied idempotency binding before dispatch
+	// — the binding is derived from the body actually sent, never trusted
+	// from the request.
+	resetIdempotencyBinding(r)
+
 	payload, sourceFormat, herr := p.parseRequestBody(gw, r, bodyBytes)
 	if herr != nil {
 		return nil, herr
@@ -1617,6 +1622,14 @@ func (p *Proxy) buildUpstreamRequest(gw *gateway.NenyaGateway, ctx context.Conte
 			req.Header.Set("Anthropic-Beta", beta)
 		}
 	}
+
+	// Idempotency-Key forwarding (NENYA-165): only a provider that declares
+	// the capability is handed the key, so a provider whose API has no
+	// idempotency concept never receives an unexpected header. The key is
+	// bound to this body, so a re-dispatch of a MODIFIED body (MCP iteration,
+	// continuation, corrective retry) is re-keyed rather than handing the
+	// provider a repeated key with a mismatched payload.
+	injectIdempotencyKey(gw, providerName, srcHeaders, req.Header, body)
 
 	// Every dispatch path shares this allowlist, so the session-header
 	// sanitation runs here too (NENYA-143): an unusable value would make

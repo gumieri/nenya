@@ -951,6 +951,12 @@ func mergeProviderRouting(merged *ProviderConfig, builtIn ProviderConfig) {
 	if merged.RatelimitMaxTPM == nil {
 		merged.RatelimitMaxTPM = builtIn.RatelimitMaxTPM
 	}
+	// The idempotency header is tri-state: nil inherits the built-in, while
+	// an explicit "" declares the provider accepts none (NENYA-165), so an
+	// operator can opt a provider out of the built-in default.
+	if merged.IdempotencyHeader == nil {
+		merged.IdempotencyHeader = builtIn.IdempotencyHeader
+	}
 	// Peak pricing windows inherit from the built-in when the user does
 	// not declare any, so overriding e.g. the URL never silently disables
 	// time-of-day cost modeling.
