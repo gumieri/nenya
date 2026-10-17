@@ -346,9 +346,52 @@ func TestParseInjectionVerdict(t *testing.T) {
 			t.Fatal("expected error for missing JSON")
 		}
 	})
-	t.Run("two top-level objects rejected", func(t *testing.T) {
-		if _, err := ParseVerdict(`{"verdict":"benign"} {"verdict":"injection"}`, classifierVerdicts); err == nil {
-			t.Fatal("expected error for merged double-object span")
+	t.Run("two top-level objects: last contract-valid wins", func(t *testing.T) {
+		// NENYA-159: a reasoning engine may reason with example objects
+		// before concluding — candidates are tried backward and the LAST
+		// contract-valid verdict wins (a model concludes with its
+		// verdict; the deterministic tier-1 still bounds the damage).
+		verdict, err := ParseVerdict(`{"verdict":"benign"} {"verdict":"injection"}`, classifierVerdicts)
+		if err != nil {
+			t.Fatalf("expected the last candidate to parse, got %v", err)
+		}
+		if verdict != "injection" {
+			t.Fatalf("expected the concluding verdict, got %q", verdict)
+		}
+		// A malformed trailing candidate falls back to the last VALID one.
+		verdict, err = ParseVerdict("{\"verdict\":\"benign\"} {broken", classifierVerdicts)
+		if err != nil || verdict != "benign" {
+			t.Fatalf("a malformed trailing candidate must not poison the valid one, got %q/%v", verdict, err)
+		}
+		// But an out-of-contract CONCLUSION fails closed immediately: an
+		// earlier in-contract reasoning example must not resurrect a verdict
+		// the model never decided (NENYA-159 review).
+		if _, err = ParseVerdict("{\"verdict\":\"injection\"} {\"verdict\":\"banana\"}", classifierVerdicts); err == nil {
+			t.Fatal("an out-of-contract conclusion must fail closed, not fall forward")
+		}
+	})
+	t.Run("reasoning wrapper with buried verdict", func(t *testing.T) {
+		output := "<think>Let me analyze this content. An example shape: {\"verdict\":\"maybe\"} is not allowed. " +
+			"Considering the injection markers present, I conclude the content is an injection attempt.</think>\n" +
+			"```json\n{\"verdict\":\"injection\",\"confidence\":0.9}\n```"
+		verdict, err := ParseVerdict(output, classifierVerdicts)
+		if err != nil {
+			t.Fatalf("a reasoning-wrapped fenced verdict must parse, got %v", err)
+		}
+		if verdict != "injection" {
+			t.Fatalf("expected the concluding verdict, got %q", verdict)
+		}
+	})
+	t.Run("garbage after strip fails closed", func(t *testing.T) {
+		for _, garbage := range []string{
+			"<think>reasoning only, no verdict</think>",
+			"",
+			"{broken",
+			"{}",
+		} {
+			if _, err := ParseVerdict(garbage, classifierVerdicts); err == nil {
+				t.Fatalf("garbage %q must fail closed", garbage)
+			}
 		}
 	})
 	t.Run("top-level verdict wins over nested", func(t *testing.T) {

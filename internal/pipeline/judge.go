@@ -350,34 +350,93 @@ func (j *Judge) AdjudicateMap(ctx context.Context, agentName, content string, pa
 	return verdicts, res
 }
 
-// ParseVerdict extracts a contract verdict from engine output. Leading
-// and trailing prose and code fences are tolerated: the first-to-last
-// brace span is parsed as a JSON object carrying a single "verdict"
-// string field. A missing, malformed, or out-of-contract verdict is an
-// error (fail-closed: callers fall back to their deterministic
-// decision).
+// ParseVerdict extracts the contract verdict from engine output. A
+// reasoning-emitting engine buries the verdict in prose, <think> wrappers,
+// or fenced JSON, and may reason with EXAMPLE objects before concluding —
+// so candidate JSON objects are extracted (balanced-brace scan) and tried
+// from the LAST backward: a model concludes with its verdict. The LAST
+// candidate decides when it parses: a contract-valid verdict wins, an
+// out-of-contract verdict fails closed immediately (an earlier in-contract
+// reasoning example must not resurrect a verdict the model never decided).
+// Fall-forward to earlier candidates happens only on MALFORMED candidates.
+// No candidates, all-malformed, empty output: fail closed (the caller
+// applies its deterministic decision, NENYA-159). Residual risk, accepted
+// and documented: a valid candidate the engine merely ECHOED after its real
+// conclusion (a verbatim-quoted excerpt tail, or an obeyed echo
+// instruction) becomes the deciding candidate — position-independent
+// policies cannot distinguish an honest quote from injected text; the
+// strengthen-only invariant bounds the damage.
 func ParseVerdict(output string, allowed []string) (string, error) {
-	start := strings.Index(output, "{")
-	if start < 0 {
+	candidates := extractJSONObjectCandidates(output)
+	if len(candidates) == 0 {
 		return "", errors.New("judgment output carries no JSON object")
 	}
-	end := strings.LastIndex(output, "}")
-	if end <= start {
-		return "", errors.New("judgment output has no closing brace (unterminated or empty JSON object)")
+	want := strings.Join(allowed, "|")
+	for i := len(candidates) - 1; i >= 0; i-- {
+		var raw struct {
+			Verdict string `json:"verdict"`
+		}
+		if err := json.Unmarshal([]byte(candidates[i]), &raw); err != nil {
+			// Malformed candidate: fall forward to an earlier one (a
+			// reasoning wrapper's partial JSON must not poison the
+			// conclusion).
+			continue
+		}
+		for _, v := range allowed {
+			if raw.Verdict == v {
+				return raw.Verdict, nil
+			}
+		}
+		// The model DECIDED — just outside the contract: fail closed now.
+		return "", fmt.Errorf("judgment verdict %q outside contract (want one of %s)", raw.Verdict, want)
 	}
-	var raw struct {
-		Verdict string `json:"verdict"`
-	}
-	if err := json.Unmarshal([]byte(output[start:end+1]), &raw); err != nil {
-		return "", fmt.Errorf("judgment output is not valid JSON: %w", err)
-	}
-	for _, v := range allowed {
-		if raw.Verdict == v {
-			return raw.Verdict, nil
+	return "", errors.New("judgment output carries no parseable JSON object")
+}
+
+// extractJSONObjectCandidates returns every top-level JSON object in the
+// text as a balanced-brace scan (string-literal aware: braces inside
+// strings do not nest). Fenced JSON, <think> wrappers, and reasoning prose
+// need no special casing — their objects are just candidates.
+func extractJSONObjectCandidates(output string) []string {
+	var candidates []string
+	depth := 0
+	start := -1
+	inString := false
+	escaped := false
+	for i := 0; i < len(output); i++ {
+		ch := output[i]
+		if inString {
+			if escaped {
+				escaped = false
+			} else if ch == '\\' {
+				escaped = true
+			} else if ch == '"' {
+				inString = false
+			}
+			continue
+		}
+		switch ch {
+		case '"':
+			if depth > 0 {
+				inString = true
+			}
+		case '{':
+			if depth == 0 {
+				start = i
+			}
+			depth++
+		case '}':
+			if depth == 0 {
+				continue
+			}
+			depth--
+			if depth == 0 && start >= 0 {
+				candidates = append(candidates, output[start:i+1])
+				start = -1
+			}
 		}
 	}
-	return "", fmt.Errorf("judgment verdict %q outside contract (want one of %s)",
-		raw.Verdict, strings.Join(allowed, "|"))
+	return candidates
 }
 
 // truncateJudgmentExcerpt caps content at maxBytes without splitting a

@@ -53,17 +53,29 @@ func TfidfRerankContract() JudgmentContract {
 // (fail-closed).
 func parseTfidfRerankVerdict(expectedKeys int) func(string) (map[int]bool, error) {
 	return func(output string) (map[int]bool, error) {
-		start := strings.Index(output, "{")
-		if start < 0 {
+		// Reasoning-emitting engines bury the verdict map in prose/<think>
+		// wrappers (NENYA-159): try candidate objects from the LAST
+		// backward, exactly like ParseVerdict. All-malformed fails closed.
+		candidates := extractJSONObjectCandidates(output)
+		if len(candidates) == 0 {
 			return nil, errors.New("tfidf rerank output carries no JSON object")
 		}
-		end := strings.LastIndex(output, "}")
-		if end <= start {
-			return nil, errors.New("tfidf rerank output has no closing brace (unterminated or empty JSON object)")
-		}
 		var raw map[string]string
-		if err := json.Unmarshal([]byte(output[start:end+1]), &raw); err != nil {
-			return nil, fmt.Errorf("tfidf rerank output is not valid JSON: %w", err)
+		var lastErr error
+		parsed := false
+		for i := len(candidates) - 1; i >= 0; i-- {
+			if err := json.Unmarshal([]byte(candidates[i]), &raw); err != nil {
+				lastErr = fmt.Errorf("tfidf rerank output is not valid JSON: %w", err)
+				continue
+			}
+			parsed = true
+			break
+		}
+		if !parsed {
+			if lastErr == nil {
+				lastErr = errors.New("tfidf rerank output carries no parseable JSON object")
+			}
+			return nil, lastErr
 		}
 		verdicts := make(map[int]bool)
 		for key, value := range raw {
