@@ -48,3 +48,29 @@ func TestValidateHeaderFilters(t *testing.T) {
 		t.Fatalf("a well-formed filter must be silent, got: %s", joined)
 	}
 }
+
+// TestBootstrapMaxHoldSecondsValidation pins the NENYA-174 config bound:
+// the bootstrap hold-time ceiling accepts 0 (off) and positive seconds, and
+// rejects negatives and over-range values.
+func TestBootstrapMaxHoldSecondsValidation(t *testing.T) {
+	mk := func(v int) *Config {
+		cfg := &Config{}
+		cfg.Governance.StreamBootstrapMaxHoldSeconds = v
+		return cfg
+	}
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	if errs := collectValidationErrors(context.Background(), mk(0), nil, false, logger); len(errs) != 0 {
+		t.Fatalf("0 (off) must be silent, got %v", errs)
+	}
+	if errs := collectValidationErrors(context.Background(), mk(30), nil, false, logger); len(errs) != 0 {
+		t.Fatalf("30s must be silent, got %v", errs)
+	}
+	errs := collectValidationErrors(context.Background(), mk(-1), nil, false, logger)
+	if len(errs) == 0 || !strings.Contains(strings.Join(errs, "\n"), "stream_bootstrap_max_hold_seconds") {
+		t.Fatalf("a negative ceiling must be rejected, got %v", errs)
+	}
+	errs = collectValidationErrors(context.Background(), mk(86401), nil, false, logger)
+	if len(errs) == 0 || !strings.Contains(strings.Join(errs, "\n"), "stream_bootstrap_max_hold_seconds") {
+		t.Fatalf("an over-range ceiling must be rejected, got %v", errs)
+	}
+}

@@ -12,6 +12,7 @@ import (
 	"math"
 	"reflect"
 	"strconv"
+	"strings"
 	"sync"
 
 	"github.com/nenya/internal/util"
@@ -185,8 +186,17 @@ type SSETransformingReader struct {
 	observer             SSEObserver
 	streamFilter         *StreamFilter
 	exfilGuard           *ExfilGuard
-	canaryWatcher        *CanaryWatcher
-	streamEntropyFilter  *StreamEntropyFilter
+	// dropPrivateEvents (NENYA-174): when set, SSE frames whose parsed
+	// event type names a provider-private/telemetry channel are suppressed
+	// before any downstream surface.
+	dropPrivateEvents bool
+	// sawResumableStop (NENYA-174): set when any parsed frame carries a
+	// resumable stop reason (pause_turn). Detected on the RAW surface —
+	// format transformers erase the reason before capture — and consulted
+	// by the response cache so a paused turn is never stored as complete.
+	sawResumableStop    bool
+	canaryWatcher       *CanaryWatcher
+	streamEntropyFilter *StreamEntropyFilter
 	// lastSurface is the wire shape of the last content-bearing chunk,
 	// recorded so the exfil guard's terminal flush (NENYA-205) can
 	// synthesize the held tail format-identically to the stream.
@@ -326,6 +336,77 @@ func NewSSETransformingReader(src io.Reader, transformer ResponseTransformer, ct
 // The callback is invoked from the same goroutine that calls Read().
 // The callback must not access the reader instance concurrently, as internal
 // state (last* token fields) is updated without mutex protection.
+// SawResumableStop reports whether any frame carried a resumable stop
+// reason (pause_turn, NENYA-174).
+func (r *SSETransformingReader) SawResumableStop() bool {
+	return r.sawResumableStop
+}
+
+// isResumableStopPayload checks a parsed frame's stop/finish-reason
+// surfaces (OpenAI choice level and delta level, Anthropic delta and
+// top-level message shapes) for a resumable reason (NENYA-174).
+func isResumableStopPayload(parsed map[string]interface{}) bool {
+	if reason, ok := parsed["stop_reason"].(string); ok && IsResumableStopReasonName(reason) {
+		return true
+	}
+	if delta, ok := parsed["delta"].(map[string]interface{}); ok {
+		if reason, ok := delta["stop_reason"].(string); ok && IsResumableStopReasonName(reason) {
+			return true
+		}
+	}
+	choices, ok := parsed["choices"].([]interface{})
+	if !ok {
+		return false
+	}
+	for _, raw := range choices {
+		choice, choiceOK := raw.(map[string]interface{})
+		if !choiceOK {
+			continue
+		}
+		if reason, ok := choice["finish_reason"].(string); ok && IsResumableStopReasonName(reason) {
+			return true
+		}
+		delta, deltaOK := choice["delta"].(map[string]interface{})
+		if !deltaOK {
+			continue
+		}
+		if reason, ok := delta["stop_reason"].(string); ok && IsResumableStopReasonName(reason) {
+			return true
+		}
+	}
+	return false
+}
+
+// SetDropPrivateEvents toggles the provider-private/telemetry event filter
+// (NENYA-174): frames whose parsed "type" names a private channel
+// (otel/telemetry/debug/ping prefixes) are suppressed.
+func (r *SSETransformingReader) SetDropPrivateEvents(drop bool) {
+	r.dropPrivateEvents = drop
+}
+
+// privateSSETypePrefixes are the event-type prefixes treated as
+// provider-private telemetry when the filter is enabled.
+var privateSSETypePrefixes = []string{"otel", "telemetry", "debug", "ping"}
+
+// isPrivateSSEType reports whether a parsed event type names a
+// provider-private channel (NENYA-174).
+func isPrivateSSEType(parsed map[string]interface{}) bool {
+	typ, ok := parsed["type"].(string)
+	if !ok || typ == "" {
+		return false
+	}
+	lower := strings.ToLower(typ)
+	for _, prefix := range privateSSETypePrefixes {
+		if strings.HasPrefix(lower, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
+// SetOnUsage registers the usage callback. It is invoked from the same
+// goroutine that drives the reader, so implementations run without mutex
+// protection.
 func (r *SSETransformingReader) SetOnUsage(cb UsageCallback) {
 	r.onUsage = cb
 }
@@ -963,6 +1044,19 @@ func (r *SSETransformingReader) transformSSEData(line []byte) []byte {
 	data := origData
 	parsed := r.tryParseJSON(data)
 
+	// Resumable terminals (NENYA-174) are remembered on the RAW surface:
+	// format transformers erase the reason before the capture tee sees it.
+	if !r.sawResumableStop && isResumableStopPayload(parsed) {
+		r.sawResumableStop = true
+	}
+
+	// Provider-private/telemetry frames (NENYA-174) are suppressed from
+	// every downstream surface when the filter is enabled; the stream
+	// itself continues.
+	if r.dropPrivateEvents && isPrivateSSEType(parsed) {
+		return nil
+	}
+
 	// Upstream error payloads routed through a healthy 200 stream (e.g. an
 	// aggregator whose provider leg failed after the stream opened) are tagged
 	// with "error" so observers can record circuit-breaker failures. The error
@@ -1397,7 +1491,15 @@ func (r *SSETransformingReader) applyToolCallNormalization(transformed []byte, s
 	return transformed
 }
 
+// transformNonSSELine handles bare-JSON lines (the sseDataLine convention:
+// some upstreams emit raw JSON bodies under text/event-stream). The
+// private-event filter applies here too (NENYA-174).
 func (r *SSETransformingReader) transformNonSSELine(line []byte) []byte {
+	if r.dropPrivateEvents {
+		if parsed := r.tryParseJSON(line); isPrivateSSEType(parsed) {
+			return nil
+		}
+	}
 	trimmed := bytes.TrimSpace(line)
 	if len(trimmed) == 0 {
 		return line

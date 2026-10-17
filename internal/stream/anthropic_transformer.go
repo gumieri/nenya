@@ -438,6 +438,11 @@ func mapStopReason(reason string) string {
 		return "length"
 	case "refusal":
 		return "content_filter"
+	case "pause_turn":
+		// Resumable terminal (NENYA-174): OpenAI semantics have no
+		// resume verb, so an OpenAI-facing client sees the turn end. The
+		// raw stop_reason stays on the Anthropic shape.
+		return "stop"
 	default:
 		slog.Debug("Unknown Anthropic stop_reason, defaulting to 'stop'", "reason", reason)
 		return "stop"

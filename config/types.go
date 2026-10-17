@@ -1163,6 +1163,18 @@ type GovernanceConfig struct {
 	UpstreamTimeoutSeconds *int     `json:"upstream_timeout_seconds,omitempty"`
 	// StreamIdleTimeoutSeconds is the stall detection timeout for SSE streams.
 	StreamIdleTimeoutSeconds *int `json:"stream_idle_timeout_seconds,omitempty"`
+	// StreamBootstrapMaxHoldSeconds is the optional TIME ceiling for stream
+	// bootstrap buffering (NENYA-174): when the handshake is still
+	// undecided after this many seconds, buffering degrades to unbuffered
+	// streaming (the buffered prefix flushes, the verdict is abandoned) so
+	// a slow-drip provider cannot hold the 200 hostage for its idle
+	// timeout. 0 (default) = no time ceiling; the byte budget remains the
+	// only bound. Capped at 86400 by validation.
+	StreamBootstrapMaxHoldSeconds int `json:"stream_bootstrap_max_hold_seconds,omitempty"`
+	// FilterPrivateSSEEvents drops SSE frames whose parsed event type names
+	// a provider-private/telemetry channel (otel, telemetry, debug, ping
+	// prefixes — NENYA-174). Default false: everything forwards.
+	FilterPrivateSSEEvents bool `json:"filter_private_sse_events,omitempty"`
 	// StreamBootstrapBufferBytes is the global stream bootstrap buffering
 	// budget in bytes (NENYA-45): when >0, streaming responses hold handshake
 	// events until a frame carrying effective output (the shared

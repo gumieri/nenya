@@ -33,6 +33,20 @@ var refusalTerminalReasons = map[string]bool{
 	"recitation":         true, // Gemini safety-class finishReason
 }
 
+// resumableTerminalReasons are stop reasons that end the CURRENT response
+// without ending the conversation: the upstream expects the client to resume
+// (Anthropic pause_turn). They are terminals for caching/breaker purposes but
+// must never be cached as a COMPLETE answer (NENYA-174).
+var resumableTerminalReasons = map[string]bool{
+	"pause_turn": true, // Anthropic stop_reason: turn paused, resumable
+}
+
+// IsResumableStopReasonName reports whether a decoded stop/finish reason
+// names a resumable terminal (NENYA-174).
+func IsResumableStopReasonName(reason string) bool {
+	return resumableTerminalReasons[strings.ToLower(strings.TrimSpace(reason))]
+}
+
 // IsRefusalStopReasonName reports whether a decoded stop/finish reason string
 // names a policy refusal class (NENYA-191). It is the single reason list —
 // the response-cache gate (NENYA-27) reuses it so refusal classification

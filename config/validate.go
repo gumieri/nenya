@@ -142,6 +142,9 @@ func collectValidationErrors(ctx context.Context, cfg *Config, providers map[str
 	errors = append(errors, validateStreamIdleTimeoutSeconds(cfg.Governance.StreamIdleTimeoutSeconds)...)
 	errors = append(errors, validateThinkingStreamIdleTimeoutSeconds(cfg.Governance.ThinkingStreamIdleTimeoutSeconds)...)
 	errors = append(errors, validateBootstrapBufferBytes(cfg.Governance.StreamBootstrapBufferBytes)...)
+	if v := cfg.Governance.StreamBootstrapMaxHoldSeconds; v < 0 || v > MaxTimeoutSeconds {
+		errors = append(errors, fmt.Sprintf("governance.stream_bootstrap_max_hold_seconds must be between 0 and %d seconds, got %d", MaxTimeoutSeconds, v))
+	}
 	errors = append(errors, validateSlowCallThresholdSeconds(cfg.Governance.SlowCallThresholdSeconds, "governance.slow_call_threshold_seconds")...)
 	errors = append(errors, validateAgentStrategies(cfg.Agents)...)
 	errors = append(errors, validateTokenCalibration(cfg.Governance.TokenCalibration)...)

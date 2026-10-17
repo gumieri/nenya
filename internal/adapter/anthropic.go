@@ -1256,6 +1256,10 @@ func (a *AnthropicAdapter) processStopReason(anthropic, choice map[string]interf
 		choice["finish_reason"] = "length"
 	case "refusal":
 		choice["finish_reason"] = "content_filter"
+	case "pause_turn":
+		// Resumable terminal (NENYA-174): OpenAI semantics have no resume
+		// verb, so a buffered OpenAI-facing client sees the turn end.
+		choice["finish_reason"] = "stop"
 	default:
 		slog.Debug("Unknown Anthropic stop_reason, defaulting to 'stop'", "reason", stopReason)
 		choice["finish_reason"] = "stop"

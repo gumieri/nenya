@@ -659,3 +659,50 @@ func TestReaderResponseModelSeedsOnAnyChunk(t *testing.T) {
 		t.Fatalf("the model from an earlier non-usage chunk must be remembered: %q", last.Model)
 	}
 }
+
+// TestPrivateSSETypeClassification pins the NENYA-174 private-event filter
+// classifier: otel/telemetry/debug/ping typed frames classify private
+// (case-insensitive), real generation events do not, and a type-less frame
+// never does.
+func TestPrivateSSETypeClassification(t *testing.T) {
+	private := []string{"otel_span", "Telemetry", "debug_info", "PING", "ping"}
+	for _, typ := range private {
+		if !isPrivateSSEType(map[string]interface{}{"type": typ}) {
+			t.Errorf("type %q must classify private", typ)
+		}
+	}
+	public := []string{"content_block_delta", "message_start", "", "response.output_text.delta"}
+	for _, typ := range public {
+		if isPrivateSSEType(map[string]interface{}{"type": typ}) {
+			t.Errorf("type %q must NOT classify private", typ)
+		}
+	}
+	if isPrivateSSEType(map[string]interface{}{}) {
+		t.Fatal("a type-less frame must not classify private")
+	}
+}
+
+// TestReaderDropsPrivateEventsWhenEnabled pins the reader wiring: with
+// SetDropPrivateEvents(true), a telemetry-typed frame is suppressed from the
+// output stream; with the filter off it forwards.
+func TestReaderDropsPrivateEventsWhenEnabled(t *testing.T) {
+	frames := "data: {\"type\":\"otel_span\",\"span\":\"x\"}\n\n" +
+		"data: {\"type\":\"content_block_delta\",\"delta\":{\"type\":\"text_delta\",\"text\":\"hi\"}}\n\n"
+	run := func(drop bool) string {
+		reader := NewSSETransformingReader(strings.NewReader(frames), nil, context.Background())
+		reader.SetDropPrivateEvents(drop)
+		out, err := io.ReadAll(reader)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(out)
+	}
+	if kept := run(false); !strings.Contains(kept, "otel_span") {
+		t.Fatalf("filter off must forward the frame: %q", kept)
+	}
+	if kept := run(true); strings.Contains(kept, "otel_span") {
+		t.Fatalf("filter on must suppress the private frame: %q", kept)
+	} else if !strings.Contains(kept, "content_block_delta") {
+		t.Fatalf("filter on must keep real events: %q", kept)
+	}
+}

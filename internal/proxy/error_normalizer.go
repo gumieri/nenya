@@ -424,6 +424,55 @@ func forbiddenFinishReason(reason string) bool {
 // previous serialized-JSON substring match that false-positived on user
 // content merely containing the words. Checks OpenAI finish_reason, refusal
 // deltas, and Anthropic stop_reason shapes.
+// capturedStreamHasResumableTerminal reports whether the captured stream's
+// terminal events carry a resumable stop reason (Anthropic pause_turn,
+// NENYA-174): the upstream expects a resume, so the capture is not a
+// complete answer and must never be cached as one.
+func capturedStreamHasResumableTerminal(captured []byte) bool {
+	for _, raw := range bytes.Split(captured, []byte{'\n'}) {
+		line := bytes.TrimSpace(raw)
+		var payload []byte
+		switch {
+		case bytes.HasPrefix(line, []byte("data:")):
+			payload = bytes.TrimSpace(bytes.TrimPrefix(line, []byte("data:")))
+		case len(line) > 0 && line[0] == '{':
+			payload = line
+		default:
+			continue
+		}
+		if len(payload) == 0 || payload[0] != '{' || bytes.Equal(payload, []byte("[DONE]")) {
+			continue
+		}
+		var parsed struct {
+			Choices []struct {
+				FinishReason string `json:"finish_reason"`
+				Delta        struct {
+					StopReason string `json:"stop_reason"`
+				} `json:"delta"`
+			} `json:"choices"`
+			Delta struct {
+				StopReason string `json:"stop_reason"`
+			} `json:"delta"`
+			StopReason string `json:"stop_reason"`
+		}
+		if json.Unmarshal(payload, &parsed) != nil {
+			continue
+		}
+		for _, ch := range parsed.Choices {
+			if stream.IsResumableStopReasonName(ch.FinishReason) || stream.IsResumableStopReasonName(ch.Delta.StopReason) {
+				return true
+			}
+		}
+		if stream.IsResumableStopReasonName(parsed.Delta.StopReason) || stream.IsResumableStopReasonName(parsed.StopReason) {
+			return true
+		}
+	}
+	return false
+}
+
+// capturedStreamHasRefusalOrFilter reports whether the captured stream's
+// terminal events name a refusal or content-filter outcome (decoded from the
+// terminal events, NENYA-27 — not substring-matched).
 func capturedStreamHasRefusalOrFilter(captured []byte) bool {
 	for _, raw := range bytes.Split(captured, []byte{'\n'}) {
 		line := bytes.TrimSpace(raw)

@@ -950,7 +950,7 @@ func TestStoreStreamCache_SkipsRefusal(t *testing.T) {
 
 			key := "test-key-" + tt.name
 			before := gw.ResponseCache.Len()
-			storeStreamCache(gw, key, &captureBuf, tee, nil, context.Background())
+			storeStreamCache(gw, key, &captureBuf, tee, nil, context.Background(), false)
 			after := gw.ResponseCache.Len()
 
 			if tt.want && after <= before {

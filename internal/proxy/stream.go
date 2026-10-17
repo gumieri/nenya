@@ -75,6 +75,7 @@ func (p *Proxy) probeStreamHead(gw *gateway.NenyaGateway, action upstreamAction,
 			stallR:        stallR,
 			budget:        budget,
 			emptyFailover: gw.Config.Governance.EmptyStreamAsError != nil && *gw.Config.Governance.EmptyStreamAsError,
+			maxHold:       time.Duration(gw.Config.Governance.StreamBootstrapMaxHoldSeconds) * time.Second,
 		})
 	}
 	probe := headProbeEnabled(gw.Config.Governance)
@@ -180,9 +181,22 @@ type bootstrapProbeParams struct {
 	stallR *stallReader
 	// budget is the maximum bytes held before degrading to unbuffered.
 	budget int
+	// maxHold is the optional time ceiling for the buffering phase
+	// (NENYA-174): 0 = unbounded (the byte budget is the only bound).
+	maxHold time.Duration
 	// emptyFailover mirrors governance.empty_stream_as_error for the
 	// zero-bytes-read case.
 	emptyFailover bool
+}
+
+// bootstrapHoldExceeded is the production hold-time predicate (NENYA-174):
+// a non-positive ceiling never trips; the ceiling trips once elapsed. Used
+// by the bootstrap loop and pinned directly by its fixture.
+func bootstrapHoldExceeded(elapsed, maxHold time.Duration) bool {
+	if maxHold <= 0 {
+		return false
+	}
+	return elapsed >= maxHold
 }
 
 // bootstrapStreamHead holds the upstream stream's handshake events until the
@@ -201,6 +215,17 @@ func (p *Proxy) bootstrapStreamHead(pp bootstrapProbeParams) *streamResult {
 	offset := 0
 	start := time.Now()
 	for {
+		if bootstrapHoldExceeded(time.Since(start), pp.maxHold) {
+			// Time ceiling (NENYA-174): checked every iteration — including
+			// after a read that returned nothing — so only a provider that
+			// stalls silently (bounded separately by the stall reader) can
+			// hold the 200 past the ceiling.
+			pp.gw.Metrics.RecordStreamBootstrap(pp.target.Model, pp.target.Provider, "hold-timeout")
+			pp.gw.Metrics.RecordBootstrapHold(pp.target.Model, pp.target.Provider, time.Since(start))
+			pp.gw.Logger.Debug("stream bootstrap hold-time ceiling, degrading to unbuffered",
+				"model", pp.target.Model, "provider", pp.target.Provider, "bytes", len(acc))
+			return p.flushBootstrapPrefix(pp, acc)
+		}
 		n, readErr := bodyReader.Read(scratch)
 		if n > 0 {
 			acc = append(acc, scratch[:n]...)
@@ -223,6 +248,16 @@ func (p *Proxy) bootstrapStreamHead(pp bootstrapProbeParams) *streamResult {
 				pp.gw.Metrics.RecordStreamBootstrap(pp.target.Model, pp.target.Provider, "overflow")
 				pp.gw.Metrics.RecordBootstrapHold(pp.target.Model, pp.target.Provider, time.Since(start))
 				pp.gw.Logger.Debug("stream bootstrap buffer overflow, degrading to unbuffered",
+					"model", pp.target.Model, "provider", pp.target.Provider, "bytes", len(acc))
+				return p.flushBootstrapPrefix(pp, acc)
+			}
+			if bootstrapHoldExceeded(time.Since(start), pp.maxHold) {
+				// Time ceiling (NENYA-174): a slow-drip provider cannot hold
+				// the 200 hostage past the configured hold time — degrade to
+				// unbuffered streaming exactly like a byte overflow.
+				pp.gw.Metrics.RecordStreamBootstrap(pp.target.Model, pp.target.Provider, "hold-timeout")
+				pp.gw.Metrics.RecordBootstrapHold(pp.target.Model, pp.target.Provider, time.Since(start))
+				pp.gw.Logger.Debug("stream bootstrap hold-time ceiling, degrading to unbuffered",
 					"model", pp.target.Model, "provider", pp.target.Provider, "bytes", len(acc))
 				return p.flushBootstrapPrefix(pp, acc)
 			}
@@ -508,10 +543,10 @@ func (p *Proxy) streamResponse(opts streamResponseOpts, action upstreamAction) s
 		// response cache with the partial cut stream.
 		if isStreamCut(cont, transformingReader, copyErr) {
 			gw.Metrics.RecordStreamContinuation(target.Model, target.Provider, "gave_up_exhausted")
-			return p.handleStreamDone(gw, w, target, opts.agentName, action, "", cooldownDuration, payload, buf, copyErr, nil, nil, contentBuilder, stallR, r.Context(), terminalSignals{injectedErr: transformingReader.InjectedError(), slowCall: slowCall, upstreamErr: upstreamErr}, opts.apiKey)
+			return p.handleStreamDone(gw, w, target, opts.agentName, action, "", cooldownDuration, payload, buf, copyErr, nil, nil, contentBuilder, stallR, r.Context(), terminalSignals{injectedErr: transformingReader.InjectedError(), slowCall: slowCall, upstreamErr: upstreamErr, resumable: transformingReader.SawResumableStop()}, opts.apiKey)
 		}
 
-		return p.handleStreamDone(gw, w, target, opts.agentName, action, cacheKey, cooldownDuration, payload, buf, copyErr, captureBuf, tee, contentBuilder, stallR, r.Context(), terminalSignals{injectedErr: transformingReader.InjectedError(), slowCall: slowCall, upstreamErr: upstreamErr}, opts.apiKey)
+		return p.handleStreamDone(gw, w, target, opts.agentName, action, cacheKey, cooldownDuration, payload, buf, copyErr, captureBuf, tee, contentBuilder, stallR, r.Context(), terminalSignals{injectedErr: transformingReader.InjectedError(), slowCall: slowCall, upstreamErr: upstreamErr, resumable: transformingReader.SawResumableStop()}, opts.apiKey)
 	}
 
 	putStreamBuffer(buf)
@@ -651,6 +686,7 @@ func (p *Proxy) setupTransformingReader(gw *gateway.NenyaGateway, o transformRea
 	}
 
 	transformingReader := stream.NewSSETransformingReader(bodyReader, transformer, o.ctx)
+	transformingReader.SetDropPrivateEvents(gw.Config.Governance.FilterPrivateSSEEvents)
 	transformingReader.SetMaxTransformedBytes(gw.Config.Governance.EffectiveMaxTransformedSSEBytes())
 	transformingReader.SetOnUsage(p.makeUsageCallback(o.ctx, gw, o.target, o.agentName))
 	observer := newUpstreamErrorObserver(gw, o.target)
@@ -887,6 +923,10 @@ func (p *Proxy) setupStreamWriter(gw *gateway.NenyaGateway, flushWriter *immedia
 // terminalSignals groups the one-off terminal flags of a streamed attempt, so
 // handleStreamDone's positional list does not grow one bool per policy.
 type terminalSignals struct {
+	// resumable (NENYA-174): the reader saw a resumable stop reason
+	// (pause_turn) on the raw surface — the capture is not a complete
+	// answer even though the transformed frames say "stop".
+	resumable bool
 	// injectedErr marks a stream the reader terminated with a synthesized
 	// gateway_error.
 	injectedErr bool
@@ -980,7 +1020,7 @@ func (p *Proxy) handleStreamDone(gw *gateway.NenyaGateway, w http.ResponseWriter
 	})
 
 	if copyErr == nil {
-		storeStreamCache(gw, cacheKey, captureBuf, tee, payload, reqCtx)
+		storeStreamCache(gw, cacheKey, captureBuf, tee, payload, reqCtx, terminal.resumable)
 		p.asyncMCPAutoSave(gw, agentName, contentBuilder, apiKey)
 		return streamResult{}
 	}
@@ -1059,7 +1099,7 @@ func recordStreamResult(gw *gateway.NenyaGateway, o streamOutcome) {
 	gw.AgentState.RecordFailure(o.target, o.cooldownDuration)
 }
 
-func storeStreamCache(gw *gateway.NenyaGateway, cacheKey string, captureBuf *bytes.Buffer, tee *sseTeeWriter, payload map[string]any, reqCtx context.Context) {
+func storeStreamCache(gw *gateway.NenyaGateway, cacheKey string, captureBuf *bytes.Buffer, tee *sseTeeWriter, payload map[string]any, reqCtx context.Context, resumable bool) {
 	if cacheKey == "" || gw.ResponseCache == nil || tee == nil || tee.exceeded || captureBuf.Len() <= 0 {
 		return
 	}
@@ -1073,6 +1113,15 @@ func storeStreamCache(gw *gateway.NenyaGateway, cacheKey string, captureBuf *byt
 	// terminals never reach this function (handleStreamDone skips earlier).
 	if capturedStreamHasRefusalOrFilter(captured) || capturedStreamHasNetworkErrorFinish(captured) ||
 		capturedStreamEndsWithErrorObject(captured) {
+		return
+	}
+	if capturedStreamHasResumableTerminal(captured) || resumable {
+		// pause_turn-class terminals (NENYA-174): the upstream expects a
+		// resume, so the captured prefix is not a complete answer — caching
+		// it would serve a truncated turn on a later identical request.
+		// terminal.resumable covers CONVERTED captures (the transformer
+		// erases the raw reason before the capture tee sees it); the byte
+		// scan covers native passthrough.
 		return
 	}
 
