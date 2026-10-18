@@ -1,3 +1,8 @@
+// Parentage policy (NENYA-187): the request span ADOPTS an inbound W3C
+// traceparent; gateway-initiated work (the MCP loop, engine calls) roots its
+// own gateway trace via StartGatewaySpan and links the current context
+// instead of adopting it.
+//
 // Package tracing provides OTel-lite request tracing over the standard
 // library only: W3C Trace Context propagation (traceparent parse/format),
 // context-derived stage spans, and log-based export via slog — no

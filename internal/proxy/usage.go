@@ -9,6 +9,7 @@ import (
 	"github.com/nenya/internal/gateway"
 	"github.com/nenya/internal/routing"
 	"github.com/nenya/internal/stream"
+	"github.com/nenya/internal/tracing"
 )
 
 // extractTokenCounts extracts input, output, and total token counts from a
@@ -82,6 +83,19 @@ func recordNonStreamingUsage(ctx context.Context, gw *gateway.NenyaGateway, targ
 	cacheMissTokens := totals.CacheMiss
 	cacheCreationTokens := totals.CacheCreation
 	reasoningTokens := totals.Reasoning
+
+	// GenAI-semconv usage attributes on the request trace (NENYA-182/187):
+	// one normalized attribute set, provider spelling folded away.
+	tracing.RecordUsage(ctx, tracing.UsageAttributes{
+		RequestModel:  target.Model,
+		ResponseModel: servedModel,
+		Provider:      target.Provider,
+		InputTokens:   inputTokens,
+		OutputTokens:  outputTokens,
+		CachedTokens:  cacheHitTokens,
+		CacheCreation: cacheCreationTokens,
+		Reasoning:     reasoningTokens,
+	})
 
 	// prompt_tokens is the calibration loop's ground truth (NENYA-135).
 	gw.Calibration.RecordActual(target.Model, inputTokens)

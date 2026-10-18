@@ -10,6 +10,7 @@ import (
 	"github.com/nenya/internal/gateway"
 	"github.com/nenya/internal/routing"
 	"github.com/nenya/internal/stream"
+	"github.com/nenya/internal/tracing"
 )
 
 // makeUsageCallback returns a callback function that records token usage statistics.
@@ -72,12 +73,30 @@ func (p *Proxy) makeUsageCallback(ctx context.Context, gw *gateway.NenyaGateway,
 		// carry only cache dimensions or only a total); the accumulators are
 		// advanced independently so a cache-only delta is still priced.
 		usageSeen := prompt > 0 || completion > 0 || cacheHit > 0 || cacheCreation > 0 || cacheMiss > 0
-		if usageSeen {
-			acc.Input += int64(prompt)
-			acc.Cached += int64(cacheHit)
-			acc.CacheWrite += int64(cacheCreation)
-			acc.Completion += int64(completion)
-		}
+		// Every dimension is a per-chunk high-water DELTA (including
+		// reasoning, which the usageSeen test above does not cover): advance
+		// the accumulators FIRST and read the trace attributes from them, so
+		// a reasoning-only chunk can never be erased by a later one
+		// (NENYA-187 review).
+		acc.Input += int64(prompt)
+		acc.Cached += int64(cacheHit)
+		acc.CacheWrite += int64(cacheCreation)
+		acc.Completion += int64(completion)
+		acc.Reasoning += int64(u.ReasoningTokens)
+		// GenAI-semconv usage attributes on the request trace (NENYA-182/187):
+		// the accumulator holds the request's cumulative usage, so the trace
+		// carries one normalized attribute set regardless of provider
+		// spelling; the last chunk wins.
+		tracing.RecordUsage(ctx, tracing.UsageAttributes{
+			RequestModel:  target.Model,
+			ResponseModel: servedModel,
+			Provider:      target.Provider,
+			InputTokens:   clampInt64ToInt(acc.Input),
+			OutputTokens:  clampInt64ToInt(acc.Completion),
+			CachedTokens:  clampInt64ToInt(acc.Cached),
+			CacheCreation: clampInt64ToInt(acc.CacheWrite),
+			Reasoning:     clampInt64ToInt(acc.Reasoning),
+		})
 		cost := 0.0
 		if usageSeen && gw.CostTracker != nil {
 			if a := attr.resolve(gw, target, servedModel); a.pricing != nil {
@@ -155,6 +174,7 @@ type streamCostAccumulator struct {
 	Cached     int64
 	CacheWrite int64
 	Completion int64
+	Reasoning  int64
 	LastCost   map[string]float64
 	LastCached map[string]int64
 }
@@ -172,7 +192,7 @@ func recordStreamCost(gw *gateway.NenyaGateway, target routing.UpstreamTarget, c
 		acc.LastCached = make(map[string]int64)
 	}
 	now := time.Now()
-	u := pricingUsage(gw, target, int(acc.Input), int(acc.Cached), int(acc.CacheWrite), int(acc.Completion), now)
+	u := pricingUsage(gw, target, clampInt64ToInt(acc.Input), clampInt64ToInt(acc.Cached), clampInt64ToInt(acc.CacheWrite), clampInt64ToInt(acc.Completion), now)
 	total := pricing.CalculateCost(u)
 	cost := total - acc.LastCost[costModel]
 	acc.LastCost[costModel] = total

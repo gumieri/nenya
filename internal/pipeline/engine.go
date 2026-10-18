@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/nenya/config"
+	"github.com/nenya/internal/tracing"
 	"github.com/nenya/internal/util"
 )
 
@@ -264,6 +265,11 @@ func CallEngineChainObserved(ctx context.Context, clientFor ClientResolver,
 	targets []config.EngineTarget, logger *slog.Logger,
 	injectAPIKey func(providerName string, headers http.Header) error,
 	call EngineChainCall) (string, error) {
+	// Gateway-initiated work: engine/judgment calls root their own trace and
+	// link the client's context instead of adopting it (NENYA-187).
+	ctx, engineSpan := tracing.StartGatewaySpan(ctx, logger, "engine.call")
+	defer engineSpan.End()
+
 	if len(targets) == 0 {
 		return "", errors.New("engine chain: no targets available")
 	}

@@ -441,7 +441,9 @@ func (p *Proxy) forwardToUpstreamWithMCP(gw *gateway.NenyaGateway,
 
 	// NENYA-140: the whole tool loop is one traced stage; thread the loop
 	// span back into r so re-dispatches parent to it, not the root.
-	loopCtx, loopSpan := tracing.StartSpan(r.Context(), gw.Logger, "upstream.mcp_loop")
+	// Gateway-rooted: the multi-turn loop is work the gateway initiates, so
+	// it gets its own trace with the client's context linked (NENYA-187).
+	loopCtx, loopSpan := tracing.StartGatewaySpan(r.Context(), gw.Logger, "upstream.mcp_loop")
 	defer loopSpan.End()
 	tracing.RecordStage(loopCtx, "upstream.mcp_loop")
 	r = r.WithContext(loopCtx)

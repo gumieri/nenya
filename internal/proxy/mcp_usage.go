@@ -8,6 +8,7 @@ import (
 	"github.com/nenya/internal/gateway"
 	"github.com/nenya/internal/routing"
 	"github.com/nenya/internal/stream"
+	"github.com/nenya/internal/tracing"
 )
 
 // mcpCalibrationModel returns the model key for the calibration tracker:
@@ -133,6 +134,19 @@ func (p *Proxy) recordMCPIterationUsage(ctx context.Context, gw *gateway.NenyaGa
 	recordNonStreamingStats(gw, model, totals.Completion, totals.CacheHit, totals.CacheMiss, totals.CacheCreation, totals.Reasoning)
 	recordNonStreamingMetrics(gw, target, agentName, totals.Completion, totals.CacheHit, totals.CacheMiss, totals.CacheCreation, totals.Reasoning)
 	recordCostAndBilling(ctx, gw, target, buf.model, totals.Prompt, totals.CacheHit, totals.CacheCreation, totals.Completion)
+	// The MCP loop replays a buffered response to the client, so the
+	// streaming usage callback never fires: the trace's GenAI-semconv
+	// attributes are recorded here (NENYA-187).
+	tracing.RecordUsage(ctx, tracing.UsageAttributes{
+		RequestModel:  target.Model,
+		ResponseModel: buf.model,
+		Provider:      target.Provider,
+		InputTokens:   totals.Prompt,
+		OutputTokens:  totals.Completion,
+		CachedTokens:  totals.CacheHit,
+		CacheCreation: totals.CacheCreation,
+		Reasoning:     totals.Reasoning,
+	})
 }
 
 // mcpServingTarget resolves the target a buffered MCP dispatch was served by
