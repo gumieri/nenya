@@ -126,6 +126,7 @@ func collectValidationErrors(ctx context.Context, cfg *Config, providers map[str
 	errors = append(errors, validateJudgmentsConfig(cfg)...)
 	errors = append(errors, validateTfidfRerankConfig(cfg)...)
 	errors = append(errors, validateSpotlightRiskTiersConfig(cfg)...)
+	errors = append(errors, validateParamCompatConfig(cfg)...)
 	errors = append(errors, validateSelfLoopGuard(cfg)...)
 	errors = append(errors, validateTelemetryExposure(cfg, logger)...)
 	errors = append(errors, validateNetworkPolicy(cfg)...)
@@ -575,6 +576,38 @@ func validateInjectionConfig(cfg *Config, logger *slog.Logger) []string {
 	}
 	errs = append(errs, validateInjectionEscalation(cfg)...)
 	return errs
+}
+
+// validateParamCompatConfig validates the target axis of the param-compat
+// rules (NENYA-179): token_field names the token-cap spelling a target
+// requires, and a typo would rename the payload's only cap to a junk key —
+// the cap would be lost with no error, only an unknown-field report.
+func validateParamCompatConfig(cfg *Config) []string {
+	var errors []string
+	for i, rule := range cfg.Governance.ParamCompat {
+		if rule.ModelPrefix == "" && (rule.TokenField != "" || len(rule.IntTypedParams) > 0) {
+			errors = append(errors, fmt.Sprintf(
+				"governance.param_compat[%d] declares the target axis (token_field/int_typed_params) with no model_prefix, so it can never match a target",
+				i))
+		}
+		switch strings.TrimSpace(rule.TokenField) {
+		case "", "max_tokens", "max_completion_tokens":
+		default:
+			errors = append(errors, fmt.Sprintf(
+				"governance.param_compat[%d].token_field must be one of max_tokens, max_completion_tokens, got %q",
+				i, rule.TokenField))
+		}
+		for _, param := range rule.IntTypedParams {
+			switch strings.TrimSpace(param) {
+			case "max_tokens", "max_completion_tokens":
+			default:
+				errors = append(errors, fmt.Sprintf(
+					"governance.param_compat[%d].int_typed_params contains %q, which no target-aware coercion applies to",
+					i, param))
+			}
+		}
+	}
+	return errors
 }
 
 // validateInjectionEscalation checks the tier-2 classifier config: band

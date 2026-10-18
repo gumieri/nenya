@@ -17,6 +17,8 @@ type paramCompatRule struct {
 	dropParams            []string
 	minReasoningEffort    string
 	relaxForcedToolChoice bool
+	tokenField            string
+	intTypedParams        []string
 }
 
 // builtInParamCompat encodes the known new-generation rejections
@@ -28,6 +30,29 @@ var builtInParamCompat = []paramCompatRule{
 		prefix:     "gemini-3",
 		dropParams: []string{"temperature", "top_p", "top_k", "presence_penalty", "frequency_penalty", "candidate_count"},
 	},
+}
+
+// NOTE (NENYA-179): no built-in token-field rename ships. A model-ID prefix
+// is not evidence about the executor behind it — an aggregator relaying a
+// gpt-5-prefixed model may accept only max_tokens, so a built-in rename would
+// convert a working request into a 400 (or silently drop the requested cap).
+// Operators declare the target axis explicitly per rule (token_field,
+// int_typed_params); the pair-keyed mechanism, its telemetry, and the
+// stage audit are the deliverable, not a guess about someone else's executor.
+
+// trimmedParams trims parameter names so a padded config value matches at
+// runtime exactly as it validates at load (NENYA-179 review).
+func trimmedParams(params []string) []string {
+	if len(params) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(params))
+	for _, p := range params {
+		if trimmed := strings.TrimSpace(p); trimmed != "" {
+			out = append(out, trimmed)
+		}
+	}
+	return out
 }
 
 // resolveParamCompatRules merges config-declared rules (first) with the
@@ -47,6 +72,8 @@ func resolveParamCompatRules(cfg *config.GovernanceConfig) []paramCompatRule {
 			dropParams:            r.DropParams,
 			minReasoningEffort:    strings.ToLower(r.MinReasoningEffort),
 			relaxForcedToolChoice: r.RelaxForcedToolChoice,
+			tokenField:            strings.TrimSpace(r.TokenField),
+			intTypedParams:        trimmedParams(r.IntTypedParams),
 		})
 	}
 	return append(rules, builtInParamCompat...)

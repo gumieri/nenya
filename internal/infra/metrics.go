@@ -124,6 +124,11 @@ type Metrics struct {
 	// resolved format (nenya_unknown_request_fields_total).
 	unknownRequestFields sync.Map
 
+	// paramCoercions counts parameters rewritten to the target's declared
+	// integer type, by parameter and client format
+	// (nenya_param_coercions_total).
+	paramCoercions sync.Map
+
 	upstreamLatency sync.Map
 	ttft            sync.Map
 	slowCalls       sync.Map
@@ -646,6 +651,28 @@ func (m *Metrics) RecordUnknownRequestField(format string) {
 		format = "other"
 	}
 	e := getOrCreateEntry(&m.unknownRequestFields, map[string]string{"format": format})
+	e.value.Add(1)
+}
+
+// RecordParamCoercion records that a parameter was rewritten to the target's
+// declared integer type, keyed on the (client format, parameter) pair
+// (NENYA-179). Both labels are closed sets; anything else collapses to
+// "other". Nil-safe.
+func (m *Metrics) RecordParamCoercion(param, clientFormat string) {
+	if m == nil || param == "" {
+		return
+	}
+	switch param {
+	case "max_tokens", "max_completion_tokens":
+	default:
+		param = "other"
+	}
+	switch clientFormat {
+	case "openai", "anthropic":
+	default:
+		clientFormat = "other"
+	}
+	e := getOrCreateEntry(&m.paramCoercions, map[string]string{"param": param, "client_format": clientFormat})
 	e.value.Add(1)
 }
 
@@ -1751,6 +1778,8 @@ func (m *Metrics) writePipelineMetrics(w io.Writer) {
 		"Conflicting duplicate parameters resolved by the request normalizer, by logical parameter (NENYA-186).", &m.duplicateParams)
 	m.writeCounterMap(w, "nenya_unknown_request_fields_total",
 		"Request fields no format path consumes, by resolved format (NENYA-186).", &m.unknownRequestFields)
+	m.writeCounterMap(w, "nenya_param_coercions_total",
+		"Parameters rewritten to the target's declared integer type, by parameter and client format (NENYA-179).", &m.paramCoercions)
 	m.writeCounterMap(w, "nenya_pipeline_tokens_saved_total",
 		"Tokens removed from request payloads by pipeline stage (trim, window, bouncer).", &m.tokensSaved)
 	m.writeCounterMap(w, "nenya_pipeline_interceptions_total",

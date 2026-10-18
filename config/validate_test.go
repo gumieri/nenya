@@ -1318,3 +1318,32 @@ func TestValidateAgentBreakerThresholds(t *testing.T) {
 		}
 	}
 }
+
+// NENYA-179: the target axis is operator-declared, so a typo (or a rule that
+// can never match) must be rejected at load — a junk token_field would rename
+// the payload's only cap and lose it silently.
+func TestValidateParamCompatConfigTargetAxis(t *testing.T) {
+	cases := []struct {
+		name    string
+		rule    ParamCompatRule
+		wantErr bool
+	}{
+		{name: "valid axis", rule: ParamCompatRule{ModelPrefix: "gpt-5", TokenField: "max_completion_tokens", IntTypedParams: []string{"max_completion_tokens"}}},
+		{name: "empty token field is canonical", rule: ParamCompatRule{ModelPrefix: "m", IntTypedParams: []string{"max_tokens"}}},
+		{name: "typo in token field", rule: ParamCompatRule{ModelPrefix: "m", TokenField: "max_completion_token"}, wantErr: true},
+		{name: "unapplicable int typed param", rule: ParamCompatRule{ModelPrefix: "m", IntTypedParams: []string{"temperature"}}, wantErr: true},
+		{name: "axis without prefix can never match", rule: ParamCompatRule{TokenField: "max_completion_tokens"}, wantErr: true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := &Config{Governance: GovernanceConfig{ParamCompat: []ParamCompatRule{tc.rule}}}
+			errs := validateParamCompatConfig(cfg)
+			if tc.wantErr && len(errs) == 0 {
+				t.Fatal("expected a validation error")
+			}
+			if !tc.wantErr && len(errs) != 0 {
+				t.Fatalf("unexpected errors: %v", errs)
+			}
+		})
+	}
+}

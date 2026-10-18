@@ -294,3 +294,19 @@ func TestConvertOpenAIToAnthropicKeepsIntMaxTokens(t *testing.T) {
 		})
 	}
 }
+
+// NENYA-179: the token cap may ride the newer spelling (a target-aware
+// normalizer moved it there); the conversion must not silently fall back to
+// its hardcoded default.
+func TestConvertOpenAIToAnthropicReadsNewerCapSpelling(t *testing.T) {
+	a := NewAnthropicAdapter()
+	openai := map[string]interface{}{
+		"model":                 "gpt-test",
+		"max_completion_tokens": 2048,
+		"messages":              []interface{}{map[string]interface{}{"role": "user", "content": "hi"}},
+	}
+	out := a.ConvertOpenAIToAnthropicBody(openai, "claude-test", false, CacheOpts{})
+	if got, _ := out["max_tokens"].(int); got != 2048 {
+		t.Fatalf("max_tokens = %#v, want the client's 2048 (not the 8192 default)", out["max_tokens"])
+	}
+}

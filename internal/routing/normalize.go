@@ -1,6 +1,7 @@
 package routing
 
 import (
+	"math"
 	"sort"
 	"strings"
 )
@@ -13,7 +14,9 @@ import (
 //     canonical one (max_tokens), or a conversion may carry both spellings of
 //     one logical knob (stop / stop_sequences). Leaving both in place is
 //     ambiguous — upstreams pick one, or reject the body. The normalizer
-//     resolves the conflict to a single canonical field and records it.
+//     resolves the conflict to a single surviving field (the canonical
+//     spelling by default, the spelling a target declares via param_compat's
+//     token_field when one matches) and records it.
 //
 //  2. Unknown top-level fields. Every request field is either consumed by a
 //     format path or explicitly reported, so a silently dropped envelope
@@ -23,9 +26,7 @@ import (
 // Both record structured telemetry (closed-label counters + a Warn log naming
 // the fields), never silence.
 
-// duplicateParamRule pairs two spellings of one logical parameter. The
-// canonical field is the one the target formats consume (and the gateway
-// manages); the alias is the newer spelling a harness may send instead.
+// duplicateParamRule pairs two spellings of one logical parameter.
 type duplicateParamRule struct {
 	canonical string
 	alias     string
@@ -37,48 +38,153 @@ var duplicateParamRules = []duplicateParamRule{
 	{canonical: "stop", alias: "stop_sequences", label: "stop"},
 }
 
-// normalizeDuplicateParams resolves conflicting duplicate parameters in place:
-// the canonical field survives with the conservative value (a token cap keeps
-// the SMALLER of the two, so neither the client's tighter budget nor the
-// gateway's model clamp can be exceeded), and the conflict is reported.
-// Duplicates whose values agree — or whose alias is JSON null — collapse
-// without telemetry (no ambiguity to report). The function is idempotent: a
-// retry/failover re-transform of the same payload finds no alias left, so the
-// conflict is reported once per request even though the dispatch funnel runs
-// per attempt.
-func normalizeDuplicateParams(deps TransformDeps, payload map[string]interface{}) {
+// normalizeTargetParams applies the target-aware half of the harness
+// normalization (NENYA-179): the mutation is a function of the (client format,
+// target executor) pair, not of the client format alone.
+//
+//   - The duplicate-spelling resolution emits the spelling the TARGET requires
+//     (param_compat `token_field`, e.g. max_completion_tokens for OpenAI
+//     reasoning/Codex executors) instead of always the canonical one, keeping
+//     the SMALLER cap so neither the client's budget nor the gateway's model
+//     clamp is exceeded.
+//   - Parameters the target declares integer-typed (`int_typed_params`) are
+//     coerced from the client's JSON-decoded float shape to an integer, with
+//     the (client format, target, param) pair recorded — a strict-typed
+//     executor must not be handed a float, and the coercion must never be
+//     silent.
+//
+// Tolerant targets (no matching rule) keep the canonical spelling and the
+// client's value shape untouched.
+func normalizeTargetParams(deps TransformDeps, payload map[string]interface{}, rules []paramCompatRule, modelName, sourceFormat string) {
+	rule := matchParamCompatRule(rules, modelName)
+	tokenField := ""
+	var intTyped []string
+	if rule != nil {
+		tokenField = rule.tokenField
+		intTyped = rule.intTypedParams
+	}
+	normalizeDuplicateParams(deps, payload, tokenField)
+	moveCapToTargetField(deps, payload, tokenField, modelName)
+	// Coerce the EFFECTIVE token field: after a move the cap lives under the
+	// target's spelling, so a rule listing only the other name would
+	// otherwise leave the declared type unconverted (NENYA-179 review).
+	coerceIntTypedParams(deps, payload, intTyped, tokenField, sourceFormat)
+}
+
+// moveCapToTargetField moves a token cap that arrived under the name the
+// target does NOT require (NENYA-179 "expanded field mappings"): when the
+// target declares max_completion_tokens and the cap sits under max_tokens
+// alone, the value is moved so a client's cap is never dropped just because
+// the executor rejects its spelling.
+func moveCapToTargetField(deps TransformDeps, payload map[string]interface{}, tokenField, modelName string) {
+	if tokenField == "" || tokenField == "max_tokens" {
+		return
+	}
+	if _, hasTarget := payload[tokenField]; hasTarget {
+		return
+	}
+	v, hasCanonical := payload["max_tokens"]
+	if !hasCanonical {
+		return
+	}
+	payload[tokenField] = v
+	delete(payload, "max_tokens")
+	if deps.Logger != nil {
+		// The move is the one normalization with no counter of its own: the
+		// client's cap keeps its value under the name the target requires,
+		// and the field move is named in the log (NENYA-179 review).
+		deps.Logger.Info("moved token cap to the target's required field",
+			"from", "max_tokens", "to", tokenField, "model", modelName)
+	}
+}
+
+// normalizeDuplicateParams resolves conflicting duplicate parameters in place.
+// tokenField, when non-empty, is the spelling the target requires and becomes
+// the surviving field (the canonical spelling is the default); a token cap
+// keeps the SMALLER of the two values, so neither the client's tighter budget
+// nor the gateway's model clamp can be exceeded. Agreeing duplicates and JSON
+// null aliases collapse without telemetry; conflicts are counted and logged.
+// The function is idempotent: a retry/failover re-transform of the same
+// payload finds no alias left, so a conflict is reported once per request even
+// though the dispatch funnel runs per attempt.
+func normalizeDuplicateParams(deps TransformDeps, payload map[string]interface{}, tokenField string) {
 	for _, rule := range duplicateParamRules {
-		primary, hasPrimary := payload[rule.canonical]
-		alias, hasAlias := payload[rule.alias]
+		keep, drop := rule.canonical, rule.alias
+		if rule.canonical == "max_tokens" && tokenField == rule.alias {
+			// The target requires the alias spelling: the client's cap must
+			// survive under the name this executor accepts (NENYA-179).
+			keep, drop = rule.alias, rule.canonical
+		}
+		primary, hasPrimary := payload[keep]
+		alias, hasAlias := payload[drop]
 		if !hasPrimary || !hasAlias {
 			continue
 		}
 		if alias == nil {
-			delete(payload, rule.alias)
+			delete(payload, drop)
 			continue
 		}
 		if primary == nil {
-			payload[rule.canonical] = alias
-			delete(payload, rule.alias)
+			payload[keep] = alias
+			delete(payload, drop)
 			continue
 		}
 		if equalParamValues(primary, alias) {
-			delete(payload, rule.alias)
+			delete(payload, drop)
 			continue
 		}
 		if pv, ok := numericValue(primary); ok {
 			if av, ok := numericValue(alias); ok && av < pv {
 				// Keep the smaller cap: neither the client's tighter
 				// budget nor the gateway's model clamp is exceeded.
-				payload[rule.canonical] = av
+				payload[keep] = av
 			}
 		}
-		delete(payload, rule.alias)
+		delete(payload, drop)
 		deps.Metrics.RecordDuplicateParam(rule.label)
 		if deps.Logger != nil {
 			deps.Logger.Warn("resolved conflicting duplicate request parameters",
-				"param", rule.label, "alias", rule.alias,
-				"kept_value", payload[rule.canonical])
+				"param", rule.label, "kept", keep, "kept_value", payload[keep])
+		}
+	}
+}
+
+// coerceIntTypedParams rewrites integer-typed parameters the target declares
+// from the client's float shape to an integer. Only integral values are
+// coerced (a fractional cap is a client bug, not a value to round silently)
+// and each coercion is recorded with the client format it came from.
+func coerceIntTypedParams(deps TransformDeps, payload map[string]interface{}, params []string, tokenField, sourceFormat string) {
+	for _, param := range params {
+		if tokenField != "" && param == "max_tokens" && tokenField == "max_completion_tokens" {
+			param = tokenField // the cap now lives under the target's spelling
+		}
+		v, ok := payload[param]
+		if !ok {
+			continue
+		}
+		f, ok := numericValue(v)
+		if !ok {
+			continue
+		}
+		if _, isInt := v.(int); isInt {
+			continue // already integer-typed
+		}
+		if _, isInt64 := v.(int64); isInt64 {
+			continue // already integer-typed
+		}
+		if f != float64(int64(f)) || f < 0 {
+			continue // fractional or negative: leave the client's value alone
+		}
+		clamped := false
+		if f > math.MaxInt32 {
+			f = math.MaxInt32 // never overflow a 32-bit int conversion
+			clamped = true
+		}
+		payload[param] = int(f)
+		deps.Metrics.RecordParamCoercion(param, sourceFormat)
+		if deps.Logger != nil {
+			deps.Logger.Debug("coerced parameter to the target's integer type",
+				"param", param, "client_format", sourceFormat, "value", int(f), "clamped", clamped)
 		}
 	}
 }

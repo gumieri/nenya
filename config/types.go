@@ -1373,6 +1373,18 @@ type ParamCompatRule struct {
 	DropParams            []string `json:"drop_params,omitempty"`
 	MinReasoningEffort    string   `json:"min_reasoning_effort,omitempty"`
 	RelaxForcedToolChoice bool     `json:"relax_forced_tool_choice,omitempty"`
+	// TokenField names the token-cap spelling this target requires
+	// ("max_tokens" or "max_completion_tokens"). Empty keeps the canonical
+	// OpenAI spelling. The duplicate-parameter normalizer (NENYA-186) emits
+	// the target's spelling, so a client's cap is never dropped just
+	// because it arrived under the other name (NENYA-179: the mutation is a
+	// function of the (client format, target executor) pair).
+	TokenField string `json:"token_field,omitempty"`
+	// IntTypedParams lists parameters this target requires as integer-typed
+	// JSON numbers (strict-typed executors). A value that arrived as a
+	// JSON-decoded float is coerced to an integer, and the coercion is
+	// recorded (NENYA-179).
+	IntTypedParams []string `json:"int_typed_params,omitempty"`
 }
 
 // AutoRetryOnParamRejectEnabled reports whether the strip-and-retry

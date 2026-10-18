@@ -64,15 +64,36 @@ func DeriveInputTokenBudget(maxContext, maxOutput int) int {
 	return budget
 }
 
+// usableCap reports whether a token-cap field carries a usable number.
+func usableCap(raw interface{}) bool {
+	switch v := raw.(type) {
+	case float64:
+		return !math.IsNaN(v) && v >= 0
+	case int:
+		return v >= 0
+	case int64:
+		return v >= 0
+	default:
+		return false
+	}
+}
+
 // EffectiveOutputTokens returns the output-token reservation to use for a
-// request: the smaller of the client-supplied max_tokens and the model's
+// request: the smaller of the client-supplied token cap and the model's
 // declared output cap, so a client that asks for little output does not make
 // the input budget over-reserve. declared is the model/output cap (0 when
 // unknown). The declared cap is returned when the payload carries no usable
-// max_tokens.
+// cap. Both spellings of the cap are read (NENYA-179): a body carrying only
+// the newer max_completion_tokens must still reduce the reservation, or a
+// target-aware rename would silently change how much input the request keeps.
 func EffectiveOutputTokens(payload map[string]interface{}, declared int) int {
-	raw, ok := payload["max_tokens"]
-	if !ok {
+	raw := payload["max_tokens"]
+	if !usableCap(raw) {
+		// A null or non-numeric canonical field falls through to the newer
+		// spelling rather than discarding a usable cap (NENYA-179 review).
+		raw = payload["max_completion_tokens"]
+	}
+	if !usableCap(raw) {
 		return declared
 	}
 	var requested int

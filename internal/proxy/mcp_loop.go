@@ -569,7 +569,7 @@ func (p *Proxy) mcpIteration(in mcpIterInput) int {
 		return mcpIterStop
 	}
 
-	buf, err := p.forwardBuffered(in.gw, in.mcpLoopCtx, in.r, in.opts.Targets, working, in.opts.Cooldown, in.opts.TokenCount, in.opts.AgentName, in.opts.MaxRetries, in.opts.ApiKey, in.opts.Canary)
+	buf, err := p.forwardBuffered(in.gw, in.mcpLoopCtx, in.r, in.opts.Targets, working, in.opts.Cooldown, in.opts.TokenCount, in.opts.AgentName, in.opts.MaxRetries, in.opts.ApiKey, in.opts.Canary, in.opts.SourceFormat)
 	// NENYA-135: each loop iteration dispatched one upstream request whose
 	// cl100k estimate was recorded at dispatch — record this iteration's
 	// real usage here (nil-buf safe; before the handled check, so
@@ -753,6 +753,7 @@ func (p *Proxy) forwardBuffered(gw *gateway.NenyaGateway,
 	maxRetries int,
 	apiKey *config.ApiKey,
 	canary pipeline.CanarResult,
+	sourceFormat string,
 ) (*bufferedSSE, error) {
 	originalPayload, err := prepareOriginalPayload(gw, payload)
 	if err != nil {
@@ -784,7 +785,7 @@ sweep:
 			continue
 		}
 
-		action := p.prepareAndSend(gw, r, i, targets, target, workingPayload, cooldownDuration, tokenCount, agentName, apiKey, false)
+		action := p.prepareAndSend(gw, r, i, targets, target, workingPayload, cooldownDuration, tokenCount, agentName, apiKey, false, sourceFormat)
 		if action.kind == actionError {
 			attempt++
 		}

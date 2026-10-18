@@ -523,6 +523,24 @@ func countBlockMarkers(blocks []interface{}) int {
 	return n
 }
 
+// firstTokenCap returns the payload's token cap under either spelling:
+// max_tokens is the canonical field, max_completion_tokens the newer one a
+// target-aware normalizer may have moved the cap to (NENYA-179). Reading only
+// max_tokens silently discarded the cap (and the model clamp) for
+// Anthropic-format targets.
+func firstTokenCap(openai map[string]interface{}) interface{} {
+	// A non-positive cap is not usable: skip it so the other spelling (or the
+	// caller's default) wins instead of suppressing the fallback
+	// (NENYA-179 review).
+	if v, ok := numericTokenValue(openai["max_tokens"]); ok && v > 0 {
+		return v
+	}
+	if v, ok := numericTokenValue(openai["max_completion_tokens"]); ok && v > 0 {
+		return v
+	}
+	return nil
+}
+
 // numericTokenValue coerces a token-count field to float64. The gateway
 // injects/clamps max_tokens in memory (int), while a decoded client body
 // carries float64 — asserting only float64 silently dropped the model output
@@ -542,7 +560,7 @@ func numericTokenValue(v interface{}) (float64, bool) {
 }
 
 func (a *AnthropicAdapter) copyOpenAIFields(openai, anthropic map[string]interface{}) {
-	if v, ok := numericTokenValue(openai["max_tokens"]); ok && v > 0 {
+	if v, ok := numericTokenValue(firstTokenCap(openai)); ok && v > 0 {
 		if v > math.MaxInt32 {
 			v = math.MaxInt32
 		}

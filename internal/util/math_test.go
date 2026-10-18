@@ -165,3 +165,19 @@ func TestEffectiveOutputTokens(t *testing.T) {
 		})
 	}
 }
+
+// NENYA-179: a body carrying only the newer cap spelling must still reduce the
+// output reservation, or a target-aware rename would silently change how much
+// input the request keeps.
+func TestEffectiveOutputTokensNewerCapSpelling(t *testing.T) {
+	if got := EffectiveOutputTokens(map[string]interface{}{"max_completion_tokens": float64(2048)}, 8192); got != 2048 {
+		t.Fatalf("EffectiveOutputTokens = %d, want 2048", got)
+	}
+	if got := EffectiveOutputTokens(map[string]interface{}{"max_completion_tokens": 2048}, 0); got != 2048 {
+		t.Fatalf("EffectiveOutputTokens (int, no declared cap) = %d, want 2048", got)
+	}
+	// The canonical spelling still wins when both are present.
+	if got := EffectiveOutputTokens(map[string]interface{}{"max_tokens": float64(1000), "max_completion_tokens": float64(2048)}, 0); got != 1000 {
+		t.Fatalf("EffectiveOutputTokens = %d, want the canonical 1000", got)
+	}
+}

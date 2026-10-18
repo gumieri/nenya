@@ -991,7 +991,7 @@ func (rl *retryLoop) maxSameTargetRetries() int {
 
 // prepareAndSend wraps the proxy's prepareAndSend method.
 func (rl *retryLoop) prepareAndSend(idx int, target routing.UpstreamTarget, payload map[string]interface{}) upstreamAction {
-	return rl.p.prepareAndSend(rl.gw, rl.r, idx, rl.opts.Targets, target, payload, rl.opts.Cooldown, rl.opts.TokenCount, rl.opts.AgentName, rl.opts.ApiKey, rl.stream)
+	return rl.p.prepareAndSend(rl.gw, rl.r, idx, rl.opts.Targets, target, payload, rl.opts.Cooldown, rl.opts.TokenCount, rl.opts.AgentName, rl.opts.ApiKey, rl.stream, rl.opts.SourceFormat)
 }
 
 // handleUpstreamError wraps the proxy's handleUpstreamError method.
@@ -1168,6 +1168,7 @@ func (p *Proxy) prepareAndSend(gw *gateway.NenyaGateway,
 	agentName string,
 	apiKey *config.ApiKey,
 	streaming bool,
+	sourceFormat string,
 ) upstreamAction {
 	ctxLogger := gw.Logger.With(
 		"operation", "upstream",
@@ -1235,7 +1236,9 @@ func (p *Proxy) prepareAndSend(gw *gateway.NenyaGateway,
 			return gw.CalibratedCountTokens(text, target.Model)
 		},
 		AgentName: agentName,
-		CacheSalt: resolveCacheSalt(apiKey, agentName, &gw.Config),
+		// The client axis of the (client, target) pair (NENYA-179).
+		SourceFormat: sourceFormat,
+		CacheSalt:    resolveCacheSalt(apiKey, agentName, &gw.Config),
 		// Per-conversation cache affinity (NENYA-158): the same coherent
 		// session identity the sticky/synthesized-session machinery
 		// produced — ensureOpencodeSessionHeader ran before dispatch.

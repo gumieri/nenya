@@ -42,6 +42,11 @@ type TransformDeps struct {
 	// (the identity rides the Session-Id header instead).
 	CacheAffinity string
 
+	// SourceFormat is the CLIENT's wire format ("openai" | "anthropic"): the
+	// client axis of the (client, target) pair target-aware normalization
+	// keys on (NENYA-179).
+	SourceFormat string
+
 	Metrics *infra.Metrics
 }
 
@@ -495,6 +500,36 @@ func applyMaxTokens(payload map[string]interface{}, effectiveMaxOutput int) {
 	payload["max_tokens"] = effectiveMaxOutput
 }
 
+// tokenCapSnapshot remembers the token-cap fields before the pair-driven
+// normalization renamed one, so the shared payload map is handed to the next
+// failover target in its original shape (NENYA-179 review).
+type tokenCapSnapshot struct {
+	maxTokens     interface{}
+	hadMaxTokens  bool
+	completionTok interface{}
+	hadCompletion bool
+}
+
+func snapshotTokenCaps(payload map[string]interface{}) tokenCapSnapshot {
+	snap := tokenCapSnapshot{}
+	snap.maxTokens, snap.hadMaxTokens = payload["max_tokens"]
+	snap.completionTok, snap.hadCompletion = payload["max_completion_tokens"]
+	return snap
+}
+
+func (s tokenCapSnapshot) restore(payload map[string]interface{}) {
+	if s.hadMaxTokens {
+		payload["max_tokens"] = s.maxTokens
+	} else {
+		delete(payload, "max_tokens")
+	}
+	if s.hadCompletion {
+		payload["max_completion_tokens"] = s.completionTok
+	} else {
+		delete(payload, "max_completion_tokens")
+	}
+}
+
 func restoreOriginalModel(payload map[string]interface{}, origModel interface{}) {
 	if origModel == nil {
 		delete(payload, "model")
@@ -600,7 +635,14 @@ func TransformRequestForUpstream(deps TransformDeps, providerName, upstreamURL s
 
 	effectiveMaxOutput := resolveEffectiveMaxOutput(deps, finalModel, maxOutput)
 	applyMaxTokens(payload, effectiveMaxOutput)
-	normalizeDuplicateParams(deps, payload)
+	// The pair-driven normalization may RENAME the token cap to the spelling a
+	// target declares; the payload map is shared across failover targets of a
+	// corrective retry, so the original spelling must be restored after
+	// marshaling or the next (possibly tolerant) target inherits it
+	// (NENYA-179 review). The rule set matches the pre-mapping model ID, the
+	// same ID param-compat sanitization above used.
+	capSnapshot := snapshotTokenCaps(payload)
+	normalizeTargetParams(deps, payload, resolveParamCompatRules(&deps.Config.Governance), modelName, deps.SourceFormat)
 
 	inputBudget := resolveTransformInputBudget(deps, finalModel, maxContext, util.EffectiveOutputTokens(payload, effectiveMaxOutput))
 	if deps.CountTokens != nil && inputBudget > 0 {
@@ -615,6 +657,11 @@ func TransformRequestForUpstream(deps TransformDeps, providerName, upstreamURL s
 
 	auditRequestFields(deps, payload, format)
 
+	// The restores below must run on the ORIGINAL map: the anthropic
+	// conversion rebinds payload to a new map, so restoring after the
+	// rebind would mutate a discarded map and leak the rename into the
+	// shared failover payload (NENYA-179 review).
+	sharedPayload := payload
 	if format == "anthropic" {
 		// Convert with the POST-mapping model: the upstream must receive
 		// the aliased ID, not the canonical one the client sent (NENYA-22).
@@ -622,7 +669,8 @@ func TransformRequestForUpstream(deps TransformDeps, providerName, upstreamURL s
 	}
 
 	newBody, err := json.Marshal(payload)
-	restoreOriginalModel(payload, origModel)
+	restoreOriginalModel(sharedPayload, origModel)
+	capSnapshot.restore(sharedPayload)
 
 	if err != nil {
 		return nil, "", fmt.Errorf("failed to marshal transformed request: %v", err)

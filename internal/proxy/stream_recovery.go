@@ -250,7 +250,7 @@ func (p *Proxy) tryContinueStream(gw *gateway.NenyaGateway, w http.ResponseWrite
 
 	p.finishStreamAttempt(gw, action, stallR)
 
-	newAction := p.prepareAndSend(gw, r, opts.idx, opts.targets, target, payload, cooldownDuration, opts.tokenCount, opts.agentName, opts.apiKey, true)
+	newAction := p.prepareAndSend(gw, r, opts.idx, opts.targets, target, payload, cooldownDuration, opts.tokenCount, opts.agentName, opts.apiKey, true, opts.sourceFormat)
 	if newAction.kind != actionStream {
 		gw.Metrics.RecordStreamContinuation(target.Model, target.Provider, "gave_up_redispatch")
 		resolveRedispatchOutcome(gw, target, cooldownDuration, newAction)
