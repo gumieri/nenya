@@ -835,13 +835,20 @@ func applyAccountCredential(ctx context.Context, t *UpstreamTarget, accountSelec
 // ActivateCooldown forces the circuit breaker for a target into the open state
 // for the specified cooldown duration.
 func (a *AgentState) ActivateCooldown(target UpstreamTarget, cooldownDuration time.Duration) {
+	if target.CoolKey == "" || target.BYOK {
+		// A BYOK request does not represent the shared account's health
+		// (NENYA-195): never cool it down on the caller's behalf.
+		return
+	}
 	a.CB.ForceOpen(target.CoolKey, cooldownDuration)
 }
 
 // RecordFailure records a failure for a target's circuit breaker,
 // potentially opening the circuit after the threshold is reached.
 func (a *AgentState) RecordFailure(target UpstreamTarget, cooldownDuration time.Duration) {
-	if target.CoolKey == "" {
+	if target.CoolKey == "" || target.BYOK {
+		// BYOK failures are the caller's credential's business, not the
+		// shared account's (NENYA-195): no breaker/cooldown write.
 		return
 	}
 	a.CB.RecordFailure(target.CoolKey, cooldownDuration)
@@ -850,7 +857,9 @@ func (a *AgentState) RecordFailure(target UpstreamTarget, cooldownDuration time.
 // RecordFailureWithStatus records a failure with HTTP status and body for
 // error-semantic classification. Returns the CooldownDecision for observability.
 func (a *AgentState) RecordFailureWithStatus(target UpstreamTarget, status int, body string) resilience.CooldownDecision {
-	if target.CoolKey == "" {
+	if target.CoolKey == "" || target.BYOK {
+		// A caller-supplied credential's failure must not cool down the
+		// shared account (NENYA-195).
 		return resilience.CooldownDecision{}
 	}
 	decision := a.CB.RecordFailureWithStatus(target.CoolKey, status, body)

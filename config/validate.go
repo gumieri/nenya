@@ -128,6 +128,7 @@ func collectValidationErrors(ctx context.Context, cfg *Config, providers map[str
 	errors = append(errors, validateSpotlightRiskTiersConfig(cfg)...)
 	errors = append(errors, validateParamCompatConfig(cfg)...)
 	errors = append(errors, validateAutoCacheBreakpointsConfig(cfg, logger)...)
+	errors = append(errors, validateBYOKConfig(cfg, logger)...)
 	errors = append(errors, validateSelfLoopGuard(cfg)...)
 	errors = append(errors, validateTelemetryExposure(cfg, logger)...)
 	errors = append(errors, validateNetworkPolicy(cfg)...)
@@ -577,6 +578,43 @@ func validateInjectionConfig(cfg *Config, logger *slog.Logger) []string {
 	}
 	errs = append(errs, validateInjectionEscalation(cfg)...)
 	return errs
+}
+
+// validateBYOKConfig validates the bring-your-own-key surface (NENYA-195):
+// the credential header must be a canonical, gateway-unowned HTTP header name,
+// and a global enable with no provider opted in is a warning (it can never
+// take effect, which is almost always a mistake).
+func validateBYOKConfig(cfg *Config, logger *slog.Logger) []string {
+	b := cfg.Governance.BYOK
+	if b == nil {
+		return nil
+	}
+	var errors []string
+	if b.Header != "" {
+		switch {
+		case !isValidHeaderToken(b.Header):
+			errors = append(errors, fmt.Sprintf("governance.byok.header %q is not a valid HTTP header name", b.Header))
+		case textproto.CanonicalMIMEHeaderKey(b.Header) != b.Header:
+			errors = append(errors, fmt.Sprintf("governance.byok.header %q: use the canonical header name %q", b.Header, textproto.CanonicalMIMEHeaderKey(b.Header)))
+		case strings.EqualFold(b.Header, "Authorization"):
+			errors = append(errors, "governance.byok.header must not be Authorization: the caller's gateway token rides there, and an upstream credential must not be able to masquerade as it")
+		case reservedProviderHeaders[strings.ToLower(b.Header)]:
+			errors = append(errors, fmt.Sprintf("governance.byok.header %q is a header the gateway sets or forwards itself; the credential would ride upstream as metadata and leak into provider logs", b.Header))
+		}
+	}
+	if !b.Enabled {
+		return errors
+	}
+	optedIn := 0
+	for _, p := range cfg.Providers {
+		if p.AllowBYOK != nil && *p.AllowBYOK {
+			optedIn++
+		}
+	}
+	if optedIn == 0 && logger != nil {
+		logger.Warn("governance.byok is enabled but no provider declares allow_byok: a caller-supplied credential can never be used")
+	}
+	return errors
 }
 
 // validateAutoCacheBreakpointsConfig WARNS (never fails the load) when an

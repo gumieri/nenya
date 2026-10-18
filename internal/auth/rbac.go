@@ -26,11 +26,16 @@ const (
 	PermissionEmbed   Permission = "embed"
 	PermissionMetrics Permission = "metrics"
 	PermissionAdmin   Permission = "admin"
+	// PermissionBYOK authorizes a key to present its own upstream credential
+	// for a request (bring-your-own-key, NENYA-195). Admin keys hold it by
+	// default; a user key must opt in with permissions.byok = true, and the
+	// target provider must also declare allow_byok.
+	PermissionBYOK Permission = "byok"
 )
 
 // RolePermissions maps roles to the set of permissions they grant.
 var RolePermissions = map[Role][]Permission{
-	RoleAdmin:    {PermissionChat, PermissionModels, PermissionEmbed, PermissionMetrics, PermissionAdmin},
+	RoleAdmin:    {PermissionChat, PermissionModels, PermissionEmbed, PermissionMetrics, PermissionAdmin, PermissionBYOK},
 	RoleUser:     {PermissionChat, PermissionModels, PermissionEmbed},
 	RoleReadOnly: {PermissionModels, PermissionMetrics},
 }
@@ -47,6 +52,28 @@ func HasPermission(role Role, perm Permission) bool {
 		}
 	}
 	return false
+}
+
+// KeyMayBYOK reports whether the presented key is allowed to bring its own
+// upstream credential (NENYA-195). Admin keys may always; any other key must
+// opt in explicitly via permissions.byok = true. Fail closed: a nil or
+// unrecognized key may not. The role alone is not enough — a user key is not
+// silently granted the permission.
+func KeyMayBYOK(apiKey *config.ApiKey) bool {
+	if apiKey == nil {
+		return false
+	}
+	for _, role := range apiKey.Roles {
+		if HasPermission(Role(role), PermissionBYOK) {
+			return true
+		}
+	}
+	v, ok := apiKey.Permissions[string(PermissionBYOK)]
+	if !ok {
+		return false
+	}
+	allowed, ok := v.(bool)
+	return ok && allowed
 }
 
 // rolesRecognized reports whether every role on the key is a known role and

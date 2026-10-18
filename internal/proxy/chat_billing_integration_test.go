@@ -28,7 +28,7 @@ func TestFilterExhaustedTargets(t *testing.T) {
 		{Provider: "anthropic", AccountName: "default", Model: "claude-3"},
 	}
 
-	filtered := filterExhaustedTargets(targets, bt, nil, slog.Default())
+	filtered := filterExhaustedTargets(targets, bt, nil, slog.Default(), false)
 
 	if len(filtered) != 2 {
 		t.Fatalf("Expected 2 targets after filtering, got %d", len(filtered))
@@ -54,7 +54,7 @@ func TestFilterExhaustedTargets_NilTracker(t *testing.T) {
 		{Provider: "anthropic", AccountName: "account2", Model: "claude-3"},
 	}
 
-	filtered := filterExhaustedTargets(targets, nil, nil, slog.Default())
+	filtered := filterExhaustedTargets(targets, nil, nil, slog.Default(), false)
 
 	if len(filtered) != 2 {
 		t.Errorf("Expected 2 targets with nil tracker, got %d", len(filtered))
@@ -80,7 +80,7 @@ func TestFilterExhaustedTargets_DropsEmptyCredential(t *testing.T) {
 		{Provider: "mystery", Model: "m1"},
 	}
 
-	filtered := filterExhaustedTargets(targets, nil, providers, slog.Default())
+	filtered := filterExhaustedTargets(targets, nil, providers, slog.Default(), false)
 
 	if len(filtered) != 3 {
 		t.Fatalf("expected 3 targets after credential filtering, got %d", len(filtered))
@@ -256,7 +256,7 @@ func TestIntegration_ConcurrentStressAndExhaustion(t *testing.T) {
 		{Provider: "openai", AccountName: "account3", Model: "gpt-4"},
 	}
 
-	filtered := filterExhaustedTargets(targets, bt, nil, slog.Default())
+	filtered := filterExhaustedTargets(targets, bt, nil, slog.Default(), false)
 
 	if len(filtered) != 2 {
 		t.Errorf("Expected 2 non-exhausted targets (account2, account3), got %d", len(filtered))

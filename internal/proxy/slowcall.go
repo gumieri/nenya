@@ -130,6 +130,11 @@ func recordBufferedOutcome(gw *gateway.NenyaGateway, target routing.UpstreamTarg
 	if gw == nil || gw.AgentState == nil || target.CoolKey == "" {
 		return
 	}
+	if target.BYOK {
+		// A caller-funded request never writes shared-account state
+		// (NENYA-195), neither a slow-call charge nor a success.
+		return
+	}
 	if !dispatchAt.IsZero() && recordSlowCall(gw, target, agentName, bodyReadAt.Sub(dispatchAt), cooldown) {
 		return
 	}

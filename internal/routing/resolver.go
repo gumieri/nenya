@@ -28,6 +28,12 @@ type UpstreamTarget struct {
 	// ReasoningEffort is the default reasoning intensity (low, medium, high, xhigh, max)
 	// from agent config, used if the client didn't specify one.
 	ReasoningEffort string
+	// BYOK marks a target whose credential is the CALLER's own (NENYA-195),
+	// not the gateway's shared account key. Such a request must never write
+	// the shared account's rotation or breaker state: the account did not
+	// serve it, so charging it would let a caller's failures cool down (or a
+	// caller's successes close) a circuit that has nothing to do with them.
+	BYOK bool
 }
 
 // LogValue implements slog.LogValuer to redact the Credential field when

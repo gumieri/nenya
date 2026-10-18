@@ -891,6 +891,7 @@ func ResolveProviders(cfg *Config, secrets *SecretsConfig) map[string]*Provider 
 			Billing:                      pc.Billing,
 			AllowedModels:                pc.AllowedModels,
 			CacheAffinity:                pc.CacheAffinity,
+			AllowBYOK:                    pc.AllowBYOK != nil && *pc.AllowBYOK,
 			IdempotencyHeader:            derefString(pc.IdempotencyHeader),
 			allowedRE:                    compiledRE,
 			NonChatModels:                pc.NonChatModels,

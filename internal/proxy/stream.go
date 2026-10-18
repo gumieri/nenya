@@ -441,7 +441,7 @@ func (p *Proxy) streamResponse(opts streamResponseOpts, action upstreamAction) s
 	}
 	w.WriteHeader(action.resp.StatusCode)
 
-	gw.ExtractQuotaFromResponseHeaders(r.Context(), target.Provider, target.AccountName, action.resp.Header)
+	extractQuotaUnlessBYOK(gw, r.Context(), target, action.resp.Header)
 
 	buf := getStreamBuffer()
 	flushWriter, canFlush := newImmediateFlushWriter(w, resolveStreamStallTimeout(gw))
@@ -1090,7 +1090,9 @@ func recordStreamResult(gw *gateway.NenyaGateway, o streamOutcome) {
 			recordSlowCallAt(gw, o.target, o.agentName, o.slowCall.threshold, o.slowCall.elapsed, o.cooldownDuration)
 			return
 		}
-		gw.AgentState.RecordSuccess(o.target.CoolKey)
+		if !o.target.BYOK {
+			gw.AgentState.RecordSuccess(o.target.CoolKey)
+		}
 		return
 	}
 	// A client-side cancel or a request deadline is connection-scoped

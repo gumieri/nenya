@@ -129,6 +129,10 @@ type Metrics struct {
 	// (nenya_auto_cache_breakpoints_total).
 	autoCacheBreakpoints sync.Map
 
+	// byokRequests counts requests served with a caller-supplied upstream
+	// credential, by provider (nenya_byok_requests_total, NENYA-195).
+	byokRequests sync.Map
+
 	// paramCoercions counts parameters rewritten to the target's declared
 	// integer type, by parameter and client format
 	// (nenya_param_coercions_total).
@@ -678,6 +682,17 @@ func (m *Metrics) RecordAutoCacheBreakpoint(outcome string) {
 		outcome = "other"
 	}
 	e := getOrCreateEntry(&m.autoCacheBreakpoints, map[string]string{"outcome": outcome})
+	e.value.Add(1)
+}
+
+// RecordBYOK records that a request was served with a caller-supplied
+// upstream credential for the named provider (NENYA-195). The credential
+// value is never recorded — only that one was used. Nil-safe.
+func (m *Metrics) RecordBYOK(provider string) {
+	if m == nil || provider == "" {
+		return
+	}
+	e := getOrCreateEntry(&m.byokRequests, map[string]string{"provider": provider})
 	e.value.Add(1)
 }
 
@@ -1805,6 +1820,8 @@ func (m *Metrics) writePipelineMetrics(w io.Writer) {
 		"Conflicting duplicate parameters resolved by the request normalizer, by logical parameter (NENYA-186).", &m.duplicateParams)
 	m.writeCounterMap(w, "nenya_unknown_request_fields_total",
 		"Request fields no format path consumes, by resolved format (NENYA-186).", &m.unknownRequestFields)
+	m.writeCounterMap(w, "nenya_byok_requests_total",
+		"Requests served with a caller-supplied upstream credential, by provider (NENYA-195).", &m.byokRequests)
 	m.writeCounterMap(w, "nenya_auto_cache_breakpoints_total",
 		"Opt-in automatic prompt-cache anchoring outcomes, including stand-downs (NENYA-185).", &m.autoCacheBreakpoints)
 	m.writeCounterMap(w, "nenya_param_coercions_total",

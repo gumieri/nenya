@@ -1365,6 +1365,19 @@ func (p *Proxy) recordNetworkError(ctxLogger *slog.Logger, gw *gateway.NenyaGate
 	gw.AgentState.RecordFailure(target, cooldownDuration)
 }
 
+// breakerGate applies the shared circuit-breaker gate to a target, returning
+// the skip action when the breaker is open. A caller-funded target consults no
+// shared breaker: the shared account's health is not evidence about the
+// caller's credential, and calling Allow would consume a half-open probe slot
+// the BYOK path never releases (NENYA-195).
+func breakerGate(gw *gateway.NenyaGateway, ctxLogger *slog.Logger, target routing.UpstreamTarget) *upstreamAction {
+	if target.CoolKey == "" || target.BYOK || gw.AgentState.CB.Allow(target.CoolKey) {
+		return nil
+	}
+	ctxLogger.Warn("target skipped: circuit breaker open")
+	return ptrAction(upstreamAction{kind: actionContinue})
+}
+
 // checkProviderBudget skips a target whose provider daily token budget is
 // exhausted for the caller's priority tier (NENYA-188): the sweep then reaches a
 // later target with headroom, and the request only fails when no target is left.
@@ -1424,24 +1437,32 @@ func (p *Proxy) checkPreDispatchGuards(gw *gateway.NenyaGateway, ctxLogger *slog
 		}
 	}
 
-	if target.CoolKey != "" && !gw.AgentState.CB.Allow(target.CoolKey) {
-		ctxLogger.Warn("target skipped: circuit breaker open")
-		return ptrAction(upstreamAction{kind: actionContinue})
+	if skip := breakerGate(gw, ctxLogger, target); skip != nil {
+		return skip
 	}
 
 	// Provider daily budget with the caller's priority tier (NENYA-188), last so
 	// that a target skipped for any other reason never consumes provider budget.
-	if action := checkProviderBudget(gw, ctxLogger, target, tokenCount, apiKey); action != nil {
-		// The circuit-breaker guard above may have consumed a half-open probe
-		// (CB.Allow increments the inflight count); this skip will not dispatch,
-		// so return the probe rather than wedging the circuit (ReleaseHalfOpen
-		// is a no-op outside HalfOpen).
-		if target.CoolKey != "" {
-			gw.AgentState.CB.ReleaseHalfOpen(target.CoolKey)
-		}
-		return action
+	return providerBudgetGate(gw, ctxLogger, target, tokenCount, apiKey)
+}
+
+// providerBudgetGate applies the provider daily-budget gate, returning the skip
+// action when it denies the dispatch. A caller-funded dispatch does not draw on
+// the gateway's provider budget (NENYA-195), so the gate is skipped entirely.
+// When it does deny, any half-open probe the breaker gate above consumed is
+// returned rather than wedged (ReleaseHalfOpen is a no-op outside HalfOpen).
+func providerBudgetGate(gw *gateway.NenyaGateway, ctxLogger *slog.Logger, target routing.UpstreamTarget, tokenCount int, apiKey *config.ApiKey) *upstreamAction {
+	if target.BYOK {
+		return nil
 	}
-	return nil
+	action := checkProviderBudget(gw, ctxLogger, target, tokenCount, apiKey)
+	if action == nil {
+		return nil
+	}
+	if target.CoolKey != "" {
+		gw.AgentState.CB.ReleaseHalfOpen(target.CoolKey)
+	}
+	return action
 }
 
 func ptrAction(a upstreamAction) *upstreamAction {

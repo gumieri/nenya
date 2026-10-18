@@ -514,3 +514,40 @@ func TestMCPGrantTouchesServer(t *testing.T) {
 		})
 	}
 }
+
+// NENYA-195: bring-your-own-key permission. Admin keys hold it implicitly;
+// every other key must opt in explicitly, and a nil key never may.
+func TestKeyMayBYOK(t *testing.T) {
+	cases := []struct {
+		name string
+		key  *config.ApiKey
+		want bool
+	}{
+		{"nil key", nil, false},
+		{"admin", &config.ApiKey{Roles: []string{"admin"}}, true},
+		{"user without the permission", &config.ApiKey{Roles: []string{"user"}}, false},
+		{"read-only", &config.ApiKey{Roles: []string{"read-only"}}, false},
+		{"user opted in", &config.ApiKey{Roles: []string{"user"}, Permissions: map[string]any{"byok": true}}, true},
+		{"user opted out explicitly", &config.ApiKey{Roles: []string{"user"}, Permissions: map[string]any{"byok": false}}, false},
+		{"non-boolean permission fails closed", &config.ApiKey{Roles: []string{"user"}, Permissions: map[string]any{"byok": "yes"}}, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := KeyMayBYOK(tc.key); got != tc.want {
+				t.Fatalf("KeyMayBYOK = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+// The permission is not granted by any non-admin role by default.
+func TestPermissionBYOKNotGrantedByDefaultRoles(t *testing.T) {
+	for _, role := range []Role{RoleUser, RoleReadOnly} {
+		if HasPermission(role, PermissionBYOK) {
+			t.Fatalf("role %s must not hold PermissionBYOK by default", role)
+		}
+	}
+	if !HasPermission(RoleAdmin, PermissionBYOK) {
+		t.Fatal("admin must hold PermissionBYOK")
+	}
+}

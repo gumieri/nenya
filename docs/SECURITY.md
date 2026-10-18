@@ -173,6 +173,52 @@ Nenya enforces per-API key access controls via RBAC. API keys defined in `secret
 
 See [`SECRETS_FORMAT.md`](SECRETS_FORMAT.md#api-keys-for-client-rbac) for full API key configuration details.
 
+### Bring-Your-Own-Key (BYOK, NENYA-195)
+
+Nenya can serve a request with the **caller's own upstream credential** instead of a shared
+provider key. The feature is off by default and gated at four independent points — every one of
+them must be satisfied, and any failure is closed, never a silent fallback to the shared key:
+
+1. **Global switch** — `governance.byok.enabled` (default `false`).
+2. **Key permission** — the presented API key must hold the `byok` permission: admin keys hold it
+   implicitly; a `user`/`read-only` key must opt in with `permissions.byok: true`. A key without it
+   gets `403` (`error_kind=auth_failed`) and the request is not dispatched.
+3. **Provider opt-in** — only providers declaring `providers.<name>.allow_byok: true` accept a
+   caller-supplied credential. A BYOK request is narrowed to those targets; if none remains the
+   request fails `422` (`error_kind=unsupported_combination`).
+4. **Header-only delivery** — the credential rides in `governance.byok.header` (default
+   `X-Nenya-Upstream-Key`, validated at load as a canonical HTTP header name and rejected if it is
+   `Authorization`). Query parameters are never read: they leak into access logs, proxies, and
+   referrers. A malformed value (control characters, non-ASCII, over 4 KiB) is rejected `400` — it
+   is never replaced by the shared key.
+
+**Precedence:** caller-supplied wins over the shared key, for the eligible targets only.
+
+**Isolation guarantees** — a BYOK request is treated as not having used a shared account at all:
+
+- **Never cached** — the response cache is bypassed (no lookup, no store): a caller-funded response
+  must not be replayed to another caller or charged to the gateway.
+- **Never charged to shared state** — the shared account's breaker/cooldown writes
+  (`AgentState.ActivateCooldown`/`RecordFailure`/`RecordFailureWithStatus`), its success records, its
+  session pin, its billing/spend entries (`recordCostAndBilling`, `recordStreamSpend`), its
+  quota-exhaustion marks (`ExtractQuotaFromResponseHeaders`), its provider daily budget
+  (`checkProviderBudget`), and its circuit-breaker gate (`CB.Allow`, so no half-open probe slot is
+  consumed) all stand down for a BYOK target. A caller's failures cannot cool down a shared account,
+  its successes cannot close its circuit, its spend cannot exhaust the account's budget or surface
+  as its usage, and its quota headers cannot take the gateway's own traffic down. A BYOK request
+  also takes no part in session affinity: the pin is neither read nor written.
+- **Documented exceptions** — the target build still runs the shared account selector for routing
+  order (its bookkeeping is not charged to any spend/breaker state), and the session-identity
+  affinity store is updated as for any request (conversation-shape state, not credential or account
+  state). Both are recorded here rather than claimed away.
+- **Never logged by value** — the credential value appears in no log line and no metric label. The
+  audit surface is the `nenya_byok_requests_total{provider}` counter plus one Info log line naming
+  the provider and the API key name (the caller identity), which answers "whose credential served
+  this request" without recording the credential itself.
+
+Scope: the chat routes (`/v1/chat/completions`, `/v1/messages`) and their dispatch paths. Passthrough
+endpoints do not read the BYOK header.
+
 ### Deployment Requirements
 
 For secure memory to work properly, the process needs:

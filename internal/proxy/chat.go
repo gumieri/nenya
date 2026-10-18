@@ -48,6 +48,19 @@ type chatRequest struct {
 	Messages     []any
 	KeyRef       string
 	SourceFormat string // "openai" or "anthropic" - indicates the original client request format
+	// BYOK reports that this request is served with a caller-supplied
+	// credential (NENYA-195): the response cache is bypassed and shared
+	// account rotation/breaker state is never written.
+	BYOK bool
+
+	// BYOKRequested reports that the request PRESENTED a BYOK credential
+	// (the global switch is on and the header is non-empty). It is resolved
+	// before routing so session affinity stands down for a caller-funded
+	// request, whose target list is narrowed to opt-in providers afterwards
+	// (NENYA-195). BYOK is set only once a credential was actually applied.
+	BYOKRequested bool
+	// byokCredential is the trimmed header value, read once.
+	byokCredential string
 	// Agent is the resolved agent config when ModelName names an agent
 	// (zero value for direct model routes). Set once in resolveRouting;
 	// all downstream consumers (sticky routing, MCP flow, session header
@@ -311,6 +324,11 @@ func (p *Proxy) validateChatRequest(w http.ResponseWriter, r *http.Request, gw *
 		}
 	}
 
+	// NENYA-195: resolve BYOK intent before routing. A caller-funded request
+	// must not write session affinity state (the pin records which SHARED
+	// account served a session, and a BYOK request uses none).
+	p.resolveBYOKIntent(gw, r, req)
+
 	req.Targets, req.AgentName, req.Cooldown, req.MaxRetries, herr = p.resolveRouting(r.Context(), req, gw)
 	if herr != nil {
 		return nil, herr
@@ -320,6 +338,10 @@ func (p *Proxy) validateChatRequest(w http.ResponseWriter, r *http.Request, gw *
 	// reason fails the request closed — before the cache lookup, so the same
 	// request cannot be 503 on a miss and 200 on a cached hit.
 	if herr = p.checkMCPAvailability(gw, req); herr != nil {
+		return nil, herr
+	}
+
+	if herr = p.applyBYOKCredential(gw, r, req); herr != nil {
 		return nil, herr
 	}
 
@@ -382,7 +404,7 @@ func (p *Proxy) resolveAgentRouting(ctx context.Context, req *chatRequest, gw *g
 		AccountSelector: gw,
 		Preferred:       sticky.preference(),
 	})
-	targets := filterExhaustedTargets(built, gw.BillingTracker, gw.Providers, gw.Logger)
+	targets := filterExhaustedTargets(built, gw.BillingTracker, gw.Providers, gw.Logger, req.BYOKRequested)
 	if len(targets) == 0 {
 		if len(built) > 0 {
 			// Every built target was dropped (billing exhaustion or missing
@@ -506,6 +528,12 @@ func sessionStickyKeysEnabled(gw *gateway.NenyaGateway, providerName string) boo
 // untouched: no re-pin, no failover metric, no Since reset. Providers that
 // opted out via session_sticky_keys=false never pin or promote.
 func applyStickyRouting(req *chatRequest, gw *gateway.NenyaGateway, agent config.AgentConfig, targets []routing.UpstreamTarget, sticky *stickyPin, reorder bool) []routing.UpstreamTarget {
+	if req.BYOKRequested {
+		// Session affinity records which SHARED account served a session;
+		// a caller-funded request neither reads nor writes that state
+		// (NENYA-195). The built order is used as-is.
+		return targets
+	}
 	if sticky == nil || gw.AgentState == nil || gw.AgentState.SessionRouter == nil {
 		return targets
 	}
@@ -537,6 +565,12 @@ func applyStickyRouting(req *chatRequest, gw *gateway.NenyaGateway, agent config
 func pinSessionTarget(gw *gateway.NenyaGateway, key string, targets []routing.UpstreamTarget, ttl time.Duration) {
 	pinTarget, ok := firstActiveTarget(targets)
 	if !ok || !sessionStickyKeysEnabled(gw, pinTarget.Provider) {
+		return
+	}
+	if pinTarget.BYOK {
+		// Defense in depth: applyStickyRouting already returns before pinning
+		// for a BYOK request (NENYA-195); a caller-funded request never
+		// records a shared account as the session's serving credential.
 		return
 	}
 	gw.AgentState.SessionRouter.Pin(key, pinTarget.Provider, pinTarget.Model, pinTarget.AccountName, ttl)
@@ -980,12 +1014,21 @@ func collectProviderFreeModels(providers map[string]*config.Provider) map[string
 // Forwarding either case would produce a guaranteed upstream 401 instead of
 // failing over to the next target.
 // tracker may be nil (skips exhaustion checks); logger must be non-nil.
-func filterExhaustedTargets(targets []routing.UpstreamTarget, tracker *billing.BillingTracker, providers map[string]*config.Provider, logger *slog.Logger) []routing.UpstreamTarget {
+func filterExhaustedTargets(targets []routing.UpstreamTarget, tracker *billing.BillingTracker, providers map[string]*config.Provider, logger *slog.Logger, byokRequested bool) []routing.UpstreamTarget {
 	if len(targets) == 0 {
 		return targets
 	}
 	filtered := make([]routing.UpstreamTarget, 0, len(targets))
 	for _, t := range targets {
+		if byokRequested && providerAllowsBYOK(providers, t.Provider) {
+			// A caller-funded request is served with the caller's credential:
+			// the shared account's exhaustion and the shared key's absence are
+			// not evidence about it (NENYA-195). Keep the target for the BYOK
+			// override to claim; a provider that did not opt in is still
+			// filtered normally.
+			filtered = append(filtered, t)
+			continue
+		}
 		if tracker != nil && tracker.IsExhausted(t.Provider, t.AccountName) {
 			logger.Debug("skipping exhausted billing account",
 				"provider", t.Provider, "account", t.AccountName, "model", t.Model)
@@ -999,6 +1042,13 @@ func filterExhaustedTargets(targets []routing.UpstreamTarget, tracker *billing.B
 		filtered = append(filtered, t)
 	}
 	return filtered
+}
+
+// providerAllowsBYOK reports whether a provider declared allow_byok, i.e.
+// accepts a caller-supplied credential (NENYA-195).
+func providerAllowsBYOK(providers map[string]*config.Provider, name string) bool {
+	p, ok := providers[name]
+	return ok && p.AllowBYOK
 }
 
 // requiresCredentials reports whether the named provider needs an explicit
@@ -1033,7 +1083,7 @@ func (p *Proxy) resolveModelRouting(ctx context.Context, req *chatRequest, gw *g
 	}
 
 	targets := buildProviderTargets(ctx, matches, gw, gw)
-	targets = filterExhaustedTargets(targets, gw.BillingTracker, gw.Providers, gw.Logger)
+	targets = filterExhaustedTargets(targets, gw.BillingTracker, gw.Providers, gw.Logger, req.BYOKRequested)
 	if len(targets) == 0 {
 		gw.Logger.Error("no valid providers after filtering", "model", req.ModelName)
 		return nil, "", 0, 0, &httpError{
@@ -1081,6 +1131,12 @@ func buildProviderTargets(ctx context.Context, matches []routing.ProviderMatch, 
 // resolveCache checks the response cache and returns a cache key. If a cached
 // response is found and served, it returns ("", httpError) to signal early return.
 func (p *Proxy) resolveCache(w http.ResponseWriter, r *http.Request, gw *gateway.NenyaGateway, req *chatRequest) (string, *httpError) {
+	if req.BYOK {
+		// A caller-funded request is never stored or replayed from the shared
+		// response cache (NENYA-195): the cache would serve it to (or charge
+		// it against) the wrong party.
+		return "", nil
+	}
 	if gw.ResponseCache == nil {
 		return "", nil
 	}
@@ -1857,7 +1913,7 @@ func (p *Proxy) handleNonStreamingResponse(gw *gateway.NenyaGateway, w http.Resp
 		return streamResult{terminal: true}
 	}
 
-	gw.ExtractQuotaFromResponseHeaders(r.Context(), target.Provider, target.AccountName, action.resp.Header)
+	extractQuotaUnlessBYOK(gw, r.Context(), target, action.resp.Header)
 
 	routing.CopyHeaders(action.resp.Header, w.Header())
 	w.WriteHeader(action.resp.StatusCode)

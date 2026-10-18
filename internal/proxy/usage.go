@@ -230,7 +230,10 @@ func recordCostAndBilling(ctx context.Context, gw *gateway.NenyaGateway, target 
 		}
 		gw.CostTracker.RecordUsage(costModel, cost)
 	}
-	if gw.BillingTracker != nil {
+	if gw.BillingTracker != nil && !target.BYOK {
+		// A caller-funded dispatch is not the gateway's spend (NENYA-195):
+		// charging it to the shared account would poison that account's
+		// exhaustion/quota state and surface caller traffic as its usage.
 		gw.BillingTracker.RecordSpend(ctx, billing.SpendEntry{
 			ProviderName: target.Provider,
 			AccountName:  target.AccountName,

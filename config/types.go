@@ -554,6 +554,14 @@ type ProviderConfig struct {
 	// the provider supports none (the header is then never forwarded), and
 	// any other value is the header name to set. See docs/CONFIGURATION.md.
 	IdempotencyHeader *string `json:"idempotency_header,omitempty"`
+	// AllowBYOK opts this provider into per-request bring-your-own-key
+	// credential overrides (NENYA-195): when governance.byok is enabled and
+	// the caller presents the BYOK header, the caller's credential replaces
+	// the gateway's shared key for this provider's dispatches, the request is
+	// excluded from the response cache, and the shared account's rotation and
+	// breaker state is not written. Default false: a provider never accepts a
+	// caller-supplied credential unless it says so. See docs/SECURITY.md.
+	AllowBYOK *bool `json:"allow_byok,omitempty"`
 	// CacheAffinity selects where this provider's prompt-cache affinity key
 	// rides (NENYA-158): "body" (default for xai/openai) injects the
 	// `prompt_cache_key` body field; "header" maps the per-conversation
@@ -715,6 +723,9 @@ type Provider struct {
 	// CacheAffinity is the resolved affinity convention ("body" | "header",
 	// NENYA-158). See ProviderConfig.CacheAffinity.
 	CacheAffinity string
+	// AllowBYOK is the resolved per-request bring-your-own-key opt-in
+	// (NENYA-195). See ProviderConfig.AllowBYOK.
+	AllowBYOK bool
 	// IdempotencyHeader is the resolved idempotency header name ("" = the
 	// provider accepts none, NENYA-165). See
 	// ProviderConfig.IdempotencyHeader.
@@ -1085,11 +1096,45 @@ type ContextConfig struct {
 	SoftLimitTokens        int     `json:"soft_limit_tokens,omitempty"`
 }
 
+// BYOKConfig configures per-request bring-your-own-key credential overrides
+// (NENYA-195). A caller presents its own upstream credential in a dedicated
+// header; the gateway uses it only for that request, only for providers that
+// opted in (providers.<name>.allow_byok), and only for API keys holding the
+// "byok" permission. The credential is never logged, never cached, and never
+// written into shared account rotation or breaker state.
+type BYOKConfig struct {
+	// Enabled turns the feature on globally. Default false.
+	Enabled bool `json:"enabled"`
+	// Header names the request header carrying the caller's upstream
+	// credential. Default "X-Nenya-Upstream-Key". Header-only by design: a
+	// query parameter would leak the credential into logs, proxies, and
+	// referrers, so none is accepted.
+	Header string `json:"header,omitempty"`
+}
+
+// BYOKHeader returns the configured header name, defaulting to
+// X-Nenya-Upstream-Key. Nil-safe.
+func (c *BYOKConfig) BYOKHeader() string {
+	if c == nil || c.Header == "" {
+		return DefaultBYOKHeader
+	}
+	return c.Header
+}
+
+// DefaultBYOKHeader is the default header carrying a caller-supplied upstream
+// credential (NENYA-195).
+const DefaultBYOKHeader = "X-Nenya-Upstream-Key"
+
 // GovernanceConfig defines security, rate-limiting, and routing policies
 // for the gateway: blocked execution patterns, retry behavior, circuit
 // breaker thresholds, latency- and cost-weighted routing, and auto-tuning flags.
 type GovernanceConfig struct {
 	BlockedExecutionPatterns []string `json:"blocked_execution_patterns"`
+	// BYOK configures per-request bring-your-own-key credential overrides
+	// (NENYA-195). Disabled by default; both this switch and the target
+	// provider's allow_byok must be on before a caller-supplied credential is
+	// ever used.
+	BYOK *BYOKConfig `json:"byok,omitempty"`
 	// Injection configures the deterministic prompt-injection detector
 	// (default disabled). Per-agent overrides live on agents.<name>.injection.
 	Injection *InjectionConfig `json:"injection,omitempty"`

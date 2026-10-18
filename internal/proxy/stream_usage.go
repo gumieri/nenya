@@ -222,7 +222,9 @@ func recordStreamCost(gw *gateway.NenyaGateway, target routing.UpstreamTarget, c
 // zero, so the billing total can only round up, never down.
 func recordStreamSpend(ctx context.Context, gw *gateway.NenyaGateway, target routing.UpstreamTarget,
 	cost float64, accInput, accCompletion int64, claimed *bool, usageSeen bool) {
-	if gw.BillingTracker == nil {
+	if gw.BillingTracker == nil || target.BYOK {
+		// A caller-funded dispatch is not the gateway's spend (NENYA-195):
+		// no request claim, no spend entry against the shared account.
 		return
 	}
 	if *claimed {
