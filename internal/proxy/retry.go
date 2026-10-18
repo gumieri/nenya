@@ -180,6 +180,10 @@ type forwardOptions struct {
 	// the judgment site is disabled); its budget is shared across all
 	// checkpoints of the request.
 	Screen *egressScreenRuntime
+	// WindowCompacted reports that the content pipeline rewrote the history
+	// (window compaction): auto cache-breakpoint anchoring stands down
+	// (NENYA-185).
+	WindowCompacted bool
 	// EntropyRedacted reports whether the entropy interceptor redacted
 	// high-entropy spans from this request. Consumed only by the
 	// buffered-response checkpoint (the tool-args checkpoint triggers
@@ -373,21 +377,22 @@ func (rl *retryLoop) handleResumeAction(action upstreamAction) actionOutcome {
 // handleStreamAction maps a streaming attempt result to a loop outcome.
 func (rl *retryLoop) handleStreamAction(i int, target routing.UpstreamTarget, action upstreamAction) actionOutcome {
 	result := rl.p.streamResponse(streamResponseOpts{
-		gw:           rl.gw,
-		w:            rl.w,
-		r:            rl.r,
-		target:       target,
-		agentName:    rl.opts.AgentName,
-		sourceFormat: rl.opts.SourceFormat,
-		cacheKey:     rl.opts.CacheKey,
-		cooldown:     rl.opts.Cooldown,
-		payload:      rl.opts.Payload,
-		targets:      rl.opts.Targets,
-		idx:          i,
-		tokenCount:   rl.opts.TokenCount,
-		apiKey:       rl.opts.ApiKey,
-		canary:       rl.opts.Canary,
-		dispatchAt:   action.dispatchAt,
+		gw:              rl.gw,
+		w:               rl.w,
+		r:               rl.r,
+		target:          target,
+		agentName:       rl.opts.AgentName,
+		sourceFormat:    rl.opts.SourceFormat,
+		windowCompacted: rl.opts.WindowCompacted,
+		cacheKey:        rl.opts.CacheKey,
+		cooldown:        rl.opts.Cooldown,
+		payload:         rl.opts.Payload,
+		targets:         rl.opts.Targets,
+		idx:             i,
+		tokenCount:      rl.opts.TokenCount,
+		apiKey:          rl.opts.ApiKey,
+		canary:          rl.opts.Canary,
+		dispatchAt:      action.dispatchAt,
 	}, action)
 	if result.terminal {
 		// Response fully written (content-policy block): stop, never append
@@ -991,7 +996,7 @@ func (rl *retryLoop) maxSameTargetRetries() int {
 
 // prepareAndSend wraps the proxy's prepareAndSend method.
 func (rl *retryLoop) prepareAndSend(idx int, target routing.UpstreamTarget, payload map[string]interface{}) upstreamAction {
-	return rl.p.prepareAndSend(rl.gw, rl.r, idx, rl.opts.Targets, target, payload, rl.opts.Cooldown, rl.opts.TokenCount, rl.opts.AgentName, rl.opts.ApiKey, rl.stream, rl.opts.SourceFormat)
+	return rl.p.prepareAndSend(rl.gw, rl.r, idx, rl.opts.Targets, target, payload, rl.opts.Cooldown, rl.opts.TokenCount, rl.opts.AgentName, rl.opts.ApiKey, rl.stream, rl.opts.SourceFormat, rl.opts.WindowCompacted)
 }
 
 // handleUpstreamError wraps the proxy's handleUpstreamError method.
@@ -1169,6 +1174,7 @@ func (p *Proxy) prepareAndSend(gw *gateway.NenyaGateway,
 	apiKey *config.ApiKey,
 	streaming bool,
 	sourceFormat string,
+	windowCompacted bool,
 ) upstreamAction {
 	ctxLogger := gw.Logger.With(
 		"operation", "upstream",
@@ -1238,7 +1244,10 @@ func (p *Proxy) prepareAndSend(gw *gateway.NenyaGateway,
 		AgentName: agentName,
 		// The client axis of the (client, target) pair (NENYA-179).
 		SourceFormat: sourceFormat,
-		CacheSalt:    resolveCacheSalt(apiKey, agentName, &gw.Config),
+		// Auto cache-breakpoint anchoring stands down on a compacted
+		// history (NENYA-185).
+		WindowCompacted: windowCompacted,
+		CacheSalt:       resolveCacheSalt(apiKey, agentName, &gw.Config),
 		// Per-conversation cache affinity (NENYA-158): the same coherent
 		// session identity the sticky/synthesized-session machinery
 		// produced — ensureOpencodeSessionHeader ran before dispatch.

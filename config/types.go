@@ -127,6 +127,15 @@ type AgentConfig struct {
 	// flag and action for this agent (host list, query cap, and IP
 	// literal policy are global-only).
 	ExfilGuard *ExfilGuardOverrideConfig `json:"exfil_guard,omitempty"`
+	// AutoCacheBreakpoints opts this agent into automatic Anthropic prompt-cache
+	// breakpoint injection (NENYA-185): when the client sent NO cache_control
+	// mark anywhere and the request has prior history, the gateway anchors the
+	// stable prefix — the end of the leading system run and the last stable
+	// history message — so a cooperating client is not required. Default off.
+	// Injection stands down on ANY client mark (including one hidden in
+	// extra_body), on one-shot requests (no stable anchor), and on requests the
+	// pipeline windowed (the frozen head is not ours to anchor).
+	AutoCacheBreakpoints *bool `json:"auto_cache_breakpoints,omitempty"`
 }
 
 // CacheAware modes for AgentConfig.CacheAware.

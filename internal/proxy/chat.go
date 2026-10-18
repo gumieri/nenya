@@ -1304,7 +1304,7 @@ func (p *Proxy) handleChatCompletions(gw *gateway.NenyaGateway, w http.ResponseW
 
 	ensureOpencodeSessionHeader(gw, r, req)
 
-	entropyRedacted, err := p.applyContentPipeline(gw, r.Context(), contentPipelineOpts{
+	pipelineOutcome, err := p.applyContentPipeline(gw, r.Context(), contentPipelineOpts{
 		Payload:        req.Payload,
 		TokenCount:     req.TokenCount,
 		WindowMaxCtx:   req.WindowMaxCtx,
@@ -1360,7 +1360,8 @@ func (p *Proxy) handleChatCompletions(gw *gateway.NenyaGateway, w http.ResponseW
 			ApiKey:          apiKey,
 			Canary:          canaryResult,
 			Screen:          screen,
-			EntropyRedacted: entropyRedacted,
+			EntropyRedacted: pipelineOutcome.EntropyRedacted,
+			WindowCompacted: pipelineOutcome.WindowCompacted,
 		})
 		return
 	}
@@ -1380,7 +1381,8 @@ func (p *Proxy) handleChatCompletions(gw *gateway.NenyaGateway, w http.ResponseW
 		ApiKey:          apiKey,
 		Canary:          canaryResult,
 		Screen:          screen,
-		EntropyRedacted: entropyRedacted,
+		EntropyRedacted: pipelineOutcome.EntropyRedacted,
+		WindowCompacted: pipelineOutcome.WindowCompacted,
 	})
 }
 

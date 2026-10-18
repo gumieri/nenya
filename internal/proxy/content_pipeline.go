@@ -52,20 +52,30 @@ func cacheAwareActive(agent *config.AgentConfig, provider string, tokenCount, ha
 	return true
 }
 
+// contentPipelineOutcome reports the per-request facts the dispatch path needs
+// from the preprocessing stages.
+type contentPipelineOutcome struct {
+	// EntropyRedacted reports that the entropy interceptor redacted
+	// high-entropy spans (an egress-screen trigger).
+	EntropyRedacted bool
+	// WindowCompacted reports that the history was rewritten by window
+	// compaction: auto cache-breakpoint anchoring stands down for such a
+	// request (NENYA-185).
+	WindowCompacted bool
+}
+
 // applyContentPipeline runs the shared preprocessing stages (prefix
 // cache optimization, compaction, windowing, interceptor chain) over the
-// request payload. Mutations are applied in place. The first return
-// reports whether the entropy interceptor redacted high-entropy spans
-// from this request (an egress-screen trigger).
-func (p *Proxy) applyContentPipeline(gw *gateway.NenyaGateway, ctx context.Context, opts contentPipelineOpts) (bool, error) {
+// request payload. Mutations are applied in place.
+func (p *Proxy) applyContentPipeline(gw *gateway.NenyaGateway, ctx context.Context, opts contentPipelineOpts) (contentPipelineOutcome, error) {
 	payload := opts.Payload
 	if gw.InterceptorChain == nil {
-		return false, nil
+		return contentPipelineOutcome{}, nil
 	}
 
 	messages, ok := payload["messages"].([]interface{})
 	if !ok || len(messages) == 0 {
-		return false, nil
+		return contentPipelineOutcome{}, nil
 	}
 
 	pipeline.ApplyPrefixCacheOptimizations(payload, messages, gw.Config.PrefixCache)
@@ -98,17 +108,17 @@ func (p *Proxy) applyContentPipeline(gw *gateway.NenyaGateway, ctx context.Conte
 
 	// cache_aware: the payload fits and the provider caches prefixes, so skip
 	// the history-wide window rewrite and let the provider cache do the work.
-	applyWindowStage(gw, ctx, opts, payload, messages, gateTokens, cacheAware)
+	windowed := applyWindowStage(gw, ctx, opts, payload, messages, gateTokens, cacheAware)
 
 	msgs, ok := payload["messages"].([]interface{})
 	if !ok {
 		// A stage rewrote messages into a non-array shape: treat as empty
 		// rather than panicking (defensive; stages preserve the array).
-		return false, nil
+		return contentPipelineOutcome{WindowCompacted: windowed}, nil
 	}
 	messages = msgs
 	if len(messages) == 0 {
-		return false, nil
+		return contentPipelineOutcome{WindowCompacted: windowed}, nil
 	}
 
 	msgObjs := make([]map[string]any, len(messages))
@@ -131,25 +141,28 @@ func (p *Proxy) applyContentPipeline(gw *gateway.NenyaGateway, ctx context.Conte
 	}
 
 	if _, err := gw.InterceptorChain.Execute(ctx, req); err != nil {
-		return req.EntropyRedacted, err
+		return contentPipelineOutcome{EntropyRedacted: req.EntropyRedacted, WindowCompacted: windowed}, err
 	}
-	return req.EntropyRedacted, nil
+	return contentPipelineOutcome{EntropyRedacted: req.EntropyRedacted, WindowCompacted: windowed}, nil
 }
 
 // applyWindowStage runs window compaction unless the cache_aware policy skipped
 // the history-wide rewrite (and the tail TF-IDF prune) for this request.
 // tokenCount is the current (post-injection) payload size.
-func applyWindowStage(gw *gateway.NenyaGateway, ctx context.Context, opts contentPipelineOpts, payload map[string]any, messages []any, tokenCount int, cacheAware bool) {
+func applyWindowStage(gw *gateway.NenyaGateway, ctx context.Context, opts contentPipelineOpts, payload map[string]any, messages []any, tokenCount int, cacheAware bool) bool {
 	if cacheAware {
-		return
+		return false
 	}
 	deps := buildWindowDeps(gw)
 	if windowed, err := pipeline.ApplyWindowCompaction(ctx, deps, payload, messages, tokenCount, gw.Config.Window, opts.WindowMaxCtx, gw.CountRequestTokens); err != nil {
 		gw.Logger.Warn("window compaction failed, proceeding without it", "err", err)
+		return false
 	} else if windowed {
 		gw.Metrics.RecordWindow(gw.Config.Window.Mode)
 		gw.Metrics.RecordTokensSaved("window", tokenCount-gw.CountRequestTokens(payload))
+		return true
 	}
+	return false
 }
 
 // buildWindowDeps creates a WindowDeps from the gateway state.

@@ -24,9 +24,13 @@ type streamResponseOpts struct {
 	target       routing.UpstreamTarget
 	agentName    string
 	sourceFormat string
-	cacheKey     string
-	cooldown     time.Duration
-	payload      map[string]any
+	// windowCompacted carries the pipeline's history-rewrite signal to a
+	// continuation re-dispatch (NENYA-185): an anchored cache boundary must
+	// never sit on a gateway-produced head.
+	windowCompacted bool
+	cacheKey        string
+	cooldown        time.Duration
+	payload         map[string]any
 
 	// Routing context used to re-dispatch the same target for continuation
 	// attempts.
@@ -250,7 +254,7 @@ func (p *Proxy) tryContinueStream(gw *gateway.NenyaGateway, w http.ResponseWrite
 
 	p.finishStreamAttempt(gw, action, stallR)
 
-	newAction := p.prepareAndSend(gw, r, opts.idx, opts.targets, target, payload, cooldownDuration, opts.tokenCount, opts.agentName, opts.apiKey, true, opts.sourceFormat)
+	newAction := p.prepareAndSend(gw, r, opts.idx, opts.targets, target, payload, cooldownDuration, opts.tokenCount, opts.agentName, opts.apiKey, true, opts.sourceFormat, opts.windowCompacted)
 	if newAction.kind != actionStream {
 		gw.Metrics.RecordStreamContinuation(target.Model, target.Provider, "gave_up_redispatch")
 		resolveRedispatchOutcome(gw, target, cooldownDuration, newAction)

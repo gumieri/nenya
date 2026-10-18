@@ -127,6 +127,7 @@ func collectValidationErrors(ctx context.Context, cfg *Config, providers map[str
 	errors = append(errors, validateTfidfRerankConfig(cfg)...)
 	errors = append(errors, validateSpotlightRiskTiersConfig(cfg)...)
 	errors = append(errors, validateParamCompatConfig(cfg)...)
+	errors = append(errors, validateAutoCacheBreakpointsConfig(cfg, logger)...)
 	errors = append(errors, validateSelfLoopGuard(cfg)...)
 	errors = append(errors, validateTelemetryExposure(cfg, logger)...)
 	errors = append(errors, validateNetworkPolicy(cfg)...)
@@ -576,6 +577,25 @@ func validateInjectionConfig(cfg *Config, logger *slog.Logger) []string {
 	}
 	errs = append(errs, validateInjectionEscalation(cfg)...)
 	return errs
+}
+
+// validateAutoCacheBreakpointsConfig WARNS (never fails the load) when an
+// agent opts into automatic cache-breakpoint anchoring while the prefix cache
+// is disabled: every dispatch would record a skipped_disabled outcome, which is
+// almost certainly a configuration mistake rather than an intent, but it is a
+// legal one (the prefix cache can be enabled later without touching the agent
+// config) — NENYA-185.
+func validateAutoCacheBreakpointsConfig(cfg *Config, logger *slog.Logger) []string {
+	if cfg.PrefixCache.Enabled || logger == nil {
+		return nil
+	}
+	for name, agent := range cfg.Agents {
+		if agent.AutoCacheBreakpoints != nil && *agent.AutoCacheBreakpoints {
+			logger.Warn("auto_cache_breakpoints is enabled while prefix_cache is disabled: anchoring can never happen (every dispatch records skipped_disabled)",
+				"agent", name)
+		}
+	}
+	return nil
 }
 
 // validateParamCompatConfig validates the target axis of the param-compat

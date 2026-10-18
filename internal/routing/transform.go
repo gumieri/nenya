@@ -47,6 +47,12 @@ type TransformDeps struct {
 	// keys on (NENYA-179).
 	SourceFormat string
 
+	// WindowCompacted reports that the content pipeline rewrote the history
+	// (window compaction) for this request. Auto cache-breakpoint injection
+	// stands down when it is set: the compacted head is a gateway-produced
+	// region whose stability across turns is not ours to promise (NENYA-185).
+	WindowCompacted bool
+
 	Metrics *infra.Metrics
 }
 
@@ -554,11 +560,154 @@ func applyParamCompatSanitize(deps TransformDeps, payload map[string]interface{}
 	}
 }
 
+// applyAutoCacheBreakpoints implements the opt-in automatic prompt-cache
+// anchoring (NENYA-185). It only ever ENABLES the gateway's own markers; it
+// never disables or rewrites one the client placed.
+//
+// Policy (all must hold to inject):
+//   - the agent opted in (agents.<name>.auto_cache_breakpoints),
+//   - the prefix cache is enabled and not in automatic mode (automatic mode
+//     emits a single top-level marker and forces block markers off, so
+//     enabling them would be a recorded no-op),
+//   - the client sent NO cache_control mark anywhere in the request (a bounded
+//     deep scan: system blocks, message content blocks, tools, and the
+//     extra_body/extra_content escape hatches),
+//   - the request has prior history (>= 2 messages that are not gateway
+//     trailers: a one-shot turn has no stable boundary, and the gateway's own
+//     canary message must not be mistaken for history),
+//   - the content pipeline did NOT window-compact the history and this
+//     dispatch did NOT trim it: both rewrite the message array, and an
+//     anchored boundary must be a client-stable prefix, not a gateway-produced
+//     head.
+//
+// Every outcome is recorded, including the stand-downs, so an operator can see
+// why anchoring did not happen.
+func applyAutoCacheBreakpoints(deps TransformDeps, payload map[string]interface{}, pc config.PrefixCacheConfig, opts *adapter.CacheOpts, historyTrimmed bool) {
+	enabled := false
+	if agent, ok := deps.Config.Agents[deps.AgentName]; ok && agent.AutoCacheBreakpoints != nil {
+		enabled = *agent.AutoCacheBreakpoints
+	}
+	if !enabled {
+		return // not opted in: no telemetry (the knob is off by default)
+	}
+	if !pc.Enabled {
+		deps.Metrics.RecordAutoCacheBreakpoint("skipped_disabled")
+		return
+	}
+	if pc.CacheMode != nil && *pc.CacheMode == config.CacheModeAutomatic {
+		deps.Metrics.RecordAutoCacheBreakpoint("skipped_automatic_mode")
+		return
+	}
+	if deps.WindowCompacted {
+		deps.Metrics.RecordAutoCacheBreakpoint("skipped_windowed")
+		return
+	}
+	if historyTrimmed {
+		deps.Metrics.RecordAutoCacheBreakpoint("skipped_trimmed")
+		return
+	}
+	if opts.System && opts.Messages {
+		// The explicit prefix-cache defaults already anchor this request; the
+		// knob changed nothing, which the outcome says instead of claiming an
+		// injection.
+		deps.Metrics.RecordAutoCacheBreakpoint("already_anchored")
+		return
+	}
+	if hasClientCacheControl(payload, deps.Logger) {
+		deps.Metrics.RecordAutoCacheBreakpoint("skipped_client_marks")
+		return
+	}
+	stableMessages := countStableHistoryMessages(payload)
+	if stableMessages < 2 {
+		deps.Metrics.RecordAutoCacheBreakpoint("skipped_one_shot")
+		return
+	}
+	// Anchor the stable prefix: the end of the leading system run (the system
+	// block marker) and the last stable history message (the adapter's
+	// message marker lands on the last-but-one message — with two stable
+	// messages that is the first of them, so the system anchor is the one
+	// that always lands).
+	opts.System = true
+	opts.Messages = true
+	deps.Metrics.RecordAutoCacheBreakpoint("injected")
+	if deps.Logger != nil {
+		deps.Logger.Debug("auto cache breakpoints injected",
+			"agent", deps.AgentName, "messages", stableMessages)
+	}
+}
+
+// countStableHistoryMessages counts the request's messages that are real
+// conversation turns: the gateway's own trailing canary marker is not history,
+// so a one-shot request with a canary stays one-shot (NENYA-185 review).
+func countStableHistoryMessages(payload map[string]interface{}) int {
+	msgs, ok := payload["messages"].([]interface{})
+	if !ok {
+		return 0
+	}
+	stable := 0
+	for _, raw := range msgs {
+		msg, ok := raw.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		if content, ok := msg["content"].(string); ok && strings.Contains(content, pipeline.CanaryPrefix) {
+			continue
+		}
+		stable++
+	}
+	return stable
+}
+
+// hasClientCacheControl reports whether the request carries a cache_control
+// mark anywhere a client could have placed one — including the extra_body /
+// extra_content escape hatches, where a harness can hide a breakpoint the
+// top-level scan would miss. The walk is bounded by depth and node count so a
+// hostile body cannot turn the check into a denial of service.
+func hasClientCacheControl(payload map[string]interface{}, depsLogger *slog.Logger) bool {
+	const maxDepth = 12
+	const maxNodes = 20000
+	nodes := 0
+	truncated := false
+	var walk func(v interface{}, depth int) bool
+	walk = func(v interface{}, depth int) bool {
+		if depth > maxDepth || nodes > maxNodes {
+			// Fail open (anchor anyway) but never invisibly: the scan was
+			// truncated, so "no client mark" is not a proven statement.
+			truncated = true
+			return false
+		}
+		nodes++
+		switch t := v.(type) {
+		case map[string]interface{}:
+			if _, marked := t["cache_control"]; marked {
+				return true
+			}
+			for _, child := range t {
+				if walk(child, depth+1) {
+					return true
+				}
+			}
+		case []interface{}:
+			for _, child := range t {
+				if walk(child, depth+1) {
+					return true
+				}
+			}
+		}
+		return false
+	}
+	found := walk(payload, 0)
+	if truncated && depsLogger != nil {
+		depsLogger.Debug("client cache_control scan truncated; treating the request as unmarked")
+	}
+	return found
+}
+
 // convertToAnthropicFormat converts an OpenAI-format payload to Anthropic format,
 // applying prefix cache configuration from agent config.
 // Returns the converted payload; the caller must use the return value as the
 // replacement for the input payload.
-func convertToAnthropicFormat(deps TransformDeps, payload map[string]interface{}, modelName string) map[string]interface{} {
+func convertToAnthropicFormat(deps TransformDeps, payload map[string]interface{}, modelName string, historyTrimmed bool) map[string]interface{} {
 	stream := false
 	if s, ok := payload["stream"].(bool); ok {
 		stream = s
@@ -593,6 +742,7 @@ func convertToAnthropicFormat(deps TransformDeps, payload map[string]interface{}
 		opts.MessagesTTL = *pc.CacheMessagesTTL
 	}
 	applyMidConversationVerdict(deps, modelName, &opts)
+	applyAutoCacheBreakpoints(deps, payload, pc, &opts, historyTrimmed)
 	return anthropicAdapter.ConvertOpenAIToAnthropicBody(payload, modelName, stream, opts)
 }
 
@@ -645,8 +795,10 @@ func TransformRequestForUpstream(deps TransformDeps, providerName, upstreamURL s
 	normalizeTargetParams(deps, payload, resolveParamCompatRules(&deps.Config.Governance), modelName, deps.SourceFormat)
 
 	inputBudget := resolveTransformInputBudget(deps, finalModel, maxContext, util.EffectiveOutputTokens(payload, effectiveMaxOutput))
+	historyTrimmed := false
 	if deps.CountTokens != nil && inputBudget > 0 {
 		modified, saved := pipeline.TrimPayload(deps.Logger, payload, inputBudget, deps.CountTokens, deps.Config.Context)
+		historyTrimmed = modified
 		if modified {
 			deps.Metrics.RecordTokensSaved("trim", saved)
 			deps.Logger.Info("payload trimmed to fit token budget",
@@ -665,7 +817,7 @@ func TransformRequestForUpstream(deps TransformDeps, providerName, upstreamURL s
 	if format == "anthropic" {
 		// Convert with the POST-mapping model: the upstream must receive
 		// the aliased ID, not the canonical one the client sent (NENYA-22).
-		payload = convertToAnthropicFormat(deps, payload, finalModel)
+		payload = convertToAnthropicFormat(deps, payload, finalModel, historyTrimmed)
 	}
 
 	newBody, err := json.Marshal(payload)

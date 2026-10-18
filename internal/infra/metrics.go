@@ -124,6 +124,11 @@ type Metrics struct {
 	// resolved format (nenya_unknown_request_fields_total).
 	unknownRequestFields sync.Map
 
+	// autoCacheBreakpoints counts opt-in automatic cache-anchoring outcomes,
+	// including the stand-downs, by outcome
+	// (nenya_auto_cache_breakpoints_total).
+	autoCacheBreakpoints sync.Map
+
 	// paramCoercions counts parameters rewritten to the target's declared
 	// integer type, by parameter and client format
 	// (nenya_param_coercions_total).
@@ -651,6 +656,28 @@ func (m *Metrics) RecordUnknownRequestField(format string) {
 		format = "other"
 	}
 	e := getOrCreateEntry(&m.unknownRequestFields, map[string]string{"format": format})
+	e.value.Add(1)
+}
+
+// RecordAutoCacheBreakpoint records one opt-in automatic cache-anchoring
+// outcome (NENYA-185): "injected" or one of the stand-down reasons
+// (skipped_client_marks, skipped_one_shot, skipped_windowed, skipped_trimmed,
+// skipped_disabled, skipped_automatic_mode) or "already_anchored" when the
+// explicit prefix-cache defaults had already anchored the request. Counted per
+// dispatch, like the other transform-stage counters. Closed label set;
+// anything else collapses to "other".
+// Nil-safe.
+func (m *Metrics) RecordAutoCacheBreakpoint(outcome string) {
+	if m == nil || outcome == "" {
+		return
+	}
+	switch outcome {
+	case "injected", "already_anchored", "skipped_client_marks", "skipped_one_shot",
+		"skipped_windowed", "skipped_trimmed", "skipped_disabled", "skipped_automatic_mode":
+	default:
+		outcome = "other"
+	}
+	e := getOrCreateEntry(&m.autoCacheBreakpoints, map[string]string{"outcome": outcome})
 	e.value.Add(1)
 }
 
@@ -1778,6 +1805,8 @@ func (m *Metrics) writePipelineMetrics(w io.Writer) {
 		"Conflicting duplicate parameters resolved by the request normalizer, by logical parameter (NENYA-186).", &m.duplicateParams)
 	m.writeCounterMap(w, "nenya_unknown_request_fields_total",
 		"Request fields no format path consumes, by resolved format (NENYA-186).", &m.unknownRequestFields)
+	m.writeCounterMap(w, "nenya_auto_cache_breakpoints_total",
+		"Opt-in automatic prompt-cache anchoring outcomes, including stand-downs (NENYA-185).", &m.autoCacheBreakpoints)
 	m.writeCounterMap(w, "nenya_param_coercions_total",
 		"Parameters rewritten to the target's declared integer type, by parameter and client format (NENYA-179).", &m.paramCoercions)
 	m.writeCounterMap(w, "nenya_pipeline_tokens_saved_total",

@@ -346,3 +346,22 @@ If cache evicts too frequently:
 1. Increase `response_cache.max_entries`
 2. Increase `response_cache.ttl_seconds`
 3. Monitor metrics to identify the right cache size for your workload
+
+### Automatic breakpoint anchoring (opt-in, NENYA-185)
+
+A client that sends no `cache_control` marks gets no Anthropic prefix cache unless the gateway
+anchors one. `agents.<name>.auto_cache_breakpoints: true` (default off) does exactly that, reusing
+the explicit-mode breakpoint machinery (including the four-marker cap and the canary exclusion):
+the gateway marks the end of the leading system run and the last stable history message. It stands
+down — with telemetry, never silently — whenever the client expressed its own placement (a bounded
+deep scan of system blocks, message content blocks, tool schemas, and the `extra_body`/
+`extra_content` escape hatches), when the request is one-shot (the gateway's own canary trailer is
+not history), when the prefix cache is disabled or in `automatic` mode (which emits a single
+top-level marker and forces block markers off), and when the history was rewritten by window
+compaction or by the per-dispatch input trim (an anchored boundary must be a client-stable prefix,
+never a gateway-produced head). Outcomes are counted in
+`nenya_auto_cache_breakpoints_total{outcome}` (`injected`, `already_anchored`,
+`skipped_client_marks`, `skipped_one_shot`, `skipped_windowed`, `skipped_trimmed`,
+`skipped_disabled`, `skipped_automatic_mode`). Outcomes are counted per DISPATCH (one
+per target per attempt, and once per MCP loop iteration), not per client request, so a failover can
+record several outcomes for one request.

@@ -195,6 +195,9 @@ func (rl *retryLoop) handleContextLimitError(i int, target routing.UpstreamTarge
 			rl.r.Context(), rl.ctxLogger, rl.gw, rl.originalPayload, action.body, rl.opts.AgentName, target.Provider, target.Model, rl.opts.Canary)
 		if sumErr == nil && summarizedPayload != nil {
 			rl.summarized = true
+			// The history is now engine-produced: auto cache anchoring must
+			// stand down (NENYA-185 review).
+			rl.opts.WindowCompacted = true
 			rl.summarizedPayload = summarizedPayload
 			rl.gw.Metrics.RecordSummarizationRetry(rl.opts.AgentName, target.Provider, target.Model)
 			rl.ctxLogger.Info("context limit summarization succeeded, retrying with summarized payload")
