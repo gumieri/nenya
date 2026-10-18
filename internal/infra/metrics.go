@@ -110,6 +110,20 @@ type Metrics struct {
 	// (nenya_unsendable_content_total).
 	unsendableContent sync.Map
 
+	// harnessEnvelopes counts client-harness scaffolding surfaces excluded
+	// from the injection action/escalation, by kind
+	// (nenya_harness_envelopes_total).
+	harnessEnvelopes sync.Map
+
+	// duplicateParams counts conflicting duplicate parameters resolved by the
+	// request normalizer, by logical parameter
+	// (nenya_duplicate_params_total).
+	duplicateParams sync.Map
+
+	// unknownRequestFields counts request fields no format path consumes, by
+	// resolved format (nenya_unknown_request_fields_total).
+	unknownRequestFields sync.Map
+
 	upstreamLatency sync.Map
 	ttft            sync.Map
 	slowCalls       sync.Map
@@ -423,8 +437,11 @@ func (m *Metrics) RecordHTTPRequest(method, path string, status int, duration ti
 }
 
 // RecordInjectionDetection records n deterministic prompt-injection
-// detections for the given action (sanitize|reject) and pattern category.
-// Nil-safe; non-positive n is ignored.
+// detections for the given action (sanitize|reject) and pattern category. Two
+// pseudo-categories carry verdicts that are not a tier-1 action: "escalated"
+// (a tier-2 full-benign clear) and "harness" (a client-harness scaffolding
+// surface excluded from the action, NENYA-186); both pair with action
+// "cleared". Nil-safe; non-positive n is ignored.
 func (m *Metrics) RecordInjectionDetection(action, category string, n int) {
 	if m == nil || n <= 0 {
 		return
@@ -443,7 +460,7 @@ func (m *Metrics) writeHandlerPanics(w io.Writer) {
 // escalation families.
 func (m *Metrics) writeInjectionMetrics(w io.Writer) {
 	m.writeCounterMap(w, "nenya_injection_detections_total",
-		"Deterministic prompt-injection detections by action and pattern category (escalated is a pseudo-category counting tier-2 full-benign clears).", &m.injectionDetections)
+		"Deterministic prompt-injection detections by action and pattern category (escalated and harness are pseudo-categories: tier-2 full-benign clears, and client-harness scaffolding excluded from the action).", &m.injectionDetections)
 	m.writeInjectionEscalations(w)
 }
 
@@ -580,6 +597,55 @@ func (m *Metrics) RecordUnsendableContent(kind string) {
 		kind = "other"
 	}
 	e := getOrCreateEntry(&m.unsendableContent, map[string]string{"kind": kind})
+	e.value.Add(1)
+}
+
+// RecordHarnessEnvelope records one client-harness scaffolding surface
+// excluded from the injection action and escalation (NENYA-186). Kinds are a
+// closed set; anything else collapses to "other". Nil-safe.
+func (m *Metrics) RecordHarnessEnvelope(kind string) {
+	if m == nil || kind == "" {
+		return
+	}
+	switch kind {
+	case "system_reminder", "env", "command", "gateway_marker":
+	default:
+		kind = "other"
+	}
+	e := getOrCreateEntry(&m.harnessEnvelopes, map[string]string{"kind": kind})
+	e.value.Add(1)
+}
+
+// RecordDuplicateParam records one conflicting duplicate parameter resolved by
+// the request normalizer (NENYA-186). Labels are a closed set; anything else
+// collapses to "other". Nil-safe.
+func (m *Metrics) RecordDuplicateParam(param string) {
+	if m == nil || param == "" {
+		return
+	}
+	switch param {
+	case "max_tokens", "stop":
+	default:
+		param = "other"
+	}
+	e := getOrCreateEntry(&m.duplicateParams, map[string]string{"param": param})
+	e.value.Add(1)
+}
+
+// RecordUnknownRequestField records that a request carried a top-level field
+// no format path consumes (NENYA-186). The label is the resolved format, a
+// closed set — the field NAME is not a label (it is client-chosen), it goes to
+// the structured log instead. Nil-safe.
+func (m *Metrics) RecordUnknownRequestField(format string) {
+	if m == nil || format == "" {
+		return
+	}
+	switch format {
+	case "openai", "anthropic", "gemini", "systemone":
+	default:
+		format = "other"
+	}
+	e := getOrCreateEntry(&m.unknownRequestFields, map[string]string{"format": format})
 	e.value.Add(1)
 }
 
@@ -1679,6 +1745,12 @@ func (m *Metrics) writePipelineMetrics(w io.Writer) {
 		"Total client-supplied schemas refused by the untrusted-schema input budget (NENYA-199).", &m.schemaBudgetRejections)
 	m.writeCounterMap(w, "nenya_unsendable_content_total",
 		"Format translations that reported unsendable content (target shape cannot represent it), by kind (NENYA-176).", &m.unsendableContent)
+	m.writeCounterMap(w, "nenya_harness_envelopes_total",
+		"Client-harness scaffolding surfaces excluded from the injection action and escalation, by kind (NENYA-186).", &m.harnessEnvelopes)
+	m.writeCounterMap(w, "nenya_duplicate_params_total",
+		"Conflicting duplicate parameters resolved by the request normalizer, by logical parameter (NENYA-186).", &m.duplicateParams)
+	m.writeCounterMap(w, "nenya_unknown_request_fields_total",
+		"Request fields no format path consumes, by resolved format (NENYA-186).", &m.unknownRequestFields)
 	m.writeCounterMap(w, "nenya_pipeline_tokens_saved_total",
 		"Tokens removed from request payloads by pipeline stage (trim, window, bouncer).", &m.tokensSaved)
 	m.writeCounterMap(w, "nenya_pipeline_interceptions_total",

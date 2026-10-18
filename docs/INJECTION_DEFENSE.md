@@ -84,6 +84,20 @@ base64/hex blobs that decode to imperative text. Matches are neutralized with
 forensics. `extra_patterns`/`ignore_patterns` tune the detector per
 deployment; per-agent `enabled`/`strict` overrides are supported.
 
+*Harness scaffold exemption (NENYA-186).* A `system`/`user` message whose
+whole plain-string content is one or more well-formed harness envelopes
+(`<system-reminder>`, `<env>`, `<command-*>`, `<additional_tools>`, or the
+gateway's own canary trailer) — with only imperative-wording detections
+(override/exfil/forgery; never hidden-text/encoded/custom carriers) — is
+exempt from the Layer-2 action and the tier-2 escalation excerpts: the
+imperative wording is the harness's, not the user's. The detections are still
+counted (`nenya_harness_envelopes_total{kind}` + the injection family's
+`cleared`/`harness`) and the exemption changes what the scanner previously did
+to such messages, so it is a documented scope reduction: tool-role output,
+multimodal arrays, unterminated envelopes, attribute-bearing tags, text mixed
+with real user content, and tool-call arguments (always) remain fully
+actionable.
+
 **Layer 3 — Spotlighting (Phase 030).** Untrusted content (Nenya-managed MCP
 tool results, auto-search memory context, tool descriptions, and incoming
 `role:"tool"` history) is enveloped in `<untrusted-content source="...">`
@@ -333,6 +347,7 @@ client-side MCP servers as trusted-by-construction.
 The stack is deliberately documented with its blind spots; a defense you
 over-trust is worse than one you understand.
 
+- **The harness scaffold exemption is structural, not semantic.** A message is exempt only when its whole content is a well-formed envelope with wording-only detections; an attacker cannot smuggle instructions past Layer 2 by opening with a public literal (the canary marker must match the gateway's full trailer form) or by wrapping content in `<untrusted-content>` (spotlight-wrapped content is scanned normally). The residual risk is the opposite direction: a client that copies fetched text into its own `<system-reminder>` gets that text exempted from the Layer-2 action (it is still scanned, counted, and escalated-free) — the envelope is a client-side trust statement, and Nenya trusts the client harness's own scaffolding.
 - **Canary is an exact-substring tripwire.** Encoded dumps (base64/hex) of the
   marker evade detection. Streaming tool-call argument deltas are not watched
   (the buffered tool-args path is). Log-mode scrubbing applies only to

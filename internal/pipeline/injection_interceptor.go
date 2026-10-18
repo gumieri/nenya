@@ -262,6 +262,12 @@ func (i *InjectionInterceptor) Process(ctx context.Context, req *InterceptReques
 	// Phase 1: read-only detection totals, collecting unique hit
 	// surfaces for potential escalation (deduped: identical content in
 	// two messages is one classification target and one budget unit).
+	// Client-harness scaffolding (a message whose whole content is a
+	// well-formed harness envelope) is detected for visibility but
+	// excluded from BOTH the deterministic action and the escalation
+	// excerpts: its imperative wording is the harness's, not the user's,
+	// and judging it as user content wastes classifier budget and mangles
+	// client instructions (NENYA-186).
 	seen := make(map[string]bool)
 	var hitSurfaces []string
 	detections := 0
@@ -278,9 +284,7 @@ func (i *InjectionInterceptor) Process(ctx context.Context, req *InterceptReques
 		}
 		return content
 	}
-	for _, msg := range req.Messages {
-		WalkMessageText(msg, count)
-	}
+	i.phaseOneDetection(req, count)
 
 	if detections == 0 {
 		return &InterceptResult{Payload: req.Payload, Skip: true}, nil
@@ -311,14 +315,21 @@ func (i *InjectionInterceptor) Process(ctx context.Context, req *InterceptReques
 	// sanitized requests — accepted in exchange for pristine payloads on
 	// strict rejection (detections were already counted in phase 1).
 	shrunk := false
+	rewrite := func(content string) string {
+		clean, _, _ := i.scan(content)
+		if len(clean) < len(content) {
+			shrunk = true
+		}
+		return clean
+	}
 	for _, msg := range req.Messages {
-		WalkMessageText(msg, func(content string) string {
-			clean, _, _ := i.scan(content)
-			if len(clean) < len(content) {
-				shrunk = true
-			}
-			return clean
-		})
+		if _, _, exempt := i.harnessExemption(msg); exempt {
+			// Only the content string is scaffolding; tool-call
+			// arguments still get sanitized (NENYA-186).
+			walkToolCallArguments(msg, rewrite)
+			continue
+		}
+		WalkMessageText(msg, rewrite)
 	}
 
 	i.recordMetrics("sanitize", categoryHits)
@@ -331,6 +342,48 @@ func (i *InjectionInterceptor) Process(ctx context.Context, req *InterceptReques
 		Truncated: shrunk,
 		Reason:    "injection_sanitized",
 	}, nil
+}
+
+// phaseOneDetection walks the request messages once. Client-harness
+// scaffolding (a client-authored message whose whole content is a well-formed
+// harness envelope, with only imperative-wording detections) is scanned for
+// visibility, recorded, and excluded from both the deterministic action and
+// the escalation excerpts; every other surface feeds count (NENYA-186).
+// Tool-call arguments are always walked, even on an exempted message: only the
+// content string is scaffolding.
+func (i *InjectionInterceptor) phaseOneDetection(req *InterceptRequest, count func(string) string) {
+	for _, msg := range req.Messages {
+		if text, kind, ok := i.harnessExemption(msg); ok {
+			// Recorded once, here in the read-only pass: the rewrite
+			// pass re-evaluates the same pure predicate without
+			// touching the counters.
+			i.metrics.RecordHarnessEnvelope(string(kind))
+			if _, hits, _ := i.scan(text); hits > 0 {
+				i.metrics.RecordInjectionDetection("cleared", "harness", hits)
+			}
+			walkToolCallArguments(msg, count)
+			continue
+		}
+		WalkMessageText(msg, count)
+	}
+}
+
+// harnessExemption reports whether msg's content is exempt harness
+// scaffolding, returning the exempted text and its envelope kind. The
+// predicate is pure (no metrics): the read-only pass records the exemption,
+// the rewrite pass only consults it. The wording-only rule is enforced here —
+// an envelope whose detections include a hidden-text/encoded/custom carrier is
+// NOT exempt and stays actionable.
+func (i *InjectionInterceptor) harnessExemption(msg map[string]interface{}) (string, harnessEnvelopeKind, bool) {
+	text, kind, ok := harnessSurface(msg)
+	if !ok {
+		return "", "", false
+	}
+	_, _, categories := i.scan(text)
+	if !wordingOnlyCategories(categories) {
+		return "", "", false
+	}
+	return text, kind, true
 }
 
 // processEscalated resolves an ambiguous-band request through the tier-2
@@ -373,17 +426,24 @@ func (i *InjectionInterceptor) processEscalated(ctx context.Context, req *Interc
 	}
 
 	shrunk := false
+	rewrite := func(content string) string {
+		if benign[content] {
+			return content
+		}
+		clean, _, _ := i.scan(content)
+		if len(clean) < len(content) {
+			shrunk = true
+		}
+		return clean
+	}
 	for _, msg := range req.Messages {
-		WalkMessageText(msg, func(content string) string {
-			if benign[content] {
-				return content
-			}
-			clean, _, _ := i.scan(content)
-			if len(clean) < len(content) {
-				shrunk = true
-			}
-			return clean
-		})
+		if _, _, exempt := i.harnessExemption(msg); exempt {
+			// Only the content string is scaffolding; tool-call
+			// arguments still get sanitized (NENYA-186).
+			walkToolCallArguments(msg, rewrite)
+			continue
+		}
+		WalkMessageText(msg, rewrite)
 	}
 
 	i.recordMetrics("sanitize", categoryHits)

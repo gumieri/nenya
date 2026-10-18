@@ -482,7 +482,10 @@ func applyMaxTokens(payload map[string]interface{}, effectiveMaxOutput int) {
 		return
 	}
 	if _, hasMaxTokens := payload["max_tokens"]; !hasMaxTokens {
-		payload["max_tokens"] = effectiveMaxOutput
+		// Store the canonical numeric type a JSON decode produces, so later
+		// comparisons (duplicate resolution, conversions) never no-op on a
+		// type mismatch (NENYA-186).
+		payload["max_tokens"] = float64(effectiveMaxOutput)
 		return
 	}
 	v, ok := payload["max_tokens"].(float64)
@@ -597,6 +600,7 @@ func TransformRequestForUpstream(deps TransformDeps, providerName, upstreamURL s
 
 	effectiveMaxOutput := resolveEffectiveMaxOutput(deps, finalModel, maxOutput)
 	applyMaxTokens(payload, effectiveMaxOutput)
+	normalizeDuplicateParams(deps, payload)
 
 	inputBudget := resolveTransformInputBudget(deps, finalModel, maxContext, util.EffectiveOutputTokens(payload, effectiveMaxOutput))
 	if deps.CountTokens != nil && inputBudget > 0 {
@@ -608,6 +612,8 @@ func TransformRequestForUpstream(deps TransformDeps, providerName, upstreamURL s
 				"saved_tokens", saved)
 		}
 	}
+
+	auditRequestFields(deps, payload, format)
 
 	if format == "anthropic" {
 		// Convert with the POST-mapping model: the upstream must receive

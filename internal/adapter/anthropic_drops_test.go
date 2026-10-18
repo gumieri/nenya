@@ -266,3 +266,31 @@ func TestConvertOpenAIResponseReasoningRidesAsText(t *testing.T) {
 		t.Fatalf("first block text = %q, want the reasoning marker", text)
 	}
 }
+
+// NENYA-186: the gateway injects/clamps max_tokens in memory (int) while a
+// decoded client body carries float64 — the conversion must honor both, or
+// the model output cap never reaches an Anthropic-format upstream.
+func TestConvertOpenAIToAnthropicKeepsIntMaxTokens(t *testing.T) {
+	a := NewAnthropicAdapter()
+	for _, tc := range []struct {
+		name string
+		in   interface{}
+		want int
+	}{
+		{name: "gateway-injected int", in: 2048, want: 2048},
+		{name: "decoded float64", in: float64(64000), want: 64000},
+		{name: "int64", in: int64(1000), want: 1000},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			openai := map[string]interface{}{
+				"model":      "gpt-test",
+				"max_tokens": tc.in,
+				"messages":   []interface{}{map[string]interface{}{"role": "user", "content": "hi"}},
+			}
+			out := a.ConvertOpenAIToAnthropicBody(openai, "claude-test", false, CacheOpts{})
+			if got, _ := out["max_tokens"].(int); got != tc.want {
+				t.Fatalf("max_tokens = %#v, want %d", out["max_tokens"], tc.want)
+			}
+		})
+	}
+}

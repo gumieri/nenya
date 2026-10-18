@@ -523,8 +523,26 @@ func countBlockMarkers(blocks []interface{}) int {
 	return n
 }
 
+// numericTokenValue coerces a token-count field to float64. The gateway
+// injects/clamps max_tokens in memory (int), while a decoded client body
+// carries float64 — asserting only float64 silently dropped the model output
+// cap for Anthropic-format targets, leaving the hardcoded default to win
+// (NENYA-186 review).
+func numericTokenValue(v interface{}) (float64, bool) {
+	switch n := v.(type) {
+	case float64:
+		return n, true
+	case int:
+		return float64(n), true
+	case int64:
+		return float64(n), true
+	default:
+		return 0, false
+	}
+}
+
 func (a *AnthropicAdapter) copyOpenAIFields(openai, anthropic map[string]interface{}) {
-	if v, ok := openai["max_tokens"].(float64); ok && v > 0 {
+	if v, ok := numericTokenValue(openai["max_tokens"]); ok && v > 0 {
 		if v > math.MaxInt32 {
 			v = math.MaxInt32
 		}
