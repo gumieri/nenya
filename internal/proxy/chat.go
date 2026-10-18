@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/textproto"
+	"sort"
 	"strings"
 	"time"
 
@@ -112,9 +113,50 @@ type httpError struct {
 
 func (e *httpError) Error() string { return e.Message }
 
+// headerDroppedContent is the client-visible response header carrying the
+// kinds of content a format translation could not represent (NENYA-176).
+const headerDroppedContent = adapter.HeaderDroppedContent
+
+// reportUnsendableContent surfaces content a format translation could not
+// represent (NENYA-176): a Warn log with the kinds, a per-kind counter in the
+// nenya_unsendable_content_total metrics family, and the client-visible
+// X-Nenya-Dropped-Content response header (merged when several conversions of
+// the same request report). Nil-safe on the report; nothing to report is a
+// no-op.
+func (p *Proxy) reportUnsendableContent(gw *gateway.NenyaGateway, w http.ResponseWriter, r *http.Request, report *adapter.DropReport) {
+	if report == nil || report.Empty() {
+		return
+	}
+	kinds := report.Kinds()
+	for _, kind := range kinds {
+		gw.Metrics.RecordUnsendableContent(kind)
+	}
+	gw.Logger.Warn("unsendable content substituted or dropped in format translation",
+		"kinds", strings.Join(kinds, ","), "path", r.URL.Path)
+	prev := w.Header().Get(headerDroppedContent)
+	if prev != "" {
+		seen := make(map[string]struct{})
+		var merged []string
+		for _, k := range strings.Split(prev, ",") {
+			if _, dup := seen[k]; !dup && k != "" {
+				seen[k] = struct{}{}
+				merged = append(merged, k)
+			}
+		}
+		for _, k := range kinds {
+			if _, dup := seen[k]; !dup {
+				merged = append(merged, k)
+			}
+		}
+		sort.Strings(merged)
+		kinds = merged
+	}
+	w.Header().Set(headerDroppedContent, strings.Join(kinds, ","))
+}
+
 // parseRequestBody parses the request body and converts it to OpenAI format if needed.
 // Returns the parsed payload, source format ("openai" or "anthropic"), and an error if parsing fails.
-func (p *Proxy) parseRequestBody(gw *gateway.NenyaGateway, r *http.Request, bodyBytes []byte) (map[string]any, string, *httpError) {
+func (p *Proxy) parseRequestBody(gw *gateway.NenyaGateway, w http.ResponseWriter, r *http.Request, bodyBytes []byte) (map[string]any, string, *httpError) {
 	sourceFormat := "openai"
 	// Hot-path peek (NENYA-35): scan for the native request landmarks
 	// without unmarshaling the whole request into a map. "type" is a
@@ -127,11 +169,13 @@ func (p *Proxy) parseRequestBody(gw *gateway.NenyaGateway, r *http.Request, body
 	_, hasSystem := util.ExtractTopLevelField(bodyBytes, "system")
 	_, openAIOnly := util.ExtractTopLevelField(bodyBytes, "max_completion_tokens")
 	if (hasType || hasSystem) && !openAIOnly {
-		converted, err := routing.TransformIncomingAnthropicRequest(r.Context(), bodyBytes)
+		report := adapter.NewDropReport()
+		converted, err := routing.TransformIncomingAnthropicRequestReported(r.Context(), bodyBytes, report)
 		if err != nil {
 			gw.Logger.Warn("failed to convert Anthropic request", "err", err)
 			return nil, "", &httpError{Code: http.StatusBadRequest, Message: "Failed to convert Anthropic format request"}
 		}
+		p.reportUnsendableContent(gw, w, r, report)
 		if converted != nil && string(converted) != string(bodyBytes) {
 			sourceFormat = "anthropic"
 			bodyBytes = converted
@@ -236,7 +280,7 @@ func (p *Proxy) validateChatRequest(w http.ResponseWriter, r *http.Request, gw *
 	// from the request.
 	resetIdempotencyBinding(r)
 
-	payload, sourceFormat, herr := p.parseRequestBody(gw, r, bodyBytes)
+	payload, sourceFormat, herr := p.parseRequestBody(gw, w, r, bodyBytes)
 	if herr != nil {
 		return nil, herr
 	}
@@ -1794,9 +1838,11 @@ func (p *Proxy) handleNonStreamingResponse(gw *gateway.NenyaGateway, w http.Resp
 	if sourceFormat == "anthropic" && target.Format != "anthropic" {
 		a := adapter.GetAnthropicAdapter()
 		responseMap = a.ConvertOpenAIResponseToAnthropicBody(responseMap)
-	} else if target.Format == "anthropic" {
+	} else if target.Format == "anthropic" && sourceFormat != "anthropic" {
 		a := adapter.GetAnthropicAdapter()
-		responseMap = a.ConvertAnthropicToOpenAIBody(responseMap, false)
+		report := adapter.NewDropReport()
+		responseMap = a.ConvertAnthropicToOpenAIBodyReported(responseMap, false, report)
+		p.reportUnsendableContent(gw, w, r, report)
 	}
 
 	// ExfilGuard + canary tripwire (Phases 050/060): egress policies on

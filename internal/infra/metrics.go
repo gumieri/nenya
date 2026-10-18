@@ -105,6 +105,11 @@ type Metrics struct {
 	// (nenya_schema_budget_rejections_total).
 	schemaBudgetRejections sync.Map
 
+	// unsendableContent counts format translations that reported unsendable
+	// content (blocks a target shape cannot represent), by kind
+	// (nenya_unsendable_content_total).
+	unsendableContent sync.Map
+
 	upstreamLatency sync.Map
 	ttft            sync.Map
 	slowCalls       sync.Map
@@ -549,6 +554,33 @@ func (m *Metrics) RecordExfilDetection(reason, action string) {
 func (m *Metrics) writeSpotlighted(w io.Writer) {
 	m.writeCounterMap(w, "nenya_spotlighted_total",
 		"Untrusted-content markings applied by source.", &m.spotlighted)
+}
+
+// dropKindsAllowlist is the closed set of kinds RecordUnsendableContent
+// labels with; anything else (client-chosen block types) collapses to
+// "other" so the metric's label space stays bounded.
+var dropKindsAllowlist = map[string]struct{}{
+	"text": {}, "image": {}, "document": {}, "web_search_tool_result": {},
+	"thinking": {}, "thinking_signature": {}, "redacted_thinking": {},
+	"tool_use": {}, "tool_result": {}, "system": {}, "unknown": {},
+	"other": {},
+}
+
+// RecordUnsendableContent records that a format translation reported
+// unsendable content of the given kind (the counter counts REQUESTS/
+// translations, not blocks: kinds are deduped per translation by
+// DropReport). Kinds outside the closed allowlist collapse
+// to "other": the label value derives from client/upstream wire data, so it
+// must not mint unbounded metric series. Nil-safe.
+func (m *Metrics) RecordUnsendableContent(kind string) {
+	if m == nil || kind == "" {
+		return
+	}
+	if _, known := dropKindsAllowlist[kind]; !known {
+		kind = "other"
+	}
+	e := getOrCreateEntry(&m.unsendableContent, map[string]string{"kind": kind})
+	e.value.Add(1)
 }
 
 // RecordSpotlighted records an untrusted-content marking applied for the
@@ -1645,6 +1677,8 @@ func (m *Metrics) writePipelineMetrics(w io.Writer) {
 		"Total window compaction passes applied.", &m.windowApplied)
 	m.writeCounterMap(w, "nenya_schema_budget_rejections_total",
 		"Total client-supplied schemas refused by the untrusted-schema input budget (NENYA-199).", &m.schemaBudgetRejections)
+	m.writeCounterMap(w, "nenya_unsendable_content_total",
+		"Format translations that reported unsendable content (target shape cannot represent it), by kind (NENYA-176).", &m.unsendableContent)
 	m.writeCounterMap(w, "nenya_pipeline_tokens_saved_total",
 		"Tokens removed from request payloads by pipeline stage (trim, window, bouncer).", &m.tokensSaved)
 	m.writeCounterMap(w, "nenya_pipeline_interceptions_total",

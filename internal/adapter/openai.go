@@ -110,13 +110,24 @@ func flattenContentArrays(msgs []interface{}) bool {
 		for _, item := range arr {
 			m, ok := item.(map[string]interface{})
 			if !ok {
+				// Non-object parts are unsendable too (NENYA-176).
+				parts = append(parts, "[unsendable content: unknown]")
 				continue
 			}
 			if typ, ok := m["type"].(string); ok && typ == "text" {
 				if text, ok := m["text"].(string); ok {
 					parts = append(parts, text)
+					continue
 				}
 			}
+			// Unsendable for a model whose dialect lacks content arrays
+			// (images, attachments, foreign parts, NENYA-176): surface the
+			// loss with a visible marker instead of dropping silently.
+			blockType, _ := m["type"].(string)
+			if blockType == "" {
+				blockType = "unknown"
+			}
+			parts = append(parts, "[unsendable content: "+blockType+"]")
 		}
 		if len(parts) > 0 {
 			msgs[i].(map[string]interface{})["content"] = strings.Join(parts, "\n")

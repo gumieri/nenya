@@ -574,6 +574,14 @@ func (p *Proxy) resolveTransformer(gw *gateway.NenyaGateway, target routing.Upst
 	}
 
 	if target.Format == "anthropic" {
+		if sourceFormat == "anthropic" {
+			// Anthropic-native client, Anthropic-format target (NENYA-176):
+			// the upstream's SSE is already the client's wire shape — pass
+			// it through instead of translating it into OpenAI chunks
+			// (mirrors the buffered gate at chat.go).
+			gw.Logger.Debug("SSE passthrough (Anthropic client, Anthropic upstream)", "provider", target.Provider)
+			return nil
+		}
 		gw.Logger.Debug("SSE transformer active", "provider", target.Provider, "format", target.Format)
 		return stream.NewAnthropicTransformer()
 	}

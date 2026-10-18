@@ -109,7 +109,16 @@ func (a *AnthropicAdapter) ConvertOpenAIToAnthropicBody(openai map[string]interf
 // ConvertAnthropicToOpenAIBody converts an Anthropic-format response
 // (as a parsed map) to the OpenAI chat completions format.
 func (a *AnthropicAdapter) ConvertAnthropicToOpenAIBody(anthropic map[string]interface{}, stream bool) map[string]interface{} {
-	return a.convertAnthropicToOpenAI(anthropic, stream)
+	return a.convertAnthropicToOpenAI(anthropic, stream, nil)
+}
+
+// ConvertAnthropicToOpenAIBodyReported is ConvertAnthropicToOpenAIBody with a
+// DropReport: content the OpenAI shape cannot represent (thinking-block
+// signatures, redacted thinking, unknown block types) is recorded by kind on
+// the report instead of being dropped silently (NENYA-176). Nil report
+// behaves exactly like the unreported variant.
+func (a *AnthropicAdapter) ConvertAnthropicToOpenAIBodyReported(anthropic map[string]interface{}, stream bool, report *DropReport) map[string]interface{} {
+	return a.convertAnthropicToOpenAI(anthropic, stream, report)
 }
 
 // ConvertAnthropicRequestToOpenAIBody converts an Anthropic-format request body
@@ -117,7 +126,13 @@ func (a *AnthropicAdapter) ConvertAnthropicToOpenAIBody(anthropic map[string]int
 // of ConvertOpenAIToAnthropicBody and is used when clients send Anthropic-format
 // requests to the gateway.
 func (a *AnthropicAdapter) ConvertAnthropicRequestToOpenAIBody(anthropic map[string]interface{}) map[string]interface{} {
-	return a.convertAnthropicToOpenAIRequest(anthropic)
+	return a.convertAnthropicToOpenAIRequest(anthropic, nil)
+}
+
+// ConvertAnthropicRequestToOpenAIBodyReported is ConvertAnthropicRequestToOpenAIBody
+// with a DropReport for content the OpenAI shape cannot represent (NENYA-176).
+func (a *AnthropicAdapter) ConvertAnthropicRequestToOpenAIBodyReported(anthropic map[string]interface{}, report *DropReport) map[string]interface{} {
+	return a.convertAnthropicToOpenAIRequest(anthropic, report)
 }
 
 // ConvertOpenAIResponseToAnthropicBody converts an OpenAI-format response
@@ -185,7 +200,7 @@ func (a *AnthropicAdapter) MutateResponse(body []byte) ([]byte, error) {
 		return body, nil
 	}
 
-	openai := a.convertAnthropicToOpenAI(anthropic, true)
+	openai := a.convertAnthropicToOpenAI(anthropic, true, nil)
 
 	out, err := json.Marshal(openai)
 	if err != nil {
@@ -1139,7 +1154,7 @@ func (a *AnthropicAdapter) convertTools(tools []interface{}, cacheTools bool, tt
 	return result
 }
 
-func (a *AnthropicAdapter) convertAnthropicToOpenAI(anthropic map[string]interface{}, stream bool) map[string]interface{} {
+func (a *AnthropicAdapter) convertAnthropicToOpenAI(anthropic map[string]interface{}, stream bool, report *DropReport) map[string]interface{} {
 	openai := map[string]interface{}{
 		"id":      "anthropic-" + util.GenerateID(),
 		"object":  "chat.completion",
@@ -1153,7 +1168,7 @@ func (a *AnthropicAdapter) convertAnthropicToOpenAI(anthropic map[string]interfa
 
 	if stream {
 		delta := map[string]interface{}{}
-		a.processAnthropicContent(anthropic, delta, choice)
+		a.processAnthropicContent(anthropic, delta, choice, report)
 		a.processStopReason(anthropic, choice)
 		choice["delta"] = delta
 		openai["object"] = "chat.completion.chunk"
@@ -1161,7 +1176,7 @@ func (a *AnthropicAdapter) convertAnthropicToOpenAI(anthropic map[string]interfa
 		message := map[string]interface{}{
 			"role": "assistant",
 		}
-		a.processAnthropicContent(anthropic, message, choice)
+		a.processAnthropicContent(anthropic, message, choice, report)
 		a.processStopReason(anthropic, choice)
 		choice["message"] = message
 	}
@@ -1172,13 +1187,41 @@ func (a *AnthropicAdapter) convertAnthropicToOpenAI(anthropic map[string]interfa
 	return openai
 }
 
-// extractContentBlocks extracts text parts and tool calls from Anthropic content blocks.
-func (a *AnthropicAdapter) extractContentBlocks(blocks []interface{}) ([]string, []interface{}) {
+// reportThinkingBlock classifies one thinking-family block in a reverse
+// translation (NENYA-176): its reasoning text is the surfaced
+// representation, the opaque signature blob and redacted thinking are
+// recorded by kind on the report (never dropped silently).
+func reportThinkingBlock(block map[string]interface{}, report *DropReport) (string, bool) {
+	reason, _ := block["thinking"].(string)
+	if sig, _ := block["signature"].(string); sig != "" {
+		report.Add("thinking_signature")
+	}
+	return reason, reason != ""
+}
+
+// untypedBlockKind names a block whose type is missing, non-string, or
+// empty, so it is still reported instead of vanishing silently.
+func untypedBlockKind(block map[string]interface{}) string {
+	bType, _ := block["type"].(string)
+	if bType == "" {
+		return "unknown"
+	}
+	return bType
+}
+
+// extractContentBlocks extracts text parts, tool calls, and reasoning text
+// from Anthropic content blocks. Content the OpenAI shape cannot represent is
+// recorded on the report (nil-safe) rather than dropped silently (NENYA-176):
+// text-bearing reasoning blocks surface as reasoning_content, redacted
+// thinking and unknown block types are counted by kind.
+func (a *AnthropicAdapter) extractContentBlocks(blocks []interface{}, report *DropReport) ([]string, []interface{}, []string) {
 	var textParts []string
 	var toolCalls []interface{}
+	var reasonParts []string
 	for _, block := range blocks {
 		bm, ok := block.(map[string]interface{})
 		if !ok {
+			report.Add("unknown")
 			continue
 		}
 		bType, _ := bm["type"].(string)
@@ -1186,21 +1229,40 @@ func (a *AnthropicAdapter) extractContentBlocks(blocks []interface{}) ([]string,
 		case "text":
 			if t, ok := bm["text"].(string); ok {
 				textParts = append(textParts, t)
+			} else {
+				// A text block without a text value is a malformed
+				// fidelity loss: report, never drop silently.
+				report.Add("text")
 			}
 		case "tool_use":
 			toolCalls = append(toolCalls, a.convertToolUseBlock(bm))
 		case "tool_result":
 			if t, ok := bm["content"].(string); ok {
 				textParts = append(textParts, t)
+			} else {
+				// Array-valued tool results have no flat OpenAI
+				// representation here: report the loss.
+				report.Add("tool_result")
 			}
+		case "thinking":
+			if reason, ok := reportThinkingBlock(bm, report); ok {
+				reasonParts = append(reasonParts, reason)
+			} else if _, has := bm["signature"]; !has {
+				// Empty thinking text with no signature: nothing was
+				// surfaced at all — report rather than vanish.
+				report.Add("thinking")
+			}
+		case "redacted_thinking":
+			report.Add("redacted_thinking")
 		default:
+			report.Add(untypedBlockKind(bm))
 			slog.Debug("Unknown Anthropic content block type", "type", bType)
 		}
 	}
-	return textParts, toolCalls
+	return textParts, toolCalls, reasonParts
 }
 
-func (a *AnthropicAdapter) processAnthropicContent(anthropic, delta, choice map[string]interface{}) {
+func (a *AnthropicAdapter) processAnthropicContent(anthropic, delta, choice map[string]interface{}, report *DropReport) {
 	content, ok := anthropic["content"]
 	if !ok {
 		return
@@ -1211,9 +1273,12 @@ func (a *AnthropicAdapter) processAnthropicContent(anthropic, delta, choice map[
 		delta["content"] = c
 		choice["finish_reason"] = "stop"
 	case []interface{}:
-		textParts, toolCalls := a.extractContentBlocks(c)
+		textParts, toolCalls, reasonParts := a.extractContentBlocks(c, report)
 		if len(textParts) > 0 {
 			delta["content"] = strings.Join(textParts, "")
+		}
+		if len(reasonParts) > 0 {
+			delta["reasoning_content"] = strings.Join(reasonParts, "\n\n")
 		}
 		if len(toolCalls) > 0 {
 			delta["tool_calls"] = toolCalls
@@ -1298,7 +1363,7 @@ func (a *AnthropicAdapter) processUsage(anthropic, openai map[string]interface{}
 	openai["usage"] = converted
 }
 
-func (a *AnthropicAdapter) convertAnthropicToOpenAIRequest(anthropic map[string]interface{}) map[string]interface{} {
+func (a *AnthropicAdapter) convertAnthropicToOpenAIRequest(anthropic map[string]interface{}, report *DropReport) map[string]interface{} {
 	openai := map[string]interface{}{}
 
 	if model, ok := anthropic["model"].(string); ok {
@@ -1306,7 +1371,7 @@ func (a *AnthropicAdapter) convertAnthropicToOpenAIRequest(anthropic map[string]
 	}
 
 	if msgs, ok := anthropic["messages"].([]interface{}); ok {
-		openai["messages"] = a.reverseConvertMessages(anthropic, msgs)
+		openai["messages"] = a.reverseConvertMessages(anthropic, msgs, report)
 	}
 
 	if tools, ok := anthropic["tools"].([]interface{}); ok && len(tools) > 0 {
@@ -1348,11 +1413,11 @@ func (a *AnthropicAdapter) copyAnthropicFields(anthropic, openai map[string]inte
 	}
 }
 
-func (a *AnthropicAdapter) reverseConvertMessages(anthropic map[string]interface{}, msgs []interface{}) []interface{} {
+func (a *AnthropicAdapter) reverseConvertMessages(anthropic map[string]interface{}, msgs []interface{}, report *DropReport) []interface{} {
 	var result []interface{}
 
 	if systemContent := anthropic["system"]; systemContent != nil {
-		sysMsg := a.buildOpenAISystemMessage(systemContent)
+		sysMsg := a.buildOpenAISystemMessage(systemContent, report)
 		if sysMsg != nil {
 			result = append(result, sysMsg)
 		}
@@ -1367,12 +1432,12 @@ func (a *AnthropicAdapter) reverseConvertMessages(anthropic map[string]interface
 		role, _ := msg["role"].(string)
 
 		if role == "user" {
-			result = a.processUserMessage(result, msgs, msg, &i)
+			result = a.processUserMessage(result, msgs, msg, &i, report)
 			continue
 		}
 
 		if role == "assistant" {
-			result = append(result, a.buildOpenAIAssistantMessage(msg))
+			result = append(result, a.buildOpenAIAssistantMessage(msg, report))
 			continue
 		}
 
@@ -1393,17 +1458,17 @@ func (a *AnthropicAdapter) reverseConvertMessages(anthropic map[string]interface
 	return result
 }
 
-func (a *AnthropicAdapter) processUserMessage(result []interface{}, msgs []interface{}, msg map[string]interface{}, i *int) []interface{} {
-	toolMsgs := a.extractToolResultMessages(msgs, i)
+func (a *AnthropicAdapter) processUserMessage(result []interface{}, msgs []interface{}, msg map[string]interface{}, i *int, report *DropReport) []interface{} {
+	toolMsgs := a.extractToolResultMessages(msgs, i, report)
 	if len(toolMsgs) > 0 {
 		result = append(result, toolMsgs...)
-		result = a.appendRemainingUserMessage(result, msgs, i)
+		result = a.appendRemainingUserMessage(result, msgs, i, report)
 		return result
 	}
-	return append(result, a.buildOpenAIUserMessage(msg))
+	return append(result, a.buildOpenAIUserMessage(msg, report))
 }
 
-func (a *AnthropicAdapter) appendRemainingUserMessage(result []interface{}, msgs []interface{}, i *int) []interface{} {
+func (a *AnthropicAdapter) appendRemainingUserMessage(result []interface{}, msgs []interface{}, i *int, report *DropReport) []interface{} {
 	if *i >= len(msgs) {
 		(*i)--
 		return result
@@ -1415,13 +1480,18 @@ func (a *AnthropicAdapter) appendRemainingUserMessage(result []interface{}, msgs
 	}
 	role, _ := msg["role"].(string)
 	if role == "user" {
-		return append(result, a.buildOpenAIUserMessage(msg))
+		return append(result, a.buildOpenAIUserMessage(msg, report))
 	}
 	(*i)--
 	return result
 }
 
-func (a *AnthropicAdapter) buildOpenAISystemMessage(systemContent interface{}) map[string]interface{} {
+// buildOpenAISystemMessage flattens Anthropic system content to an OpenAI
+// system message. Blocks without a text value carry nothing into the target
+// shape: when the report is set, each such block (or a wholly
+// unrepresentable system turn) is recorded rather than dropped silently
+// (NENYA-176). Returns nil when there is nothing to send.
+func (a *AnthropicAdapter) buildOpenAISystemMessage(systemContent interface{}, report *DropReport) map[string]interface{} {
 	switch sc := systemContent.(type) {
 	case string:
 		if sc != "" {
@@ -1433,11 +1503,24 @@ func (a *AnthropicAdapter) buildOpenAISystemMessage(systemContent interface{}) m
 	case []interface{}:
 		var parts []string
 		for _, blockRaw := range sc {
-			if block, ok := blockRaw.(map[string]interface{}); ok {
-				if t, ok := block["text"].(string); ok && t != "" {
-					parts = append(parts, t)
-				}
+			block, ok := blockRaw.(map[string]interface{})
+			if !ok {
+				report.Add("unknown")
+				continue
 			}
+			bType, _ := block["type"].(string)
+			if t, ok := block["text"].(string); ok && t != "" {
+				parts = append(parts, t)
+				continue
+			}
+			if bType == "text" {
+				// A text block carrying no text value.
+				report.Add("text")
+				continue
+			}
+			// A non-text system block (a document attachment, a
+			// foreign blob) has no OpenAI system representation.
+			report.Add(untypedBlockKind(block))
 		}
 		if len(parts) > 0 {
 			return map[string]interface{}{
@@ -1445,6 +1528,10 @@ func (a *AnthropicAdapter) buildOpenAISystemMessage(systemContent interface{}) m
 				"content": strings.Join(parts, "\n\n"),
 			}
 		}
+	default:
+		// Neither string nor array: the whole system content has no
+		// representation.
+		report.Add("system")
 	}
 	return nil
 }
@@ -1454,7 +1541,7 @@ func (a *AnthropicAdapter) buildOpenAISystemMessage(systemContent interface{}) m
 // for more consecutive user messages that are purely tool_results. It advances
 // *i past consumed messages and decrements if a non-tool-result user message
 // is encountered so the caller can process it.
-func (a *AnthropicAdapter) extractToolResultMessages(msgs []interface{}, i *int) []interface{} {
+func (a *AnthropicAdapter) extractToolResultMessages(msgs []interface{}, i *int, report *DropReport) []interface{} {
 	msg, ok := msgs[*i].(map[string]interface{})
 	if !ok {
 		return nil
@@ -1481,7 +1568,7 @@ func (a *AnthropicAdapter) extractToolResultMessages(msgs []interface{}, i *int)
 			(*i)--
 			break
 		}
-		result = append(result, a.convertToolResultContent(content)...)
+		result = append(result, a.convertToolResultContent(content, report)...)
 		(*i)++
 	}
 	return result
@@ -1507,7 +1594,7 @@ func (a *AnthropicAdapter) isPureToolResults(content interface{}) bool {
 	return true
 }
 
-func (a *AnthropicAdapter) convertToolResultContent(content interface{}) []interface{} {
+func (a *AnthropicAdapter) convertToolResultContent(content interface{}, report *DropReport) []interface{} {
 	blocks, ok := content.([]interface{})
 	if !ok {
 		return nil
@@ -1516,8 +1603,10 @@ func (a *AnthropicAdapter) convertToolResultContent(content interface{}) []inter
 	for _, blockRaw := range blocks {
 		block, ok := blockRaw.(map[string]interface{})
 		if !ok {
+			report.Add("unknown")
 			continue
 		}
+		a.reportToolResultSubblocks(block["content"], report)
 		toolUseID, _ := block["tool_use_id"].(string)
 		toolContent := a.extractToolResultText(block["content"])
 		result = append(result, map[string]interface{}{
@@ -1529,6 +1618,36 @@ func (a *AnthropicAdapter) convertToolResultContent(content interface{}) []inter
 	return result
 }
 
+// reportToolResultSubblocks records the sub-block fidelity of an
+// array-valued tool_result: only its text reaches the target shape, so
+// non-text sub-blocks (images, documents, foreign blobs) are reported by
+// kind rather than dropped silently (NENYA-176).
+func (a *AnthropicAdapter) reportToolResultSubblocks(content interface{}, report *DropReport) {
+	blocks, ok := content.([]interface{})
+	if !ok {
+		return
+	}
+	for _, blockRaw := range blocks {
+		block, ok := blockRaw.(map[string]interface{})
+		if !ok {
+			report.Add("unknown")
+			continue
+		}
+		bType, _ := block["type"].(string)
+		switch bType {
+		case "text":
+			if _, isStr := block["text"].(string); !isStr {
+				report.Add("text")
+			}
+		default:
+			report.Add(untypedBlockKind(block))
+		}
+	}
+}
+
+// extractToolResultText reduces tool_result content (a string or an array of
+// blocks) to plain text: string content passes through verbatim, array
+// content keeps the text blocks, and anything else is stringified.
 func (a *AnthropicAdapter) extractToolResultText(content interface{}) string {
 	if content == nil {
 		return ""
@@ -1552,7 +1671,7 @@ func (a *AnthropicAdapter) extractToolResultText(content interface{}) string {
 	return fmt.Sprintf("%v", content)
 }
 
-func (a *AnthropicAdapter) buildOpenAIUserMessage(msg map[string]interface{}) map[string]interface{} {
+func (a *AnthropicAdapter) buildOpenAIUserMessage(msg map[string]interface{}, report *DropReport) map[string]interface{} {
 	content := msg["content"]
 	switch c := content.(type) {
 	case string:
@@ -1561,7 +1680,7 @@ func (a *AnthropicAdapter) buildOpenAIUserMessage(msg map[string]interface{}) ma
 			"content": c,
 		}
 	case []interface{}:
-		parts := a.convertContentBlocksToOpenAI(c)
+		parts := a.convertContentBlocksToOpenAI(c, report)
 		if text := a.extractSingleText(parts); text != nil {
 			return map[string]interface{}{
 				"role":    "user",
@@ -1598,11 +1717,16 @@ func (a *AnthropicAdapter) extractSingleText(parts []interface{}) *string {
 	return &t
 }
 
-func (a *AnthropicAdapter) convertContentBlocksToOpenAI(blocks []interface{}) []interface{} {
+// convertContentBlocksToOpenAI maps Anthropic content blocks to OpenAI parts.
+// Foreign block types (documents, attachments, anything the OpenAI shape
+// cannot carry) are recorded on the report — never dropped silently
+// (NENYA-176).
+func (a *AnthropicAdapter) convertContentBlocksToOpenAI(blocks []interface{}, report *DropReport) []interface{} {
 	var result []interface{}
 	for _, blockRaw := range blocks {
 		block, ok := blockRaw.(map[string]interface{})
 		if !ok {
+			report.Add("unknown")
 			continue
 		}
 		bType, _ := block["type"].(string)
@@ -1613,13 +1737,37 @@ func (a *AnthropicAdapter) convertContentBlocksToOpenAI(blocks []interface{}) []
 					"type": "text",
 					"text": text,
 				})
+			} else {
+				report.Add("text")
 			}
 		case "image":
 			if source, ok := block["source"].(map[string]interface{}); ok {
 				result = append(result, a.convertImageSourceToOpenAI(source))
+			} else {
+				// An image block without a source map has no
+				// representation: report the loss.
+				report.Add("image")
 			}
-		case "tool_use", "tool_result":
-			continue
+		case "tool_result":
+			// Mixed content: extractToolResultMessages only drains PURE
+			// tool-result turns, so a tool_result inside a text-bearing
+			// user turn lands here — keep its text instead of dropping it
+			// (NENYA-176).
+			a.reportToolResultSubblocks(block["content"], report)
+			if text := a.extractToolResultText(block["content"]); text != "" {
+				result = append(result, map[string]interface{}{
+					"type": "text",
+					"text": text,
+				})
+			} else {
+				report.Add("tool_result")
+			}
+		case "tool_use":
+			// A tool_use block cannot appear in a client-provided user
+			// turn; report rather than drop silently.
+			report.Add("tool_use")
+		default:
+			report.Add(untypedBlockKind(block))
 		}
 	}
 	return result
@@ -1644,8 +1792,8 @@ func (a *AnthropicAdapter) convertImageSourceToOpenAI(source map[string]interfac
 	}
 }
 
-func (a *AnthropicAdapter) buildOpenAIAssistantMessage(msg map[string]interface{}) map[string]interface{} {
-	textParts, toolCalls := a.extractAssistantContent(msg["content"])
+func (a *AnthropicAdapter) buildOpenAIAssistantMessage(msg map[string]interface{}, report *DropReport) map[string]interface{} {
+	textParts, toolCalls, reasonParts := a.extractAssistantContent(msg["content"], report)
 
 	oMsg := map[string]interface{}{
 		"role": "assistant",
@@ -1655,6 +1803,9 @@ func (a *AnthropicAdapter) buildOpenAIAssistantMessage(msg map[string]interface{
 	} else if len(toolCalls) > 0 {
 		oMsg["content"] = ""
 	}
+	if len(reasonParts) > 0 {
+		oMsg["reasoning_content"] = strings.Join(reasonParts, "\n\n")
+	}
 
 	if len(toolCalls) > 0 {
 		oMsg["tool_calls"] = toolCalls
@@ -1663,39 +1814,62 @@ func (a *AnthropicAdapter) buildOpenAIAssistantMessage(msg map[string]interface{
 	return oMsg
 }
 
-func (a *AnthropicAdapter) extractAssistantContent(content interface{}) ([]string, []interface{}) {
+// extractAssistantContent maps an Anthropic assistant content array to OpenAI
+// text parts and tool calls. Thinking blocks surface as OpenAI reasoning
+// content (their signatures are opaque to the OpenAI shape and recorded on
+// the report); redacted thinking and unknown block types are reported rather
+// than dropped silently (NENYA-176).
+func (a *AnthropicAdapter) extractAssistantContent(content interface{}, report *DropReport) ([]string, []interface{}, []string) {
 	var textParts []string
 	var toolCalls []interface{}
+	var reasonParts []string
 
 	blocks, ok := content.([]interface{})
 	if !ok {
 		if text, ok := content.(string); ok {
-			return []string{text}, nil
+			return []string{text}, nil, nil
 		}
-		return nil, nil
+		// Neither array nor string: the whole content has no
+		// representation — report rather than vanish (NENYA-176).
+		report.Add("unknown")
+		return nil, nil, nil
 	}
 
 	for _, blockRaw := range blocks {
 		block, ok := blockRaw.(map[string]interface{})
 		if !ok {
+			report.Add("unknown")
 			continue
 		}
 		bType, _ := block["type"].(string)
 		switch bType {
 		case "text":
-			if t, ok := block["text"].(string); ok && t != "" {
-				textParts = append(textParts, t)
+			if t, ok := block["text"].(string); ok {
+				if t != "" {
+					textParts = append(textParts, t)
+				}
+			} else {
+				// Non-string text value: a malformed fidelity loss.
+				report.Add("text")
 			}
 		case "tool_use":
 			tc := a.reverseConvertToolUseBlock(block)
 			if tc != nil {
 				toolCalls = append(toolCalls, tc)
 			}
-		case "thinking", "redacted_thinking":
-			continue
+		case "thinking":
+			if reason, ok := reportThinkingBlock(block, report); ok {
+				reasonParts = append(reasonParts, reason)
+			} else if _, has := block["signature"]; !has {
+				report.Add("thinking")
+			}
+		case "redacted_thinking":
+			report.Add("redacted_thinking")
+		default:
+			report.Add(untypedBlockKind(block))
 		}
 	}
-	return textParts, toolCalls
+	return textParts, toolCalls, reasonParts
 }
 
 func (a *AnthropicAdapter) reverseConvertToolUseBlock(block map[string]interface{}) map[string]interface{} {
@@ -1870,6 +2044,9 @@ func (a *AnthropicAdapter) extractResponseID(openai map[string]interface{}) stri
 	return "msg_" + util.GenerateID()
 }
 
+// extractOpenAIChoiceContent extracts the Anthropic content blocks and stop
+// reason for one OpenAI-format choice. Reasoning rides as visible text
+// (NENYA-176), array content is flattened via appendOpenAIContentArray.
 func (a *AnthropicAdapter) extractOpenAIChoiceContent(choice map[string]interface{}) ([]interface{}, string) {
 	var contentBlocks []interface{}
 	var stopReason string
@@ -1879,11 +2056,31 @@ func (a *AnthropicAdapter) extractOpenAIChoiceContent(choice map[string]interfac
 		message = msg
 	}
 
-	if content, ok := message["content"].(string); ok && content != "" {
+	if reason, _ := message["reasoning_content"].(string); reason != "" {
+		// Foreign reasoning cannot ride an unsigned `thinking` block:
+		// replaying such a block as history to an Anthropic upstream is a
+		// guaranteed 400 (signature required — see ADAPTERS.md's
+		// invariant table). The reasoning rides as visible, sendable text
+		// instead of being dropped silently (NENYA-176).
 		contentBlocks = append(contentBlocks, map[string]interface{}{
 			"type": "text",
-			"text": content,
+			"text": "[reasoning] " + reason,
 		})
+	}
+
+	switch c := message["content"].(type) {
+	case string:
+		if c != "" {
+			contentBlocks = append(contentBlocks, map[string]interface{}{
+				"type": "text",
+				"text": c,
+			})
+		}
+	case []interface{}:
+		contentBlocks = a.appendOpenAIContentArray(contentBlocks, c)
+	default:
+		// Non-string/non-array content has no representation; leave it
+		// unrepresented rather than guessing.
 	}
 
 	if toolCalls, ok := message["tool_calls"].([]interface{}); ok {
@@ -1904,6 +2101,39 @@ func (a *AnthropicAdapter) extractOpenAIChoiceContent(choice map[string]interfac
 	}
 
 	return contentBlocks, stopReason
+}
+
+// appendOpenAIContentArray flattens an array-shaped OpenAI response content
+// into Anthropic blocks (multi-part / OpenRouter-style). Text parts are
+// extracted; unsendable non-text parts carry the visible
+// "[unsendable content: <type>]" marker instead of vanishing (NENYA-176).
+func (a *AnthropicAdapter) appendOpenAIContentArray(contentBlocks []interface{}, parts []interface{}) []interface{} {
+	for _, partRaw := range parts {
+		part, ok := partRaw.(map[string]interface{})
+		if !ok {
+			contentBlocks = append(contentBlocks, map[string]interface{}{
+				"type": "text",
+				"text": "[unsendable content: unknown]",
+			})
+			continue
+		}
+		partType, _ := part["type"].(string)
+		if text, ok := part["text"].(string); ok && partType == "text" {
+			contentBlocks = append(contentBlocks, map[string]interface{}{
+				"type": "text",
+				"text": text,
+			})
+			continue
+		}
+		if partType == "" {
+			partType = "unknown"
+		}
+		contentBlocks = append(contentBlocks, map[string]interface{}{
+			"type": "text",
+			"text": "[unsendable content: " + partType + "]",
+		})
+	}
+	return contentBlocks
 }
 
 func (a *AnthropicAdapter) convertToolCallToAnthropic(tc map[string]interface{}) map[string]interface{} {

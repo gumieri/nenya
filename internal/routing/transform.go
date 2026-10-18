@@ -641,8 +641,17 @@ func applyMidConversationVerdict(deps TransformDeps, modelName string, opts *ada
 	opts.MidConversationSystem = &midConvo
 }
 
-// CopyHeaders copies non-hop-by-hop headers from src to dst, filtering
-// out connection-specific headers (Connection, Content-Length, Transfer-Encoding, etc.).
+// reservedTransformHeaders are first-party response headers the gateway
+// populates itself; an upstream must not inject them via CopyHeaders or its
+// value would sit alongside the gateway's own merged annotations
+// (X-Nenya-Dropped-Content, NENYA-176).
+var reservedTransformHeaders = map[string]struct{}{
+	strings.ToLower(adapter.HeaderDroppedContent): {},
+}
+
+// CopyHeaders copies upstream response headers onto the client response,
+// skipping hop-by-hop headers and the gateway's reserved first-party
+// channels.
 func CopyHeaders(src, dst http.Header) {
 	for k, vv := range src {
 		lk := strings.ToLower(k)
@@ -650,6 +659,9 @@ func CopyHeaders(src, dst http.Header) {
 		case "connection", "content-length", "content-encoding", "upgrade",
 			"transfer-encoding", "te", "trailers", "proxy-authenticate",
 			"proxy-authorization", "keep-alive", "proxy-connection":
+			continue
+		}
+		if _, reserved := reservedTransformHeaders[lk]; reserved {
 			continue
 		}
 		for _, v := range vv {
@@ -673,6 +685,15 @@ func SliceContains(haystack []int, needle int) bool {
 // from an Anthropic-native client (e.g., Claude Desktop) using the /v1/messages endpoint.
 // The converted request is then processed through the standard OpenAI-format pipeline.
 func TransformIncomingAnthropicRequest(ctx context.Context, body []byte) ([]byte, error) {
+	return TransformIncomingAnthropicRequestReported(ctx, body, nil)
+}
+
+// TransformIncomingAnthropicRequestReported is TransformIncomingAnthropicRequest
+// with a DropReport: messages carrying content the OpenAI shape cannot
+// represent (thinking signatures, documents, unknown block types) are recorded
+// by kind instead of dropped silently (NENYA-176). Nil report behaves exactly
+// like the unreported variant.
+func TransformIncomingAnthropicRequestReported(ctx context.Context, body []byte, report *adapter.DropReport) ([]byte, error) {
 	if len(body) == 0 {
 		return body, nil
 	}
@@ -706,8 +727,7 @@ func TransformIncomingAnthropicRequest(ctx context.Context, body []byte) ([]byte
 		return nil, ctx.Err()
 	}
 
-	a := adapter.GetAnthropicAdapter()
-	openai := a.ConvertAnthropicRequestToOpenAIBody(anthropic)
+	openai := adapter.GetAnthropicAdapter().ConvertAnthropicRequestToOpenAIBodyReported(anthropic, report)
 
 	out, err := json.Marshal(openai)
 	if err != nil {

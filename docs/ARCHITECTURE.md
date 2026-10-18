@@ -667,6 +667,10 @@ The RPM/TPM limiter itself is a token-bucket per provider (`infra.RateLimiter`).
 
 The `internal/adapter` package implements the Adapter Pattern to manage provider-specific wire format differences. See [`ADAPTERS.md`](ADAPTERS.md) for full details.
 
+### Unsendable-Content Reporting (NENYA-176)
+
+A translation between wire shapes only ever carries what the target shape can represent. Nenya's conversions therefore follow a strict no-silent-drop rule: whatever they cannot represent is (a) surfaced where a faithful representation exists — Anthropic `thinking` text becomes `reasoning_content` on the OpenAI shape in both the response translation and the request-history conversion, and the reverse direction (an OpenAI upstream's `reasoning_content` handed to a Anthropic-native client) rides as visible `[reasoning]` text rather than a synthesized `thinking` block, which would be unsigned and a guaranteed-400 when replayed as history — and (b) otherwise recorded on a per-translation `adapter.DropReport` (`redacted_thinking`, the unrepresentable `signature` blob, `document`, `web_search_tool_result`, any unmapped block type), while `flattenContentArrays` (models without content arrays) marks image and attachment parts inline with `[unsendable content: <type>]`. A non-empty report emits a Warn structured log, increments `nenya_unsendable_content_total{kind}` (requests/translations reporting, kinds deduped per translation; kinds outside the closed allowlist collapse to `other`), and sets the client-visible `X-Nenya-Dropped-Content` header at the buffered reverse-conversion site and the Anthropic native-request parse (merged when several translations of the same request report). A report never fails the request; it annotates fidelity loss instead of hiding it.
+
 ## SSE Streaming Pipeline
 
 The streaming pipeline is built from composable `io.Reader` and `io.Writer` wrappers:

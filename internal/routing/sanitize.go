@@ -255,18 +255,31 @@ func stripDeepSeekThinkingParams(payload map[string]interface{}, modelName strin
 	}
 }
 
+// flattenContentArray flattens an OpenAI content array to plain text for a
+// model whose dialect lacks content arrays. Non-text parts (images,
+// attachments, foreign blocks) are unsendable for such models: they mark
+// themselves with a visible "[unsendable content: <type>]" entry instead of
+// dropping silently (NENYA-176).
 func flattenContentArray(arr []interface{}) string {
 	var parts []string
 	for _, item := range arr {
 		m, ok := item.(map[string]interface{})
 		if !ok {
+			// Non-object parts are unsendable too (NENYA-176).
+			parts = append(parts, "[unsendable content: unknown]")
 			continue
 		}
-		if typ, ok := m["type"].(string); ok && typ == "text" {
+		typ, _ := m["type"].(string)
+		if typ == "text" {
 			if text, ok := m["text"].(string); ok {
 				parts = append(parts, text)
+				continue
 			}
 		}
+		if typ == "" {
+			typ = "unknown"
+		}
+		parts = append(parts, "[unsendable content: "+typ+"]")
 	}
 	return strings.Join(parts, "\n")
 }

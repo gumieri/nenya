@@ -62,16 +62,19 @@ func TestFieldPreservationAdapterConversions(t *testing.T) {
 	}
 }
 
-// TestReasoningBlocksSurviveConversionAtomically pins the NENYA-150
+// TestReasoningBlocksSurviveConversionAtomically pins the NENYA-150/176
 // conversion guarantee on mixed tool+reasoning turns: Anthropic thinking
-// blocks are dropped WHOLE (never split, never leaked as text), tool calls
-// and text keep their content, and an OpenAI assistant reasoning_content
-// field is deliberately dropped (foreign dialect) without disturbing the
-// rest of the message.
+// text surfaces as reasoning_content (NENYA-176), the opaque signature blob
+// is dropped (reported when a DropReport is supplied — asserted in
+// anthropic_drops_test.go), tool calls and text keep their
+// content, and an OpenAI assistant reasoning_content field is deliberately
+// dropped by the forward conversion (foreign dialect, NENYA-151) without
+// disturbing the rest of the message.
 func TestReasoningBlocksSurviveConversionAtomically(t *testing.T) {
 	a := NewAnthropicAdapter()
 
-	// Anthropic-native history → OpenAI: thinking blocks vanish whole.
+	// Anthropic-native history → OpenAI: thinking text surfaces as
+	// reasoning_content; the signature blob has no OpenAI-shape home.
 	anthropic := map[string]interface{}{
 		"model":      "claude-sonnet-4",
 		"max_tokens": 1024,
