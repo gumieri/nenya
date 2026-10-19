@@ -831,6 +831,91 @@ func guardMCPArgs(gw *gateway.NenyaGateway, logger *slog.Logger, d mcpGuardDispa
 	return nil
 }
 
+// mcpAppendContext groups what appendMCPResults needs beyond the payload, the
+// calls, and the results themselves.
+type mcpAppendContext struct {
+	settings  pipeline.SpotlightSettings
+	metrics   *infra.Metrics
+	toolIndex *mcp.ToolRegistry
+	// vision gates the result's image blocks on the routed target (NENYA-149);
+	// the zero gate drops them.
+	vision mcpVisionGate
+	logger *slog.Logger
+}
+
+// applySpotlightToParts applies the untrusted-content spotlight envelope to a
+// tool result's content array (NENYA-149): only its text parts are enveloped —
+// an image part is binary and has no envelope home. Returns whether any part
+// was actually enveloped, so the spotlight counter does not fire for an
+// image-only result.
+func applySpotlightToParts(content any, settings pipeline.SpotlightSettings, server, tool string) (any, bool) {
+	parts, ok := content.([]any)
+	if !ok {
+		return content, false
+	}
+	enveloped := false
+	for _, raw := range parts {
+		part, ok := raw.(map[string]any)
+		if !ok {
+			continue
+		}
+		if part["type"] != "text" {
+			continue
+		}
+		text, _ := part["text"].(string)
+		part["text"] = settings.Apply(text, pipeline.SpotlightSourceTool(server, tool))
+		enveloped = true
+	}
+	return parts, enveloped
+}
+
+// buildToolResultMessage formats one MCP call/result pair as an OpenAI tool
+// message: the tool text (spotlight-enveloped), plus the result's image blocks
+// gated on the routed target (NENYA-149).
+func buildToolResultMessage(call mcpToolCall, result *mcp.CallToolResult, opts mcpAppendContext) map[string]any {
+	settings, metrics, toolIndex := opts.settings, opts.metrics, opts.toolIndex
+	content := result.Text()
+	if result.IsError {
+		content = "[MCP Error] " + content
+	}
+	// NENYA-149: image blocks ride only when the routed model and target
+	// format can carry them; rejected images are dropped with a counter and
+	// a debug log, and the omission is made visible in the tool text.
+	contentAny, drops := toolResultContent(content, result, opts.vision, opts.logger)
+	recordVisionDrops(metrics, drops)
+	server, tool := "unknown", call.Name
+	// The registry is the source of truth for the (server, tool) pair: the
+	// advertised name is sanitized and may be disambiguated, so re-splitting
+	// it would mislabel the spotlight source (NENYA-172).
+	if toolIndex != nil {
+		if route, ok := toolIndex.Lookup(call.Name); ok {
+			server, tool = route.ServerName, route.MCPToolName
+		}
+	}
+	if server == "unknown" {
+		if s, t, ok := mcp.ParseMCPCall(call.Name); ok {
+			server, tool = s, t
+		}
+	}
+	if text, ok := contentAny.(string); ok {
+		contentAny = settings.Apply(text, pipeline.SpotlightSourceTool(server, tool))
+		if settings.Enabled {
+			metrics.RecordSpotlighted("mcp:" + server)
+		}
+	} else {
+		var enveloped bool
+		contentAny, enveloped = applySpotlightToParts(contentAny, settings, server, tool)
+		if settings.Enabled && enveloped {
+			metrics.RecordSpotlighted("mcp:" + server)
+		}
+	}
+	return map[string]any{
+		"role":         "tool",
+		"tool_call_id": call.ID,
+		"content":      contentAny,
+	}
+}
+
 // appendMCPResults appends MCP tool results to the request payload's messages array.
 // The results are formatted as OpenAI tool messages with the corresponding tool call IDs.
 // appendMCPResults appends the assistant tool-call message and one tool
@@ -838,7 +923,7 @@ func guardMCPArgs(gw *gateway.NenyaGateway, logger *slog.Logger, d mcpGuardDispa
 // spotlight enveloping to result content. It returns the appended message
 // maps (the same maps now referenced by the payload) so the MCP loop can
 // re-scan them through the deterministic security interceptors (NENYA-136).
-func appendMCPResults(payload map[string]any, calls []mcpToolCall, results []*mcp.CallToolResult, assistantMsg map[string]any, settings pipeline.SpotlightSettings, metrics *infra.Metrics, toolIndex *mcp.ToolRegistry) []map[string]any {
+func appendMCPResults(payload map[string]any, calls []mcpToolCall, results []*mcp.CallToolResult, assistantMsg map[string]any, opts mcpAppendContext) []map[string]any {
 	if len(calls) == 0 || len(results) == 0 {
 		return nil
 	}
@@ -861,35 +946,7 @@ func appendMCPResults(payload map[string]any, calls []mcpToolCall, results []*mc
 		if i >= len(results) || results[i] == nil {
 			continue
 		}
-		result := results[i]
-		content := result.Text()
-		if result.IsError {
-			content = "[MCP Error] " + content
-		}
-		server, tool := "unknown", call.Name
-		// The registry is the source of truth for the (server, tool) pair: the
-		// advertised name is sanitized and may be disambiguated, so re-splitting
-		// it would mislabel the spotlight source (NENYA-172).
-		if toolIndex != nil {
-			if route, ok := toolIndex.Lookup(call.Name); ok {
-				server, tool = route.ServerName, route.MCPToolName
-			}
-		}
-		if server == "unknown" {
-			if s, t, ok := mcp.ParseMCPCall(call.Name); ok {
-				server, tool = s, t
-			}
-		}
-		content = settings.Apply(content, pipeline.SpotlightSourceTool(server, tool))
-		if settings.Enabled {
-			metrics.RecordSpotlighted("mcp:" + server)
-		}
-
-		toolResult := map[string]any{
-			"role":         "tool",
-			"tool_call_id": call.ID,
-			"content":      content,
-		}
+		toolResult := buildToolResultMessage(call, results[i], opts)
 		toolResults = append(toolResults, toolResult)
 		appended = append(appended, toolResult)
 	}

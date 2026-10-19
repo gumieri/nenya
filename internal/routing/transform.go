@@ -776,7 +776,7 @@ func TransformRequestForUpstream(deps TransformDeps, providerName, upstreamURL s
 	}
 
 	applyProviderSanitize(deps, payload, providerName)
-	SanitizePayload(deps, payload, modelName)
+	SanitizePayload(deps, payload, modelName, format)
 	applyParamCompatSanitize(deps, payload, modelName)
 	injectPromptCacheKey(deps, payload, providerName, modelName)
 	injectOpenAICacheBreakpoints(deps, payload, providerName, modelName)

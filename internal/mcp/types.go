@@ -189,6 +189,26 @@ type CallToolResult struct {
 type ContentBlock struct {
 	Type string `json:"type"`
 	Text string `json:"text,omitempty"`
+	// Data and MimeType carry an image block (MCP: {"type":"image",
+	// "data":"<base64>","mimeType":"image/png"}). They are inert for text
+	// blocks.
+	Data     string `json:"data,omitempty"`
+	MimeType string `json:"mimeType,omitempty"`
+}
+
+// Images returns the base64 image blocks of the result, in order. Blocks
+// without data or a media type are not images and are skipped.
+func (r *CallToolResult) Images() []ContentBlock {
+	if r == nil {
+		return nil
+	}
+	var out []ContentBlock
+	for _, b := range r.Content {
+		if b.Type == "image" && b.Data != "" && b.MimeType != "" {
+			out = append(out, b)
+		}
+	}
+	return out
 }
 
 func (r *CallToolResult) Text() string {

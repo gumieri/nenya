@@ -129,6 +129,11 @@ type Metrics struct {
 	// (nenya_auto_cache_breakpoints_total).
 	autoCacheBreakpoints sync.Map
 
+	// visionDrops counts image blocks dropped because the routed model or
+	// format cannot carry them (nenya_vision_content_dropped_total,
+	// NENYA-149), by site and reason.
+	visionDrops sync.Map
+
 	// mcpToolSearch counts MCP relevance-based tool-selection outcomes by
 	// outcome (nenya_mcp_tool_search_total, NENYA-162).
 	mcpToolSearch sync.Map
@@ -690,6 +695,29 @@ func (m *Metrics) RecordAutoCacheBreakpoint(outcome string) {
 		outcome = "other"
 	}
 	e := getOrCreateEntry(&m.autoCacheBreakpoints, map[string]string{"outcome": outcome})
+	e.value.Add(1)
+}
+
+// RecordVisionContentDropped records one image block dropped because the
+// routed model or wire format cannot carry it (NENYA-149). Closed label sets:
+// site is "request" or "tool_result"; reason is one of model_no_vision,
+// format_media, format_remote_url, format_shape, malformed_image, size_limit,
+// or no_target_context (an unrecognized value collapses to "other"). Nil-safe.
+func (m *Metrics) RecordVisionContentDropped(site, reason string) {
+	if m == nil {
+		return
+	}
+	switch site {
+	case "request", "tool_result":
+	default:
+		site = "other"
+	}
+	switch reason {
+	case "model_no_vision", "format_media", "format_remote_url", "format_shape", "malformed_image", "size_limit", "no_target_context":
+	default:
+		reason = "other"
+	}
+	e := getOrCreateEntry(&m.visionDrops, map[string]string{"site": site, "reason": reason})
 	e.value.Add(1)
 }
 
@@ -1861,6 +1889,8 @@ func (m *Metrics) writePipelineMetrics(w io.Writer) {
 		"Conflicting duplicate parameters resolved by the request normalizer, by logical parameter (NENYA-186).", &m.duplicateParams)
 	m.writeCounterMap(w, "nenya_unknown_request_fields_total",
 		"Request fields no format path consumes, by resolved format (NENYA-186).", &m.unknownRequestFields)
+	m.writeCounterMap(w, "nenya_vision_content_dropped_total",
+		"Image blocks dropped because the routed model or format cannot carry them (NENYA-149).", &m.visionDrops)
 	m.writeCounterMap(w, "nenya_mcp_tool_search_total",
 		"MCP relevance-based tool-selection outcomes (NENYA-162).", &m.mcpToolSearch)
 	m.writeCounterMap(w, "nenya_reload_rejected_total",

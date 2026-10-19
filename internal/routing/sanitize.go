@@ -161,12 +161,15 @@ func applyDeepSeekFixes(deps TransformDeps, payload map[string]interface{}, mode
 
 // SanitizePayload applies request sanitization transformations to the payload
 // before routing to the upstream provider. It removes unsupported fields,
-// strips incompatible parameters, and repairs message ordering issues.
-func SanitizePayload(deps TransformDeps, payload map[string]interface{}, modelName string) {
+// strips incompatible parameters, repairs message ordering issues, and drops
+// image blocks the routed model or target format cannot carry (NENYA-149;
+// format is the target wire format).
+func SanitizePayload(deps TransformDeps, payload map[string]interface{}, modelName, format string) {
 	stripStreamOptions(deps, payload, modelName)
 	stripToolChoice(deps, payload, modelName)
 	stripBareReasoningField(deps, payload, modelName)
 	sanitizeToolSchemas(payload)
+	DropUnsupportedVisionContent(deps, payload, modelName, format)
 	processMessages(deps, payload, modelName)
 	applyDeepSeekFixes(deps, payload, modelName)
 }

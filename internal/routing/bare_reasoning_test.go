@@ -79,7 +79,7 @@ func TestSanitizePayload_IntegratesBareReasoningStripping(t *testing.T) {
 			map[string]interface{}{"role": "user", "content": "hello"},
 		},
 	}
-	SanitizePayload(deps, payload, "o1-preview")
+	SanitizePayload(deps, payload, "o1-preview", "openai")
 	if _, has := payload["reasoning"]; has {
 		t.Error("expected SanitizePayload to strip bare reasoning field")
 	}

@@ -739,7 +739,13 @@ func (p *Proxy) executeAndAppendMCPResults(in mcpIterInput, working map[string]a
 	if buf.reasoningContent != "" {
 		mcpAssistantMsg["reasoning_content"] = buf.reasoningContent
 	}
-	appended := appendMCPResults(working, mcpCalls, results, mcpAssistantMsg, spotlightSettingsFor(&in.gw.Config, in.opts.Agent), in.gw.Metrics, in.gw.MCPToolIndex)
+	appended := appendMCPResults(working, mcpCalls, results, mcpAssistantMsg, mcpAppendContext{
+		settings:  spotlightSettingsFor(&in.gw.Config, in.opts.Agent),
+		metrics:   in.gw.Metrics,
+		toolIndex: in.gw.MCPToolIndex,
+		vision:    newMCPVisionGate(in.gw.ModelCatalog, in.opts.Targets),
+		logger:    in.gw.Logger,
+	})
 	if appended == nil {
 		// appendMCPResults only returns nil without appending when
 		// payload["messages"] lost its []any shape — the tool results

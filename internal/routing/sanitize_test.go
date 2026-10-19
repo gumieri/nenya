@@ -32,7 +32,7 @@ func TestSanitizePayload_StripStreamOptions(t *testing.T) {
 			"include_usage": true,
 		},
 	}
-	SanitizePayload(deps, payload, "nemotron-3-super")
+	SanitizePayload(deps, payload, "nemotron-3-super", "openai")
 	if _, ok := payload["stream_options"]; ok {
 		t.Fatal("stream_options should be stripped for nemotron-3-super (inference returns no capability)")
 	}
@@ -43,7 +43,7 @@ func TestSanitizePayload_StripStreamOptions(t *testing.T) {
 			"include_usage": true,
 		},
 	}
-	SanitizePayload(deps, payload2, "qwen/qwen3-32b")
+	SanitizePayload(deps, payload2, "qwen/qwen3-32b", "openai")
 	if _, ok := payload2["stream_options"]; !ok {
 		t.Fatal("stream_options should be preserved for qwen3 (inference returns capability)")
 	}
@@ -56,7 +56,7 @@ func TestSanitizePayload_StripToolChoiceAuto(t *testing.T) {
 		"model":       "nemotron-3-super",
 		"tool_choice": "auto",
 	}
-	SanitizePayload(deps, payload, "nemotron-3-super")
+	SanitizePayload(deps, payload, "nemotron-3-super", "openai")
 	if _, ok := payload["tool_choice"]; ok {
 		t.Fatal("tool_choice auto should be stripped for nemotron-3-super")
 	}
@@ -65,7 +65,7 @@ func TestSanitizePayload_StripToolChoiceAuto(t *testing.T) {
 		"model":       "gpt-4o",
 		"tool_choice": "auto",
 	}
-	SanitizePayload(deps, payload2, "gpt-4o")
+	SanitizePayload(deps, payload2, "gpt-4o", "openai")
 	if tc, ok := payload2["tool_choice"]; !ok || tc != "auto" {
 		t.Fatal("tool_choice auto should be preserved for gpt-4o")
 	}
@@ -86,7 +86,7 @@ func TestSanitizePayload_FlattenContentArrays(t *testing.T) {
 			},
 		},
 	}
-	SanitizePayload(deps, payload, "nemotron-3-super")
+	SanitizePayload(deps, payload, "nemotron-3-super", "openai")
 	msgs, ok := payload["messages"].([]interface{})
 	if !ok || len(msgs) == 0 {
 		t.Fatal("messages should exist")
@@ -108,7 +108,7 @@ func TestSanitizePayload_FlattenContentArrays(t *testing.T) {
 			},
 		},
 	}
-	SanitizePayload(deps, payload2, "gpt-4o")
+	SanitizePayload(deps, payload2, "gpt-4o", "openai")
 	msgs2, ok := payload2["messages"].([]interface{})
 	if !ok || len(msgs2) == 0 {
 		t.Fatal("messages should exist")
@@ -132,7 +132,7 @@ func TestSanitizePayload_StripReasoningContent(t *testing.T) {
 			},
 		},
 	}
-	SanitizePayload(deps, payload, "nemotron-3-super")
+	SanitizePayload(deps, payload, "nemotron-3-super", "openai")
 	msgs, ok := payload["messages"].([]interface{})
 	if !ok || len(msgs) == 0 {
 		t.Fatal("messages should exist")
@@ -152,7 +152,7 @@ func TestSanitizePayload_StripReasoningContent(t *testing.T) {
 			},
 		},
 	}
-	SanitizePayload(deps, payload2, "deepseek-v4-pro")
+	SanitizePayload(deps, payload2, "deepseek-v4-pro", "openai")
 	msgs2, ok := payload2["messages"].([]interface{})
 	if !ok || len(msgs2) == 0 {
 		t.Fatal("messages should exist")
@@ -175,7 +175,7 @@ func TestSanitizePayload_DeepSeekReasoningInjection(t *testing.T) {
 			},
 		},
 	}
-	SanitizePayload(deps, payload, "deepseek-v4-pro")
+	SanitizePayload(deps, payload, "deepseek-v4-pro", "openai")
 	msgs, ok := payload["messages"].([]interface{})
 	if !ok || len(msgs) == 0 {
 		t.Fatal("messages should exist")
@@ -198,7 +198,7 @@ func TestSanitizePayload_DeepSeekStripThinkingParams(t *testing.T) {
 		"temperature": 0.7,
 		"top_p":       0.9,
 	}
-	SanitizePayload(deps, payload, "deepseek-v4-pro")
+	SanitizePayload(deps, payload, "deepseek-v4-pro", "openai")
 	if _, has := payload["temperature"]; has {
 		t.Fatal("temperature should be stripped for deepseek with thinking enabled")
 	}
@@ -239,7 +239,7 @@ func TestSanitizePayload_RepairMessageOrdering(t *testing.T) {
 			},
 		},
 	}
-	SanitizePayload(deps, payload, "gpt-4o")
+	SanitizePayload(deps, payload, "gpt-4o", "openai")
 	msgs, ok := payload["messages"].([]interface{})
 	if !ok {
 		t.Fatal("messages should exist")
@@ -289,7 +289,7 @@ func TestSanitizePayload_NoOpOnValidOrdering(t *testing.T) {
 		},
 	}
 	originalLen := len(payload["messages"].([]interface{}))
-	SanitizePayload(deps, payload, "gpt-4o")
+	SanitizePayload(deps, payload, "gpt-4o", "openai")
 	newLen := len(payload["messages"].([]interface{}))
 	if newLen != originalLen {
 		t.Fatalf("message count should not change for valid ordering: %d -> %d", originalLen, newLen)
@@ -308,7 +308,7 @@ func TestSanitizePayload_NonDeepSeekNoReasoningInjection(t *testing.T) {
 			},
 		},
 	}
-	SanitizePayload(deps, payload, "gpt-4o")
+	SanitizePayload(deps, payload, "gpt-4o", "openai")
 	msgs, ok := payload["messages"].([]interface{})
 	if !ok || len(msgs) == 0 {
 		t.Fatal("messages should exist")
@@ -332,7 +332,7 @@ func TestSanitizePayload_DeepSeekDoesNotStripReasoning(t *testing.T) {
 			},
 		},
 	}
-	SanitizePayload(deps, payload, "deepseek-v4-pro")
+	SanitizePayload(deps, payload, "deepseek-v4-pro", "openai")
 	msgs, ok := payload["messages"].([]interface{})
 	if !ok || len(msgs) == 0 {
 		t.Fatal("messages should exist")
@@ -353,7 +353,7 @@ func TestSanitizePayload_NonDeepSeekWithThinkingStripsNothing(t *testing.T) {
 		},
 		"temperature": 0.7,
 	}
-	SanitizePayload(deps, payload, "gpt-4o")
+	SanitizePayload(deps, payload, "gpt-4o", "openai")
 	if _, has := payload["temperature"]; !has {
 		t.Fatal("temperature should be preserved for non-deepseek models with thinking")
 	}
@@ -371,7 +371,7 @@ func TestSanitizePayload_DeepSeekFlashReasoningInjection(t *testing.T) {
 			},
 		},
 	}
-	SanitizePayload(deps, payload, "deepseek-v4-flash")
+	SanitizePayload(deps, payload, "deepseek-v4-flash", "openai")
 	msgs, ok := payload["messages"].([]interface{})
 	if !ok || len(msgs) == 0 {
 		t.Fatal("messages should exist")

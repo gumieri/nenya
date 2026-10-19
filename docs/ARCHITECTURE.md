@@ -444,6 +444,15 @@ Request with MCP tools injected
 
 **Mixed tool calls**: If the LLM calls both MCP and client tools in the same response, MCP tools are resolved first and the entire response is re-sent. The LLM may re-request client-only tools in the next iteration.
 
+## Capability-Gated Image Blocks (NENYA-149)
+
+Image content is gated on the routed target before it leaves, instead of taking hard 400s from vision-less upstreams:
+
+- **Request side** (`routing.DropUnsupportedVisionContent`, run in `SanitizePayload` with the target format): message content arrays lose image parts the routed model cannot accept — every image when the model lacks the `vision` capability, an image classified by SHAPE as unsendable for the format (Anthropic message-content images are copied verbatim by the adapter and hard-400: reason `format_shape`; a remote URL where the converter only carries `data:`: `format_remote_url`), or an image whose media type is outside the format's table (`openai`: png, jpeg, gif, webp; `gemini`: png, jpeg, webp, heic, heif; `anthropic` tool content: png, jpeg, gif, webp; unknown formats keep the near-universal png+jpeg pair). An array emptied by the filter keeps a visible `[image omitted: ...]` text part instead of a bare empty array, which providers reject.
+- **Tool-result side** (`proxy/mcp_vision.go`): an MCP tool result's image content blocks ride as OpenAI `image_url` data-URL parts ONLY when the primary target's model has vision AND the format accepts the media type; otherwise the image is dropped, `[image omitted: ...]` is appended to the tool text, and the loop's spotlight step envelopes only the text parts (images are binary and have no envelope home).
+
+Every drop is counted in `nenya_vision_content_dropped_total{site, reason}` (`site`: `request`|`tool_result`; `reason`: `model_no_vision`, `format_media`, `format_remote_url`, `format_shape`, `malformed_image`, `size_limit`, `no_target_context`) and debug-logged — never failing the request. Documented limitations: the tool-result gate resolves the PRIMARY target (a failover to a target with a different capability/format applies the request-side rules on the re-transform), and a drop mutates the shared failover payload in place (the same semantics as window compaction — conservative direction). The gate covers the chat dispatch builder only: `/v1/responses`, `/v1/embeddings`, and `/proxy/*` forward images ungated (pre-existing behavior).
+
 ## Engine Reference System
 
 Both `bouncer.engine` and `window.engine` use the `EngineRef` type which supports two JSON forms:
