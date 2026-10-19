@@ -42,49 +42,33 @@ func (p *Proxy) injectMCPTools(gw *gateway.NenyaGateway, payload map[string]inte
 		"servers", agent.MCP.Servers, "agent", agentName)
 
 	var toolNames []string
+	grantedNames := make(map[string]struct{})
+	existing, _ := payload["tools"].([]interface{})
 	for _, serverName := range agent.MCP.Servers {
-		client, ok := gw.MCPClients[serverName]
-		if !ok || !client.Ready() {
-			gw.Logger.Warn("MCP server not available, skipping tool injection",
-				"server", serverName, "agent", agentName)
+		openaiTools, granted := p.serverInjectedTools(gw, serverName, req)
+		if len(openaiTools) == 0 {
 			continue
 		}
-
-		tools := client.ListTools()
-		if len(tools) == 0 {
-			gw.Logger.Warn("MCP server returned no tools",
-				"server", serverName, "agent", agentName)
-			continue
+		for _, tool := range granted {
+			grantedNames[tool.Name] = struct{}{}
 		}
-		granted := grantedToolsForServer(gw, req.apiKey, serverName, agentName, tools)
-		if len(granted) == 0 {
-			gw.Logger.Warn("MCP server exposes no tools inside the key's grant",
-				"server", serverName, "agent", agentName)
-			continue
-		}
-		// Build from the registry so the advertised function name and the
-		// dispatch key are the same string (NENYA-172).
-		openaiTools := gw.MCPToolIndex.OpenAITools(serverName, granted)
-		applyToolDescriptionSpotlight(openaiTools, spotlightSettingsFor(&gw.Config, agent), gw.Metrics)
-
-		existing, ok := payload["tools"].([]interface{})
-		if !ok {
-			existing = []interface{}{}
-		}
-
 		for _, t := range openaiTools {
 			existing = append(existing, t)
-			if fn, ok := t["function"].(map[string]any); ok {
-				if name, ok := fn["name"].(string); ok {
-					toolNames = append(toolNames, name)
-				}
-			}
 		}
-
+		// The advertised names come from the REGISTRY ROUTES (not from
+		// re-parsing the declarations): the trust anchor must not depend on
+		// the declaration's wire shape.
+		toolNames = append(toolNames, advertisedToolNames(gw, serverName, granted)...)
 		payload["tools"] = existing
 		gw.Logger.Debug("MCP tools injected",
 			"server", serverName, "tools", len(granted), "agent", agentName)
 	}
+
+	// The floor is validated against the union of every server's granted tools:
+	// a per-server check would warn about a floor tool that a DIFFERENT server
+	// of the same agent grants (NENYA-162).
+	warnUnmatchedToolFloor(gw, req, grantedNames)
+	req.injectedMCPTools = toolNames
 
 	if len(toolNames) > 0 {
 		if _, has := payload["tool_choice"]; !has {
@@ -98,6 +82,58 @@ func (p *Proxy) injectMCPTools(gw *gateway.NenyaGateway, payload map[string]inte
 	gw.Logger.Warn("MCP: no tools injected for agent",
 		"agent", agentName, "servers", agent.MCP.Servers)
 	return false
+}
+
+// serverInjectedTools resolves one server's contribution to the injected set:
+// server availability, the caller's key grant, the server's include/exclude
+// policy, and (opt-in) relevance-based selection — in that order, so RBAC
+// scope and policy compose (NENYA-162). It returns nil when the server
+// contributes nothing, logging why.
+func (p *Proxy) serverInjectedTools(gw *gateway.NenyaGateway, serverName string, req *chatRequest) ([]map[string]any, []mcp.Tool) {
+	agentName := req.AgentName
+	client, ok := gw.MCPClients[serverName]
+	if !ok || !client.Ready() {
+		gw.Logger.Warn("MCP server not available, skipping tool injection",
+			"server", serverName, "agent", agentName)
+		return nil, nil
+	}
+	tools := client.ListTools()
+	if len(tools) == 0 {
+		gw.Logger.Warn("MCP server returned no tools",
+			"server", serverName, "agent", agentName)
+		return nil, nil
+	}
+	granted := grantedToolsForServer(gw, req.apiKey, serverName, agentName, tools)
+	if len(granted) == 0 {
+		gw.Logger.Warn("MCP server exposes no tools inside the key's grant",
+			"server", serverName, "agent", agentName)
+		return nil, nil
+	}
+	granted = filterServerToolPolicy(gw, serverName, agentName, granted)
+	if len(granted) == 0 {
+		gw.Logger.Warn("MCP server exposes no tools after the server's include/exclude policy",
+			"server", serverName, "agent", agentName)
+		return nil, nil
+	}
+	granted = selectConversationTools(gw, req, granted)
+	// Build from the registry so the advertised function name and the
+	// dispatch key are the same string (NENYA-172).
+	openaiTools := gw.MCPToolIndex.OpenAITools(serverName, granted)
+	applyToolDescriptionSpotlight(openaiTools, spotlightSettingsFor(&gw.Config, req.Agent), gw.Metrics)
+	return openaiTools, granted
+}
+
+// advertisedToolNames maps the granted tools of one server to the advertised
+// function names the registry uses for them (NENYA-172: the advertised name and
+// the dispatch key are the same string). The registry is the single source: the
+// same accessor backs the declarations, so a granted tool can never be
+// advertised under a name the guard would then refuse.
+func advertisedToolNames(gw *gateway.NenyaGateway, serverName string, granted []mcp.Tool) []string {
+	names := make([]string, 0, len(granted))
+	for _, tool := range granted {
+		names = append(names, gw.MCPToolIndex.AdvertisedName(serverName, tool.Name))
+	}
+	return names
 }
 
 // grantedToolsForServer returns the server's tools that the key's grant covers
@@ -646,6 +682,36 @@ func (p *Proxy) mcpIteration(in mcpIterInput) int {
 	return mcpIterContinue
 }
 
+// injectedToolNameSet converts the gateway's injected-name list into a set
+// (NENYA-162). Nil/empty means no injection bookkeeping: the guard is inert.
+func injectedToolNameSet(names []string) map[string]struct{} {
+	if len(names) == 0 {
+		return nil
+	}
+	set := make(map[string]struct{}, len(names))
+	for _, name := range names {
+		set[name] = struct{}{}
+	}
+	return set
+}
+
+// unavailableMCPToolCalls reports which calls name an MCP tool the session did
+// not inject (NENYA-162): the loop refuses them with a structured error result.
+// An empty injected set leaves nothing unavailable (defensive: the guard is
+// anchored on the gateway's own injection bookkeeping, not the payload).
+func unavailableMCPToolCalls(calls []mcpToolCall, injected map[string]struct{}) map[string]bool {
+	if len(injected) == 0 {
+		return nil
+	}
+	unavailable := make(map[string]bool, len(calls))
+	for _, c := range calls {
+		if _, ok := injected[c.Name]; !ok {
+			unavailable[c.Name] = true
+		}
+	}
+	return unavailable
+}
+
 // executeAndAppendMCPResults executes the intercepted MCP tool calls,
 // appends their results (assistant tool_calls message + per-call tool
 // messages) to the working conversation, and re-scans the appended content
@@ -655,7 +721,16 @@ func (p *Proxy) mcpIteration(in mcpIterInput) int {
 // The iteration's buffered usage is recorded on that abort path so /statsz
 // does not undercount.
 func (p *Proxy) executeAndAppendMCPResults(in mcpIterInput, working map[string]any, mcpCalls []mcpToolCall, buf *bufferedSSE) bool {
-	results := executeMCPCalls(in.mcpLoopCtx, mcpCalls, in.gw, in.opts.AgentName, in.opts.Canary, in.opts.Screen, in.opts.ApiKey)
+	results := executeMCPCallsWithUnavailable(mcpExecOptions{
+		ctx:         in.mcpLoopCtx,
+		calls:       mcpCalls,
+		gw:          in.gw,
+		agentName:   in.opts.AgentName,
+		canary:      in.opts.Canary,
+		screen:      in.opts.Screen,
+		apiKey:      in.opts.ApiKey,
+		unavailable: unavailableMCPToolCalls(mcpCalls, injectedToolNameSet(in.opts.InjectedMCPTools)),
+	})
 	mcpAssistantMsg := map[string]any{
 		"role":       "assistant",
 		"content":    nil,

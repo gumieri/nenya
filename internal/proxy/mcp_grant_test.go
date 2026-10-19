@@ -18,7 +18,7 @@ import (
 
 // newMCPGrantProxy builds a gateway with one initialized MCP server exposing
 // the helper's "test_tool", so grant capping can be exercised end to end
-// through injectMCPTools/executeMCPCalls.
+// through injectMCPTools/executeMCPCallsForTest.
 func newMCPGrantProxy(t *testing.T) *Proxy {
 	t.Helper()
 	mock := newTestMCPServer(t)
@@ -144,7 +144,7 @@ func TestExecuteMCPCallsEnforcesKeyGrant(t *testing.T) {
 	call := mcpToolCall{ID: "call_1", Name: "memory__test_tool", Arguments: map[string]any{"query": "hi"}}
 
 	restricted := &config.ApiKey{Name: "restricted", Roles: []string{"user"}, Enabled: true, AllowedTools: []string{"other__tool"}}
-	results := executeMCPCalls(t.Context(), []mcpToolCall{call}, gw, "agent", pipeline.CanarResult{}, nil, restricted)
+	results := executeMCPCallsForTest(t.Context(), []mcpToolCall{call}, gw, "agent", pipeline.CanarResult{}, nil, restricted)
 	if len(results) != 1 || !results[0].IsError {
 		t.Fatalf("expected a refused tool result, got %+v", results)
 	}
@@ -153,7 +153,7 @@ func TestExecuteMCPCallsEnforcesKeyGrant(t *testing.T) {
 	}
 
 	granted := &config.ApiKey{Name: "granted", Roles: []string{"user"}, Enabled: true, AllowedTools: []string{"memory__test_tool"}}
-	results = executeMCPCalls(t.Context(), []mcpToolCall{call}, gw, "agent", pipeline.CanarResult{}, nil, granted)
+	results = executeMCPCallsForTest(t.Context(), []mcpToolCall{call}, gw, "agent", pipeline.CanarResult{}, nil, granted)
 	if len(results) != 1 || results[0].IsError {
 		t.Fatalf("granted tool call must succeed, got %+v", results)
 	}
@@ -237,7 +237,7 @@ func TestExecuteMCPCallsRefusesServerOutsideAgentConfig(t *testing.T) {
 	otherIndex.Register("other", []mcp.Tool{{Name: "other_tool"}})
 	gw.MCPToolIndex = otherIndex
 
-	results := executeMCPCalls(t.Context(), []mcpToolCall{{
+	results := executeMCPCallsForTest(t.Context(), []mcpToolCall{{
 		ID: "call_1", Name: "other__other_tool", Arguments: map[string]any{},
 	}}, gw, "agent", pipeline.CanarResult{}, nil, fullAccessTestKey())
 	if len(results) != 1 || !results[0].IsError {
@@ -248,7 +248,7 @@ func TestExecuteMCPCallsRefusesServerOutsideAgentConfig(t *testing.T) {
 	}
 
 	// An unknown agent is refused too (fail closed).
-	results = executeMCPCalls(t.Context(), []mcpToolCall{{
+	results = executeMCPCallsForTest(t.Context(), []mcpToolCall{{
 		ID: "call_2", Name: "other__other_tool", Arguments: map[string]any{},
 	}}, gw, "ghost-agent", pipeline.CanarResult{}, nil, fullAccessTestKey())
 	if len(results) != 1 || !results[0].IsError {

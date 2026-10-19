@@ -685,6 +685,24 @@ TLS-intercepting proxies and egress proxies:
 
 Fleet-wide defaults live in the `network` section: `{"network": {"ca_bundle": "/etc/nenya/corp-ca.pem", "proxy_url": "http://egress:3128"}}`. When neither the provider nor the network section sets a proxy, the standard `HTTPS_PROXY`/`NO_PROXY` environment variables apply (loopback is always direct under the environment default). An explicit `proxy_url` routes ALL hosts including loopback — the ollama provider is special-cased to never inherit the fleet proxy, so local engines stay direct unless explicitly overridden. Model discovery traverses the same fleet policy; Ollama engines (by name or `api_format`) are discovered through the ollama-specific client, which never inherits the fleet proxy. Known limitation: per-provider `ca_bundle`/`proxy_url` overrides apply to dispatches and validation pings, but non-ollama discovery fetches use the fleet-default client.
 
+### MCP tool-surface policy (NENYA-162)
+
+Server-pattern table (under each `mcp_servers.<name>` entry):
+
+| Field           | Default | Description |
+| --------------- | ------- | ----------- |
+| `tool_include`  | —       | Patterns over the server's OWN tool names (the raw name, the same one `allowed_tools` grants — not the advertised `server__tool`): `*`/`?` globs, or an exact name when neither appears. When non-empty, ONLY matching tools are injected. |
+| `tool_exclude`  | —       | Patterns (same grammar and name space); matching tools are never injected. Exclude always wins over include. |
+
+Agent knobs (`agents.<name>.mcp`):
+
+| Field              | Default | Description |
+| ------------------ | ------- | ----------- |
+| `tool_search`      | `0`     | Opt-in relevance-based tool selection, applied PER SERVER (a multi-server agent injects up to N tools per server, and the outcome metric counts once per server per request): instead of injecting EVERY granted tool (token bloat on large servers), the granted tools are scored against the conversation's own terms (name hits 1.5× description hits, scaled by inverse document frequency) and only the top N (clamped to the catalog size, so a typo cannot panic or over-allocate) plus `tool_search_floor` are injected. Same terms → same set (score desc, name-asc tiebreak), so the upstream surface is stable per conversation. `0`/absent = the full granted set (previous behavior); a request with no extractable terms also gets the full granted set, since selection has nothing to discriminate against (`selected_full_catalog`). |
+| `tool_search_floor`| —       | Tools ALWAYS injected when `tool_search` is enabled, regardless of relevance. Entries are EXACT server tool names (raw, not `server__tool`); a glob or a name no configured server exposes is rejected/warned. Rejected at load when `tool_search` is off. |
+
+Loop correctness: a model calling an MCP tool that was NOT injected in that session gets a structured `[unavailable tool: <name>]` error result inside the tool loop — never a silent drop, never an upstream dispatch on a guessed name. Outcomes: `nenya_mcp_tool_search_total{outcome}` (`selected`, `selected_full_catalog`, `noninjected_call_refused`, plus a defensive `other` bucket for unrecognized values). `tool_search_floor` entries are exact tool names (glob metacharacters are rejected at load, since the floor matches by equality).
+
 ### Built-in providers
 
 | Name           | URL                                                                        | Auth Style      |

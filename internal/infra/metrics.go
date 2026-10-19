@@ -129,6 +129,10 @@ type Metrics struct {
 	// (nenya_auto_cache_breakpoints_total).
 	autoCacheBreakpoints sync.Map
 
+	// mcpToolSearch counts MCP relevance-based tool-selection outcomes by
+	// outcome (nenya_mcp_tool_search_total, NENYA-162).
+	mcpToolSearch sync.Map
+
 	// reloadRejected counts configuration reloads refused before the swap,
 	// by reason (nenya_reload_rejected_total, NENYA-166).
 	reloadRejected sync.Map
@@ -686,6 +690,23 @@ func (m *Metrics) RecordAutoCacheBreakpoint(outcome string) {
 		outcome = "other"
 	}
 	e := getOrCreateEntry(&m.autoCacheBreakpoints, map[string]string{"outcome": outcome})
+	e.value.Add(1)
+}
+
+// RecordMCPToolSearch records one MCP relevance-based tool-selection outcome
+// (NENYA-162): "selected", "selected_full_catalog", or a refused
+// hallucinated call ("noninjected_call_refused"). Closed label set; anything else collapses to
+// "other". Nil-safe.
+func (m *Metrics) RecordMCPToolSearch(outcome string) {
+	if m == nil || outcome == "" {
+		return
+	}
+	switch outcome {
+	case "selected", "selected_full_catalog", "noninjected_call_refused":
+	default:
+		outcome = "other"
+	}
+	e := getOrCreateEntry(&m.mcpToolSearch, map[string]string{"outcome": outcome})
 	e.value.Add(1)
 }
 
@@ -1840,6 +1861,8 @@ func (m *Metrics) writePipelineMetrics(w io.Writer) {
 		"Conflicting duplicate parameters resolved by the request normalizer, by logical parameter (NENYA-186).", &m.duplicateParams)
 	m.writeCounterMap(w, "nenya_unknown_request_fields_total",
 		"Request fields no format path consumes, by resolved format (NENYA-186).", &m.unknownRequestFields)
+	m.writeCounterMap(w, "nenya_mcp_tool_search_total",
+		"MCP relevance-based tool-selection outcomes (NENYA-162).", &m.mcpToolSearch)
 	m.writeCounterMap(w, "nenya_reload_rejected_total",
 		"Configuration reloads refused before the swap, by reason (NENYA-166).", &m.reloadRejected)
 	m.writeCounterMap(w, "nenya_byok_requests_total",

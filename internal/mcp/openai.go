@@ -86,6 +86,19 @@ func (r *ToolRegistry) OpenAITools(serverName string, tools []Tool) []map[string
 	return result
 }
 
+// AdvertisedName returns the function name the registry advertises for one
+// (server, tool) pair: the registered route name when the pair is registered,
+// else the same deterministic fallback OpenAITools uses — so a caller deriving
+// the injected tool set sees exactly the names the model was handed.
+func (r *ToolRegistry) AdvertisedName(serverName, toolName string) string {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	if name, ok := r.byPair[pairKey(serverName, toolName)]; ok {
+		return name
+	}
+	return buildOpenAIToolName(serverName, toolName)
+}
+
 // pairKey identifies a (server, tool) pair in the byPair index.
 func pairKey(serverName, toolName string) string {
 	return serverName + "\x00" + toolName

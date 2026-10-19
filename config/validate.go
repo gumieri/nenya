@@ -129,6 +129,7 @@ func collectValidationErrors(ctx context.Context, cfg *Config, providers map[str
 	errors = append(errors, validateParamCompatConfig(cfg)...)
 	errors = append(errors, validateAutoCacheBreakpointsConfig(cfg, logger)...)
 	errors = append(errors, validateBYOKConfig(cfg, logger)...)
+	errors = append(errors, validateMCPToolSurfaces(cfg)...)
 	if cfg.Governance.SecretResolutionTimeoutSeconds != nil {
 		t := *cfg.Governance.SecretResolutionTimeoutSeconds
 		if t < 0 {
@@ -586,6 +587,65 @@ func validateInjectionConfig(cfg *Config, logger *slog.Logger) []string {
 	}
 	errs = append(errs, validateInjectionEscalation(cfg)...)
 	return errs
+}
+
+// validateMCPToolSurfaces validates the MCP tool-injection policy knobs
+// (NENYA-162): tool_search is non-negative, include/exclude entries are
+// non-empty printable-ASCII names or globs, and tool_search_floor entries are
+// EXACT names (the floor matches by equality, so a glob would silently never
+// match).
+func validateMCPToolSurfaces(cfg *Config) []string {
+	var errors []string
+	for name, agent := range cfg.Agents {
+		if agent.MCP == nil {
+			continue
+		}
+		if agent.MCP.ToolSearch < 0 {
+			errors = append(errors, fmt.Sprintf("agents.%s.mcp.tool_search %d: must not be negative (0 disables selection)", name, agent.MCP.ToolSearch))
+		}
+		if agent.MCP.ToolSearch == 0 && len(agent.MCP.ToolSearchFloor) > 0 {
+			errors = append(errors, fmt.Sprintf("agents.%s.mcp.tool_search_floor set but tool_search is off: the floor only applies with selection enabled", name))
+		}
+		for _, pat := range agent.MCP.ToolSearchFloor {
+			if !validToolName(pat) {
+				errors = append(errors, fmt.Sprintf("agents.%s.mcp.tool_search_floor %q: must be an exact non-empty tool name without glob metacharacters or control characters", name, pat))
+			}
+		}
+	}
+	for name, server := range cfg.MCPServers {
+		for _, list := range [][]string{server.ToolInclude, server.ToolExclude} {
+			for _, pat := range list {
+				if !validToolPattern(pat) {
+					errors = append(errors, fmt.Sprintf("mcp_servers.%s pattern %q: must be a non-empty name/glob without control characters", name, pat))
+				}
+			}
+		}
+	}
+	return errors
+}
+
+// validToolPattern reports whether an include/exclude pattern is sane: a
+// non-empty, printable-ASCII name or '*'/'?' glob.
+func validToolPattern(pat string) bool {
+	if pat == "" {
+		return false
+	}
+	for i := 0; i < len(pat); i++ {
+		if pat[i] < 0x21 || pat[i] > 0x7e {
+			return false
+		}
+	}
+	return true
+}
+
+// validToolName reports whether an exact tool name (the tool_search floor) is
+// sane: printable ASCII with no glob metacharacters, which the exact-match
+// floor would silently never match.
+func validToolName(pat string) bool {
+	if !validToolPattern(pat) {
+		return false
+	}
+	return !strings.ContainsAny(pat, "*?")
 }
 
 // validateBYOKConfig validates the bring-your-own-key surface (NENYA-195):

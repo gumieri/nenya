@@ -2037,6 +2037,19 @@ type MCPServerConfig struct {
 	// Use it for credentialed servers so a missing token cannot degrade
 	// into an unauthenticated (or tool-less) request.
 	RequiredHeaders []string `json:"required_headers,omitempty"`
+	// ToolExclude / ToolInclude apply a per-server policy BEFORE injection
+	// (NENYA-162): include (when non-empty) keeps only matching tool names,
+	// then exclude removes matching ones — exclude always wins. Patterns match
+	// the server's OWN tool name — the same name the key's allowed_tools grant
+	// uses, NOT the advertised "server__tool" the model sees — and are either
+	// exact or a glob with '*' and '?' (e.g. "create_*"). A fully excluded
+	// server injects no tools; when another server of the agent still injects
+	// tools, a call naming one of the excluded server's tools is refused by the
+	// loop's non-injected guard (structured "[unavailable tool]" result) rather
+	// than dispatched. If every server ends up excluded, no MCP loop runs at
+	// all (nothing was injected).
+	ToolInclude []string `json:"tool_include,omitempty"`
+	ToolExclude []string `json:"tool_exclude,omitempty"`
 }
 
 // MCPGuardConfig controls the Nenya-managed MCP tool-call argument
@@ -2084,6 +2097,23 @@ type AgentMCPConfig struct {
 	AutoSearch    bool     `json:"auto_search,omitempty"`
 	SearchTool    string   `json:"search_tool,omitempty"`
 	SaveTool      string   `json:"save_tool,omitempty"`
+	// ToolSearch enables opt-in relevance-based MCP tool selection
+	// (NENYA-162): instead of injecting EVERY granted tool's declaration
+	// (token bloat on large servers), the gateway scores the granted tools
+	// against the conversation's own terms and injects only the top
+	// `tool_search` (N > 0) plus this agent's ToolSearchFloor. Same terms →
+	// same set; descending relevance with the name as tiebreak. 0/absent = off
+	// (the full granted set is injected, as before). Negative is rejected at
+	// load.
+	ToolSearch int `json:"tool_search,omitempty"`
+	// ToolSearchFloor names tools that are ALWAYS injected when ToolSearch is
+	// enabled, regardless of relevance (a request-loop correctness tool, a
+	// cheap-but-critical save tool). Entries are EXACT server tool names (the
+	// raw name, not the advertised "server__tool"; a glob is rejected at load
+	// because the floor matches by equality), and the entry must name a tool
+	// some configured server of this agent actually exposes. Empty when
+	// ToolSearch is off.
+	ToolSearchFloor []string `json:"tool_search_floor,omitempty"`
 }
 
 // DiscoveryConfig controls dynamic model discovery from upstream

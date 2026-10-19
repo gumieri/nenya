@@ -512,7 +512,7 @@ func partitionMCPToolCalls(calls []mcpToolCall, toolIndex *mcp.ToolRegistry) (mc
 	return
 }
 
-// executeMCPCalls executes MCP tool calls concurrently using the registered MCP servers.
+// executeMCPCallsWithUnavailable executes MCP tool calls concurrently using the registered MCP servers.
 // When the canary tripwire is armed, call arguments are scanned first:
 // a canary hit means the model reproduced gateway-injected context into
 // an outbound tool call — the signature of injection-driven exfiltration.
@@ -523,7 +523,26 @@ func partitionMCPToolCalls(calls []mcpToolCall, toolIndex *mcp.ToolRegistry) (mc
 // request (shared budget); an exfil verdict under strict action refuses
 // the call. Returns a slice of tool results in the same order
 // as the input calls.
-func executeMCPCalls(ctx context.Context, calls []mcpToolCall, gw *gateway.NenyaGateway, agentName string, canary pipeline.CanarResult, screen *egressScreenRuntime, apiKey *config.ApiKey) []*mcp.CallToolResult {
+// mcpExecOptions groups the MCP tool-call execution inputs (NENYA-162): the
+// session's unavailable-tool set is set only by the MCP loop (nil elsewhere —
+// the NENYA-162 non-injected-tool guard is then inert).
+type mcpExecOptions struct {
+	ctx         context.Context
+	calls       []mcpToolCall
+	gw          *gateway.NenyaGateway
+	agentName   string
+	canary      pipeline.CanarResult
+	screen      *egressScreenRuntime
+	apiKey      *config.ApiKey
+	unavailable map[string]bool
+}
+
+// executeMCPCallsWithUnavailable executes MCP tool calls; a model naming a
+// tool the session did not inject (unavailable set) gets a structured error
+// result instead of a dispatch.
+func executeMCPCallsWithUnavailable(in mcpExecOptions) []*mcp.CallToolResult {
+	ctx, calls, gw, agentName := in.ctx, in.calls, in.gw, in.agentName
+	canary, screen, apiKey, unavailable := in.canary, in.screen, in.apiKey, in.unavailable
 	if len(calls) == 0 {
 		return nil
 	}
@@ -552,7 +571,9 @@ func executeMCPCalls(ctx context.Context, calls []mcpToolCall, gw *gateway.Nenya
 			// Canary tripwire on the tool-args egress channel: scan
 			// BEFORE dispatching the call to the MCP server. Block
 			// action refuses the call (unscannable arguments fail
-			// closed); log action records and allows.
+			// closed); log action records and allows. The scan runs even
+			// for a non-injected tool (below): the arguments are still an
+			// egress channel worth recording.
 			tripped, refuse := scanToolArgsCanary(canary, c.Arguments, gw.Metrics, ctxLogger, c.Name)
 			if refuse {
 				results[idx] = &mcp.CallToolResult{
@@ -588,6 +609,25 @@ func executeMCPCalls(ctx context.Context, calls []mcpToolCall, gw *gateway.Nenya
 					IsError: true,
 				}
 				gw.Metrics.RecordMCPToolCall(route.ServerName, c.Name, agentName, time.Since(start), refusalKind)
+				return
+			}
+
+			// NENYA-162 loop correctness: a model naming an MCP tool the
+			// session did not inject (cut by the server's tool policy or by
+			// relevance-based selection) is refused with a STRUCTURED error
+			// result the model can act on — never a silent drop, never an
+			// upstream dispatch on a guessed name. unavailable is nil for
+			// callers outside the MCP loop (the guard is then inert). The
+			// refusal is counted by the selection metric, not as a server
+			// call: nothing was dispatched.
+			if unavailable[c.Name] {
+				ctxLogger.Warn("MCP tool call refused: not injected in this session",
+					"tool", c.Name, "agent", agentName)
+				gw.Metrics.RecordMCPToolSearch("noninjected_call_refused")
+				results[idx] = &mcp.CallToolResult{
+					Content: []mcp.ContentBlock{{Type: "text", Text: "[unavailable tool: " + c.Name + "]"}},
+					IsError: true,
+				}
 				return
 			}
 

@@ -31,23 +31,29 @@ import (
 // chatRequest holds the validated request data extracted from an incoming
 // /v1/chat/completions or /v1/messages payload.
 type chatRequest struct {
-	Payload      map[string]any
-	ModelName    string
-	TokenCount   int
-	Stream       bool
-	Targets      []routing.UpstreamTarget
-	AgentName    string
-	Cooldown     time.Duration
-	MaxRetries   int
-	CacheKey     string
-	HasMCPTools  bool
-	SoftLimit    int
-	HardLimit    int
-	WindowMaxCtx int
-	Profile      pipeline.ClientProfile
-	Messages     []any
-	KeyRef       string
-	SourceFormat string // "openai" or "anthropic" - indicates the original client request format
+	Payload     map[string]any
+	ModelName   string
+	TokenCount  int
+	Stream      bool
+	Targets     []routing.UpstreamTarget
+	AgentName   string
+	Cooldown    time.Duration
+	MaxRetries  int
+	CacheKey    string
+	HasMCPTools bool
+	// injectedMCPTools is the set of MCP function names the GATEWAY injected
+	// for this request (NENYA-162). It is the trust anchor for the loop's
+	// non-injected-call guard: re-deriving the set from the client-writable
+	// payload would let a caller declare an excluded tool name and defeat the
+	// policy.
+	injectedMCPTools []string
+	SoftLimit        int
+	HardLimit        int
+	WindowMaxCtx     int
+	Profile          pipeline.ClientProfile
+	Messages         []any
+	KeyRef           string
+	SourceFormat     string // "openai" or "anthropic" - indicates the original client request format
 	// BYOK reports that this request is served with a caller-supplied
 	// credential (NENYA-195): the response cache is bypassed and shared
 	// account rotation/breaker state is never written.
@@ -1402,22 +1408,23 @@ func (p *Proxy) handleChatCompletions(gw *gateway.NenyaGateway, w http.ResponseW
 
 	if req.HasMCPTools {
 		p.forwardToUpstreamWithMCP(gw, w, r, forwardOptions{
-			Targets:         req.Targets,
-			Payload:         req.Payload,
-			Stream:          req.Stream,
-			Cooldown:        req.Cooldown,
-			TokenCount:      req.TokenCount,
-			AgentName:       req.AgentName,
-			Agent:           req.Agent,
-			MaxRetries:      req.MaxRetries,
-			CacheKey:        req.CacheKey,
-			KeyRef:          req.KeyRef,
-			SourceFormat:    req.SourceFormat,
-			ApiKey:          apiKey,
-			Canary:          canaryResult,
-			Screen:          screen,
-			EntropyRedacted: pipelineOutcome.EntropyRedacted,
-			WindowCompacted: pipelineOutcome.WindowCompacted,
+			Targets:          req.Targets,
+			Payload:          req.Payload,
+			Stream:           req.Stream,
+			Cooldown:         req.Cooldown,
+			TokenCount:       req.TokenCount,
+			AgentName:        req.AgentName,
+			Agent:            req.Agent,
+			MaxRetries:       req.MaxRetries,
+			CacheKey:         req.CacheKey,
+			KeyRef:           req.KeyRef,
+			SourceFormat:     req.SourceFormat,
+			ApiKey:           apiKey,
+			Canary:           canaryResult,
+			Screen:           screen,
+			EntropyRedacted:  pipelineOutcome.EntropyRedacted,
+			WindowCompacted:  pipelineOutcome.WindowCompacted,
+			InjectedMCPTools: req.injectedMCPTools,
 		})
 		return
 	}

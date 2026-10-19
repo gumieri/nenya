@@ -184,6 +184,10 @@ type forwardOptions struct {
 	// (window compaction): auto cache-breakpoint anchoring stands down
 	// (NENYA-185).
 	WindowCompacted bool
+	// InjectedMCPTools is the set of MCP function names the gateway injected
+	// for this request (NENYA-162): the loop's non-injected-call guard is
+	// anchored on it, never on the client-writable payload.
+	InjectedMCPTools []string
 	// EntropyRedacted reports whether the entropy interceptor redacted
 	// high-entropy spans from this request. Consumed only by the
 	// buffered-response checkpoint (the tool-args checkpoint triggers

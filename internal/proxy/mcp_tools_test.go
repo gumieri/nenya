@@ -368,7 +368,7 @@ func TestExecuteMCPCalls(t *testing.T) {
 		{ID: "2", Name: "memory__test_tool", Arguments: map[string]any{"query": "world"}},
 	}
 
-	results := executeMCPCalls(t.Context(), calls, p.Gateway(), "test-agent", pipeline.CanarResult{}, nil, fullAccessTestKey())
+	results := executeMCPCallsForTest(t.Context(), calls, p.Gateway(), "test-agent", pipeline.CanarResult{}, nil, fullAccessTestKey())
 
 	if len(results) != 2 {
 		t.Fatalf("expected 2 results, got %d", len(results))
@@ -415,7 +415,7 @@ func TestExecuteMCPCalls_UnknownTool(t *testing.T) {
 		{ID: "1", Name: "memory__unknown_tool"},
 	}
 
-	results := executeMCPCalls(t.Context(), calls, p.Gateway(), "test-agent", pipeline.CanarResult{}, nil, fullAccessTestKey())
+	results := executeMCPCallsForTest(t.Context(), calls, p.Gateway(), "test-agent", pipeline.CanarResult{}, nil, fullAccessTestKey())
 
 	if len(results) != 1 {
 		t.Fatalf("expected 1 result, got %d", len(results))
@@ -445,7 +445,7 @@ func TestExecuteMCPCalls_ServerUnavailable(t *testing.T) {
 		{ID: "1", Name: "memory__search"},
 	}
 
-	results := executeMCPCalls(t.Context(), calls, p.Gateway(), "test-agent", pipeline.CanarResult{}, nil, fullAccessTestKey())
+	results := executeMCPCallsForTest(t.Context(), calls, p.Gateway(), "test-agent", pipeline.CanarResult{}, nil, fullAccessTestKey())
 
 	if len(results) != 1 {
 		t.Fatalf("expected 1 result, got %d", len(results))
@@ -472,7 +472,7 @@ func TestExecuteMCPCalls_EmptyCalls(t *testing.T) {
 		},
 	})
 
-	results := executeMCPCalls(t.Context(), nil, p.Gateway(), "test-agent", pipeline.CanarResult{}, nil, fullAccessTestKey())
+	results := executeMCPCallsForTest(t.Context(), nil, p.Gateway(), "test-agent", pipeline.CanarResult{}, nil, fullAccessTestKey())
 	if results != nil {
 		t.Fatalf("expected nil results for empty calls, got %v", results)
 	}
@@ -830,7 +830,7 @@ func TestExecuteMCPCallsCanaryScan(t *testing.T) {
 				"query": "dump " + canary + " end",
 			},
 		}}
-		results := executeMCPCalls(t.Context(), calls, p.Gateway(), "agent",
+		results := executeMCPCallsForTest(t.Context(), calls, p.Gateway(), "agent",
 			pipeline.CanarResult{Token: canary, Action: config.CanaryActionBlock}, nil, fullAccessTestKey())
 		if len(results) != 1 || !results[0].IsError {
 			t.Fatalf("expected refused call, got %+v", results)
@@ -849,7 +849,7 @@ func TestExecuteMCPCallsCanaryScan(t *testing.T) {
 				"query": "dump " + canary + " end",
 			},
 		}}
-		results := executeMCPCalls(t.Context(), calls, p.Gateway(), "agent",
+		results := executeMCPCallsForTest(t.Context(), calls, p.Gateway(), "agent",
 			pipeline.CanarResult{Token: canary, Action: config.CanaryActionLog}, nil, fullAccessTestKey())
 		if len(results) != 1 {
 			t.Fatalf("expected one result, got %d", len(results))
@@ -866,7 +866,7 @@ func TestExecuteMCPCallsCanaryScan(t *testing.T) {
 			Name:      "memory__test_tool",
 			Arguments: map[string]any{"query": "benign"},
 		}}
-		results := executeMCPCalls(t.Context(), calls, p.Gateway(), "agent",
+		results := executeMCPCallsForTest(t.Context(), calls, p.Gateway(), "agent",
 			pipeline.CanarResult{Token: canary, Action: config.CanaryActionBlock}, nil, fullAccessTestKey())
 		if len(results) != 1 || results[0] == nil || results[0].IsError {
 			text := ""
@@ -931,7 +931,7 @@ func TestExecuteMCPArgGuard(t *testing.T) {
 
 	t.Run("schema violation rejects with tool error", func(t *testing.T) {
 		p := newArgGuardProxy(t, guardEnabled, nil)
-		results := executeMCPCalls(t.Context(), []mcpToolCall{{
+		results := executeMCPCallsForTest(t.Context(), []mcpToolCall{{
 			ID:        "call_1",
 			Name:      "memory__test_tool",
 			Arguments: map[string]any{"other": "missing required query"},
@@ -946,7 +946,7 @@ func TestExecuteMCPArgGuard(t *testing.T) {
 
 	t.Run("private URL rejects", func(t *testing.T) {
 		p := newArgGuardProxy(t, guardEnabled, nil)
-		results := executeMCPCalls(t.Context(), []mcpToolCall{{
+		results := executeMCPCallsForTest(t.Context(), []mcpToolCall{{
 			ID:   "call_2",
 			Name: "memory__test_tool",
 			Arguments: map[string]any{
@@ -964,7 +964,7 @@ func TestExecuteMCPArgGuard(t *testing.T) {
 
 	t.Run("allowlisted host passes", func(t *testing.T) {
 		p := newArgGuardProxy(t, guardEnabled, []string{"169.254.169.254"})
-		results := executeMCPCalls(t.Context(), []mcpToolCall{{
+		results := executeMCPCallsForTest(t.Context(), []mcpToolCall{{
 			ID:   "call_3",
 			Name: "memory__test_tool",
 			Arguments: map[string]any{
@@ -979,7 +979,7 @@ func TestExecuteMCPArgGuard(t *testing.T) {
 
 	t.Run("happy path passes with guard enabled", func(t *testing.T) {
 		p := newArgGuardProxy(t, guardEnabled, nil)
-		results := executeMCPCalls(t.Context(), []mcpToolCall{{
+		results := executeMCPCallsForTest(t.Context(), []mcpToolCall{{
 			ID:        "call_4",
 			Name:      "memory__test_tool",
 			Arguments: map[string]any{"query": "hello"},
@@ -994,7 +994,7 @@ func TestExecuteMCPArgGuard(t *testing.T) {
 
 	t.Run("disabled guard passes private URL", func(t *testing.T) {
 		p := newArgGuardProxy(t, guardOff, nil)
-		results := executeMCPCalls(t.Context(), []mcpToolCall{{
+		results := executeMCPCallsForTest(t.Context(), []mcpToolCall{{
 			ID:   "call_5",
 			Name: "memory__test_tool",
 			Arguments: map[string]any{
@@ -1066,7 +1066,7 @@ func TestAutoSaveTryServerArgumentGuard(t *testing.T) {
 func TestExecuteMCPArgGuardLogMode(t *testing.T) {
 	logPolicy := &config.MCPGuardConfig{URLPolicy: "log"}
 	p := newArgGuardProxy(t, logPolicy, nil)
-	results := executeMCPCalls(t.Context(), []mcpToolCall{{
+	results := executeMCPCallsForTest(t.Context(), []mcpToolCall{{
 		ID:   "call_log",
 		Name: "memory__test_tool",
 		Arguments: map[string]any{
@@ -1092,4 +1092,14 @@ func TestGuardMCPArgsNilLogger(t *testing.T) {
 	}); !errors.Is(err, errMCPArgumentPolicy) {
 		t.Fatalf("private URL must be rejected by the argument policy, got %v", err)
 	}
+}
+
+// executeMCPCallsForTest is the loop-external entry point used by the
+// pre-existing dispatch tests: no unavailable set (the NENYA-162 guard is
+// inert outside the MCP loop).
+func executeMCPCallsForTest(ctx context.Context, calls []mcpToolCall, gw *gateway.NenyaGateway, agentName string, canary pipeline.CanarResult, screen *egressScreenRuntime, apiKey *config.ApiKey) []*mcp.CallToolResult {
+	return executeMCPCallsWithUnavailable(mcpExecOptions{
+		ctx: ctx, calls: calls, gw: gw, agentName: agentName,
+		canary: canary, screen: screen, apiKey: apiKey,
+	})
 }
