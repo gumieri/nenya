@@ -218,6 +218,13 @@ func validateSecretsStrength(secrets *SecretsConfig, source string) error {
 		if strings.TrimSpace(key) == "" {
 			continue // empty provider key = keyless upstream (no credential sent)
 		}
+		if IsSecretReference(key) {
+			// A well-formed env:/file: reference is not a credential
+			// (NENYA-166): its RESOLVED value is strength-checked at the
+			// LoadSecrets boundary, so an env var holding a weak secret is
+			// still refused. This pass only guards the reference shape.
+			continue
+		}
 		if reason := weakSecretReasonPatternOnly(key); reason != "" {
 			return refuseWeakSecret(credentialLabel("provider_keys", name), source, reason, "generate a strong value with `nenya secret set --provider <name>`")
 		}

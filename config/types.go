@@ -1130,6 +1130,11 @@ const DefaultBYOKHeader = "X-Nenya-Upstream-Key"
 // breaker thresholds, latency- and cost-weighted routing, and auto-tuning flags.
 type GovernanceConfig struct {
 	BlockedExecutionPatterns []string `json:"blocked_execution_patterns"`
+	// SecretResolutionTimeoutSeconds bounds each env:/file: secret-source read
+	// (NENYA-166): a hanging source (an open FIFO with no writer) must never
+	// wedge boot, reload, or shutdown. 0/absent = the 2s default; values above
+	// 60 are clamped; negative is rejected at load.
+	SecretResolutionTimeoutSeconds *int `json:"secret_resolution_timeout_seconds,omitempty"`
 	// BYOK configures per-request bring-your-own-key credential overrides
 	// (NENYA-195). Disabled by default; both this switch and the target
 	// provider's allow_byok must be on before a caller-supplied credential is

@@ -129,6 +129,14 @@ func collectValidationErrors(ctx context.Context, cfg *Config, providers map[str
 	errors = append(errors, validateParamCompatConfig(cfg)...)
 	errors = append(errors, validateAutoCacheBreakpointsConfig(cfg, logger)...)
 	errors = append(errors, validateBYOKConfig(cfg, logger)...)
+	if cfg.Governance.SecretResolutionTimeoutSeconds != nil {
+		t := *cfg.Governance.SecretResolutionTimeoutSeconds
+		if t < 0 {
+			errors = append(errors, fmt.Sprintf("governance.secret_resolution_timeout_seconds %d: must not be negative", t))
+		} else if t > MaxSecretResolutionTimeoutSeconds {
+			errors = append(errors, fmt.Sprintf("governance.secret_resolution_timeout_seconds %d: capped at %d", t, MaxSecretResolutionTimeoutSeconds))
+		}
+	}
 	errors = append(errors, validateSelfLoopGuard(cfg)...)
 	errors = append(errors, validateTelemetryExposure(cfg, logger)...)
 	errors = append(errors, validateNetworkPolicy(cfg)...)

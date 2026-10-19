@@ -249,7 +249,7 @@ func loadConfig(paths configPaths) (*config.Config, *config.SecretsConfig, error
 		return nil, nil, err
 	}
 
-	secrets, err := config.LoadSecrets(secretsConfigRoot(paths))
+	secrets, err := config.LoadSecretsBounded(secretsConfigRoot(paths), cfg.EffectiveSecretResolutionTimeout())
 	if err != nil {
 		return nil, nil, err
 	}
@@ -713,7 +713,7 @@ func reloadConfig(ctx context.Context, p *proxy.Proxy, paths configPaths, logger
 		return
 	}
 
-	newSecrets, err := config.LoadSecrets(secretsConfigRoot(paths))
+	newSecrets, err := config.LoadSecretsBounded(secretsConfigRoot(paths), newCfg.EffectiveSecretResolutionTimeout())
 	if err != nil {
 		logger.Error("reload failed: could not load secrets", "err", err)
 		return
@@ -721,6 +721,23 @@ func reloadConfig(ctx context.Context, p *proxy.Proxy, paths configPaths, logger
 
 	if err := config.ValidateConfigurationNoPing(ctx, newCfg, newSecrets, logger); err != nil {
 		logger.Error("reload failed: configuration validation", "err", err)
+		return
+	}
+
+	// NENYA-166: a previously-serving provider whose credential would be lost
+	// (secret reference now failing, key removed from the secrets document)
+	// rejects the reload atomically — the lenient swap-in semantics must never
+	// silently drop serving capacity. The gateway is not touched on this path.
+	stillConfigured := make(map[string]struct{}, len(newCfg.Providers))
+	for name := range newCfg.Providers {
+		stillConfigured[name] = struct{}{}
+	}
+	if lost := config.ServeContinuityIssues(p.Gateway().Providers, config.ResolveProviders(newCfg, newSecrets), stillConfigured); len(lost) > 0 {
+		if g := p.Gateway(); g != nil {
+			g.Metrics.RecordReloadRejected("provider_continuity")
+		}
+		logger.Error("reload rejected: providers serving before the reload would lose their credential",
+			"providers", lost)
 		return
 	}
 

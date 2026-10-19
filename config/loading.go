@@ -625,6 +625,16 @@ func recordSecrets(res *SecretsResolution, source string, secrets *SecretsConfig
 // root, empty in file mode). Returns an error if no secrets are found or
 // validation fails.
 func LoadSecrets(configRoot string) (*SecretsConfig, error) {
+	return LoadSecretsBounded(configRoot, DefaultSecretResolutionTimeout)
+}
+
+// LoadSecretsBounded is LoadSecrets with an explicit per-resolution bound for
+// env:/file: secret references (NENYA-166). References are resolved and their
+// RESOLVED values re-validated (strength + structure) before the document is
+// returned: a rotated credential that became weak, or a source that fails to
+// resolve, fails the load — which on a SIGHUP reload is exactly the
+// reject-and-keep-last-known-good behavior.
+func LoadSecretsBounded(configRoot string, timeout time.Duration) (*SecretsConfig, error) {
 	res, err := ResolveSecrets(configRoot)
 	if err != nil {
 		return nil, err
@@ -632,7 +642,13 @@ func LoadSecrets(configRoot string) (*SecretsConfig, error) {
 	if res.Secrets == nil {
 		return nil, errors.New("secrets not found: checked " + strings.Join(res.Searched, ", "))
 	}
-	return res.Secrets, nil
+	if err := ResolveProviderKeyReferences(res.Secrets, configRoot, timeout); err != nil {
+		return nil, err
+	}
+	// The resolution pass ran validator first on the RAW document; the
+	// resolved values are what actually serve, so they get the same
+	// treatment (a reference to a weak/empty credential refuses here).
+	return validateSecretsResult(res.Secrets, res.ActiveSource)
 }
 
 func validateSecretsResult(secrets *SecretsConfig, source string) (*SecretsConfig, error) {

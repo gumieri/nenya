@@ -129,6 +129,10 @@ type Metrics struct {
 	// (nenya_auto_cache_breakpoints_total).
 	autoCacheBreakpoints sync.Map
 
+	// reloadRejected counts configuration reloads refused before the swap,
+	// by reason (nenya_reload_rejected_total, NENYA-166).
+	reloadRejected sync.Map
+
 	// byokRequests counts requests served with a caller-supplied upstream
 	// credential, by provider (nenya_byok_requests_total, NENYA-195).
 	byokRequests sync.Map
@@ -682,6 +686,22 @@ func (m *Metrics) RecordAutoCacheBreakpoint(outcome string) {
 		outcome = "other"
 	}
 	e := getOrCreateEntry(&m.autoCacheBreakpoints, map[string]string{"outcome": outcome})
+	e.value.Add(1)
+}
+
+// RecordReloadRejected records a configuration reload refused before the
+// gateway was touched (NENYA-166). Closed reason set; anything else collapses
+// to "other". Nil-safe.
+func (m *Metrics) RecordReloadRejected(reason string) {
+	if m == nil || reason == "" {
+		return
+	}
+	switch reason {
+	case "provider_continuity", "load_error", "validation":
+	default:
+		reason = "other"
+	}
+	e := getOrCreateEntry(&m.reloadRejected, map[string]string{"reason": reason})
 	e.value.Add(1)
 }
 
@@ -1820,6 +1840,8 @@ func (m *Metrics) writePipelineMetrics(w io.Writer) {
 		"Conflicting duplicate parameters resolved by the request normalizer, by logical parameter (NENYA-186).", &m.duplicateParams)
 	m.writeCounterMap(w, "nenya_unknown_request_fields_total",
 		"Request fields no format path consumes, by resolved format (NENYA-186).", &m.unknownRequestFields)
+	m.writeCounterMap(w, "nenya_reload_rejected_total",
+		"Configuration reloads refused before the swap, by reason (NENYA-166).", &m.reloadRejected)
 	m.writeCounterMap(w, "nenya_byok_requests_total",
 		"Requests served with a caller-supplied upstream credential, by provider (NENYA-195).", &m.byokRequests)
 	m.writeCounterMap(w, "nenya_auto_cache_breakpoints_total",

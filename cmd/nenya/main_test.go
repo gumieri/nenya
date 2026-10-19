@@ -885,3 +885,73 @@ func TestBuildSpotlightTierGate(t *testing.T) {
 		}
 	})
 }
+
+// NENYA-166: a reload that would strip a serving provider's credential (its
+// key removed from the secrets document) must be rejected atomically — the
+// last-known-good gateway keeps serving.
+func TestReloadConfig_RejectsLostProviderCredential(t *testing.T) {
+	logger := testutil.NewTestLogger()
+	dir := t.TempDir()
+	write := func(name, content string) string {
+		path := filepath.Join(dir, name)
+		if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		return path
+	}
+
+	configPath := write("config.json", `{
+		"server": {"listen_addr": ":9090"},
+		"providers": {"upstream": {"url": "http://127.0.0.1:1/v1/chat/completions", "auth_style": "bearer"}}
+	}`)
+	secretsDir := filepath.Join(dir, "secrets")
+	if err := os.MkdirAll(secretsDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	secretsPath := filepath.Join(secretsDir, "secrets.json")
+	secretsBody := func(json string) {
+		if err := os.WriteFile(secretsPath, []byte(json), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// The serving state: the provider has a credential.
+	secretsBody(`{"client_token": "nk-loadtest-0123456789abc67890", "provider_keys": {"upstream": "sk-serving-credential"}}`)
+	t.Setenv("NENYA_SECRETS_DIR", secretsDir)
+	cfg, err := config.Load(configPath)
+	if err != nil {
+		t.Fatalf("load config: %v", err)
+	}
+	t.Setenv("CREDENTIALS_DIRECTORY", "")
+	secrets, err := config.LoadSecretsBounded(dir, config.DefaultSecretResolutionTimeout)
+	if err != nil {
+		t.Fatalf("load secrets: %v", err)
+	}
+	gw := gateway.New(context.Background(), *cfg, secrets, logger)
+	if len(gw.Providers["upstream"].APIKey) == 0 {
+		t.Fatalf("fixture: the provider must resolve a credential, got %+v", gw.Providers["upstream"])
+	}
+
+	p := &proxy.Proxy{}
+	p.StoreGateway(gw)
+
+	// The torn-down state: the same config, but the provider's credential is gone.
+	secretsBody(`{"client_token": "nk-loadtest-0123456789abc67890"}`)
+	t.Setenv("NENYA_SECRETS_DIR", secretsDir)
+	reloadConfig(context.Background(), p, configPaths{file: configPath}, logger)
+
+	if got := p.Gateway(); got != gw {
+		t.Fatalf("a reload losing a serving provider's credential must keep the last-known-good gateway")
+	}
+	var sb strings.Builder
+	gw.Metrics.WritePrometheus(&sb)
+	if !strings.Contains(sb.String(), `nenya_reload_rejected_total{reason="provider_continuity"} 1`) {
+		t.Fatalf("the rejection must be counted:\n%s", sb.String())
+	}
+
+	// The same secrets document with the key RESTORED must reload cleanly.
+	secretsBody(`{"client_token": "nk-loadtest-0123456789abc67890", "provider_keys": {"upstream": "sk-rotated-credential"}}`)
+	reloadConfig(context.Background(), p, configPaths{file: configPath}, logger)
+	if p.Gateway() == gw || p.Gateway() == nil {
+		t.Fatalf("a reload whose providers all keep credentials must swap the gateway")
+	}
+}
