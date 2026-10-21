@@ -1477,7 +1477,6 @@ func (r *SSETransformingReader) applyStreamFilters(parsed map[string]interface{}
 		}
 		mutated = mutated || action == ActionRedact
 	}
-
 	if r.exfilGuard != nil && !r.exfilGuard.IsBlocked() {
 		out, changed, blocked := r.applyExfilStage(parsed)
 		if blocked {
@@ -1503,20 +1502,25 @@ func (r *SSETransformingReader) applyStreamFilters(parsed map[string]interface{}
 	return parsed, mutated
 }
 
-// applyStreamFilter runs the secret/policy filter over one SSE delta,
-// reporting the resulting action so callers can detect rewrites.
+// applyStreamFilter runs the secret/policy filter over one SSE chunk,
+// reporting the resulting action so callers can detect rewrites. Every
+// model-text surface is scanned (AUD-04): the OpenAI/Anthropic delta fields
+// and each Gemini-native text part — raw upstream chunks are scanned before
+// the provider transformer converts them.
 func applyStreamFilter(parsed map[string]interface{}, filter *StreamFilter) (map[string]interface{}, FilterAction) {
-	content := ExtractDeltaContentFromMap(parsed)
-	if content == "" {
-		return parsed, ActionPass
-	}
-	redacted, action, _ := filter.FilterContent(content)
-	if action == ActionBlock {
+	action := ActionPass
+	blocked, _ := forEachFilterableTextPart(parsed, func(content string) (string, FilterAction) {
+		redacted, a, _ := filter.FilterContent(content)
+		if a == ActionBlock {
+			return content, ActionBlock
+		}
+		if a == ActionRedact {
+			action = ActionRedact
+		}
+		return redacted, a
+	})
+	if blocked {
 		return nil, ActionBlock
-	}
-	if action == ActionRedact && redacted != content {
-		parsed = copyMap(parsed)
-		_ = ReplaceDeltaContentMap(parsed, redacted)
 	}
 	return parsed, action
 }
@@ -1542,14 +1546,17 @@ func (r *SSETransformingReader) blockedStreamError() error {
 	return ErrStreamBlocked
 }
 
-// applyCanaryWatcher scans one SSE delta for the request canary. A
-// block verdict nils the chunk so the reader raises ErrCanaryDetected.
+// applyCanaryWatcher scans every model-text surface of one SSE chunk for
+// the request canary (AUD-04: including Gemini-native parts). A block
+// verdict nils the chunk so the reader raises ErrCanaryDetected.
 func applyCanaryWatcher(parsed map[string]interface{}, watcher *CanaryWatcher) map[string]interface{} {
-	content := extractExfilContent(parsed)
-	if content == "" {
-		return parsed
-	}
-	if _, action, _ := watcher.FilterContent(content); action == ActionBlock {
+	blocked, _ := forEachFilterableTextPart(parsed, func(content string) (string, FilterAction) {
+		if _, action, _ := watcher.FilterContent(content); action == ActionBlock {
+			return content, ActionBlock
+		}
+		return content, ActionPass
+	})
+	if blocked {
 		return nil
 	}
 	return parsed
@@ -1560,7 +1567,7 @@ func applyCanaryWatcher(parsed map[string]interface{}, watcher *CanaryWatcher) m
 // NENYA-205), applies the guard's client-visible return, and reports
 // whether the guard blocked this chunk.
 func (r *SSETransformingReader) applyExfilStage(parsed map[string]interface{}) (out map[string]interface{}, mutated, blocked bool) {
-	if content := extractExfilContent(parsed); content != "" {
+	if hasFilterableText(parsed) {
 		r.lastSurface = exfilSurfaceOf(parsed)
 	}
 	out, _, mutated = applyExfilGuard(parsed, r.exfilGuard)
@@ -1568,56 +1575,49 @@ func (r *SSETransformingReader) applyExfilStage(parsed map[string]interface{}) (
 	return out, mutated, blocked
 }
 
-// applyExfilGuard runs the URL egress policy over one SSE delta in
-// either wire format (OpenAI or Anthropic). The guard's return is the
-// client-visible content for this delta and is applied on EVERY action:
-// stripped spans replace the delta field, and a shortened emit (the
-// guard withheld a whitespace-free tail, NENYA-205) must not stream the
-// original — the withheld remainder is delivered at the terminal flush.
-// A block verdict nils the chunk so the reader raises ErrExfilBlocked
-// (the guard itself flips to blocked). The bool reports whether the
-// chunk was rewritten (callers re-encode).
+// applyExfilGuard runs the URL egress policy over every model-text surface
+// of one SSE chunk (AUD-04). The guard's return is the client-visible
+// content for each surface and is applied on EVERY action: stripped spans
+// replace the text field, and a shortened emit (the guard withheld a
+// whitespace-free tail, NENYA-205) must not stream the original — the
+// withheld remainder is delivered at the terminal flush. A block verdict
+// nils the chunk so the reader raises ErrExfilBlocked (the guard itself
+// flips to blocked). The bool reports whether the chunk was rewritten
+// (callers re-encode). The middle FilterAction is degenerate by
+// construction (Pass/Redact only — a block comes back as a nil chunk with
+// the guard flipped, observable via IsBlocked); the only caller ignores it.
 func applyExfilGuard(parsed map[string]interface{}, guard *ExfilGuard) (map[string]interface{}, FilterAction, bool) {
-	content := extractExfilContent(parsed)
-	if content == "" {
-		return parsed, ActionPass, false
-	}
-	rewritten, action, _ := guard.FilterContent(content)
-	if action == ActionBlock {
+	rewrote := false
+	blocked, _ := forEachFilterableTextPart(parsed, func(content string) (string, FilterAction) {
+		rewritten, action, _ := guard.FilterContent(content)
+		if rewritten != content {
+			rewrote = true
+		}
+		return rewritten, action
+	})
+	if blocked {
 		return nil, ActionBlock, true
 	}
-	if rewritten != content {
-		parsed = copyMap(parsed)
-		if !setExfilContent(parsed, rewritten) {
-			return parsed, ActionPass, false
-		}
-		return parsed, action, true
+	if rewrote {
+		return parsed, ActionRedact, true
 	}
-	return parsed, action, false
+	return parsed, ActionPass, false
 }
 
-// applyEntropyFilter runs the entropy redactor over one SSE delta,
-// reporting whether it rewrote the chunk.
+// applyEntropyFilter runs the entropy redactor over one SSE chunk,
+// reporting whether it rewrote anything. Every model-text surface is
+// visited (AUD-04).
 func applyEntropyFilter(parsed map[string]interface{}, filter *StreamEntropyFilter) (map[string]interface{}, bool) {
-	content := ExtractDeltaContentFromMap(parsed)
-	if content == "" {
-		return parsed, false
-	}
-	redacted, action := filter.FilterContent(content)
-	if action == ActionRedact && redacted != content {
-		parsed = copyMap(parsed)
-		ReplaceDeltaContentMap(parsed, redacted)
-		return parsed, true
-	}
-	return parsed, false
-}
-
-func copyMap(m map[string]interface{}) map[string]interface{} {
-	out := make(map[string]interface{}, len(m))
-	for k, v := range m {
-		out[k] = v
-	}
-	return out
+	rewrote := false
+	forEachFilterableTextPart(parsed, func(content string) (string, FilterAction) {
+		redacted, a := filter.FilterContent(content)
+		if a == ActionRedact && redacted != content {
+			rewrote = true
+			return redacted, a
+		}
+		return content, a
+	})
+	return parsed, rewrote
 }
 
 func (r *SSETransformingReader) applyContentFilters(data []byte, parsed map[string]interface{}) []byte {

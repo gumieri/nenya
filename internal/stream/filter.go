@@ -268,6 +268,11 @@ func ExtractDeltaContent(data []byte) string {
 // ExtractDeltaContentFromMap extracts the delta content field from a parsed SSE chunk.
 // It navigates the OpenAI-style structure: choices[0].delta.content and returns the
 // content string, or an empty string if the structure is invalid.
+//
+// Deliberately OpenAI-shaped only: the terminal-state matrix keys its
+// cut/continuation semantics on this function's OpenAI-only view, so
+// Gemini-native model text goes through forEachFilterableTextPart at the
+// filter call sites instead of broadening this one (AUD-04).
 func ExtractDeltaContentFromMap(chunk map[string]interface{}) string {
 	choices, ok := chunk["choices"].([]interface{})
 	if !ok || len(choices) == 0 {
@@ -283,6 +288,106 @@ func ExtractDeltaContentFromMap(chunk map[string]interface{}) string {
 	}
 	content, _ := delta["content"].(string)
 	return content
+}
+
+// geminiParts locates the parts array of a Gemini-native chunk
+// (candidates[0].content.parts). Returns nil for every other shape. The
+// first candidate is the one a client renders, mirroring the first-choice
+// rule for OpenAI-shaped payloads.
+func geminiParts(chunk map[string]interface{}) []interface{} {
+	if chunk == nil {
+		return nil
+	}
+	candidates, ok := chunk["candidates"].([]interface{})
+	if !ok || len(candidates) == 0 {
+		return nil
+	}
+	candidate, ok := candidates[0].(map[string]interface{})
+	if !ok {
+		return nil
+	}
+	content, ok := candidate["content"].(map[string]interface{})
+	if !ok {
+		return nil
+	}
+	parts, _ := content["parts"].([]interface{})
+	return parts
+}
+
+// forEachFilterableTextPart applies fn to EVERY model-text surface of a
+// parsed chunk — the OpenAI/Anthropic delta fields and every Gemini-native
+// text part (AUD-04) — writing each rewritten value back in place. Gemini
+// chunks can carry multiple text parts (a thought-summary part next to the
+// answer part), so the parts loop is per part: scanning only the first
+// would let a violation in a later part stream through. fn returns
+// (rewritten, action); iteration stops on ActionBlock. Returns whether any
+// surface was blocked and whether any value was rewritten.
+func forEachFilterableTextPart(parsed map[string]interface{}, fn func(content string) (string, FilterAction)) (blocked, rewrote bool) {
+	if parsed == nil {
+		return false, false
+	}
+	blocked, rewrote = forEachDeltaTextPart(parsed, fn)
+	if blocked {
+		return true, rewrote
+	}
+	return forEachGeminiTextPart(parsed, fn)
+}
+
+// forEachDeltaTextPart visits the OpenAI/Anthropic delta fields of a chunk
+// (see forEachFilterableTextPart for the contract).
+func forEachDeltaTextPart(parsed map[string]interface{}, fn func(content string) (string, FilterAction)) (blocked, rewrote bool) {
+	delta := sseDelta(parsed)
+	if delta == nil {
+		return false, false
+	}
+	for _, key := range exfilContentKeys {
+		if text, ok := delta[key].(string); ok && text != "" {
+			out, action := fn(text)
+			if action == ActionBlock {
+				return true, rewrote
+			}
+			if out != text {
+				delta[key] = out
+				rewrote = true
+			}
+		}
+	}
+	return false, rewrote
+}
+
+// forEachGeminiTextPart visits every Gemini-native text part of a chunk
+// (see forEachFilterableTextPart for the contract).
+func forEachGeminiTextPart(parsed map[string]interface{}, fn func(content string) (string, FilterAction)) (blocked, rewrote bool) {
+	for _, rawPart := range geminiParts(parsed) {
+		part, ok := rawPart.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		text, ok := part["text"].(string)
+		if !ok || text == "" {
+			continue
+		}
+		out, action := fn(text)
+		if action == ActionBlock {
+			return true, rewrote
+		}
+		if out != text {
+			part["text"] = out
+			rewrote = true
+		}
+	}
+	return false, rewrote
+}
+
+// hasFilterableText reports whether forEachFilterableTextPart would visit
+// any surface (used for surface bookkeeping without running a filter).
+func hasFilterableText(parsed map[string]interface{}) bool {
+	visited := false
+	forEachFilterableTextPart(parsed, func(content string) (string, FilterAction) {
+		visited = true
+		return content, ActionPass
+	})
+	return visited
 }
 
 // ExtractFinishReasonFromMap extracts the finish_reason from choices[0] of an

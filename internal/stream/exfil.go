@@ -326,40 +326,74 @@ func clipSpansWithin(spans []windowSpan, cut int) []windowSpan {
 // chunk format-identical to the stream that carried it.
 type exfilSurface struct {
 	anthropic bool   // content_block_delta (top-level delta) vs OpenAI chunk
+	gemini    bool   // candidates[].content.parts[].text (Gemini-native chunk)
 	key       string // the model-text field the content was read from
 	index     int    // Anthropic content-block index
 	hasIndex  bool
 }
 
 // exfilSurfaceOf inspects a parsed chunk for the surface
-// extractExfilContent reads from.
+// extractExfilContent reads from. A delta/choices surface is claimed only
+// when text was actually read from it (the same predicate
+// extractExfilContent applies), so a hybrid chunk — a textless delta next
+// to Gemini candidates — flushes in the shape its text came from.
 func exfilSurfaceOf(parsed map[string]interface{}) exfilSurface {
 	if delta, ok := parsed["delta"].(map[string]interface{}); ok {
-		s := exfilSurface{anthropic: true, key: exfilKeyOf(delta)}
-		if idx, ok := parsed["index"].(float64); ok {
-			s.index, s.hasIndex = int(idx), true
+		if key, has := exfilDeltaKey(delta); has {
+			s := exfilSurface{anthropic: true, key: key}
+			if idx, ok := parsed["index"].(float64); ok {
+				s.index, s.hasIndex = int(idx), true
+			}
+			return s
 		}
+	}
+	if s, ok := openAIDeltaSurface(parsed); ok {
 		return s
 	}
-	if choices, ok := parsed["choices"].([]interface{}); ok && len(choices) > 0 {
-		if choice, ok := choices[0].(map[string]interface{}); ok {
-			if delta, ok := choice["delta"].(map[string]interface{}); ok {
-				return exfilSurface{key: exfilKeyOf(delta)}
-			}
+	for _, rawPart := range geminiParts(parsed) {
+		part, ok := rawPart.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		if text, ok := part["text"].(string); ok && text != "" {
+			return exfilSurface{gemini: true, key: "text"}
 		}
 	}
 	return exfilSurface{}
 }
 
-// exfilKeyOf returns the first model-text field carrying a non-empty
-// string, defaulting to the OpenAI text surface.
-func exfilKeyOf(delta map[string]interface{}) string {
+// openAIDeltaSurface claims the OpenAI surface when the first choice's
+// delta carries model text.
+func openAIDeltaSurface(parsed map[string]interface{}) (exfilSurface, bool) {
+	choices, ok := parsed["choices"].([]interface{})
+	if !ok || len(choices) == 0 {
+		return exfilSurface{}, false
+	}
+	choice, ok := choices[0].(map[string]interface{})
+	if !ok {
+		return exfilSurface{}, false
+	}
+	delta, ok := choice["delta"].(map[string]interface{})
+	if !ok {
+		return exfilSurface{}, false
+	}
+	key, has := exfilDeltaKey(delta)
+	if !has {
+		return exfilSurface{}, false
+	}
+	return exfilSurface{key: key}, true
+}
+
+// exfilDeltaKey returns the first model-text field carrying a non-empty
+// string — the exact predicate extractExfilContent applies to a delta —
+// so surface bookkeeping and extraction can never disagree.
+func exfilDeltaKey(delta map[string]interface{}) (string, bool) {
 	for _, key := range exfilContentKeys {
 		if text, ok := delta[key].(string); ok && text != "" {
-			return key
+			return key, true
 		}
 	}
-	return "content"
+	return "", false
 }
 
 // buildExfilFlushChunk encodes held text as a synthetic content chunk in
@@ -384,6 +418,11 @@ func buildExfilFlushChunk(s exfilSurface, text string) []byte {
 	case s.key == "reasoning_content":
 		payload["choices"] = []interface{}{map[string]interface{}{
 			"index": 0, "delta": map[string]interface{}{"reasoning_content": text}}}
+	case s.gemini:
+		payload["candidates"] = []interface{}{map[string]interface{}{
+			"content": map[string]interface{}{
+				"role":  "model",
+				"parts": []interface{}{map[string]interface{}{"text": text}}}}}
 	default:
 		payload["choices"] = []interface{}{map[string]interface{}{
 			"index": 0, "delta": map[string]interface{}{"content": text}}}
@@ -466,7 +505,9 @@ var exfilContentKeys = []string{"content", "text", "thinking", "reasoning_conten
 // chunk in BOTH wire formats: OpenAI (choices[0].delta.*) and Anthropic
 // (content_block_delta top-level delta). Returns "" when the chunk
 // carries no model text so non-content events (pings, tool_calls,
-// usage) skip evaluation.
+// usage) skip evaluation. Gemini-native chunks are handled per part by
+// forEachFilterableTextPart (AUD-04) — every text part is scanned, not
+// just the first.
 func extractExfilContent(parsed map[string]interface{}) string {
 	if parsed == nil {
 		return ""
@@ -501,6 +542,8 @@ func sseDelta(parsed map[string]interface{}) map[string]interface{} {
 // setExfilContent writes rewritten text back to the field extracted by
 // extractExfilContent, mutating the chunk in place (no marshal; the
 // reader re-encodes). Returns false when no known field is present.
+// Gemini-native chunks are written back per part by
+// forEachFilterableTextPart (AUD-04).
 func setExfilContent(parsed map[string]interface{}, newContent string) bool {
 	if parsed == nil {
 		return false
