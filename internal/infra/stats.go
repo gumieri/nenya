@@ -41,6 +41,14 @@ type UsageTracker struct {
 	mu     sync.RWMutex
 	models map[string]*modelStats
 	start  time.Time
+	// guard bounds the per-model keys against caller-controlled model
+	// strings (NENYA-144): hostile ids collapse to the sentinel labels
+	// instead of growing this map without bound.
+	guard *ModelLabelGuard
+	// invalidLabels / overflowLabels count collapsed model keys, surfaced in
+	// Snapshot under "label_violations".
+	invalidLabels  atomic.Uint64
+	overflowLabels atomic.Uint64
 }
 
 // NewUsageTracker returns an empty UsageTracker ready for use.
@@ -48,6 +56,7 @@ func NewUsageTracker() *UsageTracker {
 	return &UsageTracker{
 		models: make(map[string]*modelStats),
 		start:  time.Now(),
+		guard:  NewModelLabelGuard(DefaultMaxModelSeries),
 	}
 }
 
@@ -57,6 +66,7 @@ func NewUsageTracker() *UsageTracker {
 // create path upgrades R->W and re-checks under the write lock so racing
 // creators converge on one pointer.
 func (u *UsageTracker) getOrCreate(model string) *modelStats {
+	model = u.boundedModel(model)
 	u.mu.RLock()
 	s, ok := u.models[model]
 	u.mu.RUnlock()
@@ -75,6 +85,31 @@ func (u *UsageTracker) getOrCreate(model string) *modelStats {
 		u.models[strings.Clone(model)] = s
 	}
 	return s
+}
+
+// boundedModel maps a caller-controlled model string to its bounded label
+// (NENYA-144), counting collapses. Nil guard (zero-value trackers in tests)
+// sanitizes without a series budget.
+func (u *UsageTracker) boundedModel(model string) string {
+	if model == "" {
+		// Same semantics as Metrics.ModelLabel: an empty model is "unknown",
+		// not a cardinality violation.
+		return UnknownModelLabel
+	}
+	if u.guard == nil {
+		if !PlausibleModelLabel(model) {
+			return InvalidModelLabel
+		}
+		return model
+	}
+	out := u.guard.Label(model)
+	switch {
+	case out.Invalid:
+		u.invalidLabels.Add(1)
+	case out.Overflow:
+		u.overflowLabels.Add(1)
+	}
+	return out.Label
 }
 
 // RecordRequest counts one request for model and adds inputTokens to its input
@@ -183,6 +218,12 @@ func (u *UsageTracker) Snapshot() map[string]interface{} {
 	return map[string]interface{}{
 		"uptime_seconds": int(time.Since(u.start).Seconds()),
 		"models":         modelsI,
+		// NENYA-144: how many caller-controlled model strings collapsed to a
+		// sentinel label instead of growing the per-model series.
+		"label_violations": map[string]interface{}{
+			"invalid":  u.invalidLabels.Load(),
+			"overflow": u.overflowLabels.Load(),
+		},
 	}
 }
 

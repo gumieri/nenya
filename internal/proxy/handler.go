@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -186,8 +187,22 @@ func (p *Proxy) chainHealthz(gw *gateway.NenyaGateway, w http.ResponseWriter, r 
 func (p *Proxy) chainStats(gw *gateway.NenyaGateway, w http.ResponseWriter, r *http.Request) {
 	unauth := telemetryUnauthenticated(gw)
 	p.chainEndpoint(http.MethodGet, "/statsz", !unauth, func(gw *gateway.NenyaGateway, w http.ResponseWriter, r *http.Request, apiKey *config.ApiKey) {
+		// NENYA-144 format negotiation: ?format=json (the default, the
+		// historical payload) or ?format=text for a deterministic flat
+		// rendering for agent/CLI consumers. Auth rules are unchanged, and
+		// pagination is N/A by design: the per-model series family is bounded
+		// by the label guard, so the whole snapshot fits one response. The
+		// negotiation sits inside the HTTP observer so 400s are counted too.
 		infra.ObserveHTTP(gw.Metrics, func(w http.ResponseWriter) {
-			p.handleStats(w, unauth)
+			switch r.URL.Query().Get("format") {
+			case "", "json":
+				p.handleStats(w, unauth)
+			case "text":
+				p.handleStatsText(w, unauth)
+			default:
+				writeStructuredError(w, http.StatusBadRequest, infra.ErrorKindInvalidRequest,
+					"unsupported format: expected ?format=json or ?format=text")
+			}
 		})(w, r)
 	})(gw, w, r)
 }
@@ -803,13 +818,10 @@ const anthropicModelsEpoch = "1970-01-01T00:00:00Z"
 // handleStats provides runtime statistics including usage, circuit breaker state, and MCP status.
 // When redactKeys is set (unauthenticated telemetry mode), per-key usage is
 // omitted — key names never leave the process.
-func (p *Proxy) handleStats(w http.ResponseWriter, redactKeys bool) {
-	gw := p.Gateway()
-	if gw == nil {
-		writeStructuredError(w, http.StatusServiceUnavailable, infra.ErrorKindInternal, "Gateway not initialized")
-		return
-	}
-	w.Header().Set("Content-Type", "application/json")
+// buildStatsSnapshot assembles the /statsz snapshot shared by every output
+// format (NENYA-144): one builder, so the JSON and text forms can never drift
+// about content.
+func (p *Proxy) buildStatsSnapshot(gw *gateway.NenyaGateway, redactKeys bool) map[string]interface{} {
 	stats := gw.Stats.Snapshot()
 	stats["circuit_breakers"] = gw.AgentState.CBDetailedSnapshot()
 
@@ -914,9 +926,109 @@ func (p *Proxy) handleStats(w http.ResponseWriter, redactKeys bool) {
 		stats["token_calibration"] = calibration
 	}
 
+	return stats
+}
+
+// handleStats serves the /statsz JSON form: the historical payload, the
+// default of the NENYA-144 format negotiation.
+func (p *Proxy) handleStats(w http.ResponseWriter, redactKeys bool) {
+	gw := p.Gateway()
+	if gw == nil {
+		writeStructuredError(w, http.StatusServiceUnavailable, infra.ErrorKindInternal, "Gateway not initialized")
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	stats := p.buildStatsSnapshot(gw, redactKeys)
 	if err := json.NewEncoder(w).Encode(stats); err != nil {
 		gw.Logger.Error("failed to encode stats response", "err", err)
 	}
+}
+
+// handleStatsText is handleStats for ?format=text (NENYA-144): the same
+// snapshot (one shared builder with the JSON form, so the formats cannot
+// drift) rendered as deterministic dotted-path lines
+// ("models.gpt-4o.requests: 3"), sorted, for agent/CLI consumers that want
+// grep-able output without a JSON parser.
+func (p *Proxy) handleStatsText(w http.ResponseWriter, redactKeys bool) {
+	gw := p.Gateway()
+	if gw == nil {
+		writeStructuredError(w, http.StatusServiceUnavailable, infra.ErrorKindInternal, "Gateway not initialized")
+		return
+	}
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+
+	var sb strings.Builder
+	renderStatsText(&sb, p.buildStatsSnapshot(gw, redactKeys))
+	_, _ = sb.WriteString("\n")
+	_, _ = w.Write([]byte(sb.String()))
+}
+
+// renderStatsText writes one "dotted.path: value" line per scalar leaf of the
+// stats snapshot, lines sorted by their full dotted path so the output is
+// deterministic. Non-map containers (arrays, mixed values) render as compact
+// JSON — an encoding of the value, not a re-formatting of it, so text and
+// JSON forms never disagree about content. Path segments and values are
+// JSON-escaped, so a hostile label (a model id with an embedded newline, say)
+// renders as ONE physical line and can never forge additional lines.
+func renderStatsText(sb *strings.Builder, node interface{}) {
+	var lines []string
+	collectStatsLines(nil, node, &lines)
+	sort.Strings(lines)
+	for _, line := range lines {
+		sb.WriteString(line)
+		sb.WriteString("\n")
+	}
+}
+
+// collectStatsLines gathers one "dotted.path: value" string per scalar leaf.
+func collectStatsLines(path []string, node interface{}, lines *[]string) {
+	m, ok := node.(map[string]interface{})
+	if !ok {
+		if path == nil {
+			return
+		}
+		encoded, err := json.Marshal(node)
+		if err != nil {
+			encoded = []byte(`"<unencodable>"`)
+		}
+		*lines = append(*lines, strings.Join(path, ".")+": "+string(encoded))
+		return
+	}
+	for k, v := range m {
+		child := make([]string, len(path)+1)
+		copy(child, path)
+		child[len(path)] = statsPathSegment(k)
+		collectStatsLines(child, v, lines)
+	}
+}
+
+// statsKeyCharset is the plain-key grammar for dotted text paths (no quoting,
+// no line-forging characters). Byte-identical to infra modelLabelCharset
+// (internal/infra/labels.go) — keep the two grammars aligned.
+const statsKeyCharset = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-/:@+~"
+
+// statsPlainKey reports whether a snapshot key can be used verbatim in a
+// dotted text path.
+func statsPlainKey(k string) bool {
+	if k == "" {
+		return false
+	}
+	return strings.IndexFunc(k, func(r rune) bool {
+		return !strings.ContainsRune(statsKeyCharset, r)
+	}) < 0
+}
+
+// statsPathSegment renders one path segment, JSON-escaping any segment that
+// leaves the plain-key grammar (letters, digits, and ._-/:@+~ separators).
+func statsPathSegment(k string) string {
+	if statsPlainKey(k) {
+		return k
+	}
+	encoded, err := json.Marshal(k)
+	if err != nil {
+		return "<unencodable>"
+	}
+	return string(encoded)
 }
 
 // costModelStats explains how a cost total was computed: each provider's peak

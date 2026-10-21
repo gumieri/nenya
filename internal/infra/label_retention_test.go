@@ -18,6 +18,14 @@ func aliasedLabel(t *testing.T, buf []byte) string {
 	if len(buf) < 16 {
 		t.Fatalf("test buffer too small: %d bytes", len(buf))
 	}
+	// The first 16 bytes must form a PLAUSIBLE model label (NENYA-144): the
+	// guard collapses implausible ids to a shared sentinel, which would make
+	// the aliasing assertion below vacuous.
+	for i := 0; i < 16; i++ {
+		if buf[i] == 0 {
+			buf[i] = 'a'
+		}
+	}
 	return unsafe.String(&buf[0], 16)
 }
 

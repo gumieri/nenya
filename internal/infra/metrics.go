@@ -20,6 +20,14 @@ var labelEscaper = strings.NewReplacer(`\`, `\\`, `"`, `\"`, "\n", `\n`)
 type Metrics struct {
 	startTime time.Time
 
+	// modelGuard bounds caller-controlled model label values (NENYA-144);
+	// built lazily so the zero value stays usable.
+	modelGuard   *ModelLabelGuard
+	modelGuardFn sync.Once
+	// labelViolations counts collapsed model labels by kind
+	// (nenya_model_label_violations_total).
+	labelViolations sync.Map
+
 	tokens    sync.Map
 	reqTotal  sync.Map
 	errTotal  sync.Map
@@ -402,9 +410,34 @@ func (m *Metrics) RecordTokens(direction, model, agent, provider string, count i
 		return
 	}
 	e := getOrCreateEntry(&m.tokens, map[string]string{
-		"direction": direction, "model": model, "agent": agent, "provider": provider,
+		"direction": direction, "model": m.ModelLabel(model), "agent": agent, "provider": provider,
 	})
 	e.value.Add(uint64(count))
+}
+
+// ModelLabel maps a caller-controlled model string to a bounded label value
+// (NENYA-144): plausible ids pass through (up to the distinct-series budget),
+// everything else collapses to a sentinel so hostile model names cannot
+// explode Prometheus label cardinality. Violations are counted in
+// nenya_model_label_violations_total{kind}. Nil-safe.
+func (m *Metrics) ModelLabel(model string) string {
+	if model == "" {
+		return UnknownModelLabel
+	}
+	if m == nil {
+		return model
+	}
+	m.modelGuardFn.Do(func() { m.modelGuard = NewModelLabelGuard(DefaultMaxModelSeries) })
+	out := m.modelGuard.Label(model)
+	switch {
+	case out.Invalid:
+		e := getOrCreateEntry(&m.labelViolations, map[string]string{"kind": "invalid"})
+		e.value.Add(1)
+	case out.Overflow:
+		e := getOrCreateEntry(&m.labelViolations, map[string]string{"kind": "overflow"})
+		e.value.Add(1)
+	}
+	return out.Label
 }
 
 // RecordTokensSaved records n tokens removed from a request payload by a
@@ -423,7 +456,7 @@ func (m *Metrics) RecordUpstreamRequest(model, agent, provider string) {
 		return
 	}
 	e := getOrCreateEntry(&m.reqTotal, map[string]string{
-		"model": model, "agent": agent, "provider": provider,
+		"model": m.ModelLabel(model), "agent": agent, "provider": provider,
 	})
 	e.value.Add(1)
 }
@@ -435,7 +468,7 @@ func (m *Metrics) RecordDecision(model, provider string) {
 		return
 	}
 	e := getOrCreateEntry(&m.decisions, map[string]string{
-		"model": model, "provider": provider,
+		"model": m.ModelLabel(model), "provider": provider,
 	})
 	e.value.Add(1)
 }
@@ -445,7 +478,7 @@ func (m *Metrics) RecordUpstreamError(model, agent, provider string, statusCode 
 		return
 	}
 	e := getOrCreateEntry(&m.errTotal, map[string]string{
-		"model": model, "agent": agent, "provider": provider, "code": strconv.Itoa(statusCode),
+		"model": m.ModelLabel(model), "agent": agent, "provider": provider, "code": strconv.Itoa(statusCode),
 	})
 	e.value.Add(1)
 }
@@ -861,7 +894,7 @@ func (m *Metrics) RecordCostWindow(model, window string, costUSD float64) {
 	if micro == 0 {
 		micro = 1
 	}
-	e := getOrCreateEntry(&m.costByWindow, map[string]string{"model": model, "window": window})
+	e := getOrCreateEntry(&m.costByWindow, map[string]string{"model": m.ModelLabel(model), "window": window})
 	e.value.Add(uint64(micro))
 }
 
@@ -886,7 +919,7 @@ func (m *Metrics) RecordModelSubstitution(requested, served string) {
 	if m == nil || requested == "" || served == "" || requested == served {
 		return
 	}
-	e := getOrCreateEntry(&m.modelSubstitutions, map[string]string{"requested": requested, "served": served})
+	e := getOrCreateEntry(&m.modelSubstitutions, map[string]string{"requested": m.ModelLabel(requested), "served": m.ModelLabel(served)})
 	e.value.Add(1)
 }
 
@@ -896,7 +929,7 @@ func (m *Metrics) RecordCachedInputTokens(model, window string, tokens int) {
 	if m == nil || model == "" || window == "" || tokens <= 0 {
 		return
 	}
-	e := getOrCreateEntry(&m.cachedInputByWindow, map[string]string{"model": model, "window": window})
+	e := getOrCreateEntry(&m.cachedInputByWindow, map[string]string{"model": m.ModelLabel(model), "window": window})
 	e.value.Add(uint64(tokens))
 }
 
@@ -1889,6 +1922,8 @@ func (m *Metrics) writePipelineMetrics(w io.Writer) {
 		"Conflicting duplicate parameters resolved by the request normalizer, by logical parameter (NENYA-186).", &m.duplicateParams)
 	m.writeCounterMap(w, "nenya_unknown_request_fields_total",
 		"Request fields no format path consumes, by resolved format (NENYA-186).", &m.unknownRequestFields)
+	m.writeCounterMap(w, "nenya_model_label_violations_total",
+		"Caller-controlled model labels collapsed to sentinels by the cardinality guard (NENYA-144).", &m.labelViolations)
 	m.writeCounterMap(w, "nenya_vision_content_dropped_total",
 		"Image blocks dropped because the routed model or format cannot carry them (NENYA-149).", &m.visionDrops)
 	m.writeCounterMap(w, "nenya_mcp_tool_search_total",

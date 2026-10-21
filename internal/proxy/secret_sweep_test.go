@@ -118,8 +118,11 @@ func TestNoSecretInDebugLogsOrStatsz(t *testing.T) {
 	w := httptest.NewRecorder()
 	p2.handleStats(w, true)
 	statsBody := w.Body.String()
+	wText := httptest.NewRecorder()
+	p2.handleStatsText(wText, true)
+	statsTextBody := wText.Body.String()
 
-	for name, out := range map[string]string{"debug logs": logBuf.String(), "statsz": statsBody} {
+	for name, out := range map[string]string{"debug logs": logBuf.String(), "statsz": statsBody, "statsz text": statsTextBody} {
 		for _, secret := range sweepSecrets {
 			if strings.Contains(out, secret) {
 				t.Fatalf("%s leaked %q:\n%s", name, secret, out)
