@@ -158,8 +158,10 @@ type Metrics struct {
 	// by reason (nenya_reload_rejected_total, NENYA-166).
 	reloadRejected sync.Map
 
-	// byokRequests counts requests served with a caller-supplied upstream
-	// credential, by provider (nenya_byok_requests_total, NENYA-195).
+	// byokRequests counts NARROWED BYOK requests by provider: recorded when
+	// the caller's credential is applied to a target list (pre-dispatch, once
+	// per distinct provider), so a later-skipped target still counts
+	// (nenya_byok_requests_total, NENYA-195/208).
 	byokRequests sync.Map
 
 	// paramCoercions counts parameters rewritten to the target's declared
@@ -1979,7 +1981,7 @@ func (m *Metrics) writePipelineMetrics(w io.Writer) {
 	m.writeCounterMap(w, "nenya_reload_rejected_total",
 		"Configuration reloads refused before the swap, by reason (NENYA-166).", &m.reloadRejected)
 	m.writeCounterMap(w, "nenya_byok_requests_total",
-		"Requests served with a caller-supplied upstream credential, by provider (NENYA-195).", &m.byokRequests)
+		"Narrowed BYOK requests by provider: counted when the caller's credential is applied to a target list (pre-dispatch, once per distinct provider), so a later-skipped target still counts (NENYA-195/208).", &m.byokRequests)
 	m.writeCounterMap(w, "nenya_auto_cache_breakpoints_total",
 		"Opt-in automatic prompt-cache anchoring outcomes, including stand-downs (NENYA-185).", &m.autoCacheBreakpoints)
 	m.writeCounterMap(w, "nenya_param_coercions_total",

@@ -1415,7 +1415,10 @@ func (p *Proxy) checkPreDispatchGuards(gw *gateway.NenyaGateway, ctxLogger *slog
 		return ptrAction(upstreamAction{kind: actionContinue, skipReason: "rate_limit"})
 	}
 
-	if gw.Config.Governance.MaxCostPerRequest > 0 {
+	// NENYA-208: a BYOK dispatch costs the gateway nothing — the caller's own
+	// credential pays — so the gateway's max-cost estimate must not skip it.
+	// (The rate limiter above stays: it is gateway capacity, not money.)
+	if gw.Config.Governance.MaxCostPerRequest > 0 && !target.BYOK {
 		dm, ok := gw.ModelCatalog.Lookup(target.Model)
 		if ok && dm.Pricing != nil && dm.Pricing.HasStandardRate() {
 			// Conservative: estimate at the peak rate (worst case). Peak-less
@@ -1425,19 +1428,23 @@ func (p *Proxy) checkPreDispatchGuards(gw *gateway.NenyaGateway, ctxLogger *slog
 				gw.Metrics.RecordCostLimitRejected(target.Model)
 				ctxLogger.Warn("target skipped: estimated cost exceeds max_cost_per_request",
 					"estimated_cost_usd", estCost, "max_cost_usd", gw.Config.Governance.MaxCostPerRequest)
-				return ptrAction(upstreamAction{kind: actionContinue})
+				return ptrAction(upstreamAction{kind: actionContinue, skipReason: "max_cost"})
 			}
 		}
 	}
 
+	// NENYA-208: the agent budget reads SHARED-account spend evidence
+	// (BillingTracker.GetTotalSpend for the gateway account), which a BYOK
+	// dispatch does not draw on — standing it down prevents a shared account's
+	// spend from spuriously skipping a caller-funded target.
 	agent, ok := gw.Config.Agents[agentName]
-	if ok && agent.BudgetLimitUSD > 0 && gw.BillingTracker != nil {
+	if ok && agent.BudgetLimitUSD > 0 && gw.BillingTracker != nil && !target.BYOK {
 		account := gw.BillingTracker.GetTotalSpend(target.Provider, target.AccountName)
 		if account >= agent.BudgetLimitUSD {
 			gw.Metrics.RecordBudgetLimitRejected(target.Model)
 			ctxLogger.Warn("target skipped: agent budget exhausted",
 				"agent", agentName, "spent_usd", account, "budget_usd", agent.BudgetLimitUSD)
-			return ptrAction(upstreamAction{kind: actionContinue})
+			return ptrAction(upstreamAction{kind: actionContinue, skipReason: "agent_budget"})
 		}
 	}
 

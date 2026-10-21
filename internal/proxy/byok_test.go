@@ -11,6 +11,7 @@ import (
 
 	"github.com/nenya/config"
 	"github.com/nenya/internal/billing"
+	"github.com/nenya/internal/discovery"
 	"github.com/nenya/internal/gateway"
 	"github.com/nenya/internal/infra"
 	"github.com/nenya/internal/routing"
@@ -338,5 +339,60 @@ func TestFilterExhaustedTargetsExemptsBYOKEligibleProviders(t *testing.T) {
 	exhaust()
 	if got := filterExhaustedTargets(targets, tracker, other, logger, true); len(got) != 0 {
 		t.Fatalf("a non-opt-in provider must still be filtered: %+v", got)
+	}
+}
+
+// NENYA-208: the two shared-money pre-dispatch guards (the max-cost estimate
+// and the per-agent budget over shared-account spend) stand down for a BYOK
+// target — a caller-funded dispatch draws no shared money — while the same
+// guards still skip a shared-account target armed identically.
+func TestCheckPreDispatchGuardsStandDownOnBYOK(t *testing.T) {
+	priced := discovery.NewModelCatalog()
+	priced.Add(discovery.DiscoveredModel{
+		ID:      "priced-model",
+		Pricing: &discovery.PricingEntry{InputCostPer1M: 1000, OutputCostPer1M: 5000},
+	})
+
+	newGW := func(t *testing.T) *gateway.NenyaGateway {
+		t.Helper()
+		gw := byokGateway(t, true, map[string]bool{"anthropic": true}, "")
+		gw.RateLimiter = infra.NewRateLimiter(0, 0)
+		gw.ModelCatalog = priced
+		gw.BillingTracker = billing.NewBillingTracker(nil, nil)
+		gw.Config.Governance.MaxCostPerRequest = 0.000001 // any priced dispatch exceeds it
+		gw.Config.Agents = map[string]config.AgentConfig{
+			"agent-a": {BudgetLimitUSD: 1.0},
+		}
+		// Shared-account spend well over the agent budget.
+		gw.BillingTracker.RecordSpend(context.Background(), billing.SpendEntry{
+			ProviderName: "anthropic", AccountName: "acct-shared", CostUSD: 5.0,
+		})
+		return gw
+	}
+	logger := slog.New(slog.NewTextHandler(&bytes.Buffer{}, nil))
+
+	cases := []struct {
+		name     string
+		byok     bool
+		wantSkip bool
+	}{
+		{"shared target is skipped by the armed guards", false, true},
+		{"BYOK target dispatches (guards stand down)", true, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			gw := newGW(t)
+			target := routing.UpstreamTarget{Provider: "anthropic", Model: "priced-model", AccountName: "acct-shared", BYOK: tc.byok}
+			action := (&Proxy{}).checkPreDispatchGuards(gw, logger, target, 10000, "agent-a", nil)
+			if tc.wantSkip {
+				if action == nil || action.kind != actionContinue {
+					t.Fatalf("the armed guards must skip the shared target: %+v", action)
+				}
+				return
+			}
+			if action != nil {
+				t.Fatalf("the guards must stand down for a BYOK target: %+v", action)
+			}
+		})
 	}
 }
