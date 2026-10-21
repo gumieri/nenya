@@ -550,6 +550,16 @@ blindly.
 | `SIGHUP` | Reload config + secrets, re-discover models. On validation failure: log and **keep serving the old config**. If the interceptor chain cannot be rebuilt, the process exits `1` (fail-closed). |
 | `SIGTERM`, `SIGINT` | Graceful shutdown: HTTP drain (up to 30s, new requests get `503`), then bounded teardown. Exit `0` on clean drain, `1` on timeout. |
 
+Drain semantics (NENYA-181, audited against upstream immediate-close
+variants): the drain window rejects NEW work promptly (`503` + `Retry-After`
+before any routing) while an IN-FLIGHT dispatch keeps its request context
+through body-read completion — `http.Server.Shutdown` waits for active
+handlers instead of canceling them, so a mid-flight stream runs to its
+natural end or until the drain bound expires; a timed-out drain surfaces in
+the exit code rather than hanging the process. Nenya deliberately drains
+(bounded) instead of closing downstream connections immediately on stop;
+this is pinned by `TestDrain_InFlightStreamSurvives`.
+
 Reload MUST be the supported way to apply config changes; consumers SHOULD NOT
 restart for config edits.
 
