@@ -1194,7 +1194,13 @@ type GovernanceConfig struct {
 	EarlyStreamErrorFailover *bool `json:"early_stream_error_failover,omitempty"`
 	AutoContextSkip          *bool `json:"auto_context_skip,omitempty"`
 	AutoReorderByLatency     *bool `json:"auto_reorder_by_latency,omitempty"`
-	HalfOpenMaxRequests      int   `json:"half_open_max_requests,omitempty"`
+	// AutoReorderPreferWarmCache (NENYA-190, default off) breaks latency
+	// near-ties in the auto-reorder in favor of targets whose prompt cache is
+	// observed warm: a cold-cache switch re-ingests the whole prefix at
+	// first-turn rates, so when two targets' medians are within the reorder
+	// jitter band the warm one serves the conversation cheaper.
+	AutoReorderPreferWarmCache *bool `json:"auto_reorder_prefer_warm_cache,omitempty"`
+	HalfOpenMaxRequests        int   `json:"half_open_max_requests,omitempty"`
 	// MinQuotaCooldownSeconds floors quota-class cooldowns (NENYA-41):
 	// upstreams sometimes send sub-second Retry-After values on quota errors,
 	// and honoring them literally produces zero-wait retry storms against the

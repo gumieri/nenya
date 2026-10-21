@@ -131,11 +131,15 @@ type NenyaGateway struct {
 	// last discovery attempt (NENYA-152): ok | discovering | failed, with the
 	// last error and the time the status was set, surfaced in /statsz so a
 	// dead server is visible without grepping logs.
-	mcpStatusMu        sync.RWMutex
-	mcpStatus          map[string]MCPServerStatusEntry
-	ModelCatalog       *discovery.ModelCatalog
-	HealthRegistry     *discovery.HealthRegistry
-	LatencyTracker     *infra.LatencyTracker
+	mcpStatusMu    sync.RWMutex
+	mcpStatus      map[string]MCPServerStatusEntry
+	ModelCatalog   *discovery.ModelCatalog
+	HealthRegistry *discovery.HealthRegistry
+	LatencyTracker *infra.LatencyTracker
+	// CacheState observes per-(model, provider) cache warmth at the usage
+	// sites, so reorder decisions and /statsz can account for cache warmth
+	// (NENYA-190).
+	CacheState         *infra.CacheStateTracker
 	CostTracker        *infra.CostTracker
 	BillingTracker     *billing.BillingTracker
 	QuotaFetcher       *billing.QuotaFetcher
@@ -595,6 +599,7 @@ func buildGateway(cfg config.Config, secrets *config.SecretsConfig, secureClient
 		ModelCatalog:       mergedCatalog,
 		HealthRegistry:     healthRegistry,
 		LatencyTracker:     infra.NewLatencyTracker(),
+		CacheState:         infra.NewCacheStateTracker(),
 		CostTracker:        infra.NewCostTracker(),
 		Calibration:        newCalibrationTracker(&cfg),
 		BillingTracker:     billing.NewBillingTracker(logger, metrics),

@@ -99,6 +99,13 @@ func recordNonStreamingUsage(ctx context.Context, gw *gateway.NenyaGateway, targ
 
 	// prompt_tokens is the calibration loop's ground truth (NENYA-135).
 	gw.Calibration.RecordActual(target.Model, inputTokens)
+	// NENYA-190: observe the pair's cache warmth (input is the TOTAL,
+	// NENYA-167). A BYOK dispatch is served from the caller's own upstream
+	// account (NENYA-195 stand-down): its cache hits must not pollute the
+	// shared-account warmth signal the reorder tie-break consumes.
+	if gw.CacheState != nil && !target.BYOK {
+		gw.CacheState.Record(target.Model, target.Provider, cacheHitTokens, inputTokens)
+	}
 	recordNonStreamingStats(gw, target.Model, outputTokens, cacheHitTokens, cacheMissTokens, cacheCreationTokens, reasoningTokens)
 	recordNonStreamingMetrics(gw, target, agentName, outputTokens, cacheHitTokens, cacheMissTokens, cacheCreationTokens, reasoningTokens)
 	recordCostAndBilling(ctx, gw, target, servedModel, inputTokens, cacheHitTokens, cacheCreationTokens, outputTokens)

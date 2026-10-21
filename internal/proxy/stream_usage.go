@@ -135,6 +135,13 @@ func recordStreamUsageDimensions(gw *gateway.NenyaGateway, target routing.Upstre
 		gw.Stats.RecordCacheCreation(target.Model, u.CacheCreationTokens)
 		gw.Metrics.RecordCacheCreationTokens(target.Model, agentName, target.Provider, u.CacheCreationTokens)
 	}
+	// NENYA-190: observe the pair's cache warmth at the same site that sees
+	// the normalized usage (Prompt is the TOTAL input incl. cached, NENYA-167).
+	// BYOK dispatches stand down (NENYA-195): the caller's own account warmth
+	// must not feed the shared reorder signal.
+	if gw.CacheState != nil && !target.BYOK {
+		gw.CacheState.Record(target.Model, target.Provider, u.CacheHitTokens, u.PromptTokens)
+	}
 }
 
 // recordStreamCost prices the per-request cumulative usage and records only

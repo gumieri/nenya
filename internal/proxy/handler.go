@@ -946,6 +946,27 @@ func (p *Proxy) buildStatsSnapshot(gw *gateway.NenyaGateway, redactKeys bool) ma
 		stats["token_calibration"] = calibration
 	}
 
+	// NENYA-190: observed per-target cache warmth (hit ratio, last-hit age),
+	// the data the reorder tie-break and cold-switch cost reasoning use.
+	// Expanded per entry (model/provider embedded) like the latency section,
+	// so the text form renders dotted paths instead of one JSON blob.
+	if gw.CacheState != nil {
+		if cacheState := gw.CacheState.Snapshot(); len(cacheState) > 0 {
+			out := make(map[string]interface{}, len(cacheState))
+			for key, entry := range cacheState {
+				out[key] = map[string]interface{}{
+					"model":                entry.Model,
+					"provider":             entry.Provider,
+					"hit_ratio":            entry.HitRatio,
+					"input_tokens":         entry.InputTokens,
+					"last_hit_age_seconds": entry.LastHitAgeSeconds,
+					"warm":                 entry.Warm,
+				}
+			}
+			stats["cache_state"] = out
+		}
+	}
+
 	return stats
 }
 

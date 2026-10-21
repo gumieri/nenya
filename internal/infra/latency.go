@@ -1,6 +1,7 @@
 package infra
 
 import (
+	"math"
 	"math/rand"
 	"sort"
 	"strings"
@@ -293,6 +294,16 @@ const latencyJitterRange = 0.10 // Full range (0.10), halved by formula: ±laten
 // Returns the indices of the sorted keys. Targets without latency
 // data are placed last.
 func (l *LatencyTracker) SortByLatency(keys []LatencyKey, jitterFn func() float64) []int {
+	return l.SortByLatencyWithWarmth(keys, jitterFn, nil)
+}
+
+// SortByLatencyWithWarmth is SortByLatency with an optional cache-warmth
+// tie-break (NENYA-190): when two keys' RAW medians are within the ±5% jitter
+// band (the difference is ordering noise) and a warmth predicate says one is
+// warm, the warm key comes first — a cold-cache switch re-ingests the whole
+// prefix at first-turn rates, so the warm target serves the conversation
+// cheaper at indistinguishable latency. warm may be nil (no tie-break).
+func (l *LatencyTracker) SortByLatencyWithWarmth(keys []LatencyKey, jitterFn func() float64, warm func(model, provider string) bool) []int {
 	if l == nil || len(keys) <= 1 {
 		indices := make([]int, len(keys))
 		for i := range keys {
@@ -322,6 +333,23 @@ func (l *LatencyTracker) SortByLatency(keys []LatencyKey, jitterFn func() float6
 		}
 		if !okJ {
 			return true
+		}
+
+		// NENYA-190 warmth tie-break: only inside the band where the jitter
+		// would make the latency comparison noise anyway. Note: across 3+
+		// targets the band+warmth+jitter combination can be intransitive for
+		// one request; sort.SliceStable tolerates it (unspecified order for
+		// that request), and fresh jitter per comparison is the pre-existing
+		// behavior.
+		if warm != nil {
+			wi := warm(keys[indices[i]].Model, keys[indices[i]].Provider)
+			wj := warm(keys[indices[j]].Model, keys[indices[j]].Provider)
+			if wi != wj {
+				band := latencyJitterRange / 2
+				if math.Abs(latencyI.MedianMs-latencyJ.MedianMs) <= band*math.Max(latencyI.MedianMs, latencyJ.MedianMs) {
+					return wi
+				}
+			}
 		}
 
 		jitterI := latencyI.MedianMs * (1.0 + (jitterFn()*latencyJitterRange - latencyJitterRange/2))

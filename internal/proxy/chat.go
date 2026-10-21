@@ -975,7 +975,13 @@ func reorderTargetsByLatency(req *chatRequest, gw *gateway.NenyaGateway, targets
 			RequestCaps:       detectRequestCapabilities(req.Payload),
 		})
 	default:
-		return routing.SortTargetsByLatency(targets, gw.LatencyTracker, nil)
+		// NENYA-190: the warm-cache tie-break is config-gated, off by
+		// default; latency remains the primary order.
+		var warm func(model, provider string) bool
+		if gw.Config.Governance.AutoReorderPreferWarmCache != nil && *gw.Config.Governance.AutoReorderPreferWarmCache {
+			warm = gw.CacheState.Warm
+		}
+		return routing.SortTargetsByLatencyWithWarmth(targets, gw.LatencyTracker, nil, warm)
 	}
 }
 
