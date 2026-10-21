@@ -124,8 +124,15 @@ type NenyaGateway struct {
 	// server fails closed instead of silently running without its tools. A
 	// successful call clears the entry, so a recovered credential re-enables
 	// the server without a reload.
-	mcpUnavailableMu   sync.RWMutex
-	mcpUnavailable     map[string]mcpUnavailableEntry
+	mcpUnavailableMu sync.RWMutex
+	mcpUnavailable   map[string]mcpUnavailableEntry
+
+	// mcpStatusMu / mcpStatus track the per-server connection outcome of the
+	// last discovery attempt (NENYA-152): ok | discovering | failed, with the
+	// last error and the time the status was set, surfaced in /statsz so a
+	// dead server is visible without grepping logs.
+	mcpStatusMu        sync.RWMutex
+	mcpStatus          map[string]MCPServerStatusEntry
 	ModelCatalog       *discovery.ModelCatalog
 	HealthRegistry     *discovery.HealthRegistry
 	LatencyTracker     *infra.LatencyTracker
@@ -1306,6 +1313,59 @@ func buildMCPClients(cfg config.Config, logger *slog.Logger) (map[string]*mcp.Cl
 	return clients, unavailable
 }
 
+// MCP server status values (NENYA-152). Closed set.
+const (
+	MCPServerStatusOK          = "ok"
+	MCPServerStatusDiscovering = "discovering"
+	MCPServerStatusFailed      = "failed"
+)
+
+// MCPServerStatusEntry is the last discovery outcome for one configured MCP
+// server.
+type MCPServerStatusEntry struct {
+	Status    string `json:"status"`
+	LastError string `json:"last_error,omitempty"`
+	// Since is when the status was set (RFC3339 in /statsz).
+	Since time.Time `json:"since"`
+}
+
+// SetMCPServerStatus records the outcome of one discovery attempt. Nil-safe.
+func (g *NenyaGateway) SetMCPServerStatus(server, status string, lastErr error) {
+	if g == nil {
+		return
+	}
+	switch status {
+	case MCPServerStatusOK, MCPServerStatusDiscovering, MCPServerStatusFailed:
+	default:
+		return
+	}
+	entry := MCPServerStatusEntry{Status: status, Since: time.Now()}
+	if lastErr != nil {
+		entry.LastError = lastErr.Error()
+	}
+	g.mcpStatusMu.Lock()
+	defer g.mcpStatusMu.Unlock()
+	if g.mcpStatus == nil {
+		g.mcpStatus = make(map[string]MCPServerStatusEntry)
+	}
+	g.mcpStatus[server] = entry
+}
+
+// MCPServerStatusSnapshot returns the per-server discovery outcomes (nil-safe;
+// an empty map means no discovery has run).
+func (g *NenyaGateway) MCPServerStatusSnapshot() map[string]MCPServerStatusEntry {
+	if g == nil {
+		return nil
+	}
+	g.mcpStatusMu.RLock()
+	defer g.mcpStatusMu.RUnlock()
+	out := make(map[string]MCPServerStatusEntry, len(g.mcpStatus))
+	for k, v := range g.mcpStatus {
+		out[k] = v
+	}
+	return out
+}
+
 // mcpUnavailableEntry is one unusable-server record. A permanent entry (an
 // operator misconfiguration detected at build time) lasts until the next
 // reload; a transient entry (a credential the server refused) expires after
@@ -1458,6 +1518,8 @@ func (g *NenyaGateway) buildMCPToolIndex(ctx context.Context, logger *slog.Logge
 			client.SetGatewayMetrics(g.Metrics)
 		}
 
+		g.SetMCPServerStatus(name, MCPServerStatusDiscovering, nil)
+		g.Metrics.RecordMCPServerStatus(name, MCPServerStatusDiscovering)
 		initCtx, cancel := contextWithTimeout(ctx, 10*time.Second)
 		err := client.Initialize(initCtx)
 		cancel()
@@ -1469,10 +1531,16 @@ func (g *NenyaGateway) buildMCPToolIndex(ctx context.Context, logger *slog.Logge
 				logger.Error("MCP server rejected the configured credential",
 					"server", name, "err", err)
 				g.MarkMCPUnavailable(name, "credential rejected")
+				g.SetMCPServerStatus(name, MCPServerStatusFailed, err)
+				g.Metrics.RecordMCPServerStatus(name, MCPServerStatusFailed)
 				continue
 			}
-			logger.Warn("MCP client initialization failed, skipping",
+			// NENYA-152: a dead server stays skipped, but the failure is
+			// visible (WARN + /statsz status + counter), never silent.
+			logger.Warn("MCP server unreachable, skipping tool discovery",
 				"server", name, "err", err)
+			g.SetMCPServerStatus(name, MCPServerStatusFailed, err)
+			g.Metrics.RecordMCPServerStatus(name, MCPServerStatusFailed)
 			continue
 		}
 
@@ -1482,10 +1550,14 @@ func (g *NenyaGateway) buildMCPToolIndex(ctx context.Context, logger *slog.Logge
 		if err != nil {
 			logger.Warn("MCP tool list refresh failed",
 				"server", name, "err", err)
+			g.SetMCPServerStatus(name, MCPServerStatusFailed, err)
+			g.Metrics.RecordMCPServerStatus(name, MCPServerStatusFailed)
 			continue
 		}
 
 		g.MCPToolIndex.Register(name, tools)
+		g.SetMCPServerStatus(name, MCPServerStatusOK, nil)
+		g.Metrics.RecordMCPServerStatus(name, MCPServerStatusOK)
 		logger.Info("MCP server connected",
 			"server", name,
 			"tools", len(tools),

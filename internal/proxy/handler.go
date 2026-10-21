@@ -815,16 +815,11 @@ func anthropicModelEntries(models []modelEntry) []map[string]interface{} {
 // per-model date would imply history that does not exist.
 const anthropicModelsEpoch = "1970-01-01T00:00:00Z"
 
-// handleStats provides runtime statistics including usage, circuit breaker state, and MCP status.
-// When redactKeys is set (unauthenticated telemetry mode), per-key usage is
-// omitted — key names never leave the process.
-// buildStatsSnapshot assembles the /statsz snapshot shared by every output
-// format (NENYA-144): one builder, so the JSON and text forms can never drift
-// about content.
-func (p *Proxy) buildStatsSnapshot(gw *gateway.NenyaGateway, redactKeys bool) map[string]interface{} {
-	stats := gw.Stats.Snapshot()
-	stats["circuit_breakers"] = gw.AgentState.CBDetailedSnapshot()
-
+// mcpSection builds the /statsz "mcp" section: per-server readiness, tool
+// count, version, the NENYA-183 unusable reasons, and the NENYA-152 discovery
+// status (ok/discovering/failed + last error + since) so a dead server is
+// visible without grepping logs.
+func (p *Proxy) mcpSection(gw *gateway.NenyaGateway) map[string]interface{} {
 	mcpServers := make(map[string]interface{})
 	for name, client := range gw.MCPClients {
 		serverInfo := client.ServerInfo()
@@ -856,7 +851,32 @@ func (p *Proxy) buildStatsSnapshot(gw *gateway.NenyaGateway, redactKeys bool) ma
 		// readiness/tool counts and attach the reason.
 		entry["unusable"] = reason
 	}
-	stats["mcp"] = mcpServers
+	// NENYA-152: the last discovery outcome per server. Defensive: a status
+	// whose server has no client entry (e.g. a directly-seeded status) still
+	// surfaces, in a uniform shape.
+	for name, status := range gw.MCPServerStatusSnapshot() {
+		entry, exists := mcpServers[name].(map[string]interface{})
+		if !exists {
+			entry = map[string]interface{}{"ready": false, "tools": 0, "version": ""}
+			mcpServers[name] = entry
+		}
+		entry["status"] = status.Status
+		if status.LastError != "" {
+			entry["last_error"] = status.LastError
+		}
+		entry["status_since"] = status.Since.UTC().Format(time.RFC3339)
+	}
+	return mcpServers
+}
+
+// buildStatsSnapshot assembles the /statsz snapshot shared by every output
+// format (NENYA-144): one builder, so the JSON and text forms can never drift
+// about content.
+func (p *Proxy) buildStatsSnapshot(gw *gateway.NenyaGateway, redactKeys bool) map[string]interface{} {
+	stats := gw.Stats.Snapshot()
+	stats["circuit_breakers"] = gw.AgentState.CBDetailedSnapshot()
+
+	stats["mcp"] = p.mcpSection(gw)
 
 	// Per-key/per-provider budget usage (NENYA-20), additive for backward
 	// compatibility. Two shapes, mode-dependent (NENYA-131):

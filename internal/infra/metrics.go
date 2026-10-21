@@ -142,6 +142,10 @@ type Metrics struct {
 	// NENYA-149), by site and reason.
 	visionDrops sync.Map
 
+	// mcpServerStatus counts MCP discovery outcomes per server
+	// (nenya_mcp_server_status_total, NENYA-152).
+	mcpServerStatus sync.Map
+
 	// mcpToolSearch counts MCP relevance-based tool-selection outcomes by
 	// outcome (nenya_mcp_tool_search_total, NENYA-162).
 	mcpToolSearch sync.Map
@@ -751,6 +755,22 @@ func (m *Metrics) RecordVisionContentDropped(site, reason string) {
 		reason = "other"
 	}
 	e := getOrCreateEntry(&m.visionDrops, map[string]string{"site": site, "reason": reason})
+	e.value.Add(1)
+}
+
+// RecordMCPServerStatus records one MCP discovery outcome for a server
+// (NENYA-152): ok, discovering, or failed. The server label comes from the
+// operator's own configuration. Nil-safe.
+func (m *Metrics) RecordMCPServerStatus(server, status string) {
+	if m == nil || server == "" {
+		return
+	}
+	switch status {
+	case "ok", "discovering", "failed":
+	default:
+		status = "other"
+	}
+	e := getOrCreateEntry(&m.mcpServerStatus, map[string]string{"server": server, "status": status})
 	e.value.Add(1)
 }
 
@@ -1922,6 +1942,8 @@ func (m *Metrics) writePipelineMetrics(w io.Writer) {
 		"Conflicting duplicate parameters resolved by the request normalizer, by logical parameter (NENYA-186).", &m.duplicateParams)
 	m.writeCounterMap(w, "nenya_unknown_request_fields_total",
 		"Request fields no format path consumes, by resolved format (NENYA-186).", &m.unknownRequestFields)
+	m.writeCounterMap(w, "nenya_mcp_server_status_total",
+		"MCP discovery outcomes per server (NENYA-152).", &m.mcpServerStatus)
 	m.writeCounterMap(w, "nenya_model_label_violations_total",
 		"Caller-controlled model labels collapsed to sentinels by the cardinality guard (NENYA-144).", &m.labelViolations)
 	m.writeCounterMap(w, "nenya_vision_content_dropped_total",

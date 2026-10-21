@@ -161,3 +161,50 @@ func TestRenderStatsTextLineForgery(t *testing.T) {
 		t.Fatalf("a hostile value must render as ONE physical line: %q", vout)
 	}
 }
+
+type errConnectionRefused struct{}
+
+func (errConnectionRefused) Error() string { return "connection refused" }
+
+// NENYA-152: a failed MCP discovery surfaces in /statsz as status=failed with
+// the last error and timestamp, in BOTH output forms.
+func TestStatszShowsFailedMCPServer(t *testing.T) {
+	p := statszTestProxy(t)
+	gw := p.Gateway()
+	gw.SetMCPServerStatus("dead-srv", gateway.MCPServerStatusFailed, errConnectionRefused{})
+
+	// JSON form: the entry carries status/last_error/status_since.
+	w := httptest.NewRecorder()
+	p.chainStats(gw, w, statszRequest(""))
+	var decoded struct {
+		MCP map[string]struct {
+			Status      string `json:"status"`
+			LastError   string `json:"last_error"`
+			StatusSince string `json:"status_since"`
+		} `json:"mcp"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &decoded); err != nil {
+		t.Fatalf("json decode: %v", err)
+	}
+	entry, ok := decoded.MCP["dead-srv"]
+	if !ok {
+		t.Fatalf("the dead server must appear in the mcp section: %s", w.Body.String())
+	}
+	if entry.Status != "failed" || !strings.Contains(entry.LastError, "connection refused") || entry.StatusSince == "" {
+		t.Fatalf("the failure must be visible: %+v", entry)
+	}
+
+	// Text form: the same fields as dotted paths.
+	w = httptest.NewRecorder()
+	p.chainStats(gw, w, statszRequest("text"))
+	out := w.Body.String()
+	for _, want := range []string{
+		`mcp.dead-srv.status: "failed"`,
+		`mcp.dead-srv.last_error: "connection refused"`,
+		`mcp.dead-srv.status_since: "`,
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("the text form must carry %q:\n%s", want, out)
+		}
+	}
+}

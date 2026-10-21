@@ -159,3 +159,15 @@ func TestModelLabelGuardDoesNotPinCallerBuffer(t *testing.T) {
 	}
 	assertNotAliased(t, "guard seen key", stored, model)
 }
+
+// TestRecordMCPServerStatusCollapse covers the defensive collapse of an
+// unknown status to "other" (NENYA-152).
+func TestRecordMCPServerStatusCollapse(t *testing.T) {
+	m := NewMetrics()
+	m.RecordMCPServerStatus("srv", "bogus")
+	var sb strings.Builder
+	m.WritePrometheus(&sb)
+	if !strings.Contains(sb.String(), `nenya_mcp_server_status_total{server="srv", status="other"} 1`) {
+		t.Fatalf("an unknown status must collapse to other:\n%s", sb.String())
+	}
+}
