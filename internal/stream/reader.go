@@ -235,10 +235,15 @@ type SSETransformingReader struct {
 	// Anthropic-shaped stream, so synthesizeTerminalFinish stands down when
 	// this is set.
 	sawAnthropicContent bool
-	injectedError       bool
-	ctx                 context.Context
-	poolBuf             *[]byte
-	logger              *slog.Logger
+	// sawRawAnthropicDelta records that a raw Anthropic message_delta chunk
+	// was seen (any surface) — the terminal-sequence evidence the
+	// pre-terminal exfil drain requires before honoring a message_stop
+	// (AUD-02: a spoofed bare message_stop must not drain early).
+	sawRawAnthropicDelta bool
+	injectedError        bool
+	ctx                  context.Context
+	poolBuf              *[]byte
+	logger               *slog.Logger
 
 	// last* fields track token usage between consecutive usage chunks.
 	// They are accessed only from the single goroutine calling Read().
@@ -518,6 +523,7 @@ func (r *SSETransformingReader) ResetCounters() {
 	r.sawFinishReason = false
 	r.sawAnthropicFinish = false
 	r.sawAnthropicContent = false
+	r.sawRawAnthropicDelta = false
 	r.sawDone = false
 	r.injectedError = false
 	r.emittedAny = false
@@ -540,13 +546,11 @@ func (r *SSETransformingReader) SetSuppressCutError(v bool) {
 	r.suppressCutError = v
 }
 
-// trackStreamProgress marks whether assistant content or a completion
-// signal has been observed in the stream. Used together with SawDone to
-// classify no-[DONE] endings: finish_reason without DONE is benign truncation;
-// content without finish_reason is a genuine cut.
 // trackStreamProgress records the terminal-state signals used to classify a
 // stream ending (SawContent/SawFinishReason) and to gate continuation and the
-// synthetic finish_reason.
+// synthetic finish_reason; SawDone classifies no-[DONE] endings alongside
+// them: finish_reason without DONE is benign truncation, content without
+// finish_reason is a genuine cut.
 //
 // Deliberate divergence from HasEffectiveOutput (NENYA-178): this uses the
 // narrower ExtractDeltaContentFromMap (OpenAI delta.content) plus a reasoning
@@ -571,7 +575,32 @@ func (r *SSETransformingReader) trackStreamProgress(transformed []byte) {
 	if r.sawContent && r.sawFinishReason {
 		return
 	}
-	data := bytes.TrimSpace(transformed)
+	// One emission is normally a single line, but composed payloads (the
+	// pre-terminal held flush + terminal line, finishStreamFrames sequences)
+	// carry several frames: track every data line in the payload, or the
+	// terminal frame's completion signal is lost whenever a tail composes
+	// ahead of it (AUD-02). Allocation-free: IndexByte scanning only.
+	rest := transformed
+	for len(rest) > 0 {
+		if r.sawContent && r.sawFinishReason {
+			return
+		}
+		var line []byte
+		if idx := bytes.IndexByte(rest, '\n'); idx >= 0 {
+			line = rest[:idx]
+			rest = rest[idx+1:]
+		} else {
+			line = rest
+			rest = nil
+		}
+		r.trackProgressLine(line)
+	}
+}
+
+// trackProgressLine records the terminal-state signals of ONE line of an
+// emission (see trackStreamProgress).
+func (r *SSETransformingReader) trackProgressLine(line []byte) {
+	data := bytes.TrimSpace(line)
 	if value, isData := SSEDataField(data); isData {
 		// Tolerant field recognition (NENYA-197): a no-space data line must
 		// still register content/finish_reason, or the terminal-state matrix
@@ -1027,9 +1056,12 @@ func (r *SSETransformingReader) handleScannerDone() {
 				// terminal wins the injection — whoever completes the stream
 				// first in arrival order decides.
 				// The exfil guard's held tail (NENYA-205) must still reach
-				// the client: drain it as a format-shaped content chunk
-				// (lastSurface makes it a content_block_delta here), then
-				// end — mirroring injectDoneOnly minus the [DONE].
+				// the client at the clean end. The normal drain happens at
+				// the raw message_stop (transformSSEData's pre-terminal
+				// hook); this EOF-side drain is the safety net for streams
+				// that completed via message_delta alone, shaped as a
+				// content_block_delta via lastSurface — mirroring
+				// injectDoneOnly minus the [DONE].
 				if held, heldOK := r.synthesizeHeldFlush(); heldOK {
 					buf := append(r.eventSeparator(), held...)
 					buf = append(buf, '\n', '\n')
@@ -1182,6 +1214,7 @@ func (r *SSETransformingReader) transformSSEData(line []byte) []byte {
 	if !r.sawResumableStop && isResumableStopPayload(parsed) {
 		r.sawResumableStop = true
 	}
+	r.noteRawAnthropicDelta(parsed)
 
 	// Provider-private/telemetry frames (NENYA-174) are suppressed from
 	// every downstream surface when the filter is enabled; the stream
@@ -1218,19 +1251,91 @@ func (r *SSETransformingReader) transformSSEData(line []byte) []byte {
 
 	r.callUsageAndContentCallbacks(parsed)
 
-	if r.transformer == nil {
-		result := r.handleNoTransformer(parsed, data, origData, line)
-		if result == nil {
-			return nil
-		}
-		return result
-	}
+	// NENYA-205/AUD-02: a stateful transformer closes at the raw terminal
+	// (the AnthropicTransformer sets streamDone at message_stop and drops
+	// every later chunk), so the exfil guard's held tail must drain BEFORE
+	// the terminal reaches it. The drained frame re-enters the full pipeline
+	// here — while the transformer is still live — and composes ahead of the
+	// terminal line, so the tail precedes the client's terminal event. The
+	// EOF-side drains (handleScannerDone's Anthropic clean end,
+	// finishStreamFrames at [DONE]) remain as safety nets for streams that
+	// never delivered the raw terminal; a drained guard's Flush is a no-op.
+	preTerminal := r.drainHeldAtRawTerminal(parsed)
 
-	result := r.handleWithTransformer(parsed, data, origData, line)
+	var result []byte
+	if r.transformer == nil {
+		result = r.handleNoTransformer(parsed, data, origData, line)
+	} else {
+		result = r.handleWithTransformer(parsed, data, origData, line)
+	}
 	if result == nil {
+		// A consumed/suppressed terminal must not discard an already
+		// drained held tail (AUD-02): the guard re-armed on composition, so
+		// dropping the frame here would lose the tail for good.
+		return r.prependHeldFlush(preTerminal, nil)
+	}
+	return r.prependHeldFlush(preTerminal, result)
+}
+
+// drainHeldAtRawTerminal drains the exfil guard's held tail when the RAW
+// chunk is the Anthropic message_stop terminal (NENYA-205/AUD-02). Returns
+// the transformed flush frame, or nil when there is nothing to drain. Gated
+// on real terminal-sequence evidence (a raw message_delta preceded the stop):
+// a spoofed bare message_stop must not trigger an early drain — and even if
+// one does, synthesizeHeldFlush re-arms the guard so later chunks stay
+// filtered. The hook assumes a terminal-closing transformer (the
+// AnthropicTransformer is the one that synthesizes [DONE] at message_stop);
+// a transformer that stays live past message_stop would simply receive the
+// tail slightly earlier than [DONE]/EOF — benign.
+func (r *SSETransformingReader) drainHeldAtRawTerminal(parsed map[string]interface{}) []byte {
+	if r.exfilGuard == nil || r.exfilGuard.IsBlocked() || !r.sawRawAnthropicDelta || !isRawAnthropicStop(parsed) {
 		return nil
 	}
-	return result
+	held, heldOK := r.synthesizeHeldFlush()
+	if !heldOK {
+		return nil
+	}
+	return held
+}
+
+// isRawAnthropicStop reports whether the parsed RAW chunk is the Anthropic
+// message_stop terminal (the event whose transformer-side handling closes the
+// AnthropicTransformer to later chunks).
+func isRawAnthropicStop(parsed map[string]interface{}) bool {
+	if parsed == nil {
+		return false
+	}
+	typ, _ := parsed["type"].(string)
+	return typ == "message_stop"
+}
+
+// noteRawAnthropicDelta records raw terminal-sequence evidence (AUD-02): the
+// pre-terminal exfil drain requires a raw message_delta before honoring a
+// message_stop, so a spoofed bare terminal cannot trigger an early drain.
+func (r *SSETransformingReader) noteRawAnthropicDelta(parsed map[string]interface{}) {
+	if r.sawRawAnthropicDelta {
+		return
+	}
+	if typ, _ := parsed["type"].(string); typ == "message_delta" {
+		r.sawRawAnthropicDelta = true
+	}
+}
+
+// prependHeldFlush composes a pre-terminal held-flush frame ahead of the
+// terminal line (NENYA-205/AUD-02): the tail is delivered before the client's
+// terminal event instead of landing after it, and before the transformer's
+// streamDone gate would drop a post-terminal synthetic chunk. A nil terminal
+// line (consumed/suppressed terminal) still delivers the drained tail.
+func (r *SSETransformingReader) prependHeldFlush(preTerminal, terminalLine []byte) []byte {
+	if preTerminal == nil {
+		return terminalLine
+	}
+	out := append(r.eventSeparator(), preTerminal...)
+	out = append(out, '\n', '\n')
+	if terminalLine != nil {
+		out = append(out, terminalLine...)
+	}
+	return out
 }
 
 // notifySSEObserver forwards a parsed SSE event to the registered observer.
@@ -1288,13 +1393,24 @@ func (r *SSETransformingReader) synthesizeHeldFlush() ([]byte, bool) {
 	}
 	held, action := r.exfilGuard.Flush()
 	if held == "" || action == ActionBlock {
+		// A no-op Flush still disarms the guard (drained=true is set before
+		// the empty check): re-arm so a pre-terminal drain on an empty hold
+		// cannot open a pass-through window for later chunks (AUD-02).
+		r.exfilGuard.Rearm()
 		return nil, false
 	}
 	encoded := buildExfilFlushChunk(r.lastSurface, held)
 	if encoded == nil {
+		// Same disarm-window class as below: Flush already set drained, so
+		// re-arm even when the payload cannot be built (AUD-02).
+		r.exfilGuard.Rearm()
 		return nil, false
 	}
 	out := r.transformSSEData(append([]byte("data: "), encoded...))
+	// The composition is complete: re-enable filtering so a drain triggered
+	// before the real end of stream (pre-terminal hook) cannot leave the
+	// guard permanently pass-through (AUD-02).
+	r.exfilGuard.Rearm()
 	if len(out) == 0 {
 		return nil, false
 	}
@@ -1588,8 +1704,14 @@ func (r *SSETransformingReader) handleWithTransformer(parsed map[string]interfac
 
 	if bytes.Equal(transformed, []byte("[DONE]")) {
 		r.sawDone = true
-		r.notifySSEObserver([]byte(canonicalDoneFrame), nil, "done")
-		return []byte(canonicalDoneFrame)
+		// Route through finishStreamFrames exactly like the raw-[DONE] path,
+		// so a transformer-synthesized terminal composes the same frames
+		// (held tail, done notification) instead of returning bare — the
+		// direct return silently dropped the withheld tail at stream end
+		// (AUD-02). On the Anthropic path the pre-terminal drain has usually
+		// emptied the hold already; this branch is the backstop for
+		// transformers that synthesize [DONE] without a raw terminal line.
+		return r.finishStreamFrames([]byte(canonicalDoneFrame), []byte(canonicalDoneFrame))
 	}
 
 	if bytes.Equal(transformed, origData) && bytes.Equal(data, origData) {
@@ -1655,6 +1777,15 @@ func (r *SSETransformingReader) transformNonSSELine(line []byte) []byte {
 	}
 	if len(transformed) == 0 || bytes.Equal(transformed, trimmed) {
 		return line
+	}
+	if bytes.Equal(transformed, []byte("[DONE]")) {
+		// AUD-02: the bare-JSON variant of the synthesized terminal gets the
+		// same composition as the data-line variant — canonical [DONE] frame,
+		// held-tail flush, done notification. Forwarding the bare value raw
+		// would emit an unprefixed frame strict clients ignore and drop the
+		// withheld tail.
+		r.sawDone = true
+		return r.finishStreamFrames([]byte(canonicalDoneFrame), []byte(canonicalDoneFrame))
 	}
 	return transformed
 }

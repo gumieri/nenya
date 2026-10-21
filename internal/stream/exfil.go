@@ -220,6 +220,16 @@ func (g *ExfilGuard) Flush() (string, FilterAction) {
 	return spliceSpans(out, spans, exfilStripPlaceholder), ActionRedact
 }
 
+// Rearm re-enables content filtering after a Flush (NENYA-205/AUD-02). The
+// pre-terminal drain composes the held tail while the stream may continue,
+// so the drained pass-through must not become a permanent egress bypass: a
+// spoofed mid-stream message_stop drains what is held at that instant and
+// every later chunk is filtered again. The composition itself stays
+// pass-through — Rearm runs only after the synthetic frame has been built.
+func (g *ExfilGuard) Rearm() {
+	g.drained = false
+}
+
 // holdCut returns the byte offset in fresh up to which content is
 // client-visible this round. Base rule: the last whitespace boundary —
 // a URL construct contains no whitespace, so everything before it is
