@@ -219,10 +219,26 @@ type SSETransformingReader struct {
 	// trackStreamProgress), deliberately narrower than HasEffectiveOutput.
 	sawContent      bool
 	sawFinishReason bool
-	injectedError   bool
-	ctx             context.Context
-	poolBuf         *[]byte
-	logger          *slog.Logger
+	// sawAnthropicFinish records that the stream COMPLETED through the native
+	// Anthropic surface (message_delta stop_reason / message_stop). Set only
+	// on the passthrough path (nil transformer — the transformed bytes ARE
+	// the raw upstream wire); converted paths end through their transformer's
+	// synthesized [DONE] and never consult it. handleScannerDone uses it to
+	// end an Anthropic passthrough exactly where the upstream ended instead
+	// of appending OpenAI framing to the client's own message_stop (AUD-01).
+	// A completion recognized from an OpenAI finish_reason line — even on a
+	// stream that also carried Anthropic deltas — keeps the injected [DONE].
+	sawAnthropicFinish bool
+	// sawAnthropicContent records that generated content arrived through the
+	// Anthropic envelope (passthrough). The NENYA-46 synthetic finish_reason
+	// is an OpenAI-shaped frame and must never be synthesized onto an
+	// Anthropic-shaped stream, so synthesizeTerminalFinish stands down when
+	// this is set.
+	sawAnthropicContent bool
+	injectedError       bool
+	ctx                 context.Context
+	poolBuf             *[]byte
+	logger              *slog.Logger
 
 	// last* fields track token usage between consecutive usage chunks.
 	// They are accessed only from the single goroutine calling Read().
@@ -500,6 +516,8 @@ func (r *SSETransformingReader) ResetCounters() {
 	r.warnedAtThreshold = false
 	r.sawContent = false
 	r.sawFinishReason = false
+	r.sawAnthropicFinish = false
+	r.sawAnthropicContent = false
 	r.sawDone = false
 	r.injectedError = false
 	r.emittedAny = false
@@ -540,6 +558,15 @@ func (r *SSETransformingReader) SetSuppressCutError(v bool) {
 // gives up (gave_up_no_content) and writes a gateway_error instead of ending
 // cleanly. Unifying the notions needs its own item with continuation-format
 // coverage.
+//
+// Native-Anthropic passthrough is the one surface recognized beyond the OpenAI
+// shapes, and only when no transformer is installed (nil transformer means the
+// transformed bytes ARE the raw upstream wire): the Anthropic event envelope
+// carries the same terminal signals, and without reading them a COMPLETE
+// passthrough stream classified as empty at EOF — a gateway_error injected
+// after the client's own message_stop, a breaker charge, and no cache store
+// (AUD-01). Converted paths keep the OpenAI-shape semantics unchanged: their
+// transformer synthesizes the [DONE] terminal the matrix already understands.
 func (r *SSETransformingReader) trackStreamProgress(transformed []byte) {
 	if r.sawContent && r.sawFinishReason {
 		return
@@ -559,6 +586,7 @@ func (r *SSETransformingReader) trackStreamProgress(transformed []byte) {
 	if parsed == nil {
 		return
 	}
+	r.trackAnthropicSurface(parsed)
 	content := ExtractDeltaContentFromMap(parsed)
 	if content != "" {
 		r.sawContent = true
@@ -572,6 +600,66 @@ func (r *SSETransformingReader) trackStreamProgress(transformed []byte) {
 			r.sawFinishReason = true
 		}
 	}
+}
+
+// trackAnthropicSurface records the native-Anthropic terminal signals of a
+// passthrough chunk onto the terminal-state matrix. Gated on the nil
+// transformer: only there are the transformed bytes the raw upstream wire, so
+// only there can the Anthropic envelope be trusted as the client's surface.
+// Converted paths keep the OpenAI-shape semantics unchanged (their transformer
+// synthesizes the [DONE] terminal the matrix already understands).
+func (r *SSETransformingReader) trackAnthropicSurface(parsed map[string]interface{}) {
+	if r.transformer != nil {
+		return
+	}
+	content, finish := anthropicSurfaceProgress(parsed)
+	if content {
+		r.sawContent = true
+		r.sawAnthropicContent = true
+	}
+	if finish {
+		r.sawFinishReason = true
+		// Remember WHICH surface completed the stream: handleScannerDone
+		// suppresses the injected [DONE] only for Anthropic-surface
+		// completions — the client already got the upstream's message_stop.
+		r.sawAnthropicFinish = true
+	}
+}
+
+// anthropicSurfaceProgress reads the terminal-state signals of a native
+// Anthropic SSE chunk (the top-level "type" event envelope) for the
+// terminal-state matrix. It reports whether the chunk carries generated
+// content (content) and whether it carries a completion signal (finish);
+// non-Anthropic chunks report false, false. Only consulted on the passthrough
+// path (nil transformer): message_stop is a completion signal even when a
+// malformed message_delta never preceded it, and content_block_delta counts
+// text, thinking, and tool-argument deltas as generated content.
+func anthropicSurfaceProgress(parsed map[string]interface{}) (content, finish bool) {
+	typ, _ := parsed["type"].(string)
+	switch typ {
+	case "content_block_delta":
+		delta, _ := parsed["delta"].(map[string]interface{})
+		if text, _ := delta["text"].(string); text != "" {
+			content = true
+		}
+		if thinking, _ := delta["thinking"].(string); thinking != "" {
+			content = true
+		}
+		if args, _ := delta["partial_json"].(string); args != "" {
+			content = true
+		}
+		if _, cited := delta["citation"]; cited {
+			content = true
+		}
+	case "message_delta":
+		delta, _ := parsed["delta"].(map[string]interface{})
+		if stop, _ := delta["stop_reason"].(string); stop != "" {
+			finish = true
+		}
+	case "message_stop":
+		finish = true
+	}
+	return content, finish
 }
 
 // hasReasoningDelta reports whether an OpenAI-format chunk carries a non-empty
@@ -923,6 +1011,34 @@ func (r *SSETransformingReader) handleScannerDone() {
 		case r.sawDone:
 			// Normal end.
 		case r.sawFinishReason:
+			if r.sawAnthropicFinish {
+				// Native-Anthropic passthrough: the stream completed through
+				// its own terminal (message_delta stop_reason / message_stop)
+				// and the client already received the upstream's message_stop.
+				// Appending OpenAI framing (a bare data: [DONE]) on top of the
+				// client's wire shape would corrupt the passthrough — end
+				// exactly where the upstream ended (AUD-01). A completion
+				// recognized from an OpenAI finish_reason line — even on a
+				// stream that also carried Anthropic deltas — keeps the
+				// injected [DONE]. Interaction note: the sawContent &&
+				// sawFinishReason early return at the top of
+				// trackStreamProgress seals the matrix, so on a pathological
+				// mixed wire an OpenAI finish recognized BEFORE the Anthropic
+				// terminal wins the injection — whoever completes the stream
+				// first in arrival order decides.
+				// The exfil guard's held tail (NENYA-205) must still reach
+				// the client: drain it as a format-shaped content chunk
+				// (lastSurface makes it a content_block_delta here), then
+				// end — mirroring injectDoneOnly minus the [DONE].
+				if held, heldOK := r.synthesizeHeldFlush(); heldOK {
+					buf := append(r.eventSeparator(), held...)
+					buf = append(buf, '\n', '\n')
+					r.buffer = buf
+					r.pos = 0
+					r.lastLineBlank = true
+				}
+				break
+			}
 			slog.Debug("SSE scanner ended without [DONE] after finish_reason, injecting silent [DONE]",
 				"has_transformer", r.transformer != nil)
 			r.injectDoneOnly()
@@ -1196,9 +1312,11 @@ func (r *SSETransformingReader) synthesizeHeldFlush() ([]byte, bool) {
 // Deliberately narrow: only pure passthrough (no format transformer — the
 // client format would be unknown), only when content was actually streamed,
 // never when a finish_reason was seen, and never in discard mode (the early
-// [DONE] passthrough branch bypasses this path entirely).
+// [DONE] passthrough branch bypasses this path entirely). The synthesized
+// frame is OpenAI-shaped, so an Anthropic-shaped passthrough stream never
+// receives one (AUD-01): its own message_stop protocol closes the message.
 func (r *SSETransformingReader) synthesizeTerminalFinish() ([]byte, bool) {
-	if r.transformer != nil || !r.sawContent || r.sawFinishReason {
+	if r.transformer != nil || !r.sawContent || r.sawFinishReason || r.sawAnthropicContent {
 		return nil, false
 	}
 	r.sawFinishReason = true
