@@ -142,6 +142,10 @@ type Metrics struct {
 	// NENYA-149), by site and reason.
 	visionDrops sync.Map
 
+	// emptyResponses counts HTTP-200 upstream responses that carried no
+	// content (nenya_empty_responses_total, NENYA-160), by kind.
+	emptyResponses sync.Map
+
 	// mcpServerStatus counts MCP discovery outcomes per server
 	// (nenya_mcp_server_status_total, NENYA-152).
 	mcpServerStatus sync.Map
@@ -755,6 +759,26 @@ func (m *Metrics) RecordVisionContentDropped(site, reason string) {
 		reason = "other"
 	}
 	e := getOrCreateEntry(&m.visionDrops, map[string]string{"site": site, "reason": reason})
+	e.value.Add(1)
+}
+
+// RecordEmptyResponse records one HTTP-200 upstream response that carried no
+// content (NENYA-160): the early-warning signal for provider degradation,
+// visible before breakers trip. kind is "stream" (an SSE body with no events)
+// or "buffered" (a JSON body with no choices); anything else collapses to
+// "other". The model label is bounded by the cardinality guard. Nil-safe.
+func (m *Metrics) RecordEmptyResponse(model, provider, kind string) {
+	if m == nil {
+		return
+	}
+	switch kind {
+	case "stream", "buffered":
+	default:
+		kind = "other"
+	}
+	e := getOrCreateEntry(&m.emptyResponses, map[string]string{
+		"model": m.ModelLabel(model), "provider": provider, "kind": kind,
+	})
 	e.value.Add(1)
 }
 
@@ -1942,6 +1966,8 @@ func (m *Metrics) writePipelineMetrics(w io.Writer) {
 		"Conflicting duplicate parameters resolved by the request normalizer, by logical parameter (NENYA-186).", &m.duplicateParams)
 	m.writeCounterMap(w, "nenya_unknown_request_fields_total",
 		"Request fields no format path consumes, by resolved format (NENYA-186).", &m.unknownRequestFields)
+	m.writeCounterMap(w, "nenya_empty_responses_total",
+		"Upstream HTTP-200 responses that carried no content, by kind (NENYA-160).", &m.emptyResponses)
 	m.writeCounterMap(w, "nenya_mcp_server_status_total",
 		"MCP discovery outcomes per server (NENYA-152).", &m.mcpServerStatus)
 	m.writeCounterMap(w, "nenya_model_label_violations_total",

@@ -179,6 +179,10 @@ type SSETransformingReader struct {
 	onUsage     UsageCallback
 	onContent   ContentCallback
 	onThinking  ThinkingCallback
+	// onEmptyStream, when set, is invoked when the scanner ends cleanly with
+	// NO content at all — the empty-200 degradation signal (NENYA-160). Set
+	// via SetEmptyStreamCallback.
+	onEmptyStream func()
 	// onFirstOutput fires once, at the first output-bearing frame (NENYA-178):
 	// the TTFT clock's stop signal. See SetOnFirstEffectiveOutput.
 	onFirstOutput        FirstOutputCallback
@@ -308,6 +312,14 @@ func newToolCallState() toolCallState {
 		pending:     make(map[int]*pendingToolCall),
 		seenIDs:     make(map[string]bool),
 	}
+}
+
+// SetEmptyStreamCallback registers a callback invoked when the stream ends
+// cleanly with no content at all (NENYA-160). Called from the reader
+// goroutine; the callback must be safe for concurrent use with respect to its
+// own state.
+func (r *SSETransformingReader) SetEmptyStreamCallback(cb func()) {
+	r.onEmptyStream = cb
 }
 
 // NewSSETransformingReader creates a new reader that transforms SSE data lines using the provided transformer.
@@ -915,6 +927,11 @@ func (r *SSETransformingReader) handleScannerDone() {
 				"has_transformer", r.transformer != nil)
 			r.injectDoneOnly()
 		case !r.sawContent:
+			// NENYA-160: the always-on empty-200 degradation signal — this
+			// path is flag-independent (it IS the empty-stream handler).
+			if r.onEmptyStream != nil {
+				r.onEmptyStream()
+			}
 			slog.Warn("SSE scanner ended without [DONE] marker and no content, injecting gateway_error",
 				"has_transformer", r.transformer != nil)
 			r.injectErrorBuffer("upstream stream ended without [DONE]")

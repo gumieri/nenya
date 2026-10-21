@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"math"
 	"net/url"
 	"sort"
 	"strings"
@@ -15,10 +16,59 @@ type Parser interface {
 	Parse(body []byte, provider string) ([]DiscoveredModel, error)
 }
 
+// OpenAIModelsResponse is the /v1/models shape, plus the structured fields
+// aggregators advertise beyond it (NENYA-160): a context length and input/
+// output modalities (OpenRouter-style "architecture"). Structured capability
+// data is preferred over model-ID heuristics: when present it is merged into
+// ModelMetadata, which the routing resolver consults before falling back to
+// InferCapabilities.
 type OpenAIModelsResponse struct {
 	Data []struct {
 		ID string `json:"id"`
+		// ContextLength is decoded tolerantly (json.Number): aggregators have
+		// shipped it as a string, and a strict int would fail the whole
+		// provider's discovery decode.
+		ContextLength json.Number `json:"context_length"`
+		Architecture  *struct {
+			InputModalities  []string `json:"input_modalities"`
+			OutputModalities []string `json:"output_modalities"`
+		} `json:"architecture"`
 	} `json:"data"`
+}
+
+// metadataFromAdvertised builds ModelMetadata from a discovery entry's
+// advertised modalities (NENYA-160): vision/audio capabilities come from the
+// input modalities, matched case-insensitively; unknown spellings are ignored
+// rather than guessed. The record is SEEDED from the model-ID heuristics
+// (InferCapabilities) and the modalities overlay it — an aggregator that
+// advertises only ["text"] must not erase the tool-calls/reasoning/streaming
+// capabilities the ID implies, because the resolver prefers a non-nil
+// metadata record over the heuristics. Returns nil when nothing is
+// advertised, so the resolver falls straight back to the heuristics.
+func metadataFromAdvertised(modelID string, inputMods []string) *ModelMetadata {
+	// Modalities are the structured capability signal this function exists
+	// for; an entry with none must return nil so the resolver falls back to
+	// the heuristics.
+	if len(inputMods) == 0 {
+		return nil
+	}
+	meta := InferCapabilities(modelID)
+	if meta == nil {
+		// No capability rule matched this ID: start a fresh record rather
+		// than dereferencing nil — the overlay below still applies.
+		meta = &ModelMetadata{}
+	}
+	for _, mod := range inputMods {
+		switch strings.ToLower(strings.TrimSpace(mod)) {
+		case "image":
+			meta.SupportsVision = true
+		case "audio":
+			meta.SupportsAudio = true
+		}
+	}
+	// Output modalities have no ModelMetadata field yet; they are parsed and
+	// discarded until one exists.
+	return meta
 }
 
 type AnthropicModelsResponse struct {
@@ -65,10 +115,21 @@ func (p *OpenAIParser) Parse(body []byte, provider string) ([]DiscoveredModel, e
 		if !isValidModelID(m.ID) {
 			continue
 		}
-		models = append(models, DiscoveredModel{
+		model := DiscoveredModel{
 			ID:       m.ID,
 			Provider: provider,
-		})
+		}
+		if m.Architecture != nil {
+			model.Metadata = metadataFromAdvertised(m.ID, m.Architecture.InputModalities)
+		}
+		if n := m.ContextLength; n != "" {
+			// Bounded at MaxInt32 (not the uint32 ceiling): int is 32-bit on
+			// some GOARCHes and the conversion must not wrap (CWE-190).
+			if parsed, err := n.Int64(); err == nil && parsed > 0 && parsed <= math.MaxInt32 {
+				model.MaxContext = int(parsed)
+			}
+		}
+		models = append(models, model)
 	}
 	return models, nil
 }

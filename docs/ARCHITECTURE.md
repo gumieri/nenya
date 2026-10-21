@@ -475,6 +475,28 @@ Resolution happens once at config load time (`resolveEngineRefs` in `internal/co
 
 All engine calls log `caller` (`bouncer` or `window`), `agent` name (or `inline`), `provider`, `model`, and `attempt`/`total` for observability.
 
+## Capability Data: Advertised Modalities (NENYA-160)
+
+Discovery payloads often advertise more than an ID. The OpenAI-shaped parser
+merges aggregator-structured fields — `architecture.input_modalities` /
+`output_modalities` (OpenRouter-style) and `context_length` — into
+`DiscoveredModel`: vision/audio capabilities land in `ModelMetadata`
+(case-insensitive match on the input modalities; unknown spellings ignored,
+never guessed) and the context length rides `MaxContext` (decoded tolerantly —
+some aggregators ship it as a string). The record is SEEDED from the model-ID
+heuristics in `InferCapabilities` and the modalities overlay it, so an
+aggregator advertising only ["text"] cannot erase the tool-calls/reasoning/
+streaming capabilities the ID implies; a modality-less entry carries no
+metadata record, so an empty record can never mask the heuristics either. Related degradation signal:
+`nenya_empty_responses_total{model, provider, kind}` (`kind=stream|buffered`)
+counts upstream HTTP-200 responses with no content — the always-on
+early-warning signal for provider degradation, recorded at the SSE reader's own
+empty-stream handler (flag-independent — it IS the empty-stream handler that
+injects the gateway_error) and at both
+buffered sites (zero-length body, zero choices; OpenAI-format targets only,
+since an Anthropic Messages body has no `choices` key by construction). The
+failover on empty streams remains governed by `empty_stream_as_error`.
+
 ## Model Discovery
 
 Nenya dynamically fetches model catalogs from upstream providers at startup and on SIGHUP reload, replacing the static ModelRegistry with a three-tier priority system.

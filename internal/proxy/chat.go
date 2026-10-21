@@ -1803,6 +1803,40 @@ func (p *Proxy) buildUpstreamRequest(gw *gateway.NenyaGateway, ctx context.Conte
 }
 
 // handleNonStreamingResponse buffers the full upstream response and returns it as a complete JSON object.
+// embeddedProviderFailure handles a provider error embedded in an HTTP-200
+// body (Ollama-style error strings, OpenAI/Anthropic-style error objects):
+// records the failure and reports a failover result instead of relaying the
+// error as if it were a completion. A body carrying BOTH a populated error
+// object and choices is treated as a failure envelope — the error wins.
+// failed=false when the body carries no embedded error.
+func (p *Proxy) embeddedProviderFailure(gw *gateway.NenyaGateway, target routing.UpstreamTarget, responseMap map[string]interface{}, cooldownDuration time.Duration) (streamResult, bool) {
+	details, isErr := embeddedProviderError(responseMap)
+	if !isErr {
+		return streamResult{}, false
+	}
+	gw.AgentState.RecordFailure(target, cooldownDuration)
+	gw.Logger.Warn("provider error embedded in HTTP-200 body, trying next target",
+		"model", target.Model, "provider", target.Provider, "error_message", details.Message)
+	return streamResult{empty: true}, true
+}
+
+// countEmptyChoices records the NENYA-160 degradation signal when the buffered
+// body carried no choices at all (an empty HTTP 200). Branch-free at the call
+// site: handleNonStreamingResponse sits at the complexity lint's edge. Only
+// OpenAI-format targets are counted: the upstream body here is the target's
+// own wire shape, and an Anthropic Messages body (content/stop_reason, no
+// "choices" key) is not empty — counting it would saturate the signal.
+func countEmptyChoices(gw *gateway.NenyaGateway, target routing.UpstreamTarget, responseMap map[string]interface{}) {
+	if target.Format != "openai" {
+		return
+	}
+	choices, ok := responseMap["choices"].([]interface{})
+	if ok && len(choices) > 0 {
+		return
+	}
+	gw.Metrics.RecordEmptyResponse(target.Model, target.Provider, "buffered")
+}
+
 func (p *Proxy) handleNonStreamingResponse(gw *gateway.NenyaGateway, w http.ResponseWriter, r *http.Request, target routing.UpstreamTarget, agentName, sourceFormat string, action upstreamAction, cacheKey string, cooldownDuration time.Duration, egress bufferedEgressOpts) streamResult {
 	defer action.cancel()
 
@@ -1830,6 +1864,8 @@ func (p *Proxy) handleNonStreamingResponse(gw *gateway.NenyaGateway, w http.Resp
 
 	if len(respBody) == 0 {
 		gw.AgentState.RecordFailure(target, cooldownDuration)
+		// NENYA-160: count it in the always-on degradation signal too.
+		gw.Metrics.RecordEmptyResponse(target.Model, target.Provider, "buffered")
 		gw.Logger.Warn("empty non-streaming response from upstream", "model", target.Model)
 		return streamResult{empty: true}
 	}
@@ -1864,17 +1900,17 @@ func (p *Proxy) handleNonStreamingResponse(gw *gateway.NenyaGateway, w http.Resp
 	}
 
 	// Some providers return HTTP 200 with an error object in the body
-	// (Ollama-style error strings, OpenAI/Anthropic-style error objects).
-	// Treat those as failed upstream attempts too: record the failure and
-	// fail over instead of relaying the error as if it were a completion. A
-	// body carrying BOTH a populated error object and choices is treated as
-	// a failure envelope — the error wins.
-	if details, isErr := embeddedProviderError(responseMap); isErr {
-		gw.AgentState.RecordFailure(target, cooldownDuration)
-		gw.Logger.Warn("provider error embedded in HTTP-200 body, trying next target",
-			"model", target.Model, "provider", target.Provider, "error_message", details.Message)
-		return streamResult{empty: true}
+	// (Ollama-style error strings, OpenAI/Anthropic-style error objects):
+	// embeddedProviderFailure treats those as failed upstream attempts —
+	// the error wins over a populated choices array.
+	if result, failed := p.embeddedProviderFailure(gw, target, responseMap, cooldownDuration); failed {
+		return result
 	}
+
+	// NENYA-160: an HTTP-200 body with no choices (and no embedded error,
+	// handled above) is an empty response — count it as the degradation
+	// signal without changing the forwarding behavior.
+	countEmptyChoices(gw, target, responseMap)
 
 	// NENYA-51: cache Gemini thought signatures from the OpenAI-format
 	// response before any format conversion drops them. Covers the

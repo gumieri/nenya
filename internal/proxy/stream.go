@@ -133,6 +133,9 @@ func (p *Proxy) probeStreamHead(gw *gateway.NenyaGateway, action upstreamAction,
 func (p *Proxy) handleStreamHeadNoData(gw *gateway.NenyaGateway, action upstreamAction, target routing.UpstreamTarget, cooldownDuration time.Duration, probeEmpty bool, readErr error, stallR *stallReader) *streamResult {
 	if readErr == nil || readErr == io.EOF {
 		if !probeEmpty {
+			// NENYA-160: with the empty-failover flag off, the stream still
+			// flows to the SSE reader, whose empty-stream handler carries the
+			// always-on signal — counting here too would double-count.
 			return nil
 		}
 		if err := action.resp.Body.Close(); err != nil {
@@ -144,6 +147,9 @@ func (p *Proxy) handleStreamHeadNoData(gw *gateway.NenyaGateway, action upstream
 		}
 		gw.AgentState.RecordFailure(target, cooldownDuration)
 		gw.Metrics.RecordEmptyStream(target.Model, target.Provider)
+		// NENYA-160: on this path the body is closed before any SSE reader
+		// exists, so this is the empty stream's only always-on count.
+		gw.Metrics.RecordEmptyResponse(target.Model, target.Provider, "stream")
 		gw.Logger.Warn("empty upstream stream detected, falling back to next target",
 			"model", target.Model, "provider", target.Provider)
 		return &streamResult{empty: true}
@@ -402,7 +408,9 @@ type headProbe struct {
 }
 
 // headProbeEnabled computes the enabled stream-head probe flags. Probes only
-// run when at least one of the governing config flags is enabled.
+// run when at least one of the governing config flags is enabled; the
+// always-on streaming empty-200 signal is carried by the SSE reader callback
+// instead (NENYA-160), which needs no probe.
 func headProbeEnabled(gc config.GovernanceConfig) headProbe {
 	hp := headProbe{}
 	if gc.EmptyStreamAsError != nil && *gc.EmptyStreamAsError {
@@ -694,6 +702,11 @@ func (p *Proxy) setupTransformingReader(gw *gateway.NenyaGateway, o transformRea
 	}
 
 	transformingReader := stream.NewSSETransformingReader(bodyReader, transformer, o.ctx)
+	// NENYA-160: the always-on streaming empty-200 signal rides the reader's
+	// own empty-stream handler, so it fires regardless of the probe flags.
+	transformingReader.SetEmptyStreamCallback(func() {
+		gw.Metrics.RecordEmptyResponse(o.target.Model, o.target.Provider, "stream")
+	})
 	transformingReader.SetDropPrivateEvents(gw.Config.Governance.FilterPrivateSSEEvents)
 	transformingReader.SetMaxTransformedBytes(gw.Config.Governance.EffectiveMaxTransformedSSEBytes())
 	transformingReader.SetOnUsage(p.makeUsageCallback(o.ctx, gw, o.target, o.agentName))
