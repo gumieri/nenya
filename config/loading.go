@@ -99,7 +99,7 @@ func unknownFieldDiagnostic(data []byte, path string) *Diagnostic {
 	dec.DisallowUnknownFields()
 	var probe Config
 	if err := dec.Decode(&probe); err != nil {
-		if name, ok := unknownFieldName(err); ok {
+		if name, ok := UnknownFieldName(err); ok {
 			slog.Warn("config contains unknown field, ignored (possible typo)",
 				"field", name, "path", path)
 			return &Diagnostic{
@@ -113,9 +113,11 @@ func unknownFieldDiagnostic(data []byte, path string) *Diagnostic {
 	return nil
 }
 
-// unknownFieldName extracts the field name from encoding/json's
-// "json: unknown field \"x\"" error.
-func unknownFieldName(err error) (string, bool) {
+// UnknownFieldName extracts the unknown field's name from encoding/json's
+// "json: unknown field \"x\"" error. It backs the loader's NENYA-19
+// unknown-field diagnostic and the `nenya config set` schema warning
+// (NENYA-175); ok is false when err is not an unknown-field error.
+func UnknownFieldName(err error) (string, bool) {
 	const marker = "json: unknown field "
 	msg := err.Error()
 	idx := strings.Index(msg, marker)

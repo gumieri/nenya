@@ -244,6 +244,21 @@ A config file that carries MCP header values (the only credential surface the
 config accepts) can therefore be made private by the operator once (`chmod 600`)
 and the mode is kept.
 
+**Write-preservation guarantee (NENYA-175):** `nenya config set` never silently
+destroys operator-owned configuration. Unrelated keys are preserved wherever
+they sit — foreign top-level keys, foreign keys inside known sections, and
+existing provider/agent entries all survive a write against a nested path or a
+top-level key (pinned by round-trip tests). A credential-typed value under
+`providers.<name>` additionally passes the boot-time strength check, so the
+writer cannot produce a config the gateway refuses to start with (NENYA-192).
+When the target key does not exist in the config schema, the command prints a
+warning naming the key (typo protection, mirroring the loader's NENYA-19
+unknown-field diagnostic; provider, agent, and MCP-server NAMES are map keys
+and never warn) — the warning is advisory: the write proceeds unless another
+gate (the credential strength check, NENYA-192) rejects the value, and unknown
+keys are preserved on disk and ignored at load, because lenient decoding
+always wins.
+
 Examples:
 ```
 nenya config set server.listen_addr '":9090"'
@@ -262,6 +277,11 @@ The secrets single writer.
 Files are created with mode `0600` (the parent directory is created `0755`);
 existing unrelated keys are preserved. As with `config set`, the atomic rename
 replaces a symlinked target with a regular file rather than following it.
+
+The same write-preservation guarantee applies (NENYA-175): `nenya secret set`
+only ever rewrites the one key it names — unrelated `provider_keys` entries,
+the `client_token`, and any foreign keys an operator added to `secrets.json`
+survive every write (pinned by tests).
 
 The write target is, in order:
 

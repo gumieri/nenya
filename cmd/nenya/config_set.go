@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -62,6 +63,9 @@ func handleConfig(w, errW io.Writer, args []string) (bool, error) {
 	// case-insensitively (JSON decoding is) and only under the providers
 	// subtree — other api_key-named leaves (e.g. mcp_servers headers) are not
 	// credentials the strength pass covers.
+	// NENYA-175: the schema hint runs BEFORE the credential strength gate, so
+	// a typo'd key gets named even when the value is also rejected as weak.
+	warnUnknownConfigKey(errW, rest[0])
 	lowerKey := strings.ToLower(rest[0])
 	if strings.HasPrefix(lowerKey, "providers.") &&
 		(strings.HasSuffix(lowerKey, ".api_key") || strings.HasSuffix(lowerKey, ".credential")) {
@@ -77,6 +81,52 @@ func handleConfig(w, errW io.Writer, args []string) (bool, error) {
 	}
 	_, err := fmt.Fprintln(w, target)
 	return true, err
+}
+
+// warnUnknownConfigKey warns on errW when dottedKey does not exist in the
+// config schema (typo protection, NENYA-175): the key materializes as a
+// single-path document and strict-decodes (DisallowUnknownFields) against
+// config.Config — the same secondary pass the loader uses for its NENYA-19
+// unknown-field warning. Map-typed subtrees (provider, agent, and MCP-server
+// NAMES) accept arbitrary keys by construction, so only struct fields are
+// checked; case-folded spellings of known fields decode fine (SERVER.-style
+// folds match snake_case tags), while respelled keys ("MaxBodyBytes" vs
+// "max_body_bytes") warn — exactly the keys the loader's diagnostic names.
+// The warning is advisory and worded independently of the write's outcome
+// (the credential strength gate or a write error may still refuse the
+// operation): unknown keys are preserved on disk and ignored at load either
+// way (lenient decoding always wins, NENYA-19).
+func warnUnknownConfigKey(errW io.Writer, dottedKey string) {
+	parts := strings.Split(dottedKey, ".")
+	for _, part := range parts {
+		if part == "" {
+			return // malformed key: setDottedKey rejects it with its own error
+		}
+	}
+	doc := map[string]any{}
+	cur := doc
+	for i, part := range parts {
+		if i == len(parts)-1 {
+			cur[part] = nil // the leaf value's type is irrelevant to the field check
+			break
+		}
+		child := map[string]any{}
+		cur[part] = child
+		cur = child
+	}
+	data, err := json.Marshal(doc)
+	if err != nil {
+		return
+	}
+	dec := json.NewDecoder(bytes.NewReader(data))
+	dec.DisallowUnknownFields()
+	var probe config.Config
+	if err := dec.Decode(&probe); err != nil {
+		if name, ok := config.UnknownFieldName(err); ok {
+			_, _ = fmt.Fprintf(errW,
+				"warning: %q is not a known config key (possible typo); unknown keys are preserved and ignored at load\n", name)
+		}
+	}
 }
 
 // configTargetPath returns the file `config set` writes: the selected single

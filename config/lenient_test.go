@@ -104,11 +104,11 @@ func TestLoadFromDir_ConfigDUnknownField(t *testing.T) {
 }
 
 func TestUnknownFieldName(t *testing.T) {
-	_, ok := unknownFieldName(errors.New("some other error"))
+	_, ok := UnknownFieldName(errors.New("some other error"))
 	if ok {
 		t.Fatal("non unknown-field error must not match")
 	}
-	name, ok := unknownFieldName(errors.New(`json: unknown field "ratelimit_max_rpmm"`))
+	name, ok := UnknownFieldName(errors.New(`json: unknown field "ratelimit_max_rpmm"`))
 	if !ok || name != "ratelimit_max_rpmm" {
 		t.Fatalf("got %q ok=%v", name, ok)
 	}

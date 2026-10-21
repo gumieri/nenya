@@ -327,3 +327,37 @@ func TestSecretSet_ResultLoads(t *testing.T) {
 		t.Errorf("client token = %q, want the explicit value", res.Secrets.ClientToken)
 	}
 }
+
+// NENYA-175: a foreign top-level key an operator added to secrets.json
+// survives a provider-key write — the write-preservation guarantee covers
+// foreign secrets content, not just the keys the writer owns.
+func TestSecretSet_ForeignKeySurvives(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("NENYA_SECRETS_DIR", dir)
+	t.Setenv("CREDENTIALS_DIRECTORY", "")
+
+	path := filepath.Join(dir, "secrets.json")
+	original := `{"foreign_audit_key": {"history": [1, 2]}, "provider_keys": {"existing": "AIzaSy-existing-key-0123456789"}}
+`
+	if err := os.WriteFile(path, []byte(original), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	runSecretSet(t, "--provider", "gemini", "AIzaSy-synthetic-key-0123456789abcdef")
+
+	doc := readJSONFile(t, path)
+	if _, ok := doc["foreign_audit_key"]; !ok {
+		t.Fatal("the foreign top-level key must survive the write")
+	}
+	foreign, ok := doc["foreign_audit_key"].(map[string]any)
+	if !ok {
+		t.Fatalf("the foreign key must keep its shape: %v", doc["foreign_audit_key"])
+	}
+	if _, ok := foreign["history"]; !ok {
+		t.Fatalf("the foreign key's content must survive: %v", foreign)
+	}
+	keys, _ := doc["provider_keys"].(map[string]any)
+	if keys == nil || keys["gemini"] != "AIzaSy-synthetic-key-0123456789abcdef" || keys["existing"] != "AIzaSy-existing-key-0123456789" {
+		t.Fatalf("provider_keys must carry the written and the existing key: %v", doc["provider_keys"])
+	}
+}

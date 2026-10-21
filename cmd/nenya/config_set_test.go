@@ -265,3 +265,129 @@ func TestConfigSet_CredentialKeyStrengthGuard(t *testing.T) {
 		t.Fatalf("mcp header value must not be strength-checked: %v", err)
 	}
 }
+
+// NENYA-175: `config set` warns (never blocks) when the target key does not
+// exist in the config schema — typo protection mirroring the loader's
+// NENYA-19 unknown-field warning.
+func TestConfigSet_WarnsOnUnknownKey(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("NENYA_CONFIG_DIR", dir)
+	t.Setenv("NENYA_CONFIG_FILE", "")
+
+	cases := []struct {
+		name     string
+		key      string
+		value    string
+		wantWarn string // substring of the warning; "" asserts no warning
+	}{
+		{"typo in a section name", "goverance.max_tokens", `"x"`, `"goverance" is not a known config key`}, //nolint:misspell // the typo is the test input
+		{"typo in a leaf name", "server.listen_addr_typo", `"x"`, `"listen_addr_typo" is not a known config key`},
+		{"known key stays silent", "server.listen_addr", `":8080"`, ""},
+		// Provider/agent/MCP-server NAMES are map keys: any spelling is valid.
+		// (The api_key leaf needs a strong value: the credential strength gate
+		// runs before the write and rejects weak values outright, NENYA-192.)
+		{"provider name is a map key", "providers.myprov.api_key", `"nk-provider-test-0123456789abcdef"`, ""},
+		{"agent name is a map key", "agents.myagent.strategy", `"sticky"`, ""},
+		{"mcp header is a map value", "mcp_servers.srv.headers.X-Key", `"x"`, ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var out, errOut bytes.Buffer
+			handled, err := handleConfig(&out, &errOut, []string{"config", "set", tc.key, tc.value})
+			if !handled || err != nil {
+				t.Fatalf("handleConfig: handled=%v err=%v stderr=%s", handled, err, errOut.String())
+			}
+			if tc.wantWarn == "" {
+				if strings.Contains(errOut.String(), "not a known config key") {
+					t.Fatalf("a valid key must not warn: %s", errOut.String())
+				}
+			} else if !strings.Contains(errOut.String(), tc.wantWarn) {
+				t.Fatalf("expected a typo warning naming the field:\n%s", errOut.String())
+			}
+			// The value lands either way (the warning never blocks; a silent
+			// key must have been written too).
+			path := filepath.Join(dir, "config.d", managedConfigDropIn)
+			doc := readJSONFile(t, path)
+			var written any
+			if err := json.Unmarshal([]byte(tc.value), &written); err != nil {
+				t.Fatal(err)
+			}
+			if got := nested(t, doc, tc.key); got != written {
+				t.Fatalf("the value must be written: %v, want %v", got, written)
+			}
+		})
+	}
+}
+
+// NENYA-175: the write-preservation round trip — foreign top-level keys and
+// foreign keys inside known sections survive BOTH write directions (a nested
+// write and a top-level write).
+func TestConfigSet_ForeignKeysSurviveRoundTrip(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("NENYA_CONFIG_DIR", dir)
+	t.Setenv("NENYA_CONFIG_FILE", "")
+
+	original := `{
+	  "top_level_foreign": {"nested": [1, 2, {"deep": true}]},
+	  "another_foreign": "keep-me",
+	  "server": {"listen_addr": ":9000", "foreign_in_known_section": {"a": 1}},
+	  "providers": {"existing": {"url": "http://x"}}
+	}`
+	if err := os.WriteFile(filepath.Join(dir, "config.json"), []byte(original), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// A nested-path write must not disturb the foreign keys.
+	runConfigSet(t, "providers.new.api_key", "nk-roundtrip-0123456789")
+	// The drop-in only carries the written key; foreign keys live in the base.
+	base := readJSONFile(t, filepath.Join(dir, "config.json"))
+	for _, key := range []string{"top_level_foreign", "another_foreign"} {
+		if _, ok := base[key]; !ok {
+			t.Fatalf("the base file must still carry %q after a nested write", key)
+		}
+	}
+
+	// And the merged load sees foreign + written keys together.
+	cfg, err := config.LoadFromDir(dir)
+	if err != nil {
+		t.Fatalf("LoadFromDir: %v", err)
+	}
+	if cfg.Server.ListenAddr != ":9000" {
+		t.Fatalf("the base listen_addr must survive: %q", cfg.Server.ListenAddr)
+	}
+
+	// A top-level foreign-key write must not disturb nested content: write
+	// into the BASE file directly (file mode) and re-check everything.
+	baseFile := filepath.Join(dir, "config.json")
+	runConfigSet(t, "--config", baseFile, "brand_new_top_level", `"v"`)
+	after := readJSONFile(t, baseFile)
+	if got := nested(t, after, "brand_new_top_level"); got != "v" {
+		t.Fatalf("the top-level write must land: %v", got)
+	}
+	if _, ok := after["top_level_foreign"]; !ok {
+		t.Fatal("the foreign top-level object must survive the top-level write")
+	}
+	// The foreign object's nested array content survives intact (the helper
+	// walks maps only, so the array is navigated by hand).
+	foreign, ok := after["top_level_foreign"].(map[string]any)
+	if !ok {
+		t.Fatalf("the foreign object must keep its shape: %v", after["top_level_foreign"])
+	}
+	arr, ok := foreign["nested"].([]any)
+	if !ok || len(arr) != 3 {
+		t.Fatalf("the foreign array must survive intact: %v", foreign["nested"])
+	}
+	deep, ok := arr[2].(map[string]any)
+	if !ok || deep["deep"] != true {
+		t.Fatalf("the foreign array's payload must survive intact: %v", arr[2])
+	}
+	if nested(t, after, "server.listen_addr") != ":9000" {
+		t.Fatalf("nested content must survive the top-level write: %v", after["server"])
+	}
+	if nested(t, after, "server.foreign_in_known_section.a") != float64(1) {
+		t.Fatalf("a foreign key inside a known section must survive: %v", after["server"])
+	}
+	if nested(t, after, "providers.existing.url") != "http://x" {
+		t.Fatalf("existing provider config must survive: %v", after["providers"])
+	}
+}
