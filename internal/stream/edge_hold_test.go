@@ -125,6 +125,37 @@ func TestExfilGuardEOFTerminatedBareURL(t *testing.T) {
 		if !strings.Contains(got, exfilStripPlaceholder) {
 			t.Fatalf("chunk %d: placeholder missing:\n%q", chunkSize, got)
 		}
+		// AUD-03: the Flush span mapping previously shifted every span one
+		// byte left (prevWindowBytes=1 claims the first content byte is
+		// already-emitted text), so the construct's FINAL byte escaped the
+		// placeholder. The stream must end exactly at the placeholder.
+		if want := "see " + exfilStripPlaceholder; got != want {
+			t.Fatalf("chunk %d: output must end exactly at the placeholder:\nwant %q\ngot  %q", chunkSize, want, got)
+		}
+	}
+}
+
+// TestInspectFullEOFTerminatedBareURL pins the buffered-path terminator rule
+// (AUD-03): a bare violating URL at the very end of a non-streaming surface
+// has no in-band terminator; the EOF padding stands in for one, so it is
+// stripped like any other construct. Pre-fix the URL was delivered verbatim
+// with ActionPass.
+func TestInspectFullEOFTerminatedBareURL(t *testing.T) {
+	got, action, _ := stripGuard().InspectFull("see http://127.0.0.1:8080/steal")
+	if action != ActionRedact {
+		t.Fatalf("an EOF-terminated bare URL must be redacted on the buffered path, got %v", action)
+	}
+	if want := "see " + exfilStripPlaceholder; got != want {
+		t.Fatalf("output must end exactly at the placeholder:\nwant %q\ngot  %q", want, got)
+	}
+
+	// Control: the same URL with an in-band terminator strips identically.
+	got2, action2, _ := stripGuard().InspectFull("see http://127.0.0.1:8080/steal ok")
+	if action2 != ActionRedact {
+		t.Fatalf("an in-band-terminated URL must be redacted, got %v", action2)
+	}
+	if want := "see " + exfilStripPlaceholder + " ok"; got2 != want {
+		t.Fatalf("in-band-terminated strip corrupted:\nwant %q\ngot  %q", want, got2)
 	}
 }
 

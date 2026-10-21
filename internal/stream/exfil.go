@@ -208,7 +208,11 @@ func (g *ExfilGuard) Flush() (string, FilterAction) {
 	if g.blocked {
 		return out, ActionBlock
 	}
-	spans, _ := g.scanWindow(out+" ", 1, len(out))
+	// The window is `out` itself plus a padding byte standing in for the
+	// URL terminator; prevWindowBytes is 0 because EVERY byte of out is
+	// fresh content at Flush (a nonzero value shifts every span left and
+	// lets the construct's final byte escape the placeholder — AUD-03).
+	spans, _ := g.scanWindow(out+" ", 0, len(out))
 	if g.blocked {
 		// The EOF-terminated evaluation flipped the guard: the tail is
 		// the violating construct — never deliver it.
@@ -422,7 +426,13 @@ func (g *ExfilGuard) InspectFull(content string) (string, FilterAction, string) 
 	if content == "" {
 		return content, ActionPass, ""
 	}
-	spans, reason := g.scanWindow(content, 0, len(content))
+	// The padding byte stands in for the URL terminator at end-of-content
+	// (AUD-03): without it a bare violating URL running to the very end of
+	// a buffered surface has no in-band terminator and is skipped by the
+	// terminator rule — delivered unstripped. prevWindowBytes is 0 because
+	// every byte of content is fresh; the padding can never join a span
+	// (bareURLRe excludes whitespace, a markdown link must close with ')').
+	spans, reason := g.scanWindow(content+" ", 0, len(content))
 	if g.blocked {
 		return content, ActionBlock, reason
 	}
@@ -543,8 +553,11 @@ func (g *ExfilGuard) scanWindow(windowStr string, prevWindowBytes, contentLen in
 			end = contentLen
 		}
 		if start >= end {
-			// The construct completed entirely in earlier chunks; its
-			// bytes already streamed and only the fragment is fixable.
+			// Defense-in-depth: `consider` already filters targets whose
+			// fresh bytes lie entirely outside this window, so the mapping
+			// above cannot produce an empty span on any current call path
+			// (FilterContent, Flush, InspectFull). Kept as a guard against
+			// future callers.
 			continue
 		}
 		if g.action == config.ExfilActionStrip {

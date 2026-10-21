@@ -360,8 +360,10 @@ over-trust is worse than one you understand.
   content sensitivity demands it; a cloud classifier target means the excerpt
   transits that provider.
 - **ExfilGuard is URL-shaped.** Bare URLs are evaluated once terminated by
-  whitespace/delimiter — a violating URL as the literal final token of a
-  stream escapes. Streaming tool-call argument deltas are not guarded (the
+  whitespace/delimiter; a violating URL as the literal final token of a
+  stream is evaluated with EOF standing in for the terminator (streaming
+  Flush and the buffered InspectFull path alike — AUD-03). Streaming
+  tool-call argument deltas are not guarded (the
   buffered path is). STREAMING tool-argument fragments bypass; encoded or
   obfuscated destinations (punycode lookalikes, DNS that resolves privately)
   are not detected. MCP argument URL checks are string-only: DNS names that

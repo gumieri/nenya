@@ -1,5 +1,5 @@
 {
-  "_comment": "NENYA-147 adversarial variant corpus for the ExfilGuard URL policy. Cases are scanned as a full response surface by InspectFull; markdown-link forms are used where the bare-URL path would defer a final token (a documented limitation). reason is the violation reason (empty = clean pass). allow_ip_literals / allowed_hosts override the guard config for the case.",
+  "_comment": "NENYA-147 adversarial variant corpus for the ExfilGuard URL policy. Cases are scanned as a full response surface by InspectFull; since AUD-03 a bare-URL final token is evaluated with an EOF-padded window, so it no longer defers. reason is the violation reason (empty = clean pass). allow_ip_literals / allowed_hosts override the guard config for the case.",
   "cases": [
     {"name": "markdown dotted loopback", "url": "[x](http://127.0.0.1/admin)", "reason": "ip_literal"},
     {"name": "markdown decimal integer ipv4", "url": "[x](http://2130706433/admin)", "reason": "ip_literal"},
@@ -14,7 +14,7 @@
     {"name": "markdown userinfo trick", "url": "[x](http://user:pass@169.254.169.254/latest/meta-data/)", "reason": "ip_literal"},
     {"name": "known misclassification: percent-encoded host is rejected as malformed (scheme reason)", "url": "[x](http://%31%32%37.0.0.1/)", "reason": "scheme"},
     {"name": "bare url with terminator", "url": "see http://127.0.0.1/x now", "reason": "ip_literal"},
-    {"name": "documented limitation: bare url final token is deferred", "url": "see http://127.0.0.1/x", "reason": ""},
+    {"name": "bare url final token is evaluated at EOF (AUD-03)", "url": "see http://127.0.0.1/x", "reason": "ip_literal"},
     {"name": "known misclassification: bare bracketed ipv6 is truncated to a scheme violation", "url": "see http://[::1]:9000/ now", "reason": "scheme"},
     {"name": "markdown non-http scheme", "url": "[click](hxxp://127.0.0.1/x)", "reason": "scheme"},
     {"name": "markdown scheme-relative", "url": "[click](//169.254.169.254/x)", "reason": "scheme"},
