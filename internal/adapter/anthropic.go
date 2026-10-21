@@ -277,7 +277,7 @@ func (a *AnthropicAdapter) convertOpenAIToAnthropic(openai map[string]interface{
 
 	var claimedMarker map[string]interface{}
 	if opts.Messages {
-		claimedMarker = a.injectMessageCache(anthropic, opts.getMessagesTTL())
+		claimedMarker = a.injectMessageCache(anthropic, opts.getMessagesTTL(), opts.TrailingContextMarkers)
 	}
 	capCacheMarkers(anthropic, claimedMarker)
 
@@ -411,13 +411,31 @@ func (a *AnthropicAdapter) budgetForEffort(effort string, min, max int) int {
 // converted body may alias the caller's payload (reused across failover
 // targets), and an Anthropic-only marker must not leak into later
 // OpenAI-format bodies (NENYA-171).
-func (a *AnthropicAdapter) injectMessageCache(anthropic map[string]interface{}, ttl string) map[string]interface{} {
+func (a *AnthropicAdapter) injectMessageCache(anthropic map[string]interface{}, ttl string, markers []string) map[string]interface{} {
 	msgs, ok := anthropic["messages"].([]interface{})
 	if !ok || len(msgs) < 2 {
 		return nil
 	}
 
-	targetMsg, ok := msgs[len(msgs)-2].(map[string]interface{})
+	// NENYA-207: the anchor must keep the cached prefix CLIENT-STABLE. The
+	// previous rule (last-but-one message) assumed the tail is the in-flight
+	// turn; on MCP loop iterations the array continues PAST the request-
+	// varying canary trailer with gateway-produced tool traffic, so the
+	// marker could land on a gateway message adjacent to the random canary
+	// token — anchoring a prefix that differs on every later request and
+	// missing the cache. When a trailer marker is present, anchor the last
+	// message AHEAD of it instead — including when the trailer is the first
+	// message (only client forgery can produce that shape): there is no
+	// client-stable history ahead of it, so no anchor is claimed.
+	end := len(msgs) - 2
+	if idx := a.firstTrailingMarkerIndex(msgs, markers); idx >= 0 {
+		end = idx - 1
+	}
+	if end < 0 {
+		return nil
+	}
+
+	targetMsg, ok := msgs[end].(map[string]interface{})
 	if !ok {
 		return nil
 	}
@@ -443,6 +461,43 @@ func (a *AnthropicAdapter) injectMessageCache(anthropic map[string]interface{}, 
 	claimed["cache_control"] = buildCacheControl(ttl)
 	content[len(content)-1] = claimed
 	return claimed
+}
+
+// firstTrailingMarkerIndex returns the index of the first message matching a
+// trailing-context marker (the gateway's request-varying canary trailer), or
+// -1 when none is present. The converted body carries the trailer as content
+// BLOCKS (convertMessages emits it as a trailing user message), so both wire
+// shapes are matched.
+func (a *AnthropicAdapter) firstTrailingMarkerIndex(msgs []interface{}, markers []string) int {
+	if len(markers) == 0 {
+		return -1
+	}
+	for i, raw := range msgs {
+		msg, isMap := raw.(map[string]interface{})
+		if !isMap {
+			continue
+		}
+		if text, isStr := msg["content"].(string); isStr {
+			if matchesTrailingMarker(text, markers) {
+				return i
+			}
+			continue
+		}
+		blocks, ok := msg["content"].([]interface{})
+		if !ok {
+			continue
+		}
+		for _, b := range blocks {
+			block, ok := b.(map[string]interface{})
+			if !ok {
+				continue
+			}
+			if text, ok := block["text"].(string); ok && matchesTrailingMarker(text, markers) {
+				return i
+			}
+		}
+	}
+	return -1
 }
 
 // capCacheMarkers enforces Anthropic's four-breakpoint limit: when
@@ -646,10 +701,14 @@ func isTrailingContextMarker(msg map[string]interface{}, markers []string) bool 
 	if !ok {
 		return false
 	}
+	return matchesTrailingMarker(text, markers)
+}
+
+// matchesTrailingMarker reports whether text carries the gateway's marker
+// SHAPE (prefix plus the internal-ref frame), not a bare substring a client
+// might merely mention (NENYA-171).
+func matchesTrailingMarker(text string, markers []string) bool {
 	for _, marker := range markers {
-		// Match the gateway's marker SHAPE (prefix plus the internal-ref
-		// frame), not a bare substring a client might merely mention
-		// (NENYA-171).
 		if marker != "" && strings.Contains(text, "[internal-ref] "+marker) {
 			return true
 		}
@@ -1486,6 +1545,9 @@ func (a *AnthropicAdapter) reverseConvertMessages(anthropic map[string]interface
 				oMsg["content"] = preserveSystemContent(content)
 			} else {
 				oMsg["content"] = a.contentBlocksToString(content)
+				// NENYA-207: the flattening dropped any block-level mark —
+				// hoist its presence onto the message (see hoistedCacheControl).
+				hoistOntoMessage(oMsg, content)
 			}
 		}
 		result = append(result, oMsg)
@@ -1559,10 +1621,14 @@ func (a *AnthropicAdapter) buildOpenAISystemMessage(systemContent interface{}, r
 			report.Add(untypedBlockKind(block))
 		}
 		if len(parts) > 0 {
-			return map[string]interface{}{
+			oMsg := map[string]interface{}{
 				"role":    "system",
 				"content": strings.Join(parts, "\n\n"),
 			}
+			// NENYA-207: the flattened system string dropped any block-level
+			// mark — hoist its presence onto the message.
+			hoistOntoMessage(oMsg, sc)
+			return oMsg
 		}
 	default:
 		// Neither string nor array: the whole system content has no
@@ -1645,11 +1711,18 @@ func (a *AnthropicAdapter) convertToolResultContent(content interface{}, report 
 		a.reportToolResultSubblocks(block["content"], report)
 		toolUseID, _ := block["tool_use_id"].(string)
 		toolContent := a.extractToolResultText(block["content"])
-		result = append(result, map[string]interface{}{
+		oMsg := map[string]interface{}{
 			"role":         "tool",
 			"tool_call_id": toolUseID,
 			"content":      toolContent,
-		})
+		}
+		// NENYA-207: the flattening destroyed a client mark on the
+		// tool_result block — hoist its presence onto the converted tool
+		// message so the stand-down scan sees the placement intent.
+		if mark, ok := block["cache_control"]; ok {
+			oMsg["cache_control"] = mark
+		}
+		result = append(result, oMsg)
 	}
 	return result
 }
@@ -1711,27 +1784,49 @@ func (a *AnthropicAdapter) buildOpenAIUserMessage(msg map[string]interface{}, re
 	content := msg["content"]
 	switch c := content.(type) {
 	case string:
-		return map[string]interface{}{
+		oMsg := map[string]interface{}{
 			"role":    "user",
 			"content": c,
 		}
+		if m, ok := msg["cache_control"]; ok {
+			oMsg["cache_control"] = m
+		}
+		return oMsg
 	case []interface{}:
 		parts := a.convertContentBlocksToOpenAI(c, report)
+		var oMsg map[string]interface{}
 		if text := a.extractSingleText(parts); text != nil {
-			return map[string]interface{}{
+			// NENYA-207: the flattened string dropped any block-level mark.
+			oMsg = map[string]interface{}{
 				"role":    "user",
 				"content": *text,
 			}
+		} else {
+			// The parts were rebuilt without cache_control keys
+			// (convertContentBlocksToOpenAI) — same hoist.
+			oMsg = map[string]interface{}{
+				"role":    "user",
+				"content": parts,
+			}
 		}
-		return map[string]interface{}{
-			"role":    "user",
-			"content": parts,
+		// A message-level mark on the input rides along and wins over a
+		// hoisted block mark.
+		if m, ok := msg["cache_control"]; ok {
+			oMsg["cache_control"] = m
 		}
+		hoistOntoMessage(oMsg, content)
+		return oMsg
 	default:
-		return map[string]interface{}{
+		oMsg := map[string]interface{}{
 			"role":    "user",
 			"content": fmt.Sprintf("%v", content),
 		}
+		// A message-level mark on the input rides along (parity with the
+		// string and array paths, NENYA-207).
+		if m, ok := msg["cache_control"]; ok {
+			oMsg["cache_control"] = m
+		}
+		return oMsg
 	}
 }
 
@@ -1834,6 +1929,12 @@ func (a *AnthropicAdapter) buildOpenAIAssistantMessage(msg map[string]interface{
 	oMsg := map[string]interface{}{
 		"role": "assistant",
 	}
+	// A message-level mark on the input rides along; a block-level one is
+	// hoisted when the flattening drops it (NENYA-207).
+	if m, ok := msg["cache_control"]; ok {
+		oMsg["cache_control"] = m
+	}
+	hoistOntoMessage(oMsg, msg["content"])
 	if len(textParts) > 0 {
 		oMsg["content"] = strings.Join(textParts, "")
 	} else if len(toolCalls) > 0 {
@@ -1992,6 +2093,44 @@ func preserveSystemContent(content interface{}) interface{} {
 		return content
 	default:
 		return ""
+	}
+}
+
+// hoistedCacheControl preserves a client cache_control breakpoint's PRESENCE
+// when the reverse conversion flattens Anthropic content blocks (NENYA-207):
+// the OpenAI shape carries a string where Anthropic carried typed blocks, so
+// a block-level mark cannot survive positionally. Hoisting the first marked
+// block's cache_control onto the message keeps the auto-anchor stand-down
+// scan (hasClientCacheControl walks the whole payload, message level
+// included) honest — without it the gateway would anchor its own placement
+// over the client's destroyed placement and record "injected". nil when no
+// block is marked.
+func hoistedCacheControl(content interface{}) interface{} {
+	blocks, ok := content.([]interface{})
+	if !ok {
+		return nil
+	}
+	for _, blockRaw := range blocks {
+		block, ok := blockRaw.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		if mark, ok := block["cache_control"]; ok {
+			return mark
+		}
+	}
+	return nil
+}
+
+// hoistOntoMessage attaches a hoisted cache_control mark to an OpenAI-shaped
+// message unless it already carries one (a client-placed message-level mark
+// wins over a hoisted block mark).
+func hoistOntoMessage(oMsg map[string]interface{}, content interface{}) {
+	if _, exists := oMsg["cache_control"]; exists {
+		return
+	}
+	if mark := hoistedCacheControl(content); mark != nil {
+		oMsg["cache_control"] = mark
 	}
 }
 
