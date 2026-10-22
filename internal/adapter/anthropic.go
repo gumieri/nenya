@@ -1430,8 +1430,10 @@ func (a *AnthropicAdapter) processStopReason(anthropic, choice map[string]interf
 // (NENYA-167). Anthropic reports input_tokens EXCLUDING the cache dimensions,
 // while the OpenAI shape's prompt_tokens INCLUDES them with the cache counters
 // as subsets; the conversion therefore folds the cache dimensions into the
-// prompt total and re-publishes them as subsets, so a client sees each
-// dimension exactly once instead of losing the cache counts.
+// prompt total and re-publishes them as subsets under both the OpenAI-style
+// keys and the native Anthropic spellings (matching the streaming
+// transformer), so a client sees each dimension exactly once instead of
+// losing the cache counts, whichever key family it reads.
 func (a *AnthropicAdapter) processUsage(anthropic, openai map[string]interface{}) {
 	usage, ok := anthropic["usage"].(map[string]interface{})
 	if !ok {
@@ -1448,12 +1450,19 @@ func (a *AnthropicAdapter) processUsage(anthropic, openai map[string]interface{}
 	}
 	if totals.CacheHit > 0 {
 		converted["prompt_cache_hit_tokens"] = float64(totals.CacheHit)
+		// Native Anthropic spelling, mirroring the streaming transformer
+		// (internal/stream/anthropic_transformer.go) so buffered and
+		// streaming clients see the same dimensions under the same keys.
+		// Only the canonical totals are republished; re-emitting whatever
+		// spelling the upstream used would leak provider dialects.
+		converted["cache_read_input_tokens"] = float64(totals.CacheHit)
 	}
 	if totals.CacheMiss > 0 {
 		converted["prompt_cache_miss_tokens"] = float64(totals.CacheMiss)
 	}
 	if totals.CacheCreation > 0 {
 		converted["cache_creation_tokens"] = float64(totals.CacheCreation)
+		converted["cache_creation_input_tokens"] = float64(totals.CacheCreation)
 	}
 	openai["usage"] = converted
 }
