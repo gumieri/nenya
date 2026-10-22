@@ -14,9 +14,9 @@ permissions:
 jobs:
   release:
     runs-on: ubuntu-latest
-    # Deployment-protection gate: the run pauses after build and waits for a
-    # required-reviewer approval before anything is published (GHCR, goreleaser,
-    # release page). See docs: even a tampered workflow cannot release unattended.
+    # Deployment-protection gate: the job does not start (no build, no registry
+    # login) until the required reviewer approves the pending deployment on the
+    # run page. Even a tampered or redirected workflow cannot publish unattended.
     environment: release
     timeout-minutes: 40
     steps:
