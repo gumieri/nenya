@@ -65,6 +65,10 @@ type NenyaGateway struct {
 	Config       config.Config
 	Client       *http.Client
 	OllamaClient *http.Client
+	// drain gates request admission against disposal (AUD-07 / NENYA-215):
+	// in-flight requests hold the gateway alive across a reload until the
+	// swapped-out instance's CloseWhenDrained finishes. Zero value ready.
+	drain drainGate
 	// ProviderClients maps provider name to a dedicated HTTP client with a
 	// non-default response-header timeout (transport-level TTFB bound).
 	// Populated in New; providers absent here share Client via ClientFor.
@@ -1198,8 +1202,9 @@ func newResponseCache(cfg config.Config, logger *slog.Logger, metrics *infra.Met
 }
 
 // Close cleans up gateway resources: response cache, MCP clients,
-// quota fetcher, and secure memory. Waits for in-flight MCP operations
-// to complete.
+// quota fetcher, and secure memory. Callers that may race in-flight
+// requests must drain first — CloseWhenDrained arms the admission gate
+// and waits; Close itself never waits (AUD-07 moved that contract out).
 func (g *NenyaGateway) Close() {
 	if g.ResponseCache != nil {
 		g.ResponseCache.Stop()
@@ -1219,8 +1224,10 @@ func (g *NenyaGateway) Close() {
 }
 
 // Shutdown gracefully shuts down the gateway with a context timeout.
-// It unloads pinned local-engine models, waits for in-flight MCP
-// operations to complete, and cleans up resources.
+// It unloads pinned local-engine models, waits for in-flight requests to
+// finish (bounded by ctx — the HTTP server has normally already drained
+// its connections by the time this runs, so the gate is empty), and
+// cleans up resources.
 func (g *NenyaGateway) Shutdown(ctx context.Context) error {
 	g.Logger.Info("starting graceful shutdown")
 
@@ -1233,7 +1240,10 @@ func (g *NenyaGateway) Shutdown(ctx context.Context) error {
 			// the process exits. Errors are logged inside, never fatal.
 			g.LocalEngineManager.Shutdown(ctx)
 		}
-		g.Close()
+		// CloseWhenDrained (not bare Close): the drain gate makes process
+		// shutdown safe even if a caller ever reaches this before the HTTP
+		// server finished draining (AUD-07).
+		g.CloseWhenDrained(ctx)
 	}()
 
 	select {
@@ -1285,7 +1295,13 @@ func (g *NenyaGateway) Reload(ctx context.Context, cfg config.Config, secrets *c
 	newGW.Metrics.Cooldowns = newGW.AgentState.ActiveCooldowns
 	newGW.Metrics.CBStates = newGW.AgentState.CBSnapshot
 
-	g.Close()
+	// AUD-07 (NENYA-215): Reload no longer closes the old gateway here.
+	// In-flight requests still reference it (SecureMem with the provider
+	// keys, MCP clients, response cache, quota fetcher), and until the
+	// caller swaps the proxy's gateway pointer this instance is still
+	// SERVING. Disposal is the caller's job, after the swap:
+	// CloseWhenDrained refuses new admissions and waits (bounded) for the
+	// in-flight requests before Close.
 
 	return newGW
 }

@@ -1,6 +1,35 @@
 package config
 
-import "sort"
+import (
+	"sort"
+	"time"
+)
+
+// DefaultReloadDrainTimeout bounds a SIGHUP reload's wait for the replaced
+// gateway's in-flight requests (NENYA-215) when
+// governance.reload_drain_timeout_seconds is absent or non-positive.
+var DefaultReloadDrainTimeout = 30 * time.Second
+
+// MaxReloadDrainTimeoutSeconds caps governance.reload_drain_timeout_seconds:
+// a reload must not wait out an unbounded stream on the old gateway.
+const MaxReloadDrainTimeoutSeconds = 600
+
+// EffectiveReloadDrainTimeout returns the reload drain bound: the configured
+// seconds when positive, DefaultReloadDrainTimeout when absent, and the
+// MaxReloadDrainTimeoutSeconds cap for anything larger. Nil-safe.
+func (c *Config) EffectiveReloadDrainTimeout() time.Duration {
+	n := 0
+	if c != nil && c.Governance.ReloadDrainTimeoutSeconds != nil {
+		n = *c.Governance.ReloadDrainTimeoutSeconds
+	}
+	if n <= 0 {
+		return DefaultReloadDrainTimeout
+	}
+	if n > MaxReloadDrainTimeoutSeconds {
+		return MaxReloadDrainTimeoutSeconds * time.Second
+	}
+	return time.Duration(n) * time.Second
+}
 
 // ServeContinuityIssues diffs two effective provider sets across a reload
 // (NENYA-166) and returns the providers that would silently lose serving

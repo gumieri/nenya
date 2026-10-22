@@ -333,3 +333,17 @@ func TestResponseCache_BackgroundEvictorRemovesExpiredFirst(t *testing.T) {
 		}
 	}
 }
+
+// Stop must be idempotent (AUD-07 review): gateway disposal can reach Stop
+// from more than one path (reload drain, process shutdown), and a second
+// close(stopCh) would panic. The explicit postcondition: after the double
+// stop the cache is inert but readable (a Get on the empty cache is a miss,
+// not a panic).
+func TestResponseCache_StopIdempotent(t *testing.T) {
+	cache := NewResponseCache(10, 1<<20, 1*time.Hour, time.Hour, nil, nil, false, 0.9, nil)
+	cache.Stop()
+	cache.Stop() // must not panic
+	if n := cache.Len(); n != 0 {
+		t.Fatalf("a stopped cache must stay readable: Len = %d, want 0", n)
+	}
+}

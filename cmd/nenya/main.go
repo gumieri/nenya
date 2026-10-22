@@ -741,12 +741,12 @@ func reloadConfig(ctx context.Context, p *proxy.Proxy, paths configPaths, logger
 		return
 	}
 
-	// Reload closes the old gateway internally, which is irreversible:
-	// prove the new configuration can assemble a complete interceptor
-	// chain before swapping, so an abort path never has to unwind a
-	// closed gateway. Pattern compilation is re-checked here (defense in
-	// depth); escalation construction is pre-checked by
-	// validateInjectionEscalation plus engine resolution in config.Load.
+	// Reload builds the new gateway without touching the serving one
+	// (AUD-07): the swap below is the first irreversible step, so the new
+	// configuration is proven complete — interceptor chain included —
+	// before it can become the serving gateway, and an abort path never
+	// has to unwind a closed gateway. Disposal of the old gateway is the
+	// caller's job, after the swap.
 	if err := pipeline.ValidateInjectionPatterns(newCfg.Governance.Injection); err != nil {
 		logger.Error("configuration reload aborted: injection pattern validation failed", "err", err)
 		return
@@ -756,9 +756,11 @@ func reloadConfig(ctx context.Context, p *proxy.Proxy, paths configPaths, logger
 	newGW := oldGW.Reload(ctx, *newCfg, newSecrets)
 	newChain, gates, chainErr := buildInterceptorChain(newGW, newCfg, logger)
 	if chainErr != nil {
-		// The old gateway is already closed inside Reload, so this process
-		// cannot serve safely: fail fatally and let the supervisor restart
-		// a healthy instance.
+		// Fatal path (no drain): the process terminates immediately and the
+		// supervisor restarts it, so in-flight requests die with the process
+		// either way. Dispose of the old gateway's resources on the way out
+		// (AUD-07 moved the close out of Reload — this path owns it now).
+		oldGW.Close()
 		logger.Error("configuration reload aborted: interceptor chain build failed; terminating", "err", chainErr)
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
@@ -772,6 +774,25 @@ func reloadConfig(ctx context.Context, p *proxy.Proxy, paths configPaths, logger
 	newGW.WindowFidelityGate = gates.windowFidelity
 	newGW.EgressScreenJudge = gates.egressScreen
 	p.StoreGateway(newGW)
+
+	// AUD-07 (NENYA-215): the swap is complete — new requests land on the
+	// new gateway from here on. The OLD gateway's resources (SecureMem with
+	// the provider keys, MCP clients, response cache, quota fetcher) close
+	// only after its in-flight requests drain, bounded by the configured
+	// drain timeout. The wait must not block the swap path (a SIGHUP during
+	// a long drain would otherwise be dropped), so it runs detached; its
+	// lifecycle is bounded by the drain context's deadline.
+	drainCtx, cancel := context.WithTimeout(context.Background(), newCfg.EffectiveReloadDrainTimeout())
+	go func() {
+		defer cancel()
+		// Fire-and-forget MCP auto-save goroutines run OUTSIDE the request
+		// admission gate (they outlive the request that spawned them) and
+		// may still resolve the old gateway: wait for them (bounded, the
+		// same grace process shutdown grants) before the drain closes the
+		// MCP clients under a mid-CallTool save (AUD-07 review).
+		p.WaitAutoSave(drainCtx)
+		oldGW.CloseWhenDrained(drainCtx)
+	}()
 
 	logger.Info("configuration reloaded successfully")
 }

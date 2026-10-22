@@ -97,13 +97,17 @@ type responseCacheEntry struct {
 }
 
 type ResponseCache struct {
-	mu                  sync.RWMutex
-	items               map[string]*responseCacheEntry
-	order               *list.List
-	maxSize             int
-	maxBytes            int64
-	ttl                 time.Duration
-	stopCh              chan struct{}
+	mu       sync.RWMutex
+	items    map[string]*responseCacheEntry
+	order    *list.List
+	maxSize  int
+	maxBytes int64
+	ttl      time.Duration
+	stopCh   chan struct{}
+	// stopOnce makes Stop idempotent: gateway disposal can reach Stop from
+	// more than one path (reload drain and process shutdown both end in
+	// Close), and a second close(stopCh) would panic.
+	stopOnce            sync.Once
 	metrics             *Metrics
 	logger              *slog.Logger
 	semanticEnabled     bool
@@ -534,7 +538,7 @@ func (c *ResponseCache) startEvicter(interval time.Duration) {
 }
 
 func (c *ResponseCache) Stop() {
-	close(c.stopCh)
+	c.stopOnce.Do(func() { close(c.stopCh) })
 	done := make(chan struct{})
 	go func() {
 		c.evictionWg.Wait()
