@@ -7,6 +7,8 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/nenya/internal/stream"
 )
 
 func TestAnthropicAdapter_InjectAuth(t *testing.T) {
@@ -2519,6 +2521,22 @@ func TestAnthropicAdapter_UsageCacheDimensionsCountedOnce(t *testing.T) {
 	}
 	if got := usage["cache_creation_tokens"]; got != float64(10) {
 		t.Errorf("cache_creation_tokens = %v, want 10", got)
+	}
+	// The native spellings must ride alongside the OpenAI-style subsets so a
+	// buffered client can read cache dimensions the same way a streaming
+	// client does (community issue #30 symmetry).
+	if got := usage["cache_read_input_tokens"]; got != float64(60) {
+		t.Errorf("cache_read_input_tokens = %v, want 60", got)
+	}
+	if got := usage["cache_creation_input_tokens"]; got != float64(10) {
+		t.Errorf("cache_creation_input_tokens = %v, want 10", got)
+	}
+	// The enriched object must keep the inclusive-prompt reading when the
+	// shared normalizer re-consumes it: the OpenAI-style decomposition wins
+	// over the native fields, so the recorded usage is unchanged.
+	totals := stream.NormalizeUsageTotals(usage)
+	if totals.Prompt != 100 || totals.CacheHit != 60 || totals.CacheCreation != 10 || totals.Completion != 10 {
+		t.Errorf("NormalizeUsageTotals(converted) = %+v, want prompt 100 / hit 60 / creation 10 / completion 10", totals)
 	}
 }
 
