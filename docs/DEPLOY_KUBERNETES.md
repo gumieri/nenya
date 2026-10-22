@@ -283,14 +283,20 @@ spec:
               readOnly: true
             - name: tmp
               mountPath: /tmp
+          # failureThreshold above the default: /healthz reports 503 while the
+          # security-filter engine is degraded — flapping liveness on a slow
+          # engine restart would restart-loop the pod (and a SIGHUP reload's
+          # drain deliberately never fails /healthz at all).
           livenessProbe:
             httpGet:
               path: /healthz
               port: 8080
+            failureThreshold: 10
           readinessProbe:
             httpGet:
               path: /healthz
               port: 8080
+            failureThreshold: 10
           resources: {}
       volumes:
         - name: config

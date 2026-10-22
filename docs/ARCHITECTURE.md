@@ -112,7 +112,7 @@ Client Request
   ├─ POST /v1/embeddings
   ├─ POST /v1/responses (transparent passthrough, no content pipeline)
   ├─ /proxy/{provider}/* (arbitrary endpoint passthrough, auth injection, SSE auto-detect)
-  ├─ GET /healthz
+  ├─ GET /healthz (exempt from the reload-drain refusal — probe-safe, NENYA-215)
   └─ GET /statsz
 ```
 

@@ -89,6 +89,26 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// AUD-07 (NENYA-215): admission is gated on the loaded gateway's drain
+	// state. A reload swaps in the new gateway FIRST and only then drains
+	// the old one; a request that already loaded the swapped-out gateway is
+	// refused here instead of being served from closing resources
+	// (destroyed SecureMem, closed MCP clients). Every route is gated —
+	// with one exemption: GET /healthz. The Kubernetes liveness probe polls
+	// /healthz on a window comparable to the drain bound, so a 503 during a
+	// long-stream drain would get the pod killed mid-drain, defeating the
+	// drain it is meant to observe; healthz reads only status fields and
+	// the engine probe (no SecureMem/MCP use), so it is drain-safe.
+	healthProbe := r.Method == http.MethodGet && r.URL.Path == "/healthz"
+	if !healthProbe {
+		if !gw.EnterRequest() {
+			w.Header().Set("Retry-After", "2")
+			writeStructuredError(w, http.StatusServiceUnavailable, infra.ErrorKindInternal, "Gateway is draining for reload")
+			return
+		}
+		defer gw.ExitRequest()
+	}
+
 	// DNS-rebinding hardening (NENYA-34): browser-context requests are
 	// refused unless explicitly allowlisted, on every route including the
 	// no-auth GET surfaces.

@@ -138,6 +138,14 @@ func collectValidationErrors(ctx context.Context, cfg *Config, providers map[str
 			errors = append(errors, fmt.Sprintf("governance.secret_resolution_timeout_seconds %d: capped at %d", t, MaxSecretResolutionTimeoutSeconds))
 		}
 	}
+	if cfg.Governance.ReloadDrainTimeoutSeconds != nil {
+		t := *cfg.Governance.ReloadDrainTimeoutSeconds
+		if t < 0 {
+			errors = append(errors, fmt.Sprintf("governance.reload_drain_timeout_seconds %d: must not be negative", t))
+		} else if t > MaxReloadDrainTimeoutSeconds {
+			errors = append(errors, fmt.Sprintf("governance.reload_drain_timeout_seconds %d: capped at %d", t, MaxReloadDrainTimeoutSeconds))
+		}
+	}
 	errors = append(errors, validateSelfLoopGuard(cfg)...)
 	errors = append(errors, validateTelemetryExposure(cfg, logger)...)
 	errors = append(errors, validateNetworkPolicy(cfg)...)

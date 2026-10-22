@@ -1135,6 +1135,12 @@ type GovernanceConfig struct {
 	// wedge boot, reload, or shutdown. 0/absent = the 2s default; values above
 	// 60 are clamped; negative is rejected at load.
 	SecretResolutionTimeoutSeconds *int `json:"secret_resolution_timeout_seconds,omitempty"`
+	// ReloadDrainTimeoutSeconds bounds how long a SIGHUP reload waits for the
+	// replaced gateway's in-flight requests to finish before closing its
+	// resources (NENYA-215): SecureMem (provider keys), MCP clients, the
+	// response cache and the quota fetcher must not be torn down under live
+	// requests. 0/absent = the 30s default; values above 600 are clamped.
+	ReloadDrainTimeoutSeconds *int `json:"reload_drain_timeout_seconds,omitempty"`
 	// BYOK configures per-request bring-your-own-key credential overrides
 	// (NENYA-195). Disabled by default; both this switch and the target
 	// provider's allow_byok must be on before a caller-supplied credential is
