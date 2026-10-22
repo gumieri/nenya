@@ -509,11 +509,11 @@ func readSSEInitialEndpoint(ctx context.Context, reader *bufio.Reader, baseURL *
 			continue
 		}
 
-		if !strings.HasPrefix(line, "data: ") {
+		if !strings.HasPrefix(line, "data:") {
 			continue
 		}
 
-		data := strings.TrimPrefix(line, "data: ")
+		data, _ := sseFieldValue(line, "data")
 		data = strings.TrimSpace(data)
 
 		var parsed struct {
@@ -917,6 +917,23 @@ func readBoundedLine(reader *bufio.Reader) (string, error) {
 	}
 }
 
+// sseFieldValue returns the value of an SSE field line ("data:" / "event:")
+// tolerating the missing space real (non-compliant but common) servers emit.
+// This is NENYA-197's grammar — the field name is case-sensitive and at most
+// ONE optional space separates it from the value; a second space (or any
+// other byte) belongs to the value and is the caller's to trim or decode.
+// ok is false for non-field lines (comments, other fields). Pre-fix, the
+// readers required the canonical "data: " spelling, so no-space frames were
+// skipped: the endpoint event never parsed (Connect timed out) and
+// stream-pushed JSON-RPC responses were silently dropped (every request
+// waited out its full RequestTimeout — AUD-06).
+func sseFieldValue(line, field string) (string, bool) {
+	if !strings.HasPrefix(line, field+":") {
+		return "", false
+	}
+	return strings.TrimPrefix(line[len(field)+1:], " "), true
+}
+
 func readMultiLineEvent(reader *bufio.Reader) string {
 	for {
 		nextLine, readErr := readBoundedLine(reader)
@@ -927,8 +944,8 @@ func readMultiLineEvent(reader *bufio.Reader) string {
 		if nextLine == "" {
 			break
 		}
-		if strings.HasPrefix(nextLine, "data: ") {
-			return strings.TrimPrefix(nextLine, "data: ")
+		if data, ok := sseFieldValue(nextLine, "data"); ok && data != "" {
+			return data
 		}
 	}
 	return ""
@@ -973,14 +990,17 @@ func (t *HTTPTransport) sseReadLoop(reader *bufio.Reader) {
 
 		var eventType, eventData string
 
-		switch {
-		case strings.HasPrefix(line, "event: "):
-			eventType = strings.TrimPrefix(line, "event: ")
+		// NENYA-197's tolerance grammar applies here too (AUD-06): the field
+		// name is case-sensitive and at most one optional space separates it
+		// from the value — a no-space data line is a real frame, not a
+		// non-SSE line to skip (dropping it silently stalled every request
+		// waiting for its JSON-RPC response).
+		if v, ok := sseFieldValue(line, "event"); ok {
+			eventType = v
 			eventData = readMultiLineEvent(reader)
-		case strings.HasPrefix(line, "data: "):
-			eventData = strings.TrimPrefix(line, "data: ")
-		case strings.HasPrefix(line, ":"):
-		default:
+		} else if v, ok := sseFieldValue(line, "data"); ok {
+			eventData = v
+		} else if !strings.HasPrefix(line, ":") {
 			continue
 		}
 

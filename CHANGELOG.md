@@ -6,6 +6,10 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- **The MCP transport's SSE readers accept the no-space field spelling (NENYA-214, AUD-06)**: `sseReadLoop`, `readMultiLineEvent`, and the endpoint reader required the canonical `data: `/`event: ` prefixes, so a no-compliant-but-common server emitting `data:{json}` had its frames silently skipped — the endpoint event never parsed (Connect timed out) and stream-pushed JSON-RPC responses were dropped (every `tools/call` waited out its full RequestTimeout). All three readers now share `sseFieldValue`, the NENYA-197 grammar (case-sensitive field name, at most one optional space, second space belongs to the value); an empty no-space data line inside an event block is skipped rather than ending the scan.
+
+### Added
+
 - **Stream continuation no longer leaks the per-model concurrency slot (NENYA-213, AUD-05)**: the retry loop's slot release was bound to the ORIGINAL dispatch action, so when a cut stream was resumed the continuation's slot — and its `nenya_concurrency_inflight` gauge unit — was orphaned on every resume (default-on, `stream_continuation.max_attempts ≥ 2`): with `model_concurrency` configured, each resume permanently held one admission token for that provider/model. The release now tracks the current action: the final action releases at stream end, every swapped-out attempt releases at the continuation point, and a failed re-dispatch releases on the give-up path — pinned by in-flight-gauge-zero assertions on all three continuation fixtures (each failed pre-fix with the gauge at 1).
 
 ### Added
