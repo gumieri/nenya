@@ -309,6 +309,7 @@ docker run -e PORT=9090 -p 9090:9090 ghcr.io/gumieri/nenya:latest
 | [Adapters](docs/ADAPTERS.md) | Adapter system internals, auth styles, capability flags |
 | [System One Decision Models](docs/SYSTEM_ONE.md) | TypeSafe Jev integration: `/v1/systemone`, non-chat model guard, usage metrics |
 | [Secrets Format](docs/SECRETS_FORMAT.md) | Systemd credentials, env var fallback, container/K8s deployment |
+| [Artifact Verification](docs/VERIFICATION.md) | Verify release images, SBOM attestations, and archives with cosign |
 | [Security](docs/SECURITY.md) | Vulnerability reporting policy |
 | [Disclaimer](docs/DISCLAIMER.md) | Best-effort redaction scope and limitations |
 | [Changelog](CHANGELOG.md) | Release history and notable changes |

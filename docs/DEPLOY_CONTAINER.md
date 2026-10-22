@@ -135,15 +135,26 @@ The container runs with strict security controls:
 
 ## Image Verification
 
-Verify the signed image with cosign:
+Verify the signed image with cosign, pinning the signer identity to this
+repository's release workflow:
 
 ```bash
-# Verify image signature
-cosign verify ghcr.io/gumieri/nenya:latest
+# Verify image signature (identity-pinned, keyless Sigstore)
+cosign verify \
+  --certificate-identity-regexp '^https://github.com/gumieri/nenya/\.github/workflows/release\.yml@' \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  ghcr.io/gumieri/nenya:latest
 
-# Verify SBOM attestation
-cosign verify-attestation --type spdx ghcr.io/gumieri/nenya:latest
+# Verify the SPDX SBOM attestation
+cosign verify-attestation \
+  --type spdxjson \
+  --certificate-identity-regexp '^https://github.com/gumieri/nenya/\.github/workflows/release\.yml@' \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  ghcr.io/gumieri/nenya:latest
 ```
+
+See [Artifact Verification](VERIFICATION.md) for digest-pinned verification,
+release-archive checksums, and what the signature does and does not prove.
 
 ## Troubleshooting
 
