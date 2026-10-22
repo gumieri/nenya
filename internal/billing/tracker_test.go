@@ -115,6 +115,16 @@ func TestMarkExhausted(t *testing.T) {
 		t.Errorf("Expected exhausted count 1, got %d", bt.ExhaustedCount.Load())
 	}
 
+	// Re-marking an already-exhausted account is a transition no-op
+	// (AUD-08 review): a poller re-marks on every poll interval while the
+	// balance stays ≤ 0, and each re-mark used to inflate ExhaustedCount
+	// and re-fire the exhausted metric/log.
+	bt.MarkExhausted(ctx, "openai", "account1", "quota exhausted via API polling")
+	bt.MarkExhausted(ctx, "openai", "account1", "quota exhausted via API polling")
+	if bt.ExhaustedCount.Load() != 1 {
+		t.Errorf("re-marking must not inflate the exhausted count, got %d", bt.ExhaustedCount.Load())
+	}
+
 	accts := bt.GetAllAccounts()
 	if len(accts) != 1 {
 		t.Fatalf("Expected 1 account, got %d", len(accts))

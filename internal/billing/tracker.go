@@ -170,8 +170,17 @@ func (bt *BillingTracker) MarkExhausted(ctx context.Context, provider, account s
 		bt.accounts[key] = accountStatus
 	}
 
-	accountStatus.IsExhausted.Store(true)
+	// The transition fires its side effects once: a poller re-marks on
+	// every poll interval while the balance stays ≤ 0, and each re-mark
+	// used to inflate ExhaustedCount and the exhausted metric (AUD-08
+	// review — pre-existing steady-state inflation, amplified transiently
+	// by the reload drain window where two pollers feed one tracker).
+	first := accountStatus.IsExhausted.CompareAndSwap(false, true)
 	accountStatus.ExhaustedAt = time.Now()
+	if !first {
+		return
+	}
+
 	bt.ExhaustedCount.Add(1)
 
 	if bt.metrics != nil {

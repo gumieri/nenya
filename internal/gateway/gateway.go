@@ -165,8 +165,20 @@ type NenyaGateway struct {
 
 // New creates a new NenyaGateway with the given configuration, secrets,
 // and logger. It initializes HTTP clients, provider registry, rate limiter,
-// metrics, MCP clients, and starts dynamic model discovery.
+// metrics, MCP clients, and starts dynamic model discovery plus the
+// service-lifetime quota poller.
 func New(ctx context.Context, cfg config.Config, secrets *config.SecretsConfig, logger *slog.Logger) *NenyaGateway {
+	return newGateway(ctx, cfg, secrets, logger, true)
+}
+
+// newGateway is New with control over the quota poller start (AUD-08 /
+// NENYA-216): the poller captures the gw.BillingTracker passed to Start,
+// and Reload replaces that field with the CARRIED tracker after building
+// the gateway — a poller started by New on the reload path would feed the
+// orphaned fresh tracker while the live one loses its poller the moment
+// the old gateway drains (polled quota exhaustion goes dead). Reload
+// starts the poller itself, after the carry.
+func newGateway(ctx context.Context, cfg config.Config, secrets *config.SecretsConfig, logger *slog.Logger, startQuota bool) *NenyaGateway {
 	cfg = mergeBuiltInProviders(cfg)
 	// The fleet network policy is resolved (and its CA bundle read) once
 	// per start and threaded to every transport construction site.
@@ -243,7 +255,9 @@ func New(ctx context.Context, cfg config.Config, secrets *config.SecretsConfig, 
 	// the whole process lifetime. WithoutCancel detaches cancellation
 	// while keeping context values; QuotaFetcher.Stop (via Close during
 	// Shutdown) is the only thing that ends polling.
-	gw.QuotaFetcher.Start(context.WithoutCancel(ctx), gw.BillingTracker, cfg.Providers, secrets, gw)
+	if startQuota {
+		gw.QuotaFetcher.Start(context.WithoutCancel(ctx), gw.BillingTracker, cfg.Providers, secrets, gw)
+	}
 
 	if gw.ResponseCache != nil {
 		gw.Embedder = gw.ResponseCache.GetEmbedder()
@@ -1257,7 +1271,7 @@ func (g *NenyaGateway) Shutdown(ctx context.Context) error {
 }
 
 func (g *NenyaGateway) Reload(ctx context.Context, cfg config.Config, secrets *config.SecretsConfig) *NenyaGateway {
-	newGW := New(ctx, cfg, secrets, g.Logger)
+	newGW := newGateway(ctx, cfg, secrets, g.Logger, false)
 
 	newGW.Stats = g.Stats
 	newGW.Metrics = g.Metrics
@@ -1277,6 +1291,18 @@ func (g *NenyaGateway) Reload(ctx context.Context, cfg config.Config, secrets *c
 	// frozen head rather than re-freezing once.
 	newGW.WindowHeads = g.WindowHeads
 	newGW.BillingTracker = g.BillingTracker
+	// AUD-08 (NENYA-216): start the quota poller only AFTER the tracker
+	// carry — the poller captures the tracker argument, so starting it
+	// earlier (via New) would wire it to the fresh, about-to-be-discarded
+	// tracker: the carried tracker then loses its poller when the old
+	// gateway drains and polled quota exhaustion goes dead. The old
+	// gateway's poller keeps running until its drain closes it, so both
+	// pollers briefly feed the same carried tracker — duplicate balance
+	// fetches plus (once a zero balance lands) duplicate exhausted
+	// transitions, which are side-effect-idempotent since the transition
+	// guard in MarkExhausted. The provider set is the MERGED one (built-in
+	// providers included), matching what New's start would have polled.
+	newGW.QuotaFetcher.Start(context.WithoutCancel(ctx), newGW.BillingTracker, newGW.Config.Providers, secrets, newGW)
 	// Calibration is per-process learned state (NENYA-135): carry the
 	// learned sums across SIGHUP like Stats, but honor config — a disabled
 	// loop drops the tracker, changed knobs re-parameterize it
