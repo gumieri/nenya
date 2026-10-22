@@ -28,7 +28,12 @@ type Client struct {
 	tools       []Tool
 	toolsMap    map[string]Tool
 	initialized atomic.Bool
-	serverInfo  ImplementationInfo
+	// closed gates resurrection: a Recover completing after Close must not
+	// re-mark the client initialized and leave a live SSE session on a
+	// "closed" client (AUD-09 review — realistic under the reload drain,
+	// where Close lands while in-flight CallTools still recover).
+	closed     atomic.Bool
+	serverInfo ImplementationInfo
 	// recoveryGen counts completed session recoveries; recoverMu makes
 	// recovery single-flight so concurrent broken-session callers trigger
 	// exactly one rebuild and then each replay their call once.
@@ -123,7 +128,16 @@ func (c *Client) Initialize(ctx context.Context) error {
 	}
 
 	c.mu.Lock()
+	// A Close concurrent with this handshake wins: never resurrect a
+	// closed client (the fresh transport is torn down, the caller's
+	// recovery fails, and a later retry is refused the same way).
+	if c.closed.Load() {
+		c.mu.Unlock()
+		_ = tr.Close()
+		return fmt.Errorf("client closed during initialization")
+	}
 	c.serverInfo = initResult.ServerInfo
+	c.initialized.Store(true)
 	c.mu.Unlock()
 	c.logger.Info("MCP client initialized",
 		"server", initResult.ServerInfo.Name,
@@ -134,7 +148,6 @@ func (c *Client) Initialize(ctx context.Context) error {
 		c.logger.Warn("failed to send initialized notification", "err", err)
 	}
 
-	c.initialized.Store(true)
 	return nil
 }
 
@@ -290,12 +303,20 @@ func (c *Client) Recover(ctx context.Context) error {
 }
 
 // reinitialize swaps in a fresh transport and re-runs the handshake. The
-// old transport is closed first; a half-initialized rebuild tears the new
-// stream down via Initialize's error path.
+// swap happens UNDER the client mutex — currentTransport and Recover's
+// readiness check read the field under RLock, and an unsynchronized write
+// is the data race behind the recovery single-flight flake (AUD-09 /
+// NENYA-217). The old transport closes and the handshake runs OUTSIDE the
+// lock: Close joins the SSE reader goroutine, and Initialize takes the
+// mutex itself (serverInfo) — holding it across them would deadlock.
+// A half-initialized rebuild tears the new stream down via Initialize's
+// post-connect error paths (a Connect failure leaves a dead-but-retryable
+// transport installed — nothing to leak: it never connected, so no SSE
+// goroutines exist).
 func (c *Client) reinitialize(ctx context.Context) error {
-	_ = c.transport.Close()
+	c.mu.Lock()
+	old := c.transport
 	c.initialized.Store(false)
-
 	c.transport = NewHTTPTransport(TransportConfig{
 		URL:               c.cfg.URL,
 		Headers:           c.cfg.Headers,
@@ -308,10 +329,18 @@ func (c *Client) reinitialize(ctx context.Context) error {
 	if c.metrics != nil {
 		c.transport.SetGatewayMetrics(c.metrics)
 	}
+	c.mu.Unlock()
+
+	_ = old.Close()
 	return c.Initialize(ctx)
 }
 
 func (c *Client) Close() error {
+	// Set the gate under the same mutex the Initialize tail checks, so a
+	// recovery handshake cannot store initialized=true after Close ran.
+	c.mu.Lock()
+	c.closed.Store(true)
+	c.mu.Unlock()
 	c.initialized.Store(false)
 	return c.currentTransport().Close()
 }
