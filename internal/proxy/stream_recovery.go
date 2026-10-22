@@ -264,6 +264,10 @@ func (p *Proxy) tryContinueStream(gw *gateway.NenyaGateway, w http.ResponseWrite
 		if newAction.resp != nil {
 			_ = newAction.resp.Body.Close()
 		}
+		// The failed re-dispatch consumed a concurrency slot (when it got as
+		// far as an upstream attempt): release it, or the give-up path
+		// orphans the slot and its in-flight gauge (AUD-05).
+		newAction.releaseSlot()
 		writeStreamCutSSE(gw, w)
 		putStreamBuffer(buf)
 		return streamContinueGaveUp, action

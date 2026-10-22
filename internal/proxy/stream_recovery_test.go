@@ -307,6 +307,30 @@ func TestNewStreamContinuation_SameModelOnly(t *testing.T) {
 	}
 }
 
+// assertInflightGaugeZero fails when any nenya_concurrency_inflight series
+// is non-zero after a completed request (AUD-05): a leaked continuation
+// slot shows up as the gauge stuck at 1. The scan fails when NO series
+// exists at all, so a future refactor dropping the unconditional Inc/Dec
+// cannot turn the assertion vacuous.
+func assertInflightGaugeZero(t *testing.T, gw *gateway.NenyaGateway) {
+	t.Helper()
+	var buf bytes.Buffer
+	gw.Metrics.WritePrometheus(&buf)
+	saw := false
+	for _, line := range strings.Split(buf.String(), "\n") {
+		if !strings.HasPrefix(line, "nenya_concurrency_inflight{") {
+			continue
+		}
+		saw = true
+		if !strings.HasSuffix(line, " 0") {
+			t.Fatalf("continuation slot leaked (in-flight gauge not zero): %s", line)
+		}
+	}
+	if !saw {
+		t.Fatal("no nenya_concurrency_inflight series emitted: the slot-leak assertion is vacuous")
+	}
+}
+
 // TestStreamResponse_ContinuationResumesCutStream verifies that when an
 // upstream SSE stream is cut mid-generation (content seen, no finish_reason, no
 // [DONE]), the proxy appends the partial assistant message, re-dispatches the
@@ -387,6 +411,12 @@ func TestStreamResponse_ContinuationResumesCutStream(t *testing.T) {
 	if ml.TTFTSampleSize != 1 {
 		t.Fatalf("TTFT samples = %d, want 1 (only the first attempt is measured)", ml.TTFTSampleSize)
 	}
+
+	// AUD-05: the continuation's admission slot must be released. The gauge
+	// decrements on the wrapped release, so a leaked continuation slot shows
+	// up as nenya_concurrency_inflight 1 after the request completes.
+	buf.Reset()
+	assertInflightGaugeZero(t, gw)
 }
 
 // TestTTFTDispatchAtFor pins the clock's start per streaming attempt
@@ -448,4 +478,54 @@ func TestStreamResponse_ContinuationExhaustedGivesUp(t *testing.T) {
 	if !strings.Contains(buf.String(), `reason="gave_up_exhausted"`) {
 		t.Errorf("expected gave_up_exhausted metric, got: %s", buf.String())
 	}
+
+	// AUD-05: no slot may leak on the exhausted path either.
+	assertInflightGaugeZero(t, gw)
+}
+
+// TestStreamResponse_ContinuationFailedRedispatchReleasesSlot pins the
+// give-up path's slot release (AUD-05): when the continuation re-dispatch
+// fails (non-stream action), its concurrency slot and gauge must be
+// released before the cut terminator is written — previously the failed
+// action's slot leaked per resume.
+func TestStreamResponse_ContinuationFailedRedispatchReleasesSlot(t *testing.T) {
+	var calls atomic.Int32
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		n := calls.Add(1)
+		if n == 1 {
+			w.Header().Set("Content-Type", "text/event-stream")
+			_, _ = fmt.Fprintf(w, "data: {\"choices\":[{\"delta\":{\"content\":\"partial \"}}]}\n\n")
+			w.(http.Flusher).Flush()
+			return
+		}
+		// The continuation re-dispatch fails with a plain 500: the give-up
+		// path takes the non-stream action branch.
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusInternalServerError)
+		_, _ = fmt.Fprintf(w, `{"error":{"message":"upstream exploded","type":"server_error"}}`)
+	}))
+	defer upstream.Close()
+
+	p := newContinuationProxy(t, upstream.URL)
+	body := `{"model":"test-agent","messages":[{"role":"user","content":"hi"}]}`
+	req := testutil.NewTestRequest(t, http.MethodPost, "/v1/chat/completions", body)
+	rec := httptest.NewRecorder()
+
+	p.ServeHTTP(rec, req)
+
+	testutil.AssertResponseStatusCode(t, rec, http.StatusOK)
+	if got := calls.Load(); got != 2 {
+		t.Fatalf("expected 2 upstream calls (original + failed continuation), got %d", got)
+	}
+	if !strings.Contains(rec.Body.String(), "gateway_error") {
+		t.Fatalf("expected the cut terminator after the failed re-dispatch: %s", rec.Body.String())
+	}
+
+	var buf bytes.Buffer
+	gw := p.Gateway()
+	gw.Metrics.WritePrometheus(&buf)
+	if !strings.Contains(buf.String(), `reason="gave_up_redispatch"`) {
+		t.Fatalf("expected gave_up_redispatch metric, got: %s", buf.String())
+	}
+	assertInflightGaugeZero(t, gw)
 }

@@ -429,6 +429,16 @@ func (p *Proxy) streamResponse(opts streamResponseOpts, action upstreamAction) s
 	gw, w, r, target := opts.gw, opts.w, opts.r, opts.target
 	cacheKey, cooldownDuration, payload := opts.cacheKey, opts.cooldown, opts.payload
 	defer action.cancel()
+	// The slot release must follow the CURRENT action, not the one bound at
+	// entry: a continuation swaps the action mid-stream, and an entry-time
+	// release would orphan the continuation's admission slot (the in-flight
+	// gauge decrement rides the same wrapped release — AUD-05). Once-wrapped
+	// at acquire, so the original's slot also releasing via
+	// handleActionResult's defer is a no-op. Note the asymmetry with the
+	// cancel above is load-bearing: cancel binds the ORIGINAL action here
+	// and re-defers per swap (stream.go, the continuation loop), while the
+	// release must track the final action — don't "simplify" either side.
+	defer func() { action.releaseSlot() }()
 
 	// Build the stall-bounded reader once, before the pre-header probe, so the
 	// head read is subject to stream_idle_timeout_seconds. The same reader is
@@ -530,6 +540,12 @@ func (p *Proxy) streamResponse(opts streamResponseOpts, action upstreamAction) s
 				// slot and no outcome is recorded for it: release it, or a
 				// continuation leaks one slot per resume (NENYA-153).
 				gw.AgentState.CB.ReleaseHalfOpen(target.CoolKey)
+				// Release the swapped-out attempt's concurrency slot too: its
+				// stream is done (finishStreamAttempt closed the body), and
+				// only the FINAL action's release is deferred below — without
+				// this, every resume but the last orphans its slot and gauge
+				// (AUD-05).
+				action.releaseSlot()
 				action = newAction
 				// The action swap happened for this attempt; the new action's
 				// http response carries the continuation's StatusCode, which is
