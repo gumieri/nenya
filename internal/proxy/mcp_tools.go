@@ -201,6 +201,16 @@ type sseAccumulator struct {
 	dataLines    int
 	// streamError marks an in-stream error frame (NENYA-153).
 	streamError bool
+	// format is the serving target's wire format (UpstreamTarget.Format).
+	// Tool-call extraction is format-aware (AUD-10 / NENYA-218): the OpenAI
+	// delta parse always runs, and the Anthropic content_block / Gemini
+	// functionCall parsers feed the SAME index-keyed accumulators when the
+	// target's format says so — pre-fix, a non-OpenAI-format target's tool
+	// calls were invisible to the loop and replayed unexecuted.
+	format string
+	// geminiToolSeq assigns synthetic indices to Gemini's complete
+	// functionCall parts (they arrive whole — no deltas to join).
+	geminiToolSeq int
 }
 
 func newSSEAccumulator(logger *slog.Logger) *sseAccumulator {
@@ -239,6 +249,12 @@ func (acc *sseAccumulator) processLine(line string) bool {
 	}
 
 	acc.processChunk(data)
+	switch acc.format {
+	case "anthropic":
+		acc.processAnthropicData(data)
+	case "gemini":
+		acc.processGeminiData(data)
+	}
 	acc.raw.WriteString("data: ")
 	acc.raw.WriteString(data)
 	acc.raw.WriteString("\n\n")
@@ -330,9 +346,14 @@ func (acc *sseAccumulator) processDelta(delta map[string]any) {
 // processToolCallChunk extracts index, id, name, and arguments from a single
 // tool_call delta chunk, accumulating arguments across chunks by index.
 func (acc *sseAccumulator) processToolCallChunk(tc map[string]any) {
+	// An absent index defaults to 0 (sloppy single-tool emitters); a present
+	// but out-of-shape index is dropped, not trusted (NENYA-48 class).
 	idx := 0
-	if idxVal, ok := tc["index"].(float64); ok {
-		idx = int(idxVal)
+	if idxVal := tc["index"]; idxVal != nil {
+		var ok bool
+		if idx, ok = boundedIndex(idxVal); !ok {
+			return
+		}
 	}
 
 	if id, ok := tc["id"].(string); ok && id != "" {
@@ -362,6 +383,207 @@ func (acc *sseAccumulator) processToolCallChunk(tc map[string]any) {
 		}
 		acc.tcArgsAccum[idx].WriteString(argsStr)
 	}
+}
+
+// processAnthropicData extracts tool calls, text, reasoning, the model name
+// and the stop reason from an Anthropic-format SSE data line (AUD-10 /
+// NENYA-218). The data line carries its own "type" — the event: line is not
+// needed. Everything feeds the same index-keyed accumulators the OpenAI
+// parser uses, so buildToolCalls is format-agnostic downstream.
+func (acc *sseAccumulator) processAnthropicData(data string) {
+	var chunk map[string]any
+	if err := json.Unmarshal([]byte(data), &chunk); err != nil {
+		return
+	}
+
+	msgType, _ := chunk["type"].(string)
+	switch msgType {
+	case "message_start":
+		acc.anthropicMessageStart(chunk)
+	case "content_block_start":
+		acc.anthropicBlockStart(chunk)
+	case "content_block_delta":
+		acc.anthropicBlockDelta(chunk)
+	case "message_delta":
+		acc.anthropicMessageDelta(chunk)
+	}
+}
+
+// anthropicMessageStart records the serving model's name.
+func (acc *sseAccumulator) anthropicMessageStart(chunk map[string]any) {
+	msg, ok := chunk["message"].(map[string]any)
+	if !ok {
+		return
+	}
+	if model, ok := msg["model"].(string); ok && model != "" {
+		acc.model = model
+	}
+}
+
+// anthropicMessageDelta records the stop reason (e.g. tool_use).
+func (acc *sseAccumulator) anthropicMessageDelta(chunk map[string]any) {
+	delta, ok := chunk["delta"].(map[string]any)
+	if !ok {
+		return
+	}
+	if sr, ok := delta["stop_reason"].(string); ok && sr != "" {
+		acc.finishReason = sr
+	}
+}
+
+// anthropicBlockStart registers a tool_use block (id + name) under its index.
+func (acc *sseAccumulator) anthropicBlockStart(chunk map[string]any) {
+	idx, ok := boundedIndex(chunk["index"])
+	if !ok {
+		return
+	}
+	cb, ok := chunk["content_block"].(map[string]any)
+	if !ok {
+		return
+	}
+	if t, _ := cb["type"].(string); t != "tool_use" {
+		return
+	}
+	if id, ok := cb["id"].(string); ok && id != "" {
+		acc.tcIDAccum[idx] = id
+	}
+	if name, ok := cb["name"].(string); ok && name != "" {
+		acc.tcNameAccum[idx] = name
+	}
+	// Anthropic sends the parsed input at start when it is empty and streams
+	// the rest via input_json_delta — seed the accumulator so a complete
+	// start-frame input survives even with no delta following.
+	if input, ok := cb["input"].(map[string]any); ok && len(input) > 0 {
+		if encoded, err := json.Marshal(input); err == nil {
+			acc.tcArgsAccum[idx] = &strings.Builder{}
+			acc.tcArgsAccum[idx].WriteString(string(encoded))
+		}
+	}
+}
+
+// anthropicBlockDelta appends input_json_delta fragments (keyed by block
+// index) and text/thinking deltas to the content accumulators.
+func (acc *sseAccumulator) anthropicBlockDelta(chunk map[string]any) {
+	idx, ok := boundedIndex(chunk["index"])
+	if !ok {
+		return
+	}
+	delta, ok := chunk["delta"].(map[string]any)
+	if !ok {
+		return
+	}
+	switch t, _ := delta["type"].(string); t {
+	case "input_json_delta":
+		if frag, ok := delta["partial_json"].(string); ok && frag != "" {
+			if acc.tcArgsAccum[idx] == nil {
+				acc.tcArgsAccum[idx] = &strings.Builder{}
+			}
+			acc.tcArgsAccum[idx].WriteString(frag)
+		}
+	case "text_delta":
+		if s, ok := delta["text"].(string); ok && s != "" {
+			acc.hasContent = true
+			acc.content.WriteString(s)
+		}
+	case "thinking_delta":
+		if s, ok := delta["thinking"].(string); ok && s != "" {
+			acc.reasoning.WriteString(s)
+		}
+	}
+}
+
+// processGeminiData extracts tool calls, text, the model version and the
+// finish reason from a Gemini-format SSE chunk (AUD-10 / NENYA-218).
+// Gemini functionCall parts arrive COMPLETE (name + args in one part — no
+// deltas to join); each gets a synthetic index in the shared accumulators.
+// A part's thoughtSignature is carried into tcExtraAccum so the NENYA-51
+// history preservation covers native-Gemini tool calls too.
+func (acc *sseAccumulator) processGeminiData(data string) {
+	var chunk map[string]any
+	if err := json.Unmarshal([]byte(data), &chunk); err != nil {
+		return
+	}
+
+	if mv, ok := chunk["modelVersion"].(string); ok && mv != "" {
+		acc.model = mv
+	}
+
+	candidates, ok := chunk["candidates"].([]any)
+	if !ok {
+		return
+	}
+	for _, candAny := range candidates {
+		if cand, ok := candAny.(map[string]any); ok {
+			acc.geminiCandidate(cand)
+		}
+	}
+}
+
+// geminiCandidate handles one Gemini candidate: its finish reason and its
+// content parts.
+func (acc *sseAccumulator) geminiCandidate(cand map[string]any) {
+	if fr, ok := cand["finishReason"].(string); ok && fr != "" && acc.finishReason == "" {
+		acc.finishReason = fr
+	}
+	content, ok := cand["content"].(map[string]any)
+	if !ok {
+		return
+	}
+	parts, ok := content["parts"].([]any)
+	if !ok {
+		return
+	}
+	for _, partAny := range parts {
+		if part, ok := partAny.(map[string]any); ok {
+			acc.geminiPart(part)
+		}
+	}
+}
+
+// geminiPart handles one content part: text accumulation and a complete
+// functionCall (synthetic index in the shared accumulators).
+func (acc *sseAccumulator) geminiPart(part map[string]any) {
+	if text, ok := part["text"].(string); ok && text != "" {
+		acc.hasContent = true
+		acc.content.WriteString(text)
+	}
+	fc, ok := part["functionCall"].(map[string]any)
+	if !ok {
+		return
+	}
+	name, _ := fc["name"].(string)
+	if name == "" {
+		return
+	}
+	idx := acc.geminiToolSeq
+	acc.geminiToolSeq++
+	acc.tcNameAccum[idx] = name
+	// No-args calls (common for parameterless Gemini tools) must carry an
+	// empty-object argument JSON, not a nil accumulator (which the history
+	// builder would render as "arguments":"null").
+	if args, ok := fc["args"].(map[string]any); ok && len(args) > 0 {
+		if encoded, err := json.Marshal(args); err == nil {
+			acc.tcArgsAccum[idx] = &strings.Builder{}
+			acc.tcArgsAccum[idx].WriteString(string(encoded))
+		}
+	} else {
+		acc.tcArgsAccum[idx] = &strings.Builder{}
+		acc.tcArgsAccum[idx].WriteString("{}")
+	}
+	if sig, ok := part["thoughtSignature"]; ok && sig != nil {
+		acc.tcExtraAccum[idx] = sig
+	}
+}
+
+// boundedIndex converts a JSON index value (float64) guarding against
+// hostile values (negative, fractional, astronomically large — the NENYA-48
+// class): out-of-shape indices are dropped rather than trusted.
+func boundedIndex(v any) (int, bool) {
+	f, ok := v.(float64)
+	if !ok || f < 0 || f != float64(int(f)) || f > 1e9 {
+		return 0, false
+	}
+	return int(f), true
 }
 
 // buildToolCalls assembles the final tool call list from accumulators.
@@ -445,6 +667,10 @@ func (acc *sseAccumulator) result() *bufferedSSE {
 
 func bufferStreamResponse(ctx context.Context, r io.Reader, logger *slog.Logger, servingModel string, servingTarget routing.UpstreamTarget) (*bufferedSSE, error) {
 	acc := newSSEAccumulator(logger)
+	// AUD-10 (NENYA-218): tool-call extraction follows the serving target's
+	// wire format — an Anthropic/Gemini-format target's tool calls must be
+	// extracted or the loop replays them unexecuted.
+	acc.format = servingTarget.Format
 	scanner := bufio.NewScanner(r)
 	// The shared SSE splitter (LF, CRLF or lone CR) so non-canonical framing is
 	// parsed per line instead of as one glued line (NENYA-197).
