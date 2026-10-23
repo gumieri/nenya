@@ -18,9 +18,9 @@ builds:
       - CGO_ENABLED=0
     ldflags: &ldflags
       - -s -w
-      - -X nenya/internal/version.Version={{.Version}}
-      - -X nenya/internal/version.Commit={{.Commit}}
-      - -X nenya/internal/version.BuildTime={{.Date}}
+      - -X github.com/nenya/internal/version.Version={{.Version}}
+      - -X github.com/nenya/internal/version.Commit={{.Commit}}
+      - -X github.com/nenya/internal/version.BuildTime={{.Date}}
     main: ./cmd/nenya
 
   - <<: *build_defaults
