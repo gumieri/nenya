@@ -564,3 +564,13 @@ func (c *ResponseCache) GetEmbedder() EmbeddingProvider {
 	defer c.mu.RUnlock()
 	return c.embedder
 }
+
+// UsesMetrics reports whether the cache records into m — a wiring assertion
+// for reload continuity (AUD-17): the cache must hold the process-wide
+// instance, not a discarded one.
+func (c *ResponseCache) UsesMetrics(m *Metrics) bool {
+	if c == nil {
+		return false
+	}
+	return c.metrics == m
+}

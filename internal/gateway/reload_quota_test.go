@@ -45,7 +45,7 @@ func newQuotaTestGateway(t *testing.T, ctx context.Context, balance *atomic.Int6
 		},
 	}
 	secrets := &config.SecretsConfig{ClientToken: "test-token"}
-	gw := newGateway(ctx, *cfg, secrets, slog.New(slog.NewTextHandler(io.Discard, nil)), startQuota)
+	gw := newGateway(ctx, *cfg, secrets, slog.New(slog.NewTextHandler(io.Discard, nil)), startQuota, nil)
 	t.Cleanup(gw.Close)
 	return gw
 }

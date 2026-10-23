@@ -168,7 +168,7 @@ type NenyaGateway struct {
 // metrics, MCP clients, and starts dynamic model discovery plus the
 // service-lifetime quota poller.
 func New(ctx context.Context, cfg config.Config, secrets *config.SecretsConfig, logger *slog.Logger) *NenyaGateway {
-	return newGateway(ctx, cfg, secrets, logger, true)
+	return newGateway(ctx, cfg, secrets, logger, true, nil)
 }
 
 // newGateway is New with control over the quota poller start (AUD-08 /
@@ -178,7 +178,7 @@ func New(ctx context.Context, cfg config.Config, secrets *config.SecretsConfig, 
 // orphaned fresh tracker while the live one loses its poller the moment
 // the old gateway drains (polled quota exhaustion goes dead). Reload
 // starts the poller itself, after the carry.
-func newGateway(ctx context.Context, cfg config.Config, secrets *config.SecretsConfig, logger *slog.Logger, startQuota bool) *NenyaGateway {
+func newGateway(ctx context.Context, cfg config.Config, secrets *config.SecretsConfig, logger *slog.Logger, startQuota bool, carriedMetrics *infra.Metrics) *NenyaGateway {
 	cfg = mergeBuiltInProviders(cfg)
 	// The fleet network policy is resolved (and its CA bundle read) once
 	// per start and threaded to every transport construction site.
@@ -203,7 +203,16 @@ func newGateway(ctx context.Context, cfg config.Config, secrets *config.SecretsC
 
 	providers := config.ResolveProviders(&cfg, secrets)
 
-	metrics := infra.NewMetrics()
+	// AUD-17 (NENYA-217 sibling): a reload carries the process-wide Metrics
+	// instance, so the components constructed below (ResponseCache, MCP
+	// transports, discovery) must be wired to the CARRIED instance from the
+	// start — building them against a fresh one and re-pointing only
+	// gw.Metrics afterwards orphans their metrics (cache hit/miss counters
+	// and MCP transport gauges silently vanish into a discarded instance).
+	metrics := carriedMetrics
+	if metrics == nil {
+		metrics = infra.NewMetrics()
+	}
 	// NENYA-131: with telemetry_unauthenticated the /metrics scrape is
 	// unauthenticated too, so auth metrics must not carry API key names.
 	metrics.SetAuthLabelRedaction(cfg.Server.TelemetryUnauthenticated)
@@ -1271,7 +1280,10 @@ func (g *NenyaGateway) Shutdown(ctx context.Context) error {
 }
 
 func (g *NenyaGateway) Reload(ctx context.Context, cfg config.Config, secrets *config.SecretsConfig) *NenyaGateway {
-	newGW := newGateway(ctx, cfg, secrets, g.Logger, false)
+	// AUD-17: build against the CARRIED metrics so the new ResponseCache and
+	// MCP transports report into the process-wide instance instead of an
+	// orphaned one (the field assignment below then matches what they hold).
+	newGW := newGateway(ctx, cfg, secrets, g.Logger, false, g.Metrics)
 
 	newGW.Stats = g.Stats
 	newGW.Metrics = g.Metrics
