@@ -240,7 +240,7 @@ func canonicalResponsesPath(pathStr string) (string, bool) {
 	if strings.Contains(clean, "..") || strings.Contains(decoded, "..") {
 		return "", false
 	}
-	if !strings.HasPrefix(clean, "/v1/responses") {
+	if !hasPathPrefix(clean, "/v1/responses") {
 		return "", false
 	}
 	return clean, true
