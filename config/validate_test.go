@@ -1217,7 +1217,7 @@ func TestValidateMCPServerConfigs(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			cfg := &Config{MCPServers: map[string]MCPServerConfig{"s": tc.server}}
-			errs := validateMCPServerConfigs(cfg)
+			errs := validateMCPServerConfigs(cfg, slog.New(slog.NewTextHandler(io.Discard, nil)))
 			if tc.want == "" {
 				if len(errs) != 0 {
 					t.Fatalf("valid server rejected: %v", errs)
