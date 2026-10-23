@@ -1877,7 +1877,10 @@ func (r *SSETransformingReader) frameTransformedEvents(transformed []byte, parse
 // is preserved).
 func (r *SSETransformingReader) frameOneEvent(obj []byte, parsed map[string]interface{}) []byte {
 	if t := sseEventTypeOf(obj); t != "" {
-		out := make([]byte, 0, len(t)+len(obj)+16)
+		// Overflow-safe capacity (CWE-190, §7): the size hint is a hint
+		// only, but unsized arithmetic on len()s is the flagged class —
+		// AddCap clamps instead of wrapping to a negative make() size.
+		out := make([]byte, 0, util.AddCap(util.AddCap(len(t), len(obj)), len("event: \ndata: \n\n")))
 		out = append(out, "event: "...)
 		out = append(out, t...)
 		out = append(out, "\ndata: "...)
