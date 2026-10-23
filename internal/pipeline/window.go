@@ -352,9 +352,22 @@ func generateWindowSummaryTracked(ctx context.Context, deps WindowDeps, windowCf
 		}
 	}
 	coveredTokens := countCoveredTokens(deps, historyText)
-	if summarize && cache != nil {
+	// AUD-11 (NENYA-219): a deterministic-truncation FALLBACK is never
+	// cached. generateWindowSummary reports deterministic=true both for the
+	// intentional truncate/tfidf modes (whose heads are the client's own
+	// history) and for the summarize mode's fallback when the engine is
+	// unusable — and caching the latter poisoned the lineage: every later
+	// turn in that conversation replayed the truncated head instead of
+	// retrying the engine, downgrading the conversation until growth exceeds
+	// summary_regen_ratio (can be hundreds of turns for a long history).
+	// The truncate/tfidf modes are unaffected (they cache through the
+	// HeadCache branch below, never through SummaryCache). Behavioral cost,
+	// accepted: with a persistently down engine every compacting turn now
+	// pays the engine attempt + retries in the request hot path — the same
+	// cost pattern documented for strict-gate rejects.
+	if summarize && cache != nil && !deterministic {
 		cache.Store(key, historyHash, historyLen, coveredTokens, generated)
-	} else if windowCfg.Mode == "tfidf" && deps.HeadCache != nil {
+	} else if !summarize && windowCfg.Mode == "tfidf" && deps.HeadCache != nil { // !summarize is documentation: the modes are mutually exclusive (window.go:99)
 		// Deterministic head: freeze it by lineage so the compacted prefix
 		// stays byte-identical across appended turns (SummaryCache analog).
 		deps.HeadCache.Store(key, historyText, historyLen, coveredTokens, generated)
