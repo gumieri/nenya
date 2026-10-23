@@ -149,27 +149,31 @@ func parseConfigValue(raw string) any {
 }
 
 // setConfigKey reads the target document (empty when absent), sets the dotted
-// key, and writes it back atomically as pretty JSON with mode 0644. Unrelated
-// keys are preserved.
+// key, and writes it back atomically with mode 0644 (or the existing file's
+// mode). Unrelated keys are preserved.
+//
+// The document is edited by BYTE SPLICE, never re-marshaled (AUD-45 /
+// NENYA-224): config files are JSONC, so re-encoding destroyed every operator
+// comment and reordered keys (Go maps have no order, and json.MarshalIndent
+// sorts them). The result is re-validated as JSON before it is written, so a
+// splice bug can never leave an unparseable config behind.
 func setConfigKey(path, dottedKey string, value any) error {
-	doc := map[string]any{}
+	var existing []byte
 	if data, err := os.ReadFile(path); err == nil {
-		if decodeErr := json.Unmarshal(config.StripComments(data), &doc); decodeErr != nil {
-			return fmt.Errorf("parse %s: %w", path, decodeErr)
-		}
+		existing = data
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return fmt.Errorf("read %s: %w", path, err)
 	}
 
-	if err := setDottedKey(doc, dottedKey, value); err != nil {
+	encoded, err := spliceConfigKey(existing, dottedKey, value)
+	if err != nil {
 		return err
 	}
-
-	encoded, err := json.MarshalIndent(doc, "", "  ")
-	if err != nil {
-		return fmt.Errorf("encode config: %w", err)
+	// Fail closed on a malformed result: the file must stay loadable.
+	var check map[string]any
+	if err := json.Unmarshal(config.StripComments(encoded), &check); err != nil {
+		return fmt.Errorf("internal: config edit produced invalid JSON for %s: %w", path, err)
 	}
-	encoded = append(encoded, '\n')
 
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return fmt.Errorf("create config directory: %w", err)
@@ -180,35 +184,6 @@ func setConfigKey(path, dottedKey string, value any) error {
 	// operator who wants the file private (it may carry MCP header values)
 	// chmods it once and the mode is kept.
 	return writeFileAtomic(path, encoded, configFileMode(path))
-}
-
-// setDottedKey sets value at the dotted key path, creating intermediate
-// objects. It fails when an intermediate component is a non-object value.
-func setDottedKey(doc map[string]any, dottedKey string, value any) error {
-	parts := strings.Split(dottedKey, ".")
-	cur := doc
-	for i, part := range parts {
-		if part == "" {
-			return fmt.Errorf("invalid config key %q", dottedKey)
-		}
-		if i == len(parts)-1 {
-			cur[part] = value
-			return nil
-		}
-		next, ok := cur[part]
-		if !ok {
-			child := map[string]any{}
-			cur[part] = child
-			cur = child
-			continue
-		}
-		child, ok := next.(map[string]any)
-		if !ok {
-			return fmt.Errorf("config key %q is not an object", strings.Join(parts[:i+1], "."))
-		}
-		cur = child
-	}
-	return nil
 }
 
 // configFileMode returns the mode to use when rewriting a config file: the
