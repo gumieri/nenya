@@ -1553,10 +1553,32 @@ func (g *NenyaGateway) MCPUnavailableSnapshot() map[string]string {
 
 // missingRequiredHeader returns the name of the first declared required header
 // that is absent or empty, or "" when all are present (NENYA-183).
+// missingRequiredHeader reports the first declared header that carries no
+// value, or "" when every one is present.
+//
+// Header names are case-insensitive (RFC 9110 §5.1): a server declaring
+// `required_headers: ["Authorization"]` while the operator configured
+// `authorization` names the SAME header, and a case-sensitive map lookup made
+// the mismatch permanent — the server was never connected and every request
+// selecting it failed closed with 503 (AUD-19 / NENYA-223).
 func missingRequiredHeader(serverCfg config.MCPServerConfig) string {
 	for _, header := range serverCfg.RequiredHeaders {
-		if strings.TrimSpace(serverCfg.Headers[header]) == "" {
+		if strings.TrimSpace(headerValueFold(serverCfg.Headers, header)) == "" {
 			return header
+		}
+	}
+	return ""
+}
+
+// headerValueFold looks a header name up case-insensitively (an exact-match
+// hit wins, so a configuration carrying two spellings keeps the explicit one).
+func headerValueFold(headers map[string]string, name string) string {
+	if v, ok := headers[name]; ok {
+		return v
+	}
+	for k, v := range headers {
+		if strings.EqualFold(k, name) {
+			return v
 		}
 	}
 	return ""

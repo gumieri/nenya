@@ -984,7 +984,7 @@ func authKeyCanChat(key ApiKey) bool {
 // the URL must be an absolute http(s) URL with a host and no embedded
 // credentials, plaintext http is refused for non-local hosts, required
 // header names must be well-formed, and the timeouts must be non-negative.
-func validateMCPServerConfigs(cfg *Config) []string {
+func validateMCPServerConfigs(cfg *Config, logger *slog.Logger) []string {
 	var errs []string
 	names := make([]string, 0, len(cfg.MCPServers))
 	for name := range cfg.MCPServers {
@@ -1007,6 +1007,17 @@ func validateMCPServerConfigs(cfg *Config) []string {
 		for i, header := range server.RequiredHeaders {
 			if strings.TrimSpace(header) == "" {
 				errs = append(errs, fmt.Sprintf("mcp_servers[%q].required_headers[%d]: empty header name", name, i))
+				continue
+			}
+			// AUD-19 (NENYA-223): names match case-insensitively at runtime,
+			// so a spelling mismatch is no longer fatal — but a header that is
+			// declared required and NOT configured at all still fails closed
+			// with 503 on every request selecting the server. Surface it at
+			// load (Warn, not an error: a header may legitimately arrive from
+			// an environment-specific deployment overlay).
+			if !serverHasHeader(server.Headers, header) {
+				logger.Warn("mcp server declares a required header that is not configured; requests selecting it will fail closed",
+					"server", name, "header", header)
 			}
 		}
 	}
@@ -1123,7 +1134,7 @@ func ValidateConfigReferences(cfg *Config, secrets *SecretsConfig, logger *slog.
 	errs = append(errs, validateAgentSlowCallThresholds(cfg.Agents)...)
 	errs = append(errs, validateAgentMCPReferences(cfg)...)
 	errs = append(errs, validateSecretAgentScopes(cfg, secrets, logger)...)
-	errs = append(errs, validateMCPServerConfigs(cfg)...)
+	errs = append(errs, validateMCPServerConfigs(cfg, logger)...)
 	errs = append(errs, validateAPIKeyToolGrants(cfg, secrets)...)
 	return errs
 }
@@ -2026,4 +2037,15 @@ func isNumericHostLabel(label string) bool {
 	}
 	_, err := strconv.ParseUint(digits, base, 32)
 	return err == nil
+}
+
+// serverHasHeader reports whether headers carries name in any spelling
+// (HTTP header names are case-insensitive, RFC 9110 §5.1).
+func serverHasHeader(headers map[string]string, name string) bool {
+	for k, v := range headers {
+		if strings.EqualFold(k, name) && strings.TrimSpace(v) != "" {
+			return true
+		}
+	}
+	return false
 }
