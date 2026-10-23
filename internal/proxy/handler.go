@@ -135,6 +135,25 @@ func (p *Proxy) recoverPanic(w http.ResponseWriter) {
 	}
 }
 
+// hasPathPrefix reports whether p addresses base or a path UNDER it, with a
+// segment boundary: "/v1/responsesXYZ" is NOT under "/v1/responses" (AUD-20).
+// A bare strings.HasPrefix match let undeclared paths route to a prefix
+// handler and be forwarded upstream as if the client had declared them.
+func hasPathPrefix(p, base string) bool {
+	if !strings.HasPrefix(p, base) {
+		return false
+	}
+	if len(p) == len(base) {
+		return true
+	}
+	// A base that already ends in "/" (e.g. "/proxy/") is a segment prefix by
+	// construction; otherwise the next byte must open a new segment.
+	if strings.HasSuffix(base, "/") {
+		return true
+	}
+	return p[len(base)] == '/'
+}
+
 func (p *Proxy) resolveRoute(path string) routeHandler {
 	type entry struct {
 		prefix  bool
@@ -166,7 +185,7 @@ func (p *Proxy) resolveRoute(path string) routeHandler {
 
 	for _, e := range handlers {
 		if e.prefix {
-			if strings.HasPrefix(path, e.pattern) {
+			if hasPathPrefix(path, e.pattern) {
 				return e.handler
 			}
 		} else if e.pattern == path {
