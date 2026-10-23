@@ -678,19 +678,26 @@ func TestSSETransformingReader_CROnlyLineEndings(t *testing.T) {
 }
 
 // TestSSETransformingReader_MultiLineTransformerPayload_DocumentedContract pins
-// the single-line contract of ResponseTransformer.TransformSSEChunk: only the
-// first line of a multi-line return is prefixed with "data: ", so a transformer
-// returning a raw newline produces one data line plus an unparsed field line.
+// the corrected multi-object contract (AUD-12 / NENYA-220): a transformer
+// emitting several concatenated JSON objects gets each object framed as its
+// own SSE event — pre-fix only the first line was prefixed with "data: " and
+// the second object arrived glued onto the same (invalid) data line. The
+// fixture objects carry no "type" field, so no event: lines are emitted.
 func TestSSETransformingReader_MultiLineTransformerPayload_DocumentedContract(t *testing.T) {
 	out := framingReader(t, "data: {\"a\":1}\n\ndata: [DONE]\n\n", 0, multiLineTransformer{})
-	want := "data: {\"x\":1}\n{\"y\":2}\n\ndata: [DONE]\n\n"
+	// Each object is its own well-formed event; the last frame ends with a
+	// single newline and the upstream blank separator line (forwarded as
+	// "\n") completes it — no spurious empty event between the emission and
+	// [DONE], and the shape after the final frame is identical to a plain
+	// passthrough chunk.
+	want := "data: {\"x\":1}\n\ndata: {\"y\":2}\n\ndata: [DONE]\n\n"
 	if out != want {
-		t.Fatalf("out = %q, want %q (single-line transformer contract)", out, want)
+		t.Fatalf("out = %q, want %q (multi-object framing contract)", out, want)
 	}
+	assertWellFormedEvents(t, out, 3)
 }
 
-// multiLineTransformer violates the single-line TransformSSEChunk contract on
-// purpose.
+// multiLineTransformer emits two concatenated JSON objects on purpose.
 type multiLineTransformer struct{}
 
 func (multiLineTransformer) TransformSSEChunk(_ context.Context, _ []byte) ([]byte, error) {

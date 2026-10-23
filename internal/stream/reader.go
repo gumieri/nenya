@@ -108,9 +108,12 @@ var sseDataPrefix = []byte("data:")
 const canonicalDoneFrame = "data: [DONE]"
 
 // ResponseTransformer transforms one SSE data payload. TransformSSEChunk
-// receives the JSON payload of a data: line (without the field prefix) and must
-// return a SINGLE-LINE payload: the reader re-prefixes exactly one data: line
-// per call, so a payload containing a raw newline would corrupt the frame.
+// receives the JSON payload of a data: line (without the field prefix) and
+// returns the converted payload: a single JSON object (any shape) or several
+// complete JSON objects concatenated back to back. The reader frames the
+// result — each top-level object becomes its own SSE event (with an `event:`
+// line when the object carries a type field, AUD-12); a transformer must NOT
+// pre-frame its output with data:/event: lines.
 type ResponseTransformer interface {
 	TransformSSEChunk(ctx context.Context, data []byte) ([]byte, error)
 }
@@ -229,6 +232,13 @@ type SSETransformingReader struct {
 	// A completion recognized from an OpenAI finish_reason line — even on a
 	// stream that also carried Anthropic deltas — keeps the injected [DONE].
 	sawAnthropicFinish bool
+	// sawConvertedAnthropicFinish records that a CONVERTED stream (OpenAI→
+	// Anthropic transformer installed) completed through the transformer's
+	// synthesized Anthropic terminal (message_delta stop_reason / message_stop
+	// — AUD-12). Same EOF rule as the passthrough flag: appending the OpenAI
+	// sentinel data: [DONE] onto an Anthropic client's wire after its own
+	// message_stop is an unparseable frame (AUD-12 review, mirroring AUD-01).
+	sawConvertedAnthropicFinish bool
 	// sawAnthropicContent records that generated content arrived through the
 	// Anthropic envelope (passthrough). The NENYA-46 synthetic finish_reason
 	// is an OpenAI-shaped frame and must never be synthesized onto an
@@ -522,6 +532,7 @@ func (r *SSETransformingReader) ResetCounters() {
 	r.sawContent = false
 	r.sawFinishReason = false
 	r.sawAnthropicFinish = false
+	r.sawConvertedAnthropicFinish = false
 	r.sawAnthropicContent = false
 	r.sawRawAnthropicDelta = false
 	r.sawDone = false
@@ -563,14 +574,19 @@ func (r *SSETransformingReader) SetSuppressCutError(v bool) {
 // cleanly. Unifying the notions needs its own item with continuation-format
 // coverage.
 //
-// Native-Anthropic passthrough is the one surface recognized beyond the OpenAI
-// shapes, and only when no transformer is installed (nil transformer means the
-// transformed bytes ARE the raw upstream wire): the Anthropic event envelope
-// carries the same terminal signals, and without reading them a COMPLETE
-// passthrough stream classified as empty at EOF — a gateway_error injected
-// after the client's own message_stop, a breaker charge, and no cache store
-// (AUD-01). Converted paths keep the OpenAI-shape semantics unchanged: their
-// transformer synthesizes the [DONE] terminal the matrix already understands.
+// Native-Anthropic passthrough is recognized beyond the OpenAI shapes when no
+// transformer is installed (nil transformer means the transformed bytes ARE the
+// raw upstream wire): the Anthropic event envelope carries the same terminal
+// signals, and without reading them a COMPLETE passthrough stream classified as
+// empty at EOF — a gateway_error injected after the client's own message_stop,
+// a breaker charge, and no cache store (AUD-01). CONVERTED paths additionally
+// recognize a deliberately narrow Anthropic subset on their own frames
+// (content_block_delta.delta.text for content; message_delta stop_reason /
+// message_stop for completion — AUD-12): a converted stream is Anthropic-shaped
+// on the client's wire, so the multi-event framing would otherwise lose the
+// completion signal. That recognition sets sawConvertedAnthropicFinish (not
+// sawAnthropicFinish, which stays passthrough-only) so the EOF path also
+// refuses to inject the OpenAI sentinel [DONE] onto an Anthropic client's wire.
 func (r *SSETransformingReader) trackStreamProgress(transformed []byte) {
 	if r.sawContent && r.sawFinishReason {
 		return
@@ -616,27 +632,80 @@ func (r *SSETransformingReader) trackProgressLine(line []byte) {
 		return
 	}
 	r.trackAnthropicSurface(parsed)
-	content := ExtractDeltaContentFromMap(parsed)
-	if content != "" {
+	if r.progressContent(parsed) {
 		r.sawContent = true
 	}
 	if !r.sawContent && hasReasoningDelta(parsed) {
 		r.sawContent = true
 	}
-	if !r.sawFinishReason {
-		fr := ExtractFinishReasonFromMap(parsed)
-		if fr != "" {
-			r.sawFinishReason = true
+	if r.progressFinish(parsed) {
+		r.sawFinishReason = true
+		// AUD-12 review: on a CONVERTED surface (transformer installed) an
+		// Anthropic-shaped completion must not receive the OpenAI sentinel
+		// data: [DONE] at EOF either (AUD-01's passthrough argument applies
+		// identically — the frame is unparseable on that client's wire), so
+		// track the converted Anthropic completion independently of WHICH
+		// frame first transitioned sawFinishReason: a converter passing a
+		// raw OpenAI finish_reason through must not permanently block the
+		// suppression for a later message_stop.
+		if r.transformer != nil && !r.sawConvertedAnthropicFinish && r.progressFinishAnthropic(parsed) {
+			r.sawConvertedAnthropicFinish = true
 		}
 	}
+}
+
+// progressContent reports whether one parsed frame carries generation text:
+// the OpenAI delta spelling, or (AUD-12) an Anthropic-shaped converted frame's
+// content_block_delta text.
+func (r *SSETransformingReader) progressContent(parsed map[string]interface{}) bool {
+	if content := ExtractDeltaContentFromMap(parsed); content != "" {
+		return true
+	}
+	if t, _ := parsed["type"].(string); t == "content_block_delta" {
+		if delta, ok := parsed["delta"].(map[string]interface{}); ok {
+			s, _ := delta["text"].(string)
+			return s != ""
+		}
+	}
+	return false
+}
+
+// progressFinish reports whether one parsed frame completes the stream: the
+// OpenAI choices[0].finish_reason, or (AUD-12) the Anthropic-shaped converted
+// frames' message_delta stop_reason / message_stop. Without the Anthropic
+// check the multi-event framing registers no completion and the terminal-state
+// matrix misclassifies the stream.
+func (r *SSETransformingReader) progressFinish(parsed map[string]interface{}) bool {
+	if ExtractFinishReasonFromMap(parsed) != "" {
+		return true
+	}
+	return r.progressFinishAnthropic(parsed)
+}
+
+// progressFinishAnthropic reports whether one parsed frame is an
+// Anthropic-shaped completion (message_delta with a stop_reason, or
+// message_stop). Deliberately narrow: the gateway only acts on it as a
+// completion signal, and a false positive is fail-safe (a stream treated as
+// completed early, never a stuck one).
+func (r *SSETransformingReader) progressFinishAnthropic(parsed map[string]interface{}) bool {
+	t, _ := parsed["type"].(string)
+	if t != "message_delta" && t != "message_stop" {
+		return false
+	}
+	if t == "message_stop" {
+		return true
+	}
+	delta, ok := parsed["delta"].(map[string]interface{})
+	return ok && delta["stop_reason"] != nil
 }
 
 // trackAnthropicSurface records the native-Anthropic terminal signals of a
 // passthrough chunk onto the terminal-state matrix. Gated on the nil
 // transformer: only there are the transformed bytes the raw upstream wire, so
 // only there can the Anthropic envelope be trusted as the client's surface.
-// Converted paths keep the OpenAI-shape semantics unchanged (their transformer
-// synthesizes the [DONE] terminal the matrix already understands).
+// Converted paths do NOT reach this function (their own narrow Anthropic
+// recognition lives in progressContent/progressFinish instead) — this one
+// establishes the PASSTHROUGH flags, including sawAnthropicFinish.
 func (r *SSETransformingReader) trackAnthropicSurface(parsed map[string]interface{}) {
 	if r.transformer != nil {
 		return
@@ -1040,7 +1109,7 @@ func (r *SSETransformingReader) handleScannerDone() {
 		case r.sawDone:
 			// Normal end.
 		case r.sawFinishReason:
-			if r.sawAnthropicFinish {
+			if r.sawAnthropicFinish || r.sawConvertedAnthropicFinish {
 				// Native-Anthropic passthrough: the stream completed through
 				// its own terminal (message_delta stop_reason / message_stop)
 				// and the client already received the upstream's message_stop.
@@ -1727,9 +1796,153 @@ func (r *SSETransformingReader) handleWithTransformer(parsed map[string]interfac
 		return line
 	}
 
-	finalLine := append([]byte("data: "), transformed...)
+	// AUD-12 (NENYA-220): a transformer may synthesize MULTIPLE events for
+	// one upstream chunk (the OpenAI→Anthropic converter emits message_start
+	// + content_block_* + message_delta/message_stop for a finish chunk).
+	// Pre-fix every event was concatenated onto ONE `data:` line — an
+	// invalid JSON payload strict clients reject. Frame each object as its
+	// own event, with an `event:` line for the Anthropic type field.
+	return r.frameTransformedEvents(transformed, parsed)
+}
+
+// frameTransformedEvents frames a transformer emission. Every JSON object
+// with a type field becomes `event: <type>\ndata: <obj>\n\n` (strict
+// Anthropic SDKs dispatch on event: lines and skip data-only frames — the
+// single-object path must carry them too, AUD-12 review); typeless objects
+// (OpenAI/Gemini re-marshals) keep the historical data-only shape so
+// passthrough identity is preserved. A malformed multi-object payload is
+// logged and framed from the objects decoded so far plus the raw remainder —
+// never re-glued onto one invalid data line.
+func (r *SSETransformingReader) frameTransformedEvents(transformed []byte, parsed map[string]interface{}) []byte {
+	if len(transformed) == 0 || transformed[0] != '{' {
+		finalLine := append([]byte("data: "), transformed...)
+		r.notifySSEObserver(finalLine, parsed, "")
+		return finalLine
+	}
+	// Hot path (NENYA-177 allocation discipline): a single valid JSON object
+	// needs no decoder machinery — json.Valid rejects multi-object blobs in
+	// one allocation-free pass. A TYPED object still gets its event: line
+	// (strict Anthropic SDKs skip data-only frames), so a converted stream's
+	// message_start and single-delta frames are dispatched correctly.
+	if json.Valid(transformed) {
+		return r.frameOneEvent(transformed, parsed)
+	}
+
+	objs, remainder, ok := splitConcatenatedJSON(transformed)
+	if !ok {
+		// Not decodable as concatenated JSON: the historical whole-blob
+		// shape is the only safe framing.
+		finalLine := append([]byte("data: "), transformed...)
+		r.notifySSEObserver(finalLine, parsed, "")
+		return finalLine
+	}
+	if remainder != nil {
+		if r.logger != nil {
+			r.logger.Warn("transformer emission had a trailing undecodable segment; framing degraded",
+				"decoded", len(objs), "remainder_bytes", len(remainder))
+		}
+	}
+	var b bytes.Buffer
+	for i, obj := range objs {
+		if t := sseEventTypeOf(obj); t != "" {
+			b.WriteString("event: ")
+			b.WriteString(t)
+			b.WriteByte('\n')
+		}
+		b.WriteString("data: ")
+		b.Write(obj)
+		if i == len(objs)-1 && remainder == nil {
+			// The LAST frame ends with a single newline: the upstream blank
+			// separator line that follows this emission completes the event.
+			// Emitting "\n\n" here plus that separator produced a spurious
+			// empty SSE event after every converted chunk (AUD-12 review).
+			b.WriteByte('\n')
+			continue
+		}
+		b.WriteString("\n\n")
+	}
+	if remainder != nil {
+		b.WriteString("data: ")
+		b.Write(remainder)
+		b.WriteString("\n\n")
+	}
+	out := b.Bytes()
+	r.notifySSEObserver(out, parsed, "")
+	return out
+}
+
+// frameOneEvent frames a single transformed object: an event: line when the
+// object carries a well-formed type, the historical data-only line otherwise
+// (OpenAI/Gemini re-marshals have no top-level type, so passthrough identity
+// is preserved).
+func (r *SSETransformingReader) frameOneEvent(obj []byte, parsed map[string]interface{}) []byte {
+	if t := sseEventTypeOf(obj); t != "" {
+		out := make([]byte, 0, len(t)+len(obj)+16)
+		out = append(out, "event: "...)
+		out = append(out, t...)
+		out = append(out, "\ndata: "...)
+		out = append(out, obj...)
+		out = append(out, "\n\n"...)
+		r.notifySSEObserver(out, parsed, "")
+		return out
+	}
+	finalLine := append([]byte("data: "), obj...)
 	r.notifySSEObserver(finalLine, parsed, "")
 	return finalLine
+}
+
+// splitConcatenatedJSON enumerates the top-level JSON values of a payload
+// the transformer built by concatenating complete objects (raw bytes back to
+// back). Returns the raw byte slice of each value; ok is false when the
+// payload does not decode as concatenated JSON at all. A non-nil remainder
+// is a trailing segment after the last decodable value (truncated write,
+// stray noise) that could not be decoded.
+func splitConcatenatedJSON(payload []byte) (objs [][]byte, remainder []byte, ok bool) {
+	dec := json.NewDecoder(bytes.NewReader(payload))
+	for dec.More() {
+		var raw json.RawMessage
+		if err := dec.Decode(&raw); err != nil {
+			if len(objs) == 0 {
+				return nil, nil, false
+			}
+			return objs, bytes.TrimSpace(payload[dec.InputOffset():]), true
+		}
+		objs = append(objs, raw)
+	}
+	// dec.More() is false at valid input end AND at a premature `}`/`]` that
+	// closes an outer level: any non-whitespace bytes left here are a trailing
+	// segment (truncated write, stray bracket, logging noise) — surfaced as
+	// remainder so the caller frames it raw instead of silently dropping it.
+	if rest := bytes.TrimSpace(payload[dec.InputOffset():]); len(rest) > 0 && len(objs) > 0 {
+		return objs, rest, true
+	}
+	if len(objs) == 0 {
+		return nil, nil, false
+	}
+	return objs, nil, true
+}
+
+// sseEventTypeOf reads the Anthropic-style event type field of one framed
+// object. Only a strict token charset is accepted: the value is written
+// verbatim into an `event:` line, and a JSON-decoded newline in a
+// provider-supplied type would forge extra SSE fields on the client's stream
+// (defense in depth — no built-in transformer feeds upstream type values
+// here today). "" means "no event: line".
+func sseEventTypeOf(obj []byte) string {
+	var probe struct {
+		Type string `json:"type"`
+	}
+	if err := json.Unmarshal(obj, &probe); err != nil || probe.Type == "" {
+		return ""
+	}
+	for _, c := range probe.Type {
+		switch {
+		case c >= 'a' && c <= 'z', c >= 'A' && c <= 'Z', c >= '0' && c <= '9', c == '_', c == '-', c == '.':
+		default:
+			return ""
+		}
+	}
+	return probe.Type
 }
 
 func (r *SSETransformingReader) applyToolCallNormalization(transformed []byte, state *toolCallState) []byte {
@@ -1787,7 +2000,9 @@ func (r *SSETransformingReader) transformNonSSELine(line []byte) []byte {
 		r.sawDone = true
 		return r.finishStreamFrames([]byte(canonicalDoneFrame), []byte(canonicalDoneFrame))
 	}
-	return transformed
+	// AUD-12: a bare-JSON upstream through the same converter produces the
+	// same multi-object emissions — frame them identically.
+	return r.frameTransformedEvents(transformed, nil)
 }
 
 // ReasoningTokenExtractors lists the known provider spellings for the
