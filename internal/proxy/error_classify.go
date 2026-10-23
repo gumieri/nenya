@@ -79,6 +79,18 @@ func handleRetryableError429(logger *slog.Logger, errorBody []byte, action upstr
 			effectiveCooldown = floor
 			logger.Info("quota cooldown floored", "cooldown_s", effectiveCooldown.Seconds())
 		}
+		if target.BYOK {
+			// AUD-22 (NENYA-225): a caller-funded request's 429 is the
+			// CALLER's account hitting its limit, not the shared one. Evicting
+			// the provider's pooled connections would drop warm connections
+			// every other tenant shares, and recording a cooldown/breaker
+			// outcome would bench a target whose shared credential is fine —
+			// the exact cross-tenant contamination BYOK exists to prevent
+			// (NENYA-195). Stand down on every shared-account write.
+			logger.Info("BYOK request rate-limited; leaving shared account state untouched",
+				"provider", target.Provider, "model", target.Model)
+			return parseRetryDelay(action.resp.Header, errorBody), isQuota
+		}
 		// Idle-connection eviction (NENYA-47): an exhausted account's pooled
 		// connections are dead weight — drop them while the account cools
 		// down. Called without gateway locks held.
