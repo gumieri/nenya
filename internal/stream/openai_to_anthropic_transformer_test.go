@@ -3,7 +3,7 @@ package stream
 import (
 	"context"
 	"encoding/json"
-	"errors"
+	"strings"
 	"testing"
 )
 
@@ -84,6 +84,8 @@ func TestOpenAIToAnthropicTransformer_FinishReason(t *testing.T) {
 		}
 		events = append(events, evt)
 	}
+	// The tail is held at finish (AUD-29): [DONE] flushes it.
+	events = append(events, splitEvents(t, flushStreamTail(t, tr))...)
 
 	foundDelta := false
 	foundStop := false
@@ -216,6 +218,31 @@ func usageFromEvents(t *testing.T, out []byte) map[string]interface{} {
 	return usage
 }
 
+// flushStreamTail sends the [DONE] sentinel so a held tail
+// (message_delta + message_stop) is flushed, then returns the emission
+// (AUD-29 / NENYA-241).
+func flushStreamTail(t *testing.T, tr *OpenAIToAnthropicTransformer) []byte {
+	t.Helper()
+	out, err := tr.TransformSSEChunk(context.Background(), []byte("[DONE]"))
+	if err != nil {
+		t.Fatalf("[DONE]: %v", err)
+	}
+	return out
+}
+
+func splitEvents(t *testing.T, out []byte) []map[string]interface{} {
+	t.Helper()
+	var events []map[string]interface{}
+	for _, line := range splitSSEEvents(out) {
+		var evt map[string]interface{}
+		if err := json.Unmarshal(line, &evt); err != nil {
+			continue
+		}
+		events = append(events, evt)
+	}
+	return events
+}
+
 // TestOpenAIToAnthropicTransformer_UsageBeforeFinish pins the case the
 // capture fixes (NENYA-167): a provider that reports cumulative usage on the
 // content chunks (Gemini-over-OpenAI-compat and several gateways do) has its
@@ -247,11 +274,11 @@ func TestOpenAIToAnthropicTransformer_UsageBeforeFinish(t *testing.T) {
 			"index": 0, "delta": map[string]interface{}{}, "finish_reason": "stop",
 		}},
 	})
-	finishOut, err := tr.TransformSSEChunk(ctx, finish)
-	if err != nil {
+	if _, err := tr.TransformSSEChunk(ctx, finish); err != nil {
 		t.Fatalf("finish chunk: %v", err)
 	}
-	usage := usageFromEvents(t, finishOut)
+	// The tail is held at finish; [DONE] flushes it with the captured usage.
+	usage := usageFromEvents(t, flushStreamTail(t, tr))
 	if usage == nil {
 		t.Fatal("expected a message_delta with usage")
 	}
@@ -299,32 +326,41 @@ func TestOpenAIToAnthropicTransformer_UsageAfterFinish(t *testing.T) {
 	if err != nil {
 		t.Fatalf("finish chunk: %v", err)
 	}
-	usage := usageFromEvents(t, finishOut)
-	if usage == nil {
-		t.Fatal("expected a message_delta with usage")
-	}
-	if usage["output_tokens"] != float64(len("hello there")/4) {
-		t.Errorf("output_tokens = %v, want the estimate (the usage chunk has not arrived yet)", usage["output_tokens"])
+	// AUD-29 (NENYA-241): the tail is HELD at finish under the standard
+	// include_usage ordering - publishing it here would carry 0/0 (or the
+	// char estimate) because the real usage arrives in the NEXT chunk.
+	if usage := usageFromEvents(t, finishOut); usage != nil {
+		t.Fatalf("the finish chunk must hold the message_delta, got usage %v", usage)
 	}
 
-	// The later usage-only chunk is captured for the record and consumed
-	// without emitting an event (the OpenAI-shaped frame must not be forwarded
-	// to an Anthropic client after message_stop), but the estimate already
-	// sent is what the client sees.
+	// The trailing usage-only chunk is captured AND flushes the held tail:
+	// the client now sees the real counts, not the estimate.
 	usageChunk, _ := json.Marshal(map[string]interface{}{
 		"id": "chatcmpl-1", "model": "gpt-4", "choices": []interface{}{},
 		"usage": map[string]interface{}{"prompt_tokens": 100.0, "completion_tokens": 42.0, "total_tokens": 142.0},
 	})
 	out, err := tr.TransformSSEChunk(ctx, usageChunk)
-	if !errors.Is(err, ErrEventConsumed) {
-		t.Fatalf("usage chunk: err = %v, want ErrEventConsumed (the OpenAI-shaped frame must not reach an Anthropic client)", err)
+	if err != nil {
+		t.Fatalf("usage chunk: %v", err)
 	}
-	if len(out) != 0 {
-		t.Errorf("a usage-only chunk after the stream is done must emit no events, got %q", out)
+	usage := usageFromEvents(t, out)
+	if usage == nil {
+		t.Fatal("the trailing usage chunk must flush the held message_delta")
+	}
+	if usage["output_tokens"] != float64(42) {
+		t.Errorf("output_tokens = %v, want the upstream-reported 42", usage["output_tokens"])
+	}
+	if usage["input_tokens"] != float64(100) {
+		t.Errorf("input_tokens = %v, want 100", usage["input_tokens"])
+	}
+	if !strings.Contains(string(out), "message_stop") {
+		t.Fatalf("the flushed tail must end with message_stop, got %s", out)
 	}
 	if tr.outputTokens != 42 {
 		t.Errorf("captured outputTokens = %d, want 42", tr.outputTokens)
 	}
+
+	// Nothing is pending at [DONE]: the sentinel passes through unchanged.
 	if done, err := tr.TransformSSEChunk(ctx, []byte("[DONE]")); err != nil || string(done) != "[DONE]" {
 		t.Fatalf("[DONE] = %q, %v", done, err)
 	}
@@ -341,11 +377,10 @@ func TestOpenAIToAnthropicTransformer_UsageEstimateFallback(t *testing.T) {
 			"index": 0, "delta": map[string]interface{}{"content": "hello there"}, "finish_reason": "stop",
 		}},
 	})
-	out, err := tr.TransformSSEChunk(ctx, content)
-	if err != nil {
+	if _, err := tr.TransformSSEChunk(ctx, content); err != nil {
 		t.Fatalf("chunk: %v", err)
 	}
-	usage := usageFromEvents(t, out)
+	usage := usageFromEvents(t, flushStreamTail(t, tr))
 	if usage == nil {
 		t.Fatal("expected a message_delta with usage")
 	}

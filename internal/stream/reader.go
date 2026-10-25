@@ -118,6 +118,20 @@ type ResponseTransformer interface {
 	TransformSSEChunk(ctx context.Context, data []byte) ([]byte, error)
 }
 
+// TailFinisher is an optional ResponseTransformer extension for stateful
+// transformers that HOLD their closing events past the finish chunk
+// (AUD-29 / NENYA-241): the OpenAI→Anthropic converter withholds
+// message_delta/message_stop so the standard `stream_options.include_usage`
+// ordering — the trailing usage-only chunk after the finish chunk — lands in
+// the published usage instead of a 0/0 delta. The reader pulls the tail at
+// the stream terminal ([DONE] or injected end-of-stream) and composes it
+// into the final frame sequence.
+type TailFinisher interface {
+	// FinishTail returns the held closing events, or nil when nothing is
+	// held. Calling it twice must return nil the second time.
+	FinishTail() []byte
+}
+
 // UsageCallback is invoked by the SSE transformer when usage metadata is received.
 // UsageCallback receives token usage statistics from the stream.
 // Parameters are deltas since the last callback (each field >= 0).
@@ -1188,10 +1202,20 @@ func (r *SSETransformingReader) handleScannerDone() {
 // omitted the [DONE] marker.
 func (r *SSETransformingReader) injectDoneOnly() {
 	held, heldOK := r.synthesizeHeldFlush()
+	tailFrame := r.transformerTailFrame()
 	buf := append(r.eventSeparator(), []byte("data: [DONE]\n\n")...)
+	var pre []byte
 	if heldOK {
-		pre := append(r.eventSeparator(), held...)
+		pre = append(pre, r.eventSeparator()...)
+		pre = append(pre, held...)
 		pre = append(pre, '\n', '\n')
+	}
+	if tailFrame != nil {
+		pre = append(pre, r.eventSeparator()...)
+		pre = append(pre, tailFrame...)
+		pre = append(pre, '\n', '\n')
+	}
+	if pre != nil {
 		buf = append(pre, buf...)
 	}
 	r.buffer = buf
@@ -1423,22 +1447,39 @@ func (r *SSETransformingReader) notifySSEObserver(line []byte, parsed map[string
 	r.observer.OnSSEEvent(SSEEvent{Type: eventType, Raw: line, Data: parsed})
 }
 
+// transformerTailFrame pulls a stateful transformer's held closing events
+// (TailFinisher, AUD-29 / NENYA-241) and frames them for the wire. Nil when
+// the transformer holds nothing or does not implement TailFinisher.
+func (r *SSETransformingReader) transformerTailFrame() []byte {
+	tailer, ok := r.transformer.(TailFinisher)
+	if !ok {
+		return nil
+	}
+	tail := tailer.FinishTail()
+	if len(tail) == 0 {
+		return nil
+	}
+	return r.frameTransformedEvents(tail, nil)
+}
+
 // finishStreamFrames composes the clean-terminal frame sequence at
 // [DONE]: the exfil guard's held tail first (NENYA-205 — the response's
 // last fragment must not be withheld), then the synthetic finish_reason
-// chunk when one is due, then the canonical [DONE]. Each synthesized
+// chunk when one is due, then the transformer's held closing events
+// (TailFinisher), then the canonical [DONE]. Each synthesized
 // frame is a complete blank-line-separated event (NENYA-169 convention).
 // With nothing synthesized the upstream line passes through unchanged.
 func (r *SSETransformingReader) finishStreamFrames(upstreamLine, line []byte) []byte {
 	heldLine, heldOK := r.synthesizeHeldFlush()
 	synthLine, synthOK := r.synthesizeTerminalFinish()
+	tailFrame := r.transformerTailFrame()
 	r.notifySSEObserver(upstreamLine, nil, "done")
-	if !heldOK && !synthOK {
+	if !heldOK && !synthOK && tailFrame == nil {
 		return line
 	}
 	separator := r.eventSeparator()
 	out := []byte{}
-	for _, part := range [][]byte{heldLine, synthLine, line} {
+	for _, part := range [][]byte{heldLine, synthLine, tailFrame, line} {
 		if len(part) == 0 {
 			continue
 		}
