@@ -3,6 +3,7 @@ package auth
 import (
 	"context"
 	"sync"
+	"time"
 
 	"github.com/nenya/config"
 )
@@ -258,4 +259,76 @@ func (m *AccountManager) CleanupExpiredLocks() int {
 		total += pool.ExpiredLocks()
 	}
 	return total
+}
+
+// DefaultLockSweepInterval is how often a LockSweeper sweeps when no
+// explicit interval is given. Model locks are cooldown-scale (seconds to
+// minutes), so a one-minute cadence bounds the maps' growth far below any
+// operator-visible size while the sweep itself touches only small maps
+// under the pool lock.
+const DefaultLockSweepInterval = time.Minute
+
+// LockSweeper periodically removes expired model locks (and their paired
+// per-model backoff levels) across every pool the manager holds
+// (AUD-44 / NENYA-230). Without it, every (account, model) pair that ever
+// received a model-scoped lock stayed in Account.ModelLocks /
+// ModelBackoffLevels forever — an unbounded-growth leak on long-lived
+// processes, paid again on every account-state snapshot.
+//
+// The goroutine starts in the constructor and runs until Stop; a gateway
+// owns one per AccountManager and stops it in Close.
+type LockSweeper struct {
+	manager  *AccountManager
+	interval time.Duration
+	stop     chan struct{}
+	done     chan struct{}
+	stopOnce sync.Once
+}
+
+// NewLockSweeper builds a sweeper for the manager and starts its goroutine.
+// A non-positive interval selects DefaultLockSweepInterval.
+func NewLockSweeper(m *AccountManager, interval time.Duration) *LockSweeper {
+	if interval <= 0 {
+		interval = DefaultLockSweepInterval
+	}
+	s := &LockSweeper{
+		manager:  m,
+		interval: interval,
+		stop:     make(chan struct{}),
+		done:     make(chan struct{}),
+	}
+	go s.run()
+	return s
+}
+
+// run sweeps until Stop. Lifecycle: exits on stop, closing done.
+func (s *LockSweeper) run() {
+	defer close(s.done)
+	ticker := time.NewTicker(s.interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-s.stop:
+			return
+		case <-ticker.C:
+			s.manager.CleanupExpiredLocks()
+		}
+	}
+}
+
+// Stop ends the sweep goroutine and waits for it to exit. Safe to call more
+// than once and safe even if the sweeper already stopped.
+func (s *LockSweeper) Stop() {
+	s.stopOnce.Do(func() { close(s.stop) })
+	<-s.done
+}
+
+// Stopped reports whether the sweep goroutine has exited (test seam).
+func (s *LockSweeper) Stopped() bool {
+	select {
+	case <-s.done:
+		return true
+	default:
+		return false
+	}
 }
