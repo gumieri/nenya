@@ -32,6 +32,13 @@ type OpenAIToAnthropicTransformer struct {
 	toolCalls    []*openaiToolCall
 	textEmitted  bool
 	hasEmitted   bool
+	// pendingFinish holds the mapped finish reason between the finish chunk
+	// and the stream tail. The message_delta/message_stop tail is held so
+	// the standard `stream_options.include_usage` ordering — the trailing
+	// usage-only chunk AFTER the finish chunk — lands in the published
+	// usage instead of a 0/0 delta (AUD-29 / NENYA-241). Flushed by the
+	// first post-finish event (the usage chunk) or by [DONE].
+	pendingFinish string
 
 	// Upstream usage captured from the stream (NENYA-167). OpenAI-format
 	// upstreams report usage in a final chunk that often carries no choices,
@@ -60,6 +67,19 @@ func (t *OpenAIToAnthropicTransformer) TransformSSEChunk(ctx context.Context, da
 		t.mu.Lock()
 		defer t.mu.Unlock()
 		t.streamDone = true
+		// In the reader pipeline this branch is unreachable — the reader
+		// intercepts [DONE] and pulls the tail via TailFinisher — but direct
+		// callers (tests, embedding users) flush here: a still-held tail
+		// (finish chunk carried no trailing usage chunk) emits
+		// message_delta with the captured usage + message_stop
+		// (AUD-29 / NENYA-241). The OpenAI [DONE] sentinel is consumed in
+		// that case — the converted Anthropic stream terminates at
+		// message_stop.
+		if t.pendingFinish != "" {
+			tail := t.buildStreamTail(t.pendingFinish)
+			t.pendingFinish = ""
+			return tail, nil
+		}
 		return []byte("[DONE]"), nil
 	}
 
@@ -85,9 +105,16 @@ func (t *OpenAIToAnthropicTransformer) TransformSSEChunk(ctx context.Context, da
 
 	if t.streamDone {
 		// The stream is closed: a trailing usage-only chunk (the standard
-		// stream_options.include_usage ordering) is OpenAI-shaped and must not
-		// be forwarded to an Anthropic client after message_stop. It was
-		// captured above; consume it without emitting an event.
+		// stream_options.include_usage ordering) is OpenAI-shaped and must
+		// not be forwarded to an Anthropic client after message_stop. It was
+		// captured above; flush the tail now so the held message_delta
+		// carries THIS usage instead of the 0/0 published pre-fix
+		// (AUD-29 / NENYA-241).
+		if t.pendingFinish != "" {
+			tail := t.buildStreamTail(t.pendingFinish)
+			t.pendingFinish = ""
+			return tail, nil
+		}
 		return nil, ErrEventConsumed
 	}
 
@@ -214,8 +241,12 @@ func (t *OpenAIToAnthropicTransformer) processChoice(choice map[string]interface
 	}
 
 	if finishReason, ok := choice["finish_reason"].(string); ok && finishReason != "" {
-		closeEvents := t.buildStreamEnd(finishReason)
+		closeEvents := t.buildStreamStops()
 		events = append(events, closeEvents...)
+		// The tail (message_delta + message_stop) is HELD: the standard
+		// include_usage ordering delivers usage in a trailing chunk after
+		// this one, and the delta must carry it (AUD-29 / NENYA-241).
+		t.pendingFinish = finishReason
 		t.streamDone = true
 	}
 
@@ -268,7 +299,26 @@ func (t *OpenAIToAnthropicTransformer) processToolCall(tc map[string]interface{}
 	return events
 }
 
-func (t *OpenAIToAnthropicTransformer) buildStreamEnd(finishReason string) []byte {
+// FinishTail flushes the held message_delta/message_stop tail, or nil when
+// nothing is held. Reader-side hook (stream.TailFinisher, AUD-29 /
+// NENYA-241): called at the stream terminal so the standard include_usage
+// usage chunk lands in the published usage.
+func (t *OpenAIToAnthropicTransformer) FinishTail() []byte {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.pendingFinish == "" {
+		return nil
+	}
+	tail := t.buildStreamTail(t.pendingFinish)
+	t.pendingFinish = ""
+	return tail
+}
+
+// buildStreamStops emits the content_block_stop events for every open
+// content block. The message_delta/message_stop tail is held separately
+// (pendingFinish) so the standard include_usage usage chunk lands in the
+// published usage (AUD-29 / NENYA-241).
+func (t *OpenAIToAnthropicTransformer) buildStreamStops() []byte {
 	var events []byte
 
 	if t.textEmitted {
@@ -280,6 +330,15 @@ func (t *OpenAIToAnthropicTransformer) buildStreamEnd(finishReason string) []byt
 		stopEvent := t.makeContentBlockStop(i + 1)
 		events = append(events, stopEvent...)
 	}
+
+	return events
+}
+
+// buildStreamTail emits the closing message_delta (stop reason plus the
+// captured usage) and message_stop. Called once, after the last upstream
+// usage has been captured.
+func (t *OpenAIToAnthropicTransformer) buildStreamTail(finishReason string) []byte {
+	var events []byte
 
 	stopReason := mapFinishReasonReverse(finishReason)
 
