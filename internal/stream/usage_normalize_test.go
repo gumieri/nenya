@@ -344,3 +344,42 @@ func TestReaderUsageReportedTotalIsUsedAsIs(t *testing.T) {
 		t.Errorf("total tokens = %d, want the reported 42", got.TotalTokens)
 	}
 }
+
+// TestReaderUsageAmbiguousSemanticsSurfaces pins AUD-27 (NENYA-242): the
+// streaming usage callback must carry AmbiguousCacheSemantics when the
+// source object has an OpenAI-style input total with the Anthropic-native
+// cache field names and no decomposition. Pre-fix the normalizer computed
+// the flag but the reader never copied it into UsageData, so the streaming
+// consumer's fold-note was dead code (only the buffered path surfaced it).
+func TestReaderUsageAmbiguousSemanticsSurfaces(t *testing.T) {
+	sse := "data: {\"id\":\"c1\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"hi\"}}],\"usage\":{\"prompt_tokens\":100,\"completion_tokens\":12,\"cache_read_input_tokens\":60,\"cache_creation_input_tokens\":10}}\n\n" +
+		"data: [DONE]\n\n"
+
+	events := collectUsage(t, sse)
+	if len(events) == 0 {
+		t.Fatal("expected at least one usage event")
+	}
+	anyAmbiguous := false
+	for _, u := range events {
+		if u.AmbiguousCacheSemantics {
+			anyAmbiguous = true
+		}
+	}
+	if !anyAmbiguous {
+		t.Fatalf("an OpenAI-input-total + native-cache-fields usage must surface AmbiguousCacheSemantics on the streaming callback")
+	}
+}
+
+// TestReaderUsagePlainOpenAINotAmbiguous is the control: a plain OpenAI
+// decomposition (or no cache fields at all) is unambiguous.
+func TestReaderUsagePlainOpenAINotAmbiguous(t *testing.T) {
+	sse := "data: {\"id\":\"c1\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"hi\"}}],\"usage\":{\"prompt_tokens\":100,\"completion_tokens\":12,\"prompt_tokens_details\":{\"cached_tokens\":60}}}\n\n" +
+		"data: [DONE]\n\n"
+
+	events := collectUsage(t, sse)
+	for _, u := range events {
+		if u.AmbiguousCacheSemantics {
+			t.Fatalf("a decomposed OpenAI usage must not be flagged ambiguous: %+v", u)
+		}
+	}
+}

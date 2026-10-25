@@ -2163,7 +2163,12 @@ func (r *SSETransformingReader) extractUsageFromMap(chunk map[string]interface{}
 		CacheMissTokens:     dCacheMiss,
 		CacheCreationTokens: dCacheCreation,
 		ReasoningTokens:     dReasoning,
-		Model:               r.responseModel(chunk),
+		// AUD-27 (NENYA-242): the flag was computed by the normalizer but
+		// never copied into the streaming callback's UsageData, so the
+		// streaming consumer's ambiguous-semantics handling (fold-note) was
+		// dead code — only the buffered path ever surfaced it.
+		AmbiguousCacheSemantics: totals.AmbiguousCacheSemantics,
+		Model:                   r.responseModel(chunk),
 	})
 }
 
