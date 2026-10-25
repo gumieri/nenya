@@ -185,8 +185,23 @@ func ResolveModelLimits(modelID string, catalog *discovery.ModelCatalog) (maxCon
 			return entries[0].MaxContext, entries[0].MaxOutput
 		}
 	}
-	if entry, ok := config.ModelRegistry[modelID]; ok {
+	// AUD-42 (NENYA-236): fold plain-ID spellings against the static
+	// registry — the limits describe the same logical model whatever the
+	// client's capitalization. Opaque IDs resolve exactly (NENYA-146).
+	if entry, ok := config.ModelRegistry[registryLimitsKey(modelID)]; ok {
 		return entry.MaxContext, entry.MaxOutput
 	}
 	return 0, 0
+}
+
+// registryLimitsKey returns the key under which modelID can be found in
+// config.ModelRegistry for LIMIT lookups: case-folded for plain IDs, exact
+// for opaque ones (NENYA-146) — an ARN or slashed ID must not match a
+// differently-cased variant, because the dispatch keeps the client's
+// spelling verbatim.
+func registryLimitsKey(modelID string) string {
+	if util.OpaqueModelID(modelID) {
+		return modelID
+	}
+	return strings.ToLower(modelID)
 }

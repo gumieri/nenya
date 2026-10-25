@@ -440,7 +440,9 @@ func resolveEffectiveMaxOutput(deps TransformDeps, finalModel string, maxOutput 
 		}
 	}
 	if effectiveMaxOutput == 0 {
-		if entry, ok := config.ModelRegistry[finalModel]; ok && entry.MaxOutput > 0 {
+		// AUD-42 (NENYA-236): fold plain-ID spellings (opaque IDs exact,
+		// NENYA-146) — see registryLimitsKey.
+		if entry, ok := config.ModelRegistry[registryLimitsKey(finalModel)]; ok && entry.MaxOutput > 0 {
 			effectiveMaxOutput = entry.MaxOutput
 		}
 	}
@@ -458,7 +460,7 @@ func resolveEffectiveMaxContext(deps TransformDeps, finalModel string) int {
 			return m.MaxContext
 		}
 	}
-	if entry, ok := config.ModelRegistry[finalModel]; ok && entry.MaxContext > 0 {
+	if entry, ok := config.ModelRegistry[registryLimitsKey(finalModel)]; ok && entry.MaxContext > 0 {
 		return entry.MaxContext
 	}
 	return 0
