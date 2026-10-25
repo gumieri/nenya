@@ -995,7 +995,11 @@ func (p *Proxy) handleBufferedAction(ctx context.Context, gw *gateway.NenyaGatew
 		}
 		gw.Logger.Debug("MCP buffered: upstream error",
 			"target", idx+1, "status", status, "model", target.Model, "body_len", len(action.body))
-		signal, retryDelay := p.handleUpstreamError(gw, idx, targets, target, cooldownDuration, agentName, action)
+		// AUD-13 (NENYA-229): the quota flag is per call and the buffered MCP
+		// path has no quota-aware exhaustion report, so it is ignored here —
+		// exactly as before, minus the process-wide store that used to leak
+		// this loop's quota state into the next chat request's classification.
+		signal, retryDelay, _ := p.handleUpstreamError(gw, idx, targets, target, cooldownDuration, agentName, action)
 		action.cancel()
 		if signal == retrySignalDone {
 			return nil, bufferedOutcome{step: bufferedStepStop, status: status}
