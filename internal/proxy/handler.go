@@ -34,10 +34,9 @@ const fallbackAuthBodyLimit = 10 << 20
 
 // Proxy handles HTTP requests and routes them to upstream AI providers.
 type Proxy struct {
-	gw                 atomic.Pointer[gateway.NenyaGateway]
-	ShutdownCtx        context.Context
-	Shutdown           atomic.Bool
-	lastQuotaExhausted atomic.Bool
+	gw          atomic.Pointer[gateway.NenyaGateway]
+	ShutdownCtx context.Context
+	Shutdown    atomic.Bool
 	// autoSaveWG tracks fire-and-forget MCP auto-save goroutines so the
 	// drain sequence can wait (bounded) for a mid-CallTool save to finish
 	// instead of killing it at process exit.

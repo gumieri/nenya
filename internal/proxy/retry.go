@@ -1005,10 +1005,12 @@ func (rl *retryLoop) prepareAndSend(idx int, target routing.UpstreamTarget, payl
 
 // handleUpstreamError wraps the proxy's handleUpstreamError method.
 func (rl *retryLoop) handleUpstreamError(idx int, target routing.UpstreamTarget, action upstreamAction) (retrySignal, time.Duration) {
-	signal, delay := rl.p.handleUpstreamError(rl.gw, idx, rl.opts.Targets, target, rl.opts.Cooldown, rl.opts.AgentName, action)
-	if rl.p.lastQuotaExhausted.Load() {
+	// AUD-13 (NENYA-229): the quota signal arrives per call. The old
+	// load-and-clear on a process-wide atomic leaked one request's quota
+	// exhaustion into a concurrent loop (and lost it for its own).
+	signal, delay, quotaNow := rl.p.handleUpstreamError(rl.gw, idx, rl.opts.Targets, target, rl.opts.Cooldown, rl.opts.AgentName, action)
+	if quotaNow {
 		rl.quotaExhausted = true
-		rl.p.lastQuotaExhausted.Store(false)
 	}
 	return signal, delay
 }
@@ -1504,11 +1506,16 @@ func handleAdapterRetryableError(ctxLogger *slog.Logger, target routing.Upstream
 }
 
 // handleUpstreamError classifies an upstream error action and returns the
-// loop signal plus any upstream-declared retry delay. retrySignalRetry marks
-// a transient/retryable failure (same-target eligible when no later target
-// remains); retrySignalContinue marks a permanent client error with a later
-// target to fail over to; retrySignalDone means the caller must surface the
-// error to the client.
+// loop signal, any upstream-declared retry delay, and whether THIS error was
+// quota exhaustion. retrySignalRetry marks a transient/retryable failure
+// (same-target eligible when no later target remains); retrySignalContinue
+// marks a permanent client error with a later target to fail over to;
+// retrySignalDone means the caller must surface the error to the client.
+//
+// The quota flag is returned per call, never stored on the Proxy (AUD-13 /
+// NENYA-229): a process-wide flag let one request's quota exhaustion be
+// consumed by (or attributed to) a concurrent request's retry loop,
+// corrupting the client-facing error_kind for both.
 func (p *Proxy) handleUpstreamError(gw *gateway.NenyaGateway,
 	idx int,
 	targets []routing.UpstreamTarget,
@@ -1516,7 +1523,7 @@ func (p *Proxy) handleUpstreamError(gw *gateway.NenyaGateway,
 	cooldownDuration time.Duration,
 	agentName string,
 	action upstreamAction,
-) (retrySignal, time.Duration) {
+) (retrySignal, time.Duration, bool) {
 	errorBody := action.body
 
 	ctxLogger := gw.Logger.With(
@@ -1541,16 +1548,13 @@ func (p *Proxy) handleUpstreamError(gw *gateway.NenyaGateway,
 		// slot consumed by the pre-dispatch guard so repeated retries cannot
 		// exhaust the probe budget and wedge the circuit.
 		gw.AgentState.CB.ReleaseHalfOpen(target.CoolKey)
-		return retrySignalRetry, concurrencyRetryDelay()
+		return retrySignalRetry, concurrencyRetryDelay(), false
 	}
 
 	if p.isRetryableStatus(gw, target.Provider, action.resp.StatusCode) {
 		logRetryableError(ctxLogger, errorBody, gw)
 		delay, isQuota := handleRetryableError429(ctxLogger, errorBody, action, cooldownDuration, target, agentName, gw)
-		if isQuota {
-			p.lastQuotaExhausted.Store(true)
-		}
-		return retrySignalRetry, delay
+		return retrySignalRetry, delay, isQuota
 	}
 
 	// Retryable 4xx: built-in body patterns, provider-configured phrases, and
@@ -1559,14 +1563,11 @@ func (p *Proxy) handleUpstreamError(gw *gateway.NenyaGateway,
 	// regardless of how many targets remain: Run advances when a later
 	// target exists and re-attempts this one when it is the last.
 	if p.recordRetryable4xx(gw, ctxLogger, target, action, errorBody) {
-		return retrySignalRetry, 0
+		return retrySignalRetry, 0, false
 	}
 
 	if retryable, isQuota := handleAdapterRetryableError(ctxLogger, target, action, cooldownDuration, gw); retryable {
-		if isQuota {
-			p.lastQuotaExhausted.Store(true)
-		}
-		return retrySignalRetry, 0
+		return retrySignalRetry, 0, isQuota
 	}
 
 	defer action.cancel()
@@ -1585,7 +1586,7 @@ func (p *Proxy) handleUpstreamError(gw *gateway.NenyaGateway,
 	if idx+1 < len(targets) && isModelNotFoundError(action.resp.StatusCode, errorBody) {
 		gw.AgentState.RecordFailureWithStatus(target, action.resp.StatusCode, string(errorBody))
 		logWarnRetryable(ctxLogger, errorBody, gw, "model not found on this target, trying next target")
-		return retrySignalContinue, 0
+		return retrySignalContinue, 0, false
 	}
 	// A permanent client-class error records no circuit outcome; release the
 	// half-open probe slot consumed by the pre-dispatch guard so repeated
@@ -1593,11 +1594,11 @@ func (p *Proxy) handleUpstreamError(gw *gateway.NenyaGateway,
 	gw.AgentState.CB.ReleaseHalfOpen(target.CoolKey)
 	if idx+1 < len(targets) {
 		logWarnRetryable(ctxLogger, errorBody, gw, "non-retryable upstream error, trying next target")
-		return retrySignalContinue, 0
+		return retrySignalContinue, 0, false
 	}
 
 	logErrorRetryable(ctxLogger, errorBody, gw, "non-retryable upstream error, no more targets")
-	return retrySignalDone, 0
+	return retrySignalDone, 0, false
 }
 
 // recordRetryable4xx classifies a 4xx body and, when retryable, logs the
