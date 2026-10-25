@@ -213,7 +213,13 @@ func (m *AccountManager) ReportSuccess(provider, accountID string) error {
 	}
 
 	if m.storage != nil {
-		account := pool.GetAccount(accountID)
+		// AUD-43 (NENYA-232): persist a SNAPSHOT. GetAccount returns the
+		// live pointer with the pool lock already released, so SaveAccount
+		// would marshal the maps while a concurrent ApplyError/ReportSuccess
+		// mutates them — the exact hazard AccountSnapshot's doc names. The
+		// ApplyError path above has always used the snapshot; this path
+		// simply predates it.
+		account := pool.AccountSnapshot(accountID)
 		if account != nil {
 			return m.storage.SaveAccount(provider, account)
 		}
