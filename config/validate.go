@@ -1130,6 +1130,7 @@ func ValidateConfigReferences(cfg *Config, secrets *SecretsConfig, logger *slog.
 	}
 	var errs []string
 	errs = append(errs, validateStickySessionTTL(cfg.Agents)...)
+	errs = append(errs, validateAgentNames(cfg.Agents)...)
 	errs = append(errs, validateAgentBreakerThresholds(cfg.Agents)...)
 	errs = append(errs, validateAgentSlowCallThresholds(cfg.Agents)...)
 	errs = append(errs, validateAgentMCPReferences(cfg)...)
@@ -2048,4 +2049,25 @@ func serverHasHeader(headers map[string]string, name string) bool {
 		}
 	}
 	return false
+}
+
+// validateAgentNames rejects agent names that cannot round-trip through the
+// circuit key `agent:provider:model` (AUD-40 / NENYA-238): a colon in the
+// agent name made both positional key parsers misread the key — the
+// per-agent breaker threshold lookup (first field) missed the agent and
+// silently fell back to the defaults, and the backoff metric labels
+// (SplitN 3) scrambled agent/provider/model. Empty names are rejected for
+// the same reason: they cannot be distinguished from the unset case.
+func validateAgentNames(agents map[string]AgentConfig) []string {
+	var errs []string
+	for name := range agents {
+		if name == "" {
+			errs = append(errs, "agent name must not be empty")
+			continue
+		}
+		if strings.Contains(name, ":") {
+			errs = append(errs, fmt.Sprintf("agents[%q]: agent name must not contain %q — the circuit key agent:provider:model uses colons as separators, so per-agent breaker thresholds and backoff metrics would silently misattribute (rename the agent)", name, ":"))
+		}
+	}
+	return errs
 }
