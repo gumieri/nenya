@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+
+	"github.com/nenya/internal/util"
 )
 
 // JSONC-splicing config editor (AUD-45 / NENYA-224).
@@ -273,7 +275,10 @@ func spliceConfigKey(doc []byte, dottedKey string, value any) ([]byte, error) {
 
 		if depth == len(parts)-1 {
 			// Existing leaf: replace exactly its span.
-			out := make([]byte, 0, len(doc)-(ve-vs)+len(encoded))
+			// util.AddCap: CodeQL flags the capacity sum as a potential
+			// overflow; the subtraction above cannot underflow (vs..ve is a
+			// span within doc), the addition is clamped.
+			out := make([]byte, 0, util.AddCap(len(doc)-(ve-vs), len(encoded)))
 			out = append(out, doc[:vs]...)
 			out = append(out, encoded...)
 			out = append(out, doc[ve:]...)
@@ -323,7 +328,7 @@ func insertMember(doc []byte, bodyStart int, member []byte, depth int, indentUni
 		separator = ","
 	}
 	insertion := separator + "\n" + strings.Repeat(indentUnit, depth+1) + string(member)
-	out := make([]byte, 0, len(doc)+len(insertion))
+	out := make([]byte, 0, util.AddCap(len(doc), len(insertion)))
 	out = append(out, doc[:offset]...)
 	out = append(out, insertion...)
 	out = append(out, doc[offset:]...)
