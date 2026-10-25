@@ -805,7 +805,7 @@ func ensureOpencodeSessionHeader(gw *gateway.NenyaGateway, r *http.Request, req 
 	if id != "" {
 		r.Header.Set(opencodeSessionHeader, id)
 		r.Header.Set(opencodeSessionIDHeader, id)
-		if !clientSupplied && gw.Logger != nil && gw.Logger.Enabled(context.Background(), slog.LevelDebug) {
+		if !clientSupplied && gw.Logger != nil && gw.Logger.Enabled(r.Context(), slog.LevelDebug) {
 			gw.Logger.Debug("synthesized opencode session header", "session_id", id, "model", req.ModelName)
 		}
 	}
