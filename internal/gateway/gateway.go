@@ -161,6 +161,9 @@ type NenyaGateway struct {
 	MCPSecurityChain *pipeline.InterceptorChain
 	SessionRouter    *routing.SessionRouter
 	tokMu            sync.RWMutex
+	// lockSweeper removes expired model locks for the gateway's lifetime
+	// (AUD-44 / NENYA-230); stopped in Close.
+	lockSweeper *auth.LockSweeper
 }
 
 // New creates a new NenyaGateway with the given configuration, secrets,
@@ -644,7 +647,6 @@ func buildGateway(cfg config.Config, secrets *config.SecretsConfig, secureClient
 			pool := auth.NewAccountPool(name, accounts)
 			gw.AccountManager.RegisterPool(name, pool)
 		}
-
 		if p, ok := providers[name]; ok {
 			// Per-dimension resolution: an explicit provider value wins
 			// (0 disables the dimension for this provider); nil inherits
@@ -668,6 +670,13 @@ func buildGateway(cfg config.Config, secrets *config.SecretsConfig, secureClient
 				"tpm", providerTPM)
 		}
 	}
+
+	// AUD-44 (NENYA-230): sweep expired model locks (and their backoff
+	// levels) for the gateway's lifetime. Without it, every (account, model)
+	// pair that ever received a model-scoped lock stayed in memory forever.
+	// The sweeper dies with the gateway: Close stops it, and the reload
+	// drain path calls Close on the replaced gateway.
+	gw.lockSweeper = auth.NewLockSweeper(gw.AccountManager, auth.DefaultLockSweepInterval)
 	return gw
 }
 
@@ -1231,6 +1240,9 @@ func newResponseCache(cfg config.Config, logger *slog.Logger, metrics *infra.Met
 func (g *NenyaGateway) Close() {
 	if g.ResponseCache != nil {
 		g.ResponseCache.Stop()
+	}
+	if g.lockSweeper != nil {
+		g.lockSweeper.Stop()
 	}
 	if g.QuotaFetcher != nil {
 		g.QuotaFetcher.Stop()
