@@ -1516,6 +1516,13 @@ func handleAdapterRetryableError(ctxLogger *slog.Logger, target routing.Upstream
 // NENYA-229): a process-wide flag let one request's quota exhaustion be
 // consumed by (or attributed to) a concurrent request's retry loop,
 // corrupting the client-facing error_kind for both.
+//
+// Cancellation contract (AUD-49 / NENYA-235): the CALLER owns action.cancel
+// — the chat loop cancels before entry (handleActionError, once the error
+// body is consumed), the MCP buffered loop right after return. This function
+// must not assume the action is still live; historically a redundant
+// `defer action.cancel()` sat on the terminal paths here and panicked any
+// caller (or test) that passed a cancel-less action.
 func (p *Proxy) handleUpstreamError(gw *gateway.NenyaGateway,
 	idx int,
 	targets []routing.UpstreamTarget,
@@ -1570,7 +1577,8 @@ func (p *Proxy) handleUpstreamError(gw *gateway.NenyaGateway,
 		return retrySignalRetry, 0, isQuota
 	}
 
-	defer action.cancel()
+	// No action.cancel() here (AUD-49 / NENYA-235): both callers own the
+	// cancel — see the contract in the doc comment above.
 	// A model-not-found from the upstream is a target fault, not a malformed
 	// client request (NENYA-168): the model may simply be absent from this
 	// provider while a later target serves it. Cool the target down (and lock
