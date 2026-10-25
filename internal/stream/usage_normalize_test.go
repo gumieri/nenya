@@ -32,12 +32,29 @@ func TestNormalizeUsageTotals(t *testing.T) {
 			want: UsageTotals{Prompt: 105, Completion: 20, Total: 120, CacheHit: 60, CacheMiss: 40, CacheCreation: 5, TotalReported: true},
 		},
 		{
-			name: "openai nested cached details",
+			name: "openai nested cached details derive the miss (AUD-28)",
 			usage: map[string]interface{}{
 				"prompt_tokens": 100.0, "completion_tokens": 20.0,
 				"prompt_tokens_details": map[string]interface{}{"cached_tokens": 80.0},
 			},
-			want: UsageTotals{Prompt: 100, Completion: 20, Total: 120, CacheHit: 80},
+			// Hit-rate invariant: hit + miss + creation == prompt, so the
+			// miss is the derived remainder (80 + 20 == 100), not 0.
+			want: UsageTotals{Prompt: 100, Completion: 20, Total: 120, CacheHit: 80, CacheMiss: 20},
+		},
+		{
+			name: "openai explicit miss is honored and consistent",
+			usage: map[string]interface{}{
+				"prompt_tokens": 105.0, "completion_tokens": 20.0,
+				"prompt_cache_hit_tokens": 60.0,
+			},
+			want: UsageTotals{Prompt: 105, Completion: 20, Total: 125, CacheHit: 60, CacheMiss: 45},
+		},
+		{
+			name: "openai without a decomposition reports no dimensions",
+			usage: map[string]interface{}{
+				"prompt_tokens": 100.0, "completion_tokens": 20.0,
+			},
+			want: UsageTotals{Prompt: 100, Completion: 20, Total: 120},
 		},
 		{
 			name: "openai reasoning is a subset of completion",
@@ -100,7 +117,7 @@ func TestNormalizeUsageTotals(t *testing.T) {
 			},
 			want: UsageTotals{
 				Prompt: 100, Completion: 20, Total: 120,
-				CacheHit: 60, CacheCreation: 10,
+				CacheHit: 60, CacheMiss: 30, CacheCreation: 10,
 			},
 		},
 		{

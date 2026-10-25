@@ -270,5 +270,17 @@ func (f usageFields) openAITotals(totals UsageTotals) UsageTotals {
 	totals.Completion = f.openAIOutput
 	totals.Total = f.openAITotal
 	totals.TotalReported = f.openAITotal != 0
+	// AUD-28 (NENYA-240): keep the hit-rate invariant — when the upstream
+	// decomposes the cache dimensions but reports no explicit miss, derive
+	// the miss as the uncached remainder of Prompt (hit + miss + creation
+	// == prompt), exactly like the anthropic and gemini branches. An
+	// explicitly reported miss always wins (it is the provider's own
+	// number). Pre-fix CacheMiss stayed 0 for OpenAI-shape decompositions
+	// without an explicit miss, so miss counters and hit-rate ratios read
+	// 100% hits for partially-cached traffic. With no decomposition there
+	// is nothing to derive and nothing reported: both stay zero.
+	if f.cacheMiss == 0 && (totals.CacheHit > 0 || totals.CacheCreation > 0) {
+		totals.CacheMiss = max(0, totals.Prompt-totals.CacheHit-totals.CacheCreation)
+	}
 	return totals
 }
