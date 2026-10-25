@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -803,6 +804,15 @@ func (p *Proxy) handleModels(gw *gateway.NenyaGateway, w http.ResponseWriter, r 
 	}
 
 	models = append(models, catalogModelEntries(gw, seen)...)
+
+	// AUD-18 (NENYA-239): deterministic listing order. Agents are a map and
+	// the catalog iterates its own map, so the assembled order varied per
+	// request — the Anthropic dialect's first_id/last_id flapped between
+	// calls and clients diffing the listing saw phantom churn. IDs are
+	// unique (the seen-set dedupes), so sorting by ID is total.
+	slices.SortFunc(models, func(a, b modelEntry) int {
+		return strings.Compare(a.ID, b.ID)
+	})
 
 	w.Header().Set("Content-Type", "application/json")
 	if strings.EqualFold(r.URL.Query().Get("dialect"), "anthropic") {
