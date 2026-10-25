@@ -12,6 +12,7 @@ import (
 	"github.com/nenya/internal/gateway"
 	"github.com/nenya/internal/pipeline"
 	"github.com/nenya/internal/routing"
+	"github.com/nenya/internal/util"
 )
 
 // summarizeMessages compresses the messages array using the configured engine chain.
@@ -60,7 +61,7 @@ func (p *Proxy) summarizeMessages(ctx context.Context, gw *gateway.NenyaGateway,
 	// removed and the result enveloped as inert data.
 	// A fresh slice: leading shares the caller's backing array, so appending in
 	// place would overwrite the caller's first summarized message.
-	summarized := make([]interface{}, 0, len(leading)+1)
+	summarized := make([]interface{}, 0, util.AddCap(len(leading), 1))
 	summarized = append(summarized, leading...)
 	summarized = append(summarized, map[string]interface{}{
 		"role":    "assistant",

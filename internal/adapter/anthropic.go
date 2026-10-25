@@ -454,7 +454,7 @@ func (a *AnthropicAdapter) injectMessageCache(anthropic map[string]interface{}, 
 		// instead of downgrading to the configured default.
 		return nil
 	}
-	claimed := make(map[string]interface{}, len(lastBlock)+1)
+	claimed := make(map[string]interface{}, util.AddCap(len(lastBlock), 1))
 	for k, v := range lastBlock {
 		claimed[k] = v
 	}

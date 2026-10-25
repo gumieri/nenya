@@ -1075,7 +1075,9 @@ func collectStatsLines(path []string, node interface{}, lines *[]string) {
 		return
 	}
 	for k, v := range m {
-		child := make([]string, len(path)+1)
+		// util.AddCap: CodeQL flags len(path)+1 as an allocation size that
+		// could overflow; the clamp keeps the standard guard in one place.
+		child := make([]string, util.AddCap(len(path), 1))
 		copy(child, path)
 		child[len(path)] = statsPathSegment(k)
 		collectStatsLines(child, v, lines)

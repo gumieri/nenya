@@ -4,7 +4,9 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
-_No unreleased changes._
+### Fixed
+
+- **CodeQL-flagged allocation sites hardened (NENYA-228)**: the five `make()` capacity computations CodeQL flagged for potential integer overflow now use the overflow-safe `util.AddCap` clamp — the `/statsz` line collector (`internal/proxy/handler.go`), the cache-breakpoint claim copy (`internal/adapter/anthropic.go`), the context-limit summary splice (`internal/proxy/context_limit.go`), and the two byte-splice allocations in `nenya config set`. Behavior is unchanged for every reachable input (the overflow case is unreachable at 64-bit scale); the guards exist to keep the static-analysis gate clean. The three `go/weak-sensitive-data-hashing` alerts were dismissed as false positives: SHA-256 there hashes request bodies, `agent:model` identity strings, and API tokens purely as idempotency/cache-namespace keys — never for secret verification, where a deliberately slow hash would be required.
 
 ## [v0.18.0] - 2026-10-23
 
