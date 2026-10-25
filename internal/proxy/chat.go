@@ -1346,21 +1346,32 @@ func (p *Proxy) handleChatCompletions(gw *gateway.NenyaGateway, w http.ResponseW
 	// traceparent back so clients can correlate. The traced context flows
 	// to every stage via r (WithContext). Disabled: fully inert (no
 	// derivation, no spans, no header, no rand reads).
+	// requestTrace, req and herr are read by the summary defer below: the
+	// summary covers dispatch-bearing requests only (AUD-26 / NENYA-234) —
+	// body-read failures and the cache-hit sentinel (nothing dispatched) do
+	// not emit a misleading zero-stage summary.
+	var requestTrace *tracing.RequestTrace
+	var (
+		req  *chatRequest
+		herr *httpError
+	)
+	defer func() {
+		if req != nil && herr == nil {
+			requestTrace.Finish()
+		}
+	}()
 	if !gw.Config.Governance.TracingEnabled() {
 		r = r.WithContext(tracing.Disable(r.Context()))
 	} else {
 		traceName := strings.TrimPrefix(r.URL.Path, "/v1/")
-		ctx, requestTrace := tracing.StartRequest(r.Context(), gw.Logger, r.Header.Get("Traceparent"), traceName)
+		ctx, rt := tracing.StartRequest(r.Context(), gw.Logger, r.Header.Get("Traceparent"), traceName)
 		r = r.WithContext(ctx)
 		if tp := tracing.OutgoingTraceparent(r.Context()); tp != "" {
 			w.Header().Set("Traceparent", tp)
 		}
-		// The summary covers dispatch-bearing requests only: registered
-		// after validateChatRequest so body-read failures and the cache-hit
-		// sentinel (nothing dispatched) do not emit a misleading summary.
-		defer requestTrace.Finish()
+		requestTrace = rt
 	}
-	req, herr := p.validateChatRequest(w, r, gw, apiKey)
+	req, herr = p.validateChatRequest(w, r, gw, apiKey)
 	if herr != nil {
 		if herr.Code == http.StatusNoContent {
 			// Cache-hit sentinel: nothing to render.
