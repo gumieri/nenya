@@ -337,8 +337,17 @@ func (sr *stallReader) Stop() {
 
 // DrainPending reads any remaining buffered data from the reader with the given timeout.
 // Returns the number of bytes drained (including remainBuf and drained channel messages) and any error.
+//
+// DrainPending fully retires the reader: the stall timer is stopped
+// (AUD-48 / NENYA-231) and the stall channel closed. Pre-fix only Stop()
+// stopped the timer, so a caller that only drained (the continuation path's
+// finishStreamAttempt) left it armed for up to a full stall timeout after
+// the response finished — the armed callback pins the reader, and a late
+// read-loop delivery re-arms it (stalled was never set, so serveResult
+// happily Reset the timer). Callers that Stop first are unaffected: Stop is
+// idempotent.
 func (sr *stallReader) DrainPending(timeout time.Duration) (int, error) {
-	sr.closeOnce.Do(func() { close(sr.stallCh) })
+	sr.Stop()
 
 	total := 0
 	sr.mu.Lock()
