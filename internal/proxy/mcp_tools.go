@@ -2,6 +2,7 @@ package proxy
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -134,6 +135,130 @@ func (b *bufferedSSE) usageChunk() map[string]interface{} {
 // replayBufferedResponse writes a buffered SSE response to the client.
 // This is used during MCP tool call loops to replay the assistant message
 // and tool calls before sending tool results.
+// convertBufferedForReplay re-renders the buffer's SSE frames into the
+// client's wire format when the serving target's format differs from it
+// (issue 723f3db1): the chat paths translate every response target→client,
+// but the MCP replay wrote the upstream's NATIVE frames verbatim — an OpenAI
+// client of an Anthropic-format chain received message_start/
+// content_block_delta frames it cannot parse, and an Anthropic client of an
+// OpenAI chain received chunks with no message_stop. The same resolver the
+// chat streaming path uses picks the transformer; frames are fed in order
+// (the transformers are stateful across a stream) and the held tail is
+// pulled at the end (stream.TailFinisher, AUD-29). A matching format (or no
+// resolver verdict) replays verbatim; a transformer error also falls back to
+// the verbatim buffer — replaying what the upstream said — rather than
+// dropping the answer.
+func (p *Proxy) convertBufferedForReplay(gw *gateway.NenyaGateway, buf *bufferedSSE, sourceFormat string, apiKey *config.ApiKey) []byte {
+	if buf == nil || len(buf.rawBytes) == 0 {
+		return buf.rawBytes
+	}
+	target := buf.servingTarget
+	if target.Format == "" || target.Format == sourceFormat {
+		return buf.rawBytes
+	}
+	tr := p.resolveTransformer(gw, target, sourceFormat, scopedThoughtSigCache(gw, apiKey))
+	if tr == nil {
+		return buf.rawBytes
+	}
+	converted, ok := p.convertReplayFrames(tr, buf.rawBytes)
+	if !ok {
+		return buf.rawBytes
+	}
+	return converted
+}
+
+// convertReplayFrames drives a stateful transformer over the buffer's SSE
+// data frames in order and frames the converted events for the client. A
+// transformer error aborts with ok=false (the caller falls back to the
+// verbatim buffer).
+func (p *Proxy) convertReplayFrames(tr stream.ResponseTransformer, raw []byte) ([]byte, bool) {
+	var out []byte
+	for _, line := range strings.Split(string(raw), "\n") {
+		value, isData := stream.SSEDataField([]byte(line))
+		if !isData {
+			continue
+		}
+		payload := strings.TrimSpace(string(value))
+		if payload == "" {
+			continue
+		}
+		converted, ok := p.convertReplayFrame(tr, payload)
+		if !ok {
+			return nil, false
+		}
+		if converted == "[DONE]" {
+			out = append(out, "data: [DONE]\n\n"...)
+			continue
+		}
+		out = appendSSEEvents(out, []byte(converted))
+	}
+	out = appendConvertedTail(tr, out)
+	return out, true
+}
+
+// convertReplayFrame transforms one data payload. The "[DONE]" sentinel and
+// a terminator the transformer renders itself (the forward transformer emits
+// it on message_stop) both come back as the sentinel string.
+func (p *Proxy) convertReplayFrame(tr stream.ResponseTransformer, payload string) (string, bool) {
+	// A "[DONE]" payload is fed through like any frame: the transformer
+	// decides — a held tail is flushed in its place (the converted Anthropic
+	// stream terminates at message_stop), otherwise the sentinel passes
+	// through for OpenAI clients.
+	converted, err := tr.TransformSSEChunk(context.Background(), []byte(payload))
+	if err != nil && !errors.Is(err, stream.ErrEventConsumed) {
+		return "", false
+	}
+	return string(converted), true
+}
+
+// appendSSEEvents frames each JSON event of a transformer's (possibly
+// multi-event) output as its own "data: " frame.
+func appendSSEEvents(out, events []byte) []byte {
+	dec := json.NewDecoder(bytes.NewReader(events))
+	for dec.More() {
+		var evt map[string]interface{}
+		if err := dec.Decode(&evt); err != nil {
+			return out
+		}
+		reencoded, err := json.Marshal(evt)
+		if err != nil {
+			return out
+		}
+		out = append(out, "data: "...)
+		out = append(out, reencoded...)
+		out = append(out, '\n', '\n')
+	}
+	return out
+}
+
+// appendConvertedTail pulls the transformer's held tail (stream.TailFinisher,
+// AUD-29) and appends its events. A transformer without a tail is unchanged.
+func appendConvertedTail(tr stream.ResponseTransformer, out []byte) []byte {
+	finisher, ok := tr.(stream.TailFinisher)
+	if !ok {
+		return out
+	}
+	tail := finisher.FinishTail()
+	if len(tail) == 0 {
+		return out
+	}
+	dec := json.NewDecoder(bytes.NewReader(tail))
+	for dec.More() {
+		var evt map[string]interface{}
+		if err := dec.Decode(&evt); err != nil {
+			return append(out, tail...)
+		}
+		reencoded, err := json.Marshal(evt)
+		if err != nil {
+			return append(out, tail...)
+		}
+		out = append(out, "data: "...)
+		out = append(out, reencoded...)
+		out = append(out, '\n', '\n')
+	}
+	return out
+}
+
 func replayBufferedResponse(w http.ResponseWriter, buf *bufferedSSE, gw *gateway.NenyaGateway, providerName string, logger *slog.Logger) {
 	if len(buf.rawBytes) == 0 {
 		logger.Warn("MCP loop: empty buffered response, sending error")
