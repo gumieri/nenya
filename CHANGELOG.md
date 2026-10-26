@@ -6,6 +6,8 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- **The `[DONE]` sentinel check is single-sourced (NENYA-282, AUD-65)**: four spellings of the comparison (string `==`, `bytes.Equal` raw, `bytes.Equal` trimmed, plus a hand-derived canonical frame) existed across the reader, both transformers, the proxy probe, error normalizer, and MCP paths. `stream.DonePayload` (the const) and `stream.IsDonePayload` (the tolerant trimmed check) are now the only spellings; `canonicalDoneFrame` derives from the const. Behavior change: whitespace-padded sentinels are recognized everywhere (pre-fix only some sites tolerated padding).
+
 - **`SafeMicroUSD` / `SafeUSDCents` direct unit tests (AUD-70)**: the overflow-safe cost conversions had no direct tests. Pinned: NaN/±Inf/overflow → `ok=false`, rounding (half away), negatives, and the conservative `>=` guard (exact threshold rejected, just-under converts — the tests initially assumed the threshold converted and the implementation's contract won).
 
 - **`isModelScopedQuotaSignal` boundary + dead condition (NENYA-280, AUD-73)**: the `model_name` spelling matched any substring (`model_names` counted as the field); it is now boundary-pinned via a token check. The model-id signal carried an undocumented extra requirement (the literal word "model" in the message) that made ids like `gpt-4` unscoped despite the doc specifying id-token + rate/quota context; the id is now matched as a **whole token** (replacing the crude word heuristic — and its pinned single-letter false positive `m` in "many"), which also subsumes the redundant `model != ""` guard.

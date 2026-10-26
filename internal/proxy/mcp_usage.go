@@ -55,7 +55,7 @@ func (b *bufferedSSE) usageTotals() (stream.UsageTotals, bool) {
 			line = string(value)
 		}
 		line = strings.TrimSpace(line)
-		if line == "" || line == "[DONE]" || !strings.Contains(line, "usage") {
+		if line == "" || line == stream.DonePayload || !strings.Contains(line, "usage") {
 			continue
 		}
 		var chunk map[string]interface{}

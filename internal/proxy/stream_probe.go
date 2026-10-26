@@ -74,7 +74,7 @@ func classifyStreamHead(chunk []byte) streamHeadKind {
 		if !isData || len(data) == 0 {
 			return true
 		}
-		if bytes.Equal(data, []byte("[DONE]")) {
+		if stream.IsDonePayload(data) {
 			verdict = headNormal
 			return false
 		}
@@ -196,7 +196,7 @@ const (
 // undetermined and keeps the buffer open; the byte budget bounds how long that
 // can last.
 func classifyBootstrapLine(data []byte) bootstrapVerdict {
-	if bytes.Equal(data, []byte("[DONE]")) {
+	if stream.IsDonePayload(data) {
 		return bootstrapUndetermined
 	}
 	parsed := jsonMapPool.Get().(map[string]any)

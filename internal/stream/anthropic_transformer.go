@@ -368,7 +368,7 @@ func (t *AnthropicTransformer) handleMessageDelta(event map[string]interface{}) 
 func (t *AnthropicTransformer) handleMessageStop() ([]byte, error) {
 	t.streamDone = true
 	t.blockMap = make(map[int]*anthropicBlock)
-	return []byte("[DONE]"), nil
+	return []byte(DonePayload), nil
 }
 
 // Reset clears all transformer state for reuse with a new stream.
