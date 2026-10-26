@@ -6,6 +6,8 @@ All notable changes to this project will be documented in this file.
 
 ### Removed
 
+- **The `completeConnect` double closed-check (AUD-57)**: the second, lock-free `closed.Load()` was a dead duplicate of the mutex-guarded check a few instructions earlier — Close stores `closed` atomically *without* the mutex, so neither check is tighter than the other, both returned `ErrTransportClosed`, and the residual window is masked by `Ready()`'s `!closed` mask regardless. Race coverage unchanged (`client_recovery_race_test.go`).
+
 - **`config.DefaultNonChatModels` and `config.MaxSlowCallThresholdSeconds` unexported (AUD-56)**: both were config-package exports with zero `config.`-qualified users — the copy helper is now `defaultNonChatModelsCopy` and the cap `maxSlowCallThresholdSeconds`.
 
 - **`pipeline.ClassifyHarnessEnvelope` unexported (AUD-55)**: exported with zero external callers — its only consumer is `harnessSurface` in the same file. Now package-internal (`classifyHarnessEnvelope`).

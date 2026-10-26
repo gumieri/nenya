@@ -434,12 +434,10 @@ func (t *HTTPTransport) completeConnect() error {
 		// Close won the race between our closed check and completion; Close
 		// is guaranteed to tear the stream down via streamCancel and its
 		// re-snapshot. Report failure, not success, on a closed transport.
-		return ErrTransportClosed
-	}
-	if t.closed.Load() {
-		// Best-effort window shrink, not a guarantee: Close may still
-		// interleave before the store below. Ready() masks with !closed,
-		// so the flag cannot observably lie.
+		// (AUD-57: a second lock-free load here was a dead duplicate — Close
+		// stores `closed` atomically WITHOUT the mutex, so neither check is
+		// tighter than the other, both returned the same error, and the
+		// residual window is masked by Ready()'s !closed mask anyway.)
 		return ErrTransportClosed
 	}
 	// The stream may have died between the goroutine spawn and here; never
