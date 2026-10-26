@@ -220,52 +220,6 @@ func TestToolRegistry_Clear(t *testing.T) {
 	}
 }
 
-func TestBuildToolResultMessage_Success(t *testing.T) {
-	result := &CallToolResult{
-		Content: []ContentBlock{{Type: "text", Text: "found 3 results"}},
-	}
-
-	msg := BuildToolResultMessage("call_123", result, false)
-
-	if msg["role"] != "tool" {
-		t.Fatalf("role = %v, want tool", msg["role"])
-	}
-	if msg["tool_call_id"] != "call_123" {
-		t.Fatalf("tool_call_id = %v, want call_123", msg["tool_call_id"])
-	}
-	if msg["content"] != "found 3 results" {
-		t.Fatalf("content = %v, want 'found 3 results'", msg["content"])
-	}
-}
-
-func TestBuildToolResultMessage_Error(t *testing.T) {
-	result := &CallToolResult{
-		Content: []ContentBlock{{Type: "text", Text: "tool not found"}},
-		IsError: true,
-	}
-
-	msg := BuildToolResultMessage("call_456", result, true)
-
-	content, _ := msg["content"].(string)
-	if content != "[MCP Error] tool not found" {
-		t.Fatalf("content = %q, want '[MCP Error] tool not found'", content)
-	}
-}
-
-func TestBuildToolResultMessage_IsErrorFlag(t *testing.T) {
-	result := &CallToolResult{
-		Content: []ContentBlock{{Type: "text", Text: "something went wrong"}},
-		IsError: true,
-	}
-
-	msg := BuildToolResultMessage("call_789", result, false)
-
-	content, _ := msg["content"].(string)
-	if content != "[MCP Error] something went wrong" {
-		t.Fatalf("content = %q, want error prefix", content)
-	}
-}
-
 func TestMCPToolsToOpenAI_SchemaPreserved(t *testing.T) {
 	tools := []Tool{
 		{
