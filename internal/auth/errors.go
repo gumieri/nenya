@@ -70,18 +70,21 @@ type ErrorDecision struct {
 // (NENYA-170): such a signal must bench only that model, not the
 // account's other models. Deliberately tight — per-model quota field
 // spellings: "per-model"/"permodel" (Gemini's
-// GenerateRequestsPerDayPerProjectPerModel family), "model_name", a
-// `"model":` JSON field, or the model id itself — the latter two only
-// alongside a rate/quota context word, since aggregators echo the model
-// as request metadata for ACCOUNT-scoped limits. An unrecognized body
-// fails safe to the account scope. The signal is only as trustworthy as
-// the provider: a crafted body can keep a dead credential un-benched.
+// GenerateRequestsPerDayPerProjectPerModel family), the "model_name" JSON
+// key (boundary-pinned: a longer identifier containing the spelling is not
+// the field), a `"model":` JSON field, or the model id itself as a whole
+// token — the latter two only alongside a rate/quota context word, since
+// aggregators echo the model as request metadata for ACCOUNT-scoped limits.
+// An unrecognized body fails safe to the account scope. The signal is only
+// as trustworthy as the provider: a crafted body can keep a dead credential
+// un-benched.
 func isModelScopedQuotaSignal(message, model string) bool {
 	msg := strings.ToLower(message)
 	if strings.Contains(msg, "per-model") || strings.Contains(msg, "permodel") {
 		return true
 	}
-	if strings.Contains(msg, "model_name") {
+	// AUD-73 (NENYA-280): boundary-pinned — "model_names" is not the field.
+	if containsToken(msg, "model_name") {
 		return true
 	}
 	rateContext := strings.Contains(msg, "quota") || strings.Contains(msg, "limit") ||
@@ -92,7 +95,38 @@ func isModelScopedQuotaSignal(message, model string) bool {
 	if strings.Contains(msg, `"model":`) {
 		return true
 	}
-	return model != "" && strings.Contains(msg, "model") && strings.Contains(msg, strings.ToLower(model))
+	// The model-id signal is the id as a whole token next to the rate/quota
+	// context — exactly the documented contract. The empty token never
+	// matches, which subsumes the old redundant model != "" guard.
+	return containsToken(msg, strings.ToLower(model))
+}
+
+// containsToken reports whether s contains tok delimited by non-identifier
+// bytes on both sides (start/end of string count as delimiters), so a short
+// token never matches inside a longer word and a longer identifier is never
+// mistaken for the token itself.
+func containsToken(s, tok string) bool {
+	if tok == "" {
+		return false
+	}
+	for i := 0; i+len(tok) <= len(s); {
+		idx := strings.Index(s[i:], tok)
+		if idx < 0 {
+			return false
+		}
+		at := i + idx
+		before := at == 0 || !isIdentifierByte(s[at-1])
+		after := at+len(tok) == len(s) || !isIdentifierByte(s[at+len(tok)])
+		if before && after {
+			return true
+		}
+		i = at + 1
+	}
+	return false
+}
+
+func isIdentifierByte(b byte) bool {
+	return b == '_' || (b >= 'a' && b <= 'z') || (b >= 'A' && b <= 'Z') || (b >= '0' && b <= '9')
 }
 
 // ClassifyError returns an ErrorDecision based on the HTTP status code and message.

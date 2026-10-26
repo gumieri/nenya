@@ -1068,6 +1068,14 @@ func TestApplyErrorForModelScopesCooldown(t *testing.T) {
 		{"json model field without rate context", `{"model": "m"}`, "m", false},
 		{"empty model", "rate limit for model x", "", false},
 		{"unrecognized body", "too many requests", "m", false},
+		// AUD-73 (NENYA-280): the model_name spelling is boundary-pinned —
+		// a longer identifier containing it is not a field match.
+		{"model_names is not the field", "your model_names quota", "m", false},
+		// AUD-73 (NENYA-280): the model-id signal needs only the id as a
+		// token alongside a rate/quota context word — exactly what the doc
+		// specifies. Pre-fix an undocumented extra requirement (the literal
+		// word "model" in the message) made ids like gpt-4 unscoped.
+		{"model id + quota context", "quota exceeded for gpt-4", "gpt-4", true},
 	}
 	for _, tc := range cases {
 		if got := isModelScopedQuotaSignal(tc.message, tc.model); got != tc.want {
