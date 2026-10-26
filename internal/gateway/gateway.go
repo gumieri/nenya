@@ -1613,7 +1613,7 @@ func (g *NenyaGateway) buildMCPToolIndex(ctx context.Context, logger *slog.Logge
 
 		g.SetMCPServerStatus(name, MCPServerStatusDiscovering, nil)
 		g.Metrics.RecordMCPServerStatus(name, MCPServerStatusDiscovering)
-		initCtx, cancel := contextWithTimeout(ctx, 10*time.Second)
+		initCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 		err := client.Initialize(initCtx)
 		cancel()
 		if err != nil {
@@ -1637,7 +1637,7 @@ func (g *NenyaGateway) buildMCPToolIndex(ctx context.Context, logger *slog.Logge
 			continue
 		}
 
-		toolsCtx, cancel := contextWithTimeout(ctx, 15*time.Second)
+		toolsCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
 		tools, err := client.RefreshTools(toolsCtx)
 		cancel()
 		if err != nil {
@@ -1656,23 +1656,6 @@ func (g *NenyaGateway) buildMCPToolIndex(ctx context.Context, logger *slog.Logge
 			"tools", len(tools),
 			"server_version", client.ServerInfo().Version)
 	}
-}
-
-func (g *NenyaGateway) GetMCPClientsForAgent(agentName string) map[string]*mcp.Client {
-	servers := g.AgentMCPServers(agentName)
-	if len(servers) == 0 {
-		return nil
-	}
-	clients := make(map[string]*mcp.Client, len(servers))
-	for _, serverName := range servers {
-		if client, ok := g.MCPClients[serverName]; ok {
-			clients[serverName] = client
-		}
-	}
-	if len(clients) == 0 {
-		return nil
-	}
-	return clients
 }
 
 // AgentMCPServers returns the MCP server names an agent's configuration lists
@@ -1881,10 +1864,6 @@ func (g *NenyaGateway) ProviderHasAPIKey(providerName string) bool {
 		return provider.APIKey != "" || provider.AuthStyle == config.AuthStyleNone
 	}
 	return false
-}
-
-func contextWithTimeout(parent context.Context, d time.Duration) (context.Context, context.CancelFunc) {
-	return context.WithTimeout(parent, d)
 }
 
 func (g *NenyaGateway) ExtractQuotaFromResponseHeaders(ctx context.Context, provider, accountName string, headers http.Header) {

@@ -412,82 +412,6 @@ func TestGetProvidersMap(t *testing.T) {
 	}
 }
 
-func TestGetMCPClientsForAgent_AgentNotFound(t *testing.T) {
-	gw := New(context.Background(), testConfig(), testSecrets(), testLogger())
-
-	clients := gw.GetMCPClientsForAgent("nonexistent-agent")
-	if clients != nil {
-		t.Error("expected nil clients for nonexistent agent")
-	}
-}
-
-func TestGetMCPClientsForAgent_AgentHasNoMCP(t *testing.T) {
-	cfg := testConfig()
-	cfg.Agents = make(map[string]config.AgentConfig)
-	cfg.Agents["test-agent"] = config.AgentConfig{}
-	gw := New(context.Background(), cfg, testSecrets(), testLogger())
-
-	clients := gw.GetMCPClientsForAgent("test-agent")
-	if clients != nil {
-		t.Error("expected nil clients for agent without MCP config")
-	}
-}
-
-func TestGetMCPClientsForAgent_AgentHasEmptyMCP(t *testing.T) {
-	cfg := testConfig()
-	cfg.Agents = make(map[string]config.AgentConfig)
-	cfg.Agents["test-agent"] = config.AgentConfig{
-		MCP: &config.AgentMCPConfig{Servers: []string{}},
-	}
-	gw := New(context.Background(), cfg, testSecrets(), testLogger())
-
-	clients := gw.GetMCPClientsForAgent("test-agent")
-	if clients != nil {
-		t.Error("expected nil clients for agent with empty MCP servers list")
-	}
-}
-
-func TestGetMCPClientsForAgent_AgentWithMCP(t *testing.T) {
-	cfg := testConfig()
-	cfg.MCPServers = map[string]config.MCPServerConfig{
-		"test-server": {URL: "http://localhost:3000/sse"},
-	}
-	cfg.Agents = make(map[string]config.AgentConfig)
-	cfg.Agents["test-agent"] = config.AgentConfig{
-		MCP: &config.AgentMCPConfig{Servers: []string{"test-server"}},
-	}
-	gw := New(context.Background(), cfg, testSecrets(), testLogger())
-
-	clients := gw.GetMCPClientsForAgent("test-agent")
-	if clients == nil {
-		t.Fatal("expected non-nil clients map")
-	}
-	if len(clients) != 1 {
-		t.Errorf("expected 1 client, got %d", len(clients))
-	}
-	if _, ok := clients["test-server"]; !ok {
-		t.Error("expected test-server client to be present")
-	}
-}
-
-func TestGetMCPClientsForAgent_AgentWithMultipleMCP(t *testing.T) {
-	cfg := testConfig()
-	cfg.MCPServers = map[string]config.MCPServerConfig{
-		"server-a": {URL: "http://localhost:3000/sse"},
-		"server-b": {URL: "http://localhost:3001/sse"},
-	}
-	cfg.Agents = make(map[string]config.AgentConfig)
-	cfg.Agents["test-agent"] = config.AgentConfig{
-		MCP: &config.AgentMCPConfig{Servers: []string{"server-a", "server-b"}},
-	}
-	gw := New(context.Background(), cfg, testSecrets(), testLogger())
-
-	clients := gw.GetMCPClientsForAgent("test-agent")
-	if len(clients) != 2 {
-		t.Errorf("expected 2 clients, got %d", len(clients))
-	}
-}
-
 func TestGetProviderAPIKey_FromSecureMem(t *testing.T) {
 	cfg := testConfig()
 	secrets := testSecrets()
@@ -619,24 +543,6 @@ func TestExtractInputJSONFromPart_MissingField(t *testing.T) {
 	result := extractInputJSONFromPart(part)
 	if result != "" {
 		t.Errorf("expected empty string for missing input_json, got %q", result)
-	}
-}
-
-func TestContextWithTimeout(t *testing.T) {
-	ctx := context.Background()
-	timeout := 100 * time.Millisecond
-
-	newCtx, cancel := contextWithTimeout(ctx, timeout)
-	defer cancel()
-
-	if newCtx == nil {
-		t.Fatal("expected non-nil context")
-	}
-
-	select {
-	case <-newCtx.Done():
-		t.Error("context should not be canceled immediately")
-	default:
 	}
 }
 
