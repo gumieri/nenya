@@ -644,7 +644,18 @@ func applyAutoCacheBreakpoints(deps TransformDeps, payload map[string]interface{
 		deps.Metrics.RecordAutoCacheBreakpoint("already_anchored")
 		return
 	}
-	if hasClientCacheControl(payload, deps.Logger) {
+	found, truncated := hasClientCacheControl(payload, deps.Logger)
+	if truncated {
+		// The scan budget was exhausted: whether the client placed a mark is
+		// UNKNOWN. Fail closed — anchoring over a possibly-marked request
+		// violates the never-rewrite-a-client-mark invariant, and "no marks
+		// proven" cannot be claimed from a truncated scan (AUD-34 /
+		// NENYA-253). The outcome is recorded so operators see the
+		// stand-down instead of a silent Debug line.
+		deps.Metrics.RecordAutoCacheBreakpoint("skipped_scan_truncated")
+		return
+	}
+	if found {
 		deps.Metrics.RecordAutoCacheBreakpoint("skipped_client_marks")
 		return
 	}
@@ -693,17 +704,19 @@ func countStableHistoryMessages(payload map[string]interface{}) int {
 // mark anywhere a client could have placed one — including the extra_body /
 // extra_content escape hatches, where a harness can hide a breakpoint the
 // top-level scan would miss. The walk is bounded by depth and node count so a
-// hostile body cannot turn the check into a denial of service.
-func hasClientCacheControl(payload map[string]interface{}, depsLogger *slog.Logger) bool {
+// hostile body cannot turn the check into a denial of service, and reports
+// whether the bounded deep scan was TRUNCATED (budget exhausted): a truncated
+// result makes the found answer inconclusive, so callers must fail closed
+// (stand down) rather than treat the request as unmarked (AUD-34 / NENYA-253).
+func hasClientCacheControl(payload map[string]interface{}, depsLogger *slog.Logger) (found, truncated bool) {
 	const maxDepth = 12
 	const maxNodes = 20000
 	nodes := 0
-	truncated := false
 	var walk func(v interface{}, depth int) bool
 	walk = func(v interface{}, depth int) bool {
 		if depth > maxDepth || nodes > maxNodes {
-			// Fail open (anchor anyway) but never invisibly: the scan was
-			// truncated, so "no client mark" is not a proven statement.
+			// Budget exhausted: the scan is incomplete, so "no client mark"
+			// is not a proven statement — the caller stands down.
 			truncated = true
 			return false
 		}
@@ -727,11 +740,11 @@ func hasClientCacheControl(payload map[string]interface{}, depsLogger *slog.Logg
 		}
 		return false
 	}
-	found := walk(payload, 0)
+	f := walk(payload, 0)
 	if truncated && depsLogger != nil {
-		depsLogger.Debug("client cache_control scan truncated; treating the request as unmarked")
+		depsLogger.Debug("client cache_control scan truncated; result inconclusive, standing down")
 	}
-	return found
+	return f, truncated
 }
 
 // convertToAnthropicFormat converts an OpenAI-format payload to Anthropic format,

@@ -722,8 +722,9 @@ func (m *Metrics) RecordUnknownRequestField(format string) {
 // RecordAutoCacheBreakpoint records one opt-in automatic cache-anchoring
 // outcome (NENYA-185): "injected" or one of the stand-down reasons
 // (skipped_client_marks, skipped_one_shot, skipped_windowed, skipped_trimmed,
-// skipped_disabled, skipped_automatic_mode) or "already_anchored" when the
-// explicit prefix-cache defaults had already anchored the request. Counted per
+// skipped_disabled, skipped_automatic_mode, skipped_scan_truncated) or
+// "already_anchored" when the explicit prefix-cache defaults had already
+// anchored the request. Counted per
 // dispatch, like the other transform-stage counters. Closed label set;
 // anything else collapses to "other".
 // Nil-safe.
@@ -733,7 +734,8 @@ func (m *Metrics) RecordAutoCacheBreakpoint(outcome string) {
 	}
 	switch outcome {
 	case "injected", "already_anchored", "skipped_client_marks", "skipped_one_shot",
-		"skipped_windowed", "skipped_trimmed", "skipped_disabled", "skipped_automatic_mode":
+		"skipped_windowed", "skipped_trimmed", "skipped_disabled", "skipped_automatic_mode",
+		"skipped_scan_truncated":
 	default:
 		outcome = "other"
 	}
