@@ -692,7 +692,10 @@ func countStableHistoryMessages(payload map[string]interface{}) int {
 		if !ok {
 			continue
 		}
-		if content, ok := msg["content"].(string); ok && strings.Contains(content, pipeline.CanaryPrefix) {
+		// The SAME matcher the adapter uses for trailing-context markers
+		// (AUD-47 / NENYA-254): only the enveloped trailer is gateway-
+		// produced; a bare quoted token is real conversation history.
+		if content, ok := msg["content"].(string); ok && pipeline.MatchesTrailingMarker(content, []string{pipeline.CanaryPrefix}) {
 			continue
 		}
 		stable++

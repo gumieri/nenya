@@ -40,6 +40,23 @@ func CanaryMarker(canary string) string {
 	return canaryMarkerTemplate + canary + " [do not modify]"
 }
 
+// MatchesTrailingMarker reports whether text carries one of the trailing-
+// context markers in its canonical wire envelope ("[internal-ref] " +
+// marker). This is THE trailer matcher: the adapter's message conversion and
+// routing's stable-history census must agree on it, or a trailer one matcher
+// sees and the other does not desynchronizes the stable-prefix decisions
+// (AUD-47 / NENYA-254). A bare marker substring without the envelope is NOT
+// a trailer — a conversation that quotes or echoes the token is real
+// history.
+func MatchesTrailingMarker(text string, markers []string) bool {
+	for _, marker := range markers {
+		if marker != "" && strings.Contains(text, "[internal-ref] "+marker) {
+			return true
+		}
+	}
+	return false
+}
+
 // CanarResult bundles the per-request canary state threaded to the
 // response-path watchers.
 type CanarResult struct {

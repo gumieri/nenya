@@ -11,6 +11,7 @@ import (
 
 	"github.com/nenya/config"
 	"github.com/nenya/internal/jsonschema"
+	"github.com/nenya/internal/pipeline"
 	"github.com/nenya/internal/stream"
 	"github.com/nenya/internal/util"
 )
@@ -718,12 +719,7 @@ func isTrailingContextMarker(msg map[string]interface{}, markers []string) bool 
 // SHAPE (prefix plus the internal-ref frame), not a bare substring a client
 // might merely mention (NENYA-171).
 func matchesTrailingMarker(text string, markers []string) bool {
-	for _, marker := range markers {
-		if marker != "" && strings.Contains(text, "[internal-ref] "+marker) {
-			return true
-		}
-	}
-	return false
+	return pipeline.MatchesTrailingMarker(text, markers)
 }
 
 func (a *AnthropicAdapter) extractSystemContent(content interface{}) []string {
