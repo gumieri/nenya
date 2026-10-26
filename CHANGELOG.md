@@ -6,6 +6,8 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- **normalize_test.go header comment contradicted the pinned rule (AUD-77)**: it said "client value wins" for duplicate caps — the pinned NENYA-186 rule (and the test names) keep the **smaller** value, respecting both the client's tighter budget and the model clamp.
+
 - **`mcpExecOptions` GoDoc no longer names the wrong symbol (AUD-79)**: the execution function's full doc block was glued above the struct declaration, so godoc attributed the function behavior to the type and left the function with a one-line summary. Both symbols now carry their own docs.
 
 ### Removed
