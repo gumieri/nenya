@@ -11,8 +11,10 @@ import (
 )
 
 // NENYA-186: harness payload normalization. Duplicated parameters after a
-// conversion resolve to one canonical field (client value wins) with
-// telemetry, and unknown top-level fields are reported instead of vanishing.
+// conversion resolve to one canonical field with telemetry — a conflicting
+// numeric cap keeps the SMALLER value (neither the client's tighter budget
+// nor the model clamp is exceeded) — and unknown top-level fields are
+// reported instead of vanishing.
 
 func newNormalizeDeps(t *testing.T) (TransformDeps, *bytes.Buffer) {
 	t.Helper()
