@@ -70,8 +70,11 @@ type chatRequest struct {
 	// Agent is the resolved agent config when ModelName names an agent
 	// (zero value for direct model routes). Set once in resolveRouting;
 	// all downstream consumers (sticky routing, MCP flow, session header
-	// synthesis) share this resolution.
-	Agent config.AgentConfig
+	// synthesis) share this resolution. HasAgent carries the has/has-not
+	// bit so consumers can take the config's ADDRESS without re-resolving
+	// (a re-resolution could diverge after a mid-request SIGHUP reload).
+	Agent    config.AgentConfig
+	HasAgent bool
 
 	// Memoized sticky-session key (see derivedSessionKey). Memoization
 	// sentinel: sessionKeyDone; the fields are only touched on the request
@@ -388,6 +391,7 @@ func (p *Proxy) resolveRouting(ctx context.Context, req *chatRequest, gw *gatewa
 	agent, hasAgent := gw.Config.Agents[req.ModelName]
 	if hasAgent {
 		req.Agent = agent
+		req.HasAgent = true
 	}
 	// Derive the session identity eagerly right after agent resolution so
 	// every consumer (sticky pin, session-header synthesis) reads the same
@@ -1408,7 +1412,7 @@ func (p *Proxy) handleChatCompletions(gw *gateway.NenyaGateway, w http.ResponseW
 		SoftLimit:      req.SoftLimit,
 		HardLimit:      req.HardLimit,
 		AgentName:      req.ModelName,
-		Agent:          agentConfigFor(gw, req.ModelName),
+		Agent:          req.AgentPointer(),
 		TargetProvider: primaryTargetProvider(req.Targets),
 	})
 	if err != nil {
@@ -1538,16 +1542,16 @@ type contentPipelineOpts struct {
 	TargetProvider string
 }
 
-// agentConfigFor resolves the agent config for a model name, returning
-// nil when the name is not a configured agent.
-func agentConfigFor(gw *gateway.NenyaGateway, modelName string) *config.AgentConfig {
-	if modelName == "" {
+// AgentPointer returns the resolved agent config's address when
+// ModelName named an agent, nil for direct model routes. It reads the
+// shared resolution (HasAgent/Agent, set once in resolveRouting) instead
+// of re-resolving — a re-resolution could diverge from every other
+// consumer if the config reloads mid-request (AUD-83).
+func (req *chatRequest) AgentPointer() *config.AgentConfig {
+	if !req.HasAgent {
 		return nil
 	}
-	if agent, ok := gw.Config.Agents[modelName]; ok {
-		return &agent
-	}
-	return nil
+	return &req.Agent
 }
 
 // primaryTargetProvider returns the primary target's provider name, or "".
