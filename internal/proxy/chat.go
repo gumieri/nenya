@@ -1955,7 +1955,9 @@ func (p *Proxy) handleNonStreamingResponse(gw *gateway.NenyaGateway, w http.Resp
 
 	if sourceFormat == "anthropic" && target.Format != "anthropic" {
 		a := adapter.GetAnthropicAdapter()
-		responseMap = a.ConvertOpenAIResponseToAnthropicBody(responseMap)
+		report := adapter.NewDropReport()
+		responseMap = a.ConvertOpenAIResponseToAnthropicBodyReported(responseMap, report)
+		p.reportUnsendableContent(gw, w, r, report)
 	} else if target.Format == "anthropic" && sourceFormat != "anthropic" {
 		a := adapter.GetAnthropicAdapter()
 		report := adapter.NewDropReport()
