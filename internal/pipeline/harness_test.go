@@ -145,9 +145,9 @@ func TestClassifyHarnessEnvelope(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			kind, ok := ClassifyHarnessEnvelope(tc.text)
+			kind, ok := classifyHarnessEnvelope(tc.text)
 			if ok != tc.wantOK {
-				t.Fatalf("ClassifyHarnessEnvelope(%q) ok = %v, want %v", tc.text, ok, tc.wantOK)
+				t.Fatalf("classifyHarnessEnvelope(%q) ok = %v, want %v", tc.text, ok, tc.wantOK)
 			}
 			if ok && kind != tc.wantKind {
 				t.Fatalf("kind = %q, want %q", kind, tc.wantKind)
