@@ -30,8 +30,8 @@ func TestApplyDefaults_NonChatModelsProviderAgnostic(t *testing.T) {
 		t.Fatalf("ApplyDefaults: %v", err)
 	}
 
-	if got := cfg.Providers["mygateway"].NonChatModels; !reflect.DeepEqual(got, DefaultNonChatModels()) {
-		t.Errorf("mygateway non_chat_models = %v, want the provider-agnostic defaults %v", got, DefaultNonChatModels())
+	if got := cfg.Providers["mygateway"].NonChatModels; !reflect.DeepEqual(got, defaultNonChatModelsCopy()) {
+		t.Errorf("mygateway non_chat_models = %v, want the provider-agnostic defaults %v", got, defaultNonChatModelsCopy())
 	}
 	if got := cfg.Providers["legacy"].NonChatModels; !reflect.DeepEqual(got, []string{`^legacy-decision-`}) {
 		t.Errorf("legacy non_chat_models = %v, want its own list (replacement, not union)", got)
@@ -84,7 +84,7 @@ func TestApplyDefaults_NonChatModelsProviderAgnostic(t *testing.T) {
 // a valid RE2 pattern: an invalid one would be skipped (or, on the resolve path,
 // drop the whole provider), silently disabling the classification.
 func TestDefaultNonChatModelsCompile(t *testing.T) {
-	patterns := DefaultNonChatModels()
+	patterns := defaultNonChatModelsCopy()
 	if len(patterns) == 0 {
 		t.Fatal("DefaultNonChatModels is empty: decision-only models would be chat-routable on every provider without an explicit list")
 	}
@@ -116,10 +116,10 @@ func TestDefaultNonChatModelsCompile(t *testing.T) {
 	}
 	// The accessor returns a copy, so a caller cannot mutate the classification
 	// for every provider.
-	copied := DefaultNonChatModels()
+	copied := defaultNonChatModelsCopy()
 	if len(copied) > 0 {
 		copied[0] = ".*"
-		if reflect.DeepEqual(DefaultNonChatModels(), copied) {
+		if reflect.DeepEqual(defaultNonChatModelsCopy(), copied) {
 			t.Error("DefaultNonChatModels must return a copy")
 		}
 	}

@@ -842,9 +842,9 @@ func applyAgentModelRegexDefaults(cfg *Config, name string, i int, m *AgentModel
 // list (or the empty one) to keep it chat-routable.
 var defaultNonChatModels = []string{`^jev-`}
 
-// DefaultNonChatModels returns a copy of the provider-agnostic non_chat_models
+// defaultNonChatModelsCopy returns a copy of the provider-agnostic non_chat_models
 // defaults, so a caller cannot mutate the classification for every provider.
-func DefaultNonChatModels() []string {
+func defaultNonChatModelsCopy() []string {
 	return append([]string(nil), defaultNonChatModels...)
 }
 
@@ -867,7 +867,7 @@ func ApplyNonChatDefaults(cfg *Config) {
 		if pc.NonChatModels != nil {
 			continue
 		}
-		pc.NonChatModels = DefaultNonChatModels()
+		pc.NonChatModels = defaultNonChatModelsCopy()
 		cfg.Providers[name] = pc
 	}
 }

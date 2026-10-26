@@ -1508,7 +1508,7 @@ func (g *GovernanceConfig) EffectiveUpstreamTimeout() time.Duration {
 // a call slower than this counts as a circuit-breaker failure. 0 means off
 // (disabled), which is also the default; a negative value is rejected at boot
 // and defensively resolves to off here. Values are clamped to
-// MaxSlowCallThresholdSeconds.
+// maxSlowCallThresholdSeconds.
 func (g *GovernanceConfig) EffectiveSlowCallThreshold() time.Duration {
 	if g == nil || g.SlowCallThresholdSeconds == nil {
 		return 0
@@ -1517,8 +1517,8 @@ func (g *GovernanceConfig) EffectiveSlowCallThreshold() time.Duration {
 	if v <= 0 {
 		return 0
 	}
-	if v > MaxSlowCallThresholdSeconds {
-		v = MaxSlowCallThresholdSeconds
+	if v > maxSlowCallThresholdSeconds {
+		v = maxSlowCallThresholdSeconds
 	}
 	return time.Duration(v) * time.Second
 }
@@ -1527,7 +1527,7 @@ func (g *GovernanceConfig) EffectiveSlowCallThreshold() time.Duration {
 // (NENYA-153): an explicit per-agent value wins (0 disables it for the agent, a
 // negative value is rejected at boot and defensively resolves to off), otherwise
 // the global threshold applies. Values are clamped to
-// MaxSlowCallThresholdSeconds.
+// maxSlowCallThresholdSeconds.
 func (a *AgentConfig) EffectiveSlowCallThreshold(global time.Duration) time.Duration {
 	if a == nil || a.SlowCallThresholdSeconds == nil {
 		return global
@@ -1536,8 +1536,8 @@ func (a *AgentConfig) EffectiveSlowCallThreshold(global time.Duration) time.Dura
 	if v <= 0 {
 		return 0
 	}
-	if v > MaxSlowCallThresholdSeconds {
-		v = MaxSlowCallThresholdSeconds
+	if v > maxSlowCallThresholdSeconds {
+		v = maxSlowCallThresholdSeconds
 	}
 	return time.Duration(v) * time.Second
 }
