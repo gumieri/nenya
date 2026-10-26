@@ -555,11 +555,19 @@ func (i *InjectionInterceptor) scan(content string) (string, int, map[injectionC
 		_, originalSpaced := normalizeForMatching(original)
 		candidates = append(candidates, originalSpaced)
 	}
+	seenPatterns := make(map[int]bool, len(raw.matched))
+	for idx := range raw.matched {
+		seenPatterns[idx] = true
+	}
+	seenEncoded := make(map[string]bool, len(raw.encodedTokens))
+	for token := range raw.encodedTokens {
+		seenEncoded[token] = true
+	}
 	for _, candidate := range candidates {
 		if candidate == content {
 			continue
 		}
-		variant := i.applyPatterns(candidate, raw.matched, raw.encodedTokens)
+		variant := i.applyPatterns(candidate, seenPatterns, seenEncoded)
 		if len(variant.matched) == 0 && variant.content == candidate {
 			// Nothing matched in the candidate at all: leave the surface as it
 			// is (normalization alone never rewrites content).
@@ -568,7 +576,17 @@ func (i *InjectionInterceptor) scan(content string) (string, int, map[injectionC
 		content = variant.content
 		hits += len(variant.matched) + variant.encoded
 		categories = mergeCategories(categories, variant.categories)
-		break
+		// The union continues across candidates: the seen-sets accumulate so
+		// a phrase two candidates reveal is counted once, and the loop must
+		// NOT stop at the first adopting candidate — a second obfuscated
+		// phrase only the next candidate repairs would ride through behind
+		// the first hit (AUD-37 / NENYA-256).
+		for idx := range variant.matched {
+			seenPatterns[idx] = true
+		}
+		for token := range variant.encodedTokens {
+			seenEncoded[token] = true
+		}
 	}
 
 	return content, hits, categories
