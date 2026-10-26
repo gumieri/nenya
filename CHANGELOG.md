@@ -6,6 +6,8 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- **The canary-marker shape test asserted its own fixture (AUD-85)**: `TestCanaryMarkerShapeMatches` compared the file-local `canaryMarkerContent` helper against a hand-copied prefix — if the gateway's real marker changed, the test would still pass. It now requires **byte-identity** with `pipeline.CanaryMarker` (the real constructor, fed its actual argument shape: the bare hex token). Strengthening it immediately caught the constructor's double-prefix subtlety (`CanaryMarker` adds `NENYA-CANARY-` itself).
+
 - **Unknown-field names truncate on a rune boundary (NENYA-275, AUD-78)**: the 64-byte log cap sliced raw bytes — `field[:64]` split multi-byte runes and logged invalid UTF-8 fragments for non-ASCII field names (masked at the rendered layer by slog's quoting, invalid at the value layer). The new `util.RuneSafeTruncate` walks back to the last rune start; pinned by a 40-rune payload whose byte 64 lands mid-rune (`\xe6` fragment proves the pre-fix split, value-layer handler assertion) plus boundary cases (ASCII under/over cap, zero cap).
 
 - **Vacuous assertion in auto_cache_test (AUD-76)**: the byte-stability test's "marker landed on the new turn" fatal was unreachable — the exact-index assertion two lines earlier (`markerIdx == len(msgs)-2`) already made `markerIdx == len(msgs)-1` impossible. The dead block and its now-orphaned `messageText` helper are gone; the exact-index check carries the guarantee.
