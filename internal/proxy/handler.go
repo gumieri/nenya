@@ -607,16 +607,6 @@ func (p *Proxy) logAuthDenial(gw *gateway.NenyaGateway, key *config.ApiKey, reas
 	)
 }
 
-// authenticateRequest is a thin wrapper around authenticateAndAuthorize
-// that returns the key name (string) for backward compatibility in tests.
-func (p *Proxy) authenticateRequest(r *http.Request, w http.ResponseWriter) (string, bool) {
-	key, ok := p.authenticateAndAuthorize(r, w)
-	if !ok || key == nil {
-		return "", ok
-	}
-	return key.Name, ok
-}
-
 // handleMetrics serves the Prometheus-compatible metrics endpoint.
 func (p *Proxy) handleMetrics(w http.ResponseWriter, r *http.Request) {
 	gw := p.Gateway()

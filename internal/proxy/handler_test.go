@@ -199,79 +199,79 @@ func TestServeHTTP_Metrics_ValidAuth(t *testing.T) {
 	testutil.AssertResponseStatusCode(t, rec, http.StatusOK)
 }
 
-// Test authenticateRequest: missing Authorization header
+// Test authenticateAndAuthorize: missing Authorization header
 func TestAuthenticateRequest_MissingHeader(t *testing.T) {
 	p, _ := newTestProxy(t)
 	req := httptest.NewRequest(http.MethodGet, "/v1/models", nil)
 	// No Authorization header
 	rec := httptest.NewRecorder()
-	token, ok := p.authenticateRequest(req, rec)
+	key, ok := p.authenticateAndAuthorize(req, rec)
 	if ok {
-		t.Fatalf("expected authentication to fail, got token=%q", token)
+		t.Fatalf("expected authentication to fail, got key=%v", key)
 	}
 	if rec.Code != http.StatusUnauthorized {
 		t.Errorf("expected status 401, got %d", rec.Code)
 	}
-	if token != "" {
-		t.Fatalf("expected empty token, got %q", token)
+	if key != nil {
+		t.Fatalf("expected nil key, got %v", key)
 	}
 }
 
-// Test authenticateRequest: malformed Authorization header (wrong prefix)
+// Test authenticateAndAuthorize: malformed Authorization header (wrong prefix)
 func TestAuthenticateRequest_WrongPrefix(t *testing.T) {
 	p, _ := newTestProxy(t)
 	req := httptest.NewRequest(http.MethodGet, "/v1/models", nil)
 	req.Header.Set("Authorization", "Basic wrong-token")
 	rec := httptest.NewRecorder()
-	token, ok := p.authenticateRequest(req, rec)
+	key, ok := p.authenticateAndAuthorize(req, rec)
 	if ok {
-		t.Fatalf("expected authentication to fail, got token=%q", token)
+		t.Fatalf("expected authentication to fail, got key=%v", key)
 	}
 	if rec.Code != http.StatusUnauthorized {
 		t.Errorf("expected status 401, got %d", rec.Code)
 	}
-	if token != "" {
-		t.Fatalf("expected empty token, got %q", token)
+	if key != nil {
+		t.Fatalf("expected nil key, got %v", key)
 	}
 }
 
-// Test authenticateRequest: empty Bearer token
+// Test authenticateAndAuthorize: empty Bearer token
 func TestAuthenticateRequest_EmptyBearer(t *testing.T) {
 	p, _ := newTestProxy(t)
 	req := httptest.NewRequest(http.MethodGet, "/v1/models", nil)
 	req.Header.Set("Authorization", "Bearer ")
 	rec := httptest.NewRecorder()
-	token, ok := p.authenticateRequest(req, rec)
+	key, ok := p.authenticateAndAuthorize(req, rec)
 	if ok {
-		t.Fatalf("expected authentication to fail, got token=%q", token)
+		t.Fatalf("expected authentication to fail, got key=%v", key)
 	}
 	if rec.Code != http.StatusForbidden {
 		t.Errorf("expected status 403, got %d", rec.Code)
 	}
-	if token != "" {
-		t.Fatalf("expected empty token, got %q", token)
+	if key != nil {
+		t.Fatalf("expected nil key, got %v", key)
 	}
 }
 
-// Test authenticateRequest: whitespace-only Bearer token
+// Test authenticateAndAuthorize: whitespace-only Bearer token
 func TestAuthenticateRequest_WhitespaceBearer(t *testing.T) {
 	p, _ := newTestProxy(t)
 	req := httptest.NewRequest(http.MethodGet, "/v1/models", nil)
 	req.Header.Set("Authorization", "Bearer   ")
 	rec := httptest.NewRecorder()
-	token, ok := p.authenticateRequest(req, rec)
+	key, ok := p.authenticateAndAuthorize(req, rec)
 	if ok {
-		t.Fatalf("expected authentication to fail, got token=%q", token)
+		t.Fatalf("expected authentication to fail, got key=%v", key)
 	}
 	if rec.Code != http.StatusForbidden {
 		t.Errorf("expected status 403, got %d", rec.Code)
 	}
-	if token != "" {
-		t.Fatalf("expected empty token, got %q", token)
+	if key != nil {
+		t.Fatalf("expected nil key, got %v", key)
 	}
 }
 
-// Test authenticateRequest: client token mismatch via secure memory
+// Test authenticateAndAuthorize: client token mismatch via secure memory
 func TestAuthenticateRequest_ClientTokenMismatch(t *testing.T) {
 	p, _ := newTestProxyWithSecrets(t, &config.SecretsConfig{
 		ClientToken:  "correct-token",
@@ -280,19 +280,19 @@ func TestAuthenticateRequest_ClientTokenMismatch(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/v1/models", nil)
 	req.Header.Set("Authorization", "Bearer wrong-token")
 	rec := httptest.NewRecorder()
-	token, ok := p.authenticateRequest(req, rec)
+	key, ok := p.authenticateAndAuthorize(req, rec)
 	if ok {
-		t.Fatalf("expected authentication to fail, got token=%q", token)
+		t.Fatalf("expected authentication to fail, got key=%v", key)
 	}
 	if rec.Code != http.StatusForbidden {
 		t.Errorf("expected status 403, got %d", rec.Code)
 	}
-	if token != "" {
-		t.Fatalf("expected empty token, got %q", token)
+	if key != nil {
+		t.Fatalf("expected nil key, got %v", key)
 	}
 }
 
-// Test authenticateRequest: expired API key
+// Test authenticateAndAuthorize: expired API key
 func TestAuthenticateRequest_ExpiredKey(t *testing.T) {
 	expired := time.Now().Add(-time.Hour).Format(time.RFC3339)
 	p, _ := newTestProxyWithSecrets(t, &config.SecretsConfig{
@@ -309,19 +309,19 @@ func TestAuthenticateRequest_ExpiredKey(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/v1/models", nil)
 	req.Header.Set("Authorization", "Bearer secret-token")
 	rec := httptest.NewRecorder()
-	token, ok := p.authenticateRequest(req, rec)
+	key, ok := p.authenticateAndAuthorize(req, rec)
 	if ok {
-		t.Fatalf("expected authentication to fail (expired), got token=%q", token)
+		t.Fatalf("expected authentication to fail (expired), got key=%v", key)
 	}
 	if rec.Code != http.StatusForbidden {
 		t.Errorf("expected status 403, got %d", rec.Code)
 	}
-	if token != "" {
-		t.Fatalf("expected empty token, got %q", token)
+	if key != nil {
+		t.Fatalf("expected nil key, got %v", key)
 	}
 }
 
-// Test authenticateRequest: disabled API key
+// Test authenticateAndAuthorize: disabled API key
 func TestAuthenticateRequest_DisabledKey(t *testing.T) {
 	p, _ := newTestProxyWithSecrets(t, &config.SecretsConfig{
 		ClientToken:  "",
@@ -337,19 +337,19 @@ func TestAuthenticateRequest_DisabledKey(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/v1/models", nil)
 	req.Header.Set("Authorization", "Bearer secret-token")
 	rec := httptest.NewRecorder()
-	token, ok := p.authenticateRequest(req, rec)
+	key, ok := p.authenticateAndAuthorize(req, rec)
 	if ok {
-		t.Fatalf("expected authentication to fail (disabled), got token=%q", token)
+		t.Fatalf("expected authentication to fail (disabled), got key=%v", key)
 	}
 	if rec.Code != http.StatusForbidden {
 		t.Errorf("expected status 403, got %d", rec.Code)
 	}
-	if token != "" {
-		t.Fatalf("expected empty token, got %q", token)
+	if key != nil {
+		t.Fatalf("expected nil key, got %v", key)
 	}
 }
 
-// Test authenticateRequest: valid token succeeds
+// Test authenticateAndAuthorize: valid token succeeds
 func TestAuthenticateRequest_ValidToken(t *testing.T) {
 	p, _ := newTestProxyWithSecrets(t, &config.SecretsConfig{
 		ClientToken:  "valid-token",
@@ -358,12 +358,12 @@ func TestAuthenticateRequest_ValidToken(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/v1/models", nil)
 	req.Header.Set("Authorization", "Bearer valid-token")
 	rec := httptest.NewRecorder()
-	token, ok := p.authenticateRequest(req, rec)
+	key, ok := p.authenticateAndAuthorize(req, rec)
 	if !ok {
 		t.Fatalf("expected authentication to succeed, got status %d", rec.Code)
 	}
-	if token != "primary" {
-		t.Fatalf("expected token reference 'primary', got %q", token)
+	if key == nil || key.Name != "primary" {
+		t.Fatalf("expected the primary synthetic key, got %v", key)
 	}
 }
 
@@ -394,7 +394,7 @@ func TestAuthenticateRequest_MessagesAgentScoping(t *testing.T) {
 		req := newMessagesReq("agent-b")
 		req.Header.Set("Authorization", "Bearer scoped-token-agent-a")
 		rec := httptest.NewRecorder()
-		_, ok := p.authenticateRequest(req, rec)
+		_, ok := p.authenticateAndAuthorize(req, rec)
 		if ok {
 			t.Fatalf("expected authz rejection for agent-b via /v1/messages, got status %d", rec.Code)
 		}
@@ -407,12 +407,12 @@ func TestAuthenticateRequest_MessagesAgentScoping(t *testing.T) {
 		req := newMessagesReq("agent-a")
 		req.Header.Set("Authorization", "Bearer scoped-token-agent-a")
 		rec := httptest.NewRecorder()
-		key, ok := p.authenticateRequest(req, rec)
+		key, ok := p.authenticateAndAuthorize(req, rec)
 		if !ok {
 			t.Fatalf("expected authz pass for agent-a via /v1/messages, got status %d", rec.Code)
 		}
-		if key != "scoped-a" {
-			t.Fatalf("expected authenticated key 'scoped-a', got %q", key)
+		if key == nil || key.Name != "scoped-a" {
+			t.Fatalf("expected authenticated key 'scoped-a', got %v", key)
 		}
 	})
 
@@ -420,7 +420,7 @@ func TestAuthenticateRequest_MessagesAgentScoping(t *testing.T) {
 		req := newMessagesReq("agent-b")
 		req.Header.Set("Authorization", "Bearer unscoped-token-1234")
 		rec := httptest.NewRecorder()
-		if _, ok := p.authenticateRequest(req, rec); !ok {
+		if _, ok := p.authenticateAndAuthorize(req, rec); !ok {
 			t.Fatalf("expected authz pass for unscoped key, got status %d", rec.Code)
 		}
 	})
@@ -429,7 +429,7 @@ func TestAuthenticateRequest_MessagesAgentScoping(t *testing.T) {
 		req := newMessagesReq("agent-b")
 		req.Header.Set("Authorization", "Bearer admin-token-123456")
 		rec := httptest.NewRecorder()
-		if _, ok := p.authenticateRequest(req, rec); !ok {
+		if _, ok := p.authenticateAndAuthorize(req, rec); !ok {
 			t.Fatalf("expected authz pass for admin key, got status %d", rec.Code)
 		}
 	})
@@ -439,7 +439,7 @@ func TestAuthenticateRequest_MessagesAgentScoping(t *testing.T) {
 		req.Header.Set("Content-Type", "application/json")
 		req.Header.Set("Authorization", "Bearer scoped-token-agent-a")
 		rec := httptest.NewRecorder()
-		if _, ok := p.authenticateRequest(req, rec); ok {
+		if _, ok := p.authenticateAndAuthorize(req, rec); ok {
 			t.Fatalf("expected rejection for invalid JSON body, got status %d", rec.Code)
 		}
 		if rec.Code != http.StatusBadRequest {
@@ -461,7 +461,7 @@ func TestAuthenticateRequest_MessagesAgentScoping(t *testing.T) {
 		req.Header.Set("Content-Type", "application/json")
 		req.Header.Set("Authorization", "Bearer scoped-token-agent-a")
 		rec := httptest.NewRecorder()
-		if _, ok := p2.authenticateRequest(req, rec); ok {
+		if _, ok := p2.authenticateAndAuthorize(req, rec); ok {
 			t.Fatalf("expected rejection for oversized body, got status %d", rec.Code)
 		}
 		if rec.Code != http.StatusRequestEntityTooLarge {

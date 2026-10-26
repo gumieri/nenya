@@ -54,7 +54,7 @@ func TestAuthenticateRequest_NilGateway(t *testing.T) {
 	req.Header.Set("Authorization", "Bearer test-token")
 	rec := httptest.NewRecorder()
 
-	_, ok := p.authenticateRequest(req, rec)
+	_, ok := p.authenticateAndAuthorize(req, rec)
 	if ok {
 		t.Fatal("expected false for nil gateway")
 	}
@@ -79,12 +79,12 @@ func TestAuthenticateRequest_ReturnsKeyName(t *testing.T) {
 		req.Header.Set("Authorization", "Bearer test-client-token")
 		rec := httptest.NewRecorder()
 
-		keyRef, ok := p.authenticateRequest(req, rec)
+		keyRef, ok := p.authenticateAndAuthorize(req, rec)
 		if !ok {
 			t.Fatal("expected true for primary token")
 		}
-		if keyRef != "primary" {
-			t.Fatalf("expected 'primary', got %q", keyRef)
+		if keyRef == nil || keyRef.Name != "primary" {
+			t.Fatalf("expected the primary synthetic key, got %v", keyRef)
 		}
 	})
 
@@ -108,12 +108,12 @@ func TestAuthenticateRequest_ReturnsKeyName(t *testing.T) {
 		req.Header.Set("Authorization", "Bearer super-secret-token")
 		rec := httptest.NewRecorder()
 
-		keyRef, ok := p.authenticateRequest(req, rec)
+		keyRef, ok := p.authenticateAndAuthorize(req, rec)
 		if !ok {
 			t.Fatal("expected true for named API key")
 		}
-		if keyRef != "my-key" {
-			t.Fatalf("expected 'my-key', got %q", keyRef)
+		if keyRef == nil || keyRef.Name != "my-key" {
+			t.Fatalf("expected key 'my-key', got %v", keyRef)
 		}
 	})
 
@@ -130,12 +130,12 @@ func TestAuthenticateRequest_ReturnsKeyName(t *testing.T) {
 		req.Header.Set("Authorization", "Bearer invalid-token")
 		rec := httptest.NewRecorder()
 
-		keyRef, ok := p.authenticateRequest(req, rec)
+		keyRef, ok := p.authenticateAndAuthorize(req, rec)
 		if ok {
 			t.Fatal("expected false for invalid token")
 		}
-		if keyRef != "" {
-			t.Fatalf("expected empty keyRef for invalid token, got %q", keyRef)
+		if keyRef != nil {
+			t.Fatalf("expected nil key for invalid token, got %v", keyRef)
 		}
 		if rec.Code != http.StatusForbidden {
 			t.Fatalf("expected 403, got %d", rec.Code)
@@ -153,12 +153,12 @@ func TestAuthenticateRequest_ReturnsKeyName(t *testing.T) {
 		req := httptest.NewRequest(http.MethodGet, "/v1/models", nil)
 		rec := httptest.NewRecorder()
 
-		keyRef, ok := p.authenticateRequest(req, rec)
+		keyRef, ok := p.authenticateAndAuthorize(req, rec)
 		if ok {
 			t.Fatal("expected false for missing auth header")
 		}
-		if keyRef != "" {
-			t.Fatalf("expected empty keyRef for missing header, got %q", keyRef)
+		if keyRef != nil {
+			t.Fatalf("expected nil key for missing header, got %v", keyRef)
 		}
 		if rec.Code != http.StatusUnauthorized {
 			t.Fatalf("expected 401, got %d", rec.Code)
