@@ -115,16 +115,18 @@ func countEmbeddingInputTokens(gw *gateway.NenyaGateway, payload map[string]inte
 }
 
 func (p *Proxy) forwardEmbeddingsRequest(gw *gateway.NenyaGateway, w http.ResponseWriter, ctx context.Context, method, url string, bodyBytes []byte, providerName, modelName string, srcHeaders http.Header, maxAttempts int, keyRef string) {
-	req, err := p.buildUpstreamRequest(gw, ctx, method, url, bodyBytes, providerName, modelName, "", srcHeaders)
-	if err != nil {
-		ctxLogger := gw.Logger.With("operation", "forward", "api_key", keyRef)
-		ctxLogger.Error("failed to create embeddings upstream request", "err", err)
-		writeStructuredError(w, http.StatusInternalServerError, infra.ErrorKindInternal, "Internal Server Error")
-		return
-	}
-	req.Header.Set("Content-Type", "application/json")
-
 	resp, err := util.DoWithRetryResp(ctx, maxAttempts, func() (*http.Response, error) {
+		// AUD-21 (NENYA-243): every attempt rebuilds the request — the
+		// previous Do consumed the body reader, so a re-Do sent an empty
+		// request upstream (the same defect doUpstreamRoundTrip avoids by
+		// building inside the closure).
+		req, err := p.buildUpstreamRequest(gw, ctx, method, url, bodyBytes, providerName, modelName, "", srcHeaders)
+		if err != nil {
+			ctxLogger := gw.Logger.With("operation", "forward", "api_key", keyRef)
+			ctxLogger.Error("failed to create embeddings upstream request", "err", err)
+			return nil, err
+		}
+		req.Header.Set("Content-Type", "application/json")
 		r, fetchErr := gw.ClientFor(providerName).Do(req)
 		if fetchErr != nil {
 			if r != nil {
