@@ -734,7 +734,14 @@ func tryLoadCredFile(credDir string) (*SecretsConfig, error) {
 
 	data, err := os.ReadFile(filepath.Join(credDir, "secrets"))
 	if err != nil {
-		return nil, nil
+		// AUD-69 (NENYA-278): only a MISSING file is a silent skip — a
+		// mis-permissioned file (EACCES) or a directory where the file
+		// should be (EISDIR) must fail loudly with the real cause, or boot
+		// continues keyless looking like "no credentials configured".
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("failed to read %s: %w", filepath.Join(credDir, "secrets"), err)
 	}
 
 	var secrets SecretsConfig
