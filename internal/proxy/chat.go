@@ -195,10 +195,7 @@ func (p *Proxy) parseRequestBody(gw *gateway.NenyaGateway, w http.ResponseWriter
 			return nil, "", &httpError{Code: http.StatusBadRequest, Message: "Failed to convert Anthropic format request"}
 		}
 		p.reportUnsendableContent(gw, w, r, report)
-		if converted != nil && string(converted) != string(bodyBytes) {
-			sourceFormat = "anthropic"
-			bodyBytes = converted
-		}
+		bodyBytes, sourceFormat = adoptConvertedBody(bodyBytes, converted, sourceFormat)
 	}
 
 	var payload map[string]any
@@ -207,6 +204,26 @@ func (p *Proxy) parseRequestBody(gw *gateway.NenyaGateway, w http.ResponseWriter
 		return nil, "", &httpError{Code: http.StatusBadRequest, Message: "Invalid JSON payload"}
 	}
 	return payload, sourceFormat, nil
+}
+
+// adoptConvertedBody applies a successful native-shape conversion to the
+// request body and attributes the client's wire format. Attribution keys on
+// the CLIENT'S wire shape (the peek that entered the branch), not on whether
+// the converter rewrote bytes: a native-shape body the converter returned
+// unchanged is still an Anthropic conversation, and attributing it "openai"
+// would shape the response for the wrong client dialect (AUD-24 / NENYA-257).
+// The comparison is bytes.Equal, not string() conversions — bodyBytes is the
+// full client payload and the string conversions allocated two full copies
+// per Anthropic-format request (the large bodies this gateway exists to
+// bound).
+func adoptConvertedBody(bodyBytes, converted []byte, sourceFormat string) ([]byte, string) {
+	if converted == nil {
+		return bodyBytes, sourceFormat
+	}
+	if !bytes.Equal(converted, bodyBytes) {
+		bodyBytes = converted
+	}
+	return bodyBytes, "anthropic"
 }
 
 // checkSchemaBudget rejects a request whose client-supplied schemas exceed the
