@@ -4,6 +4,10 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Fixed
+
+- **`mcpExecOptions` GoDoc no longer names the wrong symbol (AUD-79)**: the execution function's full doc block was glued above the struct declaration, so godoc attributed the function behavior to the type and left the function with a one-line summary. Both symbols now carry their own docs.
+
 ### Removed
 
 - **Auth dead accessors after the snapshot fix (AUD-59)**: `AccountPool.GetAccount` (returned the **live internal pointer**; the safe `AccountSnapshot` deep-copy API replaced it — AUD-43/NENYA-232), `AccountPool.ListAccounts`, and `AccountManager.ListAccounts` had zero production callers. Tests observe through `AccountSnapshot`/`GetPool` now.

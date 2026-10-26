@@ -869,17 +869,6 @@ func partitionMCPToolCalls(calls []mcpToolCall, toolIndex *mcp.ToolRegistry) (mc
 	return
 }
 
-// executeMCPCallsWithUnavailable executes MCP tool calls concurrently using the registered MCP servers.
-// When the canary tripwire is armed, call arguments are scanned first:
-// a canary hit means the model reproduced gateway-injected context into
-// an outbound tool call — the signature of injection-driven exfiltration.
-// Block action refuses the call with an error result; log action allows
-// it after recording. When the egress screen is enabled, tool arguments
-// flagged by a deterministic signal (canary hit, unscannable arguments,
-// or argument-guard violations) get one advisory adjudication per
-// request (shared budget); an exfil verdict under strict action refuses
-// the call. Returns a slice of tool results in the same order
-// as the input calls.
 // mcpExecOptions groups the MCP tool-call execution inputs (NENYA-162): the
 // session's unavailable-tool set is set only by the MCP loop (nil elsewhere —
 // the NENYA-162 non-injected-tool guard is then inert).
@@ -894,9 +883,17 @@ type mcpExecOptions struct {
 	unavailable map[string]bool
 }
 
-// executeMCPCallsWithUnavailable executes MCP tool calls; a model naming a
-// tool the session did not inject (unavailable set) gets a structured error
-// result instead of a dispatch.
+// executeMCPCallsWithUnavailable executes MCP tool calls concurrently using the registered MCP servers.
+// When the canary tripwire is armed, call arguments are scanned first:
+// a canary hit means the model reproduced gateway-injected context into
+// an outbound tool call — the signature of injection-driven exfiltration.
+// Block action refuses the call with an error result; log action allows
+// it after recording. When the egress screen is enabled, tool arguments
+// flagged by a deterministic signal (canary hit, unscannable arguments,
+// or argument-guard violations) get one advisory adjudication per
+// request (shared budget); an exfil verdict under strict action refuses
+// the call. Returns a slice of tool results in the same order
+// as the input calls.
 func executeMCPCallsWithUnavailable(in mcpExecOptions) []*mcp.CallToolResult {
 	ctx, calls, gw, agentName := in.ctx, in.calls, in.gw, in.agentName
 	canary, screen, apiKey, unavailable := in.canary, in.screen, in.apiKey, in.unavailable
