@@ -6,6 +6,8 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- **`SafeMicroUSD` / `SafeUSDCents` direct unit tests (AUD-70)**: the overflow-safe cost conversions had no direct tests. Pinned: NaN/±Inf/overflow → `ok=false`, rounding (half away), negatives, and the conservative `>=` guard (exact threshold rejected, just-under converts — the tests initially assumed the threshold converted and the implementation's contract won).
+
 - **`isModelScopedQuotaSignal` boundary + dead condition (NENYA-280, AUD-73)**: the `model_name` spelling matched any substring (`model_names` counted as the field); it is now boundary-pinned via a token check. The model-id signal carried an undocumented extra requirement (the literal word "model" in the message) that made ids like `gpt-4` unscoped despite the doc specifying id-token + rate/quota context; the id is now matched as a **whole token** (replacing the crude word heuristic — and its pinned single-letter false positive `m` in "many"), which also subsumes the redundant `model != ""` guard.
 
 - **`tryLoadCredFile` swallows non-ENOENT read errors (NENYA-278, AUD-69)**: every `os.ReadFile` failure on the cred-dir secrets file returned `(nil, nil)` — a mis-permissioned file (EACCES) or a directory where the file should be (EISDIR) silently looked like "no credentials configured" and boot continued **keyless**. Only a missing file is a silent skip now; other errors surface wrapped with the failing path. Pinned with a directory-as-file fixture (deterministic regardless of the running user) plus the missing-file-stays-silent guard.
