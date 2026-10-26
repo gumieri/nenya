@@ -995,14 +995,3 @@ func TransformIncomingAnthropicRequestReported(ctx context.Context, body []byte,
 	}
 	return out, nil
 }
-
-// ExtractField performs a lightweight JSON field extraction without full unmarshaling.
-// Returns the value and true if the field exists, nil and false otherwise.
-func ExtractField(body []byte, field string) (interface{}, bool) {
-	var data map[string]interface{}
-	if err := json.Unmarshal(body, &data); err != nil {
-		return nil, false
-	}
-	v, ok := data[field]
-	return v, ok
-}
