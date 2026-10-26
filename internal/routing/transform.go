@@ -525,7 +525,11 @@ func applyMaxTokens(payload map[string]interface{}, effectiveMaxOutput int) {
 	if !ok || v <= float64(effectiveMaxOutput) {
 		return
 	}
-	payload["max_tokens"] = effectiveMaxOutput
+	// Same NENYA-186 contract as the set branch above: the canonical numeric
+	// type is float64. Pre-fix this stored a Go int, so a LATER clamp (a
+	// smaller-cap failover target) hit the type assertion above with !ok and
+	// silently kept the larger cap (AUD-36 / NENYA-247).
+	payload["max_tokens"] = float64(effectiveMaxOutput)
 }
 
 // tokenCapSnapshot remembers the token-cap fields before the pair-driven
