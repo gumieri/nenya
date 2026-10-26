@@ -191,6 +191,13 @@ func visionDropReason(site string, vision bool, format string, ref imageRef) str
 	if FormatAcceptsImageMedia(format, ref.mime) {
 		return ""
 	}
+	if ref.mime == "" && !ref.remote {
+		// AUD-41 (NENYA-244): no URL and no media type at all — the part is
+		// malformed, not a format/media mismatch. Pre-fix it fell through to
+		// format_media, blaming the target format for an image that never
+		// named one.
+		return "malformed_image"
+	}
 	return "format_media"
 }
 
