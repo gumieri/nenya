@@ -254,11 +254,15 @@ func (t *OpenAIToAnthropicTransformer) processChoice(choice map[string]interface
 }
 
 func (t *OpenAIToAnthropicTransformer) processToolCall(tc map[string]interface{}) []byte {
-	indexRaw, ok := tc["index"].(float64)
-	if !ok {
-		return nil
+	// An absent or non-numeric index is treated as 0: some providers omit
+	// `index` when the stream carries a single tool call, and dropping the
+	// delta there lost the ENTIRE call (AUD-31 / NENYA-250). Multi-call
+	// streams that omit indices are ambiguous anyway; 0 is the conventional
+	// interpretation.
+	index := 0
+	if indexRaw, ok := tc["index"].(float64); ok {
+		index = int(indexRaw)
 	}
-	index := int(indexRaw)
 
 	for len(t.toolCalls) <= index {
 		t.toolCalls = append(t.toolCalls, &openaiToolCall{index: len(t.toolCalls)})
