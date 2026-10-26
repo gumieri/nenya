@@ -211,9 +211,6 @@ func TestAutoCacheBreakpointsByteStableAcrossTurns(t *testing.T) {
 	if markerIdx != len(msgs)-2 {
 		t.Fatalf("message marker at index %d of %d, want the last stable history message (%d)", markerIdx, len(msgs), len(msgs)-2)
 	}
-	if text := messageText(msgs[len(msgs)-1]); strings.Contains(text, "different follow-up") && markerIdx == len(msgs)-1 {
-		t.Fatal("the marker landed on the new turn")
-	}
 }
 
 // NENYA-185 review: a one-shot request stays one-shot even when the gateway
@@ -345,28 +342,6 @@ func messageMarkerIndex(body map[string]interface{}) int {
 		}
 	}
 	return -1
-}
-
-func messageText(v interface{}) string {
-	msg, ok := v.(map[string]interface{})
-	if !ok {
-		return ""
-	}
-	switch c := msg["content"].(type) {
-	case string:
-		return c
-	case []interface{}:
-		var sb strings.Builder
-		for _, part := range c {
-			if m, ok := part.(map[string]interface{}); ok {
-				if t, ok := m["text"].(string); ok {
-					sb.WriteString(t)
-				}
-			}
-		}
-		return sb.String()
-	}
-	return ""
 }
 
 // NENYA-185: the decision is reached through the real dispatch funnel (the
