@@ -134,6 +134,16 @@ func (p *Proxy) recordMCPIterationUsage(ctx context.Context, gw *gateway.NenyaGa
 	recordNonStreamingStats(gw, model, totals.Completion, totals.CacheHit, totals.CacheMiss, totals.CacheCreation, totals.Reasoning)
 	recordNonStreamingMetrics(gw, target, agentName, totals.Completion, totals.CacheHit, totals.CacheMiss, totals.CacheCreation, totals.Reasoning)
 	recordCostAndBilling(ctx, gw, target, buf.model, totals.Prompt, totals.CacheHit, totals.CacheCreation, totals.Completion)
+	// NENYA-190: observe the pair's cache warmth at the same site that sees
+	// the normalized usage, exactly like the buffered chat path
+	// (recordNonStreamingUsage) and the streaming path (recordStreamUsage).
+	// Pre-fix this site skipped it, so NENYA-190's warm-cache reorder
+	// tie-break was blind to every request an MCP-configured agent makes
+	// (AUD-15 / NENYA-259). Prompt is the TOTAL input incl. cached
+	// (NENYA-167); BYOK dispatches stand down (NENYA-195).
+	if gw.CacheState != nil && !target.BYOK {
+		gw.CacheState.Record(model, target.Provider, totals.CacheHit, totals.Prompt)
+	}
 	// The MCP loop replays a buffered response to the client, so the
 	// streaming usage callback never fires: the trace's GenAI-semconv
 	// attributes are recorded here (NENYA-187).
