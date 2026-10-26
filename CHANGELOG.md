@@ -6,6 +6,8 @@ All notable changes to this project will be documented in this file.
 
 ### Removed
 
+- **`pipeline.ClassifyHarnessEnvelope` unexported (AUD-55)**: exported with zero external callers — its only consumer is `harnessSurface` in the same file. Now package-internal (`classifyHarnessEnvelope`).
+
 - **`routing.ExtractField` (AUD-54)**: zero callers, and its doc claimed "lightweight JSON field extraction without full unmarshaling" while the implementation did a full `json.Unmarshal` — the real lightweight path (`util.ExtractTopLevelField`, NENYA-35) has been the hot-path peek all along.
 
 - **The `authenticateRequest` backward-compat shim (AUD-53)**: a thin wrapper around `authenticateAndAuthorize` that existed only so tests could compare key names as strings — zero production callers. Its nine tests now drive `authenticateAndAuthorize` directly, asserting on the `*config.ApiKey` they always received.

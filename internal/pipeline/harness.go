@@ -60,10 +60,10 @@ var harnessEnvelopeTags = []struct {
 var gatewayCanaryMarkerRe = regexp.MustCompile(
 	`^\[internal-ref\] NENYA-CANARY-[0-9a-f]{32} \[do not modify\]$`)
 
-// ClassifyHarnessEnvelope reports whether text is entirely harness scaffolding
+// classifyHarnessEnvelope reports whether text is entirely harness scaffolding
 // and, if so, which kind (the first envelope's kind). Whitespace between and
 // around envelopes is allowed.
-func ClassifyHarnessEnvelope(text string) (harnessEnvelopeKind, bool) {
+func classifyHarnessEnvelope(text string) (harnessEnvelopeKind, bool) {
 	rest := strings.TrimSpace(text)
 	if rest == "" {
 		return "", false
@@ -116,7 +116,7 @@ func harnessSurface(msg map[string]interface{}) (string, harnessEnvelopeKind, bo
 	if !ok || text == "" {
 		return "", "", false
 	}
-	kind, isHarness := ClassifyHarnessEnvelope(text)
+	kind, isHarness := classifyHarnessEnvelope(text)
 	if !isHarness {
 		return "", "", false
 	}
