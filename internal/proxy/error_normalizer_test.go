@@ -215,17 +215,17 @@ func TestGatewayErrorHTTPStatusCode(t *testing.T) {
 	}{
 		{
 			name:     "rate limit error",
-			err:      NewRateLimitError("openai", "rate limit"),
+			err:      &GatewayError{Type: ErrorTypeRateLimit, Message: "rate limit", StatusCode: http.StatusTooManyRequests, Provider: "openai"},
 			wantCode: http.StatusTooManyRequests,
 		},
 		{
 			name:     "invalid request error",
-			err:      NewInvalidRequestError("invalid", nil),
+			err:      &GatewayError{Type: ErrorTypeInvalidRequest, Message: "invalid", StatusCode: http.StatusBadRequest},
 			wantCode: http.StatusBadRequest,
 		},
 		{
 			name:     "authentication error",
-			err:      NewAuthenticationError("openai", "auth failed"),
+			err:      &GatewayError{Type: ErrorTypeAuthentication, Message: "auth failed", StatusCode: http.StatusUnauthorized, Provider: "openai"},
 			wantCode: http.StatusUnauthorized,
 		},
 		{
@@ -268,7 +268,7 @@ func TestGatewayErrorError(t *testing.T) {
 	}{
 		{
 			name:    "error without provider",
-			err:     NewInvalidRequestError("test error", nil),
+			err:     &GatewayError{Type: ErrorTypeInvalidRequest, Message: "test error", StatusCode: http.StatusBadRequest},
 			wantMsg: "invalid_request_error: test error",
 		},
 		{
@@ -290,7 +290,7 @@ func TestGatewayErrorError(t *testing.T) {
 
 func TestGatewayError_Unwrap(t *testing.T) {
 	wrapped := errors.New("wrapped error")
-	err := NewInvalidRequestError("test", wrapped)
+	err := &GatewayError{Type: ErrorTypeInvalidRequest, Message: "test", StatusCode: http.StatusBadRequest, Err: wrapped}
 
 	if err.Unwrap() != wrapped {
 		t.Errorf("expected Unwrap to return the wrapped error")
@@ -298,7 +298,7 @@ func TestGatewayError_Unwrap(t *testing.T) {
 }
 
 func TestGatewayError_UnwrapNil(t *testing.T) {
-	err := NewInvalidRequestError("test", nil)
+	err := &GatewayError{Type: ErrorTypeInvalidRequest, Message: "test", StatusCode: http.StatusBadRequest}
 
 	if err.Unwrap() != nil {
 		t.Errorf("expected Unwrap to return nil when no wrapped error")

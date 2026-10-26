@@ -4,6 +4,10 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Removed
+
+- **Four dead error constructors in `error_normalizer.go` (AUD-50)**: `NewRateLimitError`, `NewInvalidRequestError`, `NewInvalidRequestErrorWithStatus`, and `NewAuthenticationError` had zero non-test callers (the live `ParseProviderError` path builds its errors through `newClientClassError`, now inlining the invalid-request construction). Tests exercising `GatewayError` behavior switched to struct literals, keeping coverage identical.
+
 ### Fixed
 
 - **The MCP replay speaks the client's wire format (NENYA-261, 723f3db1)**: `replayBufferedResponse` wrote the buffer's **native frames verbatim** — an OpenAI client of an Anthropic-format chain received `message_start`/`content_block_delta` frames it cannot parse, and an Anthropic client of an OpenAI chain received chunks with **no `message_stop`**. The chat paths translate every response target→client; the replay now does too — `convertBufferedForReplay` drives the **same resolver the chat streaming path uses** over the buffer's frames in order (transformers are stateful across a stream), pulls the held tail at the end (`TailFinisher`, AUD-29), frames each converted event, and handles the sentinel both ways (a `data: [DONE]` payload through the transformer, and a terminator the forward transformer renders itself on `message_stop`). A matching format replays verbatim; a transformer error falls back to the verbatim buffer rather than dropping the answer. Pinned by both mismatch directions (OpenAI chunks + sentinel for the Anthropic-served OpenAI client; `message_stop` + `text_delta` with no `choices` for the reverse), a verbatim guard, and the guarded-replay wiring (mutation-verified by forcing the verbatim path).
