@@ -105,17 +105,21 @@ func TestClient_GetTool(t *testing.T) {
 
 	_, _ = client.RefreshTools(t.Context())
 
-	tool, ok := client.GetTool("test_tool")
-	if !ok {
-		t.Fatal("expected test_tool to exist")
+	tools := client.ListTools()
+	if len(tools) == 0 {
+		t.Fatal("expected refreshed tools to be listed")
 	}
-	if tool.Description != "A test tool" {
-		t.Fatalf("description = %q, want %q", tool.Description, "A test tool")
+	found := false
+	for _, tool := range tools {
+		if tool.Name == "test_tool" {
+			found = true
+			if tool.Description != "A test tool" {
+				t.Fatalf("description = %q, want %q", tool.Description, "A test tool")
+			}
+		}
 	}
-
-	_, ok = client.GetTool("nonexistent")
-	if ok {
-		t.Fatal("expected nonexistent tool to not exist")
+	if !found {
+		t.Fatal("expected test_tool to be listed")
 	}
 }
 

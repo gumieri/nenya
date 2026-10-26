@@ -227,7 +227,3 @@ func (r *CallToolResult) Text() string {
 type ListToolsResult struct {
 	Tools []Tool `json:"tools"`
 }
-
-type ListToolsParams struct {
-	Cursor string `json:"cursor,omitempty"`
-}

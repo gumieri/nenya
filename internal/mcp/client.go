@@ -185,13 +185,6 @@ func (c *Client) ListTools() []Tool {
 	return c.tools
 }
 
-func (c *Client) GetTool(name string) (Tool, bool) {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-	t, ok := c.toolsMap[name]
-	return t, ok
-}
-
 func (c *Client) CallTool(ctx context.Context, name string, arguments map[string]any) (*CallToolResult, error) {
 	if !c.initialized.Load() {
 		// Not initialized: either never initialized or a concurrent

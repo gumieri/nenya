@@ -6,6 +6,8 @@ All notable changes to this project will be documented in this file.
 
 ### Removed
 
+- **Test-only symbols in `internal/mcp` (AUD-51)**: `BuildToolResultMessage`, `Client.GetTool`, and the `ListToolsParams` type had zero production callers. The GetTool test now exercises the live lookup path (`ListTools`) instead; the three BuildToolResultMessage tests went with their function.
+
 - **Four dead error constructors in `error_normalizer.go` (AUD-50)**: `NewRateLimitError`, `NewInvalidRequestError`, `NewInvalidRequestErrorWithStatus`, and `NewAuthenticationError` had zero non-test callers (the live `ParseProviderError` path builds its errors through `newClientClassError`, now inlining the invalid-request construction). Tests exercising `GatewayError` behavior switched to struct literals, keeping coverage identical.
 
 ### Fixed

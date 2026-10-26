@@ -181,16 +181,3 @@ func ParseMCPCall(openaiToolName string) (serverName string, mcpToolName string,
 	}
 	return openaiToolName[:idx], openaiToolName[idx+2:], true
 }
-
-func BuildToolResultMessage(toolCallID string, result *CallToolResult, isError bool) map[string]any {
-	content := result.Text()
-	if isError || result.IsError {
-		content = "[MCP Error] " + content
-	}
-
-	return map[string]any{
-		"role":         "tool",
-		"tool_call_id": toolCallID,
-		"content":      content,
-	}
-}
