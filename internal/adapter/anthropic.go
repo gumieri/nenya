@@ -140,7 +140,17 @@ func (a *AnthropicAdapter) ConvertAnthropicRequestToOpenAIBodyReported(anthropic
 // of ConvertAnthropicToOpenAIBody and is used when the gateway needs to send
 // Anthropic-format responses to clients that sent Anthropic-format requests.
 func (a *AnthropicAdapter) ConvertOpenAIResponseToAnthropicBody(openai map[string]interface{}) map[string]interface{} {
-	return a.convertOpenAIToAnthropicResponse(openai)
+	return a.convertOpenAIToAnthropicResponse(openai, nil)
+}
+
+// ConvertOpenAIResponseToAnthropicBodyReported is ConvertOpenAIResponseToAnthropicBody
+// with fidelity reporting: kinds of content the translation could not
+// represent (the "[unsendable content: <type>]" markers) are recorded in the
+// DropReport so the gateway can surface them on the X-Nenya-Dropped-Content
+// header and the unsendable-content metric (NENYA-176; the report plumbing
+// is AUD-33 / NENYA-252).
+func (a *AnthropicAdapter) ConvertOpenAIResponseToAnthropicBodyReported(openai map[string]interface{}, report *DropReport) map[string]interface{} {
+	return a.convertOpenAIToAnthropicResponse(openai, report)
 }
 
 // NewAnthropicAdapter creates a new AnthropicAdapter instance.
@@ -2168,7 +2178,7 @@ func (a *AnthropicAdapter) contentBlocksToString(content interface{}) interface{
 	return ""
 }
 
-func (a *AnthropicAdapter) convertOpenAIToAnthropicResponse(openai map[string]interface{}) map[string]interface{} {
+func (a *AnthropicAdapter) convertOpenAIToAnthropicResponse(openai map[string]interface{}, report *DropReport) map[string]interface{} {
 	anthropic := map[string]interface{}{
 		"id":   a.extractResponseID(openai),
 		"type": "message",
@@ -2186,7 +2196,7 @@ func (a *AnthropicAdapter) convertOpenAIToAnthropicResponse(openai map[string]in
 	if ok && len(choices) > 0 {
 		choice, ok := choices[0].(map[string]interface{})
 		if ok {
-			contentBlocks, stopReason = a.extractOpenAIChoiceContent(choice)
+			contentBlocks, stopReason = a.extractOpenAIChoiceContent(choice, report)
 		}
 	}
 
@@ -2231,7 +2241,7 @@ func (a *AnthropicAdapter) extractResponseID(openai map[string]interface{}) stri
 // extractOpenAIChoiceContent extracts the Anthropic content blocks and stop
 // reason for one OpenAI-format choice. Reasoning rides as visible text
 // (NENYA-176), array content is flattened via appendOpenAIContentArray.
-func (a *AnthropicAdapter) extractOpenAIChoiceContent(choice map[string]interface{}) ([]interface{}, string) {
+func (a *AnthropicAdapter) extractOpenAIChoiceContent(choice map[string]interface{}, report *DropReport) ([]interface{}, string) {
 	var contentBlocks []interface{}
 	var stopReason string
 
@@ -2261,7 +2271,7 @@ func (a *AnthropicAdapter) extractOpenAIChoiceContent(choice map[string]interfac
 			})
 		}
 	case []interface{}:
-		contentBlocks = a.appendOpenAIContentArray(contentBlocks, c)
+		contentBlocks = a.appendOpenAIContentArray(contentBlocks, c, report)
 	default:
 		// Non-string/non-array content has no representation; leave it
 		// unrepresented rather than guessing.
@@ -2291,7 +2301,7 @@ func (a *AnthropicAdapter) extractOpenAIChoiceContent(choice map[string]interfac
 // into Anthropic blocks (multi-part / OpenRouter-style). Text parts are
 // extracted; unsendable non-text parts carry the visible
 // "[unsendable content: <type>]" marker instead of vanishing (NENYA-176).
-func (a *AnthropicAdapter) appendOpenAIContentArray(contentBlocks []interface{}, parts []interface{}) []interface{} {
+func (a *AnthropicAdapter) appendOpenAIContentArray(contentBlocks []interface{}, parts []interface{}, report *DropReport) []interface{} {
 	for _, partRaw := range parts {
 		part, ok := partRaw.(map[string]interface{})
 		if !ok {
@@ -2299,6 +2309,7 @@ func (a *AnthropicAdapter) appendOpenAIContentArray(contentBlocks []interface{},
 				"type": "text",
 				"text": "[unsendable content: unknown]",
 			})
+			report.Add("unknown") // AUD-33 / NENYA-252
 			continue
 		}
 		partType, _ := part["type"].(string)
@@ -2316,6 +2327,10 @@ func (a *AnthropicAdapter) appendOpenAIContentArray(contentBlocks []interface{},
 			"type": "text",
 			"text": "[unsendable content: " + partType + "]",
 		})
+		// The marker alone is not enough: the kind must reach the DropReport
+		// surfaces (header + metric) or the fidelity loss stays silent
+		// (AUD-33 / NENYA-252). Nil-safe.
+		report.Add(partType)
 	}
 	return contentBlocks
 }
