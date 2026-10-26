@@ -1039,6 +1039,12 @@ func (p *Proxy) handleBufferedAction(ctx context.Context, gw *gateway.NenyaGatew
 			}
 			return nil, bufferedOutcome{step: bufferedStepStop}
 		}
+		if buf.emptyResponse {
+			// The void is a failed attempt: continue the sweep instead of
+			// replaying it (AUD-16 / NENYA-258). When no target remains the
+			// loop's exhaustion path handles the request.
+			return nil, bufferedOutcome{step: bufferedStepNext}
+		}
 		return buf, bufferedOutcome{step: bufferedStepStop}
 	}
 	return nil, bufferedOutcome{step: bufferedStepStop}
@@ -1072,6 +1078,18 @@ func (p *Proxy) handleBufferedStream(ctx context.Context, action upstreamAction,
 		// HTTP status was 200: charge the failure rather than a success
 		// (NENYA-153).
 		gw.AgentState.RecordFailure(target, cooldownDuration)
+		return buf, nil
+	}
+	if buf.emptyResponse {
+		// AUD-16 (NENYA-258): an HTTP-200 that carried no SSE data frames is a
+		// failed upstream attempt like any other — the chat loop fails over on
+		// its empty results (streamResult{empty} → retryable). Pre-fix this
+		// path recorded a breaker SUCCESS for the void, fired no
+		// nenya_empty_responses_total counter, and replayed it to the client.
+		gw.Metrics.RecordEmptyResponse(target.Model, target.Provider, "buffered")
+		gw.AgentState.RecordFailure(target, cooldownDuration)
+		gw.Logger.Warn("empty buffered response from upstream, trying next target",
+			"model", target.Model, "provider", target.Provider)
 		return buf, nil
 	}
 	// NENYA-153: a served slow call counts as a breaker failure instead of a
