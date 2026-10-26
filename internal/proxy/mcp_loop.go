@@ -869,7 +869,10 @@ sweep:
 			continue
 		}
 
-		action := p.prepareAndSend(gw, r, i, targets, target, workingPayload, cooldownDuration, tokenCount, agentName, apiKey, false, sourceFormat, windowCompacted)
+		// The MCP buffered loop has no request-scoped audit flag: nil keeps
+		// the per-attempt semantics there (each attempt is a distinct
+		// logical dispatch in the multi-turn loop).
+		action := p.prepareAndSend(gw, r, i, targets, target, workingPayload, cooldownDuration, tokenCount, agentName, apiKey, false, sourceFormat, windowCompacted, nil)
 		if action.kind == actionError {
 			attempt++
 		}

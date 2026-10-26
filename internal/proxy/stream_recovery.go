@@ -254,7 +254,10 @@ func (p *Proxy) tryContinueStream(gw *gateway.NenyaGateway, w http.ResponseWrite
 
 	p.finishStreamAttempt(gw, action, stallR)
 
-	newAction := p.prepareAndSend(gw, r, opts.idx, opts.targets, target, payload, cooldownDuration, opts.tokenCount, opts.agentName, opts.apiKey, true, opts.sourceFormat, opts.windowCompacted)
+	// Stream continuation is a re-dispatch of the same logical request; nil
+	// keeps per-attempt audit semantics (the chat loop's first attempt
+	// already audited this payload).
+	newAction := p.prepareAndSend(gw, r, opts.idx, opts.targets, target, payload, cooldownDuration, opts.tokenCount, opts.agentName, opts.apiKey, true, opts.sourceFormat, opts.windowCompacted, nil)
 	if newAction.kind != actionStream {
 		gw.Metrics.RecordStreamContinuation(target.Model, target.Provider, "gave_up_redispatch")
 		resolveRedispatchOutcome(gw, target, cooldownDuration, newAction)

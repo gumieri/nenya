@@ -29,9 +29,14 @@ type TransformDeps struct {
 	ThoughtSigCache    infra.ThoughtSignatureKV
 	ExtractContentText func(msg map[string]interface{}) string
 	Catalog            *discovery.ModelCatalog
-	CountTokens        func(string) int
-	AgentName          string
-	CacheSalt          string
+	// UnknownFieldsAudited gates auditRequestFields to once per logical
+	// request across failover attempts (AUD-39 / NENYA-245). Per-request
+	// callers pass a shared bool owned by the request's retry loop; nil
+	// keeps the per-attempt semantics for callers without request scope.
+	UnknownFieldsAudited *bool
+	CountTokens          func(string) int
+	AgentName            string
+	CacheSalt            string
 	// SessionIdentity is the coherent per-conversation session identity
 	// (synthesized or client-supplied, NENYA-143/158). When set, the
 	// prompt-cache key derives from IT — per conversation — instead of the

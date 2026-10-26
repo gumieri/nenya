@@ -261,7 +261,18 @@ var knownRequestFields = map[string]struct{}{
 // auditRequestFields reports top-level fields no format path consumes. The
 // counter label is the resolved format (closed set); the field names go to the
 // structured log, capped so a hostile body cannot flood the log line.
+//
+// The audit reports the CLIENT's fields once per LOGICAL request, not once
+// per failover attempt: deps.UnknownFieldsAudited (a shared bool owned by
+// the request's retry loop) gates the re-fire (AUD-39 / NENYA-245). A nil
+// pointer keeps the per-attempt semantics for callers without request scope.
 func auditRequestFields(deps TransformDeps, payload map[string]interface{}, format string) {
+	if deps.UnknownFieldsAudited != nil {
+		if *deps.UnknownFieldsAudited {
+			return
+		}
+		*deps.UnknownFieldsAudited = true
+	}
 	if len(payload) == 0 {
 		return
 	}
