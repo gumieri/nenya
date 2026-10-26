@@ -979,12 +979,29 @@ func (r *SSETransformingReader) Read(p []byte) (int, error) {
 // truncate a partially delivered line. The cancellation is then surfaced on the
 // following call.
 func (r *SSETransformingReader) finishOnContextDone(p []byte) (int, error) {
-	if sep := r.eventSeparator(); len(sep) > 0 && len(p) > 0 {
+	// A zero-length read must not discard the pending event terminator:
+	// defer termination by one read so the separator is delivered
+	// (AUD-30 / NENYA-249). Returning (0, nil) for len(p)==0 is legal per
+	// the io.Reader contract.
+	if sep := r.eventSeparator(); len(sep) > 0 {
+		if len(p) == 0 {
+			return 0, nil
+		}
 		n := copy(p, sep)
 		r.lastLineBlank = true
 		return n, nil
 	}
-	return r.finishWithError(r.ctx.Err())
+	err := r.ctx.Err()
+	// The terminal branch funnels through the same observer notification as
+	// every other stream end — pre-fix OnStreamClose was skipped on this
+	// path, so downstream observers (egress watchers, held-tail drains)
+	// never saw the close (AUD-30 / NENYA-249). The closed flag guards a
+	// double notification, mirroring the drain path.
+	if r.observer != nil && !r.closed {
+		r.closed = true
+		r.observer.OnStreamClose(err)
+	}
+	return r.finishWithError(err)
 }
 
 // closePendingEvent buffers the blank line that terminates the final forwarded
