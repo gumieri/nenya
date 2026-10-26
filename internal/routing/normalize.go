@@ -4,6 +4,8 @@ import (
 	"math"
 	"sort"
 	"strings"
+
+	"github.com/nenya/internal/util"
 )
 
 // Request normalization for coding-agent harness payloads (NENYA-186). Two
@@ -314,9 +316,9 @@ func auditRequestFields(deps TransformDeps, payload map[string]interface{}, form
 		logged = logged[:maxLogged]
 	}
 	for i, field := range logged {
-		if len(field) > 64 {
-			logged[i] = field[:64]
-		}
+		// RuneSafeTruncate, not a raw byte slice: a non-ASCII field name
+		// cut mid-rune would log invalid UTF-8 (AUD-78 / NENYA-275).
+		logged[i] = util.RuneSafeTruncate(field, 64)
 	}
 	deps.Metrics.RecordUnknownRequestField(format)
 	if deps.Logger != nil {
