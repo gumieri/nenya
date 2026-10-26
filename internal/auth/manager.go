@@ -213,7 +213,7 @@ func (m *AccountManager) ReportSuccess(provider, accountID string) error {
 	}
 
 	if m.storage != nil {
-		// AUD-43 (NENYA-232): persist a SNAPSHOT. GetAccount returns the
+		// AUD-43 (NENYA-232): persist a SNAPSHOT. AccountSnapshot returns the
 		// live pointer with the pool lock already released, so SaveAccount
 		// would marshal the maps while a concurrent ApplyError/ReportSuccess
 		// mutates them — the exact hazard AccountSnapshot's doc names. The
@@ -238,19 +238,6 @@ func (m *AccountManager) ListProviders() []string {
 		providers = append(providers, name)
 	}
 	return providers
-}
-
-// ListAccounts returns all accounts for a given provider.
-func (m *AccountManager) ListAccounts(provider string) []*config.ProviderAccount {
-	m.mu.RLock()
-	pool, ok := m.pools[provider]
-	m.mu.RUnlock()
-
-	if !ok {
-		return nil
-	}
-
-	return pool.ListAccounts()
 }
 
 // CleanupExpiredLocks removes expired model locks across all pools.

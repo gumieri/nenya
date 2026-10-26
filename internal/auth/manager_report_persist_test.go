@@ -29,7 +29,8 @@ func (s *recordingStorage) SaveAccount(provider string, account *config.Provider
 
 // TestReportSuccessPersistsSnapshotNotLivePointer pins AUD-43 (NENYA-232):
 // ReportSuccess must persist a SNAPSHOT of the account, not the live
-// pointer. GetAccount returns the live *ProviderAccount with the pool lock
+// pointer. AccountSnapshot returns a deep copy safe to marshal while the
+// pool keeps mutating live state
 // already released, so marshaling it races any concurrent ApplyError /
 // ReportSuccess map write. The ApplyError path has used AccountSnapshot for
 // exactly this reason; ReportSuccess predates it.
@@ -54,7 +55,7 @@ func TestReportSuccessPersistsSnapshotNotLivePointer(t *testing.T) {
 	if persisted == nil {
 		t.Fatal("SaveAccount was never called")
 	}
-	live := pool.GetAccount("acc-1")
+	live := pool.AccountSnapshot("acc-1")
 	if persisted == live {
 		t.Fatal("SaveAccount received the LIVE account pointer: marshaling it races concurrent map writers; ReportSuccess must persist a snapshot")
 	}
