@@ -6,6 +6,8 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- **`tryLoadCredFile` swallows non-ENOENT read errors (NENYA-278, AUD-69)**: every `os.ReadFile` failure on the cred-dir secrets file returned `(nil, nil)` — a mis-permissioned file (EACCES) or a directory where the file should be (EISDIR) silently looked like "no credentials configured" and boot continued **keyless**. Only a missing file is a silent skip now; other errors surface wrapped with the failing path. Pinned with a directory-as-file fixture (deterministic regardless of the running user) plus the missing-file-stays-silent guard.
+
 - **`LatencyTracker.Record` rejects non-positive durations (NENYA-277, AUD-72)**: `RecordTTFT` had the `duration <= 0` guard; `Record` didn't — an unmeasured call (zero-value timer) recorded as a 0ms sample, dragging the median down and distorting the latency-aware reorder and warm-cache tie-break. Pinned by entry-absence + median/sample-size assertions across zero, negative, and mixed sequences.
 
 - **The canary-marker shape test asserted its own fixture (AUD-85)**: `TestCanaryMarkerShapeMatches` compared the file-local `canaryMarkerContent` helper against a hand-copied prefix — if the gateway's real marker changed, the test would still pass. It now requires **byte-identity** with `pipeline.CanaryMarker` (the real constructor, fed its actual argument shape: the bare hex token). Strengthening it immediately caught the constructor's double-prefix subtlety (`CanaryMarker` adds `NENYA-CANARY-` itself).
