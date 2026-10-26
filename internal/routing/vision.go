@@ -244,10 +244,13 @@ func DropUnsupportedVisionContent(deps TransformDeps, payload map[string]interfa
 
 // keepSupportedVisionParts filters one content array, returning the kept parts
 // and the number of images dropped. An array emptied by the filter keeps a
-// visible omission marker instead.
+// visible omission marker carrying the FIRST drop reason (the reasons are
+// ordered by the drop loop, so the marker names what actually happened)
+// instead.
 func keepSupportedVisionParts(deps TransformDeps, parts []interface{}, site string, vision bool, format string) ([]interface{}, int) {
 	kept := make([]interface{}, 0, len(parts))
 	dropped := 0
+	firstReason := ""
 	for _, rawPart := range parts {
 		part, ok := rawPart.(map[string]interface{})
 		if !ok {
@@ -264,13 +267,36 @@ func keepSupportedVisionParts(deps TransformDeps, parts []interface{}, site stri
 			kept = append(kept, rawPart)
 			continue
 		}
+		if firstReason == "" {
+			firstReason = reason
+		}
 		dropped++
 		deps.RecordVisionDrop(VisionContentDropped{Site: site, Reason: reason, MimeType: ref.mime})
 	}
 	if dropped > 0 && len(kept) == 0 {
 		kept = append(kept, map[string]interface{}{
-			"type": "text", "text": "[image omitted: not supported by the routed model or format]",
+			"type": "text", "text": visionOmissionNote(firstReason),
 		})
 	}
 	return kept, dropped
+}
+
+// visionOmissionNote renders the client-visible omission marker for the
+// array's first drop reason (AUD-80: the note names what actually happened
+// instead of always claiming "not supported").
+func visionOmissionNote(reason string) string {
+	switch reason {
+	case "model_no_vision":
+		return "[image omitted: the routed model has no vision capability]"
+	case "format_shape":
+		return "[image omitted: the routed format cannot carry message images]"
+	case "format_media":
+		return "[image omitted: the routed format does not accept this media type]"
+	case "format_remote_url":
+		return "[image omitted: the routed format does not accept remote image URLs]"
+	case "malformed_image":
+		return "[image omitted: the image part was malformed]"
+	default:
+		return "[image omitted: not supported by the routed model or format]"
+	}
 }
