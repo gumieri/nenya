@@ -175,7 +175,6 @@ func (p *Proxy) forwardSystemOneRequest(gw *gateway.NenyaGateway, w http.Respons
 		return
 	}
 	req.Header.Set("Content-Type", "application/json")
-
 	resp, err := util.DoWithRetryResp(ctx, maxAttempts, func() (*http.Response, error) {
 		r, fetchErr := gw.ClientFor(providerName).Do(req)
 		if fetchErr != nil {
