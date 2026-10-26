@@ -113,7 +113,7 @@ func (b *bufferedSSE) usageChunk() map[string]interface{} {
 			line = string(value)
 		}
 		line = strings.TrimSpace(line)
-		if line == "" || line == "[DONE]" || !strings.Contains(line, "usage") {
+		if line == "" || line == stream.DonePayload || !strings.Contains(line, "usage") {
 			// Prefilter: content deltas are the bulk of a large buffer; only
 			// lines mentioning usage in any spelling (usage, usageMetadata) are
 			// worth unmarshaling.
@@ -186,7 +186,7 @@ func (p *Proxy) convertReplayFrames(tr stream.ResponseTransformer, raw []byte) (
 		if !ok {
 			return nil, false
 		}
-		if converted == "[DONE]" {
+		if converted == stream.DonePayload {
 			out = append(out, "data: [DONE]\n\n"...)
 			continue
 		}
@@ -373,7 +373,7 @@ func (acc *sseAccumulator) processLine(line string) bool {
 		return false
 	}
 
-	if data == "[DONE]" {
+	if data == stream.DonePayload {
 		acc.raw.WriteString("data: [DONE]\n\n")
 		return true
 	}

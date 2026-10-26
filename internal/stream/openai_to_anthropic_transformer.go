@@ -63,7 +63,7 @@ func (t *OpenAIToAnthropicTransformer) TransformSSEChunk(ctx context.Context, da
 		return nil, nil
 	}
 
-	if string(data) == "[DONE]" {
+	if IsDonePayload(data) {
 		t.mu.Lock()
 		defer t.mu.Unlock()
 		t.streamDone = true
@@ -80,7 +80,7 @@ func (t *OpenAIToAnthropicTransformer) TransformSSEChunk(ctx context.Context, da
 			t.pendingFinish = ""
 			return tail, nil
 		}
-		return []byte("[DONE]"), nil
+		return []byte(DonePayload), nil
 	}
 
 	var chunk map[string]interface{}

@@ -1186,7 +1186,7 @@ func (p *Proxy) canaryBufferedLine(watcher *stream.CanaryWatcher, canary pipelin
 		return line + "\n", false, false
 	}
 	trimmed := strings.TrimSpace(string(value))
-	if trimmed == "" || trimmed == "[DONE]" {
+	if trimmed == "" || trimmed == stream.DonePayload {
 		return line + "\n", false, false
 	}
 	parsed := stream.ParseSSEChunk([]byte(trimmed))
@@ -1255,7 +1255,7 @@ func (p *Proxy) guardBufferedLine(guard *stream.ExfilGuard, line string) (string
 		return line + "\n", false, false, nil
 	}
 	trimmed := strings.TrimSpace(string(value))
-	if trimmed == "" || trimmed == "[DONE]" {
+	if trimmed == "" || trimmed == stream.DonePayload {
 		return line + "\n", false, false, nil
 	}
 	parsed := stream.ParseSSEChunk([]byte(trimmed))

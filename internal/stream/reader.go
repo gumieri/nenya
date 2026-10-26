@@ -105,7 +105,17 @@ var sseDataPrefix = []byte("data:")
 
 // canonicalDoneFrame is the canonical [DONE] frame the reader forwards. It is a
 // constant so no caller can mutate the shared bytes.
-const canonicalDoneFrame = "data: [DONE]"
+// DonePayload is the OpenAI SSE terminal sentinel carried in a data line.
+const DonePayload = "[DONE]"
+
+// IsDonePayload reports whether v is the OpenAI terminal sentinel,
+// tolerating surrounding whitespace (the canonical frame is exactly
+// DonePayload; the same tolerance as the field recognition, NENYA-197).
+func IsDonePayload(v []byte) bool {
+	return bytes.Equal(bytes.TrimSpace(v), []byte(DonePayload))
+}
+
+const canonicalDoneFrame = "data: " + DonePayload
 
 // ResponseTransformer transforms one SSE data payload. TransformSSEChunk
 // receives the JSON payload of a data: line (without the field prefix) and
@@ -1088,7 +1098,7 @@ func (r *SSETransformingReader) transformLine(line []byte) []byte {
 		// defensive: trackTransformedSize flips discarding mid-stream and the
 		// next Read injects the size error before scanning resumes, so the
 		// branch is normally unreachable.
-		if value, isData := SSEDataField(line); isData && bytes.Equal(bytes.TrimSpace(value), []byte("[DONE]")) {
+		if value, isData := SSEDataField(line); isData && IsDonePayload(value) {
 			r.sawDone = true
 			return []byte(canonicalDoneFrame)
 		}
@@ -1302,7 +1312,7 @@ func (r *SSETransformingReader) transformSSEData(line []byte) []byte {
 		r.notifySSEObserver(line, nil, "keepalive")
 		return line
 	}
-	if bytes.Equal(bytes.TrimSpace(origData), []byte("[DONE]")) {
+	if IsDonePayload(origData) {
 		r.sawDone = true
 		// upstreamLine keeps the SSEObserver contract (Raw is the pre-filter
 		// upstream bytes) while the emitted frame is canonicalized.
@@ -1822,7 +1832,7 @@ func (r *SSETransformingReader) handleWithTransformer(parsed map[string]interfac
 
 	transformed = r.applyToolCallNormalization(transformed, &r.tcState)
 
-	if bytes.Equal(transformed, []byte("[DONE]")) {
+	if IsDonePayload(transformed) {
 		r.sawDone = true
 		// Route through finishStreamFrames exactly like the raw-[DONE] path,
 		// so a transformer-synthesized terminal composes the same frames
@@ -2045,7 +2055,7 @@ func (r *SSETransformingReader) transformNonSSELine(line []byte) []byte {
 	if len(transformed) == 0 || bytes.Equal(transformed, trimmed) {
 		return line
 	}
-	if bytes.Equal(transformed, []byte("[DONE]")) {
+	if IsDonePayload(transformed) {
 		// AUD-02: the bare-JSON variant of the synthesized terminal gets the
 		// same composition as the data-line variant — canonical [DONE] frame,
 		// held-tail flush, done notification. Forwarding the bare value raw

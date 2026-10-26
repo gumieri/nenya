@@ -410,7 +410,7 @@ func capturedStreamHasResumableTerminal(captured []byte) bool {
 		default:
 			continue
 		}
-		if len(payload) == 0 || payload[0] != '{' || bytes.Equal(payload, []byte("[DONE]")) {
+		if len(payload) == 0 || payload[0] != '{' || stream.IsDonePayload(payload) {
 			continue
 		}
 		var parsed struct {
@@ -457,7 +457,7 @@ func capturedStreamHasRefusalOrFilter(captured []byte) bool {
 		default:
 			continue
 		}
-		if len(payload) == 0 || payload[0] != '{' || bytes.Equal(payload, []byte("[DONE]")) {
+		if len(payload) == 0 || payload[0] != '{' || stream.IsDonePayload(payload) {
 			continue
 		}
 		var parsed struct {
