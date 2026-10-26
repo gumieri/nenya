@@ -181,7 +181,7 @@ func TestAccountPool_ApplyError_429(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	acc := pool.GetAccount("a1")
+	acc := pool.AccountSnapshot("a1")
 	if acc.Status != config.AccountStatusError {
 		t.Errorf("expected error status, got %s", acc.Status)
 	}
@@ -205,7 +205,7 @@ func TestAccountPool_ReportSuccess(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	acc := pool.GetAccount("a1")
+	acc := pool.AccountSnapshot("a1")
 	if acc.Status != config.AccountStatusActive {
 		t.Errorf("expected active status, got %s", acc.Status)
 	}
@@ -233,7 +233,7 @@ func TestAccountPool_ExpiredLocks(t *testing.T) {
 		t.Errorf("expected 1 expired lock, got %d", count)
 	}
 
-	acc := pool.GetAccount("a1")
+	acc := pool.AccountSnapshot("a1")
 	if _, ok := acc.ModelLocks["gpt-3.5"]; ok {
 		t.Error("expected gpt-3.5 lock to be removed")
 	}
@@ -427,20 +427,6 @@ func TestAccountManager_ListProviders(t *testing.T) {
 	}
 }
 
-func TestAccountManager_ListAccounts(t *testing.T) {
-	mgr := NewAccountManager(nil)
-	accounts := []*config.ProviderAccount{newTestAccount("a1", "k1")}
-	mgr.RegisterPool("test", NewAccountPool("test", accounts))
-
-	listed := mgr.ListAccounts("test")
-	if len(listed) != 1 {
-		t.Errorf("expected 1 account, got %d", len(listed))
-	}
-	if mgr.ListAccounts("nonexistent") != nil {
-		t.Error("expected nil for unknown provider")
-	}
-}
-
 func TestAccountManager_ConcurrentAccess(t *testing.T) {
 	mgr := NewAccountManager(nil)
 	accounts := []*config.ProviderAccount{
@@ -487,7 +473,7 @@ func TestAccountPool_SelectAccountByID_Healthy(t *testing.T) {
 	}
 
 	// LastUsed is refreshed so LRU selection stays fair for unpinned sessions.
-	if pool.GetAccount("a2").LastUsed.IsZero() {
+	if pool.AccountSnapshot("a2").LastUsed.IsZero() {
 		t.Error("expected LastUsed to be updated after selection")
 	}
 }
@@ -937,7 +923,7 @@ func TestAccountPool_ConcurrentSelectionRace(t *testing.T) {
 	if served.Load() == 0 {
 		t.Fatal("pool served no selections under concurrent load")
 	}
-	if acc := pool.GetAccount(sel.ID); acc == nil || acc.Status != config.AccountStatusActive {
+	if acc := pool.AccountSnapshot(sel.ID); acc == nil || acc.Status != config.AccountStatusActive {
 		t.Fatalf("selected account not active after recovery (acc=%v)", acc)
 	}
 }
@@ -1044,7 +1030,7 @@ func TestApplyErrorForModelScopesCooldown(t *testing.T) {
 			t.Fatalf("expected model-locked reason, got: %v", err)
 		}
 	}
-	acc := p.GetAccount("acc-1")
+	acc := p.AccountSnapshot("acc-1")
 	if acc.Status != config.AccountStatusActive {
 		t.Fatalf("model-scoped 429 must not error the account: %v", acc.Status)
 	}
@@ -1056,7 +1042,7 @@ func TestApplyErrorForModelScopesCooldown(t *testing.T) {
 	if err := p.ApplyErrorForModel("acc-1", "gemini-2.5-pro", 429, "insufficient_quota: you have exceeded your quota"); err != nil {
 		t.Fatal(err)
 	}
-	acc = p.GetAccount("acc-1")
+	acc = p.AccountSnapshot("acc-1")
 	if acc.RateLimitedUntil.IsZero() {
 		t.Fatal("account-scoped quota signal must bench the account")
 	}
@@ -1096,7 +1082,7 @@ func TestApplyErrorForModelScopesCooldown(t *testing.T) {
 	if err := p2.ApplyErrorForModel("acc-2", "some-model", 429, "too many requests"); err != nil {
 		t.Fatal(err)
 	}
-	if acc2 := p2.GetAccount("acc-2"); acc2.RateLimitedUntil.IsZero() {
+	if acc2 := p2.AccountSnapshot("acc-2"); acc2.RateLimitedUntil.IsZero() {
 		t.Fatal("an unrecognized 429 body must fail safe to the account scope")
 	}
 }

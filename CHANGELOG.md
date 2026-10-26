@@ -6,6 +6,8 @@ All notable changes to this project will be documented in this file.
 
 ### Removed
 
+- **Auth dead accessors after the snapshot fix (AUD-59)**: `AccountPool.GetAccount` (returned the **live internal pointer**; the safe `AccountSnapshot` deep-copy API replaced it — AUD-43/NENYA-232), `AccountPool.ListAccounts`, and `AccountManager.ListAccounts` had zero production callers. Tests observe through `AccountSnapshot`/`GetPool` now.
+
 - **The `applyContentFilters` TODO no-op on the SSE hot path (AUD-58)**: a per-parsed-chunk call that immediately returned its input ("TODO: Implement content filtering if needed (currently no-op)"). The content-filter machinery that DOES run lives in the interceptor chain (`RedactInterceptor` et al.) before routing; the reader-side stub never filtered anything.
 
 - **The `completeConnect` double closed-check (AUD-57)**: the second, lock-free `closed.Load()` was a dead duplicate of the mutex-guarded check a few instructions earlier — Close stores `closed` atomically *without* the mutex, so neither check is tighter than the other, both returned `ErrTransportClosed`, and the residual window is masked by `Ready()`'s `!closed` mask regardless. Race coverage unchanged (`client_recovery_race_test.go`).

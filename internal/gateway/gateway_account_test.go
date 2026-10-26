@@ -38,12 +38,16 @@ func TestSelectCredentialForPreferredAccount(t *testing.T) {
 
 	// Billing-exhausted account is rejected before the pool touch: no
 	// LastUsed bump (LRU position preserved) and no misleading miss metric.
-	before := mgr.ListAccounts("prov")[0].LastUsed
+	provPool, err := mgr.GetPool(context.Background(), "prov")
+	if err != nil {
+		t.Fatalf("GetPool: %v", err)
+	}
+	before := provPool.AccountSnapshot("a1").LastUsed
 	bt.MarkExhausted(ctx, "prov", "a1", "quota")
 	if _, _, ok := g.SelectCredentialForPreferredAccount(ctx, "prov", "m1", "a1"); ok {
 		t.Fatal("expected billing-exhausted account to be rejected")
 	}
-	after := mgr.ListAccounts("prov")[0].LastUsed
+	after := provPool.AccountSnapshot("a1").LastUsed
 	if !after.Equal(before) {
 		t.Fatal("rejected account must not have LastUsed bumped")
 	}

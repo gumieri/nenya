@@ -386,31 +386,6 @@ func (p *AccountPool) AccountSnapshot(accountID string) *config.ProviderAccount 
 	return nil
 }
 
-// GetAccount returns an account by ID without updating LastUsed.
-// The returned pointer references internal mutable state — callers MUST NOT
-// mutate the struct. Used only for read-only access (e.g., persistence).
-func (p *AccountPool) GetAccount(accountID string) *config.ProviderAccount {
-	p.mu.RLock()
-	defer p.mu.RUnlock()
-
-	for _, acc := range p.accounts {
-		if acc.ID == accountID {
-			return acc
-		}
-	}
-	return nil
-}
-
-// ListAccounts returns all accounts in the pool.
-func (p *AccountPool) ListAccounts() []*config.ProviderAccount {
-	p.mu.RLock()
-	defer p.mu.RUnlock()
-
-	accounts := make([]*config.ProviderAccount, len(p.accounts))
-	copy(accounts, p.accounts)
-	return accounts
-}
-
 // LockModel locks a model for the account until the specified time.
 // Used to prevent concurrent requests to the same model from the same account.
 func (p *AccountPool) LockModel(accountID, model string, until time.Time) error {
