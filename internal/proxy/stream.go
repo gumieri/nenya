@@ -1106,22 +1106,7 @@ func recordStreamResult(gw *gateway.NenyaGateway, o streamOutcome) {
 		return
 	}
 	if o.copyErr == nil {
-		// An in-stream error event was already charged by the observer while the
-		// frame was parsed; recording a success here would clear it (and close a
-		// half-open circuit on a stream the client saw fail).
-		if o.upstreamErr != nil && o.upstreamErr.seen {
-			return
-		}
-		if o.slowCall.slow() {
-			// Never fall through to a success once the first token was slow:
-			// the success would clear the failure streak (and close a half-open
-			// circuit) that this measurement exists to charge.
-			recordSlowCallAt(gw, o.target, o.agentName, o.slowCall.threshold, o.slowCall.elapsed, o.cooldownDuration)
-			return
-		}
-		if !o.target.BYOK {
-			gw.AgentState.RecordSuccess(o.target.CoolKey)
-		}
+		recordStreamServedOutcome(gw, o)
 		return
 	}
 	// A client-side cancel or a request deadline is connection-scoped
@@ -1136,6 +1121,35 @@ func recordStreamResult(gw *gateway.NenyaGateway, o streamOutcome) {
 	gw.Logger.Warn("stream copy error (upstream)",
 		"model", o.target.Model, "provider", o.target.Provider, "err", o.copyErr)
 	gw.AgentState.RecordFailure(o.target, o.cooldownDuration)
+}
+
+// recordStreamServedOutcome records the outcome of a stream the client
+// received in full: an in-stream upstream error stays charged by the
+// observer, a slow first token is charged as a breaker failure (NENYA-153),
+// and a fast one records the success that lets a half-open circuit recover.
+// Every write stands down for a BYOK dispatch (NENYA-195): a caller-funded
+// request never touches shared-account state — pre-fix the slow-call branch
+// skipped that guard and emitted breaker-failure metrics for a charge against
+// a shared account that never happens (AUD-14 / NENYA-260).
+func recordStreamServedOutcome(gw *gateway.NenyaGateway, o streamOutcome) {
+	// An in-stream error event was already charged by the observer while the
+	// frame was parsed; recording a success here would clear it (and close a
+	// half-open circuit on a stream the client saw fail).
+	if o.upstreamErr != nil && o.upstreamErr.seen {
+		return
+	}
+	if o.slowCall.slow() {
+		// Never fall through to a success once the first token was slow:
+		// the success would clear the failure streak (and close a half-open
+		// circuit) that this measurement exists to charge.
+		if !o.target.BYOK {
+			recordSlowCallAt(gw, o.target, o.agentName, o.slowCall.threshold, o.slowCall.elapsed, o.cooldownDuration)
+		}
+		return
+	}
+	if !o.target.BYOK {
+		gw.AgentState.RecordSuccess(o.target.CoolKey)
+	}
 }
 
 func storeStreamCache(gw *gateway.NenyaGateway, cacheKey string, captureBuf *bytes.Buffer, tee *sseTeeWriter, payload map[string]any, reqCtx context.Context, resumable bool) {
