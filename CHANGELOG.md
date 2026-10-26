@@ -6,6 +6,8 @@ All notable changes to this project will be documented in this file.
 
 ### Removed
 
+- **The `authenticateRequest` backward-compat shim (AUD-53)**: a thin wrapper around `authenticateAndAuthorize` that existed only so tests could compare key names as strings — zero production callers. Its nine tests now drive `authenticateAndAuthorize` directly, asserting on the `*config.ApiKey` they always received.
+
 - **Gateway dead API: `GetMCPClientsForAgent` and the `contextWithTimeout` wrapper (AUD-52)**: the accessor had zero production callers (its five tests exercised a dead API and went with it); the timeout wrapper was a pure pass-through to `context.WithTimeout` — the two production call sites now call the stdlib directly.
 
 - **Test-only symbols in `internal/mcp` (AUD-51)**: `BuildToolResultMessage`, `Client.GetTool`, and the `ListToolsParams` type had zero production callers. The GetTool test now exercises the live lookup path (`ListTools`) instead; the three BuildToolResultMessage tests went with their function.
