@@ -6,6 +6,8 @@ All notable changes to this project will be documented in this file.
 
 ### Removed
 
+- **`routing.ExtractField` (AUD-54)**: zero callers, and its doc claimed "lightweight JSON field extraction without full unmarshaling" while the implementation did a full `json.Unmarshal` — the real lightweight path (`util.ExtractTopLevelField`, NENYA-35) has been the hot-path peek all along.
+
 - **The `authenticateRequest` backward-compat shim (AUD-53)**: a thin wrapper around `authenticateAndAuthorize` that existed only so tests could compare key names as strings — zero production callers. Its nine tests now drive `authenticateAndAuthorize` directly, asserting on the `*config.ApiKey` they always received.
 
 - **Gateway dead API: `GetMCPClientsForAgent` and the `contextWithTimeout` wrapper (AUD-52)**: the accessor had zero production callers (its five tests exercised a dead API and went with it); the timeout wrapper was a pure pass-through to `context.WithTimeout` — the two production call sites now call the stdlib directly.
