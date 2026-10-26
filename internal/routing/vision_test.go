@@ -128,6 +128,49 @@ func TestDropUnsupportedVisionContent_ImageOnlyBecomesMarker(t *testing.T) {
 	}
 }
 
+// TestDropUnsupportedVisionContent_MarkerNamesTheReason pins AUD-80
+// (NENYA-284): the omission marker names the ACTUAL drop reason — a
+// vision-less model's marker says the model has no vision, not the generic
+// "not supported by the routed model or format". Pre-fix every emptied
+// array carried the same generic string.
+func TestDropUnsupportedVisionContent_MarkerNamesTheReason(t *testing.T) {
+	deps := visionDeps(t)
+	payload := map[string]interface{}{"messages": []interface{}{map[string]interface{}{
+		"role": "user",
+		"content": []interface{}{
+			map[string]interface{}{"type": "image_url", "image_url": map[string]interface{}{"url": "data:image/png;base64,AAAA"}},
+		},
+	}}}
+	if dropped := DropUnsupportedVisionContent(deps, payload, "glm-4.5-text-only", "openai"); dropped != 1 {
+		t.Fatalf("want 1 dropped image, got %d", dropped)
+	}
+	parts := payload["messages"].([]interface{})[0].(map[string]interface{})["content"].([]interface{})
+	text, _ := parts[0].(map[string]interface{})["text"].(string)
+	if !strings.Contains(text, "no vision capability") {
+		t.Fatalf("the marker must name the vision reason, got %q", text)
+	}
+	if strings.Contains(text, "not supported by the routed model or format") {
+		t.Fatalf("the generic fallback must not be used when the reason is known: %q", text)
+	}
+
+	// A malformed image (no URL, no media type) on a vision-capable model
+	// names the malformed reason instead.
+	payload2 := map[string]interface{}{"messages": []interface{}{map[string]interface{}{
+		"role": "user",
+		"content": []interface{}{
+			map[string]interface{}{"type": "image_url", "image_url": map[string]interface{}{}},
+		},
+	}}}
+	if dropped := DropUnsupportedVisionContent(deps, payload2, "gpt-4o", "openai"); dropped != 1 {
+		t.Fatalf("want 1 dropped malformed image, got %d", dropped)
+	}
+	parts2 := payload2["messages"].([]interface{})[0].(map[string]interface{})["content"].([]interface{})
+	text2, _ := parts2[0].(map[string]interface{})["text"].(string)
+	if !strings.Contains(text2, "malformed") {
+		t.Fatalf("the marker must name the malformed reason, got %q", text2)
+	}
+}
+
 // An OpenAI-shaped remote image URL on an Anthropic target is unsendable
 // (converter only carries data: URLs, and message content is copied verbatim)
 // while an OpenAI target keeps it.
