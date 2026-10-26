@@ -69,20 +69,20 @@ type bufferedSSE struct {
 	// string alone cannot identify when a chain lists one model under several
 	// providers.
 	servingTarget routing.UpstreamTarget
-	// lastUsageChunk caches the final SSE data line carrying a usage
-	// object so the calibration and Stats parsers parse rawBytes once
-	// (NENYA-135; multi-MB buffers must not be re-parsed per consumer).
-	// Contract: usageChunk() must not be called before the egress/canary
-	// guards finish mutating rawBytes; rawBytes is treated as immutable
-	// once parsed (current ordering — guards inside forwardBuffered, both
-	// keeping usage frames — satisfies this).
-	lastUsageChunk map[string]interface{}
-	usageParsed    bool
+	// usageScan caches the one-time parse of rawBytes: every data chunk
+	// carrying a usage object, in order. The shared scan behind
+	// usageChunk/usageTotals so multi-MB buffers are unmarshaled once
+	// (NENYA-135, AUD-82 / NENYA-287). Contract: the usage accessors must
+	// not be called before the egress/canary guards finish mutating
+	// rawBytes; rawBytes is treated as immutable once parsed (current
+	// ordering — guards inside forwardBuffered, both keeping usage
+	// frames — satisfies this).
+	usageScan       []map[string]interface{}
+	usageScanParsed bool
 	// usageMerged caches the per-dimension high-water merge of every usage
 	// object in the buffer (NENYA-167).
-	usageMerged       stream.UsageTotals
-	usageMergedSeen   bool
-	usageMergedParsed bool
+	usageMerged     stream.UsageTotals
+	usageMergedSeen bool
 	// usageClaimed records that this buffer's usage was claimed by
 	// recordMCPIterationUsage (one claim per dispatch); the MCP terminal paths
 	// check it and are therefore idempotent no-ops for a claimed buffer
@@ -101,13 +101,25 @@ type mcpToolCall struct {
 	ExtraContent any
 }
 
-// usageChunk returns the final SSE data line carrying a usage object,
-// parsing rawBytes once and caching the result (nil = no usage present).
+// usageChunk returns the final SSE data line carrying a usage object over
+// the shared single scan (nil = no usage present).
 func (b *bufferedSSE) usageChunk() map[string]interface{} {
-	if b.usageParsed {
-		return b.lastUsageChunk
+	chunks := b.usageChunks()
+	if len(chunks) == 0 {
+		return nil
 	}
-	b.usageParsed = true
+	return chunks[len(chunks)-1]
+}
+
+// usageChunks parses rawBytes ONCE (cached) and returns every data chunk
+// carrying a usage object in order — the shared scan behind usageChunk and
+// usageTotals, which previously each walked and unmarshaled the same lines
+// independently (AUD-82 / NENYA-287).
+func (b *bufferedSSE) usageChunks() []map[string]interface{} {
+	if b.usageScanParsed {
+		return b.usageScan
+	}
+	b.usageScanParsed = true
 	for _, line := range strings.Split(string(b.rawBytes), "\n") {
 		if value, isData := stream.SSEDataField([]byte(line)); isData {
 			line = string(value)
@@ -126,10 +138,10 @@ func (b *bufferedSSE) usageChunk() map[string]interface{} {
 		// Any accepted placement counts: the OpenAI top-level "usage", the
 		// Anthropic "message.usage" and Gemini's "usageMetadata" (NENYA-167).
 		if _, hasUsage := stream.UsageMapFromChunk(chunk); hasUsage {
-			b.lastUsageChunk = chunk
+			b.usageScan = append(b.usageScan, chunk)
 		}
 	}
-	return b.lastUsageChunk
+	return b.usageScan
 }
 
 // replayBufferedResponse writes a buffered SSE response to the client.
