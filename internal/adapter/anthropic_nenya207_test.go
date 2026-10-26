@@ -1,8 +1,9 @@
 package adapter
 
 import (
-	"strings"
 	"testing"
+
+	"github.com/nenya/internal/pipeline"
 )
 
 // NENYA-207 finding (1): the Anthropic→OpenAI reverse conversion flattens
@@ -165,11 +166,17 @@ func lastBlockOf(t *testing.T, msg map[string]interface{}) map[string]interface{
 	return block
 }
 
-// Sanity: the canary content the tests use matches the gateway's marker
-// shape (the isTrailingContextMarker matcher is shape-based).
+// Sanity: the canary content the tests use is BYTE-IDENTICAL to the
+// gateway's real marker constructor (pipeline.CanaryMarker) — the
+// trailing-context matcher is shape-based, so a fixture that merely
+// resembles the shape would validate against markers the gateway never
+// emits (AUD-85: the old assertion compared the fixture to its own
+// hand-copied prefix and could not detect drift).
 func TestCanaryMarkerShapeMatches(t *testing.T) {
-	if !strings.HasPrefix(canaryMarkerContent("NENYA-CANARY-x"), "\n[internal-ref] NENYA-CANARY-") {
-		t.Fatal("the test fixture drifted from the gateway's marker shape")
+	const hexToken = "0123456789abcdef0123456789abcdef"
+	if canaryMarkerContent(pipeline.CanaryPrefix+hexToken) != pipeline.CanaryMarker(hexToken) {
+		t.Fatalf("the test fixture drifted from the gateway's marker shape:\n%q\nvs\n%q",
+			canaryMarkerContent(pipeline.CanaryPrefix+hexToken), pipeline.CanaryMarker(hexToken))
 	}
 }
 
