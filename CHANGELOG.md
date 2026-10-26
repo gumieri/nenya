@@ -6,6 +6,8 @@ All notable changes to this project will be documented in this file.
 
 ### Removed
 
+- **`config.DefaultNonChatModels` and `config.MaxSlowCallThresholdSeconds` unexported (AUD-56)**: both were config-package exports with zero `config.`-qualified users — the copy helper is now `defaultNonChatModelsCopy` and the cap `maxSlowCallThresholdSeconds`.
+
 - **`pipeline.ClassifyHarnessEnvelope` unexported (AUD-55)**: exported with zero external callers — its only consumer is `harnessSurface` in the same file. Now package-internal (`classifyHarnessEnvelope`).
 
 - **`routing.ExtractField` (AUD-54)**: zero callers, and its doc claimed "lightweight JSON field extraction without full unmarshaling" while the implementation did a full `json.Unmarshal` — the real lightweight path (`util.ExtractTopLevelField`, NENYA-35) has been the hot-path peek all along.

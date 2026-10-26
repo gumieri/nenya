@@ -840,10 +840,10 @@ func validateTokenCalibration(cfg *TokenCalibrationConfig) []string {
 	return errs
 }
 
-// MaxSlowCallThresholdSeconds caps governance/agents slow_call_threshold_seconds
+// maxSlowCallThresholdSeconds caps governance/agents slow_call_threshold_seconds
 // (24 hours). A longer threshold would make the slow-call breaker unreachable by
 // design, which is what "disabled" is for.
-const MaxSlowCallThresholdSeconds = 86400
+const maxSlowCallThresholdSeconds = 86400
 
 // MaxStickySessionTTLSeconds caps agents[].sticky_session_ttl_seconds (24
 // hours). Exported so the proxy's runtime clamp uses the same value.
@@ -1733,8 +1733,8 @@ func validateSlowCallThresholdSeconds(v *int, field string) []string {
 	if *v < 0 {
 		return []string{fmt.Sprintf("%s must be non-negative (set to 0 to disable slow-call breaking), got %d", field, *v)}
 	}
-	if *v > MaxSlowCallThresholdSeconds {
-		return []string{fmt.Sprintf("%s exceeds maximum allowed value (%d seconds / 24 hours), got %d", field, MaxSlowCallThresholdSeconds, *v)}
+	if *v > maxSlowCallThresholdSeconds {
+		return []string{fmt.Sprintf("%s exceeds maximum allowed value (%d seconds / 24 hours), got %d", field, maxSlowCallThresholdSeconds, *v)}
 	}
 	return nil
 }
