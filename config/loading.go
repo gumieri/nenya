@@ -234,7 +234,8 @@ func configDropInFiles(dir string) ([]string, error) {
 
 // mergeConfig applies overlay onto base with the directory-mode merge rules:
 // exported struct fields recurse; pointers to structs deep-merge; pointers to
-// scalars, non-empty slices, and non-nil maps are applied (maps merge per key;
+// scalars, non-nil slices (an explicit empty list IS a clear — AUD-46), and
+// non-nil maps are applied (maps merge per key;
 // struct-valued entries deep-merge per FIELD — NENYA-203); plain scalars apply
 // when non-zero. The rules cover every field of Config
 // structurally, so a newly added field merges without touching this function.
@@ -257,7 +258,13 @@ func mergeValue(dst, src reflect.Value) {
 	case reflect.Map:
 		mergeMapValue(dst, src)
 	case reflect.Slice:
-		if src.Len() > 0 {
+		// Nil means the field was ABSENT (JSON decode leaves it nil), so the
+		// base value stands. A non-nil slice — including an EMPTY one — is
+		// an explicit value: "an explicit list (including an empty one) is
+		// the operator's intent" (mergeProviderRouting's stated semantics).
+		// Ignoring empty slices made the non_chat_models empty-list opt-out
+		// inexpressible from a drop-in (AUD-46 / NENYA-255).
+		if !src.IsNil() {
 			dst.Set(src)
 		}
 	case reflect.Bool:
@@ -309,8 +316,9 @@ func mergeStruct(dst, src reflect.Value) {
 // a drop-in patching one field of an existing entry must not discard the
 // others. Every other element shape (scalars, slices, pointers to
 // scalars) is last-file-wins. Inside struct entries the mergeConfig
-// value rules apply: zero scalars/empty slices/nil pointers leave the
-// base field, so clearing a base value from a drop-in is not possible.
+// value rules apply: zero scalars/nil pointers leave the
+// base field; a slice is only skipped when NIL (absent), so an explicit
+// empty list IS a clear (AUD-46 / NENYA-255).
 // Map values are not addressable, so struct entries are merged into a
 // copy and stored back (pointer entries into a fresh pointee — the
 // base's pointee is never mutated in place).
