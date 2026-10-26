@@ -2,8 +2,6 @@ package proxy
 
 import (
 	"context"
-	"encoding/json"
-	"strings"
 
 	"github.com/nenya/internal/gateway"
 	"github.com/nenya/internal/routing"
@@ -46,22 +44,7 @@ func mcpCalibrationModel(targets []routing.UpstreamTarget, buf *bufferedSSE) str
 // usage-bearing chunk alone would lose the input (and the calibration actual);
 // for the OpenAI shape, whose usage object is cumulative, the merge is a no-op.
 func (b *bufferedSSE) usageTotals() (stream.UsageTotals, bool) {
-	if b.usageMergedParsed {
-		return b.usageMerged, b.usageMergedSeen
-	}
-	b.usageMergedParsed = true
-	for _, line := range strings.Split(string(b.rawBytes), "\n") {
-		if value, isData := stream.SSEDataField([]byte(line)); isData {
-			line = string(value)
-		}
-		line = strings.TrimSpace(line)
-		if line == "" || line == stream.DonePayload || !strings.Contains(line, "usage") {
-			continue
-		}
-		var chunk map[string]interface{}
-		if err := json.Unmarshal([]byte(line), &chunk); err != nil {
-			continue
-		}
+	for _, chunk := range b.usageChunks() {
 		usage, ok := stream.UsageMapFromChunk(chunk)
 		if !ok {
 			continue
