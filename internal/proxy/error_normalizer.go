@@ -134,41 +134,6 @@ func NewProviderError(provider string, statusCode int, message string, err error
 	}
 }
 
-// NewRateLimitError creates a new rate limit error
-func NewRateLimitError(provider string, message string) *GatewayError {
-	return &GatewayError{
-		Type:       ErrorTypeRateLimit,
-		Message:    message,
-		StatusCode: http.StatusTooManyRequests,
-		Provider:   provider,
-	}
-}
-
-// NewInvalidRequestError creates a new invalid request error
-func NewInvalidRequestError(message string, err error) *GatewayError {
-	return NewInvalidRequestErrorWithStatus(http.StatusBadRequest, message, err)
-}
-
-// NewInvalidRequestErrorWithStatus creates a new invalid request error with a custom status code
-func NewInvalidRequestErrorWithStatus(statusCode int, message string, err error) *GatewayError {
-	return &GatewayError{
-		Type:       ErrorTypeInvalidRequest,
-		Message:    message,
-		StatusCode: statusCode,
-		Err:        err,
-	}
-}
-
-// NewAuthenticationError creates a new authentication error
-func NewAuthenticationError(provider string, message string) *GatewayError {
-	return &GatewayError{
-		Type:       ErrorTypeAuthentication,
-		Message:    message,
-		StatusCode: http.StatusUnauthorized,
-		Provider:   provider,
-	}
-}
-
 // NewNotFoundError creates a new not found error
 func NewNotFoundError(message string) *GatewayError {
 	return &GatewayError{
@@ -249,8 +214,13 @@ func newClientClassError(provider string, statusCode int, message string, detail
 		stream.IsPolicyRefusalText(details.Message) ||
 		stream.IsPolicyRefusalText(message)
 	if !isPolicy {
-		gatewayErr := NewInvalidRequestErrorWithStatus(statusCode, message, originalErr)
-		gatewayErr.Provider = provider
+		gatewayErr := &GatewayError{
+			Type:       ErrorTypeInvalidRequest,
+			Message:    message,
+			StatusCode: statusCode,
+			Err:        originalErr,
+			Provider:   provider,
+		}
 		return gatewayErr
 	}
 	return &GatewayError{
