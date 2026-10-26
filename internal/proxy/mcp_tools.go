@@ -52,7 +52,12 @@ type bufferedSSE struct {
 	// streamError marks a buffer carrying an in-stream error frame (NENYA-153):
 	// the client is replayed the error, so the attempt must not be charged as a
 	// breaker success.
-	streamError      bool
+	streamError bool
+	// emptyResponse marks a buffer whose HTTP-200 carried NO SSE data frames
+	// at all (empty body, keepalives only, or non-SSE junk): a failed upstream
+	// attempt like any other — counted in the NENYA-160 degradation signal,
+	// charged as a breaker failure, and failed over (AUD-16 / NENYA-258).
+	emptyResponse    bool
 	reasoningContent string
 	// calibrationModel is the serving target's model (set at construction
 	// by handleBufferedStream): the exact key the dispatch estimate for
@@ -662,6 +667,7 @@ func (acc *sseAccumulator) result() *bufferedSSE {
 		providerName:     "",
 		reasoningContent: reasoningStr,
 		streamError:      acc.streamError,
+		emptyResponse:    acc.dataLines == 0,
 	}
 }
 
