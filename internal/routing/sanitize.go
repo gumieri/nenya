@@ -39,7 +39,7 @@ func stripStreamOptions(deps TransformDeps, payload map[string]interface{}, mode
 		return
 	}
 	delete(payload, "stream_options")
-	deps.Logger.Debug("stripped stream_options", "model", modelName)
+	deps.log().Debug("stripped stream_options", "model", modelName)
 }
 
 func stripToolChoice(deps TransformDeps, payload map[string]interface{}, modelName string) {
@@ -55,7 +55,7 @@ func stripToolChoice(deps TransformDeps, payload map[string]interface{}, modelNa
 		return
 	}
 	delete(payload, "tool_choice")
-	deps.Logger.Debug("stripped tool_choice \"auto\"", "model", modelName)
+	deps.log().Debug("stripped tool_choice \"auto\"", "model", modelName)
 }
 
 func flattenContentArrays(deps TransformDeps, payload map[string]interface{}, modelName string) {
@@ -92,7 +92,7 @@ func flattenContentArrays(deps TransformDeps, payload map[string]interface{}, mo
 		changed = true
 	}
 	if changed {
-		deps.Logger.Debug("flattened content arrays", "model", modelName)
+		deps.log().Debug("flattened content arrays", "model", modelName)
 	}
 }
 
@@ -105,7 +105,7 @@ func processReasoningContent(deps TransformDeps, payload map[string]interface{},
 		return
 	}
 	if pipeline.StripReasoningContent(payload) {
-		deps.Logger.Debug("stripped reasoning_content", "model", modelName)
+		deps.log().Debug("stripped reasoning_content", "model", modelName)
 	}
 }
 
@@ -122,13 +122,13 @@ func stripBareReasoningField(deps TransformDeps, payload map[string]interface{},
 	_, hasReasoningEffort := payload["reasoning_effort"]
 	if hasReasoningEffort {
 		delete(payload, "reasoning")
-		deps.Logger.Debug("stripped bare reasoning field (redundant with reasoning_effort)", "model", modelName)
+		deps.log().Debug("stripped bare reasoning field (redundant with reasoning_effort)", "model", modelName)
 		return
 	}
 
 	if shouldStripReasoning(deps, modelName) {
 		delete(payload, "reasoning")
-		deps.Logger.Debug("stripped bare reasoning field (model does not support reasoning)", "model", modelName)
+		deps.log().Debug("stripped bare reasoning field (model does not support reasoning)", "model", modelName)
 	}
 }
 
@@ -148,7 +148,7 @@ func processMessages(deps TransformDeps, payload map[string]interface{}, modelNa
 		return
 	}
 	payload["messages"] = repairedMessages
-	deps.Logger.Info("repaired invalid message role ordering", "model", modelName)
+	deps.log().Info("repaired invalid message role ordering", "model", modelName)
 }
 
 func applyDeepSeekFixes(deps TransformDeps, payload map[string]interface{}, modelName string) {

@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log/slog"
 	"math"
 	"net/http"
@@ -22,6 +23,10 @@ import (
 
 // TransformDeps provides the dependencies needed for request payload
 // transformation (provider lookup, API key injection, metrics, etc.).
+// nilLogger backs TransformDeps.log: a discard logger for callers that set
+// no Logger. Package-level so the hot path does not allocate per call.
+var nilLogger = slog.New(slog.NewTextHandler(io.Discard, nil))
+
 type TransformDeps struct {
 	Logger             *slog.Logger
 	Providers          map[string]*config.Provider
@@ -59,6 +64,16 @@ type TransformDeps struct {
 	WindowCompacted bool
 
 	Metrics *infra.Metrics
+}
+
+// log returns the deps logger, or a discard logger when unset: every
+// transform/sanitize site logs best-effort, and a nil Logger must degrade to
+// silence rather than panic mid-request (AUD-38 / NENYA-246).
+func (d TransformDeps) log() *slog.Logger {
+	if d.Logger == nil {
+		return nilLogger
+	}
+	return d.Logger
 }
 
 func InjectAPIKeyWithGateway(providerName string, gw interface {
@@ -143,7 +158,7 @@ func resolveModelMapping(deps TransformDeps, payload map[string]interface{}, pro
 	}
 	payload["model"] = finalModel
 	if finalModel != modelName && deps.Logger != nil {
-		deps.Logger.Info("provider model mapping", "provider", providerName, "from", modelName, "to", finalModel)
+		deps.log().Info("provider model mapping", "provider", providerName, "from", modelName, "to", finalModel)
 	}
 	return finalModel
 }
@@ -231,7 +246,7 @@ func injectPromptCacheKey(deps TransformDeps, payload map[string]interface{}, pr
 	if identity == "" {
 		if deps.AgentName == "" {
 			if deps.Logger != nil {
-				deps.Logger.Debug("skipped prompt_cache_key injection: no session identity or agent name",
+				deps.log().Debug("skipped prompt_cache_key injection: no session identity or agent name",
 					"provider", providerName, "model", modelName)
 			}
 			return
@@ -270,14 +285,14 @@ func injectOpenAICacheBreakpoints(deps TransformDeps, payload map[string]interfa
 
 	if !supportsOpenAICacheBreakpoints(modelName) {
 		if deps.Logger != nil {
-			deps.Logger.Debug("skipped OpenAI cache breakpoint injection: model not in GPT-5.6+ family", "model", modelName)
+			deps.log().Debug("skipped OpenAI cache breakpoint injection: model not in GPT-5.6+ family", "model", modelName)
 		}
 		return
 	}
 
 	if _, hasKey := payload["prompt_cache_key"]; !hasKey {
 		if deps.Logger != nil {
-			deps.Logger.Debug("skipped OpenAI cache breakpoint injection: prompt_cache_key missing", "model", modelName)
+			deps.log().Debug("skipped OpenAI cache breakpoint injection: prompt_cache_key missing", "model", modelName)
 		}
 		return
 	}
@@ -363,7 +378,7 @@ func injectSystemMessage(deps TransformDeps, payload map[string]interface{}, age
 		if firstMsg, ok := messages[0].(map[string]interface{}); ok {
 			injectSystem = shouldInjectSystem(firstMsg, agent)
 			if !injectSystem {
-				deps.Logger.Debug("agent system prompt skipped: first message already system role", "agent", agentNameRaw)
+				deps.log().Debug("agent system prompt skipped: first message already system role", "agent", agentNameRaw)
 			}
 		}
 	}
@@ -377,7 +392,7 @@ func injectSystemMessage(deps TransformDeps, payload map[string]interface{}, age
 		// the provider-cached prefix and re-bill the conversation every
 		// turn. Place the agent prompt immediately after it instead.
 		insertAt = 1
-		deps.Logger.Debug("agent system prompt placed after cached client system message", "agent", agentNameRaw)
+		deps.log().Debug("agent system prompt placed after cached client system message", "agent", agentNameRaw)
 	}
 	systemMsg := map[string]interface{}{
 		"role":    "system",
@@ -389,7 +404,7 @@ func injectSystemMessage(deps TransformDeps, payload map[string]interface{}, age
 	newMessages = append(newMessages, systemMsg)
 	newMessages = append(newMessages, messages[insertAt:]...)
 	payload["messages"] = newMessages
-	deps.Logger.Info("injected agent system prompt", "agent", agentNameRaw)
+	deps.log().Info("injected agent system prompt", "agent", agentNameRaw)
 }
 
 // firstMessageCarriesCacheControl reports whether the message carries an
@@ -428,7 +443,7 @@ func resolveAgentSystemPrompt(deps TransformDeps, payload map[string]interface{}
 	}
 	systemPrompt, err := config.LoadPromptFile(agent.SystemPromptFile, agent.SystemPrompt, "")
 	if err != nil {
-		deps.Logger.Warn("failed to load agent system prompt, skipping", "agent", agentNameRaw, "err", err)
+		deps.log().Warn("failed to load agent system prompt, skipping", "agent", agentNameRaw, "err", err)
 		return
 	}
 	if systemPrompt == "" {
@@ -563,7 +578,7 @@ func applyParamCompatSanitize(deps TransformDeps, payload map[string]interface{}
 	rules := resolveParamCompatRules(&deps.Config.Governance)
 	applied := applyParamCompat(rules, payload, modelName)
 	for _, param := range applied {
-		deps.Logger.Debug("param-compat rule applied", "model", modelName, "param", param)
+		deps.log().Debug("param-compat rule applied", "model", modelName, "param", param)
 	}
 }
 
@@ -638,7 +653,7 @@ func applyAutoCacheBreakpoints(deps TransformDeps, payload map[string]interface{
 	opts.Messages = true
 	deps.Metrics.RecordAutoCacheBreakpoint("injected")
 	if deps.Logger != nil {
-		deps.Logger.Debug("auto cache breakpoints injected",
+		deps.log().Debug("auto cache breakpoints injected",
 			"agent", deps.AgentName, "messages", stableMessages)
 	}
 }
@@ -808,7 +823,7 @@ func TransformRequestForUpstream(deps TransformDeps, providerName, upstreamURL s
 		historyTrimmed = modified
 		if modified {
 			deps.Metrics.RecordTokensSaved("trim", saved)
-			deps.Logger.Info("payload trimmed to fit token budget",
+			deps.log().Info("payload trimmed to fit token budget",
 				"input_budget", inputBudget,
 				"saved_tokens", saved)
 		}
