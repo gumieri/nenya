@@ -1357,8 +1357,6 @@ func (r *SSETransformingReader) transformSSEData(line []byte) []byte {
 		}
 	}
 
-	data = r.applyContentFilters(data, parsed)
-
 	r.callUsageAndContentCallbacks(parsed)
 
 	// NENYA-205/AUD-02: a stateful transformer closes at the raw terminal
@@ -1745,11 +1743,6 @@ func applyEntropyFilter(parsed map[string]interface{}, filter *StreamEntropyFilt
 		return content, a
 	})
 	return parsed, rewrote
-}
-
-func (r *SSETransformingReader) applyContentFilters(data []byte, parsed map[string]interface{}) []byte {
-	// TODO: Implement content filtering if needed (currently no-op)
-	return data
 }
 
 func (r *SSETransformingReader) callUsageAndContentCallbacks(parsed map[string]interface{}) {
