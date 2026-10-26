@@ -65,6 +65,11 @@ func normalizeTargetParams(deps TransformDeps, payload map[string]interface{}, r
 	}
 	normalizeDuplicateParams(deps, payload, tokenField)
 	moveCapToTargetField(deps, payload, tokenField, modelName)
+	// AUD-35 (NENYA-248): the first attempt records the client-shape
+	// findings; later attempts (payload restored) skip the recordings.
+	if deps.Telemetry != nil {
+		deps.Telemetry.CapNormalizeRecorded = true
+	}
 	// Coerce the EFFECTIVE token field: after a move the cap lives under the
 	// target's spelling, so a rule listing only the other name would
 	// otherwise leave the declared type unconverted (NENYA-179 review).
@@ -141,10 +146,16 @@ func normalizeDuplicateParams(deps TransformDeps, payload map[string]interface{}
 			}
 		}
 		delete(payload, drop)
-		deps.Metrics.RecordDuplicateParam(rule.label)
-		if deps.Logger != nil {
-			deps.Logger.Warn("resolved conflicting duplicate request parameters",
-				"param", rule.label, "kept", keep, "kept_value", payload[keep])
+		// AUD-35 (NENYA-248): the recording is once-per-request — the
+		// payload is restored to the client's original shape between
+		// attempts, so every failover would re-detect and re-record the
+		// same client-shape finding. The MUTATION above stays unconditional.
+		if deps.Telemetry == nil || !deps.Telemetry.CapNormalizeRecorded {
+			deps.Metrics.RecordDuplicateParam(rule.label)
+			if deps.Logger != nil {
+				deps.Logger.Warn("resolved conflicting duplicate request parameters",
+					"param", rule.label, "kept", keep, "kept_value", payload[keep])
+			}
 		}
 	}
 }
@@ -181,10 +192,14 @@ func coerceIntTypedParams(deps TransformDeps, payload map[string]interface{}, pa
 			clamped = true
 		}
 		payload[param] = int(f)
-		deps.Metrics.RecordParamCoercion(param, sourceFormat)
-		if deps.Logger != nil {
-			deps.Logger.Debug("coerced parameter to the target's integer type",
-				"param", param, "client_format", sourceFormat, "value", int(f), "clamped", clamped)
+		// AUD-35 (NENYA-248): once-per-request recording, same restore
+		// reasoning as the duplicate-resolution gate above.
+		if deps.Telemetry == nil || !deps.Telemetry.CapNormalizeRecorded {
+			deps.Metrics.RecordParamCoercion(param, sourceFormat)
+			if deps.Logger != nil {
+				deps.Logger.Debug("coerced parameter to the target's integer type",
+					"param", param, "client_format", sourceFormat, "value", int(f), "clamped", clamped)
+			}
 		}
 	}
 }
@@ -267,11 +282,11 @@ var knownRequestFields = map[string]struct{}{
 // the request's retry loop) gates the re-fire (AUD-39 / NENYA-245). A nil
 // pointer keeps the per-attempt semantics for callers without request scope.
 func auditRequestFields(deps TransformDeps, payload map[string]interface{}, format string) {
-	if deps.UnknownFieldsAudited != nil {
-		if *deps.UnknownFieldsAudited {
+	if deps.Telemetry != nil {
+		if deps.Telemetry.UnknownFieldsAudited {
 			return
 		}
-		*deps.UnknownFieldsAudited = true
+		deps.Telemetry.UnknownFieldsAudited = true
 	}
 	if len(payload) == 0 {
 		return

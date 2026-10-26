@@ -34,14 +34,19 @@ type TransformDeps struct {
 	ThoughtSigCache    infra.ThoughtSignatureKV
 	ExtractContentText func(msg map[string]interface{}) string
 	Catalog            *discovery.ModelCatalog
-	// UnknownFieldsAudited gates auditRequestFields to once per logical
-	// request across failover attempts (AUD-39 / NENYA-245). Per-request
-	// callers pass a shared bool owned by the request's retry loop; nil
-	// keeps the per-attempt semantics for callers without request scope.
-	UnknownFieldsAudited *bool
-	CountTokens          func(string) int
-	AgentName            string
-	CacheSalt            string
+	// Telemetry gates the once-per-request telemetry families across
+	// failover attempts (AUD-39 / NENYA-245 and AUD-35 / NENYA-248):
+	// UnknownFieldsAudited gates the unknown-fields audit,
+	// CapNormalizeRecorded gates the duplicate-resolution and coercion
+	// recordings (the payload is RESTORED to the client's original shape
+	// between attempts, so every attempt would otherwise re-detect and
+	// re-record the same client-shape findings). Per-request callers pass a
+	// shared struct owned by the request's retry loop; nil keeps the
+	// per-attempt semantics for callers without request scope.
+	Telemetry   *RequestTelemetry
+	CountTokens func(string) int
+	AgentName   string
+	CacheSalt   string
 	// SessionIdentity is the coherent per-conversation session identity
 	// (synthesized or client-supplied, NENYA-143/158). When set, the
 	// prompt-cache key derives from IT — per conversation — instead of the
@@ -770,6 +775,13 @@ func convertToAnthropicFormat(deps TransformDeps, payload map[string]interface{}
 	applyMidConversationVerdict(deps, modelName, &opts)
 	applyAutoCacheBreakpoints(deps, payload, pc, &opts, historyTrimmed)
 	return anthropicAdapter.ConvertOpenAIToAnthropicBody(payload, modelName, stream, opts)
+}
+
+// RequestTelemetry carries the once-per-request telemetry flags shared by a
+// request's failover attempts. See TransformDeps.Telemetry.
+type RequestTelemetry struct {
+	UnknownFieldsAudited bool
+	CapNormalizeRecorded bool
 }
 
 func TransformRequestForUpstream(deps TransformDeps, providerName, upstreamURL string, payload map[string]interface{}, model string, maxOutput int, maxContext int, format string, reasoningEffort string) ([]byte, string, error) {

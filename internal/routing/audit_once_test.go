@@ -42,12 +42,12 @@ func unknownFieldCount(t *testing.T, m *infra.Metrics) int {
 // nenya_unknown_request_fields_total by the attempt count.
 func TestAuditRequestFieldsOncePerRequest(t *testing.T) {
 	m := infra.NewMetrics()
-	audited := false
+	telemetry := RequestTelemetry{}
 	deps := TransformDeps{
-		Logger:               slog.New(slog.NewTextHandler(io.Discard, nil)),
-		Config:               &config.Config{},
-		Metrics:              m,
-		UnknownFieldsAudited: &audited,
+		Logger:    slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Config:    &config.Config{},
+		Metrics:   m,
+		Telemetry: &telemetry,
 	}
 	payload := map[string]interface{}{
 		"model":            "m",

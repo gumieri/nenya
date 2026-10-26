@@ -221,9 +221,9 @@ type retryLoop struct {
 	summarizedPayload map[string]interface{}
 	attempt           int
 	quotaExhausted    bool
-	// unknownFieldsAudited gates the per-request unknown-fields audit across
-	// failover attempts (AUD-39 / NENYA-245); shared with transformDeps.
-	unknownFieldsAudited bool
+	// telemetry carries the once-per-request telemetry gates shared with
+	// transformDeps across failover attempts (AUD-39 / AUD-35).
+	telemetry routing.RequestTelemetry
 	// lastStreamErr holds the final transport-level stream read error observed
 	// across targets (distinct from an empty stream). Its detail is logged, not
 	// echoed to the client after Exhausted(), to avoid leaking internal
@@ -1003,7 +1003,7 @@ func (rl *retryLoop) maxSameTargetRetries() int {
 
 // prepareAndSend wraps the proxy's prepareAndSend method.
 func (rl *retryLoop) prepareAndSend(idx int, target routing.UpstreamTarget, payload map[string]interface{}) upstreamAction {
-	return rl.p.prepareAndSend(rl.gw, rl.r, idx, rl.opts.Targets, target, payload, rl.opts.Cooldown, rl.opts.TokenCount, rl.opts.AgentName, rl.opts.ApiKey, rl.stream, rl.opts.SourceFormat, rl.opts.WindowCompacted, &rl.unknownFieldsAudited)
+	return rl.p.prepareAndSend(rl.gw, rl.r, idx, rl.opts.Targets, target, payload, rl.opts.Cooldown, rl.opts.TokenCount, rl.opts.AgentName, rl.opts.ApiKey, rl.stream, rl.opts.SourceFormat, rl.opts.WindowCompacted, &rl.telemetry)
 }
 
 // handleUpstreamError wraps the proxy's handleUpstreamError method.
@@ -1184,7 +1184,7 @@ func (p *Proxy) prepareAndSend(gw *gateway.NenyaGateway,
 	streaming bool,
 	sourceFormat string,
 	windowCompacted bool,
-	unknownFieldsAudited *bool,
+	unknownFieldsAudited *routing.RequestTelemetry,
 ) upstreamAction {
 	ctxLogger := gw.Logger.With(
 		"operation", "upstream",
@@ -1268,8 +1268,8 @@ func (p *Proxy) prepareAndSend(gw *gateway.NenyaGateway,
 			}
 			return ""
 		}(),
-		Metrics:              gw.Metrics,
-		UnknownFieldsAudited: unknownFieldsAudited,
+		Metrics:   gw.Metrics,
+		Telemetry: unknownFieldsAudited,
 	}
 	transformedBody, _, err := routing.TransformRequestForUpstream(transformDeps, target.Provider, target.URL, payload, target.Model, target.MaxOutput, target.MaxContext, target.Format, target.ReasoningEffort)
 	if err != nil {
