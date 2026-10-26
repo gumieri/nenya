@@ -446,12 +446,20 @@ func mapFinishReasonReverse(reason string) string {
 	switch reason {
 	case "stop":
 		return "end_turn"
-	case "tool_calls":
+	case "tool_calls", "function_call":
+		// function_call is OpenAI's legacy pre-tool_calls spelling.
 		return "tool_use"
 	case "length":
 		return "max_tokens"
+	case "content_filter":
+		return "refusal"
 	default:
-		return reason
+		// Anthropic's stop_reason is a CLOSED enum (end_turn, max_tokens,
+		// stop_sequence, tool_use, refusal, pause_turn). A provider's
+		// custom or case-drifted finish reason must never ride onto it
+		// verbatim — strict clients reject foreign values; end_turn is
+		// the neutral natural-stop (AUD-32 / NENYA-251).
+		return "end_turn"
 	}
 }
 
