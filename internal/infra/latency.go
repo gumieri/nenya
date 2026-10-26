@@ -87,7 +87,7 @@ func NewLatencyTracker() *LatencyTracker {
 // strings are cloned on entry creation only (see cloneLabels in metrics.go,
 // NENYA-198); updates reuse the existing entry.
 func (l *LatencyTracker) Record(model, provider string, duration time.Duration) {
-	if l == nil {
+	if l == nil || duration <= 0 {
 		return
 	}
 	key := model + ":" + provider
