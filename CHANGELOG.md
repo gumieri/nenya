@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [Unreleased]
+
+### Documentation
+
+- Backfilled the v0.19.0 behavior changes into the docs: symlink containment in the `file:` secret-reference guard (NENYA-298 — SECRETS_FORMAT.md, CONFIGURATION.md), the `config set` reference/null stderr notes (NENYA-302 — CONFIGURATION.md), the per-TTL `cache_creation` breakdown surviving the buffered conversions (NENYA-311 — CACHING.md), and the URL-userinfo redaction scope of `nenya describe` (NENYA-296 — SECRETS_FORMAT.md, CONFIGURATION.md).
+
 ## [0.19.0] - 2026-10-26
 
 ### Fixed

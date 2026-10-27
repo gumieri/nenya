@@ -207,7 +207,11 @@ These token counters are distinct from the `nenya_cache_hit_total` /
 `nenya_cache_miss_total` event counters above: the former count _tokens_ for
 upstream prompt caching, while the latter count _response events_ for Nenya's
 own response cache. Both streaming and non-streaming requests are accounted,
-including Anthropic's native `cache_creation_input_tokens` field.
+including Anthropic's native `cache_creation_input_tokens` field. The per-TTL
+breakdown (`cache_creation.ephemeral_5m_input_tokens` /
+`ephemeral_1h_input_tokens`) survives the buffered format conversions too —
+the converted usage publishes the same object the streaming transformer does,
+omitted when the upstream did not report it (NENYA-311).
 
 ### `/statsz` cache hit ratio
 
