@@ -257,7 +257,8 @@ func TestHandleDescribe_RedactsCredentials(t *testing.T) {
 	setupDescribeEnv(t, `{
 		"providers": {
 			"gemini": {
-				"url": "https://example.invalid",
+				"url": "https://urluser:urlpass@example.invalid/v1",
+				"format_urls": {"anthropic": "https://fmtuser:fmtpass@example.invalid/anthropic"},
 				"api_key": "provider-secret-0123456789",
 				"proxy_url": "http://proxyuser:proxypass@proxy.invalid:3128",
 				"accounts": [{"id": "a1", "type": "apikey", "credential": "account-secret-abcdef"}]
@@ -280,6 +281,16 @@ func TestHandleDescribe_RedactsCredentials(t *testing.T) {
 	}
 	if proxy := got.Config.Providers["gemini"].ProxyURL; !strings.Contains(proxy, redactedSentinel) || strings.Contains(proxy, "proxypass") {
 		t.Errorf("provider proxy_url = %q, want the userinfo replaced by %q", proxy, redactedSentinel)
+	}
+	// AUD-68 (NENYA-295): the provider URL and format URLs can carry
+	// userinfo credentials too — they must not reach the paste surface.
+	if u := got.Config.Providers["gemini"].URL; strings.Contains(u, "urlpass") {
+		t.Errorf("provider url echoes userinfo: %q", u)
+	}
+	for _, fu := range got.Config.Providers["gemini"].FormatURLs {
+		if strings.Contains(fu, "fmtpass") {
+			t.Errorf("format_urls echoes userinfo: %q", fu)
+		}
 	}
 	if got.Config.Network == nil {
 		t.Fatal("expected the network section to survive redaction")
