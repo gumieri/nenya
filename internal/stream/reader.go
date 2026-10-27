@@ -1064,6 +1064,18 @@ func (r *SSETransformingReader) eventSeparator() []byte {
 	return nil
 }
 
+// appendSSEEvent appends one TERMINATED SSE event — separator + frame + blank
+// line — to out, and returns the extended buffer. This is the reader's single
+// composition primitive (AUD-64 / NENYA-306): injected terminals, held-tail
+// drains, and finishStreamFrames all frame their events through it, so the
+// wire shape cannot drift between the sites. The separator honors the
+// reader's line state at call time.
+func (r *SSETransformingReader) appendSSEEvent(out, frame []byte) []byte {
+	out = append(out, r.eventSeparator()...)
+	out = append(out, frame...)
+	return append(out, '\n', '\n')
+}
+
 // trackTransformedSize accumulates the transformed output size and sets the
 // discarding flag when the total exceeds maxTransformedBytes.
 func (r *SSETransformingReader) trackTransformedSize(transformed []byte) {
@@ -1173,9 +1185,7 @@ func (r *SSETransformingReader) handleScannerDone() {
 				// content_block_delta via lastSurface — mirroring
 				// injectDoneOnly minus the [DONE].
 				if held, heldOK := r.synthesizeHeldFlush(); heldOK {
-					buf := append(r.eventSeparator(), held...)
-					buf = append(buf, '\n', '\n')
-					r.buffer = buf
+					r.buffer = r.appendSSEEvent(nil, held)
 					r.pos = 0
 					r.lastLineBlank = true
 				}
@@ -1230,21 +1240,14 @@ func (r *SSETransformingReader) handleScannerDone() {
 func (r *SSETransformingReader) injectDoneOnly() {
 	held, heldOK := r.synthesizeHeldFlush()
 	tailFrame := r.transformerTailFrame()
-	buf := append(r.eventSeparator(), []byte("data: [DONE]\n\n")...)
-	var pre []byte
+	var buf []byte
 	if heldOK {
-		pre = append(pre, r.eventSeparator()...)
-		pre = append(pre, held...)
-		pre = append(pre, '\n', '\n')
+		buf = r.appendSSEEvent(buf, held)
 	}
 	if tailFrame != nil {
-		pre = append(pre, r.eventSeparator()...)
-		pre = append(pre, tailFrame...)
-		pre = append(pre, '\n', '\n')
+		buf = r.appendSSEEvent(buf, tailFrame)
 	}
-	if pre != nil {
-		buf = append(pre, buf...)
-	}
+	buf = r.appendSSEEvent(buf, []byte("data: [DONE]"))
 	r.buffer = buf
 	r.pos = 0
 	r.lastLineBlank = true
@@ -1266,12 +1269,15 @@ func (r *SSETransformingReader) injectErrorBuffer(message string) {
 		errPayload = []byte(`{"error":{"message":"internal error","type":"gateway_error"}}`)
 	}
 	held, heldOK := r.synthesizeHeldFlush()
-	r.buffer = append(append(append(r.eventSeparator(), []byte("data: ")...), errPayload...), []byte("\n\ndata: [DONE]\n\n")...)
+	var buf []byte
 	if heldOK {
-		pre := append(r.eventSeparator(), held...)
-		pre = append(pre, '\n', '\n')
-		r.buffer = append(pre, r.buffer...)
+		buf = r.appendSSEEvent(buf, held)
 	}
+	buf = r.appendSSEEvent(buf, append([]byte("data: "), errPayload...))
+	// The [DONE] terminator glues on directly: the error event above already
+	// closed with a blank line, so a separator here would add a stray one.
+	buf = append(buf, "data: [DONE]\n\n"...)
+	r.buffer = buf
 	r.pos = 0
 	r.lastLineBlank = true
 	if r.observer != nil {
@@ -1448,12 +1454,10 @@ func (r *SSETransformingReader) prependHeldFlush(preTerminal, terminalLine []byt
 	if preTerminal == nil {
 		return terminalLine
 	}
-	out := append(r.eventSeparator(), preTerminal...)
-	out = append(out, '\n', '\n')
-	if terminalLine != nil {
-		out = append(out, terminalLine...)
-	}
-	return out
+	// The drained tail becomes a terminated event; the terminal line stays
+	// raw — it is the pipeline's own output and is terminated downstream.
+	out := r.appendSSEEvent(nil, preTerminal)
+	return append(out, terminalLine...)
 }
 
 // notifySSEObserver forwards a parsed SSE event to the registered observer.
@@ -1502,15 +1506,12 @@ func (r *SSETransformingReader) finishStreamFrames(upstreamLine, line []byte) []
 	if !heldOK && !synthOK && tailFrame == nil {
 		return line
 	}
-	separator := r.eventSeparator()
 	out := []byte{}
 	for _, part := range [][]byte{heldLine, synthLine, tailFrame, line} {
 		if len(part) == 0 {
 			continue
 		}
-		out = append(out, separator...)
-		out = append(out, part...)
-		out = append(out, '\n', '\n')
+		out = r.appendSSEEvent(out, part)
 	}
 	return out
 }
