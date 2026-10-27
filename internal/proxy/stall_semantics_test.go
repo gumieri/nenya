@@ -123,8 +123,9 @@ func TestPipeSSE_StallEmitsTerminal(t *testing.T) {
 	var buf strings.Builder
 	gw.Metrics.WritePrometheus(&buf)
 	// The HELP line is emitted unconditionally; assert the labeled SAMPLE so
-	// the telemetry claim is not vacuous.
-	if !strings.Contains(buf.String(), `nenya_stream_stalled_total{model="", provider="test-provider"} 1`) {
+	// the telemetry claim is not vacuous. The empty model normalizes to the
+	// shared unknown label through the cardinality guard (AUD-66).
+	if !strings.Contains(buf.String(), `nenya_stream_stalled_total{model="unknown", provider="test-provider"} 1`) {
 		t.Fatalf("expected the stall sample, got:\n%s", buf.String())
 	}
 }
