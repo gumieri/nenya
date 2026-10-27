@@ -607,7 +607,18 @@ func (p *Proxy) mcpIteration(in mcpIterInput) int {
 		return mcpIterStop
 	}
 
-	buf, err := p.forwardBuffered(in.gw, in.mcpLoopCtx, in.r, in.opts.Targets, working, in.opts.Cooldown, in.opts.TokenCount, in.opts.AgentName, in.opts.MaxRetries, in.opts.ApiKey, in.opts.Canary, in.opts.SourceFormat, in.opts.WindowCompacted)
+	buf, err := p.forwardBuffered(in.gw, in.mcpLoopCtx, in.r, bufferedDispatch{
+		Targets:         in.opts.Targets,
+		Payload:         working,
+		Cooldown:        in.opts.Cooldown,
+		TokenCount:      in.opts.TokenCount,
+		AgentName:       in.opts.AgentName,
+		MaxRetries:      in.opts.MaxRetries,
+		APIKey:          in.opts.ApiKey,
+		Canary:          in.opts.Canary,
+		SourceFormat:    in.opts.SourceFormat,
+		WindowCompacted: in.opts.WindowCompacted,
+	})
 	// NENYA-135: each loop iteration dispatched one upstream request whose
 	// cl100k estimate was recorded at dispatch — record this iteration's
 	// real usage here (nil-buf safe; before the handled check, so
@@ -825,20 +836,32 @@ func (p *Proxy) handleRescanFailure(in mcpIterInput, err error) {
 	writePipelineRejection(in.gw, in.w, err)
 }
 
+// bufferedDispatch groups forwardBuffered's request-scoped parameters
+// (AUD-60 / NENYA-314: thirteen positional parameters beyond the options
+// threshold). gw, ctx, and r stay positional; everything that varies per
+// dispatch is the struct.
+type bufferedDispatch struct {
+	Targets         []routing.UpstreamTarget
+	Payload         map[string]interface{}
+	Cooldown        time.Duration
+	TokenCount      int
+	AgentName       string
+	MaxRetries      int
+	APIKey          *config.ApiKey
+	Canary          pipeline.CanarResult
+	SourceFormat    string
+	WindowCompacted bool
+}
+
 func (p *Proxy) forwardBuffered(gw *gateway.NenyaGateway,
 	ctx context.Context,
 	r *http.Request,
-	targets []routing.UpstreamTarget,
-	payload map[string]interface{},
-	cooldownDuration time.Duration,
-	tokenCount int,
-	agentName string,
-	maxRetries int,
-	apiKey *config.ApiKey,
-	canary pipeline.CanarResult,
-	sourceFormat string,
-	windowCompacted bool,
+	d bufferedDispatch,
 ) (*bufferedSSE, error) {
+	targets, payload := d.Targets, d.Payload
+	cooldownDuration, tokenCount, agentName := d.Cooldown, d.TokenCount, d.AgentName
+	maxRetries, apiKey, canary := d.MaxRetries, d.APIKey, d.Canary
+	sourceFormat, windowCompacted := d.SourceFormat, d.WindowCompacted
 	originalPayload, err := prepareOriginalPayload(gw, payload)
 	if err != nil {
 		return nil, err
@@ -872,7 +895,19 @@ sweep:
 		// The MCP buffered loop has no request-scoped audit flag: nil keeps
 		// the per-attempt semantics there (each attempt is a distinct
 		// logical dispatch in the multi-turn loop).
-		action := p.prepareAndSend(gw, r, i, targets, target, workingPayload, cooldownDuration, tokenCount, agentName, apiKey, false, sourceFormat, windowCompacted, nil)
+		action := p.prepareAndSend(gw, r, dispatchParams{
+			idx:             i,
+			targets:         targets,
+			target:          target,
+			payload:         workingPayload,
+			cooldown:        cooldownDuration,
+			tokenCount:      tokenCount,
+			agentName:       agentName,
+			apiKey:          apiKey,
+			streaming:       false,
+			sourceFormat:    sourceFormat,
+			windowCompacted: windowCompacted,
+		})
 		if action.kind == actionError {
 			attempt++
 		}
