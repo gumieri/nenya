@@ -211,7 +211,7 @@ including Anthropic's native `cache_creation_input_tokens` field. The per-TTL
 breakdown (`cache_creation.ephemeral_5m_input_tokens` /
 `ephemeral_1h_input_tokens`) survives the buffered format conversions too —
 the converted usage publishes the same object the streaming transformer does,
-omitted when the upstream did not report it (NENYA-311).
+omitted when the upstream did not report it (NENYA-310).
 
 ### `/statsz` cache hit ratio
 

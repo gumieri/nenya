@@ -4,9 +4,15 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Fixed
+
+- **`config set` credential notes told operators a falsehood (review of 0.19.0)**: the AUD-74 note claimed an `env:`/`file:` value under a config-file `providers.<name>.api_key` "will be resolved at boot" and that a JSON null "clears the credential" — but config-file api_key values are **never** reference-resolved and are **not** the runtime credential (resolution and consumption both run over secrets.json `provider_keys`). The notes now say the value is written verbatim (a live reference belongs in secrets.json `provider_keys`) and that `null` only empties the config-file leaf; tests assert the new wording.
+
+- **The `file:` secret-reference guard falsely rejected references under a symlinked config root (review of 0.19.0)**: the resolved-path containment compared against the unresolved root, so when the config root itself sat behind a symlink, `EvalSymlinks` resolved the root component too and every legitimate internal reference was refused. The compare is now resolved-vs-resolved (best-effort root resolution); escape detection through a symlinked root still works. Pinned by `TestResolveSecretFilePath_RootBehindSymlink` (failed pre-fix).
+
 ### Documentation
 
-- Backfilled the v0.19.0 behavior changes into the docs: symlink containment in the `file:` secret-reference guard (NENYA-298 — SECRETS_FORMAT.md, CONFIGURATION.md), the `config set` reference/null stderr notes (NENYA-302 — CONFIGURATION.md), the per-TTL `cache_creation` breakdown surviving the buffered conversions (NENYA-311 — CACHING.md), and the URL-userinfo redaction scope of `nenya describe` (NENYA-296 — SECRETS_FORMAT.md, CONFIGURATION.md).
+- Backfilled the v0.19.0 behavior changes into the docs, with the canonical work-item numbers (NENYA-295/297/300/310 as cited in the code, correcting this entry's first draft): symlink containment in the `file:` secret-reference guard scoped to relative references in directory mode (NENYA-297 — SECRETS_FORMAT.md, CONFIGURATION.md), the `config set` credential-leaf notes (NENYA-300 — CONFIGURATION.md), the per-TTL `cache_creation` breakdown surviving the buffered conversions (NENYA-310 — CACHING.md), and the URL-userinfo redaction scope of `nenya describe` as defense-in-depth behind the validation refusal (NENYA-295 — SECRETS_FORMAT.md, CONFIGURATION.md).
 
 ## [0.19.0] - 2026-10-26
 

@@ -374,9 +374,7 @@ At least one provider key must be present for the corresponding provider to work
 - Use systemd's credential mechanism for secure in-memory storage
 - Rotate tokens periodically
 - Path traversal (`..`) is rejected for all secret paths
-- Symlinks are resolved and containment-verified: a `file:` reference whose
-  real path escapes the config root is rejected, even when the link itself
-  lives inside it (NENYA-298); an internal link still resolves
+- Symlinks are resolved: a relative `file:` reference (directory mode) whose real path escapes the config root is rejected, even when the link itself lives inside it (NENYA-297); a config root behind a symlink still works
 
 ### Weak-Credential Refusal (Fail-Closed Boot)
 
@@ -416,9 +414,9 @@ without starting the gateway. Scope note (NENYA-183): credentials in `mcp_server
 config strings and are **not** covered by the secrets strength checks or by
 secure memory — there is no MCP section in secrets documents. Nenya mitigates
 the consequences rather than moving the storage: header values are redacted
-from `nenya describe --json` (as is any `user:pass` userinfo embedded in a
-provider `url`, a `format_urls` entry, or an MCP server `url` — NENYA-296),
-`nenya config set` preserves a config file's
+from `nenya describe --json` (as is any URL userinfo in a provider `url`, a
+`format_urls` entry, or an MCP server `url` — NENYA-295), `nenya config set`
+preserves a config file's
 existing permissions (defaulting a new file to `0644`; `chmod 600` it if it
 carries a token), a server may declare `required_headers` so a missing
 token fails the request closed (`503 error_kind=mcp_unavailable`) instead of
