@@ -167,6 +167,7 @@ func collectValidationErrors(ctx context.Context, cfg *Config, providers map[str
 		errors = append(errors, fmt.Sprintf("governance.stream_bootstrap_max_hold_seconds must be between 0 and %d seconds, got %d", MaxTimeoutSeconds, v))
 	}
 	errors = append(errors, validateSlowCallThresholdSeconds(cfg.Governance.SlowCallThresholdSeconds, "governance.slow_call_threshold_seconds")...)
+	errors = append(errors, validateWarmCacheKnobs(cfg)...)
 	errors = append(errors, validateAgentStrategies(cfg.Agents)...)
 	errors = append(errors, validateTokenCalibration(cfg.Governance.TokenCalibration)...)
 
@@ -1720,6 +1721,24 @@ func validateUpstreamTimeoutSeconds(v *int) []string {
 		return []string{fmt.Sprintf("governance.upstream_timeout_seconds must be non-negative (set to 0 for unlimited), got %d", *v)}
 	}
 	return nil
+}
+
+// validateWarmCacheKnobs rejects out-of-range warm-cache tie-break knobs
+// (NENYA-202 follow-up) instead of silently clamping: a negative band or
+// floor is a configuration mistake (0 is the documented "off"), and a band
+// above 100% would let warmth reorder against any latency difference,
+// silently inverting latency-aware routing.
+func validateWarmCacheKnobs(cfg *Config) []string {
+	var errs []string
+	if v := cfg.Governance.AutoReorderWarmCacheBandPct; v != nil {
+		if *v < 0 || *v > 100 {
+			errs = append(errs, fmt.Sprintf("governance.auto_reorder_warm_cache_band_pct must be between 0 and 100 percent (0 disables the near-tie reorder), got %v", *v))
+		}
+	}
+	if v := cfg.Governance.AutoReorderWarmCacheMinTokens; v != nil && *v < 0 {
+		errs = append(errs, fmt.Sprintf("governance.auto_reorder_warm_cache_min_tokens must be non-negative (set to 0 to disable the floor), got %d", *v))
+	}
+	return errs
 }
 
 // validateSlowCallThresholdSeconds rejects a negative or over-long slow-call

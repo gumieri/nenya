@@ -289,21 +289,28 @@ func (l *LatencyTracker) Snapshot() map[string]*ModelLatency {
 
 const latencyJitterRange = 0.10 // Full range (0.10), halved by formula: ±latencyJitterRange/2 = ±0.05 = ±5%
 
+// DefaultWarmCacheBand is the default width of the NENYA-190 near-tie band,
+// as a fraction of the larger raw median: ±5%. Configurable via
+// governance.auto_reorder_warm_cache_band_pct (NENYA-202 follow-up).
+const DefaultWarmCacheBand = latencyJitterRange / 2
+
 // SortByLatency sorts keys by median latency from this tracker,
 // applying ±5% random jitter to prevent thundering herd.
 // Returns the indices of the sorted keys. Targets without latency
 // data are placed last.
 func (l *LatencyTracker) SortByLatency(keys []LatencyKey, jitterFn func() float64) []int {
-	return l.SortByLatencyWithWarmth(keys, jitterFn, nil)
+	return l.SortByLatencyWithWarmth(keys, jitterFn, nil, DefaultWarmCacheBand)
 }
 
 // SortByLatencyWithWarmth is SortByLatency with an optional cache-warmth
-// tie-break (NENYA-190): when two keys' RAW medians are within the ±5% jitter
-// band (the difference is ordering noise) and a warmth predicate says one is
-// warm, the warm key comes first — a cold-cache switch re-ingests the whole
-// prefix at first-turn rates, so the warm target serves the conversation
-// cheaper at indistinguishable latency. warm may be nil (no tie-break).
-func (l *LatencyTracker) SortByLatencyWithWarmth(keys []LatencyKey, jitterFn func() float64, warm func(model, provider string) bool) []int {
+// tie-break (NENYA-190): when two keys' RAW medians are within the warmBand
+// fraction (default ±5%, configurable — NENYA-202 follow-up) and a warmth
+// predicate says one is warm, the warm key comes first — a cold-cache switch
+// re-ingests the whole prefix at first-turn rates, so the warm target serves
+// the conversation cheaper at indistinguishable latency. warm may be nil (no
+// tie-break). A warmBand of 0 disables the tie-break except for exact median
+// ties; negative values are treated as 0.
+func (l *LatencyTracker) SortByLatencyWithWarmth(keys []LatencyKey, jitterFn func() float64, warm func(model, provider string) bool, warmBand float64) []int {
 	if l == nil || len(keys) <= 1 {
 		indices := make([]int, len(keys))
 		for i := range keys {
@@ -345,7 +352,10 @@ func (l *LatencyTracker) SortByLatencyWithWarmth(keys []LatencyKey, jitterFn fun
 			wi := warm(keys[indices[i]].Model, keys[indices[i]].Provider)
 			wj := warm(keys[indices[j]].Model, keys[indices[j]].Provider)
 			if wi != wj {
-				band := latencyJitterRange / 2
+				band := warmBand
+				if band < 0 {
+					band = 0
+				}
 				if math.Abs(latencyI.MedianMs-latencyJ.MedianMs) <= band*math.Max(latencyI.MedianMs, latencyJ.MedianMs) {
 					return wi
 				}

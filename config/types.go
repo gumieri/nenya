@@ -1206,7 +1206,21 @@ type GovernanceConfig struct {
 	// first-turn rates, so when two targets' medians are within the reorder
 	// jitter band the warm one serves the conversation cheaper.
 	AutoReorderPreferWarmCache *bool `json:"auto_reorder_prefer_warm_cache,omitempty"`
-	HalfOpenMaxRequests        int   `json:"half_open_max_requests,omitempty"`
+	// AutoReorderWarmCacheBandPct (NENYA-202 follow-up, default 5.0) is the
+	// width of the near-tie band, in percent of the larger raw median, inside
+	// which AutoReorderPreferWarmCache may reorder. The default matches the
+	// reorder jitter band (a wider gap is real latency signal, not noise).
+	// An explicit 0 disables the near-tie reorder (only exact median ties
+	// tie-break); values above 100 are rejected at load.
+	AutoReorderWarmCacheBandPct *float64 `json:"auto_reorder_warm_cache_band_pct,omitempty"`
+	// AutoReorderWarmCacheMinTokens (NENYA-202 follow-up, default 8192) is
+	// the request-size floor below which the warm-cache tie-break stands
+	// down: a small prompt has nothing worth re-ingesting, so chasing cache
+	// affinity for it only adds ordering churn (the production-stack
+	// kv_aware_threshold lesson). 0 disables the floor (always apply);
+	// negative values are rejected at load.
+	AutoReorderWarmCacheMinTokens *int `json:"auto_reorder_warm_cache_min_tokens,omitempty"`
+	HalfOpenMaxRequests           int  `json:"half_open_max_requests,omitempty"`
 	// MinQuotaCooldownSeconds floors quota-class cooldowns (NENYA-41):
 	// upstreams sometimes send sub-second Retry-After values on quota errors,
 	// and honoring them literally produces zero-wait retry storms against the
@@ -1316,6 +1330,32 @@ func (g *GovernanceConfig) EffectiveMaxRetryAttempts() int {
 		return g.MaxRetryAttempts
 	}
 	return 3
+}
+
+// DefaultWarmCacheBandPct and DefaultWarmCacheMinTokens are the NENYA-202
+// follow-up knob defaults (band = the ±5% reorder jitter band; floor = 8K,
+// below which a prompt has nothing worth re-ingesting).
+const (
+	DefaultWarmCacheBandPct   = 5.0
+	DefaultWarmCacheMinTokens = 8192
+)
+
+// EffectiveWarmCacheBandPct resolves the near-tie band width in percent.
+// Nil-safe.
+func (g *GovernanceConfig) EffectiveWarmCacheBandPct() float64 {
+	if g == nil || g.AutoReorderWarmCacheBandPct == nil {
+		return DefaultWarmCacheBandPct
+	}
+	return *g.AutoReorderWarmCacheBandPct
+}
+
+// EffectiveWarmCacheMinTokens resolves the request-size floor for the
+// warm-cache tie-break. Nil-safe.
+func (g *GovernanceConfig) EffectiveWarmCacheMinTokens() int {
+	if g == nil || g.AutoReorderWarmCacheMinTokens == nil {
+		return DefaultWarmCacheMinTokens
+	}
+	return *g.AutoReorderWarmCacheMinTokens
 }
 
 // DefaultTokenCalibration* mirror infra.CalibrationDefaults without an
