@@ -1656,41 +1656,50 @@ func applyProviderHeaderFilters(gw *gateway.NenyaGateway, providerName string, h
 	if !ok || p == nil || len(p.HeaderFilters) == 0 {
 		return
 	}
-	for name, raw := range p.HeaderFilters {
-		filter := lowerFilter(raw)
-		canonical := textproto.CanonicalMIMEHeaderKey(name)
-		raw := h.Values(canonical) //nolint:staticcheck // canonical form is exactly what Set/Del/Values use
-		if len(raw) == 0 {
-			continue
-		}
-		kept := make([]string, 0, len(raw))
-		stripped := 0
-		for _, v := range raw {
-			for _, piece := range strings.Split(v, ",") {
-				piece = strings.TrimSpace(piece)
-				if piece == "" {
-					continue
-				}
-				if headerValueMatches(piece, filter) {
-					kept = append(kept, piece)
-				} else {
-					stripped++
-					gw.Metrics.RecordHeaderValueFiltered(providerName, canonical)
-				}
+	lowered := make(map[string]loweredFilter, len(p.HeaderFilters))
+	for name, spec := range p.HeaderFilters {
+		lowered[name] = lowerFilter(spec)
+	}
+	for name := range p.HeaderFilters {
+		applyOneHeaderFilter(gw, providerName, h, lowered[name], textproto.CanonicalMIMEHeaderKey(name))
+	}
+}
+
+// applyOneHeaderFilter enforces ONE lowered filter on its canonical header:
+// matching pieces survive, stripped pieces are counted, and a header whose
+// values were all stripped is removed entirely.
+func applyOneHeaderFilter(gw *gateway.NenyaGateway, providerName string, h http.Header, filter loweredFilter, canonical string) {
+	values := h.Values(canonical)
+	if len(values) == 0 {
+		return
+	}
+	kept := make([]string, 0, len(values))
+	stripped := 0
+	for _, v := range values {
+		for _, piece := range strings.Split(v, ",") {
+			piece = strings.TrimSpace(piece)
+			if piece == "" {
+				continue
+			}
+			if headerValueMatches(piece, filter) {
+				kept = append(kept, piece)
+			} else {
+				stripped++
+				gw.Metrics.RecordHeaderValueFiltered(providerName, canonical)
 			}
 		}
-		if stripped == 0 {
-			continue
-		}
-		// Rewrite rule: once any value is stripped the survivors are
-		// re-serialized as trimmed ", "-joined values (a value that was
-		// one comma-joined string becomes individual values); an
-		// unstripped header keeps its original bytes.
-		if len(kept) == 0 {
-			h.Del(canonical)
-		} else {
-			h.Set(canonical, strings.Join(kept, ", "))
-		}
+	}
+	if stripped == 0 {
+		return
+	}
+	// Rewrite rule: once any value is stripped the survivors are
+	// re-serialized as trimmed ", "-joined values (a value that was
+	// one comma-joined string becomes individual values); an
+	// unstripped header keeps its original bytes.
+	if len(kept) == 0 {
+		h.Del(canonical)
+	} else {
+		h.Set(canonical, strings.Join(kept, ", "))
 	}
 }
 
