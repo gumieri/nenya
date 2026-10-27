@@ -40,6 +40,14 @@ type UsageTotals struct {
 	CacheMiss int
 	// CacheCreation is the cache-write subset of Prompt.
 	CacheCreation int
+	// CacheCreation5m / CacheCreation1h are the per-TTL breakdown of
+	// CacheCreation when the provider reports it (the Anthropic-native
+	// `cache_creation` object: ephemeral_5m_input_tokens /
+	// ephemeral_1h_input_tokens). Zero when unreported. Carried so the
+	// buffered conversions can publish the same breakdown as the streaming
+	// transformer (NENYA-310).
+	CacheCreation5m int
+	CacheCreation1h int
 	// Reasoning is the reasoning/thinking subset of Completion.
 	Reasoning int
 	// TotalReported records that Total came from the provider instead of being
@@ -101,10 +109,12 @@ func NormalizeUsageTotals(usage map[string]interface{}) UsageTotals {
 	}
 	fields := readUsageFields(usage)
 	totals := UsageTotals{
-		CacheHit:      fields.cacheHit,
-		CacheMiss:     fields.cacheMiss,
-		CacheCreation: fields.cacheCreation,
-		Reasoning:     ExtractReasoningTokens(usage),
+		CacheHit:        fields.cacheHit,
+		CacheMiss:       fields.cacheMiss,
+		CacheCreation:   fields.cacheCreation,
+		Reasoning:       ExtractReasoningTokens(usage),
+		CacheCreation5m: fields.cacheCreation5m,
+		CacheCreation1h: fields.cacheCreation1h,
 	}
 	switch {
 	case fields.geminiOnly():
@@ -150,6 +160,9 @@ type usageFields struct {
 	cacheMiss     int
 	cacheCreation int
 
+	cacheCreation5m int
+	cacheCreation1h int
+
 	// openAICacheDecomposition records that the object decomposes its input
 	// total into cache subsets (prompt_cache_hit_tokens,
 	// prompt_tokens_details.cached_tokens, or cache_creation_tokens), which
@@ -174,6 +187,13 @@ func readUsageFields(usage map[string]interface{}) usageFields {
 		cacheHit:            ToInt(usage["prompt_cache_hit_tokens"]),
 		cacheMiss:           ToInt(usage["prompt_cache_miss_tokens"]),
 		cacheCreation:       ToInt(usage["cache_creation_tokens"]),
+	}
+	// The Anthropic-native per-TTL breakdown (NENYA-310): parsed in every
+	// dialect — the key is unambiguous, and a buffered OpenAI-format response
+	// from an Anthropic-relaying aggregator carries it verbatim.
+	if cc, ok := usage["cache_creation"].(map[string]interface{}); ok {
+		f.cacheCreation5m = ToInt(cc["ephemeral_5m_input_tokens"])
+		f.cacheCreation1h = ToInt(cc["ephemeral_1h_input_tokens"])
 	}
 	f.openAICacheDecomposition = f.cacheHit > 0 || f.cacheCreation > 0
 	if f.cacheHit == 0 {
