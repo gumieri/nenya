@@ -997,12 +997,16 @@ func reorderTargetsByLatency(req *chatRequest, gw *gateway.NenyaGateway, targets
 		})
 	default:
 		// NENYA-190: the warm-cache tie-break is config-gated, off by
-		// default; latency remains the primary order.
+		// default; latency remains the primary order. NENYA-202 follow-up:
+		// gated on a request-size floor (a small prompt has nothing worth
+		// re-ingesting) and its near-tie band is configurable.
 		var warm func(model, provider string) bool
-		if gw.Config.Governance.AutoReorderPreferWarmCache != nil && *gw.Config.Governance.AutoReorderPreferWarmCache {
+		if gw.Config.Governance.AutoReorderPreferWarmCache != nil && *gw.Config.Governance.AutoReorderPreferWarmCache &&
+			req.TokenCount >= gw.Config.Governance.EffectiveWarmCacheMinTokens() {
 			warm = gw.CacheState.Warm
 		}
-		return routing.SortTargetsByLatencyWithWarmth(targets, gw.LatencyTracker, nil, warm)
+		band := gw.Config.Governance.EffectiveWarmCacheBandPct() / 100.0
+		return routing.SortTargetsByLatencyWithWarmth(targets, gw.LatencyTracker, nil, warm, band)
 	}
 }
 

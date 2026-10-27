@@ -1152,14 +1152,15 @@ func catalogPricingWithStaticOverlay(m config.AgentModel, catalog *discovery.Mod
 // to prevent thundering herd. Returns the original slice if latencyTracker
 // is nil or the slice has ≤1 element.
 func SortTargetsByLatency(targets []UpstreamTarget, lt *infra.LatencyTracker, jitterFn func() float64) []UpstreamTarget {
-	return SortTargetsByLatencyWithWarmth(targets, lt, jitterFn, nil)
+	return SortTargetsByLatencyWithWarmth(targets, lt, jitterFn, nil, infra.DefaultWarmCacheBand)
 }
 
 // SortTargetsByLatencyWithWarmth is SortTargetsByLatency with the NENYA-190
 // cache-warmth tie-break: when the warm predicate reports one of two
-// near-tied (within the jitter band) targets as cache-warm, it orders first.
+// near-tied (within warmBand, a fraction of the larger raw median — the
+// configurable NENYA-202 knob) targets as cache-warm, it orders first.
 // warm may be nil.
-func SortTargetsByLatencyWithWarmth(targets []UpstreamTarget, lt *infra.LatencyTracker, jitterFn func() float64, warm func(model, provider string) bool) []UpstreamTarget {
+func SortTargetsByLatencyWithWarmth(targets []UpstreamTarget, lt *infra.LatencyTracker, jitterFn func() float64, warm func(model, provider string) bool, warmBand float64) []UpstreamTarget {
 	if lt == nil || len(targets) <= 1 {
 		return targets
 	}
@@ -1169,7 +1170,7 @@ func SortTargetsByLatencyWithWarmth(targets []UpstreamTarget, lt *infra.LatencyT
 		keys[i] = infra.LatencyKey{Model: t.Model, Provider: t.Provider}
 	}
 
-	indices := lt.SortByLatencyWithWarmth(keys, jitterFn, warm)
+	indices := lt.SortByLatencyWithWarmth(keys, jitterFn, warm, warmBand)
 
 	sorted := make([]UpstreamTarget, len(targets))
 	for i, idx := range indices {
