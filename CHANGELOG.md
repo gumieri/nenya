@@ -4,6 +4,14 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Added
+
+- **`governance.auto_reorder_warm_cache_band_pct` (default 5.0) and `governance.auto_reorder_warm_cache_min_tokens` (default 8192) — the NENYA-190 warm-cache tie-break gains its two missing knobs (NENYA-202 follow-up)**: the band is the near-tie width, in percent of the larger raw median, inside which warmth may reorder (the gateway-side equivalent of production-stack's `LOADAWARE_BETA`; `0` disables the near-tie reorder, >100 rejected at load), and the floor stands the tie-break down for small requests (a prompt below the floor has nothing worth re-ingesting; production-stack's `kv_aware_threshold` lesson; `0` disables the floor). Latency stays primary outside the band — unchanged.
+
+### Changed
+
+- **A session pin on a cache-aware agent is held through a transient bench instead of migrating (NENYA-202 follow-up)**: when the pinned provider/model is benched (breaker-open Cooling entry, or a model lock) and the agent resolves `cache_aware` (`force`, or `auto` with a cache-capable pinned provider), the fallback serves the turn and the pin stays — the session snaps back to the warm target when the bench lifts. Previously `promoteToFirstActive` migrated the pin unconditionally, converting a 60 s cooldown into a TTL-length migration off the warm target (detour turn re-ingests the full prefix at first-turn rates; the migrated pin never returns). Exhaustion, credential drops, and config removal still migrate; the idle TTL bounds the hold. Grounding: the NENYA-202 research note (`Prefix-Cache-Routing-Research` in the wiki — Li et al.'s priced TTL pinning, production-stack RFC #59's affinity-as-weight).
+
 ## [0.19.1] - 2026-10-27
 
 ### Fixed
