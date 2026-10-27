@@ -69,7 +69,7 @@ func TestTransformRequest_GeminiModelMapping(t *testing.T) {
 				"model":    tt.model,
 				"messages": []interface{}{},
 			}
-			body, returnedModel, err := TransformRequestForUpstream(deps, "gemini", "http://example.com", payload, "", 0, 0, "", "")
+			body, returnedModel, err := TransformRequestForUpstream(deps, TransformParams{ProviderName: "gemini", Model: "", MaxOutput: 0, MaxContext: 0, Format: "", ReasoningEffort: ""}, payload)
 			if err != nil {
 				t.Fatalf("unexpected error: %v", err)
 			}
@@ -98,7 +98,7 @@ func TestTransformRequest_GeminiUnknownModel(t *testing.T) {
 		"model":    "gemini-totally-unknown",
 		"messages": []interface{}{},
 	}
-	body, returnedModel, err := TransformRequestForUpstream(deps, "gemini", "http://example.com", payload, "", 0, 0, "", "")
+	body, returnedModel, err := TransformRequestForUpstream(deps, TransformParams{ProviderName: "gemini", Model: "", MaxOutput: 0, MaxContext: 0, Format: "", ReasoningEffort: ""}, payload)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -122,7 +122,7 @@ func TestTransformRequest_NonGeminiNoMapping(t *testing.T) {
 		"model":    "deepseek-v4-flash",
 		"messages": []interface{}{},
 	}
-	_, returnedModel, err := TransformRequestForUpstream(deps, "deepseek", "http://example.com", payload, "", 0, 0, "", "")
+	_, returnedModel, err := TransformRequestForUpstream(deps, TransformParams{ProviderName: "deepseek", Model: "", MaxOutput: 0, MaxContext: 0, Format: "", ReasoningEffort: ""}, payload)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -149,7 +149,7 @@ func TestTransformRequest_AgentSystemPrompt(t *testing.T) {
 			map[string]interface{}{"role": "user", "content": "hello"},
 		},
 	}
-	body, _, err := TransformRequestForUpstream(deps, "deepseek", "http://example.com", payload, "deepseek-v4-flash", 0, 0, "", "")
+	body, _, err := TransformRequestForUpstream(deps, TransformParams{ProviderName: "deepseek", Model: "deepseek-v4-flash", MaxOutput: 0, MaxContext: 0, Format: "", ReasoningEffort: ""}, payload)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -189,7 +189,7 @@ func TestTransformRequest_AgentSystemPromptSkippedWhenSystemFirst(t *testing.T) 
 			map[string]interface{}{"role": "user", "content": "hello"},
 		},
 	}
-	body, _, err := TransformRequestForUpstream(deps, "deepseek", "http://example.com", payload, "deepseek-v4-flash", 0, 0, "", "")
+	body, _, err := TransformRequestForUpstream(deps, TransformParams{ProviderName: "deepseek", Model: "deepseek-v4-flash", MaxOutput: 0, MaxContext: 0, Format: "", ReasoningEffort: ""}, payload)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -230,7 +230,7 @@ func TestTransformRequest_ForceSystemPromptOverridesExistingSystem(t *testing.T)
 			map[string]interface{}{"role": "user", "content": "hello"},
 		},
 	}
-	body, _, err := TransformRequestForUpstream(deps, "deepseek", "http://example.com", payload, "deepseek-v4-flash", 0, 0, "", "")
+	body, _, err := TransformRequestForUpstream(deps, TransformParams{ProviderName: "deepseek", Model: "deepseek-v4-flash", MaxOutput: 0, MaxContext: 0, Format: "", ReasoningEffort: ""}, payload)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -268,7 +268,7 @@ func TestTransformRequest_NoModelField(t *testing.T) {
 	payload := map[string]interface{}{
 		"messages": []interface{}{},
 	}
-	body, returnedModel, err := TransformRequestForUpstream(deps, "deepseek", "http://example.com", payload, "", 0, 0, "", "")
+	body, returnedModel, err := TransformRequestForUpstream(deps, TransformParams{ProviderName: "deepseek", Model: "", MaxOutput: 0, MaxContext: 0, Format: "", ReasoningEffort: ""}, payload)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -288,7 +288,7 @@ func TestTransformRequest_NonStringModel(t *testing.T) {
 		"model":    12345,
 		"messages": []interface{}{},
 	}
-	body, returnedModel, err := TransformRequestForUpstream(deps, "deepseek", "http://example.com", payload, "", 0, 0, "", "")
+	body, returnedModel, err := TransformRequestForUpstream(deps, TransformParams{ProviderName: "deepseek", Model: "", MaxOutput: 0, MaxContext: 0, Format: "", ReasoningEffort: ""}, payload)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -308,7 +308,7 @@ func TestTransformRequest_ModelOverride(t *testing.T) {
 		"model":    "some-agent",
 		"messages": []interface{}{},
 	}
-	_, returnedModel, err := TransformRequestForUpstream(deps, "deepseek", "http://example.com", payload, "deepseek-v4-flash", 0, 0, "", "")
+	_, returnedModel, err := TransformRequestForUpstream(deps, TransformParams{ProviderName: "deepseek", Model: "deepseek-v4-flash", MaxOutput: 0, MaxContext: 0, Format: "", ReasoningEffort: ""}, payload)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -329,7 +329,7 @@ func TestTransformRequest_OriginalPayloadNotMutated(t *testing.T) {
 		"model":    origModel,
 		"messages": []interface{}{},
 	}
-	_, _, err := TransformRequestForUpstream(deps, "gemini", "http://example.com", payload, "", 0, 0, "", "")
+	_, _, err := TransformRequestForUpstream(deps, TransformParams{ProviderName: "gemini", Model: "", MaxOutput: 0, MaxContext: 0, Format: "", ReasoningEffort: ""}, payload)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -347,7 +347,7 @@ func TestTransformRequest_MaxTokensCapping(t *testing.T) {
 			"model":    "gemini-2.5-flash",
 			"messages": []interface{}{},
 		}
-		body, _, err := TransformRequestForUpstream(deps, "gemini", "http://example.com", payload, "", 0, 0, "", "")
+		body, _, err := TransformRequestForUpstream(deps, TransformParams{ProviderName: "gemini", Model: "", MaxOutput: 0, MaxContext: 0, Format: "", ReasoningEffort: ""}, payload)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -370,7 +370,7 @@ func TestTransformRequest_MaxTokensCapping(t *testing.T) {
 			"messages":   []interface{}{},
 			"max_tokens": float64(128000),
 		}
-		body, _, err := TransformRequestForUpstream(deps, "gemini", "http://example.com", payload, "", 0, 0, "", "")
+		body, _, err := TransformRequestForUpstream(deps, TransformParams{ProviderName: "gemini", Model: "", MaxOutput: 0, MaxContext: 0, Format: "", ReasoningEffort: ""}, payload)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -389,7 +389,7 @@ func TestTransformRequest_MaxTokensCapping(t *testing.T) {
 			"messages":   []interface{}{},
 			"max_tokens": float64(4000),
 		}
-		body, _, err := TransformRequestForUpstream(deps, "gemini", "http://example.com", payload, "", 0, 0, "", "")
+		body, _, err := TransformRequestForUpstream(deps, TransformParams{ProviderName: "gemini", Model: "", MaxOutput: 0, MaxContext: 0, Format: "", ReasoningEffort: ""}, payload)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -407,7 +407,7 @@ func TestTransformRequest_MaxTokensCapping(t *testing.T) {
 			"model":    "gemini-2.5-flash",
 			"messages": []interface{}{},
 		}
-		body, _, err := TransformRequestForUpstream(deps, "gemini", "http://example.com", payload, "", 4096, 0, "", "")
+		body, _, err := TransformRequestForUpstream(deps, TransformParams{ProviderName: "gemini", Model: "", MaxOutput: 4096, MaxContext: 0, Format: "", ReasoningEffort: ""}, payload)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -533,7 +533,7 @@ func TestTransformDeps_WithCache(t *testing.T) {
 		},
 	}
 
-	body, returnedModel, err := TransformRequestForUpstream(deps, "gemini", "http://example.com", payload, "", 0, 0, "", "")
+	body, returnedModel, err := TransformRequestForUpstream(deps, TransformParams{ProviderName: "gemini", Model: "", MaxOutput: 0, MaxContext: 0, Format: "", ReasoningEffort: ""}, payload)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -573,7 +573,7 @@ func TestTransformRequest_ZAIWithTools_PreservesMessages(t *testing.T) {
 		"tool_choice": "auto",
 	}
 
-	body, _, err := TransformRequestForUpstream(deps, "zai", "http://example.com", payload, "", 0, 0, "", "")
+	body, _, err := TransformRequestForUpstream(deps, TransformParams{ProviderName: "zai", Model: "", MaxOutput: 0, MaxContext: 0, Format: "", ReasoningEffort: ""}, payload)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -614,7 +614,7 @@ func TestTransformRequest_ZAIWithTools_KeepsMaxTokens(t *testing.T) {
 		"tools":      []interface{}{},
 	}
 
-	body, _, err := TransformRequestForUpstream(deps, "zai", "http://example.com", payload, "", 0, 0, "", "")
+	body, _, err := TransformRequestForUpstream(deps, TransformParams{ProviderName: "zai", Model: "", MaxOutput: 0, MaxContext: 0, Format: "", ReasoningEffort: ""}, payload)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -641,7 +641,7 @@ func TestTransformRequest_ZAIWithTools_KeepsStreamOptions(t *testing.T) {
 		"tools": []interface{}{},
 	}
 
-	body, _, err := TransformRequestForUpstream(deps, "zai", "http://example.com", payload, "", 0, 0, "", "")
+	body, _, err := TransformRequestForUpstream(deps, TransformParams{ProviderName: "zai", Model: "", MaxOutput: 0, MaxContext: 0, Format: "", ReasoningEffort: ""}, payload)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -727,7 +727,7 @@ func TestTransformRequest_InputBudgetDerivedFromContextWindow(t *testing.T) {
 				},
 			}
 
-			body, _, err := TransformRequestForUpstream(deps, "deepseek", "http://upstream.test", payload, "ctx-test-model", 16000, tt.agentCtx, "openai", "")
+			body, _, err := TransformRequestForUpstream(deps, TransformParams{ProviderName: "deepseek", Model: "ctx-test-model", MaxOutput: 16000, MaxContext: tt.agentCtx, Format: "openai"}, payload)
 			if err != nil {
 				t.Fatalf("TransformRequestForUpstream: %v", err)
 			}
@@ -838,7 +838,7 @@ func TestTransformRequest_ClientMaxTokensAvoidsOverTrim(t *testing.T) {
 	}
 
 	t.Run("declared cap drops the oldest message", func(t *testing.T) {
-		body, _, err := TransformRequestForUpstream(newDeps(), "deepseek", "http://upstream.test", payload(), "ctx-test-model", 384_000, 1_000_000, "openai", "")
+		body, _, err := TransformRequestForUpstream(newDeps(), TransformParams{ProviderName: "deepseek", Model: "ctx-test-model", MaxOutput: 384_000, MaxContext: 1_000_000, Format: "openai", ReasoningEffort: ""}, payload())
 		if err != nil {
 			t.Fatalf("TransformRequestForUpstream: %v", err)
 		}
@@ -850,7 +850,7 @@ func TestTransformRequest_ClientMaxTokensAvoidsOverTrim(t *testing.T) {
 	t.Run("small max_tokens keeps the payload", func(t *testing.T) {
 		p := payload()
 		p["max_tokens"] = float64(8192)
-		body, _, err := TransformRequestForUpstream(newDeps(), "deepseek", "http://upstream.test", p, "ctx-test-model", 384_000, 1_000_000, "openai", "")
+		body, _, err := TransformRequestForUpstream(newDeps(), TransformParams{ProviderName: "deepseek", Model: "ctx-test-model", MaxOutput: 384_000, MaxContext: 1_000_000, Format: "openai", ReasoningEffort: ""}, p)
 		if err != nil {
 			t.Fatalf("TransformRequestForUpstream: %v", err)
 		}
@@ -875,7 +875,7 @@ func TestTransformRequest_RecordsTrimSavings(t *testing.T) {
 		},
 	}
 
-	if _, _, err := TransformRequestForUpstream(deps, "deepseek", "http://upstream.test", payload, "ctx-test-model", 16000, 0, "openai", ""); err != nil {
+	if _, _, err := TransformRequestForUpstream(deps, TransformParams{ProviderName: "deepseek", Model: "ctx-test-model", MaxOutput: 16000, MaxContext: 0, Format: "openai", ReasoningEffort: ""}, payload); err != nil {
 		t.Fatalf("TransformRequestForUpstream: %v", err)
 	}
 
@@ -905,7 +905,7 @@ func TestTransformRequest_ConfigModelAlias(t *testing.T) {
 		"model":    "claude-haiku-4.5",
 		"messages": []interface{}{},
 	}
-	_, returnedModel, err := TransformRequestForUpstream(deps, "gemini", "http://example.com", payload, "", 0, 0, "", "")
+	_, returnedModel, err := TransformRequestForUpstream(deps, TransformParams{ProviderName: "gemini", Model: "", MaxOutput: 0, MaxContext: 0, Format: "", ReasoningEffort: ""}, payload)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -921,7 +921,7 @@ func TestTransformRequest_ConfigModelAlias(t *testing.T) {
 		"model":    "gemini-2.5-flash",
 		"messages": []interface{}{},
 	}
-	_, model2, err := TransformRequestForUpstream(deps, "gemini", "http://example.com", payload2, "", 0, 0, "", "")
+	_, model2, err := TransformRequestForUpstream(deps, TransformParams{ProviderName: "gemini", Model: "", MaxOutput: 0, MaxContext: 0, Format: "", ReasoningEffort: ""}, payload2)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -993,7 +993,7 @@ func TestTransformRequest_ForceSystemPromptDoesNotDisplaceCachedSystem(t *testin
 			map[string]interface{}{"role": "user", "content": "hello"},
 		},
 	}
-	body, _, err := TransformRequestForUpstream(deps, "deepseek", "http://example.com", payload, "deepseek-v4-flash", 0, 0, "", "")
+	body, _, err := TransformRequestForUpstream(deps, TransformParams{ProviderName: "deepseek", Model: "deepseek-v4-flash", MaxOutput: 0, MaxContext: 0, Format: "", ReasoningEffort: ""}, payload)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
