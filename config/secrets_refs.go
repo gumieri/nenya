@@ -161,7 +161,18 @@ func resolveSecretFilePath(path, configRoot string) (string, error) {
 	if !strings.HasPrefix(joined, root+string(filepath.Separator)) {
 		return "", fmt.Errorf("file: path %q escapes the config directory %q", path, root)
 	}
-	return joined, nil
+	// AUD-71 (NENYA-297): the lexical check above does not see SYMLINKS —
+	// a link inside the config root can point anywhere on the filesystem.
+	// Resolve the real path and re-verify the containment; fail closed on
+	// resolution errors (a missing file fails the load downstream anyway).
+	resolved, err := filepath.EvalSymlinks(joined)
+	if err != nil {
+		return "", fmt.Errorf("file: path %q cannot be resolved: %w", path, err)
+	}
+	if !strings.HasPrefix(resolved, root+string(filepath.Separator)) {
+		return "", fmt.Errorf("file: path %q resolves to %q which escapes the config directory %q", path, resolved, root)
+	}
+	return resolved, nil
 }
 
 // readSecretFileBounded reads one credential file under a deadline (NENYA-166):
