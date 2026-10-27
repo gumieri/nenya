@@ -186,32 +186,29 @@ func setConfigKey(path, dottedKey string, value any) error {
 	return writeFileAtomic(path, encoded, configFileMode(path))
 }
 
-// isCredentialKey reports whether a dotted key targets a credential leaf
-// (providers.*.api_key / .credential — case-insensitive, JSON decoding is).
+// isCredentialKey reports whether a dotted key targets a provider credential
+// leaf: providers.<name>.api_key (case-insensitive, JSON decoding is). The
+// .credential suffix is kept for symmetry with the accounts[] shape, but
+// Credential exists only on accounts[] entries, which dotted keys cannot
+// reach — in practice only the api_key suffix fires on schema keys.
 func isCredentialKey(lowerKey string) bool {
 	return strings.HasPrefix(lowerKey, "providers.") &&
 		(strings.HasSuffix(lowerKey, ".api_key") || strings.HasSuffix(lowerKey, ".credential"))
 }
 
 // credentialValueNotes prints the non-fatal notes a credential write owes
-// the operator (AUD-74 / NENYA-300): the config-file providers.*.api_key /
-// .credential leaf is written verbatim — it is NOT reference-resolved and
-// NOT the runtime credential (both live in secrets.json provider_keys), so
-// an env:/file: literal here is a dead string and a JSON null only empties
-// the leaf. Say both instead of writing silently.
+// the operator (AUD-74 / NENYA-300). Two facts, both easy to get wrong:
+// env:/file: REFERENCE resolution runs over secrets.json provider_keys only,
+// never the config file — a reference written here is a dead literal and
+// belongs in provider_keys; but a LITERAL api_key in the config file IS a
+// serving credential (the provider's legacy "default" account), so a JSON
+// null removes a credential rather than a dead string.
 func credentialValueNotes(errW io.Writer, key string, value any) {
 	if s, isStr := value.(string); isStr && config.IsSecretReference(s) {
-		// The config-file api_key leaf is written VERBATIM: reference
-		// resolution runs over secrets.json provider_keys only (config
-		// loading.go ResolveProviderKeyReferences), and the serving
-		// credential is read from there too (ResolveProviders). The earlier
-		// wording ("will be resolved at boot") was wrong — an env:/file:
-		// literal in the config file is a dead string, so point the operator
-		// at the surface where a reference actually lives.
-		_, _ = fmt.Fprintf(errW, "note: %s is written verbatim; config-file api_key values are not resolved as references and are not the runtime credential — a live env:/file: reference belongs in secrets.json provider_keys\n", key)
+		_, _ = fmt.Fprintf(errW, "note: %s is written verbatim; env:/file: references are resolved only in secrets.json provider_keys, never in the config file — a live reference belongs there\n", key)
 	}
 	if value == nil {
-		_, _ = fmt.Fprintf(errW, "note: %s = null empties this config-file leaf; the serving credential (secrets.json provider_keys) is unaffected\n", key)
+		_, _ = fmt.Fprintf(errW, "note: %s = null removes this config-file credential; the secrets.json provider_keys credential is unaffected (if this leaf was the serving credential, serving falls back to it)\n", key)
 	}
 }
 

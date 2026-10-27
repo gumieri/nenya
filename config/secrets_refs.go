@@ -146,6 +146,10 @@ func resolveSecretReference(value, configRoot string, timeout time.Duration) (st
 // resolveSecretFilePath validates a file: target: absolute, or relative within
 // the config root in directory mode (path traversal is rejected — NENYA-166
 // keeps the repository's file-path security rule).
+// Threat model: containment is verified on the resolved path, but the file
+// is later re-opened BY NAME (readSecretFileBounded), so the guard is
+// against config-directory accidents — traversal, links, misplacement — not
+// a hostile local writer racing the path swap.
 func resolveSecretFilePath(path, configRoot string) (string, error) {
 	if filepath.IsAbs(path) {
 		return filepath.Clean(path), nil
@@ -179,6 +183,9 @@ func resolveSecretFilePath(path, configRoot string) (string, error) {
 		root = CleanAbs(resolvedRoot)
 	}
 	if !strings.HasPrefix(resolved, root+string(filepath.Separator)) {
+		if resolved == root {
+			return "", fmt.Errorf("file: path %q resolves to the config directory itself", path)
+		}
 		return "", fmt.Errorf("file: path %q resolves to %q which escapes the config directory %q", path, resolved, root)
 	}
 	return resolved, nil

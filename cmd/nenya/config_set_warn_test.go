@@ -9,11 +9,14 @@ import (
 
 // TestConfigSet_WarnsOnSecretReferenceUnderCredentialKey pins AUD-74
 // (NENYA-300): writing an env:/file: value under a credential key must say
-// on stderr that the literal is written VERBATIM — config-file api_key
-// values are not reference-resolved and are not the runtime credential; a
-// live reference belongs in secrets.json provider_keys. (The first wording
-// of this note claimed the value "will be resolved at boot", which is false
-// — corrected after review of the shipped 0.19.0.)
+// on stderr that the literal is written VERBATIM — reference resolution
+// runs only over secrets.json provider_keys, so a reference in the config
+// file is a dead literal and belongs there. (The first wording of this note
+// claimed the value "will be resolved at boot", and the second claimed
+// config-file api_key is "not the runtime credential" — both false: only
+// the resolution half is secrets-only, the literal itself serves via the
+// provider's default account. Corrected after review of the shipped
+// 0.19.0.)
 func TestConfigSet_WarnsOnSecretReferenceUnderCredentialKey(t *testing.T) {
 	dir := t.TempDir()
 	cfg := filepath.Join(dir, "config.json")
@@ -33,9 +36,9 @@ func TestConfigSet_WarnsOnSecretReferenceUnderCredentialKey(t *testing.T) {
 		t.Fatalf("handled=%v err=%v stderr=%s", handled, err, errBuf.String())
 	}
 	if !strings.Contains(errBuf.String(), "written verbatim") {
-		t.Fatalf("an env: literal under a credential key must warn it is NOT a live reference, stderr:\n%s", errBuf.String())
+		t.Fatalf("an env: literal under a credential key must warn it is NOT reference-resolved, stderr:\n%s", errBuf.String())
 	}
-	if !strings.Contains(errBuf.String(), "secrets.json provider_keys") {
+	if !strings.Contains(errBuf.String(), "only in secrets.json provider_keys") {
 		t.Fatalf("the note must point at the surface where references live, stderr:\n%s", errBuf.String())
 	}
 }
@@ -58,10 +61,10 @@ func TestConfigSet_WarnsOnNullCredential(t *testing.T) {
 	if err != nil || !handled {
 		t.Fatalf("handled=%v err=%v stderr=%s", handled, err, errBuf.String())
 	}
-	if !strings.Contains(errBuf.String(), "empties this config-file leaf") {
+	if !strings.Contains(errBuf.String(), "removes this config-file credential") {
 		t.Fatalf("a null credential write must warn, stderr:\n%s", errBuf.String())
 	}
 	if !strings.Contains(errBuf.String(), "unaffected") {
-		t.Fatalf("the note must say the serving credential is unaffected, stderr:\n%s", errBuf.String())
+		t.Fatalf("the note must say the provider_keys credential is unaffected, stderr:\n%s", errBuf.String())
 	}
 }

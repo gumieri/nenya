@@ -373,7 +373,7 @@ At least one provider key must be present for the corresponding provider to work
 - Secrets files should be readable only by the service user (`chmod 600`)
 - Use systemd's credential mechanism for secure in-memory storage
 - Rotate tokens periodically
-- Path traversal (`..`) is rejected for all secret paths
+- Path traversal (`..`) is rejected for relative secret paths (directory mode)
 - Symlinks are resolved: a relative `file:` reference (directory mode) whose real path escapes the config root is rejected, even when the link itself lives inside it (NENYA-297); a config root behind a symlink still works
 
 ### Weak-Credential Refusal (Fail-Closed Boot)
