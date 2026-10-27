@@ -70,7 +70,7 @@ func TestForwardBufferedEmpty200FailsOver(t *testing.T) {
 	}
 	r := httptest.NewRequest("POST", "/v1/chat/completions", nil)
 
-	buf, err := p.forwardBuffered(gw, r.Context(), r, []routing.UpstreamTarget{emptyTarget, goodTarget}, payload, 0, 0, "test-agent", 3, nil, pipeline.CanarResult{}, "openai", false)
+	buf, err := p.forwardBuffered(gw, r.Context(), r, bufferedDispatch{Targets: []routing.UpstreamTarget{emptyTarget, goodTarget}, Payload: payload, Cooldown: 0, TokenCount: 0, AgentName: "test-agent", MaxRetries: 3, APIKey: nil, Canary: pipeline.CanarResult{}, SourceFormat: "openai", WindowCompacted: false})
 	if err != nil {
 		t.Fatalf("forwardBuffered: %v", err)
 	}

@@ -1003,7 +1003,20 @@ func (rl *retryLoop) maxSameTargetRetries() int {
 
 // prepareAndSend wraps the proxy's prepareAndSend method.
 func (rl *retryLoop) prepareAndSend(idx int, target routing.UpstreamTarget, payload map[string]interface{}) upstreamAction {
-	return rl.p.prepareAndSend(rl.gw, rl.r, idx, rl.opts.Targets, target, payload, rl.opts.Cooldown, rl.opts.TokenCount, rl.opts.AgentName, rl.opts.ApiKey, rl.stream, rl.opts.SourceFormat, rl.opts.WindowCompacted, &rl.telemetry)
+	return rl.p.prepareAndSend(rl.gw, rl.r, dispatchParams{
+		idx:                  idx,
+		targets:              rl.opts.Targets,
+		target:               target,
+		payload:              payload,
+		cooldown:             rl.opts.Cooldown,
+		tokenCount:           rl.opts.TokenCount,
+		agentName:            rl.opts.AgentName,
+		apiKey:               rl.opts.ApiKey,
+		streaming:            rl.stream,
+		sourceFormat:         rl.opts.SourceFormat,
+		windowCompacted:      rl.opts.WindowCompacted,
+		unknownFieldsAudited: &rl.telemetry,
+	})
 }
 
 // handleUpstreamError wraps the proxy's handleUpstreamError method.
@@ -1171,21 +1184,32 @@ func resolveCacheSalt(apiKey *config.ApiKey, agentName string, cfg *config.Confi
 	return ""
 }
 
+// dispatchParams groups prepareAndSend's request-scoped parameters
+// (AUD-60 / NENYA-314: fourteen positional parameters beyond the options
+// threshold). gw and r stay positional.
+type dispatchParams struct {
+	idx                  int
+	targets              []routing.UpstreamTarget
+	target               routing.UpstreamTarget
+	payload              map[string]interface{}
+	cooldown             time.Duration
+	tokenCount           int
+	agentName            string
+	apiKey               *config.ApiKey
+	streaming            bool
+	sourceFormat         string
+	windowCompacted      bool
+	unknownFieldsAudited *routing.RequestTelemetry
+}
+
 func (p *Proxy) prepareAndSend(gw *gateway.NenyaGateway,
 	r *http.Request,
-	idx int,
-	targets []routing.UpstreamTarget,
-	target routing.UpstreamTarget,
-	payload map[string]interface{},
-	cooldownDuration time.Duration,
-	tokenCount int,
-	agentName string,
-	apiKey *config.ApiKey,
-	streaming bool,
-	sourceFormat string,
-	windowCompacted bool,
-	unknownFieldsAudited *routing.RequestTelemetry,
+	dp dispatchParams,
 ) upstreamAction {
+	idx, targets, target := dp.idx, dp.targets, dp.target
+	payload, cooldownDuration, tokenCount := dp.payload, dp.cooldown, dp.tokenCount
+	agentName, apiKey, streaming := dp.agentName, dp.apiKey, dp.streaming
+	sourceFormat, windowCompacted, unknownFieldsAudited := dp.sourceFormat, dp.windowCompacted, dp.unknownFieldsAudited
 	ctxLogger := gw.Logger.With(
 		"operation", "upstream",
 		"agent", agentName,
