@@ -41,7 +41,7 @@ func TestResolveSecretFilePath_RejectsSymlinkEscape(t *testing.T) {
 	if err != nil {
 		t.Fatalf("an internal symlink must resolve: %v", err)
 	}
-	if !strings.HasPrefix(got, CleanAbs(root)+string(filepath.Separator)) {
+	if !strings.HasPrefix(got, containmentPrefix(CleanAbs(root))) {
 		t.Fatalf("resolved path %q escapes the root", got)
 	}
 }
@@ -67,7 +67,7 @@ func TestResolveSecretFilePath_RootBehindSymlink(t *testing.T) {
 	if err != nil {
 		t.Fatalf("an internal reference under a symlinked config root must resolve: %v", err)
 	}
-	if !strings.HasPrefix(got, CleanAbs(realRoot)+string(filepath.Separator)) {
+	if !strings.HasPrefix(got, containmentPrefix(CleanAbs(realRoot))) {
 		t.Fatalf("resolved path %q escapes the real root", got)
 	}
 
