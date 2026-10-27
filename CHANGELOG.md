@@ -4,6 +4,8 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.19.1] - 2026-10-27
+
 ### Fixed
 
 - **`config set` credential notes misdescribed the credential model (review of 0.19.0)**: the AUD-74 note claimed an `env:`/`file:` value under a config-file `providers.<name>.api_key` "will be resolved at boot" — false: reference resolution runs over secrets.json `provider_keys` only, so a reference written into the config file is a dead literal (a live reference belongs in `provider_keys`). The first correction over-swung ("not the runtime credential") — also false: a literal config-file api_key serves via the provider's legacy default account. The notes now state both facts: written verbatim, resolution is `provider_keys`-only; a JSON `null` removes the config-file credential (the `provider_keys` credential is unaffected; a leaf that was serving via the default account stops serving). Tests assert the wording.
