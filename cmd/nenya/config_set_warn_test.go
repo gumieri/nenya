@@ -67,4 +67,7 @@ func TestConfigSet_WarnsOnNullCredential(t *testing.T) {
 	if !strings.Contains(errBuf.String(), "unaffected") {
 		t.Fatalf("the note must say the provider_keys credential is unaffected, stderr:\n%s", errBuf.String())
 	}
+	if !strings.Contains(errBuf.String(), "becomes credential-less") {
+		t.Fatalf("the note must cover the no-provider_keys case, stderr:\n%s", errBuf.String())
+	}
 }
