@@ -295,3 +295,132 @@ func TestApplyStickyRouting_ValidFrontPinNotRePinned(t *testing.T) {
 		t.Fatalf("expected unchanged pin, got %+v (before Since %v)", after, before.Since)
 	}
 }
+
+// NENYA-202 follow-up: for an agent that opted into cache economics
+// (cache_aware force, or auto with a cache-capable pinned provider), a pin
+// whose target is TRANSIENTLY benched (breaker-open, listed Cooling; or
+// model-locked) is held rather than migrated: the fallback serves the turn,
+// and the session snaps back to the warm target when the bench lifts.
+// Migrating (the old unconditional promotion) converts the bench into a full
+// prefix re-ingest AND abandons the warm target after recovery.
+func TestApplyStickyRouting_PinHoldThroughCooldown(t *testing.T) {
+	newGW := func(t *testing.T) *gateway.NenyaGateway {
+		gw := &gateway.NenyaGateway{
+			Logger:     testLog(t),
+			AgentState: routing.NewAgentState(testLog(t), nil),
+		}
+		gw.SessionRouter = gw.AgentState.SessionRouter
+		return gw
+	}
+	req := &chatRequest{ModelName: "opencode", Payload: map[string]any{
+		"messages": []any{map[string]any{"role": "user", "content": "first turn"}},
+	}}
+	// The pinned target is present but flagged Cooling (breaker open at
+	// build); the fallback deepseek target is active and serves the turn.
+	coolingTargets := func() []routing.UpstreamTarget {
+		return []routing.UpstreamTarget{
+			{Provider: "deepseek", Model: "deepseek-free"},
+			{Provider: "zai", Model: "zai-free", Cooling: true, CoolKey: "opencode:zai:zai-free"},
+		}
+	}
+
+	t.Run("force holds the pin through a cooling target", func(t *testing.T) {
+		gw := newGW(t)
+		agent := config.AgentConfig{Strategy: "sticky", CacheAware: config.CacheAwareForce}
+		key := routing.SessionKeyForSubject("", "opencode", "", "first turn")
+		gw.SessionRouter.Pin(key, "zai", "zai-free", "acct-a", 0)
+
+		out := applyStickyRouting(req, gw, agent, coolingTargets(), resolveStickyPin(req, gw), true)
+		if out[0].Provider != "deepseek" {
+			t.Fatalf("the fallback must serve the turn, got %+v", out[0])
+		}
+		state, ok := gw.SessionRouter.Lookup(key)
+		if !ok || state.Provider != "zai" || state.Model != "zai-free" {
+			t.Fatalf("the pin must be held on the benched warm target, got %+v, %v", state, ok)
+		}
+	})
+
+	t.Run("auto holds only for a cache-capable pinned provider", func(t *testing.T) {
+		gw := newGW(t)
+		agent := config.AgentConfig{Strategy: "sticky", CacheAware: config.CacheAwareAuto}
+		key := routing.SessionKeyForSubject("", "opencode", "", "first turn")
+
+		// deepseek is a built-in automatic-prefix-cache provider: hold.
+		gw.SessionRouter.Pin(key, "deepseek", "deepseek-free", "acct-a", 0)
+		targets := []routing.UpstreamTarget{
+			{Provider: "zai", Model: "zai-free"},
+			{Provider: "deepseek", Model: "deepseek-free", Cooling: true, CoolKey: "opencode:deepseek:deepseek-free"},
+		}
+		applyStickyRouting(req, gw, agent, targets, resolveStickyPin(req, gw), true)
+		if state, _ := gw.SessionRouter.Lookup(key); state.Provider != "deepseek" {
+			t.Fatalf("auto must hold the pin on a cache-capable provider, got %+v", state)
+		}
+
+		// zai is not: the pin migrates (pre-existing behavior).
+		gw2 := newGW(t)
+		gw2.SessionRouter = gw2.AgentState.SessionRouter
+		gw2.SessionRouter.Pin(key, "zai", "zai-free", "acct-a", 0)
+		targets2 := []routing.UpstreamTarget{
+			{Provider: "deepseek", Model: "deepseek-free"},
+			{Provider: "zai", Model: "zai-free", Cooling: true, CoolKey: "opencode:zai:zai-free"},
+		}
+		applyStickyRouting(req, gw2, agent, targets2, resolveStickyPin(req, gw2), true)
+		if state, _ := gw2.SessionRouter.Lookup(key); state.Provider == "zai" {
+			t.Fatalf("auto must NOT hold the pin on a non-cache-capable provider")
+		}
+	})
+
+	t.Run("cache_aware off promotes as before", func(t *testing.T) {
+		gw := newGW(t)
+		agent := config.AgentConfig{Strategy: "sticky"}
+		key := routing.SessionKeyForSubject("", "opencode", "", "first turn")
+		gw.SessionRouter.Pin(key, "zai", "zai-free", "acct-a", 0)
+
+		out := applyStickyRouting(req, gw, agent, coolingTargets(), resolveStickyPin(req, gw), true)
+		if out[0].Provider != "deepseek" {
+			t.Fatalf("expected the fallback promoted to front, got %+v", out[0])
+		}
+		if state, _ := gw.SessionRouter.Lookup(key); state.Provider != "deepseek" {
+			t.Fatalf("off must keep the pre-existing migration behavior, got %+v", state)
+		}
+	})
+
+	t.Run("a target absent from the chain still promotes", func(t *testing.T) {
+		gw := newGW(t)
+		agent := config.AgentConfig{Strategy: "sticky", CacheAware: config.CacheAwareForce}
+		key := routing.SessionKeyForSubject("", "opencode", "", "first turn")
+		gw.SessionRouter.Pin(key, "zai", "zai-free", "acct-a", 0)
+
+		// The pinned provider appears nowhere: removed (or fully filtered),
+		// not benched — the pin must migrate.
+		targets := []routing.UpstreamTarget{
+			{Provider: "deepseek", Model: "deepseek-free"},
+		}
+		applyStickyRouting(req, gw, agent, targets, resolveStickyPin(req, gw), true)
+		if state, _ := gw.SessionRouter.Lookup(key); state.Provider != "deepseek" {
+			t.Fatalf("a removed target must not hold the pin, got %+v", state)
+		}
+	})
+
+	t.Run("a model-locked pinned target holds the pin", func(t *testing.T) {
+		gw := newGW(t)
+		agent := config.AgentConfig{Strategy: "sticky", CacheAware: config.CacheAwareForce}
+		key := routing.SessionKeyForSubject("", "opencode", "", "first turn")
+		gw.SessionRouter.Pin(key, "zai", "zai-free", "acct-a", 0)
+
+		coolKey := "opencode:zai:zai-free"
+		// A model-scoped lock (NENYA-170): the build drops the target
+		// entirely, so the hold must consult the breaker.
+		gw.AgentState.CB.RecordFailureWithStatus(coolKey, 429, "Model `zai-free` is rate limited (model-scoped quota)")
+		if !gw.AgentState.CB.IsModelLocked(coolKey) {
+			t.Skip("classifier did not produce a model lock for this body; lock-path covered by the Cooling case")
+		}
+		targets := []routing.UpstreamTarget{
+			{Provider: "deepseek", Model: "deepseek-free"},
+		}
+		applyStickyRouting(req, gw, agent, targets, resolveStickyPin(req, gw), true)
+		if state, _ := gw.SessionRouter.Lookup(key); state.Provider != "zai" {
+			t.Fatalf("a model-locked target must hold the pin, got %+v", state)
+		}
+	})
+}

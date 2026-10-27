@@ -22,6 +22,7 @@ import (
 	"github.com/nenya/internal/infra"
 	"github.com/nenya/internal/jsonschema"
 	"github.com/nenya/internal/pipeline"
+	providerpkg "github.com/nenya/internal/providers"
 	"github.com/nenya/internal/routing"
 	"github.com/nenya/internal/stream"
 	"github.com/nenya/internal/tracing"
@@ -544,12 +545,12 @@ func sessionStickyKeysEnabled(gw *gateway.NenyaGateway, providerName string) boo
 //     fallback selected a sibling account. The pin follows the sibling.
 //   - Pinned provider/model lost: the pinned target is cooling, was filtered
 //     out (billing exhaustion), or no longer exists — the pin is promoted to
-//     the first active target (existing failover behavior). Unlike the drift
-//     path, this promotion is unconditional even when the new target carries
-//     an empty account: the old provider/model is gone, so an empty-account
-//     pin (self-healing on the next successful resolution) beats a pin stuck
-//     on a lost target, and single-account legacy providers always run with
-//     empty account names.
+//     the first active target (existing failover behavior), EXCEPT when the
+//     agent opted into cache economics and the loss is a transient bench
+//     (breaker-open Cooling target, or a model lock — NENYA-202 follow-up):
+//     there the pin is HELD and the fallback serves the turn, so the session
+//     returns to the warm target when the bench lifts. A held pin is bounded
+//     by the idle TTL, exactly like any other pin.
 //
 // A pin that still matches the served provider/model and account is left
 // untouched: no re-pin, no failover metric, no Since reset. Providers that
@@ -583,8 +584,58 @@ func applyStickyRouting(req *chatRequest, gw *gateway.NenyaGateway, agent config
 		promoteOnFrontDrift(gw, req, sticky.key, pin, targets, ttl)
 		return targets
 	}
+	// NENYA-202 follow-up: an agent that opted into cache economics holds
+	// its pin through a TRANSIENT bench (a breaker-open target listed
+	// Cooling, or a model lock) instead of migrating it — the fallback
+	// serves this turn, and the session snaps back to the warm target when
+	// the bench lifts. The pre-spike behavior (unconditional promotion)
+	// converted a 60s cooldown into a TTL-length migration off the warm
+	// target: the detour turn re-ingests the whole prefix at first-turn
+	// rates, and the migrated pin never returns. Exhaustion, credential
+	// drops, and config removal are not transient and still promote; the
+	// idle TTL bounds the hold.
+	if pinHoldThroughBench(req, gw, agent, pin, targets) {
+		gw.Logger.Debug("session pin held through a transient bench",
+			"agent", req.ModelName, "provider", pin.Provider, "model", pin.Model)
+		return targets
+	}
 	promoteToFirstActive(gw, req, sticky.key, pin, targets, ttl)
 	return targets
+}
+
+// pinHoldThroughBench reports whether a lost pin should stay put rather than
+// migrate to the fallback target. Gate: the agent opted into cache economics
+// (cache_aware "force", or "auto" with a pinned provider that actually caches
+// prefixes automatically — for a non-cache-capable provider there is no warm
+// prefix to preserve, so the old migration is strictly better). The bench
+// must be transient: a target the build flagged Cooling (breaker open), or
+// one dropped by a model lock (the builder queries the same CoolKey).
+// Exhaustion-filtered and removed targets are absent without any bench state
+// and still promote.
+func pinHoldThroughBench(req *chatRequest, gw *gateway.NenyaGateway, agent config.AgentConfig, pin routing.SessionState, targets []routing.UpstreamTarget) bool {
+	if gw.AgentState == nil || gw.AgentState.CB == nil {
+		return false
+	}
+	switch agent.CacheAware {
+	case config.CacheAwareForce:
+		// Force: no provider-capability check.
+	case config.CacheAwareAuto:
+		if !providerpkg.SupportsAutomaticPrefixCache(pin.Provider) {
+			return false
+		}
+	default:
+		return false
+	}
+	for _, t := range targets {
+		if t.Provider == pin.Provider && t.Model == pin.Model {
+			// Present but benched: the build appends breaker-open targets
+			// flagged Cooling after the active ones.
+			return true
+		}
+	}
+	// Model-locked targets are dropped from the list at build; the lock is
+	// keyed by the same CoolKey the builder queries.
+	return gw.AgentState.CB.IsModelLocked(req.ModelName + ":" + pin.Provider + ":" + pin.Model)
 }
 
 // pinSessionTarget records the first active target as the session's pin when
