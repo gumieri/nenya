@@ -268,6 +268,12 @@ func (i *InjectionInterceptor) Process(ctx context.Context, req *InterceptReques
 	// excerpts: its imperative wording is the harness's, not the user's,
 	// and judging it as user content wastes classifier budget and mangles
 	// client instructions (NENYA-186).
+	// AUD-84 (NENYA-304): the exemption predicate costs one scan per
+	// message; evaluate it ONCE here and feed every consumer (phase one,
+	// both rewrite passes) from the snapshot instead of re-scanning an
+	// exempt surface up to three times per Process. Phase one is
+	// read-only, so the decisions stay valid through the rewrite pass.
+	exemptions := i.harnessExemptions(req)
 	seen := make(map[string]bool)
 	var hitSurfaces []string
 	detections := 0
@@ -284,7 +290,7 @@ func (i *InjectionInterceptor) Process(ctx context.Context, req *InterceptReques
 		}
 		return content
 	}
-	i.phaseOneDetection(req, count)
+	i.phaseOneDetection(req, exemptions, count)
 
 	if detections == 0 {
 		return &InterceptResult{Payload: req.Payload, Skip: true}, nil
@@ -299,7 +305,7 @@ func (i *InjectionInterceptor) Process(ctx context.Context, req *InterceptReques
 	}
 
 	if !bandAct {
-		return i.processEscalated(ctx, req, strict, hitSurfaces, categoryHits)
+		return i.processEscalated(ctx, req, strict, hitSurfaces, categoryHits, exemptions)
 	}
 
 	if strict {
@@ -322,8 +328,8 @@ func (i *InjectionInterceptor) Process(ctx context.Context, req *InterceptReques
 		}
 		return clean
 	}
-	for _, msg := range req.Messages {
-		if _, _, exempt := i.harnessExemption(msg); exempt {
+	for idx, msg := range req.Messages {
+		if exemptions[idx].exempt {
 			// Only the content string is scaffolding; tool-call
 			// arguments still get sanitized (NENYA-186).
 			walkToolCallArguments(msg, rewrite)
@@ -351,15 +357,12 @@ func (i *InjectionInterceptor) Process(ctx context.Context, req *InterceptReques
 // the escalation excerpts; every other surface feeds count (NENYA-186).
 // Tool-call arguments are always walked, even on an exempted message: only the
 // content string is scaffolding.
-func (i *InjectionInterceptor) phaseOneDetection(req *InterceptRequest, count func(string) string) {
-	for _, msg := range req.Messages {
-		if text, kind, ok := i.harnessExemption(msg); ok {
-			// Recorded once, here in the read-only pass: the rewrite
-			// pass re-evaluates the same pure predicate without
-			// touching the counters.
-			i.metrics.RecordHarnessEnvelope(string(kind))
-			if _, hits, _ := i.scan(text); hits > 0 {
-				i.metrics.RecordInjectionDetection("cleared", "harness", hits)
+func (i *InjectionInterceptor) phaseOneDetection(req *InterceptRequest, exemptions []harnessExemption, count func(string) string) {
+	for idx, msg := range req.Messages {
+		if ex := exemptions[idx]; ex.exempt {
+			i.metrics.RecordHarnessEnvelope(string(ex.kind))
+			if ex.hits > 0 {
+				i.metrics.RecordInjectionDetection("cleared", "harness", ex.hits)
 			}
 			walkToolCallArguments(msg, count)
 			continue
@@ -368,22 +371,44 @@ func (i *InjectionInterceptor) phaseOneDetection(req *InterceptRequest, count fu
 	}
 }
 
-// harnessExemption reports whether msg's content is exempt harness
-// scaffolding, returning the exempted text and its envelope kind. The
-// predicate is pure (no metrics): the read-only pass records the exemption,
-// the rewrite pass only consults it. The wording-only rule is enforced here —
+// harnessExemption is the single evaluation of one message's harness
+// scaffolding predicate: the exempted text, envelope kind, and detection-hit
+// count. The predicate is pure (no metrics); it costs one scan, which is why
+// harnessExemptions evaluates it once per Process and every consumer reads
+// the snapshot (AUD-84 / NENYA-304). The wording-only rule is enforced here —
 // an envelope whose detections include a hidden-text/encoded/custom carrier is
 // NOT exempt and stays actionable.
-func (i *InjectionInterceptor) harnessExemption(msg map[string]interface{}) (string, harnessEnvelopeKind, bool) {
+func (i *InjectionInterceptor) harnessExemption(msg map[string]interface{}) (string, harnessEnvelopeKind, int, bool) {
 	text, kind, ok := harnessSurface(msg)
 	if !ok {
-		return "", "", false
+		return "", "", 0, false
 	}
-	_, _, categories := i.scan(text)
+	_, hits, categories := i.scan(text)
 	if !wordingOnlyCategories(categories) {
-		return "", "", false
+		return "", "", 0, false
 	}
-	return text, kind, true
+	return text, kind, hits, true
+}
+
+// harnessExemption is the per-message exemption decision snapshot shared by
+// phase one and the rewrite passes.
+type harnessExemption struct {
+	kind   harnessEnvelopeKind
+	hits   int
+	exempt bool
+}
+
+// harnessExemptions evaluates the exemption predicate once per message, in
+// order. Consumers (phaseOneDetection, both rewrite passes) index the result
+// by message position — phase one is read-only, so the decisions remain
+// valid through the rewrite pass (AUD-84 / NENYA-304).
+func (i *InjectionInterceptor) harnessExemptions(req *InterceptRequest) []harnessExemption {
+	out := make([]harnessExemption, len(req.Messages))
+	for idx, msg := range req.Messages {
+		_, kind, hits, ok := i.harnessExemption(msg)
+		out[idx] = harnessExemption{kind: kind, hits: hits, exempt: ok}
+	}
+	return out
 }
 
 // processEscalated resolves an ambiguous-band request through the tier-2
@@ -391,7 +416,7 @@ func (i *InjectionInterceptor) harnessExemption(msg map[string]interface{}) (str
 // exempt from the tier-1 action; injection verdicts, classifier errors,
 // truncated-excerpt benigns (inconclusive), budget exhaustion, and
 // summarized traffic all fall back to tier-1.
-func (i *InjectionInterceptor) processEscalated(ctx context.Context, req *InterceptRequest, strict bool, hitSurfaces []string, categoryHits map[injectionCategory]int) (*InterceptResult, error) {
+func (i *InjectionInterceptor) processEscalated(ctx context.Context, req *InterceptRequest, strict bool, hitSurfaces []string, categoryHits map[injectionCategory]int, exemptions []harnessExemption) (*InterceptResult, error) {
 	agentName := AgentNameFor(req)
 	benign := make(map[string]bool, len(hitSurfaces))
 	confirmed := false
@@ -436,8 +461,8 @@ func (i *InjectionInterceptor) processEscalated(ctx context.Context, req *Interc
 		}
 		return clean
 	}
-	for _, msg := range req.Messages {
-		if _, _, exempt := i.harnessExemption(msg); exempt {
+	for idx, msg := range req.Messages {
+		if exemptions[idx].exempt {
 			// Only the content string is scaffolding; tool-call
 			// arguments still get sanitized (NENYA-186).
 			walkToolCallArguments(msg, rewrite)
