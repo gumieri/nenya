@@ -330,10 +330,10 @@ func mergeWithStatic(merged *ModelCatalog, modelID string, catalog *ModelCatalog
 		Provider: primaryProvider,
 		Format: pickFormat(true, static.Format,
 			hasDiscovered, discovered.Format),
-		MaxContext: firstPositive(static.MaxContext,
-			pickInt(hasDiscovered, discovered.MaxContext)),
-		MaxOutput: firstPositive(static.MaxOutput,
-			pickInt(hasDiscovered, discovered.MaxOutput)),
+		MaxContext: firstPositive(pickInt(hasDiscovered, discovered.MaxContext),
+			static.MaxContext),
+		MaxOutput: firstPositive(pickInt(hasDiscovered, discovered.MaxOutput),
+			static.MaxOutput),
 		OwnedBy:  firstNonEmpty(discovered.OwnedBy, "nenya"),
 		Metadata: metadata,
 		// Static registry pricing becomes the catalog pricing entry so
@@ -374,7 +374,12 @@ func mergeWithStatic(merged *ModelCatalog, modelID string, catalog *ModelCatalog
 func pickMetadata(discovered DiscoveredModel, hasDiscovered bool, static config.ModelEntry, hasStatic bool) *ModelMetadata {
 	var metadata *ModelMetadata
 	if hasDiscovered && discovered.Metadata != nil {
-		metadata = discovered.Metadata
+		// AUD-67 (NENYA-308): the pointer belongs to the discovery catalog —
+		// applyStaticEntryMetadata mutates in place, so handing it out
+		// directly corrupted the SOURCE catalog (every later merge/reload
+		// reads it). The merged entries own their clone.
+		clone := *discovered.Metadata
+		metadata = &clone
 	}
 
 	if !hasStatic || (static.ScoreBonus == 0 && len(static.Capabilities) == 0 && static.Pricing.IsZero()) {
