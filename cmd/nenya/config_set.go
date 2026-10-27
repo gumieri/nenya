@@ -67,8 +67,8 @@ func handleConfig(w, errW io.Writer, args []string) (bool, error) {
 	// a typo'd key gets named even when the value is also rejected as weak.
 	warnUnknownConfigKey(errW, rest[0])
 	lowerKey := strings.ToLower(rest[0])
-	if strings.HasPrefix(lowerKey, "providers.") &&
-		(strings.HasSuffix(lowerKey, ".api_key") || strings.HasSuffix(lowerKey, ".credential")) {
+	if isCredentialKey(lowerKey) {
+		credentialValueNotes(errW, rest[0], value)
 		if s, isStr := value.(string); isStr {
 			if err := config.ValidateProviderKeyStrength(s); err != nil {
 				_, _ = fmt.Fprintf(errW, "%s rejected: %v\n", rest[0], err)
@@ -184,6 +184,26 @@ func setConfigKey(path, dottedKey string, value any) error {
 	// operator who wants the file private (it may carry MCP header values)
 	// chmods it once and the mode is kept.
 	return writeFileAtomic(path, encoded, configFileMode(path))
+}
+
+// isCredentialKey reports whether a dotted key targets a credential leaf
+// (providers.*.api_key / .credential — case-insensitive, JSON decoding is).
+func isCredentialKey(lowerKey string) bool {
+	return strings.HasPrefix(lowerKey, "providers.") &&
+		(strings.HasSuffix(lowerKey, ".api_key") || strings.HasSuffix(lowerKey, ".credential"))
+}
+
+// credentialValueNotes prints the non-fatal notes a credential write owes
+// the operator (AUD-74 / NENYA-300): an env:/file: value is a live secret
+// REFERENCE resolved at boot (NENYA-166) — say so instead of writing the
+// literal silently; a JSON null CLEARS the credential.
+func credentialValueNotes(errW io.Writer, key string, value any) {
+	if s, isStr := value.(string); isStr && config.IsSecretReference(s) {
+		_, _ = fmt.Fprintf(errW, "note: %s is a secret reference and will be resolved at boot (env: names a variable; file: is relative to the config directory or absolute)\n", key)
+	}
+	if value == nil {
+		_, _ = fmt.Fprintf(errW, "note: %s = null clears the credential\n", key)
+	}
 }
 
 // configFileMode returns the mode to use when rewriting a config file: the

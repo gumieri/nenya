@@ -22,6 +22,8 @@ All notable changes to this project will be documented in this file.
 
 - **The secret file-ref guard resolves symlinks (NENYA-297, AUD-71)**: the `file:` traversal guard checked the lexical path only — a symlink inside the config root pointing anywhere on the filesystem passed the prefix check and was read. The resolved real path is now containment-verified (fail-closed on resolution errors); internal symlinks still resolve. Pinned with an escaping-link rejection + an internal-link acceptance.
 
+- **`config set` writes secret references and nulls silently (NENYA-300, AUD-74)**: an `env:`/`file:` value under a credential key is a **live secret reference** resolved at boot (NENYA-166) — written with no hint; a JSON null under a credential key **clears** the credential. Both now print a note on stderr (the reference semantics incl. the file: path base, and the clear), via the extracted `credentialValueNotes` helper.
+
 - **The vision omission marker names the actual drop reason (NENYA-284, AUD-80)**: every emptied content array carried the same generic "[image omitted: not supported by the routed model or format]" regardless of why the image was dropped. The marker is now rendered from the array's first drop reason — model has no vision / format cannot carry message images / media type rejected / remote URLs unaccepted / malformed part — with the generic text kept as the fallback.
 
 - **`SafeMicroUSD` / `SafeUSDCents` direct unit tests (AUD-70)**: the overflow-safe cost conversions had no direct tests. Pinned: NaN/±Inf/overflow → `ok=false`, rounding (half away), negatives, and the conservative `>=` guard (exact threshold rejected, just-under converts — the tests initially assumed the threshold converted and the implementation's contract won).
