@@ -2488,6 +2488,42 @@ func TestAnthropicAdapter_AutomaticCachingMode(t *testing.T) {
 	})
 }
 
+// TestAnthropicAdapter_UsageCacheCreationBreakdown pins the buffered
+// per-TTL breakdown (NENYA-310): a buffered Anthropic response whose usage
+// carries the `cache_creation` object converts with the breakdown intact,
+// mirroring the streaming transformer — pre-fix the buffered conversion
+// dropped the object and the client lost the 5m/1h split.
+func TestAnthropicAdapter_UsageCacheCreationBreakdown(t *testing.T) {
+	a := NewAnthropicAdapter()
+	body := []byte(`{"id":"msg_1","type":"message","role":"assistant","content":[{"type":"text","text":"hi"}],"model":"claude-3","stop_reason":"end_turn","usage":{"input_tokens":30,"output_tokens":10,"cache_creation_input_tokens":25,"cache_creation":{"ephemeral_5m_input_tokens":20,"ephemeral_1h_input_tokens":5}}}`)
+	out, err := a.MutateResponse(body)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	var m map[string]interface{}
+	if err := json.Unmarshal(out, &m); err != nil {
+		t.Fatalf("failed to parse output: %v", err)
+	}
+	usage, ok := m["usage"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("expected a usage object, got %v", m["usage"])
+	}
+	cc, ok := usage["cache_creation"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("the per-TTL breakdown must survive the buffered conversion, usage: %v", usage)
+	}
+	if got := cc["ephemeral_5m_input_tokens"]; got != float64(20) {
+		t.Errorf("ephemeral_5m_input_tokens = %v, want 20", got)
+	}
+	if got := cc["ephemeral_1h_input_tokens"]; got != float64(5) {
+		t.Errorf("ephemeral_1h_input_tokens = %v, want 5", got)
+	}
+	// The flat total still rides alongside.
+	if got := usage["cache_creation_input_tokens"]; got != float64(25) {
+		t.Errorf("cache_creation_input_tokens = %v, want 25", got)
+	}
+}
+
 // TestAnthropicAdapter_UsageCacheDimensionsCountedOnce pins NENYA-167: the
 // Anthropic→OpenAI conversion folds the cache dimensions into the prompt total
 // and re-publishes them as subsets, instead of dropping them (the previous

@@ -1470,6 +1470,15 @@ func (a *AnthropicAdapter) processUsage(anthropic, openai map[string]interface{}
 		converted["cache_creation_tokens"] = float64(totals.CacheCreation)
 		converted["cache_creation_input_tokens"] = float64(totals.CacheCreation)
 	}
+	// The per-TTL breakdown mirrors the streaming transformer
+	// (internal/stream/anthropic_transformer.go) so buffered and streaming
+	// clients see the same object (NENYA-310); omitted when unreported.
+	if totals.CacheCreation5m > 0 || totals.CacheCreation1h > 0 {
+		converted["cache_creation"] = map[string]interface{}{
+			"ephemeral_5m_input_tokens": float64(totals.CacheCreation5m),
+			"ephemeral_1h_input_tokens": float64(totals.CacheCreation1h),
+		}
+	}
 	openai["usage"] = converted
 }
 
@@ -2220,6 +2229,16 @@ func (a *AnthropicAdapter) convertOpenAIToAnthropicResponse(openai map[string]in
 		}
 		if totals.CacheCreation > 0 {
 			converted["cache_creation_input_tokens"] = float64(totals.CacheCreation)
+		}
+		// The per-TTL breakdown survives the reverse conversion too
+		// (NENYA-310): an OpenAI-format source that carried it (an
+		// Anthropic-relaying aggregator) keeps the split in the Anthropic
+		// shape.
+		if totals.CacheCreation5m > 0 || totals.CacheCreation1h > 0 {
+			converted["cache_creation"] = map[string]interface{}{
+				"ephemeral_5m_input_tokens": float64(totals.CacheCreation5m),
+				"ephemeral_1h_input_tokens": float64(totals.CacheCreation1h),
+			}
 		}
 		anthropic["usage"] = converted
 	}

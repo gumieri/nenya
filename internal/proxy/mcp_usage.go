@@ -63,6 +63,8 @@ func mergeUsageTotals(acc, next stream.UsageTotals) stream.UsageTotals {
 	acc.CacheHit = max(acc.CacheHit, next.CacheHit)
 	acc.CacheMiss = max(acc.CacheMiss, next.CacheMiss)
 	acc.CacheCreation = max(acc.CacheCreation, next.CacheCreation)
+	acc.CacheCreation5m = max(acc.CacheCreation5m, next.CacheCreation5m)
+	acc.CacheCreation1h = max(acc.CacheCreation1h, next.CacheCreation1h)
 	acc.Reasoning = max(acc.Reasoning, next.Reasoning)
 	acc.Total = max(acc.Total, next.Total)
 	acc.TotalReported = acc.TotalReported || next.TotalReported
