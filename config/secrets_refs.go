@@ -162,7 +162,14 @@ func resolveSecretFilePath(path, configRoot string) (string, error) {
 		return "", fmt.Errorf("invalid file: path %q: %w", path, err)
 	}
 	root := CleanAbs(configRoot)
-	if !strings.HasPrefix(joined, root+string(filepath.Separator)) {
+	// The containment compares use a root-relative prefix; a pathological
+	// configRoot of "/" must not turn the prefix into "//" (which rejects
+	// everything with a misleading message).
+	prefix := root + string(filepath.Separator)
+	if root == string(filepath.Separator) {
+		prefix = root
+	}
+	if !strings.HasPrefix(joined, prefix) {
 		return "", fmt.Errorf("file: path %q escapes the config directory %q", path, root)
 	}
 	// AUD-71 (NENYA-297): the lexical check above does not see SYMLINKS —
@@ -182,7 +189,11 @@ func resolveSecretFilePath(path, configRoot string) (string, error) {
 	if resolvedRoot, rerr := filepath.EvalSymlinks(root); rerr == nil {
 		root = CleanAbs(resolvedRoot)
 	}
-	if !strings.HasPrefix(resolved, root+string(filepath.Separator)) {
+	prefix = root + string(filepath.Separator)
+	if root == string(filepath.Separator) {
+		prefix = root
+	}
+	if !strings.HasPrefix(resolved, prefix) {
 		if resolved == root {
 			return "", fmt.Errorf("file: path %q resolves to the config directory itself", path)
 		}

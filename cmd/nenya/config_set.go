@@ -208,7 +208,7 @@ func credentialValueNotes(errW io.Writer, key string, value any) {
 		_, _ = fmt.Fprintf(errW, "note: %s is written verbatim; env:/file: references are resolved only in secrets.json provider_keys, never in the config file — a live reference belongs there\n", key)
 	}
 	if value == nil {
-		_, _ = fmt.Fprintf(errW, "note: %s = null removes this config-file credential; the secrets.json provider_keys credential is unaffected (if this leaf was the serving credential, serving falls back to it)\n", key)
+		_, _ = fmt.Fprintf(errW, "note: %s = null removes this config-file credential; the secrets.json provider_keys credential is unaffected (if this leaf was the serving credential, serving falls back to it — and with no provider_keys credential the provider simply becomes credential-less)\n", key)
 	}
 }
 

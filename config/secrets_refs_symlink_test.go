@@ -83,3 +83,25 @@ func TestResolveSecretFilePath_RootBehindSymlink(t *testing.T) {
 		t.Fatal("an escape through a symlinked config root must still be rejected")
 	}
 }
+
+// TestResolveSecretFilePath_FilesystemRoot pins the pathological configRoot
+// of "/": the containment prefix must not collapse to "//" (which rejected
+// every reference with a misleading escape message).
+func TestResolveSecretFilePath_FilesystemRoot(t *testing.T) {
+	dir := t.TempDir() // /tmp/TestXxx/001 — contained under "/"
+	secret := filepath.Join(dir, "c.txt")
+	if err := os.WriteFile(secret, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	rel, err := filepath.Rel(string(filepath.Separator), secret)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := resolveSecretFilePath(rel, string(filepath.Separator))
+	if err != nil {
+		t.Fatalf("a reference under a / config root must resolve: %v", err)
+	}
+	if got != CleanAbs(secret) {
+		t.Fatalf("got %q, want %q", got, CleanAbs(secret))
+	}
+}
