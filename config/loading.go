@@ -1,7 +1,6 @@
 package config
 
 import (
-	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -83,34 +82,29 @@ func decodeConfigFileWithDiagnostics(path string) (*Config, []Diagnostic, error)
 		return nil, nil, fmt.Errorf("failed to parse config file %s: %w", path, err)
 	}
 	var diags []Diagnostic
-	if d := unknownFieldDiagnostic(data, path); d != nil {
-		diags = append(diags, *d)
-	}
+	diags = append(diags, unknownFieldDiagnostics(data, path)...)
 	return &cfg, diags, nil
 }
 
-// unknownFieldDiagnostic performs a strict secondary decode and, when it hits
-// an unknown field, logs a warning naming it and returns the diagnostic.
-// Lenient decoding always wins — unknown fields never fail load or SIGHUP
-// reload (NENYA-19) — but the warning surfaces likely typos that lenient
-// parsing would silently drop.
-func unknownFieldDiagnostic(data []byte, path string) *Diagnostic {
-	dec := json.NewDecoder(bytes.NewReader(data))
-	dec.DisallowUnknownFields()
-	var probe Config
-	if err := dec.Decode(&probe); err != nil {
-		if name, ok := UnknownFieldName(err); ok {
-			slog.Warn("config contains unknown field, ignored (possible typo)",
-				"field", name, "path", path)
-			return &Diagnostic{
-				Level:   "warn",
-				Code:    "unknown_field",
-				Message: fmt.Sprintf("unknown field %q ignored", name),
-				Source:  path,
-			}
-		}
+// unknownFieldDiagnostics performs the strict-field audit and returns one
+// diagnostic per unknown field (AUD-75 / NENYA-303: the single-decode probe
+// stopped at the first hit). Lenient decoding always wins — unknown fields
+// never fail load or SIGHUP reload (NENYA-19) — but the warnings surface
+// likely typos that lenient parsing would silently drop. Acceptance rules
+// mirror encoding/json exactly (see strictUnknownFields).
+func unknownFieldDiagnostics(data []byte, path string) []Diagnostic {
+	var out []Diagnostic
+	for _, name := range strictUnknownFields(data, reflect.TypeFor[Config]()) {
+		slog.Warn("config contains unknown field, ignored (possible typo)",
+			"field", name, "path", path)
+		out = append(out, Diagnostic{
+			Level:   "warn",
+			Code:    "unknown_field",
+			Message: fmt.Sprintf("unknown field %q ignored", name),
+			Source:  path,
+		})
 	}
-	return nil
+	return out
 }
 
 // UnknownFieldName extracts the unknown field's name from encoding/json's
