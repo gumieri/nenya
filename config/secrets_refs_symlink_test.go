@@ -88,7 +88,7 @@ func TestResolveSecretFilePath_RootBehindSymlink(t *testing.T) {
 // of "/": the containment prefix must not collapse to "//" (which rejected
 // every reference with a misleading escape message).
 func TestResolveSecretFilePath_FilesystemRoot(t *testing.T) {
-	dir := t.TempDir() // /tmp/TestXxx/001 — contained under "/"
+	dir := t.TempDir() // contained under "/"
 	secret := filepath.Join(dir, "c.txt")
 	if err := os.WriteFile(secret, []byte("x"), 0o600); err != nil {
 		t.Fatal(err)
@@ -101,7 +101,13 @@ func TestResolveSecretFilePath_FilesystemRoot(t *testing.T) {
 	if err != nil {
 		t.Fatalf("a reference under a / config root must resolve: %v", err)
 	}
-	if got != CleanAbs(secret) {
-		t.Fatalf("got %q, want %q", got, CleanAbs(secret))
+	// Compare against the RESOLVED target: TempDir may traverse symlinks on
+	// some hosts (macOS /var -> /private/var).
+	want, err := filepath.EvalSymlinks(secret)
+	if err != nil {
+		want = secret
+	}
+	if got != CleanAbs(want) {
+		t.Fatalf("got %q, want %q", got, CleanAbs(want))
 	}
 }

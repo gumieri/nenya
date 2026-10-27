@@ -143,6 +143,16 @@ func resolveSecretReference(value, configRoot string, timeout time.Duration) (st
 	}
 }
 
+// containmentPrefix returns the path prefix every contained path must carry:
+// root + separator, except the filesystem root itself (whose separator would
+// otherwise double: root "/" + "/" = "//" rejects everything).
+func containmentPrefix(root string) string {
+	if root == string(filepath.Separator) {
+		return root
+	}
+	return root + string(filepath.Separator)
+}
+
 // resolveSecretFilePath validates a file: target: absolute, or relative within
 // the config root in directory mode (path traversal is rejected — NENYA-166
 // keeps the repository's file-path security rule).
@@ -165,9 +175,9 @@ func resolveSecretFilePath(path, configRoot string) (string, error) {
 	// The containment compares use a root-relative prefix; a pathological
 	// configRoot of "/" must not turn the prefix into "//" (which rejects
 	// everything with a misleading message).
-	prefix := root + string(filepath.Separator)
-	if root == string(filepath.Separator) {
-		prefix = root
+	prefix := containmentPrefix(root)
+	if joined == root {
+		return "", fmt.Errorf("file: path %q is the config directory itself", path)
 	}
 	if !strings.HasPrefix(joined, prefix) {
 		return "", fmt.Errorf("file: path %q escapes the config directory %q", path, root)
@@ -189,14 +199,14 @@ func resolveSecretFilePath(path, configRoot string) (string, error) {
 	if resolvedRoot, rerr := filepath.EvalSymlinks(root); rerr == nil {
 		root = CleanAbs(resolvedRoot)
 	}
-	prefix = root + string(filepath.Separator)
-	if root == string(filepath.Separator) {
-		prefix = root
+	prefix = containmentPrefix(root)
+	// The root-itself check precedes the prefix test: under a "/" config root
+	// every path carries the prefix, so a self-reference would otherwise be
+	// accepted and only surface as an opaque read-a-directory error.
+	if resolved == root {
+		return "", fmt.Errorf("file: path %q resolves to the config directory itself", path)
 	}
 	if !strings.HasPrefix(resolved, prefix) {
-		if resolved == root {
-			return "", fmt.Errorf("file: path %q resolves to the config directory itself", path)
-		}
 		return "", fmt.Errorf("file: path %q resolves to %q which escapes the config directory %q", path, resolved, root)
 	}
 	return resolved, nil

@@ -44,8 +44,10 @@ func TestConfigSet_WarnsOnSecretReferenceUnderCredentialKey(t *testing.T) {
 }
 
 // TestConfigSet_WarnsOnNullCredential pins the null half of AUD-74: writing
-// JSON null under a credential key empties the config-file leaf — the
-// operator must be told, and told the serving credential is unaffected.
+// JSON null under a credential key removes the config-file credential — the
+// operator must be told that the provider_keys credential is unaffected and
+// that a leaf serving via the default account falls back to it (a provider
+// with neither becomes credential-less).
 func TestConfigSet_WarnsOnNullCredential(t *testing.T) {
 	dir := t.TempDir()
 	cfg := filepath.Join(dir, "config.json")
