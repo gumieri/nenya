@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"strings"
 	"sync"
@@ -1225,16 +1226,22 @@ func computeEmbedding(gw *gateway.NenyaGateway, payload map[string]any, reqCtx c
 }
 
 func extractUserTextForEmbedding(payload map[string]any) string {
-	const maxEmbeddingTextLen = 10000
-
 	messagesRaw, ok := payload["messages"]
 	if !ok {
 		return ""
 	}
 	messages, ok := messagesRaw.([]any)
-	if !ok || len(messages) == 0 {
+	if !ok {
 		return ""
 	}
+	return embeddingUserText(messages, nil)
+}
+
+// embeddingUserText is THE semantic-embedding text extractor (AUD-62:
+// duplicated in stream.go and chat.go with drift risk): the request's user
+// string contents, newline-joined, capped at 10000 bytes. logger may be nil.
+func embeddingUserText(messages []any, logger *slog.Logger) string {
+	const maxEmbeddingTextLen = 10000
 
 	var userMsgs strings.Builder
 	estimatedLen := len(messages) * 100
@@ -1246,6 +1253,9 @@ func extractUserTextForEmbedding(payload map[string]any) string {
 	for _, m := range messages {
 		msg, ok := m.(map[string]any)
 		if !ok {
+			if logger != nil {
+				logger.Debug("skipping non-object message in semantic embedding")
+			}
 			continue
 		}
 		role, ok := msg["role"].(string)
@@ -1254,6 +1264,9 @@ func extractUserTextForEmbedding(payload map[string]any) string {
 		}
 		content, ok := msg["content"].(string)
 		if !ok {
+			if logger != nil {
+				logger.Debug("skipping non-string content in semantic embedding", "role", role)
+			}
 			continue
 		}
 		if userMsgs.Len()+len(content) > maxEmbeddingTextLen {

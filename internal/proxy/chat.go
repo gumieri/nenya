@@ -1231,36 +1231,7 @@ func (p *Proxy) buildEmbedFunc(gw *gateway.NenyaGateway, r *http.Request, payloa
 }
 
 func (p *Proxy) extractUserMessagesForEmbedding(gw *gateway.NenyaGateway, messages []any) string {
-	const maxEmbeddingTextLen = 10000
-
-	var userMsgs strings.Builder
-	userMsgs.Grow(min(maxEmbeddingTextLen, len(messages)*100))
-
-	for _, m := range messages {
-		msg, ok := m.(map[string]any)
-		if !ok {
-			gw.Logger.Debug("skipping non-object message in semantic embedding")
-			continue
-		}
-		role, ok := msg["role"].(string)
-		if !ok || role != "user" {
-			continue
-		}
-		content, ok := msg["content"].(string)
-		if !ok {
-			gw.Logger.Debug("skipping non-string content in semantic embedding", "role", role)
-			continue
-		}
-
-		// Enforce size limit to prevent unbounded string growth
-		if userMsgs.Len()+len(content) > maxEmbeddingTextLen {
-			break
-		}
-
-		userMsgs.WriteString(content)
-		userMsgs.WriteString("\n")
-	}
-	return userMsgs.String()
+	return embeddingUserText(messages, gw.Logger)
 }
 
 // resolvePipelineContext extracts messages, MCP tool state, limits, and client
