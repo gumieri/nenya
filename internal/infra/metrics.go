@@ -1144,24 +1144,27 @@ func (m *Metrics) IncMCPCredentialRejection(server string) {
 
 // RecordClientStalled increments the counter for streaming clients that
 // stopped reading (NENYA-155): a per-write deadline fired on the response
-// path. Never charged to provider health.
+// path. Never charged to provider health. The model label goes through the
+// same cardinality guard as every model-labeled counter (AUD-66 /
+// NENYA-289): a hostile id collapses instead of creating unbounded series.
 func (m *Metrics) RecordClientStalled(model, provider string) {
 	if m == nil {
 		return
 	}
 	e := getOrCreateEntry(&m.clientStalled, map[string]string{
-		"model": model, "provider": provider,
+		"model": m.ModelLabel(model), "provider": provider,
 	})
 	e.value.Add(1)
 }
 
 // RecordStreamStall increments the stream stall counter for the given model/provider.
+// The model label goes through the same cardinality guard (AUD-66 / NENYA-289).
 func (m *Metrics) RecordStreamStall(model, provider string) {
 	if m == nil {
 		return
 	}
 	e := getOrCreateEntry(&m.streamStalled, map[string]string{
-		"model": model, "provider": provider,
+		"model": m.ModelLabel(model), "provider": provider,
 	})
 	e.value.Add(1)
 }
