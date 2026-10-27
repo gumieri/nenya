@@ -348,18 +348,10 @@ func (l *LatencyTracker) SortByLatencyWithWarmth(keys []LatencyKey, jitterFn fun
 		// one request; sort.SliceStable tolerates it (unspecified order for
 		// that request), and fresh jitter per comparison is the pre-existing
 		// behavior.
-		if warm != nil {
-			wi := warm(keys[indices[i]].Model, keys[indices[i]].Provider)
-			wj := warm(keys[indices[j]].Model, keys[indices[j]].Provider)
-			if wi != wj {
-				band := warmBand
-				if band < 0 {
-					band = 0
-				}
-				if math.Abs(latencyI.MedianMs-latencyJ.MedianMs) <= band*math.Max(latencyI.MedianMs, latencyJ.MedianMs) {
-					return wi
-				}
-			}
+		if warm != nil && warmCacheLeads(latencyI, latencyJ,
+			warm(keys[indices[i]].Model, keys[indices[i]].Provider),
+			warm(keys[indices[j]].Model, keys[indices[j]].Provider), warmBand) {
+			return true
 		}
 
 		jitterI := latencyI.MedianMs * (1.0 + (jitterFn()*latencyJitterRange - latencyJitterRange/2))
@@ -369,4 +361,23 @@ func (l *LatencyTracker) SortByLatencyWithWarmth(keys []LatencyKey, jitterFn fun
 	})
 
 	return indices
+}
+
+// warmCacheLeads reports whether the sort should order i first because i is
+// the cache-warm one: exactly one side is warm AND the raw-median gap sits
+// inside the near-tie band (a fraction of the larger median — NENYA-190,
+// band configurable per the NENYA-202 follow-up; a negative band clamps to
+// 0). Any other case returns false so the jitter comparison decides.
+func warmCacheLeads(latencyI, latencyJ *ModelLatency, warmI, warmJ bool, warmBand float64) bool {
+	if warmI == warmJ {
+		return false
+	}
+	band := warmBand
+	if band < 0 {
+		band = 0
+	}
+	if math.Abs(latencyI.MedianMs-latencyJ.MedianMs) > band*math.Max(latencyI.MedianMs, latencyJ.MedianMs) {
+		return false
+	}
+	return warmI
 }
