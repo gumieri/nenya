@@ -117,7 +117,16 @@ func ApplyWindowCompaction(ctx context.Context, deps WindowDeps, payload map[str
 		// No cache hit: generate. coveredTokens is the covered region's
 		// token estimate, computed (and cached) at generation time.
 		var err error
-		summary, deltaStart, coveredTokens, engineGenerated, err = generateWindowSummaryTracked(ctx, deps, windowCfg, active, historyText, summarize, deps.SummaryCache, key, historyHash, len(history))
+		summary, deltaStart, coveredTokens, engineGenerated, err = generateWindowSummaryTracked(ctx, deps, windowSummaryInput{
+			windowCfg:   windowCfg,
+			active:      active,
+			historyText: historyText,
+			summarize:   summarize,
+			cache:       deps.SummaryCache,
+			key:         key,
+			historyHash: historyHash,
+			historyLen:  len(history),
+		})
 		if err != nil || summary == "" {
 			if err != nil {
 				deps.Logger.Warn("window summarization failed, skipping", "err", err)
@@ -325,14 +334,36 @@ func generateEngineSummary(ctx context.Context, deps WindowDeps, windowCfg confi
 	return s, false, nil
 }
 
+// windowSummaryInput groups the summary-generation inputs that vary per call
+// site of generateWindowSummaryTracked (AUD-61 / NENYA-312: ten positional
+// parameters beyond the options threshold). ctx and deps stay positional.
+type windowSummaryInput struct {
+	// windowCfg is the agent's window section (summary knobs, max runes).
+	windowCfg config.WindowConfig
+	// active is the compaction-active message slice fed to the engine.
+	active []interface{}
+	// historyText is the serialized history being summarized.
+	historyText string
+	// summarize selects summary mode (false = deterministic head).
+	summarize bool
+	// cache is the lineage summary cache (nil when the mode has none).
+	cache *SummaryCache
+	// key / historyHash / historyLen identify the lineage entry; key is the
+	// precomputed lineage key (empty when no cache is active).
+	key         string
+	historyHash string
+	historyLen  int
+}
+
 // generateWindowSummaryTracked generates a summary and, when the mode has a
 // lineage cache, records it against the conversation lineage. It returns the
 // covered-region token estimate (computed once at generation and cached with
 // the head). When the fidelity gate is wired, freshly generated summaries are
 // judged before storing: an "insufficient" verdict under strict action
-// discards the summary for deterministic truncation (nothing is cached). key
-// is the precomputed lineage key (empty when no cache is active).
-func generateWindowSummaryTracked(ctx context.Context, deps WindowDeps, windowCfg config.WindowConfig, active []interface{}, historyText string, summarize bool, cache *SummaryCache, key, historyHash string, historyLen int) (string, int, int, bool, error) {
+// discards the summary for deterministic truncation (nothing is cached).
+func generateWindowSummaryTracked(ctx context.Context, deps WindowDeps, in windowSummaryInput) (string, int, int, bool, error) {
+	windowCfg, active, historyText := in.windowCfg, in.active, in.historyText
+	summarize, cache, key, historyHash, historyLen := in.summarize, in.cache, in.key, in.historyHash, in.historyLen
 	generated, deterministic, err := generateWindowSummary(ctx, deps, windowCfg, active, historyText)
 	if err != nil || generated == "" {
 		return "", 0, 0, false, err

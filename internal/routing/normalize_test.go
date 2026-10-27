@@ -343,7 +343,7 @@ func TestTransformRequestForUpstreamCapRenameDoesNotLeak(t *testing.T) {
 	}
 
 	// Target A (declared strict): the cap rides the required spelling.
-	body, model, err := TransformRequestForUpstream(deps, "prov", "http://up", payload, "strict-executor", 0, 0, "openai", "")
+	body, model, err := TransformRequestForUpstream(deps, TransformParams{ProviderName: "prov", Model: "strict-executor", MaxOutput: 0, MaxContext: 0, Format: "openai", ReasoningEffort: ""}, payload)
 	if err != nil {
 		t.Fatalf("transform: %v", err)
 	}
@@ -358,7 +358,7 @@ func TestTransformRequestForUpstreamCapRenameDoesNotLeak(t *testing.T) {
 	}
 
 	// Target B (tolerant, same shared payload): the original spelling is back.
-	body, _, err = TransformRequestForUpstream(deps, "prov", "http://up", payload, "tolerant-model", 0, 0, "openai", "")
+	body, _, err = TransformRequestForUpstream(deps, TransformParams{ProviderName: "prov", Model: "tolerant-model", MaxOutput: 0, MaxContext: 0, Format: "openai", ReasoningEffort: ""}, payload)
 	if err != nil {
 		t.Fatalf("transform: %v", err)
 	}
@@ -388,11 +388,11 @@ func TestTransformRequestForUpstreamCapRenameDoesNotLeakAnthropic(t *testing.T) 
 	}
 
 	// Target A: anthropic format (conversion rebinds the map).
-	if _, _, err := TransformRequestForUpstream(deps, "prov", "http://up", payload, "strict-executor", 0, 0, "anthropic", ""); err != nil {
+	if _, _, err := TransformRequestForUpstream(deps, TransformParams{ProviderName: "prov", Model: "strict-executor", MaxOutput: 0, MaxContext: 0, Format: "anthropic", ReasoningEffort: ""}, payload); err != nil {
 		t.Fatalf("transform: %v", err)
 	}
 	// Target B: same shared payload, tolerant-but-declared canonical spelling.
-	body, _, err := TransformRequestForUpstream(deps, "prov", "http://up", payload, "tolerant-model", 0, 0, "openai", "")
+	body, _, err := TransformRequestForUpstream(deps, TransformParams{ProviderName: "prov", Model: "tolerant-model", MaxOutput: 0, MaxContext: 0, Format: "openai", ReasoningEffort: ""}, payload)
 	if err != nil {
 		t.Fatalf("transform: %v", err)
 	}

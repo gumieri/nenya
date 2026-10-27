@@ -56,7 +56,7 @@ func TestAuditRequestFieldsOncePerRequest(t *testing.T) {
 	}
 
 	for i := 0; i < 3; i++ {
-		_, _, _ = TransformRequestForUpstream(deps, "prov", "http://upstream", payload, "m", 0, 0, "openai", "")
+		_, _, _ = TransformRequestForUpstream(deps, TransformParams{ProviderName: "prov", Model: "m", MaxOutput: 0, MaxContext: 0, Format: "openai", ReasoningEffort: ""}, payload)
 	}
 
 	if got := unknownFieldCount(t, m); got != 1 {
@@ -79,7 +79,7 @@ func TestAuditRequestFieldsNilFlagKeepsPerAttempt(t *testing.T) {
 		"client_telemetry": "whatever",
 	}
 	for i := 0; i < 3; i++ {
-		_, _, _ = TransformRequestForUpstream(deps, "prov", "http://upstream", payload, "m", 0, 0, "openai", "")
+		_, _, _ = TransformRequestForUpstream(deps, TransformParams{ProviderName: "prov", Model: "m", MaxOutput: 0, MaxContext: 0, Format: "openai", ReasoningEffort: ""}, payload)
 	}
 	if got := unknownFieldCount(t, m); got != 3 {
 		t.Fatalf("nil flag must keep per-attempt semantics: counter = %d, want 3", got)

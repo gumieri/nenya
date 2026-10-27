@@ -800,7 +800,31 @@ type RequestTelemetry struct {
 	CapNormalizeRecorded bool
 }
 
-func TransformRequestForUpstream(deps TransformDeps, providerName, upstreamURL string, payload map[string]interface{}, model string, maxOutput int, maxContext int, format string, reasoningEffort string) ([]byte, string, error) {
+// TransformParams groups the per-target parameters
+// TransformRequestForUpstream applies on top of the shared TransformDeps
+// (AUD-61 / NENYA-312): nine positional parameters were beyond the options
+// threshold and every failover attempt rebuilt the same list. UpstreamURL was
+// a dead parameter (declared, never read) and is gone.
+type TransformParams struct {
+	// ProviderName is the resolved upstream provider (sanitize hooks, cache
+	// key/salt injection).
+	ProviderName string
+	// Model is the target model ID (aliased, injected into the payload).
+	Model string
+	// MaxOutput / MaxContext are the target's output reservation and input
+	// budget sources.
+	MaxOutput  int
+	MaxContext int
+	// Format is the target wire format ("openai", "anthropic", "gemini").
+	Format string
+	// ReasoningEffort is the agent's default reasoning_effort injection
+	// (client-specified wins).
+	ReasoningEffort string
+}
+
+func TransformRequestForUpstream(deps TransformDeps, params TransformParams, payload map[string]interface{}) ([]byte, string, error) {
+	providerName, model, maxOutput, maxContext := params.ProviderName, params.Model, params.MaxOutput, params.MaxContext
+	format, reasoningEffort := params.Format, params.ReasoningEffort
 	origModel := payload["model"]
 
 	if model != "" {

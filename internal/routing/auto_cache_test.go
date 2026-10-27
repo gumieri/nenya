@@ -352,7 +352,7 @@ func TestTransformRequestForUpstreamWindowedStandsDown(t *testing.T) {
 		deps, cfg := autoCacheDeps(t, true)
 		deps.WindowCompacted = windowed
 		payload := multiTurnPayload()
-		if _, _, err := TransformRequestForUpstream(deps, "prov", "http://up", payload, "claude-test", 0, 0, "anthropic", ""); err != nil {
+		if _, _, err := TransformRequestForUpstream(deps, TransformParams{ProviderName: "prov", Model: "claude-test", MaxOutput: 0, MaxContext: 0, Format: "anthropic", ReasoningEffort: ""}, payload); err != nil {
 			t.Fatalf("transform: %v", err)
 		}
 		var sb strings.Builder

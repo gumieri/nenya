@@ -84,7 +84,7 @@ func TestCapNormalizeTelemetryOncePerRequest(t *testing.T) {
 			"max_tokens":            float64(100),
 			"max_completion_tokens": float64(50),
 		}
-		_, _, _ = TransformRequestForUpstream(deps, "prov", "http://upstream", payload, "m", 0, 0, "openai", "")
+		_, _, _ = TransformRequestForUpstream(deps, TransformParams{ProviderName: "prov", Model: "m", MaxOutput: 0, MaxContext: 0, Format: "openai", ReasoningEffort: ""}, payload)
 	}
 
 	if got := counterValue(t, m, "nenya_duplicate_params_total", ""); got != 1 {
@@ -105,7 +105,7 @@ func TestCapNormalizeTelemetryNilKeepsPerAttempt(t *testing.T) {
 			"max_tokens":            float64(100),
 			"max_completion_tokens": float64(50),
 		}
-		_, _, _ = TransformRequestForUpstream(deps, "prov", "http://upstream", payload, "m", 0, 0, "openai", "")
+		_, _, _ = TransformRequestForUpstream(deps, TransformParams{ProviderName: "prov", Model: "m", MaxOutput: 0, MaxContext: 0, Format: "openai", ReasoningEffort: ""}, payload)
 	}
 
 	if got := counterValue(t, m, "nenya_duplicate_params_total", ""); got != 3 {

@@ -26,5 +26,5 @@ func TestTransformWithNilLoggerDoesNotPanic(t *testing.T) {
 		t.Fatal("stream_options must be stripped for an OpenAI-shape target (the strip is the logged site under test)")
 	}
 
-	_, _, _ = TransformRequestForUpstream(deps, "prov", "http://upstream", payload, "deepseek-v4", 0, 0, "openai", "")
+	_, _, _ = TransformRequestForUpstream(deps, TransformParams{ProviderName: "prov", Model: "deepseek-v4", MaxOutput: 0, MaxContext: 0, Format: "openai", ReasoningEffort: ""}, payload)
 }
