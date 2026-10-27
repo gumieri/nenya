@@ -169,6 +169,15 @@ func resolveSecretFilePath(path, configRoot string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("file: path %q cannot be resolved: %w", path, err)
 	}
+	// The containment compare is resolved-vs-resolved: EvalSymlinks(joined)
+	// resolves the ROOT component too, so comparing against the unresolved
+	// root would falsely reject every internal reference when the config
+	// root itself sits behind a symlink (review finding on NENYA-297). Best
+	// effort: an unresolvable root keeps the lexical form (the lexical check
+	// above already passed it).
+	if resolvedRoot, rerr := filepath.EvalSymlinks(root); rerr == nil {
+		root = CleanAbs(resolvedRoot)
+	}
 	if !strings.HasPrefix(resolved, root+string(filepath.Separator)) {
 		return "", fmt.Errorf("file: path %q resolves to %q which escapes the config directory %q", path, resolved, root)
 	}

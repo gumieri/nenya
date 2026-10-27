@@ -45,3 +45,41 @@ func TestResolveSecretFilePath_RejectsSymlinkEscape(t *testing.T) {
 		t.Fatalf("resolved path %q escapes the root", got)
 	}
 }
+
+// TestResolveSecretFilePath_RootBehindSymlink pins the resolved-vs-resolved
+// containment compare: when the config root ITSELF sits behind a symlink,
+// EvalSymlinks(joined) resolves the root component too, so comparing against
+// the unresolved root would falsely reject every legitimate internal
+// reference. Pre-fix this test failed exactly that way.
+func TestResolveSecretFilePath_RootBehindSymlink(t *testing.T) {
+	realRoot := t.TempDir()
+	secret := filepath.Join(realRoot, "cred.txt")
+	if err := os.WriteFile(secret, []byte("inside"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// The configured root is a symlink to the real directory.
+	linkRoot := filepath.Join(t.TempDir(), "nenya-link")
+	if err := os.Symlink(realRoot, linkRoot); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+
+	got, err := resolveSecretFilePath("cred.txt", linkRoot)
+	if err != nil {
+		t.Fatalf("an internal reference under a symlinked config root must resolve: %v", err)
+	}
+	if !strings.HasPrefix(got, CleanAbs(realRoot)+string(filepath.Separator)) {
+		t.Fatalf("resolved path %q escapes the real root", got)
+	}
+
+	// The escape guard still works through the symlinked root.
+	outside := filepath.Join(t.TempDir(), "outside.txt")
+	if err := os.WriteFile(outside, []byte("outside"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(linkRoot, "escape")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := resolveSecretFilePath("escape", linkRoot); err == nil {
+		t.Fatal("an escape through a symlinked config root must still be rejected")
+	}
+}

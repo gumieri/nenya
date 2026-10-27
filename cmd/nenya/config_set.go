@@ -194,15 +194,24 @@ func isCredentialKey(lowerKey string) bool {
 }
 
 // credentialValueNotes prints the non-fatal notes a credential write owes
-// the operator (AUD-74 / NENYA-300): an env:/file: value is a live secret
-// REFERENCE resolved at boot (NENYA-166) — say so instead of writing the
-// literal silently; a JSON null CLEARS the credential.
+// the operator (AUD-74 / NENYA-300): the config-file providers.*.api_key /
+// .credential leaf is written verbatim — it is NOT reference-resolved and
+// NOT the runtime credential (both live in secrets.json provider_keys), so
+// an env:/file: literal here is a dead string and a JSON null only empties
+// the leaf. Say both instead of writing silently.
 func credentialValueNotes(errW io.Writer, key string, value any) {
 	if s, isStr := value.(string); isStr && config.IsSecretReference(s) {
-		_, _ = fmt.Fprintf(errW, "note: %s is a secret reference and will be resolved at boot (env: names a variable; file: is relative to the config directory or absolute)\n", key)
+		// The config-file api_key leaf is written VERBATIM: reference
+		// resolution runs over secrets.json provider_keys only (config
+		// loading.go ResolveProviderKeyReferences), and the serving
+		// credential is read from there too (ResolveProviders). The earlier
+		// wording ("will be resolved at boot") was wrong — an env:/file:
+		// literal in the config file is a dead string, so point the operator
+		// at the surface where a reference actually lives.
+		_, _ = fmt.Fprintf(errW, "note: %s is written verbatim; config-file api_key values are not resolved as references and are not the runtime credential — a live env:/file: reference belongs in secrets.json provider_keys\n", key)
 	}
 	if value == nil {
-		_, _ = fmt.Fprintf(errW, "note: %s = null clears the credential\n", key)
+		_, _ = fmt.Fprintf(errW, "note: %s = null empties this config-file leaf; the serving credential (secrets.json provider_keys) is unaffected\n", key)
 	}
 }
 

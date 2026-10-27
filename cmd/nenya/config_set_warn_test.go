@@ -9,9 +9,11 @@ import (
 
 // TestConfigSet_WarnsOnSecretReferenceUnderCredentialKey pins AUD-74
 // (NENYA-300): writing an env:/file: value under a credential key must say
-// on stderr that the literal will function as a secret REFERENCE resolved at
-// boot — pre-fix it was written silently, so an operator pasting a
-// placeholder got a live reference (or a misread) without a hint.
+// on stderr that the literal is written VERBATIM — config-file api_key
+// values are not reference-resolved and are not the runtime credential; a
+// live reference belongs in secrets.json provider_keys. (The first wording
+// of this note claimed the value "will be resolved at boot", which is false
+// — corrected after review of the shipped 0.19.0.)
 func TestConfigSet_WarnsOnSecretReferenceUnderCredentialKey(t *testing.T) {
 	dir := t.TempDir()
 	cfg := filepath.Join(dir, "config.json")
@@ -30,14 +32,17 @@ func TestConfigSet_WarnsOnSecretReferenceUnderCredentialKey(t *testing.T) {
 	if err != nil || !handled {
 		t.Fatalf("handled=%v err=%v stderr=%s", handled, err, errBuf.String())
 	}
-	if !strings.Contains(errBuf.String(), "secret reference") {
-		t.Fatalf("an env: literal under a credential key must warn that it acts as a reference, stderr:\n%s", errBuf.String())
+	if !strings.Contains(errBuf.String(), "written verbatim") {
+		t.Fatalf("an env: literal under a credential key must warn it is NOT a live reference, stderr:\n%s", errBuf.String())
+	}
+	if !strings.Contains(errBuf.String(), "secrets.json provider_keys") {
+		t.Fatalf("the note must point at the surface where references live, stderr:\n%s", errBuf.String())
 	}
 }
 
 // TestConfigSet_WarnsOnNullCredential pins the null half of AUD-74: writing
-// JSON null under a credential key clears the credential — the operator must
-// be told.
+// JSON null under a credential key empties the config-file leaf — the
+// operator must be told, and told the serving credential is unaffected.
 func TestConfigSet_WarnsOnNullCredential(t *testing.T) {
 	dir := t.TempDir()
 	cfg := filepath.Join(dir, "config.json")
@@ -53,7 +58,10 @@ func TestConfigSet_WarnsOnNullCredential(t *testing.T) {
 	if err != nil || !handled {
 		t.Fatalf("handled=%v err=%v stderr=%s", handled, err, errBuf.String())
 	}
-	if !strings.Contains(errBuf.String(), "clears the credential") {
+	if !strings.Contains(errBuf.String(), "empties this config-file leaf") {
 		t.Fatalf("a null credential write must warn, stderr:\n%s", errBuf.String())
+	}
+	if !strings.Contains(errBuf.String(), "unaffected") {
+		t.Fatalf("the note must say the serving credential is unaffected, stderr:\n%s", errBuf.String())
 	}
 }
