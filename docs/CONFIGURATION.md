@@ -949,6 +949,8 @@ See [`docs/BILLING.md`](BILLING.md) for full documentation on quota fetchers, ex
 
 ## Model Registry
 
+The static registry (`config/registry.go`) backs string-shorthand references, cost math, and context budgets; dynamic discovery merges over it. Refresh procedure: [REGISTRY_REFRESH.md](REGISTRY_REFRESH.md).
+
 Built-in models that can be referenced as string shorthand in agent `models` arrays. Each entry maps to a provider and includes a default `max_context` (in tokens, measured via `tiktoken`/`cl100k_base`) and optionally a `format` for per-model wire format routing.
 
 For the current catalog, query the `/v1/models` endpoint or enable [dynamic discovery](#model-discovery). Models not in this registry (e.g., local Ollama models, custom endpoints) must be specified as full objects with explicit `provider` and `model` fields.
