@@ -87,6 +87,7 @@ func redactConfigForDescribe(cfg *config.Config) *config.Config {
 	if len(cfg.MCPServers) > 0 {
 		servers := make(map[string]config.MCPServerConfig, len(cfg.MCPServers))
 		for name, server := range cfg.MCPServers {
+			server.URL = netutil.RedactURLUserinfo(server.URL)
 			if len(server.Headers) > 0 {
 				headers := make(map[string]string, len(server.Headers))
 				for header := range server.Headers {
@@ -108,6 +109,17 @@ func redactProviderForDescribe(provider config.ProviderConfig) config.ProviderCo
 		provider.APIKey = redactedSentinel
 	}
 	provider.ProxyURL = netutil.RedactURLUserinfo(provider.ProxyURL)
+	// AUD-68 (NENYA-295): the endpoint URLs are first-party surfaces too —
+	// a provider URL (or a per-format URL) may carry userinfo credentials
+	// (https://user:pass@host/...), same class as the proxy URLs.
+	provider.URL = netutil.RedactURLUserinfo(provider.URL)
+	if len(provider.FormatURLs) > 0 {
+		formatURLs := make(map[string]string, len(provider.FormatURLs))
+		for format, u := range provider.FormatURLs {
+			formatURLs[format] = netutil.RedactURLUserinfo(u)
+		}
+		provider.FormatURLs = formatURLs
+	}
 	if len(provider.Accounts) == 0 {
 		return provider
 	}
