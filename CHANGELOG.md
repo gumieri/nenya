@@ -4,6 +4,14 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Removed
+
+- **Vestigial `.github/coverage-config.yml` (NENYA-309, quality review 2026-11-02)**: the file declared `threshold: total: 0` — a no-op; the real coverage gates live in the `Coverage gates` step of `.github/workflows/ci.yml`, and nothing referenced the file. Deleted.
+
+### Changed
+
+- **AGENTS.md complexity/nesting guidance now states target vs enforced gate (NENYA-309)**: §9 said "Keep under 10 / Maximum 3 levels ... Enforced by the linter", but the linter enforces `gocyclo` 15 and `nestif` 4 — the doc claimed enforcement the gate does not have. The guidelines now present 10/3 as aspirations and the linter thresholds as the binding CI gate, so the document can no longer contradict `.golangci.yml`.
+
 ### Added
 
 - **`governance.auto_reorder_warm_cache_band_pct` (default 5.0) and `governance.auto_reorder_warm_cache_min_tokens` (default 8192) — the NENYA-190 warm-cache tie-break gains its two missing knobs (NENYA-202 follow-up)**: the band is the near-tie width, in percent of the larger raw median, inside which warmth may reorder (the gateway-side equivalent of production-stack's `LOADAWARE_BETA`; `0` disables the near-tie reorder, >100 rejected at load), and the floor stands the tie-break down for small requests (a prompt below the floor has nothing worth re-ingesting; production-stack's `kv_aware_threshold` lesson; `0` disables the floor). Latency stays primary outside the band — unchanged.

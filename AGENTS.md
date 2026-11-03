@@ -174,8 +174,8 @@ All outbound HTTP dispatch points vulnerable to transient network errors (TLS ha
 ### 9. Code Readability Patterns (Strong Recommendations)
 
 - **Function Length:** Target ≤80 lines. Functions exceeding 150 lines SHOULD be decomposed into smaller, named helpers. Enforced by `funlen` linter.
-- **Cyclomatic Complexity:** Keep under 10. Functions with high branch count (many if/else, switch cases) SHOULD extract branches into named methods. Enforced by `gocyclo` linter (threshold: 15 for existing code).
-- **Nesting Depth:** Maximum 3 levels. Deeper nesting MUST use guard clauses (early return) or extraction into a named function. Enforced by `nestif` linter.
+- **Cyclomatic Complexity:** Aspire to under 10. Functions with high branch count (many if/else, switch cases) SHOULD extract branches into named methods. The enforced CI gate is `gocyclo` at 15 (raised from 10 grandfathered for existing code; new code should meet the 10 target) — the linter, not this guideline, is the binding gate.
+- **Nesting Depth:** Aspire to a maximum of 3 levels. Deeper nesting MUST use guard clauses (early return) or extraction into a named function. The enforced CI gate is the `nestif` linter at complexity 4.
 - **Decomposition Pattern:** Split large handlers into a validate → resolve → execute pipeline where each step is a distinct method returning early on failure:
   ```go
   // PREFER: linear flow with early returns
