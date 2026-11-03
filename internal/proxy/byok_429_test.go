@@ -34,7 +34,7 @@ func TestHandleRetryableError429_BYOKLeavesSharedStateUntouched(t *testing.T) {
 	}
 
 	action := upstreamAction{
-		resp: &http.Response{
+		Resp: &http.Response{
 			StatusCode: http.StatusTooManyRequests,
 			Header:     http.Header{},
 		},
@@ -74,7 +74,7 @@ func TestHandleRetryableError429_SharedStillCoolsDown(t *testing.T) {
 		Model:    "model",
 	}
 	action := upstreamAction{
-		resp: &http.Response{
+		Resp: &http.Response{
 			StatusCode: http.StatusTooManyRequests,
 			Header:     http.Header{},
 		},

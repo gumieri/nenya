@@ -1,4 +1,4 @@
-package proxy
+package mcpproxy
 
 import (
 	"log/slog"
@@ -18,62 +18,45 @@ import (
 // log, and the omission is made visible in the tool text — never a hard 400
 // from a vision-less target, never a silent loss.
 
-// mcpVisionGate decides whether an MCP tool result's image blocks may ride to
-// the routed target. The zero gate (no target context) drops every image: the
-// pre-NENYA-149 behavior was text-only, so the zero value is fail-closed and
-// never widens what a caller sends.
-type mcpVisionGate struct {
-	model    string
-	format   string
-	vision   bool
-	resolved bool
-}
-
-// newMCPVisionGate resolves the gate from the request's primary target: the
+// NewMCPVisionGate resolves the gate from the request's primary target: the
 // model's vision capability (catalog metadata first, then ID inference) and the
 // target wire format. Targets beyond the primary one are not consulted: the
 // gate is a conservative pre-filter, and a failover to a target with a
 // different format re-runs the transform path, which applies the same rules
 // (routing.DropUnsupportedVisionContent) on the request side.
-func newMCPVisionGate(catalog *discovery.ModelCatalog, targets []routing.UpstreamTarget) mcpVisionGate {
+func NewMCPVisionGate(catalog *discovery.ModelCatalog, targets []routing.UpstreamTarget) VisionGate {
 	if len(targets) == 0 {
-		return mcpVisionGate{}
+		return VisionGate{}
 	}
 	primary := targets[0]
 	deps := routing.TransformDeps{Catalog: catalog}
-	return mcpVisionGate{
-		model:    primary.Model,
-		format:   primary.Format,
-		vision:   routing.SupportsVision(deps, primary.Model),
-		resolved: true,
+	return VisionGate{
+		Model:    primary.Model,
+		Format:   primary.Format,
+		Vision:   routing.SupportsVision(deps, primary.Model),
+		Resolved: true,
 	}
 }
 
-// accept reports whether an image with the given media type ("" for a remote
+// Accept reports whether an image with the given media type ("" for a remote
 // URL) can ride to the target, and the drop reason when it cannot.
-func (g mcpVisionGate) accept(mime string) (bool, string) {
-	if !g.resolved {
+func (g VisionGate) Accept(mime string) (bool, string) {
+	if !g.Resolved {
 		return false, "no_target_context"
 	}
-	if !g.vision {
+	if !g.Vision {
 		return false, "model_no_vision"
 	}
 	if mime == "" {
-		if routing.FormatAcceptsRemoteImageURL(g.format) {
+		if routing.FormatAcceptsRemoteImageURL(g.Format) {
 			return true, ""
 		}
 		return false, "format_remote_url"
 	}
-	if routing.FormatAcceptsImageMedia(g.format, mime) {
+	if routing.FormatAcceptsImageMedia(g.Format, mime) {
 		return true, ""
 	}
 	return false, "format_media"
-}
-
-// visionDrop records one dropped image with its reason.
-type visionDrop struct {
-	reason string
-	mime   string
 }
 
 // maxToolResultImageBytes caps one tool-result image's base64 payload: the
@@ -136,9 +119,9 @@ func toolResultContent(text string, result *mcp.CallToolResult, gate mcpVisionGa
 func classifyImageBlocks(malformed int, gate mcpVisionGate, logger *slog.Logger) []visionDrop {
 	var drops []visionDrop
 	for range malformed {
-		drops = append(drops, visionDrop{reason: "malformed_image"})
+		drops = append(drops, VisionDrop{Reason: "malformed_image"})
 		if logger != nil {
-			logger.Debug("dropped malformed tool-result image block", "model", gate.model)
+			logger.Debug("dropped malformed tool-result image block", "model", gate.Model)
 		}
 	}
 	return drops
@@ -151,19 +134,19 @@ func survivingImages(images []mcp.ContentBlock, gate mcpVisionGate, drops *[]vis
 	var kept []mcp.ContentBlock
 	for _, img := range images {
 		if len(img.Data) > maxToolResultImageBytes {
-			*drops = append(*drops, visionDrop{reason: "size_limit", mime: img.MimeType})
+			*drops = append(*drops, VisionDrop{Reason: "size_limit", Mime: img.MimeType})
 			if logger != nil {
 				logger.Debug("dropped oversized tool-result image block",
-					"bytes", len(img.Data), "media_type", img.MimeType, "model", gate.model)
+					"bytes", len(img.Data), "media_type", img.MimeType, "model", gate.Model)
 			}
 			continue
 		}
-		ok, reason := gate.accept(img.MimeType)
+		ok, reason := gate.Accept(img.MimeType)
 		if !ok {
-			*drops = append(*drops, visionDrop{reason: reason, mime: img.MimeType})
+			*drops = append(*drops, VisionDrop{Reason: reason, Mime: img.MimeType})
 			if logger != nil {
 				logger.Debug("dropped tool-result image block",
-					"reason", reason, "media_type", img.MimeType, "model", gate.model)
+					"reason", reason, "media_type", img.MimeType, "model", gate.Model)
 			}
 			continue
 		}
@@ -198,6 +181,6 @@ func malformedImageCount(result *mcp.CallToolResult) int {
 // recordVisionDrops counts the drops of one tool result.
 func recordVisionDrops(metrics *infra.Metrics, drops []visionDrop) {
 	for _, d := range drops {
-		metrics.RecordVisionContentDropped("tool_result", d.reason)
+		metrics.RecordVisionContentDropped("tool_result", d.Reason)
 	}
 }

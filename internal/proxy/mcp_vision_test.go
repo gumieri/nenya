@@ -4,6 +4,8 @@ import (
 	"strings"
 	"testing"
 
+	mcpproxy "github.com/nenya/internal/proxy/mcp"
+
 	"github.com/nenya/internal/discovery"
 	"github.com/nenya/internal/infra"
 	"github.com/nenya/internal/mcp"
@@ -27,15 +29,15 @@ func TestMCPVisionGateAccept(t *testing.T) {
 		reason string
 	}{
 		{"zero gate drops everything", mcpVisionGate{}, "image/png", false, "no_target_context"},
-		{"visionless model", mcpVisionGate{resolved: true, vision: false, format: "openai"}, "image/png", false, "model_no_vision"},
-		{"vision model, accepted media", mcpVisionGate{resolved: true, vision: true, format: "openai"}, "image/png", true, ""},
-		{"vision model, rejected media", mcpVisionGate{resolved: true, vision: true, format: "openai"}, "image/svg+xml", false, "format_media"},
-		{"remote URL on anthropic", mcpVisionGate{resolved: true, vision: true, format: "anthropic"}, "", false, "format_remote_url"},
-		{"remote URL on openai", mcpVisionGate{resolved: true, vision: true, format: "openai"}, "", true, ""},
+		{"visionless model", mcpVisionGate{Resolved: true, Vision: false, Format: "openai"}, "image/png", false, "model_no_vision"},
+		{"vision model, accepted media", mcpVisionGate{Resolved: true, Vision: true, Format: "openai"}, "image/png", true, ""},
+		{"vision model, rejected media", mcpVisionGate{Resolved: true, Vision: true, Format: "openai"}, "image/svg+xml", false, "format_media"},
+		{"remote URL on anthropic", mcpVisionGate{Resolved: true, Vision: true, Format: "anthropic"}, "", false, "format_remote_url"},
+		{"remote URL on openai", mcpVisionGate{Resolved: true, Vision: true, Format: "openai"}, "", true, ""},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			ok, reason := tc.gate.accept(tc.mime)
+			ok, reason := tc.gate.Accept(tc.mime)
 			if ok != tc.want || reason != tc.reason {
 				t.Fatalf("accept(%q) = (%v, %q), want (%v, %q)", tc.mime, ok, reason, tc.want, tc.reason)
 			}
@@ -45,8 +47,8 @@ func TestMCPVisionGateAccept(t *testing.T) {
 
 // An accepted image rides as an OpenAI image part next to the tool text.
 func TestToolResultContentKeepsSupportedImage(t *testing.T) {
-	gate := mcpVisionGate{resolved: true, vision: true, format: "openai", model: "gpt-4o"}
-	content, drops := toolResultContent("chart follows", imageResult("image/png", "AAAA"), gate, nil)
+	gate := mcpVisionGate{Resolved: true, Vision: true, Format: "openai", Model: "gpt-4o"}
+	content, drops := mcpproxy.ToolResultContent("chart follows", imageResult("image/png", "AAAA"), gate, nil)
 	if len(drops) != 0 {
 		t.Fatalf("no drops expected: %+v", drops)
 	}
@@ -67,13 +69,13 @@ func TestToolResultContentKeepsSupportedImage(t *testing.T) {
 // A rejected image is dropped, counted by the caller, and the omission is
 // visible in the tool text (never a silent loss, never a hard 400).
 func TestToolResultContentDropsUnsupportedImage(t *testing.T) {
-	gate := mcpVisionGate{resolved: true, vision: false, format: "openai", model: "glm-4.5-text-only"}
+	gate := mcpVisionGate{Resolved: true, Vision: false, Format: "openai", Model: "glm-4.5-text-only"}
 	metrics := &infra.Metrics{}
-	content, drops := toolResultContent("chart follows", imageResult("image/png", "AAAA"), gate, nil)
-	if len(drops) != 1 || drops[0].reason != "model_no_vision" {
+	content, drops := mcpproxy.ToolResultContent("chart follows", imageResult("image/png", "AAAA"), gate, nil)
+	if len(drops) != 1 || drops[0].Reason != "model_no_vision" {
 		t.Fatalf("want one model_no_vision drop: %+v", drops)
 	}
-	recordVisionDrops(metrics, drops)
+	mcpproxy.RecordVisionDrops(metrics, drops)
 	// No image survived: the legacy string shape with the omission noted.
 	body, isStr := content.(string)
 	if !isStr {
@@ -92,8 +94,8 @@ func TestToolResultContentDropsUnsupportedImage(t *testing.T) {
 // A result whose ONLY content is an image, and where every image is dropped,
 // keeps the plain string shape with the visible omission marker.
 func TestToolResultContentImageOnlyOmission(t *testing.T) {
-	gate := mcpVisionGate{resolved: true, vision: false, format: "openai"}
-	content, drops := toolResultContent("", &mcp.CallToolResult{Content: []mcp.ContentBlock{
+	gate := mcpVisionGate{Resolved: true, Vision: false, Format: "openai"}
+	content, drops := mcpproxy.ToolResultContent("", &mcp.CallToolResult{Content: []mcp.ContentBlock{
 		{Type: "image", MimeType: "image/png", Data: "AAAA"},
 	}}, gate, nil)
 	if len(drops) != 1 {
@@ -111,12 +113,12 @@ func TestToolResultContentImageOnlyOmission(t *testing.T) {
 // Malformed image blocks (missing data or media type) are dropped and counted,
 // never silently lost.
 func TestToolResultContentMalformedImage(t *testing.T) {
-	gate := mcpVisionGate{resolved: true, vision: true, format: "openai"}
-	content, drops := toolResultContent("look", &mcp.CallToolResult{Content: []mcp.ContentBlock{
+	gate := mcpVisionGate{Resolved: true, Vision: true, Format: "openai"}
+	content, drops := mcpproxy.ToolResultContent("look", &mcp.CallToolResult{Content: []mcp.ContentBlock{
 		{Type: "image"},
 		{Type: "text", Text: "look"},
 	}}, gate, nil)
-	if len(drops) != 1 || drops[0].reason != "malformed_image" {
+	if len(drops) != 1 || drops[0].Reason != "malformed_image" {
 		t.Fatalf("want one malformed_image drop: %+v", drops)
 	}
 	if s, ok := content.(string); !ok || !strings.Contains(s, "[image omitted") {
@@ -126,11 +128,11 @@ func TestToolResultContentMalformedImage(t *testing.T) {
 
 // An oversized image is dropped with the size_limit reason.
 func TestToolResultContentOversizedImage(t *testing.T) {
-	gate := mcpVisionGate{resolved: true, vision: true, format: "openai"}
-	content, drops := toolResultContent("", &mcp.CallToolResult{Content: []mcp.ContentBlock{
+	gate := mcpVisionGate{Resolved: true, Vision: true, Format: "openai"}
+	content, drops := mcpproxy.ToolResultContent("", &mcp.CallToolResult{Content: []mcp.ContentBlock{
 		{Type: "image", MimeType: "image/png", Data: strings.Repeat("A", (4<<20)+1)},
 	}}, gate, nil)
-	if len(drops) != 1 || drops[0].reason != "size_limit" {
+	if len(drops) != 1 || drops[0].Reason != "size_limit" {
 		t.Fatalf("want one size_limit drop: %+v", drops)
 	}
 	if s, ok := content.(string); !ok || !strings.Contains(s, "[image omitted") {
@@ -140,8 +142,8 @@ func TestToolResultContentOversizedImage(t *testing.T) {
 
 // A text-only result keeps its plain-string content: the pre-NENYA-149 shape.
 func TestToolResultContentTextOnlyUnchanged(t *testing.T) {
-	gate := mcpVisionGate{resolved: true, vision: true, format: "openai"}
-	content, drops := toolResultContent("plain", &mcp.CallToolResult{Content: []mcp.ContentBlock{{Type: "text", Text: "plain"}}}, gate, nil)
+	gate := mcpVisionGate{Resolved: true, Vision: true, Format: "openai"}
+	content, drops := mcpproxy.ToolResultContent("plain", &mcp.CallToolResult{Content: []mcp.ContentBlock{{Type: "text", Text: "plain"}}}, gate, nil)
 	if len(drops) != 0 {
 		t.Fatalf("no drops expected: %+v", drops)
 	}
@@ -155,13 +157,13 @@ func TestNewMCPVisionGateResolvesCapability(t *testing.T) {
 	catalog := discovery.NewModelCatalog()
 	catalog.Add(discovery.DiscoveredModel{ID: "gpt-4o", Metadata: &discovery.ModelMetadata{SupportsVision: true}})
 
-	gate := newMCPVisionGate(catalog, []routing.UpstreamTarget{{Model: "gpt-4o", Format: "openai"}})
-	if !gate.resolved || !gate.vision || gate.format != "openai" {
+	gate := mcpproxy.NewMCPVisionGate(catalog, []routing.UpstreamTarget{{Model: "gpt-4o", Format: "openai"}})
+	if !gate.Resolved || !gate.Vision || gate.Format != "openai" {
 		t.Fatalf("a vision-capable model must resolve an accepting gate: %+v", gate)
 	}
 
 	// No targets at all: the gate is unresolved and fail-closed.
-	if got := newMCPVisionGate(catalog, nil); got.resolved {
+	if got := mcpproxy.NewMCPVisionGate(catalog, nil); got.Resolved {
 		t.Fatalf("no target context must leave the gate unresolved: %+v", got)
 	}
 }
@@ -182,8 +184,8 @@ func TestAppendMCPResultsGatesImages(t *testing.T) {
 
 	// Vision-capable gate: the array with the image survives into the message.
 	visionPayload := payload()
-	appendMCPResults(visionPayload, calls, results, assistant, mcpAppendContext{
-		vision: mcpVisionGate{resolved: true, vision: true, format: "openai", model: "gpt-4o"},
+	mcpproxy.AppendMCPResults(visionPayload, calls, results, assistant, mcpAppendContext{
+		Vision: mcpVisionGate{Resolved: true, Vision: true, Format: "openai", Model: "gpt-4o"},
 	})
 	toolMsg := visionPayload["messages"].([]any)[2].(map[string]any)
 	parts, ok := toolMsg["content"].([]any)
@@ -196,7 +198,7 @@ func TestAppendMCPResultsGatesImages(t *testing.T) {
 
 	// Spotlight over the array: only the text part is enveloped.
 	settings := pipeline.SpotlightSettings{Enabled: true, MaxToolResultBytes: 1 << 20}
-	content, enveloped := applySpotlightToParts(parts, settings, "mem", "chart")
+	content, enveloped := mcpproxy.ApplySpotlightToParts(parts, settings, "mem", "chart")
 	if _, isArr := content.([]any); !isArr || !enveloped {
 		t.Fatal("applySpotlightToParts must keep the array and report enveloping")
 	}
@@ -210,7 +212,7 @@ func TestAppendMCPResultsGatesImages(t *testing.T) {
 	// Zero gate (no target context): fail-closed drop; no image survives, so
 	// the tool message keeps the string shape with the omission visible.
 	legacyPayload := payload()
-	appendMCPResults(legacyPayload, calls, results, assistant, mcpAppendContext{})
+	mcpproxy.AppendMCPResults(legacyPayload, calls, results, assistant, mcpAppendContext{})
 	legacyMsg := legacyPayload["messages"].([]any)[2].(map[string]any)
 	text, ok := legacyMsg["content"].(string)
 	if !ok {

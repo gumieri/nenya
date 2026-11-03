@@ -218,13 +218,13 @@ func TestHandleBufferedAction_RetryableSignal(t *testing.T) {
 	target := routing.UpstreamTarget{Provider: "test-provider", Model: "test-model", CoolKey: "retry-agent:test-provider:test-model"}
 	targets := []routing.UpstreamTarget{target}
 	action := upstreamAction{
-		kind: actionError,
-		resp: &http.Response{
+		Kind: actionError,
+		Resp: &http.Response{
 			StatusCode: http.StatusInternalServerError,
 			Header:     http.Header{},
 			Body:       io.NopCloser(strings.NewReader(`{"error":{"message":"boom"}}`)),
 		},
-		cancel: func() {},
+		Cancel: func() {},
 	}
 	// A 20ms deadline short-circuits the internal backoff while keeping the
 	// retry decision observable.
@@ -235,8 +235,8 @@ func TestHandleBufferedAction_RetryableSignal(t *testing.T) {
 	if result != nil {
 		t.Fatalf("expected no buffered result on error, got %v", result)
 	}
-	if outcome.step != bufferedStepRetry {
-		t.Fatalf("expected bufferedStepRetry for a retryable 5xx, got %v", outcome.step)
+	if outcome.Step != bufferedStepRetry {
+		t.Fatalf("expected bufferedStepRetry for a retryable 5xx, got %v", outcome.Step)
 	}
 }
 

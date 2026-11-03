@@ -985,10 +985,10 @@ func TestPrepareAndSend_ContextCanceledDoesNotRecordFailure(t *testing.T) {
 
 	p := &Proxy{}
 	p.StoreGateway(gw)
-	action := p.prepareAndSend(gw, r, dispatchParams{idx: 0, targets: []routing.UpstreamTarget{target}, target: target, payload: payload, cooldown: 0, tokenCount: 0, agentName: "test-agent", apiKey: nil, streaming: false, sourceFormat: "openai", windowCompacted: false, unknownFieldsAudited: nil})
+	action := p.prepareAndSend(gw, r, dispatchParams{Idx: 0, Targets: []routing.UpstreamTarget{target}, Target: target, Payload: payload, Cooldown: 0, TokenCount: 0, AgentName: "test-agent", APIKey: nil, Streaming: false, SourceFormat: "openai", WindowCompacted: false, UnknownFieldsAudited: nil})
 
-	if action.kind != actionContinue {
-		t.Errorf("expected actionContinue, got %v", action.kind)
+	if action.Kind != actionContinue {
+		t.Errorf("expected actionContinue, got %v", action.Kind)
 	}
 
 	state := gw.AgentState.CB.State(target.CoolKey)
@@ -1027,10 +1027,10 @@ func TestPrepareAndSend_DeadlineExceededDoesNotRecordFailure(t *testing.T) {
 
 	p := &Proxy{}
 	p.StoreGateway(gw)
-	action := p.prepareAndSend(gw, r, dispatchParams{idx: 0, targets: []routing.UpstreamTarget{target}, target: target, payload: payload, cooldown: 0, tokenCount: 0, agentName: "test-agent", apiKey: nil, streaming: false, sourceFormat: "openai", windowCompacted: false, unknownFieldsAudited: nil})
+	action := p.prepareAndSend(gw, r, dispatchParams{Idx: 0, Targets: []routing.UpstreamTarget{target}, Target: target, Payload: payload, Cooldown: 0, TokenCount: 0, AgentName: "test-agent", APIKey: nil, Streaming: false, SourceFormat: "openai", WindowCompacted: false, UnknownFieldsAudited: nil})
 
-	if action.kind != actionContinue {
-		t.Errorf("expected actionContinue, got %v", action.kind)
+	if action.Kind != actionContinue {
+		t.Errorf("expected actionContinue, got %v", action.Kind)
 	}
 
 	state := gw.AgentState.CB.State(target.CoolKey)
@@ -1064,10 +1064,10 @@ func TestPrepareAndSend_NetworkErrorRecordsFailure(t *testing.T) {
 
 	p := &Proxy{}
 	p.StoreGateway(gw)
-	action := p.prepareAndSend(gw, r, dispatchParams{idx: 0, targets: []routing.UpstreamTarget{target}, target: target, payload: payload, cooldown: 0, tokenCount: 0, agentName: "test-agent", apiKey: nil, streaming: false, sourceFormat: "openai", windowCompacted: false, unknownFieldsAudited: nil})
+	action := p.prepareAndSend(gw, r, dispatchParams{Idx: 0, Targets: []routing.UpstreamTarget{target}, Target: target, Payload: payload, Cooldown: 0, TokenCount: 0, AgentName: "test-agent", APIKey: nil, Streaming: false, SourceFormat: "openai", WindowCompacted: false, UnknownFieldsAudited: nil})
 
-	if action.kind != actionContinue {
-		t.Errorf("expected actionContinue, got %v", action.kind)
+	if action.Kind != actionContinue {
+		t.Errorf("expected actionContinue, got %v", action.Kind)
 	}
 
 	detailed := gw.AgentState.CB.SnapshotDetailed()
@@ -1122,10 +1122,10 @@ func TestPrepareAndSend_UsesProviderDedicatedClient(t *testing.T) {
 
 	p := &Proxy{}
 	p.StoreGateway(gw)
-	action := p.prepareAndSend(gw, r, dispatchParams{idx: 0, targets: []routing.UpstreamTarget{target}, target: target, payload: payload, cooldown: 0, tokenCount: 0, agentName: "test-agent", apiKey: nil, streaming: false, sourceFormat: "openai", windowCompacted: false, unknownFieldsAudited: nil})
+	action := p.prepareAndSend(gw, r, dispatchParams{Idx: 0, Targets: []routing.UpstreamTarget{target}, Target: target, Payload: payload, Cooldown: 0, TokenCount: 0, AgentName: "test-agent", APIKey: nil, Streaming: false, SourceFormat: "openai", WindowCompacted: false, UnknownFieldsAudited: nil})
 
-	if action.kind != actionContinue {
-		t.Errorf("expected actionContinue, got %v", action.kind)
+	if action.Kind != actionContinue {
+		t.Errorf("expected actionContinue, got %v", action.Kind)
 	}
 	if providerRT.calls != 1 {
 		t.Errorf("provider-dedicated client calls = %d, want 1", providerRT.calls)
@@ -1169,10 +1169,10 @@ func TestPrepareAndSend_ProviderTimeoutRecordsFailure(t *testing.T) {
 
 	p := &Proxy{}
 	p.StoreGateway(gw)
-	action := p.prepareAndSend(gw, r, dispatchParams{idx: 0, targets: []routing.UpstreamTarget{target}, target: target, payload: payload, cooldown: 0, tokenCount: 0, agentName: "test-agent", apiKey: nil, streaming: false, sourceFormat: "openai", windowCompacted: false, unknownFieldsAudited: nil})
+	action := p.prepareAndSend(gw, r, dispatchParams{Idx: 0, Targets: []routing.UpstreamTarget{target}, Target: target, Payload: payload, Cooldown: 0, TokenCount: 0, AgentName: "test-agent", APIKey: nil, Streaming: false, SourceFormat: "openai", WindowCompacted: false, UnknownFieldsAudited: nil})
 
-	if action.kind != actionContinue {
-		t.Errorf("expected actionContinue, got %v", action.kind)
+	if action.Kind != actionContinue {
+		t.Errorf("expected actionContinue, got %v", action.Kind)
 	}
 
 	detailed := gw.AgentState.CB.SnapshotDetailed()
@@ -1265,9 +1265,9 @@ func TestRetryLoop_HandleActionError_ClientCanceled(t *testing.T) {
 	}
 
 	action := upstreamAction{
-		kind:   actionError,
-		resp:   &http.Response{StatusCode: http.StatusInternalServerError, Header: http.Header{}, Body: io.NopCloser(strings.NewReader(`{}`))},
-		cancel: func() {},
+		Kind:   actionError,
+		Resp:   &http.Response{StatusCode: http.StatusInternalServerError, Header: http.Header{}, Body: io.NopCloser(strings.NewReader(`{}`))},
+		Cancel: func() {},
 	}
 	signal := rl.handleActionError(0, opts.Targets[0], action)
 	if signal != retrySignalDone {
@@ -1294,13 +1294,13 @@ func TestHandleRetryableError429_QuotaCooldownFloored(t *testing.T) {
 
 	target := routing.UpstreamTarget{Provider: "test-provider", Model: "test-model", CoolKey: "agent:test-provider:test-model"}
 	action := upstreamAction{
-		kind: actionError,
-		resp: &http.Response{
+		Kind: actionError,
+		Resp: &http.Response{
 			StatusCode: http.StatusTooManyRequests,
 			Header:     http.Header{},
 			Body:       io.NopCloser(strings.NewReader(body)),
 		},
-		cancel: func() {},
+		Cancel: func() {},
 	}
 
 	delay, isQuota := handleRetryableError429(slog.Default(), []byte(body), action, 150*time.Millisecond, target, "agent", gw)

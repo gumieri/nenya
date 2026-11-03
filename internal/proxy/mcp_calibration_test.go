@@ -4,6 +4,8 @@ import (
 	"strings"
 	"testing"
 
+	mcpproxy "github.com/nenya/internal/proxy/mcp"
+
 	"github.com/nenya/internal/gateway"
 	"github.com/nenya/internal/infra"
 	"github.com/nenya/internal/routing"
@@ -26,25 +28,25 @@ func TestMCPCalibrationModel(t *testing.T) {
 	}{
 		{
 			name:     "response matches primary target",
-			buf:      &bufferedSSE{model: "primary-model"},
+			buf:      &bufferedSSE{Model: "primary-model"},
 			targets:  targets,
 			expected: "primary-model",
 		},
 		{
 			name:     "response matches fallback target",
-			buf:      &bufferedSSE{model: "fallback-model"},
+			buf:      &bufferedSSE{Model: "fallback-model"},
 			targets:  targets,
 			expected: "fallback-model",
 		},
 		{
 			name:     "aggregator-normalized name falls back to primary",
-			buf:      &bufferedSSE{model: "primary-model-2026-10-07"},
+			buf:      &bufferedSSE{Model: "primary-model-2026-10-07"},
 			targets:  targets,
 			expected: "primary-model",
 		},
 		{
 			name:     "no targets falls back to response model",
-			buf:      &bufferedSSE{model: "whatever"},
+			buf:      &bufferedSSE{Model: "whatever"},
 			targets:  nil,
 			expected: "whatever",
 		},
@@ -57,7 +59,7 @@ func TestMCPCalibrationModel(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := mcpCalibrationModel(tc.targets, tc.buf); got != tc.expected {
+			if got := mcpproxy.MCPCalibrationModel(tc.targets, tc.buf); got != tc.expected {
 				t.Fatalf("got %q, want %q", got, tc.expected)
 			}
 		})
@@ -70,7 +72,7 @@ func TestRecordCalibrationFromBuffer(t *testing.T) {
 	gw := &gateway.NenyaGateway{
 		Calibration: infra.NewCalibrationTracker(infra.CalibrationParams{Enabled: true, MinObservations: 1, Decay: 1 - 1e-9, ClampMin: 0.5, ClampMax: 4.0}),
 	}
-	buf := &bufferedSSE{rawBytes: []byte(strings.Join([]string{
+	buf := &bufferedSSE{RawBytes: []byte(strings.Join([]string{
 		"data: {\"choices\":[{}]}",
 		"",
 		"data: {\"model\":\"m\",\"usage\":{\"prompt_tokens\":123,\"completion_tokens\":4}}",
@@ -79,20 +81,20 @@ func TestRecordCalibrationFromBuffer(t *testing.T) {
 		"",
 	}, "\n"))}
 
-	recordCalibrationFromBuffer(gw, "m", buf)
+	mcpproxy.RecordCalibrationFromBuffer(gw, "m", buf)
 	snap := gw.Calibration.Snapshot()["m"]
 	if snap.ActualTokens != 123 {
 		t.Fatalf("actual tokens = %v, want 123", snap.ActualTokens)
 	}
 
 	t.Run("nil buf and nil gw are no-ops", func(t *testing.T) {
-		recordCalibrationFromBuffer(gw, "m", nil)
-		recordCalibrationFromBuffer(nil, "m", buf)
+		mcpproxy.RecordCalibrationFromBuffer(gw, "m", nil)
+		mcpproxy.RecordCalibrationFromBuffer(nil, "m", buf)
 	})
 
 	t.Run("buffer without usage is a no-op", func(t *testing.T) {
 		before := gw.Calibration.Snapshot()["m"].ActualTokens
-		recordCalibrationFromBuffer(gw, "m", &bufferedSSE{rawBytes: []byte("data: {\"choices\":[{}]}\n\n")})
+		mcpproxy.RecordCalibrationFromBuffer(gw, "m", &bufferedSSE{RawBytes: []byte("data: {\"choices\":[{}]}\n\n")})
 		if after := gw.Calibration.Snapshot()["m"].ActualTokens; after != before {
 			t.Fatalf("usage-less buffer must not record: %v -> %v", before, after)
 		}

@@ -24,6 +24,23 @@ var dagExcluded = map[string]bool{
 	"releasecontract": true,
 }
 
+// dagNestedAllow maps a deliberately nested internal package path to the
+// DAG token that documents it (the token cannot be derived from the path's
+// last element without colliding with the parent layer).
+var dagNestedAllow = map[string]string{
+	"internal/proxy/mcp": "mcpproxy",
+}
+
+// dagTokenIsNested reports whether a DAG token names a nested-package entry.
+func dagTokenIsNested(name string) bool {
+	for _, token := range dagNestedAllow {
+		if token == name {
+			return true
+		}
+	}
+	return false
+}
+
 // dagData is the shared, load-once input for the DAG drift guards.
 type dagData struct {
 	tokens []string
@@ -151,8 +168,20 @@ func TestDocsDAGCoversInternalPackages(t *testing.T) {
 
 	for path, pkg := range data.pkgs {
 		isRootConfig := path == "config"
-		if !isRootConfig && path != dagInternalPrefix+pkg.name {
+		// dagNestedAllow lists the deliberate sub-packages of an existing
+		// layer (NENYA-312 Phase 040: the MCP subsystem extracted from
+		// proxy into internal/proxy/mcp, DAG token mcpproxy). The token
+		// names the LAST path element's package name; the nesting is
+		// documented in the DAG note.
+		_, isNested := dagNestedAllow[path]
+		if !isRootConfig && !isNested && path != dagInternalPrefix+pkg.name {
 			t.Errorf("package %s is nested below internal/<name>/; the single-token DAG cannot represent it — flatten the package or extend the DAG guard", path)
+			continue
+		}
+		if isNested {
+			if !tokenSet[dagNestedAllow[path]] {
+				t.Errorf("internal/%s nested package missing from the docs/ARCHITECTURE.md package DAG (expected token %q)", path, dagNestedAllow[path])
+			}
 			continue
 		}
 		if dagExcluded[pkg.name] {
@@ -168,7 +197,7 @@ func TestDocsDAGCoversInternalPackages(t *testing.T) {
 
 	// Reverse direction: every token must name a real package.
 	for _, name := range data.tokens {
-		if _, ok := data.pkgs[dagInternalPrefix+name]; !ok && name != "config" {
+		if _, ok := data.pkgs[dagInternalPrefix+name]; !ok && name != "config" && !dagTokenIsNested(name) {
 			t.Errorf("DAG token %q does not name a real package (stale docs/ARCHITECTURE.md entry)", name)
 		}
 	}

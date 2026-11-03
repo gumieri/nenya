@@ -142,13 +142,13 @@ func TestHandleUpstreamError_ZAI1302_NoCooldownNoCB(t *testing.T) {
 	target := routing.UpstreamTarget{Provider: "zai", Model: "glm-5.3", CoolKey: "agent|x|zai|glm-5.3"}
 	targets := []routing.UpstreamTarget{target}
 	action := upstreamAction{
-		resp: &http.Response{
+		Resp: &http.Response{
 			StatusCode: http.StatusTooManyRequests,
 			Header:     http.Header{},
 			Body:       io.NopCloser(strings.NewReader(`{"error":{"code":"1302"}}`)),
 		},
 	}
-	action.body, _ = io.ReadAll(action.resp.Body)
+	action.Body, _ = io.ReadAll(action.Resp.Body)
 
 	signal, delay, _ := p.handleUpstreamError(gw, 0, targets, target, 5*time.Second, "agent", action)
 
@@ -175,13 +175,13 @@ func TestHandleUpstreamError_ZAI1303_KeepsRateLimitPath(t *testing.T) {
 	target := routing.UpstreamTarget{Provider: "zai", Model: "glm-5.3", CoolKey: "agent|x|zai|glm-5.3"}
 	targets := []routing.UpstreamTarget{target}
 	action := upstreamAction{
-		resp: &http.Response{
+		Resp: &http.Response{
 			StatusCode: http.StatusTooManyRequests,
 			Header:     http.Header{},
 			Body:       io.NopCloser(strings.NewReader(`{"error":{"code":"1303"}}`)),
 		},
 	}
-	action.body, _ = io.ReadAll(action.resp.Body)
+	action.Body, _ = io.ReadAll(action.Resp.Body)
 
 	signal, delay, _ := p.handleUpstreamError(gw, 0, targets, target, 5*time.Second, "agent", action)
 

@@ -18,13 +18,13 @@ import (
 // quotaAction builds an upstreamAction with the given status and body.
 func quotaAction(status int, body string) upstreamAction {
 	action := upstreamAction{
-		resp: &http.Response{
+		Resp: &http.Response{
 			StatusCode: status,
 			Header:     http.Header{},
 			Body:       io.NopCloser(strings.NewReader(body)),
 		},
 	}
-	action.body, _ = io.ReadAll(action.resp.Body)
+	action.Body, _ = io.ReadAll(action.Resp.Body)
 	return action
 }
 

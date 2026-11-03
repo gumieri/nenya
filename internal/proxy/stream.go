@@ -86,7 +86,7 @@ func (p *Proxy) probeStreamHead(gw *gateway.NenyaGateway, action upstreamAction,
 	// Single use, once per stream request: a pooled buffer would only shift a
 	// one-time allocation off the request's stack frame without measurable gain.
 	firstBuf := make([]byte, streamHeadBufferSize)
-	bodyReader := action.resp.Body
+	bodyReader := action.Resp.Body
 	if stallR != nil {
 		bodyReader = stallR
 	}
@@ -111,7 +111,7 @@ func (p *Proxy) probeStreamHead(gw *gateway.NenyaGateway, action upstreamAction,
 	// continues. Any read-ahead bytes the reader already buffered (remainBuf
 	// or a queued channel result) stay in line behind the prefix — nothing is
 	// lost, because the stream phase keeps reading through this same reader.
-	action.resp.Body = &prefixedReadCloser{
+	action.Resp.Body = &prefixedReadCloser{
 		prefix: chunk,
 		reader: bodyReader,
 	}
@@ -139,7 +139,7 @@ func (p *Proxy) handleStreamHeadNoData(gw *gateway.NenyaGateway, action upstream
 			// always-on signal — counting here too would double-count.
 			return nil
 		}
-		if err := action.resp.Body.Close(); err != nil {
+		if err := action.Resp.Body.Close(); err != nil {
 			gw.Logger.Debug("close empty upstream body", "err", err, "provider", target.Provider)
 		}
 		if stallR != nil {
@@ -153,23 +153,23 @@ func (p *Proxy) handleStreamHeadNoData(gw *gateway.NenyaGateway, action upstream
 		gw.Metrics.RecordEmptyResponse(target.Model, target.Provider, "stream")
 		gw.Logger.Warn("empty upstream stream detected, falling back to next target",
 			"model", target.Model, "provider", target.Provider)
-		return &streamResult{empty: true}
+		return &streamResult{Empty: true}
 	}
 	// Transport-level failure before any bytes: distinct from a genuinely
 	// empty stream. Fail over without mislabeling it as empty; the retry
 	// loop surfaces the error on the last target.
-	if err := action.resp.Body.Close(); err != nil {
+	if err := action.Resp.Body.Close(); err != nil {
 		gw.Logger.Debug("close errored upstream body", "err", err, "provider", target.Provider)
 	}
 	if stallR != nil {
 		stallR.Stop()
 		stallR.DrainBuffered()
 	}
-	action.cancel()
+	action.Cancel()
 	gw.AgentState.RecordFailure(target, cooldownDuration)
 	gw.Logger.Warn("upstream stream read error at head, falling back to next target",
 		"err", readErr, "model", target.Model, "provider", target.Provider)
-	return &streamResult{err: readErr}
+	return &streamResult{Err: readErr}
 }
 
 // bootstrapProbeParams groups the bootstrap buffering probe inputs (AGENTS.md
@@ -213,7 +213,7 @@ func bootstrapHoldExceeded(elapsed, maxHold time.Duration) bool {
 // overflow degrades to unbuffered streaming. No client bytes are written
 // until a decision is reached, so a rejection stays failover-able.
 func (p *Proxy) bootstrapStreamHead(pp bootstrapProbeParams) *streamResult {
-	bodyReader := pp.action.resp.Body
+	bodyReader := pp.action.Resp.Body
 	if pp.stallR != nil {
 		bodyReader = pp.stallR
 	}
@@ -358,26 +358,26 @@ func (p *Proxy) resolveBootstrapRefusal(pp bootstrapProbeParams, acc []byte, sta
 // sticky_provider (a policy outcome is not a stream fault) and log the
 // diagnosis correctly.
 func (p *Proxy) failoverHeadPolicy(pp bootstrapProbeParams, reason streamFailoverReason) *streamResult {
-	if err := pp.action.resp.Body.Close(); err != nil {
+	if err := pp.action.Resp.Body.Close(); err != nil {
 		pp.gw.Logger.Debug("close errored upstream body", "err", err, "provider", pp.target.Provider)
 	}
 	if pp.stallR != nil {
 		pp.stallR.Stop()
 		pp.stallR.DrainBuffered()
 	}
-	pp.action.cancel()
+	pp.action.Cancel()
 	pp.gw.AgentState.CB.ReleaseHalfOpen(pp.target.CoolKey)
-	return &streamResult{empty: true, failoverReason: reason}
+	return &streamResult{Empty: true, FailoverReason: reason}
 }
 
 // flushBootstrapPrefix re-arms the response body so the bytes held during the
 // bootstrap probe are served before the (stall-bounded) reader continues.
 func (p *Proxy) flushBootstrapPrefix(pp bootstrapProbeParams, acc []byte) *streamResult {
-	bodyReader := pp.action.resp.Body
+	bodyReader := pp.action.Resp.Body
 	if pp.stallR != nil {
 		bodyReader = pp.stallR
 	}
-	pp.action.resp.Body = &prefixedReadCloser{prefix: acc, reader: bodyReader}
+	pp.action.Resp.Body = &prefixedReadCloser{prefix: acc, reader: bodyReader}
 	return nil
 }
 
@@ -386,19 +386,19 @@ func (p *Proxy) flushBootstrapPrefix(pp bootstrapProbeParams, acc []byte) *strea
 // streamResult{empty}. outcome is the metric reason ("failover" for the
 // first-event probe, "bootstrap_failover" for the bootstrap buffer).
 func (p *Proxy) failoverEarlyHeadError(gw *gateway.NenyaGateway, action upstreamAction, target routing.UpstreamTarget, cooldownDuration time.Duration, stallR *stallReader, outcome string) *streamResult {
-	if err := action.resp.Body.Close(); err != nil {
+	if err := action.Resp.Body.Close(); err != nil {
 		gw.Logger.Debug("close errored upstream body", "err", err, "provider", target.Provider)
 	}
 	if stallR != nil {
 		stallR.Stop()
 		stallR.DrainBuffered()
 	}
-	action.cancel()
+	action.Cancel()
 	gw.AgentState.RecordFailure(target, cooldownDuration)
 	gw.Metrics.RecordEarlyStreamError(target.Model, target.Provider, outcome)
 	gw.Logger.Warn("upstream error event at stream head, falling back to next target",
 		"model", target.Model, "provider", target.Provider)
-	return &streamResult{empty: true}
+	return &streamResult{Empty: true}
 }
 
 // headProbe reports which stream-head probes are enabled by governance config.
@@ -429,7 +429,7 @@ func headProbeEnabled(gc config.GovernanceConfig) headProbe {
 func (p *Proxy) streamResponse(opts streamResponseOpts, action upstreamAction) streamResult {
 	gw, w, r, target := opts.gw, opts.w, opts.r, opts.target
 	cacheKey, cooldownDuration, payload := opts.cacheKey, opts.cooldown, opts.payload
-	defer action.cancel()
+	defer action.Cancel()
 	// The slot release must follow the CURRENT action, not the one bound at
 	// entry: a continuation swaps the action mid-stream, and an entry-time
 	// release would orphan the continuation's admission slot (the in-flight
@@ -439,7 +439,7 @@ func (p *Proxy) streamResponse(opts streamResponseOpts, action upstreamAction) s
 	// cancel above is load-bearing: cancel binds the ORIGINAL action here
 	// and re-defers per swap (stream.go, the continuation loop), while the
 	// release must track the final action — don't "simplify" either side.
-	defer func() { action.releaseSlot() }()
+	defer func() { action.ReleaseSlot() }()
 
 	// Build the stall-bounded reader once, before the pre-header probe, so the
 	// head read is subject to stream_idle_timeout_seconds. The same reader is
@@ -447,20 +447,20 @@ func (p *Proxy) streamResponse(opts streamResponseOpts, action upstreamAction) s
 	// its goroutine stays in line).
 	var stallR *stallReader
 	if timeout := resolveStreamIdleTimeout(gw, target.Provider); timeout > 0 {
-		stallR = newStallReader(r.Context(), action.resp.Body, timeout, gw.Config.Governance.EffectiveThinkingStreamIdleTimeout())
+		stallR = newStallReader(r.Context(), action.Resp.Body, timeout, gw.Config.Governance.EffectiveThinkingStreamIdleTimeout())
 	}
 
 	if res := p.probeStreamHead(gw, action, target, cooldownDuration, opts, stallR); res != nil {
 		return *res
 	}
 
-	routing.CopyHeaders(action.resp.Header, w.Header())
+	routing.CopyHeaders(action.Resp.Header, w.Header())
 	if cacheKey != "" {
 		w.Header().Set("X-Nenya-Cache-Status", "MISS")
 	}
-	w.WriteHeader(action.resp.StatusCode)
+	w.WriteHeader(action.Resp.StatusCode)
 
-	extractQuotaUnlessBYOK(gw, r.Context(), target, action.resp.Header)
+	extractQuotaUnlessBYOK(gw, r.Context(), target, action.Resp.Header)
 
 	buf := getStreamBuffer()
 	flushWriter, canFlush := newImmediateFlushWriter(w, resolveStreamStallTimeout(gw))
@@ -546,14 +546,14 @@ func (p *Proxy) streamResponse(opts streamResponseOpts, action upstreamAction) s
 				// only the FINAL action's release is deferred below — without
 				// this, every resume but the last orphans its slot and gauge
 				// (AUD-05).
-				action.releaseSlot()
+				action.ReleaseSlot()
 				action = newAction
 				// The action swap happened for this attempt; the new action's
 				// http response carries the continuation's StatusCode, which is
 				// equal to the original (both should be 200). Ensure the
 				// deferred cancel on streamResponse doesn't leak the previous
 				// action's context.
-				defer action.cancel()
+				defer action.Cancel()
 				continue
 			}
 			// The re-dispatch's slot is resolved by resolveRedispatchOutcome
@@ -698,19 +698,19 @@ type transformReaderOpts struct {
 func (p *Proxy) setupTransformingReader(gw *gateway.NenyaGateway, o transformReaderOpts) (*stream.SSETransformingReader, *contentBuilder, *stallReader) {
 	transformer := p.resolveTransformer(gw, o.target, o.sourceFormat, o.sigCache)
 
-	var bodyReader io.Reader = o.action.resp.Body
+	var bodyReader io.Reader = o.action.Resp.Body
 	var stallR = o.reuse
 	if stallR == nil {
 		timeout := resolveStreamIdleTimeout(gw, o.target.Provider)
 		if timeout > 0 {
 			thinkingTimeout := gw.Config.Governance.EffectiveThinkingStreamIdleTimeout()
-			stallR = newStallReader(o.ctx, o.action.resp.Body, timeout, thinkingTimeout)
+			stallR = newStallReader(o.ctx, o.action.Resp.Body, timeout, thinkingTimeout)
 			bodyReader = stallR
 		}
-	} else if _, wrapped := o.action.resp.Body.(*prefixedReadCloser); wrapped {
+	} else if _, wrapped := o.action.Resp.Body.(*prefixedReadCloser); wrapped {
 		// The stream-head probe wrapped the body (prefix over the reused stall
 		// reader): keep reading through the wrapper so byte order is preserved.
-		bodyReader = o.action.resp.Body
+		bodyReader = o.action.Resp.Body
 	} else {
 		// Probe disabled: the reused stall reader's goroutine is the sole
 		// consumer of the raw body. Reading the raw body directly here would
@@ -985,8 +985,8 @@ func (p *Proxy) handleStreamDone(gw *gateway.NenyaGateway, w http.ResponseWriter
 
 	// Close upstream body and cancel context before draining to unblock
 	// the readLoop, preventing DrainPending from blocking for the full timeout.
-	action.cancel()
-	_ = action.resp.Body.Close()
+	action.Cancel()
+	_ = action.Resp.Body.Close()
 
 	if stallR != nil {
 		drained, err := stallR.DrainPending(100 * time.Millisecond)
@@ -1004,7 +1004,7 @@ func (p *Proxy) handleStreamDone(gw *gateway.NenyaGateway, w http.ResponseWriter
 		p.writeStallSSE(gw, w)
 		// Headers and partial SSE are already committed: terminal, never
 		// fail over and append a second stream to the client's bytes.
-		return streamResult{terminal: true}
+		return streamResult{Terminal: true}
 	}
 
 	if isClientWriteError(copyErr) {
@@ -1284,7 +1284,7 @@ func embeddingUserText(messages []any, logger *slog.Logger) string {
 // idle timeout). The error event lets the client distinguish a stall from a
 // normal completion.
 func (p *Proxy) writeStallSSE(gw *gateway.NenyaGateway, w http.ResponseWriter) {
-	armClientWriteDeadline(w, resolveStreamStallTimeout(gw))
+	ArmClientWriteDeadline(w, resolveStreamStallTimeout(gw))
 	_, _ = w.Write(stallSSEFrames())
 	flushPassthrough(w)
 }
@@ -1308,7 +1308,7 @@ func stallSSEFrames() []byte {
 }
 
 func (p *Proxy) writeTimeoutSSE(gw *gateway.NenyaGateway, w http.ResponseWriter) {
-	armClientWriteDeadline(w, resolveStreamStallTimeout(gw))
+	ArmClientWriteDeadline(w, resolveStreamStallTimeout(gw))
 	errPayload, err := json.Marshal(map[string]any{
 		"error_kind": string(infra.ErrorKindProviderTimeout),
 		"error": map[string]any{
@@ -1364,8 +1364,8 @@ func (p *Proxy) handleBlockedStream(gw *gateway.NenyaGateway, w http.ResponseWri
 		return false, streamResult{}
 	}
 
-	action.cancel()
-	_ = action.resp.Body.Close()
+	action.Cancel()
+	_ = action.Resp.Body.Close()
 	if stallR != nil {
 		stallR.Stop()
 		stallR.DrainBuffered()
@@ -1382,7 +1382,7 @@ func (p *Proxy) handleBlockedStream(gw *gateway.NenyaGateway, w http.ResponseWri
 	// Every branch fully writes the response (a structured block frame):
 	// the retry loop must not fail over onto the committed bytes, so all
 	// three terminations are terminal.
-	return true, streamResult{terminal: true}
+	return true, streamResult{Terminal: true}
 }
 
 // writeExfilDetectedSSE sends the structured canary-detection response:
@@ -1432,7 +1432,7 @@ func (p *Proxy) writeExfilBlockedSSE(gw *gateway.NenyaGateway, w http.ResponseWr
 // writeBlockedSSEPayload marshals a blocked-response payload and writes
 // it as one SSE data line plus [DONE].
 func (p *Proxy) writeBlockedSSEPayload(gw *gateway.NenyaGateway, w http.ResponseWriter, blockPayload map[string]interface{}) {
-	armClientWriteDeadline(w, resolveStreamStallTimeout(gw))
+	ArmClientWriteDeadline(w, resolveStreamStallTimeout(gw))
 	blockJSON, err := json.Marshal(blockPayload)
 	if err != nil {
 		gw.Logger.Error("failed to marshal blocked SSE payload", "err", err)
@@ -1486,7 +1486,7 @@ func (p *Proxy) autoSaveTryServer(liveGW *gateway.NenyaGateway, agent *config.Ag
 		ToolName:   saveTool,
 		Purpose:    "auto_save",
 		Args:       saveArgs,
-		ApiKey:     apiKey,
+		APIKey:     apiKey,
 	}); guardErr != nil {
 		// Return false so the caller may fall back to another server
 		// whose allowed_hosts permits the content; the guard already

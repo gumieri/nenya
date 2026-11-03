@@ -12,6 +12,8 @@ import (
 	"strings"
 	"testing"
 
+	mcpproxy "github.com/nenya/internal/proxy/mcp"
+
 	"github.com/nenya/config"
 	"github.com/nenya/internal/gateway"
 	"github.com/nenya/internal/infra"
@@ -31,24 +33,24 @@ data: {"id":"1","choices":[{"delta":{},"finish_reason":"stop"}],"usage":{"prompt
 data: [DONE]
 `
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	buf, err := bufferStreamResponse(context.Background(), strings.NewReader(sse), logger, "", routing.UpstreamTarget{})
+	buf, err := mcpproxy.BufferStreamResponse(context.Background(), strings.NewReader(sse), logger, "", routing.UpstreamTarget{})
 	if err != nil {
 		t.Fatalf("bufferStreamResponse failed: %v", err)
 	}
 
-	if !buf.hasContent {
+	if !buf.HasContent {
 		t.Fatal("expected hasContent=true")
 	}
-	if len(buf.toolCalls) != 0 {
-		t.Fatalf("expected 0 tool calls, got %d", len(buf.toolCalls))
+	if len(buf.ToolCalls) != 0 {
+		t.Fatalf("expected 0 tool calls, got %d", len(buf.ToolCalls))
 	}
-	if buf.finishReason != "stop" {
-		t.Fatalf("finishReason = %q, want stop", buf.finishReason)
+	if buf.FinishReason != "stop" {
+		t.Fatalf("finishReason = %q, want stop", buf.FinishReason)
 	}
-	if !strings.Contains(string(buf.rawBytes), "Hello") {
+	if !strings.Contains(string(buf.RawBytes), "Hello") {
 		t.Fatal("rawBytes missing content")
 	}
-	if !strings.Contains(string(buf.rawBytes), "[DONE]") {
+	if !strings.Contains(string(buf.RawBytes), "[DONE]") {
 		t.Fatal("rawBytes missing [DONE] marker")
 	}
 }
@@ -67,19 +69,19 @@ data: {"id":"1","choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}]}
 data: [DONE]
 `
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	buf, err := bufferStreamResponse(context.Background(), strings.NewReader(sse), logger, "", routing.UpstreamTarget{})
+	buf, err := mcpproxy.BufferStreamResponse(context.Background(), strings.NewReader(sse), logger, "", routing.UpstreamTarget{})
 	if err != nil {
 		t.Fatalf("bufferStreamResponse failed: %v", err)
 	}
 
-	if buf.hasContent {
+	if buf.HasContent {
 		t.Fatal("expected hasContent=false for tool call response")
 	}
-	if len(buf.toolCalls) != 1 {
-		t.Fatalf("expected 1 tool call, got %d", len(buf.toolCalls))
+	if len(buf.ToolCalls) != 1 {
+		t.Fatalf("expected 1 tool call, got %d", len(buf.ToolCalls))
 	}
 
-	tc := buf.toolCalls[0]
+	tc := buf.ToolCalls[0]
 	if tc.ID != "call_abc123" {
 		t.Fatalf("tool call ID = %q, want call_abc123", tc.ID)
 	}
@@ -89,23 +91,23 @@ data: [DONE]
 	if tc.Arguments["query"] != "hello" {
 		t.Fatalf("tool call args = %v, want query=hello", tc.Arguments)
 	}
-	if buf.finishReason != "tool_calls" {
-		t.Fatalf("finishReason = %q, want tool_calls", buf.finishReason)
+	if buf.FinishReason != "tool_calls" {
+		t.Fatalf("finishReason = %q, want tool_calls", buf.FinishReason)
 	}
 }
 
 func TestBufferStreamResponse_Empty(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	buf, err := bufferStreamResponse(context.Background(), strings.NewReader(""), logger, "", routing.UpstreamTarget{})
+	buf, err := mcpproxy.BufferStreamResponse(context.Background(), strings.NewReader(""), logger, "", routing.UpstreamTarget{})
 	if err != nil {
 		t.Fatalf("bufferStreamResponse failed: %v", err)
 	}
 
-	if buf.hasContent {
+	if buf.HasContent {
 		t.Fatal("expected hasContent=false for empty stream")
 	}
-	if len(buf.rawBytes) != 0 {
-		t.Fatalf("expected empty rawBytes, got %d bytes", len(buf.rawBytes))
+	if len(buf.RawBytes) != 0 {
+		t.Fatalf("expected empty rawBytes, got %d bytes", len(buf.RawBytes))
 	}
 }
 
@@ -115,7 +117,7 @@ func TestBufferStreamResponse_ContextCancelled(t *testing.T) {
 
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	sse := "data: {\"choices\":[{\"delta\":{\"content\":\"Hello\"}}]}\n\n"
-	_, err := bufferStreamResponse(ctx, strings.NewReader(sse), logger, "", routing.UpstreamTarget{})
+	_, err := mcpproxy.BufferStreamResponse(ctx, strings.NewReader(sse), logger, "", routing.UpstreamTarget{})
 	if err == nil {
 		t.Fatal("expected error for canceled context")
 	}
@@ -135,7 +137,7 @@ func TestPartitionMCPToolCalls(t *testing.T) {
 		{ID: "4", Name: "bash"},
 	}
 
-	mcpCalls, nonMcpCalls := partitionMCPToolCalls(calls, index)
+	mcpCalls, nonMcpCalls := mcpproxy.PartitionMCPToolCalls(calls, index)
 
 	if len(mcpCalls) != 2 {
 		t.Fatalf("expected 2 MCP calls, got %d", len(mcpCalls))
@@ -164,7 +166,7 @@ func TestPartitionMCPToolCalls_AllMCP(t *testing.T) {
 		{ID: "1", Name: "memory__search"},
 	}
 
-	mcpCalls, nonMcpCalls := partitionMCPToolCalls(calls, index)
+	mcpCalls, nonMcpCalls := mcpproxy.PartitionMCPToolCalls(calls, index)
 
 	if len(mcpCalls) != 1 {
 		t.Fatalf("expected 1 MCP call, got %d", len(mcpCalls))
@@ -181,7 +183,7 @@ func TestPartitionMCPToolCalls_NoneMCP(t *testing.T) {
 		{ID: "1", Name: "file_edit"},
 	}
 
-	mcpCalls, nonMcpCalls := partitionMCPToolCalls(calls, index)
+	mcpCalls, nonMcpCalls := mcpproxy.PartitionMCPToolCalls(calls, index)
 
 	if len(mcpCalls) != 0 {
 		t.Fatalf("expected 0 MCP calls, got %d", len(mcpCalls))
@@ -220,7 +222,7 @@ func TestAppendMCPResults(t *testing.T) {
 		{Content: []mcp.ContentBlock{{Type: "text", Text: "found 3 items"}}},
 	}
 
-	appendMCPResults(payload, calls, results, assistantMsg, mcpAppendContext{})
+	mcpproxy.AppendMCPResults(payload, calls, results, assistantMsg, mcpAppendContext{})
 
 	messages, ok := payload["messages"].([]any)
 	if !ok {
@@ -273,7 +275,7 @@ func TestAppendMCPResults_Error(t *testing.T) {
 		{Content: []mcp.ContentBlock{{Type: "text", Text: "server unavailable"}}, IsError: true},
 	}
 
-	appendMCPResults(payload, calls, results, assistantMsg, mcpAppendContext{})
+	mcpproxy.AppendMCPResults(payload, calls, results, assistantMsg, mcpAppendContext{})
 
 	messages := payload["messages"].([]any)
 	toolMsg := messages[2].(map[string]any)
@@ -285,7 +287,7 @@ func TestAppendMCPResults_Error(t *testing.T) {
 
 func TestAppendMCPResults_NoMessages(t *testing.T) {
 	payload := map[string]any{"messages": "not-array"}
-	appendMCPResults(payload, []mcpToolCall{{ID: "1"}}, []*mcp.CallToolResult{{}}, nil, mcpAppendContext{})
+	mcpproxy.AppendMCPResults(payload, []mcpToolCall{{ID: "1"}}, []*mcp.CallToolResult{{}}, nil, mcpAppendContext{})
 }
 
 func TestAppendMCPResults_NilResults(t *testing.T) {
@@ -301,7 +303,7 @@ func TestAppendMCPResults_NilResults(t *testing.T) {
 		},
 	}
 
-	appendMCPResults(payload, []mcpToolCall{{ID: "call_1"}}, nil, nil, mcpAppendContext{})
+	mcpproxy.AppendMCPResults(payload, []mcpToolCall{{ID: "call_1"}}, nil, nil, mcpAppendContext{})
 	messages := payload["messages"].([]any)
 	if len(messages) != 2 {
 		t.Fatalf("expected 2 messages (unchanged), got %d", len(messages))
@@ -309,12 +311,13 @@ func TestAppendMCPResults_NilResults(t *testing.T) {
 }
 
 func TestReplayBufferedResponse(t *testing.T) {
+	p := &Proxy{}
 	w := httptest.NewRecorder()
 	buf := &bufferedSSE{
-		rawBytes: []byte("data: {\"choices\":[{}]}\n\ndata: [DONE]\n\n"),
+		RawBytes: []byte("data: {\"choices\":[{}]}\n\ndata: [DONE]\n\n"),
 	}
 
-	replayBufferedResponse(w, buf, nil, "test-provider", slog.New(slog.NewTextHandler(io.Discard, nil)))
+	replayBufferedResponse(p.mcpHost(), w, buf, nil, "test-provider", slog.New(slog.NewTextHandler(io.Discard, nil)))
 
 	if w.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200", w.Code)
@@ -492,28 +495,28 @@ data: {"id":"1","choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}]}
 data: [DONE]
 `
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	buf, err := bufferStreamResponse(context.Background(), strings.NewReader(sse), logger, "", routing.UpstreamTarget{})
+	buf, err := mcpproxy.BufferStreamResponse(context.Background(), strings.NewReader(sse), logger, "", routing.UpstreamTarget{})
 	if err != nil {
 		t.Fatalf("bufferStreamResponse failed: %v", err)
 	}
 
-	if buf.hasContent {
+	if buf.HasContent {
 		t.Fatal("expected hasContent=false")
 	}
-	if len(buf.toolCalls) != 2 {
-		t.Fatalf("expected 2 tool calls, got %d", len(buf.toolCalls))
+	if len(buf.ToolCalls) != 2 {
+		t.Fatalf("expected 2 tool calls, got %d", len(buf.ToolCalls))
 	}
-	if buf.toolCalls[0].ID != "call_A" || buf.toolCalls[0].Name != "tool_a" {
-		t.Errorf("tool call 0: got id=%q name=%q", buf.toolCalls[0].ID, buf.toolCalls[0].Name)
+	if buf.ToolCalls[0].ID != "call_A" || buf.ToolCalls[0].Name != "tool_a" {
+		t.Errorf("tool call 0: got id=%q name=%q", buf.ToolCalls[0].ID, buf.ToolCalls[0].Name)
 	}
-	if buf.toolCalls[0].Arguments["x"] != float64(1) {
-		t.Errorf("tool call 0 args: got %v", buf.toolCalls[0].Arguments)
+	if buf.ToolCalls[0].Arguments["x"] != float64(1) {
+		t.Errorf("tool call 0 args: got %v", buf.ToolCalls[0].Arguments)
 	}
-	if buf.toolCalls[1].ID != "call_B" || buf.toolCalls[1].Name != "tool_b" {
-		t.Errorf("tool call 1: got id=%q name=%q", buf.toolCalls[1].ID, buf.toolCalls[1].Name)
+	if buf.ToolCalls[1].ID != "call_B" || buf.ToolCalls[1].Name != "tool_b" {
+		t.Errorf("tool call 1: got id=%q name=%q", buf.ToolCalls[1].ID, buf.ToolCalls[1].Name)
 	}
-	if buf.toolCalls[1].Arguments["y"] != float64(2) {
-		t.Errorf("tool call 1 args: got %v", buf.toolCalls[1].Arguments)
+	if buf.ToolCalls[1].Arguments["y"] != float64(2) {
+		t.Errorf("tool call 1 args: got %v", buf.ToolCalls[1].Arguments)
 	}
 }
 
@@ -527,22 +530,22 @@ data: {"id":"1","choices":[{"delta":{},"finish_reason":"tool_calls"}]}
 data: [DONE]
 `
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	buf, err := bufferStreamResponse(context.Background(), strings.NewReader(sse), logger, "", routing.UpstreamTarget{})
+	buf, err := mcpproxy.BufferStreamResponse(context.Background(), strings.NewReader(sse), logger, "", routing.UpstreamTarget{})
 	if err != nil {
 		t.Fatalf("bufferStreamResponse failed: %v", err)
 	}
 
-	if !buf.hasContent {
+	if !buf.HasContent {
 		t.Fatal("expected hasContent=true")
 	}
-	if len(buf.toolCalls) != 1 {
-		t.Fatalf("expected 1 tool call, got %d", len(buf.toolCalls))
+	if len(buf.ToolCalls) != 1 {
+		t.Fatalf("expected 1 tool call, got %d", len(buf.ToolCalls))
 	}
-	if buf.toolCalls[0].Name != "search" {
-		t.Errorf("expected tool name 'search', got %q", buf.toolCalls[0].Name)
+	if buf.ToolCalls[0].Name != "search" {
+		t.Errorf("expected tool name 'search', got %q", buf.ToolCalls[0].Name)
 	}
-	if buf.finishReason != "tool_calls" {
-		t.Fatalf("expected finish_reason=tool_calls, got %q", buf.finishReason)
+	if buf.FinishReason != "tool_calls" {
+		t.Fatalf("expected finish_reason=tool_calls, got %q", buf.FinishReason)
 	}
 }
 
@@ -574,7 +577,7 @@ func TestAppendMCPResults_MultipleCallsPreserveOrder(t *testing.T) {
 		{Content: []mcp.ContentBlock{{Type: "text", Text: "result C"}}},
 	}
 
-	appendMCPResults(payload, calls, results, assistantMsg, mcpAppendContext{})
+	mcpproxy.AppendMCPResults(payload, calls, results, assistantMsg, mcpAppendContext{})
 
 	messages := payload["messages"].([]any)
 	if len(messages) != 5 {
@@ -614,7 +617,7 @@ func TestAppendMCPResults_LargeContentNotTruncated(t *testing.T) {
 		},
 	}
 
-	appendMCPResults(payload, []mcpToolCall{{ID: "call_1", Name: "mcp__big"}},
+	mcpproxy.AppendMCPResults(payload, []mcpToolCall{{ID: "call_1", Name: "mcp__big"}},
 		[]*mcp.CallToolResult{{Content: []mcp.ContentBlock{{Type: "text", Text: largeContent}}}},
 		assistantMsg, mcpAppendContext{})
 
@@ -635,7 +638,7 @@ func TestBufferStreamResponse_LargeSSELine(t *testing.T) {
 
 	ctx := context.Background()
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	result, err := bufferStreamResponse(ctx, strings.NewReader(input), logger, "", routing.UpstreamTarget{})
+	result, err := mcpproxy.BufferStreamResponse(ctx, strings.NewReader(input), logger, "", routing.UpstreamTarget{})
 
 	if err != nil {
 		t.Fatalf("expected no error for 100KB SSE line, got %v", err)
@@ -643,7 +646,7 @@ func TestBufferStreamResponse_LargeSSELine(t *testing.T) {
 	if result == nil {
 		t.Fatal("expected non-nil result")
 	}
-	if !strings.Contains(string(result.rawBytes), strings.Repeat("x", 100)) {
+	if !strings.Contains(string(result.RawBytes), strings.Repeat("x", 100)) {
 		t.Error("expected large content prefix in rawBytes")
 	}
 }
@@ -661,7 +664,7 @@ data: [DONE]
 
 	ctx := context.Background()
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	result, err := bufferStreamResponse(ctx, strings.NewReader(input), logger, "", routing.UpstreamTarget{})
+	result, err := mcpproxy.BufferStreamResponse(ctx, strings.NewReader(input), logger, "", routing.UpstreamTarget{})
 
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -669,13 +672,13 @@ data: [DONE]
 	if result == nil {
 		t.Fatal("expected non-nil result")
 	}
-	if !result.hasContent {
+	if !result.HasContent {
 		t.Error("expected hasContent=true")
 	}
-	if !strings.Contains(string(result.rawBytes), "Hello") {
+	if !strings.Contains(string(result.RawBytes), "Hello") {
 		t.Errorf("expected 'Hello' in rawBytes")
 	}
-	if !strings.Contains(string(result.rawBytes), " World") {
+	if !strings.Contains(string(result.RawBytes), " World") {
 		t.Errorf("expected ' World' in rawBytes")
 	}
 }
@@ -689,7 +692,7 @@ func TestBufferStreamResponse_OverLimitLine(t *testing.T) {
 
 	ctx := context.Background()
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	_, err := bufferStreamResponse(ctx, strings.NewReader(input), logger, "", routing.UpstreamTarget{})
+	_, err := mcpproxy.BufferStreamResponse(ctx, strings.NewReader(input), logger, "", routing.UpstreamTarget{})
 
 	if err == nil {
 		t.Fatal("expected error for line exceeding SSEScannerMaxBuf")
@@ -715,7 +718,7 @@ func TestAppendMCPResultsSpotlightEnabled(t *testing.T) {
 		Mode:               pipeline.SpotlightModeDelimiters,
 		MaxToolResultBytes: config.DefaultMaxToolResultBytes,
 	}
-	appendMCPResults(payload, calls, results, assistant, mcpAppendContext{settings: settings, metrics: metrics})
+	mcpproxy.AppendMCPResults(payload, calls, results, assistant, mcpAppendContext{Settings: settings, Metrics: metrics})
 
 	msgs := payload["messages"].([]any)
 	toolMsg := msgs[len(msgs)-1].(map[string]any)
@@ -745,7 +748,7 @@ func TestApplyCanaryToBufferedSSE(t *testing.T) {
 		for _, f := range frames {
 			raw = append(raw, []byte("data: "+f+"\n\n")...)
 		}
-		return &bufferedSSE{rawBytes: raw, hasContent: true}
+		return &bufferedSSE{RawBytes: raw, HasContent: true}
 	}
 
 	t.Run("block on straddled canary", func(t *testing.T) {
@@ -755,7 +758,7 @@ func TestApplyCanaryToBufferedSSE(t *testing.T) {
 		tail := `{"choices":[{"delta":{"content":"` + canary.Token[20:] + ` tail"}}]}`
 		buf := buildBuf(head, tail)
 		p.applyCanaryToBufferedSSE(gw, buf, "agent", canary)
-		if !buf.canaryBlocked {
+		if !buf.CanaryBlocked {
 			t.Fatal("expected canaryBlocked on straddled token")
 		}
 	})
@@ -764,9 +767,9 @@ func TestApplyCanaryToBufferedSSE(t *testing.T) {
 		p := &Proxy{}
 		gw := newTestGateway(nil, nil)
 		buf := buildBuf(`{"choices":[{"delta":{"content":"benign output"}}]}`)
-		before := string(buf.rawBytes)
+		before := string(buf.RawBytes)
 		p.applyCanaryToBufferedSSE(gw, buf, "agent", canary)
-		if buf.canaryBlocked || string(buf.rawBytes) != before {
+		if buf.CanaryBlocked || string(buf.RawBytes) != before {
 			t.Fatal("clean buffer must be untouched")
 		}
 	})
@@ -778,11 +781,11 @@ func TestApplyCanaryToBufferedSSE(t *testing.T) {
 		frame := `{"choices":[{"delta":{"content":"leak ` + canary.Token + ` done"}}]}`
 		buf := buildBuf(frame)
 		p.applyCanaryToBufferedSSE(gw, buf, "agent", logCanary)
-		if buf.canaryBlocked {
+		if buf.CanaryBlocked {
 			t.Fatal("log action must not block")
 		}
-		if strings.Contains(string(buf.rawBytes), canary.Token) {
-			t.Errorf("token must be scrubbed in log mode: %q", buf.rawBytes)
+		if strings.Contains(string(buf.RawBytes), canary.Token) {
+			t.Errorf("token must be scrubbed in log mode: %q", buf.RawBytes)
 		}
 	})
 }
@@ -1088,8 +1091,8 @@ func TestGuardMCPArgsNilLogger(t *testing.T) {
 		ToolName:   "test_tool",
 		Purpose:    "test",
 		Args:       map[string]any{"url": "http://127.0.0.1/"},
-		ApiKey:     fullAccessTestKey(),
-	}); !errors.Is(err, errMCPArgumentPolicy) {
+		APIKey:     fullAccessTestKey(),
+	}); !errors.Is(err, mcpproxy.ErrMCPArgumentPolicy) {
 		t.Fatalf("private URL must be rejected by the argument policy, got %v", err)
 	}
 }
@@ -1098,8 +1101,8 @@ func TestGuardMCPArgsNilLogger(t *testing.T) {
 // pre-existing dispatch tests: no unavailable set (the NENYA-162 guard is
 // inert outside the MCP loop).
 func executeMCPCallsForTest(ctx context.Context, calls []mcpToolCall, gw *gateway.NenyaGateway, agentName string, canary pipeline.CanarResult, screen *egressScreenRuntime, apiKey *config.ApiKey) []*mcp.CallToolResult {
-	return executeMCPCallsWithUnavailable(mcpExecOptions{
-		ctx: ctx, calls: calls, gw: gw, agentName: agentName,
-		canary: canary, screen: screen, apiKey: apiKey,
+	return mcpproxy.ExecuteMCPCallsWithUnavailable((&Proxy{}).mcpHost(), mcpExecOptions{
+		Ctx: ctx, Calls: calls, GW: gw, AgentName: agentName,
+		Canary: canary, Screen: screen, APIKey: apiKey,
 	})
 }

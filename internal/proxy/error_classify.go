@@ -70,9 +70,9 @@ func extendForCooldownSignal(logger *slog.Logger, effective, signal time.Duratio
 }
 
 func handleRetryableError429(logger *slog.Logger, errorBody []byte, action upstreamAction, cooldownDuration time.Duration, target routing.UpstreamTarget, agentName string, gw *gateway.NenyaGateway) (time.Duration, bool) {
-	effectiveCooldown, isQuota := derive429Cooldown(logger, errorBody, action.resp.Header, action.resp.StatusCode, cooldownDuration)
+	effectiveCooldown, isQuota := derive429Cooldown(logger, errorBody, action.Resp.Header, action.Resp.StatusCode, cooldownDuration)
 
-	if action.resp.StatusCode == http.StatusTooManyRequests {
+	if action.Resp.StatusCode == http.StatusTooManyRequests {
 		// Quota floor (NENYA-41): never let a sub-second provider-supplied
 		// cooldown produce a zero-wait retry storm against the same account.
 		if floor := gw.Config.Governance.EffectiveMinQuotaCooldown(); isQuota && floor > 0 && effectiveCooldown < floor {
@@ -89,7 +89,7 @@ func handleRetryableError429(logger *slog.Logger, errorBody []byte, action upstr
 			// (NENYA-195). Stand down on every shared-account write.
 			logger.Info("BYOK request rate-limited; leaving shared account state untouched",
 				"provider", target.Provider, "model", target.Model)
-			return parseRetryDelay(action.resp.Header, errorBody), isQuota
+			return parseRetryDelay(action.Resp.Header, errorBody), isQuota
 		}
 		// Idle-connection eviction (NENYA-47): an exhausted account's pooled
 		// connections are dead weight — drop them while the account cools
@@ -97,11 +97,11 @@ func handleRetryableError429(logger *slog.Logger, errorBody []byte, action upstr
 		gw.EvictIdleConnections(target.Provider)
 		gw.AgentState.ActivateCooldown(target, effectiveCooldown)
 		gw.Metrics.RecordCooldown(agentName, target.Provider, target.Model)
-		gw.AgentState.RecordFailureWithStatus(target, action.resp.StatusCode, string(errorBody))
-		return parseRetryDelay(action.resp.Header, errorBody), isQuota
+		gw.AgentState.RecordFailureWithStatus(target, action.Resp.StatusCode, string(errorBody))
+		return parseRetryDelay(action.Resp.Header, errorBody), isQuota
 	}
 
-	gw.AgentState.RecordFailureWithStatus(target, action.resp.StatusCode, string(errorBody))
+	gw.AgentState.RecordFailureWithStatus(target, action.Resp.StatusCode, string(errorBody))
 	return 0, false
 }
 

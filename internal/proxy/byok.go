@@ -44,8 +44,8 @@ func (p *Proxy) applyBYOKCredential(gw *gateway.NenyaGateway, r *http.Request, r
 	if !req.BYOKRequested {
 		return nil // switch off or no credential presented: the shared key serves
 	}
-	raw := req.byokCredential
-	if !auth.KeyMayBYOK(req.apiKey) {
+	raw := req.BYOKCredential
+	if !auth.KeyMayBYOK(req.APIKey) {
 		gw.Metrics.IncAuthDenials(req.KeyRef, "byok")
 		return &httpError{
 			Code:    http.StatusForbidden,
@@ -133,7 +133,7 @@ func (p *Proxy) resolveBYOKIntent(gw *gateway.NenyaGateway, r *http.Request, req
 		}
 		return
 	}
-	req.byokCredential = value
+	req.BYOKCredential = value
 	req.BYOKRequested = value != ""
 }
 

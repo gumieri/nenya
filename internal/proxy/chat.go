@@ -14,6 +14,8 @@ import (
 	"strings"
 	"time"
 
+	mcpproxy "github.com/nenya/internal/proxy/mcp"
+
 	"github.com/nenya/config"
 	"github.com/nenya/internal/adapter"
 	"github.com/nenya/internal/billing"
@@ -29,112 +31,9 @@ import (
 	"github.com/nenya/internal/util"
 )
 
-// chatRequest holds the validated request data extracted from an incoming
-// /v1/chat/completions or /v1/messages payload.
-type chatRequest struct {
-	Payload     map[string]any
-	ModelName   string
-	TokenCount  int
-	Stream      bool
-	Targets     []routing.UpstreamTarget
-	AgentName   string
-	Cooldown    time.Duration
-	MaxRetries  int
-	CacheKey    string
-	HasMCPTools bool
-	// injectedMCPTools is the set of MCP function names the GATEWAY injected
-	// for this request (NENYA-162). It is the trust anchor for the loop's
-	// non-injected-call guard: re-deriving the set from the client-writable
-	// payload would let a caller declare an excluded tool name and defeat the
-	// policy.
-	injectedMCPTools []string
-	SoftLimit        int
-	HardLimit        int
-	WindowMaxCtx     int
-	Profile          pipeline.ClientProfile
-	Messages         []any
-	KeyRef           string
-	SourceFormat     string // "openai" or "anthropic" - indicates the original client request format
-	// BYOK reports that this request is served with a caller-supplied
-	// credential (NENYA-195): the response cache is bypassed and shared
-	// account rotation/breaker state is never written.
-	BYOK bool
-
-	// BYOKRequested reports that the request PRESENTED a BYOK credential
-	// (the global switch is on and the header is non-empty). It is resolved
-	// before routing so session affinity stands down for a caller-funded
-	// request, whose target list is narrowed to opt-in providers afterwards
-	// (NENYA-195). BYOK is set only once a credential was actually applied.
-	BYOKRequested bool
-	// byokCredential is the trimmed header value, read once.
-	byokCredential string
-	// Agent is the resolved agent config when ModelName names an agent
-	// (zero value for direct model routes). Set once in resolveRouting;
-	// all downstream consumers (sticky routing, MCP flow, session header
-	// synthesis) share this resolution. HasAgent carries the has/has-not
-	// bit so consumers can take the config's ADDRESS without re-resolving
-	// (a re-resolution could diverge after a mid-request SIGHUP reload).
-	Agent    config.AgentConfig
-	HasAgent bool
-
-	// Memoized sticky-session key (see derivedSessionKey). Memoization
-	// sentinel: sessionKeyDone; the fields are only touched on the request
-	// goroutine before upstream dispatch begins, so no lock is needed.
-	sessionKey     string
-	sessionKeyOK   bool
-	sessionKeyDone bool
-
-	// apiKey is the authenticated key for this request, set once in
-	// validateChatRequest. It carries the per-key MCP tool grant (NENYA-183)
-	// and is never nil on a served request path.
-	apiKey *config.ApiKey
-
-	// SessionSubject binds all session-derived state (sticky pins, affinity
-	// forks, synthesized session headers) to the authenticated caller
-	// (NENYA-196): the digest of the API key's token, set once in
-	// validateChatRequest. Empty for a nil key (defensive/test path); the
-	// synthetic primary-token key hashes its empty token, giving primary
-	// traffic its own single-operator namespace.
-	SessionSubject string
-
-	// Memoized affinity-resolved session identity (see sessionIdentity):
-	// the root session key, or a deterministic fork key when the leading
-	// turns collide with a different conversation (NENYA-39). Same
-	// single-goroutine discipline as the raw key fields.
-	affinityKey  string
-	affinityDone bool
-}
-
-// sessionIdentity returns the memoized affinity-resolved session identity:
-// the raw session key when the leading turns continue the remembered
-// conversation, or a deterministic fork key when they collide with a
-// different conversation sharing the same opener (NENYA-39).
-func (req *chatRequest) sessionIdentity(gw *gateway.NenyaGateway) (string, bool) {
-	raw, ok := req.derivedSessionKey()
-	if !ok {
-		return raw, ok
-	}
-	if req.affinityDone {
-		return req.affinityKey, true
-	}
-	req.affinityKey = raw
-	if gw != nil && gw.AgentState != nil && gw.AgentState.Affinity != nil {
-		req.affinityKey = gw.AgentState.Affinity.ResolveIdentity(raw, routing.BuildAffinityChain(req.Payload))
-	}
-	req.affinityDone = true
-	return req.affinityKey, true
-}
-
 // httpError pairs an HTTP status code with a user-facing message and an
 // optional structured error kind. When Kind is empty the renderer falls back
 // to invalid_request.
-type httpError struct {
-	Code    int
-	Message string
-	Kind    infra.ErrorKind
-}
-
-func (e *httpError) Error() string { return e.Message }
 
 // headerDroppedContent is the client-visible response header carrying the
 // kinds of content a format translation could not represent (NENYA-176).
@@ -341,7 +240,7 @@ func (p *Proxy) validateChatRequest(w http.ResponseWriter, r *http.Request, gw *
 		TokenCount:     gw.CountRequestTokens(payload),
 		Stream:         false,
 		KeyRef:         apiKeyName(apiKey),
-		apiKey:         apiKey,
+		APIKey:         apiKey,
 		SessionSubject: sessionSubjectScope(apiKey),
 		SourceFormat:   sourceFormat,
 	}
@@ -399,7 +298,7 @@ func (p *Proxy) resolveRouting(ctx context.Context, req *chatRequest, gw *gatewa
 	// memoized value derived from the resolved agent — no caller can derive
 	// from an unresolved agent. The identity includes the NENYA-39 affinity
 	// fork check over the leading turns.
-	req.sessionIdentity(gw)
+	chatSessionIdentity(req, gw)
 	if hasAgent {
 		return p.resolveAgentRouting(ctx, req, gw, agent)
 	}
@@ -506,7 +405,7 @@ func resolveStickyPin(req *chatRequest, gw *gateway.NenyaGateway) *stickyPin {
 	if gw.AgentState == nil || gw.AgentState.SessionRouter == nil {
 		return nil
 	}
-	key, ok := req.sessionIdentity(gw)
+	key, ok := chatSessionIdentity(req, gw)
 	if !ok {
 		return nil
 	}
@@ -702,19 +601,41 @@ func sessionKeyFromRequest(req *chatRequest, agent config.AgentConfig) (string, 
 	return routing.SessionKeyForSubject(req.SessionSubject, req.ModelName, systemPrompt, firstUser), true
 }
 
+// chatSessionIdentity returns the memoized affinity-resolved session
+// identity: the raw session key when the leading turns continue the
+// remembered conversation, or a deterministic fork key when they collide
+// with a different conversation sharing the same opener (NENYA-39). The
+// logic moved beside ChatRequest (mcpproxy); the parent keeps this wrapper
+// because the affinity resolution touches only parent-owned state.
+func chatSessionIdentity(req *chatRequest, gw *gateway.NenyaGateway) (string, bool) {
+	raw, ok := derivedSessionKey(req)
+	if !ok {
+		return raw, ok
+	}
+	if req.AffinityDone {
+		return req.AffinityKey, true
+	}
+	req.AffinityKey = raw
+	if gw != nil && gw.AgentState != nil && gw.AgentState.Affinity != nil {
+		req.AffinityKey = gw.AgentState.Affinity.ResolveIdentity(raw, routing.BuildAffinityChain(req.Payload))
+	}
+	req.AffinityDone = true
+	return req.AffinityKey, true
+}
+
 // derivedSessionKey returns the memoized stable session key for the
 // request. It is computed eagerly in resolveRouting immediately after
 // agent resolution (both sticky routing and the opencode-session header
 // need the same value; the derivation performs prompt-file I/O and hashes
 // the first user message, so it must not run twice per request). Later
 // callers only read the memo.
-func (req *chatRequest) derivedSessionKey() (string, bool) {
-	if req.sessionKeyDone {
-		return req.sessionKey, req.sessionKeyOK
+func derivedSessionKey(req *chatRequest) (string, bool) {
+	if req.SessionKeyDone {
+		return req.SessionKey, req.SessionKeyOK
 	}
-	req.sessionKey, req.sessionKeyOK = sessionKeyFromRequest(req, req.Agent)
-	req.sessionKeyDone = true
-	return req.sessionKey, req.sessionKeyOK
+	req.SessionKey, req.SessionKeyOK = sessionKeyFromRequest(req, req.Agent)
+	req.SessionKeyDone = true
+	return req.SessionKey, req.SessionKeyOK
 }
 
 const (
@@ -865,7 +786,7 @@ func ensureOpencodeSessionHeader(gw *gateway.NenyaGateway, r *http.Request, req 
 		// key plus NENYA-39 affinity fork check) is memoized on the
 		// request, so sticky and non-sticky agents each resolve at most
 		// once per request.
-		if key, ok := req.sessionIdentity(gw); ok && len(key) >= opencodeSessionIDLen {
+		if key, ok := chatSessionIdentity(req, gw); ok && len(key) >= opencodeSessionIDLen {
 			id = "nenya-" + key[:opencodeSessionIDLen]
 		}
 	}
@@ -1438,7 +1359,7 @@ func (p *Proxy) handleChatCompletions(gw *gateway.NenyaGateway, w http.ResponseW
 		SoftLimit:      req.SoftLimit,
 		HardLimit:      req.HardLimit,
 		AgentName:      req.ModelName,
-		Agent:          req.AgentPointer(),
+		Agent:          AgentPointer(req),
 		TargetProvider: primaryTargetProvider(req.Targets),
 	})
 	if err != nil {
@@ -1471,7 +1392,7 @@ func (p *Proxy) handleChatCompletions(gw *gateway.NenyaGateway, w http.ResponseW
 	gw.Metrics.RecordGatewayProcessing(r.Method, infra.NormalizeMetricPath(r.URL.Path), time.Since(gwStart))
 
 	if req.HasMCPTools {
-		p.forwardToUpstreamWithMCP(gw, w, r, forwardOptions{
+		mcpproxy.ForwardToUpstreamWithMCP(p.mcpHost(), gw, w, r, forwardOptions{
 			Targets:          req.Targets,
 			Payload:          req.Payload,
 			Stream:           req.Stream,
@@ -1483,12 +1404,12 @@ func (p *Proxy) handleChatCompletions(gw *gateway.NenyaGateway, w http.ResponseW
 			CacheKey:         req.CacheKey,
 			KeyRef:           req.KeyRef,
 			SourceFormat:     req.SourceFormat,
-			ApiKey:           apiKey,
+			APIKey:           apiKey,
 			Canary:           canaryResult,
 			Screen:           screen,
 			EntropyRedacted:  pipelineOutcome.EntropyRedacted,
 			WindowCompacted:  pipelineOutcome.WindowCompacted,
-			InjectedMCPTools: req.injectedMCPTools,
+			InjectedMCPTools: req.InjectedMCPTools,
 		})
 		return
 	}
@@ -1505,7 +1426,7 @@ func (p *Proxy) handleChatCompletions(gw *gateway.NenyaGateway, w http.ResponseW
 		CacheKey:        req.CacheKey,
 		KeyRef:          req.KeyRef,
 		SourceFormat:    req.SourceFormat,
-		ApiKey:          apiKey,
+		APIKey:          apiKey,
 		Canary:          canaryResult,
 		Screen:          screen,
 		EntropyRedacted: pipelineOutcome.EntropyRedacted,
@@ -1573,11 +1494,8 @@ type contentPipelineOpts struct {
 // shared resolution (HasAgent/Agent, set once in resolveRouting) instead
 // of re-resolving — a re-resolution could diverge from every other
 // consumer if the config reloads mid-request (AUD-83).
-func (req *chatRequest) AgentPointer() *config.AgentConfig {
-	if !req.HasAgent {
-		return nil
-	}
-	return &req.Agent
+func AgentPointer(req *chatRequest) *config.AgentConfig {
+	return req.AgentPointer()
 }
 
 // primaryTargetProvider returns the primary target's provider name, or "".
@@ -1652,12 +1570,12 @@ func (p *Proxy) bufferedEgressScreen(gw *gateway.NenyaGateway, w http.ResponseWr
 	if screen == nil || !triggered {
 		return false
 	}
-	if !screen.screenOnce(r.Context(), agentName, collectResponseTexts(responseMap, screen.judge.MaxBytes())) {
+	if !screen.ScreenOnce(r.Context(), agentName, collectResponseTexts(responseMap, screen.Judge.MaxBytes())) {
 		return false
 	}
-	screen.recordDetection(gw.Metrics)
-	screen.logScreenHit(gw.Logger, agentName, "buffered")
-	if !screen.strict {
+	screen.RecordDetection(gw.Metrics)
+	screen.LogScreenHit(gw.Logger, agentName, "buffered")
+	if !screen.Strict {
 		return false
 	}
 	writeStructuredError(w, http.StatusForbidden, infra.ErrorKindExfilDetected,
@@ -1890,7 +1808,7 @@ func (p *Proxy) embeddedProviderFailure(gw *gateway.NenyaGateway, target routing
 	gw.AgentState.RecordFailure(target, cooldownDuration)
 	gw.Logger.Warn("provider error embedded in HTTP-200 body, trying next target",
 		"model", target.Model, "provider", target.Provider, "error_message", details.Message)
-	return streamResult{empty: true}, true
+	return streamResult{Empty: true}, true
 }
 
 // countEmptyChoices records the NENYA-160 degradation signal when the buffered
@@ -1911,13 +1829,13 @@ func countEmptyChoices(gw *gateway.NenyaGateway, target routing.UpstreamTarget, 
 }
 
 func (p *Proxy) handleNonStreamingResponse(gw *gateway.NenyaGateway, w http.ResponseWriter, r *http.Request, target routing.UpstreamTarget, agentName, sourceFormat string, action upstreamAction, cacheKey string, cooldownDuration time.Duration, egress bufferedEgressOpts) streamResult {
-	defer action.cancel()
+	defer action.Cancel()
 
 	const maxNonStreamingResponseBytes = 10 * 1024 * 1024
-	respBody, err := io.ReadAll(io.LimitReader(action.resp.Body, maxNonStreamingResponseBytes))
+	respBody, err := io.ReadAll(io.LimitReader(action.Resp.Body, maxNonStreamingResponseBytes))
 	if err != nil {
 		gw.Logger.Error("failed to read non-streaming response body", "err", err)
-		_ = action.resp.Body.Close()
+		_ = action.Resp.Body.Close()
 		writeGatewayError(w, http.StatusBadGateway, ErrorTypeProvider, "Failed to read upstream response")
 		// A body read error is a provider fault — unless the read failed
 		// because the client went away (NENYA-42: connection-scoped, no state
@@ -1928,9 +1846,9 @@ func (p *Proxy) handleNonStreamingResponse(gw *gateway.NenyaGateway, w http.Resp
 		} else {
 			gw.AgentState.CB.ReleaseHalfOpen(target.CoolKey)
 		}
-		return streamResult{terminal: true}
+		return streamResult{Terminal: true}
 	}
-	_ = action.resp.Body.Close()
+	_ = action.Resp.Body.Close()
 	// NENYA-153: the slow-call clock stops here, at the body read, so egress
 	// screening, JSON encoding and the client write cannot inflate it.
 	bodyReadAt := time.Now()
@@ -1940,7 +1858,7 @@ func (p *Proxy) handleNonStreamingResponse(gw *gateway.NenyaGateway, w http.Resp
 		// NENYA-160: count it in the always-on degradation signal too.
 		gw.Metrics.RecordEmptyResponse(target.Model, target.Provider, "buffered")
 		gw.Logger.Warn("empty non-streaming response from upstream", "model", target.Model)
-		return streamResult{empty: true}
+		return streamResult{Empty: true}
 	}
 	if len(respBody) >= maxNonStreamingResponseBytes {
 		gw.Logger.Error("non-streaming response exceeded size limit", "model", target.Model)
@@ -1949,7 +1867,7 @@ func (p *Proxy) handleNonStreamingResponse(gw *gateway.NenyaGateway, w http.Resp
 		// dispatch consumed a half-open probe slot: release it.
 		gw.AgentState.CB.ReleaseHalfOpen(target.CoolKey)
 		// Response already written: terminal, never fail over and append.
-		return streamResult{terminal: true}
+		return streamResult{Terminal: true}
 	}
 
 	var responseMap map[string]interface{}
@@ -1959,7 +1877,7 @@ func (p *Proxy) handleNonStreamingResponse(gw *gateway.NenyaGateway, w http.Resp
 		gw.AgentState.RecordFailure(target, cooldownDuration)
 		gw.Logger.Warn("failed to parse non-streaming JSON response, trying next target",
 			"model", target.Model, "provider", target.Provider, "error_message", err.Error())
-		return streamResult{empty: true}
+		return streamResult{Empty: true}
 	}
 
 	// A completion that terminated with a network-failure finish_reason is a
@@ -1969,7 +1887,7 @@ func (p *Proxy) handleNonStreamingResponse(gw *gateway.NenyaGateway, w http.Resp
 		gw.AgentState.RecordFailure(target, cooldownDuration)
 		gw.Logger.Warn("non-streaming completion ended with network-error finish_reason, trying next target",
 			"model", target.Model, "provider", target.Provider, "finish_reason", reason)
-		return streamResult{empty: true}
+		return streamResult{Empty: true}
 	}
 
 	// Some providers return HTTP 200 with an error object in the body
@@ -2028,13 +1946,13 @@ func (p *Proxy) handleNonStreamingResponse(gw *gateway.NenyaGateway, w http.Resp
 		// A policy block is not a provider failure: record no outcome, but
 		// release the probe slot the dispatch consumed.
 		gw.AgentState.CB.ReleaseHalfOpen(target.CoolKey)
-		return streamResult{terminal: true}
+		return streamResult{Terminal: true}
 	}
 
-	extractQuotaUnlessBYOK(gw, r.Context(), target, action.resp.Header)
+	extractQuotaUnlessBYOK(gw, r.Context(), target, action.Resp.Header)
 
-	routing.CopyHeaders(action.resp.Header, w.Header())
-	w.WriteHeader(action.resp.StatusCode)
+	routing.CopyHeaders(action.Resp.Header, w.Header())
+	w.WriteHeader(action.Resp.StatusCode)
 	if err := json.NewEncoder(w).Encode(responseMap); err != nil {
 		// The client never received the body: no breaker outcome, and release
 		// the probe slot the dispatch consumed (the streaming path treats a
@@ -2049,6 +1967,6 @@ func (p *Proxy) handleNonStreamingResponse(gw *gateway.NenyaGateway, w http.Resp
 	// cosmetic: without it a half-open circuit would burn its probe slots on
 	// buffered requests and never close, since for some callers every request
 	// is buffered.
-	recordBufferedOutcome(gw, target, agentName, action.dispatchAt, bodyReadAt, cooldownDuration)
+	recordBufferedOutcome(gw, target, agentName, action.DispatchAt, bodyReadAt, cooldownDuration)
 	return streamResult{}
 }

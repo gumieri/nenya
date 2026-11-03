@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 
+	mcpproxy "github.com/nenya/internal/proxy/mcp"
+
 	"github.com/nenya/config"
 	"github.com/nenya/internal/gateway"
 	"github.com/nenya/internal/infra"
@@ -89,7 +91,7 @@ func mcpAgentRequest(p *Proxy, key *config.ApiKey) *chatRequest {
 		ModelName: "agent",
 		AgentName: "agent",
 		Agent:     agent,
-		apiKey:    key,
+		APIKey:    key,
 	}
 }
 
@@ -196,15 +198,15 @@ func TestGuardMCPArgsEnforcesKeyGrant(t *testing.T) {
 	restricted := &config.ApiKey{Name: "restricted", Roles: []string{"user"}, Enabled: true, AllowedTools: []string{"other__*"}}
 	if err := guardMCPArgs(gw, gw.Logger, mcpGuardDispatch{
 		ServerName: "memory", ToolName: "test_tool", Purpose: "auto_search",
-		Args: map[string]any{"query": "hi"}, ApiKey: restricted,
-	}); !errors.Is(err, errMCPNotGranted) {
+		Args: map[string]any{"query": "hi"}, APIKey: restricted,
+	}); !errors.Is(err, mcpproxy.ErrMCPNotGranted) {
 		t.Fatalf("an ungranted auto-search dispatch must be refused with the grant sentinel, got %v", err)
 	}
 
 	granted := &config.ApiKey{Name: "granted", Roles: []string{"user"}, Enabled: true, AllowedTools: []string{"memory__*"}}
 	if err := guardMCPArgs(gw, gw.Logger, mcpGuardDispatch{
 		ServerName: "memory", ToolName: "test_tool", Purpose: "auto_search",
-		Args: map[string]any{"query": "hi"}, ApiKey: granted,
+		Args: map[string]any{"query": "hi"}, APIKey: granted,
 	}); err != nil {
 		t.Fatalf("a granted auto-search dispatch must be allowed, got %v", err)
 	}
@@ -213,15 +215,15 @@ func TestGuardMCPArgsEnforcesKeyGrant(t *testing.T) {
 	if err := guardMCPArgs(gw, gw.Logger, mcpGuardDispatch{
 		ServerName: "memory", ToolName: "test_tool", Purpose: "auto_save",
 		Args: map[string]any{"content": "hi"},
-	}); !errors.Is(err, errMCPNotGranted) {
+	}); !errors.Is(err, mcpproxy.ErrMCPNotGranted) {
 		t.Fatalf("a dispatch without an authenticated key must be refused, got %v", err)
 	}
 
 	// An argument-policy rejection is distinguishable from a grant refusal.
 	if err := guardMCPArgs(gw, gw.Logger, mcpGuardDispatch{
 		ServerName: "memory", ToolName: "test_tool", Purpose: "auto_search",
-		Args: map[string]any{"query": "x", "url": "http://169.254.169.254/latest/meta-data/"}, ApiKey: granted,
-	}); !errors.Is(err, errMCPArgumentPolicy) {
+		Args: map[string]any{"query": "x", "url": "http://169.254.169.254/latest/meta-data/"}, APIKey: granted,
+	}); !errors.Is(err, mcpproxy.ErrMCPArgumentPolicy) {
 		t.Fatalf("a private-URL dispatch must be refused by the argument policy, got %v", err)
 	}
 }
@@ -322,9 +324,9 @@ func TestGuardMCPArgsRefusesUnusableServer(t *testing.T) {
 
 	err := guardMCPArgs(gw, gw.Logger, mcpGuardDispatch{
 		ServerName: "memory", ToolName: "test_tool", Purpose: "auto_search",
-		Args: map[string]any{"query": "hi"}, ApiKey: fullAccessTestKey(),
+		Args: map[string]any{"query": "hi"}, APIKey: fullAccessTestKey(),
 	})
-	if !errors.Is(err, errMCPServerUnavailable) {
+	if !errors.Is(err, mcpproxy.ErrMCPServerUnavailable) {
 		t.Fatalf("expected the unavailability sentinel, got %v", err)
 	}
 
@@ -333,9 +335,9 @@ func TestGuardMCPArgsRefusesUnusableServer(t *testing.T) {
 	gw.MarkMCPUnavailable("memory", "missing required header Authorization")
 	err = guardMCPArgs(gw, gw.Logger, mcpGuardDispatch{
 		ServerName: "memory", ToolName: "test_tool", Purpose: "auto_save",
-		Args: map[string]any{"content": "hi"}, ApiKey: fullAccessTestKey(),
+		Args: map[string]any{"content": "hi"}, APIKey: fullAccessTestKey(),
 	})
-	if !errors.Is(err, errMCPServerUnavailable) {
+	if !errors.Is(err, mcpproxy.ErrMCPServerUnavailable) {
 		t.Fatalf("expected the unavailability sentinel, got %v", err)
 	}
 }

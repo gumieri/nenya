@@ -49,7 +49,7 @@ func fixtureStats(t *testing.T, gw *gateway.NenyaGateway) map[string]interface{}
 	}
 	model, ok := models["fixture-model"].(map[string]interface{})
 	if !ok {
-		t.Fatalf("no stats recorded for fixture-model: %v", models)
+		t.Fatalf("no stats recorded for fixture-Model: %v", models)
 	}
 	return model
 }
@@ -388,7 +388,7 @@ func TestNonStreamingUsageRecordedBeforeFormatConversion(t *testing.T) {
 	models, _ := snapshot["models"].(map[string]interface{})
 	model, ok := models["test-model"].(map[string]interface{})
 	if !ok {
-		t.Fatalf("no usage recorded for test-model: %v", models)
+		t.Fatalf("no usage recorded for test-Model: %v", models)
 	}
 	if got, _ := model["output_tokens"].(uint64); got != 20 {
 		t.Errorf("output_tokens = %d, want 20 (usage must survive the format conversion)", got)
@@ -411,9 +411,9 @@ func TestMCPBufferUsageMergesPlacements(t *testing.T) {
 		`data: {"type":"message_delta","usage":{"output_tokens":12}}`,
 		``,
 	}, "\n")
-	buf := &bufferedSSE{rawBytes: []byte(raw), model: "fixture-model"}
+	buf := &bufferedSSE{RawBytes: []byte(raw), Model: "fixture-model"}
 
-	totals, ok := buf.usageTotals()
+	totals, ok := buf.UsageTotals()
 	if !ok {
 		t.Fatal("expected the buffer's usage to be found")
 	}
@@ -431,8 +431,8 @@ func TestMCPBufferUsageMergesPlacements(t *testing.T) {
 	}
 
 	// The OpenAI shape (one cumulative object) merges to the same values.
-	openAI := &bufferedSSE{rawBytes: []byte(`data: {"id":"c1","choices":[],"usage":{"prompt_tokens":100,"completion_tokens":12,"total_tokens":112,"prompt_cache_hit_tokens":60,"cache_creation_tokens":10}}`), model: "fixture-model"}
-	merged, ok := openAI.usageTotals()
+	openAI := &bufferedSSE{RawBytes: []byte(`data: {"id":"c1","choices":[],"usage":{"prompt_tokens":100,"completion_tokens":12,"total_tokens":112,"prompt_cache_hit_tokens":60,"cache_creation_tokens":10}}`), Model: "fixture-model"}
+	merged, ok := openAI.UsageTotals()
 	if !ok || merged.Prompt != 100 || merged.Completion != 12 || merged.Total != 112 {
 		t.Fatalf("openai buffer totals = %+v (ok=%v)", merged, ok)
 	}

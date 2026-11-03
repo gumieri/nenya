@@ -61,48 +61,11 @@ func concurrencyRetryDelay() time.Duration {
 	return concurrencyRetryBase + time.Duration(rand.Int63n(int64(concurrencyRetryJitter)))
 }
 
-// upstreamAction holds the result of a single upstream HTTP request attempt.
-// The kind field distinguishes between streaming, response, and error outcomes.
-// release frees the per-model concurrency slot held for the round-trip; it is
-// invoked at every terminal handling point and is idempotent.
-type upstreamAction struct {
-	kind    int
-	resp    *http.Response
-	body    []byte
-	cancel  context.CancelFunc
-	release func()
-	// retryable marks an actionContinue that carried a transient local
-	// failure (network error) eligible for a same-target retry when no
-	// later target remains. Guard/skip actions leave it false.
-	retryable bool
-	// skipReason names why a guard skipped the target ("provider_budget",
-	// "rate_limit", …), so the loop can report the reason that mattered when
-	// every target was skipped (NENYA-188).
-	skipReason string
-	// dispatchAt is when the upstream request was sent (NENYA-178): the start
-	// of the time-to-first-effective-output clock the streaming path records.
-	dispatchAt time.Time
-	// upstreamAttempted marks an action that performed an HTTP round-trip
-	// (any outcome of a successful Do: stream, response, upstream error, HTML
-	// rejection, network failure). The retry loop uses it to avoid reporting a
-	// budget exhaustion when a target actually reached a provider (NENYA-188).
-	upstreamAttempted bool
-}
-
-// releaseSlot frees the concurrency slot held by this action, if any. The
-// release function is Once-wrapped at acquire time, so double invocation is
-// safe.
-func (a upstreamAction) releaseSlot() {
-	if a.release != nil {
-		a.release()
-	}
-}
-
 const (
-	actionContinue = iota
-	actionError
-	actionStream
-	actionResponse
+	// actionResponse is a buffered (non-streaming) HTTP 200 response action
+	// (value 3, the historical iota position after the moved
+	// actionContinue/actionError/actionStream — see mcp_compat.go).
+	actionResponse = 3
 )
 
 func calculateBackoff(attempt int) time.Duration {
@@ -155,44 +118,6 @@ func (p *Proxy) doUpstreamRoundTrip(ctx context.Context, gw *gateway.NenyaGatewa
 		}
 		return resp, nil
 	})
-}
-
-// forwardOptions holds the parameters for forwarding a request upstream.
-type forwardOptions struct {
-	Targets    []routing.UpstreamTarget
-	Payload    map[string]any
-	Stream     bool
-	Cooldown   time.Duration
-	TokenCount int
-	AgentName  string
-	// Agent is the resolved agent config for AgentName (zero value for
-	// direct model routes), resolved once in resolveRouting.
-	Agent        config.AgentConfig
-	MaxRetries   int
-	CacheKey     string
-	KeyRef       string
-	SourceFormat string
-	ApiKey       *config.ApiKey
-	// Canary carries the per-request tripwire token (empty when the
-	// guard is disabled).
-	Canary pipeline.CanarResult
-	// Screen carries the per-request egress screen runtime (nil when
-	// the judgment site is disabled); its budget is shared across all
-	// checkpoints of the request.
-	Screen *egressScreenRuntime
-	// WindowCompacted reports that the content pipeline rewrote the history
-	// (window compaction): auto cache-breakpoint anchoring stands down
-	// (NENYA-185).
-	WindowCompacted bool
-	// InjectedMCPTools is the set of MCP function names the gateway injected
-	// for this request (NENYA-162): the loop's non-injected-call guard is
-	// anchored on it, never on the client-writable payload.
-	InjectedMCPTools []string
-	// EntropyRedacted reports whether the entropy interceptor redacted
-	// high-entropy spans from this request. Consumed only by the
-	// buffered-response checkpoint (the tool-args checkpoint triggers
-	// off its own canary/guard signals).
-	EntropyRedacted bool
 }
 
 // bufferedEgressOpts groups the egress-policy inputs of the buffered
@@ -320,10 +245,10 @@ type actionOutcome struct {
 	status int
 }
 
-// handleActionResult dispatches on action.kind and reports whether the
+// handleActionResult dispatches on action.Kind and reports whether the
 // request is handled and, when not, whether the failure is retryable.
 func (rl *retryLoop) handleActionResult(i int, target routing.UpstreamTarget, action upstreamAction) actionOutcome {
-	defer action.releaseSlot()
+	defer action.ReleaseSlot()
 	// Any outcome other than a classified upstream error invalidates the
 	// retryable-4xx snapshot: the exhaustion relay must reflect the last
 	// failure. handleUpstreamError re-snapshots when this attempt is itself a
@@ -332,13 +257,13 @@ func (rl *retryLoop) handleActionResult(i int, target routing.UpstreamTarget, ac
 	// (a real response, a classified upstream error, an HTML rejection, or a
 	// retryable local failure). This is what keeps the budget-exhaustion report
 	// from masking a later target's real failure (NENYA-188).
-	if action.upstreamAttempted || action.kind != actionContinue || action.retryable {
+	if action.UpstreamAttempted || action.Kind != actionContinue || action.Retryable {
 		rl.upstreamReached = true
 	}
-	if action.kind != actionError {
+	if action.Kind != actionError {
 		rl.lastRetryable4xx = nil
 	}
-	switch action.kind {
+	switch action.Kind {
 	case actionContinue:
 		return rl.handleResumeAction(action)
 	case actionError:
@@ -354,12 +279,12 @@ func (rl *retryLoop) handleActionResult(i int, target routing.UpstreamTarget, ac
 // retrySignalRetry is eligible for a same-target repeat; retrySignalContinue
 // only advances.
 func (rl *retryLoop) handleErrorActionOutcome(i int, target routing.UpstreamTarget, action upstreamAction) actionOutcome {
-	if action.resp.StatusCode >= http.StatusInternalServerError {
+	if action.Resp.StatusCode >= http.StatusInternalServerError {
 		rl.lastFailReason = failReason5xx
 	} else {
 		rl.lastFailReason = failReason4xx
 	}
-	status := action.resp.StatusCode
+	status := action.Resp.StatusCode
 	switch rl.handleActionError(i, target, action) {
 	case retrySignalDone:
 		return actionOutcome{handled: true, status: status}
@@ -375,10 +300,10 @@ func (rl *retryLoop) handleErrorActionOutcome(i int, target routing.UpstreamTarg
 // later target stays immediate.
 func (rl *retryLoop) handleResumeAction(action upstreamAction) actionOutcome {
 	rl.lastFailReason = failReasonDispatch
-	if action.skipReason == "provider_budget" {
+	if action.SkipReason == "provider_budget" {
 		rl.providerBudgetSkipped = true
 	}
-	return actionOutcome{retryable: action.retryable}
+	return actionOutcome{retryable: action.Retryable}
 }
 
 // handleStreamAction maps a streaming attempt result to a loop outcome.
@@ -397,17 +322,17 @@ func (rl *retryLoop) handleStreamAction(i int, target routing.UpstreamTarget, ac
 		targets:         rl.opts.Targets,
 		idx:             i,
 		tokenCount:      rl.opts.TokenCount,
-		apiKey:          rl.opts.ApiKey,
+		apiKey:          rl.opts.APIKey,
 		canary:          rl.opts.Canary,
-		dispatchAt:      action.dispatchAt,
+		dispatchAt:      action.DispatchAt,
 	}, action)
-	if result.terminal {
+	if result.Terminal {
 		// Response fully written (content-policy block): stop, never append
 		// another target's output to the committed bytes.
 		return actionOutcome{handled: true}
 	}
-	if result.empty {
-		if result.failoverReason == streamFailoverPolicyRefusal {
+	if result.Empty {
+		if result.FailoverReason == streamFailoverPolicyRefusal {
 			rl.lastFailReason = failReasonPolicy
 			rl.ctxLogger.Warn("policy refusal before any output, failing over without breaker charge",
 				"model", target.Model, "provider", target.Provider)
@@ -418,13 +343,13 @@ func (rl *retryLoop) handleStreamAction(i int, target routing.UpstreamTarget, ac
 			"model", target.Model, "provider", target.Provider)
 		return actionOutcome{retryable: true}
 	}
-	if result.err != nil {
+	if result.Err != nil {
 		// Transport-level failure before any stream bytes: fail over; on the
 		// last target Exhausted() surfaces the error.
 		rl.lastFailReason = failReasonStream
-		rl.lastStreamErr = result.err
+		rl.lastStreamErr = result.Err
 		rl.ctxLogger.Warn("stream read error from upstream, trying next target",
-			"err", result.err, "model", target.Model, "provider", target.Provider)
+			"err", result.Err, "model", target.Model, "provider", target.Provider)
 		return actionOutcome{retryable: true}
 	}
 	return actionOutcome{handled: true}
@@ -433,21 +358,21 @@ func (rl *retryLoop) handleStreamAction(i int, target routing.UpstreamTarget, ac
 // handleNonStreamingActionOutcome maps a non-streaming attempt result to a
 // loop outcome (the actionResponse case plus the defensive default).
 func (rl *retryLoop) handleNonStreamingActionOutcome(i int, target routing.UpstreamTarget, action upstreamAction) actionOutcome {
-	if action.kind != actionResponse {
+	if action.Kind != actionResponse {
 		return actionOutcome{}
 	}
 	egress := bufferedEgressOpts{
 		Canary:          rl.opts.Canary,
 		Screen:          rl.opts.Screen,
 		EntropyRedacted: rl.opts.EntropyRedacted,
-		SigCache:        scopedThoughtSigCache(rl.gw, rl.opts.ApiKey),
+		SigCache:        scopedThoughtSigCache(rl.gw, rl.opts.APIKey),
 	}
 	result := rl.p.handleNonStreamingResponse(rl.gw, rl.w, rl.r, target, rl.opts.AgentName, rl.opts.SourceFormat, action, rl.opts.CacheKey, rl.opts.Cooldown, egress)
-	if result.terminal {
+	if result.Terminal {
 		// 403 already written (exfil block): stop the loop.
 		return actionOutcome{handled: true}
 	}
-	if result.empty {
+	if result.Empty {
 		rl.ctxLogger.Warn("empty non-streaming response from upstream, trying next target",
 			"model", target.Model, "provider", target.Provider)
 		return actionOutcome{retryable: true}
@@ -530,19 +455,6 @@ func (rl *retryLoop) hasOtherEligiblePair(i int) bool {
 	return false
 }
 
-// retrySignal controls the outer loop from action handlers.
-type retrySignal int
-
-const (
-	// retrySignalContinue advances to the next target (failover).
-	retrySignalContinue retrySignal = iota
-	// retrySignalRetry is a transient failure eligible for a same-target
-	// re-attempt when no later target remains.
-	retrySignalRetry
-	retrySignalBreak
-	retrySignalDone
-)
-
 // handleActionError processes an upstream error action, applies backoff, and returns a loop signal.
 func (rl *retryLoop) handleActionError(i int, target routing.UpstreamTarget, action upstreamAction) retrySignal {
 	rl.attempt++
@@ -550,19 +462,19 @@ func (rl *retryLoop) handleActionError(i int, target routing.UpstreamTarget, act
 	// upstream error is classified; handleUpstreamError re-snapshots below
 	// when this failure is itself a retryable 4xx.
 	rl.lastRetryable4xx = nil
-	action.body, _ = io.ReadAll(io.LimitReader(action.resp.Body, pipeline.MaxErrorBodyBytes))
-	_ = action.resp.Body.Close()
+	action.Body, _ = io.ReadAll(io.LimitReader(action.Resp.Body, pipeline.MaxErrorBodyBytes))
+	_ = action.Resp.Body.Close()
 	// The upstream response is fully consumed; release its request context on
 	// every path so retries do not abandon in-flight upstream contexts.
 	// CancelFunc is idempotent, so the later cancels are harmless.
-	if action.cancel != nil {
-		action.cancel()
+	if action.Cancel != nil {
+		action.Cancel()
 	}
 
 	// Connection-scoped (client cancel/disconnect, NENYA-42): the client is
 	// gone. Surface nothing, mutate no resilience state, retry nothing.
 	if err := rl.r.Context().Err(); err != nil {
-		action.cancel()
+		action.Cancel()
 		// A consumed half-open probe slot would otherwise leak.
 		rl.gw.AgentState.CB.ReleaseHalfOpen(target.CoolKey)
 		rl.ctxLogger.Info("client context canceled during upstream error handling",
@@ -573,11 +485,11 @@ func (rl *retryLoop) handleActionError(i int, target routing.UpstreamTarget, act
 	// Attempted-set (NENYA-41): a 429 rate/quota failure benches the target's
 	// provider+account pair for the remainder of this failover round — the
 	// same credential would just 429 again. Other pairs are still eligible.
-	if action.resp.StatusCode == http.StatusTooManyRequests {
+	if action.Resp.StatusCode == http.StatusTooManyRequests {
 		rl.markRateLimitedPair(target)
 	}
 
-	if util.IsContextLengthError(action.resp.StatusCode, string(action.body)) {
+	if util.IsContextLengthError(action.Resp.StatusCode, string(action.Body)) {
 		return rl.handleContextLimitError(i, target, action)
 	}
 
@@ -586,7 +498,7 @@ func (rl *retryLoop) handleActionError(i int, target routing.UpstreamTarget, act
 	// Context-length handling above keeps precedence; when the safety net
 	// fires it re-enters the loop immediately (no backoff) with the
 	// stripped payload, bypassing request-scoped rules for that attempt.
-	if action.resp.StatusCode == http.StatusBadRequest && rl.maybeStripAndRetryParamReject(i, target, action) {
+	if action.Resp.StatusCode == http.StatusBadRequest && rl.maybeStripAndRetryParamReject(i, target, action) {
 		rl.waited = true // corrective retry: no backoff, Run must not sleep
 		// The retry re-dispatches and consumes a fresh probe; release this
 		// attempt's probe so the corrective retry does not leak a slot.
@@ -599,24 +511,24 @@ func (rl *retryLoop) handleActionError(i int, target routing.UpstreamTarget, act
 	// directly to the client instead of sweeping the remaining targets.
 	// Note: context-length handling above wins over rules — an operator rule
 	// cannot disable the summarization retry for ctx-limit-shaped errors.
-	if matched := rl.p.matchRequestScopedError(rl.gw, target.Provider, action.resp.StatusCode, action.body); matched != nil {
-		gwErr := ParseProviderError(target.Provider, action.resp.StatusCode, action.body, nil)
+	if matched := rl.p.matchRequestScopedError(rl.gw, target.Provider, action.Resp.StatusCode, action.Body); matched != nil {
+		gwErr := ParseProviderError(target.Provider, action.Resp.StatusCode, action.Body, nil)
 		rl.ctxLogger.Warn("request-scoped error from provider, failing without rotation",
-			"model", target.Model, "provider", target.Provider, "status", action.resp.StatusCode,
+			"model", target.Model, "provider", target.Provider, "status", action.Resp.StatusCode,
 			"rule_pattern", matched.MessagePattern)
-		action.cancel()
+		action.Cancel()
 		// No circuit outcome is recorded for a client-fault error; release the
 		// probe slot consumed by the pre-dispatch guard.
 		rl.gw.AgentState.CB.ReleaseHalfOpen(target.CoolKey)
-		rl.writeUpstreamErrorToClient(action.resp.StatusCode, gwErr)
+		rl.writeUpstreamErrorToClient(action.Resp.StatusCode, gwErr)
 		return retrySignalDone
 	}
 
 	signal, retryDelay := rl.handleUpstreamError(i, target, action)
 	rl.rememberRetryable4xx(target, action, signal)
 	if signal == retrySignalDone {
-		gwErr := ParseProviderError(target.Provider, action.resp.StatusCode, action.body, nil)
-		rl.writeUpstreamErrorToClient(action.resp.StatusCode, gwErr)
+		gwErr := ParseProviderError(target.Provider, action.Resp.StatusCode, action.Body, nil)
+		rl.writeUpstreamErrorToClient(action.Resp.StatusCode, gwErr)
 		return retrySignalDone
 	}
 	// max_retries bounds the retry budget. handleActionError increments
@@ -629,7 +541,7 @@ func (rl *retryLoop) handleActionError(i int, target routing.UpstreamTarget, act
 	// Concurrency saturation follows its own short fixed pacing: honor the
 	// delay handleUpstreamError derived, then mark the wait so Run does not
 	// add the generic backoff on top.
-	if signal == retrySignalRetry && adapter.ForProvider(target.Provider).NormalizeError(action.resp.StatusCode, action.body) == adapter.ErrorConcurrencyLimited {
+	if signal == retrySignalRetry && adapter.ForProvider(target.Provider).NormalizeError(action.Resp.StatusCode, action.Body) == adapter.ErrorConcurrencyLimited {
 		if retryDelay > 0 {
 			rl.ctxLogger.Info("retrying with concurrency delay",
 				"model", target.Model, "delay_ms", retryDelay.Milliseconds())
@@ -658,8 +570,8 @@ func (rl *retryLoop) handleActionError(i int, target routing.UpstreamTarget, act
 // clears a previously remembered snapshot: the exhaustion relay must reflect
 // the *last* failure, not a stale earlier target's 4xx.
 func (rl *retryLoop) rememberRetryable4xx(target routing.UpstreamTarget, action upstreamAction, signal retrySignal) {
-	if signal != retrySignalRetry || action.resp.StatusCode < 400 || action.resp.StatusCode >= 500 ||
-		action.resp.StatusCode == http.StatusTooManyRequests {
+	if signal != retrySignalRetry || action.Resp.StatusCode < 400 || action.Resp.StatusCode >= 500 ||
+		action.Resp.StatusCode == http.StatusTooManyRequests {
 		rl.lastRetryable4xx = nil
 		return
 	}
@@ -671,8 +583,8 @@ func (rl *retryLoop) rememberRetryable4xx(target routing.UpstreamTarget, action 
 	}
 	rl.lastRetryable4xx = &upstreamErrorSnapshot{
 		provider: target.Provider,
-		status:   action.resp.StatusCode,
-		body:     append([]byte(nil), action.body...),
+		status:   action.Resp.StatusCode,
+		body:     append([]byte(nil), action.Body...),
 	}
 }
 
@@ -691,7 +603,7 @@ func (rl *retryLoop) maybeStripAndRetryParamReject(i int, target routing.Upstrea
 	if rl.paramRejectRetried || !rl.gw.Config.Governance.AutoRetryOnParamRejectEnabled() {
 		return false
 	}
-	params := extractRejectedParamNames(string(action.body))
+	params := extractRejectedParamNames(string(action.Body))
 	if len(params) == 0 {
 		return false
 	}
@@ -818,7 +730,7 @@ func (rl *retryLoop) enforceBudgets() (bool, string) {
 	}
 	if !rl.keyBudgetCharged {
 		rl.keyBudgetCharged = true
-		if reason, denied := reserveKeyBudget(rl.gw, rl.opts.ApiKey, rl.opts.TokenCount); denied {
+		if reason, denied := reserveKeyBudget(rl.gw, rl.opts.APIKey, rl.opts.TokenCount); denied {
 			return true, reason
 		}
 	}
@@ -900,7 +812,7 @@ func (rl *retryLoop) Run() bool {
 		// inside checkPreDispatchGuards. A denial writes a typed 429 and ends
 		// the request.
 		if denied, reason := rl.enforceBudgets(); denied {
-			rl.gw.Metrics.IncAuthDenials(apiKeyName(rl.opts.ApiKey), reason)
+			rl.gw.Metrics.IncAuthDenials(apiKeyName(rl.opts.APIKey), reason)
 			rl.ctxLogger.Warn("token budget exhausted, rejecting request",
 				"reason", reason, "model", target.Model, "provider", target.Provider,
 				"token_count", rl.opts.TokenCount)
@@ -921,10 +833,10 @@ func (rl *retryLoop) Run() bool {
 		action := rl.prepareAndSend(i, target, payloadToUse)
 		rl.dispatches++
 		if err := rl.r.Context().Err(); err != nil {
-			if action.cancel != nil {
-				action.cancel()
+			if action.Cancel != nil {
+				action.Cancel()
 			}
-			action.releaseSlot()
+			action.ReleaseSlot()
 			// prepareAndSend releases any probe it consumed on its own exit
 			// paths; this break only stops the sweep.
 			rl.ctxLogger.Debug("request context canceled during prepareAndSend, stopping failover sweep", "err", err)
@@ -1004,18 +916,18 @@ func (rl *retryLoop) maxSameTargetRetries() int {
 // prepareAndSend wraps the proxy's prepareAndSend method.
 func (rl *retryLoop) prepareAndSend(idx int, target routing.UpstreamTarget, payload map[string]interface{}) upstreamAction {
 	return rl.p.prepareAndSend(rl.gw, rl.r, dispatchParams{
-		idx:                  idx,
-		targets:              rl.opts.Targets,
-		target:               target,
-		payload:              payload,
-		cooldown:             rl.opts.Cooldown,
-		tokenCount:           rl.opts.TokenCount,
-		agentName:            rl.opts.AgentName,
-		apiKey:               rl.opts.ApiKey,
-		streaming:            rl.stream,
-		sourceFormat:         rl.opts.SourceFormat,
-		windowCompacted:      rl.opts.WindowCompacted,
-		unknownFieldsAudited: &rl.telemetry,
+		Idx:                  idx,
+		Targets:              rl.opts.Targets,
+		Target:               target,
+		Payload:              payload,
+		Cooldown:             rl.opts.Cooldown,
+		TokenCount:           rl.opts.TokenCount,
+		AgentName:            rl.opts.AgentName,
+		APIKey:               rl.opts.APIKey,
+		Streaming:            rl.stream,
+		SourceFormat:         rl.opts.SourceFormat,
+		WindowCompacted:      rl.opts.WindowCompacted,
+		UnknownFieldsAudited: &rl.telemetry,
 	})
 }
 
@@ -1054,7 +966,7 @@ func (rl *retryLoop) Exhausted() {
 		if rl.opts.AgentName != "" {
 			rl.gw.Metrics.RecordExhausted(rl.opts.AgentName)
 		}
-		rl.gw.Metrics.IncAuthDenials(apiKeyName(rl.opts.ApiKey), "provider_budget")
+		rl.gw.Metrics.IncAuthDenials(apiKeyName(rl.opts.APIKey), "provider_budget")
 		rl.writeBudgetDenial("provider_budget")
 		return
 	}
@@ -1146,13 +1058,13 @@ func handleUpstreamResponse(ctxLogger *slog.Logger, resp *http.Response, cancel 
 		_, _ = io.Copy(io.Discard, resp.Body)
 		_ = resp.Body.Close()
 		cancel()
-		return upstreamAction{kind: actionContinue, release: release}
+		return upstreamAction{Kind: actionContinue, Release: release}
 	}
 	isSSE := strings.Contains(strings.ToLower(ct), "text/event-stream")
 	if isSSE {
-		return upstreamAction{kind: actionStream, resp: resp, cancel: cancel, release: release}
+		return upstreamAction{Kind: actionStream, Resp: resp, Cancel: cancel, Release: release}
 	}
-	return upstreamAction{kind: actionResponse, resp: resp, cancel: cancel, release: release}
+	return upstreamAction{Kind: actionResponse, Resp: resp, Cancel: cancel, Release: release}
 }
 
 // upstreamRequestContext builds the context for an outbound upstream call.
@@ -1184,32 +1096,14 @@ func resolveCacheSalt(apiKey *config.ApiKey, agentName string, cfg *config.Confi
 	return ""
 }
 
-// dispatchParams groups prepareAndSend's request-scoped parameters
-// (AUD-60 / NENYA-314: fourteen positional parameters beyond the options
-// threshold). gw and r stay positional.
-type dispatchParams struct {
-	idx                  int
-	targets              []routing.UpstreamTarget
-	target               routing.UpstreamTarget
-	payload              map[string]interface{}
-	cooldown             time.Duration
-	tokenCount           int
-	agentName            string
-	apiKey               *config.ApiKey
-	streaming            bool
-	sourceFormat         string
-	windowCompacted      bool
-	unknownFieldsAudited *routing.RequestTelemetry
-}
-
 func (p *Proxy) prepareAndSend(gw *gateway.NenyaGateway,
 	r *http.Request,
 	dp dispatchParams,
 ) upstreamAction {
-	idx, targets, target := dp.idx, dp.targets, dp.target
-	payload, cooldownDuration, tokenCount := dp.payload, dp.cooldown, dp.tokenCount
-	agentName, apiKey, streaming := dp.agentName, dp.apiKey, dp.streaming
-	sourceFormat, windowCompacted, unknownFieldsAudited := dp.sourceFormat, dp.windowCompacted, dp.unknownFieldsAudited
+	idx, targets, target := dp.Idx, dp.Targets, dp.Target
+	payload, cooldownDuration, tokenCount := dp.Payload, dp.Cooldown, dp.TokenCount
+	agentName, apiKey, streaming := dp.AgentName, dp.APIKey, dp.Streaming
+	sourceFormat, windowCompacted, unknownFieldsAudited := dp.SourceFormat, dp.WindowCompacted, dp.UnknownFieldsAudited
 	ctxLogger := gw.Logger.With(
 		"operation", "upstream",
 		"agent", agentName,
@@ -1242,7 +1136,7 @@ func (p *Proxy) prepareAndSend(gw *gateway.NenyaGateway,
 		ctxLogger.Info("client canceled while waiting for concurrency slot",
 			"model", target.Model, "provider", target.Provider)
 		gw.AgentState.CB.ReleaseHalfOpen(target.CoolKey)
-		return upstreamAction{kind: actionContinue}
+		return upstreamAction{Kind: actionContinue}
 	}
 	gw.Metrics.RecordConcurrencyWait(target.Provider, target.Model, time.Since(waitStart))
 	gw.Metrics.IncConcurrencyInflight(target.Provider, target.Model)
@@ -1329,7 +1223,7 @@ func (p *Proxy) prepareAndSend(gw *gateway.NenyaGateway,
 		// No dispatch happened: release the probe slot consumed by the guard
 		// so an abandoned half-open probe cannot wedge the circuit.
 		gw.AgentState.CB.ReleaseHalfOpen(target.CoolKey)
-		return upstreamAction{kind: actionContinue, release: release}
+		return upstreamAction{Kind: actionContinue, Release: release}
 	}
 
 	logRequestIfDebug(r.Context(), ctxLogger, req, target.URL, transformedBody)
@@ -1346,7 +1240,7 @@ func (p *Proxy) prepareAndSend(gw *gateway.NenyaGateway,
 		p.recordNetworkError(ctxLogger, gw, target, err, r, cooldownDuration)
 		// Network failures are transient: retryable for a same-target repeat
 		// when no later target remains (bounded by the attempt cap).
-		return upstreamAction{kind: actionContinue, release: release, retryable: true, upstreamAttempted: true}
+		return upstreamAction{Kind: actionContinue, Release: release, Retryable: true, UpstreamAttempted: true}
 	}
 
 	duration := time.Since(startTime)
@@ -1363,14 +1257,14 @@ func (p *Proxy) prepareAndSend(gw *gateway.NenyaGateway,
 			gw.CostTracker.RecordError(target.Model)
 		}
 		gw.Metrics.RecordUpstreamError(target.Model, agentName, target.Provider, resp.StatusCode)
-		return upstreamAction{kind: actionError, resp: resp, cancel: upstreamCancel, release: release, upstreamAttempted: true}
+		return upstreamAction{Kind: actionError, Resp: resp, Cancel: upstreamCancel, Release: release, UpstreamAttempted: true}
 	}
 
 	action := handleUpstreamResponse(ctxLogger, resp, upstreamCancel, release)
-	action.upstreamAttempted = true
+	action.UpstreamAttempted = true
 	// The dispatch instant starts the TTFT clock (NENYA-178); the streaming
 	// path records the elapsed time at the first effective output frame.
-	action.dispatchAt = startTime
+	action.DispatchAt = startTime
 	return action
 }
 
@@ -1417,7 +1311,7 @@ func breakerGate(gw *gateway.NenyaGateway, ctxLogger *slog.Logger, target routin
 		return nil
 	}
 	ctxLogger.Warn("target skipped: circuit breaker open")
-	return ptrAction(upstreamAction{kind: actionContinue})
+	return ptrAction(upstreamAction{Kind: actionContinue})
 }
 
 // checkProviderBudget skips a target whose provider daily token budget is
@@ -1439,7 +1333,7 @@ func checkProviderBudget(gw *gateway.NenyaGateway, ctxLogger *slog.Logger, targe
 	}
 	ctxLogger.Warn("target skipped: provider token budget exhausted",
 		"tier", tier, "provider_budget_daily", prov.TokenBudgetDaily, "token_count", tokenCount)
-	return ptrAction(upstreamAction{kind: actionContinue, skipReason: "provider_budget"})
+	return ptrAction(upstreamAction{Kind: actionContinue, SkipReason: "provider_budget"})
 }
 
 func (p *Proxy) checkPreDispatchGuards(gw *gateway.NenyaGateway, ctxLogger *slog.Logger, target routing.UpstreamTarget, tokenCount int, agentName string, apiKey *config.ApiKey) *upstreamAction {
@@ -1450,7 +1344,7 @@ func (p *Proxy) checkPreDispatchGuards(gw *gateway.NenyaGateway, ctxLogger *slog
 			"limit", rej.Limit,
 			"bucket_left", rej.BucketLeft,
 			"token_count", rej.TokenCount)
-		return ptrAction(upstreamAction{kind: actionContinue, skipReason: "rate_limit"})
+		return ptrAction(upstreamAction{Kind: actionContinue, SkipReason: "rate_limit"})
 	}
 
 	// NENYA-208: a BYOK dispatch costs the gateway nothing — the caller's own
@@ -1466,7 +1360,7 @@ func (p *Proxy) checkPreDispatchGuards(gw *gateway.NenyaGateway, ctxLogger *slog
 				gw.Metrics.RecordCostLimitRejected(target.Model)
 				ctxLogger.Warn("target skipped: estimated cost exceeds max_cost_per_request",
 					"estimated_cost_usd", estCost, "max_cost_usd", gw.Config.Governance.MaxCostPerRequest)
-				return ptrAction(upstreamAction{kind: actionContinue, skipReason: "max_cost"})
+				return ptrAction(upstreamAction{Kind: actionContinue, SkipReason: "max_cost"})
 			}
 		}
 	}
@@ -1482,7 +1376,7 @@ func (p *Proxy) checkPreDispatchGuards(gw *gateway.NenyaGateway, ctxLogger *slog
 			gw.Metrics.RecordBudgetLimitRejected(target.Model)
 			ctxLogger.Warn("target skipped: agent budget exhausted",
 				"agent", agentName, "spent_usd", account, "budget_usd", agent.BudgetLimitUSD)
-			return ptrAction(upstreamAction{kind: actionContinue, skipReason: "agent_budget"})
+			return ptrAction(upstreamAction{Kind: actionContinue, SkipReason: "agent_budget"})
 		}
 	}
 
@@ -1532,10 +1426,10 @@ func logRetryableError(ctxLogger *slog.Logger, errorBody []byte, gw *gateway.Nen
 
 func handleAdapterRetryableError(ctxLogger *slog.Logger, target routing.UpstreamTarget, action upstreamAction, cooldownDuration time.Duration, gw *gateway.NenyaGateway) (bool, bool) {
 	a := adapter.ForProvider(target.Provider)
-	errClass := a.NormalizeError(action.resp.StatusCode, action.body)
-	if (errClass == adapter.ErrorRetryable || errClass == adapter.ErrorQuotaExhausted) && action.resp.StatusCode >= 400 && action.resp.StatusCode < 500 {
+	errClass := a.NormalizeError(action.Resp.StatusCode, action.Body)
+	if (errClass == adapter.ErrorRetryable || errClass == adapter.ErrorQuotaExhausted) && action.Resp.StatusCode >= 400 && action.Resp.StatusCode < 500 {
 		ctxLogger.Warn("adapter classified client error as retryable, trying next target", "error_class", errClass)
-		gw.AgentState.RecordFailureWithStatus(target, action.resp.StatusCode, string(action.body))
+		gw.AgentState.RecordFailureWithStatus(target, action.Resp.StatusCode, string(action.Body))
 		return true, errClass == adapter.ErrorQuotaExhausted
 	}
 	return false, false
@@ -1553,11 +1447,11 @@ func handleAdapterRetryableError(ctxLogger *slog.Logger, target routing.Upstream
 // consumed by (or attributed to) a concurrent request's retry loop,
 // corrupting the client-facing error_kind for both.
 //
-// Cancellation contract (AUD-49 / NENYA-235): the CALLER owns action.cancel
+// Cancellation contract (AUD-49 / NENYA-235): the CALLER owns action.Cancel
 // — the chat loop cancels before entry (handleActionError, once the error
 // body is consumed), the MCP buffered loop right after return. This function
 // must not assume the action is still live; historically a redundant
-// `defer action.cancel()` sat on the terminal paths here and panicked any
+// `defer action.Cancel()` sat on the terminal paths here and panicked any
 // caller (or test) that passed a cancel-less action.
 func (p *Proxy) handleUpstreamError(gw *gateway.NenyaGateway,
 	idx int,
@@ -1567,7 +1461,7 @@ func (p *Proxy) handleUpstreamError(gw *gateway.NenyaGateway,
 	agentName string,
 	action upstreamAction,
 ) (retrySignal, time.Duration, bool) {
-	errorBody := action.body
+	errorBody := action.Body
 
 	ctxLogger := gw.Logger.With(
 		"operation", "upstream_error",
@@ -1575,10 +1469,10 @@ func (p *Proxy) handleUpstreamError(gw *gateway.NenyaGateway,
 		"provider", target.Provider,
 		"model", target.Model,
 		"target_idx", fmt.Sprintf("%d/%d", idx+1, len(targets)),
-		"status", action.resp.StatusCode,
+		"status", action.Resp.StatusCode,
 	)
 
-	errClass := adapter.ForProvider(target.Provider).NormalizeError(action.resp.StatusCode, action.body)
+	errClass := adapter.ForProvider(target.Provider).NormalizeError(action.Resp.StatusCode, action.Body)
 	// Concurrency-limit rejection (NENYA-69): e.g. ZAI 1302. Hitting a
 	// per-model in-flight cap is saturation, not provider illness — do not
 	// activate a cooldown or count a circuit-breaker failure. A short fixed
@@ -1594,7 +1488,7 @@ func (p *Proxy) handleUpstreamError(gw *gateway.NenyaGateway,
 		return retrySignalRetry, concurrencyRetryDelay(), false
 	}
 
-	if p.isRetryableStatus(gw, target.Provider, action.resp.StatusCode) {
+	if p.isRetryableStatus(gw, target.Provider, action.Resp.StatusCode) {
 		logRetryableError(ctxLogger, errorBody, gw)
 		delay, isQuota := handleRetryableError429(ctxLogger, errorBody, action, cooldownDuration, target, agentName, gw)
 		return retrySignalRetry, delay, isQuota
@@ -1613,7 +1507,7 @@ func (p *Proxy) handleUpstreamError(gw *gateway.NenyaGateway,
 		return retrySignalRetry, 0, isQuota
 	}
 
-	// No action.cancel() here (AUD-49 / NENYA-235): both callers own the
+	// No action.Cancel() here (AUD-49 / NENYA-235): both callers own the
 	// cancel — see the contract in the doc comment above.
 	// A model-not-found from the upstream is a target fault, not a malformed
 	// client request (NENYA-168): the model may simply be absent from this
@@ -1627,8 +1521,8 @@ func (p *Proxy) handleUpstreamError(gw *gateway.NenyaGateway,
 	// agent the 404 surfaces to the client instead of failing over, even though
 	// the model is genuinely unavailable on this target. Loosening that is a
 	// sticky-semantics change, not part of NENYA-168.
-	if idx+1 < len(targets) && isModelNotFoundError(action.resp.StatusCode, errorBody) {
-		gw.AgentState.RecordFailureWithStatus(target, action.resp.StatusCode, string(errorBody))
+	if idx+1 < len(targets) && isModelNotFoundError(action.Resp.StatusCode, errorBody) {
+		gw.AgentState.RecordFailureWithStatus(target, action.Resp.StatusCode, string(errorBody))
 		logWarnRetryable(ctxLogger, errorBody, gw, "model not found on this target, trying next target")
 		return retrySignalContinue, 0, false
 	}
@@ -1649,7 +1543,7 @@ func (p *Proxy) handleUpstreamError(gw *gateway.NenyaGateway,
 // reason and records the appropriate circuit-breaker signal. Returns true when
 // the caller should treat the error as retryable.
 func (p *Proxy) recordRetryable4xx(gw *gateway.NenyaGateway, ctxLogger *slog.Logger, target routing.UpstreamTarget, action upstreamAction, errorBody []byte) bool {
-	reason := retryable4xxReasonFor(gw, action.resp.StatusCode, errorBody, target.Provider)
+	reason := retryable4xxReasonFor(gw, action.Resp.StatusCode, errorBody, target.Provider)
 	if reason == retryable4xxNone {
 		return false
 	}
@@ -1666,7 +1560,7 @@ func (p *Proxy) recordRetryable4xx(gw *gateway.NenyaGateway, ctxLogger *slog.Log
 	if reason == retryable4xxOpaque {
 		gw.AgentState.CB.RecordOpaqueFailure(target.CoolKey)
 	} else {
-		gw.AgentState.RecordFailureWithStatus(target, action.resp.StatusCode, string(errorBody))
+		gw.AgentState.RecordFailureWithStatus(target, action.Resp.StatusCode, string(errorBody))
 	}
 	return true
 }

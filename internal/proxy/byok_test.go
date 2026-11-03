@@ -92,7 +92,7 @@ func TestApplyBYOKCredentialPermissionAndValidation(t *testing.T) {
 
 	t.Run("key without the byok permission is denied", func(t *testing.T) {
 		req := byokChatRequest("anthropic")
-		req.apiKey = &config.ApiKey{Name: "user-key", Roles: []string{"user"}, Enabled: true}
+		req.APIKey = &config.ApiKey{Name: "user-key", Roles: []string{"user"}, Enabled: true}
 		herr := applyBYOK(t, gw, byokRequest(t, config.DefaultBYOKHeader, "caller-key"), req)
 		if herr == nil || herr.Code != http.StatusForbidden {
 			t.Fatalf("want 403 for a key without the byok permission, got %+v", herr)
@@ -104,7 +104,7 @@ func TestApplyBYOKCredentialPermissionAndValidation(t *testing.T) {
 
 	t.Run("user key with permissions.byok may", func(t *testing.T) {
 		req := byokChatRequest("anthropic")
-		req.apiKey = &config.ApiKey{
+		req.APIKey = &config.ApiKey{
 			Name: "user-key", Roles: []string{"user"}, Enabled: true,
 			Permissions: map[string]any{"byok": true},
 		}
@@ -116,7 +116,7 @@ func TestApplyBYOKCredentialPermissionAndValidation(t *testing.T) {
 	t.Run("malformed credential is rejected, never silently replaced", func(t *testing.T) {
 		for _, bad := range []string{"has space", "tab\there", "café", strings.Repeat("a", maxBYOKCredentialLen+1)} {
 			req := byokChatRequest("anthropic")
-			req.apiKey = adminKey()
+			req.APIKey = adminKey()
 			herr := applyBYOK(t, gw, byokRequest(t, config.DefaultBYOKHeader, bad), req)
 			if herr == nil || herr.Code != http.StatusBadRequest {
 				t.Fatalf("want 400 for %q, got %+v", bad, herr)
@@ -131,7 +131,7 @@ func TestApplyBYOKCredentialPermissionAndValidation(t *testing.T) {
 func TestApplyBYOKCredentialAppliesAndAudits(t *testing.T) {
 	gw := byokGateway(t, true, map[string]bool{"anthropic": true}, "")
 	req := byokChatRequest("anthropic", "openai")
-	req.apiKey = adminKey()
+	req.APIKey = adminKey()
 
 	if herr := applyBYOK(t, gw, byokRequest(t, config.DefaultBYOKHeader, "caller-key"), req); herr != nil {
 		t.Fatalf("BYOK: %v", herr)
@@ -161,7 +161,7 @@ func TestApplyBYOKCredentialAppliesAndAudits(t *testing.T) {
 func TestApplyBYOKCredentialNoEligibleProvider(t *testing.T) {
 	gw := byokGateway(t, true, map[string]bool{"anthropic": false}, "")
 	req := byokChatRequest("anthropic")
-	req.apiKey = adminKey()
+	req.APIKey = adminKey()
 	herr := applyBYOK(t, gw, byokRequest(t, config.DefaultBYOKHeader, "caller-key"), req)
 	if herr == nil || herr.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("a BYOK request with no opt-in target must fail closed with 422, got %+v", herr)
@@ -175,7 +175,7 @@ func TestApplyBYOKCredentialNoEligibleProvider(t *testing.T) {
 func TestApplyBYOKCredentialCustomHeader(t *testing.T) {
 	gw := byokGateway(t, true, map[string]bool{"anthropic": true}, "X-Corp-Upstream-Key")
 	req := byokChatRequest("anthropic")
-	req.apiKey = adminKey()
+	req.APIKey = adminKey()
 	if herr := applyBYOK(t, gw, byokRequest(t, config.DefaultBYOKHeader, "caller-key"), req); herr != nil {
 		t.Fatalf("the default header must be ignored when a custom one is configured: %v", herr)
 	}
@@ -220,7 +220,7 @@ func TestBYOKTargetsDoNotWriteSharedAccountState(t *testing.T) {
 func TestBYOKDispatchDoesNotChargeSharedBillingAccount(t *testing.T) {
 	gw := byokGateway(t, true, map[string]bool{"anthropic": true}, "")
 	req := byokChatRequest("anthropic")
-	req.apiKey = adminKey()
+	req.APIKey = adminKey()
 	if herr := applyBYOK(t, gw, byokRequest(t, config.DefaultBYOKHeader, "caller-key"), req); herr != nil {
 		t.Fatalf("BYOK: %v", herr)
 	}
@@ -276,7 +276,7 @@ func TestBYOKCredentialReachesUpstreamAuthHeader(t *testing.T) {
 	gw := byokGateway(t, true, map[string]bool{"openai": true}, "")
 	gw.Providers["openai"] = &config.Provider{Name: "openai", AuthStyle: "bearer", AllowBYOK: true}
 	req := byokChatRequest("openai")
-	req.apiKey = adminKey()
+	req.APIKey = adminKey()
 	if herr := applyBYOK(t, gw, byokRequest(t, config.DefaultBYOKHeader, "caller-key"), req); herr != nil {
 		t.Fatalf("BYOK: %v", herr)
 	}
@@ -385,7 +385,7 @@ func TestCheckPreDispatchGuardsStandDownOnBYOK(t *testing.T) {
 			target := routing.UpstreamTarget{Provider: "anthropic", Model: "priced-model", AccountName: "acct-shared", BYOK: tc.byok}
 			action := (&Proxy{}).checkPreDispatchGuards(gw, logger, target, 10000, "agent-a", nil)
 			if tc.wantSkip {
-				if action == nil || action.kind != actionContinue {
+				if action == nil || action.Kind != actionContinue {
 					t.Fatalf("the armed guards must skip the shared target: %+v", action)
 				}
 				return

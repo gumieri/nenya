@@ -1,0 +1,90 @@
+name: Fuzz
+
+# Weekly corpus growth for the go fuzz targets. CI (ci.yml) only runs the
+# seed corpora; this job runs each target time-boxed so the corpus in the
+# Go build cache keeps growing without local runs. A crasher fails the run
+# and is uploaded as an artifact (the file is also written into
+# testdata/fuzz/<Target>/, where committing it permanently adds it to the
+# seed corpus — do that in the fix PR).
+#
+# Targets are discovered from the source tree, never hardcoded, so a new
+# FuzzXxx function is picked up automatically.
+#
+# Actions are pinned to commit SHAs (same supply-chain rule as ci.yml):
+# a moved version tag would run attacker code inside this pipeline.
+
+on:
+  schedule:
+    # Sundays 03:23 UTC — off-peak, before the working week.
+    - cron: '23 3 * * 0'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  fuzz:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 1
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+        with:
+          go-version-file: go.mod
+          # Zero-dependency module: go.sum is empty, so key the built-in
+          # build-cache on go.mod instead (same as ci.yml). The fuzz
+          # corpus lives under the build cache (GOCACHE/fuzz), so this
+          # cache also carries grown corpus entries between runs.
+          cache-dependency-path: go.mod
+
+      # Explicit corpus cache on top of the build cache: keyed weekly and
+      # restored with fallback, so an evicted build cache does not reset
+      # corpus growth.
+      - name: Restore fuzz corpus
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+        with:
+          path: ~/.cache/go-build/fuzz
+          key: go-fuzz-${{ github.run_id }}
+          restore-keys: |
+            go-fuzz-
+
+      - name: Enumerate fuzz targets
+        id: targets
+        run: |
+          set -eu
+          # "pkg:FuzzName" pairs, one per line.
+          grep -rl '^func Fuzz' --include='*_test.go' . \
+            | sed 's|^\./||' \
+            | while read -r f; do
+                pkg_dir=$(dirname "$f")
+                grep -o '^func Fuzz[A-Za-z0-9_]*' "$f" | sed "s|^func |$pkg_dir:|"
+              done | tee fuzz_targets.txt
+          count=$(wc -l < fuzz_targets.txt)
+          echo "count=$count" >> "$GITHUB_OUTPUT"
+          echo "Found $count fuzz targets"
+
+      - name: Run fuzz targets (30s each)
+        run: |
+          set -eu
+          fail=0
+          while IFS=: read -r pkg target; do
+            echo "::group::go test -fuzz ^${target}\$ ./${pkg}"
+            if ! go test -run='^$' -fuzz "^${target}$" -fuzztime=30s "./${pkg}"; then
+              echo "::error::fuzz target ${target} failed in ${pkg}"
+              fail=1
+            fi
+            echo "::endgroup::"
+          done < fuzz_targets.txt
+          exit "$fail"
+
+      - name: Upload crashers
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: fuzz-crashers
+          path: |
+            **/testdata/fuzz/**
+          if-no-files-found: ignore
