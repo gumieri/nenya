@@ -48,8 +48,8 @@ func TestConvertBufferedForReplay(t *testing.T) {
 
 	t.Run("anthropic target served to an openai client", func(t *testing.T) {
 		buf := &bufferedSSE{
-			rawBytes:      []byte(anthropicFrames),
-			servingTarget: routing.UpstreamTarget{Provider: "prov", Model: "m", Format: "anthropic"},
+			RawBytes:      []byte(anthropicFrames),
+			ServingTarget: routing.UpstreamTarget{Provider: "prov", Model: "m", Format: "anthropic"},
 		}
 		out := string(p.convertBufferedForReplay(gw, buf, "openai", nil))
 		if !strings.Contains(out, `"choices"`) {
@@ -65,8 +65,8 @@ func TestConvertBufferedForReplay(t *testing.T) {
 
 	t.Run("openai target served to an anthropic client", func(t *testing.T) {
 		buf := &bufferedSSE{
-			rawBytes:      []byte(openAIFrames),
-			servingTarget: routing.UpstreamTarget{Provider: "prov", Model: "m", Format: "openai"},
+			RawBytes:      []byte(openAIFrames),
+			ServingTarget: routing.UpstreamTarget{Provider: "prov", Model: "m", Format: "openai"},
 		}
 		out := string(p.convertBufferedForReplay(gw, buf, "anthropic", nil))
 		if !strings.Contains(out, `"message_stop"`) {
@@ -82,8 +82,8 @@ func TestConvertBufferedForReplay(t *testing.T) {
 
 	t.Run("matching format stays verbatim", func(t *testing.T) {
 		buf := &bufferedSSE{
-			rawBytes:      []byte(openAIFrames),
-			servingTarget: routing.UpstreamTarget{Provider: "prov", Model: "m", Format: "openai"},
+			RawBytes:      []byte(openAIFrames),
+			ServingTarget: routing.UpstreamTarget{Provider: "prov", Model: "m", Format: "openai"},
 		}
 		out := p.convertBufferedForReplay(gw, buf, "openai", nil)
 		if string(out) != openAIFrames {
@@ -100,8 +100,8 @@ func TestReplayGuardedWritesClientFormat(t *testing.T) {
 	p.StoreGateway(gw)
 
 	buf := &bufferedSSE{
-		rawBytes:      []byte(anthropicFrames),
-		servingTarget: routing.UpstreamTarget{Provider: "prov", Model: "m", Format: "anthropic"},
+		RawBytes:      []byte(anthropicFrames),
+		ServingTarget: routing.UpstreamTarget{Provider: "prov", Model: "m", Format: "anthropic"},
 	}
 	w := httptest.NewRecorder()
 	p.replayGuardedBufferedWithProvider(gw, w, buf, "prov", "test-agent", "openai", nil)

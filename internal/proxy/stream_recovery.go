@@ -7,6 +7,8 @@ import (
 	"net/http"
 	"time"
 
+	mcpproxy "github.com/nenya/internal/proxy/mcp"
+
 	"github.com/nenya/config"
 	"github.com/nenya/internal/gateway"
 	"github.com/nenya/internal/pipeline"
@@ -101,8 +103,8 @@ func (p *Proxy) newStreamContinuation(gw *gateway.NenyaGateway, opts streamRespo
 // a continuation re-dispatch. Cancels the upstream context, closes the body,
 // and drains the stall reader so its background goroutine does not leak.
 func (p *Proxy) finishStreamAttempt(gw *gateway.NenyaGateway, action upstreamAction, stallR *stallReader) {
-	action.cancel()
-	_ = action.resp.Body.Close()
+	action.Cancel()
+	_ = action.Resp.Body.Close()
 	if stallR != nil {
 		drained, err := stallR.DrainPending(100 * time.Millisecond)
 		if err != nil {
@@ -169,7 +171,7 @@ func (p *Proxy) buildContinuationMessage(ctx context.Context, gw *gateway.NenyaG
 		return nil, "gave_up_no_content"
 	}
 
-	buffered, err := bufferStreamResponse(ctx, bytes.NewReader(cont.capture.buf.Bytes()), gw.Logger, "", routing.UpstreamTarget{})
+	buffered, err := mcpproxy.BufferStreamResponse(ctx, bytes.NewReader(cont.capture.buf.Bytes()), gw.Logger, "", routing.UpstreamTarget{})
 	if err != nil {
 		gw.Logger.Warn("stream continuation: failed to parse captured output",
 			"err", err)
@@ -178,15 +180,15 @@ func (p *Proxy) buildContinuationMessage(ctx context.Context, gw *gateway.NenyaG
 
 	// A tool call without a finish_reason means arguments were cut mid-stream;
 	// resuming would silently corrupt the tool call. Give up.
-	if len(buffered.toolCalls) > 0 && buffered.finishReason == "" {
+	if len(buffered.ToolCalls) > 0 && buffered.FinishReason == "" {
 		return nil, "gave_up_tool_call"
 	}
 
-	if buffered.assistantMessage == nil || !buffered.hasContent {
+	if buffered.AssistantMessage == nil || !buffered.HasContent {
 		return nil, "gave_up_no_content"
 	}
 
-	msg := buffered.assistantMessage
+	msg := buffered.AssistantMessage
 	if !cont.includeReasoning {
 		delete(msg, "reasoning_content")
 	}
@@ -258,31 +260,31 @@ func (p *Proxy) tryContinueStream(gw *gateway.NenyaGateway, w http.ResponseWrite
 	// keeps per-attempt audit semantics (the chat loop's first attempt
 	// already audited this payload).
 	newAction := p.prepareAndSend(gw, r, dispatchParams{
-		idx:             opts.idx,
-		targets:         opts.targets,
-		target:          target,
-		payload:         payload,
-		cooldown:        cooldownDuration,
-		tokenCount:      opts.tokenCount,
-		agentName:       opts.agentName,
-		apiKey:          opts.apiKey,
-		streaming:       true,
-		sourceFormat:    opts.sourceFormat,
-		windowCompacted: opts.windowCompacted,
+		Idx:             opts.idx,
+		Targets:         opts.targets,
+		Target:          target,
+		Payload:         payload,
+		Cooldown:        cooldownDuration,
+		TokenCount:      opts.tokenCount,
+		AgentName:       opts.agentName,
+		APIKey:          opts.apiKey,
+		Streaming:       true,
+		SourceFormat:    opts.sourceFormat,
+		WindowCompacted: opts.windowCompacted,
 	})
-	if newAction.kind != actionStream {
+	if newAction.Kind != actionStream {
 		gw.Metrics.RecordStreamContinuation(target.Model, target.Provider, "gave_up_redispatch")
 		resolveRedispatchOutcome(gw, target, cooldownDuration, newAction)
-		if newAction.cancel != nil {
-			newAction.cancel()
+		if newAction.Cancel != nil {
+			newAction.Cancel()
 		}
-		if newAction.resp != nil {
-			_ = newAction.resp.Body.Close()
+		if newAction.Resp != nil {
+			_ = newAction.Resp.Body.Close()
 		}
 		// The failed re-dispatch consumed a concurrency slot (when it got as
 		// far as an upstream attempt): release it, or the give-up path
 		// orphans the slot and its in-flight gauge (AUD-05).
-		newAction.releaseSlot()
+		newAction.ReleaseSlot()
 		writeStreamCutSSE(gw, w)
 		putStreamBuffer(buf)
 		return streamContinueGaveUp, action
@@ -297,11 +299,11 @@ func (p *Proxy) tryContinueStream(gw *gateway.NenyaGateway, w http.ResponseWrite
 // attempted-but-not-streaming outcome releases the slot, and a guard skip that
 // never dispatched is a no-op.
 func resolveRedispatchOutcome(gw *gateway.NenyaGateway, target routing.UpstreamTarget, cooldownDuration time.Duration, action upstreamAction) {
-	if !action.upstreamAttempted {
+	if !action.UpstreamAttempted {
 		return
 	}
-	if action.kind == actionError && action.resp != nil {
-		gw.AgentState.RecordFailureWithStatus(target, action.resp.StatusCode, "")
+	if action.Kind == actionError && action.Resp != nil {
+		gw.AgentState.RecordFailureWithStatus(target, action.Resp.StatusCode, "")
 		return
 	}
 	gw.AgentState.CB.ReleaseHalfOpen(target.CoolKey)

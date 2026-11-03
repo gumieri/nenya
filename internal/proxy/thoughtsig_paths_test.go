@@ -10,6 +10,8 @@ import (
 	"sync"
 	"testing"
 
+	mcpproxy "github.com/nenya/internal/proxy/mcp"
+
 	"github.com/nenya/config"
 	"github.com/nenya/internal/gateway"
 	"github.com/nenya/internal/infra"
@@ -129,19 +131,19 @@ func TestMCPAccumulatorCarriesExtraContent(t *testing.T) {
 		"data: [DONE]",
 	}
 	for _, line := range lines {
-		if acc.processLine(line) {
+		if acc.ProcessLine(line) {
 			break
 		}
 	}
 
-	calls := acc.buildToolCalls()
+	calls := acc.BuildToolCalls()
 	if len(calls) != 1 {
 		t.Fatalf("expected 1 tool call, got %d", len(calls))
 	}
 	if calls[0].ExtraContent == nil {
 		t.Fatal("extra_content must ride through the accumulator")
 	}
-	toolCalls := buildOpenAIToolCalls(calls)
+	toolCalls := mcpproxy.BuildOpenAIToolCalls(calls)
 	tc, ok := toolCalls[0].(map[string]any)
 	if !ok {
 		t.Fatal("tool call must be a map")

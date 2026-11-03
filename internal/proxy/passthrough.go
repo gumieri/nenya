@@ -198,7 +198,7 @@ func (p *Proxy) pipeSSE(o pipeSSEOpts) {
 	for {
 		n, err := stallR.Read(buf)
 		if n > 0 {
-			armClientWriteDeadline(o.Dst, o.ClientStallTimeout)
+			ArmClientWriteDeadline(o.Dst, o.ClientStallTimeout)
 			if _, writeErr := o.Dst.Write(buf[:n]); writeErr != nil {
 				p.handlePassthroughWriteError(o.Gw, o.Logger, o.ProviderName, writeErr)
 				return
@@ -230,7 +230,7 @@ func (p *Proxy) pipeSSERaw(o pipeSSEOpts) {
 	for {
 		n, err := o.Src.Read(buf)
 		if n > 0 {
-			armClientWriteDeadline(o.Dst, o.ClientStallTimeout)
+			ArmClientWriteDeadline(o.Dst, o.ClientStallTimeout)
 			if _, writeErr := o.Dst.Write(buf[:n]); writeErr != nil {
 				p.handlePassthroughWriteError(o.Gw, o.Logger, o.ProviderName, writeErr)
 				return
@@ -284,7 +284,7 @@ func (p *Proxy) handlePassthroughReadError(gw *gateway.NenyaGateway, ctxLogger *
 	ctxLogger.Warn("passthrough SSE stream stalled, emitting stall terminal",
 		"provider", providerName)
 	// A blank line at a true boundary is a no-op for SSE parsers.
-	armClientWriteDeadline(dst, resolveStreamStallTimeout(gw))
+	ArmClientWriteDeadline(dst, resolveStreamStallTimeout(gw))
 	_, _ = dst.Write([]byte("\n\n"))
 	_, _ = dst.Write(stallSSEFrames())
 	flushPassthrough(dst)

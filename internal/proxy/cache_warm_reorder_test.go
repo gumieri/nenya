@@ -20,6 +20,13 @@ func TestReorderTargetsPreferWarmCache(t *testing.T) {
 	cfg := testutil.MinimalConfig()
 	cfg.Governance.AutoReorderByLatency = &on
 	cfg.Governance.AutoReorderPreferWarmCache = &on
+	// Pin the NENYA-202 floor to zero: this request carries no token count,
+	// and the default 8192-token floor would stand the tie-break down, letting
+	// the fresh-random jitter decide the near-tie (flaky since 8e9ec92 — the
+	// floor landed without updating this test). The band stays at its default
+	// 5%, which deterministically covers the 100 ms-vs-103 ms gap.
+	minTokens := 0
+	cfg.Governance.AutoReorderWarmCacheMinTokens = &minTokens
 
 	gw := gateway.New(t.Context(), *cfg, secrets, logger)
 	// warm-model: cache-warm; cold-model: same-ish latency, no cache history.

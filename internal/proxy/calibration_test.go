@@ -58,7 +58,7 @@ func TestRecordMCPUsageStats(t *testing.T) {
 		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
 		Stats:  infra.NewUsageTracker(),
 	}
-	buf := &bufferedSSE{rawBytes: []byte(strings.Join([]string{
+	buf := &bufferedSSE{RawBytes: []byte(strings.Join([]string{
 		`data: {"model":"response-model","choices":[{"delta":{}}],"usage":{"prompt_tokens":50,"completion_tokens":7,"total_tokens":57}}`,
 		"",
 		"data: [DONE]",

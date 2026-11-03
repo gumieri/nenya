@@ -1,4 +1,4 @@
-package proxy
+package mcpproxy
 
 import (
 	"bufio"
@@ -17,7 +17,6 @@ import (
 
 	"github.com/nenya/config"
 	"github.com/nenya/internal/auth"
-	"github.com/nenya/internal/infra"
 	"github.com/nenya/internal/routing"
 
 	"github.com/nenya/internal/gateway"
@@ -27,100 +26,34 @@ import (
 	"github.com/nenya/internal/util"
 )
 
+// MCPExecTimeout bounds one MCP tool call dispatch. The parent package
+// aliases it (mcpExecTimeout) so the auto-save path shares the value.
 const (
-	mcpExecTimeout = 30 * time.Second
+	MCPExecTimeout = 30 * time.Second
+
+	mcpExecTimeout = MCPExecTimeout
 )
 
-// bufferedSSE holds a buffered streaming response from the upstream LLM.
-// It contains raw SSE bytes, extracted tool calls, the assistant message,
-// and metadata about the response.
-type bufferedSSE struct {
-	rawBytes         []byte
-	toolCalls        []mcpToolCall
-	assistantMessage map[string]any
-	finishReason     string
-	hasContent       bool
-	model            string
-	// providerName is the target that produced the buffer (NENYA-155): the
-	// replay write's client-stall telemetry is labeled with it.
-	providerName string
-	// exfilBlocked marks a buffer truncated by the egress guard: callers
-	// must not replay it and should emit the structured block payload.
-	exfilBlocked bool
-	// canaryBlocked marks a buffer truncated by the canary tripwire
-	// (routes to error_kind=exfil_detected instead of exfil_blocked).
-	canaryBlocked bool
-	// streamError marks a buffer carrying an in-stream error frame (NENYA-153):
-	// the client is replayed the error, so the attempt must not be charged as a
-	// breaker success.
-	streamError bool
-	// emptyResponse marks a buffer whose HTTP-200 carried NO SSE data frames
-	// at all (empty body, keepalives only, or non-SSE junk): a failed upstream
-	// attempt like any other — counted in the NENYA-160 degradation signal,
-	// charged as a breaker failure, and failed over (AUD-16 / NENYA-258).
-	emptyResponse    bool
-	reasoningContent string
-	// calibrationModel is the serving target's model (set at construction
-	// by handleBufferedStream): the exact key the dispatch estimate for
-	// this buffer was recorded under (NENYA-135).
-	calibrationModel string
-	// servingTarget is the target this buffer was dispatched to (NENYA-193):
-	// cost and spend are attributed to its provider/account, which the model
-	// string alone cannot identify when a chain lists one model under several
-	// providers.
-	servingTarget routing.UpstreamTarget
-	// usageScan caches the one-time parse of rawBytes: every data chunk
-	// carrying a usage object, in order. The shared scan behind
-	// usageChunk/usageTotals so multi-MB buffers are unmarshaled once
-	// (NENYA-135, AUD-82 / NENYA-287). Contract: the usage accessors must
-	// not be called before the egress/canary guards finish mutating
-	// rawBytes; rawBytes is treated as immutable once parsed (current
-	// ordering — guards inside forwardBuffered, both keeping usage
-	// frames — satisfies this).
-	usageScan       []map[string]interface{}
-	usageScanParsed bool
-	// usageMerged caches the per-dimension high-water merge of every usage
-	// object in the buffer (NENYA-167).
-	usageMerged     stream.UsageTotals
-	usageMergedSeen bool
-	// usageClaimed records that this buffer's usage was claimed by
-	// recordMCPIterationUsage (one claim per dispatch); the MCP terminal paths
-	// check it and are therefore idempotent no-ops for a claimed buffer
-	// (NENYA-193).
-	usageClaimed bool
-}
-
-// mcpToolCall represents a tool call extracted from an upstream LLM response.
-type mcpToolCall struct {
-	ID        string
-	Name      string
-	Arguments map[string]any
-	// ExtraContent carries the Gemini thought signature (extra_content) so
-	// synthetic assistant tool_calls keep the model's signatures inline
-	// (NENYA-51). Nil for providers that do not emit signatures.
-	ExtraContent any
-}
-
-// usageChunk returns the final SSE data line carrying a usage object over
+// UsageChunk returns the final SSE data line carrying a usage object over
 // the shared single scan (nil = no usage present).
-func (b *bufferedSSE) usageChunk() map[string]interface{} {
-	chunks := b.usageChunks()
+func (b *BufferedSSE) UsageChunk() map[string]interface{} {
+	chunks := b.UsageChunks()
 	if len(chunks) == 0 {
 		return nil
 	}
 	return chunks[len(chunks)-1]
 }
 
-// usageChunks parses rawBytes ONCE (cached) and returns every data chunk
-// carrying a usage object in order — the shared scan behind usageChunk and
-// usageTotals, which previously each walked and unmarshaled the same lines
+// UsageChunks parses RawBytes ONCE (cached) and returns every data chunk
+// carrying a usage object in order — the shared scan behind UsageChunk and
+// UsageTotals, which previously each walked and unmarshaled the same lines
 // independently (AUD-82 / NENYA-287).
-func (b *bufferedSSE) usageChunks() []map[string]interface{} {
+func (b *BufferedSSE) UsageChunks() []map[string]interface{} {
 	if b.usageScanParsed {
 		return b.usageScan
 	}
 	b.usageScanParsed = true
-	for _, line := range strings.Split(string(b.rawBytes), "\n") {
+	for _, line := range strings.Split(string(b.RawBytes), "\n") {
 		if value, isData := stream.SSEDataField([]byte(line)); isData {
 			line = string(value)
 		}
@@ -160,21 +93,21 @@ func (b *bufferedSSE) usageChunks() []map[string]interface{} {
 // resolver verdict) replays verbatim; a transformer error also falls back to
 // the verbatim buffer — replaying what the upstream said — rather than
 // dropping the answer.
-func (p *Proxy) convertBufferedForReplay(gw *gateway.NenyaGateway, buf *bufferedSSE, sourceFormat string, apiKey *config.ApiKey) []byte {
-	if buf == nil || len(buf.rawBytes) == 0 {
-		return buf.rawBytes
+func ConvertBufferedForReplay(h Host, gw *gateway.NenyaGateway, buf *BufferedSSE, sourceFormat string, apiKey *config.ApiKey) []byte {
+	if buf == nil || len(buf.RawBytes) == 0 {
+		return buf.RawBytes
 	}
-	target := buf.servingTarget
+	target := buf.ServingTarget
 	if target.Format == "" || target.Format == sourceFormat {
-		return buf.rawBytes
+		return buf.RawBytes
 	}
-	tr := p.resolveTransformer(gw, target, sourceFormat, scopedThoughtSigCache(gw, apiKey))
+	tr := h.ResolveTransformer(gw, target, sourceFormat, h.ScopedThoughtSigCache(gw, apiKey))
 	if tr == nil {
-		return buf.rawBytes
+		return buf.RawBytes
 	}
-	converted, ok := p.convertReplayFrames(tr, buf.rawBytes)
+	converted, ok := ConvertReplayFrames(h, tr, buf.RawBytes)
 	if !ok {
-		return buf.rawBytes
+		return buf.RawBytes
 	}
 	return converted
 }
@@ -183,7 +116,7 @@ func (p *Proxy) convertBufferedForReplay(gw *gateway.NenyaGateway, buf *buffered
 // data frames in order and frames the converted events for the client. A
 // transformer error aborts with ok=false (the caller falls back to the
 // verbatim buffer).
-func (p *Proxy) convertReplayFrames(tr stream.ResponseTransformer, raw []byte) ([]byte, bool) {
+func ConvertReplayFrames(h Host, tr stream.ResponseTransformer, raw []byte) ([]byte, bool) {
 	var out []byte
 	for _, line := range strings.Split(string(raw), "\n") {
 		value, isData := stream.SSEDataField([]byte(line))
@@ -194,7 +127,7 @@ func (p *Proxy) convertReplayFrames(tr stream.ResponseTransformer, raw []byte) (
 		if payload == "" {
 			continue
 		}
-		converted, ok := p.convertReplayFrame(tr, payload)
+		converted, ok := convertReplayFrame(tr, payload)
 		if !ok {
 			return nil, false
 		}
@@ -211,7 +144,7 @@ func (p *Proxy) convertReplayFrames(tr stream.ResponseTransformer, raw []byte) (
 // convertReplayFrame transforms one data payload. The "[DONE]" sentinel and
 // a terminator the transformer renders itself (the forward transformer emits
 // it on message_stop) both come back as the sentinel string.
-func (p *Proxy) convertReplayFrame(tr stream.ResponseTransformer, payload string) (string, bool) {
+func convertReplayFrame(tr stream.ResponseTransformer, payload string) (string, bool) {
 	// A "[DONE]" payload is fed through like any frame: the transformer
 	// decides — a held tail is flushed in its place (the converted Anthropic
 	// stream terminates at message_stop), otherwise the sentinel passes
@@ -271,26 +204,26 @@ func appendConvertedTail(tr stream.ResponseTransformer, out []byte) []byte {
 	return out
 }
 
-func replayBufferedResponse(w http.ResponseWriter, buf *bufferedSSE, gw *gateway.NenyaGateway, providerName string, logger *slog.Logger) {
-	if len(buf.rawBytes) == 0 {
+func replayBufferedResponse(h Host, w http.ResponseWriter, buf *bufferedSSE, gw *gateway.NenyaGateway, providerName string, logger *slog.Logger) {
+	if len(buf.RawBytes) == 0 {
 		logger.Warn("MCP loop: empty buffered response, sending error")
-		writeSSEError(gw, w, http.StatusInternalServerError, "MCP loop: empty response from upstream")
+		h.WriteSSEError(gw, w, http.StatusInternalServerError, "MCP loop: empty response from upstream")
 		return
 	}
 
 	logger.Info("replaying buffered SSE response",
-		"has_content", buf.hasContent,
-		"finish_reason", buf.finishReason,
-		"raw_bytes_len", len(buf.rawBytes))
+		"has_content", buf.HasContent,
+		"finish_reason", buf.FinishReason,
+		"raw_bytes_len", len(buf.RawBytes))
 
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.WriteHeader(http.StatusOK)
 
-	if fw, ok := newImmediateFlushWriter(w, resolveStreamStallTimeout(gw)); ok {
+	if fw, ok := NewImmediateFlushWriter(w, h.ResolveStreamStallTimeout(gw)); ok {
 		replayViaFlushWriter(gw, fw, buf, providerName)
 	} else {
-		if _, err := w.Write(buf.rawBytes); err != nil {
+		if _, err := w.Write(buf.RawBytes); err != nil {
 			return
 		}
 	}
@@ -299,84 +232,28 @@ func replayBufferedResponse(w http.ResponseWriter, buf *bufferedSSE, gw *gateway
 // replayViaFlushWriter writes one replay chunk through the flushing writer and
 // classifies a failure: a per-write deadline timeout is client_stalled
 // (NENYA-155) — telemetry only, never a provider fault.
-func replayViaFlushWriter(gw *gateway.NenyaGateway, fw *immediateFlushWriter, buf *bufferedSSE, providerName string) {
-	if _, err := fw.Write(buf.rawBytes); err == nil {
+func replayViaFlushWriter(gw *gateway.NenyaGateway, fw *ImmediateFlushWriter, buf *bufferedSSE, providerName string) {
+	if _, err := fw.Write(buf.RawBytes); err == nil {
 		return
-	} else if isWriteTimeout(err) {
+	} else if IsWriteTimeout(err) {
 		if gw != nil {
 			gw.Metrics.RecordClientStalled("", providerName)
 		}
 	}
 }
 
-// writeSSEError sends an SSE error event to the client with the given status code and message.
-// The error is formatted as an OpenAI-compatible error object and followed by [DONE].
-func writeSSEError(gw *gateway.NenyaGateway, w http.ResponseWriter, statusCode int, message string) {
-	// NENYA-155: re-arm the client-stall deadline — a terminal written long
-	// after the last streamed chunk must not be silently dropped by the stale
-	// deadline, and must stay bounded against a stuck peer.
-	armClientWriteDeadline(w, resolveStreamStallTimeout(gw))
-	writeGatewayStreamError(w, statusCode, ErrorTypeGateway, message)
-}
-
-// sseAccumulator accumulates SSE stream state during buffered reading,
-// decomposing the high-cyclomatic-complexity bufferStreamResponse into
-// single-responsibility methods.
-type sseAccumulator struct {
-	raw          strings.Builder
-	finishReason string
-	hasContent   bool
-	content      strings.Builder
-	reasoning    strings.Builder
-	model        string
-	logger       *slog.Logger
-
-	tcArgsAccum map[int]*strings.Builder
-	tcNameAccum map[int]string
-	tcIDAccum   map[int]string
-	// tcExtraAccum carries Gemini thought signatures (extra_content) seen in
-	// tool_call deltas so synthetic assistant messages keep them inline
-	// (NENYA-51); without this the MCP loop's own history lost the model's
-	// signatures and the sanitizer stripped the just-completed tool pairs.
-	tcExtraAccum map[int]any
-	totalLines   int
-	dataLines    int
-	// streamError marks an in-stream error frame (NENYA-153).
-	streamError bool
-	// format is the serving target's wire format (UpstreamTarget.Format).
-	// Tool-call extraction is format-aware (AUD-10 / NENYA-218): the OpenAI
-	// delta parse always runs, and the Anthropic content_block / Gemini
-	// functionCall parsers feed the SAME index-keyed accumulators when the
-	// target's format says so — pre-fix, a non-OpenAI-format target's tool
-	// calls were invisible to the loop and replayed unexecuted.
-	format string
-	// geminiToolSeq assigns synthetic indices to Gemini's complete
-	// functionCall parts (they arrive whole — no deltas to join).
-	geminiToolSeq int
-}
-
-func newSSEAccumulator(logger *slog.Logger) *sseAccumulator {
-	return &sseAccumulator{
-		tcArgsAccum:  make(map[int]*strings.Builder),
-		tcNameAccum:  make(map[int]string),
-		tcIDAccum:    make(map[int]string),
-		tcExtraAccum: make(map[int]any),
-		logger:       logger,
-	}
-}
-
-// processLine handles a single scanner line. Returns true when [DONE] is seen.
-func (acc *sseAccumulator) processLine(line string) bool {
+// ProcessLine handles a single scanner line. Returns true when [DONE] is seen.
+func (acc *SSEAccumulator) ProcessLine(line string) bool {
 	if line == "" {
 		return false
 	}
-	acc.totalLines++
+	acc.TotalLines++
 
 	value, isData := stream.SSEDataField([]byte(line))
 	if !isData {
 		return false
 	}
-	acc.dataLines++
+	acc.DataLines++
 
 	// Tolerant field recognition (NENYA-197): a provider emitting
 	// "data:{json}" must not be read as an empty response.
@@ -386,26 +263,26 @@ func (acc *sseAccumulator) processLine(line string) bool {
 	}
 
 	if data == stream.DonePayload {
-		acc.raw.WriteString("data: [DONE]\n\n")
+		acc.Raw.WriteString("data: [DONE]\n\n")
 		return true
 	}
 
 	acc.processChunk(data)
-	switch acc.format {
+	switch acc.Format {
 	case "anthropic":
 		acc.processAnthropicData(data)
 	case "gemini":
 		acc.processGeminiData(data)
 	}
-	acc.raw.WriteString("data: ")
-	acc.raw.WriteString(data)
-	acc.raw.WriteString("\n\n")
+	acc.Raw.WriteString("data: ")
+	acc.Raw.WriteString(data)
+	acc.Raw.WriteString("\n\n")
 	return false
 }
 
 // processChunk unmarshals a JSON data chunk and extracts model, delta, and
 // finish_reason.
-func (acc *sseAccumulator) processChunk(data string) {
+func (acc *SSEAccumulator) processChunk(data string) {
 	var chunk map[string]any
 	if err := json.Unmarshal([]byte(data), &chunk); err != nil {
 		return
@@ -422,11 +299,11 @@ func (acc *sseAccumulator) processChunk(data string) {
 	// provider fault, so it is not charged here either.
 	policy := stream.IsPolicyRefusalPayload(chunk)
 	if !policy && (stream.IsStreamErrorPayload(chunk) || stream.IsResponseFailedEvent(chunk) || stream.IsCapacityRejection(chunk)) {
-		acc.streamError = true
+		acc.StreamError = true
 	}
 
 	if m := stream.ResponseModelOf(chunk); m != "" {
-		acc.model = m
+		acc.Model = m
 	}
 
 	if choice := extractFirstChoice(chunk); choice != nil {
@@ -434,13 +311,13 @@ func (acc *sseAccumulator) processChunk(data string) {
 			acc.processDelta(d)
 		}
 		if fr, ok := choice["finish_reason"].(string); ok && fr != "" {
-			acc.finishReason = fr
+			acc.FinishReason = fr
 		}
 	}
 
-	if acc.finishReason == "" {
+	if acc.FinishReason == "" {
 		if fr, ok := chunk["finish_reason"].(string); ok && fr != "" {
-			acc.finishReason = fr
+			acc.FinishReason = fr
 		}
 	}
 }
@@ -460,17 +337,17 @@ func extractFirstChoice(chunk map[string]any) map[string]any {
 
 // processDelta extracts content, reasoning_content, and tool_calls from a
 // delta map.
-func (acc *sseAccumulator) processDelta(delta map[string]any) {
+func (acc *SSEAccumulator) processDelta(delta map[string]any) {
 	if content, ok := delta["content"]; ok && content != nil {
 		if s, ok := content.(string); ok && s != "" {
-			acc.hasContent = true
-			acc.content.WriteString(s)
+			acc.HasContent = true
+			acc.Content.WriteString(s)
 		}
 	}
 
 	if rc, ok := delta["reasoning_content"]; ok && rc != nil {
 		if s, ok := rc.(string); ok && s != "" {
-			acc.reasoning.WriteString(s)
+			acc.Reasoning.WriteString(s)
 		}
 	}
 
@@ -487,7 +364,7 @@ func (acc *sseAccumulator) processDelta(delta map[string]any) {
 
 // processToolCallChunk extracts index, id, name, and arguments from a single
 // tool_call delta chunk, accumulating arguments across chunks by index.
-func (acc *sseAccumulator) processToolCallChunk(tc map[string]any) {
+func (acc *SSEAccumulator) processToolCallChunk(tc map[string]any) {
 	// An absent index defaults to 0 (sloppy single-tool emitters); a present
 	// but out-of-shape index is dropped, not trusted (NENYA-48 class).
 	idx := 0
@@ -499,11 +376,11 @@ func (acc *sseAccumulator) processToolCallChunk(tc map[string]any) {
 	}
 
 	if id, ok := tc["id"].(string); ok && id != "" {
-		acc.tcIDAccum[idx] = id
+		acc.TCIDAccum[idx] = id
 	}
 
 	if extra, ok := tc["extra_content"]; ok {
-		acc.tcExtraAccum[idx] = extra
+		acc.TCExtraAccum[idx] = extra
 	}
 
 	fn, ok := tc["function"].(map[string]any)
@@ -512,7 +389,7 @@ func (acc *sseAccumulator) processToolCallChunk(tc map[string]any) {
 	}
 
 	if name, ok := fn["name"].(string); ok && name != "" {
-		acc.tcNameAccum[idx] = name
+		acc.TCNameAccum[idx] = name
 	}
 
 	if argsAny, ok := fn["arguments"]; ok {
@@ -520,10 +397,10 @@ func (acc *sseAccumulator) processToolCallChunk(tc map[string]any) {
 		if !ok || argsStr == "" {
 			return
 		}
-		if acc.tcArgsAccum[idx] == nil {
-			acc.tcArgsAccum[idx] = &strings.Builder{}
+		if acc.TCArgsAccum[idx] == nil {
+			acc.TCArgsAccum[idx] = &strings.Builder{}
 		}
-		acc.tcArgsAccum[idx].WriteString(argsStr)
+		acc.TCArgsAccum[idx].WriteString(argsStr)
 	}
 }
 
@@ -532,7 +409,7 @@ func (acc *sseAccumulator) processToolCallChunk(tc map[string]any) {
 // NENYA-218). The data line carries its own "type" — the event: line is not
 // needed. Everything feeds the same index-keyed accumulators the OpenAI
 // parser uses, so buildToolCalls is format-agnostic downstream.
-func (acc *sseAccumulator) processAnthropicData(data string) {
+func (acc *SSEAccumulator) processAnthropicData(data string) {
 	var chunk map[string]any
 	if err := json.Unmarshal([]byte(data), &chunk); err != nil {
 		return
@@ -552,29 +429,29 @@ func (acc *sseAccumulator) processAnthropicData(data string) {
 }
 
 // anthropicMessageStart records the serving model's name.
-func (acc *sseAccumulator) anthropicMessageStart(chunk map[string]any) {
+func (acc *SSEAccumulator) anthropicMessageStart(chunk map[string]any) {
 	msg, ok := chunk["message"].(map[string]any)
 	if !ok {
 		return
 	}
 	if model, ok := msg["model"].(string); ok && model != "" {
-		acc.model = model
+		acc.Model = model
 	}
 }
 
 // anthropicMessageDelta records the stop reason (e.g. tool_use).
-func (acc *sseAccumulator) anthropicMessageDelta(chunk map[string]any) {
+func (acc *SSEAccumulator) anthropicMessageDelta(chunk map[string]any) {
 	delta, ok := chunk["delta"].(map[string]any)
 	if !ok {
 		return
 	}
 	if sr, ok := delta["stop_reason"].(string); ok && sr != "" {
-		acc.finishReason = sr
+		acc.FinishReason = sr
 	}
 }
 
 // anthropicBlockStart registers a tool_use block (id + name) under its index.
-func (acc *sseAccumulator) anthropicBlockStart(chunk map[string]any) {
+func (acc *SSEAccumulator) anthropicBlockStart(chunk map[string]any) {
 	idx, ok := boundedIndex(chunk["index"])
 	if !ok {
 		return
@@ -587,25 +464,25 @@ func (acc *sseAccumulator) anthropicBlockStart(chunk map[string]any) {
 		return
 	}
 	if id, ok := cb["id"].(string); ok && id != "" {
-		acc.tcIDAccum[idx] = id
+		acc.TCIDAccum[idx] = id
 	}
 	if name, ok := cb["name"].(string); ok && name != "" {
-		acc.tcNameAccum[idx] = name
+		acc.TCNameAccum[idx] = name
 	}
 	// Anthropic sends the parsed input at start when it is empty and streams
 	// the rest via input_json_delta — seed the accumulator so a complete
 	// start-frame input survives even with no delta following.
 	if input, ok := cb["input"].(map[string]any); ok && len(input) > 0 {
 		if encoded, err := json.Marshal(input); err == nil {
-			acc.tcArgsAccum[idx] = &strings.Builder{}
-			acc.tcArgsAccum[idx].WriteString(string(encoded))
+			acc.TCArgsAccum[idx] = &strings.Builder{}
+			acc.TCArgsAccum[idx].WriteString(string(encoded))
 		}
 	}
 }
 
 // anthropicBlockDelta appends input_json_delta fragments (keyed by block
 // index) and text/thinking deltas to the content accumulators.
-func (acc *sseAccumulator) anthropicBlockDelta(chunk map[string]any) {
+func (acc *SSEAccumulator) anthropicBlockDelta(chunk map[string]any) {
 	idx, ok := boundedIndex(chunk["index"])
 	if !ok {
 		return
@@ -617,19 +494,19 @@ func (acc *sseAccumulator) anthropicBlockDelta(chunk map[string]any) {
 	switch t, _ := delta["type"].(string); t {
 	case "input_json_delta":
 		if frag, ok := delta["partial_json"].(string); ok && frag != "" {
-			if acc.tcArgsAccum[idx] == nil {
-				acc.tcArgsAccum[idx] = &strings.Builder{}
+			if acc.TCArgsAccum[idx] == nil {
+				acc.TCArgsAccum[idx] = &strings.Builder{}
 			}
-			acc.tcArgsAccum[idx].WriteString(frag)
+			acc.TCArgsAccum[idx].WriteString(frag)
 		}
 	case "text_delta":
 		if s, ok := delta["text"].(string); ok && s != "" {
-			acc.hasContent = true
-			acc.content.WriteString(s)
+			acc.HasContent = true
+			acc.Content.WriteString(s)
 		}
 	case "thinking_delta":
 		if s, ok := delta["thinking"].(string); ok && s != "" {
-			acc.reasoning.WriteString(s)
+			acc.Reasoning.WriteString(s)
 		}
 	}
 }
@@ -640,14 +517,14 @@ func (acc *sseAccumulator) anthropicBlockDelta(chunk map[string]any) {
 // deltas to join); each gets a synthetic index in the shared accumulators.
 // A part's thoughtSignature is carried into tcExtraAccum so the NENYA-51
 // history preservation covers native-Gemini tool calls too.
-func (acc *sseAccumulator) processGeminiData(data string) {
+func (acc *SSEAccumulator) processGeminiData(data string) {
 	var chunk map[string]any
 	if err := json.Unmarshal([]byte(data), &chunk); err != nil {
 		return
 	}
 
 	if mv, ok := chunk["modelVersion"].(string); ok && mv != "" {
-		acc.model = mv
+		acc.Model = mv
 	}
 
 	candidates, ok := chunk["candidates"].([]any)
@@ -663,9 +540,9 @@ func (acc *sseAccumulator) processGeminiData(data string) {
 
 // geminiCandidate handles one Gemini candidate: its finish reason and its
 // content parts.
-func (acc *sseAccumulator) geminiCandidate(cand map[string]any) {
-	if fr, ok := cand["finishReason"].(string); ok && fr != "" && acc.finishReason == "" {
-		acc.finishReason = fr
+func (acc *SSEAccumulator) geminiCandidate(cand map[string]any) {
+	if fr, ok := cand["finishReason"].(string); ok && fr != "" && acc.FinishReason == "" {
+		acc.FinishReason = fr
 	}
 	content, ok := cand["content"].(map[string]any)
 	if !ok {
@@ -684,10 +561,10 @@ func (acc *sseAccumulator) geminiCandidate(cand map[string]any) {
 
 // geminiPart handles one content part: text accumulation and a complete
 // functionCall (synthetic index in the shared accumulators).
-func (acc *sseAccumulator) geminiPart(part map[string]any) {
+func (acc *SSEAccumulator) geminiPart(part map[string]any) {
 	if text, ok := part["text"].(string); ok && text != "" {
-		acc.hasContent = true
-		acc.content.WriteString(text)
+		acc.HasContent = true
+		acc.Content.WriteString(text)
 	}
 	fc, ok := part["functionCall"].(map[string]any)
 	if !ok {
@@ -697,23 +574,23 @@ func (acc *sseAccumulator) geminiPart(part map[string]any) {
 	if name == "" {
 		return
 	}
-	idx := acc.geminiToolSeq
-	acc.geminiToolSeq++
-	acc.tcNameAccum[idx] = name
+	idx := acc.GeminiToolSeq
+	acc.GeminiToolSeq++
+	acc.TCNameAccum[idx] = name
 	// No-args calls (common for parameterless Gemini tools) must carry an
 	// empty-object argument JSON, not a nil accumulator (which the history
 	// builder would render as "arguments":"null").
 	if args, ok := fc["args"].(map[string]any); ok && len(args) > 0 {
 		if encoded, err := json.Marshal(args); err == nil {
-			acc.tcArgsAccum[idx] = &strings.Builder{}
-			acc.tcArgsAccum[idx].WriteString(string(encoded))
+			acc.TCArgsAccum[idx] = &strings.Builder{}
+			acc.TCArgsAccum[idx].WriteString(string(encoded))
 		}
 	} else {
-		acc.tcArgsAccum[idx] = &strings.Builder{}
-		acc.tcArgsAccum[idx].WriteString("{}")
+		acc.TCArgsAccum[idx] = &strings.Builder{}
+		acc.TCArgsAccum[idx].WriteString("{}")
 	}
 	if sig, ok := part["thoughtSignature"]; ok && sig != nil {
-		acc.tcExtraAccum[idx] = sig
+		acc.TCExtraAccum[idx] = sig
 	}
 }
 
@@ -729,50 +606,50 @@ func boundedIndex(v any) (int, bool) {
 }
 
 // buildToolCalls assembles the final tool call list from accumulators.
-func (acc *sseAccumulator) buildToolCalls() []mcpToolCall {
-	indices := make([]int, 0, len(acc.tcNameAccum))
-	for idx := range acc.tcNameAccum {
+func (acc *SSEAccumulator) BuildToolCalls() []MCPToolCall {
+	indices := make([]int, 0, len(acc.TCNameAccum))
+	for idx := range acc.TCNameAccum {
 		indices = append(indices, idx)
 	}
 	sort.Ints(indices)
 
 	calls := make([]mcpToolCall, 0, len(indices))
 	for _, idx := range indices {
-		name := acc.tcNameAccum[idx]
+		name := acc.TCNameAccum[idx]
 		if name == "" {
 			continue
 		}
-		id := acc.tcIDAccum[idx]
+		id := acc.TCIDAccum[idx]
 		if id == "" {
 			id = util.SyntheticToolCallID(idx)
 		}
 		var args map[string]any
-		if argsBuilder := acc.tcArgsAccum[idx]; argsBuilder != nil {
+		if argsBuilder := acc.TCArgsAccum[idx]; argsBuilder != nil {
 			argsStr := argsBuilder.String()
 			if err := json.Unmarshal([]byte(argsStr), &args); err != nil {
-				if acc.logger != nil {
-					acc.logger.Warn("MCP: failed to parse tool arguments, calling with empty args",
+				if acc.Logger != nil {
+					acc.Logger.Warn("MCP: failed to parse tool arguments, calling with empty args",
 						"tool", name, "err", err)
 				}
 				args = make(map[string]any)
 			}
 		}
-		calls = append(calls, mcpToolCall{ID: id, Name: name, Arguments: args, ExtraContent: acc.tcExtraAccum[idx]})
+		calls = append(calls, mcpToolCall{ID: id, Name: name, Arguments: args, ExtraContent: acc.TCExtraAccum[idx]})
 	}
 	return calls
 }
 
 // result produces the final bufferedSSE from accumulated state.
-func (acc *sseAccumulator) result() *bufferedSSE {
-	if acc.dataLines == 0 && acc.totalLines > 0 {
-		if acc.logger != nil {
-			acc.logger.Warn("MCP stream: no SSE 'data:' lines found; possible non-SSE response",
-				"total_lines", acc.totalLines)
+func (acc *SSEAccumulator) Result() *BufferedSSE {
+	if acc.DataLines == 0 && acc.TotalLines > 0 {
+		if acc.Logger != nil {
+			acc.Logger.Warn("MCP stream: no SSE 'data:' lines found; possible non-SSE response",
+				"total_lines", acc.TotalLines)
 		}
 	}
 
-	toolCalls := acc.buildToolCalls()
-	reasoningStr := acc.reasoning.String()
+	toolCalls := acc.BuildToolCalls()
+	reasoningStr := acc.Reasoning.String()
 
 	var assistantMsg map[string]any
 	if len(toolCalls) > 0 {
@@ -784,10 +661,10 @@ func (acc *sseAccumulator) result() *bufferedSSE {
 		if reasoningStr != "" {
 			assistantMsg["reasoning_content"] = reasoningStr
 		}
-	} else if acc.hasContent {
+	} else if acc.HasContent {
 		assistantMsg = map[string]any{
 			"role":    "assistant",
-			"content": acc.content.String(),
+			"content": acc.Content.String(),
 		}
 		if reasoningStr != "" {
 			assistantMsg["reasoning_content"] = reasoningStr
@@ -795,25 +672,25 @@ func (acc *sseAccumulator) result() *bufferedSSE {
 	}
 
 	return &bufferedSSE{
-		rawBytes:         []byte(acc.raw.String()),
-		toolCalls:        toolCalls,
-		assistantMessage: assistantMsg,
-		finishReason:     acc.finishReason,
-		hasContent:       acc.hasContent,
-		model:            acc.model,
-		providerName:     "",
-		reasoningContent: reasoningStr,
-		streamError:      acc.streamError,
-		emptyResponse:    acc.dataLines == 0,
+		RawBytes:         []byte(acc.Raw.String()),
+		ToolCalls:        toolCalls,
+		AssistantMessage: assistantMsg,
+		FinishReason:     acc.FinishReason,
+		HasContent:       acc.HasContent,
+		Model:            acc.Model,
+		ProviderName:     "",
+		ReasoningContent: reasoningStr,
+		StreamError:      acc.StreamError,
+		EmptyResponse:    acc.DataLines == 0,
 	}
 }
 
 func bufferStreamResponse(ctx context.Context, r io.Reader, logger *slog.Logger, servingModel string, servingTarget routing.UpstreamTarget) (*bufferedSSE, error) {
-	acc := newSSEAccumulator(logger)
+	acc := NewSSEAccumulator(logger)
 	// AUD-10 (NENYA-218): tool-call extraction follows the serving target's
 	// wire format — an Anthropic/Gemini-format target's tool calls must be
 	// extracted or the loop replays them unexecuted.
-	acc.format = servingTarget.Format
+	acc.Format = servingTarget.Format
 	scanner := bufio.NewScanner(r)
 	// The shared SSE splitter (LF, CRLF or lone CR) so non-canonical framing is
 	// parsed per line instead of as one glued line (NENYA-197).
@@ -826,7 +703,7 @@ func bufferStreamResponse(ctx context.Context, r io.Reader, logger *slog.Logger,
 		default:
 		}
 
-		if acc.processLine(scanner.Text()) {
+		if acc.ProcessLine(scanner.Text()) {
 			break
 		}
 	}
@@ -836,12 +713,12 @@ func bufferStreamResponse(ctx context.Context, r io.Reader, logger *slog.Logger,
 		}
 		return nil, fmt.Errorf("reading SSE stream: %w", err)
 	}
-	out := acc.result()
-	out.calibrationModel = servingModel
-	out.servingTarget = servingTarget
+	out := acc.Result()
+	out.CalibrationModel = servingModel
+	out.ServingTarget = servingTarget
 	// NENYA-155: the replay write's client-stall telemetry is labeled with
 	// the producing provider.
-	out.providerName = servingTarget.Provider
+	out.ProviderName = servingTarget.Provider
 	return out, nil
 }
 
@@ -881,20 +758,6 @@ func partitionMCPToolCalls(calls []mcpToolCall, toolIndex *mcp.ToolRegistry) (mc
 	return
 }
 
-// mcpExecOptions groups the MCP tool-call execution inputs (NENYA-162): the
-// session's unavailable-tool set is set only by the MCP loop (nil elsewhere —
-// the NENYA-162 non-injected-tool guard is then inert).
-type mcpExecOptions struct {
-	ctx         context.Context
-	calls       []mcpToolCall
-	gw          *gateway.NenyaGateway
-	agentName   string
-	canary      pipeline.CanarResult
-	screen      *egressScreenRuntime
-	apiKey      *config.ApiKey
-	unavailable map[string]bool
-}
-
 // executeMCPCallsWithUnavailable executes MCP tool calls concurrently using the registered MCP servers.
 // When the canary tripwire is armed, call arguments are scanned first:
 // a canary hit means the model reproduced gateway-injected context into
@@ -906,9 +769,9 @@ type mcpExecOptions struct {
 // request (shared budget); an exfil verdict under strict action refuses
 // the call. Returns a slice of tool results in the same order
 // as the input calls.
-func executeMCPCallsWithUnavailable(in mcpExecOptions) []*mcp.CallToolResult {
-	ctx, calls, gw, agentName := in.ctx, in.calls, in.gw, in.agentName
-	canary, screen, apiKey, unavailable := in.canary, in.screen, in.apiKey, in.unavailable
+func executeMCPCallsWithUnavailable(h Host, in mcpExecOptions) []*mcp.CallToolResult {
+	ctx, calls, gw, agentName := in.Ctx, in.Calls, in.GW, in.AgentName
+	canary, screen, apiKey, unavailable := in.Canary, in.Screen, in.APIKey, in.Unavailable
 	if len(calls) == 0 {
 		return nil
 	}
@@ -940,7 +803,7 @@ func executeMCPCallsWithUnavailable(in mcpExecOptions) []*mcp.CallToolResult {
 			// closed); log action records and allows. The scan runs even
 			// for a non-injected tool (below): the arguments are still an
 			// egress channel worth recording.
-			tripped, refuse := scanToolArgsCanary(canary, c.Arguments, gw.Metrics, ctxLogger, c.Name)
+			tripped, refuse := h.ScanToolArgsCanary(canary, c.Arguments, gw.Metrics, ctxLogger, c.Name)
 			if refuse {
 				results[idx] = &mcp.CallToolResult{
 					Content: []mcp.ContentBlock{{Type: "text", Text: "[blocked by egress policy: canary detected in tool arguments]"}},
@@ -1041,7 +904,7 @@ func executeMCPCallsWithUnavailable(in mcpExecOptions) []*mcp.CallToolResult {
 			// refused or unadjudicable). One judgment per request;
 			// strict action refuses the call.
 			screenTriggered := tripped || len(violations) > 0
-			if screen.screenToolArgs(ctx, gw, agentName, c.Arguments, screenTriggered) {
+			if h.ScreenToolArgs(screen, ctx, gw, agentName, c.Arguments, screenTriggered) {
 				results[idx] = &mcp.CallToolResult{
 					Content: []mcp.ContentBlock{{Type: "text", Text: "[blocked by egress policy: data exfiltration detected in tool arguments]"}},
 					IsError: true,
@@ -1142,19 +1005,6 @@ var errMCPCanaryBlock = errors.New("canary block")
 // screen (distinct from the deterministic argument guard).
 var errMCPEgressScreen = errors.New("egress screen")
 
-// mcpGuardDispatch groups the identity and payload of a non-registry
-// MCP dispatch (auto-search, auto-save) for the argument guard.
-type mcpGuardDispatch struct {
-	ServerName string
-	ToolName   string
-	Purpose    string
-	Args       map[string]any
-	// ApiKey is the authenticated key whose tool grant must cover the
-	// dispatch (NENYA-183). Nil denies (fail closed): auto-search and
-	// auto-save always run on behalf of an authenticated request.
-	ApiKey *config.ApiKey
-}
-
 // guardMCPArgs runs the tool-argument guard for dispatches that are not
 // routed through the tool registry (auto-search, auto-save): size cap
 // and URL policy apply; schema validation is skipped (no declared
@@ -1171,7 +1021,7 @@ func guardMCPArgs(gw *gateway.NenyaGateway, logger *slog.Logger, d mcpGuardDispa
 	}
 	// NENYA-183: auto-search and auto-save are tool dispatches too, so the
 	// caller's grant caps them as well.
-	if !auth.AuthorizeMCPTool(d.ApiKey, d.ServerName, d.ToolName) {
+	if !auth.AuthorizeMCPTool(d.APIKey, d.ServerName, d.ToolName) {
 		logger.Warn("MCP dispatch refused: outside the key's grant",
 			"purpose", d.Purpose, "server", d.ServerName, "tool", d.ToolName)
 		return errMCPNotGranted
@@ -1195,18 +1045,6 @@ func guardMCPArgs(gw *gateway.NenyaGateway, logger *slog.Logger, d mcpGuardDispa
 			"purpose", d.Purpose, "server", d.ServerName, "tool", d.ToolName, "detail", summary)
 	}
 	return nil
-}
-
-// mcpAppendContext groups what appendMCPResults needs beyond the payload, the
-// calls, and the results themselves.
-type mcpAppendContext struct {
-	settings  pipeline.SpotlightSettings
-	metrics   *infra.Metrics
-	toolIndex *mcp.ToolRegistry
-	// vision gates the result's image blocks on the routed target (NENYA-149);
-	// the zero gate drops them.
-	vision mcpVisionGate
-	logger *slog.Logger
 }
 
 // applySpotlightToParts applies the untrusted-content spotlight envelope to a
@@ -1239,7 +1077,7 @@ func applySpotlightToParts(content any, settings pipeline.SpotlightSettings, ser
 // message: the tool text (spotlight-enveloped), plus the result's image blocks
 // gated on the routed target (NENYA-149).
 func buildToolResultMessage(call mcpToolCall, result *mcp.CallToolResult, opts mcpAppendContext) map[string]any {
-	settings, metrics, toolIndex := opts.settings, opts.metrics, opts.toolIndex
+	settings, metrics, toolIndex := opts.Settings, opts.Metrics, opts.ToolIndex
 	content := result.Text()
 	if result.IsError {
 		content = "[MCP Error] " + content
@@ -1247,7 +1085,7 @@ func buildToolResultMessage(call mcpToolCall, result *mcp.CallToolResult, opts m
 	// NENYA-149: image blocks ride only when the routed model and target
 	// format can carry them; rejected images are dropped with a counter and
 	// a debug log, and the omission is made visible in the tool text.
-	contentAny, drops := toolResultContent(content, result, opts.vision, opts.logger)
+	contentAny, drops := toolResultContent(content, result, opts.Vision, opts.Logger)
 	recordVisionDrops(metrics, drops)
 	server, tool := "unknown", call.Name
 	// The registry is the source of truth for the (server, tool) pair: the

@@ -13,6 +13,8 @@ import (
 	"testing"
 	"time"
 
+	mcpproxy "github.com/nenya/internal/proxy/mcp"
+
 	"github.com/nenya/config"
 	"github.com/nenya/internal/routing"
 	"github.com/nenya/internal/stream"
@@ -51,22 +53,22 @@ func TestBufferStreamResponse_NonCanonicalFraming(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			buf, err := bufferStreamResponse(context.Background(), strings.NewReader(tt.sse), logger, "", routing.UpstreamTarget{})
+			buf, err := mcpproxy.BufferStreamResponse(context.Background(), strings.NewReader(tt.sse), logger, "", routing.UpstreamTarget{})
 			if err != nil {
 				t.Fatalf("bufferStreamResponse: %v", err)
 			}
-			if !buf.hasContent {
+			if !buf.HasContent {
 				t.Fatalf("hasContent = false; the non-canonical stream was read as an empty response")
 			}
-			if !strings.Contains(string(buf.rawBytes), "Hello") {
-				t.Fatalf("replayed stream lost the content: %q", string(buf.rawBytes))
+			if !strings.Contains(string(buf.RawBytes), "Hello") {
+				t.Fatalf("replayed stream lost the content: %q", string(buf.RawBytes))
 			}
-			if buf.finishReason != "stop" {
-				t.Fatalf("finishReason = %q, want stop", buf.finishReason)
+			if buf.FinishReason != "stop" {
+				t.Fatalf("finishReason = %q, want stop", buf.FinishReason)
 			}
 			// The replayed stream is canonical so downstream consumers agree.
-			if !strings.Contains(string(buf.rawBytes), "data: [DONE]") {
-				t.Fatalf("replayed stream is not canonical: %q", string(buf.rawBytes))
+			if !strings.Contains(string(buf.RawBytes), "data: [DONE]") {
+				t.Fatalf("replayed stream is not canonical: %q", string(buf.RawBytes))
 			}
 		})
 	}

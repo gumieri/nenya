@@ -185,7 +185,7 @@ func canarySafeMessages(messages []interface{}, canary pipeline.CanarResult) []i
 func (rl *retryLoop) handleContextLimitError(i int, target routing.UpstreamTarget, action upstreamAction) retrySignal {
 	rl.gw.Metrics.RecordContextLimitError(rl.opts.AgentName, target.Provider, target.Model)
 	rl.ctxLogger.Warn("context length exceeded error from upstream",
-		"status", action.resp.StatusCode,
+		"status", action.Resp.StatusCode,
 		"provider", target.Provider,
 		"model", target.Model)
 
@@ -193,7 +193,7 @@ func (rl *retryLoop) handleContextLimitError(i int, target routing.UpstreamTarge
 		rl.ctxLogger.Info("auto_retry_on_context_limit disabled")
 	} else if !rl.summarized {
 		summarizedPayload, sumErr := rl.p.attemptContextLimitSummarization(
-			rl.r.Context(), rl.ctxLogger, rl.gw, rl.originalPayload, action.body, rl.opts.AgentName, target.Provider, target.Model, rl.opts.Canary)
+			rl.r.Context(), rl.ctxLogger, rl.gw, rl.originalPayload, action.Body, rl.opts.AgentName, target.Provider, target.Model, rl.opts.Canary)
 		if sumErr == nil && summarizedPayload != nil {
 			rl.summarized = true
 			// The history is now engine-produced: auto cache anchoring must
@@ -212,8 +212,8 @@ func (rl *retryLoop) handleContextLimitError(i int, target routing.UpstreamTarge
 		rl.ctxLogger.Warn("already attempted summarization")
 	}
 
-	gwErr := ParseProviderError(target.Provider, action.resp.StatusCode, action.body, nil)
+	gwErr := ParseProviderError(target.Provider, action.Resp.StatusCode, action.Body, nil)
 	rl.gw.AgentState.CB.ReleaseHalfOpen(target.CoolKey)
-	rl.writeUpstreamErrorToClient(action.resp.StatusCode, gwErr)
+	rl.writeUpstreamErrorToClient(action.Resp.StatusCode, gwErr)
 	return retrySignalDone
 }

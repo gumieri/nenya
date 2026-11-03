@@ -4,6 +4,8 @@ import (
 	"strings"
 	"testing"
 
+	mcpproxy "github.com/nenya/internal/proxy/mcp"
+
 	"github.com/nenya/config"
 	"github.com/nenya/internal/gateway"
 	"github.com/nenya/internal/infra"
@@ -73,30 +75,30 @@ func TestMCPToolPolicyTrustAnchorEndToEnd(t *testing.T) {
 				map[string]any{"type": "function", "function": map[string]any{"name": "memory__secret_tool"}},
 			},
 		},
-		apiKey: fullAccessTestKey(),
+		APIKey: fullAccessTestKey(),
 	}
 	if !p.injectMCPTools(gw, req.Payload, req) {
 		t.Fatal("expected the MCP tools to be injected")
 	}
 
-	if len(req.injectedMCPTools) != 1 || req.injectedMCPTools[0] != "memory__test_tool" {
-		t.Fatalf("the injected set must hold exactly the policy-allowed tool: %v", req.injectedMCPTools)
+	if len(req.InjectedMCPTools) != 1 || req.InjectedMCPTools[0] != "memory__test_tool" {
+		t.Fatalf("the injected set must hold exactly the policy-allowed tool: %v", req.InjectedMCPTools)
 	}
 
 	// A call naming the excluded tool goes through the real wiring and is
 	// refused with the structured NENYA-162 error (never dispatched).
 	cut := "memory__secret_tool"
-	unavailable := unavailableMCPToolCalls(
+	unavailable := mcpproxy.UnavailableMCPToolCalls(
 		[]mcpToolCall{{ID: "1", Name: cut}},
-		injectedToolNameSet(req.injectedMCPTools),
+		mcpproxy.InjectedToolNameSet(req.InjectedMCPTools),
 	)
 	if !unavailable[cut] {
 		t.Fatalf("the excluded tool must be unavailable: %v", unavailable)
 	}
-	results := executeMCPCallsWithUnavailable(mcpExecOptions{
-		ctx: t.Context(), calls: []mcpToolCall{{ID: "1", Name: cut}},
-		gw: gw, agentName: "agent", apiKey: fullAccessTestKey(),
-		unavailable: unavailable,
+	results := mcpproxy.ExecuteMCPCallsWithUnavailable(p.mcpHost(), mcpExecOptions{
+		Ctx: t.Context(), Calls: []mcpToolCall{{ID: "1", Name: cut}},
+		GW: gw, AgentName: "agent", APIKey: fullAccessTestKey(),
+		Unavailable: unavailable,
 	})
 	if len(results) != 1 || results[0] == nil || !results[0].IsError {
 		t.Fatalf("the excluded tool must be refused: %+v", results)

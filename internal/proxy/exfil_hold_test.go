@@ -34,7 +34,7 @@ func bufferedExfilGateway(t *testing.T) *gateway.NenyaGateway {
 // BEFORE [DONE] — the replayed buffer carries no host and no truncation.
 func TestApplyExfilToBufferedSSEHeldTailDrained(t *testing.T) {
 	gw := bufferedExfilGateway(t)
-	buf := &bufferedSSE{rawBytes: []byte(strings.Join([]string{
+	buf := &bufferedSSE{RawBytes: []byte(strings.Join([]string{
 		`data: {"choices":[{"delta":{"content":"see ![b](http://"}}]}`,
 		`data: {"choices":[{"delta":{"content":"127.0.0.1:8080/x?d=` + strings.Repeat("A", 300) + `) done"}}]}`,
 		"",
@@ -44,7 +44,7 @@ func TestApplyExfilToBufferedSSEHeldTailDrained(t *testing.T) {
 
 	(&Proxy{}).applyExfilToBufferedSSE(gw, buf, "agent")
 
-	out := string(buf.rawBytes)
+	out := string(buf.RawBytes)
 	if strings.Contains(out, "127.0.0.1:8080") {
 		t.Fatalf("the violating URL leaked in the replayed buffer:\n%s", out)
 	}
@@ -76,11 +76,11 @@ func TestApplyExfilToBufferedSSEBenignIdentity(t *testing.T) {
 		"data: [DONE]",
 		"",
 	}, "\n")
-	buf := &bufferedSSE{rawBytes: []byte(raw)}
+	buf := &bufferedSSE{RawBytes: []byte(raw)}
 
 	(&Proxy{}).applyExfilToBufferedSSE(gw, buf, "agent")
 
-	if text := bufferedWireText(t, string(buf.rawBytes)); text != "Hello world!" {
+	if text := bufferedWireText(t, string(buf.RawBytes)); text != "Hello world!" {
 		t.Fatalf("benign buffered replay corrupted: %q", text)
 	}
 }

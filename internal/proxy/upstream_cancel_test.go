@@ -14,19 +14,19 @@ import (
 // actions and several test fixtures do.
 func cancellessAction(status int, body string) upstreamAction {
 	action := upstreamAction{
-		resp: &http.Response{
+		Resp: &http.Response{
 			StatusCode: status,
 			Header:     http.Header{},
 			Body:       io.NopCloser(strings.NewReader(body)),
 		},
 	}
-	action.body, _ = io.ReadAll(action.resp.Body)
+	action.Body, _ = io.ReadAll(action.Resp.Body)
 	return action
 }
 
 // TestHandleUpstreamErrorTerminalPathsWithoutCancel pins AUD-49 (NENYA-235):
 // the terminal error paths must not require the action to carry a cancel
-// func. Pre-fix a `defer action.cancel()` sat on exactly those paths, so any
+// func. Pre-fix a `defer action.Cancel()` sat on exactly those paths, so any
 // caller (or test) passing a cancel-less action panicked with a nil-func
 // call. The contract is that CALLERS own cancellation: the chat loop cancels
 // before entry (handleActionError, after the error body is consumed — its

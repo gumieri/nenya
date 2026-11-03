@@ -13,6 +13,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	mcpproxy "github.com/nenya/internal/proxy/mcp"
 )
 
 func getStreamBuffer() *[]byte {
@@ -408,41 +410,17 @@ func isClientStalled(err error) bool {
 	return errors.Is(err, errClientStalled)
 }
 
+// ArmClientWriteDeadline re-arms the per-write client-stall deadline
+// (NENYA-155). Delegates to the moved implementation used by both the chat
+// streaming path and the MCP subsystem.
+func ArmClientWriteDeadline(w http.ResponseWriter, timeout time.Duration) {
+	mcpproxy.ArmClientWriteDeadline(w, timeout)
+}
+
 // isWriteTimeout reports whether an error is a deadline/timeout from a write.
 func isWriteTimeout(err error) bool {
 	var ne net.Error
 	return errors.As(err, &ne) && ne.Timeout()
-}
-
-// streamResult carries the outcome of streamResponse back to the retry loop.
-// empty signals a zero-byte upstream stream; err signals a transport-level read
-// failure before any stream bytes were produced (distinct from empty).
-// streamFailoverReason distinguishes why a stream attempt handed the dispatch
-// back to the retry loop, so the loop can pick the right failReason (and with
-// it the sticky_provider behavior) and log the real diagnosis.
-type streamFailoverReason int
-
-const (
-	// The unnamed zero value: no failover context. A zero streamResult reads
-	// as "no failover story" without a sentinel bool; the loop only switches
-	// on the named reasons below.
-	_ streamFailoverReason = iota
-	// streamFailoverPolicyRefusal: a policy refusal/safeguard terminal
-	// (NENYA-191) — not a provider fault, so the target was not charged and
-	// the sticky lenient policy allows the failover.
-	streamFailoverPolicyRefusal
-)
-
-type streamResult struct {
-	empty bool
-	// terminal marks a response already fully written to the client
-	// (e.g. a content-policy block): the retry loop must stop instead of
-	// failing over and appending another response to the committed one.
-	terminal bool
-	err      error
-	// failoverReason, when non-zero, explains an empty result's cause so the
-	// retry loop records the matching failReason (sticky policy + logging).
-	failoverReason streamFailoverReason
 }
 
 // prefixedReadCloser wraps an io.Reader with a prefix buffer that is
@@ -465,57 +443,6 @@ func (p *prefixedReadCloser) Read(buf []byte) (int, error) {
 
 func (p *prefixedReadCloser) Close() error {
 	return p.reader.Close()
-}
-
-// immediateFlushWriter wraps an http.ResponseWriter and flushes after every
-// Write call when the underlying writer supports http.Flusher.
-type immediateFlushWriter struct {
-	dst     http.ResponseWriter
-	flusher http.Flusher
-	// stallTimeout bounds a single client write (NENYA-155): re-armed before
-	// every write/flush via the ResponseController, so only a write that
-	// cannot complete within the window — a client that stopped reading —
-	// trips it. A slow provider with nothing to send never arms a pending
-	// write, so idle gaps never fire the stale deadline. 0 disables.
-	stallTimeout time.Duration
-}
-
-// newImmediateFlushWriter creates an immediateFlushWriter if the response writer
-// supports http.Flusher. The boolean indicates whether Flusher was available.
-// stallTimeout is the per-write client-stall deadline (0 disables).
-func newImmediateFlushWriter(w http.ResponseWriter, stallTimeout time.Duration) (*immediateFlushWriter, bool) {
-	flusher, ok := w.(http.Flusher)
-	if !ok {
-		return &immediateFlushWriter{dst: w, stallTimeout: stallTimeout}, false
-	}
-	return &immediateFlushWriter{dst: w, flusher: flusher, stallTimeout: stallTimeout}, true
-}
-
-// armClientWriteDeadline re-arms the per-write client-stall deadline
-// (NENYA-155). Best effort: writers that cannot set deadlines (httptest
-// recorders, custom wrappers) return an error that is deliberately ignored.
-func armClientWriteDeadline(w http.ResponseWriter, timeout time.Duration) {
-	if timeout <= 0 || w == nil {
-		return
-	}
-	_ = http.NewResponseController(w).SetWriteDeadline(time.Now().Add(timeout))
-}
-
-func (fw *immediateFlushWriter) Write(p []byte) (int, error) {
-	armClientWriteDeadline(fw.dst, fw.stallTimeout)
-	n, err := fw.dst.Write(p)
-	if err == nil && fw.flusher != nil {
-		fw.flusher.Flush()
-	}
-	return n, err
-}
-
-func (fw *immediateFlushWriter) Header() http.Header {
-	return fw.dst.Header()
-}
-
-func (fw *immediateFlushWriter) WriteHeader(statusCode int) {
-	fw.dst.WriteHeader(statusCode)
 }
 
 // sseTeeWriter copies SSE output to a buffer while forwarding to the client,
