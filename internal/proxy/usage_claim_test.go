@@ -162,8 +162,8 @@ func TestMCPUsageClaimedOncePerBuffer(t *testing.T) {
 	p := &Proxy{}
 	gw := usageFixtureGW()
 	buf := &bufferedSSE{
-		rawBytes: []byte(`data: {"id":"c1","choices":[],"usage":{"prompt_tokens":100,"completion_tokens":20,"total_tokens":120}}`),
-		model:    "fixture-model",
+		RawBytes: []byte(`data: {"id":"c1","choices":[],"usage":{"prompt_tokens":100,"completion_tokens":20,"total_tokens":120}}`),
+		Model:    "fixture-model",
 	}
 
 	p.recordMCPUsage(gw, buf, "agent")
@@ -177,9 +177,9 @@ func TestMCPUsageClaimedOncePerBuffer(t *testing.T) {
 	// A buffer with no usable usage must not consume the claim, so a terminal
 	// path observing it does not suppress a later legitimate record for the
 	// same buffer (the flag is set only when a record is actually written).
-	empty := &bufferedSSE{rawBytes: []byte("data: {\"choices\":[]}"), model: "fixture-model"}
+	empty := &bufferedSSE{RawBytes: []byte("data: {\"choices\":[]}"), Model: "fixture-model"}
 	p.recordMCPUsage(gw, empty, "agent")
-	if empty.usageClaimed {
+	if empty.UsageClaimed {
 		t.Error("a buffer with no usage must not consume the claim")
 	}
 	if got := statValue(t, fixtureStats(t, gw), "output_tokens"); got != 20 {
@@ -279,9 +279,9 @@ func TestMCPIterationUsageClaimsOnce(t *testing.T) {
 	}
 	served := targets[1]
 	buf := &bufferedSSE{
-		rawBytes:      []byte(`data: {"id":"c1","choices":[],"usage":{"prompt_tokens":1000000,"completion_tokens":1000000,"total_tokens":2000000,"prompt_cache_hit_tokens":600000,"cache_creation_tokens":100000}}`),
-		model:         "fixture-model",
-		servingTarget: served,
+		RawBytes:      []byte(`data: {"id":"c1","choices":[],"usage":{"prompt_tokens":1000000,"completion_tokens":1000000,"total_tokens":2000000,"prompt_cache_hit_tokens":600000,"cache_creation_tokens":100000}}`),
+		Model:         "fixture-model",
+		ServingTarget: served,
 	}
 
 	p.recordMCPIterationUsage(context.Background(), gw, buf, targets, "agent")
@@ -316,8 +316,8 @@ func TestMCPIterationUsageClaimsOnce(t *testing.T) {
 	// A buffer without a recorded serving target falls back to the chain
 	// resolution (the first target offering the model).
 	fallback := &bufferedSSE{
-		rawBytes: []byte(`data: {"choices":[],"usage":{"prompt_tokens":1000000,"completion_tokens":1000000,"total_tokens":2000000}}`),
-		model:    "fixture-model",
+		RawBytes: []byte(`data: {"choices":[],"usage":{"prompt_tokens":1000000,"completion_tokens":1000000,"total_tokens":2000000}}`),
+		Model:    "fixture-model",
 	}
 	p.recordMCPIterationUsage(context.Background(), gw, fallback, targets, "agent")
 	if got := gw.BillingTracker.GetTotalSpend("fixture", "acct-a"); got <= 0 {

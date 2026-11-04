@@ -18,10 +18,10 @@ func mcpUsageBuffer(target routing.UpstreamTarget) *bufferedSSE {
 	raw := "data: {\"id\":\"c1\",\"choices\":[],\"usage\":{\"prompt_tokens\":1000,\"completion_tokens\":10,\"prompt_tokens_details\":{\"cached_tokens\":800}}}\n\n" +
 		"data: [DONE]\n\n"
 	buf := &bufferedSSE{
-		rawBytes:         []byte(raw),
-		model:            target.Model,
-		servingTarget:    target,
-		calibrationModel: target.Model,
+		RawBytes:         []byte(raw),
+		Model:            target.Model,
+		ServingTarget:    target,
+		CalibrationModel: target.Model,
 	}
 	return buf
 }

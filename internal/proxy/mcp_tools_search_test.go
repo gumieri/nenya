@@ -5,6 +5,8 @@ import (
 	"strings"
 	"testing"
 
+	mcpproxy "github.com/nenya/internal/proxy/mcp"
+
 	"github.com/nenya/config"
 
 	"github.com/nenya/internal/gateway"
@@ -41,8 +43,8 @@ func TestMatchesToolPattern(t *testing.T) {
 		{"prefix_mid", "prefix_*", true},
 	}
 	for _, tc := range cases {
-		if got := matchesToolPattern(tc.name, tc.pattern); got != tc.want {
-			t.Fatalf("matchesToolPattern(%q, %q) = %v, want %v", tc.name, tc.pattern, got, tc.want)
+		if got := mcpproxy.MatchesToolPattern(tc.name, tc.pattern); got != tc.want {
+			t.Fatalf("mcpproxy.MatchesToolPattern(%q, %q) = %v, want %v", tc.name, tc.pattern, got, tc.want)
 		}
 	}
 }
@@ -54,14 +56,14 @@ func TestServerToolPolicyIncludeExclude(t *testing.T) {
 		{Name: "list_issues", Description: "list issues"},
 		{Name: "delete_repo", Description: "dangerous"},
 	}
-	kept := serverToolPolicy(tools, []string{"*_issue"}, []string{"list_*"})
+	kept := mcpproxy.ServerToolPolicy(tools, []string{"*_issue"}, []string{"list_*"})
 	if len(kept) != 1 || kept[0].Name != "create_issue" {
 		t.Fatalf("include+exclude policy: %+v", kept)
 	}
-	if got := serverToolPolicy(tools, nil, []string{"*"}); len(got) != 0 {
+	if got := mcpproxy.ServerToolPolicy(tools, nil, []string{"*"}); len(got) != 0 {
 		t.Fatalf("exclude '*' empties the surface: %+v", got)
 	}
-	if got := serverToolPolicy(tools, nil, nil); len(got) != 3 {
+	if got := mcpproxy.ServerToolPolicy(tools, nil, nil); len(got) != 3 {
 		t.Fatalf("no policy passes through: %+v", got)
 	}
 }
@@ -74,8 +76,8 @@ func TestSelectToolsForRequestStableSet(t *testing.T) {
 	tools[len(tools)-1] = mcp.Tool{Name: "run_search", Description: "search the codebase for code"}
 	query := "please search the codebase"
 
-	a, _ := selectToolsForRequest(tools, query, 5, nil)
-	b, _ := selectToolsForRequest(tools, query, 5, nil)
+	a, _ := mcpproxy.SelectToolsForRequest(tools, query, 5, nil)
+	b, _ := mcpproxy.SelectToolsForRequest(tools, query, 5, nil)
 	if len(a) == 0 || len(b) == 0 {
 		t.Fatalf("selection must never be empty: %d %d", len(a), len(b))
 	}
@@ -106,7 +108,7 @@ func TestSelectToolsForRequestFloorAlwaysInjected(t *testing.T) {
 		{Name: "delete_everything", Description: "irrelevant"},
 	}
 	query := "search the codebase for bugs"
-	selected, outcome := selectToolsForRequest(tools, query, 1, []string{"delete_everything"})
+	selected, outcome := mcpproxy.SelectToolsForRequest(tools, query, 1, []string{"delete_everything"})
 	names := make([]string, 0, len(selected))
 	for _, tl := range selected {
 		names = append(names, tl.Name)
@@ -120,11 +122,11 @@ func TestSelectToolsForRequestFloorAlwaysInjected(t *testing.T) {
 // topN 0 = off (also the full set).
 func TestSelectToolsForRequestNoSignal(t *testing.T) {
 	tools := []mcp.Tool{{Name: "a"}, {Name: "b"}, {Name: "c"}}
-	selected, outcome := selectToolsForRequest(tools, "", 2, []string{"c"})
+	selected, outcome := mcpproxy.SelectToolsForRequest(tools, "", 2, []string{"c"})
 	if outcome != "selected_full_catalog" || len(selected) != len(tools) {
 		t.Fatalf("no-terms selection must pass the catalog through: %+v %s", selected, outcome)
 	}
-	if got, _ := selectToolsForRequest(tools, "", 0, nil); len(got) != 3 {
+	if got, _ := mcpproxy.SelectToolsForRequest(tools, "", 0, nil); len(got) != 3 {
 		t.Fatalf("tool_search off passes the catalog through: %+v", got)
 	}
 }
@@ -133,7 +135,7 @@ func TestSelectToolsForRequestNoSignal(t *testing.T) {
 // declared capacity: topN is clamped to the catalog size.
 func TestSelectToolsForRequestHugeTopN(t *testing.T) {
 	tools := []mcp.Tool{{Name: "a", Description: "alpha"}, {Name: "b", Description: "beta"}}
-	selected, _ := selectToolsForRequest(tools, "alpha", 1<<62, nil)
+	selected, _ := mcpproxy.SelectToolsForRequest(tools, "alpha", 1<<62, nil)
 	if len(selected) != 2 {
 		t.Fatalf("a huge topN must clamp to the catalog: %+v", selected)
 	}
@@ -144,17 +146,17 @@ func TestSelectToolsForRequestHugeTopN(t *testing.T) {
 // excluded tool name in `tools` cannot make it count as injected.
 func TestInjectedToolNameSetIsTheTrustAnchor(t *testing.T) {
 	// The gateway injected only this tool...
-	injected := injectedToolNameSet([]string{"mcp__s__allowed"})
+	injected := mcpproxy.InjectedToolNameSet([]string{"mcp__s__allowed"})
 	// ...while the client's payload also declares an excluded name.
 	calls := []mcpToolCall{{Name: "mcp__s__allowed"}, {Name: "mcp__s__client_declared"}}
-	un := unavailableMCPToolCalls(calls, injected)
+	un := mcpproxy.UnavailableMCPToolCalls(calls, injected)
 	if un["mcp__s__allowed"] {
 		t.Fatalf("a gateway-injected tool must not be refused: %v", un)
 	}
 	if !un["mcp__s__client_declared"] {
 		t.Fatalf("a client-declared name must not count as injected: %v", un)
 	}
-	if injectedToolNameSet(nil) != nil {
+	if mcpproxy.InjectedToolNameSet(nil) != nil {
 		t.Fatal("no injection bookkeeping must leave the guard inert")
 	}
 }
@@ -167,11 +169,11 @@ func TestUnavailableMCPToolCalls(t *testing.T) {
 		{Name: "mcp__s__ok"},
 		{Name: "mcp__s__hallucinated"},
 	}
-	un := unavailableMCPToolCalls(calls, injected)
+	un := mcpproxy.UnavailableMCPToolCalls(calls, injected)
 	if !un["mcp__s__hallucinated"] || un["mcp__s__ok"] {
 		t.Fatalf("unavailable set: %v", un)
 	}
-	if u := unavailableMCPToolCalls(calls, nil); u != nil {
+	if u := mcpproxy.UnavailableMCPToolCalls(calls, nil); u != nil {
 		t.Fatalf("an empty injected set disables the guard: %v", u)
 	}
 }
@@ -185,7 +187,7 @@ func TestToolSelectionDropsInjectedTokens(t *testing.T) {
 		tools = append(tools, mcp.Tool{Name: "mcp__big__op_" + strconv.Itoa(i), Description: "does something"})
 	}
 	tools[7] = mcp.Tool{Name: "mcp__big__search_docs", Description: "search the docs for error handling"}
-	gwl, _ := selectToolsForRequest(tools, "search docs about error handling", 8, nil)
+	gwl, _ := mcpproxy.SelectToolsForRequest(tools, "search docs about error handling", 8, nil)
 	if got := len(gwl); got >= 20 {
 		t.Fatalf("selection must be lean: got %d tools", got)
 	}
@@ -204,6 +206,7 @@ func TestToolSelectionDropsInjectedTokens(t *testing.T) {
 // outside the session's injected set produces a structured IsError result and
 // never touches the tool index — while a nil set keeps the legacy pass-through.
 func TestExecuteMCPCallsWithUnavailableRefuses(t *testing.T) {
+	p := &Proxy{}
 	gw := &gateway.NenyaGateway{
 		Logger:       testutil.NewTestLogger(),
 		Metrics:      &infra.Metrics{},
@@ -221,10 +224,10 @@ func TestExecuteMCPCallsWithUnavailableRefuses(t *testing.T) {
 	cutName := index.AllRoutes()[0].OpenAIToolName
 
 	calls := []mcpToolCall{{ID: "1", Name: cutName}}
-	results := executeMCPCallsWithUnavailable(mcpExecOptions{
-		ctx: t.Context(), calls: calls, gw: gw, agentName: "agent",
-		apiKey:      fullAccessTestKey(),
-		unavailable: map[string]bool{cutName: true},
+	results := mcpproxy.ExecuteMCPCallsWithUnavailable(p.mcpHost(), mcpExecOptions{
+		Ctx: t.Context(), Calls: calls, GW: gw, AgentName: "agent",
+		APIKey:      fullAccessTestKey(),
+		Unavailable: map[string]bool{cutName: true},
 	})
 	if len(results) != 1 || results[0] == nil || !results[0].IsError {
 		t.Fatalf("the refusal must be a structured error result: %+v", results)
@@ -235,8 +238,8 @@ func TestExecuteMCPCallsWithUnavailableRefuses(t *testing.T) {
 
 	// nil set = legacy pass-through: the call falls through to the
 	// pre-existing dispatch checks, never the NENYA-162 refusal.
-	got := executeMCPCallsWithUnavailable(mcpExecOptions{
-		ctx: t.Context(), calls: calls, gw: gw, agentName: "agent", apiKey: fullAccessTestKey(),
+	got := mcpproxy.ExecuteMCPCallsWithUnavailable(p.mcpHost(), mcpExecOptions{
+		Ctx: t.Context(), Calls: calls, GW: gw, AgentName: "agent", APIKey: fullAccessTestKey(),
 	})
 	if len(got) != 1 || got[0] == nil || !got[0].IsError {
 		t.Fatalf("the legacy path must keep its pre-existing error: %+v", got)

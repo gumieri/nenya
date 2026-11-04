@@ -51,9 +51,9 @@ func TestSessionHeaderLevelCheckUsesRequestContext(t *testing.T) {
 	// Seed the memoized session key so the function synthesizes a session ID
 	// (the only path that reaches the level check) without building routing.
 	req := &chatRequest{ModelName: "test-model"}
-	req.sessionKeyDone = true
-	req.sessionKey = "0123456789abcdef"
-	req.sessionKeyOK = true
+	req.SessionKeyDone = true
+	req.SessionKey = "0123456789abcdef"
+	req.SessionKeyOK = true
 
 	ensureOpencodeSessionHeader(gw, r, req)
 

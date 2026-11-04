@@ -1,4 +1,4 @@
-package proxy
+package mcpproxy
 
 import (
 	"context"
@@ -16,14 +16,14 @@ import (
 // model, else the raw response string. A mismatched key would split each
 // estimate/actual pair across two models and silently pin the ratio at 1.0.
 func mcpCalibrationModel(targets []routing.UpstreamTarget, buf *bufferedSSE) string {
-	if buf != nil && buf.calibrationModel != "" {
+	if buf != nil && buf.CalibrationModel != "" {
 		// Exact key: the serving target the dispatch estimate was
 		// recorded under (failover chains may serve any target).
-		return buf.calibrationModel
+		return buf.CalibrationModel
 	}
 	responseModel := ""
 	if buf != nil {
-		responseModel = buf.model
+		responseModel = buf.Model
 	}
 	if responseModel != "" {
 		for _, t := range targets {
@@ -38,13 +38,13 @@ func mcpCalibrationModel(targets []routing.UpstreamTarget, buf *bufferedSSE) str
 	return responseModel
 }
 
-// usageTotals returns the per-dimension high-water merge of every usage object
+// UsageTotals returns the per-dimension high-water merge of every usage object
 // in the buffer (NENYA-167). An Anthropic-native stream reports the input side
 // on message_start and the output side on message_delta, so taking the last
 // usage-bearing chunk alone would lose the input (and the calibration actual);
 // for the OpenAI shape, whose usage object is cumulative, the merge is a no-op.
-func (b *bufferedSSE) usageTotals() (stream.UsageTotals, bool) {
-	for _, chunk := range b.usageChunks() {
+func (b *BufferedSSE) UsageTotals() (stream.UsageTotals, bool) {
+	for _, chunk := range b.UsageChunks() {
 		usage, ok := stream.UsageMapFromChunk(chunk)
 		if !ok {
 			continue
@@ -81,7 +81,7 @@ func recordCalibrationFromBuffer(gw *gateway.NenyaGateway, model string, buf *bu
 	if gw == nil || buf == nil || model == "" {
 		return
 	}
-	totals, ok := buf.usageTotals()
+	totals, ok := buf.UsageTotals()
 	if !ok {
 		return
 	}
@@ -93,21 +93,21 @@ func recordCalibrationFromBuffer(gw *gateway.NenyaGateway, model string, buf *bu
 // Stats counters, metrics, cost and one billing request exactly once
 // (NENYA-193). The per-buffer claim flag makes the terminal paths
 // (recordMCPUsage) idempotent no-ops for a buffer already claimed here.
-func (p *Proxy) recordMCPIterationUsage(ctx context.Context, gw *gateway.NenyaGateway, buf *bufferedSSE, targets []routing.UpstreamTarget, agentName string) {
-	if gw == nil || buf == nil || agentName == "" || buf.usageClaimed {
+func RecordMCPIterationUsage(h Host, ctx context.Context, gw *gateway.NenyaGateway, buf *BufferedSSE, targets []routing.UpstreamTarget, agentName string) {
+	if gw == nil || buf == nil || agentName == "" || buf.UsageClaimed {
 		return
 	}
-	totals, ok := buf.usageTotals()
+	totals, ok := buf.UsageTotals()
 	if !ok || totals.Total <= 0 {
 		return
 	}
-	buf.usageClaimed = true
+	buf.UsageClaimed = true
 
 	model := mcpCalibrationModel(targets, buf)
 	// The serving target recorded at dispatch time is authoritative: a chain
 	// can list one model under several providers/accounts, and the model string
 	// alone would attribute the spend to the wrong account.
-	target := buf.servingTarget
+	target := buf.ServingTarget
 	if target.Model == "" {
 		target = mcpServingTarget(targets, model)
 	}
@@ -116,9 +116,9 @@ func (p *Proxy) recordMCPIterationUsage(ctx context.Context, gw *gateway.NenyaGa
 			"agent", agentName, "model", model, "provider", target.Provider,
 			"usage", totals)
 	}
-	recordNonStreamingStats(gw, model, totals.Completion, totals.CacheHit, totals.CacheMiss, totals.CacheCreation, totals.Reasoning)
-	recordNonStreamingMetrics(gw, target, agentName, totals.Completion, totals.CacheHit, totals.CacheMiss, totals.CacheCreation, totals.Reasoning)
-	recordCostAndBilling(ctx, gw, target, buf.model, totals.Prompt, totals.CacheHit, totals.CacheCreation, totals.Completion)
+	h.RecordNonStreamingStats(gw, model, totals.Completion, totals.CacheHit, totals.CacheMiss, totals.CacheCreation, totals.Reasoning)
+	h.RecordNonStreamingMetrics(gw, target, agentName, totals.Completion, totals.CacheHit, totals.CacheMiss, totals.CacheCreation, totals.Reasoning)
+	h.RecordCostAndBilling(ctx, gw, target, buf.Model, totals.Prompt, totals.CacheHit, totals.CacheCreation, totals.Completion)
 	// NENYA-190: observe the pair's cache warmth at the same site that sees
 	// the normalized usage, exactly like the buffered chat path
 	// (recordNonStreamingUsage) and the streaming path (recordStreamUsage).
@@ -134,7 +134,7 @@ func (p *Proxy) recordMCPIterationUsage(ctx context.Context, gw *gateway.NenyaGa
 	// attributes are recorded here (NENYA-187).
 	tracing.RecordUsage(ctx, tracing.UsageAttributes{
 		RequestModel:  target.Model,
-		ResponseModel: buf.model,
+		ResponseModel: buf.Model,
 		Provider:      target.Provider,
 		InputTokens:   totals.Prompt,
 		OutputTokens:  totals.Completion,
@@ -162,22 +162,22 @@ func mcpServingTarget(targets []routing.UpstreamTarget, model string) routing.Up
 // once per dispatch: the claim flag (set by recordMCPIterationUsage, or here
 // for a buffer no iteration claimed) makes the terminal paths idempotent, so
 // two terminal paths observing the same buffer cannot double-count (NENYA-193).
-func (p *Proxy) recordMCPUsage(gw *gateway.NenyaGateway, buf *bufferedSSE, agentName string) {
+func RecordMCPUsage(h Host, gw *gateway.NenyaGateway, buf *BufferedSSE, agentName string) {
 	if buf == nil || gw == nil || agentName == "" {
 		return
 	}
-	if buf.usageClaimed {
+	if buf.UsageClaimed {
 		return
 	}
-	chunk := buf.usageChunk()
+	chunk := buf.UsageChunk()
 	if chunk == nil {
 		return
 	}
-	totals, ok := buf.usageTotals()
+	totals, ok := buf.UsageTotals()
 	if !ok {
 		return
 	}
-	model := buf.model
+	model := buf.Model
 	if model == "" {
 		if m, ok := chunk["model"].(string); ok {
 			model = m
@@ -186,11 +186,11 @@ func (p *Proxy) recordMCPUsage(gw *gateway.NenyaGateway, buf *bufferedSSE, agent
 	if model == "" {
 		return
 	}
-	buf.usageClaimed = true
+	buf.UsageClaimed = true
 	if gw.Logger != nil {
 		gw.Logger.Debug("MCP loop usage recorded",
 			"agent", agentName, "model", model,
 			"usage", totals)
 	}
-	recordChatUsageTotals(gw, model, totals)
+	h.RecordChatUsageTotals(gw, model, totals)
 }

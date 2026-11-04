@@ -11,6 +11,8 @@ import (
 	"testing"
 	"time"
 
+	mcpproxy "github.com/nenya/internal/proxy/mcp"
+
 	"github.com/nenya/config"
 	"github.com/nenya/internal/gateway"
 	"github.com/nenya/internal/pipeline"
@@ -537,12 +539,12 @@ func TestBufferStreamResponseFlagsInStreamError(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			body := "data: " + tt.payload + "\n\ndata: [DONE]\n\n"
-			buf, err := bufferStreamResponse(context.Background(), strings.NewReader(body), slog.Default(), "test-model", routing.UpstreamTarget{})
+			buf, err := mcpproxy.BufferStreamResponse(context.Background(), strings.NewReader(body), slog.Default(), "test-model", routing.UpstreamTarget{})
 			if err != nil {
 				t.Fatalf("bufferStreamResponse: %v", err)
 			}
-			if buf.streamError != tt.want {
-				t.Fatalf("streamError = %v, want %v for %s", buf.streamError, tt.want, tt.payload)
+			if buf.StreamError != tt.want {
+				t.Fatalf("streamError = %v, want %v for %s", buf.StreamError, tt.want, tt.payload)
 			}
 		})
 	}
@@ -584,10 +586,10 @@ func TestBufferedStreamOutcomes(t *testing.T) {
 				CoolKey: "test-agent:test-provider:test-model", Model: "test-model", Provider: "test-provider",
 			}
 			action := upstreamAction{
-				kind:       actionStream,
-				resp:       &http.Response{StatusCode: http.StatusOK, Header: http.Header{}, Body: io.NopCloser(strings.NewReader(tt.sse))},
-				dispatchAt: time.Now(),
-				cancel:     func() {},
+				Kind:       actionStream,
+				Resp:       &http.Response{StatusCode: http.StatusOK, Header: http.Header{}, Body: io.NopCloser(strings.NewReader(tt.sse))},
+				DispatchAt: time.Now(),
+				Cancel:     func() {},
 			}
 
 			if _, err := p.handleBufferedStream(context.Background(), action, target, gw, time.Minute, "test-agent", pipeline.CanarResult{}); err != nil {

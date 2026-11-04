@@ -83,7 +83,7 @@ func TestEgressScreenFor(t *testing.T) {
 	t.Run("enabled resolves strict flag", func(t *testing.T) {
 		gw := screenTestGateway(t, judge, "strict")
 		rt := egressScreenFor(gw)
-		if rt == nil || !rt.strict {
+		if rt == nil || !rt.Strict {
 			t.Fatalf("expected enabled strict runtime, got %+v", rt)
 		}
 	})
@@ -94,11 +94,11 @@ func TestEgressScreenRuntimeBudgetAndVerdicts(t *testing.T) {
 	gw := screenTestGateway(t, judge, "strict")
 	rt := egressScreenFor(gw)
 
-	if !rt.screenOnce(context.Background(), "agent", "flagged content") {
+	if !rt.ScreenOnce(context.Background(), "agent", "flagged content") {
 		t.Fatal("expected exfil verdict on first screen")
 	}
 	// Budget spent: even an exfil stub cannot screen again.
-	if rt.screenOnce(context.Background(), "agent", "more flagged content") {
+	if rt.ScreenOnce(context.Background(), "agent", "more flagged content") {
 		t.Fatal("budget must allow only one judgment per request")
 	}
 	if calls.Load() != 1 {
@@ -107,29 +107,29 @@ func TestEgressScreenRuntimeBudgetAndVerdicts(t *testing.T) {
 
 	// Benign verdicts never report exfil.
 	judge2, _ := newScreenJudgeStub(t, `benign`, http.StatusOK)
-	rt2 := &egressScreenRuntime{judge: judge2}
-	if rt2.screenOnce(context.Background(), "agent", "content") {
+	rt2 := &egressScreenRuntime{Judge: judge2}
+	if rt2.ScreenOnce(context.Background(), "agent", "content") {
 		t.Fatal("benign verdict must not report exfil")
 	}
 
 	// Operational failure keeps the deterministic verdict (no exfil).
 	judge3, _ := newScreenJudgeStub(t, `garbage`, http.StatusServiceUnavailable)
-	rt3 := &egressScreenRuntime{judge: judge3}
-	if rt3.screenOnce(context.Background(), "agent", "content") {
+	rt3 := &egressScreenRuntime{Judge: judge3}
+	if rt3.ScreenOnce(context.Background(), "agent", "content") {
 		t.Fatal("operational failure must not report exfil")
 	}
 
 	// Empty content does not burn the budget: two empty calls then a
 	// real one still screens.
 	judge4, calls4 := newScreenJudgeStub(t, `exfil`, http.StatusOK)
-	rt4 := &egressScreenRuntime{judge: judge4}
-	if rt4.screenOnce(context.Background(), "agent", "") {
+	rt4 := &egressScreenRuntime{Judge: judge4}
+	if rt4.ScreenOnce(context.Background(), "agent", "") {
 		t.Fatal("empty content must not report exfil")
 	}
-	if rt4.screenOnce(context.Background(), "agent", "") {
+	if rt4.ScreenOnce(context.Background(), "agent", "") {
 		t.Fatal("empty content must not report exfil (second)")
 	}
-	if !rt4.screenOnce(context.Background(), "agent", "real content") {
+	if !rt4.ScreenOnce(context.Background(), "agent", "real content") {
 		t.Fatal("budget must be unspent after empty-content calls")
 	}
 	if calls4.Load() != 1 {
@@ -240,7 +240,7 @@ func TestEgressScreenToolArgsStrictRefuses(t *testing.T) {
 		gw.Config.Governance.Judgments = map[string]*config.JudgmentConfig{
 			"egress_screen": {Enabled: config.PtrTo(true), Action: "strict"},
 		}
-		rt := &egressScreenRuntime{judge: judge, strict: true}
+		rt := &egressScreenRuntime{Judge: judge, Strict: true}
 
 		// Canary action log would let the call proceed deterministically;
 		// the strict screen strengthens it to a refusal.
@@ -268,7 +268,7 @@ func TestEgressScreenToolArgsStrictRefuses(t *testing.T) {
 		gw.Config.Governance.Judgments = map[string]*config.JudgmentConfig{
 			"egress_screen": {Enabled: config.PtrTo(true), Action: "log"},
 		}
-		rt := &egressScreenRuntime{judge: judge}
+		rt := &egressScreenRuntime{Judge: judge}
 
 		results := executeMCPCallsForTest(context.Background(), []mcpToolCall{{
 			ID:        "call_1",
@@ -288,7 +288,7 @@ func TestEgressScreenToolArgsStrictRefuses(t *testing.T) {
 		gw.Config.Governance.Judgments = map[string]*config.JudgmentConfig{
 			"egress_screen": {Enabled: config.PtrTo(true), Action: "strict"},
 		}
-		rt := &egressScreenRuntime{judge: judge, strict: true}
+		rt := &egressScreenRuntime{Judge: judge, Strict: true}
 		canary := pipeline.CanarResult{Token: "tok", Action: config.CanaryActionLog}
 		mk := func(id string) []mcpToolCall {
 			return []mcpToolCall{{ID: id, Name: "memory__test_tool", Arguments: map[string]any{"query": "tok"}}}

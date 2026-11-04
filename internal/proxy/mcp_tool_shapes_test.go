@@ -4,13 +4,15 @@ import (
 	"strings"
 	"testing"
 
+	mcpproxy "github.com/nenya/internal/proxy/mcp"
+
 	"github.com/nenya/internal/routing"
 )
 
 // feedLines drives the accumulator with wire-format SSE data lines.
 func feedLines(acc *sseAccumulator, lines []string) {
 	for _, l := range lines {
-		acc.processLine(l)
+		acc.ProcessLine(l)
 	}
 }
 
@@ -35,14 +37,14 @@ func anthropicToolLines() []string {
 // only, so non-OpenAI-format chains replayed tool calls unexecuted.
 func TestSSEAccumulatorAnthropicToolCalls(t *testing.T) {
 	acc := newSSEAccumulator(nil)
-	acc.format = "anthropic"
+	acc.Format = "anthropic"
 	feedLines(acc, anthropicToolLines())
 
-	buf := acc.result()
-	if len(buf.toolCalls) != 1 {
-		t.Fatalf("toolCalls = %d, want 1", len(buf.toolCalls))
+	buf := acc.Result()
+	if len(buf.ToolCalls) != 1 {
+		t.Fatalf("toolCalls = %d, want 1", len(buf.ToolCalls))
 	}
-	call := buf.toolCalls[0]
+	call := buf.ToolCalls[0]
 	if call.ID != "toolu_1" || call.Name != "get_weather" {
 		t.Fatalf("call identity = %q/%q, want toolu_1/get_weather", call.ID, call.Name)
 	}
@@ -52,17 +54,17 @@ func TestSSEAccumulatorAnthropicToolCalls(t *testing.T) {
 	if unit, _ := call.Arguments["unit"].(string); unit != "c" {
 		t.Fatalf("args unit = %v, want c", call.Arguments)
 	}
-	if buf.finishReason != "tool_use" {
-		t.Fatalf("finishReason = %q, want tool_use", buf.finishReason)
+	if buf.FinishReason != "tool_use" {
+		t.Fatalf("finishReason = %q, want tool_use", buf.FinishReason)
 	}
-	if !buf.hasContent {
+	if !buf.HasContent {
 		t.Fatal("text_delta must accumulate content")
 	}
-	if !strings.Contains(acc.content.String(), "checking") {
-		t.Fatalf("content = %q, want the text delta", acc.content.String())
+	if !strings.Contains(acc.Content.String(), "checking") {
+		t.Fatalf("content = %q, want the text delta", acc.Content.String())
 	}
-	if acc.model != "claude-x" {
-		t.Fatalf("model = %q, want claude-x (message_start)", acc.model)
+	if acc.Model != "claude-x" {
+		t.Fatalf("model = %q, want claude-x (message_start)", acc.Model)
 	}
 }
 
@@ -71,17 +73,17 @@ func TestSSEAccumulatorAnthropicToolCalls(t *testing.T) {
 // part's thoughtSignature rides into ExtraContent (NENYA-51 parity).
 func TestSSEAccumulatorGeminiToolCalls(t *testing.T) {
 	acc := newSSEAccumulator(nil)
-	acc.format = "gemini"
+	acc.Format = "gemini"
 	feedLines(acc, []string{
 		`data: {"candidates":[{"content":{"parts":[{"text":"checking"},{"functionCall":{"name":"get_weather","args":{"city":"Paris"}},"thoughtSignature":"sig1"}]}}],"modelVersion":"gemini-x"}`,
 		`data: {"candidates":[{"finishReason":"STOP"}],"usageMetadata":{"promptTokenCount":1}}`,
 	})
 
-	buf := acc.result()
-	if len(buf.toolCalls) != 1 {
-		t.Fatalf("toolCalls = %d, want 1", len(buf.toolCalls))
+	buf := acc.Result()
+	if len(buf.ToolCalls) != 1 {
+		t.Fatalf("toolCalls = %d, want 1", len(buf.ToolCalls))
 	}
-	call := buf.toolCalls[0]
+	call := buf.ToolCalls[0]
 	if call.Name != "get_weather" {
 		t.Fatalf("call name = %q, want get_weather", call.Name)
 	}
@@ -91,11 +93,11 @@ func TestSSEAccumulatorGeminiToolCalls(t *testing.T) {
 	if call.ExtraContent != "sig1" {
 		t.Fatalf("ExtraContent = %v, want sig1 (thoughtSignature parity)", call.ExtraContent)
 	}
-	if !buf.hasContent {
+	if !buf.HasContent {
 		t.Fatal("the text part must accumulate content")
 	}
-	if acc.model != "gemini-x" {
-		t.Fatalf("model = %q, want gemini-x", acc.model)
+	if acc.Model != "gemini-x" {
+		t.Fatalf("model = %q, want gemini-x", acc.Model)
 	}
 }
 
@@ -103,17 +105,17 @@ func TestSSEAccumulatorGeminiToolCalls(t *testing.T) {
 // one chunk each become their own call.
 func TestSSEAccumulatorGeminiMultipleToolCalls(t *testing.T) {
 	acc := newSSEAccumulator(nil)
-	acc.format = "gemini"
+	acc.Format = "gemini"
 	feedLines(acc, []string{
 		`data: {"candidates":[{"content":{"parts":[{"functionCall":{"name":"a","args":{}}},{"functionCall":{"name":"b","args":{"k":1}}}]}}]}`,
 	})
 
-	buf := acc.result()
-	if len(buf.toolCalls) != 2 {
-		t.Fatalf("toolCalls = %d, want 2", len(buf.toolCalls))
+	buf := acc.Result()
+	if len(buf.ToolCalls) != 2 {
+		t.Fatalf("toolCalls = %d, want 2", len(buf.ToolCalls))
 	}
-	if buf.toolCalls[0].Name != "a" || buf.toolCalls[1].Name != "b" {
-		t.Fatalf("calls = %q,%q want a,b", buf.toolCalls[0].Name, buf.toolCalls[1].Name)
+	if buf.ToolCalls[0].Name != "a" || buf.ToolCalls[1].Name != "b" {
+		t.Fatalf("calls = %q,%q want a,b", buf.ToolCalls[0].Name, buf.ToolCalls[1].Name)
 	}
 }
 
@@ -124,9 +126,9 @@ func TestSSEAccumulatorOpenAIIgnoredForUnknownFormat(t *testing.T) {
 	acc := newSSEAccumulator(nil)
 	feedLines(acc, anthropicToolLines())
 
-	buf := acc.result()
-	if len(buf.toolCalls) != 0 {
-		t.Fatalf("toolCalls = %d, want 0 for an unknown format", len(buf.toolCalls))
+	buf := acc.Result()
+	if len(buf.ToolCalls) != 0 {
+		t.Fatalf("toolCalls = %d, want 0 for an unknown format", len(buf.ToolCalls))
 	}
 }
 
@@ -134,7 +136,7 @@ func TestSSEAccumulatorOpenAIIgnoredForUnknownFormat(t *testing.T) {
 // dropped, not trusted (the NENYA-48 class).
 func TestSSEAccumulatorAnthropicHostileIndex(t *testing.T) {
 	acc := newSSEAccumulator(nil)
-	acc.format = "anthropic"
+	acc.Format = "anthropic"
 	feedLines(acc, []string{
 		`data: {"type":"content_block_start","index":-1,"content_block":{"type":"tool_use","id":"x","name":"evil","input":{}}}`,
 		`data: {"type":"content_block_start","index":1.5,"content_block":{"type":"tool_use","id":"y","name":"evil2","input":{}}}`,
@@ -142,9 +144,9 @@ func TestSSEAccumulatorAnthropicHostileIndex(t *testing.T) {
 		`data: {"type":"content_block_start","index":"zero","content_block":{"type":"tool_use","id":"w","name":"evil4","input":{}}}`,
 	})
 
-	buf := acc.result()
-	if len(buf.toolCalls) != 0 {
-		t.Fatalf("hostile indices must be dropped, got %d calls", len(buf.toolCalls))
+	buf := acc.Result()
+	if len(buf.ToolCalls) != 0 {
+		t.Fatalf("hostile indices must be dropped, got %d calls", len(buf.ToolCalls))
 	}
 }
 
@@ -158,12 +160,12 @@ func TestBufferStreamResponseFormatWiring(t *testing.T) {
 		Format:   "anthropic",
 	}
 	body := strings.Join(anthropicToolLines(), "\n") + "\n"
-	buf, err := bufferStreamResponse(t.Context(), strings.NewReader(body), nil, "claude-x", target)
+	buf, err := mcpproxy.BufferStreamResponse(t.Context(), strings.NewReader(body), nil, "claude-x", target)
 	if err != nil {
 		t.Fatalf("bufferStreamResponse: %v", err)
 	}
-	if len(buf.toolCalls) != 1 || buf.toolCalls[0].Name != "get_weather" {
-		t.Fatalf("buffered tool calls = %+v, want one get_weather", buf.toolCalls)
+	if len(buf.ToolCalls) != 1 || buf.ToolCalls[0].Name != "get_weather" {
+		t.Fatalf("buffered tool calls = %+v, want one get_weather", buf.ToolCalls)
 	}
 }
 
@@ -171,23 +173,23 @@ func TestBufferStreamResponseFormatWiring(t *testing.T) {
 // empty-object arguments, never a nil accumulator.
 func TestSSEAccumulatorGeminiNoArgsCall(t *testing.T) {
 	acc := newSSEAccumulator(nil)
-	acc.format = "gemini"
+	acc.Format = "gemini"
 	feedLines(acc, []string{
 		`data: {"candidates":[{"content":{"parts":[{"functionCall":{"name":"ping"}}]},"finishReason":"STOP"}]}`,
 	})
 
-	buf := acc.result()
-	if len(buf.toolCalls) != 1 {
-		t.Fatalf("toolCalls = %d, want 1", len(buf.toolCalls))
+	buf := acc.Result()
+	if len(buf.ToolCalls) != 1 {
+		t.Fatalf("toolCalls = %d, want 1", len(buf.ToolCalls))
 	}
-	if buf.toolCalls[0].Arguments == nil {
+	if buf.ToolCalls[0].Arguments == nil {
 		t.Fatal("a no-args call must carry an empty map, not nil")
 	}
-	if len(buf.toolCalls[0].Arguments) != 0 {
-		t.Fatalf("arguments = %v, want empty", buf.toolCalls[0].Arguments)
+	if len(buf.ToolCalls[0].Arguments) != 0 {
+		t.Fatalf("arguments = %v, want empty", buf.ToolCalls[0].Arguments)
 	}
-	if buf.finishReason != "STOP" {
-		t.Fatalf("finishReason = %q, want STOP", buf.finishReason)
+	if buf.FinishReason != "STOP" {
+		t.Fatalf("finishReason = %q, want STOP", buf.FinishReason)
 	}
 }
 
@@ -195,14 +197,14 @@ func TestSSEAccumulatorGeminiNoArgsCall(t *testing.T) {
 // through the OpenAI parse only.
 func TestSSEAccumulatorExplicitOpenAIFormat(t *testing.T) {
 	acc := newSSEAccumulator(nil)
-	acc.format = "openai"
+	acc.Format = "openai"
 	feedLines(acc, []string{
 		`data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"c1","function":{"name":"f","arguments":"{}"}}]}}]}`,
 		`data: {"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"toolu_1","name":"evil","input":{}}}`,
 	})
 
-	buf := acc.result()
-	if len(buf.toolCalls) != 1 || buf.toolCalls[0].Name != "f" {
-		t.Fatalf("openai format must parse only OpenAI deltas, got %+v", buf.toolCalls)
+	buf := acc.Result()
+	if len(buf.ToolCalls) != 1 || buf.ToolCalls[0].Name != "f" {
+		t.Fatalf("openai format must parse only OpenAI deltas, got %+v", buf.ToolCalls)
 	}
 }

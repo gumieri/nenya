@@ -74,7 +74,7 @@ func TestForwardBufferedEmpty200FailsOver(t *testing.T) {
 	if err != nil {
 		t.Fatalf("forwardBuffered: %v", err)
 	}
-	if buf == nil || !strings.Contains(string(buf.rawBytes), "ok") {
+	if buf == nil || !strings.Contains(string(buf.RawBytes), "ok") {
 		t.Fatalf("the sweep must fail over to the good target and serve its content, got: %q", bufContent(buf))
 	}
 	if emptyHits.Load() != 1 || goodHits.Load() != 1 {
@@ -95,5 +95,5 @@ func bufContent(buf *bufferedSSE) string {
 	if buf == nil {
 		return "<nil>"
 	}
-	return string(buf.rawBytes)
+	return string(buf.RawBytes)
 }

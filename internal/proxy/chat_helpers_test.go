@@ -14,6 +14,7 @@ import (
 	"github.com/nenya/internal/gateway"
 	"github.com/nenya/internal/infra"
 	"github.com/nenya/internal/mcp"
+	mcpproxy "github.com/nenya/internal/proxy/mcp"
 	"github.com/nenya/internal/routing"
 	"github.com/nenya/internal/testutil"
 	"github.com/nenya/internal/tiktoken"
@@ -234,7 +235,7 @@ func TestInspectMessageCaps(t *testing.T) {
 			},
 			"reasoning": map[string]interface{}{"key": "val"},
 		}
-		done := inspectMessageCaps(msg, caps)
+		done := mcpproxy.InspectMessageCaps(msg, caps)
 		if !done {
 			t.Errorf("expected early return true")
 		}
@@ -247,7 +248,7 @@ func TestInspectMessageCaps(t *testing.T) {
 				map[string]interface{}{"type": "text", "text": "hello"},
 			},
 		}
-		done := inspectMessageCaps(msg, caps)
+		done := mcpproxy.InspectMessageCaps(msg, caps)
 		if done {
 			t.Errorf("expected no early return")
 		}
@@ -258,7 +259,7 @@ func TestInspectMessageCaps(t *testing.T) {
 
 	t.Run("non-map message returns false", func(t *testing.T) {
 		caps := &routing.RequestCapabilities{}
-		done := inspectMessageCaps("not a map", caps)
+		done := mcpproxy.InspectMessageCaps("not a map", caps)
 		if done {
 			t.Errorf("expected false for non-map")
 		}
@@ -521,7 +522,7 @@ func TestPrepareOriginalPayload(t *testing.T) {
 		cfg.Compaction.Enabled = config.PtrTo(false)
 		gw := &gateway.NenyaGateway{Config: *cfg}
 		payload := map[string]interface{}{"key": "value"}
-		data, err := prepareOriginalPayload(gw, payload)
+		data, err := mcpproxy.PrepareOriginalPayload(gw, payload)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -545,7 +546,7 @@ func TestPrepareOriginalPayload(t *testing.T) {
 				map[string]interface{}{"role": "user", "content": "hi"},
 			},
 		}
-		data, err := prepareOriginalPayload(gw, payload)
+		data, err := mcpproxy.PrepareOriginalPayload(gw, payload)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -564,7 +565,7 @@ func TestPrepareOriginalPayload(t *testing.T) {
 		cfg.Compaction.JSONMinify = config.PtrTo(true)
 		gw := &gateway.NenyaGateway{Config: *cfg}
 		payload := map[string]interface{}{"key": "value"}
-		data, err := prepareOriginalPayload(gw, payload)
+		data, err := mcpproxy.PrepareOriginalPayload(gw, payload)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}

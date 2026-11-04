@@ -31,7 +31,11 @@ jobs:
           cache-dependency-path: go.mod
 
       - name: Test (race + coverage)
-        run: go test ./... -race -coverprofile=coverage.out -timeout 5m
+        # -coverpkg=./... instruments every package, so coverage exercised
+        # THROUGH other packages' tests is attributed (without it, only each
+        # package-under-test is instrumented — the phase-040 proxy/mcp
+        # subpackage has no test files of its own and would profile at 0%).
+        run: go test ./... -race -coverpkg=./... -coverprofile=coverage.out -timeout 5m
 
       - name: Vet
         run: go vet ./...
@@ -44,8 +48,10 @@ jobs:
           # time — raise them, never lower them.
           #
           # Semantics: the total is statement coverage over packages WITH
-          # tests — packages without any test files (deploy, examples,
-          # internal/version) are invisible to this gate. Per-package checks
+          # tests — packages without any test files (deploy, examples) are
+          # invisible to this gate. deploy/ and examples/ are embed-only
+          # (go:embed surfaces, no logic) and intentionally stay invisible;
+          # internal/version is visible since NENYA-310. Per-package checks
           # are function averages; a future subpackage (internal/pipeline/x)
           # folds into its parent's average.
           total_floor=74
@@ -53,6 +59,11 @@ jobs:
           auth_floor=77
           security_floor=85
           stream_floor=73
+          # proxy floor (2026-11-04, re-based on -coverpkg=./... profiles):
+          # combined function-average 86.0% (parent 86.2% + proxy/mcp 84.1%,
+          # 666 funcs); floor set four points below the baseline and ratchets
+          # up from here. Without -coverpkg the subpackage profiles at 0%.
+          proxy_floor=82
 
           go tool cover -func=coverage.out > cover-func.txt
           total=$(awk '/^total:/ {gsub(/%/,"",$3); print $3}' cover-func.txt)
@@ -72,6 +83,7 @@ jobs:
           check internal/auth "$(pkg_avg internal/auth)" "$auth_floor"
           check internal/security "$(pkg_avg internal/security)" "$security_floor"
           check internal/stream "$(pkg_avg internal/stream)" "$stream_floor"
+          check internal/proxy "$(pkg_avg internal/proxy)" "$proxy_floor"
           exit "$fail"
 
       - uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9
