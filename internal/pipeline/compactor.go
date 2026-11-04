@@ -77,32 +77,36 @@ func TrimTrailingWhitespace(s string) string {
 	var b strings.Builder
 	b.Grow(len(s))
 
-	var lineBuf []rune
-	for _, r := range s {
-		if r == '\n' {
-			lineBuf = trimTrailingRunes(lineBuf)
-			for _, c := range lineBuf {
-				b.WriteRune(c)
-			}
-			b.WriteRune('\n')
+	// Byte-oriented: '\n' cannot appear inside a multi-byte UTF-8 sequence,
+	// so byte iteration is equivalent to rune iteration for valid text while
+	// preserving invalid bytes exactly (range-over-string would re-encode
+	// each invalid byte as U+FFFD, GROWING the output — caught by
+	// FuzzTrimTrailingWhitespace).
+	var lineBuf []byte
+	flush := func() {
+		lineBuf = trimTrailingBytes(lineBuf)
+		b.Write(lineBuf)
+	}
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if c == '\n' {
+			flush()
+			b.WriteByte('\n')
 			lineBuf = lineBuf[:0]
 			continue
 		}
-		lineBuf = append(lineBuf, r)
+		lineBuf = append(lineBuf, c)
 	}
-	lineBuf = trimTrailingRunes(lineBuf)
-	for _, c := range lineBuf {
-		b.WriteRune(c)
-	}
+	flush()
 	return b.String()
 }
 
-func trimTrailingRunes(runes []rune) []rune {
-	i := len(runes) - 1
-	for i >= 0 && (runes[i] == ' ' || runes[i] == '\t') {
+func trimTrailingBytes(b []byte) []byte {
+	i := len(b) - 1
+	for i >= 0 && (b[i] == ' ' || b[i] == '\t') {
 		i--
 	}
-	return runes[:i+1]
+	return b[:i+1]
 }
 
 func CollapseBlankLines(s string) string {
@@ -111,17 +115,20 @@ func CollapseBlankLines(s string) string {
 	var b strings.Builder
 	b.Grow(len(s))
 
+	// Byte-oriented (see TrimTrailingWhitespace): preserves invalid UTF-8
+	// bytes exactly instead of re-encoding them as U+FFFD.
 	blankCount := 0
-	for _, r := range s {
-		if r == '\n' {
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if c == '\n' {
 			blankCount++
 			if blankCount <= maxBlankLines+1 {
-				b.WriteRune(r)
+				b.WriteByte(c)
 			}
 			continue
 		}
 		blankCount = 0
-		b.WriteRune(r)
+		b.WriteByte(c)
 	}
 
 	return b.String()
