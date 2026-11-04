@@ -178,7 +178,7 @@ func (a proxyHost) WriteExfilDetectedSSE(gw *gateway.NenyaGateway, w http.Respon
 	a.p.writeExfilDetectedSSE(gw, w)
 }
 
-func (a proxyHost) WriteGatewayStreamError(w http.ResponseWriter, statusCode int, errType string, message string) {
+func (a proxyHost) WriteGatewayStreamError(w http.ResponseWriter, statusCode int, errType infra.ErrorType, message string) {
 	writeGatewayStreamError(w, statusCode, ErrorType(errType), message)
 }
 
