@@ -20,19 +20,10 @@ import (
 )
 
 // ErrorType represents the type of error that occurred during request
-// processing. Maps to upstream provider error types (provider_error,
-// rate_limit_error, etc.). Mirrors the parent package's ErrorType spellings
-// (the gateway's stream-error writer owns the wire values).
-type ErrorType = string
-
-// ErrorType constants mirror the parent package's values (the gateway's
-// stream-error writer owns the spellings). Keep byte-identical with
-// internal/proxy/error_normalizer.go — a drift here silently changes the
-// SSE error wire values the client sees.
-const (
-	ErrorTypeRateLimit ErrorType = "rate_limit_error"
-	ErrorTypeGateway   ErrorType = "gateway_error"
-)
+// processing. The wire spellings are single-sourced in internal/infra
+// (NENYA-315) — both this package and package proxy spell values from the
+// same constants, so drift is impossible by construction.
+type ErrorType = infra.ErrorType
 
 // ---- Types that moved from the parent package (exported; the parent
 // keeps unexported aliases so existing call sites compile unchanged) ----

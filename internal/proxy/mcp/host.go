@@ -76,7 +76,7 @@ type Host interface {
 	// WriteExfilDetectedSSE writes the structured canary-detected payload.
 	WriteExfilDetectedSSE(gw *gateway.NenyaGateway, w http.ResponseWriter)
 	// WriteGatewayStreamError writes an SSE error event with the given type.
-	WriteGatewayStreamError(w http.ResponseWriter, statusCode int, errType string, message string)
+	WriteGatewayStreamError(w http.ResponseWriter, statusCode int, errType infra.ErrorType, message string)
 	// WritePipelineRejection renders a pipeline rejection to the client.
 	WritePipelineRejection(gw *gateway.NenyaGateway, w http.ResponseWriter, err error) bool
 	// WriteSSEError sends an SSE error event (OpenAI-compatible error object

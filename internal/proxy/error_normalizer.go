@@ -18,27 +18,20 @@ const (
 
 // ErrorType represents the type of error that occurred during request processing.
 // Maps to upstream provider error types (provider_error, rate_limit_error, etc.).
-type ErrorType string
+// The type and its wire spellings are single-sourced in internal/infra
+// (NENYA-315); these aliases keep the package-local names compiling.
+type ErrorType = infra.ErrorType
 
 const (
-	// ErrorTypeProvider indicates an upstream provider error (5xx)
-	ErrorTypeProvider ErrorType = "provider_error"
-	// ErrorTypeRateLimit indicates a rate limit error (429)
-	ErrorTypeRateLimit ErrorType = "rate_limit_error"
-	// ErrorTypeQuotaExhausted indicates a quota exhaustion error (429)
-	ErrorTypeQuotaExhausted ErrorType = "quota_exhausted_error"
-	// ErrorTypeInvalidRequest indicates a client error (4xx)
-	ErrorTypeInvalidRequest ErrorType = "invalid_request_error"
-	// ErrorTypeAuthentication indicates an authentication error (401)
-	ErrorTypeAuthentication ErrorType = "authentication_error"
-	// ErrorTypeNotFound indicates a not found error (404)
-	ErrorTypeNotFound ErrorType = "not_found_error"
-	// ErrorTypePolicyRefusal indicates a content-policy/safeguard rejection
-	// (NENYA-191): the upstream declined the content. Request-scoped — never
-	// a provider fault — and failover-eligible.
-	ErrorTypePolicyRefusal ErrorType = "policy_refusal_error"
-	ErrorTypeGateway       ErrorType = "gateway_error"
-	ErrorTypeBouncer       ErrorType = "bouncer_error"
+	ErrorTypeProvider       = infra.ErrorTypeProvider
+	ErrorTypeRateLimit      = infra.ErrorTypeRateLimit
+	ErrorTypeQuotaExhausted = infra.ErrorTypeQuotaExhausted
+	ErrorTypeInvalidRequest = infra.ErrorTypeInvalidRequest
+	ErrorTypeAuthentication = infra.ErrorTypeAuthentication
+	ErrorTypeNotFound       = infra.ErrorTypeNotFound
+	ErrorTypePolicyRefusal  = infra.ErrorTypePolicyRefusal
+	ErrorTypeGateway        = infra.ErrorTypeGateway
+	ErrorTypeBouncer        = infra.ErrorTypeBouncer
 )
 
 // GatewayError represents an error that occurred in the gateway, with structured

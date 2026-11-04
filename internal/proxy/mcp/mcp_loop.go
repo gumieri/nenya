@@ -454,7 +454,7 @@ func ForwardToUpstreamWithMCP(h Host, gw *gateway.NenyaGateway,
 		// The MCP loop always replays SSE (even for stream:false), so the
 		// denial matches that shape with the same error_kind as the chat paths
 		// (NENYA-188).
-		h.WriteGatewayStreamError(w, http.StatusTooManyRequests, ErrorTypeRateLimit, "Token budget exhausted ("+reason+")")
+		h.WriteGatewayStreamError(w, http.StatusTooManyRequests, infra.ErrorTypeRateLimit, "Token budget exhausted ("+reason+")")
 		return
 	}
 
