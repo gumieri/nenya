@@ -65,8 +65,6 @@ type Host interface {
 	ScanToolArgsCanary(canary pipeline.CanarResult, args map[string]any, metrics *infra.Metrics, logger *slog.Logger, tool string) (tripped, refuse bool)
 	// ScopedThoughtSigCache returns the caller-namespaced signature view.
 	ScopedThoughtSigCache(gw *gateway.NenyaGateway, apiKey *config.ApiKey) infra.ThoughtSignatureKV
-	// ScreenToolArgs runs the advisory egress screen over tool arguments.
-	ScreenToolArgs(s *EgressScreenRuntime, ctx context.Context, gw *gateway.NenyaGateway, agentName string, args map[string]any, triggered bool) bool
 	// SpotlightSettingsFor resolves the spotlight settings for an agent.
 	SpotlightSettingsFor(cfg *config.Config, agent config.AgentConfig) pipeline.SpotlightSettings
 	// WaitWithCancel waits d or until ctx is canceled.

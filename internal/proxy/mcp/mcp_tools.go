@@ -904,7 +904,7 @@ func executeMCPCallsWithUnavailable(h Host, in mcpExecOptions) []*mcp.CallToolRe
 			// refused or unadjudicable). One judgment per request;
 			// strict action refuses the call.
 			screenTriggered := tripped || len(violations) > 0
-			if h.ScreenToolArgs(screen, ctx, gw, agentName, c.Arguments, screenTriggered) {
+			if screen.ScreenToolArgs(ctx, gw, agentName, c.Arguments, screenTriggered) {
 				results[idx] = &mcp.CallToolResult{
 					Content: []mcp.ContentBlock{{Type: "text", Text: "[blocked by egress policy: data exfiltration detected in tool arguments]"}},
 					IsError: true,

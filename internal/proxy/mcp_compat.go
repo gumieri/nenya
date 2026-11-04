@@ -160,10 +160,6 @@ func (a proxyHost) ScopedThoughtSigCache(gw *gateway.NenyaGateway, apiKey *confi
 	return scopedThoughtSigCache(gw, apiKey)
 }
 
-func (a proxyHost) ScreenToolArgs(s *mcpproxy.EgressScreenRuntime, ctx context.Context, gw *gateway.NenyaGateway, agentName string, args map[string]any, triggered bool) bool {
-	return s.ScreenToolArgs(ctx, gw, agentName, args, triggered)
-}
-
 func (a proxyHost) SpotlightSettingsFor(cfg *config.Config, agent config.AgentConfig) pipeline.SpotlightSettings {
 	return spotlightSettingsFor(cfg, agent)
 }
@@ -310,7 +306,6 @@ func replayBufferedResponse(h mcpproxy.Host, w http.ResponseWriter, buf *buffere
 // rescan tests that only exercise nil-chain paths).
 func mcpproxyHost(p *Proxy) mcpproxy.Host { return p.mcpHost() }
 
-// Follow-up tightening (noted by the phase-040 review, harmless today):
-// Host.ScreenToolArgs takes the runtime before ctx, unlike every other
-// method, and the adapter ignores the proxy — the method arguably belongs
-// on EgressScreenRuntime rather than Host.
+// Follow-up note removed (NENYA-316): Host.ScreenToolArgs was a method on
+// EgressScreenRuntime, not a host capability — callers hold the runtime
+// (opts.Screen) and call it directly; the nil receiver fails closed.
