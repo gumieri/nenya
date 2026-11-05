@@ -4,6 +4,24 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.20.0] - 2026-11-04
+
+### Fixed
+
+- **Compactor byte-safety: invalid UTF-8 no longer grows the output (found by the fuzz workflow's first CI run)**: `TrimTrailingWhitespace` and `CollapseBlankLines` iterated runes and re-encoded through `WriteRune`, so each invalid UTF-8 byte expanded into the 3-byte U+FFFD replacement — a 1-byte input produced 3 bytes of output, violating the bounded-growth invariant the fuzz targets assert. Since `CompactText` feeds window-compaction budget math, growth is the wrong direction: the compactor could leave the payload LARGER than the pre-compaction estimate it replaced. Both functions are now byte-oriented (`\n` cannot occur inside a multi-byte UTF-8 sequence, so behavior on valid text is identical); invalid bytes are preserved exactly. The three minimized crashers are committed under `testdata/fuzz/` as permanent seed corpus; each target re-fuzzed clean.
+
+### Changed
+
+- **`ErrorType` wire spellings are single-sourced in `internal/infra` (NENYA-315)**: the type and its nine SSE wire values were duplicated as independent string literals in `proxy/error_normalizer.go` and `proxy/mcp/types.go` — a typo in either copy silently changes the wire. `infra` now owns the constants (left of both packages in the DAG; drift impossible by construction); `proxy` keeps package-local aliases and `proxy/mcp` uses `infra` directly. `Host.WriteGatewayStreamError`'s `errType` parameter tightened from `string` to `infra.ErrorType` — raw-string typos at call sites are now compile errors.
+- **`ScreenToolArgs` removed from the `proxy/mcp` Host seam (NENYA-316)**: it is a method on `EgressScreenRuntime`, not a host capability — the adapter was a pure passthrough ignoring the proxy, with the runtime as an odd first parameter. Callers hold the runtime (`MCPExecOptions.Screen`) and invoke it directly; the nil receiver fails closed exactly as before.
+- **Coverage instrumentation is whole-module (`-coverpkg=./...`) in CI (NENYA-314)**: without it, only each package-under-test is instrumented — the `proxy/mcp` subpackage (no test files of its own, exercised through the parent seam) profiled at 0.0% and dragged the proxy coverage gate down 17 points. All gate numbers moved up with correct attribution (total 76.4 → 84.0); the `proxy_floor=82` ratchet is re-based on the new profile.
+- **AGENTS.md complexity/nesting guidance now states target vs enforced gate (NENYA-309)**: §9 said "Keep under 10 / Maximum 3 levels ... Enforced by the linter", but the linter enforces `gocyclo` 15 and `nestif` 4 — the doc claimed enforcement the gate does not have. The guidelines now present 10/3 as aspirations and the linter thresholds as the binding CI gate, so the document can no longer contradict `.golangci.yml`.
+
+### Added
+
+- **Weekly scheduled fuzz-corpus workflow (`fuzz.yml`, NENYA-311)**: every Sunday all 34 fuzz targets run 30s each with the corpus carried between runs via a cache; crashers minimize and upload as artifacts. Targets are enumerated from the source tree, never hardcoded. First dispatch run immediately found three real compactor bugs (see Fixed).
+- **`docs/REGISTRY_REFRESH.md`** — the step-by-step runbook for refreshing the static model/provider registry from the public catalogs of the eight built-in providers.
+
 ### Removed
 
 - **Vestigial `.github/coverage-config.yml` (NENYA-309, quality review 2026-11-02)**: the file declared `threshold: total: 0` — a no-op; the real coverage gates live in the `Coverage gates` step of `.github/workflows/ci.yml`, and nothing referenced the file. Deleted.
@@ -55,9 +73,9 @@ All notable changes to this project will be documented in this file.
 
 - **The stall counters go through the model-label guard (NENYA-289, AUD-66)**: `RecordClientStalled` and `RecordStreamStall` wrote raw model strings into their label maps — the only model-labelled counters bypassing the NENYA-144 cardinality guard, so a hostile id created unbounded series. Both now route through `ModelLabel`; the empty model normalizes to the shared `unknown` label (the codified `model=""` test updated to the invariant).
 
-- **The secret file-ref guard resolves symlinks (NENYA-297, AUD-71)**: the `file:` traversal guard checked the lexical path only — a symlink inside the config root pointing anywhere on the filesystem passed the prefix check and was read. The resolved real path is now containment-verified (fail-closed on resolution errors); internal symlinks still resolve. Pinned with an escaping-link rejection + an internal-link acceptance. *(See [Unreleased]: internal references were also falsely rejected when the config root itself was a symlink, and a `/` config root collapsed the containment prefix — both corrected post-release.)*
+- **The secret file-ref guard resolves symlinks (NENYA-297, AUD-71)**: the `file:` traversal guard checked the lexical path only — a symlink inside the config root pointing anywhere on the filesystem passed the prefix check and was read. The resolved real path is now containment-verified (fail-closed on resolution errors); internal symlinks still resolve. Pinned with an escaping-link rejection + an internal-link acceptance. *(See [0.20.0]: internal references were also falsely rejected when the config root itself was a symlink, and a `/` config root collapsed the containment prefix — both corrected post-release.)*
 
-- **`config set` writes secret references and nulls silently (NENYA-300, AUD-74)**: an `env:`/`file:` value under a credential key is treated by this entry as a **live secret reference** resolved at boot (NENYA-166) — written with no hint; a JSON null under a credential key **clears** the credential. Both now print a note on stderr via the extracted `credentialValueNotes` helper. *(Correction, see [Unreleased]: the note's premise was wrong on both halves — reference resolution is secrets.json-only, and a null only removes the config-file leaf; the notes were reworded.)*
+- **`config set` writes secret references and nulls silently (NENYA-300, AUD-74)**: an `env:`/`file:` value under a credential key is treated by this entry as a **live secret reference** resolved at boot (NENYA-166) — written with no hint; a JSON null under a credential key **clears** the credential. Both now print a note on stderr via the extracted `credentialValueNotes` helper. *(Correction, see [0.20.0]: the note's premise was wrong on both halves — reference resolution is secrets.json-only, and a null only removes the config-file leaf; the notes were reworded.)*
 
 - **The oversized adapter/reader files are split by theme, and `setSystemPrompt` takes a spec struct (NENYA-316, AUD-81)**: `internal/adapter/anthropic.go` (2394 lines) is now the core adapter (234) plus `anthropic_request.go` (1052, OpenAI→Anthropic conversion) and `anthropic_response.go` (1150, Anthropic→OpenAI + reverse); `internal/stream/reader.go` (2433) is now the core reader (1140) plus `reader_terminal.go` (465, injected terminals/drains) and `reader_pipeline.go` (847, filters/callbacks/framing/tool-calls) — all same-package mechanical moves, zero behavior change. `setSystemPrompt`'s seven positional parameters grouped into `systemPromptSpec`.
 
