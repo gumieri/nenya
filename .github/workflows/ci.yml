@@ -1,8 +1,11 @@
 name: CI
 
-# Actions are pinned to commit SHAs (supply-chain hardening): a moved version
-# tag would run attacker code inside this pipeline. Dependabot keeps the
-# pins updated.
+# Actions are tag-pinned and enforced by .github/workflows/actions.lock
+# (supply-chain hardening): GitHub verifies at run time that each tag still
+# resolves to its locked commit, so a moved or hijacked tag fails the run
+# instead of executing attacker code. Dependabot updates tags + lockfile
+# together; manual bumps must relock with `gh actions-lock` (the CI lockfile
+# job rejects out-of-sync edits).
 
 on:
   push:
@@ -18,11 +21,11 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/checkout@v7.0.1
         with:
           fetch-depth: 1
 
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+      - uses: actions/setup-go@v7.0.0
         id: setup-go
         with:
           go-version-file: go.mod
@@ -87,7 +90,7 @@ jobs:
           check internal/proxy "$(pkg_avg internal/proxy)" "$proxy_floor"
           exit "$fail"
 
-      - uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9
+      - uses: golangci/golangci-lint-action@v9.3.0
         with:
           # Pin: v2 schema required by .golangci.yml; "latest" lets an
           # unrelated release break CI.

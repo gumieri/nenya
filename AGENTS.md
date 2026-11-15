@@ -290,6 +290,7 @@ All outbound HTTP dispatch points vulnerable to transient network errors (TLS ha
 - **Compilation Check:** Run `go build ./...` to ensure all code compiles without errors.
 - **CI Enforcement:** The GitHub Actions workflow requires lint to pass before tests run. Failing lint will block PRs.
 - **Format Enforcement:** `golangci-lint` automatically runs `gofmt` and `goimports` - do not run these separately.
+- **CI Supply-Chain (Action Lockfiles):** every `uses:` ref in `.github/workflows/*.yml` is a tag (`vX.Y.Z`) whose resolution is pinned by `.github/workflows/actions.lock` — GitHub verifies at run time that each tag still resolves to its locked commit, and a moved/hijacked tag fails the workflow instead of executing attacker code. Rules: bump actions ONLY via Dependabot (it updates tags + lockfile together) or by running `gh actions-lock` after a manual edit (`gh extension install github/gh-actions-lock`); NEVER hand-edit a workflow ref without relocking — the CI `lockfile` job rejects out-of-sync or unverifiable pins. Do not delete or hand-edit `actions.lock`.
 
 ### 16. RBAC Enforcement (Per-Key Access Control)
 
