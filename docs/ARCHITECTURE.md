@@ -621,6 +621,14 @@ If discovery fails for any provider:
 - Other providers' discovered models are still used
 - `/v1/models` endpoint shows only successfully discovered models
 
+A failed fetch is never reported as an empty catalog. HTTP-layer failures
+(non-200 responses, including 401/403 credential rejections, and non-JSON
+bodies) surface as `discovery.StatusError` — a warning log carrying the
+status, and `nenya_model_discovery_total{provider,status}` counts
+`auth_failure` (401/403) distinctly from `error` and from `success` (a
+valid, empty catalog). An operator can therefore tell a rotated-out API
+key apart from a provider that genuinely lists no models.
+
 This ensures Nenya never breaks due to discovery failures — it's a best-effort enhancement on top of the static registry.
 
 ## Circuit Breaker

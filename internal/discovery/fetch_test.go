@@ -3,6 +3,7 @@ package discovery
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -88,6 +89,7 @@ func TestClientForSelection(t *testing.T) {
 func TestFetchProviderModels_UsesInjectedClient(t *testing.T) {
 	var injectedHits, defaultHits atomic.Bool
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]interface{}{
 			"object": "list",
 			"data":   []interface{}{map[string]string{"id": "test-model"}},
@@ -124,6 +126,102 @@ type hitRecordingTransport struct {
 func (h *hitRecordingTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	h.hit.Store(true)
 	return h.base.RoundTrip(req)
+}
+
+// TestFetchProviderModels_DistinguishesAuthFailureFromEmptyCatalog pins the
+// observable distinction between a catalog fetch that failed at the HTTP
+// layer (401/403 credential rejection, missing endpoint, non-JSON body) and
+// one that succeeded with zero models: failures return a *StatusError so
+// FetchAll warns and RecordModelDiscovery can classify the outcome, while an
+// empty-but-valid catalog stays a successful (nil, nil) result.
+func TestFetchProviderModels_DistinguishesAuthFailureFromEmptyCatalog(t *testing.T) {
+	tests := []struct {
+		name       string
+		status     int
+		body       string
+		contentTyp string
+		wantErr    bool
+		wantAuth   bool
+	}{
+		{
+			name:       "401 rejected credential is an auth failure",
+			status:     http.StatusUnauthorized,
+			body:       `{"error":{"message":"invalid api key"}}`,
+			contentTyp: "application/json",
+			wantErr:    true,
+			wantAuth:   true,
+		},
+		{
+			name:       "403 forbidden is an auth failure",
+			status:     http.StatusForbidden,
+			body:       `{"error":{"message":"forbidden"}}`,
+			contentTyp: "application/json",
+			wantErr:    true,
+			wantAuth:   true,
+		},
+		{
+			name:       "404 missing endpoint is a plain error",
+			status:     http.StatusNotFound,
+			body:       "not found",
+			contentTyp: "text/plain",
+			wantErr:    true,
+		},
+		{
+			name:       "200 with non-JSON body is an error",
+			status:     http.StatusOK,
+			body:       "<html>login page</html>",
+			contentTyp: "text/html",
+			wantErr:    true,
+		},
+		{
+			name:       "200 with empty catalog is success",
+			status:     http.StatusOK,
+			body:       `{"object":"list","data":[]}`,
+			contentTyp: "application/json",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", tt.contentTyp)
+				w.WriteHeader(tt.status)
+				_, _ = w.Write([]byte(tt.body))
+			}))
+			defer server.Close()
+
+			provider := &config.Provider{
+				Name:      "test-provider",
+				URL:       server.URL + "/chat/completions",
+				AuthStyle: "none",
+			}
+
+			df := NewDiscoveryFetcher(1, nil)
+			models, err := df.fetchProviderModels(context.Background(), "test-provider", provider, nil, slog.Default())
+			if tt.wantErr {
+				if err == nil {
+					t.Fatalf("expected error, got nil (models=%d)", len(models))
+				}
+				var statusErr *StatusError
+				if !errors.As(err, &statusErr) {
+					t.Fatalf("expected *StatusError, got %T: %v", err, err)
+				}
+				if statusErr.StatusCode() != tt.status {
+					t.Errorf("expected status %d preserved on the error, got %d", tt.status, statusErr.StatusCode())
+				}
+				if statusErr.IsAuthFailure() != tt.wantAuth {
+					t.Errorf("IsAuthFailure() = %v, want %v", statusErr.IsAuthFailure(), tt.wantAuth)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("expected success, got error: %v", err)
+			}
+			if len(models) != 0 {
+				t.Errorf("expected an empty catalog, got %d models", len(models))
+			}
+		})
+	}
 }
 
 func TestFetchProviderModels_NoRetryOnContextTimeout(t *testing.T) {
