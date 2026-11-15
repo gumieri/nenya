@@ -1,8 +1,10 @@
 package infra
 
 import (
+	"errors"
 	"fmt"
 	"io"
+	"net/http"
 	"runtime"
 	"sort"
 	"strconv"
@@ -1871,6 +1873,13 @@ func (m *Metrics) RecordOllamaSummarizedBytes(n int) {
 	m.ollamaBytes.Add(uint64(n))
 }
 
+// RecordModelDiscovery counts a model discovery fetch attempt, classified by
+// outcome: "success" (catalog fetched, even when empty), "auth_failure"
+// (401/403 — the endpoint rejected the credential, surfaced via a
+// StatusCode() carrier such as discovery.StatusError), or "error"
+// (everything else). A failed discovery is not charged as an empty catalog:
+// the operator must be able to tell a rotated-out key apart from a provider
+// that genuinely lists no models.
 func (m *Metrics) RecordModelDiscovery(provider string, err error) {
 	if m == nil {
 		return
@@ -1878,6 +1887,13 @@ func (m *Metrics) RecordModelDiscovery(provider string, err error) {
 	status := "success"
 	if err != nil {
 		status = "error"
+		var sc interface{ StatusCode() int }
+		if errors.As(err, &sc) {
+			switch sc.StatusCode() {
+			case http.StatusUnauthorized, http.StatusForbidden:
+				status = "auth_failure"
+			}
+		}
 	}
 	e := getOrCreateEntry(&m.modelDiscovery, map[string]string{
 		"provider": provider, "status": status,
@@ -2086,7 +2102,7 @@ func (m *Metrics) WritePrometheus(w io.Writer) {
 	m.writeCounterAtomic(w, "nenya_secure_mem_seal_failures_total",
 		"Total secure memory seal (mprotect) failures.", m.secureMemSealFailures.Load())
 	m.writeCounterMap(w, "nenya_model_discovery_total",
-		"Total model discovery fetch attempts by provider.", &m.modelDiscovery)
+		"Total model discovery fetch attempts by provider (status: success = catalog fetched, empty or not; auth_failure = 401/403 rejected credential; error = any other failure).", &m.modelDiscovery)
 	m.writeCounterMap(w, "nenya_non_chat_models_dropped_total",
 		"Total model classifications that excluded a model from the chat catalog (non_chat_models), by provider (cumulative across discovery runs).", &m.nonChatDropped)
 	m.writeCounterMap(w, "nenya_retries_total",

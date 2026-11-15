@@ -2,6 +2,8 @@ package infra
 
 import (
 	"bytes"
+	"fmt"
+	"net/http"
 	"regexp"
 	"strings"
 	"testing"
@@ -342,6 +344,46 @@ var assertAnError = &errSentinel{}
 type errSentinel struct{}
 
 func (e *errSentinel) Error() string { return "test error" }
+
+// discoveryStatusStub mirrors discovery.StatusError's structural surface
+// (Error + StatusCode) without importing the discovery package, which itself
+// imports infra.
+type discoveryStatusStub struct{ status int }
+
+func (e *discoveryStatusStub) Error() string   { return "model catalog endpoint returned status" }
+func (e *discoveryStatusStub) StatusCode() int { return e.status }
+
+// TestMetrics_RecordModelDiscoveryOutcome pins the outcome classification of
+// nenya_model_discovery_total: a failed catalog fetch must not be counted as
+// an empty catalog, and 401/403 (a rejected credential) must be visible as
+// auth_failure — including through wrapped errors.
+func TestMetrics_RecordModelDiscoveryOutcome(t *testing.T) {
+	m := NewMetrics()
+
+	m.RecordModelDiscovery("ok-provider", nil)
+	m.RecordModelDiscovery("auth-provider", &discoveryStatusStub{status: http.StatusUnauthorized})
+	m.RecordModelDiscovery("auth-provider", &discoveryStatusStub{status: http.StatusForbidden})
+	m.RecordModelDiscovery("wrapped-provider", fmt.Errorf("discovery fetch: %w", &discoveryStatusStub{status: http.StatusUnauthorized}))
+	m.RecordModelDiscovery("plain-provider", assertAnError)
+	m.RecordModelDiscovery("httperr-provider", &discoveryStatusStub{status: http.StatusInternalServerError})
+
+	var buf bytes.Buffer
+	m.WritePrometheus(&buf)
+	out := buf.String()
+
+	expected := []string{
+		`nenya_model_discovery_total{provider="ok-provider", status="success"} 1`,
+		`nenya_model_discovery_total{provider="auth-provider", status="auth_failure"} 2`,
+		`nenya_model_discovery_total{provider="wrapped-provider", status="auth_failure"} 1`,
+		`nenya_model_discovery_total{provider="plain-provider", status="error"} 1`,
+		`nenya_model_discovery_total{provider="httperr-provider", status="error"} 1`,
+	}
+	for _, want := range expected {
+		if !strings.Contains(out, want) {
+			t.Errorf("expected %q in prometheus output", want)
+		}
+	}
+}
 
 func TestNormalizeMetricPath(t *testing.T) {
 	tests := []struct {

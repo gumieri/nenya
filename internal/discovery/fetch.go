@@ -28,6 +28,40 @@ const (
 	maxIdleConns    = 20
 )
 
+// StatusError reports a model-catalog fetch that failed at the HTTP layer:
+// the endpoint answered but did not deliver a usable catalog (401/403 auth
+// rejection, 404 missing endpoint, non-JSON body behind a misconfigured
+// proxy, ...). Before this type existed, every non-200 response was logged
+// at Debug and swallowed as (nil, nil), making an authentication failure
+// indistinguishable from a successful but empty catalog.
+type StatusError struct {
+	// Status is the HTTP status code the catalog endpoint returned.
+	Status int
+	// Reason optionally describes why the response was rejected when the
+	// status alone is not the story (e.g. a 200 carrying a non-JSON body).
+	Reason string
+}
+
+// Error implements the error interface.
+func (e *StatusError) Error() string {
+	if e.Reason != "" {
+		return fmt.Sprintf("model catalog endpoint returned %s (status %d)", e.Reason, e.Status)
+	}
+	return fmt.Sprintf("model catalog endpoint returned status %d", e.Status)
+}
+
+// StatusCode exposes the HTTP status so metrics and logs can classify the
+// failure without importing this package (structural interface).
+func (e *StatusError) StatusCode() int { return e.Status }
+
+// IsAuthFailure reports whether the catalog request was rejected by
+// authentication or authorization (401/403) — the operator-actionable case
+// of a bad, expired, or under-scoped API key.
+func (e *StatusError) IsAuthFailure() bool {
+	return e.Status == http.StatusUnauthorized || e.Status == http.StatusForbidden
+}
+
+// DiscoveryFetcher fetches model catalogs from upstream providers.
 type DiscoveryFetcher struct {
 	// ollamaClient, when set, is used for the ollama provider's discovery
 	// fetches: its policy is explicit-only (loopback-safe), unlike the
@@ -280,14 +314,12 @@ func (df *DiscoveryFetcher) fetchProviderModels(ctx context.Context, providerNam
 	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
-		logger.Debug("non-200 from models endpoint", "provider", providerName, "status", resp.StatusCode)
-		return nil, nil
+		return nil, &StatusError{Status: resp.StatusCode}
 	}
 
 	ct := resp.Header.Get("Content-Type")
 	if ct != "" && !strings.HasPrefix(ct, "application/json") {
-		logger.Debug("unexpected content-type from models endpoint", "provider", providerName, "content_type", ct)
-		return nil, nil
+		return nil, &StatusError{Status: resp.StatusCode, Reason: "a non-JSON body (unexpected content type " + ct + ")"}
 	}
 
 	body, err := io.ReadAll(io.LimitReader(resp.Body, maxModelsBody))
