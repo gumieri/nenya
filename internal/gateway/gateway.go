@@ -1237,6 +1237,11 @@ func newResponseCache(cfg config.Config, logger *slog.Logger, metrics *infra.Met
 // quota fetcher, and secure memory. Callers that may race in-flight
 // requests must drain first — CloseWhenDrained arms the admission gate
 // and waits; Close itself never waits (AUD-07 moved that contract out).
+// The closeOnce inside the drain gate makes the CloseWhenDrained path
+// exactly-once; the ONE sanctioned exception is the fatal reload path
+// (cmd/nenya reloadConfig): it calls Close directly and exits before any
+// drain goroutine could be armed on the same instance, so the two paths
+// cannot double-Close in practice — keep it that way when touching either.
 func (g *NenyaGateway) Close() {
 	if g.ResponseCache != nil {
 		g.ResponseCache.Stop()

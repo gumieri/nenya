@@ -4,6 +4,10 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Drain gate: an unpaired exit can no longer close the drain under a live request (NENYA-333)**: `EnterRequest` now returns a per-admission release closure instead of pairing with a bare `ExitRequest` counter decrement, so a double release (double-defer, a duplicated handler path) is structurally a no-op — it counts `unpairedExits`, logs at Error with a stack (outside the gate lock, so a misuse storm cannot stall admissions behind the log sink), and increments `nenya_drain_unpaired_exits_total` instead of silently stealing the last live request's slot and destroying SecureMem/MCP clients mid-request. `CloseWhenDrained` logging is nil-guarded and moved off the gate lock — admissions no longer stall behind the arm-time log write.
+
 ## [0.20.0] - 2026-11-04
 
 ### Fixed

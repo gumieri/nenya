@@ -101,12 +101,13 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// the engine probe (no SecureMem/MCP use), so it is drain-safe.
 	healthProbe := r.Method == http.MethodGet && r.URL.Path == "/healthz"
 	if !healthProbe {
-		if !gw.EnterRequest() {
+		release, ok := gw.EnterRequest()
+		if !ok {
 			w.Header().Set("Retry-After", "2")
 			writeStructuredError(w, http.StatusServiceUnavailable, infra.ErrorKindInternal, "Gateway is draining for reload")
 			return
 		}
-		defer gw.ExitRequest()
+		defer release()
 	}
 
 	// DNS-rebinding hardening (NENYA-34): browser-context requests are

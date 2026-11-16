@@ -171,12 +171,13 @@ type Metrics struct {
 	// (nenya_param_coercions_total).
 	paramCoercions sync.Map
 
-	upstreamLatency sync.Map
-	ttft            sync.Map
-	slowCalls       sync.Map
-	gatewayProcess  sync.Map
-	ollamaBytes     atomic.Uint64
-	modelDiscovery  sync.Map
+	upstreamLatency    sync.Map
+	ttft               sync.Map
+	slowCalls          sync.Map
+	gatewayProcess     sync.Map
+	ollamaBytes        atomic.Uint64
+	drainUnpairedExits atomic.Uint64
+	modelDiscovery     sync.Map
 	// nonChatDropped counts models excluded from the chat catalog by the
 	// non_chat_models classification (nenya_non_chat_models_dropped_total).
 	nonChatDropped sync.Map
@@ -1901,6 +1902,17 @@ func (m *Metrics) RecordModelDiscovery(provider string, err error) {
 	e.value.Add(1)
 }
 
+// RecordDrainUnpairedExits counts unpaired gateway exit attempts: a release
+// closure invoked twice for one admission (NENYA-333). Structural pairing
+// makes these impossible through the public API — any nonzero value signals
+// internal misuse and must be investigated.
+func (m *Metrics) RecordDrainUnpairedExits() {
+	if m == nil {
+		return
+	}
+	m.drainUnpairedExits.Add(1)
+}
+
 // RecordNonChatModelsDropped counts n models excluded from the chat catalog
 // because a provider's non_chat_models classified them as decision-only
 // (NENYA-180). The provider label identifies where the classification fired, so
@@ -2095,20 +2107,7 @@ func (m *Metrics) WritePrometheus(w io.Writer) {
 		"Currently held concurrency slots per provider and model.", &m.concurrencyInflight)
 	m.writeHistogramMap(w, "nenya_gateway_processing_duration_seconds",
 		"Gateway processing time (before upstream) in seconds.", &m.gatewayProcess)
-	m.writeCounterAtomic(w, "nenya_ollama_summarized_bytes_total",
-		"Total bytes sent to Ollama for summarization.", m.ollamaBytes.Load())
-	m.writeCounterAtomic(w, "nenya_secure_mem_init_failures_total",
-		"Total secure memory allocation failures.", m.secureMemInitFailures.Load())
-	m.writeCounterAtomic(w, "nenya_secure_mem_seal_failures_total",
-		"Total secure memory seal (mprotect) failures.", m.secureMemSealFailures.Load())
-	m.writeCounterMap(w, "nenya_model_discovery_total",
-		"Total model discovery fetch attempts by provider (status: success = catalog fetched, empty or not; auth_failure = 401/403 rejected credential; error = any other failure).", &m.modelDiscovery)
-	m.writeCounterMap(w, "nenya_non_chat_models_dropped_total",
-		"Total model classifications that excluded a model from the chat catalog (non_chat_models), by provider (cumulative across discovery runs).", &m.nonChatDropped)
-	m.writeCounterMap(w, "nenya_retries_total",
-		"Total retry attempts by operation and provider.", &m.retryTotal)
-	m.writeGaugeMap(w, "nenya_inflight_requests",
-		"Current in-flight requests by model, agent, and provider.", &m.inflightReqs)
+	m.writeInfraCounters(w)
 
 	m.writeHistogramMap(w, "nenya_http_request_duration_seconds",
 		"HTTP request duration in seconds.", &m.httpDur)
@@ -2188,6 +2187,29 @@ func (m *Metrics) writeCounterMap(w io.Writer, name, help string, mmap *sync.Map
 	for _, e := range entries {
 		_, _ = fmt.Fprintf(w, "%s%s %d\n", name, labelStr(e.labels), e.value.Load())
 	}
+}
+
+// writeInfraCounters exports the standalone atomic infrastructure counters
+// (Ollama summarization, secure-memory failures, drain-gate misuse) plus the
+// per-provider discovery/retry/in-flight maps. Extracted from WritePrometheus
+// to keep each writer under the funlen statement budget.
+func (m *Metrics) writeInfraCounters(w io.Writer) {
+	m.writeCounterAtomic(w, "nenya_ollama_summarized_bytes_total",
+		"Total bytes sent to Ollama for summarization.", m.ollamaBytes.Load())
+	m.writeCounterAtomic(w, "nenya_secure_mem_init_failures_total",
+		"Total secure memory allocation failures.", m.secureMemInitFailures.Load())
+	m.writeCounterAtomic(w, "nenya_secure_mem_seal_failures_total",
+		"Total secure memory seal (mprotect) failures.", m.secureMemSealFailures.Load())
+	m.writeCounterAtomic(w, "nenya_drain_unpaired_exits_total",
+		"Total unpaired gateway exit attempts (a release closure invoked twice for one admission) — structural pairing makes these impossible through the API; any nonzero value signals internal misuse (NENYA-333).", m.drainUnpairedExits.Load())
+	m.writeCounterMap(w, "nenya_model_discovery_total",
+		"Total model discovery fetch attempts by provider (status: success = catalog fetched, empty or not; auth_failure = 401/403 rejected credential; error = any other failure).", &m.modelDiscovery)
+	m.writeCounterMap(w, "nenya_non_chat_models_dropped_total",
+		"Total model classifications that excluded a model from the chat catalog (non_chat_models), by provider (cumulative across discovery runs).", &m.nonChatDropped)
+	m.writeCounterMap(w, "nenya_retries_total",
+		"Total retry attempts by operation and provider.", &m.retryTotal)
+	m.writeGaugeMap(w, "nenya_inflight_requests",
+		"Current in-flight requests by model, agent, and provider.", &m.inflightReqs)
 }
 
 func (m *Metrics) writeCounterAtomic(w io.Writer, name, help string, value uint64) {
