@@ -10,8 +10,10 @@ name: Fuzz
 # Targets are discovered from the source tree, never hardcoded, so a new
 # FuzzXxx function is picked up automatically.
 #
-# Actions are pinned to commit SHAs (same supply-chain rule as ci.yml):
-# a moved version tag would run attacker code inside this pipeline.
+# Actions are tag-pinned and enforced by .github/workflows/actions.lock
+# (same supply-chain rule as ci.yml): a moved or hijacked tag fails the
+# run instead of executing attacker code. Relock manual bumps with
+# `gh actions-lock`; Dependabot updates tags + lockfile together.
 
 on:
   schedule:
@@ -27,11 +29,12 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/checkout@v7.0.1
         with:
           fetch-depth: 1
+          persist-credentials: false
 
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+      - uses: actions/setup-go@v7.0.0
         with:
           go-version-file: go.mod
           # Zero-dependency module: go.sum is empty, so key the built-in
@@ -44,7 +47,7 @@ jobs:
       # restored with fallback, so an evicted build cache does not reset
       # corpus growth.
       - name: Restore fuzz corpus
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+        uses: actions/cache@v6.1.0
         with:
           path: ~/.cache/go-build/fuzz
           key: go-fuzz-${{ github.run_id }}
@@ -82,7 +85,7 @@ jobs:
 
       - name: Upload crashers
         if: failure()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@v4.6.2
         with:
           name: fuzz-crashers
           path: |
