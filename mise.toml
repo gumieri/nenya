@@ -79,3 +79,12 @@ run = "go test -count=1 ./..."
 [tasks.raw-vet]
 description = "Run go vet using direct go path"
 run = "go vet ./..."
+
+[tasks.deadcode]
+description = "Report unreachable-from-main symbols (input to the CI ratchet; version-pinned)"
+run = "go run golang.org/x/tools/cmd/deadcode@v0.52.0 ./..."
+
+[tasks.quality]
+description = "Agent quality gate: lint + vet + race tests + deadcode report"
+depends = ["lint", "vet"]
+run = "go test ./... -race -timeout 10m && go run golang.org/x/tools/cmd/deadcode@v0.52.0 ./..."

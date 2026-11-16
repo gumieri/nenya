@@ -355,3 +355,20 @@ type ApiKey struct {
 - Admin role bypasses all restrictions (intentional security design)
 - Empty lists grant full access (backward compatible)
 - Key validation enforces at least one role and minimum token length (16 chars)
+
+### 17. Agent Quality Gate (Agentic Coding Discipline)
+
+Agents (and humans) implementing tracked work MUST follow this gate. The principle: **mechanical gates beat procedural rules beat vigilance** — a careful implementer still leaks debt, so counters catch what review misses.
+
+**Per-issue workflow (ordered, non-negotiable):**
+
+1. **Pin first.** Write the issue's pinning test BEFORE the fix; record the test name in the worklog. The test must fail pre-fix and pass post-fix.
+2. **Minimal diff.** One issue ≈ one sitting ≈ one PR. No drive-by refactors.
+3. **Run the gate** (`mise run quality`): lint + vet + `go test ./... -race` + deadcode report. Paste the output in the worklog — "done" claims without pasted gate output are not done.
+4. **Adversarial review.** The implementer NEVER closes its own issue. The `code-reviewer` subagent (review-loop skill) reviews with an assume-there-is-a-bug prompt and iterates until clean; only the reviewer closes.
+5. **Verify claims against code.** Any finding or completion claim is spot-checked at file:line (direct read) or routed through `jev_verify`/`jev_review` before it is acted on or reported.
+6. **Persist.** On completion, save decisions/gotchas to MemPalace; docs-worthy outcomes go to Outline.
+
+**Feedback ratchet:** when review catches what the implementer missed — file it as a gotcha drawer, and if mechanizable, add a literal gate item here or to the CI floors. Monthly: drop gate items that catch nothing. Gates ratchet like the coverage floor; they never loosen silently.
+
+**Dead-code policy:** new symbols must have a production caller (test-only callers do not count). Before deleting dead code, run `mise run deadcode`; the CI ratchet (see issue tracking it) fails on new unreachable symbols.
