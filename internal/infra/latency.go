@@ -25,8 +25,15 @@ const (
 // (MedianTTFT/TTFTSampleSize, NENYA-178). Entries are immutable once published
 // by the tracker.
 type ModelLatency struct {
-	Model      string
-	Provider   string
+	Model    string
+	Provider string
+	// MedianMs is the median upstream response-header latency in
+	// milliseconds, kept lossless: float division only, never a
+	// Duration.Milliseconds() truncation — sub-millisecond medians are
+	// load-bearing for the anti-herd jitter and balanced scoring
+	// (NENYA-335). Float division is exact for any realistic duration
+	// (int64-exact to ~292 days of ns values; rounding error ~2e-6 ms at
+	// the 2^53 ns boundary beyond that — unreachable).
 	MedianMs   float64
 	SampleSize int
 	LastUpdate time.Time
@@ -103,7 +110,11 @@ func (l *LatencyTracker) Record(model, provider string, duration time.Duration) 
 	l.sorted[key] = buf
 
 	ml := l.publishLocked(key, model, provider)
-	ml.MedianMs = float64(buf[len(buf)/2].Milliseconds())
+	// Lossless float division, NOT Duration.Milliseconds(): the int64
+	// truncation published every sub-millisecond median as 0.0, collapsing
+	// all fast targets into exact ties for the anti-herd jitter and the
+	// balanced scoring (NENYA-335).
+	ml.MedianMs = float64(buf[len(buf)/2]) / float64(time.Millisecond)
 	ml.SampleSize = len(buf)
 	l.latency[key] = ml
 }
