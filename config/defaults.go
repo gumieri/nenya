@@ -439,9 +439,6 @@ func applyPrefixCacheDefaults(cfg *Config) error {
 	if (cfg.PrefixCache.StableTools == nil || !*cfg.PrefixCache.StableTools) && !cfg.PrefixCache.StableWasSet() {
 		cfg.PrefixCache.StableTools = PtrTo(true)
 	}
-	if !cfg.PrefixCache.SkipRedactionWasSet() {
-		cfg.PrefixCache.SkipRedactionOnSystem = PtrTo(false)
-	}
 	return applyCacheControlDefaults(cfg)
 }
 
@@ -574,9 +571,6 @@ func anyCacheFeatureSet(cfg *Config) bool {
 		return true
 	}
 	if cfg.PrefixCache.StableTools != nil && *cfg.PrefixCache.StableTools {
-		return true
-	}
-	if cfg.PrefixCache.SkipRedactionOnSystem != nil && *cfg.PrefixCache.SkipRedactionOnSystem {
 		return true
 	}
 	if cfg.PrefixCache.CacheSystem != nil && *cfg.PrefixCache.CacheSystem {

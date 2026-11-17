@@ -40,21 +40,26 @@ func recordChatUsageTotals(gw *gateway.NenyaGateway, model string, totals stream
 	}
 }
 
-func recordUsageFromMap(gw *gateway.NenyaGateway, responseMap map[string]interface{}, model, providerName string) {
+// recordUsageFromMap records the Stats/Metrics side of a buffered response's
+// usage object and returns the normalized (input, output, total) token
+// counts so call sites can apply rate-limit true-ups without re-extracting.
+// Counts are 0/0/0 when the response carries no usable usage object.
+func recordUsageFromMap(gw *gateway.NenyaGateway, responseMap map[string]interface{}, model, providerName string) (inputTokens, outputTokens, totalTokens int) {
 	usage, ok := stream.UsageMapFromChunk(responseMap)
 	if !ok {
-		return
+		return 0, 0, 0
 	}
-	_, outputTokens, totalTokens := extractTokenCounts(usage)
-	if totalTokens <= 0 {
-		return
-	}
+	inputTokens, outputTokens, totalTokens = extractTokenCounts(usage)
+	// Record whichever legs parsed — a usage object with input>0/total<=0
+	// still carries a real output count and must not be suppressed
+	// (NENYA-336 round-10 review).
 	if gw.Stats != nil {
 		gw.Stats.RecordOutput(model, outputTokens)
 	}
 	if providerName != "" {
 		gw.Metrics.RecordTokens("output", model, "", providerName, outputTokens)
 	}
+	return inputTokens, outputTokens, totalTokens
 }
 
 // recordNonStreamingUsage records a completed (non-streaming) upstream usage

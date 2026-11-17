@@ -51,8 +51,11 @@ func TestSystemOneRetryResendsFullBody(t *testing.T) {
 
 	body := `{"state":{"thread":"t1"},"questions":[{"id":"q1","prompt":"decide"}],"model":"prov/system-one"}`
 	w := httptest.NewRecorder()
-	p.forwardSystemOneRequest(gw, w, context.Background(), upstream.URL+"/v1/systemone/decide",
-		[]byte(body), "prov", "system-one", http.Header{}, 3, "test-key")
+	p.forwardSystemOneRequest(forwardOpts{
+		gw: gw, respWriter: w, requestCtx: context.Background(), endpointURL: upstream.URL + "/v1/systemone/decide",
+		bodyBytes: []byte(body), providerName: "prov", modelName: "system-one",
+		srcHeaders: http.Header{}, maxAttempts: 3, keyRef: "test-key", estimate: 0,
+	})
 
 	mu.Lock()
 	defer mu.Unlock()

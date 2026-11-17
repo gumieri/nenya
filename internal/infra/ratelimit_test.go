@@ -360,7 +360,7 @@ func TestCheck_OversizedRequestAdmittedAndDrains(t *testing.T) {
 	if allowed {
 		t.Fatal("mid-size request should throttle after the bucket was drained")
 	}
-	if rej.Dimension != "tpm" {
+	if rej.Dimension != RateLimitDimensionTPM {
 		t.Fatalf("dimension = %q, want tpm", rej.Dimension)
 	}
 }
@@ -374,7 +374,7 @@ func TestCheck_MidSizeRejectionUnchanged(t *testing.T) {
 	if allowed {
 		t.Fatal("second request should throttle (40 tokens left < 60)")
 	}
-	if rej.Dimension != "tpm" || rej.Limit != 100 || rej.TokenCount != 60 {
+	if rej.Dimension != RateLimitDimensionTPM || rej.Limit != 100 || rej.TokenCount != 60 {
 		t.Fatalf("rejection details = %+v", rej)
 	}
 	if rej.BucketLeft < 0 || rej.BucketLeft >= 60 {
@@ -392,7 +392,162 @@ func TestCheck_OversizedStillBoundByRPM(t *testing.T) {
 	if allowed {
 		t.Fatal("second request should be RPM-throttled")
 	}
-	if rej.Dimension != "rpm" {
+	if rej.Dimension != RateLimitDimensionRPM {
 		t.Fatalf("dimension = %q, want rpm (oversize bypass is TPM-only)", rej.Dimension)
+	}
+}
+
+// TestRateLimiter_ChargeTPM pins the ChargeTPM accounting (NENYA-336): the
+// charge credits BOTH time-based dimensions over the elapsed interval (the
+// refill anchor is shared with Check — discarding the RPM accrual would
+// starve the provider bucket the chat path shares), debits only the TPM
+// dimension, and is a no-op for non-positive counts and nil limiters. The
+// sub-cap setup makes a double-refill regression observable: the duplicated
+// TPM accrual this test was written against produced 50, not 30.
+func TestRateLimiter_ChargeTPM(t *testing.T) {
+	rl := NewRateLimiter(60, 60)
+
+	// Create the provider bucket with a full Check, then force it into a
+	// sub-cap state with a known stale anchor so the refill amounts are
+	// exact: 30s of elapsed at 60/min credits +30 to each dimension.
+	if !rl.Check("p", "http://example.com/api", 0) {
+		t.Fatal("first Check must be admitted (full bucket)")
+	}
+	var staleAnchor time.Time
+	rl.mu.Lock()
+	for _, b := range rl.limits {
+		b.mu.Lock()
+		b.rpmBucket = 10
+		b.tpmBucket = 10
+		b.lastRefill = time.Now().Add(-30 * time.Second)
+		staleAnchor = b.lastRefill
+		b.mu.Unlock()
+	}
+	rl.mu.Unlock()
+
+	rl.ChargeTPM("p", "http://example.com/api", 10)
+
+	rl.mu.Lock()
+	b := rl.limits["p"]
+	if b == nil {
+		t.Fatal("provider bucket vanished")
+	}
+	rl.mu.Unlock()
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	// The charge itself sets lastRefill = call time; the interval it
+	// credited is exactly lastRefill − staleAnchor. Deriving the expectation
+	// from the measured interval (not a fixed 30s) keeps the assertions
+	// exact regardless of test-runner scheduling.
+	elapsed := b.lastRefill.Sub(staleAnchor).Seconds()
+	wantRPM := min(60.0, 10+elapsed*1.0)      // 60 RPM = 1 token/s
+	wantTPM := min(60.0, 10+elapsed*1.0) - 10 // one 10-token debit
+	// RPM: 10 + accrued (must NOT be discarded by the charge).
+	if b.rpmBucket < wantRPM-1e-6 || b.rpmBucket > wantRPM+1e-6 {
+		t.Errorf("rpmBucket = %v, want %v (elapsed %.3fs accrual credited)", b.rpmBucket, wantRPM, elapsed)
+	}
+	// TPM: 10 + accrued − 10 charged. The double-refill regression hit the
+	// cap and produced 50.
+	if b.tpmBucket < wantTPM-1e-6 || b.tpmBucket > wantTPM+1e-6 {
+		t.Errorf("tpmBucket = %v, want %v (one refill credit, one 10-token debit)", b.tpmBucket, wantTPM)
+	}
+}
+
+// TestRateLimiter_ChargeTPM_NoOps pins the guards: a nil limiter and
+// non-positive token counts must not touch bucket state.
+func TestRateLimiter_ChargeTPM_NoOps(t *testing.T) {
+	var nilRL *RateLimiter
+	nilRL.ChargeTPM("p", "http://example.com/api", 10) // must not panic
+
+	rl := NewRateLimiter(60, 60)
+	if !rl.Check("p", "http://example.com/api", 0) {
+		t.Fatal("first Check must be admitted")
+	}
+	rl.mu.Lock()
+	b := rl.limits["p"]
+	rl.mu.Unlock()
+	b.mu.Lock()
+	snapshotRPM, snapshotTPM := b.rpmBucket, b.tpmBucket
+	b.mu.Unlock()
+
+	rl.ChargeTPM("p", "http://example.com/api", 0)
+	rl.ChargeTPM("p", "http://example.com/api", -5)
+
+	rl.mu.Lock()
+	b = rl.limits["p"]
+	rl.mu.Unlock()
+	b.mu.Lock()
+	rpmAfter, tpmAfter := b.rpmBucket, b.tpmBucket
+	b.mu.Unlock()
+	if rpmAfter != snapshotRPM || tpmAfter != snapshotTPM {
+		t.Errorf("non-positive charge mutated state: rpm %v→%v, tpm %v→%v",
+			snapshotRPM, rpmAfter, snapshotTPM, tpmAfter)
+	}
+}
+
+// TestRateLimiter_CheckDetailed_RejectionAdvancesAnchor pins the anchor
+// discipline: a REJECTED check must still advance lastRefill (the refill
+// credits were already absorbed into the buckets). Without this, the next
+// check re-credits the same elapsed interval — inflating the bucket during
+// 429-retry storms and double-crediting ChargeTPM interleavings.
+func TestRateLimiter_CheckDetailed_RejectionAdvancesAnchor(t *testing.T) {
+	rl := NewRateLimiter(0, 100) // TPM-only: the RPM rejection path stays out of the way
+
+	if !rl.Check("p", "http://example.com/api", 0) {
+		t.Fatal("first Check must be admitted")
+	}
+	var staleAnchor time.Time
+	rl.mu.Lock()
+	for _, b := range rl.limits {
+		b.mu.Lock()
+		b.tpmBucket = 5
+		b.lastRefill = time.Now().Add(-6 * time.Second)
+		staleAnchor = b.lastRefill
+		b.mu.Unlock()
+	}
+	rl.mu.Unlock()
+
+	// 6s of elapsed at 100/min credits +10 → bucket 15; a 50-token request
+	// exceeds the remaining budget (and is under the 100 cap) → rejected.
+	allowed, rej := rl.CheckDetailed("p", "http://example.com/api", 50)
+	if allowed || rej.Dimension != RateLimitDimensionTPM {
+		t.Fatalf("expected a TPM rejection, got allowed=%v dimension=%q", allowed, rej.Dimension)
+	}
+
+	// The anchor advanced with the rejection: an immediate retry credits
+	// ≈0 elapsed and must stay rejected with an unchanged bucket.
+	rl.mu.Lock()
+	b := rl.limits["p"]
+	rl.mu.Unlock()
+	b.mu.Lock()
+	anchor := b.lastRefill
+	bucketAfterFirst := b.tpmBucket
+	b.mu.Unlock()
+	if time.Since(anchor) > 2*time.Second {
+		t.Fatalf("lastRefill = %v, want ≈now (the rejection must absorb the interval)", anchor)
+	}
+
+	// Pin the refill MAGNITUDE: the credited interval is anchor − staleAnchor,
+	// so the bucket must equal min(cap, 5 + elapsed·100/60) — a duplicated
+	// refill block would produce ≈25 and fail this exact comparison.
+	elapsed := anchor.Sub(staleAnchor).Seconds()
+	wantBucket := min(100.0, 5+elapsed*100.0/60.0)
+	if bucketAfterFirst < wantBucket-1e-6 || bucketAfterFirst > wantBucket+1e-6 {
+		t.Errorf("tpmBucket = %v, want %v (one 6s accrual over the measured interval)", bucketAfterFirst, wantBucket)
+	}
+
+	allowed2, _ := rl.CheckDetailed("p", "http://example.com/api", 50)
+	if allowed2 {
+		t.Fatal("immediate retry was admitted: the rejection re-credited the same elapsed interval (anchor did not advance)")
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	// The immediate retry may credit only the microseconds between calls
+	// (~1e-6 tokens) — what it must NOT do is re-credit the full 6s
+	// interval (+10, which would flip it to admitted).
+	// +0.5 tolerates ≈18s of scheduler accrual (100 TPM ≈ 1.67 tok/s) while
+	// staying 20× below the +10 full-interval re-credit this guards against.
+	if got := b.tpmBucket; got >= bucketAfterFirst+0.5 {
+		t.Errorf("tpmBucket = %v after the retry, want ≈%v (no full-interval re-credit)", got, bucketAfterFirst)
 	}
 }

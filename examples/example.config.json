@@ -48,8 +48,7 @@
   "prefix_cache": {
     "enabled": true,
     "pin_system_first": true,
-    "stable_tools": true,
-    "skip_redaction_on_system": true
+    "stable_tools": true
   },
 
   "compaction": {

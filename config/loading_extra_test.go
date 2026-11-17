@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -621,5 +622,76 @@ func TestResolveProvidersHeaderFilters(t *testing.T) {
 	}
 	if len(filter.Deny) != 1 || filter.Deny[0] != "context-management" {
 		t.Fatalf("unexpected filter: %#v", filter)
+	}
+}
+
+// TestRemovedOptionsProduceUnknownFieldDiagnostics pins NENYA-331: options
+// removed from the config schema must not silently survive as schema fields.
+// skip_redaction_on_system (prefix_cache is an audited plain struct) must
+// surface as an unknown-field diagnostic so an operator carrying it in a
+// config file learns it no longer does anything. RED before the field was
+// removed (it decoded cleanly and did nothing).
+//
+// failure_window_secs cannot be pinned the same way: AgentConfig implements
+// json.Unmarshaler, and the unknown-field walker treats Unmarshaler subtrees
+// as opaque (mirroring encoding/json's strict decode exactly — AUD-75 /
+// NENYA-303), so no key under agents.<name> is ever diagnosable. Its removal
+// is pinned structurally instead: the struct must have no such field, and a
+// config carrying the key must still load (lenient decode wins, NENYA-19).
+func TestRemovedOptionsProduceUnknownFieldDiagnostics(t *testing.T) {
+	data := []byte(`{"prefix_cache": {"skip_redaction_on_system": true}}`)
+	diags := unknownFieldDiagnostics(data, "test-config.json")
+
+	found := 0
+	for _, d := range diags {
+		if d.Code == "unknown_field" && strings.Contains(d.Message, "skip_redaction_on_system") {
+			found++
+		}
+	}
+	if found != 1 {
+		t.Errorf("removed option skip_redaction_on_system: want exactly one unknown_field diagnostic, got %d; diagnostics: %+v", found, diags)
+	}
+}
+
+// TestRemovedOptionsGoneFromSchema pins the failure_window_secs removal
+// (NENYA-331): the documented-but-never-enforced breaker knob must not exist
+// as an AgentConfig schema field, and a config still carrying it must load
+// leniently without error.
+func TestRemovedOptionsGoneFromSchema(t *testing.T) {
+	for f := range reflect.TypeFor[AgentConfig]().Fields() {
+		if strings.Contains(f.Tag.Get("json"), "failure_window_secs") {
+			t.Errorf("failure_window_secs still exists on AgentConfig (json tag %q); NENYA-331 removed it", f.Tag.Get("json"))
+		}
+	}
+
+	// A config still carrying the removed knob must load leniently without
+	// error (NENYA-19: unknown fields never fail load — and under an agent
+	// they are not even diagnosable, see the Unmarshaler opacity note above).
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.json")
+	body := `{"agents": {"a1": {"failure_window_secs": 30, "strategy": "fallback"}}}`
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	cfg, diags, err := LoadWithDiagnostics(path)
+	if err != nil {
+		t.Fatalf("lenient load of a config carrying the removed knob failed: %v", err)
+	}
+	if cfg == nil {
+		t.Fatal("lenient load returned a nil config")
+	}
+	// The knob sits under an agent section, which the unknown-field walker
+	// treats as opaque (AgentConfig implements json.Unmarshaler) — asserting
+	// the diagnostics are empty pins that opacity assumption: if the walker
+	// ever starts descending into Unmarshaler subtrees, this test is the
+	// tripwire that says the "not diagnosable" claim above needs revisiting.
+	// (The reflection scan above is likewise shallow: direct AgentConfig
+	// fields only — AgentConfig has no embedded structs today; a future
+	// promoted field would need the walker's knownFields expansion.)
+	if len(diags) != 0 {
+		t.Errorf("lenient load produced unexpected diagnostics for an agent-scoped key: %+v", diags)
+	}
+	if _, ok := cfg.Agents["a1"]; !ok {
+		t.Fatal("lenient load dropped the agents map — decode regression")
 	}
 }

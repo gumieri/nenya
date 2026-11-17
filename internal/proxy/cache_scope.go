@@ -66,13 +66,10 @@ type cachePolicyScope struct {
 	// rewrite or block served output bytes.
 	BlockedPatterns string `json:"blocked_patterns"`
 
-	// Prefix-cache redaction relaxation: skipping Tier-0 redaction on system
-	// messages changes what the upstream sees and what is served back.
-	// `enabled` is keyed only because it gates the skip (ShouldSkipRedaction);
-	// the remaining prefix-cache knobs shape the upstream prefix, not the
-	// served policy.
-	PrefixCacheEnabled    bool  `json:"prefix_cache_enabled"`
-	SkipRedactionOnSystem *bool `json:"prefix_cache_skip_redaction_on_system"`
+	// Prefix-cache enabled state shapes which history-wide rewrites the
+	// payload undergoes; the remaining prefix-cache knobs shape the
+	// upstream prefix, not the served policy.
+	PrefixCacheEnabled bool `json:"prefix_cache_enabled"`
 
 	// Global security sections and the resolved agent's per-agent overrides
 	// (nil when absent). Marshal wholesale so every knob in the section is
@@ -142,7 +139,6 @@ func resolveCachePolicyScope(agentName string, agent config.AgentConfig, sourceF
 
 	scope.BlockedPatterns = digestStringList(cfg.Governance.BlockedExecutionPatterns)
 	scope.PrefixCacheEnabled = cfg.PrefixCache.Enabled
-	scope.SkipRedactionOnSystem = cfg.PrefixCache.SkipRedactionOnSystem
 
 	scope.Injection = cfg.Governance.Injection
 	scope.Spotlight = cfg.Governance.Spotlight

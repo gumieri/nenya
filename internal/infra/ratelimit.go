@@ -54,10 +54,19 @@ func NewRateLimiter(maxRPM, maxTPM int) *RateLimiter {
 	}
 }
 
+// Rate-limit rejection dimensions reported in RateLimitRejection.Dimension.
+const (
+	RateLimitDimensionRPM            = "rpm"
+	RateLimitDimensionTPM            = "tpm"
+	RateLimitDimensionBucketCapacity = "bucket_capacity"
+)
+
 // RateLimitRejection describes why a request was rejected by the rate
 // limiter. Dimension is empty when the request was allowed.
 type RateLimitRejection struct {
-	// Dimension is "rpm" or "tpm"; empty when the request was allowed.
+	// Dimension is the exhausting dimension: "rpm", "tpm", or
+	// "bucket_capacity" (host capacity exhausted, no bucket exists); empty
+	// when the request was allowed.
 	Dimension string
 	// Limit is the configured limit of the rejecting dimension.
 	Limit int
@@ -72,6 +81,11 @@ type RateLimitRejection struct {
 // bucket falls back to the upstream host. Provider-specific limits (set via
 // SetProviderLimits) apply when set, otherwise the global defaults.
 // For rejection details use CheckDetailed.
+//
+// Test-only convenience: production call sites must use CheckDetailed so
+// rejection details (dimension/limit/remaining) reach the logs and the
+// structured 429 body. Retained for test ergonomics — see issue #150's
+// dead-code ledger before removing.
 func (rl *RateLimiter) Check(providerName, upstreamURL string, tokenCount int) bool {
 	allowed, _ := rl.CheckDetailed(providerName, upstreamURL, tokenCount)
 	return allowed
@@ -83,7 +97,7 @@ func (rl *RateLimiter) Check(providerName, upstreamURL string, tokenCount int) b
 func (rl *RateLimiter) CheckDetailed(providerName, upstreamURL string, tokenCount int) (bool, RateLimitRejection) {
 	limiter := rl.getOrCreateBucket(bucketKey(providerName, upstreamURL))
 	if limiter == nil {
-		return false, RateLimitRejection{Dimension: "bucket_capacity", TokenCount: tokenCount}
+		return false, RateLimitRejection{Dimension: RateLimitDimensionBucketCapacity, TokenCount: tokenCount}
 	}
 
 	return limiter.checkDetailed(tokenCount)
@@ -96,7 +110,10 @@ func (l *rateLimiter) checkDetailed(tokenCount int) (bool, RateLimitRejection) {
 	defer l.mu.Unlock()
 
 	now := time.Now()
-	elapsed := now.Sub(l.lastRefill).Seconds()
+	// A backward clock step must not credit negative amounts: clamp the
+	// elapsed interval to zero — the anchor still advances, so the skipped
+	// interval is lost rather than double-counted (rate-limit conservatism).
+	elapsed := max(0.0, now.Sub(l.lastRefill).Seconds())
 
 	if l.maxRPM > 0 {
 		l.rpmBucket = min(float64(l.maxRPM),
@@ -106,16 +123,21 @@ func (l *rateLimiter) checkDetailed(tokenCount int) (bool, RateLimitRejection) {
 		l.tpmBucket = min(float64(l.maxTPM),
 			l.tpmBucket+elapsed*float64(l.maxTPM)/60.0)
 	}
+	// The anchor advances on EVERY path once the credits are absorbed —
+	// rejection paths included. Re-crediting the same elapsed interval on
+	// the next call would inflate the buckets during 429-retry storms and
+	// poison ChargeTPM interleavings.
+	l.lastRefill = now
 
 	if l.maxRPM > 0 && l.rpmBucket < 1.0 {
 		return false, RateLimitRejection{
-			Dimension: "rpm", Limit: l.maxRPM,
+			Dimension: RateLimitDimensionRPM, Limit: l.maxRPM,
 			BucketLeft: l.rpmBucket, TokenCount: tokenCount,
 		}
 	}
 	if l.maxTPM > 0 && l.tpmBucket < float64(tokenCount) && float64(tokenCount) < float64(l.maxTPM) {
 		return false, RateLimitRejection{
-			Dimension: "tpm", Limit: l.maxTPM,
+			Dimension: RateLimitDimensionTPM, Limit: l.maxTPM,
 			BucketLeft: l.tpmBucket, TokenCount: tokenCount,
 		}
 	}
@@ -126,8 +148,56 @@ func (l *rateLimiter) checkDetailed(tokenCount int) (bool, RateLimitRejection) {
 	if l.maxTPM > 0 {
 		l.tpmBucket = max(0, l.tpmBucket-float64(tokenCount))
 	}
-	l.lastRefill = now
 	return true, RateLimitRejection{}
+}
+
+// ChargeTPM decrements the TPM bucket by tokenCount without making an
+// admission decision and without debiting RPM: the post-dispatch true-up
+// for endpoints whose real token usage is only known after the response
+// (NENYA-336 — embeddings). RPM accrual over the elapsed interval is still
+// credited (the refill anchor is shared with Check); refill semantics
+// mirror checkDetailed so a charge that lands after a refill boundary
+// credits the elapsed budget first. tokenCount <= 0 is a no-op. The bucket
+// is keyed exactly like Check, so a charge lands in the same provider
+// bucket subsequent admission checks consult.
+func (rl *RateLimiter) ChargeTPM(providerName, upstreamURL string, tokenCount int) {
+	if rl == nil || tokenCount <= 0 {
+		return
+	}
+	limiter := rl.getOrCreateBucket(bucketKey(providerName, upstreamURL))
+	if limiter == nil {
+		// Host capacity exhausted: the true-up is silently dropped — the
+		// bucket it would land in no longer exists, so there is nothing to
+		// charge. Accepted under-charge; Check callers hit the same
+		// capacity wall first.
+		return
+	}
+	limiter.chargeTPM(tokenCount)
+}
+
+// chargeTPM is ChargeTPM's bucket-level implementation. The refill credits
+// BOTH time-based dimensions before the TPM debit: the lastRefill anchor is
+// shared with Check, and discarding the RPM accrual over the interval would
+// starve the bucket this provider shares with the chat path.
+func (l *rateLimiter) chargeTPM(tokenCount int) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	now := time.Now()
+	// Same backward-clock clamp as checkDetailed: credit nothing, lose the
+	// interval, keep the anchor monotone.
+	elapsed := max(0.0, now.Sub(l.lastRefill).Seconds())
+	l.lastRefill = now
+
+	if l.maxRPM > 0 {
+		l.rpmBucket = min(float64(l.maxRPM),
+			l.rpmBucket+elapsed*float64(l.maxRPM)/60.0)
+	}
+	if l.maxTPM > 0 {
+		l.tpmBucket = min(float64(l.maxTPM),
+			l.tpmBucket+elapsed*float64(l.maxTPM)/60.0)
+		l.tpmBucket = max(0, l.tpmBucket-float64(tokenCount))
+	}
 }
 
 // bucketKey resolves the bucket key: provider name when set, otherwise the
