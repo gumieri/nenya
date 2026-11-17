@@ -111,7 +111,8 @@ func TestReloadSwapWindowServesFromOldGateway(t *testing.T) {
 	if !g1.Draining() {
 		t.Fatal("the swapped-out gateway is not draining after CloseWhenDrained")
 	}
-	if g1.EnterRequest() {
+	if rel, ok := g1.EnterRequest(); ok {
+		defer rel() // don't leak the admission slot on the failure path
 		t.Fatal("the swapped-out gateway still admits requests after draining")
 	}
 	raceProxy := &Proxy{}

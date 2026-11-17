@@ -230,3 +230,52 @@ func TestLatencyTracker_TTFTRemainsNilSafe(t *testing.T) {
 		t.Error("a nil tracker must report a TTFT miss")
 	}
 }
+
+// TestLatencyMedianSubMillisecondLossless pins NENYA-335: the full-request
+// median must keep sub-millisecond precision. The old computation
+// (`Milliseconds()` truncation) published 0.9ms as 0.0, making every
+// sub-ms target (local Ollama) an exact tie: the ±5% anti-herd jitter
+// multiplied zero and the balanced scoring deemed the range degenerate —
+// routing quality for fast targets silently degraded. MedianTTFT already
+// keeps its dimension lossless; the header-latency median must too.
+func TestLatencyMedianSubMillisecondLossless(t *testing.T) {
+	tr := NewLatencyTracker()
+	tr.Record("m-fast", "p", 700*time.Microsecond)
+	tr.Record("m-slow", "p", 1300*time.Microsecond)
+
+	fast, ok := tr.Get("m-fast", "p")
+	if !ok {
+		t.Fatal("no entry for (m-fast, p)")
+	}
+	if fast.MedianMs != 0.7 {
+		t.Errorf("MedianMs = %v, want 0.7 (700µs must not truncate to 0)", fast.MedianMs)
+	}
+
+	slow, ok := tr.Get("m-slow", "p")
+	if !ok {
+		t.Fatal("no entry for (m-slow, p)")
+	}
+	if slow.MedianMs != 1.3 {
+		t.Errorf("MedianMs = %v, want 1.3 (1300µs must not truncate to 1)", slow.MedianMs)
+	}
+
+	// The medians must stay distinct so the anti-herd jitter and balanced
+	// scoring see a real range, not a degenerate all-tie field.
+	if fast.MedianMs == slow.MedianMs {
+		t.Error("sub-ms medians collapsed to equal values")
+	}
+
+	// Odd multi-sample buffer: the median selection (buf[len/2]) must stay
+	// lossless too, not just the single-sample fast path.
+	tr2 := NewLatencyTracker()
+	for _, d := range []time.Duration{500 * time.Microsecond, 700 * time.Microsecond, 900 * time.Microsecond} {
+		tr2.Record("m-odd", "p", d)
+	}
+	odd, ok := tr2.Get("m-odd", "p")
+	if !ok {
+		t.Fatal("no entry for (m-odd, p)")
+	}
+	if odd.MedianMs != 0.7 {
+		t.Errorf("MedianMs = %v, want 0.7 (median of 500/700/900µs must not truncate)", odd.MedianMs)
+	}
+}
