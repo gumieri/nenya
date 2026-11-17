@@ -167,8 +167,8 @@ func (p *Proxy) handleResponses(gw *gateway.NenyaGateway, w http.ResponseWriter,
 	ctx, cancel := p.buildResponsesContext(r, provider)
 	defer cancel()
 
-	if !gw.RateLimiter.Check(provider.Name, provider.BaseURL, 0) {
-		writeStructuredError(w, http.StatusTooManyRequests, infra.ErrorKindRateLimited, "Rate limit exceeded")
+	if allowed, rej := gw.RateLimiter.CheckDetailed(provider.Name, provider.BaseURL, 0); !allowed {
+		writeRateLimitRejection(gw.Logger, w, provider.Name, rej)
 		return
 	}
 
@@ -178,7 +178,6 @@ func (p *Proxy) handleResponses(gw *gateway.NenyaGateway, w http.ResponseWriter,
 	}
 
 	gw.Stats.RecordRequest(responsesModel, 0)
-	gw.Metrics.RecordUpstreamRequest(responsesModel, "", provider.Name)
 
 	ctxLogger := gw.Logger.With("operation", "responses", "provider", provider.Name, "api_key", keyRef)
 
@@ -210,6 +209,9 @@ func (p *Proxy) handleResponses(gw *gateway.NenyaGateway, w http.ResponseWriter,
 		writeStructuredError(w, http.StatusBadGateway, infra.ErrorKindNetworkError, "Upstream provider error")
 		return
 	}
+	// Counted on round-trip success (matching embeddings/systemone), not at
+	// admission — a failed dispatch is not an upstream request served.
+	gw.Metrics.RecordUpstreamRequest(responsesModel, "", provider.Name)
 	defer func() { _ = resp.Body.Close() }()
 
 	writeUpstreamResponse(ctx, w, resp, ctxLogger)

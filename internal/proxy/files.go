@@ -43,8 +43,8 @@ func (p *Proxy) handleFilesOrBatches(gw *gateway.NenyaGateway, w http.ResponseWr
 		return
 	}
 
-	if !gw.RateLimiter.Check(provider.Name, provider.BaseURL, 0) {
-		writeStructuredError(w, http.StatusTooManyRequests, infra.ErrorKindRateLimited, "Rate limit exceeded")
+	if allowed, rej := gw.RateLimiter.CheckDetailed(provider.Name, provider.BaseURL, 0); !allowed {
+		writeRateLimitRejection(gw.Logger, w, provider.Name, rej)
 		return
 	}
 

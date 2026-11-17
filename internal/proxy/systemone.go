@@ -61,14 +61,20 @@ func (p *Proxy) handleSystemOne(gw *gateway.NenyaGateway, w http.ResponseWriter,
 		return
 	}
 
-	if !gw.RateLimiter.Check(provider.Name, provider.BaseURL, 0) {
-		writeStructuredError(w, http.StatusTooManyRequests, infra.ErrorKindRateLimited, "Rate limit exceeded")
+	tokenCount := gw.CountTokens(string(bodyBytes))
+
+	// NENYA-336: pass the REAL token count — the body is fully buffered, so
+	// the count is computed from it directly (still a cl100k estimate that
+	// drifts against the provider, corrected by the response true-up in the
+	// forward helper) and the TPM dimension is enforced here like on the
+	// chat path (a hardcoded 0 skipped TPM entirely, letting System One
+	// traffic run RPM-only).
+	if allowed, rej := gw.RateLimiter.CheckDetailed(provider.Name, provider.BaseURL, tokenCount); !allowed {
+		writeRateLimitRejection(gw.Logger, w, provider.Name, rej)
 		return
 	}
 
-	tokenCount := gw.CountTokens(string(bodyBytes))
 	gw.Stats.RecordRequest(modelName, tokenCount)
-	gw.Metrics.RecordUpstreamRequest(modelName, "", provider.Name)
 	gw.Metrics.RecordDecision(modelName, provider.Name)
 	gw.Metrics.RecordTokens("client", modelName, "", provider.Name, tokenCount)
 
@@ -84,7 +90,11 @@ func (p *Proxy) handleSystemOne(gw *gateway.NenyaGateway, w http.ResponseWriter,
 		maxAttempts = gw.Config.Governance.EffectiveMaxRetryAttempts()
 	}
 
-	p.forwardSystemOneRequest(gw, w, ctx, endpoint, bodyBytes, provider.Name, modelName, r.Header, maxAttempts, keyRef)
+	p.forwardSystemOneRequest(forwardOpts{
+		gw: gw, respWriter: w, requestCtx: ctx, endpointURL: endpoint, bodyBytes: bodyBytes,
+		providerName: provider.Name, baseURL: provider.BaseURL, modelName: modelName, srcHeaders: r.Header,
+		maxAttempts: maxAttempts, keyRef: keyRef, estimate: tokenCount,
+	})
 }
 
 // parseSystemOneModel extracts and validates the "model" field from a System
@@ -92,7 +102,7 @@ func (p *Proxy) handleSystemOne(gw *gateway.NenyaGateway, w http.ResponseWriter,
 func parseSystemOneModel(gw *gateway.NenyaGateway, bodyBytes []byte) (string, *httpError) {
 	var payload map[string]any
 	if err := json.Unmarshal(bodyBytes, &payload); err != nil {
-		gw.Logger.Warn("failed to parse system one JSON")
+		gw.Logger.Warn("failed to parse system one JSON", "err", err)
 		return "", &httpError{Code: http.StatusBadRequest, Kind: infra.ErrorKindInvalidRequest, Message: "Invalid JSON payload"}
 	}
 	modelName, ok := payload["model"].(string)
@@ -167,16 +177,23 @@ func systemOneProviderFor(gw *gateway.NenyaGateway, modelName string) (string, [
 
 // forwardSystemOneRequest performs the retried upstream round-trip and relays
 // the non-streaming JSON response, recording usage from its `usage` object.
-func (p *Proxy) forwardSystemOneRequest(gw *gateway.NenyaGateway, w http.ResponseWriter, ctx context.Context, endpoint string, bodyBytes []byte, providerName, modelName string, srcHeaders http.Header, maxAttempts int, keyRef string) {
-	req, err := p.buildUpstreamRequest(gw, ctx, http.MethodPost, endpoint, bodyBytes, providerName, modelName, "", srcHeaders)
-	if err != nil {
-		gw.Logger.Error("failed to create system one upstream request", "err", err, "api_key", keyRef)
-		writeStructuredError(w, http.StatusInternalServerError, infra.ErrorKindInternal, "Internal Server Error")
-		return
-	}
-	req.Header.Set("Content-Type", "application/json")
-	resp, err := util.DoWithRetryResp(ctx, maxAttempts, func() (*http.Response, error) {
-		r, fetchErr := gw.ClientFor(providerName).Do(req)
+func (p *Proxy) forwardSystemOneRequest(o forwardOpts) {
+	ctxLogger := o.gw.Logger.With("operation", "systemone", "api_key", o.keyRef, "provider", o.providerName)
+	resp, err := util.DoWithRetryResp(o.requestCtx, o.maxAttempts, func() (*http.Response, error) {
+		// AUD-21 (NENYA-243): every attempt rebuilds the request — the
+		// previous Do consumed the body reader, so a re-Do sent an empty
+		// request upstream. Build failures here surface as 502
+		// (network_error) after retries, matching the embeddings handler —
+		// a deterministic build failure burns the remaining attempts first
+		// (accepted: build errors are effectively impossible for a
+		// pre-validated endpoint + buffered body).
+		req, buildErr := p.buildUpstreamRequest(o.gw, o.requestCtx, http.MethodPost, o.endpointURL, o.bodyBytes, o.providerName, o.modelName, "", o.srcHeaders)
+		if buildErr != nil {
+			ctxLogger.Error("failed to create system one upstream request", "err", buildErr)
+			return nil, buildErr
+		}
+		req.Header.Set("Content-Type", "application/json")
+		r, fetchErr := o.gw.ClientFor(o.providerName).Do(req)
 		if fetchErr != nil {
 			if r != nil {
 				_ = r.Body.Close()
@@ -190,49 +207,54 @@ func (p *Proxy) forwardSystemOneRequest(gw *gateway.NenyaGateway, w http.Respons
 		return r, nil
 	})
 	if err != nil {
-		gw.Logger.Error("system one upstream request failed", "err", err, "provider", providerName)
-		writeStructuredError(w, http.StatusBadGateway, infra.ErrorKindNetworkError, "Upstream provider error")
+		ctxLogger.Error("system one upstream request failed", "err", err)
+		writeStructuredError(o.respWriter, http.StatusBadGateway, infra.ErrorKindNetworkError, "Upstream provider error")
 		return
 	}
+	// Counted on round-trip success (matching the embeddings handler), not
+	// at admission — a 502/network-failed dispatch is not an upstream
+	// request served.
+	o.gw.Metrics.RecordUpstreamRequest(o.modelName, "", o.providerName)
 	defer func() { _ = resp.Body.Close() }()
 
-	ctxLogger := gw.Logger.With("operation", "systemone", "api_key", keyRef, "provider", providerName)
-	respBody, err := io.ReadAll(io.LimitReader(resp.Body, maxEmbeddingsResponseBytes))
+	respBody, err := io.ReadAll(io.LimitReader(resp.Body, maxNonChatResponseBytes))
 	if err != nil {
 		ctxLogger.Error("failed to read system one response body", "err", err)
-		writeStructuredError(w, http.StatusBadGateway, infra.ErrorKindNetworkError, "Failed to read upstream response")
+		writeStructuredError(o.respWriter, http.StatusBadGateway, infra.ErrorKindNetworkError, "Failed to read upstream response")
 		return
 	}
 
-	gw.Stats.RecordOutput(modelName, systemOneOutputTokens(respBody))
-	if gw.Metrics != nil {
-		gw.Metrics.RecordUpstreamRequest(modelName, "", providerName)
-		if input, output, ok := systemOneTokenCounts(respBody); ok {
-			gw.Metrics.RecordTokens("input", modelName, "", providerName, input)
-			gw.Metrics.RecordTokens("output", modelName, "", providerName, output)
+	input, output, usagePresent := systemOneTokenCounts(respBody)
+	if usagePresent {
+		o.gw.Stats.RecordOutput(o.modelName, output)
+	}
+	o.gw.Metrics.RecordTokens("input", o.modelName, "", o.providerName, input)
+	o.gw.Metrics.RecordTokens("output", o.modelName, "", o.providerName, output)
+	// NENYA-336: true-up the TPM bucket on the real input total — the
+	// admission debit used the cl100k estimate, which drifts against the
+	// provider's own accounting. Rate-limit accounting must not depend on
+	// the Metrics instance being present.
+	if usagePresent {
+		if delta := input - o.estimate; delta > 0 {
+			o.gw.RateLimiter.ChargeTPM(o.providerName, o.baseURL, delta)
 		}
 	}
 
-	writeUpstreamBytesResponse(ctx, w, resp, respBody, ctxLogger)
+	writeUpstreamBytesResponse(o.requestCtx, o.respWriter, resp, respBody, ctxLogger)
 }
 
 // systemOneTokenCounts extracts the input/output token counts from a System
-// One response's usage object.
+// One response's usage object. ok is true only when the body parsed AND
+// carried a usage object — a valid body without usage reports no counts.
 func systemOneTokenCounts(respBody []byte) (input, output int, ok bool) {
 	var payload struct {
-		Usage struct {
+		Usage *struct {
 			InputTokens  int `json:"input_tokens"`
 			OutputTokens int `json:"output_tokens"`
 		} `json:"usage"`
 	}
-	if err := json.Unmarshal(respBody, &payload); err != nil {
+	if err := json.Unmarshal(respBody, &payload); err != nil || payload.Usage == nil {
 		return 0, 0, false
 	}
 	return payload.Usage.InputTokens, payload.Usage.OutputTokens, true
-}
-
-// systemOneOutputTokens returns the output token count, or 0 when absent.
-func systemOneOutputTokens(respBody []byte) int {
-	_, output, _ := systemOneTokenCounts(respBody)
-	return output
 }

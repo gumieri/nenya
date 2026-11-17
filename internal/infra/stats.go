@@ -116,8 +116,12 @@ func (u *UsageTracker) boundedModel(model string) string {
 // total. input_tokens is the request-side count and is unrelated to
 // cache_hit_ratio, whose numerator and denominator come from the cache_* token
 // counters. A negative inputTokens is not added; the request is still counted,
-// so requests may exceed the summed input_tokens.
+// so requests may exceed the summed input_tokens. Nil-safe (§9): a nil
+// tracker records nothing.
 func (u *UsageTracker) RecordRequest(model string, inputTokens int) {
+	if u == nil {
+		return
+	}
 	s := u.getOrCreate(model)
 	// Malformed input must not drop the request: the guard sits after the
 	// increment on purpose.
@@ -130,7 +134,11 @@ func (u *UsageTracker) RecordRequest(model string, inputTokens int) {
 
 // RecordOutput adds outputTokens to model's output total. Negative counts are
 // ignored so a malformed usage object cannot wrap the unsigned counter.
+// Nil-safe (§9): a nil tracker records nothing.
 func (u *UsageTracker) RecordOutput(model string, outputTokens int) {
+	if u == nil {
+		return
+	}
 	if outputTokens < 0 {
 		return
 	}
@@ -140,6 +148,9 @@ func (u *UsageTracker) RecordOutput(model string, outputTokens int) {
 
 // RecordError counts one failed request for model.
 func (u *UsageTracker) RecordError(model string) {
+	if u == nil {
+		return
+	}
 	s := u.getOrCreate(model)
 	atomic.AddUint64(&s.errors, 1)
 }
@@ -147,6 +158,9 @@ func (u *UsageTracker) RecordError(model string) {
 // RecordCacheHit adds upstream prompt-cache hit tokens (served from cache) to
 // model's total. Negative counts are ignored.
 func (u *UsageTracker) RecordCacheHit(model string, tokens int) {
+	if u == nil {
+		return
+	}
 	if tokens < 0 {
 		return
 	}
@@ -157,6 +171,9 @@ func (u *UsageTracker) RecordCacheHit(model string, tokens int) {
 // RecordCacheMiss adds upstream prompt-cache miss tokens (uncached input) to
 // model's total. Negative counts are ignored.
 func (u *UsageTracker) RecordCacheMiss(model string, tokens int) {
+	if u == nil {
+		return
+	}
 	if tokens < 0 {
 		return
 	}
@@ -167,6 +184,9 @@ func (u *UsageTracker) RecordCacheMiss(model string, tokens int) {
 // RecordCacheCreation adds upstream prompt-cache creation tokens (newly written
 // cache entries) to model's total. Negative counts are ignored.
 func (u *UsageTracker) RecordCacheCreation(model string, tokens int) {
+	if u == nil {
+		return
+	}
 	if tokens < 0 {
 		return
 	}
@@ -177,6 +197,9 @@ func (u *UsageTracker) RecordCacheCreation(model string, tokens int) {
 // RecordReasoning adds reasoning tokens to model's total. Negative counts are
 // ignored.
 func (u *UsageTracker) RecordReasoning(model string, tokens int) {
+	if u == nil {
+		return
+	}
 	if tokens < 0 {
 		return
 	}

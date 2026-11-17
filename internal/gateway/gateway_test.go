@@ -768,7 +768,7 @@ func TestNew_ProviderRateLimitInheritsGlobal(t *testing.T) {
 	}
 	if allowed, rej := gw.RateLimiter.CheckDetailed("deepseek", url, 0); allowed {
 		t.Fatal("expected global RPM (60) to reject request 61 for deepseek")
-	} else if rej.Dimension != "rpm" {
+	} else if rej.Dimension != infra.RateLimitDimensionRPM {
 		t.Fatalf("expected rpm rejection, got %+v", rej)
 	}
 }
@@ -790,7 +790,7 @@ func TestNew_ProviderRateLimitUserOverride(t *testing.T) {
 	}
 	if allowed, rej := gw.RateLimiter.CheckDetailed("zai-coding-plan", url, 0); allowed {
 		t.Fatal("third request should be rejected with rpm=2 override")
-	} else if rej.Dimension != "rpm" || rej.Limit != 2 {
+	} else if rej.Dimension != infra.RateLimitDimensionRPM || rej.Limit != 2 {
 		t.Fatalf("expected rpm limit 2, got %+v", rej)
 	}
 }
