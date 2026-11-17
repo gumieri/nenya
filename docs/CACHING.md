@@ -28,7 +28,7 @@ When a Bearer token is present, the fingerprint is `"auth:" + hex(sha256(sha256(
 
 - the resolved **agent** (for agent routes; direct-model routes carry none), including the agent's system prompt identity (`system_prompt`, `system_prompt_file`, `force_system_prompt`), `cache_aware`, and `cache_salt`,
 - the client **wire format** the cached bytes are rendered in (`openai` / `anthropic`). The value is the format the gateway *detected* for the request (an Anthropic body is detected by its top-level `type` field) and it is the same value that selects the SSE transformer, so a replayed body always matches the format it was rendered in.
-- the security-relevant **guardrail configuration**: output redaction (bouncer `redact_output`/window), the redaction pattern set, preset and label, entropy redaction thresholds, `bouncer.fail_open`, the blocked-execution (response stream filter) pattern set, the prefix-cache redaction skip (`skip_redaction_on_system`), the injection detector (global section plus the agent's override), spotlighting, the egress guard (hosts, query cap, action), the canary tripwire, and the advisory judgment sites (`judgments`, `tfidf_rerank`) including the identity of their engine chains.
+- the security-relevant **guardrail configuration**: output redaction (bouncer `redact_output`/window), the redaction pattern set, preset and label, entropy redaction thresholds, `bouncer.fail_open`, the blocked-execution (response stream filter) pattern set, the injection detector (global section plus the agent's override), spotlighting, the egress guard (hosts, query cap, action), the canary tripwire, and the advisory judgment sites (`judgments`, `tfidf_rerank`) including the identity of their engine chains.
 
 A cached body is therefore only replayable for the caller, agent, format, and guardrail set that produced it: tightening a policy (or switching an agent from the global defaults to stricter overrides) starts a fresh namespace instead of serving a body cached before the guardrail existed — the class behind GoModel #971. **Operator-visible hit-rate change:** editing any of the knobs above invalidates entries stored under the previous policy (they simply never match again); agents that rely on per-agent policy overrides no longer share entries with agents using the global defaults.
 
@@ -120,7 +120,7 @@ Nenya also supports **provider-side prompt prefix caching** (`prefix_cache`), wh
 
 ### How it works
 
-- **Prefix stabilization** — system messages are pinned first (`pin_system_first`), tools are sorted deterministically (`stable_tools`), and Tier-0 redaction is skipped on system messages (`skip_redaction_on_system`) so the prefix is byte-identical between requests.
+- **Prefix stabilization** — system messages are pinned first (`pin_system_first`), tools are sorted deterministically (`stable_tools`), so the prefix is byte-identical between requests.
 - **Anthropic breakpoints** (`cache_control`) — the gateway injects `cache_control` markers on the system, tools, and messages blocks. Two breakpoint strategies are available:
   - `cache_mode: "explicit"` (default) — injects block-level `cache_control` markers on `CacheSystem`/`CacheTools`/`CacheMessages`.
   - `cache_mode: "automatic"` — emits a single top-level `cache_control` (Anthropic automatic caching). Block-level markers are forced off.

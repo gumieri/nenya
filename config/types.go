@@ -84,7 +84,6 @@ type AgentConfig struct {
 	Description             string          `json:"description,omitempty"`
 	CooldownSeconds         int             `json:"cooldown_seconds"`
 	FailureThreshold        int             `json:"failure_threshold"`
-	FailureWindowSec        int             `json:"failure_window_secs"`
 	SuccessThreshold        int             `json:"success_threshold"`
 	MaxRetries              int             `json:"max_retries"`
 	SystemPrompt            string          `json:"system_prompt"`
@@ -1963,26 +1962,24 @@ func (s *BouncerConfig) UnmarshalJSON(data []byte) error {
 // CacheModeAutomatic ("automatic") emits a single top-level cache_control and
 // disables block markers.
 type PrefixCacheConfig struct {
-	Enabled               bool    `json:"enabled"`
-	CacheMode             *string `json:"cache_mode,omitempty"`
-	PinSystemFirst        *bool   `json:"pin_system_first,omitempty"`
-	StableTools           *bool   `json:"stable_tools,omitempty"`
-	SkipRedactionOnSystem *bool   `json:"skip_redaction_on_system,omitempty"`
-	CacheSystem           *bool   `json:"cache_system,omitempty"`
-	CacheTools            *bool   `json:"cache_tools,omitempty"`
-	CacheMessages         *bool   `json:"cache_messages,omitempty"`
-	CacheControlTTL       string  `json:"cache_control_ttl,omitempty"`
-	CacheSystemTTL        *string `json:"cache_system_ttl,omitempty"`
-	CacheToolsTTL         *string `json:"cache_tools_ttl,omitempty"`
-	CacheMessagesTTL      *string `json:"cache_messages_ttl,omitempty"`
-	OpenAIBreakpoint      *bool   `json:"openai_breakpoint,omitempty"`
-	OpenAIMode            *string `json:"openai_mode,omitempty"`
+	Enabled          bool    `json:"enabled"`
+	CacheMode        *string `json:"cache_mode,omitempty"`
+	PinSystemFirst   *bool   `json:"pin_system_first,omitempty"`
+	StableTools      *bool   `json:"stable_tools,omitempty"`
+	CacheSystem      *bool   `json:"cache_system,omitempty"`
+	CacheTools       *bool   `json:"cache_tools,omitempty"`
+	CacheMessages    *bool   `json:"cache_messages,omitempty"`
+	CacheControlTTL  string  `json:"cache_control_ttl,omitempty"`
+	CacheSystemTTL   *string `json:"cache_system_ttl,omitempty"`
+	CacheToolsTTL    *string `json:"cache_tools_ttl,omitempty"`
+	CacheMessagesTTL *string `json:"cache_messages_ttl,omitempty"`
+	OpenAIBreakpoint *bool   `json:"openai_breakpoint,omitempty"`
+	OpenAIMode       *string `json:"openai_mode,omitempty"`
 }
 
 func (c *PrefixCacheConfig) CacheModeWasSet() bool        { return wasSet(c.CacheMode) }
 func (c *PrefixCacheConfig) PinWasSet() bool              { return wasSet(c.PinSystemFirst) }
 func (c *PrefixCacheConfig) StableWasSet() bool           { return wasSet(c.StableTools) }
-func (c *PrefixCacheConfig) SkipRedactionWasSet() bool    { return wasSet(c.SkipRedactionOnSystem) }
 func (c *PrefixCacheConfig) CacheSystemWasSet() bool      { return wasSet(c.CacheSystem) }
 func (c *PrefixCacheConfig) CacheToolsWasSet() bool       { return wasSet(c.CacheTools) }
 func (c *PrefixCacheConfig) CacheMessagesWasSet() bool    { return wasSet(c.CacheMessages) }

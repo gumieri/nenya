@@ -96,13 +96,3 @@ func ToolSortKey(tool interface{}) string {
 	}
 	return name
 }
-
-func ShouldSkipRedaction(msgNode map[string]interface{}, cfg config.PrefixCacheConfig) bool {
-	if cfg.Enabled && cfg.SkipRedactionOnSystem != nil && *cfg.SkipRedactionOnSystem {
-		role, _ := msgNode["role"].(string)
-		if role == "system" {
-			return true
-		}
-	}
-	return false
-}

@@ -52,7 +52,6 @@ func scopeBaseConfig() *config.Config {
 	cfg.Bouncer.RedactPreset = "credentials"
 	cfg.Bouncer.Engine = config.EngineRef{AgentName: "summarizer"}
 	cfg.PrefixCache.Enabled = true
-	cfg.PrefixCache.SkipRedactionOnSystem = config.PtrTo(true)
 	return cfg
 }
 
@@ -109,9 +108,6 @@ func TestCachePolicyScope_PartitionsEveryPolicyInput(t *testing.T) {
 			c.Governance.BlockedExecutionPatterns = append(c.Governance.BlockedExecutionPatterns, `curl`)
 		})},
 		{"prefix cache enabled", mutate(func(c *config.Config) { c.PrefixCache.Enabled = false })},
-		{"prefix cache redaction skip", mutate(func(c *config.Config) {
-			c.PrefixCache.SkipRedactionOnSystem = config.PtrTo(false)
-		})},
 		{"injection section", mutate(func(c *config.Config) {
 			c.Governance.Injection = &config.InjectionConfig{Enabled: config.PtrTo(false)}
 		})},
@@ -264,7 +260,7 @@ func TestCachePolicyScope_FieldSetIsPinned(t *testing.T) {
 		"bouncer_enabled", "bouncer_fail_open", "redaction_label", "redact_preset",
 		"redact_patterns", "redact_output", "redact_output_window",
 		"entropy_enabled", "entropy_threshold", "entropy_min_token",
-		"blocked_patterns", "prefix_cache_enabled", "prefix_cache_skip_redaction_on_system",
+		"blocked_patterns", "prefix_cache_enabled",
 		"injection", "spotlight", "exfil_guard", "canary", "judgments", "tfidf_rerank",
 		"engine_identity",
 		"agent_injection", "agent_spotlight", "agent_exfil_guard",

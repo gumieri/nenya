@@ -224,43 +224,6 @@ func TestToolSortKey(t *testing.T) {
 	}
 }
 
-func TestShouldSkipRedaction(t *testing.T) {
-	tests := []struct {
-		name string
-		msg  map[string]interface{}
-		cfg  config.PrefixCacheConfig
-		want bool
-	}{
-		{
-			name: "enabled skip on system role",
-			msg:  map[string]interface{}{"role": "system", "content": "instructions"},
-			cfg:  config.PrefixCacheConfig{Enabled: true, SkipRedactionOnSystem: config.PtrTo(true)},
-			want: true,
-		},
-		{
-			name: "enabled skip on system user role",
-			msg:  map[string]interface{}{"role": "user", "content": "hello"},
-			cfg:  config.PrefixCacheConfig{Enabled: true, SkipRedactionOnSystem: config.PtrTo(true)},
-			want: false,
-		},
-		{
-			name: "disabled",
-			msg:  map[string]interface{}{"role": "system", "content": "instructions"},
-			cfg:  config.PrefixCacheConfig{Enabled: false, SkipRedactionOnSystem: config.PtrTo(true)},
-			want: false,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := ShouldSkipRedaction(tt.msg, tt.cfg)
-			if got != tt.want {
-				t.Errorf("ShouldSkipRedaction() = %v, want %v", got, tt.want)
-			}
-		})
-	}
-}
-
 func TestApplyPrefixCacheOptimizations(t *testing.T) {
 	t.Run("disabled no mutation", func(t *testing.T) {
 		payload := map[string]interface{}{
