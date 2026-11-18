@@ -63,8 +63,7 @@ func (a *ResponsesAdapter) convertOpenAIToResponses(openai map[string]interface{
 	if messages, ok := openai["messages"].([]interface{}); ok {
 		out["input"] = convertResponsesInput(messages, report)
 		delete(out, "messages")
-	} else {
-		// A chat request without a messages array is malformed; without
+	} else { // A chat request without a messages array is malformed; without
 		// this report it would dispatch verbatim to /v1/responses with
 		// nothing surfaced.
 		delete(out, "messages")
@@ -230,7 +229,12 @@ func responsesChatOnlyDefault(k string, v interface{}) bool {
 // assistant tool_calls → function_call items, tool results →
 // function_call_output items (the MCP loop's appended shapes).
 func convertResponsesInput(messages []interface{}, report *DropReport) []interface{} {
-	input := make([]interface{}, 0, len(messages))
+	// The capacity mirrors the client-supplied message count (bounded by the
+	// request body limit) — clamped explicitly so the allocation cannot
+	// overflow (CWE-190 §7, AGENTS.md §7 guard pattern; CodeQL
+	// go/allocation-size-overflow).
+	const maxInputItemsCap = 1 << 16
+	input := make([]interface{}, 0, min(len(messages), maxInputItemsCap))
 	for _, mRaw := range messages {
 		m, ok := mRaw.(map[string]interface{})
 		if !ok {
@@ -370,7 +374,10 @@ func responsesInputContent(content interface{}, report *DropReport) []interface{
 		report.Add("content")
 		return nil
 	}
-	out := make([]interface{}, 0, len(parts))
+	// Same capacity clamp as convertResponsesInput (CWE-190 §7): the parts
+	// slice is client-shaped.
+	const maxInputPartsCap = 1 << 16
+	out := make([]interface{}, 0, min(len(parts), maxInputPartsCap))
 	for _, pRaw := range parts {
 		p, ok := pRaw.(map[string]interface{})
 		if !ok {
@@ -520,7 +527,10 @@ func responsesToolOutputText(content interface{}, report *DropReport) string {
 // flattenResponsesTools converts chat-completions function tools to the
 // flat Responses tool shape. Non-function tool entries are reported.
 func flattenResponsesTools(tools []interface{}, report *DropReport) []interface{} {
-	flat := make([]interface{}, 0, len(tools))
+	// Same capacity clamp as convertResponsesInput (CWE-190 §7): the tools
+	// slice is client-shaped.
+	const maxToolsCap = 1 << 12
+	flat := make([]interface{}, 0, min(len(tools), maxToolsCap))
 	for _, tRaw := range tools {
 		t, ok := tRaw.(map[string]interface{})
 		if !ok {
