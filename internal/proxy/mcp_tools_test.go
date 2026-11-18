@@ -317,7 +317,7 @@ func TestReplayBufferedResponse(t *testing.T) {
 		RawBytes: []byte("data: {\"choices\":[{}]}\n\ndata: [DONE]\n\n"),
 	}
 
-	replayBufferedResponse(p.mcpHost(), w, buf, nil, "test-provider", slog.New(slog.NewTextHandler(io.Discard, nil)))
+	mcpproxy.ReplayBufferedResponse(p.mcpHost(), w, buf, nil, "test-provider", slog.New(slog.NewTextHandler(io.Discard, nil)))
 
 	if w.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200", w.Code)
@@ -757,7 +757,7 @@ func TestApplyCanaryToBufferedSSE(t *testing.T) {
 		head := `{"choices":[{"delta":{"content":"` + canary.Token[:20] + `"}}]}`
 		tail := `{"choices":[{"delta":{"content":"` + canary.Token[20:] + ` tail"}}]}`
 		buf := buildBuf(head, tail)
-		p.applyCanaryToBufferedSSE(gw, buf, "agent", canary)
+		mcpproxy.ApplyCanaryToBufferedSSE(p.mcpHost(), gw, buf, "agent", canary)
 		if !buf.CanaryBlocked {
 			t.Fatal("expected canaryBlocked on straddled token")
 		}
@@ -768,7 +768,7 @@ func TestApplyCanaryToBufferedSSE(t *testing.T) {
 		gw := newTestGateway(nil, nil)
 		buf := buildBuf(`{"choices":[{"delta":{"content":"benign output"}}]}`)
 		before := string(buf.RawBytes)
-		p.applyCanaryToBufferedSSE(gw, buf, "agent", canary)
+		mcpproxy.ApplyCanaryToBufferedSSE(p.mcpHost(), gw, buf, "agent", canary)
 		if buf.CanaryBlocked || string(buf.RawBytes) != before {
 			t.Fatal("clean buffer must be untouched")
 		}
@@ -780,7 +780,7 @@ func TestApplyCanaryToBufferedSSE(t *testing.T) {
 		logCanary := pipeline.CanarResult{Token: canary.Token, Action: config.CanaryActionLog}
 		frame := `{"choices":[{"delta":{"content":"leak ` + canary.Token + ` done"}}]}`
 		buf := buildBuf(frame)
-		p.applyCanaryToBufferedSSE(gw, buf, "agent", logCanary)
+		mcpproxy.ApplyCanaryToBufferedSSE(p.mcpHost(), gw, buf, "agent", logCanary)
 		if buf.CanaryBlocked {
 			t.Fatal("log action must not block")
 		}
@@ -1014,7 +1014,7 @@ func TestExecuteMCPArgGuard(t *testing.T) {
 func TestMCPClientCallToolArgumentGuard(t *testing.T) {
 	t.Run("private URL query is rejected as a search failure", func(t *testing.T) {
 		p := newArgGuardProxy(t, &config.MCPGuardConfig{}, nil)
-		result, err := p.mcpClientCallTool(p.Gateway(), t.Context(), "memory", "test_tool", "http://169.254.169.254/latest/meta-data/", fullAccessTestKey())
+		result, err := mcpproxy.MCPClientCallTool(p.mcpHost(), p.Gateway(), t.Context(), "memory", "test_tool", "http://169.254.169.254/latest/meta-data/", fullAccessTestKey())
 		if err == nil {
 			t.Fatalf("expected guard error, got result %+v", result)
 		}
@@ -1025,7 +1025,7 @@ func TestMCPClientCallToolArgumentGuard(t *testing.T) {
 
 	t.Run("benign query passes", func(t *testing.T) {
 		p := newArgGuardProxy(t, &config.MCPGuardConfig{}, nil)
-		result, err := p.mcpClientCallTool(p.Gateway(), t.Context(), "memory", "test_tool", "golang proxy patterns", fullAccessTestKey())
+		result, err := mcpproxy.MCPClientCallTool(p.mcpHost(), p.Gateway(), t.Context(), "memory", "test_tool", "golang proxy patterns", fullAccessTestKey())
 		if err != nil {
 			t.Fatalf("benign search failed: %v", err)
 		}
@@ -1036,7 +1036,7 @@ func TestMCPClientCallToolArgumentGuard(t *testing.T) {
 
 	t.Run("disabled guard lets the query through", func(t *testing.T) {
 		p := newArgGuardProxy(t, &config.MCPGuardConfig{Enabled: config.PtrTo(false)}, nil)
-		result, err := p.mcpClientCallTool(p.Gateway(), t.Context(), "memory", "test_tool", "http://127.0.0.1/admin", fullAccessTestKey())
+		result, err := mcpproxy.MCPClientCallTool(p.mcpHost(), p.Gateway(), t.Context(), "memory", "test_tool", "http://127.0.0.1/admin", fullAccessTestKey())
 		if err != nil {
 			t.Fatalf("disabled guard must pass: %v", err)
 		}

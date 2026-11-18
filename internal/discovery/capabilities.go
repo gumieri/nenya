@@ -3,8 +3,6 @@ package discovery
 import (
 	"log/slog"
 	"strings"
-
-	"github.com/nenya/internal/util"
 )
 
 type Capability string
@@ -99,15 +97,6 @@ func InferCapabilities(modelID string) *ModelMetadata {
 		"vision", meta.SupportsVision,
 	)
 	return &meta
-}
-
-// SupportsMidConversationSystem reports whether the model family accepts
-// role=system messages positioned after the first conversation turn
-// (Anthropic 4.8+/5-family). Thin wrapper over the shared predicate in
-// internal/util; see CapMidConversationSystem for the metadata-driven
-// path via config capabilities and the discovery catalog.
-func SupportsMidConversationSystem(modelID string) bool {
-	return util.SupportsMidConversationSystem(modelID)
 }
 
 func InferFormat(modelID string) string {

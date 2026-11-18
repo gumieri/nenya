@@ -83,21 +83,6 @@ func (m *ModelMetadata) HasCapability(cap Capability) bool {
 	}
 }
 
-// AllCapabilities returns every Capability known to the discovery package,
-// in stable order. Used to validate capability names supplied via config.
-func AllCapabilities() []Capability {
-	return []Capability{
-		CapVision,
-		CapToolCalls,
-		CapReasoning,
-		CapContentArrays,
-		CapStreamOptions,
-		CapAutoToolChoice,
-		CapAudio,
-		CapMidConversationSystem,
-	}
-}
-
 func applyCapabilities(meta *ModelMetadata, caps []Capability) *ModelMetadata {
 	if meta == nil || len(caps) == 0 {
 		return meta

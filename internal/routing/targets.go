@@ -100,12 +100,6 @@ type selectorCacheEntry struct {
 	hash      string // hash of dynamic model entries for change detection
 }
 
-// NewAgentState creates an AgentState with a circuit breaker and
-// optional state-change logging.
-func NewAgentState(logger *slog.Logger, metrics *infra.Metrics) *AgentState {
-	return NewAgentStateWithConfig(logger, metrics, nil, nil)
-}
-
 // NewAgentStateWithConfig creates an AgentState with a circuit breaker using
 // governance configuration for halfOpenMaxRequests and the agents config
 // for per-agent breaker thresholds (NENYA-204): agents.<name>.failure_threshold
@@ -1147,19 +1141,13 @@ func catalogPricingWithStaticOverlay(m config.AgentModel, catalog *discovery.Mod
 	return &p
 }
 
-// SortTargetsByLatency orders targets by median latency using the provided
-// latency tracker. If jitterFn is non-nil, it applies randomization (±5%)
-// to prevent thundering herd. Returns the original slice if latencyTracker
-// is nil or the slice has ≤1 element.
-func SortTargetsByLatency(targets []UpstreamTarget, lt *infra.LatencyTracker, jitterFn func() float64) []UpstreamTarget {
-	return SortTargetsByLatencyWithWarmth(targets, lt, jitterFn, nil, infra.DefaultWarmCacheBand)
-}
-
-// SortTargetsByLatencyWithWarmth is SortTargetsByLatency with the NENYA-190
-// cache-warmth tie-break: when the warm predicate reports one of two
-// near-tied (within warmBand, a fraction of the larger raw median — the
-// configurable NENYA-202 knob) targets as cache-warm, it orders first.
-// warm may be nil.
+// SortTargetsByLatencyWithWarmth orders targets by median latency using the
+// provided latency tracker, with the NENYA-190 cache-warmth tie-break: when
+// the warm predicate reports one of two near-tied (within warmBand, a
+// fraction of the larger raw median — the configurable NENYA-202 knob)
+// targets as cache-warm, it orders first. If jitterFn is non-nil, it applies
+// randomization (±5%) to prevent thundering herd. Returns the original slice
+// if latencyTracker is nil or the slice has ≤1 element. warm may be nil.
 func SortTargetsByLatencyWithWarmth(targets []UpstreamTarget, lt *infra.LatencyTracker, jitterFn func() float64, warm func(model, provider string) bool, warmBand float64) []UpstreamTarget {
 	if lt == nil || len(targets) <= 1 {
 		return targets

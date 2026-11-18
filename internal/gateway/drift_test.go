@@ -1,4 +1,4 @@
-package releasecontract
+package gateway
 
 import (
 	"os"
@@ -79,8 +79,8 @@ func TestInstallerMatchesContract(t *testing.T) {
 			t.Errorf("install.sh no longer matches the contract: missing %q", want)
 		}
 	}
-	if !strings.Contains(sh, BundleName) {
-		t.Errorf("install.sh does not reference %s", BundleName)
+	if !strings.Contains(sh, "checksums.txt.sigstore.json") {
+		t.Errorf("install.sh does not reference checksums.txt.sigstore.json")
 	}
 }
 

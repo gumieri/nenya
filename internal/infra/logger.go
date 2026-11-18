@@ -1,7 +1,6 @@
 package infra
 
 import (
-	"fmt"
 	"log/slog"
 	"os"
 	"syscall"
@@ -30,39 +29,6 @@ func SetupLoggerWithLevel(level slog.Level) *slog.Logger {
 	logger := slog.New(handler)
 	slog.SetDefault(logger)
 	return logger
-}
-
-func SetLogLevel(level string) error {
-	if level == "" {
-		return nil
-	}
-
-	var slogLevel slog.Level
-	switch level {
-	case "debug":
-		slogLevel = slog.LevelDebug
-	case "info":
-		slogLevel = slog.LevelInfo
-	case "warn":
-		slogLevel = slog.LevelWarn
-	case "error":
-		slogLevel = slog.LevelError
-	default:
-		return fmt.Errorf("invalid log level: %s (must be debug, info, warn, or error)", level)
-	}
-
-	logLevel.Set(slogLevel)
-
-	var handler slog.Handler
-	if isatty(os.Stderr.Fd()) {
-		handler = slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: &logLevel})
-	} else {
-		handler = slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{Level: &logLevel})
-	}
-
-	logger := slog.New(handler)
-	slog.SetDefault(logger)
-	return nil
 }
 
 func isatty(fd uintptr) bool {

@@ -125,17 +125,6 @@ func (c *TfidfSelectionCache) put(key string, kept map[int]bool) {
 	}
 }
 
-// size returns the current entry count. Test-only helper (production does not
-// need to observe the bound).
-func (c *TfidfSelectionCache) size() int {
-	if c == nil {
-		return 0
-	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	return c.order.Len()
-}
-
 // Block represents a contiguous text segment, tagged as code or prose.
 type Block struct {
 	Content string
@@ -334,17 +323,11 @@ func TruncateTFIDF(text string, maxSize int, query string, cfg config.ContextCon
 	return truncateTFIDF(text, maxSize, query, cfg, nil, "", nil)
 }
 
-// TruncateTFIDFWithRescue is TruncateTFIDF with the advisory rescue
-// hook: borderline dropped blocks may re-enter within leftover budget.
-func TruncateTFIDFWithRescue(text string, maxSize int, query string, cfg config.ContextConfig, rescue *TfidfRescueParams) string {
-	return truncateTFIDF(text, maxSize, query, cfg, rescue, "", nil)
-}
-
-// TruncateTFIDFWithRescueMemo is TruncateTFIDFWithRescue with the selection
-// memo: the first keep/drop decision for a piece of content is frozen and
-// reused on later calls, regardless of the query (prompt-cache stability).
-// scope isolates memo entries (pass the agent name when a rescue judge is
-// armed so one agent's verdict is never replayed to another).
+// TruncateTFIDFWithRescueMemo is TruncateTFIDF with the advisory rescue hook
+// and the selection memo: the first keep/drop decision for a piece of content
+// is frozen and reused on later calls, regardless of the query (prompt-cache
+// stability). scope isolates memo entries (pass the agent name when a rescue
+// judge is armed so one agent's verdict is never replayed to another).
 func TruncateTFIDFWithRescueMemo(text string, maxSize int, query string, cfg config.ContextConfig, rescue *TfidfRescueParams, scope string, memo *TfidfSelectionCache) string {
 	return truncateTFIDF(text, maxSize, query, cfg, rescue, scope, memo)
 }
@@ -602,18 +585,8 @@ func assembleResult(blocks []Block, blockRunes []int, pinFirst, middleStart, mid
 	return sb.String()
 }
 
-func TruncateTFIDFCodeAware(text string, maxSize int, query string, cfg config.ContextConfig) string {
-	return TruncateTFIDFCodeAwareWithRescue(text, maxSize, query, cfg, nil)
-}
-
-// TruncateTFIDFCodeAwareWithRescue is TruncateTFIDFCodeAware with the
-// advisory rescue hook.
-func TruncateTFIDFCodeAwareWithRescue(text string, maxSize int, query string, cfg config.ContextConfig, rescue *TfidfRescueParams) string {
-	return codeAwareAdjust(truncateTFIDF(text, maxSize, query, cfg, rescue, "", nil))
-}
-
-// TruncateTFIDFCodeAwareWithRescueMemo is TruncateTFIDFCodeAwareWithRescue
-// with the selection memo (see TfidfSelectionCache). scope isolates entries
+// TruncateTFIDFCodeAwareWithRescueMemo applies codeAwareAdjust over the
+// truncated result (see TfidfSelectionCache). scope isolates entries
 // (agent name when a rescue judge is armed).
 func TruncateTFIDFCodeAwareWithRescueMemo(text string, maxSize int, query string, cfg config.ContextConfig, rescue *TfidfRescueParams, scope string, memo *TfidfSelectionCache) string {
 	return codeAwareAdjust(truncateTFIDF(text, maxSize, query, cfg, rescue, scope, memo))

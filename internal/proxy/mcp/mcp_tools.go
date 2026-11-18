@@ -77,7 +77,7 @@ func (b *BufferedSSE) UsageChunks() []map[string]interface{} {
 	return b.usageScan
 }
 
-// replayBufferedResponse writes a buffered SSE response to the client.
+// ReplayBufferedResponse writes a buffered SSE response to the client.
 // This is used during MCP tool call loops to replay the assistant message
 // and tool calls before sending tool results.
 // convertBufferedForReplay re-renders the buffer's SSE frames into the
@@ -204,7 +204,7 @@ func appendConvertedTail(tr stream.ResponseTransformer, out []byte) []byte {
 	return out
 }
 
-func replayBufferedResponse(h Host, w http.ResponseWriter, buf *bufferedSSE, gw *gateway.NenyaGateway, providerName string, logger *slog.Logger) {
+func ReplayBufferedResponse(h Host, w http.ResponseWriter, buf *bufferedSSE, gw *gateway.NenyaGateway, providerName string, logger *slog.Logger) {
 	if len(buf.RawBytes) == 0 {
 		logger.Warn("MCP loop: empty buffered response, sending error")
 		h.WriteSSEError(gw, w, http.StatusInternalServerError, "MCP loop: empty response from upstream")
@@ -656,7 +656,7 @@ func (acc *SSEAccumulator) Result() *BufferedSSE {
 		assistantMsg = map[string]any{
 			"role":       "assistant",
 			"content":    nil,
-			"tool_calls": buildOpenAIToolCalls(toolCalls),
+			"tool_calls": BuildOpenAIToolCalls(toolCalls),
 		}
 		if reasoningStr != "" {
 			assistantMsg["reasoning_content"] = reasoningStr
@@ -722,8 +722,8 @@ func bufferStreamResponse(ctx context.Context, r io.Reader, logger *slog.Logger,
 	return out, nil
 }
 
-// buildOpenAIToolCalls converts internal mcpToolCall structs to OpenAI function call format.
-func buildOpenAIToolCalls(calls []mcpToolCall) []any {
+// BuildOpenAIToolCalls converts internal mcpToolCall structs to OpenAI function call format.
+func BuildOpenAIToolCalls(calls []mcpToolCall) []any {
 	result := make([]any, 0, len(calls))
 	for _, call := range calls {
 		argsBytes, _ := json.Marshal(call.Arguments)
@@ -745,9 +745,9 @@ func buildOpenAIToolCalls(calls []mcpToolCall) []any {
 	return result
 }
 
-// partitionMCPToolCalls splits tool calls into MCP and non-MCP categories.
+// PartitionMCPToolCalls splits tool calls into MCP and non-MCP categories.
 // This is used to route MCP tools to the MCP server while passing other tools upstream.
-func partitionMCPToolCalls(calls []mcpToolCall, toolIndex *mcp.ToolRegistry) (mcpCalls, nonMcpCalls []mcpToolCall) {
+func PartitionMCPToolCalls(calls []mcpToolCall, toolIndex *mcp.ToolRegistry) (mcpCalls, nonMcpCalls []mcpToolCall) {
 	for _, call := range calls {
 		if toolIndex.IsMCPTool(call.Name) {
 			mcpCalls = append(mcpCalls, call)
@@ -758,7 +758,7 @@ func partitionMCPToolCalls(calls []mcpToolCall, toolIndex *mcp.ToolRegistry) (mc
 	return
 }
 
-// executeMCPCallsWithUnavailable executes MCP tool calls concurrently using the registered MCP servers.
+// ExecuteMCPCallsWithUnavailable executes MCP tool calls concurrently using the registered MCP servers.
 // When the canary tripwire is armed, call arguments are scanned first:
 // a canary hit means the model reproduced gateway-injected context into
 // an outbound tool call — the signature of injection-driven exfiltration.
@@ -769,7 +769,7 @@ func partitionMCPToolCalls(calls []mcpToolCall, toolIndex *mcp.ToolRegistry) (mc
 // request (shared budget); an exfil verdict under strict action refuses
 // the call. Returns a slice of tool results in the same order
 // as the input calls.
-func executeMCPCallsWithUnavailable(h Host, in mcpExecOptions) []*mcp.CallToolResult {
+func ExecuteMCPCallsWithUnavailable(h Host, in mcpExecOptions) []*mcp.CallToolResult {
 	ctx, calls, gw, agentName := in.Ctx, in.Calls, in.GW, in.AgentName
 	canary, screen, apiKey, unavailable := in.Canary, in.Screen, in.APIKey, in.Unavailable
 	if len(calls) == 0 {
@@ -1047,12 +1047,12 @@ func guardMCPArgs(gw *gateway.NenyaGateway, logger *slog.Logger, d mcpGuardDispa
 	return nil
 }
 
-// applySpotlightToParts applies the untrusted-content spotlight envelope to a
+// ApplySpotlightToParts applies the untrusted-content spotlight envelope to a
 // tool result's content array (NENYA-149): only its text parts are enveloped —
 // an image part is binary and has no envelope home. Returns whether any part
 // was actually enveloped, so the spotlight counter does not fire for an
 // image-only result.
-func applySpotlightToParts(content any, settings pipeline.SpotlightSettings, server, tool string) (any, bool) {
+func ApplySpotlightToParts(content any, settings pipeline.SpotlightSettings, server, tool string) (any, bool) {
 	parts, ok := content.([]any)
 	if !ok {
 		return content, false
@@ -1085,8 +1085,8 @@ func buildToolResultMessage(call mcpToolCall, result *mcp.CallToolResult, opts m
 	// NENYA-149: image blocks ride only when the routed model and target
 	// format can carry them; rejected images are dropped with a counter and
 	// a debug log, and the omission is made visible in the tool text.
-	contentAny, drops := toolResultContent(content, result, opts.Vision, opts.Logger)
-	recordVisionDrops(metrics, drops)
+	contentAny, drops := ToolResultContent(content, result, opts.Vision, opts.Logger)
+	RecordVisionDrops(metrics, drops)
 	server, tool := "unknown", call.Name
 	// The registry is the source of truth for the (server, tool) pair: the
 	// advertised name is sanitized and may be disambiguated, so re-splitting
@@ -1108,7 +1108,7 @@ func buildToolResultMessage(call mcpToolCall, result *mcp.CallToolResult, opts m
 		}
 	} else {
 		var enveloped bool
-		contentAny, enveloped = applySpotlightToParts(contentAny, settings, server, tool)
+		contentAny, enveloped = ApplySpotlightToParts(contentAny, settings, server, tool)
 		if settings.Enabled && enveloped {
 			metrics.RecordSpotlighted("mcp:" + server)
 		}
@@ -1120,14 +1120,14 @@ func buildToolResultMessage(call mcpToolCall, result *mcp.CallToolResult, opts m
 	}
 }
 
-// appendMCPResults appends MCP tool results to the request payload's messages array.
+// AppendMCPResults appends MCP tool results to the request payload's messages array.
 // The results are formatted as OpenAI tool messages with the corresponding tool call IDs.
-// appendMCPResults appends the assistant tool-call message and one tool
+// AppendMCPResults appends the assistant tool-call message and one tool
 // result message per call to the payload's conversation, applying
 // spotlight enveloping to result content. It returns the appended message
 // maps (the same maps now referenced by the payload) so the MCP loop can
 // re-scan them through the deterministic security interceptors (NENYA-136).
-func appendMCPResults(payload map[string]any, calls []mcpToolCall, results []*mcp.CallToolResult, assistantMsg map[string]any, opts mcpAppendContext) []map[string]any {
+func AppendMCPResults(payload map[string]any, calls []mcpToolCall, results []*mcp.CallToolResult, assistantMsg map[string]any, opts mcpAppendContext) []map[string]any {
 	if len(calls) == 0 || len(results) == 0 {
 		return nil
 	}

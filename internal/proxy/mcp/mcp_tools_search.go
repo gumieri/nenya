@@ -12,12 +12,12 @@ import (
 
 // ---- Per-server tool policy (NENYA-162) -----------------------------------
 
-// serverToolPolicy applies one server's include/exclude patterns to its granted
+// ServerToolPolicy applies one server's include/exclude patterns to its granted
 // tools: include (when non-empty) keeps only matching names, then exclude
 // removes matching ones — exclude always wins. A pattern matches exactly or as
 // a '*'/'?' glob. The policy runs AFTER the key grant, so the RBAC scope and
 // the server policy compose.
-func serverToolPolicy(tools []mcp.Tool, include, exclude []string) []mcp.Tool {
+func ServerToolPolicy(tools []mcp.Tool, include, exclude []string) []mcp.Tool {
 	if len(include) == 0 && len(exclude) == 0 {
 		return tools
 	}
@@ -37,14 +37,14 @@ func serverToolPolicy(tools []mcp.Tool, include, exclude []string) []mcp.Tool {
 // matchesAnyPattern reports whether name matches any of the patterns.
 func matchesAnyPattern(name string, patterns []string) bool {
 	for _, pat := range patterns {
-		if matchesToolPattern(name, pat) {
+		if MatchesToolPattern(name, pat) {
 			return true
 		}
 	}
 	return false
 }
 
-func matchesToolPattern(name, pattern string) bool {
+func MatchesToolPattern(name, pattern string) bool {
 	if !strings.ContainsAny(pattern, "*?") {
 		return name == pattern
 	}
@@ -80,7 +80,7 @@ func globMatch(name, pattern string) bool {
 
 // ---- Opt-in relevance-based tool selection (NENYA-162) ---------------------
 
-// selectToolsForRequest implements the opt-in relevance-based MCP tool
+// SelectToolsForRequest implements the opt-in relevance-based MCP tool
 // selection (NENYA-162): the granted tools are scored against the
 // conversation's own terms and only the top `topN` (plus the agent's floor)
 // are injected, instead of the whole catalog — token bloat on large servers,
@@ -92,7 +92,7 @@ func globMatch(name, pattern string) bool {
 // an arbitrary sub-delection would strand the agent. The outcome is returned
 // with the set ("selected" otherwise). topN is clamped to the catalog size:
 // an operator typo (a huge tool_search value) must not drive the capacity.
-func selectToolsForRequest(tools []mcp.Tool, query string, topN int, floor []string) ([]mcp.Tool, string) {
+func SelectToolsForRequest(tools []mcp.Tool, query string, topN int, floor []string) ([]mcp.Tool, string) {
 	if topN <= 0 || len(tools) == 0 {
 		return tools, ""
 	}
@@ -237,7 +237,7 @@ func filterServerToolPolicy(gw *gateway.NenyaGateway, serverName, agentName stri
 		return granted
 	}
 	before := len(granted)
-	granted = serverToolPolicy(granted, server.ToolInclude, server.ToolExclude)
+	granted = ServerToolPolicy(granted, server.ToolInclude, server.ToolExclude)
 	gw.Logger.Info("MCP server tool policy applied",
 		"server", serverName, "agent", agentName, "stage", "injection",
 		"before", before, "after", len(granted))
@@ -254,7 +254,7 @@ func selectConversationTools(gw *gateway.NenyaGateway, req *chatRequest, granted
 		return granted
 	}
 	query := pipeline.ExtractPriorUserMessages(req.Messages, 1)
-	selected, outcome := selectToolsForRequest(granted, query, req.Agent.MCP.ToolSearch, req.Agent.MCP.ToolSearchFloor)
+	selected, outcome := SelectToolsForRequest(granted, query, req.Agent.MCP.ToolSearch, req.Agent.MCP.ToolSearchFloor)
 	gw.Metrics.RecordMCPToolSearch(outcome)
 	gw.Logger.Info("MCP tool selection",
 		"agent", req.AgentName, "outcome", outcome,

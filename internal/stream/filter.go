@@ -258,13 +258,6 @@ func (f *StreamFilter) WindowLen() int {
 	return f.windowLen
 }
 
-// ExtractDeltaContent extracts the delta content from SSE chunk data by parsing
-// the JSON and navigating the OpenAI-style structure: choices[0].delta.content.
-// Returns an empty string if the structure is invalid or the data is not valid JSON.
-func ExtractDeltaContent(data []byte) string {
-	return ExtractDeltaContentFromMap(ParseSSEChunk(data))
-}
-
 // ExtractDeltaContentFromMap extracts the delta content field from a parsed SSE chunk.
 // It navigates the OpenAI-style structure: choices[0].delta.content and returns the
 // content string, or an empty string if the structure is invalid.
@@ -407,14 +400,6 @@ func ExtractFinishReasonFromMap(chunk map[string]interface{}) string {
 	return fr
 }
 
-func ReplaceDeltaContent(data []byte, newContent string) []byte {
-	chunk := ParseSSEChunk(data)
-	if chunk == nil {
-		return data
-	}
-	return ReplaceDeltaContentMap(chunk, newContent)
-}
-
 // ExtractThinkingSignal detects whether an SSE event indicates active or
 // inactive thinking/reasoning phases. Returns (active, hasSignal) where
 // hasSignal indicates a definitive state transition (avoid false positives
@@ -505,35 +490,6 @@ func checkContentBlockStart(chunk map[string]interface{}) (active bool, hasSigna
 		return false, true
 	}
 	return false, false
-}
-
-// ReplaceDeltaContentMap replaces the delta content field in a parsed SSE chunk with
-// newContent and returns the modified chunk as JSON bytes. If the chunk structure is
-// invalid, it returns the original chunk marshaled.
-func ReplaceDeltaContentMap(chunk map[string]interface{}, newContent string) []byte {
-	choices, ok := chunk["choices"].([]interface{})
-	if !ok || len(choices) == 0 {
-		result, _ := json.Marshal(chunk)
-		return result
-	}
-	choice, ok := choices[0].(map[string]interface{})
-	if !ok {
-		result, _ := json.Marshal(chunk)
-		return result
-	}
-	delta, ok := choice["delta"].(map[string]interface{})
-	if !ok {
-		result, _ := json.Marshal(chunk)
-		return result
-	}
-	original := delta["content"]
-	delta["content"] = newContent
-	result, err := json.Marshal(chunk)
-	if err != nil {
-		delta["content"] = original
-		result, _ = json.Marshal(chunk)
-	}
-	return result
 }
 
 // ParseSSEChunk parses SSE chunk JSON data into a map. Returns nil if the data

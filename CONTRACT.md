@@ -629,8 +629,8 @@ Guarantees:
 3. **Constructor/validation API.** The exported loading and validation
    entry points keep their names and roles: the `*Provider`/
    `*GovernanceConfig`/`*NetworkConfig` resolver methods named below are
-   pinned by the releasecontract guard; `Load*`/`Validate*` helpers and
-   `PtrTo` are guaranteed by name.
+   pinned by the `config/config_surface_test.go` guard; `Load*`/`Validate*`
+   helpers and `PtrTo` are guaranteed by name.
 4. **Defaults drift guard.** Default constants move only with a CHANGELOG
    note; the resolver methods always return a valid value for zero-value
    configs.
@@ -647,7 +647,7 @@ Contract types (non-exhaustive enumeration of the guaranteed roots):
 `Provider`, `LocalEngineConfig`, `DiscoveryConfig`, …), `SecretsConfig`,
 `ApiKey`, `SecretsConfig.ProviderKeys`.
 
-Enforcement: `internal/releasecontract` carries
+Enforcement: `config/config_surface_test.go` carries
 `TestConfigPublicSurfaceJSONTags` (every exported field of the contract
 roots must carry a non-empty `json` tag) and
 `TestConfigPublicSurfaceMethods` (the guaranteed resolver methods exist

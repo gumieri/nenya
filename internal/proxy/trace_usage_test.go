@@ -59,14 +59,29 @@ func TestEngineCallRootsGatewayTrace(t *testing.T) {
 
 	ctx, rt := tracing.StartRequest(context.Background(), logger, "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01", "chat_completions")
 	defer rt.Finish()
-	clientTrace := tracing.CurrentTraceID(ctx)
+	clientTrace := "4bf92f3577b34da6a3ce929d0e0e4736" // the trace id inside the inbound traceparent above
 
 	// The engine span is the gateway-rooted primitive the chain uses: assert
-	// the trace id differs from the client's and the link carries it.
-	engineCtx, span := tracing.StartGatewaySpan(ctx, logger, "engine.call")
+	// the emitted record carries a gateway-generated trace id distinct from
+	// the client's and that the link carries the client trace.
+	_, span := tracing.StartGatewaySpan(ctx, logger, "engine.call")
 	span.End()
-	if got := tracing.CurrentTraceID(engineCtx); got == clientTrace || got == "" {
-		t.Fatalf("engine span trace = %q, want a gateway-rooted trace distinct from %q", got, clientTrace)
+	engineTrace := ""
+	for _, line := range strings.Split(buf.String(), "\n") {
+		if !strings.Contains(line, "engine.call") {
+			continue
+		}
+		if i := strings.Index(line, "trace_id="); i >= 0 {
+			if rest := line[i+len("trace_id="):]; rest != "" {
+				engineTrace = strings.Fields(rest)[0]
+			}
+		}
+	}
+	if engineTrace == "" {
+		t.Fatalf("engine span record carries no trace_id:\n%s", buf.String())
+	}
+	if engineTrace == clientTrace {
+		t.Fatalf("engine span adopted the client trace %q — must root its own (NENYA-187)", clientTrace)
 	}
 	if !strings.Contains(buf.String(), "linked_trace_id="+clientTrace) {
 		t.Fatalf("engine span must link the client trace:\n%s", buf.String())

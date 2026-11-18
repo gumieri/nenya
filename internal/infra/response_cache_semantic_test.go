@@ -24,6 +24,13 @@ func testPayload(text string) map[string]interface{} {
 	}
 }
 
+// fingerprintAuth is the auth-scoped fingerprint with no content-policy scope
+// (FingerprintPayloadScoped with an empty scope): the test-shorthand form of
+// the only production fingerprint constructor.
+func fingerprintAuth(payload map[string]interface{}, authToken string) string {
+	return FingerprintPayloadScoped(payload, authToken, "")
+}
+
 // TestResponseCache_SemanticPartitionedByAuth pins the NENYA-189 tenant
 // isolation on the semantic path: the exact-match key already mixes the auth
 // hash, and the semantic index must be partitioned by the same identity, so a
@@ -34,8 +41,8 @@ func TestResponseCache_SemanticPartitionedByAuth(t *testing.T) {
 	t.Cleanup(c.Stop)
 
 	payload := testPayload("hello world")
-	keyA := FingerprintPayloadWithAuth(payload, "token-a")
-	keyB := FingerprintPayloadWithAuth(payload, "token-b")
+	keyA := fingerprintAuth(payload, "token-a")
+	keyB := fingerprintAuth(payload, "token-b")
 	if keyA == keyB {
 		t.Fatal("auth-scoped fingerprints must differ across keys")
 	}
@@ -60,22 +67,22 @@ func TestResponseCache_SemanticPartitionedByAuth(t *testing.T) {
 	}
 
 	// Key A, near-identical prompt: semantic hit inside its own namespace.
-	similar := FingerprintPayloadWithAuth(testPayload("hello world!"), "token-a")
+	similar := fingerprintAuth(testPayload("hello world!"), "token-a")
 	embedA := func() ([]float32, error) { return []float32{0.7071, 0.7071, 0}, nil }
 	if data, ok, cacheType := c.Lookup(similar, "m", true, embedA); !ok || cacheType != "semantic" {
 		t.Fatalf("owning-key semantic lookup = %v, %q; want hit/semantic", data, cacheType)
 	}
 }
 
-// TestResponseCache_UnscopedNamespaceIsolated verifies that legacy unscoped
-// fingerprints (FingerprintPayload, tests/tooling) live in their own
-// namespace and cannot reach authed entries.
+// TestResponseCache_UnscopedNamespaceIsolated verifies that unscoped
+// fingerprints (the no-auth "p:"-prefixed form, tests/tooling only) live in
+// their own namespace and cannot reach authed entries.
 func TestResponseCache_UnscopedNamespaceIsolated(t *testing.T) {
 	c := NewResponseCache(16, 0, 0, 0, nil, nil, true, 0.9, okEmbedder{})
 	t.Cleanup(c.Stop)
 
-	keyA := FingerprintPayloadWithAuth(testPayload("hello world"), "token-a")
-	unscoped := FingerprintPayload(testPayload("hello world"))
+	keyA := fingerprintAuth(testPayload("hello world"), "token-a")
+	unscoped := FingerprintPayloadScoped(testPayload("hello world"), "", "")
 
 	c.Store(keyA, "m", true, []byte(`{"resp":"a"}`), []float32{1, 0, 0})
 
@@ -92,12 +99,12 @@ func TestResponseCache_SemanticEmbedFailureIsAMiss(t *testing.T) {
 	c := NewResponseCache(16, 0, 0, 0, nil, nil, true, 0.9, okEmbedder{})
 	t.Cleanup(c.Stop)
 
-	key := FingerprintPayloadWithAuth(testPayload("hello world"), "token-a")
+	key := fingerprintAuth(testPayload("hello world"), "token-a")
 	c.Store(key, "m", true, []byte(`{"resp":"a"}`), []float32{1, 0, 0})
 
 	// Different payload (exact miss) in the same namespace; the semantic
 	// fallback then fails to embed.
-	other := FingerprintPayloadWithAuth(testPayload("other topic entirely"), "token-a")
+	other := fingerprintAuth(testPayload("other topic entirely"), "token-a")
 	fail := func() ([]float32, error) { return nil, errors.New("embedder down") }
 	if data, ok, _ := c.Lookup(other, "m", true, fail); ok {
 		t.Fatalf("lookup with failing embedder must be a miss, got %q", data)
@@ -127,9 +134,9 @@ func TestResponseCache_SemanticNamespaceEviction(t *testing.T) {
 
 	// Fill namespace A past capacity with DISTINCT vectors, so the evicted
 	// entry cannot semantically match its survivor.
-	keyA1 := FingerprintPayloadWithAuth(testPayload("hello one"), "token-a")
-	keyA2 := FingerprintPayloadWithAuth(testPayload("hello two"), "token-a")
-	keyA3 := FingerprintPayloadWithAuth(testPayload("hello three"), "token-a")
+	keyA1 := fingerprintAuth(testPayload("hello one"), "token-a")
+	keyA2 := fingerprintAuth(testPayload("hello two"), "token-a")
+	keyA3 := fingerprintAuth(testPayload("hello three"), "token-a")
 	c.Store(keyA1, "m", true, []byte(`{"r":1}`), []float32{1, 0, 0})
 	c.Store(keyA2, "m", true, []byte(`{"r":2}`), []float32{0, 1, 0})
 	c.Store(keyA3, "m", true, []byte(`{"r":3}`), []float32{0, 0, 1})
@@ -146,8 +153,8 @@ func TestResponseCache_SemanticNamespaceEviction(t *testing.T) {
 
 	// Push namespace-B entries through: namespace A drains and its index is
 	// pruned instead of leaking.
-	keyB1 := FingerprintPayloadWithAuth(testPayload("hello one"), "token-b")
-	keyB2 := FingerprintPayloadWithAuth(testPayload("hello two"), "token-b")
+	keyB1 := fingerprintAuth(testPayload("hello one"), "token-b")
+	keyB2 := fingerprintAuth(testPayload("hello two"), "token-b")
 	c.Store(keyB1, "m", true, []byte(`{"r":4}`), []float32{0, 1, 0})
 	c.Store(keyB2, "m", true, []byte(`{"r":5}`), []float32{0, 1, 0})
 
@@ -160,7 +167,7 @@ func TestResponseCache_SemanticNamespaceEviction(t *testing.T) {
 
 	// Surviving entries stay reachable within their namespace.
 	embedB := func() ([]float32, error) { return []float32{0, 1, 0}, nil }
-	if _, ok, cacheType := c.Lookup(FingerprintPayloadWithAuth(testPayload("hello one variant"), "token-b"), "m", true, embedB); !ok || cacheType != "semantic" {
+	if _, ok, cacheType := c.Lookup(fingerprintAuth(testPayload("hello one variant"), "token-b"), "m", true, embedB); !ok || cacheType != "semantic" {
 		t.Fatalf("namespace-B semantic hit = %v, %q; want hit/semantic", ok, cacheType)
 	}
 }
@@ -173,12 +180,12 @@ func TestResponseCache_SemanticHitRequiresSameShape(t *testing.T) {
 	c := NewResponseCache(16, 0, 0, 0, nil, nil, true, 0.9, okEmbedder{})
 	t.Cleanup(c.Stop)
 
-	key := FingerprintPayloadWithAuth(testPayload("hello world"), "token-a")
+	key := fingerprintAuth(testPayload("hello world"), "token-a")
 	c.Store(key, "m", true, []byte("data: {...}\n\n"), []float32{1, 0, 0})
 
 	// A near-identical prompt (exact miss) from a non-streaming request:
 	// semantic candidate exists but the shape differs, so it must miss.
-	nonStream := FingerprintPayloadWithAuth(testPayload("hello world!"), "token-a")
+	nonStream := fingerprintAuth(testPayload("hello world!"), "token-a")
 	embed := func() ([]float32, error) { return []float32{1, 0, 0}, nil }
 	if data, ok, cacheType := c.Lookup(nonStream, "m", false, embed); ok {
 		t.Fatalf("non-streaming lookup served response (type %q): %q", cacheType, data)
@@ -200,7 +207,7 @@ func TestResponseCache_SemanticGaugeStaysExact(t *testing.T) {
 
 	const n = semanticIndexMaxEntries + 1
 	for i := 0; i < n; i++ {
-		key := FingerprintPayloadWithAuth(testPayload(fmt.Sprintf("prompt %d", i)), "token-a")
+		key := fingerprintAuth(testPayload(fmt.Sprintf("prompt %d", i)), "token-a")
 		c.Store(key, "m", true, []byte(fmt.Sprintf("resp %d", i)), []float32{1, 0, 0})
 	}
 
@@ -212,7 +219,7 @@ func TestResponseCache_SemanticGaugeStaysExact(t *testing.T) {
 	}
 
 	// Re-storing an existing key must not double-count it.
-	c.Store(FingerprintPayloadWithAuth(testPayload("prompt 5"), "token-a"), "m", true, []byte("resp again"), []float32{1, 0, 0})
+	c.Store(fingerprintAuth(testPayload("prompt 5"), "token-a"), "m", true, []byte("resp again"), []float32{1, 0, 0})
 	if got := c.semanticEntries; got != semanticIndexMaxEntries {
 		t.Fatalf("semanticEntries after refresh = %d, want %d", got, semanticIndexMaxEntries)
 	}

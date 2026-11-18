@@ -1043,7 +1043,7 @@ func TestTransformIncomingAnthropicNativeBodyWithoutType(t *testing.T) {
 		"messages": [{"role":"user","content":"hi"}]
 	}`)
 
-	converted, err := TransformIncomingAnthropicRequest(context.Background(), body)
+	converted, err := TransformIncomingAnthropicRequestReported(context.Background(), body, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1074,7 +1074,7 @@ func TestTransformIncomingAnthropicNativeBodyWithoutType(t *testing.T) {
 
 	// An OpenAI-only landmark bails out (no conversion).
 	openaiBody := []byte(`{"model":"gpt-4","max_completion_tokens":64,"system":"x","messages":[]}`)
-	kept, err := TransformIncomingAnthropicRequest(context.Background(), openaiBody)
+	kept, err := TransformIncomingAnthropicRequestReported(context.Background(), openaiBody, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

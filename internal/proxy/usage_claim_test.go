@@ -16,6 +16,7 @@ import (
 	"github.com/nenya/internal/discovery"
 	"github.com/nenya/internal/gateway"
 	"github.com/nenya/internal/infra"
+	mcpproxy "github.com/nenya/internal/proxy/mcp"
 	"github.com/nenya/internal/routing"
 	"github.com/nenya/internal/stream"
 	"github.com/nenya/internal/testutil"
@@ -166,8 +167,8 @@ func TestMCPUsageClaimedOncePerBuffer(t *testing.T) {
 		Model:    "fixture-model",
 	}
 
-	p.recordMCPUsage(gw, buf, "agent")
-	p.recordMCPUsage(gw, buf, "agent")
+	mcpproxy.RecordMCPUsage(p.mcpHost(), gw, buf, "agent")
+	mcpproxy.RecordMCPUsage(p.mcpHost(), gw, buf, "agent")
 
 	model := fixtureStats(t, gw)
 	if got := statValue(t, model, "output_tokens"); got != 20 {
@@ -178,7 +179,7 @@ func TestMCPUsageClaimedOncePerBuffer(t *testing.T) {
 	// path observing it does not suppress a later legitimate record for the
 	// same buffer (the flag is set only when a record is actually written).
 	empty := &bufferedSSE{RawBytes: []byte("data: {\"choices\":[]}"), Model: "fixture-model"}
-	p.recordMCPUsage(gw, empty, "agent")
+	mcpproxy.RecordMCPUsage(p.mcpHost(), gw, empty, "agent")
 	if empty.UsageClaimed {
 		t.Error("a buffer with no usage must not consume the claim")
 	}
@@ -284,8 +285,8 @@ func TestMCPIterationUsageClaimsOnce(t *testing.T) {
 		ServingTarget: served,
 	}
 
-	p.recordMCPIterationUsage(context.Background(), gw, buf, targets, "agent")
-	p.recordMCPIterationUsage(context.Background(), gw, buf, targets, "agent")
+	mcpproxy.RecordMCPIterationUsage(p.mcpHost(), context.Background(), gw, buf, targets, "agent")
+	mcpproxy.RecordMCPIterationUsage(p.mcpHost(), context.Background(), gw, buf, targets, "agent")
 
 	model := fixtureStats(t, gw)
 	if got := statValue(t, model, "output_tokens"); got != 1_000_000 {
@@ -319,7 +320,7 @@ func TestMCPIterationUsageClaimsOnce(t *testing.T) {
 		RawBytes: []byte(`data: {"choices":[],"usage":{"prompt_tokens":1000000,"completion_tokens":1000000,"total_tokens":2000000}}`),
 		Model:    "fixture-model",
 	}
-	p.recordMCPIterationUsage(context.Background(), gw, fallback, targets, "agent")
+	mcpproxy.RecordMCPIterationUsage(p.mcpHost(), context.Background(), gw, fallback, targets, "agent")
 	if got := gw.BillingTracker.GetTotalSpend("fixture", "acct-a"); got <= 0 {
 		t.Errorf("fallback spend for acct-a = %v, want > 0", got)
 	}

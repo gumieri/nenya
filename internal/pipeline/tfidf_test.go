@@ -340,34 +340,6 @@ func TestTruncateTFIDF(t *testing.T) {
 	})
 }
 
-func TestTruncateTFIDFCodeAware(t *testing.T) {
-	cfg := config.ContextConfig{
-		TruncationKeepFirstPct: 15.0,
-		TruncationKeepLastPct:  25.0,
-	}
-
-	text := strings.Repeat("irrelevant paragraph. ", 100) + "\n\n" +
-		"```go\n" + strings.Repeat("func irrelevant() {}\n", 50) + "```\n\n" +
-		"Fix the login JWT handler.\n\n" +
-		strings.Repeat("more irrelevant text. ", 100)
-
-	maxSize := utf8.RuneCountInString(text) / 2
-	result := TruncateTFIDFCodeAware(text, maxSize, "fix login jwt handler", cfg)
-
-	if utf8.RuneCountInString(result) > maxSize {
-		t.Errorf("result %d runes exceeds maxSize %d", utf8.RuneCountInString(result), maxSize)
-	}
-
-	if strings.Contains(result, "[NENYA: TF-IDF PRUNED]") {
-		if idx := strings.Index(result, "[NENYA: TF-IDF PRUNED]"); idx > 0 {
-			before := result[:idx]
-			if !strings.HasSuffix(before, "\n\n") {
-				t.Log("code-aware should snap to paragraph boundaries")
-			}
-		}
-	}
-}
-
 func TestTruncateTFIDFHistory(t *testing.T) {
 	cfg := config.ContextConfig{
 		TruncationKeepFirstPct: 25.0,

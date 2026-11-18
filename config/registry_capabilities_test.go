@@ -16,9 +16,20 @@ import (
 // covers all built-in models), so this guard is forward-looking — it fires on
 // the first entry that declares capabilities with a typo'd or unknown name.
 func TestModelRegistry_CapabilitiesAreKnown(t *testing.T) {
-	known := make(map[string]bool)
-	for _, c := range discovery.AllCapabilities() {
-		known[string(c)] = true
+	// Explicit copy of internal/discovery's Capability constant set (the
+	// AllCapabilities accessor was removed with NENYA-334 — test-only
+	// callers don't keep production symbols alive). If discovery grows a
+	// capability and a registry entry declares it, this list is the
+	// drift tripwire to update.
+	known := map[string]bool{
+		string(discovery.CapVision):                true,
+		string(discovery.CapToolCalls):             true,
+		string(discovery.CapReasoning):             true,
+		string(discovery.CapContentArrays):         true,
+		string(discovery.CapStreamOptions):         true,
+		string(discovery.CapAutoToolChoice):        true,
+		string(discovery.CapAudio):                 true,
+		string(discovery.CapMidConversationSystem): true,
 	}
 
 	for modelID, entry := range config.ModelRegistry {

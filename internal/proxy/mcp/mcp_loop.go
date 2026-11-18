@@ -249,7 +249,7 @@ func InjectAutoSearch(h Host, gw *gateway.NenyaGateway, ctx context.Context, pay
 		return
 	}
 
-	query, _ := extractAutoSearchQuery(h, messages)
+	query, _ := ExtractAutoSearchQuery(h, messages)
 	if query == "" {
 		return
 	}
@@ -257,11 +257,11 @@ func InjectAutoSearch(h Host, gw *gateway.NenyaGateway, ctx context.Context, pay
 	query = redactQuery(h, gw, query)
 
 	for _, serverName := range agent.MCP.Servers {
-		if !canPerformAutoSearch(h, gw, serverName) {
+		if !CanPerformAutoSearch(h, gw, serverName) {
 			continue
 		}
 
-		toolName := resolveSearchTool(h, gw, serverName, agent.MCP.SearchTool, agentName)
+		toolName := ResolveSearchTool(h, gw, serverName, agent.MCP.SearchTool, agentName)
 		if toolName == "" {
 			continue
 		}
@@ -281,7 +281,7 @@ func InjectAutoSearch(h Host, gw *gateway.NenyaGateway, ctx context.Context, pay
 	}
 }
 
-func extractAutoSearchQuery(h Host, messages []interface{}) (string, map[string]interface{}) {
+func ExtractAutoSearchQuery(h Host, messages []interface{}) (string, map[string]interface{}) {
 	if len(messages) == 0 {
 		return "", nil
 	}
@@ -305,12 +305,12 @@ func redactQuery(h Host, gw *gateway.NenyaGateway, query string) string {
 	return query
 }
 
-func canPerformAutoSearch(h Host, gw *gateway.NenyaGateway, serverName string) bool {
+func CanPerformAutoSearch(h Host, gw *gateway.NenyaGateway, serverName string) bool {
 	client, ok := gw.MCPClients[serverName]
 	return ok && client.Ready()
 }
 
-func resolveSearchTool(h Host, gw *gateway.NenyaGateway, serverName, configuredTool, agentName string) string {
+func ResolveSearchTool(h Host, gw *gateway.NenyaGateway, serverName, configuredTool, agentName string) string {
 	if configuredTool != "" {
 		return configuredTool
 	}
@@ -324,7 +324,7 @@ func resolveSearchTool(h Host, gw *gateway.NenyaGateway, serverName, configuredT
 
 func executeAutoSearch(h Host, gw *gateway.NenyaGateway, ctx context.Context, serverName, toolName, query, agentName string, apiKey *config.ApiKey) *autoSearchResult {
 	start := time.Now()
-	result, err := mcpClientCallTool(h, gw, ctx, serverName, toolName, query, apiKey)
+	result, err := MCPClientCallTool(h, gw, ctx, serverName, toolName, query, apiKey)
 	duration := time.Since(start)
 
 	if err != nil {
@@ -357,7 +357,7 @@ func executeAutoSearch(h Host, gw *gateway.NenyaGateway, ctx context.Context, se
 	}
 }
 
-func mcpClientCallTool(h Host, gw *gateway.NenyaGateway, ctx context.Context, serverName, toolName, query string, apiKey *config.ApiKey) (*mcp.CallToolResult, error) {
+func MCPClientCallTool(h Host, gw *gateway.NenyaGateway, ctx context.Context, serverName, toolName, query string, apiKey *config.ApiKey) (*mcp.CallToolResult, error) {
 	client, ok := gw.MCPClients[serverName]
 	if !ok {
 		return nil, fmt.Errorf("MCP client not found")
@@ -618,7 +618,7 @@ func mcpIteration(h Host, in mcpIterInput) int {
 	// exfil/canary-blocked buffers with a valid usage payload still pair)
 	// so K estimates pair with K actuals instead of biasing the ratio
 	// toward ~1/K (the terminal paths only add Stats).
-	recordCalibrationFromBuffer(in.GW, mcpCalibrationModel(in.Opts.Targets, buf), buf)
+	RecordCalibrationFromBuffer(in.GW, MCPCalibrationModel(in.Opts.Targets, buf), buf)
 	// NENYA-193: this iteration is one upstream dispatch that reached a
 	// provider, so it claims its usage (Stats, metrics, cost, one billing
 	// request) exactly once. The terminal paths below are idempotent no-ops
@@ -649,7 +649,7 @@ func mcpIteration(h Host, in mcpIterInput) int {
 		return mcpIterReturn
 	}
 
-	mcpCalls, nonMcpCalls := partitionMCPToolCalls(allCalls, in.GW.MCPToolIndex)
+	mcpCalls, nonMcpCalls := PartitionMCPToolCalls(allCalls, in.GW.MCPToolIndex)
 	*in.TotalToolCalls += len(mcpCalls)
 
 	if len(mcpCalls) > 0 {
@@ -659,7 +659,7 @@ func mcpIteration(h Host, in mcpIterInput) int {
 			"iteration", in.Iteration+1,
 			"agent", in.Opts.AgentName)
 
-		if !executeAndAppendMCPResults(h, in, working, mcpCalls, buf) {
+		if !ExecuteAndAppendMCPResults(h, in, working, mcpCalls, buf) {
 			return mcpIterReturn
 		}
 
@@ -686,9 +686,9 @@ func mcpIteration(h Host, in mcpIterInput) int {
 	return mcpIterContinue
 }
 
-// injectedToolNameSet converts the gateway's injected-name list into a set
+// InjectedToolNameSet converts the gateway's injected-name list into a set
 // (NENYA-162). Nil/empty means no injection bookkeeping: the guard is inert.
-func injectedToolNameSet(names []string) map[string]struct{} {
+func InjectedToolNameSet(names []string) map[string]struct{} {
 	if len(names) == 0 {
 		return nil
 	}
@@ -699,11 +699,11 @@ func injectedToolNameSet(names []string) map[string]struct{} {
 	return set
 }
 
-// unavailableMCPToolCalls reports which calls name an MCP tool the session did
+// UnavailableMCPToolCalls reports which calls name an MCP tool the session did
 // not inject (NENYA-162): the loop refuses them with a structured error result.
 // An empty injected set leaves nothing unavailable (defensive: the guard is
 // anchored on the gateway's own injection bookkeeping, not the payload).
-func unavailableMCPToolCalls(calls []mcpToolCall, injected map[string]struct{}) map[string]bool {
+func UnavailableMCPToolCalls(calls []mcpToolCall, injected map[string]struct{}) map[string]bool {
 	if len(injected) == 0 {
 		return nil
 	}
@@ -716,7 +716,7 @@ func unavailableMCPToolCalls(calls []mcpToolCall, injected map[string]struct{}) 
 	return unavailable
 }
 
-// executeAndAppendMCPResults executes the intercepted MCP tool calls,
+// ExecuteAndAppendMCPResults executes the intercepted MCP tool calls,
 // appends their results (assistant tool_calls message + per-call tool
 // messages) to the working conversation, and re-scans the appended content
 // through the deterministic security interceptors (NENYA-136). Returns
@@ -724,8 +724,8 @@ func unavailableMCPToolCalls(calls []mcpToolCall, injected map[string]struct{}) 
 // structured client error (or deadline replay) has already been written.
 // The iteration's buffered usage is recorded on that abort path so /statsz
 // does not undercount.
-func executeAndAppendMCPResults(h Host, in mcpIterInput, working map[string]any, mcpCalls []mcpToolCall, buf *bufferedSSE) bool {
-	results := executeMCPCallsWithUnavailable(h, MCPExecOptions{
+func ExecuteAndAppendMCPResults(h Host, in mcpIterInput, working map[string]any, mcpCalls []mcpToolCall, buf *bufferedSSE) bool {
+	results := ExecuteMCPCallsWithUnavailable(h, MCPExecOptions{
 		Ctx:         in.MCPLoopCtx,
 		Calls:       mcpCalls,
 		GW:          in.GW,
@@ -733,17 +733,17 @@ func executeAndAppendMCPResults(h Host, in mcpIterInput, working map[string]any,
 		Canary:      in.Opts.Canary,
 		Screen:      in.Opts.Screen,
 		APIKey:      in.Opts.APIKey,
-		Unavailable: unavailableMCPToolCalls(mcpCalls, injectedToolNameSet(in.Opts.InjectedMCPTools)),
+		Unavailable: UnavailableMCPToolCalls(mcpCalls, InjectedToolNameSet(in.Opts.InjectedMCPTools)),
 	})
 	mcpAssistantMsg := map[string]any{
 		"role":       "assistant",
 		"content":    nil,
-		"tool_calls": buildOpenAIToolCalls(mcpCalls),
+		"tool_calls": BuildOpenAIToolCalls(mcpCalls),
 	}
 	if buf.ReasoningContent != "" {
 		mcpAssistantMsg["reasoning_content"] = buf.ReasoningContent
 	}
-	appended := appendMCPResults(working, mcpCalls, results, mcpAssistantMsg, MCPAppendContext{
+	appended := AppendMCPResults(working, mcpCalls, results, mcpAssistantMsg, MCPAppendContext{
 		Settings:  h.SpotlightSettingsFor(&in.GW.Config, in.Opts.Agent),
 		Metrics:   in.GW.Metrics,
 		ToolIndex: in.GW.MCPToolIndex,
@@ -751,13 +751,13 @@ func executeAndAppendMCPResults(h Host, in mcpIterInput, working map[string]any,
 		Logger:    in.GW.Logger,
 	})
 	if appended == nil {
-		// appendMCPResults only returns nil without appending when
+		// AppendMCPResults only returns nil without appending when
 		// payload["messages"] lost its []any shape — the tool results
 		// (and the assistant tool_calls) were dropped entirely.
 		in.GW.Logger.Warn("MCP loop: payload messages lost []any shape; tool results dropped before re-dispatch",
 			"iteration", in.Iteration, "agent", in.Opts.AgentName, "mcp_calls", len(mcpCalls))
 	}
-	if rescanErr := rescanAppendedMessages(h, in, working, appended); rescanErr != nil {
+	if rescanErr := RescanAppendedMessages(h, in, working, appended); rescanErr != nil {
 		// The iteration's upstream response was successfully buffered but
 		// never reaches the client from this path — still count its usage.
 		RecordMCPUsage(h, in.GW, buf, in.Opts.AgentName)
@@ -766,7 +766,7 @@ func executeAndAppendMCPResults(h Host, in mcpIterInput, working map[string]any,
 	return true
 }
 
-// rescanAppendedMessages runs the deterministic security subset of the
+// RescanAppendedMessages runs the deterministic security subset of the
 // interceptor chain (redact, entropy, tier-1 injection — NENYA-136) over the
 // tool-result messages the MCP loop just appended, which never pass through
 // the request-time chain. Interceptors mutate the appended maps in place, so
@@ -787,7 +787,7 @@ func executeAndAppendMCPResults(h Host, in mcpIterInput, working map[string]any,
 // (client gone / loop deadline) replays the last good response or writes a
 // timeout; real pipeline errors render via writePipelineRejection. A nil
 // chain (gateway built without one) fails open — the pre-NENYA-136 behavior.
-func rescanAppendedMessages(h Host, in mcpIterInput, working map[string]any, appended []map[string]any) error {
+func RescanAppendedMessages(h Host, in mcpIterInput, working map[string]any, appended []map[string]any) error {
 	chain := in.GW.MCPSecurityChain
 	if chain == nil || len(appended) == 0 {
 		return nil
@@ -859,7 +859,7 @@ func ForwardBuffered(h Host, gw *gateway.NenyaGateway,
 	cooldownDuration, tokenCount, agentName := d.Cooldown, d.TokenCount, d.AgentName
 	maxRetries, apiKey, canary := d.MaxRetries, d.APIKey, d.Canary
 	sourceFormat, windowCompacted := d.SourceFormat, d.WindowCompacted
-	originalPayload, err := prepareOriginalPayload(gw, payload)
+	originalPayload, err := PrepareOriginalPayload(gw, payload)
 	if err != nil {
 		return nil, err
 	}
@@ -953,7 +953,7 @@ func hasLaterDispatchableTarget(gw *gateway.NenyaGateway, targets []routing.Upst
 	return false
 }
 
-func prepareOriginalPayload(gw *gateway.NenyaGateway, payload map[string]interface{}) ([]byte, error) {
+func PrepareOriginalPayload(gw *gateway.NenyaGateway, payload map[string]interface{}) ([]byte, error) {
 	originalPayload, err := json.Marshal(payload)
 	if err != nil {
 		return nil, fmt.Errorf("marshal payload: %w", err)
@@ -1363,14 +1363,14 @@ func ReplayGuardedBufferedWithProvider(h Host, gw *gateway.NenyaGateway, w http.
 		return
 	}
 	// Issue 723f3db1: the replay must speak the CLIENT's wire format — a
-	// native-frame replay reached mismatched clients. Converted replayBufferedResponse
+	// native-frame replay reached mismatched clients. Converted ReplayBufferedResponse
 	// mutates nothing shared: the conversion allocates a fresh buffer.
 	if buf != nil {
 		if converted := ConvertBufferedForReplay(h, gw, buf, sourceFormat, apiKey); !bytes.Equal(converted, buf.RawBytes) {
 			buf = &bufferedSSE{RawBytes: converted, ServingTarget: buf.ServingTarget}
 		}
 	}
-	replayBufferedResponse(h, w, buf, gw, providerName, gw.Logger)
+	ReplayBufferedResponse(h, w, buf, gw, providerName, gw.Logger)
 }
 
 func detectRequestCapabilities(payload map[string]interface{}) routing.RequestCapabilities {
@@ -1385,7 +1385,7 @@ func detectRequestCapabilities(payload map[string]interface{}) routing.RequestCa
 		return caps
 	}
 	for _, msg := range messages {
-		if inspectMessageCaps(msg, &caps) {
+		if InspectMessageCaps(msg, &caps) {
 			break
 		}
 	}
@@ -1393,9 +1393,9 @@ func detectRequestCapabilities(payload map[string]interface{}) routing.RequestCa
 	return caps
 }
 
-// inspectMessageCaps inspects a message object and updates the RequestCapabilities struct.
+// InspectMessageCaps inspects a message object and updates the RequestCapabilities struct.
 // Returns true if both HasVision and HasReasoning capabilities are detected.
-func inspectMessageCaps(msg any, caps *routing.RequestCapabilities) bool {
+func InspectMessageCaps(msg any, caps *routing.RequestCapabilities) bool {
 	m, ok := msg.(map[string]interface{})
 	if !ok {
 		return false

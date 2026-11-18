@@ -964,19 +964,16 @@ func SliceContains(haystack []int, needle int) bool {
 	return false
 }
 
-// TransformIncomingAnthropicRequest converts an Anthropic-format request body to
-// OpenAI chat completions format. This is called when the gateway receives a request
-// from an Anthropic-native client (e.g., Claude Desktop) using the /v1/messages endpoint.
-// The converted request is then processed through the standard OpenAI-format pipeline.
-func TransformIncomingAnthropicRequest(ctx context.Context, body []byte) ([]byte, error) {
-	return TransformIncomingAnthropicRequestReported(ctx, body, nil)
-}
-
-// TransformIncomingAnthropicRequestReported is TransformIncomingAnthropicRequest
-// with a DropReport: messages carrying content the OpenAI shape cannot
-// represent (thinking signatures, documents, unknown block types) are recorded
-// by kind instead of dropped silently (NENYA-176). Nil report behaves exactly
-// like the unreported variant.
+// TransformIncomingAnthropicRequestReported converts an Anthropic-format
+// request body to OpenAI chat completions format. This is called when the
+// gateway receives a request from an Anthropic-native client (e.g., Claude
+// Desktop) using the /v1/messages endpoint; the converted request is then
+// processed through the standard OpenAI-format pipeline.
+//
+// The DropReport records messages carrying content the OpenAI shape cannot
+// represent (thinking signatures, documents, unknown block types) by kind
+// instead of dropping them silently (NENYA-176). A nil report behaves the
+// same modulo the report itself.
 func TransformIncomingAnthropicRequestReported(ctx context.Context, body []byte, report *adapter.DropReport) ([]byte, error) {
 	if len(body) == 0 {
 		return body, nil

@@ -167,48 +167,6 @@ func TestRedactSecrets_CodeFenceNotBypassed(t *testing.T) {
 	}
 }
 
-func TestTruncateMiddleOutCodeAware(t *testing.T) {
-	cfg := config.ContextConfig{
-		TruncationKeepFirstPct: 40,
-		TruncationKeepLastPct:  40,
-	}
-
-	t.Run("short text no truncation", func(t *testing.T) {
-		got := TruncateMiddleOutCodeAware("hello", 100, cfg)
-		if got != "hello" {
-			t.Errorf("got %q, want %q", got, "hello")
-		}
-	})
-
-	t.Run("snaps to blank line boundary", func(t *testing.T) {
-		text := "line one\nline two\n\nfunc foo() {\n\treturn 42\n}\n\nfunc bar() {\n\treturn 99\n}\n\nlast line\n"
-		maxSize := 50
-		got := TruncateMiddleOutCodeAware(text, maxSize, cfg)
-		if !strings.Contains(got, "... [NENYA: MASSIVE PAYLOAD TRUNCATED] ...") {
-			t.Errorf("expected truncation marker in output: %q", got)
-		}
-		if strings.Contains(got, "return") && strings.Count(got, "return") > 1 {
-			t.Errorf("should not cut inside both functions: %q", got)
-		}
-	})
-
-	t.Run("no blank lines falls back to normal", func(t *testing.T) {
-		text := strings.Repeat("a", 50) + strings.Repeat("b", 50)
-		maxSize := 80
-		got := TruncateMiddleOutCodeAware(text, maxSize, cfg)
-		if !strings.Contains(got, "... [NENYA: MASSIVE PAYLOAD TRUNCATED] ...") {
-			t.Errorf("expected truncation: %q", got)
-		}
-	})
-
-	t.Run("empty text", func(t *testing.T) {
-		got := TruncateMiddleOutCodeAware("", 100, cfg)
-		if got != "" {
-			t.Errorf("got %q, want empty", got)
-		}
-	})
-}
-
 // TestTruncateMiddleOutNegativeMaxSize guards the request-path panic on
 // negative budgets (reachable via negative window.max_context config).
 func TestTruncateMiddleOutNegativeMaxSize(t *testing.T) {

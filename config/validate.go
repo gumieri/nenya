@@ -1469,16 +1469,6 @@ func validatePatternsToList(label string, patterns []string, logger *slog.Logger
 	return errs
 }
 
-// ValidatePatterns compiles all patterns in the slice and returns an
-// error if any pattern is invalid. Uses label in error messages for context.
-func ValidatePatterns(label string, patterns []string, logger *slog.Logger) error {
-	errs := validatePatternsToList(label, patterns, logger)
-	if len(errs) > 0 {
-		return fmt.Errorf("invalid patterns in %s:\n  - %s", label, strings.Join(errs, "\n  - "))
-	}
-	return nil
-}
-
 // OllamaHealthURL derives the health check URL (/api/tags) from an
 // Ollama engine URL by stripping common suffixes (e.g., /v1/chat/completions,
 // /api/generate).
@@ -1513,36 +1503,6 @@ func validateOllamaHealth(ctx context.Context, ollamaURL, caBundle, proxyURL str
 	return resp.StatusCode == http.StatusOK
 }
 
-func doWithRetry(ctx context.Context, maxAttempts int, fn func() error) error {
-	if maxAttempts <= 1 {
-		return fn()
-	}
-
-	var lastErr error
-	for attempt := range maxAttempts {
-		if err := fn(); err != nil {
-			lastErr = err
-			if attempt == maxAttempts-1 {
-				return lastErr
-			}
-			backoff := calculateBackoff(attempt)
-			timer := time.NewTimer(backoff)
-			select {
-			case <-timer.C:
-			case <-ctx.Done():
-				timer.Stop()
-				return ctx.Err()
-			}
-			continue
-		}
-		return nil
-	}
-	return lastErr
-}
-
-// doWithRetryResp is like doWithRetry but for HTTP functions returning
-// (*http.Response, error). Callback must close body on error and return
-// response on success.
 func doWithRetryResp(ctx context.Context, maxAttempts int, fn func() (*http.Response, error)) (*http.Response, error) {
 	if maxAttempts <= 1 {
 		return fn()

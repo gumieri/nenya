@@ -4,7 +4,7 @@
 // The primary types are:
 //   - AccountManager: top-level coordinator owning per-provider AccountPools
 //   - AccountPool: LRU-based account selection with rate-limit and backoff tracking
-//   - AccountStorage: persistence interface (JSONFileStorage implementation)
+//   - AccountStorage: persistence interface
 //   - ClassifyError: error classification with exponential backoff decisions
 //
 // Account selection returns a SelectedAccount value (not a mutable pointer),

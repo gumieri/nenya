@@ -189,13 +189,15 @@ All outbound HTTP dispatch points vulnerable to transient network errors (TLS ha
 - **Strategy Extraction:** When a function branches on a condition to pick an algorithm (e.g. IDE vs non-IDE truncation), extract each branch into a function and select via a variable or table:
   ```go
   // PREFER: table-driven selection
-  var truncate func(string, int, string) string
+  var truncate func(string, int, string, config.ContextConfig) string
   if profile.IsIDE {
-      truncate = pipeline.TruncateTFIDFCodeAware
-  } else {
       truncate = pipeline.TruncateTFIDF
+  } else {
+      truncate = func(text string, limit int, query string, cfg config.ContextConfig) string {
+          return pipeline.TruncateTFIDFWithRescueMemo(text, limit, query, cfg, nil, "", nil)
+      }
   }
-  result := truncate(text, limit, query)
+  result := truncate(text, limit, query, cfg)
   ```
 - **State Machine Extraction:** Loops that track mutable state across iterations (retry counters, backoff timers, circuit state) SHOULD be extracted into a struct with named methods for each transition.
 - **Guard Clauses Over Nesting:** Prefer early returns over nested if-else:

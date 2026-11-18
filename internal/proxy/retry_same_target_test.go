@@ -16,6 +16,7 @@ import (
 	"github.com/nenya/config"
 	"github.com/nenya/internal/gateway"
 	"github.com/nenya/internal/pipeline"
+	mcpproxy "github.com/nenya/internal/proxy/mcp"
 	"github.com/nenya/internal/routing"
 	"github.com/nenya/internal/testutil"
 )
@@ -231,7 +232,7 @@ func TestHandleBufferedAction_RetryableSignal(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
 	defer cancel()
 
-	result, outcome := p.handleBufferedAction(ctx, gw, 0, targets, target, 0, "retry-agent", action, 1, 0, 0, pipeline.CanarResult{})
+	result, outcome := mcpproxy.HandleBufferedAction(p.mcpHost(), ctx, gw, 0, targets, target, 0, "retry-agent", action, 1, 0, 0, pipeline.CanarResult{})
 	if result != nil {
 		t.Fatalf("expected no buffered result on error, got %v", result)
 	}

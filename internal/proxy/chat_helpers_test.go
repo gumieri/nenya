@@ -582,7 +582,7 @@ func TestExtractAutoSearchQuery(t *testing.T) {
 		messages := []interface{}{
 			map[string]interface{}{"role": "user", "content": "hello world"},
 		}
-		query, lastMsg := p.extractAutoSearchQuery(messages)
+		query, lastMsg := mcpproxy.ExtractAutoSearchQuery(p.mcpHost(), messages)
 		if query != "hello world" {
 			t.Errorf("expected 'hello world', got %q", query)
 		}
@@ -595,7 +595,7 @@ func TestExtractAutoSearchQuery(t *testing.T) {
 		messages := []interface{}{
 			map[string]interface{}{"role": "assistant", "content": "hello"},
 		}
-		query, lastMsg := p.extractAutoSearchQuery(messages)
+		query, lastMsg := mcpproxy.ExtractAutoSearchQuery(p.mcpHost(), messages)
 		if query != "" {
 			t.Errorf("expected empty query, got %q", query)
 		}
@@ -605,7 +605,7 @@ func TestExtractAutoSearchQuery(t *testing.T) {
 	})
 
 	t.Run("empty messages", func(t *testing.T) {
-		query, lastMsg := p.extractAutoSearchQuery(nil)
+		query, lastMsg := mcpproxy.ExtractAutoSearchQuery(p.mcpHost(), nil)
 		if query != "" {
 			t.Errorf("expected empty query, got %q", query)
 		}
@@ -616,7 +616,7 @@ func TestExtractAutoSearchQuery(t *testing.T) {
 
 	t.Run("last message not a map", func(t *testing.T) {
 		messages := []interface{}{"not a map"}
-		query, lastMsg := p.extractAutoSearchQuery(messages)
+		query, lastMsg := mcpproxy.ExtractAutoSearchQuery(p.mcpHost(), messages)
 		if query != "" {
 			t.Errorf("expected empty query")
 		}
@@ -629,7 +629,7 @@ func TestExtractAutoSearchQuery(t *testing.T) {
 		messages := []interface{}{
 			map[string]interface{}{"content": "hello"},
 		}
-		query, _ := p.extractAutoSearchQuery(messages)
+		query, _ := mcpproxy.ExtractAutoSearchQuery(p.mcpHost(), messages)
 		if query != "" {
 			t.Errorf("expected empty query for missing role")
 		}
@@ -644,7 +644,7 @@ func TestExtractAutoSearchQuery(t *testing.T) {
 				},
 			},
 		}
-		query, _ := p.extractAutoSearchQuery(messages)
+		query, _ := mcpproxy.ExtractAutoSearchQuery(p.mcpHost(), messages)
 		if query != "hello from array" {
 			t.Errorf("expected 'hello from array', got %q", query)
 		}
@@ -752,7 +752,7 @@ func TestResolveSearchTool(t *testing.T) {
 		gw := &gateway.NenyaGateway{
 			MCPClients: map[string]*mcp.Client{},
 		}
-		tool := p.resolveSearchTool(gw, "test-server", "my-search-tool", "test-agent")
+		tool := mcpproxy.ResolveSearchTool(p.mcpHost(), gw, "test-server", "my-search-tool", "test-agent")
 		if tool != "my-search-tool" {
 			t.Errorf("expected 'my-search-tool', got %q", tool)
 		}
@@ -764,7 +764,7 @@ func TestResolveSearchTool(t *testing.T) {
 			MCPClients: ms.clients(),
 			Logger:     newTestLogger(),
 		}
-		tool := p.resolveSearchTool(gw, ms.serverName(), "", "test-agent")
+		tool := mcpproxy.ResolveSearchTool(p.mcpHost(), gw, ms.serverName(), "", "test-agent")
 		if tool != "" {
 			t.Errorf("expected empty string, got %q", tool)
 		}
@@ -776,7 +776,7 @@ func TestCanPerformAutoSearch(t *testing.T) {
 
 	t.Run("server not found", func(t *testing.T) {
 		gw := &gateway.NenyaGateway{MCPClients: map[string]*mcp.Client{}}
-		if p.canPerformAutoSearch(gw, "nonexistent") {
+		if mcpproxy.CanPerformAutoSearch(p.mcpHost(), gw, "nonexistent") {
 			t.Errorf("expected false")
 		}
 	})
@@ -787,7 +787,7 @@ func TestCanPerformAutoSearch(t *testing.T) {
 			MCPClients: ms.clients(),
 			Logger:     newTestLogger(),
 		}
-		if p.canPerformAutoSearch(gw, ms.serverName()) {
+		if mcpproxy.CanPerformAutoSearch(p.mcpHost(), gw, ms.serverName()) {
 			t.Errorf("expected false for non-ready server")
 		}
 	})

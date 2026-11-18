@@ -64,40 +64,6 @@ type OpenAIErrorObject struct {
 	ErrorKind infra.ErrorKind `json:"error_kind,omitempty"`
 }
 
-// Error implements the error interface
-func (e *GatewayError) Error() string {
-	if e.Provider != "" {
-		return fmt.Sprintf("[%s] %s: %s", e.Provider, e.Type, e.Message)
-	}
-	return fmt.Sprintf("%s: %s", e.Type, e.Message)
-}
-
-// Unwrap returns the wrapped error
-func (e *GatewayError) Unwrap() error {
-	return e.Err
-}
-
-// HTTPStatusCode returns the appropriate HTTP status code for the error type
-func (e *GatewayError) HTTPStatusCode() int {
-	if e.StatusCode != 0 {
-		return e.StatusCode
-	}
-	switch e.Type {
-	case ErrorTypeRateLimit:
-		return http.StatusTooManyRequests
-	case ErrorTypeInvalidRequest, ErrorTypePolicyRefusal:
-		return http.StatusBadRequest
-	case ErrorTypeAuthentication:
-		return http.StatusUnauthorized
-	case ErrorTypeNotFound:
-		return http.StatusNotFound
-	case ErrorTypeProvider:
-		return http.StatusBadGateway
-	default:
-		return http.StatusInternalServerError
-	}
-}
-
 // WithParam sets the param field and returns the error
 func (e *GatewayError) WithParam(param string) *GatewayError {
 	if len(param) > maxParamLength {

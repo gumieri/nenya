@@ -175,52 +175,11 @@ func min64(a, b int64) int64 {
 }
 
 // PricingSource is an interface for pricing data sources. It is reserved for future
-// use in implementing a pricing chain (e.g., StaticPricing → FallbackPricing) for
-// more flexible pricing resolution. Currently not integrated into the main discovery
-// flow.
+// use in implementing a pricing chain for more flexible pricing resolution.
+// Currently not integrated into the main discovery flow, and has no
+// implementations yet.
 type PricingSource interface {
 	GetPricing(ctx context.Context, modelID string) (PricingEntry, bool)
-}
-
-// StaticPricing implements PricingSource by looking up pricing from a static map.
-// Reserved for future use in pricing chain implementation.
-type StaticPricing struct {
-	pricing map[string]PricingEntry
-}
-
-func NewStaticPricing(pricing map[string]PricingEntry) *StaticPricing {
-	return &StaticPricing{pricing: pricing}
-}
-
-func (sp *StaticPricing) GetPricing(ctx context.Context, modelID string) (PricingEntry, bool) {
-	if sp.pricing == nil {
-		return PricingEntry{}, false
-	}
-	p, ok := sp.pricing[modelID]
-	return p, ok
-}
-
-// FallbackPricing implements PricingSource by returning a fixed high-cost estimate.
-// Reserved for future use in pricing chain implementation when no other pricing source
-// is available.
-type FallbackPricing struct {
-	InputCostPer1M  float64
-	OutputCostPer1M float64
-}
-
-func NewFallbackPricing(inputCost, outputCost float64) *FallbackPricing {
-	return &FallbackPricing{
-		InputCostPer1M:  inputCost,
-		OutputCostPer1M: outputCost,
-	}
-}
-
-func (fp *FallbackPricing) GetPricing(ctx context.Context, modelID string) (PricingEntry, bool) {
-	return PricingEntry{
-		InputCostPer1M:  fp.InputCostPer1M,
-		OutputCostPer1M: fp.OutputCostPer1M,
-		Currency:        "USD",
-	}, true
 }
 
 type openRouterPricing struct {
@@ -329,24 +288,4 @@ func (pf *PricingFetcher) FetchOpenRouterPricing(ctx context.Context) (map[strin
 
 	pf.logger.Debug("fetched openrouter pricing", "models", len(pricing))
 	return pricing, nil
-}
-
-// MergePricing overlays discovered pricing onto the static map: a static entry
-// is used only when the model is absent from the discovered set or the
-// discovered entry is entirely zero. IsZero covers peak/cached fields, so a
-// discovered entry carrying only those still wins over the static baseline.
-//
-// Reserved for a future pricing chain (see PricingSource); not wired into the
-// discovery flow today.
-func MergePricing(discovered map[string]PricingEntry, static map[string]PricingEntry) map[string]PricingEntry {
-	merged := make(map[string]PricingEntry, len(discovered)+len(static))
-	for k, v := range discovered {
-		merged[k] = v
-	}
-	for k, v := range static {
-		if existing, ok := merged[k]; !ok || existing.IsZero() {
-			merged[k] = v
-		}
-	}
-	return merged
 }

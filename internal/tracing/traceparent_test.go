@@ -89,12 +89,12 @@ func TestTraceLifecycle(t *testing.T) {
 	ctx, rt := StartRequest(context.Background(), testLogger(), validTP, "chat_completions")
 
 	// Inbound trace continued.
-	if got := CurrentTraceID(ctx); got != "4bf92f3577b34da6a3ce929d0e0e4736" {
+	if got := testTraceID(t, ctx); got != "4bf92f3577b34da6a3ce929d0e0e4736" {
 		t.Fatalf("trace id = %s, want the inbound one", got)
 	}
 
 	childCtx, span := StartSpan(ctx, testLogger(), "pipeline.interceptors")
-	if got := CurrentTraceID(childCtx); got != "4bf92f3577b34da6a3ce929d0e0e4736" {
+	if got := testTraceID(t, childCtx); got != "4bf92f3577b34da6a3ce929d0e0e4736" {
 		t.Errorf("child span changed the trace id: %s", got)
 	}
 	if span.sc.SpanID == (SpanID{}) {
@@ -119,7 +119,7 @@ func TestTraceLifecycle(t *testing.T) {
 // TestStartTraceWithoutInbound roots a fresh trace.
 func TestStartTraceWithoutInbound(t *testing.T) {
 	ctx, _ := StartRequest(context.Background(), testLogger(), "", "chat_completions")
-	id := CurrentTraceID(ctx)
+	id := testTraceID(t, ctx)
 	if len(id) != 32 {
 		t.Fatalf("fresh trace id = %q, want 32 hex chars", id)
 	}
@@ -135,7 +135,7 @@ func TestDisabledContext(t *testing.T) {
 	}
 	span.End() // nil-safe no-op
 	RecordStage(dctx, "stage")
-	if got := CurrentTraceID(dctx); got != "" {
+	if got := testTraceID(t, dctx); got != "" {
 		t.Fatalf("disabled trace id = %q, want empty", got)
 	}
 	if got := OutgoingTraceparent(dctx); got != "" {
@@ -146,7 +146,7 @@ func TestDisabledContext(t *testing.T) {
 	}
 	// StartRequest on a disabled context also stays inert.
 	ctx2, rt := StartRequest(Disable(context.Background()), testLogger(), validTP, "chat")
-	if got := CurrentTraceID(ctx2); got != "" {
+	if got := testTraceID(t, ctx2); got != "" {
 		t.Fatalf("disabled StartRequest traced id = %q, want empty", got)
 	}
 	rt.Finish() // no-op, must not panic
@@ -155,11 +155,22 @@ func TestDisabledContext(t *testing.T) {
 // TestUntracedContext verifies the no-op paths.
 func TestUntracedContext(t *testing.T) {
 	ctx := context.Background()
-	if got := CurrentTraceID(ctx); got != "" {
+	if got := testTraceID(t, ctx); got != "" {
 		t.Fatalf("untraced trace id = %q, want empty", got)
 	}
 	if got := OutgoingTraceparent(ctx); got != "" {
 		t.Fatalf("untraced outgoing = %q, want empty", got)
 	}
 	RecordStage(ctx, "nothing") // must not panic
+}
+
+// testTraceID reads the active span's trace id (test-file helper: invisible
+// to deadcode, replaces the deleted production CurrentTraceID seam).
+func testTraceID(t *testing.T, ctx context.Context) string {
+	t.Helper()
+	sp, ok := ctx.Value(ctxKey{}).(Span)
+	if !ok {
+		return ""
+	}
+	return sp.sc.TraceID.String()
 }

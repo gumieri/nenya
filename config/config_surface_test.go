@@ -1,4 +1,4 @@
-package releasecontract
+package config_test
 
 import (
 	"reflect"

@@ -911,7 +911,7 @@ func newStreamTestGateway() *gateway.NenyaGateway {
 		Logger:     slog.Default(),
 		Stats:      infra.NewUsageTracker(),
 		Metrics:    infra.NewMetrics(),
-		AgentState: routing.NewAgentState(slog.Default(), nil),
+		AgentState: routing.NewAgentStateWithConfig(slog.Default(), nil, nil, nil),
 		Providers:  make(map[string]*config.Provider),
 	}
 }

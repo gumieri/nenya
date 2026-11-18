@@ -27,8 +27,8 @@ type CacheOpts struct {
 	GlobalTTL   string // Fallback TTL for all breakpoints (from CacheControlTTL)
 	// MidConversationSystem overrides the model-capability probe for
 	// keeping role=system messages in the messages array (Anthropic
-	// 4.8+/5-family). nil lets the adapter decide via
-	// discovery.SupportsMidConversationSystem; a non-nil value wins so
+	// 4.8+/5-family). nil lets the adapter decide via the shared
+	// util.SupportsMidConversationSystem predicate; a non-nil value wins so
 	// catalog/config-driven metadata can steer legacy hoisting either
 	// way.
 	MidConversationSystem *bool

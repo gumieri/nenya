@@ -1,4 +1,4 @@
-package releasecontract
+package gateway
 
 import (
 	"fmt"
@@ -20,8 +20,7 @@ const dagInternalPrefix = "internal/"
 // runtime dependency DAG (see the note under "Package Dependency DAG" in
 // docs/ARCHITECTURE.md).
 var dagExcluded = map[string]bool{
-	"testutil":        true,
-	"releasecontract": true,
+	"testutil": true,
 }
 
 // dagNestedAllow maps a deliberately nested internal package path to the

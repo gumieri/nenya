@@ -128,7 +128,7 @@ func TestMoveToFront(t *testing.T) {
 func TestApplyStickyRouting_NewPin(t *testing.T) {
 	gw := &gateway.NenyaGateway{
 		Logger:     testLog(t),
-		AgentState: routing.NewAgentState(testLog(t), nil),
+		AgentState: routing.NewAgentStateWithConfig(testLog(t), nil, nil, nil),
 	}
 	gw.SessionRouter = gw.AgentState.SessionRouter
 	agent := config.AgentConfig{Strategy: "sticky"}
@@ -156,7 +156,7 @@ func TestApplyStickyRouting_NewPin(t *testing.T) {
 func TestApplyStickyRouting_EmptyAccountDoesNotWipePin(t *testing.T) {
 	gw := &gateway.NenyaGateway{
 		Logger:     testLog(t),
-		AgentState: routing.NewAgentState(testLog(t), nil),
+		AgentState: routing.NewAgentStateWithConfig(testLog(t), nil, nil, nil),
 	}
 	gw.SessionRouter = gw.AgentState.SessionRouter
 	agent := config.AgentConfig{Strategy: "sticky"}
@@ -186,7 +186,7 @@ func TestApplyStickyRouting_EmptyAccountDoesNotWipePin(t *testing.T) {
 func TestApplyStickyRouting_ReusePin(t *testing.T) {
 	gw := &gateway.NenyaGateway{
 		Logger:     testLog(t),
-		AgentState: routing.NewAgentState(testLog(t), nil),
+		AgentState: routing.NewAgentStateWithConfig(testLog(t), nil, nil, nil),
 	}
 	gw.SessionRouter = gw.AgentState.SessionRouter
 	agent := config.AgentConfig{Strategy: "sticky"}
@@ -209,7 +209,7 @@ func TestApplyStickyRouting_ReusePin(t *testing.T) {
 func TestApplyStickyRouting_CoolingPinPromoted(t *testing.T) {
 	gw := &gateway.NenyaGateway{
 		Logger:     testLog(t),
-		AgentState: routing.NewAgentState(testLog(t), nil),
+		AgentState: routing.NewAgentStateWithConfig(testLog(t), nil, nil, nil),
 	}
 	gw.SessionRouter = gw.AgentState.SessionRouter
 	agent := config.AgentConfig{Strategy: "sticky"}
@@ -236,7 +236,7 @@ func TestApplyStickyRouting_CoolingPinPromoted(t *testing.T) {
 func TestApplyStickyRouting_AccountDriftPromotesToSibling(t *testing.T) {
 	gw := &gateway.NenyaGateway{
 		Logger:     testLog(t),
-		AgentState: routing.NewAgentState(testLog(t), nil),
+		AgentState: routing.NewAgentStateWithConfig(testLog(t), nil, nil, nil),
 	}
 	gw.SessionRouter = gw.AgentState.SessionRouter
 	agent := config.AgentConfig{Strategy: "sticky"}
@@ -267,7 +267,7 @@ func TestApplyStickyRouting_AccountDriftPromotesToSibling(t *testing.T) {
 func TestApplyStickyRouting_ValidFrontPinNotRePinned(t *testing.T) {
 	gw := &gateway.NenyaGateway{
 		Logger:     testLog(t),
-		AgentState: routing.NewAgentState(testLog(t), nil),
+		AgentState: routing.NewAgentStateWithConfig(testLog(t), nil, nil, nil),
 	}
 	gw.SessionRouter = gw.AgentState.SessionRouter
 	agent := config.AgentConfig{Strategy: "sticky"}
@@ -307,7 +307,7 @@ func TestApplyStickyRouting_PinHoldThroughCooldown(t *testing.T) {
 	newGW := func(t *testing.T) *gateway.NenyaGateway {
 		gw := &gateway.NenyaGateway{
 			Logger:     testLog(t),
-			AgentState: routing.NewAgentState(testLog(t), nil),
+			AgentState: routing.NewAgentStateWithConfig(testLog(t), nil, nil, nil),
 		}
 		gw.SessionRouter = gw.AgentState.SessionRouter
 		return gw

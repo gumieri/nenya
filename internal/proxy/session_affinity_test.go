@@ -20,7 +20,7 @@ func newAffinityTestGateway(t *testing.T, providers map[string]*config.Provider)
 	t.Helper()
 	gw := &gateway.NenyaGateway{
 		Logger:     testLog(t),
-		AgentState: routing.NewAgentState(testLog(t), nil),
+		AgentState: routing.NewAgentStateWithConfig(testLog(t), nil, nil, nil),
 		Providers:  providers,
 	}
 	gw.SessionRouter = gw.AgentState.SessionRouter

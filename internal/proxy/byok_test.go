@@ -193,7 +193,7 @@ func TestApplyBYOKCredentialCustomHeader(t *testing.T) {
 // BYOK targets never write shared-account breaker state (NENYA-195).
 func TestBYOKTargetsDoNotWriteSharedAccountState(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(&bytes.Buffer{}, nil))
-	state := routing.NewAgentState(logger, infra.NewMetrics())
+	state := routing.NewAgentStateWithConfig(logger, infra.NewMetrics(), nil, nil)
 	shared := routing.UpstreamTarget{Provider: "anthropic", Model: "m", CoolKey: "agent:anthropic:m", AccountName: "acct-1"}
 	byok := shared
 	byok.BYOK = true
@@ -255,7 +255,7 @@ func TestBYOKDispatchDoesNotChargeSharedBillingAccount(t *testing.T) {
 // the intent must be known BEFORE routing (the pin is written inside it).
 func TestBYOKRequestSkipsSessionAffinity(t *testing.T) {
 	gw := byokGateway(t, true, map[string]bool{"anthropic": true}, "")
-	gw.AgentState = routing.NewAgentState(slog.New(slog.NewTextHandler(&bytes.Buffer{}, nil)), infra.NewMetrics())
+	gw.AgentState = routing.NewAgentStateWithConfig(slog.New(slog.NewTextHandler(&bytes.Buffer{}, nil)), infra.NewMetrics(), nil, nil)
 	req := &chatRequest{}
 	(&Proxy{}).resolveBYOKIntent(gw, byokRequest(t, config.DefaultBYOKHeader, "caller-key"), req)
 	if !req.BYOKRequested {

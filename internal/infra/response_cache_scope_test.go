@@ -44,23 +44,16 @@ func TestFingerprintPayloadScoped_PolicyChangesKey(t *testing.T) {
 	}
 }
 
-// TestFingerprintPayloadScoped_EmptyPolicyMatchesAuthOnly pins the helper
-// relationship: the two-argument helper and the three-argument helper with an
-// empty scope are the same key. It does NOT promise byte-compatibility with
-// pre-NENYA-154 keys — folding the (empty) scope digest into the namespace
-// segment deliberately changes the namespace format.
-func TestFingerprintPayloadScoped_EmptyPolicyMatchesAuthOnly(t *testing.T) {
+// TestFingerprintPayloadScoped_FailClosedWithoutToken pins that the unscoped
+// form cannot be partitioned by policy: a scoped request without a caller
+// identity fails closed (no cacheable key). It does NOT promise
+// byte-compatibility with pre-NENYA-154 keys — folding the (empty) scope
+// digest into the namespace segment deliberately changes the namespace
+// format.
+func TestFingerprintPayloadScoped_FailClosedWithoutToken(t *testing.T) {
 	payload := testPayload("hello world")
-	if got, want := FingerprintPayloadWithAuth(payload, "token-a"), FingerprintPayloadScoped(payload, "token-a", ""); got != want {
-		t.Fatalf("empty-policy fingerprint = %q, want %q", got, want)
-	}
-	// The unscoped form cannot be partitioned by policy, so a scoped request
-	// without a caller identity fails closed (no cacheable key).
 	if got := FingerprintPayloadScoped(payload, "", `{"agent":"chat"}`); got != "" {
 		t.Fatalf("scoped fingerprint without a token must be empty, got %q", got)
-	}
-	if got, want := FingerprintPayload(payload), FingerprintPayloadScoped(payload, "", ""); got != want {
-		t.Fatalf("unscoped fingerprint drift: %q != %q", got, want)
 	}
 }
 

@@ -33,13 +33,3 @@ var ServiceKindEndpoints = map[ServiceKind]EndpointMapping{
 	ServiceKindBatches:     {Method: "POST", Path: "/v1/batches"},
 	ServiceKindModerations: {Method: "POST", Path: "/v1/moderations"},
 }
-
-// Supports returns true if the provider supports the given service kind.
-func (s *ProviderSpec) Supports(kind ServiceKind) bool {
-	for _, k := range s.ServiceKinds {
-		if k == kind {
-			return true
-		}
-	}
-	return false
-}

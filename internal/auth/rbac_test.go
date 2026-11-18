@@ -404,21 +404,6 @@ func TestHasPermission(t *testing.T) {
 	}
 }
 
-func TestAuthError(t *testing.T) {
-	err := &AuthError{Status: 403, Msg: "forbidden"}
-	expected := "auth: status=403 msg=forbidden"
-	if err.Error() != expected {
-		t.Errorf("AuthError.Error() = %q; want %q", err.Error(), expected)
-	}
-
-	if ErrKeyDisabled.Status != 403 {
-		t.Errorf("ErrKeyDisabled.Status = %d; want 403", ErrKeyDisabled.Status)
-	}
-	if ErrKeyExpired.Status != 403 {
-		t.Errorf("ErrKeyExpired.Status = %d; want 403", ErrKeyExpired.Status)
-	}
-}
-
 // TestAuthorizeUnknownRoleDenies pins the NENYA-196 fail-closed role check:
 // a key carrying an unrecognized role (or no role at all) must not fall
 // through to the permissive branches. Load validation rejects such keys, so

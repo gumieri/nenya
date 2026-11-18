@@ -116,19 +116,3 @@ func (a *NoAuthAdapter) MutateResponse(body []byte) ([]byte, error) {
 func (a *NoAuthAdapter) NormalizeError(statusCode int, body []byte) ErrorClass {
 	return defaultNormalizeError(statusCode, body)
 }
-
-// NoAuth is a marker type for providers that do not require authentication.
-type NoAuth struct{}
-
-// InjectAuth is a no-op for providers that do not require authentication.
-func (a *NoAuth) InjectAuth(req *http.Request, apiKey string) error {
-	return nil
-}
-
-// IdentityResponse is a response transformer that returns the body unchanged.
-type IdentityResponse struct{}
-
-// MutateResponse returns the response body unchanged.
-func (r *IdentityResponse) MutateResponse(body []byte) ([]byte, error) {
-	return body, nil
-}
