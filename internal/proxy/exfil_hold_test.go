@@ -9,6 +9,7 @@ import (
 	"github.com/nenya/config"
 	"github.com/nenya/internal/gateway"
 	"github.com/nenya/internal/infra"
+	mcpproxy "github.com/nenya/internal/proxy/mcp"
 	"github.com/nenya/internal/stream"
 )
 
@@ -42,7 +43,7 @@ func TestApplyExfilToBufferedSSEHeldTailDrained(t *testing.T) {
 		"",
 	}, "\n"))}
 
-	(&Proxy{}).applyExfilToBufferedSSE(gw, buf, "agent")
+	mcpproxy.ApplyExfilToBufferedSSE((&Proxy{}).mcpHost(), gw, buf, "agent")
 
 	out := string(buf.RawBytes)
 	if strings.Contains(out, "127.0.0.1:8080") {
@@ -78,7 +79,7 @@ func TestApplyExfilToBufferedSSEBenignIdentity(t *testing.T) {
 	}, "\n")
 	buf := &bufferedSSE{RawBytes: []byte(raw)}
 
-	(&Proxy{}).applyExfilToBufferedSSE(gw, buf, "agent")
+	mcpproxy.ApplyExfilToBufferedSSE((&Proxy{}).mcpHost(), gw, buf, "agent")
 
 	if text := bufferedWireText(t, string(buf.RawBytes)); text != "Hello world!" {
 		t.Fatalf("benign buffered replay corrupted: %q", text)

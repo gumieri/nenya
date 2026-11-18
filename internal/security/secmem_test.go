@@ -1,7 +1,6 @@
 package security
 
 import (
-	"strings"
 	"testing"
 )
 
@@ -237,24 +236,6 @@ func TestSecureMem_Used(t *testing.T) {
 
 	if used := sm.Used(); used == 0 {
 		t.Error("expected non-zero used after store")
-	}
-}
-
-func TestGenerateToken(t *testing.T) {
-	token := GenerateToken()
-	if !strings.HasPrefix(token, "nk-") {
-		t.Errorf("expected token to start with 'nk-', got %q", token)
-	}
-	if len(token) != 51 {
-		t.Errorf("expected token length 51, got %d: %q", len(token), token)
-	}
-}
-
-func TestGenerateToken_Unique(t *testing.T) {
-	t1 := GenerateToken()
-	t2 := GenerateToken()
-	if t1 == t2 {
-		t.Error("expected unique tokens")
 	}
 }
 

@@ -9,7 +9,6 @@ import (
 	"github.com/nenya/config"
 	"github.com/nenya/internal/gateway"
 	"github.com/nenya/internal/infra"
-	"github.com/nenya/internal/mcp"
 	"github.com/nenya/internal/pipeline"
 	mcpproxy "github.com/nenya/internal/proxy/mcp"
 	"github.com/nenya/internal/routing"
@@ -65,9 +64,7 @@ const streamFailoverPolicyRefusal = mcpproxy.StreamFailoverPolicyRefusal
 
 // Buffered sweep step constants (moved with the subsystem).
 const (
-	bufferedStepNext  = mcpproxy.BufferedStepNext
 	bufferedStepRetry = mcpproxy.BufferedStepRetry
-	bufferedStepStop  = mcpproxy.BufferedStepStop
 )
 
 // Constructor aliases for the moved buffered-core types.
@@ -206,54 +203,6 @@ func (p *Proxy) injectAutoSearch(gw *gateway.NenyaGateway, ctx context.Context, 
 	mcpproxy.InjectAutoSearch(p.mcpHost(), gw, ctx, payload, messages, req)
 }
 
-func (p *Proxy) forwardBuffered(gw *gateway.NenyaGateway, ctx context.Context, r *http.Request, d mcpproxy.BufferedDispatch) (*bufferedSSE, error) {
-	return mcpproxy.ForwardBuffered(p.mcpHost(), gw, ctx, r, d)
-}
-
-func (p *Proxy) handleBufferedAction(ctx context.Context, gw *gateway.NenyaGateway, idx int, targets []routing.UpstreamTarget, target routing.UpstreamTarget, cooldownDuration time.Duration, agentName string, action upstreamAction, attempt, localRetries, maxRetries int, canary pipeline.CanarResult) (*bufferedSSE, mcpproxy.BufferedOutcome) {
-	return mcpproxy.HandleBufferedAction(p.mcpHost(), ctx, gw, idx, targets, target, cooldownDuration, agentName, action, attempt, localRetries, maxRetries, canary)
-}
-
-func (p *Proxy) handleBufferedStream(ctx context.Context, action upstreamAction, target routing.UpstreamTarget, gw *gateway.NenyaGateway, cooldownDuration time.Duration, agentName string, canary pipeline.CanarResult) (*bufferedSSE, error) {
-	return mcpproxy.HandleBufferedStream(p.mcpHost(), ctx, action, target, gw, cooldownDuration, agentName, canary)
-}
-
-func (p *Proxy) applyExfilToBufferedSSE(gw *gateway.NenyaGateway, buf *bufferedSSE, agentName string) {
-	mcpproxy.ApplyExfilToBufferedSSE(p.mcpHost(), gw, buf, agentName)
-}
-
-func (p *Proxy) applyCanaryToBufferedSSE(gw *gateway.NenyaGateway, buf *bufferedSSE, agentName string, canary pipeline.CanarResult) {
-	mcpproxy.ApplyCanaryToBufferedSSE(p.mcpHost(), gw, buf, agentName, canary)
-}
-
-func (p *Proxy) guardBufferedLine(guard *stream.ExfilGuard, line string) (string, bool, bool, map[string]interface{}) {
-	return mcpproxy.GuardBufferedLine(p.mcpHost(), guard, line)
-}
-
-func (p *Proxy) replayGuardedBufferedWithProvider(gw *gateway.NenyaGateway, w http.ResponseWriter, buf *bufferedSSE, providerName string, agentName string, sourceFormat string, apiKey *config.ApiKey) {
-	mcpproxy.ReplayGuardedBufferedWithProvider(p.mcpHost(), gw, w, buf, providerName, agentName, sourceFormat, apiKey)
-}
-
-func (p *Proxy) convertBufferedForReplay(gw *gateway.NenyaGateway, buf *bufferedSSE, sourceFormat string, apiKey *config.ApiKey) []byte {
-	return mcpproxy.ConvertBufferedForReplay(p.mcpHost(), gw, buf, sourceFormat, apiKey)
-}
-
-func (p *Proxy) recordMCPUsage(gw *gateway.NenyaGateway, buf *bufferedSSE, agentName string) {
-	mcpproxy.RecordMCPUsage(p.mcpHost(), gw, buf, agentName)
-}
-
-func (p *Proxy) recordMCPIterationUsage(ctx context.Context, gw *gateway.NenyaGateway, buf *bufferedSSE, targets []routing.UpstreamTarget, agentName string) {
-	mcpproxy.RecordMCPIterationUsage(p.mcpHost(), ctx, gw, buf, targets, agentName)
-}
-
-func (p *Proxy) rescanAppendedMessages(h mcpproxy.Host, in mcpproxy.MCPIterInput, working map[string]any, appended []map[string]any) error {
-	return mcpproxy.RescanAppendedMessages(h, in, working, appended)
-}
-
-func (p *Proxy) executeAndAppendMCPResults(h mcpproxy.Host, in mcpproxy.MCPIterInput, working map[string]any, mcpCalls []mcpToolCall, buf *bufferedSSE) bool {
-	return mcpproxy.ExecuteAndAppendMCPResults(h, in, working, mcpCalls, buf)
-}
-
 // discoverToolByPrefix resolves an MCP tool by name prefix. Single shim
 // serves both the auto-save path in stream.go and the test helpers.
 func (p *Proxy) discoverToolByPrefix(gw *gateway.NenyaGateway, serverName, prefix string) string {
@@ -261,22 +210,6 @@ func (p *Proxy) discoverToolByPrefix(gw *gateway.NenyaGateway, serverName, prefi
 }
 
 // Test shims for auto-search helpers moved with the subsystem.
-
-func (p *Proxy) extractAutoSearchQuery(messages []interface{}) (string, map[string]interface{}) {
-	return mcpproxy.ExtractAutoSearchQuery(p.mcpHost(), messages)
-}
-
-func (p *Proxy) resolveSearchTool(gw *gateway.NenyaGateway, serverName, configuredTool, agentName string) string {
-	return mcpproxy.ResolveSearchTool(p.mcpHost(), gw, serverName, configuredTool, agentName)
-}
-
-func (p *Proxy) canPerformAutoSearch(gw *gateway.NenyaGateway, serverName string) bool {
-	return mcpproxy.CanPerformAutoSearch(p.mcpHost(), gw, serverName)
-}
-
-func (p *Proxy) mcpClientCallTool(gw *gateway.NenyaGateway, ctx context.Context, serverName, toolName, query string, apiKey *config.ApiKey) (*mcp.CallToolResult, error) {
-	return mcpproxy.MCPClientCallTool(p.mcpHost(), gw, ctx, serverName, toolName, query, apiKey)
-}
 
 // writeSSEError is the parent-side SSE error writer shared by the chat
 // streaming path and the MCP subsystem (via mcpproxy.Host.WriteSSEError).
@@ -295,16 +228,6 @@ var detectRequestCapabilities = mcpproxy.DetectRequestCapabilities
 // guardMCPArgs delegates to the moved implementation (auto-save call site in
 // stream.go).
 var guardMCPArgs = mcpproxy.GuardMCPArgs
-
-// replayBufferedResponse delegates to the moved implementation (test shim;
-// production callers pass the host explicitly).
-func replayBufferedResponse(h mcpproxy.Host, w http.ResponseWriter, buf *bufferedSSE, gw *gateway.NenyaGateway, providerName string, logger *slog.Logger) {
-	mcpproxy.ReplayBufferedResponse(h, w, buf, gw, providerName, logger)
-}
-
-// mcpproxyHost returns a Host over the given proxy (nil-safe for the
-// rescan tests that only exercise nil-chain paths).
-func mcpproxyHost(p *Proxy) mcpproxy.Host { return p.mcpHost() }
 
 // Follow-up note removed (NENYA-316): Host.ScreenToolArgs was a method on
 // EgressScreenRuntime, not a host capability — callers hold the runtime

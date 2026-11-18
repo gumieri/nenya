@@ -286,7 +286,7 @@ Security vulnerabilities include but are not limited to:
 
 ### File Path Security
 
-Config file loading functions (`LoadConfig`, `LoadSecrets`, `LoadPromptFile`) are hardened against path traversal attacks:
+Config file loading functions (`LoadConfig`, `LoadSecretsBounded`, `LoadPromptFile`) are hardened against path traversal attacks:
 
 - All user-supplied paths are resolved via `filepath.Abs` and checked against the config directory prefix
 - Paths containing `..` segments are rejected

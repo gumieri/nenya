@@ -207,10 +207,3 @@ func (c *WindowHeadCache) Stats() WindowHeadStats {
 		Invalidated: c.invalidated,
 	}
 }
-
-// size returns the current entry count (test helper).
-func (c *WindowHeadCache) size() int {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	return c.order.Len()
-}

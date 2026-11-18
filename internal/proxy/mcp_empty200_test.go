@@ -14,6 +14,7 @@ import (
 	"github.com/nenya/internal/gateway"
 	"github.com/nenya/internal/infra"
 	"github.com/nenya/internal/pipeline"
+	mcpproxy "github.com/nenya/internal/proxy/mcp"
 	"github.com/nenya/internal/resilience"
 	"github.com/nenya/internal/routing"
 	"github.com/nenya/internal/testutil"
@@ -70,7 +71,7 @@ func TestForwardBufferedEmpty200FailsOver(t *testing.T) {
 	}
 	r := httptest.NewRequest("POST", "/v1/chat/completions", nil)
 
-	buf, err := p.forwardBuffered(gw, r.Context(), r, bufferedDispatch{Targets: []routing.UpstreamTarget{emptyTarget, goodTarget}, Payload: payload, Cooldown: 0, TokenCount: 0, AgentName: "test-agent", MaxRetries: 3, APIKey: nil, Canary: pipeline.CanarResult{}, SourceFormat: "openai", WindowCompacted: false})
+	buf, err := mcpproxy.ForwardBuffered(p.mcpHost(), gw, r.Context(), r, bufferedDispatch{Targets: []routing.UpstreamTarget{emptyTarget, goodTarget}, Payload: payload, Cooldown: 0, TokenCount: 0, AgentName: "test-agent", MaxRetries: 3, APIKey: nil, Canary: pipeline.CanarResult{}, SourceFormat: "openai", WindowCompacted: false})
 	if err != nil {
 		t.Fatalf("forwardBuffered: %v", err)
 	}

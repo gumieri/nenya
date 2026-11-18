@@ -3,7 +3,6 @@ package jsonschema
 import (
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
 	"fmt"
 	"regexp"
 	"sort"
@@ -666,14 +665,4 @@ func CapToolName(name string) string {
 		prefix = prefix[:len(prefix)-size]
 	}
 	return prefix + suffix
-}
-
-// canonicalJSON renders a sanitized schema deterministically (json.Marshal sorts
-// map keys); the tests use it to compare whole schemas.
-func canonicalJSON(schema map[string]any) string {
-	encoded, err := json.Marshal(schema)
-	if err != nil {
-		return "{}"
-	}
-	return string(encoded)
 }

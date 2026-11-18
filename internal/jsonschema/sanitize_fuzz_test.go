@@ -63,7 +63,7 @@ func FuzzSanitizeToolSchema(f *testing.F) {
 		if out == nil {
 			t.Fatal("Sanitize returned nil")
 		}
-		encoded := canonicalJSON(out)
+		encoded := mustJSON(out)
 		for keyword := range dialectKeywords {
 			if findKeyword(out, keyword, 0) {
 				t.Fatalf("dialect keyword %q survived: %s", keyword, encoded)
@@ -89,7 +89,7 @@ func FuzzSanitizeToolSchema(f *testing.F) {
 		if depth := schemaDepth(out, 0); depth > maxDepth+2 {
 			t.Fatalf("depth = %d, want <= %d", depth, maxDepth+2)
 		}
-		if again := canonicalJSON(Sanitize(out)); again != encoded {
+		if again := mustJSON(Sanitize(out)); again != encoded {
 			t.Fatalf("not idempotent:\n%s\n%s", encoded, again)
 		}
 	})

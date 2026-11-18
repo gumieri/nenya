@@ -592,7 +592,7 @@ func TestBufferedStreamOutcomes(t *testing.T) {
 				Cancel:     func() {},
 			}
 
-			if _, err := p.handleBufferedStream(context.Background(), action, target, gw, time.Minute, "test-agent", pipeline.CanarResult{}); err != nil {
+			if _, err := mcpproxy.HandleBufferedStream(p.mcpHost(), context.Background(), action, target, gw, time.Minute, "test-agent", pipeline.CanarResult{}); err != nil {
 				t.Fatalf("handleBufferedStream: %v", err)
 			}
 

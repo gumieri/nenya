@@ -53,13 +53,6 @@ func EnsureThoughtSignaturePlaceholder(tc map[string]interface{}) bool {
 	return true
 }
 
-// HasThoughtSignature reports whether the tool_call carries a signature in
-// canonical extra_content form (any shape counts: the strip policy only
-// needs to know the call is signed, not which surface spelled it).
-func HasThoughtSignature(tc map[string]interface{}) bool {
-	return hasThoughtSignature(tc)
-}
-
 func hasThoughtSignature(tc map[string]interface{}) bool {
 	extra, ok := tc["extra_content"].(map[string]interface{})
 	if !ok {

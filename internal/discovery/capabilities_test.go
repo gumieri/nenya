@@ -242,28 +242,39 @@ func TestInferCapabilities_BackwardCompatibility(t *testing.T) {
 	}
 }
 
-// TestAllCapabilities_ConsistentWithMetadata cross-checks the AllCapabilities
-// enumeration against applyCapabilities and HasCapability: every capability
-// advertised by AllCapabilities must round-trip through both, so adding a new
-// Capability constant without updating any of the three places fails here.
-func TestAllCapabilities_ConsistentWithMetadata(t *testing.T) {
-	all := AllCapabilities()
-	if len(all) == 0 {
-		t.Fatal("AllCapabilities() returned no capabilities")
+// TestCapabilityConstantsRoundTripThroughMetadata is the exhaustive guard the
+// deleted AllCapabilities accessor backed (NENYA-334): every Capability
+// constant must wire through its dedicated ModelMetadata field —
+// HasCapability true when the field is set, false when it is not. Add new
+// constants to the table here (the drift tripwire: a constant that misses
+// this table is untested).
+func TestCapabilityConstantsRoundTripThroughMetadata(t *testing.T) {
+	cases := []struct {
+		cap   Capability
+		field func(*ModelMetadata) bool // reads the capability's bool field
+		set   func(*ModelMetadata)      // sets it
+	}{
+		{CapVision, func(m *ModelMetadata) bool { return m.SupportsVision }, func(m *ModelMetadata) { m.SupportsVision = true }},
+		{CapToolCalls, func(m *ModelMetadata) bool { return m.SupportsToolCalls }, func(m *ModelMetadata) { m.SupportsToolCalls = true }},
+		{CapReasoning, func(m *ModelMetadata) bool { return m.SupportsReasoning }, func(m *ModelMetadata) { m.SupportsReasoning = true }},
+		{CapContentArrays, func(m *ModelMetadata) bool { return m.SupportsContentArrays }, func(m *ModelMetadata) { m.SupportsContentArrays = true }},
+		{CapStreamOptions, func(m *ModelMetadata) bool { return m.SupportsStreamOptions }, func(m *ModelMetadata) { m.SupportsStreamOptions = true }},
+		{CapAutoToolChoice, func(m *ModelMetadata) bool { return m.SupportsAutoToolChoice }, func(m *ModelMetadata) { m.SupportsAutoToolChoice = true }},
+		{CapAudio, func(m *ModelMetadata) bool { return m.SupportsAudio }, func(m *ModelMetadata) { m.SupportsAudio = true }},
+		{CapMidConversationSystem, func(m *ModelMetadata) bool { return m.SupportsMidConversationSystem }, func(m *ModelMetadata) { m.SupportsMidConversationSystem = true }},
 	}
-	seen := make(map[Capability]bool, len(all))
-	for _, c := range all {
-		if c == "" {
-			t.Fatal("AllCapabilities() contains an empty capability")
+	for _, tc := range cases {
+		declared := &ModelMetadata{}
+		tc.set(declared)
+		if !declared.HasCapability(tc.cap) {
+			t.Errorf("HasCapability(%q) = false with the field set, want true", tc.cap)
 		}
-		if seen[c] {
-			t.Errorf("AllCapabilities() contains duplicate capability %q", c)
+		empty := &ModelMetadata{}
+		if empty.HasCapability(tc.cap) {
+			t.Errorf("HasCapability(%q) = true on a zero metadata, want false", tc.cap)
 		}
-		seen[c] = true
-
-		meta := applyCapabilities(&ModelMetadata{}, []Capability{c})
-		if !meta.HasCapability(c) {
-			t.Errorf("capability %q from AllCapabilities() does not round-trip through applyCapabilities/HasCapability", c)
+		if !tc.field(declared) {
+			t.Errorf("the %q case's field accessor reads back false after set — wrong field wired", tc.cap)
 		}
 	}
 }

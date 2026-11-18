@@ -75,13 +75,6 @@ func (a *bearerPlusGoogAdapter) NormalizeError(statusCode int, body []byte) Erro
 	return defaultNormalizeError(statusCode, body)
 }
 
-func Entry(name string) (AdapterEntry, bool) {
-	registryMu.RLock()
-	defer registryMu.RUnlock()
-	entry, ok := registry[strings.ToLower(name)]
-	return entry, ok
-}
-
 var defaultAdapter ProviderAdapter = &OpenAIAdapter{
 	Caps: Capabilities{},
 }

@@ -9,6 +9,7 @@ import (
 
 	"github.com/nenya/internal/gateway"
 	"github.com/nenya/internal/infra"
+	mcpproxy "github.com/nenya/internal/proxy/mcp"
 	"github.com/nenya/internal/routing"
 	"github.com/nenya/internal/stream"
 )
@@ -65,7 +66,7 @@ func TestRecordMCPUsageStats(t *testing.T) {
 		"",
 	}, "\n"))}
 
-	(&Proxy{}).recordMCPUsage(gw, buf, "agent")
+	mcpproxy.RecordMCPUsage((&Proxy{}).mcpHost(), gw, buf, "agent")
 
 	snap := gw.Stats.Snapshot()
 	models, _ := snap["models"].(map[string]interface{})

@@ -2,7 +2,6 @@ package config
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -171,20 +170,6 @@ func TestValidatePatternsToList(t *testing.T) {
 	}
 }
 
-func TestValidatePatterns(t *testing.T) {
-	logger := testLogger()
-
-	err := ValidatePatterns("test", []string{`[a-z]+`}, logger)
-	if err != nil {
-		t.Errorf("expected no error, got: %v", err)
-	}
-
-	err = ValidatePatterns("test", []string{`[invalid`}, logger)
-	if err == nil {
-		t.Error("expected error for invalid pattern")
-	}
-}
-
 func TestValidateEntropyConfig(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -305,68 +290,6 @@ func TestCalculateBackoff(t *testing.T) {
 	d10 := calculateBackoff(10)
 	if d10 > 10*time.Second {
 		t.Errorf("expected backoff cap ~8s, got %v", d10)
-	}
-}
-
-func TestDoWithRetry(t *testing.T) {
-	attempts := 0
-	err := doWithRetry(context.Background(), 3, func() error {
-		attempts++
-		if attempts < 2 {
-			return errors.New("transient error")
-		}
-		return nil
-	})
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if attempts != 2 {
-		t.Errorf("expected 2 attempts, got %d", attempts)
-	}
-}
-
-func TestDoWithRetry_AllFail(t *testing.T) {
-	attempts := 0
-	err := doWithRetry(context.Background(), 3, func() error {
-		attempts++
-		return errors.New("persistent error")
-	})
-	if err == nil {
-		t.Fatal("expected error")
-	}
-	if attempts != 3 {
-		t.Errorf("expected 3 attempts, got %d", attempts)
-	}
-}
-
-func TestDoWithRetry_NoRetry(t *testing.T) {
-	attempts := 0
-	err := doWithRetry(context.Background(), 1, func() error {
-		attempts++
-		return errors.New("error")
-	})
-	if err == nil {
-		t.Fatal("expected error")
-	}
-	if attempts != 1 {
-		t.Errorf("expected 1 attempt, got %d", attempts)
-	}
-}
-
-func TestDoWithRetry_CanceledContext(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-
-	attempts := 0
-	err := doWithRetry(ctx, 3, func() error {
-		attempts++
-		return errors.New("error")
-	})
-	if err == nil {
-		t.Fatal("expected error")
-	}
-	if attempts != 1 {
-		t.Errorf("expected 1 attempt (canceled), got %d", attempts)
 	}
 }
 

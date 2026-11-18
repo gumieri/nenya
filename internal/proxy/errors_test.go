@@ -17,81 +17,6 @@ import (
 	"github.com/nenya/internal/pipeline"
 )
 
-func TestClassifyError(t *testing.T) {
-	tests := []struct {
-		name       string
-		statusCode int
-		body       []byte
-		want       infra.ErrorKind
-	}{
-		{"rate limited", http.StatusTooManyRequests, nil, infra.ErrorKindRateLimited},
-		{"unauthorized", http.StatusUnauthorized, nil, infra.ErrorKindAuthFailed},
-		{"forbidden", http.StatusForbidden, nil, infra.ErrorKindAuthFailed},
-		{"not found", http.StatusNotFound, nil, infra.ErrorKindModelNotFound},
-		{"payload too large", http.StatusRequestEntityTooLarge, nil, infra.ErrorKindPayloadTooLarge},
-		{"bad request no body", http.StatusBadRequest, nil, infra.ErrorKindInvalidRequest},
-		{"bad request context exceeded", http.StatusBadRequest, bodyWithMessage("context_length_exceeded"), infra.ErrorKindContextExceeded},
-		{"bad request rate limit", http.StatusBadRequest, bodyWithMessage("rate_limit_exceeded"), infra.ErrorKindRateLimited},
-		{"bad request timeout", http.StatusBadRequest, bodyWithMessage("request timed out"), infra.ErrorKindProviderTimeout},
-		{"500 server error", 500, nil, infra.ErrorKindProviderError},
-		{"502 server error", 502, nil, infra.ErrorKindProviderError},
-		{"503 timeout", 503, []byte("timeout"), infra.ErrorKindProviderTimeout},
-		{"network error", 0, nil, infra.ErrorKindNetworkError},
-		{"unknown status", 418, nil, infra.ErrorKindInvalidRequest},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := classifyError(tt.statusCode, tt.body)
-			if got != tt.want {
-				t.Errorf("classifyError(%d, %q) = %q, want %q", tt.statusCode, string(tt.body), got, tt.want)
-			}
-		})
-	}
-}
-
-func bodyWithMessage(msg string) []byte {
-	data, _ := json.Marshal(map[string]interface{}{
-		"error": map[string]interface{}{
-			"message": msg,
-		},
-	})
-	return data
-}
-
-func TestInferErrorKind_MalformedBody(t *testing.T) {
-	got := inferErrorKind([]byte(`{invalid json`))
-	if got != infra.ErrorKindInvalidRequest {
-		t.Errorf("got %q, want %q", got, infra.ErrorKindInvalidRequest)
-	}
-}
-
-func TestInferErrorKind_EmptyBody(t *testing.T) {
-	got := inferErrorKind(nil)
-	if got != infra.ErrorKindInvalidRequest {
-		t.Errorf("got %q, want %q", got, infra.ErrorKindInvalidRequest)
-	}
-}
-
-func TestClassifyServerError(t *testing.T) {
-	tests := []struct {
-		name string
-		body []byte
-		want infra.ErrorKind
-	}{
-		{"generic timeout", []byte("upstream timeout"), infra.ErrorKindProviderTimeout},
-		{"generic 500", []byte("internal server error"), infra.ErrorKindProviderError},
-		{"empty body", nil, infra.ErrorKindProviderError},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := classifyServerError(tt.body)
-			if got != tt.want {
-				t.Errorf("classifyServerError(%q) = %q, want %q", string(tt.body), got, tt.want)
-			}
-		})
-	}
-}
-
 func TestWriteError(t *testing.T) {
 	w := newMockResponseWriter()
 	writeStructuredError(w, http.StatusBadGateway, infra.ErrorKindProviderError, "upstream failed")
@@ -304,21 +229,6 @@ func TestResolveModelRouting_NonChatModel(t *testing.T) {
 	}
 	if herr.Kind != infra.ErrorKindInvalidRequest {
 		t.Fatalf("error_kind = %q, want %q", herr.Kind, infra.ErrorKindInvalidRequest)
-	}
-}
-
-func TestContainsAny(t *testing.T) {
-	if !containsAny("hello world", "world") {
-		t.Error("expected true for 'world' in 'hello world'")
-	}
-	if containsAny("hello world", "foo") {
-		t.Error("expected false for 'foo' in 'hello world'")
-	}
-	if !containsAny("a b c", "a", "b") {
-		t.Error("expected true for 'a' or 'b' in 'a b c'")
-	}
-	if containsAny("", "a") {
-		t.Error("expected false for empty string")
 	}
 }
 

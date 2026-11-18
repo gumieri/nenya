@@ -221,8 +221,9 @@ func validateSecretsStrength(secrets *SecretsConfig, source string) error {
 		if IsSecretReference(key) {
 			// A well-formed env:/file: reference is not a credential
 			// (NENYA-166): its RESOLVED value is strength-checked at the
-			// LoadSecrets boundary, so an env var holding a weak secret is
-			// still refused. This pass only guards the reference shape.
+			// LoadSecretsBounded boundary, so an env var holding a weak
+			// secret is still refused. This pass only guards the reference
+			// shape.
 			continue
 		}
 		if reason := weakSecretReasonPatternOnly(key); reason != "" {

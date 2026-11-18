@@ -153,18 +153,6 @@ func (s *Span) End() {
 	s.logger.Debug("trace span", attrs...)
 }
 
-// CurrentTraceID returns the current trace's id, or "" when untraced or
-// tracing-disabled.
-func CurrentTraceID(ctx context.Context) string {
-	if disabled(ctx) {
-		return ""
-	}
-	if span, ok := ctx.Value(ctxKey{}).(Span); ok {
-		return span.sc.TraceID.String()
-	}
-	return ""
-}
-
 // ContinuedInbound reports whether the active span continues an inbound
 // traceparent (false = the gateway rooted a fresh trace, so inbound
 // tracestate must be discarded per W3C §4.2). False when untraced.

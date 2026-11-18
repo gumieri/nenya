@@ -2,7 +2,6 @@ package proxy
 
 import (
 	"encoding/json"
-	"errors"
 	"net/http"
 	"testing"
 
@@ -191,8 +190,8 @@ func TestParseProviderError(t *testing.T) {
 			if got.Message != tt.wantMessage {
 				t.Errorf("ParseProviderError() Message = %v, want %v", got.Message, tt.wantMessage)
 			}
-			if got.HTTPStatusCode() != tt.wantStatus {
-				t.Errorf("ParseProviderError() HTTPStatusCode = %v, want %v", got.HTTPStatusCode(), tt.wantStatus)
+			if got.StatusCode != tt.wantStatus {
+				t.Errorf("ParseProviderError() StatusCode = %v, want %v", got.StatusCode, tt.wantStatus)
 			}
 			if got.Provider != tt.provider {
 				t.Errorf("ParseProviderError() Provider = %v, want %v", got.Provider, tt.provider)
@@ -204,104 +203,6 @@ func TestParseProviderError(t *testing.T) {
 				t.Errorf("ParseProviderError() Param = %v, want %v", got.Param, tt.wantParam)
 			}
 		})
-	}
-}
-
-func TestGatewayErrorHTTPStatusCode(t *testing.T) {
-	tests := []struct {
-		name     string
-		err      *GatewayError
-		wantCode int
-	}{
-		{
-			name:     "rate limit error",
-			err:      &GatewayError{Type: ErrorTypeRateLimit, Message: "rate limit", StatusCode: http.StatusTooManyRequests, Provider: "openai"},
-			wantCode: http.StatusTooManyRequests,
-		},
-		{
-			name:     "invalid request error",
-			err:      &GatewayError{Type: ErrorTypeInvalidRequest, Message: "invalid", StatusCode: http.StatusBadRequest},
-			wantCode: http.StatusBadRequest,
-		},
-		{
-			name:     "authentication error",
-			err:      &GatewayError{Type: ErrorTypeAuthentication, Message: "auth failed", StatusCode: http.StatusUnauthorized, Provider: "openai"},
-			wantCode: http.StatusUnauthorized,
-		},
-		{
-			name:     "not found error",
-			err:      NewNotFoundError("not found"),
-			wantCode: http.StatusNotFound,
-		},
-		{
-			name:     "provider error",
-			err:      NewProviderError("openai", http.StatusInternalServerError, "upstream error", nil),
-			wantCode: http.StatusInternalServerError,
-		},
-		{
-			name:     "provider error with custom status",
-			err:      NewProviderError("openai", http.StatusBadGateway, "bad gateway", nil),
-			wantCode: http.StatusBadGateway,
-		},
-		{
-			name:     "unknown error type",
-			err:      &GatewayError{Type: ErrorType("unknown"), Message: "unknown"},
-			wantCode: http.StatusInternalServerError,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := tt.err.HTTPStatusCode()
-			if got != tt.wantCode {
-				t.Errorf("GatewayError.HTTPStatusCode() = %v, want %v", got, tt.wantCode)
-			}
-		})
-	}
-}
-
-func TestGatewayErrorError(t *testing.T) {
-	tests := []struct {
-		name    string
-		err     *GatewayError
-		wantMsg string
-	}{
-		{
-			name:    "error without provider",
-			err:     &GatewayError{Type: ErrorTypeInvalidRequest, Message: "test error", StatusCode: http.StatusBadRequest},
-			wantMsg: "invalid_request_error: test error",
-		},
-		{
-			name:    "error with provider",
-			err:     NewProviderError("openai", http.StatusInternalServerError, "upstream error", nil),
-			wantMsg: "[openai] provider_error: upstream error",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := tt.err.Error()
-			if got != tt.wantMsg {
-				t.Errorf("GatewayError.Error() = %v, want %v", got, tt.wantMsg)
-			}
-		})
-	}
-}
-
-func TestGatewayError_Unwrap(t *testing.T) {
-	wrapped := errors.New("wrapped error")
-	err := &GatewayError{Type: ErrorTypeInvalidRequest, Message: "test", StatusCode: http.StatusBadRequest, Err: wrapped}
-
-	if err.Unwrap() != wrapped {
-		t.Errorf("expected Unwrap to return the wrapped error")
-	}
-}
-
-func TestGatewayError_UnwrapNil(t *testing.T) {
-	err := &GatewayError{Type: ErrorTypeInvalidRequest, Message: "test", StatusCode: http.StatusBadRequest}
-
-	if err.Unwrap() != nil {
-		t.Errorf("expected Unwrap to return nil when no wrapped error")
 	}
 }
 

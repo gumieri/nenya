@@ -30,7 +30,7 @@ func extractTokenCounts(usage map[string]interface{}) (inputTokens, outputTokens
 
 // recordChatUsageTotals records the Stats side of a buffered response from its
 // normalized usage. The MCP loop records its calibration actuals per iteration
-// (recordCalibrationFromBuffer), so this stays Stats-only.
+// (RecordCalibrationFromBuffer), so this stays Stats-only.
 func recordChatUsageTotals(gw *gateway.NenyaGateway, model string, totals stream.UsageTotals) {
 	if totals.Total <= 0 {
 		return

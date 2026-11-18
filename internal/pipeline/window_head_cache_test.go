@@ -130,6 +130,15 @@ func TestWindowHeadCache_RegenRatioTrips(t *testing.T) {
 	}
 }
 
+// headCacheSize returns the cache's entry count under the cache's own lock.
+// The production size() helper was removed as dead code (test-only caller);
+// this test-local replacement keeps the LRU-bound assertions.
+func headCacheSize(c *WindowHeadCache) int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.order.Len()
+}
+
 // TestWindowHeadCache_LRUBound pins bounded memory across lineages.
 func TestWindowHeadCache_LRUBound(t *testing.T) {
 	c := NewWindowHeadCache(2)
@@ -137,8 +146,8 @@ func TestWindowHeadCache_LRUBound(t *testing.T) {
 		h := whHistory(fmt.Sprintf("lineage%d", i))
 		c.Store(fmt.Sprintf("L%d", i), SerializeMessages(h), len(h), 0, "HEAD")
 	}
-	if c.size() != 2 {
-		t.Fatalf("cache exceeded cap: %d", c.size())
+	if headCacheSize(c) != 2 {
+		t.Fatalf("cache exceeded cap: %d", headCacheSize(c))
 	}
 }
 
@@ -158,8 +167,8 @@ func TestWindowHeadCache_Concurrent(t *testing.T) {
 		}()
 	}
 	wg.Wait()
-	if c.size() != 1 {
-		t.Errorf("expected a single lineage entry, got %d", c.size())
+	if headCacheSize(c) != 1 {
+		t.Errorf("expected a single lineage entry, got %d", headCacheSize(c))
 	}
 }
 

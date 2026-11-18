@@ -135,29 +135,6 @@ func resolveFromRegistry(modelName string, providers map[string]*config.Provider
 	}}
 }
 
-// ResolveProvider resolves the first provider for a model name,
-// checking the dynamic discovery catalog first, then falling back to the
-// static ModelRegistry. Returns nil for unknown models.
-func ResolveProvider(modelName string, providers map[string]*config.Provider, catalog *discovery.ModelCatalog) *config.Provider {
-	matches := ResolveProviders(modelName, providers, catalog)
-	if len(matches) == 0 {
-		return nil
-	}
-	if p, ok := providers[matches[0].Provider]; ok {
-		return p
-	}
-	return nil
-}
-
-// DetermineUpstream returns the base endpoint URL for a model's provider.
-// Returns an empty string if the model cannot be resolved.
-func DetermineUpstream(modelName string, providers map[string]*config.Provider) string {
-	if p := ResolveProvider(modelName, providers, nil); p != nil {
-		return p.URL
-	}
-	return ""
-}
-
 // ProviderURL selects the final endpoint URL for a given provider/model/format
 // combination. Priority: agent URL > format-specific URL > provider default URL.
 func ProviderURL(provider, agentURL, format string, formatURLs map[string]string, providers map[string]*config.Provider) string {
@@ -173,25 +150,6 @@ func ProviderURL(provider, agentURL, format string, formatURLs map[string]string
 		return p.URL
 	}
 	return ""
-}
-
-// ResolveModelLimits returns the max_context and max_output for a model,
-// checking the dynamic discovery catalog first, then falling back to the
-// static ModelRegistry.
-func ResolveModelLimits(modelID string, catalog *discovery.ModelCatalog) (maxContext, maxOutput int) {
-	if catalog != nil {
-		entries := catalog.LookupAll(modelID)
-		if len(entries) > 0 {
-			return entries[0].MaxContext, entries[0].MaxOutput
-		}
-	}
-	// AUD-42 (NENYA-236): fold plain-ID spellings against the static
-	// registry — the limits describe the same logical model whatever the
-	// client's capitalization. Opaque IDs resolve exactly (NENYA-146).
-	if entry, ok := config.ModelRegistry[registryLimitsKey(modelID)]; ok {
-		return entry.MaxContext, entry.MaxOutput
-	}
-	return 0, 0
 }
 
 // registryLimitsKey returns the key under which modelID can be found in

@@ -490,8 +490,8 @@ type SecretsResolution struct {
 // `nenya -config-dir <root>` resolve the same secrets the unit would load,
 // without changing precedence for sources 1-4.
 //
-// A non-nil error reports a read or validation failure; LoadSecrets treats a
-// missing document as fatal.
+// A non-nil error reports a read or validation failure; LoadSecretsBounded
+// treats a missing document as fatal.
 func ResolveSecrets(configRoot string) (SecretsResolution, error) {
 	credDir := os.Getenv("CREDENTIALS_DIRECTORY")
 	secretsDir := os.Getenv("NENYA_SECRETS_DIR")
@@ -624,18 +624,12 @@ func recordSecrets(res *SecretsResolution, source string, secrets *SecretsConfig
 	return true, nil
 }
 
-// LoadSecrets loads and validates the secrets configuration (see
+// LoadSecretsBounded loads and validates the secrets configuration (see
 // ResolveSecrets for the search order; configRoot is the directory-mode config
 // root, empty in file mode). Returns an error if no secrets are found or
-// validation fails.
-func LoadSecrets(configRoot string) (*SecretsConfig, error) {
-	return LoadSecretsBounded(configRoot, DefaultSecretResolutionTimeout)
-}
-
-// LoadSecretsBounded is LoadSecrets with an explicit per-resolution bound for
-// env:/file: secret references (NENYA-166). References are resolved and their
-// RESOLVED values re-validated (strength + structure) before the document is
-// returned: a rotated credential that became weak, or a source that fails to
+// validation fails. The timeout bounds env:/file: secret-reference resolution
+// (NENYA-166): references are resolved and their RESOLVED values re-validated
+// (strength + structure) before the document is returned: a rotated credential that became weak, or a source that fails to
 // resolve, fails the load — which on a SIGHUP reload is exactly the
 // reject-and-keep-last-known-good behavior.
 func LoadSecretsBounded(configRoot string, timeout time.Duration) (*SecretsConfig, error) {

@@ -9,13 +9,13 @@ import (
 	"github.com/nenya/internal/tracing"
 )
 
-// mcpCalibrationModel returns the model key for the calibration tracker:
+// MCPCalibrationModel returns the model key for the calibration tracker:
 // the response-reported model when it matches one of the chain's targets
 // (the key the serving dispatch estimate was recorded under — failover
 // chains may serve a different target than [0]), else the primary target's
 // model, else the raw response string. A mismatched key would split each
 // estimate/actual pair across two models and silently pin the ratio at 1.0.
-func mcpCalibrationModel(targets []routing.UpstreamTarget, buf *bufferedSSE) string {
+func MCPCalibrationModel(targets []routing.UpstreamTarget, buf *bufferedSSE) string {
 	if buf != nil && buf.CalibrationModel != "" {
 		// Exact key: the serving target the dispatch estimate was
 		// recorded under (failover chains may serve any target).
@@ -74,10 +74,10 @@ func mergeUsageTotals(acc, next stream.UsageTotals) stream.UsageTotals {
 	return acc
 }
 
-// recordCalibrationFromBuffer feeds the NENYA-135 tracker from a buffered
+// RecordCalibrationFromBuffer feeds the NENYA-135 tracker from a buffered
 // response without touching Stats (per-iteration pairing; terminal paths
 // own the Stats side via recordMCPUsage).
-func recordCalibrationFromBuffer(gw *gateway.NenyaGateway, model string, buf *bufferedSSE) {
+func RecordCalibrationFromBuffer(gw *gateway.NenyaGateway, model string, buf *bufferedSSE) {
 	if gw == nil || buf == nil || model == "" {
 		return
 	}
@@ -103,7 +103,7 @@ func RecordMCPIterationUsage(h Host, ctx context.Context, gw *gateway.NenyaGatew
 	}
 	buf.UsageClaimed = true
 
-	model := mcpCalibrationModel(targets, buf)
+	model := MCPCalibrationModel(targets, buf)
 	// The serving target recorded at dispatch time is authoritative: a chain
 	// can list one model under several providers/accounts, and the model string
 	// alone would attribute the spend to the wrong account.

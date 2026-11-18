@@ -24,7 +24,7 @@ func TestRequestSpanAdoptsClientTraceparent(t *testing.T) {
 	defer rt.Finish()
 
 	// The request span continues the client's trace id.
-	if got := CurrentTraceID(ctx); got != "4bf92f3577b34da6a3ce929d0e0e4736" {
+	if got := testTraceID(t, ctx); got != "4bf92f3577b34da6a3ce929d0e0e4736" {
 		t.Fatalf("trace id = %q, want the client's trace id (adopted)", got)
 	}
 	if !ContinuedInbound(ctx) {
@@ -41,10 +41,10 @@ func TestGatewaySpanRootsOwnTraceAndLinksClient(t *testing.T) {
 	ctx, rt := StartRequest(context.Background(), debugLogger(&buf), clientTraceparent, "chat_completions")
 	defer rt.Finish()
 
-	clientTrace := CurrentTraceID(ctx)
+	clientTrace := testTraceID(t, ctx)
 	loopCtx, span := StartGatewaySpan(ctx, debugLogger(&buf), "upstream.mcp_loop")
 
-	gatewayTrace := CurrentTraceID(loopCtx)
+	gatewayTrace := testTraceID(t, loopCtx)
 	if gatewayTrace == clientTrace {
 		t.Fatal("gateway-initiated work must root its OWN trace, not adopt the client's")
 	}
@@ -77,7 +77,7 @@ func TestGatewaySpanWithoutInboundTrace(t *testing.T) {
 	if span.hasLink {
 		t.Fatal("no client context to link when the request was untraced")
 	}
-	if CurrentTraceID(ctx) == "" {
+	if testTraceID(t, ctx) == "" {
 		t.Fatal("a gateway span still roots a trace")
 	}
 }
@@ -85,7 +85,7 @@ func TestGatewaySpanWithoutInboundTrace(t *testing.T) {
 func TestGatewaySpanDisabledIsInert(t *testing.T) {
 	ctx, span := StartGatewaySpan(Disable(context.Background()), debugLogger(&bytes.Buffer{}), "engine.call")
 	span.End() // nil span, must not panic
-	if CurrentTraceID(ctx) != "" {
+	if testTraceID(t, ctx) != "" {
 		t.Fatal("tracing-disabled context must stay untraced")
 	}
 }

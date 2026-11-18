@@ -3,14 +3,12 @@ package pipeline
 import (
 	"math"
 	"regexp"
-	"strings"
 	"unicode/utf8"
 
 	"github.com/nenya/config"
 )
 
 // truncationMarker separates the kept head/tail in middle-out truncation.
-// CodeAware trimming locates this exact marker to paragraph-trim the cut.
 const truncationMarker = "\n... [NENYA: MASSIVE PAYLOAD TRUNCATED] ...\n"
 
 // ReplaceValidated replaces all matches of re in text with label, applying
@@ -109,36 +107,6 @@ func TruncateMiddleOut(text string, maxSize int, cfg config.ContextConfig) strin
 	result = append(result, runes[len(runes)-keepLast:]...)
 
 	return string(result)
-}
-
-// TruncateMiddleOutCodeAware truncates like TruncateMiddleOut, then trims
-// the content around the separator marker to paragraph breaks so the cut
-// lands between code blocks rather than mid-block.
-func TruncateMiddleOutCodeAware(text string, maxSize int, cfg config.ContextConfig) string {
-	if utf8.RuneCountInString(text) <= maxSize {
-		return text
-	}
-
-	result := TruncateMiddleOut(text, maxSize, cfg)
-
-	sepMarker := truncationMarker
-	sepIdx := strings.Index(result, sepMarker)
-	if sepIdx < 0 {
-		return result
-	}
-
-	before := result[:sepIdx]
-	after := result[sepIdx+len(sepMarker):]
-
-	if lastBlank := strings.LastIndex(before, "\n\n"); lastBlank > 0 {
-		before = before[:lastBlank+2]
-	}
-
-	if firstBlank := strings.Index(after, "\n\n"); firstBlank > 0 {
-		after = after[firstBlank:]
-	}
-
-	return before + sepMarker + after
 }
 
 // TruncateMiddleOutByTokens truncates text that exceeds maxTokens using a

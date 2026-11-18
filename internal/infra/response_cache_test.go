@@ -9,14 +9,18 @@ import (
 	"time"
 )
 
-func TestFingerprintPayload_Deterministic(t *testing.T) {
+// TestFingerprintUnscoped_Deterministic pins that the no-auth unscoped
+// fingerprint (FingerprintPayloadScoped with an empty token and empty policy
+// scope) is a pure function of the payload: identical inputs must keep
+// sharing entries, or every request would be a cache miss.
+func TestFingerprintUnscoped_Deterministic(t *testing.T) {
 	payload := map[string]interface{}{
 		"model":       "gpt-4",
 		"messages":    []interface{}{map[string]interface{}{"role": "user", "content": "hello"}},
 		"temperature": 0.7,
 	}
-	h1 := FingerprintPayload(payload)
-	h2 := FingerprintPayload(payload)
+	h1 := FingerprintPayloadScoped(payload, "", "")
+	h2 := FingerprintPayloadScoped(payload, "", "")
 	if h1 == "" {
 		t.Fatal("fingerprint returned empty string")
 	}
@@ -25,7 +29,7 @@ func TestFingerprintPayload_Deterministic(t *testing.T) {
 	}
 }
 
-func TestFingerprintPayload_KeyOrdering(t *testing.T) {
+func TestFingerprintUnscoped_KeyOrdering(t *testing.T) {
 	json1 := `{"messages":[{"role":"user","content":"hi"}],"model":"gpt-4","temperature":0.5}`
 	json2 := `{"temperature":0.5,"model":"gpt-4","messages":[{"content":"hi","role":"user"}]}`
 
@@ -37,21 +41,21 @@ func TestFingerprintPayload_KeyOrdering(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	h1 := FingerprintPayload(p1)
-	h2 := FingerprintPayload(p2)
+	h1 := FingerprintPayloadScoped(p1, "", "")
+	h2 := FingerprintPayloadScoped(p2, "", "")
 	if h1 != h2 {
 		t.Fatalf("different key orderings produced different fingerprints: %q != %q", h1, h2)
 	}
 }
 
-func TestFingerprintPayload_ExcludedFields(t *testing.T) {
+func TestFingerprintUnscoped_ExcludedFields(t *testing.T) {
 	base := map[string]interface{}{
 		"model":       "gpt-4",
 		"messages":    []interface{}{map[string]interface{}{"role": "user", "content": "hi"}},
 		"temperature": 0.5,
 		"top_p":       0.9,
 	}
-	h1 := FingerprintPayload(base)
+	h1 := FingerprintPayloadScoped(base, "", "")
 
 	extra := map[string]interface{}{
 		"model":       "gpt-4",
@@ -60,14 +64,14 @@ func TestFingerprintPayload_ExcludedFields(t *testing.T) {
 		"top_p":       0.9,
 		"extra":       "should be ignored",
 	}
-	h2 := FingerprintPayload(extra)
+	h2 := FingerprintPayloadScoped(extra, "", "")
 	if h1 != h2 {
 		t.Fatalf("extra field changed fingerprint: %q != %q", h1, h2)
 	}
 }
 
-func TestFingerprintPayload_EmptyPayload(t *testing.T) {
-	h := FingerprintPayload(map[string]interface{}{})
+func TestFingerprintUnscoped_EmptyPayload(t *testing.T) {
+	h := FingerprintPayloadScoped(map[string]interface{}{}, "", "")
 	if h == "" {
 		t.Fatal("empty payload should still produce a fingerprint")
 	}

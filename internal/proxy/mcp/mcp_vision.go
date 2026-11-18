@@ -64,7 +64,7 @@ func (g VisionGate) Accept(mime string) (bool, string) {
 // N MiB request with no per-request budget.
 const maxToolResultImageBytes = 4 << 20 // 4 MiB of base64
 
-// toolResultContent builds the content of one tool-result message: the tool
+// ToolResultContent builds the content of one tool-result message: the tool
 // text, plus the result's image blocks as OpenAI image parts when the gate
 // accepts them. Malformed image blocks (missing data or media type) and
 // oversized ones are dropped exactly like gate-rejected images — counted and
@@ -73,7 +73,7 @@ const maxToolResultImageBytes = 4 << 20 // 4 MiB of base64
 // A result with NO image blocks, or where no image SURVIVES, keeps the plain
 // string shape (the pre-NENYA-149 shape, and the shape the spotlight byte cap
 // knows how to bound).
-func toolResultContent(text string, result *mcp.CallToolResult, gate mcpVisionGate, logger *slog.Logger) (any, []visionDrop) {
+func ToolResultContent(text string, result *mcp.CallToolResult, gate mcpVisionGate, logger *slog.Logger) (any, []visionDrop) {
 	images := result.Images()
 	malformed := malformedImageCount(result)
 	if len(images) == 0 && malformed == 0 {
@@ -178,8 +178,8 @@ func malformedImageCount(result *mcp.CallToolResult) int {
 	return n
 }
 
-// recordVisionDrops counts the drops of one tool result.
-func recordVisionDrops(metrics *infra.Metrics, drops []visionDrop) {
+// RecordVisionDrops counts the drops of one tool result.
+func RecordVisionDrops(metrics *infra.Metrics, drops []visionDrop) {
 	for _, d := range drops {
 		metrics.RecordVisionContentDropped("tool_result", d.Reason)
 	}

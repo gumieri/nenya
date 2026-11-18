@@ -219,7 +219,7 @@ func TestTfidfRescueRescuesBorderlineEndToEnd(t *testing.T) {
 		},
 	}
 
-	got := TruncateTFIDFWithRescue(text, 600, "alpha", config.ContextConfig{TruncationKeepFirstPct: 10, TruncationKeepLastPct: 10}, rescue)
+	got := TruncateTFIDFWithRescueMemo(text, 600, "alpha", config.ContextConfig{TruncationKeepFirstPct: 10, TruncationKeepLastPct: 10}, rescue, "", nil)
 	if calls.Load() != 1 {
 		t.Fatalf("engine calls = %d, want 1", calls.Load())
 	}
@@ -237,11 +237,11 @@ func TestTfidfRescueFailOpenOnMalformed(t *testing.T) {
 			return rerankRescueFn(judge, 8192)(q, borderline)
 		},
 	}
-	got := TruncateTFIDFWithRescue(text, 300, "alpha", config.ContextConfig{TruncationKeepFirstPct: 10, TruncationKeepLastPct: 10}, rescue)
+	got := TruncateTFIDFWithRescueMemo(text, 300, "alpha", config.ContextConfig{TruncationKeepFirstPct: 10, TruncationKeepLastPct: 10}, rescue, "", nil)
 	// Fail-open: identical to the armed pass with no rescues (same
 	// greedy reserve), which is the tier-1 outcome the caller keeps.
-	want := TruncateTFIDFWithRescue(text, 300, "alpha", config.ContextConfig{TruncationKeepFirstPct: 10, TruncationKeepLastPct: 10},
-		&TfidfRescueParams{Band: 100.0, MaxBlocks: 8, MaxBytes: 8192, Rescorer: func(string, []Block) map[int]bool { return nil }})
+	want := TruncateTFIDFWithRescueMemo(text, 300, "alpha", config.ContextConfig{TruncationKeepFirstPct: 10, TruncationKeepLastPct: 10},
+		&TfidfRescueParams{Band: 100.0, MaxBlocks: 8, MaxBytes: 8192, Rescorer: func(string, []Block) map[int]bool { return nil }}, "", nil)
 	if got != want {
 		t.Errorf("fail-open rescue output differs from deterministic pruning\n--- got ---\n%s\n--- want ---\n%s", got, want)
 	}
@@ -250,7 +250,7 @@ func TestTfidfRescueFailOpenOnMalformed(t *testing.T) {
 func TestTfidfRescueNilParamsDeterministic(t *testing.T) {
 	text := strings.Repeat("alpha\n\n", 80) + strings.Repeat("zebra\n\n", 40)
 	base := TruncateTFIDF(text, 300, "alpha", config.ContextConfig{TruncationKeepFirstPct: 10, TruncationKeepLastPct: 10})
-	if got := TruncateTFIDFWithRescue(text, 300, "alpha", config.ContextConfig{TruncationKeepFirstPct: 10, TruncationKeepLastPct: 10}, nil); got != base {
+	if got := TruncateTFIDFWithRescueMemo(text, 300, "alpha", config.ContextConfig{TruncationKeepFirstPct: 10, TruncationKeepLastPct: 10}, nil, "", nil); got != base {
 		t.Error("nil rescue params must be byte-identical to deterministic pruning")
 	}
 }
@@ -324,10 +324,10 @@ func TestTfidfRescueFailOpenOnEngineHTTPError(t *testing.T) {
 	metrics := infra.NewMetrics()
 	judge.deps.Metrics = metrics
 	text := strings.Repeat("alpha alpha\n\n", 60) + strings.Repeat("alpha beta\n\n", 60)
-	got := TruncateTFIDFWithRescue(text, 300, "alpha", config.ContextConfig{TruncationKeepFirstPct: 10, TruncationKeepLastPct: 10},
-		&TfidfRescueParams{Band: 100.0, MaxBlocks: 8, MaxBytes: 8192, Rescorer: rerankRescueFn(judge, 8192)})
-	want := TruncateTFIDFWithRescue(text, 300, "alpha", config.ContextConfig{TruncationKeepFirstPct: 10, TruncationKeepLastPct: 10},
-		&TfidfRescueParams{Band: 100.0, MaxBlocks: 8, MaxBytes: 8192, Rescorer: func(string, []Block) map[int]bool { return nil }})
+	got := TruncateTFIDFWithRescueMemo(text, 300, "alpha", config.ContextConfig{TruncationKeepFirstPct: 10, TruncationKeepLastPct: 10},
+		&TfidfRescueParams{Band: 100.0, MaxBlocks: 8, MaxBytes: 8192, Rescorer: rerankRescueFn(judge, 8192)}, "", nil)
+	want := TruncateTFIDFWithRescueMemo(text, 300, "alpha", config.ContextConfig{TruncationKeepFirstPct: 10, TruncationKeepLastPct: 10},
+		&TfidfRescueParams{Band: 100.0, MaxBlocks: 8, MaxBytes: 8192, Rescorer: func(string, []Block) map[int]bool { return nil }}, "", nil)
 	if got != want {
 		t.Error("engine HTTP failure must fail open to the armed deterministic pruning")
 	}

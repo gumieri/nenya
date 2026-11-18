@@ -18,22 +18,6 @@ var cacheableFields = []string{
 	"stream",
 }
 
-// FingerprintPayload returns the cache fingerprint for payload without auth
-// scoping (tests and tooling): "p:" + hex(sha256(canonical payload)).
-func FingerprintPayload(payload map[string]interface{}) string {
-	return FingerprintPayloadScoped(payload, "", "")
-}
-
-// FingerprintPayloadWithAuth returns the fingerprint for an authenticated
-// caller with no additional scope: FingerprintPayloadScoped(payload,
-// authToken, "").
-//
-// Deprecated: test/tooling helper. Production callers must scope with
-// FingerprintPayloadScoped so the key covers the effective content policy.
-func FingerprintPayloadWithAuth(payload map[string]interface{}, authToken string) string {
-	return FingerprintPayloadScoped(payload, authToken, "")
-}
-
 // FingerprintPayloadScoped returns the cache fingerprint over the payload's
 // cacheable fields, scoped by the caller's auth identity and by the request's
 // effective content-policy identity (NENYA-154).

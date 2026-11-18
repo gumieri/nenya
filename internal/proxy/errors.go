@@ -1,28 +1,15 @@
 package proxy
 
 import (
-	"bytes"
 	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
-	"strings"
 
 	"github.com/nenya/internal/gateway"
 	"github.com/nenya/internal/infra"
 	"github.com/nenya/internal/pipeline"
-	"github.com/nenya/internal/stream"
 )
-
-// containsAny checks if the string contains any of the substrings.
-func containsAny(s string, substrs ...string) bool {
-	for _, sub := range substrs {
-		if strings.Contains(s, sub) {
-			return true
-		}
-	}
-	return false
-}
 
 // writeHTTPError renders an httpError with its structured kind, falling back
 // to invalid_request when the kind is unset. nil herr is a documented no-op.
@@ -108,83 +95,6 @@ func readRequestBody(r *http.Request, gw *gateway.NenyaGateway, logMsg string, a
 		Message: "Failed to read request body",
 		Kind:    infra.ErrorKindInvalidRequest,
 	}
-}
-
-// classifyError maps upstream responses to error kinds.
-func classifyError(statusCode int, body []byte) infra.ErrorKind {
-	switch {
-	case statusCode == http.StatusTooManyRequests || statusCode == 529:
-		// 529 is "Provider Overloaded" (non-standard, used by xAI and some LLM gateways)
-		return infra.ErrorKindRateLimited
-	case statusCode == http.StatusUnauthorized || statusCode == http.StatusForbidden:
-		return infra.ErrorKindAuthFailed
-	case statusCode == http.StatusNotFound:
-		return infra.ErrorKindModelNotFound
-	case statusCode == http.StatusRequestEntityTooLarge:
-		// Cross-check 413 body for context-overflow messages before classifying
-		// as payload-too-large — some providers return 413 for context limits
-		if inferErrorKind(body) == infra.ErrorKindContextExceeded {
-			return infra.ErrorKindContextExceeded
-		}
-		return infra.ErrorKindPayloadTooLarge
-	case statusCode == http.StatusBadRequest:
-		return inferErrorKind(body)
-	case statusCode >= 500:
-		return classifyServerError(body)
-	case statusCode == 0:
-		return infra.ErrorKindNetworkError
-	default:
-		return infra.ErrorKindInvalidRequest
-	}
-}
-
-// inferErrorKind tries to determine the error kind from the error body.
-func inferErrorKind(body []byte) infra.ErrorKind {
-	if len(body) == 0 {
-		return infra.ErrorKindInvalidRequest
-	}
-	var parsed struct {
-		Error struct {
-			Message string `json:"message"`
-			Type    string `json:"type"`
-			Code    string `json:"code"`
-		} `json:"error"`
-	}
-	if err := json.Unmarshal(body, &parsed); err != nil {
-		return infra.ErrorKindInvalidRequest
-	}
-	// Classify each error field separately (message, type, code) so the two
-	// taxonomies cannot diverge on a body like
-	// {"error":{"type":"safeguard_error"}} with an empty message, and a
-	// marker can never match across a field boundary.
-	isPolicy := stream.IsPolicyRefusalText(parsed.Error.Message) ||
-		stream.IsPolicyRefusalText(parsed.Error.Type) ||
-		stream.IsPolicyRefusalText(parsed.Error.Code)
-	msg := strings.ToLower(parsed.Error.Message)
-	switch {
-	case containsAny(msg, "context_length", "context length", "max_tokens", "too many tokens",
-		"exceeded model token", "maximum prompt length", "exceeds the available context",
-		"model_context_window", "too large for model"):
-		return infra.ErrorKindContextExceeded
-	case containsAny(msg, "rate limit", "rate_limit"):
-		return infra.ErrorKindRateLimited
-	case containsAny(msg, "timeout", "timed out", "deadline exceeded"):
-		return infra.ErrorKindProviderTimeout
-	case isPolicy:
-		// A content-policy / safeguard rejection (NENYA-191): request-scoped,
-		// never a provider fault, failover-eligible.
-		return infra.ErrorKindPolicyRefusal
-	default:
-		return infra.ErrorKindInvalidRequest
-	}
-}
-
-// classifyServerError categorizes 5xx upstream responses.
-func classifyServerError(body []byte) infra.ErrorKind {
-	if len(body) > 0 && bytes.Contains(bytes.ToLower(body), []byte("timeout")) {
-		return infra.ErrorKindProviderTimeout
-	}
-	return infra.ErrorKindProviderError
 }
 
 // writePipelineRejection writes the structured client error for pipeline

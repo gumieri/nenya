@@ -1,6 +1,7 @@
 package providers
 
 import (
+	"slices"
 	"testing"
 )
 
@@ -28,7 +29,7 @@ func TestGet_NonExistingProvider(t *testing.T) {
 
 func TestAllProvidersHaveLLMKind(t *testing.T) {
 	for name, spec := range Registry {
-		if !spec.Supports(ServiceKindLLM) {
+		if !slices.Contains(spec.ServiceKinds, ServiceKindLLM) {
 			t.Errorf("provider %q should support ServiceKindLLM", name)
 		}
 	}
@@ -39,13 +40,13 @@ func TestOpenAIHasEmbedding(t *testing.T) {
 	if !ok {
 		t.Fatal("expected openai provider to exist")
 	}
-	if !spec.Supports(ServiceKindEmbedding) {
+	if !slices.Contains(spec.ServiceKinds, ServiceKindEmbedding) {
 		t.Error("expected openai to support ServiceKindEmbedding")
 	}
-	if !spec.Supports(ServiceKindTTS) {
+	if !slices.Contains(spec.ServiceKinds, ServiceKindTTS) {
 		t.Error("expected openai to support ServiceKindTTS")
 	}
-	if !spec.Supports(ServiceKindSTT) {
+	if !slices.Contains(spec.ServiceKinds, ServiceKindSTT) {
 		t.Error("expected openai to support ServiceKindSTT")
 	}
 }
@@ -55,7 +56,7 @@ func TestPerplexityHasWebSearch(t *testing.T) {
 	if !ok {
 		t.Fatal("expected perplexity provider to exist")
 	}
-	if !spec.Supports(ServiceKindWebSearch) {
+	if !slices.Contains(spec.ServiceKinds, ServiceKindWebSearch) {
 		t.Error("expected perplexity to support ServiceKindWebSearch")
 	}
 }
@@ -65,7 +66,7 @@ func TestCohereHasRerank(t *testing.T) {
 	if !ok {
 		t.Fatal("expected cohere provider to exist")
 	}
-	if !spec.Supports(ServiceKindRerank) {
+	if !slices.Contains(spec.ServiceKinds, ServiceKindRerank) {
 		t.Error("expected cohere to support ServiceKindRerank")
 	}
 }

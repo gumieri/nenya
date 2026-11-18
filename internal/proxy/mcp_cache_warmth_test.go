@@ -8,6 +8,7 @@ import (
 
 	"github.com/nenya/config"
 	"github.com/nenya/internal/gateway"
+	mcpproxy "github.com/nenya/internal/proxy/mcp"
 	"github.com/nenya/internal/routing"
 	"github.com/nenya/internal/testutil"
 )
@@ -43,7 +44,7 @@ func TestMCPIterationUsageRecordsCacheWarmth(t *testing.T) {
 	p.StoreGateway(gw)
 
 	buf := mcpUsageBuffer(target)
-	p.recordMCPIterationUsage(context.Background(), gw, buf, []routing.UpstreamTarget{target}, "test-agent")
+	mcpproxy.RecordMCPIterationUsage(p.mcpHost(), context.Background(), gw, buf, []routing.UpstreamTarget{target}, "test-agent")
 
 	snap := gw.CacheState.Snapshot()
 	found := false

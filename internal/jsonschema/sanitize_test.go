@@ -46,10 +46,10 @@ func TestSchemaVariantTaxonomy(t *testing.T) {
 			}
 			for _, keyword := range tc.Absent {
 				if found := findKeyword(out, keyword, 0); found {
-					t.Fatalf("keyword %q survived: %s", keyword, canonicalJSON(out))
+					t.Fatalf("keyword %q survived: %s", keyword, mustJSON(out))
 				}
 			}
-			encoded := canonicalJSON(out)
+			encoded := mustJSON(out)
 			for _, text := range tc.AbsentText {
 				// The check walks the decoded strings: json.Marshal escapes
 				// control characters, so a substring search on the encoded form
@@ -275,7 +275,7 @@ func TestSanitizeRefExpansionIsBounded(t *testing.T) {
 			t.Fatal("Sanitize returned nil")
 		}
 		if findKeyword(out, "$ref", 0) {
-			t.Fatalf("a $ref survived: %s", canonicalJSON(out))
+			t.Fatalf("a $ref survived: %s", mustJSON(out))
 		}
 		// Memoization is what bounds the expansion: without it the shared
 		// definition multiplies out (40 properties each re-expanding the same
@@ -297,7 +297,7 @@ func TestSanitizeRefExpansionIsBounded(t *testing.T) {
 	chain["D30"] = map[string]any{"type": "string"}
 	out := Sanitize(map[string]any{"type": "object", "properties": map[string]any{"a": map[string]any{"$ref": "#/$defs/D0"}}, "$defs": chain})
 	if findKeyword(out, "$ref", 0) {
-		t.Fatalf("a $ref survived the chain: %s", canonicalJSON(out))
+		t.Fatalf("a $ref survived the chain: %s", mustJSON(out))
 	}
 }
 
@@ -318,7 +318,7 @@ func TestSanitizeNestedDefinitionScope(t *testing.T) {
 	props, _ := out["properties"].(map[string]any)
 	a, _ := props["a"].(map[string]any)
 	if a["type"] != "string" {
-		t.Fatalf("a nested $defs reference did not resolve: %s", canonicalJSON(out))
+		t.Fatalf("a nested $defs reference did not resolve: %s", mustJSON(out))
 	}
 }
 
@@ -336,7 +336,7 @@ func TestSanitizeIsIdempotent(t *testing.T) {
 	}
 	once := Sanitize(schema)
 	twice := Sanitize(once)
-	if canonicalJSON(once) != canonicalJSON(twice) {
-		t.Fatalf("not idempotent:\n%s\n%s", canonicalJSON(once), canonicalJSON(twice))
+	if mustJSON(once) != mustJSON(twice) {
+		t.Fatalf("not idempotent:\n%s\n%s", mustJSON(once), mustJSON(twice))
 	}
 }

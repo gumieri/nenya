@@ -1,9 +1,7 @@
 package security
 
 import (
-	"crypto/rand"
 	"crypto/subtle"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"math"
@@ -161,14 +159,6 @@ func (sm *SecureMem) Destroy() {
 		sm.data = nil
 		sm.used = 0
 	}
-}
-
-func GenerateToken() string {
-	b := make([]byte, 24)
-	if _, err := rand.Read(b); err != nil {
-		panic("failed to read random: " + err.Error())
-	}
-	return "nk-" + hex.EncodeToString(b)
 }
 
 func TokenSizeHint(numKeys int, providerKeyCount int) int {
