@@ -38,6 +38,14 @@ var capabilityRules = []capabilityRule{
 	{prefix: "gpt-4o", caps: []Capability{CapVision, CapToolCalls, CapReasoning, CapContentArrays, CapAutoToolChoice, CapStreamOptions}},
 	{prefix: "gpt-4-turbo", caps: []Capability{CapVision, CapToolCalls, CapContentArrays, CapAutoToolChoice, CapStreamOptions}},
 	{prefix: "gpt-4", caps: []Capability{CapToolCalls, CapContentArrays, CapAutoToolChoice, CapStreamOptions}},
+	// NENYA-337: the gpt-6 family tool-calls via the Responses API (the
+	// incident's models), with native content arrays, stream_options, vision,
+	// and reasoning like the gpt-4o generation. Pre-rule, the capability
+	// heuristics stripped tool_choice:"auto", flattened content arrays, and
+	// (worst) dropped every request image for them. Discovered metadata
+	// (NENYA-160) still overrides these heuristics when the upstream
+	// advertises modalities.
+	{prefix: "gpt-6", caps: []Capability{CapVision, CapToolCalls, CapReasoning, CapContentArrays, CapAutoToolChoice, CapStreamOptions}},
 	{prefix: "o1", caps: []Capability{CapReasoning, CapToolCalls, CapContentArrays, CapAutoToolChoice, CapStreamOptions}},
 	{prefix: "o3", caps: []Capability{CapReasoning, CapToolCalls, CapContentArrays, CapAutoToolChoice, CapStreamOptions}},
 	{prefix: "o4", caps: []Capability{CapReasoning, CapToolCalls, CapContentArrays, CapAutoToolChoice, CapStreamOptions}},

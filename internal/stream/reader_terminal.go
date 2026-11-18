@@ -9,6 +9,14 @@ import (
 )
 
 func (r *SSETransformingReader) handleScannerDone() {
+	// NENYA-337: drain the stateful transformer's held tail BEFORE the
+	// hygiene warn below and before classifying the ending — see
+	// drainTransformerTailBeforeClassification. The drain updates the
+	// terminal-state flags from the RAW held bytes (no observer notify —
+	// framing/notify happens once in the composition paths), so the logged
+	// snapshot reflects the held close.
+	r.drainTransformerTailBeforeClassification()
+
 	// Terminal-state matrix hygiene (NENYA-46): argument chunks buffered
 	// waiting for a name that never arrived are silently dropped by
 	// design (they were never forwarded). Surface the loss — a provider
@@ -20,65 +28,10 @@ func (r *SSETransformingReader) handleScannerDone() {
 			"sawDone", r.sawDone,
 			"sawFinishReason", r.sawFinishReason)
 	}
+
 	switch r.scanner.Err() {
 	case nil:
-		switch {
-		case r.sawDone:
-			// Normal end.
-		case r.sawFinishReason:
-			if r.sawAnthropicFinish || r.sawConvertedAnthropicFinish {
-				// Native-Anthropic passthrough: the stream completed through
-				// its own terminal (message_delta stop_reason / message_stop)
-				// and the client already received the upstream's message_stop.
-				// Appending OpenAI framing (a bare data: [DONE]) on top of the
-				// client's wire shape would corrupt the passthrough — end
-				// exactly where the upstream ended (AUD-01). A completion
-				// recognized from an OpenAI finish_reason line — even on a
-				// stream that also carried Anthropic deltas — keeps the
-				// injected [DONE]. Interaction note: the sawContent &&
-				// sawFinishReason early return at the top of
-				// trackStreamProgress seals the matrix, so on a pathological
-				// mixed wire an OpenAI finish recognized BEFORE the Anthropic
-				// terminal wins the injection — whoever completes the stream
-				// first in arrival order decides.
-				// The exfil guard's held tail (NENYA-205) must still reach
-				// the client at the clean end. The normal drain happens at
-				// the raw message_stop (transformSSEData's pre-terminal
-				// hook); this EOF-side drain is the safety net for streams
-				// that completed via message_delta alone, shaped as a
-				// content_block_delta via lastSurface — mirroring
-				// injectDoneOnly minus the [DONE].
-				if held, heldOK := r.synthesizeHeldFlush(); heldOK {
-					r.buffer = r.appendSSEEvent(nil, held)
-					r.pos = 0
-					r.lastLineBlank = true
-				}
-				break
-			}
-			slog.Debug("SSE scanner ended without [DONE] after finish_reason, injecting silent [DONE]",
-				"has_transformer", r.transformer != nil)
-			r.injectDoneOnly()
-		case !r.sawContent:
-			// NENYA-160: the always-on empty-200 degradation signal — this
-			// path is flag-independent (it IS the empty-stream handler).
-			if r.onEmptyStream != nil {
-				r.onEmptyStream()
-			}
-			slog.Warn("SSE scanner ended without [DONE] marker and no content, injecting gateway_error",
-				"has_transformer", r.transformer != nil)
-			r.injectErrorBuffer("upstream stream ended without [DONE]")
-		default:
-			if r.suppressCutError {
-				slog.Debug("SSE scanner ended without [DONE] mid-generation, cut error suppressed for continuation",
-					"has_transformer", r.transformer != nil,
-					"saw_content", r.sawContent)
-				break
-			}
-			slog.Warn("SSE scanner ended without [DONE] marker mid-generation, injecting gateway_error",
-				"has_transformer", r.transformer != nil,
-				"saw_content", r.sawContent)
-			r.injectErrorBuffer("upstream stream ended without [DONE]")
-		}
+		r.classifyCleanEOF()
 		r.err = io.EOF
 	case bufio.ErrTooLong:
 		slog.Warn("SSE scanner error: line too long, injecting gateway_error")
@@ -96,6 +49,131 @@ func (r *SSETransformingReader) handleScannerDone() {
 	// injectDoneOnly and injectErrorBuffer emit their own terminator (preceded
 	// by eventSeparator when the previous line was unterminated).
 	r.closePendingEvent()
+}
+
+// drainTransformerTailBeforeClassification drains the stateful transformer's
+// held tail BEFORE classifying the ending (NENYA-337). A converter that holds
+// its close (the OpenAI→Anthropic stage holds message_delta/message_stop for
+// a trailing usage chunk that a Responses terminal never sends) must have
+// those frames counted as the stream's terminal state — without the drain a
+// clean close classifies as a mid-generation cut (spurious gateway_error, no
+// stop_reason). The pulled frame is memoized: the composition paths below
+// emit exactly these bytes once.
+func (r *SSETransformingReader) drainTransformerTailBeforeClassification() {
+	r.memoizeTransformerTail()
+	if len(r.drainedTail) == 0 {
+		return
+	}
+	// The raw tail is concatenated JSON objects (the converter appends
+	// marshaled frames) — split it the way frameTransformedEvents does so
+	// EVERY terminal frame updates the matrix, then feed each object to the
+	// progress tracker (raw bytes, no observer notify; framing is
+	// transformerTailFrame's job). The splitter's remainder is deliberately
+	// dropped here: the tail is gateway-built (never carries trailing
+	// garbage), while frameTransformedEvents must still forward a remainder
+	// to the client for upstream-shaped tails.
+	objs, _, ok := splitConcatenatedJSON(r.drainedTail)
+	if !ok {
+		r.trackStreamProgress(r.drainedTail)
+		return
+	}
+	for _, obj := range objs {
+		r.trackProgressLine(obj)
+	}
+}
+
+// classifyCleanEOF routes a scanner-nil (clean EOF) ending through the
+// terminal-state matrix: normal [DONE] end, finish-reason close (with the
+// anthropic-finish suppression and the NENYA-337 drained-tail composition),
+// the NENYA-337 error-terminal cell (no injection, no empty count), the
+// NENYA-160 empty cell, and the mid-generation cut.
+func (r *SSETransformingReader) classifyCleanEOF() {
+	switch {
+	case r.sawDone:
+		// Normal end.
+	case r.sawFinishReason:
+		if r.sawAnthropicFinish || r.sawConvertedAnthropicFinish {
+			// Native-Anthropic passthrough: the stream completed through
+			// its own terminal (message_delta stop_reason / message_stop)
+			// and the client already received the upstream's message_stop.
+			// Appending OpenAI framing (a bare data: [DONE]) on top of the
+			// client's wire shape would corrupt the passthrough — end
+			// exactly where the upstream ended (AUD-01). A completion
+			// recognized from an OpenAI finish_reason line — even on a
+			// stream that also carried Anthropic deltas — keeps the
+			// injected [DONE]. Interaction note: the sawContent &&
+			// sawFinishReason early return at the top of
+			// trackStreamProgress seals the matrix, so on a pathological
+			// mixed wire an OpenAI finish recognized BEFORE the Anthropic
+			// terminal wins the injection — whoever completes the stream
+			// first in arrival order decides.
+			// The exfil guard's held tail (NENYA-205) must still reach
+			// the client at the clean end. The normal drain happens at
+			// the raw message_stop (transformSSEData's pre-terminal
+			// hook); this EOF-side drain is the safety net for streams
+			// that completed via message_delta alone, shaped as a
+			// content_block_delta via lastSurface — mirroring
+			// injectDoneOnly minus the [DONE]. NENYA-337: the drained
+			// transformer tail (a held message_delta/message_stop close
+			// the client has NOT received yet — the pre-drain
+			// classification is what surfaced it here) rides the same
+			// composition.
+			var buf []byte
+			if held, heldOK := r.synthesizeHeldFlush(); heldOK {
+				buf = r.appendSSEEvent(buf, held)
+			}
+			if tailFrame := r.transformerTailFrame(); tailFrame != nil {
+				buf = r.appendSSEEvent(buf, tailFrame)
+			}
+			if len(buf) > 0 {
+				r.buffer = buf
+				r.pos = 0
+				r.lastLineBlank = true
+			}
+			return
+		}
+		slog.Debug("SSE scanner ended without [DONE] after finish_reason, injecting silent [DONE]",
+			"has_transformer", r.transformer != nil)
+		r.injectDoneOnly()
+	case r.sawErrorTerminal && !r.sawFinishReason:
+		// NENYA-337: the stream ended on an upstream error frame (the
+		// converted {"error":{...}} or the raw failed event already
+		// forwarded to the client). Neither a finish_reason nor content
+		// followed: inject nothing and count nothing — a FAILED stream
+		// is not an empty-200 degradation signal.
+		slog.Debug("SSE scanner ended on an upstream error frame; no injection",
+			"has_transformer", r.transformer != nil)
+		// NENYA-205: the exfil guard's withheld last fragment must reach
+		// the client even on this ending — the error frame went out live,
+		// but a fragment withheld before it is still outstanding (the normal
+		// drain hooks fire at the raw terminal and at the finish cells,
+		// neither of which an error-terminal stream reached).
+		if held, heldOK := r.synthesizeHeldFlush(); heldOK {
+			r.buffer = r.appendSSEEvent(nil, held)
+			r.pos = 0
+			r.lastLineBlank = true
+		}
+	case !r.sawContent:
+		// NENYA-160: the always-on empty-200 degradation signal — this
+		// path is flag-independent (it IS the empty-stream handler).
+		if r.onEmptyStream != nil {
+			r.onEmptyStream()
+		}
+		slog.Warn("SSE scanner ended without [DONE] marker and no content, injecting gateway_error",
+			"has_transformer", r.transformer != nil)
+		r.injectErrorBuffer("upstream stream ended without [DONE]")
+	default:
+		if r.suppressCutError {
+			slog.Debug("SSE scanner ended without [DONE] mid-generation, cut error suppressed for continuation",
+				"has_transformer", r.transformer != nil,
+				"saw_content", r.sawContent)
+			return
+		}
+		slog.Warn("SSE scanner ended without [DONE] marker mid-generation, injecting gateway_error",
+			"has_transformer", r.transformer != nil,
+			"saw_content", r.sawContent)
+		r.injectErrorBuffer("upstream stream ended without [DONE]")
+	}
 }
 
 // injectDoneOnly buffers a bare [DONE] event without a gateway_error. Used for
@@ -217,7 +295,9 @@ func (r *SSETransformingReader) transformSSEData(line []byte) []byte {
 	// aggregator whose provider leg failed after the stream opened) are tagged
 	// with "error" so observers can record circuit-breaker failures. The error
 	// line itself is still forwarded to the client unchanged below.
-	if IsStreamErrorPayload(parsed) {
+	// NENYA-337: the Responses failed event is the same class (the bootstrap
+	// probe and the MCP accumulator already recognize it).
+	if IsStreamErrorPayload(parsed) || IsResponseFailedEvent(parsed) {
 		r.notifySSEObserver(line, parsed, "error")
 	}
 
@@ -333,26 +413,39 @@ func (r *SSETransformingReader) notifySSEObserver(line []byte, parsed map[string
 	}
 	// Upstream error payloads are already notified with Type "error" when
 	// parsed; suppress the duplicate downstream notify so observers count each
-	// error event exactly once.
-	if eventType == "" && IsStreamErrorPayload(parsed) {
+	// error event exactly once. NENYA-337: the Responses failed event is the
+	// same class.
+	if eventType == "" && (IsStreamErrorPayload(parsed) || IsResponseFailedEvent(parsed)) {
 		return
 	}
 	r.observer.OnSSEEvent(SSEEvent{Type: eventType, Raw: line, Data: parsed})
 }
 
-// transformerTailFrame pulls a stateful transformer's held closing events
-// (TailFinisher, AUD-29 / NENYA-241) and frames them for the wire. Nil when
-// the transformer holds nothing or does not implement TailFinisher.
+// transformerTailFrame returns the memoized transformer tail, framed for the
+// wire (TailFinisher, AUD-29 / NENYA-241). Nil when the transformer holds
+// nothing or does not implement TailFinisher. Memoized (NENYA-337):
+// handleScannerDone drains the raw tail before classifying (feeding
+// trackStreamProgress directly — no observer notify), and the composition
+// paths frame + notify the same bytes exactly once.
 func (r *SSETransformingReader) transformerTailFrame() []byte {
-	tailer, ok := r.transformer.(TailFinisher)
-	if !ok {
+	r.memoizeTransformerTail()
+	if len(r.drainedTail) == 0 {
 		return nil
 	}
-	tail := tailer.FinishTail()
-	if len(tail) == 0 {
-		return nil
+	return r.frameTransformedEvents(r.drainedTail, nil)
+}
+
+// memoizeTransformerTail pulls the transformer's FinishTail once and stores
+// the raw bytes (framing — and its observer notify — happens only in
+// transformerTailFrame, so the classification-time drain never notifies).
+func (r *SSETransformingReader) memoizeTransformerTail() {
+	if r.tailDrained {
+		return
 	}
-	return r.frameTransformedEvents(tail, nil)
+	r.tailDrained = true
+	if tailer, ok := r.transformer.(TailFinisher); ok {
+		r.drainedTail = tailer.FinishTail()
+	}
 }
 
 // finishStreamFrames composes the clean-terminal frame sequence at

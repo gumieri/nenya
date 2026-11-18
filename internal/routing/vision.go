@@ -22,6 +22,11 @@ var imageMediaByFormat = map[string]map[string]bool{
 	"openai": {
 		"image/png": true, "image/jpeg": true, "image/gif": true, "image/webp": true,
 	},
+	// NENYA-337: the Responses API carries the same image inputs (input_image
+	// parts; the request converter maps the chat image_url shape).
+	"openai-responses": {
+		"image/png": true, "image/jpeg": true, "image/gif": true, "image/webp": true,
+	},
 	"anthropic": {
 		"image/png": true, "image/jpeg": true, "image/gif": true, "image/webp": true,
 	},

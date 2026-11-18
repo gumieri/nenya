@@ -732,6 +732,42 @@ func checkProviderAndLocal(a *AgentState, m config.AgentModel, providers map[str
 	return checkLocalModelAvailability(a, m, logger)
 }
 
+// canonicalBodyShapeFormats are the wire formats every provider's default
+// URL already serves (openai canonically; anthropic via full conversion;
+// gemini via the provider adapter) — they need no format_urls entry and are
+// excluded from the missing-URL warn. Anything else (today:
+// routing.FormatOpenAIResponses, spelled as its literal here — config sits
+// left of routing in the DAG) dispatches a body the default URL cannot
+// parse when the entry is missing.
+var canonicalBodyShapeFormats = map[string]bool{
+	"openai": true, "anthropic": true, "gemini": true,
+}
+
+// resolveTargetFormatURLs collects the provider's per-format URL overrides,
+// warning loudly when a model declares a format the provider has no URL
+// entry for (see canonicalBodyShapeFormats): the dispatch then silently
+// falls back to the provider's default URL — for openai-responses that means
+// a Responses-shaped body hits the chat-completions endpoint, a guaranteed
+// upstream 400 that is baffling at request time. First target build is the
+// only reliable surfacing point (load-time validation cannot know every
+// provider override).
+func resolveTargetFormatURLs(m config.AgentModel, providers map[string]*config.Provider, logger *slog.Logger) map[string]string {
+	formatURLs := map[string]string{}
+	if m.Provider == "" {
+		return formatURLs
+	}
+	provider := providers[m.Provider]
+	if provider == nil {
+		return formatURLs
+	}
+	formatURLs = provider.FormatURLs
+	if m.Format != "" && !canonicalBodyShapeFormats[m.Format] && formatURLs[m.Format] == "" && m.URL == "" && logger != nil {
+		logger.Warn("model format has no provider format_urls entry; dispatching to the provider's default URL",
+			"provider", m.Provider, "model", m.Model, "format", m.Format)
+	}
+	return formatURLs
+}
+
 // buildTarget builds a single upstream target for the given model entry,
 // reporting ok=false when the entry is skipped (context fit, capabilities,
 // provider availability, unknown provider).
@@ -761,12 +797,7 @@ func (a *AgentState) buildTarget(ctx context.Context, opts TargetBuildOpts, m co
 
 	maxOut := resolveMaxOutput(m, catalog)
 
-	formatURLs := map[string]string{}
-	if m.Provider != "" {
-		if provider := providers[m.Provider]; provider != nil {
-			formatURLs = provider.FormatURLs
-		}
-	}
+	formatURLs := resolveTargetFormatURLs(m, providers, logger)
 	p := ProviderURL(m.Provider, m.URL, m.Format, formatURLs, providers)
 	if p == "" {
 		logger.Warn("unknown provider, skipping model", "provider", m.Provider, "model", m.Model)

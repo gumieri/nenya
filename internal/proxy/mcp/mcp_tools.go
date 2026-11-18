@@ -109,7 +109,26 @@ func ConvertBufferedForReplay(h Host, gw *gateway.NenyaGateway, buf *BufferedSSE
 	if !ok {
 		return buf.RawBytes
 	}
+	// NENYA-337: Responses SSE carries no [DONE] sentinel (the live reader
+	// composes it at EOF), so a replayed stream would end without one and
+	// chat clients would hang on the final read. Anthropic-shaped clients
+	// terminate on message_stop — no sentinel for them.
+	if sourceFormat != "anthropic" && !replayEndsWithDone(converted) {
+		converted = append(converted, "data: [DONE]\n\n"...)
+	}
 	return converted
+}
+
+// replayEndsWithDone reports whether the converted replay buffer already
+// closes with the replayDoneMarker frame — a suffix match on the trailing
+// complete frame (trailing separators trimmed), not a substring probe: a
+// text payload that happens to contain the marker must not suppress the
+// close. The ResponsesTransformer never emits the sentinel, so the append
+// below is what closes those streams.
+func replayEndsWithDone(converted []byte) bool {
+	const replayDoneMarker = "data: [DONE]"
+	trimmed := bytes.TrimRight(converted, "\n")
+	return bytes.HasSuffix(trimmed, []byte(replayDoneMarker))
 }
 
 // convertReplayFrames drives a stateful transformer over the buffer's SSE
@@ -273,6 +292,8 @@ func (acc *SSEAccumulator) ProcessLine(line string) bool {
 		acc.processAnthropicData(data)
 	case "gemini":
 		acc.processGeminiData(data)
+	case "openai-responses":
+		acc.processResponsesData(data)
 	}
 	acc.Raw.WriteString("data: ")
 	acc.Raw.WriteString(data)
@@ -401,6 +422,94 @@ func (acc *SSEAccumulator) processToolCallChunk(tc map[string]any) {
 			acc.TCArgsAccum[idx] = &strings.Builder{}
 		}
 		acc.TCArgsAccum[idx].WriteString(argsStr)
+	}
+}
+
+// processResponsesData extracts tool calls, text, reasoning, and the model
+// name from a Responses-API SSE data line (NENYA-337). Complete function_call
+// items arrive whole on response.output_item.done — no deltas to join — so
+// they get synthetic indices like Gemini's functionCall parts; everything
+// feeds the same index-keyed accumulators, so buildToolCalls stays
+// format-agnostic downstream. Stream-error flagging for response.failed
+// already happens in processChunk (IsResponseFailedEvent).
+func (acc *SSEAccumulator) processResponsesData(data string) {
+	var chunk map[string]any
+	if err := json.Unmarshal([]byte(data), &chunk); err != nil {
+		return
+	}
+	eventType, _ := chunk["type"].(string)
+	switch eventType {
+	case "response.created":
+		if response, ok := chunk["response"].(map[string]any); ok {
+			if model, ok := response["model"].(string); ok && model != "" {
+				acc.Model = model
+			}
+		}
+	case "response.output_text.delta":
+		if delta, ok := chunk["delta"].(string); ok && delta != "" {
+			acc.HasContent = true
+			acc.Content.WriteString(delta)
+		}
+	case "response.reasoning_summary_text.delta", "response.reasoning_text.delta":
+		if delta, ok := chunk["delta"].(string); ok && delta != "" {
+			acc.Reasoning.WriteString(delta)
+		}
+	case "response.output_item.done":
+		acc.responsesOutputItemDone(chunk)
+	case "response.completed", "response.incomplete":
+		acc.FinishReason = acc.responsesTerminalFinishReason(eventType, chunk)
+	}
+}
+
+// responsesTerminalFinishReason folds the terminal event into the loop's
+// finish_reason spelling: completed streams close tool_calls (calls recorded
+// on this stream) or stop; incomplete honors the reason like the buffered
+// converter does (content_filter is not a length truncation).
+func (acc *SSEAccumulator) responsesTerminalFinishReason(eventType string, chunk map[string]any) string {
+	if eventType == "response.incomplete" {
+		return responsesIncompleteReason(chunk)
+	}
+	if acc.ResponsesToolSeq > 0 {
+		return "tool_calls"
+	}
+	return "stop"
+}
+
+// responsesIncompleteReason maps a response.incomplete event's reason to the
+// chat finish_reason spelling.
+func responsesIncompleteReason(chunk map[string]any) string {
+	if response, ok := chunk["response"].(map[string]any); ok {
+		if d, ok := response["incomplete_details"].(map[string]any); ok {
+			if r, _ := d["reason"].(string); r == "content_filter" {
+				return "content_filter"
+			}
+		}
+	}
+	return "length"
+}
+
+// responsesOutputItemDone folds one completed output item: a function_call
+// item records its whole tool call under a synthetic index.
+func (acc *SSEAccumulator) responsesOutputItemDone(chunk map[string]any) {
+	item, ok := chunk["item"].(map[string]any)
+	if !ok {
+		return
+	}
+	if itemType, _ := item["type"].(string); itemType != "function_call" {
+		return
+	}
+	idx := acc.ResponsesToolSeq
+	acc.ResponsesToolSeq++
+	if callID, ok := item["call_id"].(string); ok && callID != "" {
+		acc.TCIDAccum[idx] = callID
+	}
+	if name, ok := item["name"].(string); ok {
+		acc.TCNameAccum[idx] = name
+	}
+	if args, ok := item["arguments"].(string); ok {
+		b := &strings.Builder{}
+		b.WriteString(args)
+		acc.TCArgsAccum[idx] = b
 	}
 }
 

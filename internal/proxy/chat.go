@@ -1818,6 +1818,16 @@ func (p *Proxy) embeddedProviderFailure(gw *gateway.NenyaGateway, target routing
 // own wire shape, and an Anthropic Messages body (content/stop_reason, no
 // "choices" key) is not empty — counting it would saturate the signal.
 func countEmptyChoices(gw *gateway.NenyaGateway, target routing.UpstreamTarget, responseMap map[string]interface{}) {
+	if target.Format == routing.FormatOpenAIResponses {
+		// NENYA-337: the Responses body's empty signal is an output array
+		// with no items (same always-on degradation signal, target's own
+		// wire shape).
+		if outputs, ok := responseMap["output"].([]interface{}); ok && len(outputs) > 0 {
+			return
+		}
+		gw.Metrics.RecordEmptyResponse(target.Model, target.Provider, "buffered")
+		return
+	}
 	if target.Format != "openai" {
 		return
 	}
@@ -1826,6 +1836,43 @@ func countEmptyChoices(gw *gateway.NenyaGateway, target routing.UpstreamTarget, 
 		return
 	}
 	gw.Metrics.RecordEmptyResponse(target.Model, target.Provider, "buffered")
+}
+
+// convertBufferedResponseForClient converts a buffered upstream response
+// body into the client's wire shape: Responses targets go through the
+// NENYA-337 converter first (composed with the Anthropic reverse converter
+// for anthropic clients), and the pre-existing Anthropic translation branches
+// follow. The DropReport of any applied conversion is surfaced via
+// reportUnsendableContent (Warn + metric + the X-Nenya-Dropped-Content
+// header). responseMap is returned unchanged when no conversion applies.
+func (p *Proxy) convertBufferedResponseForClient(gw *gateway.NenyaGateway, w http.ResponseWriter, r *http.Request, target routing.UpstreamTarget, sourceFormat string, responseMap map[string]interface{}) map[string]interface{} {
+	if target.Format == routing.FormatOpenAIResponses && sourceFormat != routing.FormatOpenAIResponses {
+		// NENYA-337: Responses body → chat completion; an anthropic client
+		// composes the reverse converter (Responses → chat → Anthropic).
+		report := adapter.NewDropReport()
+		converted := adapter.GetResponsesAdapter().ConvertResponsesToOpenAIBodyReported(responseMap, report)
+		if sourceFormat == "anthropic" {
+			responseMap = adapter.GetAnthropicAdapter().ConvertOpenAIResponseToAnthropicBodyReported(converted, report)
+		} else {
+			responseMap = converted
+		}
+		p.reportUnsendableContent(gw, w, r, report)
+		return responseMap
+	}
+	if sourceFormat == "anthropic" && target.Format != "anthropic" {
+		a := adapter.GetAnthropicAdapter()
+		report := adapter.NewDropReport()
+		responseMap = a.ConvertOpenAIResponseToAnthropicBodyReported(responseMap, report)
+		p.reportUnsendableContent(gw, w, r, report)
+		return responseMap
+	}
+	if target.Format == "anthropic" && sourceFormat != "anthropic" {
+		a := adapter.GetAnthropicAdapter()
+		report := adapter.NewDropReport()
+		responseMap = a.ConvertAnthropicToOpenAIBodyReported(responseMap, false, report)
+		p.reportUnsendableContent(gw, w, r, report)
+	}
+	return responseMap
 }
 
 func (p *Proxy) handleNonStreamingResponse(gw *gateway.NenyaGateway, w http.ResponseWriter, r *http.Request, target routing.UpstreamTarget, agentName, sourceFormat string, action upstreamAction, cacheKey string, cooldownDuration time.Duration, egress bufferedEgressOpts) streamResult {
@@ -1898,6 +1945,19 @@ func (p *Proxy) handleNonStreamingResponse(gw *gateway.NenyaGateway, w http.Resp
 		return result
 	}
 
+	// NENYA-337: a Responses body with status:"failed" is an upstream
+	// failure inside a success envelope — same treatment as the branches
+	// above: record the failure and let the retry loop try the next target
+	// instead of converting it into a silent empty chat completion.
+	if target.Format == routing.FormatOpenAIResponses {
+		if status, _ := responseMap["status"].(string); status == "failed" {
+			gw.AgentState.RecordFailure(target, cooldownDuration)
+			gw.Logger.Warn("responses target reported a failed response, trying next target",
+				"model", target.Model, "provider", target.Provider)
+			return streamResult{Empty: true}
+		}
+	}
+
 	// NENYA-160: an HTTP-200 body with no choices (and no embedded error,
 	// handled above) is an empty response — count it as the degradation
 	// signal without changing the forwarding behavior.
@@ -1920,24 +1980,15 @@ func (p *Proxy) handleNonStreamingResponse(gw *gateway.NenyaGateway, w http.Resp
 	//
 	// Accepted gap (NENYA-193): the attempt-rejection branches above (an
 	// unparseable 200 body, a network-error finish_reason, an embedded provider
-	// error) return before this point, so a dispatch that reported usage but is
-	// treated as a failed attempt records nothing here — it is re-dispatched,
-	// and the retry's own dispatch is what gets recorded.
+	// error, a Responses status:"failed" body) return before this point, so a
+	// dispatch that reported usage but is treated as a failed attempt records
+	// nothing here — it is re-dispatched, and the retry's own dispatch is what
+	// gets recorded.
 	if usage, ok := stream.UsageMapFromChunk(responseMap); ok {
 		recordNonStreamingUsage(r.Context(), gw, target, agentName, stream.ResponseModelOf(responseMap), usage)
 	}
 
-	if sourceFormat == "anthropic" && target.Format != "anthropic" {
-		a := adapter.GetAnthropicAdapter()
-		report := adapter.NewDropReport()
-		responseMap = a.ConvertOpenAIResponseToAnthropicBodyReported(responseMap, report)
-		p.reportUnsendableContent(gw, w, r, report)
-	} else if target.Format == "anthropic" && sourceFormat != "anthropic" {
-		a := adapter.GetAnthropicAdapter()
-		report := adapter.NewDropReport()
-		responseMap = a.ConvertAnthropicToOpenAIBodyReported(responseMap, false, report)
-		p.reportUnsendableContent(gw, w, r, report)
-	}
+	responseMap = p.convertBufferedResponseForClient(gw, w, r, target, sourceFormat, responseMap)
 
 	// ExfilGuard + canary tripwire (Phases 050/060): egress policies on
 	// the buffered body before headers are committed. Both may terminate

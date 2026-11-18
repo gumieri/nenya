@@ -79,7 +79,13 @@ var ProviderRegistry = map[string]ProviderEntry{
 		AuthStyle: "bearer",
 	},
 	"openai": {
-		URL:       "https://api.openai.com/v1/chat/completions",
+		URL: "https://api.openai.com/v1/chat/completions",
+		FormatURLs: map[string]string{
+			// NENYA-337: models that reject function tools + reasoning_effort
+			// on chat completions route here via format "openai-responses"
+			// (routing.FormatOpenAIResponses; config cannot import routing).
+			"openai-responses": "https://api.openai.com/v1/responses",
+		},
 		AuthStyle: "bearer",
 	},
 	"qwen_free": {

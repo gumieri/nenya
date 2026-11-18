@@ -193,6 +193,42 @@ func TestSSEAccumulatorGeminiNoArgsCall(t *testing.T) {
 	}
 }
 
+// TestSSEAccumulatorResponsesToolCalls pins the NENYA-337 MCP-loop parser:
+// complete function_call items arrive whole on response.output_item.done and
+// feed the same accumulators (synthetic indices), text deltas accumulate,
+// and the serving model is picked from response.created.
+func TestSSEAccumulatorResponsesToolCalls(t *testing.T) {
+	acc := newSSEAccumulator(nil)
+	acc.Format = "openai-responses"
+	feedLines(acc, []string{
+		`data: {"type":"response.created","response":{"id":"resp_1","model":"gpt-6-luna"}}`,
+		`data: {"type":"response.output_text.delta","delta":"checking"}`,
+		`data: {"type":"response.output_item.done","output_index":0,"item":{"type":"function_call","id":"fc_1","call_id":"call_abc","name":"bash","arguments":"{\"cmd\":\"ls\"}"}}`,
+		`data: {"type":"response.output_item.done","output_index":1,"item":{"type":"function_call","id":"fc_2","call_id":"call_def","name":"read","arguments":"{\"path\":\"a.go\"}"}}`,
+		`data: {"type":"response.output_item.done","output_index":2,"item":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"done"}]}}`,
+	})
+
+	buf := acc.Result()
+	if len(buf.ToolCalls) != 2 {
+		t.Fatalf("toolCalls = %d, want 2", len(buf.ToolCalls))
+	}
+	if buf.ToolCalls[0].ID != "call_abc" || buf.ToolCalls[0].Name != "bash" {
+		t.Fatalf("call 0 = %q/%q, want call_abc/bash", buf.ToolCalls[0].ID, buf.ToolCalls[0].Name)
+	}
+	if cmd, _ := buf.ToolCalls[0].Arguments["cmd"].(string); cmd != "ls" {
+		t.Fatalf("call 0 args = %v, want cmd=ls", buf.ToolCalls[0].Arguments)
+	}
+	if buf.ToolCalls[1].ID != "call_def" || buf.ToolCalls[1].Name != "read" {
+		t.Fatalf("call 1 = %q/%q, want call_def/read", buf.ToolCalls[1].ID, buf.ToolCalls[1].Name)
+	}
+	if !buf.HasContent || !strings.Contains(acc.Content.String(), "checking") {
+		t.Fatalf("content = %q, want the output_text delta", acc.Content.String())
+	}
+	if acc.Model != "gpt-6-luna" {
+		t.Fatalf("model = %q, want gpt-6-luna (response.created)", acc.Model)
+	}
+}
+
 // TestSSEAccumulatorExplicitOpenAIFormat: an explicit openai format routes
 // through the OpenAI parse only.
 func TestSSEAccumulatorExplicitOpenAIFormat(t *testing.T) {

@@ -793,6 +793,26 @@ func convertToAnthropicFormat(deps TransformDeps, payload map[string]interface{}
 	return anthropicAdapter.ConvertOpenAIToAnthropicBody(payload, modelName, stream, opts)
 }
 
+// convertToResponsesFormat converts the chat-completions payload to an
+// OpenAI Responses create request (NENYA-337), surfacing forward-path drops
+// via Warn + the unsendable-content metric (there is no response writer on
+// this path to carry the X-Nenya-Dropped-Content header; the buffered
+// response conversion sets it).
+func convertToResponsesFormat(deps TransformDeps, payload map[string]interface{}, modelName string) map[string]interface{} {
+	report := adapter.NewDropReport()
+	converted := adapter.GetResponsesAdapter().ConvertOpenAIToResponsesBodyReported(payload, report)
+	if !report.Empty() {
+		if deps.Metrics != nil {
+			for _, kind := range report.Kinds() {
+				deps.Metrics.RecordUnsendableContent(kind)
+			}
+		}
+		deps.log().Warn("openai-responses: chat parameters with no Responses equivalent were dropped",
+			"kinds", strings.Join(report.Kinds(), ","), "model", modelName)
+	}
+	return converted
+}
+
 // RequestTelemetry carries the once-per-request telemetry flags shared by a
 // request's failover attempts. See TransformDeps.Telemetry.
 type RequestTelemetry struct {
@@ -815,12 +835,26 @@ type TransformParams struct {
 	// budget sources.
 	MaxOutput  int
 	MaxContext int
-	// Format is the target wire format ("openai", "anthropic", "gemini").
+	// Format is the target wire format ("openai", "anthropic", "gemini",
+	// "openai-responses").
 	Format string
 	// ReasoningEffort is the agent's default reasoning_effort injection
 	// (client-specified wins).
 	ReasoningEffort string
 }
+
+// Target wire formats (NENYA-337 note: the format strings predate this
+// constant and are spelled as bare literals at older call sites; new call
+// sites use the constant).
+const (
+	// FormatOpenAIResponses is the OpenAI Responses API (/v1/responses)
+	// wire format (NENYA-337): selectable on agent model entries for models
+	// that reject function tools + reasoning_effort on
+	// /v1/chat/completions. The chat-completions client payload converts to
+	// a Responses create request, and the Responses reply converts back to
+	// the client's shape (streaming deltas or buffered body).
+	FormatOpenAIResponses = "openai-responses"
+)
 
 func TransformRequestForUpstream(deps TransformDeps, params TransformParams, payload map[string]interface{}) ([]byte, string, error) {
 	providerName, model, maxOutput, maxContext := params.ProviderName, params.Model, params.MaxOutput, params.MaxContext
@@ -892,10 +926,17 @@ func TransformRequestForUpstream(deps TransformDeps, params TransformParams, pay
 	// rebind would mutate a discarded map and leak the rename into the
 	// shared failover payload (NENYA-179 review).
 	sharedPayload := payload
-	if format == "anthropic" {
+	switch format {
+	case "anthropic":
 		// Convert with the POST-mapping model: the upstream must receive
 		// the aliased ID, not the canonical one the client sent (NENYA-22).
 		payload = convertToAnthropicFormat(deps, payload, finalModel, historyTrimmed)
+	case FormatOpenAIResponses:
+		// NENYA-337: chat-completions → Responses create request. The
+		// converted body is a NEW map; the restore below keeps the shared
+		// failover payload in the client's shape (same discipline as the
+		// anthropic branch).
+		payload = convertToResponsesFormat(deps, payload, finalModel)
 	}
 
 	newBody, err := json.Marshal(payload)

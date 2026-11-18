@@ -68,7 +68,11 @@ type UsageTotals struct {
 //
 //   - the OpenAI-compatible top-level "usage" (including usage-only final
 //     chunks, the shape some providers such as Together send with no
-//     choices);
+//     choices) — this also matches a buffered OpenAI Responses body, whose
+//     usage is top-level;
+//   - the OpenAI Responses streaming shape, where the usage nests under
+//     "response" on the terminal event (response.completed/incomplete/
+//     failed carry response.usage — NENYA-337);
 //   - the Anthropic streaming shape, where the initial input usage is nested
 //     under "message" (message_start) and the final output usage is top-level
 //     (message_delta);
@@ -76,6 +80,11 @@ type UsageTotals struct {
 func UsageMapFromChunk(chunk map[string]interface{}) (map[string]interface{}, bool) {
 	if usage, ok := asUsageMap(chunk["usage"]); ok {
 		return usage, true
+	}
+	if response, ok := chunk["response"].(map[string]interface{}); ok {
+		if usage, ok := asUsageMap(response["usage"]); ok {
+			return usage, true
+		}
 	}
 	if message, ok := chunk["message"].(map[string]interface{}); ok {
 		if usage, ok := asUsageMap(message["usage"]); ok {
@@ -196,11 +205,19 @@ func readUsageFields(usage map[string]interface{}) usageFields {
 		f.cacheCreation1h = ToInt(cc["ephemeral_1h_input_tokens"])
 	}
 	f.openAICacheDecomposition = f.cacheHit > 0 || f.cacheCreation > 0
+	// Cache decompositions read the same cached_tokens detail under both
+	// spellings: the OpenAI chat field (prompt_tokens_details) and the
+	// Responses API field (input_tokens_details — NENYA-337; without it the
+	// cached share was billed at the full input rate and the warm-cache
+	// tie-break (NENYA-190) never saw warmth).
 	if f.cacheHit == 0 {
-		if details, ok := usage["prompt_tokens_details"].(map[string]interface{}); ok {
-			if cached := ToInt(details["cached_tokens"]); cached > 0 {
-				f.cacheHit = cached
-				f.openAICacheDecomposition = true
+		for _, detailsKey := range []string{"prompt_tokens_details", "input_tokens_details"} {
+			if details, ok := usage[detailsKey].(map[string]interface{}); ok {
+				if cached := ToInt(details["cached_tokens"]); cached > 0 {
+					f.cacheHit = cached
+					f.openAICacheDecomposition = true
+					break
+				}
 			}
 		}
 	}
@@ -213,7 +230,14 @@ func (f usageFields) hasGemini() bool {
 
 // ambiguousCacheSemantics reports that the object carries an OpenAI-style input
 // total together with the Anthropic-native cache field names and no OpenAI
-// cache decomposition: the cache semantics can only be inferred.
+// style decomposition: the cache semantics can only be inferred.
+//
+// NOTE (NENYA-337): a raw Responses usage object (input_tokens/output_tokens)
+// ALSO routes through anthropicInputSemantics — numerically correct today
+// only because Responses never carries native cache_read/creation fields
+// (the fold adds nothing; the cache share comes from the
+// input_tokens_details read). A future Responses-native cache field would be
+// double-folded into Prompt and needs its own branch.
 func (f usageFields) ambiguousCacheSemantics() bool {
 	if f.nativeInput != 0 || f.nativeOutput != 0 || f.openAICacheDecomposition {
 		return false

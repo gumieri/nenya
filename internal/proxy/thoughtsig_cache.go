@@ -76,3 +76,29 @@ func (c *compositeTransformer) TransformSSEChunk(ctx context.Context, data []byt
 	}
 	return c.clientSecond.TransformSSEChunk(ctx, transformed)
 }
+
+// FinishTail implements stream.TailFinisher by concatenating the held tails
+// of both stages, upstream-native first (NENYA-337): the Responses
+// transformer holds nothing back, but the client-stage OpenAI→Anthropic
+// converter holds the message_delta/message_stop close — without this the
+// reader never pulls it (TransformSSEChunk is not a TailFinisher), and an
+// Anthropic-client stream on a Responses upstream ends with a foreign
+// [DONE], no stop_reason, and no client-visible usage. The same gap silently
+// no-ops the MCP replay's appendConvertedTail (a failed type-assert).
+// INVARIANT: a providerFirst tail is only safe here because every current
+// provider stage is either not a TailFinisher (gemini) or holds nothing
+// (responses) — a future provider stage with a real tail would emit
+// provider-format frames unconverted (its output must be client-shaped or
+// routed through clientSecond before landing here).
+func (c *compositeTransformer) FinishTail() []byte {
+	var out []byte
+	for _, stage := range []stream.ResponseTransformer{c.providerFirst, c.clientSecond} {
+		if tailer, ok := stage.(stream.TailFinisher); ok {
+			if tail := tailer.FinishTail(); len(tail) > 0 {
+				out = append(out, tail...)
+				out = append(out, '\n')
+			}
+		}
+	}
+	return out
+}
