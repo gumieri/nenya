@@ -46,17 +46,18 @@ jobs:
           set -eu
           # Unreachable-from-main symbols must never exceed the allowlist
           # (issue #150; floor ratchets down to 0 — raise, never lower).
-          # Allowlisted: internal/testutil (intentional test-only helpers;
-          # deadcode analyzes main-reachability and cannot see test callers).
+          # Allowlisted: internal/testutil + internal/ssefixtures
+          # (intentional test-only helpers/fixtures; deadcode analyzes
+          # main-reachability and cannot see test callers).
           report=$(go run golang.org/x/tools/cmd/deadcode@v0.52.0 ./...)
           echo "$report"
           findings=$(echo "$report" | grep -c 'unreachable func' || true)
-          allowlisted=$(echo "$report" | grep -c 'internal/testutil/' || true)
+          allowlisted=$(echo "$report" | grep -c -E 'internal/(testutil|ssefixtures)/' || true)
           over=$((findings - allowlisted))
-          echo "unreachable: $findings total, $allowlisted allowlisted (internal/testutil)"
+          echo "unreachable: $findings total, $allowlisted allowlisted (internal/testutil + internal/ssefixtures)"
           if [ "$over" -gt 0 ]; then
             echo "::error::dead-code ratchet exceeded: $over non-allowlisted unreachable symbols (floor 0)"
-            echo "$report" | grep -v 'internal/testutil/'
+            echo "$report" | grep -v -E 'internal/(testutil|ssefixtures)/'
             exit 1
           fi
           echo "within floor: all $findings symbols are allowlisted test-only helpers"

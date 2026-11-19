@@ -20,7 +20,8 @@ const dagInternalPrefix = "internal/"
 // runtime dependency DAG (see the note under "Package Dependency DAG" in
 // docs/ARCHITECTURE.md).
 var dagExcluded = map[string]bool{
-	"testutil": true,
+	"testutil":    true,
+	"ssefixtures": true,
 }
 
 // dagNestedAllow maps a deliberately nested internal package path to the
