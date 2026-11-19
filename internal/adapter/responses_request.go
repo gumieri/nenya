@@ -149,7 +149,10 @@ func convertResponsesResponseFormat(out, openai map[string]interface{}, report *
 			// Responses' text.format IS the inner envelope but still requires
 			// its own type field — without it every structured-output request
 			// 400s upstream.
-			typed := make(map[string]interface{}, len(js)+1)
+			// No size hint: the envelope is client-shaped (CWE-190 §7 — the
+			// len+1 arithmetic is the allocation-overflow pattern CodeQL
+			// flags), and the map is tiny in practice.
+			typed := make(map[string]interface{})
 			typed["type"] = "json_schema"
 			for k, v := range js {
 				typed[k] = v
