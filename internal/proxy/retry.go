@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -455,6 +456,27 @@ func (rl *retryLoop) hasOtherEligiblePair(i int) bool {
 	return false
 }
 
+// consumeErrorBody reads the upstream error response's (limited) body into
+// the action and closes it. A mid-body read failure is logged loudly: the
+// truncated payload feeds retryable-phrase classification, so a flipped
+// retryable↔terminal decision must be traceable (NENYA-332 — the read error
+// used to be swallowed silently).
+func (rl *retryLoop) consumeErrorBody(target routing.UpstreamTarget, action *upstreamAction) {
+	var bodyReadErr error
+	action.Body, bodyReadErr = io.ReadAll(io.LimitReader(action.Resp.Body, pipeline.MaxErrorBodyBytes))
+	_ = action.Resp.Body.Close()
+	if bodyReadErr != nil && !errors.Is(bodyReadErr, context.Canceled) {
+		// A mid-body network reset truncated the error payload that feeds
+		// retryable-phrase classification — surface it loudly so a flipped
+		// retryable↔terminal decision is traceable (NENYA-332). Client
+		// cancellation while draining the body is benign teardown, not a
+		// classification hazard — skip the warning for it.
+		rl.ctxLogger.Warn("upstream error body read failed; classification runs on a truncated body",
+			"model", target.Model, "provider", target.Provider,
+			"status", action.Resp.StatusCode, "error_message", bodyReadErr.Error())
+	}
+}
+
 // handleActionError processes an upstream error action, applies backoff, and returns a loop signal.
 func (rl *retryLoop) handleActionError(i int, target routing.UpstreamTarget, action upstreamAction) retrySignal {
 	rl.attempt++
@@ -462,8 +484,7 @@ func (rl *retryLoop) handleActionError(i int, target routing.UpstreamTarget, act
 	// upstream error is classified; handleUpstreamError re-snapshots below
 	// when this failure is itself a retryable 4xx.
 	rl.lastRetryable4xx = nil
-	action.Body, _ = io.ReadAll(io.LimitReader(action.Resp.Body, pipeline.MaxErrorBodyBytes))
-	_ = action.Resp.Body.Close()
+	rl.consumeErrorBody(target, &action)
 	// The upstream response is fully consumed; release its request context on
 	// every path so retries do not abandon in-flight upstream contexts.
 	// CancelFunc is idempotent, so the later cancels are harmless.

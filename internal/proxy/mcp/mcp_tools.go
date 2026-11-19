@@ -93,7 +93,19 @@ func (b *BufferedSSE) UsageChunks() []map[string]interface{} {
 // resolver verdict) replays verbatim; a transformer error also falls back to
 // the verbatim buffer — replaying what the upstream said — rather than
 // dropping the answer.
-func ConvertBufferedForReplay(h Host, gw *gateway.NenyaGateway, buf *BufferedSSE, sourceFormat string, apiKey *config.ApiKey) []byte {
+// ConvertBufferedForReplay converts a buffered upstream response into the
+// client's wire format for replay. ctx is the request context, threaded into
+// the transformer so stage spans keep their trace (NENYA-332: the replay
+// drove conversions on context.Background(), severing propagation).
+//
+// Cancellation is DETACHED here (context.WithoutCancel): the replay fires
+// exactly when the request's ctx is already dead (loop deadline exhausted,
+// dispatch failed on the deadline) yet must still deliver the buffered
+// response — and every production transformer fails a canceled ctx, which
+// would silently degrade cross-format replays to verbatim bytes. Values are
+// preserved, so trace propagation survives.
+func ConvertBufferedForReplay(ctx context.Context, h Host, gw *gateway.NenyaGateway, buf *BufferedSSE, sourceFormat string, apiKey *config.ApiKey) []byte {
+	ctx = context.WithoutCancel(ctx)
 	if buf == nil || len(buf.RawBytes) == 0 {
 		return buf.RawBytes
 	}
@@ -105,8 +117,14 @@ func ConvertBufferedForReplay(h Host, gw *gateway.NenyaGateway, buf *BufferedSSE
 	if tr == nil {
 		return buf.RawBytes
 	}
-	converted, ok := ConvertReplayFrames(h, tr, buf.RawBytes)
+	converted, ok := ConvertReplayFrames(ctx, tr, buf.RawBytes)
 	if !ok {
+		// The conversion aborted mid-buffer (transform error or a frame the
+		// event decoder could not parse). Serving the truncated conversion
+		// would corrupt the client stream: fall back to the verbatim buffer,
+		// loudly — the client may see the WRONG wire format (NENYA-332).
+		gw.Logger.Warn("MCP replay conversion failed; serving the buffer verbatim (possible wire-format mismatch)",
+			"target_format", target.Format, "client_format", sourceFormat, "provider", target.Provider, "model", target.Model)
 		return buf.RawBytes
 	}
 	// NENYA-337: Responses SSE carries no [DONE] sentinel (the live reader
@@ -133,9 +151,11 @@ func replayEndsWithDone(converted []byte) bool {
 
 // convertReplayFrames drives a stateful transformer over the buffer's SSE
 // data frames in order and frames the converted events for the client. A
-// transformer error aborts with ok=false (the caller falls back to the
-// verbatim buffer).
-func ConvertReplayFrames(h Host, tr stream.ResponseTransformer, raw []byte) ([]byte, bool) {
+// transformer error OR a converted frame/tail the SSE-event decoder cannot
+// parse aborts with ok=false (the caller falls back to the verbatim buffer) —
+// a silent truncated conversion would corrupt the client stream (NENYA-332).
+func ConvertReplayFrames(ctx context.Context, tr stream.ResponseTransformer, raw []byte) ([]byte, bool) {
+	ctx = context.WithoutCancel(ctx) // conversion of received bytes must survive a dead request ctx (see ConvertBufferedForReplay)
 	var out []byte
 	for _, line := range strings.Split(string(raw), "\n") {
 		value, isData := stream.SSEDataField([]byte(line))
@@ -146,7 +166,7 @@ func ConvertReplayFrames(h Host, tr stream.ResponseTransformer, raw []byte) ([]b
 		if payload == "" {
 			continue
 		}
-		converted, ok := convertReplayFrame(tr, payload)
+		converted, ok := convertReplayFrame(ctx, tr, payload)
 		if !ok {
 			return nil, false
 		}
@@ -154,21 +174,29 @@ func ConvertReplayFrames(h Host, tr stream.ResponseTransformer, raw []byte) ([]b
 			out = append(out, "data: [DONE]\n\n"...)
 			continue
 		}
-		out = appendSSEEvents(out, []byte(converted))
+		var eventsOK bool
+		out, eventsOK = appendSSEEvents(out, []byte(converted))
+		if !eventsOK {
+			return nil, false
+		}
 	}
-	out = appendConvertedTail(tr, out)
+	out, tailOK := appendConvertedTail(tr, out)
+	if !tailOK {
+		return nil, false
+	}
 	return out, true
 }
 
 // convertReplayFrame transforms one data payload. The "[DONE]" sentinel and
 // a terminator the transformer renders itself (the forward transformer emits
-// it on message_stop) both come back as the sentinel string.
-func convertReplayFrame(tr stream.ResponseTransformer, payload string) (string, bool) {
+// it on message_stop) both come back as the sentinel string. ctx is the
+// request context (trace propagation — NENYA-332).
+func convertReplayFrame(ctx context.Context, tr stream.ResponseTransformer, payload string) (string, bool) {
 	// A "[DONE]" payload is fed through like any frame: the transformer
 	// decides — a held tail is flushed in its place (the converted Anthropic
 	// stream terminates at message_stop), otherwise the sentinel passes
 	// through for OpenAI clients.
-	converted, err := tr.TransformSSEChunk(context.Background(), []byte(payload))
+	converted, err := tr.TransformSSEChunk(ctx, []byte(payload))
 	if err != nil && !errors.Is(err, stream.ErrEventConsumed) {
 		return "", false
 	}
@@ -176,51 +204,56 @@ func convertReplayFrame(tr stream.ResponseTransformer, payload string) (string, 
 }
 
 // appendSSEEvents frames each JSON event of a transformer's (possibly
-// multi-event) output as its own "data: " frame.
-func appendSSEEvents(out, events []byte) []byte {
+// multi-event) output as its own "data: " frame. ok=false means the output
+// could not be decoded as JSON events — the caller aborts the conversion
+// rather than shipping a truncated stream (NENYA-332).
+func appendSSEEvents(out, events []byte) ([]byte, bool) {
 	dec := json.NewDecoder(bytes.NewReader(events))
 	for dec.More() {
 		var evt map[string]interface{}
 		if err := dec.Decode(&evt); err != nil {
-			return out
+			return out, false
 		}
 		reencoded, err := json.Marshal(evt)
 		if err != nil {
-			return out
+			return out, false
 		}
 		out = append(out, "data: "...)
 		out = append(out, reencoded...)
 		out = append(out, '\n', '\n')
 	}
-	return out
+	return out, true
 }
 
 // appendConvertedTail pulls the transformer's held tail (stream.TailFinisher,
 // AUD-29) and appends its events. A transformer without a tail is unchanged.
-func appendConvertedTail(tr stream.ResponseTransformer, out []byte) []byte {
+// ok=false means the tail could not be decoded — the caller aborts (NENYA-332).
+func appendConvertedTail(tr stream.ResponseTransformer, out []byte) ([]byte, bool) {
 	finisher, ok := tr.(stream.TailFinisher)
 	if !ok {
-		return out
+		return out, true
 	}
 	tail := finisher.FinishTail()
 	if len(tail) == 0 {
-		return out
+		return out, true
 	}
 	dec := json.NewDecoder(bytes.NewReader(tail))
 	for dec.More() {
 		var evt map[string]interface{}
 		if err := dec.Decode(&evt); err != nil {
-			return append(out, tail...)
+			// Fail WITHOUT appending: the caller discards out on ok=false —
+			// symmetric with appendSSEEvents (NENYA-332 review).
+			return out, false
 		}
 		reencoded, err := json.Marshal(evt)
 		if err != nil {
-			return append(out, tail...)
+			return out, false // fail without appending (symmetric with appendSSEEvents)
 		}
 		out = append(out, "data: "...)
 		out = append(out, reencoded...)
 		out = append(out, '\n', '\n')
 	}
-	return out
+	return out, true
 }
 
 func ReplayBufferedResponse(h Host, w http.ResponseWriter, buf *bufferedSSE, gw *gateway.NenyaGateway, providerName string, logger *slog.Logger) {

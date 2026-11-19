@@ -27,13 +27,12 @@ func init() {
 	}
 }
 
+// getStreamBuffer returns a pooled scanner buffer. Miss accounting lives
+// entirely in sseBufPool.New: with New set, Get never returns nil, so the
+// old dead nil-branch here (which would have double-counted the miss) is
+// gone (NENYA-332 pool hygiene).
 func getStreamBuffer() *[]byte {
 	bufPtr := sseBufPool.Get()
-	if bufPtr == nil {
-		atomic.AddUint64(&poolMisses, 1)
-		buf := make([]byte, SSEScannerInitialBuf)
-		return &buf
-	}
 	atomic.AddUint64(&poolHits, 1)
 	return bufPtr.(*[]byte)
 }
@@ -42,8 +41,10 @@ func putStreamBuffer(buf *[]byte) {
 	if buf == nil || *buf == nil {
 		return
 	}
-	// Reject oversized buffers to prevent pool memory bloat
-	if cap(*buf) > SSEScannerInitialBuf {
+	// Reject oversized buffers to prevent pool memory bloat. Same policy
+	// as PutLineCopyBuffer (NENYA-332: the two policies were expressed with
+	// different constants; both are the 64KiB ceiling).
+	if cap(*buf) > maxPooledBufSize {
 		return
 	}
 	sseBufPool.Put(buf)

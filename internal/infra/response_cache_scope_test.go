@@ -1,6 +1,7 @@
 package infra
 
 import (
+	"context"
 	"strings"
 	"testing"
 )
@@ -85,16 +86,16 @@ func TestResponseCache_SemanticPartitionedByPolicy(t *testing.T) {
 		t.Fatalf("policy scopes must yield distinct namespaces: %q vs %q", nsA, nsB)
 	}
 
-	c.Store(keyA, "m", true, []byte(`{"resp":"a"}`), []float32{0.7071, 0.7071, 0})
+	c.Store(context.Background(), keyA, "m", true, []byte(`{"resp":"a"}`), []float32{0.7071, 0.7071, 0})
 
 	embed := func() ([]float32, error) { return []float32{0.7071, 0.7071, 0}, nil }
-	if data, ok, cacheType := c.Lookup(keyB, "m", true, embed); ok {
+	if data, ok, cacheType := c.Lookup(context.Background(), keyB, "m", true, embed); ok {
 		t.Fatalf("policy-B lookup reached policy-A entry (type %q): %q", cacheType, data)
 	}
 
 	// Same policy, near-identical prompt: the semantic fallback still works.
 	samePolicy := FingerprintPayloadScoped(testPayload("hello world!"), "token-a", policyA)
-	if _, ok, cacheType := c.Lookup(samePolicy, "m", true, embed); !ok || cacheType != "semantic" {
+	if _, ok, cacheType := c.Lookup(context.Background(), samePolicy, "m", true, embed); !ok || cacheType != "semantic" {
 		t.Fatalf("same-policy semantic lookup = %v, %q; want semantic hit", ok, cacheType)
 	}
 }

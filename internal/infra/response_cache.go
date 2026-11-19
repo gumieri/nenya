@@ -227,14 +227,14 @@ func (c *ResponseCache) semanticEntryCountLocked() int {
 	return c.semanticEntries
 }
 
-func (c *ResponseCache) handleExactHit(entry *responseCacheEntry, model string) ([]byte, bool, string) {
+func (c *ResponseCache) handleExactHit(ctx context.Context, entry *responseCacheEntry, model string) ([]byte, bool, string) {
 	data := entry.data
 	c.mu.RUnlock()
 	if model == "" {
 		model = "unknown"
 	}
 	c.recordExactHit(model)
-	if c.logger != nil && c.logger.Enabled(context.Background(), slog.LevelDebug) {
+	if c.logger != nil && c.logger.Enabled(ctx, slog.LevelDebug) {
 		c.logger.Debug("cache exact hit", "model", model)
 	}
 	return data, true, "exact"
@@ -245,8 +245,10 @@ func (c *ResponseCache) handleExactHit(entry *responseCacheEntry, model string) 
 // auth+model namespace (never across namespaces, NENYA-189) and with the
 // same response shape (stream; enforced on the semantic fallback, whose
 // namespace excludes the payload's stream field). embed is only called when
-// the semantic fallback runs; a nil embed disables the fallback.
-func (c *ResponseCache) Lookup(key, model string, stream bool, embed func() ([]float32, error)) ([]byte, bool, string) {
+// the semantic fallback runs; a nil embed disables the fallback. ctx feeds
+// the debug gates so request-scoped tracing stays intact (NENYA-332: the
+// gates read context.Background() mid-request).
+func (c *ResponseCache) Lookup(ctx context.Context, key, model string, stream bool, embed func() ([]float32, error)) ([]byte, bool, string) {
 	if key == "" {
 		return nil, false, ""
 	}
@@ -261,12 +263,12 @@ func (c *ResponseCache) Lookup(key, model string, stream bool, embed func() ([]f
 	// stream field; the exact key includes it, so the two paths are
 	// deliberately asymmetric.)
 	if ok && !time.Now().After(entry.expireAt) {
-		return c.handleExactHit(entry, model)
+		return c.handleExactHit(ctx, entry, model)
 	}
 	c.mu.RUnlock()
 
 	if c.semanticEnabled && c.embedder != nil {
-		if data, ok := c.lookupSemantic(key, model, stream, embed); ok {
+		if data, ok := c.lookupSemantic(ctx, key, model, stream, embed); ok {
 			return data, true, "semantic"
 		}
 	}
@@ -275,13 +277,13 @@ func (c *ResponseCache) Lookup(key, model string, stream bool, embed func() ([]f
 		model = "unknown"
 	}
 	c.recordMiss("exact", model)
-	if c.logger != nil && c.logger.Enabled(context.Background(), slog.LevelDebug) {
+	if c.logger != nil && c.logger.Enabled(ctx, slog.LevelDebug) {
 		c.logger.Debug("cache miss", "model", model, "type", "exact")
 	}
 	return nil, false, ""
 }
 
-func (c *ResponseCache) lookupSemantic(key, model string, stream bool, embed func() ([]float32, error)) ([]byte, bool) {
+func (c *ResponseCache) lookupSemantic(ctx context.Context, key, model string, stream bool, embed func() ([]float32, error)) ([]byte, bool) {
 	if embed == nil {
 		// No embedder wired for this request: the semantic fallback cannot
 		// run (treated as a miss, never a panic).
@@ -291,7 +293,7 @@ func (c *ResponseCache) lookupSemantic(key, model string, stream bool, embed fun
 	vec, err := embed()
 	if err != nil {
 		c.recordMiss("semantic", model)
-		if c.logger != nil && c.logger.Enabled(context.Background(), slog.LevelDebug) {
+		if c.logger != nil && c.logger.Enabled(ctx, slog.LevelDebug) {
 			c.logger.Debug("cache semantic embedding failed", "model", model, "err", err)
 		}
 		return nil, false
@@ -305,7 +307,7 @@ func (c *ResponseCache) lookupSemantic(key, model string, stream bool, embed fun
 	cachedKeyBytes, similarity, ok := idx.Search(vec, c.similarityThreshold)
 	if !ok {
 		c.recordMiss("semantic", model)
-		if c.logger != nil && c.logger.Enabled(context.Background(), slog.LevelDebug) {
+		if c.logger != nil && c.logger.Enabled(ctx, slog.LevelDebug) {
 			c.logger.Debug("cache semantic miss", "model", model)
 		}
 		return nil, false
@@ -322,7 +324,7 @@ func (c *ResponseCache) lookupSemantic(key, model string, stream bool, embed fun
 		data := semEntry.data
 		c.mu.RUnlock()
 		c.recordSemanticHit(model, similarity)
-		if c.logger != nil && c.logger.Enabled(context.Background(), slog.LevelDebug) {
+		if c.logger != nil && c.logger.Enabled(ctx, slog.LevelDebug) {
 			c.logger.Debug("cache semantic hit", "model", model, "similarity", similarity)
 		}
 		return data, true
@@ -361,7 +363,11 @@ func (c *ResponseCache) recordMiss(cacheType, model string) {
 // embedding in the key's auth+model semantic namespace when one is present.
 // stream records the response shape (semantic hits only serve same-shape
 // requests).
-func (c *ResponseCache) Store(key, model string, stream bool, data []byte, embedding []float32) {
+// Store inserts an entry, evicting when over capacity. ctx feeds the
+// eviction debug gate — Store runs on the REQUEST path (stream capture), so
+// the gate must not fall back to context.Background() (NENYA-332; the
+// janitor caller passes a marked background context).
+func (c *ResponseCache) Store(ctx context.Context, key, model string, stream bool, data []byte, embedding []float32) {
 	if key == "" || len(data) == 0 {
 		return
 	}
@@ -389,7 +395,7 @@ func (c *ResponseCache) Store(key, model string, stream bool, data []byte, embed
 		}
 	} else {
 		if len(c.items) >= c.maxSize {
-			c.evictLocked()
+			c.evictLocked(ctx)
 		}
 
 		elem := c.order.PushFront(key)
@@ -482,7 +488,7 @@ func (c *ResponseCache) evictOverflowLocked() int {
 	return evictedCount
 }
 
-func (c *ResponseCache) evictLocked() {
+func (c *ResponseCache) evictLocked(ctx context.Context) {
 	now := time.Now()
 	evictedCount := c.evictExpiredLocked(now)
 	evictedCount += c.evictOverflowLocked()
@@ -490,7 +496,7 @@ func (c *ResponseCache) evictLocked() {
 	if c.semanticEnabled && c.metrics != nil {
 		c.metrics.SetSemanticCacheEntries(int64(c.semanticEntryCountLocked()))
 	}
-	if evictedCount > 0 && c.logger != nil && c.logger.Enabled(context.Background(), slog.LevelDebug) {
+	if evictedCount > 0 && c.logger != nil && c.logger.Enabled(ctx, slog.LevelDebug) {
 		c.logger.Debug("cache eviction", "evicted", evictedCount)
 	}
 }
@@ -512,7 +518,7 @@ func (c *ResponseCache) startEvicter(interval time.Duration) {
 			select {
 			case <-ticker.C:
 				c.mu.Lock()
-				c.evictLocked()
+				c.evictLocked(context.Background()) // background-janitor: the eviction ticker has no request scope
 				c.mu.Unlock()
 			case <-c.stopCh:
 				return

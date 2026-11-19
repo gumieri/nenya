@@ -1,6 +1,7 @@
 package infra
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -82,14 +83,14 @@ func TestResponseCache_CacheMetrics(t *testing.T) {
 	cache := NewResponseCache(10, 1<<20, 1*time.Hour, 1*time.Hour, metrics, nil, false, 0.9, nil)
 	defer cache.Stop()
 
-	cache.Store("key1", "m", false, []byte("response1"), nil)
+	cache.Store(context.Background(), "key1", "m", false, []byte("response1"), nil)
 
-	data, ok, _ := cache.Lookup("key1", "", false, nil)
+	data, ok, _ := cache.Lookup(context.Background(), "key1", "", false, nil)
 	if !ok || string(data) != "response1" {
 		t.Fatal("cache hit should return value")
 	}
 
-	_, ok, _ = cache.Lookup("nonexistent", "", false, nil)
+	_, ok, _ = cache.Lookup(context.Background(), "nonexistent", "", false, nil)
 	if ok {
 		t.Fatal("nonexistent key should not be found")
 	}
@@ -110,20 +111,20 @@ func TestResponseCache_StoreAndLookup(t *testing.T) {
 	cache := NewResponseCache(10, 1<<20, 1*time.Hour, 1*time.Hour, nil, nil, false, 0.9, nil)
 	defer cache.Stop()
 
-	cache.Store("key1", "m", false, []byte("response1"), nil)
-	cache.Store("key2", "m", false, []byte("response2"), nil)
+	cache.Store(context.Background(), "key1", "m", false, []byte("response1"), nil)
+	cache.Store(context.Background(), "key2", "m", false, []byte("response2"), nil)
 
-	data, ok, _ := cache.Lookup("key1", "", false, nil)
+	data, ok, _ := cache.Lookup(context.Background(), "key1", "", false, nil)
 	if !ok || string(data) != "response1" {
 		t.Fatalf("expected response1, got %q, ok=%v", string(data), ok)
 	}
 
-	data, ok, _ = cache.Lookup("key2", "", false, nil)
+	data, ok, _ = cache.Lookup(context.Background(), "key2", "", false, nil)
 	if !ok || string(data) != "response2" {
 		t.Fatalf("expected response2, got %q, ok=%v", string(data), ok)
 	}
 
-	_, ok, _ = cache.Lookup("nonexistent", "", false, nil)
+	_, ok, _ = cache.Lookup(context.Background(), "nonexistent", "", false, nil)
 	if ok {
 		t.Fatal("nonexistent key should not be found")
 	}
@@ -133,16 +134,16 @@ func TestResponseCache_TTLExpiration(t *testing.T) {
 	cache := NewResponseCache(10, 1<<20, 100*time.Millisecond, 50*time.Millisecond, nil, nil, false, 0.9, nil)
 	defer cache.Stop()
 
-	cache.Store("key1", "m", false, []byte("response1"), nil)
+	cache.Store(context.Background(), "key1", "m", false, []byte("response1"), nil)
 
-	data, ok, _ := cache.Lookup("key1", "", false, nil)
+	data, ok, _ := cache.Lookup(context.Background(), "key1", "", false, nil)
 	if !ok || string(data) != "response1" {
 		t.Fatal("should find entry immediately")
 	}
 
 	time.Sleep(150 * time.Millisecond)
 
-	_, ok, _ = cache.Lookup("key1", "", false, nil)
+	_, ok, _ = cache.Lookup(context.Background(), "key1", "", false, nil)
 	if ok {
 		t.Fatal("expired entry should not be found")
 	}
@@ -156,31 +157,31 @@ func TestResponseCache_LRU_Eviction(t *testing.T) {
 	cache := NewResponseCache(3, 1<<20, 1*time.Hour, 1*time.Hour, nil, nil, false, 0.9, nil)
 	defer cache.Stop()
 
-	cache.Store("key1", "m", false, []byte("a"), nil)
-	cache.Store("key2", "m", false, []byte("b"), nil)
-	cache.Store("key3", "m", false, []byte("c"), nil)
+	cache.Store(context.Background(), "key1", "m", false, []byte("a"), nil)
+	cache.Store(context.Background(), "key2", "m", false, []byte("b"), nil)
+	cache.Store(context.Background(), "key3", "m", false, []byte("c"), nil)
 
 	if cache.Len() != 3 {
 		t.Fatalf("expected 3 entries, got %d", cache.Len())
 	}
 
-	cache.Store("key4", "m", false, []byte("d"), nil)
+	cache.Store(context.Background(), "key4", "m", false, []byte("d"), nil)
 
 	if cache.Len() != 3 {
 		t.Fatalf("expected 3 entries after eviction, got %d", cache.Len())
 	}
 
-	_, ok, _ := cache.Lookup("key1", "", false, nil)
+	_, ok, _ := cache.Lookup(context.Background(), "key1", "", false, nil)
 	if ok {
 		t.Fatal("oldest entry (key1) should have been evicted")
 	}
 
-	data, ok, _ := cache.Lookup("key2", "", false, nil)
+	data, ok, _ := cache.Lookup(context.Background(), "key2", "", false, nil)
 	if !ok || string(data) != "b" {
 		t.Fatal("key2 should still exist")
 	}
 
-	data, ok, _ = cache.Lookup("key4", "", false, nil)
+	data, ok, _ = cache.Lookup(context.Background(), "key4", "", false, nil)
 	if !ok || string(data) != "d" {
 		t.Fatal("key4 should exist")
 	}
@@ -190,16 +191,16 @@ func TestResponseCache_MaxEntryBytes(t *testing.T) {
 	cache := NewResponseCache(10, 100, 1*time.Hour, 1*time.Hour, nil, nil, false, 0.9, nil)
 	defer cache.Stop()
 
-	cache.Store("small", "m", false, []byte("hello"), nil)
-	data, ok, _ := cache.Lookup("small", "", false, nil)
+	cache.Store(context.Background(), "small", "m", false, []byte("hello"), nil)
+	data, ok, _ := cache.Lookup(context.Background(), "small", "", false, nil)
 	if !ok || string(data) != "hello" {
 		t.Fatal("small entry should be stored")
 	}
 
 	largeData := strings.Repeat("x", 200)
-	cache.Store("large", "m", false, []byte(largeData), nil)
+	cache.Store(context.Background(), "large", "m", false, []byte(largeData), nil)
 
-	_, ok, _ = cache.Lookup("large", "", false, nil)
+	_, ok, _ = cache.Lookup(context.Background(), "large", "", false, nil)
 	if ok {
 		t.Fatal("oversized entry should not be stored")
 	}
@@ -213,14 +214,14 @@ func TestResponseCache_StoreUpdate(t *testing.T) {
 	cache := NewResponseCache(10, 1<<20, 1*time.Hour, 1*time.Hour, nil, nil, false, 0.9, nil)
 	defer cache.Stop()
 
-	cache.Store("key1", "m", false, []byte("v1"), nil)
-	cache.Store("key1", "m", false, []byte("v2"), nil)
+	cache.Store(context.Background(), "key1", "m", false, []byte("v1"), nil)
+	cache.Store(context.Background(), "key1", "m", false, []byte("v2"), nil)
 
 	if cache.Len() != 1 {
 		t.Fatalf("expected 1 entry after update, got %d", cache.Len())
 	}
 
-	data, ok, _ := cache.Lookup("key1", "", false, nil)
+	data, ok, _ := cache.Lookup(context.Background(), "key1", "", false, nil)
 	if !ok || string(data) != "v2" {
 		t.Fatalf("expected v2, got %q", data)
 	}
@@ -230,17 +231,17 @@ func TestResponseCache_EmptyKeyAndData(t *testing.T) {
 	cache := NewResponseCache(10, 1<<20, 1*time.Hour, 1*time.Hour, nil, nil, false, 0.9, nil)
 	defer cache.Stop()
 
-	cache.Store("", "m", false, []byte("data"), nil)
+	cache.Store(context.Background(), "", "m", false, []byte("data"), nil)
 	if cache.Len() != 0 {
 		t.Fatal("empty key should not be stored")
 	}
 
-	cache.Store("key", "m", false, nil, nil)
+	cache.Store(context.Background(), "key", "m", false, nil, nil)
 	if cache.Len() != 0 {
 		t.Fatal("nil data should not be stored")
 	}
 
-	cache.Store("key", "m", false, []byte{}, nil)
+	cache.Store(context.Background(), "key", "m", false, []byte{}, nil)
 	if cache.Len() != 0 {
 		t.Fatal("empty data should not be stored")
 	}
@@ -251,7 +252,7 @@ func TestResponseCache_BackgroundEvictor(t *testing.T) {
 	defer cache.Stop()
 
 	for i := 0; i < 50; i++ {
-		cache.Store(fmt.Sprintf("key%d", i), "m", false, []byte(fmt.Sprintf("val%d", i)), nil)
+		cache.Store(context.Background(), fmt.Sprintf("key%d", i), "m", false, []byte(fmt.Sprintf("val%d", i)), nil)
 	}
 
 	if cache.Len() != 50 {
@@ -292,10 +293,10 @@ func TestResponseCache_ConcurrentAccess(t *testing.T) {
 		go func(idx int) {
 			defer wg.Done()
 			key := fmt.Sprintf("key%d", idx)
-			cache.Store(key, "m", false, []byte(fmt.Sprintf("val%d", idx)), nil)
+			cache.Store(context.Background(), key, "m", false, []byte(fmt.Sprintf("val%d", idx)), nil)
 			time.Sleep(time.Microsecond * time.Duration(idx%5))
-			cache.Lookup(key, "", false, nil)
-			cache.Lookup("nonexistent", "", false, nil)
+			cache.Lookup(context.Background(), key, "", false, nil)
+			cache.Lookup(context.Background(), "nonexistent", "", false, nil)
 		}(i)
 	}
 	wg.Wait()
@@ -310,28 +311,28 @@ func TestResponseCache_BackgroundEvictorRemovesExpiredFirst(t *testing.T) {
 	cache := NewResponseCache(5, 1<<20, 50*time.Millisecond, 20*time.Millisecond, nil, nil, false, 0.9, nil)
 	defer cache.Stop()
 
-	cache.Store("expires-soon", "m", false, []byte("a"), nil)
-	cache.Store("expires-soon-2", "m", false, []byte("b"), nil)
+	cache.Store(context.Background(), "expires-soon", "m", false, []byte("a"), nil)
+	cache.Store(context.Background(), "expires-soon-2", "m", false, []byte("b"), nil)
 
 	time.Sleep(70 * time.Millisecond)
 
 	for i := 0; i < 3; i++ {
-		cache.Store(fmt.Sprintf("fresh%d", i), "m", false, []byte(fmt.Sprintf("f%d", i)), nil)
+		cache.Store(context.Background(), fmt.Sprintf("fresh%d", i), "m", false, []byte(fmt.Sprintf("f%d", i)), nil)
 	}
 
 	time.Sleep(40 * time.Millisecond)
 
-	_, ok, _ := cache.Lookup("expires-soon", "", false, nil)
+	_, ok, _ := cache.Lookup(context.Background(), "expires-soon", "", false, nil)
 	if ok {
 		t.Fatal("expired entries should be cleaned up by background evictor")
 	}
-	_, ok, _ = cache.Lookup("expires-soon-2", "", false, nil)
+	_, ok, _ = cache.Lookup(context.Background(), "expires-soon-2", "", false, nil)
 	if ok {
 		t.Fatal("expired entries should be cleaned up by background evictor")
 	}
 
 	for i := 0; i < 3; i++ {
-		_, ok, _ := cache.Lookup(fmt.Sprintf("fresh%d", i), "", false, nil)
+		_, ok, _ := cache.Lookup(context.Background(), fmt.Sprintf("fresh%d", i), "", false, nil)
 		if !ok {
 			t.Fatalf("fresh entry fresh%d should still exist", i)
 		}
