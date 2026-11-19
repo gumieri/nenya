@@ -1139,6 +1139,17 @@ func recordStreamResult(gw *gateway.NenyaGateway, o streamOutcome) {
 		gw.AgentState.CB.ReleaseHalfOpen(o.target.CoolKey)
 		return
 	}
+	if errors.Is(o.copyErr, errReaderNoProgress) {
+		// An internal reader-stack invariant violation (a reader returning
+		// (0, nil) forever), not a provider fault — no cooldown/breaker
+		// charge, only telemetry (NENYA-332 review: it would otherwise be a
+		// false failover signal against the provider's health).
+		gw.Logger.Warn("internal: stream reader made no progress",
+			"model", o.target.Model, "provider", o.target.Provider, "err", o.copyErr)
+		gw.Metrics.RecordStreamInterrupt(o.target.Model, o.target.Provider, "internal_no_progress")
+		gw.AgentState.CB.ReleaseHalfOpen(o.target.CoolKey)
+		return
+	}
 	gw.Logger.Warn("stream copy error (upstream)",
 		"model", o.target.Model, "provider", o.target.Provider, "err", o.copyErr)
 	gw.AgentState.RecordFailure(o.target, o.cooldownDuration)
@@ -1210,7 +1221,7 @@ func storeStreamCache(gw *gateway.NenyaGateway, cacheKey string, captureBuf *byt
 	// agent routes the alias and the resolved upstream model differ, and a
 	// mismatch would silently disable semantic hits.
 	modelName, _ := payload["model"].(string)
-	gw.ResponseCache.Store(cacheKey, modelName, true, captured, embedding)
+	gw.ResponseCache.Store(reqCtx, cacheKey, modelName, true, captured, embedding)
 	gw.Logger.Debug("response cache stored", "size", len(captured), "has_embedding", embedding != nil)
 }
 

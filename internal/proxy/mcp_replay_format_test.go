@@ -52,7 +52,7 @@ func TestConvertBufferedForReplay(t *testing.T) {
 			RawBytes:      []byte(anthropicFrames),
 			ServingTarget: routing.UpstreamTarget{Provider: "prov", Model: "m", Format: "anthropic"},
 		}
-		out := string(mcpproxy.ConvertBufferedForReplay(p.mcpHost(), gw, buf, "openai", nil))
+		out := string(mcpproxy.ConvertBufferedForReplay(context.Background(), p.mcpHost(), gw, buf, "openai", nil))
 		if !strings.Contains(out, `"choices"`) {
 			t.Fatalf("an OpenAI client must receive OpenAI chunks, got:\n%s", out)
 		}
@@ -69,7 +69,7 @@ func TestConvertBufferedForReplay(t *testing.T) {
 			RawBytes:      []byte(openAIFrames),
 			ServingTarget: routing.UpstreamTarget{Provider: "prov", Model: "m", Format: "openai"},
 		}
-		out := string(mcpproxy.ConvertBufferedForReplay(p.mcpHost(), gw, buf, "anthropic", nil))
+		out := string(mcpproxy.ConvertBufferedForReplay(context.Background(), p.mcpHost(), gw, buf, "anthropic", nil))
 		if !strings.Contains(out, `"message_stop"`) {
 			t.Fatalf("an Anthropic client must receive the message_stop terminator:\n%s", out)
 		}
@@ -86,7 +86,7 @@ func TestConvertBufferedForReplay(t *testing.T) {
 			RawBytes:      []byte(openAIFrames),
 			ServingTarget: routing.UpstreamTarget{Provider: "prov", Model: "m", Format: "openai"},
 		}
-		out := mcpproxy.ConvertBufferedForReplay(p.mcpHost(), gw, buf, "openai", nil)
+		out := mcpproxy.ConvertBufferedForReplay(context.Background(), p.mcpHost(), gw, buf, "openai", nil)
 		if string(out) != openAIFrames {
 			t.Fatalf("a matching format must replay verbatim:\n%s", out)
 		}
@@ -105,7 +105,7 @@ func TestReplayGuardedWritesClientFormat(t *testing.T) {
 		ServingTarget: routing.UpstreamTarget{Provider: "prov", Model: "m", Format: "anthropic"},
 	}
 	w := httptest.NewRecorder()
-	mcpproxy.ReplayGuardedBufferedWithProvider(p.mcpHost(), gw, w, buf, "prov", "test-agent", "openai", nil)
+	mcpproxy.ReplayGuardedBufferedWithProvider(context.Background(), p.mcpHost(), gw, w, buf, "prov", "test-agent", "openai", nil)
 
 	body := w.Body.String()
 	if !strings.Contains(body, `"choices"`) || strings.Contains(body, "message_start") {
@@ -134,7 +134,7 @@ func TestConvertBufferedForReplay_ResponsesSentinel(t *testing.T) {
 		RawBytes:      []byte(frames),
 		ServingTarget: routing.UpstreamTarget{Provider: "openai", Model: "gpt-6-luna", Format: "openai-responses"},
 	}
-	out := string(mcpproxy.ConvertBufferedForReplay(p.mcpHost(), gw, buf, "openai", nil))
+	out := string(mcpproxy.ConvertBufferedForReplay(context.Background(), p.mcpHost(), gw, buf, "openai", nil))
 	if !strings.Contains(out, `"choices"`) {
 		t.Fatalf("a chat client must receive chat chunks, got:\n%s", out)
 	}

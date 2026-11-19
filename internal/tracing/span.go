@@ -38,6 +38,14 @@ type Span struct {
 	start     time.Time
 	logger    *slog.Logger
 	hasParent bool
+	// debugEnabled caches the logger's Debug gate, evaluated against the
+	// span's OWN context at creation (NENYA-332: End() previously probed it
+	// with context.Background(), severing request-scoped context; End is
+	// defer-called with no ctx available). SNAPSHOT SEMANTICS: the gate is
+	// evaluated once at creation — a slog LevelVar raised mid-span skips
+	// End's record. Acceptable: spans live for milliseconds and the
+	// snapshot also skips a per-End Enabled evaluation on the hot path.
+	debugEnabled bool
 	// linkTraceID/linkSpanID carry the CURRENT (innermost) span when the
 	// gateway roots its own trace for gateway-initiated work (MCP loop,
 	// engine calls): that context is linked for correlation, never adopted as
@@ -60,12 +68,13 @@ func StartSpan(ctx context.Context, logger *slog.Logger, name string) (context.C
 	}
 	if parent, ok := ctx.Value(ctxKey{}).(Span); ok {
 		child := &Span{
-			name:      name,
-			sc:        SpanContext{TraceID: parent.sc.TraceID, SpanID: NewSpanID(), Sampled: parent.sc.Sampled},
-			parentID:  parent.sc.SpanID,
-			start:     time.Now(),
-			logger:    logger,
-			hasParent: true,
+			name:         name,
+			sc:           SpanContext{TraceID: parent.sc.TraceID, SpanID: NewSpanID(), Sampled: parent.sc.Sampled},
+			parentID:     parent.sc.SpanID,
+			start:        time.Now(),
+			logger:       logger,
+			hasParent:    true,
+			debugEnabled: logger != nil && logger.Enabled(ctx, slog.LevelDebug),
 		}
 		return context.WithValue(ctx, ctxKey{}, *child), child
 	}
@@ -89,7 +98,13 @@ func StartTrace(ctx context.Context, logger *slog.Logger, name, inboundParent st
 	}
 	traceID, spanID := NewIDs()
 	sc := SpanContext{TraceID: traceID, SpanID: spanID, Sampled: true}
-	span := &Span{name: name, sc: sc, start: time.Now(), logger: logger}
+	span := &Span{
+		name:         name,
+		sc:           sc,
+		start:        time.Now(),
+		logger:       logger,
+		debugEnabled: logger != nil && logger.Enabled(ctx, slog.LevelDebug),
+	}
 	if inbound, ok := ParseTraceparent(inboundParent); ok {
 		span.sc.TraceID = inbound.TraceID
 		span.sc.Sampled = inbound.Sampled
@@ -113,10 +128,11 @@ func StartGatewaySpan(ctx context.Context, logger *slog.Logger, name string) (co
 	}
 	traceID, spanID := NewIDs()
 	span := &Span{
-		name:   name,
-		sc:     SpanContext{TraceID: traceID, SpanID: spanID, Sampled: true},
-		start:  time.Now(),
-		logger: logger,
+		name:         name,
+		sc:           SpanContext{TraceID: traceID, SpanID: spanID, Sampled: true},
+		start:        time.Now(),
+		logger:       logger,
+		debugEnabled: logger != nil && logger.Enabled(ctx, slog.LevelDebug),
 	}
 	if parent, ok := ctx.Value(ctxKey{}).(Span); ok {
 		span.linkTraceID = parent.sc.TraceID.String()
@@ -133,8 +149,9 @@ func StartGatewaySpan(ctx context.Context, logger *slog.Logger, name string) (co
 // End completes the span, emitting one structured slog record. Safe to call
 // on a nil span.
 func (s *Span) End() {
-	if s == nil || s.logger == nil || !s.logger.Enabled(context.Background(), slog.LevelDebug) {
-		// Skip the hex encodings when Debug is off (the common case).
+	if s == nil || s.logger == nil || !s.debugEnabled {
+		// Skip the hex encodings when Debug is off (the common case); the
+		// gate was cached against the span's own context at creation.
 		return
 	}
 	attrs := []any{

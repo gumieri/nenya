@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/nenya/config"
 	"github.com/nenya/internal/util"
 )
 
@@ -47,23 +48,29 @@ func (s *jsonScanner) skipIgnorable() {
 }
 
 // skipComment advances past a // or /* */ comment at s.i, reporting whether
-// it actually was one.
+// it actually was one. The block-comment grammar mirrors the loader's
+// config.StripComments skipBlockComment EXACTLY — including its quirk of
+// closing a comment at the first `*/` EVEN WHEN the `*` is the opener
+// (`/*/` is a complete 3-byte comment for the loader). The editor splices
+// against the document the loader actually sees; divergent comment
+// grammars compute offsets over different bytes and corrupt the config.
 func (s *jsonScanner) skipComment() bool {
 	if s.i+1 >= len(s.data) {
 		return false
 	}
 	switch s.data[s.i+1] {
 	case '/':
-		for s.i < len(s.data) && s.data[s.i] != '\n' {
+		for s.i < len(s.data) && s.data[s.i] != '\n' && s.data[s.i] != '\r' {
 			s.i++
 		}
 		return true
 	case '*':
-		s.i += 2
-		for s.i+1 < len(s.data) && (s.data[s.i] != '*' || s.data[s.i+1] != '/') {
+		for s.i < len(s.data) && (s.data[s.i] != '*' || s.i+1 >= len(s.data) || s.data[s.i+1] != '/') {
 			s.i++
 		}
-		s.i = min(s.i+2, len(s.data))
+		if s.i+1 < len(s.data) {
+			s.i += 2
+		}
 		return true
 	}
 	return false
@@ -110,7 +117,8 @@ func (s *jsonScanner) skipValue() (start, end int, ok bool) {
 	default:
 		for s.i < len(s.data) {
 			switch s.data[s.i] {
-			case ',', '}', ']', ' ', '\t', '\n', '\r':
+			case ',', '}', ']', ' ', '\t', '\n', '\r',
+				'/': // a comment may follow a bare literal (0/*x*/}); the scan must not swallow it
 				return start, s.i, s.i > start
 			}
 			s.i++
@@ -155,12 +163,19 @@ func (s *jsonScanner) skipComposite() (start, end int, ok bool) {
 }
 
 // objectKeySpan locates key inside the object whose body starts at bodyStart
-// (the offset just after its '{').
+// (the offset just after its '{'). On DUPLICATE keys the LAST occurrence
+// wins — matching encoding/json's last-value-wins, which is what the loader
+// (and therefore the effective config) reads (NENYA-332 review round 2:
+// rewriting the first occurrence silently edited a dead value).
 func objectKeySpan(data []byte, bodyStart int, key string) (valStart, valEnd int, ok bool) {
 	s := &jsonScanner{data: data, i: bodyStart}
+	lastVS, lastVE := -1, -1
 	for {
 		s.skipIgnorable()
 		if s.i >= len(data) || data[s.i] == '}' {
+			if lastVS >= 0 {
+				return lastVS, lastVE, true
+			}
 			return 0, 0, false
 		}
 		if data[s.i] == ',' {
@@ -184,14 +199,19 @@ func objectKeySpan(data []byte, bodyStart int, key string) (valStart, valEnd int
 			return 0, 0, false
 		}
 		if gotKey == key {
-			return vs, ve, true
+			lastVS, lastVE = vs, ve
 		}
 	}
 }
 
 // objectInsertOffset returns where a new member may be inserted in the object
 // whose body starts at bodyStart, and whether the object is empty (no leading
-// comma needed). Comments that trail the last value stay attached to it.
+// comma needed). The insertion point sits immediately after the last VALUE:
+// a comment trailing that value re-attaches to the NEWLY INSERTED member
+// (NENYA-332 round 2 — the bare-literal scan terminates at '/'). A member
+// position must hold `"key": value` — anything else means the body
+// is malformed and the splice refuses (ok=false) rather than corrupting the
+// document further.
 func objectInsertOffset(data []byte, bodyStart int) (offset int, empty bool, ok bool) {
 	s := &jsonScanner{data: data, i: bodyStart}
 	lastEnd := -1
@@ -210,6 +230,17 @@ func objectInsertOffset(data []byte, bodyStart int) (offset int, empty bool, ok 
 			s.i++
 			continue
 		}
+		if data[s.i] != '"' {
+			return 0, false, false
+		}
+		if _, keyOK := s.skipString(); !keyOK {
+			return 0, false, false
+		}
+		s.skipIgnorable()
+		if s.i >= len(data) || data[s.i] != ':' {
+			return 0, false, false
+		}
+		s.i++
 		_, ve, valueOK := s.skipValue()
 		if !valueOK {
 			return 0, false, false
@@ -248,6 +279,14 @@ func spliceConfigKey(doc []byte, dottedKey string, value any) ([]byte, error) {
 	}
 	if len(bytes.TrimSpace(doc)) == 0 {
 		return buildNestedDocument(parts, encoded, indentUnit), nil
+	}
+
+	// Fail-closed gate (NENYA-332): the editor splices byte spans into the
+	// LIVE config file — feeding it a malformed document must error, never
+	// produce a differently-corrupted file. Comments are stripped first (the
+	// loader's grammar), then standard JSON validity is required.
+	if !json.Valid(config.StripComments(doc)) {
+		return nil, fmt.Errorf("config document is not valid JSON(C); refusing to splice")
 	}
 
 	root := &jsonScanner{data: doc}

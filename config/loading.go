@@ -12,6 +12,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 )
 
@@ -34,6 +35,21 @@ func (e *ConfigNotFoundError) Error() string { return e.Detail }
 
 // Is reports ConfigNotFoundError as ErrConfigNotFound.
 func (e *ConfigNotFoundError) Is(target error) bool { return target == ErrConfigNotFound }
+
+// loadedConfigRoot records the directory of the config file config.Load
+// accepted (set once at boot/reload). validatePromptPath bounds prompt-file
+// paths to it when no explicit CONFIG_DIR override exists — production sets
+// NENYA_CONFIG_DIR or --config, and the loaded file's directory is the
+// resolved root in every launch mode (NENYA-332: the old CONFIG_DIR-only
+// check never engaged in real deployments because nothing sets that env
+// var; absolute prompt paths were unbounded when it was unset).
+var loadedConfigRoot atomic.Value // string
+
+// recordConfigRoot stores the resolved config root (best-effort singleton;
+// a reload refreshes it).
+func recordConfigRoot(dir string) {
+	loadedConfigRoot.Store(dir)
+}
 
 // Load reads and parses a single JSON config file from path. Returns
 // the parsed Config with defaults applied, or an error if the file
@@ -65,6 +81,7 @@ func LoadWithDiagnostics(path string) (*Config, []Diagnostic, error) {
 	if err := ApplyDefaults(cfg); err != nil {
 		return nil, nil, fmt.Errorf("failed to apply defaults: %w", err)
 	}
+	recordConfigRoot(filepath.Dir(path))
 	return cfg, diags, nil
 }
 
@@ -197,6 +214,11 @@ func LoadFromDirWithDiagnostics(dir string) (*Config, []Diagnostic, error) {
 	if err := ApplyDefaults(merged); err != nil {
 		return nil, nil, fmt.Errorf("failed to apply defaults: %w", err)
 	}
+	// Directory launch mode (--config-dir / NENYA_CONFIG_DIR): record the
+	// resolved root so absolute prompt-path validation bounds against it
+	// (NENYA-332 round 2 — file-mode Load records it; this mode did not,
+	// leaving the boundary at cwd).
+	recordConfigRoot(dir)
 	return merged, diags, nil
 }
 
@@ -431,30 +453,77 @@ func validatePromptPath(filePath string) error {
 		return fmt.Errorf("prompt file path escapes working directory: %s", filePath)
 	}
 
-	absPath, err := filepath.Abs(filePath)
+	// Boundary selection (NENYA-332): RELATIVE paths resolve against the
+	// process working directory at read time (os.ReadFile) — their boundary
+	// is the cwd. ABSOLUTE paths are bounded by the config root: an
+	// explicit CONFIG_DIR override wins (ops escape hatch / tests),
+	// otherwise the directory of the LOADED config file (production sets
+	// NENYA_CONFIG_DIR or --config; the loaded file's directory is the
+	// resolved root in every launch mode), last resort the working
+	// directory.
+	boundary := "."
+	if filepath.IsAbs(cleaned) {
+		boundary, _ = loadedConfigRoot.Load().(string)
+		if envDir := os.Getenv("CONFIG_DIR"); envDir != "" {
+			boundary = envDir
+		}
+		if boundary == "" {
+			boundary = "."
+		}
+	}
+
+	absConfigDir, err := filepath.Abs(boundary)
+	if err != nil {
+		return fmt.Errorf("cannot resolve absolute path for config directory: %w", err)
+	}
+	absPath, err := filepath.Abs(cleaned)
 	if err != nil {
 		return fmt.Errorf("cannot resolve absolute path for prompt file: %w", err)
 	}
 
-	configDir := os.Getenv("CONFIG_DIR")
-	if configDir == "" {
+	// Containment is decided by checkSymlinkContainment: the RESOLVED pair
+	// is authoritative when both sides resolve (a symlinked config root or
+	// a symlinked prompt compares at its true location); the lexical
+	// compare is the fallback when resolution is not possible.
+	return checkSymlinkContainment(absPath, absConfigDir, filePath)
+}
+
+// escapesBoundary reports whether path sits outside root.
+func escapesBoundary(root, path string) bool {
+	rel, err := filepath.Rel(root, path)
+	if err != nil {
+		return true
+	}
+	return strings.HasPrefix(rel, ".."+string(filepath.Separator)) || rel == ".."
+}
+
+// checkSymlinkContainment decides prompt-path containment. When both the
+// candidate and the boundary resolve, the RESOLVED pair is authoritative: a
+// path inside a SYMLINKED config root passes (its true location is inside
+// the resolved root) while an escape symlink fails — the lexical-only check
+// got both of those wrong (NENYA-332 review rounds 2-4). When resolution is
+// not possible (missing target), the lexical pair decides and a missing
+// target keeps the lexical verdict — the later os.ReadFile fails on it
+// anyway. Known limit (documented defense-in-depth; the cross-ref names the
+// containment shape — secrets_refs.go documents containment but not a race
+// limit): the check races with the later read — a file swapped to an escape
+// symlink between check and read bypasses containment; closing that fully
+// needs openat/O_NOFOLLOW-style reads. NOTE: this check deliberately fails
+// OPEN on EvalSymlinks errors where secrets_refs.go fails CLOSED — every
+// EvalSymlinks failure mode (ENOENT/EACCES/ELOOP) also fails the later
+// read, and the fallback lexical check still bounds the path.
+func checkSymlinkContainment(absPath, absConfigDir, original string) error {
+	resolved, resErr := filepath.EvalSymlinks(absPath)
+	resolvedRoot, rootErr := filepath.EvalSymlinks(absConfigDir)
+	if resErr == nil && rootErr == nil {
+		if escapesBoundary(resolvedRoot, resolved) {
+			return fmt.Errorf("prompt file path resolves outside config directory: %s", original)
+		}
 		return nil
 	}
-
-	absConfigDir, err := filepath.Abs(configDir)
-	if err != nil {
-		return fmt.Errorf("cannot resolve absolute path for config directory: %w", err)
+	if escapesBoundary(absConfigDir, absPath) {
+		return fmt.Errorf("prompt file path escapes config directory: %s", original)
 	}
-
-	relPath, err := filepath.Rel(absConfigDir, absPath)
-	if err != nil {
-		return fmt.Errorf("cannot compute relative path for prompt file: %w", err)
-	}
-
-	if strings.HasPrefix(relPath, ".."+string(filepath.Separator)) || relPath == ".." {
-		return fmt.Errorf("prompt file path escapes config directory: %s", filePath)
-	}
-
 	return nil
 }
 

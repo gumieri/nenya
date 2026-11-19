@@ -298,16 +298,7 @@ func (df *DiscoveryFetcher) fetchProviderModels(ctx context.Context, providerNam
 	providerCtx, cancel := context.WithTimeout(ctx, fetchTimeout)
 	defer cancel()
 
-	req, err := http.NewRequestWithContext(providerCtx, "GET", endpoint, nil)
-	if err != nil {
-		return nil, fmt.Errorf("discovery request: %w", err)
-	}
-
-	if err = injectAuth(req, providerName, provider, df); err != nil {
-		return nil, fmt.Errorf("discovery auth: %w", err)
-	}
-
-	resp, err := df.fetchWithRetry(providerCtx, client, req, provider)
+	resp, err := df.fetchWithRetry(providerCtx, client, "GET", endpoint, provider)
 	if err != nil {
 		return nil, fmt.Errorf("discovery fetch: %w", err)
 	}
@@ -446,8 +437,13 @@ func backfillStaticModels(models []DiscoveredModel, providerName string, provide
 	return models
 }
 
-// fetchWithRetry executes the HTTP request with retries and records retry metrics.
-func (df *DiscoveryFetcher) fetchWithRetry(ctx context.Context, client *http.Client, req *http.Request, provider *config.Provider) (*http.Response, error) {
+// fetchWithRetry executes the HTTP request with retries and records retry
+// metrics. The request is REBUILT per attempt (NENYA-332): reusing one
+// *http.Request is benign for bodiless GETs but latent for bodied callers —
+// a transport consumes the body on attempt 1, so attempt 2 would send an
+// empty body. Callers pass the method/endpoint/auth inputs; the closure
+// re-injects auth on the fresh request every attempt.
+func (df *DiscoveryFetcher) fetchWithRetry(ctx context.Context, client *http.Client, method, endpoint string, provider *config.Provider) (*http.Response, error) {
 	maxAttempts := df.maxAttempts
 	if provider.MaxRetryAttempts > 0 {
 		maxAttempts = provider.MaxRetryAttempts
@@ -457,6 +453,13 @@ func (df *DiscoveryFetcher) fetchWithRetry(ctx context.Context, client *http.Cli
 	attempt := 0
 	return util.DoWithRetryResp(ctx, maxAttempts, func() (*http.Response, error) {
 		attempt++
+		req, err := http.NewRequestWithContext(ctx, method, endpoint, nil)
+		if err != nil {
+			return nil, &util.PermanentError{Err: fmt.Errorf("discovery request: %w", err)}
+		}
+		if err := injectAuth(req, providerName, provider, df); err != nil {
+			return nil, &util.PermanentError{Err: fmt.Errorf("discovery auth: %w", err)}
+		}
 		resp, fetchErr := client.Do(req)
 		if fetchErr != nil {
 			if resp != nil {

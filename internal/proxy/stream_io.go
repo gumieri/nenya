@@ -466,19 +466,35 @@ func (t *sseTeeWriter) Write(p []byte) (int, error) {
 }
 
 // copyStream copies data from src to dst using the provided buffer, respecting context cancellation.
-// Returns the number of bytes copied and any error encountered.
+// Returns the number of bytes copied and any error encountered. A reader
+// violating the io.Reader contract with repeated (0, nil) reads is cut off
+// after maxConsecutiveZeroReads iterations (NENYA-332: the loop previously
+// busy-spun on such a reader, bounded only by ctx cancellation).
 func copyStream(ctx context.Context, dst io.Writer, src io.Reader, buf []byte) (int64, error) {
 	if len(buf) == 0 {
 		buf = make([]byte, streamBufferSize)
 	}
 	var written int64
+	zeroReads := 0
 	for {
 		nr, rerr := src.Read(buf)
 		if nr > 0 {
+			zeroReads = 0
 			var werr error
 			written, werr = writeStreamChunk(ctx, dst, buf[:nr], written)
 			if werr != nil {
 				return written, werr
+			}
+		} else if rerr == nil {
+			zeroReads++
+			if zeroReads > maxConsecutiveZeroReads {
+				// An internal invariant violation (a reader in OUR stack
+				// returning (0, nil) forever) — NOT a provider fault: the
+				// sentinel skips the provider cooldown/breaker charge in
+				// recordStreamResult (NENYA-332 review: false failover
+				// signal otherwise).
+				return written, fmt.Errorf("%w: reader returned (0, nil) %d times",
+					errReaderNoProgress, maxConsecutiveZeroReads)
 			}
 		}
 		if rerr != nil {
@@ -489,6 +505,16 @@ func copyStream(ctx context.Context, dst io.Writer, src io.Reader, buf []byte) (
 		}
 	}
 }
+
+// maxConsecutiveZeroReads bounds the (0, nil) busy-spin window: a well-fed
+// SSE stream never hits it, a contract-violating reader terminates instead
+// of spinning until ctx cancellation.
+const maxConsecutiveZeroReads = 1024
+
+// errReaderNoProgress marks the copyStream zero-read exhaustion: an internal
+// reader-stack invariant violation, not a provider fault — recordStreamResult
+// skips the provider cooldown/breaker charge for it (NENYA-332 review).
+var errReaderNoProgress = errors.New("reader made no progress")
 
 // writeStreamChunk writes a single read chunk to dst, folding client-side write
 // failures into the client-side error sentinel and tracking progress.

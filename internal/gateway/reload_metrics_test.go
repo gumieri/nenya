@@ -43,11 +43,11 @@ func TestReloadResponseCacheSharesCarriedMetrics(t *testing.T) {
 
 	// Drive cache activity on the RELOADED gateway: a store then a lookup
 	// that misses (different key). Both must land in the carried instance.
-	g2.ResponseCache.Store("hit-key", "test-model", false, []byte("body"), nil)
-	if _, ok, _ := g2.ResponseCache.Lookup("hit-key", "test-model", false, nil); !ok {
+	g2.ResponseCache.Store(context.Background(), "hit-key", "test-model", false, []byte("body"), nil)
+	if _, ok, _ := g2.ResponseCache.Lookup(context.Background(), "hit-key", "test-model", false, nil); !ok {
 		t.Fatal("stored entry must be retrievable")
 	}
-	if _, ok, _ := g2.ResponseCache.Lookup("miss-key", "test-model", false, nil); ok {
+	if _, ok, _ := g2.ResponseCache.Lookup(context.Background(), "miss-key", "test-model", false, nil); ok {
 		t.Fatal("unknown key must miss")
 	}
 

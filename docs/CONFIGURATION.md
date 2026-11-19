@@ -1326,7 +1326,7 @@ The content pipeline (steps 2–9) is best-effort **by default**: if a token-sav
 ## Configuration Notes
 
 - **JSON with Comments**: Configuration files support `//` and `/* */` comments
-- **External Prompts**: System prompts can be inline (`system_prompt`) or external files (`system_prompt_file`) relative to the config directory (or absolute if validated)
+- **External Prompts**: System prompts can be inline (`system_prompt`) or external files (`system_prompt_file`). Relative paths resolve against the working directory; absolute paths are validated against the config root (the loaded config file's directory, overridable with `CONFIG_DIR`) and rejected when outside it
 - **API Format Abstraction**: Supports `"ollama"` (native `/api/generate`) and `"openai"` (compatible `/v1/chat/completions`) formats
 - **Provider Adapters**: Provider-specific wire format differences are handled by the adapter system. See [`ADAPTERS.md`](ADAPTERS.md) for details.
 - **Circuit Breaker**: Each agent+provider+model combination has an independent circuit breaker. See [`ARCHITECTURE.md`](ARCHITECTURE.md#circuit-breaker) for the state machine.

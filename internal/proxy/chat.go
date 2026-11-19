@@ -1172,7 +1172,7 @@ func (p *Proxy) resolveCache(w http.ResponseWriter, r *http.Request, gw *gateway
 	if r.Header.Get(gw.Config.ResponseCache.ForceRefreshHeader) == "" {
 		embedFunc := p.buildEmbedFunc(gw, r, req.Payload)
 		model := req.ModelName
-		if data, ok, cacheType := gw.ResponseCache.Lookup(cacheKey, model, req.Stream, embedFunc); ok {
+		if data, ok, cacheType := gw.ResponseCache.Lookup(r.Context(), cacheKey, model, req.Stream, embedFunc); ok {
 			p.replayCachedResponse(gw, w, r, data, cacheType)
 			return "", &httpError{Code: http.StatusNoContent, Message: "cache hit"}
 		}
