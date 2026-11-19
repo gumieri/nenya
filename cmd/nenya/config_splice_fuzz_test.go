@@ -110,6 +110,7 @@ func FuzzSpliceConfigKey(f *testing.F) {
 	f.Add([]byte(`{"k": [1, 2, {"deep": true}]}`), "k")
 	f.Add([]byte(`{"k": {"a": "\\"}, "j": "// not a comment"}`), "j")
 	f.Add([]byte(`{"k": "unterminated`), "k")
+	f.Add([]byte(`{"a": 1 /*/ note */}`), "b") // NENYA-339: explore the shared-star grammar from generation 0
 
 	f.Fuzz(func(t *testing.T, doc []byte, dottedKey string) {
 		out, err := spliceConfigKey(doc, dottedKey, float64(42))

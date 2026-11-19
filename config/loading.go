@@ -408,6 +408,12 @@ func skipLineComment(data []byte, i int) int {
 }
 
 func skipBlockComment(data []byte, i int) int {
+	// i points at the opening '/'; step past the opening '/*' BEFORE
+	// scanning so the opening '*' cannot double as the closer — '/*/' is
+	// NOT a complete comment (standard JSONC; NENYA-339: the old scan from
+	// i made '/*/' a 3-byte comment, diverging from every external JSONC
+	// tool and from the config editor's scanner).
+	i += 2
 	for i < len(data) && (data[i] != '*' || i+1 >= len(data) || data[i+1] != '/') {
 		i++
 	}
