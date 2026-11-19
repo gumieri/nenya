@@ -42,7 +42,39 @@ func HasEffectiveOutput(parsed map[string]any, includeReasoning bool) bool {
 	if choicesHaveOutput(parsed, includeReasoning) {
 		return true
 	}
+	if responsesHasOutput(parsed, includeReasoning) {
+		return true
+	}
 	return geminiCandidatesHaveOutput(parsed, includeReasoning)
+}
+
+// responsesHasOutput classifies OpenAI Responses API events (NENYA-337): the
+// raw surface of an openai-responses target is Responses events, and without
+// this branch the TTFT clock, the NENYA-153 slow-call clock, and the NENYA-45
+// bootstrap head probe never observe first output.
+func responsesHasOutput(parsed map[string]any, includeReasoning bool) bool {
+	switch t, _ := parsed["type"].(string); t {
+	case "response.output_text.delta", "response.refusal.delta",
+		"response.function_call_arguments.delta":
+		// Note: response.custom_tool_call_input.delta is deliberately NOT
+		// here — the transformer consumes custom-tool events (custom tools
+		// are unsupported for this format), so the client never renders one
+		// and it must not start the TTFT/slow-call clocks.
+		return true
+	case "response.output_item.added":
+		item, _ := parsed["item"].(map[string]any)
+		// A function_call item opening carries the call identity the client
+		// renders; a message item is the role handshake (no output yet).
+		// Custom-tool call items have no client-visible delta (the
+		// transformer consumes their events — custom tools are unsupported
+		// for this format, dropped at flattenResponsesTools with a report),
+		// so they deliberately do not start the clock.
+		bt, _ := item["type"].(string)
+		return bt == "function_call"
+	case "response.reasoning_summary_text.delta", "response.reasoning_text.delta":
+		return includeReasoning
+	}
+	return false
 }
 
 // anthropicHasOutput reports whether an Anthropic event carries generation

@@ -12,9 +12,12 @@ import (
 	"github.com/nenya/internal/util"
 )
 
-// safeFloatToInt converts a float64 to int with overflow protection.
+// safeFloatToInt converts a float64 to int with overflow protection. The
+// boundary is the exact float 2⁶³ (constant rounding makes `v > math.MaxInt`
+// pass for float64(1<<63), and int(that) is implementation-defined — the
+// CWE-190 §7 guard the responsesToInt clamp mirrors).
 func safeFloatToInt(v float64) int {
-	if v > math.MaxInt || v < math.MinInt {
+	if v >= 1<<63 || v < math.MinInt {
 		return 0
 	}
 	return int(v)

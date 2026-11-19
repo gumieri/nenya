@@ -531,6 +531,13 @@ For custom or local models (not in the registry), or to override registry defaul
           "model": "claude-opus-4-7",
           "format": "anthropic",
           "max_context": 200000
+        },
+        {
+          "provider": "openai",
+          "model": "gpt-6-luna",
+          "format": "openai-responses",
+          "reasoning_effort": "medium",
+          "max_context": 272000
         }
       ]
     }
@@ -648,7 +655,7 @@ Each model entry (object form):
 | ----------------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `provider`              | string   | Provider name (must match a key in `providers` or a built-in). If set without `model`, expands to all models from that provider.                                                                                                                                                                                                |
 | `model`                 | string   | Model identifier sent to the upstream API. If set without `provider`, expands to all providers offering this model (deferred provider expansion).                                                                                                                                                                               |
-| `format`                | string   | (optional) Override wire format for this model. `"openai"` (default), `"anthropic"` (full request body + SSE response conversion to Anthropic Messages API), `"gemini"` (URL routing only; body/SSE conversion handled by Gemini provider adapter). When set, takes precedence over catalog and static registry resolution.     |
+| `format`                | string   | (optional) Override wire format for this model. `"openai"` (default), `"anthropic"` (full request body + SSE response conversion to Anthropic Messages API), `"gemini"` (URL routing only; body/SSE conversion handled by Gemini provider adapter), `"openai-responses"` (NENYA-337: the request converts to an OpenAI **Responses API** create request and dispatches to the provider's `format_urls` entry — `https://api.openai.com/v1/responses` on the built-in `openai` provider; the Responses reply converts back to the client's shape, streaming or buffered). Use it for models that reject function tools + `reasoning_effort` on `/v1/chat/completions` (e.g. gpt-6-luna, gpt-6.2-sol): the agent keeps `reasoning_effort` and tools — the effort rides as `reasoning:{effort}` and tool definitions are flattened to the Responses shape, with chat-only parameters (`stop`, `logprobs`, penalties, `n`, …) dropped and surfaced on `X-Nenya-Dropped-Content`/logs. When set, takes precedence over catalog and static registry resolution.     |
 | `provider_rgx`          | string   | Regex pattern to match provider names from the discovery catalog. Expands to all models from matching providers.                                                                                                                                                                                                                |
 | `model_rgx`             | string   | Regex pattern to match model names from the discovery catalog. Expands to all models matching the pattern.                                                                                                                                                                                                                      |
 | `url`                   | string   | (optional) Override provider URL for this specific model                                                                                                                                                                                                                                                                        |

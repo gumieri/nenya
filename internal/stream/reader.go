@@ -283,6 +283,20 @@ type SSETransformingReader struct {
 	lastCacheMissTokens     int
 	lastCacheCreationTokens int
 	lastReasoningTokens     int
+	// sawErrorTerminal records that an upstream error frame ({"error":{...}}
+	// converted or passthrough, or a Responses failed event) was seen
+	// (NENYA-337): the EOF empty cell must not fire for a stream that
+	// FAILED — the error frame itself is the client-facing terminal — while
+	// sawContent/sawFinishReason semantics (continuation, cache gating,
+	// anthropic-finish suppression) stay untouched for recovering error
+	// frames and streams that continue past an error.
+	sawErrorTerminal bool
+
+	// tailDrained/drainedTail memoize the transformer's held tail
+	// (NENYA-337): handleScannerDone drains before classifying, the
+	// composition paths emit the same bytes once.
+	tailDrained bool
+	drainedTail []byte
 
 	// tcState tracks tool call state across stream chunks.
 	tcState toolCallState
@@ -557,6 +571,40 @@ func (r *SSETransformingReader) ResetCounters() {
 	r.injectedError = false
 	r.emittedAny = false
 	r.lastLineBlank = false
+	// NENYA-337: the error-terminal cell and the memoized transformer tail
+	// are per-stream state too — a pooled reader must not inherit the prior
+	// stream's classification or held close. sawResumableStop predates this
+	// reset's last touch and belongs here for the same reason.
+	r.sawErrorTerminal = false
+	r.tailDrained = false
+	r.drainedTail = nil
+	r.sawResumableStop = false
+	// The usage-delta memos are per-stream: a pooled reader inheriting the
+	// prior stream's cumulative totals would compute garbage deltas.
+	r.lastCompletionTokens = 0
+	r.lastPromptTokens = 0
+	r.lastTotalTokens = 0
+	r.lastCacheHitTokens = 0
+	r.lastCacheMissTokens = 0
+	r.lastCacheCreationTokens = 0
+	r.lastReasoningTokens = 0
+	// Tool-call deconfliction state (seenIndices/pending/seenIDs) is
+	// per-stream as well — clear it under its mutex so a pooled reader never
+	// inherits the prior stream's claimed indexes (pre-existing gap, same
+	// class as the NENYA-337 fields).
+	r.tcState.mu.Lock()
+	r.tcState.seenIndices = make(map[int]bool)
+	r.tcState.pending = make(map[int]*pendingToolCall)
+	r.tcState.seenIDs = make(map[string]bool)
+	r.tcState.mu.Unlock()
+	// Terminal bookkeeping that must never leak into a reused stream either:
+	// a stale err would fail the next Read immediately, a stale closed flag
+	// suppresses OnStreamClose, and the last-surface/model snapshots feed
+	// classification and silent-substitution detection.
+	r.err = nil
+	r.closed = false
+	r.lastSurface = exfilSurface{}
+	r.lastResponseModel = ""
 	// Clear the one-shot first-output hook (NENYA-178): a caller that reuses
 	// this reader must re-register it to measure a further stream. The
 	// reasoning-inclusion flag is configuration, not stream state, so it
@@ -650,14 +698,33 @@ func (r *SSETransformingReader) trackProgressLine(line []byte) {
 		return
 	}
 	r.trackAnthropicSurface(parsed)
+	// NENYA-337: an error frame is the stream's terminal signal ONLY while
+	// nothing follows it — the flag means "error was the LAST signal". A
+	// later content/finish frame clears it: an aggregator that emits an
+	// error and then keeps streaming is a recovering/cut stream, and the
+	// EOF matrix must classify it by what came after (continuation, cache
+	// gating, injected terminal all keyed off the normal flags).
+	if IsStreamErrorPayload(parsed) || IsResponseFailedEvent(parsed) {
+		r.sawErrorTerminal = true
+		return
+	}
 	if r.progressContent(parsed) {
 		r.sawContent = true
+		r.sawErrorTerminal = false
 	}
 	if !r.sawContent && hasReasoningDelta(parsed) {
+		// Reasoning deltas are content for the terminal-state matrix (and
+		// clear the error terminal unconditionally: any frame arriving after
+		// the error means the error was not the last signal — same contract
+		// as the content/finish clears below).
 		r.sawContent = true
+		r.sawErrorTerminal = false
+	} else if hasReasoningDelta(parsed) {
+		r.sawErrorTerminal = false
 	}
 	if r.progressFinish(parsed) {
 		r.sawFinishReason = true
+		r.sawErrorTerminal = false
 		// AUD-12 review: on a CONVERTED surface (transformer installed) an
 		// Anthropic-shaped completion must not receive the OpenAI sentinel
 		// data: [DONE] at EOF either (AUD-01's passthrough argument applies

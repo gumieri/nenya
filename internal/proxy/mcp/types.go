@@ -450,6 +450,10 @@ type SSEAccumulator struct {
 	// GeminiToolSeq assigns synthetic indices to Gemini's complete
 	// functionCall parts (they arrive whole — no deltas to join).
 	GeminiToolSeq int
+	// ResponsesToolSeq assigns synthetic indices to the Responses API's
+	// complete function_call output items (NENYA-337: they arrive whole on
+	// response.output_item.done — no deltas to join).
+	ResponsesToolSeq int
 }
 
 // NewSSEAccumulator constructs an SSEAccumulator with its index-keyed

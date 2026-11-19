@@ -72,9 +72,10 @@ type streamContinuation struct {
 // continuation is applicable, or nil when it must be disabled:
 //   - governance.stream_continuation.enabled is false or unset;
 //   - the effective max attempts is < 2 (no room for a continuation);
-//   - the client uses the Anthropic Messages API or the target speaks the
-//     Anthropic wire format (transformer-state carry-over is deferred to a
-//     later phase).
+//   - the client uses the Anthropic Messages API, the target speaks the
+//     Anthropic wire format, or the target is an openai-responses format
+//     (transformer-state carry-over: Anthropic deferred to a later phase;
+//     Responses' item-id → positional mapping is stateful per stream).
 func (p *Proxy) newStreamContinuation(gw *gateway.NenyaGateway, opts streamResponseOpts) *streamContinuation {
 	if gw == nil || !gw.Config.Governance.StreamContinuationEnabled() {
 		return nil
@@ -83,7 +84,13 @@ func (p *Proxy) newStreamContinuation(gw *gateway.NenyaGateway, opts streamRespo
 	if maxAttempts < 2 {
 		return nil
 	}
-	if opts.sourceFormat == "anthropic" || opts.target.Format == "anthropic" {
+	if opts.sourceFormat == "anthropic" || opts.target.Format == "anthropic" ||
+		opts.target.Format == routing.FormatOpenAIResponses {
+		// Stand-down conditions: Anthropic-shaped streams (message_stop
+		// protocol closes the message), and the NENYA-337 Responses
+		// transformer (stateful item-id → positional tool-call mapping — a
+		// continuation re-dispatch would resume into a fresh transformer
+		// with no mapping).
 		return nil
 	}
 	// Continuation always re-dispatches the exact same target; cross-model

@@ -604,6 +604,49 @@ func TestSSETransformingReader_ResetCounters(t *testing.T) {
 	if reader.warnedAtThreshold {
 		t.Error("expected warnedAtThreshold=false after reset")
 	}
+	// NENYA-337: the per-stream terminal/tail/memo state must reset too — a
+	// pooled reader inheriting any of these classifies or accounts wrongly.
+	reader.sawErrorTerminal = true
+	reader.tailDrained = true
+	reader.drainedTail = []byte(`{"x":1}`)
+	reader.sawResumableStop = true
+	reader.err = io.EOF
+	reader.closed = true
+	reader.lastSurface = exfilSurface{anthropic: true}
+	reader.lastResponseModel = "ghost-model"
+	for i, memo := range []*int{&reader.lastCompletionTokens, &reader.lastPromptTokens,
+		&reader.lastTotalTokens, &reader.lastCacheHitTokens, &reader.lastCacheMissTokens,
+		&reader.lastCacheCreationTokens, &reader.lastReasoningTokens} {
+		*memo = 99 + i
+	}
+	reader.tcState.mu.Lock()
+	reader.tcState.seenIndices[3] = true
+	reader.tcState.seenIDs["call_ghost"] = true
+	reader.tcState.mu.Unlock()
+
+	reader.ResetCounters()
+
+	if reader.sawErrorTerminal || reader.tailDrained || reader.drainedTail != nil || reader.sawResumableStop {
+		t.Error("terminal/tail state must reset (sawErrorTerminal/tailDrained/drainedTail/sawResumableStop)")
+	}
+	if reader.err != nil || reader.closed || reader.lastSurface != (exfilSurface{}) || reader.lastResponseModel != "" {
+		t.Error("terminal bookkeeping (err/closed/lastSurface/lastResponseModel) must reset")
+	}
+	for name, memo := range map[string]*int{
+		"lastCompletionTokens": &reader.lastCompletionTokens, "lastPromptTokens": &reader.lastPromptTokens,
+		"lastTotalTokens": &reader.lastTotalTokens, "lastCacheHitTokens": &reader.lastCacheHitTokens,
+		"lastCacheMissTokens": &reader.lastCacheMissTokens, "lastCacheCreationTokens": &reader.lastCacheCreationTokens,
+		"lastReasoningTokens": &reader.lastReasoningTokens,
+	} {
+		if *memo != 0 {
+			t.Errorf("%s = %d after reset, want 0", name, *memo)
+		}
+	}
+	reader.tcState.mu.RLock()
+	if len(reader.tcState.seenIndices) != 0 || len(reader.tcState.seenIDs) != 0 || len(reader.tcState.pending) != 0 {
+		t.Error("tool-call deconfliction state must reset")
+	}
+	reader.tcState.mu.RUnlock()
 }
 
 func TestSSETransformingReader_SetMaxTransformedBytes(t *testing.T) {

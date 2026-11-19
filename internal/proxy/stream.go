@@ -580,6 +580,26 @@ func (p *Proxy) streamResponse(opts streamResponseOpts, action upstreamAction) s
 
 // resolveTransformer selects the appropriate SSE transformer based on source format and target format.
 func (p *Proxy) resolveTransformer(gw *gateway.NenyaGateway, target routing.UpstreamTarget, sourceFormat string, sigCache infra.ThoughtSignatureKV) stream.ResponseTransformer {
+	if target.Format == routing.FormatOpenAIResponses && sourceFormat != routing.FormatOpenAIResponses {
+		// NENYA-337: Responses upstream → chat chunks for the openai
+		// client; an anthropic client composes the reverse converter on top
+		// (Responses → chat → Anthropic events), mirroring the NENYA-51
+		// composite ordering (upstream-native transform first, client
+		// conversion second). This branch MUST precede the generic
+		// anthropic-client branch: a Responses body is not an OpenAI chat
+		// body, so feeding it to the OpenAI→Anthropic converter alone would
+		// forward raw Responses events as chat deltas.
+		if sourceFormat == "anthropic" {
+			gw.Logger.Debug("SSE composite transformer active (Responses upstream, Anthropic client)", "provider", target.Provider)
+			return &compositeTransformer{
+				providerFirst: stream.NewResponsesTransformer(),
+				clientSecond:  stream.NewOpenAIToAnthropicTransformer(),
+			}
+		}
+		gw.Logger.Debug("SSE Responses transformer active (chat client, Responses upstream)", "provider", target.Provider)
+		return stream.NewResponsesTransformer()
+	}
+
 	if sourceFormat == "anthropic" && target.Format != "anthropic" {
 		// NENYA-51: run the provider transformer FIRST (it caches Gemini
 		// thought signatures on the upstream's native OpenAI format), then

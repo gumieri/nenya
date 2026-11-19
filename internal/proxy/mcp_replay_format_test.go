@@ -112,3 +112,33 @@ func TestReplayGuardedWritesClientFormat(t *testing.T) {
 		t.Fatalf("the client must receive OpenAI-shaped frames, got:\n%s", body)
 	}
 }
+
+// TestConvertBufferedForReplay_ResponsesSentinel pins the NENYA-337 replay
+// close: Responses SSE carries no [DONE] sentinel (the live reader composes
+// it at EOF), so the replay of a responses-format buffer to a chat client
+// must synthesize it — otherwise the client hangs on the final read.
+func TestConvertBufferedForReplay_ResponsesSentinel(t *testing.T) {
+	gw := newReplayGateway(t)
+	p := &Proxy{}
+	p.StoreGateway(gw)
+
+	frames := strings.Join([]string{
+		`data: {"type":"response.created","response":{"id":"r1","model":"gpt-6-luna"}}`,
+		``,
+		`data: {"type":"response.output_text.delta","delta":"hello"}`,
+		``,
+		`data: {"type":"response.completed","response":{"id":"r1","status":"completed","usage":{"input_tokens":3,"output_tokens":2,"total_tokens":5}}}`,
+		``,
+	}, "\n")
+	buf := &bufferedSSE{
+		RawBytes:      []byte(frames),
+		ServingTarget: routing.UpstreamTarget{Provider: "openai", Model: "gpt-6-luna", Format: "openai-responses"},
+	}
+	out := string(mcpproxy.ConvertBufferedForReplay(p.mcpHost(), gw, buf, "openai", nil))
+	if !strings.Contains(out, `"choices"`) {
+		t.Fatalf("a chat client must receive chat chunks, got:\n%s", out)
+	}
+	if !strings.Contains(out, "data: [DONE]") {
+		t.Fatalf("a replayed Responses stream must close with the sentinel (the raw stream has none):\n%s", out)
+	}
+}

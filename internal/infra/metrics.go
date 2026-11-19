@@ -649,11 +649,30 @@ func (m *Metrics) writeSpotlighted(w io.Writer) {
 // dropKindsAllowlist is the closed set of kinds RecordUnsendableContent
 // labels with; anything else (client-chosen block types) collapses to
 // "other" so the metric's label space stays bounded.
+// NENYA-337 additions: the openai-responses converters' request-side
+// parameter kinds (the Warn log carries every kind verbatim; provider-native
+// content shapes beyond these still collapse to "other" by design).
 var dropKindsAllowlist = map[string]struct{}{
 	"text": {}, "image": {}, "document": {}, "web_search_tool_result": {},
 	"thinking": {}, "thinking_signature": {}, "redacted_thinking": {},
 	"tool_use": {}, "tool_result": {}, "system": {}, "unknown": {},
 	"other": {},
+	// openai-responses request-side drops (NENYA-337).
+	"stop": {}, "logprobs": {}, "top_logprobs": {}, "logit_bias": {},
+	"presence_penalty": {}, "frequency_penalty": {}, "n": {},
+	"stream_options": {}, "seed": {}, "user": {},
+	"response_format": {}, "tool_choice": {},
+	// openai-responses content-shape drops (both directions).
+	"content_part_text": {}, "content_part_refusal": {},
+	"tool_name": {}, "tool_call_id": {}, "tool_call_arguments": {},
+	"messages": {}, "assistant_content": {}, "message_content": {},
+	"image_url": {}, "reasoning_signature": {}, "reasoning_history": {},
+	"reasoning_summary":  {},
+	"function_arguments": {},
+	// Gateway-internal literal kinds (closed set, not provider-native):
+	// generic malformed-entry labels the responses/adapter converters emit.
+	"tool_call": {}, "content": {}, "content_part": {}, "tool": {},
+	"message": {}, "output_item": {},
 }
 
 // RecordUnsendableContent records that a format translation reported
@@ -714,7 +733,7 @@ func (m *Metrics) RecordUnknownRequestField(format string) {
 		return
 	}
 	switch format {
-	case "openai", "anthropic", "gemini", "systemone":
+	case "openai", "anthropic", "gemini", "systemone", "openai-responses":
 	default:
 		format = "other"
 	}
