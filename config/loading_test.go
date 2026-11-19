@@ -205,6 +205,25 @@ func TestStripComments(t *testing.T) {
 			input: `{"key": "value"}`,
 			want:  `{"key": "value"}`,
 		},
+		{
+			// NENYA-339 (found by the NENYA-332 fuzz work): the shared star
+			// of an opening /* must NOT close the comment — standard JSONC
+			// consumes the whole /*/ trailing */ span. The old grammar
+			// closed at /*/ alone, leaving trailing garbage in the output.
+			name:  "shared star opens, standard close ends the comment",
+			input: `{"a": 1 /*/ trailing */}`,
+			want:  `{"a": 1 }`,
+		},
+		{
+			name:  "shared-star comment wrapping a key",
+			input: `{/*/x*/}`,
+			want:  `{}`,
+		},
+		{
+			name:  "multiline block comment regression",
+			input: "{\n  /* multi\n     line */\n  \"a\": 1\n}",
+			want:  "{\n  \n  \"a\": 1\n}",
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

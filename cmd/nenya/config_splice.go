@@ -49,11 +49,11 @@ func (s *jsonScanner) skipIgnorable() {
 
 // skipComment advances past a // or /* */ comment at s.i, reporting whether
 // it actually was one. The block-comment grammar mirrors the loader's
-// config.StripComments skipBlockComment EXACTLY — including its quirk of
-// closing a comment at the first `*/` EVEN WHEN the `*` is the opener
-// (`/*/` is a complete 3-byte comment for the loader). The editor splices
-// against the document the loader actually sees; divergent comment
-// grammars compute offsets over different bytes and corrupt the config.
+// config.StripComments skipBlockComment EXACTLY — standard JSONC: the
+// opening '/*' cannot close its own comment ('/*/' is not a complete
+// comment; NENYA-339). The editor must splice against the document the
+// loader actually sees; divergent comment grammars compute offsets over
+// different bytes and corrupt the config.
 func (s *jsonScanner) skipComment() bool {
 	if s.i+1 >= len(s.data) {
 		return false
@@ -65,6 +65,7 @@ func (s *jsonScanner) skipComment() bool {
 		}
 		return true
 	case '*':
+		s.i += 2 // past the opening '/*' (standard JSONC — see doc above)
 		for s.i < len(s.data) && (s.data[s.i] != '*' || s.i+1 >= len(s.data) || s.data[s.i+1] != '/') {
 			s.i++
 		}

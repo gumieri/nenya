@@ -216,3 +216,84 @@ func TestSetConfigKeyPreservesCommentsOnDisk(t *testing.T) {
 		t.Fatalf("key order changed on disk:\n%s", got)
 	}
 }
+
+// TestSpliceConfigKeySharedStarGrammar pins the NENYA-339 invariant that
+// the editor's comment scanner and the loader's StripComments agree
+// byte-for-byte: a doc whose comment span only parses correctly under the
+// STANDARD grammar (the shared star of an opening /* must not close it)
+// splices cleanly, the trailing comment survives the splice verbatim, and
+// the spliced output strips to a document carrying both the replaced value
+// and the preserved comment's neighbors. If the two hand-synced scanners
+// ever drift apart again, offsets diverge and this fails deterministically.
+func TestSpliceConfigKeySharedStarGrammar(t *testing.T) {
+	doc := []byte(`{"a": 1 /*/ note */}`)
+
+	t.Run("insert after a shared-star comment value", func(t *testing.T) {
+		out, err := spliceConfigKey(append([]byte(nil), doc...), "b", float64(42))
+		if err != nil {
+			t.Fatalf("splice: %v", err)
+		}
+		stripped := config.StripComments(out)
+		var m map[string]any
+		if err := json.Unmarshal(stripped, &m); err != nil {
+			t.Fatalf("spliced doc does not strip to valid JSON: %v\n%s", err, out)
+		}
+		if m["a"] != float64(1) || m["b"] != float64(42) {
+			t.Fatalf("a=%v b=%v, want 1 and 42\n%s", m["a"], m["b"], out)
+		}
+		if !contains(string(out), "/*/ note */") {
+			t.Fatalf("the trailing comment must survive the splice verbatim:\n%s", out)
+		}
+	})
+
+	t.Run("replace a value before a shared-star comment", func(t *testing.T) {
+		out, err := spliceConfigKey(append([]byte(nil), doc...), "a", float64(7))
+		if err != nil {
+			t.Fatalf("splice: %v", err)
+		}
+		stripped := config.StripComments(out)
+		var m map[string]any
+		if err := json.Unmarshal(stripped, &m); err != nil {
+			t.Fatalf("spliced doc does not strip to valid JSON: %v\n%s", err, out)
+		}
+		if m["a"] != float64(7) {
+			t.Fatalf("a=%v, want 7 (the shared-star comment must not eat the replacement)\n%s", m["a"], out)
+		}
+		if _, ok := m["b"]; ok {
+			t.Fatalf("a replace must not create b:\n%s", out)
+		}
+		if string(out) != `{"a": 7 /*/ note */}` {
+			t.Fatalf("byte-exact output mismatch (the comment must survive the replacement verbatim):\n%s", out)
+		}
+	})
+}
+
+// TestSkipCommentMatchesLoaderGrammar is the direct drift detector: for a
+// doc that is exactly one block comment, the editor scanner must consume
+// precisely the bytes the loader's StripComments removes. Under the
+// NENYA-339 quirk (comment closed at the shared star) the editor consumed
+// 3 bytes where the loader now consumes 6.
+func TestSkipCommentMatchesLoaderGrammar(t *testing.T) {
+	for _, doc := range []string{
+		"/*x*/",
+		"/*/x*/", // shared star: NOT a close
+		"/* multi\nline */",
+		// "/*/" — boundary case: both grammars consume 3 (EOF coverage,
+		// not a grammar discriminator).
+		"/*/",
+	} {
+		// Bytes removed by the loader == bytes the editor must consume.
+		want := len(doc) - len(stripCommentsForTest(doc))
+		s := &jsonScanner{data: []byte(doc)}
+		s.skipIgnorable()
+		if s.i != want {
+			t.Errorf("editor consumed %d bytes of %q, loader grammar removes %d — comment grammars diverged", s.i, doc, want)
+		}
+	}
+}
+
+// stripCommentsForTest exposes the loader grammar to the drift detector
+// without importing the loader's internals beyond the public strip.
+func stripCommentsForTest(doc string) string {
+	return string(config.StripComments([]byte(doc)))
+}
