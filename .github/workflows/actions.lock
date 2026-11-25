@@ -29,6 +29,8 @@ workflows:
         - 'docker/setup-qemu-action@v4.4.0'
         - 'goreleaser/goreleaser-action@v7.3.0'
         - 'sigstore/cosign-installer@v4.1.2'
+    '.github/workflows/zz-zizmor-gate-probe.yml':
+        - 'actions/checkout@v7.0.1'
 dependencies:
     'actions/cache@v6.1.0':
         ref: 'v6.1.0'

@@ -14,7 +14,9 @@ jobs:
   probe:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # tag pinned per repo policy; zizmor unpinned-uses suppressed with the
+      # standard inline annotation (throwaway gate-test probe)
+      - uses: actions/checkout@v7.0.1 # zizmor: ignore[unpinned-uses]
         with:
           persist-credentials: false
       # INTENTIONAL zizmor template-injection finding (gate probe):
