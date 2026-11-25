@@ -4,6 +4,12 @@ updates:
     directory: /
     schedule:
       interval: weekly
+    # Supply-chain cooldown (zizmor dependabot-cooldown): freshly published
+    # module releases soak for 7 days before Dependabot proposes them
+    # (the implicit Dependabot default is 3). Security updates bypass the
+    # cooldown.
+    cooldown:
+      default-days: 7
   - package-ecosystem: github-actions
     directory: /
     schedule:
