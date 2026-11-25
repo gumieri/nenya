@@ -19,4 +19,6 @@ jobs:
           persist-credentials: false
       # INTENTIONAL zizmor template-injection finding (gate probe):
       # untrusted PR title interpolated into a run script.
-      - run: echo "title=${{ github.event.pull_request.title }}"
+      - env:
+          PR_TITLE: ${{ github.event.pull_request.title }}
+        run: echo "title=$PR_TITLE"
