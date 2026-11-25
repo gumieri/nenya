@@ -140,8 +140,11 @@ jobs:
 
   # Static security audit of the workflows themselves (injection
   # surfaces, excessive permissions, credential persistence). Runs at
-  # the default (regular) persona; any finding fails the job. Version
-  # pinned for reproducibility; bump deliberately.
+  # the default (regular) persona. Findings do NOT fail the job: zizmor
+  # uploads SARIF to code scanning (Security tab), and the repository
+  # ruleset blocks PRs that introduce a new zizmor finding at warning
+  # severity or higher. This job only fails on internal errors.
+  # Version pinned for reproducibility; bump deliberately.
   zizmor:
     runs-on: ubuntu-latest
     timeout-minutes: 5
