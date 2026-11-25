@@ -1,0 +1,22 @@
+# TEMPORARY negative test for the zizmor code scanning merge gate
+# (ruleset main-branch-protection, code_scanning rule, tool zizmor).
+# Expected: this PR is BLOCKED while the template-injection finding is
+# present and unblocked after the fix. Do not merge; the branch is
+# deleted after the test.
+name: zizmor-gate-probe
+
+on:
+  pull_request:
+
+permissions: {}
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+      # INTENTIONAL zizmor template-injection finding (gate probe):
+      # untrusted PR title interpolated into a run script.
+      - run: echo "title=${{ github.event.pull_request.title }}"
