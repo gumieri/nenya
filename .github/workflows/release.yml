@@ -35,7 +35,7 @@ jobs:
       # Cache-free by design: a publishing pipeline must not read or write
       # shared caches (zizmor cache-poisoning audit). The module is
       # zero-dependency (empty go.sum), so a cold build costs seconds.
-      - uses: actions/setup-go@v7.0.0
+      - uses: actions/setup-go@v7.1.0
         with:
           go-version-file: go.mod
           cache: false
