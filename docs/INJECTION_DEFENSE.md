@@ -449,6 +449,7 @@ corpora, so every shape has a test rather than a claim:
 |---|---|---|
 | ExfilGuard URL policy | `internal/stream/testdata/exfil_url_variants.json` | `TestExfilGuardVariantTaxonomy` |
 | Tier-1 injection patterns | `internal/pipeline/testdata/injection_variants.json` | `TestInjectionVariantTaxonomy` |
+| Secret and PII redaction | `internal/pipeline/testdata/redaction_variants.json` | `TestRedactionVariantTaxonomy` |
 | MCP argument URL policy | `internal/mcp/testdata/tool_arg_url_variants.json` | `TestToolArgURLVariantTaxonomy` |
 | Destination deny set (shared) | `internal/netutil/ipdeny_test.go` (policy boundary) | `TestParseStandaloneIPv4`, `TestParseNumericIPv4URLHost`, `TestDenyHostNormalization` |
 | Canary tripwire | prose only (CONFIGURATION.md) | no fixture: the marker is per-request random, so a fixture could only pin the documented non-detections (encoded dumps, streaming tool-arg deltas) |
@@ -457,7 +458,7 @@ A case whose evasion is a documented limitation is committed with the
 non-detecting expectation, so a future change that closes it must update the
 corpus (and cannot silently claim coverage it does not have). Each gate also has
 a variant fuzz target: `FuzzExfilURLVariantScan`, `FuzzNormalizeForMatching`,
-and `FuzzDenyURLHost`.
+`FuzzRedactVariantScan`, and `FuzzDenyURLHost`.
 
 ## Research and references
 
