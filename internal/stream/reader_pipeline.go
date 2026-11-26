@@ -17,39 +17,55 @@ func (r *SSETransformingReader) applyStreamFilters(parsed map[string]interface{}
 	if parsed == nil {
 		return parsed, false
 	}
-	mutated := false
+	// NENYA-344: the tool-argument assembler observes the raw chunk first,
+	// so the registered observer (and the Phase 020 guard observers) sees
+	// reassembled tool-call content; the later stages themselves still see
+	// the raw chunk. It never mutates.
+	if r.toolArgs != nil {
+		r.toolArgs.FeedParsed(parsed)
+	}
+	out, mutated, blocked := r.applyEgressGuards(parsed)
+	if blocked {
+		return nil, false
+	}
+	if r.streamEntropyFilter != nil {
+		var changed bool
+		out, changed = applyEntropyFilter(out, r.streamEntropyFilter)
+		mutated = mutated || changed
+	}
+	return out, mutated
+}
 
+// applyEgressGuards runs the terminating egress guards — the secret/policy
+// stream filter, the ExfilGuard URL policy, and the canary tripwire — over
+// one parsed chunk in pipeline order. blocked reports a guard that
+// terminated the stream (the returned chunk is nil); mutated reports
+// in-place rewrites.
+func (r *SSETransformingReader) applyEgressGuards(parsed map[string]interface{}) (out map[string]interface{}, mutated bool, blocked bool) {
+	out = parsed
 	if r.streamFilter != nil && !r.streamFilter.IsBlocked() {
 		var action FilterAction
-		parsed, action = applyStreamFilter(parsed, r.streamFilter)
+		out, action = applyStreamFilter(out, r.streamFilter)
 		if r.streamFilter.IsBlocked() {
-			return nil, false
+			return nil, false, true
 		}
 		mutated = mutated || action == ActionRedact
 	}
 	if r.exfilGuard != nil && !r.exfilGuard.IsBlocked() {
-		out, changed, blocked := r.applyExfilStage(parsed)
-		if blocked {
-			return nil, false
+		guarded, changed, exfilBlocked := r.applyExfilStage(out)
+		if exfilBlocked {
+			return nil, false, true
 		}
-		parsed = out
+		out = guarded
 		mutated = mutated || changed
 	}
-
 	if r.canaryWatcher != nil && !r.canaryWatcher.IsBlocked() {
-		parsed = applyCanaryWatcher(parsed, r.canaryWatcher)
+		out = applyCanaryWatcher(out, r.canaryWatcher)
 		if r.canaryWatcher.IsBlocked() {
-			return nil, false
+			return nil, false, true
 		}
 	}
-
-	if r.streamEntropyFilter != nil {
-		var changed bool
-		parsed, changed = applyEntropyFilter(parsed, r.streamEntropyFilter)
-		mutated = mutated || changed
-	}
-
-	return parsed, mutated
+	return out, mutated, false
 }
 
 // applyStreamFilter runs the secret/policy filter over one SSE chunk,
@@ -444,8 +460,18 @@ func (r *SSETransformingReader) applyToolCallNormalization(transformed []byte, s
 // some upstreams emit raw JSON bodies under text/event-stream). The
 // private-event filter applies here too (NENYA-174).
 func (r *SSETransformingReader) transformNonSSELine(line []byte) []byte {
+	// NENYA-344: bare-JSON lines carry the same tool-call argument shapes;
+	// the assembler observes them too (the egress guards themselves remain
+	// scoped to data:-framed lines — a pre-existing gap documented in the
+	// egress coverage docs). Quiet parse: malformed non-data lines are
+	// noise, not protocol violations.
+	if r.toolArgs != nil {
+		if parsed := r.tryParseJSONQuiet(line); parsed != nil {
+			r.toolArgs.FeedParsed(parsed)
+		}
+	}
 	if r.dropPrivateEvents {
-		if parsed := r.tryParseJSON(line); isPrivateSSEType(parsed) {
+		if parsed := r.tryParseJSONQuiet(line); isPrivateSSEType(parsed) {
 			return nil
 		}
 	}

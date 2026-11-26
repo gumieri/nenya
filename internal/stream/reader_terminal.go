@@ -9,6 +9,22 @@ import (
 )
 
 func (r *SSETransformingReader) handleScannerDone() {
+	// NENYA-344: complete every open tool-call assembly at stream end so
+	// observers receive the held remainders and completion signals even
+	// when the wire never sent an explicit per-call completion.
+	if r.toolArgs != nil {
+		// Capture the cap telemetry BEFORE Flush: the flush resets both
+		// counters, so reading them afterwards would never fire for a
+		// saturation-only breach.
+		sat, over := r.toolArgs.Saturated(), r.toolArgs.OverCapCalls()
+		r.toolArgs.Flush()
+		if over > 0 || sat {
+			slog.Warn("tool-call argument assembly hit accumulation caps",
+				"overCapCalls", over,
+				"saturated", sat)
+		}
+	}
+
 	// NENYA-337: drain the stateful transformer's held tail BEFORE the
 	// hygiene warn below and before classifying the ending — see
 	// drainTransformerTailBeforeClassification. The drain updates the
@@ -537,13 +553,24 @@ func (r *SSETransformingReader) synthesizeTerminalFinish() ([]byte, bool) {
 }
 
 func (r *SSETransformingReader) tryParseJSON(data []byte) map[string]interface{} {
+	return r.tryParseJSONLabeled(data, "malformed JSON in SSE data line")
+}
+
+// tryParseJSONQuiet parses a bare (non-`data:`) JSON line, returning nil on
+// malformed input without warning: non-data lines carry arbitrary noise and
+// truncated writes, and a parse failure there is not a protocol violation.
+func (r *SSETransformingReader) tryParseJSONQuiet(data []byte) map[string]interface{} {
+	return r.tryParseJSONLabeled(data, "")
+}
+
+func (r *SSETransformingReader) tryParseJSONLabeled(data []byte, warn string) map[string]interface{} {
 	if !bytes.HasPrefix(bytes.TrimSpace(data), []byte("{")) {
 		return nil
 	}
 	var parsed map[string]interface{}
 	if err := json.Unmarshal(data, &parsed); err != nil {
-		if r.logger != nil {
-			r.logger.Warn("malformed JSON in SSE data line",
+		if warn != "" && r.logger != nil {
+			r.logger.Warn(warn,
 				"err", err,
 				"data_len", len(data))
 		}

@@ -301,6 +301,12 @@ type SSETransformingReader struct {
 	// tcState tracks tool call state across stream chunks.
 	tcState toolCallState
 
+	// toolArgs, when set, reassembles streamed tool-call names and
+	// argument fragments across chunks (NENYA-344) so the egress guard
+	// phases can observe them whole; it observes only and never mutates
+	// the chunk. Accessed only from the single goroutine calling Read().
+	toolArgs *ToolCallAssembler
+
 	// transformedBytes tracks accumulated output size across the stream.
 	// When it exceeds maxTransformedBytes, discarding is set to true.
 	transformedBytes uint64
@@ -489,6 +495,14 @@ func (r *SSETransformingReader) SetOnUsage(cb UsageCallback) {
 // SetStreamFilter sets a stream filter for content filtering.
 func (r *SSETransformingReader) SetStreamFilter(sf *StreamFilter) {
 	r.streamFilter = sf
+}
+
+// SetToolArgsAssembler registers the streamed tool-call argument assembler
+// (NENYA-344). The assembler observes the raw chunk in applyStreamFilters —
+// before provider transformers — and drives its observer with hold-bounded
+// reassembled argument slices; it never mutates the chunk.
+func (r *SSETransformingReader) SetToolArgsAssembler(a *ToolCallAssembler) {
+	r.toolArgs = a
 }
 
 // SetExfilGuard sets the output egress guard for URL policy enforcement.
@@ -944,6 +958,13 @@ func (r *SSETransformingReader) releaseLineBuffer() {
 // outlive the stream (the pool is process-wide; keeping a buffer alive past the
 // stream would waste it, and recycling it early would corrupt live output).
 func (r *SSETransformingReader) finishWithError(err error) (int, error) {
+	// NENYA-344: the assembler's held tails and completions are delivered
+	// even on the early-termination funnels (guard block, injected error,
+	// context cancel) — the scanner-done path never runs on those. Flush
+	// is idempotent, so the double flush at a normal end is a no-op.
+	if r.toolArgs != nil {
+		r.toolArgs.Flush()
+	}
 	r.releaseLineBuffer()
 	buf := r.poolBuf
 	r.poolBuf = nil

@@ -760,6 +760,19 @@ func (p *Proxy) setupTransformingReader(gw *gateway.NenyaGateway, o transformRea
 		transformingReader.SetCanaryWatcher(stream.NewCanaryWatcher(o.canary.Token, o.canary.Action, "stream", gw.Metrics, gw.Logger.With("agent", o.agentName)))
 	}
 	p.setupStreamEntropyFilterIfEnabled(gw, transformingReader)
+	// NENYA-344 (Module A Phase 010): the always-on tool-argument assembler
+	// reassembles streamed tool-call names and arguments across chunks so
+	// the guard phases can observe them; it observes only. Bounds: the
+	// hold-back default covers the longest exact-substring token the
+	// stream guards match (the canary marker), the per-call cap aligns
+	// with mcp.DefaultMaxArgBytes when the MCP guard is not materialized
+	// (clamped under the 8 MiB stream total, which is enforced on every
+	// append), and at most DefaultToolArgsMaxCalls calls accumulate
+	// concurrently — see stream.ToolCallAssembler. The Phase 010 observer
+	// logs completion activity (names and byte counts, never content).
+	assembler := stream.NewToolCallAssembler(stream.DefaultToolArgsHoldBytes, toolArgsMaxBytes(gw), stream.DefaultToolArgsTotalBytes, stream.DefaultToolArgsMaxCalls)
+	assembler.SetObserver(&toolArgsLogObserver{logger: gw.Logger.With("agent", o.agentName, "provider", o.target.Provider, "model", o.target.Model), fragLens: map[string]int{}})
+	transformingReader.SetToolArgsAssembler(assembler)
 	contentBuilder := p.setupContentBuilderIfNeeded(gw, o.agentName, transformingReader)
 
 	if stallR != nil {

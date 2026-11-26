@@ -321,7 +321,33 @@ marker on `stream`, `buffered`, and tool-args channels). Both can terminate
 the response with a structured SSE error frame (`error_kind=exfil_blocked` /
 `exfil_detected`) or rewrite content in place (`strip` / log-mode scrubbing).
 Buffered (non-streaming) bodies run the same policies via a full-body
-inspection. See [INJECTION_DEFENSE.md](INJECTION_DEFENSE.md#response-path-controls).
+inspection. One guard-blind spot is closed for observation: the guards visit
+model text, so tool-call arguments delivered as streamed deltas — OpenAI
+`delta.tool_calls[].function.arguments`, Anthropic
+`input_json_delta.partial_json`, Responses `function_call_arguments.delta` —
+reached the client with no observation surface at all (NENYA-344, Module A
+Phase 010). The always-on streamed tool-call argument assembler
+(`internal/stream/toolargs.go`) reassembles each call's name and arguments
+across chunks on the raw provider-native surface (including Gemini's whole
+`functionCall` parts and bare-JSON non-`data:` lines; the egress guards
+themselves remain scoped to `data:`-framed lines — a pre-existing gap) and
+drives a `ToolArgsObserver` with hold-bounded, rune-aligned, non-overlapping
+slices plus a per-call completion signal. The 64-byte hold-back is sized to
+the longest exact-substring token the guards match (the canary marker);
+fragments stay contiguous and the live tail is withheld until completion, so
+observers match at completion or retain a ≤hold-byte sliding window (the
+mechanism the existing stream guards already use) — cap evictions carry the
+withheld tail into the successor accumulator to keep that stream contiguous
+across the boundary. It observes
+only — wire bytes are untouched, and Phase 010 supports detection, metrics
+and tripwires, not retroactive stripping (an enforcing guard registers in
+Phase 020 with chunk-mutation or mid-stream termination semantics).
+Accumulation is bounded on every axis — per call (aligned with the MCP
+guard's `max_arg_bytes` when set, clamped under the stream bound), per
+stream (enforced on every append), and per concurrently-open call count —
+with breaches surfaced (cap-eviction count + saturation Warn), and the
+Phase 020 guard observers register on this surface. See
+[INJECTION_DEFENSE.md](INJECTION_DEFENSE.md#response-path-controls).
 
 ## Cost Model (Peak/Off-Peak & Cached Input)
 
