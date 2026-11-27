@@ -53,8 +53,15 @@ func (r *RedactInterceptor) Process(_ context.Context, req *InterceptRequest) (*
 		// count closure honest if the field semantics ever change.
 		return RedactSecrets(content, true, r.patterns, r.label)
 	}, r.label, &redactions)
+	// NENYA-348: the tool-call arguments surface is a JSON-ENCODED
+	// document — it gets the escape-aware redactor so a secret hidden
+	// behind \" or \uXXXX quoting is still caught (the decoded span is
+	// replaced, leaving the document's structure untouched).
+	argsRedact := newCountingRedactor(func(content string) string {
+		return RedactJSONEncoded(content, true, r.patterns, r.label)
+	}, r.label, &redactions)
 	for _, msg := range req.Messages {
-		if WalkMessageText(msg, redact) {
+		if WalkMessageTextArgs(msg, redact, argsRedact) {
 			modified = true
 		}
 	}

@@ -32,6 +32,7 @@ type redactionVariantCorpus struct {
 	Cases []struct {
 		Name       string `json:"name"`
 		Preset     string `json:"preset"`
+		Surface    string `json:"surface,omitempty"`
 		Text       string `json:"text"`
 		Value      string `json:"value"`
 		Detected   bool   `json:"detected"`
@@ -40,6 +41,16 @@ type redactionVariantCorpus struct {
 		PlannedFix string `json:"plannedFix,omitempty"`
 		Note       string `json:"note,omitempty"`
 	} `json:"cases"`
+}
+
+// knownRedactionSurfaces is the closed set of surface kinds a corpus case
+// may declare: "" runs the flat RedactSecrets path, "toolargs" runs the
+// JSON-aware encoded-arguments redactor the tool-call surface uses in
+// production. A typo'd surface would silently exercise the wrong entry
+// point, so the corpus rejects unknown values.
+var knownRedactionSurfaces = map[string]bool{
+	"":         true,
+	"toolargs": true,
 }
 
 // knownRedactionPresets guards the corpus against a typo'd preset name:
@@ -120,6 +131,9 @@ func TestRedactionVariantTaxonomy(t *testing.T) {
 		if !knownRedactionPresets[tc.Preset] {
 			t.Fatalf("case %q: unknown preset %q (expandRedactPreset would silently fall back to credentials)", tc.Name, tc.Preset)
 		}
+		if !knownRedactionSurfaces[tc.Surface] {
+			t.Fatalf("case %q: unknown surface %q (the corpus would silently exercise the wrong redaction entry point)", tc.Name, tc.Surface)
+		}
 		if !tc.Benign && tc.Value == "" {
 			t.Fatalf("case %q: non-benign cases must carry a non-empty value", tc.Name)
 		}
@@ -154,6 +168,12 @@ func TestRedactionVariantTaxonomy(t *testing.T) {
 		}
 		t.Run(tc.Name, func(t *testing.T) {
 			sanitized := RedactSecrets(tc.Text, true, fixture.Patterns, fixture.Label)
+			if tc.Surface == "toolargs" {
+				// The tool-call arguments surface runs the JSON-aware
+				// redactor in production (NENYA-348): the corpus must
+				// exercise the same entry point.
+				sanitized = RedactJSONEncoded(tc.Text, true, fixture.Patterns, fixture.Label)
+			}
 			switch {
 			case tc.Benign:
 				if sanitized != tc.Text {

@@ -17,8 +17,19 @@ import (
 // NENYA marker object) so the original text never survives. Returns
 // true if any surface was modified.
 func WalkMessageText(msg map[string]interface{}, fn func(string) string) bool {
+	return WalkMessageTextArgs(msg, fn, nil)
+}
+
+// WalkMessageTextArgs is WalkMessageText with a dedicated fn for the
+// tool-call arguments surface: arguments are JSON-ENCODED documents, so
+// their redactor (NENYA-348) decodes escapes before matching while the
+// other text surfaces stay flat. A nil argsFn falls back to fn.
+func WalkMessageTextArgs(msg map[string]interface{}, fn func(string) string, argsFn func(string) string) bool {
 	changed := walkMessageContent(msg, fn)
-	if walkToolCallArguments(msg, fn) {
+	if argsFn == nil {
+		argsFn = fn
+	}
+	if walkToolCallArguments(msg, argsFn) {
 		changed = true
 	}
 	return changed
