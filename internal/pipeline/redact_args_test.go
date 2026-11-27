@@ -5,6 +5,8 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+
+	"github.com/nenya/config"
 )
 
 // NENYA-348 pins: the tool-call arguments surface runs the JSON-aware
@@ -111,6 +113,45 @@ func TestRedactInterceptorInvalidJSONArgsNeutralized(t *testing.T) {
 	out := processArgs(t, argsRedactInterceptor(), `{"cmd":"export KEY=AKIAIOSFODNN7EXAMPLE"`)
 	if out["args"].(string) != `{"nenya":"content_neutralized"}` {
 		t.Fatalf("invalid-JSON arguments not neutralized: %q", out["args"])
+	}
+}
+
+// TestRedactInterceptorArgsKeepChecksumGate pins the validator parity
+// (round-1 MED): a Luhn-invalid card-shaped match inside args stays
+// untouched while a Luhn-valid one is redacted — the decode pass gates
+// on the same checksum validators as the flat pass.
+func TestRedactInterceptorArgsKeepChecksumGate(t *testing.T) {
+	patterns := []*regexp.Regexp{regexp.MustCompile(config.FinancialCardPattern)}
+	interceptor := NewRedactInterceptor(true, patterns, "REDACTED", nil)
+
+	invalid := processArgs(t, interceptor, `{"order":"4111-1111-1111-1112","note":"test card"}`)
+	if strings.Contains(invalid["args"].(string), "REDACTED") {
+		t.Fatalf("Luhn-invalid card in args redacted: %q", invalid["args"])
+	}
+	valid := processArgs(t, interceptor, `{"pay":"4111-1111-1111-1111"}`)
+	if strings.Contains(valid["args"].(string), "4111") {
+		t.Fatalf("Luhn-valid card in args survived: %q", valid["args"])
+	}
+}
+
+// TestRedactInterceptorArgsConfusableLayer pins the confusable layer on
+// the args surface (round-1 MED): an invisible-split secret inside a
+// JSON-escaped arguments document is caught by the confusable layer.
+func TestRedactInterceptorArgsConfusableLayer(t *testing.T) {
+	patterns := []*regexp.Regexp{
+		regexp.MustCompile(`(?i)(password|passwd|pwd|secret|token)[\s:=]+['"][^'"]{6,}['"]`),
+	}
+	out := processArgs(t, NewRedactInterceptor(true, patterns, "REDACTED", nil),
+		`{"cmd":"mysql --password=\"hunter\u200b2secret\""}`)
+	if strings.Contains(out["args"].(string), "hunter2secret") {
+		t.Fatalf("invisible-split secret in args survived: %q", out["args"])
+	}
+	var decoded map[string]any
+	if err := json.Unmarshal([]byte(out["args"].(string)), &decoded); err != nil {
+		t.Fatalf("confusable-layer rewrite broke JSON: %v (%q)", err, out["args"])
+	}
+	if !strings.Contains(out["args"].(string), "REDACTED") {
+		t.Fatalf("label missing: %q", out["args"])
 	}
 }
 
