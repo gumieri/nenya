@@ -296,7 +296,31 @@ const (
 	// FinancialCNPJPattern matches formatted Brazilian CNPJ numbers; gated
 	// by check-digit validation.
 	FinancialCNPJPattern = `\b\d{2}\.\d{3}\.\d{3}/\d{4}-\d{2}\b`
+	// RegionalPIIPatterns (NENYA-355, Module B Phase 060): checksum-gated
+	// national-identifier shapes. All gated by validators in
+	// internal/pipeline/checksum.go — a shape match without a valid
+	// check digit is NOT redacted.
+	// AadhaarPattern matches the Indian 12-digit resident identifier
+	// (starts 2-9, optional space/dash separators); gated by Verhoeff.
+	AadhaarPattern = `\b[2-9]\d{3}[ -]?\d{4}[ -]?\d{4}\b`
+	// ChinaIDPattern matches the Chinese resident identity card number
+	// (18 chars: 6-digit region, 19/20-century birth date, sequence,
+	// check digit X|d); gated by ISO 7064 MOD 11-2.
+	ChinaIDPattern = `\b\d{6}(?:19|20)\d{2}(?:0[1-9]|1[0-2])(?:0[1-9]|[12]\d|3[01])\d{3}[\dXx]\b`
+	// MyNumberPattern matches the Japanese 12-digit personal number
+	// (optional space/dash separators); gated by MOD 11 weights.
+	MyNumberPattern = `\b\d{4}[ -]?\d{4}[ -]?\d{4}\b`
 )
+
+// RedactPresetRegionalPII returns the regional national-identifier
+// patterns (NENYA-355): the three checksum-gated packs, one per region.
+func RedactPresetRegionalPII() []string {
+	return []string{
+		AadhaarPattern,
+		ChinaIDPattern,
+		MyNumberPattern,
+	}
+}
 
 // RedactPresetFinancial returns the financial preset source list. It
 // returns a fresh copy so callers cannot mutate the package-level preset
@@ -324,6 +348,10 @@ var redactPresets = map[string][]string{
 		`eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]*`,
 	},
 	"financial": RedactPresetFinancial(),
+	// NENYA-355 (Module B Phase 060): the regional PII pack — one
+	// checksum-gated national-identifier pattern per region (India
+	// Aadhaar/Verhoeff, China resident ID/ISO 7064, Japan My Number).
+	"pii-regional": RedactPresetRegionalPII(),
 	"pii": {
 		`\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b`,
 		`\b\d{3}-\d{2}-\d{4}\b`,

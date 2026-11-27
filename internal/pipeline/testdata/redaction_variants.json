@@ -36,6 +36,14 @@
     {"name": "benign: port range", "preset": "financial", "text": "open ports 3000-4000 and 8080 on the firewall", "value": "", "detected": false, "benign": true},
     {"name": "benign: short digit run", "preset": "financial", "text": "invoice 411111111111 for the year 2026", "value": "", "detected": false, "benign": true},
     {"name": "benign: domestic phone without country code", "preset": "pii", "text": "the support line is 555 123 4567", "value": "", "detected": false, "benign": true},
-    {"name": "benign: the bare word password", "preset": "credentials", "text": "rotate the password regularly", "value": "", "detected": false, "benign": true}
+    {"name": "benign: the bare word password", "preset": "credentials", "text": "rotate the password regularly", "value": "", "detected": false, "benign": true},
+
+    {"name": "regional: valid Aadhaar with space groups", "preset": "pii-regional", "text": "aadhaar 2345 6789 0124 on file", "value": "2345 6789 0124", "detected": true, "note": "Verhoeff-valid (the derived fixture, tables anchored by the canonical 236→3 vector)"},
+    {"name": "regional: checksum-invalid Aadhaar shape", "preset": "pii-regional", "text": "ref 2345 6789 0123 on file", "value": "2345 6789 0123", "detected": false, "accepted": true, "note": "the shape matches but the Verhoeff digit fails — the checksum gate keeps false positives out, exactly like the Luhn-gated card patterns"},
+    {"name": "regional: valid China ID", "preset": "pii-regional", "text": "id 110101199003074477 issued", "value": "110101199003074477", "detected": true},
+    {"name": "regional: checksum-invalid China ID", "preset": "pii-regional", "text": "id 110101199003074478 issued", "value": "110101199003074478", "detected": false, "accepted": true, "note": "ISO 7064 check digit fails; the shape-only match is not redacted"},
+    {"name": "regional: valid My Number with dash groups", "preset": "pii-regional", "text": "my number 1234-5678-9018 issued", "value": "1234-5678-9018", "detected": true},
+    {"name": "regional: contiguous Aadhaar", "preset": "pii-regional", "text": "aadhaar 234567890124 on file", "value": "234567890124", "detected": true, "note": "the contiguous spelling matches the same pattern"},
+    {"name": "benign: regional 12-digit order number", "preset": "pii-regional", "text": "order 300012345670 shipped", "value": "", "detected": false, "benign": true, "note": "fails BOTH the Verhoeff (Aadhaar) and My Number MOD 11 checksums — the multi-pack design means a 12-digit number must fail every validator before it is treated as benign"}
   ]
 }

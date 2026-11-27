@@ -58,9 +58,10 @@ var knownRedactionSurfaces = map[string]bool{
 // credentials patterns, which would silently pin cases against the wrong
 // pattern set.
 var knownRedactionPresets = map[string]bool{
-	"credentials": true,
-	"financial":   true,
-	"pii":         true,
+	"credentials":  true,
+	"financial":    true,
+	"pii":          true,
+	"pii-regional": true,
 }
 
 // validRedactionPlannedFixes is the closed set of phases a pinned

@@ -99,22 +99,25 @@ func TestCNPJValid(t *testing.T) {
 }
 
 // TestFinancialPresetValidatorCoverage guards against preset drift in both
-// directions: every financial preset pattern must have a checksum validator
-// registered (else it silently redacts unconditionally), and every
-// registered validator must correspond to a live preset pattern (else the
-// gating silently stopped applying).
+// directions: every validator-carrying preset pattern (financial + the
+// regional PII pack, NENYA-355) must have a checksum validator registered
+// (else it silently redacts unconditionally), and every registered
+// validator must correspond to a live preset pattern (else the gating
+// silently stopped applying).
 func TestFinancialPresetValidatorCoverage(t *testing.T) {
-	preset := config.RedactPresetFinancial()
+	preset := append(
+		config.RedactPresetFinancial(),
+		config.RedactPresetRegionalPII()...)
 	presetSet := make(map[string]bool, len(preset))
 	for _, src := range preset {
 		presetSet[src] = true
 		if _, ok := matchValidators[src]; !ok {
-			t.Errorf("financial preset pattern %q has no validator in matchValidators", src)
+			t.Errorf("preset pattern %q has no validator in matchValidators", src)
 		}
 	}
 	for src := range matchValidators {
 		if !presetSet[src] {
-			t.Errorf("matchValidators entry %q does not match any financial preset pattern", src)
+			t.Errorf("matchValidators entry %q does not match any preset pattern", src)
 		}
 	}
 }
