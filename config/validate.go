@@ -1904,6 +1904,9 @@ func validateExfilGuardConfig(cfg *Config) []string {
 		if g.MaxQueryChars < 0 {
 			errs = append(errs, "governance.exfil_guard.max_query_chars must be >= 0")
 		}
+		if d := g.DNSCheck; d != nil && d.TimeoutMs != 0 && (d.TimeoutMs < 1 || d.TimeoutMs > MaxExfilDNSTimeoutMs) {
+			errs = append(errs, fmt.Sprintf("governance.exfil_guard.dns_check.timeout_ms must be between 1 and %d (0 applies the default %d)", MaxExfilDNSTimeoutMs, DefaultExfilDNSTimeoutMs))
+		}
 		for i, host := range g.AllowedHosts {
 			if strings.ContainsAny(host, "/ :") {
 				errs = append(errs, fmt.Sprintf("governance.exfil_guard.allowed_hosts[%d]: %q is not a bare hostname (scheme, path, port, or space)", i, host))

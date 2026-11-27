@@ -1,12 +1,15 @@
 package stream
 
 import (
+	"context"
 	"encoding/json"
 	"log/slog"
+	"net"
 	"net/url"
 	"regexp"
 	"sort"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	"github.com/nenya/config"
@@ -46,6 +49,10 @@ const (
 	exfilReasonHostNotAllowed = "host_not_allowed"
 	exfilReasonQueryLength    = "query_length"
 	exfilReasonQueryEntropy   = "query_entropy"
+	// exfilReasonDNSUnresolvable (NENYA-354, optional dns_check): the
+	// hostname failed to resolve within the configured timeout — a
+	// fabricated host.
+	exfilReasonDNSUnresolvable = "dns_unresolvable"
 )
 
 // Markdown image ![alt](url) and link [text](url) constructs, plus bare
@@ -73,6 +80,20 @@ type ExfilGuard struct {
 	allowedHosts    []string
 	maxQueryChars   int
 	allowIPLiterals bool
+
+	// DNS-reachability check (NENYA-354, optional, default off): when
+	// enabled, a hostname that fails to resolve within dnsTimeout is
+	// flagged `dns_unresolvable` (fabricated host). resolveHost is the
+	// seam the tests stub; production uses net.DefaultResolver. The
+	// lookup context is bounded ONLY by dnsTimeout (Background-derived):
+	// the guard's evaluation methods carry no request context, and a
+	// bounded fire-and-forget probe is the documented allowance.
+	dnsEnabled  bool
+	dnsTimeout  time.Duration
+	resolveHost func(ctx context.Context, host string) ([]string, error)
+	// dnsMemo caches per-HOST verdicts ("" = resolved) so N unique URLs
+	// on one host cost one resolution; bounded like the URL memo.
+	dnsMemo map[string]string
 
 	window     []rune
 	windowSize int
@@ -121,10 +142,16 @@ func NewExfilGuard(cfg config.ExfilGuardConfig, metrics *infra.Metrics) *ExfilGu
 		allowedHosts:    hosts,
 		maxQueryChars:   maxQueryChars,
 		allowIPLiterals: allowIPLiterals,
-		window:          make([]rune, 0, exfilWindowRunes),
-		windowSize:      exfilWindowRunes,
-		memo:            make(map[string]string),
-		metrics:         metrics,
+		dnsEnabled:      cfg.EffectiveDNSCheckEnabled(),
+		dnsTimeout:      cfg.DNSCheck.EffectiveTimeout(),
+		resolveHost: func(ctx context.Context, host string) ([]string, error) {
+			return net.DefaultResolver.LookupHost(ctx, host)
+		},
+		window:     make([]rune, 0, exfilWindowRunes),
+		windowSize: exfilWindowRunes,
+		memo:       make(map[string]string),
+		dnsMemo:    make(map[string]string),
+		metrics:    metrics,
 	}
 }
 
@@ -743,7 +770,8 @@ func (g *ExfilGuard) evaluate(rawURL string) string {
 		return g.evaluateQuery(u.RawQuery)
 	}
 	// An explicitly allowed host wins over the built-in deny set.
-	if !hostAllowed(host, g.allowedHosts) {
+	allowed := hostAllowed(host, g.allowedHosts)
+	if !allowed {
 		// A special-use name or localhost variant (NENYA-147): the same
 		// definition the MCP argument policy uses, so "http://db.internal/"
 		// cannot pass as an ordinary hostname.
@@ -754,7 +782,50 @@ func (g *ExfilGuard) evaluate(rawURL string) string {
 			return exfilReasonHostNotAllowed
 		}
 	}
-	return g.evaluateQuery(u.RawQuery)
+	// Cheap checks first: the (optional, potentially blocking) DNS
+	// reachability probe runs only when everything else passed. IP
+	// literals returned above — there is no name to resolve.
+	if v := g.evaluateQuery(u.RawQuery); v != "" {
+		return v
+	}
+	return g.evaluateDNS(host, allowed)
+}
+
+// evaluateDNS applies the optional DNS-reachability check (NENYA-354):
+// a hostname that fails to resolve within the configured timeout gets
+// reason `dns_unresolvable` — a fabricated host, the signature of a
+// hallucinated link (or a deliberately bogus destination). Verdicts are
+// memoized per host (evicting one entry on overflow) so N unique URLs
+// on one host cost one bounded lookup. Allowlisted hosts are TRUSTED
+// and never resolved: the operator's allowlist is an explicit statement
+// that the host is legitimate (often internal — unresolvable against a
+// public resolver), so probing it would both risk a false flag and leak
+// the internal namespace to the resolver. No-op when disabled.
+func (g *ExfilGuard) evaluateDNS(host string, allowlisted bool) string {
+	if !g.dnsEnabled || allowlisted {
+		return ""
+	}
+	if v, cached := g.dnsMemo[host]; cached {
+		return v
+	}
+	verdict := ""
+	ctx, cancel := context.WithTimeout(context.Background(), g.dnsTimeout)
+	defer cancel()
+	_, err := g.resolveHost(ctx, host)
+	if err != nil {
+		verdict = exfilReasonDNSUnresolvable
+	}
+	if len(g.dnsMemo) >= exfilMaxTrackedURLs {
+		// Bounded-but-refreshing: evict one entry so per-host cost stays
+		// one resolution per stream instead of degrading to
+		// per-occurrence lookups past the cap.
+		for k := range g.dnsMemo {
+			delete(g.dnsMemo, k)
+			break
+		}
+	}
+	g.dnsMemo[host] = verdict
+	return verdict
 }
 
 // evaluateQuery applies the data-smuggling checks: query length and

@@ -315,7 +315,13 @@ EngineManager (internal/local/manager.go:13)
 The upstream SSE stream flows through pluggable egress filters before reaching
 the client: provider response transformations (adapter system), the optional
 **ExfilGuard** URL policy (markdown links/images and bare URLs, sliding-window
-over deltas so a construct straddling chunk boundaries is still evaluated),
+over deltas so a construct straddling chunk boundaries is still evaluated;
+an optional DNS-reachability probe — `exfil_guard.dns_check`, default off —
+flags a hostname that fails to resolve as `dns_unresolvable`, a fabricated
+host, with per-host memoization (evicting on overflow) and a bounded
+per-lookup timeout; allowlisted hosts are trusted and never probed;
+enabling it means Nenya itself issues the DNS query, a tradeoff
+documented in CONFIGURATION.md),
 and the **canary tripwire** watcher (exact-substring echo of the per-request
 marker). Both watch the `stream` and `buffered` channels and the tool-args
 surfaces — the MCP request scan and, since NENYA-345, the reassembled

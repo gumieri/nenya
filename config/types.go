@@ -201,6 +201,62 @@ type ExfilGuardConfig struct {
 	// AllowIPLiterals permits IP-literal hosts (private, loopback, and
 	// link-local ranges remain denied regardless; default false).
 	AllowIPLiterals *bool `json:"allow_ip_literals,omitempty"`
+	// DNSCheck optionally adds a DNS-reachability check to the URL
+	// policy (NENYA-354, default off): a hostname that FAILS to resolve
+	// is flagged with reason `dns_unresolvable` (a fabricated host —
+	// hallucinated links can be stripped without touching real content).
+	// See ExfilDNSCheckConfig for the tradeoffs.
+	DNSCheck *ExfilDNSCheckConfig `json:"dns_check,omitempty"`
+}
+
+// ExfilDNSCheckConfig configures the optional DNS-reachability check
+// (NENYA-354). Tradeoffs an operator accepts by enabling it: (1) Nenya
+// itself performs a DNS query for every checked hostname — a URL that
+// encodes data in subdomains makes the RESOLUTION the exfil channel
+// (enable only with a resolver setup you accept querying); (2) a
+// failing/slow resolver adds a bounded per-unique-host stall on the
+// response path (the timeout below); (3) transient resolver failures
+// flag real hosts as unresolvable — pair with `log` before `strip`/`block`.
+type ExfilDNSCheckConfig struct {
+	// Enabled master-switches the check. Default OFF — the field exists
+	// to make the resolution cost and DNS-echo tradeoff explicit opt-in.
+	Enabled *bool `json:"enabled,omitempty"`
+	// TimeoutMs bounds each resolution (0 applies the default; rejected
+	// outside 1..MaxExfilDNSTimeoutMs at the config boundary).
+	TimeoutMs int `json:"timeout_ms,omitempty"`
+}
+
+// DefaultExfilDNSTimeoutMs bounds one resolution when the operator left
+// the knob unset.
+const DefaultExfilDNSTimeoutMs = 1000
+
+// MaxExfilDNSTimeoutMs caps the configured resolution timeout (a large
+// stall budget on the response path is a self-inflicted DoS).
+const MaxExfilDNSTimeoutMs = 5000
+
+// EffectiveDNSCheckEnabled reports whether the DNS-reachability check
+// runs (nil-safe at both levels; default OFF).
+func (g *ExfilGuardConfig) EffectiveDNSCheckEnabled() bool {
+	return g.DNSCheck != nil && g.DNSCheck.EffectiveEnabled()
+}
+
+// EffectiveEnabled reports whether the check is on (nil-safe; default OFF).
+func (c *ExfilDNSCheckConfig) EffectiveEnabled() bool {
+	return c != nil && c.Enabled != nil && *c.Enabled
+}
+
+// EffectiveTimeout reports the per-resolution timeout as a duration
+// (nil-safe; 0/negatives apply the default, values above the cap are
+// clamped — direct construction cannot bypass the config boundary).
+func (c *ExfilDNSCheckConfig) EffectiveTimeout() time.Duration {
+	ms := DefaultExfilDNSTimeoutMs
+	if c != nil && c.TimeoutMs > 0 {
+		ms = c.TimeoutMs
+	}
+	if ms > MaxExfilDNSTimeoutMs {
+		ms = MaxExfilDNSTimeoutMs
+	}
+	return time.Duration(ms) * time.Millisecond
 }
 
 // Exfil guard actions.
