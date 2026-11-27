@@ -72,6 +72,18 @@ func (p *Proxy) handleEmbeddings(gw *gateway.NenyaGateway, w http.ResponseWriter
 		return
 	}
 
+	// NENYA-352: the deterministic security subset (secret redaction,
+	// entropy redaction, injection detection — chat-parity) scans the
+	// input text surfaces BEFORE the token estimate, so the bucket is
+	// charged for the text actually dispatched. Rejections and strict
+	// faults render here; re-marshaling failures fail closed (a scanned
+	// payload that cannot be re-encoded must not dispatch in the clear).
+	scannedBody, ok := p.scanEmbeddingsInput(gw, r.Context(), w, payload, bodyBytes)
+	if !ok {
+		return
+	}
+	bodyBytes = scannedBody
+
 	// NENYA-336: charge the PRE-DISPATCH INPUT ESTIMATE. String and
 	// string-array inputs are countable from the buffered body here;
 	// pre-tokenized int-array inputs are uncountable and estimate 0 — the

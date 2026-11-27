@@ -78,6 +78,18 @@ func (p *Proxy) handleExtensionEndpoint(gw *gateway.NenyaGateway, w http.Respons
 	}
 
 	contentType := r.Header.Get("Content-Type")
+	// NENYA-352: the content policy scans the endpoint's text surfaces
+	// before dispatch (scanExtensionBody: JSON text fields on the JSON
+	// endpoints, multipart form fields for transcriptions — the audio
+	// itself is binary and passes through byte-exact). POSTs only; reads
+	// have no request content.
+	if r.Method == http.MethodPost && len(bodyBytes) > 0 {
+		scanned, newCT, ok := p.scanExtensionBody(gw, ctx, w, contentType, bodyBytes)
+		if !ok {
+			return
+		}
+		bodyBytes, contentType = scanned, newCT
+	}
 	ctxLogger = ctxLogger.With("provider", provider.Name)
 
 	resp, err := p.doUpstreamRoundTrip(ctx, gw, r.Method, targetURL, bodyBytes, provider.Name, "", r.Header, contentType, maxAttempts)

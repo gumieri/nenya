@@ -420,6 +420,26 @@ text, matching the chat walker's treatment of tool results; the buffered
 scan caps at the request-side body limit (a larger response is refused, not
 streamed past the guards).
 
+### Content Policy on Non-Chat Endpoints (NENYA-352)
+
+The deterministic security subset (gw.MCPSecurityChain — the same fail-closed
+redact/entropy/injection interceptors the MCP loop's re-scan uses, escalation
+disabled, nil chain fails open) also covers the non-chat endpoints' text
+surfaces: `/v1/embeddings` scans the input string/array BEFORE the token
+estimate (the TPM bucket charges the dispatched text); the JSON extension
+endpoints (`/v1/audio/speech`, `/v1/moderations`, `/v1/rerank`) scan their
+text fields (input, prompt, query, documents — arrays per element);
+`/v1/audio/transcriptions` and `/v1/files` uploads scan multipart form
+fields and text-decodable file parts (valid UTF-8, no NUL — batch JSONL,
+plain text), with binary parts passing through byte-exact and the original
+part Content-Type preserved on re-emission. Strict faults render 503,
+injection rejections 403, and re-marshal failures fail closed (500) — a
+policy-rewritten body never dispatches in the clear. `/v1/batches` create
+references an uploaded file id (content scanned at upload; no text surface).
+Files/batches remain passthrough for ids (NENYA-189). Recorded gaps:
+binary content is never decoded (documented skip), and embeddings'
+tokenized int-array inputs have no text surface.
+
 ## Cost Model (Peak/Off-Peak & Cached Input)
 
 Cost is a first-class, privacy-neutral signal: per-model rate cards

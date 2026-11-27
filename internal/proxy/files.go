@@ -59,6 +59,25 @@ func (p *Proxy) handleFilesOrBatches(gw *gateway.NenyaGateway, w http.ResponseWr
 		return
 	}
 
+	// NENYA-352: multipart POSTs are file uploads — the content policy
+	// scans the form fields and text-decodable file parts (batch JSONL,
+	// plain text); binary parts pass through byte-exact. The batch create
+	// body is JSON referencing an uploaded file id — its content was
+	// scanned at upload, so there is no text surface here (documented).
+	if r.Method == http.MethodPost {
+		contentType := r.Header.Get("Content-Type")
+		if strings.HasPrefix(strings.ToLower(contentType), "multipart/") {
+			scanCtx, scanCancel := p.buildFilesContext(r, provider)
+			scanned, newCT, ok := p.scanMultipartBody(gw, scanCtx, w, contentType, bodyBytes, "")
+			scanCancel()
+			if !ok {
+				return
+			}
+			bodyBytes = scanned
+			r.Header.Set("Content-Type", newCT)
+		}
+	}
+
 	ctx, cancel := p.buildFilesContext(r, provider)
 	defer cancel()
 
