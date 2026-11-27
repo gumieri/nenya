@@ -317,9 +317,11 @@ the client: provider response transformations (adapter system), the optional
 **ExfilGuard** URL policy (markdown links/images and bare URLs, sliding-window
 over deltas so a construct straddling chunk boundaries is still evaluated),
 and the **canary tripwire** watcher (exact-substring echo of the per-request
-marker on `stream`, `buffered`, and tool-args channels). Both can terminate
-the response with a structured SSE error frame (`error_kind=exfil_blocked` /
-`exfil_detected`) or rewrite content in place (`strip` / log-mode scrubbing).
+marker). Both watch the `stream` and `buffered` channels and the tool-args
+surfaces — the MCP request scan and, since NENYA-345, the reassembled
+streamed response arguments. Both can terminate the response with a
+structured SSE error frame (`error_kind=exfil_blocked` / `exfil_detected`)
+or rewrite content in place (`strip` / log-mode scrubbing).
 Buffered (non-streaming) bodies run the same policies via a full-body
 inspection. One guard-blind spot is closed for observation: the guards visit
 model text, so tool-call arguments delivered as streamed deltas — OpenAI
@@ -338,16 +340,32 @@ fragments stay contiguous and the live tail is withheld until completion, so
 observers match at completion or retain a ≤hold-byte sliding window (the
 mechanism the existing stream guards already use) — cap evictions carry the
 withheld tail into the successor accumulator to keep that stream contiguous
-across the boundary. It observes
-only — wire bytes are untouched, and Phase 010 supports detection, metrics
-and tripwires, not retroactive stripping (an enforcing guard registers in
-Phase 020 with chunk-mutation or mid-stream termination semantics).
+across the boundary. It observes only — wire bytes are untouched, and
+Phase 010 supports detection, metrics and tripwires, not retroactive
+stripping.
 Accumulation is bounded on every axis — per call (aligned with the MCP
 guard's `max_arg_bytes` when set, clamped under the stream bound), per
 stream (enforced on every append), and per concurrently-open call count —
-with breaches surfaced (cap-eviction count + saturation Warn), and the
-Phase 020 guard observers register on this surface. See
-[INJECTION_DEFENSE.md](INJECTION_DEFENSE.md#response-path-controls).
+with breaches surfaced (cap-eviction count + saturation Warn). Phase 020
+(NENYA-345) registers the enforcing observers on this surface: a dedicated
+ExfilGuard and canary watcher — separate sliding windows holding argument
+bytes — with the same effective config as their text-path counterparts.
+`log` (the default) records detections — the canary on the documented
+`tool_args` channel, the URL policy by reason and action — and the stream
+continues; `block` terminates the stream mid-detection through the
+assembler (`ErrCanaryDetected` / `ErrExfilBlocked`): the detection chunk
+and everything after it are suppressed, while bytes of the construct
+forwarded in earlier chunks (up to the guard's withheld tail) cannot be
+recalled; `strip` records the detection without redacting, because
+retroactive redaction of forwarded bytes is impossible (a one-time warning
+states it — an operator who needs argument content kept from the client
+uses block). Guard tails are EOF-evaluated when the last observed call
+completes and at stream end — on a stream read to scanner-done, a tail
+verdict becomes the stream's terminal error (terminal framing already
+forwarded before the verdict — a `[DONE]` or an injected gateway_error —
+precedes it, so a strict client may only see the interruption); on a
+canceled request the verdict is recorded but the client is already gone.
+See [INJECTION_DEFENSE.md](INJECTION_DEFENSE.md#response-path-controls).
 
 ## Cost Model (Peak/Off-Peak & Cached Input)
 

@@ -136,6 +136,51 @@ type ToolCallAssembler struct {
 	calls       map[string]*toolArgsCall
 	overCap     int
 	saturated   bool
+
+	// blockedErr, set by the Phase 020 enforcing guard observer, carries
+	// the first guard verdict that must terminate the stream (canary or
+	// egress policy); the reader checks Blocked() after every feed and
+	// reports BlockedError() through the existing blocked machinery.
+	blockedErr error
+	// flushHook, when set, runs at the end of every Flush — the guard
+	// observer drains its guards' held tails there so a stream-end tail
+	// scan can still raise a verdict.
+	flushHook func()
+}
+
+// Blocked reports whether an enforcing guard observer has raised a
+// stream-terminating verdict on the reassembled arguments.
+func (a *ToolCallAssembler) Blocked() bool {
+	return a != nil && a.blockedErr != nil
+}
+
+// BlockedError returns the verdict raised by the enforcing guard observer
+// (nil when not blocked).
+func (a *ToolCallAssembler) BlockedError() error {
+	if a == nil {
+		return nil
+	}
+	return a.blockedErr
+}
+
+// setBlocked records the first guard verdict; later verdicts cannot
+// displace it.
+func (a *ToolCallAssembler) setBlocked(err error) {
+	if a == nil || a.blockedErr != nil || err == nil {
+		return
+	}
+	a.blockedErr = err
+}
+
+// SetFlushHook registers a callback that runs at the end of every Flush —
+// the enforcing guard observer drains its guards' held tails there so a
+// stream-end tail scan can still raise a verdict (visible via Blocked()
+// immediately after the flush).
+func (a *ToolCallAssembler) SetFlushHook(fn func()) {
+	if a == nil {
+		return
+	}
+	a.flushHook = fn
 }
 
 // NewToolCallAssembler creates an assembler. holdBytes is a security floor,
@@ -219,19 +264,28 @@ func (a *ToolCallAssembler) FeedParsed(parsed map[string]interface{}) {
 // in the reader's early-termination funnels) as the backstop; a flush with
 // no open calls is a no-op and is idempotent.
 func (a *ToolCallAssembler) Flush() {
-	if a == nil || len(a.calls) == 0 {
+	if a == nil {
 		return
 	}
-	keys := make([]string, 0, len(a.calls))
-	for k := range a.calls {
-		keys = append(keys, k)
+	if len(a.calls) > 0 {
+		keys := make([]string, 0, len(a.calls))
+		for k := range a.calls {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		for _, k := range keys {
+			a.complete(k)
+		}
+		a.total = 0
+		a.saturated = false
 	}
-	sort.Strings(keys)
-	for _, k := range keys {
-		a.complete(k)
+	// The hook runs on EVERY flush — including no-ops: a cleanly completed
+	// call empties the map before the enforcing guard's withheld tail is
+	// drained, and skipping the hook there would leave that tail
+	// un-EOF-evaluated at stream end. Guard drains are idempotent.
+	if a.flushHook != nil {
+		a.flushHook()
 	}
-	a.total = 0
-	a.saturated = false
 }
 
 func (a *ToolCallAssembler) open(key, name string) *toolArgsCall {
@@ -371,6 +425,14 @@ func (a *ToolCallAssembler) complete(key string) {
 		// bounds re-evaluate on every new open, and a stale saturation
 		// flag would only misreport telemetry.
 		a.saturated = false
+		// All observed calls have ended — the arguments are final, so the
+		// enforcing guard's withheld tail can be EOF-evaluated now (the
+		// hook is the Phase 020 guard drain; idempotent). Draining only at
+		// map-empty keeps the tail pending while other calls still stream,
+		// so a still-growing construct is not falsely EOF-terminated early.
+		if a.flushHook != nil {
+			a.flushHook()
+		}
 	}
 }
 

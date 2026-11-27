@@ -57,6 +57,14 @@ func (r *SSETransformingReader) handleScannerDone() {
 		slog.Warn("SSE scanner error", "err", r.scanner.Err())
 		r.err = r.scanner.Err()
 	}
+	// NENYA-345: a tool-args guard verdict — the guard's withheld tail is
+	// EOF-evaluated during the flush above — outranks the ending
+	// classification: the client gets the policy block frame instead of a
+	// clean end. drainAfterScanDone routes it through the same blocked
+	// handling as any text-path block.
+	if r.toolArgs != nil && r.toolArgs.Blocked() {
+		r.err = r.toolArgs.BlockedError()
+	}
 	// NENYA-169: terminate the final event. A spec-compliant SSE client
 	// discards a pending event at EOF unless a blank line closed it, so an
 	// upstream that omitted the trailing blank line — or a stream that ended on
@@ -578,8 +586,3 @@ func (r *SSETransformingReader) tryParseJSONLabeled(data []byte, warn string) ma
 	}
 	return parsed
 }
-
-// applyStreamFilters runs the stream-side content filters over one
-// parsed chunk, reporting whether any filter rewrote it (callers must
-// re-encode; mutations live only in the map). A nil map means a filter
-// blocked the chunk.

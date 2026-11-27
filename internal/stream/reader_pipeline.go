@@ -24,6 +24,13 @@ func (r *SSETransformingReader) applyStreamFilters(parsed map[string]interface{}
 	if r.toolArgs != nil {
 		r.toolArgs.FeedParsed(parsed)
 	}
+	// NENYA-345: an enforcing guard observer's verdict terminates the
+	// stream through the existing blocked machinery (anyFilterBlocked /
+	// blockedStreamError) — the chunk that carried the detection is not
+	// forwarded.
+	if r.toolArgs != nil && r.toolArgs.Blocked() {
+		return nil, false
+	}
 	out, mutated, blocked := r.applyEgressGuards(parsed)
 	if blocked {
 		return nil, false
@@ -92,22 +99,28 @@ func applyStreamFilter(parsed map[string]interface{}, filter *StreamFilter) (map
 }
 
 // anyFilterBlocked reports whether a stream-side filter has terminated
-// the stream.
+// the stream — the text-path guards, or the Phase 020 enforcing guard
+// observer on the reassembled tool-call arguments.
 func (r *SSETransformingReader) anyFilterBlocked() bool {
 	return (r.streamFilter != nil && r.streamFilter.IsBlocked()) ||
 		(r.exfilGuard != nil && r.exfilGuard.IsBlocked()) ||
-		(r.canaryWatcher != nil && r.canaryWatcher.IsBlocked())
+		(r.canaryWatcher != nil && r.canaryWatcher.IsBlocked()) ||
+		(r.toolArgs != nil && r.toolArgs.Blocked())
 }
 
 // blockedStreamError returns the specific error for whichever filter
 // terminated the stream (canary tripwire takes precedence, then the
-// exfil guard; all wrap as stream-block errors for generic handling).
+// exfil guard, then the tool-args guard observer; all wrap as stream-block
+// errors for generic handling).
 func (r *SSETransformingReader) blockedStreamError() error {
 	if r.canaryWatcher != nil && r.canaryWatcher.IsBlocked() {
 		return ErrCanaryDetected
 	}
 	if r.exfilGuard != nil && r.exfilGuard.IsBlocked() {
 		return ErrExfilBlocked
+	}
+	if r.toolArgs != nil && r.toolArgs.Blocked() {
+		return r.toolArgs.BlockedError()
 	}
 	return ErrStreamBlocked
 }
@@ -468,6 +481,11 @@ func (r *SSETransformingReader) transformNonSSELine(line []byte) []byte {
 	if r.toolArgs != nil {
 		if parsed := r.tryParseJSONQuiet(line); parsed != nil {
 			r.toolArgs.FeedParsed(parsed)
+		}
+		// NENYA-345: a tool-args guard verdict suppresses this line; the
+		// Read loop's anyFilterBlocked check then terminates the stream.
+		if r.toolArgs.Blocked() {
+			return nil
 		}
 	}
 	if r.dropPrivateEvents {

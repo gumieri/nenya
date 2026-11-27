@@ -770,8 +770,19 @@ func (p *Proxy) setupTransformingReader(gw *gateway.NenyaGateway, o transformRea
 	// append), and at most DefaultToolArgsMaxCalls calls accumulate
 	// concurrently — see stream.ToolCallAssembler. The Phase 010 observer
 	// logs completion activity (names and byte counts, never content).
+	// NENYA-345 (Phase 020): the enforcing guard observer (dedicated
+	// ExfilGuard + canary watcher on the tool-args channel, same effective
+	// config as their text-path counterparts) joins the fan-out when
+	// enabled; its block verdict terminates the stream through the
+	// assembler.
 	assembler := stream.NewToolCallAssembler(stream.DefaultToolArgsHoldBytes, toolArgsMaxBytes(gw), stream.DefaultToolArgsTotalBytes, stream.DefaultToolArgsMaxCalls)
-	assembler.SetObserver(&toolArgsLogObserver{logger: gw.Logger.With("agent", o.agentName, "provider", o.target.Provider, "model", o.target.Model), fragLens: map[string]int{}})
+	activity := &toolArgsLogObserver{logger: gw.Logger.With("agent", o.agentName, "provider", o.target.Provider, "model", o.target.Model), fragLens: map[string]int{}}
+	guards := toolArgsGuards(assembler, gw, o)
+	if guards != nil {
+		assembler.SetObserver(&toolArgsFanOut{activity: activity, guards: guards})
+	} else {
+		assembler.SetObserver(activity)
+	}
 	transformingReader.SetToolArgsAssembler(assembler)
 	contentBuilder := p.setupContentBuilderIfNeeded(gw, o.agentName, transformingReader)
 
