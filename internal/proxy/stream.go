@@ -753,6 +753,13 @@ func (p *Proxy) setupTransformingReader(gw *gateway.NenyaGateway, o transformRea
 	transformingReader.SetLogger(gw.Logger)
 
 	p.setupStreamFilterIfEnabled(gw, transformingReader)
+	// NENYA-351: the outbound invisible-text guard (log or strip, opt-in).
+	if gw.Config.Governance.EffectiveInvisibleTextEnabled() {
+		transformingReader.SetInvisibleGuard(stream.NewInvisibleGuard(
+			gw.Config.Governance.EffectiveInvisibleTextAction() == config.InvisibleActionStrip,
+			gw.Config.Governance.EffectiveInvisibleTextSet() == config.InvisibleSetExtended,
+			gw.Metrics))
+	}
 	if guard := exfilGuardFor(gw, o.agentName); guard != nil {
 		transformingReader.SetExfilGuard(guard)
 	}

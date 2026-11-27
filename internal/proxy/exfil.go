@@ -114,6 +114,17 @@ func inspectResponseTexts(guard *stream.ExfilGuard, responseMap map[string]inter
 	return hits
 }
 
+// stripInvisibleTexts runs the outbound invisible-text guard over every
+// text surface of a buffered response body (NENYA-351), mutating
+// stripped surfaces in place. Strip mode rewrites; log mode counts only.
+func stripInvisibleTexts(guard *stream.InvisibleGuard, responseMap map[string]interface{}) {
+	rewrite := func(surface string) string {
+		stripped, _ := guard.Apply(surface)
+		return stripped
+	}
+	walkResponseText(responseMap, rewrite)
+}
+
 // collectResponseTexts concatenates the model-produced text surfaces of
 // a response body (post deterministic rewrites) for the egress screen,
 // skipping surfaces once maxBytes have been collected (the walk may

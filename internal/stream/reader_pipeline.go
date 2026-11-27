@@ -50,6 +50,14 @@ func (r *SSETransformingReader) applyStreamFilters(parsed map[string]interface{}
 // in-place rewrites.
 func (r *SSETransformingReader) applyEgressGuards(parsed map[string]interface{}) (out map[string]interface{}, mutated bool, blocked bool) {
 	out = parsed
+	// NENYA-351: the invisible-text guard runs FIRST — stripping hidden
+	// characters normalizes the surfaces the later guards match against
+	// (an invisible-obfuscated secret or canary echo becomes detectable).
+	if r.invisibleGuard != nil {
+		var changed bool
+		out, changed = applyInvisibleStripStage(out, r.invisibleGuard)
+		mutated = mutated || changed
+	}
 	if r.streamFilter != nil && !r.streamFilter.IsBlocked() {
 		var action FilterAction
 		out, action = applyStreamFilter(out, r.streamFilter)
@@ -123,6 +131,25 @@ func (r *SSETransformingReader) blockedStreamError() error {
 		return r.toolArgs.BlockedError()
 	}
 	return ErrStreamBlocked
+}
+
+// applyInvisibleStripStage runs the outbound invisible-text guard over
+// every model-text surface of one parsed chunk (NENYA-351). Strip mode
+// rewrites the surfaces; log mode counts only — and must NOT mark the
+// chunk mutated: `mutated` forces a whole-chunk re-encode (map-order +
+// float64 round-trip wire mutation) that would contradict the count-only
+// contract. The guard never blocks.
+func applyInvisibleStripStage(parsed map[string]interface{}, guard *InvisibleGuard) (map[string]interface{}, bool) {
+	mutated := false
+	forEachFilterableTextPart(parsed, func(content string) (string, FilterAction) {
+		stripped, n := guard.Apply(content)
+		if n > 0 && stripped != content {
+			mutated = true
+			return stripped, ActionPass
+		}
+		return content, ActionPass
+	})
+	return parsed, mutated
 }
 
 // applyCanaryWatcher scans every model-text surface of one SSE chunk for

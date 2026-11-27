@@ -1237,9 +1237,16 @@ type GovernanceConfig struct {
 	// channel a model can copy sensitive values into. Default ON with
 	// action "log": visible and counted, zero behavior change; "strip"
 	// and "block" are operator opt-in.
-	ToolEgress      *ToolEgressConfig `json:"tool_egress,omitempty"`
-	RatelimitMaxRPM *int              `json:"ratelimit_max_rpm,omitempty"`
-	RatelimitMaxTPM *int              `json:"ratelimit_max_tpm,omitempty"`
+	ToolEgress *ToolEgressConfig `json:"tool_egress,omitempty"`
+	// InvisibleText configures the outbound invisible-text guard
+	// (NENYA-351): hidden/format characters in MODEL OUTPUT (zero-width
+	// spaces, direction marks, BOM — optionally the extended ignorable
+	// set) are counted (log, default) or stripped (strip) before the
+	// downstream consumer sees them. Default OFF — an output-mutating
+	// guard is operator opt-in.
+	InvisibleText   *InvisibleTextConfig `json:"invisible_text,omitempty"`
+	RatelimitMaxRPM *int                 `json:"ratelimit_max_rpm,omitempty"`
+	RatelimitMaxTPM *int                 `json:"ratelimit_max_tpm,omitempty"`
 	// MaxConcurrentRequests is the global fallback cap on in-flight requests
 	// per provider+model when the provider config does not set its own limit
 	// (0 or omitted = unlimited).
@@ -2294,6 +2301,61 @@ func DefaultNetworkedToolPatterns() []string {
 	out := make([]string, len(defaultNetworkedToolPatternList))
 	copy(out, defaultNetworkedToolPatternList)
 	return out
+}
+
+// InvisibleTextConfig configures the outbound invisible-text guard
+// (NENYA-351): hidden/format characters in model output are counted
+// (log) or stripped (strip) before the downstream consumer sees them.
+type InvisibleTextConfig struct {
+	// Enabled master-switches the guard. Default OFF — an
+	// output-mutating guard is operator opt-in.
+	Enabled *bool `json:"enabled,omitempty"`
+	// Action: "log" (default — count + metric, output unchanged) or
+	// "strip" (remove the invisible characters from the output).
+	Action string `json:"action,omitempty"`
+	// Set: "narrow" (default — the zero-width/direction-format set;
+	// Persian/Indic text and emoji untouched) or "extended" (also the
+	// soft hyphen, ZWNJ/ZWJ, variation selectors, the Unicode tag block
+	// — opt-in because variation selectors are legitimate emoji
+	// modifiers).
+	Set string `json:"set,omitempty"`
+}
+
+// Invisible-text guard actions and sets.
+const (
+	InvisibleActionLog   = "log"
+	InvisibleActionStrip = "strip"
+	InvisibleSetNarrow   = "narrow"
+	InvisibleSetExtended = "extended"
+)
+
+// EffectiveInvisibleTextEnabled reports whether the guard runs
+// (nil-safe; default OFF).
+func (g *GovernanceConfig) EffectiveInvisibleTextEnabled() bool {
+	return g.InvisibleText != nil && g.InvisibleText.EffectiveEnabled()
+}
+
+// EffectiveEnabled reports whether the guard is on (nil-safe; default OFF).
+func (c *InvisibleTextConfig) EffectiveEnabled() bool {
+	return c != nil && c.Enabled != nil && *c.Enabled
+}
+
+// EffectiveInvisibleTextAction reports the configured action normalized
+// to lowercase (nil-safe; default "log").
+func (g *GovernanceConfig) EffectiveInvisibleTextAction() string {
+	if g == nil || g.InvisibleText == nil || g.InvisibleText.Action == "" {
+		return InvisibleActionLog
+	}
+	return strings.ToLower(g.InvisibleText.Action)
+}
+
+// EffectiveInvisibleTextSet reports the configured character set
+// (nil-safe; default "narrow").
+func (g *GovernanceConfig) EffectiveInvisibleTextSet() string {
+	if g == nil || g.InvisibleText == nil || g.InvisibleText.Set == "" {
+		return InvisibleSetNarrow
+	}
+	return strings.ToLower(g.InvisibleText.Set)
 }
 
 // EffectiveMaxArgBytes reports the configured argument size cap

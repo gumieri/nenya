@@ -135,6 +135,27 @@ func stripInvisible(content string) string {
 	return invisibleChars.ReplaceAllString(content, "")
 }
 
+// StripInvisibleForOutput is the outbound invisible-text guard's
+// normalizer (NENYA-351): removes the invisible/format characters from
+// model output so hidden-text payloads cannot reach the downstream
+// consumer. extended=false strips the narrow set only (zero-width and
+// direction-format characters — legitimate Persian/Indic text and emoji
+// are untouched); extended=true additionally strips the extended set
+// (soft hyphen, ZWNJ/ZWJ, variation selectors, the Unicode tag block —
+// opt-in because variation selectors are legitimate emoji modifiers).
+// Returns the stripped text and the number of removals.
+func StripInvisibleForOutput(content string, extended bool) (string, int) {
+	re := invisibleChars
+	if extended {
+		re = invisibleCharsOrExtended
+	}
+	removed := len(re.FindAllString(content, -1))
+	if removed == 0 {
+		return content, 0
+	}
+	return re.ReplaceAllString(content, ""), removed
+}
+
 // ansiEscape matches ANSI/CSI escape sequences (colors, cursor moves, and the
 // two-character escapes): an escape sequence spliced into a keyword
 // ("ig\x1b[0mnore previous instructions") otherwise hides it from the
@@ -149,6 +170,12 @@ var ansiEscape = regexp.MustCompile(`\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b[@-_]`)
 // stripInvisible (the sanitize path) keeps its deliberately narrower set so
 // legitimate Persian/Indic and emoji text is not mangled.
 var extendedInvisibles = regexp.MustCompile(`[\x{00AD}\x{180E}\x{200C}\x{200D}\x{3164}\x{FFA0}\x{115F}\x{1160}\x{FE00}-\x{FE0F}\x{E0000}-\x{E007F}]`)
+
+// invisibleCharsOrExtended is the outbound guard's extended set: the
+// narrow invisible set OR the extended ignorable set (NENYA-351 —
+// StripInvisibleForOutput's extended mode strips the union, since a
+// guard that strips half the hidden text is not a guard).
+var invisibleCharsOrExtended = regexp.MustCompile(`[\x{200B}\x{200E}\x{200F}\x{202A}-\x{202E}\x{2060}-\x{206F}\x{FEFF}\x{00AD}\x{180E}\x{200C}\x{200D}\x{3164}\x{FFA0}\x{115F}\x{1160}\x{FE00}-\x{FE0F}\x{E0000}-\x{E007F}]`)
 
 // controlChars matches the C0 control characters (including a lone ESC that is
 // not part of an escape sequence, and DEL): a keyword split by a bare ESC or

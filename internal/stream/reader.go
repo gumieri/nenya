@@ -211,6 +211,7 @@ type SSETransformingReader struct {
 	observer             SSEObserver
 	streamFilter         *StreamFilter
 	exfilGuard           *ExfilGuard
+	invisibleGuard       *InvisibleGuard
 	// dropPrivateEvents (NENYA-174): when set, SSE frames whose parsed
 	// event type names a provider-private/telemetry channel are suppressed
 	// before any downstream surface.
@@ -522,6 +523,11 @@ func (r *SSETransformingReader) SetToolArgsAssembler(a *ToolCallAssembler) {
 // SetExfilGuard sets the output egress guard for URL policy enforcement.
 func (r *SSETransformingReader) SetExfilGuard(g *ExfilGuard) {
 	r.exfilGuard = g
+}
+
+// SetInvisibleGuard sets the outbound invisible-text guard (NENYA-351).
+func (r *SSETransformingReader) SetInvisibleGuard(g *InvisibleGuard) {
+	r.invisibleGuard = g
 }
 
 // SetCanaryWatcher sets the per-request canary tripwire.

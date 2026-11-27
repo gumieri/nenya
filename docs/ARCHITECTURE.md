@@ -314,6 +314,8 @@ EngineManager (internal/local/manager.go:13)
 
 The upstream SSE stream flows through pluggable egress filters before reaching
 the client: provider response transformations (adapter system), the optional
+**invisible-text guard** (NENYA-351 — running FIRST so stripping normalizes
+the surfaces the later guards match against), the optional
 **ExfilGuard** URL policy (markdown links/images and bare URLs, sliding-window
 over deltas so a construct straddling chunk boundaries is still evaluated;
 an optional DNS-reachability probe — `exfil_guard.dns_check`, default off —

@@ -91,6 +91,12 @@ type Metrics struct {
 	// toolEgressStripped counts networked tool declarations removed from
 	// dispatches by the strip action.
 	toolEgressStripped atomic.Uint64
+	// invisibleTextEvents counts invisible-text guard firings by action
+	// (log|strip) — NENYA-351.
+	invisibleTextEvents sync.Map
+	// invisibleTextChars counts invisible characters removed (strip) or
+	// detected (log) in model output.
+	invisibleTextChars atomic.Uint64
 	// exfilEvents counts canary tripwire detections by egress channel.
 	exfilEvents   sync.Map
 	panics        atomic.Uint64
@@ -650,6 +656,26 @@ func (m *Metrics) RecordToolEgressStripped(n int) {
 		return
 	}
 	m.toolEgressStripped.Add(uint64(n))
+}
+
+// RecordInvisibleText records one invisible-text guard firing (an event
+// counter by action) plus the number of characters it removed —
+// NENYA-351. Nil-safe.
+func (m *Metrics) RecordInvisibleText(action string, chars int) {
+	if m == nil || action == "" || chars <= 0 {
+		return
+	}
+	e := getOrCreateEntry(&m.invisibleTextEvents, map[string]string{"action": action})
+	e.value.Add(1)
+	m.invisibleTextChars.Add(uint64(chars))
+}
+
+// writeInvisibleText emits the invisible-text guard counters.
+func (m *Metrics) writeInvisibleText(w io.Writer) {
+	m.writeCounterMap(w, "nenya_invisible_text_total",
+		"Invisible-text guard firings by action (log|strip).", &m.invisibleTextEvents)
+	m.writeCounterAtomic(w, "nenya_invisible_text_chars_total",
+		"Invisible characters removed (strip) or detected (log) in model output.", m.invisibleTextChars.Load())
 }
 
 // writeToolEgress emits the tool-egress policy counters.
@@ -2115,6 +2141,7 @@ func (m *Metrics) WritePrometheus(w io.Writer) {
 	m.writeSpotlighted(w)
 	m.writeExfilDetections(w)
 	m.writeToolEgress(w)
+	m.writeInvisibleText(w)
 	m.writeExfilEvents(w)
 	m.writePipelineMetrics(w)
 	m.writeCounterMap(w, "nenya_ratelimit_rejected_total",

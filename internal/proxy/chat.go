@@ -1530,6 +1530,16 @@ func primaryTargetProvider(targets []routing.UpstreamTarget) string {
 // — and never weakens a deterministic verdict.
 func (p *Proxy) applyBufferedEgressPolicies(gw *gateway.NenyaGateway, w http.ResponseWriter, r *http.Request, target routing.UpstreamTarget, agentName string, responseMap map[string]interface{}, egress bufferedEgressOpts) bool {
 	guardFired := false
+	// NENYA-351: the invisible-text guard runs FIRST — stripping hidden
+	// characters normalizes the surfaces the exfil guard and canary scan
+	// match against (detection-improving, never weakening).
+	if gw.Config.Governance.EffectiveInvisibleTextEnabled() {
+		guard := stream.NewInvisibleGuard(
+			gw.Config.Governance.EffectiveInvisibleTextAction() == config.InvisibleActionStrip,
+			gw.Config.Governance.EffectiveInvisibleTextSet() == config.InvisibleSetExtended,
+			gw.Metrics)
+		stripInvisibleTexts(guard, responseMap)
+	}
 	if guard := exfilGuardFor(gw, agentName); guard != nil {
 		hits := inspectResponseTexts(guard, responseMap)
 		guardFired = hits.fired

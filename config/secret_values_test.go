@@ -100,3 +100,34 @@ func TestResolveSecretValueReferencesNilSafe(t *testing.T) {
 		t.Fatalf("nil secrets errored: %v", err)
 	}
 }
+
+// NENYA-351 (outbound invisible-text guard) config pins.
+func TestValidateInvisibleTextConfig(t *testing.T) {
+	if errs := validateInvisibleTextConfig(&Config{Governance: GovernanceConfig{InvisibleText: &InvisibleTextConfig{Action: "block"}}}); len(errs) != 1 {
+		t.Fatalf("bad action accepted: %v", errs)
+	}
+	if errs := validateInvisibleTextConfig(&Config{Governance: GovernanceConfig{InvisibleText: &InvisibleTextConfig{Set: "wide"}}}); len(errs) != 1 {
+		t.Fatalf("bad set accepted: %v", errs)
+	}
+	if errs := validateInvisibleTextConfig(&Config{Governance: GovernanceConfig{InvisibleText: &InvisibleTextConfig{Action: "strip", Set: "extended"}}}); len(errs) != 0 {
+		t.Fatalf("good config rejected: %v", errs)
+	}
+	if errs := validateInvisibleTextConfig(&Config{}); len(errs) != 0 {
+		t.Fatalf("nil knob rejected: %v", errs)
+	}
+}
+
+func TestEffectiveInvisibleTextDefaults(t *testing.T) {
+	var g GovernanceConfig
+	if g.EffectiveInvisibleTextEnabled() {
+		t.Fatal("default must be OFF")
+	}
+	if g.EffectiveInvisibleTextAction() != InvisibleActionLog || g.EffectiveInvisibleTextSet() != InvisibleSetNarrow {
+		t.Fatalf("defaults: action %q set %q", g.EffectiveInvisibleTextAction(), g.EffectiveInvisibleTextSet())
+	}
+	enabled := true
+	g.InvisibleText = &InvisibleTextConfig{Enabled: &enabled, Action: "STRIP", Set: "Extended"}
+	if !g.EffectiveInvisibleTextEnabled() || g.EffectiveInvisibleTextAction() != "strip" || g.EffectiveInvisibleTextSet() != "extended" {
+		t.Fatal("explicit config not honored")
+	}
+}

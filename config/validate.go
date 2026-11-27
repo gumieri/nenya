@@ -151,6 +151,7 @@ func collectValidationErrors(ctx context.Context, cfg *Config, providers map[str
 	errors = append(errors, validateNetworkPolicy(cfg)...)
 	errors = append(errors, validateExfilGuardConfig(cfg)...)
 	errors = append(errors, validateToolEgressConfig(cfg)...)
+	errors = append(errors, validateInvisibleTextConfig(cfg)...)
 	errors = append(errors, validateCanaryConfig(cfg)...)
 	errors = append(errors, validateMCPGuardConfig(cfg)...)
 	errors = append(errors, validateModelRegistryErrors(logger)...)
@@ -1988,6 +1989,28 @@ func validateToolEgressConfig(cfg *Config) []string {
 		if strings.TrimSpace(pat) == "" {
 			errs = append(errs, fmt.Sprintf("governance.tool_egress.networked_patterns[%d]: empty pattern", i))
 		}
+	}
+	return errs
+}
+
+// validateInvisibleTextConfig checks the outbound invisible-text guard
+// knob (NENYA-351): the action must be log|strip and the set
+// narrow|extended.
+func validateInvisibleTextConfig(cfg *Config) []string {
+	g := cfg.Governance.InvisibleText
+	if g == nil {
+		return nil
+	}
+	var errs []string
+	switch strings.ToLower(g.Action) {
+	case "", InvisibleActionLog, InvisibleActionStrip:
+	default:
+		errs = append(errs, fmt.Sprintf("governance.invisible_text.action: invalid value %q, must be empty, \"log\", or \"strip\"", g.Action))
+	}
+	switch strings.ToLower(g.Set) {
+	case "", InvisibleSetNarrow, InvisibleSetExtended:
+	default:
+		errs = append(errs, fmt.Sprintf("governance.invisible_text.set: invalid value %q, must be empty, \"narrow\", or \"extended\"", g.Set))
 	}
 	return errs
 }
