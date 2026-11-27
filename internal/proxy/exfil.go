@@ -71,6 +71,11 @@ type responseExfilHits struct {
 	// a Pass action). Used as an egress-screen trigger.
 	fired  bool
 	reason string
+	// rewrote reports whether any surface's content actually changed
+	// (a strip splice) — the caller decides whether re-encoding the
+	// body is required (NENYA-346 uses it to keep unrewritten bodies
+	// byte-verbatim).
+	rewrote bool
 }
 
 // inspectResponseTexts runs the guard over every text surface of a
@@ -98,6 +103,9 @@ func inspectResponseTexts(guard *stream.ExfilGuard, responseMap map[string]inter
 			if reason != "" {
 				hits.fired = true
 			}
+		}
+		if cleaned != surface {
+			hits.rewrote = true
 		}
 		return cleaned
 	}
@@ -127,8 +135,10 @@ func collectResponseTexts(responseMap map[string]interface{}, maxBytes int) stri
 // response body, applying fn and storing its result back in place.
 // Covered: OpenAI choices[].message.content (string or content array),
 // message.reasoning_content, message.tool_calls[].function.arguments;
-// Anthropic content[] text and thinking blocks. Anthropic tool_use input
-// objects are structured JSON, not prose — excluded (documented).
+// Anthropic content[] text and thinking blocks; Responses output[] items
+// (walkResponsesOutput — NENYA-346). Anthropic tool_use input objects and
+// Responses function_call_output items are structured JSON / tool output,
+// not model prose — excluded (documented).
 func walkResponseText(responseMap map[string]interface{}, fn func(string) string) {
 	if responseMap == nil {
 		return
@@ -159,6 +169,85 @@ func walkResponseText(responseMap map[string]interface{}, fn func(string) string
 				if text, ok := block["thinking"].(string); ok {
 					block["thinking"] = fn(text)
 				}
+			}
+		}
+	}
+	// Responses shape: output[] items (NENYA-346).
+	walkResponsesOutput(responseMap, fn)
+}
+
+// walkResponsesOutput applies fn to the model-text surfaces of a response
+// body's Responses output[] items (NENYA-346): function_call arguments,
+// message content[] parts (output_text text, refusal) plus the item-level
+// refusal, and reasoning summary[] text. function_call_output items carry
+// TOOL output (untrusted content, not model text) and stay excluded,
+// matching the chat walker's treatment of tool results.
+func walkResponsesOutput(responseMap map[string]interface{}, fn func(string) string) {
+	items, ok := responseMap["output"].([]interface{})
+	if !ok {
+		return
+	}
+	for _, raw := range items {
+		item, ok := raw.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		switch item["type"] {
+		case "function_call":
+			if args, ok := item["arguments"].(string); ok {
+				item["arguments"] = fn(args)
+			}
+		case "message":
+			walkResponsesContentParts(item["content"], fn)
+			if refusal, ok := item["refusal"].(string); ok {
+				item["refusal"] = fn(refusal)
+			}
+		case "reasoning":
+			walkResponsesSummaryParts(item["summary"], fn)
+		}
+	}
+}
+
+// walkResponsesContentParts applies fn to the model-text fields of a
+// Responses message item's content[] parts: output_text text and refusal.
+func walkResponsesContentParts(content interface{}, fn func(string) string) {
+	parts, ok := content.([]interface{})
+	if !ok {
+		return
+	}
+	for _, raw := range parts {
+		part, ok := raw.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		switch part["type"] {
+		case "output_text":
+			if text, ok := part["text"].(string); ok {
+				part["text"] = fn(text)
+			}
+		case "refusal":
+			if refusal, ok := part["refusal"].(string); ok {
+				part["refusal"] = fn(refusal)
+			}
+		}
+	}
+}
+
+// walkResponsesSummaryParts applies fn to the text of a Responses reasoning
+// item's summary[] parts (summary_text).
+func walkResponsesSummaryParts(summary interface{}, fn func(string) string) {
+	parts, ok := summary.([]interface{})
+	if !ok {
+		return
+	}
+	for _, raw := range parts {
+		part, ok := raw.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		if part["type"] == "summary_text" {
+			if text, ok := part["text"].(string); ok {
+				part["text"] = fn(text)
 			}
 		}
 	}

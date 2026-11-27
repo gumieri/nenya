@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"io"
 	"log/slog"
+	"strings"
 )
 
 func (r *SSETransformingReader) handleScannerDone() {
@@ -159,6 +160,19 @@ func (r *SSETransformingReader) classifyCleanEOF() {
 		slog.Debug("SSE scanner ended without [DONE] after finish_reason, injecting silent [DONE]",
 			"has_transformer", r.transformer != nil)
 		r.injectDoneOnly()
+	case r.sawResponsesTerminal:
+		// NENYA-346: the stream ended through its own Responses terminal
+		// (completed/failed/incomplete) — a clean end, never a
+		// mid-generation cut: no gateway_error injection, and no empty-200
+		// count (the upstream answered; emptiness is its answer, the same
+		// ruling as the error-terminal cell). A failed terminal lands
+		// here too (the error event went out live; the held tail follows
+		// it — NENYA-205's rule: the tail reaches the client whatever the
+		// ending). The raw-terminal hook skips the nil-transformer
+		// passthrough (line-split scanning composes mid-frame), so this is
+		// where the passthrough's tail drains — as a typed event frame
+		// after the complete terminal.
+		r.drainHeldAtResponsesEOF()
 	case r.sawErrorTerminal && !r.sawFinishReason:
 		// NENYA-337: the stream ended on an upstream error frame (the
 		// converted {"error":{...}} or the raw failed event already
@@ -200,6 +214,19 @@ func (r *SSETransformingReader) classifyCleanEOF() {
 	}
 }
 
+// drainHeldAtResponsesEOF drains the exfil guard's held tail at a clean
+// Responses-terminal end (NENYA-346), buffered as a typed event frame the
+// next Read delivers. See classifyCleanEOF's sawResponsesTerminal cell.
+func (r *SSETransformingReader) drainHeldAtResponsesEOF() {
+	held, heldOK := r.synthesizeHeldFlush()
+	if !heldOK {
+		return
+	}
+	r.buffer = r.appendSSEEvent(nil, held)
+	r.pos = 0
+	r.lastLineBlank = true
+}
+
 // injectDoneOnly buffers a bare [DONE] event without a gateway_error. Used for
 // benign stream endings where the model signaled completion but the upstream
 // omitted the [DONE] marker.
@@ -220,8 +247,18 @@ func (r *SSETransformingReader) injectDoneOnly() {
 }
 
 // injectErrorBuffer creates a gateway_error SSE event + [DONE] and places it
-// in r.buffer so the client receives the error before EOF.
+// in r.buffer so the client receives the error before EOF. A nil-transformer
+// passthrough that carried Responses-format frames instead gets a
+// Responses-native error event (injectResponsesErrorBuffer) — a chat-shaped
+// payload plus a stray [DONE] would land on a stream the client parses by
+// event name (NENYA-346). The gate is ANY Responses frame (not just text
+// deltas): a stream cut before its first text delta — or one that only
+// streamed argument deltas — is still Responses-format to its client.
 func (r *SSETransformingReader) injectErrorBuffer(message string) {
+	if r.transformer == nil && r.sawResponsesFrame {
+		r.injectResponsesErrorBuffer(message)
+		return
+	}
 	r.injectedError = true
 	slog.Warn("injecting gateway_error into stream", "message", message, "sawDone", r.sawDone)
 	errPayload, err := json.Marshal(map[string]any{
@@ -246,6 +283,53 @@ func (r *SSETransformingReader) injectErrorBuffer(message string) {
 	r.buffer = buf
 	r.pos = 0
 	r.lastLineBlank = true
+	if r.observer != nil {
+		var errMap map[string]any
+		if err := json.Unmarshal(errPayload, &errMap); err != nil {
+			slog.Error("failed to unmarshal error payload for observer", "error", err)
+			r.observer.OnSSEEvent(SSEEvent{Type: "error", Data: map[string]any{"message": message, "type": "gateway_error"}, GatewayInjected: true})
+		} else {
+			r.observer.OnSSEEvent(SSEEvent{Type: "error", Data: errMap, GatewayInjected: true})
+		}
+	}
+}
+
+// injectResponsesErrorBuffer buffers a Responses-native error event for a
+// nil-transformer passthrough that carried Responses-format frames
+// (NENYA-346): `event: error` + a typed data payload, no [DONE] — a
+// chat-shaped gateway_error payload plus a stray [DONE] data line would
+// corrupt a stream the client parses by event name. The held exfil tail
+// composes ahead of the frame (NENYA-205: the tail reaches the client
+// whatever the ending).
+func (r *SSETransformingReader) injectResponsesErrorBuffer(message string) {
+	r.injectedError = true
+	slog.Warn("injecting gateway_error into responses stream", "message", message)
+	errPayload, err := json.Marshal(map[string]any{
+		"type":    "error",
+		"code":    "gateway_error",
+		"message": message,
+	})
+	if err != nil {
+		errPayload = []byte(`{"type":"error","code":"gateway_error","message":"internal error"}`)
+	}
+	held, heldOK := r.synthesizeHeldFlush()
+	var buf []byte
+	if heldOK {
+		buf = r.appendSSEEvent(buf, held)
+	}
+	// One frame, event line and data line together: composing them through
+	// appendSSEEvent separately would strand the event line (a blank line
+	// between it and its data makes the event data-less, and strict
+	// Responses SDKs dispatch on event names).
+	frame := append([]byte("event: error\ndata: "), errPayload...)
+	buf = append(buf, frame...)
+	buf = append(buf, "\n\n"...)
+	r.buffer = buf
+	r.pos = 0
+	r.lastLineBlank = true
+	// Observer parity with the chat injector: the gateway-injected error is
+	// classified for any observer (breaker semantics, MCP accumulator) the
+	// same way regardless of the wire shape it was rendered in.
 	if r.observer != nil {
 		var errMap map[string]any
 		if err := json.Unmarshal(errPayload, &errMap); err != nil {
@@ -307,6 +391,7 @@ func (r *SSETransformingReader) transformSSEData(line []byte) []byte {
 		r.sawResumableStop = true
 	}
 	r.noteRawAnthropicDelta(parsed)
+	r.noteRawResponsesState(parsed)
 
 	// Provider-private/telemetry frames (NENYA-174) are suppressed from
 	// every downstream surface when the filter is enabled; the stream
@@ -380,14 +465,36 @@ func (r *SSETransformingReader) transformSSEData(line []byte) []byte {
 // a transformer that stays live past message_stop would simply receive the
 // tail slightly earlier than [DONE]/EOF — benign.
 func (r *SSETransformingReader) drainHeldAtRawTerminal(parsed map[string]interface{}) []byte {
-	if r.exfilGuard == nil || r.exfilGuard.IsBlocked() || !r.sawRawAnthropicDelta || !isRawAnthropicStop(parsed) {
+	if r.exfilGuard == nil || r.exfilGuard.IsBlocked() {
 		return nil
 	}
-	held, heldOK := r.synthesizeHeldFlush()
-	if !heldOK {
+	// The Responses terminals close the ResponsesTransformer to later
+	// chunks the same way message_stop closes the AnthropicTransformer
+	// (NENYA-337 taxonomy), so a held tail must compose before the
+	// terminal reaches it — the transformer's output is one frame, so
+	// the composition order is preserved. The NIL-transformer passthrough
+	// is excluded: line-split scanning already emitted the terminal's
+	// event: line, and composing between it and the data line would
+	// splice the tail into the terminal's frame — there the scanner-done
+	// cell (classifyCleanEOF's sawResponsesTerminal) drains after the
+	// complete frame instead. Evidence gate mirrors the Anthropic cell: a
+	// raw Responses TEXT delta must have preceded (a spoofed bare
+	// terminal must not trigger an early drain — and even if one does,
+	// synthesizeHeldFlush re-arms the guard).
+	if r.sawRawAnthropicDelta && isRawAnthropicStop(parsed) {
+		held, heldOK := r.synthesizeHeldFlush()
+		if heldOK {
+			return held
+		}
 		return nil
 	}
-	return held
+	if r.transformer != nil && r.sawRawResponsesDelta && isRawResponsesTerminal(parsed) {
+		held, heldOK := r.synthesizeHeldFlush()
+		if heldOK {
+			return held
+		}
+	}
+	return nil
 }
 
 // isRawAnthropicStop reports whether the parsed RAW chunk is the Anthropic
@@ -401,6 +508,22 @@ func isRawAnthropicStop(parsed map[string]interface{}) bool {
 	return typ == "message_stop"
 }
 
+// isRawResponsesTerminal reports whether the parsed RAW chunk is one of the
+// Responses-format terminal events (the NENYA-337 taxonomy: completed,
+// failed, incomplete) whose transformer-side handling closes the
+// ResponsesTransformer to later chunks.
+func isRawResponsesTerminal(parsed map[string]interface{}) bool {
+	if parsed == nil {
+		return false
+	}
+	switch typ, _ := parsed["type"].(string); typ {
+	case "response.completed", "response.failed", "response.incomplete":
+		return true
+	default:
+		return false
+	}
+}
+
 // noteRawAnthropicDelta records raw terminal-sequence evidence (AUD-02): the
 // pre-terminal exfil drain requires a raw message_delta before honoring a
 // message_stop, so a spoofed bare terminal cannot trigger an early drain.
@@ -410,6 +533,38 @@ func (r *SSETransformingReader) noteRawAnthropicDelta(parsed map[string]interfac
 	}
 	if typ, _ := parsed["type"].(string); typ == "message_delta" {
 		r.sawRawAnthropicDelta = true
+	}
+}
+
+// noteRawResponsesState records the Responses-format evidence flags
+// (NENYA-346): that a raw TEXT delta was seen (the spoofing-guard twin of
+// the Anthropic message_delta evidence — the pre-terminal drain on a
+// Responses terminal requires a text delta before it), that a raw terminal
+// event was seen (the clean-end classification for a passthrough stream
+// that ends through its own terminal instead of [DONE]), and that ANY
+// Responses frame was seen (the injection routing gate — a chat-shaped
+// injected terminal must not land on a stream the client parses by event
+// name, whatever the frame mix).
+func (r *SSETransformingReader) noteRawResponsesState(parsed map[string]interface{}) {
+	if typ, _ := parsed["type"].(string); strings.HasPrefix(typ, "response.") {
+		r.sawResponsesFrame = true
+	}
+	r.noteRawResponsesDelta(parsed)
+	if isRawResponsesTerminal(parsed) {
+		r.sawResponsesTerminal = true
+	}
+}
+
+// noteRawResponsesDelta records the Responses-format evidence twin
+// (NENYA-346): the pre-terminal exfil drain on a Responses terminal requires
+// a raw Responses TEXT delta before it — the same spoofing guard as the
+// Anthropic cell.
+func (r *SSETransformingReader) noteRawResponsesDelta(parsed map[string]interface{}) {
+	if r.sawRawResponsesDelta {
+		return
+	}
+	if text, ok := parsed["delta"].(string); ok && text != "" && !responsesArgsDelta(parsed) {
+		r.sawRawResponsesDelta = true
 	}
 }
 
@@ -530,6 +685,14 @@ func (r *SSETransformingReader) synthesizeHeldFlush() ([]byte, bool) {
 	r.exfilGuard.Rearm()
 	if len(out) == 0 {
 		return nil, false
+	}
+	// NENYA-346: a passthrough (nil transformer) synthetic Responses event
+	// must carry its event: line — strict Responses SDKs dispatch on event
+	// names and skip data-only frames. The transformer path emits data
+	// lines; the caller's framing turns the composed bytes into a complete
+	// frame either way.
+	if r.transformer == nil && r.lastSurface.responses {
+		out = append([]byte("event: response.output_text.delta\n"), out...)
 	}
 	return out, true
 }

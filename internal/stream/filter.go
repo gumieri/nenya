@@ -323,17 +323,45 @@ func forEachFilterableTextPart(parsed map[string]interface{}, fn func(content st
 	if blocked {
 		return true, rewrote
 	}
-	return forEachGeminiTextPart(parsed, fn)
+	// The Gemini result composes with the delta result: a chunk whose
+	// text surface was rewritten before the (absent) Gemini parts must
+	// still report the rewrite — the return contract covers EVERY
+	// surface visited.
+	geminiBlocked, geminiRewrote := forEachGeminiTextPart(parsed, fn)
+	return geminiBlocked, rewrote || geminiRewrote
 }
 
 // forEachDeltaTextPart visits the OpenAI/Anthropic delta fields of a chunk
-// (see forEachFilterableTextPart for the contract).
+// (see forEachFilterableTextPart for the contract). Responses-format
+// deltas (NENYA-346) carry the text as a TOP-LEVEL STRING delta
+// (response.output_text.delta and friends) and are visited too.
 func forEachDeltaTextPart(parsed map[string]interface{}, fn func(content string) (string, FilterAction)) (blocked, rewrote bool) {
-	delta := sseDelta(parsed)
-	if delta == nil {
-		return false, false
+	if delta := sseDelta(parsed); delta != nil {
+		blocked, rewrote = forEachDeltaKey(delta, exfilContentKeys, fn)
+		if blocked {
+			return true, rewrote
+		}
 	}
-	for _, key := range exfilContentKeys {
+	// Responses-format top-level string delta (function-call argument
+	// deltas are excluded — the assembler + tool-args guards own those).
+	if text, ok := parsed["delta"].(string); ok && text != "" && !responsesArgsDelta(parsed) {
+		out, action := fn(text)
+		if action == ActionBlock {
+			return true, rewrote
+		}
+		if out != text {
+			parsed["delta"] = out
+			rewrote = true
+		}
+	}
+	return false, rewrote
+}
+
+// forEachDeltaKey applies fn to every named string field of one delta
+// object, writing rewrites back in place (see forEachDeltaTextPart for the
+// contract).
+func forEachDeltaKey(delta map[string]interface{}, keys []string, fn func(content string) (string, FilterAction)) (blocked, rewrote bool) {
+	for _, key := range keys {
 		if text, ok := delta[key].(string); ok && text != "" {
 			out, action := fn(text)
 			if action == ActionBlock {

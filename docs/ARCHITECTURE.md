@@ -367,6 +367,59 @@ precedes it, so a strict client may only see the interruption); on a
 canceled request the verdict is recorded but the client is already gone.
 See [INJECTION_DEFENSE.md](INJECTION_DEFENSE.md#response-path-controls).
 
+### Responses Endpoint Pipeline (NENYA-346)
+
+The `/v1/responses` passthrough used to copy upstream bytes to the client
+untouched — every defense above had an endpoint-shaped blind spot. With the
+responses pipeline (default ON; `governance.responses_pipeline.enabled=false`
+is the kill switch that restores the raw passthrough):
+
+- **Request side**: a `POST /v1/responses` create request gets the canary
+  marker injected into its `instructions` channel (the Responses
+  system-context field) before dispatch — the twin of the chat path's
+  trailing system message — so the response-side watcher watches a token the
+  upstream actually saw. The idempotency key binds the marker-bearing body.
+  A body that cannot carry the marker (non-object JSON, non-string
+  `instructions`) dispatches unchanged with the tripwire disarmed for that
+  request.
+- **Streaming 2xx** (`text/event-stream`): the stream relays through the
+  transforming reader with the full guard set — the text-path egress guards
+  (secret/policy filter, ExfilGuard URL policy, entropy redactor, canary
+  watcher on the `stream` channel) scan every frame inline BEFORE it is
+  forwarded, and the tool-call argument assembler feeds the dedicated
+  enforcing guards (identical A010/A020 wiring; Responses events are a
+  first-class assembler feed via `feedResponses`). Responses text deltas
+  (`response.output_text.delta` and friends — a TOP-LEVEL string `delta`)
+  are first-class guard surfaces; argument deltas are excluded from the text
+  surfaces (a mid-argument redaction would corrupt the reassembled JSON) and
+  owned by the assembler instead. A guard verdict suppresses the carrying
+  frame and terminates the stream with a Responses-shaped `event: error`
+  frame (`code`/`error_kind` = `exfil_detected` / `exfil_blocked`); bytes
+  already forwarded cannot be recalled. The upstream's own terminal events
+  (`response.completed/failed/incomplete`) classify as a clean end — no
+  gateway_error injection — and the guard's withheld tail drains after the
+  complete terminal as a typed event frame (the raw-terminal drain that
+  composes ahead of the converted terminal is reserved for the converting
+  transformer path, where the terminal is one frame).
+- **Buffered 2xx**: the JSON body's Responses output surfaces — message
+  `content[]` parts (`output_text` text, refusal), `function_call`
+  `arguments`, reasoning `summary[]` text — are scanned wholesale (strip
+  rewrites in place, block replaces the reply with `403
+  error_kind=exfil_blocked`; canary block replaces it with `403
+  exfil_detected`). Unrewritten bodies are forwarded byte-verbatim; a
+  rewrite re-encodes the parsed body. A non-JSON body gets the shape-agnostic
+  raw-byte canary scan only. Bodies beyond the request-side body limit are
+  refused rather than scanned unbounded; non-2xx error bodies pass through
+  unscanned (their fidelity is diagnostic; model text lives in 2xx
+  payloads).
+
+Out of scope for this phase, deliberately: the advisory egress screen (LLM
+judgment) does not run on this endpoint — the deterministic defenses do;
+`function_call_output` items are tool output (untrusted content), not model
+text, matching the chat walker's treatment of tool results; the buffered
+scan caps at the request-side body limit (a larger response is refused, not
+streamed past the guards).
+
 ## Cost Model (Peak/Off-Peak & Cached Input)
 
 Cost is a first-class, privacy-neutral signal: per-model rate cards

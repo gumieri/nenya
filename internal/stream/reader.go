@@ -268,10 +268,24 @@ type SSETransformingReader struct {
 	// pre-terminal exfil drain requires before honoring a message_stop
 	// (AUD-02: a spoofed bare message_stop must not drain early).
 	sawRawAnthropicDelta bool
-	injectedError        bool
-	ctx                  context.Context
-	poolBuf              *[]byte
-	logger               *slog.Logger
+	// sawRawResponsesDelta records that a raw Responses-format TEXT delta
+	// was seen — the evidence twin for the drain on a Responses terminal
+	// (NENYA-346; same spoofing guard as the Anthropic cell).
+	sawRawResponsesDelta bool
+	// sawResponsesTerminal records that a raw Responses-format terminal
+	// event (completed/failed/incomplete, the NENYA-337 taxonomy) was
+	// seen — the clean-end classification for a passthrough stream that
+	// ends through its own terminal instead of [DONE] (NENYA-346).
+	sawResponsesTerminal bool
+	// sawResponsesFrame records that ANY Responses-format frame was seen
+	// (a `response.`-typed event) — the injection routing gate: a
+	// nil-transformer passthrough whose client parses by event name gets
+	// Responses-native injected terminals (NENYA-346).
+	sawResponsesFrame bool
+	injectedError     bool
+	ctx               context.Context
+	poolBuf           *[]byte
+	logger            *slog.Logger
 
 	// last* fields track token usage between consecutive usage chunks.
 	// They are accessed only from the single goroutine calling Read().
@@ -754,8 +768,10 @@ func (r *SSETransformingReader) trackProgressLine(line []byte) {
 }
 
 // progressContent reports whether one parsed frame carries generation text:
-// the OpenAI delta spelling, or (AUD-12) an Anthropic-shaped converted frame's
-// content_block_delta text.
+// the OpenAI delta spelling, (AUD-12) an Anthropic-shaped converted frame's
+// content_block_delta text, or (NENYA-346) a Responses-format top-level
+// string delta on the passthrough relay — so a mid-cut stream that delivered
+// text classifies as a cut, not as empty.
 func (r *SSETransformingReader) progressContent(parsed map[string]interface{}) bool {
 	if content := ExtractDeltaContentFromMap(parsed); content != "" {
 		return true
@@ -765,6 +781,9 @@ func (r *SSETransformingReader) progressContent(parsed map[string]interface{}) b
 			s, _ := delta["text"].(string)
 			return s != ""
 		}
+	}
+	if text, ok := parsed["delta"].(string); ok && text != "" && !responsesArgsDelta(parsed) {
+		return true
 	}
 	return false
 }

@@ -327,6 +327,7 @@ func clipSpansWithin(spans []windowSpan, cut int) []windowSpan {
 type exfilSurface struct {
 	anthropic bool   // content_block_delta (top-level delta) vs OpenAI chunk
 	gemini    bool   // candidates[].content.parts[].text (Gemini-native chunk)
+	responses bool   // Responses-format top-level string delta (NENYA-346)
 	key       string // the model-text field the content was read from
 	index     int    // Anthropic content-block index
 	hasIndex  bool
@@ -346,6 +347,12 @@ func exfilSurfaceOf(parsed map[string]interface{}) exfilSurface {
 			}
 			return s
 		}
+	}
+	// Responses-format text delta (NENYA-346): the text is a top-level
+	// STRING delta. Function-call argument deltas carry tool arguments,
+	// not model text, and are never claimed (responsesArgsDelta).
+	if text, ok := parsed["delta"].(string); ok && text != "" && !responsesArgsDelta(parsed) {
+		return exfilSurface{responses: true, key: "delta"}
 	}
 	if s, ok := openAIDeltaSurface(parsed); ok {
 		return s
@@ -403,6 +410,14 @@ func exfilDeltaKey(delta map[string]interface{}) (string, bool) {
 func buildExfilFlushChunk(s exfilSurface, text string) []byte {
 	payload := map[string]interface{}{}
 	switch {
+	case s.responses:
+		// Responses-format text delta (NENYA-346): the synthetic frame is
+		// a Responses event, so a nil-transformer passthrough forwards it
+		// verbatim and the Responses→chat transformer converts it for a
+		// chat client. item_id/output_index are deliberately omitted —
+		// the converters key on the type and delta fields.
+		payload["type"] = "response.output_text.delta"
+		payload["delta"] = text
 	case s.anthropic && s.key == "thinking":
 		payload["type"] = "content_block_delta"
 		if s.hasIndex {
@@ -507,7 +522,9 @@ var exfilContentKeys = []string{"content", "text", "thinking", "reasoning_conten
 // carries no model text so non-content events (pings, tool_calls,
 // usage) skip evaluation. Gemini-native chunks are handled per part by
 // forEachFilterableTextPart (AUD-04) — every text part is scanned, not
-// just the first.
+// just the first. Responses-format deltas (NENYA-346) carry the text as
+// a TOP-LEVEL STRING delta (response.output_text.delta and friends) and
+// are covered too.
 func extractExfilContent(parsed map[string]interface{}) string {
 	if parsed == nil {
 		return ""
@@ -519,7 +536,19 @@ func extractExfilContent(parsed map[string]interface{}) string {
 			}
 		}
 	}
+	if text, ok := parsed["delta"].(string); ok && text != "" && !responsesArgsDelta(parsed) {
+		return text
+	}
 	return ""
+}
+
+// responsesArgsDelta reports whether the chunk is a Responses function-call
+// argument delta — its top-level string delta carries TOOL ARGUMENTS, which
+// the assembler and the tool-args guards own; the text surfaces must skip
+// it (a mid-argument secret redaction would corrupt the reassembled JSON).
+func responsesArgsDelta(parsed map[string]interface{}) bool {
+	typ, _ := parsed["type"].(string)
+	return typ == "response.function_call_arguments.delta"
 }
 
 // sseDelta locates the delta object in either wire format: Anthropic
@@ -555,6 +584,11 @@ func setExfilContent(parsed map[string]interface{}, newContent string) bool {
 				return true
 			}
 		}
+	}
+	// Responses-format deltas (NENYA-346): the text is a top-level STRING.
+	if _, ok := parsed["delta"].(string); ok && !responsesArgsDelta(parsed) {
+		parsed["delta"] = newContent
+		return true
 	}
 	return false
 }

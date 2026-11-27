@@ -469,6 +469,19 @@ func (r *SSETransformingReader) applyToolCallNormalization(transformed []byte, s
 	return transformed
 }
 
+// noteAndAssembleBareJSON updates the Responses-format evidence flags
+// (NENYA-346) and the tool-args assembler (NENYA-344) from one parsed
+// bare-JSON line. Returns false when the assembler raised a block verdict —
+// the line is suppressed and the Read loop terminates the stream.
+func (r *SSETransformingReader) noteAndAssembleBareJSON(parsed map[string]interface{}) bool {
+	r.noteRawResponsesState(parsed)
+	if r.toolArgs == nil {
+		return true
+	}
+	r.toolArgs.FeedParsed(parsed)
+	return !r.toolArgs.Blocked()
+}
+
 // transformNonSSELine handles bare-JSON lines (the sseDataLine convention:
 // some upstreams emit raw JSON bodies under text/event-stream). The
 // private-event filter applies here too (NENYA-174).
@@ -478,20 +491,25 @@ func (r *SSETransformingReader) transformNonSSELine(line []byte) []byte {
 	// scoped to data:-framed lines — a pre-existing gap documented in the
 	// egress coverage docs). Quiet parse: malformed non-data lines are
 	// noise, not protocol violations.
-	if r.toolArgs != nil {
-		if parsed := r.tryParseJSONQuiet(line); parsed != nil {
-			r.toolArgs.FeedParsed(parsed)
-		}
-		// NENYA-345: a tool-args guard verdict suppresses this line; the
-		// Read loop's anyFilterBlocked check then terminates the stream.
-		if r.toolArgs.Blocked() {
+	// NENYA-346: the Responses-format evidence flags update from this
+	// shape too — a bare-JSON-only stream is still Responses-format to its
+	// client, so the injected-terminal routing must classify it the same
+	// way (the drain branches are no-ops here: the guards never hold bare-
+	// JSON bytes, so there is no tail to drain).
+	// One quiet parse shared by the evidence flags, the assembler, and the
+	// private-event filter (NENYA-346/NENYA-344/NENYA-174);
+	// isPrivateSSEType(nil) is false, so a non-JSON line is inert here.
+	parsed := r.tryParseJSONQuiet(line)
+	if parsed != nil {
+		if !r.noteAndAssembleBareJSON(parsed) {
+			// NENYA-345: a tool-args guard verdict suppresses this line;
+			// the Read loop's anyFilterBlocked check then terminates the
+			// stream.
 			return nil
 		}
 	}
-	if r.dropPrivateEvents {
-		if parsed := r.tryParseJSONQuiet(line); isPrivateSSEType(parsed) {
-			return nil
-		}
+	if r.dropPrivateEvents && isPrivateSSEType(parsed) {
+		return nil
 	}
 	trimmed := bytes.TrimSpace(line)
 	if len(trimmed) == 0 {

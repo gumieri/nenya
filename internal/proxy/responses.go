@@ -16,6 +16,7 @@ import (
 	"github.com/nenya/internal/auth"
 	"github.com/nenya/internal/gateway"
 	"github.com/nenya/internal/infra"
+	"github.com/nenya/internal/pipeline"
 	"github.com/nenya/internal/routing"
 	"github.com/nenya/internal/util"
 )
@@ -177,6 +178,13 @@ func (p *Proxy) handleResponses(gw *gateway.NenyaGateway, w http.ResponseWriter,
 		maxAttempts = gw.Config.Governance.EffectiveMaxRetryAttempts()
 	}
 
+	// NENYA-346: generate the per-request canary and inject its marker into
+	// the create request's instructions channel BEFORE dispatch, so the
+	// response-path watcher watches a token the upstream actually saw (the
+	// idempotency key binds the marker-bearing body). Kill-switched with
+	// the rest of the pipeline.
+	canary, bodyBytes := responsesCanaryForRequest(gw, r, bodyBytes)
+
 	gw.Stats.RecordRequest(responsesModel, 0)
 
 	ctxLogger := gw.Logger.With("operation", "responses", "provider", provider.Name, "api_key", keyRef)
@@ -214,7 +222,23 @@ func (p *Proxy) handleResponses(gw *gateway.NenyaGateway, w http.ResponseWriter,
 	gw.Metrics.RecordUpstreamRequest(responsesModel, "", provider.Name)
 	defer func() { _ = resp.Body.Close() }()
 
-	writeUpstreamResponse(ctx, w, resp, ctxLogger)
+	p.relayResponsesUpstream(gw, w, r, resp, provider.Name, responsesModel, keyRef, canary, ctxLogger)
+}
+
+// responsesCanaryForRequest generates the per-request canary and injects its
+// marker into a create request's instructions channel (NENYA-346), returning
+// the canary state and the (possibly rewritten) body. Inert when the
+// pipeline is disabled, the route is not the create endpoint, or the guard
+// is off — the body passes through unchanged.
+func responsesCanaryForRequest(gw *gateway.NenyaGateway, r *http.Request, body []byte) (pipeline.CanarResult, []byte) {
+	if !gw.Config.Governance.EffectiveResponsesPipelineEnabled() || !responsesModelRequired(r) {
+		return pipeline.CanarResult{}, body
+	}
+	res, newBody, injected := injectResponsesCanary(gw, body)
+	if !injected {
+		return pipeline.CanarResult{}, body
+	}
+	return res, newBody
 }
 
 // canonicalResponsesPath decodes and cleans a request path for the

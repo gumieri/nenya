@@ -162,7 +162,7 @@ func applyServerDefaults(cfg *Config) {
 		cfg.Server.ListenAddr = "127.0.0.1:8080"
 	}
 	if cfg.Server.MaxBodyBytes == 0 {
-		cfg.Server.MaxBodyBytes = 10 << 20
+		cfg.Server.MaxBodyBytes = DefaultMaxBodyBytes
 	}
 	if cfg.Server.StreamStallTimeoutSeconds == nil {
 		// GoModel parity (#921): a stuck reader must not pin the handler
@@ -277,6 +277,12 @@ func applyStreamHeadDefaults(gc *GovernanceConfig) {
 // anchored at word boundaries: identifiers embedded in adjacent word
 // characters (e.g. "x4111111111111111") are not matched — an accepted
 // Tier-0 regex redaction limitation.
+// DefaultMaxBodyBytes is the request/response body ceiling applied when the
+// operator sets no max_body_bytes (config/defaults.go); the responses
+// pipeline reuses it as its buffered scan bound (NENYA-346) so the two
+// defaults cannot drift.
+const DefaultMaxBodyBytes int64 = 10 << 20
+
 const (
 	// FinancialCardPattern matches 13-19 digit card-shaped numbers with
 	// optional space/dash separators; gated by Luhn validation.

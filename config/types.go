@@ -1167,9 +1167,15 @@ type GovernanceConfig struct {
 	TfidfRerank *TfidfRerankConfig `json:"tfidf_rerank,omitempty"`
 	// MCPGuard validates Nenya-managed tool-call arguments (schema,
 	// size, URL destinations) before dispatch to MCP servers.
-	MCPGuard        *MCPGuardConfig `json:"mcp_guard,omitempty"`
-	RatelimitMaxRPM *int            `json:"ratelimit_max_rpm,omitempty"`
-	RatelimitMaxTPM *int            `json:"ratelimit_max_tpm,omitempty"`
+	MCPGuard *MCPGuardConfig `json:"mcp_guard,omitempty"`
+	// ResponsesPipeline gates the security pipeline on the /v1/responses
+	// passthrough (NENYA-346): egress guards (ExfilGuard URL policy,
+	// secret redaction) and the streamed tool-call argument assembler +
+	// enforcing guards run on the endpoint's responses. Default ON — the
+	// knob exists as a kill switch.
+	ResponsesPipeline *ResponsesPipelineConfig `json:"responses_pipeline,omitempty"`
+	RatelimitMaxRPM   *int                     `json:"ratelimit_max_rpm,omitempty"`
+	RatelimitMaxTPM   *int                     `json:"ratelimit_max_tpm,omitempty"`
 	// MaxConcurrentRequests is the global fallback cap on in-flight requests
 	// per provider+model when the provider config does not set its own limit
 	// (0 or omitted = unlimited).
@@ -1329,6 +1335,16 @@ func (g *GovernanceConfig) EffectiveMaxRetryAttempts() int {
 		return g.MaxRetryAttempts
 	}
 	return 3
+}
+
+// EffectiveResponsesPipelineEnabled reports whether the /v1/responses
+// security pipeline should run. Default ON — the knob is a kill switch
+// (nil-safe at both levels).
+func (g *GovernanceConfig) EffectiveResponsesPipelineEnabled() bool {
+	if g == nil || g.ResponsesPipeline == nil || g.ResponsesPipeline.Enabled == nil {
+		return true
+	}
+	return *g.ResponsesPipeline.Enabled
 }
 
 // DefaultWarmCacheBandPct and DefaultWarmCacheMinTokens are the NENYA-202
@@ -2117,6 +2133,16 @@ type MCPGuardConfig struct {
 // EffectiveEnabled reports the resolved guard state (nil-safe).
 func (m *MCPGuardConfig) EffectiveEnabled() bool {
 	return m != nil && (m.Enabled == nil || *m.Enabled)
+}
+
+// ResponsesPipelineConfig gates the security pipeline on the
+// /v1/responses passthrough (NENYA-346): egress guards (ExfilGuard URL
+// policy, secret redaction) and the streamed tool-call argument assembler
+// with its enforcing guards run on the endpoint's responses.
+type ResponsesPipelineConfig struct {
+	// Enabled master-switches the pipeline. Default ON — the field
+	// exists as a kill switch (set false to restore the raw passthrough).
+	Enabled *bool `json:"enabled,omitempty"`
 }
 
 // EffectiveMaxArgBytes reports the configured argument size cap
