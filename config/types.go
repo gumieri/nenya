@@ -1781,6 +1781,20 @@ type SecretsConfig struct {
 	ClientToken  string            `json:"client_token,omitempty"`
 	ProviderKeys map[string]string `json:"provider_keys,omitempty"`
 	ApiKeys      map[string]ApiKey `json:"api_keys,omitempty"`
+	// SecretValues is the literal-value redaction list (NENYA-350 /
+	// Module B Phase 040): values declared here are redacted VERBATIM
+	// from every redacted surface (request content, tool-call arguments,
+	// MCP tool results, response stream, upstream error logs) in addition
+	// to the bouncer's pattern presets — without disabling preset
+	// expansion the way a custom redact_patterns list does. Entries may
+	// be env:/file: references (resolved at boot and on every SIGHUP
+	// reload like provider keys, fail-closed) or inline literals
+	// (discouraged: an inline value lives in secrets.json, which the
+	// operator already holds). Values are compiled as exact-literal
+	// patterns (regexp.QuoteMeta — metacharacters are inert) and never
+	// logged. Validation rejects an empty/short (<8 byte) value and
+	// lists beyond MaxSecretValues entries.
+	SecretValues []string `json:"secret_values,omitempty"`
 }
 
 // ApiKey defines an API key entry for client authentication, with

@@ -1137,6 +1137,7 @@ func ValidateConfigReferences(cfg *Config, secrets *SecretsConfig, logger *slog.
 	errs = append(errs, validateAgentSlowCallThresholds(cfg.Agents)...)
 	errs = append(errs, validateAgentMCPReferences(cfg)...)
 	errs = append(errs, validateSecretAgentScopes(cfg, secrets, logger)...)
+	errs = append(errs, validateSecretValues(secrets)...)
 	errs = append(errs, validateMCPServerConfigs(cfg, logger)...)
 	errs = append(errs, validateAPIKeyToolGrants(cfg, secrets)...)
 	return errs
@@ -1924,6 +1925,45 @@ func validateExfilGuardConfig(cfg *Config) []string {
 		case "", ExfilActionLog, ExfilActionStrip, ExfilActionBlock:
 		default:
 			errs = append(errs, fmt.Sprintf("agents.%s.exfil_guard.action: invalid value %q", name, agent.ExfilGuard.Action))
+		}
+	}
+	return errs
+}
+
+// MaxSecretValues caps the secrets.secret_values literal list (a list
+// beyond this size is a misconfiguration — literal scans cost O(list ×
+// text)).
+const MaxSecretValues = 256
+
+// MinSecretValueLength is the shortest literal secret_values entry that
+// compiles into a redaction pattern (shorter values redact noise, not
+// secrets).
+const MinSecretValueLength = 8
+
+// validateSecretValues checks the literal-value redaction list
+// (NENYA-350): bounded count, no empty entries, and a minimum length —
+// the list feeds verbatim-pattern matching on every redacted surface,
+// so a junk entry is config error territory (fail closed), unlike a
+// weak PROVIDER key which the strength validator handles separately.
+// It runs TWICE: on the raw document (where env:/file: REFERENCES are
+// exempt from the length check — a short REF name is not a short
+// secret) and post-resolution inside validateSecretsResult, where the
+// resolved — actually serving — values are length-gated (NENYA-350
+// round-1 review).
+func validateSecretValues(secrets *SecretsConfig) []string {
+	if secrets == nil || len(secrets.SecretValues) == 0 {
+		return nil
+	}
+	var errs []string
+	if len(secrets.SecretValues) > MaxSecretValues {
+		errs = append(errs, fmt.Sprintf("secrets.secret_values: %d entries exceeds the %d cap", len(secrets.SecretValues), MaxSecretValues))
+	}
+	for i, v := range secrets.SecretValues {
+		switch {
+		case strings.TrimSpace(v) == "":
+			errs = append(errs, fmt.Sprintf("secrets.secret_values[%d]: empty entry", i))
+		case len(v) < MinSecretValueLength && !IsSecretReference(v):
+			errs = append(errs, fmt.Sprintf("secrets.secret_values[%d]: shorter than the %d-byte minimum (a short literal redacts noise, not secrets)", i, MinSecretValueLength))
 		}
 	}
 	return errs

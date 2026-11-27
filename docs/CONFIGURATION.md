@@ -685,6 +685,16 @@ References are resolved at boot and RE-RESOLVED on every SIGHUP reload, so rotat
 
 `nenya config set` notes when a write targets a provider credential leaf — `providers.<name>.api_key` (NENYA-300): an `env:`/`file:` value prints a note that it is written VERBATIM — reference resolution runs only over secrets.json `provider_keys`, never the config file, so a live reference belongs there (a LITERAL api_key here is a valid serving credential via the provider's default account); a JSON `null` prints a note that it removes this config-file credential — the `provider_keys` credential is unaffected, and if this leaf was the serving credential, serving falls back to it.
 
+### Literal-value redaction list (secrets.secret_values, NENYA-350)
+
+`secrets.json` `secret_values` is a list of literal secrets redacted VERBATIM from every redacted surface — request content, tool-call arguments, MCP tool results, the response stream, and upstream error logs — in addition to the bouncer's pattern presets, WITHOUT disabling preset expansion (the way a custom `bouncer.redact_patterns` list does). Entries may be `env:`/`file:` references (resolved at boot and re-resolved on every SIGHUP reload exactly like provider keys, fail-closed: a resolution failure fails the whole load; errors name the list index, never the value) or inline literals (discouraged — an inline value lives in secrets.json, which the operator already holds):
+
+```json
+{"secret_values": ["env:DEPLOY_WEBHOOK_TOKEN", "file:/run/secrets/internal-api-key"]}
+```
+
+Values compile as exact-literal patterns (`regexp.QuoteMeta` — metacharacters are inert, so a value matches only itself), are never logged, and participate in every downstream consumer of the compiled secret patterns (the interceptor chain, the output-stream filter, MCP tool-result redaction, upstream error-log redaction). Scope notes: the output-stream filter matches within its fixed detection window (4096 runes), so a literal longer than the window never matches on the response stream (content/args/log surfaces are unaffected), and multi-line literals match only within one window on the stream. Validation rejects an empty entry, a value shorter than 8 bytes (a short literal redacts noise, not secrets — the length gate measures the RESOLVED value; raw `env:`/`file:` references are exempt until resolution), and lists beyond 256 entries. Scope note: the literal list is operator tooling — the DEFAULT pattern presets' quoted-value gap (the redaction-variants corpus pins it as an accepted limitation) remains permanent.
+
 
 
 ### Per-provider network settings (NENYA-137)

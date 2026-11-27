@@ -718,6 +718,9 @@ func LoadSecretsBounded(configRoot string, timeout time.Duration) (*SecretsConfi
 	if err := ResolveProviderKeyReferences(res.Secrets, configRoot, timeout); err != nil {
 		return nil, err
 	}
+	if err := ResolveSecretValueReferences(res.Secrets, configRoot, timeout); err != nil {
+		return nil, err
+	}
 	// The resolution pass ran validator first on the RAW document; the
 	// resolved values are what actually serve, so they get the same
 	// treatment (a reference to a weak/empty credential refuses here).
@@ -734,6 +737,13 @@ func validateSecretsResult(secrets *SecretsConfig, source string) (*SecretsConfi
 	}
 	if err := validateSecrets(secrets); err != nil {
 		return nil, err
+	}
+	// The secret_values gate re-runs POST-resolution (NENYA-350 round-1
+	// review): the raw pass exempts env:/file: references from the
+	// length check (a short REF name is not a short secret), so the
+	// RESOLVED — actually serving — values are length-gated here.
+	if errs := validateSecretValues(secrets); len(errs) > 0 {
+		return nil, errors.New("secret_values invalid: " + strings.Join(errs, "; "))
 	}
 	return secrets, nil
 }

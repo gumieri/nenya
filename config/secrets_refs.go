@@ -114,6 +114,33 @@ func ResolveProviderKeyReferences(secrets *SecretsConfig, configRoot string, tim
 	return errors.Join(errs...)
 }
 
+// ResolveSecretValueReferences resolves the env:/file: references in
+// secrets.secret_values in place (NENYA-350), with the same fail-closed
+// semantics and timing as the provider keys (boot + every SIGHUP reload,
+// so a rotated literal is picked up without a restart). Errors name the
+// list INDEX, never the value.
+func ResolveSecretValueReferences(secrets *SecretsConfig, configRoot string, timeout time.Duration) error {
+	if secrets == nil {
+		return nil
+	}
+	var errs []error
+	for i, value := range secrets.SecretValues {
+		if !IsSecretReference(value) {
+			continue
+		}
+		resolved, err := resolveSecretReference(value, configRoot, timeout)
+		if err != nil {
+			errs = append(errs, fmt.Errorf("secret_values[%d] (%s): %w", i, value, err))
+			continue
+		}
+		secrets.SecretValues[i] = resolved
+	}
+	if len(errs) == 0 {
+		return nil
+	}
+	return errors.Join(errs...)
+}
+
 // resolveSecretReference resolves one reference to its concrete credential.
 func resolveSecretReference(value, configRoot string, timeout time.Duration) (string, error) {
 	switch {

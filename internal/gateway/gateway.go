@@ -250,6 +250,7 @@ func newGateway(ctx context.Context, cfg config.Config, secrets *config.SecretsC
 	})
 
 	secretPatterns, blockedPatterns := compilePatterns(cfg, logger)
+	secretPatterns = append(secretPatterns, compileSecretValuePatterns(secrets, logger)...)
 	entropyFilter := createEntropyFilter(cfg, logger)
 
 	gw := buildGateway(cfg, secrets, secureClient, ollamaClient, providers,
@@ -538,6 +539,28 @@ func generateAutoAgents(cfg *config.Config, catalog *discovery.ModelCatalog, pro
 // Pattern order matters: patterns are applied in config order, and the first
 // matching pattern wins for redaction label assignment. Place more specific
 // patterns before more general ones to ensure correct label attribution.
+// compileSecretValuePatterns compiles the secrets.secret_values literal
+// list (NENYA-350) into exact-match patterns: regexp.QuoteMeta makes
+// every metacharacter inert, so the value matches VERBATIM and nothing
+// else. Values below the validation minimum are skipped with a warning
+// naming the index (validation rejects them at load; the skip keeps
+// direct-construction callers safe). Values are never logged.
+func compileSecretValuePatterns(secrets *config.SecretsConfig, logger *slog.Logger) []*regexp.Regexp {
+	if secrets == nil || len(secrets.SecretValues) == 0 {
+		return nil
+	}
+	patterns := make([]*regexp.Regexp, 0, len(secrets.SecretValues))
+	for i, value := range secrets.SecretValues {
+		if len(value) < config.MinSecretValueLength {
+			logger.Warn("skipping short secret_values entry", "index", i)
+			continue
+		}
+		patterns = append(patterns, regexp.MustCompile(regexp.QuoteMeta(value)))
+	}
+	logger.Info("compiled literal secret-value patterns", "count", len(patterns))
+	return patterns
+}
+
 func compilePatterns(cfg config.Config, logger *slog.Logger) ([]*regexp.Regexp, []*regexp.Regexp) {
 	var secretPatterns []*regexp.Regexp
 	if cfg.Bouncer.Enabled != nil && *cfg.Bouncer.Enabled && len(cfg.Bouncer.RedactPatterns) > 0 {
