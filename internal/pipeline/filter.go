@@ -34,8 +34,13 @@ func RedactSecrets(text string, enabled bool, patterns []*regexp.Regexp, label s
 	for _, re := range patterns {
 		redacted = replaceValidated(re, redacted, label)
 	}
-
-	return redacted
+	// NENYA-349: the confusable candidate pass catches what the flat
+	// patterns cannot see — secrets whose separators are invisible
+	// characters or whose characters are fullwidth/NBSP/typographic
+	// foldables. No-op (fast-path scan) on clean text; every existing
+	// flat catch is preserved because the pass runs on the flat output
+	// and only replaces spans the flat pass left behind.
+	return redactConfusablePass(redacted, patterns, label)
 }
 
 // truncationSplits computes the keep-first/keep-last rune budgets for

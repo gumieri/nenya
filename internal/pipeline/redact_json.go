@@ -3,7 +3,6 @@ package pipeline
 import (
 	"encoding/json"
 	"regexp"
-	"sort"
 	"strings"
 )
 
@@ -25,24 +24,23 @@ func RedactJSONEncoded(text string, enabled bool, patterns []*regexp.Regexp, lab
 	return redactJSONEscapedPass(text, patterns, label)
 }
 
-// edit is one pending original-byte replacement.
-type edit struct{ start, end int }
+// decRun is one maximal in-literal run in DECODED-text coordinates.
+type decRun struct{ start, end int }
 
 // clampToLiteralRuns splits one decoded-text match into its maximal
-// in-literal runs (contiguous stretches of string-literal content),
-// returning one original-byte edit per run: a structure-crossing pattern
-// redacts each literal fragment it touched and NEVER any structural
-// byte — the two-literal interior case (contentA | structural | contentB)
-// yields two independent edits, so neither the whole-args neutralization
-// nor a silent element merge can happen. A match with no in-literal
-// bytes yields no edits. toOrig maps a decoded byte index to its
-// original-byte span. Bounds guards reject malformed locations.
-func clampToLiteralRuns(loc []int, inString []bool, toOrig func(i int) (int, int)) []edit {
+// in-literal runs (contiguous stretches of string-literal content): a
+// structure-crossing pattern yields one run per literal fragment it
+// touched and NEVER any structural byte — the two-literal interior case
+// (contentA | structural | contentB) yields two independent runs, so
+// neither the whole-args neutralization nor a silent element merge can
+// happen. A match with no in-literal bytes yields no runs. Bounds guards
+// reject malformed locations.
+func clampToLiteralRuns(loc []int, inString []bool) []decRun {
 	start, end := loc[0], loc[1]
 	if start < 0 || start >= end || end > len(inString) {
 		return nil
 	}
-	var edits []edit
+	var runs []decRun
 	for start < end {
 		for start < end && !inString[start] {
 			start++
@@ -52,12 +50,10 @@ func clampToLiteralRuns(loc []int, inString []bool, toOrig func(i int) (int, int
 			start++
 		}
 		if start > runStart {
-			s, _ := toOrig(runStart)
-			_, e := toOrig(start - 1)
-			edits = append(edits, edit{s, e})
+			runs = append(runs, decRun{runStart, start})
 		}
 	}
-	return edits
+	return runs
 }
 
 // redactJSONEscapedPass applies the decode-aware pass, returning the
@@ -68,62 +64,62 @@ func clampToLiteralRuns(loc []int, inString []bool, toOrig func(i int) (int, int
 // literal fragment it touched — for the natural shapes that is the
 // whole secret — and the JSON structure survives untouched); the
 // walker's wholesale-neutralization guard stays as defense-in-depth for
-// other breakage (e.g. a label carrying a quote). Escape-free input
-// takes the identity fast path (no decoded copy, no span map — a 1-byte
-// structural flag walk instead of the ~19n transient materialization).
+// other breakage (e.g. a label carrying a quote). Checksum validators
+// gate each run on its decoded text (flat-parity: a Luhn-invalid card
+// in args stays). Escape-free input takes the identity fast path (no
+// decoded copy, no span map — a 1-byte structural flag walk instead of
+// the ~19n transient materialization). NENYA-349: a second layer runs
+// the confusable candidates over the decoded text, so invisible-split or
+// fullwidth secrets inside args are caught too — every confusable byte
+// in valid JSON is literal content (the structure is ASCII), and the
+// flags check stays as an invariant guard.
 func redactJSONEscapedPass(s string, patterns []*regexp.Regexp, label string) string {
 	var (
-		matches  [][]int
+		text     string
 		inString []bool
 		toOrig   func(i int) (int, int)
 	)
 	if strings.ContainsRune(s, '\\') {
 		dec, spans, flags := decodeJSONEscapes(s)
-		for _, re := range patterns {
-			matches = append(matches, re.FindAllStringSubmatchIndex(dec, -1)...)
-		}
-		inString, toOrig = flags, func(i int) (int, int) {
+		text, inString, toOrig = dec, flags, func(i int) (int, int) {
 			return spans[i].start, spans[i].end
 		}
 	} else {
 		// Identity fast path: the decoded text IS s, spans are {i,i+1}.
-		for _, re := range patterns {
-			matches = append(matches, re.FindAllStringSubmatchIndex(s, -1)...)
-		}
-		inString, toOrig = literalFlags(s), func(i int) (int, int) {
+		text, inString, toOrig = s, literalFlags(s), func(i int) (int, int) {
 			return i, i + 1
 		}
 	}
 	var edits []edit
-	for _, loc := range matches {
-		edits = append(edits, clampToLiteralRuns(loc, inString, toOrig)...)
-	}
-	if len(edits) == 0 {
-		return s
-	}
-	// First-wins on overlap, longest-wins on ties: sort by start asc,
-	// end DESC so two patterns matching at the same decoded start
-	// deterministically keep the longer redaction (sort.Slice is
-	// unstable — the tie-break must live in the comparator).
-	sort.Slice(edits, func(i, j int) bool {
-		if edits[i].start != edits[j].start {
-			return edits[i].start < edits[j].start
+	for _, re := range patterns {
+		validate, hasValidator := matchValidators[re.String()]
+		for _, loc := range re.FindAllStringSubmatchIndex(text, -1) {
+			for _, run := range clampToLiteralRuns(loc, inString) {
+				if hasValidator && !validate(text[run.start:run.end]) {
+					continue
+				}
+				sOrig, _ := toOrig(run.start)
+				_, eOrig := toOrig(run.end - 1)
+				edits = append(edits, edit{sOrig, eOrig})
+			}
 		}
-		return edits[i].end > edits[j].end
-	})
-	// First-wins on overlap: overlapping edits keep the leftmost span.
-	var b strings.Builder
-	last := 0
-	for _, e := range edits {
-		if e.start < last {
-			continue
-		}
-		b.WriteString(s[last:e.start])
-		b.WriteString(label)
-		last = e.end
 	}
-	b.WriteString(s[last:])
-	return b.String()
+	// Layer 2: confusable candidates over the decoded text.
+	if containsConfusables(text) {
+		edits = append(edits, confusableJSONEdits(text, patterns, inString, toOrig)...)
+	}
+	return applyEdits(s, edits, label)
+}
+
+// allInStringFlags reports whether every byte of the range is
+// string-literal content.
+func allInStringFlags(flags []bool) bool {
+	for _, f := range flags {
+		if !f {
+			return false
+		}
+	}
+	return true
 }
 
 // literalFlags computes per-byte string-literal membership for an
