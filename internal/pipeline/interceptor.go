@@ -82,6 +82,11 @@ type InterceptRequest struct {
 	// egress screen as a deterministic trigger signal.
 	EntropyRedacted bool
 
+	// SecretsRedacted is set in place by the redaction interceptor when
+	// its secret patterns matched this request (NENYA-353); consumed as
+	// the strong half of the tool-egress policy's sensitivity signal.
+	SecretsRedacted bool
+
 	// SkipTFIDFPrune is set by the proxy when the per-agent cache_aware policy
 	// is active for a cache-rich provider and the payload fits the hard limit:
 	// the TF-IDF tail prune is skipped so the provider prefix cache can do the

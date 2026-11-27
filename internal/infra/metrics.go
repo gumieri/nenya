@@ -85,6 +85,12 @@ type Metrics struct {
 	// exfilDetections counts egress-guard URL violations by reason and
 	// configured action.
 	exfilDetections sync.Map
+	// toolEgressEvents counts tool-egress policy firings by action
+	// (log|strip|block) — NENYA-353.
+	toolEgressEvents sync.Map
+	// toolEgressStripped counts networked tool declarations removed from
+	// dispatches by the strip action.
+	toolEgressStripped atomic.Uint64
 	// exfilEvents counts canary tripwire detections by egress channel.
 	exfilEvents   sync.Map
 	panics        atomic.Uint64
@@ -625,6 +631,33 @@ func (m *Metrics) RecordExfilEvent(channel string) {
 func (m *Metrics) writeExfilDetections(w io.Writer) {
 	m.writeCounterMap(w, "nenya_exfil_detections_total",
 		"Egress violations by reason (deterministic URL-policy reasons or llm_screen) and applied action.", &m.exfilDetections)
+}
+
+// RecordToolEgressEvent records one tool-egress policy firing with its
+// action (log|strip|block) — NENYA-353. Nil-safe.
+func (m *Metrics) RecordToolEgressEvent(action string) {
+	if m == nil || action == "" {
+		return
+	}
+	e := getOrCreateEntry(&m.toolEgressEvents, map[string]string{"action": action})
+	e.value.Add(1)
+}
+
+// RecordToolEgressStripped records n networked tool declarations removed
+// from a dispatch by the strip action — NENYA-353. Nil-safe.
+func (m *Metrics) RecordToolEgressStripped(n int) {
+	if m == nil || n <= 0 {
+		return
+	}
+	m.toolEgressStripped.Add(uint64(n))
+}
+
+// writeToolEgress emits the tool-egress policy counters.
+func (m *Metrics) writeToolEgress(w io.Writer) {
+	m.writeCounterMap(w, "nenya_tool_egress_events_total",
+		"Tool-capability egress policy firings by applied action (log|strip|block).", &m.toolEgressEvents)
+	m.writeCounterAtomic(w, "nenya_tool_egress_tools_stripped_total",
+		"Networked tool declarations removed from dispatches by the strip action.", m.toolEgressStripped.Load())
 }
 
 // RecordExfilDetection records an egress violation with its reason —
@@ -2081,6 +2114,7 @@ func (m *Metrics) WritePrometheus(w io.Writer) {
 	m.writeJudgments(w)
 	m.writeSpotlighted(w)
 	m.writeExfilDetections(w)
+	m.writeToolEgress(w)
 	m.writeExfilEvents(w)
 	m.writePipelineMetrics(w)
 	m.writeCounterMap(w, "nenya_ratelimit_rejected_total",

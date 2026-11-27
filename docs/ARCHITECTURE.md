@@ -6,7 +6,7 @@
 netutil, jsonschema, tracing, config -> tiktoken, security, version, util -> infra -> auth -> pipeline -> stream -> resilience -> billing -> mcp -> adapter -> discovery -> providers -> routing -> local -> gateway -> mcpproxy -> proxy
 ```
 
-Each layer may only import from layers to its left — enforced by `TestDocsDAGMatchesImportOrder` against the runtime import graph (`internal/gateway/docs_dag_test.go`), so this map cannot drift silently. `netutil` (outbound transport policy helpers) and root `config` are the shared foundations; `util` imports root `config`, so it sits right of it. Leaf dependencies (`netutil`, `jsonschema`, `tracing`, `tiktoken`, `security`, `version`) are stdlib-only. `jsonschema` sanitizes tool schemas for cross-provider transport (NENYA-172). `tracing` provides OTel-lite request tracing (W3C traceparent propagation + stage spans exported as slog records). The `local` package manages Ollama model lifecycles; `auth` (RBAC, account pools, key usage) sits right of `infra`; `billing` builds on `resilience` backoff/retry state. `mcpproxy` (package path `internal/proxy/mcp`, DAG token `mcpproxy`) hosts the MCP subsystem extracted from `proxy` — tool injection, the multi-turn tool loop, the buffered dispatch core, the tool-result vision gate, usage recording — talking to the proxy through the `mcpproxy.Host` seam. Packages outside the runtime DAG by design: `testutil` (test-only helpers) and `ssefixtures` (deterministic SSE/chat fixture corpus for the hot-path benchmarks, 5a8943f0). The release-contract drift guards that enforce this document's claims live in `internal/gateway` (DAG coverage + import order, `.goreleaser.yml`/`install.sh`/`CONTRACT.md` §7 alignment) and `config` (public-surface JSON tags); the dist-artifact verifier was removed with the releasecontract package (NENYA-334).
+Each layer may only import from layers to its left — enforced by `TestDocsDAGMatchesImportOrder` against the runtime import graph (`internal/gateway/docs_dag_test.go`), so this map cannot drift silently. `netutil` (outbound transport policy helpers) and root `config` are the shared foundations; `util` imports root `config`, so it sits right of it. Leaf dependencies (`netutil`, `jsonschema`, `tracing`, `tiktoken`, `security`, `version`) are stdlib-only. `jsonschema` sanitizes tool schemas for cross-provider transport (NENYA-172). `tracing` provides OTel-lite request tracing (W3C traceparent propagation + stage spans exported as slog records). The `local` package manages Ollama model lifecycles; `auth` (RBAC, account pools, key usage) sits right of `infra`; `billing` builds on `resilience` backoff/retry state. `mcpproxy` (package path `internal/proxy/mcp`, DAG token `mcpproxy`) hosts the MCP subsystem extracted from `proxy` — tool injection, the multi-turn tool loop, the buffered dispatch core, the tool-result vision gate, usage recording — talking to the proxy through the `mcpproxy.Host` seam. Packages outside the runtime DAG by design: `testutil` (test-only helpers), `ssefixtures` (deterministic SSE/chat fixture corpus for the hot-path benchmarks, 5a8943f0), and `pseudonym` (the C010 reversible-pseudonymization spike package — deliberately unwired: no runtime package imports it, only the `cmd/pseudonym-spike` harness; it gains a DAG slot when the pseudonymizer is wired into the pipeline, C020). The release-contract drift guards that enforce this document's claims live in `internal/gateway` (DAG coverage + import order, `.goreleaser.yml`/`install.sh`/`CONTRACT.md` §7 alignment) and `config` (public-surface JSON tags); the dist-artifact verifier was removed with the releasecontract package (NENYA-334).
 
 ## Package Overview
 
@@ -439,6 +439,42 @@ references an uploaded file id (content scanned at upload; no text surface).
 Files/batches remain passthrough for ids (NENYA-189). Recorded gaps:
 binary content is never decoded (documented skip), and embeddings'
 tokenized int-array inputs have no text surface.
+
+### Tool-Capability Egress Policy (NENYA-353)
+
+The response-side guards (ExfilGuard, canary, stream filter) watch what
+flows BACK through the gateway; they cannot see a model copying sensitive
+values into a networked tool's arguments — that traffic leaves from the
+tool executor and never returns through Nenya. The tool-capability egress
+policy closes the request side of that channel: when the interceptor chain
+marked a request sensitive (the redaction interceptor matched a secret
+pattern — `SecretsRedacted` — or the entropy interceptor redacted
+high-entropy spans), the policy acts on the request's NETWORKED tool
+declarations (tools that move data off-box: web search/fetch, HTTP
+request tools, mail/chat relays) classified by NAME against globs
+(`governance.tool_egress.networked_patterns`, `mcp.MatchesToolPattern`
+semantics — the same matcher as the per-server tool policy; empty uses
+built-in conservative defaults, a non-empty list replaces them). The
+policy runs on the chat dispatch path (both wire routes share
+`chainChat`) after the content pipeline — the only point where the
+sensitivity signal exists — and before dispatch, covering client-declared
+and gateway-injected (MCP) tools alike, and BEFORE the token recount so a
+strip shrinks the payload the pre-dispatch guards judge. Actions:
+`log` (default — warn + `nenya_tool_egress_events_total{action}`, zero
+behavior change), `strip` (remove the networked declarations and a
+`tool_choice` naming one — an emptied list deletes the `tools` field and
+any `tool_choice` with it, since a choice without declarations is a
+guaranteed upstream 400; prune the names from the injected-MCP
+bookkeeping so the loop's execution gate answers a model-initiated call
+to a stripped tool with the structured `[unavailable tool]` refusal —
+the NENYA-162 machinery — rather than dispatching it; the injected names
+were already advertised in the gateway-authored MCP system prompt, so
+the refusal, not the declaration's absence, is what closes the
+capability; `nenya_tool_egress_tools_stripped_total`),
+`block` (403 `error_kind=exfil_blocked`). `governance.tool_egress.enabled`
+is the kill switch (default ON — inert at the default action). Recorded
+boundary: `/v1/responses` is not covered — its pipeline (NENYA-346) does
+not run the interceptor chain, so it has no sensitivity signal to key on.
 
 ## Cost Model (Peak/Off-Peak & Cached Input)
 

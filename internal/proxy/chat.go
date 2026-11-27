@@ -1373,6 +1373,16 @@ func (p *Proxy) handleChatCompletions(gw *gateway.NenyaGateway, w http.ResponseW
 		}
 		gw.Logger.Warn("content pipeline failed, proceeding with interceptor output", "err", err)
 	}
+	// NENYA-353: the tool-capability egress policy runs BEFORE the token
+	// recount so a strip shrinks the payload the guards and token
+	// accounting actually judge. Sensitive = the chain's redaction
+	// signals fired on this request (secret patterns or entropy spans);
+	// a strip also prunes the injected-MCP execution bookkeeping (the
+	// loop's gate keys on those names — NENYA-162).
+	if !p.applyToolEgressOutcome(gw, w, req, pipelineOutcome) {
+		return
+	}
+
 	// NENYA-70: the interceptor chain/trim may have shrunk the payload after
 	// the estimate was taken at request build. Pre-dispatch guards (TPM, cost)
 	// and token accounting must judge the payload that is actually dispatched,

@@ -60,6 +60,10 @@ func (r *RedactInterceptor) Process(_ context.Context, req *InterceptRequest) (*
 	}
 	if redactions > 0 {
 		r.metrics.RecordRedaction(redactions)
+		// NENYA-353: raise the sensitivity signal in place — the
+		// tool-egress policy consumes it as the strong half of its
+		// sensitive-request trigger.
+		req.SecretsRedacted = true
 	}
 	if !modified {
 		return &InterceptResult{Payload: req.Payload, Skip: true}, nil

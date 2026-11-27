@@ -1174,8 +1174,16 @@ type GovernanceConfig struct {
 	// enforcing guards run on the endpoint's responses. Default ON — the
 	// knob exists as a kill switch.
 	ResponsesPipeline *ResponsesPipelineConfig `json:"responses_pipeline,omitempty"`
-	RatelimitMaxRPM   *int                     `json:"ratelimit_max_rpm,omitempty"`
-	RatelimitMaxTPM   *int                     `json:"ratelimit_max_tpm,omitempty"`
+	// ToolEgress configures the tool-capability egress policy (NENYA-353):
+	// when a request's content was marked sensitive by the interceptor
+	// chain (secret-pattern or entropy redactions fired), the policy acts
+	// on the request's NETWORKED tool declarations — the exfiltration
+	// channel a model can copy sensitive values into. Default ON with
+	// action "log": visible and counted, zero behavior change; "strip"
+	// and "block" are operator opt-in.
+	ToolEgress      *ToolEgressConfig `json:"tool_egress,omitempty"`
+	RatelimitMaxRPM *int              `json:"ratelimit_max_rpm,omitempty"`
+	RatelimitMaxTPM *int              `json:"ratelimit_max_tpm,omitempty"`
 	// MaxConcurrentRequests is the global fallback cap on in-flight requests
 	// per provider+model when the provider config does not set its own limit
 	// (0 or omitted = unlimited).
@@ -2143,6 +2151,79 @@ type ResponsesPipelineConfig struct {
 	// Enabled master-switches the pipeline. Default ON — the field
 	// exists as a kill switch (set false to restore the raw passthrough).
 	Enabled *bool `json:"enabled,omitempty"`
+}
+
+// ToolEgressConfig configures the tool-capability egress policy
+// (NENYA-353): a sensitive request (the interceptor chain's secret-pattern
+// or entropy redactions fired) carrying NETWORKED tool declarations —
+// tools that can move data off-box (web search/fetch, HTTP, mail, chat
+// relays) — is the exfiltration channel this policy closes.
+type ToolEgressConfig struct {
+	// Enabled master-switches the policy. Default ON — the field exists
+	// as a kill switch; with the default action ("log") the policy only
+	// logs and counts.
+	Enabled *bool `json:"enabled,omitempty"`
+	// Action applied when a sensitive request declares networked tools:
+	// "log" (default — warn + counter, dispatch unchanged), "strip"
+	// (remove the networked declarations and a tool_choice naming one
+	// before dispatch), "block" (reject the request 403).
+	Action string `json:"action,omitempty"`
+	// NetworkedPatterns are name globs ('*'/'?', mcp.MatchesToolPattern
+	// semantics) classifying networked tool declarations. Empty or nil
+	// uses the built-in conservative defaults; a non-empty list REPLACES
+	// the defaults entirely.
+	NetworkedPatterns []string `json:"networked_patterns,omitempty"`
+}
+
+// DefaultToolEgressAction is the policy action applied when the operator
+// leaves governance.tool_egress.action unset: log-only, zero behavior
+// change.
+const DefaultToolEgressAction = "log"
+
+// EffectiveToolEgressEnabled reports whether the tool-egress policy runs
+// (nil-safe at both levels; default ON).
+func (g *GovernanceConfig) EffectiveToolEgressEnabled() bool {
+	if g == nil || g.ToolEgress == nil || g.ToolEgress.Enabled == nil {
+		return true
+	}
+	return *g.ToolEgress.Enabled
+}
+
+// EffectiveToolEgressAction reports the configured policy action,
+// normalized to lowercase (nil-safe; default "log").
+func (g *GovernanceConfig) EffectiveToolEgressAction() string {
+	if g == nil || g.ToolEgress == nil || g.ToolEgress.Action == "" {
+		return DefaultToolEgressAction
+	}
+	return strings.ToLower(g.ToolEgress.Action)
+}
+
+// EffectiveToolEgressPatterns reports the networked-tool name globs:
+// the configured list when non-empty, else the built-in defaults.
+func (g *GovernanceConfig) EffectiveToolEgressPatterns() []string {
+	if g == nil || g.ToolEgress == nil || len(g.ToolEgress.NetworkedPatterns) == 0 {
+		return DefaultNetworkedToolPatterns()
+	}
+	return g.ToolEgress.NetworkedPatterns
+}
+
+// defaultNetworkedToolPatternList is the built-in conservative classification
+// for networked tool declarations: tools that move data off-box. It is
+// deliberately narrow (a false match only costs a stripped capability on
+// requests the chain already flagged sensitive) and operators extend it via
+// governance.tool_egress.networked_patterns.
+var defaultNetworkedToolPatternList = []string{
+	"web_*", "*web_search*", "*web_fetch*", "fetch", "fetch_*",
+	"*fetch_url*", "search_web", "browse*", "browser*", "http_request*",
+	"send_email*", "send_message*", "slack_*", "post_to_*",
+}
+
+// DefaultNetworkedToolPatterns returns the built-in networked-tool name
+// globs (a copy; callers may not mutate the package default).
+func DefaultNetworkedToolPatterns() []string {
+	out := make([]string, len(defaultNetworkedToolPatternList))
+	copy(out, defaultNetworkedToolPatternList)
+	return out
 }
 
 // EffectiveMaxArgBytes reports the configured argument size cap

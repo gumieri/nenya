@@ -42,7 +42,9 @@ type ChatRequest struct {
 	CacheKey    string
 	HasMCPTools bool
 	// InjectedMCPTools is the set of MCP function names the GATEWAY injected
-	// for this request (NENYA-162). It is the trust anchor for the loop's
+	// for this request (NENYA-162), minus any names the tool-capability
+	// egress policy stripped on a sensitive request (NENYA-353 pruning —
+	// the execution-authorized subset). It is the trust anchor for the loop's
 	// non-injected-call guard: re-deriving the set from the client-writable
 	// payload would let a caller declare an excluded tool name and defeat the
 	// policy.
@@ -154,8 +156,9 @@ type ForwardOptions struct {
 	// (NENYA-185).
 	WindowCompacted bool
 	// InjectedMCPTools is the set of MCP function names the gateway injected
-	// for this request (NENYA-162): the loop's non-injected-call guard is
-	// anchored on it, never on the client-writable payload.
+	// for this request (NENYA-162), minus any names the tool-capability
+	// egress policy stripped (NENYA-353 pruning): the loop's non-injected-call
+	// guard is anchored on it, never on the client-writable payload.
 	InjectedMCPTools []string
 	// EntropyRedacted reports whether the entropy interceptor redacted
 	// high-entropy spans from this request. Consumed only by the

@@ -150,6 +150,7 @@ func collectValidationErrors(ctx context.Context, cfg *Config, providers map[str
 	errors = append(errors, validateTelemetryExposure(cfg, logger)...)
 	errors = append(errors, validateNetworkPolicy(cfg)...)
 	errors = append(errors, validateExfilGuardConfig(cfg)...)
+	errors = append(errors, validateToolEgressConfig(cfg)...)
 	errors = append(errors, validateCanaryConfig(cfg)...)
 	errors = append(errors, validateMCPGuardConfig(cfg)...)
 	errors = append(errors, validateModelRegistryErrors(logger)...)
@@ -1920,6 +1921,29 @@ func validateExfilGuardConfig(cfg *Config) []string {
 		case "", ExfilActionLog, ExfilActionStrip, ExfilActionBlock:
 		default:
 			errs = append(errs, fmt.Sprintf("agents.%s.exfil_guard.action: invalid value %q", name, agent.ExfilGuard.Action))
+		}
+	}
+	return errs
+}
+
+// validateToolEgressConfig checks the tool-capability egress policy knob
+// (NENYA-353): the action must be a known verb, and a pattern list that
+// is present must contain only non-empty globs (an empty ENTRY would
+// silently match nothing and read as a misconfiguration).
+func validateToolEgressConfig(cfg *Config) []string {
+	var errs []string
+	g := cfg.Governance.ToolEgress
+	if g == nil {
+		return nil
+	}
+	switch strings.ToLower(g.Action) {
+	case "", DefaultToolEgressAction, ExfilActionStrip, ExfilActionBlock:
+	default:
+		errs = append(errs, fmt.Sprintf("governance.tool_egress.action: invalid value %q, must be empty, \"log\", \"strip\", or \"block\"", g.Action))
+	}
+	for i, pat := range g.NetworkedPatterns {
+		if strings.TrimSpace(pat) == "" {
+			errs = append(errs, fmt.Sprintf("governance.tool_egress.networked_patterns[%d]: empty pattern", i))
 		}
 	}
 	return errs

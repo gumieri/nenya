@@ -58,6 +58,9 @@ type contentPipelineOutcome struct {
 	// EntropyRedacted reports that the entropy interceptor redacted
 	// high-entropy spans (an egress-screen trigger).
 	EntropyRedacted bool
+	// SecretsRedacted reports that the redaction interceptor matched a
+	// secret pattern in this request (NENYA-353).
+	SecretsRedacted bool
 	// WindowCompacted reports that the history was rewritten by window
 	// compaction: auto cache-breakpoint anchoring stands down for such a
 	// request (NENYA-185).
@@ -141,9 +144,9 @@ func (p *Proxy) applyContentPipeline(gw *gateway.NenyaGateway, ctx context.Conte
 	}
 
 	if _, err := gw.InterceptorChain.Execute(ctx, req); err != nil {
-		return contentPipelineOutcome{EntropyRedacted: req.EntropyRedacted, WindowCompacted: windowed}, err
+		return contentPipelineOutcome{EntropyRedacted: req.EntropyRedacted, SecretsRedacted: req.SecretsRedacted, WindowCompacted: windowed}, err
 	}
-	return contentPipelineOutcome{EntropyRedacted: req.EntropyRedacted, WindowCompacted: windowed}, nil
+	return contentPipelineOutcome{EntropyRedacted: req.EntropyRedacted, SecretsRedacted: req.SecretsRedacted, WindowCompacted: windowed}, nil
 }
 
 // applyWindowStage runs window compaction unless the cache_aware policy skipped

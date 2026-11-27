@@ -22,6 +22,7 @@ const dagInternalPrefix = "internal/"
 var dagExcluded = map[string]bool{
 	"testutil":    true,
 	"ssefixtures": true,
+	"pseudonym":   true,
 }
 
 // dagNestedAllow maps a deliberately nested internal package path to the
