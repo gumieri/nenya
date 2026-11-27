@@ -1,0 +1,6 @@
+{"terms":[
+  {"value":"Acme Corp","kind":"company"},
+  {"value":"acme.com","kind":"domain"},
+  {"value":"Maria Silva","kind":"person"},
+  {"value":"sk-live-9f4a7b2c","kind":"identifier"}
+]}

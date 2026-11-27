@@ -1,0 +1,16 @@
+Plain notes file: edge cases for the matcher.
+
+The word "acme.community" is NOT our domain — a domain term acme.com must
+not swallow it. The word "AcmeCorp" (one token) is not the company name
+either. The distinct word "Acme Corps" is unrelated to Acme Corp. A
+possessive "Acme Corp's" contains the whole declared term; the suffix stays
+natural after a patch.
+
+Email addresses carry the domain twice: maria.silva@acme.com is one token
+where the domain appears mid-token — the declared-term matcher will see
+acme.com inside it (word boundary after the @ sign). That is a real
+occurrence of the declared domain and SHOULD patch (the mailbox stays
+readable as maria.silva@DOM-….invalid).
+
+Repeat line for volume: Acme Corp, Acme Corp, Acme Corp, Maria Silva,
+Maria Silva, acme.com, acme.com, sk-live-9f4a7b2c.
