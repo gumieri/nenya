@@ -97,6 +97,9 @@ type Metrics struct {
 	// invisibleTextChars counts invisible characters removed (strip) or
 	// detected (log) in model output.
 	invisibleTextChars atomic.Uint64
+	// redactionAuditEvents counts redaction-audit outcomes (label map:
+	// written|failed) — NENYA-362.
+	redactionAuditEvents sync.Map
 	// exfilEvents counts canary tripwire detections by egress channel.
 	exfilEvents   sync.Map
 	panics        atomic.Uint64
@@ -676,6 +679,16 @@ func (m *Metrics) writeInvisibleText(w io.Writer) {
 		"Invisible-text guard firings by action (log|strip).", &m.invisibleTextEvents)
 	m.writeCounterAtomic(w, "nenya_invisible_text_chars_total",
 		"Invisible characters removed (strip) or detected (log) in model output.", m.invisibleTextChars.Load())
+}
+
+// RecordRedactionAudit records one redaction-audit outcome — written or
+// failed (NENYA-362). Nil-safe.
+func (m *Metrics) RecordRedactionAudit(outcome string) {
+	if m == nil || outcome == "" {
+		return
+	}
+	e := getOrCreateEntry(&m.redactionAuditEvents, map[string]string{"outcome": outcome})
+	e.value.Add(1)
 }
 
 // writeToolEgress emits the tool-egress policy counters.
@@ -2142,6 +2155,8 @@ func (m *Metrics) WritePrometheus(w io.Writer) {
 	m.writeExfilDetections(w)
 	m.writeToolEgress(w)
 	m.writeInvisibleText(w)
+	m.writeCounterMap(w, "nenya_redaction_audit_entries_total",
+		"Redaction audit entries by outcome (written|failed).", &m.redactionAuditEvents)
 	m.writeExfilEvents(w)
 	m.writePipelineMetrics(w)
 	m.writeCounterMap(w, "nenya_ratelimit_rejected_total",

@@ -152,6 +152,7 @@ func collectValidationErrors(ctx context.Context, cfg *Config, providers map[str
 	errors = append(errors, validateExfilGuardConfig(cfg)...)
 	errors = append(errors, validateToolEgressConfig(cfg)...)
 	errors = append(errors, validateInvisibleTextConfig(cfg)...)
+	errors = append(errors, validateRedactionAuditConfig(cfg)...)
 	errors = append(errors, validateCanaryConfig(cfg)...)
 	errors = append(errors, validateMCPGuardConfig(cfg)...)
 	errors = append(errors, validateModelRegistryErrors(logger)...)
@@ -2011,6 +2012,23 @@ func validateInvisibleTextConfig(cfg *Config) []string {
 	case "", InvisibleSetNarrow, InvisibleSetExtended:
 	default:
 		errs = append(errs, fmt.Sprintf("governance.invisible_text.set: invalid value %q, must be empty, \"narrow\", or \"extended\"", g.Set))
+	}
+	return errs
+}
+
+// validateRedactionAuditConfig checks the tamper-evident audit log
+// config (NENYA-362): enabling requires an explicit file path — the
+// writer refuses to guess a location for a tamper-evidence artifact,
+// and a silent no-op would hide a security-observability surface the
+// operator believed was armed.
+func validateRedactionAuditConfig(cfg *Config) []string {
+	g := cfg.Governance.RedactionAudit
+	if g == nil {
+		return nil
+	}
+	var errs []string
+	if g.EffectiveEnabled() && strings.TrimSpace(g.Path) == "" {
+		errs = append(errs, "governance.redaction_audit.path: must be set when enabled")
 	}
 	return errs
 }

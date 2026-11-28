@@ -1244,9 +1244,10 @@ type GovernanceConfig struct {
 	// set) are counted (log, default) or stripped (strip) before the
 	// downstream consumer sees them. Default OFF — an output-mutating
 	// guard is operator opt-in.
-	InvisibleText   *InvisibleTextConfig `json:"invisible_text,omitempty"`
-	RatelimitMaxRPM *int                 `json:"ratelimit_max_rpm,omitempty"`
-	RatelimitMaxTPM *int                 `json:"ratelimit_max_tpm,omitempty"`
+	InvisibleText   *InvisibleTextConfig  `json:"invisible_text,omitempty"`
+	RedactionAudit  *RedactionAuditConfig `json:"redaction_audit,omitempty"`
+	RatelimitMaxRPM *int                  `json:"ratelimit_max_rpm,omitempty"`
+	RatelimitMaxTPM *int                  `json:"ratelimit_max_tpm,omitempty"`
 	// MaxConcurrentRequests is the global fallback cap on in-flight requests
 	// per provider+model when the provider config does not set its own limit
 	// (0 or omitted = unlimited).
@@ -2329,6 +2330,19 @@ const (
 	InvisibleSetExtended = "extended"
 )
 
+// RedactionAuditConfig configures the tamper-evident redaction audit
+// log (NENYA-362): an append-only, hash-chained file recording THAT
+// redaction events happened (agent, surface, replacement count) —
+// never the redacted content. Default OFF.
+type RedactionAuditConfig struct {
+	// Enabled master-switches the audit log. Default OFF.
+	Enabled *bool `json:"enabled,omitempty"`
+	// Path is the audit file (JSONL, hash-chained). Required when
+	// enabled: the writer refuses to guess a location for a
+	// tamper-evidence artifact.
+	Path string `json:"path,omitempty"`
+}
+
 // EffectiveInvisibleTextEnabled reports whether the guard runs
 // (nil-safe; default OFF).
 func (g *GovernanceConfig) EffectiveInvisibleTextEnabled() bool {
@@ -2356,6 +2370,27 @@ func (g *GovernanceConfig) EffectiveInvisibleTextSet() string {
 		return InvisibleSetNarrow
 	}
 	return strings.ToLower(g.InvisibleText.Set)
+}
+
+// EffectiveRedactionAuditEnabled reports whether the redaction audit
+// log is on (nil-safe; default OFF).
+func (g *GovernanceConfig) EffectiveRedactionAuditEnabled() bool {
+	return g.RedactionAudit != nil && g.RedactionAudit.EffectiveEnabled()
+}
+
+// EffectiveEnabled reports whether the audit log is on (nil-safe;
+// default OFF).
+func (c *RedactionAuditConfig) EffectiveEnabled() bool {
+	return c != nil && c.Enabled != nil && *c.Enabled
+}
+
+// EffectiveRedactionAuditPath reports the configured audit file path
+// (nil-safe; empty default — enabling without a path fails validation).
+func (g *GovernanceConfig) EffectiveRedactionAuditPath() string {
+	if g == nil || g.RedactionAudit == nil {
+		return ""
+	}
+	return g.RedactionAudit.Path
 }
 
 // EffectiveMaxArgBytes reports the configured argument size cap

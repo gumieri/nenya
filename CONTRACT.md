@@ -328,6 +328,32 @@ so an invalid document fails the read even when the requested provider key is
 itself present. It prints only the requested value to stdout, exits `1` when no
 source resolves or the provider key is absent, and never logs the value.
 
+### 4.9 `nenya audit-verify [--json] <audit-file>` — status: stable
+
+The redaction-audit chain verifier (NENYA-362). Walks a
+`governance.redaction_audit` JSONL file and reports whether its hash
+chain is intact.
+
+| Exit | Meaning |
+|------|---------|
+| `0` | Chain intact (a torn crash tail is reported, not fatal) |
+| `1` | Chain broken — the first bad line and reason are printed |
+| `2` | Usage error |
+
+`--json` emits `{"ok":bool,"entries":n,"first_bad":n,"reason":"…","torn_tail":bool,"file_error":bool}`
+with the failure fields omitted when zero/empty. Verification detects
+edits and injections (`chain_mismatch`), deletions (`seq_gap`), a
+replaced genesis anchor (`bad_genesis`), and malformed lines; a
+non-newline-terminated tail is a crash remnant (`torn_tail`), never
+tampering; an unreadable file is `file_error`.
+
+**Restart semantics (evidence preservation):** the gateway's audit
+writer truncates only a torn crash tail. Complete but invalid entries
+make the next `Open` REFUSE the file (fatal at boot) instead of
+healing over them — the tamper evidence survives for the operator.
+Run `audit-verify` before restarting a suspect instance, and archive
+(move) the file once investigated to let the gateway start.
+
 ---
 
 ## 5. On-disk layout and precedence

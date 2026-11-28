@@ -83,7 +83,13 @@ type NenyaGateway struct {
 	SecretPatterns     []*regexp.Regexp
 	BlockedPatterns    []*regexp.Regexp
 	EntropyFilter      *pipeline.EntropyFilter
-	Stats              *infra.UsageTracker
+	// RedactionAudit receives structure-only redaction events for the
+	// tamper-evident audit log (NENYA-362); nil when disabled. The
+	// concrete writer is opened once by the process entrypoint and
+	// carried across reloads — the file handle and chain state outlive
+	// any single configuration.
+	RedactionAudit pipeline.RedactionAuditSink
+	Stats          *infra.UsageTracker
 	// Calibration learns per-model cl100k drift ratios from real upstream
 	// usage (NENYA-135); nil means the loop is disabled and estimates are
 	// raw cl100k. Nil-safe methods everywhere.
@@ -1343,6 +1349,9 @@ func (g *NenyaGateway) Reload(ctx context.Context, cfg config.Config, secrets *c
 	// frozen head rather than re-freezing once.
 	newGW.WindowHeads = g.WindowHeads
 	newGW.BillingTracker = g.BillingTracker
+	// The audit writer outlives configs: reloads must never fork the
+	// hash chain by reopening the file (NENYA-362).
+	newGW.RedactionAudit = g.RedactionAudit
 	// AUD-08 (NENYA-216): start the quota poller only AFTER the tracker
 	// carry — the poller captures the tracker argument, so starting it
 	// earlier (via New) would wire it to the fresh, about-to-be-discarded

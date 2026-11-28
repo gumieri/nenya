@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/nenya/config"
+	"github.com/nenya/internal/audit"
 	"github.com/nenya/internal/gateway"
 	"github.com/nenya/internal/infra"
 	"github.com/nenya/internal/local"
@@ -122,6 +123,9 @@ func runSubcommands(args []string) (int, bool) {
 		return inspectionExitCode(err), true
 	}
 	if handled, err := handleSecret(os.Stdout, os.Stderr, args); handled {
+		return inspectionExitCode(err), true
+	}
+	if handled, err := handleAuditVerify(os.Stdout, os.Stderr, args); handled {
 		return inspectionExitCode(err), true
 	}
 	return 0, false
@@ -364,16 +368,27 @@ func run(logger *slog.Logger, cfg *config.Config, secrets *config.SecretsConfig,
 		}
 	}
 
+	// NENYA-362: the tamper-evident redaction audit log opens once, here,
+	// and outlives every reload — the writer carries chain state and the
+	// gateway field is carried across Reload. A failed open is fatal:
+	// an operator who armed the audit log must not silently run without
+	// it. Each Record is an unbuffered write(2); Close on the shutdown
+	// paths is hygiene, not durability.
+	auditWriter, auditSink, auditErr := startRedactionAudit(cfg, gw.Metrics, logger)
+	if auditErr != nil {
+		logger.Error("gateway startup aborted: redaction audit log", "err", auditErr)
+		cleanupAbortedStartup(gw, logger)
+		return 1
+	}
+	if auditSink != nil {
+		gw.RedactionAudit = auditSink
+	}
+
 	chain, gates, err := buildInterceptorChain(gw, cfg, logger)
 	if err != nil {
 		logger.Error("gateway startup aborted: interceptor chain build failed", "err", err)
-		// Release what the gateway already acquired (engine preload pins,
-		// quota fetcher, MCP clients) before exiting.
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		if shutdownErr := gw.Shutdown(shutdownCtx); shutdownErr != nil {
-			logger.Warn("cleanup after failed startup incomplete", "err", shutdownErr)
-		}
+		_ = auditWriter.Close()
+		cleanupAbortedStartup(gw, logger)
 		return 1
 	}
 	gw.InterceptorChain = chain
@@ -458,7 +473,11 @@ func buildInterceptorChain(gw *gateway.NenyaGateway, cfg *config.Config, logger 
 	// the bouncer disabled, MCPSecurityChain (NENYA-136) carries no redact
 	// stage and MCP tool-result rescans run entropy/injection only.
 	if enabled := (cfg.Bouncer.Enabled != nil && *cfg.Bouncer.Enabled); enabled && len(gw.SecretPatterns) > 0 {
-		chain.Register(pipeline.NewRedactInterceptor(true, gw.SecretPatterns, cfg.Bouncer.RedactionLabel, gw.Metrics))
+		redact := pipeline.NewRedactInterceptor(true, gw.SecretPatterns, cfg.Bouncer.RedactionLabel, gw.Metrics)
+		// NENYA-362: arm the tamper-evident audit sink when the gateway
+		// carries one (nil is the disabled default).
+		redact.SetRedactionAudit(gw.RedactionAudit)
+		chain.Register(redact)
 	}
 
 	if gw.EntropyFilter != nil {
@@ -508,6 +527,53 @@ func buildInterceptorChain(gw *gateway.NenyaGateway, cfg *config.Config, logger 
 func gatewayAPIKeyInjector(gw *gateway.NenyaGateway) func(string, http.Header) error {
 	return func(providerName string, headers http.Header) error {
 		return routing.InjectAPIKeyWithGateway(providerName, gw, headers)
+	}
+}
+
+// redactionAuditSink adapts the audit writer to the pipeline's
+// structure-only sink interface (NENYA-362). Outcomes are counted:
+// written on success, failed on any write error — the request that
+// produced the redaction is never failed by the audit path, but a
+// failure is loud (metric + warn) because it means the chain in the
+// file will show a gap.
+type redactionAuditSink struct {
+	w       *audit.Writer
+	metrics *infra.Metrics
+	logger  *slog.Logger
+}
+
+// RecordRedactionEvent implements pipeline.RedactionAuditSink.
+func (s *redactionAuditSink) RecordRedactionEvent(agent string, surface string, count int) {
+	if err := s.w.Record(agent, surface, count); err != nil {
+		s.metrics.RecordRedactionAudit("failed")
+		s.logger.Warn("redaction audit write failed; chain will show a gap", "err", err)
+		return
+	}
+	s.metrics.RecordRedactionAudit("written")
+}
+
+// startRedactionAudit opens the audit writer when the configuration
+// arms it; (nil, nil, nil) when disabled. A failed open is the caller's
+// fatal-startup signal.
+func startRedactionAudit(cfg *config.Config, metrics *infra.Metrics, logger *slog.Logger) (*audit.Writer, *redactionAuditSink, error) {
+	if !cfg.Governance.EffectiveRedactionAuditEnabled() {
+		return nil, nil, nil
+	}
+	w, err := audit.Open(cfg.Governance.EffectiveRedactionAuditPath())
+	if err != nil {
+		return nil, nil, err
+	}
+	return w, &redactionAuditSink{w: w, metrics: metrics, logger: logger}, nil
+}
+
+// cleanupAbortedStartup releases what a partially-started gateway
+// already acquired (engine preload pins, quota fetcher, MCP clients)
+// before the process exits.
+func cleanupAbortedStartup(gw *gateway.NenyaGateway, logger *slog.Logger) {
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if shutdownErr := gw.Shutdown(shutdownCtx); shutdownErr != nil {
+		logger.Warn("cleanup after failed startup incomplete", "err", shutdownErr)
 	}
 }
 
@@ -693,6 +759,14 @@ func shutdownGateway(p *proxy.Proxy, logger *slog.Logger, budget time.Duration) 
 	if err := gw.Shutdown(ctx); err != nil {
 		logger.Error("gateway shutdown failed", "err", err)
 		return err
+	}
+	// NENYA-362: close the audit writer after gateway teardown. Every
+	// Record is an unbuffered write(2), so a close here is hygiene; the
+	// type assertion keeps internal/audit out of the gateway's imports.
+	if closer, ok := gw.RedactionAudit.(interface{ Close() error }); ok {
+		if closeErr := closer.Close(); closeErr != nil {
+			logger.Warn("redaction audit close incomplete", "err", closeErr)
+		}
 	}
 	return nil
 }
