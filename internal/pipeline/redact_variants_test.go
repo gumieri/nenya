@@ -263,3 +263,27 @@ func FuzzRedactVariantScan(f *testing.F) {
 		}
 	})
 }
+
+// TestSendGridFullShapeDetectedAtRuntime pins complete-shape SendGrid
+// detection without committing a scanner-tripping literal. The corpus's
+// SendGrid case is truncated one character below the 22.43 shape and
+// marked accepted (GitHub push protection rejects any committed literal
+// matching the SendGrid format, even a synthetic one), so the full
+// shape is proven here by assembling the key from parts at runtime —
+// the committed source never contains a matching literal, but the
+// runtime string does and the credentials preset must redact it.
+func TestSendGridFullShapeDetectedAtRuntime(t *testing.T) {
+	cred := redactionPresetForTest(t, "credentials")
+	key := "SG." + strings.Repeat("a", 22) + "." + strings.Repeat("b", 43)
+	out := RedactSecrets("the alert fired for "+key+" overnight", true, cred.Patterns, cred.Label)
+	if strings.Contains(out, key) {
+		t.Fatalf("full-shape SendGrid key not redacted: %q", out)
+	}
+	// The truncated corpus shape stays untouched (parity with the
+	// accepted corpus case).
+	short := "SG." + strings.Repeat("a", 22) + "." + strings.Repeat("b", 42)
+	shortOut := RedactSecrets("the alert fired for "+short+" overnight", true, cred.Patterns, cred.Label)
+	if strings.Contains(shortOut, cred.Label) {
+		t.Fatalf("truncated SendGrid shape redacted: %q", shortOut)
+	}
+}
