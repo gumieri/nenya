@@ -179,15 +179,27 @@ func systemOneProviderFor(gw *gateway.NenyaGateway, modelName string) (string, [
 // the non-streaming JSON response, recording usage from its `usage` object.
 func (p *Proxy) forwardSystemOneRequest(o forwardOpts) {
 	ctxLogger := o.gw.Logger.With("operation", "systemone", "api_key", o.keyRef, "provider", o.providerName)
+	// NENYA-363: the dispatch verification pass is deterministic over
+	// identical bytes — a block short-circuits before the retry budget is
+	// burned (the stale AUD-21 rationale that build failures were
+	// "effectively impossible" no longer holds with action=block armed),
+	// with the structured refusal instead of the generic network_error.
+	// The probe is verdict-only (no side effects): the in-closure pass on
+	// the shipping body records the metric/audit exactly once.
+	if p.dispatchVerifyBlocked(o.gw, o.bodyBytes) {
+		ctxLogger.Warn("dispatch verification blocked the system one request", "model", o.modelName)
+		writeStructuredError(o.respWriter, http.StatusForbidden, infra.ErrorKindDispatchBlocked,
+			"the request body was refused by the dispatch verification pass")
+		return
+	}
 	resp, err := util.DoWithRetryResp(o.requestCtx, o.maxAttempts, func() (*http.Response, error) {
 		// AUD-21 (NENYA-243): every attempt rebuilds the request — the
 		// previous Do consumed the body reader, so a re-Do sent an empty
-		// request upstream. Build failures here surface as 502
-		// (network_error) after retries, matching the embeddings handler —
-		// a deterministic build failure burns the remaining attempts first
-		// (accepted: build errors are effectively impossible for a
-		// pre-validated endpoint + buffered body).
-		req, buildErr := p.buildUpstreamRequest(o.gw, o.requestCtx, http.MethodPost, o.endpointURL, o.bodyBytes, o.providerName, o.modelName, "", o.srcHeaders)
+		// request upstream. Genuine build failures still surface as 502
+		// (network_error) after retries, matching the embeddings handler;
+		// the verification pre-check above already accepted these bytes,
+		// so the in-closure pass is a redundant but bounded re-scan.
+		req, _, buildErr := p.buildUpstreamRequest(o.gw, o.requestCtx, http.MethodPost, o.endpointURL, o.bodyBytes, o.providerName, o.modelName, "", "", o.srcHeaders)
 		if buildErr != nil {
 			ctxLogger.Error("failed to create system one upstream request", "err", buildErr)
 			return nil, buildErr

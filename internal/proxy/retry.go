@@ -99,7 +99,7 @@ func waitWithCancel(ctx context.Context, d time.Duration) {
 // and returns the response. 5xx responses are retried.
 func (p *Proxy) doUpstreamRoundTrip(ctx context.Context, gw *gateway.NenyaGateway, method, targetURL string, bodyBytes []byte, providerName, modelName string, srcHeaders http.Header, contentType string, maxAttempts int) (*http.Response, error) {
 	return util.DoWithRetryResp(ctx, maxAttempts, func() (*http.Response, error) {
-		upstreamReq, reqErr := p.buildUpstreamRequest(gw, ctx, method, targetURL, bodyBytes, providerName, modelName, "", srcHeaders)
+		upstreamReq, _, reqErr := p.buildUpstreamRequest(gw, ctx, method, targetURL, bodyBytes, providerName, modelName, "", "", srcHeaders)
 		if reqErr != nil {
 			return nil, reqErr
 		}
@@ -298,8 +298,15 @@ func (rl *retryLoop) handleErrorActionOutcome(i int, target routing.UpstreamTarg
 // handleResumeAction handles a local dispatch outcome (network failure or
 // guard skip): a network failure is retryable. Backoff is applied by Run
 // immediately before a same-target repeat, so a plain failover to a healthy
-// later target stays immediate.
+// later target stays immediate. NENYA-363: a dispatch-verification block is
+// terminal — the structured 403 is written and the loop ends, because the
+// CONTENT is what is blocked and no other provider would accept it either.
 func (rl *retryLoop) handleResumeAction(action upstreamAction) actionOutcome {
+	if action.SkipReason == "dispatch_blocked" {
+		writeStructuredError(rl.w, http.StatusForbidden, infra.ErrorKindDispatchBlocked,
+			"the request body was refused by the dispatch verification pass")
+		return actionOutcome{handled: true}
+	}
 	rl.lastFailReason = failReasonDispatch
 	if action.SkipReason == "provider_budget" {
 		rl.providerBudgetSkipped = true
@@ -1238,8 +1245,15 @@ func (p *Proxy) prepareAndSend(gw *gateway.NenyaGateway,
 	gw.Calibration.RecordEstimate(target.Model, inputEstimate)
 	gw.Metrics.RecordTokens("input", target.Model, agentName, target.Provider, inputEstimate)
 
-	req, err := p.buildUpstreamRequest(gw, r.Context(), r.Method, target.URL, transformedBody, target.Provider, target.Model, target.Credential, r.Header)
+	req, verifiedBody, err := p.buildUpstreamRequest(gw, r.Context(), r.Method, target.URL, transformedBody, target.Provider, target.Model, agentName, target.Credential, r.Header)
 	if err != nil {
+		// NENYA-363: a dispatch-verification block is terminal — the
+		// content is what is blocked, so failover cannot help. The skip
+		// reason maps to a structured 403 in the loop (handleResumeAction)
+		// and no upstream call happened for this target.
+		if errors.Is(err, errDispatchBlocked) {
+			return upstreamAction{Kind: actionContinue, SkipReason: "dispatch_blocked", Release: release}
+		}
 		ctxLogger.Error("failed to create upstream request", "err", err)
 		// No dispatch happened: release the probe slot consumed by the guard
 		// so an abandoned half-open probe cannot wedge the circuit.
@@ -1247,7 +1261,7 @@ func (p *Proxy) prepareAndSend(gw *gateway.NenyaGateway,
 		return upstreamAction{Kind: actionContinue, Release: release}
 	}
 
-	logRequestIfDebug(r.Context(), ctxLogger, req, target.URL, transformedBody)
+	logRequestIfDebug(r.Context(), ctxLogger, req, target.URL, verifiedBody)
 
 	// Streaming keeps an unbounded context (bounded by the stream idle stall
 	// reader); non-streaming calls are bounded by the provider timeout.

@@ -46,8 +46,8 @@ func TestCacheAffinityHeaderConvention(t *testing.T) {
 	src.Set(opencodeSessionHeader, "nenya-abcd1234")
 	prx := &Proxy{}
 
-	req, err := prx.buildUpstreamRequest(gw, context.Background(), "POST",
-		"https://codex.test/v1/chat/completions", []byte(`{}`), "codexish", "", "", src)
+	req, _, err := prx.buildUpstreamRequest(gw, context.Background(), "POST",
+		"https://codex.test/v1/chat/completions", []byte(`{}`), "codexish", "", "", "", src)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -55,8 +55,8 @@ func TestCacheAffinityHeaderConvention(t *testing.T) {
 		t.Fatalf("the header convention must carry the session identity, got %q", got)
 	}
 
-	req, err = prx.buildUpstreamRequest(gw, context.Background(), "POST",
-		"https://plain.test/v1/chat/completions", []byte(`{}`), "plain", "", "", src)
+	req, _, err = prx.buildUpstreamRequest(gw, context.Background(), "POST",
+		"https://plain.test/v1/chat/completions", []byte(`{}`), "plain", "", "", "", src)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -67,8 +67,8 @@ func TestCacheAffinityHeaderConvention(t *testing.T) {
 	// Sanitation parity: an unusable identity is not forwarded.
 	bad := http.Header{}
 	bad.Set(opencodeSessionHeader, "bad\x01identity")
-	req, err = prx.buildUpstreamRequest(gw, context.Background(), "POST",
-		"https://codex.test/v1/chat/completions", []byte(`{}`), "codexish", "", "", bad)
+	req, _, err = prx.buildUpstreamRequest(gw, context.Background(), "POST",
+		"https://codex.test/v1/chat/completions", []byte(`{}`), "codexish", "", "", "", bad)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -23,8 +23,9 @@ import (
 // Surface names the redaction surface an entry covers. The set is
 // closed so a typo cannot fork the file format.
 const (
-	SurfaceBody = "body"
-	SurfaceArgs = "args"
+	SurfaceBody     = "body"
+	SurfaceArgs     = "args"
+	SurfaceDispatch = "dispatch"
 )
 
 // Verification failure reasons (Report.Reason). Empty when OK.
@@ -256,7 +257,7 @@ func mustUnhex(s string) []byte {
 // to surface (metric + log); the request that produced the redaction is
 // never failed by the audit path.
 func (w *Writer) Record(agent string, surface string, count int) error {
-	if surface != SurfaceBody && surface != SurfaceArgs {
+	if surface != SurfaceBody && surface != SurfaceArgs && surface != SurfaceDispatch {
 		return fmt.Errorf("audit: unknown surface %q", surface)
 	}
 	if count <= 0 {
@@ -358,7 +359,7 @@ func verifyEntryShape(e Entry) bool {
 	if len(e.Hash) != sha256.Size*2 || len(e.PrevHash) != sha256.Size*2 {
 		return false
 	}
-	if e.Surface != SurfaceBody && e.Surface != SurfaceArgs {
+	if e.Surface != SurfaceBody && e.Surface != SurfaceArgs && e.Surface != SurfaceDispatch {
 		return false
 	}
 	return e.Count > 0

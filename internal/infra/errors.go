@@ -65,6 +65,12 @@ const (
 	ErrorKindInjection     ErrorKind = "injection_detected"
 	ErrorKindExfil         ErrorKind = "exfil_blocked"
 	ErrorKindExfilDetected ErrorKind = "exfil_detected"
+	// ErrorKindDispatchBlocked marks a request the dispatch verification
+	// pass refused (NENYA-363): the FINAL upstream body — after every
+	// transform — still matched a secret pattern and the configured
+	// action is block. Request-scoped like the other security gates: no
+	// retry, no failover (any target would see the same content), 403.
+	ErrorKindDispatchBlocked ErrorKind = "dispatch_blocked"
 	// ErrorKindUnsupported marks a request the gateway understands but cannot
 	// serve as asked: the requested endpoint/model combination has no usable
 	// target (e.g. an agent with no configured models). It is request-scoped
@@ -130,6 +136,7 @@ func (k ErrorKind) Scope() ErrorScope {
 		ErrorKindInjection,
 		ErrorKindExfil,
 		ErrorKindExfilDetected,
+		ErrorKindDispatchBlocked,
 		ErrorKindUnsupported:
 		return ScopeRequest
 	case ErrorKindAuthFailed,
@@ -205,7 +212,8 @@ func (k ErrorKind) HTTPStatus() int {
 	case ErrorKindAuthFailed:
 		return http.StatusUnauthorized
 	case ErrorKindPolicyRefusal, ErrorKindInjection,
-		ErrorKindExfil, ErrorKindExfilDetected, ErrorKindBouncerError:
+		ErrorKindExfil, ErrorKindExfilDetected, ErrorKindBouncerError,
+		ErrorKindDispatchBlocked:
 		return http.StatusForbidden
 	case ErrorKindModelNotFound:
 		return http.StatusNotFound

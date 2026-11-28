@@ -59,8 +59,8 @@ func TestHeaderFiltersStrippedPerTarget(t *testing.T) {
 
 	build := func(provider, url string) *http.Request {
 		t.Helper()
-		req, err := prx.buildUpstreamRequest(gw, context.Background(), "POST",
-			url, []byte(`{}`), provider, "", "", src)
+		req, _, err := prx.buildUpstreamRequest(gw, context.Background(), "POST",
+			url, []byte(`{}`), provider, "", "", "", src)
 		if err != nil {
 			t.Fatalf("%s: %v", provider, err)
 		}
@@ -88,8 +88,8 @@ func TestHeaderFiltersDropAndRepeat(t *testing.T) {
 	// Deny-everything: the header disappears entirely.
 	src := http.Header{}
 	src.Set("Anthropic-Beta", "context-management-2025-06-27")
-	req, err := prx.buildUpstreamRequest(gw, context.Background(), "POST",
-		"https://agg.test/v1/messages", []byte(`{}`), "agg-deny", "", "", src)
+	req, _, err := prx.buildUpstreamRequest(gw, context.Background(), "POST",
+		"https://agg.test/v1/messages", []byte(`{}`), "agg-deny", "", "", "", src)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -101,8 +101,8 @@ func TestHeaderFiltersDropAndRepeat(t *testing.T) {
 	src = http.Header{}
 	src.Add("Anthropic-Beta", "extended-cache-ttl-2025-04-11")
 	src.Add("Anthropic-Beta", "context-management-2025-06-27")
-	req, err = prx.buildUpstreamRequest(gw, context.Background(), "POST",
-		"https://agg.test/v1/messages", []byte(`{}`), "agg-deny", "", "", src)
+	req, _, err = prx.buildUpstreamRequest(gw, context.Background(), "POST",
+		"https://agg.test/v1/messages", []byte(`{}`), "agg-deny", "", "", "", src)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -114,8 +114,8 @@ func TestHeaderFiltersDropAndRepeat(t *testing.T) {
 	// not carry is inert.
 	src = http.Header{}
 	src.Set("X-Request-Id", "req-1")
-	req, err = prx.buildUpstreamRequest(gw, context.Background(), "POST",
-		"https://agg.test/v1/messages", []byte(`{}`), "agg-deny", "", "", src)
+	req, _, err = prx.buildUpstreamRequest(gw, context.Background(), "POST",
+		"https://agg.test/v1/messages", []byte(`{}`), "agg-deny", "", "", "", src)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -136,8 +136,8 @@ func TestHeaderFiltersCoverGatewayInjectedHeaders(t *testing.T) {
 	src := http.Header{}
 	src.Set("X-Opencode-Session", "partner-abc-123")
 	prx := &Proxy{}
-	req, err := prx.buildUpstreamRequest(gw, context.Background(), "POST",
-		"https://agg.test/v1/messages", []byte(`{}`), "agg-deny", "", "", src)
+	req, _, err := prx.buildUpstreamRequest(gw, context.Background(), "POST",
+		"https://agg.test/v1/messages", []byte(`{}`), "agg-deny", "", "", "", src)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -154,8 +154,8 @@ func TestHeaderFiltersCounted(t *testing.T) {
 	src := http.Header{}
 	src.Set("Anthropic-Beta", mixedBeta)
 	prx := &Proxy{}
-	if _, err := prx.buildUpstreamRequest(gw, context.Background(), "POST",
-		"https://agg.test/v1/messages", []byte(`{}`), "agg-deny", "", "", src); err != nil {
+	if _, _, err := prx.buildUpstreamRequest(gw, context.Background(), "POST",
+		"https://agg.test/v1/messages", []byte(`{}`), "agg-deny", "", "", "", src); err != nil {
 		t.Fatal(err)
 	}
 

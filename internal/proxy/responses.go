@@ -190,7 +190,7 @@ func (p *Proxy) handleResponses(gw *gateway.NenyaGateway, w http.ResponseWriter,
 	ctxLogger := gw.Logger.With("operation", "responses", "provider", provider.Name, "api_key", keyRef)
 
 	resp, err := util.DoWithRetryResp(ctx, maxAttempts, func() (*http.Response, error) {
-		req, reqErr := p.buildUpstreamRequest(gw, ctx, r.Method, targetURL, bodyBytes, provider.Name, responsesModel, "", r.Header)
+		req, _, reqErr := p.buildUpstreamRequest(gw, ctx, r.Method, targetURL, bodyBytes, provider.Name, responsesModel, "", "", r.Header)
 		if reqErr != nil {
 			return nil, reqErr
 		}

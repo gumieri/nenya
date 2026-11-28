@@ -1724,24 +1724,43 @@ func anthropicFormatTarget(gw *gateway.NenyaGateway, providerName string) bool {
 	return false
 }
 
-func (p *Proxy) buildUpstreamRequest(gw *gateway.NenyaGateway, ctx context.Context, method, url string, body []byte, providerName, modelName, preselectedCredential string, srcHeaders http.Header) (*http.Request, error) {
+// applyAnthropicBetaHeader forwards a client Anthropic-Beta flag onto an
+// Anthropic-format dispatch (NENYA-171) — extracted from
+// buildUpstreamRequest (its second branch pushed the function over the
+// complexity gate when the NENYA-363 verification hook landed).
+func applyAnthropicBetaHeader(gw *gateway.NenyaGateway, providerName string, srcHeaders, dst http.Header) {
+	if anthropicFormatTarget(gw, providerName) {
+		if beta := srcHeaders.Get("Anthropic-Beta"); beta != "" {
+			dst.Set("Anthropic-Beta", beta)
+		}
+	}
+}
+
+// buildUpstreamRequest assembles the upstream request. NENYA-363: the
+// final body passes the dispatch verification pass first — the returned
+// body is what actually went into the request (the redact action
+// rewrites spans in place), so callers logging the body log the
+// verified bytes, not the pre-verification ones. agentName feeds the
+// audit-log identity on dispatch-surface entries ("" on utility paths
+// that have no agent).
+func (p *Proxy) buildUpstreamRequest(gw *gateway.NenyaGateway, ctx context.Context, method, url string, body []byte, providerName, modelName, agentName, preselectedCredential string, srcHeaders http.Header) (*http.Request, []byte, error) {
+	body, verifyErr := p.verifyDispatchBody(gw, agentName, modelName, body)
+	if verifyErr != nil {
+		return nil, body, verifyErr
+	}
 	req, err := http.NewRequestWithContext(ctx, method, url, bytes.NewBuffer(body))
 	if err != nil {
-		return nil, fmt.Errorf("failed to create upstream request: %w", err)
+		return nil, body, fmt.Errorf("failed to create upstream request: %w", err)
 	}
 	if err := routing.InjectAPIKeyWithGatewayCtx(ctx, providerName, modelName, gw, req.Header, preselectedCredential); err != nil {
-		return nil, fmt.Errorf("API key injection failed: %w", err)
+		return nil, body, fmt.Errorf("API key injection failed: %w", err)
 	}
 	// Anthropic beta flags (the extended-cache-TTL class among others) are
 	// request options the upstream honors per flag: forward them only on
 	// Anthropic-format dispatches (an OpenAI-compatible endpoint would not
 	// know the header), so an explicit client cache option is not silently
 	// downgraded (NENYA-171).
-	if anthropicFormatTarget(gw, providerName) {
-		if beta := srcHeaders.Get("Anthropic-Beta"); beta != "" {
-			req.Header.Set("Anthropic-Beta", beta)
-		}
-	}
+	applyAnthropicBetaHeader(gw, providerName, srcHeaders, req.Header)
 
 	// Idempotency-Key forwarding (NENYA-165): only a provider that declares
 	// the capability is handed the key, so a provider whose API has no
@@ -1810,7 +1829,7 @@ func (p *Proxy) buildUpstreamRequest(gw *gateway.NenyaGateway, ctx context.Conte
 	// flags, tracing, and the injected auth), so a configured filter can
 	// reach every header it names.
 	applyProviderHeaderFilters(gw, providerName, req.Header)
-	return req, nil
+	return req, body, nil
 }
 
 // handleNonStreamingResponse buffers the full upstream response and returns it as a complete JSON object.

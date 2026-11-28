@@ -139,12 +139,26 @@ func countEmbeddingInputTokens(gw *gateway.NenyaGateway, payload map[string]inte
 }
 
 func (p *Proxy) forwardEmbeddingsRequest(o forwardOpts) {
+	// NENYA-363: the dispatch verification pass is deterministic over
+	// identical bytes — a block short-circuits before the retry budget is
+	// burned, with the structured refusal instead of a generic 502. The
+	// probe is verdict-only (no side effects): the in-closure pass on the
+	// shipping body records the metric/audit exactly once.
+	if p.dispatchVerifyBlocked(o.gw, o.bodyBytes) {
+		ctxLogger := o.gw.Logger.With("operation", "forward", "api_key", o.keyRef, "provider", o.providerName)
+		ctxLogger.Warn("dispatch verification blocked the embeddings request", "model", o.modelName)
+		writeStructuredError(o.respWriter, http.StatusForbidden, infra.ErrorKindDispatchBlocked,
+			"the request body was refused by the dispatch verification pass")
+		return
+	}
 	resp, err := util.DoWithRetryResp(o.requestCtx, o.maxAttempts, func() (*http.Response, error) {
 		// AUD-21 (NENYA-243): every attempt rebuilds the request — the
 		// previous Do consumed the body reader, so a re-Do sent an empty
 		// request upstream (the same defect doUpstreamRoundTrip avoids by
-		// building inside the closure).
-		req, err := p.buildUpstreamRequest(o.gw, o.requestCtx, http.MethodPost, o.endpointURL, o.bodyBytes, o.providerName, o.modelName, "", o.srcHeaders)
+		// building inside the closure). The verification pre-check above
+		// already accepted these bytes, so the in-closure pass is a
+		// redundant but bounded re-scan.
+		req, _, err := p.buildUpstreamRequest(o.gw, o.requestCtx, http.MethodPost, o.endpointURL, o.bodyBytes, o.providerName, o.modelName, "", "", o.srcHeaders)
 		if err != nil {
 			ctxLogger := o.gw.Logger.With("operation", "forward", "api_key", o.keyRef, "provider", o.providerName)
 			ctxLogger.Error("failed to create embeddings upstream request", "err", err)

@@ -281,8 +281,8 @@ func TestBYOKCredentialReachesUpstreamAuthHeader(t *testing.T) {
 		t.Fatalf("BYOK: %v", herr)
 	}
 	target := req.Targets[0]
-	out, err := (&Proxy{}).buildUpstreamRequest(gw, context.Background(), http.MethodPost,
-		target.URL, []byte(`{}`), target.Provider, target.Model, target.Credential, http.Header{})
+	out, _, err := (&Proxy{}).buildUpstreamRequest(gw, context.Background(), http.MethodPost,
+		target.URL, []byte(`{}`), target.Provider, target.Model, "", target.Credential, http.Header{})
 	if err != nil {
 		t.Fatalf("build upstream request: %v", err)
 	}

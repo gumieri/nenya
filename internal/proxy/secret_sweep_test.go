@@ -89,8 +89,8 @@ func TestNoSecretInDebugLogsOrStatsz(t *testing.T) {
 	src := http.Header{}
 	src.Set("Authorization", "Bearer "+sweepSecrets[1])
 	prx := &Proxy{}
-	if _, err := prx.buildUpstreamRequest(gw, context.Background(), "POST",
-		"https://upstream.test/v1/chat/completions", []byte(`{"model":"m"}`), "up", "m", "", src); err != nil {
+	if _, _, err := prx.buildUpstreamRequest(gw, context.Background(), "POST",
+		"https://upstream.test/v1/chat/completions", []byte(`{"model":"m"}`), "up", "m", "", "", src); err != nil {
 		t.Fatal(err)
 	}
 	req, _ := http.NewRequestWithContext(context.Background(), http.MethodPost,

@@ -163,8 +163,8 @@ func TestBuildUpstreamRequestForwardsSessionHeaderSet(t *testing.T) {
 	src.Set("X-Custom-Not-Allowed", "leak")
 
 	prx := &Proxy{}
-	upstreamReq, err := prx.buildUpstreamRequest(gw, context.Background(), "POST",
-		"https://api.test.com/v1/chat/completions", []byte(`{}`), "test", "", "", src)
+	upstreamReq, _, err := prx.buildUpstreamRequest(gw, context.Background(), "POST",
+		"https://api.test.com/v1/chat/completions", []byte(`{}`), "test", "", "", "", src)
 	if err != nil {
 		t.Fatalf("failed to build upstream request: %v", err)
 	}
@@ -207,8 +207,8 @@ func TestBuildUpstreamRequestForwardsAnthropicBeta(t *testing.T) {
 	src.Set("Anthropic-Beta", "extended-cache-ttl-2025-04-11")
 
 	prx := &Proxy{}
-	upstreamReq, err := prx.buildUpstreamRequest(gw, context.Background(), "POST",
-		"https://api.anthropic.com/v1/messages", []byte(`{}`), "anthropic", "", "", src)
+	upstreamReq, _, err := prx.buildUpstreamRequest(gw, context.Background(), "POST",
+		"https://api.anthropic.com/v1/messages", []byte(`{}`), "anthropic", "", "", "", src)
 	if err != nil {
 		t.Fatalf("failed to build upstream request: %v", err)
 	}
@@ -220,8 +220,8 @@ func TestBuildUpstreamRequestForwardsAnthropicBeta(t *testing.T) {
 	providers["openaiish"] = &config.Provider{
 		Name: "openaiish", URL: "https://api.openai.com/v1/chat/completions", AuthStyle: "none",
 	}
-	other, err := prx.buildUpstreamRequest(gw, context.Background(), "POST",
-		"https://api.openai.com/v1/chat/completions", []byte(`{}`), "openaiish", "", "", src)
+	other, _, err := prx.buildUpstreamRequest(gw, context.Background(), "POST",
+		"https://api.openai.com/v1/chat/completions", []byte(`{}`), "openaiish", "", "", "", src)
 	if err != nil {
 		t.Fatal(err)
 	}

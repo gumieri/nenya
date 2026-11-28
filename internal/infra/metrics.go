@@ -100,6 +100,9 @@ type Metrics struct {
 	// redactionAuditEvents counts redaction-audit outcomes (label map:
 	// written|failed) — NENYA-362.
 	redactionAuditEvents sync.Map
+	// dispatchVerifyEvents counts dispatch-verification matches by
+	// action (log|redact|block) — NENYA-363.
+	dispatchVerifyEvents sync.Map
 	// exfilEvents counts canary tripwire detections by egress channel.
 	exfilEvents   sync.Map
 	panics        atomic.Uint64
@@ -688,6 +691,16 @@ func (m *Metrics) RecordRedactionAudit(outcome string) {
 		return
 	}
 	e := getOrCreateEntry(&m.redactionAuditEvents, map[string]string{"outcome": outcome})
+	e.value.Add(1)
+}
+
+// RecordDispatchVerify records one dispatch-verification match by
+// action (log|redact|block) — NENYA-363. Nil-safe.
+func (m *Metrics) RecordDispatchVerify(action string) {
+	if m == nil || action == "" {
+		return
+	}
+	e := getOrCreateEntry(&m.dispatchVerifyEvents, map[string]string{"action": action})
 	e.value.Add(1)
 }
 
@@ -2157,6 +2170,8 @@ func (m *Metrics) WritePrometheus(w io.Writer) {
 	m.writeInvisibleText(w)
 	m.writeCounterMap(w, "nenya_redaction_audit_entries_total",
 		"Redaction audit entries by outcome (written|failed).", &m.redactionAuditEvents)
+	m.writeCounterMap(w, "nenya_dispatch_verify_total",
+		"Dispatch verification verdicts by action (log|redact|block) — one per verification pass with at least one match.", &m.dispatchVerifyEvents)
 	m.writeExfilEvents(w)
 	m.writePipelineMetrics(w)
 	m.writeCounterMap(w, "nenya_ratelimit_rejected_total",

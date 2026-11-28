@@ -1246,6 +1246,7 @@ type GovernanceConfig struct {
 	// guard is operator opt-in.
 	InvisibleText   *InvisibleTextConfig  `json:"invisible_text,omitempty"`
 	RedactionAudit  *RedactionAuditConfig `json:"redaction_audit,omitempty"`
+	DispatchVerify  *DispatchVerifyConfig `json:"dispatch_verify,omitempty"`
 	RatelimitMaxRPM *int                  `json:"ratelimit_max_rpm,omitempty"`
 	RatelimitMaxTPM *int                  `json:"ratelimit_max_tpm,omitempty"`
 	// MaxConcurrentRequests is the global fallback cap on in-flight requests
@@ -2343,6 +2344,31 @@ type RedactionAuditConfig struct {
 	Path string `json:"path,omitempty"`
 }
 
+// DispatchVerifyConfig configures the dispatch verification pass
+// (NENYA-363): a final scan of the marshaled upstream body — after
+// every transform — for secret patterns that survived all earlier
+// stages. Patterns are the gateway's compiled secret set (presets +
+// secrets.secret_values), so no new pattern configuration exists.
+// Default OFF.
+type DispatchVerifyConfig struct {
+	// Enabled master-switches the pass. Default OFF — it scans every
+	// dispatched body.
+	Enabled *bool `json:"enabled,omitempty"`
+	// Action: "log" (default — metric + warn, body unchanged), "redact"
+	// (replace matched spans with the redaction label; the label must
+	// not contain quotes or backslashes so the marshaled JSON stays
+	// valid), or "block" (refuse the dispatch with a 403
+	// dispatch_blocked error before any upstream call).
+	Action string `json:"action,omitempty"`
+}
+
+// Dispatch verification actions.
+const (
+	DispatchActionLog    = "log"
+	DispatchActionRedact = "redact"
+	DispatchActionBlock  = "block"
+)
+
 // EffectiveInvisibleTextEnabled reports whether the guard runs
 // (nil-safe; default OFF).
 func (g *GovernanceConfig) EffectiveInvisibleTextEnabled() bool {
@@ -2391,6 +2417,27 @@ func (g *GovernanceConfig) EffectiveRedactionAuditPath() string {
 		return ""
 	}
 	return g.RedactionAudit.Path
+}
+
+// EffectiveDispatchVerifyEnabled reports whether the dispatch
+// verification pass is on (nil-safe; default OFF).
+func (g *GovernanceConfig) EffectiveDispatchVerifyEnabled() bool {
+	return g.DispatchVerify != nil && g.DispatchVerify.EffectiveEnabled()
+}
+
+// EffectiveEnabled reports whether the dispatch verification pass is on
+// (nil-safe; default OFF).
+func (c *DispatchVerifyConfig) EffectiveEnabled() bool {
+	return c != nil && c.Enabled != nil && *c.Enabled
+}
+
+// EffectiveDispatchVerifyAction reports the configured action normalized
+// to lowercase (nil-safe; default "log").
+func (g *GovernanceConfig) EffectiveDispatchVerifyAction() string {
+	if g == nil || g.DispatchVerify == nil || g.DispatchVerify.Action == "" {
+		return DispatchActionLog
+	}
+	return strings.ToLower(g.DispatchVerify.Action)
 }
 
 // EffectiveMaxArgBytes reports the configured argument size cap

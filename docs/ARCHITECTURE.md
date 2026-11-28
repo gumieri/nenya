@@ -311,6 +311,34 @@ EngineManager (internal/local/manager.go:13)
 }
 ```
 
+## Input-Side Final Gate (Dispatch Verification)
+
+Every dispatch path — chat streaming/buffered, the MCP multi-turn loop's
+re-dispatches, embeddings, responses, and the utility round-trips — funnels
+through `buildUpstreamRequest` (`internal/proxy/chat.go`). NENYA-363 adds a
+final verification pass there, over the MARSHALED body: the bytes that
+actually leave the gateway, after every transform (interceptor chain, format
+conversion, capability gates, cache injection, MCP tool-result appends).
+`governance.dispatch_verify` (default OFF) scans those bytes with the
+gateway's compiled secret patterns (presets + `secrets.secret_values`) — a
+defense-in-depth net catching anything that survived all earlier structured
+stages. Actions: `log` (metric + warn, body unchanged), `redact` (matched
+splices the redaction label; a quote-spanning match that would corrupt the
+marshaled JSON falls back to `log` — the guard never ships invalid JSON; a
+replacement appends a structure-only entry to the NENYA-362 audit log,
+surface `dispatch`), or `block` (refusal with `error_kind=dispatch_blocked`
+before any upstream call; on the chat retry loop it is TERMINAL — the
+content is what is blocked, failover cannot help — the embeddings and
+systemone paths run a verification pre-check that short-circuits the
+retry budget with the same structured 403 (a deterministic block must
+not burn retries), while the MCP buffered
+loop sweeps to exhaustion, each dispatch blocked the same way). Matched
+text never reaches metrics, logs, or the audit sink (structure only:
+counts and pattern indices). The chat loop logs the VERIFIED body at Debug
+level, not the pre-verification one. MCP-loop SkipReason mapping boundary:
+the buffered loop treats the block as a skip and ends at exhaustion (the
+chat loop's terminal 403 is the documented primary behavior).
+
 ## Output-Side Defenses (Stream Path)
 
 The upstream SSE stream flows through pluggable egress filters before reaching

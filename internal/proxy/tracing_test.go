@@ -69,7 +69,7 @@ func TestBuildUpstreamRequestPropagatesCurrentSpan(t *testing.T) {
 
 	ctx, _ := tracing.StartRequest(context.Background(), tracingTestLogger(), fixtureTraceparent, "chat_completions")
 	prx := &Proxy{}
-	req, err := prx.buildUpstreamRequest(gw, ctx, "POST", "https://api.test.com/v1/chat/completions", []byte(`{}`), "test", "", "", src.Header)
+	req, _, err := prx.buildUpstreamRequest(gw, ctx, "POST", "https://api.test.com/v1/chat/completions", []byte(`{}`), "test", "", "", "", src.Header)
 	if err != nil {
 		t.Fatalf("buildUpstreamRequest: %v", err)
 	}
@@ -111,7 +111,7 @@ func TestBuildUpstreamRequestDiscardsTracestateOnRestart(t *testing.T) {
 
 	ctx, _ := tracing.StartRequest(context.Background(), tracingTestLogger(), src.Header.Get("Traceparent"), "chat_completions")
 	prx := &Proxy{}
-	req, err := prx.buildUpstreamRequest(gw, ctx, "POST", "https://api.test.com/v1/chat/completions", []byte(`{}`), "test", "", "", src.Header)
+	req, _, err := prx.buildUpstreamRequest(gw, ctx, "POST", "https://api.test.com/v1/chat/completions", []byte(`{}`), "test", "", "", "", src.Header)
 	if err != nil {
 		t.Fatalf("buildUpstreamRequest: %v", err)
 	}

@@ -153,6 +153,7 @@ func collectValidationErrors(ctx context.Context, cfg *Config, providers map[str
 	errors = append(errors, validateToolEgressConfig(cfg)...)
 	errors = append(errors, validateInvisibleTextConfig(cfg)...)
 	errors = append(errors, validateRedactionAuditConfig(cfg)...)
+	errors = append(errors, validateDispatchVerifyConfig(cfg)...)
 	errors = append(errors, validateCanaryConfig(cfg)...)
 	errors = append(errors, validateMCPGuardConfig(cfg)...)
 	errors = append(errors, validateModelRegistryErrors(logger)...)
@@ -2029,6 +2030,30 @@ func validateRedactionAuditConfig(cfg *Config) []string {
 	var errs []string
 	if g.EffectiveEnabled() && strings.TrimSpace(g.Path) == "" {
 		errs = append(errs, "governance.redaction_audit.path: must be set when enabled")
+	}
+	return errs
+}
+
+// validateDispatchVerifyConfig checks the dispatch verification pass
+// config (NENYA-363): the action vocabulary is closed, and a redact
+// action requires a redaction label that cannot break the marshaled
+// JSON it is spliced into (no quote, no backslash — the replacement
+// lands inside JSON string literals).
+func validateDispatchVerifyConfig(cfg *Config) []string {
+	g := cfg.Governance.DispatchVerify
+	if g == nil {
+		return nil
+	}
+	var errs []string
+	switch strings.ToLower(g.Action) {
+	case "", DispatchActionLog, DispatchActionRedact, DispatchActionBlock:
+	default:
+		errs = append(errs, fmt.Sprintf("governance.dispatch_verify.action: invalid value %q, must be empty, \"log\", \"redact\", or \"block\"", g.Action))
+	}
+	if strings.ToLower(g.Action) == DispatchActionRedact {
+		if strings.ContainsAny(cfg.Bouncer.RedactionLabel, "\"\\") {
+			errs = append(errs, "governance.dispatch_verify.action=redact: bouncer.redaction_label must not contain quotes or backslashes (the label is spliced into marshaled JSON)")
+		}
 	}
 	return errs
 }

@@ -195,8 +195,8 @@ func TestBuildUpstreamRequest_ForwardsIdempotencyKey(t *testing.T) {
 	body := []byte(`{"model":"m"}`)
 	build := func(t *testing.T, provider string, body []byte) *http.Request {
 		t.Helper()
-		req, err := p.buildUpstreamRequest(gw, context.Background(), http.MethodPost,
-			"https://up.test/v1/chat/completions", body, provider, "m", "", src)
+		req, _, err := p.buildUpstreamRequest(gw, context.Background(), http.MethodPost,
+			"https://up.test/v1/chat/completions", body, provider, "m", "", "", src)
 		if err != nil {
 			t.Fatal(err)
 		}

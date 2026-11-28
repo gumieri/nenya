@@ -74,7 +74,7 @@ func TestBuildUpstreamRequest_ForwardsOpencodeSession(t *testing.T) {
 	src.Set("X-Custom-Not-Allowed", "leak")
 
 	prx := &Proxy{}
-	upstreamReq, err := prx.buildUpstreamRequest(gw, context.Background(), "POST", "https://api.test.com/v1/chat/completions", []byte(`{}`), "test", "", "", src)
+	upstreamReq, _, err := prx.buildUpstreamRequest(gw, context.Background(), "POST", "https://api.test.com/v1/chat/completions", []byte(`{}`), "test", "", "", "", src)
 	if err != nil {
 		t.Fatalf("failed to build upstream request: %v", err)
 	}
